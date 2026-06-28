@@ -1,0 +1,231 @@
+package main
+
+import (
+	"fmt"
+
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/update"
+)
+
+type serveReplacementAction int
+
+const (
+	serveReplacementNone serveReplacementAction = iota
+	serveReplacementUseExisting
+	serveReplacementAuto
+	serveReplacementExplicit
+	serveReplacementRefuse
+)
+
+type serveReplacementOptions struct {
+	Replace bool
+}
+
+type serveReplacementDecision struct {
+	Action           serveReplacementAction
+	Runtime          *DaemonRuntime
+	CompatibilityErr error
+	Reason           string
+}
+
+func decideServeDaemonReplacement(
+	cfg config.Config, opts serveReplacementOptions,
+) serveReplacementDecision {
+	if rt := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil &&
+		!rt.ReadOnly {
+		return decideCompatibleServeDaemonReplacement(rt, opts)
+	}
+
+	rt, compatErr := findIncompatibleWritableDaemonRuntime(
+		cfg.DataDir, cfg.AuthToken,
+	)
+	if rt == nil {
+		return serveReplacementDecision{Action: serveReplacementNone}
+	}
+	return decideIncompatibleServeDaemonReplacement(rt, compatErr, opts)
+}
+
+func decideCompatibleServeDaemonReplacement(
+	rt *DaemonRuntime, opts serveReplacementOptions,
+) serveReplacementDecision {
+	decision := serveReplacementDecision{Runtime: rt}
+	if opts.Replace {
+		decision.Action = serveReplacementExplicit
+		decision.Reason = "replacement requested with --replace"
+		return decision
+	}
+	if shouldUpgradeDaemonRuntime(rt, version) {
+		decision.Action = serveReplacementAuto
+		decision.Reason = serveDaemonOlderReason(rt)
+		return decision
+	}
+	if update.IsDevBuildVersion(version) && rt.Record.Version != version {
+		decision.Action = serveReplacementRefuse
+		decision.Reason = serveDaemonRefusalReason(rt, nil)
+		return decision
+	}
+	decision.Action = serveReplacementUseExisting
+	decision.Reason = "compatible writable daemon is already running"
+	return decision
+}
+
+func decideIncompatibleServeDaemonReplacement(
+	rt *DaemonRuntime, compatErr error, opts serveReplacementOptions,
+) serveReplacementDecision {
+	decision := serveReplacementDecision{
+		Runtime:          rt,
+		CompatibilityErr: compatErr,
+	}
+	if opts.Replace {
+		decision.Action = serveReplacementExplicit
+		decision.Reason = "replacement requested with --replace"
+		return decision
+	}
+	if shouldUpgradeIncompatibleDaemonRuntime(rt, version) {
+		decision.Action = serveReplacementAuto
+		decision.Reason = serveDaemonOlderReason(rt)
+		return decision
+	}
+	decision.Action = serveReplacementRefuse
+	decision.Reason = serveDaemonRefusalReason(rt, compatErr)
+	return decision
+}
+
+func serveDaemonOlderReason(rt *DaemonRuntime) string {
+	daemonVersion := serveDaemonVersion(rt)
+	if rt == nil || rt.Record.Version == "" {
+		return fmt.Sprintf(
+			"daemon version is unknown and treated as older than current "+
+				"binary version %s",
+			serveCurrentVersion(),
+		)
+	}
+	return fmt.Sprintf(
+		"daemon version %s is older than current binary version %s",
+		daemonVersion, serveCurrentVersion(),
+	)
+}
+
+func serveDaemonRefusalReason(
+	rt *DaemonRuntime, compatErr error,
+) string {
+	if rt != nil && (rt.API > daemonAPIVersion ||
+		rt.Data > db.CurrentDataVersion()) {
+		return fmt.Sprintf(
+			"daemon API/data version is ahead of this binary "+
+				"(daemon API %d, data %d; current API %d, data %d)",
+			rt.API, rt.Data, daemonAPIVersion, db.CurrentDataVersion(),
+		)
+	}
+	if update.IsDevBuildVersion(version) {
+		return fmt.Sprintf(
+			"current binary version %s is a dev build; dev builds do not "+
+				"replace running daemons automatically",
+			serveCurrentVersion(),
+		)
+	}
+	if rt != nil && update.IsNewer(rt.Record.Version, version) {
+		return fmt.Sprintf(
+			"daemon version %s is newer than current binary version %s",
+			serveDaemonVersion(rt), serveCurrentVersion(),
+		)
+	}
+	if compatErr != nil {
+		return fmt.Sprintf(
+			"current binary version %s is not newer than daemon version %s "+
+				"and cannot automatically replace the incompatible daemon: %v",
+			serveCurrentVersion(), serveDaemonVersion(rt), compatErr,
+		)
+	}
+	return fmt.Sprintf(
+		"current binary version %s is not newer than daemon version %s",
+		serveCurrentVersion(), serveDaemonVersion(rt),
+	)
+}
+
+func serveDaemonConflictLines(decision serveReplacementDecision) []string {
+	lines := serveDaemonDecisionLines(
+		"agentsview found a running writable daemon that will not be replaced.",
+		decision,
+	)
+	if decision.Runtime == nil {
+		return lines
+	}
+	switch decision.Action {
+	case serveReplacementRefuse:
+		return append(lines,
+			"Run `agentsview serve --replace` to replace it, or "+
+				"`agentsview serve stop` to stop it first.",
+		)
+	case serveReplacementUseExisting:
+		return append(lines,
+			"Using the existing daemon. Run `agentsview serve stop` "+
+				"to stop it first.",
+		)
+	default:
+		return append(lines,
+			"Run `agentsview serve stop` to stop it first.",
+		)
+	}
+}
+
+func serveDaemonReplacementLines(decision serveReplacementDecision) []string {
+	lines := serveDaemonDecisionLines(
+		"agentsview will replace a running writable daemon.",
+		decision,
+	)
+	if decision.Runtime == nil {
+		return lines
+	}
+	return append(lines,
+		"Run `agentsview serve stop` to stop it manually instead.",
+	)
+}
+
+func serveDaemonDecisionLines(
+	header string, decision serveReplacementDecision,
+) []string {
+	rt := decision.Runtime
+	if rt == nil {
+		return []string{"No writable agentsview daemon is running."}
+	}
+	lines := []string{
+		header,
+		fmt.Sprintf("  url:             %s", urlFromDaemonRuntime(rt)),
+		fmt.Sprintf("  pid:             %d", rt.Record.PID),
+		fmt.Sprintf("  daemon version:  %s", serveDaemonVersion(rt)),
+		fmt.Sprintf("  binary version:  %s", serveCurrentVersion()),
+		fmt.Sprintf(
+			"  API version:     daemon %d, current %d",
+			rt.API, daemonAPIVersion,
+		),
+		fmt.Sprintf(
+			"  data version:    daemon %d, current %d",
+			rt.Data, db.CurrentDataVersion(),
+		),
+	}
+	if decision.CompatibilityErr != nil {
+		lines = append(lines,
+			fmt.Sprintf("  compatibility:   %v", decision.CompatibilityErr),
+		)
+	}
+	if decision.Reason != "" {
+		lines = append(lines, fmt.Sprintf("  reason:          %s", decision.Reason))
+	}
+	return lines
+}
+
+func serveDaemonVersion(rt *DaemonRuntime) string {
+	if rt == nil || rt.Record.Version == "" {
+		return "(unknown)"
+	}
+	return rt.Record.Version
+}
+
+func serveCurrentVersion() string {
+	if version == "" {
+		return "(unknown)"
+	}
+	return version
+}
