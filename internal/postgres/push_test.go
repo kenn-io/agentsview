@@ -5,7 +5,11 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
+	"io"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -239,6 +243,176 @@ func (c *capturePGExec) ExecContext(
 	c.query = query
 	c.args = args
 	return driver.RowsAffected(0), nil
+}
+
+func TestPushSessionRechecksExclusionAfterSuccessfulUpsert(t *testing.T) {
+	state := &pushSessionProbeState{excludedAfterUpsert: true}
+	pg := newPushSessionProbeDB(t, state)
+	tx, err := pg.BeginTx(context.Background(), nil)
+	require.NoError(t, err, "BeginTx")
+
+	syncer := &Sync{machine: "push-machine"}
+	err = syncer.pushSession(
+		context.Background(), tx,
+		db.Session{
+			ID:        "sess-race",
+			Project:   "proj",
+			Machine:   "push-machine",
+			Agent:     "claude",
+			CreatedAt: "2026-01-01T00:00:00Z",
+		},
+		"marker", nil,
+	)
+
+	require.ErrorIs(t, err, errSessionExcluded)
+	assert.Equal(t, 1, state.upserts)
+	assert.Equal(t, 1, state.exclusionChecks)
+	assert.True(t, state.deletedExcluded,
+		"excluded row should be deleted after the tombstone is observed")
+	require.NoError(t, tx.Rollback(), "Rollback")
+}
+
+type pushSessionProbeDriver struct{}
+
+type pushSessionProbeConn struct {
+	state *pushSessionProbeState
+}
+
+type pushSessionProbeTx struct{}
+
+type pushSessionProbeRows struct {
+	columns []string
+	values  [][]driver.Value
+	next    int
+}
+
+type pushSessionProbeState struct {
+	mu                  sync.Mutex
+	excludedAfterUpsert bool
+	upserts             int
+	exclusionChecks     int
+	deletedExcluded     bool
+}
+
+var (
+	pushSessionProbeRegisterOnce sync.Once
+	pushSessionProbeStatesMu     sync.Mutex
+	pushSessionProbeStates       = map[string]*pushSessionProbeState{}
+)
+
+func newPushSessionProbeDB(
+	t *testing.T, state *pushSessionProbeState,
+) *sql.DB {
+	t.Helper()
+	pushSessionProbeRegisterOnce.Do(func() {
+		sql.Register("agentsview_push_session_probe", pushSessionProbeDriver{})
+	})
+	name := t.Name()
+	pushSessionProbeStatesMu.Lock()
+	pushSessionProbeStates[name] = state
+	pushSessionProbeStatesMu.Unlock()
+	t.Cleanup(func() {
+		pushSessionProbeStatesMu.Lock()
+		delete(pushSessionProbeStates, name)
+		pushSessionProbeStatesMu.Unlock()
+	})
+
+	pg, err := sql.Open("agentsview_push_session_probe", name)
+	require.NoError(t, err, "open push-session probe db")
+	t.Cleanup(func() { _ = pg.Close() })
+	return pg
+}
+
+func (pushSessionProbeDriver) Open(name string) (driver.Conn, error) {
+	pushSessionProbeStatesMu.Lock()
+	state := pushSessionProbeStates[name]
+	pushSessionProbeStatesMu.Unlock()
+	return &pushSessionProbeConn{state: state}, nil
+}
+
+func (c *pushSessionProbeConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("prepare not implemented")
+}
+
+func (c *pushSessionProbeConn) Close() error { return nil }
+
+func (c *pushSessionProbeConn) Begin() (driver.Tx, error) {
+	return c.BeginTx(context.Background(), driver.TxOptions{})
+}
+
+func (c *pushSessionProbeConn) BeginTx(
+	context.Context, driver.TxOptions,
+) (driver.Tx, error) {
+	return pushSessionProbeTx{}, nil
+}
+
+func (c *pushSessionProbeConn) CheckNamedValue(
+	*driver.NamedValue,
+) error {
+	return nil
+}
+
+func (c *pushSessionProbeConn) ExecContext(
+	_ context.Context, query string, _ []driver.NamedValue,
+) (driver.Result, error) {
+	normalized := strings.ToLower(query)
+	c.state.mu.Lock()
+	defer c.state.mu.Unlock()
+
+	switch {
+	case strings.Contains(normalized, "insert into sessions"):
+		c.state.upserts++
+		return driver.RowsAffected(1), nil
+	case strings.Contains(normalized, "delete from sessions") &&
+		strings.Contains(normalized, "id = any($1)"):
+		c.state.deletedExcluded = true
+		return driver.RowsAffected(1), nil
+	default:
+		return nil, errors.New("unexpected push-session probe exec")
+	}
+}
+
+func (c *pushSessionProbeConn) QueryContext(
+	_ context.Context, query string, _ []driver.NamedValue,
+) (driver.Rows, error) {
+	normalized := strings.ToLower(query)
+	c.state.mu.Lock()
+	defer c.state.mu.Unlock()
+
+	switch {
+	case strings.Contains(normalized, "select machine, owner_marker"):
+		return &pushSessionProbeRows{
+			columns: []string{"machine", "owner_marker"},
+		}, nil
+	case strings.Contains(normalized, "select exists") &&
+		strings.Contains(normalized, "excluded_sessions"):
+		c.state.exclusionChecks++
+		return &pushSessionProbeRows{
+			columns: []string{"exists"},
+			values: [][]driver.Value{
+				{c.state.excludedAfterUpsert},
+			},
+		}, nil
+	default:
+		return nil, errors.New("unexpected push-session probe query")
+	}
+}
+
+func (pushSessionProbeTx) Commit() error { return nil }
+
+func (pushSessionProbeTx) Rollback() error { return nil }
+
+func (r *pushSessionProbeRows) Columns() []string { return r.columns }
+
+func (r *pushSessionProbeRows) Close() error { return nil }
+
+func (r *pushSessionProbeRows) Next(dest []driver.Value) error {
+	if r.next >= len(r.values) {
+		return io.EOF
+	}
+	copy(dest, r.values[r.next])
+	r.next++
+	return nil
 }
 
 func TestSessionPushFingerprintDiffers(t *testing.T) {

@@ -15,6 +15,7 @@ import (
 )
 
 const tokenCoverageRepairMetadataKey = "token_coverage_repair_v1"
+const sourceCurationBackfillMetadataKey = "source_curation_baseline_backfill_v1"
 const tokenCoverageBackfillBatchSize = 1000
 
 type columnMigration struct {
@@ -710,14 +711,23 @@ func EnsureSchema(
 		time.Since(step).Round(time.Millisecond),
 		len(addedColumns),
 	)
-	if sourceCurationColumnsAdded {
-		step = time.Now()
-		if err := backfillSourceCurationBaselines(ctx, db); err != nil {
-			return err
-		}
+	step = time.Now()
+	sourceBackfilled, err := runSourceCurationBackfill(
+		ctx, db, sourceCurationColumnsAdded,
+	)
+	if err != nil {
+		return err
+	}
+	if sourceBackfilled {
 		log.Printf(
 			"pg schema: source curation baseline backfill"+
 				" completed in %s",
+			time.Since(step).Round(time.Millisecond),
+		)
+	} else {
+		log.Printf(
+			"pg schema: source curation baseline backfill"+
+				" check completed in %s (repair skipped)",
 			time.Since(step).Round(time.Millisecond),
 		)
 	}
@@ -1021,6 +1031,9 @@ func runSchemaDataRepairsPG(ctx context.Context, db *sql.DB) error {
 	if err := backfillIsAutomatedPG(ctx, db); err != nil {
 		return err
 	}
+	if _, err := runSourceCurationBackfill(ctx, db, false); err != nil {
+		return err
+	}
 	runRepair, err := shouldRunTokenCoverageRepair(ctx, db, false)
 	if err != nil {
 		return err
@@ -1053,6 +1066,67 @@ func backfillSourceCurationBaselines(
 	); err != nil {
 		return fmt.Errorf(
 			"backfilling PG source deleted-at baselines: %w", err,
+		)
+	}
+	return nil
+}
+
+func runSourceCurationBackfill(
+	ctx context.Context, db *sql.DB, sourceCurationColumnsAdded bool,
+) (bool, error) {
+	runRepair, err := shouldRunSourceCurationBackfill(
+		ctx, db, sourceCurationColumnsAdded,
+	)
+	if err != nil {
+		return false, err
+	}
+	if !runRepair {
+		return false, nil
+	}
+	if err := backfillSourceCurationBaselines(ctx, db); err != nil {
+		return false, err
+	}
+	if err := markSourceCurationBackfillDone(ctx, db); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func shouldRunSourceCurationBackfill(
+	ctx context.Context, db *sql.DB, sourceCurationColumnsAdded bool,
+) (bool, error) {
+	if sourceCurationColumnsAdded {
+		return true, nil
+	}
+
+	var done bool
+	if err := db.QueryRowContext(ctx,
+		`SELECT EXISTS (
+			SELECT 1 FROM sync_metadata
+			WHERE key = $1
+		)`,
+		sourceCurationBackfillMetadataKey,
+	).Scan(&done); err != nil {
+		return false, fmt.Errorf(
+			"probing source curation backfill metadata: %w", err,
+		)
+	}
+	return !done, nil
+}
+
+func markSourceCurationBackfillDone(
+	ctx context.Context, db *sql.DB,
+) error {
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO sync_metadata (key, value)
+		 VALUES ($1, '1')
+		 ON CONFLICT (key) DO UPDATE
+		 SET value = EXCLUDED.value`,
+		sourceCurationBackfillMetadataKey,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"storing source curation backfill metadata: %w", err,
 		)
 	}
 	return nil

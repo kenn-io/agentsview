@@ -1146,6 +1146,22 @@ func pgSessionExcluded(
 	return excluded, nil
 }
 
+func deletePGSessionIfExcluded(
+	ctx context.Context, tx *sql.Tx, id string,
+) (bool, error) {
+	excluded, err := pgSessionExcluded(ctx, tx, id)
+	if err != nil {
+		return false, err
+	}
+	if !excluded {
+		return false, nil
+	}
+	if err := deletePGExcludedSessionRows(ctx, tx, []string{id}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // sessionPushFingerprint builds the change-detection fingerprint for a
 // session. pushedMachine is the value pushSession actually writes to PG
 // (pushedSessionMachine), not the raw sess.Machine: a "local"/empty sentinel
@@ -1474,6 +1490,10 @@ func (s *Sync) pushSession(
 					))
 			)
 			OR sessions.owner_marker = EXCLUDED.owner_marker)
+			AND NOT EXISTS (
+				SELECT 1 FROM excluded_sessions
+				WHERE id = EXCLUDED.id
+			)
 			AND (
 			sessions.machine IS DISTINCT FROM EXCLUDED.machine
 			OR sessions.owner_marker IS DISTINCT FROM EXCLUDED.owner_marker
@@ -1573,16 +1593,13 @@ func (s *Sync) pushSession(
 		return err
 	}
 	if rowsAffected, rowsErr := result.RowsAffected(); rowsErr == nil && rowsAffected == 0 {
-		excluded, excludedErr := pgSessionExcluded(ctx, tx, sess.ID)
+		excluded, excludedErr := deletePGSessionIfExcluded(
+			ctx, tx, sess.ID,
+		)
 		if excludedErr != nil {
 			return excludedErr
 		}
 		if excluded {
-			if err := deletePGExcludedSessionRows(
-				ctx, tx, []string{sess.ID},
-			); err != nil {
-				return err
-			}
 			return errSessionExcluded
 		}
 		refreshErr := tx.QueryRowContext(ctx,
@@ -1610,6 +1627,13 @@ func (s *Sync) pushSession(
 			)
 			return errSessionOwnershipConflict
 		}
+	}
+	excluded, excludedErr := deletePGSessionIfExcluded(ctx, tx, sess.ID)
+	if excludedErr != nil {
+		return excludedErr
+	}
+	if excluded {
+		return errSessionExcluded
 	}
 	return nil
 }

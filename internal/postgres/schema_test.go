@@ -36,11 +36,13 @@ type schemaProbeState struct {
 	mu                  sync.Mutex
 	informationQueries  int
 	execs               []string
+	execArgs            [][]driver.NamedValue
 	alterTableExecs     []string
 	currentSchema       string
 	existingColumnNames map[string][]string
 	existingTables      map[string]bool
 	existingIndexes     map[string]bool
+	syncMetadataKeys    map[string]bool
 	maxDataVersion      int
 	maxDataVersionErr   error
 	queryErrors         []schemaProbeQueryError
@@ -104,17 +106,31 @@ func (c *schemaProbeConn) Begin() (driver.Tx, error) {
 }
 
 func (c *schemaProbeConn) ExecContext(
-	_ context.Context, query string, _ []driver.NamedValue,
+	_ context.Context, query string, args []driver.NamedValue,
 ) (driver.Result, error) {
 	c.state.mu.Lock()
 	c.state.execs = append(c.state.execs, query)
+	c.state.execArgs = append(
+		c.state.execArgs, append([]driver.NamedValue(nil), args...),
+	)
 	c.state.mu.Unlock()
-	if strings.Contains(strings.ToLower(query), "alter table") {
+	normalized := strings.ToLower(query)
+	if strings.Contains(normalized, "alter table") {
 		c.state.mu.Lock()
 		c.state.alterTableExecs = append(
 			c.state.alterTableExecs, query,
 		)
 		c.state.mu.Unlock()
+	}
+	if strings.Contains(normalized, "insert into sync_metadata") &&
+		len(args) > 0 {
+		if key, ok := args[0].Value.(string); ok {
+			c.state.mu.Lock()
+			if c.state.syncMetadataKeys != nil {
+				c.state.syncMetadataKeys[key] = true
+			}
+			c.state.mu.Unlock()
+		}
 	}
 	return driver.RowsAffected(0), nil
 }
@@ -203,9 +219,19 @@ func (c *schemaProbeConn) QueryContext(
 		}, nil
 	case strings.Contains(normalized, "select exists") &&
 		strings.Contains(normalized, "from sync_metadata"):
+		done := true
+		if c.state.syncMetadataKeys != nil {
+			key := ""
+			if len(args) > 0 {
+				if v, ok := args[0].Value.(string); ok {
+					key = v
+				}
+			}
+			done = c.state.syncMetadataKeys[key]
+		}
 		return &schemaProbeRows{
 			columns: []string{"exists"},
-			values:  [][]driver.Value{{true}},
+			values:  [][]driver.Value{{done}},
 		}, nil
 	case strings.Contains(normalized, "select exists"):
 		return &schemaProbeRows{
@@ -252,6 +278,19 @@ func (s *schemaProbeState) executedSQL() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return strings.Join(s.execs, "\n")
+}
+
+func (s *schemaProbeState) execArgValueSeen(value string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, args := range s.execArgs {
+		for _, arg := range args {
+			if got, ok := arg.Value.(string); ok && got == value {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func TestEnsureSchemaBatchesColumnIntrospection(t *testing.T) {
@@ -357,6 +396,36 @@ func TestEnsureSchemaBackfillsCurationBaselinesWhenAdded(t *testing.T) {
 		"set source_deleted_at = deleted_at")
 	assert.Contains(t, executed,
 		"where source_deleted_at is null")
+}
+
+func TestEnsureSchemaRetriesCurationBaselineBackfillUntilMarked(t *testing.T) {
+	existing := map[string][]string{
+		"sessions": {
+			"source_display_name",
+			"source_deleted_at",
+			"has_total_output_tokens",
+			"has_peak_context_tokens",
+		},
+		"messages": {
+			"has_context_tokens",
+			"has_output_tokens",
+		},
+	}
+	pg, state := newSchemaProbeDB(t, existing)
+	state.syncMetadataKeys = map[string]bool{
+		tokenCoverageRepairMetadataKey: true,
+	}
+
+	require.NoError(t, EnsureSchema(context.Background(), pg, "agentsview"))
+
+	executed := strings.ToLower(state.executedSQL())
+	assert.Contains(t, executed,
+		"set source_display_name = display_name")
+	assert.Contains(t, executed,
+		"set source_deleted_at = deleted_at")
+	assert.True(t,
+		state.execArgValueSeen("source_curation_baseline_backfill_v1"),
+		"source curation backfill completion marker should be written")
 }
 
 func TestCheckDataVersionCompatRejectsNewerPGRows(t *testing.T) {
