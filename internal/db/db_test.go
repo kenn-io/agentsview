@@ -764,6 +764,47 @@ func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
 	assert.Equal(t, "subagent_notification", tc.ResultEvents[1].Source, "result event 1 source")
 }
 
+func TestSessionSubagentSessionIDs(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s-sub", "proj")
+	require.NoError(t, d.InsertMessages([]Message{
+		{
+			SessionID: "s-sub", Ordinal: 0, Role: "assistant",
+			Content: "spawn", HasToolUse: true,
+			ToolCalls: []ToolCall{
+				{
+					SessionID: "s-sub", ToolName: "Task", Category: "Task",
+					ToolUseID: "call-1", SubagentSessionID: "sub-a",
+					ResultEvents: []ToolResultEvent{
+						{
+							ToolUseID: "call-1", SubagentSessionID: "sub-a",
+							Source: "subagent", Status: "ok", EventIndex: 0,
+						},
+						{
+							ToolUseID: "call-1", SubagentSessionID: "sub-b",
+							Source: "subagent", Status: "ok", EventIndex: 1,
+						},
+					},
+				},
+				{
+					SessionID: "s-sub", ToolName: "Read", Category: "file",
+					ToolUseID: "call-2",
+				},
+			},
+		},
+	}), "InsertMessages")
+
+	ids, err := d.SessionSubagentSessionIDs("s-sub")
+	require.NoError(t, err, "SessionSubagentSessionIDs")
+	// "sub-a" appears on both the tool call and a result event (deduped);
+	// "sub-b" only on a result event; the empty subagent id is excluded.
+	assert.ElementsMatch(t, []string{"sub-a", "sub-b"}, ids)
+
+	none, err := d.SessionSubagentSessionIDs("missing")
+	require.NoError(t, err, "SessionSubagentSessionIDs missing")
+	assert.Empty(t, none)
+}
+
 func TestOpenPreservesDataAtCurrentVersion(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
@@ -4206,11 +4247,16 @@ func TestStarSession(t *testing.T) {
 	assert.Equal(t, []string{"s1"}, ids, "listed = %v, want [s1]", ids)
 
 	// Unstar.
-	err = d.UnstarSession("s1")
+	removed, err := d.UnstarSession("s1")
 	require.NoError(t, err, "UnstarSession")
+	assert.True(t, removed, "UnstarSession should report removed star")
 	ids, err = d.ListStarredSessionIDs(ctx)
 	require.NoError(t, err, "ListStarredSessionIDs after unstar")
 	assert.Empty(t, ids, "listed after unstar = %v, want []", ids)
+
+	removed, err = d.UnstarSession("s1")
+	require.NoError(t, err, "UnstarSession no-op")
+	assert.False(t, removed, "UnstarSession should report no-op")
 
 	// Star non-existent session returns false (no FK error).
 	ok, err = d.StarSession("nonexistent")
@@ -4225,8 +4271,13 @@ func TestBulkStarSessions(t *testing.T) {
 	insertSession(t, d, "s2", "proj")
 
 	// Bulk star with mix of valid and invalid IDs.
-	err := d.BulkStarSessions([]string{"s1", "s2", "nonexistent"})
+	starred, err := d.BulkStarSessions([]string{"s1", "s2", "nonexistent"})
 	require.NoError(t, err, "BulkStarSessions")
+	assert.ElementsMatch(t, []string{"s1", "s2"}, starred, "starred ids returned")
+
+	starred, err = d.BulkStarSessions([]string{"s1", "s2"})
+	require.NoError(t, err, "BulkStarSessions already starred")
+	assert.Empty(t, starred, "already-starred ids should not be returned")
 
 	ids, err := d.ListStarredSessionIDs(ctx)
 	require.NoError(t, err, "ListStarredSessionIDs")

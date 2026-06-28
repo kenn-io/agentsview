@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
+	"go.kenn.io/agentsview/internal/artifact"
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -63,7 +65,7 @@ func (s *Server) humaListSessionPins(
 }
 
 func (s *Server) humaPinMessage(
-	_ context.Context,
+	ctx context.Context,
 	in *pinMessageInput,
 ) (*createdOutput[pinMessageResponse], error) {
 	id, err := s.db.PinMessage(in.ID, in.MessageID, in.Body.Note)
@@ -77,6 +79,21 @@ func (s *Server) humaPinMessage(
 		return nil, apiError(http.StatusBadRequest,
 			"message does not belong to this session")
 	}
+	pin, err := s.metadataPinForMessage(ctx, in.ID, in.MessageID, in.Body.Note)
+	if err != nil {
+		return nil, internalError("pin message metadata lookup", err)
+	}
+	if pin == nil {
+		return nil, internalError("pin message metadata lookup",
+			errors.New("message disappeared after pin"))
+	}
+	if err := s.appendMetadataEvent(ctx, artifact.MetadataEventInput{
+		SessionID: in.ID,
+		Op:        artifact.MetadataOpPin,
+		Pin:       pin,
+	}); err != nil {
+		return nil, internalError("pin message metadata event", err)
+	}
 	return &createdOutput[pinMessageResponse]{
 		Status: http.StatusCreated,
 		Body:   pinMessageResponse{ID: id},
@@ -84,14 +101,27 @@ func (s *Server) humaPinMessage(
 }
 
 func (s *Server) humaUnpinMessage(
-	_ context.Context,
+	ctx context.Context,
 	in *messagePathInput,
 ) (*noContentOutput, error) {
+	pin, err := s.metadataPinForMessage(ctx, in.ID, in.MessageID, nil)
+	if err != nil {
+		return nil, internalError("unpin message metadata lookup", err)
+	}
 	if err := s.db.UnpinMessage(in.ID, in.MessageID); err != nil {
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
 		}
 		return nil, internalError("unpin message", err)
+	}
+	if pin != nil {
+		if err := s.appendMetadataEvent(ctx, artifact.MetadataEventInput{
+			SessionID: in.ID,
+			Op:        artifact.MetadataOpUnpin,
+			Pin:       pin,
+		}); err != nil {
+			return nil, internalError("unpin message metadata event", err)
+		}
 	}
 	return &noContentOutput{Status: http.StatusNoContent}, nil
 }

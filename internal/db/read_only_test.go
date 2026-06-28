@@ -130,7 +130,8 @@ func TestOpenReadOnlyWriteMethodsReturnErrReadOnly(t *testing.T) {
 		return readonly.InsertMessages(nil)
 	})
 	requireReadOnlyOp(t, "BulkStarSessions", func() error {
-		return readonly.BulkStarSessions(nil)
+		_, err := readonly.BulkStarSessions(nil)
+		return err
 	})
 	requireReadOnlyOp(t, "DeleteParserExcludedSessions", func() error {
 		_, err := readonly.DeleteParserExcludedSessions(nil)

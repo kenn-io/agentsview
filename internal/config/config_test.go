@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/gofrs/flock"
 	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -400,6 +401,162 @@ func TestLoad_PublicURLMergedIntoOrigins(t *testing.T) {
 
 	assert.Equal(t, "https://viewer.example.test", cfg.PublicURL)
 	assert.Equal(t, "https://viewer.example.test", strings.Join(cfg.PublicOrigins, ","))
+}
+
+func TestLoad_ArtifactOriginIDFromConfigFile(t *testing.T) {
+	tmp := setupTestEnv(t)
+	writeConfig(t, tmp, map[string]any{
+		"artifact_origin_id": "desk-abcdef",
+	})
+
+	cfg, err := LoadMinimal()
+	require.NoError(t, err)
+
+	assert.Equal(t, "desk-abcdef", cfg.ArtifactOriginID)
+}
+
+func TestLoad_ArtifactOriginIDRejectsInvalid(t *testing.T) {
+	tmp := setupTestEnv(t)
+	writeConfig(t, tmp, map[string]any{
+		"artifact_origin_id": "local",
+	})
+
+	_, err := LoadMinimal()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid artifact origin id")
+}
+
+func TestEnsureArtifactOriginIDPersists(t *testing.T) {
+	tmp := setupTestEnv(t)
+	cfg, err := LoadMinimal()
+	require.NoError(t, err)
+
+	origin, err := cfg.EnsureArtifactOriginID()
+	require.NoError(t, err)
+	assert.Regexp(t, `^[a-z0-9]+(?:-[a-z0-9]+)*-[0-9a-f]{6}$`, origin)
+
+	data, err := os.ReadFile(filepath.Join(tmp, configFileName))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `artifact_origin_id = "`+origin+`"`)
+
+	reloaded, err := LoadMinimal()
+	require.NoError(t, err)
+	assert.Equal(t, origin, reloaded.ArtifactOriginID)
+	again, err := reloaded.EnsureArtifactOriginID()
+	require.NoError(t, err)
+	assert.Equal(t, origin, again)
+}
+
+func TestEnsureArtifactOriginIDUsesConfiguredMachineName(t *testing.T) {
+	tmp := setupTestEnv(t)
+	writeConfig(t, tmp, map[string]any{
+		"pg": map[string]any{
+			"machine_name": "Desk Box",
+		},
+	})
+	cfg, err := LoadMinimal()
+	require.NoError(t, err)
+
+	origin, err := cfg.EnsureArtifactOriginID()
+	require.NoError(t, err)
+
+	assert.Regexp(t, `^desk-box-[0-9a-f]{6}$`, origin)
+}
+
+func TestEnsureArtifactOriginIDRejectsReservedMachineName(t *testing.T) {
+	tmp := setupTestEnv(t)
+	writeConfig(t, tmp, map[string]any{
+		"pg": map[string]any{
+			"machine_name": "local",
+		},
+	})
+	cfg, err := LoadMinimal()
+	require.NoError(t, err)
+
+	origin, err := cfg.EnsureArtifactOriginID()
+	require.Error(t, err)
+	assert.Empty(t, origin)
+	assert.Contains(t, err.Error(), "reserved")
+}
+
+func TestEnsureArtifactOriginIDDoesNotRewriteExistingOrigin(t *testing.T) {
+	tmp := setupTestEnv(t)
+	writeConfig(t, tmp, map[string]any{
+		"artifact_origin_id": "original-a1b2c3",
+		"pg": map[string]any{
+			"machine_name": "new-machine",
+		},
+	})
+	cfg, err := LoadMinimal()
+	require.NoError(t, err)
+
+	origin, err := cfg.EnsureArtifactOriginID()
+	require.NoError(t, err)
+
+	assert.Equal(t, "original-a1b2c3", origin)
+}
+
+func TestEnsureArtifactOriginIDReusesOriginWrittenBeforeLock(t *testing.T) {
+	tmp := setupTestEnv(t)
+	cfg, err := LoadMinimal()
+	require.NoError(t, err)
+
+	lock := flock.New(cfg.configPath() + ".lock")
+	require.NoError(t, lock.Lock())
+	t.Cleanup(func() {
+		_ = lock.Unlock()
+	})
+
+	type ensureResult struct {
+		origin string
+		err    error
+	}
+	done := make(chan ensureResult, 1)
+	go func() {
+		origin, err := cfg.EnsureArtifactOriginID()
+		done <- ensureResult{origin: origin, err: err}
+	}()
+
+	select {
+	case res := <-done:
+		require.Failf(t, "EnsureArtifactOriginID ignored config lock",
+			"origin=%q err=%v", res.origin, res.err)
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	writeConfig(t, tmp, map[string]any{
+		"artifact_origin_id": "winner-a1b2c3",
+	})
+	require.NoError(t, lock.Unlock())
+
+	select {
+	case res := <-done:
+		require.NoError(t, res.err)
+		assert.Equal(t, "winner-a1b2c3", res.origin)
+		assert.Equal(t, "winner-a1b2c3", cfg.ArtifactOriginID)
+	case <-time.After(2 * time.Second):
+		require.Fail(t, "EnsureArtifactOriginID did not finish after lock release")
+	}
+}
+
+func TestMigrateJSONToTOMLPreservesArtifactOriginID(t *testing.T) {
+	tmp := setupTestEnv(t)
+	jsonPath := filepath.Join(tmp, "config.json")
+	require.NoError(t, os.WriteFile(
+		jsonPath,
+		[]byte(`{"artifact_origin_id":"desk-abcdef"}`),
+		0o600,
+	))
+
+	cfg, err := LoadMinimal()
+	require.NoError(t, err)
+
+	assert.Equal(t, "desk-abcdef", cfg.ArtifactOriginID)
+	_, err = os.Stat(jsonPath + ".bak")
+	require.NoError(t, err)
+	data, err := os.ReadFile(filepath.Join(tmp, configFileName))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `artifact_origin_id = "desk-abcdef"`)
 }
 
 func TestLoad_ProxyConfigFromFile(t *testing.T) {

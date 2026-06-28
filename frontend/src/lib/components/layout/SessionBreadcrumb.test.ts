@@ -42,6 +42,7 @@ vi.mock("../../api/generated/index", async (importOriginal) => {
     },
     SessionsService: {
       getApiV1SessionsIdDirectory: vi.fn(),
+      getApiV1SessionsIdMetadataConflicts: vi.fn(),
       getApiV1SessionsIdUsage: vi.fn(),
       postApiV1SessionsIdResume: vi.fn(),
       postApiV1SessionsIdOpen: vi.fn(),
@@ -55,6 +56,7 @@ const openersService = OpenersService as unknown as {
 
 const sessionsService = SessionsService as unknown as {
   getApiV1SessionsIdDirectory: ReturnType<typeof vi.fn>;
+  getApiV1SessionsIdMetadataConflicts: ReturnType<typeof vi.fn>;
   getApiV1SessionsIdUsage: ReturnType<typeof vi.fn>;
 };
 
@@ -160,6 +162,9 @@ beforeEach(() => {
   sessionsService.getApiV1SessionsIdDirectory
     .mockReset()
     .mockResolvedValue({ path: "" });
+  sessionsService.getApiV1SessionsIdMetadataConflicts
+    .mockReset()
+    .mockResolvedValue({ conflicts: [] });
   sessionsService.getApiV1SessionsIdUsage
     .mockReset()
     .mockResolvedValue(makeUsage());
@@ -444,6 +449,98 @@ describe("SessionBreadcrumb", () => {
     expect(resumeBtn).toBeNull();
 
     unmount(component);
+  });
+
+  it("renders metadata conflicts with the current winner and other value", async () => {
+    sessionsService.getApiV1SessionsIdMetadataConflicts.mockResolvedValue({
+      conflicts: [
+        {
+          id: 42,
+          session_gid: "desk-a1b2c3~run:123456789abcdef",
+          field: "display_name",
+          winning_order_key: "2026-06-14T01:02:04Z-desk-a1b2c3",
+          losing_order_key: "2026-06-14T01:02:03Z-lap-b2c3d4",
+          winning_origin: "desk-a1b2c3",
+          losing_origin: "lap-b2c3d4",
+          winning_op: "rename",
+          losing_op: "rename",
+          winning_value: "{\"display_name\":\"Current title\"}",
+          losing_value: "{\"display_name\":\"Other title\"}",
+          created_at: "2026-06-14T01:02:05Z",
+        },
+      ],
+    });
+
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("claude"),
+        onBack: () => {},
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(document.querySelector(".conflict-badge")).toBeTruthy();
+    });
+
+    document.querySelector(".conflict-badge")!.dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
+    await tick();
+
+    const text = document
+      .querySelector(".conflict-menu")
+      ?.textContent
+      ?.replace(/\s+/g, " ")
+      .trim();
+    expect(text).toContain("Name");
+    expect(text).toContain("Current");
+    expect(text).toContain("Current title");
+    expect(text).toContain("Other");
+    expect(text).toContain("Other title");
+
+    unmount(component);
+  });
+
+  it("does not retry failed metadata conflict fetches until the session changes", async () => {
+    sessionsService.getApiV1SessionsIdMetadataConflicts.mockRejectedValue(
+      new Error("boom"),
+    );
+
+    const component = createClassComponent({
+      component: SessionBreadcrumb,
+      target: document.body,
+      props: {
+        session: makeSession("claude", { id: "run:aaa" }),
+        onBack: () => {},
+      },
+    });
+
+    await flushPromises();
+    expect(
+      sessionsService.getApiV1SessionsIdMetadataConflicts,
+    ).toHaveBeenCalledTimes(1);
+
+    component.$set({
+      session: makeSession("claude", {
+        id: "run:aaa",
+        message_count: 3,
+      }),
+    });
+    await flushPromises();
+    expect(
+      sessionsService.getApiV1SessionsIdMetadataConflicts,
+    ).toHaveBeenCalledTimes(1);
+
+    component.$set({
+      session: makeSession("claude", { id: "run:bbb" }),
+    });
+    await flushPromises();
+    expect(
+      sessionsService.getApiV1SessionsIdMetadataConflicts,
+    ).toHaveBeenCalledTimes(2);
+
+    component.$destroy();
   });
 
   describe("cost badge", () => {

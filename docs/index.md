@@ -177,8 +177,10 @@ AgentsView reads the session files that your
 [AI coding agents](/configuration/#session-discovery) leave on
 your machine and gives you a local-first desktop and web app to
 work with them. By default everything stays on your machine.
-Optionally, [PostgreSQL sync](/pg-sync/) can push session data
-to a shared database for team or multi-machine setups.
+Optionally, [artifact sync](/artifact-sync/) can converge a
+trusted personal fleet without copying the live SQLite database,
+and [PostgreSQL sync](/pg-sync/) can push session data to a shared
+database for read-only dashboards.
 
 <div class="grid cards" markdown>
 

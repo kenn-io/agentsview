@@ -1296,7 +1296,9 @@ func TestSyncEngineHashSkip(t *testing.T) {
 	different := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "msg2").
 		String()
-	os.WriteFile(path, []byte(different), 0o644)
+	require.NoError(t, os.WriteFile(path, []byte(different), 0o644), "rewrite changed session")
+	future := time.Unix(0, mtime).Add(time.Second)
+	require.NoError(t, os.Chtimes(path, future, future), "advance changed file mtime")
 
 	// Third sync — mtime changed → re-synced
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 1 + 0, Synced: 1, Skipped: 0})
@@ -3842,6 +3844,8 @@ func TestSyncPathsOpenCodeStorageChildUpdateAdvancesSessionMtime(
 		`{"id":"part-a1","sessionID":"oc-storage-mtime","messageID":"msg-a1","type":"text","text":"updated reply","time":{"created":1704067201000}}`,
 	), 0o644)
 	require.NoError(t, err, "rewrite part")
+	childMtime := time.Unix(0, initialMtime).Add(time.Second)
+	require.NoError(t, os.Chtimes(partPath, childMtime, childMtime), "advance part mtime")
 	err = os.Chtimes(
 		sessionPath,
 		time.Unix(0, sessionMtime),
@@ -4389,6 +4393,8 @@ func TestSyncPathsMiMoCodeStorageIgnoresStaleSessionSkipCache(t *testing.T) {
 		t, sessionID, "msg-a1", "part-a1",
 		"rewritten mimo reply", 1704067201000,
 	)
+	childMtime := sessionMtime.Add(time.Second)
+	require.NoError(t, os.Chtimes(partPath, childMtime, childMtime), "advance part mtime")
 	require.NoError(t,
 		os.Chtimes(sessionPath, sessionMtime, sessionMtime),
 		"restore session mtime")
