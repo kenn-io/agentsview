@@ -258,20 +258,10 @@ func (s *Sync) Push(
 		}
 	}
 
-	excludedIDs, err := readPGExcludedSessionIDs(
-		ctx, s.pg, mapKeys(sessionByID),
-	)
-	if err != nil {
-		return result, err
-	}
-	excludedIDList := mapSetKeys(excludedIDs)
-	if err := deletePGExcludedSessionRows(
-		ctx, s.pg, excludedIDList,
+	if err := purgePGExcludedPushSessions(
+		ctx, s.pg, sessionByID,
 	); err != nil {
 		return result, err
-	}
-	for _, id := range excludedIDList {
-		delete(sessionByID, id)
 	}
 
 	usageFingerprints, err := s.local.UsageEventFingerprints(
@@ -1017,14 +1007,6 @@ func mapKeys(m map[string]db.Session) []string {
 	return keys
 }
 
-func mapSetKeys(m map[string]struct{}) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
-}
-
 func localSessionSyncMarker(sess db.Session) string {
 	marker, err := NormalizeLocalSyncTimestamp(sess.CreatedAt)
 	if err != nil || marker == "" {
@@ -1113,6 +1095,53 @@ func pgExcludedSessionIDsQuery(ids []string) (string, []any) {
 			 WHERE id = ANY($1)`, []any{ids}
 }
 
+func purgePGExcludedPushSessions(
+	ctx context.Context, pg *sql.DB, sessionByID map[string]db.Session,
+) error {
+	tombstoneIDsBySession := make(map[string][]string, len(sessionByID))
+	candidateIDs := []string{}
+	for id, sess := range sessionByID {
+		tombstoneIDs := pgSessionTombstoneIDs(sess)
+		tombstoneIDsBySession[id] = tombstoneIDs
+		candidateIDs = append(candidateIDs, tombstoneIDs...)
+	}
+	excludedIDs, err := readPGExcludedSessionIDs(ctx, pg, candidateIDs)
+	if err != nil {
+		return err
+	}
+	if len(excludedIDs) == 0 {
+		return nil
+	}
+
+	purgeIDs := []string{}
+	for id, tombstoneIDs := range tombstoneIDsBySession {
+		if !hasPGExcludedSessionID(tombstoneIDs, excludedIDs) {
+			continue
+		}
+		purgeIDs = append(purgeIDs, tombstoneIDs...)
+		delete(sessionByID, id)
+	}
+	purgeIDs = uniqueNonEmptyStrings(purgeIDs)
+	if len(purgeIDs) == 0 {
+		return nil
+	}
+	if err := insertPGExcludedSessionIDs(ctx, pg, purgeIDs); err != nil {
+		return err
+	}
+	return deletePGExcludedSessionRows(ctx, pg, purgeIDs)
+}
+
+func hasPGExcludedSessionID(
+	ids []string, excluded map[string]struct{},
+) bool {
+	for _, id := range ids {
+		if _, ok := excluded[id]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 type pgSessionQueryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
@@ -1139,8 +1168,7 @@ func deletePGExcludedSessionRows(
 func deletePGSessionIfExcluded(
 	ctx context.Context, tx *sql.Tx, sess db.Session,
 ) (bool, error) {
-	ids := append([]string{sess.ID}, pgSessionAliasIDs(sess)...)
-	ids = uniqueNonEmptyStrings(ids)
+	ids := pgSessionTombstoneIDs(sess)
 	excluded, err := readPGExcludedSessionIDs(ctx, tx, ids)
 	if err != nil {
 		return false, err

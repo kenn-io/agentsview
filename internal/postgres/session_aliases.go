@@ -46,6 +46,11 @@ func pgSessionAliasIDs(sess db.Session) []string {
 	return []string{aliasID}
 }
 
+func pgSessionTombstoneIDs(sess db.Session) []string {
+	ids := append([]string{sess.ID}, pgSessionAliasIDs(sess)...)
+	return uniqueNonEmptyStrings(ids)
+}
+
 func pgVibeFallbackAliasID(id, agent, filePath string) string {
 	if agent != "vibe" || filePath == "" {
 		return ""

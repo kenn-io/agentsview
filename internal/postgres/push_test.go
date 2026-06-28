@@ -387,6 +387,47 @@ func TestPushSessionSkipsVibeCanonicalWhenFallbackAliasExcluded(t *testing.T) {
 	require.NoError(t, tx.Rollback(), "Rollback")
 }
 
+func TestPurgePGExcludedPushSessionsChecksDerivedAliases(t *testing.T) {
+	state := &pushSessionProbeState{
+		existingExcluded: map[string]bool{
+			"vibe:session_20260616_083518_jkl012": true,
+		},
+		excludedIDs: map[string]bool{},
+	}
+	pg := newPushSessionProbeDB(t, state)
+
+	sessionDir := filepath.Join(
+		t.TempDir(),
+		"session_20260616_083518_jkl012",
+	)
+	filePath := filepath.Join(sessionDir, "messages.jsonl")
+	sessionByID := map[string]db.Session{
+		"vibe:canonical-unchanged": {
+			ID:        "vibe:canonical-unchanged",
+			Project:   "proj",
+			Machine:   "push-machine",
+			Agent:     "vibe",
+			CreatedAt: "2026-01-01T00:00:00Z",
+			FilePath:  &filePath,
+		},
+	}
+
+	err := purgePGExcludedPushSessions(
+		context.Background(), pg, sessionByID,
+	)
+
+	require.NoError(t, err, "purgePGExcludedPushSessions")
+	assert.Empty(t, sessionByID)
+	assert.True(t, state.excludedIDs["vibe:canonical-unchanged"])
+	assert.True(t,
+		state.excludedIDs["vibe:session_20260616_083518_jkl012"],
+	)
+	assert.True(t, state.deletedExcluded,
+		"all excluded aliases should be purged before fingerprint pruning")
+	assert.Equal(t, 1, state.exclusionChecks)
+	assert.Equal(t, 0, state.upserts)
+}
+
 type pushSessionProbeDriver struct{}
 
 type pushSessionProbeConn struct {

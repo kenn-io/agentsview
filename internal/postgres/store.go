@@ -538,9 +538,11 @@ func readPGTrashedSessionExclusions(
 	ctx context.Context, tx *sql.Tx, where string, args ...any,
 ) ([]string, []string, error) {
 	rows, err := tx.QueryContext(ctx,
-		`SELECT s.id, sa.alias_id
+		`SELECT s.id, sa.alias_id, rsa.session_id, rsaa.alias_id
 		 FROM sessions s
 		 LEFT JOIN session_aliases sa ON sa.session_id = s.id
+		 LEFT JOIN session_aliases rsa ON rsa.alias_id = s.id
+		 LEFT JOIN session_aliases rsaa ON rsaa.session_id = rsa.session_id
 		 WHERE `+where+`
 		 FOR UPDATE OF s`,
 		args...,
@@ -554,28 +556,40 @@ func readPGTrashedSessionExclusions(
 	excludedIDs := []string{}
 	sessionSeen := map[string]struct{}{}
 	excludedSeen := map[string]struct{}{}
+	addExcludedID := func(id string) {
+		if id == "" {
+			return
+		}
+		if _, ok := excludedSeen[id]; ok {
+			return
+		}
+		excludedSeen[id] = struct{}{}
+		excludedIDs = append(excludedIDs, id)
+	}
 	for rows.Next() {
 		var id string
 		var aliasID sql.NullString
-		if err := rows.Scan(&id, &aliasID); err != nil {
+		var reverseSessionID sql.NullString
+		var reverseAliasID sql.NullString
+		if err := rows.Scan(
+			&id, &aliasID, &reverseSessionID, &reverseAliasID,
+		); err != nil {
 			return nil, nil, err
 		}
 		if _, ok := sessionSeen[id]; !ok {
 			sessionSeen[id] = struct{}{}
 			sessionIDs = append(sessionIDs, id)
 		}
-		if _, ok := excludedSeen[id]; !ok {
-			excludedSeen[id] = struct{}{}
-			excludedIDs = append(excludedIDs, id)
+		addExcludedID(id)
+		if aliasID.Valid {
+			addExcludedID(aliasID.String)
 		}
-		if !aliasID.Valid || aliasID.String == "" {
-			continue
+		if reverseSessionID.Valid {
+			addExcludedID(reverseSessionID.String)
 		}
-		if _, ok := excludedSeen[aliasID.String]; ok {
-			continue
+		if reverseAliasID.Valid {
+			addExcludedID(reverseAliasID.String)
 		}
-		excludedSeen[aliasID.String] = struct{}{}
-		excludedIDs = append(excludedIDs, aliasID.String)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, nil, err

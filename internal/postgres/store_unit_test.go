@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -165,6 +166,30 @@ func TestDeleteSessionIfTrashedExcludesRecordedAliases(t *testing.T) {
 	assert.True(t, state.deleted["vibe:session_trashed"])
 }
 
+func TestDeleteSessionIfTrashedExcludesReverseAliasCanonical(t *testing.T) {
+	state := &emptyTrashProbeState{
+		sessions: map[string]bool{
+			"vibe:canonical":       false,
+			"vibe:session_trashed": true,
+		},
+		aliases: map[string][]string{
+			"vibe:canonical": {"vibe:session_trashed"},
+		},
+		excluded: map[string]bool{},
+		deleted:  map[string]bool{},
+	}
+	store := &Store{pg: newEmptyTrashProbeDB(t, state)}
+
+	count, err := store.DeleteSessionIfTrashed("vibe:session_trashed")
+
+	require.NoError(t, err, "DeleteSessionIfTrashed")
+	assert.EqualValues(t, 1, count)
+	assert.True(t, state.deleted["vibe:session_trashed"])
+	assert.True(t, state.deleted["vibe:canonical"])
+	assert.True(t, state.excluded["vibe:session_trashed"])
+	assert.True(t, state.excluded["vibe:canonical"])
+}
+
 type emptyTrashProbeDriver struct{}
 
 type emptyTrashProbeConn struct {
@@ -292,8 +317,10 @@ func (c *emptyTrashProbeConn) QueryContext(
 		c.state.sessions["concurrently-trashed"] = true
 	}
 	return &emptyTrashProbeRows{
-		columns: []string{"id", "alias_id"},
-		values:  values,
+		columns: []string{
+			"id", "alias_id", "session_id", "alias_id",
+		},
+		values: values,
 	}, nil
 }
 
@@ -322,16 +349,54 @@ func (s *emptyTrashProbeState) trashedSessionAliasRowsLocked(
 		if !trashed {
 			continue
 		}
-		aliases := s.aliases[id]
-		if len(aliases) == 0 {
-			values = append(values, []driver.Value{id, nil})
+		directAliases := s.aliases[id]
+		if len(directAliases) == 0 {
+			directAliases = []string{""}
+		}
+		reverseAliases := s.reverseAliasRowsLocked(id)
+		if len(reverseAliases) == 0 {
+			for _, aliasID := range directAliases {
+				values = append(values, []driver.Value{
+					id, nullableDriverString(aliasID), nil, nil,
+				})
+			}
 			continue
 		}
-		for _, aliasID := range aliases {
-			values = append(values, []driver.Value{id, aliasID})
+		for _, aliasID := range directAliases {
+			for _, reverseAlias := range reverseAliases {
+				values = append(values, []driver.Value{
+					id,
+					nullableDriverString(aliasID),
+					reverseAlias[0],
+					nullableDriverString(reverseAlias[1]),
+				})
+			}
 		}
 	}
 	return values
+}
+
+func (s *emptyTrashProbeState) reverseAliasRowsLocked(
+	aliasID string,
+) [][2]string {
+	rows := [][2]string{}
+	for sessionID, aliases := range s.aliases {
+		hasAlias := slices.Contains(aliases, aliasID)
+		if !hasAlias {
+			continue
+		}
+		for _, alias := range aliases {
+			rows = append(rows, [2]string{sessionID, alias})
+		}
+	}
+	return rows
+}
+
+func nullableDriverString(value string) driver.Value {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 func (s *emptyTrashProbeState) excludeNamedValuesLocked(
