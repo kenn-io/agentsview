@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -26,6 +27,109 @@ func TestServeDaemonReplacementDecisionAutoReplacesOlderRelease(t *testing.T) {
 	require.NotNil(t, decision.Runtime)
 	assert.Equal(t, serveReplacementAuto, decision.Action)
 	assert.Contains(t, decision.Reason, "older")
+}
+
+func TestPrepareForegroundServeDaemonAutoReplacesOlderDaemon(t *testing.T) {
+	dir := runtimeTestDir(t)
+	host, port := testPingServer(t)
+	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
+		host, port, withRuntimeVersion("1.0.0"),
+	))
+	setTestVersion(t, "1.1.0")
+
+	var stoppedPID int
+	stubStopDaemonRuntimeForUpgrade(t, func(
+		_ config.Config, rt *DaemonRuntime,
+	) error {
+		stoppedPID = rt.Record.PID
+		RemoveDaemonRuntime(dir)
+		return nil
+	})
+
+	out := captureStdout(t, func() {
+		cont, err := prepareForegroundServeDaemon(
+			config.Config{DataDir: dir}, serveReplacementOptions{},
+		)
+		require.NoError(t, err)
+		assert.True(t, cont)
+	})
+
+	assert.Equal(t, os.Getpid(), stoppedPID)
+	assert.Contains(t, out, "Replacing agentsview daemon")
+	assert.Contains(t, out, "version 1.0.0")
+	assert.Nil(t, FindDaemonRuntime(dir))
+}
+
+func TestPrepareForegroundServeDaemonRefusesDevWithoutReplace(t *testing.T) {
+	dir := runtimeTestDir(t)
+	host, port := testPingServer(t)
+	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
+		host, port, withRuntimeVersion("1.0.0"),
+	))
+	setTestVersion(t, "dev")
+	forbidStopDaemonRuntimeForUpgrade(t, "dev build needs --replace")
+
+	cont, err := prepareForegroundServeDaemon(
+		config.Config{DataDir: dir}, serveReplacementOptions{},
+	)
+
+	assert.False(t, cont)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "dev builds")
+	assert.Contains(t, err.Error(), "--replace")
+}
+
+func TestPrepareForegroundServeDaemonReplaceStopsWritableDevConflict(t *testing.T) {
+	dir := runtimeTestDir(t)
+	host, port := testPingServer(t)
+	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
+		host, port, withRuntimeVersion("1.0.0"),
+	))
+	setTestVersion(t, "dev")
+
+	var stopped bool
+	stubStopDaemonRuntimeForUpgrade(t, func(
+		_ config.Config, rt *DaemonRuntime,
+	) error {
+		stopped = true
+		RemoveDaemonRuntime(dir)
+		return nil
+	})
+
+	out := captureStdout(t, func() {
+		cont, err := prepareForegroundServeDaemon(
+			config.Config{DataDir: dir},
+			serveReplacementOptions{Replace: true},
+		)
+		require.NoError(t, err)
+		assert.True(t, cont)
+	})
+
+	assert.True(t, stopped)
+	assert.Contains(t, out, "Replacing agentsview daemon")
+	assert.Nil(t, FindDaemonRuntime(dir))
+}
+
+func TestPrepareForegroundServeDaemonReplaceLeavesReadOnlyDaemon(t *testing.T) {
+	dir := runtimeTestDir(t)
+	host, port := testPingServer(t)
+	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
+		host, port,
+		withRuntimeReadOnly(true),
+		withRuntimeAPIVersion(0),
+	))
+	forbidStopDaemonRuntimeForUpgrade(t, "read-only daemon must not be stopped")
+
+	cont, err := prepareForegroundServeDaemon(
+		config.Config{DataDir: dir},
+		serveReplacementOptions{Replace: true},
+	)
+
+	require.NoError(t, err)
+	assert.True(t, cont)
+	rt, compatErr := FindIncompatibleDaemonRuntime(dir)
+	require.NotNil(t, rt)
+	require.Error(t, compatErr)
 }
 
 func TestServeDaemonReplacementDecisionRefusesDevBuild(t *testing.T) {
@@ -107,4 +211,16 @@ func TestServeDaemonReplacementLinesIncludeRuntimeDetails(t *testing.T) {
 	assert.Contains(t, lines, "API version")
 	assert.Contains(t, lines, "data version")
 	assert.Contains(t, lines, "serve stop")
+}
+
+func TestServeCommandHasReplaceFlag(t *testing.T) {
+	cmd := newServeCommand()
+
+	flag := cmd.Flags().Lookup("replace")
+
+	require.NotNil(t, flag)
+	assert.Equal(t,
+		"Replace a running local daemon before starting",
+		flag.Usage,
+	)
 }

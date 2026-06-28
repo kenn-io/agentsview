@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -27,6 +29,41 @@ type serveReplacementDecision struct {
 	Runtime          *DaemonRuntime
 	CompatibilityErr error
 	Reason           string
+}
+
+func prepareForegroundServeDaemon(
+	cfg config.Config, opts serveReplacementOptions,
+) (bool, error) {
+	decision := decideServeDaemonReplacement(cfg, opts)
+	switch decision.Action {
+	case serveReplacementNone:
+		return true, nil
+	case serveReplacementUseExisting:
+		rt := decision.Runtime
+		if rt != nil {
+			fmt.Printf(
+				"agentsview already running at %s (pid %d)\n",
+				urlFromDaemonRuntime(rt), rt.Record.PID,
+			)
+		}
+		return false, nil
+	case serveReplacementAuto, serveReplacementExplicit:
+		fmt.Println("Replacing agentsview daemon")
+		for _, line := range serveDaemonReplacementLines(decision) {
+			fmt.Println(line)
+		}
+		if err := stopDaemonRuntimeForUpgrade(cfg, decision.Runtime); err != nil {
+			return false, err
+		}
+		return true, nil
+	case serveReplacementRefuse:
+		return false, errors.New(strings.Join(
+			serveDaemonConflictLines(decision), "\n",
+		))
+	default:
+		return false, fmt.Errorf("unknown serve replacement action %d",
+			decision.Action)
+	}
 }
 
 func decideServeDaemonReplacement(

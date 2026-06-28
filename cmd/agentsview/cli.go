@@ -123,6 +123,7 @@ func newRootCommand() *cobra.Command {
 func newServeCommand() *cobra.Command {
 	var background bool
 	var checkDataVersion bool
+	var replace bool
 	cmd := &cobra.Command{
 		Use:          "serve",
 		Short:        "Start server",
@@ -144,7 +145,7 @@ func newServeCommand() *cobra.Command {
 				runServeBackgroundCommand(cmd)
 				return nil
 			}
-			runServe(mustLoadConfig(cmd))
+			runServe(mustLoadConfig(cmd), serveOptions{ReplaceDaemon: replace})
 			return nil
 		},
 	}
@@ -153,6 +154,12 @@ func newServeCommand() *cobra.Command {
 		"background",
 		false,
 		"Start server in the background and return to the shell",
+	)
+	cmd.Flags().BoolVar(
+		&replace,
+		"replace",
+		false,
+		"Replace a running local daemon before starting",
 	)
 	cmd.Flags().BoolVar(
 		&checkDataVersion,

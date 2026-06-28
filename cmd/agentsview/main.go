@@ -85,7 +85,11 @@ func warnMissingDirs(dirs []string, label string) {
 	}
 }
 
-func runServe(cfg config.Config) {
+type serveOptions struct {
+	ReplaceDaemon bool
+}
+
+func runServe(cfg config.Config, opts serveOptions) {
 	start := time.Now()
 	setupLogFile(cfg.DataDir)
 
@@ -107,6 +111,17 @@ func runServe(cfg config.Config) {
 		if cfg.AuthToken != "" && !runningAsBackgroundChild() {
 			fmt.Printf("Auth enabled. Token: %s\n", cfg.AuthToken)
 		}
+	}
+
+	cont, err := prepareForegroundServeDaemon(
+		cfg,
+		serveReplacementOptions{Replace: opts.ReplaceDaemon},
+	)
+	if err != nil {
+		fatal("%v", err)
+	}
+	if !cont {
+		return
 	}
 
 	// Acquire the daemon start lock immediately after config setup,
