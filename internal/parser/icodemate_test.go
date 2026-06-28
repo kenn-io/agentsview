@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -8,7 +9,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestParseIcodemateFileRelabelsOpenCodeSession(t *testing.T) {
+// TestIcodemateProviderParseRelabelsOpenCodeSession exercises the migrated
+// path: IcodeMate is provider-authoritative and reuses the shared
+// OpenCode-format provider, which parses the storage session and relabels
+// it onto the icodemate: ID prefix.
+func TestIcodemateProviderParseRelabelsOpenCodeSession(t *testing.T) {
 	root := t.TempDir()
 	sessionPath := filepath.Join(
 		root, "storage", "session_diff", "global", "ses_icode.json",
@@ -46,9 +51,24 @@ func TestParseIcodemateFileRelabelsOpenCodeSession(t *testing.T) {
 		},
 	})
 
-	sess, msgs, err := ParseIcodemateFile(sessionPath, "testmachine")
+	provider, ok := NewProvider(AgentIcodemate, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "testmachine",
+	})
+	require.True(t, ok)
+
+	sources, err := provider.Discover(context.Background())
 	require.NoError(t, err)
-	require.NotNil(t, sess)
+	require.Len(t, sources, 1)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: sources[0],
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+
+	sess := outcome.Results[0].Result.Session
+	msgs := outcome.Results[0].Result.Messages
 	require.Len(t, msgs, 1)
 
 	assert.Equal(t, "icodemate:ses_icode", sess.ID)

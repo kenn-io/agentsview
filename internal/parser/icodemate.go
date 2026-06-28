@@ -2,30 +2,11 @@ package parser
 
 import "strings"
 
-// Icodemate uses OpenCode's storage format, and is exposed as a distinct
-// agent with the icodemate: ID prefix.
-func ParseIcodemateFile(
-	sessionPath, machine string,
-) (*ParsedSession, []ParsedMessage, error) {
-	sess, msgs, err := ParseOpenCodeFile(sessionPath, machine)
-	if err != nil || sess == nil {
-		return sess, msgs, err
-	}
-	relabelOpenCodeSessionAsIcodemate(sess)
-	return sess, msgs, nil
-}
-
-func ParseIcodemateSession(
-	dbPath, sessionID, machine string,
-) (*ParsedSession, []ParsedMessage, error) {
-	sess, msgs, err := ParseOpenCodeSession(dbPath, sessionID, machine)
-	if err != nil || sess == nil {
-		return sess, msgs, err
-	}
-	relabelOpenCodeSessionAsIcodemate(sess)
-	return sess, msgs, nil
-}
-
+// Icodemate uses OpenCode's storage format and is exposed as a distinct
+// agent with the icodemate: ID prefix. Discovery and parsing run through
+// the shared OpenCode-format provider (openCodeProviderSpecForAgent); the
+// helpers below adapt the shared SQLite metadata reader, source mtime, and
+// session relabeling to Icodemate.
 func ListIcodemateSessionMeta(dbPath string) ([]OpenCodeSessionMeta, error) {
 	metas, err := ListOpenCodeSessionMeta(dbPath)
 	if err != nil {
