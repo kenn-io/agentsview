@@ -22,16 +22,27 @@ var stopDaemonRuntimeForUpgrade = stopDaemonRuntimeForUpgradeImpl
 // runServeStatus reports whether a server owns this data dir, and where to
 // reach it. It always exits zero; the output distinguishes the states.
 func runServeStatus(cfg config.Config) {
+	var readOnly *DaemonRuntime
 	if rt := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil {
-		for _, line := range serveStatusLines(rt) {
-			fmt.Println(line)
+		if rt.ReadOnly {
+			readOnly = rt
+		} else {
+			for _, line := range serveStatusLines(rt) {
+				fmt.Println(line)
+			}
+			return
 		}
-		return
 	}
 	if rt, compatErr := findIncompatibleWritableDaemonRuntime(
 		cfg.DataDir, cfg.AuthToken,
 	); rt != nil {
 		for _, line := range serveIncompatibleDaemonStatusLines(rt, compatErr) {
+			fmt.Println(line)
+		}
+		return
+	}
+	if readOnly != nil {
+		for _, line := range serveStatusLines(readOnly) {
 			fmt.Println(line)
 		}
 		return

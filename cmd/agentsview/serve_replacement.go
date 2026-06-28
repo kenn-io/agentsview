@@ -118,7 +118,7 @@ func decideCompatibleServeDaemonReplacement(
 		decision.Reason = serveDaemonOlderReason(rt)
 		return decision
 	}
-	if update.IsDevBuildVersion(version) && rt.Record.Version != version {
+	if rt.Record.Version != version {
 		decision.Action = serveReplacementRefuse
 		decision.Reason = serveDaemonRefusalReason(rt, nil)
 		return decision

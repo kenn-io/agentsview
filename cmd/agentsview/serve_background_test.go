@@ -335,6 +335,86 @@ func TestEnsureBackgroundServeExistingDaemon(t *testing.T) {
 	assert.Equal(t, port, rt.Port)
 }
 
+func TestEnsureBackgroundServeChecksTooNewDatabaseBeforeReplacingCompatibleDaemon(
+	t *testing.T,
+) {
+	dir := runtimeTestDir(t)
+	dbPath := writeTooNewSQLiteDB(t, dir)
+	host, port := testPingServer(t)
+	_, err := WriteDaemonRuntime(dir, host, port, "1.0.0", false)
+	require.NoError(t, err)
+	setTestVersion(t, "1.1.0")
+
+	var stopped bool
+	stubStopDaemonRuntimeForUpgrade(t, func(
+		config.Config, *DaemonRuntime,
+	) error {
+		stopped = true
+		RemoveDaemonRuntime(dir)
+		return nil
+	})
+	oldStartProcess := startServeBackgroundProcessForEnsure
+	startServeBackgroundProcessForEnsure = func(
+		config.Config, []string,
+	) (*exec.Cmd, string, error) {
+		return nil, "", fmt.Errorf("start should not run")
+	}
+	t.Cleanup(func() {
+		startServeBackgroundProcessForEnsure = oldStartProcess
+		RemoveDaemonRuntime(dir)
+	})
+
+	cfg := config.Config{DataDir: dir, DBPath: dbPath}
+	rt, err := ensureBackgroundServe(context.Background(), &cfg, time.Second)
+
+	require.Error(t, err)
+	assert.True(t, db.IsDataVersionTooNew(err))
+	assert.Nil(t, rt)
+	assert.False(t, stopped)
+	assert.NotNil(t, FindDaemonRuntime(dir))
+}
+
+func TestEnsureBackgroundServeChecksTooNewDatabaseBeforeReplacingIncompatibleDaemon(
+	t *testing.T,
+) {
+	dir := runtimeTestDir(t)
+	dbPath := writeTooNewSQLiteDB(t, dir)
+	host, port := testPingServer(t)
+	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
+		host, port,
+		withRuntimeVersion("1.0.0"),
+		withRuntimeAPIVersion(0),
+	))
+	setTestVersion(t, "1.1.0")
+
+	var stopped bool
+	stubStopDaemonRuntimeForUpgrade(t, func(
+		config.Config, *DaemonRuntime,
+	) error {
+		stopped = true
+		RemoveDaemonRuntime(dir)
+		return nil
+	})
+	oldStartProcess := startServeBackgroundProcessForEnsure
+	startServeBackgroundProcessForEnsure = func(
+		config.Config, []string,
+	) (*exec.Cmd, string, error) {
+		return nil, "", fmt.Errorf("start should not run")
+	}
+	t.Cleanup(func() { startServeBackgroundProcessForEnsure = oldStartProcess })
+
+	cfg := config.Config{DataDir: dir, DBPath: dbPath}
+	rt, err := ensureBackgroundServe(context.Background(), &cfg, time.Second)
+
+	require.Error(t, err)
+	assert.True(t, db.IsDataVersionTooNew(err))
+	assert.Nil(t, rt)
+	assert.False(t, stopped)
+	found, compatErr := FindIncompatibleDaemonRuntime(dir)
+	require.NotNil(t, found)
+	require.Error(t, compatErr)
+}
+
 func TestEnsureBackgroundServeIncompatibleDaemonReturnsError(t *testing.T) {
 	dir := runtimeTestDir(t)
 	host, port := testPingServer(t)
@@ -451,6 +531,57 @@ func TestEnsureBackgroundServeLaunchLoserWaitsThroughReplacementGap(
 	require.NotNil(t, rt)
 	assert.Equal(t, newHost, rt.Host)
 	assert.Equal(t, newPort, rt.Port)
+}
+
+func TestEnsureBackgroundServeChecksTooNewDatabaseAfterStartupWait(
+	t *testing.T,
+) {
+	dir := runtimeTestDir(t)
+	dbPath := writeTooNewSQLiteDB(t, dir)
+	setTestVersion(t, "1.1.0")
+
+	var stopped bool
+	stubStopDaemonRuntimeForUpgrade(t, func(
+		config.Config, *DaemonRuntime,
+	) error {
+		stopped = true
+		RemoveDaemonRuntime(dir)
+		return nil
+	})
+	oldStartProcess := startServeBackgroundProcessForEnsure
+	startServeBackgroundProcessForEnsure = func(
+		config.Config, []string,
+	) (*exec.Cmd, string, error) {
+		return nil, "", fmt.Errorf("start should not run")
+	}
+	t.Cleanup(func() { startServeBackgroundProcessForEnsure = oldStartProcess })
+
+	MarkDaemonStarting(dir)
+	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+	oldHost, oldPort := testPingServer(t)
+	errCh := make(chan error, 1)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		_, err := writeRuntimeRecordForTest(dir, daemonRuntimeRecord(
+			oldHost, oldPort,
+			withRuntimeVersion("1.0.0"),
+			withRuntimeAPIVersion(0),
+		))
+		UnmarkDaemonStarting(dir)
+		errCh <- err
+	}()
+
+	cfg := config.Config{DataDir: dir, DBPath: dbPath}
+	rt, err := ensureBackgroundServe(context.Background(), &cfg, time.Second)
+
+	require.NoError(t, <-errCh)
+	require.Error(t, err)
+	assert.True(t, db.IsDataVersionTooNew(err))
+	assert.Nil(t, rt)
+	assert.False(t, stopped)
+	found, compatErr := FindIncompatibleDaemonRuntime(dir)
+	require.NotNil(t, found)
+	require.Error(t, compatErr)
 }
 
 func TestEnsureBackgroundServeLaunchLoserIgnoresReadOnlyRuntimeDuringReplacement(
@@ -740,6 +871,53 @@ func TestRunServeBackgroundPreservesNoSyncWhenReplacingOlderDaemon(
 			assert.Equal(t, []string{"serve", "--no-sync"}, gotArgs)
 		})
 	}
+}
+
+func TestRunServeBackgroundKeepsInvocationNoSyncWhenReplacingSyncingDaemon(
+	t *testing.T,
+) {
+	dir := runtimeTestDir(t)
+	oldHost, oldPort := testPingServer(t)
+	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
+		dir, oldHost, oldPort, "1.0.0", false, false, false,
+	)
+	require.NoError(t, err)
+	setTestVersion(t, "1.1.0")
+
+	stubStopDaemonRuntimeForUpgrade(t, func(
+		_ config.Config, rt *DaemonRuntime,
+	) error {
+		assert.False(t, rt.NoSync)
+		RemoveDaemonRuntime(dir)
+		return nil
+	})
+
+	newHost, newPort := testPingServer(t)
+	oldStart := startServeBackgroundProcessForRun
+	var gotArgs []string
+	startServeBackgroundProcessForRun = func(
+		_ config.Config, arguments []string,
+	) (*exec.Cmd, string, error) {
+		gotArgs = append([]string(nil), arguments...)
+		_, err := WriteDaemonRuntime(dir, newHost, newPort, "1.1.0", false)
+		require.NoError(t, err)
+		cmd := exec.Command("sleep", "2")
+		require.NoError(t, cmd.Start())
+		t.Cleanup(func() { _ = cmd.Process.Kill() })
+		return cmd, "test.log", nil
+	}
+	t.Cleanup(func() {
+		startServeBackgroundProcessForRun = oldStart
+		RemoveDaemonRuntime(dir)
+	})
+
+	runServeBackground(
+		config.Config{DataDir: dir},
+		[]string{"serve", "--background", "--no-sync"},
+		serveReplacementOptions{},
+	)
+
+	assert.Equal(t, []string{"serve", "--no-sync"}, gotArgs)
 }
 
 func TestEnsureBackgroundServeConcurrentLaunchConvergesOnDaemon(t *testing.T) {

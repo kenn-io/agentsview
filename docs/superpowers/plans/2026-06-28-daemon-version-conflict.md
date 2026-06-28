@@ -176,8 +176,11 @@ Then implement `decideServeDaemonReplacement(cfg, opts)`:
 - Ignore read-only runtimes.
 - Return `serveReplacementExplicit` when `opts.Replace` is true.
 - Return `serveReplacementAuto` when `shouldUpgradeDaemonRuntime` is true.
-- Return `serveReplacementUseExisting` for compatible writable daemons that
-  should not be replaced automatically.
+- Return `serveReplacementUseExisting` only for compatible writable daemons that
+  are safe to reuse as-is, such as the same binary version.
+- Return `serveReplacementRefuse` when a compatible writable daemon has a
+  different version that the current binary cannot prove is older, including
+  dev builds, downgrades, and non-semver versions.
 - If no compatible writable runtime is found, check
   `findIncompatibleWritableDaemonRuntime`.
 - For incompatible writable runtimes, return explicit, auto, or refuse using
@@ -350,7 +353,8 @@ Add `prepareForegroundServeDaemon(cfg, opts) (bool, error)`:
 - `serveReplacementUseExisting`: print `agentsview already running at ...` and
   return `false, nil`.
 - `serveReplacementAuto` or `serveReplacementExplicit`: print replacement lines,
-  call `stopDaemonRuntimeForUpgrade(cfg, decision.Runtime)`, return
+  call `stopDaemonRuntimeForUpgrade(cfg, decision.Runtime)`, and return
+  `false, err` if stopping or identity confirmation fails; otherwise return
   `true, nil`.
 - `serveReplacementRefuse`: return `false, errors.New(strings.Join(...))`.
 

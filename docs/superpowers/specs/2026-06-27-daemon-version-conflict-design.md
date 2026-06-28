@@ -124,18 +124,20 @@ sync settings.
 
 Background `serve` should replace its current scattered compatible and
 incompatible checks with the shared classifier. Its existing launch lock remains
-the concurrency boundary for stop/start replacement. It should keep the current,
-unconditional background behavior that preserves the replaced daemon's `no_sync`
-setting. That asymmetry is intentional for this change: the background path is
-shared with daemon auto-start flows where the caller often has no sync-mode
-opinion, so preserving the prior writer mode is the smaller behavioral change.
-Other host, port, and auth settings should still come from the new invocation's
-config and flags.
+the concurrency boundary for stop/start replacement. It should keep the current
+true-only background inheritance for `no_sync`: replacing a no-sync daemon keeps
+the replacement no-sync by default, while replacing a syncing daemon uses the
+new invocation's sync flags. That asymmetry is intentional for this change: the
+background path is shared with daemon auto-start flows where the caller often
+has no sync-mode opinion, so preserving an existing no-sync writer mode is the
+smaller behavioral change. Other host, port, and auth settings should still come
+from the new invocation's config and flags.
 
-`serve status` should first look for a compatible daemon with
-`FindDaemonRuntime`. If none is found, it should call
-`FindIncompatibleDaemonRuntime` before falling back to generic live-record or
-startup-lock messages.
+`serve status` should first report a compatible writable daemon when one exists.
+If compatible discovery only finds a read-only daemon, it should still check for
+an incompatible writable daemon before printing the read-only status. This keeps
+the local write-owner conflict visible before falling back to generic
+live-record or startup-lock messages.
 
 The existing `openWriteDB` daemon rejection remains as a second line of defense
 after replacement. A successful stop removes the old runtime record, so the

@@ -142,10 +142,8 @@ func runServeBackground(
 		}
 		return
 	case serveReplacementAuto, serveReplacementExplicit:
-		if cfg.DBPath != "" {
-			if err := db.CheckDataVersion(cfg.DBPath); err != nil {
-				fatal("serve background: %v", err)
-			}
+		if err := checkBackgroundReplacementDataVersion(&cfg); err != nil {
+			fatal("serve background: %v", err)
 		}
 		// runServeBackgroundCommand holds the background launch lock across
 		// this stop/start sequence, so another CLI launcher cannot race into
@@ -286,6 +284,9 @@ func ensureBackgroundServe(
 	if rt := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil &&
 		!rt.ReadOnly {
 		if shouldUpgradeDaemonRuntime(rt, version) {
+			if err := checkBackgroundReplacementDataVersion(cfg); err != nil {
+				return nil, err
+			}
 			adoptDaemonRuntimeLaunchOptions(cfg, rt)
 			if err := stopDaemonRuntimeForUpgrade(*cfg, rt); err != nil {
 				return nil, fmt.Errorf(
@@ -305,6 +306,9 @@ func ensureBackgroundServe(
 		cfg.DataDir, cfg.AuthToken,
 	); err != nil {
 		if rt != nil && shouldUpgradeIncompatibleDaemonRuntime(rt, version) {
+			if err := checkBackgroundReplacementDataVersion(cfg); err != nil {
+				return nil, err
+			}
 			adoptDaemonRuntimeLaunchOptions(cfg, rt)
 			if stopErr := stopDaemonRuntimeForUpgrade(*cfg, rt); stopErr != nil {
 				return nil, fmt.Errorf(
@@ -336,6 +340,9 @@ func ensureBackgroundServe(
 			cfg.DataDir, cfg.AuthToken,
 		); err != nil {
 			if rt != nil && shouldUpgradeIncompatibleDaemonRuntime(rt, version) {
+				if err := checkBackgroundReplacementDataVersion(cfg); err != nil {
+					return nil, err
+				}
 				adoptDaemonRuntimeLaunchOptions(cfg, rt)
 				if stopErr := stopDaemonRuntimeForUpgrade(*cfg, rt); stopErr != nil {
 					return nil, fmt.Errorf(
@@ -383,6 +390,13 @@ func ensureBackgroundServe(
 		)
 	}
 	return rt, nil
+}
+
+func checkBackgroundReplacementDataVersion(cfg *config.Config) error {
+	if cfg == nil || cfg.DBPath == "" {
+		return nil
+	}
+	return db.CheckDataVersion(cfg.DBPath)
 }
 
 func waitForBackgroundLaunchOwner(

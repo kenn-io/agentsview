@@ -116,6 +116,46 @@ func TestPrepareForegroundServeDaemonUsesExistingCompatibleDaemon(t *testing.T) 
 	assert.Contains(t, out, "http://")
 }
 
+func TestServeDaemonReplacementDecisionRefusesCompatibleDowngrade(t *testing.T) {
+	dir := runtimeTestDir(t)
+	host, port := testPingServer(t)
+	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
+		host, port, withRuntimeVersion("1.1.0"),
+	))
+	setTestVersion(t, "1.0.0")
+	forbidStopDaemonRuntimeForUpgrade(t, "downgrade needs --replace")
+
+	decision := decideServeDaemonReplacement(
+		config.Config{DataDir: dir}, serveReplacementOptions{},
+	)
+
+	require.NotNil(t, decision.Runtime)
+	assert.Equal(t, serveReplacementRefuse, decision.Action)
+	assert.Contains(t, decision.Reason, "newer")
+	assert.Contains(t, strings.Join(serveDaemonConflictLines(decision), "\n"),
+		"--replace")
+}
+
+func TestServeDaemonReplacementDecisionRefusesCompatibleNonSemver(t *testing.T) {
+	dir := runtimeTestDir(t)
+	host, port := testPingServer(t)
+	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
+		host, port, withRuntimeVersion("local-build"),
+	))
+	setTestVersion(t, "1.1.0")
+	forbidStopDaemonRuntimeForUpgrade(t, "non-semver daemon needs --replace")
+
+	decision := decideServeDaemonReplacement(
+		config.Config{DataDir: dir}, serveReplacementOptions{},
+	)
+
+	require.NotNil(t, decision.Runtime)
+	assert.Equal(t, serveReplacementRefuse, decision.Action)
+	assert.Contains(t, decision.Reason, "not newer")
+	assert.Contains(t, strings.Join(serveDaemonConflictLines(decision), "\n"),
+		"--replace")
+}
+
 func TestPrepareForegroundServeDaemonRefusesDevWithoutReplace(t *testing.T) {
 	dir := runtimeTestDir(t)
 	host, port := testPingServer(t)
