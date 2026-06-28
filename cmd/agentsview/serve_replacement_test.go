@@ -94,6 +94,39 @@ func TestPrepareForegroundServeDaemonPreservesNoSyncWhenReplacingOlderDaemon(
 	assert.True(t, cfg.NoSync)
 }
 
+func TestPrepareForegroundServeDaemonExplicitNoSyncOverridesRuntime(
+	t *testing.T,
+) {
+	dir := runtimeTestDir(t)
+	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+	host, port := testPingServer(t)
+	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
+		dir, host, port, "1.0.0", false, false, true,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
+	setTestVersion(t, "1.1.0")
+
+	stubStopDaemonRuntimeForUpgrade(t, func(
+		cfg config.Config, rt *DaemonRuntime,
+	) error {
+		assert.False(t, cfg.NoSync)
+		assert.True(t, rt.NoSync)
+		RemoveDaemonRuntime(dir)
+		return nil
+	})
+
+	cfg := config.Config{DataDir: dir, NoSync: false}
+	cont, err := prepareForegroundServeDaemon(
+		&cfg,
+		serveReplacementOptions{NoSyncExplicit: true},
+	)
+
+	require.NoError(t, err)
+	assert.True(t, cont)
+	assert.False(t, cfg.NoSync)
+}
+
 func TestPrepareForegroundServeDaemonMarksStartingBeforeStopping(t *testing.T) {
 	dir := runtimeTestDir(t)
 	host, port := testPingServer(t)

@@ -86,7 +86,8 @@ func warnMissingDirs(dirs []string, label string) {
 }
 
 type serveOptions struct {
-	ReplaceDaemon bool
+	ReplaceDaemon  bool
+	NoSyncExplicit bool
 }
 
 func runServe(cfg config.Config, opts serveOptions) {
@@ -115,7 +116,10 @@ func runServe(cfg config.Config, opts serveOptions) {
 
 	cont, err := prepareForegroundServeDaemon(
 		&cfg,
-		serveReplacementOptions{Replace: opts.ReplaceDaemon},
+		serveReplacementOptions{
+			Replace:        opts.ReplaceDaemon,
+			NoSyncExplicit: opts.NoSyncExplicit,
+		},
 	)
 	if err != nil {
 		fatal("%v", err)

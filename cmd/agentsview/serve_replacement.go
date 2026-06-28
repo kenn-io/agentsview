@@ -22,7 +22,8 @@ const (
 )
 
 type serveReplacementOptions struct {
-	Replace bool
+	Replace        bool
+	NoSyncExplicit bool
 }
 
 type serveReplacementDecision struct {
@@ -74,7 +75,9 @@ func prepareForegroundServeDaemon(
 		for _, line := range serveDaemonReplacementLines(decision) {
 			fmt.Println(line)
 		}
-		adoptDaemonRuntimeLaunchOptions(cfg, decision.Runtime)
+		if !opts.NoSyncExplicit {
+			adoptDaemonRuntimeLaunchOptions(cfg, decision.Runtime)
+		}
 		if err := stopDaemonRuntimeForUpgrade(*cfg, decision.Runtime); err != nil {
 			if acquiredStartLock {
 				UnmarkDaemonStarting(cfg.DataDir)

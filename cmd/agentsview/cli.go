@@ -147,7 +147,10 @@ func newServeCommand() *cobra.Command {
 				)
 				return nil
 			}
-			runServe(mustLoadConfig(cmd), serveOptions{ReplaceDaemon: replace})
+			runServe(mustLoadConfig(cmd), serveOptions{
+				ReplaceDaemon:  replace,
+				NoSyncExplicit: cmd.Flags().Changed("no-sync"),
+			})
 			return nil
 		},
 	}
