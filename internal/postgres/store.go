@@ -522,32 +522,20 @@ func (s *Store) EmptyTrash() (int, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE sessions
-		 SET deleted_at = deleted_at
-		 WHERE deleted_at IS NOT NULL`,
-	); err != nil {
-		return 0, mapPGWriteError("locking trashed sessions", err)
-	}
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO excluded_sessions (id)
-		 SELECT id FROM sessions WHERE deleted_at IS NOT NULL
-		 ON CONFLICT (id) DO NOTHING`,
-	); err != nil {
-		return 0, mapPGWriteError(
-			"recording excluded trashed sessions", err,
+	var n int64
+	if err := tx.QueryRowContext(ctx,
+		`WITH deleted AS (
+			DELETE FROM sessions
+			WHERE deleted_at IS NOT NULL
+			RETURNING id
+		), excluded AS (
+			INSERT INTO excluded_sessions (id)
+			SELECT id FROM deleted
+			ON CONFLICT (id) DO NOTHING
 		)
-	}
-
-	res, err := tx.ExecContext(ctx,
-		"DELETE FROM sessions WHERE deleted_at IS NOT NULL",
-	)
-	if err != nil {
+		SELECT COUNT(*) FROM deleted`,
+	).Scan(&n); err != nil {
 		return 0, mapPGWriteError("emptying trash", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("counting emptied trash rows: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, mapPGWriteError("commit empty-trash", err)
