@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/kit/daemon"
 )
 
@@ -122,6 +125,134 @@ func TestRunServeBackgroundReplaceOverridesDevRefusal(t *testing.T) {
 	)
 
 	assert.True(t, stopped)
+}
+
+func TestRunServeBackgroundRejectsTooNewDatabaseBeforeStop(t *testing.T) {
+	dir := runtimeTestDir(t)
+	dbPath := writeTooNewSQLiteDB(t, dir)
+
+	stopMarker := filepath.Join(dir, "stop-called")
+	cmd := exec.Command(
+		os.Args[0],
+		"-test.run=TestRunServeBackgroundRejectsTooNewDatabaseBeforeStopHelper",
+		"--",
+	)
+	cmd.Env = append(
+		os.Environ(),
+		"AGENTSVIEW_BACKGROUND_TOO_NEW_HELPER=1",
+		"AGENTSVIEW_BACKGROUND_TOO_NEW_DIR="+dir,
+		"AGENTSVIEW_BACKGROUND_TOO_NEW_DB="+dbPath,
+		"AGENTSVIEW_BACKGROUND_TOO_NEW_MARKER="+stopMarker,
+	)
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "helper should fatal on too-new database\n%s", out)
+	assert.Contains(t, string(out), "database data version")
+	assert.NoFileExists(t, stopMarker,
+		"too-new database must be rejected before stop")
+	runtimeFiles, err := filepath.Glob(filepath.Join(dir, "daemon.*.json"))
+	require.NoError(t, err)
+	assert.Len(t, runtimeFiles, 1,
+		"old daemon runtime should remain when preflight fails")
+}
+
+func TestRunServeBackgroundRejectsTooNewDatabaseBeforeStopHelper(t *testing.T) {
+	if os.Getenv("AGENTSVIEW_BACKGROUND_TOO_NEW_HELPER") != "1" {
+		return
+	}
+
+	dir := os.Getenv("AGENTSVIEW_BACKGROUND_TOO_NEW_DIR")
+	dbPath := os.Getenv("AGENTSVIEW_BACKGROUND_TOO_NEW_DB")
+	stopMarker := os.Getenv("AGENTSVIEW_BACKGROUND_TOO_NEW_MARKER")
+	require.NotEmpty(t, dir)
+	require.NotEmpty(t, dbPath)
+	require.NotEmpty(t, stopMarker)
+
+	host, port := testPingServer(t)
+	_, err := WriteDaemonRuntime(dir, host, port, "1.0.0", false)
+	require.NoError(t, err)
+
+	stopDaemonRuntimeForUpgrade = func(
+		_ config.Config, rt *DaemonRuntime,
+	) error {
+		require.NotNil(t, rt)
+		require.NoError(t, os.WriteFile(stopMarker, []byte("stop"), 0o600))
+		if rt.Record.SourcePath != "" {
+			_ = os.Remove(rt.Record.SourcePath)
+		}
+		return nil
+	}
+	startServeBackgroundProcessForRun = func(
+		config.Config, []string,
+	) (*exec.Cmd, string, error) {
+		return nil, "", fmt.Errorf("start should not run")
+	}
+
+	runServeBackground(
+		config.Config{DataDir: dir, DBPath: dbPath},
+		[]string{"serve", "--background", "--replace"},
+		serveReplacementOptions{Replace: true},
+	)
+}
+
+func TestServeBackgroundReplaceCommandUsesParentReplacementUnderLaunchLock(
+	t *testing.T,
+) {
+	dir := testDataDir(t)
+	host, port := testPingServer(t)
+	_, err := WriteDaemonRuntime(dir, host, port, "1.0.0", false)
+	require.NoError(t, err)
+	setTestVersion(t, "1.0.0")
+
+	oldArgs := os.Args
+	os.Args = []string{
+		"agentsview", "serve", "--background", "--replace", "--port", "0",
+	}
+	t.Cleanup(func() { os.Args = oldArgs })
+
+	var stopped bool
+	stubStopDaemonRuntimeForUpgrade(t, func(
+		_ config.Config, rt *DaemonRuntime,
+	) error {
+		stopped = true
+		require.NotNil(t, rt)
+		lock, ok := acquireBackgroundLaunchLock(dir)
+		if ok {
+			_ = lock.Unlock()
+		}
+		assert.False(t, ok,
+			"background replacement stop must run under launch lock")
+		RemoveDaemonRuntime(dir)
+		return nil
+	})
+
+	newHost, newPort := testPingServer(t)
+	oldStart := startServeBackgroundProcessForRun
+	var gotArgs []string
+	startServeBackgroundProcessForRun = func(
+		_ config.Config, arguments []string,
+	) (*exec.Cmd, string, error) {
+		gotArgs = append([]string(nil), arguments...)
+		assert.NotContains(t, arguments, "--replace")
+		assert.NotContains(t, arguments, "--background")
+		_, err := WriteDaemonRuntime(dir, newHost, newPort, "1.0.0", false)
+		require.NoError(t, err)
+		cmd := exec.Command("sleep", "2")
+		require.NoError(t, cmd.Start())
+		t.Cleanup(func() { _ = cmd.Process.Kill() })
+		return cmd, "test.log", nil
+	}
+	t.Cleanup(func() {
+		startServeBackgroundProcessForRun = oldStart
+		RemoveDaemonRuntime(dir)
+	})
+
+	_, err = executeCommand(
+		newRootCommand(), "serve", "--background", "--replace", "--port", "0",
+	)
+
+	require.NoError(t, err)
+	assert.True(t, stopped)
+	assert.Equal(t, []string{"serve", "--port", "0"}, gotArgs)
 }
 
 func TestServeCommandParsesBackgroundFlag(t *testing.T) {
@@ -674,6 +805,22 @@ func TestEnsureTransportArchiveWriteRecoversStaleBackgroundRuntime(t *testing.T)
 
 func TestConfigureServeBackgroundCommandSetsProcessAttributes(t *testing.T) {
 	requireConfiguredServeBackgroundSysProcAttr(t)
+}
+
+func writeTooNewSQLiteDB(t *testing.T, dir string) string {
+	t.Helper()
+	dbPath := filepath.Join(dir, "sessions.db")
+	database, err := db.Open(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	futureVersion := db.CurrentDataVersion() + 10
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = conn.Exec(fmt.Sprintf("PRAGMA user_version = %d", futureVersion))
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	return dbPath
 }
 
 // requireConfiguredServeBackgroundSysProcAttr builds the background serve

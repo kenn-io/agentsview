@@ -12,6 +12,7 @@ import (
 	"github.com/gofrs/flock"
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 const (
@@ -141,6 +142,11 @@ func runServeBackground(
 		}
 		return
 	case serveReplacementAuto, serveReplacementExplicit:
+		if cfg.DBPath != "" {
+			if err := db.CheckDataVersion(cfg.DBPath); err != nil {
+				fatal("serve background: %v", err)
+			}
+		}
 		// runServeBackgroundCommand holds the background launch lock across
 		// this stop/start sequence, so another CLI launcher cannot race into
 		// the replacement gap.
