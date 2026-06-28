@@ -86,7 +86,9 @@ func reportBackgroundLaunchInProgress(dataDir, authToken string) {
 // lock could clobber each other's writes -- leaving the spawned server using a
 // token the parent never printed. Holding the launch lock across both config
 // load and token generation makes those writes single-writer.
-func runServeBackgroundCommand(cmd *cobra.Command) {
+func runServeBackgroundCommand(
+	cmd *cobra.Command, opts serveReplacementOptions,
+) {
 	dataDir, err := config.ResolveDataDir()
 	if err != nil {
 		fatal("serve background: resolving data dir: %v", err)
@@ -106,7 +108,7 @@ func runServeBackgroundCommand(cmd *cobra.Command) {
 	}
 	defer func() { _ = launchLock.Unlock() }()
 
-	runServeBackground(mustLoadConfig(cmd), os.Args[1:])
+	runServeBackground(mustLoadConfig(cmd), os.Args[1:], opts)
 }
 
 // runServeBackground generates the auth token, checks for an existing daemon,
@@ -114,7 +116,9 @@ func runServeBackgroundCommand(cmd *cobra.Command) {
 // launch lock (see runServeBackgroundCommand). The launch lock is distinct
 // from the daemon start lock so the spawned child can still claim the start
 // lock during its own (possibly long) startup.
-func runServeBackground(cfg config.Config, args []string) {
+func runServeBackground(
+	cfg config.Config, args []string, opts serveReplacementOptions,
+) {
 	if cfg.RequireAuth {
 		if err := cfg.EnsureAuthToken(); err != nil {
 			fatal("serve background: generating auth token: %v", err)
@@ -124,50 +128,43 @@ func runServeBackground(cfg config.Config, args []string) {
 		}
 	}
 
-	if rt := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil &&
-		!rt.ReadOnly {
-		if shouldUpgradeDaemonRuntime(rt, version) {
-			// runServeBackgroundCommand holds the background launch lock across
-			// this stop/start sequence, so another CLI launcher cannot race into
-			// the replacement gap.
-			adoptDaemonRuntimeLaunchOptions(&cfg, rt)
-			if err := stopDaemonRuntimeForUpgrade(cfg, rt); err != nil {
-				fatal(
-					"serve background: stopping older daemon before "+
-						"restart: %v",
-					err,
-				)
-			}
-		} else {
+	decision := decideServeDaemonReplacement(cfg, opts)
+	switch decision.Action {
+	case serveReplacementNone:
+	case serveReplacementUseExisting:
+		if rt := decision.Runtime; rt != nil {
 			fmt.Printf(
 				"agentsview already running at %s (pid %d)\n",
 				urlFromDaemonRuntime(rt),
 				rt.Record.PID,
 			)
-			return
 		}
-	}
-	if rt, err := findIncompatibleWritableDaemonRuntime(
-		cfg.DataDir, cfg.AuthToken,
-	); err != nil {
-		if shouldUpgradeIncompatibleDaemonRuntime(rt, version) {
-			// The background launch lock is still held here; incompatible
-			// replacement follows the same serialized stop/start path.
-			adoptDaemonRuntimeLaunchOptions(&cfg, rt)
-			if stopErr := stopDaemonRuntimeForUpgrade(cfg, rt); stopErr != nil {
-				fatal(
-					"serve background: stopping older daemon before "+
-						"restart: %v",
-					stopErr,
-				)
-			}
-		} else {
+		return
+	case serveReplacementAuto, serveReplacementExplicit:
+		// runServeBackgroundCommand holds the background launch lock across
+		// this stop/start sequence, so another CLI launcher cannot race into
+		// the replacement gap.
+		adoptDaemonRuntimeLaunchOptions(&cfg, decision.Runtime)
+		fmt.Println("Replacing agentsview daemon")
+		for _, line := range serveDaemonReplacementLines(decision) {
+			fmt.Println(line)
+		}
+		if err := stopDaemonRuntimeForUpgrade(cfg, decision.Runtime); err != nil {
 			fatal(
-				"serve background: incompatible daemon is already running: %v; "+
-					"run `agentsview serve stop` before starting this version",
+				"serve background: stopping daemon before restart: %v",
 				err,
 			)
 		}
+	case serveReplacementRefuse:
+		fatal(
+			"serve background: %s",
+			strings.Join(serveDaemonConflictLines(decision), "\n"),
+		)
+	default:
+		fatal(
+			"serve background: unknown serve replacement action %d",
+			decision.Action,
+		)
 	}
 
 	// A writable daemon (a foreground `serve` or a prior background launch)
@@ -178,6 +175,7 @@ func runServeBackground(cfg config.Config, args []string) {
 		return
 	}
 
+	args = serveBackgroundChildArgs(args)
 	args = serveBackgroundArgsWithNoSync(args, cfg.NoSync)
 	child, logPath, err := startServeBackgroundProcessForRun(cfg, args)
 	if err != nil {

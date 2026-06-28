@@ -142,7 +142,9 @@ func newServeCommand() *cobra.Command {
 				// Acquire the launch lock before loading config; config
 				// loading writes config.toml and must be single-writer
 				// across concurrent launches.
-				runServeBackgroundCommand(cmd)
+				runServeBackgroundCommand(
+					cmd, serveReplacementOptions{Replace: replace},
+				)
 				return nil
 			}
 			runServe(mustLoadConfig(cmd), serveOptions{ReplaceDaemon: replace})

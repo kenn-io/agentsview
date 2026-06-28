@@ -79,6 +79,51 @@ func TestServeBackgroundChildArgsRemovesReplaceFlag(t *testing.T) {
 	assert.Equal(t, []string{"serve", "--host", "127.0.0.1"}, got)
 }
 
+func TestRunServeBackgroundReplaceOverridesDevRefusal(t *testing.T) {
+	dir := runtimeTestDir(t)
+	host, port := testPingServer(t)
+	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
+		host, port, withRuntimeVersion("1.0.0"),
+	))
+	setTestVersion(t, "dev")
+
+	var stopped bool
+	stubStopDaemonRuntimeForUpgrade(t, func(
+		_ config.Config, rt *DaemonRuntime,
+	) error {
+		stopped = true
+		assert.Equal(t, "1.0.0", rt.Record.Version)
+		RemoveDaemonRuntime(dir)
+		return nil
+	})
+
+	newHost, newPort := testPingServer(t)
+	oldStart := startServeBackgroundProcessForRun
+	startServeBackgroundProcessForRun = func(
+		_ config.Config, arguments []string,
+	) (*exec.Cmd, string, error) {
+		assert.NotContains(t, arguments, "--replace")
+		_, err := WriteDaemonRuntime(dir, newHost, newPort, "dev", false)
+		require.NoError(t, err)
+		cmd := exec.Command("sleep", "2")
+		require.NoError(t, cmd.Start())
+		t.Cleanup(func() { _ = cmd.Process.Kill() })
+		return cmd, "test.log", nil
+	}
+	t.Cleanup(func() {
+		startServeBackgroundProcessForRun = oldStart
+		RemoveDaemonRuntime(dir)
+	})
+
+	runServeBackground(
+		config.Config{DataDir: dir},
+		[]string{"serve", "--background", "--replace"},
+		serveReplacementOptions{Replace: true},
+	)
+
+	assert.True(t, stopped)
+}
+
 func TestServeCommandParsesBackgroundFlag(t *testing.T) {
 	dataDir := testDataDir(t)
 
@@ -558,6 +603,7 @@ func TestRunServeBackgroundPreservesNoSyncWhenReplacingOlderDaemon(
 			runServeBackground(
 				config.Config{DataDir: dir},
 				[]string{"serve", "--background"},
+				serveReplacementOptions{},
 			)
 
 			assert.Equal(t, []string{"serve", "--no-sync"}, gotArgs)
