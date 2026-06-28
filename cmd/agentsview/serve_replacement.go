@@ -48,11 +48,18 @@ func prepareForegroundServeDaemon(
 		}
 		return false, nil
 	case serveReplacementAuto, serveReplacementExplicit:
+		if err := checkExplicitForegroundReplacementDataVersion(
+			cfg, decision,
+		); err != nil {
+			return false, err
+		}
+		MarkDaemonStarting(cfg.DataDir)
 		fmt.Println("Replacing agentsview daemon")
 		for _, line := range serveDaemonReplacementLines(decision) {
 			fmt.Println(line)
 		}
 		if err := stopDaemonRuntimeForUpgrade(cfg, decision.Runtime); err != nil {
+			UnmarkDaemonStarting(cfg.DataDir)
 			return false, err
 		}
 		return true, nil
@@ -64,6 +71,18 @@ func prepareForegroundServeDaemon(
 		return false, fmt.Errorf("unknown serve replacement action %d",
 			decision.Action)
 	}
+}
+
+func checkExplicitForegroundReplacementDataVersion(
+	cfg config.Config, decision serveReplacementDecision,
+) error {
+	if decision.Action != serveReplacementExplicit ||
+		decision.Runtime == nil ||
+		decision.Runtime.Data <= db.CurrentDataVersion() ||
+		cfg.DBPath == "" {
+		return nil
+	}
+	return db.CheckDataVersion(cfg.DBPath)
 }
 
 func decideServeDaemonReplacement(

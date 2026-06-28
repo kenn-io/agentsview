@@ -1,7 +1,10 @@
 package main
 
 import (
+	"database/sql"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -31,6 +34,7 @@ func TestServeDaemonReplacementDecisionAutoReplacesOlderRelease(t *testing.T) {
 
 func TestPrepareForegroundServeDaemonAutoReplacesOlderDaemon(t *testing.T) {
 	dir := runtimeTestDir(t)
+	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 	host, port := testPingServer(t)
 	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
 		host, port, withRuntimeVersion("1.0.0"),
@@ -58,6 +62,36 @@ func TestPrepareForegroundServeDaemonAutoReplacesOlderDaemon(t *testing.T) {
 	assert.Contains(t, out, "Replacing agentsview daemon")
 	assert.Contains(t, out, "version 1.0.0")
 	assert.Nil(t, FindDaemonRuntime(dir))
+}
+
+func TestPrepareForegroundServeDaemonMarksStartingBeforeStopping(t *testing.T) {
+	dir := runtimeTestDir(t)
+	host, port := testPingServer(t)
+	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
+		host, port, withRuntimeVersion("1.0.0"),
+	))
+	setTestVersion(t, "1.1.0")
+
+	var sawStarting bool
+	stubStopDaemonRuntimeForUpgrade(t, func(
+		_ config.Config, rt *DaemonRuntime,
+	) error {
+		sawStarting = IsDaemonStarting(dir)
+		RemoveDaemonRuntime(dir)
+		return nil
+	})
+
+	cont, err := prepareForegroundServeDaemon(
+		config.Config{DataDir: dir}, serveReplacementOptions{},
+	)
+	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+
+	require.NoError(t, err)
+	assert.True(t, cont)
+	assert.True(t, sawStarting,
+		"start marker must be visible before stopping old daemon")
+	assert.True(t, IsDaemonStarting(dir),
+		"replacement leaves marker held for runServe startup")
 }
 
 func TestPrepareForegroundServeDaemonUsesExistingCompatibleDaemon(t *testing.T) {
@@ -102,6 +136,7 @@ func TestPrepareForegroundServeDaemonRefusesDevWithoutReplace(t *testing.T) {
 
 func TestPrepareForegroundServeDaemonReplaceStopsWritableDevConflict(t *testing.T) {
 	dir := runtimeTestDir(t)
+	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 	host, port := testPingServer(t)
 	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
 		host, port, withRuntimeVersion("1.0.0"),
@@ -129,6 +164,45 @@ func TestPrepareForegroundServeDaemonReplaceStopsWritableDevConflict(t *testing.
 	assert.True(t, stopped)
 	assert.Contains(t, out, "Replacing agentsview daemon")
 	assert.Nil(t, FindDaemonRuntime(dir))
+}
+
+func TestPrepareForegroundServeDaemonReplaceChecksTooNewDatabaseBeforeStop(t *testing.T) {
+	dir := runtimeTestDir(t)
+	dbPath := filepath.Join(dir, "sessions.db")
+	database, err := db.Open(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	futureVersion := db.CurrentDataVersion() + 10
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = conn.Exec(fmt.Sprintf("PRAGMA user_version = %d", futureVersion))
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	host, port := testPingServer(t)
+	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
+		host, port,
+		withRuntimeVersion("9.9.9"),
+		withRuntimeMetadata(runtimeDataVersion, strconv.Itoa(futureVersion)),
+	))
+	setTestVersion(t, "dev")
+	forbidStopDaemonRuntimeForUpgrade(t,
+		"too-new database must be rejected before stop")
+
+	cont, err := prepareForegroundServeDaemon(
+		config.Config{DataDir: dir, DBPath: dbPath},
+		serveReplacementOptions{Replace: true},
+	)
+
+	assert.False(t, cont)
+	require.Error(t, err)
+	assert.True(t, db.IsDataVersionTooNew(err))
+	rt, compatErr := FindIncompatibleDaemonRuntime(dir)
+	require.NotNil(t, rt)
+	require.Error(t, compatErr)
+	assert.False(t, IsDaemonStarting(dir),
+		"failed precheck must not leave start marker held")
 }
 
 func TestPrepareForegroundServeDaemonReplaceLeavesReadOnlyDaemon(t *testing.T) {
