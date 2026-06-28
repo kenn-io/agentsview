@@ -552,6 +552,36 @@ func TestEnsureTransport_ArchiveWriteUsesAutoStartWaitForStartingDaemon(
 	assert.Equal(t, backgroundAutoStartReadyTimeout, gotWait)
 }
 
+func TestDetectTransportWaitsForExternalStartLockBeforeReturningRuntime(
+	t *testing.T,
+) {
+	dir := daemonRuntimeDir(t)
+	oldHost, oldPort := testPingServer(t)
+	writeDaemonRuntimeForTest(t, dir, oldHost, oldPort, "1.0.0", false)
+	unlockStart := holdExternalDaemonStartLock(t, dir)
+
+	newHost, newPort := testPingServer(t)
+	published := make(chan error, 1)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		RemoveDaemonRuntime(dir)
+		_, err := WriteDaemonRuntime(dir, newHost, newPort, "1.1.0", false)
+		unlockStart()
+		published <- err
+	}()
+
+	tr, err := detectTransportContext(
+		context.Background(), dir, "", time.Second,
+	)
+
+	require.NoError(t, <-published)
+	require.NoError(t, err)
+	assert.Equal(t, transportHTTP, tr.Mode)
+	assert.Equal(t, "http://"+net.JoinHostPort(
+		newHost, strconv.Itoa(newPort),
+	), tr.URL)
+}
+
 func TestEnsureTransportContextCancelDuringStartupWait(t *testing.T) {
 	dir := daemonRuntimeDir(t)
 	MarkDaemonStarting(dir)

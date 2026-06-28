@@ -533,6 +533,67 @@ func TestEnsureBackgroundServeReplacementWaitsForExternalStartLock(
 	}
 }
 
+func TestEnsureBackgroundServeLaunchLoserReplacesStaleDaemonAfterStartup(
+	t *testing.T,
+) {
+	dir := runtimeTestDir(t)
+	oldHost, oldPort := testPingServer(t)
+	_, err := WriteDaemonRuntime(dir, oldHost, oldPort, "1.0.0", false)
+	require.NoError(t, err)
+	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
+	setTestVersion(t, "1.1.0")
+
+	launchLock, ok := acquireBackgroundLaunchLock(dir)
+	require.True(t, ok)
+	t.Cleanup(func() { _ = launchLock.Unlock() })
+	unlockStart := holdExternalDaemonStartLock(t, dir)
+
+	var stopped bool
+	stubStopDaemonRuntimeForUpgrade(t, func(
+		_ config.Config, rt *DaemonRuntime,
+	) error {
+		stopped = true
+		assert.Equal(t, "1.0.0", rt.Record.Version)
+		RemoveDaemonRuntime(dir)
+		return nil
+	})
+
+	newHost, newPort := testPingServer(t)
+	oldStart := startServeBackgroundProcessForEnsure
+	startServeBackgroundProcessForEnsure = func(
+		config.Config, []string,
+	) (*exec.Cmd, string, error) {
+		_, err := WriteDaemonRuntime(dir, newHost, newPort, "1.1.0", false)
+		if err != nil {
+			return nil, "", err
+		}
+		cmd := exec.Command("sleep", "2")
+		if err := cmd.Start(); err != nil {
+			return nil, "", err
+		}
+		t.Cleanup(func() { _ = cmd.Process.Kill() })
+		return cmd, "test.log", nil
+	}
+	t.Cleanup(func() { startServeBackgroundProcessForEnsure = oldStart })
+
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		unlockStart()
+		_ = launchLock.Unlock()
+		close(released)
+	}()
+
+	cfg := config.Config{DataDir: dir}
+	rt, err := ensureBackgroundServe(context.Background(), &cfg, time.Second)
+
+	<-released
+	require.NoError(t, err)
+	require.NotNil(t, rt)
+	assert.True(t, stopped)
+	assert.Equal(t, newPort, rt.Port)
+}
+
 func TestEnsureBackgroundServeIncompatibleDaemonReturnsError(t *testing.T) {
 	dir := runtimeTestDir(t)
 	host, port := testPingServer(t)

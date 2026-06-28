@@ -71,11 +71,11 @@ func isBackgroundLaunchActive(dataDir string) bool {
 // for a contender that has not loaded config; a require_auth daemon then
 // reports as in-progress rather than by URL.
 func reportBackgroundLaunchInProgress(dataDir, authToken string) {
-	WaitForDaemonStartupContext(
-		context.Background(), dataDir, backgroundServeReadyTimeout, authToken,
+	waitForBackgroundLaunchOwner(
+		context.Background(), dataDir, authToken, backgroundServeReadyTimeout,
 	)
 	if rt := FindDaemonRuntime(dataDir, authToken); rt != nil &&
-		!rt.ReadOnly {
+		!rt.ReadOnly && !shouldUpgradeDaemonRuntime(rt, version) {
 		fmt.Printf(
 			"agentsview already running at %s (pid %d)\n",
 			urlFromDaemonRuntime(rt),
@@ -249,8 +249,13 @@ func ensureBackgroundServe(
 		return nil, fmt.Errorf("creating data dir: %w", err)
 	}
 
-	launchLock, ok := acquireBackgroundLaunchLock(cfg.DataDir)
-	if !ok {
+	var launchLock *flock.Flock
+	for {
+		var ok bool
+		launchLock, ok = acquireBackgroundLaunchLock(cfg.DataDir)
+		if ok {
+			break
+		}
 		waitForBackgroundLaunchOwner(
 			ctx, cfg.DataDir, cfg.AuthToken, waitTimeout,
 		)
@@ -260,8 +265,19 @@ func ensureBackgroundServe(
 		if cfg.AuthToken == "" {
 			adoptBackgroundLaunchConfig(cfg)
 		}
+		if retryLock, retryOK := acquireBackgroundLaunchLock(
+			cfg.DataDir,
+		); retryOK {
+			_ = retryLock.Unlock()
+			continue
+		}
 		if rt := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil &&
 			!rt.ReadOnly {
+			if shouldUpgradeDaemonRuntime(rt, version) {
+				return nil, fmt.Errorf(
+					"agentsview serve --background is already in progress",
+				)
+			}
 			return rt, nil
 		}
 		if _, err := findIncompatibleWritableDaemonRuntime(
@@ -521,6 +537,12 @@ func waitForBackgroundLaunchOwner(
 ) {
 	deadline := time.Now().Add(waitTimeout)
 	for time.Now().Before(deadline) {
+		if isExternalDaemonStarting(dataDir) {
+			_, _, _ = waitForExternalServeStartup(
+				ctx, dataDir, authToken, time.Until(deadline),
+			)
+			return
+		}
 		if rt := FindDaemonRuntime(dataDir, authToken); rt != nil &&
 			!rt.ReadOnly {
 			return
