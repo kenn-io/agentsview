@@ -1,6 +1,9 @@
 package postgres
 
 import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"path/filepath"
 	"testing"
@@ -206,6 +209,36 @@ func TestPGExcludedSessionIDsQueryUsesSingleArrayParameter(t *testing.T) {
 		[]string{"sess-001", "sess-002", "sess-003"},
 		args[0],
 	)
+}
+
+func TestDeletePGExcludedSessionRowsUsesSingleArrayParameter(t *testing.T) {
+	execer := &capturePGExec{}
+
+	require.NoError(t, deletePGExcludedSessionRows(
+		context.Background(), execer,
+		[]string{"sess-001", "sess-002", "sess-003"},
+	))
+
+	assert.Contains(t, execer.query, "DELETE FROM sessions")
+	assert.Contains(t, execer.query, "id = ANY($1)")
+	require.Len(t, execer.args, 1)
+	assert.Equal(t,
+		[]string{"sess-001", "sess-002", "sess-003"},
+		execer.args[0],
+	)
+}
+
+type capturePGExec struct {
+	query string
+	args  []any
+}
+
+func (c *capturePGExec) ExecContext(
+	_ context.Context, query string, args ...any,
+) (sql.Result, error) {
+	c.query = query
+	c.args = args
+	return driver.RowsAffected(0), nil
 }
 
 func TestSessionPushFingerprintDiffers(t *testing.T) {

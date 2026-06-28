@@ -34,6 +34,7 @@ const (
 )
 
 var errSessionOwnershipConflict = errors.New("session ownership conflict")
+var errSessionExcluded = errors.New("session excluded")
 
 type pushBoundaryState struct {
 	Cutoff       string            `json:"cutoff"`
@@ -263,7 +264,13 @@ func (s *Sync) Push(
 	if err != nil {
 		return result, err
 	}
-	for id := range excludedIDs {
+	excludedIDList := mapSetKeys(excludedIDs)
+	if err := deletePGExcludedSessionRows(
+		ctx, s.pg, excludedIDList,
+	); err != nil {
+		return result, err
+	}
+	for _, id := range excludedIDList {
 		delete(sessionByID, id)
 	}
 
@@ -755,6 +762,9 @@ func (s *Sync) pushBatchAttempt(
 				skippedConflicts++
 				continue
 			}
+			if errors.Is(err, errSessionExcluded) {
+				continue
+			}
 			log.Printf(
 				"pgsync: session %s: %v",
 				sess.ID, err,
@@ -1007,6 +1017,14 @@ func mapKeys(m map[string]db.Session) []string {
 	return keys
 }
 
+func mapSetKeys(m map[string]struct{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 func localSessionSyncMarker(sess db.Session) string {
 	marker, err := NormalizeLocalSyncTimestamp(sess.CreatedAt)
 	if err != nil || marker == "" {
@@ -1091,7 +1109,41 @@ func readPGExcludedSessionIDs(
 
 func pgExcludedSessionIDsQuery(ids []string) (string, []any) {
 	return `SELECT id FROM excluded_sessions
-		 WHERE id = ANY($1)`, []any{ids}
+			 WHERE id = ANY($1)`, []any{ids}
+}
+
+type pgSessionExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func deletePGExcludedSessionRows(
+	ctx context.Context, pg pgSessionExecer, ids []string,
+) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if _, err := pg.ExecContext(ctx,
+		`DELETE FROM sessions WHERE id = ANY($1)`,
+		ids,
+	); err != nil {
+		return fmt.Errorf("deleting pg excluded session rows: %w", err)
+	}
+	return nil
+}
+
+func pgSessionExcluded(
+	ctx context.Context, tx *sql.Tx, id string,
+) (bool, error) {
+	var excluded bool
+	if err := tx.QueryRowContext(ctx,
+		`SELECT EXISTS (
+			SELECT 1 FROM excluded_sessions WHERE id = $1
+		)`,
+		id,
+	).Scan(&excluded); err != nil {
+		return false, fmt.Errorf("checking pg excluded session %s: %w", id, err)
+	}
+	return excluded, nil
 }
 
 // sessionPushFingerprint builds the change-detection fingerprint for a
@@ -1326,10 +1378,11 @@ func (s *Sync) pushSession(
 			missing_verification_count, duplicate_prompt_count,
 			no_code_context_count, runaway_tool_loop_count,
 			updated_at
-		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8,
-			$9, $10, $11, $12, $13, $14,
-			$15, $16, $17, $18,
+			)
+			SELECT
+				$1, $2, $3, $4, $5, $6, $7, $8,
+				$9, $10, $11, $12, $13, $14,
+				$15, $16, $17, $18,
 			$19, $20, $21, $22,
 			$23, $24, $25, $26, $27, $28, $29,
 			$30, $31,
@@ -1340,10 +1393,12 @@ func (s *Sync) pushSession(
 			$43,
 			$44, $45, $46, $47,
 			$48, $49,
-			$50, $51, $52, $53, $54, $55, $56, $57,
-			NOW()
-		)
-		ON CONFLICT (id) DO UPDATE SET
+				$50, $51, $52, $53, $54, $55, $56, $57,
+				NOW()
+			WHERE NOT EXISTS (
+				SELECT 1 FROM excluded_sessions WHERE id = $1
+			)
+			ON CONFLICT (id) DO UPDATE SET
 			machine = EXCLUDED.machine,
 			owner_marker = EXCLUDED.owner_marker,
 			project = EXCLUDED.project,
@@ -1518,6 +1573,18 @@ func (s *Sync) pushSession(
 		return err
 	}
 	if rowsAffected, rowsErr := result.RowsAffected(); rowsErr == nil && rowsAffected == 0 {
+		excluded, excludedErr := pgSessionExcluded(ctx, tx, sess.ID)
+		if excludedErr != nil {
+			return excludedErr
+		}
+		if excluded {
+			if err := deletePGExcludedSessionRows(
+				ctx, tx, []string{sess.ID},
+			); err != nil {
+				return err
+			}
+			return errSessionExcluded
+		}
 		refreshErr := tx.QueryRowContext(ctx,
 			`SELECT machine, owner_marker FROM sessions WHERE id = $1`, sess.ID,
 		).Scan(&existingMachine, &existingOwnerMarker)

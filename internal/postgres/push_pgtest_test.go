@@ -661,6 +661,145 @@ func TestPushPreservesPGServePermanentDeletes(t *testing.T) {
 	assert.Equal(t, 2, excludedCount)
 }
 
+func TestPushPurgesRowsForPGExcludedSessions(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_excluded_purge_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "test-machine",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const sessionID = "pg-excluded-purge-001"
+	sess := db.Session{
+		ID:               sessionID,
+		Project:          "test-proj",
+		Machine:          "test-machine",
+		Agent:            "claude",
+		MessageCount:     1,
+		UserMessageCount: 1,
+		CreatedAt:        "2026-01-01T00:00:00Z",
+	}
+	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     sessionID,
+		Ordinal:       0,
+		Role:          "user",
+		Content:       "hello",
+		ContentLength: len("hello"),
+	}}), "InsertMessages")
+
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "initial Push")
+
+	_, err = pg.Exec(
+		`INSERT INTO excluded_sessions (id) VALUES ($1)`,
+		sessionID,
+	)
+	require.NoError(t, err, "insert excluded session")
+
+	updated := sess
+	updated.MessageCount = 2
+	require.NoError(t, localDB.UpsertSession(updated), "update local session")
+	require.NoError(t, localDB.ReplaceSessionMessages(sessionID, []db.Message{
+		{
+			SessionID:     sessionID,
+			Ordinal:       0,
+			Role:          "user",
+			Content:       "hello updated",
+			ContentLength: len("hello updated"),
+		},
+		{
+			SessionID:     sessionID,
+			Ordinal:       1,
+			Role:          "assistant",
+			Content:       "reply",
+			ContentLength: len("reply"),
+		},
+	}), "ReplaceSessionMessages")
+
+	res, err := sync.Push(ctx, true, nil)
+	require.NoError(t, err, "full Push with excluded row")
+	assert.Zero(t, res.SessionsPushed)
+
+	var count int
+	require.NoError(t, pg.QueryRow(
+		`SELECT COUNT(*) FROM sessions WHERE id = $1`,
+		sessionID,
+	).Scan(&count), "count purged session")
+	assert.Zero(t, count, "excluded session row should be purged")
+}
+
+func TestPushSessionSkipsPGExcludedSession(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_session_excluded_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "test-machine",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const sessionID = "pg-excluded-push-session-001"
+	_, err = pg.Exec(
+		`INSERT INTO excluded_sessions (id) VALUES ($1)`,
+		sessionID,
+	)
+	require.NoError(t, err, "insert excluded session")
+
+	tx, err := pg.BeginTx(ctx, nil)
+	require.NoError(t, err, "BeginTx")
+	markerID, err := sync.pushMarkerID()
+	require.NoError(t, err, "pushMarkerID")
+	err = sync.pushSession(ctx, tx, db.Session{
+		ID:        sessionID,
+		Project:   "test-proj",
+		Machine:   "test-machine",
+		Agent:     "claude",
+		CreatedAt: "2026-01-01T00:00:00Z",
+	}, markerID, nil)
+	require.ErrorIs(t, err, errSessionExcluded)
+	require.NoError(t, tx.Rollback(), "Rollback")
+
+	var count int
+	require.NoError(t, pg.QueryRow(
+		`SELECT COUNT(*) FROM sessions WHERE id = $1`,
+		sessionID,
+	).Scan(&count), "count skipped session")
+	assert.Zero(t, count)
+}
+
 func TestPushUpdatesSourceCurationFieldsWithoutPGOverride(t *testing.T) {
 	pgURL := testPGURL(t)
 
