@@ -25,7 +25,7 @@
     "shiki": "4.2.0"
   },
   "devDependencies": {
-    "@inlang/paraglide-js": "^2.19.0",
+    "@inlang/paraglide-js": "^2.20.2",
     "@inlang/plugin-m-function-matcher": "^2.2.9",
     "@inlang/plugin-message-format": "^4.4.0",
     "@playwright/test": "1.61.0",
