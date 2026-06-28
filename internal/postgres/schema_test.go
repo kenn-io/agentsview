@@ -531,6 +531,20 @@ func TestCheckSchemaCompatRequiresExcludedSessions(t *testing.T) {
 	assert.Contains(t, err.Error(), "excluded_sessions table missing")
 }
 
+func TestCheckSchemaCompatRequiresSessionAliases(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.queryErrors = []schemaProbeQueryError{{
+		contains: "from session_aliases",
+		err: errors.New(
+			`ERROR: relation "session_aliases" does not exist (SQLSTATE 42P01)`),
+	}}
+
+	err := CheckSchemaCompat(context.Background(), pg)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "session_aliases table missing")
+}
+
 func TestSyncEnsureSchemaRunsDDLWhenPushMetadataMissing(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, map[string][]string{
 		"sessions": {

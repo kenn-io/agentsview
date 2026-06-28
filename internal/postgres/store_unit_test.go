@@ -116,6 +116,10 @@ func TestEmptyTrashExcludesSameRowsItDeletes(t *testing.T) {
 			"already-trashed":      true,
 			"concurrently-trashed": false,
 		},
+		aliases: map[string][]string{
+			"already-trashed":      {"vibe:session_already_trashed"},
+			"concurrently-trashed": {"vibe:session_concurrently_trashed"},
+		},
 		excluded: map[string]bool{},
 		deleted:  map[string]bool{},
 	}
@@ -127,8 +131,32 @@ func TestEmptyTrashExcludesSameRowsItDeletes(t *testing.T) {
 	assert.Equal(t, 1, count)
 	assert.True(t, state.deleted["already-trashed"])
 	assert.True(t, state.excluded["already-trashed"])
+	assert.True(t, state.excluded["vibe:session_already_trashed"])
 	assert.False(t, state.deleted["concurrently-trashed"])
 	assert.False(t, state.excluded["concurrently-trashed"])
+	assert.False(t, state.excluded["vibe:session_concurrently_trashed"])
+}
+
+func TestDeleteSessionIfTrashedExcludesRecordedAliases(t *testing.T) {
+	state := &emptyTrashProbeState{
+		sessions: map[string]bool{
+			"trashed": true,
+		},
+		aliases: map[string][]string{
+			"trashed": {"vibe:session_trashed"},
+		},
+		excluded: map[string]bool{},
+		deleted:  map[string]bool{},
+	}
+	store := &Store{pg: newEmptyTrashProbeDB(t, state)}
+
+	count, err := store.DeleteSessionIfTrashed("trashed")
+
+	require.NoError(t, err, "DeleteSessionIfTrashed")
+	assert.EqualValues(t, 1, count)
+	assert.True(t, state.deleted["trashed"])
+	assert.True(t, state.excluded["trashed"])
+	assert.True(t, state.excluded["vibe:session_trashed"])
 }
 
 type emptyTrashProbeDriver struct{}
@@ -142,13 +170,15 @@ type emptyTrashProbeTx struct {
 }
 
 type emptyTrashProbeRows struct {
-	count int64
-	read  bool
+	columns []string
+	values  [][]driver.Value
+	next    int
 }
 
 type emptyTrashProbeState struct {
 	mu       sync.Mutex
 	sessions map[string]bool
+	aliases  map[string][]string
 	excluded map[string]bool
 	deleted  map[string]bool
 }
@@ -205,8 +235,14 @@ func (c *emptyTrashProbeConn) BeginTx(
 	return &emptyTrashProbeTx{state: c.state}, nil
 }
 
+func (c *emptyTrashProbeConn) CheckNamedValue(
+	*driver.NamedValue,
+) error {
+	return nil
+}
+
 func (c *emptyTrashProbeConn) ExecContext(
-	_ context.Context, query string, _ []driver.NamedValue,
+	_ context.Context, query string, args []driver.NamedValue,
 ) (driver.Result, error) {
 	normalized := strings.ToLower(query)
 	c.state.mu.Lock()
@@ -216,36 +252,40 @@ func (c *emptyTrashProbeConn) ExecContext(
 	case strings.Contains(normalized, "set deleted_at = deleted_at"):
 		return driver.RowsAffected(c.state.trashedCountLocked()), nil
 	case strings.Contains(normalized, "insert into excluded_sessions"):
-		c.state.excludeTrashedLocked()
-		c.state.sessions["concurrently-trashed"] = true
+		c.state.excludeNamedValuesLocked(args)
 		return driver.RowsAffected(1), nil
 	case strings.Contains(normalized, "delete from sessions") &&
+		strings.Contains(normalized, "id = any($1)") &&
 		strings.Contains(normalized, "deleted_at is not null"):
-		return driver.RowsAffected(c.state.deleteTrashedLocked()), nil
+		return driver.RowsAffected(c.state.deleteNamedValuesLocked(args)), nil
 	default:
 		return nil, errors.New("unexpected empty-trash exec")
 	}
 }
 
 func (c *emptyTrashProbeConn) QueryContext(
-	_ context.Context, query string, _ []driver.NamedValue,
+	_ context.Context, query string, args []driver.NamedValue,
 ) (driver.Rows, error) {
 	normalized := strings.ToLower(query)
-	if !strings.Contains(normalized, "with deleted as") ||
-		!strings.Contains(normalized, "delete from sessions") ||
-		!strings.Contains(normalized, "returning id") ||
-		!strings.Contains(normalized, "select id from deleted") {
+	if !strings.Contains(normalized, "left join session_aliases") ||
+		!strings.Contains(normalized, "for update of s") {
 		return nil, errors.New("unexpected empty-trash query")
 	}
 
 	c.state.mu.Lock()
 	defer c.state.mu.Unlock()
-	deleted := c.state.deleteTrashedLocked()
-	for id := range c.state.deleted {
-		c.state.excluded[id] = true
+	filterID := ""
+	if strings.Contains(normalized, "s.id = $1") && len(args) > 0 {
+		filterID, _ = args[0].Value.(string)
 	}
-	c.state.sessions["concurrently-trashed"] = true
-	return &emptyTrashProbeRows{count: deleted}, nil
+	values := c.state.trashedSessionAliasRowsLocked(filterID)
+	if _, ok := c.state.sessions["concurrently-trashed"]; ok {
+		c.state.sessions["concurrently-trashed"] = true
+	}
+	return &emptyTrashProbeRows{
+		columns: []string{"id", "alias_id"},
+		values:  values,
+	}, nil
 }
 
 func (t *emptyTrashProbeTx) Commit() error { return nil }
@@ -262,18 +302,43 @@ func (s *emptyTrashProbeState) trashedCountLocked() int64 {
 	return count
 }
 
-func (s *emptyTrashProbeState) excludeTrashedLocked() {
+func (s *emptyTrashProbeState) trashedSessionAliasRowsLocked(
+	filterID string,
+) [][]driver.Value {
+	values := [][]driver.Value{}
 	for id, trashed := range s.sessions {
-		if trashed {
-			s.excluded[id] = true
+		if filterID != "" && id != filterID {
+			continue
 		}
+		if !trashed {
+			continue
+		}
+		aliases := s.aliases[id]
+		if len(aliases) == 0 {
+			values = append(values, []driver.Value{id, nil})
+			continue
+		}
+		for _, aliasID := range aliases {
+			values = append(values, []driver.Value{id, aliasID})
+		}
+	}
+	return values
+}
+
+func (s *emptyTrashProbeState) excludeNamedValuesLocked(
+	args []driver.NamedValue,
+) {
+	for _, id := range namedValueStrings(args) {
+		s.excluded[id] = true
 	}
 }
 
-func (s *emptyTrashProbeState) deleteTrashedLocked() int64 {
+func (s *emptyTrashProbeState) deleteNamedValuesLocked(
+	args []driver.NamedValue,
+) int64 {
 	var count int64
-	for id, trashed := range s.sessions {
-		if !trashed {
+	for _, id := range namedValueStrings(args) {
+		if !s.sessions[id] {
 			continue
 		}
 		s.deleted[id] = true
@@ -283,15 +348,29 @@ func (s *emptyTrashProbeState) deleteTrashedLocked() int64 {
 	return count
 }
 
-func (r *emptyTrashProbeRows) Columns() []string { return []string{"count"} }
+func namedValueStrings(args []driver.NamedValue) []string {
+	if len(args) == 0 {
+		return nil
+	}
+	switch value := args[0].Value.(type) {
+	case []string:
+		return value
+	case string:
+		return []string{value}
+	default:
+		return nil
+	}
+}
+
+func (r *emptyTrashProbeRows) Columns() []string { return r.columns }
 
 func (r *emptyTrashProbeRows) Close() error { return nil }
 
 func (r *emptyTrashProbeRows) Next(dest []driver.Value) error {
-	if r.read {
+	if r.next >= len(r.values) {
 		return io.EOF
 	}
-	dest[0] = r.count
-	r.read = true
+	copy(dest, r.values[r.next])
+	r.next++
 	return nil
 }

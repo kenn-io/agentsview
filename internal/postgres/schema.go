@@ -189,6 +189,15 @@ CREATE TABLE IF NOT EXISTS excluded_sessions (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS session_aliases (
+    session_id TEXT NOT NULL,
+    alias_id   TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (session_id, alias_id),
+    FOREIGN KEY (session_id)
+        REFERENCES sessions(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS pinned_messages (
     id          BIGSERIAL PRIMARY KEY,
     session_id  TEXT NOT NULL,
@@ -1665,6 +1674,15 @@ func CheckSchemaCompat(
 	if err != nil {
 		return fmt.Errorf(
 			"excluded_sessions table missing required columns: %w", err,
+		)
+	}
+	rows.Close()
+
+	rows, err = db.QueryContext(ctx,
+		`SELECT session_id, alias_id FROM session_aliases LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"session_aliases table missing required columns: %w", err,
 		)
 	}
 	rows.Close()

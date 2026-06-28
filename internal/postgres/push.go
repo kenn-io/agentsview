@@ -1147,16 +1147,21 @@ func pgSessionExcluded(
 }
 
 func deletePGSessionIfExcluded(
-	ctx context.Context, tx *sql.Tx, id string,
+	ctx context.Context, tx *sql.Tx, sess db.Session,
 ) (bool, error) {
-	excluded, err := pgSessionExcluded(ctx, tx, id)
+	excluded, err := pgSessionExcluded(ctx, tx, sess.ID)
 	if err != nil {
 		return false, err
 	}
 	if !excluded {
 		return false, nil
 	}
-	if err := deletePGExcludedSessionRows(ctx, tx, []string{id}); err != nil {
+	if err := insertPGExcludedSessionIDs(
+		ctx, tx, pgSessionAliasIDs(sess),
+	); err != nil {
+		return false, err
+	}
+	if err := deletePGExcludedSessionRows(ctx, tx, []string{sess.ID}); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -1593,9 +1598,7 @@ func (s *Sync) pushSession(
 		return err
 	}
 	if rowsAffected, rowsErr := result.RowsAffected(); rowsErr == nil && rowsAffected == 0 {
-		excluded, excludedErr := deletePGSessionIfExcluded(
-			ctx, tx, sess.ID,
-		)
+		excluded, excludedErr := deletePGSessionIfExcluded(ctx, tx, sess)
 		if excludedErr != nil {
 			return excludedErr
 		}
@@ -1628,12 +1631,15 @@ func (s *Sync) pushSession(
 			return errSessionOwnershipConflict
 		}
 	}
-	excluded, excludedErr := deletePGSessionIfExcluded(ctx, tx, sess.ID)
+	excluded, excludedErr := deletePGSessionIfExcluded(ctx, tx, sess)
 	if excludedErr != nil {
 		return excludedErr
 	}
 	if excluded {
 		return errSessionExcluded
+	}
+	if err := replacePGSessionAliases(ctx, tx, sess); err != nil {
+		return err
 	}
 	return nil
 }

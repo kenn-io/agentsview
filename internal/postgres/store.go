@@ -439,11 +439,8 @@ func (s *Store) DeleteSessionIfTrashed(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	res, err := tx.ExecContext(ctx,
-		`UPDATE sessions
-		 SET deleted_at = deleted_at
-		 WHERE id = $1 AND deleted_at IS NOT NULL`,
-		id,
+	sessionIDs, excludedIDs, err := readPGTrashedSessionExclusions(
+		ctx, tx, "s.id = $1 AND s.deleted_at IS NOT NULL", id,
 	)
 	if err != nil {
 		return 0, mapPGWriteError(
@@ -451,42 +448,22 @@ func (s *Store) DeleteSessionIfTrashed(
 			err,
 		)
 	}
-	locked, err := res.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf(
-			"counting locked trashed session %s: %w", id, err,
-		)
-	}
-	if locked == 0 {
+	if len(sessionIDs) == 0 {
 		return 0, nil
 	}
 
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO excluded_sessions (id)
-		 SELECT id FROM sessions
-		 WHERE id = $1 AND deleted_at IS NOT NULL
-		 ON CONFLICT (id) DO NOTHING`,
-		id,
-	); err != nil {
+	if err := insertPGExcludedSessionIDs(ctx, tx, excludedIDs); err != nil {
 		return 0, mapPGWriteError(
 			fmt.Sprintf("recording excluded trashed session %s", id),
 			err,
 		)
 	}
 
-	res, err = tx.ExecContext(ctx,
-		`DELETE FROM sessions
-		 WHERE id = $1 AND deleted_at IS NOT NULL`,
-		id,
-	)
+	n, err := deletePGTrashedSessionRows(ctx, tx, sessionIDs)
 	if err != nil {
 		return 0, mapPGWriteError(
 			fmt.Sprintf("deleting trashed session %s", id), err,
 		)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("counting deleted trashed session %s: %w", id, err)
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, mapPGWriteError(
@@ -522,25 +499,101 @@ func (s *Store) EmptyTrash() (int, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var n int64
-	if err := tx.QueryRowContext(ctx,
-		`WITH deleted AS (
-			DELETE FROM sessions
-			WHERE deleted_at IS NOT NULL
-			RETURNING id
-		), excluded AS (
-			INSERT INTO excluded_sessions (id)
-			SELECT id FROM deleted
-			ON CONFLICT (id) DO NOTHING
-		)
-		SELECT COUNT(*) FROM deleted`,
-	).Scan(&n); err != nil {
+	sessionIDs, excludedIDs, err := readPGTrashedSessionExclusions(
+		ctx, tx, "s.deleted_at IS NOT NULL",
+	)
+	if err != nil {
+		return 0, mapPGWriteError("locking trashed sessions", err)
+	}
+	if len(sessionIDs) == 0 {
+		if err := tx.Commit(); err != nil {
+			return 0, mapPGWriteError("commit empty-trash", err)
+		}
+		return 0, nil
+	}
+
+	if err := insertPGExcludedSessionIDs(ctx, tx, excludedIDs); err != nil {
+		return 0, mapPGWriteError("recording excluded trashed sessions", err)
+	}
+
+	n, err := deletePGTrashedSessionRows(ctx, tx, sessionIDs)
+	if err != nil {
 		return 0, mapPGWriteError("emptying trash", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, mapPGWriteError("commit empty-trash", err)
 	}
 	return int(n), nil
+}
+
+func readPGTrashedSessionExclusions(
+	ctx context.Context, tx *sql.Tx, where string, args ...any,
+) ([]string, []string, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT s.id, sa.alias_id
+		 FROM sessions s
+		 LEFT JOIN session_aliases sa ON sa.session_id = s.id
+		 WHERE `+where+`
+		 FOR UPDATE OF s`,
+		args...,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+
+	sessionIDs := []string{}
+	excludedIDs := []string{}
+	sessionSeen := map[string]struct{}{}
+	excludedSeen := map[string]struct{}{}
+	for rows.Next() {
+		var id string
+		var aliasID sql.NullString
+		if err := rows.Scan(&id, &aliasID); err != nil {
+			return nil, nil, err
+		}
+		if _, ok := sessionSeen[id]; !ok {
+			sessionSeen[id] = struct{}{}
+			sessionIDs = append(sessionIDs, id)
+		}
+		if _, ok := excludedSeen[id]; !ok {
+			excludedSeen[id] = struct{}{}
+			excludedIDs = append(excludedIDs, id)
+		}
+		if !aliasID.Valid || aliasID.String == "" {
+			continue
+		}
+		if _, ok := excludedSeen[aliasID.String]; ok {
+			continue
+		}
+		excludedSeen[aliasID.String] = struct{}{}
+		excludedIDs = append(excludedIDs, aliasID.String)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	return sessionIDs, excludedIDs, nil
+}
+
+func deletePGTrashedSessionRows(
+	ctx context.Context, tx *sql.Tx, ids []string,
+) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	res, err := tx.ExecContext(ctx,
+		`DELETE FROM sessions
+		 WHERE id = ANY($1) AND deleted_at IS NOT NULL`,
+		ids,
+	)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // UpsertSession is not supported in read-only mode.
