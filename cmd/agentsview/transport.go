@@ -100,14 +100,14 @@ func detectTransportContext(
 		if waitTimeout <= 0 {
 			waitTimeout = startupWaitTimeout
 		}
-		rt, _, err := waitForExternalServeStartup(
+		_, _, err := waitForExternalServeStartup(
 			ctx, dataDir, authToken, waitTimeout,
 		)
-		if err != nil {
+		if err != nil && errors.Is(err, errServeStartupInProgress) {
 			return transport{}, err
 		}
-		if rt != nil {
-			return transportFromRuntime(rt), nil
+		if err := ctx.Err(); err != nil {
+			return transport{}, err
 		}
 	}
 	if sf := FindDaemonRuntime(dataDir, authToken); sf != nil {

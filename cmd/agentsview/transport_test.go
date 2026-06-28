@@ -437,6 +437,48 @@ func TestEnsureTransport_ArchiveWriteRestartsIncompatibleOlderDaemon(t *testing.
 	assert.Equal(t, "http://127.0.0.1:23456", tr.URL)
 }
 
+func TestEnsureTransport_ArchiveWriteRestartsIncompatibleDaemonAfterExternalStartupAbort(
+	t *testing.T,
+) {
+	dir := daemonRuntimeDir(t)
+	host, port := testPingServer(t)
+	writeIncompatibleDaemonRuntime(t, dir, host, port, "1.0.0", true)
+	unlockStart := holdExternalDaemonStartLock(t, dir)
+
+	setTestVersion(t, "1.1.0")
+
+	var started bool
+	stubStartBackgroundServeForTransport(t, func(
+		_ context.Context, gotCfg *config.Config, _ time.Duration,
+	) (*DaemonRuntime, error) {
+		started = true
+		assert.Equal(t, dir, gotCfg.DataDir)
+		assert.True(t, gotCfg.NoSync)
+		return &DaemonRuntime{
+			Host: "127.0.0.1",
+			Port: 23456,
+		}, nil
+	})
+
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		unlockStart()
+		close(released)
+	}()
+
+	cfg := config.Config{DataDir: dir}
+	tr, err := ensureTransport(
+		&cfg, transportIntentArchiveWrite, time.Second,
+	)
+
+	<-released
+	require.NoError(t, err)
+	assert.True(t, started)
+	assert.Equal(t, transportHTTP, tr.Mode)
+	assert.Equal(t, "http://127.0.0.1:23456", tr.URL)
+}
+
 func TestEnsureTransport_ArchiveWriteRejectsUnsafeOlderDaemonRestart(t *testing.T) {
 	dir := daemonRuntimeDir(t)
 	host, port := testPingServer(t)
