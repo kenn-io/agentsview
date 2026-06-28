@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -164,6 +165,52 @@ func TestPrepareForegroundServeDaemonReplaceStopsWritableDevConflict(t *testing.
 	assert.True(t, stopped)
 	assert.Contains(t, out, "Replacing agentsview daemon")
 	assert.Nil(t, FindDaemonRuntime(dir))
+}
+
+func TestPrepareForegroundServeDaemonBackstopRefusesSecondWritableDaemon(t *testing.T) {
+	dir := runtimeTestDir(t)
+	dbPath := filepath.Join(dir, "sessions.db")
+	firstHost, firstPort := testPingServer(t)
+	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
+		firstHost, firstPort, withRuntimeVersion("1.0.0"),
+	))
+
+	secondPID := startSleepProcess(t)
+	secondHost, secondPort := testPingServer(t)
+	_, err := writeRuntimeRecordForTest(dir, daemonRuntimeRecord(
+		secondHost, secondPort,
+		withRuntimePID(secondPID),
+		withRuntimeVersion("1.0.0"),
+	))
+	require.NoError(t, err)
+	setTestVersion(t, "1.1.0")
+
+	stubStopDaemonRuntimeForUpgrade(t, func(
+		_ config.Config, rt *DaemonRuntime,
+	) error {
+		assert.Equal(t, os.Getpid(), rt.Record.PID)
+		if rt.Record.SourcePath != "" {
+			require.NoError(t, os.Remove(rt.Record.SourcePath))
+		}
+		return nil
+	})
+
+	cont, err := prepareForegroundServeDaemon(
+		config.Config{DataDir: dir, DBPath: dbPath},
+		serveReplacementOptions{},
+	)
+	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+
+	require.NoError(t, err)
+	assert.True(t, cont)
+	database, lock, err := openWriteDB(
+		context.Background(),
+		config.Config{DataDir: dir, DBPath: dbPath},
+	)
+	require.Error(t, err)
+	assert.Nil(t, database)
+	assert.Nil(t, lock)
+	assert.Contains(t, err.Error(), "owns the SQLite archive")
 }
 
 func TestPrepareForegroundServeDaemonReplaceChecksTooNewDatabaseBeforeStop(t *testing.T) {

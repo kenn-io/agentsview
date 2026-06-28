@@ -24,6 +24,7 @@ instead of starting the web UI.
 | `--no-browser` | `false` | Don't open browser on startup |
 | `--no-update-check` | `false` | Disable automatic update checks |
 | `--background` | `false` | Start `agentsview serve` as a managed background process |
+| `--replace` | `false` | Replace a running local daemon before starting |
 | `--public-url` | | Public URL for hostname or proxy access |
 | `--public-origin` | | Trusted browser origin (repeatable/comma-separated) |
 | `--proxy` | | Managed proxy mode (`caddy`) |
@@ -45,6 +46,7 @@ agentsview serve                                # defaults
 agentsview serve --port 9090                    # custom port
 agentsview serve --no-browser                   # disable browser auto-open
 agentsview serve --background                   # start managed background server
+agentsview serve --replace                      # replace an existing daemon
 agentsview serve --public-url https://agents.example.com
 ```
 
@@ -77,6 +79,16 @@ URL, PID, and log path. Background server output is written to
 process, URL, version, uptime, and read-only mode when available.
 `serve stop` gracefully terminates the managed process and cleans
 up its runtime record.
+
+When a writable daemon is already running, a newer release binary
+automatically replaces an older compatible daemon before starting.
+Development builds, downgrades, and forward API/data-version
+conflicts do not auto-replace; use `--replace` when you deliberately
+want this invocation to stop the running daemon first. If the SQLite
+archive itself has a newer data version than the current binary can
+open, `serve` refuses before stopping the old daemon. `serve status`
+reports incompatible live daemons with their daemon and binary
+versions plus the `--replace` or `serve stop` actions.
 
 Background servers also act as the shared local daemon for the
 desktop app and CLI. The daemon owns local SQLite writes for its
