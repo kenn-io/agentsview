@@ -27,10 +27,10 @@ func newSessionExportCommand() *cobra.Command {
 					"session export: local-only command; --server not supported",
 				)
 			}
-			if cmd.Flags().Changed("format") {
-				return fmt.Errorf(
-					"session export: streams raw bytes; --format not supported",
-				)
+			if err := rejectFormatFlags(
+				cmd, "session export", "raw bytes",
+			); err != nil {
+				return err
 			}
 			if pgReadRequested(cmd) {
 				return fmt.Errorf(

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -24,14 +25,7 @@ func newSessionCommand() *cobra.Command {
 			return cmd.Help()
 		},
 	}
-	cmd.PersistentFlags().String(
-		"format", "human",
-		"Output format: human or json",
-	)
-	cmd.PersistentFlags().Bool(
-		"json", false,
-		"Emit JSON output (alias for --format json)",
-	)
+	registerFormatFlags(cmd.PersistentFlags())
 	cmd.PersistentFlags().String(
 		"server", "",
 		"Remote daemon URL",
@@ -210,16 +204,55 @@ func explicitServerToken(cmd *cobra.Command) (string, error) {
 	return strings.TrimSpace(os.Getenv("AGENTSVIEW_SERVER_TOKEN")), nil
 }
 
-// outputFormat returns the requested --format flag value
-// ("human" or "json"). Defaults to "human".
+// formatFlag restricts --format to "human" or "json", so a typo fails at
+// parse time rather than silently degrading to human output. Type returns
+// the allowed values, which --help renders as `--format human|json`.
+type formatFlag string
+
+func (f *formatFlag) String() string { return string(*f) }
+
+func (f *formatFlag) Set(v string) error {
+	switch v {
+	case "human", "json":
+		*f = formatFlag(v)
+		return nil
+	default:
+		return errors.New("must be human or json")
+	}
+}
+
+func (*formatFlag) Type() string { return "human|json" }
+
+// registerFormatFlags installs the --format/--json pair shared by every
+// machine-readable command. Read the result with outputFormat.
+func registerFormatFlags(flags *pflag.FlagSet) {
+	f := formatFlag("human")
+	flags.Var(&f, "format", "Output format: human or json")
+	flags.Bool("json", false, "Emit JSON output (alias for --format json)")
+}
+
+// rejectFormatFlags errors when --format or --json was set on a command
+// that streams a fixed format: such commands inherit the pair from the
+// session group but cannot honor it.
+func rejectFormatFlags(cmd *cobra.Command, cmdName, streams string) error {
+	if cmd.Flags().Changed("format") || cmd.Flags().Changed("json") {
+		return fmt.Errorf(
+			"%s: streams %s; --format/--json not supported",
+			cmdName, streams,
+		)
+	}
+	return nil
+}
+
+// outputFormat resolves the output format to "human" or "json". The
+// --json alias wins when set; otherwise the --format value, default
+// "human".
 func outputFormat(cmd *cobra.Command) string {
-	jsonOutput, _ := cmd.Flags().GetBool("json")
-	if jsonOutput {
+	if jsonOutput, _ := cmd.Flags().GetBool("json"); jsonOutput {
 		return "json"
 	}
-	v, _ := cmd.Flags().GetString("format")
-	if v == "" {
-		return "human"
+	if f := cmd.Flag("format"); f != nil {
+		return f.Value.String()
 	}
-	return v
+	return "human"
 }

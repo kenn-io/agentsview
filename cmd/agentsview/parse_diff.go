@@ -76,6 +76,7 @@ func newParseDiffCommand() *cobra.Command {
 			return err
 		},
 		Run: func(cmd *cobra.Command, args []string) {
+			cfg.JSON = outputFormat(cmd) == "json"
 			cfg.Stdout = cmd.OutOrStdout()
 			cfg.Stderr = cmd.ErrOrStderr()
 			runParseDiff(cfg)
@@ -87,8 +88,7 @@ func newParseDiffCommand() *cobra.Command {
 		"Re-parse only the N most recently modified source files (0 = all)")
 	cmd.Flags().BoolVar(&cfg.FailOnChange, "fail-on-change", false,
 		"Exit 1 when sessions changed or files failed to parse")
-	cmd.Flags().BoolVar(&cfg.JSON, "json", false,
-		"Output the full report as JSON")
+	registerFormatFlags(cmd.Flags())
 	cmd.Flags().BoolVarP(&cfg.Verbose, "verbose", "v", false,
 		"Show every field diff for every changed session")
 	return cmd

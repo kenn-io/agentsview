@@ -77,8 +77,7 @@ func newStatsCommand() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().String("format", "human",
-		"Output format: human or json")
+	registerFormatFlags(cmd.Flags())
 	registerStatsFlags(cmd,
 		&since, &until, &agent, &timezone,
 		&includeProjects, &excludeProjects,

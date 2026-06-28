@@ -15,6 +15,11 @@ func newSessionWatchCommand() *cobra.Command {
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := rejectFormatFlags(
+				cmd, "session watch", "NDJSON",
+			); err != nil {
+				return err
+			}
 			svc, cleanup, err := resolveService(cmd)
 			if err != nil {
 				return err

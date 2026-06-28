@@ -452,7 +452,7 @@ Beyond raw speed, `agentsview usage`:
 ## `agentsview usage daily`
 
 Daily cost report. Outputs a tab-aligned table to stdout by
-default, or JSON with `--json`.
+default, or JSON with `--format json` (or the `--json` alias).
 
 ```bash
 agentsview usage daily [flags]
@@ -460,7 +460,8 @@ agentsview usage daily [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--json` | `false` | Emit a JSON document instead of a table |
+| `--format` | `human` | Output format: `human` or `json` |
+| `--json` | `false` | Alias for `--format json` |
 | `--since` | `30 days ago` | Start of window, a duration like `28d` or a `YYYY-MM-DD` date, inclusive |
 | `--until` |  | End of window, a duration like `28d` or a `YYYY-MM-DD` date, inclusive |
 | `--all` | `false` | Include all history; overrides the default 30-day window |

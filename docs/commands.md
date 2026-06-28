@@ -255,7 +255,8 @@ agentsview usage daily [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--json` | `false` | Emit JSON instead of a terminal table |
+| `--format` | `human` | Output format: `human` or `json` |
+| `--json` | `false` | Alias for `--format json` |
 | `--since` | `30 days ago` | Start of window, a duration like `28d` or a `YYYY-MM-DD` date, inclusive |
 | `--until` | | End of window, a duration like `28d` or a `YYYY-MM-DD` date, inclusive |
 | `--all` | `false` | Scan all history; overrides the default 30-day window |
@@ -356,7 +357,8 @@ agentsview activity report [flags]
 | `--project` | | Filter by project |
 | `--agent` | | Filter by agent name |
 | `--machine` | | Filter by machine name |
-| `--json` | `false` | Emit the full report as JSON |
+| `--format` | `human` | Output format: `human` or `json` |
+| `--json` | `false` | Alias for `--format json` |
 | `--no-sync` | `false` | Skip on-demand sync before querying |
 | `--offline` | `false` | Use fallback pricing only |
 
@@ -548,7 +550,8 @@ agentsview projects [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--json` | `false` | Output as a JSON array |
+| `--format` | `human` | Output format: `human` or `json` |
+| `--json` | `false` | Alias for `--format json` |
 
 **Examples:**
 
@@ -571,7 +574,8 @@ agentsview health [session-id] [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--json` | `false` | Output JSON instead of terminal text |
+| `--format` | `human` | Output format: `human` or `json` |
+| `--json` | `false` | Alias for `--format json` |
 | `--limit` | `20` | Number of sessions to list when no session ID is given |
 
 **Examples:**
@@ -601,6 +605,7 @@ agentsview stats [flags]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--format` | `human` | Output format: `human` or `json` |
+| `--json` | `false` | Alias for `--format json` |
 | `--since` | `28d` | Start of window, either `YYYY-MM-DD` or a compact duration like `28d` |
 | `--until` | | End of window as `YYYY-MM-DD` |
 | `--agent` | `all` | Restrict to one agent or use `all` |
@@ -665,7 +670,8 @@ agentsview parse-diff [flags]
 | `--agent` | | Restrict to one agent; repeatable |
 | `--limit` | `0` | Maximum number of source files to inspect, newest first (`0` means all) |
 | `--fail-on-change` | `false` | Exit non-zero when changes or parse errors are found |
-| `--json` | `false` | Emit a machine-readable report |
+| `--format` | `human` | Output format: `human` or `json` |
+| `--json` | `false` | Alias for `--format json` |
 | `--verbose` / `-v` | `false` | Include more detail in the human report |
 
 **Examples:**
@@ -732,7 +738,10 @@ agentsview session usage <id>            # token usage and cost estimate
 ```
 
 Structured response commands accept `--format json`; `--json` is
-a short alias for that scripting mode. Use `--server <url>` to
+a short alias for that scripting mode. `session export` and
+`session watch` are the exceptions: they stream raw bytes and
+NDJSON respectively, so they reject `--format`/`--json`. Use
+`--server <url>` to
 target an explicit running daemon, `AGENTSVIEW_SERVER_TOKEN` or
 `--server-token-file <path>` when that daemon requires auth, or
 `--pg` to read from configured PostgreSQL.
@@ -827,6 +836,7 @@ localhost-bound daemon and emits a warning to stderr.
 | Flag | Used by | Description |
 |------|---------|-------------|
 | `--format` | both | `human` or `json` (inherited from `secrets`) |
+| `--json` | both | Alias for `--format json` (inherited from `secrets`) |
 | `--backfill` | scan | Scan only sessions not yet scanned at the current ruleset version |
 | `--project` | both | Limit to a project |
 | `--agent` | both | Limit to an agent |
