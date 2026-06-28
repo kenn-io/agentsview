@@ -212,3 +212,32 @@ func kimiProviderFixture(firstMessage string) string {
 		`{"timestamp":1704067201.0,"message":{"type":"ContentPart","payload":{"type":"text","text":"Done."}}}` + "\n" +
 		`{"timestamp":1704067202.0,"message":{"type":"TurnEnd","payload":{}}}` + "\n"
 }
+
+// TestKimiProviderFingerprintIncludesContentHash guards that the Kimi provider
+// computes a full-file content hash. The legacy per-agent parse stored a
+// file_hash; without WithContentHashing the provider fingerprint hash is empty
+// and a resync clears the stored file_hash to NULL. Toggle-provable: removing
+// WithContentHashing from newKimiSourceSet makes fp.Hash empty and fails here.
+func TestKimiProviderFingerprintIncludesContentHash(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "abc123", "uuid-1", "wire.jsonl")
+	writeSourceFile(t, sourcePath, kimiProviderFixture("inspect logs"))
+
+	provider, ok := NewProvider(AgentKimi, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+
+	fp, err := provider.Fingerprint(context.Background(), sources[0])
+	require.NoError(t, err)
+	require.NotEmpty(t, fp.Hash)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source:      sources[0],
+		Fingerprint: fp,
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, fp.Hash, outcome.Results[0].Result.Session.File.Hash)
+}

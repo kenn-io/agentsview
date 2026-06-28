@@ -64,7 +64,12 @@ func TestCortexProviderSourceMethods(t *testing.T) {
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.False(t, plan.Roots[0].Recursive)
-	assert.Equal(t, []string{"*.json", "*.history.jsonl"}, plan.Roots[0].IncludeGlobs)
+	// The shared companion mechanism watches each discovered session's specific
+	// .history.jsonl sidecar (not a wildcard), so a sidecar change on a known
+	// session is observed live; new sessions are picked up on rediscovery.
+	assert.Contains(t, plan.Roots[0].IncludeGlobs, "*.json")
+	assert.Contains(t, plan.Roots[0].IncludeGlobs, cortexTestUUID+".history.jsonl")
+	assert.Contains(t, plan.Roots[0].IncludeGlobs, otherID+".history.jsonl")
 
 	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
 		FullSessionID: "host~cortex:" + cortexTestUUID,
@@ -215,4 +220,33 @@ func TestCortexProviderParse(t *testing.T) {
 	assert.Equal(t, "abc123", result.Result.Session.File.Hash)
 	assert.Equal(t, "Test session", result.Result.Session.SessionName)
 	assert.Len(t, result.Result.Messages, 2)
+}
+
+// TestCortexProviderFingerprintIncludesContentHash guards that the Cortex
+// provider computes a full-file content hash. The legacy per-agent parse stored
+// a file_hash; without WithContentHashing the provider fingerprint hash is empty
+// and a resync clears the stored file_hash to NULL. Toggle-provable: removing
+// WithContentHashing from newCortexSourceSet makes fp.Hash empty and fails here.
+func TestCortexProviderFingerprintIncludesContentHash(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, cortexTestUUID+".json")
+	writeSourceFile(t, sourcePath, minimalCortexSession(cortexTestUUID))
+
+	provider, ok := NewProvider(AgentCortex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+
+	fp, err := provider.Fingerprint(context.Background(), sources[0])
+	require.NoError(t, err)
+	require.NotEmpty(t, fp.Hash)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source:      sources[0],
+		Fingerprint: fp,
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, fp.Hash, outcome.Results[0].Result.Session.File.Hash)
 }

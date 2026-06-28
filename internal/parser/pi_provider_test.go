@@ -225,3 +225,32 @@ func piProviderFixture(sessionID string) string {
 		`{"type":"message","id":"msg-2","timestamp":"2025-01-01T10:00:02Z","message":{"role":"assistant","content":"Looks ready.","model":"claude-opus-4-5","usage":{"input_tokens":10,"output_tokens":5}}}`,
 	}, "\n")
 }
+
+// TestPiProviderFingerprintIncludesContentHash guards that the Pi provider
+// computes a full-file content hash. The legacy per-agent parse stored a
+// file_hash; without WithContentHashing the provider fingerprint hash is empty
+// and a resync clears the stored file_hash to NULL. Toggle-provable: removing
+// WithContentHashing from newPiSourceSet makes fp.Hash empty and fails here.
+func TestPiProviderFingerprintIncludesContentHash(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "encoded-cwd", "session-123.jsonl")
+	writeSourceFile(t, sourcePath, piProviderFixture("session-123"))
+
+	provider, ok := NewProvider(AgentPi, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+
+	fp, err := provider.Fingerprint(context.Background(), sources[0])
+	require.NoError(t, err)
+	require.NotEmpty(t, fp.Hash)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source:      sources[0],
+		Fingerprint: fp,
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, fp.Hash, outcome.Results[0].Result.Session.File.Hash)
+}

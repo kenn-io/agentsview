@@ -2,7 +2,6 @@ package parser
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -49,33 +48,14 @@ func (p *commandCodeProvider) Discover(ctx context.Context) ([]SourceRef, error)
 }
 
 func (p *commandCodeProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
-	plan, err := p.sources.WatchPlan(ctx)
-	if err != nil {
-		return WatchPlan{}, err
-	}
-	for i := range plan.Roots {
-		plan.Roots[i].IncludeGlobs = append(
-			plan.Roots[i].IncludeGlobs,
-			"*.meta.json",
-		)
-	}
-	return plan, nil
+	return p.sources.WatchPlan(ctx)
 }
 
 func (p *commandCodeProvider) SourcesForChangedPath(
 	ctx context.Context,
 	req ChangedPathRequest,
 ) ([]SourceRef, error) {
-	sources, err := p.sources.SourcesForChangedPath(ctx, req)
-	if err != nil || len(sources) > 0 {
-		return sources, err
-	}
-	if source, ok, err := p.sourceForMetaCompanion(ctx, req); err != nil {
-		return nil, err
-	} else if ok {
-		return []SourceRef{source}, nil
-	}
-	return nil, nil
+	return p.sources.SourcesForChangedPath(ctx, req)
 }
 
 func (p *commandCodeProvider) FindSource(
@@ -89,51 +69,7 @@ func (p *commandCodeProvider) Fingerprint(
 	ctx context.Context,
 	source SourceRef,
 ) (SourceFingerprint, error) {
-	if err := ctx.Err(); err != nil {
-		return SourceFingerprint{}, err
-	}
-	path, ok, err := p.sources.pathFromSource(ctx, source)
-	if err != nil {
-		return SourceFingerprint{}, err
-	}
-	if !ok {
-		return SourceFingerprint{}, fmt.Errorf("commandcode source path unavailable")
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return SourceFingerprint{}, fmt.Errorf("stat %s: %w", path, err)
-	}
-	if info.IsDir() {
-		return SourceFingerprint{}, fmt.Errorf("stat %s: source is a directory", path)
-	}
-	fingerprint := SourceFingerprint{
-		Key: firstNonEmptyJSONLString(
-			source.FingerprintKey,
-			source.Key,
-			path,
-		),
-		Size:    info.Size(),
-		MTimeNS: info.ModTime().UnixNano(),
-	}
-
-	h := sha256.New()
-	if err := addCommandCodeFingerprintPart(h, "transcript", path, info); err != nil {
-		return SourceFingerprint{}, err
-	}
-	metaPath := commandCodeMetaCompanionPath(path)
-	if metaInfo, ok, err := commandCodeCompanionInfo(metaPath); err != nil {
-		return SourceFingerprint{}, err
-	} else if ok && metaInfo != nil {
-		fingerprint.Size += metaInfo.Size()
-		if mtime := metaInfo.ModTime().UnixNano(); mtime > fingerprint.MTimeNS {
-			fingerprint.MTimeNS = mtime
-		}
-		if err := addCommandCodeFingerprintPart(h, "meta", metaPath, metaInfo); err != nil {
-			return SourceFingerprint{}, err
-		}
-	}
-	fingerprint.Hash = fmt.Sprintf("%x", h.Sum(nil))
-	return fingerprint, nil
+	return p.sources.Fingerprint(ctx, source)
 }
 
 func (p *commandCodeProvider) Parse(
@@ -161,8 +97,11 @@ func (p *commandCodeProvider) Parse(
 			SkipReason:        SkipNoSession,
 		}, nil
 	}
-	if hash, err := hashJSONLSourceFile(path); err == nil {
-		sess.File.Hash = hash
+	// Use the shared fingerprint hash (which folds the .meta.json companion via
+	// WithCompanionFiles + WithContentHashing) rather than recomputing a bespoke
+	// transcript-only hash, so file_hash stays consistent with the fingerprint.
+	if req.Fingerprint.Hash != "" {
+		sess.File.Hash = req.Fingerprint.Hash
 	}
 	// Mirror the legacy effective-info behavior: the transcript's
 	// freshness identity (size and mtime) includes the .meta.json
@@ -189,40 +128,16 @@ func newCommandCodeSourceSet(roots []string) DirectoryJSONLSourceSet {
 		WithIncludePath(isCommandCodeSourcePath),
 		WithProjectHint(func(root, path string) string { return "" }),
 		WithSessionIDFromPath(commandCodeSessionIDFromPath),
+		// Command Code's .meta.json sidecar participates in source freshness, so
+		// fold it into the shared fingerprint (size, mtime, and content hash) via
+		// the framework companion hook instead of a bespoke Fingerprint.
+		// WithContentHashing preserves the legacy per-agent file_hash, which a
+		// resync would otherwise clear to NULL.
+		WithCompanionFiles(func(transcriptPath string) []string {
+			return []string{commandCodeMetaCompanionPath(transcriptPath)}
+		}),
+		WithContentHashing(),
 	)
-}
-
-func (p *commandCodeProvider) sourceForMetaCompanion(
-	ctx context.Context,
-	req ChangedPathRequest,
-) (SourceRef, bool, error) {
-	if req.Path == "" {
-		return SourceRef{}, false, nil
-	}
-	path := filepath.Clean(req.Path)
-	stem, ok := strings.CutSuffix(filepath.Base(path), ".meta.json")
-	if !ok || !IsValidSessionID(stem) {
-		return SourceRef{}, false, nil
-	}
-	transcriptPath := filepath.Join(filepath.Dir(path), stem+".jsonl")
-	if _, err := os.Stat(transcriptPath); err != nil {
-		return SourceRef{}, false, nil
-	}
-	source, ok, err := p.sources.sourceForPath(ctx, transcriptPath)
-	if err != nil {
-		return SourceRef{}, false, err
-	}
-	if !ok {
-		return SourceRef{}, false, nil
-	}
-	if req.WatchRoot != "" {
-		root := filepath.Clean(req.WatchRoot)
-		src := source.Opaque.(JSONLSource)
-		if !samePath(root, src.Root) {
-			return SourceRef{}, false, nil
-		}
-	}
-	return source, true, nil
 }
 
 func isCommandCodeSourcePath(root, path string) bool {
@@ -280,28 +195,6 @@ func commandCodeCompanionInfo(path string) (os.FileInfo, bool, error) {
 		return nil, false, nil
 	}
 	return info, true, nil
-}
-
-func addCommandCodeFingerprintPart(
-	h interface{ Write([]byte) (int, error) },
-	label string,
-	path string,
-	info os.FileInfo,
-) error {
-	hash, err := hashJSONLSourceFile(path)
-	if err != nil {
-		return err
-	}
-	_, _ = fmt.Fprintf(
-		h,
-		"%s:%s:%d:%d:%s\n",
-		label,
-		filepath.Base(path),
-		info.Size(),
-		info.ModTime().UnixNano(),
-		hash,
-	)
-	return nil
 }
 
 func commandCodeProviderCapabilities() Capabilities {

@@ -35,6 +35,10 @@ func newKimiSourceSet(roots []string) JSONLSourceSet {
 		}),
 		WithRawSessionIDSourceFiles(kimiRawSessionIDSourceFiles),
 		WithParseFile(kimiParseFile),
+		// Kimi persisted a full-file content hash (file_hash) in the legacy
+		// per-agent parse. Without this the provider fingerprint hash is empty
+		// and a resync clears the stored file_hash to NULL.
+		WithContentHashing(),
 	)
 }
 

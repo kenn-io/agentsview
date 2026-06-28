@@ -2,9 +2,7 @@ package parser
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 )
@@ -49,33 +47,14 @@ func (p *cortexProvider) Discover(ctx context.Context) ([]SourceRef, error) {
 }
 
 func (p *cortexProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
-	plan, err := p.sources.WatchPlan(ctx)
-	if err != nil {
-		return WatchPlan{}, err
-	}
-	for i := range plan.Roots {
-		plan.Roots[i].IncludeGlobs = append(
-			plan.Roots[i].IncludeGlobs,
-			"*.history.jsonl",
-		)
-	}
-	return plan, nil
+	return p.sources.WatchPlan(ctx)
 }
 
 func (p *cortexProvider) SourcesForChangedPath(
 	ctx context.Context,
 	req ChangedPathRequest,
 ) ([]SourceRef, error) {
-	sources, err := p.sources.SourcesForChangedPath(ctx, req)
-	if err != nil || len(sources) > 0 {
-		return sources, err
-	}
-	if source, ok, err := p.sourceForHistoryCompanion(ctx, req); err != nil {
-		return nil, err
-	} else if ok {
-		return []SourceRef{source}, nil
-	}
-	return nil, nil
+	return p.sources.SourcesForChangedPath(ctx, req)
 }
 
 func (p *cortexProvider) FindSource(
@@ -89,52 +68,7 @@ func (p *cortexProvider) Fingerprint(
 	ctx context.Context,
 	source SourceRef,
 ) (SourceFingerprint, error) {
-	if err := ctx.Err(); err != nil {
-		return SourceFingerprint{}, err
-	}
-	path, ok, err := p.sources.pathFromSource(ctx, source)
-	if err != nil {
-		return SourceFingerprint{}, err
-	}
-	if !ok {
-		return SourceFingerprint{}, fmt.Errorf("cortex source path unavailable")
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return SourceFingerprint{}, fmt.Errorf("stat %s: %w", path, err)
-	}
-	if info.IsDir() {
-		return SourceFingerprint{}, fmt.Errorf("stat %s: source is a directory", path)
-	}
-	fingerprint := SourceFingerprint{
-		Key: firstNonEmptyJSONLString(
-			source.FingerprintKey,
-			source.Key,
-			path,
-		),
-		Size:    info.Size(),
-		MTimeNS: info.ModTime().UnixNano(),
-	}
-
-	h := sha256.New()
-	if err := addCortexFingerprintPart(h, "metadata", path, info); err != nil {
-		return SourceFingerprint{}, err
-	}
-	historyPath := cortexHistoryCompanionPath(path)
-	if historyInfo, ok, err := cortexCompanionInfo(historyPath); err != nil {
-		return SourceFingerprint{}, err
-	} else if ok && historyInfo != nil {
-		fingerprint.Size += historyInfo.Size()
-		mtime := historyInfo.ModTime().UnixNano()
-		if mtime > fingerprint.MTimeNS {
-			fingerprint.MTimeNS = mtime
-		}
-		if err := addCortexFingerprintPart(h, "history", historyPath, historyInfo); err != nil {
-			return SourceFingerprint{}, err
-		}
-	}
-	fingerprint.Hash = fmt.Sprintf("%x", h.Sum(nil))
-	return fingerprint, nil
+	return p.sources.Fingerprint(ctx, source)
 }
 
 func (p *cortexProvider) Parse(
@@ -184,53 +118,16 @@ func newCortexSourceSet(roots []string) JSONLSourceSet {
 		WithIncludePath(isCortexSourcePath),
 		WithSessionIDFromPath(cortexSessionIDFromPath),
 		WithProjectHint(func(root, path string) string { return "" }),
+		// Cortex's .history.jsonl sidecar participates in source freshness, so
+		// fold it into the shared fingerprint (size, mtime, and content hash)
+		// via the framework companion hook instead of a bespoke Fingerprint.
+		// WithContentHashing preserves the legacy per-agent file_hash, which a
+		// resync would otherwise clear to NULL.
+		WithCompanionFiles(func(transcriptPath string) []string {
+			return []string{cortexHistoryCompanionPath(transcriptPath)}
+		}),
+		WithContentHashing(),
 	)
-}
-
-func (p *cortexProvider) sourceForHistoryCompanion(
-	ctx context.Context,
-	req ChangedPathRequest,
-) (SourceRef, bool, error) {
-	if req.Path == "" {
-		return SourceRef{}, false, nil
-	}
-	path := filepath.Clean(req.Path)
-	for _, root := range p.sources.roots {
-		if req.WatchRoot != "" && !samePath(req.WatchRoot, root) {
-			continue
-		}
-		source, ok, err := cortexSourceForHistoryCompanion(ctx, p.sources, root, path)
-		if err != nil {
-			return SourceRef{}, false, err
-		}
-		if ok {
-			return source, true, nil
-		}
-	}
-	return SourceRef{}, false, nil
-}
-
-func cortexSourceForHistoryCompanion(
-	ctx context.Context,
-	sources JSONLSourceSet,
-	root string,
-	path string,
-) (SourceRef, bool, error) {
-	root = filepath.Clean(root)
-	if !samePath(filepath.Dir(path), root) {
-		return SourceRef{}, false, nil
-	}
-	stem, ok := strings.CutSuffix(filepath.Base(path), ".history.jsonl")
-	if !ok || !IsCortexSessionFile(stem+".json") {
-		return SourceRef{}, false, nil
-	}
-	metadataPath := filepath.Join(root, stem+".json")
-	if source, ok, err := sources.sourceForPath(ctx, metadataPath); err != nil {
-		return SourceRef{}, false, err
-	} else if ok {
-		return source, true, nil
-	}
-	return SourceRef{}, false, nil
 }
 
 func isCortexSourcePath(root, path string) bool {
@@ -249,42 +146,6 @@ func cortexSessionIDFromPath(root, path string) string {
 
 func cortexHistoryCompanionPath(path string) string {
 	return strings.TrimSuffix(path, ".json") + ".history.jsonl"
-}
-
-func cortexCompanionInfo(path string) (os.FileInfo, bool, error) {
-	info, err := os.Stat(path)
-	if os.IsNotExist(err) {
-		return nil, false, nil
-	}
-	if err != nil {
-		return nil, false, fmt.Errorf("stat %s: %w", path, err)
-	}
-	if info.IsDir() {
-		return nil, false, nil
-	}
-	return info, true, nil
-}
-
-func addCortexFingerprintPart(
-	h interface{ Write([]byte) (int, error) },
-	label string,
-	path string,
-	info os.FileInfo,
-) error {
-	hash, err := hashJSONLSourceFile(path)
-	if err != nil {
-		return err
-	}
-	_, _ = fmt.Fprintf(
-		h,
-		"%s:%s:%d:%d:%s\n",
-		label,
-		filepath.Base(path),
-		info.Size(),
-		info.ModTime().UnixNano(),
-		hash,
-	)
-	return nil
 }
 
 func cortexProviderCapabilities() Capabilities {

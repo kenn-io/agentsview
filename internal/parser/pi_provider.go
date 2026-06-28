@@ -196,6 +196,10 @@ func newPiSourceSet(agent AgentType, roots []string) DirectoryJSONLSourceSet {
 		WithIncludePath(isPiSourcePath),
 		WithProjectHint(func(root, path string) string { return "" }),
 		WithSessionIDFromPath(piSessionIDFromPath),
+		// Pi/OMP persisted a full-file content hash (file_hash) in the legacy
+		// per-agent parse. Without this the provider fingerprint hash is empty
+		// and a resync clears the stored file_hash to NULL.
+		WithContentHashing(),
 	)
 }
 
