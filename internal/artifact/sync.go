@@ -151,7 +151,13 @@ func syncWithTransport(
 
 	clock := NewHLCClock(database, HLCClockOptions{Now: opts.Now})
 	var imported ImportResult
+	var baselineSnapshot db.MetadataBaselineSnapshot
 	if opts.BaselineMetadata {
+		var err error
+		baselineSnapshot, err = database.MetadataBaselineSnapshot(ctx)
+		if err != nil {
+			return SyncResult{}, err
+		}
 		if err := tr.Exchange(ctx, localRoot); err != nil {
 			return SyncResult{}, err
 		}
@@ -168,7 +174,7 @@ func syncWithTransport(
 			Origin:  origin,
 			Now:     opts.Now,
 		})
-		if _, err := recorder.AppendBaseline(ctx); err != nil {
+		if _, err := recorder.AppendBaselineSnapshot(ctx, baselineSnapshot); err != nil {
 			return SyncResult{}, err
 		}
 	}

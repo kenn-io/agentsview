@@ -274,6 +274,23 @@ func (r *MetadataRecorder) AppendBaseline(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	return r.AppendBaselineSnapshot(ctx, snap)
+}
+
+// AppendBaselineSnapshot writes metadata events from a previously captured
+// curation snapshot. Callers that import peer artifacts before initialization
+// should capture the snapshot before that import so newly imported rows cannot
+// be re-published as local baseline metadata.
+func (r *MetadataRecorder) AppendBaselineSnapshot(
+	ctx context.Context,
+	snap db.MetadataBaselineSnapshot,
+) (int, error) {
+	if r == nil {
+		return 0, nil
+	}
+	if r.database == nil {
+		return 0, errors.New("metadata recorder database is required")
+	}
 	origin, err := r.ensureOrigin()
 	if err != nil {
 		return 0, err

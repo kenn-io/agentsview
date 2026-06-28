@@ -2,6 +2,7 @@ package artifact
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"slices"
 	"testing"
@@ -233,6 +234,40 @@ func TestSyncInitDoesNotLetBaselineOutrankExistingPeerMetadata(t *testing.T) {
 	assert.Equal(t, peerName, *b.displayName(t, gid))
 	assertMetadataConflictCount(t, a.db, gid, "display_name", 0)
 	assertMetadataConflictCount(t, b.db, gid, "display_name", 0)
+}
+
+func TestSyncInitDoesNotBaselineRowsCreatedByPreBaselineImport(t *testing.T) {
+	target := t.TempDir()
+	a := newSyncInstance(t, "laptop-a1b2c3")
+	b := newSyncInstance(t, "desktop-d4e5f6")
+	gid := b.origin + "~sess-1"
+
+	seedSession(t, b.db, "sess-1", "alpha")
+	b.sync(target)
+
+	require.NoError(t, a.db.Update(func(tx *sql.Tx) error {
+		_, err := tx.Exec(`
+			CREATE TRIGGER test_imported_display_name
+			AFTER INSERT ON sessions
+			WHEN NEW.id = 'desktop-d4e5f6~sess-1'
+			BEGIN
+				UPDATE sessions
+				SET display_name = 'Imported stale title'
+				WHERE id = NEW.id;
+			END`)
+		return err
+	}))
+
+	res := a.syncInit(target)
+	assert.Equal(t, 1, res.ImportedSessions)
+	assert.Equal(t, 0, res.ImportedMetadata)
+	require.NotNil(t, a.displayName(t, gid))
+	assert.Equal(t, "Imported stale title", *a.displayName(t, gid))
+
+	_, ok, err := a.db.MetadataReplayStateOp(context.Background(), gid, "display_name")
+	require.NoError(t, err)
+	assert.False(t, ok, "import-created curation must not become local baseline metadata")
+	assert.Empty(t, globArtifacts(t, target, a.origin, "meta", "*"+metadataEventExtension))
 }
 
 func TestTwoInstanceStarAndPurgePropagate(t *testing.T) {
