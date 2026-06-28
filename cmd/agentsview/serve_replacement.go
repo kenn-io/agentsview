@@ -48,7 +48,7 @@ func prepareForegroundServeDaemon(
 		}
 		return false, nil
 	case serveReplacementAuto, serveReplacementExplicit:
-		if err := checkExplicitForegroundReplacementDataVersion(
+		if err := checkForegroundReplacementDataVersion(
 			cfg, decision,
 		); err != nil {
 			return false, err
@@ -73,10 +73,15 @@ func prepareForegroundServeDaemon(
 	}
 }
 
-func checkExplicitForegroundReplacementDataVersion(
+func checkForegroundReplacementDataVersion(
 	cfg config.Config, decision serveReplacementDecision,
 ) error {
-	if decision.Action != serveReplacementExplicit || cfg.DBPath == "" {
+	if cfg.DBPath == "" {
+		return nil
+	}
+	switch decision.Action {
+	case serveReplacementAuto, serveReplacementExplicit:
+	default:
 		return nil
 	}
 	return db.CheckDataVersion(cfg.DBPath)
