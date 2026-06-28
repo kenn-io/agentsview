@@ -222,8 +222,11 @@ func shouldUpgradeDaemonRuntime(rt *DaemonRuntime, currentVersion string) bool {
 	if rt == nil || rt.ReadOnly {
 		return false
 	}
+	if update.IsDevBuildVersion(currentVersion) {
+		return false
+	}
 	if rt.Record.Version == "" {
-		return !update.IsDevBuildVersion(currentVersion)
+		return true
 	}
 	return update.IsNewer(currentVersion, rt.Record.Version)
 }

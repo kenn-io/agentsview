@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -53,6 +54,12 @@ func prepareForegroundServeDaemon(
 		); err != nil {
 			return false, err
 		}
+		releaseReplacementLock, err := acquireForegroundReplacementLock(cfg)
+		if err != nil {
+			return false, err
+		}
+		defer releaseReplacementLock()
+
 		ownsStartLock, acquiredStartLock := markDaemonStarting(cfg.DataDir)
 		if !ownsStartLock {
 			return false, fmt.Errorf(
@@ -79,6 +86,20 @@ func prepareForegroundServeDaemon(
 		return false, fmt.Errorf("unknown serve replacement action %d",
 			decision.Action)
 	}
+}
+
+func acquireForegroundReplacementLock(cfg config.Config) (func(), error) {
+	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
+		return nil, fmt.Errorf("creating data dir: %w", err)
+	}
+	lock, ok := acquireBackgroundLaunchLock(cfg.DataDir)
+	if !ok {
+		return nil, fmt.Errorf(
+			"agentsview serve --background is already in progress; " +
+				"wait for it to finish or run `agentsview serve status`",
+		)
+	}
+	return func() { _ = lock.Unlock() }, nil
 }
 
 func checkForegroundReplacementDataVersion(
