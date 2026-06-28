@@ -587,8 +587,6 @@ var Registry = []AgentDef{
 		IDPrefix:       "icodemate:",
 		WatchSubdirs:   []string{"storage/session_diff"},
 		FileBased:      true,
-		DiscoverFunc:   DiscoverIcodemateSessions,
-		FindSourceFunc: FindIcodemateSourceFile,
 		WatchRootsFunc: ResolveIcodemateWatchRoots,
 	},
 }
