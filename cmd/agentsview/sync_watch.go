@@ -36,7 +36,8 @@ func (p *artifactFolderPusher) push(
 		p.engine.SyncAll(ctx, nil)
 	}
 	res, err := syncArtifactFolder(
-		ctx, p.appCfg, p.database, p.target, p.origin, p.token, p.onDataChanged,
+		ctx, p.appCfg, p.database, p.target, p.origin, p.token, false,
+		p.onDataChanged,
 	)
 	if err != nil {
 		return err

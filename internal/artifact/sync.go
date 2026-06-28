@@ -57,6 +57,9 @@ type SyncOptions struct {
 	// Token is the Bearer token for an HTTP peer target. It is ignored by
 	// folder and object-store targets.
 	Token string
+	// BaselineMetadata writes metadata events for existing local curation before
+	// exchanging artifacts. It is intended for first-time initialization.
+	BaselineMetadata bool
 	// OnDataChanged is called after a foreign import writes local rows.
 	OnDataChanged func()
 }
@@ -146,6 +149,16 @@ func syncWithTransport(
 		return SyncResult{}, err
 	}
 
+	if opts.BaselineMetadata {
+		recorder := NewMetadataRecorder(database, MetadataRecorderOptions{
+			DataDir: opts.DataDir,
+			Origin:  origin,
+			Now:     opts.Now,
+		})
+		if _, err := recorder.AppendBaseline(ctx); err != nil {
+			return SyncResult{}, err
+		}
+	}
 	exported, err := Export(ctx, database, localRoot, origin)
 	if err != nil {
 		return SyncResult{}, err

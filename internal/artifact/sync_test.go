@@ -188,6 +188,92 @@ func TestSyncFolderRoundTripPreservesSessionName(t *testing.T) {
 	assert.Equal(t, sessionName, *got.SessionName)
 }
 
+func TestSyncFolderInitBaselineMetadataConvergesCuration(t *testing.T) {
+	ctx := context.Background()
+	share := t.TempDir()
+	aData := t.TempDir()
+	bData := t.TempDir()
+	aDB := testDB(t)
+	bDB := testDB(t)
+
+	require.NoError(t, AdoptOrigin(aDB, "laptop-a1b2c3"))
+	require.NoError(t, AdoptOrigin(bDB, "desktop-d4e5f6"))
+	seedSession(t, aDB, "sess-1", "alpha")
+	require.NoError(t, aDB.ReplaceSessionMessages("sess-1", []db.Message{
+		{
+			SessionID:     "sess-1",
+			Ordinal:       0,
+			Role:          "user",
+			Content:       "hello",
+			ContentLength: 5,
+			SourceUUID:    "uuid-question",
+		},
+		{
+			SessionID:     "sess-1",
+			Ordinal:       1,
+			Role:          "assistant",
+			Content:       "world",
+			ContentLength: 5,
+			SourceUUID:    "uuid-answer",
+		},
+	}))
+	displayName := "Already renamed"
+	require.NoError(t, aDB.RenameSession("sess-1", &displayName))
+	starred, err := aDB.StarSession("sess-1")
+	require.NoError(t, err)
+	require.True(t, starred)
+	msgs, err := aDB.GetAllMessages(ctx, "sess-1")
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	note := "already pinned"
+	_, err = aDB.PinMessage("sess-1", msgs[1].ID, &note)
+	require.NoError(t, err)
+
+	_, err = SyncFolder(ctx, aDB, SyncOptions{
+		DataDir:          aData,
+		Target:           share,
+		BaselineMetadata: true,
+	})
+	require.NoError(t, err)
+	res, err := SyncFolder(ctx, bDB, SyncOptions{
+		DataDir: bData,
+		Target:  share,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.ImportedSessions)
+	assert.Equal(t, 2, res.ImportedMessages)
+	assert.Equal(t, 3, res.ImportedMetadata)
+
+	gid := "laptop-a1b2c3~sess-1"
+	got, err := bDB.GetSessionFull(ctx, gid)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.DisplayName)
+	assert.Equal(t, displayName, *got.DisplayName)
+	stars, err := bDB.ListStarredSessionIDs(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{gid}, stars)
+	pins, err := bDB.ListPinnedMessages(ctx, gid, "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, 1, pins[0].Ordinal)
+	require.NotNil(t, pins[0].Note)
+	assert.Equal(t, note, *pins[0].Note)
+
+	op, ok, err := bDB.MetadataReplayStateOp(ctx, gid, "display_name")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, MetadataOpRename, op)
+	op, ok, err = bDB.MetadataReplayStateOp(ctx, gid, "starred")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, MetadataOpStar, op)
+	op, ok, err = bDB.MetadataReplayStateOp(ctx, gid, "pin:source_uuid:uuid-answer")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, MetadataOpPin, op)
+}
+
 func TestSyncFolderImportClearsSourceFileState(t *testing.T) {
 	ctx := context.Background()
 	share := t.TempDir()

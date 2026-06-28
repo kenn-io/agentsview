@@ -255,6 +255,109 @@ func TestPushPreservesMultiplePGPinsBySourceUUID(t *testing.T) {
 	assert.Equal(t, 3, pin.Ordinal)
 }
 
+func TestPushBackfillsLegacyPinSourceUUIDBeforeOrdinalShift(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+	local := testDB(t)
+	ps, err := New(
+		pgURL, "agentsview", local,
+		"curation-machine", true,
+		SyncOptions{},
+	)
+	require.NoError(t, err, "New sync")
+	defer ps.Close()
+
+	ctx := context.Background()
+	require.NoError(t, ps.EnsureSchema(ctx), "EnsureSchema")
+
+	sess := db.Session{
+		ID:               "pg-legacy-pin-shift",
+		Project:          "proj-curation",
+		Machine:          "local",
+		Agent:            "codex",
+		MessageCount:     2,
+		UserMessageCount: 1,
+		CreatedAt:        "2026-05-01T00:00:00Z",
+	}
+	require.NoError(t, local.UpsertSession(sess), "UpsertSession first")
+	require.NoError(t, local.InsertMessages([]db.Message{
+		{
+			SessionID:  "pg-legacy-pin-shift",
+			Ordinal:    0,
+			Role:       "user",
+			Content:    "question",
+			SourceUUID: "uuid-question",
+		},
+		{
+			SessionID:  "pg-legacy-pin-shift",
+			Ordinal:    1,
+			Role:       "assistant",
+			Content:    "answer",
+			SourceUUID: "uuid-answer",
+		},
+	}), "InsertMessages first")
+	_, err = ps.Push(ctx, false, nil)
+	require.NoError(t, err, "Push first")
+
+	store, err := NewStore(pgURL, "agentsview", true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	note := "legacy pin"
+	_, err = store.PinMessage("pg-legacy-pin-shift", 1, &note)
+	require.NoError(t, err, "PinMessage")
+	_, err = ps.pg.ExecContext(ctx, `
+		UPDATE pinned_messages
+		SET source_uuid = ''
+		WHERE session_id = $1 AND message_id = $2`,
+		"pg-legacy-pin-shift", 1,
+	)
+	require.NoError(t, err, "clear source_uuid to simulate legacy pin")
+
+	sess.MessageCount = 3
+	require.NoError(t, local.UpsertSession(sess), "UpsertSession second")
+	require.NoError(t, local.ReplaceSessionMessages(
+		"pg-legacy-pin-shift",
+		[]db.Message{
+			{
+				SessionID:  "pg-legacy-pin-shift",
+				Ordinal:    0,
+				Role:       "user",
+				Content:    "question",
+				SourceUUID: "uuid-question",
+			},
+			{
+				SessionID:         "pg-legacy-pin-shift",
+				Ordinal:           1,
+				Role:              "user",
+				Content:           "[compact]",
+				SourceUUID:        "uuid-boundary",
+				IsCompactBoundary: true,
+			},
+			{
+				SessionID:  "pg-legacy-pin-shift",
+				Ordinal:    2,
+				Role:       "assistant",
+				Content:    "answer",
+				SourceUUID: "uuid-answer",
+			},
+		},
+	), "ReplaceSessionMessages")
+
+	_, err = ps.Push(ctx, true, nil)
+	require.NoError(t, err, "Push rewrite")
+
+	pins, err := store.ListPinnedMessages(ctx, "pg-legacy-pin-shift", "")
+	require.NoError(t, err, "ListPinnedMessages")
+	require.Len(t, pins, 1)
+	assert.Equal(t, int64(2), pins[0].MessageID)
+	assert.Equal(t, 2, pins[0].Ordinal)
+	require.NotNil(t, pins[0].Note)
+	assert.Equal(t, note, *pins[0].Note)
+}
+
 func TestReconcilePinnedMessagesPrefersCurrentTargetPin(t *testing.T) {
 	pgURL := testPGURL(t)
 

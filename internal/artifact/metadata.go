@@ -261,6 +261,60 @@ func (r *MetadataRecorder) RepairLocalSessionMetadata(
 	return repaired, nil
 }
 
+// AppendBaseline writes metadata events for existing local curation that
+// predates artifact metadata recording.
+func (r *MetadataRecorder) AppendBaseline(ctx context.Context) (int, error) {
+	if r == nil {
+		return 0, nil
+	}
+	if r.database == nil {
+		return 0, errors.New("metadata recorder database is required")
+	}
+	snap, err := r.database.MetadataBaselineSnapshot(ctx)
+	if err != nil {
+		return 0, err
+	}
+	written := 0
+	for _, rename := range snap.Renames {
+		value, err := metadataRenameValue(rename.DisplayName)
+		if err != nil {
+			return written, err
+		}
+		if _, err := r.Append(ctx, MetadataEventInput{
+			SessionID: rename.SessionID,
+			Op:        MetadataOpRename,
+			Value:     value,
+		}); err != nil {
+			return written, fmt.Errorf("writing baseline rename metadata: %w", err)
+		}
+		written++
+	}
+	for _, sessionID := range snap.StarredSessionIDs {
+		if _, err := r.Append(ctx, MetadataEventInput{
+			SessionID: sessionID,
+			Op:        MetadataOpStar,
+		}); err != nil {
+			return written, fmt.Errorf("writing baseline star metadata: %w", err)
+		}
+		written++
+	}
+	for _, pin := range snap.Pins {
+		if _, err := r.Append(ctx, MetadataEventInput{
+			SessionID: pin.SessionID,
+			Op:        MetadataOpPin,
+			Pin: &MetadataPin{
+				SourceUUID: pin.SourceUUID,
+				Ordinal:    pin.Ordinal,
+				Note:       pin.Note,
+			},
+		}); err != nil {
+			return written, fmt.Errorf("writing baseline pin metadata: %w", err)
+		}
+		written++
+	}
+	return written, nil
+}
+
 // Import reads every foreign origin under root and imports referenced sessions
 // plus metadata events, advancing this recorder's HLC clock past observed
 // remote HLCs so later local edits stay causally ahead of imported peers.
@@ -298,6 +352,16 @@ func (r *MetadataRecorder) ensureOrigin() (string, error) {
 	}
 	r.origin = origin
 	return origin, nil
+}
+
+func metadataRenameValue(displayName *string) (json.RawMessage, error) {
+	data, err := json.Marshal(struct {
+		DisplayName *string `json:"display_name"`
+	}{DisplayName: displayName})
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(data), nil
 }
 
 func validateMetadataOp(op string) error {

@@ -286,7 +286,7 @@ func runArtifactFolderSync(
 	}
 	ctx := context.Background()
 	res, err := syncArtifactFolder(
-		ctx, appCfg, database, target, origin, artifactPeerToken(cfg), nil,
+		ctx, appCfg, database, target, origin, artifactPeerToken(cfg), cfg.Init, nil,
 	)
 	if err != nil {
 		fatal("artifact sync: %v", err)
@@ -311,6 +311,7 @@ func syncArtifactFolder(
 	target string,
 	origin string,
 	token string,
+	baselineMetadata bool,
 	onDataChanged func(),
 ) (artifact.SyncResult, error) {
 	if !artifact.IsFolderTarget(target) && !artifact.IsHTTPTarget(target) && !artifact.IsObjectTarget(target) {
@@ -320,11 +321,12 @@ func syncArtifactFolder(
 		)
 	}
 	return artifact.Sync(ctx, database, artifact.SyncOptions{
-		DataDir:       appCfg.DataDir,
-		Target:        target,
-		Origin:        origin,
-		Token:         token,
-		OnDataChanged: onDataChanged,
+		DataDir:          appCfg.DataDir,
+		Target:           target,
+		Origin:           origin,
+		Token:            token,
+		BaselineMetadata: baselineMetadata,
+		OnDataChanged:    onDataChanged,
 	})
 }
 

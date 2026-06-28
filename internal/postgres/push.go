@@ -2166,6 +2166,10 @@ func (s *Sync) pushMessages(
 		}
 	}
 
+	if err := backfillLegacyPinnedMessageSourceUUIDs(ctx, tx, pgSessionID); err != nil {
+		return 0, err
+	}
+
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM tool_result_events
 		WHERE session_id = $1
@@ -2285,20 +2289,8 @@ func (s *Sync) replaceUsageEvents(
 func reconcilePinnedMessages(
 	ctx context.Context, tx *sql.Tx, sessionID string,
 ) error {
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE pinned_messages p
-		SET source_uuid = m.source_uuid
-		FROM messages m
-		WHERE p.session_id = $1
-			AND m.session_id = p.session_id
-			AND m.ordinal = p.message_id
-			AND p.source_uuid = ''
-			AND m.source_uuid <> ''`,
-		sessionID,
-	); err != nil {
-		return fmt.Errorf(
-			"backfilling pg pin source_uuid: %w", err,
-		)
+	if err := backfillLegacyPinnedMessageSourceUUIDs(ctx, tx, sessionID); err != nil {
+		return err
 	}
 
 	// Move shifted source-backed pins out of the real ordinal range
@@ -2452,6 +2444,27 @@ func reconcilePinnedMessages(
 		)
 	}
 
+	return nil
+}
+
+func backfillLegacyPinnedMessageSourceUUIDs(
+	ctx context.Context, tx *sql.Tx, sessionID string,
+) error {
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE pinned_messages p
+		SET source_uuid = m.source_uuid
+		FROM messages m
+		WHERE p.session_id = $1
+			AND m.session_id = p.session_id
+			AND m.ordinal = p.message_id
+			AND p.source_uuid = ''
+			AND m.source_uuid <> ''`,
+		sessionID,
+	); err != nil {
+		return fmt.Errorf(
+			"backfilling pg pin source_uuid: %w", err,
+		)
+	}
 	return nil
 }
 
