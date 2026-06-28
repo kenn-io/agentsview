@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -112,9 +114,23 @@ func zedFingerprintSource(src multiSessionSource) (SourceFingerprint, error) {
 	}
 	mtime := info.ModTime().UnixNano()
 	if src.MemberID != "" {
-		if sessionMtime, err := ZedSQLiteSourceMtime(src.Path); err == nil {
+		sessionMtime, err := ZedSQLiteSourceMtime(src.Path)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			// The thread row is gone but threads.db is still present. Return a
+			// keyed-empty fingerprint without error (matching the Shelley and
+			// Kiro tombstone behavior) so the engine reaches Parse and
+			// force-replaces the deleted thread out of the archive. Falling back
+			// to the physical DB size/mtime/hash here would let the engine's
+			// pre-parse freshness check skip Parse whenever stored metadata
+			// happened to match, stranding the stale thread.
+			return SourceFingerprint{}, nil
+		case err == nil:
 			mtime = sessionMtime
 		}
+		// A non-ErrNoRows error (unreadable DB, non-virtual path) keeps the
+		// physical DB mtime fallback, preserving the prior behavior for
+		// transient failures.
 	} else if compositeMtime, err := sqliteDBCompositeMtime(src.Container); err == nil {
 		mtime = compositeMtime
 	}

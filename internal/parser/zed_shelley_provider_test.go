@@ -390,7 +390,27 @@ func TestZedProviderChangedPathTombstonesDeletedThread(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, tombstone.DisplayPath, "deleted-thread tombstone source")
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: tombstone})
+
+	// The fingerprint of a deleted-but-present-DB thread must be keyed-empty:
+	// it must not error (or the engine aborts before Parse) and must not carry
+	// the physical DB size/mtime/hash. A DB-level fingerprint here lets the
+	// engine's pre-parse freshness check skip Parse whenever stored metadata
+	// happens to match, stranding the deleted thread. This mirrors Shelley and
+	// Kiro tombstone fingerprinting.
+	fingerprint, err := provider.Fingerprint(context.Background(), tombstone)
+	require.NoError(t, err, "missing-thread fingerprint must not error")
+	assert.Equal(t, tombstone.FingerprintKey, fingerprint.Key)
+	assert.Zero(t, fingerprint.Size,
+		"deleted-thread fingerprint must not carry the DB size")
+	assert.Zero(t, fingerprint.MTimeNS,
+		"deleted-thread fingerprint must not carry the DB mtime")
+	assert.Empty(t, fingerprint.Hash,
+		"deleted-thread fingerprint must not carry the DB hash")
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source:      tombstone,
+		Fingerprint: fingerprint,
+	})
 	require.NoError(t, err)
 	assert.True(t, outcome.ResultSetComplete)
 	assert.True(t, outcome.ForceReplace,
