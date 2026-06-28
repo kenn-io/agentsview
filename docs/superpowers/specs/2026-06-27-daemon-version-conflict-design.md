@@ -53,6 +53,8 @@ not responding to health checks.
   newer API/data version, refuse by default and explain the conflict.
 - If `--replace` is passed, stop the confirmed writable daemon and proceed even
   for dev builds, downgrades, and forward API/data mismatches.
+- If `--replace` is passed but only read-only daemons are present, leave them
+  running and start the local writable server normally.
 
 `agentsview serve --background`:
 
@@ -75,6 +77,7 @@ Example refusal shape:
 agentsview daemon version conflict:
   daemon:  http://127.0.0.1:8080 (pid 12345, version 0.23.0, api 1, data 7)
   binary:  dev (api 1, data 7)
+  reason:  dev builds do not replace running daemons automatically
 
 This binary will not replace that daemon automatically.
 Run `agentsview serve --replace` to replace it, or run
@@ -121,15 +124,23 @@ sync settings.
 
 Background `serve` should replace its current scattered compatible and
 incompatible checks with the shared classifier. Its existing launch lock remains
-the concurrency boundary for stop/start replacement. It should keep the current
-background behavior that preserves the replaced daemon's `no_sync` setting when
-the replacement command did not explicitly enable sync, but otherwise use the
-new invocation's config and flags.
+the concurrency boundary for stop/start replacement. It should keep the current,
+unconditional background behavior that preserves the replaced daemon's `no_sync`
+setting. That asymmetry is intentional for this change: the background path is
+shared with daemon auto-start flows where the caller often has no sync-mode
+opinion, so preserving the prior writer mode is the smaller behavioral change.
+Other host, port, and auth settings should still come from the new invocation's
+config and flags.
 
 `serve status` should first look for a compatible daemon with
 `FindDaemonRuntime`. If none is found, it should call
 `FindIncompatibleDaemonRuntime` before falling back to generic live-record or
 startup-lock messages.
+
+The existing `openWriteDB` daemon rejection remains as a second line of defense
+after replacement. A successful stop removes the old runtime record, so the
+normal open path can proceed. If an invalid state contains another live writable
+daemon, the re-check should refuse rather than allowing a second writer.
 
 ## Safety
 
@@ -141,7 +152,9 @@ successful daemon ping or an exact recorded process create-time match before
 signalling a PID.
 
 `--replace` is explicit but not blind. It skips the automatic version policy,
-but it does not skip identity confirmation or writable/read-only checks.
+but it does not skip identity confirmation or writable/read-only checks. A
+read-only daemon is never a replacement target; with no writable daemon to
+replace, `--replace` behaves like normal `serve`.
 
 If the old daemon stops and the new server fails during startup, no automatic
 rollback is attempted. This is the same operational tradeoff already present in
@@ -158,12 +171,17 @@ Add focused Go tests for:
 - foreground `serve --replace` replaces a confirmed writable daemon even when
   the automatic policy would refuse;
 - foreground `serve` does not stop read-only daemons;
+- foreground `serve --replace` with only a read-only daemon starts normally and
+  leaves the read-only daemon running;
 - `serve --background --replace` follows the same replacement decision while
   retaining the background launch lock behavior;
+- replacement stops one discoverable writable daemon and the existing
+  `openWriteDB` daemon rejection still refuses if another writable daemon
+  remains;
 - `serve status` reports incompatible responding daemons as incompatible rather
   than not responding;
 - status/refusal output includes daemon version, binary version, PID, URL, and
-  API/data mismatch details when available.
+  the concrete refusal reason, plus API/data mismatch details when available.
 
 Where tests stub process stopping or server startup, they should assert the
 replacement decision and output shape without starting a real long-running
