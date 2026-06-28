@@ -67,6 +67,18 @@ func TestServeBackgroundChildArgsRemovesBackgroundFlag(t *testing.T) {
 	}
 }
 
+func TestServeBackgroundChildArgsRemovesReplaceFlag(t *testing.T) {
+	got := serveBackgroundChildArgs([]string{
+		"serve", "--background", "--replace", "--port", "0",
+	})
+	assert.Equal(t, []string{"serve", "--port", "0"}, got)
+
+	got = serveBackgroundChildArgs([]string{
+		"serve", "-background=true", "-replace=true", "--host", "127.0.0.1",
+	})
+	assert.Equal(t, []string{"serve", "--host", "127.0.0.1"}, got)
+}
+
 func TestServeCommandParsesBackgroundFlag(t *testing.T) {
 	dataDir := testDataDir(t)
 

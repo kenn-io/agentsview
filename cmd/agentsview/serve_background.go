@@ -496,7 +496,7 @@ func startServeBackgroundProcess(
 func serveBackgroundChildArgs(args []string) []string {
 	out := make([]string, 0, len(args))
 	for _, arg := range args {
-		if isBackgroundFlagArg(arg) {
+		if isBackgroundChildStrippedFlagArg(arg) {
 			continue
 		}
 		out = append(out, arg)
@@ -528,14 +528,17 @@ func serveBackgroundArgsWithNoSync(args []string, noSync bool) []string {
 	return append(out, "--no-sync")
 }
 
-// isBackgroundFlagArg reports whether arg is the --background flag in any
-// spelling the CLI accepts. The legacy flag normalizer rewrites the
-// single-dash form -background to --background before Cobra parses, so the
-// raw args handed to the child still carry -background. Stripping both
-// spellings stops the child from re-entering background mode and spawning
-// itself recursively.
-func isBackgroundFlagArg(arg string) bool {
-	for _, name := range []string{"--background", "-background"} {
+// isBackgroundChildStrippedFlagArg reports whether arg is a serve flag that
+// belongs only to the launching parent. The legacy flag normalizer rewrites
+// single-dash forms before Cobra parses, so raw child args still need both
+// spellings stripped.
+func isBackgroundChildStrippedFlagArg(arg string) bool {
+	for _, name := range []string{
+		"--background",
+		"-background",
+		"--replace",
+		"-replace",
+	} {
 		if arg == name || strings.HasPrefix(arg, name+"=") {
 			return true
 		}

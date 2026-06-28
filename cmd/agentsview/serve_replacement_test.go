@@ -60,6 +60,27 @@ func TestPrepareForegroundServeDaemonAutoReplacesOlderDaemon(t *testing.T) {
 	assert.Nil(t, FindDaemonRuntime(dir))
 }
 
+func TestPrepareForegroundServeDaemonUsesExistingCompatibleDaemon(t *testing.T) {
+	dir := runtimeTestDir(t)
+	host, port := testPingServer(t)
+	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
+		host, port, withRuntimeVersion("1.1.0"),
+	))
+	setTestVersion(t, "1.1.0")
+	forbidStopDaemonRuntimeForUpgrade(t, "same-version daemon must be reused")
+
+	out := captureStdout(t, func() {
+		cont, err := prepareForegroundServeDaemon(
+			config.Config{DataDir: dir}, serveReplacementOptions{},
+		)
+		require.NoError(t, err)
+		assert.False(t, cont)
+	})
+
+	assert.Contains(t, out, "agentsview already running")
+	assert.Contains(t, out, "http://")
+}
+
 func TestPrepareForegroundServeDaemonRefusesDevWithoutReplace(t *testing.T) {
 	dir := runtimeTestDir(t)
 	host, port := testPingServer(t)
