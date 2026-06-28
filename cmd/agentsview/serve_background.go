@@ -147,24 +147,59 @@ func runServeBackground(
 		}
 		return
 	case serveReplacementAuto, serveReplacementExplicit:
-		if err := checkBackgroundReplacementDataVersion(&cfg); err != nil {
-			fatal("serve background: %v", err)
+		if waited, err := waitForExternalServeStartupBeforeReplacement(
+			context.Background(),
+			cfg.DataDir,
+			cfg.AuthToken,
+			backgroundServeReadyTimeout,
+		); waited {
+			if err != nil {
+				if errors.Is(err, errServeStartupInProgress) {
+					fmt.Println(errServeStartupInProgress.Error() + ".")
+					return
+				}
+				fatal("serve background: %v", err)
+			}
+			decision = decideServeDaemonReplacementAfterExternalStartup(cfg, opts)
 		}
-		if reportExternalServeStartupBeforeBackgroundReplacement(cfg) {
+		switch decision.Action {
+		case serveReplacementNone:
+		case serveReplacementUseExisting:
+			if rt := decision.Runtime; rt != nil {
+				fmt.Printf(
+					"agentsview already running at %s (pid %d)\n",
+					urlFromDaemonRuntime(rt),
+					rt.Record.PID,
+				)
+			}
 			return
-		}
-		// runServeBackgroundCommand holds the background launch lock across
-		// this stop/start sequence, so another CLI launcher cannot race into
-		// the replacement gap.
-		adoptDaemonRuntimeLaunchOptions(&cfg, decision.Runtime)
-		fmt.Println("Replacing agentsview daemon")
-		for _, line := range serveDaemonReplacementLines(decision) {
-			fmt.Println(line)
-		}
-		if err := stopDaemonRuntimeForUpgrade(cfg, decision.Runtime); err != nil {
+		case serveReplacementAuto, serveReplacementExplicit:
+			if err := checkBackgroundReplacementDataVersion(&cfg); err != nil {
+				fatal("serve background: %v", err)
+			}
+			// runServeBackgroundCommand holds the background launch lock across
+			// this stop/start sequence, so another CLI launcher cannot race into
+			// the replacement gap.
+			adoptDaemonRuntimeLaunchOptions(&cfg, decision.Runtime)
+			fmt.Println("Replacing agentsview daemon")
+			for _, line := range serveDaemonReplacementLines(decision) {
+				fmt.Println(line)
+			}
+			if err := stopDaemonRuntimeForUpgrade(cfg, decision.Runtime); err != nil {
+				fatal(
+					"serve background: stopping daemon before restart: %v",
+					err,
+				)
+			}
+		case serveReplacementRefuse:
 			fatal(
-				"serve background: stopping daemon before restart: %v",
-				err,
+				"serve background: %s",
+				strings.Join(serveDaemonConflictLines(decision), "\n"),
+			)
+		default:
+			fatal(
+				"serve background: unknown serve replacement action %d",
+				decision.Action,
 			)
 		}
 	case serveReplacementRefuse:
@@ -305,19 +340,21 @@ func ensureBackgroundServe(
 			return nil, fmt.Errorf("generating auth token: %w", err)
 		}
 	}
+
+probeDaemon:
 	if rt := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil &&
 		!rt.ReadOnly {
 		if shouldUpgradeDaemonRuntime(rt, version) {
 			if err := checkBackgroundReplacementDataVersion(cfg); err != nil {
 				return nil, err
 			}
-			if rt, waited, err := waitForExternalServeStartup(
+			if waited, err := waitForExternalServeStartupBeforeReplacement(
 				ctx, cfg.DataDir, cfg.AuthToken, waitTimeout,
 			); waited {
 				if err != nil {
 					return nil, err
 				}
-				return rt, nil
+				goto probeDaemon
 			}
 			adoptDaemonRuntimeLaunchOptions(cfg, rt)
 			if err := stopDaemonRuntimeForUpgrade(*cfg, rt); err != nil {
@@ -341,13 +378,13 @@ func ensureBackgroundServe(
 			if err := checkBackgroundReplacementDataVersion(cfg); err != nil {
 				return nil, err
 			}
-			if rt, waited, err := waitForExternalServeStartup(
+			if waited, err := waitForExternalServeStartupBeforeReplacement(
 				ctx, cfg.DataDir, cfg.AuthToken, waitTimeout,
 			); waited {
 				if err != nil {
 					return nil, err
 				}
-				return rt, nil
+				goto probeDaemon
 			}
 			adoptDaemonRuntimeLaunchOptions(cfg, rt)
 			if stopErr := stopDaemonRuntimeForUpgrade(*cfg, rt); stopErr != nil {
@@ -383,13 +420,13 @@ func ensureBackgroundServe(
 				if err := checkBackgroundReplacementDataVersion(cfg); err != nil {
 					return nil, err
 				}
-				if rt, waited, err := waitForExternalServeStartup(
+				if waited, err := waitForExternalServeStartupBeforeReplacement(
 					ctx, cfg.DataDir, cfg.AuthToken, waitTimeout,
 				); waited {
 					if err != nil {
 						return nil, err
 					}
-					return rt, nil
+					goto probeDaemon
 				}
 				adoptDaemonRuntimeLaunchOptions(cfg, rt)
 				if stopErr := stopDaemonRuntimeForUpgrade(*cfg, rt); stopErr != nil {
@@ -438,37 +475,6 @@ func ensureBackgroundServe(
 		)
 	}
 	return rt, nil
-}
-
-func reportExternalServeStartupBeforeBackgroundReplacement(
-	cfg config.Config,
-) bool {
-	rt, waited, err := waitForExternalServeStartup(
-		context.Background(),
-		cfg.DataDir,
-		cfg.AuthToken,
-		backgroundServeReadyTimeout,
-	)
-	if !waited {
-		return false
-	}
-	if err != nil {
-		if errors.Is(err, errServeStartupInProgress) {
-			fmt.Println(errServeStartupInProgress.Error() + ".")
-			return true
-		}
-		fatal("serve background: %v", err)
-	}
-	if rt != nil {
-		fmt.Printf(
-			"agentsview already running at %s (pid %d)\n",
-			urlFromDaemonRuntime(rt),
-			rt.Record.PID,
-		)
-		return true
-	}
-	fmt.Println(errServeStartupInProgress.Error() + ".")
-	return true
 }
 
 func waitForExternalServeStartup(
@@ -520,6 +526,45 @@ func waitForExternalServeStartup(
 		"agentsview serve startup finished without publishing a writable " +
 			"runtime record",
 	)
+}
+
+func waitForExternalServeStartupBeforeReplacement(
+	ctx context.Context,
+	dataDir string,
+	authToken string,
+	waitTimeout time.Duration,
+) (bool, error) {
+	_, waited, err := waitForExternalServeStartup(
+		ctx, dataDir, authToken, waitTimeout,
+	)
+	if !waited {
+		return false, nil
+	}
+	if err != nil && (errors.Is(err, errServeStartupInProgress) ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded)) {
+		return true, err
+	}
+	if err := ctx.Err(); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func decideServeDaemonReplacementAfterExternalStartup(
+	cfg config.Config,
+	opts serveReplacementOptions,
+) serveReplacementDecision {
+	if !opts.Replace {
+		return decideServeDaemonReplacement(cfg, opts)
+	}
+	decision := decideServeDaemonReplacement(
+		cfg, serveReplacementOptions{},
+	)
+	if decision.Action != serveReplacementRefuse {
+		return decision
+	}
+	return decideServeDaemonReplacement(cfg, opts)
 }
 
 func checkBackgroundReplacementDataVersion(cfg *config.Config) error {
