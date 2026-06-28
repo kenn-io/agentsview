@@ -503,6 +503,34 @@ func TestCheckSchemaCompatIgnoresPushOnlySchema(t *testing.T) {
 		"read compatibility must not require push-only schema")
 }
 
+func TestCheckSchemaCompatRequiresCurationBaselineColumns(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.queryErrors = []schemaProbeQueryError{{
+		contains: "source_display_name",
+		err: errors.New(
+			`ERROR: column "source_display_name" does not exist (SQLSTATE 42703)`),
+	}}
+
+	err := CheckSchemaCompat(context.Background(), pg)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sessions table missing curation columns")
+}
+
+func TestCheckSchemaCompatRequiresExcludedSessions(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.queryErrors = []schemaProbeQueryError{{
+		contains: "from excluded_sessions",
+		err: errors.New(
+			`ERROR: relation "excluded_sessions" does not exist (SQLSTATE 42P01)`),
+	}}
+
+	err := CheckSchemaCompat(context.Background(), pg)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "excluded_sessions table missing")
+}
+
 func TestSyncEnsureSchemaRunsDDLWhenPushMetadataMissing(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, map[string][]string{
 		"sessions": {

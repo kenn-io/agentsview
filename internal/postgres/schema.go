@@ -1651,6 +1651,25 @@ func CheckSchemaCompat(
 	rows.Close()
 
 	rows, err = db.QueryContext(ctx,
+		`SELECT source_display_name, source_deleted_at
+		 FROM sessions LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"sessions table missing curation columns: %w", err,
+		)
+	}
+	rows.Close()
+
+	rows, err = db.QueryContext(ctx,
+		`SELECT id FROM excluded_sessions LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"excluded_sessions table missing required columns: %w", err,
+		)
+	}
+	rows.Close()
+
+	rows, err = db.QueryContext(ctx,
 		`SELECT call_index, file_path FROM tool_calls LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
@@ -1787,10 +1806,10 @@ func CheckSchemaCompat(
 	return nil
 }
 
-// checkPushSchemaCompat verifies schema elements that only push needs:
-// the sync_metadata table and sessions.owner_marker. pg serve never reads
-// these, so they live outside CheckSchemaCompat (which gates read-only
-// serve startup) and are checked only on the push fast path.
+// checkPushSchemaCompat verifies schema elements that only push needs. PG serve
+// never reads sync_metadata or owner_marker, so they live outside
+// CheckSchemaCompat (which gates read-only serve startup) and are checked only
+// on the push fast path.
 func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
 	rows, err := db.QueryContext(ctx,
 		`SELECT key, value FROM sync_metadata LIMIT 0`)
@@ -1801,27 +1820,18 @@ func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
 	rows.Close()
 
 	rows, err = db.QueryContext(ctx,
-		`SELECT owner_marker, source_display_name, source_deleted_at
-		 FROM sessions LIMIT 0`)
+		`SELECT owner_marker FROM sessions LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
-			"sessions table missing push curation columns: %w", err)
-	}
-	rows.Close()
-
-	rows, err = db.QueryContext(ctx,
-		`SELECT id FROM excluded_sessions LIMIT 0`)
-	if err != nil {
-		return fmt.Errorf(
-			"excluded_sessions table missing required columns: %w", err)
+			"sessions table missing push ownership columns: %w", err)
 	}
 	rows.Close()
 	return nil
 }
 
 // pushSchemaCurrent reports whether the PG schema has everything a push
-// needs. CheckSchemaCompat covers the read paths but does not require the
-// push-only sync_metadata table or sessions.owner_marker (verified by
+// needs. CheckSchemaCompat covers the read and PG serve write paths but does
+// not require push-only sync_metadata or sessions.owner_marker (verified by
 // checkPushSchemaCompat), model_pricing (always queried by syncModelPricing)
 // or cursor_usage_events (written by syncCursorUsageEvents), so probe those
 // explicitly. It also requires the cursor dedup index, which the cursor usage
