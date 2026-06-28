@@ -276,7 +276,7 @@ func TestParseKimiSession_SessionLevelTokensEmitUsageEvent(t *testing.T) {
 		},
 	)
 
-	sess, _, err := ParseKimiSession(path, "testproj", "local")
+	sess, _, err := parseKimiSession(path, "testproj", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -304,7 +304,7 @@ func TestParseKimiSession_PerMessageTokensSkipUsageEvent(t *testing.T) {
 		},
 	)
 
-	sess, _, err := ParseKimiSession(path, "testproj", "local")
+	sess, _, err := parseKimiSession(path, "testproj", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Empty(t, sess.UsageEvents)
@@ -321,7 +321,7 @@ func TestParseKimiSession_StepEndModelOverridesDefault(t *testing.T) {
 		},
 	)
 
-	_, msgs, err := ParseKimiSession(path, "testproj", "local")
+	_, msgs, err := parseKimiSession(path, "testproj", "local")
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
 	assert.Equal(t, "moonshot/kimi-k2", msgs[1].Model)
