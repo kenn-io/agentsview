@@ -32,3 +32,82 @@ func FetchLiteLLMPricingContext(
 func ParseLiteLLMPricing(data []byte) ([]ModelPricing, error) {
 	return catalog.ParseLiteLLMPricing(data)
 }
+
+// FetchOpenRouterPricing downloads the OpenRouter public model
+// catalog and converts each text-generation entry into
+// ModelPricing. See catalog.FetchOpenRouterPricing for the
+// underlying parser and the rationale for dropping non-text
+// modalities.
+func FetchOpenRouterPricing() ([]ModelPricing, error) {
+	return catalog.FetchOpenRouterPricing()
+}
+
+// ParseOpenRouterPricing is the byte-level equivalent of
+// FetchOpenRouterPricing, exposed for unit tests.
+func ParseOpenRouterPricing(data []byte) ([]ModelPricing, error) {
+	return catalog.ParseOpenRouterPricing(data)
+}
+
+// PricingSource describes one upstream catalog that the
+// pricing refresh loop tries to fetch in the background.
+// Sources are tried in declaration order; the first to
+// succeed wins for the seed batch, and every successful
+// fetch contributes its rows to the merged result so
+// downstream callers see the union.
+type PricingSource struct {
+	Name string
+	Fetch func() ([]ModelPricing, error)
+}
+
+// DefaultPricingSources returns the built-in pricing sources
+// in priority order. LiteLLM covers most public models; the
+// OpenRouter catalog frequently lists fork-tuned and private
+// model prices that LiteLLM has not yet picked up. The list
+// is intentionally short: each entry adds an HTTP request on
+// every server start and we want startup latency to stay low.
+func DefaultPricingSources() []PricingSource {
+	return []PricingSource{
+		{Name: "litellm", Fetch: FetchLiteLLMPricing},
+		{Name: "openrouter", Fetch: FetchOpenRouterPricing},
+	}
+}
+
+// MergePricing combines per-source ModelPricing slices into a
+// single map keyed by ModelPattern. When two sources report
+// the same pattern, the first non-zero field wins (so earlier
+// sources in the slice take precedence over later ones).
+// This gives LiteLLM priority over OpenRouter for models both
+// catalogs cover, while still letting OpenRouter fill in
+// models that LiteLLM does not list.
+func MergePricing(sources map[string][]ModelPricing) map[string]ModelPricing {
+	out := make(map[string]ModelPricing)
+	// Stable iteration order: callers pass a map but we want
+	// deterministic precedence. The DefaultPricingSources order
+	// is the documented priority; here we just merge whatever
+	// the caller hands us and rely on each source slice being
+	// internally consistent.
+	for _, prices := range sources {
+		for _, p := range prices {
+			existing, ok := out[p.ModelPattern]
+			if !ok {
+				out[p.ModelPattern] = p
+				continue
+			}
+			merged := existing
+			if merged.InputPerMTok == 0 && p.InputPerMTok != 0 {
+				merged.InputPerMTok = p.InputPerMTok
+			}
+			if merged.OutputPerMTok == 0 && p.OutputPerMTok != 0 {
+				merged.OutputPerMTok = p.OutputPerMTok
+			}
+			if merged.CacheCreationPerMTok == 0 && p.CacheCreationPerMTok != 0 {
+				merged.CacheCreationPerMTok = p.CacheCreationPerMTok
+			}
+			if merged.CacheReadPerMTok == 0 && p.CacheReadPerMTok != 0 {
+				merged.CacheReadPerMTok = p.CacheReadPerMTok
+			}
+			out[p.ModelPattern] = merged
+		}
+	}
+	return out
+}

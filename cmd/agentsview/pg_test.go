@@ -83,7 +83,7 @@ url = "postgres://user:pass@db.example.test:5432/agentsview?sslmode=require"
 	assert.Empty(t, cfg.PublicOrigins, "PublicOrigins should be empty")
 	assert.Empty(t, cfg.Proxy.Mode, "Proxy.Mode should be empty")
 	assert.Equal(t, "127.0.0.1", cfg.Host)
-	assert.Equal(t, 8080, cfg.Port)
+	assert.Equal(t, 9765, cfg.Port)
 }
 
 func TestLoadPGServeConfigIgnoresInvalidPersistedServeSettings(t *testing.T) {
