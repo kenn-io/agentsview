@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net"
 	"os"
 	"strconv"
@@ -68,6 +69,33 @@ func TestServeStatusLinesReadOnly(t *testing.T) {
 	out := strings.Join(serveStatusLines(rt), "\n")
 	assert.Contains(t, out, "mode:    read-only")
 	assert.NotContains(t, out, "uptime:", "zero StartedAt must omit uptime")
+}
+
+func TestRunServeStatusReportsIncompatibleWritableDaemon(t *testing.T) {
+	dir := runtimeTestDir(t)
+	host, port := testPingServer(t)
+	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
+		host, port,
+		withRuntimeVersion("1.0.0"),
+		withRuntimeAPIVersion(0),
+	))
+
+	out := captureStdout(t, func() {
+		runServeStatus(config.Config{DataDir: dir})
+	})
+
+	assert.Contains(t, out, "incompatible")
+	assert.Contains(t, out, "running")
+	assert.Contains(t, out, fmt.Sprintf("http://%s:%d", host, port))
+	assert.Contains(t, out, strconv.Itoa(os.Getpid()))
+	assert.Contains(t, out, "daemon version")
+	assert.Contains(t, out, "binary version")
+	assert.Contains(t, out, "API version")
+	assert.Contains(t, out, "data version")
+	assert.Contains(t, out, "compatibility")
+	assert.Contains(t, out, "serve --replace")
+	assert.Contains(t, out, "serve stop")
+	assert.NotContains(t, out, "not responding")
 }
 
 func TestAcquireBackgroundLaunchLockSerializes(t *testing.T) {

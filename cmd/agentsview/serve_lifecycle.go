@@ -28,6 +28,14 @@ func runServeStatus(cfg config.Config) {
 		}
 		return
 	}
+	if rt, compatErr := findIncompatibleWritableDaemonRuntime(
+		cfg.DataDir, cfg.AuthToken,
+	); rt != nil {
+		for _, line := range serveIncompatibleDaemonStatusLines(rt, compatErr) {
+			fmt.Println(line)
+		}
+		return
+	}
 	if recs := liveDaemonRecords(cfg.DataDir); len(recs) > 0 {
 		fmt.Printf(
 			"agentsview process running (pid %d) but not responding "+
@@ -60,6 +68,25 @@ func serveStatusLines(rt *DaemonRuntime) []string {
 		lines = append(lines, "  mode:    read-only")
 	}
 	return lines
+}
+
+func serveIncompatibleDaemonStatusLines(
+	rt *DaemonRuntime, compatErr error,
+) []string {
+	decision := serveReplacementDecision{
+		Action:           serveReplacementRefuse,
+		Runtime:          rt,
+		CompatibilityErr: compatErr,
+		Reason:           serveDaemonRefusalReason(rt, compatErr),
+	}
+	lines := serveDaemonDecisionLines(
+		"agentsview found an incompatible running writable daemon.",
+		decision,
+	)
+	return append(lines,
+		"Run `agentsview serve --replace` to replace it, or "+
+			"`agentsview serve stop` to stop it first.",
+	)
 }
 
 // runServeStop terminates every agentsview server owning this data dir whose
