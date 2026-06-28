@@ -389,6 +389,110 @@ func TestGetDailyUsageWithData(t *testing.T) {
 		"Totals.TotalCost")
 }
 
+// TestGetDailyUsageForkModelPricing verifies that custom model
+// patterns added via UpsertModelPricing (e.g. for internal/private
+// models that are not in the upstream LiteLLM catalog) are picked
+// up by GetDailyUsage and produce non-zero cost. This guards
+// against regressions where a fork or downstream adds bespoke
+// models but the daily usage board silently shows $0.00 because
+// the model does not canonicalize to a known catalog key.
+func TestGetDailyUsageForkModelPricing(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	err := d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern:         "internal-private-model",
+		InputPerMTok:         5.0,
+		OutputPerMTok:        25.0,
+		CacheCreationPerMTok: 6.25,
+		CacheReadPerMTok:     0.5,
+	}})
+	requireNoError(t, err, "UpsertModelPricing")
+
+	insertSession(t, d, "fork-sess", "fork-proj", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = new("2026-06-25T10:00:00Z")
+		s.EndedAt = new("2026-06-25T11:00:00Z")
+	})
+
+	tokenUsage := `{
+		"input_tokens": 1000000,
+		"output_tokens": 500000,
+		"cache_creation_input_tokens": 0,
+		"cache_read_input_tokens": 0
+	}`
+	insertMessages(t, d, Message{
+		SessionID:  "fork-sess",
+		Ordinal:    0,
+		Role:       "assistant",
+		Timestamp:  "2026-06-25T10:30:00Z",
+		Model:      "internal-private-model",
+		TokenUsage: json.RawMessage(tokenUsage),
+	})
+
+	result, err := d.GetDailyUsage(ctx, UsageFilter{
+		From: "2026-06-20",
+		To:   "2026-06-28",
+	})
+	requireNoError(t, err, "GetDailyUsage")
+
+	require.Len(t, result.Daily, 1,
+		"daily should have one entry; got 0 means fork model "+
+			"pricing is being silently dropped")
+
+	day := result.Daily[0]
+	assert.Equal(t, "2026-06-25", day.Date, "Date")
+	assert.Equal(t, 1000000, day.InputTokens, "InputTokens")
+	assert.Equal(t, 500000, day.OutputTokens, "OutputTokens")
+
+	// Cost = (1_000_000 * 5.0 + 500_000 * 25.0) / 1_000_000
+	//      = (5_000_000 + 12_500_000) / 1_000_000
+	//      = 17.5
+	assert.InDelta(t, 17.5, day.TotalCost, 1e-9, "TotalCost")
+	assert.InDelta(t, 17.5, result.Totals.TotalCost, 1e-9,
+		"Totals.TotalCost")
+}
+
+// TestGetDailyUsageUnknownModelHasZeroCostButCountsTokens asserts
+// the failing case the fix guards against: a model that is not
+// in the pricing catalog must NOT silently make days[] empty.
+// The tokens still count toward Daily/Totals, but cost is $0
+// for the unrecognised model. If this test ever fails with
+// len(result.Daily)==0 the upstream time-window SQL has
+// regressed and the bug from upstream issue #904 has crept
+// back in.
+func TestGetDailyUsageUnknownModelHasZeroCostButCountsTokens(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Deliberately do NOT register pricing for "totally-unknown".
+	insertSession(t, d, "unk-sess", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = new("2026-06-25T10:00:00Z")
+	})
+	tokenUsage := `{"input_tokens":1000,"output_tokens":500}`
+	insertMessages(t, d, Message{
+		SessionID:  "unk-sess",
+		Ordinal:    0,
+		Role:       "assistant",
+		Timestamp:  "2026-06-25T10:30:00Z",
+		Model:      "totally-unknown",
+		TokenUsage: json.RawMessage(tokenUsage),
+	})
+
+	result, err := d.GetDailyUsage(ctx, UsageFilter{
+		From: "2026-06-25",
+		To:   "2026-06-25",
+	})
+	requireNoError(t, err, "GetDailyUsage")
+
+	require.Len(t, result.Daily, 1,
+		"daily entry must exist even when model is unpriced")
+	assert.Equal(t, 0.0, result.Daily[0].TotalCost, "cost is zero")
+	assert.Equal(t, 1000, result.Daily[0].InputTokens,
+		"input tokens still counted")
+}
+
 func TestUsageRowsHandleBlankMessageTimestampWithoutSessionStart(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
