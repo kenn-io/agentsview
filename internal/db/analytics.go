@@ -92,6 +92,7 @@ type AnalyticsFilter struct {
 	Machine          string // optional machine filter
 	Project          string // optional project filter
 	Agent            string // optional agent filter
+	Model            string // optional model filter
 	Timezone         string // IANA timezone for day bucketing
 	DayOfWeek        *int   // nil = all, 0=Mon, 6=Sun (ISO)
 	Hour             *int   // nil = all, 0-23
@@ -213,7 +214,7 @@ func (f AnalyticsFilter) utcRange() (string, string) {
 func (f AnalyticsFilter) buildWhere(
 	dateCol string,
 ) (string, []any) {
-	return f.buildWhereWithDate(dateCol, true)
+	return f.buildWhereWithDate(dateCol, true, "sessions.id")
 }
 
 // buildWhereWithoutDate returns common analytics predicates
@@ -221,7 +222,7 @@ func (f AnalyticsFilter) buildWhere(
 // date windows against message timestamps should use this to
 // avoid pre-filtering by the parent session timestamp.
 func (f AnalyticsFilter) buildWhereWithoutDate() (string, []any) {
-	return f.buildWhereWithDate("", false)
+	return f.buildWhereWithDate("", false, "sessions.id")
 }
 
 func csvFilterValues(raw string) []string {
@@ -236,10 +237,82 @@ func csvFilterValues(raw string) []string {
 	return out
 }
 
+func sqliteAnalyticsCSVPredicate(
+	col string,
+	raw string,
+) (string, []any) {
+	values := csvFilterValues(raw)
+	if len(values) == 0 {
+		return "", nil
+	}
+	if len(values) == 1 {
+		return col + " = ?", []any{values[0]}
+	}
+	placeholders := make([]string, len(values))
+	args := make([]any, 0, len(values))
+	for i, value := range values {
+		placeholders[i] = "?"
+		args = append(args, value)
+	}
+	return col + " IN (" + strings.Join(placeholders, ",") + ")", args
+}
+
+func (db *DB) getAnalyticsFilteredMessageCounts(
+	ctx context.Context,
+	sessionIDs []string,
+	f AnalyticsFilter,
+) (map[string]int, error) {
+	stats, err := db.getAnalyticsFilteredMessageStats(
+		ctx, sessionIDs, f,
+	)
+	if err != nil {
+		return nil, err
+	}
+	counts := make(map[string]int, len(stats))
+	for sessionID, stat := range stats {
+		counts[sessionID] = stat.Messages
+	}
+	return counts, nil
+}
+
+func (db *DB) getAnalyticsModelScopedMessages(
+	ctx context.Context,
+	sessionIDs []string,
+	f AnalyticsFilter,
+) (map[string][]ScopedMessage, error) {
+	scope, err := db.resolveAnalyticsMessageScope(ctx, sessionIDs, f, true)
+	if err != nil {
+		return nil, err
+	}
+	if scope == nil {
+		return map[string][]ScopedMessage{}, nil
+	}
+	return scope.MessagesBySession(), nil
+}
+
+func (db *DB) getAnalyticsFilteredMessageStats(
+	ctx context.Context,
+	sessionIDs []string,
+	f AnalyticsFilter,
+) (map[string]MessageStats, error) {
+	scope, err := db.resolveAnalyticsMessageScope(ctx, sessionIDs, f, false)
+	if err != nil {
+		return nil, err
+	}
+	if scope == nil {
+		return map[string]MessageStats{}, nil
+	}
+	return scope.StatsBySession(), nil
+}
+
 func (f AnalyticsFilter) buildWhereWithDate(
 	dateCol string,
 	includeDate bool,
+	sessionIDExpr string,
 ) (string, []any) {
+	if sessionIDExpr == "" {
+		sessionIDExpr = "sessions.id"
+	}
 	preds := []string{
 		"message_count > 0",
 		f.RelationshipExclusionSQL(),
@@ -302,6 +375,31 @@ func (f AnalyticsFilter) buildWhereWithDate(
 		}
 	}
 
+	if f.Model != "" {
+		models := csvFilterValues(f.Model)
+		if len(models) == 1 {
+			preds = append(preds,
+				"EXISTS (SELECT 1 FROM messages m WHERE "+
+					"m.session_id = "+sessionIDExpr+" AND "+
+					"m.model = ?)")
+			args = append(args, models[0])
+		} else if len(models) > 1 {
+			placeholders := make(
+				[]string, len(models),
+			)
+			for i, m := range models {
+				placeholders[i] = "?"
+				args = append(args, m)
+			}
+			preds = append(preds,
+				"EXISTS (SELECT 1 FROM messages m WHERE "+
+					"m.session_id = "+sessionIDExpr+" AND "+
+					"m.model IN ("+
+					strings.Join(placeholders, ",")+
+					"))")
+		}
+	}
+
 	if f.MinUserMessages > 0 {
 		preds = append(preds, "user_message_count >= ?")
 		args = append(args, f.MinUserMessages)
@@ -358,6 +456,183 @@ func automatedScopePredicate(scope, col string) string {
 	default:
 		return ""
 	}
+}
+
+func (db *DB) queryAnalyticsModels(
+	ctx context.Context,
+	query string,
+	args []any,
+) ([]string, error) {
+	rows, err := db.getReader().QueryContext(ctx, `
+		`+query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying analytics models: %w", err)
+	}
+	defer rows.Close()
+
+	models := make([]string, 0)
+	for rows.Next() {
+		var model string
+		if err := rows.Scan(&model); err != nil {
+			return nil, fmt.Errorf("scanning analytics model: %w", err)
+		}
+		models = append(models, model)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating analytics models: %w", err)
+	}
+	return models, nil
+}
+
+func (db *DB) getAnalyticsModelsSQLiteSummary(
+	ctx context.Context,
+	f AnalyticsFilter,
+	dateCol string,
+) ([]string, error) {
+	if f.HasTimeFilter() {
+		ids, err := db.filteredSessionIDs(ctx, f)
+		if err != nil {
+			return nil, err
+		}
+		sessionIDs := make([]string, 0, len(ids))
+		for id := range ids {
+			sessionIDs = append(sessionIDs, id)
+		}
+		return db.getAnalyticsModelsForSessionIDsFiltered(
+			ctx, sessionIDs, f,
+		)
+	}
+
+	where, args := sqliteAnalyticsWhereSQL(f, dateCol, "s.id", true)
+	return db.queryAnalyticsModels(ctx, `
+		SELECT DISTINCT m.model
+		FROM sessions s
+		JOIN messages m ON m.session_id = s.id
+		WHERE `+where+`
+		AND COALESCE(m.model, '') <> ''
+		ORDER BY m.model`,
+		args,
+	)
+}
+
+func (db *DB) getAnalyticsModelsForSessionIDs(
+	ctx context.Context,
+	sessionIDs []string,
+) ([]string, error) {
+	if len(sessionIDs) == 0 {
+		return []string{}, nil
+	}
+	seen := make(map[string]struct{}, len(sessionIDs))
+	unique := make([]string, 0, len(sessionIDs))
+	for _, sessionID := range sessionIDs {
+		if _, ok := seen[sessionID]; ok {
+			continue
+		}
+		seen[sessionID] = struct{}{}
+		unique = append(unique, sessionID)
+	}
+
+	modelSet := make(map[string]struct{})
+	models := make([]string, 0)
+	if err := queryChunked(unique, func(chunk []string) error {
+		ph, args := inPlaceholders(chunk)
+		found, err := db.queryAnalyticsModels(ctx, `
+			SELECT DISTINCT model
+			FROM messages
+			WHERE session_id IN `+ph+`
+			AND COALESCE(model, '') <> ''
+			ORDER BY model`,
+			args,
+		)
+		if err != nil {
+			return err
+		}
+		for _, model := range found {
+			if _, ok := modelSet[model]; ok {
+				continue
+			}
+			modelSet[model] = struct{}{}
+			models = append(models, model)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	sort.Strings(models)
+	return models, nil
+}
+
+func (db *DB) getAnalyticsModelsForSessionIDsFiltered(
+	ctx context.Context,
+	sessionIDs []string,
+	f AnalyticsFilter,
+) ([]string, error) {
+	if len(sessionIDs) == 0 {
+		return []string{}, nil
+	}
+	seen := make(map[string]struct{}, len(sessionIDs))
+	unique := make([]string, 0, len(sessionIDs))
+	for _, sessionID := range sessionIDs {
+		if _, ok := seen[sessionID]; ok {
+			continue
+		}
+		seen[sessionID] = struct{}{}
+		unique = append(unique, sessionID)
+	}
+
+	filterModels := csvFilterValues(f.Model)
+	allowedModels := make(map[string]struct{}, len(filterModels))
+	for _, model := range filterModels {
+		allowedModels[model] = struct{}{}
+	}
+	loc := f.location()
+	modelSet := make(map[string]struct{})
+	models := make([]string, 0)
+	if err := queryChunked(unique, func(chunk []string) error {
+		ph, args := inPlaceholders(chunk)
+		rows, err := db.getReader().QueryContext(ctx, `
+			SELECT model, COALESCE(timestamp, '')
+			FROM messages
+			WHERE session_id IN `+ph+`
+			AND COALESCE(model, '') <> ''`,
+			args...,
+		)
+		if err != nil {
+			return fmt.Errorf("querying filtered analytics models: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var model, ts string
+			if err := rows.Scan(&model, &ts); err != nil {
+				return fmt.Errorf("scanning filtered analytics model: %w", err)
+			}
+			if len(allowedModels) > 0 {
+				if _, ok := allowedModels[model]; !ok {
+					continue
+				}
+			}
+			if f.HasTimeFilter() {
+				t, ok := localTime(ts, loc)
+				if !ok || !f.matchesTimeFilter(t) {
+					continue
+				}
+			}
+			if _, ok := modelSet[model]; ok {
+				continue
+			}
+			modelSet[model] = struct{}{}
+			models = append(models, model)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("iterating filtered analytics models: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	sort.Strings(models)
+	return models, nil
 }
 
 // HasTimeFilter returns true when hour-of-day or day-of-week
@@ -455,7 +730,9 @@ func sqliteAnalyticsWhereSQL(
 	sessionIDExpr string,
 	includeTime bool,
 ) (string, []any) {
-	where, args := f.buildWhere(dateCol)
+	where, args := f.buildWhereWithDate(
+		dateCol, true, sessionIDExpr,
+	)
 	modifier, _ := f.sqliteTimeModifier()
 	dateExpr := sqliteDateExpr(dateCol, modifier)
 	if f.From != "" {
@@ -470,6 +747,12 @@ func sqliteAnalyticsWhereSQL(
 		preds := []string{
 			"m.session_id = " + sessionIDExpr,
 			"m.timestamp != ''",
+		}
+		if modelPred, modelArgs := sqliteAnalyticsCSVPredicate(
+			"m.model", f.Model,
+		); modelPred != "" {
+			preds = append(preds, modelPred)
+			args = append(args, modelArgs...)
 		}
 		if f.DayOfWeek != nil {
 			dowExpr := "strftime('%w', m.timestamp)"
@@ -498,13 +781,21 @@ func sqliteAnalyticsWhereSQL(
 // filteredSessionIDs returns the set of session IDs that have
 // at least one message matching the hour/dow filter. Used by
 // session-level queries to restrict results when time filters
-// are active.
+// are active. With a model filter active it pairs through the
+// shared scope reducer (see filteredSessionIDsModel) so an
+// empty-model user turn at the selected hour keeps its session,
+// matching how the model-scoped panels count it.
 func (db *DB) filteredSessionIDs(
 	ctx context.Context, f AnalyticsFilter,
 ) (map[string]bool, error) {
+	if strings.TrimSpace(f.Model) != "" {
+		return db.filteredSessionIDsModel(ctx, f)
+	}
 	loc := f.location()
 	dateCol := "COALESCE(NULLIF(s.started_at, ''), s.created_at)"
-	where, args := f.buildWhere(dateCol)
+	where, args := f.buildWhereWithDate(
+		dateCol, true, "s.id",
+	)
 
 	query := `SELECT s.id, m.timestamp
 		FROM sessions s
@@ -542,6 +833,31 @@ func (db *DB) filteredSessionIDs(
 		return nil, fmt.Errorf(
 			"iterating filtered session IDs: %w", err,
 		)
+	}
+	return ids, nil
+}
+
+// filteredSessionIDsModel returns the sessions that have at least one
+// model-scoped message matching the hour/dow filter. Unlike a direct m.model
+// predicate, it runs the shared scope reducer (with the day/hour filter), so an
+// empty-model user turn paired with a selected-model assistant keeps its
+// session when the user turn falls in the selected hour.
+func (db *DB) filteredSessionIDsModel(
+	ctx context.Context, f AnalyticsFilter,
+) (map[string]bool, error) {
+	sessionIDs, err := db.analyticsModelCandidateSessionIDs(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+	scope, err := db.resolveAnalyticsMessageScope(ctx, sessionIDs, f, false)
+	if err != nil {
+		return nil, err
+	}
+	ids := make(map[string]bool)
+	if scope != nil {
+		for id := range scope.MessagesBySession() {
+			ids[id] = true
+		}
 	}
 	return ids, nil
 }
@@ -628,6 +944,7 @@ type AnalyticsSummary struct {
 	TotalMessages          int                      `json:"total_messages"`
 	TotalOutputTokens      int                      `json:"total_output_tokens"`
 	TokenReportingSessions int                      `json:"token_reporting_sessions"`
+	Models                 []string                 `json:"models"`
 	ActiveProjects         int                      `json:"active_projects"`
 	ActiveDays             int                      `json:"active_days"`
 	AvgMessages            float64                  `json:"avg_messages"`
@@ -645,7 +962,7 @@ func (db *DB) GetAnalyticsSummary(
 	// The summary is a token/session aggregate, so subagent sessions
 	// (including workflow subagents) are counted here.
 	f.IncludeSubagents = true
-	if !f.canUseSQLiteTimeSQL() {
+	if !f.canUseSQLiteTimeSQL() || strings.TrimSpace(f.Model) != "" {
 		return db.getAnalyticsSummaryGo(ctx, f)
 	}
 	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
@@ -718,7 +1035,10 @@ func (db *DB) GetAnalyticsSummary(
 		return AnalyticsSummary{},
 			fmt.Errorf("querying analytics summary: %w", err)
 	}
-	s := AnalyticsSummary{Agents: make(map[string]*AgentSummary)}
+	s := AnalyticsSummary{
+		Agents: make(map[string]*AgentSummary),
+		Models: []string{},
+	}
 	if !rows.Next() {
 		rows.Close()
 		return s, nil
@@ -749,6 +1069,12 @@ func (db *DB) GetAnalyticsSummary(
 		return AnalyticsSummary{},
 			fmt.Errorf("closing summary rows: %w", err)
 	}
+
+	models, err := db.getAnalyticsModelsSQLiteSummary(ctx, f, dateCol)
+	if err != nil {
+		return AnalyticsSummary{}, err
+	}
+	s.Models = models
 
 	agentRows, err := db.getReader().QueryContext(ctx, `
 		WITH filtered AS (
@@ -815,6 +1141,7 @@ func (db *DB) getAnalyticsSummaryGo(
 	defer rows.Close()
 
 	type sessionRow struct {
+		id           string
 		date         string
 		messages     int
 		agent        string
@@ -845,6 +1172,7 @@ func (db *DB) getAnalyticsSummaryGo(
 			continue
 		}
 		all = append(all, sessionRow{
+			id:           id,
 			date:         date,
 			messages:     mc,
 			agent:        agent,
@@ -860,14 +1188,33 @@ func (db *DB) getAnalyticsSummaryGo(
 
 	var s AnalyticsSummary
 	s.Agents = make(map[string]*AgentSummary)
+	s.Models = []string{}
 
 	if len(all) == 0 {
 		return s, nil
 	}
 
+	if f.Model != "" {
+		ids := make([]string, 0, len(all))
+		for _, r := range all {
+			ids = append(ids, r.id)
+		}
+		stats, err := db.getAnalyticsFilteredMessageStats(ctx, ids, f)
+		if err != nil {
+			return AnalyticsSummary{}, err
+		}
+		for i := range all {
+			stat := stats[all[i].id]
+			all[i].messages = stat.Messages
+			all[i].outputTokens = stat.OutputTokens
+			all[i].hasTokens = stat.HasOutputTokens
+		}
+	}
+
 	days := make(map[string]bool)
 	projects := make(map[string]int) // project -> message count
 	msgCounts := make([]int, 0, len(all))
+	sessionIDs := make([]string, 0, len(all))
 
 	for _, r := range all {
 		s.TotalSessions++
@@ -879,6 +1226,7 @@ func (db *DB) getAnalyticsSummaryGo(
 		days[r.date] = true
 		projects[r.project] += r.messages
 		msgCounts = append(msgCounts, r.messages)
+		sessionIDs = append(sessionIDs, r.id)
 
 		if s.Agents[r.agent] == nil {
 			s.Agents[r.agent] = &AgentSummary{}
@@ -886,6 +1234,22 @@ func (db *DB) getAnalyticsSummaryGo(
 		s.Agents[r.agent].Sessions++
 		s.Agents[r.agent].Messages += r.messages
 	}
+
+	var models []string
+	var modelErr error
+	if strings.TrimSpace(f.Model) != "" || f.HasTimeFilter() {
+		models, modelErr = db.getAnalyticsModelsForSessionIDsFiltered(
+			ctx, sessionIDs, f,
+		)
+	} else {
+		models, modelErr = db.getAnalyticsModelsForSessionIDs(
+			ctx, sessionIDs,
+		)
+	}
+	if modelErr != nil {
+		return s, modelErr
+	}
+	s.Models = models
 
 	s.ActiveProjects = len(projects)
 	s.ActiveDays = len(days)
@@ -977,6 +1341,154 @@ func bucketDate(date string, granularity string) string {
 	}
 }
 
+func (db *DB) getModelScopedToolCallCounts(
+	ctx context.Context,
+	sessionIDs []string,
+	f AnalyticsFilter,
+) (map[string]int, error) {
+	counts := make(map[string]int, len(sessionIDs))
+	if len(sessionIDs) == 0 || strings.TrimSpace(f.Model) == "" {
+		return counts, nil
+	}
+	flt := f.messageScopeFilter()
+	loc := f.location()
+	if err := queryChunked(sessionIDs, func(chunk []string) error {
+		ph, args := inPlaceholders(chunk)
+		rows, err := db.getReader().QueryContext(ctx, `
+			SELECT tc.session_id, m.model, COALESCE(m.timestamp, ''), COUNT(*)
+			FROM tool_calls tc
+			JOIN messages m
+				ON m.session_id = tc.session_id
+				AND m.id = tc.message_id
+			WHERE tc.session_id IN `+ph+`
+			GROUP BY tc.session_id, m.model, COALESCE(m.timestamp, '')`,
+			args...,
+		)
+		if err != nil {
+			return fmt.Errorf("querying model-scoped analytics tool calls: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var sessionID, model, ts string
+			var count int
+			if err := rows.Scan(&sessionID, &model, &ts, &count); err != nil {
+				return fmt.Errorf("scanning model-scoped analytics tool calls: %w", err)
+			}
+			if _, ok := flt.Models[model]; !ok {
+				continue
+			}
+			parsed, has := localTime(ts, loc)
+			if !flt.MatchesDayHour(parsed, has) {
+				continue
+			}
+			counts[sessionID] += count
+		}
+		return rows.Err()
+	}); err != nil {
+		return nil, err
+	}
+	return counts, nil
+}
+
+func (db *DB) getAnalyticsActivityFilteredByModelTime(
+	ctx context.Context,
+	f AnalyticsFilter,
+	granularity string,
+) (ActivityResponse, error) {
+	loc := f.location()
+	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
+	where, args := f.buildWhereWithDate(dateCol, true, "sessions.id")
+	var timeIDs map[string]bool
+	if f.HasTimeFilter() {
+		var err error
+		timeIDs, err = db.filteredSessionIDs(ctx, f)
+		if err != nil {
+			return ActivityResponse{}, err
+		}
+	}
+
+	rows, err := db.getReader().QueryContext(ctx, `SELECT id, `+dateCol+`, agent
+		FROM sessions
+		WHERE `+where, args...)
+	if err != nil {
+		return ActivityResponse{},
+			fmt.Errorf("querying analytics activity sessions: %w", err)
+	}
+	defer rows.Close()
+
+	type sessionRow struct {
+		id, date, agent string
+	}
+	sessions := make([]sessionRow, 0)
+	sessionIDs := make([]string, 0)
+	for rows.Next() {
+		var id, ts, agent string
+		if err := rows.Scan(&id, &ts, &agent); err != nil {
+			return ActivityResponse{},
+				fmt.Errorf("scanning analytics activity session: %w", err)
+		}
+		date := localDate(ts, loc)
+		if !inDateRange(date, f.From, f.To) {
+			continue
+		}
+		if timeIDs != nil && !timeIDs[id] {
+			continue
+		}
+		sessions = append(sessions, sessionRow{id: id, date: date, agent: agent})
+		sessionIDs = append(sessionIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return ActivityResponse{},
+			fmt.Errorf("iterating analytics activity sessions: %w", err)
+	}
+
+	messageStats, err := db.getAnalyticsFilteredMessageStats(
+		ctx, sessionIDs, f,
+	)
+	if err != nil {
+		return ActivityResponse{}, err
+	}
+	toolCalls, err := db.getModelScopedToolCallCounts(
+		ctx, sessionIDs, f,
+	)
+	if err != nil {
+		return ActivityResponse{}, err
+	}
+
+	buckets := make(map[string]*ActivityEntry)
+	for _, session := range sessions {
+		bucket := bucketDate(session.date, granularity)
+		entry := buckets[bucket]
+		if entry == nil {
+			entry = &ActivityEntry{
+				Date:    bucket,
+				ByAgent: make(map[string]int),
+			}
+			buckets[bucket] = entry
+		}
+		entry.Sessions++
+		stat := messageStats[session.id]
+		entry.Messages += stat.Messages
+		entry.UserMessages += stat.UserMessages
+		entry.AssistantMessages += stat.AssistantMessages
+		entry.ThinkingMessages += stat.ThinkingMessages
+		entry.ToolCalls += toolCalls[session.id]
+		entry.ByAgent[session.agent] += stat.Messages
+	}
+
+	series := make([]ActivityEntry, 0, len(buckets))
+	for _, entry := range buckets {
+		series = append(series, *entry)
+	}
+	sort.Slice(series, func(i, j int) bool {
+		return series[i].Date < series[j].Date
+	})
+	return ActivityResponse{
+		Granularity: granularity,
+		Series:      series,
+	}, nil
+}
+
 // GetAnalyticsActivity returns session/message counts grouped
 // by time bucket.
 func (db *DB) GetAnalyticsActivity(
@@ -986,9 +1498,20 @@ func (db *DB) GetAnalyticsActivity(
 	if granularity == "" {
 		granularity = "day"
 	}
+	if strings.TrimSpace(f.Model) != "" {
+		return db.getAnalyticsActivityFilteredByModelTime(
+			ctx, f, granularity,
+		)
+	}
 	loc := f.location()
 	dateCol := "COALESCE(NULLIF(s.started_at, ''), s.created_at)"
-	where, args := f.buildWhere(dateCol)
+	where, args := f.buildWhereWithDate(dateCol, true, "s.id")
+	if modelPred, modelArgs := sqliteAnalyticsCSVPredicate(
+		"m.model", f.Model,
+	); modelPred != "" {
+		where += " AND " + modelPred
+		args = append(args, modelArgs...)
+	}
 
 	var timeIDs map[string]bool
 	if f.HasTimeFilter() {
@@ -1082,7 +1605,7 @@ func (db *DB) GetAnalyticsActivity(
 		err = queryChunked(sessionIDs,
 			func(chunk []string) error {
 				return db.mergeActivityToolCalls(
-					ctx, chunk, sessionSeen, buckets,
+					ctx, chunk, sessionSeen, buckets, f.Model,
 				)
 			})
 		if err != nil {
@@ -1112,12 +1635,26 @@ func (db *DB) mergeActivityToolCalls(
 	chunk []string,
 	sessionBucket map[string]string,
 	buckets map[string]*ActivityEntry,
+	model string,
 ) error {
 	ph, args := inPlaceholders(chunk)
-	q := `SELECT session_id, COUNT(*)
-		FROM tool_calls
-		WHERE session_id IN ` + ph + `
-		GROUP BY session_id`
+	q := `SELECT tc.session_id, COUNT(*)
+		FROM tool_calls tc`
+	if model != "" {
+		q += `
+		JOIN messages m
+			ON m.session_id = tc.session_id AND m.id = tc.message_id`
+	}
+	q += `
+		WHERE tc.session_id IN ` + ph
+	if modelPred, modelArgs := sqliteAnalyticsCSVPredicate(
+		"m.model", model,
+	); modelPred != "" {
+		q += ` AND ` + modelPred
+		args = append(args, modelArgs...)
+	}
+	q += `
+		GROUP BY tc.session_id`
 	rows, err := db.getReader().QueryContext(ctx, q, args...)
 	if err != nil {
 		return fmt.Errorf(
@@ -1201,7 +1738,16 @@ func (db *DB) GetAnalyticsHeatmap(
 	}
 	defer rows.Close()
 
-	dayCounts := make(map[string]int) // date -> count
+	type heatmapRow struct {
+		id           string
+		date         string
+		messages     int
+		outputTokens int
+		hasTokens    bool
+	}
+
+	var heatmapRows []heatmapRow
+	dayCounts := make(map[string]int)
 	daySessions := make(map[string]int)
 	dayOutputTokens := make(map[string]int)
 
@@ -1222,15 +1768,42 @@ func (db *DB) GetAnalyticsHeatmap(
 		if timeIDs != nil && !timeIDs[id] {
 			continue
 		}
-		dayCounts[date] += mc
-		daySessions[date]++
-		if hasTokens {
-			dayOutputTokens[date] += outputTokens
-		}
+		heatmapRows = append(heatmapRows, heatmapRow{
+			id:           id,
+			date:         date,
+			messages:     mc,
+			outputTokens: outputTokens,
+			hasTokens:    hasTokens,
+		})
 	}
 	if err := rows.Err(); err != nil {
 		return HeatmapResponse{},
 			fmt.Errorf("iterating heatmap rows: %w", err)
+	}
+
+	if f.Model != "" && (metric == "messages" || metric == "output_tokens") {
+		ids := make([]string, 0, len(heatmapRows))
+		for _, row := range heatmapRows {
+			ids = append(ids, row.id)
+		}
+		stats, err := db.getAnalyticsFilteredMessageStats(ctx, ids, f)
+		if err != nil {
+			return HeatmapResponse{}, err
+		}
+		for i := range heatmapRows {
+			stat := stats[heatmapRows[i].id]
+			heatmapRows[i].messages = stat.Messages
+			heatmapRows[i].outputTokens = stat.OutputTokens
+			heatmapRows[i].hasTokens = stat.HasOutputTokens
+		}
+	}
+
+	for _, row := range heatmapRows {
+		dayCounts[row.date] += row.messages
+		daySessions[row.date]++
+		if row.hasTokens {
+			dayOutputTokens[row.date] += row.outputTokens
+		}
 	}
 
 	// Choose which map to use based on metric
@@ -1430,6 +2003,14 @@ func (db *DB) GetAnalyticsProjects(
 
 	projectMap := make(map[string]*projectData)
 	var projectOrder []string
+	type projectRow struct {
+		id       string
+		project  string
+		date     string
+		messages int
+		agent    string
+	}
+	var projectRows []projectRow
 
 	for rows.Next() {
 		var id, project, ts, agent string
@@ -1447,34 +2028,57 @@ func (db *DB) GetAnalyticsProjects(
 		if timeIDs != nil && !timeIDs[id] {
 			continue
 		}
-
-		pd, ok := projectMap[project]
-		if !ok {
-			pd = &projectData{
-				name:   project,
-				agents: make(map[string]int),
-				days:   make(map[string]int),
-			}
-			projectMap[project] = pd
-			projectOrder = append(projectOrder, project)
-		}
-
-		pd.sessions++
-		pd.messages += mc
-		pd.counts = append(pd.counts, mc)
-		pd.agents[agent]++
-		pd.days[date] += mc
-
-		if pd.first == "" || date < pd.first {
-			pd.first = date
-		}
-		if date > pd.last {
-			pd.last = date
-		}
+		projectRows = append(projectRows, projectRow{
+			id:       id,
+			project:  project,
+			date:     date,
+			messages: mc,
+			agent:    agent,
+		})
 	}
 	if err := rows.Err(); err != nil {
 		return ProjectsAnalyticsResponse{},
 			fmt.Errorf("iterating project rows: %w", err)
+	}
+
+	if f.Model != "" {
+		ids := make([]string, 0, len(projectRows))
+		for _, row := range projectRows {
+			ids = append(ids, row.id)
+		}
+		counts, err := db.getAnalyticsFilteredMessageCounts(ctx, ids, f)
+		if err != nil {
+			return ProjectsAnalyticsResponse{}, err
+		}
+		for i := range projectRows {
+			projectRows[i].messages = counts[projectRows[i].id]
+		}
+	}
+
+	for _, row := range projectRows {
+		pd, ok := projectMap[row.project]
+		if !ok {
+			pd = &projectData{
+				name:   row.project,
+				agents: make(map[string]int),
+				days:   make(map[string]int),
+			}
+			projectMap[row.project] = pd
+			projectOrder = append(projectOrder, row.project)
+		}
+
+		pd.sessions++
+		pd.messages += row.messages
+		pd.counts = append(pd.counts, row.messages)
+		pd.agents[row.agent]++
+		pd.days[row.date] += row.messages
+
+		if pd.first == "" || row.date < pd.first {
+			pd.first = row.date
+		}
+		if row.date > pd.last {
+			pd.last = row.date
+		}
 	}
 
 	projects := make([]ProjectAnalytics, 0, len(projectMap))
@@ -1541,9 +2145,12 @@ type HourOfWeekResponse struct {
 func (db *DB) GetAnalyticsHourOfWeek(
 	ctx context.Context, f AnalyticsFilter,
 ) (HourOfWeekResponse, error) {
+	if strings.TrimSpace(f.Model) != "" {
+		return db.getAnalyticsHourOfWeekFilteredByModel(ctx, f)
+	}
 	loc := f.location()
 	dateCol := "COALESCE(NULLIF(s.started_at, ''), s.created_at)"
-	where, args := f.buildWhere(dateCol)
+	where, args := f.buildWhereWithDate(dateCol, true, "s.id")
 
 	query := `SELECT ` + dateCol + `, m.timestamp
 		FROM sessions s
@@ -1582,6 +2189,91 @@ func (db *DB) GetAnalyticsHourOfWeek(
 			fmt.Errorf("iterating hour-of-week rows: %w", err)
 	}
 
+	return HourOfWeekResponseFromGrid(grid), nil
+}
+
+// getAnalyticsHourOfWeekFilteredByModel buckets model-scoped messages by
+// day-of-week and hour. Like every model-filtered panel it pairs empty-model
+// user turns with their selected-model assistant via the shared scope reducer,
+// so those user turns appear in the heatmap consistently with the summary,
+// activity, velocity, and trends panels. The heatmap is the control that sets
+// the day/hour filter, so it clears DayOfWeek/Hour before scoping to keep
+// showing the full grid, matching the no-model path.
+// analyticsModelCandidateSessionIDs returns the date-filtered, model-scoped
+// session IDs that feed the shared message-scope reducer. The day/hour filter
+// is intentionally not applied here: callers that need it let the reducer
+// apply it (so paired empty-model user turns are kept), while the hour-of-week
+// heatmap clears it to show the full grid.
+func (db *DB) analyticsModelCandidateSessionIDs(
+	ctx context.Context, f AnalyticsFilter,
+) ([]string, error) {
+	loc := f.location()
+	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
+	where, args := f.buildWhereWithDate(dateCol, true, "sessions.id")
+
+	rows, err := db.getReader().QueryContext(ctx, `SELECT id, `+dateCol+`
+		FROM sessions
+		WHERE `+where, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying model candidate sessions: %w", err)
+	}
+	defer rows.Close()
+
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id, ts string
+		if err := rows.Scan(&id, &ts); err != nil {
+			return nil, fmt.Errorf("scanning model candidate session: %w", err)
+		}
+		if !inDateRange(localDate(ts, loc), f.From, f.To) {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating model candidate sessions: %w", err)
+	}
+	return ids, nil
+}
+
+func (db *DB) getAnalyticsHourOfWeekFilteredByModel(
+	ctx context.Context, f AnalyticsFilter,
+) (HourOfWeekResponse, error) {
+	sessionIDs, err := db.analyticsModelCandidateSessionIDs(ctx, f)
+	if err != nil {
+		return HourOfWeekResponse{}, err
+	}
+
+	scopeFilter := f
+	scopeFilter.DayOfWeek = nil
+	scopeFilter.Hour = nil
+	scope, err := db.resolveAnalyticsMessageScope(
+		ctx, sessionIDs, scopeFilter, false,
+	)
+	if err != nil {
+		return HourOfWeekResponse{}, err
+	}
+
+	var grid [7][24]int
+	if scope != nil {
+		for _, msgs := range scope.MessagesBySession() {
+			for _, m := range msgs {
+				if !m.HasLocalTime {
+					continue
+				}
+				// Go Sunday=0, convert to ISO Monday=0
+				dow := (int(m.LocalTime.Weekday()) + 6) % 7
+				grid[dow][m.LocalTime.Hour()]++
+			}
+		}
+	}
+
+	return HourOfWeekResponseFromGrid(grid), nil
+}
+
+// HourOfWeekResponseFromGrid flattens the 7x24 grid into the dense 168-cell
+// response.
+func HourOfWeekResponseFromGrid(grid [7][24]int) HourOfWeekResponse {
 	cells := make([]HourOfWeekCell, 0, 168)
 	for d := range 7 {
 		for h := range 24 {
@@ -1592,8 +2284,7 @@ func (db *DB) GetAnalyticsHourOfWeek(
 			})
 		}
 	}
-
-	return HourOfWeekResponse{Cells: cells}, nil
+	return HourOfWeekResponse{Cells: cells}
 }
 
 // --- Session Shape ---
@@ -1714,6 +2405,7 @@ func (db *DB) GetAnalyticsSessionShape(
 	ctx context.Context, f AnalyticsFilter,
 ) (SessionShapeResponse, error) {
 	loc := f.location()
+	modelFilter := strings.TrimSpace(f.Model) != ""
 	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
 	where, args := f.buildWhere(dateCol)
 
@@ -1761,7 +2453,9 @@ func (db *DB) GetAnalyticsSessionShape(
 		}
 
 		totalCount++
-		lengthCounts[lengthBucket(mc)]++
+		if !modelFilter {
+			lengthCounts[lengthBucket(mc)]++
+		}
 		sessionIDs = append(sessionIDs, id)
 
 		if startedAt != nil && endedAt != nil &&
@@ -1781,9 +2475,30 @@ func (db *DB) GetAnalyticsSessionShape(
 			fmt.Errorf("iterating session shape rows: %w", err)
 	}
 
-	// Query autonomy data for filtered sessions
 	autonomyCounts := make(map[string]int)
-	if len(sessionIDs) > 0 {
+	if modelFilter && len(sessionIDs) > 0 {
+		stats, err := db.getAnalyticsFilteredMessageStats(
+			ctx, sessionIDs, f,
+		)
+		if err != nil {
+			return SessionShapeResponse{}, err
+		}
+		lengthCounts = make(map[string]int)
+		seen := make(map[string]struct{}, len(sessionIDs))
+		for _, sessionID := range sessionIDs {
+			if _, ok := seen[sessionID]; ok {
+				continue
+			}
+			seen[sessionID] = struct{}{}
+			stat := stats[sessionID]
+			lengthCounts[lengthBucket(stat.Messages)]++
+			if stat.UserMessages > 0 {
+				ratio := float64(stat.ToolUseMessages) /
+					float64(stat.UserMessages)
+				autonomyCounts[autonomyBucket(ratio)]++
+			}
+		}
+	} else if len(sessionIDs) > 0 {
 		err := queryChunked(sessionIDs,
 			func(chunk []string) error {
 				return db.queryAutonomyChunk(
@@ -2071,23 +2786,55 @@ func skillProjectBreakdowns(
 	return out
 }
 
-func analyticsToolsQuery(placeholders string) string {
-	return `SELECT session_id, category, COUNT(*)
-		FROM tool_calls
-		WHERE session_id IN ` + placeholders + `
-		GROUP BY session_id, category`
+func analyticsToolsQuery(
+	placeholders string,
+	modelPred string,
+	includeMessageMeta bool,
+) string {
+	query := `SELECT tc.session_id, tc.category, COUNT(*)`
+	if includeMessageMeta {
+		query += `, COALESCE(m.timestamp, '')`
+	}
+	query += `
+		FROM tool_calls tc`
+	if includeMessageMeta {
+		query += `
+		LEFT JOIN messages m
+			ON m.session_id = tc.session_id AND m.id = tc.message_id`
+	}
+	query += `
+		WHERE tc.session_id IN ` + placeholders
+	if modelPred != "" {
+		query += `
+			AND ` + modelPred
+	}
+	query += `
+		GROUP BY tc.session_id, tc.category`
+	if includeMessageMeta {
+		query += `, COALESCE(m.timestamp, '')`
+	}
+	return query
 }
 
-func analyticsSkillsQuery(placeholders string) string {
-	return `SELECT tc.session_id, TRIM(tc.skill_name), COUNT(*),
+func analyticsSkillsQuery(
+	placeholders string,
+	modelPred string,
+) string {
+	query := `SELECT tc.session_id, TRIM(tc.skill_name), COUNT(*),
 			COALESCE(m.timestamp, '')
 		FROM tool_calls tc
 		LEFT JOIN messages m
 			ON m.session_id = tc.session_id AND m.id = tc.message_id
 		WHERE tc.session_id IN ` + placeholders + `
-			AND TRIM(COALESCE(tc.skill_name, '')) != ''
+			AND TRIM(COALESCE(tc.skill_name, '')) != ''`
+	if modelPred != "" {
+		query += `
+			AND ` + modelPred
+	}
+	query += `
 		GROUP BY tc.session_id, TRIM(tc.skill_name),
 			COALESCE(m.timestamp, '')`
+	return query
 }
 
 // GetAnalyticsTools returns tool usage analytics aggregated
@@ -2095,18 +2842,8 @@ func analyticsSkillsQuery(placeholders string) string {
 func (db *DB) GetAnalyticsTools(
 	ctx context.Context, f AnalyticsFilter,
 ) (ToolsAnalyticsResponse, error) {
-	loc := f.location()
 	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
-	where, args := f.buildWhere(dateCol)
-
-	var timeIDs map[string]bool
-	if f.HasTimeFilter() {
-		var err error
-		timeIDs, err = db.filteredSessionIDs(ctx, f)
-		if err != nil {
-			return ToolsAnalyticsResponse{}, err
-		}
-	}
+	where, args := f.buildWhereWithoutDate()
 
 	// Fetch filtered session IDs and their metadata.
 	sessQ := `SELECT id, ` + dateCol + `, agent
@@ -2120,7 +2857,7 @@ func (db *DB) GetAnalyticsTools(
 	defer sessRows.Close()
 
 	type sessInfo struct {
-		date  string
+		ts    string
 		agent string
 	}
 	sessionMap := make(map[string]sessInfo)
@@ -2132,14 +2869,7 @@ func (db *DB) GetAnalyticsTools(
 			return ToolsAnalyticsResponse{},
 				fmt.Errorf("scanning tool session: %w", err)
 		}
-		date := localDate(ts, loc)
-		if !inDateRange(date, f.From, f.To) {
-			continue
-		}
-		if timeIDs != nil && !timeIDs[id] {
-			continue
-		}
-		sessionMap[id] = sessInfo{date: date, agent: agent}
+		sessionMap[id] = sessInfo{ts: ts, agent: agent}
 		sessionIDs = append(sessionIDs, id)
 	}
 	if err := sessRows.Err(); err != nil {
@@ -2162,13 +2892,18 @@ func (db *DB) GetAnalyticsTools(
 		sessionID string
 		category  string
 		count     int
+		date      string
 	}
 	var toolRows []toolRow
 
 	err = queryChunked(sessionIDs,
 		func(chunk []string) error {
 			ph, chunkArgs := inPlaceholders(chunk)
-			q := analyticsToolsQuery(ph)
+			modelPred, modelArgs := sqliteAnalyticsCSVPredicate(
+				"m.model", f.Model,
+			)
+			chunkArgs = append(chunkArgs, modelArgs...)
+			q := analyticsToolsQuery(ph, modelPred, true)
 			rows, qErr := db.getReader().QueryContext(
 				ctx, q, chunkArgs...,
 			)
@@ -2179,19 +2914,30 @@ func (db *DB) GetAnalyticsTools(
 			}
 			defer rows.Close()
 			for rows.Next() {
-				var sid, cat string
+				var sid, cat, ts string
 				var count int
 				if err := rows.Scan(
-					&sid, &cat, &count,
+					&sid, &cat, &count, &ts,
 				); err != nil {
 					return fmt.Errorf(
 						"scanning tool_call: %w", err,
 					)
 				}
+				info, ok := sessionMap[sid]
+				if !ok {
+					continue
+				}
+				_, date, keep := f.ResolveSkillRowTime(
+					ts, info.ts,
+				)
+				if !keep {
+					continue
+				}
 				toolRows = append(toolRows, toolRow{
 					sessionID: sid,
 					category:  cat,
 					count:     count,
+					date:      date,
 				})
 			}
 			return rows.Err()
@@ -2218,7 +2964,7 @@ func (db *DB) GetAnalyticsTools(
 		}
 		agentCats[info.agent][tr.category] += tr.count
 
-		week := bucketDate(info.date, "week")
+		week := bucketDate(tr.date, "week")
 		if trendBuckets[week] == nil {
 			trendBuckets[week] = make(map[string]int)
 		}
@@ -2389,7 +3135,11 @@ func (db *DB) GetAnalyticsSkills(
 	err = queryChunked(sessionIDs,
 		func(chunk []string) error {
 			ph, chunkArgs := inPlaceholders(chunk)
-			q := analyticsSkillsQuery(ph)
+			modelPred, modelArgs := sqliteAnalyticsCSVPredicate(
+				"m.model", f.Model,
+			)
+			chunkArgs = append(chunkArgs, modelArgs...)
+			q := analyticsSkillsQuery(ph, modelPred)
 			rows, qErr := db.getReader().QueryContext(
 				ctx, q, chunkArgs...,
 			)
@@ -2495,6 +3245,42 @@ func (db *DB) queryVelocityMsgs(
 			})
 	}
 	return rows.Err()
+}
+
+func (db *DB) getAnalyticsVelocityMessages(
+	ctx context.Context,
+	sessionIDs []string,
+	f AnalyticsFilter,
+) (map[string][]velocityMsg, error) {
+	sessionMsgs := make(map[string][]velocityMsg, len(sessionIDs))
+	if len(sessionIDs) == 0 {
+		return sessionMsgs, nil
+	}
+
+	loc := f.location()
+	if strings.TrimSpace(f.Model) == "" {
+		err := queryChunked(sessionIDs, func(chunk []string) error {
+			return db.queryVelocityMsgs(ctx, chunk, loc, sessionMsgs)
+		})
+		return sessionMsgs, err
+	}
+
+	scope, err := db.resolveAnalyticsMessageScope(ctx, sessionIDs, f, false)
+	if err != nil {
+		return nil, err
+	}
+	if scope == nil {
+		return sessionMsgs, nil
+	}
+	for sessionID, rows := range scope.TimingBySession() {
+		for _, row := range rows {
+			sessionMsgs[sessionID] = append(sessionMsgs[sessionID], velocityMsg{
+				role: row.Role, ts: row.Time, valid: row.Valid,
+				contentLength: row.ContentLength,
+			})
+		}
+	}
+	return sessionMsgs, nil
 }
 
 // Percentiles holds p50 and p90 values.
@@ -2840,53 +3626,70 @@ func (db *DB) GetAnalyticsVelocity(
 			ByComplexity: []VelocityBreakdown{},
 		}, nil
 	}
+	if strings.TrimSpace(f.Model) != "" {
+		stats, err := db.getAnalyticsFilteredMessageStats(
+			ctx, sessionIDs, f,
+		)
+		if err != nil {
+			return VelocityResponse{}, err
+		}
+		for _, sid := range sessionIDs {
+			info := sessionMap[sid]
+			info.mc = stats[sid].Messages
+			sessionMap[sid] = info
+		}
+	}
 
-	// Phase 2: Fetch messages for filtered sessions (chunked)
-	sessionMsgs := make(map[string][]velocityMsg)
-	err = queryChunked(sessionIDs,
-		func(chunk []string) error {
-			return db.queryVelocityMsgs(
-				ctx, chunk, loc, sessionMsgs,
-			)
-		})
+	sessionMsgs, err := db.getAnalyticsVelocityMessages(
+		ctx, sessionIDs, f,
+	)
 	if err != nil {
 		return VelocityResponse{}, err
 	}
 
-	// Phase 2b: Fetch tool call counts per session (chunked)
-	toolCountMap := make(map[string]int)
-	err = queryChunked(sessionIDs,
-		func(chunk []string) error {
-			ph, chunkArgs := inPlaceholders(chunk)
-			q := `SELECT session_id, COUNT(*)
-				FROM tool_calls
-				WHERE session_id IN ` + ph + `
-				GROUP BY session_id`
-			rows, qErr := db.getReader().QueryContext(
-				ctx, q, chunkArgs...,
-			)
-			if qErr != nil {
-				return fmt.Errorf(
-					"querying velocity tool_calls: %w",
-					qErr,
+	var toolCountMap map[string]int
+	if strings.TrimSpace(f.Model) != "" {
+		toolCountMap, err = db.getModelScopedToolCallCounts(
+			ctx, sessionIDs, f,
+		)
+		if err != nil {
+			return VelocityResponse{}, err
+		}
+	} else {
+		toolCountMap = make(map[string]int)
+		err = queryChunked(sessionIDs,
+			func(chunk []string) error {
+				ph, chunkArgs := inPlaceholders(chunk)
+				q := `SELECT session_id, COUNT(*)
+					FROM tool_calls
+					WHERE session_id IN ` + ph + `
+					GROUP BY session_id`
+				rows, qErr := db.getReader().QueryContext(
+					ctx, q, chunkArgs...,
 				)
-			}
-			defer rows.Close()
-			for rows.Next() {
-				var sid string
-				var count int
-				if err := rows.Scan(&sid, &count); err != nil {
+				if qErr != nil {
 					return fmt.Errorf(
-						"scanning velocity tool_call: %w",
-						err,
+						"querying velocity tool_calls: %w",
+						qErr,
 					)
 				}
-				toolCountMap[sid] = count
-			}
-			return rows.Err()
-		})
-	if err != nil {
-		return VelocityResponse{}, err
+				defer rows.Close()
+				for rows.Next() {
+					var sid string
+					var count int
+					if err := rows.Scan(&sid, &count); err != nil {
+						return fmt.Errorf(
+							"scanning velocity tool_call: %w",
+							err,
+						)
+					}
+					toolCountMap[sid] = count
+				}
+				return rows.Err()
+			})
+		if err != nil {
+			return VelocityResponse{}, err
+		}
 	}
 
 	// Process per-session metrics
@@ -3141,6 +3944,15 @@ type SignalRow struct {
 }
 
 // GetAnalyticsSignals returns aggregated session signal data.
+//
+// Signals are session-scoped: the counts come from persisted per-session
+// columns computed at parse time (health, context pressure, compaction,
+// quality markers) that describe the whole session, not one model's turns.
+// When a model filter is active the session set is scoped to sessions that
+// used the model, but the totals stay session-level aggregates and are not
+// re-attributed per model -- per-model signal attribution is not well defined
+// for most signals and is intentionally not computed here. The PostgreSQL and
+// DuckDB stores mirror this.
 func (db *DB) GetAnalyticsSignals(
 	ctx context.Context, f AnalyticsFilter,
 ) (SignalsAnalyticsResponse, error) {
@@ -3231,7 +4043,9 @@ func (db *DB) GetAnalyticsSignals(
 }
 
 // GetAnalyticsSignalSessions returns concrete examples for a
-// signal within the current analytics filter.
+// signal within the current analytics filter. Candidates are ranked by the
+// session-level signal counts (see GetAnalyticsSignals); under a model filter
+// the drill-down evidence is model-scoped while the ranking stays session-level.
 func (db *DB) GetAnalyticsSignalSessions(
 	ctx context.Context,
 	f AnalyticsFilter,
@@ -3252,7 +4066,7 @@ func (db *DB) GetAnalyticsSignalSessions(
 		return SignalSessionsResponse{}, err
 	}
 	candidates := SignalCandidates(rows, signal, limit)
-	messages, err := db.signalMessages(ctx, candidates)
+	messages, err := db.signalMessages(ctx, candidates, f)
 	if err != nil {
 		return SignalSessionsResponse{}, err
 	}
@@ -3442,6 +4256,7 @@ func SignalCandidates(
 func (db *DB) signalMessages(
 	ctx context.Context,
 	rows []SignalRow,
+	f AnalyticsFilter,
 ) (map[string][]SignalMessage, error) {
 	out := make(map[string][]SignalMessage, len(rows))
 	if len(rows) == 0 {
@@ -3451,12 +4266,42 @@ func (db *DB) signalMessages(
 	for _, r := range rows {
 		ids = append(ids, r.ID)
 	}
+	if strings.TrimSpace(f.Model) != "" {
+		rowsBySession, err := db.getAnalyticsModelScopedMessages(ctx, ids, f)
+		if err != nil {
+			return nil, err
+		}
+		for sessionID, scopedRows := range rowsBySession {
+			for _, row := range scopedRows {
+				out[sessionID] = append(out[sessionID], SignalMessage{
+					SessionID:  row.SessionID,
+					Ordinal:    row.Ordinal,
+					Role:       row.Role,
+					Content:    row.Content,
+					Timestamp:  row.Timestamp,
+					IsSystem:   row.IsSystem,
+					HasToolUse: row.HasToolUse,
+				})
+			}
+		}
+		return out, nil
+	}
+	filterModels := csvFilterValues(f.Model)
 	err := queryChunked(ids, func(chunk []string) error {
 		ph, args := inPlaceholders(chunk)
 		q := `SELECT session_id, ordinal, role, content,
 					COALESCE(timestamp, ''), is_system, has_tool_use
 				FROM messages
-				WHERE session_id IN ` + ph + `
+				WHERE session_id IN ` + ph
+		if len(filterModels) == 1 {
+			q += ` AND model = ?`
+			args = append(args, filterModels[0])
+		} else if len(filterModels) > 1 {
+			modelPH, modelArgs := inPlaceholders(filterModels)
+			q += ` AND model IN ` + modelPH
+			args = append(args, modelArgs...)
+		}
+		q += `
 				ORDER BY session_id, ordinal`
 		msgRows, err := db.getReader().QueryContext(ctx, q, args...)
 		if err != nil {
@@ -4459,7 +5304,7 @@ func (db *DB) GetAnalyticsTopSessions(
 	if metric == "" {
 		metric = "messages"
 	}
-	if !f.canUseSQLiteTimeSQL() {
+	if !f.canUseSQLiteTimeSQL() || strings.TrimSpace(f.Model) != "" {
 		return db.getAnalyticsTopSessionsGo(ctx, f, metric)
 	}
 	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
@@ -4474,7 +5319,9 @@ func (db *DB) GetAnalyticsTopSessions(
 	var orderExpr string
 	switch metric {
 	case "output_tokens":
-		where += " AND has_total_output_tokens = TRUE"
+		if strings.TrimSpace(f.Model) == "" {
+			where += " AND has_total_output_tokens = TRUE"
+		}
 		orderExpr = "total_output_tokens DESC, id ASC"
 	case "duration":
 		orderExpr = activeDurationSelectExpr + " DESC, id ASC"
@@ -4560,7 +5407,9 @@ func (db *DB) getAnalyticsTopSessionsGo(
 	}
 
 	limitClause := " LIMIT 200"
-	if f.HasTimeFilter() || needsGoSort {
+	if f.HasTimeFilter() || needsGoSort ||
+		(strings.TrimSpace(f.Model) != "" &&
+			(metric == "messages" || metric == "output_tokens")) {
 		limitClause = ""
 	}
 
@@ -4575,7 +5424,6 @@ func (db *DB) getAnalyticsTopSessionsGo(
 		activeDurationSelectExpr = "COALESCE(" +
 			sqliteActiveDurationExpr("sessions.id") + ", 0)"
 	}
-
 	query := `SELECT id, ` + dateCol + `, project,
 		first_message,
 		COALESCE(display_name, session_name) AS display_name,
@@ -4641,6 +5489,41 @@ func (db *DB) getAnalyticsTopSessionsGo(
 	if err := rows.Err(); err != nil {
 		return TopSessionsResponse{},
 			fmt.Errorf("iterating top sessions: %w", err)
+	}
+
+	if strings.TrimSpace(f.Model) != "" &&
+		(metric == "messages" || metric == "output_tokens") {
+		sessionIDs := make([]string, 0, len(sessions))
+		for _, session := range sessions {
+			sessionIDs = append(sessionIDs, session.ID)
+		}
+		stats, err := db.getAnalyticsFilteredMessageStats(ctx, sessionIDs, f)
+		if err != nil {
+			return TopSessionsResponse{}, err
+		}
+		filtered := sessions[:0]
+		for i := range sessions {
+			stat := stats[sessions[i].ID]
+			sessions[i].MessageCount = stat.Messages
+			sessions[i].OutputTokens = stat.OutputTokens
+			if metric == "output_tokens" && !stat.HasOutputTokens {
+				continue
+			}
+			filtered = append(filtered, sessions[i])
+		}
+		sessions = filtered
+		sort.SliceStable(sessions, func(i, j int) bool {
+			if metric == "output_tokens" {
+				if sessions[i].OutputTokens != sessions[j].OutputTokens {
+					return sessions[i].OutputTokens >
+						sessions[j].OutputTokens
+				}
+			} else if sessions[i].MessageCount != sessions[j].MessageCount {
+				return sessions[i].MessageCount >
+					sessions[j].MessageCount
+			}
+			return sessions[i].ID < sessions[j].ID
+		})
 	}
 
 	if sessions == nil {

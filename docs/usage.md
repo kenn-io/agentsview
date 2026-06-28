@@ -80,6 +80,52 @@ navigating to explicit range URLs also pins the range while the
 bare page URL returns to rolling mode. The `All` preset always
 pins to `(earliest_session, today)`.
 
+### Model Filter
+
+The dashboard toolbar includes a **Model** dropdown that scopes
+every panel to one or more AI models. By default the button reads
+**Model: All** and nothing is filtered.
+
+<!-- Screenshot placeholder: capture the dashboard Model dropdown
+open with a model selected, then add it here as
+/assets/generated/screenshots/analytics-model-filter.png after
+release. See docs/screenshots for the capture setup. -->
+
+Open the dropdown for a searchable list of the models found in
+your sessions, then click models to include them. The button then
+shows the chosen model — for example **Model: gpt-4o** — or
+**Model: 3 selected** once several are active. Click the
+**All models** row at the top of the list to clear the filter and
+return to every model. Selected models also appear as removable
+chips beneath the toolbar.
+
+While a model filter is active, every dashboard panel reflects
+only the selected model(s): the summary cards, activity chart,
+heatmap, hour-of-week grid, projects, session shape, velocity,
+tools, skills, top sessions, and the Session Health rollup.
+
+Model filtering is **message-grain**, unlike the session-grain
+project and agent filters, because a single session can switch
+models across turns. A session is included when it has at least
+one message from a selected model, and most panels count only the
+matching messages. The user turn paired with a matching assistant
+turn is kept alongside it — even though a user message carries no
+model of its own — so prompts and their responses stay aligned in
+the counts and in the top-session evidence.
+
+**Session Health** is the exception. It is scoped to whole
+sessions that used the selected model, but its health scores,
+outcomes, tool-failure rates, and compaction counts stay
+whole-session aggregates — they are not recomputed from only that
+model's messages.
+
+!!! note "Dashboard-only scope"
+    The model filter applies only to the analytics dashboard. The
+    [Session Insights](/insights/) page and the session list are
+    not scoped by it, so a model selected here does not silently
+    narrow those views. The [Usage](/token-usage/) page keeps its
+    own separate model filter.
+
 ### Activity Heatmap
 
 A GitHub-style contribution graph showing daily activity. Toggle

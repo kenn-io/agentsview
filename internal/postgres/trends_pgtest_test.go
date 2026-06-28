@@ -97,6 +97,44 @@ func TestStoreGetTrendsTermsUsesMessageTimestampFilters(t *testing.T) {
 	assert.Equal(t, 1, trendSeriesByTerm(got.Series)["seam"].Total)
 }
 
+func TestStoreGetTrendsTermsModelFilterStaysOnMatchingMessages(
+	t *testing.T,
+) {
+	_, store := prepareUsageSchema(t, "agentsview_trends_terms_model_messages_test")
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at,
+			message_count, user_message_count
+		) VALUES (
+			'trends-pg-model-messages-001', 'test-machine',
+			'alpha', 'claude',
+			'2024-06-01T09:00:00Z'::timestamptz, 3, 1
+		)`)
+	require.NoError(t, err, "insert session")
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp,
+			content_length, is_system, model
+		) VALUES
+			('trends-pg-model-messages-001', 0, 'user', 'seam',
+			 '2024-06-01T09:00:00Z'::timestamptz, 4, FALSE, ''),
+			('trends-pg-model-messages-001', 1, 'assistant', 'ready',
+			 '2024-06-01T09:01:00Z'::timestamptz, 5, FALSE, 'gpt-4o'),
+			('trends-pg-model-messages-001', 2, 'assistant', 'seam seam',
+			 '2024-06-01T09:05:00Z'::timestamptz, 9, FALSE, 'claude-3-5-sonnet')`)
+	require.NoError(t, err, "insert messages")
+	terms, err := db.ParseTrendTerms([]string{"seam"})
+	require.NoError(t, err, "ParseTrendTerms")
+	got, err := store.GetTrendsTerms(ctx, db.AnalyticsFilter{
+		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
+		Model: "gpt-4o",
+	}, terms, "day")
+	require.NoError(t, err, "GetTrendsTerms")
+	assert.Equal(t, 2, got.MessageCount)
+	assert.Equal(t, 1, trendSeriesByTerm(got.Series)["seam"].Total)
+}
+
 func trendBucketDates(buckets []db.TrendBucket) []string {
 	dates := make([]string, len(buckets))
 	for i, bucket := range buckets {

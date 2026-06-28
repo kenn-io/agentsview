@@ -186,6 +186,86 @@ func TestGetTrendsTermsSQLiteProjectFilter(t *testing.T) {
 		"project-filtered total")
 }
 
+func TestGetTrendsTermsSQLiteModelFilter(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	start := "2024-06-01T09:00:00Z"
+	insertSession(t, d, "s1", "proj-a", func(s *Session) {
+		s.StartedAt = &start
+		s.CreatedAt = start
+		s.MessageCount = 1
+		s.UserMessageCount = 1
+	})
+	insertSession(t, d, "s2", "proj-a", func(s *Session) {
+		s.StartedAt = &start
+		s.CreatedAt = start
+		s.MessageCount = 1
+		s.UserMessageCount = 1
+	})
+	insertMessages(t, d,
+		Message{
+			SessionID: "s1", Ordinal: 0, Role: "user",
+			Content: "seam", Timestamp: start, ContentLength: 4,
+			Model: "gpt-4o",
+		},
+		Message{
+			SessionID: "s2", Ordinal: 0, Role: "user",
+			Content: "seam", Timestamp: start, ContentLength: 4,
+			Model: "claude-3-5-sonnet",
+		},
+	)
+	terms, err := ParseTrendTerms([]string{"seam"})
+	require.NoError(t, err)
+	got, err := d.GetTrendsTerms(ctx, AnalyticsFilter{
+		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
+		Model: "gpt-4o",
+	}, terms, "day")
+	require.NoError(t, err, "GetTrendsTerms")
+	assert.Equal(t, 1, got.MessageCount, "message count")
+	assert.Equal(t, 1, trendSeriesByTerm(got.Series)["seam"].Total,
+		"model-filtered total")
+}
+
+func TestGetTrendsTermsSQLiteModelFilterStaysOnMatchingMessages(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+	start := "2024-06-01T09:00:00Z"
+	insertSession(t, d, "s1", "proj-a", func(s *Session) {
+		s.StartedAt = &start
+		s.CreatedAt = start
+		s.MessageCount = 3
+		s.UserMessageCount = 1
+	})
+	insertMessages(t, d,
+		Message{
+			SessionID: "s1", Ordinal: 0, Role: "user",
+			Content: "seam", Timestamp: start, ContentLength: 4,
+		},
+		Message{
+			SessionID: "s1", Ordinal: 1, Role: "assistant",
+			Content: "ready", Timestamp: start, ContentLength: 5,
+			Model: "gpt-4o",
+		},
+		Message{
+			SessionID: "s1", Ordinal: 2, Role: "assistant",
+			Content: "seam seam", Timestamp: start, ContentLength: 9,
+			Model: "claude-3-5-sonnet",
+		},
+	)
+	terms, err := ParseTrendTerms([]string{"seam"})
+	require.NoError(t, err)
+	got, err := d.GetTrendsTerms(ctx, AnalyticsFilter{
+		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
+		Model: "gpt-4o",
+	}, terms, "day")
+	require.NoError(t, err, "GetTrendsTerms")
+	assert.Equal(t, 2, got.MessageCount, "message count")
+	assert.Equal(t, 1, trendSeriesByTerm(got.Series)["seam"].Total,
+		"model-filtered total")
+}
+
 func TestGetTrendsTermsSQLiteUsesMessageTimestampRange(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

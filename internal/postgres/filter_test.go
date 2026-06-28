@@ -31,6 +31,7 @@ func TestPGAutomatedScopePredicates(t *testing.T) {
 					"created_at",
 					&paramBuilder{},
 					false,
+					"id",
 				)
 			},
 		},
@@ -48,6 +49,7 @@ func TestPGAutomatedScopePredicates(t *testing.T) {
 					"created_at",
 					&paramBuilder{},
 					false,
+					"id",
 				)
 			},
 		},
@@ -65,6 +67,7 @@ func TestPGAutomatedScopePredicates(t *testing.T) {
 					"created_at",
 					&paramBuilder{},
 					false,
+					"id",
 				)
 			},
 		},
@@ -120,6 +123,7 @@ func TestPGAutomatedScopeOneShotExemption(t *testing.T) {
 		"created_at",
 		&paramBuilder{},
 		false,
+		"id",
 	)
 	want := "(user_message_count > 1 OR is_automated = TRUE)"
 	assert.Contains(t, sql, want, "analytics SQL missing one-shot exemption")
@@ -145,6 +149,7 @@ func TestPGAnalyticsMachineMultiSelectPredicate(t *testing.T) {
 		"created_at",
 		pb,
 		false,
+		"id",
 	)
 
 	want := "machine IN ($1,$2)"
