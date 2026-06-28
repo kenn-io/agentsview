@@ -655,40 +655,36 @@ func TestWindowBounds(t *testing.T) {
 	})
 }
 
-func TestResolveWindowDate(t *testing.T) {
-	// Fixed reference time so duration math is deterministic.
+func TestParseWindowPoint(t *testing.T) {
 	now := time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC)
 
-	t.Run("empty passes through", func(t *testing.T) {
-		got, err := ResolveWindowDate("", now)
-		require.NoError(t, err, "ResolveWindowDate")
-		assert.Equal(t, "", got, "empty input")
-	})
-
-	t.Run("Nd duration anchors at now", func(t *testing.T) {
-		got, err := ResolveWindowDate("7d", now)
-		require.NoError(t, err, "ResolveWindowDate")
-		assert.Equal(t, "2026-04-11", got, "7d before 2026-04-18")
-	})
-
-	t.Run("Nh duration", func(t *testing.T) {
-		got, err := ResolveWindowDate("48h", now)
-		require.NoError(t, err, "ResolveWindowDate")
-		assert.Equal(t, "2026-04-16", got, "48h before 2026-04-18")
-	})
-
-	t.Run("bare date stands alone", func(t *testing.T) {
-		got, err := ResolveWindowDate("2026-04-01", now)
-		require.NoError(t, err, "ResolveWindowDate")
-		assert.Equal(t, "2026-04-01", got, "date passthrough")
-	})
-
-	t.Run("garbage is a hard error", func(t *testing.T) {
-		_, err := ResolveWindowDate("7x", now)
-		require.Error(t, err, "expected error for unparseable input")
-		assert.Contains(t, err.Error(), "Nd, Nh, or YYYY-MM-DD",
-			"error should name the accepted forms")
-	})
+	tests := []struct {
+		name             string
+		in               string
+		want             time.Time
+		wantErrSubstring string
+	}{
+		{name: "Nd duration anchors at now", in: "7d",
+			want: time.Date(2026, 4, 11, 12, 0, 0, 0, time.UTC)},
+		{name: "Nh duration", in: "48h",
+			want: time.Date(2026, 4, 16, 12, 0, 0, 0, time.UTC)},
+		{name: "bare date is start of UTC day", in: "2026-04-01",
+			want: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)},
+		{name: "garbage is a hard error", in: "7x",
+			wantErrSubstring: "Nd, Nh, or YYYY-MM-DD"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseWindowPoint(tc.in, now)
+			if tc.wantErrSubstring != "" {
+				require.Error(t, err, "expected an error")
+				assert.Contains(t, err.Error(), tc.wantErrSubstring)
+				return
+			}
+			require.NoError(t, err)
+			assert.True(t, got.Equal(tc.want), "got %v want %v", got, tc.want)
+		})
+	}
 }
 
 func TestGetSessionStats_Distributions(t *testing.T) {

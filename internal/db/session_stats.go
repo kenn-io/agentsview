@@ -288,7 +288,7 @@ func windowBounds(
 ) (from, to time.Time, days int, err error) {
 	to = now
 	if f.Until != "" {
-		to, err = parseWindowPoint(f.Until, now)
+		to, err = ParseWindowPoint(f.Until, now)
 		if err != nil {
 			return time.Time{}, time.Time{}, 0,
 				fmt.Errorf("parsing until %q: %w", f.Until, err)
@@ -301,7 +301,7 @@ func windowBounds(
 		if d, ok := parseDurationShort(f.Since); ok {
 			from = to.Add(-d)
 		} else {
-			from, err = parseWindowPoint(f.Since, now)
+			from, err = ParseWindowPoint(f.Since, now)
 			if err != nil {
 				return time.Time{}, time.Time{}, 0,
 					fmt.Errorf(
@@ -328,10 +328,13 @@ func windowBounds(
 	return from, to, days, nil
 }
 
-// parseWindowPoint accepts either a duration-relative-to-now form
-// ("28d", "12h") or an absolute YYYY-MM-DD date (interpreted as
-// the start of that UTC day). Used by Since and Until.
-func parseWindowPoint(s string, now time.Time) (time.Time, error) {
+// ParseWindowPoint resolves a single window bound — a compact
+// duration-relative-to-now form ("28d", "12h") or an absolute YYYY-MM-DD
+// date (the start of that UTC day) — to an instant. A duration anchors at
+// now; passing a resolved bound as now lets a caller anchor a duration
+// against it (as usage daily anchors --since to --until). Shared by stats'
+// windowBounds and the usage CLI.
+func ParseWindowPoint(s string, now time.Time) (time.Time, error) {
 	if d, ok := parseDurationShort(s); ok {
 		return now.Add(-d), nil
 	}
@@ -341,24 +344,6 @@ func parseWindowPoint(s string, now time.Time) (time.Time, error) {
 	return time.Time{}, fmt.Errorf(
 		"expected Nd, Nh, or YYYY-MM-DD, got %q", s,
 	)
-}
-
-// ResolveWindowDate converts a window input — a compact "Nd"/"Nh" duration
-// or an absolute YYYY-MM-DD date — into a YYYY-MM-DD string the same way
-// stats' parseWindowPoint resolves a single bound: durations anchor at now,
-// dates stand alone. Empty input passes through so callers can apply their
-// own default range. Unparseable input is a hard error so `usage daily
-// --since 7d` fails loudly instead of silently producing an out-of-range
-// window.
-func ResolveWindowDate(s string, now time.Time) (string, error) {
-	if s == "" {
-		return "", nil
-	}
-	t, err := parseWindowPoint(s, now)
-	if err != nil {
-		return "", err
-	}
-	return t.UTC().Format("2006-01-02"), nil
 }
 
 // parseDurationShort recognises the compact "Nd" / "Nh" forms the

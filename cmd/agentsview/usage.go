@@ -76,23 +76,26 @@ type UsageDailyConfig struct {
 func resolveUsageWindow(
 	since, until string, now time.Time,
 ) (string, string, error) {
-	to, err := db.ResolveWindowDate(until, now)
-	if err != nil {
-		return "", "", fmt.Errorf("invalid --until: %w", err)
-	}
-	// ResolveWindowDate anchors a duration at its time argument (and
-	// ignores it for a date), so resolving --since against the resolved
-	// --until measures a duration --since back from --until.
+	// Resolve --until first and keep it as the anchor for --since:
+	// ParseWindowPoint measures a duration back from its time argument, so
+	// a duration --since is measured from the resolved --until while a date
+	// stands alone. --until open leaves the anchor at now.
 	anchor := now
-	if to != "" {
-		anchor, err = time.Parse("2006-01-02", to)
+	to := ""
+	if until != "" {
+		t, err := db.ParseWindowPoint(until, now)
 		if err != nil {
-			return "", "", err
+			return "", "", fmt.Errorf("invalid --until: %w", err)
 		}
+		anchor, to = t, t.UTC().Format("2006-01-02")
 	}
-	from, err := db.ResolveWindowDate(since, anchor)
-	if err != nil {
-		return "", "", fmt.Errorf("invalid --since: %w", err)
+	from := ""
+	if since != "" {
+		t, err := db.ParseWindowPoint(since, anchor)
+		if err != nil {
+			return "", "", fmt.Errorf("invalid --since: %w", err)
+		}
+		from = t.UTC().Format("2006-01-02")
 	}
 	// Bounds are inclusive, so from == to is a valid single day (hence >
 	// not >=). String comparison is valid because YYYY-MM-DD sorts

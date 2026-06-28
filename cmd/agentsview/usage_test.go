@@ -264,7 +264,7 @@ func TestRunUsageDailyResolvesDurationSince(t *testing.T) {
 		})
 	})
 
-	// Exact date math is pinned by TestResolveWindowDate; here we only
+	// Exact date math is pinned by TestResolveUsageWindow; here we only
 	// prove the duration resolved to a concrete date, not forwarded as
 	// "14d".
 	assert.NotEqual(t, "14d", gotFrom, "duration should be resolved, not forwarded")
@@ -284,6 +284,7 @@ func TestResolveUsageWindow(t *testing.T) {
 	}{
 		{name: "empty passes through"},
 		{name: "duration since anchors at now", since: "14d", wantFrom: "2026-04-04"},
+		{name: "Nh duration since", since: "48h", wantFrom: "2026-04-16"},
 		{name: "duration since anchors to explicit until", since: "14d",
 			until: "2026-04-10", wantFrom: "2026-03-27", wantTo: "2026-04-10"},
 		{name: "duration since anchors to duration until", since: "7d",
