@@ -168,6 +168,16 @@ func scanPGInsight(rs pgInsightRowScanner) (db.Insight, error) {
 	return s, nil
 }
 
+func mapPGWriteError(action string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if IsReadOnlyError(err) {
+		return fmt.Errorf("%s: %w: %w", action, db.ErrReadOnly, err)
+	}
+	return fmt.Errorf("%s: %w", action, err)
+}
+
 func buildPGInsightFilter(
 	f db.InsightFilter, pb *paramBuilder,
 ) string {
@@ -219,7 +229,7 @@ func (s *Store) InsertInsight(insight db.Insight) (int64, error) {
 		insight.CacheStatus, insight.ProvenanceJSON, insight.StructuredJSON,
 	).Scan(&id)
 	if err != nil {
-		return 0, fmt.Errorf("inserting insight: %w", err)
+		return 0, mapPGWriteError("inserting insight", err)
 	}
 	return id, nil
 }
@@ -231,7 +241,7 @@ func (s *Store) DeleteInsight(id int64) error {
 		id,
 	)
 	if err != nil {
-		return fmt.Errorf("deleting insight %d: %w", id, err)
+		return mapPGWriteError(fmt.Sprintf("deleting insight %d", id), err)
 	}
 	return nil
 }
@@ -338,7 +348,7 @@ func (s *Store) RenameSession(
 		id, displayName,
 	)
 	if err != nil {
-		return fmt.Errorf("renaming session %s: %w", id, err)
+		return mapPGWriteError(fmt.Sprintf("renaming session %s", id), err)
 	}
 	return nil
 }
@@ -353,7 +363,9 @@ func (s *Store) SoftDeleteSession(id string) error {
 		id,
 	)
 	if err != nil {
-		return fmt.Errorf("soft deleting session %s: %w", id, err)
+		return mapPGWriteError(
+			fmt.Sprintf("soft deleting session %s", id), err,
+		)
 	}
 	return nil
 }
@@ -381,7 +393,7 @@ func (s *Store) SoftDeleteSessions(ids []string) (int, error) {
 			pb.args...,
 		)
 		if err != nil {
-			return total, fmt.Errorf("soft deleting sessions: %w", err)
+			return total, mapPGWriteError("soft deleting sessions", err)
 		}
 		n, err := res.RowsAffected()
 		if err != nil {
@@ -402,7 +414,9 @@ func (s *Store) RestoreSession(id string) (int64, error) {
 		id,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("restoring session %s: %w", id, err)
+		return 0, mapPGWriteError(
+			fmt.Sprintf("restoring session %s", id), err,
+		)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
@@ -418,8 +432,9 @@ func (s *Store) DeleteSessionIfTrashed(
 	ctx := context.Background()
 	tx, err := s.pg.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf(
-			"begin delete-if-trashed tx for %s: %w", id, err,
+		return 0, mapPGWriteError(
+			fmt.Sprintf("begin delete-if-trashed tx for %s", id),
+			err,
 		)
 	}
 	defer func() { _ = tx.Rollback() }()
@@ -431,8 +446,9 @@ func (s *Store) DeleteSessionIfTrashed(
 		id,
 	)
 	if err != nil {
-		return 0, fmt.Errorf(
-			"locking trashed session %s: %w", id, err,
+		return 0, mapPGWriteError(
+			fmt.Sprintf("locking trashed session %s", id),
+			err,
 		)
 	}
 	locked, err := res.RowsAffected()
@@ -452,8 +468,9 @@ func (s *Store) DeleteSessionIfTrashed(
 		 ON CONFLICT (id) DO NOTHING`,
 		id,
 	); err != nil {
-		return 0, fmt.Errorf(
-			"recording excluded trashed session %s: %w", id, err,
+		return 0, mapPGWriteError(
+			fmt.Sprintf("recording excluded trashed session %s", id),
+			err,
 		)
 	}
 
@@ -463,15 +480,18 @@ func (s *Store) DeleteSessionIfTrashed(
 		id,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("deleting trashed session %s: %w", id, err)
+		return 0, mapPGWriteError(
+			fmt.Sprintf("deleting trashed session %s", id), err,
+		)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
 		return 0, fmt.Errorf("counting deleted trashed session %s: %w", id, err)
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf(
-			"commit delete-if-trashed %s: %w", id, err,
+		return 0, mapPGWriteError(
+			fmt.Sprintf("commit delete-if-trashed %s", id),
+			err,
 		)
 	}
 	return n, nil
@@ -498,7 +518,7 @@ func (s *Store) EmptyTrash() (int, error) {
 	ctx := context.Background()
 	tx, err := s.pg.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf("begin empty-trash tx: %w", err)
+		return 0, mapPGWriteError("begin empty-trash tx", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -507,28 +527,30 @@ func (s *Store) EmptyTrash() (int, error) {
 		 SET deleted_at = deleted_at
 		 WHERE deleted_at IS NOT NULL`,
 	); err != nil {
-		return 0, fmt.Errorf("locking trashed sessions: %w", err)
+		return 0, mapPGWriteError("locking trashed sessions", err)
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO excluded_sessions (id)
 		 SELECT id FROM sessions WHERE deleted_at IS NOT NULL
 		 ON CONFLICT (id) DO NOTHING`,
 	); err != nil {
-		return 0, fmt.Errorf("recording excluded trashed sessions: %w", err)
+		return 0, mapPGWriteError(
+			"recording excluded trashed sessions", err,
+		)
 	}
 
 	res, err := tx.ExecContext(ctx,
 		"DELETE FROM sessions WHERE deleted_at IS NOT NULL",
 	)
 	if err != nil {
-		return 0, fmt.Errorf("emptying trash: %w", err)
+		return 0, mapPGWriteError("emptying trash", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
 		return 0, fmt.Errorf("counting emptied trash rows: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit empty-trash: %w", err)
+		return 0, mapPGWriteError("commit empty-trash", err)
 	}
 	return int(n), nil
 }

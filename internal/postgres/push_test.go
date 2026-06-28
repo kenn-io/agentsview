@@ -192,6 +192,22 @@ func TestLocalSessionSyncMarkerNormalizesSecondPrecisionTimestamps(t *testing.T)
 	require.Equal(t, endedAt, got)
 }
 
+func TestPGExcludedSessionIDsQueryUsesSingleArrayParameter(t *testing.T) {
+	query, args := pgExcludedSessionIDsQuery([]string{
+		"sess-001",
+		"sess-002",
+		"sess-003",
+	})
+
+	assert.Contains(t, query, "id = ANY($1)")
+	assert.NotContains(t, query, "$2")
+	require.Len(t, args, 1)
+	assert.Equal(t,
+		[]string{"sess-001", "sess-002", "sess-003"},
+		args[0],
+	)
+}
+
 func TestSessionPushFingerprintDiffers(t *testing.T) {
 	base := db.Session{
 		ID:               "sess-001",

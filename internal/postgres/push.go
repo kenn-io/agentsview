@@ -1062,16 +1062,8 @@ func readPGExcludedSessionIDs(
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	pb := &paramBuilder{}
-	placeholders := make([]string, 0, len(ids))
-	for _, id := range ids {
-		placeholders = append(placeholders, pb.add(id))
-	}
-	rows, err := pg.QueryContext(ctx,
-		`SELECT id FROM excluded_sessions
-		 WHERE id IN (`+strings.Join(placeholders, ",")+`)`,
-		pb.args...,
-	)
+	query, args := pgExcludedSessionIDsQuery(ids)
+	rows, err := pg.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"reading pg excluded sessions: %w", err,
@@ -1095,6 +1087,11 @@ func readPGExcludedSessionIDs(
 		)
 	}
 	return excluded, nil
+}
+
+func pgExcludedSessionIDsQuery(ids []string) (string, []any) {
+	return `SELECT id FROM excluded_sessions
+		 WHERE id = ANY($1)`, []any{ids}
 }
 
 // sessionPushFingerprint builds the change-detection fingerprint for a

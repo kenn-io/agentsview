@@ -1,10 +1,13 @@
 package postgres
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -76,4 +79,28 @@ func TestPGSubstringSnippetFTSModeCentersOnFirstTerm(t *testing.T) {
 
 	assert.Contains(t, got, "quick")
 	assert.Contains(t, got, "fox")
+}
+
+func TestMapPGWriteErrorNormalizesReadOnlyPgErrors(t *testing.T) {
+	for _, code := range []string{"25006", "42501"} {
+		t.Run(code, func(t *testing.T) {
+			err := mapPGWriteError("writing test row", &pgconn.PgError{
+				Code:    code,
+				Message: "permission denied",
+			})
+
+			require.ErrorIs(t, err, db.ErrReadOnly)
+			assert.Contains(t, err.Error(), "writing test row")
+		})
+	}
+}
+
+func TestMapPGWriteErrorKeepsNonReadOnlyCause(t *testing.T) {
+	cause := errors.New("network unavailable")
+
+	err := mapPGWriteError("writing test row", cause)
+
+	require.ErrorIs(t, err, cause)
+	assert.False(t, errors.Is(err, db.ErrReadOnly))
+	assert.Contains(t, err.Error(), "writing test row")
 }
