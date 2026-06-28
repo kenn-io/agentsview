@@ -464,7 +464,10 @@ func TestCleanJSONLRootsPreservesS3Scheme(t *testing.T) {
 		{
 			name:  "local roots still cleaned",
 			roots: []string{"/tmp/foo/../bar", "/tmp/baz/"},
-			want:  []string{"/tmp/bar", "/tmp/baz"},
+			// filepath.Clean yields OS-native separators (backslashes on
+			// Windows), so build the expectation with FromSlash rather than
+			// hard-coding forward slashes.
+			want: []string{filepath.FromSlash("/tmp/bar"), filepath.FromSlash("/tmp/baz")},
 		},
 		{
 			name:  "empty roots dropped",
@@ -474,7 +477,7 @@ func TestCleanJSONLRootsPreservesS3Scheme(t *testing.T) {
 		{
 			name:  "mixed local and s3",
 			roots: []string{"/tmp/a/./b", "s3://bucket/y/"},
-			want:  []string{"/tmp/a/b", "s3://bucket/y/"},
+			want:  []string{filepath.FromSlash("/tmp/a/b"), "s3://bucket/y/"},
 		},
 	}
 	for _, tt := range tests {
