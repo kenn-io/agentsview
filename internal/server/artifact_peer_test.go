@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -18,8 +19,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/artifact"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/server"
 )
 
 type artifactOriginsBody struct {
@@ -34,6 +37,12 @@ type artifactPostBody struct {
 	Size      int64  `json:"size"`
 	Duplicate bool   `json:"duplicate"`
 }
+
+type artifactRemoteStore struct {
+	db.Store
+}
+
+func (artifactRemoteStore) ReadOnly() bool { return true }
 
 func TestArtifactPeerRoutesRequireBearerAuthWhenConfigured(t *testing.T) {
 	te := setup(t, withAuth("secret"))
@@ -102,6 +111,77 @@ func TestArtifactPeerRoutesPostDuplicateAndFetch(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	origins := decode[artifactOriginsBody](t, w)
 	assert.Contains(t, origins.Origins, origin)
+}
+
+func TestArtifactPeerPostRejectsRemoteStoreBeforeWrite(t *testing.T) {
+	dir := tempDirWithRetryCleanup(t)
+	cfg := config.Config{
+		Host:         "127.0.0.1",
+		Port:         0,
+		DataDir:      dir,
+		WriteTimeout: 30 * time.Second,
+	}
+	srv := server.New(cfg, artifactRemoteStore{}, nil)
+	te := &testEnv{
+		srv:     srv,
+		handler: wrapTestHandler(cfg, srv.Handler()),
+		dataDir: dir,
+	}
+	origin := "peer-a1b2c3"
+	metadataBody, metadataName := peerMetadataArtifact(
+		origin,
+		"2026-06-14T010203.000000001Z-peer-a1b2c3",
+	)
+
+	w := artifactPeerRequest(
+		t, te, http.MethodPost,
+		"/api/v1/artifacts/"+origin+"/meta/"+url.PathEscape(metadataName),
+		metadataBody, "",
+	)
+
+	assertStatus(t, w, http.StatusNotImplemented)
+	assertArtifactMissing(t, dir, origin, "meta", metadataName)
+}
+
+func TestArtifactPeerPostRejectsReadOnlySQLiteBeforeWrite(t *testing.T) {
+	dir := tempDirWithRetryCleanup(t)
+	dbPath := filepath.Join(dir, "test.db")
+	writable, err := db.Open(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, writable.Close())
+	readonly, err := db.OpenReadOnly(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { readonly.Close() })
+
+	cfg := config.Config{
+		Host:             "127.0.0.1",
+		Port:             0,
+		DataDir:          dir,
+		DBPath:           dbPath,
+		ArtifactOriginID: "desktop-d4e5f6",
+		WriteTimeout:     30 * time.Second,
+	}
+	srv := server.New(cfg, readonly, nil)
+	te := &testEnv{
+		srv:     srv,
+		handler: wrapTestHandler(cfg, srv.Handler()),
+		db:      readonly,
+		dataDir: dir,
+	}
+	origin := "peer-a1b2c3"
+	metadataBody, metadataName := peerMetadataArtifact(
+		origin,
+		"2026-06-14T010203.000000001Z-peer-a1b2c3",
+	)
+
+	w := artifactPeerRequest(
+		t, te, http.MethodPost,
+		"/api/v1/artifacts/"+origin+"/meta/"+url.PathEscape(metadataName),
+		metadataBody, "",
+	)
+
+	assertStatus(t, w, http.StatusNotImplemented)
+	assertArtifactMissing(t, dir, origin, "meta", metadataName)
 }
 
 type artifactPeerBody struct {
@@ -298,6 +378,20 @@ func postArtifactFile(
 		body, "",
 	)
 	assertStatus(t, w, http.StatusOK)
+}
+
+func assertArtifactMissing(
+	t *testing.T,
+	dataDir string,
+	origin string,
+	kind string,
+	name string,
+) {
+	t.Helper()
+	path := filepath.Join(dataDir, "artifacts", origin, kind, name)
+	_, err := os.Stat(path)
+	assert.True(t, errors.Is(err, os.ErrNotExist),
+		"artifact should not have been written at %s", path)
 }
 
 func oneArtifactPath(

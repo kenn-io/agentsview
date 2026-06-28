@@ -229,6 +229,10 @@ func (s *Server) humaPostArtifact(
 	ctx context.Context,
 	in *artifactPostInput,
 ) (*jsonOutput[artifactPostResponse], error) {
+	local, err := s.writableArtifactImportDB()
+	if err != nil {
+		return nil, err
+	}
 	root, err := s.artifactRoot()
 	if err != nil {
 		return nil, err
@@ -237,7 +241,7 @@ func (s *Server) humaPostArtifact(
 	if err != nil {
 		return nil, artifactRouteError("post artifact", err)
 	}
-	if err := s.importPeerArtifacts(ctx, root); err != nil {
+	if err := s.importPeerArtifacts(ctx, local, root); err != nil {
 		return nil, err
 	}
 	return &jsonOutput[artifactPostResponse]{
@@ -252,11 +256,20 @@ func (s *Server) humaPostArtifact(
 	}, nil
 }
 
-func (s *Server) importPeerArtifacts(ctx context.Context, root string) error {
+func (s *Server) writableArtifactImportDB() (*db.DB, error) {
 	local, ok := s.db.(*db.DB)
 	if !ok {
-		return nil
+		return nil, apiError(http.StatusNotImplemented,
+			"artifact uploads are not available in remote mode")
 	}
+	if local.ReadOnly() {
+		return nil, apiError(http.StatusNotImplemented,
+			"artifact uploads are not available in read-only mode")
+	}
+	return local, nil
+}
+
+func (s *Server) importPeerArtifacts(ctx context.Context, local *db.DB, root string) error {
 	var res artifact.ImportResult
 	var err error
 	if s.metadata != nil {
