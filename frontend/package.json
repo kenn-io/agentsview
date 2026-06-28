@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "engines": {
-    "node": "^20.19 || ^22.12 || >=24"
+    "node": "^20.19.0 || ^22.18.0 || >=24.11.0"
   },
   "scripts": {
     "dev": "vp dev",
