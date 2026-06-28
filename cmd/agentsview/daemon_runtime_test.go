@@ -12,9 +12,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
@@ -218,6 +220,23 @@ func runtimeTestDir(t *testing.T) string {
 	_, err := runtimeStore(dir).LockPath()
 	require.NoError(t, err)
 	return dir
+}
+
+func holdExternalDaemonStartLock(t *testing.T, dataDir string) func() {
+	t.Helper()
+	lockPath, err := runtimeStore(dataDir).LockPath()
+	require.NoError(t, err)
+	lock := flock.New(lockPath)
+	locked, err := lock.TryLock()
+	require.NoError(t, err)
+	require.True(t, locked)
+
+	var once sync.Once
+	unlock := func() {
+		once.Do(func() { _ = lock.Unlock() })
+	}
+	t.Cleanup(unlock)
+	return unlock
 }
 
 func serverEndpoint(t *testing.T, ts *httptest.Server) testDaemonEndpoint {

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gofrs/flock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -100,13 +99,7 @@ func TestPrepareForegroundServeDaemonRefusesReplacementWhenStartLockHeld(
 	t *testing.T,
 ) {
 	dir := runtimeTestDir(t)
-	lockPath, err := runtimeStore(dir).LockPath()
-	require.NoError(t, err)
-	lock := flock.New(lockPath)
-	locked, err := lock.TryLock()
-	require.NoError(t, err)
-	require.True(t, locked)
-	t.Cleanup(func() { require.NoError(t, lock.Unlock()) })
+	holdExternalDaemonStartLock(t, dir)
 
 	host, port := testPingServer(t)
 	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(

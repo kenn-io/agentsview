@@ -127,6 +127,49 @@ func TestRunServeBackgroundReplaceOverridesDevRefusal(t *testing.T) {
 	assert.True(t, stopped)
 }
 
+func TestRunServeBackgroundReplaceWaitsForExternalStartLock(t *testing.T) {
+	dir := runtimeTestDir(t)
+	oldHost, oldPort := testPingServer(t)
+	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
+		oldHost, oldPort, withRuntimeVersion("1.0.0"),
+	))
+	setTestVersion(t, "dev")
+	unlockStart := holdExternalDaemonStartLock(t, dir)
+
+	forbidStopDaemonRuntimeForUpgrade(t,
+		"background replacement must not stop while foreground owns start lock")
+	oldStart := startServeBackgroundProcessForRun
+	startServeBackgroundProcessForRun = func(
+		config.Config, []string,
+	) (*exec.Cmd, string, error) {
+		t.Fatal("background replacement must not spawn while waiting on foreground")
+		return nil, "", nil
+	}
+	t.Cleanup(func() { startServeBackgroundProcessForRun = oldStart })
+
+	newHost, newPort := testPingServer(t)
+	published := make(chan error, 1)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		RemoveDaemonRuntime(dir)
+		_, err := WriteDaemonRuntime(dir, newHost, newPort, "dev", false)
+		unlockStart()
+		published <- err
+	}()
+
+	out := captureStdout(t, func() {
+		runServeBackground(
+			config.Config{DataDir: dir},
+			[]string{"serve", "--background", "--replace"},
+			serveReplacementOptions{Replace: true},
+		)
+	})
+
+	require.NoError(t, <-published)
+	assert.Contains(t, out, "agentsview already running at")
+	assert.Contains(t, out, fmt.Sprintf(":%d", newPort))
+}
+
 func TestRunServeBackgroundRejectsTooNewDatabaseBeforeStop(t *testing.T) {
 	dir := runtimeTestDir(t)
 	dbPath := writeTooNewSQLiteDB(t, dir)
@@ -413,6 +456,81 @@ func TestEnsureBackgroundServeChecksTooNewDatabaseBeforeReplacingIncompatibleDae
 	found, compatErr := FindIncompatibleDaemonRuntime(dir)
 	require.NotNil(t, found)
 	require.Error(t, compatErr)
+}
+
+func TestEnsureBackgroundServeReplacementWaitsForExternalStartLock(
+	t *testing.T,
+) {
+	tests := []struct {
+		name         string
+		writeRuntime func(t *testing.T, dir, host string, port int)
+	}{
+		{
+			name: "compatible older daemon",
+			writeRuntime: func(t *testing.T, dir, host string, port int) {
+				t.Helper()
+				_, err := WriteDaemonRuntime(dir, host, port, "1.0.0", false)
+				require.NoError(t, err)
+				t.Cleanup(func() { RemoveDaemonRuntime(dir) })
+			},
+		},
+		{
+			name: "incompatible older daemon",
+			writeRuntime: func(t *testing.T, dir, host string, port int) {
+				t.Helper()
+				writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
+					host, port,
+					withRuntimeVersion("1.0.0"),
+					withRuntimeAPIVersion(0),
+				))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := runtimeTestDir(t)
+			oldHost, oldPort := testPingServer(t)
+			tt.writeRuntime(t, dir, oldHost, oldPort)
+			setTestVersion(t, "1.1.0")
+			unlockStart := holdExternalDaemonStartLock(t, dir)
+
+			forbidStopDaemonRuntimeForUpgrade(t,
+				"auto-start replacement must not stop while foreground owns start lock")
+			oldStart := startServeBackgroundProcessForEnsure
+			startServeBackgroundProcessForEnsure = func(
+				config.Config, []string,
+			) (*exec.Cmd, string, error) {
+				t.Fatal("auto-start must not spawn while waiting on foreground")
+				return nil, "", nil
+			}
+			t.Cleanup(func() {
+				startServeBackgroundProcessForEnsure = oldStart
+			})
+
+			newHost, newPort := testPingServer(t)
+			published := make(chan error, 1)
+			go func() {
+				time.Sleep(50 * time.Millisecond)
+				RemoveDaemonRuntime(dir)
+				_, err := WriteDaemonRuntime(
+					dir, newHost, newPort, "1.1.0", false,
+				)
+				unlockStart()
+				published <- err
+			}()
+
+			cfg := config.Config{DataDir: dir}
+			rt, err := ensureBackgroundServe(
+				context.Background(), &cfg, time.Second,
+			)
+
+			require.NoError(t, <-published)
+			require.NoError(t, err)
+			require.NotNil(t, rt)
+			assert.Equal(t, newPort, rt.Port)
+		})
+	}
 }
 
 func TestEnsureBackgroundServeIncompatibleDaemonReturnsError(t *testing.T) {

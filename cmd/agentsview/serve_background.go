@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,6 +19,10 @@ import (
 const (
 	backgroundServeReadyTimeout     = 5 * time.Second
 	backgroundAutoStartReadyTimeout = 90 * time.Second
+)
+
+var errServeStartupInProgress = errors.New(
+	"agentsview serve startup is already in progress",
 )
 
 var startServeBackgroundProcessForEnsure = startServeBackgroundProcess
@@ -144,6 +149,9 @@ func runServeBackground(
 	case serveReplacementAuto, serveReplacementExplicit:
 		if err := checkBackgroundReplacementDataVersion(&cfg); err != nil {
 			fatal("serve background: %v", err)
+		}
+		if reportExternalServeStartupBeforeBackgroundReplacement(cfg) {
+			return
 		}
 		// runServeBackgroundCommand holds the background launch lock across
 		// this stop/start sequence, so another CLI launcher cannot race into
@@ -287,6 +295,14 @@ func ensureBackgroundServe(
 			if err := checkBackgroundReplacementDataVersion(cfg); err != nil {
 				return nil, err
 			}
+			if rt, waited, err := waitForExternalServeStartup(
+				ctx, cfg.DataDir, cfg.AuthToken, waitTimeout,
+			); waited {
+				if err != nil {
+					return nil, err
+				}
+				return rt, nil
+			}
 			adoptDaemonRuntimeLaunchOptions(cfg, rt)
 			if err := stopDaemonRuntimeForUpgrade(*cfg, rt); err != nil {
 				return nil, fmt.Errorf(
@@ -308,6 +324,14 @@ func ensureBackgroundServe(
 		if rt != nil && shouldUpgradeIncompatibleDaemonRuntime(rt, version) {
 			if err := checkBackgroundReplacementDataVersion(cfg); err != nil {
 				return nil, err
+			}
+			if rt, waited, err := waitForExternalServeStartup(
+				ctx, cfg.DataDir, cfg.AuthToken, waitTimeout,
+			); waited {
+				if err != nil {
+					return nil, err
+				}
+				return rt, nil
 			}
 			adoptDaemonRuntimeLaunchOptions(cfg, rt)
 			if stopErr := stopDaemonRuntimeForUpgrade(*cfg, rt); stopErr != nil {
@@ -342,6 +366,14 @@ func ensureBackgroundServe(
 			if rt != nil && shouldUpgradeIncompatibleDaemonRuntime(rt, version) {
 				if err := checkBackgroundReplacementDataVersion(cfg); err != nil {
 					return nil, err
+				}
+				if rt, waited, err := waitForExternalServeStartup(
+					ctx, cfg.DataDir, cfg.AuthToken, waitTimeout,
+				); waited {
+					if err != nil {
+						return nil, err
+					}
+					return rt, nil
 				}
 				adoptDaemonRuntimeLaunchOptions(cfg, rt)
 				if stopErr := stopDaemonRuntimeForUpgrade(*cfg, rt); stopErr != nil {
@@ -390,6 +422,88 @@ func ensureBackgroundServe(
 		)
 	}
 	return rt, nil
+}
+
+func reportExternalServeStartupBeforeBackgroundReplacement(
+	cfg config.Config,
+) bool {
+	rt, waited, err := waitForExternalServeStartup(
+		context.Background(),
+		cfg.DataDir,
+		cfg.AuthToken,
+		backgroundServeReadyTimeout,
+	)
+	if !waited {
+		return false
+	}
+	if err != nil {
+		if errors.Is(err, errServeStartupInProgress) {
+			fmt.Println(errServeStartupInProgress.Error() + ".")
+			return true
+		}
+		fatal("serve background: %v", err)
+	}
+	if rt != nil {
+		fmt.Printf(
+			"agentsview already running at %s (pid %d)\n",
+			urlFromDaemonRuntime(rt),
+			rt.Record.PID,
+		)
+		return true
+	}
+	fmt.Println(errServeStartupInProgress.Error() + ".")
+	return true
+}
+
+func waitForExternalServeStartup(
+	ctx context.Context,
+	dataDir string,
+	authToken string,
+	waitTimeout time.Duration,
+) (*DaemonRuntime, bool, error) {
+	if !isExternalDaemonStarting(dataDir) {
+		return nil, false, nil
+	}
+	if waitTimeout <= 0 {
+		waitTimeout = backgroundServeReadyTimeout
+	}
+	deadline := time.Now().Add(waitTimeout)
+	for isExternalDaemonStarting(dataDir) {
+		if err := ctx.Err(); err != nil {
+			return nil, true, err
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil, true, errServeStartupInProgress
+		}
+		wait := min(remaining, startProbeTick)
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, true, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, true, err
+	}
+	if rt := FindDaemonRuntime(dataDir, authToken); rt != nil && !rt.ReadOnly {
+		return rt, true, nil
+	}
+	if rt, err := findIncompatibleWritableDaemonRuntime(
+		dataDir, authToken,
+	); rt != nil && err != nil {
+		return nil, true, fmt.Errorf(
+			"incompatible daemon is already running: %w; run "+
+				"`agentsview serve stop` before starting this version",
+			err,
+		)
+	}
+	return nil, true, fmt.Errorf(
+		"agentsview serve startup finished without publishing a writable " +
+			"runtime record",
+	)
 }
 
 func checkBackgroundReplacementDataVersion(cfg *config.Config) error {
