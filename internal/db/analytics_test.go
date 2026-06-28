@@ -3895,6 +3895,55 @@ func TestGetAnalyticsTopSessionsMessagesUseFilteredModelCounts(
 	assert.Equal(t, 1, resp.Sessions[1].MessageCount, "second MessageCount")
 }
 
+func TestGetAnalyticsTopSessionsModelFilterCapsAtTen(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Twelve sessions all match the gpt-4o filter, so the model-scoped
+	// re-sort drops the SQL LIMIT and ranks every matching session. The
+	// caller must still cap the result at the top ten. Session i carries
+	// i+1 gpt-4o assistant messages of ten output tokens each, so
+	// "top-cap-11" has the most messages and the most tokens.
+	for i := range 12 {
+		id := fmt.Sprintf("top-cap-%d", i)
+		count := i + 1
+		hour := fmt.Sprintf("%02d", 8+i)
+		insertSession(t, d, id, "alpha", func(s *Session) {
+			s.StartedAt = new("2024-06-01T" + hour + ":00:00Z")
+			s.EndedAt = new("2024-06-01T" + hour + ":30:00Z")
+			s.MessageCount = count
+			s.Agent = "gpt"
+			s.TotalOutputTokens = count * 10
+			s.HasTotalOutputTokens = true
+		})
+		msgs := make([]Message, count)
+		for j := range msgs {
+			msgs[j] = Message{
+				SessionID: id, Ordinal: j, Role: "assistant",
+				Content: "gpt", ContentLength: 3,
+				Timestamp:    "2024-06-01T" + hour + ":00:00Z",
+				Model:        "gpt-4o",
+				OutputTokens: 10, HasOutputTokens: true,
+			}
+		}
+		insertMessages(t, d, msgs...)
+	}
+
+	for _, metric := range []string{"messages", "output_tokens"} {
+		t.Run(metric, func(t *testing.T) {
+			resp, err := d.GetAnalyticsTopSessions(ctx, AnalyticsFilter{
+				From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
+				Model: "gpt-4o",
+			}, metric)
+			require.NoError(t, err, "GetAnalyticsTopSessions")
+			require.Len(t, resp.Sessions, 10,
+				"model-filtered top sessions capped at ten")
+			assert.Equal(t, "top-cap-11", resp.Sessions[0].ID,
+				"highest-count session ranks first")
+		})
+	}
+}
+
 func TestBuildWhereProjectFilter(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
