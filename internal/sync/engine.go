@@ -4098,6 +4098,26 @@ func (e *Engine) processProviderFile(
 	}
 	incForceReplace := incRes.forceReplace
 
+	// DB-stored-file-info skip: a session whose persisted file_size/file_mtime
+	// already match the source fingerprint (and whose data_version is current)
+	// is unchanged and need not be reparsed. This reproduces the legacy
+	// shouldSkipByPath behavior the per-agent process methods provided before the
+	// migration, so a repeat full/periodic sync of an untouched
+	// provider-authoritative session (OpenHands, Cursor, Hermes, Vibe, ...)
+	// skips instead of rewriting. It only skips on an exact size+mtime match, so
+	// a provider whose fingerprint mtime differs from the stored value simply
+	// reparses, matching the prior behavior. Claude and Cowork have their own
+	// earlier freshness checks; this is the generic fallback for the rest.
+	if !e.forceParse && !file.ForceParse &&
+		e.providerSourceUnchangedInDB(source, fingerprint) {
+		return processResult{
+			skip:      true,
+			mtime:     fingerprint.MTimeNS,
+			cacheSkip: cacheSkip,
+			cacheKey:  cacheKey,
+		}, true
+	}
+
 	outcome, err := provider.Parse(ctx, parser.ParseRequest{
 		Source:      source,
 		Fingerprint: fingerprint,
@@ -4832,6 +4852,45 @@ func (e *Engine) providerCoworkSourceFresh(
 		return 0, false
 	}
 	return mtime, true
+}
+
+// providerSourceUnchangedInDB reports whether a provider source's persisted
+// file metadata already matches its current fingerprint, so a reparse would be
+// redundant. It compares the stored file_size/file_mtime for the discovered
+// path against the fingerprint and requires a current data_version, mirroring
+// the legacy shouldSkipByPath gate. It returns false on a missing stored row, an
+// empty key, or a non-fingerprint identity (no size and no mtime, e.g. a
+// container source), so those callers fall through to a full parse.
+func (e *Engine) providerSourceUnchangedInDB(
+	source parser.SourceRef,
+	fingerprint parser.SourceFingerprint,
+) bool {
+	if fingerprint.MTimeNS == 0 && fingerprint.Size == 0 {
+		return false
+	}
+	lookupPath := providerDiscoveredPath(source)
+	if lookupPath == "" {
+		return false
+	}
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(lookupPath)
+	}
+	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
+	if !ok {
+		return false
+	}
+	if storedSize != fingerprint.Size || storedMtime != fingerprint.MTimeNS {
+		return false
+	}
+	// A stale stored project (e.g. a generated roborev CI worktree name)
+	// must defeat the unchanged-source skip so the corrected project is
+	// reparsed, mirroring shouldSkipCodexFingerprint and the in-memory
+	// skip-cache bypass in processProviderFile.
+	if project, ok := e.db.GetProjectByPath(lookupPath); ok &&
+		parser.NeedsProjectReparse(project) {
+		return false
+	}
+	return e.db.GetDataVersionByPath(lookupPath) >= db.CurrentDataVersion()
 }
 
 // stampProviderFileIdentity copies the source file's inode and device onto
