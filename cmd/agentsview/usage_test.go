@@ -300,12 +300,52 @@ func TestResolveUsageWindow(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			from, to, err := resolveUsageWindow(tc.since, tc.until, now)
+			from, to, err := resolveUsageWindow(tc.since, tc.until, now, time.UTC)
 			if tc.wantErrSubstring != "" {
 				require.Error(t, err, "expected an error")
 				assert.Contains(t, err.Error(), tc.wantErrSubstring)
 				return
 			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantFrom, from, "from")
+			assert.Equal(t, tc.wantTo, to, "to")
+		})
+	}
+}
+
+func TestResolveUsageWindowUsesReportTimezone(t *testing.T) {
+	loc, err := time.LoadLocation("America/Los_Angeles")
+	require.NoError(t, err)
+	now := time.Date(2026, 4, 17, 19, 0, 0, 0, loc)
+
+	tests := []struct {
+		name             string
+		since, until     string
+		wantFrom, wantTo string
+	}{
+		{
+			name:     "duration since formats report local date",
+			since:    "1d",
+			wantFrom: "2026-04-16",
+		},
+		{
+			name:     "duration since anchors to until in report timezone",
+			since:    "1d",
+			until:    "2026-04-10",
+			wantFrom: "2026-04-09",
+			wantTo:   "2026-04-10",
+		},
+		{
+			name:     "explicit dates pass through unchanged",
+			since:    "2026-04-01",
+			until:    "2026-04-10",
+			wantFrom: "2026-04-01",
+			wantTo:   "2026-04-10",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			from, to, err := resolveUsageWindow(tc.since, tc.until, now, loc)
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantFrom, from, "from")
 			assert.Equal(t, tc.wantTo, to, "to")
