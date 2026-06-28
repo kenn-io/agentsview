@@ -444,3 +444,44 @@ func sourceDisplayPaths(sources []SourceRef) []string {
 	}
 	return paths
 }
+
+func TestCleanJSONLRootsPreservesS3Scheme(t *testing.T) {
+	tests := []struct {
+		name  string
+		roots []string
+		want  []string
+	}{
+		{
+			name:  "s3 root kept verbatim",
+			roots: []string{"s3://bucket/laptop/raw/claude"},
+			want:  []string{"s3://bucket/laptop/raw/claude"},
+		},
+		{
+			name:  "s3 root with trailing slash kept verbatim",
+			roots: []string{"s3://bucket/laptop/raw/claude/"},
+			want:  []string{"s3://bucket/laptop/raw/claude/"},
+		},
+		{
+			name:  "local roots still cleaned",
+			roots: []string{"/tmp/foo/../bar", "/tmp/baz/"},
+			want:  []string{"/tmp/bar", "/tmp/baz"},
+		},
+		{
+			name:  "empty roots dropped",
+			roots: []string{"", "s3://bucket/x", ""},
+			want:  []string{"s3://bucket/x"},
+		},
+		{
+			name:  "mixed local and s3",
+			roots: []string{"/tmp/a/./b", "s3://bucket/y/"},
+			want:  []string{"/tmp/a/b", "s3://bucket/y/"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// filepath.Clean would collapse "s3://" to "s3:/", which defeats the
+			// HasPrefix("s3://") checks that route discovery to the object store.
+			assert.Equal(t, tt.want, cleanJSONLRoots(tt.roots))
+		})
+	}
+}

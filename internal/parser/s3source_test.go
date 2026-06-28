@@ -242,3 +242,39 @@ func TestDiscoverClaudeS3RequiresSubagentsUnderParentSession(t *testing.T) {
 		got[0].Path,
 	)
 }
+
+func TestS3SourceRefFromDiscoveredFile(t *testing.T) {
+	uri := "s3://bucket/laptop/raw/codex/sessions/2026/06/abc.jsonl"
+	file := DiscoveredFile{
+		Path:              uri,
+		Agent:             AgentCodex,
+		Project:           "proj",
+		Machine:           "laptop",
+		SourceSize:        4096,
+		SourceMtime:       1718900000000000000,
+		SourceFingerprint: "fp-1",
+	}
+
+	ref := s3SourceRefFromDiscoveredFile(file)
+
+	// The s3 URI is the stable identity across every key field so dedup and
+	// fingerprinting agree on one source.
+	assert.Equal(t, AgentCodex, ref.Provider)
+	assert.Equal(t, uri, ref.Key)
+	assert.Equal(t, uri, ref.DisplayPath)
+	assert.Equal(t, uri, ref.FingerprintKey)
+	assert.Equal(t, "proj", ref.ProjectHint)
+
+	// The durable object metadata rides in the Opaque payload for the engine to
+	// thread back into the DiscoveredFile.
+	opaque, ok := ref.Opaque.(S3DiscoveredSource)
+	require.True(t, ok, "Opaque must be an S3DiscoveredSource")
+	assert.Equal(t, S3DiscoveredSource{
+		URI:         uri,
+		Project:     "proj",
+		Machine:     "laptop",
+		Size:        4096,
+		MtimeNS:     1718900000000000000,
+		Fingerprint: "fp-1",
+	}, opaque)
+}

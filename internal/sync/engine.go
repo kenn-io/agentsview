@@ -3557,13 +3557,30 @@ func (e *Engine) discoverProviderSources(
 				agent = def.Type
 			}
 			sourceCopy := source
-			files = append(files, parser.DiscoveredFile{
+			discovered := parser.DiscoveredFile{
 				Path:            sourcePath,
 				Project:         source.ProjectHint,
 				Agent:           agent,
 				ProviderSource:  &sourceCopy,
 				ProviderProcess: true,
-			})
+			}
+			// S3-aware source sets carry the durable object metadata in the
+			// Opaque payload. Thread it into the DiscoveredFile so the S3 sync
+			// path (object fetch, fingerprinting, machine-ID namespacing) and the
+			// freshness/dedup/mtime-cutoff logic see the same source identity the
+			// legacy s3:// discovery emitted directly. Providers read local files,
+			// so the engine still routes s3:// objects through processS3Session
+			// rather than the provider parse path.
+			if s3, ok := source.Opaque.(parser.S3DiscoveredSource); ok {
+				discovered.Machine = s3.Machine
+				discovered.SourceSize = s3.Size
+				discovered.SourceMtime = s3.MtimeNS
+				discovered.SourceFingerprint = s3.Fingerprint
+				if discovered.Project == "" {
+					discovered.Project = s3.Project
+				}
+			}
+			files = append(files, discovered)
 		}
 	}
 	return files, failures
