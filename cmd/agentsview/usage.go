@@ -67,19 +67,32 @@ type UsageDailyConfig struct {
 }
 
 // resolveUsageWindow resolves the raw --since/--until flags into concrete
-// inclusive YYYY-MM-DD bounds — a duration like 28d or a date, the same
-// syntax as `stats --since` — and rejects an inverted explicit window so a
-// reversed range fails loudly instead of returning an empty result.
+// inclusive YYYY-MM-DD bounds. Both accept a duration like 28d or a date,
+// the same syntax as `stats`. --until resolves first; a duration --since is
+// then measured back from the resolved --until (or from now when --until is
+// open), matching how stats anchors a duration window. An inverted explicit
+// window is rejected so a reversed range fails loudly instead of returning
+// an empty result.
 func resolveUsageWindow(
 	since, until string, now time.Time,
 ) (string, string, error) {
-	from, err := db.ResolveWindowDate(since, now)
-	if err != nil {
-		return "", "", fmt.Errorf("invalid --since: %w", err)
-	}
 	to, err := db.ResolveWindowDate(until, now)
 	if err != nil {
 		return "", "", fmt.Errorf("invalid --until: %w", err)
+	}
+	// ResolveWindowDate anchors a duration at its time argument (and
+	// ignores it for a date), so resolving --since against the resolved
+	// --until measures a duration --since back from --until.
+	anchor := now
+	if to != "" {
+		anchor, err = time.Parse("2006-01-02", to)
+		if err != nil {
+			return "", "", err
+		}
+	}
+	from, err := db.ResolveWindowDate(since, anchor)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid --since: %w", err)
 	}
 	// Bounds are inclusive, so from == to is a valid single day (hence >
 	// not >=). String comparison is valid because YYYY-MM-DD sorts

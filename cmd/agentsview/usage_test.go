@@ -284,6 +284,10 @@ func TestResolveUsageWindow(t *testing.T) {
 	}{
 		{name: "empty passes through"},
 		{name: "duration since anchors at now", since: "14d", wantFrom: "2026-04-04"},
+		{name: "duration since anchors to explicit until", since: "14d",
+			until: "2026-04-10", wantFrom: "2026-03-27", wantTo: "2026-04-10"},
+		{name: "duration since anchors to duration until", since: "7d",
+			until: "30d", wantFrom: "2026-03-12", wantTo: "2026-03-19"},
 		{name: "dates pass through", since: "2026-04-01", until: "2026-04-10",
 			wantFrom: "2026-04-01", wantTo: "2026-04-10"},
 		{name: "equal bounds are a valid single day", since: "2026-04-10",
