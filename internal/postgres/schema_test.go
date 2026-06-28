@@ -302,6 +302,63 @@ func TestEnsureSchemaBatchesColumnIntrospection(t *testing.T) {
 		"information_schema.columns queries")
 }
 
+func TestEnsureSchemaBackfillsCurationBaselinesWhenAdded(t *testing.T) {
+	existing := map[string][]string{
+		"sessions": {
+			"owner_marker",
+			"created_at", "deleted_at", "display_name",
+			"total_output_tokens", "peak_context_tokens",
+			"has_total_output_tokens",
+			"has_peak_context_tokens", "is_automated",
+			"tool_failure_signal_count", "tool_retry_count",
+			"edit_churn_count", "consecutive_failure_max",
+			"outcome", "outcome_confidence",
+			"ended_with_role", "final_failure_streak",
+			"signals_pending_since", "compaction_count",
+			"mid_task_compaction_count",
+			"context_pressure_max", "health_score",
+			"health_grade", "has_tool_calls",
+			"has_context_data", "data_version", "cwd",
+			"quality_signal_version", "short_prompt_count",
+			"unstructured_start",
+			"missing_success_criteria_count",
+			"missing_verification_count",
+			"duplicate_prompt_count", "no_code_context_count",
+			"runaway_tool_loop_count",
+			"git_branch", "source_session_id",
+			"source_version", "parser_malformed_lines",
+			"is_truncated", "termination_status",
+			"secret_leak_count", "secrets_rules_version",
+			"session_name",
+		},
+		"messages": {
+			"model", "token_usage", "context_tokens",
+			"output_tokens", "has_context_tokens",
+			"has_output_tokens", "claude_message_id",
+			"claude_request_id", "source_type",
+			"source_subtype", "source_uuid",
+			"source_parent_uuid", "is_sidechain",
+			"is_compact_boundary", "thinking_text",
+		},
+		"tool_calls": {
+			"call_index", "file_path",
+		},
+	}
+	pg, state := newSchemaProbeDB(t, existing)
+
+	require.NoError(t, EnsureSchema(context.Background(), pg, "agentsview"))
+
+	executed := strings.ToLower(state.executedSQL())
+	assert.Contains(t, executed,
+		"set source_display_name = display_name")
+	assert.Contains(t, executed,
+		"where source_display_name is null")
+	assert.Contains(t, executed,
+		"set source_deleted_at = deleted_at")
+	assert.Contains(t, executed,
+		"where source_deleted_at is null")
+}
+
 func TestCheckDataVersionCompatRejectsNewerPGRows(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
 	state.maxDataVersion = localdb.CurrentDataVersion() + 10

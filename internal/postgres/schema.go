@@ -690,6 +690,7 @@ func EnsureSchema(
 	)
 	step = time.Now()
 	tokenCoverageColumnsAdded := false
+	sourceCurationColumnsAdded := false
 	addedColumns, err := ensureColumns(ctx, db, existingColumns, alters)
 	if err != nil {
 		return err
@@ -699,6 +700,8 @@ func EnsureSchema(
 		case "has_total_output_tokens", "has_peak_context_tokens",
 			"has_context_tokens", "has_output_tokens":
 			tokenCoverageColumnsAdded = true
+		case "source_display_name", "source_deleted_at":
+			sourceCurationColumnsAdded = true
 		}
 	}
 	log.Printf(
@@ -707,6 +710,17 @@ func EnsureSchema(
 		time.Since(step).Round(time.Millisecond),
 		len(addedColumns),
 	)
+	if sourceCurationColumnsAdded {
+		step = time.Now()
+		if err := backfillSourceCurationBaselines(ctx, db); err != nil {
+			return err
+		}
+		log.Printf(
+			"pg schema: source curation baseline backfill"+
+				" completed in %s",
+			time.Since(step).Round(time.Millisecond),
+		)
+	}
 	step = time.Now()
 	if _, err := db.ExecContext(ctx,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_termination_status
@@ -1018,6 +1032,30 @@ func runSchemaDataRepairsPG(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	return markTokenCoverageRepairDone(ctx, db)
+}
+
+func backfillSourceCurationBaselines(
+	ctx context.Context, pg *sql.DB,
+) error {
+	if _, err := pg.ExecContext(ctx,
+		`UPDATE sessions
+		 SET source_display_name = display_name
+		 WHERE source_display_name IS NULL`,
+	); err != nil {
+		return fmt.Errorf(
+			"backfilling PG source display-name baselines: %w", err,
+		)
+	}
+	if _, err := pg.ExecContext(ctx,
+		`UPDATE sessions
+		 SET source_deleted_at = deleted_at
+		 WHERE source_deleted_at IS NULL`,
+	); err != nil {
+		return fmt.Errorf(
+			"backfilling PG source deleted-at baselines: %w", err,
+		)
+	}
+	return nil
 }
 
 func batchUpdateAutomatedPG(
