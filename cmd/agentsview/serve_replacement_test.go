@@ -205,6 +205,41 @@ func TestPrepareForegroundServeDaemonReplaceChecksTooNewDatabaseBeforeStop(t *te
 		"failed precheck must not leave start marker held")
 }
 
+func TestPrepareForegroundServeDaemonReplaceChecksDatabaseEvenWithCurrentRuntimeData(t *testing.T) {
+	dir := runtimeTestDir(t)
+	dbPath := filepath.Join(dir, "sessions.db")
+	database, err := db.Open(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, database.Close())
+
+	futureVersion := db.CurrentDataVersion() + 10
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = conn.Exec(fmt.Sprintf("PRAGMA user_version = %d", futureVersion))
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	host, port := testPingServer(t)
+	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
+		host, port,
+		withRuntimeVersion("1.0.0"),
+	))
+	setTestVersion(t, "dev")
+	forbidStopDaemonRuntimeForUpgrade(t,
+		"too-new database must be rejected before stop")
+
+	cont, err := prepareForegroundServeDaemon(
+		config.Config{DataDir: dir, DBPath: dbPath},
+		serveReplacementOptions{Replace: true},
+	)
+
+	assert.False(t, cont)
+	require.Error(t, err)
+	assert.True(t, db.IsDataVersionTooNew(err))
+	assert.NotNil(t, FindDaemonRuntime(dir))
+	assert.False(t, IsDaemonStarting(dir))
+}
+
 func TestPrepareForegroundServeDaemonReplaceLeavesReadOnlyDaemon(t *testing.T) {
 	dir := runtimeTestDir(t)
 	host, port := testPingServer(t)
