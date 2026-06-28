@@ -149,7 +149,20 @@ func syncWithTransport(
 		return SyncResult{}, err
 	}
 
+	clock := NewHLCClock(database, HLCClockOptions{Now: opts.Now})
+	var imported ImportResult
 	if opts.BaselineMetadata {
+		if err := tr.Exchange(ctx, localRoot); err != nil {
+			return SyncResult{}, err
+		}
+		preBaselineImported, err := importDetailed(ctx, database, clock, localRoot, origin)
+		if err != nil {
+			return SyncResult{}, err
+		}
+		imported.Sessions += preBaselineImported.Sessions
+		imported.Messages += preBaselineImported.Messages
+		imported.Metadata += preBaselineImported.Metadata
+
 		recorder := NewMetadataRecorder(database, MetadataRecorderOptions{
 			DataDir: opts.DataDir,
 			Origin:  origin,
@@ -166,11 +179,13 @@ func syncWithTransport(
 	if err := tr.Exchange(ctx, localRoot); err != nil {
 		return SyncResult{}, err
 	}
-	clock := NewHLCClock(database, HLCClockOptions{Now: opts.Now})
-	imported, err := importDetailed(ctx, database, clock, localRoot, origin)
+	postExportImported, err := importDetailed(ctx, database, clock, localRoot, origin)
 	if err != nil {
 		return SyncResult{}, err
 	}
+	imported.Sessions += postExportImported.Sessions
+	imported.Messages += postExportImported.Messages
+	imported.Metadata += postExportImported.Metadata
 	if imported.Changed() && opts.OnDataChanged != nil {
 		opts.OnDataChanged()
 	}

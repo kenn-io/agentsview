@@ -274,8 +274,19 @@ func (r *MetadataRecorder) AppendBaseline(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	origin, err := r.ensureOrigin()
+	if err != nil {
+		return 0, err
+	}
 	written := 0
 	for _, rename := range snap.Renames {
+		covered, err := r.baselineFieldCovered(ctx, origin, rename.SessionID, "display_name")
+		if err != nil {
+			return written, err
+		}
+		if covered {
+			continue
+		}
 		value, err := metadataRenameValue(rename.DisplayName)
 		if err != nil {
 			return written, err
@@ -290,6 +301,13 @@ func (r *MetadataRecorder) AppendBaseline(ctx context.Context) (int, error) {
 		written++
 	}
 	for _, sessionID := range snap.StarredSessionIDs {
+		covered, err := r.baselineFieldCovered(ctx, origin, sessionID, "starred")
+		if err != nil {
+			return written, err
+		}
+		if covered {
+			continue
+		}
 		if _, err := r.Append(ctx, MetadataEventInput{
 			SessionID: sessionID,
 			Op:        MetadataOpStar,
@@ -299,20 +317,45 @@ func (r *MetadataRecorder) AppendBaseline(ctx context.Context) (int, error) {
 		written++
 	}
 	for _, pin := range snap.Pins {
+		metadataPin := MetadataPin{
+			SourceUUID: pin.SourceUUID,
+			Ordinal:    pin.Ordinal,
+			Note:       pin.Note,
+		}
+		covered, err := r.baselineFieldCovered(
+			ctx, origin, pin.SessionID, "pin:"+metadataPinAnchor(metadataPin),
+		)
+		if err != nil {
+			return written, err
+		}
+		if covered {
+			continue
+		}
 		if _, err := r.Append(ctx, MetadataEventInput{
 			SessionID: pin.SessionID,
 			Op:        MetadataOpPin,
-			Pin: &MetadataPin{
-				SourceUUID: pin.SourceUUID,
-				Ordinal:    pin.Ordinal,
-				Note:       pin.Note,
-			},
+			Pin:       &metadataPin,
 		}); err != nil {
 			return written, fmt.Errorf("writing baseline pin metadata: %w", err)
 		}
 		written++
 	}
 	return written, nil
+}
+
+func (r *MetadataRecorder) baselineFieldCovered(
+	ctx context.Context,
+	origin string,
+	sessionID string,
+	field string,
+) (bool, error) {
+	_, ok, err := r.database.MetadataReplayStateOp(
+		ctx, MetadataSessionGID(origin, sessionID), field,
+	)
+	if err != nil {
+		return false, fmt.Errorf("checking baseline metadata field %s: %w", field, err)
+	}
+	return ok, nil
 }
 
 // Import reads every foreign origin under root and imports referenced sessions

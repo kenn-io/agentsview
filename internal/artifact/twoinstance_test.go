@@ -61,6 +61,21 @@ func (in *syncInstance) sync(target string) SyncResult {
 	return res
 }
 
+// syncInit mirrors `agentsview sync --init <folder>` for baseline metadata
+// initialization.
+func (in *syncInstance) syncInit(target string) SyncResult {
+	in.t.Helper()
+	res, err := SyncFolder(context.Background(), in.db, SyncOptions{
+		DataDir:          in.dataDir,
+		Target:           target,
+		Origin:           in.origin,
+		Now:              func() time.Time { return in.now },
+		BaselineMetadata: true,
+	})
+	require.NoError(in.t, err)
+	return res
+}
+
 // rename mirrors the rename handler: mutate the local row, then append the
 // metadata event (which also records the local LWW register entry).
 func (in *syncInstance) rename(localID, name string) {
@@ -188,6 +203,36 @@ func TestTwoInstanceConcurrentRenameConverges(t *testing.T) {
 	// Both machines independently record exactly one losing edit for the field.
 	assertMetadataConflictCount(t, a.db, gid, "display_name", 1)
 	assertMetadataConflictCount(t, b.db, gid, "display_name", 1)
+}
+
+func TestSyncInitDoesNotLetBaselineOutrankExistingPeerMetadata(t *testing.T) {
+	target := t.TempDir()
+	a := newSyncInstance(t, "laptop-a1b2c3")
+	b := newSyncInstance(t, "desktop-d4e5f6")
+	gid := a.origin + "~sess-1"
+
+	seedSession(t, a.db, "sess-1", "alpha")
+	a.sync(target)
+	b.sync(target)
+	b.requireSession(t, gid)
+
+	peerName := "Peer newer title"
+	b.at(fixedHLCTime().Add(time.Minute)).rename(gid, peerName)
+	b.sync(target)
+
+	staleLocalName := "Stale local title"
+	require.NoError(t, a.db.RenameSession("sess-1", &staleLocalName))
+
+	res := a.at(fixedHLCTime().Add(2 * time.Minute)).syncInit(target)
+	assert.Equal(t, 1, res.ImportedMetadata)
+	require.NotNil(t, a.displayName(t, "sess-1"))
+	assert.Equal(t, peerName, *a.displayName(t, "sess-1"))
+
+	b.sync(target)
+	require.NotNil(t, b.displayName(t, gid))
+	assert.Equal(t, peerName, *b.displayName(t, gid))
+	assertMetadataConflictCount(t, a.db, gid, "display_name", 0)
+	assertMetadataConflictCount(t, b.db, gid, "display_name", 0)
 }
 
 func TestTwoInstanceStarAndPurgePropagate(t *testing.T) {
