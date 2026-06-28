@@ -465,6 +465,11 @@ func (s *Store) DeleteSessionIfTrashed(
 			fmt.Sprintf("deleting trashed session %s", id), err,
 		)
 	}
+	if err := deletePGExcludedSessionRows(ctx, tx, excludedIDs); err != nil {
+		return 0, mapPGWriteError(
+			fmt.Sprintf("purging excluded session aliases for %s", id), err,
+		)
+	}
 	if err := tx.Commit(); err != nil {
 		return 0, mapPGWriteError(
 			fmt.Sprintf("commit delete-if-trashed %s", id),
@@ -519,6 +524,9 @@ func (s *Store) EmptyTrash() (int, error) {
 	n, err := deletePGTrashedSessionRows(ctx, tx, sessionIDs)
 	if err != nil {
 		return 0, mapPGWriteError("emptying trash", err)
+	}
+	if err := deletePGExcludedSessionRows(ctx, tx, excludedIDs); err != nil {
+		return 0, mapPGWriteError("purging excluded trashed session aliases", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, mapPGWriteError("commit empty-trash", err)

@@ -246,7 +246,11 @@ func (c *capturePGExec) ExecContext(
 }
 
 func TestPushSessionRechecksExclusionAfterSuccessfulUpsert(t *testing.T) {
-	state := &pushSessionProbeState{excludedAfterUpsert: true}
+	state := &pushSessionProbeState{
+		existingExcluded: map[string]bool{
+			"sess-race": true,
+		},
+	}
 	pg := newPushSessionProbeDB(t, state)
 	tx, err := pg.BeginTx(context.Background(), nil)
 	require.NoError(t, err, "BeginTx")
@@ -307,8 +311,10 @@ func TestPushSessionStoresVibeFallbackAlias(t *testing.T) {
 
 func TestPushSessionExcludesVibeFallbackAliasWhenCanonicalExcluded(t *testing.T) {
 	state := &pushSessionProbeState{
-		excludedAfterUpsert: true,
-		excludedIDs:         map[string]bool{},
+		existingExcluded: map[string]bool{
+			"vibe:canonical-deleted": true,
+		},
+		excludedIDs: map[string]bool{},
 	}
 	pg := newPushSessionProbeDB(t, state)
 	tx, err := pg.BeginTx(context.Background(), nil)
@@ -341,6 +347,46 @@ func TestPushSessionExcludesVibeFallbackAliasWhenCanonicalExcluded(t *testing.T)
 	require.NoError(t, tx.Rollback(), "Rollback")
 }
 
+func TestPushSessionSkipsVibeCanonicalWhenFallbackAliasExcluded(t *testing.T) {
+	state := &pushSessionProbeState{
+		existingExcluded: map[string]bool{
+			"vibe:session_20260616_083518_ghi789": true,
+		},
+		excludedIDs: map[string]bool{},
+	}
+	pg := newPushSessionProbeDB(t, state)
+	tx, err := pg.BeginTx(context.Background(), nil)
+	require.NoError(t, err, "BeginTx")
+
+	sessionDir := filepath.Join(
+		t.TempDir(),
+		"session_20260616_083518_ghi789",
+	)
+	filePath := filepath.Join(sessionDir, "messages.jsonl")
+	syncer := &Sync{machine: "push-machine"}
+	err = syncer.pushSession(
+		context.Background(), tx,
+		db.Session{
+			ID:        "vibe:canonical-active",
+			Project:   "proj",
+			Machine:   "push-machine",
+			Agent:     "vibe",
+			CreatedAt: "2026-01-01T00:00:00Z",
+			FilePath:  &filePath,
+		},
+		"marker", nil,
+	)
+
+	require.ErrorIs(t, err, errSessionExcluded)
+	assert.True(t, state.excludedIDs["vibe:canonical-active"])
+	assert.True(t,
+		state.excludedIDs["vibe:session_20260616_083518_ghi789"],
+	)
+	assert.True(t, state.deletedExcluded,
+		"all excluded aliases should be purged from PG sessions")
+	require.NoError(t, tx.Rollback(), "Rollback")
+}
+
 type pushSessionProbeDriver struct{}
 
 type pushSessionProbeConn struct {
@@ -363,6 +409,7 @@ type pushSessionProbeState struct {
 	deletedExcluded     bool
 	aliases             map[string]string
 	excludedIDs         map[string]bool
+	existingExcluded    map[string]bool
 }
 
 var (
@@ -472,7 +519,7 @@ func (c *pushSessionProbeConn) ExecContext(
 }
 
 func (c *pushSessionProbeConn) QueryContext(
-	_ context.Context, query string, _ []driver.NamedValue,
+	_ context.Context, query string, args []driver.NamedValue,
 ) (driver.Rows, error) {
 	normalized := strings.ToLower(query)
 	c.state.mu.Lock()
@@ -483,13 +530,32 @@ func (c *pushSessionProbeConn) QueryContext(
 		return &pushSessionProbeRows{
 			columns: []string{"machine", "owner_marker"},
 		}, nil
+	case strings.Contains(normalized, "select id") &&
+		strings.Contains(normalized, "excluded_sessions") &&
+		strings.Contains(normalized, "id = any($1)"):
+		c.state.exclusionChecks++
+		values := [][]driver.Value{}
+		for _, id := range namedValueStrings(args) {
+			if c.state.existingExcluded[id] {
+				values = append(values, []driver.Value{id})
+			}
+		}
+		return &pushSessionProbeRows{
+			columns: []string{"id"},
+			values:  values,
+		}, nil
 	case strings.Contains(normalized, "select exists") &&
 		strings.Contains(normalized, "excluded_sessions"):
 		c.state.exclusionChecks++
+		excluded := c.state.excludedAfterUpsert
+		if c.state.existingExcluded != nil && len(args) > 0 {
+			id, _ := args[0].Value.(string)
+			excluded = c.state.existingExcluded[id]
+		}
 		return &pushSessionProbeRows{
 			columns: []string{"exists"},
 			values: [][]driver.Value{
-				{c.state.excludedAfterUpsert},
+				{excluded},
 			},
 		}, nil
 	default:

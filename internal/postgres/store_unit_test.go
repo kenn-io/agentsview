@@ -113,8 +113,10 @@ func TestMapPGWriteErrorKeepsNonReadOnlyCause(t *testing.T) {
 func TestEmptyTrashExcludesSameRowsItDeletes(t *testing.T) {
 	state := &emptyTrashProbeState{
 		sessions: map[string]bool{
-			"already-trashed":      true,
-			"concurrently-trashed": false,
+			"already-trashed":                   true,
+			"vibe:session_already_trashed":      false,
+			"concurrently-trashed":              false,
+			"vibe:session_concurrently_trashed": false,
 		},
 		aliases: map[string][]string{
 			"already-trashed":      {"vibe:session_already_trashed"},
@@ -132,15 +134,18 @@ func TestEmptyTrashExcludesSameRowsItDeletes(t *testing.T) {
 	assert.True(t, state.deleted["already-trashed"])
 	assert.True(t, state.excluded["already-trashed"])
 	assert.True(t, state.excluded["vibe:session_already_trashed"])
+	assert.True(t, state.deleted["vibe:session_already_trashed"])
 	assert.False(t, state.deleted["concurrently-trashed"])
 	assert.False(t, state.excluded["concurrently-trashed"])
 	assert.False(t, state.excluded["vibe:session_concurrently_trashed"])
+	assert.False(t, state.deleted["vibe:session_concurrently_trashed"])
 }
 
 func TestDeleteSessionIfTrashedExcludesRecordedAliases(t *testing.T) {
 	state := &emptyTrashProbeState{
 		sessions: map[string]bool{
-			"trashed": true,
+			"trashed":              true,
+			"vibe:session_trashed": false,
 		},
 		aliases: map[string][]string{
 			"trashed": {"vibe:session_trashed"},
@@ -157,6 +162,7 @@ func TestDeleteSessionIfTrashedExcludesRecordedAliases(t *testing.T) {
 	assert.True(t, state.deleted["trashed"])
 	assert.True(t, state.excluded["trashed"])
 	assert.True(t, state.excluded["vibe:session_trashed"])
+	assert.True(t, state.deleted["vibe:session_trashed"])
 }
 
 type emptyTrashProbeDriver struct{}
@@ -257,7 +263,10 @@ func (c *emptyTrashProbeConn) ExecContext(
 	case strings.Contains(normalized, "delete from sessions") &&
 		strings.Contains(normalized, "id = any($1)") &&
 		strings.Contains(normalized, "deleted_at is not null"):
-		return driver.RowsAffected(c.state.deleteNamedValuesLocked(args)), nil
+		return driver.RowsAffected(c.state.deleteNamedTrashedLocked(args)), nil
+	case strings.Contains(normalized, "delete from sessions") &&
+		strings.Contains(normalized, "id = any($1)"):
+		return driver.RowsAffected(c.state.deleteNamedExistingLocked(args)), nil
 	default:
 		return nil, errors.New("unexpected empty-trash exec")
 	}
@@ -333,12 +342,27 @@ func (s *emptyTrashProbeState) excludeNamedValuesLocked(
 	}
 }
 
-func (s *emptyTrashProbeState) deleteNamedValuesLocked(
+func (s *emptyTrashProbeState) deleteNamedTrashedLocked(
 	args []driver.NamedValue,
 ) int64 {
 	var count int64
 	for _, id := range namedValueStrings(args) {
 		if !s.sessions[id] {
+			continue
+		}
+		s.deleted[id] = true
+		delete(s.sessions, id)
+		count++
+	}
+	return count
+}
+
+func (s *emptyTrashProbeState) deleteNamedExistingLocked(
+	args []driver.NamedValue,
+) int64 {
+	var count int64
+	for _, id := range namedValueStrings(args) {
+		if _, ok := s.sessions[id]; !ok {
 			continue
 		}
 		s.deleted[id] = true

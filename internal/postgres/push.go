@@ -1075,8 +1075,9 @@ func localSessionSyncMarker(sess db.Session) string {
 }
 
 func readPGExcludedSessionIDs(
-	ctx context.Context, pg *sql.DB, ids []string,
+	ctx context.Context, pg pgSessionQueryer, ids []string,
 ) (map[string]struct{}, error) {
+	ids = uniqueNonEmptyStrings(ids)
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -1112,6 +1113,10 @@ func pgExcludedSessionIDsQuery(ids []string) (string, []any) {
 			 WHERE id = ANY($1)`, []any{ids}
 }
 
+type pgSessionQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
 type pgSessionExecer interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
@@ -1131,37 +1136,22 @@ func deletePGExcludedSessionRows(
 	return nil
 }
 
-func pgSessionExcluded(
-	ctx context.Context, tx *sql.Tx, id string,
-) (bool, error) {
-	var excluded bool
-	if err := tx.QueryRowContext(ctx,
-		`SELECT EXISTS (
-			SELECT 1 FROM excluded_sessions WHERE id = $1
-		)`,
-		id,
-	).Scan(&excluded); err != nil {
-		return false, fmt.Errorf("checking pg excluded session %s: %w", id, err)
-	}
-	return excluded, nil
-}
-
 func deletePGSessionIfExcluded(
 	ctx context.Context, tx *sql.Tx, sess db.Session,
 ) (bool, error) {
-	excluded, err := pgSessionExcluded(ctx, tx, sess.ID)
+	ids := append([]string{sess.ID}, pgSessionAliasIDs(sess)...)
+	ids = uniqueNonEmptyStrings(ids)
+	excluded, err := readPGExcludedSessionIDs(ctx, tx, ids)
 	if err != nil {
 		return false, err
 	}
-	if !excluded {
+	if len(excluded) == 0 {
 		return false, nil
 	}
-	if err := insertPGExcludedSessionIDs(
-		ctx, tx, pgSessionAliasIDs(sess),
-	); err != nil {
+	if err := insertPGExcludedSessionIDs(ctx, tx, ids); err != nil {
 		return false, err
 	}
-	if err := deletePGExcludedSessionRows(ctx, tx, []string{sess.ID}); err != nil {
+	if err := deletePGExcludedSessionRows(ctx, tx, ids); err != nil {
 		return false, err
 	}
 	return true, nil
