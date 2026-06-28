@@ -1437,6 +1437,10 @@ func TestParseCodexSession_EdgeCases(t *testing.T) {
 			"The objective below is user-provided data."
 		current := "<codex_internal_context source=\"goal\">\n" +
 			goalBody + "\n</codex_internal_context>"
+		attrBeforeSource := "<codex_internal_context data-id=\"1\" source=\"goal\">\n" +
+			goalBody + "\n</codex_internal_context>"
+		attrAfterSource := "<codex_internal_context source=\"goal\" data-id=\"1\">\n" +
+			goalBody + "\n</codex_internal_context>"
 		legacy := "<goal_context>\n" + goalBody + "\n</goal_context>"
 		content := testjsonl.JoinJSONL(
 			testjsonl.CodexSessionMetaJSON("abc", "/tmp", "user", tsEarly),
@@ -1444,8 +1448,10 @@ func TestParseCodexSession_EdgeCases(t *testing.T) {
 			testjsonl.CodexMsgJSON("assistant", "Working on it", "2024-01-01T10:00:02Z"),
 			testjsonl.CodexMsgJSON("user", current, "2024-01-01T10:00:03Z"),
 			testjsonl.CodexMsgJSON("assistant", "Still working", "2024-01-01T10:00:04Z"),
-			testjsonl.CodexMsgJSON("user", legacy, "2024-01-01T10:00:05Z"),
-			testjsonl.CodexMsgJSON("user", "Real second request", "2024-01-01T10:00:06Z"),
+			testjsonl.CodexMsgJSON("user", attrBeforeSource, "2024-01-01T10:00:05Z"),
+			testjsonl.CodexMsgJSON("user", attrAfterSource, "2024-01-01T10:00:06Z"),
+			testjsonl.CodexMsgJSON("user", legacy, "2024-01-01T10:00:07Z"),
+			testjsonl.CodexMsgJSON("user", "Real second request", "2024-01-01T10:00:08Z"),
 		)
 		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
 		require.NotNil(t, sess)
@@ -1456,6 +1462,43 @@ func TestParseCodexSession_EdgeCases(t *testing.T) {
 		assert.Equal(t, "Real second request", msgs[3].Content)
 		assert.Equal(t, 2, sess.UserMessageCount,
 			"goal continuation context must not count as user turns")
+	})
+
+	t.Run("keeps non-goal codex internal contexts", func(t *testing.T) {
+		cases := []struct {
+			name    string
+			content string
+		}{
+			{
+				name: "data source goal",
+				content: "<codex_internal_context data-source=\"goal\">\n" +
+					"Preserve this internal context.\n</codex_internal_context>",
+			},
+			{
+				name: "other source",
+				content: "<codex_internal_context source=\"tool\">\n" +
+					"Preserve this internal context.\n</codex_internal_context>",
+			},
+			{
+				name: "no source",
+				content: "<codex_internal_context data-id=\"1\">\n" +
+					"Preserve this internal context.\n</codex_internal_context>",
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				content := testjsonl.JoinJSONL(
+					testjsonl.CodexSessionMetaJSON("abc", "/tmp", "user", tsEarly),
+					testjsonl.CodexMsgJSON("user", tc.content, tsEarlyS1),
+				)
+				sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+				require.NotNil(t, sess)
+				require.Len(t, msgs, 1)
+				assert.Equal(t, tc.content, msgs[0].Content)
+				assert.Equal(t, 1, sess.UserMessageCount,
+					"non-goal internal contexts must count as user turns")
+			})
+		}
 	})
 
 	// Only the structured goal wrapper is system content; a real user

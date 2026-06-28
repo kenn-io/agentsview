@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -30,6 +31,11 @@ const (
 var errCodexIncrementalNeedsFullParse = errors.New(
 	"codex incremental event requires full parse",
 )
+
+const codexGoalContextSourceAttr = `source="goal"`
+
+var codexGoalContextSourceAttrRe = regexp.MustCompile(`(?:^|\s)` +
+	regexp.QuoteMeta(codexGoalContextSourceAttr) + `(?:\s|/|$)`)
 
 var codexSessionIndexCache = struct {
 	mu      sync.Mutex
@@ -1767,7 +1773,7 @@ func isCodexGoalContext(content string) bool {
 	}
 	if strings.HasPrefix(trimmed, "<codex_internal_context") {
 		openTag, _, ok := strings.Cut(trimmed, ">")
-		return ok && strings.Contains(openTag, `source="goal"`)
+		return ok && codexGoalContextSourceAttrRe.MatchString(openTag)
 	}
 	return false
 }
