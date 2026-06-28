@@ -1320,11 +1320,12 @@ description: Release history for AgentsView
   via `[custom_model_pricing.<model>]` tables in
   `~/.agentsview/config.toml`, for models not in the LiteLLM
   catalog or when you want to override the catalog's rates.
-- Add configurable [automation prefixes](/configuration/#automated-session-detection)
-  via `[automated] prefixes = [...]` in `~/.agentsview/config.toml`,
-  so single-turn sessions with first-message patterns unique to
-  your own automation get filtered from session lists and analytics
-  alongside the built-in roborev patterns.
+- Add configurable [automation patterns](/configuration/#automated-session-detection)
+  via `[automated] prefixes`, `substrings`, and `exact_matches` in
+  `~/.agentsview/config.toml`, so single-turn sessions with
+  first-message patterns unique to your own automation get filtered
+  from session lists and analytics alongside the built-in roborev
+  patterns.
 
 **Improvements**
 
@@ -1333,9 +1334,10 @@ description: Release history for AgentsView
   review combiner prompts, and AgentsView's own changelog
   generator.
 - Refresh the `is_automated` classification at startup, using a
-  classifier hash that covers built-in patterns and `[automated]
-  prefixes`, so edits to automation rules and rows imported from
-  other archives get re-labeled without a manual resync.
+  classifier hash that covers built-in patterns and configured
+  `[automated]` patterns, so edits to automation rules and rows
+  imported from other archives get re-labeled without a manual
+  resync.
 - Improve Claude first-message selection in the sidebar by
   skipping leading `/clear` and `/effort` command envelopes so
   the session preview shows the next real user message instead.

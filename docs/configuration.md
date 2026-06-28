@@ -497,7 +497,7 @@ the session filter dropdown opts them back in.
 
 A set of built-in patterns covers the roborev family and
 AgentsView's own internal prompts. To teach AgentsView about
-first-message prefixes unique to your own automation, add them
+first-message patterns unique to your own automation, add them
 to `~/.agentsview/config.toml`:
 
 ```toml
@@ -506,18 +506,32 @@ prefixes = [
   "You are summarizing a nightly batch run.",
   "INTERNAL-AUTOMATION:",
 ]
+substrings = [
+  "This is an automated repository maintenance run.",
+]
+exact_matches = [
+  "Nightly automation completed.",
+]
 ```
 
-User-configured entries use a case-sensitive `HasPrefix` check
-against the session's first user message. Entries are trimmed,
-deduplicated, and capped at 1024 characters; prefixes that
-duplicate a built-in pattern are silently dropped.
+User-configured entries are case-sensitive and are matched
+against the session's first user message:
+
+| Key | Match behavior |
+|-----|----------------|
+| `prefixes` | `HasPrefix` against the first user message |
+| `substrings` | `Contains` anywhere in the first user message |
+| `exact_matches` | trims the first user message, then compares the whole string |
+
+Entries are trimmed, deduplicated, and capped at 1024
+characters. Entries that duplicate a built-in pattern in the
+same category are silently dropped.
 
 **Reclassification on config change.** AgentsView stores a hash
 of the active classifier (built-in patterns + your configured
-prefixes) with the database. On startup, it rechecks stored
+patterns) with the database. On startup, it rechecks stored
 `is_automated` values against the active classifier and
-re-stamps the hash, so edits to `[automated] prefixes` apply to
+re-stamps the hash, so edits to `[automated]` patterns apply to
 history immediately — no manual resync required. The same
 backfill also corrects rows pulled in from PostgreSQL sync or
 copied from other archives.
