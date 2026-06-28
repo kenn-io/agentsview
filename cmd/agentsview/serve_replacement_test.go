@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gofrs/flock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
@@ -93,6 +94,36 @@ func TestPrepareForegroundServeDaemonMarksStartingBeforeStopping(t *testing.T) {
 		"start marker must be visible before stopping old daemon")
 	assert.True(t, IsDaemonStarting(dir),
 		"replacement leaves marker held for runServe startup")
+}
+
+func TestPrepareForegroundServeDaemonRefusesReplacementWhenStartLockHeld(
+	t *testing.T,
+) {
+	dir := runtimeTestDir(t)
+	lockPath, err := runtimeStore(dir).LockPath()
+	require.NoError(t, err)
+	lock := flock.New(lockPath)
+	locked, err := lock.TryLock()
+	require.NoError(t, err)
+	require.True(t, locked)
+	t.Cleanup(func() { require.NoError(t, lock.Unlock()) })
+
+	host, port := testPingServer(t)
+	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
+		host, port, withRuntimeVersion("1.0.0"),
+	))
+	setTestVersion(t, "1.1.0")
+	forbidStopDaemonRuntimeForUpgrade(t,
+		"foreground replacement must not stop without owning start lock")
+
+	cont, err := prepareForegroundServeDaemon(
+		config.Config{DataDir: dir}, serveReplacementOptions{},
+	)
+
+	assert.False(t, cont)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "startup")
+	assert.NotNil(t, FindDaemonRuntime(dir))
 }
 
 func TestPrepareForegroundServeDaemonUsesExistingCompatibleDaemon(t *testing.T) {

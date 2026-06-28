@@ -53,13 +53,21 @@ func prepareForegroundServeDaemon(
 		); err != nil {
 			return false, err
 		}
-		MarkDaemonStarting(cfg.DataDir)
+		ownsStartLock, acquiredStartLock := markDaemonStarting(cfg.DataDir)
+		if !ownsStartLock {
+			return false, fmt.Errorf(
+				"agentsview serve startup is already in progress; " +
+					"wait for it to finish or run `agentsview serve status`",
+			)
+		}
 		fmt.Println("Replacing agentsview daemon")
 		for _, line := range serveDaemonReplacementLines(decision) {
 			fmt.Println(line)
 		}
 		if err := stopDaemonRuntimeForUpgrade(cfg, decision.Runtime); err != nil {
-			UnmarkDaemonStarting(cfg.DataDir)
+			if acquiredStartLock {
+				UnmarkDaemonStarting(cfg.DataDir)
+			}
 			return false, err
 		}
 		return true, nil
