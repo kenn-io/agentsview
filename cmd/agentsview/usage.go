@@ -66,15 +66,46 @@ type UsageDailyConfig struct {
 	Timezone  string
 }
 
+// resolveUsageWindow resolves the raw --since/--until flags into concrete
+// inclusive YYYY-MM-DD bounds — a duration like 28d or a date, the same
+// syntax as `stats --since` — and rejects an inverted explicit window so a
+// reversed range fails loudly instead of returning an empty result.
+func resolveUsageWindow(
+	since, until string, now time.Time,
+) (string, string, error) {
+	from, err := db.ResolveWindowDate(since, now)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid --since: %w", err)
+	}
+	to, err := db.ResolveWindowDate(until, now)
+	if err != nil {
+		return "", "", fmt.Errorf("invalid --until: %w", err)
+	}
+	// Bounds are inclusive, so from == to is a valid single day (hence >
+	// not >=). String comparison is valid because YYYY-MM-DD sorts
+	// lexically.
+	if from != "" && to != "" && from > to {
+		return "", "", fmt.Errorf(
+			"--since (%s) must not be after --until (%s)", from, to)
+	}
+	return from, to, nil
+}
+
 func runUsageDaily(cfg UsageDailyConfig) {
 	tz := cfg.Timezone
 	if tz == "" {
 		tz = localTimezone()
 	}
 
+	since, until, err := resolveUsageWindow(cfg.Since, cfg.Until, time.Now())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
 	filter := db.UsageFilter{
-		From:     cfg.Since,
-		To:       cfg.Until,
+		From:     since,
+		To:       until,
 		Agent:    cfg.Agent,
 		Timezone: tz,
 	}

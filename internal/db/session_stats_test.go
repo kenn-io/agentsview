@@ -655,6 +655,42 @@ func TestWindowBounds(t *testing.T) {
 	})
 }
 
+func TestResolveWindowDate(t *testing.T) {
+	// Fixed reference time so duration math is deterministic.
+	now := time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC)
+
+	t.Run("empty passes through", func(t *testing.T) {
+		got, err := ResolveWindowDate("", now)
+		require.NoError(t, err, "ResolveWindowDate")
+		assert.Equal(t, "", got, "empty input")
+	})
+
+	t.Run("Nd duration anchors at now", func(t *testing.T) {
+		got, err := ResolveWindowDate("7d", now)
+		require.NoError(t, err, "ResolveWindowDate")
+		assert.Equal(t, "2026-04-11", got, "7d before 2026-04-18")
+	})
+
+	t.Run("Nh duration", func(t *testing.T) {
+		got, err := ResolveWindowDate("48h", now)
+		require.NoError(t, err, "ResolveWindowDate")
+		assert.Equal(t, "2026-04-16", got, "48h before 2026-04-18")
+	})
+
+	t.Run("bare date stands alone", func(t *testing.T) {
+		got, err := ResolveWindowDate("2026-04-01", now)
+		require.NoError(t, err, "ResolveWindowDate")
+		assert.Equal(t, "2026-04-01", got, "date passthrough")
+	})
+
+	t.Run("garbage is a hard error", func(t *testing.T) {
+		_, err := ResolveWindowDate("7x", now)
+		require.Error(t, err, "expected error for unparseable input")
+		assert.Contains(t, err.Error(), "Nd, Nh, or YYYY-MM-DD",
+			"error should name the accepted forms")
+	})
+}
+
 func TestGetSessionStats_Distributions(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

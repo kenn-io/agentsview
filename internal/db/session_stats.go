@@ -343,6 +343,24 @@ func parseWindowPoint(s string, now time.Time) (time.Time, error) {
 	)
 }
 
+// ResolveWindowDate converts a window input — a compact "Nd"/"Nh" duration
+// or an absolute YYYY-MM-DD date — into a YYYY-MM-DD string the same way
+// stats' parseWindowPoint resolves a single bound: durations anchor at now,
+// dates stand alone. Empty input passes through so callers can apply their
+// own default range. Unparseable input is a hard error so `usage daily
+// --since 7d` fails loudly instead of silently producing an out-of-range
+// window.
+func ResolveWindowDate(s string, now time.Time) (string, error) {
+	if s == "" {
+		return "", nil
+	}
+	t, err := parseWindowPoint(s, now)
+	if err != nil {
+		return "", err
+	}
+	return t.UTC().Format("2006-01-02"), nil
+}
+
 // parseDurationShort recognises the compact "Nd" / "Nh" forms the
 // stats CLI advertises. Returns ok=false when s is not a compact
 // duration so callers can try the date path.

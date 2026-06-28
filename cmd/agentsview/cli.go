@@ -443,8 +443,8 @@ func newUsageDailyCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&cfg.JSON, "json", false, "Output as JSON")
-	cmd.Flags().StringVar(&cfg.Since, "since", "", "Start date (YYYY-MM-DD)")
-	cmd.Flags().StringVar(&cfg.Until, "until", "", "End date (YYYY-MM-DD)")
+	cmd.Flags().StringVar(&cfg.Since, "since", "", "Start of window (duration like 28d, or YYYY-MM-DD)")
+	cmd.Flags().StringVar(&cfg.Until, "until", "", "End of window (duration like 28d, or YYYY-MM-DD)")
 	cmd.Flags().BoolVar(&cfg.All, "all", false, "Include all history (overrides default 30-day window)")
 	cmd.Flags().StringVar(&cfg.Agent, "agent", "", "Filter by agent name")
 	cmd.Flags().BoolVar(&cfg.Breakdown, "breakdown", false, "Show per-model breakdown rows")

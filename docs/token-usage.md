@@ -461,8 +461,8 @@ agentsview usage daily [flags]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--json` | `false` | Emit a JSON document instead of a table |
-| `--since` | `30 days ago` | Start date (`YYYY-MM-DD`), inclusive |
-| `--until` |  | End date (`YYYY-MM-DD`), inclusive |
+| `--since` | `30 days ago` | Start of window, a duration like `28d` or a `YYYY-MM-DD` date, inclusive |
+| `--until` |  | End of window, a duration like `28d` or a `YYYY-MM-DD` date, inclusive |
 | `--all` | `false` | Include all history; overrides the default 30-day window |
 | `--agent` |  | Filter by agent name (e.g. `claude`, `codex`) |
 | `--breakdown` | `false` | Show indented per-model sub-rows under each day |

@@ -256,8 +256,8 @@ agentsview usage daily [flags]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--json` | `false` | Emit JSON instead of a terminal table |
-| `--since` | `30 days ago` | Start date (`YYYY-MM-DD`), inclusive |
-| `--until` | | End date (`YYYY-MM-DD`), inclusive |
+| `--since` | `30 days ago` | Start of window, a duration like `28d` or a `YYYY-MM-DD` date, inclusive |
+| `--until` | | End of window, a duration like `28d` or a `YYYY-MM-DD` date, inclusive |
 | `--all` | `false` | Scan all history; overrides the default 30-day window |
 | `--agent` | | Filter by agent name |
 | `--breakdown` | `false` | Show indented per-model rows under each day |
@@ -270,6 +270,7 @@ agentsview usage daily [flags]
 ```bash
 agentsview usage daily                           # last 30 days
 agentsview usage daily --all                     # full history
+agentsview usage daily --since 14d               # last 14 days
 agentsview usage daily --since 2026-04-01 --breakdown
 agentsview usage daily --json --agent claude
 ```
