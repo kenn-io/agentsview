@@ -33,9 +33,12 @@ type serveReplacementDecision struct {
 }
 
 func prepareForegroundServeDaemon(
-	cfg config.Config, opts serveReplacementOptions,
+	cfg *config.Config, opts serveReplacementOptions,
 ) (bool, error) {
-	decision := decideServeDaemonReplacement(cfg, opts)
+	if cfg == nil {
+		return false, errors.New("nil config")
+	}
+	decision := decideServeDaemonReplacement(*cfg, opts)
 	switch decision.Action {
 	case serveReplacementNone:
 		return true, nil
@@ -50,11 +53,11 @@ func prepareForegroundServeDaemon(
 		return false, nil
 	case serveReplacementAuto, serveReplacementExplicit:
 		if err := checkForegroundReplacementDataVersion(
-			cfg, decision,
+			*cfg, decision,
 		); err != nil {
 			return false, err
 		}
-		releaseReplacementLock, err := acquireForegroundReplacementLock(cfg)
+		releaseReplacementLock, err := acquireForegroundReplacementLock(*cfg)
 		if err != nil {
 			return false, err
 		}
@@ -71,7 +74,8 @@ func prepareForegroundServeDaemon(
 		for _, line := range serveDaemonReplacementLines(decision) {
 			fmt.Println(line)
 		}
-		if err := stopDaemonRuntimeForUpgrade(cfg, decision.Runtime); err != nil {
+		adoptDaemonRuntimeLaunchOptions(cfg, decision.Runtime)
+		if err := stopDaemonRuntimeForUpgrade(*cfg, decision.Runtime); err != nil {
 			if acquiredStartLock {
 				UnmarkDaemonStarting(cfg.DataDir)
 			}
@@ -128,9 +132,37 @@ func decideServeDaemonReplacement(
 		cfg.DataDir, cfg.AuthToken,
 	)
 	if rt == nil {
+		if opts.Replace {
+			if rt := findConfirmedUnreachableWritableDaemonRuntime(cfg); rt != nil {
+				return serveReplacementDecision{
+					Action:  serveReplacementExplicit,
+					Runtime: rt,
+					Reason:  "replacement requested with --replace",
+				}
+			}
+		}
 		return serveReplacementDecision{Action: serveReplacementNone}
 	}
 	return decideIncompatibleServeDaemonReplacement(rt, compatErr, opts)
+}
+
+func findConfirmedUnreachableWritableDaemonRuntime(
+	cfg config.Config,
+) *DaemonRuntime {
+	for _, rec := range liveDaemonRecords(cfg.DataDir) {
+		rt := daemonRuntimeFromRecord(rec)
+		if rt.ReadOnly {
+			continue
+		}
+		if daemonRecordPingConfirmed(rec, cfg.AuthToken) {
+			continue
+		}
+		if !stopTargetConfirmed(rec, cfg.AuthToken) {
+			continue
+		}
+		return rt
+	}
+	return nil
 }
 
 func decideCompatibleServeDaemonReplacement(

@@ -114,7 +114,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 	}
 
 	cont, err := prepareForegroundServeDaemon(
-		cfg,
+		&cfg,
 		serveReplacementOptions{Replace: opts.ReplaceDaemon},
 	)
 	if err != nil {
