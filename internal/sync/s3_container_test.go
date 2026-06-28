@@ -10,8 +10,9 @@
 //
 //	CGO_ENABLED=1 go test -tags "fts5,s3test" ./internal/sync/ -run TestS3 -v
 //
-// The container image is MinIO (a widely-deployed S3-compatible server); any
-// S3-compatible store (e.g. rustfs) works by swapping s3ContainerImage.
+// The container image is rustfs, an actively maintained S3-compatible object
+// store; any S3-compatible image works by swapping s3ContainerImage and its
+// credential env vars.
 package sync
 
 import (
@@ -34,9 +35,9 @@ import (
 )
 
 const (
-	s3ContainerImage = "minio/minio:latest"
-	s3TestAccessKey  = "minioadmin"
-	s3TestSecretKey  = "minioadmin"
+	s3ContainerImage = "rustfs/rustfs:latest"
+	s3TestAccessKey  = "rustfsadmin"
+	s3TestSecretKey  = "rustfsadmin"
 	s3TestBucket     = "agentsview"
 	// s3TestMachine is the machine segment of the /<machine>/raw/<provider>
 	// layout; discovery derives the session machine namespace from it.
@@ -49,13 +50,15 @@ func startS3Container(ctx context.Context, t *testing.T) string {
 	t.Helper()
 	req := testcontainers.ContainerRequest{
 		Image:        s3ContainerImage,
-		Cmd:          []string{"server", "/data"},
 		ExposedPorts: []string{"9000/tcp"},
 		Env: map[string]string{
-			"MINIO_ROOT_USER":     s3TestAccessKey,
-			"MINIO_ROOT_PASSWORD": s3TestSecretKey,
+			"RUSTFS_ACCESS_KEY": s3TestAccessKey,
+			"RUSTFS_SECRET_KEY": s3TestSecretKey,
 		},
-		WaitingFor: wait.ForHTTP("/minio/health/live").
+		// rustfs serves the S3 API on :9000 and answers /health with 200 once
+		// the object store is ready; the image's default entrypoint starts the
+		// server, so no Cmd override is needed.
+		WaitingFor: wait.ForHTTP("/health").
 			WithPort("9000/tcp").
 			WithStartupTimeout(90 * time.Second),
 	}

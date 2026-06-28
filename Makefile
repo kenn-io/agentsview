@@ -259,8 +259,8 @@ test-postgres: pricing-snapshot ensure-embed-dir postgres-up
 test-postgres-ci: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -count=1
 
-# S3 discovery integration tests. testcontainers starts and tears down an
-# S3-compatible (MinIO) container automatically, so only a working Docker
+# S3 discovery integration tests. testcontainers starts and tears down a
+# rustfs (S3-compatible) container automatically, so only a working Docker
 # daemon is required.
 test-s3: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,s3test" -v ./internal/sync/... -run TestS3 -count=1
