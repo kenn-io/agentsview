@@ -214,9 +214,20 @@ func (s singleFileSourceSet) FindSource(
 			continue
 		}
 		for _, root := range s.roots {
-			if match, ok := s.cfg.classifyPath(root, path, false); ok {
-				return s.sourceRef(root, match), true, nil
+			match, ok := s.cfg.classifyPath(root, path, false)
+			if !ok {
+				continue
 			}
+			// classifyPath accepts a stored single-file path by shape, without
+			// confirming it still exists. A fresh-source lookup must not return a
+			// moved or deleted transcript: fall through to raw-ID re-resolution
+			// instead, mirroring the multiSessionContainerSourceSet.FindSource
+			// freshness guard. Only RequireFreshSource gates this, so
+			// PreferStoredSource semantics for still-present paths are unchanged.
+			if req.RequireFreshSource && !IsRegularFile(match.Path) {
+				continue
+			}
+			return s.sourceRef(root, match), true, nil
 		}
 	}
 	if req.RawSessionID == "" {
