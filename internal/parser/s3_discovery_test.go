@@ -107,3 +107,42 @@ func TestClaudeSourceSetMixedLocalAndS3Roots(t *testing.T) {
 	assert.Equal(t, 1, s3Count, "exactly one remote source")
 	assert.Equal(t, 1, localCount, "exactly one local source")
 }
+
+// TestCodexSourceSetDiscoversS3Sessions verifies the Codex source set enumerates
+// rollout objects under an s3:// sessions root through its provider Discover
+// path and carries the object metadata in the S3DiscoveredSource opaque.
+func TestCodexSourceSetDiscoversS3Sessions(t *testing.T) {
+	oldList := listS3Objects
+	t.Cleanup(func() { listS3Objects = oldList })
+
+	root := "s3://bucket/coder/raw/codex"
+	rolloutURI := root + "/2026/06/24/rollout-2026-06-24T00-00-00-" +
+		"11111111-1111-4111-8111-111111111111.jsonl"
+	mtime := time.Unix(100, 0)
+	listS3Objects = func(got string) ([]S3Object, error) {
+		require.Equal(t, root, got)
+		return []S3Object{{
+			URI:          rolloutURI,
+			Size:         11,
+			LastModified: mtime,
+			Fingerprint:  "s3-meta:rollout",
+		}}, nil
+	}
+
+	sources, err := newCodexSourceSet([]string{root}).Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+
+	src := sources[0]
+	assert.Equal(t, AgentCodex, src.Provider)
+	assert.Equal(t, rolloutURI, src.DisplayPath)
+	assert.Equal(t, rolloutURI, src.Key)
+
+	s3, ok := src.Opaque.(S3DiscoveredSource)
+	require.True(t, ok, "s3 source carries S3DiscoveredSource opaque")
+	assert.Equal(t, rolloutURI, s3.URI)
+	assert.Equal(t, "coder", s3.Machine)
+	assert.Equal(t, int64(11), s3.Size)
+	assert.Equal(t, mtime.UnixNano(), s3.MtimeNS)
+	assert.Contains(t, s3.Fingerprint, "rollout")
+}
