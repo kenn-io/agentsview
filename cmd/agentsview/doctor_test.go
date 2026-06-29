@@ -114,6 +114,71 @@ func TestDoctorSyncNewerDatabaseReportsRefusedStartup(t *testing.T) {
 	assert.Contains(t, out, `Run "agentsview update"`)
 }
 
+func TestWriteDoctorSummaryMode(t *testing.T) {
+	var buf bytes.Buffer
+	writeDoctorSummaryMode(&buf, doctorSyncReport{
+		AntigravityCLITotal:   12,
+		AntigravityCLISummary: 5,
+	})
+	out := buf.String()
+	assert.Contains(t, out, "antigravity-cli")
+	assert.Contains(t, out, "5")
+	assert.Contains(t, out, "summary mode")
+	assert.Contains(t, out, "agy-reader")
+}
+
+func TestWriteDoctorSummaryModeSilentWhenNone(t *testing.T) {
+	var buf bytes.Buffer
+	writeDoctorSummaryMode(&buf, doctorSyncReport{
+		AntigravityCLITotal: 12, AntigravityCLISummary: 0,
+	})
+	assert.NotContains(t, buf.String(), "summary mode")
+}
+
+func TestWriteDoctorSummaryModeSilentOnErr(t *testing.T) {
+	var buf bytes.Buffer
+	writeDoctorSummaryMode(&buf, doctorSyncReport{
+		AntigravityCLITotal:   12,
+		AntigravityCLISummary: 5,
+		SummaryModeErr:        errors.New("query failed"),
+	})
+	assert.Empty(t, buf.String())
+}
+
+func TestInspectDoctorDBCountsAntigravityCLISummaryMode(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "sessions.db")
+
+	database, err := db.Open(dbPath)
+	require.NoError(t, err, "open db")
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:                 "agy-summary",
+		Agent:              "antigravity-cli",
+		Machine:            "local",
+		Project:            "proj",
+		TranscriptFidelity: "summary",
+	}), "upsert summary session")
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:                 "agy-full",
+		Agent:              "antigravity-cli",
+		Machine:            "local",
+		Project:            "proj",
+		TranscriptFidelity: "full",
+	}), "upsert full session")
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:      "other-agent",
+		Agent:   "claude-code",
+		Machine: "local",
+		Project: "proj",
+	}), "upsert other-agent session")
+	require.NoError(t, database.Close(), "close db")
+
+	_, _, _, _, _, _, total, summary, summaryErr := inspectDoctorDB(dbPath)
+	require.NoError(t, summaryErr, "summary mode query")
+	assert.Equal(t, 2, total, "AntigravityCLITotal")
+	assert.Equal(t, 1, summary, "AntigravityCLISummary")
+}
+
 func TestDoctorSyncReportStatErrorDoesNotRenderAsMissingDatabase(t *testing.T) {
 	report := doctorSyncReport{
 		Config: config.Config{

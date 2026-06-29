@@ -33,18 +33,21 @@ type doctorAgentRoot struct {
 }
 
 type doctorSyncReport struct {
-	Config              config.Config
-	DBExists            bool
-	DBReadable          bool
-	DBError             error
-	UserVersion         *int
-	SessionCounts       []doctorDataVersionCount
-	SessionCountsErr    error
-	TempFiles           []string
-	AgentRoots          []doctorAgentRoot
-	DebugLines          []string
-	DebugLogErr         error
-	HasResyncFailureLog bool
+	Config                config.Config
+	DBExists              bool
+	DBReadable            bool
+	DBError               error
+	UserVersion           *int
+	SessionCounts         []doctorDataVersionCount
+	SessionCountsErr      error
+	AntigravityCLITotal   int
+	AntigravityCLISummary int
+	SummaryModeErr        error
+	TempFiles             []string
+	AgentRoots            []doctorAgentRoot
+	DebugLines            []string
+	DebugLogErr           error
+	HasResyncFailureLog   bool
 }
 
 func newDoctorCommand() *cobra.Command {
@@ -89,7 +92,9 @@ func collectDoctorSyncReport(cfg config.Config) doctorSyncReport {
 
 	report.DBExists, report.DBReadable, report.DBError,
 		report.UserVersion, report.SessionCounts,
-		report.SessionCountsErr = inspectDoctorDB(cfg.DBPath)
+		report.SessionCountsErr,
+		report.AntigravityCLITotal, report.AntigravityCLISummary,
+		report.SummaryModeErr = inspectDoctorDB(cfg.DBPath)
 	report.TempFiles = listDoctorResyncTempFiles(cfg.DBPath)
 	report.AgentRoots = collectDoctorAgentRoots(cfg)
 	report.DebugLines, report.DebugLogErr = readDoctorDebugLines(
@@ -110,28 +115,31 @@ func inspectDoctorDB(
 	userVersion *int,
 	counts []doctorDataVersionCount,
 	countsErr error,
+	antigravityCLITotal int,
+	antigravityCLISummary int,
+	summaryModeErr error,
 ) {
 	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return false, false, nil, nil, nil, nil
+			return false, false, nil, nil, nil, nil, 0, 0, nil
 		}
-		return false, false, err, nil, nil, nil
+		return false, false, err, nil, nil, nil, 0, 0, nil
 	}
 	if info.IsDir() {
 		return true, false, fmt.Errorf("database path is a directory"),
-			nil, nil, nil
+			nil, nil, nil, 0, 0, nil
 	}
 
 	conn, err := sql.Open("sqlite3", doctorReadOnlyDSN(path))
 	if err != nil {
-		return true, false, err, nil, nil, nil
+		return true, false, err, nil, nil, nil, 0, 0, nil
 	}
 	defer conn.Close()
 
 	var version int
 	if err := conn.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
-		return true, false, err, nil, nil, nil
+		return true, false, err, nil, nil, nil, 0, 0, nil
 	}
 	readable = true
 	userVersion = &version
@@ -141,21 +149,31 @@ func inspectDoctorDB(
 			"GROUP BY data_version ORDER BY data_version",
 	)
 	if err != nil {
-		return true, readable, nil, userVersion, nil, err
+		return true, readable, nil, userVersion, nil, err, 0, 0, nil
 	}
 	defer rows.Close()
 
 	for rows.Next() {
 		var row doctorDataVersionCount
 		if err := rows.Scan(&row.Version, &row.Count); err != nil {
-			return true, readable, nil, userVersion, counts, err
+			return true, readable, nil, userVersion, counts, err, 0, 0, nil
 		}
 		counts = append(counts, row)
 	}
 	if err := rows.Err(); err != nil {
-		return true, readable, nil, userVersion, counts, err
+		return true, readable, nil, userVersion, counts, err, 0, 0, nil
 	}
-	return true, readable, nil, userVersion, counts, nil
+
+	var total, summary int
+	row := conn.QueryRow(
+		"SELECT COUNT(*), " +
+			"COUNT(*) FILTER (WHERE transcript_fidelity = 'summary') " +
+			"FROM sessions WHERE agent = 'antigravity-cli'",
+	)
+	if err := row.Scan(&total, &summary); err != nil {
+		return true, readable, nil, userVersion, counts, nil, 0, 0, err
+	}
+	return true, readable, nil, userVersion, counts, nil, total, summary, nil
 }
 
 func doctorReadOnlyDSN(path string) string {
@@ -280,6 +298,7 @@ func writeDoctorSyncReport(w io.Writer, report doctorSyncReport) {
 		doctorStartupDecision(report, currentVersion))
 
 	writeDoctorSessionCounts(w, report)
+	writeDoctorSummaryMode(w, report)
 	writeDoctorTempFiles(w, report.TempFiles)
 	writeDoctorAgentRoots(w, report.AgentRoots)
 	writeDoctorDebugEvidence(w, report)
@@ -325,6 +344,17 @@ func writeDoctorSessionCounts(w io.Writer, report doctorSyncReport) {
 	for _, row := range report.SessionCounts {
 		fmt.Fprintf(w, "  version %d: %d\n", row.Version, row.Count)
 	}
+}
+
+func writeDoctorSummaryMode(w io.Writer, report doctorSyncReport) {
+	if report.SummaryModeErr != nil || report.AntigravityCLISummary == 0 {
+		return
+	}
+	fmt.Fprintf(w,
+		"antigravity-cli: %d sessions, %d in summary mode\n"+
+			"  -> install agy-reader for full transcripts: "+
+			"https://github.com/mjacobs/agy-reader\n",
+		report.AntigravityCLITotal, report.AntigravityCLISummary)
 }
 
 func writeDoctorTempFiles(w io.Writer, files []string) {
