@@ -271,6 +271,22 @@ func TestUpsertSessionDoesNotAdvanceDataVersion(t *testing.T) {
 		"after re-upsert, data_version (must be preserved across UpsertSession)")
 }
 
+func TestSessionTranscriptFidelityRoundTrips(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	s := Session{
+		ID:                 "antigravity-cli:fidelity-rt",
+		Agent:              "antigravity-cli",
+		TranscriptFidelity: "summary",
+	}
+	require.NoError(t, d.UpsertSession(s))
+
+	got, err := d.GetSession(ctx, s.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "summary", got.TranscriptFidelity)
+}
+
 func TestUpsertSessionTerminationStatus(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

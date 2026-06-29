@@ -281,6 +281,7 @@ func SanitizeSession(s *Session) ValidationStats {
 	sanitizeStringField(&s.GitBranch, &stats)
 	sanitizeStringField(&s.SourceSessionID, &stats)
 	sanitizeStringField(&s.SourceVersion, &stats)
+	sanitizeStringField(&s.TranscriptFidelity, &stats)
 	sanitizeStringPtrField(s.FirstMessage, &stats)
 	sanitizeStringPtrField(s.SessionName, &stats)
 	sanitizeStringPtrField(s.TerminationStatus, &stats)

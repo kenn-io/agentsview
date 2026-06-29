@@ -53,6 +53,7 @@ const sessionBaseCols = `id, project, machine, agent,
 	no_code_context_count, runaway_tool_loop_count,
 	data_version,
 	cwd, git_branch, source_session_id, source_version,
+	transcript_fidelity,
 	parser_malformed_lines, is_truncated,
 	deleted_at, termination_status, created_at`
 
@@ -82,6 +83,7 @@ const sessionPruneCols = `id, project, machine, agent,
 	no_code_context_count, runaway_tool_loop_count,
 	data_version,
 	cwd, git_branch, source_session_id, source_version,
+	transcript_fidelity,
 	parser_malformed_lines, is_truncated,
 	deleted_at, termination_status, file_path, file_size, created_at`
 
@@ -110,6 +112,7 @@ const sessionFullCols = `id, project, machine, agent,
 	no_code_context_count, runaway_tool_loop_count,
 	data_version,
 	cwd, git_branch, source_session_id, source_version,
+	transcript_fidelity,
 	parser_malformed_lines, is_truncated,
 	deleted_at, termination_status, file_path, file_size, file_mtime,
 	next_ordinal, last_entry_uuid,
@@ -158,6 +161,7 @@ func scanSessionRow(rs rowScanner) (Session, error) {
 		&s.DataVersion,
 		&s.Cwd, &s.GitBranch,
 		&s.SourceSessionID, &s.SourceVersion,
+		&s.TranscriptFidelity,
 		&s.ParserMalformedLines, &s.IsTruncated,
 		&s.DeletedAt, &s.TerminationStatus, &s.CreatedAt,
 	)
@@ -312,6 +316,7 @@ type Session struct {
 	GitBranch                   string          `json:"git_branch,omitempty"`
 	SourceSessionID             string          `json:"source_session_id,omitempty"`
 	SourceVersion               string          `json:"source_version,omitempty"`
+	TranscriptFidelity          string          `json:"transcript_fidelity,omitempty"`
 	ParserMalformedLines        int             `json:"parser_malformed_lines,omitempty"`
 	IsTruncated                 bool            `json:"is_truncated,omitempty"`
 
@@ -1044,6 +1049,7 @@ func (db *DB) GetSessionFull(
 		&s.DataVersion,
 		&s.Cwd, &s.GitBranch,
 		&s.SourceSessionID, &s.SourceVersion,
+		&s.TranscriptFidelity,
 		&s.ParserMalformedLines, &s.IsTruncated,
 		&s.DeletedAt, &s.TerminationStatus, &s.FilePath, &s.FileSize,
 		&s.FileMtime, &s.NextOrdinal, &s.LastEntryUUID,
@@ -1194,12 +1200,13 @@ const upsertSessionSQL = `
 			is_automated,
 			termination_status,
 			cwd, git_branch, source_session_id,
-			source_version, parser_malformed_lines,
+			source_version, transcript_fidelity,
+			parser_malformed_lines,
 			is_truncated,
 			file_path, file_size, file_mtime,
 			next_ordinal, last_entry_uuid,
 			file_inode, file_device, file_hash
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			project = excluded.project,
 			machine = excluded.machine,
@@ -1224,6 +1231,7 @@ const upsertSessionSQL = `
 			git_branch = excluded.git_branch,
 			source_session_id = excluded.source_session_id,
 			source_version = excluded.source_version,
+			transcript_fidelity = excluded.transcript_fidelity,
 			parser_malformed_lines = excluded.parser_malformed_lines,
 			is_truncated = excluded.is_truncated,
 			file_path = excluded.file_path,
@@ -1253,7 +1261,8 @@ func upsertSessionArgs(s Session) []any {
 		sessionIsAutomated(s),
 		s.TerminationStatus,
 		s.Cwd, s.GitBranch, s.SourceSessionID,
-		s.SourceVersion, s.ParserMalformedLines,
+		s.SourceVersion, s.TranscriptFidelity,
+		s.ParserMalformedLines,
 		s.IsTruncated,
 		s.FilePath, s.FileSize, s.FileMtime,
 		s.NextOrdinal, s.LastEntryUUID,
@@ -2381,6 +2390,7 @@ func (db *DB) FindPruneCandidates(
 			&s.DataVersion,
 			&s.Cwd, &s.GitBranch,
 			&s.SourceSessionID, &s.SourceVersion,
+			&s.TranscriptFidelity,
 			&s.ParserMalformedLines, &s.IsTruncated,
 			&s.DeletedAt, &s.TerminationStatus, &s.FilePath, &s.FileSize, &s.CreatedAt,
 		)
@@ -2769,6 +2779,7 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.DataVersion,
 			&s.Cwd, &s.GitBranch,
 			&s.SourceSessionID, &s.SourceVersion,
+			&s.TranscriptFidelity,
 			&s.ParserMalformedLines, &s.IsTruncated,
 			&s.DeletedAt, &s.TerminationStatus, &s.FilePath, &s.FileSize,
 			&s.FileMtime, &s.NextOrdinal, &s.LastEntryUUID,

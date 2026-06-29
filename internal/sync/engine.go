@@ -8810,6 +8810,7 @@ func toDBSession(pw pendingWrite) db.Session {
 		GitBranch:            pw.sess.GitBranch,
 		SourceSessionID:      pw.sess.SourceSessionID,
 		SourceVersion:        pw.sess.SourceVersion,
+		TranscriptFidelity:   pw.sess.TranscriptFidelity,
 		ParserMalformedLines: pw.sess.MalformedLines,
 		IsTruncated:          pw.sess.IsTruncated,
 		TerminationStatus:    strPtr(string(pw.sess.TerminationStatus)),

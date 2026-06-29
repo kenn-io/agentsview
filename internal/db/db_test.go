@@ -696,8 +696,8 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 }
 
 func TestCurrentDataVersionKimiUsageEvents(t *testing.T) {
-	assert.Equal(t, 55, CurrentDataVersion(),
-		"Kimi persisted usage events require a data version bump")
+	assert.Equal(t, 56, CurrentDataVersion(),
+		"antigravity-cli transcript fidelity require a data version bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
