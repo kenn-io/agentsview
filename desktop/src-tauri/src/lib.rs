@@ -977,6 +977,7 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u6
     tauri::async_runtime::spawn(async move {
         let mut stdout_buffer = String::new();
         let mut stdout_log_buffer = String::new();
+        let mut stderr_log_buffer = String::new();
         while let Some(event) = rx.recv().await {
             match event {
                 CommandEvent::Stdout(chunk_bytes) => {
@@ -1011,18 +1012,30 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u6
                     }
                 }
                 CommandEvent::Stderr(line_bytes) => {
-                    queue_sidecar_event_log_record(
-                        &log_sender,
-                        &CommandEvent::Stderr(line_bytes.clone()),
+                    emit_redacted_sidecar_stderr_chunk(
+                        queue_redacted_sidecar_chunk(
+                            &log_sender,
+                            "stderr",
+                            &mut stderr_log_buffer,
+                            String::from_utf8_lossy(&line_bytes).as_ref(),
+                        )
+                        .as_str(),
                     );
-                    let line = String::from_utf8_lossy(&line_bytes);
-                    eprintln!("[agentsview:stderr] {}", line.trim_end());
                 }
                 CommandEvent::Terminated(payload) => {
                     emit_redacted_sidecar_stdout_chunk(
-                        flush_pending_sidecar_stdout_log_record(
+                        flush_pending_sidecar_log_record(
                             &log_sender,
+                            "stdout",
                             &mut stdout_log_buffer,
+                        )
+                        .as_str(),
+                    );
+                    emit_redacted_sidecar_stderr_chunk(
+                        flush_pending_sidecar_log_record(
+                            &log_sender,
+                            "stderr",
+                            &mut stderr_log_buffer,
                         )
                         .as_str(),
                     );
@@ -1071,7 +1084,12 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u6
             }
         }
         emit_redacted_sidecar_stdout_chunk(
-            flush_pending_sidecar_stdout_log_record(&log_sender, &mut stdout_log_buffer).as_str(),
+            flush_pending_sidecar_log_record(&log_sender, "stdout", &mut stdout_log_buffer)
+                .as_str(),
+        );
+        emit_redacted_sidecar_stderr_chunk(
+            flush_pending_sidecar_log_record(&log_sender, "stderr", &mut stderr_log_buffer)
+                .as_str(),
         );
     });
 }
@@ -1580,13 +1598,8 @@ fn prepare_sidecar_stdout_update(
     chunk_bytes: &[u8],
 ) -> SidecarStdoutUpdate {
     let chunk = String::from_utf8_lossy(chunk_bytes).into_owned();
-    let redacted_chunk = drain_redacted_sidecar_stdout_log_lines(stdout_log_buffer, chunk.as_str());
-    if !redacted_chunk.trim().is_empty() {
-        try_send_sidecar_log_record(
-            log_sender,
-            SidecarLogRecord::new("stdout", redacted_chunk.clone()),
-        );
-    }
+    let redacted_chunk =
+        queue_redacted_sidecar_chunk(log_sender, "stdout", stdout_log_buffer, chunk.as_str());
     SidecarStdoutUpdate {
         status: extract_startup_status(chunk.as_ref()),
         port: parse_listening_port_from_stdout_buffer(stdout_buffer, chunk.as_ref()),
@@ -1596,22 +1609,46 @@ fn prepare_sidecar_stdout_update(
 }
 
 fn emit_redacted_sidecar_stdout_chunk(redacted_chunk: &str) {
+    emit_sidecar_console_chunk("agentsview", redacted_chunk);
+}
+
+fn emit_redacted_sidecar_stderr_chunk(redacted_chunk: &str) {
+    emit_sidecar_console_chunk("agentsview:stderr", redacted_chunk);
+}
+
+fn emit_sidecar_console_chunk(prefix: &str, redacted_chunk: &str) {
     for line in redacted_chunk.lines().filter(|line| !line.is_empty()) {
-        eprintln!("[agentsview] {line}");
+        eprintln!("[{prefix}] {line}");
     }
 }
 
-fn drain_redacted_sidecar_stdout_log_lines(stdout_log_buffer: &mut String, chunk: &str) -> String {
-    stdout_log_buffer.push_str(chunk);
+fn queue_redacted_sidecar_chunk(
+    log_sender: &SyncSender<SidecarLogRecord>,
+    label: &'static str,
+    log_buffer: &mut String,
+    chunk: &str,
+) -> String {
+    let redacted_chunk = drain_redacted_sidecar_log_lines(log_buffer, chunk);
+    if !redacted_chunk.trim().is_empty() {
+        try_send_sidecar_log_record(
+            log_sender,
+            SidecarLogRecord::new(label, redacted_chunk.clone()),
+        );
+    }
+    redacted_chunk
+}
+
+fn drain_redacted_sidecar_log_lines(log_buffer: &mut String, chunk: &str) -> String {
+    log_buffer.push_str(chunk);
 
     let mut redacted_lines = Vec::new();
     let mut consumed = 0;
-    let mut chars = stdout_log_buffer.char_indices().peekable();
+    let mut chars = log_buffer.char_indices().peekable();
     while let Some((idx, ch)) = chars.next() {
         if ch != '\r' && ch != '\n' {
             continue;
         }
-        let line = &stdout_log_buffer[consumed..idx];
+        let line = &log_buffer[consumed..idx];
         if !line.is_empty() {
             redacted_lines.push(redact_sidecar_log_line(line));
         }
@@ -1623,21 +1660,22 @@ fn drain_redacted_sidecar_stdout_log_lines(stdout_log_buffer: &mut String, chunk
     }
 
     if consumed > 0 {
-        stdout_log_buffer.drain(..consumed);
+        log_buffer.drain(..consumed);
     }
 
     redacted_lines.join("\n")
 }
 
-fn flush_pending_sidecar_stdout_log_record(
+fn flush_pending_sidecar_log_record(
     log_sender: &SyncSender<SidecarLogRecord>,
-    stdout_log_buffer: &mut String,
+    label: &'static str,
+    log_buffer: &mut String,
 ) -> String {
-    if stdout_log_buffer.trim().is_empty() {
-        stdout_log_buffer.clear();
+    if log_buffer.trim().is_empty() {
+        log_buffer.clear();
         return String::new();
     }
-    let pending = std::mem::take(stdout_log_buffer);
+    let pending = std::mem::take(log_buffer);
     let redacted = pending
         .split(['\r', '\n'])
         .filter(|line| !line.is_empty())
@@ -1647,10 +1685,7 @@ fn flush_pending_sidecar_stdout_log_record(
         .trim()
         .to_string();
     if !redacted.is_empty() {
-        try_send_sidecar_log_record(
-            log_sender,
-            SidecarLogRecord::new("stdout", redacted.clone()),
-        );
+        try_send_sidecar_log_record(log_sender, SidecarLogRecord::new(label, redacted.clone()));
     }
     redacted
 }
@@ -1707,7 +1742,12 @@ fn sidecar_log_record_from_event(event: &CommandEvent) -> Option<SidecarLogRecor
         CommandEvent::Stdout(_) => None,
         CommandEvent::Stderr(line_bytes) => Some(SidecarLogRecord::new(
             "stderr",
-            String::from_utf8_lossy(line_bytes).into_owned(),
+            String::from_utf8_lossy(line_bytes)
+                .split(['\r', '\n'])
+                .filter(|line| !line.is_empty())
+                .map(redact_sidecar_log_line)
+                .collect::<Vec<_>>()
+                .join("\n"),
         )),
         CommandEvent::Terminated(payload) => Some(SidecarLogRecord::new(
             "terminated",
@@ -2815,7 +2855,8 @@ mod tests {
         );
         assert!(log_receiver.try_recv().is_err());
 
-        let flushed = flush_pending_sidecar_stdout_log_record(&log_sender, &mut stdout_log_buffer);
+        let flushed =
+            flush_pending_sidecar_log_record(&log_sender, "stdout", &mut stdout_log_buffer);
 
         let logged = log_receiver.try_recv().expect("stdout record");
         assert_eq!(logged.label, "stdout");
@@ -2823,6 +2864,71 @@ mod tests {
         assert!(!flushed.contains("split-secret"));
         assert!(logged.record.contains("Auth enabled. Token: <redacted>"));
         assert!(!logged.record.contains("split-secret"));
+    }
+
+    #[test]
+    fn queue_redacted_sidecar_stderr_chunk_redacts_split_token_lines_after_newline() {
+        let (log_sender, log_receiver) = sync_channel(1);
+        let mut stderr_log_buffer = String::new();
+
+        let first_chunk = queue_redacted_sidecar_chunk(
+            &log_sender,
+            "stderr",
+            &mut stderr_log_buffer,
+            "Authorization: Bearer ",
+        );
+        assert!(first_chunk.is_empty());
+        assert!(log_receiver.try_recv().is_err());
+
+        let second_chunk = queue_redacted_sidecar_chunk(
+            &log_sender,
+            "stderr",
+            &mut stderr_log_buffer,
+            "stderr-secret\n",
+        );
+
+        let logged = log_receiver.try_recv().expect("stderr record");
+        assert_eq!(logged.label, "stderr");
+        assert!(second_chunk.contains("Authorization: Bearer <redacted>"));
+        assert!(!second_chunk.contains("stderr-secret"));
+        assert!(logged.record.contains("Authorization: Bearer <redacted>"));
+        assert!(!logged.record.contains("stderr-secret"));
+    }
+
+    #[test]
+    fn flush_pending_sidecar_stderr_log_record_redacts_split_token_tail() {
+        let (log_sender, log_receiver) = sync_channel(1);
+        let mut stderr_log_buffer = String::new();
+
+        queue_redacted_sidecar_chunk(
+            &log_sender,
+            "stderr",
+            &mut stderr_log_buffer,
+            "Auth enabled. Token: stderr-tail",
+        );
+        assert!(log_receiver.try_recv().is_err());
+
+        let flushed =
+            flush_pending_sidecar_log_record(&log_sender, "stderr", &mut stderr_log_buffer);
+
+        let logged = log_receiver.try_recv().expect("stderr record");
+        assert_eq!(logged.label, "stderr");
+        assert!(flushed.contains("Auth enabled. Token: <redacted>"));
+        assert!(!flushed.contains("stderr-tail"));
+        assert!(logged.record.contains("Auth enabled. Token: <redacted>"));
+        assert!(!logged.record.contains("stderr-tail"));
+    }
+
+    #[test]
+    fn sidecar_log_record_from_event_redacts_stderr_token_lines() {
+        let record = sidecar_log_record_from_event(&CommandEvent::Stderr(
+            b"Authorization: Bearer stderr-secret\n".to_vec(),
+        ))
+        .expect("stderr record");
+
+        assert_eq!(record.label, "stderr");
+        assert!(record.record.contains("Authorization: Bearer <redacted>"));
+        assert!(!record.record.contains("stderr-secret"));
     }
 
     #[test]
