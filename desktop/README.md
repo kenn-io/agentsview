@@ -44,6 +44,9 @@ Optional escape hatch:
 - Add overrides in `~/.agentsview/desktop.env`:
   - Example: `PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`
   - Example: `ANTHROPIC_API_KEY=...`
+- Windows WSL bridge example:
+  - `CODEX_SESSIONS_DIR=wsl:Ubuntu:/home/me/.codex/sessions`
+    (becomes `\\wsl.localhost\Ubuntu\home\me\.codex\sessions` in desktop wrapper env)
 - On Windows, this file resolves to `%USERPROFILE%\\.agentsview\\desktop.env`.
 - Force a custom PATH with `AGENTSVIEW_DESKTOP_PATH`.
 - Skip login-shell env loading with `AGENTSVIEW_DESKTOP_SKIP_LOGIN_SHELL_ENV=1`.
