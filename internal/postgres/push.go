@@ -22,6 +22,7 @@ import (
 const (
 	lastPushBoundaryStateKey     = "last_push_boundary_state"
 	lastPushTargetFingerprintKey = "pg_target_fingerprint_v1"
+	sessionAliasBackfillStateKey = "pg_session_alias_backfill_v1"
 )
 
 // pushMarkerIDStateKey names the local sync-state entry holding this DB's
@@ -131,6 +132,18 @@ func (s *Sync) Push(
 	legacyMarkerMachines := pushMarkerLegacyMachines(
 		markerMachine, markerMachineAliases,
 	)
+	aliasBackfillNeeded := false
+	full, aliasBackfillNeeded, err = applySessionAliasBackfillRequirement(
+		state, full,
+	)
+	if err != nil {
+		return result, err
+	}
+	if aliasBackfillNeeded {
+		log.Printf(
+			"pgsync: session alias backfill marker missing; forcing full push",
+		)
+	}
 	if full {
 		lastPush = ""
 		// Caller requested a full push — the PG schema
@@ -325,6 +338,11 @@ func (s *Sync) Push(
 		); err != nil {
 			return result, err
 		}
+		if err := completeSessionAliasBackfill(
+			state, aliasBackfillNeeded, result,
+		); err != nil {
+			return result, err
+		}
 		result.Duration = time.Since(start)
 		return result, nil
 	}
@@ -421,6 +439,11 @@ func (s *Sync) Push(
 	// rather than skipping the still-missing sessions.
 	if err := s.writePushMarker(
 		ctx, markerID, markerMachine, markerMachineAliases,
+	); err != nil {
+		return result, err
+	}
+	if err := completeSessionAliasBackfill(
+		state, aliasBackfillNeeded, result,
 	); err != nil {
 		return result, err
 	}
@@ -881,6 +904,49 @@ func clearPushState(local syncStateStore) error {
 		)
 	}
 	return nil
+}
+
+func applySessionAliasBackfillRequirement(
+	local syncStateStore, full bool,
+) (bool, bool, error) {
+	needed, err := sessionAliasBackfillNeeded(local)
+	if err != nil {
+		return full, false, err
+	}
+	if !needed {
+		return full, false, nil
+	}
+	return true, true, nil
+}
+
+func sessionAliasBackfillNeeded(local syncStateStore) (bool, error) {
+	done, err := local.GetSyncState(sessionAliasBackfillStateKey)
+	if err != nil {
+		return false, fmt.Errorf(
+			"reading %s: %w", sessionAliasBackfillStateKey, err,
+		)
+	}
+	return done != "1", nil
+}
+
+func markSessionAliasBackfillDone(local syncStateStore) error {
+	if err := local.SetSyncState(
+		sessionAliasBackfillStateKey, "1",
+	); err != nil {
+		return fmt.Errorf(
+			"updating %s: %w", sessionAliasBackfillStateKey, err,
+		)
+	}
+	return nil
+}
+
+func completeSessionAliasBackfill(
+	local syncStateStore, needed bool, result PushResult,
+) error {
+	if !needed || result.Errors > 0 || result.SkippedConflicts > 0 {
+		return nil
+	}
+	return markSessionAliasBackfillDone(local)
 }
 
 func persistPushTargetFingerprint(

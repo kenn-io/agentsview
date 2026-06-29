@@ -132,6 +132,61 @@ func TestPushMarkerIDUsesUnscopedStateAcrossNamedTargets(t *testing.T) {
 	}
 }
 
+func TestSessionAliasBackfillForcesOneFullPush(t *testing.T) {
+	store := &syncStateStoreStub{}
+
+	full, needed, err := applySessionAliasBackfillRequirement(
+		store, false,
+	)
+
+	require.NoError(t, err)
+	assert.True(t, full, "missing alias backfill marker should force full push")
+	assert.True(t, needed)
+
+	require.NoError(t, markSessionAliasBackfillDone(store))
+
+	full, needed, err = applySessionAliasBackfillRequirement(
+		store, false,
+	)
+
+	require.NoError(t, err)
+	assert.False(t, full,
+		"completed alias backfill should preserve incremental push")
+	assert.False(t, needed)
+
+	full, needed, err = applySessionAliasBackfillRequirement(
+		store, true,
+	)
+
+	require.NoError(t, err)
+	assert.True(t, full, "explicit full push should stay full")
+	assert.False(t, needed)
+}
+
+func TestCompleteSessionAliasBackfillRequiresCleanPush(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		res  PushResult
+		want string
+	}{
+		{name: "clean", want: "1"},
+		{name: "errors", res: PushResult{Errors: 1}},
+		{name: "skipped conflicts", res: PushResult{SkippedConflicts: 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &syncStateStoreStub{}
+
+			err := completeSessionAliasBackfill(
+				store, true, tc.res,
+			)
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.want,
+				store.values[sessionAliasBackfillStateKey])
+		})
+	}
+}
+
 func TestReadPushBoundaryStateValidity(t *testing.T) {
 	const cutoff = "2026-03-11T12:34:56.123Z"
 
