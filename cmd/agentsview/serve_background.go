@@ -160,7 +160,9 @@ func runServeBackground(
 				}
 				fatal("serve background: %v", err)
 			}
-			decision = decideServeDaemonReplacementAfterExternalStartup(cfg, opts)
+			decision = decideServeDaemonReplacementAfterExternalStartup(
+				cfg, opts, decision,
+			)
 		}
 		switch decision.Action {
 		case serveReplacementNone:
@@ -554,6 +556,7 @@ func waitForExternalServeStartupBeforeReplacement(
 func decideServeDaemonReplacementAfterExternalStartup(
 	cfg config.Config,
 	opts serveReplacementOptions,
+	original serveReplacementDecision,
 ) serveReplacementDecision {
 	if !opts.Replace {
 		return decideServeDaemonReplacement(cfg, opts)
@@ -561,10 +564,19 @@ func decideServeDaemonReplacementAfterExternalStartup(
 	decision := decideServeDaemonReplacement(
 		cfg, serveReplacementOptions{},
 	)
-	if decision.Action != serveReplacementRefuse {
+	if decision.Action == serveReplacementUseExisting &&
+		!sameDaemonReplacementTarget(original.Runtime, decision.Runtime) {
 		return decision
 	}
 	return decideServeDaemonReplacement(cfg, opts)
+}
+
+func sameDaemonReplacementTarget(a, b *DaemonRuntime) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return a.Record.PID == b.Record.PID &&
+		a.Record.Address == b.Record.Address
 }
 
 func checkBackgroundReplacementDataVersion(cfg *config.Config) error {
