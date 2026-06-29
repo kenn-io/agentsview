@@ -4,7 +4,6 @@ package duckdb
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -76,9 +75,7 @@ func newDuckRecentEditsStore(
 	ctx := context.Background()
 	local := newLocalDB(t)
 	setup(local)
-	syncer := newTestSync(t,
-		filepath.Join(t.TempDir(), "recentedits.duckdb"),
-		local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	_, err := syncer.Push(ctx, true, nil)
 	require.NoError(t, err, "Push to DuckDB mirror")
 	return NewStoreFromDB(syncer.DB())

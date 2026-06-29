@@ -3,7 +3,6 @@ package duckdb
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -1524,12 +1523,7 @@ func newDuckAnalyticsStore(
 	local := newLocalDB(t)
 	_, err := local.WriteSessionBatchAtomic(writes)
 	require.NoError(t, err)
-	syncer := newTestSync(
-		t,
-		filepath.Join(t.TempDir(), "analytics-model.duckdb"),
-		local,
-		SyncOptions{},
-	)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	_, err = syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
 	return NewStoreFromDB(syncer.DB())

@@ -4,7 +4,6 @@ package duckdb
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -79,8 +78,7 @@ func TestDuckMessageHydratesToolCallFilePathAndCallIndex(t *testing.T) {
 		},
 	}}), "insert messages")
 
-	syncer := newTestSync(t,
-		filepath.Join(t.TempDir(), "mirror.duckdb"), local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	_, err := syncer.Push(ctx, true, nil)
 	require.NoError(t, err, "push to duckdb mirror")
 	store := NewStoreFromDB(syncer.DB())

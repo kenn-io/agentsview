@@ -732,6 +732,11 @@ func newTestSync(
 	return syncer
 }
 
+func newInMemoryTestSync(t *testing.T, local *db.DB, opts SyncOptions) *Sync {
+	t.Helper()
+	return newTestSync(t, ":memory:", local, opts)
+}
+
 // TestDuckGetAnalyticsSkillsIgnoresCrossSessionDuplicateIDs guards the
 // skill join: DuckDB mirrors SQLite row IDs from many machines, so
 // messages.id is not globally unique. A tool call must join only to a

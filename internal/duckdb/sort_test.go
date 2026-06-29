@@ -4,7 +4,6 @@ package duckdb
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -21,8 +20,7 @@ func syncedStoreFromWrites(t *testing.T, writes []db.SessionBatchWrite) *Store {
 	local := newLocalDB(t)
 	_, err := local.WriteSessionBatchAtomic(writes)
 	require.NoError(t, err)
-	syncer := newTestSync(t,
-		filepath.Join(t.TempDir(), "mirror.duckdb"), local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	_, err = syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
 	return NewStoreFromDB(syncer.DB())

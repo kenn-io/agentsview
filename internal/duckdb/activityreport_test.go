@@ -5,7 +5,6 @@ package duckdb
 import (
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -43,9 +42,7 @@ func activityReportStore(
 	}
 	_, err := local.WriteSessionBatchAtomic(writes)
 	require.NoError(t, err)
-	syncer := newTestSync(t,
-		filepath.Join(t.TempDir(), "daily-report.duckdb"),
-		local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	_, err = syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
 	return NewStoreFromDB(syncer.DB())
