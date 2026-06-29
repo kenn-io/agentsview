@@ -520,16 +520,12 @@ func (e *Engine) classifyPaths(
 	files := make([]parser.DiscoveredFile, 0, len(paths))
 	for _, p := range paths {
 		// Codex resolved-index events map to potentially several session
-		// sources and must classify even when the event path was deleted,
-		// so they bypass classifyOnePath. Antigravity's analogous sidecar
-		// fan-out (annotations, brain, history.jsonl) is owned by the
-		// provider-authoritative SourcesForChangedPath path below.
+		// sources and must classify even when the event path was deleted, so
+		// they are handled by classifyCodexIndexPath. All other changed paths,
+		// including Antigravity's sidecar fan-out (annotations, brain,
+		// history.jsonl), are owned by each provider-authoritative
+		// SourcesForChangedPath via classifyProviderChangedPath.
 		dfs := e.classifyCodexIndexPath(p)
-		if len(dfs) == 0 {
-			if df, ok := e.classifyOnePath(p); ok {
-				dfs = []parser.DiscoveredFile{df}
-			}
-		}
 		dfs = append(dfs, e.classifyProviderChangedPath(p)...)
 		for _, df := range dfs {
 			key := string(df.Agent) + "\x00" + df.Path
@@ -950,39 +946,6 @@ func isUnder(dir, path string) (string, bool) {
 		return "", false
 	}
 	return rel, true
-}
-
-// classifyContainerPath previously ran the container- and SQLite-style
-// classifiers that resolve a path whether or not it currently exists on disk.
-// Every such provider (OpenCode-format stores, Kiro, Zed, Shelley, Vibe) is now
-// provider-authoritative and classifies through the provider facade, so no
-// legacy classifier remains here.
-func (e *Engine) classifyContainerPath(
-	path string, pathExists bool,
-) (parser.DiscoveredFile, bool) {
-	return parser.DiscoveredFile{}, false
-}
-
-func (e *Engine) classifyOnePath(
-	path string,
-) (parser.DiscoveredFile, bool) {
-	pathExists := true
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			pathExists = false
-		}
-	}
-
-	if df, ok := e.classifyContainerPath(path, pathExists); ok {
-		return df, true
-	}
-	// All file-backed agents are provider-authoritative: changed-path
-	// classification (including Reasonix's .jsonl.meta sidecar mapping,
-	// Aider's rootless history files, Claude's project transcripts, and
-	// Antigravity's sidecar fan-out) is owned by each provider's
-	// SourcesForChangedPath via classifyProviderChangedPath, so no legacy
-	// classifier remains here.
-	return parser.DiscoveredFile{}, false
 }
 
 // shelleyDBFile is the shared Shelley conversation database basename. Zed and
@@ -2724,15 +2687,7 @@ func (e *Engine) countDBBackedProgressTotal(
 			context.Background(), agent, scope,
 		)
 	}
-	total := 0
-	for _, dir := range e.agentDirs[agent] {
-		if dir == "" || !scope.includes(dir) {
-			continue
-		}
-		switch agent {
-		}
-	}
-	return total
+	return 0
 }
 
 // countProviderDBBackedSessions counts every session a DB-backed provider
@@ -5016,8 +4971,8 @@ func copilotEffectiveMtime(eventsPath string, info os.FileInfo) int64 {
 	return m
 }
 
-// classifyReasonixPath handles Reasonix session classification,
-// extracted from classifyOnePath to stay within nilaway limits.
+// classifyReasonixPath handles Reasonix session classification as a dedicated
+// helper to stay within nilaway limits.
 func (e *Engine) classifyReasonixPath(
 	path string,
 ) (parser.DiscoveredFile, bool) {
