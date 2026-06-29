@@ -182,6 +182,82 @@ func TestMCPDaemonServiceStartsDaemonForEachOperation(t *testing.T) {
 	assert.NoFileExists(t, cfg.DBPath)
 }
 
+func TestMCPDaemonService_UsagePairwiseComparisonForwardsToDaemon(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := config.Config{
+		DataDir: dataDir,
+		DBPath:  filepath.Join(dataDir, "sessions.db"),
+	}
+
+	expected := service.UsagePairwiseComparisonResponse{
+		Left: service.UsagePairwiseComparisonSide{
+			TotalCost:    1.25,
+			TotalTokens:  150,
+			SessionCount: 2,
+		},
+		Right: service.UsagePairwiseComparisonSide{
+			TotalCost:    3.5,
+			TotalTokens:  420,
+			SessionCount: 5,
+		},
+		Deltas: service.UsagePairwiseComparisonDelta{
+			TotalCostDelta:    2.25,
+			TotalTokensDelta:  270,
+			SessionCountDelta: 3,
+		},
+	}
+
+	var starts int
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/usage/pairwise-comparison", r.URL.Path)
+		assert.Equal(t, "2024-06-01", r.URL.Query().Get("from"))
+		assert.Equal(t, "2024-06-07", r.URL.Query().Get("to"))
+		assert.Equal(t, "UTC", r.URL.Query().Get("timezone"))
+		assert.Equal(t, "gpt-4o", r.URL.Query().Get("model"))
+		assert.Equal(t, "model", r.URL.Query().Get("left_dimension"))
+		assert.Equal(t, "claude-sonnet-4-20250514", r.URL.Query().Get("left_value"))
+		assert.Equal(t, "project", r.URL.Query().Get("right_dimension"))
+		assert.Equal(t, "proj-b", r.URL.Query().Get("right_value"))
+		assert.Equal(t, "3", r.URL.Query().Get("min_user_messages"))
+		assert.Equal(t, "true", r.URL.Query().Get("include_one_shot"))
+		assert.Equal(t, "false", r.URL.Query().Get("include_automated"))
+		_ = json.NewEncoder(w).Encode(expected)
+	}))
+	t.Cleanup(ts.Close)
+
+	host, port := splitTestServerURL(t, ts.URL)
+	stubStartBackgroundServeForTransport(t, func(
+		context.Context, *config.Config, time.Duration,
+	) (*DaemonRuntime, error) {
+		starts++
+		return &DaemonRuntime{Host: host, Port: port}, nil
+	})
+
+	svc := newMCPDaemonService(cfg)
+	res, err := svc.UsagePairwiseComparison(
+		context.Background(),
+		service.UsagePairwiseComparisonRequest{
+			UsageRequest: service.UsageRequest{
+				From:            "2024-06-01",
+				To:              "2024-06-07",
+				Timezone:        "UTC",
+				MinUserMessages: 3,
+				IncludeOneShot:  true,
+				Model:           "gpt-4o",
+			},
+			LeftDimension:  "model",
+			LeftValue:      "claude-sonnet-4-20250514",
+			RightDimension: "project",
+			RightValue:     "proj-b",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Equal(t, expected, *res)
+	assert.Equal(t, 1, starts)
+	assert.NoFileExists(t, cfg.DBPath)
+}
+
 func splitTestServerURL(t *testing.T, raw string) (string, int) {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodGet, raw, nil)
