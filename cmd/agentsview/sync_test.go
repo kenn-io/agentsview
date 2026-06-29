@@ -389,6 +389,39 @@ func TestRemoteProgressPrinterWritesTimedStepLines(t *testing.T) {
 	assert.True(t, strings.HasSuffix(got, "\n"), "remote progress should finish on a newline")
 }
 
+func TestRemoteProgressPrinterRendersByteProgressInPlace(t *testing.T) {
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	var out bytes.Buffer
+	printer := newRemoteProgressPrinter(&out, clock)
+
+	printer.Print(agentsync.Progress{
+		Detail:     "Downloading session archive from devbox",
+		BytesDone:  1 << 20,
+		BytesTotal: 4 << 20,
+	})
+	now = now.Add(150 * time.Millisecond)
+	printer.Print(agentsync.Progress{
+		Detail:     "Downloading session archive from devbox",
+		BytesDone:  4 << 20,
+		BytesTotal: 4 << 20,
+	})
+	now = now.Add(850 * time.Millisecond)
+	printer.Print(agentsync.Progress{
+		Detail: "Extracting session archive from devbox",
+	})
+	printer.Finish()
+
+	got := out.String()
+	assert.Contains(t, got,
+		"\r  Downloading session archive from devbox: 1.0 MB/4.0 MB (25%)\x1b[K")
+	assert.Contains(t, got,
+		"\r  Downloading session archive from devbox: 4.0 MB/4.0 MB (100%)\x1b[K")
+	assert.Contains(t, got,
+		"\n  Downloading session archive from devbox completed in 1s\n")
+	assert.Contains(t, got, "  Extracting session archive from devbox...\n")
+}
+
 func TestRemoteProgressPrinterRendersLocalSyncProgressWithoutDetail(t *testing.T) {
 	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
 	clock := func() time.Time { return now }

@@ -842,6 +842,9 @@ func printSyncProgress(p sync.Progress) {
 func formatSyncProgress(p sync.Progress) string {
 	if p.Detail != "" {
 		detail := p.Detail
+		if p.BytesDone > 0 || p.BytesTotal > 0 {
+			detail = fmt.Sprintf("%s: %s", detail, formatByteProgress(p))
+		}
 		if p.SessionsTotal > 0 {
 			detail = fmt.Sprintf(
 				"%s: %d/%d sessions (%.0f%%) · %d messages",
@@ -862,6 +865,17 @@ func formatSyncProgress(p sync.Progress) string {
 		)
 	}
 	return ""
+}
+
+func formatByteProgress(p sync.Progress) string {
+	if p.BytesTotal > 0 {
+		return fmt.Sprintf(
+			"%s/%s (%.0f%%)",
+			formatBytes(p.BytesDone), formatBytes(p.BytesTotal),
+			float64(p.BytesDone)/float64(p.BytesTotal)*100,
+		)
+	}
+	return formatBytes(p.BytesDone)
 }
 
 func startFileWatcher(

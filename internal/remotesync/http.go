@@ -30,6 +30,9 @@ func (hs HTTPSync) Run(ctx context.Context) (SyncStats, error) {
 	if client == nil {
 		client = http.DefaultClient
 	}
+	hs.report(syncpkg.Progress{
+		Detail: fmt.Sprintf("Resolving agent directories on %s", hs.Host),
+	})
 	targets, err := hs.fetchTargets(ctx, client)
 	if err != nil {
 		return SyncStats{}, err
@@ -42,13 +45,23 @@ func (hs HTTPSync) Run(ctx context.Context) (SyncStats, error) {
 		return SyncStats{}, err
 	}
 	defer os.RemoveAll(tmpDir)
-	return Importer{
+	stats, err := Importer{
 		Host:                    hs.Host,
 		Full:                    hs.Full,
 		DB:                      hs.DB,
 		BlockedResultCategories: hs.BlockedResultCategories,
 		Progress:                hs.Progress,
 	}.ImportExtracted(ctx, targets, tmpDir)
+	if err != nil {
+		return SyncStats{}, err
+	}
+	hs.report(syncpkg.Progress{
+		Detail: fmt.Sprintf(
+			"Synced %d sessions from %s (%d unchanged)",
+			stats.SessionsSynced, hs.Host, stats.Skipped,
+		),
+	})
+	return stats, nil
 }
 
 func (hs HTTPSync) fetchTargets(
@@ -106,11 +119,88 @@ func (hs HTTPSync) downloadAndExtract(
 	if err != nil {
 		return "", fmt.Errorf("create temp dir: %w", err)
 	}
-	if _, err := ExtractTarStream(ctx, resp.Body, tmpDir); err != nil {
+	archivePath := tmpDir + "/remote-sync.tar"
+	archive, err := os.Create(archivePath)
+	if err != nil {
+		os.RemoveAll(tmpDir)
+		return "", fmt.Errorf("create archive temp file: %w", err)
+	}
+	downloadLabel := fmt.Sprintf("Downloading session archive from %s", hs.Host)
+	hs.report(syncpkg.Progress{
+		Detail:     downloadLabel,
+		BytesTotal: positiveContentLength(resp.ContentLength),
+	})
+	reader := &progressReader{
+		r:     resp.Body,
+		total: positiveContentLength(resp.ContentLength),
+		report: func(done, total int64) {
+			hs.report(syncpkg.Progress{
+				Detail:     downloadLabel,
+				BytesDone:  done,
+				BytesTotal: total,
+			})
+		},
+	}
+	if _, err := io.Copy(archive, reader); err != nil {
+		_ = archive.Close()
+		os.RemoveAll(tmpDir)
+		return "", fmt.Errorf("download archive: %w", err)
+	}
+	if err := archive.Close(); err != nil {
+		os.RemoveAll(tmpDir)
+		return "", fmt.Errorf("close archive temp file: %w", err)
+	}
+	hs.report(syncpkg.Progress{
+		Detail: fmt.Sprintf("Extracting session archive from %s", hs.Host),
+	})
+	archive, err = os.Open(archivePath)
+	if err != nil {
+		os.RemoveAll(tmpDir)
+		return "", fmt.Errorf("open archive temp file: %w", err)
+	}
+	if _, err := ExtractTarStream(ctx, archive, tmpDir); err != nil {
+		_ = archive.Close()
 		os.RemoveAll(tmpDir)
 		return "", fmt.Errorf("extract tar: %w", err)
 	}
+	if err := archive.Close(); err != nil {
+		os.RemoveAll(tmpDir)
+		return "", fmt.Errorf("close archive temp file: %w", err)
+	}
+	if err := os.Remove(archivePath); err != nil {
+		os.RemoveAll(tmpDir)
+		return "", fmt.Errorf("remove archive temp file: %w", err)
+	}
 	return tmpDir, nil
+}
+
+func (hs HTTPSync) report(progress syncpkg.Progress) {
+	if hs.Progress != nil {
+		hs.Progress(progress)
+	}
+}
+
+func positiveContentLength(n int64) int64 {
+	if n > 0 {
+		return n
+	}
+	return 0
+}
+
+type progressReader struct {
+	r      io.Reader
+	done   int64
+	total  int64
+	report func(done, total int64)
+}
+
+func (r *progressReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	if n > 0 {
+		r.done += int64(n)
+		r.report(r.done, r.total)
+	}
+	return n, err
 }
 
 func (hs HTTPSync) endpoint(path string) string {

@@ -218,6 +218,16 @@ func (p *remoteProgressPrinter) Print(progress sync.Progress) {
 		fmt.Fprintf(p.w, "  %s\n", label)
 		return
 	}
+	if progress.BytesDone > 0 || progress.BytesTotal > 0 {
+		if p.label != label {
+			p.finishCurrent()
+			p.label = label
+			p.started = p.now()
+		}
+		p.inPlace = true
+		fmt.Fprintf(p.w, "\r  %s\x1b[K", formatSyncProgress(progress))
+		return
+	}
 	if progress.Phase == sync.PhaseSyncing && progress.SessionsTotal > 0 {
 		if p.label != label {
 			p.finishCurrent()

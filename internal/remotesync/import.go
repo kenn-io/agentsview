@@ -68,7 +68,7 @@ func (im Importer) ImportExtracted(
 		engine.InjectSkipCache(translated)
 	}
 
-	engineStats := engine.SyncAll(ctx, im.Progress)
+	engineStats := engine.SyncAll(ctx, im.hostProgress)
 	if err := im.saveSkipCache(engine, remoteDirs, tempDirs); err != nil {
 		return stats, err
 	}
@@ -77,6 +77,21 @@ func (im Importer) ImportExtracted(
 	stats.Skipped = engineStats.Skipped
 	stats.Failed = engineStats.Failed
 	return stats, nil
+}
+
+func (im Importer) hostProgress(p syncpkg.Progress) {
+	if im.Progress == nil {
+		return
+	}
+	switch {
+	case p.Phase == syncpkg.PhaseDiscovering:
+		p.Detail = fmt.Sprintf("Discovering sessions from %s", im.Host)
+	case p.Phase == syncpkg.PhaseSyncing && p.SessionsTotal > 0:
+		p.Detail = fmt.Sprintf("Processing sessions from %s", im.Host)
+	case p.Phase == syncpkg.PhaseDone && p.SessionsTotal > 0:
+		p.Detail = fmt.Sprintf("Processing sessions from %s", im.Host)
+	}
+	im.Progress(p)
 }
 
 func translateRemoteCacheToTemp(

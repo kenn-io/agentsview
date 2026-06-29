@@ -30,6 +30,8 @@ type Progress struct {
 	SessionsTotal   int    `json:"sessions_total"`
 	SessionsDone    int    `json:"sessions_done"`
 	MessagesIndexed int    `json:"messages_indexed"`
+	BytesDone       int64  `json:"bytes_done,omitempty"`
+	BytesTotal      int64  `json:"bytes_total,omitempty"`
 }
 
 // SyncResult describes the outcome of syncing a single session.
