@@ -33,22 +33,22 @@ exit 1
 EOF
 chmod +x "$fakebin/go"
 
-recipe="$(
-    PATH="$fakebin:$PATH" HOME="$home" make -C "$REPO_ROOT" -n install |
+render_install_recipe() {
+    PATH="$fakebin:$PATH" HOME="$1" make -C "$REPO_ROOT" -n install |
         sed -n '/^if \[ -d /,$p'
-)"
+}
+
+recipe="$(render_install_recipe "$home")"
 
 [ -n "$recipe" ] || fail "could not extract install recipe"
-
-cp() {
-    printf 'partial binary\n' > "$2"
-    return 1
-}
-export -f cp
 
 set +e
 (
     cd "$work" || exit 1
+    cp() {
+        printf 'partial binary\n' > "$2"
+        return 1
+    }
     eval "$recipe"
 )
 status=$?
@@ -64,3 +64,32 @@ leftovers="$(find "$install_dir" -maxdepth 1 -type f -name 'agentsview.*' -print
 [ -z "$leftovers" ] || fail "temporary install files were not cleaned up: $leftovers"
 
 echo "PASS: install recipe keeps existing binary when copy fails"
+
+success_home="$tmpdir/success-home"
+success_work="$tmpdir/success-work"
+success_install_dir="$success_home/.local/bin"
+mkdir -p "$success_install_dir" "$success_work"
+printf 'old binary\n' > "$success_install_dir/agentsview"
+printf 'new binary\n' > "$success_work/agentsview"
+chmod 755 "$success_work/agentsview"
+
+success_recipe="$(render_install_recipe "$success_home")"
+[ -n "$success_recipe" ] || fail "could not extract success install recipe"
+
+(
+    cd "$success_work" || exit 1
+    eval "$success_recipe"
+)
+
+success_installed="$(cat "$success_install_dir/agentsview")"
+[ "$success_installed" = "new binary" ] ||
+    fail "successful install wrote unexpected content: $success_installed"
+
+[ -x "$success_install_dir/agentsview" ] ||
+    fail "successful install did not leave agentsview executable"
+
+success_leftovers="$(find "$success_install_dir" -maxdepth 1 -type f -name 'agentsview.*' -print)"
+[ -z "$success_leftovers" ] ||
+    fail "successful install left temporary files: $success_leftovers"
+
+echo "PASS: install recipe keeps installed binary executable"

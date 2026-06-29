@@ -65,7 +65,7 @@ install: build-release
 	tmp="$$(mktemp "$$INSTALL_DIR/agentsview.tmp.XXXXXX")" || exit $$?; \
 	cleanup() { rm -f "$$tmp"; }; \
 	trap cleanup EXIT HUP INT TERM; \
-	cp agentsview "$$tmp" && mv -f "$$tmp" "$$INSTALL_DIR/agentsview"; \
+	cp agentsview "$$tmp" && chmod 755 "$$tmp" && mv -f "$$tmp" "$$INSTALL_DIR/agentsview"; \
 	status=$$?; \
 	trap - EXIT HUP INT TERM; \
 	cleanup; \
