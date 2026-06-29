@@ -199,7 +199,7 @@ func TestParseClaudeAIExport_AttachmentContent(t *testing.T) {
 	}]`
 
 	var results []ParseResult
-	err := ParseClaudeAIExport(
+	err := parseClaudeAIExport(
 		strings.NewReader(input),
 		func(r ParseResult) error {
 			results = append(results, r)
@@ -257,7 +257,7 @@ func TestParseClaudeAIExport_AttachmentFallbackPaths(t *testing.T) {
 	}]`
 
 	var results []ParseResult
-	err := ParseClaudeAIExport(
+	err := parseClaudeAIExport(
 		strings.NewReader(input),
 		func(r ParseResult) error {
 			results = append(results, r)
@@ -321,7 +321,7 @@ func TestParseClaudeAIExport_IgnoredAttachments(t *testing.T) {
 	}]`
 
 	var results []ParseResult
-	err := ParseClaudeAIExport(
+	err := parseClaudeAIExport(
 		strings.NewReader(input),
 		func(r ParseResult) error {
 			results = append(results, r)
@@ -360,7 +360,7 @@ func TestParseClaudeAIExport_TextFallbackPreservesWhitespace(t *testing.T) {
 	}]`
 
 	var results []ParseResult
-	err := ParseClaudeAIExport(
+	err := parseClaudeAIExport(
 		strings.NewReader(input),
 		func(r ParseResult) error {
 			results = append(results, r)
