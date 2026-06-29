@@ -97,95 +97,76 @@ func (f *failFirstWriteRecorder) Flush() {
 }
 
 func TestListInsights(t *testing.T) {
-	tests := []struct {
-		name       string
-		seed       func(t *testing.T, te *testEnv)
-		path       string
-		wantStatus int
-		wantCount  int
-		wantBody   string
-	}{
-		{
-			name:       "Empty",
-			seed:       func(t *testing.T, te *testEnv) {},
-			path:       "/api/v1/insights",
-			wantStatus: http.StatusOK,
-			wantCount:  0,
-		},
-		{
-			name: "WithData",
-			seed: func(t *testing.T, te *testEnv) {
-				te.seedInsight(t, "daily_activity", "2025-01-15", new("my-app"))
-				te.seedInsight(t, "daily_activity", "2025-01-15", new("other-app"))
-				te.seedInsight(t, "agent_analysis", "2025-01-15", nil)
-			},
-			path:       "/api/v1/insights",
-			wantStatus: http.StatusOK,
-			wantCount:  3,
-		},
-		{
-			name: "TypeFilter",
-			seed: func(t *testing.T, te *testEnv) {
-				te.seedInsight(t, "daily_activity", "2025-01-15", new("my-app"))
-				te.seedInsight(t, "agent_analysis", "2025-01-15", nil)
-			},
-			path:       "/api/v1/insights?type=daily_activity",
-			wantStatus: http.StatusOK,
-			wantCount:  1,
-		},
-		{
-			name: "ReturnsAll",
-			seed: func(t *testing.T, te *testEnv) {
-				te.seedInsight(t, "daily_activity", "2025-01-15", new("my-app"))
-				te.seedInsight(t, "daily_activity", "2025-01-16", new("my-app"))
-			},
-			path:       "/api/v1/insights",
-			wantStatus: http.StatusOK,
-			wantCount:  2,
-		},
-		{
-			name:       "InvalidType",
-			seed:       func(t *testing.T, te *testEnv) {},
-			path:       "/api/v1/insights?type=invalid",
-			wantStatus: http.StatusBadRequest,
-			wantBody:   "invalid type",
-		},
-		{
-			name:       "ReversedDateRange",
-			seed:       func(t *testing.T, te *testEnv) {},
-			path:       "/api/v1/insights?date_from=2026-06-17&date_to=2026-06-16",
-			wantStatus: http.StatusBadRequest,
-			wantBody:   "date_from must not be after date_to",
-		},
-		{
-			// A non-date value is rejected with 400 before the handler runs
-			// (huma's format:"date" query validation), so only the status is
-			// asserted; the body message is owned by the framework.
-			name:       "InvalidDateFrom",
-			seed:       func(t *testing.T, te *testEnv) {},
-			path:       "/api/v1/insights?date_from=not-a-date",
-			wantStatus: http.StatusBadRequest,
-		},
+	assertList := func(
+		t *testing.T,
+		te *testEnv,
+		path string,
+		wantStatus int,
+		wantCount int,
+		wantBody string,
+	) {
+		t.Helper()
+		w := te.get(t, path)
+		assertStatus(t, w, wantStatus)
+
+		if wantBody != "" {
+			assertBodyContains(t, w, wantBody)
+		}
+
+		if wantStatus == http.StatusOK {
+			r := decode[listInsightsResponse](t, w)
+			require.Len(t, r.Insights, wantCount)
+		}
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			te := setup(t)
-			tt.seed(t, te)
+	t.Run("Empty", func(t *testing.T) {
+		te := setup(t)
+		assertList(t, te, "/api/v1/insights", http.StatusOK, 0, "")
+	})
 
-			w := te.get(t, tt.path)
-			assertStatus(t, w, tt.wantStatus)
+	t.Run("FiltersAndInvalidRequests", func(t *testing.T) {
+		te := setup(t)
+		te.seedInsight(t, "daily_activity", "2025-01-15", new("my-app"))
+		te.seedInsight(t, "agent_analysis", "2025-01-15", nil)
 
-			if tt.wantBody != "" {
-				assertBodyContains(t, w, tt.wantBody)
-			}
-
-			if tt.wantStatus == http.StatusOK {
-				r := decode[listInsightsResponse](t, w)
-				require.Len(t, r.Insights, tt.wantCount)
-			}
+		t.Run("TypeFilter", func(t *testing.T) {
+			assertList(t, te, "/api/v1/insights?type=daily_activity",
+				http.StatusOK, 1, "")
 		})
-	}
+
+		te.seedInsight(t, "daily_activity", "2025-01-15", new("other-app"))
+		t.Run("WithData", func(t *testing.T) {
+			assertList(t, te, "/api/v1/insights", http.StatusOK, 3, "")
+		})
+
+		t.Run("InvalidType", func(t *testing.T) {
+			assertList(t, te, "/api/v1/insights?type=invalid",
+				http.StatusBadRequest, 0, "invalid type")
+		})
+
+		t.Run("ReversedDateRange", func(t *testing.T) {
+			assertList(t, te,
+				"/api/v1/insights?date_from=2026-06-17&date_to=2026-06-16",
+				http.StatusBadRequest, 0,
+				"date_from must not be after date_to")
+		})
+
+		t.Run("InvalidDateFrom", func(t *testing.T) {
+			// A non-date value is rejected with 400 before the handler
+			// runs (huma's format:"date" query validation), so only the
+			// status is asserted; the body message is owned by the
+			// framework.
+			assertList(t, te, "/api/v1/insights?date_from=not-a-date",
+				http.StatusBadRequest, 0, "")
+		})
+	})
+
+	t.Run("ReturnsAll", func(t *testing.T) {
+		te := setup(t)
+		te.seedInsight(t, "daily_activity", "2025-01-15", new("my-app"))
+		te.seedInsight(t, "daily_activity", "2025-01-16", new("my-app"))
+		assertList(t, te, "/api/v1/insights", http.StatusOK, 2, "")
+	})
 }
 
 func TestGetInsight_Found(t *testing.T) {
@@ -340,6 +321,8 @@ func TestInsightPublish(t *testing.T) {
 }
 
 func TestGenerateInsight_Validation(t *testing.T) {
+	te := setup(t)
+
 	tests := []struct {
 		name     string
 		payload  string
@@ -356,7 +339,6 @@ func TestGenerateInsight_Validation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			te := setup(t)
 			w := te.post(t, "/api/v1/insights/generate", tt.payload)
 
 			assertStatus(t, w, http.StatusBadRequest)

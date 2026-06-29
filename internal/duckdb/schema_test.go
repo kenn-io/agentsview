@@ -270,8 +270,11 @@ func TestEnsureSchemaCreatesToolCallsFilePathIndex(t *testing.T) {
 
 func openTestDuckDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := Open(filepath.Join(t.TempDir(), "agentsview.duckdb"))
-	require.NoError(t, err, "Open")
+	db, err := openDuckDB("")
+	require.NoError(t, err, "open in-memory DuckDB")
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	require.NoError(t, configureDuckDBThreads(db))
 	t.Cleanup(func() {
 		require.NoError(t, db.Close(), "close DuckDB")
 	})

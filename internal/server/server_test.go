@@ -3968,9 +3968,26 @@ func parseSSEDoneStats(
 
 func TestListSessions_Limits(t *testing.T) {
 	te := setup(t)
-	for i := range db.MaxSessionLimit + 5 {
-		te.seedSession(t, fmt.Sprintf("s%d", i), "my-app", 1)
+	totalSessions := db.MaxSessionLimit + 5
+	writes := make([]db.SessionBatchWrite, 0, totalSessions)
+	for i := range totalSessions {
+		writes = append(writes, db.SessionBatchWrite{
+			Session: db.Session{
+				ID:               fmt.Sprintf("s%d", i),
+				Project:          "my-app",
+				Machine:          "test",
+				Agent:            "claude",
+				MessageCount:     1,
+				UserMessageCount: 2,
+				StartedAt:        new(tsSeed),
+				EndedAt:          new(tsSeedEnd),
+				FirstMessage:     new("Hello world"),
+			},
+		})
 	}
+	result, err := te.db.WriteSessionBatchAtomic(writes)
+	require.NoError(t, err)
+	require.Equal(t, totalSessions, result.WrittenSessions)
 
 	tests := []struct {
 		name      string
