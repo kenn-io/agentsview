@@ -8,6 +8,7 @@ use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::mpsc::{sync_channel, Receiver as StdReceiver, SyncSender, TrySendError};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -33,6 +34,7 @@ const LOGIN_SHELL_ENV_TIMEOUT: Duration = Duration::from_secs(3);
 const UPDATE_SIDECAR_STOP_TIMEOUT: Duration = Duration::from_secs(10);
 const DATA_VERSION_TOO_NEW_EXIT_CODE: i32 = 3;
 const DESKTOP_LOG_FILE_NAME: &str = "agentsview-desktop.log";
+const DESKTOP_LOG_QUEUE_CAPACITY: usize = 64;
 const OPEN_LOGS_FOLDER_MENU_ID: &str = "open_logs_folder";
 // Delay after navigating to the backend before probing whether the
 // Linux WebKitGTK web content process is actually alive. Gives the
@@ -60,6 +62,28 @@ struct SidecarState {
 struct SidecarProcess {
     child: CommandChild,
     generation: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SidecarLogRecord {
+    label: &'static str,
+    record: String,
+}
+
+impl SidecarLogRecord {
+    fn new(label: &'static str, record: impl Into<String>) -> Self {
+        Self {
+            label,
+            record: record.into(),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct SidecarStdoutUpdate {
+    chunk: String,
+    status: Option<String>,
+    port: Option<u16>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -936,7 +960,7 @@ fn wait_for_sidecar_termination(state: &SidecarState, generation: u64, timeout: 
 fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u64) {
     let startup_handled = Arc::new(AtomicBool::new(false));
     let first_output = Arc::new(AtomicBool::new(false));
-    let log_handle = window.app_handle().clone();
+    let log_sender = spawn_sidecar_log_writer(window.app_handle().clone());
     let timeout_window = window.clone();
     let timeout_state = startup_handled.clone();
     thread::spawn(move || {
@@ -950,11 +974,14 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u6
     tauri::async_runtime::spawn(async move {
         let mut stdout_buffer = String::new();
         while let Some(event) = rx.recv().await {
-            append_sidecar_event_record(&log_handle, &event);
             match event {
                 CommandEvent::Stdout(chunk_bytes) => {
-                    let chunk = String::from_utf8_lossy(&chunk_bytes);
-                    eprintln!("[agentsview] {}", chunk.trim_end());
+                    let stdout_update = prepare_sidecar_stdout_update(
+                        &log_sender,
+                        &mut stdout_buffer,
+                        &chunk_bytes,
+                    );
+                    eprintln!("[agentsview] {}", stdout_update.chunk.trim_end());
                     if !startup_handled.load(Ordering::SeqCst) {
                         if !first_output.swap(true, Ordering::SeqCst) {
                             let _ = window.eval(
@@ -962,15 +989,12 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u6
                                  window.__setStatus('Starting database and syncing sessions...');",
                             );
                         }
-                        if let Some(status) = extract_startup_status(chunk.as_ref()) {
+                        if let Some(status) = stdout_update.status {
                             let escaped = status.replace('\\', "\\\\").replace('\'', "\\'");
                             let _ =
                                 window.eval(format!("window.__setStatus('{escaped}');").as_str());
                         }
-                        if let Some(port) = parse_listening_port_from_stdout_buffer(
-                            &mut stdout_buffer,
-                            chunk.as_ref(),
-                        ) {
+                        if let Some(port) = stdout_update.port {
                             save_sidecar_port(window.app_handle(), port);
                             startup_handled.store(true, Ordering::SeqCst);
                             let _ = window.eval(
@@ -982,10 +1006,18 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u6
                     }
                 }
                 CommandEvent::Stderr(line_bytes) => {
+                    queue_sidecar_event_log_record(
+                        &log_sender,
+                        &CommandEvent::Stderr(line_bytes.clone()),
+                    );
                     let line = String::from_utf8_lossy(&line_bytes);
                     eprintln!("[agentsview:stderr] {}", line.trim_end());
                 }
                 CommandEvent::Terminated(payload) => {
+                    queue_sidecar_event_log_record(
+                        &log_sender,
+                        &CommandEvent::Terminated(payload.clone()),
+                    );
                     eprintln!(
                         "[agentsview] sidecar terminated (code: {:?}, signal: {:?})",
                         payload.code, payload.signal
@@ -1020,6 +1052,7 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u6
                     break;
                 }
                 CommandEvent::Error(err) => {
+                    queue_sidecar_event_log_record(&log_sender, &CommandEvent::Error(err.clone()));
                     eprintln!("[agentsview:error] {err}");
                 }
                 _ => {}
@@ -1501,19 +1534,93 @@ fn ensure_desktop_log_dir(handle: &AppHandle) -> io::Result<PathBuf> {
     Ok(log_dir)
 }
 
-fn append_sidecar_event_record(handle: &AppHandle, event: &CommandEvent) {
-    let path = match desktop_log_file_path(handle) {
-        Ok(path) => path,
-        Err(err) => {
-            eprintln!("[agentsview] failed to resolve sidecar event log path: {err}");
-            return;
+fn spawn_sidecar_log_writer(handle: AppHandle) -> SyncSender<SidecarLogRecord> {
+    let (log_sender, log_receiver) = sync_channel(DESKTOP_LOG_QUEUE_CAPACITY);
+    thread::spawn(move || drain_sidecar_log_records(handle, log_receiver));
+    log_sender
+}
+
+fn drain_sidecar_log_records(handle: AppHandle, log_receiver: StdReceiver<SidecarLogRecord>) {
+    while let Ok(record) = log_receiver.recv() {
+        let path = match desktop_log_file_path(&handle) {
+            Ok(path) => path,
+            Err(err) => {
+                eprintln!("[agentsview] failed to resolve sidecar event log path: {err}");
+                continue;
+            }
+        };
+        if let Err(err) =
+            append_sidecar_log_record_at_path(&path, record.label, record.record.as_str())
+        {
+            eprintln!("[agentsview] failed to append sidecar event log: {err}");
         }
-    };
-    if let Err(err) = append_sidecar_event_record_at_path(&path, event) {
-        eprintln!("[agentsview] failed to append sidecar event log: {err}");
     }
 }
 
+fn prepare_sidecar_stdout_update(
+    log_sender: &SyncSender<SidecarLogRecord>,
+    stdout_buffer: &mut String,
+    chunk_bytes: &[u8],
+) -> SidecarStdoutUpdate {
+    let chunk = String::from_utf8_lossy(chunk_bytes).into_owned();
+    try_send_sidecar_log_record(log_sender, SidecarLogRecord::new("stdout", chunk.clone()));
+    SidecarStdoutUpdate {
+        status: extract_startup_status(chunk.as_ref()),
+        port: parse_listening_port_from_stdout_buffer(stdout_buffer, chunk.as_ref()),
+        chunk,
+    }
+}
+
+fn queue_sidecar_event_log_record(log_sender: &SyncSender<SidecarLogRecord>, event: &CommandEvent) {
+    if let Some(record) = sidecar_log_record_from_event(event) {
+        try_send_sidecar_log_record(log_sender, record);
+    }
+}
+
+fn sidecar_log_record_from_event(event: &CommandEvent) -> Option<SidecarLogRecord> {
+    match event {
+        CommandEvent::Stdout(_) => None,
+        CommandEvent::Stderr(line_bytes) => Some(SidecarLogRecord::new(
+            "stderr",
+            String::from_utf8_lossy(line_bytes).into_owned(),
+        )),
+        CommandEvent::Terminated(payload) => Some(SidecarLogRecord::new(
+            "terminated",
+            format!(
+                "sidecar terminated (code: {:?}, signal: {:?})",
+                payload.code, payload.signal
+            ),
+        )),
+        CommandEvent::Error(err) => Some(SidecarLogRecord::new(
+            "error",
+            format!("sidecar command error: {err}"),
+        )),
+        _ => None,
+    }
+}
+
+fn try_send_sidecar_log_record(
+    log_sender: &SyncSender<SidecarLogRecord>,
+    record: SidecarLogRecord,
+) {
+    match log_sender.try_send(record) {
+        Ok(()) => {}
+        Err(TrySendError::Full(record)) => {
+            eprintln!(
+                "[agentsview] dropping sidecar {} log because the log queue is full",
+                record.label
+            );
+        }
+        Err(TrySendError::Disconnected(record)) => {
+            eprintln!(
+                "[agentsview] dropping sidecar {} log because the log worker is unavailable",
+                record.label
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 fn append_sidecar_event_record_at_path(path: &Path, event: &CommandEvent) -> io::Result<()> {
     match event {
         CommandEvent::Stdout(chunk_bytes) => append_sidecar_log_record_at_path(
@@ -2423,6 +2530,47 @@ mod tests {
     }
 
     #[test]
+    fn prepare_sidecar_stdout_update_enqueues_log_and_keeps_port_detection() {
+        let (log_sender, log_receiver) = sync_channel(1);
+        let mut stdout_buffer = String::new();
+
+        let stdout_update = prepare_sidecar_stdout_update(
+            &log_sender,
+            &mut stdout_buffer,
+            b"agentsview dev listening at http://127.0.0.1:18080 (started in 1.2s)\n",
+        );
+
+        assert_eq!(stdout_update.port, Some(18080));
+        let logged = log_receiver.try_recv().expect("stdout record");
+        assert_eq!(logged.label, "stdout");
+        assert!(logged
+            .record
+            .contains("agentsview dev listening at http://127.0.0.1:18080"));
+    }
+
+    #[test]
+    fn prepare_sidecar_stdout_update_keeps_parsing_when_log_queue_is_full() {
+        let (log_sender, log_receiver) = sync_channel(1);
+        log_sender
+            .send(SidecarLogRecord::new("stdout", "already queued"))
+            .expect("fill queue");
+        let mut stdout_buffer = String::new();
+
+        let stdout_update = prepare_sidecar_stdout_update(
+            &log_sender,
+            &mut stdout_buffer,
+            b"Running initial sync...\n",
+        );
+
+        assert_eq!(
+            stdout_update.status,
+            Some("Running initial sync...".to_string())
+        );
+        let retained = log_receiver.try_recv().expect("queued record");
+        assert_eq!(retained.record, "already queued");
+    }
+
+    #[test]
     fn forward_sidecar_logs_stdout_path_keeps_status_and_port_parsing() {
         let source = include_str!("lib.rs");
         let stdout_arm = source
@@ -2435,8 +2583,9 @@ mod tests {
             })
             .expect("stdout arm");
 
-        assert!(stdout_arm.contains("extract_startup_status(chunk.as_ref())"));
-        assert!(stdout_arm.contains("parse_listening_port_from_stdout_buffer"));
+        assert!(stdout_arm.contains("prepare_sidecar_stdout_update("));
+        assert!(stdout_arm.contains("stdout_update.status"));
+        assert!(stdout_arm.contains("stdout_update.port"));
         assert!(stdout_arm.contains("window.__setStage(2)"));
     }
 
