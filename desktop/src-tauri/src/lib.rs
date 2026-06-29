@@ -5,6 +5,8 @@ use std::fs;
 use std::io;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -1531,6 +1533,7 @@ fn ensure_desktop_log_dir(handle: &AppHandle) -> io::Result<PathBuf> {
         .app_log_dir()
         .map_err(|err| io::Error::other(err.to_string()))?;
     fs::create_dir_all(&log_dir)?;
+    tighten_desktop_log_dir_permissions(&log_dir)?;
     Ok(log_dir)
 }
 
@@ -1563,12 +1566,62 @@ fn prepare_sidecar_stdout_update(
     chunk_bytes: &[u8],
 ) -> SidecarStdoutUpdate {
     let chunk = String::from_utf8_lossy(chunk_bytes).into_owned();
-    try_send_sidecar_log_record(log_sender, SidecarLogRecord::new("stdout", chunk.clone()));
+    let redacted_chunk = redact_sidecar_stdout_for_log(chunk.as_str());
+    if !redacted_chunk.trim().is_empty() {
+        try_send_sidecar_log_record(log_sender, SidecarLogRecord::new("stdout", redacted_chunk));
+    }
     SidecarStdoutUpdate {
         status: extract_startup_status(chunk.as_ref()),
         port: parse_listening_port_from_stdout_buffer(stdout_buffer, chunk.as_ref()),
         chunk,
     }
+}
+
+fn redact_sidecar_stdout_for_log(chunk: &str) -> String {
+    chunk
+        .lines()
+        .map(redact_sidecar_log_line)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn redact_sidecar_log_line(line: &str) -> String {
+    let mut redacted = line.to_string();
+    for prefix in [
+        "Authorization: Bearer ",
+        "authorization: Bearer ",
+        "Bearer ",
+        "bearer ",
+        "--auth-token=",
+        "--auth-token ",
+        "auth_token=",
+        "token=",
+    ] {
+        redacted = redact_value_after_prefix(redacted, prefix);
+    }
+    redacted
+}
+
+fn redact_value_after_prefix(mut text: String, prefix: &str) -> String {
+    let mut search_from = 0;
+    while let Some(relative_start) = text[search_from..].find(prefix) {
+        let value_start = search_from + relative_start + prefix.len();
+        let value_end = value_start
+            + text[value_start..]
+                .find(is_sensitive_value_terminator)
+                .unwrap_or_else(|| text.len() - value_start);
+        if value_end > value_start {
+            text.replace_range(value_start..value_end, "<redacted>");
+            search_from = value_start + "<redacted>".len();
+        } else {
+            search_from = value_start;
+        }
+    }
+    text
+}
+
+fn is_sensitive_value_terminator(ch: char) -> bool {
+    ch.is_whitespace() || matches!(ch, '"' | '\'' | ',' | '&' | ')' | ']' | '}')
 }
 
 fn queue_sidecar_event_log_record(log_sender: &SyncSender<SidecarLogRecord>, event: &CommandEvent) {
@@ -1654,12 +1707,34 @@ fn append_sidecar_event_record_at_path(path: &Path, event: &CommandEvent) -> io:
 fn append_sidecar_log_record_at_path(path: &Path, label: &str, record: &str) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
+        tighten_desktop_log_dir_permissions(parent)?;
     }
     let mut file = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)?;
+    tighten_desktop_log_file_permissions(&file)?;
     write_labeled_log_record(&mut file, label, record)
+}
+
+#[cfg(unix)]
+fn tighten_desktop_log_dir_permissions(path: &Path) -> io::Result<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+}
+
+#[cfg(not(unix))]
+fn tighten_desktop_log_dir_permissions(_path: &Path) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn tighten_desktop_log_file_permissions(file: &fs::File) -> io::Result<()> {
+    file.set_permissions(fs::Permissions::from_mode(0o600))
+}
+
+#[cfg(not(unix))]
+fn tighten_desktop_log_file_permissions(_file: &fs::File) -> io::Result<()> {
+    Ok(())
 }
 
 fn write_labeled_log_record(file: &mut fs::File, label: &str, record: &str) -> io::Result<()> {
@@ -2465,6 +2540,30 @@ mod tests {
         assert!(logged.contains("[stderr] fatal line"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn append_sidecar_log_record_tightens_log_permissions() {
+        let tempdir = tempdir().expect("tempdir");
+        let log_path = tempdir.path().join("logs").join(DESKTOP_LOG_FILE_NAME);
+
+        append_sidecar_log_record_at_path(&log_path, "stdout", "booting\n")
+            .expect("stdout log write");
+
+        let log_dir_mode = fs::metadata(log_path.parent().expect("log dir"))
+            .expect("read log dir metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        let log_file_mode = fs::metadata(&log_path)
+            .expect("read log file metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+
+        assert_eq!(log_dir_mode, 0o700);
+        assert_eq!(log_file_mode, 0o600);
+    }
+
     #[test]
     fn append_sidecar_log_record_returns_error_when_log_dir_is_not_directory() {
         let tempdir = tempdir().expect("tempdir");
@@ -2546,6 +2645,25 @@ mod tests {
         assert!(logged
             .record
             .contains("agentsview dev listening at http://127.0.0.1:18080"));
+    }
+
+    #[test]
+    fn prepare_sidecar_stdout_update_redacts_token_bearing_lines() {
+        let (log_sender, log_receiver) = sync_channel(1);
+        let mut stdout_buffer = String::new();
+
+        prepare_sidecar_stdout_update(
+            &log_sender,
+            &mut stdout_buffer,
+            b"Authorization: Bearer secret-token\n--auth-token=another-secret\n",
+        );
+
+        let logged = log_receiver.try_recv().expect("stdout record");
+        assert_eq!(logged.label, "stdout");
+        assert!(logged.record.contains("Authorization: Bearer <redacted>"));
+        assert!(logged.record.contains("--auth-token=<redacted>"));
+        assert!(!logged.record.contains("secret-token"));
+        assert!(!logged.record.contains("another-secret"));
     }
 
     #[test]
