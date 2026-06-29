@@ -52,9 +52,10 @@ func TestPrepareForegroundServeDaemonAutoReplacesOlderDaemon(t *testing.T) {
 	})
 
 	out := captureStdout(t, func() {
-		cont, err := prepareForegroundServeDaemon(
+		cont, release, err := prepareForegroundServeDaemon(
 			&config.Config{DataDir: dir}, serveReplacementOptions{},
 		)
+		t.Cleanup(release)
 		require.NoError(t, err)
 		assert.True(t, cont)
 	})
@@ -87,7 +88,10 @@ func TestPrepareForegroundServeDaemonPreservesNoSyncWhenReplacingOlderDaemon(
 	})
 
 	cfg := config.Config{DataDir: dir}
-	cont, err := prepareForegroundServeDaemon(&cfg, serveReplacementOptions{})
+	cont, release, err := prepareForegroundServeDaemon(
+		&cfg, serveReplacementOptions{},
+	)
+	t.Cleanup(release)
 
 	require.NoError(t, err)
 	assert.True(t, cont)
@@ -117,10 +121,11 @@ func TestPrepareForegroundServeDaemonExplicitNoSyncOverridesRuntime(
 	})
 
 	cfg := config.Config{DataDir: dir, NoSync: false}
-	cont, err := prepareForegroundServeDaemon(
+	cont, release, err := prepareForegroundServeDaemon(
 		&cfg,
 		serveReplacementOptions{NoSyncExplicit: true},
 	)
+	t.Cleanup(release)
 
 	require.NoError(t, err)
 	assert.True(t, cont)
@@ -144,9 +149,10 @@ func TestPrepareForegroundServeDaemonMarksStartingBeforeStopping(t *testing.T) {
 		return nil
 	})
 
-	cont, err := prepareForegroundServeDaemon(
+	cont, release, err := prepareForegroundServeDaemon(
 		&config.Config{DataDir: dir}, serveReplacementOptions{},
 	)
+	t.Cleanup(release)
 	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 
 	require.NoError(t, err)
@@ -171,9 +177,10 @@ func TestPrepareForegroundServeDaemonRefusesReplacementWhenStartLockHeld(
 	forbidStopDaemonRuntimeForUpgrade(t,
 		"foreground replacement must not stop without owning start lock")
 
-	cont, err := prepareForegroundServeDaemon(
+	cont, release, err := prepareForegroundServeDaemon(
 		&config.Config{DataDir: dir}, serveReplacementOptions{},
 	)
+	t.Cleanup(release)
 
 	assert.False(t, cont)
 	require.Error(t, err)
@@ -197,9 +204,10 @@ func TestPrepareForegroundServeDaemonRefusesReplacementWhenBackgroundLaunchHeld(
 	forbidStopDaemonRuntimeForUpgrade(t,
 		"foreground replacement must not stop during background launch")
 
-	cont, err := prepareForegroundServeDaemon(
+	cont, release, err := prepareForegroundServeDaemon(
 		&config.Config{DataDir: dir}, serveReplacementOptions{},
 	)
+	t.Cleanup(release)
 
 	assert.False(t, cont)
 	require.Error(t, err)
@@ -231,12 +239,61 @@ func TestPrepareForegroundServeDaemonStopsUnderBackgroundLaunchLock(
 		return nil
 	})
 
-	cont, err := prepareForegroundServeDaemon(
+	cont, release, err := prepareForegroundServeDaemon(
 		&config.Config{DataDir: dir}, serveReplacementOptions{},
 	)
+	t.Cleanup(release)
 
 	require.NoError(t, err)
 	assert.True(t, cont)
+}
+
+func TestPrepareForegroundServeDaemonKeepsLaunchLockThroughDBOpen(
+	t *testing.T,
+) {
+	dir := runtimeTestDir(t)
+	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+	dbPath := filepath.Join(dir, "sessions.db")
+	host, port := testPingServer(t)
+	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
+		host, port, withRuntimeVersion("1.0.0"),
+	))
+	setTestVersion(t, "1.1.0")
+
+	stubStopDaemonRuntimeForUpgrade(t, func(
+		_ config.Config, rt *DaemonRuntime,
+	) error {
+		RemoveDaemonRuntime(dir)
+		return nil
+	})
+
+	cont, release, err := prepareForegroundServeDaemon(
+		&config.Config{DataDir: dir, DBPath: dbPath},
+		serveReplacementOptions{},
+	)
+	t.Cleanup(release)
+
+	require.NoError(t, err)
+	assert.True(t, cont)
+	launchLock, ok := acquireBackgroundLaunchLock(dir)
+	if ok {
+		require.NoError(t, launchLock.Unlock())
+	}
+	assert.False(t, ok,
+		"foreground replacement must keep launch lock until startup handoff")
+
+	database, writeLock, err := openWriteDB(
+		context.Background(),
+		config.Config{DataDir: dir, DBPath: dbPath},
+	)
+	require.NoError(t, err)
+	require.NoError(t, writeLock.Close())
+	require.NoError(t, database.Close())
+
+	release()
+	launchLock, ok = acquireBackgroundLaunchLock(dir)
+	require.True(t, ok)
+	require.NoError(t, launchLock.Unlock())
 }
 
 func TestPrepareForegroundServeDaemonUsesExistingCompatibleDaemon(t *testing.T) {
@@ -249,9 +306,10 @@ func TestPrepareForegroundServeDaemonUsesExistingCompatibleDaemon(t *testing.T) 
 	forbidStopDaemonRuntimeForUpgrade(t, "same-version daemon must be reused")
 
 	out := captureStdout(t, func() {
-		cont, err := prepareForegroundServeDaemon(
+		cont, release, err := prepareForegroundServeDaemon(
 			&config.Config{DataDir: dir}, serveReplacementOptions{},
 		)
+		t.Cleanup(release)
 		require.NoError(t, err)
 		assert.False(t, cont)
 	})
@@ -332,9 +390,10 @@ func TestPrepareForegroundServeDaemonRefusesDevWithoutReplace(t *testing.T) {
 	setTestVersion(t, "dev")
 	forbidStopDaemonRuntimeForUpgrade(t, "dev build needs --replace")
 
-	cont, err := prepareForegroundServeDaemon(
+	cont, release, err := prepareForegroundServeDaemon(
 		&config.Config{DataDir: dir}, serveReplacementOptions{},
 	)
+	t.Cleanup(release)
 
 	assert.False(t, cont)
 	require.Error(t, err)
@@ -361,10 +420,11 @@ func TestPrepareForegroundServeDaemonReplaceStopsWritableDevConflict(t *testing.
 	})
 
 	out := captureStdout(t, func() {
-		cont, err := prepareForegroundServeDaemon(
+		cont, release, err := prepareForegroundServeDaemon(
 			&config.Config{DataDir: dir},
 			serveReplacementOptions{Replace: true},
 		)
+		t.Cleanup(release)
 		require.NoError(t, err)
 		assert.True(t, cont)
 	})
@@ -398,10 +458,11 @@ func TestPrepareForegroundServeDaemonReplaceStopsConfirmedUnreachableDaemon(
 		return nil
 	})
 
-	cont, err := prepareForegroundServeDaemon(
+	cont, release, err := prepareForegroundServeDaemon(
 		&config.Config{DataDir: dir},
 		serveReplacementOptions{Replace: true},
 	)
+	t.Cleanup(release)
 
 	require.NoError(t, err)
 	assert.True(t, cont)
@@ -436,10 +497,11 @@ func TestPrepareForegroundServeDaemonBackstopRefusesSecondWritableDaemon(t *test
 		return nil
 	})
 
-	cont, err := prepareForegroundServeDaemon(
+	cont, release, err := prepareForegroundServeDaemon(
 		&config.Config{DataDir: dir, DBPath: dbPath},
 		serveReplacementOptions{},
 	)
+	t.Cleanup(release)
 	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 
 	require.NoError(t, err)
@@ -478,10 +540,11 @@ func TestPrepareForegroundServeDaemonReplaceChecksTooNewDatabaseBeforeStop(t *te
 	forbidStopDaemonRuntimeForUpgrade(t,
 		"too-new database must be rejected before stop")
 
-	cont, err := prepareForegroundServeDaemon(
+	cont, release, err := prepareForegroundServeDaemon(
 		&config.Config{DataDir: dir, DBPath: dbPath},
 		serveReplacementOptions{Replace: true},
 	)
+	t.Cleanup(release)
 
 	assert.False(t, cont)
 	require.Error(t, err)
@@ -516,10 +579,11 @@ func TestPrepareForegroundServeDaemonReplaceChecksDatabaseEvenWithCurrentRuntime
 	forbidStopDaemonRuntimeForUpgrade(t,
 		"too-new database must be rejected before stop")
 
-	cont, err := prepareForegroundServeDaemon(
+	cont, release, err := prepareForegroundServeDaemon(
 		&config.Config{DataDir: dir, DBPath: dbPath},
 		serveReplacementOptions{Replace: true},
 	)
+	t.Cleanup(release)
 
 	assert.False(t, cont)
 	require.Error(t, err)
@@ -551,10 +615,11 @@ func TestPrepareForegroundServeDaemonAutoReplaceChecksTooNewDatabaseBeforeStop(t
 	forbidStopDaemonRuntimeForUpgrade(t,
 		"too-new database must be rejected before auto replacement stop")
 
-	cont, err := prepareForegroundServeDaemon(
+	cont, release, err := prepareForegroundServeDaemon(
 		&config.Config{DataDir: dir, DBPath: dbPath},
 		serveReplacementOptions{},
 	)
+	t.Cleanup(release)
 
 	assert.False(t, cont)
 	require.Error(t, err)
@@ -573,10 +638,11 @@ func TestPrepareForegroundServeDaemonReplaceLeavesReadOnlyDaemon(t *testing.T) {
 	))
 	forbidStopDaemonRuntimeForUpgrade(t, "read-only daemon must not be stopped")
 
-	cont, err := prepareForegroundServeDaemon(
+	cont, release, err := prepareForegroundServeDaemon(
 		&config.Config{DataDir: dir},
 		serveReplacementOptions{Replace: true},
 	)
+	t.Cleanup(release)
 
 	require.NoError(t, err)
 	assert.True(t, cont)

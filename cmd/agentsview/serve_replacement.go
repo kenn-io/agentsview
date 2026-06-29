@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -33,16 +34,19 @@ type serveReplacementDecision struct {
 	Reason           string
 }
 
+var foregroundReplacementLaunchLocks sync.Map
+
 func prepareForegroundServeDaemon(
 	cfg *config.Config, opts serveReplacementOptions,
-) (bool, error) {
+) (bool, func(), error) {
+	noRelease := func() {}
 	if cfg == nil {
-		return false, errors.New("nil config")
+		return false, noRelease, errors.New("nil config")
 	}
 	decision := decideServeDaemonReplacement(*cfg, opts)
 	switch decision.Action {
 	case serveReplacementNone:
-		return true, nil
+		return true, noRelease, nil
 	case serveReplacementUseExisting:
 		rt := decision.Runtime
 		if rt != nil {
@@ -51,22 +55,22 @@ func prepareForegroundServeDaemon(
 				urlFromDaemonRuntime(rt), rt.Record.PID,
 			)
 		}
-		return false, nil
+		return false, noRelease, nil
 	case serveReplacementAuto, serveReplacementExplicit:
 		if err := checkForegroundReplacementDataVersion(
 			*cfg, decision,
 		); err != nil {
-			return false, err
+			return false, noRelease, err
 		}
 		releaseReplacementLock, err := acquireForegroundReplacementLock(*cfg)
 		if err != nil {
-			return false, err
+			return false, noRelease, err
 		}
-		defer releaseReplacementLock()
 
 		ownsStartLock, acquiredStartLock := markDaemonStarting(cfg.DataDir)
 		if !ownsStartLock {
-			return false, fmt.Errorf(
+			releaseReplacementLock()
+			return false, noRelease, fmt.Errorf(
 				"agentsview serve startup is already in progress; " +
 					"wait for it to finish or run `agentsview serve status`",
 			)
@@ -82,15 +86,16 @@ func prepareForegroundServeDaemon(
 			if acquiredStartLock {
 				UnmarkDaemonStarting(cfg.DataDir)
 			}
-			return false, err
+			releaseReplacementLock()
+			return false, noRelease, err
 		}
-		return true, nil
+		return true, releaseReplacementLock, nil
 	case serveReplacementRefuse:
-		return false, errors.New(strings.Join(
+		return false, noRelease, errors.New(strings.Join(
 			serveDaemonConflictLines(decision), "\n",
 		))
 	default:
-		return false, fmt.Errorf("unknown serve replacement action %d",
+		return false, noRelease, fmt.Errorf("unknown serve replacement action %d",
 			decision.Action)
 	}
 }
@@ -106,7 +111,19 @@ func acquireForegroundReplacementLock(cfg config.Config) (func(), error) {
 				"wait for it to finish or run `agentsview serve status`",
 		)
 	}
-	return func() { _ = lock.Unlock() }, nil
+	path := backgroundLaunchLockPath(cfg.DataDir)
+	foregroundReplacementLaunchLocks.Store(path, struct{}{})
+	return sync.OnceFunc(func() {
+		foregroundReplacementLaunchLocks.Delete(path)
+		_ = lock.Unlock()
+	}), nil
+}
+
+func ownsForegroundReplacementLaunchLock(dataDir string) bool {
+	_, ok := foregroundReplacementLaunchLocks.Load(
+		backgroundLaunchLockPath(dataDir),
+	)
+	return ok
 }
 
 func checkForegroundReplacementDataVersion(
