@@ -223,6 +223,36 @@ export class SessionsService {
     });
   }
   /**
+   * Batch delete sessions
+   * @returns void
+   * @throws ApiError
+   */
+  public static postApiV1SessionsBatchDelete({
+    requestBody,
+  }: {
+    requestBody: BatchDeleteInputBody,
+  }): CancelablePromise<void> {
+    return __request(OpenAPI, {
+      method: 'POST',
+      url: '/api/v1/sessions/batch-delete',
+      body: requestBody,
+      mediaType: 'application/json',
+      errors: {
+        400: `Bad Request`,
+        401: `Unauthorized`,
+        403: `Forbidden`,
+        404: `Not Found`,
+        409: `Conflict`,
+        422: `Unprocessable Entity`,
+        500: `Internal Server Error`,
+        501: `Not Implemented`,
+        502: `Bad Gateway`,
+        503: `Service Unavailable`,
+        504: `Gateway Timeout`,
+      },
+    });
+  }
+  /**
    * List sidebar sessions
    * @returns DbSidebarSessionIndex OK
    * @throws ApiError
@@ -1180,36 +1210,6 @@ export class SessionsService {
         403: `Forbidden`,
         404: `Not Found`,
         409: `Conflict`,
-        500: `Internal Server Error`,
-        501: `Not Implemented`,
-        502: `Bad Gateway`,
-        503: `Service Unavailable`,
-        504: `Gateway Timeout`,
-      },
-    });
-  }
-  /**
-   * Batch delete sessions
-   * @returns void
-   * @throws ApiError
-   */
-  public static postApiV1SessionsBatchDelete({
-    requestBody,
-  }: {
-    requestBody: BatchDeleteInputBody,
-  }): CancelablePromise<void> {
-    return __request(OpenAPI, {
-      method: 'POST',
-      url: '/api/v1/sessions/batch-delete',
-      body: requestBody,
-      mediaType: 'application/json',
-      errors: {
-        400: `Bad Request`,
-        401: `Unauthorized`,
-        403: `Forbidden`,
-        404: `Not Found`,
-        409: `Conflict`,
-        422: `Unprocessable Entity`,
         500: `Internal Server Error`,
         501: `Not Implemented`,
         502: `Bad Gateway`,

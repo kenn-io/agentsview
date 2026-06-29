@@ -6,5 +6,6 @@ export type BatchDeleteInputBody = {
   /**
    * Session IDs to soft-delete
    */
-  session_ids: Array<string>;
+  session_ids: any[] | null;
 };
+

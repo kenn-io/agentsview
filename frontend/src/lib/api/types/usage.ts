@@ -99,6 +99,47 @@ export interface UsageComparison {
   deltaPct: number;
 }
 
+export type UsagePairwiseDimension = "model" | "project";
+
+export interface UsagePairwiseComparisonSide {
+  totalCost: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  totalTokens: number;
+  sessionCount: number;
+  costPerSession?: number;
+  tokensPerSession?: number;
+}
+
+export interface UsagePairwiseComparisonDelta {
+  totalCostDelta: number;
+  totalCostDeltaRatio?: number;
+  inputTokensDelta: number;
+  inputTokensDeltaRatio?: number;
+  outputTokensDelta: number;
+  outputTokensDeltaRatio?: number;
+  cacheCreationDelta: number;
+  cacheCreationDeltaRatio?: number;
+  cacheReadDelta: number;
+  cacheReadDeltaRatio?: number;
+  totalTokensDelta: number;
+  totalTokensDeltaRatio?: number;
+  sessionCountDelta: number;
+  sessionCountDeltaRatio?: number;
+  costPerSessionDelta?: number;
+  costPerSessionRatio?: number;
+  tokensPerSessionDelta?: number;
+  tokensPerSessionRatio?: number;
+}
+
+export interface UsagePairwiseComparisonResponse {
+  left: UsagePairwiseComparisonSide;
+  right: UsagePairwiseComparisonSide;
+  deltas: UsagePairwiseComparisonDelta;
+}
+
 export interface UsageSummaryResponse {
   from: string;
   to: string;

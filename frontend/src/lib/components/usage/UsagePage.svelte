@@ -22,6 +22,7 @@
     type RangeSelection,
   } from "../shared/rangeSelection.js";
   import UsageSummaryCards from "./UsageSummaryCards.svelte";
+  import UsagePairwiseComparisonPanel from "./UsagePairwiseComparisonPanel.svelte";
   import CostTimeSeriesChart from "./CostTimeSeriesChart.svelte";
   import AttributionPanel from "./AttributionPanel.svelte";
   import TopSessionsTable from "./TopSessionsTable.svelte";
@@ -429,6 +430,10 @@
     {/if}
 
     <UsageSummaryCards />
+
+    <div class="chart-panel wide">
+      <UsagePairwiseComparisonPanel />
+    </div>
 
     <div class="chart-panel wide">
       <CostTimeSeriesChart />

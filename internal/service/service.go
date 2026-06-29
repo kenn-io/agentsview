@@ -36,6 +36,9 @@ type SessionService interface {
 	Search(ctx context.Context, req SearchRequest) (*SessionSearchResult, error)
 	SearchContent(ctx context.Context, req ContentSearchRequest) (*ContentSearchResult, error)
 	UsageSummary(ctx context.Context, req UsageRequest) (*UsageSummaryResult, error)
+	UsagePairwiseComparison(
+		ctx context.Context, req UsagePairwiseComparisonRequest,
+	) (*UsagePairwiseComparisonResponse, error)
 	ListSecrets(ctx context.Context, f SecretListFilter) (*SecretFindingList, error)
 	ScanSecrets(ctx context.Context, in SecretScanInput,
 		progress func(SecretScanProgress)) (*SecretScanSummary, error)

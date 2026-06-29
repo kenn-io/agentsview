@@ -569,6 +569,31 @@ func (b *directBackend) UsageSummary(
 	return buildUsageSummary(f, result), nil
 }
 
+func (b *directBackend) UsagePairwiseComparison(
+	ctx context.Context, req UsagePairwiseComparisonRequest,
+) (*UsagePairwiseComparisonResponse, error) {
+	leftFilter, rightFilter, err := BuildUsagePairwiseFilters(req)
+	if err != nil {
+		return nil, err
+	}
+	leftFilter.Breakdowns = false
+	rightFilter.Breakdowns = false
+	leftFilter.SkipSessionCounts = false
+	rightFilter.SkipSessionCounts = false
+
+	leftResult, err := b.db.GetDailyUsage(ctx, leftFilter)
+	if err != nil {
+		return nil, err
+	}
+	rightResult, err := b.db.GetDailyUsage(ctx, rightFilter)
+	if err != nil {
+		return nil, err
+	}
+
+	out := BuildUsagePairwiseComparisonResult(leftResult, rightResult)
+	return &out, nil
+}
+
 // SearchContent maps the transport-neutral request to a
 // db.ContentSearchFilter, calls the store, and redacts secret-shaped
 // spans from each snippet unless Reveal is set.
