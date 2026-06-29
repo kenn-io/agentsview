@@ -109,6 +109,7 @@ jobs:
 
       - name: Run shell script tests
         run: |
+          bash scripts/make_install_test.sh
           bash scripts/install_test.sh
           bash scripts/check_desktop_release_health_test.sh
           bash scripts/check_desktop_release_health_from_event_test.sh
