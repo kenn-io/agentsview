@@ -330,6 +330,45 @@ func TestResumeSession(t *testing.T) {
 		assert.NotContains(t, text, "Message C")
 	})
 
+	t.Run("message point command only finds sparse ordinals", func(t *testing.T) {
+		removeMessagePointPrompts(t, "sess-sparse", 3)
+
+		te.seedSession(t, "sess-sparse", projectDir, 3, func(s *db.Session) {
+			s.Agent = "claude"
+		})
+		te.seedMessages(t, "sess-sparse", 3, func(i int, m *db.Message) {
+			if i == 2 {
+				m.Ordinal = 3
+				m.Content = "Message D"
+			}
+		})
+
+		w := te.post(t,
+			"/api/v1/sessions/sess-sparse/resume",
+			`{"command_only":true,"from_ordinal":3,"fork_session":true}`,
+		)
+		assertStatus(t, w, http.StatusOK)
+		var resp struct {
+			Launched bool   `json:"launched"`
+			Command  string `json:"command"`
+			Cwd      string `json:"cwd"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.False(t, resp.Launched, "expected launched=false for command_only")
+		assert.Contains(t, resp.Command, "claude <")
+		assertSamePath(t, "cwd", resp.Cwd, projectDir)
+
+		promptPath := findSingleMessagePointPrompt(t, "sess-sparse", 3)
+		t.Cleanup(func() { _ = os.Remove(promptPath) })
+
+		data, err := os.ReadFile(promptPath)
+		require.NoError(t, err)
+		text := string(data)
+		assert.Contains(t, text, "Message A")
+		assert.Contains(t, text, "Message B")
+		assert.Contains(t, text, "Message D")
+	})
+
 	t.Run("message point rejects unsupported agents", func(t *testing.T) {
 		removeMessagePointPrompts(t, "codex-desk", 0)
 

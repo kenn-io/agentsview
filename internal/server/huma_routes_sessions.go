@@ -1031,7 +1031,14 @@ func (s *Server) humaResumeSession(
 		if err != nil {
 			return nil, internalError("resume: message lookup failed", err)
 		}
-		if *req.FromOrdinal >= len(msgs) || msgs[*req.FromOrdinal].Ordinal != *req.FromOrdinal {
+		messageIdx := -1
+		for i := range msgs {
+			if msgs[i].Ordinal == *req.FromOrdinal {
+				messageIdx = i
+				break
+			}
+		}
+		if messageIdx < 0 {
 			return nil, apiError(http.StatusNotFound, "message not found")
 		}
 		if !req.CommandOnly && s.db.ReadOnly() {
@@ -1039,7 +1046,7 @@ func (s *Server) humaResumeSession(
 				"session launch not available in remote mode")
 		}
 		promptPath, err := writeClaudeMessagePointPrompt(
-			session, msgs[:*req.FromOrdinal+1], *req.FromOrdinal,
+			session, msgs[:messageIdx+1], *req.FromOrdinal,
 		)
 		if err != nil {
 			return nil, internalError("resume: prompt render failed", err)
