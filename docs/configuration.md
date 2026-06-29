@@ -297,6 +297,8 @@ AgentsView reads whichever source is richest, in this order:
 4. **Plaintext summary mode.** Otherwise AgentsView reads
    only `history.jsonl` and the `brain/` summaries — enough
    to populate session metadata and a high-level transcript.
+   Sessions in this mode show a "Summary mode" badge in the
+   detail header.
 
 Install `agy-reader` when you want high-resolution transcripts
 for older encrypted `.pb` sessions:

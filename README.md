@@ -386,7 +386,8 @@ conversation trajectories as SQLite `.db` files, which agentsview indexes
 directly. Older releases stored assistant turns and tool calls in
 AES-GCM-encrypted `.pb` files; for those sessions, agentsview falls back to
 **summary mode** using your prompts from `history.jsonl` plus any plain-text
-artifacts under `brain/` (plans, walkthroughs, checkpoints).
+artifacts under `brain/` (plans, walkthroughs, checkpoints). Degraded sessions
+show a "Summary mode" badge in the detail header that links here.
 
 To unlock full transcripts for older `.pb` sessions, run
 [agy-reader](https://github.com/mjacobs/agy-reader) alongside agentsview.

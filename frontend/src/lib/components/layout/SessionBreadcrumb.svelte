@@ -555,6 +555,15 @@
         style:background={agentColor(session.agent)}
         style:color={agentForeground(session.agent)}
       >{agentLabel(session.agent)}</span>
+      {#if session.agent === "antigravity-cli" && session.transcript_fidelity === "summary"}
+        <a
+          class="summary-badge"
+          href="https://github.com/kenn-io/agentsview#antigravity-cli-high-resolution-transcripts"
+          target="_blank"
+          rel="noopener noreferrer"
+          title={m.session_breadcrumb_summary_mode_tooltip()}
+        >{m.session_breadcrumb_summary_mode()}</a>
+      {/if}
       {#if session.started_at}
         <span class="session-time">
           {new Date(session.started_at).toLocaleDateString(
@@ -850,6 +859,25 @@
     color: white;
     flex-shrink: 0;
     background: var(--text-muted);
+  }
+
+  .summary-badge {
+    font-size: 9px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    flex-shrink: 0;
+    color: var(--accent-amber, #e0a458);
+    background: color-mix(in srgb, var(--accent-amber, #e0a458) 18%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-amber, #e0a458) 40%, transparent);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  .summary-badge:hover {
+    text-decoration: underline;
   }
 
   .session-time {
