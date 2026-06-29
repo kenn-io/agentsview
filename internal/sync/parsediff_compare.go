@@ -286,6 +286,10 @@ func appendSessionMetadataDiffs(
 		diffs, FieldSourceVersion, agent,
 		stored.SourceVersion, prepared.SourceVersion,
 	)
+	diffs = appendScalarSessionDiff(
+		diffs, FieldTranscriptFidelity, agent,
+		stored.TranscriptFidelity, prepared.TranscriptFidelity,
+	)
 	// parent_session_id is *string: NULL and "" are the same state
 	// (toDBSession maps "" to nil via strPtr).
 	diffs = appendScalarSessionDiff(

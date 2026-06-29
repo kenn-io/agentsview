@@ -367,6 +367,33 @@ func TestCompareSessionFields(t *testing.T) {
 			}},
 		},
 		{
+			name: "transcript_fidelity drift is a real diff",
+			stored: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.TranscriptFidelity = "summary"
+			},
+			prepared: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.TranscriptFidelity = "full"
+			},
+			want: []want{{
+				field:  FieldTranscriptFidelity,
+				stored: "summary",
+				parsed: "full",
+			}},
+		},
+		{
+			name: "transcript_fidelity equal values produce no diff",
+			stored: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.TranscriptFidelity = "full"
+			},
+			prepared: func(s *db.Session) {
+				s.Agent = "gemini"
+				s.TranscriptFidelity = "full"
+			},
+		},
+		{
 			name: "parent_session_id nil stored vs empty parsed is no diff",
 			stored: func(s *db.Session) {
 				s.Agent = "gemini"

@@ -106,6 +106,7 @@ const (
 	FieldRelationshipType     = "relationship_type"
 	FieldSourceSessionID      = "source_session_id"
 	FieldSourceVersion        = "source_version"
+	FieldTranscriptFidelity   = "transcript_fidelity"
 	FieldParserMalformedLines = "parser_malformed_lines"
 	FieldIsTruncated          = "is_truncated"
 	// FieldPresence is the synthetic diff attached when a stored,
