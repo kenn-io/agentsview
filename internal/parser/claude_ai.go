@@ -17,11 +17,12 @@ type claudeAIConversation struct {
 }
 
 type claudeAIMessage struct {
-	UUID      string          `json:"uuid"`
-	Text      string          `json:"text"`
-	Content   []claudeAIBlock `json:"content"`
-	Sender    string          `json:"sender"`
-	CreatedAt string          `json:"created_at"`
+	UUID        string               `json:"uuid"`
+	Text        string               `json:"text"`
+	Content     []claudeAIBlock      `json:"content"`
+	Sender      string               `json:"sender"`
+	CreatedAt   string               `json:"created_at"`
+	Attachments []claudeAIAttachment `json:"attachments"`
 }
 
 // claudeAIBlock represents a content block within a message.
@@ -46,6 +47,12 @@ type ClaudeAIExportParser interface {
 		r io.Reader,
 		onConversation func(ParseResult) error,
 	) error
+}
+
+// claudeAIAttachment holds content emitted by Claude attachments.
+type claudeAIAttachment struct {
+	FileName         string `json:"file_name"`
+	ExtractedContent string `json:"extracted_content"`
 }
 
 // ParseClaudeAIExport streams a Claude.ai conversations.json
@@ -97,21 +104,32 @@ func (p *claudeAIImportOnlyProvider) ParseClaudeAIExport(
 func assembleClaudeAIContent(
 	m claudeAIMessage,
 ) (content string, hasThinking bool) {
+	attachmentParts := buildClaudeAttachmentText(m.Attachments)
+
 	if len(m.Content) == 0 {
-		return m.Text, false
+		if len(attachmentParts) == 0 {
+			return m.Text, false
+		}
+
+		contentParts := make([]string, 0, 1+len(attachmentParts))
+		if m.Text != "" {
+			contentParts = append(contentParts, m.Text)
+		}
+		contentParts = append(contentParts, attachmentParts...)
+		return strings.Join(contentParts, "\n\n"), false
 	}
 
-	var parts []string
+	var contentParts []string
 	for _, b := range m.Content {
 		switch b.Type {
 		case "text":
 			if b.Text != "" {
-				parts = append(parts, b.Text)
+				contentParts = append(contentParts, b.Text)
 			}
 		case "thinking":
 			if b.Thinking != "" {
 				hasThinking = true
-				parts = append(parts,
+				contentParts = append(contentParts,
 					"[Thinking]\n"+b.Thinking+"\n[/Thinking]")
 			}
 			// tool_use, tool_result, voice_note, token_budget
@@ -119,10 +137,35 @@ func assembleClaudeAIContent(
 		}
 	}
 
-	if len(parts) == 0 {
-		return m.Text, hasThinking
+	if len(contentParts) == 0 {
+		if len(attachmentParts) == 0 {
+			return m.Text, hasThinking
+		}
+		if m.Text != "" {
+			contentParts = append(contentParts, m.Text)
+		}
 	}
-	return strings.Join(parts, "\n\n"), hasThinking
+
+	contentParts = append(contentParts, attachmentParts...)
+
+	return strings.Join(contentParts, "\n\n"), hasThinking
+}
+
+func buildClaudeAttachmentText(
+	attachments []claudeAIAttachment,
+) []string {
+	parts := make([]string, 0, len(attachments))
+	for _, a := range attachments {
+		if strings.TrimSpace(a.ExtractedContent) == "" {
+			continue
+		}
+		if a.FileName == "" {
+			parts = append(parts, a.ExtractedContent)
+			continue
+		}
+		parts = append(parts, "[Attachment: "+a.FileName+"]\n"+a.ExtractedContent)
+	}
+	return parts
 }
 
 func convertClaudeAIConversation(

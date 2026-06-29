@@ -47,6 +47,42 @@ const testConversationsJSON = `[
   }
 ]`
 
+const testConversationsWithAttachmentJSON = `[{
+  "uuid": "import-test-002",
+  "name": "Attachment Chat",
+  "summary": "",
+  "created_at": "2026-02-02T09:00:00.000000Z",
+  "updated_at": "2026-02-02T09:15:00.000000Z",
+  "account": {"uuid":"acct-1"},
+  "chat_messages": [
+    {
+      "uuid":"m1",
+      "text":"Can you show me the config?",
+      "content":[{"type":"text","text":"Can you show me the config?"}],
+      "sender":"human",
+      "created_at":"2026-02-02T09:00:00.000000Z",
+      "updated_at":"2026-02-02T09:00:00.000000Z",
+      "attachments":[],
+      "files":[]
+    },
+    {
+      "uuid":"m2",
+      "text":"Sure, here it is.",
+      "content":[{"type":"text","text":"Sure, here it is."}],
+      "sender":"assistant",
+      "created_at":"2026-02-02T09:00:05.000000Z",
+      "updated_at":"2026-02-02T09:00:05.000000Z",
+      "attachments":[
+        {
+          "file_name":"agent.yaml",
+          "extracted_content":"model: claude-3.7\nmode: debug"
+        }
+      ],
+      "files":[]
+    }
+  ]
+}]`
+
 func testDB(t *testing.T) *db.DB {
 	t.Helper()
 	d, err := db.Open(t.TempDir() + "/test.db")
@@ -77,6 +113,30 @@ func TestImportClaudeAI(t *testing.T) {
 	msgs, err := d.GetAllMessages(ctx, "claude-ai:import-test-001")
 	require.NoError(t, err)
 	assert.Len(t, msgs, 2)
+}
+
+func TestImportClaudeAIIncludesAttachmentContent(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	stats, err := ImportClaudeAI(
+		ctx, d, strings.NewReader(testConversationsWithAttachmentJSON), nil,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Imported)
+	assert.Equal(t, 0, stats.Updated)
+
+	msgs, err := d.GetAllMessages(
+		ctx, "claude-ai:import-test-002",
+	)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "Can you show me the config?", msgs[0].Content)
+	assert.Equal(
+		t,
+		"Sure, here it is.\n\n[Attachment: agent.yaml]\nmodel: claude-3.7\nmode: debug",
+		msgs[1].Content,
+	)
 }
 
 func TestImportClaudeAI_ReimportSkipsUnchanged(t *testing.T) {

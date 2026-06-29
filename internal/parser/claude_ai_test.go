@@ -172,6 +172,142 @@ func TestParseClaudeAIExport_ContentBlocks(t *testing.T) {
 	assert.True(t, msgs[1].HasThinking)
 }
 
+func TestParseClaudeAIExport_AttachmentContent(t *testing.T) {
+	input := `[{
+		"uuid": "conv-attachments",
+		"name": "Attachment Test",
+		"created_at": "2026-01-21T10:00:00.000000Z",
+		"updated_at": "2026-01-21T10:05:00.000000Z",
+		"account": {"uuid": "acct-1"},
+		"chat_messages": [
+			{
+				"uuid": "m1",
+				"text": "Here is the base idea.",
+				"content": [
+					{"type": "text", "text": "Here is the base idea."}
+				],
+				"sender": "assistant",
+				"created_at": "2026-01-21T10:00:00.000000Z",
+				"attachments": [
+					{
+						"file_name": "notes.md",
+						"extracted_content": "line one\nline two"
+					}
+				]
+			}
+		]
+	}]`
+
+	var results []ParseResult
+	err := ParseClaudeAIExport(
+		strings.NewReader(input),
+		func(r ParseResult) error {
+			results = append(results, r)
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+
+	msgs := results[0].Messages
+	require.Len(t, msgs, 1)
+
+	assert.Equal(
+		t,
+		"Here is the base idea.\n\n[Attachment: notes.md]\nline one\nline two",
+		msgs[0].Content,
+	)
+}
+
+func TestParseClaudeAIExport_IgnoredAttachments(t *testing.T) {
+	input := `[{
+		"uuid": "conv-attachments-ignored",
+		"name": "Attachment Ignore Test",
+		"created_at": "2026-01-22T10:00:00.000000Z",
+		"updated_at": "2026-01-22T10:05:00.000000Z",
+		"account": {"uuid": "acct-1"},
+		"chat_messages": [
+			{
+				"uuid": "m1",
+				"text": "User prompt",
+				"content": [
+					{"type": "text", "text": "User prompt"}
+				],
+				"sender": "human",
+				"created_at": "2026-01-22T10:00:00.000000Z"
+			},
+			{
+				"uuid": "m2",
+				"text": "Response kept the same.",
+				"content": [
+					{"type": "text", "text": "Response kept the same."}
+				],
+				"sender": "assistant",
+				"created_at": "2026-01-22T10:01:00.000000Z",
+				"attachments": [
+					{"file_name": "empty.txt", "extracted_content": ""},
+					{"file_name": "noop.txt", "extracted_content": "   "},
+					{"file_name": "missing.txt"}
+				]
+			}
+		]
+	}]`
+
+	var results []ParseResult
+	err := ParseClaudeAIExport(
+		strings.NewReader(input),
+		func(r ParseResult) error {
+			results = append(results, r)
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+
+	msgs := results[0].Messages
+	require.Len(t, msgs, 2)
+
+	assert.Equal(t, "User prompt", msgs[0].Content)
+	assert.Equal(t, "Response kept the same.", msgs[1].Content)
+}
+
+func TestParseClaudeAIExport_TextFallbackPreservesWhitespace(t *testing.T) {
+	input := `[{
+		"uuid": "conv-fallback",
+		"name": "Fallback Test",
+		"created_at": "2026-01-23T10:00:00.000000Z",
+		"updated_at": "2026-01-23T10:05:00.000000Z",
+		"account": {"uuid": "acct-1"},
+		"chat_messages": [
+			{
+				"uuid": "m1",
+				"text": "  keep surrounding whitespace  ",
+				"content": [],
+				"sender": "assistant",
+				"created_at": "2026-01-23T10:00:00.000000Z",
+				"attachments": []
+			}
+		]
+	}]`
+
+	var results []ParseResult
+	err := ParseClaudeAIExport(
+		strings.NewReader(input),
+		func(r ParseResult) error {
+			results = append(results, r)
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Len(t, results[0].Messages, 1)
+	assert.Equal(
+		t,
+		"  keep surrounding whitespace  ",
+		results[0].Messages[0].Content,
+	)
+}
+
 func TestParseClaudeAIExport_EmptyArray(t *testing.T) {
 	var results []ParseResult
 	err := parseClaudeAIExport(
