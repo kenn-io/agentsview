@@ -599,6 +599,35 @@ describe("UsageStore session filter params", () => {
     expect(usage.pairwiseComparison).toBeNull();
   });
 
+  it("clears pairwise querying when a selector change leaves no comparable values", async () => {
+    const { usage } = await loadStore();
+
+    usageServiceMocks.getApiV1UsagePairwiseComparison.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+
+    void usage.fetchAll();
+    await vi.waitFor(() =>
+      expect(
+        usageServiceMocks.getApiV1UsagePairwiseComparison,
+      ).toHaveBeenCalledTimes(1),
+    );
+
+    usage.summary = usageSummaryWithOptions({
+      projects: [],
+      models: ["gpt-4o"],
+    });
+
+    usage.setPairwiseSide("left", { dimension: "project" });
+
+    expect(usage.pairwiseSelection.left).toEqual({
+      dimension: "project",
+      value: "",
+    });
+    expect(usage.loading.pairwise).toBe(false);
+    expect(usage.querying.pairwise).toBe(false);
+  });
+
   it("records full refresh time and clears new-data hints", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {

@@ -87,7 +87,7 @@
       : m.usage_model();
   }
 
-  const dimensionOptions: TypeaheadOption[] = [
+  const dimensionOptions: TypeaheadOption[] = $derived([
     {
       name: "model",
       label: m.usage_model(),
@@ -96,7 +96,7 @@
       name: "project",
       label: m.usage_project(),
     },
-  ];
+  ]);
 
   type MetricRow = {
     label: string;

@@ -719,6 +719,7 @@ class UsageStore {
       this.pairwiseComparison = null;
       this.errors.pairwise = null;
       this.loading.pairwise = false;
+      this.abortPanel("pairwise");
       return "ok";
     }
     const signal = this.nextAbortSignal("pairwise");
