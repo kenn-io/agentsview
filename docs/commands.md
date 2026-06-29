@@ -203,6 +203,13 @@ auth. The per-host `token` is required and must match the remote daemon's
 endpoints. Ad hoc HTTP remotes are not supported. Hosts must be unique within
 the list, since remote sessions are namespaced by host.
 
+During HTTP remote sync, the collector prints durable phase lines for resolving
+remote roots, downloading and extracting the archive, processing sessions, and
+the final per-host summary. Archive downloads also show live byte progress when
+the remote daemon provides a `Content-Length` header. If an upgraded binary does
+not show those phases, restart the local collector daemon; restarting the remote
+daemon as well avoids version skew while smoke testing.
+
 ______________________________________________________________________
 
 ### `agentsview prune`
