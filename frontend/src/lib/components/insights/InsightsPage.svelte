@@ -786,6 +786,17 @@
           </div>
           <h2 id="actions-title">{m.insights_page_deterministic_recommendations()}</h2>
         </div>
+        <p class="insights-help">
+          {m.insights_page_insights_help_intro()}
+          <a
+            href="https://www.agentsview.io/insights/"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="insights-help-link"
+          >
+            {m.insights_page_insights_help_docs()}
+          </a>
+        </p>
       </div>
 
       {#if recommendations.length === 0}
@@ -1394,6 +1405,26 @@
 
   .section-heading.compact {
     align-items: center;
+  }
+
+  .section-heading p.insights-help {
+    max-width: 58ch;
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 4px;
+    text-align: right;
+    line-height: 1.35;
+  }
+
+  .insights-help-link {
+    color: var(--accent-blue);
+  }
+
+  .insights-help-link:hover {
+    color: color-mix(in srgb, var(--accent-blue) 70%, var(--text-primary));
+    text-underline-offset: 2px;
   }
 
   .section-heading h2 {

@@ -249,6 +249,31 @@ describe("InsightsPage selected insight actions", () => {
     document.body.innerHTML = "";
   });
 
+  it("renders the deterministic-vs-generated insights help affordance", async () => {
+    component = mount(InsightsPage, { target: document.body });
+    await tick();
+
+    const helpBlock = document.querySelector("p.insights-help");
+    expect(helpBlock).toBeDefined();
+    const helpText = helpBlock?.textContent ?? "";
+    expect(
+      helpText.includes("insights_page_insights_help_intro") ||
+        helpText.includes("Deterministic sections are computed"),
+    ).toBe(true);
+
+    const docsLink = document.querySelector<HTMLAnchorElement>(
+      'a[href="https://www.agentsview.io/insights/"]',
+    );
+    expect(docsLink).toBeDefined();
+    expect(
+      (docsLink!.textContent?.includes("insights_page_insights_help_docs") ||
+        docsLink!.textContent?.includes("Read Insights docs")),
+    ).toBe(true);
+    expect(docsLink!.getAttribute("target")).toBe("_blank");
+    expect(docsLink!.getAttribute("rel")).toContain("noopener");
+    expect(docsLink!.getAttribute("rel")).toContain("noreferrer");
+  });
+
   it("exports the selected insight", async () => {
     component = mount(InsightsPage, { target: document.body });
     await tick();

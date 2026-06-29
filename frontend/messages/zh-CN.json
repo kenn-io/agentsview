@@ -1124,6 +1124,8 @@
   "insights_page_scored_facts": "评分事实",
   "insights_page_quality_patterns": "质量模式",
   "insights_page_deterministic_counts": "基于 {range} 持久化会话信号的确定性统计。",
+  "insights_page_insights_help_intro": "确定性部分由会话数据计算得出，生成洞察是分开展示的说明文本。",
+  "insights_page_insights_help_docs": "查看 Insights 文档",
   "insights_page_could_not_load": "无法加载确定性洞察。",
   "insights_page_retry": "重试",
   "insights_page_no_scored_data": "此范围内无评分质量数据。",

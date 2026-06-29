@@ -1152,6 +1152,8 @@
   "insights_page_scored_facts": "Scored facts",
   "insights_page_quality_patterns": "Quality Patterns",
   "insights_page_deterministic_counts": "Deterministic counts from persisted session signals for {range}.",
+  "insights_page_insights_help_intro": "Deterministic sections are computed from session data, while generated insights are separate context text.",
+  "insights_page_insights_help_docs": "Read Insights docs",
   "insights_page_could_not_load": "Could not load deterministic insights.",
   "insights_page_retry": "Retry",
   "insights_page_no_scored_data": "No scored quality data for this range.",
