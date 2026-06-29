@@ -18,6 +18,8 @@
       "groupName": "GitHub Actions dependencies",
       "groupSlug": "github-actions-dependencies",
       "separateMajorMinor": false,
+      "separateMinorPatch": false,
+      "separateMultipleMinor": false,
       "separateMultipleMajor": false
     },
     {
