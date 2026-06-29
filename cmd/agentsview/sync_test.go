@@ -354,6 +354,35 @@ func TestRemoteProgressPrinterRendersLocalSyncProgressWithoutDetail(t *testing.T
 	assert.Contains(t, got, "  Resolving agent directories on devbox...\n")
 }
 
+func TestRemoteProgressPrinterKeepsResyncLabelOnDoneProgress(t *testing.T) {
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	var out bytes.Buffer
+	printer := newRemoteProgressPrinter(&out, clock)
+
+	printer.Print(agentsync.Progress{
+		Phase:           agentsync.PhaseSyncing,
+		Detail:          "Syncing sessions into rebuilt database",
+		SessionsTotal:   10,
+		SessionsDone:    4,
+		MessagesIndexed: 40,
+		Resync:          true,
+	})
+	now = now.Add(250 * time.Millisecond)
+	printer.Print(agentsync.Progress{
+		Phase:           agentsync.PhaseDone,
+		SessionsTotal:   10,
+		SessionsDone:    10,
+		MessagesIndexed: 100,
+		Resync:          true,
+	})
+
+	got := out.String()
+	assert.Contains(t, got, "\r  Syncing sessions into rebuilt database: 10/10 sessions (100%) · 100 messages\x1b[K")
+	assert.NotContains(t, got, "\r  Syncing local sessions: 10/10 sessions (100%) · 100 messages\x1b[K")
+	assert.Contains(t, got, "\n  Syncing sessions into rebuilt database completed in 250ms\n")
+}
+
 func TestRunLocalSyncUsesCallerContextForResync(t *testing.T) {
 	dataDir := t.TempDir()
 	dbPath := filepath.Join(dataDir, "sessions.db")

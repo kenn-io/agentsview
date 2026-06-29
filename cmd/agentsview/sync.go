@@ -199,16 +199,15 @@ func (p *remoteProgressPrinter) Print(progress sync.Progress) {
 		return
 	}
 	label := strings.TrimSpace(progress.Detail)
-	if label == "" && progress.SessionsTotal > 0 &&
-		(progress.Phase == sync.PhaseSyncing ||
-			progress.Phase == sync.PhaseDone) {
-		label = remoteLocalSyncProgressLabel
-		progress.Detail = label
-	}
 	if progress.Phase == sync.PhaseDone {
 		p.printFinalInPlaceProgress(progress)
 		p.finishCurrent()
 		return
+	}
+	if label == "" && progress.SessionsTotal > 0 &&
+		progress.Phase == sync.PhaseSyncing {
+		label = remoteLocalSyncProgressLabel
+		progress.Detail = label
 	}
 	if label == "" {
 		return
