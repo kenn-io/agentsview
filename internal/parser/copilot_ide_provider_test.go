@@ -319,6 +319,136 @@ func TestVisualStudioCopilotProviderClassifiesDeletedTraceAndFansOutPhysicalTrac
 	assert.Equal(t, tracePath, deleted[0].DisplayPath)
 }
 
+func TestVisualStudioCopilotProviderSupportsVS2026RootModes(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	vsRoot := filepath.Join(root, ".vs")
+	conversationID := "5bc5f6d7-9a6e-4f9c-8f3c-b7be2e7d9f20"
+	sessionPath := filepath.Join(
+		vsRoot, "SampleApp", "copilot-chat", "thread", "sessions",
+		conversationID,
+	)
+	traceData := vsCopilotTraceLineJSON(
+		conversationID,
+		"chat gpt-5.5", "1781293600000000000", "1781293610000000000",
+		map[string]string{
+			"gen_ai.operation.name": "chat",
+			"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Run the tests."}]}]`,
+		},
+	) + "\n"
+	writeSourceFile(t, sessionPath, traceData)
+
+	virtualPath := VisualStudioCopilotVirtualPath(sessionPath, conversationID)
+	cases := []struct {
+		name string
+		root string
+	}{
+		{name: "project root", root: root},
+		{name: ".vs root", root: vsRoot},
+		{name: "copilot-chat root", root: filepath.Join(vsRoot, "SampleApp", "copilot-chat")},
+		{name: "thread root", root: filepath.Join(vsRoot, "SampleApp", "copilot-chat", "thread")},
+		{name: "sessions root", root: filepath.Join(vsRoot, "SampleApp", "copilot-chat", "thread", "sessions")},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			provider, ok := NewProvider(AgentVSCopilot, ProviderConfig{
+				Roots: []string{tc.root},
+			})
+			require.True(t, ok)
+
+			discovered, err := provider.Discover(context.Background())
+			require.NoError(t, err)
+			require.Len(t, discovered, 1)
+			assert.Equal(t, virtualPath, discovered[0].DisplayPath)
+
+			found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+				RawSessionID: conversationID,
+			})
+			require.NoError(t, err)
+			require.True(t, ok)
+			assert.Equal(t, virtualPath, found.DisplayPath)
+
+			changed, err := provider.SourcesForChangedPath(
+				context.Background(),
+				ChangedPathRequest{
+					Path:      sessionPath,
+					EventKind: "write",
+					WatchRoot: tc.root,
+				},
+			)
+			require.NoError(t, err)
+			require.Len(t, changed, 1)
+			assert.Equal(t, virtualPath, changed[0].DisplayPath)
+
+			fingerprint, err := provider.Fingerprint(context.Background(), changed[0])
+			require.NoError(t, err)
+			assert.Equal(t, virtualPath, fingerprint.Key)
+			assert.Positive(t, fingerprint.Size)
+			assert.Positive(t, fingerprint.MTimeNS)
+			assert.NotEmpty(t, fingerprint.Hash)
+
+			parseOutcome, err := provider.Parse(context.Background(), ParseRequest{
+				Source:      changed[0],
+				Fingerprint: fingerprint,
+			})
+			require.NoError(t, err)
+			require.True(t, parseOutcome.ForceReplace)
+			require.Len(t, parseOutcome.Results, 1)
+			assert.Equal(t, "visualstudio-copilot:"+conversationID,
+				parseOutcome.Results[0].Result.Session.ID)
+			assert.Equal(t, virtualPath,
+				parseOutcome.Results[0].Result.Session.File.Path)
+			assert.Equal(t, fingerprint.Hash,
+				parseOutcome.Results[0].Result.Session.File.Hash)
+			assert.Equal(t, fingerprint.Size,
+				parseOutcome.Results[0].Result.Session.File.Size)
+			assert.Equal(t, fingerprint.MTimeNS,
+				parseOutcome.Results[0].Result.Session.File.Mtime)
+		})
+	}
+}
+
+func TestVisualStudioCopilotProviderRejectsOutsideVS2026SessionLayout(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	conversationID := "8e5bb2d4-ef8e-4a90-a1f2-3d3d4d6fc9e9"
+	invalidPath := filepath.Join(
+		root, ".vs", "SampleApp", "copilot-chat", "thread", "transcripts",
+		conversationID,
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(invalidPath), 0o755))
+	writeSourceFile(t, invalidPath, vsCopilotTraceLineJSON(
+		conversationID,
+		"chat gpt-5.5", "1781293600000000000", "1781293610000000000",
+		map[string]string{
+			"gen_ai.operation.name": "chat",
+			"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Run the tests."}]}]`,
+		},
+	)+"\n")
+
+	provider, ok := NewProvider(AgentVSCopilot, ProviderConfig{
+		Roots: []string{root},
+	})
+	require.True(t, ok)
+
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:      invalidPath,
+			EventKind: "write",
+			WatchRoot: root,
+		},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, changed)
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, discovered)
+}
+
 func vscodeCopilotProviderJSON(sessionID, prompt string) string {
 	return `{"version":3,"sessionId":"` + sessionID + `","creationDate":1770650022790,"requests":[{"requestId":"req1","timestamp":1770650031889,"message":{"text":"` + prompt + `","parts":[]},"response":[{"value":"Hi from VS Code"}],"modelId":"copilot/gpt-4o"}]}`
 }

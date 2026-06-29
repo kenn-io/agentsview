@@ -7,15 +7,16 @@ import (
 	"strings"
 )
 
-// Visual Studio Copilot stores conversations inside shared trace files
-// (*_VSGitHubCopilot_traces.jsonl). It is a multi-session container provider,
-// but unlike the SQLite-backed containers it discovers one source per
-// conversation (deduplicated across trace files, newest trace wins) plus a bare
-// physical source for any trace whose conversation IDs could not be read, so
-// the read failure surfaces instead of being silently dropped. Parse of a
-// conversation virtual path yields that one session; Parse of a bare trace fans
-// out every conversation in it. All behavior is wired into the shared
-// multi-session-container base via options.
+// Visual Studio Copilot normally stores conversations inside shared trace
+// files (*_VSGitHubCopilot_traces.jsonl), and newer Visual Studio versions can
+// also write extensionless conversation files under .vs/*/copilot-chat/*/sessions.
+// It is a multi-session container provider, but unlike the SQLite-backed
+// containers it discovers one source per conversation (deduplicated across trace
+// files, newest trace wins) plus a bare physical source for any legacy trace
+// whose conversation IDs could not be read, so read failures are surfaced instead
+// of being silently dropped. Parse of a conversation virtual path yields that one
+// session; Parse of a bare trace fans out every conversation in it. All behavior
+// is wired into the shared multi-session-container base via options.
 func newVisualStudioCopilotProviderFactory(def AgentDef) ProviderFactory {
 	return NewMultiSessionProviderFactory(
 		def,
@@ -71,6 +72,9 @@ func vsCopilotDiscoveredMatch(root, path string) (multiSessionMatch, bool) {
 	if _, _, ok := splitVisualStudioCopilotVirtualPath(path); ok {
 		return multiSessionMatch{}, false
 	}
+	if visualStudioCopilotVS2026SessionUnderRoot(root, path) {
+		return multiSessionMatch{}, false
+	}
 	if !visualStudioCopilotTraceUnderRoot(root, path, false) {
 		return multiSessionMatch{}, false
 	}
@@ -84,16 +88,126 @@ func vsCopilotDiscoveredMatch(root, path string) (multiSessionMatch, bool) {
 func discoverVisualStudioCopilotSessionFilesUnderRoot(
 	vsRoot string,
 ) []DiscoveredFile {
+	vsRoot = filepath.Clean(vsRoot)
 	if vsRoot == "" {
 		return nil
 	}
+	filesByPath := map[string]DiscoveredFile{}
+
 	entries, err := os.ReadDir(vsRoot)
+	if err == nil {
+		for _, file := range discoverVisualStudioCopilotSessionFiles(vsRoot, entries) {
+			filesByPath[file.Path] = file
+		}
+	}
+
+	for _, file := range discoverVisualStudioCopilotVS2026SessionFiles(vsRoot) {
+		filesByPath[file.Path] = file
+	}
+
+	files := make([]DiscoveredFile, 0, len(filesByPath))
+	for _, file := range filesByPath {
+		files = append(files, file)
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	return files
+}
+
+func discoverVisualStudioCopilotVS2026SessionFiles(
+	root string,
+) []DiscoveredFile {
+	root = filepath.Clean(root)
+	switch visualStudioCopilotVS2026RootKind(root) {
+	case visualStudioCopilotVS2026SessionsRoot:
+		return discoverVisualStudioCopilotVS2026SessionFilesInDirectory(root)
+	case visualStudioCopilotVS2026ThreadRoot:
+		return discoverVisualStudioCopilotVS2026SessionFilesInDirectory(
+			filepath.Join(root, "sessions"),
+		)
+	case visualStudioCopilotVS2026CopilotChatRoot:
+		return discoverVisualStudioCopilotVS2026SessionFilesInCopilotChatRoot(root)
+	case visualStudioCopilotVS2026VSRoot:
+		return discoverVisualStudioCopilotVS2026SessionFilesInVSRoot(root)
+	default:
+		return discoverVisualStudioCopilotVS2026SessionFilesInVSRoot(
+			filepath.Join(root, ".vs"),
+		)
+	}
+}
+
+func discoverVisualStudioCopilotVS2026SessionFilesInVSRoot(
+	vsRoot string,
+) []DiscoveredFile {
+	solutions, err := os.ReadDir(vsRoot)
 	if err != nil {
 		return nil
 	}
-	files := discoverVisualStudioCopilotSessionFiles(vsRoot, entries)
-	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
-	return files
+	out := []DiscoveredFile{}
+	for _, solution := range solutions {
+		if !solution.IsDir() {
+			continue
+		}
+		out = append(
+			out,
+			discoverVisualStudioCopilotVS2026SessionFilesInCopilotChatRoot(
+				filepath.Join(vsRoot, solution.Name(), "copilot-chat"),
+			)...,
+		)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out
+}
+
+func discoverVisualStudioCopilotVS2026SessionFilesInCopilotChatRoot(
+	copilotChatRoot string,
+) []DiscoveredFile {
+	threads, err := os.ReadDir(copilotChatRoot)
+	if err != nil {
+		return nil
+	}
+	out := []DiscoveredFile{}
+	for _, thread := range threads {
+		if !thread.IsDir() {
+			continue
+		}
+		out = append(
+			out,
+			discoverVisualStudioCopilotVS2026SessionFilesInDirectory(
+				filepath.Join(copilotChatRoot, thread.Name(), "sessions"),
+			)...,
+		)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+	return out
+}
+
+func discoverVisualStudioCopilotVS2026SessionFilesInDirectory(
+	dir string,
+) []DiscoveredFile {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	out := make([]DiscoveredFile, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !isVisualStudioCopilotVS2026SessionFileName(name) {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		if !isVisualStudioCopilotVS2026SessionPath(path) {
+			continue
+		}
+		out = append(out, DiscoveredFile{
+			Path:    VisualStudioCopilotVirtualPath(path, name),
+			Project: "visualstudio",
+			Agent:   AgentVSCopilot,
+		})
+	}
+	return out
 }
 
 func vsCopilotWatchRoots(roots []string) []WatchRoot {
@@ -120,6 +234,17 @@ func vsCopilotClassifyPath(
 	path = filepath.Clean(path)
 	if tracePath, conversationID, ok :=
 		splitVisualStudioCopilotVirtualPath(path); ok {
+		if isVisualStudioCopilotVS2026SessionPath(tracePath) {
+			if !visualStudioCopilotVS2026SessionUnderRoot(root, tracePath) {
+				return multiSessionMatch{}, false
+			}
+			return multiSessionMatch{
+				Path:        path,
+				Container:   tracePath,
+				MemberID:    conversationID,
+				ProjectHint: "visualstudio",
+			}, true
+		}
 		if !visualStudioCopilotTraceUnderRoot(root, tracePath, true) {
 			return multiSessionMatch{}, false
 		}
@@ -127,6 +252,15 @@ func vsCopilotClassifyPath(
 			Path:        path,
 			Container:   tracePath,
 			MemberID:    conversationID,
+			ProjectHint: "visualstudio",
+		}, true
+	}
+	if isVisualStudioCopilotVS2026SessionPath(path) &&
+		visualStudioCopilotVS2026SessionUnderRoot(root, path) {
+		return multiSessionMatch{
+			Path:        VisualStudioCopilotVirtualPath(path, filepath.Base(path)),
+			Container:   path,
+			MemberID:    filepath.Base(path),
 			ProjectHint: "visualstudio",
 		}, true
 	}
@@ -154,7 +288,82 @@ func findVisualStudioCopilotSourceFile(root, rawID string) string {
 	if root == "" || !IsValidSessionID(rawID) {
 		return ""
 	}
-	return findVisualStudioCopilotTraceSourceFile(root, rawID)
+	if path := findVisualStudioCopilotTraceSourceFile(root, rawID); path != "" {
+		return path
+	}
+	return findVisualStudioCopilotVS2026SourceFile(root, rawID)
+}
+
+func findVisualStudioCopilotVS2026SourceFile(
+	root, rawID string,
+) string {
+	for _, file := range discoverVisualStudioCopilotVS2026SessionFiles(root) {
+		path, conversationID, ok := splitVisualStudioCopilotVirtualPath(file.Path)
+		if !ok || conversationID != rawID {
+			continue
+		}
+		return VisualStudioCopilotVirtualPath(path, rawID)
+	}
+	return ""
+}
+
+func visualStudioCopilotVS2026SessionUnderRoot(
+	root, path string,
+) bool {
+	rel, ok := relUnder(root, path)
+	if !ok {
+		return false
+	}
+	if !isVisualStudioCopilotVS2026SessionPath(path) {
+		return false
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	switch visualStudioCopilotVS2026RootKind(root) {
+	case visualStudioCopilotVS2026SessionsRoot:
+		return len(parts) == 1
+	case visualStudioCopilotVS2026ThreadRoot:
+		return len(parts) == 2 && parts[0] == "sessions"
+	case visualStudioCopilotVS2026CopilotChatRoot:
+		return len(parts) == 3 && parts[1] == "sessions"
+	case visualStudioCopilotVS2026VSRoot:
+		return len(parts) == 5 &&
+			parts[1] == "copilot-chat" &&
+			parts[3] == "sessions"
+	default:
+		return len(parts) == 6 &&
+			strings.EqualFold(parts[0], ".vs") &&
+			parts[2] == "copilot-chat" &&
+			parts[4] == "sessions"
+	}
+}
+
+type visualStudioCopilotVS2026RootMode int
+
+const (
+	visualStudioCopilotVS2026ProjectRoot visualStudioCopilotVS2026RootMode = iota
+	visualStudioCopilotVS2026VSRoot
+	visualStudioCopilotVS2026CopilotChatRoot
+	visualStudioCopilotVS2026ThreadRoot
+	visualStudioCopilotVS2026SessionsRoot
+)
+
+func visualStudioCopilotVS2026RootKind(
+	root string,
+) visualStudioCopilotVS2026RootMode {
+	root = filepath.Clean(root)
+	switch {
+	case strings.EqualFold(filepath.Base(root), "sessions") &&
+		strings.EqualFold(filepath.Base(filepath.Dir(filepath.Dir(root))), "copilot-chat"):
+		return visualStudioCopilotVS2026SessionsRoot
+	case strings.EqualFold(filepath.Base(filepath.Dir(root)), "copilot-chat"):
+		return visualStudioCopilotVS2026ThreadRoot
+	case strings.EqualFold(filepath.Base(root), "copilot-chat"):
+		return visualStudioCopilotVS2026CopilotChatRoot
+	case strings.EqualFold(filepath.Base(root), ".vs"):
+		return visualStudioCopilotVS2026VSRoot
+	default:
+		return visualStudioCopilotVS2026ProjectRoot
+	}
 }
 
 func vsCopilotFingerprintSource(
@@ -218,7 +427,7 @@ func vsCopilotParseContainer(
 // splitVisualStudioCopilotVirtualPath splits a <traceFile>#<conversationID>
 // virtual source path into its physical trace file and conversation ID. It
 // builds on the provider-neutral ParseVirtualSourcePath splitter and adds the
-// Visual Studio Copilot validation: the container must name a trace file and the
+// Visual Studio Copilot validation: the container must name a trace file path and
 // source ID must be a valid conversation ID. It returns ok=false for a plain
 // trace-file path.
 func splitVisualStudioCopilotVirtualPath(
@@ -228,7 +437,7 @@ func splitVisualStudioCopilotVirtualPath(
 	if !ok {
 		return "", "", false
 	}
-	if !IsVisualStudioCopilotTraceFile(tracePath) ||
+	if !isVisualStudioCopilotConversationPath(tracePath) ||
 		!IsValidSessionID(conversationID) {
 		return "", "", false
 	}

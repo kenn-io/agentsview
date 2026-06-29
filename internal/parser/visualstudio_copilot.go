@@ -46,6 +46,28 @@ func IsVisualStudioCopilotTraceFile(path string) bool {
 		strings.Contains(base, "_VSGitHubCopilot_traces")
 }
 
+func isVisualStudioCopilotConversationPath(path string) bool {
+	return IsVisualStudioCopilotTraceFile(path) ||
+		isVisualStudioCopilotVS2026SessionPath(path)
+}
+
+func isVisualStudioCopilotVS2026SessionPath(path string) bool {
+	if !isVisualStudioCopilotVS2026SessionFileName(filepath.Base(path)) {
+		return false
+	}
+
+	parts := strings.Split(filepath.ToSlash(filepath.Dir(path)), "/")
+	if len(parts) < 4 {
+		return false
+	}
+	return parts[len(parts)-1] == "sessions" &&
+		parts[len(parts)-3] == "copilot-chat"
+}
+
+func isVisualStudioCopilotVS2026SessionFileName(name string) bool {
+	return !strings.Contains(name, ".") && IsValidSessionID(name)
+}
+
 // ResolveSourceFilePath maps a stored session source path to a path that can
 // be opened on disk. Visual Studio Copilot stores a
 // <traceFile>#<conversationID> virtual path whose conversations share one
@@ -571,6 +593,12 @@ func visualStudioCopilotSiblingTraceFiles(path string) ([]string, error) {
 func VisualStudioCopilotTraceFingerprint(
 	tracePath string,
 ) (size, mtime int64) {
+	if isVisualStudioCopilotVS2026SessionPath(tracePath) {
+		if info, err := os.Stat(tracePath); err == nil {
+			return info.Size(), info.ModTime().UnixNano()
+		}
+		return 0, 0
+	}
 	size, mtime, err := visualStudioCopilotTraceFingerprint(tracePath, false)
 	if err != nil {
 		if info, statErr := os.Stat(tracePath); statErr == nil {
@@ -593,6 +621,13 @@ func VisualStudioCopilotTraceFingerprint(
 func VisualStudioCopilotTraceFingerprintStrict(
 	tracePath string,
 ) (size, mtime int64, err error) {
+	if isVisualStudioCopilotVS2026SessionPath(tracePath) {
+		info, err := os.Stat(tracePath)
+		if err != nil {
+			return 0, 0, err
+		}
+		return info.Size(), info.ModTime().UnixNano(), nil
+	}
 	return visualStudioCopilotTraceFingerprint(tracePath, true)
 }
 
