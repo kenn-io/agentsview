@@ -190,7 +190,10 @@ func (s positronSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 			return nil, err
 		}
 		for _, file := range s.discoverSessions(root) {
-			source, ok := s.sourceRef(root, file.Path)
+			// discoverSessions already resolved the workspace project once per
+			// workspace dir; thread it so sourceRef does not re-read the
+			// workspace manifest for every session.
+			source, ok := s.sourceRefWithProject(root, file.Path, file.Project)
 			if !ok {
 				continue
 			}
@@ -400,6 +403,16 @@ func (s positronSourceSet) pathFromSource(source SourceRef) (string, string, boo
 }
 
 func (s positronSourceSet) sourceRef(root, path string) (SourceRef, bool) {
+	return s.sourceRefWithProject(root, path, "")
+}
+
+// sourceRefWithProject builds a SourceRef using a caller-supplied workspace
+// project. Discovery resolves the project once per workspace dir and threads it
+// for every session under that dir; single-path callers pass "" and the
+// workspace manifest is read for that one path.
+func (s positronSourceSet) sourceRefWithProject(
+	root, path, project string,
+) (SourceRef, bool) {
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
 	rel, ok := relUnder(root, path)
@@ -419,7 +432,9 @@ func (s positronSourceSet) sourceRef(root, path string) (SourceRef, bool) {
 	if !IsRegularFile(path) {
 		return SourceRef{}, false
 	}
-	project := positronWorkspaceProject(root, parts[1])
+	if project == "" {
+		project = positronWorkspaceProject(root, parts[1])
+	}
 	return s.newSourceRef(root, path, project), true
 }
 
@@ -541,7 +556,7 @@ func (s positronSourceSet) newSourceRef(root, path, project string) SourceRef {
 
 func positronWorkspaceProject(root, hash string) string {
 	hashDir := filepath.Join(root, "workspaceStorage", hash)
-	project := ReadVSCodeWorkspaceManifest(hashDir)
+	project := readVSCodeWorkspaceManifest(hashDir)
 	if project == "" {
 		project = "unknown"
 	}

@@ -833,3 +833,41 @@ func assertAntigravityCLISourcePaths(
 	}
 	assert.Equal(t, want, got)
 }
+
+// TestAntigravityCLIDiscoverBuildsProjectMapOncePerRoot guards against
+// rebuilding the history.jsonl project map for every discovered source.
+// buildAntigravityProjectMap reads and per-line-parses history.jsonl, and the
+// per-source fallback fired for every project-less session, so discovery scaled
+// with session count.
+func TestAntigravityCLIDiscoverBuildsProjectMapOncePerRoot(t *testing.T) {
+	root := t.TempDir()
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	// No history.jsonl: every session is project-less, which is exactly what
+	// triggered the per-source map rebuild.
+	for _, id := range []string{
+		"11111111-1111-1111-1111-111111111111",
+		"22222222-2222-2222-2222-222222222222",
+		"33333333-3333-3333-3333-333333333333",
+	} {
+		mustWrite(t, filepath.Join(root, "conversations", id+".pb"), []byte("x"))
+	}
+
+	var calls int
+	orig := buildAntigravityProjectMap
+	buildAntigravityProjectMap = func(p string) map[string]string {
+		calls++
+		return orig(p)
+	}
+	t.Cleanup(func() { buildAntigravityProjectMap = orig })
+
+	provider, ok := NewProvider(AgentAntigravityCLI, ProviderConfig{
+		Roots: []string{root}, Machine: "local",
+	})
+	require.True(t, ok)
+
+	srcs, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, srcs, 3)
+	assert.Equal(t, 1, calls,
+		"history.jsonl project map should be built once per root, not per source")
+}

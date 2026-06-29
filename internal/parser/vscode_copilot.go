@@ -580,6 +580,11 @@ func extractInvocationText(raw json.RawMessage) string {
 	return ""
 }
 
+// readVSCodeWorkspaceManifest indirects ReadVSCodeWorkspaceManifest so the
+// VSCode-Copilot and Positron discovery paths can resolve the manifest once
+// per workspace dir and tests can observe how often it runs.
+var readVSCodeWorkspaceManifest = ReadVSCodeWorkspaceManifest
+
 // ReadVSCodeWorkspaceManifest reads the workspace.json file
 // in a workspaceStorage hash directory and extracts the
 // project folder path.

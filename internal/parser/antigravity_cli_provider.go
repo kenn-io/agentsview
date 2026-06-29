@@ -158,8 +158,13 @@ func (s antigravityCLISourceSet) Discover(ctx context.Context) ([]SourceRef, err
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		for _, file := range s.discoverSessions(root) {
-			source, ok := s.sourceRef(root, file.Path, file.Project, false)
+		files, projects := s.discoverSessionsAndProjects(root)
+		for _, file := range files {
+			// Thread the prebuilt project map so per-source resolution does not
+			// re-read and re-parse history.jsonl for every project-less source.
+			source, ok := s.sourceRefWithProjects(
+				root, file.Path, file.Project, projects, false,
+			)
 			if ok {
 				addJSONLSource(source, &sources, seen)
 			}
@@ -176,8 +181,19 @@ func (s antigravityCLISourceSet) Discover(ctx context.Context) ([]SourceRef, err
 // keeps the legacy DiscoveredFile shape so the project hint travels with each
 // path.
 func (s antigravityCLISourceSet) discoverSessions(root string) []DiscoveredFile {
+	files, _ := s.discoverSessionsAndProjects(root)
+	return files
+}
+
+// discoverSessionsAndProjects enumerates sessions and also returns the project
+// map it built from history.jsonl, so callers can thread the same map into
+// per-source resolution instead of rebuilding it (the map is a full read and
+// per-line parse of history.jsonl).
+func (s antigravityCLISourceSet) discoverSessionsAndProjects(
+	root string,
+) ([]DiscoveredFile, map[string]string) {
 	if root == "" {
-		return nil
+		return nil, nil
 	}
 	projects := buildAntigravityProjectMap(
 		filepath.Join(root, "history.jsonl"),
@@ -217,7 +233,7 @@ func (s antigravityCLISourceSet) discoverSessions(root string) []DiscoveredFile 
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].Path < files[j].Path
 	})
-	return files
+	return files, projects
 }
 
 // findSourceFile locates the source file for a session id (without the agent
@@ -448,8 +464,11 @@ func (s antigravityCLISourceSet) sourcesForHistoryChange(
 func (s antigravityCLISourceSet) sourcesForUntaggedHistoryChange(root string) []SourceRef {
 	var sources []SourceRef
 	seen := make(map[string]struct{})
-	for _, file := range s.discoverSessions(root) {
-		source, ok := s.sourceRef(root, file.Path, file.Project, false)
+	files, projects := s.discoverSessionsAndProjects(root)
+	for _, file := range files {
+		source, ok := s.sourceRefWithProjects(
+			root, file.Path, file.Project, projects, false,
+		)
 		if ok {
 			addJSONLSource(source, &sources, seen)
 		}
@@ -494,6 +513,29 @@ func (s antigravityCLISourceSet) sourceRef(
 	}
 	if project == "" {
 		project = s.projectForID(root, strings.TrimPrefix(id, antigravityImplicitTag))
+	}
+	return s.newSourceRef(root, path, id, project), true
+}
+
+// sourceRefWithProjects is sourceRef but resolves a missing project from a
+// prebuilt project map instead of rebuilding it from history.jsonl per call.
+// Discovery builds the map once per root and threads it for every source.
+func (s antigravityCLISourceSet) sourceRefWithProjects(
+	root, path, project string,
+	projects map[string]string,
+	allowMissing bool,
+) (SourceRef, bool) {
+	root = filepath.Clean(root)
+	path = filepath.Clean(path)
+	id, ok := antigravityCLISessionIDForPath(root, path)
+	if !ok {
+		return SourceRef{}, false
+	}
+	if !allowMissing && !IsRegularFile(path) {
+		return SourceRef{}, false
+	}
+	if project == "" {
+		project = projects[strings.TrimPrefix(id, antigravityImplicitTag)]
 	}
 	return s.newSourceRef(root, path, id, project), true
 }

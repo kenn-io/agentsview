@@ -140,7 +140,10 @@ func (s vscodeCopilotSourceSet) Discover(ctx context.Context) ([]SourceRef, erro
 			return nil, err
 		}
 		for _, file := range s.discoverSessionFiles(root) {
-			source, ok := s.sourceRef(root, file.Path)
+			// discoverSessionFiles already resolved the workspace project once
+			// per workspace dir; thread it so sourceRef does not re-read the
+			// workspace manifest for every session.
+			source, ok := s.sourceRefWithProject(root, file.Path, file.Project)
 			if !ok {
 				continue
 			}
@@ -186,7 +189,7 @@ func (s vscodeCopilotSourceSet) discoverSessionFiles(
 			}
 
 			// Read workspace.json to get project name
-			project := ReadVSCodeWorkspaceManifest(hashPath)
+			project := readVSCodeWorkspaceManifest(hashPath)
 			if project == "" {
 				project = "unknown"
 			}
@@ -406,6 +409,16 @@ func (s vscodeCopilotSourceSet) pathFromSource(source SourceRef) (string, string
 }
 
 func (s vscodeCopilotSourceSet) sourceRef(root, path string) (SourceRef, bool) {
+	return s.sourceRefWithProject(root, path, "")
+}
+
+// sourceRefWithProject builds a SourceRef using a caller-supplied workspace
+// project. Discovery resolves the project once per workspace dir and threads it
+// for every session under that dir; single-path callers pass "" and the
+// workspace manifest is read for that one path.
+func (s vscodeCopilotSourceSet) sourceRefWithProject(
+	root, path, project string,
+) (SourceRef, bool) {
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
 	rel, ok := relUnder(root, path)
@@ -423,8 +436,10 @@ func (s vscodeCopilotSourceSet) sourceRef(root, path string) (SourceRef, bool) {
 		if !IsRegularFile(path) {
 			return SourceRef{}, false
 		}
-		hashDir := filepath.Join(root, "workspaceStorage", parts[1])
-		project := ReadVSCodeWorkspaceManifest(hashDir)
+		if project == "" {
+			hashDir := filepath.Join(root, "workspaceStorage", parts[1])
+			project = readVSCodeWorkspaceManifest(hashDir)
+		}
 		if project == "" {
 			project = "unknown"
 		}

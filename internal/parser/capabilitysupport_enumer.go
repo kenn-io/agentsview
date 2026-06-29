@@ -5,6 +5,7 @@ package parser
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -74,12 +75,7 @@ func CapabilitySupportStrings() []string {
 
 // IsACapabilitySupport returns "true" if the value is listed in the enum definition. "false" otherwise
 func (i CapabilitySupport) IsACapabilitySupport() bool {
-	for _, v := range _CapabilitySupportValues {
-		if i == v {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(_CapabilitySupportValues, i)
 }
 
 // MarshalJSON implements the json.Marshaler interface for CapabilitySupport

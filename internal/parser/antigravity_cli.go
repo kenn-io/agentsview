@@ -427,9 +427,14 @@ func hasDisplayableAntigravityCLITrajectoryMessage(
 	return false
 }
 
-// buildAntigravityProjectMap reads history.jsonl and returns a
+// buildAntigravityProjectMap indirects antigravityProjectMapFromHistory so the
+// discovery path can build the map once per root and tests can observe how
+// often it runs.
+var buildAntigravityProjectMap = antigravityProjectMapFromHistory
+
+// antigravityProjectMapFromHistory reads history.jsonl and returns a
 // map of conversationId -> workspace path.
-func buildAntigravityProjectMap(path string) map[string]string {
+func antigravityProjectMapFromHistory(path string) map[string]string {
 	out := make(map[string]string)
 	f, err := os.Open(path)
 	if err != nil {
