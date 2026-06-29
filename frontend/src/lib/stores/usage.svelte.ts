@@ -171,6 +171,16 @@ function emptyPairwiseSelection(): UsagePairwiseSelection {
   };
 }
 
+function samePairwiseSelection(
+  left: UsagePairwiseSelection,
+  right: UsagePairwiseSelection,
+): boolean {
+  return left.left.dimension === right.left.dimension &&
+    left.left.value === right.left.value &&
+    left.right.dimension === right.right.dimension &&
+    left.right.value === right.right.value;
+}
+
 class UsageStore {
   from: string = $state(daysAgo(DEFAULT_WINDOW_DAYS));
   to: string = $state(today());
@@ -306,7 +316,7 @@ class UsageStore {
     return options[0] ?? "";
   }
 
-  private ensurePairwiseSelection(): void {
+  private ensurePairwiseSelection(): boolean {
     const current = this.pairwiseSelection;
     const currentLeftOptions = this.pairwiseOptionsFor(current.left.dimension);
     const currentRightOptions = this.pairwiseOptionsFor(current.right.dimension);
@@ -314,7 +324,7 @@ class UsageStore {
       currentLeftOptions.includes(current.left.value);
     const rightValid = current.right.value !== "" &&
       currentRightOptions.includes(current.right.value);
-    if (leftValid && rightValid) return;
+    if (leftValid && rightValid) return false;
 
     const modelOptions = this.pairwiseModelOptions;
     const projectOptions = this.pairwiseProjectOptions;
@@ -337,7 +347,16 @@ class UsageStore {
     } else {
       next = emptyPairwiseSelection();
     }
+    if (samePairwiseSelection(current, next)) {
+      return false;
+    }
     this.pairwiseSelection = next;
+    return true;
+  }
+
+  private clearPairwiseComparisonState(): void {
+    this.pairwiseComparison = null;
+    this.errors.pairwise = null;
   }
 
   applyDateRange(from: string, to: string) {
@@ -384,8 +403,7 @@ class UsageStore {
     next[side] = { dimension, value };
     this.pairwiseSelection = next;
     if (this.summary) {
-      this.pairwiseComparison = null;
-      this.errors.pairwise = null;
+      this.clearPairwiseComparisonState();
       void this.fetchPairwise(this.versions.summary, this.baseParams());
     }
   }
@@ -540,7 +558,9 @@ class UsageStore {
       await topSessionsPromise;
       return;
     }
-    this.ensurePairwiseSelection();
+    if (this.ensurePairwiseSelection()) {
+      this.clearPairwiseComparisonState();
+    }
     const [topSessionsResult, comparisonResult, pairwiseResult] = await Promise.all([
       topSessionsPromise,
       this.fetchComparison(
@@ -586,7 +606,9 @@ class UsageStore {
       if (this.versions.summary === v) {
         this.summary = data;
         this.errors.summary = null;
-        this.ensurePairwiseSelection();
+        if (this.ensurePairwiseSelection()) {
+          this.clearPairwiseComparisonState();
+        }
         const loaded = { version: v, summary: data, params };
         if (loadComparison) {
           void this.fetchComparison(v, data, params);

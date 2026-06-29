@@ -572,7 +572,7 @@ func (b *directBackend) UsageSummary(
 func (b *directBackend) UsagePairwiseComparison(
 	ctx context.Context, req UsagePairwiseComparisonRequest,
 ) (*UsagePairwiseComparisonResponse, error) {
-	leftFilter, rightFilter, err := BuildUsagePairwiseFilters(req)
+	leftFilter, leftEmpty, rightFilter, rightEmpty, err := BuildUsagePairwiseFilters(req)
 	if err != nil {
 		return nil, err
 	}
@@ -581,13 +581,19 @@ func (b *directBackend) UsagePairwiseComparison(
 	leftFilter.SkipSessionCounts = false
 	rightFilter.SkipSessionCounts = false
 
-	leftResult, err := b.db.GetDailyUsage(ctx, leftFilter)
-	if err != nil {
-		return nil, err
+	var leftResult db.DailyUsageResult
+	if !leftEmpty {
+		leftResult, err = b.db.GetDailyUsage(ctx, leftFilter)
+		if err != nil {
+			return nil, err
+		}
 	}
-	rightResult, err := b.db.GetDailyUsage(ctx, rightFilter)
-	if err != nil {
-		return nil, err
+	var rightResult db.DailyUsageResult
+	if !rightEmpty {
+		rightResult, err = b.db.GetDailyUsage(ctx, rightFilter)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	out := BuildUsagePairwiseComparisonResult(leftResult, rightResult)

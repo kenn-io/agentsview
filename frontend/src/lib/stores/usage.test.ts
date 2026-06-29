@@ -250,6 +250,61 @@ function usageComparison(): UsageComparison {
   };
 }
 
+function usageSummaryWithOptions(options: {
+  totalCost?: number;
+  projects?: string[];
+  models?: string[];
+} = {}): UsageSummaryResponse {
+  const totalCost = options.totalCost ?? 0;
+  const projects = options.projects ?? ["alpha", "beta"];
+  const models = options.models ?? [
+    "claude-sonnet-4-20250514",
+    "gpt-4o",
+  ];
+  return {
+    from: "2024-01-01",
+    to: "2024-01-31",
+    totals: {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      totalCost,
+    },
+    daily: [],
+    projectTotals: projects.map((project) => ({
+      project,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost: 0,
+    })),
+    modelTotals: models.map((model) => ({
+      model,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost: 0,
+    })),
+    agentTotals: [],
+    sessionCounts: {
+      total: 0,
+      byProject: {},
+      byAgent: {},
+    },
+    cacheStats: {
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      uncachedInputTokens: 0,
+      outputTokens: 0,
+      hitRate: 0,
+      savingsVsUncached: 0,
+    },
+  };
+}
+
 function usagePairwiseComparison(): UsagePairwiseComparisonResponse {
   return {
     left: {
@@ -471,6 +526,43 @@ describe("UsageStore session filter params", () => {
     usage.setPairwiseSide("left", { value: "gpt-4o" });
 
     expect(usage.pairwiseSelection.left.value).toBe("gpt-4o");
+    expect(usage.pairwiseComparison).toBeNull();
+  });
+
+  it("clears stale pairwise results when a summary refresh rewrites the selection", async () => {
+    const { usage } = await loadStore();
+
+    await usage.fetchAll();
+    expect(usage.pairwiseSelection).toEqual({
+      left: {
+        dimension: "model",
+        value: "claude-sonnet-4-20250514",
+      },
+      right: {
+        dimension: "model",
+        value: "gpt-4o",
+      },
+    });
+    expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
+
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce(
+      usageSummaryWithOptions({
+        projects: ["beta", "gamma"],
+        models: ["gpt-4o"],
+      }),
+    );
+    usageServiceMocks.getApiV1UsagePairwiseComparison.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+
+    void usage.fetchAll();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(usage.pairwiseSelection).toEqual({
+      left: { dimension: "project", value: "beta" },
+      right: { dimension: "project", value: "gamma" },
+    });
     expect(usage.pairwiseComparison).toBeNull();
   });
 

@@ -387,10 +387,16 @@ func BuildUsagePairwiseComparisonResult(
 
 func BuildUsagePairwiseFilters(
 	req UsagePairwiseComparisonRequest,
-) (db.UsageFilter, db.UsageFilter, error) {
+) (
+	db.UsageFilter,
+	bool,
+	db.UsageFilter,
+	bool,
+	error,
+) {
 	base, err := BuildUsageFilter(req.UsageRequest)
 	if err != nil {
-		return db.UsageFilter{}, db.UsageFilter{}, err
+		return db.UsageFilter{}, false, db.UsageFilter{}, false, err
 	}
 
 	left, err := applyPairwiseDimension(
@@ -400,7 +406,7 @@ func BuildUsagePairwiseFilters(
 		"left",
 	)
 	if err != nil {
-		return db.UsageFilter{}, db.UsageFilter{}, err
+		return db.UsageFilter{}, false, db.UsageFilter{}, false, err
 	}
 	right, err := applyPairwiseDimension(
 		base,
@@ -409,9 +415,9 @@ func BuildUsagePairwiseFilters(
 		"right",
 	)
 	if err != nil {
-		return db.UsageFilter{}, db.UsageFilter{}, err
+		return db.UsageFilter{}, false, db.UsageFilter{}, false, err
 	}
-	return left, right, nil
+	return left.filter, left.empty, right.filter, right.empty, nil
 }
 
 func intersectCSV(base, add string) (string, bool) {
@@ -438,7 +444,7 @@ func intersectCSV(base, add string) (string, bool) {
 		out = append(out, token)
 	}
 	if len(out) == 0 {
-		return "__agentsview_no_match__", false
+		return "", false
 	}
 	return joinCSVTokens(out), true
 }
@@ -459,37 +465,37 @@ func joinCSVTokens(tokens []string) string {
 	return strings.Join(tokens, ",")
 }
 
+type pairwiseFilterResult struct {
+	filter db.UsageFilter
+	empty  bool
+}
+
 func applyPairwiseDimension(
 	base db.UsageFilter, dimension, value string,
 	label string,
-) (db.UsageFilter, error) {
+) (pairwiseFilterResult, error) {
 	filter := base
 	if value == "" {
-		return db.UsageFilter{},
+		return pairwiseFilterResult{},
 			&UsageInputError{Msg: label + "_value is required"}
 	}
 	var ok bool
 	switch dimension {
 	case "model":
 		filter.Model, ok = intersectCSV(filter.Model, value)
-		if !ok {
-			filter.Model = "__agentsview_no_match__"
-		}
+		return pairwiseFilterResult{filter: filter, empty: !ok}, nil
 	case "project":
 		filter.Project, ok = intersectCSV(filter.Project, value)
-		if !ok {
-			filter.Project = "__agentsview_no_match__"
-		}
+		return pairwiseFilterResult{filter: filter, empty: !ok}, nil
 	case "":
-		return db.UsageFilter{},
+		return pairwiseFilterResult{},
 			&UsageInputError{Msg: label + "_dimension is required"}
 	default:
-		return db.UsageFilter{},
+		return pairwiseFilterResult{},
 			&UsageInputError{
 				Msg: label + "_dimension must be model or project",
 			}
 	}
-	return filter, nil
 }
 
 func safePerTurnDenominator(count int) bool {

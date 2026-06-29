@@ -265,7 +265,7 @@ func TestHTTPBackend_UsageSummary_ReadOnly(t *testing.T) {
 func TestBuildUsagePairwiseFilters_Validation(t *testing.T) {
 	t.Parallel()
 
-	_, _, err := service.BuildUsagePairwiseFilters(
+	_, _, _, _, err := service.BuildUsagePairwiseFilters(
 		service.UsagePairwiseComparisonRequest{
 			UsageRequest:   service.UsageRequest{From: "2024-06-01", To: "2024-06-02"},
 			LeftDimension:  "model",
@@ -283,7 +283,7 @@ func TestBuildUsagePairwiseFilters_Validation(t *testing.T) {
 func TestBuildUsagePairwiseFilters_PreservesNonComparedBaseFilters(t *testing.T) {
 	t.Parallel()
 
-	left, right, err := service.BuildUsagePairwiseFilters(
+	left, leftEmpty, right, rightEmpty, err := service.BuildUsagePairwiseFilters(
 		service.UsagePairwiseComparisonRequest{
 			UsageRequest: service.UsageRequest{
 				From:     "2024-06-01",
@@ -299,10 +299,35 @@ func TestBuildUsagePairwiseFilters_PreservesNonComparedBaseFilters(t *testing.T)
 		},
 	)
 	require.NoError(t, err)
+	assert.False(t, leftEmpty)
+	assert.False(t, rightEmpty)
 	assert.Equal(t, "model-b", left.Model)
 	assert.Equal(t, "alpha,beta", left.Project)
 	assert.Equal(t, "model-a,model-b", right.Model)
 	assert.Equal(t, "beta", right.Project)
+}
+
+func TestBuildUsagePairwiseFilters_ConflictingBaseFilterMarksEmptySide(t *testing.T) {
+	t.Parallel()
+
+	left, leftEmpty, right, rightEmpty, err := service.BuildUsagePairwiseFilters(
+		service.UsagePairwiseComparisonRequest{
+			UsageRequest: service.UsageRequest{
+				From:  "2024-06-01",
+				To:    "2024-06-03",
+				Model: "gpt-4o",
+			},
+			LeftDimension:  "model",
+			LeftValue:      "claude-sonnet-4-20250514",
+			RightDimension: "model",
+			RightValue:     "gpt-4o",
+		},
+	)
+	require.NoError(t, err)
+	assert.True(t, leftEmpty)
+	assert.False(t, rightEmpty)
+	assert.Empty(t, left.Model)
+	assert.Equal(t, "gpt-4o", right.Model)
 }
 
 func TestDirectBackend_UsagePairwiseComparison_ModelVsModel(t *testing.T) {
@@ -396,6 +421,103 @@ func TestDirectBackend_UsagePairwiseComparison_ZeroDataSide(t *testing.T) {
 	assert.Zero(t, res.Left.TotalTokens)
 	assert.Nil(t, res.Left.CostPerSession)
 	assert.Nil(t, res.Deltas.TotalCostDeltaRatio)
+}
+
+func TestDirectBackend_UsagePairwiseComparison_ConflictingBaseFilterReturnsZeroData(t *testing.T) {
+	t.Parallel()
+
+	d := dbtest.OpenTestDB(t)
+	seedPairwiseUsageFixture(t, d)
+	be := service.NewDirectBackend(d, nil)
+
+	res, err := be.UsagePairwiseComparison(
+		context.Background(),
+		service.UsagePairwiseComparisonRequest{
+			UsageRequest: service.UsageRequest{
+				From:           "2024-06-01",
+				To:             "2024-06-01",
+				Timezone:       "UTC",
+				Model:          "gpt-4o",
+				IncludeOneShot: true,
+			},
+			LeftDimension:  "model",
+			LeftValue:      "claude-sonnet-4-20250514",
+			RightDimension: "model",
+			RightValue:     "gpt-4o",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Zero(t, res.Left.SessionCount)
+	assert.Zero(t, res.Left.TotalTokens)
+	assert.Equal(t, 1, res.Right.SessionCount)
+	assert.Equal(t, 50, res.Right.TotalTokens)
+}
+
+func TestDirectBackend_UsagePairwiseComparison_DoesNotUseSentinelFilterValues(t *testing.T) {
+	t.Parallel()
+
+	d := dbtest.OpenTestDB(t)
+	seedPairwiseUsageFixture(t, d)
+	started := "2024-06-01T12:00:00Z"
+	dbtest.SeedSessionWithMessages(
+		t,
+		d,
+		"usage-sentinel-model",
+		"sentinel-project",
+		[]db.Message{
+			dbtest.UserMsg("usage-sentinel-model", 0, "compare usage"),
+			assistantUsageMsg("usage-sentinel-model", 1, struct {
+				id      string
+				project string
+				started string
+				model   string
+				input   int
+				output  int
+				create  int
+				read    int
+			}{
+				id:      "usage-sentinel-model",
+				project: "sentinel-project",
+				started: started,
+				model:   "__agentsview_no_match__",
+				input:   999,
+				output:  999,
+				create:  0,
+				read:    0,
+			}),
+		},
+		dbtest.WithMessageCounts(2, 1),
+		func(s *db.Session) {
+			s.Agent = "claude"
+			s.StartedAt = &started
+			s.EndedAt = &started
+		},
+	)
+	be := service.NewDirectBackend(d, nil)
+
+	res, err := be.UsagePairwiseComparison(
+		context.Background(),
+		service.UsagePairwiseComparisonRequest{
+			UsageRequest: service.UsageRequest{
+				From:           "2024-06-01",
+				To:             "2024-06-01",
+				Timezone:       "UTC",
+				Model:          "gpt-4o",
+				IncludeOneShot: true,
+			},
+			LeftDimension:  "model",
+			LeftValue:      "claude-sonnet-4-20250514",
+			RightDimension: "model",
+			RightValue:     "gpt-4o",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Zero(t, res.Left.SessionCount)
+	assert.Zero(t, res.Left.TotalTokens)
+	assert.Equal(t, 1, res.Right.SessionCount)
+	assert.Equal(t, 50, res.Right.TotalTokens)
 }
 
 func TestHTTPBackend_UsagePairwiseComparison_Roundtrip(t *testing.T) {
