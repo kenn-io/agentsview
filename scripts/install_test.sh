@@ -71,3 +71,5 @@ MOCK_CURL_EXIT=0
 echo
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
+
+bash "$SCRIPT_DIR/make_install_test.sh"
