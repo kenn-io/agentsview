@@ -769,6 +769,13 @@ func ValidRole(r RoleType) bool {
 	}
 }
 
+// Transcript fidelity values for ParsedSession.TranscriptFidelity. Empty
+// is treated as full (no degradation signalled).
+const (
+	TranscriptFidelityFull    = "full"
+	TranscriptFidelitySummary = "summary"
+)
+
 // FileInfo holds file system metadata for a session source file.
 type FileInfo struct {
 	Path   string
@@ -791,15 +798,21 @@ type ParsedSession struct {
 	GitBranch        string
 	SourceSessionID  string
 	SourceVersion    string
-	MalformedLines   int
-	IsTruncated      bool
-	FirstMessage     string
-	SessionName      string
-	StartedAt        time.Time
-	EndedAt          time.Time
-	MessageCount     int
-	UserMessageCount int
-	File             FileInfo
+	// TranscriptFidelity classifies how complete a stored transcript is
+	// relative to the agent's full session data: "full" when the
+	// high-resolution source was used, "summary" for a degraded/fallback
+	// decode. Empty means full (parser did not classify). Currently set
+	// only by the Antigravity CLI parser.
+	TranscriptFidelity string
+	MalformedLines     int
+	IsTruncated        bool
+	FirstMessage       string
+	SessionName        string
+	StartedAt          time.Time
+	EndedAt            time.Time
+	MessageCount       int
+	UserMessageCount   int
+	File               FileInfo
 
 	// TerminationStatus describes how the session appears to have
 	// ended. Empty string = unknown (parser did not classify, or

@@ -3241,3 +3241,84 @@ func TestDecodeAntigravityStepToolOnlyAssistantStep(t *testing.T) {
 	require.Len(t, msg.ToolCalls, 1)
 	assert.Equal(t, "view_file", msg.ToolCalls[0].ToolName)
 }
+
+func TestAntigravityCLITranscriptFidelity(t *testing.T) {
+	t.Run("covering sidecar is full", func(t *testing.T) {
+		root := t.TempDir()
+		id := "11111111-2222-3333-4444-555555555555"
+		mustMkdir(t, filepath.Join(root, "conversations"))
+		dbPath := filepath.Join(root, "conversations", id+".db")
+		createAntigravityTestDB(t, dbPath) // 2 raw steps
+		writeAntigravityTestSidecar(t, root, id, 2)
+
+		sess, _, _, status, err := ParseAntigravityCLISessionWithStatus(
+			dbPath, "", "test-machine",
+		)
+		require.NoError(t, err)
+		assert.False(t, status.NeedsRetry)
+		assert.Equal(t, TranscriptFidelityFull, sess.TranscriptFidelity)
+	})
+
+	t.Run("heuristic db decode (no covering sidecar) is summary", func(t *testing.T) {
+		root := t.TempDir()
+		id := "22222222-3333-4444-5555-666666666666"
+		mustMkdir(t, filepath.Join(root, "conversations"))
+		dbPath := filepath.Join(root, "conversations", id+".db")
+		createAntigravityTestDB(t, dbPath)          // 2 raw steps
+		writeAntigravityTestSidecar(t, root, id, 1) // lags -> db decode wins
+		mustWrite(t, filepath.Join(root, "history.jsonl"),
+			[]byte(`{"display":"history prompt","timestamp":1779000000000,`+
+				`"workspace":"/tmp/db-proj","conversationId":"`+id+`"}`))
+
+		sess, _, _, status, err := ParseAntigravityCLISessionWithStatus(
+			dbPath, "", "test-machine",
+		)
+		require.NoError(t, err)
+		assert.False(t, status.NeedsRetry)
+		assert.Equal(t, TranscriptFidelitySummary, sess.TranscriptFidelity)
+	})
+
+	t.Run("partial sidecar over undecodable db is summary", func(t *testing.T) {
+		root := t.TempDir()
+		id := "33333333-4444-5555-6666-777777777777"
+		mustMkdir(t, filepath.Join(root, "conversations"))
+		dbPath := filepath.Join(root, "conversations", id+".db")
+		createAntigravityUndecodableDB(t, dbPath, 3)
+		writeAntigravityTestSidecar(t, root, id, 2) // partial
+
+		sess, _, _, status, err := ParseAntigravityCLISessionWithStatus(
+			dbPath, "", "test-machine",
+		)
+		require.NoError(t, err)
+		assert.True(t, status.NeedsRetry)
+		assert.Equal(t, TranscriptFidelitySummary, sess.TranscriptFidelity)
+	})
+
+	t.Run("legacy .pb sidecar is full", func(t *testing.T) {
+		root := t.TempDir()
+		id := "44444444-5555-6666-7777-888888888888"
+		mustMkdir(t, filepath.Join(root, "conversations"))
+		pbPath := filepath.Join(root, "conversations", id+".pb")
+		mustWrite(t, pbPath, []byte("pb-stub"))
+		writeAntigravityTestSidecar(t, root, id, 2)
+
+		sess, _, err := ParseAntigravityCLISession(pbPath, "", "test-machine")
+		require.NoError(t, err)
+		assert.Equal(t, TranscriptFidelityFull, sess.TranscriptFidelity)
+	})
+
+	t.Run("history+brain only is summary", func(t *testing.T) {
+		root := t.TempDir()
+		id := "55555555-6666-7777-8888-999999999999"
+		mustMkdir(t, filepath.Join(root, "conversations"))
+		pbPath := filepath.Join(root, "conversations", id+".pb")
+		mustWrite(t, pbPath, []byte("pb-stub")) // no sidecar, no key
+		mustWrite(t, filepath.Join(root, "history.jsonl"),
+			[]byte(`{"display":"hi","timestamp":1779000000000,`+
+				`"workspace":"/tmp/p","conversationId":"`+id+`"}`))
+
+		sess, _, err := ParseAntigravityCLISession(pbPath, "", "test-machine")
+		require.NoError(t, err)
+		assert.Equal(t, TranscriptFidelitySummary, sess.TranscriptFidelity)
+	})
+}

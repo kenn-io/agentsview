@@ -192,6 +192,7 @@ func ParseAntigravityCLISessionWithStatus(
 	var messages []ParsedMessage
 	var usageEvents []ParsedUsageEvent
 	var hasTrajectory bool
+	transcriptFidelity := TranscriptFidelitySummary
 	// sourceVersion is the schema-fingerprint label of the .db source; it
 	// stays empty for legacy .pb and sidecar-only sessions where no schema
 	// is available, so SourceVersion is never fabricated.
@@ -228,6 +229,7 @@ func ParseAntigravityCLISessionWithStatus(
 		case sidecarOK && sidecarCovers:
 			messages = tRes.messages
 			hasTrajectory = true
+			transcriptFidelity = TranscriptFidelityFull
 		case dbOK:
 			messages = mergeAntigravityDBHistoryMessages(
 				dbResult.messages,
@@ -277,6 +279,7 @@ func ParseAntigravityCLISessionWithStatus(
 			if hasDisplayableAntigravityCLITrajectoryMessage(tRes.messages) {
 				messages = tRes.messages
 				hasTrajectory = true
+				transcriptFidelity = TranscriptFidelityFull
 			}
 		}
 	}
@@ -360,16 +363,17 @@ func ParseAntigravityCLISessionWithStatus(
 	}
 
 	sess := &ParsedSession{
-		ID:               antigravityCLIIDPrefix + storageID,
-		Project:          project,
-		Machine:          machine,
-		Agent:            AgentAntigravityCLI,
-		FirstMessage:     firstMessage,
-		StartedAt:        startedAt,
-		EndedAt:          endedAt,
-		MessageCount:     len(messages),
-		UserMessageCount: userCount,
-		SourceVersion:    sourceVersion,
+		ID:                 antigravityCLIIDPrefix + storageID,
+		Project:            project,
+		Machine:            machine,
+		Agent:              AgentAntigravityCLI,
+		FirstMessage:       firstMessage,
+		StartedAt:          startedAt,
+		EndedAt:            endedAt,
+		MessageCount:       len(messages),
+		UserMessageCount:   userCount,
+		SourceVersion:      sourceVersion,
+		TranscriptFidelity: transcriptFidelity,
 		File: FileInfo{
 			Path:  path,
 			Size:  size,
