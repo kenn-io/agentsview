@@ -613,6 +613,33 @@ func TestDiscoverGeminiSessions(t *testing.T) {
 	})
 }
 
+// TestDiscoverGeminiBuildsProjectMapOncePerRoot guards against rebuilding the
+// project map for every discovered source. The map depends only on the root,
+// and BuildGeminiProjectMap re-reads and SHA-256-hashes projects.json each
+// call, so a per-source rebuild makes discovery scale with session count.
+func TestDiscoverGeminiBuildsProjectMapOncePerRoot(t *testing.T) {
+	dir := t.TempDir()
+	setupFileSystem(t, dir, map[string]string{
+		filepath.Join("tmp", "hash1", geminiChatsDir, "session-2026-01-01T10-00-a.json"): "{}",
+		filepath.Join("tmp", "hash1", geminiChatsDir, "session-2026-01-02T10-00-b.json"): "{}",
+		filepath.Join("tmp", "hash2", geminiChatsDir, "session-2026-01-03T10-00-c.json"): "{}",
+		filepath.Join("tmp", "hash3", geminiChatsDir, "session-2026-01-04T10-00-d.json"): "{}",
+	})
+
+	var calls int
+	orig := buildGeminiProjectMap
+	buildGeminiProjectMap = func(root string) map[string]string {
+		calls++
+		return orig(root)
+	}
+	t.Cleanup(func() { buildGeminiProjectMap = orig })
+
+	got := discoverGeminiTestSessions(t, dir)
+	require.Len(t, got, 4, "expected all sessions discovered")
+	assert.Equal(t, 1, calls,
+		"project map should be built once per root, not once per source")
+}
+
 func TestFindGeminiSourceFile(t *testing.T) {
 	tests := []struct {
 		name     string

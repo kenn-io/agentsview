@@ -151,8 +151,13 @@ func (s geminiSourceSet) discoverRoot(
 	}
 	sources := make([]SourceRef, 0)
 	seen := make(map[string]struct{})
+	// Build the project map once per root. It depends only on root, and
+	// BuildGeminiProjectMap re-reads and SHA-256-hashes projects.json on every
+	// call, so resolving it per source path made discovery scale with session
+	// count (the dominant cost on large archives).
+	projectMap := buildGeminiProjectMap(root)
 	for _, path := range s.discoverSessionPaths(root) {
-		source, ok := s.sourceRef(root, path)
+		source, ok := s.sourceRefForPathWithProjectMap(root, path, true, projectMap)
 		if !ok {
 			continue
 		}
@@ -411,6 +416,17 @@ func (s geminiSourceSet) sourceRefForPath(
 	root, path string,
 	requireRegular bool,
 ) (SourceRef, bool) {
+	return s.sourceRefForPathWithProjectMap(root, path, requireRegular, nil)
+}
+
+// sourceRefForPathWithProjectMap builds a SourceRef using a caller-supplied
+// project map. Discovery builds the map once per root and passes it for every
+// source; single-path callers pass nil and the map is built for that one path.
+func (s geminiSourceSet) sourceRefForPathWithProjectMap(
+	root, path string,
+	requireRegular bool,
+	projectMap map[string]string,
+) (SourceRef, bool) {
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
 	rel, ok := relUnder(root, path)
@@ -424,7 +440,10 @@ func (s geminiSourceSet) sourceRefForPath(
 		!isGeminiSessionFilename(sepParts[3]) {
 		return SourceRef{}, false
 	}
-	project := ResolveGeminiProject(sepParts[1], BuildGeminiProjectMap(root))
+	if projectMap == nil {
+		projectMap = buildGeminiProjectMap(root)
+	}
+	project := ResolveGeminiProject(sepParts[1], projectMap)
 	return SourceRef{
 		Provider:       AgentGemini,
 		Key:            path,
@@ -437,6 +456,10 @@ func (s geminiSourceSet) sourceRefForPath(
 		},
 	}, true
 }
+
+// buildGeminiProjectMap indirects BuildGeminiProjectMap so discovery can build
+// the project map once per root and tests can observe how often it runs.
+var buildGeminiProjectMap = BuildGeminiProjectMap
 
 func geminiProjectMetadataPaths(root string) []string {
 	return []string{
