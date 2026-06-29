@@ -18,8 +18,8 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/server"
-	"go.kenn.io/agentsview/internal/ssh"
 	agentsync "go.kenn.io/agentsview/internal/sync"
 )
 
@@ -189,6 +189,33 @@ func TestTruncateLogFileSymlink(t *testing.T) {
 	assert.Len(t, data, 1024, "symlink target was truncated")
 }
 
+func TestNewDaemonIdleTrackerUsesConfigTimeout(t *testing.T) {
+	t.Setenv(backgroundChildEnvVar, "1")
+	fired := make(chan struct{})
+	tracker := newDaemonIdleTracker(config.Config{DaemonIdleTimeout: 20 * time.Millisecond}, func() { close(fired) })
+	require.NotNil(t, tracker)
+	ctx := t.Context()
+	go tracker.Run(ctx)
+	select {
+	case <-fired:
+	case <-time.After(time.Second):
+		require.FailNow(t, "idle tracker did not fire")
+	}
+}
+
+func TestNewDaemonIdleTrackerConfigZeroDisables(t *testing.T) {
+	t.Setenv(backgroundChildEnvVar, "1")
+	tracker := newDaemonIdleTracker(config.Config{DaemonIdleTimeout: 0}, func() { require.FailNow(t, "idle tracker fired") })
+	assert.Nil(t, tracker)
+}
+
+func TestNewDaemonIdleTrackerEnvOverridesConfig(t *testing.T) {
+	t.Setenv(backgroundChildEnvVar, "1")
+	t.Setenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT", "0")
+	tracker := newDaemonIdleTracker(config.Config{DaemonIdleTimeout: 20 * time.Minute}, func() { require.FailNow(t, "idle tracker fired") })
+	assert.Nil(t, tracker)
+}
+
 type fakeUnwatchedPollSyncer struct {
 	roots     []string
 	since     time.Time
@@ -286,10 +313,12 @@ func TestRemoteHostSyncFuncSerializesWithEngineExclusiveLock(t *testing.T) {
 		database,
 		engine,
 		config.RemoteHost{Host: "test-host"},
-		func(context.Context, *ssh.RemoteSync) (ssh.SyncStats, error) {
+		func(
+			context.Context, config.Config, *db.DB, config.RemoteHost, bool,
+		) (remotesync.SyncStats, error) {
 			close(remoteEntered)
 			<-releaseRemote
-			return ssh.SyncStats{}, nil
+			return remotesync.SyncStats{}, nil
 		},
 	)
 
@@ -352,14 +381,56 @@ func TestRemoteHostSyncFuncUsesCallerContext(t *testing.T) {
 		database,
 		engine,
 		config.RemoteHost{Host: "test-host"},
-		func(runCtx context.Context, _ *ssh.RemoteSync) (ssh.SyncStats, error) {
-			return ssh.SyncStats{}, runCtx.Err()
+		func(
+			runCtx context.Context, _ config.Config, _ *db.DB,
+			_ config.RemoteHost, _ bool,
+		) (remotesync.SyncStats, error) {
+			return remotesync.SyncStats{}, runCtx.Err()
 		},
 	)
 
 	_, err = syncFn()
 
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestRemoteHostSyncFuncDispatchesHTTPTransport(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{},
+		Machine:   "local",
+	})
+	var called config.RemoteHost
+	restore := stubHTTPRemoteSyncForTest(t, func(
+		_ context.Context,
+		rh config.RemoteHost,
+		full bool,
+	) (remotesync.SyncStats, error) {
+		called = rh
+		assert.False(t, full)
+		return remotesync.SyncStats{SessionsSynced: 1}, nil
+	})
+	defer restore()
+	syncFn := remoteHostSyncFunc(
+		context.Background(),
+		config.Config{},
+		database,
+		engine,
+		config.RemoteHost{
+			Host:      "test-host",
+			Transport: config.RemoteTransportHTTP,
+			URL:       "https://test-host.example.test",
+		},
+		runRemoteSyncTransport,
+	)
+
+	synced, err := syncFn()
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, synced)
+	assert.Equal(t, "https://test-host.example.test", called.URL)
 }
 
 func TestRemoteHostSyncFuncForcesFullWhenDatabaseNeedsResync(t *testing.T) {
@@ -390,9 +461,12 @@ func TestRemoteHostSyncFuncForcesFullWhenDatabaseNeedsResync(t *testing.T) {
 		database,
 		engine,
 		config.RemoteHost{Host: "test-host"},
-		func(_ context.Context, rs *ssh.RemoteSync) (ssh.SyncStats, error) {
-			gotFull = rs.Full
-			return ssh.SyncStats{}, nil
+		func(
+			_ context.Context, _ config.Config, _ *db.DB,
+			_ config.RemoteHost, full bool,
+		) (remotesync.SyncStats, error) {
+			gotFull = full
+			return remotesync.SyncStats{}, nil
 		},
 	)
 

@@ -21,10 +21,10 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/signals"
-	"go.kenn.io/agentsview/internal/ssh"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/telemetry"
 )
@@ -37,7 +37,6 @@ var (
 
 const (
 	periodicSyncInterval  = 15 * time.Minute
-	daemonIdleTimeout     = 20 * time.Minute
 	telemetryPingInterval = 24 * time.Hour
 	unwatchedPollInterval = 2 * time.Minute
 	watcherDebounce       = 500 * time.Millisecond
@@ -165,7 +164,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 		context.Background(), os.Interrupt, syscall.SIGTERM,
 	)
 	defer stop()
-	idleTracker := newDaemonIdleTracker(stop)
+	idleTracker := newDaemonIdleTracker(cfg, stop)
 
 	telemetryReporter := telemetry.NewReporterOrDisabled(telemetry.Options{
 		DataDir: cfg.DataDir,
@@ -326,11 +325,11 @@ func runServe(cfg config.Config, opts serveOptions) {
 	}
 }
 
-func newDaemonIdleTracker(stop context.CancelFunc) *server.IdleTracker {
+func newDaemonIdleTracker(cfg config.Config, stop context.CancelFunc) *server.IdleTracker {
 	if !runningAsBackgroundChild() {
 		return nil
 	}
-	timeout := daemonIdleTimeout
+	timeout := cfg.DaemonIdleTimeout
 	if raw := os.Getenv("AGENTSVIEW_DAEMON_IDLE_TIMEOUT"); raw != "" {
 		parsed, err := time.ParseDuration(raw)
 		if err != nil {
@@ -1131,9 +1130,7 @@ func startRemoteHostSync(
 ) {
 	syncFn := remoteHostSyncFunc(
 		ctx, cfg, database, engine, rh,
-		func(ctx context.Context, rs *ssh.RemoteSync) (ssh.SyncStats, error) {
-			return rs.Run(ctx)
-		},
+		runRemoteSyncTransport,
 	)
 	runRemoteHostSyncLoop(ctx, rh.Host, rh.Interval, syncFn, emitter, idleTracker, nil)
 }
@@ -1142,7 +1139,13 @@ type remoteSyncExclusiveRunner interface {
 	RunExclusive(func() error) error
 }
 
-type remoteSyncRunner func(context.Context, *ssh.RemoteSync) (ssh.SyncStats, error)
+type remoteSyncRunner func(
+	context.Context,
+	config.Config,
+	*db.DB,
+	config.RemoteHost,
+	bool,
+) (remotesync.SyncStats, error)
 
 func remoteHostSyncFunc(
 	ctx context.Context,
@@ -1156,18 +1159,10 @@ func remoteHostSyncFunc(
 		if runner == nil {
 			return 0, fmt.Errorf("scheduled remote sync missing exclusive runner")
 		}
-		var stats ssh.SyncStats
+		var stats remotesync.SyncStats
 		err := runner.RunExclusive(func() error {
-			rs := &ssh.RemoteSync{
-				Host:                    rh.Host,
-				User:                    rh.User,
-				Port:                    rh.Port,
-				Full:                    database.NeedsResync(),
-				DB:                      database,
-				BlockedResultCategories: cfg.ResultContentBlockedCategories,
-			}
 			var err error
-			stats, err = runRemote(ctx, rs)
+			stats, err = runRemote(ctx, cfg, database, rh, database.NeedsResync())
 			return err
 		})
 		return stats.SessionsSynced, err

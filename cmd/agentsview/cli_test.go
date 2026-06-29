@@ -296,7 +296,14 @@ func TestExecuteCLIWithLegacyFlagCompatWarnsOnce(t *testing.T) {
 func TestRootHelpDocumentsRemoteHosts(t *testing.T) {
 	help, err := executeCommand(newRootCommand(), "--help")
 	require.NoError(t, err, "Execute")
-	for _, want := range []string{"remote_hosts", "passwordless"} {
+	for _, want := range []string{
+		"remote_hosts",
+		"passwordless",
+		"transport = \"http\"",
+		"daemon_idle_timeout",
+		"Top-level daemon_idle_timeout",
+		"Tailscale",
+	} {
 		assert.Contains(t, help, want,
 			"root help should document %q", want)
 	}

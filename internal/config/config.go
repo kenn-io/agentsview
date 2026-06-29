@@ -125,15 +125,26 @@ type CustomModelRate struct {
 	CacheRead     float64 `json:"cache_read,omitempty" toml:"cache_read"`
 }
 
-// RemoteHost describes one SSH target for config-driven
-// `agentsview sync` fan-out. Host is required; User, Port, and
-// Interval are optional (Port 0 means the ssh default of 22;
-// zero/empty Interval disables periodic remote sync for this host).
+type RemoteTransport string
+
+const (
+	RemoteTransportSSH  RemoteTransport = "ssh"
+	RemoteTransportHTTP RemoteTransport = "http"
+)
+
+// RemoteHost describes one target for config-driven `agentsview sync`
+// fan-out. Host is required. SSH remotes may set User and Port
+// (Port 0 means the ssh default of 22). HTTP remotes must set URL
+// and Token. A zero/empty Interval disables periodic remote
+// sync for this host.
 type RemoteHost struct {
-	Host     string        `toml:"host" json:"host"`
-	User     string        `toml:"user,omitempty" json:"user,omitempty"`
-	Port     int           `toml:"port,omitempty" json:"port,omitempty"`
-	Interval time.Duration `toml:"interval,omitempty" json:"interval,omitempty"`
+	Host      string          `toml:"host" json:"host"`
+	Transport RemoteTransport `toml:"transport,omitempty" json:"transport,omitempty"`
+	User      string          `toml:"user,omitempty" json:"user,omitempty"`
+	Port      int             `toml:"port,omitempty" json:"port,omitempty"`
+	URL       string          `toml:"url,omitempty" json:"url,omitempty"`
+	Token     string          `toml:"token,omitempty" json:"-"`
+	Interval  time.Duration   `toml:"interval,omitempty" json:"interval,omitempty"`
 }
 
 // Config holds all application configuration.
@@ -183,9 +194,11 @@ type Config struct {
 	// work during bursts of sync activity. Zero disables coalescing.
 	EventsCoalesceInterval time.Duration `json:"events_coalesce_interval,omitempty" toml:"events_coalesce_interval"`
 
+	DaemonIdleTimeout time.Duration `json:"daemon_idle_timeout,omitempty" toml:"daemon_idle_timeout"`
+
 	CustomModelPricing map[string]CustomModelRate `json:"custom_model_pricing,omitempty" toml:"custom_model_pricing"`
 
-	// RemoteHosts is the config-file list of SSH targets that
+	// RemoteHosts is the config-file list of remote targets that
 	// `agentsview sync` (with no --host) syncs after the local
 	// pass. CLI/config-file only; never serialized to the
 	// settings API, so there is no web-UI editing of this list.
@@ -224,15 +237,18 @@ func (c *Config) IsUserConfigured(
 }
 
 // ValidateRemoteHosts checks the configured remote_hosts entries
-// for semantic errors: a non-empty host and a port within 0..65535
-// (0 means the ssh default). It checks the trimmed values that
-// loadFile already normalized, so what is validated here is exactly
-// what is passed to ssh. Returns an aggregated error naming every
+// for semantic errors. It checks the trimmed values that loadFile
+// already normalized, so what is validated here is exactly what is
+// passed to remote sync. Returns an aggregated error naming every
 // offending entry, or nil when all entries are valid.
 func (c Config) ValidateRemoteHosts() error {
 	var problems []string
 	seen := make(map[string]int, len(c.RemoteHosts))
 	for i, h := range c.RemoteHosts {
+		transport := h.Transport
+		if transport == "" {
+			transport = RemoteTransportSSH
+		}
 		if h.Host == "" {
 			problems = append(problems,
 				fmt.Sprintf("entry %d: host is required", i+1))
@@ -257,6 +273,44 @@ func (c Config) ValidateRemoteHosts() error {
 				fmt.Sprintf("entry %d (%q): invalid interval %s",
 					i+1, h.Host, h.Interval))
 		}
+		switch transport {
+		case RemoteTransportSSH:
+			if h.URL != "" {
+				problems = append(problems,
+					fmt.Sprintf("entry %d (%q): url is only valid for http",
+						i+1, h.Host))
+			}
+			if h.Token != "" {
+				problems = append(problems,
+					fmt.Sprintf("entry %d (%q): token is only valid for http",
+						i+1, h.Host))
+			}
+		case RemoteTransportHTTP:
+			if h.User != "" {
+				problems = append(problems,
+					fmt.Sprintf("entry %d (%q): user is only valid for ssh",
+						i+1, h.Host))
+			}
+			if h.Port != 0 {
+				problems = append(problems,
+					fmt.Sprintf("entry %d (%q): port is only valid for ssh",
+						i+1, h.Host))
+			}
+			if err := validateRemoteHTTPURL(h.URL); err != nil {
+				problems = append(problems,
+					fmt.Sprintf("entry %d (%q): %v",
+						i+1, h.Host, err))
+			}
+			if h.Token == "" {
+				problems = append(problems,
+					fmt.Sprintf("entry %d (%q): token is required for http",
+						i+1, h.Host))
+			}
+		default:
+			problems = append(problems,
+				fmt.Sprintf("entry %d (%q): invalid transport %q",
+					i+1, h.Host, h.Transport))
+		}
 		// Remote sync namespaces sessions and the skip cache by
 		// host alone (see ssh.RemoteSync), so two entries sharing a
 		// host collide regardless of user/port. Reject duplicates
@@ -274,6 +328,34 @@ func (c Config) ValidateRemoteHosts() error {
 	if len(problems) > 0 {
 		return fmt.Errorf("remote_hosts: %s",
 			strings.Join(problems, "; "))
+	}
+	return nil
+}
+
+func validateRemoteHTTPURL(raw string) error {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return fmt.Errorf("url is required")
+	}
+	u, err := url.Parse(value)
+	if err != nil {
+		return fmt.Errorf("invalid url: %w", err)
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf("url must use http or https")
+	}
+	if u.Hostname() == "" {
+		return fmt.Errorf("url must include a host")
+	}
+	if u.User != nil {
+		return fmt.Errorf("url must not include userinfo")
+	}
+	if u.RawQuery != "" || u.ForceQuery {
+		return fmt.Errorf("url must not include query")
+	}
+	if u.Fragment != "" || u.RawFragment != "" || strings.Contains(value, "#") {
+		return fmt.Errorf("url must not include fragment")
 	}
 	return nil
 }
@@ -322,6 +404,7 @@ func Default() (Config, error) {
 		WatchExcludePatterns:           []string{".git", "node_modules", "__pycache__", ".venv", "venv", "vendor", ".next"},
 		ResultContentBlockedCategories: []string{"Read", "Glob"},
 		EventsCoalesceInterval:         10 * time.Second,
+		DaemonIdleTimeout:              20 * time.Minute,
 		Agent:                          map[string]AgentConfig{},
 	}, nil
 }
@@ -599,6 +682,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		Automated                      AutomatedConfig            `toml:"automated"`
 		Agent                          map[string]AgentConfig     `toml:"agent"`
 		EventsCoalesceInterval         time.Duration              `toml:"events_coalesce_interval"`
+		DaemonIdleTimeout              time.Duration              `toml:"daemon_idle_timeout"`
 		CustomModelPricing             map[string]CustomModelRate `toml:"custom_model_pricing"`
 		RemoteHosts                    []RemoteHost               `toml:"remote_hosts"`
 	}
@@ -711,6 +795,9 @@ func (c *Config) applyConfigTOML(data string) error {
 	if meta.IsDefined("events_coalesce_interval") {
 		c.EventsCoalesceInterval = file.EventsCoalesceInterval
 	}
+	if meta.IsDefined("daemon_idle_timeout") {
+		c.DaemonIdleTimeout = file.DaemonIdleTimeout
+	}
 	if file.Automated.Prefixes != nil {
 		c.Automated.Prefixes = file.Automated.Prefixes
 	}
@@ -740,10 +827,13 @@ func (c *Config) applyConfigTOML(data string) error {
 		hosts := make([]RemoteHost, len(file.RemoteHosts))
 		for i, h := range file.RemoteHosts {
 			hosts[i] = RemoteHost{
-				Host:     strings.TrimSpace(h.Host),
-				User:     strings.TrimSpace(h.User),
-				Port:     h.Port,
-				Interval: h.Interval,
+				Host:      strings.TrimSpace(h.Host),
+				Transport: RemoteTransport(strings.TrimSpace(string(h.Transport))),
+				User:      strings.TrimSpace(h.User),
+				Port:      h.Port,
+				URL:       strings.TrimSpace(h.URL),
+				Token:     strings.TrimSpace(h.Token),
+				Interval:  h.Interval,
 			}
 		}
 		c.RemoteHosts = hosts
@@ -1185,6 +1275,9 @@ func finalize(cfg *Config) error {
 		if err != nil {
 			return fmt.Errorf("invalid public url: %w", err)
 		}
+	}
+	if cfg.DaemonIdleTimeout < 0 {
+		return fmt.Errorf("invalid daemon_idle_timeout: %s", cfg.DaemonIdleTimeout)
 	}
 	return nil
 }

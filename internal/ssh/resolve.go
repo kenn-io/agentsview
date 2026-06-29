@@ -152,6 +152,12 @@ func buildResolveScript() string {
 	return b.String()
 }
 
+// BuildResolveScriptForTest exposes the SSH resolver script to
+// internal/remotesync parity tests.
+func BuildResolveScriptForTest() string {
+	return buildResolveScript()
+}
+
 func remoteDefaultRootTail(rel string) string {
 	cleaned := path.Clean(rel)
 	if _, tail, ok := strings.Cut(cleaned, "/"); ok && tail != "" {
@@ -216,6 +222,12 @@ func parseResolvedDirs(
 		dirs[at] = append(dirs[at], value)
 	}
 	return dirs, extraFiles
+}
+
+// ParseResolvedTargetsForTest exposes SSH resolver output parsing to
+// internal/remotesync parity tests.
+func ParseResolvedTargetsForTest(output string) (map[parser.AgentType][]string, []string) {
+	return parseResolvedDirs(output)
 }
 
 func resolveOutputRecords(output string) []string {

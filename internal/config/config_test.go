@@ -899,6 +899,24 @@ func TestLoadFile_EventsCoalesceInterval(t *testing.T) {
 	}
 }
 
+func TestLoadFile_DaemonIdleTimeout(t *testing.T) {
+	tests := []struct {
+		name string
+		data map[string]any
+		want time.Duration
+	}{
+		{name: "absent uses default", data: map[string]any{}, want: 20 * time.Minute},
+		{name: "configured", data: map[string]any{"daemon_idle_timeout": "6h"}, want: 6 * time.Hour},
+		{name: "explicit zero disables", data: map[string]any{"daemon_idle_timeout": "0s"}, want: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := loadMinimalWithConfig(t, tt.data)
+			assert.Equal(t, tt.want, cfg.DaemonIdleTimeout)
+		})
+	}
+}
+
 func TestLoadFile_PGConfig(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -1519,6 +1537,42 @@ host = "  laptop2  "
 	assert.Equal(t, RemoteHost{Host: "laptop2"}, cfg.RemoteHosts[1])
 }
 
+func TestLoadFile_RemoteHostsHTTP(t *testing.T) {
+	f := newConfigFixture(t)
+	f.WriteConfigText(t, `[[remote_hosts]]
+host = "devbox1"
+transport = "http"
+url = "http://devbox1.tailnet.ts.net:8080"
+token = "remote-token"
+interval = "5m"
+`)
+
+	cfg := f.LoadMinimal(t)
+
+	require.Len(t, cfg.RemoteHosts, 1)
+	assert.Equal(t, RemoteHost{
+		Host:      "devbox1",
+		Transport: RemoteTransportHTTP,
+		URL:       "http://devbox1.tailnet.ts.net:8080",
+		Token:     "remote-token",
+		Interval:  5 * time.Minute,
+	}, cfg.RemoteHosts[0])
+}
+
+func TestLoadFile_InvalidRemoteHostsDoNotBlockConfigLoad(t *testing.T) {
+	f := newConfigFixture(t)
+	f.WriteConfigText(t, `[[remote_hosts]]
+host = "devbox1"
+transport = "http"
+`)
+
+	cfg := f.LoadMinimal(t)
+
+	require.Len(t, cfg.RemoteHosts, 1)
+	assert.Equal(t, RemoteTransportHTTP, cfg.RemoteHosts[0].Transport)
+	assert.Equal(t, "devbox1", cfg.RemoteHosts[0].Host)
+}
+
 func TestLoadFile_RemoteHostsAbsentIsNil(t *testing.T) {
 	cfg := loadMinimalWithConfig(t,
 		map[string]any{"public_url": "http://example.com"})
@@ -1544,6 +1598,21 @@ func TestValidateRemoteHosts(t *testing.T) {
 		{"none configured", nil, nil},
 		{"negative interval", []RemoteHost{{Host: "a", Interval: -1}}, []string{"invalid interval"}},
 		{"zero interval ok", []RemoteHost{{Host: "a", Interval: 0}}, nil},
+		{"http valid", []RemoteHost{{Host: "a", Transport: RemoteTransportHTTP, URL: "https://a.example.test", Token: "token"}}, nil},
+		{"http requires url", []RemoteHost{{Host: "a", Transport: RemoteTransportHTTP}}, []string{"url is required"}},
+		{"http requires token", []RemoteHost{{Host: "a", Transport: RemoteTransportHTTP, URL: "https://a.example.test"}}, []string{"token is required"}},
+		{"http rejects user", []RemoteHost{{Host: "a", Transport: RemoteTransportHTTP, URL: "https://a.example.test", User: "alice"}}, []string{"user is only valid for ssh"}},
+		{"http rejects port", []RemoteHost{{Host: "a", Transport: RemoteTransportHTTP, URL: "https://a.example.test", Port: 443}}, []string{"port is only valid for ssh"}},
+		{"http rejects bad scheme", []RemoteHost{{Host: "a", Transport: RemoteTransportHTTP, URL: "ftp://a.example.test"}}, []string{"url must use http or https"}},
+		{"http rejects empty hostname with port", []RemoteHost{{Host: "a", Transport: RemoteTransportHTTP, URL: "http://:8080"}}, []string{"url must include a host"}},
+		{"http rejects query", []RemoteHost{{Host: "a", Transport: RemoteTransportHTTP, URL: "https://a.example.test?token=x"}}, []string{"url must not include query"}},
+		{"http rejects empty query delimiter", []RemoteHost{{Host: "a", Transport: RemoteTransportHTTP, URL: "https://a.example.test?", Token: "token"}}, []string{"url must not include query"}},
+		{"http rejects fragment", []RemoteHost{{Host: "a", Transport: RemoteTransportHTTP, URL: "https://a.example.test/#remote"}}, []string{"url must not include fragment"}},
+		{"http rejects empty fragment delimiter", []RemoteHost{{Host: "a", Transport: RemoteTransportHTTP, URL: "https://a.example.test#", Token: "token"}}, []string{"url must not include fragment"}},
+		{"http rejects userinfo", []RemoteHost{{Host: "a", Transport: RemoteTransportHTTP, URL: "https://alice@a.example.test"}}, []string{"url must not include userinfo"}},
+		{"ssh rejects url", []RemoteHost{{Host: "a", Transport: RemoteTransportSSH, URL: "https://a.example.test"}}, []string{"url is only valid for http"}},
+		{"ssh rejects token", []RemoteHost{{Host: "a", Transport: RemoteTransportSSH, Token: "token"}}, []string{"token is only valid for http"}},
+		{"unknown transport", []RemoteHost{{Host: "a", Transport: RemoteTransport("sftp")}}, []string{"invalid transport"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

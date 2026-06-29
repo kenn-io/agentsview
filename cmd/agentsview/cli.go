@@ -242,11 +242,12 @@ func newSyncCommand() *cobra.Command {
 			"HTTP server.\n\n" +
 			"With no --host, sync runs the local sync and then fans out to\n" +
 			"every host listed in the [[remote_hosts]] array in config.toml,\n" +
-			"syncing each over SSH. A failure on one configured host is logged\n" +
-			"and the run continues; the command exits non-zero if any\n" +
-			"configured host failed.\n\n" +
-			"With --host, sync ignores remote_hosts and syncs only that host.\n\n" +
-			"Remote sync uses your existing SSH configuration and requires\n" +
+			"syncing each by its configured transport. A failure on one\n" +
+			"configured host is logged and the run continues; the command\n" +
+			"exits non-zero if any configured host failed.\n\n" +
+			"With --host, syncs only that host. A running local daemon may use a\n" +
+			"matching configured remote_hosts entry and transport; otherwise,\n" +
+			"ad hoc --host sync uses your existing SSH configuration and requires\n" +
 			"key-based (passwordless) auth; it never prompts for a password.",
 		GroupID:      groupCore,
 		SilenceUsage: true,
@@ -827,13 +828,23 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Remote hosts:")
 	fmt.Fprintln(w, "  Add a [[remote_hosts]] array to ~/.agentsview/config.toml so that")
-	fmt.Fprintln(w, "  \"agentsview sync\" (no --host) also syncs each host over SSH:")
+	fmt.Fprintln(w, "  \"agentsview sync\" (no --host) also syncs each configured host:")
 	fmt.Fprintln(w, "  [[remote_hosts]]")
 	fmt.Fprintln(w, "  host = \"devbox1\"")
+	fmt.Fprintln(w, "  transport = \"ssh\" # optional; default")
 	fmt.Fprintln(w, "  user = \"jesse\"  # optional")
 	fmt.Fprintln(w, "  port = 22        # optional")
-	fmt.Fprintln(w, "  Each host must be unique.")
 	fmt.Fprintln(w, "  Requires key-based (passwordless) SSH to each host.")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "  For daemon-backed HTTP sync over a private network such as Tailscale:")
+	fmt.Fprintln(w, "  [[remote_hosts]]")
+	fmt.Fprintln(w, "  host = \"devbox1\"")
+	fmt.Fprintln(w, "  transport = \"http\"")
+	fmt.Fprintln(w, "  url = \"http://devbox1.tailnet.ts.net:8080\"")
+	fmt.Fprintln(w, "  token = \"remote-token\" # required; remote daemon auth_token")
+	fmt.Fprintln(w, "  Each host must be unique.")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "  Top-level daemon_idle_timeout = \"0s\" keeps serve --background nodes alive.")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Data stored in ~/.agentsview/ by default.")
 }

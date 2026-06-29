@@ -41,8 +41,8 @@ frontend, or send it in an `Authorization` header.
 
 !!! note
 
-    Older configs may still use `remote_access = true`. AgentsView still reads that
-    legacy key, but new setups should use `require_auth = true`.
+    Older configs may still use `remote_access = true`. AgentsView still reads
+    that legacy key, but new setups should use `require_auth = true`.
 
 ## Authentication
 
@@ -61,6 +61,41 @@ load the HTML shell, but API requests fail with `401` until the correct token is
 supplied.
 
 When `require_auth` is disabled, normal local loopback use remains ungated.
+
+## HTTP Remote Sync
+
+Configured `[[remote_hosts]]` entries can use `transport = "http"` when the
+remote machine is already running an AgentsView daemon:
+
+```toml
+[[remote_hosts]]
+host = "devbox1"
+transport = "http"
+url = "http://devbox1.tailnet.ts.net:8080"
+token = "remote-token"
+```
+
+Use `require_auth = true` on remote nodes when practical, or at minimum keep
+their generated `auth_token` configured. The remote archive endpoints always
+require `Authorization: Bearer <token>`, even when the rest of the daemon API is
+unauthenticated. The `token` in the collector's `remote_hosts` entry must match
+the remote daemon's `auth_token` and is required for HTTP remote sync. Do not
+reuse the collector daemon's own `auth_token` for untrusted remote endpoints.
+
+The HTTP transport is intended for private networking such as Tailscale or an
+equivalent restricted overlay. Do not expose raw archive endpoints directly to
+the public internet.
+
+For always-available fleet nodes launched with `agentsview serve --background`,
+set:
+
+```toml
+daemon_idle_timeout = "0s"
+```
+
+That setting controls detached background daemons only. Supervised daemons run
+under systemd, launchd, Docker, or a foreground shell never create the idle
+tracker and already stay alive until their supervisor stops them.
 
 ## SSE Endpoints
 
@@ -166,8 +201,8 @@ handles the public socket.
 !!! warning "Enable auth first"
 
     Managed Caddy exposes a public endpoint. Set `require_auth = true` in
-    `~/.agentsview/config.toml` before starting the server, or the proxy will front
-    an unauthenticated API. See [Quick Setup](#quick-setup).
+    `~/.agentsview/config.toml` before starting the server, or the proxy will
+    front an unauthenticated API. See [Quick Setup](#quick-setup).
 
 ```bash
 agentsview serve \

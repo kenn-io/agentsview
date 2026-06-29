@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/ssh"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
@@ -235,6 +237,25 @@ func stubRunRemoteSync(
 	t.Cleanup(func() { runRemoteSync = originalRunRemoteSync })
 }
 
+func stubRunHTTPRemoteSync(
+	t *testing.T,
+	fn func(context.Context, config.RemoteHost, bool) (remotesync.SyncStats, error),
+) {
+	t.Helper()
+	originalRunHTTPRemoteSync := runHTTPRemoteSync
+	runHTTPRemoteSync = func(
+		ctx context.Context,
+		_ config.Config,
+		_ *db.DB,
+		rh config.RemoteHost,
+		full bool,
+		_ func(syncpkg.Progress),
+	) (remotesync.SyncStats, error) {
+		return fn(ctx, rh, full)
+	}
+	t.Cleanup(func() { runHTTPRemoteSync = originalRunHTTPRemoteSync })
+}
+
 func TestSyncEngineForLocalReusesNoSyncEngineConcurrently(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
@@ -399,6 +420,44 @@ func TestRunRemoteSyncRequestEmitsAfterRemoteOnlyWrites(t *testing.T) {
 	case <-time.After(time.Second):
 		require.FailNow(t, "remote sync did not emit")
 	}
+}
+
+func TestRunRemoteSyncHostsDispatchesHTTPTransport(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	sshCalled := false
+	stubRunRemoteSync(t, func(
+		context.Context,
+		*ssh.RemoteSync,
+	) (ssh.SyncStats, error) {
+		sshCalled = true
+		return ssh.SyncStats{}, errors.New("ssh runner called")
+	})
+	var got config.RemoteHost
+	stubRunHTTPRemoteSync(t, func(
+		_ context.Context,
+		rh config.RemoteHost,
+		_ bool,
+	) (remotesync.SyncStats, error) {
+		got = rh
+		return remotesync.SyncStats{SessionsSynced: 1, SessionsTotal: 1}, nil
+	})
+
+	failures, stats := f.srv.runRemoteSyncHosts(
+		context.Background(),
+		f.db,
+		[]config.RemoteHost{{
+			Host:      "alpha",
+			Transport: config.RemoteTransportHTTP,
+			URL:       "https://alpha.example.test",
+		}},
+		false,
+		nil,
+	)
+
+	assert.Empty(t, failures)
+	assert.False(t, sshCalled, "server HTTP remote must not use SSH runner")
+	assert.Equal(t, "https://alpha.example.test", got.URL)
+	assert.Equal(t, remotesync.SyncStats{SessionsSynced: 1, SessionsTotal: 1}, stats)
 }
 
 func TestHumaSyncRemotesStreamsLocalProgress(t *testing.T) {
@@ -594,4 +653,104 @@ func TestHumaSyncRemotesAllowsNonLocalConfiguredHostIgnoringInterval(t *testing.
 	assert.Equal(t, requested.Host, got.Host)
 	assert.Equal(t, requested.User, got.User)
 	assert.Equal(t, requested.Port, got.Port)
+}
+
+func TestSyncRemotesUsesStoredConfigForConfiguredHost(t *testing.T) {
+	stored := config.RemoteHost{
+		Host:      "devbox",
+		Transport: config.RemoteTransportHTTP,
+		URL:       "http://stored.example",
+		Token:     "stored-token",
+	}
+	f := newSyncRouteFixture(t, withRemoteHosts(stored))
+	var got config.RemoteHost
+	stubRunHTTPRemoteSync(t, func(
+		_ context.Context,
+		rh config.RemoteHost,
+		_ bool,
+	) (remotesync.SyncStats, error) {
+		got = rh
+		return remotesync.SyncStats{}, nil
+	})
+
+	w := postRemoteSync(t, f.handler, []config.RemoteHost{{
+		Host:      "devbox",
+		Transport: config.RemoteTransportHTTP,
+		URL:       "http://169.254.169.254",
+		Token:     "evil",
+	}}, withRemoteAddr("203.0.113.10:9999"))
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	assert.Equal(t, stored.URL, got.URL)
+	assert.Equal(t, stored.Token, got.Token)
+}
+
+func TestSyncRemotesRedactsStoredHTTPConfigOnFailure(t *testing.T) {
+	stored := config.RemoteHost{
+		Host:      "devbox",
+		Transport: config.RemoteTransportHTTP,
+		URL:       "http://stored.example",
+		Token:     "stored.example-secret",
+	}
+	f := newSyncRouteFixture(t, withRemoteHosts(stored))
+	stubRunHTTPRemoteSync(t, func(
+		_ context.Context,
+		_ config.RemoteHost,
+		_ bool,
+	) (remotesync.SyncStats, error) {
+		return remotesync.SyncStats{}, errors.New(
+			`Get "http://stored.example/api/v1/remote-sync/targets": lookup stored.example: bearer stored.example-secret rejected`,
+		)
+	})
+
+	w := postRemoteSync(t, f.handler,
+		[]config.RemoteHost{{Host: "devbox"}},
+		withRemoteAddr("203.0.113.10:9999"))
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	assert.NotContains(t, w.Body.String(), "stored.example-secret")
+	assert.NotContains(t, w.Body.String(), "secret")
+	assert.NotContains(t, w.Body.String(), "stored.example")
+	resp := decodeRecorder[remoteSyncResponse](t, w)
+	require.Len(t, resp.Failures, 1)
+	assert.Equal(t, config.RemoteHost{Host: "devbox"}, resp.Failures[0].Host)
+	assert.NotContains(t, resp.Failures[0].Err, "stored.example")
+	assert.NotContains(t, resp.Failures[0].Err, "secret")
+	assert.Equal(t, "HTTP remote sync failed", resp.Failures[0].Err)
+}
+
+func TestRunHTTPRemoteSyncRequiresExplicitHTTPToken(t *testing.T) {
+	called := false
+	ts := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		called = true
+	}))
+	t.Cleanup(ts.Close)
+
+	_, err := runHTTPRemoteSync(
+		context.Background(),
+		config.Config{AuthToken: "collector-token"},
+		nil,
+		config.RemoteHost{
+			Host:      "devbox",
+			Transport: config.RemoteTransportHTTP,
+			URL:       ts.URL,
+		},
+		false,
+		nil,
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "token is required")
+	assert.False(t, called, "collector auth_token must not be sent to remote")
+}
+
+func TestSyncRemotesRejectsAdHocHTTP(t *testing.T) {
+	f := newSyncRouteFixture(t)
+	w := postRemoteSync(t, f.handler, []config.RemoteHost{{
+		Host:      "devbox",
+		Transport: config.RemoteTransportHTTP,
+		URL:       "http://devbox:8080",
+	}})
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
 }

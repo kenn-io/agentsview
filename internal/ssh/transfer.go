@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/remotesync"
 )
 
 // buildTarCommand generates the remote tar command for the given
@@ -70,7 +70,7 @@ func downloadAndExtract(
 	done := make(chan struct{})
 	go pr.printLoop(done)
 
-	skipped, extractErr := extractTarStream(ctx, pr, tmpDir)
+	skipped, extractErr := remotesync.ExtractTarStream(ctx, pr, tmpDir)
 	close(done)
 	pr.printFinal()
 
@@ -114,12 +114,7 @@ func downloadAndExtract(
 //	localPath="/tmp/sync-123/home/wes/.claude/foo.jsonl"
 //	result="/home/wes/.claude/foo.jsonl"
 func remapToRemotePath(tempDir, remoteDir, localPath string) string {
-	_ = remoteDir // reserved for future use; tar -C / preserves full paths
-	rel, err := filepath.Rel(tempDir, localPath)
-	if err != nil {
-		return localPath
-	}
-	return "/" + filepath.ToSlash(rel)
+	return remotesync.RemapToRemotePath(tempDir, remoteDir, localPath)
 }
 
 // progressReader wraps a reader and tracks bytes read.
@@ -178,9 +173,7 @@ func formatBytes(b int64) string {
 //	remoteDir="/home/wes/.claude"
 //	result="/tmp/sync-123/home/wes/.claude"
 func remappedDir(tempDir, remoteDir string) string {
-	return filepath.Join(
-		tempDir, strings.TrimPrefix(remoteDir, "/"),
-	)
+	return remotesync.RemappedDir(tempDir, remoteDir)
 }
 
 // benignRemoteTarPrimary are remote tar (creation-side) stderr

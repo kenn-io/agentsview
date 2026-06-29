@@ -1,4 +1,4 @@
-package ssh
+package remotesync
 
 import (
 	"path/filepath"
@@ -46,8 +46,9 @@ func TestMigrateVisualStudioCopilotRemoteSkipsRemovesStaleTracePaths(
 		t, database.ReplaceRemoteSkippedFiles(host, seed),
 	)
 
-	rs := &RemoteSync{Host: host, DB: database}
-	cleaned := rs.migrateVisualStudioCopilotRemoteSkips(seed)
+	cleaned := migrateVisualStudioCopilotRemoteSkips(
+		database, host, seed,
+	)
 
 	assert.NotContains(t, cleaned, vsCopilotRemoteSkipTracePath)
 	assert.NotContains(t, cleaned, virtualPath)
@@ -73,10 +74,9 @@ func TestMigrateVisualStudioCopilotRemoteSkipsIsOneTimePerHost(
 	require.NoError(t, database.ReplaceRemoteSkippedFiles(
 		host, map[string]int64{vsCopilotRemoteSkipTracePath: 111},
 	))
-	rs := &RemoteSync{Host: host, DB: database}
 
-	first := rs.migrateVisualStudioCopilotRemoteSkips(
-		map[string]int64{vsCopilotRemoteSkipTracePath: 111},
+	first := migrateVisualStudioCopilotRemoteSkips(
+		database, host, map[string]int64{vsCopilotRemoteSkipTracePath: 111},
 	)
 	assert.NotContains(t, first, vsCopilotRemoteSkipTracePath)
 
@@ -84,7 +84,7 @@ func TestMigrateVisualStudioCopilotRemoteSkipsIsOneTimePerHost(
 	require.NoError(
 		t, database.ReplaceRemoteSkippedFiles(host, fresh),
 	)
-	second := rs.migrateVisualStudioCopilotRemoteSkips(fresh)
+	second := migrateVisualStudioCopilotRemoteSkips(database, host, fresh)
 	assert.Contains(
 		t, second, vsCopilotRemoteSkipTracePath,
 		"migration must not re-scrub after the one-time pass",
@@ -105,13 +105,13 @@ func TestMigrateVisualStudioCopilotRemoteSkipsPerHost(
 		"host-b", map[string]int64{vsCopilotRemoteSkipTracePath: 2},
 	))
 
-	rsA := &RemoteSync{Host: "host-a", DB: database}
-	rsA.migrateVisualStudioCopilotRemoteSkips(
+	migrateVisualStudioCopilotRemoteSkips(
+		database, "host-a",
 		map[string]int64{vsCopilotRemoteSkipTracePath: 1},
 	)
 
-	rsB := &RemoteSync{Host: "host-b", DB: database}
-	cleanedB := rsB.migrateVisualStudioCopilotRemoteSkips(
+	cleanedB := migrateVisualStudioCopilotRemoteSkips(
+		database, "host-b",
 		map[string]int64{vsCopilotRemoteSkipTracePath: 2},
 	)
 	assert.NotContains(t, cleanedB, vsCopilotRemoteSkipTracePath)

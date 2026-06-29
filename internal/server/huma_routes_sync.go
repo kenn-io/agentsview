@@ -11,6 +11,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/ssh"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
@@ -62,8 +63,34 @@ type remoteSyncResponse struct {
 var runRemoteSync = func(
 	ctx context.Context,
 	rs *ssh.RemoteSync,
-) (ssh.SyncStats, error) {
+) (remotesync.SyncStats, error) {
 	return rs.Run(ctx)
+}
+
+var runHTTPRemoteSync = func(
+	ctx context.Context,
+	cfg config.Config,
+	local *db.DB,
+	rh config.RemoteHost,
+	full bool,
+	progress func(syncpkg.Progress),
+) (remotesync.SyncStats, error) {
+	token := rh.Token
+	if token == "" {
+		return remotesync.SyncStats{}, fmt.Errorf(
+			"http remote sync token is required for host %q",
+			rh.Host,
+		)
+	}
+	return remotesync.HTTPSync{
+		Host:                    rh.Host,
+		URL:                     rh.URL,
+		Token:                   token,
+		Full:                    full,
+		DB:                      local,
+		BlockedResultCategories: cfg.ResultContentBlockedCategories,
+		Progress:                progress,
+	}.Run(ctx)
 }
 
 func (s *Server) humaSyncStatus(
@@ -210,10 +237,7 @@ func (s *Server) humaSyncRemotes(
 		return nil, apiError(http.StatusNotImplemented, "not available in remote mode")
 	}
 	engine := s.syncEngineForLocal(local)
-	if len(in.Body.Hosts) == 0 {
-		return nil, apiError(http.StatusBadRequest, "at least one remote host is required")
-	}
-	hosts, err := s.authorizeRemoteSyncHosts(ctx, in.Body.Hosts)
+	hosts, err := s.resolveRemoteSyncHosts(ctx, in.Body.Hosts)
 	if err != nil {
 		return nil, err
 	}
@@ -241,23 +265,24 @@ func (s *Server) humaSyncRemotes(
 	}}, nil
 }
 
-func (s *Server) authorizeRemoteSyncHosts(
+func (s *Server) resolveRemoteSyncHosts(
 	ctx context.Context,
 	hosts []config.RemoteHost,
 ) ([]config.RemoteHost, error) {
-	if err := (config.Config{RemoteHosts: hosts}).ValidateRemoteHosts(); err != nil {
-		return nil, apiError(http.StatusBadRequest, err.Error())
+	if len(hosts) == 0 {
+		return nil, apiError(http.StatusBadRequest, "at least one remote host is required")
 	}
-	if isLocalhostContext(ctx) {
-		return hosts, nil
-	}
-
-	allowed := make(map[remoteHostIdentity]struct{}, len(s.cfg.RemoteHosts))
+	configured := make(map[remoteHostIdentity]config.RemoteHost, len(s.cfg.RemoteHosts))
 	for _, h := range s.cfg.RemoteHosts {
-		allowed[remoteHostIdentityFrom(h)] = struct{}{}
+		configured[remoteHostIdentityFrom(h)] = h
 	}
+	resolved := make([]config.RemoteHost, 0, len(hosts))
 	for _, h := range hosts {
-		if _, ok := allowed[remoteHostIdentityFrom(h)]; !ok {
+		if stored, ok := configured[remoteHostIdentityFrom(h)]; ok {
+			resolved = append(resolved, stored)
+			continue
+		}
+		if !isLocalhostContext(ctx) {
 			return nil, apiError(
 				http.StatusForbidden,
 				fmt.Sprintf(
@@ -266,8 +291,18 @@ func (s *Server) authorizeRemoteSyncHosts(
 				),
 			)
 		}
+		if h.Transport == config.RemoteTransportHTTP || h.URL != "" || h.Token != "" {
+			return nil, apiError(
+				http.StatusForbidden,
+				"ad hoc HTTP remote sync requires a configured remote_hosts entry",
+			)
+		}
+		resolved = append(resolved, h)
 	}
-	return hosts, nil
+	if err := (config.Config{RemoteHosts: resolved}).ValidateRemoteHosts(); err != nil {
+		return nil, apiError(http.StatusBadRequest, err.Error())
+	}
+	return resolved, nil
 }
 
 type remoteHostIdentity struct {
@@ -293,7 +328,7 @@ func (s *Server) runRemoteSyncRequest(
 ) remoteSyncResponse {
 	var localStats *syncpkg.SyncStats
 	failures := make([]remoteSyncFailure, 0)
-	var remoteStats ssh.SyncStats
+	var remoteStats remotesync.SyncStats
 	run := func(full bool) {
 		failures, remoteStats = s.runRemoteSyncHosts(
 			ctx, local, req.Hosts, full, progress,
@@ -326,35 +361,59 @@ func (s *Server) runRemoteSyncHosts(
 	hosts []config.RemoteHost,
 	full bool,
 	progress func(syncpkg.Progress),
-) ([]remoteSyncFailure, ssh.SyncStats) {
+) ([]remoteSyncFailure, remotesync.SyncStats) {
 	failures := make([]remoteSyncFailure, 0)
-	var totals ssh.SyncStats
+	var totals remotesync.SyncStats
 	for _, rh := range hosts {
-		rs := &ssh.RemoteSync{
-			Host:                    rh.Host,
-			User:                    rh.User,
-			Port:                    rh.Port,
-			Full:                    full,
-			DB:                      local,
-			BlockedResultCategories: s.cfg.ResultContentBlockedCategories,
-			Progress:                progress,
+		var stats remotesync.SyncStats
+		var err error
+		switch rh.Transport {
+		case "", config.RemoteTransportSSH:
+			rs := &ssh.RemoteSync{
+				Host:                    rh.Host,
+				User:                    rh.User,
+				Port:                    rh.Port,
+				Full:                    full,
+				DB:                      local,
+				BlockedResultCategories: s.cfg.ResultContentBlockedCategories,
+				Progress:                progress,
+			}
+			stats, err = runRemoteSync(ctx, rs)
+		case config.RemoteTransportHTTP:
+			stats, err = runHTTPRemoteSync(ctx, s.cfg, local, rh, full, progress)
+		default:
+			err = fmt.Errorf("invalid remote transport %q", rh.Transport)
 		}
-		stats, err := runRemoteSync(ctx, rs)
 		totals.SessionsSynced += stats.SessionsSynced
 		totals.SessionsTotal += stats.SessionsTotal
 		totals.Skipped += stats.Skipped
 		totals.Failed += stats.Failed
 		if err != nil {
 			failures = append(failures, remoteSyncFailure{
-				Host: rh,
-				Err:  err.Error(),
+				Host: remoteSyncFailureHost(rh),
+				Err:  remoteSyncFailureError(rh, err),
 			})
 		}
 	}
 	return failures, totals
 }
 
-func (s *Server) emitRemoteSyncChanged(stats ssh.SyncStats) {
+func remoteSyncFailureHost(rh config.RemoteHost) config.RemoteHost {
+	return config.RemoteHost{
+		Host: rh.Host,
+		User: rh.User,
+		Port: rh.Port,
+	}
+}
+
+func remoteSyncFailureError(rh config.RemoteHost, err error) string {
+	if rh.Transport == config.RemoteTransportHTTP {
+		return "HTTP remote sync failed"
+	}
+	return err.Error()
+}
+
+func (s *Server) emitRemoteSyncChanged(stats remotesync.SyncStats) {
 	if s.broadcaster == nil || stats.SessionsSynced == 0 {
 		return
 	}

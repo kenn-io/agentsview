@@ -5,11 +5,11 @@ description: Config file, default paths, and runtime settings
 
 ## Data Directory
 
-AgentsView stores all persistent data under a single directory,
-defaulting to `~/.agentsview/`. Override with the
-`AGENTSVIEW_DATA_DIR` environment variable.
+AgentsView stores all persistent data under a single directory, defaulting to
+`~/.agentsview/`. Override with the `AGENTSVIEW_DATA_DIR` environment variable.
 
 !!! note
+
     `AGENT_VIEWER_DATA_DIR` is still accepted as a legacy fallback when
     `AGENTSVIEW_DATA_DIR` is unset, but new setups should use
     `AGENTSVIEW_DATA_DIR`.
@@ -33,61 +33,106 @@ daemon.
 
 ## Config File
 
-The config file at `~/.agentsview/config.toml` is auto-created
-on first run. It stores persistent settings that survive restarts.
+The config file at `~/.agentsview/config.toml` is auto-created on first run. It
+stores persistent settings that survive restarts.
 
 !!! note
-    The config format changed from JSON to TOML. Existing
-    `config.json` files are automatically migrated to `config.toml`
-    on first run (the JSON file is renamed to `config.json.bak`).
+
+    The config format changed from JSON to TOML. Existing `config.json` files
+    are automatically migrated to `config.toml` on first run (the JSON file is
+    renamed to `config.json.bak`).
 
 ```toml
 cursor_secret = "base64-encoded-secret"
 require_auth = true
 cursor_admin_api_key = "key_xxxxx"
+daemon_idle_timeout = "20m"
 ```
 
-| Field | Description |
-|-------|-------------|
-| `cursor_secret` | Auto-generated HMAC key for pagination cursor signing |
-| `cursor_admin_api_key` | Cursor Admin API key used by `agentsview usage cursor` |
-| `cursor_admin_email` | Optional default Cursor Admin usage filter by member email |
-| `cursor_admin_user_id` | Optional default Cursor Admin usage filter by member user ID |
-| `github_token` | Optional saved GitHub token for Gist publishing |
-| `result_content_blocked_categories` | Tool categories whose result content is not stored (default: `["Read", "Glob"]`) |
-| `require_auth` | Require bearer-token authentication for API access |
-| `auth_token` | Auto-generated 256-bit bearer token for remote access |
-| `public_url` | Public URL for hostname/proxy access and origin validation |
-| `public_origins` | Array of additional trusted CORS origins |
-| `[proxy]` | Managed proxy configuration table — see [Remote Access](/remote-access/) |
-| `disable_update_check` | Disable the automatic update check (see [Privacy](#privacy-and-telemetry)) |
-| `[pg]` | PostgreSQL sync configuration — see [PostgreSQL Sync](/pg-sync/) |
-| `[duckdb]` | DuckDB mirror configuration — see [DuckDB Mirror](/duckdb/) |
-| `[[remote_hosts]]` | Remote machines synced by a bare `agentsview sync` — see [CLI Reference](/commands/#agentsview-sync) |
-| `[automated]` | Custom automated-session patterns — see [Automated Session Detection](#automated-session-detection) |
-| `[custom_model_pricing]` | Per-model price overrides for usage reports — see [Custom Model Pricing](/token-usage/#custom-model-pricing) |
+| Field                               | Description                                                                                                  |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `cursor_secret`                     | Auto-generated HMAC key for pagination cursor signing                                                        |
+| `cursor_admin_api_key`              | Cursor Admin API key used by `agentsview usage cursor`                                                       |
+| `cursor_admin_email`                | Optional default Cursor Admin usage filter by member email                                                   |
+| `cursor_admin_user_id`              | Optional default Cursor Admin usage filter by member user ID                                                 |
+| `github_token`                      | Optional saved GitHub token for Gist publishing                                                              |
+| `result_content_blocked_categories` | Tool categories whose result content is not stored (default: `["Read", "Glob"]`)                             |
+| `require_auth`                      | Require bearer-token authentication for API access                                                           |
+| `auth_token`                        | Auto-generated 256-bit bearer token for remote access                                                        |
+| `public_url`                        | Public URL for hostname/proxy access and origin validation                                                   |
+| `public_origins`                    | Array of additional trusted CORS origins                                                                     |
+| `daemon_idle_timeout`               | Idle timeout for detached `serve --background` daemons; set to `"0s"` to keep them alive                     |
+| `[proxy]`                           | Managed proxy configuration table — see [Remote Access](/remote-access/)                                     |
+| `disable_update_check`              | Disable the automatic update check (see [Privacy](#privacy-and-telemetry))                                   |
+| `[pg]`                              | PostgreSQL sync configuration — see [PostgreSQL Sync](/pg-sync/)                                             |
+| `[duckdb]`                          | DuckDB mirror configuration — see [DuckDB Mirror](/duckdb/)                                                  |
+| `[[remote_hosts]]`                  | Remote machines synced by a bare `agentsview sync` — see [CLI Reference](/commands/#agentsview-sync)         |
+| `[automated]`                       | Custom automated-session patterns — see [Automated Session Detection](#automated-session-detection)          |
+| `[custom_model_pricing]`            | Per-model price overrides for usage reports — see [Custom Model Pricing](/token-usage/#custom-model-pricing) |
 
-The `cursor_secret` is generated automatically on first run.
-For Gist publishing, AgentsView first uses a saved `github_token`.
-For local browser requests, if no token is saved, it then tries
-`AGENTSVIEW_GITHUB_TOKEN` and then `gh auth token` from the GitHub
-CLI. Local users usually only need to run `gh auth login`. For
-remote or proxied access, save a `github_token` via the web UI
-Settings page or the API endpoint `POST /api/v1/config/github`
-when you want AgentsView to publish gists. Remote access fields can
-be configured via the Settings page or CLI flags — see
-[Remote Access](/remote-access/) for details.
+The `cursor_secret` is generated automatically on first run. For Gist
+publishing, AgentsView first uses a saved `github_token`. For local browser
+requests, if no token is saved, it then tries `AGENTSVIEW_GITHUB_TOKEN` and then
+`gh auth token` from the GitHub CLI. Local users usually only need to run
+`gh auth login`. For remote or proxied access, save a `github_token` via the web
+UI Settings page or the API endpoint `POST /api/v1/config/github` when you want
+AgentsView to publish gists. Remote access fields can be configured via the
+Settings page or CLI flags — see [Remote Access](/remote-access/) for details.
 
 !!! note
-    Older configs may still contain `remote_access = true`. AgentsView
-    still reads that legacy key for backward compatibility, but new
-    setups should use `require_auth = true`.
+
+    Older configs may still contain `remote_access = true`. AgentsView still
+    reads that legacy key for backward compatibility, but new setups should use
+    `require_auth = true`.
+
+## Remote Hosts
+
+Add `[[remote_hosts]]` entries when a bare `agentsview sync` should pull raw
+session files from other machines after the local sync finishes. SSH remains the
+default transport:
+
+```toml
+[[remote_hosts]]
+host = "buildbox"
+transport = "ssh" # optional; default
+user = "wes"
+port = 2222
+```
+
+For daemon-backed HTTP sync, run an AgentsView daemon on the remote host and
+secure reachability with a private network such as Tailscale:
+
+```toml
+[[remote_hosts]]
+host = "devbox1"
+transport = "http"
+url = "http://devbox1.tailnet.ts.net:8080"
+token = "remote-token"
+```
+
+HTTP remote sync calls the remote daemon's archive endpoints and always uses a
+bearer token, even when the rest of that daemon has `require_auth = false`. The
+per-host `token` is required and must match the remote daemon's `auth_token`.
+Do not reuse the collector daemon's own `auth_token` for untrusted remote
+endpoints.
+
+Detached daemons started with `agentsview serve --background` exit after
+`daemon_idle_timeout` when idle. Set it to zero on machines that should stay
+available for HTTP remote sync:
+
+```toml
+daemon_idle_timeout = "0s"
+```
+
+Supervised daemons run under systemd, launchd, Docker, or a foreground shell do
+not create the detached-daemon idle tracker, so they do not idle-exit regardless
+of this setting.
 
 ## Cursor Admin Usage API
 
-`agentsview usage cursor` imports Cursor Admin API usage events into
-the local archive so Cursor's billed usage can appear in the Usage
-dashboard and `agentsview usage daily` reports. Set the API key in
+`agentsview usage cursor` imports Cursor Admin API usage events into the local
+archive so Cursor's billed usage can appear in the Usage dashboard and
+`agentsview usage daily` reports. Set the API key in
 `~/.agentsview/config.toml`:
 
 ```toml
@@ -104,62 +149,62 @@ export AGENTSVIEW_CURSOR_ADMIN_EMAIL=you@example.com
 export AGENTSVIEW_CURSOR_ADMIN_USER_ID=152683922
 ```
 
-The legacy unprefixed names `CURSOR_ADMIN_API_KEY`,
-`CURSOR_ADMIN_EMAIL`, and `CURSOR_ADMIN_USER_ID` are also accepted
-when the matching `AGENTSVIEW_` variable is unset. The email and user
-ID values are default filters; pass `--email` or `--user-id` to
-`agentsview usage cursor` to override them for one import.
+The legacy unprefixed names `CURSOR_ADMIN_API_KEY`, `CURSOR_ADMIN_EMAIL`, and
+`CURSOR_ADMIN_USER_ID` are also accepted when the matching `AGENTSVIEW_`
+variable is unset. The email and user ID values are default filters; pass
+`--email` or `--user-id` to `agentsview usage cursor` to override them for one
+import.
 
 ## Session Discovery
 
-AgentsView auto-discovers session files from the following agent
-sources. Amp support is deprecated because current Amp releases may keep full
-threads server-side and leave only local stubs; historical local Amp thread
-JSON files can still be parsed.
+AgentsView auto-discovers session files from the following agent sources. Amp
+support is deprecated because current Amp releases may keep full threads
+server-side and leave only local stubs; historical local Amp thread JSON files
+can still be parsed.
 
-| Agent | Default Directory | File Format |
-|-------|-------------------|-------------|
-| Aider | No default; opt in with `AIDER_DIR` or `aider_dirs` | `.aider.chat.history.md` Markdown history files |
-| Amp (deprecated) | `~/.local/share/amp/threads/` | Historical local JSON thread files |
-| Antigravity (IDE) | `~/.gemini/antigravity/` | SQLite database per session |
-| Antigravity CLI | `~/.gemini/antigravity-cli/` | SQLite `conversations/<uuid>.db`, `<uuid>.trajectory.json` sidecars, or encrypted `.pb` files plus `brain/` and `history.jsonl` |
-| Claude Code | `~/.claude/projects/` | JSONL per session |
-| Claude Cowork | (platform-specific, see below) | Claude Desktop cowork sessions |
-| Codex | `~/.codex/sessions/` and `~/.codex/archived_sessions/` | JSONL per session |
-| Command Code | `~/.commandcode/projects/` | JSONL per session, optional `.meta.json` sidecar |
-| Copilot CLI | `~/.copilot/` | JSONL per session under `session-state/` |
-| Cortex Code | `~/.snowflake/cortex/conversations/` | JSON / JSONL per session |
-| Cursor | `~/.cursor/projects/` | JSONL or plain-text transcripts |
-| DeepSeek TUI | `~/.codewhale/sessions/` and `~/.deepseek/sessions/` | JSON per session |
-| Forge | `~/.forge/` | SQLite database (`.forge.db`) |
-| Gemini CLI | `~/.gemini/` | JSONL in `tmp/` subdirectory |
-| gptme | `~/.local/share/gptme/logs/` | JSONL logs |
-| Hermes Agent | `~/.hermes/sessions/` | JSONL / JSON per session |
-| iFlow | `~/.iflow/projects/` | JSONL per session |
-| Kilo | `~/.local/share/kilo/` | SQLite DB or `storage/` JSON files |
-| Kimi | `~/.kimi/sessions/` and `~/.kimi-code/sessions/` | JSONL per session |
-| Kiro CLI | `~/.kiro/sessions/cli/` and `~/.local/share/kiro-cli/` | JSONL per session and SQLite database |
-| Kiro IDE | (platform-specific, see below) | JSON / chat files |
-| MiMoCode | `~/.local/share/mimocode/` | SQLite DB or `storage/` JSON files |
-| Mistral Vibe | `~/.vibe/logs/session/` | Per-session `messages.jsonl` plus `meta.json` |
-| OhMyPi | `~/.omp/agent/sessions/` | JSONL per session |
-| OpenClaw | `~/.openclaw/assets/static/agents/` and `~/.kimi_openclaw/assets/static/agents/` | JSONL per session |
-| OpenCode | `~/.local/share/opencode/` | SQLite DB or `storage/` JSON files |
-| OpenHands CLI | `~/.openhands/conversations/` | Per-conversation `base_state.json` + `events/*.json` |
-| Pi | `~/.pi/agent/sessions/` | JSONL per session |
-| Piebald | `~/.local/share/piebald/` | SQLite database (`app.db`) |
-| Positron Assistant | (platform-specific, see below) | JSON / JSONL per session |
-| QClaw | `~/.qclaw/assets/static/agents/` | JSONL per session |
-| Qwen Code | `~/.qwen/projects/` | JSONL per session |
-| QwenPaw | `~/.copaw/workspaces/` | JSON session files |
-| Reasonix | `~/.reasonix/` and `~/AppData/Roaming/reasonix/` | JSONL sessions plus `.jsonl.meta` sidecars |
-| Shelley | `~/.config/shelley/` | SQLite database (`shelley.db`) |
-| Visual Studio Copilot | (platform-specific, see below) | Trace JSONL files |
-| VS Code Copilot | (platform-specific, see below) | JSON / JSONL per session |
-| Warp | (platform-specific, see below) | SQLite database |
-| WorkBuddy | `~/.workbuddy/projects/` | JSONL per session |
-| Zed | (platform-specific, see below) | SQLite database (`threads/threads.db`) |
-| Zencoder | `~/.zencoder/sessions/` | JSONL per session |
+| Agent                 | Default Directory                                                                | File Format                                                                                                                     |
+| --------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Aider                 | No default; opt in with `AIDER_DIR` or `aider_dirs`                              | `.aider.chat.history.md` Markdown history files                                                                                 |
+| Amp (deprecated)      | `~/.local/share/amp/threads/`                                                    | Historical local JSON thread files                                                                                              |
+| Antigravity (IDE)     | `~/.gemini/antigravity/`                                                         | SQLite database per session                                                                                                     |
+| Antigravity CLI       | `~/.gemini/antigravity-cli/`                                                     | SQLite `conversations/<uuid>.db`, `<uuid>.trajectory.json` sidecars, or encrypted `.pb` files plus `brain/` and `history.jsonl` |
+| Claude Code           | `~/.claude/projects/`                                                            | JSONL per session                                                                                                               |
+| Claude Cowork         | (platform-specific, see below)                                                   | Claude Desktop cowork sessions                                                                                                  |
+| Codex                 | `~/.codex/sessions/` and `~/.codex/archived_sessions/`                           | JSONL per session                                                                                                               |
+| Command Code          | `~/.commandcode/projects/`                                                       | JSONL per session, optional `.meta.json` sidecar                                                                                |
+| Copilot CLI           | `~/.copilot/`                                                                    | JSONL per session under `session-state/`                                                                                        |
+| Cortex Code           | `~/.snowflake/cortex/conversations/`                                             | JSON / JSONL per session                                                                                                        |
+| Cursor                | `~/.cursor/projects/`                                                            | JSONL or plain-text transcripts                                                                                                 |
+| DeepSeek TUI          | `~/.codewhale/sessions/` and `~/.deepseek/sessions/`                             | JSON per session                                                                                                                |
+| Forge                 | `~/.forge/`                                                                      | SQLite database (`.forge.db`)                                                                                                   |
+| Gemini CLI            | `~/.gemini/`                                                                     | JSONL in `tmp/` subdirectory                                                                                                    |
+| gptme                 | `~/.local/share/gptme/logs/`                                                     | JSONL logs                                                                                                                      |
+| Hermes Agent          | `~/.hermes/sessions/`                                                            | JSONL / JSON per session                                                                                                        |
+| iFlow                 | `~/.iflow/projects/`                                                             | JSONL per session                                                                                                               |
+| Kilo                  | `~/.local/share/kilo/`                                                           | SQLite DB or `storage/` JSON files                                                                                              |
+| Kimi                  | `~/.kimi/sessions/` and `~/.kimi-code/sessions/`                                 | JSONL per session                                                                                                               |
+| Kiro CLI              | `~/.kiro/sessions/cli/` and `~/.local/share/kiro-cli/`                           | JSONL per session and SQLite database                                                                                           |
+| Kiro IDE              | (platform-specific, see below)                                                   | JSON / chat files                                                                                                               |
+| MiMoCode              | `~/.local/share/mimocode/`                                                       | SQLite DB or `storage/` JSON files                                                                                              |
+| Mistral Vibe          | `~/.vibe/logs/session/`                                                          | Per-session `messages.jsonl` plus `meta.json`                                                                                   |
+| OhMyPi                | `~/.omp/agent/sessions/`                                                         | JSONL per session                                                                                                               |
+| OpenClaw              | `~/.openclaw/assets/static/agents/` and `~/.kimi_openclaw/assets/static/agents/` | JSONL per session                                                                                                               |
+| OpenCode              | `~/.local/share/opencode/`                                                       | SQLite DB or `storage/` JSON files                                                                                              |
+| OpenHands CLI         | `~/.openhands/conversations/`                                                    | Per-conversation `base_state.json` + `events/*.json`                                                                            |
+| Pi                    | `~/.pi/agent/sessions/`                                                          | JSONL per session                                                                                                               |
+| Piebald               | `~/.local/share/piebald/`                                                        | SQLite database (`app.db`)                                                                                                      |
+| Positron Assistant    | (platform-specific, see below)                                                   | JSON / JSONL per session                                                                                                        |
+| QClaw                 | `~/.qclaw/assets/static/agents/`                                                 | JSONL per session                                                                                                               |
+| Qwen Code             | `~/.qwen/projects/`                                                              | JSONL per session                                                                                                               |
+| QwenPaw               | `~/.copaw/workspaces/`                                                           | JSON session files                                                                                                              |
+| Reasonix              | `~/.reasonix/` and `~/AppData/Roaming/reasonix/`                                 | JSONL sessions plus `.jsonl.meta` sidecars                                                                                      |
+| Shelley               | `~/.config/shelley/`                                                             | SQLite database (`shelley.db`)                                                                                                  |
+| Visual Studio Copilot | (platform-specific, see below)                                                   | Trace JSONL files                                                                                                               |
+| VS Code Copilot       | (platform-specific, see below)                                                   | JSON / JSONL per session                                                                                                        |
+| Warp                  | (platform-specific, see below)                                                   | SQLite database                                                                                                                 |
+| WorkBuddy             | `~/.workbuddy/projects/`                                                         | JSONL per session                                                                                                               |
+| Zed                   | (platform-specific, see below)                                                   | SQLite database (`threads/threads.db`)                                                                                          |
+| Zencoder              | `~/.zencoder/sessions/`                                                          | JSONL per session                                                                                                               |
 
 **VS Code Copilot default directories** vary by platform:
 
@@ -167,8 +212,7 @@ JSON files can still be parsed.
 - **Linux:** `~/.config/Code/User/`
 - **Windows:** `%APPDATA%/Code/User/`
 
-Code Insiders and VSCodium variants are also discovered
-automatically.
+Code Insiders and VSCodium variants are also discovered automatically.
 
 **Visual Studio Copilot default directories** vary by platform:
 
@@ -176,76 +220,72 @@ automatically.
 - **Linux:** `~/.cache/VSGitHubCopilotLogs/traces/`
 - **Windows:** `%LOCALAPPDATA%/Temp/VSGitHubCopilotLogs/traces/`
 
-This is separate from VS Code Copilot. Visual Studio Copilot stores
-trace files named like `*_VSGitHubCopilot_traces.jsonl`; set
-`VISUALSTUDIO_COPILOT_DIR` or `visualstudio_copilot_dirs` if your
-installation writes them elsewhere.
+This is separate from VS Code Copilot. Visual Studio Copilot stores trace files
+named like `*_VSGitHubCopilot_traces.jsonl`; set `VISUALSTUDIO_COPILOT_DIR` or
+`visualstudio_copilot_dirs` if your installation writes them elsewhere.
 
 **Positron Assistant default directory** (macOS only):
 
 - **macOS:** `~/Library/Application Support/Positron/User/`
 
 Positron is an IDE built on VS Code, so sessions use the same
-`workspaceStorage/<hash>/chatSessions/` layout as VS Code
-Copilot. As of v0.20.0, Positron Assistant has a built-in
-default path only on macOS — on Linux and Windows, set
-`POSITRON_DIR` or `positron_dirs` to point at your Positron
-user directory (for example, `~/.config/Positron/User` on
-Linux or `%APPDATA%\Positron\User` on Windows).
+`workspaceStorage/<hash>/chatSessions/` layout as VS Code Copilot. As of
+v0.20.0, Positron Assistant has a built-in default path only on macOS — on Linux
+and Windows, set `POSITRON_DIR` or `positron_dirs` to point at your Positron
+user directory (for example, `~/.config/Positron/User` on Linux or
+`%APPDATA%\Positron\User` on Windows).
 
-**Claude Cowork default directories** follow Claude Desktop's
-Electron user-data location:
+**Claude Cowork default directories** follow Claude Desktop's Electron user-data
+location:
 
 - **macOS:** `~/Library/Application Support/Claude/local-agent-mode-sessions/`
 - **Linux:** `~/.config/Claude/local-agent-mode-sessions/`
-- **Windows:** `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\local-agent-mode-sessions\` or `%APPDATA%\Claude\local-agent-mode-sessions\`
+- **Windows:**
+  `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\local-agent-mode-sessions\`
+  or `%APPDATA%\Claude\local-agent-mode-sessions\`
 
-Set `COWORK_DIR` or `cowork_dirs` when Claude Desktop stores
-local-agent-mode sessions somewhere else.
+Set `COWORK_DIR` or `cowork_dirs` when Claude Desktop stores local-agent-mode
+sessions somewhere else.
 
-**OpenHands CLI shallow watch:** OpenHands stores each
-conversation in its own subdirectory, which would consume one
-recursive file watch per session and can exhaust inotify
-limits on Linux. AgentsView watches the root
-`~/.openhands/conversations/` directory non-recursively and
-relies on the 15-minute periodic sync to pick up changes
-inside existing conversations. New conversation directories
-are still detected immediately. The server's startup log
-reports how many directories are watched this way:
+**OpenHands CLI shallow watch:** OpenHands stores each conversation in its own
+subdirectory, which would consume one recursive file watch per session and can
+exhaust inotify limits on Linux. AgentsView watches the root
+`~/.openhands/conversations/` directory non-recursively and relies on the
+15-minute periodic sync to pick up changes inside existing conversations. New
+conversation directories are still detected immediately. The server's startup
+log reports how many directories are watched this way:
 
 ```
 Watching 74 directories for changes (2 shallow) (76ms)
 ```
 
-**OpenCode storage backend:** As of 0.24.0, AgentsView reads
-both of OpenCode's layouts. If a `storage/session/` directory
-exists under the OpenCode root, sessions are parsed from the
-per-file JSON layout (`storage/session`, `storage/message`,
-`storage/part`); otherwise the legacy `opencode.db` SQLite
-file is used. Detection is automatic and requires no
-configuration. In storage mode, the file watcher scopes itself
-to the `storage/` subtree rather than the entire OpenCode
-directory, so unrelated OpenCode state like binaries, logs, and
-caches no longer trigger sync events. In SQLite mode, it watches
-the `opencode.db` parent.
+**OpenCode storage backend:** As of 0.24.0, AgentsView reads both of OpenCode's
+layouts. If a `storage/session/` directory exists under the OpenCode root,
+sessions are parsed from the per-file JSON layout (`storage/session`,
+`storage/message`, `storage/part`); otherwise the legacy `opencode.db` SQLite
+file is used. Detection is automatic and requires no configuration. In storage
+mode, the file watcher scopes itself to the `storage/` subtree rather than the
+entire OpenCode directory, so unrelated OpenCode state like binaries, logs, and
+caches no longer trigger sync events. In SQLite mode, it watches the
+`opencode.db` parent.
 
-Kilo and MiMoCode use the same OpenCode-format storage reader.
-Kilo reads from `storage/session`, while MiMoCode reads from
-`storage/session_diff` when present; both fall back to their
-SQLite databases when the file-backed storage layout is absent.
+Kilo and MiMoCode use the same OpenCode-format storage reader. Kilo reads from
+`storage/session`, while MiMoCode reads from `storage/session_diff` when
+present; both fall back to their SQLite databases when the file-backed storage
+layout is absent.
 
-**aider discovery:** aider writes one `.aider.chat.history.md`
-file per repository instead of a central session directory. AgentsView
-does not scan for Aider logs unless you opt in with `AIDER_DIR` or
-`aider_dirs`. Always-on home-directory discovery has caused unwanted
-macOS privacy prompts from background refreshes, so Aider discovery is
-limited to roots you explicitly configure. On macOS, broad home roots
-still skip protected top-level folders unless one of those folders is
-configured directly.
+**aider discovery:** aider writes one `.aider.chat.history.md` file per
+repository instead of a central session directory. AgentsView does not scan for
+Aider logs unless you opt in with `AIDER_DIR` or `aider_dirs`. Always-on
+home-directory discovery has caused unwanted macOS privacy prompts from
+background refreshes, so Aider discovery is limited to roots you explicitly
+configure. On macOS, broad home roots still skip protected top-level folders
+unless one of those folders is configured directly.
 
 **Warp default directories** vary by platform:
 
-- **macOS:** `~/Library/Group Containers/2BBY89MBSN.dev.warp/Library/Application Support/dev.warp.Warp-Stable/`
+- **macOS:**
+  `~/Library/Group Containers/2BBY89MBSN.dev.warp/Library/Application Support/dev.warp.Warp-Stable/`
 - **Linux:** `~/.local/state/warp-terminal/`
 - **Windows:** `~/AppData/Local/warp/Warp/data/`
 
@@ -255,20 +295,20 @@ configured directly.
 - **Linux:** `~/.local/share/zed/`
 - **Windows:** `~/AppData/Local/Zed/`
 
-Zed stores all assistant threads in a single
-`threads/threads.db` SQLite database under its data directory.
-AgentsView reads it directly, including model names and
-per-request token usage.
+Zed stores all assistant threads in a single `threads/threads.db` SQLite
+database under its data directory. AgentsView reads it directly, including model
+names and per-request token usage.
 
 **Kiro IDE default directories** vary by platform:
 
-- **macOS:** `~/Library/Application Support/Kiro/User/globalStorage/kiro.kiroagent/`
+- **macOS:**
+  `~/Library/Application Support/Kiro/User/globalStorage/kiro.kiroagent/`
 - **Linux:** `~/.config/Kiro/User/globalStorage/kiro.kiroagent/`
 - **Windows:** `~/AppData/Roaming/Kiro/User/globalStorage/kiro.kiroagent/`
 
-**Antigravity CLI transcript sources:** Antigravity CLI has
-used both SQLite databases and AES-encrypted `.pb` files.
-AgentsView reads whichever source is richest, in this order:
+**Antigravity CLI transcript sources:** Antigravity CLI has used both SQLite
+databases and AES-encrypted `.pb` files. AgentsView reads whichever source is
+richest, in this order:
 
 1. **Decrypted trajectory sidecar.** For either format, if a
    `<uuid>.trajectory.json` file sits next to the source `.db`
@@ -299,9 +339,9 @@ AgentsView reads whichever source is richest, in this order:
    decrypts the `.pb` payloads itself, mirroring the upstream
    Python tool
    [`antigravity_decryptor`](https://github.com/arashz/antigravity_decryptor).
-4. **Plaintext summary mode.** Otherwise AgentsView reads
-   only `history.jsonl` and the `brain/` summaries — enough
-   to populate session metadata and a high-level transcript.
+1. **Plaintext summary mode.** Otherwise AgentsView reads only `history.jsonl`
+   and the `brain/` summaries — enough to populate session metadata and a
+   high-level transcript.
 
 Any session not backed by a covering sidecar — heuristic `.db`
 decode, in-process `.pb` decryption, or plaintext summary mode —
@@ -315,9 +355,8 @@ agy-reader --sync
 agy-reader --watch
 ```
 
-Override any default with an environment variable (single
-directory). For Aider, this opt-in is required because there is no
-default discovery root:
+Override any default with an environment variable (single directory). For Aider,
+this opt-in is required because there is no default discovery root:
 
 ```bash
 export AIDER_DIR=~/code
@@ -365,9 +404,8 @@ export ZENCODER_DIR=~/custom/zencoder
 
 ### Multiple Directories
 
-To scan more than one directory per agent — for example, when
-running Windows and WSL side by side — add array fields to
-`~/.agentsview/config.toml`:
+To scan more than one directory per agent — for example, when running Windows
+and WSL side by side — add array fields to `~/.agentsview/config.toml`:
 
 ```toml
 claude_project_dirs = [
@@ -380,34 +418,27 @@ codex_sessions_dirs = [
 ]
 ```
 
-The corresponding fields are `aider_dirs`, `amp_dirs`,
-`antigravity_dirs`, `antigravity_cli_dirs`,
-`claude_project_dirs`, `cowork_dirs`, `codex_sessions_dirs`,
-`commandcode_project_dirs`, `copilot_dirs`, `cortex_dirs`,
-`cursor_project_dirs`, `deepseek_tui_sessions_dirs`,
-`forge_dirs`, `gemini_dirs`, `gptme_dirs`,
-`hermes_sessions_dirs`, `iflow_dirs`, `kilo_dirs`,
-`kimi_dirs`, `kiro_dirs`, `kiro_ide_dirs`,
-`mimocode_dirs`, `vibe_session_dirs`, `omp_dirs`,
-`openclaw_dirs`, `opencode_dirs`, `openhands_dirs`,
-`pi_dirs`, `piebald_dirs`, `positron_dirs`, `qclaw_dirs`,
-`qwen_project_dirs`, `qwenpaw_dirs`, `reasonix_dirs`,
-`shelley_dirs`, `visualstudio_copilot_dirs`,
-`vscode_copilot_dirs`, `warp_dirs`, `workbuddy_project_dirs`,
-`zed_dirs`, and `zencoder_dirs`.
-Each accepts an array of paths. When set, these take precedence
-over the single-directory environment variable and the default
-path.
+The corresponding fields are `aider_dirs`, `amp_dirs`, `antigravity_dirs`,
+`antigravity_cli_dirs`, `claude_project_dirs`, `cowork_dirs`,
+`codex_sessions_dirs`, `commandcode_project_dirs`, `copilot_dirs`,
+`cortex_dirs`, `cursor_project_dirs`, `deepseek_tui_sessions_dirs`,
+`forge_dirs`, `gemini_dirs`, `gptme_dirs`, `hermes_sessions_dirs`, `iflow_dirs`,
+`kilo_dirs`, `kimi_dirs`, `kiro_dirs`, `kiro_ide_dirs`, `mimocode_dirs`,
+`vibe_session_dirs`, `omp_dirs`, `openclaw_dirs`, `opencode_dirs`,
+`openhands_dirs`, `pi_dirs`, `piebald_dirs`, `positron_dirs`, `qclaw_dirs`,
+`qwen_project_dirs`, `qwenpaw_dirs`, `reasonix_dirs`, `shelley_dirs`,
+`visualstudio_copilot_dirs`, `vscode_copilot_dirs`, `warp_dirs`,
+`workbuddy_project_dirs`, `zed_dirs`, and `zencoder_dirs`. Each accepts an array
+of paths. When set, these take precedence over the single-directory environment
+variable and the default path.
 
-All listed directories are discovered, watched, and synced
-independently.
+All listed directories are discovered, watched, and synced independently.
 
 ### S3-Compatible Session Sources
 
-Claude and Codex session roots can also be `s3://` URIs. This is
-useful when several machines push their raw session files to object
-storage and one central AgentsView instance reads them without SSH
-access to those machines.
+Claude and Codex session roots can also be `s3://` URIs. This is useful when
+several machines push their raw session files to object storage and one central
+AgentsView instance reads them without SSH access to those machines.
 
 ```toml
 claude_project_dirs = [
@@ -421,14 +452,14 @@ codex_sessions_dirs = [
 ]
 ```
 
-S3 sources are read-only inputs to the normal local sync. AgentsView
-lists matching objects, fetches each changed object to a temporary
-file, parses it with the existing Claude/Codex parser, records the
-original `s3://` URI as `file_path`, and removes the temporary file.
-No persistent local mirror is created.
+S3 sources are read-only inputs to the normal local sync. AgentsView lists
+matching objects, fetches each changed object to a temporary file, parses it
+with the existing Claude/Codex parser, records the original `s3://` URI as
+`file_path`, and removes the temporary file. No persistent local mirror is
+created.
 
-Credentials and endpoint configuration use standard AWS-style
-environment variables:
+Credentials and endpoint configuration use standard AWS-style environment
+variables:
 
 ```bash
 export AWS_ACCESS_KEY_ID=...
@@ -437,12 +468,12 @@ export AWS_REGION=us-east-1
 export AWS_S3_ENDPOINT=https://s3.amazonaws.com
 ```
 
-`AWS_S3_ENDPOINT` is optional for AWS S3. Set it for S3-compatible
-services such as MinIO, Aliyun OSS, or Cloudflare R2. `http://`
-endpoints are accepted only for loopback hosts such as `localhost` or
-`127.0.0.1`. For a non-loopback HTTP endpoint, set
-`AGENTSVIEW_ALLOW_INSECURE_S3_ENDPOINT=true`; use that override only for
-trusted private networks because session transcripts travel without TLS.
+`AWS_S3_ENDPOINT` is optional for AWS S3. Set it for S3-compatible services such
+as MinIO, Aliyun OSS, or Cloudflare R2. `http://` endpoints are accepted only
+for loopback hosts such as `localhost` or `127.0.0.1`. For a non-loopback HTTP
+endpoint, set `AGENTSVIEW_ALLOW_INSECURE_S3_ENDPOINT=true`; use that override
+only for trusted private networks because session transcripts travel without
+TLS.
 
 Expected object layouts:
 
@@ -452,61 +483,55 @@ s3://bucket/.../<machine>/raw/claude/<project>/subagents/.../agent-*.jsonl
 s3://bucket/.../<machine>/raw/codex/2026/06/24/rollout-*.jsonl
 ```
 
-The machine name is derived from the path segment immediately before
-`raw`. If no such segment exists, sessions use the local AgentsView
-machine label. Codex discovery only imports rollout files under the
-configured root plus a trailing slash, so sibling prefixes such as
-`raw/codex-backup` are ignored.
+The machine name is derived from the path segment immediately before `raw`. If
+no such segment exists, sessions use the local AgentsView machine label. Codex
+discovery only imports rollout files under the configured root plus a trailing
+slash, so sibling prefixes such as `raw/codex-backup` are ignored.
 
-S3 object `Size`, `LastModified`, and available object fingerprints
-(`ETag`, version ID, and checksum headers) are stored in the session row
-and used for unchanged-object skip checks. A later sync therefore lists
-object metadata first and downloads only objects whose source metadata
-changed or whose stored parser data is stale.
+S3 object `Size`, `LastModified`, and available object fingerprints (`ETag`,
+version ID, and checksum headers) are stored in the session row and used for
+unchanged-object skip checks. A later sync therefore lists object metadata first
+and downloads only objects whose source metadata changed or whose stored parser
+data is stale.
 
-S3 roots are not watched with fsnotify. They are picked up by initial
-sync, manual sync, and the periodic directory scan.
+S3 roots are not watched with fsnotify. They are picked up by initial sync,
+manual sync, and the periodic directory scan.
 
 ### Worktree Project Mappings
 
-The parser infers a session's project from its `cwd`, which
-works for standard layouts but not custom worktree conventions
-like `~/code/{project}.worktrees/feat/<branch>/` — those
-sessions otherwise group under `<branch>` rather than
-`{project}`. As of 0.29.0, you can register manual
-**path-prefix → project** rules from the **Worktree Project
-Mappings** section in Settings:
+The parser infers a session's project from its `cwd`, which works for standard
+layouts but not custom worktree conventions like
+`~/code/{project}.worktrees/feat/<branch>/` — those sessions otherwise group
+under `<branch>` rather than `{project}`. As of 0.29.0, you can register manual
+**path-prefix → project** rules from the **Worktree Project Mappings** section
+in Settings:
 
 ![Worktree Project Mappings settings section](/assets/generated/screenshots/worktree-mappings.png)
 
 - Mappings are explicit; there is no auto-discovery.
-- Each rule applies whenever a session's `cwd` falls under the
-  configured prefix, on both new sessions as they sync and (via
-  the **Apply** button) already-imported sessions.
-- Rules are stored in a `worktree_project_mappings` SQLite
-  table scoped to the host machine, so a mapping created on one
-  machine does not leak into another machine's view of synced
-  sessions.
+- Each rule applies whenever a session's `cwd` falls under the configured
+  prefix, on both new sessions as they sync and (via the **Apply** button)
+  already-imported sessions.
+- Rules are stored in a `worktree_project_mappings` SQLite table scoped to the
+  host machine, so a mapping created on one machine does not leak into another
+  machine's view of synced sessions.
 - Excluded, trashed, and skipped session files are left alone.
 
-Mappings only mutate the session's `project` field; the rest of
-the session record is preserved through the bulk-resync
-rebuild-and-copy path.
+Mappings only mutate the session's `project` field; the rest of the session
+record is preserved through the bulk-resync rebuild-and-copy path.
 
 ## Automated Session Detection
 
-AgentsView classifies a session as "automated" when it has one
-or fewer real user messages and its first user message matches
-the automation classifier. Automated sessions (roborev reviews,
-title generation, warmup pings, changelog generation, and
-similar scripted runs) are filtered out of session lists, counts,
-and analytics by default — the **Include automated** toggle in
-the session filter dropdown opts them back in.
+AgentsView classifies a session as "automated" when it has one or fewer real
+user messages and its first user message matches the automation classifier.
+Automated sessions (roborev reviews, title generation, warmup pings, changelog
+generation, and similar scripted runs) are filtered out of session lists,
+counts, and analytics by default — the **Include automated** toggle in the
+session filter dropdown opts them back in.
 
-A set of built-in patterns covers the roborev family and
-AgentsView's own internal prompts. To teach AgentsView about
-first-message patterns unique to your own automation, add them
-to `~/.agentsview/config.toml`:
+A set of built-in patterns covers the roborev family and AgentsView's own
+internal prompts. To teach AgentsView about first-message patterns unique to
+your own automation, add them to `~/.agentsview/config.toml`:
 
 ```toml
 [automated]
@@ -522,104 +547,93 @@ exact_matches = [
 ]
 ```
 
-User-configured entries are case-sensitive and are matched
-against the session's first user message:
+User-configured entries are case-sensitive and are matched against the session's
+first user message:
 
-| Key | Match behavior |
-|-----|----------------|
-| `prefixes` | `HasPrefix` against the first user message |
-| `substrings` | `Contains` anywhere in the first user message |
+| Key             | Match behavior                                               |
+| --------------- | ------------------------------------------------------------ |
+| `prefixes`      | `HasPrefix` against the first user message                   |
+| `substrings`    | `Contains` anywhere in the first user message                |
 | `exact_matches` | trims the first user message, then compares the whole string |
 
-Entries are trimmed, deduplicated, and capped at 1024
-characters. Entries that duplicate a built-in pattern in the
-same category are silently dropped.
+Entries are trimmed, deduplicated, and capped at 1024 characters. Entries that
+duplicate a built-in pattern in the same category are silently dropped.
 
-**Reclassification on config change.** AgentsView stores a hash
-of the active classifier (built-in patterns + your configured
-patterns) with the database. On startup, it rechecks stored
-`is_automated` values against the active classifier and
-re-stamps the hash, so edits to `[automated]` patterns apply to
-history immediately — no manual resync required. The same
-backfill also corrects rows pulled in from PostgreSQL sync or
-copied from other archives.
+**Reclassification on config change.** AgentsView stores a hash of the active
+classifier (built-in patterns + your configured patterns) with the database. On
+startup, it rechecks stored `is_automated` values against the active classifier
+and re-stamps the hash, so edits to `[automated]` patterns apply to history
+immediately — no manual resync required. The same backfill also corrects rows
+pulled in from PostgreSQL sync or copied from other archives.
 
 ## Database
 
-The SQLite database uses WAL mode for concurrent reads and
-includes FTS5 full-text search indexes on message content.
+The SQLite database uses WAL mode for concurrent reads and includes FTS5
+full-text search indexes on message content.
 
 **Schema tables:**
 
-| Table | Purpose |
-|-------|---------|
-| `sessions` | Session metadata (project, agent, timestamps, file info, user message count) |
-| `messages` | Message content with role, ordinal, timestamps |
-| `tool_calls` | Tool invocations with normalized category taxonomy |
-| `tool_result_events` | Chronological status events for tool calls (e.g. Codex subagent updates) |
-| `insights` | AI-generated session analysis and summaries |
-| `starred_sessions` | Server-side star persistence (replaces localStorage) |
-| `pinned_messages` | Pinned message references with session linkage |
-| `stats` | Aggregate counts (session_count, message_count) |
-| `skipped_files` | Cache of non-interactive session files |
-| `messages_fts` | FTS5 virtual table for full-text search |
+| Table                | Purpose                                                                      |
+| -------------------- | ---------------------------------------------------------------------------- |
+| `sessions`           | Session metadata (project, agent, timestamps, file info, user message count) |
+| `messages`           | Message content with role, ordinal, timestamps                               |
+| `tool_calls`         | Tool invocations with normalized category taxonomy                           |
+| `tool_result_events` | Chronological status events for tool calls (e.g. Codex subagent updates)     |
+| `insights`           | AI-generated session analysis and summaries                                  |
+| `starred_sessions`   | Server-side star persistence (replaces localStorage)                         |
+| `pinned_messages`    | Pinned message references with session linkage                               |
+| `stats`              | Aggregate counts (session_count, message_count)                              |
+| `skipped_files`      | Cache of non-interactive session files                                       |
+| `messages_fts`       | FTS5 virtual table for full-text search                                      |
 
-The database is automatically migrated on startup when the
-schema changes.
+The database is automatically migrated on startup when the schema changes.
 
 ## Sync Behavior
 
-AgentsView keeps the database in sync with session files through
-two mechanisms:
+AgentsView keeps the database in sync with session files through two mechanisms:
 
-1. **File watcher** — uses fsnotify to detect file changes
-   in real time (500ms debounce). Common dependency and build
-   folders (`node_modules`, `__pycache__`, `.git`, `vendor`,
-   `dist`, etc.) are automatically skipped to reduce noise
-   and overhead.
-2. **Periodic sync** — full directory scan every 15 minutes
-   as a safety net
+1. **File watcher** — uses fsnotify to detect file changes in real time (500ms
+   debounce). Common dependency and build folders (`node_modules`,
+   `__pycache__`, `.git`, `vendor`, `dist`, etc.) are automatically skipped to
+   reduce noise and overhead.
+1. **Periodic sync** — full directory scan every 15 minutes as a safety net
 
-Change detection uses file size, mtime, inode, and device
-tracking to validate incremental parses more reliably. A pool of
-8 workers processes files in parallel during sync.
+Change detection uses file size, mtime, inode, and device tracking to validate
+incremental parses more reliably. A pool of 8 workers processes files in
+parallel during sync.
 
 For `s3://` Claude and Codex roots, change detection uses object size,
-`LastModified`, and available object fingerprints such as ETag, version
-ID, and checksums from listing or stat calls. Object content is
-downloaded only after that metadata shows a parse may be needed.
+`LastModified`, and available object fingerprints such as ETag, version ID, and
+checksums from listing or stat calls. Object content is downloaded only after
+that metadata shows a parse may be needed.
 
-Files that fail to parse or contain no interactive content
-are cached in the `skipped_files` table and skipped on
-subsequent syncs until their mtime changes.
+Files that fail to parse or contain no interactive content are cached in the
+`skipped_files` table and skipped on subsequent syncs until their mtime changes.
 
 ### Large Watch Trees
 
-The recursive watcher has a hard budget of 8192 directories
-per process. If a session root is larger than the remaining
-budget, or if registering watches hits the operating system's
-inotify or file-descriptor limit (`ENOSPC` / `EMFILE`), as of
-0.27.0 AgentsView **degrades** that root to polling instead of
-aborting startup. The HTTP listener is now bound before any
-watches are registered, so the server still comes up cleanly.
+The recursive watcher has a hard budget of 8192 directories per process. If a
+session root is larger than the remaining budget, or if registering watches hits
+the operating system's inotify or file-descriptor limit (`ENOSPC` / `EMFILE`),
+as of 0.27.0 AgentsView **degrades** that root to polling instead of aborting
+startup. The HTTP listener is now bound before any watches are registered, so
+the server still comes up cleanly.
 
 Roots that fall back to polling are picked up by:
 
 - the existing 15-minute periodic full sync, plus
-- a new 2-minute fallback sync loop that runs whenever any roots
-  are unwatched (it re-syncs all configured roots, not just the
-  unwatched ones)
+- a new 2-minute fallback sync loop that runs whenever any roots are unwatched
+  (it re-syncs all configured roots, not just the unwatched ones)
 
-Startup logs make degradation explicit. Per-root and summary
-lines look like:
+Startup logs make degradation explicit. Per-root and summary lines look like:
 
 ```
 Couldn't watch 12500 directories under /home/me/.claude/projects, will poll every 2m0s
 Polling 1 roots every 2m0s for changes
 ```
 
-No configuration is required, but on Linux you can still raise
-the global cap to keep more roots watched in real time:
+No configuration is required, but on Linux you can still raise the global cap to
+keep more roots watched in real time:
 
 ```bash
 sudo sysctl fs.inotify.max_user_watches=524288
@@ -639,8 +653,8 @@ Trigger a full resync (re-parses all session files from scratch):
 curl -X POST http://127.0.0.1:8080/api/v1/resync
 ```
 
-Both endpoints stream progress via Server-Sent Events when
-accessed from a browser or SSE-capable client.
+Both endpoints stream progress via Server-Sent Events when accessed from a
+browser or SSE-capable client.
 
 Check sync status:
 
@@ -650,51 +664,43 @@ curl http://127.0.0.1:8080/api/v1/sync/status
 
 ## Privacy and Telemetry
 
-By default, all session data stays on your local machine in
-SQLite. AgentsView never sends session content, project names,
-prompts, file paths, or hostnames anywhere.
+By default, all session data stays on your local machine in SQLite. AgentsView
+never sends session content, project names, prompts, file paths, or hostnames
+anywhere.
 
-Optional features that send data externally when you enable
-them:
+Optional features that send data externally when you enable them:
 
-- [PostgreSQL sync](/pg-sync/) (`pg push`) sends session data
-  to a PostgreSQL database you configure.
-- The [DuckDB mirror](/duckdb/) writes a local DuckDB file by
-  default; data only leaves the machine if you expose the
-  mirror over a remote Quack endpoint.
-- [Session Insights](/insights/) sends session content to an
-  AI provider (Claude, Codex, Copilot, or Gemini) to generate
-  summaries.
-- [Publish to Gist](/usage/#publish-to-gist) uploads a session
-  to GitHub.
+- [PostgreSQL sync](/pg-sync/) (`pg push`) sends session data to a PostgreSQL
+  database you configure.
+- The [DuckDB mirror](/duckdb/) writes a local DuckDB file by default; data only
+  leaves the machine if you expose the mirror over a remote Quack endpoint.
+- [Session Insights](/insights/) sends session content to an AI provider
+  (Claude, Codex, Copilot, or Gemini) to generate summaries.
+- [Publish to Gist](/usage/#publish-to-gist) uploads a session to GitHub.
 
-The automatic outbound requests are update checks and an
-anonymous daemon ping:
+The automatic outbound requests are update checks and an anonymous daemon ping:
 
-- **CLI and web UI** — on startup, the server contacts the
-  GitHub API to check for new releases. No identifying
-  information is sent beyond what a standard GitHub API
-  request includes (IP address, user-agent).
-- **Desktop app** — uses Tauri's native updater, which
-  checks the GitHub release feed independently.
+- **CLI and web UI** — on startup, the server contacts the GitHub API to check
+  for new releases. No identifying information is sent beyond what a standard
+  GitHub API request includes (IP address, user-agent).
+- **Desktop app** — uses Tauri's native updater, which checks the GitHub release
+  feed independently.
 - **Anonymous daemon telemetry** — see below.
 
 ### Anonymous Daemon Telemetry
 
-As of 0.33.0, the server sends an anonymous `daemon_active`
-liveness ping on startup and every 24 hours while running. The
-ping contains only:
+As of 0.33.0, the server sends an anonymous `daemon_active` liveness ping on
+startup and every 24 hours while running. The ping contains only:
 
 - app version and git commit
 - operating system and CPU architecture
 - a random install ID, generated once and stored in
   `~/.agentsview/telemetry-install-id`
 
-It contains no session data, prompts, project names, file
-paths, account information, or hostname, and the events are
-sent with person-profile processing and GeoIP lookup disabled.
-The ping runs in the background and never blocks startup or
-operation.
+It contains no session data, prompts, project names, file paths, account
+information, or hostname, and the events are sent with person-profile processing
+and GeoIP lookup disabled. The ping runs in the background and never blocks
+startup or operation.
 
 Disable it with an environment variable:
 
@@ -706,11 +712,11 @@ export AGENTSVIEW_TELEMETRY_ENABLED=0
 
 Disable the CLI/web UI update check with any of:
 
-| Method | Value |
-|--------|-------|
-| Config file | `disable_update_check = true` in `~/.agentsview/config.toml` |
-| Environment variable | `AGENTSVIEW_DISABLE_UPDATE_CHECK=1` |
-| CLI flag | `--no-update-check` |
+| Method               | Value                                                        |
+| -------------------- | ------------------------------------------------------------ |
+| Config file          | `disable_update_check = true` in `~/.agentsview/config.toml` |
+| Environment variable | `AGENTSVIEW_DISABLE_UPDATE_CHECK=1`                          |
+| CLI flag             | `--no-update-check`                                          |
 
 The desktop app's auto-updater is controlled separately via
 `AGENTSVIEW_DESKTOP_AUTOUPDATE=0`.
