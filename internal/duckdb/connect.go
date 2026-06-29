@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	neturl "net/url"
+	"runtime"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -24,6 +25,10 @@ func Open(path string) (*sql.DB, error) {
 	// the mirror sync path is still process-local.
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
+	if err := configureDuckDBThreads(db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return db, nil
 }
 
@@ -48,6 +53,10 @@ func NewQuackStore(rawURL, token string, allowInsecure bool) (*Store, error) {
 	}
 	conn.SetMaxOpenConns(1)
 	conn.SetMaxIdleConns(1)
+	if err := configureDuckDBThreads(conn); err != nil {
+		conn.Close()
+		return nil, err
+	}
 
 	if _, err := conn.Exec("INSTALL quack"); err != nil {
 		conn.Close()
@@ -73,6 +82,22 @@ func NewQuackStore(rawURL, token string, allowInsecure bool) (*Store, error) {
 		return nil, fmt.Errorf("selecting quack catalog: %w", err)
 	}
 	return NewStoreFromDB(conn), nil
+}
+
+func configureDuckDBThreads(db *sql.DB) error {
+	threads := duckDBThreadCount()
+	if _, err := db.Exec(fmt.Sprintf("SET threads TO %d", threads)); err != nil {
+		return fmt.Errorf("configuring duckdb threads: %w", err)
+	}
+	return nil
+}
+
+func duckDBThreadCount() int {
+	threads := runtime.GOMAXPROCS(0)
+	if threads < 1 {
+		return 1
+	}
+	return threads
 }
 
 // ValidateQuackClientURL rejects unsafe remote client connections before the
