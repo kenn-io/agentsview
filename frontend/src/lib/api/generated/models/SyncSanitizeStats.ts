@@ -9,4 +9,3 @@ export type SyncSanitizeStats = {
   timestamps_blanked?: number;
   tokens_clamped?: number;
 };
-

@@ -8,4 +8,3 @@ export type SyncAnomalyStats = {
   malformed_lines_total?: number;
   sanitize?: SyncSanitizeStats;
 };
-
