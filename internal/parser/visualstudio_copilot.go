@@ -273,19 +273,36 @@ func VisualStudioCopilotFileConversationIDs(path string) ([]string, error) {
 // WriteVisualStudioCopilotConversationJSONL streams the trace data for one
 // conversation across every sibling trace file in the representative trace's
 // directory, since a conversation's spans can be split across rotated trace
-// files. From each file it emits only the spans whose gen_ai.conversation.id
-// matches the requested conversation: a line is written verbatim when all of its
-// spans already belong to that conversation, otherwise it is re-encoded with
-// only the matching spans so a batched OTLP line cannot disclose another
-// conversation's or an id-less span's prompts, tool arguments, command output,
-// or secrets. A sibling that vanished between listing and open is skipped; any
-// other read error is returned. When no trace file in the directory contains the
-// conversation (e.g. the representative trace was rotated away and no sibling
-// holds it), it returns an os.ErrNotExist-wrapped error rather than succeeding
-// with empty output, so callers can report a clear not-found error.
+// files. VS 2026 session-file paths already point at one conversation file, so
+// they are filtered and exported directly. From each file it emits only the
+// spans whose gen_ai.conversation.id matches the requested conversation: a line
+// is written verbatim when all of its spans already belong to that
+// conversation, otherwise it is re-encoded with only the matching spans so a
+// batched OTLP line cannot disclose another conversation's or an id-less span's
+// prompts, tool arguments, command output, or secrets. A sibling that vanished
+// between listing and open is skipped; any other read error is returned. When
+// no trace file in the directory contains the conversation (e.g. the
+// representative trace was rotated away and no sibling holds it), it returns an
+// os.ErrNotExist-wrapped error rather than succeeding with empty output, so
+// callers can report a clear not-found error.
 func WriteVisualStudioCopilotConversationJSONL(
 	w io.Writer, tracePath, conversationID string,
 ) error {
+	if isVisualStudioCopilotVS2026SessionPath(tracePath) {
+		written, err := writeVisualStudioCopilotConversationFile(
+			w, tracePath, conversationID,
+		)
+		if err != nil {
+			return err
+		}
+		if written == 0 {
+			return fmt.Errorf(
+				"conversation %s not found in %s: %w",
+				conversationID, tracePath, os.ErrNotExist,
+			)
+		}
+		return nil
+	}
 	files, err := visualStudioCopilotSiblingTraceFiles(tracePath)
 	if err != nil {
 		return err

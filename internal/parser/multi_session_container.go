@@ -2,7 +2,9 @@ package parser
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 )
 
@@ -371,7 +373,12 @@ func (s multiSessionContainerSourceSet) Fingerprint(
 	}
 	fingerprint, err := s.cfg.fingerprint(src)
 	if err != nil {
-		return SourceFingerprint{}, err
+		if errors.Is(err, os.ErrNotExist) &&
+			multiSessionSourceOwnsContainer(src) {
+			fingerprint = SourceFingerprint{}
+		} else {
+			return SourceFingerprint{}, err
+		}
 	}
 	fingerprint.Key = firstNonEmptyJSONLString(
 		source.FingerprintKey, source.Key, src.Path,
@@ -429,13 +436,19 @@ func (s multiSessionContainerSourceSet) parse(
 }
 
 // skipOutcome builds the "no session" outcome for a container/member that
-// produced no results. When the backing container file is gone, the stored
-// sessions must be preserved (the archive survives a vanished source file), so
-// it skips without ForceReplace, which would delete them. When the container is
-// still present, the member row or contents were genuinely removed, so it
-// force-replaces to drop the now-absent stored sessions.
+// produced no results. When the backing container file is gone, whole-container
+// sources preserve the stored sessions because the archive survives a vanished
+// source file. Member tombstones for one-file-per-member layouts still
+// force-replace so a deleted session row does not linger forever.
 func (s multiSessionContainerSourceSet) skipOutcome(src multiSessionSource) ParseOutcome {
 	if src.Container != "" && !IsRegularFile(src.Container) {
+		if multiSessionSourceOwnsContainer(src) {
+			return ParseOutcome{
+				ResultSetComplete: true,
+				ForceReplace:      true,
+				SkipReason:        SkipNoSession,
+			}
+		}
 		return ParseOutcome{
 			ResultSetComplete: true,
 			SkipReason:        SkipNoSession,
@@ -446,6 +459,10 @@ func (s multiSessionContainerSourceSet) skipOutcome(src multiSessionSource) Pars
 		ForceReplace:      true,
 		SkipReason:        SkipNoSession,
 	}
+}
+
+func multiSessionSourceOwnsContainer(src multiSessionSource) bool {
+	return src.MemberID != "" && src.MemberID == filepath.Base(src.Container)
 }
 
 func (s multiSessionContainerSourceSet) memberPresent(src multiSessionSource) bool {

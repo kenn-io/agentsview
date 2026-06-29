@@ -1836,6 +1836,44 @@ func TestWriteVisualStudioCopilotConversationJSONLTraversesSiblings(
 	assert.NotContains(t, out, other)
 }
 
+func TestWriteVisualStudioCopilotConversationJSONLReadsVS2026SessionFile(
+	t *testing.T,
+) {
+	dir := t.TempDir()
+	convA := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
+	convB := "c0aca2e3-d1f2-4d28-bd5e-5dab29e2be28"
+	path := filepath.Join(
+		dir, ".vs", "SampleApp", "copilot-chat", "thread", "sessions", convA,
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	lineA := vsCopilotTraceLineJSONWithSpanID(convA, "a1", "chat gpt-5.5",
+		"1781293600000000000", "1781293610000000000",
+		map[string]string{
+			"gen_ai.operation.name": "chat",
+			"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Conversation A prompt."}]}]`,
+		})
+	lineB := vsCopilotTraceLineJSONWithSpanID(convB, "b1", "chat gpt-5.5",
+		"1781293620000000000", "1781293630000000000",
+		map[string]string{
+			"gen_ai.operation.name": "chat",
+			"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Other conversation secret B."}]}]`,
+		})
+	require.NoError(t, os.WriteFile(path, []byte(lineA+"\n"+lineB+"\n"), 0o644))
+
+	var buf bytes.Buffer
+	require.NoError(
+		t, WriteVisualStudioCopilotConversationJSONL(&buf, path, convA),
+	)
+
+	out := buf.String()
+	assert.Contains(t, out, "Conversation A prompt.")
+	assert.NotContains(t, out, convB)
+	assert.NotContains(t, out, "Other conversation secret B.")
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	require.Len(t, lines, 1)
+	assert.JSONEq(t, lineA, lines[0])
+}
+
 func vsCopilotTraceLineJSON(
 	conversationID, name, start, end string,
 	attrs map[string]string,

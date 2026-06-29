@@ -517,6 +517,66 @@ func TestVisualStudioCopilotProviderCanonicalizesMixedLegacyAndVS2026Sources(
 	assert.Equal(t, virtualPath, found.DisplayPath)
 }
 
+func TestVisualStudioCopilotProviderDeletesVS2026SessionTombstone(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	conversationID := "5bc5f6d7-9a6e-4f9c-8f3c-b7be2e7d9f20"
+	sessionPath := filepath.Join(
+		root, ".vs", "SampleApp", "copilot-chat", "thread", "sessions",
+		conversationID,
+	)
+	writeSourceFile(t, sessionPath, vsCopilotTraceLineJSON(
+		conversationID,
+		"chat gpt-5.5", "1781293600000000000", "1781293610000000000",
+		map[string]string{
+			"gen_ai.operation.name": "chat",
+			"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Run the tests."}]}]`,
+		},
+	)+"\n")
+
+	provider, ok := NewProvider(AgentVSCopilot, ProviderConfig{
+		Roots: []string{root},
+	})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	virtualPath := VisualStudioCopilotVirtualPath(sessionPath, conversationID)
+	assert.Equal(t, virtualPath, discovered[0].DisplayPath)
+
+	require.NoError(t, os.Remove(sessionPath))
+
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:              sessionPath,
+			EventKind:         "remove",
+			WatchRoot:         root,
+			StoredSourcePaths: []string{virtualPath},
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, virtualPath, changed[0].DisplayPath)
+
+	fingerprint, err := provider.Fingerprint(context.Background(), changed[0])
+	require.NoError(t, err)
+	assert.Equal(t, SourceFingerprint{Key: virtualPath}, fingerprint)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source:      changed[0],
+		Fingerprint: fingerprint,
+	})
+	require.NoError(t, err)
+	assert.True(t, outcome.ResultSetComplete)
+	assert.True(t, outcome.ForceReplace,
+		"deleted VS 2026 session files must force-replace the archived member")
+	assert.Equal(t, SkipNoSession, outcome.SkipReason)
+	assert.Empty(t, outcome.Results)
+}
+
 func TestVisualStudioCopilotProviderRejectsOutsideVS2026SessionLayout(
 	t *testing.T,
 ) {
