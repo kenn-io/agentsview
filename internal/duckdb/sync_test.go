@@ -193,6 +193,35 @@ func TestSyncModelPricingPreservesExistingMirrorRows(t *testing.T) {
 	assert.Equal(t, 2.0, output)
 }
 
+func TestSyncModelPricingSkipsUnchangedMirrorRows(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:         "claude-test",
+		InputPerMTok:         3,
+		OutputPerMTok:        15,
+		CacheCreationPerMTok: 1,
+		CacheReadPerMTok:     0.5,
+	}}))
+	syncer := newTestSync(t, filepath.Join(t.TempDir(), "mirror.duckdb"), local, SyncOptions{})
+	require.NoError(t, syncer.EnsureSchema(ctx))
+	require.NoError(t, syncer.syncModelPricing(ctx))
+	_, err := syncer.DB().ExecContext(ctx,
+		`UPDATE model_pricing SET updated_at = ? WHERE model_pattern = ?`,
+		"kept", "claude-test",
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, syncer.syncModelPricing(ctx))
+
+	var updatedAt string
+	require.NoError(t, syncer.DB().QueryRowContext(ctx,
+		`SELECT updated_at FROM model_pricing WHERE model_pattern = ?`,
+		"claude-test",
+	).Scan(&updatedAt))
+	assert.Equal(t, "kept", updatedAt)
+}
+
 func TestSyncIncrementalSkipsUnchangedAndPushesChangedSessions(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)

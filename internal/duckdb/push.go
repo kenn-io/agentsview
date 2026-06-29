@@ -24,6 +24,16 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if len(prices) == 0 {
 		return nil
 	}
+
+	existing, err := listDuckModelPricing(ctx, s.duck)
+	if err != nil {
+		return err
+	}
+	_, prices = db.FilterChangedModelPricing(existing, prices)
+	if len(prices) == 0 {
+		return nil
+	}
+
 	tx, err := s.duck.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning duckdb pricing sync: %w", err)
@@ -31,33 +41,87 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	defer func() {
 		_ = tx.Rollback()
 	}()
-	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO model_pricing (
-			model_pattern, input_per_mtok, output_per_mtok,
-			cache_creation_per_mtok, cache_read_per_mtok, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT(model_pattern) DO UPDATE SET
-			input_per_mtok = excluded.input_per_mtok,
-			output_per_mtok = excluded.output_per_mtok,
-			cache_creation_per_mtok = excluded.cache_creation_per_mtok,
-			cache_read_per_mtok = excluded.cache_read_per_mtok,
-			updated_at = excluded.updated_at`)
-	if err != nil {
-		return fmt.Errorf("preparing duckdb pricing sync: %w", err)
-	}
-	defer stmt.Close()
-	for _, p := range prices {
-		if _, err := stmt.ExecContext(ctx,
-			p.ModelPattern, p.InputPerMTok, p.OutputPerMTok,
-			p.CacheCreationPerMTok, p.CacheReadPerMTok, p.UpdatedAt,
-		); err != nil {
-			return fmt.Errorf("syncing model pricing %q: %w", p.ModelPattern, err)
+
+	for i := 0; i < len(prices); i += duckPricingUpsertBatch {
+		end := min(i+duckPricingUpsertBatch, len(prices))
+		query, args := duckPricingUpsertStatement(prices[i:end])
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			return fmt.Errorf(
+				"syncing duckdb pricing batch starting at %d: %w",
+				i, err,
+			)
 		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing duckdb pricing sync: %w", err)
 	}
 	return nil
+}
+
+const duckPricingUpsertBatch = 100
+
+func duckPricingUpsertStatement(prices []db.ModelPricing) (string, []any) {
+	var b strings.Builder
+	b.WriteString(`INSERT INTO model_pricing (
+		model_pattern, input_per_mtok, output_per_mtok,
+		cache_creation_per_mtok, cache_read_per_mtok, updated_at
+	) VALUES `)
+	args := make([]any, 0, len(prices)*6)
+	for i, p := range prices {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString("(?, ?, ?, ?, ?, ?)")
+		args = append(args,
+			p.ModelPattern,
+			p.InputPerMTok,
+			p.OutputPerMTok,
+			p.CacheCreationPerMTok,
+			p.CacheReadPerMTok,
+			p.UpdatedAt,
+		)
+	}
+	b.WriteString(`
+	ON CONFLICT(model_pattern) DO UPDATE SET
+		input_per_mtok = excluded.input_per_mtok,
+		output_per_mtok = excluded.output_per_mtok,
+		cache_creation_per_mtok = excluded.cache_creation_per_mtok,
+		cache_read_per_mtok = excluded.cache_read_per_mtok,
+		updated_at = excluded.updated_at`)
+	return b.String(), args
+}
+
+func listDuckModelPricing(ctx context.Context, duck *sql.DB) ([]db.ModelPricing, error) {
+	rows, err := duck.QueryContext(ctx,
+		`SELECT model_pattern, input_per_mtok,
+			output_per_mtok, cache_creation_per_mtok,
+			cache_read_per_mtok, updated_at
+		 FROM model_pricing`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing duckdb pricing: %w", err)
+	}
+	defer rows.Close()
+
+	var out []db.ModelPricing
+	for rows.Next() {
+		var p db.ModelPricing
+		if err := rows.Scan(
+			&p.ModelPattern,
+			&p.InputPerMTok,
+			&p.OutputPerMTok,
+			&p.CacheCreationPerMTok,
+			&p.CacheReadPerMTok,
+			&p.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scanning duckdb pricing: %w", err)
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating duckdb pricing: %w", err)
+	}
+	return out, nil
 }
 
 func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
