@@ -2979,6 +2979,7 @@ func TestGetSettings_UsesGitHubCLIAuthTokenFallback(t *testing.T) {
 
 func TestSettingsRemainLockedInPGMode(t *testing.T) {
 	te := setupPGMode(t)
+	te.srv.SetGithubToken("settings-test-token")
 
 	w := te.get(t, "/api/v1/settings")
 	assertStatus(t, w, http.StatusOK)
@@ -3000,6 +3001,7 @@ func TestSettingsRemainLockedInPGMode(t *testing.T) {
 
 func TestSettingsRemainWritableInLocalNoSyncMode(t *testing.T) {
 	te := setupNoSyncMode(t)
+	te.srv.SetGithubToken("settings-test-token")
 
 	w := te.get(t, "/api/v1/settings")
 	assertStatus(t, w, http.StatusOK)
