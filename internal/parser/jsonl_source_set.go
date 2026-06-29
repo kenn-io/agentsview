@@ -55,12 +55,8 @@ type JSONLSourceSetOptions struct {
 	// when every physical source should be parsed. If duplicates exist,
 	// discovery keeps the first configured root/traversal result.
 	Key func(root, path string) string
-	// DisplayPath is human-readable. When FingerprintKey is not set, it also
-	// becomes the persisted freshness key.
-	DisplayPath func(root, path string) string
-	// FingerprintKey is the persisted lookup and freshness identity. Override it
-	// when DisplayPath is not the stable value that should survive a provider
-	// migration.
+	// FingerprintKey is the persisted lookup and freshness identity. When unset,
+	// it falls back to the display path (the source's relative-or-absolute path).
 	FingerprintKey func(root, path string) string
 	// ProjectHint is display metadata only.
 	ProjectHint func(root, path string) string
@@ -715,10 +711,7 @@ func (s JSONLSourceSet) sourceRefFromPath(
 	// OS-native separators, so normalize here; this is a no-op on Unix and
 	// keeps RelPath stable for Windows callers and tests.
 	rel = filepath.ToSlash(rel)
-	displayPath := firstNonEmptyJSONLString(
-		callPathFunc(s.options.DisplayPath, root, path),
-		path,
-	)
+	displayPath := path
 	fingerprintKey := firstNonEmptyJSONLString(
 		callPathFunc(s.options.FingerprintKey, root, path),
 		displayPath,

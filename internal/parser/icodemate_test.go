@@ -78,28 +78,6 @@ func TestIcodemateProviderParseRelabelsOpenCodeSession(t *testing.T) {
 	assert.Equal(t, "Hello from IcodeMate", msgs[0].Content)
 }
 
-func TestDiscoverIcodemateSessions(t *testing.T) {
-	root := t.TempDir()
-	sessionPath := filepath.Join(
-		root, "storage", "session_diff", "global", "ses_icode.json",
-	)
-	writeOpenCodeStorageFile(t, sessionPath, map[string]any{
-		"id":        "ses_icode",
-		"directory": "/home/user/code/icodeapp",
-		"time": map[string]any{
-			"created": 1700000000000,
-			"updated": 1700000060000,
-		},
-	})
-
-	files := DiscoverIcodemateSessions(root)
-	require.Len(t, files, 1)
-
-	assert.Equal(t, sessionPath, files[0].Path)
-	assert.Equal(t, "icodeapp", files[0].Project)
-	assert.Equal(t, AgentIcodemate, files[0].Agent)
-}
-
 func TestParseIcodemateSQLiteVirtualPath(t *testing.T) {
 	wantDBPath := filepath.Join(t.TempDir(), "icodemate.db")
 	virtual := wantDBPath + "#ses_icode"
@@ -112,20 +90,4 @@ func TestParseIcodemateSQLiteVirtualPath(t *testing.T) {
 		filepath.Join(t.TempDir(), "opencode.db") + "#ses_icode",
 	)
 	assert.False(t, ok)
-}
-
-func TestDiscoverIcodemateSessionsEmptyDir(t *testing.T) {
-	root := t.TempDir()
-	files := DiscoverIcodemateSessions(root)
-	assert.Empty(t, files)
-}
-
-func TestDiscoverIcodemateSessionsNoSessionDiff(t *testing.T) {
-	root := t.TempDir()
-	writeOpenCodeStorageFile(t,
-		filepath.Join(root, "storage", "other", "x.json"),
-		map[string]any{"id": "x"},
-	)
-	files := DiscoverIcodemateSessions(root)
-	assert.Empty(t, files)
 }

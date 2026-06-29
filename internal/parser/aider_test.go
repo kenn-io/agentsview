@@ -535,32 +535,6 @@ func TestAiderVirtualPathRoundTrip(t *testing.T) {
 	}
 }
 
-func TestListAiderRunMetas(t *testing.T) {
-	metas, err := ListAiderRunMetas(fixtureAider())
-	require.NoError(t, err)
-	// Three runs -> three metas (one per slot, including the header-only
-	// trailing run, so positional indices stay stable).
-	require.Len(t, metas, 3)
-	assert.Equal(t, 0, metas[0].Idx)
-	assert.Equal(t, 1, metas[1].Idx)
-	assert.Equal(t, 2, metas[2].Idx)
-	assert.Equal(t,
-		time.Date(2026, 6, 9, 14, 1, 0, 0, time.UTC), metas[0].Started)
-	assert.Equal(t,
-		time.Date(2026, 6, 9, 15, 30, 0, 0, time.UTC), metas[1].Started)
-	for i, m := range metas {
-		_, idx, ok := ParseAiderVirtualPath(m.VirtualPath)
-		require.True(t, ok)
-		assert.Equal(t, i, idx)
-	}
-	// HasMessages flags content-bearing runs: the first two runs have turns,
-	// the trailing header-only run does not. The engine's unchanged-check
-	// uses this to avoid expecting a stored row for header-only runs.
-	assert.True(t, metas[0].HasMessages, "run 0 has turns")
-	assert.True(t, metas[1].HasMessages, "run 1 has turns")
-	assert.False(t, metas[2].HasMessages, "header-only run produces no session")
-}
-
 // TestAiderRegistryOptInDiscovery pins that Aider is not discovered by
 // default. Aider has no central store, and a rootless $HOME scan can trigger
 // macOS privacy prompts during passive background refreshes, so users must opt

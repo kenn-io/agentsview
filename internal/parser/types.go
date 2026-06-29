@@ -673,20 +673,6 @@ const (
 	RoleTool   RoleType = "tool"
 )
 
-// ValidRole reports whether r is a recognized message role. It is the
-// authoritative enum check for the central output-validation pass,
-// which coerces out-of-enum roles rather than persisting garbage
-// strings. The empty role is treated as valid (absent) so a parser
-// that legitimately leaves the role unset is not flagged.
-func ValidRole(r RoleType) bool {
-	switch r {
-	case "", RoleUser, RoleAssistant, RoleSystem, RoleTool:
-		return true
-	default:
-		return false
-	}
-}
-
 // Transcript fidelity values for ParsedSession.TranscriptFidelity. Empty
 // is treated as full (no degradation signalled).
 const (

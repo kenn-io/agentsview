@@ -719,46 +719,6 @@ func TestFindOpenCodeSourceFilePureSQLiteOnlyForExistingSession(t *testing.T) {
 	assert.Empty(t, got, "FindOpenCodeSourceFile(absent)")
 }
 
-func TestOpenCodeStorageSessionIDsCollectsJSONFiles(t *testing.T) {
-	root := t.TempDir()
-	sessionDir := filepath.Join(root, "storage", "session")
-	require.NoError(t, os.MkdirAll(
-		filepath.Join(sessionDir, "global"), 0o755,
-	), "mkdir global")
-	require.NoError(t, os.MkdirAll(
-		filepath.Join(sessionDir, "proj-x"), 0o755,
-	), "mkdir proj-x")
-	for _, p := range []string{
-		filepath.Join(sessionDir, "global", "ses_a.json"),
-		filepath.Join(sessionDir, "global", "ses_b.json"),
-		filepath.Join(sessionDir, "proj-x", "ses_c.json"),
-		filepath.Join(sessionDir, "global", "skip.txt"),
-	} {
-		require.NoErrorf(t, os.WriteFile(p, []byte("{}"), 0o644), "write %s", p)
-	}
-
-	got := OpenCodeStorageSessionIDs(root)
-	want := map[string]struct{}{
-		"ses_a": {},
-		"ses_b": {},
-		"ses_c": {},
-	}
-	require.Lenf(t, got, len(want), "got %v, want %v", got, want)
-	for id := range want {
-		_, ok := got[id]
-		assert.Truef(t, ok, "missing %q in result %v", id, got)
-	}
-}
-
-func TestOpenCodeStorageSessionIDsNilForNonStorageRoot(t *testing.T) {
-	root := t.TempDir()
-	require.NoError(t, os.WriteFile(
-		filepath.Join(root, "opencode.db"), []byte("x"), 0o644,
-	), "write db marker")
-	got := OpenCodeStorageSessionIDs(root)
-	assert.Nil(t, got, "want nil for SQLite-only root")
-}
-
 func TestResolveCodexShallowWatchRoots(t *testing.T) {
 	tests := []struct {
 		name string

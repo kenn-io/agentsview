@@ -77,12 +77,6 @@ func WithKey(fn func(root, path string) string) JSONLOption {
 	return func(o *JSONLSourceSetOptions) { o.Key = fn }
 }
 
-// WithFingerprintKey overrides the persisted lookup/freshness identity when the
-// display path is not the value that should survive a provider migration.
-func WithFingerprintKey(fn func(root, path string) string) JSONLOption {
-	return func(o *JSONLSourceSetOptions) { o.FingerprintKey = fn }
-}
-
 // WithProjectHint sets display-only project metadata for a source.
 func WithProjectHint(fn func(root, path string) string) JSONLOption {
 	return func(o *JSONLSourceSetOptions) { o.ProjectHint = fn }

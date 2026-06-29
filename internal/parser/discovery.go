@@ -314,15 +314,6 @@ func ResolveOpenCodeSource(root string) OpenCodeSource {
 	return resolveOpenCodeFormatSource(openCodeFmt, root)
 }
 
-// OpenCodeStorageSessionIDs returns the set of session IDs that
-// have a JSON file under storage/session/*/ in the given root.
-// Returns nil for non-storage roots. In hybrid roots (storage and
-// SQLite both present) the storage transcript is canonical, so
-// callers use this to skip duplicate SQLite metas during sync.
-func OpenCodeStorageSessionIDs(root string) map[string]struct{} {
-	return openCodeFormatStorageSessionIDs(openCodeFmt, root)
-}
-
 // ResolveOpenCodeWatchRoots returns the directories that should be
 // watched for live OpenCode updates under a configured root. Pure
 // storage mode targets the storage/ subtree so fsnotify does not
@@ -364,10 +355,6 @@ func ResolveKiloSource(root string) OpenCodeSource {
 	return resolveOpenCodeFormatSource(kiloFmt, root)
 }
 
-func KiloStorageSessionIDs(root string) map[string]struct{} {
-	return openCodeFormatStorageSessionIDs(kiloFmt, root)
-}
-
 func ResolveKiloWatchRoots(root string) []string {
 	return resolveOpenCodeFormatWatchRoots(kiloFmt, root)
 }
@@ -380,18 +367,6 @@ func KiloSQLiteVirtualPath(dbPath, sessionID string) string {
 // file-backed storage or legacy SQLite storage.
 func ResolveIcodemateSource(root string) OpenCodeSource {
 	return resolveOpenCodeFormatSource(icodemateFmt, root)
-}
-
-func DiscoverIcodemateSessions(root string) []DiscoveredFile {
-	return discoverOpenCodeFormatSessions(icodemateFmt, root)
-}
-
-func FindIcodemateSourceFile(root, sessionID string) string {
-	return findOpenCodeFormatSourceFile(icodemateFmt, root, sessionID)
-}
-
-func IcodemateStorageSessionIDs(root string) map[string]struct{} {
-	return openCodeFormatStorageSessionIDs(icodemateFmt, root)
 }
 
 func ResolveIcodemateWatchRoots(root string) []string {
@@ -412,10 +387,6 @@ func ParseIcodemateSQLiteVirtualPath(
 // file-backed storage (storage/session_diff) or SQLite storage.
 func ResolveMiMoCodeSource(root string) OpenCodeSource {
 	return resolveOpenCodeFormatSource(mimoFmt, root)
-}
-
-func MiMoCodeStorageSessionIDs(root string) map[string]struct{} {
-	return openCodeFormatStorageSessionIDs(mimoFmt, root)
 }
 
 func ResolveMiMoCodeWatchRoots(root string) []string {

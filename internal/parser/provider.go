@@ -493,17 +493,6 @@ func ProviderFactoryByType(t AgentType) (ProviderFactory, bool) {
 	return nil, false
 }
 
-// ProviderSupportsSourceDiscovery reports whether the registered provider can
-// enumerate source references for report-only or sync discovery surfaces.
-func ProviderSupportsSourceDiscovery(t AgentType) bool {
-	factory, ok := ProviderFactoryByType(t)
-	if !ok {
-		return false
-	}
-	return factory.Capabilities().Source.DiscoverSources ==
-		CapabilitySupported
-}
-
 // NewProvider constructs a config-bound provider for an agent type.
 func NewProvider(t AgentType, cfg ProviderConfig) (Provider, bool) {
 	factory, ok := ProviderFactoryByType(t)

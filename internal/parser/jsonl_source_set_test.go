@@ -157,38 +157,6 @@ func TestJSONLSourceSetWatchChangedPathFindAndFingerprint(t *testing.T) {
 	assert.Equal(t, fmt.Sprintf("%x", sha256.Sum256([]byte(content))), fingerprint.Hash)
 }
 
-func TestJSONLSourceSetFindSourceUsesFingerprintKey(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, "nested", "session-1.jsonl")
-	writeSourceFile(t, path, "{}\n")
-
-	defaultSources := NewJSONLSourceSet(
-		AgentCodex, []string{root}, WithRecursive(),
-	)
-	found, ok, err := defaultSources.FindSource(
-		context.Background(),
-		FindSourceRequest{FingerprintKey: path},
-	)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, path, found.DisplayPath)
-
-	customSources := NewJSONLSourceSet(AgentCodex, []string{root},
-		WithRecursive(),
-		WithFingerprintKey(func(root, path string) string {
-			return "fingerprint:" + mustRelSlash(t, root, path)
-		}),
-	)
-	found, ok, err = customSources.FindSource(
-		context.Background(),
-		FindSourceRequest{FingerprintKey: "fingerprint:nested/session-1.jsonl"},
-	)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, path, found.DisplayPath)
-	assert.Equal(t, "fingerprint:nested/session-1.jsonl", found.FingerprintKey)
-}
-
 func TestJSONLSourceSetChangedPathClassifiesDeletedFiles(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "nested", "deleted.jsonl")

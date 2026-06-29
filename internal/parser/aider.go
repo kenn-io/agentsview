@@ -494,49 +494,6 @@ func AiderVirtualPathForRawID(historyPath, rawID string) (string, bool) {
 	return "", false
 }
 
-// AiderRunMeta describes one run within a history file: its virtual
-// source path, positional index, and parsed start time. The sync engine
-// fans a physical file out into one session per meta. HasMessages reports
-// whether the run has parseable turns and so produces a session row;
-// header-only runs keep a meta slot (to hold their positional index) but
-// HasMessages is false, so the engine's unchanged-check does not expect a
-// stored row for them.
-type AiderRunMeta struct {
-	VirtualPath string
-	Idx         int
-	Started     time.Time
-	HasMessages bool
-}
-
-// ListAiderRunMetas reads a history file once and returns one meta per
-// run it contains, in file order. It mirrors the per-conversation meta
-// listers (e.g. ListShelleyConversationMetas) so the engine can fan a
-// single physical file out into per-run sessions. Runs with no parseable
-// header still get a meta slot so their positional index stays stable;
-// the per-run parse drops runs with no messages (flagged via HasMessages).
-// Returns nil for an unreadable or run-less file.
-func ListAiderRunMetas(path string) ([]AiderRunMeta, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
-	}
-	runs := splitAiderRuns(string(data))
-	if len(runs) == 0 {
-		return nil, nil
-	}
-	metas := make([]AiderRunMeta, 0, len(runs))
-	for idx, run := range runs {
-		msgs, _ := parseAiderTurns(run.body)
-		metas = append(metas, AiderRunMeta{
-			VirtualPath: AiderVirtualPath(path, idx),
-			Idx:         idx,
-			Started:     run.started,
-			HasMessages: len(msgs) > 0,
-		})
-	}
-	return metas, nil
-}
-
 // aiderIdentityPath returns the path whose absolute form seeds the run's
 // session ID hash. When idPath is non-empty it is used verbatim (it is
 // already a canonical identity, e.g. the remote physical history path), so
