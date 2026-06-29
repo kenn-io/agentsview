@@ -1994,6 +1994,12 @@ func (e *Engine) syncAllLocked(
 	return stats
 }
 
+// slowProviderDiscoveryThreshold is the per-provider discovery duration above
+// which discovery timing is logged. Most providers finish in well under a
+// millisecond; a provider over this bound is doing real per-source work worth
+// surfacing.
+const slowProviderDiscoveryThreshold = 100 * time.Millisecond
+
 // discoverProviderSources runs full-sync discovery through the provider facade
 // for every concrete provider that is authoritative. It is the sole on-disk
 // discovery path: every file-based agent owns discovery through its provider.
@@ -2038,7 +2044,17 @@ func (e *Engine) discoverProviderSources(
 			Roots:   filteredRoots,
 			Machine: e.machine,
 		})
+		tDiscover := time.Now()
 		sources, err := provider.Discover(ctx)
+		// Log only providers whose discovery is slow enough to matter, so a
+		// single pathological provider (e.g. a per-source map rebuild) stands
+		// out instead of hiding inside the aggregate discovery timing.
+		if d := time.Since(tDiscover); d >= slowProviderDiscoveryThreshold {
+			log.Printf(
+				"discovery: %s returned %d sources in %s",
+				agentType, len(sources), d.Round(time.Millisecond),
+			)
+		}
 		if err != nil {
 			log.Printf("%s provider discovery: %v", agentType, err)
 			failures++
