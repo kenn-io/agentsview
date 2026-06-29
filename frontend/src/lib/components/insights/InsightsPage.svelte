@@ -2316,6 +2316,11 @@
       text-align: left;
     }
 
+    .section-heading p.insights-help {
+      justify-content: flex-start;
+      text-align: left;
+    }
+
     .summary-grid,
     .pattern-grid,
     .recommendation-list,

@@ -254,7 +254,7 @@ describe("InsightsPage selected insight actions", () => {
     await tick();
 
     const helpBlock = document.querySelector("p.insights-help");
-    expect(helpBlock).toBeDefined();
+    expect(helpBlock).not.toBeNull();
     const helpText = helpBlock?.textContent ?? "";
     expect(
       helpText.includes("insights_page_insights_help_intro") ||
@@ -264,7 +264,7 @@ describe("InsightsPage selected insight actions", () => {
     const docsLink = document.querySelector<HTMLAnchorElement>(
       'a[href="https://www.agentsview.io/insights/"]',
     );
-    expect(docsLink).toBeDefined();
+    expect(docsLink).not.toBeNull();
     expect(
       (docsLink!.textContent?.includes("insights_page_insights_help_docs") ||
         docsLink!.textContent?.includes("Read Insights docs")),
