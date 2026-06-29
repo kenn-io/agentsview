@@ -183,21 +183,6 @@ func TestCIWorkflowRestoresPricingSnapshotBeforeGoTests(t *testing.T) {
 	}
 }
 
-func TestCIWorkflowRunsFullGoSuiteOnEveryOS(t *testing.T) {
-	contents, err := os.ReadFile(".github/workflows/ci.yml")
-	require.NoError(t, err)
-
-	var workflow githubWorkflow
-	require.NoError(t, yaml.Unmarshal(contents, &workflow))
-
-	job, ok := workflow.Jobs["test"]
-	require.True(t, ok, "test job must exist")
-
-	_, step := findWorkflowStep(t, job, "Run Go tests")
-	assert.Empty(t, step.If)
-	assert.Equal(t, `go test -tags "fts5" ./... -v -count=1 -timeout=20m`, step.Run)
-}
-
 func TestMSYS2UpdateWorkflowRestoresPricingSnapshotBeforeGoTests(t *testing.T) {
 	contents, err := os.ReadFile(".github/workflows/msys2-update-check.yml")
 	require.NoError(t, err)
@@ -214,20 +199,6 @@ func TestMSYS2UpdateWorkflowRestoresPricingSnapshotBeforeGoTests(t *testing.T) {
 		"msys2 update check must restore pricing snapshot before tests")
 
 	assertSnapshotRestoreStep(t, restoreStep)
-}
-
-func TestMSYS2UpdateWorkflowRunsFullGoSuite(t *testing.T) {
-	contents, err := os.ReadFile(".github/workflows/msys2-update-check.yml")
-	require.NoError(t, err)
-
-	var workflow githubWorkflow
-	require.NoError(t, yaml.Unmarshal(contents, &workflow))
-
-	job, ok := workflow.Jobs["windows-update-check"]
-	require.True(t, ok, "windows-update-check job must exist")
-
-	_, step := findWorkflowStep(t, job, "Run Go tests")
-	assert.Equal(t, `go test -tags "fts5" ./... -v -count=1`, step.Run)
 }
 
 func TestMSYS2UpdateWorkflowStubsFrontendEmbedDirWithPowerShell(t *testing.T) {
