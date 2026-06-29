@@ -463,6 +463,9 @@ fn translate_desktop_env_value(value: OsString, is_windows: bool) -> OsString {
     else {
         return value;
     };
+    if distro.is_empty() {
+        return value;
+    }
     OsString::from(format!(r"\\wsl.localhost\{distro}\{unix_path}").replace('/', "\\"))
 }
 
@@ -2667,12 +2670,16 @@ mode:    writable
     }
 
     #[test]
-    fn parse_desktop_env_content_does_not_change_non_marked_values() {
-        let parsed = parse_desktop_env_content("HOME=/base");
-        let translated = translate_desktop_env_value(parsed[0].1.clone(), false);
-        let map: HashMap<_, _> = vec![(parsed[0].0.clone(), translated)]
-            .into_iter()
-            .collect();
+    fn merge_desktop_env_pairs_preserves_non_marker_windows_values() {
+        let merged = build_sidecar_env(
+            Vec::new(),
+            Vec::new(),
+            vec![(OsString::from("HOME"), OsString::from("/base"))],
+            None,
+            false,
+            true,
+        );
+        let map: HashMap<_, _> = merged.into_iter().collect();
         assert_eq!(map.get(&OsString::from("HOME")), Some(&OsString::from("/base")));
     }
 
@@ -2693,6 +2700,26 @@ mode:    writable
         assert_eq!(
             map.get(&OsString::from("CODEX_SESSIONS_DIR")),
             Some(&OsString::from(r"\\wsl.localhost\Ubuntu\home\me\.codex\sessions"))
+        );
+    }
+
+    #[test]
+    fn merge_desktop_env_pairs_preserves_malformed_wsl_marker() {
+        let merged = build_sidecar_env(
+            Vec::new(),
+            Vec::new(),
+            vec![(
+                OsString::from("CODEX_SESSIONS_DIR"),
+                OsString::from("wsl::/home/me/.codex/sessions"),
+            )],
+            None,
+            false,
+            true,
+        );
+        let map: HashMap<_, _> = merged.into_iter().collect();
+        assert_eq!(
+            map.get(&OsString::from("CODEX_SESSIONS_DIR")),
+            Some(&OsString::from("wsl::/home/me/.codex/sessions"))
         );
     }
 
