@@ -169,10 +169,14 @@ func ensureTransportContext(
 		waitTimeout = backgroundAutoStartReadyTimeout
 	}
 	if intent == transportIntentArchiveWrite {
-		if err := waitForBackgroundLaunchBeforeArchiveWrite(
+		waited, err := waitForBackgroundLaunchBeforeArchiveWrite(
 			ctx, cfg.DataDir, waitTimeout,
-		); err != nil {
+		)
+		if err != nil {
 			return transport{}, err
+		}
+		if waited && cfg.AuthToken == "" {
+			adoptBackgroundLaunchConfig(cfg)
 		}
 	}
 	tr, err := detectTransportContext(
@@ -245,17 +249,22 @@ func waitForBackgroundLaunchBeforeArchiveWrite(
 	ctx context.Context,
 	dataDir string,
 	waitTimeout time.Duration,
-) error {
+) (bool, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return false, err
 	}
-	if _, err := os.Stat(dataDir); err != nil {
+	info, err := os.Stat(dataDir)
+	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return false, nil
 		}
+		return false, err
+	}
+	if !info.IsDir() {
+		return false, fmt.Errorf("data dir %q is not a directory", dataDir)
 	}
 	if !isBackgroundLaunchActive(dataDir) {
-		return nil
+		return false, nil
 	}
 	if waitTimeout <= 0 {
 		waitTimeout = backgroundAutoStartReadyTimeout
@@ -263,21 +272,21 @@ func waitForBackgroundLaunchBeforeArchiveWrite(
 	deadline := time.Now().Add(waitTimeout)
 	for isBackgroundLaunchActive(dataDir) {
 		if err := ctx.Err(); err != nil {
-			return err
+			return true, err
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			return errServeStartupInProgress
+			return true, errServeStartupInProgress
 		}
 		timer := time.NewTimer(min(remaining, startProbeTick))
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return ctx.Err()
+			return true, ctx.Err()
 		case <-timer.C:
 		}
 	}
-	return ctx.Err()
+	return true, ctx.Err()
 }
 
 func shouldUpgradeDaemonRuntime(rt *DaemonRuntime, currentVersion string) bool {
