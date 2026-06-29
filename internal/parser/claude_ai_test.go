@@ -219,6 +219,68 @@ func TestParseClaudeAIExport_AttachmentContent(t *testing.T) {
 	)
 }
 
+func TestParseClaudeAIExport_AttachmentFallbackPaths(t *testing.T) {
+	input := `[{
+		"uuid": "conv-attachment-fallbacks",
+		"name": "Attachment Fallback Test",
+		"created_at": "2026-01-21T11:00:00.000000Z",
+		"updated_at": "2026-01-21T11:05:00.000000Z",
+		"account": {"uuid": "acct-1"},
+		"chat_messages": [
+			{
+				"uuid": "m1",
+				"text": "Top-level text survives.",
+				"content": [],
+				"sender": "assistant",
+				"created_at": "2026-01-21T11:00:00.000000Z",
+				"attachments": [
+					{
+						"extracted_content": "attachment with no filename"
+					}
+				]
+			},
+			{
+				"uuid": "m2",
+				"text": "Fallback text survives too.",
+				"content": [
+					{"type": "tool_use", "text": ""}
+				],
+				"sender": "assistant",
+				"created_at": "2026-01-21T11:01:00.000000Z",
+				"attachments": [
+					{
+						"extracted_content": "attachment after unsupported block"
+					}
+				]
+			}
+		]
+	}]`
+
+	var results []ParseResult
+	err := ParseClaudeAIExport(
+		strings.NewReader(input),
+		func(r ParseResult) error {
+			results = append(results, r)
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+
+	msgs := results[0].Messages
+	require.Len(t, msgs, 2)
+	assert.Equal(
+		t,
+		"Top-level text survives.\n\nattachment with no filename",
+		msgs[0].Content,
+	)
+	assert.Equal(
+		t,
+		"Fallback text survives too.\n\nattachment after unsupported block",
+		msgs[1].Content,
+	)
+}
+
 func TestParseClaudeAIExport_IgnoredAttachments(t *testing.T) {
 	input := `[{
 		"uuid": "conv-attachments-ignored",
@@ -247,7 +309,12 @@ func TestParseClaudeAIExport_IgnoredAttachments(t *testing.T) {
 				"attachments": [
 					{"file_name": "empty.txt", "extracted_content": ""},
 					{"file_name": "noop.txt", "extracted_content": "   "},
-					{"file_name": "missing.txt"}
+					{"file_name": "missing.txt"},
+					{
+						"file_name": "metadata.json",
+						"mime_type": "application/json",
+						"metadata": {"unexpected": "value"}
+					}
 				]
 			}
 		]
@@ -269,6 +336,8 @@ func TestParseClaudeAIExport_IgnoredAttachments(t *testing.T) {
 
 	assert.Equal(t, "User prompt", msgs[0].Content)
 	assert.Equal(t, "Response kept the same.", msgs[1].Content)
+	assert.NotContains(t, msgs[1].Content, "metadata.json")
+	assert.NotContains(t, msgs[1].Content, "unexpected")
 }
 
 func TestParseClaudeAIExport_TextFallbackPreservesWhitespace(t *testing.T) {
