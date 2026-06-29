@@ -950,10 +950,10 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u6
     tauri::async_runtime::spawn(async move {
         let mut stdout_buffer = String::new();
         while let Some(event) = rx.recv().await {
+            append_sidecar_event_record(&log_handle, &event);
             match event {
                 CommandEvent::Stdout(chunk_bytes) => {
                     let chunk = String::from_utf8_lossy(&chunk_bytes);
-                    append_sidecar_log_record(&log_handle, "stdout", chunk.as_ref());
                     eprintln!("[agentsview] {}", chunk.trim_end());
                     if !startup_handled.load(Ordering::SeqCst) {
                         if !first_output.swap(true, Ordering::SeqCst) {
@@ -983,19 +983,9 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u6
                 }
                 CommandEvent::Stderr(line_bytes) => {
                     let line = String::from_utf8_lossy(&line_bytes);
-                    append_sidecar_log_record(&log_handle, "stderr", line.as_ref());
                     eprintln!("[agentsview:stderr] {}", line.trim_end());
                 }
                 CommandEvent::Terminated(payload) => {
-                    append_sidecar_log_record(
-                        &log_handle,
-                        "terminated",
-                        format!(
-                            "sidecar terminated (code: {:?}, signal: {:?})",
-                            payload.code, payload.signal
-                        )
-                        .as_str(),
-                    );
                     eprintln!(
                         "[agentsview] sidecar terminated (code: {:?}, signal: {:?})",
                         payload.code, payload.signal
@@ -1030,11 +1020,6 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u6
                     break;
                 }
                 CommandEvent::Error(err) => {
-                    append_sidecar_log_record(
-                        &log_handle,
-                        "error",
-                        format!("sidecar command error: {err}").as_str(),
-                    );
                     eprintln!("[agentsview:error] {err}");
                 }
                 _ => {}
@@ -1489,8 +1474,16 @@ fn open_logs_folder(handle: &AppHandle) {
         .opener()
         .open_path(log_dir.to_string_lossy().into_owned(), None::<&str>)
     {
-        let message = format!("failed to open logs folder {}: {err}", log_dir.display());
-        append_sidecar_log_record(handle, "menu", message.as_str());
+        let log_path = desktop_log_file_path(handle).ok();
+        let err_text = err.to_string();
+        let message = open_logs_folder_failure_message(&log_dir, err_text.as_str());
+        if let Some(path) = log_path {
+            if let Err(log_err) =
+                append_open_logs_folder_failure_at_path(&path, &log_dir, err_text.as_str())
+            {
+                eprintln!("[agentsview] failed to append logs-folder failure log: {log_err}");
+            }
+        }
         eprintln!("[agentsview] {message}");
     }
 }
@@ -1521,6 +1514,49 @@ fn append_sidecar_log_record(handle: &AppHandle, label: &str, record: &str) {
     }
 }
 
+fn append_sidecar_event_record(handle: &AppHandle, event: &CommandEvent) {
+    let path = match desktop_log_file_path(handle) {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("[agentsview] failed to resolve sidecar event log path: {err}");
+            return;
+        }
+    };
+    if let Err(err) = append_sidecar_event_record_at_path(&path, event) {
+        eprintln!("[agentsview] failed to append sidecar event log: {err}");
+    }
+}
+
+fn append_sidecar_event_record_at_path(path: &Path, event: &CommandEvent) -> io::Result<()> {
+    match event {
+        CommandEvent::Stdout(chunk_bytes) => append_sidecar_log_record_at_path(
+            path,
+            "stdout",
+            String::from_utf8_lossy(chunk_bytes).as_ref(),
+        ),
+        CommandEvent::Stderr(line_bytes) => append_sidecar_log_record_at_path(
+            path,
+            "stderr",
+            String::from_utf8_lossy(line_bytes).as_ref(),
+        ),
+        CommandEvent::Terminated(payload) => append_sidecar_log_record_at_path(
+            path,
+            "terminated",
+            format!(
+                "sidecar terminated (code: {:?}, signal: {:?})",
+                payload.code, payload.signal
+            )
+            .as_str(),
+        ),
+        CommandEvent::Error(err) => append_sidecar_log_record_at_path(
+            path,
+            "error",
+            format!("sidecar command error: {err}").as_str(),
+        ),
+        _ => Ok(()),
+    }
+}
+
 fn append_sidecar_log_record_at_path(path: &Path, label: &str, record: &str) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -1542,6 +1578,22 @@ fn write_labeled_log_record(file: &mut fs::File, label: &str, record: &str) -> i
         writeln!(file, "[{label}] {line}")?;
     }
     Ok(())
+}
+
+fn open_logs_folder_failure_message(log_dir: &Path, err: &str) -> String {
+    format!("failed to open logs folder {}: {err}", log_dir.display())
+}
+
+fn append_open_logs_folder_failure_at_path(
+    path: &Path,
+    log_dir: &Path,
+    err: &str,
+) -> io::Result<()> {
+    append_sidecar_log_record_at_path(
+        path,
+        "menu",
+        open_logs_folder_failure_message(log_dir, err).as_str(),
+    )
 }
 
 /// Restore input focus to the main webview after a native GTK dialog
@@ -2330,6 +2382,57 @@ mod tests {
             .expect_err("append should fail");
 
         assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+    }
+
+    #[test]
+    fn append_sidecar_event_record_writes_logged_event_variants() {
+        let tempdir = tempdir().expect("tempdir");
+        let log_path = tempdir.path().join("logs").join(DESKTOP_LOG_FILE_NAME);
+
+        append_sidecar_event_record_at_path(
+            &log_path,
+            &CommandEvent::Stdout(b"booting\n".to_vec()),
+        )
+        .expect("stdout event log write");
+        append_sidecar_event_record_at_path(
+            &log_path,
+            &CommandEvent::Stderr(b"fatal line\n".to_vec()),
+        )
+        .expect("stderr event log write");
+        append_sidecar_event_record_at_path(
+            &log_path,
+            &CommandEvent::Terminated(tauri_plugin_shell::process::TerminatedPayload {
+                code: Some(23),
+                signal: None,
+            }),
+        )
+        .expect("terminated event log write");
+        append_sidecar_event_record_at_path(
+            &log_path,
+            &CommandEvent::Error("spawn failed".to_string()),
+        )
+        .expect("error event log write");
+
+        let logged = fs::read_to_string(log_path).expect("read log");
+        assert!(logged.contains("[stdout] booting"));
+        assert!(logged.contains("[stderr] fatal line"));
+        assert!(logged.contains("[terminated] sidecar terminated (code: Some(23), signal: None)"));
+        assert!(logged.contains("[error] sidecar command error: spawn failed"));
+    }
+
+    #[test]
+    fn append_open_logs_folder_failure_writes_menu_log_entry() {
+        let tempdir = tempdir().expect("tempdir");
+        let log_dir = tempdir.path().join("logs");
+        let log_path = log_dir.join(DESKTOP_LOG_FILE_NAME);
+
+        append_open_logs_folder_failure_at_path(&log_path, &log_dir, "not allowed")
+            .expect("menu failure log write");
+
+        let logged = fs::read_to_string(log_path).expect("read menu log");
+        assert!(logged.contains("[menu] failed to open logs folder"));
+        assert!(logged.contains(log_dir.display().to_string().as_str()));
+        assert!(logged.contains("not allowed"));
     }
 
     #[test]
