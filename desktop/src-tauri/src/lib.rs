@@ -1501,19 +1501,6 @@ fn ensure_desktop_log_dir(handle: &AppHandle) -> io::Result<PathBuf> {
     Ok(log_dir)
 }
 
-fn append_sidecar_log_record(handle: &AppHandle, label: &str, record: &str) {
-    let path = match desktop_log_file_path(handle) {
-        Ok(path) => path,
-        Err(err) => {
-            eprintln!("[agentsview] failed to resolve sidecar {label} log path: {err}");
-            return;
-        }
-    };
-    if let Err(err) = append_sidecar_log_record_at_path(&path, label, record) {
-        eprintln!("[agentsview] failed to append sidecar {label} log: {err}");
-    }
-}
-
 fn append_sidecar_event_record(handle: &AppHandle, event: &CommandEvent) {
     let path = match desktop_log_file_path(handle) {
         Ok(path) => path,
