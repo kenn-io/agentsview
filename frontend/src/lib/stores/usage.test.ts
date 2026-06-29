@@ -566,6 +566,39 @@ describe("UsageStore session filter params", () => {
     expect(usage.pairwiseComparison).toBeNull();
   });
 
+  it("clears pairwise loading when an aborted first load resolves to no selection", async () => {
+    const { usage } = await loadStore();
+
+    usageServiceMocks.getApiV1UsagePairwiseComparison.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+
+    void usage.fetchAll();
+    await vi.waitFor(() =>
+      expect(
+        usageServiceMocks.getApiV1UsagePairwiseComparison,
+      ).toHaveBeenCalledTimes(1),
+    );
+
+    expect(usage.loading.pairwise).toBe(true);
+
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce(
+      usageSummaryWithOptions({
+        projects: [],
+        models: ["gpt-4o"],
+      }),
+    );
+
+    await usage.fetchAll();
+
+    expect(usage.pairwiseSelection).toEqual({
+      left: { dimension: "model", value: "" },
+      right: { dimension: "model", value: "" },
+    });
+    expect(usage.loading.pairwise).toBe(false);
+    expect(usage.pairwiseComparison).toBeNull();
+  });
+
   it("records full refresh time and clears new-data hints", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {

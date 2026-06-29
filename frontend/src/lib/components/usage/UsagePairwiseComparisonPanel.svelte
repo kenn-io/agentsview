@@ -1,4 +1,7 @@
 <script lang="ts">
+  import OptionTypeahead, {
+    type TypeaheadOption,
+  } from "../layout/OptionTypeahead.svelte";
   import { usage } from "../../stores/usage.svelte.js";
   import { m } from "../../i18n/index.js";
   import type { UsagePairwiseDimension } from "../../api/types/usage.js";
@@ -69,11 +72,31 @@
       : usage.pairwiseModelOptions;
   }
 
+  function typeaheadOptionsFor(
+    dimension: UsagePairwiseDimension,
+  ): TypeaheadOption[] {
+    return optionsFor(dimension).map((option) => ({
+      name: option,
+      label: option,
+    }));
+  }
+
   function dimensionLabel(dimension: UsagePairwiseDimension): string {
     return dimension === "project"
       ? m.usage_project()
       : m.usage_model();
   }
+
+  const dimensionOptions: TypeaheadOption[] = [
+    {
+      name: "model",
+      label: m.usage_model(),
+    },
+    {
+      name: "project",
+      label: m.usage_project(),
+    },
+  ];
 
   type MetricRow = {
     label: string;
@@ -159,40 +182,39 @@
       <div class="side-controls">
         <label>
           <span>{m.usage_pairwise_dimension()}</span>
-          <select
-            value={usage.pairwiseSelection.left.dimension}
-            aria-label={m.usage_pairwise_left_dimension()}
-            onchange={(event) =>
-              usage.setPairwiseSide("left", {
-                dimension: (
-                  event.currentTarget as HTMLSelectElement
-                ).value as UsagePairwiseDimension,
-              })}
-          >
-            <option value="model">{m.usage_model()}</option>
-            <option value="project">{m.usage_project()}</option>
-          </select>
+          <div class="pairwise-typeahead">
+            <OptionTypeahead
+              options={dimensionOptions}
+              value={usage.pairwiseSelection.left.dimension}
+              fallbackLabel={dimensionLabel(usage.pairwiseSelection.left.dimension)}
+              placeholder={m.usage_pairwise_left_dimension()}
+              title={m.usage_pairwise_left_dimension()}
+              emptyLabel={m.usage_pairwise_no_matching_dimensions()}
+              onselect={(value) =>
+                usage.setPairwiseSide("left", {
+                  dimension: value as UsagePairwiseDimension,
+                })}
+            />
+          </div>
         </label>
 
         <label>
           <span>{m.usage_pairwise_value()}</span>
-          <select
-            value={usage.pairwiseSelection.left.value}
-            aria-label={m.usage_pairwise_left_value()}
-            disabled={optionsFor(usage.pairwiseSelection.left.dimension).length === 0}
-            onchange={(event) =>
-              usage.setPairwiseSide("left", {
-                value: (event.currentTarget as HTMLSelectElement).value,
-              })}
-          >
-            {#if optionsFor(usage.pairwiseSelection.left.dimension).length === 0}
-              <option value="">{m.usage_pairwise_select_value()}</option>
-            {:else}
-              {#each optionsFor(usage.pairwiseSelection.left.dimension) as option}
-                <option value={option}>{option}</option>
-              {/each}
-            {/if}
-          </select>
+          <div class="pairwise-typeahead">
+            <OptionTypeahead
+              options={typeaheadOptionsFor(usage.pairwiseSelection.left.dimension)}
+              value={usage.pairwiseSelection.left.value}
+              fallbackLabel={usage.pairwiseSelection.left.value || m.usage_pairwise_select_value()}
+              placeholder={m.usage_pairwise_left_value()}
+              title={m.usage_pairwise_left_value()}
+              emptyLabel={m.usage_pairwise_no_matching_values()}
+              disabled={optionsFor(usage.pairwiseSelection.left.dimension).length === 0}
+              onselect={(value) =>
+                usage.setPairwiseSide("left", {
+                  value,
+                })}
+            />
+          </div>
         </label>
       </div>
     </div>
@@ -202,40 +224,39 @@
       <div class="side-controls">
         <label>
           <span>{m.usage_pairwise_dimension()}</span>
-          <select
-            value={usage.pairwiseSelection.right.dimension}
-            aria-label={m.usage_pairwise_right_dimension()}
-            onchange={(event) =>
-              usage.setPairwiseSide("right", {
-                dimension: (
-                  event.currentTarget as HTMLSelectElement
-                ).value as UsagePairwiseDimension,
-              })}
-          >
-            <option value="model">{m.usage_model()}</option>
-            <option value="project">{m.usage_project()}</option>
-          </select>
+          <div class="pairwise-typeahead">
+            <OptionTypeahead
+              options={dimensionOptions}
+              value={usage.pairwiseSelection.right.dimension}
+              fallbackLabel={dimensionLabel(usage.pairwiseSelection.right.dimension)}
+              placeholder={m.usage_pairwise_right_dimension()}
+              title={m.usage_pairwise_right_dimension()}
+              emptyLabel={m.usage_pairwise_no_matching_dimensions()}
+              onselect={(value) =>
+                usage.setPairwiseSide("right", {
+                  dimension: value as UsagePairwiseDimension,
+                })}
+            />
+          </div>
         </label>
 
         <label>
           <span>{m.usage_pairwise_value()}</span>
-          <select
-            value={usage.pairwiseSelection.right.value}
-            aria-label={m.usage_pairwise_right_value()}
-            disabled={optionsFor(usage.pairwiseSelection.right.dimension).length === 0}
-            onchange={(event) =>
-              usage.setPairwiseSide("right", {
-                value: (event.currentTarget as HTMLSelectElement).value,
-              })}
-          >
-            {#if optionsFor(usage.pairwiseSelection.right.dimension).length === 0}
-              <option value="">{m.usage_pairwise_select_value()}</option>
-            {:else}
-              {#each optionsFor(usage.pairwiseSelection.right.dimension) as option}
-                <option value={option}>{option}</option>
-              {/each}
-            {/if}
-          </select>
+          <div class="pairwise-typeahead">
+            <OptionTypeahead
+              options={typeaheadOptionsFor(usage.pairwiseSelection.right.dimension)}
+              value={usage.pairwiseSelection.right.value}
+              fallbackLabel={usage.pairwiseSelection.right.value || m.usage_pairwise_select_value()}
+              placeholder={m.usage_pairwise_right_value()}
+              title={m.usage_pairwise_right_value()}
+              emptyLabel={m.usage_pairwise_no_matching_values()}
+              disabled={optionsFor(usage.pairwiseSelection.right.dimension).length === 0}
+              onselect={(value) =>
+                usage.setPairwiseSide("right", {
+                  value,
+                })}
+            />
+          </div>
         </label>
       </div>
     </div>
@@ -351,13 +372,13 @@
     color: var(--text-muted);
   }
 
-  select {
+  .pairwise-typeahead {
     min-width: 0;
-    padding: 8px 10px;
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm);
-    background: var(--bg-app);
-    color: var(--text-primary);
+  }
+
+  .pairwise-typeahead :global(.typeahead) {
+    --typeahead-min-width: 100%;
+    --typeahead-max-width: 100%;
   }
 
   .table-wrap {

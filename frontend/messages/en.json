@@ -1594,6 +1594,8 @@
   "usage_pairwise_right_dimension": "Right comparison dimension",
   "usage_pairwise_right_value": "Right comparison value",
   "usage_pairwise_select_value": "Select a value",
+  "usage_pairwise_no_matching_dimensions": "No matching dimensions",
+  "usage_pairwise_no_matching_values": "No matching values",
   "usage_pairwise_not_enough_data": "Need at least two model or project slices in this range to compare them.",
   "usage_pairwise_metric": "Metric",
   "usage_pairwise_delta": "Delta",

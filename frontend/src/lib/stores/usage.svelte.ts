@@ -718,6 +718,7 @@ class UsageStore {
     if (!request) {
       this.pairwiseComparison = null;
       this.errors.pairwise = null;
+      this.loading.pairwise = false;
       return "ok";
     }
     const signal = this.nextAbortSignal("pairwise");

@@ -151,13 +151,20 @@ describe("UsagePairwiseComparisonPanel", () => {
     });
     await tick();
 
-    const select = document.querySelector<HTMLSelectElement>(
-      'select[aria-label="Left comparison dimension"]',
+    const trigger = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Left comparison dimension"]',
     );
-    expect(select).toBeTruthy();
-    if (!select) return;
-    select.value = "project";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(trigger).toBeTruthy();
+    if (!trigger) return;
+    trigger.click();
+    await tick();
+
+    const option = Array.from(
+      document.querySelectorAll<HTMLLIElement>('li[role="option"]'),
+    ).find((item) => item.textContent?.includes("Project"));
+    expect(option).toBeTruthy();
+    option?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    await tick();
 
     expect(spy).toHaveBeenCalledWith("left", { dimension: "project" });
     unmount(component);

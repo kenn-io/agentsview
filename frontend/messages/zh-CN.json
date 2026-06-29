@@ -1562,6 +1562,8 @@
   "usage_pairwise_right_dimension": "右侧对比维度",
   "usage_pairwise_right_value": "右侧对比值",
   "usage_pairwise_select_value": "选择一个值",
+  "usage_pairwise_no_matching_dimensions": "没有匹配的维度",
+  "usage_pairwise_no_matching_values": "没有匹配的值",
   "usage_pairwise_not_enough_data": "此范围内至少需要两个模型或项目切片才能比较。",
   "usage_pairwise_metric": "指标",
   "usage_pairwise_delta": "差值",
