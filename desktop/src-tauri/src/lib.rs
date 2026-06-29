@@ -1592,6 +1592,8 @@ fn redact_sidecar_log_line(line: &str) -> String {
         "authorization: Bearer ",
         "Bearer ",
         "bearer ",
+        "Token: ",
+        "token: ",
         "--auth-token=",
         "--auth-token ",
         "auth_token=",
@@ -2668,14 +2670,16 @@ mod tests {
         prepare_sidecar_stdout_update(
             &log_sender,
             &mut stdout_buffer,
-            b"Authorization: Bearer secret-token\n--auth-token=another-secret\n",
+            b"Authorization: Bearer secret-token\nAuth enabled. Token: startup-secret\n--auth-token=another-secret\n",
         );
 
         let logged = log_receiver.try_recv().expect("stdout record");
         assert_eq!(logged.label, "stdout");
         assert!(logged.record.contains("Authorization: Bearer <redacted>"));
+        assert!(logged.record.contains("Auth enabled. Token: <redacted>"));
         assert!(logged.record.contains("--auth-token=<redacted>"));
         assert!(!logged.record.contains("secret-token"));
+        assert!(!logged.record.contains("startup-secret"));
         assert!(!logged.record.contains("another-secret"));
     }
 
