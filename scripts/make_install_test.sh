@@ -14,13 +14,27 @@ trap 'rm -rf "$tmpdir"' EXIT
 
 home="$tmpdir/home"
 work="$tmpdir/work"
+fakebin="$tmpdir/bin"
 install_dir="$home/.local/bin"
-mkdir -p "$install_dir" "$work"
+mkdir -p "$install_dir" "$work" "$fakebin"
 printf 'old binary\n' > "$install_dir/agentsview"
 printf 'new binary\n' > "$work/agentsview"
+cat > "$fakebin/go" <<'EOF'
+#!/bin/sh
+if [ "$1" = "env" ] && [ "$2" = "GOPATH" ]; then
+    printf '%s\n' "$HOME/go"
+    exit 0
+fi
+if [ "$1" = "env" ] && [ "$2" = "GOBIN" ]; then
+    exit 0
+fi
+echo "unexpected go command: $*" >&2
+exit 1
+EOF
+chmod +x "$fakebin/go"
 
 recipe="$(
-    HOME="$home" make -C "$REPO_ROOT" -n install |
+    PATH="$fakebin:$PATH" HOME="$home" make -C "$REPO_ROOT" -n install |
         sed -n '/^if \[ -d /,$p'
 )"
 
