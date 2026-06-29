@@ -280,7 +280,7 @@ func TestBuildUsagePairwiseFilters_Validation(t *testing.T) {
 	assert.Equal(t, "right_dimension must be model or project", ue.Msg)
 }
 
-func TestBuildUsagePairwiseFilters_MergesBaseFilters(t *testing.T) {
+func TestBuildUsagePairwiseFilters_PreservesNonComparedBaseFilters(t *testing.T) {
 	t.Parallel()
 
 	left, right, err := service.BuildUsagePairwiseFilters(
@@ -300,8 +300,8 @@ func TestBuildUsagePairwiseFilters_MergesBaseFilters(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "model-b", left.Model)
-	assert.Empty(t, left.Project)
-	assert.Empty(t, right.Model)
+	assert.Equal(t, "alpha,beta", left.Project)
+	assert.Equal(t, "model-a,model-b", right.Model)
 	assert.Equal(t, "beta", right.Project)
 }
 
