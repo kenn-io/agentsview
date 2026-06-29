@@ -2397,29 +2397,41 @@ func TestVelocityChunkedQuery(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 
-	// Seed >500 sessions to exercise chunked IN-clause logic.
-	const n = 600
+	// Seed >maxSQLVars sessions to exercise chunked IN-clause logic.
+	const n = maxSQLVars + 1
+	writes := make([]SessionBatchWrite, 0, n)
 	for i := range n {
 		id := fmt.Sprintf("chunk-%d", i)
-		insertSession(t, d, id, "proj", func(s *Session) {
-			s.StartedAt = new("2024-06-01T09:00:00Z")
-			s.MessageCount = 2
-			s.Agent = "claude"
+		writes = append(writes, SessionBatchWrite{
+			Session: Session{
+				ID:               id,
+				Project:          "proj",
+				Machine:          defaultMachine,
+				Agent:            "claude",
+				MessageCount:     2,
+				UserMessageCount: 1,
+				StartedAt:        new("2024-06-01T09:00:00Z"),
+				FirstMessage:     new("q"),
+			},
+			Messages: []Message{
+				{
+					SessionID: id, Ordinal: 0, Role: "user",
+					Content: "q", ContentLength: 1,
+					Timestamp: "2024-06-01T09:00:00Z",
+				},
+				{
+					SessionID: id, Ordinal: 1,
+					Role:    "assistant",
+					Content: "a", ContentLength: 1,
+					Timestamp: "2024-06-01T09:00:10Z",
+				},
+			},
 		})
-		insertMessages(t, d,
-			Message{
-				SessionID: id, Ordinal: 0, Role: "user",
-				Content: "q", ContentLength: 1,
-				Timestamp: "2024-06-01T09:00:00Z",
-			},
-			Message{
-				SessionID: id, Ordinal: 1,
-				Role:    "assistant",
-				Content: "a", ContentLength: 1,
-				Timestamp: "2024-06-01T09:00:10Z",
-			},
-		)
 	}
+	result, err := d.WriteSessionBatchAtomic(writes)
+	require.NoError(t, err)
+	require.Equal(t, n, result.WrittenSessions)
+	require.Equal(t, 2*n, result.WrittenMessages)
 
 	// Velocity must not fail even with >500 sessions
 	resp, err := d.GetAnalyticsVelocity(ctx, baseFilter())

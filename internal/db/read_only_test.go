@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -29,6 +30,27 @@ func createClosedTestDB(
 	}
 	require.NoError(t, d.Close())
 	return path
+}
+
+func copyClosedTestDB(t *testing.T, src string) string {
+	t.Helper()
+	dst := tempDBPath(t, filepath.Base(src))
+	copyTestDBFile(t, src, dst, true)
+	copyTestDBFile(t, src+"-wal", dst+"-wal", false)
+	copyTestDBFile(t, src+"-shm", dst+"-shm", false)
+	return dst
+}
+
+func copyTestDBFile(t *testing.T, src, dst string, required bool) {
+	t.Helper()
+	data, err := os.ReadFile(src)
+	if err != nil {
+		if !required && errors.Is(err, os.ErrNotExist) {
+			return
+		}
+		require.NoError(t, err)
+	}
+	require.NoError(t, os.WriteFile(dst, data, 0o600))
 }
 
 func openReadOnlyTestDB(t *testing.T, path string) *DB {
@@ -160,6 +182,7 @@ func TestOpenReadOnlyRejectsMissingMigratedColumn(t *testing.T) {
 }
 
 func TestOpenReadOnlyRejectsMissingReadColumn(t *testing.T) {
+	basePath := createClosedTestDB(t, tempDBPath(t, "sessions.db"), nil)
 	tests := []struct {
 		name   string
 		table  string
@@ -184,7 +207,7 @@ func TestOpenReadOnlyRejectsMissingReadColumn(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			path := createClosedTestDB(t, tempDBPath(t, "sessions.db"), nil)
+			path := copyClosedTestDB(t, basePath)
 			execRawSQLite(t, path,
 				"ALTER TABLE "+tt.table+" DROP COLUMN "+tt.column)
 			requireOpenReadOnlyFails(t, path,
@@ -194,6 +217,7 @@ func TestOpenReadOnlyRejectsMissingReadColumn(t *testing.T) {
 }
 
 func TestOpenReadOnlyRejectsMissingReadTable(t *testing.T) {
+	basePath := createClosedTestDB(t, tempDBPath(t, "sessions.db"), nil)
 	tests := []struct {
 		table  string
 		column string
@@ -207,7 +231,7 @@ func TestOpenReadOnlyRejectsMissingReadTable(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.table, func(t *testing.T) {
-			path := createClosedTestDB(t, tempDBPath(t, "sessions.db"), nil)
+			path := copyClosedTestDB(t, basePath)
 			execRawSQLite(t, path, "DROP TABLE "+tt.table)
 			requireOpenReadOnlyFails(t, path,
 				"schema missing "+tt.table+"."+tt.column)

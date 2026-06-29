@@ -607,24 +607,36 @@ func TestGetActivityReport_ManySessionsWithinSQLiteVarLimit(t *testing.T) {
 	ctx := context.Background()
 
 	// More candidate sessions than maxSQLVars, so the usage fetch must chunk.
-	const n = maxSQLVars + 50
+	const n = maxSQLVars + 1
+	writes := make([]SessionBatchWrite, 0, n)
 	for i := range n {
 		sid := fmt.Sprintf("s%04d", i)
-		insertSession(t, d, sid, "proj1", func(s *Session) {
-			s.Agent = "claude"
-			s.StartedAt = Ptr("2026-06-16T10:00:00Z")
-			s.EndedAt = Ptr("2026-06-16T10:01:00Z")
-		})
-		insertMessages(t, d, Message{
-			SessionID:  sid,
-			Ordinal:    0,
-			Role:       "assistant",
-			Content:    "x",
-			Timestamp:  "2026-06-16T10:00:00Z",
-			Model:      "claude-sonnet-4-20250514",
-			TokenUsage: json.RawMessage(`{"input_tokens":100,"output_tokens":10}`),
+		writes = append(writes, SessionBatchWrite{
+			Session: Session{
+				ID:           sid,
+				Project:      "proj1",
+				Machine:      defaultMachine,
+				Agent:        "claude",
+				MessageCount: 1,
+				StartedAt:    Ptr("2026-06-16T10:00:00Z"),
+				EndedAt:      Ptr("2026-06-16T10:01:00Z"),
+				FirstMessage: Ptr("x"),
+			},
+			Messages: []Message{{
+				SessionID:  sid,
+				Ordinal:    0,
+				Role:       "assistant",
+				Content:    "x",
+				Timestamp:  "2026-06-16T10:00:00Z",
+				Model:      "claude-sonnet-4-20250514",
+				TokenUsage: json.RawMessage(`{"input_tokens":100,"output_tokens":10}`),
+			}},
 		})
 	}
+	result, err := d.WriteSessionBatchAtomic(writes)
+	require.NoError(t, err)
+	require.Equal(t, n, result.WrittenSessions)
+	require.Equal(t, n, result.WrittenMessages)
 
 	forceReaderVarLimit(t, d, 999)
 

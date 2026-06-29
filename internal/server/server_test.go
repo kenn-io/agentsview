@@ -1796,30 +1796,52 @@ func TestSearch_WithResults(t *testing.T) {
 func TestSearch_Limits(t *testing.T) {
 	te := setup(t)
 	te.requireFTS(t)
-	// Seed 600 distinct sessions, each with one matching message.
+	// Seed enough distinct sessions to prove clamping at the maximum.
 	// Under session-grouped search, each session produces exactly one result,
 	// so limit/pagination operates at the session level.
-	const totalSessions = 600
+	const totalSessions = db.MaxSearchLimit + 1
+	writes := make([]db.SessionBatchWrite, 0, totalSessions)
+	content := "common search term"
 	for i := range totalSessions {
 		id := fmt.Sprintf("limit-test-%04d", i)
-		te.seedSession(t, id, "my-app", 1)
-		te.seedMessages(t, id, 1, func(_ int, m *db.Message) {
-			m.Content = "common search term"
-			m.ContentLength = 18
+		writes = append(writes, db.SessionBatchWrite{
+			Session: db.Session{
+				ID:               id,
+				Project:          "my-app",
+				Machine:          "test",
+				Agent:            "claude",
+				MessageCount:     1,
+				UserMessageCount: 1,
+				StartedAt:        new(tsSeed),
+				EndedAt:          new(tsSeedEnd),
+				FirstMessage:     new("Hello world"),
+			},
+			Messages: []db.Message{{
+				SessionID:     id,
+				Ordinal:       0,
+				Role:          "user",
+				Content:       content,
+				ContentLength: len(content),
+				Timestamp:     tsSeed,
+			}},
 		})
 	}
+	result, err := te.db.WriteSessionBatchAtomic(writes)
+	require.NoError(t, err)
+	require.Equal(t, totalSessions, result.WrittenSessions)
+	require.Equal(t, totalSessions, result.WrittenMessages)
 
 	tests := []struct {
 		name      string
 		queryVal  string
 		wantCount int
 	}{
-		{"DefaultLimit", "", 50},          // default
-		{"ExplicitLimit", "limit=10", 10}, // explicit
-		{"ZeroLimit", "limit=0", 50},      // treat as default
-		{"LargeLimit", "limit=1000", 500}, // clamped to 500
-		{"ExactMax", "limit=500", 500},    // max allowed
-		{"JustOver", "limit=501", 500},    // clamped to 500
+		{"DefaultLimit", "", db.DefaultSearchLimit},
+		{"ExplicitLimit", "limit=10", 10},
+		{"ZeroLimit", "limit=0", db.DefaultSearchLimit},
+		{"LargeLimit", "limit=1000", db.MaxSearchLimit},
+		{"ExactMax", fmt.Sprintf("limit=%d", db.MaxSearchLimit), db.MaxSearchLimit},
+		{"JustOver", fmt.Sprintf("limit=%d", db.MaxSearchLimit+1), db.MaxSearchLimit},
 	}
 
 	for _, tt := range tests {

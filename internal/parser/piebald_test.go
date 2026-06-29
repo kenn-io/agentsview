@@ -100,40 +100,81 @@ func execPiebaldTestSQL(t *testing.T, dbPath, stmt string, args ...any) {
 	require.NoError(t, err, "exec %q", stmt)
 }
 
+func withPiebaldTestTx(t *testing.T, dbPath string, fn func(*sql.Tx)) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err, "open test db")
+	defer db.Close()
+	tx, err := db.Begin()
+	require.NoError(t, err, "begin test tx")
+	defer tx.Rollback()
+	fn(tx)
+	require.NoError(t, tx.Commit(), "commit test tx")
+}
+
+func execPiebaldTestTx(t *testing.T, tx *sql.Tx, stmt string, args ...any) {
+	t.Helper()
+	_, err := tx.Exec(stmt, args...)
+	require.NoError(t, err, "exec %q", stmt)
+}
+
+type piebaldTextPartSeed struct {
+	partID   int64
+	msgID    int64
+	idx      int
+	text     string
+	thinking bool
+}
+
 func seedPiebaldTextPart(t *testing.T, dbPath string, partID, msgID int64, idx int, text string, thinking bool) {
 	t.Helper()
-	execPiebaldTestSQL(t, dbPath,
-		`INSERT INTO message_parts (id, parent_chat_message_id, part_index, part_type)
-		 VALUES (?, ?, ?, 'text')`, partID, msgID, idx)
-	execPiebaldTestSQL(t, dbPath,
-		`INSERT INTO message_part_text (message_part_id, is_thinking) VALUES (?, ?)`, partID, thinking)
-	execPiebaldTestSQL(t, dbPath,
-		`INSERT INTO message_content_nodes (id, parent_text_part_id, node_index, node_type)
-		 VALUES (?, ?, 0, 'text')`, partID+1000, partID)
-	execPiebaldTestSQL(t, dbPath,
-		`INSERT INTO message_node_text (node_id, content) VALUES (?, ?)`, partID+1000, text)
+	seedPiebaldTextParts(t, dbPath, piebaldTextPartSeed{
+		partID: partID, msgID: msgID, idx: idx, text: text, thinking: thinking,
+	})
+}
+
+func seedPiebaldTextParts(t *testing.T, dbPath string, parts ...piebaldTextPartSeed) {
+	t.Helper()
+	withPiebaldTestTx(t, dbPath, func(tx *sql.Tx) {
+		for _, part := range parts {
+			execPiebaldTestTx(t, tx,
+				`INSERT INTO message_parts (id, parent_chat_message_id, part_index, part_type)
+				 VALUES (?, ?, ?, 'text')`, part.partID, part.msgID, part.idx)
+			execPiebaldTestTx(t, tx,
+				`INSERT INTO message_part_text (message_part_id, is_thinking) VALUES (?, ?)`, part.partID, part.thinking)
+			execPiebaldTestTx(t, tx,
+				`INSERT INTO message_content_nodes (id, parent_text_part_id, node_index, node_type)
+				 VALUES (?, ?, 0, 'text')`, part.partID+1000, part.partID)
+			execPiebaldTestTx(t, tx,
+				`INSERT INTO message_node_text (node_id, content) VALUES (?, ?)`, part.partID+1000, part.text)
+		}
+	})
 }
 
 func seedPiebaldToolPart(t *testing.T, dbPath string, partID, msgID int64, idx int) {
 	t.Helper()
-	execPiebaldTestSQL(t, dbPath,
-		`INSERT INTO message_parts (id, parent_chat_message_id, part_index, part_type)
-		 VALUES (?, ?, ?, 'tool_call')`, partID, msgID, idx)
-	execPiebaldTestSQL(t, dbPath,
-		`INSERT INTO message_part_tool_call
-		 (message_part_id, provider_tool_use_id, tool_name, tool_input, tool_result, tool_state)
-		 VALUES (?, 'toolu_1', 'Read', '{"path":"README.md"}', 'file contents', 'completed')`, partID)
+	withPiebaldTestTx(t, dbPath, func(tx *sql.Tx) {
+		execPiebaldTestTx(t, tx,
+			`INSERT INTO message_parts (id, parent_chat_message_id, part_index, part_type)
+			 VALUES (?, ?, ?, 'tool_call')`, partID, msgID, idx)
+		execPiebaldTestTx(t, tx,
+			`INSERT INTO message_part_tool_call
+			 (message_part_id, provider_tool_use_id, tool_name, tool_input, tool_result, tool_state)
+			 VALUES (?, 'toolu_1', 'Read', '{"path":"README.md"}', 'file contents', 'completed')`, partID)
+	})
 }
 
 func seedPiebaldSubagentToolPart(t *testing.T, dbPath string, partID, msgID int64, idx int, subAgentChatID int64) {
 	t.Helper()
-	execPiebaldTestSQL(t, dbPath,
-		`INSERT INTO message_parts (id, parent_chat_message_id, part_index, part_type)
-		 VALUES (?, ?, ?, 'tool_call')`, partID, msgID, idx)
-	execPiebaldTestSQL(t, dbPath,
-		`INSERT INTO message_part_tool_call
-		 (message_part_id, provider_tool_use_id, tool_name, tool_input, tool_result, tool_state, sub_agent_chat_id)
-		 VALUES (?, 'toolu_sub', 'LaunchSubagent', '{"prompt":"research"}', 'done', 'completed', ?)`, partID, subAgentChatID)
+	withPiebaldTestTx(t, dbPath, func(tx *sql.Tx) {
+		execPiebaldTestTx(t, tx,
+			`INSERT INTO message_parts (id, parent_chat_message_id, part_index, part_type)
+			 VALUES (?, ?, ?, 'tool_call')`, partID, msgID, idx)
+		execPiebaldTestTx(t, tx,
+			`INSERT INTO message_part_tool_call
+			 (message_part_id, provider_tool_use_id, tool_name, tool_input, tool_result, tool_state, sub_agent_chat_id)
+			 VALUES (?, 'toolu_sub', 'LaunchSubagent', '{"prompt":"research"}', 'done', 'completed', ?)`, partID, subAgentChatID)
+	})
 }
 
 func TestPiebaldDBPath(t *testing.T) {
@@ -257,12 +298,14 @@ func TestParsePiebaldSessionResultsSplitsForks(t *testing.T) {
 		        (103, 42, 102, 'assistant', '2026-05-01T10:00:04Z', '2026-05-01T10:00:04Z', 'completed', 1),
 		        (200, 42, 101, 'user', '2026-05-01T10:01:00Z', '2026-05-01T10:01:00Z', 'completed', 0),
 		        (201, 42, 200, 'assistant', '2026-05-01T10:01:01Z', '2026-05-01T10:01:01Z', 'completed', 1)`)
-	seedPiebaldTextPart(t, dbPath, 1000, 100, 0, "main start", false)
-	seedPiebaldTextPart(t, dbPath, 1001, 101, 0, "main first answer", false)
-	seedPiebaldTextPart(t, dbPath, 1002, 102, 0, "main followup", false)
-	seedPiebaldTextPart(t, dbPath, 1003, 103, 0, "main second answer", false)
-	seedPiebaldTextPart(t, dbPath, 2000, 200, 0, "fork question", false)
-	seedPiebaldTextPart(t, dbPath, 2001, 201, 0, "fork answer", false)
+	seedPiebaldTextParts(t, dbPath,
+		piebaldTextPartSeed{1000, 100, 0, "main start", false},
+		piebaldTextPartSeed{1001, 101, 0, "main first answer", false},
+		piebaldTextPartSeed{1002, 102, 0, "main followup", false},
+		piebaldTextPartSeed{1003, 103, 0, "main second answer", false},
+		piebaldTextPartSeed{2000, 200, 0, "fork question", false},
+		piebaldTextPartSeed{2001, 201, 0, "fork answer", false},
+	)
 
 	results, err := parsePiebaldSessionResults(dbPath, "42", "machine")
 	require.NoError(t, err, "parsePiebaldSessionResults")
@@ -310,16 +353,18 @@ func TestParsePiebaldSessionResultsHandlesNestedForks(t *testing.T) {
 		        (203, 42, 202,  'assistant', '2026-05-01T10:01:03Z', '2026-05-01T10:01:03Z', 'completed', 1),
 		        (300, 42, 201,  'user',      '2026-05-01T10:02:00Z', '2026-05-01T10:02:00Z', 'completed', 0),
 		        (301, 42, 300,  'assistant', '2026-05-01T10:02:01Z', '2026-05-01T10:02:01Z', 'completed', 1)`)
-	seedPiebaldTextPart(t, dbPath, 1100, 100, 0, "main start", false)
-	seedPiebaldTextPart(t, dbPath, 1101, 101, 0, "main answer", false)
-	seedPiebaldTextPart(t, dbPath, 1102, 102, 0, "main followup", false)
-	seedPiebaldTextPart(t, dbPath, 1103, 103, 0, "main final", false)
-	seedPiebaldTextPart(t, dbPath, 1200, 200, 0, "outer fork question", false)
-	seedPiebaldTextPart(t, dbPath, 1201, 201, 0, "outer fork answer", false)
-	seedPiebaldTextPart(t, dbPath, 1202, 202, 0, "outer fork followup", false)
-	seedPiebaldTextPart(t, dbPath, 1203, 203, 0, "outer fork final", false)
-	seedPiebaldTextPart(t, dbPath, 1300, 300, 0, "nested fork question", false)
-	seedPiebaldTextPart(t, dbPath, 1301, 301, 0, "nested fork answer", false)
+	seedPiebaldTextParts(t, dbPath,
+		piebaldTextPartSeed{1100, 100, 0, "main start", false},
+		piebaldTextPartSeed{1101, 101, 0, "main answer", false},
+		piebaldTextPartSeed{1102, 102, 0, "main followup", false},
+		piebaldTextPartSeed{1103, 103, 0, "main final", false},
+		piebaldTextPartSeed{1200, 200, 0, "outer fork question", false},
+		piebaldTextPartSeed{1201, 201, 0, "outer fork answer", false},
+		piebaldTextPartSeed{1202, 202, 0, "outer fork followup", false},
+		piebaldTextPartSeed{1203, 203, 0, "outer fork final", false},
+		piebaldTextPartSeed{1300, 300, 0, "nested fork question", false},
+		piebaldTextPartSeed{1301, 301, 0, "nested fork answer", false},
+	)
 
 	results, err := parsePiebaldSessionResults(dbPath, "42", "machine")
 	require.NoError(t, err, "parsePiebaldSessionResults")
