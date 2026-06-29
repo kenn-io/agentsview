@@ -803,11 +803,16 @@ func TestDuckAnalyticsTopSessionsDurationModelFilterHandlesManyScopedSessions(
 	t *testing.T,
 ) {
 	ctx := context.Background()
-	// More scoped sessions than duckMaxSQLVars, the cap the rest of the codebase
-	// chunks IN (...) predicates against. The model+time duration path filters
-	// and ranks the scoped set in Go instead of binding every ID into one
-	// predicate, so a set larger than the cap still returns the correct top 10.
-	const scoped = duckMaxSQLVars + 50
+	originalChunkSize := duckQueryChunkSize
+	duckQueryChunkSize = 5
+	t.Cleanup(func() {
+		duckQueryChunkSize = originalChunkSize
+	})
+	// More scoped sessions than the current chunk size. The model+time duration
+	// path filters and ranks the scoped set in Go instead of binding every ID
+	// into one predicate, so a set larger than one chunk still returns the
+	// correct top 10.
+	const scoped = 12
 	var writes []db.SessionBatchWrite
 	for k := range scoped {
 		id := fmt.Sprintf("duck-top-many-%04d", k)
