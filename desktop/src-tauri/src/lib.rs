@@ -32,6 +32,8 @@ const STATUS_PROBE_FAILURE_NOTICE_AFTER: u32 = 10;
 const LOGIN_SHELL_ENV_TIMEOUT: Duration = Duration::from_secs(3);
 const UPDATE_SIDECAR_STOP_TIMEOUT: Duration = Duration::from_secs(10);
 const DATA_VERSION_TOO_NEW_EXIT_CODE: i32 = 3;
+const DESKTOP_LOG_FILE_NAME: &str = "agentsview-desktop.log";
+const OPEN_LOGS_FOLDER_MENU_ID: &str = "open_logs_folder";
 // Delay after navigating to the backend before probing whether the
 // Linux WebKitGTK web content process is actually alive. Gives the
 // process time to spawn so we don't false-positive on slow startup.
@@ -131,6 +133,9 @@ pub fn run() {
                     if let Some(window) = app_handle.get_webview_window("main") {
                         let _ = window.eval("window.dispatchEvent(new CustomEvent('show-about'));");
                     }
+                }
+                if event.id().0 == OPEN_LOGS_FOLDER_MENU_ID {
+                    open_logs_folder(app_handle);
                 }
                 if event.id().0 == "check_updates" {
                     let handle = app_handle.clone();
@@ -448,7 +453,10 @@ fn merge_desktop_env_pairs(
 ) {
     for (k, v) in pairs {
         let translated = translate_desktop_env_value(v, is_windows);
-        dest.insert(normalize_env_key(k.as_os_str(), case_insensitive_keys), translated);
+        dest.insert(
+            normalize_env_key(k.as_os_str(), case_insensitive_keys),
+            translated,
+        );
     }
 }
 
@@ -459,11 +467,17 @@ fn translate_desktop_env_value(value: OsString, is_windows: bool) -> OsString {
     let Some(v) = value.to_str() else {
         return value;
     };
-    let Some((distro, unix_path)) = v.strip_prefix("wsl:").and_then(|value| value.split_once(":/"))
+    let Some((distro, unix_path)) = v
+        .strip_prefix("wsl:")
+        .and_then(|value| value.split_once(":/"))
     else {
         return value;
     };
-    if distro.is_empty() || distro.contains(':') || unix_path.is_empty() || unix_path.starts_with('/') {
+    if distro.is_empty()
+        || distro.contains(':')
+        || unix_path.is_empty()
+        || unix_path.starts_with('/')
+    {
         return value;
     }
     OsString::from(format!(r"\\wsl.localhost\{distro}\{unix_path}").replace('/', "\\"))
@@ -922,6 +936,7 @@ fn wait_for_sidecar_termination(state: &SidecarState, generation: u64, timeout: 
 fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u64) {
     let startup_handled = Arc::new(AtomicBool::new(false));
     let first_output = Arc::new(AtomicBool::new(false));
+    let log_handle = window.app_handle().clone();
     let timeout_window = window.clone();
     let timeout_state = startup_handled.clone();
     thread::spawn(move || {
@@ -938,6 +953,7 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u6
             match event {
                 CommandEvent::Stdout(chunk_bytes) => {
                     let chunk = String::from_utf8_lossy(&chunk_bytes);
+                    append_sidecar_log_record(&log_handle, "stdout", chunk.as_ref());
                     eprintln!("[agentsview] {}", chunk.trim_end());
                     if !startup_handled.load(Ordering::SeqCst) {
                         if !first_output.swap(true, Ordering::SeqCst) {
@@ -967,9 +983,19 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u6
                 }
                 CommandEvent::Stderr(line_bytes) => {
                     let line = String::from_utf8_lossy(&line_bytes);
+                    append_sidecar_log_record(&log_handle, "stderr", line.as_ref());
                     eprintln!("[agentsview:stderr] {}", line.trim_end());
                 }
                 CommandEvent::Terminated(payload) => {
+                    append_sidecar_log_record(
+                        &log_handle,
+                        "terminated",
+                        format!(
+                            "sidecar terminated (code: {:?}, signal: {:?})",
+                            payload.code, payload.signal
+                        )
+                        .as_str(),
+                    );
                     eprintln!(
                         "[agentsview] sidecar terminated (code: {:?}, signal: {:?})",
                         payload.code, payload.signal
@@ -1004,6 +1030,11 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u6
                     break;
                 }
                 CommandEvent::Error(err) => {
+                    append_sidecar_log_record(
+                        &log_handle,
+                        "error",
+                        format!("sidecar command error: {err}").as_str(),
+                    );
                     eprintln!("[agentsview:error] {err}");
                 }
                 _ => {}
@@ -1410,12 +1441,15 @@ fn parse_writable_listening_port_from_status(buffer: &str) -> Option<u16> {
 
 fn setup_menu(app: &mut App) -> Result<(), DynError> {
     let about = MenuItemBuilder::with_id("about", "About AgentsView").build(app)?;
+    let open_logs_folder =
+        MenuItemBuilder::with_id(OPEN_LOGS_FOLDER_MENU_ID, "Open Logs Folder").build(app)?;
     let check_updates =
         MenuItemBuilder::with_id("check_updates", "Check for Updates...").build(app)?;
 
     let builder = SubmenuBuilder::new(app, "File")
         .item(&about)
         .separator()
+        .item(&open_logs_folder)
         .item(&check_updates)
         .separator();
 
@@ -1439,6 +1473,74 @@ fn setup_menu(app: &mut App) -> Result<(), DynError> {
         .item(&edit_submenu)
         .build()?;
     app.set_menu(menu)?;
+    Ok(())
+}
+
+fn open_logs_folder(handle: &AppHandle) {
+    let log_dir = match ensure_desktop_log_dir(handle) {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("[agentsview] failed to resolve logs folder: {err}");
+            return;
+        }
+    };
+
+    if let Err(err) = handle
+        .opener()
+        .open_path(log_dir.to_string_lossy().into_owned(), None::<&str>)
+    {
+        let message = format!("failed to open logs folder {}: {err}", log_dir.display());
+        append_sidecar_log_record(handle, "menu", message.as_str());
+        eprintln!("[agentsview] {message}");
+    }
+}
+
+fn desktop_log_file_path(handle: &AppHandle) -> io::Result<PathBuf> {
+    Ok(ensure_desktop_log_dir(handle)?.join(DESKTOP_LOG_FILE_NAME))
+}
+
+fn ensure_desktop_log_dir(handle: &AppHandle) -> io::Result<PathBuf> {
+    let log_dir = handle
+        .path()
+        .app_log_dir()
+        .map_err(|err| io::Error::other(err.to_string()))?;
+    fs::create_dir_all(&log_dir)?;
+    Ok(log_dir)
+}
+
+fn append_sidecar_log_record(handle: &AppHandle, label: &str, record: &str) {
+    let path = match desktop_log_file_path(handle) {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("[agentsview] failed to resolve sidecar {label} log path: {err}");
+            return;
+        }
+    };
+    if let Err(err) = append_sidecar_log_record_at_path(&path, label, record) {
+        eprintln!("[agentsview] failed to append sidecar {label} log: {err}");
+    }
+}
+
+fn append_sidecar_log_record_at_path(path: &Path, label: &str, record: &str) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    write_labeled_log_record(&mut file, label, record)
+}
+
+fn write_labeled_log_record(file: &mut fs::File, label: &str, record: &str) -> io::Result<()> {
+    let trimmed = record.trim_end_matches(['\r', '\n']);
+    if trimmed.is_empty() {
+        writeln!(file, "[{label}]")?;
+        return Ok(());
+    }
+    for line in trimmed.lines() {
+        writeln!(file, "[{label}] {line}")?;
+    }
     Ok(())
 }
 
@@ -2007,12 +2109,14 @@ mod tests {
     use super::*;
     use serde_json::Value;
     use std::collections::HashMap;
+    use std::fs;
     #[cfg(unix)]
     use std::os::unix::ffi::OsStrExt;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     #[cfg(unix)]
     use std::time::{SystemTime, UNIX_EPOCH};
+    use tempfile::tempdir;
 
     #[test]
     fn sidecar_args_use_cobra_long_flags() {
@@ -2197,6 +2301,63 @@ mod tests {
             parse_listening_port_from_stdout_buffer(&mut buf, "080 (started in 1.2s)\n"),
             Some(18080)
         );
+    }
+
+    #[test]
+    fn append_sidecar_log_record_writes_labeled_stdout_and_stderr_lines() {
+        let tempdir = tempdir().expect("tempdir");
+        let log_path = tempdir.path().join("logs").join(DESKTOP_LOG_FILE_NAME);
+
+        append_sidecar_log_record_at_path(&log_path, "stdout", "booting\nlistening\n")
+            .expect("stdout log write");
+        append_sidecar_log_record_at_path(&log_path, "stderr", "fatal line\n")
+            .expect("stderr log write");
+
+        let logged = fs::read_to_string(log_path).expect("read log");
+        assert!(logged.contains("[stdout] booting"));
+        assert!(logged.contains("[stdout] listening"));
+        assert!(logged.contains("[stderr] fatal line"));
+    }
+
+    #[test]
+    fn append_sidecar_log_record_returns_error_when_log_dir_is_not_directory() {
+        let tempdir = tempdir().expect("tempdir");
+        let blocked_parent = tempdir.path().join("blocked");
+        fs::write(&blocked_parent, "not a directory").expect("write blocker");
+        let log_path = blocked_parent.join(DESKTOP_LOG_FILE_NAME);
+
+        let err = append_sidecar_log_record_at_path(&log_path, "stdout", "booting")
+            .expect_err("append should fail");
+
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+    }
+
+    #[test]
+    fn forward_sidecar_logs_stdout_path_keeps_status_and_port_parsing() {
+        let source = include_str!("lib.rs");
+        let stdout_arm = source
+            .split("CommandEvent::Stdout(chunk_bytes) => {")
+            .nth(1)
+            .and_then(|segment| {
+                segment
+                    .split("CommandEvent::Stderr(line_bytes) => {")
+                    .next()
+            })
+            .expect("stdout arm");
+
+        assert!(stdout_arm.contains("extract_startup_status(chunk.as_ref())"));
+        assert!(stdout_arm.contains("parse_listening_port_from_stdout_buffer"));
+        assert!(stdout_arm.contains("window.__setStage(2)"));
+    }
+
+    #[test]
+    fn file_menu_includes_open_logs_folder_action() {
+        let source = include_str!("lib.rs");
+
+        assert!(source.contains("OPEN_LOGS_FOLDER_MENU_ID"));
+        assert!(source
+            .contains("MenuItemBuilder::with_id(OPEN_LOGS_FOLDER_MENU_ID, \"Open Logs Folder\")"));
+        assert!(source.contains(".open_path(log_dir.to_string_lossy().into_owned(), None::<&str>)"));
     }
 
     #[test]
@@ -2680,7 +2841,10 @@ mode:    writable
             true,
         );
         let map: HashMap<_, _> = merged.into_iter().collect();
-        assert_eq!(map.get(&OsString::from("HOME")), Some(&OsString::from("/base")));
+        assert_eq!(
+            map.get(&OsString::from("HOME")),
+            Some(&OsString::from("/base"))
+        );
     }
 
     #[test]
@@ -2699,7 +2863,9 @@ mode:    writable
         let map: HashMap<_, _> = merged.into_iter().collect();
         assert_eq!(
             map.get(&OsString::from("CODEX_SESSIONS_DIR")),
-            Some(&OsString::from(r"\\wsl.localhost\Ubuntu\home\me\.codex\sessions"))
+            Some(&OsString::from(
+                r"\\wsl.localhost\Ubuntu\home\me\.codex\sessions"
+            ))
         );
     }
 
