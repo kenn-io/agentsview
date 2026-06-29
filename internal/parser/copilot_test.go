@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,60 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// newCopilotTestProvider builds a concrete copilotProvider for the given roots
+// so package tests can exercise the folded parse, discovery, and source-lookup
+// behavior directly through provider methods, replacing the removed
+// package-level entrypoints.
+func newCopilotTestProvider(t *testing.T, roots ...string) *copilotProvider {
+	t.Helper()
+	provider, ok := NewProvider(AgentCopilot, ProviderConfig{
+		Roots:   roots,
+		Machine: "local",
+	})
+	require.True(t, ok)
+	cp, ok := provider.(*copilotProvider)
+	require.True(t, ok)
+	return cp
+}
+
+// parseCopilotTestSession parses a Copilot JSONL session file at path through
+// the provider-owned parse method, replacing the removed package-level
+// ParseCopilotSession entrypoint.
+func parseCopilotTestSession(
+	t *testing.T, path, machine string,
+) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
+	t.Helper()
+	return newCopilotTestProvider(t).parseSession(path, machine)
+}
+
+// discoverCopilotTestSessions discovers Copilot sessions under root through the
+// provider, returning the legacy DiscoveredFile shape (path) the tests assert
+// against.
+func discoverCopilotTestSessions(t *testing.T, root string) []DiscoveredFile {
+	t.Helper()
+	provider := newCopilotTestProvider(t, root)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	if len(sources) == 0 {
+		return nil
+	}
+	files := make([]DiscoveredFile, 0, len(sources))
+	for _, source := range sources {
+		files = append(files, DiscoveredFile{
+			Path:  source.DisplayPath,
+			Agent: AgentCopilot,
+		})
+	}
+	return files
+}
+
+// findCopilotTestSourceFile resolves a Copilot session ID to a session file
+// path through the provider, replacing the removed FindCopilotSourceFile.
+func findCopilotTestSourceFile(t *testing.T, root, rawID string) string {
+	t.Helper()
+	return newCopilotTestProvider(t, root).sources.findSourceFile(root, rawID)
+}
 
 // writeCopilotJSONL writes JSONL lines to a temp file and
 // returns the file path.
@@ -28,7 +83,7 @@ func writeCopilotJSONL(
 // parseAndValidateHelper parses the session and fails the test on basic errors.
 func parseAndValidateHelper(t *testing.T, path string, machine string, wantMsgs int) (*ParsedSession, []ParsedMessage) {
 	t.Helper()
-	sess, msgs, _, err := ParseCopilotSession(path, machine)
+	sess, msgs, _, err := parseCopilotTestSession(t, path, machine)
 	require.NoError(t, err)
 	require.NotNil(t, sess, "expected non-nil session")
 	require.Len(t, msgs, wantMsgs)
@@ -349,7 +404,7 @@ func TestParseCopilotSession_EmptySession(t *testing.T) {
 		`{"type":"session.start","data":{"sessionId":"empty"},"timestamp":"2025-01-15T10:00:00Z"}`,
 	)
 
-	sess, msgs, _, err := ParseCopilotSession(path, "m")
+	sess, msgs, _, err := parseCopilotTestSession(t, path, "m")
 	require.NoError(t, err)
 	assert.Nil(t, sess, "expected nil session for empty")
 	assert.Nil(t, msgs, "expected nil messages for empty")
@@ -358,7 +413,7 @@ func TestParseCopilotSession_EmptySession(t *testing.T) {
 func TestParseCopilotSession_NonexistentFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nonexistent.jsonl")
 
-	sess, msgs, _, err := ParseCopilotSession(path, "m")
+	sess, msgs, _, err := parseCopilotTestSession(t, path, "m")
 	require.NoError(t, err, "expected nil error")
 	assert.Nil(t, sess, "expected nil session for nonexistent file")
 	assert.Nil(t, msgs, "expected nil messages for nonexistent file")
@@ -588,7 +643,7 @@ func parseCopilotFull(
 	t *testing.T, path, machine string,
 ) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent) {
 	t.Helper()
-	sess, msgs, usage, err := ParseCopilotSession(path, machine)
+	sess, msgs, usage, err := parseCopilotTestSession(t, path, machine)
 	require.NoError(t, err)
 	return sess, msgs, usage
 }

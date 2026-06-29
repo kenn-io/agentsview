@@ -33,7 +33,7 @@ type classifierFixture struct {
 // newClassifierFixture prepares a temp data dir with a minimal
 // config.toml carrying the given user prefixes, loads a minimal
 // config pointed at that dir, applies any option mutators, and
-// installs the classifier prefixes into the db singleton.
+// installs the classifier patterns into the db singleton.
 func newClassifierFixture(
 	t *testing.T, prefixes []string, opts ...func(*config.Config),
 ) classifierFixture {
@@ -49,7 +49,11 @@ func newClassifierFixture(
 	}
 	applyClassifierConfig(cfg)
 
-	t.Cleanup(func() { db.SetUserAutomationPrefixes(nil) })
+	t.Cleanup(func() {
+		db.SetUserAutomationPrefixes(nil)
+		db.SetUserAutomationSubstrings(nil)
+		db.SetUserAutomationExactMatches(nil)
+	})
 	return classifierFixture{Dir: dir, Cfg: cfg}
 }
 

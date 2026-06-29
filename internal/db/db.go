@@ -241,7 +241,7 @@ import (
 // classification, so historical skill usage is backfilled on
 // re-parse.)
 //
-// (56: Antigravity-CLI transcript fidelity classification. Re-parsing
+// (57: Antigravity-CLI transcript fidelity classification. Re-parsing
 // populates transcript_fidelity ("full"/"summary") on existing
 // Antigravity CLI rows so sessions built from summary transcripts are
 // distinguishable from full-fidelity captures.)
@@ -249,6 +249,9 @@ import (
 // backfill. Re-parsing persists estimated usage events for existing
 // aggregate-only Kimi sessions and preserves explicit native event
 // model names instead of the proxy fallback.)
+// (56: Codex goal-continuation context wrappers are filtered from
+// persisted messages and user_message_count. Existing Codex rows need
+// re-parsing so synthetic /goal continuation records are removed.)
 // (54: Antigravity .db sessions record a schema-fingerprint
 // source_version. Re-parsing populates source_version on existing
 // Antigravity IDE and CLI rows so "which agy release produced this
@@ -262,7 +265,7 @@ import (
 // (51: Gemini cumulative-to-delta token reparse.)
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 56
+const dataVersion = 57
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -1430,6 +1433,9 @@ func (db *DB) createPartialIndexesLocked(w *writerHandle) error {
 		   AND model != '<synthetic>'`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_has_secret
 		 ON sessions(secret_leak_count) WHERE secret_leak_count > 0`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_agent_file_path_active
+		 ON sessions(agent, file_path)
+		 WHERE file_path IS NOT NULL AND deleted_at IS NULL`,
 	}
 	for _, ddl := range indexes {
 		if _, err := w.Exec(ddl); err != nil {

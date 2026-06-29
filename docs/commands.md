@@ -24,6 +24,7 @@ instead of starting the web UI.
 | `--no-browser` | `false` | Don't open browser on startup |
 | `--no-update-check` | `false` | Disable automatic update checks |
 | `--background` | `false` | Start `agentsview serve` as a managed background process |
+| `--replace` | `false` | Replace a running local daemon before starting |
 | `--public-url` | | Public URL for hostname or proxy access |
 | `--public-origin` | | Trusted browser origin (repeatable/comma-separated) |
 | `--proxy` | | Managed proxy mode (`caddy`) |
@@ -45,6 +46,7 @@ agentsview serve                                # defaults
 agentsview serve --port 9090                    # custom port
 agentsview serve --no-browser                   # disable browser auto-open
 agentsview serve --background                   # start managed background server
+agentsview serve --replace                      # replace an existing daemon
 agentsview serve --public-url https://agents.example.com
 ```
 
@@ -77,6 +79,16 @@ URL, PID, and log path. Background server output is written to
 process, URL, version, uptime, and read-only mode when available.
 `serve stop` gracefully terminates the managed process and cleans
 up its runtime record.
+
+When a writable daemon is already running, a newer release binary
+automatically replaces an older compatible daemon before starting.
+Development builds, downgrades, and forward API/data-version
+conflicts do not auto-replace; use `--replace` when you deliberately
+want this invocation to stop the running daemon first. If the SQLite
+archive itself has a newer data version than the current binary can
+open, `serve` refuses before stopping the old daemon. `serve status`
+reports incompatible live daemons with their daemon and binary
+versions plus the `--replace` or `serve stop` actions.
 
 Background servers also act as the shared local daemon for the
 desktop app and CLI. The daemon owns local SQLite writes for its
@@ -255,9 +267,10 @@ agentsview usage daily [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--json` | `false` | Emit JSON instead of a terminal table |
-| `--since` | `30 days ago` | Start date (`YYYY-MM-DD`), inclusive |
-| `--until` | | End date (`YYYY-MM-DD`), inclusive |
+| `--format` | `human` | Output format: `human` or `json` |
+| `--json` | `false` | Alias for `--format json` |
+| `--since` | `30 days ago` | Start of window, a duration like `28d` or a `YYYY-MM-DD` date, inclusive |
+| `--until` | | End of window, a duration like `28d` or a `YYYY-MM-DD` date, inclusive |
 | `--all` | `false` | Scan all history; overrides the default 30-day window |
 | `--agent` | | Filter by agent name |
 | `--breakdown` | `false` | Show indented per-model rows under each day |
@@ -270,6 +283,7 @@ agentsview usage daily [flags]
 ```bash
 agentsview usage daily                           # last 30 days
 agentsview usage daily --all                     # full history
+agentsview usage daily --since 14d               # last 14 days
 agentsview usage daily --since 2026-04-01 --breakdown
 agentsview usage daily --json --agent claude
 ```
@@ -355,7 +369,8 @@ agentsview activity report [flags]
 | `--project` | | Filter by project |
 | `--agent` | | Filter by agent name |
 | `--machine` | | Filter by machine name |
-| `--json` | `false` | Emit the full report as JSON |
+| `--format` | `human` | Output format: `human` or `json` |
+| `--json` | `false` | Alias for `--format json` |
 | `--no-sync` | `false` | Skip on-demand sync before querying |
 | `--offline` | `false` | Use fallback pricing only |
 
@@ -547,7 +562,8 @@ agentsview projects [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--json` | `false` | Output as a JSON array |
+| `--format` | `human` | Output format: `human` or `json` |
+| `--json` | `false` | Alias for `--format json` |
 
 **Examples:**
 
@@ -570,7 +586,8 @@ agentsview health [session-id] [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--json` | `false` | Output JSON instead of terminal text |
+| `--format` | `human` | Output format: `human` or `json` |
+| `--json` | `false` | Alias for `--format json` |
 | `--limit` | `20` | Number of sessions to list when no session ID is given |
 
 **Examples:**
@@ -600,6 +617,7 @@ agentsview stats [flags]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--format` | `human` | Output format: `human` or `json` |
+| `--json` | `false` | Alias for `--format json` |
 | `--since` | `28d` | Start of window, either `YYYY-MM-DD` or a compact duration like `28d` |
 | `--until` | | End of window as `YYYY-MM-DD` |
 | `--agent` | `all` | Restrict to one agent or use `all` |
@@ -664,7 +682,8 @@ agentsview parse-diff [flags]
 | `--agent` | | Restrict to one agent; repeatable |
 | `--limit` | `0` | Maximum number of source files to inspect, newest first (`0` means all) |
 | `--fail-on-change` | `false` | Exit non-zero when changes or parse errors are found |
-| `--json` | `false` | Emit a machine-readable report |
+| `--format` | `human` | Output format: `human` or `json` |
+| `--json` | `false` | Alias for `--format json` |
 | `--verbose` / `-v` | `false` | Include more detail in the human report |
 
 **Examples:**
@@ -731,7 +750,10 @@ agentsview session usage <id>            # token usage and cost estimate
 ```
 
 Structured response commands accept `--format json`; `--json` is
-a short alias for that scripting mode. Use `--server <url>` to
+a short alias for that scripting mode. `session export` and
+`session watch` are the exceptions: they stream raw bytes and
+NDJSON respectively, so they reject `--format`/`--json`. Use
+`--server <url>` to
 target an explicit running daemon, `AGENTSVIEW_SERVER_TOKEN` or
 `--server-token-file <path>` when that daemon requires auth, or
 `--pg` to read from configured PostgreSQL.
@@ -826,6 +848,7 @@ localhost-bound daemon and emits a warning to stderr.
 | Flag | Used by | Description |
 |------|---------|-------------|
 | `--format` | both | `human` or `json` (inherited from `secrets`) |
+| `--json` | both | Alias for `--format json` (inherited from `secrets`) |
 | `--backfill` | scan | Scan only sessions not yet scanned at the current ruleset version |
 | `--project` | both | Limit to a project |
 | `--agent` | both | Limit to an agent |

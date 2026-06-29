@@ -67,21 +67,28 @@ func buildAiderResolveSnippet(envVar string) string {
 // "agentType:path\n" per agent target, plus "@file:path\n" lines for sibling
 // metadata files such as Codex's session_index.jsonl.
 //
-// Only includes agents where FileBased is true and DiscoverFunc
-// is non-nil. For each agent with an EnvVar, the script checks
-// the env var first and falls back to the default dir. Dirs (and
-// files) that don't exist on the remote are skipped.
+// Only includes file-based agents that have on-disk sources to resolve via
+// their provider facade. For each agent with an EnvVar, the script checks the
+// env var first and falls back to the default dir. Dirs (and files) that don't
+// exist on the remote are skipped.
 func buildResolveScript() string {
 	var b strings.Builder
 	for _, def := range parser.Registry {
-		if !def.FileBased || def.DiscoverFunc == nil {
+		if !resolveAgentHasOnDiskSource(def) {
 			continue
 		}
+		// Aider has no central store and no safe default root: it writes
+		// one .aider.chat.history.md per repository, so after the opt-in
+		// change it carries no DefaultDirs and the DefaultDirs loop below
+		// never runs for it. Handle it independently so an explicitly
+		// configured remote AIDER_DIR still resolves history files. Remote
+		// sync emits only discovered .aider.chat.history.md files as tar
+		// targets, never the configured code root or the remote $HOME. The
+		// shell guard in buildAiderResolveSnippet also drops AIDER_DIR set
+		// to literal "$HOME" (or "$HOME/"), so an unscoped override cannot
+		// reintroduce a whole-home scan or tar. Local sync is unaffected:
+		// it discovers via its provider facade, not this script.
 		if def.Type == parser.AgentAider {
-			// Aider has no safe default root: it writes one history file per
-			// repository. Remote sync still supports an explicit AIDER_DIR by
-			// emitting only discovered history files as tar targets instead of
-			// the configured code root or the remote home directory.
 			if def.EnvVar != "" {
 				b.WriteString(buildAiderResolveSnippet(def.EnvVar))
 			}
@@ -151,6 +158,23 @@ func remoteDefaultRootTail(rel string) string {
 		return tail
 	}
 	return ""
+}
+
+// resolveAgentHasOnDiskSource reports whether a file-based agent has
+// on-disk sources the resolve script should probe via its provider facade.
+// Provider-authoritative agents have a configurable directory, so they must
+// stay in the remote resolve set.
+func resolveAgentHasOnDiskSource(def parser.AgentDef) bool {
+	if !def.FileBased {
+		return false
+	}
+	switch parser.ProviderMigrationModes()[def.Type] {
+	case parser.ProviderMigrationProviderAuthoritative:
+		_, ok := parser.ProviderFactoryByType(def.Type)
+		return ok
+	default:
+		return false
+	}
 }
 
 // parseResolvedDirs parses script output into a map of agent type to transfer

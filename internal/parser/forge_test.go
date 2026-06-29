@@ -166,7 +166,7 @@ func TestParseForgeDB_StandardConversation(t *testing.T) {
 	defer db.Close()
 	seedForgeConversation(t, seeder)
 
-	sessions, err := ParseForgeDB(dbPath, "testmachine")
+	sessions, err := parseForgeAll(dbPath, "testmachine")
 	require.NoError(t, err, "ParseForgeDB")
 
 	assertEq(t, "sessions len", len(sessions), 1)
@@ -200,8 +200,8 @@ func TestParseForgeSession_SingleConversation(t *testing.T) {
 	defer db.Close()
 	seedForgeConversation(t, seeder)
 
-	sess, msgs, err := ParseForgeSession(dbPath, "conv-001", "testmachine")
-	require.NoError(t, err, "ParseForgeSession")
+	sess, msgs, err := parseForgeSession(dbPath, "conv-001", "testmachine")
+	require.NoError(t, err, "parseForgeSession")
 	require.NotNil(t, sess, "expected non-nil session")
 
 	assertEq(t, "ID", sess.ID, "forge:conv-001")
@@ -266,8 +266,8 @@ func TestCollectForgeToolCalls_TaskSubagentIDPrefixed(t *testing.T) {
 		"2026-05-02 10:00:00", "2026-05-02 10:00:01", "",
 	)
 
-	sess, msgs, err := ParseForgeSession(dbPath, "parent-conv", "m")
-	require.NoError(t, err, "ParseForgeSession")
+	sess, msgs, err := parseForgeSession(dbPath, "parent-conv", "m")
+	require.NoError(t, err, "parseForgeSession")
 	require.NotNil(t, sess, "expected non-nil session")
 	require.NotEmpty(t, msgs, "expected messages")
 	var taskCall *ParsedToolCall
@@ -282,13 +282,13 @@ func TestCollectForgeToolCalls_TaskSubagentIDPrefixed(t *testing.T) {
 	assertEq(t, "SubagentSessionID", taskCall.SubagentSessionID, "forge:child-conv-001")
 }
 
-func TestFindForgeDBPath(t *testing.T) {
+func TestForgeDBPath(t *testing.T) {
 	dir := t.TempDir()
-	assertEq(t, "not found", FindForgeDBPath(dir), "")
+	assertEq(t, "not found", forgeDBPath(dir), "")
 
 	dbPath, _, db := newForgeTestDB(t)
 	defer db.Close()
-	assertEq(t, "found", FindForgeDBPath(filepath.Dir(dbPath)), dbPath)
+	assertEq(t, "found", forgeDBPath(filepath.Dir(dbPath)), dbPath)
 }
 
 // ---------------------------------------------------------------------------
@@ -341,7 +341,7 @@ func TestForgeTokenFallbacks(t *testing.T) {
 			"", // empty metrics → accumulateMessageTokenUsage fallback
 		)
 
-		sessions, err := ParseForgeDB(dbPath, "m")
+		sessions, err := parseForgeAll(dbPath, "m")
 		require.NoError(t, err, "ParseForgeDB")
 		require.Len(t, sessions, 1)
 		s := sessions[0].Session
@@ -387,7 +387,7 @@ func TestForgeTokenFallbacks(t *testing.T) {
 			`{"output_tokens": 42}`,
 		)
 
-		sessions, err := ParseForgeDB(dbPath, "m")
+		sessions, err := parseForgeAll(dbPath, "m")
 		require.NoError(t, err, "ParseForgeDB")
 		require.Len(t, sessions, 1)
 		s := sessions[0].Session
@@ -426,7 +426,7 @@ func TestForgeTokenFallbacks(t *testing.T) {
 			"",
 		)
 
-		sessions, err := ParseForgeDB(dbPath, "m")
+		sessions, err := parseForgeAll(dbPath, "m")
 		require.NoError(t, err, "ParseForgeDB")
 		require.Len(t, sessions, 1)
 		msgs := sessions[0].Messages
@@ -460,7 +460,7 @@ func TestForgeTokenFallbacks(t *testing.T) {
 			"",
 		)
 
-		sessions, err := ParseForgeDB(dbPath, "m")
+		sessions, err := parseForgeAll(dbPath, "m")
 		require.NoError(t, err, "ParseForgeDB")
 		require.Len(t, sessions, 1)
 		msgs := sessions[0].Messages
@@ -514,7 +514,7 @@ func TestForgeDegenerate(t *testing.T) {
 			"",
 		)
 
-		sessions, err := ParseForgeDB(dbPath, "m")
+		sessions, err := parseForgeAll(dbPath, "m")
 		require.NoError(t, err, "ParseForgeDB")
 		require.Len(t, sessions, 1)
 		// Only the user message; empty assistant was skipped.
@@ -556,7 +556,7 @@ func TestForgeDegenerate(t *testing.T) {
 			"",
 		)
 
-		sessions, err := ParseForgeDB(dbPath, "m")
+		sessions, err := parseForgeAll(dbPath, "m")
 		require.NoError(t, err, "ParseForgeDB")
 		require.Len(t, sessions, 1)
 		// Only the user message; tool result with empty call_id was skipped.
@@ -589,7 +589,7 @@ func TestForgeDegenerate(t *testing.T) {
 			"",
 		)
 
-		sessions, err := ParseForgeDB(dbPath, "m")
+		sessions, err := parseForgeAll(dbPath, "m")
 		require.NoError(t, err, "ParseForgeDB")
 		require.Len(t, sessions, 1)
 		msgs := sessions[0].Messages
@@ -628,7 +628,7 @@ func TestForgeCwdEdgeCases(t *testing.T) {
 			"",
 		)
 
-		sessions, err := ParseForgeDB(dbPath, "m")
+		sessions, err := parseForgeAll(dbPath, "m")
 		require.NoError(t, err, "ParseForgeDB")
 		require.Len(t, sessions, 1)
 		s := sessions[0].Session
@@ -670,7 +670,7 @@ func TestForgeCwdEdgeCases(t *testing.T) {
 			"",
 		)
 
-		sessions, err := ParseForgeDB(dbPath, "m")
+		sessions, err := parseForgeAll(dbPath, "m")
 		require.NoError(t, err, "ParseForgeDB")
 		require.Len(t, sessions, 1)
 		assertEq(t, "Cwd", sessions[0].Session.Cwd, "")
@@ -710,7 +710,7 @@ func TestForgeCwdEdgeCases(t *testing.T) {
 			"",
 		)
 
-		sessions, err := ParseForgeDB(dbPath, "m")
+		sessions, err := parseForgeAll(dbPath, "m")
 		require.NoError(t, err, "ParseForgeDB")
 		require.Len(t, sessions, 1)
 		assertEq(t, "Cwd", sessions[0].Session.Cwd, "")
@@ -741,7 +741,7 @@ func TestForgeCwdEdgeCases(t *testing.T) {
 			"",
 		)
 
-		sessions, err := ParseForgeDB(dbPath, "m")
+		sessions, err := parseForgeAll(dbPath, "m")
 		require.NoError(t, err, "ParseForgeDB")
 		require.Len(t, sessions, 1)
 		s := sessions[0].Session
@@ -814,7 +814,7 @@ func TestForgeEndedAtFallback(t *testing.T) {
 	_, err := db.Exec("UPDATE conversations SET updated_at = NULL WHERE conversation_id = 'ended-fallback'")
 	require.NoError(t, err, "update")
 
-	sessions, err := ParseForgeDB(dbPath, "m")
+	sessions, err := parseForgeAll(dbPath, "m")
 	require.NoError(t, err, "ParseForgeDB")
 	require.Len(t, sessions, 1)
 	s := sessions[0].Session
@@ -864,7 +864,7 @@ func TestForgeToolOutputText(t *testing.T) {
 			"",
 		)
 
-		sessions, err := ParseForgeDB(dbPath, "m")
+		sessions, err := parseForgeAll(dbPath, "m")
 		require.NoError(t, err, "ParseForgeDB")
 		require.Len(t, sessions, 1)
 		msgs := sessions[0].Messages
@@ -936,7 +936,7 @@ func TestForgeSkillToolName(t *testing.T) {
 				"",
 			)
 
-			sessions, err := ParseForgeDB(dbPath, "m")
+			sessions, err := parseForgeAll(dbPath, "m")
 			require.NoError(t, err, "ParseForgeDB")
 			require.Len(t, sessions, 1)
 			var skillCall *ParsedToolCall
@@ -994,7 +994,7 @@ func TestForgeReasoningNoText(t *testing.T) {
 		"",
 	)
 
-	sessions, err := ParseForgeDB(dbPath, "m")
+	sessions, err := parseForgeAll(dbPath, "m")
 	require.NoError(t, err, "ParseForgeDB")
 	require.Len(t, sessions, 1)
 	msgs := sessions[0].Messages

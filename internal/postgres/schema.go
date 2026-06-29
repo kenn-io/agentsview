@@ -15,6 +15,7 @@ import (
 )
 
 const tokenCoverageRepairMetadataKey = "token_coverage_repair_v1"
+const sourceCurationBackfillMetadataKey = "source_curation_baseline_backfill_v1"
 const tokenCoverageBackfillBatchSize = 1000
 
 type columnMigration struct {
@@ -40,11 +41,13 @@ CREATE TABLE IF NOT EXISTS sessions (
     agent              TEXT NOT NULL,
     first_message      TEXT,
     display_name       TEXT,
+    source_display_name TEXT,
     session_name       TEXT,
     created_at         TIMESTAMPTZ,
     started_at         TIMESTAMPTZ,
     ended_at           TIMESTAMPTZ,
     deleted_at         TIMESTAMPTZ,
+    source_deleted_at  TIMESTAMPTZ,
     message_count      INT NOT NULL DEFAULT 0,
     user_message_count INT NOT NULL DEFAULT 0,
     parent_session_id  TEXT,
@@ -181,6 +184,20 @@ CREATE TABLE IF NOT EXISTS starred_sessions (
         REFERENCES sessions(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS excluded_sessions (
+    id         TEXT PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS session_aliases (
+    session_id TEXT NOT NULL,
+    alias_id   TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (session_id, alias_id),
+    FOREIGN KEY (session_id)
+        REFERENCES sessions(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS pinned_messages (
     id          BIGSERIAL PRIMARY KEY,
     session_id  TEXT NOT NULL,
@@ -292,6 +309,35 @@ CREATE INDEX IF NOT EXISTS idx_secret_findings_session
 
 CREATE INDEX IF NOT EXISTS idx_secret_findings_rule
     ON secret_findings (rule_name);
+
+CREATE TABLE IF NOT EXISTS insights (
+    id               BIGSERIAL PRIMARY KEY,
+    type             TEXT NOT NULL DEFAULT '',
+    date_from        TEXT NOT NULL DEFAULT '',
+    date_to          TEXT NOT NULL DEFAULT '',
+    project          TEXT,
+    agent            TEXT NOT NULL DEFAULT '',
+    model            TEXT,
+    prompt           TEXT,
+    content          TEXT NOT NULL DEFAULT '',
+    kind             TEXT NOT NULL DEFAULT '',
+    schema_version   TEXT NOT NULL DEFAULT '',
+    template_id      TEXT NOT NULL DEFAULT '',
+    template_version TEXT NOT NULL DEFAULT '',
+    aggregate_hash   TEXT NOT NULL DEFAULT '',
+    cache_key        TEXT NOT NULL DEFAULT '',
+    cache_status     TEXT NOT NULL DEFAULT '',
+    provenance_json  TEXT NOT NULL DEFAULT '',
+    structured_json  TEXT NOT NULL DEFAULT '',
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_insights_lookup
+    ON insights (type, date_from, date_to, project);
+
+CREATE INDEX IF NOT EXISTS idx_insights_cache
+    ON insights (cache_key, created_at DESC)
+    WHERE cache_key <> '';
 `
 
 // EnsureSchema creates the schema (if needed), then runs
@@ -346,6 +392,16 @@ func EnsureSchema(
 			"sessions", "created_at",
 			`created_at TIMESTAMPTZ`,
 			"adding sessions.created_at",
+		},
+		{
+			"sessions", "source_display_name",
+			`source_display_name TEXT`,
+			"adding sessions.source_display_name",
+		},
+		{
+			"sessions", "source_deleted_at",
+			`source_deleted_at TIMESTAMPTZ`,
+			"adding sessions.source_deleted_at",
 		},
 		{
 			"sessions", "total_output_tokens",
@@ -649,6 +705,7 @@ func EnsureSchema(
 	)
 	step = time.Now()
 	tokenCoverageColumnsAdded := false
+	sourceCurationColumnsAdded := false
 	addedColumns, err := ensureColumns(ctx, db, existingColumns, alters)
 	if err != nil {
 		return err
@@ -658,6 +715,8 @@ func EnsureSchema(
 		case "has_total_output_tokens", "has_peak_context_tokens",
 			"has_context_tokens", "has_output_tokens":
 			tokenCoverageColumnsAdded = true
+		case "source_display_name", "source_deleted_at":
+			sourceCurationColumnsAdded = true
 		}
 	}
 	log.Printf(
@@ -666,6 +725,26 @@ func EnsureSchema(
 		time.Since(step).Round(time.Millisecond),
 		len(addedColumns),
 	)
+	step = time.Now()
+	sourceBackfilled, err := runSourceCurationBackfill(
+		ctx, db, sourceCurationColumnsAdded,
+	)
+	if err != nil {
+		return err
+	}
+	if sourceBackfilled {
+		log.Printf(
+			"pg schema: source curation baseline backfill"+
+				" completed in %s",
+			time.Since(step).Round(time.Millisecond),
+		)
+	} else {
+		log.Printf(
+			"pg schema: source curation baseline backfill"+
+				" check completed in %s (repair skipped)",
+			time.Since(step).Round(time.Millisecond),
+		)
+	}
 	step = time.Now()
 	if _, err := db.ExecContext(ctx,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_termination_status
@@ -966,6 +1045,9 @@ func runSchemaDataRepairsPG(ctx context.Context, db *sql.DB) error {
 	if err := backfillIsAutomatedPG(ctx, db); err != nil {
 		return err
 	}
+	if _, err := runSourceCurationBackfill(ctx, db, false); err != nil {
+		return err
+	}
 	runRepair, err := shouldRunTokenCoverageRepair(ctx, db, false)
 	if err != nil {
 		return err
@@ -977,6 +1059,91 @@ func runSchemaDataRepairsPG(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	return markTokenCoverageRepairDone(ctx, db)
+}
+
+func backfillSourceCurationBaselines(
+	ctx context.Context, pg *sql.DB,
+) error {
+	if _, err := pg.ExecContext(ctx,
+		`UPDATE sessions
+		 SET source_display_name = display_name
+		 WHERE source_display_name IS NULL`,
+	); err != nil {
+		return fmt.Errorf(
+			"backfilling PG source display-name baselines: %w", err,
+		)
+	}
+	if _, err := pg.ExecContext(ctx,
+		`UPDATE sessions
+		 SET source_deleted_at = deleted_at
+		 WHERE source_deleted_at IS NULL`,
+	); err != nil {
+		return fmt.Errorf(
+			"backfilling PG source deleted-at baselines: %w", err,
+		)
+	}
+	return nil
+}
+
+func runSourceCurationBackfill(
+	ctx context.Context, db *sql.DB, sourceCurationColumnsAdded bool,
+) (bool, error) {
+	runRepair, err := shouldRunSourceCurationBackfill(
+		ctx, db, sourceCurationColumnsAdded,
+	)
+	if err != nil {
+		return false, err
+	}
+	if !runRepair {
+		return false, nil
+	}
+	if err := backfillSourceCurationBaselines(ctx, db); err != nil {
+		return false, err
+	}
+	if err := markSourceCurationBackfillDone(ctx, db); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func shouldRunSourceCurationBackfill(
+	ctx context.Context, db *sql.DB, sourceCurationColumnsAdded bool,
+) (bool, error) {
+	if sourceCurationColumnsAdded {
+		return true, nil
+	}
+
+	var done bool
+	if err := db.QueryRowContext(ctx,
+		`SELECT EXISTS (
+			SELECT 1 FROM sync_metadata
+			WHERE key = $1
+		)`,
+		sourceCurationBackfillMetadataKey,
+	).Scan(&done); err != nil {
+		return false, fmt.Errorf(
+			"probing source curation backfill metadata: %w", err,
+		)
+	}
+	return !done, nil
+}
+
+func markSourceCurationBackfillDone(
+	ctx context.Context, db *sql.DB,
+) error {
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO sync_metadata (key, value)
+		 VALUES ($1, '1')
+		 ON CONFLICT (key) DO UPDATE
+		 SET value = EXCLUDED.value`,
+		sourceCurationBackfillMetadataKey,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"storing source curation backfill metadata: %w", err,
+		)
+	}
+	return nil
 }
 
 func batchUpdateAutomatedPG(
@@ -1498,6 +1665,34 @@ func CheckSchemaCompat(
 	rows.Close()
 
 	rows, err = db.QueryContext(ctx,
+		`SELECT source_display_name, source_deleted_at
+		 FROM sessions LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"sessions table missing curation columns: %w", err,
+		)
+	}
+	rows.Close()
+
+	rows, err = db.QueryContext(ctx,
+		`SELECT id FROM excluded_sessions LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"excluded_sessions table missing required columns: %w", err,
+		)
+	}
+	rows.Close()
+
+	rows, err = db.QueryContext(ctx,
+		`SELECT session_id, alias_id FROM session_aliases LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"session_aliases table missing required columns: %w", err,
+		)
+	}
+	rows.Close()
+
+	rows, err = db.QueryContext(ctx,
 		`SELECT call_index, file_path FROM tool_calls LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
@@ -1592,6 +1787,18 @@ func CheckSchemaCompat(
 	}
 	rows.Close()
 
+	rows, err = db.QueryContext(ctx,
+		`SELECT id, type, date_from, date_to, project, agent,
+			model, prompt, content, kind, schema_version,
+			template_id, template_version, aggregate_hash,
+			cache_key, cache_status, provenance_json,
+			structured_json, created_at
+		 FROM insights LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf("insights table missing required columns: %w", err)
+	}
+	rows.Close()
+
 	if pgHasTable(ctx, db, "cursor_usage_events") {
 		rows, err = db.QueryContext(ctx,
 			`SELECT id, occurred_at, model, kind,
@@ -1622,10 +1829,10 @@ func CheckSchemaCompat(
 	return nil
 }
 
-// checkPushSchemaCompat verifies schema elements that only push needs:
-// the sync_metadata table and sessions.owner_marker. pg serve never reads
-// these, so they live outside CheckSchemaCompat (which gates read-only
-// serve startup) and are checked only on the push fast path.
+// checkPushSchemaCompat verifies schema elements that only push needs. PG serve
+// never reads sync_metadata or owner_marker, so they live outside
+// CheckSchemaCompat (which gates read-only serve startup) and are checked only
+// on the push fast path.
 func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
 	rows, err := db.QueryContext(ctx,
 		`SELECT key, value FROM sync_metadata LIMIT 0`)
@@ -1639,15 +1846,15 @@ func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
 		`SELECT owner_marker FROM sessions LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
-			"sessions table missing owner_marker: %w", err)
+			"sessions table missing push ownership columns: %w", err)
 	}
 	rows.Close()
 	return nil
 }
 
 // pushSchemaCurrent reports whether the PG schema has everything a push
-// needs. CheckSchemaCompat covers the read paths but does not require the
-// push-only sync_metadata table or sessions.owner_marker (verified by
+// needs. CheckSchemaCompat covers the read and PG serve write paths but does
+// not require push-only sync_metadata or sessions.owner_marker (verified by
 // checkPushSchemaCompat), model_pricing (always queried by syncModelPricing)
 // or cursor_usage_events (written by syncCursorUsageEvents), so probe those
 // explicitly. It also requires the cursor dedup index, which the cursor usage

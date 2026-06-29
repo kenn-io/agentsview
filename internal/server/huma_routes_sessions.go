@@ -884,7 +884,21 @@ func (s *Server) humaUploadSession(
 		return nil, apiError(http.StatusInternalServerError, "failed to save upload")
 	}
 	defer func() { _ = os.RemoveAll(upload.tempDir) }()
-	results, err := parser.ParseClaudeSession(upload.tempPath, project, machine)
+	provider, ok := parser.NewProvider(
+		parser.AgentClaude, parser.ProviderConfig{Machine: machine},
+	)
+	if !ok {
+		return nil, apiError(http.StatusInternalServerError,
+			"claude provider unavailable")
+	}
+	uploader, ok := provider.(parser.ClaudeUploadParser)
+	if !ok {
+		return nil, apiError(http.StatusInternalServerError,
+			"claude provider does not support uploads")
+	}
+	results, err := uploader.ParseUploadedTranscript(
+		upload.tempPath, project, machine,
+	)
 	if err != nil {
 		return nil, apiError(http.StatusBadRequest,
 			fmt.Sprintf("parsing session: %v", err))
@@ -892,7 +906,6 @@ func (s *Server) humaUploadSession(
 	if len(results) == 0 {
 		return nil, apiError(http.StatusBadRequest, "no sessions parsed from upload")
 	}
-	parser.InferRelationshipTypes(results)
 	for i := range results {
 		results[i].Session.File.Path = upload.finalPath
 	}

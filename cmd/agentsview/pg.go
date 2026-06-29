@@ -418,6 +418,14 @@ func runPGServe(appCfg config.Config, basePath string) {
 	); err != nil {
 		fatal("pg serve: %v", err)
 	}
+	if err := store.DetectInsightGenerationAvailability(
+		ctx,
+	); err != nil {
+		fatal(
+			"pg serve: probing insight generation capability: %v",
+			err,
+		)
+	}
 
 	rtOpts := serveRuntimeOptions{
 		Mode:          "pg-serve",
@@ -430,10 +438,11 @@ func runPGServe(appCfg config.Config, basePath string) {
 
 	opts := []server.Option{
 		server.WithVersion(server.VersionInfo{
-			Version:   version,
-			Commit:    commit,
-			BuildDate: buildDate,
-			ReadOnly:  true,
+			Version:                    version,
+			Commit:                     commit,
+			BuildDate:                  buildDate,
+			ReadOnly:                   true,
+			InsightGenerationAvailable: store.InsightGenerationAvailable(),
 		}),
 		server.WithDataDir(appCfg.DataDir),
 		server.WithBaseContext(ctx),

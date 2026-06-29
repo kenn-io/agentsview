@@ -115,10 +115,10 @@ type vscodeCopilotWorkspace struct {
 	Workspace string `json:"workspace"`
 }
 
-// ParseVSCodeCopilotSession parses a VSCode Copilot chat
-// session file (.json or .jsonl). Returns (nil, nil, nil)
-// if the file is empty or contains no meaningful content.
-func ParseVSCodeCopilotSession(
+// parseSession parses a VSCode Copilot chat session file (.json or .jsonl).
+// Returns (nil, nil, nil) if the file is empty or contains no meaningful
+// content.
+func (p *vscodeCopilotProvider) parseSession(
 	path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
@@ -579,6 +579,11 @@ func extractInvocationText(raw json.RawMessage) string {
 	}
 	return ""
 }
+
+// readVSCodeWorkspaceManifest indirects ReadVSCodeWorkspaceManifest so the
+// VSCode-Copilot and Positron discovery paths can resolve the manifest once
+// per workspace dir and tests can observe how often it runs.
+var readVSCodeWorkspaceManifest = ReadVSCodeWorkspaceManifest
 
 // ReadVSCodeWorkspaceManifest reads the workspace.json file
 // in a workspaceStorage hash directory and extracts the

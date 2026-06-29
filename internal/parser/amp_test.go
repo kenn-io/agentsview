@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,10 +17,43 @@ func runAmpParserTest(
 ) (*ParsedSession, []ParsedMessage, error) {
 	t.Helper()
 	path := createTestFile(t, "T-test.json", content)
-	return ParseAmpSession(path, "local")
+	return parseAmpTestSession(t, path, "local")
 }
 
-func TestParseAmpSession_Basic(t *testing.T) {
+func parseAmpTestSession(
+	t *testing.T,
+	path string,
+	machine string,
+) (*ParsedSession, []ParsedMessage, error) {
+	t.Helper()
+
+	provider, ok := NewProvider(AgentAmp, ProviderConfig{
+		Roots:   []string{filepath.Dir(path)},
+		Machine: machine,
+	})
+	require.True(t, ok)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: SourceRef{
+			Provider:       AgentAmp,
+			Key:            path,
+			DisplayPath:    path,
+			FingerprintKey: path,
+			Opaque: JSONLSource{
+				Root: filepath.Dir(path),
+				Path: path,
+			},
+		},
+		Machine: machine,
+	})
+	if err != nil || len(outcome.Results) == 0 {
+		return nil, nil, err
+	}
+	result := outcome.Results[0].Result
+	return &result.Session, result.Messages, nil
+}
+
+func TestAmpProviderParsesBasic(t *testing.T) {
 	threadID := "T-019ca26f-aaaa-bbbb-cccc-dddddddddddd"
 	content := `{
 		"v": 1,
@@ -43,7 +78,7 @@ func TestParseAmpSession_Basic(t *testing.T) {
 	}`
 
 	path := createTestFile(t, threadID+".json", content)
-	sess, msgs, err := ParseAmpSession(path, "local")
+	sess, msgs, err := parseAmpTestSession(t, path, "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -72,7 +107,7 @@ func TestParseAmpSession_Basic(t *testing.T) {
 	assert.Equal(t, 1, msgs[1].Ordinal)
 }
 
-func TestParseAmpSession_ToolUseAndThinking(t *testing.T) {
+func TestAmpProviderParsesToolUseAndThinking(t *testing.T) {
 	content := `{
 		"v": 1,
 		"id": "T-tooluse",
@@ -322,7 +357,7 @@ func TestExtractAmpToolResults(t *testing.T) {
 	}
 }
 
-func TestParseAmpSession_AmpToolResultSchema(t *testing.T) {
+func TestAmpProviderParsesAmpToolResultSchema(t *testing.T) {
 	content := `{
 		"v": 1,
 		"id": "T-amp-tool-result-schema",
@@ -347,7 +382,7 @@ func TestParseAmpSession_AmpToolResultSchema(t *testing.T) {
 	assert.Equal(t, "Here is a complete breakdown", DecodeContent(msgs[1].ToolResults[0].ContentRaw))
 }
 
-func TestParseAmpSession_AmpToolResultDict(t *testing.T) {
+func TestAmpProviderParsesAmpToolResultDict(t *testing.T) {
 	content := `{
 		"v": 1,
 		"id": "T-amp-tool-result-dict",
@@ -370,7 +405,7 @@ func TestParseAmpSession_AmpToolResultDict(t *testing.T) {
 	assert.Equal(t, "cmd output", DecodeContent(msgs[1].ToolResults[0].ContentRaw))
 }
 
-func TestParseAmpSession_NoEnv(t *testing.T) {
+func TestAmpProviderParsesNoEnv(t *testing.T) {
 	content := `{
 		"v": 1,
 		"id": "T-noenv",
@@ -389,7 +424,7 @@ func TestParseAmpSession_NoEnv(t *testing.T) {
 	require.Equal(t, 1, len(msgs))
 }
 
-func TestParseAmpSession_NoTitle(t *testing.T) {
+func TestAmpProviderParsesNoTitle(t *testing.T) {
 	content := `{
 		"v": 1,
 		"id": "T-notitle",
@@ -408,7 +443,7 @@ func TestParseAmpSession_NoTitle(t *testing.T) {
 	assert.Equal(t, "Fix the bug in main.go please.", sess.FirstMessage)
 }
 
-func TestParseAmpSession_NoMetaTraces(t *testing.T) {
+func TestAmpProviderParsesNoMetaTraces(t *testing.T) {
 	content := `{
 		"v": 1,
 		"id": "T-notraces",
@@ -427,7 +462,7 @@ func TestParseAmpSession_NoMetaTraces(t *testing.T) {
 	assertZeroTimestamp(t, sess.EndedAt, "EndedAt")
 }
 
-func TestParseAmpSession_LastTraceWithoutEndTime(t *testing.T) {
+func TestAmpProviderParsesLastTraceWithoutEndTime(t *testing.T) {
 	content := `{
 		"v": 1,
 		"id": "T-trace-end-missing",
@@ -451,7 +486,7 @@ func TestParseAmpSession_LastTraceWithoutEndTime(t *testing.T) {
 	assert.Equal(t, "2024-01-01T00:00:02Z", sess.EndedAt.UTC().Format(time.RFC3339))
 }
 
-func TestParseAmpSession_EmptyThread(t *testing.T) {
+func TestAmpProviderParsesEmptyThread(t *testing.T) {
 	content := `{
 		"v": 1,
 		"id": "T-empty",
@@ -466,7 +501,7 @@ func TestParseAmpSession_EmptyThread(t *testing.T) {
 	assert.Nil(t, msgs)
 }
 
-func TestParseAmpSession_FirstMessageTruncation(t *testing.T) {
+func TestAmpProviderParsesFirstMessageTruncation(t *testing.T) {
 	longText := strings.Repeat("a", 400)
 	content := `{"v":1,"id":"T-trunc","created":1704067200000,"messages":[` +
 		`{"role":"user","content":[{"type":"text","text":"` + longText + `"}]}]}`
@@ -478,7 +513,7 @@ func TestParseAmpSession_FirstMessageTruncation(t *testing.T) {
 	assert.Equal(t, 303, len(sess.FirstMessage))
 }
 
-func TestParseAmpSession_InvalidCreated(t *testing.T) {
+func TestAmpProviderParsesInvalidCreated(t *testing.T) {
 	t.Run("missing created", func(t *testing.T) {
 		content := `{
 			"v": 1,
@@ -539,9 +574,9 @@ func TestParseAmpSession_InvalidCreated(t *testing.T) {
 	})
 }
 
-func TestParseAmpSession_Errors(t *testing.T) {
+func TestAmpProviderParsesErrors(t *testing.T) {
 	t.Run("missing file", func(t *testing.T) {
-		_, _, err := ParseAmpSession("/nonexistent/T-xxx.json", "local")
+		_, _, err := parseAmpTestSession(t, "/nonexistent/T-xxx.json", "local")
 		assert.Error(t, err)
 	})
 
@@ -563,13 +598,13 @@ func TestParseAmpSession_Errors(t *testing.T) {
 	t.Run("missing id and invalid filename", func(t *testing.T) {
 		content := `{"v":1,"created":1704067200000,"messages":[]}`
 		path := createTestFile(t, "bad-name.json", content)
-		_, _, err := ParseAmpSession(path, "local")
+		_, _, err := parseAmpTestSession(t, path, "local")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "missing or invalid id")
 	})
 }
 
-func TestParseAmpSession_MismatchedID(t *testing.T) {
+func TestAmpProviderParsesMismatchedID(t *testing.T) {
 	t.Run("invalid JSON id", func(t *testing.T) {
 		content := `{
 			"v": 1,
@@ -581,7 +616,7 @@ func TestParseAmpSession_MismatchedID(t *testing.T) {
 		}`
 
 		path := createTestFile(t, "T-fallback-uuid.json", content)
-		sess, _, err := ParseAmpSession(path, "local")
+		sess, _, err := parseAmpTestSession(t, path, "local")
 		require.NoError(t, err)
 		require.NotNil(t, sess)
 		assert.Equal(t, "amp:T-fallback-uuid", sess.ID)
@@ -600,7 +635,7 @@ func TestParseAmpSession_MismatchedID(t *testing.T) {
 		}`
 
 		path := createTestFile(t, "bad-name.json", content)
-		sess, _, err := ParseAmpSession(path, "local")
+		sess, _, err := parseAmpTestSession(t, path, "local")
 		require.NoError(t, err)
 		require.NotNil(t, sess)
 		assert.Equal(t, "amp:T-from-json", sess.ID)
@@ -620,7 +655,7 @@ func TestParseAmpSession_MismatchedID(t *testing.T) {
 		}`
 
 		path := createTestFile(t, "T-from-file.json", content)
-		sess, _, err := ParseAmpSession(path, "local")
+		sess, _, err := parseAmpTestSession(t, path, "local")
 		require.NoError(t, err)
 		require.NotNil(t, sess)
 		assert.Equal(t, "amp:T-from-file", sess.ID)

@@ -104,9 +104,11 @@ type DuckDBConfig struct {
 // AutomatedConfig holds user-supplied additions to the
 // automated-session classifier. Parse-only; all semantic
 // normalization (trim, dedupe, length cap, built-in overlap
-// drop) happens inside db.SetUserAutomationPrefixes.
+// drop) happens inside the db setters.
 type AutomatedConfig struct {
-	Prefixes []string `toml:"prefixes" json:"prefixes,omitempty"`
+	Prefixes     []string `toml:"prefixes" json:"prefixes,omitempty"`
+	Substrings   []string `toml:"substrings" json:"substrings,omitempty"`
+	ExactMatches []string `toml:"exact_matches" json:"exact_matches,omitempty"`
 }
 
 // AgentConfig holds per-agent runtime overrides.
@@ -711,6 +713,12 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if file.Automated.Prefixes != nil {
 		c.Automated.Prefixes = file.Automated.Prefixes
+	}
+	if file.Automated.Substrings != nil {
+		c.Automated.Substrings = file.Automated.Substrings
+	}
+	if file.Automated.ExactMatches != nil {
+		c.Automated.ExactMatches = file.Automated.ExactMatches
 	}
 	if len(file.Agent) > 0 {
 		if c.Agent == nil {

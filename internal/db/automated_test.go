@@ -2,10 +2,17 @@ package db
 
 import (
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
+
+func resetUserAutomationPatterns() {
+	SetUserAutomationPrefixes(nil)
+	SetUserAutomationSubstrings(nil)
+	SetUserAutomationExactMatches(nil)
+}
 
 func TestIsAutomatedSession(t *testing.T) {
 	tests := []struct {
@@ -310,6 +317,7 @@ func TestIsAutomatedSession(t *testing.T) {
 }
 
 func TestNormalizeUserPrefixes(t *testing.T) {
+	t.Cleanup(resetUserAutomationPatterns)
 	long := strings.Repeat("a", 1025)
 	tests := []struct {
 		name string
@@ -337,15 +345,15 @@ func TestNormalizeUserPrefixes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := normalizeUserPrefixes(tt.in)
+			got := normalizeUserAutomationPatterns(tt.in, automatedPrefixes)
 			assert.Equal(t, tt.want, got,
-				"normalizeUserPrefixes(%q)", tt.in)
+				"normalizeUserAutomationPatterns(%q)", tt.in)
 		})
 	}
 }
 
 func TestIsAutomatedSessionWithUserPrefixes(t *testing.T) {
-	t.Cleanup(func() { SetUserAutomationPrefixes(nil) })
+	t.Cleanup(resetUserAutomationPatterns)
 	SetUserAutomationPrefixes([]string{
 		"You are analyzing an essay",
 		"Grade these Benn Stancil quotes",
@@ -387,7 +395,7 @@ func TestIsAutomatedSessionWithUserPrefixes(t *testing.T) {
 }
 
 func TestUserAutomationPrefixesReturnsCopy(t *testing.T) {
-	t.Cleanup(func() { SetUserAutomationPrefixes(nil) })
+	t.Cleanup(resetUserAutomationPatterns)
 	SetUserAutomationPrefixes([]string{"alpha", "beta"})
 	got := UserAutomationPrefixes()
 	if len(got) > 0 {
@@ -399,4 +407,238 @@ func TestUserAutomationPrefixesReturnsCopy(t *testing.T) {
 		assert.Equal(t, "alpha", again[0],
 			"singleton mutated through returned slice")
 	}
+}
+
+func TestNormalizeUserSubstrings(t *testing.T) {
+	t.Cleanup(resetUserAutomationPatterns)
+	long := strings.Repeat("a", 1025)
+	tests := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{"Nil", nil, nil},
+		{"Empty", []string{}, nil},
+		{"AllWhitespace", []string{"   ", "\t\n"}, nil},
+		{"TrimsEachEntry", []string{"  hello  ", "world\n"}, []string{"hello", "world"}},
+		{"DropEmpty", []string{"hello", "", "  ", "world"}, []string{"hello", "world"}},
+		{"DropTooLong", []string{"hello", long}, []string{"hello"}},
+		{"DropDuplicate", []string{"a", "b", "a"}, []string{"a", "b"}},
+		{"DropDuplicateAfterTrim", []string{"a", " a "}, []string{"a"}},
+		{
+			"DropBuiltInOverlap",
+			[]string{"invoked by roborev to perform this review", "novel"},
+			[]string{"novel"},
+		},
+		{
+			"PreservesUserOrder",
+			[]string{"zeta", "alpha", "mu"},
+			[]string{"zeta", "alpha", "mu"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeUserAutomationPatterns(tt.in, automatedSubstrings)
+			assert.Equal(t, tt.want, got,
+				"normalizeUserAutomationPatterns(%q)", tt.in)
+		})
+	}
+}
+
+func TestNormalizeUserExactMatches(t *testing.T) {
+	t.Cleanup(resetUserAutomationPatterns)
+	long := strings.Repeat("a", 1025)
+	tests := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{"Nil", nil, nil},
+		{"Empty", []string{}, nil},
+		{"AllWhitespace", []string{"   ", "\t\n"}, nil},
+		{"TrimsEachEntry", []string{"  hello  ", "world\n"}, []string{"hello", "world"}},
+		{"DropEmpty", []string{"hello", "", "  ", "world"}, []string{"hello", "world"}},
+		{"DropTooLong", []string{"hello", long}, []string{"hello"}},
+		{"DropDuplicate", []string{"a", "b", "a"}, []string{"a", "b"}},
+		{"DropDuplicateAfterTrim", []string{"a", " a "}, []string{"a"}},
+		{
+			"DropBuiltInOverlap",
+			[]string{"Warmup", "novel"},
+			[]string{"novel"},
+		},
+		{
+			"PreservesUserOrder",
+			[]string{"zeta", "alpha", "mu"},
+			[]string{"zeta", "alpha", "mu"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeUserAutomationPatterns(tt.in, automatedExactMatches)
+			assert.Equal(t, tt.want, got,
+				"normalizeUserAutomationPatterns(%q)", tt.in)
+		})
+	}
+}
+
+func TestIsAutomatedSessionWithUserSubstrings(t *testing.T) {
+	t.Cleanup(resetUserAutomationPatterns)
+	SetUserAutomationSubstrings([]string{
+		"embedded marker",
+		"review the commit metadata",
+	})
+
+	tests := []struct {
+		name         string
+		firstMessage string
+		want         bool
+	}{
+		{
+			"UserSubstringMatchesInteriorText",
+			"Please note: this prompt has an embedded marker in the middle.",
+			true,
+		},
+		{
+			"UserSubstringMatchesLongerPrompt",
+			"Context here.\nPlease review the commit metadata and continue.",
+			true,
+		},
+		{
+			"UserSubstringDoesNotMatchUnrelated",
+			"How do I fix this bug?",
+			false,
+		},
+		{
+			"BuiltInSubstringStillMatches",
+			"IMPORTANT: You are being invoked by roborev to perform this review directly.",
+			true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsAutomatedSession(tt.firstMessage)
+			assert.Equal(t, tt.want, got,
+				"IsAutomatedSession(%q)", tt.firstMessage)
+		})
+	}
+}
+
+func TestIsAutomatedSessionWithUserExactMatches(t *testing.T) {
+	t.Cleanup(resetUserAutomationPatterns)
+	SetUserAutomationExactMatches([]string{
+		"Give a one-word answer: YES",
+		"Reply with a single token: NO",
+	})
+
+	tests := []struct {
+		name         string
+		firstMessage string
+		want         bool
+	}{
+		{
+			"ExactMatchWithWhitespaceTrimmed",
+			"\n Give a one-word answer: YES \t",
+			true,
+		},
+		{
+			"ExactMatchSecondLiteral",
+			"Reply with a single token: NO",
+			true,
+		},
+		{
+			"PartialMatchRejected",
+			"Give a one-word answer: YES and then explain why.",
+			false,
+		},
+		{
+			"BuiltInExactStillMatches",
+			"Warmup\n",
+			true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := IsAutomatedSession(tt.firstMessage)
+			assert.Equal(t, tt.want, got,
+				"IsAutomatedSession(%q)", tt.firstMessage)
+		})
+	}
+}
+
+func TestIsAutomatedTranscriptSingleTurnGate(t *testing.T) {
+	t.Cleanup(resetUserAutomationPatterns)
+	SetUserAutomationPrefixes([]string{"You are analyzing an essay"})
+
+	msg := "You are analyzing an essay about epistemology."
+	msgs := []Message{{Role: "user", Content: msg}}
+
+	assert.True(t, IsAutomatedTranscript(1, msgs, &msg))
+	assert.False(t, IsAutomatedTranscript(2, msgs, &msg))
+}
+
+func TestUserAutomationSubstringsReturnsCopy(t *testing.T) {
+	t.Cleanup(resetUserAutomationPatterns)
+	SetUserAutomationSubstrings([]string{"alpha", "beta"})
+	got := UserAutomationSubstrings()
+	if len(got) > 0 {
+		got[0] = "MUTATED"
+	}
+	again := UserAutomationSubstrings()
+	assert.NotEmpty(t, again, "singleton mutated through returned slice")
+	if len(again) > 0 {
+		assert.Equal(t, "alpha", again[0],
+			"singleton mutated through returned slice")
+	}
+}
+
+func TestUserAutomationExactMatchesReturnsCopy(t *testing.T) {
+	t.Cleanup(resetUserAutomationPatterns)
+	SetUserAutomationExactMatches([]string{"alpha", "beta"})
+	got := UserAutomationExactMatches()
+	if len(got) > 0 {
+		got[0] = "MUTATED"
+	}
+	again := UserAutomationExactMatches()
+	assert.NotEmpty(t, again, "singleton mutated through returned slice")
+	if len(again) > 0 {
+		assert.Equal(t, "alpha", again[0],
+			"singleton mutated through returned slice")
+	}
+}
+
+func TestUserAutomationGettersConcurrentWithSetters(t *testing.T) {
+	t.Cleanup(resetUserAutomationPatterns)
+
+	const workers = 32
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+
+	for i := range workers {
+		wg.Add(2)
+
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			if i%2 == 0 {
+				SetUserAutomationPrefixes([]string{"alpha", "beta"})
+				SetUserAutomationSubstrings([]string{"gamma"})
+				SetUserAutomationExactMatches([]string{"delta"})
+				return
+			}
+			SetUserAutomationPrefixes([]string{"epsilon"})
+			SetUserAutomationSubstrings([]string{"zeta", "eta"})
+			SetUserAutomationExactMatches([]string{"theta"})
+		}(i)
+
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = UserAutomationPrefixes()
+			_ = UserAutomationSubstrings()
+			_ = UserAutomationExactMatches()
+		}()
+	}
+
+	close(start)
+	wg.Wait()
 }

@@ -449,7 +449,11 @@ func TestBackfillIsAutomatedBumpsLocalModifiedAt(t *testing.T) {
 // the stored hash and re-runs the backfill on next open,
 // without any manual marker bump.
 func TestBackfillIsAutomatedRerunsOnHashChange(t *testing.T) {
-	t.Cleanup(func() { SetUserAutomationPrefixes(nil) })
+	t.Cleanup(func() {
+		SetUserAutomationPrefixes(nil)
+		SetUserAutomationSubstrings(nil)
+		SetUserAutomationExactMatches(nil)
+	})
 	d := testDB(t)
 
 	// Seed a session whose first_message would match a

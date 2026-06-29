@@ -37,6 +37,7 @@ type testEnv struct {
 	iflowDir          string
 	ampDir            string
 	piDir             string
+	ompDir            string
 	kiroDir           string
 	shelleyDir        string
 	antigravityCLIDir string
@@ -117,6 +118,7 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 		iflowDir:          t.TempDir(),
 		ampDir:            t.TempDir(),
 		piDir:             t.TempDir(),
+		ompDir:            t.TempDir(),
 		shelleyDir:        t.TempDir(),
 		antigravityCLIDir: t.TempDir(),
 		db:                dbtest.OpenTestDB(t),
@@ -184,6 +186,7 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 			parser.AgentIflow:          {env.iflowDir},
 			parser.AgentAmp:            {env.ampDir},
 			parser.AgentPi:             {env.piDir},
+			parser.AgentOMP:            {env.ompDir},
 			parser.AgentKiro:           kiroDirs,
 			parser.AgentShelley:        {env.shelleyDir},
 			parser.AgentAntigravityCLI: {env.antigravityCLIDir},
@@ -223,6 +226,28 @@ func TestSyncEngineKiroSQLiteCurrentStore(t *testing.T) {
 		TotalSessions: 1, Synced: 1, Skipped: 0,
 	})
 	assertSessionMessageCount(t, env.db, "kiro:sqlite-session", 2)
+}
+
+func TestSyncEngineKiroSQLiteUnchangedRowSkippedOnResync(t *testing.T) {
+	env := setupTestEnv(t)
+	ks := createKiroSQLiteDB(t, env.kiroDir)
+	ks.addSession(
+		t, "/home/user/code/kiro-app", "sqlite-session",
+		readKiroSQLiteFixture(t, "standard_payload.json"),
+		1779012000000, 1779012030000,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1, Skipped: 0,
+	})
+
+	// A second full sync with the Kiro DB unchanged must not rewrite the row
+	// (Synced stays 0). Kiro fans data.sqlite3 out to one session per row, so
+	// without Kiro in the unchanged-result filter the row is reparsed and
+	// rewritten on every sync (Synced would be 1).
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 0, Skipped: 0,
+	})
 }
 
 func TestSyncEngineKiroSQLiteWatchReplacesMessages(t *testing.T) {
@@ -313,8 +338,12 @@ func TestSyncEngineKiroSQLiteCurrentStoreShadowsLegacy(t *testing.T) {
 	})
 	assertSessionProject(t, env.db, "kiro:overlap-session", "current_kiro")
 
+	// Kiro is provider-authoritative: the current-store database is
+	// rediscovered and re-parsed on every full sync, but an unchanged row is
+	// dropped from the write batch (Synced stays 0) instead of being rewritten
+	// and recounted. The legacy file stays shadowed throughout.
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 0, Synced: 0, Skipped: 0,
+		TotalSessions: 1, Synced: 0, Skipped: 0,
 	})
 	sess, err := env.db.GetSessionFull(
 		context.Background(), "kiro:overlap-session",
@@ -389,8 +418,12 @@ func TestSyncEngineKiroSQLiteMalformedUpdatePreservesArchive(t *testing.T) {
 		readKiroSQLiteFixture(t, "malformed_payload.txt"),
 		1779012040000,
 	)
+	// Kiro is provider-authoritative: the database is rediscovered and
+	// re-parsed (TotalSessions counts the source), but the malformed payload
+	// yields no parseable session, so nothing is written and the previously
+	// archived session is preserved.
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 0, Synced: 0, Skipped: 0,
+		TotalSessions: 1, Synced: 0, Skipped: 0,
 	})
 	assertSessionMessageCount(t, env.db, "kiro:sqlite-session", 4)
 }
@@ -1244,6 +1277,85 @@ func TestResyncAllEmitsFTSRebuildHint(t *testing.T) {
 	assert.True(t, fts.Resync, "FTS progress should identify full resync")
 	assert.Contains(t, fts.Detail, "Rebuilding search index")
 	assert.Contains(t, fts.Hint, "may take a while")
+}
+
+// TestResyncAllReportsDiscoveryBeforeSyncing verifies the resync emits a
+// distinct discovery phase before the first syncing event. Without it, the
+// silent discovery walk is mislabeled: the progress printer credits its
+// wall-clock time to the preceding "Disabling temporary search index updates"
+// phase, which actually completes instantly.
+func TestResyncAllReportsDiscoveryBeforeSyncing(t *testing.T) {
+	env := setupTestEnv(t)
+
+	msg := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "findable prompt").
+		AddClaudeAssistant(tsZeroS5, "findable response").
+		String()
+	env.writeClaudeSession(t, "test-proj", "a.jsonl", msg)
+
+	var events []sync.Progress
+	stats := env.engine.ResyncAll(context.Background(), func(p sync.Progress) {
+		events = append(events, p)
+	})
+	require.False(t, stats.Aborted, "resync aborted: %+v", stats.Warnings)
+
+	discoveryIdx, syncingIdx := -1, -1
+	for i, event := range events {
+		if event.Phase == sync.PhaseDiscovering && discoveryIdx == -1 {
+			discoveryIdx = i
+		}
+		if event.Phase == sync.PhaseSyncing && syncingIdx == -1 {
+			syncingIdx = i
+		}
+	}
+	require.NotEqual(t, -1, discoveryIdx,
+		"missing discovery progress event; events=%+v", events)
+	require.NotEqual(t, -1, syncingIdx,
+		"missing syncing progress event; events=%+v", events)
+	assert.Less(t, discoveryIdx, syncingIdx,
+		"discovery must be reported before syncing")
+	assert.True(t, events[discoveryIdx].Resync,
+		"discovery progress should identify full resync")
+	assert.Contains(t, events[discoveryIdx].Detail, "Discovering sessions")
+}
+
+// TestSyncAllReportsDiscoveryBeforeSyncing verifies an incremental SyncAll
+// emits a discovery phase before its first syncing event. syncAllLocked walks
+// every source before emitting any syncing progress, so without this marker a
+// daemon-driven `agentsview sync` shows no terminal feedback for the entire
+// (sometimes multi-minute) discovery walk.
+func TestSyncAllReportsDiscoveryBeforeSyncing(t *testing.T) {
+	env := setupTestEnv(t)
+
+	msg := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "findable prompt").
+		AddClaudeAssistant(tsZeroS5, "findable response").
+		String()
+	env.writeClaudeSession(t, "test-proj", "a.jsonl", msg)
+
+	var events []sync.Progress
+	env.engine.SyncAll(context.Background(), func(p sync.Progress) {
+		events = append(events, p)
+	})
+
+	discoveryIdx, syncingIdx := -1, -1
+	for i, event := range events {
+		if event.Phase == sync.PhaseDiscovering && discoveryIdx == -1 {
+			discoveryIdx = i
+		}
+		if event.Phase == sync.PhaseSyncing && syncingIdx == -1 {
+			syncingIdx = i
+		}
+	}
+	require.NotEqual(t, -1, discoveryIdx,
+		"missing discovery progress event; events=%+v", events)
+	require.NotEqual(t, -1, syncingIdx,
+		"missing syncing progress event; events=%+v", events)
+	assert.Less(t, discoveryIdx, syncingIdx,
+		"discovery must be reported before syncing")
+	assert.False(t, events[discoveryIdx].Resync,
+		"incremental sync discovery should not be flagged as a full resync")
+	assert.Contains(t, events[discoveryIdx].Detail, "Discovering sessions")
 }
 
 func TestSyncEngineProgressDoneCatchesResyncDBBackedWork(t *testing.T) {
@@ -2125,6 +2237,150 @@ func TestSyncPathsGeminiJSONL(t *testing.T) {
 	assertSessionMessageCount(t, env.db, "gemini:"+sessionID, 2)
 }
 
+func TestSyncPathsGeminiProjectMetadataEventRefreshesProject(t *testing.T) {
+	env := setupTestEnv(t)
+
+	sessionID := "gem-project-refresh"
+	projectsPath := filepath.Join(env.geminiDir, "projects.json")
+	writeProject := func(name string) {
+		t.Helper()
+		require.NoError(t, os.WriteFile(
+			projectsPath,
+			fmt.Appendf(nil,
+				`{"projects":{"/Users/alice/code/%s":"alias"}}`,
+				name,
+			),
+			0o644,
+		), "write projects")
+	}
+	writeProject("one")
+	path := env.writeGeminiSession(
+		t,
+		filepath.Join(
+			"tmp", "alias", "chats",
+			"session-001.json",
+		),
+		testjsonl.GeminiSessionJSON(
+			sessionID, "alias", tsEarly, tsEarlyS5,
+			[]map[string]any{
+				testjsonl.GeminiUserMsg(
+					"m1", tsEarly, "Hello Gemini",
+				),
+				testjsonl.GeminiAssistantMsg(
+					"m2", tsEarlyS5, "Hi there!", nil,
+				),
+			},
+		),
+	)
+
+	env.engine.SyncPaths([]string{path})
+	assertSessionState(
+		t, env.db, "gemini:"+sessionID,
+		func(sess *db.Session) {
+			assert.Equal(t, "one", sess.Project)
+		},
+	)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err, "stat gemini session")
+	env.engine.InjectSkipCache(map[string]int64{
+		path: info.ModTime().UnixNano(),
+	})
+
+	writeProject("two")
+	env.engine.SyncPaths([]string{projectsPath})
+
+	assertSessionState(
+		t, env.db, "gemini:"+sessionID,
+		func(sess *db.Session) {
+			assert.Equal(t, "two", sess.Project)
+		},
+	)
+
+	writeProject("three")
+	env.engine.SyncPaths([]string{path, projectsPath})
+
+	assertSessionState(
+		t, env.db, "gemini:"+sessionID,
+		func(sess *db.Session) {
+			assert.Equal(t, "three", sess.Project)
+		},
+	)
+
+	writeProject("four")
+	env.engine.SyncPaths([]string{projectsPath, path})
+
+	assertSessionState(
+		t, env.db, "gemini:"+sessionID,
+		func(sess *db.Session) {
+			assert.Equal(t, "four", sess.Project)
+		},
+	)
+
+	require.NoError(t, os.Remove(projectsPath), "remove projects")
+	env.engine.SyncPaths([]string{projectsPath})
+
+	assertSessionState(
+		t, env.db, "gemini:"+sessionID,
+		func(sess *db.Session) {
+			assert.Equal(t, "alias", sess.Project)
+		},
+	)
+}
+
+// TestSyncAllGeminiProjectMetadataChangeReparsesProject guards that a scheduled
+// SyncAll is not fooled by the pre-fingerprint fast skip when only Gemini's
+// projects.json changed. The session transcript's own size and mtime are left
+// untouched, so the removed AgentGemini fast skip (which compared just the
+// session stat) would have kept the stale project; the composite fingerprint,
+// which folds in projects.json, must drive a reparse on the periodic full sync.
+func TestSyncAllGeminiProjectMetadataChangeReparsesProject(t *testing.T) {
+	env := setupTestEnv(t)
+
+	sessionID := "gem-syncall-refresh"
+	projectsPath := filepath.Join(env.geminiDir, "projects.json")
+	writeProject := func(name string) {
+		t.Helper()
+		require.NoError(t, os.WriteFile(
+			projectsPath,
+			fmt.Appendf(nil,
+				`{"projects":{"/Users/alice/code/%s":"alias"}}`,
+				name,
+			),
+			0o644,
+		), "write projects")
+	}
+	writeProject("one")
+	env.writeGeminiSession(
+		t,
+		filepath.Join("tmp", "alias", "chats", "session-001.json"),
+		testjsonl.GeminiSessionJSON(
+			sessionID, "alias", tsEarly, tsEarlyS5,
+			[]map[string]any{
+				testjsonl.GeminiUserMsg("m1", tsEarly, "Hello Gemini"),
+				testjsonl.GeminiAssistantMsg("m2", tsEarlyS5, "Hi there!", nil),
+			},
+		),
+	)
+
+	env.engine.SyncAll(context.Background(), nil)
+	assertSessionState(t, env.db, "gemini:"+sessionID, func(sess *db.Session) {
+		assert.Equal(t, "one", sess.Project)
+	})
+
+	// Change only the project metadata, then advance its mtime so the composite
+	// fingerprint moves forward. The session transcript is left untouched, so a
+	// fast skip keyed on the transcript stat alone would keep the stale "one".
+	writeProject("two")
+	later := time.Now().Add(48 * time.Hour)
+	require.NoError(t, os.Chtimes(projectsPath, later, later), "bump projects mtime")
+	env.engine.SyncAll(context.Background(), nil)
+
+	assertSessionState(t, env.db, "gemini:"+sessionID, func(sess *db.Session) {
+		assert.Equal(t, "two", sess.Project)
+	})
+}
+
 func TestSyncPathsCodexAcceptsFlatArchived(t *testing.T) {
 	env := setupTestEnv(t)
 
@@ -2657,6 +2913,104 @@ func TestSyncPathsCodexIndexEventRefreshesStoredDuplicate(t *testing.T) {
 	if assert.NotNil(t, sess.SessionName, "expected renamed session_name") {
 		assert.Equal(t, "Renamed title", *sess.SessionName)
 	}
+	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
+}
+
+func TestSyncPathsCodexArchivedDuplicateEventPinsChangedFile(t *testing.T) {
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	archivedDir := filepath.Join(root, "archived_sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	require.NoError(t, os.MkdirAll(archivedDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir, archivedDir}))
+
+	uuid := "f7a8b9ca-7890-1234-ef01-456789012346"
+	staleLiveContent := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "Stale live copy").
+		String()
+	archivedContent := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "Archived copy").
+		String()
+	updatedArchivedContent := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "Archived copy").
+		AddCodexMessage(tsEarlyS5, "assistant", "Updated archived reply").
+		String()
+
+	livePath := env.writeCodexSession(
+		t,
+		filepath.Join("2026", "05", "04"),
+		"rollout-2026-05-04T02-10-04-"+uuid+".jsonl",
+		staleLiveContent,
+	)
+	archivedPath := env.writeSession(
+		t, archivedDir,
+		"rollout-2026-05-04T14-31-58-"+uuid+".jsonl",
+		archivedContent,
+	)
+	initialTime := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(livePath, initialTime, initialTime), "chtimes live")
+	require.NoError(t, os.Chtimes(archivedPath, initialTime, initialTime), "chtimes archived")
+
+	env.engine.SyncAll(context.Background(), nil)
+	assert.Equal(t, livePath, env.db.GetSessionFilePath("codex:"+uuid))
+
+	newTime := time.Now().Add(-30 * time.Minute)
+	require.NoError(t, os.WriteFile(archivedPath, []byte(updatedArchivedContent), 0o644))
+	require.NoError(t, os.Chtimes(archivedPath, newTime, newTime), "chtimes archived update")
+
+	env.engine.SyncPaths([]string{archivedPath})
+
+	assert.Equal(t, archivedPath, env.db.GetSessionFilePath("codex:"+uuid),
+		"archived transcript event must parse the changed file, not the stale live duplicate")
+	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
+}
+
+func TestSyncSingleSessionCodexPreservesStoredArchivedDuplicate(t *testing.T) {
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	archivedDir := filepath.Join(root, "archived_sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	require.NoError(t, os.MkdirAll(archivedDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir, archivedDir}))
+
+	uuid := "f7a8b9ca-7890-1234-ef01-456789012347"
+	archivedContent := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "Archived copy").
+		AddCodexMessage(tsEarlyS5, "assistant", "Archived reply").
+		String()
+	staleLiveContent := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/home/user/code/api", "user").
+		AddCodexMessage(tsEarlyS1, "user", "Stale live copy").
+		String()
+
+	archivedPath := env.writeSession(
+		t, archivedDir,
+		"rollout-2026-05-04T14-31-58-"+uuid+".jsonl",
+		archivedContent,
+	)
+	initialTime := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(archivedPath, initialTime, initialTime), "chtimes archived")
+
+	env.engine.SyncAll(context.Background(), nil)
+	require.Equal(t, archivedPath, env.db.GetSessionFilePath("codex:"+uuid),
+		"DB must track the archived copy before a stale live duplicate appears")
+
+	livePath := env.writeCodexSession(
+		t,
+		filepath.Join("2026", "05", "04"),
+		"rollout-2026-05-04T02-10-04-"+uuid+".jsonl",
+		staleLiveContent,
+	)
+	require.NoError(t, os.Chtimes(livePath, initialTime, initialTime), "chtimes live")
+
+	require.NoError(t, env.engine.SyncSingleSession("codex:"+uuid))
+
+	assert.Equal(t, archivedPath, env.db.GetSessionFilePath("codex:"+uuid),
+		"single-session resync must preserve the stored archived source")
 	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
 }
 
@@ -3848,10 +4202,24 @@ func TestSyncPathsOpenCodeStorageChildUpdateAdvancesSessionMtime(
 		time.Unix(0, sessionMtime),
 	)
 	require.NoError(t, err, "restore session mtime")
-	_, parsedMsgs, parseErr := parser.ParseOpenCodeFile(
-		sessionPath, "local",
+	ocProvider, ok := parser.NewProvider(parser.AgentOpenCode, parser.ProviderConfig{
+		Roots:   []string{env.opencodeDir},
+		Machine: "local",
+	})
+	require.True(t, ok, "opencode provider available")
+	ocSource, found, parseErr := ocProvider.FindSource(
+		context.Background(),
+		parser.FindSourceRequest{FullSessionID: "opencode:oc-storage-mtime"},
 	)
-	require.NoError(t, parseErr, "ParseOpenCodeFile after rewrite")
+	require.NoError(t, parseErr, "find opencode source after rewrite")
+	require.True(t, found, "opencode source found after rewrite")
+	ocOutcome, parseErr := ocProvider.Parse(context.Background(), parser.ParseRequest{
+		Source:  ocSource,
+		Machine: "local",
+	})
+	require.NoError(t, parseErr, "parse opencode source after rewrite")
+	require.Len(t, ocOutcome.Results, 1, "parsed results after rewrite")
+	parsedMsgs := ocOutcome.Results[0].Result.Messages
 	require.Len(t, parsedMsgs, 1, "parsed messages after rewrite = %#v, want updated reply", parsedMsgs)
 	require.Equal(t, "updated reply", parsedMsgs[0].Content,
 		"parsed messages after rewrite = %#v, want updated reply", parsedMsgs)
@@ -4118,8 +4486,8 @@ func TestOpenCodeHybridRootSyncsSQLiteSessions(t *testing.T) {
 // multi-root shadowing case: an early hybrid root with an
 // opencode.db that lacks the requested session must not shadow a
 // later pure-storage root that contains it. Without the
-// session-existence gate in FindOpenCodeSourceFile, the engine
-// would return a virtual SQLite path pointing at the wrong DB.
+// session-existence gate in the OpenCode-format source lookup, the
+// engine would return a virtual SQLite path pointing at the wrong DB.
 func TestFindSourceFileSkipsHybridRootMissingSession(t *testing.T) {
 	hybridRoot := t.TempDir()
 	storageRoot := t.TempDir()
@@ -4538,6 +4906,8 @@ func TestSyncAllSinceOpenCodeStoragePicksUpUsagePartUpdate(t *testing.T) {
 	require.NoError(t, os.Chtimes(usagePartPath, future, future), "chtimes usage part")
 	require.NoError(t, os.Chtimes(sessionPath, sessionMtime, sessionMtime), "restore session mtime")
 
+	// Composite freshness includes the part file, so the part-only edit is
+	// fresh relative to the cutoff and re-syncs the updated reply.
 	stats := env.engine.SyncAllSince(context.Background(), cutoff, nil)
 	require.Equal(t, 1, stats.Synced, "SyncAllSince synced = %d, want 1", stats.Synced)
 
@@ -4555,7 +4925,12 @@ func TestSyncAllSinceOpenCodeStoragePicksUpUsagePartUpdate(t *testing.T) {
 	assert.Equal(t, []string{"Gemini 3.5 Flash (High)"}, daily.Daily[0].ModelsUsed)
 }
 
-func TestSyncAllOpenCodeStorageSkipsUnchangedSessions(t *testing.T) {
+// TestSyncAllOpenCodeStorageReparsesUnchangedSessionsIdempotently covers a
+// re-sync of an unchanged OpenCode storage session. OpenCode is
+// provider-authoritative, so a full SyncAll re-parses the source through
+// the provider facade rather than taking the legacy DB-mtime skip; the
+// re-parse must be idempotent and keep the same content.
+func TestSyncAllOpenCodeStorageReparsesUnchangedSessionsIdempotently(t *testing.T) {
 	env := setupTestEnv(t)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
@@ -4580,8 +4955,11 @@ func TestSyncAllOpenCodeStorageSkipsUnchangedSessions(t *testing.T) {
 	})
 
 	stats := env.engine.SyncAll(context.Background(), nil)
-	require.Equal(t, 1, stats.Skipped, "SyncAll stats = %+v, want 1 skipped and 0 synced", stats)
-	require.Equal(t, 0, stats.Synced, "SyncAll stats = %+v, want 1 skipped and 0 synced", stats)
+	require.Equal(t, 1, stats.TotalSessions, "SyncAll stats = %+v", stats)
+	require.Equal(t, 0, stats.Failed, "SyncAll stats = %+v", stats)
+	assertMessageContent(
+		t, env.db, "opencode:oc-skip-unchanged", "stable reply",
+	)
 }
 
 func TestSyncAllOpenCodeStorageMissingMessagePreservesArchive(t *testing.T) {
@@ -5676,18 +6054,15 @@ func TestResyncAllReplacesMessageContent(t *testing.T) {
 	})
 	require.NoError(t, err, "update message content")
 
-	// Normal SyncAll should skip (file unchanged on disk).
-	stats := env.engine.SyncAll(context.Background(), nil)
-	require.Equal(t, 1, stats.Skipped, "expected 1 skip, got %d", stats.Skipped)
-	msgs = fetchMessages(t, env.db, fullID)
-	require.True(t, strings.Contains(msgs[1].Content, "stale content"), "SyncAll should not have replaced content")
-
 	// Capture FTS state before resync so a regression that
 	// breaks FTS isn't masked by HasFTS() returning false
 	// post-resync.
 	hadFTS := env.db.HasFTS()
 
-	// ResyncAll should re-parse and replace message content.
+	// ResyncAll should re-parse and replace message content. Gemini is
+	// provider-authoritative, so it has no DB-backed mtime skip; a plain
+	// SyncAll would also re-parse the unchanged file. ResyncAll additionally
+	// drops and rebuilds the FTS index, which is what this test guards.
 	env.engine.ResyncAll(context.Background(), nil)
 	msgs = fetchMessages(t, env.db, fullID)
 	require.Equal(t, 2, len(msgs), "got %d messages after resync, want 2", len(msgs))
@@ -6904,6 +7279,402 @@ func TestSyncPathsVSCodeCopilotJSONLPriority(t *testing.T) {
 	assert.Equal(t, 0, len(page.Sessions), "expected 0 sessions (.json skipped), got %d", len(page.Sessions))
 }
 
+func TestSyncPathsVSCodeCopilotWorkspaceMetadataRefreshesProject(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	dir := t.TempDir()
+	vscDir := filepath.Join(dir, "vscode")
+	hashDir := filepath.Join(vscDir, "workspaceStorage", "abc123")
+	chatDir := filepath.Join(hashDir, "chatSessions")
+	workspacePath := filepath.Join(hashDir, "workspace.json")
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentVSCodeCopilot: {vscDir},
+		},
+		Machine: "local",
+	})
+
+	writeWorkspace := func(name string) {
+		t.Helper()
+		dbtest.WriteTestFile(t, workspacePath, fmt.Appendf(nil,
+			`{"folder":"file:///Users/alice/code/%s"}`,
+			name,
+		))
+	}
+
+	uuid := "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+	session := fmt.Sprintf(
+		`{"version":1,"sessionId":"%s",`+
+			`"creationDate":1704103200000,`+
+			`"lastMessageDate":1704103260000,`+
+			`"requests":[{"requestId":"r1",`+
+			`"message":{"text":"hello"},`+
+			`"response":[{"value":"hi"}],`+
+			`"timestamp":1704103200000}]}`,
+		uuid,
+	)
+	jsonlPath := filepath.Join(chatDir, uuid+".jsonl")
+
+	writeWorkspace("one")
+	dbtest.WriteTestFile(
+		t, jsonlPath,
+		[]byte(`{"kind":0,"v":`+session+`}`),
+	)
+
+	engine.SyncPaths([]string{jsonlPath})
+	assertSessionState(
+		t, database, "vscode-copilot:"+uuid,
+		func(sess *db.Session) {
+			assert.Equal(t, "one", sess.Project)
+		},
+	)
+
+	info, err := os.Stat(jsonlPath)
+	require.NoError(t, err, "stat vscode copilot session")
+	engine.InjectSkipCache(map[string]int64{
+		jsonlPath: info.ModTime().UnixNano(),
+	})
+
+	writeWorkspace("two")
+	engine.SyncPaths([]string{workspacePath})
+	assertSessionState(
+		t, database, "vscode-copilot:"+uuid,
+		func(sess *db.Session) {
+			assert.Equal(t, "two", sess.Project)
+		},
+	)
+
+	writeWorkspace("three")
+	engine.SyncPaths([]string{jsonlPath, workspacePath})
+	assertSessionState(
+		t, database, "vscode-copilot:"+uuid,
+		func(sess *db.Session) {
+			assert.Equal(t, "three", sess.Project)
+		},
+	)
+}
+
+func TestSyncPathsVSCodeCopilotPersistsUsageEvents(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	dir := t.TempDir()
+	vscDir := filepath.Join(dir, "vscode")
+	chatDir := filepath.Join(
+		vscDir, "workspaceStorage", "abc123",
+		"chatSessions",
+	)
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentVSCodeCopilot: {vscDir},
+		},
+		Machine: "local",
+	})
+
+	uuid := "cccccccc-dddd-eeee-ffff-000000000000"
+	session := fmt.Sprintf(
+		`{"version":3,"sessionId":"%s",`+
+			`"creationDate":1704103200000,`+
+			`"lastMessageDate":1704103260000,`+
+			`"requests":[{"requestId":"r1",`+
+			`"message":{"text":"hello"},`+
+			`"response":[{"value":"hi"}],`+
+			`"timestamp":1704103200000,`+
+			`"modelId":"copilot/claude-opus-4.8",`+
+			`"result":{"metadata":{`+
+			`"promptTokens":12,`+
+			`"outputTokens":3,`+
+			`"resolvedModel":"claude-opus-4-8"}}}]}`,
+		uuid,
+	)
+	jsonPath := filepath.Join(chatDir, uuid+".json")
+	dbtest.WriteTestFile(t, jsonPath, []byte(session))
+
+	engine.SyncPaths([]string{jsonPath})
+
+	ctx := context.Background()
+	sessionID := "vscode-copilot:" + uuid
+	events, err := database.GetUsageEvents(ctx, sessionID)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, "vscode-copilot", events[0].Source)
+	assert.Equal(t, "claude-opus-4-8", events[0].Model)
+	assert.Equal(t, 12, events[0].InputTokens)
+	assert.Equal(t, 3, events[0].OutputTokens)
+
+	require.NoError(t, engine.SyncSingleSession(sessionID))
+	events, err = database.GetUsageEvents(ctx, sessionID)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, "claude-opus-4-8", events[0].Model)
+}
+
+func TestSyncPathsPositronJSONLPriority(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	dir := t.TempDir()
+	positronDir := filepath.Join(dir, "positron")
+	chatDir := filepath.Join(
+		positronDir, "workspaceStorage", "abc123",
+		"chatSessions",
+	)
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentPositron: {positronDir},
+		},
+		Machine: "local",
+	})
+
+	uuid := "cccccccc-dddd-eeee-ffff-aaaaaaaaaaaa"
+	session := fmt.Sprintf(
+		`{"version":1,"sessionId":"%s",`+
+			`"creationDate":1704103200000,`+
+			`"lastMessageDate":1704103260000,`+
+			`"requests":[{"requestId":"r1",`+
+			`"message":{"text":"hello"},`+
+			`"response":[{"value":"hi"}],`+
+			`"timestamp":1704103200000}]}`,
+		uuid,
+	)
+
+	jsonPath := filepath.Join(chatDir, uuid+".json")
+	jsonlPath := filepath.Join(chatDir, uuid+".jsonl")
+	dbtest.WriteTestFile(t, jsonPath, []byte(session))
+	dbtest.WriteTestFile(
+		t, jsonlPath,
+		[]byte(`{"kind":0,"v":`+session+`}`),
+	)
+
+	engine.SyncPaths([]string{jsonPath})
+
+	page, err := database.ListSessions(
+		context.Background(), db.SessionFilter{Limit: 10},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 0, len(page.Sessions), "expected 0 sessions (.json skipped), got %d", len(page.Sessions))
+}
+
+func TestSyncAllPositronJSONLPriority(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	dir := t.TempDir()
+	positronDir := filepath.Join(dir, "positron")
+	hashDir := filepath.Join(positronDir, "workspaceStorage", "abc123")
+	chatDir := filepath.Join(hashDir, "chatSessions")
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentPositron: {positronDir},
+		},
+		Machine: "local",
+	})
+
+	uuid := "cccccccc-dddd-eeee-ffff-bbbbbbbbbbbb"
+	jsonSession := fmt.Sprintf(
+		`{"version":1,"sessionId":"%s",`+
+			`"creationDate":1704103200000,`+
+			`"lastMessageDate":1704103260000,`+
+			`"requests":[{"requestId":"r1",`+
+			`"message":{"text":"json fallback"},`+
+			`"response":[{"value":"json response"}],`+
+			`"timestamp":1704103200000}]}`,
+		uuid,
+	)
+	jsonlSession := fmt.Sprintf(
+		`{"version":1,"sessionId":"%s",`+
+			`"creationDate":1704103200000,`+
+			`"lastMessageDate":1704103260000,`+
+			`"requests":[{"requestId":"r1",`+
+			`"message":{"text":"jsonl preferred"},`+
+			`"response":[{"value":"jsonl response"}],`+
+			`"timestamp":1704103200000}]}`,
+		uuid,
+	)
+
+	jsonPath := filepath.Join(chatDir, uuid+".json")
+	jsonlPath := filepath.Join(chatDir, uuid+".jsonl")
+	dbtest.WriteTestFile(t, jsonPath, []byte(jsonSession))
+	dbtest.WriteTestFile(
+		t, jsonlPath,
+		[]byte(`{"kind":0,"v":`+jsonlSession+`}`),
+	)
+
+	stats := engine.SyncAll(context.Background(), nil)
+	assert.Equal(t, 1, stats.Synced, "synced = %d, want 1", stats.Synced)
+
+	sess, err := database.GetSession(context.Background(), "positron:"+uuid)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assertSessionMessageCount(t, database, "positron:"+uuid, 2)
+	msgs := fetchMessages(t, database, "positron:"+uuid)
+	require.NotEmpty(t, msgs)
+	assert.Equal(t, "jsonl preferred", msgs[0].Content)
+}
+
+func TestSyncPathsPositronWorkspaceMetadataRefreshesProject(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	dir := t.TempDir()
+	positronDir := filepath.Join(dir, "positron")
+	hashDir := filepath.Join(positronDir, "workspaceStorage", "abc123")
+	chatDir := filepath.Join(hashDir, "chatSessions")
+	workspacePath := filepath.Join(hashDir, "workspace.json")
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentPositron: {positronDir},
+		},
+		Machine: "local",
+	})
+
+	writeWorkspace := func(name string) {
+		t.Helper()
+		dbtest.WriteTestFile(t, workspacePath, fmt.Appendf(nil,
+			`{"folder":"file:///Users/alice/code/%s"}`,
+			name,
+		))
+	}
+
+	uuid := "dddddddd-eeee-ffff-aaaa-bbbbbbbbbbbb"
+	session := fmt.Sprintf(
+		`{"version":1,"sessionId":"%s",`+
+			`"creationDate":1704103200000,`+
+			`"lastMessageDate":1704103260000,`+
+			`"requests":[{"requestId":"r1",`+
+			`"message":{"text":"hello"},`+
+			`"response":[{"value":"hi"}],`+
+			`"timestamp":1704103200000}]}`,
+		uuid,
+	)
+	jsonlPath := filepath.Join(chatDir, uuid+".jsonl")
+
+	writeWorkspace("one")
+	dbtest.WriteTestFile(
+		t, jsonlPath,
+		[]byte(`{"kind":0,"v":`+session+`}`),
+	)
+
+	engine.SyncPaths([]string{jsonlPath})
+	assertSessionState(
+		t, database, "positron:"+uuid,
+		func(sess *db.Session) {
+			assert.Equal(t, "one", sess.Project)
+		},
+	)
+
+	info, err := os.Stat(jsonlPath)
+	require.NoError(t, err, "stat positron session")
+	engine.InjectSkipCache(map[string]int64{
+		jsonlPath: info.ModTime().UnixNano(),
+	})
+
+	writeWorkspace("two")
+	engine.SyncPaths([]string{workspacePath})
+	assertSessionState(
+		t, database, "positron:"+uuid,
+		func(sess *db.Session) {
+			assert.Equal(t, "two", sess.Project)
+		},
+	)
+
+	writeWorkspace("three")
+	engine.SyncPaths([]string{jsonlPath, workspacePath})
+	assertSessionState(
+		t, database, "positron:"+uuid,
+		func(sess *db.Session) {
+			assert.Equal(t, "three", sess.Project)
+		},
+	)
+}
+
+func TestSyncAllSincePositronWorkspaceMetadataRefreshesProject(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	dir := t.TempDir()
+	positronDir := filepath.Join(dir, "positron")
+	hashDir := filepath.Join(positronDir, "workspaceStorage", "abc123")
+	chatDir := filepath.Join(hashDir, "chatSessions")
+	workspacePath := filepath.Join(hashDir, "workspace.json")
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentPositron: {positronDir},
+		},
+		Machine: "local",
+	})
+
+	writeWorkspace := func(name string) {
+		t.Helper()
+		dbtest.WriteTestFile(t, workspacePath, fmt.Appendf(nil,
+			`{"folder":"file:///Users/alice/code/%s"}`,
+			name,
+		))
+	}
+
+	uuid := "dddddddd-eeee-ffff-aaaa-cccccccccccc"
+	session := fmt.Sprintf(
+		`{"version":1,"sessionId":"%s",`+
+			`"creationDate":1704103200000,`+
+			`"lastMessageDate":1704103260000,`+
+			`"requests":[{"requestId":"r1",`+
+			`"message":{"text":"hello"},`+
+			`"response":[{"value":"hi"}],`+
+			`"timestamp":1704103200000}]}`,
+		uuid,
+	)
+	jsonlPath := filepath.Join(chatDir, uuid+".jsonl")
+
+	writeWorkspace("one")
+	dbtest.WriteTestFile(
+		t, jsonlPath,
+		[]byte(`{"kind":0,"v":`+session+`}`),
+	)
+
+	engine.SyncAll(context.Background(), nil)
+	assertSessionState(
+		t, database, "positron:"+uuid,
+		func(sess *db.Session) {
+			assert.Equal(t, "one", sess.Project)
+		},
+	)
+
+	oldTime := time.Now().Add(-48 * time.Hour)
+	require.NoError(t, os.Chtimes(jsonlPath, oldTime, oldTime), "chtimes session")
+	require.NoError(t, os.Chtimes(workspacePath, oldTime, oldTime), "chtimes workspace")
+	cutoff := time.Now().Add(-1 * time.Hour)
+
+	writeWorkspace("two")
+	stats := engine.SyncAllSince(context.Background(), cutoff, nil)
+	assert.Equal(t, 1, stats.Synced, "synced = %d, want 1", stats.Synced)
+
+	assertSessionState(
+		t, database, "positron:"+uuid,
+		func(sess *db.Session) {
+			assert.Equal(t, "two", sess.Project)
+		},
+	)
+}
+
 func TestPiSessionIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -6961,6 +7732,42 @@ func TestPiSessionIntegration(t *testing.T) {
 			assert.Equal(t, "pi", sess.Agent, "after SyncSingleSession: agent = %q, want %q", sess.Agent, "pi")
 		},
 	)
+}
+
+func TestOMPSyncAllAndChangedPathUseProvider(t *testing.T) {
+	env := setupTestEnv(t)
+	path := env.writeSession(
+		t,
+		env.ompDir,
+		filepath.Join("encoded-cwd", "omp-sync.jsonl"),
+		piLikeProviderFixture("omp-sync", "/Users/alice/code/omp-app"),
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+	assertSessionState(t, env.db, "omp:omp-sync", func(sess *db.Session) {
+		assert.Equal(t, "omp", sess.Agent)
+		assert.Equal(t, "omp_app", sess.Project)
+	})
+	assert.Equal(t, path, env.engine.FindSourceFile("omp:omp-sync"))
+
+	updated := piLikeProviderFixture("omp-sync", "/Users/alice/code/omp-renamed")
+	dbtest.WriteTestFile(t, path, []byte(updated))
+	env.engine.SyncPaths([]string{path})
+
+	assertSessionState(t, env.db, "omp:omp-sync", func(sess *db.Session) {
+		assert.Equal(t, "omp", sess.Agent)
+		assert.Equal(t, "omp_renamed", sess.Project)
+	})
+}
+
+func piLikeProviderFixture(sessionID, cwd string) string {
+	return strings.Join([]string{
+		`{"type":"session","version":3,"id":"` + sessionID + `","timestamp":"2025-01-01T10:00:00Z","cwd":"` + cwd + `"}`,
+		`{"type":"message","id":"msg-1","timestamp":"2025-01-01T10:00:01Z","message":{"role":"user","content":"Inspect the source."}}`,
+		`{"type":"message","id":"msg-2","timestamp":"2025-01-01T10:00:02Z","message":{"role":"assistant","content":"Ready.","model":"claude-opus-4-5"}}`,
+	}, "\n")
 }
 
 func TestIncrementalSync_ClaudeAppend(t *testing.T) {
@@ -7255,6 +8062,106 @@ func TestIncrementalSync_ClaudeFileReplaced(t *testing.T) {
 	require.NoError(t, err, "stat replacement")
 	require.NotNil(t, full.FileSize, "file_size = nil, want %d (full-parse size)", newInfo.Size())
 	assert.Equal(t, newInfo.Size(), *full.FileSize, "file_size = %v, want %d (full-parse size)", *full.FileSize, newInfo.Size())
+}
+
+func TestIncrementalSync_ClaudeTruncatedFileReplacesStoredMessages(t *testing.T) {
+	env := setupTestEnv(t)
+
+	original := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("first", tsZero),
+		testjsonl.ClaudeAssistantJSON("stale assistant", tsZeroS5),
+	)
+	path := env.writeClaudeSession(
+		t, "proj", "truncated-replace.jsonl", original,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+	assertSessionMessageCount(t, env.db, "truncated-replace", 2)
+
+	replacement := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("replacement", tsZero),
+	)
+	require.Less(t, len(replacement), len(original), "replacement must truncate file")
+	require.NoError(t, os.WriteFile(path, []byte(replacement), 0o644), "write truncated replacement")
+
+	env.engine.SyncPaths([]string{path})
+
+	assertSessionMessageCount(t, env.db, "truncated-replace", 1)
+	msgs := fetchMessages(t, env.db, "truncated-replace")
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "replacement", msgs[0].Content)
+}
+
+func TestIncrementalSync_ClaudeSameSizeFileReplaceUsesFullParse(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("identity tracking is a no-op on Windows")
+	}
+	env := setupTestEnv(t)
+
+	original := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("first", tsZero),
+		testjsonl.ClaudeAssistantJSON("alpha", tsZeroS5),
+	)
+	path := env.writeClaudeSession(
+		t, "proj", "same-size-replace.jsonl", original,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	replacement := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("third", tsZero),
+		testjsonl.ClaudeAssistantJSON("bravo", tsZeroS5),
+	)
+	require.Len(t, replacement, len(original), "replacement fixture must keep same byte size")
+	tmp := path + ".tmp"
+	require.NoError(t, os.WriteFile(tmp, []byte(replacement), 0o644), "write replacement")
+	require.NoError(t, os.Rename(tmp, path), "rename replacement")
+
+	env.engine.SyncPaths([]string{path})
+
+	msgs := fetchMessages(t, env.db, "same-size-replace")
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "third", msgs[0].Content)
+	assert.Equal(t, "bravo", msgs[1].Content)
+}
+
+func TestIncrementalSync_ClaudeSameSizeInPlaceRewriteClearsStaleRows(t *testing.T) {
+	env := setupTestEnv(t)
+
+	original := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("first", tsZero),
+		testjsonl.ClaudeAssistantJSON("stale assistant", tsZeroS5),
+	)
+	path := env.writeClaudeSession(
+		t, "proj", "same-size-in-place.jsonl", original,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+	assertSessionMessageCount(t, env.db, "same-size-in-place", 2)
+
+	replacement := ""
+	for padding := range 4096 {
+		candidate := testjsonl.JoinJSONL(
+			testjsonl.ClaudeUserJSON(
+				"replacement"+strings.Repeat("x", padding),
+				tsZero,
+			),
+		)
+		if len(candidate) == len(original) {
+			replacement = candidate
+			break
+		}
+	}
+	require.NotEmpty(t, replacement, "failed to build same-size replacement fixture")
+	require.Len(t, replacement, len(original), "replacement fixture must keep same byte size")
+
+	require.NoError(t, os.WriteFile(path, []byte(replacement), 0o644), "write in-place replacement")
+	now := time.Now().Add(time.Second)
+	require.NoError(t, os.Chtimes(path, now, now), "bump replacement mtime")
+
+	env.engine.SyncPaths([]string{path})
+
+	assertSessionMessageCount(t, env.db, "same-size-in-place", 1)
+	msgs := fetchMessages(t, env.db, "same-size-in-place")
+	require.Len(t, msgs, 1)
+	assert.Contains(t, msgs[0].Content, "replacement")
 }
 
 // TestIncrementalSync_ClaudeMidStreamSplitFallsBackToFullParse covers
@@ -7565,7 +8472,7 @@ func TestIncrementalSync_CodexStoresEffectiveMtime(t *testing.T) {
 		"effective mtime exceeds the plain rollout mtime")
 }
 
-func TestIncrementalSync_CodexHashMatchesConsumedPrefix(t *testing.T) {
+func TestIncrementalSync_CodexAppendFullReparseStoresRawFileSize(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -7607,13 +8514,17 @@ func TestIncrementalSync_CodexHashMatchesConsumedPrefix(t *testing.T) {
 
 	live, err := os.ReadFile(path)
 	require.NoError(t, err, "read live transcript")
-	require.Less(t, *sess.FileSize, int64(len(live)),
-		"partial trailing JSON should remain outside the consumed prefix")
-	prefix := live[:*sess.FileSize]
-	sum := sha256.Sum256(prefix)
+	// Codex does not advertise incremental append, so re-syncing the appended
+	// transcript is a full re-parse that stores the raw file size and hash
+	// (including the ignored partial trailing line). The parsed-snapshot vs
+	// partial-tail distinction is enforced at parse-diff time via
+	// CodexTranscriptConsumedSize, not in the stored fingerprint.
+	require.Equal(t, int64(len(live)), *sess.FileSize,
+		"full Codex re-parse stores the raw file size")
+	sum := sha256.Sum256(live)
 	wantHash := fmt.Sprintf("%x", sum[:])
 	assert.Equal(t, wantHash, *sess.FileHash,
-		"incremental Codex hash must match the consumed file_size prefix")
+		"stored Codex hash matches the whole-file fingerprint")
 }
 
 func TestIncrementalSync_CodexExecAppendRetainsEvents(t *testing.T) {
@@ -7797,8 +8708,8 @@ func TestIncrementalSync_CodexLateTokenCountWithIndexRenameRewritesStoredMessage
 // rename whose mtime is <= that stored value cannot be detected by a
 // indexMtime > storedMtime gate, so the incremental path must compare the
 // session name directly and fall back to a full parse, otherwise
-// shouldSkipCodex's storedMtime==effectiveMtime fast path would strand the
-// stale title on every subsequent sync.
+// shouldSkipCodexFingerprint's storedMtime==effectiveMtime fast path would
+// strand the stale title on every subsequent sync.
 func TestIncrementalSync_CodexIndexRenameBelowStoredMtimeRefreshesName(t *testing.T) {
 	root := t.TempDir()
 	codexDir := filepath.Join(root, "sessions")

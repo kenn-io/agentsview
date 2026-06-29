@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "engines": {
-    "node": "^20.19 || ^22.12 || >=24"
+    "node": "^20.19.0 || ^22.18.0 || >=24.11.0"
   },
   "scripts": {
     "dev": "vp dev",
@@ -18,32 +18,31 @@
     "e2e": "playwright test"
   },
   "dependencies": {
-    "@lucide/svelte": "1.17.0",
-    "@tanstack/virtual-core": "3.17.0",
+    "@lucide/svelte": "1.21.0",
+    "@tanstack/virtual-core": "3.17.1",
     "dompurify": "3.4.11",
     "marked": "18.0.5",
     "shiki": "4.2.0"
   },
   "devDependencies": {
-    "@inlang/paraglide-js": "^2.19.0",
+    "@inlang/paraglide-js": "^2.20.2",
     "@inlang/plugin-m-function-matcher": "^2.2.9",
     "@inlang/plugin-message-format": "^4.4.0",
-    "@playwright/test": "1.60.0",
+    "@playwright/test": "1.61.0",
     "@sveltejs/vite-plugin-svelte": "7.1.2",
     "@testing-library/svelte": "^5.3.1",
     "@tsconfig/svelte": "5.0.8",
     "jsdom": "29.1.1",
-    "openapi-typescript-codegen": "^0.30.0",
-    "svelte": "5.56.1",
+    "openapi-typescript-codegen": "^0.31.0",
+    "svelte": "5.56.3",
     "svelte-check": "4.6.0",
     "typescript": "6.0.3",
-    "vite": "npm:@voidzero-dev/vite-plus-core@0.1.24",
-    "vite-plus": "0.1.24",
-    "vitest": "npm:@voidzero-dev/vite-plus-test@0.1.24"
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.1",
+    "vite-plus": "0.2.1",
+    "vitest": "4.1.9"
   },
   "overrides": {
-    "vite": "npm:@voidzero-dev/vite-plus-core@0.1.24",
-    "vitest": "npm:@voidzero-dev/vite-plus-test@0.1.24"
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.1"
   },
   "packageManager": "npm@11.17.0"
 }

@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,12 +14,6 @@ import (
 
 const forgeDBFilename = ".forge.db"
 
-// ForgeSession bundles a parsed session with its messages.
-type ForgeSession struct {
-	Session  ParsedSession
-	Messages []ParsedMessage
-}
-
 // ForgeSessionMeta is lightweight metadata for a session,
 // used to detect changes without parsing messages.
 type ForgeSessionMeta struct {
@@ -29,8 +22,8 @@ type ForgeSessionMeta struct {
 	FileMtime   int64
 }
 
-// FindForgeDBPath returns the Forge SQLite database path when present.
-func FindForgeDBPath(dir string) string {
+// forgeDBPath returns the Forge SQLite database path when present.
+func forgeDBPath(dir string) string {
 	if dir == "" {
 		return ""
 	}
@@ -83,41 +76,8 @@ func ListForgeSessionMeta(dbPath string) ([]ForgeSessionMeta, error) {
 	return metas, rows.Err()
 }
 
-// ParseForgeDB opens the Forge SQLite database read-only and returns
-// all conversations with parsed messages.
-func ParseForgeDB(dbPath, machine string) ([]ForgeSession, error) {
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		return nil, nil
-	}
-
-	db, err := openForgeDB(dbPath)
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-
-	convos, err := loadForgeConversations(db)
-	if err != nil {
-		return nil, fmt.Errorf("loading forge conversations: %w", err)
-	}
-
-	var results []ForgeSession
-	for _, c := range convos {
-		parsed, msgs, err := buildForgeSession(c, dbPath, machine)
-		if err != nil {
-			log.Printf("forge conversation %s: %v", c.id, err)
-			continue
-		}
-		if parsed == nil {
-			continue
-		}
-		results = append(results, ForgeSession{Session: *parsed, Messages: msgs})
-	}
-	return results, nil
-}
-
-// ParseForgeSession parses a single conversation by ID from the Forge database.
-func ParseForgeSession(dbPath, conversationID, machine string) (*ParsedSession, []ParsedMessage, error) {
+// parseForgeSession parses a single conversation by ID from the Forge database.
+func parseForgeSession(dbPath, conversationID, machine string) (*ParsedSession, []ParsedMessage, error) {
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		return nil, nil, fmt.Errorf("forge db not found: %s", dbPath)
 	}
@@ -151,34 +111,6 @@ type forgeConversationRow struct {
 	createdAt string
 	updatedAt string
 	metrics   string
-}
-
-func loadForgeConversations(db *sql.DB) ([]forgeConversationRow, error) {
-	rows, err := db.Query(`
-		SELECT conversation_id,
-		       COALESCE(title, ''),
-		       COALESCE(context, ''),
-		       created_at,
-		       COALESCE(updated_at, created_at),
-		       COALESCE(metrics, '')
-		FROM conversations
-		WHERE context IS NOT NULL
-		ORDER BY COALESCE(updated_at, created_at)
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var convos []forgeConversationRow
-	for rows.Next() {
-		var c forgeConversationRow
-		if err := rows.Scan(&c.id, &c.title, &c.context, &c.createdAt, &c.updatedAt, &c.metrics); err != nil {
-			return nil, err
-		}
-		convos = append(convos, c)
-	}
-	return convos, rows.Err()
 }
 
 func loadOneForgeConversation(db *sql.DB, conversationID string) (forgeConversationRow, error) {

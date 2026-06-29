@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"os"
@@ -159,6 +160,19 @@ func seedShelleyMainConversation(t *testing.T, db *sql.DB) {
 		"2026-06-15T10:05:00Z")
 }
 
+// parseShelleyConversationDirectForTest exercises the Shelley provider's
+// single-conversation parse in isolation, mirroring the legacy direct-parse
+// entrypoint the fold removed.
+func parseShelleyConversationDirectForTest(
+	t *testing.T, dbPath, rawID, machine string, _ os.FileInfo,
+) (*ParseResult, error) {
+	t.Helper()
+	return shelleyParseMember(
+		multiSessionSource{Container: dbPath, MemberID: rawID},
+		ParseRequest{Machine: machine},
+	)
+}
+
 func TestParseShelleyConversation(t *testing.T) {
 	_, dbPath, db := newShelleyTestDB(t)
 	seedShelleyMainConversation(t, db)
@@ -166,10 +180,10 @@ func TestParseShelleyConversation(t *testing.T) {
 	info, err := os.Stat(dbPath)
 	require.NoError(t, err, "stat db")
 
-	result, err := ParseShelleyConversationDirect(
-		dbPath, "cMAIN1", "test-machine", info,
+	result, err := parseShelleyConversationDirectForTest(
+		t, dbPath, "cMAIN1", "test-machine", info,
 	)
-	require.NoError(t, err, "ParseShelleyConversationDirect")
+	require.NoError(t, err, "parseConversationDirect")
 	require.NotNil(t, result, "expected result")
 
 	sess := result.Session
@@ -257,8 +271,8 @@ func TestParseShelleySubagentRelationship(t *testing.T) {
 	info, err := os.Stat(dbPath)
 	require.NoError(t, err, "stat db")
 
-	result, err := ParseShelleyConversationDirect(
-		dbPath, "cSUB01", "test-machine", info,
+	result, err := parseShelleyConversationDirectForTest(
+		t, dbPath, "cSUB01", "test-machine", info,
 	)
 	require.NoError(t, err, "parse subagent")
 	require.NotNil(t, result, "expected subagent result")
@@ -271,34 +285,60 @@ func TestDiscoverAndFindShelley(t *testing.T) {
 	root, dbPath, db := newShelleyTestDB(t)
 	seedShelleyMainConversation(t, db)
 
-	files := DiscoverShelleySessions(root)
-	require.Len(t, files, 1, "discovered files")
-	assert.Equal(t, dbPath, files[0].Path, "discovered db path")
-	assert.Equal(t, AgentShelley, files[0].Agent, "discovered agent")
+	// Discovery and source lookup are provider-owned after the fold; the
+	// physical DB still surfaces as a single source and a raw conversation
+	// ID resolves to its virtual path.
+	provider, ok := NewProvider(AgentShelley, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
 
-	assert.Equal(t, dbPath+"#cMAIN1",
-		FindShelleySourceFile(root, "cMAIN1"), "find existing")
-	assert.Empty(t, FindShelleySourceFile(root, "cNOPE0"), "find missing")
-	assert.Empty(t, FindShelleySourceFile(root, "../escape"), "reject path-like id")
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1, "discovered sources")
+	assert.Equal(t, dbPath, sources[0].DisplayPath, "discovered db path")
+	assert.Equal(t, AgentShelley, sources[0].Provider, "discovered provider")
+
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "cMAIN1",
+	})
+	require.NoError(t, err)
+	require.True(t, ok, "find existing")
+	assert.Equal(t, dbPath+"#cMAIN1", found.DisplayPath, "find existing path")
+
+	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "cNOPE0",
+	})
+	require.NoError(t, err)
+	assert.False(t, ok, "find missing")
+
+	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "../escape",
+	})
+	require.NoError(t, err)
+	assert.False(t, ok, "reject path-like id")
+
 	assert.True(t, ShelleyConversationExists(dbPath, "cMAIN1"), "exists")
 	assert.False(t, ShelleyConversationExists(dbPath, "cNOPE0"), "not exists")
 
-	// Empty root yields no discovery and no source file.
-	assert.Nil(t, DiscoverShelleySessions(t.TempDir()), "empty dir discovery")
+	// Empty root yields no discovery.
+	emptyProvider, ok := NewProvider(AgentShelley, ProviderConfig{Roots: []string{t.TempDir()}})
+	require.True(t, ok)
+	emptySources, err := emptyProvider.Discover(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, emptySources, "empty dir discovery")
 }
 
 func TestParseShelleyVirtualPath(t *testing.T) {
 	dbPath := "/home/user/.config/shelley/shelley.db"
-	got, id, ok := ParseShelleyVirtualPath(dbPath + "#cABC123")
+	got, id, ok := parseShelleyVirtualPath(dbPath + "#cABC123")
 	require.True(t, ok, "valid virtual path")
 	assert.Equal(t, dbPath, got, "db path")
 	assert.Equal(t, "cABC123", id, "conversation id")
 
-	_, _, ok = ParseShelleyVirtualPath("/x/other.db#id")
+	_, _, ok = parseShelleyVirtualPath("/x/other.db#id")
 	assert.False(t, ok, "wrong db name")
-	_, _, ok = ParseShelleyVirtualPath(dbPath)
+	_, _, ok = parseShelleyVirtualPath(dbPath)
 	assert.False(t, ok, "no separator")
-	_, _, ok = ParseShelleyVirtualPath(dbPath + "#")
+	_, _, ok = parseShelleyVirtualPath(dbPath + "#")
 	assert.False(t, ok, "empty id")
 }
 
@@ -355,7 +395,7 @@ func TestParseShelleyTimestampFormats(t *testing.T) {
 
 	info, err := os.Stat(dbPath)
 	require.NoError(t, err, "stat db")
-	result, err := ParseShelleyConversationDirect(dbPath, "cTIME1", "m", info)
+	result, err := parseShelleyConversationDirectForTest(t, dbPath, "cTIME1", "m", info)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.False(t, result.Session.StartedAt.IsZero(), "StartedAt parsed")
@@ -394,7 +434,7 @@ func TestParseShelleyRobustContent(t *testing.T) {
 
 	info, err := os.Stat(dbPath)
 	require.NoError(t, err, "stat db")
-	result, err := ParseShelleyConversationDirect(dbPath, "cROB1", "m", info)
+	result, err := parseShelleyConversationDirectForTest(t, dbPath, "cROB1", "m", info)
 	require.NoError(t, err, "must not error on robust content")
 	require.NotNil(t, result)
 
@@ -431,7 +471,7 @@ func TestParseShelleyUsageOnlyRows(t *testing.T) {
 
 	info, err := os.Stat(dbPath)
 	require.NoError(t, err, "stat db")
-	result, err := ParseShelleyConversationDirect(dbPath, "cUSG1", "m", info)
+	result, err := parseShelleyConversationDirectForTest(t, dbPath, "cUSG1", "m", info)
 	require.NoError(t, err, "must not error on usage-only row")
 	require.NotNil(t, result)
 
@@ -475,7 +515,7 @@ func TestParseShelleyWebSearchToolResult(t *testing.T) {
 
 	info, err := os.Stat(dbPath)
 	require.NoError(t, err, "stat db")
-	result, err := ParseShelleyConversationDirect(dbPath, "cWEB1", "m", info)
+	result, err := parseShelleyConversationDirectForTest(t, dbPath, "cWEB1", "m", info)
 	require.NoError(t, err, "parse web search conversation")
 	require.NotNil(t, result, "expected result")
 
@@ -526,7 +566,7 @@ func TestShelleySameSecondChangeSignal(t *testing.T) {
 	require.NoError(t, err, "open shelley db")
 	defer conn.Close()
 
-	first, err := ParseShelleyConversationDirect(dbPath, "cSEC1", "m", info)
+	first, err := parseShelleyConversationDirectForTest(t, dbPath, "cSEC1", "m", info)
 	require.NoError(t, err)
 	require.NotNil(t, first)
 	mtime1 := first.Session.File.Mtime
@@ -556,7 +596,7 @@ func TestShelleySameSecondChangeSignal(t *testing.T) {
 		`{"Role":1,"Content":[{"Type":2,"Text":"second"}]}`,
 		"", "", "2026-06-15T10:00:00Z")
 
-	second, err := ParseShelleyConversationDirect(dbPath, "cSEC1", "m", info)
+	second, err := parseShelleyConversationDirectForTest(t, dbPath, "cSEC1", "m", info)
 	require.NoError(t, err)
 	require.NotNil(t, second)
 
@@ -597,8 +637,8 @@ func TestShelleyNumericUserInitiatedScans(t *testing.T) {
 
 	info, err := os.Stat(dbPath)
 	require.NoError(t, err, "stat db")
-	result, err := ParseShelleyConversationDirect(
-		dbPath, "cNUM1", "m", info,
+	result, err := parseShelleyConversationDirectForTest(
+		t, dbPath, "cNUM1", "m", info,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, result)

@@ -80,8 +80,8 @@ for a writable local archive owner.
   second writer. Read commands may still fall back to direct
   read-only SQLite.
 - `session export` always runs locally regardless of daemon
-  state, and rejects `--server`, `--pg`, and `--format` because it
-  streams raw source bytes.
+  state, and rejects `--server`, `--pg`, and `--format`/`--json`
+  because it streams raw source bytes.
 
 When a discovered local daemon requires auth (`require_auth: true`),
 the CLI attaches `Authorization: Bearer <token>` using the
@@ -304,9 +304,9 @@ be a plain string (e.g. `"echo hello world"` from Codex).
 Stream the raw session source file to stdout. This is a
 **local-only** filesystem helper: the source file path is resolved
 from the local SQLite archive, never from any daemon. Both
-`--server` and `--format` are rejected with an error — the command
-also rejects `--pg`. It streams raw bytes, so structured-output
-and remote-store flags don't apply.
+`--server` and `--format`/`--json` are rejected with an error — the
+command also rejects `--pg`. It streams raw bytes, so
+structured-output and remote-store flags don't apply.
 
 ```bash
 agentsview session export <id>
@@ -394,7 +394,8 @@ agentsview session watch <id>
 Recognized `event` values today: `session_updated`, `heartbeat`.
 New events may be added; consumers should ignore unknown events.
 The command runs until interrupted (Ctrl+C) or the context is
-cancelled.
+cancelled. Like `session export`, it streams a fixed format and
+rejects `--format`/`--json`.
 
 Watch validates the session id before opening the stream. An
 unknown id fails fast with a `watch: session not found: <id>`

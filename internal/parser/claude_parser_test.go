@@ -22,7 +22,7 @@ func runClaudeParserTest(t *testing.T, fileName, content string) (ParsedSession,
 		fileName = "test.jsonl"
 	}
 	path := createTestFile(t, fileName, content)
-	results, err := ParseClaudeSession(path, "my_app", "local")
+	results, err := parseClaudeSession(path, "my_app", "local")
 	require.NoError(t, err)
 	require.NotEmpty(t, results)
 	return results[0].Session, results[0].Messages
@@ -31,7 +31,7 @@ func runClaudeParserTest(t *testing.T, fileName, content string) (ParsedSession,
 func callParseClaudeSessionFrom(
 	path string, offset int64, startOrdinal int, lastEntryUUID string,
 ) ([]ParsedMessage, time.Time, int64, error) {
-	fn := reflect.ValueOf(ParseClaudeSessionFrom)
+	fn := reflect.ValueOf(claudeParseSessionFrom)
 	args := []reflect.Value{
 		reflect.ValueOf(path),
 		reflect.ValueOf(offset),
@@ -68,7 +68,7 @@ func TestParseClaudeSession_UsageProbe(t *testing.T) {
 	parse := func(t *testing.T, content string) []ParseResult {
 		t.Helper()
 		path := createTestFile(t, "probe.jsonl", content)
-		results, err := ParseClaudeSession(path, "ClaudeProbe", "local")
+		results, err := parseClaudeSession(path, "ClaudeProbe", "local")
 		require.NoError(t, err)
 		return results
 	}
@@ -516,7 +516,7 @@ func TestParseClaudeSessionFrom_Incremental(t *testing.T) {
 	path := createTestFile(t, "inc-claude.jsonl", initial)
 
 	// Full parse to get baseline.
-	results, err := ParseClaudeSession(path, "proj", "local")
+	results, err := parseClaudeSession(path, "proj", "local")
 	require.NoError(t, err)
 	require.NotEmpty(t, results)
 	assert.Equal(t, 2, len(results[0].Messages))
@@ -978,7 +978,7 @@ func TestParseClaudeSession_ResolvesPersistedToolResultOutput(
 	sessionPath := filepath.Join(dir, "project", "parent-session.jsonl")
 	require.NoError(t, os.WriteFile(sessionPath, []byte(content), 0o644))
 
-	results, err := ParseClaudeSession(sessionPath, "project", "local")
+	results, err := parseClaudeSession(sessionPath, "project", "local")
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.Len(t, results[0].Messages, 3)
@@ -1016,7 +1016,7 @@ func TestParseClaudeSession_PersistedToolResultDoesNotOverwriteSiblings(
 	sessionPath := filepath.Join(dir, "project", "parent-session.jsonl")
 	require.NoError(t, os.WriteFile(sessionPath, []byte(content), 0o644))
 
-	results, err := ParseClaudeSession(sessionPath, "project", "local")
+	results, err := parseClaudeSession(sessionPath, "project", "local")
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.Len(t, results[0].Messages, 3)
@@ -1406,7 +1406,7 @@ func TestParseClaudeSession_ExtractsMessageIDAndRequestID(t *testing.T) {
 		t.Fatalf("write fixture: %v", err)
 	}
 
-	results, err := ParseClaudeSession(path, "proj", "m")
+	results, err := parseClaudeSession(path, "proj", "m")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -1779,7 +1779,7 @@ func TestClassifyClaudeSystemMessage(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := ClassifyClaudeSystemMessage(c.content)
+			got := classifyClaudeSystemMessage(c.content)
 			assert.Equal(t, c.expected, got)
 		})
 	}

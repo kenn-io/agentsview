@@ -878,17 +878,20 @@ func TestSessionExport_FailsWhenNotInLocalArchive(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown-id")
 }
 
-// TestSessionExport_RejectsFormatFlag verifies that export refuses
-// --format because it streams raw bytes. Previously --format was a
-// silently-accepted inherited flag, which was a contract footgun
-// for scripts that expected JSON output.
+// Export inherits --format/--json from the session group but streams raw
+// bytes, so it must reject both rather than silently ignore them.
 func TestSessionExport_RejectsFormatFlag(t *testing.T) {
-	newAgentDataDir(t)
+	for _, flag := range [][]string{{"--format", "json"}, {"--json"}} {
+		t.Run(strings.Join(flag, " "), func(t *testing.T) {
+			newAgentDataDir(t)
 
-	_, err := executeCommand(newRootCommand(),
-		"session", "export", "some-id", "--format", "json")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--format not supported")
+			args := append([]string{"session", "export", "some-id"}, flag...)
+			_, err := executeCommand(newRootCommand(), args...)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(),
+				"--format/--json not supported")
+		})
+	}
 }
 
 func TestSessionExport_RejectsPGFlag(t *testing.T) {
@@ -1548,6 +1551,23 @@ func TestSessionWatch_UnknownID_FailsFast(t *testing.T) {
 		"expected 'session not found' error; got: %v", err)
 	assert.Contains(t, err.Error(), "unknown-id",
 		"error should name the missing session id")
+}
+
+// Watch streams a fixed NDJSON format, so it rejects --format/--json
+// inherited from the session group. The guard fires before any service
+// resolution, so no archive setup is needed.
+func TestSessionWatch_RejectsFormatFlag(t *testing.T) {
+	for _, flag := range [][]string{{"--format", "json"}, {"--json"}} {
+		t.Run(strings.Join(flag, " "), func(t *testing.T) {
+			newAgentDataDir(t)
+
+			args := append([]string{"session", "watch", "some-id"}, flag...)
+			_, err := executeCommand(newRootCommand(), args...)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(),
+				"--format/--json not supported")
+		})
+	}
 }
 
 // TestLooksLikePath covers both POSIX and Windows-style separators

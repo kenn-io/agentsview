@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -13,47 +12,7 @@ import (
 
 const deepSeekTUIPrefix = "deepseek-tui:"
 
-// DiscoverDeepSeekTUISessions finds DeepSeek TUI / CodeWhale session
-// JSON documents under a sessions directory.
-func DiscoverDeepSeekTUISessions(root string) []DiscoveredFile {
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return nil
-	}
-
-	files := make([]DiscoveredFile, 0)
-	for _, entry := range entries {
-		if entry.IsDir() || !isDeepSeekTUISessionFile(entry.Name()) {
-			continue
-		}
-		files = append(files, DiscoveredFile{
-			Path:  filepath.Join(root, entry.Name()),
-			Agent: AgentDeepSeekTUI,
-		})
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-// FindDeepSeekTUISourceFile locates a DeepSeek TUI / CodeWhale session
-// JSON document by raw session ID.
-func FindDeepSeekTUISourceFile(root, rawID string) string {
-	if !IsValidSessionID(rawID) {
-		return ""
-	}
-	path := filepath.Join(root, rawID+".json")
-	if info, err := os.Stat(path); err == nil && !info.IsDir() {
-		return path
-	}
-	return ""
-}
-
-// ParseDeepSeekTUISession parses a DeepSeek TUI / CodeWhale saved
-// session JSON file.
-func ParseDeepSeekTUISession(
+func parseDeepSeekTUISession(
 	path, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)

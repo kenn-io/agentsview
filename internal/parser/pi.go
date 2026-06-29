@@ -11,22 +11,12 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// ParsePiSession parses a pi-agent JSONL session file.
-// The file format uses a leading session-header entry followed by
-// message, model_change, and compaction entries.
-func ParsePiSession(
+func (p *piProvider) parseSession(
 	path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
-	return parsePiLikeSession(path, project, machine, AgentPi, "pi:")
-}
-
-// ParseOMPSession parses an OhMyPi JSONL session file. OMP uses the
-// same on-disk session format as Pi, but sessions are identified with
-// the omp agent type and omp: session ID prefix.
-func ParseOMPSession(
-	path, project, machine string,
-) (*ParsedSession, []ParsedMessage, error) {
-	return parsePiLikeSession(path, project, machine, AgentOMP, "omp:")
+	return parsePiLikeSession(
+		path, project, machine, p.Def.Type, p.Def.IDPrefix,
+	)
 }
 
 func parsePiLikeSession(

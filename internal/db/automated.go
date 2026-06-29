@@ -52,53 +52,99 @@ var automatedExactMatches = []string{
 	"Reply with exactly OK.",
 }
 
-const userPrefixMaxLen = 1024
+const userPatternMaxLen = 1024
 
 var (
-	userPrefixesMu sync.RWMutex
-	userPrefixes   []string
+	userPatternsMu   sync.RWMutex
+	userPrefixes     []string
+	userSubstrings   []string
+	userExactMatches []string
 )
 
-// SetUserAutomationPrefixes replaces the user-pattern slice
+// SetUserAutomationPrefixes replaces the user-prefix slice
 // with a normalized copy of the input. Normalization (trim,
 // drop empty, length cap, dedupe within input, drop entries
 // that equal a built-in prefix) happens here so callers can
 // pass the raw list straight from config. Pass nil to clear.
-// Idempotent and silent — safe to call from quiet CLI paths
+// Idempotent and silent, safe to call from quiet CLI paths
 // (statusline, JSON output). Callers that want a startup
-// summary should read len(UserAutomationPrefixes()).
+// summary should read the relevant getter(s).
 func SetUserAutomationPrefixes(prefixes []string) {
-	cleaned := normalizeUserPrefixes(prefixes)
-	userPrefixesMu.Lock()
-	defer userPrefixesMu.Unlock()
-	userPrefixes = cleaned
+	setUserAutomationPatterns(&userPrefixes, prefixes, automatedPrefixes)
+}
+
+// SetUserAutomationSubstrings replaces the user-substring
+// slice with a normalized copy of the input. The same trim,
+// dedupe, and length rules apply; overlap filtering only
+// removes built-in substrings.
+func SetUserAutomationSubstrings(substrings []string) {
+	setUserAutomationPatterns(&userSubstrings, substrings, automatedSubstrings)
+}
+
+// SetUserAutomationExactMatches replaces the user exact-match
+// slice with a normalized copy of the input. Matching trims
+// the message before comparing against these literals.
+func SetUserAutomationExactMatches(matches []string) {
+	setUserAutomationPatterns(&userExactMatches, matches, automatedExactMatches)
 }
 
 // UserAutomationPrefixes returns a copy of the current
 // user-prefix slice. Used by ClassifierHash and tests; the
 // copy prevents callers from mutating singleton state.
 func UserAutomationPrefixes() []string {
-	userPrefixesMu.RLock()
-	defer userPrefixesMu.RUnlock()
-	return append([]string(nil), userPrefixes...)
+	return copyUserAutomationPatterns(&userPrefixes)
 }
 
-// normalizeUserPrefixes applies the validation rules from the
-// design spec ("Validation behavior" section). Built-in
-// overlap is checked against the package-private
-// automatedPrefixes directly.
-func normalizeUserPrefixes(in []string) []string {
+// UserAutomationSubstrings returns a copy of the current
+// user-substring slice.
+func UserAutomationSubstrings() []string {
+	return copyUserAutomationPatterns(&userSubstrings)
+}
+
+// UserAutomationExactMatches returns a copy of the current
+// user exact-match slice.
+func UserAutomationExactMatches() []string {
+	return copyUserAutomationPatterns(&userExactMatches)
+}
+
+func setUserAutomationPatterns(dst *[]string, in []string, builtIns []string) {
+	cleaned := normalizeUserAutomationPatterns(in, builtIns)
+	userPatternsMu.Lock()
+	defer userPatternsMu.Unlock()
+	*dst = cleaned
+}
+
+func copyUserAutomationPatterns(src *[]string) []string {
+	userPatternsMu.RLock()
+	defer userPatternsMu.RUnlock()
+	return append([]string(nil), (*src)...)
+}
+
+func snapshotUserAutomationPatterns() (
+	prefixes, substrings, exactMatches []string,
+) {
+	userPatternsMu.RLock()
+	defer userPatternsMu.RUnlock()
+	return append([]string(nil), userPrefixes...),
+		append([]string(nil), userSubstrings...),
+		append([]string(nil), userExactMatches...)
+}
+
+// normalizeUserAutomationPatterns applies the validation rules from the
+// design spec ("Validation behavior" section). Built-in overlap is checked
+// against the category-specific pattern slice directly.
+func normalizeUserAutomationPatterns(in []string, builtIns []string) []string {
 	seen := make(map[string]struct{}, len(in))
 	out := make([]string, 0, len(in))
 	for _, raw := range in {
 		s := strings.TrimSpace(raw)
-		if s == "" || len(s) > userPrefixMaxLen {
+		if s == "" || len(s) > userPatternMaxLen {
 			continue
 		}
 		if _, dup := seen[s]; dup {
 			continue
 		}
-		if slices.Contains(automatedPrefixes, s) {
+		if slices.Contains(builtIns, s) {
 			continue
 		}
 		seen[s] = struct{}{}
@@ -113,26 +159,36 @@ func normalizeUserPrefixes(in []string) []string {
 // IsAutomatedSession returns true if the first message
 // matches a known automated review/fix prompt pattern.
 func IsAutomatedSession(firstMessage string) bool {
+	prefixes, substrings, exactMatches := snapshotUserAutomationPatterns()
+
 	for _, prefix := range automatedPrefixes {
 		if strings.HasPrefix(firstMessage, prefix) {
 			return true
 		}
 	}
-	userPrefixesMu.RLock()
-	for _, prefix := range userPrefixes {
+	for _, prefix := range prefixes {
 		if strings.HasPrefix(firstMessage, prefix) {
-			userPrefixesMu.RUnlock()
 			return true
 		}
 	}
-	userPrefixesMu.RUnlock()
 	for _, sub := range automatedSubstrings {
 		if strings.Contains(firstMessage, sub) {
 			return true
 		}
 	}
+	for _, sub := range substrings {
+		if strings.Contains(firstMessage, sub) {
+			return true
+		}
+	}
 	trimmed := strings.TrimSpace(firstMessage)
-	return slices.Contains(automatedExactMatches, trimmed)
+	if slices.Contains(automatedExactMatches, trimmed) {
+		return true
+	}
+	if slices.Contains(exactMatches, trimmed) {
+		return true
+	}
+	return false
 }
 
 // IsAutomatedTranscript classifies automation from the actual

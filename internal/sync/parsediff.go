@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -16,8 +15,9 @@ import (
 // ParseDiffOptions configures a report-only re-parse comparison.
 type ParseDiffOptions struct {
 	// Agents restricts the run; empty means every file-based agent with
-	// a DiscoverFunc. Agents without an on-disk source to re-parse
-	// (database-backed or import-only) are rejected with an error.
+	// a provider-discoverable on-disk source. Agents without an on-disk
+	// source to re-parse (database-backed or import-only) are rejected
+	// with an error.
 	Agents []parser.AgentType
 	// Limit caps the number of source files parsed, newest mtime first
 	// across all agents. 0 means no limit.
@@ -48,7 +48,7 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 	e.syncMu.Lock()
 	defer e.syncMu.Unlock()
 
-	resolved, err := resolveParseDiffAgents(opts.Agents)
+	resolved, err := e.resolveParseDiffAgents(opts.Agents)
 	if err != nil {
 		return nil, err
 	}
@@ -67,21 +67,19 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 		report.Agents = append(report.Agents, string(def.Type))
 	}
 
-	// Discovery mirrors syncAllLocked's file phase: per-agent
-	// DiscoverFunc over the configured dirs, then dedupe and the
-	// legacy-Kiro shadow filter.
+	// Discovery mirrors syncAllLocked's file phase: provider discovery over
+	// the configured dirs per agent, then dedupe and the legacy-Kiro shadow
+	// filter. Provider discovery already enumerates shared-SQLite sources
+	// (Kiro's data.sqlite3, db-mode OpenCode's opencode.db) per session, so
+	// no separate db-source synthesis is needed.
 	var files []parser.DiscoveredFile
 	for _, def := range resolved {
-		for _, d := range e.agentDirs[def.Type] {
-			files = append(files, def.DiscoverFunc(d)...)
+		providerFiles, err := e.parseDiffProviderSources(ctx, def.Type)
+		if err != nil {
+			return nil, err
 		}
+		files = append(files, providerFiles...)
 	}
-	// DiscoverFunc does not emit the shared-SQLite source for Kiro
-	// (data.sqlite3) or db-mode OpenCode (opencode.db) — normal sync
-	// reaches those through dedicated phases. Synthesize them here so
-	// their sessions are actually re-parsed; processKiro/processOpenCode
-	// fan one db path out to every contained session under forceParse.
-	files = append(files, e.parseDiffDatabaseSources(resolved)...)
 	files = dedupeDiscoveredFiles(files)
 	files = e.filterShadowedLegacyKiroFiles(files)
 
@@ -108,7 +106,7 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 		s := &storedSessions[i]
 		storedByID[s.ID] = s
 		if s.FilePath != nil && *s.FilePath != "" {
-			base := stripVirtualSourceSuffix(*s.FilePath)
+			base := parseDiffSourceKey(*s.FilePath)
 			storedByPath[base] = append(storedByPath[base], s)
 		}
 	}
@@ -204,18 +202,93 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 	return report, nil
 }
 
+// parseDiffProviderSources discovers an agent's on-disk sources through
+// the provider facade. It is scoped to a single agent type so parse-diff
+// respects the requested agent set.
+func (e *Engine) parseDiffProviderSources(
+	ctx context.Context,
+	agentType parser.AgentType,
+) ([]parser.DiscoveredFile, error) {
+	factory, ok := e.providerFactories[agentType]
+	if !ok || factory == nil {
+		return nil, nil
+	}
+	roots := e.agentDirs[agentType]
+	if len(roots) == 0 {
+		return nil, nil
+	}
+	provider := factory.NewProvider(parser.ProviderConfig{
+		Roots:   roots,
+		Machine: e.machine,
+	})
+	sources, err := provider.Discover(ctx)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"parse-diff %s provider discovery: %w",
+			agentType, err,
+		)
+	}
+	def := provider.Definition()
+	var files []parser.DiscoveredFile
+	for _, source := range sources {
+		sourcePath := providerDiscoveredPath(source)
+		if sourcePath == "" {
+			continue
+		}
+		agent := source.Provider
+		if agent == "" {
+			agent = def.Type
+		}
+		sourceCopy := source
+		discovered := parser.DiscoveredFile{
+			Path:            sourcePath,
+			Project:         source.ProjectHint,
+			Agent:           agent,
+			ProviderSource:  &sourceCopy,
+			ProviderProcess: true,
+		}
+		// Thread S3 discovery metadata onto the file exactly as the main sync
+		// discovery path does. Without this, s3:// sources carry a zero mtime
+		// and parse-diff ordering falls back to a network stat (or treats them
+		// as oldest if that stat fails), skewing --limit selection.
+		if s3, ok := source.Opaque.(parser.S3DiscoveredSource); ok {
+			discovered.Machine = s3.Machine
+			discovered.SourceSize = s3.Size
+			discovered.SourceMtime = s3.MtimeNS
+			discovered.SourceFingerprint = s3.Fingerprint
+			if discovered.Project == "" {
+				discovered.Project = s3.Project
+			}
+		}
+		files = append(files, discovered)
+	}
+	return files, nil
+}
+
+func (e *Engine) parseDiffAgentDiscoverable(def parser.AgentDef) bool {
+	if !def.FileBased {
+		return false
+	}
+	switch e.providerMigrationModes[def.Type] {
+	case parser.ProviderMigrationProviderAuthoritative:
+		factory, ok := e.providerFactories[def.Type]
+		return ok && factory != nil
+	default:
+		return false
+	}
+}
+
 // resolveParseDiffAgents validates the requested agent set against
 // the registry and returns the matching defs in registry order. Only
-// file-based agents with a DiscoverFunc have an on-disk source to
-// re-parse.
-func resolveParseDiffAgents(
+// file-based agents with an on-disk source can be re-parsed.
+func (e *Engine) resolveParseDiffAgents(
 	requested []parser.AgentType,
 ) ([]parser.AgentDef, error) {
 	var allowed []parser.AgentDef
 	allowedSet := make(map[parser.AgentType]bool)
 	var names []string
 	for _, def := range parser.Registry {
-		if def.FileBased && def.DiscoverFunc != nil {
+		if e.parseDiffAgentDiscoverable(def) {
 			allowed = append(allowed, def)
 			allowedSet[def.Type] = true
 			names = append(names, string(def.Type))
@@ -251,60 +324,6 @@ func resolveParseDiffAgents(
 	return out, nil
 }
 
-// parseDiffDatabaseSources synthesizes DiscoveredFile entries for the
-// shared-SQLite agent stores that DiscoverFunc does not emit: Kiro's
-// data.sqlite3, OpenCode's opencode.db, and Kilo's kilo.db. The
-// corresponding process functions recognize those base filenames and fan
-// one db path out to every contained session, so routing them through the
-// normal worker loop re-parses every CLI Kiro / DB-backed OpenCode /
-// DB-backed Kilo session.
-// Without this, those sessions fall to the "not discovered" sweep and
-// an --agent kiro / --agent opencode run would pass while comparing
-// nothing.
-//
-// The OpenCode db is added whenever it exists, regardless of which
-// source mode ResolveOpenCodeSource picks: normal sync reads
-// opencode.db in storage-mode roots too (openCodePendingSessionIDs),
-// because a migrated root can still hold DB-only legacy sessions. Kilo
-// uses the same hybrid storage model. The storage-ID filtering in each
-// process function keeps file-backed sessions from being compared twice.
-func (e *Engine) parseDiffDatabaseSources(
-	resolved []parser.AgentDef,
-) []parser.DiscoveredFile {
-	var extra []parser.DiscoveredFile
-	for _, def := range resolved {
-		switch def.Type {
-		case parser.AgentKiro:
-			for _, dir := range e.agentDirs[def.Type] {
-				if dir == "" {
-					continue
-				}
-				if dbPath := parser.FindKiroSQLiteDBPath(dir); dbPath != "" {
-					extra = append(extra, parser.DiscoveredFile{
-						Path: dbPath, Agent: parser.AgentKiro,
-					})
-				}
-			}
-		case parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode, parser.AgentIcodemate:
-			for _, dir := range e.agentDirs[def.Type] {
-				if dir == "" {
-					continue
-				}
-				dbPath := filepath.Join(
-					dir, openCodeFormatDBName(def.Type),
-				)
-				if info, err := os.Stat(dbPath); err == nil &&
-					!info.IsDir() {
-					extra = append(extra, parser.DiscoveredFile{
-						Path: dbPath, Agent: def.Type,
-					})
-				}
-			}
-		}
-	}
-	return extra
-}
-
 // sortAndLimitParseDiffFiles orders files newest-first by source
 // mtime (tie-break: path ascending) and applies the file cap. It
 // returns the kept files and the base paths of files cut by the
@@ -333,11 +352,27 @@ func sortAndLimitParseDiffFiles(
 	if limit > 0 && len(files) > limit {
 		limited = true
 		for _, f := range files[limit:] {
-			cutPaths[stripVirtualSourceSuffix(f.Path)] = true
+			cutPaths[parseDiffSourceKey(f.Path)] = true
 		}
 		files = files[:limit]
 	}
 	return files, cutPaths, limited
+}
+
+func parseDiffSourceKey(path string) string {
+	if isOpenCodeFamilyProviderVirtualSource(path) {
+		return path
+	}
+	return stripVirtualSourceSuffix(path)
+}
+
+func isOpenCodeFamilyProviderVirtualSource(path string) bool {
+	for _, base := range []string{"opencode.db", "kilo.db", "mimocode.db"} {
+		if _, _, ok := parser.ParseVirtualSourcePathForBase(path, base); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // stripVirtualSourceSuffix maps a stored file_path to its on-disk base
@@ -347,31 +382,31 @@ func sortAndLimitParseDiffFiles(
 // shared trace file, and the "#runIdx" suffix aider appends to its shared
 // history file.
 func stripVirtualSourceSuffix(path string) string {
-	if tracePath, _, ok := parser.ParseVisualStudioCopilotVirtualPath(path); ok {
+	if tracePath, _, ok := parser.SplitVisualStudioCopilotVirtualPath(path); ok {
 		return tracePath
 	}
 	if historyPath, _, ok := parser.ParseAiderVirtualPath(path); ok {
 		return historyPath
 	}
-	if dbPath, _, ok := parser.ParseKiroSQLiteVirtualPath(path); ok {
+	if dbPath, _, ok := parseKiroSQLiteVirtualPath(path); ok {
 		return dbPath
 	}
-	if dbPath, _, ok := parser.ParseZedSQLiteVirtualPath(path); ok {
+	if dbPath, _, ok := parser.ParseVirtualSourcePathForBase(path, "threads.db"); ok {
 		return dbPath
 	}
-	if dbPath, _, ok := parser.ParseOpenCodeSQLiteVirtualPath(path); ok {
+	if dbPath, _, ok := parser.ParseVirtualSourcePathForBase(path, "opencode.db"); ok {
 		return dbPath
 	}
-	if dbPath, _, ok := parser.ParseKiloSQLiteVirtualPath(path); ok {
+	if dbPath, _, ok := parser.ParseVirtualSourcePathForBase(path, "kilo.db"); ok {
 		return dbPath
 	}
-	if dbPath, _, ok := parser.ParseMiMoCodeSQLiteVirtualPath(path); ok {
+	if dbPath, _, ok := parser.ParseVirtualSourcePathForBase(path, "mimocode.db"); ok {
 		return dbPath
 	}
-	if dbPath, _, ok := parser.ParseIcodemateSQLiteVirtualPath(path); ok {
+	if dbPath, _, ok := parser.ParseVirtualSourcePathForBase(path, "icodemate.db"); ok {
 		return dbPath
 	}
-	if dbPath, _, ok := parser.ParseShelleyVirtualPath(path); ok {
+	if dbPath, _, ok := parser.ParseVirtualSourcePathForBase(path, shelleyDBFile); ok {
 		return dbPath
 	}
 	return path
@@ -408,7 +443,7 @@ func stripVirtualSourceSuffix(path string) string {
 // Detecting either makes the source unreliable, so the caller skips the raced
 // guard entirely. This never masks genuine drift for those agents, while plain
 // file-based agents reading a literal file still get the real race protection.
-func parseDiffSourceReliableForRaced(
+func (e *Engine) parseDiffSourceReliableForRaced(
 	agent parser.AgentType, sourcePath string,
 ) bool {
 	// A virtual path carries a recognized "#..." suffix; stripping changes
@@ -417,15 +452,16 @@ func parseDiffSourceReliableForRaced(
 	if stripVirtualSourceSuffix(sourcePath) != sourcePath {
 		return false
 	}
-	// Only plain file-based agents (FileBased with a DiscoverFunc, the same
-	// on-disk-source condition resolveParseDiffAgents uses) read a literal
-	// file whose mtime populated file_mtime. An unknown or DB-backed agent has
-	// no such basis.
+	// Only agents with a literal on-disk source -- the same discoverability
+	// condition resolveParseDiffAgents uses -- read a file whose mtime
+	// populated file_mtime. parseDiffAgentDiscoverable gates out DB-backed
+	// (FileBased == false, e.g. Forge) and non-authoritative agents, so an
+	// unknown or DB-backed agent has no such basis.
 	def, ok := parser.AgentByType(agent)
 	if !ok {
 		return false
 	}
-	return def.FileBased && def.DiscoverFunc != nil
+	return e.parseDiffAgentDiscoverable(def)
 }
 
 // parseDiffLiveMtime resolves a session's live source mtime for the raced
@@ -523,7 +559,7 @@ func (e *Engine) parseDiffCollectFile(
 	resolver worktreeProjectResolver,
 	presencePaths *[]string,
 ) error {
-	base := stripVirtualSourceSuffix(job.path)
+	base := parseDiffSourceKey(job.path)
 
 	if job.err != nil {
 		storedHere := storedByPath[base]
@@ -569,7 +605,7 @@ func (e *Engine) parseDiffCollectFile(
 			sess:        pr.Session,
 			msgs:        pr.Messages,
 			usageEvents: pr.UsageEvents,
-			needsRetry:  job.needsRetry,
+			needsRetry:  job.needsRetryForSession(pr.Session.ID),
 		}
 		prepared, msgs, ok := e.prepareSessionWrite(pw, resolver)
 		id := prepared.ID
@@ -632,7 +668,7 @@ func (e *Engine) parseDiffCollectFile(
 		raced := false
 		if realDiffs > 0 && compare &&
 			sourceSessionCount[pw.sess.File.Path] == 1 &&
-			parseDiffSourceReliableForRaced(pw.sess.Agent, pw.sess.File.Path) {
+			e.parseDiffSourceReliableForRaced(pw.sess.Agent, pw.sess.File.Path) {
 			var storedMtime *int64
 			if stored != nil {
 				storedMtime = stored.FileMtime
@@ -769,9 +805,12 @@ func (e *Engine) parseDiffCollectFile(
 		report.Totals.ExcludedByParser++
 	}
 
-	// needsRetry output is transient and low fidelity; missing
-	// sessions there are expected, not parser drift.
-	if !job.needsRetry {
+	// Legacy source-wide needsRetry output and incomplete provider
+	// result sets are transient and low fidelity; missing sessions
+	// there are expected, not parser drift. Provider per-session
+	// retry state is handled above and should not hide unrelated
+	// missing sessions from the same complete source.
+	if !job.suppressesPresenceSweepForRetry() && !job.suppressPresenceSweep {
 		*presencePaths = append(*presencePaths, base)
 	}
 	return nil
@@ -868,11 +907,12 @@ func parseDiffSweepStored(
 		case s.FilePath == nil || *s.FilePath == "":
 			reason = "source missing"
 		default:
-			base := stripVirtualSourceSuffix(*s.FilePath)
+			sourceKey := parseDiffSourceKey(*s.FilePath)
+			sourcePath := stripVirtualSourceSuffix(*s.FilePath)
 			switch {
-			case cutPaths[base]:
+			case cutPaths[sourceKey]:
 				reason = "not sampled (--limit)"
-			case !statExists(base):
+			case !statExists(sourcePath):
 				reason = "source missing"
 			default:
 				reason = "not discovered"

@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -105,6 +106,14 @@ func ensureAnalyticsTokenStoreSchema(
 	require.NoError(t, err, "inserting analytics token sessions")
 }
 
+func sessionIDs(sessions []db.Session) []string {
+	ids := make([]string, 0, len(sessions))
+	for _, s := range sessions {
+		ids = append(ids, s.ID)
+	}
+	return ids
+}
+
 func TestNewStore(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
@@ -115,6 +124,42 @@ func TestNewStore(t *testing.T) {
 
 	assert.True(t, store.ReadOnly())
 	assert.True(t, store.HasFTS())
+}
+
+func TestDetectInsightGenerationAvailability(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	require.NoError(t, store.DetectInsightGenerationAvailability(
+		context.Background(),
+	), "DetectInsightGenerationAvailability")
+	assert.True(t, store.InsightGenerationAvailable())
+}
+
+func TestProbeInsightGenerationAvailabilityTx_ReadOnly(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	pg, err := Open(pgURL, testSchema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	tx, err := pg.BeginTx(
+		context.Background(),
+		&sql.TxOptions{ReadOnly: true},
+	)
+	require.NoError(t, err, "BeginTx")
+	defer func() { _ = tx.Rollback() }()
+
+	available, err := probeInsightGenerationAvailabilityTx(
+		context.Background(), tx,
+	)
+	require.NoError(t, err, "probeInsightGenerationAvailabilityTx")
+	assert.False(t, available)
 }
 
 func TestStoreListSessions(t *testing.T) {
@@ -1326,56 +1371,124 @@ func TestStoreAnalyticsTopSessionsDurationExcludesReversedTimestamps(t *testing.
 		"reversed duration row must be excluded")
 }
 
-func TestStoreWriteMethodsReturnReadOnly(t *testing.T) {
+func TestStoreWriteSurfaceSplitByCapability(t *testing.T) {
 	pgURL := testPGURL(t)
 
 	store, err := NewStore(pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	tests := []struct {
-		name string
-		fn   func() error
-	}{
-		{"InsertInsight", func() error {
-			_, err := store.InsertInsight(db.Insight{})
-			return err
-		}},
-		{"DeleteInsight", func() error {
-			return store.DeleteInsight(1)
-		}},
-		{"RenameSession", func() error {
-			return store.RenameSession("x", nil)
-		}},
-		{"SoftDeleteSession", func() error {
-			return store.SoftDeleteSession("x")
-		}},
-		{"RestoreSession", func() error {
-			_, err := store.RestoreSession("x")
-			return err
-		}},
-		{"DeleteSessionIfTrashed", func() error {
-			_, err := store.DeleteSessionIfTrashed("x")
-			return err
-		}},
-		{"EmptyTrash", func() error {
-			_, err := store.EmptyTrash()
-			return err
-		}},
-		{"UpsertSession", func() error {
-			return store.UpsertSession(db.Session{})
-		}},
-		{"ReplaceSessionMessages", func() error {
-			return store.ReplaceSessionMessages("x", nil)
-		}},
-		{"WriteSessionBatchAtomic", func() error {
-			_, err := store.WriteSessionBatchAtomic(nil)
-			return err
-		}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, db.ErrReadOnly, tt.fn())
-		})
-	}
+	assert.True(t, store.ReadOnly())
+
+	ctx := context.Background()
+	project := "store-capability"
+	sessionID := "store-capability-001"
+	trashedID := "store-capability-002"
+	emptyTrashID := "store-capability-003"
+	batchTrashID := "store-capability-004"
+
+	insightID, err := store.InsertInsight(db.Insight{
+		Type:     "dashboard",
+		DateFrom: "2026-03-12",
+		DateTo:   "2026-03-12",
+		Project:  &project,
+		Agent:    "claude",
+		Content:  "insight content",
+		CacheKey: "capability-cache",
+	})
+	require.NoError(t, err, "InsertInsight")
+	require.NotZero(t, insightID)
+
+	insight, err := store.GetInsight(ctx, insightID)
+	require.NoError(t, err, "GetInsight")
+	require.NotNil(t, insight)
+	assert.Equal(t, project, *insight.Project)
+
+	cached, err := store.GetCachedInsight(ctx, "capability-cache")
+	require.NoError(t, err, "GetCachedInsight")
+	require.NotNil(t, cached)
+	assert.Equal(t, insightID, cached.ID)
+
+	listed, err := store.ListInsights(ctx, db.InsightFilter{
+		Type: "dashboard",
+	})
+	require.NoError(t, err, "ListInsights")
+	require.NotEmpty(t, listed)
+	assert.Equal(t, insightID, listed[0].ID)
+
+	require.NoError(t, store.DeleteInsight(insightID), "DeleteInsight")
+	insight, err = store.GetInsight(ctx, insightID)
+	require.NoError(t, err, "GetInsight after delete")
+	assert.Nil(t, insight)
+
+	_, err = store.DB().Exec(`
+		INSERT INTO sessions (
+			id, machine, project, agent, first_message,
+			display_name, started_at, ended_at, message_count,
+			user_message_count
+		) VALUES
+			($1, 'machine', $2, 'claude', 'hello',
+			 NULL, '2026-03-12T10:00:00Z'::timestamptz,
+			 '2026-03-12T10:30:00Z'::timestamptz, 2, 1),
+			($3, 'machine', $2, 'claude', 'trash me',
+			 NULL, '2026-03-12T11:00:00Z'::timestamptz,
+			 '2026-03-12T11:30:00Z'::timestamptz, 2, 1),
+			($4, 'machine', $2, 'claude', 'empty trash me',
+			 NULL, '2026-03-12T12:00:00Z'::timestamptz,
+			 '2026-03-12T12:30:00Z'::timestamptz, 2, 1),
+			($5, 'machine', $2, 'claude', 'batch trash me',
+			 NULL, '2026-03-12T13:00:00Z'::timestamptz,
+			 '2026-03-12T13:30:00Z'::timestamptz, 2, 1)
+	`, sessionID, project, trashedID, emptyTrashID, batchTrashID)
+	require.NoError(t, err, "inserting session rows")
+
+	renamed := "Capability renamed session"
+	require.NoError(t, store.RenameSession(sessionID, &renamed),
+		"RenameSession")
+	sess, err := store.GetSession(ctx, sessionID)
+	require.NoError(t, err, "GetSession after rename")
+	require.NotNil(t, sess)
+	require.NotNil(t, sess.DisplayName)
+	assert.Equal(t, renamed, *sess.DisplayName)
+
+	require.NoError(t, store.SoftDeleteSession(sessionID),
+		"SoftDeleteSession")
+	sess, err = store.GetSession(ctx, sessionID)
+	require.NoError(t, err, "GetSession after soft delete")
+	assert.Nil(t, sess)
+	trashed, err := store.ListTrashedSessions(ctx)
+	require.NoError(t, err, "ListTrashedSessions")
+	assert.Contains(t, sessionIDs(trashed), sessionID)
+
+	restored, err := store.RestoreSession(sessionID)
+	require.NoError(t, err, "RestoreSession")
+	assert.EqualValues(t, 1, restored)
+
+	require.NoError(t, store.SoftDeleteSession(trashedID),
+		"SoftDeleteSession trashedID")
+	deleted, err := store.DeleteSessionIfTrashed(trashedID)
+	require.NoError(t, err, "DeleteSessionIfTrashed")
+	assert.EqualValues(t, 1, deleted)
+	sess, err = store.GetSessionFull(ctx, trashedID)
+	require.NoError(t, err, "GetSessionFull after permanent delete")
+	assert.Nil(t, sess)
+
+	deletedCount, err := store.SoftDeleteSessions([]string{
+		emptyTrashID, batchTrashID,
+	})
+	require.NoError(t, err, "SoftDeleteSessions")
+	assert.Equal(t, 2, deletedCount)
+	count, err := store.EmptyTrash()
+	require.NoError(t, err, "EmptyTrash")
+	assert.Equal(t, 2, count)
+	trashed, err = store.ListTrashedSessions(ctx)
+	require.NoError(t, err, "ListTrashedSessions after empty trash")
+	assert.NotContains(t, sessionIDs(trashed), emptyTrashID)
+	assert.NotContains(t, sessionIDs(trashed), batchTrashID)
+
+	assert.Equal(t, db.ErrReadOnly, store.UpsertSession(db.Session{}))
+	assert.Equal(t, db.ErrReadOnly,
+		store.ReplaceSessionMessages("x", nil))
+	_, err = store.WriteSessionBatchAtomic(nil)
+	assert.ErrorIs(t, err, db.ErrReadOnly)
 }

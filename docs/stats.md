@@ -77,6 +77,7 @@ agentsview stats --agent claude --include-project my-app
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--format` | `human` | Output format: `human` or `json` |
+| `--json` | `false` | Alias for `--format json` |
 | `--since` | `28d` | Start of window, either a compact duration like `28d` or a `YYYY-MM-DD` date |
 | `--until` | now | End of window as `YYYY-MM-DD` |
 | `--agent` | `all` | Restrict to one agent, or leave as `all` |

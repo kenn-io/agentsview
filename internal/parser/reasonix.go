@@ -166,10 +166,10 @@ func (b *reasonixSessionBuilder) processToolResult(
 	return nil
 }
 
-// ParseReasonixSession parses a Reasonix JSONL session file.
+// parseReasonixSession parses a Reasonix JSONL session file.
 // Returns (nil, nil, nil, nil) if the file doesn't exist or
 // contains no user/assistant messages.
-func ParseReasonixSession(
+func parseReasonixSession(
 	path, machine string,
 ) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
 	info, err := os.Stat(path)
@@ -339,10 +339,10 @@ func loadReasonixMetadata(transcriptPath string) (*reasonixMetadata, error) {
 	return &meta, nil
 }
 
-// DiscoverReasonixSessions discovers Reasonix sessions across
+// discoverReasonixSessions discovers Reasonix sessions across
 // four layouts: project sessions, global sessions, global subagents,
 // and archive sessions.
-func DiscoverReasonixSessions(reasonixDir string) []DiscoveredFile {
+func discoverReasonixSessions(reasonixDir string) []DiscoveredFile {
 	if reasonixDir == "" {
 		return nil
 	}
@@ -461,9 +461,9 @@ func DiscoverReasonixSessions(reasonixDir string) []DiscoveredFile {
 	return files
 }
 
-// FindReasonixSourceFile locates a Reasonix session file by
+// findReasonixSourceFile locates a Reasonix session file by
 // session ID. Searches project, global, subagent, and archive layouts.
-func FindReasonixSourceFile(reasonixDir, rawID string) string {
+func findReasonixSourceFile(reasonixDir, rawID string) string {
 	if reasonixDir == "" || rawID == "" {
 		return ""
 	}

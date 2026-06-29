@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -20,83 +19,8 @@ type commandCodeMeta struct {
 	Cwd         string `json:"cwd"`
 }
 
-// DiscoverCommandCodeSessions finds Command Code transcripts under
-// ~/.commandcode/projects/<slugified-cwd>/<session-id>.jsonl.
-func DiscoverCommandCodeSessions(projectsDir string) []DiscoveredFile {
-	if projectsDir == "" {
-		return nil
-	}
-
-	projectEntries, err := os.ReadDir(projectsDir)
-	if err != nil {
-		return nil
-	}
-
-	var files []DiscoveredFile
-	for _, entry := range projectEntries {
-		if !isDirOrSymlink(entry, projectsDir) {
-			continue
-		}
-
-		projectDir := filepath.Join(projectsDir, entry.Name())
-		sessionEntries, err := os.ReadDir(projectDir)
-		if err != nil {
-			continue
-		}
-
-		for _, sessionEntry := range sessionEntries {
-			if sessionEntry.IsDir() {
-				continue
-			}
-			name := sessionEntry.Name()
-			if !strings.HasSuffix(name, ".jsonl") ||
-				strings.HasSuffix(name, ".checkpoints.jsonl") ||
-				strings.HasSuffix(name, ".prompts.jsonl") {
-				continue
-			}
-			id := strings.TrimSuffix(name, ".jsonl")
-			if !IsValidSessionID(id) {
-				continue
-			}
-			files = append(files, DiscoveredFile{
-				Path:  filepath.Join(projectDir, name),
-				Agent: AgentCommandCode,
-			})
-		}
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-// FindCommandCodeSourceFile locates a Command Code transcript by
-// its raw session ID (without the "commandcode:" prefix).
-func FindCommandCodeSourceFile(projectsDir, rawID string) string {
-	if projectsDir == "" || !IsValidSessionID(rawID) {
-		return ""
-	}
-
-	projectEntries, err := os.ReadDir(projectsDir)
-	if err != nil {
-		return ""
-	}
-	for _, entry := range projectEntries {
-		if !isDirOrSymlink(entry, projectsDir) {
-			continue
-		}
-
-		candidate := filepath.Join(projectsDir, entry.Name(), rawID+".jsonl")
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate
-		}
-	}
-	return ""
-}
-
-// ParseCommandCodeSession parses a Command Code JSONL transcript.
-func ParseCommandCodeSession(
+// parseSession parses a Command Code JSONL transcript.
+func (p *commandCodeProvider) parseSession(
 	path, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)

@@ -10,6 +10,7 @@ export type DbAnalyticsSummary = {
   avg_messages: number;
   concentration: number;
   median_messages: number;
+  models: any[] | null;
   most_active_project: string;
   p90_messages: number;
   token_reporting_sessions: number;

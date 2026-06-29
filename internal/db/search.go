@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -12,10 +13,10 @@ const (
 	snippetTokenLength = 32
 )
 
-// SystemMsgPrefixes lists content prefixes that identify system-injected
-// user messages. These are excluded from search results even when the
-// is_system column has not been backfilled (e.g. Claude sessions parsed
-// before schema version 2). Keep in sync with the frontend list in
+// SystemMsgPrefixes lists non-goal content prefixes that identify
+// system-injected user messages. These are excluded from search results even
+// when the is_system column has not been backfilled (e.g. Claude sessions
+// parsed before schema version 2). Keep in sync with the frontend list in
 // frontend/src/lib/utils/messages.ts.
 var SystemMsgPrefixes = []string{
 	"This session is being continued",
@@ -27,30 +28,134 @@ var SystemMsgPrefixes = []string{
 	"Stop hook feedback:",
 }
 
+const (
+	legacyGoalContextPrefix        = "<goal_context>"
+	codexInternalContextTagPrefix  = "<codex_internal_context"
+	goalContextSourceAttr          = `source="goal"`
+	goalContextSourceAttrSQLPrefix = ` source="goal"`
+)
+
+var goalContextSourceAttrRe = regexp.MustCompile(`(?:^|\s)` +
+	regexp.QuoteMeta(goalContextSourceAttr) + `(?:\s|/|$)`)
+
+// IsGoalContextPrefixed reports whether a user-role message is a legacy
+// Codex /goal continuation wrapper that may already be stored in older
+// archives or read-only stores.
+func IsGoalContextPrefixed(content, role string) bool {
+	if role != "user" {
+		return false
+	}
+	trimmed := strings.TrimLeft(content, systemPrefixTrimCutset)
+	if strings.HasPrefix(trimmed, legacyGoalContextPrefix) {
+		return true
+	}
+	if strings.HasPrefix(trimmed, codexInternalContextTagPrefix) {
+		openTag, _, ok := strings.Cut(trimmed, ">")
+		return ok && goalContextSourceAttrRe.MatchString(openTag)
+	}
+	return false
+}
+
+type systemPrefixSQLDialect int
+
+const (
+	systemPrefixSQLite systemPrefixSQLDialect = iota
+	systemPrefixPostgres
+	systemPrefixDuckDB
+)
+
 // SystemPrefixSQL returns a SQL clause that excludes user messages
-// matching any system prefix. The column alias for content must be
-// passed (e.g. "m.content" or "m2.content"). Uses case-sensitive
-// substr comparison, which behaves identically on SQLite and
-// PostgreSQL (unlike LIKE, which is case-insensitive on SQLite).
+// matching any system prefix. The column alias for content must be passed
+// (e.g. "m.content" or "m2.content"). Uses case-sensitive substr and
+// position checks instead of LIKE, which is case-insensitive on SQLite.
 func SystemPrefixSQL(contentCol, roleCol string) string {
+	return systemPrefixSQL(contentCol, roleCol, systemPrefixSQLite)
+}
+
+// PostgresSystemPrefixSQL is the PostgreSQL form of SystemPrefixSQL.
+func PostgresSystemPrefixSQL(contentCol, roleCol string) string {
+	return systemPrefixSQL(contentCol, roleCol, systemPrefixPostgres)
+}
+
+// DuckDBSystemPrefixSQL is the DuckDB form of SystemPrefixSQL.
+func DuckDBSystemPrefixSQL(contentCol, roleCol string) string {
+	return systemPrefixSQL(contentCol, roleCol, systemPrefixDuckDB)
+}
+
+func systemPrefixSQL(
+	contentCol, roleCol string, dialect systemPrefixSQLDialect,
+) string {
 	// LTRIM strips the same whitespace as Go's strings.TrimSpace,
 	// JS .trim(), and the parser's isSystem helpers: ASCII whitespace,
 	// BOM (U+FEFF), and Unicode
 	// spaces (U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028,
-	// U+2029, U+202F, U+205F, U+3000). Both SQLite and PostgreSQL
+	// U+2029, U+202F, U+205F, U+3000). SQLite, PostgreSQL, and DuckDB
 	// handle multi-byte UTF-8 characters in the trim set correctly.
-	trimmed := "LTRIM(" + contentCol + ", ' \t\n\v\f\r" +
+	trimmed := systemPrefixSQLTrimmed(contentCol)
+	parts := make([]string, 0, len(SystemMsgPrefixes)+1)
+	for _, p := range SystemMsgPrefixes {
+		parts = append(parts, fmt.Sprintf(
+			"substr(%s, 1, %d) = '%s'", trimmed, len(p), p,
+		))
+	}
+	parts = append(parts, goalContextPrefixSQL(trimmed, dialect))
+	return "NOT (" + roleCol + " = 'user' AND (" +
+		strings.Join(parts, " OR ") + "))"
+}
+
+func systemPrefixSQLTrimmed(contentCol string) string {
+	return "LTRIM(" + contentCol + ", ' \t\n\v\f\r" +
 		"\u0085\u00A0\u1680" +
 		"\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A" +
 		"\u2028\u2029\u202F\u205F\u3000\uFEFF')"
-	parts := make([]string, len(SystemMsgPrefixes))
-	for i, p := range SystemMsgPrefixes {
-		parts[i] = fmt.Sprintf(
-			"substr(%s, 1, %d) = '%s'", trimmed, len(p), p,
-		)
+}
+
+func goalContextPrefixSQL(trimmed string, dialect systemPrefixSQLDialect) string {
+	legacy := fmt.Sprintf("substr(%s, 1, %d) = '%s'",
+		trimmed, len(legacyGoalContextPrefix), legacyGoalContextPrefix)
+	current := fmt.Sprintf(
+		"(substr(%[1]s, 1, %[2]d) = '%[3]s' AND %[4]s)",
+		trimmed, len(codexInternalContextTagPrefix),
+		codexInternalContextTagPrefix,
+		goalContextSourceAttrSQL(openingTagSQL(trimmed, dialect), dialect),
+	)
+	return "(" + legacy + " OR " + current + ")"
+}
+
+func openingTagSQL(trimmed string, dialect systemPrefixSQLDialect) string {
+	return fmt.Sprintf("substr(%s, 1, %s)",
+		trimmed, sqlPosition(dialect, ">", trimmed))
+}
+
+func goalContextSourceAttrSQL(
+	openTag string, dialect systemPrefixSQLDialect,
+) string {
+	normalized := openTag
+	for _, ws := range []string{"\t", "\n", "\v", "\f", "\r"} {
+		normalized = fmt.Sprintf("replace(%s, '%s', ' ')", normalized, ws)
 	}
-	return "NOT (" + roleCol + " = 'user' AND (" +
-		strings.Join(parts, " OR ") + "))"
+	checks := []string{
+		sqlContains(dialect, normalized, goalContextSourceAttrSQLPrefix+" "),
+		sqlContains(dialect, normalized, goalContextSourceAttrSQLPrefix+">"),
+		sqlContains(dialect, normalized, goalContextSourceAttrSQLPrefix+"/>"),
+	}
+	return "(" + strings.Join(checks, " OR ") + ")"
+}
+
+func sqlContains(
+	dialect systemPrefixSQLDialect, haystack, needle string,
+) string {
+	return sqlPosition(dialect, needle, haystack) + " > 0"
+}
+
+func sqlPosition(
+	dialect systemPrefixSQLDialect, needle, haystack string,
+) string {
+	quotedNeedle := "'" + needle + "'"
+	if dialect == systemPrefixPostgres {
+		return fmt.Sprintf("POSITION(%s IN %s)", quotedNeedle, haystack)
+	}
+	return fmt.Sprintf("instr(%s, %s)", haystack, quotedNeedle)
 }
 
 // systemPrefixTrimCutset is the leading-whitespace set SystemPrefixSQL's
@@ -69,6 +174,9 @@ const systemPrefixTrimCutset = " \t\n\v\f\r" +
 func IsSystemPrefixed(content, role string) bool {
 	if role != "user" {
 		return false
+	}
+	if IsGoalContextPrefixed(content, role) {
+		return true
 	}
 	trimmed := strings.TrimLeft(content, systemPrefixTrimCutset)
 	for _, p := range SystemMsgPrefixes {

@@ -91,12 +91,12 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 			useDaemon := useDaemonForSync(tr)
 			if useDaemon && len(remoteHosts) > 0 {
 				fmt.Println("Running sync with remotes via daemon...")
-				onProgress, finishProgress := daemonProgressPrinter()
+				progress := newRemoteProgressPrinter(os.Stdout, time.Now)
 				failures, err := runDaemonRemoteSync(
 					context.Background(), tr, appCfg.AuthToken,
-					remoteHosts, cfg.Full, includeLocal, onProgress,
+					remoteHosts, cfg.Full, includeLocal, progress.Print,
 				)
-				finishProgress()
+				progress.Finish()
 				if err != nil {
 					fatal("daemon remote sync: %v", err)
 				}
@@ -177,41 +177,95 @@ func useDaemonForSync(tr transport) bool {
 	return true
 }
 
-func daemonProgressPrinter() (sync.ProgressFunc, func()) {
-	var resyncProgress *resyncProgressPrinter
-	var printedInline bool
-	onProgress := func(p sync.Progress) {
-		if p.Resync {
-			if printedInline {
-				fmt.Println()
-				printedInline = false
-			}
-			if resyncProgress == nil {
-				resyncProgress = newResyncProgressPrinter(os.Stdout, time.Now)
-			}
-			resyncProgress.Print(p)
-			return
-		}
-		if resyncProgress != nil {
-			resyncProgress.Finish()
-			resyncProgress = nil
-		}
-		if formatSyncProgress(p) != "" {
-			printedInline = true
-		}
-		printSyncProgress(p)
+type remoteProgressPrinter struct {
+	w        io.Writer
+	now      func() time.Time
+	label    string
+	started  time.Time
+	inPlace  bool
+	finished bool
+}
+
+const remoteLocalSyncProgressLabel = "Syncing local sessions"
+
+func newRemoteProgressPrinter(
+	w io.Writer, now func() time.Time,
+) *remoteProgressPrinter {
+	return &remoteProgressPrinter{w: w, now: now}
+}
+
+func (p *remoteProgressPrinter) Print(progress sync.Progress) {
+	if p.finished {
+		return
 	}
-	finish := func() {
-		if resyncProgress != nil {
-			resyncProgress.Finish()
-			resyncProgress = nil
-		}
-		if printedInline {
-			fmt.Println()
-			printedInline = false
-		}
+	label := strings.TrimSpace(progress.Detail)
+	if progress.Phase == sync.PhaseDone {
+		p.printFinalInPlaceProgress(progress)
+		p.finishCurrent()
+		return
 	}
-	return onProgress, finish
+	if label == "" && progress.SessionsTotal > 0 &&
+		progress.Phase == sync.PhaseSyncing {
+		label = remoteLocalSyncProgressLabel
+		progress.Detail = label
+	}
+	if label == "" {
+		return
+	}
+	if strings.HasPrefix(label, "Synced ") {
+		p.finishCurrent()
+		fmt.Fprintf(p.w, "  %s\n", label)
+		return
+	}
+	if progress.Phase == sync.PhaseSyncing && progress.SessionsTotal > 0 {
+		if p.label != label {
+			p.finishCurrent()
+			p.label = label
+			p.started = p.now()
+		}
+		p.inPlace = true
+		fmt.Fprintf(p.w, "\r  %s\x1b[K", formatSyncProgress(progress))
+		return
+	}
+	if p.label == label {
+		return
+	}
+	p.finishCurrent()
+	p.label = label
+	p.started = p.now()
+	p.inPlace = false
+	fmt.Fprintf(p.w, "  %s...\n", strings.TrimSuffix(label, "."))
+}
+
+func (p *remoteProgressPrinter) printFinalInPlaceProgress(
+	progress sync.Progress,
+) {
+	if !p.inPlace || p.label == "" || progress.SessionsTotal == 0 {
+		return
+	}
+	if progress.Detail == "" {
+		progress.Detail = p.label
+	}
+	fmt.Fprintf(p.w, "\r  %s\x1b[K", formatSyncProgress(progress))
+}
+
+func (p *remoteProgressPrinter) Finish() {
+	p.finished = true
+	p.finishCurrent()
+}
+
+func (p *remoteProgressPrinter) finishCurrent() {
+	if p.label == "" {
+		return
+	}
+	if p.inPlace {
+		fmt.Fprint(p.w, "\n")
+	}
+	elapsed := p.now().Sub(p.started).Round(time.Millisecond)
+	fmt.Fprintf(p.w, "  %s completed in %s\n", p.label, elapsed)
+	p.label = ""
+	p.started = time.Time{}
+	p.inPlace = false
 }
 
 // syncLocalAndRemotes runs the local sync, then the configured

@@ -33,10 +33,25 @@ type claudeAIBlock struct {
 	Thinking string `json:"thinking"`
 }
 
+// ClaudeAIExportParser is implemented by the Claude.ai import-only provider to
+// stream a Claude.ai conversations export. Claude.ai sessions are never
+// discovered or synced from disk; they only enter the archive through a
+// one-shot import, so this entry point lives on the provider rather than the
+// Discover/Parse path. Callers obtain it via NewProvider(AgentClaudeAI, ...)
+// and a type assertion.
+type ClaudeAIExportParser interface {
+	// ParseClaudeAIExport streams a Claude.ai conversations.json export and
+	// calls onConversation for each non-empty conversation.
+	ParseClaudeAIExport(
+		r io.Reader,
+		onConversation func(ParseResult) error,
+	) error
+}
+
 // ParseClaudeAIExport streams a Claude.ai conversations.json
 // export and calls onConversation for each non-empty
 // conversation.
-func ParseClaudeAIExport(
+func (p *claudeAIImportOnlyProvider) ParseClaudeAIExport(
 	r io.Reader,
 	onConversation func(ParseResult) error,
 ) error {

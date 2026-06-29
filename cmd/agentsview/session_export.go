@@ -27,10 +27,10 @@ func newSessionExportCommand() *cobra.Command {
 					"session export: local-only command; --server not supported",
 				)
 			}
-			if cmd.Flags().Changed("format") {
-				return fmt.Errorf(
-					"session export: streams raw bytes; --format not supported",
-				)
+			if err := rejectFormatFlags(
+				cmd, "session export", "raw bytes",
+			); err != nil {
+				return err
 			}
 			if pgReadRequested(cmd) {
 				return fmt.Errorf(
@@ -114,7 +114,7 @@ func newSessionExportCommand() *cobra.Command {
 			// conversations, so streaming the whole file would disclose
 			// unrelated conversations. Filter to the requested conversation.
 			if tracePath, conversationID, ok :=
-				parser.ParseVisualStudioCopilotVirtualPath(storedPath); ok {
+				parser.SplitVisualStudioCopilotVirtualPath(storedPath); ok {
 				err := parser.WriteVisualStudioCopilotConversationJSONL(
 					cmd.OutOrStdout(), tracePath, conversationID,
 				)

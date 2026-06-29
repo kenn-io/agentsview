@@ -5,85 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/tidwall/gjson"
 )
 
-// DiscoverQwenSessions finds Qwen Code chat transcripts under the
-// projects root. The directory structure is:
-// <projectsDir>/<encoded-project>/chats/<session-id>.jsonl
-func DiscoverQwenSessions(projectsDir string) []DiscoveredFile {
-	if projectsDir == "" {
-		return nil
-	}
-
-	projectEntries, err := os.ReadDir(projectsDir)
-	if err != nil {
-		return nil
-	}
-
-	var files []DiscoveredFile
-	for _, entry := range projectEntries {
-		if !isDirOrSymlink(entry, projectsDir) {
-			continue
-		}
-
-		projectDir := filepath.Join(projectsDir, entry.Name())
-		chatsDir := filepath.Join(projectDir, "chats")
-		chatEntries, err := os.ReadDir(chatsDir)
-		if err != nil {
-			continue
-		}
-
-		project := GetProjectName(entry.Name())
-		for _, chat := range chatEntries {
-			if chat.IsDir() || !strings.HasSuffix(chat.Name(), ".jsonl") {
-				continue
-			}
-			files = append(files, DiscoveredFile{
-				Path:    filepath.Join(chatsDir, chat.Name()),
-				Project: project,
-				Agent:   AgentQwen,
-			})
-		}
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-// FindQwenSourceFile locates a Qwen session file by its raw session
-// ID (without the "qwen:" prefix).
-func FindQwenSourceFile(projectsDir, rawID string) string {
-	if projectsDir == "" || !IsValidSessionID(rawID) {
-		return ""
-	}
-
-	projectEntries, err := os.ReadDir(projectsDir)
-	if err != nil {
-		return ""
-	}
-	for _, entry := range projectEntries {
-		if !isDirOrSymlink(entry, projectsDir) {
-			continue
-		}
-
-		candidate := filepath.Join(
-			projectsDir, entry.Name(), "chats", rawID+".jsonl",
-		)
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
-	return ""
-}
-
-// ParseQwenSession parses a Qwen Code JSONL chat transcript.
+// parseSession parses a Qwen Code JSONL chat transcript.
 //
 // Qwen emits one `type=assistant` line per model output, including
 // every tool-call iteration in a multi-step turn. Each iteration's
@@ -96,7 +24,7 @@ func FindQwenSourceFile(projectsDir, rawID string) string {
 // aggregating their thinking text and token usage. A trailing run of
 // tool-call-only entries with no text follow-up is emitted as a single
 // coalesced assistant message so the data isn't lost.
-func ParseQwenSession(
+func parseQwenSession(
 	path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)

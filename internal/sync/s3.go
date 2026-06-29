@@ -286,16 +286,9 @@ func (e *Engine) processS3Session(
 			defer parser.EvictCodexSessionIndex(indexPath)
 		}
 	}
-	local := file
-	local.Path = tmp
-	var res processResult
-	switch file.Agent {
-	case parser.AgentClaude:
-		res = e.processClaudeWithStoredSkip(ctx, local, sourceInfo, false)
-	case parser.AgentCodex:
-		res = e.processCodex(local, sourceInfo)
-	default:
-		return processResult{}
+	res, err := e.parseMaterializedS3Source(ctx, file, dir, tmp)
+	if err != nil {
+		return processResult{err: err, noCacheSkip: true}
 	}
 	// Record the real s3:// source on each parsed session rather than the
 	// transient temp path (which is deleted on return), so the stored source
@@ -316,4 +309,58 @@ func (e *Engine) processS3Session(
 		idPrefix, res.excludedSessionIDs,
 	)
 	return res
+}
+
+// parseMaterializedS3Source parses an s3:// object that has been materialized to
+// a local temp file through the normal provider parse path, instead of a
+// per-agent S3 parse method. The temp file is laid out under tempDir at the
+// prefix-anchored path the parser expects (so the filename-derived session
+// identity and any companion lookups resolve), and the provider is configured
+// with tempDir as its root so pathFromSource resolves the temp path. This is the
+// same parse a local source of the same agent would get; the only S3-specific
+// handling (machine-ID namespacing, recording the s3:// URI as the source path,
+// and forced replacement on source change) is applied by the caller.
+func (e *Engine) parseMaterializedS3Source(
+	ctx context.Context,
+	file parser.DiscoveredFile,
+	tempDir, tempPath string,
+) (processResult, error) {
+	machine := e.machine
+	if file.Machine != "" {
+		machine = file.Machine // the s3 source machine overrides the host
+	}
+	provider, ok := parser.NewProvider(file.Agent, parser.ProviderConfig{
+		Roots:   []string{tempDir},
+		Machine: machine,
+	})
+	if !ok {
+		return processResult{}, fmt.Errorf(
+			"no provider for s3 agent %s", file.Agent,
+		)
+	}
+	source := parser.SourceRef{
+		Provider:       file.Agent,
+		Key:            tempPath,
+		DisplayPath:    tempPath,
+		FingerprintKey: tempPath,
+		ProjectHint:    file.Project,
+		Opaque:         parser.MaterializedFileSource{Path: tempPath},
+	}
+	outcome, err := provider.Parse(ctx, parser.ParseRequest{
+		Source:     source,
+		Machine:    machine,
+		ForceParse: true,
+	})
+	if err != nil {
+		return processResult{}, err
+	}
+	// Do not short-circuit on an empty Results slice: a content-free source can
+	// still carry ExcludedSessionIDs (a Claude /usage probe parses to no live
+	// session but excludes its ID), and the caller needs those IDs to drop the
+	// previously-archived row on resync. ForceReplace must survive too.
+	return processResult{
+		results:            parseOutcomeResults(outcome.Results),
+		excludedSessionIDs: append([]string(nil), outcome.ExcludedSessionIDs...),
+		forceReplace:       outcome.ForceReplace,
+	}, nil
 }

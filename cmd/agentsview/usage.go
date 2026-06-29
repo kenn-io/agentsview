@@ -66,15 +66,85 @@ type UsageDailyConfig struct {
 	Timezone  string
 }
 
+// resolveUsageWindow resolves the raw --since/--until flags into concrete
+// inclusive YYYY-MM-DD bounds. Both accept a duration like 28d or a date,
+// the same syntax as `stats`. --until resolves first; a duration --since is
+// then measured back from the resolved --until (or from now when --until is
+// open), matching how stats anchors a duration window. An inverted explicit
+// window is rejected so a reversed range fails loudly instead of returning
+// an empty result.
+func resolveUsageWindow(
+	since, until string, now time.Time, loc *time.Location,
+) (string, string, error) {
+	if loc == nil {
+		loc = time.UTC
+	}
+	now = now.In(loc)
+	// Resolve --until first and keep it as the anchor for --since:
+	// ParseWindowPoint measures a duration back from its time argument, so
+	// a duration --since is measured from the resolved --until while a date
+	// stands alone. --until open leaves the anchor at now.
+	anchor := now
+	to := ""
+	if until != "" {
+		t, date, err := resolveUsageWindowPoint(until, now, loc)
+		if err != nil {
+			return "", "", fmt.Errorf("invalid --until: %w", err)
+		}
+		anchor, to = t, date
+	}
+	from := ""
+	if since != "" {
+		_, date, err := resolveUsageWindowPoint(since, anchor, loc)
+		if err != nil {
+			return "", "", fmt.Errorf("invalid --since: %w", err)
+		}
+		from = date
+	}
+	// Bounds are inclusive, so from == to is a valid single day (hence >
+	// not >=). String comparison is valid because YYYY-MM-DD sorts
+	// lexically.
+	if from != "" && to != "" && from > to {
+		return "", "", fmt.Errorf(
+			"--since (%s) must not be after --until (%s)", from, to)
+	}
+	return from, to, nil
+}
+
+func resolveUsageWindowPoint(
+	raw string, anchor time.Time, loc *time.Location,
+) (time.Time, string, error) {
+	if t, err := time.ParseInLocation("2006-01-02", raw, loc); err == nil {
+		return t, raw, nil
+	}
+	t, err := db.ParseWindowPoint(raw, anchor)
+	if err != nil {
+		return time.Time{}, "", err
+	}
+	return t, t.In(loc).Format("2006-01-02"), nil
+}
+
 func runUsageDaily(cfg UsageDailyConfig) {
 	tz := cfg.Timezone
 	if tz == "" {
 		tz = localTimezone()
 	}
 
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: invalid --timezone: %v\n", err)
+		os.Exit(1)
+	}
+
+	since, until, err := resolveUsageWindow(cfg.Since, cfg.Until, time.Now(), loc)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
 	filter := db.UsageFilter{
-		From:     cfg.Since,
-		To:       cfg.Until,
+		From:     since,
+		To:       until,
 		Agent:    cfg.Agent,
 		Timezone: tz,
 	}

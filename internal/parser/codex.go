@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -30,6 +31,11 @@ const (
 var errCodexIncrementalNeedsFullParse = errors.New(
 	"codex incremental event requires full parse",
 )
+
+const codexGoalContextSourceAttr = `source="goal"`
+
+var codexGoalContextSourceAttrRe = regexp.MustCompile(`(?:^|\s)` +
+	regexp.QuoteMeta(codexGoalContextSourceAttr) + `(?:\s|/|$)`)
 
 var codexSessionIndexCache = struct {
 	mu      sync.Mutex
@@ -1299,11 +1305,12 @@ func IsCodexExecSessionFile(path string) bool {
 	return false
 }
 
-// ParseCodexSession parses a Codex JSONL session file.
-// The includeExec parameter is retained for backward
-// compatibility; exec-originated sessions are now always
-// parsed and imported.
-func ParseCodexSession(
+// parseSession parses a Codex JSONL session file into a session and its
+// messages. The includeExec parameter is retained for backward compatibility;
+// exec-originated sessions are now always parsed and imported. This is the
+// provider-owned parse entrypoint; the package-level free function was folded
+// onto the provider.
+func (p *codexProvider) parseSession(
 	path, machine string, includeExec bool,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
@@ -1669,12 +1676,13 @@ func CodexTranscriptConsumedSize(path string) (int64, error) {
 	return readJSONLFrom(path, 0, func(line string) {})
 }
 
-// ParseCodexSessionFrom parses only new lines from a Codex
-// JSONL file starting at the given byte offset. Returns only
-// the newly parsed messages (with ordinals starting at
-// startOrdinal) and the latest timestamp seen. Used for
-// incremental re-parsing of large append-only session files.
-func ParseCodexSessionFrom(
+// parseSessionFrom parses only new lines from a Codex JSONL file starting at
+// the given byte offset. Returns only the newly parsed messages (with ordinals
+// starting at startOrdinal) and the latest timestamp seen. Used for incremental
+// re-parsing of large append-only session files. This is the provider-owned
+// incremental parse entrypoint; the package-level free function was folded onto
+// the provider.
+func (p *codexProvider) parseSessionFrom(
 	path string,
 	offset int64,
 	startOrdinal int,
@@ -1767,7 +1775,7 @@ func isCodexGoalContext(content string) bool {
 	}
 	if strings.HasPrefix(trimmed, "<codex_internal_context") {
 		openTag, _, ok := strings.Cut(trimmed, ">")
-		return ok && strings.Contains(openTag, `source="goal"`)
+		return ok && codexGoalContextSourceAttrRe.MatchString(openTag)
 	}
 	return false
 }

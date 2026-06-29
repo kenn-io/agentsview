@@ -67,8 +67,10 @@ type VibeStats struct {
 	LastTurnTotalTokens      int   `json:"last_turn_total_tokens"`
 }
 
-// ParseVibeSession parses a Mistral Vibe messages.jsonl file
-func ParseVibeSession(path string, fileInfo FileInfo) (ParseResult, error) {
+// parseVibeResult parses a Mistral Vibe messages.jsonl file into a ParseResult.
+// It owns the on-disk shape (messages.jsonl plus the sibling meta.json) for the
+// Vibe provider; the package-level entrypoint was folded onto the provider.
+func parseVibeResultFile(path string, fileInfo FileInfo) (ParseResult, error) {
 	result := ParseResult{
 		Session: ParsedSession{
 			Agent:     AgentVibe,
@@ -386,11 +388,11 @@ func vibeToolArguments(args json.RawMessage) string {
 	return string(args)
 }
 
-// ParseVibeSessionWrapper wraps ParseVibeSession and returns the session,
-// messages, and usage events in the shape the sync engine consumes:
-// (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error). It stats the
-// file to build FileInfo and optionally overrides the project and machine.
-func ParseVibeSessionWrapper(path, project, machine string) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
+// parseSession parses a Vibe session at path and returns the session, messages,
+// and usage events in the shape the provider consumes: (*ParsedSession,
+// []ParsedMessage, []ParsedUsageEvent, error). It stats the file to build
+// FileInfo and optionally overrides the project and machine.
+func parseVibeSession(path, project, machine string) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("stat %s: %w", path, err)
@@ -402,7 +404,7 @@ func ParseVibeSessionWrapper(path, project, machine string) (*ParsedSession, []P
 		Mtime: info.ModTime().UnixNano(),
 	}
 
-	result, err := ParseVibeSession(path, fileInfo)
+	result, err := parseVibeResultFile(path, fileInfo)
 	if err != nil {
 		return nil, nil, nil, err
 	}

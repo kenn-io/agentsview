@@ -11,10 +11,10 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// ParseQClawSession parses a QClaw JSONL session file.
+// parseSession parses a QClaw JSONL session file.
 // QClaw stores messages in a JSONL format with a session header
 // line, message entries, compaction summaries, and metadata events.
-func ParseQClawSession(
+func (p *qClawProvider) parseSession(
 	path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)

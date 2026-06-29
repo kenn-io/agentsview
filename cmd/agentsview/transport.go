@@ -94,6 +94,22 @@ func detectTransportContext(
 	if err := ctx.Err(); err != nil {
 		return transport{}, err
 	}
+	if isExternalDaemonStarting(dataDir) {
+		fmt.Fprintln(os.Stderr,
+			"server is starting up, waiting...")
+		if waitTimeout <= 0 {
+			waitTimeout = startupWaitTimeout
+		}
+		_, _, err := waitForExternalServeStartup(
+			ctx, dataDir, authToken, waitTimeout,
+		)
+		if err != nil && errors.Is(err, errServeStartupInProgress) {
+			return transport{}, err
+		}
+		if err := ctx.Err(); err != nil {
+			return transport{}, err
+		}
+	}
 	if sf := FindDaemonRuntime(dataDir, authToken); sf != nil {
 		return transportFromRuntime(sf), nil
 	}
@@ -151,6 +167,17 @@ func ensureTransportContext(
 	}
 	if intent == transportIntentArchiveWrite && waitTimeout <= 0 {
 		waitTimeout = backgroundAutoStartReadyTimeout
+	}
+	if intent == transportIntentArchiveWrite {
+		waited, err := waitForBackgroundLaunchBeforeArchiveWrite(
+			ctx, cfg.DataDir, waitTimeout,
+		)
+		if err != nil {
+			return transport{}, err
+		}
+		if waited && cfg.AuthToken == "" {
+			adoptBackgroundLaunchConfig(cfg)
+		}
 	}
 	tr, err := detectTransportContext(
 		ctx, cfg.DataDir, cfg.AuthToken, waitTimeout,
@@ -218,12 +245,59 @@ func ensureTransportContext(
 	return transportFromRuntime(rt), nil
 }
 
+func waitForBackgroundLaunchBeforeArchiveWrite(
+	ctx context.Context,
+	dataDir string,
+	waitTimeout time.Duration,
+) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	info, err := os.Stat(dataDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !info.IsDir() {
+		return false, fmt.Errorf("data dir %q is not a directory", dataDir)
+	}
+	if !isBackgroundLaunchActive(dataDir) {
+		return false, nil
+	}
+	if waitTimeout <= 0 {
+		waitTimeout = backgroundAutoStartReadyTimeout
+	}
+	deadline := time.Now().Add(waitTimeout)
+	for isBackgroundLaunchActive(dataDir) {
+		if err := ctx.Err(); err != nil {
+			return true, err
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return true, errServeStartupInProgress
+		}
+		timer := time.NewTimer(min(remaining, startProbeTick))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return true, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return true, ctx.Err()
+}
+
 func shouldUpgradeDaemonRuntime(rt *DaemonRuntime, currentVersion string) bool {
 	if rt == nil || rt.ReadOnly {
 		return false
 	}
+	if update.IsDevBuildVersion(currentVersion) {
+		return false
+	}
 	if rt.Record.Version == "" {
-		return !update.IsDevBuildVersion(currentVersion)
+		return true
 	}
 	return update.IsNewer(currentVersion, rt.Record.Version)
 }

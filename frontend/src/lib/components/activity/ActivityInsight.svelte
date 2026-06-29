@@ -55,12 +55,15 @@
     router.navigate("insights");
   }
 
-  const readOnly = $derived(sync.serverVersion?.read_only === true);
+  const insightGenerationAvailable = $derived(
+    sync.serverVersion?.insight_generation_available === true ||
+      sync.serverVersion?.read_only !== true,
+  );
   const generationUnavailable = $derived(
-    sync.serverVersion === null || readOnly,
+    sync.serverVersion === null || !insightGenerationAvailable,
   );
   const unavailableTitle = $derived(
-    readOnly
+    sync.serverVersion !== null && !insightGenerationAvailable
       ? m.activity_insight_unavailable_read_only()
       : sync.serverVersion === null
         ? m.activity_insight_waiting_server()

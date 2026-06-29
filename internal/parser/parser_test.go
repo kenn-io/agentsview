@@ -790,7 +790,7 @@ func TestClaudeSessionTimestampSemantics(t *testing.T) {
 		buf := captureLog(t)
 
 		path := createTestFile(t, "ts-long-invalid.jsonl", content)
-		_, err := ParseClaudeSession(
+		_, err := parseClaudeSession(
 			path, "proj", "local",
 		)
 		require.NoError(t, err, "ParseClaudeSession")
@@ -969,7 +969,7 @@ func TestCodexUserMessageCount(t *testing.T) {
 	)
 
 	path := createTestFile(t, "codex-umc.jsonl", content)
-	sess, msgs, err := ParseCodexSession(path, "local", false)
+	sess, msgs, err := parseCodexTestSession(t, path, "local", false)
 	require.NoError(t, err, "ParseCodexSession")
 	require.NotNil(t, sess, "session")
 	require.Len(t, msgs, 4, "messages")
@@ -983,9 +983,7 @@ func TestCodexSessionTimestampSemantics(t *testing.T) {
 		path := createTestFile(t, "codex-ts-invalid.jsonl", content)
 		buf := captureLog(t)
 
-		sess, msgs, err := ParseCodexSession(
-			path, "local", false,
-		)
+		sess, msgs, err := parseCodexTestSession(t, path, "local", false)
 		require.NoError(t, err, "ParseCodexSession")
 
 		assertZeroTimestamp(t, sess.StartedAt, "StartedAt")
@@ -1002,9 +1000,7 @@ func TestCodexSessionTimestampSemantics(t *testing.T) {
 		path := createTestFile(t, "codex-ts-long-invalid.jsonl", content)
 		buf := captureLog(t)
 
-		_, _, err := ParseCodexSession(
-			path, "local", false,
-		)
+		_, _, err := parseCodexTestSession(t, path, "local", false)
 		require.NoError(t, err, "ParseCodexSession")
 
 		assertLogContains(t, buf,
@@ -1038,9 +1034,7 @@ func TestParseCodexSessionOversizedLineSkipped(t *testing.T) {
 	// skipping from the re-emitted-prompt dedup.
 	content := meta + firstLine + oversizedLine + secondLine
 	path := createTestFile(t, "oversized.jsonl", content)
-	sess, msgs, err := ParseCodexSession(
-		path, "local", false,
-	)
+	sess, msgs, err := parseCodexTestSession(t, path, "local", false)
 	require.NoError(t, err, "unexpected error")
 	require.NotNil(t, sess, "session")
 	require.Len(t, msgs, 2, "messages (oversized skipped)")
@@ -1083,7 +1077,7 @@ func TestParseCodexSession_WorktreeBranchFallback(t *testing.T) {
 		`{"type":"response_item","timestamp":"2024-01-01T00:00:01Z","payload":{"role":"user","content":[{"type":"input_text","text":"hello"}]}}` + "\n"
 	path := createTestFile(t, "codex-worktree.jsonl", content)
 
-	sess, _, err := ParseCodexSession(path, "local", false)
+	sess, _, err := parseCodexTestSession(t, path, "local", false)
 	require.NoError(t, err, "ParseCodexSession")
 	require.NotNil(t, sess, "session")
 	assert.Equal(t, "agentsview", sess.Project, "project")
@@ -1230,10 +1224,10 @@ func TestGeminiUserMessageCount(t *testing.T) {
 	)
 
 	path := createTestFile(t, "gemini-umc.json", content)
-	sess, msgs, err := ParseGeminiSession(
-		path, "my_project", "local",
+	sess, msgs, err := parseGeminiTestSession(
+		t, path, "my_project", "local",
 	)
-	require.NoError(t, err, "ParseGeminiSession")
+	require.NoError(t, err, "parseGeminiTestSession")
 	require.NotNil(t, sess, "session")
 	require.Len(t, msgs, 4, "messages")
 	assert.Equal(t, 2, sess.UserMessageCount, "UserMessageCount")
@@ -1303,7 +1297,7 @@ func TestClaudeUserMessageCount(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path := createTestFile(t, "test.jsonl", tt.content)
-			results, err := ParseClaudeSession(
+			results, err := parseClaudeSession(
 				path, "test-proj", "local",
 			)
 			require.NoError(t, err, "ParseClaudeSession")
@@ -1324,7 +1318,7 @@ func TestParseClaudeToolResults(t *testing.T) {
 	content := strings.Join(lines, "\n") + "\n"
 	path := createTestFile(t, "tool-results.jsonl", content)
 
-	results, err := ParseClaudeSession(path, "test-project", "local")
+	results, err := parseClaudeSession(path, "test-project", "local")
 	require.NoError(t, err, "ParseClaudeSession")
 	require.NotEmpty(t, results, "ParseClaudeSession returned no results")
 	msgs := results[0].Messages

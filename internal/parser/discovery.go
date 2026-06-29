@@ -23,6 +23,11 @@ var uuidRe = regexp.MustCompile(
 		`[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$`,
 )
 
+const (
+	copilotStateDir = "session-state"
+	geminiChatsDir  = "chats"
+)
+
 // isDirOrSymlink reports whether the entry is a directory or a
 // symlink that resolves to a directory. parentDir is needed to
 // build the full path for symlink resolution.
@@ -54,6 +59,9 @@ type DiscoveredFile struct {
 	SourceMtime int64     // source object mtime for s3:// sources, UnixNano
 	// SourceFingerprint is a durable object fingerprint for s3:// sources.
 	SourceFingerprint string
+	ForceParse        bool       // caller requires a full source reparse
+	ProviderSource    *SourceRef // provider-owned source identity, when known
+	ProviderProcess   bool       // true when this caller may parse via ProviderSource
 }
 
 // OpenCodeSourceMode identifies the usable OpenCode storage
@@ -306,22 +314,6 @@ func ResolveOpenCodeSource(root string) OpenCodeSource {
 	return resolveOpenCodeFormatSource(openCodeFmt, root)
 }
 
-// DiscoverOpenCodeSessions finds all file-backed OpenCode session
-// JSON files under storage/session.
-func DiscoverOpenCodeSessions(root string) []DiscoveredFile {
-	return discoverOpenCodeFormatSessions(openCodeFmt, root)
-}
-
-// FindOpenCodeSourceFile locates a single OpenCode session source
-// path or SQLite backing file by raw session ID. Returns "" when
-// the session is not present under this root so the caller
-// (Engine.FindSourceFile) can continue searching later configured
-// roots — important when an early hybrid root with an unrelated
-// opencode.db could otherwise shadow a session in a later root.
-func FindOpenCodeSourceFile(root, sessionID string) string {
-	return findOpenCodeFormatSourceFile(openCodeFmt, root, sessionID)
-}
-
 // OpenCodeStorageSessionIDs returns the set of session IDs that
 // have a JSON file under storage/session/*/ in the given root.
 // Returns nil for non-storage roots. In hybrid roots (storage and
@@ -350,12 +342,6 @@ func OpenCodeSQLiteVirtualPath(
 	return dbPath + "#" + sessionID
 }
 
-func ParseOpenCodeSQLiteVirtualPath(
-	sourcePath string,
-) (dbPath, sessionID string, ok bool) {
-	return parseOpenCodeFormatVirtualPath(openCodeFmt.dbName, sourcePath)
-}
-
 func openCodeSessionProject(path string) string {
 	data, err := os.ReadFile(path)
 	if err == nil {
@@ -378,14 +364,6 @@ func ResolveKiloSource(root string) OpenCodeSource {
 	return resolveOpenCodeFormatSource(kiloFmt, root)
 }
 
-func DiscoverKiloSessions(root string) []DiscoveredFile {
-	return discoverOpenCodeFormatSessions(kiloFmt, root)
-}
-
-func FindKiloSourceFile(root, sessionID string) string {
-	return findOpenCodeFormatSourceFile(kiloFmt, root, sessionID)
-}
-
 func KiloStorageSessionIDs(root string) map[string]struct{} {
 	return openCodeFormatStorageSessionIDs(kiloFmt, root)
 }
@@ -398,12 +376,8 @@ func KiloSQLiteVirtualPath(dbPath, sessionID string) string {
 	return OpenCodeSQLiteVirtualPath(dbPath, sessionID)
 }
 
-func ParseKiloSQLiteVirtualPath(
-	sourcePath string,
-) (dbPath, sessionID string, ok bool) {
-	return parseOpenCodeFormatVirtualPath(kiloFmt.dbName, sourcePath)
-}
-
+// ResolveIcodemateSource detects whether an Icodemate root is using
+// file-backed storage or legacy SQLite storage.
 func ResolveIcodemateSource(root string) OpenCodeSource {
 	return resolveOpenCodeFormatSource(icodemateFmt, root)
 }
@@ -440,14 +414,6 @@ func ResolveMiMoCodeSource(root string) OpenCodeSource {
 	return resolveOpenCodeFormatSource(mimoFmt, root)
 }
 
-func DiscoverMiMoCodeSessions(root string) []DiscoveredFile {
-	return discoverOpenCodeFormatSessions(mimoFmt, root)
-}
-
-func FindMiMoCodeSourceFile(root, sessionID string) string {
-	return findOpenCodeFormatSourceFile(mimoFmt, root, sessionID)
-}
-
 func MiMoCodeStorageSessionIDs(root string) map[string]struct{} {
 	return openCodeFormatStorageSessionIDs(mimoFmt, root)
 }
@@ -458,12 +424,6 @@ func ResolveMiMoCodeWatchRoots(root string) []string {
 
 func MiMoCodeSQLiteVirtualPath(dbPath, sessionID string) string {
 	return OpenCodeSQLiteVirtualPath(dbPath, sessionID)
-}
-
-func ParseMiMoCodeSQLiteVirtualPath(
-	sourcePath string,
-) (dbPath, sessionID string, ok bool) {
-	return parseOpenCodeFormatVirtualPath(mimoFmt.dbName, sourcePath)
 }
 
 // ResolveCodexShallowWatchRoots returns directories that should be watched
@@ -481,9 +441,13 @@ func ResolveCodexShallowWatchRoots(root string) []string {
 	return []string{parent}
 }
 
-// DiscoverClaudeProjects finds all project directories under the
-// Claude projects dir and returns their JSONL session files.
-func DiscoverClaudeProjects(projectsDir string) []DiscoveredFile {
+// ClaudeProjectSessionFiles finds all project directories under the
+// Claude projects dir and returns their JSONL session files. It is the
+// provider-owned enumeration body shared by the Claude provider source
+// set (full-sync discovery) and the engine's duplicate-candidate
+// expansion. The name carries no legacy entrypoint verb so the
+// provider can call it without shimming a Discover* free function.
+func ClaudeProjectSessionFiles(projectsDir string) []DiscoveredFile {
 	if strings.HasPrefix(projectsDir, "s3://") {
 		return discoverClaudeS3(projectsDir)
 	}
@@ -563,60 +527,12 @@ func DiscoverClaudeProjects(projectsDir string) []DiscoveredFile {
 	return files
 }
 
-// DiscoverCodexSessions finds all Codex JSONL session files under
-// either the standard year/month/day layout or a flat archived dir.
-func DiscoverCodexSessions(sessionsDir string) []DiscoveredFile {
-	if strings.HasPrefix(sessionsDir, "s3://") {
-		return discoverCodexS3(sessionsDir)
-	}
-	var files []DiscoveredFile
-
-	entries, err := os.ReadDir(sessionsDir)
-	if err != nil {
-		return nil
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		if !isCodexSessionFilename(entry.Name()) {
-			continue
-		}
-		files = append(files, DiscoveredFile{
-			Path:  filepath.Join(sessionsDir, entry.Name()),
-			Agent: AgentCodex,
-		})
-	}
-
-	walkCodexDayDirs(sessionsDir, func(dayPath string) bool {
-		entries, err := os.ReadDir(dayPath)
-		if err != nil {
-			return true
-		}
-		for _, sf := range entries {
-			if sf.IsDir() {
-				continue
-			}
-			if !isCodexSessionFilename(sf.Name()) {
-				continue
-			}
-			files = append(files, DiscoveredFile{
-				Path:  filepath.Join(dayPath, sf.Name()),
-				Agent: AgentCodex,
-			})
-		}
-		return true
-	})
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-// FindClaudeSourceFile finds the original JSONL file for a Claude
-// session ID by searching all project directories.
-func FindClaudeSourceFile(
+// claudeFindSourceFile finds the original JSONL file for a Claude
+// session ID by searching all project directories. It is the
+// provider-owned lookup body used by the Claude provider source set's
+// FindSource. The name carries no legacy entrypoint verb so the
+// provider can call it without shimming a Find* free function.
+func claudeFindSourceFile(
 	projectsDir, sessionID string,
 ) string {
 	if !IsValidSessionID(sessionID) {
@@ -645,7 +561,7 @@ func FindClaudeSourceFile(
 	// <project>/<session>/subagents/**/agent-<id>.jsonl
 	if strings.HasPrefix(sessionID, "agent-") {
 		for _, entry := range entries {
-			if !entry.IsDir() {
+			if !isDirOrSymlink(entry, projectsDir) {
 				continue
 			}
 			projDir := filepath.Join(
@@ -681,62 +597,6 @@ func FindClaudeSourceFile(
 	}
 
 	return ""
-}
-
-// FindCodexSourceFile finds a Codex session file by UUID.
-// Prefers the standard year/month/day live path when present,
-// then falls back to a flat archived dir entry.
-func FindCodexSourceFile(sessionsDir, sessionID string) string {
-	if !IsValidSessionID(sessionID) {
-		return ""
-	}
-
-	var archived string
-	entries, err := os.ReadDir(sessionsDir)
-	if err == nil {
-		for _, f := range entries {
-			if f.IsDir() {
-				continue
-			}
-			name := f.Name()
-			if !isCodexSessionFilename(name) {
-				continue
-			}
-			if extractUUIDFromRollout(name) == sessionID {
-				archived = filepath.Join(sessionsDir, name)
-				break
-			}
-		}
-	}
-
-	var live string
-	walkCodexDayDirs(sessionsDir, func(dayPath string) bool {
-		if live != "" {
-			return false
-		}
-		entries, err := os.ReadDir(dayPath)
-		if err != nil {
-			return true
-		}
-		for _, f := range entries {
-			if f.IsDir() {
-				continue
-			}
-			name := f.Name()
-			if !isCodexSessionFilename(name) {
-				continue
-			}
-			if extractUUIDFromRollout(name) == sessionID {
-				live = filepath.Join(dayPath, name)
-				return false
-			}
-		}
-		return true
-	})
-	if live != "" {
-		return live
-	}
-	return archived
 }
 
 func isCodexSessionFilename(name string) bool {
@@ -921,330 +781,6 @@ func isGeminiSessionFilename(name string) bool {
 			strings.HasSuffix(name, ".jsonl"))
 }
 
-// DiscoverGeminiSessions finds all Gemini session files under
-// the Gemini directory (~/.gemini/tmp/*/chats/session-*).
-func DiscoverGeminiSessions(
-	geminiDir string,
-) []DiscoveredFile {
-	if geminiDir == "" {
-		return nil
-	}
-
-	tmpDir := filepath.Join(geminiDir, "tmp")
-	hashDirs, err := os.ReadDir(tmpDir)
-	if err != nil {
-		return nil
-	}
-
-	projectMap := BuildGeminiProjectMap(geminiDir)
-
-	var files []DiscoveredFile
-	for _, hd := range hashDirs {
-		if !isDirOrSymlink(hd, tmpDir) {
-			continue
-		}
-		hash := hd.Name()
-		chatsDir := filepath.Join(tmpDir, hash, "chats")
-		entries, err := os.ReadDir(chatsDir)
-		if err != nil {
-			continue
-		}
-
-		project := ResolveGeminiProject(hash, projectMap)
-
-		for _, sf := range entries {
-			if sf.IsDir() {
-				continue
-			}
-			name := sf.Name()
-			if !isGeminiSessionFilename(name) {
-				continue
-			}
-			files = append(files, DiscoveredFile{
-				Path:    filepath.Join(chatsDir, name),
-				Project: project,
-				Agent:   AgentGemini,
-			})
-		}
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-// FindGeminiSourceFile locates a Gemini session file by its
-// session UUID. Searches all project hash directories.
-func FindGeminiSourceFile(
-	geminiDir, sessionID string,
-) string {
-	if geminiDir == "" || !IsValidSessionID(sessionID) ||
-		len(sessionID) < 8 {
-		return ""
-	}
-
-	tmpDir := filepath.Join(geminiDir, "tmp")
-	hashDirs, err := os.ReadDir(tmpDir)
-	if err != nil {
-		return ""
-	}
-
-	for _, hd := range hashDirs {
-		if !isDirOrSymlink(hd, tmpDir) {
-			continue
-		}
-		chatsDir := filepath.Join(tmpDir, hd.Name(), "chats")
-		entries, err := os.ReadDir(chatsDir)
-		if err != nil {
-			continue
-		}
-		for _, sf := range entries {
-			if sf.IsDir() {
-				continue
-			}
-			name := sf.Name()
-			if !isGeminiSessionFilename(name) {
-				continue
-			}
-			if strings.Contains(name, sessionID[:8]) {
-				path := filepath.Join(chatsDir, name)
-				if confirmGeminiSessionID(
-					path, sessionID,
-				) {
-					return path
-				}
-			}
-		}
-	}
-	return ""
-}
-
-// confirmGeminiSessionID reads the sessionId field from a
-// Gemini file to confirm it matches the expected ID.
-func confirmGeminiSessionID(
-	path, sessionID string,
-) bool {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	return GeminiSessionID(data) == sessionID
-}
-
-// DiscoverCursorSessions finds all agent transcript files under
-// the Cursor projects dir (<projectsDir>/<project>/agent-transcripts/<uuid>.txt).
-// All discovered paths are validated to resolve within the
-// canonical projectsDir, preventing symlink escapes.
-// cursorAddSeen inserts a transcript path into the seen map,
-// preferring .jsonl over .txt when both exist for the same stem.
-func cursorAddSeen(
-	seen map[string]string, name, fullPath string,
-) {
-	stem := strings.TrimSuffix(name, filepath.Ext(name))
-	if prev, ok := seen[stem]; ok {
-		if strings.HasSuffix(prev, ".txt") &&
-			strings.HasSuffix(name, ".jsonl") {
-			seen[stem] = fullPath
-		}
-		return
-	}
-	seen[stem] = fullPath
-}
-
-func DiscoverCursorSessions(
-	projectsDir string,
-) []DiscoveredFile {
-	if projectsDir == "" {
-		return nil
-	}
-
-	// Canonicalize root once for containment checks.
-	resolvedRoot, err := filepath.EvalSymlinks(projectsDir)
-	if err != nil {
-		return nil
-	}
-
-	entries, err := os.ReadDir(projectsDir)
-	if err != nil {
-		return nil
-	}
-
-	var files []DiscoveredFile
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		// Reject symlinked project directory entries.
-		if entry.Type()&os.ModeSymlink != 0 {
-			continue
-		}
-
-		transcriptsDir := filepath.Join(
-			projectsDir, entry.Name(), "agent-transcripts",
-		)
-
-		// Verify the transcripts directory resolves within
-		// the canonical root.
-		resolvedDir, err := filepath.EvalSymlinks(
-			transcriptsDir,
-		)
-		if err != nil {
-			continue
-		}
-		if !isContainedIn(resolvedDir, resolvedRoot) {
-			continue
-		}
-
-		transcripts, err := os.ReadDir(transcriptsDir)
-		if err != nil {
-			continue
-		}
-
-		project := DecodeCursorProjectDir(entry.Name())
-		if project == "" {
-			project = "unknown"
-		}
-
-		// Collect valid transcripts, deduping by basename
-		// stem. When both .jsonl and .txt exist for the
-		// same session, prefer .jsonl.
-		//
-		// Cursor uses two layouts:
-		//   flat:   agent-transcripts/<uuid>.{txt,jsonl}
-		//   nested: agent-transcripts/<uuid>/<uuid>.{txt,jsonl}
-		seen := make(map[string]string) // stem -> path
-		for _, sf := range transcripts {
-			if !sf.IsDir() {
-				// Flat layout: file directly in
-				// agent-transcripts/.
-				name := sf.Name()
-				if !IsCursorTranscriptExt(name) {
-					continue
-				}
-				fullPath := filepath.Join(
-					transcriptsDir, name,
-				)
-				if !IsRegularFile(fullPath) {
-					continue
-				}
-				cursorAddSeen(seen, name, fullPath)
-				continue
-			}
-
-			// Nested layout: agent-transcripts/<uuid>/
-			// containing <uuid>.{txt,jsonl}.
-			subDir := filepath.Join(
-				transcriptsDir, sf.Name(),
-			)
-			subEntries, err := os.ReadDir(subDir)
-			if err != nil {
-				continue
-			}
-			dirName := sf.Name()
-			for _, sub := range subEntries {
-				if sub.IsDir() {
-					continue
-				}
-				name := sub.Name()
-				if !IsCursorTranscriptExt(name) {
-					continue
-				}
-				// Only accept files whose stem matches
-				// the parent directory name, e.g.
-				// <uuid>/<uuid>.jsonl.
-				stem := strings.TrimSuffix(
-					name, filepath.Ext(name),
-				)
-				if stem != dirName {
-					continue
-				}
-				fullPath := filepath.Join(
-					subDir, name,
-				)
-				if !IsRegularFile(fullPath) {
-					continue
-				}
-				cursorAddSeen(seen, name, fullPath)
-			}
-		}
-		for _, path := range seen {
-			files = append(files, DiscoveredFile{
-				Path:    path,
-				Project: project,
-				Agent:   AgentCursor,
-			})
-		}
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-// FindCursorSourceFile finds a Cursor transcript file by
-// session UUID. Prefers .jsonl over .txt.
-func FindCursorSourceFile(
-	projectsDir, sessionID string,
-) string {
-	if projectsDir == "" || !IsValidSessionID(sessionID) {
-		return ""
-	}
-
-	entries, err := os.ReadDir(projectsDir)
-	if err != nil {
-		return ""
-	}
-
-	resolvedRoot, err := filepath.EvalSymlinks(projectsDir)
-	if err != nil {
-		return ""
-	}
-
-	for _, ext := range []string{".jsonl", ".txt"} {
-		target := sessionID + ext
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			// Nested layout first (matches discovery
-			// precedence), then flat layout.
-			candidates := []string{
-				filepath.Join(
-					projectsDir, entry.Name(),
-					"agent-transcripts", sessionID, target,
-				),
-				filepath.Join(
-					projectsDir, entry.Name(),
-					"agent-transcripts", target,
-				),
-			}
-			for _, candidate := range candidates {
-				if !IsRegularFile(candidate) {
-					continue
-				}
-				resolved, err := filepath.EvalSymlinks(
-					candidate,
-				)
-				if err != nil {
-					continue
-				}
-				rel, err := filepath.Rel(
-					resolvedRoot, resolved,
-				)
-				sep := string(filepath.Separator)
-				if err != nil || rel == ".." ||
-					strings.HasPrefix(rel, ".."+sep) {
-					continue
-				}
-				return candidate
-			}
-		}
-	}
-	return ""
-}
-
 // geminiProjectsFile holds the structure of
 // ~/.gemini/projects.json.
 type geminiProjectsFile struct {
@@ -1360,138 +896,6 @@ func ResolveGeminiProject(
 	return NormalizeName(dirName)
 }
 
-// DiscoverAmpSessions finds all thread JSON files under
-// the Amp threads directory (~/.local/share/amp/threads/T-*.json).
-func DiscoverAmpSessions(threadsDir string) []DiscoveredFile {
-	if threadsDir == "" {
-		return nil
-	}
-
-	entries, err := os.ReadDir(threadsDir)
-	if err != nil {
-		return nil
-	}
-
-	var files []DiscoveredFile
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !IsAmpThreadFileName(name) {
-			continue
-		}
-		files = append(files, DiscoveredFile{
-			Path:  filepath.Join(threadsDir, name),
-			Agent: AgentAmp,
-		})
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-// FindAmpSourceFile locates an Amp thread file by its raw
-// thread ID (without the "amp:" prefix).
-func FindAmpSourceFile(threadsDir, threadID string) string {
-	if threadsDir == "" || !isValidAmpThreadID(threadID) {
-		return ""
-	}
-	candidate := filepath.Join(threadsDir, threadID+".json")
-	if _, err := os.Stat(candidate); err == nil {
-		return candidate
-	}
-	return ""
-}
-
-// DiscoverCopilotSessions finds all JSONL files under
-// <copilotDir>/session-state/. Supports both bare format
-// (<uuid>.jsonl) and directory format (<uuid>/events.jsonl).
-func DiscoverCopilotSessions(
-	copilotDir string,
-) []DiscoveredFile {
-	if copilotDir == "" {
-		return nil
-	}
-
-	stateDir := filepath.Join(copilotDir, "session-state")
-	entries, err := os.ReadDir(stateDir)
-	if err != nil {
-		return nil
-	}
-
-	dirs := make(map[string]struct{})
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		eventsPath := filepath.Join(
-			stateDir, entry.Name(), "events.jsonl",
-		)
-		if _, err := os.Stat(eventsPath); err == nil {
-			dirs[entry.Name()] = struct{}{}
-		}
-	}
-
-	var files []DiscoveredFile
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() {
-			candidate := filepath.Join(
-				stateDir, name, "events.jsonl",
-			)
-			if _, err := os.Stat(candidate); err == nil {
-				files = append(files, DiscoveredFile{
-					Path:  candidate,
-					Agent: AgentCopilot,
-				})
-			}
-			continue
-		}
-		if stem, ok := strings.CutSuffix(name, ".jsonl"); ok {
-			if _, dup := dirs[stem]; dup {
-				continue
-			}
-			files = append(files, DiscoveredFile{
-				Path:  filepath.Join(stateDir, name),
-				Agent: AgentCopilot,
-			})
-		}
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-// FindCopilotSourceFile locates a Copilot session file by
-// UUID. Checks both bare (<uuid>.jsonl) and directory
-// (<uuid>/events.jsonl) layouts.
-func FindCopilotSourceFile(
-	copilotDir, rawID string,
-) string {
-	if copilotDir == "" || !IsValidSessionID(rawID) {
-		return ""
-	}
-
-	stateDir := filepath.Join(copilotDir, "session-state")
-
-	dirFmt := filepath.Join(stateDir, rawID, "events.jsonl")
-	if _, err := os.Stat(dirFmt); err == nil {
-		return dirFmt
-	}
-
-	bare := filepath.Join(stateDir, rawID+".jsonl")
-	if _, err := os.Stat(bare); err == nil {
-		return bare
-	}
-
-	return ""
-}
-
 // IsPiSessionFile reads the first non-blank line of path and returns true
 // when the JSON type field equals "session". The scanner buffer grows up to
 // 64 MiB to match parser.maxLineSize. Leading blank lines are skipped to
@@ -1512,100 +916,6 @@ func IsPiSessionFile(path string) bool {
 		return gjson.Get(line, "type").Str == "session"
 	}
 	return false
-}
-
-// DiscoverPiSessions finds JSONL files under piDir that are
-// valid pi sessions. Pi sessions live in
-// <piDir>/<encoded-cwd>/<session-id>.jsonl; the encoded-cwd
-// format is ambiguous between pi versions, so discovery
-// validates by reading the session header rather than parsing
-// the directory name. Project is left empty so ParsePiSession
-// can derive it from the header cwd field.
-func DiscoverPiSessions(piDir string) []DiscoveredFile {
-	return discoverPiLikeSessions(piDir, AgentPi)
-}
-
-// DiscoverOMPSessions finds JSONL files under an OhMyPi session root.
-// OMP uses the same layout and file format as Pi, rooted by default at
-// ~/.omp/agent/sessions.
-func DiscoverOMPSessions(ompDir string) []DiscoveredFile {
-	return discoverPiLikeSessions(ompDir, AgentOMP)
-}
-
-func discoverPiLikeSessions(piDir string, agent AgentType) []DiscoveredFile {
-	if piDir == "" {
-		return nil
-	}
-	entries, err := os.ReadDir(piDir)
-	if err != nil {
-		return nil
-	}
-	var files []DiscoveredFile
-	for _, entry := range entries {
-		if !isDirOrSymlink(entry, piDir) {
-			continue
-		}
-		cwdDir := filepath.Join(piDir, entry.Name())
-		sessionFiles, err := os.ReadDir(cwdDir)
-		if err != nil {
-			continue
-		}
-		for _, sf := range sessionFiles {
-			if sf.IsDir() {
-				continue
-			}
-			if !strings.HasSuffix(sf.Name(), ".jsonl") {
-				continue
-			}
-			path := filepath.Join(cwdDir, sf.Name())
-			if !IsPiSessionFile(path) {
-				continue
-			}
-			files = append(files, DiscoveredFile{
-				Path:  path,
-				Agent: agent,
-				// Project intentionally empty; ParsePiSession
-				// derives project from the header cwd field.
-			})
-		}
-	}
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-// FindPiSourceFile finds the original JSONL file for a pi
-// session ID by searching all encoded-cwd subdirectories
-// under piDir for a file named <sessionID>.jsonl.
-func FindPiSourceFile(piDir, sessionID string) string {
-	return findPiLikeSourceFile(piDir, sessionID)
-}
-
-// FindOMPSourceFile finds the original JSONL file for an OMP session ID.
-func FindOMPSourceFile(ompDir, sessionID string) string {
-	return findPiLikeSourceFile(ompDir, sessionID)
-}
-
-func findPiLikeSourceFile(piDir, sessionID string) string {
-	if piDir == "" || !IsValidSessionID(sessionID) {
-		return ""
-	}
-	entries, err := os.ReadDir(piDir)
-	if err != nil {
-		return ""
-	}
-	target := sessionID + ".jsonl"
-	for _, entry := range entries {
-		if !isDirOrSymlink(entry, piDir) {
-			continue
-		}
-		candidate := filepath.Join(piDir, entry.Name(), target)
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
-	return ""
 }
 
 // isRegularFile returns true if path exists and is a regular
@@ -1640,82 +950,11 @@ func isContainedIn(child, root string) bool {
 		!strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// DiscoverVSCodeCopilotSessions traverses the VSCode
-// workspaceStorage directory to find chatSessions/*.json
-// and *.jsonl files. When both formats exist for the same
-// session UUID, the .jsonl file takes priority.
-// It also checks globalStorage/emptyWindowChatSessions.
-// The vscodeUserDir should point to e.g.
-//
-//	~/Library/Application Support/Code/User (macOS)
-//	~/.config/Code/User (Linux)
-func DiscoverVSCodeCopilotSessions(
-	vscodeUserDir string,
-) []DiscoveredFile {
-	if vscodeUserDir == "" {
-		return nil
-	}
-
-	var files []DiscoveredFile
-
-	// 1. Scan workspaceStorage/<hash>/chatSessions/*.{json,jsonl}
-	wsDir := filepath.Join(vscodeUserDir, "workspaceStorage")
-	hashDirs, err := os.ReadDir(wsDir)
-	if err == nil {
-		for _, entry := range hashDirs {
-			if !entry.IsDir() {
-				continue
-			}
-
-			hashPath := filepath.Join(wsDir, entry.Name())
-			chatDir := filepath.Join(hashPath, "chatSessions")
-			sessionFiles, err := os.ReadDir(chatDir)
-			if err != nil {
-				continue
-			}
-
-			// Read workspace.json to get project name
-			project := ReadVSCodeWorkspaceManifest(hashPath)
-			if project == "" {
-				project = "unknown"
-			}
-
-			files = append(files,
-				discoverVSCodeSessionFiles(
-					chatDir, sessionFiles, project,
-				)...,
-			)
-		}
-	}
-
-	// 2. Scan globalStorage/emptyWindowChatSessions/*.{json,jsonl}
-	for _, subdir := range []string{
-		"globalStorage/emptyWindowChatSessions",
-		"globalStorage/transferredChatSessions",
-	} {
-		globalDir := filepath.Join(vscodeUserDir, subdir)
-		globalFiles, err := os.ReadDir(globalDir)
-		if err != nil {
-			continue
-		}
-		files = append(files,
-			discoverVSCodeSessionFiles(
-				globalDir, globalFiles, "empty-window",
-			)...,
-		)
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
 // discoverVSCodeSessionFiles collects .json and .jsonl
 // session files from a directory, preferring .jsonl when
 // both exist for the same UUID.
 func discoverVSCodeSessionFiles(
-	dir string, entries []os.DirEntry, project string,
+	dir string, entries []os.DirEntry, project string, agent AgentType,
 ) []DiscoveredFile {
 	// Collect UUIDs that have .jsonl files
 	hasJSONL := make(map[string]bool)
@@ -1741,7 +980,7 @@ func discoverVSCodeSessionFiles(
 			files = append(files, DiscoveredFile{
 				Path:    filepath.Join(dir, name),
 				Project: project,
-				Agent:   AgentVSCodeCopilot,
+				Agent:   agent,
 			})
 		} else if uuid, ok := strings.CutSuffix(name, ".json"); ok {
 			// Skip .json if a .jsonl exists for the same UUID
@@ -1751,74 +990,10 @@ func discoverVSCodeSessionFiles(
 			files = append(files, DiscoveredFile{
 				Path:    filepath.Join(dir, name),
 				Project: project,
-				Agent:   AgentVSCodeCopilot,
+				Agent:   agent,
 			})
 		}
 	}
-	return files
-}
-
-// FindVSCodeCopilotSourceFile locates a VSCode Copilot
-// session file by UUID (.jsonl preferred over .json).
-func FindVSCodeCopilotSourceFile(
-	vscodeUserDir, rawID string,
-) string {
-	if vscodeUserDir == "" || !IsValidSessionID(rawID) {
-		return ""
-	}
-
-	// Search through workspaceStorage
-	wsDir := filepath.Join(vscodeUserDir, "workspaceStorage")
-	hashDirs, err := os.ReadDir(wsDir)
-	if err == nil {
-		for _, entry := range hashDirs {
-			if !entry.IsDir() {
-				continue
-			}
-			base := filepath.Join(
-				wsDir, entry.Name(), "chatSessions",
-			)
-			// Prefer .jsonl
-			for _, ext := range []string{".jsonl", ".json"} {
-				candidate := filepath.Join(
-					base, rawID+ext,
-				)
-				if _, err := os.Stat(candidate); err == nil {
-					return candidate
-				}
-			}
-		}
-	}
-
-	// Check global dirs
-	for _, subdir := range []string{
-		"globalStorage/emptyWindowChatSessions",
-		"globalStorage/transferredChatSessions",
-	} {
-		base := filepath.Join(vscodeUserDir, subdir)
-		for _, ext := range []string{".jsonl", ".json"} {
-			candidate := filepath.Join(base, rawID+ext)
-			if _, err := os.Stat(candidate); err == nil {
-				return candidate
-			}
-		}
-	}
-
-	return ""
-}
-
-// DiscoverVisualStudioCopilotSessions finds Visual Studio Copilot
-// trace files under the configured traces directory.
-func DiscoverVisualStudioCopilotSessions(vsRoot string) []DiscoveredFile {
-	if vsRoot == "" {
-		return nil
-	}
-	entries, err := os.ReadDir(vsRoot)
-	if err != nil {
-		return nil
-	}
-	files := discoverVisualStudioCopilotSessionFiles(vsRoot, entries)
-	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files
 }
 
@@ -1832,19 +1007,14 @@ func DiscoverVisualStudioCopilotSessions(vsRoot string) []DiscoveredFile {
 func discoverVisualStudioCopilotSessionFiles(
 	dir string, entries []os.DirEntry,
 ) []DiscoveredFile {
-	type candidate struct {
-		path  string
-		mtime time.Time
-	}
-	bestByConversation := map[string]candidate{}
+	bestByConversation := map[string]visualStudioCopilotCandidate{}
 	var unreadable []DiscoveredFile
 	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".jsonl") ||
-			!strings.Contains(name, "_VSGitHubCopilot_traces") {
+		if entry.IsDir() ||
+			!isVisualStudioCopilotTraceFileName(entry.Name()) {
 			continue
 		}
-		path := filepath.Join(dir, name)
+		path := filepath.Join(dir, entry.Name())
 		mtime := time.Time{}
 		if info, err := entry.Info(); err == nil {
 			mtime = info.ModTime()
@@ -1862,10 +1032,11 @@ func discoverVisualStudioCopilotSessionFiles(
 			continue
 		}
 		for _, id := range ids {
-			current, ok := bestByConversation[id]
-			if !ok || mtime.After(current.mtime) ||
-				(mtime.Equal(current.mtime) && path > current.path) {
-				bestByConversation[id] = candidate{path: path, mtime: mtime}
+			current := bestByConversation[id]
+			if visualStudioCopilotCandidateWins(path, mtime, current) {
+				bestByConversation[id] = visualStudioCopilotCandidate{
+					path: path, mtime: mtime,
+				}
 			}
 		}
 	}
@@ -1881,15 +1052,6 @@ func discoverVisualStudioCopilotSessionFiles(
 	return files
 }
 
-// FindVisualStudioCopilotSourceFile locates a Visual Studio Copilot
-// trace file by conversation UUID.
-func FindVisualStudioCopilotSourceFile(vsRoot, rawID string) string {
-	if vsRoot == "" || !IsValidSessionID(rawID) {
-		return ""
-	}
-	return findVisualStudioCopilotTraceSourceFile(vsRoot, rawID)
-}
-
 func findVisualStudioCopilotTraceSourceFile(
 	dir, rawID string,
 ) string {
@@ -1899,27 +1061,65 @@ func findVisualStudioCopilotTraceSourceFile(
 	}
 	needle := `"gen_ai.conversation.id"`
 	valueNeedle := `"stringValue":"` + rawID + `"`
-	var matches []string
+	var best visualStudioCopilotCandidate
 	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".jsonl") ||
-			!strings.Contains(name, "_VSGitHubCopilot_traces") {
+		if entry.IsDir() ||
+			!isVisualStudioCopilotTraceFileName(entry.Name()) {
 			continue
 		}
-		path := filepath.Join(dir, name)
-		if visualStudioCopilotTraceContains(path, needle, valueNeedle) {
-			matches = append(matches, path)
+		path := filepath.Join(dir, entry.Name())
+		if !visualStudioCopilotTraceContains(path, needle, valueNeedle) {
+			continue
+		}
+		mtime := time.Time{}
+		if info, err := entry.Info(); err == nil {
+			mtime = info.ModTime()
+		}
+		// Select the same canonical trace discovery would (newest mtime, then
+		// greater path) so a single-session resync resolves the conversation to
+		// the identical virtual path discovery stored, even when filename order
+		// and mtime order disagree.
+		if visualStudioCopilotCandidateWins(path, mtime, best) {
+			best = visualStudioCopilotCandidate{path: path, mtime: mtime}
 		}
 	}
-	if len(matches) == 0 {
+	if best.path == "" {
 		return ""
 	}
-	sort.Strings(matches)
 	// Return a conversation-scoped virtual path. The stored file_path is a
 	// <traceFile>#<conversationID> key, and returning the bare trace file would
 	// let a single-session resync enumerate and rewrite every conversation in
 	// that trace rather than only the requested one.
-	return VisualStudioCopilotVirtualPath(matches[len(matches)-1], rawID)
+	return VisualStudioCopilotVirtualPath(best.path, rawID)
+}
+
+// visualStudioCopilotCandidate is one trace file considered as the canonical
+// home for a conversation: its path and mtime.
+type visualStudioCopilotCandidate struct {
+	path  string
+	mtime time.Time
+}
+
+// isVisualStudioCopilotTraceFileName reports whether name is a Visual Studio
+// Copilot trace file.
+func isVisualStudioCopilotTraceFileName(name string) bool {
+	return strings.HasSuffix(name, ".jsonl") &&
+		strings.Contains(name, "_VSGitHubCopilot_traces")
+}
+
+// visualStudioCopilotCandidateWins reports whether the trace at (path, mtime)
+// should replace the current best candidate. The canonical rule, shared by
+// discovery and single-session lookup, is newest mtime first, then the
+// lexicographically greater path as a deterministic tie-breaker. A zero-value
+// best (empty path) means no candidate has been chosen yet.
+func visualStudioCopilotCandidateWins(
+	path string, mtime time.Time, best visualStudioCopilotCandidate,
+) bool {
+	if best.path == "" {
+		return true
+	}
+	return mtime.After(best.mtime) ||
+		(mtime.Equal(best.mtime) && path > best.path)
 }
 
 func visualStudioCopilotTraceContains(
@@ -1941,457 +1141,6 @@ func visualStudioCopilotTraceContains(
 		}
 	}
 	return false
-}
-
-// DiscoverOpenClawSessions finds all JSONL session files under the
-// OpenClaw agents directory. The directory structure is:
-// <agentsDir>/<agentId>/sessions/<sessionId>.jsonl
-//
-// When both active (.jsonl) and archived (.jsonl.deleted.*,
-// .jsonl.full.bak, .jsonl.reset.*) files exist for the same
-// logical session ID, only one file is returned per session:
-// the active .jsonl file is preferred; if absent, the newest
-// archived file (by filename, which embeds a timestamp, or by
-// file mtime as a fallback) is chosen.
-func DiscoverOpenClawSessions(agentsDir string) []DiscoveredFile {
-	if agentsDir == "" {
-		return nil
-	}
-
-	// Each agent has its own subdirectory.
-	agentEntries, err := os.ReadDir(agentsDir)
-	if err != nil {
-		return nil
-	}
-
-	var files []DiscoveredFile
-	for _, agentEntry := range agentEntries {
-		if !isDirOrSymlink(agentEntry, agentsDir) {
-			continue
-		}
-		if !IsValidSessionID(agentEntry.Name()) {
-			continue
-		}
-
-		sessionsDir := filepath.Join(
-			agentsDir, agentEntry.Name(), "sessions",
-		)
-		entries, err := os.ReadDir(sessionsDir)
-		if err != nil {
-			continue
-		}
-
-		// Deduplicate by logical session ID within each
-		// agent's sessions directory.
-		best := make(map[string]os.DirEntry) // sessionID -> best entry
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-			name := entry.Name()
-			if !IsOpenClawSessionFile(name) {
-				continue
-			}
-			sid := OpenClawSessionID(name)
-			prev, exists := best[sid]
-			if !exists {
-				best[sid] = entry
-				continue
-			}
-			best[sid] = bestOpenClawEntry(prev, entry)
-		}
-
-		for _, entry := range best {
-			files = append(files, DiscoveredFile{
-				Path: filepath.Join(
-					sessionsDir, entry.Name(),
-				),
-				Agent: AgentOpenClaw,
-			})
-		}
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-// bestOpenClawEntry returns the preferred entry when two files
-// share the same logical session ID. Active .jsonl files always
-// win. Among archived files, the one with the newest embedded
-// timestamp wins; when no timestamp is parseable, mtime is used.
-func bestOpenClawEntry(a, b os.DirEntry) os.DirEntry {
-	aActive := strings.HasSuffix(a.Name(), ".jsonl")
-	bActive := strings.HasSuffix(b.Name(), ".jsonl")
-	if aActive && !bActive {
-		return a
-	}
-	if bActive && !aActive {
-		return b
-	}
-	aTime := openClawArchiveTime(a)
-	bTime := openClawArchiveTime(b)
-	if !aTime.IsZero() && !bTime.IsZero() {
-		if bTime.After(aTime) {
-			return b
-		}
-		return a
-	}
-	if !aTime.IsZero() {
-		return a
-	}
-	if !bTime.IsZero() {
-		return b
-	}
-	ai, errA := a.Info()
-	bi, errB := b.Info()
-	if errA == nil && errB == nil &&
-		bi.ModTime().After(ai.ModTime()) {
-		return b
-	}
-	return a
-}
-
-// openClawArchiveTime extracts the timestamp embedded in an
-// OpenClaw archive filename suffix (e.g. ".deleted.2026-02-19T08-59-24.951Z").
-func openClawArchiveTime(e os.DirEntry) time.Time {
-	name := e.Name()
-	idx := strings.Index(name, ".jsonl.")
-	if idx <= 0 {
-		return time.Time{}
-	}
-	suffix := name[idx+len(".jsonl."):]
-	// suffix is e.g. "deleted.2026-02-19T08-59-24.951Z" or "full.bak"
-	_, tsStr, ok := strings.Cut(suffix, ".")
-	if !ok {
-		return time.Time{}
-	}
-	// Convert dash-separated time back to colons: 08-59-24 → 08:59:24
-	if tIdx := strings.IndexByte(tsStr, 'T'); tIdx >= 0 {
-		datePart := tsStr[:tIdx+1]
-		timePart := tsStr[tIdx+1:]
-		// Only replace first two dashes in time portion (hh-mm-ss)
-		timePart = strings.Replace(timePart, "-", ":", 1)
-		timePart = strings.Replace(timePart, "-", ":", 1)
-		tsStr = datePart + timePart
-	}
-	t, err := time.Parse("2006-01-02T15:04:05.000Z", tsStr)
-	if err != nil {
-		t, err = time.Parse("2006-01-02T15:04:05Z", tsStr)
-	}
-	if err != nil {
-		return time.Time{}
-	}
-	return t
-}
-
-// FindOpenClawSourceFile locates an OpenClaw session file by its
-// raw ID (without the "openclaw:" prefix). The raw ID has the
-// format "<agentId>:<sessionId>", which directly maps to the
-// file at <agentsDir>/<agentId>/sessions/<sessionId>.jsonl.
-//
-// If the active .jsonl file does not exist (archive-only session),
-// the sessions directory is scanned for any archived file whose
-// logical session ID matches. When multiple archived files match,
-// the best candidate (newest by filename timestamp) is returned.
-func FindOpenClawSourceFile(agentsDir, rawID string) string {
-	if agentsDir == "" {
-		return ""
-	}
-
-	// Split "agentId:sessionId" into its two parts.
-	agentID, sessionID, ok := strings.Cut(rawID, ":")
-	if !ok || !IsValidSessionID(agentID) ||
-		!IsValidSessionID(sessionID) {
-		return ""
-	}
-
-	sessionsDir := filepath.Join(
-		agentsDir, agentID, "sessions",
-	)
-
-	// Fast path: the active .jsonl file exists.
-	active := filepath.Join(sessionsDir, sessionID+".jsonl")
-	if _, err := os.Stat(active); err == nil {
-		return active
-	}
-
-	// Slow path: scan for archived files matching this session.
-	entries, err := os.ReadDir(sessionsDir)
-	if err != nil {
-		return ""
-	}
-
-	var best os.DirEntry
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !IsOpenClawSessionFile(name) {
-			continue
-		}
-		if OpenClawSessionID(name) != sessionID {
-			continue
-		}
-		if best == nil {
-			best = entry
-			continue
-		}
-		best = bestOpenClawEntry(best, entry)
-	}
-	if best != nil {
-		return filepath.Join(sessionsDir, best.Name())
-	}
-	return ""
-}
-
-// DiscoverQClawSessions finds all JSONL session files under the
-// QClaw agents directory. The directory structure is:
-// <agentsDir>/<agentId>/sessions/<sessionId>.jsonl
-//
-// When both active (.jsonl) and archived (.jsonl.deleted.*,
-// .jsonl.full.bak, .jsonl.reset.*) files exist for the same
-// logical session ID, only one file is returned per session:
-// the active .jsonl file is preferred; if absent, the newest
-// archived file (by filename, which embeds a timestamp, or by
-// file mtime as a fallback) is chosen.
-func DiscoverQClawSessions(agentsDir string) []DiscoveredFile {
-	if agentsDir == "" {
-		return nil
-	}
-
-	// Each agent has its own subdirectory.
-	agentEntries, err := os.ReadDir(agentsDir)
-	if err != nil {
-		return nil
-	}
-
-	var files []DiscoveredFile
-	for _, agentEntry := range agentEntries {
-		if !isDirOrSymlink(agentEntry, agentsDir) {
-			continue
-		}
-		if !IsValidSessionID(agentEntry.Name()) {
-			continue
-		}
-
-		sessionsDir := filepath.Join(
-			agentsDir, agentEntry.Name(), "sessions",
-		)
-		entries, err := os.ReadDir(sessionsDir)
-		if err != nil {
-			continue
-		}
-
-		// Deduplicate by logical session ID within each
-		// agent's sessions directory.
-		best := make(map[string]os.DirEntry) // sessionID -> best entry
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-			name := entry.Name()
-			if !IsQClawSessionFile(name) {
-				continue
-			}
-			sid := QClawSessionID(name)
-			prev, exists := best[sid]
-			if !exists {
-				best[sid] = entry
-				continue
-			}
-			best[sid] = bestQClawEntry(prev, entry)
-		}
-
-		for _, entry := range best {
-			files = append(files, DiscoveredFile{
-				Path: filepath.Join(
-					sessionsDir, entry.Name(),
-				),
-				Agent: AgentQClaw,
-			})
-		}
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
-}
-
-// bestQClawEntry returns the preferred entry when two files
-// share the same logical session ID. Active .jsonl files always
-// win. Among archived files, the one with the newest embedded
-// timestamp wins; when no timestamp is parseable, mtime is used.
-func bestQClawEntry(a, b os.DirEntry) os.DirEntry {
-	aActive := strings.HasSuffix(a.Name(), ".jsonl")
-	bActive := strings.HasSuffix(b.Name(), ".jsonl")
-	if aActive && !bActive {
-		return a
-	}
-	if bActive && !aActive {
-		return b
-	}
-	aTime := qClawArchiveTime(a)
-	bTime := qClawArchiveTime(b)
-	if !aTime.IsZero() && !bTime.IsZero() {
-		if bTime.After(aTime) {
-			return b
-		}
-		return a
-	}
-	if !aTime.IsZero() {
-		return a
-	}
-	if !bTime.IsZero() {
-		return b
-	}
-	ai, errA := a.Info()
-	bi, errB := b.Info()
-	if errA == nil && errB == nil &&
-		bi.ModTime().After(ai.ModTime()) {
-		return b
-	}
-	return a
-}
-
-// qClawArchiveTime extracts the timestamp embedded in an
-// QClaw archive filename suffix (e.g. ".deleted.2026-02-19T08-59-24.951Z").
-func qClawArchiveTime(e os.DirEntry) time.Time {
-	name := e.Name()
-	idx := strings.Index(name, ".jsonl.")
-	if idx <= 0 {
-		return time.Time{}
-	}
-	suffix := name[idx+len(".jsonl."):]
-	// suffix is e.g. "deleted.2026-02-19T08-59-24.951Z" or "full.bak"
-	_, tsStr, ok := strings.Cut(suffix, ".")
-	if !ok {
-		return time.Time{}
-	}
-	// Convert dash-separated time back to colons: 08-59-24 → 08:59:24
-	if tIdx := strings.IndexByte(tsStr, 'T'); tIdx >= 0 {
-		datePart := tsStr[:tIdx+1]
-		timePart := tsStr[tIdx+1:]
-		// Only replace first two dashes in time portion (hh-mm-ss)
-		timePart = strings.Replace(timePart, "-", ":", 1)
-		timePart = strings.Replace(timePart, "-", ":", 1)
-		tsStr = datePart + timePart
-	}
-	t, err := time.Parse("2006-01-02T15:04:05.000Z", tsStr)
-	if err != nil {
-		t, err = time.Parse("2006-01-02T15:04:05Z", tsStr)
-	}
-	if err != nil {
-		return time.Time{}
-	}
-	return t
-}
-
-// FindQClawSourceFile locates a QClaw session file by its
-// raw ID (without the "qclaw:" prefix). The raw ID has the
-// format "<agentId>:<sessionId>", which directly maps to the
-// file at <agentsDir>/<agentId>/sessions/<sessionId>.jsonl.
-//
-// If the active .jsonl file does not exist (archive-only session),
-// the sessions directory is scanned for any archived file whose
-// logical session ID matches. When multiple archived files match,
-// the best candidate (newest by filename timestamp) is returned.
-func FindQClawSourceFile(agentsDir, rawID string) string {
-	if agentsDir == "" {
-		return ""
-	}
-
-	// Split "agentId:sessionId" into its two parts.
-	agentID, sessionID, ok := strings.Cut(rawID, ":")
-	if !ok || !IsValidSessionID(agentID) ||
-		!IsValidSessionID(sessionID) {
-		return ""
-	}
-
-	sessionsDir := filepath.Join(
-		agentsDir, agentID, "sessions",
-	)
-
-	// Fast path: the active .jsonl file exists.
-	active := filepath.Join(sessionsDir, sessionID+".jsonl")
-	if _, err := os.Stat(active); err == nil {
-		return active
-	}
-
-	// Slow path: scan for archived files matching this session.
-	entries, err := os.ReadDir(sessionsDir)
-	if err != nil {
-		return ""
-	}
-
-	var best os.DirEntry
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !IsQClawSessionFile(name) {
-			continue
-		}
-		if QClawSessionID(name) != sessionID {
-			continue
-		}
-		if best == nil {
-			best = entry
-			continue
-		}
-		best = bestQClawEntry(best, entry)
-	}
-	if best != nil {
-		return filepath.Join(sessionsDir, best.Name())
-	}
-	return ""
-}
-
-// DiscoverIflowProjects finds all project directories under the
-// iFlow projects dir and returns their JSONL session files.
-// iFlow stores sessions in .iflow/projects/<project>/session-<uuid>.jsonl
-func DiscoverIflowProjects(projectsDir string) []DiscoveredFile {
-	entries, err := os.ReadDir(projectsDir)
-	if err != nil {
-		return nil
-	}
-
-	var files []DiscoveredFile
-	for _, entry := range entries {
-		if !isDirOrSymlink(entry, projectsDir) {
-			continue
-		}
-
-		projDir := filepath.Join(projectsDir, entry.Name())
-		sessionFiles, err := os.ReadDir(projDir)
-		if err != nil {
-			continue
-		}
-
-		for _, sf := range sessionFiles {
-			if sf.IsDir() {
-				continue
-			}
-			name := sf.Name()
-			if !strings.HasPrefix(name, "session-") || !strings.HasSuffix(name, ".jsonl") {
-				continue
-			}
-			files = append(files, DiscoveredFile{
-				Path:    filepath.Join(projDir, name),
-				Project: entry.Name(),
-				Agent:   AgentIflow,
-			})
-		}
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Path < files[j].Path
-	})
-	return files
 }
 
 // extractIflowBaseSessionID extracts the base session ID from an iFlow
@@ -2419,115 +1168,4 @@ func extractIflowBaseSessionID(sessionID string) string {
 
 	// If we didn't find 5 hyphens, this is not a fork ID
 	return sessionID
-}
-
-// FindIflowSourceFile finds the original JSONL file for an iFlow
-// session ID by searching all project directories.
-func FindIflowSourceFile(
-	projectsDir, sessionID string,
-) string {
-	if !IsValidSessionID(sessionID) {
-		return ""
-	}
-
-	// For fork IDs, extract the base session ID to find the source file
-	baseID := extractIflowBaseSessionID(sessionID)
-
-	entries, err := os.ReadDir(projectsDir)
-	if err != nil {
-		return ""
-	}
-
-	target := "session-" + strings.TrimPrefix(baseID, "iflow:") + ".jsonl"
-	for _, entry := range entries {
-		if !isDirOrSymlink(entry, projectsDir) {
-			continue
-		}
-		candidate := filepath.Join(
-			projectsDir, entry.Name(), target,
-		)
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
-
-	return ""
-}
-
-// DiscoverVibeSessions finds all Vibe session files under the given root directory.
-// Vibe stores sessions in: ~/.vibe/logs/session/session_YYYYMMDD_HHMMSS_uuid/
-// Each session directory contains messages.jsonl
-func DiscoverVibeSessions(root string) []DiscoveredFile {
-	var results []DiscoveredFile
-
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return results
-	}
-
-	for _, entry := range entries {
-		if !isDirOrSymlink(entry, root) {
-			continue
-		}
-
-		// Vibe session directories match pattern: session_YYYYMMDD_HHMMSS_uuid
-		// The uuid part can contain hyphens
-		if !strings.HasPrefix(entry.Name(), "session_") || !strings.Contains(entry.Name(), "_") {
-			continue
-		}
-
-		sessionDir := filepath.Join(root, entry.Name())
-		messagesPath := filepath.Join(sessionDir, "messages.jsonl")
-
-		if info, err := os.Stat(messagesPath); err == nil && !info.IsDir() {
-			results = append(results, DiscoveredFile{
-				Path:    messagesPath,
-				Agent:   AgentVibe,
-				Project: entry.Name(),
-			})
-		}
-	}
-
-	return results
-}
-
-// FindVibeSourceFile locates a specific Vibe session file by ID. The ID is the
-// session_id recorded in meta.json (a uuid), which usually differs from the
-// session directory name. Sessions without meta.json fall back to the directory
-// name, so a direct path is tried first before scanning meta.json files.
-func FindVibeSourceFile(root, sessionID string) string {
-	// Fast path: sessionID is the directory name (no-meta fallback).
-	if messagesPath := filepath.Join(root, sessionID, "messages.jsonl"); isVibeMessagesFile(messagesPath) {
-		return messagesPath
-	}
-
-	// Otherwise sessionID is a meta.json session_id; scan session
-	// directories and match on their recorded session_id.
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return ""
-	}
-	for _, entry := range entries {
-		if !isDirOrSymlink(entry, root) || !strings.HasPrefix(entry.Name(), "session_") {
-			continue
-		}
-		messagesPath := filepath.Join(root, entry.Name(), "messages.jsonl")
-		if !isVibeMessagesFile(messagesPath) {
-			continue
-		}
-		metaPath := filepath.Join(root, entry.Name(), "meta.json")
-		if meta, err := parseVibeMetadata(metaPath); err == nil && meta.SessionID == sessionID {
-			return messagesPath
-		}
-	}
-	return ""
-}
-
-// isVibeMessagesFile reports whether path is an existing regular file.
-func isVibeMessagesFile(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil || info == nil {
-		return false
-	}
-	return !info.IsDir()
 }

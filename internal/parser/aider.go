@@ -36,7 +36,7 @@ import (
 // sessiondex Rust adapter, which emits one session per run via a
 // path#idx key). agentsview already supports multiple sessions per
 // physical file via the virtual-path fan-out pattern used by Shelley and
-// Zed, so aider reuses it: DiscoverAiderSessions returns the single
+// Zed, so aider reuses it: discoverAiderSessions returns the single
 // physical file and the sync engine fans it out to one ParseResult per
 // run. A run with no parseable turns (e.g. a header-only run) yields no
 // session. Edited files are best-effort, taken from aider's own
@@ -616,23 +616,23 @@ func buildAiderRunSession(
 	return sess, messages
 }
 
-// ParseAiderRun parses a single run (by positional index) out of a
+// parseAiderRun parses a single run (by positional index) out of a
 // history file into one session. The physical file is read and split on
 // every call; callers parsing every run of a file should prefer
-// ParseAiderRuns, which reads the file once. Returns (nil, nil, nil)
+// parseAiderRuns, which reads the file once. Returns (nil, nil, nil)
 // when the run does not exist or has no parseable turns.
-func ParseAiderRun(
+func parseAiderRun(
 	path string, idx int, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
-	return ParseAiderRunWithID(path, "", idx, machine)
+	return parseAiderRunWithID(path, "", idx, machine)
 }
 
-// ParseAiderRunWithID is ParseAiderRun with an explicit canonical identity
+// parseAiderRunWithID is parseAiderRun with an explicit canonical identity
 // path used to derive the stable session ID. idPath should be the run's
 // canonical physical history path (e.g. the remote path during SSH sync);
 // pass "" to fall back to the on-disk path, which is the local behavior.
 // The file is always read from path; only the ID hash uses idPath.
-func ParseAiderRunWithID(
+func parseAiderRunWithID(
 	path, idPath string, idx int, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
@@ -657,16 +657,16 @@ func ParseAiderRunWithID(
 	return sess, msgs, nil
 }
 
-// ParseAiderRuns reads a history file once and parses every run into its
+// parseAiderRuns reads a history file once and parses every run into its
 // own ParseResult, in file order. Runs with no parseable turns are
 // dropped. Returns nil for an unreadable or run-less file. This is the
-// fan-out entry point used by the sync engine; ParseAiderRun is the
+// fan-out entry point used by the sync engine; parseAiderRun is the
 // single-run lookup used when resolving one virtual path.
-func ParseAiderRuns(path, machine string) ([]ParseResult, error) {
-	return ParseAiderRunsWithID(path, "", machine)
+func parseAiderRuns(path, machine string) ([]ParseResult, error) {
+	return parseAiderRunsWithID(path, "", machine)
 }
 
-// ParseAiderRunsWithID is ParseAiderRuns with an explicit canonical
+// parseAiderRunsWithID is parseAiderRuns with an explicit canonical
 // identity path used to derive stable session IDs for every run. idPath
 // should be the file's canonical physical history path (e.g. the remote
 // path during SSH sync, where path is a random temp extraction dir); pass
@@ -674,7 +674,7 @@ func ParseAiderRuns(path, machine string) ([]ParseResult, error) {
 // file is always read from path; only the per-run ID hash uses idPath, so
 // the IDs stay stable across syncs that extract the file to a different
 // temp location.
-func ParseAiderRunsWithID(path, idPath, machine string) ([]ParseResult, error) {
+func parseAiderRunsWithID(path, idPath, machine string) ([]ParseResult, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("stat %s: %w", path, err)
@@ -701,7 +701,7 @@ func ParseAiderRunsWithID(path, idPath, machine string) ([]ParseResult, error) {
 	return results, nil
 }
 
-// DiscoverAiderSessions walks root looking for .aider.chat.history.md
+// discoverAiderSessions walks root looking for .aider.chat.history.md
 // files. aider is rootless (no central store), so this is a bounded,
 // depth-capped, symlink-safe walk: it descends at most aiderMaxWalkDepth
 // levels, never follows symlinks, skips a fixed set of large vendor /
@@ -712,7 +712,7 @@ func ParseAiderRunsWithID(path, idPath, machine string) ([]ParseResult, error) {
 // surfaced, so a partial scan still indexes whatever it found. Each
 // discovered physical file is fanned out into one session per run by the
 // sync engine.
-func DiscoverAiderSessions(root string) []DiscoveredFile {
+func discoverAiderSessions(root string) []DiscoveredFile {
 	if root == "" {
 		return nil
 	}
@@ -859,18 +859,18 @@ func aiderShouldSkipProtectedHomeDirs(root, home, goos string) bool {
 	return filepath.Clean(root) == filepath.Clean(home)
 }
 
-// FindAiderSourceFile resolves a single aider run's virtual source path
+// findAiderSourceFile resolves a single aider run's virtual source path
 // ("<historyPath>#<idx>") from a root directory and a raw session ID (the
 // per-run hash). It re-runs the bounded discovery walk to find candidate
 // history files, then, for each, reads and splits it once to recompute
 // the per-run IDs and match rawID. It returns the matching virtual path,
 // or "" when nothing under root produces rawID. The physical file is
 // stat-ed via os.Stat (not re-walked) for the per-run parse downstream.
-func FindAiderSourceFile(root, rawID string) string {
+func findAiderSourceFile(root, rawID string) string {
 	if root == "" || rawID == "" {
 		return ""
 	}
-	for _, f := range DiscoverAiderSessions(root) {
+	for _, f := range discoverAiderSessions(root) {
 		if path, ok := AiderVirtualPathForRawID(f.Path, rawID); ok {
 			return path
 		}

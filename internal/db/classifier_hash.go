@@ -23,18 +23,19 @@ const classifierAlgorithmVersion = 2
 
 // ClassifierHash returns a stable hex-encoded SHA-256 over
 // the algorithm version, all built-in pattern slices, and the
-// currently configured user prefixes. Inputs are sorted
+// currently configured user patterns. Inputs are sorted
 // before hashing so config order doesn't affect the result.
 // Tagged + length-prefixed encoding prevents splice
-// collisions between slice boundaries (e.g. moving an entry
-// from substrings to exact-matches must change the hash).
+// collisions between slice boundaries.
 func ClassifierHash() string {
 	h := sha256.New()
 	fmt.Fprintf(h, "v%d\n", classifierAlgorithmVersion)
 	writeSorted(h, "P", automatedPrefixes)
 	writeSorted(h, "S", automatedSubstrings)
 	writeSorted(h, "E", automatedExactMatches)
-	writeSorted(h, "U", UserAutomationPrefixes())
+	writeSorted(h, "UP", UserAutomationPrefixes())
+	writeSorted(h, "US", UserAutomationSubstrings())
+	writeSorted(h, "UE", UserAutomationExactMatches())
 	return hex.EncodeToString(h.Sum(nil))
 }
 

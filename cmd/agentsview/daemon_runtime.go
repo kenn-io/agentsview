@@ -550,23 +550,35 @@ type heldStartLock struct {
 
 var startLocks sync.Map
 
-// MarkDaemonStarting acquires the kit daemon start lock for this data dir while
-// the server is starting. The lock file itself is advisory; lock ownership is
-// what other processes observe.
-func MarkDaemonStarting(dataDir string) {
+// markDaemonStarting acquires the kit daemon start lock for this data dir while
+// the server is starting. owned reports whether this process now owns the
+// marker; acquired reports whether this call acquired it.
+func markDaemonStarting(dataDir string) (owned bool, acquired bool) {
 	path, err := runtimeStore(dataDir).LockPath()
 	if err != nil {
-		return
+		return false, false
 	}
 	if _, ok := startLocks.Load(path); ok {
-		return
+		return true, false
 	}
 	lock := flock.New(path)
 	locked, err := lock.TryLock()
 	if err != nil || !locked {
-		return
+		return false, false
 	}
-	startLocks.Store(path, heldStartLock{path: path, lock: lock})
+	held := heldStartLock{path: path, lock: lock}
+	if _, loaded := startLocks.LoadOrStore(path, held); loaded {
+		_ = lock.Unlock()
+		return true, false
+	}
+	return true, true
+}
+
+// MarkDaemonStarting acquires the kit daemon start lock for this data dir while
+// the server is starting. The lock file itself is advisory; lock ownership is
+// what other processes observe.
+func MarkDaemonStarting(dataDir string) {
+	markDaemonStarting(dataDir)
 }
 
 // UnmarkDaemonStarting releases the kit daemon start lock for this data dir.

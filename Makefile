@@ -20,7 +20,7 @@ AIR_BIN := $(shell if command -v air >/dev/null 2>&1; then command -v air; \
 	elif [ -x "$(GOPATH_FIRST)/bin/air" ]; then printf "%s" "$(GOPATH_FIRST)/bin/air"; \
 	fi)
 
-.PHONY: build build-release install frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short bench-backends test-postgres test-postgres-ci postgres-up postgres-down test-ssh test-ssh-ci ssh-up ssh-down e2e e2e-duckdb vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot dev-snapshot help
+.PHONY: build build-release install frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short bench-backends test-postgres test-postgres-ci test-s3 postgres-up postgres-down test-ssh test-ssh-ci ssh-up ssh-down e2e e2e-duckdb vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot dev-snapshot help
 
 # Ensure go:embed has at least one file (no-op if frontend is built)
 ensure-embed-dir:
@@ -259,6 +259,12 @@ test-postgres: pricing-snapshot ensure-embed-dir postgres-up
 test-postgres-ci: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -count=1
 
+# S3 discovery integration tests. testcontainers starts and tears down a
+# rustfs (S3-compatible) container automatically, so only a working Docker
+# daemon is required.
+test-s3: pricing-snapshot ensure-embed-dir
+	CGO_ENABLED=1 go test -tags "fts5,s3test" -v ./internal/sync/... -run TestS3 -count=1
+
 # Start test SSH container
 ssh-up:
 	docker compose -f docker-compose.test.yml up -d --build --wait sshd
@@ -334,7 +340,19 @@ nilaway-golangci-build:
 
 # Run NilAway through the custom golangci-lint module plugin.
 nilaway: pricing-snapshot ensure-embed-dir nilaway-golangci-build
-	$(CUSTOM_GCL) run --config .golangci.nilaway.yml ./...
+	@set -e; \
+	root=$$(pwd); \
+	dirs=$$(go list -f '{{.Dir}}' ./...); \
+	for dir in $$dirs; do \
+		if [ "$$dir" = "$$root" ]; then \
+			pkg="."; \
+		else \
+			pkg="./$${dir#$$root/}"; \
+		fi; \
+		echo "$(CUSTOM_GCL) run --config .golangci.nilaway.yml $$pkg"; \
+		GOMAXPROCS=$${GOMAXPROCS:-1} GOGC=$${GOGC:-10} GOMEMLIMIT=$${GOMEMLIMIT:-512MiB} \
+			$(CUSTOM_GCL) run --config .golangci.nilaway.yml "$$pkg"; \
+	done
 
 # Install pinned local lint tools.
 lint-tools:
@@ -441,6 +459,7 @@ help:
 	@echo "  test-short     - Run fast tests only"
 	@echo "  bench-backends - Benchmark SQLite, DuckDB, and PostgreSQL stores"
 	@echo "  test-postgres  - Run PostgreSQL integration tests"
+	@echo "  test-s3        - Run S3 discovery integration tests (Docker)"
 	@echo "  postgres-up    - Start test PostgreSQL container"
 	@echo "  postgres-down  - Stop test PostgreSQL container"
 	@echo "  test-ssh       - Run SSH integration tests"

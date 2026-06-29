@@ -91,14 +91,14 @@ type Store interface {
 	UnpinMessage(sessionID string, messageID int64) error
 	ListPinnedMessages(ctx context.Context, sessionID string, project string) ([]PinnedMessage, error)
 
-	// Insights (local-only; PG returns ErrReadOnly).
+	// Insights.
 	ListInsights(ctx context.Context, f InsightFilter) ([]Insight, error)
 	GetInsight(ctx context.Context, id int64) (*Insight, error)
 	GetCachedInsight(ctx context.Context, cacheKey string) (*Insight, error)
 	InsertInsight(s Insight) (int64, error)
 	DeleteInsight(id int64) error
 
-	// Session management (local-only; PG returns ErrReadOnly).
+	// Session management.
 	RenameSession(id string, displayName *string) error
 	SoftDeleteSession(id string) error
 	SoftDeleteSessions(ids []string) (int, error)

@@ -481,32 +481,26 @@ func TestFileBasedAgentsHaveConfigKey(t *testing.T) {
 
 func TestZedRegistryEntry(t *testing.T) {
 	def, ok := AgentByType(AgentZed)
-	if !ok {
-		t.Fatalf("AgentZed missing from Registry")
-	}
-	if !def.FileBased {
-		t.Fatalf("Zed FileBased = false, want true")
-	}
-	if def.EnvVar != "ZED_DIR" {
-		t.Fatalf("Zed EnvVar = %q", def.EnvVar)
-	}
-	if def.ConfigKey != "zed_dirs" {
-		t.Fatalf("Zed ConfigKey = %q", def.ConfigKey)
-	}
-	if def.IDPrefix != "zed:" {
-		t.Fatalf("Zed IDPrefix = %q", def.IDPrefix)
-	}
-	if def.DiscoverFunc == nil || def.FindSourceFunc == nil {
-		t.Fatalf("Zed discover/source funcs must be set")
-	}
+	require.True(t, ok, "AgentZed missing from Registry")
+	require.True(t, def.FileBased, "Zed FileBased")
+	assert.Equal(t, "ZED_DIR", def.EnvVar)
+	assert.Equal(t, "zed_dirs", def.ConfigKey)
+	assert.Equal(t, "zed:", def.IDPrefix)
+}
+
+func TestShelleyRegistryEntry(t *testing.T) {
+	def, ok := AgentByType(AgentShelley)
+	require.True(t, ok, "AgentShelley missing from Registry")
+	require.True(t, def.FileBased, "Shelley FileBased")
+	assert.Equal(t, "SHELLEY_DIR", def.EnvVar)
+	assert.Equal(t, "shelley_dirs", def.ConfigKey)
+	assert.Equal(t, "shelley:", def.IDPrefix)
 }
 
 func TestOpenCodeRegistryEntry(t *testing.T) {
 	def, ok := AgentByType(AgentOpenCode)
 	require.True(t, ok, "AgentOpenCode missing from Registry")
 	require.True(t, def.FileBased, "OpenCode FileBased")
-	require.NotNil(t, def.DiscoverFunc, "OpenCode DiscoverFunc")
-	require.NotNil(t, def.FindSourceFunc, "OpenCode FindSourceFunc")
 	want := []string{
 		"storage/session",
 		"storage/message",
@@ -520,8 +514,6 @@ func TestCoworkRegistryEntry(t *testing.T) {
 	def, ok := AgentByType(AgentCowork)
 	require.True(t, ok, "AgentCowork missing from Registry")
 	require.True(t, def.FileBased, "Cowork FileBased")
-	require.NotNil(t, def.DiscoverFunc, "Cowork DiscoverFunc")
-	require.NotNil(t, def.FindSourceFunc, "Cowork FindSourceFunc")
 	assert.Equal(t, "COWORK_DIR", def.EnvVar)
 	assert.Equal(t, "cowork_dirs", def.ConfigKey)
 	assert.Equal(t, "cowork:", def.IDPrefix)
@@ -540,8 +532,6 @@ func TestMiMoCodeRegistryEntry(t *testing.T) {
 	def, ok := AgentByType(AgentMiMoCode)
 	require.True(t, ok, "AgentMiMoCode missing from Registry")
 	require.True(t, def.FileBased, "MiMoCode FileBased")
-	require.NotNil(t, def.DiscoverFunc, "MiMoCode DiscoverFunc")
-	require.NotNil(t, def.FindSourceFunc, "MiMoCode FindSourceFunc")
 	assert.Equal(t, "MIMOCODE_DIR", def.EnvVar)
 	assert.Equal(t, "mimocode_dirs", def.ConfigKey)
 	assert.Equal(t, []string{".local/share/mimocode"}, def.DefaultDirs)
@@ -559,8 +549,6 @@ func TestCommandCodeRegistryEntry(t *testing.T) {
 	def, ok := AgentByType(AgentCommandCode)
 	require.True(t, ok, "AgentCommandCode missing from Registry")
 	require.True(t, def.FileBased, "Command Code FileBased")
-	require.NotNil(t, def.DiscoverFunc, "Command Code DiscoverFunc")
-	require.NotNil(t, def.FindSourceFunc, "Command Code FindSourceFunc")
 	assert.Equal(t, []string{".commandcode/projects"}, def.DefaultDirs)
 	assert.Equal(t, "commandcode:", def.IDPrefix)
 }
@@ -569,8 +557,6 @@ func TestDeepSeekTUIRegistryEntry(t *testing.T) {
 	def, ok := AgentByType(AgentDeepSeekTUI)
 	require.True(t, ok, "AgentDeepSeekTUI missing from Registry")
 	require.True(t, def.FileBased, "DeepSeek TUI FileBased")
-	require.NotNil(t, def.DiscoverFunc, "DeepSeek TUI DiscoverFunc")
-	require.NotNil(t, def.FindSourceFunc, "DeepSeek TUI FindSourceFunc")
 	assert.Equal(t, "DeepSeek TUI", def.DisplayName)
 	assert.Equal(t, "DEEPSEEK_TUI_SESSIONS_DIR", def.EnvVar)
 	assert.Equal(t, "deepseek_tui_sessions_dirs", def.ConfigKey)
@@ -606,11 +592,11 @@ func TestResolveMiMoCodeSourcePrefersStorage(t *testing.T) {
 		[]byte(`{"id":"ses_test","directory":"/home/user/code/my-app"}`),
 		0o644))
 
-	discovered := DiscoverMiMoCodeSessions(root)
+	discovered := discoverOpenCodeFormatSessions(mimoFmt, root)
 	require.Len(t, discovered, 1)
 	require.Equal(t, AgentMiMoCode, discovered[0].Agent)
 
-	require.Equal(t, path, FindMiMoCodeSourceFile(root, "ses_test"))
+	require.Equal(t, path, findOpenCodeFormatSourceFile(mimoFmt, root, "ses_test"))
 }
 
 func TestResolveOpenCodeSourceFallsBackToSQLiteOnBrokenStoragePath(
@@ -657,7 +643,7 @@ func TestDiscoverOpenCodeSessions(t *testing.T) {
 	data := []byte(`{"id":"ses_test","directory":"/home/user/code/my-app"}`)
 	require.NoError(t, os.WriteFile(path, data, 0o644), "write session")
 
-	got := DiscoverOpenCodeSessions(root)
+	got := discoverOpenCodeFormatSessions(openCodeFmt, root)
 	require.Len(t, got, 1, "len")
 	require.Equal(t, path, got[0].Path, "Path")
 	require.Equal(t, "my_app", got[0].Project, "Project")
@@ -672,7 +658,7 @@ func TestDiscoverOpenCodeSessionsIgnoresNestedJSON(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(`{"id":"ses_test"}`), 0o644), "write session")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "nested", "meta.json"), []byte(`{"id":"meta"}`), 0o644), "write nested json")
 
-	got := DiscoverOpenCodeSessions(root)
+	got := discoverOpenCodeFormatSessions(openCodeFmt, root)
 	require.Len(t, got, 1, "len")
 	require.Equal(t, path, got[0].Path, "Path")
 }
@@ -684,7 +670,7 @@ func TestFindOpenCodeSourceFilePrefersStorage(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(`{"id":"ses_123"}`), 0o644), "write session")
 	require.NoError(t, os.WriteFile(filepath.Join(root, "opencode.db"), []byte("x"), 0o644), "write db marker")
 
-	got := FindOpenCodeSourceFile(root, "ses_123")
+	got := findOpenCodeFormatSourceFile(openCodeFmt, root, "ses_123")
 	require.Equal(t, path, got, "FindOpenCodeSourceFile()")
 }
 
@@ -697,7 +683,7 @@ func TestFindOpenCodeSourceFileFallsBackToSQLiteInHybridRoot(t *testing.T) {
 	dbPath := filepath.Join(root, "opencode.db")
 	seedHybridSQLiteDB(t, dbPath, "ses_456")
 
-	got := FindOpenCodeSourceFile(root, "ses_456")
+	got := findOpenCodeFormatSourceFile(openCodeFmt, root, "ses_456")
 	want := OpenCodeSQLiteVirtualPath(dbPath, "ses_456")
 	require.Equal(t, want, got, "FindOpenCodeSourceFile()")
 }
@@ -716,7 +702,7 @@ func TestFindOpenCodeSourceFileReturnsEmptyWhenSessionMissing(t *testing.T) {
 	dbPath := filepath.Join(root, "opencode.db")
 	seedHybridSQLiteDB(t, dbPath, "ses_unrelated")
 
-	got := FindOpenCodeSourceFile(root, "ses_missing")
+	got := findOpenCodeFormatSourceFile(openCodeFmt, root, "ses_missing")
 	assert.Empty(t, got, "FindOpenCodeSourceFile()")
 }
 
@@ -725,11 +711,11 @@ func TestFindOpenCodeSourceFilePureSQLiteOnlyForExistingSession(t *testing.T) {
 	dbPath := filepath.Join(root, "opencode.db")
 	seedHybridSQLiteDB(t, dbPath, "ses_present")
 
-	got := FindOpenCodeSourceFile(root, "ses_present")
+	got := findOpenCodeFormatSourceFile(openCodeFmt, root, "ses_present")
 	assert.Equal(t,
 		OpenCodeSQLiteVirtualPath(dbPath, "ses_present"),
 		got, "FindOpenCodeSourceFile(present)")
-	got = FindOpenCodeSourceFile(root, "ses_absent")
+	got = findOpenCodeFormatSourceFile(openCodeFmt, root, "ses_absent")
 	assert.Empty(t, got, "FindOpenCodeSourceFile(absent)")
 }
 
@@ -893,17 +879,18 @@ func TestResolveOpenCodeWatchRootsMissingRoot(t *testing.T) {
 func TestParseOpenCodeSQLiteVirtualPath(t *testing.T) {
 	dbPath := filepath.Join("/tmp", "opencode.db")
 	virtual := OpenCodeSQLiteVirtualPath(dbPath, "ses_123")
-	gotDB, gotSessionID, ok := ParseOpenCodeSQLiteVirtualPath(virtual)
+	gotDB, gotSessionID, ok := parseOpenCodeFormatVirtualPath(openCodeFmt.dbName, virtual)
 	require.True(t, ok, "expected virtual path to parse")
 	assert.Equal(t, dbPath, gotDB, "db path")
 	assert.Equal(t, "ses_123", gotSessionID, "session ID")
 	hashDBPath := filepath.Join("/tmp", "opencode#dev", "opencode.db")
 	hashVirtual := OpenCodeSQLiteVirtualPath(hashDBPath, "ses_456")
-	gotDB, gotSessionID, ok = ParseOpenCodeSQLiteVirtualPath(hashVirtual)
+	gotDB, gotSessionID, ok = parseOpenCodeFormatVirtualPath(openCodeFmt.dbName, hashVirtual)
 	require.True(t, ok, "expected virtual path with # in db path to parse")
 	assert.Equal(t, hashDBPath, gotDB, "db path with #")
 	assert.Equal(t, "ses_456", gotSessionID, "session ID with #")
-	_, _, ok = ParseOpenCodeSQLiteVirtualPath(
+	_, _, ok = parseOpenCodeFormatVirtualPath(
+		openCodeFmt.dbName,
 		"/tmp/project#dir/storage/session/global/ses_123.json",
 	)
 	assert.False(t, ok, "expected real storage path with # to be rejected")
@@ -1107,10 +1094,6 @@ func TestReasonixRegistryEntry(t *testing.T) {
 	// Verify watch subdirs
 	assert.Contains(t, reasonixDef.WatchSubdirs, "sessions")
 	assert.Contains(t, reasonixDef.WatchSubdirs, "archive")
-
-	// Verify function pointers are set
-	assert.NotNil(t, reasonixDef.DiscoverFunc, "DiscoverFunc must be set")
-	assert.NotNil(t, reasonixDef.FindSourceFunc, "FindSourceFunc must be set")
 
 	// Verify default dirs contain .reasonix and Windows path
 	assert.True(t, len(reasonixDef.DefaultDirs) > 0)

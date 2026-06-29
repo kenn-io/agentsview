@@ -1,7 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"net"
+	"net/http/httptest"
 	"os"
 	"strconv"
 	"strings"
@@ -68,6 +70,72 @@ func TestServeStatusLinesReadOnly(t *testing.T) {
 	out := strings.Join(serveStatusLines(rt), "\n")
 	assert.Contains(t, out, "mode:    read-only")
 	assert.NotContains(t, out, "uptime:", "zero StartedAt must omit uptime")
+}
+
+func TestRunServeStatusReportsIncompatibleWritableDaemon(t *testing.T) {
+	dir := runtimeTestDir(t)
+	host, port := testPingServer(t)
+	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
+		host, port,
+		withRuntimeVersion("1.0.0"),
+		withRuntimeAPIVersion(0),
+	))
+
+	out := captureStdout(t, func() {
+		runServeStatus(config.Config{DataDir: dir})
+	})
+
+	assert.Contains(t, out, "incompatible")
+	assert.Contains(t, out, "running")
+	assert.Contains(t, out, fmt.Sprintf("http://%s:%d", host, port))
+	assert.Contains(t, out, strconv.Itoa(os.Getpid()))
+	assert.Contains(t, out, "daemon version")
+	assert.Contains(t, out, "binary version")
+	assert.Contains(t, out, "API version")
+	assert.Contains(t, out, "data version")
+	assert.Contains(t, out, "compatibility")
+	assert.Contains(t, out, "serve --replace")
+	assert.Contains(t, out, "serve stop")
+	assert.NotContains(t, out, "not responding")
+}
+
+func TestRunServeStatusPrefersIncompatibleWritableOverReadOnly(t *testing.T) {
+	dir := runtimeTestDir(t)
+	readOnlyHost, readOnlyPort := testPingServer(t)
+	_, err := WriteDaemonRuntime(
+		dir, readOnlyHost, readOnlyPort, "1.0.0", true,
+	)
+	require.NoError(t, err)
+
+	writablePID := startSleepProcess(t)
+	writableEndpoint := newPingDaemonWithPID(t, writablePID)
+	_, err = writeRuntimeRecordForTest(dir, daemonRuntimeRecord(
+		writableEndpoint.Host, writableEndpoint.Port,
+		withRuntimePID(writablePID),
+		withRuntimeVersion("1.0.0"),
+		withRuntimeAPIVersion(0),
+	))
+	require.NoError(t, err)
+
+	out := captureStdout(t, func() {
+		runServeStatus(config.Config{DataDir: dir})
+	})
+
+	assert.Contains(t, out, "incompatible")
+	assert.Contains(t, out, strconv.Itoa(writablePID))
+	assert.Contains(t, out, "serve --replace")
+	assert.NotContains(t, out, "mode:    read-only")
+}
+
+func newPingDaemonWithPID(t *testing.T, pid int) testDaemonEndpoint {
+	t.Helper()
+	ts := httptest.NewServer(daemon.NewPingHandler(daemon.PingHandlerOptions{
+		Service: daemonService,
+		Version: "test",
+		PID:     pid,
+	}))
+	t.Cleanup(ts.Close)
+	return serverEndpoint(t, ts)
 }
 
 func TestAcquireBackgroundLaunchLockSerializes(t *testing.T) {

@@ -628,6 +628,8 @@ footer a {
 func generateExportHTML(
 	session *db.Session, msgs []db.Message,
 ) string {
+	msgs = filterExportHTMLMessages(msgs)
+
 	startedAt := ""
 	if session.StartedAt != nil {
 		startedAt = formatTimestamp(*session.StartedAt)
@@ -636,7 +638,7 @@ func generateExportHTML(
 	data := exportData{
 		Project:      session.Project,
 		Agent:        agentDisplayName(session.Agent),
-		MessageCount: session.MessageCount,
+		MessageCount: len(msgs),
 		StartedAt:    startedAt,
 		Messages:     make([]exportMessage, len(msgs)),
 	}
@@ -668,6 +670,17 @@ func generateExportHTML(
 		return fmt.Sprintf("template error: %s", err)
 	}
 	return b.String()
+}
+
+func filterExportHTMLMessages(msgs []db.Message) []db.Message {
+	filtered := make([]db.Message, 0, len(msgs))
+	for _, m := range msgs {
+		if db.IsGoalContextPrefixed(m.Content, m.Role) {
+			continue
+		}
+		filtered = append(filtered, m)
+	}
+	return filtered
 }
 
 func generateInsightExportHTML(insight *db.Insight) string {
@@ -752,7 +765,8 @@ func focusedExportOrdinals(msgs []db.Message) map[int]bool {
 			continue
 		}
 
-		if m.IsSystem || isThinkingOnly(m.Content) {
+		if m.IsSystem || db.IsGoalContextPrefixed(m.Content, m.Role) ||
+			isThinkingOnly(m.Content) {
 			continue
 		}
 

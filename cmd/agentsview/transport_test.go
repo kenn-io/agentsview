@@ -437,6 +437,48 @@ func TestEnsureTransport_ArchiveWriteRestartsIncompatibleOlderDaemon(t *testing.
 	assert.Equal(t, "http://127.0.0.1:23456", tr.URL)
 }
 
+func TestEnsureTransport_ArchiveWriteRestartsIncompatibleDaemonAfterExternalStartupAbort(
+	t *testing.T,
+) {
+	dir := daemonRuntimeDir(t)
+	host, port := testPingServer(t)
+	writeIncompatibleDaemonRuntime(t, dir, host, port, "1.0.0", true)
+	unlockStart := holdExternalDaemonStartLock(t, dir)
+
+	setTestVersion(t, "1.1.0")
+
+	var started bool
+	stubStartBackgroundServeForTransport(t, func(
+		_ context.Context, gotCfg *config.Config, _ time.Duration,
+	) (*DaemonRuntime, error) {
+		started = true
+		assert.Equal(t, dir, gotCfg.DataDir)
+		assert.True(t, gotCfg.NoSync)
+		return &DaemonRuntime{
+			Host: "127.0.0.1",
+			Port: 23456,
+		}, nil
+	})
+
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		unlockStart()
+		close(released)
+	}()
+
+	cfg := config.Config{DataDir: dir}
+	tr, err := ensureTransport(
+		&cfg, transportIntentArchiveWrite, time.Second,
+	)
+
+	<-released
+	require.NoError(t, err)
+	assert.True(t, started)
+	assert.Equal(t, transportHTTP, tr.Mode)
+	assert.Equal(t, "http://127.0.0.1:23456", tr.URL)
+}
+
 func TestEnsureTransport_ArchiveWriteRejectsUnsafeOlderDaemonRestart(t *testing.T) {
 	dir := daemonRuntimeDir(t)
 	host, port := testPingServer(t)
@@ -550,6 +592,130 @@ func TestEnsureTransport_ArchiveWriteUsesAutoStartWaitForStartingDaemon(
 	_, err := ensureTransport(&cfg, transportIntentArchiveWrite, 0)
 	require.NoError(t, err)
 	assert.Equal(t, backgroundAutoStartReadyTimeout, gotWait)
+}
+
+func TestDetectTransportWaitsForExternalStartLockBeforeReturningRuntime(
+	t *testing.T,
+) {
+	dir := daemonRuntimeDir(t)
+	oldHost, oldPort := testPingServer(t)
+	writeDaemonRuntimeForTest(t, dir, oldHost, oldPort, "1.0.0", false)
+	unlockStart := holdExternalDaemonStartLock(t, dir)
+
+	newHost, newPort := testPingServer(t)
+	published := make(chan error, 1)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		RemoveDaemonRuntime(dir)
+		_, err := WriteDaemonRuntime(dir, newHost, newPort, "1.1.0", false)
+		unlockStart()
+		published <- err
+	}()
+
+	tr, err := detectTransportContext(
+		context.Background(), dir, "", time.Second,
+	)
+
+	require.NoError(t, <-published)
+	require.NoError(t, err)
+	assert.Equal(t, transportHTTP, tr.Mode)
+	assert.Equal(t, "http://"+net.JoinHostPort(
+		newHost, strconv.Itoa(newPort),
+	), tr.URL)
+}
+
+func TestEnsureTransportArchiveWriteWaitsForBackgroundReplacementLock(
+	t *testing.T,
+) {
+	dir := daemonRuntimeDir(t)
+	oldHost, oldPort := testPingServer(t)
+	writeDaemonRuntimeForTest(t, dir, oldHost, oldPort, version, false)
+	launchLock, ok := acquireBackgroundLaunchLock(dir)
+	require.True(t, ok)
+	t.Cleanup(func() { _ = launchLock.Unlock() })
+
+	newHost, newPort := testPingServer(t)
+	published := make(chan error, 1)
+	go func() {
+		time.Sleep(2 * startProbeTick)
+		RemoveDaemonRuntime(dir)
+		_, err := WriteDaemonRuntime(dir, newHost, newPort, version, false)
+		if err == nil {
+			err = launchLock.Unlock()
+		}
+		published <- err
+	}()
+
+	cfg := config.Config{DataDir: dir}
+	tr, err := ensureTransport(
+		&cfg, transportIntentArchiveWrite, time.Second,
+	)
+
+	require.NoError(t, <-published)
+	require.NoError(t, err)
+	assert.Equal(t, transportHTTP, tr.Mode)
+	assert.Equal(t, "http://"+net.JoinHostPort(
+		newHost, strconv.Itoa(newPort),
+	), tr.URL)
+}
+
+func TestEnsureTransportArchiveWriteAdoptsAuthAfterBackgroundLaunchWait(
+	t *testing.T,
+) {
+	dir := daemonRuntimeDir(t)
+	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
+	oldHost, oldPort := testPingServer(t)
+	writeDaemonRuntimeForTest(t, dir, oldHost, oldPort, version, false)
+	launchLock, ok := acquireBackgroundLaunchLock(dir)
+	require.True(t, ok)
+	t.Cleanup(func() { _ = launchLock.Unlock() })
+
+	const token = "generated-token"
+	newHost, newPort := testAuthenticatedPingServer(t, token)
+	published := make(chan error, 1)
+	go func() {
+		time.Sleep(2 * startProbeTick)
+		writeTestConfig(t, dir, `require_auth = true
+auth_token = "generated-token"
+`)
+		RemoveDaemonRuntime(dir)
+		_, err := WriteDaemonRuntimeWithAuth(
+			dir, newHost, newPort, version, false, true,
+		)
+		if err == nil {
+			err = launchLock.Unlock()
+		}
+		published <- err
+	}()
+
+	cfg := config.Config{DataDir: dir}
+	tr, err := ensureTransport(
+		&cfg, transportIntentArchiveWrite, time.Second,
+	)
+
+	require.NoError(t, <-published)
+	require.NoError(t, err)
+	assert.Equal(t, token, cfg.AuthToken)
+	assert.True(t, cfg.RequireAuth)
+	assert.Equal(t, transportHTTP, tr.Mode)
+	assert.Equal(t, "http://"+net.JoinHostPort(
+		newHost, strconv.Itoa(newPort),
+	), tr.URL)
+}
+
+func TestWaitForBackgroundLaunchBeforeArchiveWriteRejectsFileDataDir(
+	t *testing.T,
+) {
+	dataDir := filepath.Join(t.TempDir(), "not-a-directory")
+	require.NoError(t, os.WriteFile(dataDir, []byte("not a dir"), 0o600))
+
+	waited, err := waitForBackgroundLaunchBeforeArchiveWrite(
+		context.Background(), dataDir, 10*time.Millisecond,
+	)
+
+	require.Error(t, err)
+	assert.False(t, waited)
+	assert.Contains(t, err.Error(), "not a directory")
 }
 
 func TestEnsureTransportContextCancelDuringStartupWait(t *testing.T) {

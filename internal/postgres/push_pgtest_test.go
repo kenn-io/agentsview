@@ -450,6 +450,576 @@ func TestPushSessionPreservesSourceMachine(t *testing.T) {
 	assert.Equal(t, "remote-host", got)
 }
 
+func TestPushPreservesPGServeLocalCurationFields(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_preserve_pg_curation_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "test-machine",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const sessID = "pg-curation-preserve-001"
+	firstMessage := "source before"
+	sess := db.Session{
+		ID:               sessID,
+		Project:          "test-proj",
+		Machine:          "test-machine",
+		Agent:            "claude",
+		FirstMessage:     &firstMessage,
+		MessageCount:     1,
+		UserMessageCount: 1,
+		CreatedAt:        "2026-01-01T00:00:00Z",
+	}
+	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     sessID,
+		Ordinal:       0,
+		Role:          "user",
+		Content:       firstMessage,
+		ContentLength: len(firstMessage),
+	}}), "InsertMessages")
+
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push before local PG curation")
+
+	store, err := NewStore(pgURL, schema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	renamed := "Renamed in PG serve"
+	require.NoError(t, store.RenameSession(sessID, &renamed),
+		"RenameSession")
+	require.NoError(t, store.SoftDeleteSession(sessID),
+		"SoftDeleteSession")
+
+	updatedFirstMessage := "source after"
+	sess.FirstMessage = &updatedFirstMessage
+	require.NoError(t, localDB.UpsertSession(sess),
+		"UpsertSession updated source row")
+	require.NoError(t, localDB.SetSyncState("last_push_at", ""),
+		"clearing last_push_at")
+	require.NoError(t, localDB.SetSyncState(lastPushBoundaryStateKey, ""),
+		"clearing boundary state")
+
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push after local PG curation")
+
+	var gotDisplayName sql.NullString
+	var gotDeleted bool
+	var gotFirstMessage sql.NullString
+	require.NoError(t, pg.QueryRow(
+		`SELECT display_name, deleted_at IS NOT NULL, first_message
+		 FROM sessions WHERE id = $1`,
+		sessID,
+	).Scan(&gotDisplayName, &gotDeleted, &gotFirstMessage),
+		"reading pushed curation row")
+	require.True(t, gotDisplayName.Valid, "display_name should persist")
+	assert.Equal(t, renamed, gotDisplayName.String)
+	assert.True(t, gotDeleted, "PG-local trash state should persist")
+	require.True(t, gotFirstMessage.Valid, "first_message should remain visible")
+	assert.Equal(t, updatedFirstMessage, gotFirstMessage.String,
+		"source-owned fields should still update")
+}
+
+func TestPushPreservesPGServePermanentDeletes(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_preserve_pg_deletes_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "test-machine",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const deleteIfTrashedID = "pg-delete-preserve-001"
+	const emptyTrashID = "pg-delete-preserve-002"
+	sourceRows := []db.Session{
+		{
+			ID:               deleteIfTrashedID,
+			Project:          "test-proj",
+			Machine:          "test-machine",
+			Agent:            "claude",
+			MessageCount:     1,
+			UserMessageCount: 1,
+			CreatedAt:        "2026-01-01T00:00:00Z",
+		},
+		{
+			ID:               emptyTrashID,
+			Project:          "test-proj",
+			Machine:          "test-machine",
+			Agent:            "claude",
+			MessageCount:     1,
+			UserMessageCount: 1,
+			CreatedAt:        "2026-01-01T00:00:01Z",
+		},
+	}
+	for _, sess := range sourceRows {
+		require.NoError(t, localDB.UpsertSession(sess),
+			"UpsertSession "+sess.ID)
+		require.NoError(t, localDB.InsertMessages([]db.Message{{
+			SessionID:     sess.ID,
+			Ordinal:       0,
+			Role:          "user",
+			Content:       sess.ID,
+			ContentLength: len(sess.ID),
+		}}), "InsertMessages "+sess.ID)
+	}
+
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push before PG permanent deletes")
+
+	store, err := NewStore(pgURL, schema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	require.NoError(t, store.SoftDeleteSession(deleteIfTrashedID),
+		"SoftDeleteSession deleteIfTrashedID")
+	deleted, err := store.DeleteSessionIfTrashed(deleteIfTrashedID)
+	require.NoError(t, err, "DeleteSessionIfTrashed")
+	assert.EqualValues(t, 1, deleted)
+
+	deletedCount, err := store.SoftDeleteSessions([]string{emptyTrashID})
+	require.NoError(t, err, "SoftDeleteSessions")
+	assert.Equal(t, 1, deletedCount)
+	emptied, err := store.EmptyTrash()
+	require.NoError(t, err, "EmptyTrash")
+	assert.Equal(t, 1, emptied)
+
+	for _, sess := range sourceRows {
+		updated := sess
+		updated.MessageCount = 2
+		require.NoError(t, localDB.UpsertSession(updated),
+			"UpsertSession updated "+sess.ID)
+		require.NoError(t, localDB.ReplaceSessionMessages(sess.ID, []db.Message{
+			{
+				SessionID:     sess.ID,
+				Ordinal:       0,
+				Role:          "user",
+				Content:       sess.ID + "-updated",
+				ContentLength: len(sess.ID + "-updated"),
+			},
+			{
+				SessionID:     sess.ID,
+				Ordinal:       1,
+				Role:          "assistant",
+				Content:       "reply",
+				ContentLength: len("reply"),
+			},
+		}), "ReplaceSessionMessages "+sess.ID)
+	}
+
+	_, err = sync.Push(ctx, true, nil)
+	require.NoError(t, err, "full Push after PG permanent deletes")
+
+	for _, sessionID := range []string{deleteIfTrashedID, emptyTrashID} {
+		var count int
+		require.NoError(t, pg.QueryRow(
+			`SELECT COUNT(*) FROM sessions WHERE id = $1`,
+			sessionID,
+		).Scan(&count), "count deleted session "+sessionID)
+		assert.Zero(t, count, "permanently deleted session should stay absent")
+	}
+
+	var excludedCount int
+	require.NoError(t, pg.QueryRow(
+		`SELECT COUNT(*) FROM excluded_sessions
+		 WHERE id IN ($1, $2)`,
+		deleteIfTrashedID, emptyTrashID,
+	).Scan(&excludedCount), "count pg excluded sessions")
+	assert.Equal(t, 2, excludedCount)
+}
+
+func TestPushPurgesRowsForPGExcludedSessions(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_excluded_purge_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "test-machine",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const sessionID = "pg-excluded-purge-001"
+	sess := db.Session{
+		ID:               sessionID,
+		Project:          "test-proj",
+		Machine:          "test-machine",
+		Agent:            "claude",
+		MessageCount:     1,
+		UserMessageCount: 1,
+		CreatedAt:        "2026-01-01T00:00:00Z",
+	}
+	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     sessionID,
+		Ordinal:       0,
+		Role:          "user",
+		Content:       "hello",
+		ContentLength: len("hello"),
+	}}), "InsertMessages")
+
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "initial Push")
+
+	_, err = pg.Exec(
+		`INSERT INTO excluded_sessions (id) VALUES ($1)`,
+		sessionID,
+	)
+	require.NoError(t, err, "insert excluded session")
+
+	updated := sess
+	updated.MessageCount = 2
+	require.NoError(t, localDB.UpsertSession(updated), "update local session")
+	require.NoError(t, localDB.ReplaceSessionMessages(sessionID, []db.Message{
+		{
+			SessionID:     sessionID,
+			Ordinal:       0,
+			Role:          "user",
+			Content:       "hello updated",
+			ContentLength: len("hello updated"),
+		},
+		{
+			SessionID:     sessionID,
+			Ordinal:       1,
+			Role:          "assistant",
+			Content:       "reply",
+			ContentLength: len("reply"),
+		},
+	}), "ReplaceSessionMessages")
+
+	res, err := sync.Push(ctx, true, nil)
+	require.NoError(t, err, "full Push with excluded row")
+	assert.Zero(t, res.SessionsPushed)
+
+	var count int
+	require.NoError(t, pg.QueryRow(
+		`SELECT COUNT(*) FROM sessions WHERE id = $1`,
+		sessionID,
+	).Scan(&count), "count purged session")
+	assert.Zero(t, count, "excluded session row should be purged")
+}
+
+func TestPushSessionSkipsPGExcludedSession(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_session_excluded_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "test-machine",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const sessionID = "pg-excluded-push-session-001"
+	_, err = pg.Exec(
+		`INSERT INTO excluded_sessions (id) VALUES ($1)`,
+		sessionID,
+	)
+	require.NoError(t, err, "insert excluded session")
+
+	tx, err := pg.BeginTx(ctx, nil)
+	require.NoError(t, err, "BeginTx")
+	markerID, err := sync.pushMarkerID()
+	require.NoError(t, err, "pushMarkerID")
+	err = sync.pushSession(ctx, tx, db.Session{
+		ID:        sessionID,
+		Project:   "test-proj",
+		Machine:   "test-machine",
+		Agent:     "claude",
+		CreatedAt: "2026-01-01T00:00:00Z",
+	}, markerID, nil)
+	require.ErrorIs(t, err, errSessionExcluded)
+	require.NoError(t, tx.Rollback(), "Rollback")
+
+	var count int
+	require.NoError(t, pg.QueryRow(
+		`SELECT COUNT(*) FROM sessions WHERE id = $1`,
+		sessionID,
+	).Scan(&count), "count skipped session")
+	assert.Zero(t, count)
+}
+
+func TestPushUpdatesSourceCurationFieldsWithoutPGOverride(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_source_curation_update_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "test-machine",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const renamedID = "pg-source-curation-rename-001"
+	sourceNameOne := "Source name one"
+	sourceNameTwo := "Source name two"
+	renamed := db.Session{
+		ID:               renamedID,
+		Project:          "test-proj",
+		Machine:          "test-machine",
+		Agent:            "claude",
+		MessageCount:     1,
+		UserMessageCount: 1,
+		CreatedAt:        "2026-01-01T00:00:00Z",
+	}
+	require.NoError(t, localDB.UpsertSession(renamed), "UpsertSession renamed")
+	require.NoError(t, localDB.RenameSession(renamedID, &sourceNameOne),
+		"RenameSession renamed initial source name")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     renamedID,
+		Ordinal:       0,
+		Role:          "user",
+		Content:       renamedID,
+		ContentLength: len(renamedID),
+	}}), "InsertMessages renamed")
+
+	const restoredID = "pg-source-curation-restore-001"
+	restored := db.Session{
+		ID:               restoredID,
+		Project:          "test-proj",
+		Machine:          "test-machine",
+		Agent:            "claude",
+		MessageCount:     1,
+		UserMessageCount: 1,
+		CreatedAt:        "2026-01-01T00:00:01Z",
+	}
+	require.NoError(t, localDB.UpsertSession(restored), "UpsertSession restored")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     restoredID,
+		Ordinal:       0,
+		Role:          "user",
+		Content:       restoredID,
+		ContentLength: len(restoredID),
+	}}), "InsertMessages restored")
+	require.NoError(t, localDB.SoftDeleteSession(restoredID),
+		"SoftDeleteSession restored")
+
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push initial source curation")
+
+	require.NoError(t, localDB.RenameSession(renamedID, &sourceNameTwo),
+		"RenameSession renamed source update")
+	restoredCount, err := localDB.RestoreSession(restoredID)
+	require.NoError(t, err, "RestoreSession restoredID")
+	assert.EqualValues(t, 1, restoredCount)
+
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push source curation update")
+
+	var gotDisplayName sql.NullString
+	require.NoError(t, pg.QueryRow(
+		`SELECT display_name FROM sessions WHERE id = $1`,
+		renamedID,
+	).Scan(&gotDisplayName), "read renamed display_name")
+	require.True(t, gotDisplayName.Valid, "display_name should remain populated")
+	assert.Equal(t, sourceNameTwo, gotDisplayName.String)
+
+	var deletedAt sql.NullTime
+	require.NoError(t, pg.QueryRow(
+		`SELECT deleted_at FROM sessions WHERE id = $1`,
+		restoredID,
+	).Scan(&deletedAt), "read restored deleted_at")
+	assert.False(t, deletedAt.Valid, "source restore should clear deleted_at")
+}
+
+func TestPushPreservesLegacyPGCurationWithoutSourceBaseline(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	const schema = "agentsview_push_legacy_source_curation_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg:         pg,
+		local:      localDB,
+		machine:    "test-machine",
+		schema:     schema,
+		schemaDone: true,
+	}
+
+	const renamedID = "pg-legacy-curation-rename-001"
+	sourceNameOne := "Source name one"
+	sourceNameTwo := "Source name two"
+	renamed := db.Session{
+		ID:               renamedID,
+		Project:          "test-proj",
+		Machine:          "test-machine",
+		Agent:            "claude",
+		MessageCount:     1,
+		UserMessageCount: 1,
+		CreatedAt:        "2026-01-01T00:00:00Z",
+	}
+	require.NoError(t, localDB.UpsertSession(renamed), "UpsertSession renamed")
+	require.NoError(t, localDB.RenameSession(renamedID, &sourceNameOne),
+		"RenameSession renamed initial source name")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     renamedID,
+		Ordinal:       0,
+		Role:          "user",
+		Content:       renamedID,
+		ContentLength: len(renamedID),
+	}}), "InsertMessages renamed")
+
+	const trashedID = "pg-legacy-curation-trash-001"
+	trashed := db.Session{
+		ID:               trashedID,
+		Project:          "test-proj",
+		Machine:          "test-machine",
+		Agent:            "claude",
+		MessageCount:     1,
+		UserMessageCount: 1,
+		CreatedAt:        "2026-01-01T00:00:01Z",
+	}
+	require.NoError(t, localDB.UpsertSession(trashed), "UpsertSession trashed")
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID:     trashedID,
+		Ordinal:       0,
+		Role:          "user",
+		Content:       trashedID,
+		ContentLength: len(trashedID),
+	}}), "InsertMessages trashed")
+
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push initial legacy source rows")
+
+	pgName := "PG curated name"
+	_, err = pg.Exec(
+		`UPDATE sessions
+		 SET display_name = $2,
+		     source_display_name = NULL
+		 WHERE id = $1`,
+		renamedID, pgName,
+	)
+	require.NoError(t, err, "simulate legacy PG rename")
+
+	_, err = pg.Exec(
+		`UPDATE sessions
+		 SET deleted_at = NOW(),
+		     source_deleted_at = NULL
+		 WHERE id = $1`,
+		trashedID,
+	)
+	require.NoError(t, err, "simulate legacy PG trash")
+
+	require.NoError(t, localDB.RenameSession(renamedID, &sourceNameTwo),
+		"RenameSession renamed source update")
+
+	_, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "Push legacy source curation update")
+
+	var gotDisplayName sql.NullString
+	var gotSourceDisplayName sql.NullString
+	require.NoError(t, pg.QueryRow(
+		`SELECT display_name, source_display_name
+		 FROM sessions WHERE id = $1`,
+		renamedID,
+	).Scan(&gotDisplayName, &gotSourceDisplayName),
+		"read renamed legacy curation state")
+	require.True(t, gotDisplayName.Valid, "legacy display_name should remain populated")
+	assert.Equal(t, pgName, gotDisplayName.String)
+	require.True(t, gotSourceDisplayName.Valid,
+		"legacy source_display_name should capture the source baseline")
+	assert.Equal(t, sourceNameTwo, gotSourceDisplayName.String)
+
+	var deletedAt sql.NullTime
+	var sourceDeletedAt sql.NullTime
+	require.NoError(t, pg.QueryRow(
+		`SELECT deleted_at, source_deleted_at
+		 FROM sessions WHERE id = $1`,
+		trashedID,
+	).Scan(&deletedAt, &sourceDeletedAt),
+		"read trashed legacy curation state")
+	assert.True(t, deletedAt.Valid,
+		"legacy PG delete should remain in place without a source baseline")
+	assert.False(t, sourceDeletedAt.Valid,
+		"active source row should keep a null source_deleted_at baseline")
+}
+
 // TestPushSyncsUsageEventsForZeroMessageSession verifies that a session
 // carrying token/cost accounting as a usage_event but no transcript
 // messages still has its usage_event pushed to PG. This is the shape of a

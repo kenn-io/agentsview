@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +10,47 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+func parseQwenTestSession(
+	t testing.TB,
+	path, project, machine string,
+) (*ParsedSession, []ParsedMessage, error) {
+	t.Helper()
+	return parseQwenSession(path, project, machine)
+}
+
+func discoverQwenTestSessions(t testing.TB, root string) []DiscoveredFile {
+	t.Helper()
+	provider, ok := NewProvider(AgentQwen, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+
+	files := make([]DiscoveredFile, 0, len(sources))
+	for _, source := range sources {
+		files = append(files, DiscoveredFile{
+			Path:    source.DisplayPath,
+			Project: source.ProjectHint,
+			Agent:   source.Provider,
+		})
+	}
+	return files
+}
+
+func findQwenTestSourceFile(t testing.TB, root, rawID string) string {
+	t.Helper()
+	provider, ok := NewProvider(AgentQwen, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source, found, err := provider.FindSource(
+		context.Background(),
+		FindSourceRequest{RawSessionID: rawID},
+	)
+	require.NoError(t, err)
+	if !found {
+		return ""
+	}
+	return source.DisplayPath
+}
 
 func TestParseQwenSession(t *testing.T) {
 	t.Parallel()
@@ -19,7 +61,7 @@ func TestParseQwenSession(t *testing.T) {
 
 	path := createTestFile(t, "qwen-session.jsonl", content)
 
-	sess, msgs, err := ParseQwenSession(path, "", "local")
+	sess, msgs, err := parseQwenTestSession(t, path, "", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.Len(t, msgs, 2)
@@ -74,7 +116,7 @@ func TestParseQwenSession_CoalescesToolCallOnlyAssistants(t *testing.T) {
 
 	path := createTestFile(t, "coalesce.jsonl", content)
 
-	sess, msgs, err := ParseQwenSession(path, "", "local")
+	sess, msgs, err := parseQwenTestSession(t, path, "", "local")
 	require.NoError(t, err)
 	require.Len(t, msgs, 2, "expected user + single coalesced assistant turn")
 	require.Equal(t, 2, sess.MessageCount)
@@ -141,7 +183,7 @@ func TestParseQwenSession_TrailingToolCallOnlyAssistants(t *testing.T) {
 
 	path := createTestFile(t, "trail.jsonl", content)
 
-	sess, msgs, err := ParseQwenSession(path, "", "local")
+	sess, msgs, err := parseQwenTestSession(t, path, "", "local")
 	require.NoError(t, err)
 	require.Len(t, msgs, 2, "trailing tool-call run should coalesce into one assistant message")
 	require.Equal(t, 2, sess.MessageCount)
@@ -188,7 +230,7 @@ func TestParseQwenSession_ToolUseRoundTrip(t *testing.T) {
 
 	path := createTestFile(t, "tools.jsonl", content)
 
-	sess, msgs, err := ParseQwenSession(path, "", "local")
+	sess, msgs, err := parseQwenTestSession(t, path, "", "local")
 	require.NoError(t, err)
 	require.Len(t, msgs, 2,
 		"tool-result user entry should fold into the assistant turn")
@@ -235,7 +277,7 @@ func TestParseQwenSession_TextWithFunctionCallCoalesces(t *testing.T) {
 
 	path := createTestFile(t, "interleaved.jsonl", content)
 
-	sess, msgs, err := ParseQwenSession(path, "", "local")
+	sess, msgs, err := parseQwenTestSession(t, path, "", "local")
 	require.NoError(t, err)
 	require.Len(t, msgs, 2,
 		"interleaved text+functionCall must not inflate MessageCount")
@@ -269,7 +311,7 @@ func TestParseQwenSession_AbortedNoAssistantResponse(t *testing.T) {
 
 	path := createTestFile(t, "abort.jsonl", content)
 
-	sess, msgs, err := ParseQwenSession(path, "", "local")
+	sess, msgs, err := parseQwenTestSession(t, path, "", "local")
 	require.NoError(t, err)
 	require.Len(t, msgs, 1)
 	assert.Equal(t, 1, sess.MessageCount)
@@ -291,7 +333,7 @@ func TestParseQwenSession_ShortClean(t *testing.T) {
 
 	path := createTestFile(t, "short.jsonl", content)
 
-	sess, msgs, err := ParseQwenSession(path, "", "local")
+	sess, msgs, err := parseQwenTestSession(t, path, "", "local")
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
 	assert.Equal(t, 2, sess.MessageCount)
@@ -300,7 +342,7 @@ func TestParseQwenSession_ShortClean(t *testing.T) {
 	assert.False(t, msgs[1].HasThinking)
 }
 
-func TestDiscoverQwenSessions(t *testing.T) {
+func TestQwenProviderDiscoverSessions(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -311,7 +353,7 @@ func TestDiscoverQwenSessions(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(chatsDir, "b.jsonl"), []byte("{}\n"), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(chatsDir, "notes.txt"), []byte("ignore"), 0o644))
 
-	files := DiscoverQwenSessions(root)
+	files := discoverQwenTestSessions(t, root)
 	require.Len(t, files, 2)
 	assert.Equal(t, AgentQwen, files[0].Agent)
 	assert.Equal(t, "qwen", files[0].Project)
@@ -319,7 +361,7 @@ func TestDiscoverQwenSessions(t *testing.T) {
 	assert.Equal(t, "qwen", files[1].Project)
 }
 
-func TestFindQwenSourceFile(t *testing.T) {
+func TestQwenProviderFindSourceFile(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -331,8 +373,8 @@ func TestFindQwenSourceFile(t *testing.T) {
 	want := filepath.Join(chatsDir, sessionID+".jsonl")
 	require.NoError(t, os.WriteFile(want, []byte("{}\n"), 0o644))
 
-	assert.Equal(t, want, FindQwenSourceFile(root, sessionID))
-	assert.Empty(t, FindQwenSourceFile(root, "not-a-session-id"))
-	assert.Empty(t, FindQwenSourceFile(root, "b0a4eadd-cb99-4165-94d9-64cad5a66d99"))
-	assert.Empty(t, FindQwenSourceFile("", sessionID))
+	assert.Equal(t, want, findQwenTestSourceFile(t, root, sessionID))
+	assert.Empty(t, findQwenTestSourceFile(t, root, "not-a-session-id"))
+	assert.Empty(t, findQwenTestSourceFile(t, root, "b0a4eadd-cb99-4165-94d9-64cad5a66d99"))
+	assert.Empty(t, findQwenTestSourceFile(t, "", sessionID))
 }

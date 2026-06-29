@@ -498,6 +498,91 @@ func TestGenerateExportHTML_TranscriptModeControls(t *testing.T) {
 	})
 }
 
+func TestGenerateExportHTML_OmitsGoalContextRows(t *testing.T) {
+	t.Parallel()
+	session := testSession(func(s *db.Session) {
+		s.MessageCount = 4
+	})
+	currentGoal := "<codex_internal_context foo=\"bar\" source=\"goal\">\n" +
+		"Continue working toward the active thread goal.\n" +
+		"</codex_internal_context>"
+	legacyGoal := "<goal_context>\n" +
+		"Continue working toward the active thread goal.\n" +
+		"</goal_context>"
+	msgs := []db.Message{
+		{
+			SessionID: "test-id", Ordinal: 0,
+			Role: "user", Content: "Actual user message",
+			Timestamp: "2025-01-15T10:00:00Z",
+		},
+		{
+			SessionID: "test-id", Ordinal: 1,
+			Role: "user", Content: "\n\t" + currentGoal,
+			Timestamp: "2025-01-15T10:00:01Z",
+		},
+		{
+			SessionID: "test-id", Ordinal: 2,
+			Role: "user", Content: "  " + legacyGoal,
+			Timestamp: "2025-01-15T10:00:02Z",
+		},
+		{
+			SessionID: "test-id", Ordinal: 3,
+			Role: "assistant", Content: "Assistant reply",
+			Timestamp: "2025-01-15T10:00:03Z",
+		},
+	}
+
+	html := generateExportHTML(session, msgs)
+
+	assertContainsAll(t, html, []string{
+		"2 messages",
+		`class="message user" data-ordinal="0"`,
+		`class="message assistant" data-ordinal="3"`,
+		"Actual user message",
+		"Assistant reply",
+	})
+	assertContainsNone(t, html, []string{
+		`data-ordinal="1"`,
+		`data-ordinal="2"`,
+		"<codex_internal_context",
+		"<goal_context>",
+		"Continue working toward the active thread goal.",
+	})
+}
+
+func TestGenerateExportHTML_PreservesNonGoalSystemPrefixedRows(t *testing.T) {
+	t.Parallel()
+	session := testSession(func(s *db.Session) {
+		s.MessageCount = 3
+	})
+	msgs := []db.Message{
+		{
+			SessionID: "test-id", Ordinal: 0,
+			Role: "user", Content: "This session is being continued from a previous conversation.",
+			Timestamp: "2025-01-15T10:00:00Z",
+		},
+		{
+			SessionID: "test-id", Ordinal: 1,
+			Role: "user", Content: "<task-notification>done</task-notification>",
+			Timestamp: "2025-01-15T10:00:01Z",
+		},
+		{
+			SessionID: "test-id", Ordinal: 2,
+			Role: "user", Content: "Stop hook feedback: blocked",
+			Timestamp: "2025-01-15T10:00:02Z",
+		},
+	}
+
+	html := generateExportHTML(session, msgs)
+
+	assertContainsAll(t, html, []string{
+		"3 messages",
+		"This session is being continued from a previous conversation.",
+		"&lt;task-notification&gt;done&lt;/task-notification&gt;",
+		"Stop hook feedback: blocked",
+	})
+}
+
 func TestFocusedExportOrdinals(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -582,6 +667,41 @@ func TestFocusedExportOrdinals(t *testing.T) {
 				exportUserMsg(4),
 			},
 			want: []int{0, 1, 4},
+		},
+		{
+			name: "ignores system-prefixed goal contexts",
+			msgs: []db.Message{
+				exportUserMsg(0),
+				exportAssistantMsg(1, "draft"),
+				{
+					SessionID: "test-id",
+					Ordinal:   2,
+					Role:      "user",
+					Content:   `<codex_internal_context foo="bar" source="goal">state`,
+				},
+				{
+					SessionID: "test-id",
+					Ordinal:   3,
+					Role:      "user",
+					Content:   "\n\t<goal_context>state</goal_context>",
+				},
+				exportAssistantMsg(4, "final"),
+			},
+			want: []int{0, 4},
+		},
+		{
+			name: "keeps non-goal system-prefixed user rows",
+			msgs: []db.Message{
+				exportUserMsg(0),
+				{
+					SessionID: "test-id",
+					Ordinal:   1,
+					Role:      "user",
+					Content:   "Stop hook feedback: blocked",
+				},
+				exportAssistantMsg(2, "answer"),
+			},
+			want: []int{0, 1, 2},
 		},
 		{
 			name: "keeps answer before compact boundary",

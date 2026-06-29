@@ -20,15 +20,11 @@ describe("InsightsPage sidebar filter sync", () => {
     // sidebar toggle, map it to all/human, and write both fields.
     const normalized = source.replace(/\s+/g, " ");
     expect(source).toContain("sessions.filters.includeAutomated");
-    expect(normalized).toContain(
-      'headerIncludeAutomated ? "all" : "human"',
-    );
+    expect(normalized).toContain('headerIncludeAutomated ? "all" : "human"');
     expect(source).toContain(
       "analytics.includeAutomated = headerIncludeAutomated",
     );
-    expect(source).toContain(
-      "analytics.automatedScope = headerAutomatedScope",
-    );
+    expect(source).toContain("analytics.automatedScope = headerAutomatedScope");
   });
 
   it("refetches when the automated scope changes", () => {
@@ -95,9 +91,7 @@ describe("InsightsPage date yoke controls", () => {
   });
 
   it("routes automated scope changes through the insight refresh wrapper", () => {
-    const handlerIndex = source.indexOf(
-      "function handleAutomatedScopeChange",
-    );
+    const handlerIndex = source.indexOf("function handleAutomatedScopeChange");
     const nextHandlerIndex = source.indexOf(
       "\n\n  function handlePromptChange",
       handlerIndex,
@@ -165,6 +159,15 @@ const state = vi.hoisted(() => {
   };
 });
 
+const syncState = vi.hoisted(() => ({
+  serverVersion: {
+    read_only: false,
+  } as {
+    read_only: boolean;
+    insight_generation_available?: boolean;
+  },
+}));
+
 vi.mock("../../api/client.js", () => ({
   downloadInsightExport: mocks.downloadInsightExport,
   watchEvents: mocks.watchEvents,
@@ -195,17 +198,22 @@ vi.mock("../../stores/sessions.svelte.js", () => ({
 
 vi.mock("../../stores/sync.svelte.js", () => ({
   sync: {
-    serverVersion: { read_only: false },
+    get serverVersion() {
+      return syncState.serverVersion;
+    },
   },
 }));
 
 vi.mock("../../paraglide/messages.js", () => {
-  const stub = new Proxy({}, {
-    get(_target, prop) {
-      if (prop === "m") return stub;
-      return () => String(prop);
+  const stub = new Proxy(
+    {},
+    {
+      get(_target, prop) {
+        if (prop === "m") return stub;
+        return () => String(prop);
+      },
     },
-  });
+  );
   return stub;
 });
 
@@ -227,6 +235,7 @@ describe("InsightsPage selected insight actions", () => {
     ui.activeModal = null;
     ui.publishSecret = false;
     ui.clearPublishTarget();
+    syncState.serverVersion = { read_only: false };
     state.insightsStore.selectedItem = state.selectedInsight;
     state.insightsStore.selectedId = state.selectedInsight.id;
     state.insightsStore.items = [state.selectedInsight];
@@ -293,5 +302,20 @@ describe("InsightsPage selected insight actions", () => {
       kind: "insight",
       id: 42,
     });
+  });
+
+  it("keeps Generate enabled for pg serve when version advertises insight writes", async () => {
+    syncState.serverVersion = {
+      read_only: true,
+      insight_generation_available: true,
+    };
+    component = mount(InsightsPage, { target: document.body });
+    await tick();
+
+    const generateButton = document.querySelector<HTMLButtonElement>(
+      "button.generate-action",
+    );
+    expect(generateButton).toBeDefined();
+    expect(generateButton!.disabled).toBe(false);
   });
 });

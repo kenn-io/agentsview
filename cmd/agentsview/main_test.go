@@ -570,6 +570,121 @@ func TestStartRemoteHostSync_NilEmitterSafe(t *testing.T) {
 	<-exited
 }
 
+func TestCollectWatchRootsHermesSessionsWatchesStateDBParent(t *testing.T) {
+	root := t.TempDir()
+	sessionsDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.Mkdir(sessionsDir, 0o755), "mkdir sessions")
+
+	cfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentHermes: {sessionsDir},
+		},
+	}
+
+	roots, unwatchedDirs := collectWatchRoots(cfg)
+
+	require.Empty(t, unwatchedDirs, "unwatched dirs before watcher setup")
+	require.Len(t, roots, 2)
+	assert.Equal(t, root, roots[0].root)
+	assert.True(t, roots[0].shallow)
+	assert.Equal(t, []string{sessionsDir}, roots[0].dirs)
+	assert.Equal(t, sessionsDir, roots[1].root)
+	assert.False(t, roots[1].shallow)
+	assert.Equal(t, []string{sessionsDir}, roots[1].dirs)
+}
+
+func TestCollectWatchRootsUsesCoworkProviderRecursiveRoot(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCowork: {root},
+		},
+	}
+
+	roots, unwatchedDirs := collectWatchRoots(cfg)
+
+	require.Empty(t, unwatchedDirs, "cowork root should be watched directly")
+	got, ok := findCollectedWatchRoot(roots, root)
+	require.True(t, ok, "cowork provider WatchPlan root not collected")
+	assert.False(t, got.shallow,
+		"cowork provider recursive WatchPlan must override legacy ShallowWatch")
+	assert.Equal(t, []string{root}, got.dirs)
+}
+
+func TestCollectWatchRootsUsesGeminiProviderMetadataRoot(t *testing.T) {
+	root := t.TempDir()
+	tmpRoot := filepath.Join(root, "tmp")
+	require.NoError(t, os.Mkdir(tmpRoot, 0o755), "mkdir tmp")
+	cfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentGemini: {root},
+		},
+	}
+
+	roots, unwatchedDirs := collectWatchRoots(cfg)
+
+	require.Empty(t, unwatchedDirs, "all gemini provider roots exist")
+	metadataRoot, ok := findCollectedWatchRoot(roots, root)
+	require.True(t, ok, "gemini provider metadata root not collected")
+	assert.True(t, metadataRoot.shallow)
+	tmp, ok := findCollectedWatchRoot(roots, tmpRoot)
+	require.True(t, ok, "gemini provider recursive tmp root not collected")
+	assert.False(t, tmp.shallow)
+}
+
+func TestCollectWatchRootsUsesAntigravityCLIHistoryRoot(t *testing.T) {
+	root := t.TempDir()
+	for _, subdir := range []string{"brain", "conversations", "implicit"} {
+		require.NoError(t, os.Mkdir(filepath.Join(root, subdir), 0o755))
+	}
+	cfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentAntigravityCLI: {root},
+		},
+	}
+
+	roots, unwatchedDirs := collectWatchRoots(cfg)
+
+	require.Empty(t, unwatchedDirs, "all antigravity cli provider roots exist")
+	historyRoot, ok := findCollectedWatchRoot(roots, root)
+	require.True(t, ok, "antigravity cli history.jsonl root not collected")
+	assert.True(t, historyRoot.shallow)
+	conversations, ok := findCollectedWatchRoot(
+		roots, filepath.Join(root, "conversations"),
+	)
+	require.True(t, ok, "antigravity cli conversations root not collected")
+	assert.True(t, conversations.shallow)
+	brain, ok := findCollectedWatchRoot(roots, filepath.Join(root, "brain"))
+	require.True(t, ok, "antigravity cli brain root not collected")
+	assert.False(t, brain.shallow)
+}
+
+func TestMissingWatchRootCoverageDoesNotTreatShallowAncestorAsRecursive(t *testing.T) {
+	root := filepath.Clean(filepath.Join(t.TempDir(), "state"))
+	shallowRoots := []watchRoot{{root: root, shallow: true}}
+	recursiveRoots := []watchRoot{{root: root, shallow: false}}
+
+	assert.True(t,
+		pathCoveredByAnyWatchRootCreation(filepath.Join(root, "sessions"), shallowRoots),
+		"shallow roots can observe immediate child creation")
+	assert.False(t,
+		pathCoveredByAnyWatchRootCreation(filepath.Join(root, "nested", "sessions"), shallowRoots),
+		"shallow ancestors must not be treated like recursive watches")
+	assert.True(t,
+		pathCoveredByAnyWatchRootCreation(filepath.Join(root, "nested", "sessions"), recursiveRoots),
+		"recursive roots cover nested missing roots")
+}
+
+func findCollectedWatchRoot(roots []watchRoot, path string) (watchRoot, bool) {
+	path = filepath.Clean(path)
+	for _, root := range roots {
+		if filepath.Clean(root.root) == path {
+			return root, true
+		}
+	}
+	return watchRoot{}, false
+}
+
 func TestResyncCoversSignals(t *testing.T) {
 	tests := []struct {
 		name     string

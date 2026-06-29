@@ -21,11 +21,15 @@ func TestClassifyOnePath_Cortex(t *testing.T) {
 	require.NoError(t, os.WriteFile(jsonlPath, []byte("{}"), 0o644))
 
 	eng := &Engine{
+		db: openTestDB(t),
 		agentDirs: map[parser.AgentType][]string{
 			parser.AgentCortex: {dir},
 		},
+		providerFactories: providerFactoryMap(parser.ProviderFactories()),
+		providerMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentCortex: parser.ProviderMigrationProviderAuthoritative,
+		},
 	}
-	geminiMap := make(map[string]map[string]string)
 
 	tests := []struct {
 		name    string
@@ -71,9 +75,14 @@ func TestClassifyOnePath_Cortex(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := eng.classifyOnePath(tt.path, geminiMap)
-			assert.Equal(t, tt.want, ok)
-			if ok {
+			files := eng.classifyPaths([]string{tt.path})
+			if !tt.want {
+				assert.Empty(t, files)
+				return
+			}
+			require.Len(t, files, 1)
+			got := files[0]
+			if tt.want {
 				assert.Equal(t, tt.agent, got.Agent)
 				assert.Equal(t, tt.retPath, got.Path)
 			}

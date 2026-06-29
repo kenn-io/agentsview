@@ -123,6 +123,7 @@ func newRootCommand() *cobra.Command {
 func newServeCommand() *cobra.Command {
 	var background bool
 	var checkDataVersion bool
+	var replace bool
 	cmd := &cobra.Command{
 		Use:          "serve",
 		Short:        "Start server",
@@ -141,10 +142,15 @@ func newServeCommand() *cobra.Command {
 				// Acquire the launch lock before loading config; config
 				// loading writes config.toml and must be single-writer
 				// across concurrent launches.
-				runServeBackgroundCommand(cmd)
+				runServeBackgroundCommand(
+					cmd, serveReplacementOptions{Replace: replace},
+				)
 				return nil
 			}
-			runServe(mustLoadConfig(cmd))
+			runServe(mustLoadConfig(cmd), serveOptions{
+				ReplaceDaemon:  replace,
+				NoSyncExplicit: cmd.Flags().Changed("no-sync"),
+			})
 			return nil
 		},
 	}
@@ -153,6 +159,12 @@ func newServeCommand() *cobra.Command {
 		"background",
 		false,
 		"Start server in the background and return to the shell",
+	)
+	cmd.Flags().BoolVar(
+		&replace,
+		"replace",
+		false,
+		"Replace a running local daemon before starting",
 	)
 	cmd.Flags().BoolVar(
 		&checkDataVersion,
@@ -375,7 +387,6 @@ func newImportCommand() *cobra.Command {
 }
 
 func newProjectsCommand() *cobra.Command {
-	var jsonOutput bool
 	cmd := &cobra.Command{
 		Use:          "projects",
 		Short:        "List projects with session counts",
@@ -383,10 +394,10 @@ func newProjectsCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runProjects(jsonOutput)
+			runProjects(outputFormat(cmd) == "json")
 		},
 	}
-	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output as JSON array")
+	registerFormatFlags(cmd.Flags())
 	return cmd
 }
 
@@ -403,11 +414,11 @@ func newHealthCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.MaximumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
+			cfg.JSON = outputFormat(cmd) == "json"
 			runHealth(args, cfg)
 		},
 	}
-	cmd.Flags().BoolVar(&cfg.JSON, "json", false,
-		"Output as JSON")
+	registerFormatFlags(cmd.Flags())
 	cmd.Flags().IntVar(&cfg.Limit, "limit",
 		defaultHealthLimit,
 		"Number of sessions to list (max 500)")
@@ -439,12 +450,13 @@ func newUsageDailyCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
+			cfg.JSON = outputFormat(cmd) == "json"
 			runUsageDaily(cfg)
 		},
 	}
-	cmd.Flags().BoolVar(&cfg.JSON, "json", false, "Output as JSON")
-	cmd.Flags().StringVar(&cfg.Since, "since", "", "Start date (YYYY-MM-DD)")
-	cmd.Flags().StringVar(&cfg.Until, "until", "", "End date (YYYY-MM-DD)")
+	registerFormatFlags(cmd.Flags())
+	cmd.Flags().StringVar(&cfg.Since, "since", "", "Start of window (duration like 28d, or YYYY-MM-DD)")
+	cmd.Flags().StringVar(&cfg.Until, "until", "", "End of window (duration like 28d, or YYYY-MM-DD)")
 	cmd.Flags().BoolVar(&cfg.All, "all", false, "Include all history (overrides default 30-day window)")
 	cmd.Flags().StringVar(&cfg.Agent, "agent", "", "Filter by agent name")
 	cmd.Flags().BoolVar(&cfg.Breakdown, "breakdown", false, "Show per-model breakdown rows")
@@ -494,6 +506,7 @@ func newActivityReportCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
+			cfg.JSON = outputFormat(cmd) == "json"
 			runActivityReport(cfg)
 		},
 	}
@@ -506,7 +519,7 @@ func newActivityReportCommand() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.Project, "project", "", "Filter by project")
 	cmd.Flags().StringVar(&cfg.Agent, "agent", "", "Filter by agent name")
 	cmd.Flags().StringVar(&cfg.Machine, "machine", "", "Filter by machine name")
-	cmd.Flags().BoolVar(&cfg.JSON, "json", false, "Output as JSON")
+	registerFormatFlags(cmd.Flags())
 	cmd.Flags().BoolVar(&cfg.NoSync, "no-sync", false, "Skip on-demand sync before querying")
 	cmd.Flags().BoolVar(&cfg.Offline, "offline", false, "Use fallback pricing only")
 	return cmd

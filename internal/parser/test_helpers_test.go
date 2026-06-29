@@ -3,6 +3,7 @@ package parser
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"log"
 	"strings"
 	"testing"
@@ -11,6 +12,43 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// parseChatGPTExport parses a ChatGPT export through the ChatGPT import-only
+// provider. It is the test harness replacement for the former
+// ParseChatGPTExport free function.
+func parseChatGPTExport(
+	dir string,
+	assets AssetResolver,
+	onConversation func(ParseResult) error,
+) error {
+	p, ok := NewProvider(AgentChatGPT, ProviderConfig{})
+	if !ok {
+		return fmt.Errorf("chatgpt provider unavailable")
+	}
+	exporter, ok := p.(ChatGPTExportParser)
+	if !ok {
+		return fmt.Errorf("chatgpt provider does not support exports")
+	}
+	return exporter.ParseChatGPTExport(dir, assets, onConversation)
+}
+
+// parseClaudeAIExport parses a Claude.ai export through the Claude.ai
+// import-only provider. It is the test harness replacement for the former
+// ParseClaudeAIExport free function.
+func parseClaudeAIExport(
+	r io.Reader,
+	onConversation func(ParseResult) error,
+) error {
+	p, ok := NewProvider(AgentClaudeAI, ProviderConfig{})
+	if !ok {
+		return fmt.Errorf("claude.ai provider unavailable")
+	}
+	exporter, ok := p.(ClaudeAIExportParser)
+	if !ok {
+		return fmt.Errorf("claude.ai provider does not support exports")
+	}
+	return exporter.ParseClaudeAIExport(r, onConversation)
+}
 
 // Timestamp constants for test data.
 const (
@@ -145,10 +183,28 @@ func parseClaudeTestFile(
 ) (ParsedSession, []ParsedMessage) {
 	t.Helper()
 	path := createTestFile(t, name, content)
-	results, err := ParseClaudeSession(
+	results, err := parseClaudeSession(
 		path, project, "local",
 	)
-	require.NoError(t, err, "ParseClaudeSession")
-	require.NotEmpty(t, results, "ParseClaudeSession returned no results")
+	require.NoError(t, err, "parseClaudeSession")
+	require.NotEmpty(t, results, "parseClaudeSession returned no results")
 	return results[0].Session, results[0].Messages
+}
+
+// parseClaudeSession parses a standalone Claude transcript through the Claude
+// provider's upload entry point, honoring the explicit project. It is the
+// test harness replacement for the former ParseClaudeSession free function,
+// exercising the same provider-owned parse body that production uploads use.
+func parseClaudeSession(
+	path, project, machine string,
+) ([]ParseResult, error) {
+	provider, ok := NewProvider(AgentClaude, ProviderConfig{Machine: machine})
+	if !ok {
+		return nil, fmt.Errorf("claude provider unavailable")
+	}
+	uploader, ok := provider.(ClaudeUploadParser)
+	if !ok {
+		return nil, fmt.Errorf("claude provider does not support upload parsing")
+	}
+	return uploader.ParseUploadedTranscript(path, project, machine)
 }

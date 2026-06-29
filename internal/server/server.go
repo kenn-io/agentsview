@@ -29,12 +29,13 @@ import (
 
 // VersionInfo holds build-time version metadata.
 type VersionInfo struct {
-	Version     string `json:"version"`
-	Commit      string `json:"commit"`
-	BuildDate   string `json:"build_date"`
-	ReadOnly    bool   `json:"read_only,omitempty"`
-	APIVersion  int    `json:"api_version"`
-	DataVersion int    `json:"data_version"`
+	Version                    string `json:"version"`
+	Commit                     string `json:"commit"`
+	BuildDate                  string `json:"build_date"`
+	ReadOnly                   bool   `json:"read_only,omitempty"`
+	InsightGenerationAvailable bool   `json:"insight_generation_available,omitempty"`
+	APIVersion                 int    `json:"api_version"`
+	DataVersion                int    `json:"data_version"`
 }
 
 const daemonService = "agentsview"

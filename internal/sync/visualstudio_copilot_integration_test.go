@@ -246,8 +246,8 @@ func TestFindSourceFileVisualStudioCopilotReturnsVirtualPath(t *testing.T) {
 }
 
 // TestSyncSingleSessionContextVisualStudioCopilotPreservesProject verifies that
-// a single-session re-sync keeps the session's visualstudio project rather than
-// overwriting it with an empty string.
+// a single-session re-sync keeps the stored project rather than overwriting it
+// with the provider's default project.
 func TestSyncSingleSessionContextVisualStudioCopilotPreservesProject(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -271,6 +271,8 @@ func TestSyncSingleSessionContextVisualStudioCopilotPreservesProject(t *testing.
 	require.NoError(t, err)
 	require.NotNil(t, before)
 	require.Equal(t, "visualstudio", before.Project)
+	before.Project = "stored-solution"
+	require.NoError(t, database.UpsertSession(*before))
 
 	require.NoError(t, engine.SyncSingleSessionContext(
 		context.Background(), sessionID,
@@ -279,8 +281,8 @@ func TestSyncSingleSessionContextVisualStudioCopilotPreservesProject(t *testing.
 	after, err := database.GetSession(context.Background(), sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, after)
-	assert.Equal(t, "visualstudio", after.Project,
-		"single-session re-sync must preserve the visualstudio project")
+	assert.Equal(t, "stored-solution", after.Project,
+		"single-session re-sync must preserve the stored project")
 }
 
 // TestSyncEngineVisualStudioCopilotUnreadableSiblingBlocksPartialSession

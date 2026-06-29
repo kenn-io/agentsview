@@ -201,7 +201,10 @@ func TestSyncSingleSessionForge(t *testing.T) {
 	assertSessionMessageCount(t, env.db, "forge:forge-sync-single", 3)
 
 	src := env.engine.FindSourceFile("forge:forge-sync-single")
-	wantSrc := filepath.Join(env.forgeDir, ".forge.db")
+	// Forge is a provider-authoritative DB-backed provider: FindSourceFile
+	// resolves the per-session virtual <db>#<conversationID> path the
+	// provider parses, matching the stored session file_path.
+	wantSrc := filepath.Join(env.forgeDir, ".forge.db") + "#forge-sync-single"
 	assert.Equal(t, wantSrc, src)
 
 	mtime := env.engine.SourceMtime("forge:forge-sync-single")
@@ -310,7 +313,7 @@ func TestSyncForgeMissingConversation(t *testing.T) {
 
 func TestSyncForgeSyncSingleNonExistent(t *testing.T) {
 	env := setupTestEnv(t)
-	// Create an empty .forge.db so FindForgeDBPath finds it.
+	// Create an empty .forge.db so the provider discovers the DB.
 	createForgeDB(t, env.forgeDir)
 
 	err := env.engine.SyncSingleSession("forge:does-not-exist")

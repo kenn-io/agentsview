@@ -22,8 +22,27 @@ var stopDaemonRuntimeForUpgrade = stopDaemonRuntimeForUpgradeImpl
 // runServeStatus reports whether a server owns this data dir, and where to
 // reach it. It always exits zero; the output distinguishes the states.
 func runServeStatus(cfg config.Config) {
+	var readOnly *DaemonRuntime
 	if rt := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil {
-		for _, line := range serveStatusLines(rt) {
+		if rt.ReadOnly {
+			readOnly = rt
+		} else {
+			for _, line := range serveStatusLines(rt) {
+				fmt.Println(line)
+			}
+			return
+		}
+	}
+	if rt, compatErr := findIncompatibleWritableDaemonRuntime(
+		cfg.DataDir, cfg.AuthToken,
+	); rt != nil {
+		for _, line := range serveIncompatibleDaemonStatusLines(rt, compatErr) {
+			fmt.Println(line)
+		}
+		return
+	}
+	if readOnly != nil {
+		for _, line := range serveStatusLines(readOnly) {
 			fmt.Println(line)
 		}
 		return
@@ -60,6 +79,25 @@ func serveStatusLines(rt *DaemonRuntime) []string {
 		lines = append(lines, "  mode:    read-only")
 	}
 	return lines
+}
+
+func serveIncompatibleDaemonStatusLines(
+	rt *DaemonRuntime, compatErr error,
+) []string {
+	decision := serveReplacementDecision{
+		Action:           serveReplacementRefuse,
+		Runtime:          rt,
+		CompatibilityErr: compatErr,
+		Reason:           serveDaemonRefusalReason(rt, compatErr),
+	}
+	lines := serveDaemonDecisionLines(
+		"agentsview found an incompatible running writable daemon.",
+		decision,
+	)
+	return append(lines,
+		"Run `agentsview serve --replace` to replace it, or "+
+			"`agentsview serve stop` to stop it first.",
+	)
 }
 
 // runServeStop terminates every agentsview server owning this data dir whose

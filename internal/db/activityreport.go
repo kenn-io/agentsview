@@ -87,7 +87,7 @@ func (db *DB) GetActivityReport(
 func (db *DB) activityReportSessions(
 	ctx context.Context, f AnalyticsFilter, rangeStartUTC, rangeEndUTC string,
 ) ([]activity.SessionMeta, []string, error) {
-	where, args := f.buildWhereWithDate("", false)
+	where, args := f.buildWhereWithDate("", false, "s.id")
 	args = append(args, rangeStartUTC, rangeEndUTC)
 
 	// Each Title candidate is NULLIF'd independently (not a nested

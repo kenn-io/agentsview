@@ -62,6 +62,7 @@ class AnalyticsStore {
   project: string = $state("");
   machine: string = $state("");
   agent: string = $state("");
+  model: string = $state("");
   termination: string = $state("");
   minUserMessages: number = $state(0);
   includeOneShot: boolean = $state(true);
@@ -143,6 +144,11 @@ class AnalyticsStore {
   };
   private fetchAllVersion = 0;
   private abortControllers: Partial<Record<Panel, AbortController>> = {};
+  // Scope key of the cached `signals`: the Analytics-only filters (model plus
+  // the heatmap drill-down) the cached data was fetched with. Used to drop the
+  // cache when a fetch crosses the Analytics / Insights boundary, where those
+  // filters do not exist.
+  private signalsScope: string | null = null;
 
   get timezone(): string {
     return Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -154,6 +160,7 @@ class AnalyticsStore {
       this.project !== "" ||
       this.machine !== "" ||
       this.agent !== "" ||
+      this.model !== "" ||
       this.termination !== "" ||
       this.minUserMessages > 0 ||
       !this.includeOneShot ||
@@ -184,6 +191,7 @@ class AnalyticsStore {
     this.project = "";
     this.machine = "";
     this.agent = "";
+    this.model = "";
     this.termination = "";
     this.minUserMessages = 0;
     this.includeOneShot = true;
@@ -214,6 +222,11 @@ class AnalyticsStore {
     this.fetchAll();
   }
 
+  clearModel() {
+    this.model = "";
+    this.fetchAll();
+  }
+
   toggleAgent(agent: string) {
     const current = this.agent ? this.agent.split(",") : [];
     const idx = current.indexOf(agent);
@@ -226,6 +239,19 @@ class AnalyticsStore {
     sessions.filters.agent = this.agent;
     sessions.activeSessionId = null;
     sessions.load();
+    this.fetchAll();
+  }
+
+  toggleModel(model: string) {
+    const current = new Set(
+      this.model.split(",").filter((value) => value.length > 0),
+    );
+    if (current.has(model)) {
+      current.delete(model);
+    } else {
+      current.add(model);
+    }
+    this.model = [...current].join(",");
     this.fetchAll();
   }
 
@@ -348,10 +374,12 @@ class AnalyticsStore {
     opts: {
       includeProject?: boolean;
       includeTime?: boolean;
+      includeModel?: boolean;
     } = {},
   ): AnalyticsParams {
     const includeProject = opts.includeProject ?? true;
     const includeTime = opts.includeTime ?? true;
+    const includeModel = opts.includeModel ?? true;
     const p: AnalyticsParams = {
       from: this.from,
       to: this.to,
@@ -362,6 +390,7 @@ class AnalyticsStore {
     }
     if (this.machine) p.machine = this.machine;
     if (this.agent) p.agent = this.agent;
+    if (includeModel && this.model) p.model = this.model;
     if (this.termination) p.termination = this.termination;
     if (this.minUserMessages > 0) {
       p.minUserMessages = this.minUserMessages;
@@ -388,10 +417,12 @@ class AnalyticsStore {
     opts: {
       includeProject?: boolean;
       includeTime?: boolean;
+      includeModel?: boolean;
     } = {},
   ): AnalyticsParams {
     const includeProject = opts.includeProject ?? true;
     const includeTime = opts.includeTime ?? true;
+    const includeModel = opts.includeModel ?? true;
     if (this.selectedDate) {
       const p: AnalyticsParams = {
         from: this.selectedDate,
@@ -403,6 +434,7 @@ class AnalyticsStore {
       }
       if (this.machine) p.machine = this.machine;
       if (this.agent) p.agent = this.agent;
+      if (includeModel && this.model) p.model = this.model;
       if (this.termination) p.termination = this.termination;
       if (this.minUserMessages > 0) {
         p.minUserMessages = this.minUserMessages;
@@ -426,11 +458,14 @@ class AnalyticsStore {
       }
       return p;
     }
-    return this.baseParams({ includeProject, includeTime });
+    return this.baseParams({ includeProject, includeTime, includeModel });
   }
 
   signalEvidenceParams(): AnalyticsParams {
-    return this.filterParams();
+    // Insights-only drilldown: omit the Analytics model filter so signal
+    // evidence matches the unscoped Insights signal facts (the Insights page
+    // has no model control).
+    return this.filterParams({ includeModel: false });
   }
 
   private async executeFetch<T>(
@@ -694,12 +729,32 @@ class AnalyticsStore {
     );
   }
 
-  async fetchSignals(): Promise<FetchResult> {
+  async fetchSignals(
+    opts: { includeModel?: boolean } = {},
+  ): Promise<FetchResult> {
+    const includeModel = opts.includeModel ?? true;
+    // `signals` is a cache shared by the Analytics page and the Insights page.
+    // Key it by the filters that exist on Analytics but not Insights: the model
+    // and the heatmap drill-down (date/day/hour), which fetchSignalsForInsights
+    // clears. When this fetch's scope differs from the cached one, drop the
+    // cache so another scope's signals are never shown while the fetch is in
+    // flight or retained if it fails; a matching scope keeps the in-place
+    // refetch behavior used for filter changes shared by both pages.
+    const scope = JSON.stringify([
+      includeModel ? this.model : "",
+      this.selectedDate,
+      this.selectedDow,
+      this.selectedHour,
+    ]);
+    if (this.signals !== null && this.signalsScope !== scope) {
+      this.signals = null;
+    }
+    this.signalsScope = scope;
     return await this.executeFetch(
       "signals",
       () =>
         AnalyticsService.getApiV1AnalyticsSignals(
-          this.filterParams(),
+          this.filterParams({ includeModel }),
         ) as unknown as Promise<SignalsAnalyticsResponse>,
       (data) => {
         this.signals = data;
@@ -713,7 +768,10 @@ class AnalyticsStore {
     this.selectedDate = null;
     this.selectedDow = null;
     this.selectedHour = null;
-    await this.fetchSignals();
+    // The Insights page has no model control and the model filter is an
+    // Analytics-only scope; omit it so a model selected on Analytics does not
+    // silently narrow the Insights signal facts.
+    await this.fetchSignals({ includeModel: false });
   }
 
   setTopMetric(m: TopSessionsMetric) {

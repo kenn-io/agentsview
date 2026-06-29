@@ -23,8 +23,7 @@ func newSecretsCommand() *cobra.Command {
 			return cmd.Help()
 		},
 	}
-	cmd.PersistentFlags().String("format", "human",
-		"Output format: human or json")
+	registerFormatFlags(cmd.PersistentFlags())
 	cmd.AddCommand(newSecretsListCommand())
 	cmd.AddCommand(newSecretsScanCommand())
 	return cmd

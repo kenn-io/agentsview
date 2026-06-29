@@ -1,8 +1,15 @@
 package postgres
 
 import (
+	"context"
+	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
+	"errors"
+	"io"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -125,6 +132,61 @@ func TestPushMarkerIDUsesUnscopedStateAcrossNamedTargets(t *testing.T) {
 	}
 }
 
+func TestSessionAliasBackfillForcesOneFullPush(t *testing.T) {
+	store := &syncStateStoreStub{}
+
+	full, needed, err := applySessionAliasBackfillRequirement(
+		store, false,
+	)
+
+	require.NoError(t, err)
+	assert.True(t, full, "missing alias backfill marker should force full push")
+	assert.True(t, needed)
+
+	require.NoError(t, markSessionAliasBackfillDone(store))
+
+	full, needed, err = applySessionAliasBackfillRequirement(
+		store, false,
+	)
+
+	require.NoError(t, err)
+	assert.False(t, full,
+		"completed alias backfill should preserve incremental push")
+	assert.False(t, needed)
+
+	full, needed, err = applySessionAliasBackfillRequirement(
+		store, true,
+	)
+
+	require.NoError(t, err)
+	assert.True(t, full, "explicit full push should stay full")
+	assert.False(t, needed)
+}
+
+func TestCompleteSessionAliasBackfillRequiresCleanPush(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		res  PushResult
+		want string
+	}{
+		{name: "clean", want: "1"},
+		{name: "errors", res: PushResult{Errors: 1}},
+		{name: "skipped conflicts", res: PushResult{SkippedConflicts: 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &syncStateStoreStub{}
+
+			err := completeSessionAliasBackfill(
+				store, true, tc.res,
+			)
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.want,
+				store.values[sessionAliasBackfillStateKey])
+		})
+	}
+}
+
 func TestReadPushBoundaryStateValidity(t *testing.T) {
 	const cutoff = "2026-03-11T12:34:56.123Z"
 
@@ -190,6 +252,428 @@ func TestLocalSessionSyncMarkerNormalizesSecondPrecisionTimestamps(t *testing.T)
 	})
 
 	require.Equal(t, endedAt, got)
+}
+
+func TestPGExcludedSessionIDsQueryUsesSingleArrayParameter(t *testing.T) {
+	query, args := pgExcludedSessionIDsQuery([]string{
+		"sess-001",
+		"sess-002",
+		"sess-003",
+	})
+
+	assert.Contains(t, query, "id = ANY($1)")
+	assert.NotContains(t, query, "$2")
+	require.Len(t, args, 1)
+	assert.Equal(t,
+		[]string{"sess-001", "sess-002", "sess-003"},
+		args[0],
+	)
+}
+
+func TestDeletePGExcludedSessionRowsUsesSingleArrayParameter(t *testing.T) {
+	execer := &capturePGExec{}
+
+	require.NoError(t, deletePGExcludedSessionRows(
+		context.Background(), execer,
+		[]string{"sess-001", "sess-002", "sess-003"},
+	))
+
+	assert.Contains(t, execer.query, "DELETE FROM sessions")
+	assert.Contains(t, execer.query, "id = ANY($1)")
+	require.Len(t, execer.args, 1)
+	assert.Equal(t,
+		[]string{"sess-001", "sess-002", "sess-003"},
+		execer.args[0],
+	)
+}
+
+type capturePGExec struct {
+	query string
+	args  []any
+}
+
+func (c *capturePGExec) ExecContext(
+	_ context.Context, query string, args ...any,
+) (sql.Result, error) {
+	c.query = query
+	c.args = args
+	return driver.RowsAffected(0), nil
+}
+
+func TestPushSessionRechecksExclusionAfterSuccessfulUpsert(t *testing.T) {
+	state := &pushSessionProbeState{
+		existingExcluded: map[string]bool{
+			"sess-race": true,
+		},
+	}
+	pg := newPushSessionProbeDB(t, state)
+	tx, err := pg.BeginTx(context.Background(), nil)
+	require.NoError(t, err, "BeginTx")
+
+	syncer := &Sync{machine: "push-machine"}
+	err = syncer.pushSession(
+		context.Background(), tx,
+		db.Session{
+			ID:        "sess-race",
+			Project:   "proj",
+			Machine:   "push-machine",
+			Agent:     "claude",
+			CreatedAt: "2026-01-01T00:00:00Z",
+		},
+		"marker", nil,
+	)
+
+	require.ErrorIs(t, err, errSessionExcluded)
+	assert.Equal(t, 1, state.upserts)
+	assert.Equal(t, 1, state.exclusionChecks)
+	assert.True(t, state.deletedExcluded,
+		"excluded row should be deleted after the tombstone is observed")
+	require.NoError(t, tx.Rollback(), "Rollback")
+}
+
+func TestPushSessionStoresVibeFallbackAlias(t *testing.T) {
+	state := &pushSessionProbeState{aliases: map[string]string{}}
+	pg := newPushSessionProbeDB(t, state)
+	tx, err := pg.BeginTx(context.Background(), nil)
+	require.NoError(t, err, "BeginTx")
+
+	sessionDir := filepath.Join(
+		t.TempDir(),
+		"session_20260616_083518_abc123",
+	)
+	filePath := filepath.Join(sessionDir, "messages.jsonl")
+	syncer := &Sync{machine: "push-machine"}
+	err = syncer.pushSession(
+		context.Background(), tx,
+		db.Session{
+			ID:        "vibe:canonical-uuid",
+			Project:   "proj",
+			Machine:   "push-machine",
+			Agent:     "vibe",
+			CreatedAt: "2026-01-01T00:00:00Z",
+			FilePath:  &filePath,
+		},
+		"marker", nil,
+	)
+
+	require.NoError(t, err, "pushSession")
+	assert.Equal(t,
+		"vibe:session_20260616_083518_abc123",
+		state.aliases["vibe:canonical-uuid"],
+	)
+	require.NoError(t, tx.Rollback(), "Rollback")
+}
+
+func TestPushSessionExcludesVibeFallbackAliasWhenCanonicalExcluded(t *testing.T) {
+	state := &pushSessionProbeState{
+		existingExcluded: map[string]bool{
+			"vibe:canonical-deleted": true,
+		},
+		excludedIDs: map[string]bool{},
+	}
+	pg := newPushSessionProbeDB(t, state)
+	tx, err := pg.BeginTx(context.Background(), nil)
+	require.NoError(t, err, "BeginTx")
+
+	sessionDir := filepath.Join(
+		t.TempDir(),
+		"session_20260616_083518_def456",
+	)
+	filePath := filepath.Join(sessionDir, "messages.jsonl")
+	syncer := &Sync{machine: "push-machine"}
+	err = syncer.pushSession(
+		context.Background(), tx,
+		db.Session{
+			ID:        "vibe:canonical-deleted",
+			Project:   "proj",
+			Machine:   "push-machine",
+			Agent:     "vibe",
+			CreatedAt: "2026-01-01T00:00:00Z",
+			FilePath:  &filePath,
+		},
+		"marker", nil,
+	)
+
+	require.ErrorIs(t, err, errSessionExcluded)
+	assert.True(t,
+		state.excludedIDs["vibe:session_20260616_083518_def456"],
+		"excluded canonical Vibe pushes should tombstone the fallback alias",
+	)
+	require.NoError(t, tx.Rollback(), "Rollback")
+}
+
+func TestPushSessionSkipsVibeCanonicalWhenFallbackAliasExcluded(t *testing.T) {
+	state := &pushSessionProbeState{
+		existingExcluded: map[string]bool{
+			"vibe:session_20260616_083518_ghi789": true,
+		},
+		excludedIDs: map[string]bool{},
+	}
+	pg := newPushSessionProbeDB(t, state)
+	tx, err := pg.BeginTx(context.Background(), nil)
+	require.NoError(t, err, "BeginTx")
+
+	sessionDir := filepath.Join(
+		t.TempDir(),
+		"session_20260616_083518_ghi789",
+	)
+	filePath := filepath.Join(sessionDir, "messages.jsonl")
+	syncer := &Sync{machine: "push-machine"}
+	err = syncer.pushSession(
+		context.Background(), tx,
+		db.Session{
+			ID:        "vibe:canonical-active",
+			Project:   "proj",
+			Machine:   "push-machine",
+			Agent:     "vibe",
+			CreatedAt: "2026-01-01T00:00:00Z",
+			FilePath:  &filePath,
+		},
+		"marker", nil,
+	)
+
+	require.ErrorIs(t, err, errSessionExcluded)
+	assert.True(t, state.excludedIDs["vibe:canonical-active"])
+	assert.True(t,
+		state.excludedIDs["vibe:session_20260616_083518_ghi789"],
+	)
+	assert.True(t, state.deletedExcluded,
+		"all excluded aliases should be purged from PG sessions")
+	require.NoError(t, tx.Rollback(), "Rollback")
+}
+
+func TestPurgePGExcludedPushSessionsChecksDerivedAliases(t *testing.T) {
+	state := &pushSessionProbeState{
+		existingExcluded: map[string]bool{
+			"vibe:session_20260616_083518_jkl012": true,
+		},
+		excludedIDs: map[string]bool{},
+	}
+	pg := newPushSessionProbeDB(t, state)
+
+	sessionDir := filepath.Join(
+		t.TempDir(),
+		"session_20260616_083518_jkl012",
+	)
+	filePath := filepath.Join(sessionDir, "messages.jsonl")
+	sessionByID := map[string]db.Session{
+		"vibe:canonical-unchanged": {
+			ID:        "vibe:canonical-unchanged",
+			Project:   "proj",
+			Machine:   "push-machine",
+			Agent:     "vibe",
+			CreatedAt: "2026-01-01T00:00:00Z",
+			FilePath:  &filePath,
+		},
+	}
+
+	err := purgePGExcludedPushSessions(
+		context.Background(), pg, sessionByID,
+	)
+
+	require.NoError(t, err, "purgePGExcludedPushSessions")
+	assert.Empty(t, sessionByID)
+	assert.True(t, state.excludedIDs["vibe:canonical-unchanged"])
+	assert.True(t,
+		state.excludedIDs["vibe:session_20260616_083518_jkl012"],
+	)
+	assert.True(t, state.deletedExcluded,
+		"all excluded aliases should be purged before fingerprint pruning")
+	assert.Equal(t, 1, state.exclusionChecks)
+	assert.Equal(t, 0, state.upserts)
+}
+
+type pushSessionProbeDriver struct{}
+
+type pushSessionProbeConn struct {
+	state *pushSessionProbeState
+}
+
+type pushSessionProbeTx struct{}
+
+type pushSessionProbeRows struct {
+	columns []string
+	values  [][]driver.Value
+	next    int
+}
+
+type pushSessionProbeState struct {
+	mu                  sync.Mutex
+	excludedAfterUpsert bool
+	upserts             int
+	exclusionChecks     int
+	deletedExcluded     bool
+	aliases             map[string]string
+	excludedIDs         map[string]bool
+	existingExcluded    map[string]bool
+}
+
+var (
+	pushSessionProbeRegisterOnce sync.Once
+	pushSessionProbeStatesMu     sync.Mutex
+	pushSessionProbeStates       = map[string]*pushSessionProbeState{}
+)
+
+func newPushSessionProbeDB(
+	t *testing.T, state *pushSessionProbeState,
+) *sql.DB {
+	t.Helper()
+	pushSessionProbeRegisterOnce.Do(func() {
+		sql.Register("agentsview_push_session_probe", pushSessionProbeDriver{})
+	})
+	name := t.Name()
+	pushSessionProbeStatesMu.Lock()
+	pushSessionProbeStates[name] = state
+	pushSessionProbeStatesMu.Unlock()
+	t.Cleanup(func() {
+		pushSessionProbeStatesMu.Lock()
+		delete(pushSessionProbeStates, name)
+		pushSessionProbeStatesMu.Unlock()
+	})
+
+	pg, err := sql.Open("agentsview_push_session_probe", name)
+	require.NoError(t, err, "open push-session probe db")
+	t.Cleanup(func() { _ = pg.Close() })
+	return pg
+}
+
+func (pushSessionProbeDriver) Open(name string) (driver.Conn, error) {
+	pushSessionProbeStatesMu.Lock()
+	state := pushSessionProbeStates[name]
+	pushSessionProbeStatesMu.Unlock()
+	return &pushSessionProbeConn{state: state}, nil
+}
+
+func (c *pushSessionProbeConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("prepare not implemented")
+}
+
+func (c *pushSessionProbeConn) Close() error { return nil }
+
+func (c *pushSessionProbeConn) Begin() (driver.Tx, error) {
+	return c.BeginTx(context.Background(), driver.TxOptions{})
+}
+
+func (c *pushSessionProbeConn) BeginTx(
+	context.Context, driver.TxOptions,
+) (driver.Tx, error) {
+	return pushSessionProbeTx{}, nil
+}
+
+func (c *pushSessionProbeConn) CheckNamedValue(
+	*driver.NamedValue,
+) error {
+	return nil
+}
+
+func (c *pushSessionProbeConn) ExecContext(
+	_ context.Context, query string, args []driver.NamedValue,
+) (driver.Result, error) {
+	normalized := strings.ToLower(query)
+	c.state.mu.Lock()
+	defer c.state.mu.Unlock()
+
+	switch {
+	case strings.Contains(normalized, "insert into sessions"):
+		c.state.upserts++
+		return driver.RowsAffected(1), nil
+	case strings.Contains(normalized, "delete from sessions") &&
+		strings.Contains(normalized, "id = any($1)"):
+		c.state.deletedExcluded = true
+		return driver.RowsAffected(1), nil
+	case strings.Contains(normalized, "delete from session_aliases"):
+		if c.state.aliases != nil && len(args) > 0 {
+			if sessionID, ok := args[0].Value.(string); ok {
+				delete(c.state.aliases, sessionID)
+			}
+		}
+		return driver.RowsAffected(1), nil
+	case strings.Contains(normalized, "insert into session_aliases"):
+		if c.state.aliases != nil && len(args) > 1 {
+			sessionID, sessionOK := args[0].Value.(string)
+			aliasID, aliasOK := args[1].Value.(string)
+			if sessionOK && aliasOK {
+				c.state.aliases[sessionID] = aliasID
+			}
+		}
+		return driver.RowsAffected(1), nil
+	case strings.Contains(normalized, "insert into excluded_sessions"):
+		if c.state.excludedIDs != nil && len(args) > 0 {
+			switch ids := args[0].Value.(type) {
+			case []string:
+				for _, id := range ids {
+					c.state.excludedIDs[id] = true
+				}
+			case string:
+				c.state.excludedIDs[ids] = true
+			}
+		}
+		return driver.RowsAffected(1), nil
+	default:
+		return nil, errors.New("unexpected push-session probe exec")
+	}
+}
+
+func (c *pushSessionProbeConn) QueryContext(
+	_ context.Context, query string, args []driver.NamedValue,
+) (driver.Rows, error) {
+	normalized := strings.ToLower(query)
+	c.state.mu.Lock()
+	defer c.state.mu.Unlock()
+
+	switch {
+	case strings.Contains(normalized, "select machine, owner_marker"):
+		return &pushSessionProbeRows{
+			columns: []string{"machine", "owner_marker"},
+		}, nil
+	case strings.Contains(normalized, "select id") &&
+		strings.Contains(normalized, "excluded_sessions") &&
+		strings.Contains(normalized, "id = any($1)"):
+		c.state.exclusionChecks++
+		values := [][]driver.Value{}
+		for _, id := range namedValueStrings(args) {
+			if c.state.existingExcluded[id] {
+				values = append(values, []driver.Value{id})
+			}
+		}
+		return &pushSessionProbeRows{
+			columns: []string{"id"},
+			values:  values,
+		}, nil
+	case strings.Contains(normalized, "select exists") &&
+		strings.Contains(normalized, "excluded_sessions"):
+		c.state.exclusionChecks++
+		excluded := c.state.excludedAfterUpsert
+		if c.state.existingExcluded != nil && len(args) > 0 {
+			id, _ := args[0].Value.(string)
+			excluded = c.state.existingExcluded[id]
+		}
+		return &pushSessionProbeRows{
+			columns: []string{"exists"},
+			values: [][]driver.Value{
+				{excluded},
+			},
+		}, nil
+	default:
+		return nil, errors.New("unexpected push-session probe query")
+	}
+}
+
+func (pushSessionProbeTx) Commit() error { return nil }
+
+func (pushSessionProbeTx) Rollback() error { return nil }
+
+func (r *pushSessionProbeRows) Columns() []string { return r.columns }
+
+func (r *pushSessionProbeRows) Close() error { return nil }
+
+func (r *pushSessionProbeRows) Next(dest []driver.Value) error {
+	if r.next >= len(r.values) {
+		return io.EOF
+	}
+	copy(dest, r.values[r.next])
+	r.next++
+	return nil
 }
 
 func TestSessionPushFingerprintDiffers(t *testing.T) {

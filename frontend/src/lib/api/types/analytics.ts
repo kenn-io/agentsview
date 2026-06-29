@@ -22,6 +22,7 @@ export interface AnalyticsSummary {
   total_messages: number;
   total_output_tokens?: number;
   token_reporting_sessions?: number;
+  models?: string[];
   active_projects: number;
   active_days: number;
   avg_messages: number;

@@ -3,6 +3,7 @@ export interface VersionInfo {
   version: string;
   commit: string;
   build_date: string;
+  insight_generation_available?: boolean;
   read_only?: boolean;
 }
 

@@ -14,7 +14,7 @@ import (
 func parseTestContent(t *testing.T, name, content string, expectedLen int) []ParseResult {
 	t.Helper()
 	path := createTestFile(t, name, content)
-	results, err := ParseClaudeSession(path, "proj", "local")
+	results, err := parseClaudeSession(path, "proj", "local")
 	require.NoError(t, err, "ParseClaudeSession")
 	require.Len(t, results, expectedLen)
 	return results

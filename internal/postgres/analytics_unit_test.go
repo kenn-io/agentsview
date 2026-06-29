@@ -32,6 +32,7 @@ type analyticsProbeRows struct {
 type analyticsProbeState struct {
 	mu      sync.Mutex
 	queries []string
+	args    [][]any
 }
 
 var (
@@ -81,15 +82,59 @@ func (c *analyticsProbeConn) Begin() (driver.Tx, error) {
 }
 
 func (c *analyticsProbeConn) QueryContext(
-	_ context.Context, query string, _ []driver.NamedValue,
+	_ context.Context, query string, args []driver.NamedValue,
 ) (driver.Rows, error) {
+	values := make([]any, len(args))
+	for i, arg := range args {
+		values[i] = arg.Value
+	}
 	c.state.mu.Lock()
 	c.state.queries = append(c.state.queries, query)
+	c.state.args = append(c.state.args, values)
 	c.state.mu.Unlock()
 
 	normalized := strings.ToLower(query)
 	switch {
+	case strings.Contains(normalized, "select distinct model"):
+		sessionModels := make([][]driver.Value, 0)
+		for _, value := range values {
+			sessionID, ok := value.(string)
+			if !ok || !strings.HasPrefix(sessionID, "s") {
+				continue
+			}
+			sessionModels = append(sessionModels,
+				[]driver.Value{"model-" + sessionID},
+			)
+		}
+		if len(sessionModels) == 0 {
+			sessionModels = [][]driver.Value{
+				{"model-s1"},
+				{"model-s2"},
+			}
+		}
+		return &analyticsProbeRows{
+			columns: []string{"model"},
+			values:  sessionModels,
+		}, nil
 	case strings.Contains(normalized, "from sessions"):
+		if strings.Contains(normalized, "message_count, agent, project") {
+			return &analyticsProbeRows{
+				columns: []string{
+					"id", "date", "message_count", "agent", "project",
+					"total_output_tokens", "has_total_output_tokens",
+				},
+				values: [][]driver.Value{
+					{
+						"s1", time.Date(2024, 6, 3, 9, 0, 0, 0, time.UTC),
+						int64(10), "claude", "alpha", int64(0), false,
+					},
+					{
+						"s2", time.Date(2024, 6, 4, 9, 0, 0, 0, time.UTC),
+						int64(20), "codex", "beta", int64(0), false,
+					},
+				},
+			}, nil
+		}
 		if strings.Contains(normalized, "agent, project") {
 			return &analyticsProbeRows{
 				columns: []string{"id", "date", "agent", "project"},
@@ -134,7 +179,32 @@ func (c *analyticsProbeConn) QueryContext(
 			}, nil
 		}
 		if !strings.Contains(normalized, "group by session_id, category") {
-			return nil, errors.New("tool call query must group by session_id, category")
+			if !strings.Contains(normalized,
+				"group by tc.session_id, tc.category") {
+				return nil, errors.New(
+					"tool call query must group by session_id, category")
+			}
+		}
+		if strings.Contains(normalized, "to_char(m.timestamp") {
+			return &analyticsProbeRows{
+				columns: []string{
+					"session_id", "category", "count", "timestamp",
+				},
+				values: [][]driver.Value{
+					{
+						"s1", "Read", int64(2),
+						"2024-06-03T09:00:00Z",
+					},
+					{
+						"s1", "Bash", int64(1),
+						"2024-06-03T09:00:00Z",
+					},
+					{
+						"s2", "Read", int64(1),
+						"2024-06-04T09:00:00Z",
+					},
+				},
+			}, nil
 		}
 		return &analyticsProbeRows{
 			columns: []string{"session_id", "category", "count"},
@@ -237,6 +307,74 @@ func TestGetAnalyticsSkillsAggregatesToolCallsInSQL(t *testing.T) {
 			"with session fallback for null timestamps")
 }
 
+func TestGetAnalyticsToolsModelFilterJoinsMessages(t *testing.T) {
+	state := &analyticsProbeState{}
+	store := &Store{
+		pg: newAnalyticsProbeDB(t, state),
+	}
+
+	_, err := store.GetAnalyticsTools(
+		context.Background(),
+		db.AnalyticsFilter{
+			From:  "2024-06-01",
+			To:    "2024-06-30",
+			Model: "gpt-4o",
+		},
+	)
+	require.NoError(t, err, "GetAnalyticsTools")
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	var toolQuery string
+	for _, query := range state.queries {
+		if strings.Contains(strings.ToLower(query), "from tool_calls tc") {
+			toolQuery = query
+			break
+		}
+	}
+	require.NotEmpty(t, toolQuery, "tool query not captured")
+	normalized := strings.Join(strings.Fields(strings.ToLower(toolQuery)), " ")
+	assert.Contains(t, normalized,
+		"join messages m on m.session_id = tc.session_id and m.ordinal = tc.message_ordinal")
+	assert.Contains(t, normalized, "m.model = $")
+}
+
+func TestGetAnalyticsSkillsModelFilterUsesMatchingMessages(t *testing.T) {
+	state := &analyticsProbeState{}
+	store := &Store{
+		pg: newAnalyticsProbeDB(t, state),
+	}
+
+	_, err := store.GetAnalyticsSkills(
+		context.Background(),
+		db.AnalyticsFilter{
+			From:  "2024-06-01",
+			To:    "2024-06-30",
+			Model: "gpt-4o",
+		},
+	)
+	require.NoError(t, err, "GetAnalyticsSkills")
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	var skillQuery string
+	for _, query := range state.queries {
+		q := strings.ToLower(query)
+		if strings.Contains(q, "from tool_calls tc") &&
+			strings.Contains(q, "trim(coalesce(tc.skill_name") {
+			skillQuery = query
+			break
+		}
+	}
+	require.NotEmpty(t, skillQuery, "skill query not captured")
+	normalized := strings.Join(strings.Fields(strings.ToLower(skillQuery)), " ")
+	assert.Contains(t, normalized,
+		"left join messages m on m.session_id = tc.session_id and m.ordinal = tc.message_ordinal")
+	assert.Contains(t, normalized, "m.model = $")
+}
+
 func TestQueryVelocityMsgsScansNativeTimestamps(t *testing.T) {
 	store := &Store{
 		pg: newAnalyticsProbeDB(t, &analyticsProbeState{}),
@@ -256,4 +394,21 @@ func TestQueryVelocityMsgsScansNativeTimestamps(t *testing.T) {
 	assert.True(t, sessionMsgs["s1"][1].valid)
 	assert.Equal(t, 10.0,
 		sessionMsgs["s1"][1].ts.Sub(sessionMsgs["s1"][0].ts).Seconds())
+}
+
+func TestGetAnalyticsSummaryModelsFollowFilteredSessions(t *testing.T) {
+	store := &Store{
+		pg: newAnalyticsProbeDB(t, &analyticsProbeState{}),
+	}
+
+	resp, err := store.GetAnalyticsSummary(
+		context.Background(),
+		db.AnalyticsFilter{
+			From:     "2024-06-03",
+			To:       "2024-06-03",
+			Timezone: "UTC",
+		},
+	)
+	require.NoError(t, err, "GetAnalyticsSummary")
+	assert.Equal(t, []string{"model-s1"}, resp.Models)
 }

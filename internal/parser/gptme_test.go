@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -9,18 +10,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestParseGptmeSession(t *testing.T) {
-	path := filepath.Join(
-		"testdata", "gptme",
-		"2026-06-13-write-hello-world",
-		"conversation.jsonl",
-	)
+func TestGptmeProviderParsesFixture(t *testing.T) {
+	logsDir := filepath.Join("testdata", "gptme")
 
-	sess, msgs, err := ParseGptmeSession(path, "testmachine")
+	provider, ok := NewProvider(AgentGptme, ProviderConfig{
+		Roots:   []string{logsDir},
+		Machine: "testmachine",
+	})
+	require.True(t, ok)
+	source, found, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "2026-06-13-write-hello-world",
+	})
 	require.NoError(t, err)
-	require.NotNil(t, sess)
-	require.NotEmpty(t, msgs)
+	require.True(t, found)
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source:  source,
+		Machine: "testmachine",
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
 
+	sess := outcome.Results[0].Result.Session
+	msgs := outcome.Results[0].Result.Messages
 	assert.Equal(t, "gptme:2026-06-13-write-hello-world", sess.ID)
 	assert.Equal(t, "write-hello-world", sess.Project)
 	assert.Equal(t, "testmachine", sess.Machine)
@@ -60,23 +71,35 @@ func TestParseGptmeSession(t *testing.T) {
 	assert.Equal(t, 2, sess.UserMessageCount)
 }
 
-func TestDiscoverGptmeSessions(t *testing.T) {
+func TestGptmeProviderDiscoversFixture(t *testing.T) {
 	logsDir := filepath.Join("testdata", "gptme")
-	files := DiscoverGptmeSessions(logsDir)
-	require.Len(t, files, 1)
-	assert.Equal(t, AgentGptme, files[0].Agent)
-	assert.Contains(t, files[0].Path, "conversation.jsonl")
+	provider, ok := NewProvider(AgentGptme, ProviderConfig{Roots: []string{logsDir}})
+	require.True(t, ok)
+
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, AgentGptme, sources[0].Provider)
+	assert.Contains(t, sources[0].DisplayPath, "conversation.jsonl")
 }
 
-func TestFindGptmeSourceFile(t *testing.T) {
+func TestGptmeProviderFindsFixtureSource(t *testing.T) {
 	logsDir := filepath.Join("testdata", "gptme")
+	provider, ok := NewProvider(AgentGptme, ProviderConfig{Roots: []string{logsDir}})
+	require.True(t, ok)
 
-	found := FindGptmeSourceFile(logsDir, "2026-06-13-write-hello-world")
-	assert.NotEmpty(t, found)
-	assert.Contains(t, found, "conversation.jsonl")
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "2026-06-13-write-hello-world",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Contains(t, found.DisplayPath, "conversation.jsonl")
 
-	notFound := FindGptmeSourceFile(logsDir, "nonexistent-session")
-	assert.Empty(t, notFound)
+	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "nonexistent-session",
+	})
+	require.NoError(t, err)
+	assert.False(t, ok)
 }
 
 func TestGptmeProjectFromSessionName(t *testing.T) {

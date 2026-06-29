@@ -3,8 +3,11 @@ name: CI
 on:
   push:
     branches: [main]
+  # Run on every pull request regardless of base branch so stacked PRs that
+  # target another feature branch (not just main) still get the full test,
+  # lint, and e2e suite. The expensive desktop/tauri bundle builds are gated
+  # to main separately in desktop-artifacts.yml.
   pull_request:
-    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}

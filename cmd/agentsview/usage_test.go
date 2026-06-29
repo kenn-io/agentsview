@@ -242,6 +242,117 @@ func TestRunUsageDailyUsesDiscoveredDaemon(t *testing.T) {
 	assertNoLocalSessionsDB(t, dataDir)
 }
 
+// TestRunUsageDailyResolvesDurationSince proves a duration --since (e.g.
+// "14d") is resolved to a concrete YYYY-MM-DD before it reaches the query
+// layer, not forwarded verbatim.
+func TestRunUsageDailyResolvesDurationSince(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+
+	var gotFrom string
+	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotFrom = r.URL.Query().Get("from")
+		assert.Equal(t, "true", r.URL.Query().Get("no_default_range"))
+		writeJSONResponse(w, sampleDailyUsageJSON)
+	})
+	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
+
+	_ = captureStdout(t, func() {
+		runUsageDaily(UsageDailyConfig{
+			JSON:     true,
+			Since:    "14d",
+			Timezone: "UTC",
+		})
+	})
+
+	// Exact date math is pinned by TestResolveUsageWindow; here we only
+	// prove the duration resolved to a concrete date, not forwarded as
+	// "14d".
+	assert.NotEqual(t, "14d", gotFrom, "duration should be resolved, not forwarded")
+	assert.Regexp(t, `^\d{4}-\d{2}-\d{2}$`, gotFrom,
+		"duration --since should resolve to a concrete YYYY-MM-DD date")
+	assertNoLocalSessionsDB(t, dataDir)
+}
+
+func TestResolveUsageWindow(t *testing.T) {
+	now := time.Date(2026, 4, 18, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name             string
+		since, until     string
+		wantFrom, wantTo string
+		wantErrSubstring string
+	}{
+		{name: "empty passes through"},
+		{name: "duration since anchors at now", since: "14d", wantFrom: "2026-04-04"},
+		{name: "Nh duration since", since: "48h", wantFrom: "2026-04-16"},
+		{name: "duration since anchors to explicit until", since: "14d",
+			until: "2026-04-10", wantFrom: "2026-03-27", wantTo: "2026-04-10"},
+		{name: "duration since anchors to duration until", since: "7d",
+			until: "30d", wantFrom: "2026-03-12", wantTo: "2026-03-19"},
+		{name: "dates pass through", since: "2026-04-01", until: "2026-04-10",
+			wantFrom: "2026-04-01", wantTo: "2026-04-10"},
+		{name: "equal bounds are a valid single day", since: "2026-04-10",
+			until: "2026-04-10", wantFrom: "2026-04-10", wantTo: "2026-04-10"},
+		{name: "garbage since", since: "7x", wantErrSubstring: "invalid --since"},
+		{name: "garbage until", until: "nope", wantErrSubstring: "invalid --until"},
+		{name: "inverted explicit window", since: "2026-06-20", until: "2026-06-13",
+			wantErrSubstring: "must not be after"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			from, to, err := resolveUsageWindow(tc.since, tc.until, now, time.UTC)
+			if tc.wantErrSubstring != "" {
+				require.Error(t, err, "expected an error")
+				assert.Contains(t, err.Error(), tc.wantErrSubstring)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantFrom, from, "from")
+			assert.Equal(t, tc.wantTo, to, "to")
+		})
+	}
+}
+
+func TestResolveUsageWindowUsesReportTimezone(t *testing.T) {
+	loc, err := time.LoadLocation("America/Los_Angeles")
+	require.NoError(t, err)
+	now := time.Date(2026, 4, 17, 19, 0, 0, 0, loc)
+
+	tests := []struct {
+		name             string
+		since, until     string
+		wantFrom, wantTo string
+	}{
+		{
+			name:     "duration since formats report local date",
+			since:    "1d",
+			wantFrom: "2026-04-16",
+		},
+		{
+			name:     "duration since anchors to until in report timezone",
+			since:    "1d",
+			until:    "2026-04-10",
+			wantFrom: "2026-04-09",
+			wantTo:   "2026-04-10",
+		},
+		{
+			name:     "explicit dates pass through unchanged",
+			since:    "2026-04-01",
+			until:    "2026-04-10",
+			wantFrom: "2026-04-01",
+			wantTo:   "2026-04-10",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			from, to, err := resolveUsageWindow(tc.since, tc.until, now, loc)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantFrom, from, "from")
+			assert.Equal(t, tc.wantTo, to, "to")
+		})
+	}
+}
+
 func TestRunUsageDailyTableSkipsDaemonSessionCounts(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 
