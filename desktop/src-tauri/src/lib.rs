@@ -1743,7 +1743,7 @@ fn write_labeled_log_record(file: &mut fs::File, label: &str, record: &str) -> i
         writeln!(file, "[{label}]")?;
         return Ok(());
     }
-    for line in trimmed.lines() {
+    for line in trimmed.split(['\r', '\n']).filter(|line| !line.is_empty()) {
         writeln!(file, "[{label}] {line}")?;
     }
     Ok(())
@@ -2538,6 +2538,19 @@ mod tests {
         assert!(logged.contains("[stdout] booting"));
         assert!(logged.contains("[stdout] listening"));
         assert!(logged.contains("[stderr] fatal line"));
+    }
+
+    #[test]
+    fn append_sidecar_log_record_splits_carriage_return_progress_updates() {
+        let tempdir = tempdir().expect("tempdir");
+        let log_path = tempdir.path().join("logs").join(DESKTOP_LOG_FILE_NAME);
+
+        append_sidecar_log_record_at_path(&log_path, "stdout", "syncing\rindexing\r")
+            .expect("progress log write");
+
+        let logged = fs::read_to_string(log_path).expect("read progress log");
+        assert!(logged.contains("[stdout] syncing"));
+        assert!(logged.contains("[stdout] indexing"));
     }
 
     #[cfg(unix)]
