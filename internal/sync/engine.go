@@ -1171,14 +1171,24 @@ func (e *Engine) resyncAllLocked(
 		)
 	}
 
-	// 3. Point engine at newDB and sync into it.
+	// 3. Point engine at newDB and sync into it. Report discovery as its
+	// own phase first: syncAllLocked walks every source before emitting
+	// its first syncing event, and on a large archive that walk takes
+	// minutes. Without this marker the progress printer credits that
+	// silent time to the preceding (instant) "Disabling ..." phase.
 	e.openCodeArchiveStore = origDB
 	e.db = newDB
+	reportResyncPhase(
+		PhaseDiscovering,
+		"Discovering sessions",
+		"",
+	)
 	stats = e.syncAllLocked(
 		ctx, reportResyncProgress, time.Time{}, nil, syncWriteBulk, true,
 	)
 	e.db = origDB // restore immediately
 	e.openCodeArchiveStore = nil
+	e.phaseStats.Log("resync")
 
 	// Abort swap when the fresh DB would be worse than the
 	// original:
@@ -1806,31 +1816,39 @@ func (e *Engine) syncAllLocked(
 
 	verbose := onProgress == nil
 
-	if verbose {
-		log.Printf(
-			"discovered %d files (%d claude, %d codex, %d copilot, %d gemini, %d cursor, %d amp, %d zencoder, %d iflow, %d vscode-copilot, %d visualstudio-copilot, %d pi, %d omp, %d kiro, %d zed, %d vibe) in %s",
-			len(all),
-			counts[parser.AgentClaude],
-			counts[parser.AgentCodex],
-			counts[parser.AgentCopilot],
-			counts[parser.AgentGemini],
-			counts[parser.AgentCursor],
-			counts[parser.AgentAmp],
-			counts[parser.AgentZencoder],
-			counts[parser.AgentIflow],
-			counts[parser.AgentVSCodeCopilot],
-			counts[parser.AgentVSCopilot],
-			counts[parser.AgentPi],
-			counts[parser.AgentOMP],
-			counts[parser.AgentKiro],
-			counts[parser.AgentZed],
-			counts[parser.AgentVibe],
-			time.Since(t0).Round(time.Millisecond),
-		)
-	}
+	// Always log discovery timing: this is the only window into the
+	// otherwise-silent provider walk, which dominates resync wall-clock
+	// on large archives. Suppressing it behind verbose hid that cost on
+	// the daemon resync and interactive sync paths (both pass onProgress).
+	log.Printf(
+		"discovered %d files (%d claude, %d codex, %d copilot, %d gemini, %d cursor, %d amp, %d zencoder, %d iflow, %d vscode-copilot, %d visualstudio-copilot, %d pi, %d omp, %d kiro, %d zed, %d vibe) in %s",
+		len(all),
+		counts[parser.AgentClaude],
+		counts[parser.AgentCodex],
+		counts[parser.AgentCopilot],
+		counts[parser.AgentGemini],
+		counts[parser.AgentCursor],
+		counts[parser.AgentAmp],
+		counts[parser.AgentZencoder],
+		counts[parser.AgentIflow],
+		counts[parser.AgentVSCodeCopilot],
+		counts[parser.AgentVSCopilot],
+		counts[parser.AgentPi],
+		counts[parser.AgentOMP],
+		counts[parser.AgentKiro],
+		counts[parser.AgentZed],
+		counts[parser.AgentVibe],
+		time.Since(t0).Round(time.Millisecond),
+	)
 
 	progressTotal := len(all)
-	progressTotal += e.countDBBackedSessions(ctx, scope)
+	tDBCount := time.Now()
+	dbBackedCount := e.countDBBackedSessions(ctx, scope)
+	progressTotal += dbBackedCount
+	log.Printf(
+		"counted %d db-backed sessions in %s",
+		dbBackedCount, time.Since(tDBCount).Round(time.Millisecond),
+	)
 	e.reportProgress(onProgress, Progress{
 		Phase:         PhaseSyncing,
 		SessionsTotal: progressTotal,

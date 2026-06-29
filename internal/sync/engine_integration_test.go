@@ -1279,6 +1279,46 @@ func TestResyncAllEmitsFTSRebuildHint(t *testing.T) {
 	assert.Contains(t, fts.Hint, "may take a while")
 }
 
+// TestResyncAllReportsDiscoveryBeforeSyncing verifies the resync emits a
+// distinct discovery phase before the first syncing event. Without it, the
+// silent discovery walk is mislabeled: the progress printer credits its
+// wall-clock time to the preceding "Disabling temporary search index updates"
+// phase, which actually completes instantly.
+func TestResyncAllReportsDiscoveryBeforeSyncing(t *testing.T) {
+	env := setupTestEnv(t)
+
+	msg := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "findable prompt").
+		AddClaudeAssistant(tsZeroS5, "findable response").
+		String()
+	env.writeClaudeSession(t, "test-proj", "a.jsonl", msg)
+
+	var events []sync.Progress
+	stats := env.engine.ResyncAll(context.Background(), func(p sync.Progress) {
+		events = append(events, p)
+	})
+	require.False(t, stats.Aborted, "resync aborted: %+v", stats.Warnings)
+
+	discoveryIdx, syncingIdx := -1, -1
+	for i, event := range events {
+		if event.Phase == sync.PhaseDiscovering && discoveryIdx == -1 {
+			discoveryIdx = i
+		}
+		if event.Phase == sync.PhaseSyncing && syncingIdx == -1 {
+			syncingIdx = i
+		}
+	}
+	require.NotEqual(t, -1, discoveryIdx,
+		"missing discovery progress event; events=%+v", events)
+	require.NotEqual(t, -1, syncingIdx,
+		"missing syncing progress event; events=%+v", events)
+	assert.Less(t, discoveryIdx, syncingIdx,
+		"discovery must be reported before syncing")
+	assert.True(t, events[discoveryIdx].Resync,
+		"discovery progress should identify full resync")
+	assert.Contains(t, events[discoveryIdx].Detail, "Discovering sessions")
+}
+
 func TestSyncEngineProgressDoneCatchesResyncDBBackedWork(t *testing.T) {
 	env := setupTestEnv(t)
 
