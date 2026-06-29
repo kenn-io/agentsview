@@ -59,7 +59,7 @@ func TestShellQuote(t *testing.T) {
 
 func TestCommandWithCleanup(t *testing.T) {
 	assert.Equal(t,
-		"claude < prompt.txt; rm -f -- prompt.txt",
+		"claude < prompt.txt; rm -f -- 'prompt.txt'",
 		commandWithCleanup("claude < prompt.txt", "prompt.txt"),
 	)
 	assert.Equal(t,
