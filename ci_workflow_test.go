@@ -34,6 +34,7 @@ type githubWorkflowStep struct {
 	Name string `yaml:"name"`
 	Run  string `yaml:"run"`
 	Uses string `yaml:"uses"`
+	If   string `yaml:"if"`
 }
 
 // TestCIRunsOnAllPullRequestsWhileDesktopBuildsTargetMain guards the trigger
@@ -181,6 +182,40 @@ func TestCIWorkflowRestoresPricingSnapshotBeforeGoTests(t *testing.T) {
 	}
 }
 
+func TestWindowsGoWorkflowRunsDuckDBSmokeInsteadOfFullDuckDBSuite(t *testing.T) {
+	contents, err := os.ReadFile(".github/workflows/ci.yml")
+	require.NoError(t, err)
+
+	var workflow githubWorkflow
+	require.NoError(t, yaml.Unmarshal(contents, &workflow))
+
+	job, ok := workflow.Jobs["test"]
+	require.True(t, ok, "test job must exist")
+
+	restoreIndex, _ := findWorkflowStep(t, job, "Restore pricing snapshot")
+	fullIndex, fullStep := findWorkflowStep(t, job, "Run Go tests")
+	windowsIndex, windowsStep := findWorkflowStep(
+		t, job, "Run Go tests (Windows, excluding DuckDB)")
+	smokeIndex, smokeStep := findWorkflowStep(t, job, "Run DuckDB smoke tests (Windows)")
+
+	require.Less(t, restoreIndex, fullIndex)
+	require.Less(t, restoreIndex, windowsIndex)
+	require.Less(t, restoreIndex, smokeIndex)
+	require.Less(t, windowsIndex, smokeIndex)
+
+	assert.Equal(t, "runner.os != 'Windows'", fullStep.If)
+	assert.Equal(t, "runner.os == 'Windows'", windowsStep.If)
+	assert.Contains(t, windowsStep.Run, "go list -tags \"fts5\" ./...")
+	assert.Contains(t, windowsStep.Run, "go.kenn.io/agentsview/internal/duckdb")
+	assert.Contains(t, windowsStep.Run, "go test -tags \"fts5\" $packages -v -count=1 -timeout=20m")
+
+	assert.Equal(t, "runner.os == 'Windows'", smokeStep.If)
+	assert.Contains(t, smokeStep.Run, "go test -tags \"fts5\" ./internal/duckdb")
+	assert.Contains(t, smokeStep.Run, "TestLocalFileSmoke")
+	assert.Contains(t, smokeStep.Run, "TestEnsureSchemaCreatesRequiredMirrorTables")
+	assert.Contains(t, smokeStep.Run, "TestEnsureSchemaIsIdempotent")
+}
+
 func TestMSYS2UpdateWorkflowRestoresPricingSnapshotBeforeGoTests(t *testing.T) {
 	contents, err := os.ReadFile(".github/workflows/msys2-update-check.yml")
 	require.NoError(t, err)
@@ -197,6 +232,30 @@ func TestMSYS2UpdateWorkflowRestoresPricingSnapshotBeforeGoTests(t *testing.T) {
 		"msys2 update check must restore pricing snapshot before tests")
 
 	assertSnapshotRestoreStep(t, restoreStep)
+}
+
+func TestMSYS2UpdateWorkflowRunsDuckDBSmokeInsteadOfFullDuckDBSuite(t *testing.T) {
+	contents, err := os.ReadFile(".github/workflows/msys2-update-check.yml")
+	require.NoError(t, err)
+
+	var workflow githubWorkflow
+	require.NoError(t, yaml.Unmarshal(contents, &workflow))
+
+	job, ok := workflow.Jobs["windows-update-check"]
+	require.True(t, ok, "windows-update-check job must exist")
+
+	testIndex, testStep := findWorkflowStep(t, job, "Run Go tests")
+	smokeIndex, smokeStep := findWorkflowStep(t, job, "Run DuckDB smoke tests")
+	require.Less(t, testIndex, smokeIndex)
+
+	assert.Contains(t, testStep.Run, "go list -tags \"fts5\" ./...")
+	assert.Contains(t, testStep.Run, "go.kenn.io/agentsview/internal/duckdb")
+	assert.Contains(t, testStep.Run, "go test -tags \"fts5\" $packages -v -count=1")
+
+	assert.Contains(t, smokeStep.Run, "go test -tags \"fts5\" ./internal/duckdb")
+	assert.Contains(t, smokeStep.Run, "TestLocalFileSmoke")
+	assert.Contains(t, smokeStep.Run, "TestEnsureSchemaCreatesRequiredMirrorTables")
+	assert.Contains(t, smokeStep.Run, "TestEnsureSchemaIsIdempotent")
 }
 
 func TestDockerWorkflowRestoresPricingSnapshotBeforeImageBuild(t *testing.T) {

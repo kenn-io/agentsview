@@ -37,6 +37,22 @@ jobs:
         run: mkdir -p internal/web/dist && echo ok > internal/web/dist/stub.html
 
       - name: Run Go tests
-        run: go test -tags "fts5" ./... -v -count=1
+        run: |
+          $packages = go list -tags "fts5" ./...
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          $packages = $packages | Where-Object {
+            $_ -ne "go.kenn.io/agentsview/internal/duckdb"
+          }
+          go test -tags "fts5" $packages -v -count=1
+        env:
+          CGO_ENABLED: "1"
+
+      - name: Run DuckDB smoke tests
+        run: >
+          go test -tags "fts5" ./internal/duckdb
+          -run '^(TestLocalFileSmoke|TestOpenCreatesLocalDuckDBFile|TestEnsureSchemaCreatesRequiredMirrorTables|TestEnsureSchemaIsIdempotent|TestCheckSchemaCompatPassesAfterEnsureSchema)$'
+          -v -count=1 -timeout=5m
         env:
           CGO_ENABLED: "1"
