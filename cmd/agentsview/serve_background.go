@@ -117,18 +117,18 @@ func runServeBackgroundCommand(
 	runServeBackground(mustLoadConfig(cmd), os.Args[1:], opts)
 }
 
-// runServeBackground generates the auth token, checks for an existing daemon,
-// and spawns the detached child. The caller must already hold the background
-// launch lock (see runServeBackgroundCommand). The launch lock is distinct
-// from the daemon start lock so the spawned child can still claim the start
-// lock during its own (possibly long) startup.
+// runServeBackground generates the daemon auth token, checks for an existing
+// daemon, and spawns the detached child. The caller must already hold the
+// background launch lock (see runServeBackgroundCommand). The launch lock is
+// distinct from the daemon start lock so the spawned child can still claim the
+// start lock during its own (possibly long) startup.
 func runServeBackground(
 	cfg config.Config, args []string, opts serveReplacementOptions,
 ) {
+	if err := ensureServeAuthToken(&cfg); err != nil {
+		fatal("serve background: generating auth token: %v", err)
+	}
 	if cfg.RequireAuth {
-		if err := cfg.EnsureAuthToken(); err != nil {
-			fatal("serve background: generating auth token: %v", err)
-		}
 		if cfg.AuthToken != "" {
 			fmt.Printf("Auth enabled. Token: %s\n", cfg.AuthToken)
 		}
@@ -337,10 +337,8 @@ func ensureBackgroundServe(
 	}
 	defer func() { _ = launchLock.Unlock() }()
 
-	if cfg.RequireAuth {
-		if err := cfg.EnsureAuthToken(); err != nil {
-			return nil, fmt.Errorf("generating auth token: %w", err)
-		}
+	if err := ensureServeAuthToken(cfg); err != nil {
+		return nil, fmt.Errorf("generating auth token: %w", err)
 	}
 
 probeDaemon:

@@ -127,6 +127,41 @@ func TestRunServeBackgroundReplaceOverridesDevRefusal(t *testing.T) {
 	assert.True(t, stopped)
 }
 
+func TestRunServeBackgroundGeneratesAuthTokenForRemoteSync(t *testing.T) {
+	dir := testDataDir(t)
+	host, port := testPingServer(t)
+	var gotCfg config.Config
+
+	oldStart := startServeBackgroundProcessForRun
+	startServeBackgroundProcessForRun = func(
+		cfg config.Config, _ []string,
+	) (*exec.Cmd, string, error) {
+		gotCfg = cfg
+		_, err := WriteDaemonRuntime(dir, host, port, version, false)
+		require.NoError(t, err)
+		cmd := exec.Command("sleep", "2")
+		require.NoError(t, cmd.Start())
+		t.Cleanup(func() { _ = cmd.Process.Kill() })
+		return cmd, "test.log", nil
+	}
+	t.Cleanup(func() {
+		startServeBackgroundProcessForRun = oldStart
+		RemoveDaemonRuntime(dir)
+	})
+
+	runServeBackground(
+		config.Config{DataDir: dir},
+		[]string{"serve", "--background"},
+		serveReplacementOptions{},
+	)
+
+	require.NotEmpty(t, gotCfg.AuthToken)
+	assert.False(t, gotCfg.RequireAuth)
+	data, err := os.ReadFile(filepath.Join(dir, "config.toml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `auth_token = "`)
+}
+
 func TestRunServeBackgroundReplaceWaitsForExternalStartLock(t *testing.T) {
 	dir := runtimeTestDir(t)
 	oldHost, oldPort := testPingServer(t)
@@ -548,6 +583,45 @@ func TestEnsureBackgroundServeExistingDaemon(t *testing.T) {
 	require.NotNil(t, rt)
 	assert.Equal(t, host, rt.Host)
 	assert.Equal(t, port, rt.Port)
+}
+
+func TestEnsureBackgroundServeGeneratesAuthTokenForRemoteSync(t *testing.T) {
+	dir := testDataDir(t)
+	host, port := testPingServer(t)
+	var gotCfg config.Config
+
+	oldStartProcess := startServeBackgroundProcessForEnsure
+	startServeBackgroundProcessForEnsure = func(
+		cfg config.Config, _ []string,
+	) (*exec.Cmd, string, error) {
+		gotCfg = cfg
+		_, err := WriteDaemonRuntime(dir, host, port, version, false)
+		if err != nil {
+			return nil, "", err
+		}
+		cmd := exec.Command("sleep", "2")
+		if err := cmd.Start(); err != nil {
+			return nil, "", err
+		}
+		t.Cleanup(func() { _ = cmd.Process.Kill() })
+		return cmd, "test.log", nil
+	}
+	t.Cleanup(func() {
+		startServeBackgroundProcessForEnsure = oldStartProcess
+		RemoveDaemonRuntime(dir)
+	})
+
+	cfg := config.Config{DataDir: dir}
+	rt, err := ensureBackgroundServe(context.Background(), &cfg, time.Second)
+
+	require.NoError(t, err)
+	require.NotNil(t, rt)
+	require.NotEmpty(t, gotCfg.AuthToken)
+	assert.Equal(t, gotCfg.AuthToken, cfg.AuthToken)
+	assert.False(t, gotCfg.RequireAuth)
+	data, err := os.ReadFile(filepath.Join(dir, "config.toml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `auth_token = "`)
 }
 
 func TestEnsureBackgroundServeChecksTooNewDatabaseBeforeReplacingCompatibleDaemon(

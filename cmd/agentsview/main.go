@@ -97,13 +97,13 @@ func runServe(cfg config.Config, opts serveOptions) {
 		fatal("invalid serve config: %v", err)
 	}
 
-	// When auth is required, ensure a token exists before publishing
-	// startup state so waiting CLI probes can authenticate the first
-	// protected /api/ping after startup completes.
+	// Remote sync archive endpoints always require bearer auth, even when
+	// general API auth is disabled. Ensure a token exists before publishing
+	// startup state so daemon probes and remote collectors share one token.
+	if err := ensureServeAuthToken(&cfg); err != nil {
+		log.Fatalf("Failed to generate auth token: %v", err)
+	}
 	if cfg.RequireAuth {
-		if err := cfg.EnsureAuthToken(); err != nil {
-			log.Fatalf("Failed to generate auth token: %v", err)
-		}
 		// A background child redirects stdout to serve.log; printing the
 		// token there would persist it to a file. The parent already
 		// printed the token to the invoking terminal, so the child stays
@@ -323,6 +323,13 @@ func runServe(cfg config.Config, opts serveOptions) {
 	if err := waitForServerRuntime(ctx, srv, rt); err != nil {
 		fatal("%v", err)
 	}
+}
+
+func ensureServeAuthToken(cfg *config.Config) error {
+	if cfg == nil || cfg.AuthToken != "" {
+		return nil
+	}
+	return cfg.EnsureAuthToken()
 }
 
 func newDaemonIdleTracker(cfg config.Config, stop context.CancelFunc) *server.IdleTracker {
