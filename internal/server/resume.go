@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/google/shlex"
 	"github.com/tidwall/gjson"
@@ -111,15 +110,18 @@ func claudeMessagePointPromptPath(sessionID string, ordinal int) (string, error)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	stem := sanitizeFilename(
-		fmt.Sprintf(
-			"%s-ordinal-%d-%d.txt",
-			sessionID,
-			ordinal,
-			time.Now().UnixNano(),
-		),
+	prefix := sanitizeFilename(
+		fmt.Sprintf("%s-ordinal-%d-", sessionID, ordinal),
 	)
-	return filepath.Join(dir, stem), nil
+	f, err := os.CreateTemp(dir, prefix+"*.txt")
+	if err != nil {
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
 }
 
 func renderClaudeMessagePointPrompt(
