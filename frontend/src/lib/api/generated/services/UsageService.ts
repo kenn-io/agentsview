@@ -157,6 +157,10 @@ export class UsageService {
    * @throws ApiError
    */
   public static getApiV1UsagePairwiseComparison({
+    leftDimension,
+    leftValue,
+    rightDimension,
+    rightValue,
     from,
     to,
     timezone,
@@ -175,11 +179,23 @@ export class UsageService {
     noDefaultRange,
     breakdowns = true,
     sessionCounts = true,
-    leftDimension,
-    leftValue,
-    rightDimension,
-    rightValue,
   }: {
+    /**
+     * Left-side comparison dimension
+     */
+    leftDimension: string,
+    /**
+     * Left-side comparison value
+     */
+    leftValue: string,
+    /**
+     * Right-side comparison dimension
+     */
+    rightDimension: string,
+    /**
+     * Right-side comparison value
+     */
+    rightValue: string,
     /**
      * Range start date
      */
@@ -252,22 +268,6 @@ export class UsageService {
      * Include distinct session counts
      */
     sessionCounts?: boolean,
-    /**
-     * Left-side comparison dimension
-     */
-    leftDimension?: string,
-    /**
-     * Left-side comparison value
-     */
-    leftValue?: string,
-    /**
-     * Right-side comparison dimension
-     */
-    rightDimension?: string,
-    /**
-     * Right-side comparison value
-     */
-    rightValue?: string,
   }): CancelablePromise<ServiceUsagePairwiseComparisonResponse> {
     return __request(OpenAPI, {
       method: 'GET',

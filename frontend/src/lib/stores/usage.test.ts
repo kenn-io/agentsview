@@ -458,6 +458,22 @@ describe("UsageStore session filter params", () => {
     expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
   });
 
+  it("clears stale pairwise results before refetching after a selector change", async () => {
+    const { usage } = await loadStore();
+
+    await usage.fetchAll();
+    expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
+
+    usageServiceMocks.getApiV1UsagePairwiseComparison.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+
+    usage.setPairwiseSide("left", { value: "gpt-4o" });
+
+    expect(usage.pairwiseSelection.left.value).toBe("gpt-4o");
+    expect(usage.pairwiseComparison).toBeNull();
+  });
+
   it("records full refresh time and clears new-data hints", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {

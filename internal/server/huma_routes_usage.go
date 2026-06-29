@@ -55,10 +55,10 @@ type usageComparisonInput struct {
 
 type usagePairwiseComparisonInput struct {
 	UsageFilterInput
-	LeftDimension  string `query:"left_dimension" doc:"Left-side comparison dimension"`
-	LeftValue      string `query:"left_value" doc:"Left-side comparison value"`
-	RightDimension string `query:"right_dimension" doc:"Right-side comparison dimension"`
-	RightValue     string `query:"right_value" doc:"Right-side comparison value"`
+	LeftDimension  string `query:"left_dimension" required:"true" doc:"Left-side comparison dimension"`
+	LeftValue      string `query:"left_value" required:"true" doc:"Left-side comparison value"`
+	RightDimension string `query:"right_dimension" required:"true" doc:"Right-side comparison dimension"`
+	RightValue     string `query:"right_value" required:"true" doc:"Right-side comparison value"`
 }
 
 // usageRequestFromInput maps the HTTP query-param struct to the

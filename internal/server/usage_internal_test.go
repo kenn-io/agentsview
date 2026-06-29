@@ -186,3 +186,21 @@ func TestUsagePairwiseComparisonScansTwoDailyFilters(t *testing.T) {
 	assert.False(t, spy.filters[0].SkipSessionCounts)
 	assert.False(t, spy.filters[1].SkipSessionCounts)
 }
+
+func TestUsagePairwiseComparisonOpenAPIRequiresSideParams(t *testing.T) {
+	s := testServer(t, 30)
+	spec := readOpenAPISpec(t, s.Handler())
+	op := requireOpenAPIOperation(t, spec, "get", "/api/v1/usage/pairwise-comparison")
+
+	required := map[string]bool{}
+	for _, parameter := range op.Parameters {
+		if parameter.In == "query" {
+			required[parameter.Name] = parameter.Required
+		}
+	}
+
+	assert.True(t, required["left_dimension"])
+	assert.True(t, required["left_value"])
+	assert.True(t, required["right_dimension"])
+	assert.True(t, required["right_value"])
+}
