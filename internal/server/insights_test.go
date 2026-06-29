@@ -49,6 +49,13 @@ type readOnlyInsightPersistStore struct {
 	insertCalls int
 }
 
+func fastInsightLogDrainTimeouts() server.Option {
+	return server.WithInsightLogDrainTimeouts(
+		50*time.Millisecond,
+		150*time.Millisecond,
+	)
+}
+
 func (s *readOnlyInsightPersistStore) ReadOnly() bool { return true }
 
 func (s *readOnlyInsightPersistStore) InsightGenerationAvailable() bool {
@@ -1560,6 +1567,7 @@ func TestGenerateInsight_LogDrainTimeoutReturnsWithoutHang(t *testing.T) {
 	}
 	te := setupWithServerOpts(t, []server.Option{
 		server.WithGenerateStreamFunc(stubGen),
+		fastInsightLogDrainTimeouts(),
 	})
 
 	req := httptest.NewRequest(
@@ -1571,7 +1579,7 @@ func TestGenerateInsight_LogDrainTimeoutReturnsWithoutHang(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := &slowLogRecorder{
 		ResponseRecorder: httptest.NewRecorder(),
-		delay:            5 * time.Second,
+		delay:            75 * time.Millisecond,
 	}
 
 	started := time.Now()
@@ -1614,6 +1622,7 @@ func TestGenerateInsight_LogDrainTimeoutReportsBufferedDrops(t *testing.T) {
 	}
 	te := setupWithServerOpts(t, []server.Option{
 		server.WithGenerateStreamFunc(stubGen),
+		fastInsightLogDrainTimeouts(),
 	})
 
 	req := httptest.NewRequest(
@@ -1625,7 +1634,7 @@ func TestGenerateInsight_LogDrainTimeoutReportsBufferedDrops(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := &firstLogDelayRecorder{
 		ResponseRecorder: httptest.NewRecorder(),
-		delay:            2200 * time.Millisecond,
+		delay:            75 * time.Millisecond,
 	}
 
 	done := make(chan struct{})
@@ -1692,6 +1701,7 @@ func TestGenerateInsight_LogDrainTimeoutBoundedWhenWriterStuck(t *testing.T) {
 	}
 	te := setupWithServerOpts(t, []server.Option{
 		server.WithGenerateStreamFunc(stubGen),
+		fastInsightLogDrainTimeouts(),
 	})
 
 	req := httptest.NewRequest(
@@ -1741,6 +1751,7 @@ func TestGenerateInsight_LogDrainTimeoutForceUnblocksAndNoPostReturnWrites(t *te
 	}
 	te := setupWithServerOpts(t, []server.Option{
 		server.WithGenerateStreamFunc(stubGen),
+		fastInsightLogDrainTimeouts(),
 	})
 
 	req := httptest.NewRequest(

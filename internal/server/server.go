@@ -40,6 +40,11 @@ type VersionInfo struct {
 
 const daemonService = "agentsview"
 
+const (
+	defaultInsightLogDrainTimeout    = 2 * time.Second
+	defaultInsightLogStopWaitTimeout = 500 * time.Millisecond
+)
+
 // Server is the HTTP server that serves the SPA and REST API.
 type Server struct {
 	mu             gosync.RWMutex
@@ -63,6 +68,9 @@ type Server struct {
 	generateStreamFunc insight.GenerateStreamFunc
 	spaFS              fs.FS
 	spaHandler         http.Handler
+
+	insightLogDrainTimeout    time.Duration
+	insightLogStopWaitTimeout time.Duration
 
 	// handlerDelay is injected before each timeout-wrapped
 	// handler, used only by tests to guarantee handlers
@@ -105,11 +113,13 @@ func New(
 	}
 
 	s := &Server{
-		cfg:      cfg,
-		db:       database,
-		engine:   engine,
-		sessions: sessions,
-		mux:      http.NewServeMux(),
+		cfg:                       cfg,
+		db:                        database,
+		engine:                    engine,
+		sessions:                  sessions,
+		mux:                       http.NewServeMux(),
+		insightLogDrainTimeout:    defaultInsightLogDrainTimeout,
+		insightLogStopWaitTimeout: defaultInsightLogStopWaitTimeout,
 		generateStreamFunc: func(
 			ctx context.Context, agent, prompt string,
 			onLog insight.LogFunc,
@@ -222,6 +232,19 @@ func WithGenerateStreamFunc(f insight.GenerateStreamFunc) Option {
 	return func(s *Server) {
 		if f != nil {
 			s.generateStreamFunc = f
+		}
+	}
+}
+
+// WithInsightLogDrainTimeouts overrides SSE insight log stream drain timeouts.
+// Zero or negative values keep the production defaults.
+func WithInsightLogDrainTimeouts(drain, stopWait time.Duration) Option {
+	return func(s *Server) {
+		if drain > 0 {
+			s.insightLogDrainTimeout = drain
+		}
+		if stopWait > 0 {
+			s.insightLogStopWaitTimeout = stopWait
 		}
 	}
 }

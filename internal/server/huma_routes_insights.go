@@ -278,9 +278,9 @@ func (s *Server) humaGenerateInsight(
 
 		const (
 			maxBufferedLogEvents = 256
-			logDrainTimeout      = 2 * time.Second
-			logStopWaitTimeout   = 500 * time.Millisecond
 		)
+		logDrainTimeout := s.insightLogDrainTimeout
+		logStopWaitTimeout := s.insightLogStopWaitTimeout
 		logCh := make(chan insight.LogEvent, maxBufferedLogEvents)
 		logDone := make(chan struct{})
 		logStop := make(chan struct{})
