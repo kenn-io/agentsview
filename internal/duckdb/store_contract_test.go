@@ -14,6 +14,7 @@ import (
 )
 
 func TestDuckDBStoreContract(t *testing.T) {
+	store, fixture := newSyncedStore(t)
 	tests := []struct {
 		name string
 		run  func(t *testing.T, store *Store, fixture syncFixture)
@@ -26,7 +27,6 @@ func TestDuckDBStoreContract(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			store, fixture := newSyncedStore(t)
 			tt.run(t, store, fixture)
 		})
 	}
