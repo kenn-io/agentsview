@@ -463,7 +463,7 @@ fn translate_desktop_env_value(value: OsString, is_windows: bool) -> OsString {
     else {
         return value;
     };
-    if distro.is_empty() || distro.contains(':') {
+    if distro.is_empty() || distro.contains(':') || unix_path.is_empty() || unix_path.starts_with('/') {
         return value;
     }
     OsString::from(format!(r"\\wsl.localhost\{distro}\{unix_path}").replace('/', "\\"))
@@ -2740,6 +2740,26 @@ mode:    writable
         assert_eq!(
             map.get(&OsString::from("CODEX_SESSIONS_DIR")),
             Some(&OsString::from("wsl:Ubuntu:C:/tmp"))
+        );
+    }
+
+    #[test]
+    fn merge_desktop_env_pairs_preserves_url_like_wsl_marker() {
+        let merged = build_sidecar_env(
+            Vec::new(),
+            Vec::new(),
+            vec![(
+                OsString::from("CODEX_SESSIONS_DIR"),
+                OsString::from("wsl:http://example"),
+            )],
+            None,
+            false,
+            true,
+        );
+        let map: HashMap<_, _> = merged.into_iter().collect();
+        assert_eq!(
+            map.get(&OsString::from("CODEX_SESSIONS_DIR")),
+            Some(&OsString::from("wsl:http://example"))
         );
     }
 
