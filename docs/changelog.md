@@ -3,6 +3,130 @@ title: Changelog
 description: Release history for AgentsView
 ---
 
+## 0.35.0
+<small>2026-06-29</small>
+
+**New features**
+
+- Add **HTTP daemon remote sync** so configured remote hosts can sync through the
+  local daemon instead of requiring each CLI invocation to perform the work
+  directly.
+- Add **PostgreSQL serve support for curation and insights**. `agentsview pg
+  serve` can now back starred, trashed, renamed, and insight workflows from the
+  shared PostgreSQL store.
+- Add a read-only **`agentsview mcp` server** for MCP-capable assistants to
+  search sessions, inspect message windows, and summarize usage from the
+  AgentsView archive. See [MCP Server](/mcp/).
+- Add **Recent Edits**, a top-level feed for reviewing file edits across
+  sessions and jumping back to the exact message that made each change. See
+  [Recent Edits](/recent-edits/).
+- Add **batch session selection and deletion** in the sidebar.
+- Add **S3-compatible object storage discovery** for many file-backed agent
+  session roots, including Claude and Codex layouts, so a central AgentsView
+  instance can sync raw session files from S3, MinIO, R2, OSS, and similar
+  stores. See
+  [S3-Compatible Session Sources](/configuration/#s3-compatible-session-sources).
+- Add **Chinese localization** plus language settings across the frontend.
+- Add **UI text-size scaling** and **high-contrast** appearance mode.
+- Add an **Analytics dashboard model filter** that scopes dashboard panels to
+  selected models. See [Model Filter](/usage/#model-filter).
+- Add **export and publish actions for generated insights**.
+- Add **IcodeMate** agent support.
+- Add **Cursor admin usage ingestion** to the Usage board.
+- Add **Kimi cost estimation** from aggregate token usage.
+- Add **per-remote sync intervals** for configured remote hosts.
+- Add **named PostgreSQL push targets** so separate destinations can keep their
+  own connection and watermark state.
+- Add **offline LiteLLM pricing fallback data** for usage and cost reporting.
+
+**Improvements**
+
+- Make **local CLI and desktop workflows daemon-first**, aligning commands with
+  the long-running local service used by the desktop app.
+- Standardize **`--format` and `--json` output flags** across commands.
+- Surface **parser anomaly signals** in sync summaries so malformed or
+  suspicious parser output is easier to notice.
+- Stream **remote sync progress through the daemon** and improve timeout
+  visibility.
+- Improve **daemon replacement handling** for `agentsview serve`.
+- Preserve **Pi message tree lineage**.
+- Preserve **XML-style prompt tags** in rendered markdown.
+- Show **summary-mode Antigravity CLI sessions** and record Antigravity
+  producing-version metadata.
+- Enrich **tool summaries** and add a **skim layout** for session reading.
+- Add an **in-page help affordance** for Insights.
+- Add **right-side axis labels** to the concurrency timeline.
+- Require **opt-in Aider discovery** to avoid scanning large or sensitive
+  directory trees unexpectedly.
+- Add `substrings` and `exact_matches` to **automated session detection**
+  configuration.
+- Publish **raw markdown route companions** for docs pages.
+- Deprecate **Amp support documentation** now that current Amp releases may keep
+  complete threads server-side.
+
+**Bug fixes**
+
+- Include **Claude.ai export attachments** during import.
+- Honor **`CLAUDE_CONFIG_DIR`** for Claude session discovery.
+- Support **explicit WSL paths** in desktop environment settings.
+- Persist **desktop sidecar logs** for desktop builds.
+- Use **native desktop zoom on Windows**.
+- Repair the **AppImage DirIcon** after bundling.
+- Fix **remote daemon progress reporting** and timeout visibility.
+- Fix **resync discovery performance regression** reporting.
+- Detect **Codex title-only renames** during full sync.
+- Repair **persisted Codex goal-context rows**.
+- Treat Codex **`/goal` continuation context** as system content.
+- Fix **Gemini per-turn context token** calculation.
+- Count **subagent sessions** in analytics totals.
+- Clamp **analytics top-session active duration** by idle gaps.
+- Scope **filtered PostgreSQL push watermarks** correctly.
+- Reset **push watermarks** when PostgreSQL targets change.
+- Fail **blocked PostgreSQL pushes** and surface push errors.
+- Accept duration syntax for **`usage daily --since` and `--until`**.
+- Deduplicate **replayed continued-session usage rows**.
+- Suppress the **Local reporter timezone sentinel** in stats.
+- Preserve **Gist publishing** by falling back to the GitHub auth token.
+- Install binaries with an **atomic rename** in `make install`.
+- Skip compatible PostgreSQL push schema DDL where it is not needed.
+
+**Acknowledgements**
+
+- Thanks to [Wes McKinney](https://github.com/wesm) for HTTP daemon remote sync,
+  daemon-first CLI and desktop workflows, Recent Edits, UI text-size scaling and
+  high-contrast mode, remote sync progress fixes, daemon replacement handling,
+  raw markdown docs routes, Amp documentation deprecation, PostgreSQL push
+  watermark fixes, and installer hardening.
+- Thanks to [Rod Boev](https://github.com/rodboev) for PostgreSQL serve curation
+  and insight persistence, generated insight export and publishing, Cursor admin
+  usage ingestion, per-remote sync intervals, named PostgreSQL push targets,
+  offline LiteLLM pricing fallback data, Pi lineage preservation, Insights help,
+  desktop fixes, Claude import/config fixes, and usage/stat fixes.
+- Thanks to [Matthew Jacobs](https://github.com/mjacobs) for the MCP server,
+  parser anomaly signals, Codex rename and `/goal` handling fixes, Antigravity
+  summary-mode sessions, blocked PostgreSQL push error handling, and parser
+  validation work.
+- Thanks to [Marius van Niekerk](https://github.com/mariusvniekerk) for the
+  provider source-set migration work, frontend control chrome guard, localized
+  reading-control pluralization, and analytics active-duration correction.
+- Thanks to [icatw](https://github.com/icatw) for Chinese localization and
+  frontend localization coverage.
+- Thanks to [Prateek Rungta](https://github.com/prateek) for standardized CLI
+  output flags and duration syntax for `usage daily`.
+- Thanks to [DanielMao](https://github.com/DanielMao1) for S3-compatible session
+  discovery.
+- Thanks to [huaiyuWangh](https://github.com/huaiyuWangh) for batch sidebar
+  selection and deletion.
+- Thanks to Leonidas Lux for IcodeMate agent support.
+- Thanks to [Junt184](https://github.com/Junt184) for Kimi cost estimation.
+- Thanks to [Jesse Robbins](https://github.com/jesserobbins) for counting
+  subagent sessions in analytics totals.
+- Thanks to Trent Nelson for repairing persisted Codex goal-context rows.
+- Thanks to [Martin Wimpress](https://github.com/flexiondotorg) for compatible
+  PostgreSQL push schema handling.
+
+---
+
 ## 0.34.5
 <small>2026-06-23</small>
 

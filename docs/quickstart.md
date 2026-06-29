@@ -254,7 +254,8 @@ export ZENCODER_DIR=~/custom/zencoder/sessions
 agentsview serve
 ```
 
-For Claude and Codex, custom roots may also be `s3://` URIs:
+For many file-backed agents, custom roots may also be `s3://` URIs. Claude and
+Codex examples:
 
 ```toml
 claude_project_dirs = ["s3://agent-archive/laptop/raw/claude"]
