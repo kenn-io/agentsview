@@ -2682,7 +2682,7 @@ mode:    writable
             Vec::new(),
             Vec::new(),
             vec![(
-                OsString::from("CODEX_SESSIONS"),
+                OsString::from("CODEX_SESSIONS_DIR"),
                 OsString::from("wsl:Ubuntu:/home/me/.codex/sessions"),
             )],
             None,
@@ -2691,7 +2691,7 @@ mode:    writable
         );
         let map: HashMap<_, _> = merged.into_iter().collect();
         assert_eq!(
-            map.get(&OsString::from("CODEX_SESSIONS")),
+            map.get(&OsString::from("CODEX_SESSIONS_DIR")),
             Some(&OsString::from(r"\\wsl.localhost\Ubuntu\home\me\.codex\sessions"))
         );
     }
