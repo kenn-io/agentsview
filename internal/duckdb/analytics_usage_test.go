@@ -377,9 +377,39 @@ func TestDuckAnalyticsSummaryModelFilterPopulatesModels(t *testing.T) {
 	assert.Equal(t, []string{"gpt-4o"}, resp.Models, "Models")
 }
 
-func TestDuckAnalyticsSummaryModelFilterCountsOnlyMatchingMessages(t *testing.T) {
+func TestDuckAnalyticsMixedModelFilters(t *testing.T) {
 	ctx := context.Background()
 	store := newDuckMixedModelAnalyticsStore(t)
+
+	t.Run("summary counts only matching messages", func(t *testing.T) {
+		assertDuckAnalyticsSummaryModelFilterCountsOnlyMatchingMessages(t, ctx, store)
+	})
+	t.Run("activity counts only matching messages", func(t *testing.T) {
+		assertDuckAnalyticsActivityModelFilterCountsOnlyMatchingMessages(t, ctx, store)
+	})
+	t.Run("hour of week counts only matching messages", func(t *testing.T) {
+		assertDuckAnalyticsHourOfWeekModelFilterCountsOnlyMatchingMessages(t, ctx, store)
+	})
+	t.Run("tools count only matching calls", func(t *testing.T) {
+		assertDuckAnalyticsToolsModelFilterCountsOnlyMatchingToolCalls(t, ctx, store)
+	})
+	t.Run("skills count only matching calls", func(t *testing.T) {
+		assertDuckAnalyticsSkillsModelFilterCountsOnlyMatchingSkillCalls(t, ctx, store)
+	})
+	t.Run("projects count only matching messages", func(t *testing.T) {
+		assertDuckAnalyticsProjectsModelFilterCountsOnlyMatchingMessages(t, ctx, store)
+	})
+	t.Run("heatmap counts only matching messages", func(t *testing.T) {
+		assertDuckAnalyticsHeatmapModelFilterCountsOnlyMatchingMessages(t, ctx, store)
+	})
+}
+
+func assertDuckAnalyticsSummaryModelFilterCountsOnlyMatchingMessages(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+) {
+	t.Helper()
 
 	resp, err := store.GetAnalyticsSummary(ctx, db.AnalyticsFilter{
 		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
@@ -514,11 +544,12 @@ func TestDuckAnalyticsSummaryModelFilterUsesFilteredOutputTokens(
 	assert.Equal(t, 1, resp.TokenReportingSessions, "TokenReportingSessions")
 }
 
-func TestDuckAnalyticsActivityModelFilterCountsOnlyMatchingMessages(
+func assertDuckAnalyticsActivityModelFilterCountsOnlyMatchingMessages(
 	t *testing.T,
+	ctx context.Context,
+	store *Store,
 ) {
-	ctx := context.Background()
-	store := newDuckMixedModelAnalyticsStore(t)
+	t.Helper()
 
 	resp, err := store.GetAnalyticsActivity(ctx, db.AnalyticsFilter{
 		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
@@ -584,11 +615,12 @@ func TestDuckAnalyticsActivityModelAndHourFilterCountsOnlyMatchingHourRows(
 	assert.Equal(t, 1, resp.Series[0].ToolCalls, "ToolCalls")
 }
 
-func TestDuckAnalyticsHourOfWeekModelFilterCountsOnlyMatchingMessages(
+func assertDuckAnalyticsHourOfWeekModelFilterCountsOnlyMatchingMessages(
 	t *testing.T,
+	ctx context.Context,
+	store *Store,
 ) {
-	ctx := context.Background()
-	store := newDuckMixedModelAnalyticsStore(t)
+	t.Helper()
 
 	resp, err := store.GetAnalyticsHourOfWeek(ctx, db.AnalyticsFilter{
 		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
@@ -855,11 +887,12 @@ func TestDuckAnalyticsTopSessionsDurationModelFilterHandlesManyScopedSessions(
 		"longest active span ranks first across the scoped set")
 }
 
-func TestDuckAnalyticsToolsModelFilterCountsOnlyMatchingToolCalls(
+func assertDuckAnalyticsToolsModelFilterCountsOnlyMatchingToolCalls(
 	t *testing.T,
+	ctx context.Context,
+	store *Store,
 ) {
-	ctx := context.Background()
-	store := newDuckMixedModelAnalyticsStore(t)
+	t.Helper()
 
 	resp, err := store.GetAnalyticsTools(ctx, db.AnalyticsFilter{
 		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
@@ -917,11 +950,12 @@ func TestDuckAnalyticsToolsModelAndHourFilterCountsOnlyMatchingHourToolCalls(
 	assert.Equal(t, 1, resp.ByCategory[0].Count, "Count")
 }
 
-func TestDuckAnalyticsSkillsModelFilterCountsOnlyMatchingSkillCalls(
+func assertDuckAnalyticsSkillsModelFilterCountsOnlyMatchingSkillCalls(
 	t *testing.T,
+	ctx context.Context,
+	store *Store,
 ) {
-	ctx := context.Background()
-	store := newDuckMixedModelAnalyticsStore(t)
+	t.Helper()
 
 	resp, err := store.GetAnalyticsSkills(ctx, db.AnalyticsFilter{
 		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
@@ -935,11 +969,12 @@ func TestDuckAnalyticsSkillsModelFilterCountsOnlyMatchingSkillCalls(
 	assert.Equal(t, 1, resp.BySkill[0].CallCount, "CallCount")
 }
 
-func TestDuckAnalyticsProjectsModelFilterCountsOnlyMatchingMessages(
+func assertDuckAnalyticsProjectsModelFilterCountsOnlyMatchingMessages(
 	t *testing.T,
+	ctx context.Context,
+	store *Store,
 ) {
-	ctx := context.Background()
-	store := newDuckMixedModelAnalyticsStore(t)
+	t.Helper()
 
 	resp, err := store.GetAnalyticsProjects(ctx, db.AnalyticsFilter{
 		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
@@ -953,11 +988,12 @@ func TestDuckAnalyticsProjectsModelFilterCountsOnlyMatchingMessages(
 	assert.Equal(t, 1.0, resp.Projects[0].DailyTrend, "DailyTrend")
 }
 
-func TestDuckAnalyticsHeatmapModelFilterCountsOnlyMatchingMessages(
+func assertDuckAnalyticsHeatmapModelFilterCountsOnlyMatchingMessages(
 	t *testing.T,
+	ctx context.Context,
+	store *Store,
 ) {
-	ctx := context.Background()
-	store := newDuckMixedModelAnalyticsStore(t)
+	t.Helper()
 
 	resp, err := store.GetAnalyticsHeatmap(ctx, db.AnalyticsFilter{
 		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
