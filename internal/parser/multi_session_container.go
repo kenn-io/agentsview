@@ -247,9 +247,9 @@ func (s multiSessionContainerSourceSet) SourcesForChangedPath(
 		}
 		tombstones := s.changedPathTombstones(root, match, req.StoredSourcePaths)
 		sources := make([]SourceRef, 0, 1+len(tombstones))
-		if !(req.EventKind == "remove" &&
-			len(tombstones) > 0 &&
-			!IsRegularFile(match.Container)) {
+		if req.EventKind != "remove" ||
+			len(tombstones) == 0 ||
+			IsRegularFile(match.Container) {
 			sources = append(sources, s.sourceRef(root, match))
 		}
 		sources = append(sources, tombstones...)
