@@ -624,6 +624,41 @@ func TestDetectTransportWaitsForExternalStartLockBeforeReturningRuntime(
 	), tr.URL)
 }
 
+func TestEnsureTransportArchiveWriteWaitsForBackgroundReplacementLock(
+	t *testing.T,
+) {
+	dir := daemonRuntimeDir(t)
+	oldHost, oldPort := testPingServer(t)
+	writeDaemonRuntimeForTest(t, dir, oldHost, oldPort, version, false)
+	launchLock, ok := acquireBackgroundLaunchLock(dir)
+	require.True(t, ok)
+	t.Cleanup(func() { _ = launchLock.Unlock() })
+
+	newHost, newPort := testPingServer(t)
+	published := make(chan error, 1)
+	go func() {
+		time.Sleep(2 * startProbeTick)
+		RemoveDaemonRuntime(dir)
+		_, err := WriteDaemonRuntime(dir, newHost, newPort, version, false)
+		if err == nil {
+			err = launchLock.Unlock()
+		}
+		published <- err
+	}()
+
+	cfg := config.Config{DataDir: dir}
+	tr, err := ensureTransport(
+		&cfg, transportIntentArchiveWrite, time.Second,
+	)
+
+	require.NoError(t, <-published)
+	require.NoError(t, err)
+	assert.Equal(t, transportHTTP, tr.Mode)
+	assert.Equal(t, "http://"+net.JoinHostPort(
+		newHost, strconv.Itoa(newPort),
+	), tr.URL)
+}
+
 func TestEnsureTransportContextCancelDuringStartupWait(t *testing.T) {
 	dir := daemonRuntimeDir(t)
 	MarkDaemonStarting(dir)

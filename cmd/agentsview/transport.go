@@ -168,6 +168,13 @@ func ensureTransportContext(
 	if intent == transportIntentArchiveWrite && waitTimeout <= 0 {
 		waitTimeout = backgroundAutoStartReadyTimeout
 	}
+	if intent == transportIntentArchiveWrite {
+		if err := waitForBackgroundLaunchBeforeArchiveWrite(
+			ctx, cfg.DataDir, waitTimeout,
+		); err != nil {
+			return transport{}, err
+		}
+	}
 	tr, err := detectTransportContext(
 		ctx, cfg.DataDir, cfg.AuthToken, waitTimeout,
 	)
@@ -232,6 +239,45 @@ func ensureTransportContext(
 		return transport{}, err
 	}
 	return transportFromRuntime(rt), nil
+}
+
+func waitForBackgroundLaunchBeforeArchiveWrite(
+	ctx context.Context,
+	dataDir string,
+	waitTimeout time.Duration,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := os.Stat(dataDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+	}
+	if !isBackgroundLaunchActive(dataDir) {
+		return nil
+	}
+	if waitTimeout <= 0 {
+		waitTimeout = backgroundAutoStartReadyTimeout
+	}
+	deadline := time.Now().Add(waitTimeout)
+	for isBackgroundLaunchActive(dataDir) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return errServeStartupInProgress
+		}
+		timer := time.NewTimer(min(remaining, startProbeTick))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return ctx.Err()
 }
 
 func shouldUpgradeDaemonRuntime(rt *DaemonRuntime, currentVersion string) bool {
