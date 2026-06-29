@@ -301,14 +301,14 @@ func upsertSession(
 			missing_success_criteria_count, missing_verification_count,
 			duplicate_prompt_count, no_code_context_count,
 			runaway_tool_loop_count, data_version,
-			cwd, git_branch, source_session_id, source_version,
+			cwd, git_branch, source_session_id, source_version, transcript_fidelity,
 			parser_malformed_lines, is_truncated, deleted_at, created_at,
 			termination_status, secret_leak_count, secrets_rules_version
 		) VALUES (
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?, ?, ?
+			?, ?, ?, ?, ?, ?, ?, ?
 		)
 		ON CONFLICT(id) DO UPDATE SET
 			project = excluded.project,
@@ -364,6 +364,7 @@ func upsertSession(
 			git_branch = excluded.git_branch,
 			source_session_id = excluded.source_session_id,
 			source_version = excluded.source_version,
+			transcript_fidelity = excluded.transcript_fidelity,
 			parser_malformed_lines = excluded.parser_malformed_lines,
 			is_truncated = excluded.is_truncated,
 			deleted_at = excluded.deleted_at,
@@ -397,7 +398,7 @@ func upsertSession(
 		sess.NoCodeContextCount, sess.RunawayToolLoopCount,
 		sess.DataVersion,
 		sess.Cwd, sess.GitBranch, sess.SourceSessionID,
-		sess.SourceVersion, sess.ParserMalformedLines,
+		sess.SourceVersion, sess.TranscriptFidelity, sess.ParserMalformedLines,
 		sess.IsTruncated, nilTime(sess.DeletedAt),
 		timeValue(sess.CreatedAt), nilString(sess.TerminationStatus),
 		sess.SecretLeakCount, sess.SecretsRulesVersion,
