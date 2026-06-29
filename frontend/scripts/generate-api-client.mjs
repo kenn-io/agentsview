@@ -34,40 +34,31 @@ function run(cmd, args, options = {}) {
 const tempDir = mkdtempSync(join(tmpdir(), "agentsview-openapi-"));
 try {
   const specPath = join(tempDir, "openapi.json");
-  const specPathForShell = specPath.replaceAll("\\", "/");
   const spec = run("go", ["run", "./cmd/agentsview", "openapi"], {
     cwd: repoRoot,
     capture: true,
   });
   writeFileSync(specPath, spec);
+  const openapiArgs = [
+    "openapi",
+    "-i",
+    specPath,
+    "-o",
+    "src/lib/api/generated",
+    "-c",
+    "fetch",
+    "--useOptions",
+    "--indent",
+    "2",
+  ];
   if (process.platform === "win32") {
     run(
-      "cmd",
-      [
-        "/d",
-        "/s",
-        "/c",
-        `npx openapi -i ${specPathForShell} -o src/lib/api/generated -c fetch --useOptions --indent 2`,
-      ],
+      process.env.ComSpec ?? "cmd.exe",
+      ["/d", "/s", "/c", "npx.cmd", ...openapiArgs],
       { cwd: frontendDir },
     );
   } else {
-    run(
-      "npx",
-      [
-        "openapi",
-        "-i",
-        specPath,
-        "-o",
-        "src/lib/api/generated",
-        "-c",
-        "fetch",
-        "--useOptions",
-        "--indent",
-        "2",
-      ],
-      { cwd: frontendDir },
-    );
+    run("npx", openapiArgs, { cwd: frontendDir });
   }
 } finally {
   rmSync(tempDir, { recursive: true, force: true });

@@ -115,23 +115,23 @@ export interface UsagePairwiseComparisonSide {
 
 export interface UsagePairwiseComparisonDelta {
   totalCostDelta: number;
-  totalCostDeltaRatio?: number;
+  totalCostDeltaRatio: number | null;
   inputTokensDelta: number;
-  inputTokensDeltaRatio?: number;
+  inputTokensDeltaRatio: number | null;
   outputTokensDelta: number;
-  outputTokensDeltaRatio?: number;
+  outputTokensDeltaRatio: number | null;
   cacheCreationDelta: number;
-  cacheCreationDeltaRatio?: number;
+  cacheCreationDeltaRatio: number | null;
   cacheReadDelta: number;
-  cacheReadDeltaRatio?: number;
+  cacheReadDeltaRatio: number | null;
   totalTokensDelta: number;
-  totalTokensDeltaRatio?: number;
+  totalTokensDeltaRatio: number | null;
   sessionCountDelta: number;
-  sessionCountDeltaRatio?: number;
-  costPerSessionDelta?: number;
-  costPerSessionRatio?: number;
-  tokensPerSessionDelta?: number;
-  tokensPerSessionRatio?: number;
+  sessionCountDeltaRatio: number | null;
+  costPerSessionDelta: number | null;
+  costPerSessionRatio: number | null;
+  tokensPerSessionDelta: number | null;
+  tokensPerSessionRatio: number | null;
 }
 
 export interface UsagePairwiseComparisonResponse {

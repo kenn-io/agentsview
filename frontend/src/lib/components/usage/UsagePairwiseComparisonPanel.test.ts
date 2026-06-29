@@ -104,9 +104,9 @@ function pairwiseComparison(): UsagePairwiseComparisonResponse {
       outputTokensDelta: -50,
       outputTokensDeltaRatio: -0.5,
       cacheCreationDelta: 0,
-      cacheCreationDeltaRatio: undefined,
+      cacheCreationDeltaRatio: null,
       cacheReadDelta: 0,
-      cacheReadDeltaRatio: undefined,
+      cacheReadDeltaRatio: null,
       totalTokensDelta: -150,
       totalTokensDeltaRatio: -0.5,
       sessionCountDelta: -1,
@@ -173,6 +173,27 @@ describe("UsagePairwiseComparisonPanel", () => {
     expect(text).toContain("+$1.50");
     expect(text).toContain("+37.5%");
     expect(text).not.toContain("+$94.49");
+
+    unmount(component);
+  });
+
+  it("renders null backend ratios as the empty-state marker", async () => {
+    usage.pairwiseComparison = {
+      ...pairwiseComparison(),
+      deltas: {
+        ...pairwiseComparison().deltas,
+        tokensPerSessionDelta: null,
+        tokensPerSessionRatio: null,
+      },
+    };
+    const component = mount(UsagePairwiseComparisonPanel, {
+      target: document.body,
+    });
+    await tick();
+
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("None");
+    expect(text).not.toContain("+0.0%");
 
     unmount(component);
   });

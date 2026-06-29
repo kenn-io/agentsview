@@ -37,29 +37,29 @@
     return `${prefix}${fmtTokens(Math.abs(value))}`;
   }
 
-  function fmtRatio(value: number | undefined): string {
-    if (value === undefined) return m.shared_none();
+  function fmtRatio(value: number | null | undefined): string {
+    if (value == null) return m.shared_none();
     const prefix = value >= 0 ? "+" : "";
     return `${prefix}${(value * 100).toFixed(1)}%`;
   }
 
-  function fmtMaybeCost(value: number | undefined): string {
-    if (value === undefined) return m.shared_none();
+  function fmtMaybeCost(value: number | null | undefined): string {
+    if (value == null) return m.shared_none();
     return fmtCost(value);
   }
 
-  function fmtMaybeTokens(value: number | undefined): string {
-    if (value === undefined) return m.shared_none();
+  function fmtMaybeTokens(value: number | null | undefined): string {
+    if (value == null) return m.shared_none();
     return fmtTokens(value);
   }
 
-  function fmtMaybeSignedCost(value: number | undefined): string {
-    if (value === undefined) return m.shared_none();
+  function fmtMaybeSignedCost(value: number | null | undefined): string {
+    if (value == null) return m.shared_none();
     return fmtSignedCost(value);
   }
 
-  function fmtMaybeSignedTokens(value: number | undefined): string {
-    if (value === undefined) return m.shared_none();
+  function fmtMaybeSignedTokens(value: number | null | undefined): string {
+    if (value == null) return m.shared_none();
     return fmtSignedTokens(value);
   }
 
