@@ -68,8 +68,13 @@ rm -f "$OUTPUT"
   done <<<"$BLOCKED_TERMS"
 } >"$BLOCKED_PATTERNS_SQL"
 
-# Copy the full database to preserve exact schema
-cp "$SOURCE" "$OUTPUT"
+# Snapshot the full database with SQLite's online backup. A plain cp
+# of a WAL-mode database misses committed data still sitting in the
+# -wal file and reads a torn image while a live writer (a running
+# `agentsview serve`) is checkpointing, surfacing as "database disk
+# image is malformed". The backup API copies a consistent snapshot,
+# including the WAL, without touching the source.
+sqlite3 "$SOURCE" ".backup '$OUTPUT'"
 
 # Delete sessions (and related data) for non-matching projects.
 # The heredoc delimiter is quoted so bash does NOT expand $ or
