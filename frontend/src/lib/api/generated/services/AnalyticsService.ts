@@ -673,7 +673,7 @@ export class AnalyticsService {
      */
     agent?: string,
     /**
-     * Comma-separated model filter
+     * Filter by model
      */
     model?: string,
     /**
