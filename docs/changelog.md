@@ -21,10 +21,9 @@ description: Release history for AgentsView
   sessions and jumping back to the exact message that made each change. See
   [Recent Edits](/recent-edits/).
 - Add **batch session selection and deletion** in the sidebar.
-- Add **S3-compatible object storage discovery** for many file-backed agent
-  session roots, including Claude and Codex layouts, so a central AgentsView
-  instance can sync raw session files from S3, MinIO, R2, OSS, and similar
-  stores. See
+- Add **S3-compatible object storage discovery** for Claude and Codex session
+  roots, so a central AgentsView instance can sync raw session files from S3,
+  MinIO, R2, OSS, and similar stores. See
   [S3-Compatible Session Sources](/configuration/#s3-compatible-session-sources).
 - Add **Chinese localization** plus language settings across the frontend.
 - Add **UI text-size scaling** and **high-contrast** appearance mode.
@@ -46,8 +45,8 @@ description: Release history for AgentsView
 - Standardize **`--format` and `--json` output flags** across commands.
 - Surface **parser anomaly signals** in sync summaries so malformed or
   suspicious parser output is easier to notice.
-- Stream **remote sync progress through the daemon** and improve timeout
-  visibility.
+- Stream **remote sync progress through the daemon** with per-phase elapsed
+  time.
 - Improve **daemon replacement handling** for `agentsview serve`.
 - Preserve **Pi message tree lineage**.
 - Preserve **XML-style prompt tags** in rendered markdown.
@@ -70,14 +69,18 @@ description: Release history for AgentsView
 - Honor **`CLAUDE_CONFIG_DIR`** for Claude session discovery.
 - Support **explicit WSL paths** in desktop environment settings.
 - Persist **desktop sidecar logs** for desktop builds.
-- Use **native desktop zoom on Windows**.
+- Use **native webview zoom** in the desktop app, fixing Windows zoom rendering.
 - Repair the **AppImage DirIcon** after bundling.
-- Fix **remote daemon progress reporting** and timeout visibility.
-- Fix **resync discovery performance regression** reporting.
+- Fix **remote daemon progress reporting** so each sync phase stays visible with
+  elapsed time.
+- Fix a **resync discovery performance regression** and correct its
+  mis-attributed phase timing.
 - Detect **Codex title-only renames** during full sync.
 - Repair **persisted Codex goal-context rows**.
 - Treat Codex **`/goal` continuation context** as system content.
 - Fix **Gemini per-turn context token** calculation.
+- Fix **Gemini insight generation** by no longer forcing a sandboxed Gemini CLI
+  run.
 - Count **subagent sessions** in analytics totals.
 - Clamp **analytics top-session active duration** by idle gaps.
 - Scope **filtered PostgreSQL push watermarks** correctly.
@@ -86,8 +89,9 @@ description: Release history for AgentsView
 - Accept duration syntax for **`usage daily --since` and `--until`**.
 - Deduplicate **replayed continued-session usage rows**.
 - Suppress the **Local reporter timezone sentinel** in stats.
-- Preserve **Gist publishing** by falling back to the GitHub auth token.
-- Install binaries with an **atomic rename** in `make install`.
+- Fall back to `AGENTSVIEW_GITHUB_TOKEN` and the GitHub CLI auth token for local
+  **Gist publishing**.
+- Install the binary with an **atomic rename** in `make install`.
 - Skip compatible PostgreSQL push schema DDL where it is not needed.
 
 **Acknowledgements**

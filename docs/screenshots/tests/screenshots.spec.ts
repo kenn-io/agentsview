@@ -273,6 +273,42 @@ test.describe('Dashboard', () => {
       }
     }
   });
+
+  test('dashboard model filter', async ({ page }) => {
+    // The dashboard toolbar Model dropdown reuses the shared
+    // FilterDropdown (label "Model") in include mode. Open it and
+    // include the first listed model so the screenshot shows the open
+    // panel, the resulting "Model: <name>" trigger label, and the
+    // active-filter chip the ActiveFilters row renders beneath it.
+    const trigger = page.locator(
+      '.analytics-toolbar .filter-dropdown .filter-trigger',
+      { hasText: 'Model' }
+    );
+    await expect(trigger).toBeVisible({ timeout: 5_000 });
+    await trigger.click();
+    await page.waitForSelector(
+      '.analytics-toolbar .filter-dropdown .dropdown-panel',
+      { timeout: 5_000 }
+    );
+
+    // In include mode the first .dropdown-row is the "All models"
+    // reset row; the actual models follow. Include the first real
+    // model if one exists so a filter chip appears.
+    const rows = page.locator(
+      '.analytics-toolbar .filter-dropdown .dropdown-row'
+    );
+    if (await rows.count() > 1) {
+      await rows.nth(1).click();
+      await page.waitForTimeout(1500);
+    }
+    await snap(page, 'analytics-model-filter');
+
+    // Clean up: clicking the "All models" row clears the filter.
+    if (await rows.count() > 0) {
+      await rows.first().click();
+    }
+    await page.keyboard.press('Escape');
+  });
 });
 
 // ── Activity dashboard ───────────────────────────────────
@@ -1555,5 +1591,32 @@ test.describe('Usage dashboard', () => {
     await page.waitForTimeout(300);
     await snap(page, 'usage-filter-dropdown');
     await page.keyboard.press('Escape');
+  });
+});
+
+// ── Recent Edits ────────────────────────────────────────
+
+test.describe('Recent Edits', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize(FULL);
+    await waitForApp(page);
+  });
+
+  test('recent edits feed', async ({ page }) => {
+    // Recent Edits is a top-level route reached from the More menu.
+    // Navigate directly, then expand the first file row so the
+    // screenshot shows both the grouped feed and a file's edits.
+    await page.goto('/recent-edits');
+    await page.waitForSelector('.recent-edits-page', {
+      timeout: 10_000,
+    });
+    await page.waitForSelector('.re-file', { timeout: 10_000 });
+
+    const firstRow = page.locator('.re-file-row').first();
+    await firstRow.click();
+    await page.waitForSelector('.re-edits', { timeout: 5_000 });
+    await page.waitForTimeout(500);
+
+    await snap(page, 'recent-edits');
   });
 });

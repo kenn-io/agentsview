@@ -86,10 +86,7 @@ The dashboard toolbar includes a **Model** dropdown that scopes
 every panel to one or more AI models. By default the button reads
 **Model: All** and nothing is filtered.
 
-<!-- Screenshot placeholder: capture the dashboard Model dropdown
-open with a model selected, then add it here as
-/assets/generated/screenshots/analytics-model-filter.png after
-release. See docs/screenshots for the capture setup. -->
+![Dashboard model filter](/assets/generated/screenshots/analytics-model-filter.png)
 
 Open the dropdown for a searchable list of the models found in
 your sessions, then click models to include them. The button then
@@ -565,14 +562,16 @@ badge to toggle the signal panel.
 
 ### Message Layouts
 
-Three layouts control how messages are rendered. Cycle between
-them with the `l` key or the layout button in the header:
+Four layouts control how messages are rendered. Cycle between
+them with the `l` key or the layout button in the header, or pick
+one directly in Settings > Appearance:
 
 | Layout | Description |
 |--------|-------------|
 | Default | Full card layout with colored borders and spacing |
 | Compact | Condensed view with minimal spacing |
 | Stream | Continuous flow optimized for reading |
+| Skim | Collapses tool calls to summary headers for fast skimming |
 
 ### Focused Transcript Mode
 
@@ -930,6 +929,16 @@ trashed sessions. From the trash page you can restore
 individual sessions or permanently delete them. Use **Empty
 trash** to permanently delete all trashed sessions at once.
 
+### Batch Selection
+
+Click the **Multi-select** toggle in the sidebar header to enter
+selection mode. A checkbox appears on each session; click
+sessions to check them, or use **All** to select every visible
+session and **Clear** to deselect. The batch toolbar shows how
+many are selected and a **Delete** action that moves the whole
+selection to the trash at once. Toggle multi-select off to return
+to normal browsing.
+
 ### Pinned Messages
 
 Click the pin icon on any message header to pin it. Pinned
@@ -1105,16 +1114,18 @@ always works.
 ## Settings
 
 Click the gear icon in the header to open the Settings page.
-Settings are organized into tabs:
+Settings are organized into sections:
 
 ![Settings page](/assets/generated/screenshots/settings.png)
 
 | Section | What You Can Configure |
 |---------|----------------------|
-| Appearance | Theme (light/dark), block visibility, desktop zoom level |
-| Terminal | Default terminal emulator for session resume |
-| GitHub | Personal access token for Gist publishing |
+| Language | Interface language (English or Simplified Chinese) |
+| Appearance | Theme (light/dark), high-contrast mode, message layout, text size, block visibility, desktop zoom level |
 | Agent Directories | Custom paths for each agent's session files |
+| Terminal | Default terminal emulator for session resume |
+| Worktree Mappings | Map worktree paths back to their main project (see [Worktree Project Mappings](/configuration/#worktree-project-mappings)) |
+| GitHub | Personal access token for Gist publishing |
 | Remote Access | Remote connections toggle, auth token, connect to remote server |
 
 ![Settings remote access section](/assets/generated/screenshots/settings-remote.png)
@@ -1154,6 +1165,11 @@ preference is saved and persists across sessions.
 ![Light theme](/assets/generated/screenshots/theme-light.png)
 
 ![Dark theme](/assets/generated/screenshots/theme-dark.png)
+
+Settings > Appearance also offers a **high-contrast** mode for
+greater legibility and a **text size** control (90–130%) that
+scales message and interface text. Both preferences are saved
+and persist across sessions.
 
 ### Iframe Embedding
 
