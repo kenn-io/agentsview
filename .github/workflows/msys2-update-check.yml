@@ -34,7 +34,10 @@ jobs:
           path-type: inherit
 
       - name: Stub frontend embed dir
-        run: mkdir -p internal/web/dist && echo ok > internal/web/dist/stub.html
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force internal/web/dist | Out-Null
+          Set-Content -Path internal/web/dist/stub.html -Value ok
 
       - name: Run Go tests
         run: |

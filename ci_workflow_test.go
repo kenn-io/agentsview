@@ -31,10 +31,11 @@ type githubWorkflowJob struct {
 }
 
 type githubWorkflowStep struct {
-	Name string `yaml:"name"`
-	Run  string `yaml:"run"`
-	Uses string `yaml:"uses"`
-	If   string `yaml:"if"`
+	Name  string `yaml:"name"`
+	Run   string `yaml:"run"`
+	Uses  string `yaml:"uses"`
+	If    string `yaml:"if"`
+	Shell string `yaml:"shell"`
 }
 
 // TestCIRunsOnAllPullRequestsWhileDesktopBuildsTargetMain guards the trigger
@@ -256,6 +257,23 @@ func TestMSYS2UpdateWorkflowRunsDuckDBSmokeInsteadOfFullDuckDBSuite(t *testing.T
 	assert.Contains(t, smokeStep.Run, "TestLocalFileSmoke")
 	assert.Contains(t, smokeStep.Run, "TestEnsureSchemaCreatesRequiredMirrorTables")
 	assert.Contains(t, smokeStep.Run, "TestEnsureSchemaIsIdempotent")
+}
+
+func TestMSYS2UpdateWorkflowStubsFrontendEmbedDirWithPowerShell(t *testing.T) {
+	contents, err := os.ReadFile(".github/workflows/msys2-update-check.yml")
+	require.NoError(t, err)
+
+	var workflow githubWorkflow
+	require.NoError(t, yaml.Unmarshal(contents, &workflow))
+
+	job, ok := workflow.Jobs["windows-update-check"]
+	require.True(t, ok, "windows-update-check job must exist")
+
+	_, step := findWorkflowStep(t, job, "Stub frontend embed dir")
+	assert.Equal(t, "pwsh", step.Shell)
+	assert.Contains(t, step.Run, "New-Item -ItemType Directory -Force internal/web/dist")
+	assert.Contains(t, step.Run, "Set-Content -Path internal/web/dist/stub.html -Value ok")
+	assert.NotContains(t, step.Run, "mkdir -p")
 }
 
 func TestDockerWorkflowRestoresPricingSnapshotBeforeImageBuild(t *testing.T) {
