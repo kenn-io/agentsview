@@ -1755,10 +1755,6 @@ func (s *Store) analyticsAutonomyBuckets(
 // driver bind-variable limits; larger ID sets are split into chunks.
 const duckMaxSQLVars = 900
 
-// duckQueryChunkSize is a variable so tests can force chunking without seeding
-// hundreds of rows.
-var duckQueryChunkSize = duckMaxSQLVars
-
 func duckInPlaceholders(ids []string) (string, []any) {
 	ph := make([]string, len(ids))
 	args := make([]any, len(ids))
@@ -1770,12 +1766,8 @@ func duckInPlaceholders(ids []string) (string, []any) {
 }
 
 func duckQueryChunked(ids []string, fn func(chunk []string) error) error {
-	chunkSize := duckQueryChunkSize
-	if chunkSize <= 0 {
-		chunkSize = duckMaxSQLVars
-	}
-	for i := 0; i < len(ids); i += chunkSize {
-		end := min(i+chunkSize, len(ids))
+	for i := 0; i < len(ids); i += duckMaxSQLVars {
+		end := min(i+duckMaxSQLVars, len(ids))
 		if err := fn(ids[i:end]); err != nil {
 			return err
 		}

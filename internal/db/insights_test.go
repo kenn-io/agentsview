@@ -110,7 +110,7 @@ func TestInsights_GetNonexistent(t *testing.T) {
 	assert.Nil(t, got, "expected nil")
 }
 
-func insertInsights(t *testing.T, d *DB, entries []Insight) []int64 {
+func insertInsightFixtures(t *testing.T, d *DB, entries []Insight) []int64 {
 	t.Helper()
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -153,12 +153,19 @@ func TestListInsights(t *testing.T) {
 	ctx := context.Background()
 
 	seedFiltersData := func(t *testing.T, d *DB) []int64 {
-		return insertInsights(t, d, []Insight{
+		entries := []Insight{
 			{Type: "daily_activity", DateFrom: "2025-01-15", DateTo: "2025-01-15", Project: new("app-a"), Agent: "claude", Content: "Day 1 app-a"},
 			{Type: "daily_activity", DateFrom: "2025-01-15", DateTo: "2025-01-15", Project: new("app-b"), Agent: "claude", Content: "Day 1 app-b"},
 			{Type: "agent_analysis", DateFrom: "2025-01-15", DateTo: "2025-01-15", Agent: "claude", Content: "Analysis"},
 			{Type: "daily_activity", DateFrom: "2025-01-16", DateTo: "2025-01-16", Project: new("app-a"), Agent: "claude", Content: "Day 2 app-a"},
-		})
+		}
+		ids := make([]int64, 0, len(entries))
+		for i, insight := range entries {
+			id, err := d.InsertInsight(insight)
+			require.NoError(t, err, "InsertInsight %d", i)
+			ids = append(ids, id)
+		}
+		return ids
 	}
 
 	tests := []struct {
@@ -226,15 +233,17 @@ func TestListInsights(t *testing.T) {
 		{
 			name: "OrderByCreatedAtDesc",
 			seed: func(t *testing.T, d *DB) []int64 {
-				entries := make([]Insight, 0, 3)
+				ids := make([]int64, 0, 3)
 				for _, content := range []string{"first", "second", "third"} {
-					entries = append(entries, Insight{
+					id, err := d.InsertInsight(Insight{
 						Type:     "daily_activity",
 						DateFrom: "2025-01-15", DateTo: "2025-01-15",
 						Agent: "claude", Content: content,
 					})
+					require.NoError(t, err, "InsertInsight")
+					ids = append(ids, id)
 				}
-				return insertInsights(t, d, entries)
+				return ids
 			},
 			filter: InsightFilter{},
 			verify: func(t *testing.T, got []Insight, ids []int64) {
@@ -257,7 +266,7 @@ func TestListInsights(t *testing.T) {
 						Content:  fmt.Sprintf("insight %d", i),
 					})
 				}
-				return insertInsights(t, d, entries)
+				return insertInsightFixtures(t, d, entries)
 			},
 			filter: InsightFilter{},
 			verify: func(t *testing.T, got []Insight, ids []int64) {

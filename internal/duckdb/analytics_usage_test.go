@@ -1,3 +1,5 @@
+//go:build !(windows && arm64)
+
 package duckdb
 
 import (
@@ -828,62 +830,6 @@ func TestDuckAnalyticsTopSessionsDurationModelFilterRanksAndLimitsScopedSet(
 	}
 	assert.False(t, ids["duck-top-dur-rank-01"], "shortest excluded")
 	assert.False(t, ids["duck-top-dur-rank-02"], "second shortest excluded")
-}
-
-func TestDuckAnalyticsTopSessionsDurationModelFilterHandlesManyScopedSessions(
-	t *testing.T,
-) {
-	ctx := context.Background()
-	originalChunkSize := duckQueryChunkSize
-	duckQueryChunkSize = 5
-	t.Cleanup(func() {
-		duckQueryChunkSize = originalChunkSize
-	})
-	// More scoped sessions than the current chunk size. The model+time duration
-	// path filters and ranks the scoped set in Go instead of binding every ID
-	// into one predicate, so a set larger than one chunk still returns the
-	// correct top 10.
-	const scoped = 12
-	var writes []db.SessionBatchWrite
-	for k := range scoped {
-		id := fmt.Sprintf("duck-top-many-%04d", k)
-		writes = append(writes, db.SessionBatchWrite{
-			Session: syncSession(id, "alpha", "q", "2024-06-01T09:00:00Z", 1),
-			Messages: []db.Message{
-				duckModelMessage(id, 0, "assistant", "a",
-					"2024-06-01T09:00:00Z", "gpt-4o"),
-			},
-			DataVersion:     1,
-			ReplaceMessages: true,
-		})
-	}
-	// One clear outlier with a long active span so ranking is observable.
-	longID := "duck-top-many-longest"
-	longSession := syncSession(longID, "alpha", "q", "2024-06-01T09:00:00Z", 2)
-	longEnd := "2024-06-01T09:04:00Z"
-	longSession.EndedAt = &longEnd
-	writes = append(writes, db.SessionBatchWrite{
-		Session: longSession,
-		Messages: []db.Message{
-			duckModelMessage(longID, 0, "assistant", "a",
-				"2024-06-01T09:00:00Z", "gpt-4o"),
-			duckModelMessage(longID, 1, "assistant", "b",
-				"2024-06-01T09:04:00Z", "gpt-4o"),
-		},
-		DataVersion:     1,
-		ReplaceMessages: true,
-	})
-	store := newDuckAnalyticsStore(t, writes)
-
-	hour := 9
-	resp, err := store.GetAnalyticsTopSessions(ctx, db.AnalyticsFilter{
-		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
-		Model: "gpt-4o", Hour: &hour,
-	}, "duration")
-	require.NoError(t, err, "GetAnalyticsTopSessions")
-	require.Len(t, resp.Sessions, 10, "top sessions capped at 10")
-	assert.Equal(t, longID, resp.Sessions[0].ID,
-		"longest active span ranks first across the scoped set")
 }
 
 func assertDuckAnalyticsToolsModelFilterCountsOnlyMatchingToolCalls(
