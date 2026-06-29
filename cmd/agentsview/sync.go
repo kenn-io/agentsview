@@ -186,6 +186,8 @@ type remoteProgressPrinter struct {
 	finished bool
 }
 
+const remoteLocalSyncProgressLabel = "Syncing local sessions"
+
 func newRemoteProgressPrinter(
 	w io.Writer, now func() time.Time,
 ) *remoteProgressPrinter {
@@ -197,6 +199,17 @@ func (p *remoteProgressPrinter) Print(progress sync.Progress) {
 		return
 	}
 	label := strings.TrimSpace(progress.Detail)
+	if label == "" && progress.SessionsTotal > 0 &&
+		(progress.Phase == sync.PhaseSyncing ||
+			progress.Phase == sync.PhaseDone) {
+		label = remoteLocalSyncProgressLabel
+		progress.Detail = label
+	}
+	if progress.Phase == sync.PhaseDone {
+		p.printFinalInPlaceProgress(progress)
+		p.finishCurrent()
+		return
+	}
 	if label == "" {
 		return
 	}
@@ -223,6 +236,18 @@ func (p *remoteProgressPrinter) Print(progress sync.Progress) {
 	p.started = p.now()
 	p.inPlace = false
 	fmt.Fprintf(p.w, "  %s...\n", strings.TrimSuffix(label, "."))
+}
+
+func (p *remoteProgressPrinter) printFinalInPlaceProgress(
+	progress sync.Progress,
+) {
+	if !p.inPlace || p.label == "" || progress.SessionsTotal == 0 {
+		return
+	}
+	if progress.Detail == "" {
+		progress.Detail = p.label
+	}
+	fmt.Fprintf(p.w, "\r  %s\x1b[K", formatSyncProgress(progress))
 }
 
 func (p *remoteProgressPrinter) Finish() {

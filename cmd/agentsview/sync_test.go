@@ -324,6 +324,36 @@ func TestRemoteProgressPrinterWritesTimedStepLines(t *testing.T) {
 	assert.True(t, strings.HasSuffix(got, "\n"), "remote progress should finish on a newline")
 }
 
+func TestRemoteProgressPrinterRendersLocalSyncProgressWithoutDetail(t *testing.T) {
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	var out bytes.Buffer
+	printer := newRemoteProgressPrinter(&out, clock)
+
+	printer.Print(agentsync.Progress{
+		Phase:           agentsync.PhaseSyncing,
+		SessionsTotal:   10,
+		SessionsDone:    4,
+		MessagesIndexed: 40,
+	})
+	now = now.Add(250 * time.Millisecond)
+	printer.Print(agentsync.Progress{
+		Phase:           agentsync.PhaseDone,
+		SessionsTotal:   10,
+		SessionsDone:    10,
+		MessagesIndexed: 100,
+	})
+	printer.Print(agentsync.Progress{
+		Detail: "Resolving agent directories on devbox",
+	})
+
+	got := out.String()
+	assert.Contains(t, got, "\r  Syncing local sessions: 4/10 sessions (40%) · 40 messages\x1b[K")
+	assert.Contains(t, got, "\r  Syncing local sessions: 10/10 sessions (100%) · 100 messages\x1b[K")
+	assert.Contains(t, got, "\n  Syncing local sessions completed in 250ms\n")
+	assert.Contains(t, got, "  Resolving agent directories on devbox...\n")
+}
+
 func TestRunLocalSyncUsesCallerContextForResync(t *testing.T) {
 	dataDir := t.TempDir()
 	dbPath := filepath.Join(dataDir, "sessions.db")
