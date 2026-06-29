@@ -568,6 +568,11 @@ func EnsureSchema(
 			"adding sessions.source_version",
 		},
 		{
+			"sessions", "transcript_fidelity",
+			`transcript_fidelity TEXT NOT NULL DEFAULT ''`,
+			"adding sessions.transcript_fidelity",
+		},
+		{
 			"sessions", "parser_malformed_lines",
 			`parser_malformed_lines INT NOT NULL DEFAULT 0`,
 			"adding sessions.parser_malformed_lines",

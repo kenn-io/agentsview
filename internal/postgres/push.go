@@ -1109,6 +1109,7 @@ func sessionPushFingerprint(
 		sess.GitBranch,
 		sess.SourceSessionID,
 		sess.SourceVersion,
+		sess.TranscriptFidelity,
 		fmt.Sprintf("%d", sess.ParserMalformedLines),
 		fmt.Sprintf("%t", sess.IsTruncated),
 		stringValue(sess.TerminationStatus),
@@ -1276,6 +1277,7 @@ func (s *Sync) pushSession(
 			missing_success_criteria_count,
 			missing_verification_count, duplicate_prompt_count,
 			no_code_context_count, runaway_tool_loop_count,
+			transcript_fidelity,
 			updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8,
@@ -1292,6 +1294,7 @@ func (s *Sync) pushSession(
 			$42, $43, $44, $45,
 			$46, $47,
 			$48, $49, $50, $51, $52, $53, $54, $55,
+			$56,
 			NOW()
 		)
 		ON CONFLICT (id) DO UPDATE SET
@@ -1318,6 +1321,7 @@ func (s *Sync) pushSession(
 			git_branch = EXCLUDED.git_branch,
 			source_session_id = EXCLUDED.source_session_id,
 			source_version = EXCLUDED.source_version,
+			transcript_fidelity = EXCLUDED.transcript_fidelity,
 			parser_malformed_lines = EXCLUDED.parser_malformed_lines,
 			is_truncated = EXCLUDED.is_truncated,
 			termination_status = EXCLUDED.termination_status,
@@ -1356,7 +1360,7 @@ func (s *Sync) pushSession(
 					OR sessions.machine = 'local'
 					OR sessions.machine = ''
 					OR sessions.machine IN (
-						SELECT jsonb_array_elements_text($56::jsonb)
+						SELECT jsonb_array_elements_text($57::jsonb)
 					))
 			)
 			OR sessions.owner_marker = EXCLUDED.owner_marker)
@@ -1384,6 +1388,7 @@ func (s *Sync) pushSession(
 			OR sessions.git_branch IS DISTINCT FROM EXCLUDED.git_branch
 			OR sessions.source_session_id IS DISTINCT FROM EXCLUDED.source_session_id
 			OR sessions.source_version IS DISTINCT FROM EXCLUDED.source_version
+			OR sessions.transcript_fidelity IS DISTINCT FROM EXCLUDED.transcript_fidelity
 			OR sessions.parser_malformed_lines IS DISTINCT FROM EXCLUDED.parser_malformed_lines
 			OR sessions.is_truncated IS DISTINCT FROM EXCLUDED.is_truncated
 			OR sessions.termination_status IS DISTINCT FROM EXCLUDED.termination_status
@@ -1451,6 +1456,7 @@ func (s *Sync) pushSession(
 		sess.MissingSuccessCriteriaCount,
 		sess.MissingVerificationCount, sess.DuplicatePromptCount,
 		sess.NoCodeContextCount, sess.RunawayToolLoopCount,
+		sanitizePG(sess.TranscriptFidelity),
 		string(legacyMarkerMachinesJSON),
 	)
 	if err != nil {
