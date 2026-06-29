@@ -99,13 +99,13 @@ func assistantUsageMsg(
 	msg := dbtest.AsstMsg(sessionID, ordinal, "done")
 	msg.Timestamp = seed.started
 	msg.Model = seed.model
-	msg.TokenUsage = []byte(fmt.Sprintf(
+	msg.TokenUsage = fmt.Appendf(nil,
 		`{"input_tokens":%d,"output_tokens":%d,"cache_creation_input_tokens":%d,"cache_read_input_tokens":%d}`,
 		seed.input,
 		seed.output,
 		seed.create,
 		seed.read,
-	))
+	)
 	return msg
 }
 

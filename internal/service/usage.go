@@ -451,7 +451,7 @@ func intersectCSV(base, add string) (string, bool) {
 
 func splitCSVTokens(raw string) []string {
 	out := make([]string, 0)
-	for _, token := range strings.Split(raw, ",") {
+	for token := range strings.SplitSeq(raw, ",") {
 		trimmed := strings.TrimSpace(token)
 		if trimmed == "" {
 			continue
