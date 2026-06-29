@@ -10,19 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestHermesProviderFactoryReplacesLegacyAdapter(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentHermes)
-	require.True(t, ok)
-	require.NotNil(t, factory)
-
-	provider, ok := NewProvider(AgentHermes, ProviderConfig{
-		Roots:   []string{t.TempDir()},
-		Machine: "devbox",
-	})
-	require.True(t, ok)
-	require.NotNil(t, provider)
-}
-
 func TestHermesProviderTranscriptSourceMethods(t *testing.T) {
 	root := t.TempDir()
 	jsonlPath := filepath.Join(root, "child.jsonl")

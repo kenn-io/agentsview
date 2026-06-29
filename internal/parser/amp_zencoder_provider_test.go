@@ -13,19 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAmpProviderFactoryReplacesLegacyAdapter(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentAmp)
-	require.True(t, ok)
-	require.NotNil(t, factory)
-
-	provider, ok := NewProvider(AgentAmp, ProviderConfig{
-		Roots:   []string{t.TempDir()},
-		Machine: "devbox",
-	})
-	require.True(t, ok)
-	require.NotNil(t, provider)
-}
-
 func TestAmpProviderSourceMethods(t *testing.T) {
 	root := t.TempDir()
 	threadID := "T-019ca26f-aaaa-bbbb-cccc-dddddddddddd"
@@ -137,19 +124,6 @@ func TestAmpProviderParse(t *testing.T) {
 		outcome.Results[0].Result.Session.File.Hash,
 	)
 	assert.Len(t, outcome.Results[0].Result.Messages, 2)
-}
-
-func TestZencoderProviderFactoryReplacesLegacyAdapter(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentZencoder)
-	require.True(t, ok)
-	require.NotNil(t, factory)
-
-	provider, ok := NewProvider(AgentZencoder, ProviderConfig{
-		Roots:   []string{t.TempDir()},
-		Machine: "devbox",
-	})
-	require.True(t, ok)
-	require.NotNil(t, provider)
 }
 
 func TestZencoderProviderSourceMethods(t *testing.T) {

@@ -10,19 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPositronProviderFactoryReplacesLegacyAdapter(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentPositron)
-	require.True(t, ok)
-	require.NotNil(t, factory)
-
-	provider, ok := NewProvider(AgentPositron, ProviderConfig{
-		Roots:   []string{t.TempDir()},
-		Machine: "devbox",
-	})
-	require.True(t, ok)
-	require.NotNil(t, provider)
-}
-
 func TestPositronProviderSourceMethods(t *testing.T) {
 	root := t.TempDir()
 	sessionID := "positron-provider"

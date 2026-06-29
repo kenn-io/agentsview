@@ -10,19 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestOpenHandsProviderFactoryReplacesLegacyAdapter(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentOpenHands)
-	require.True(t, ok)
-	require.NotNil(t, factory)
-
-	provider, ok := NewProvider(AgentOpenHands, ProviderConfig{
-		Roots:   []string{t.TempDir()},
-		Machine: "devbox",
-	})
-	require.True(t, ok)
-	require.NotNil(t, provider)
-}
-
 func TestOpenHandsProviderSourceMethods(t *testing.T) {
 	root := t.TempDir()
 	sessionID := "086c7ecf-6cb7-46b6-9fbc-b900358d1247"

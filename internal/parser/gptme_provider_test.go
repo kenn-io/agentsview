@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGptmeProviderFactoryReplacesLegacyAdapter(t *testing.T) {
+func TestGptmeProviderCapabilities(t *testing.T) {
 	factory, ok := ProviderFactoryByType(AgentGptme)
 	require.True(t, ok)
 	require.NotNil(t, factory)

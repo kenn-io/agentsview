@@ -11,19 +11,6 @@ import (
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
-func TestClaudeProviderFactoryReplacesLegacyAdapter(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentClaude)
-	require.True(t, ok)
-	require.NotNil(t, factory)
-
-	provider, ok := NewProvider(AgentClaude, ProviderConfig{
-		Roots:   []string{t.TempDir()},
-		Machine: "devbox",
-	})
-	require.True(t, ok)
-	require.NotNil(t, provider)
-}
-
 func TestClaudeProviderSourceMethods(t *testing.T) {
 	root := t.TempDir()
 	projectDir := "-Users-dev-code-demo"

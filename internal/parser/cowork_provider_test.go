@@ -12,19 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCoworkProviderFactoryReplacesLegacyAdapter(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentCowork)
-	require.True(t, ok)
-	require.NotNil(t, factory)
-
-	provider, ok := NewProvider(AgentCowork, ProviderConfig{
-		Roots:   []string{t.TempDir()},
-		Machine: "devbox",
-	})
-	require.True(t, ok)
-	require.NotNil(t, provider)
-}
-
 func TestCoworkProviderSourceMethods(t *testing.T) {
 	root := t.TempDir()
 	cli := "c0000000-0000-4000-8000-000000000101"

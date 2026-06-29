@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestWorkBuddyProviderFactoryReplacesLegacyAdapter(t *testing.T) {
+func TestWorkBuddyProviderCapabilities(t *testing.T) {
 	factory, ok := ProviderFactoryByType(AgentWorkBuddy)
 	require.True(t, ok)
 	require.NotNil(t, factory)

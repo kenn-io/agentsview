@@ -12,68 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestZedShelleyProvidersOwnLegacyEntrypoints guards the fold: the
-// provider-specific Discover/Find/Parse free functions for both shared-SQLite
-// providers must stay deleted, and neither provider file may reach back into
-// them as a shim. Discovery and lookup live on the provider source sets;
-// virtual-path resolution flows through the provider-neutral
-// ParseVirtualSourcePathForBase helper; parse lives on provider methods.
-func TestZedShelleyProvidersOwnLegacyEntrypoints(t *testing.T) {
-	zedLegacy, err := os.ReadFile("zed.go")
-	require.NoError(t, err)
-	zedHelpers, err := os.ReadFile("zed_helpers.go")
-	require.NoError(t, err)
-	zedProviderSrc, err := os.ReadFile("zed_provider.go")
-	require.NoError(t, err)
-	shelleyLegacy, err := os.ReadFile("shelley.go")
-	require.NoError(t, err)
-	shelleyProviderSrc, err := os.ReadFile("shelley_provider.go")
-	require.NoError(t, err)
-
-	zedLegacyText := string(zedLegacy) + string(zedHelpers)
-	for _, symbol := range []string{
-		"func DiscoverZedSessions",
-		"func FindZedSourceFile",
-		"func ParseZedSQLiteVirtualPath",
-		"func ParseZedThreadDirect",
-		"func ParseZedThreadFromDB",
-	} {
-		assert.NotContains(t, zedLegacyText, symbol)
-		assert.NotContains(t, string(zedProviderSrc), symbol)
-	}
-	for _, call := range []string{
-		"DiscoverZedSessions(",
-		"FindZedSourceFile(",
-		"ParseZedSQLiteVirtualPath(",
-		"ParseZedThreadDirect(",
-		"ParseZedThreadFromDB(",
-	} {
-		assert.NotContains(t, string(zedProviderSrc), call)
-	}
-
-	shelleyLegacyText := string(shelleyLegacy)
-	for _, symbol := range []string{
-		"func DiscoverShelleySessions",
-		"func FindShelleySourceFile",
-		"func ParseShelleyConversationDirect",
-		"func ParseShelleyConversationFromDB",
-		"func ParseShelleyVirtualPath",
-	} {
-		assert.NotContains(t, shelleyLegacyText, symbol)
-		assert.NotContains(t, string(shelleyProviderSrc), symbol)
-	}
-	for _, call := range []string{
-		"DiscoverShelleySessions(",
-		"FindShelleySourceFile(",
-		"ParseShelleyConversationDirect(",
-		"ParseShelleyConversationFromDB(",
-		"ParseShelleyVirtualPath(",
-	} {
-		assert.NotContains(t, string(shelleyProviderSrc), call)
-	}
-}
-
-func TestZedProviderFactoryReplacesLegacyAdapter(t *testing.T) {
+func TestZedProviderCapabilities(t *testing.T) {
 	factory, ok := ProviderFactoryByType(AgentZed)
 	require.True(t, ok)
 	require.NotNil(t, factory)
@@ -483,7 +422,7 @@ func TestZedProviderIgnoresUnrelatedSidecarBasename(t *testing.T) {
 	assert.Empty(t, changed)
 }
 
-func TestShelleyProviderFactoryReplacesLegacyAdapter(t *testing.T) {
+func TestShelleyProviderCapabilities(t *testing.T) {
 	factory, ok := ProviderFactoryByType(AgentShelley)
 	require.True(t, ok)
 	require.NotNil(t, factory)

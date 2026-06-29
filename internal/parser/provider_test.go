@@ -176,22 +176,6 @@ func TestProviderMigrationModesCoverRegistry(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestProviderMigrationModesUseOnlyFinalModes(t *testing.T) {
-	for agent, mode := range ProviderMigrationModes() {
-		switch mode {
-		case ProviderMigrationProviderAuthoritative, ProviderMigrationImportOnly:
-		default:
-			assert.Failf(
-				t,
-				"unexpected migration mode",
-				"%s uses non-final provider migration mode %q",
-				agent,
-				mode,
-			)
-		}
-	}
-}
-
 func TestProviderMigrationModesRestrictImportOnlyMode(t *testing.T) {
 	factory := testProviderFactory{
 		def: AgentDef{

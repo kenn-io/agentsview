@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCortexProviderFactoryReplacesLegacyAdapter(t *testing.T) {
+func TestCortexProviderCapabilities(t *testing.T) {
 	factory, ok := ProviderFactoryByType(AgentCortex)
 	require.True(t, ok)
 	require.NotNil(t, factory)

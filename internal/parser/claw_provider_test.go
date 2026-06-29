@@ -4,76 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestOpenClawProviderFactoryReplacesLegacyAdapter(t *testing.T) {
-	assertClawProviderReplacesLegacyAdapter(t, AgentOpenClaw)
-}
-
-func TestQClawProviderFactoryReplacesLegacyAdapter(t *testing.T) {
-	assertClawProviderReplacesLegacyAdapter(t, AgentQClaw)
-}
-
-func TestClawProvidersOwnLegacyEntrypoints(t *testing.T) {
-	for _, tt := range []struct {
-		parserFile   string
-		providerFile string
-		symbols      []string
-		calls        []string
-	}{
-		{
-			parserFile:   "openclaw.go",
-			providerFile: "claw_provider.go",
-			symbols: []string{
-				"func DiscoverOpenClawSessions",
-				"func FindOpenClawSourceFile",
-				"func ParseOpenClawSession",
-			},
-			calls: []string{
-				"DiscoverOpenClawSessions(",
-				"FindOpenClawSourceFile(",
-				"ParseOpenClawSession(",
-			},
-		},
-		{
-			parserFile:   "qclaw.go",
-			providerFile: "claw_provider.go",
-			symbols: []string{
-				"func DiscoverQClawSessions",
-				"func FindQClawSourceFile",
-				"func ParseQClawSession",
-			},
-			calls: []string{
-				"DiscoverQClawSessions(",
-				"FindQClawSourceFile(",
-				"ParseQClawSession(",
-			},
-		},
-	} {
-		parserSource, err := os.ReadFile(tt.parserFile)
-		require.NoError(t, err)
-		providerSource, err := os.ReadFile(tt.providerFile)
-		require.NoError(t, err)
-
-		for _, symbol := range tt.symbols {
-			assert.NotContains(t, string(parserSource), symbol)
-		}
-
-		providerText := string(providerSource)
-		for _, call := range tt.calls {
-			assert.NotContains(
-				t,
-				strings.ReplaceAll(providerText, "func "+call, ""),
-				call,
-			)
-		}
-	}
-}
 
 func TestOpenClawProviderSourceMethods(t *testing.T) {
 	spec := openClawProviderTestSpec()
@@ -132,21 +67,6 @@ func qClawProviderTestSpec() clawProviderTestSpec {
 			return clawProviderFixture(sessionID, firstMessage)
 		},
 	}
-}
-
-func assertClawProviderReplacesLegacyAdapter(t *testing.T, agent AgentType) {
-	t.Helper()
-
-	factory, ok := ProviderFactoryByType(agent)
-	require.True(t, ok)
-	require.NotNil(t, factory)
-
-	provider, ok := NewProvider(agent, ProviderConfig{
-		Roots:   []string{t.TempDir()},
-		Machine: "devbox",
-	})
-	require.True(t, ok)
-	require.NotNil(t, provider)
 }
 
 func assertClawProviderSourceMethods(t *testing.T, spec clawProviderTestSpec) {

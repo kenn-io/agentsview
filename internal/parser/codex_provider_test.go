@@ -12,19 +12,6 @@ import (
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
-func TestCodexProviderFactoryReplacesLegacyAdapter(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentCodex)
-	require.True(t, ok)
-	require.NotNil(t, factory)
-
-	provider, ok := NewProvider(AgentCodex, ProviderConfig{
-		Roots:   []string{t.TempDir()},
-		Machine: "devbox",
-	})
-	require.True(t, ok)
-	require.NotNil(t, provider)
-}
-
 func TestCodexProviderSourceMethods(t *testing.T) {
 	base := t.TempDir()
 	root := filepath.Join(base, "sessions")

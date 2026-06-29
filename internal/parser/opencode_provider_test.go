@@ -12,27 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestOpenCodeFamilyProviderFactoriesReplaceLegacyAdapter(t *testing.T) {
-	for _, agent := range []AgentType{
-		AgentOpenCode,
-		AgentKilo,
-		AgentMiMoCode,
-	} {
-		t.Run(string(agent), func(t *testing.T) {
-			factory, ok := ProviderFactoryByType(agent)
-			require.True(t, ok)
-			require.NotNil(t, factory)
-
-			provider, ok := NewProvider(agent, ProviderConfig{
-				Roots:   []string{t.TempDir()},
-				Machine: "devbox",
-			})
-			require.True(t, ok)
-			require.NotNil(t, provider)
-		})
-	}
-}
-
 func TestOpenCodeProviderStorageSourceMethods(t *testing.T) {
 	root := t.TempDir()
 	sessionPath := writeOpenCodeProviderStorageSession(

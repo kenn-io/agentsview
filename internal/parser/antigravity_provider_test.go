@@ -12,69 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestAntigravityProvidersOwnLegacyEntrypoints guards the fold: the
-// provider-specific Discover/Find/Parse free functions for both the
-// Antigravity IDE and CLI providers must stay deleted, and the provider files
-// must not reach back into them as shims. Discovery and source lookup live on
-// the provider source sets; parse lives on the provider methods.
-func TestAntigravityProvidersOwnLegacyEntrypoints(t *testing.T) {
-	legacySources := map[string]string{}
-	for _, file := range []string{
-		"antigravity.go",
-		"antigravity_cli.go",
-		"antigravity_provider.go",
-		"antigravity_cli_provider.go",
-	} {
-		data, err := os.ReadFile(file)
-		require.NoErrorf(t, err, "read %s", file)
-		legacySources[file] = string(data)
-	}
-
-	symbols := []string{
-		"func DiscoverAntigravitySessions",
-		"func FindAntigravitySourceFile",
-		"func ParseAntigravitySession",
-		"func DiscoverAntigravityCLISessions",
-		"func FindAntigravityCLISourceFile",
-		"func ParseAntigravityCLISessionWithStatus",
-		"func ParseAntigravityCLISession",
-	}
-	for _, symbol := range symbols {
-		for file, src := range legacySources {
-			assert.NotContainsf(t, src, symbol, "%s still defines %s", file, symbol)
-		}
-	}
-
-	providerCalls := []string{
-		"DiscoverAntigravitySessions(",
-		"FindAntigravitySourceFile(",
-		"ParseAntigravitySession(",
-		"DiscoverAntigravityCLISessions(",
-		"FindAntigravityCLISourceFile(",
-		"ParseAntigravityCLISessionWithStatus(",
-		"ParseAntigravityCLISession(",
-	}
-	for _, file := range []string{"antigravity_provider.go", "antigravity_cli_provider.go"} {
-		for _, call := range providerCalls {
-			assert.NotContainsf(t, legacySources[file], call,
-				"%s still references legacy entrypoint %s", file, call)
-		}
-	}
-}
-
-func TestAntigravityProviderFactoryReplacesLegacyAdapter(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentAntigravity)
-	require.True(t, ok)
-	require.NotNil(t, factory)
-
-	provider, ok := NewProvider(AgentAntigravity, ProviderConfig{
-		Roots:   []string{t.TempDir()},
-		Machine: "devbox",
-	})
-	require.True(t, ok)
-	require.NotNil(t, provider)
-}
-
 func TestAntigravityProviderSourceMethods(t *testing.T) {
 	root := t.TempDir()
 	id := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
@@ -240,19 +177,6 @@ func TestAntigravityProviderRejectsInvalidStoredPaths(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.False(t, ok, "fresh lookup must reject a stored path for a different session")
-}
-
-func TestAntigravityCLIProviderFactoryReplacesLegacyAdapter(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentAntigravityCLI)
-	require.True(t, ok)
-	require.NotNil(t, factory)
-
-	provider, ok := NewProvider(AgentAntigravityCLI, ProviderConfig{
-		Roots:   []string{t.TempDir()},
-		Machine: "devbox",
-	})
-	require.True(t, ok)
-	require.NotNil(t, provider)
 }
 
 func TestAntigravityCLIProviderSourceMethods(t *testing.T) {

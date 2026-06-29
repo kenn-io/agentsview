@@ -12,19 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCommandCodeProviderFactoryReplacesLegacyAdapter(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentCommandCode)
-	require.True(t, ok)
-	require.NotNil(t, factory)
-
-	provider, ok := NewProvider(AgentCommandCode, ProviderConfig{
-		Roots:   []string{t.TempDir()},
-		Machine: "devbox",
-	})
-	require.True(t, ok)
-	require.NotNil(t, provider)
-}
-
 func TestCommandCodeProviderSourceMethods(t *testing.T) {
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "users-alice-code-sample-project")

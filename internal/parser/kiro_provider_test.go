@@ -13,19 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestKiroProviderFactoryReplacesLegacyAdapter(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentKiro)
-	require.True(t, ok)
-	require.NotNil(t, factory)
-
-	provider, ok := NewProvider(AgentKiro, ProviderConfig{
-		Roots:   []string{t.TempDir()},
-		Machine: "devbox",
-	})
-	require.True(t, ok)
-	require.NotNil(t, provider)
-}
-
 func TestKiroProviderSourceMethods(t *testing.T) {
 	root := t.TempDir()
 	dbPath, db := newKiroProviderSQLiteDBAt(t, root)
@@ -469,19 +456,6 @@ func TestKiroProviderRejectsInvalidStoredSQLitePaths(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, ok, "stored path %q", path)
 	}
-}
-
-func TestKiroIDEProviderFactoryReplacesLegacyAdapter(t *testing.T) {
-	factory, ok := ProviderFactoryByType(AgentKiroIDE)
-	require.True(t, ok)
-	require.NotNil(t, factory)
-
-	provider, ok := NewProvider(AgentKiroIDE, ProviderConfig{
-		Roots:   []string{t.TempDir()},
-		Machine: "devbox",
-	})
-	require.True(t, ok)
-	require.NotNil(t, provider)
 }
 
 func TestKiroIDEProviderSourceMethods(t *testing.T) {

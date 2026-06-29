@@ -73,7 +73,6 @@ func TestForgeProviderSourceMethodsAndParse(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	assertNotLegacyProvider(t, AgentForge, provider)
 
 	assertDBBackedWatchPlan(t, provider, root, forgeDBFilename)
 	assertDBBackedDiscoverFindFingerprint(
@@ -109,7 +108,6 @@ func TestPiebaldProviderSourceMethodsAndParse(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	assertNotLegacyProvider(t, AgentPiebald, provider)
 
 	assertDBBackedWatchPlan(t, provider, root, piebaldDBFilename)
 	assertDBBackedDiscoverFindFingerprint(
@@ -153,7 +151,6 @@ func TestWarpProviderSourceMethodsAndParse(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	assertNotLegacyProvider(t, AgentWarp, provider)
 
 	assertDBBackedWatchPlan(t, provider, root, warpDBFilename)
 	assertDBBackedDiscoverFindFingerprint(
@@ -405,14 +402,6 @@ func TestDBBackedProviderMissingDBSkipsAndPreservesSessions(t *testing.T) {
 	assert.False(t, outcome.ForceReplace)
 	assert.Equal(t, SkipNoSession, outcome.SkipReason)
 	assert.Empty(t, outcome.Results)
-}
-
-func assertNotLegacyProvider(t *testing.T, agent AgentType, provider Provider) {
-	t.Helper()
-	factory, ok := ProviderFactoryByType(agent)
-	require.True(t, ok)
-	require.NotNil(t, factory)
-	require.NotNil(t, provider)
 }
 
 func assertDBBackedWatchPlan(
