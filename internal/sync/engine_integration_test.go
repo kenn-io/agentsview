@@ -1319,6 +1319,45 @@ func TestResyncAllReportsDiscoveryBeforeSyncing(t *testing.T) {
 	assert.Contains(t, events[discoveryIdx].Detail, "Discovering sessions")
 }
 
+// TestSyncAllReportsDiscoveryBeforeSyncing verifies an incremental SyncAll
+// emits a discovery phase before its first syncing event. syncAllLocked walks
+// every source before emitting any syncing progress, so without this marker a
+// daemon-driven `agentsview sync` shows no terminal feedback for the entire
+// (sometimes multi-minute) discovery walk.
+func TestSyncAllReportsDiscoveryBeforeSyncing(t *testing.T) {
+	env := setupTestEnv(t)
+
+	msg := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "findable prompt").
+		AddClaudeAssistant(tsZeroS5, "findable response").
+		String()
+	env.writeClaudeSession(t, "test-proj", "a.jsonl", msg)
+
+	var events []sync.Progress
+	env.engine.SyncAll(context.Background(), func(p sync.Progress) {
+		events = append(events, p)
+	})
+
+	discoveryIdx, syncingIdx := -1, -1
+	for i, event := range events {
+		if event.Phase == sync.PhaseDiscovering && discoveryIdx == -1 {
+			discoveryIdx = i
+		}
+		if event.Phase == sync.PhaseSyncing && syncingIdx == -1 {
+			syncingIdx = i
+		}
+	}
+	require.NotEqual(t, -1, discoveryIdx,
+		"missing discovery progress event; events=%+v", events)
+	require.NotEqual(t, -1, syncingIdx,
+		"missing syncing progress event; events=%+v", events)
+	assert.Less(t, discoveryIdx, syncingIdx,
+		"discovery must be reported before syncing")
+	assert.False(t, events[discoveryIdx].Resync,
+		"incremental sync discovery should not be flagged as a full resync")
+	assert.Contains(t, events[discoveryIdx].Detail, "Discovering sessions")
+}
+
 func TestSyncEngineProgressDoneCatchesResyncDBBackedWork(t *testing.T) {
 	env := setupTestEnv(t)
 

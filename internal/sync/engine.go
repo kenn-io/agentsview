@@ -1782,6 +1782,17 @@ func (e *Engine) syncAllLocked(
 
 	t0 := time.Now()
 
+	// Report discovery as its own phase before the walk. syncAllLocked
+	// visits every source before emitting any syncing progress, and on a
+	// large archive that walk takes minutes; without this marker a
+	// daemon-driven `agentsview sync` shows no terminal feedback until the
+	// walk and DB-backed count both finish. The resync path emits the same
+	// marker, so its progress printer dedupes on the matching Detail.
+	e.reportProgress(onProgress, Progress{
+		Phase:  PhaseDiscovering,
+		Detail: "Discovering sessions",
+	})
+
 	var all []parser.DiscoveredFile
 	counts := make(map[parser.AgentType]int)
 	providerFound, providerFailures := e.discoverProviderSources(ctx, scope)
