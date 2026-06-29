@@ -65,7 +65,32 @@ func isVisualStudioCopilotVS2026SessionPath(path string) bool {
 }
 
 func isVisualStudioCopilotVS2026SessionFileName(name string) bool {
-	return !strings.Contains(name, ".") && IsValidSessionID(name)
+	return isVisualStudioCopilotVS2026SessionID(name)
+}
+
+func isVisualStudioCopilotVS2026SessionID(id string) bool {
+	if len(id) != 36 {
+		return false
+	}
+	for i, c := range id {
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			if !isVisualStudioCopilotVS2026Hex(c) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func isVisualStudioCopilotVS2026Hex(c rune) bool {
+	return (c >= '0' && c <= '9') ||
+		(c >= 'a' && c <= 'f') ||
+		(c >= 'A' && c <= 'F')
 }
 
 // ResolveSourceFilePath maps a stored session source path to a path that can

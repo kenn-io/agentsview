@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 )
 
 // multi_session_container.go provides a reusable source-set, provider, and
@@ -244,11 +245,14 @@ func (s multiSessionContainerSourceSet) SourcesForChangedPath(
 		if !ok {
 			continue
 		}
-		sources := []SourceRef{s.sourceRef(root, match)}
-		sources = append(
-			sources,
-			s.changedPathTombstones(root, match, req.StoredSourcePaths)...,
-		)
+		tombstones := s.changedPathTombstones(root, match, req.StoredSourcePaths)
+		sources := make([]SourceRef, 0, 1+len(tombstones))
+		if !(req.EventKind == "remove" &&
+			len(tombstones) > 0 &&
+			!IsRegularFile(match.Container)) {
+			sources = append(sources, s.sourceRef(root, match))
+		}
+		sources = append(sources, tombstones...)
 		return sources, nil
 	}
 	return nil, nil
@@ -259,9 +263,10 @@ func (s multiSessionContainerSourceSet) SourcesForChangedPath(
 // file still exists. The whole-container source re-writes the surviving
 // members; without these, a member row deleted from a still-present container
 // is never force-replaced and a stale session lingers, diverging from the
-// db-backed providers that drop it. A vanished container yields no tombstones,
-// preserving the archive when the whole source file disappears (per the
-// persistent-archive rule).
+// db-backed providers that drop it. A vanished shared container still yields no
+// tombstones, preserving the archive when the whole source file disappears; a
+// vanished one-file-per-member container emits the stored member tombstone so
+// the deleted row is force-replaced instead of lingering forever.
 func (s multiSessionContainerSourceSet) changedPathTombstones(
 	root string,
 	changed multiSessionMatch,
@@ -270,9 +275,7 @@ func (s multiSessionContainerSourceSet) changedPathTombstones(
 	if changed.MemberID != "" || changed.Container == "" {
 		return nil
 	}
-	if !IsRegularFile(changed.Container) {
-		return nil
-	}
+	containerExists := IsRegularFile(changed.Container)
 	var tombstones []SourceRef
 	seen := make(map[string]struct{})
 	for _, stored := range storedPaths {
@@ -283,7 +286,11 @@ func (s multiSessionContainerSourceSet) changedPathTombstones(
 		if !samePath(match.Container, changed.Container) {
 			continue
 		}
-		if s.memberPresent(match.toSource(root)) {
+		if !containerExists {
+			if !multiSessionMatchOwnsContainer(match) {
+				continue
+			}
+		} else if s.memberPresent(match.toSource(root)) {
 			continue
 		}
 		if _, dup := seen[match.Path]; dup {
@@ -293,6 +300,12 @@ func (s multiSessionContainerSourceSet) changedPathTombstones(
 		tombstones = append(tombstones, s.sourceRef(root, match))
 	}
 	return tombstones
+}
+
+func multiSessionMatchOwnsContainer(
+	match multiSessionMatch,
+) bool {
+	return match.MemberID == filepath.Base(match.Container)
 }
 
 func (s multiSessionContainerSourceSet) FindSource(

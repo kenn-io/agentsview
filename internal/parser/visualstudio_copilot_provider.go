@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Visual Studio Copilot normally stores conversations inside shared trace
@@ -92,25 +93,65 @@ func discoverVisualStudioCopilotSessionFilesUnderRoot(
 	if vsRoot == "" {
 		return nil
 	}
+	bestByConversation := map[string]visualStudioCopilotCandidate{}
+	filesByConversation := map[string]DiscoveredFile{}
 	filesByPath := map[string]DiscoveredFile{}
 
 	entries, err := os.ReadDir(vsRoot)
 	if err == nil {
 		for _, file := range discoverVisualStudioCopilotSessionFiles(vsRoot, entries) {
-			filesByPath[file.Path] = file
+			if !vsCopilotRememberVirtualDiscoveredFile(
+				file,
+				bestByConversation,
+				filesByConversation,
+			) {
+				filesByPath[file.Path] = file
+			}
 		}
 	}
 
 	for _, file := range discoverVisualStudioCopilotVS2026SessionFiles(vsRoot) {
-		filesByPath[file.Path] = file
+		vsCopilotRememberVirtualDiscoveredFile(
+			file,
+			bestByConversation,
+			filesByConversation,
+		)
 	}
 
-	files := make([]DiscoveredFile, 0, len(filesByPath))
+	files := make([]DiscoveredFile, 0, len(filesByConversation)+len(filesByPath))
+	for _, file := range filesByConversation {
+		files = append(files, file)
+	}
 	for _, file := range filesByPath {
 		files = append(files, file)
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files
+}
+
+func vsCopilotRememberVirtualDiscoveredFile(
+	file DiscoveredFile,
+	bestByConversation map[string]visualStudioCopilotCandidate,
+	filesByConversation map[string]DiscoveredFile,
+) bool {
+	path, conversationID, ok := splitVisualStudioCopilotVirtualPath(file.Path)
+	if !ok {
+		return false
+	}
+	mtime := time.Time{}
+	if info, err := os.Stat(path); err == nil {
+		mtime = info.ModTime()
+	}
+	current := bestByConversation[conversationID]
+	if !visualStudioCopilotCandidateWins(path, mtime, current) {
+		return true
+	}
+	bestByConversation[conversationID] = visualStudioCopilotCandidate{
+		path:  path,
+		mtime: mtime,
+	}
+	filesByConversation[conversationID] = file
+	return true
 }
 
 func discoverVisualStudioCopilotVS2026SessionFiles(
@@ -211,14 +252,40 @@ func discoverVisualStudioCopilotVS2026SessionFilesInDirectory(
 }
 
 func vsCopilotWatchRoots(roots []string) []WatchRoot {
-	out := make([]WatchRoot, 0, len(roots))
+	out := make([]WatchRoot, 0, len(roots)*2)
 	for _, root := range roots {
-		out = append(out, WatchRoot{
-			Path:         root,
-			Recursive:    false,
-			IncludeGlobs: []string{"*_VSGitHubCopilot_traces.jsonl"},
-			DebounceKey:  string(AgentVSCopilot) + ":traces:" + root,
-		})
+		root = filepath.Clean(root)
+		if root == "" || root == "." {
+			continue
+		}
+		switch visualStudioCopilotVS2026RootKind(root) {
+		case visualStudioCopilotVS2026VSRoot,
+			visualStudioCopilotVS2026CopilotChatRoot,
+			visualStudioCopilotVS2026ThreadRoot,
+			visualStudioCopilotVS2026SessionsRoot:
+			out = append(out, WatchRoot{
+				Path:         root,
+				Recursive:    true,
+				IncludeGlobs: []string{"*"},
+				DebounceKey:  string(AgentVSCopilot) + ":sessions:" + root,
+			})
+		default:
+			out = append(out, WatchRoot{
+				Path:         root,
+				Recursive:    false,
+				IncludeGlobs: []string{"*_VSGitHubCopilot_traces.jsonl"},
+				DebounceKey:  string(AgentVSCopilot) + ":traces:" + root,
+			})
+			vsRoot := filepath.Join(root, ".vs")
+			if info, err := os.Stat(vsRoot); err == nil && info.IsDir() {
+				out = append(out, WatchRoot{
+					Path:         vsRoot,
+					Recursive:    true,
+					IncludeGlobs: []string{"*"},
+					DebounceKey:  string(AgentVSCopilot) + ":sessions:" + vsRoot,
+				})
+			}
+		}
 	}
 	return out
 }
@@ -257,6 +324,13 @@ func vsCopilotClassifyPath(
 	}
 	if isVisualStudioCopilotVS2026SessionPath(path) &&
 		visualStudioCopilotVS2026SessionUnderRoot(root, path) {
+		if allowMissing && !IsRegularFile(path) {
+			return multiSessionMatch{
+				Path:        path,
+				Container:   path,
+				ProjectHint: "visualstudio",
+			}, true
+		}
 		return multiSessionMatch{
 			Path:        VisualStudioCopilotVirtualPath(path, filepath.Base(path)),
 			Container:   path,
@@ -282,27 +356,18 @@ func vsCopilotFindMember(root, rawID string) (multiSessionMatch, bool) {
 	return vsCopilotClassifyPath(root, path, false)
 }
 
-// findVisualStudioCopilotSourceFile locates a trace file by conversation UUID
-// and returns a conversation-scoped <traceFile>#<conversationID> virtual path.
+// findVisualStudioCopilotSourceFile locates the canonical source for one
+// conversation ID, deduplicating across legacy traces and VS 2026 session
+// files with the same newest-mtime, then path tie-breaker used by discovery.
 func findVisualStudioCopilotSourceFile(root, rawID string) string {
 	if root == "" || !IsValidSessionID(rawID) {
 		return ""
 	}
-	if path := findVisualStudioCopilotTraceSourceFile(root, rawID); path != "" {
-		return path
-	}
-	return findVisualStudioCopilotVS2026SourceFile(root, rawID)
-}
-
-func findVisualStudioCopilotVS2026SourceFile(
-	root, rawID string,
-) string {
-	for _, file := range discoverVisualStudioCopilotVS2026SessionFiles(root) {
-		path, conversationID, ok := splitVisualStudioCopilotVirtualPath(file.Path)
-		if !ok || conversationID != rawID {
-			continue
+	for _, file := range discoverVisualStudioCopilotSessionFilesUnderRoot(root) {
+		_, conversationID, ok := splitVisualStudioCopilotVirtualPath(file.Path)
+		if ok && conversationID == rawID {
+			return file.Path
 		}
-		return VisualStudioCopilotVirtualPath(path, rawID)
 	}
 	return ""
 }
