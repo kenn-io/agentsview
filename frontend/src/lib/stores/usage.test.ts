@@ -810,6 +810,89 @@ describe("UsageStore session filter params", () => {
     expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
   });
 
+  it("clears stale pairwise data and ignores late selector responses", async () => {
+    const { usage } = await loadStore();
+
+    await usage.fetchAll();
+    expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
+
+    let resolveFirst:
+      | ((value: UsagePairwiseComparisonResponse) => void)
+      | undefined;
+    let resolveSecond:
+      | ((value: UsagePairwiseComparisonResponse) => void)
+      | undefined;
+    usageServiceMocks.getApiV1UsagePairwiseComparison
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecond = resolve;
+          }),
+      );
+
+    usage.setPairwiseSide("left", { dimension: "project" });
+    await Promise.resolve();
+    expect(usage.pairwiseComparison).toBeNull();
+    expect(usage.loading.pairwise).toBe(true);
+
+    usage.setPairwiseSide("right", {
+      dimension: "project",
+      value: "alpha",
+    });
+    await Promise.resolve();
+
+    resolveFirst?.({
+      ...usagePairwiseComparison(),
+      left: {
+        ...usagePairwiseComparison().left,
+        totalCost: 99,
+      },
+    });
+    await Promise.resolve();
+    expect(usage.pairwiseComparison).toBeNull();
+
+    const latest = {
+      ...usagePairwiseComparison(),
+      left: {
+        ...usagePairwiseComparison().left,
+        totalCost: 3,
+      },
+      deltas: {
+        ...usagePairwiseComparison().deltas,
+        totalCostDelta: 2,
+        totalCostDeltaRatio: 2,
+      },
+    };
+    resolveSecond?.(latest);
+    await vi.waitFor(() => {
+      expect(usage.pairwiseComparison).toEqual(latest);
+    });
+    expect(
+      usageServiceMocks.getApiV1UsagePairwiseComparison,
+    ).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        leftDimension: "project",
+      }),
+    );
+    expect(
+      usageServiceMocks.getApiV1UsagePairwiseComparison,
+    ).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        leftDimension: "project",
+        rightDimension: "project",
+        rightValue: "alpha",
+      }),
+    );
+  });
+
   it("aborts stale summary requests when a newer fetch starts", async () => {
     const signals: (AbortSignal | undefined)[] = [];
     apiRuntimeMocks.callGenerated.mockImplementation(

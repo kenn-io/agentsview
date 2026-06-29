@@ -384,6 +384,8 @@ class UsageStore {
     next[side] = { dimension, value };
     this.pairwiseSelection = next;
     if (this.summary) {
+      this.pairwiseComparison = null;
+      this.errors.pairwise = null;
       void this.fetchPairwise(this.versions.summary, this.baseParams());
     }
   }
@@ -689,6 +691,7 @@ class UsageStore {
     params: UsageParams,
   ): Promise<FetchResult> {
     if (this.versions.summary !== summaryVersion) return "aborted";
+    const pairwiseVersion = ++this.versions.pairwise;
     const request = this.currentPairwiseParams(params);
     if (!request) {
       this.pairwiseComparison = null;
@@ -706,7 +709,10 @@ class UsageStore {
         UsageService.getApiV1UsagePairwiseComparison(request),
         signal,
       ) as unknown as UsagePairwiseComparisonResponse;
-      if (this.versions.summary === summaryVersion) {
+      if (
+        this.versions.summary === summaryVersion &&
+        this.versions.pairwise === pairwiseVersion
+      ) {
         this.pairwiseComparison = comparison;
         this.errors.pairwise = null;
         return "ok";
@@ -718,7 +724,10 @@ class UsageStore {
         return "aborted";
       }
       status = "error";
-      if (this.versions.summary === summaryVersion) {
+      if (
+        this.versions.summary === summaryVersion &&
+        this.versions.pairwise === pairwiseVersion
+      ) {
         if (this.pairwiseComparison === null) {
           this.errors.pairwise =
             e instanceof Error ? e.message : "Failed to load";
@@ -735,7 +744,10 @@ class UsageStore {
         status,
       });
       this.clearAbortSignal("pairwise", signal);
-      if (this.versions.summary === summaryVersion) {
+      if (
+        this.versions.summary === summaryVersion &&
+        this.versions.pairwise === pairwiseVersion
+      ) {
         this.loading.pairwise = false;
       }
     }

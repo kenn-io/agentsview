@@ -182,6 +182,8 @@ describe("UsagePairwiseComparisonPanel", () => {
       ...pairwiseComparison(),
       deltas: {
         ...pairwiseComparison().deltas,
+        costPerSessionDelta: null,
+        costPerSessionRatio: null,
         tokensPerSessionDelta: null,
         tokensPerSessionRatio: null,
       },
@@ -193,6 +195,7 @@ describe("UsagePairwiseComparisonPanel", () => {
 
     const text = document.body.textContent ?? "";
     expect(text).toContain("None");
+    expect(text).not.toContain("+$0.00");
     expect(text).not.toContain("+0.0%");
 
     unmount(component);
