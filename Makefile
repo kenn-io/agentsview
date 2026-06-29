@@ -45,11 +45,14 @@ build-release: pricing-snapshot frontend
 	CGO_ENABLED=1 go build -tags fts5 -ldflags="$(LDFLAGS_RELEASE)" -trimpath -o agentsview ./cmd/agentsview
 	@chmod +x agentsview
 
-# Install to ~/.local/bin, $GOBIN, or $GOPATH/bin
+# Install to ~/.local/bin, $GOBIN, or $GOPATH/bin.
+# Copy to a temp file in the destination directory, then rename into place.
+# Rename is atomic and produces a fresh inode, so overwriting the binary while
+# an old agentsview is still running does not leave the kernel validating exec
+# against stale code-signature pages (which SIGKILLs the new process on macOS).
 install: build-release
 	@if [ -d "$(HOME)/.local/bin" ]; then \
-		echo "Installing to ~/.local/bin/agentsview"; \
-		cp agentsview "$(HOME)/.local/bin/agentsview"; \
+		INSTALL_DIR="$(HOME)/.local/bin"; \
 	else \
 		INSTALL_DIR="$${GOBIN:-$$(go env GOBIN)}"; \
 		if [ -z "$$INSTALL_DIR" ]; then \
@@ -57,9 +60,10 @@ install: build-release
 			INSTALL_DIR="$$GOPATH_FIRST/bin"; \
 		fi; \
 		mkdir -p "$$INSTALL_DIR"; \
-		echo "Installing to $$INSTALL_DIR/agentsview"; \
-		cp agentsview "$$INSTALL_DIR/agentsview"; \
-	fi
+	fi; \
+	echo "Installing to $$INSTALL_DIR/agentsview"; \
+	cp agentsview "$$INSTALL_DIR/agentsview.tmp"; \
+	mv -f "$$INSTALL_DIR/agentsview.tmp" "$$INSTALL_DIR/agentsview"
 
 # Build frontend SPA and copy into embed directory
 frontend:
