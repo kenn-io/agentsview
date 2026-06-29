@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
-import type { Message } from "../../api/types.js";
+import type { Message, Session } from "../../api/types.js";
 import { setLocale } from "../../i18n/index.js";
 // @ts-ignore
 import MessageContent from "./MessageContent.svelte";
@@ -9,6 +9,18 @@ import MessageContent from "./MessageContent.svelte";
 const copyToClipboardMock = vi.hoisted(() =>
   vi.fn().mockResolvedValue(true),
 );
+
+const forkSessionMock = vi.hoisted(() => vi.fn());
+const sessionsState = vi.hoisted(() => ({
+  sessions: [] as Session[],
+  activeSession: null as Session | null,
+}));
+const syncState = vi.hoisted(() => ({
+  readOnly: false,
+}));
+const runtimeState = vi.hoisted(() => ({
+  isRemote: false,
+}));
 
 vi.mock("../../stores/messages.svelte.js", () => ({
   messages: {
@@ -31,11 +43,28 @@ vi.mock("../../stores/pins.svelte.js", () => ({
 }));
 
 vi.mock("../../stores/sessions.svelte.js", () => ({
-  sessions: {
-    sessions: [],
-    activeSession: null,
-  },
+  sessions: sessionsState,
 }));
+
+vi.mock("../../stores/sync.svelte.js", () => ({
+  sync: syncState,
+}));
+
+vi.mock("../../api/runtime.js", () => ({
+  configureGeneratedClient: vi.fn(),
+  isRemoteConnection: () => runtimeState.isRemote,
+}));
+
+vi.mock("../../api/generated/index", async (importOriginal) => {
+  const orig =
+    await importOriginal<typeof import("../../api/generated/index")>();
+  return {
+    ...orig,
+    SessionsService: {
+      postApiV1SessionsIdResume: forkSessionMock,
+    },
+  };
+});
 
 vi.mock("../../utils/highlight.js", async () => {
   const actual = await vi.importActual<
@@ -83,6 +112,14 @@ afterEach(() => {
   setLocale("en");
   document.body.innerHTML = "";
   vi.clearAllMocks();
+  sessionsState.sessions = [];
+  sessionsState.activeSession = null;
+  syncState.readOnly = false;
+  runtimeState.isRemote = false;
+});
+
+beforeEach(() => {
+  forkSessionMock.mockReset();
 });
 
 describe("MessageContent", () => {
@@ -242,6 +279,251 @@ describe("MessageContent", () => {
     );
     expect(copyButton!.querySelector("svg")).not.toBeNull();
     expect(copyButton!.textContent?.trim()).toBe("");
+
+    unmount(component);
+  });
+
+  it("forks a Claude session from the selected message ordinal", async () => {
+    sessionsState.sessions = [{
+      id: "session-1",
+      agent: "claude",
+      project: "proj-a",
+      machine: "test",
+      first_message: "hello",
+      started_at: "2026-02-20T12:30:00Z",
+      ended_at: "2026-02-20T12:31:00Z",
+      message_count: 3,
+      user_message_count: 2,
+      total_output_tokens: 0,
+      peak_context_tokens: 0,
+      is_automated: false,
+      created_at: "2026-02-20T12:30:00Z",
+    } as Session];
+    forkSessionMock.mockResolvedValueOnce({
+      launched: false,
+      command: "claude < '/tmp/agentsview/claude-message-points/session-1-ordinal-1.txt'",
+      cwd: "/tmp/project",
+    });
+
+    const component = mount(MessageContent, {
+      target: document.body,
+      props: {
+        message: makeMessage({
+          session_id: "session-1",
+          ordinal: 1,
+          role: "assistant",
+          content: "Branch here.",
+        }),
+      },
+    });
+
+    await tick();
+
+    const forkButton = document.querySelector<HTMLButtonElement>(
+      "button.fork-btn",
+    );
+    expect(forkButton).not.toBeNull();
+    forkButton!.click();
+    await Promise.resolve();
+    await tick();
+
+    expect(forkSessionMock).toHaveBeenCalledWith({
+      id: "session-1",
+      requestBody: {
+        from_ordinal: 1,
+        fork_session: true,
+      },
+    });
+    expect(copyToClipboardMock).toHaveBeenCalledWith(
+      "claude < '/tmp/agentsview/claude-message-points/session-1-ordinal-1.txt'",
+    );
+    await vi.waitFor(() => {
+      expect(document.querySelector(".fork-feedback")).toBeTruthy();
+    });
+    const forkFeedback = document.querySelector(".fork-feedback");
+    expect(forkFeedback).toBeTruthy();
+    expect(forkFeedback?.textContent?.trim()).not.toBe("");
+
+    unmount(component);
+  });
+
+  it("does not show the fork action for an embedded non-Claude child session", async () => {
+    sessionsState.activeSession = {
+      id: "parent-session",
+      agent: "claude",
+      project: "proj-a",
+      machine: "test",
+      first_message: "hello",
+      started_at: "2026-02-20T12:30:00Z",
+      ended_at: "2026-02-20T12:31:00Z",
+      message_count: 3,
+      user_message_count: 2,
+      total_output_tokens: 0,
+      peak_context_tokens: 0,
+      is_automated: false,
+      created_at: "2026-02-20T12:30:00Z",
+    } as Session;
+
+    const component = mount(MessageContent, {
+      target: document.body,
+      props: {
+        message: makeMessage({
+          session_id: "child-session",
+          ordinal: 1,
+          role: "assistant",
+          content: "Embedded child message.",
+        }),
+        session: {
+          id: "child-session",
+          agent: "codex",
+          project: "proj-b",
+          machine: "test",
+          first_message: "child",
+          started_at: "2026-02-20T12:30:00Z",
+          ended_at: "2026-02-20T12:31:00Z",
+          message_count: 2,
+          user_message_count: 1,
+          total_output_tokens: 0,
+          peak_context_tokens: 0,
+          is_automated: false,
+          created_at: "2026-02-20T12:30:00Z",
+        } as Session,
+        isSubagentContext: true,
+      },
+    });
+
+    await tick();
+
+    expect(document.querySelector("button.fork-btn")).toBeNull();
+
+    unmount(component);
+  });
+
+  it("requests command-only message forks in local read-only mode", async () => {
+    syncState.readOnly = true;
+    sessionsState.sessions = [{
+      id: "session-1",
+      agent: "claude",
+      project: "proj-a",
+      machine: "test",
+      first_message: "hello",
+      started_at: "2026-02-20T12:30:00Z",
+      ended_at: "2026-02-20T12:31:00Z",
+      message_count: 3,
+      user_message_count: 2,
+      total_output_tokens: 0,
+      peak_context_tokens: 0,
+      is_automated: false,
+      created_at: "2026-02-20T12:30:00Z",
+    } as Session];
+    forkSessionMock.mockResolvedValueOnce({
+      launched: false,
+      command: "claude < '/tmp/agentsview/claude-message-points/session-1-ordinal-1.txt'",
+      cwd: "/tmp/project",
+    });
+
+    const component = mount(MessageContent, {
+      target: document.body,
+      props: {
+        message: makeMessage({
+          session_id: "session-1",
+          ordinal: 1,
+          role: "assistant",
+          content: "Branch here.",
+        }),
+      },
+    });
+
+    await tick();
+
+    document.querySelector<HTMLButtonElement>("button.fork-btn")!.click();
+    await Promise.resolve();
+    await tick();
+
+    expect(forkSessionMock).toHaveBeenCalledWith({
+      id: "session-1",
+      requestBody: {
+        command_only: true,
+        from_ordinal: 1,
+        fork_session: true,
+      },
+    });
+
+    unmount(component);
+  });
+
+  it("hides the fork action in remote read-only mode", async () => {
+    syncState.readOnly = true;
+    runtimeState.isRemote = true;
+    sessionsState.sessions = [{
+      id: "session-1",
+      agent: "claude",
+      project: "proj-a",
+      machine: "test",
+      first_message: "hello",
+      started_at: "2026-02-20T12:30:00Z",
+      ended_at: "2026-02-20T12:31:00Z",
+      message_count: 3,
+      user_message_count: 2,
+      total_output_tokens: 0,
+      peak_context_tokens: 0,
+      is_automated: false,
+      created_at: "2026-02-20T12:30:00Z",
+    } as Session];
+
+    const component = mount(MessageContent, {
+      target: document.body,
+      props: {
+        message: makeMessage({
+          session_id: "session-1",
+          ordinal: 1,
+          role: "assistant",
+          content: "Branch here.",
+        }),
+      },
+    });
+
+    await tick();
+
+    expect(document.querySelector("button.fork-btn")).toBeNull();
+
+    unmount(component);
+  });
+
+  it("does not fall back to the active session when embedded session metadata is missing", async () => {
+    sessionsState.activeSession = {
+      id: "parent-session",
+      agent: "claude",
+      project: "proj-a",
+      machine: "test",
+      first_message: "hello",
+      started_at: "2026-02-20T12:30:00Z",
+      ended_at: "2026-02-20T12:31:00Z",
+      message_count: 3,
+      user_message_count: 2,
+      total_output_tokens: 0,
+      peak_context_tokens: 0,
+      is_automated: false,
+      created_at: "2026-02-20T12:30:00Z",
+    } as Session;
+
+    const component = mount(MessageContent, {
+      target: document.body,
+      props: {
+        message: makeMessage({
+          session_id: "child-session",
+          ordinal: 1,
+          role: "assistant",
+          content: "Embedded child message.",
+        }),
+        session: null,
+        isSubagentContext: true,
+      },
+    });
+
+    await tick();
+
+    expect(document.querySelector("button.fork-btn")).toBeNull();
 
     unmount(component);
   });

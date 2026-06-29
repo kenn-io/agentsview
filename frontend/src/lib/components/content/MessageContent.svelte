@@ -15,6 +15,15 @@
   import { messages as messagesStore } from "../../stores/messages.svelte.js";
   import { sessionTiming } from "../../stores/sessionTiming.svelte.js";
   import { liveTick } from "../../stores/liveTick.svelte.js";
+  import {
+    configureGeneratedClient,
+    isRemoteConnection,
+  } from "../../api/runtime.js";
+  import {
+    SessionsService,
+    type ResumeRequest,
+    type ResumeResponse,
+  } from "../../api/generated/index";
   import ThinkingBlock from "./ThinkingBlock.svelte";
   import ToolBlock from "./ToolBlock.svelte";
   import ParallelGroup from "./ParallelGroup.svelte";
@@ -24,22 +33,30 @@
   import { ui } from "../../stores/ui.svelte.js";
   import { pins } from "../../stores/pins.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
+  import { sync } from "../../stores/sync.svelte.js";
   import { applyHighlight } from "../../utils/highlight.js";
   import { highlightCodeFences } from "../../utils/highlight-fences.js";
   import { renderMarkdown } from "../../utils/markdown.js";
   import { displayToolName } from "../../utils/toolDisplay.js";
-  import { PinIcon } from "../../icons.js";
+  import { CirclePlayIcon, PinIcon } from "../../icons.js";
   import type { Session } from "../../api/types.js";
   import { m } from "../../i18n/index.js";
 
   interface Props {
     message: Message;
+    session?: Session | null;
     isSubagentContext?: boolean;
     highlightQuery?: string;
     isCurrentHighlight?: boolean;
   }
 
-  let { message, isSubagentContext = false, highlightQuery = "", isCurrentHighlight = false }: Props = $props();
+  let {
+    message,
+    session,
+    isSubagentContext = false,
+    highlightQuery = "",
+    isCurrentHighlight = false,
+  }: Props = $props();
 
   let copied = $state(false);
 
@@ -86,10 +103,12 @@
     ),
   );
 
-  /** Resolve the session that owns this message, falling back to activeSession. */
+  /** Resolve the owning session, favoring explicit embedded-session context. */
   let owningSession = $derived(
-    sessions.sessions.find((s) => s.id === message.session_id) ??
-      sessions.activeSession,
+    session !== undefined
+      ? session
+      : sessions.sessions.find((s) => s.id === message.session_id) ??
+        sessions.activeSession,
   );
 
   /** Walk the parent chain to check if any ancestor has the teammate tag. */
@@ -171,6 +190,7 @@
 
   let pinned = $derived(pins.isPinned(message.id));
   let pinFeedback = $state("");
+  let forkFeedback = $state("");
 
   /** Index turn timings by message id for O(1) lookup. */
   let turnByMessage = $derived.by(() => {
@@ -264,6 +284,7 @@
 
   let copyTimer: ReturnType<typeof setTimeout>;
   let pinTimer: ReturnType<typeof setTimeout>;
+  let forkTimer: ReturnType<typeof setTimeout>;
 
   async function handleCopy() {
     const ok = await copyToClipboard(formatMessageForCopy(message));
@@ -290,6 +311,50 @@
     } catch {
       // silently fail
     }
+  }
+
+  let canForkFromMessage = $derived(
+    owningSession?.agent === "claude" &&
+      !(owningSession?.id ?? "").includes("~") &&
+      !(sync.readOnly && isRemoteConnection()),
+  );
+
+  async function handleForkFromHere() {
+    if (!canForkFromMessage) return;
+    clearTimeout(forkTimer);
+    try {
+      configureGeneratedClient();
+      const resp =
+        await SessionsService.postApiV1SessionsIdResume({
+          id: message.session_id,
+          requestBody: {
+            ...(sync.readOnly && !isRemoteConnection()
+              ? { command_only: true }
+              : {}),
+            from_ordinal: message.ordinal,
+            fork_session: true,
+          } satisfies ResumeRequest,
+        }) as ResumeResponse;
+      if (resp.launched) {
+        forkFeedback = m.session_breadcrumb_resumed_in({
+          target: resp.terminal ?? "terminal",
+        });
+        forkTimer = setTimeout(() => { forkFeedback = ""; }, 2000);
+        return;
+      }
+      if (resp.command) {
+        const ok = await copyToClipboard(resp.command);
+        forkFeedback = ok
+          ? m.session_breadcrumb_command_copied()
+          : m.session_breadcrumb_failed();
+        forkTimer = setTimeout(() => { forkFeedback = ""; }, 2000);
+        return;
+      }
+    } catch {
+      // silently fail
+    }
+    forkFeedback = m.session_breadcrumb_failed();
+    forkTimer = setTimeout(() => { forkFeedback = ""; }, 2000);
   }
 </script>
 
@@ -332,8 +397,22 @@
     >
       <PinIcon size="14" strokeWidth="1.8" aria-hidden="true" />
     </button>
+    {#if canForkFromMessage}
+      <button
+        type="button"
+        class="pin-btn fork-btn"
+        title={m.session_breadcrumb_resume_session()}
+        aria-label={m.session_breadcrumb_resume_session()}
+        onclick={handleForkFromHere}
+      >
+        <CirclePlayIcon size="14" strokeWidth="1.8" aria-hidden="true" />
+      </button>
+    {/if}
     {#if pinFeedback}
       <span class="pin-feedback">{pinFeedback}</span>
+    {/if}
+    {#if forkFeedback}
+      <span class="fork-feedback">{forkFeedback}</span>
     {/if}
     <div class="header-meta">
       {#if tokenSummary}
@@ -592,6 +671,12 @@
   }
 
   .pin-feedback {
+    font-size: 11px;
+    color: var(--text-muted);
+    animation: fade-in-out 1.5s ease-in-out;
+  }
+
+  .fork-feedback {
     font-size: 11px;
     color: var(--text-muted);
     animation: fade-in-out 1.5s ease-in-out;

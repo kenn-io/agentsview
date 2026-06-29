@@ -57,6 +57,25 @@ func TestShellQuote(t *testing.T) {
 	}
 }
 
+func TestCommandWithCleanup(t *testing.T) {
+	assert.Equal(t,
+		"claude < prompt.txt; rm -f -- prompt.txt",
+		commandWithCleanup("claude < prompt.txt", "prompt.txt"),
+	)
+	assert.Equal(t,
+		"claude < prompt.txt",
+		commandWithCleanup("claude < prompt.txt", ""),
+	)
+}
+
+func TestClaudeMessagePointPromptPathIsUniquePerLaunch(t *testing.T) {
+	first, err := claudeMessagePointPromptPath("sess-1", 2)
+	require.NoError(t, err)
+	second, err := claudeMessagePointPromptPath("sess-1", 2)
+	require.NoError(t, err)
+	assert.NotEqual(t, first, second)
+}
+
 func TestDetectTerminalLinux_NoTerminal(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Linux-only terminal detection")

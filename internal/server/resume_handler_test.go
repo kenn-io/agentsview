@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -47,6 +48,52 @@ func assertSamePath(t *testing.T, label, got, want string) {
 	assert.Fail(t, "path mismatch", "%s = %q, want %q", label, got, want)
 }
 
+func messagePointPromptGlob(t *testing.T, sessionID string, ordinal int) string {
+	t.Helper()
+	cacheDir, err := os.UserCacheDir()
+	require.NoError(t, err)
+	return filepath.Join(
+		cacheDir,
+		"agentsview",
+		"claude-message-points",
+		fmt.Sprintf("%s-ordinal-%d-*.txt", sessionID, ordinal),
+	)
+}
+
+func removeMessagePointPrompts(t *testing.T, sessionID string, ordinal int) {
+	t.Helper()
+	matches, err := filepath.Glob(
+		messagePointPromptGlob(t, sessionID, ordinal),
+	)
+	require.NoError(t, err)
+	for _, match := range matches {
+		_ = os.Remove(match)
+	}
+}
+
+func findSingleMessagePointPrompt(
+	t *testing.T, sessionID string, ordinal int,
+) string {
+	t.Helper()
+	matches, err := filepath.Glob(
+		messagePointPromptGlob(t, sessionID, ordinal),
+	)
+	require.NoError(t, err)
+	require.Len(t, matches, 1)
+	return matches[0]
+}
+
+func assertNoMessagePointPrompts(
+	t *testing.T, sessionID string, ordinal int,
+) {
+	t.Helper()
+	matches, err := filepath.Glob(
+		messagePointPromptGlob(t, sessionID, ordinal),
+	)
+	require.NoError(t, err)
+	assert.Empty(t, matches)
+}
+
 func TestResumeSession(t *testing.T) {
 	te := setup(t)
 
@@ -70,6 +117,23 @@ func TestResumeSession(t *testing.T) {
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.False(t, resp.Launched, "expected launched=false for command_only")
 		assert.NotEmpty(t, resp.Command)
+		assertSamePath(t, "cwd", resp.Cwd, projectDir)
+	})
+
+	t.Run("fork session command only", func(t *testing.T) {
+		w := te.post(t,
+			"/api/v1/sessions/sess-1/resume",
+			`{"command_only":true,"fork_session":true}`,
+		)
+		assertStatus(t, w, http.StatusOK)
+		var resp struct {
+			Launched bool   `json:"launched"`
+			Command  string `json:"command"`
+			Cwd      string `json:"cwd"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.False(t, resp.Launched, "expected launched=false for command_only")
+		assert.Contains(t, resp.Command, "claude --resume sess-1 --fork-session")
 		assertSamePath(t, "cwd", resp.Cwd, projectDir)
 	})
 
@@ -219,6 +283,155 @@ func TestResumeSession(t *testing.T) {
 			`{"command_only":true}`,
 		)
 		assertStatus(t, w, http.StatusBadRequest)
+	})
+
+	t.Run("message point command only", func(t *testing.T) {
+		removeMessagePointPrompts(t, "sess-2", 1)
+
+		te.seedSession(t, "sess-2", projectDir, 3, func(s *db.Session) {
+			s.Agent = "claude"
+		})
+		te.seedMessages(t, "sess-2", 3)
+
+		w := te.post(t,
+			"/api/v1/sessions/sess-2/resume",
+			`{"command_only":true,"from_ordinal":1,"fork_session":true}`,
+		)
+		assertStatus(t, w, http.StatusOK)
+		var resp struct {
+			Launched bool   `json:"launched"`
+			Command  string `json:"command"`
+			Cwd      string `json:"cwd"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.False(t, resp.Launched, "expected launched=false for command_only")
+		assert.Contains(t, resp.Command, "claude <")
+		assert.Contains(t, resp.Command, "< '")
+		assert.Contains(t, resp.Command, "rm -f --")
+		assertSamePath(t, "cwd", resp.Cwd, projectDir)
+
+		idx := strings.LastIndex(resp.Command, "< ")
+		require.Greater(t, idx, 0, "command = %q", resp.Command)
+		extracted := strings.TrimSpace(resp.Command[idx+2:])
+		if semi := strings.Index(extracted, ";"); semi >= 0 {
+			extracted = strings.TrimSpace(extracted[:semi])
+		}
+		extracted = strings.TrimPrefix(extracted, "'")
+		extracted = strings.TrimSuffix(extracted, "'")
+		promptPath := findSingleMessagePointPrompt(t, "sess-2", 1)
+		assertSamePath(t, "prompt file", extracted, promptPath)
+
+		data, err := os.ReadFile(extracted)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = os.Remove(extracted) })
+		text := string(data)
+		assert.Contains(t, text, "Message A")
+		assert.Contains(t, text, "Message B")
+		assert.NotContains(t, text, "Message C")
+	})
+
+	t.Run("message point rejects unsupported agents", func(t *testing.T) {
+		removeMessagePointPrompts(t, "codex-desk", 0)
+
+		te.seedSession(t, "codex-desk", t.TempDir(), 3, func(s *db.Session) {
+			s.Agent = "codex"
+		})
+		w := te.post(t,
+			"/api/v1/sessions/codex-desk/resume",
+			`{"command_only":true,"from_ordinal":0,"fork_session":true}`,
+		)
+		assertStatus(t, w, http.StatusBadRequest)
+		assertNoMessagePointPrompts(t, "codex-desk", 0)
+	})
+
+	t.Run("message point requires fork session", func(t *testing.T) {
+		removeMessagePointPrompts(t, "sess-need-fork", 0)
+
+		te.seedSession(t, "sess-need-fork", projectDir, 3, func(s *db.Session) {
+			s.Agent = "claude"
+		})
+		te.seedMessages(t, "sess-need-fork", 3)
+
+		w := te.post(t,
+			"/api/v1/sessions/sess-need-fork/resume",
+			`{"command_only":true,"from_ordinal":0}`,
+		)
+		assertStatus(t, w, http.StatusBadRequest)
+		assertNoMessagePointPrompts(t, "sess-need-fork", 0)
+	})
+
+	t.Run("message point rejects opener id", func(t *testing.T) {
+		removeMessagePointPrompts(t, "sess-opener", 0)
+
+		te.seedSession(t, "sess-opener", projectDir, 3, func(s *db.Session) {
+			s.Agent = "claude"
+		})
+		te.seedMessages(t, "sess-opener", 3)
+
+		w := te.post(t,
+			"/api/v1/sessions/sess-opener/resume",
+			`{"command_only":true,"from_ordinal":0,"fork_session":true,"opener_id":"claude-desktop"}`,
+		)
+		assertStatus(t, w, http.StatusBadRequest)
+		assertNoMessagePointPrompts(t, "sess-opener", 0)
+	})
+
+	t.Run("message point rejects missing ordinals", func(t *testing.T) {
+		removeMessagePointPrompts(t, "sess-3", 99)
+
+		te.seedSession(t, "sess-3", projectDir, 3, func(s *db.Session) {
+			s.Agent = "claude"
+		})
+		te.seedMessages(t, "sess-3", 3)
+		w := te.post(t,
+			"/api/v1/sessions/sess-3/resume",
+			`{"command_only":true,"from_ordinal":99,"fork_session":true}`,
+		)
+		assertStatus(t, w, http.StatusNotFound)
+		assertNoMessagePointPrompts(t, "sess-3", 99)
+	})
+
+	t.Run("message point remote launch rejects before writing prompt", func(t *testing.T) {
+		te := setupPGMode(t)
+		removeMessagePointPrompts(t, "sess-remote", 1)
+
+		te.seedSession(t, "sess-remote", projectDir, 3, func(s *db.Session) {
+			s.Agent = "claude"
+		})
+		te.seedMessages(t, "sess-remote", 3)
+
+		w := te.post(t,
+			"/api/v1/sessions/sess-remote/resume",
+			`{"from_ordinal":1,"fork_session":true}`,
+		)
+		assertStatus(t, w, http.StatusNotImplemented)
+		assertNoMessagePointPrompts(t, "sess-remote", 1)
+	})
+
+	t.Run("message point command only works in read only mode", func(t *testing.T) {
+		te := setupPGMode(t)
+		removeMessagePointPrompts(t, "sess-remote-copy", 1)
+
+		te.seedSession(t, "sess-remote-copy", projectDir, 3, func(s *db.Session) {
+			s.Agent = "claude"
+		})
+		te.seedMessages(t, "sess-remote-copy", 3)
+
+		w := te.post(t,
+			"/api/v1/sessions/sess-remote-copy/resume",
+			`{"command_only":true,"from_ordinal":1,"fork_session":true}`,
+		)
+		assertStatus(t, w, http.StatusOK)
+		var resp struct {
+			Launched bool   `json:"launched"`
+			Command  string `json:"command"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		assert.False(t, resp.Launched)
+		assert.Contains(t, resp.Command, "claude <")
+		assert.Contains(t, resp.Command, "rm -f --")
+		promptPath := findSingleMessagePointPrompt(t, "sess-remote-copy", 1)
+		t.Cleanup(func() { _ = os.Remove(promptPath) })
 	})
 
 	t.Run("deleted session rejected", func(t *testing.T) {
