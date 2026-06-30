@@ -279,6 +279,102 @@ func TestDirectBackend_Stats_CursorAttributionIgnoredForProjectFilters(
 	}
 }
 
+func TestDirectBackend_Stats_CursorAttributionLoadedForAllAgentFilter(
+	t *testing.T,
+) {
+	svc, env := newDirectTestSvc(t)
+	now := time.Now().UTC()
+	startedAt := now.Add(-45 * time.Minute).Format(time.RFC3339)
+	dbtest.SeedSession(t, env.db, "cursor-1", "proj",
+		func(s *db.Session) {
+			s.Agent = "cursor"
+			s.MessageCount = 2
+			s.UserMessageCount = 1
+			s.StartedAt = &startedAt
+		},
+	)
+	dbtest.SeedSession(t, env.db, "codex-1", "proj",
+		func(s *db.Session) {
+			s.Agent = "codex"
+			s.MessageCount = 2
+			s.UserMessageCount = 1
+			s.StartedAt = &startedAt
+		},
+	)
+
+	path := seedCursorAttributionDB(t,
+		[]cursorCommitFixture{{
+			commitHash:         "c1",
+			scoredAt:           now.Add(-30 * time.Minute).UnixMilli(),
+			commitDate:         formatCursorCommitDate(now.Add(-30 * time.Minute)),
+			linesAdded:         9,
+			tabLinesAdded:      4,
+			composerLinesAdded: 2,
+			humanLinesAdded:    3,
+		}},
+		nil,
+	)
+	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB", path)
+
+	stats, err := svc.Stats(context.Background(), service.StatsFilter{
+		Since: "28d",
+		Agent: "all",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, stats)
+	assert.Equal(t, 2, stats.Totals.SessionsAll)
+	require.NotNil(t, stats.CursorAttribution)
+	assert.Equal(t, int64(1), stats.CursorAttribution.ScoredCommits)
+}
+
+func TestDirectBackend_Stats_CursorAttributionIgnoredWhenAllMixedWithNonCursorFilter(
+	t *testing.T,
+) {
+	svc, env := newDirectTestSvc(t)
+	now := time.Now().UTC()
+	startedAt := now.Add(-45 * time.Minute).Format(time.RFC3339)
+	dbtest.SeedSession(t, env.db, "cursor-1", "proj",
+		func(s *db.Session) {
+			s.Agent = "cursor"
+			s.MessageCount = 2
+			s.UserMessageCount = 1
+			s.StartedAt = &startedAt
+		},
+	)
+	dbtest.SeedSession(t, env.db, "codex-1", "proj",
+		func(s *db.Session) {
+			s.Agent = "codex"
+			s.MessageCount = 2
+			s.UserMessageCount = 1
+			s.StartedAt = &startedAt
+		},
+	)
+
+	path := seedCursorAttributionDB(t,
+		[]cursorCommitFixture{{
+			commitHash:         "c1",
+			scoredAt:           now.Add(-30 * time.Minute).UnixMilli(),
+			commitDate:         formatCursorCommitDate(now.Add(-30 * time.Minute)),
+			linesAdded:         9,
+			tabLinesAdded:      4,
+			composerLinesAdded: 2,
+			humanLinesAdded:    3,
+		}},
+		nil,
+	)
+	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB", path)
+
+	stats, err := svc.Stats(context.Background(), service.StatsFilter{
+		Since: "28d",
+		Agent: "all, codex",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, stats)
+	assert.Equal(t, 1, stats.Totals.SessionsAll)
+	assert.Equal(t, "codex", stats.Filters.Agent)
+	assert.Nil(t, stats.CursorAttribution)
+}
+
 func TestDirectBackend_Get_HealthBreakdownIncludesHeuristics(
 	t *testing.T,
 ) {

@@ -703,6 +703,7 @@ func (b *directBackend) Stats(
 	if b.local == nil {
 		return nil, db.ErrReadOnly
 	}
+	f.Agent = normalizeStatsAgentFilter(f.Agent)
 	stats, err := b.local.GetSessionStats(ctx, db.StatsFilter{
 		Since:                 f.Since,
 		Until:                 f.Until,
@@ -740,11 +741,24 @@ func attachCursorAttribution(stats *SessionStats, f StatsFilter) {
 	stats.CursorAttribution = mapCursorAttribution(attr)
 }
 
+func normalizeStatsAgentFilter(raw string) string {
+	parts := strings.Split(raw, ",")
+	filtered := parts[:0]
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" || part == "all" {
+			continue
+		}
+		filtered = append(filtered, part)
+	}
+	return strings.Join(filtered, ",")
+}
+
 func shouldLoadCursorAttribution(f StatsFilter) bool {
 	if len(f.IncludeProjects) > 0 || len(f.ExcludeProjects) > 0 {
 		return false
 	}
-	agents := strings.Split(f.Agent, ",")
+	agents := strings.Split(normalizeStatsAgentFilter(f.Agent), ",")
 	seen := 0
 	for _, agent := range agents {
 		agent = strings.TrimSpace(agent)
@@ -752,7 +766,7 @@ func shouldLoadCursorAttribution(f StatsFilter) bool {
 			continue
 		}
 		seen++
-		if agent == "cursor" || agent == "all" {
+		if agent == "cursor" {
 			return true
 		}
 	}
