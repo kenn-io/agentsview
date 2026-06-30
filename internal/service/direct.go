@@ -703,7 +703,7 @@ func (b *directBackend) Stats(
 	if b.local == nil {
 		return nil, db.ErrReadOnly
 	}
-	return b.local.GetSessionStats(ctx, db.StatsFilter{
+	stats, err := b.local.GetSessionStats(ctx, db.StatsFilter{
 		Since:                 f.Since,
 		Until:                 f.Until,
 		Agent:                 f.Agent,
@@ -714,4 +714,85 @@ func (b *directBackend) Stats(
 		IncludeGitHubOutcomes: f.IncludeGitHubOutcomes,
 		GHToken:               f.GHToken,
 	})
+	if err != nil {
+		return nil, err
+	}
+	attachCursorAttribution(stats, f)
+	return stats, nil
+}
+
+func attachCursorAttribution(stats *SessionStats, f StatsFilter) {
+	if stats == nil || !shouldLoadCursorAttribution(f) {
+		return
+	}
+	from, err := time.Parse(time.RFC3339, stats.Window.Since)
+	if err != nil {
+		return
+	}
+	to, err := time.Parse(time.RFC3339, stats.Window.Until)
+	if err != nil {
+		return
+	}
+	attr, err := parser.LoadCursorAttribution(from, to)
+	if err != nil || attr == nil {
+		return
+	}
+	stats.CursorAttribution = mapCursorAttribution(attr)
+}
+
+func shouldLoadCursorAttribution(f StatsFilter) bool {
+	agents := strings.Split(f.Agent, ",")
+	seen := 0
+	for _, agent := range agents {
+		agent = strings.TrimSpace(agent)
+		if agent == "" {
+			continue
+		}
+		seen++
+		if agent == "cursor" || agent == "all" {
+			return true
+		}
+	}
+	return seen == 0
+}
+
+func mapCursorAttribution(
+	attr *parser.CursorAttribution,
+) *db.CursorAttribution {
+	if attr == nil {
+		return nil
+	}
+	out := &db.CursorAttribution{
+		ScoredCommits:        attr.ScoredCommits,
+		LinesAdded:           attr.LinesAdded,
+		LinesDeleted:         attr.LinesDeleted,
+		TabLinesAdded:        attr.TabLinesAdded,
+		TabLinesDeleted:      attr.TabLinesDeleted,
+		ComposerLinesAdded:   attr.ComposerLinesAdded,
+		ComposerLinesDeleted: attr.ComposerLinesDeleted,
+		HumanLinesAdded:      attr.HumanLinesAdded,
+		HumanLinesDeleted:    attr.HumanLinesDeleted,
+		BlankLinesAdded:      attr.BlankLinesAdded,
+		BlankLinesDeleted:    attr.BlankLinesDeleted,
+		AIAuthoredPct:        attr.AIAuthoredPct,
+	}
+	if len(attr.ConversationCounts) == 0 {
+		return out
+	}
+	out.ConversationCounts = make(
+		[]db.CursorConversationCount,
+		0,
+		len(attr.ConversationCounts),
+	)
+	for _, entry := range attr.ConversationCounts {
+		out.ConversationCounts = append(
+			out.ConversationCounts,
+			db.CursorConversationCount{
+				Model: entry.Model,
+				Mode:  entry.Mode,
+				Count: entry.Count,
+			},
+		)
+	}
+	return out
 }

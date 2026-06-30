@@ -173,6 +173,9 @@ func printStatsHuman(w io.Writer, stats *service.SessionStats) error {
 	if stats.Totals.SessionsAll == 0 {
 		fmt.Fprintln(ew, "Totals")
 		fmt.Fprintln(ew, "  (no sessions in window)")
+		if stats.CursorAttribution != nil {
+			printCursorAttribution(ew, stats.CursorAttribution)
+		}
 		return ew.err
 	}
 	printTotals(ew, stats)
@@ -194,6 +197,9 @@ func printStatsHuman(w io.Writer, stats *service.SessionStats) error {
 	}
 	if stats.Outcomes != nil {
 		printOutcomes(ew, stats.Outcomes)
+	}
+	if stats.CursorAttribution != nil {
+		printCursorAttribution(ew, stats.CursorAttribution)
 	}
 	return ew.err
 }
@@ -448,6 +454,42 @@ func printOutcomes(w io.Writer, o *db.StatsOutcomes) {
 		fmtFloat(o.CompactionsPerSession))
 	fmt.Fprintf(w, "  Avg edit churn:      %s\n",
 		fmtFloat(o.AvgEditChurn))
+	fmt.Fprintln(w)
+}
+
+func printCursorAttribution(w io.Writer, c *db.CursorAttribution) {
+	fmt.Fprintln(w, "Cursor attribution")
+	fmt.Fprintf(w, "  Scored commits:      %s\n",
+		fmtInt64(c.ScoredCommits))
+	fmt.Fprintf(w, "  Lines added/deleted: %s / %s\n",
+		fmtInt64(c.LinesAdded), fmtInt64(c.LinesDeleted))
+	fmt.Fprintf(w, "  Tab lines:           +%s / -%s\n",
+		fmtInt64(c.TabLinesAdded), fmtInt64(c.TabLinesDeleted))
+	fmt.Fprintf(w, "  Composer lines:      +%s / -%s\n",
+		fmtInt64(c.ComposerLinesAdded), fmtInt64(c.ComposerLinesDeleted))
+	fmt.Fprintf(w, "  Human lines:         +%s / -%s\n",
+		fmtInt64(c.HumanLinesAdded), fmtInt64(c.HumanLinesDeleted))
+	fmt.Fprintf(w, "  Blank lines:         +%s / -%s\n",
+		fmtInt64(c.BlankLinesAdded), fmtInt64(c.BlankLinesDeleted))
+	fmt.Fprintf(w, "  AI-authored pct:     %.1f%%\n",
+		c.AIAuthoredPct*100)
+	if len(c.ConversationCounts) > 0 {
+		fmt.Fprintln(w, "  Conversation counts")
+		tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+		for _, entry := range c.ConversationCounts {
+			model := entry.Model
+			if model == "" {
+				model = "(empty)"
+			}
+			mode := entry.Mode
+			if mode == "" {
+				mode = "(empty)"
+			}
+			fmt.Fprintf(tw, "    %s / %s\t%s\n",
+				model, mode, fmtInt64(entry.Count))
+		}
+		tw.Flush()
+	}
 	fmt.Fprintln(w)
 }
 

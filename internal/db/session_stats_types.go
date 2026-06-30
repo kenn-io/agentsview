@@ -13,22 +13,23 @@ package db
 // reporter's agentsview_version, not schema_version, for non-bump
 // changes.
 type SessionStats struct {
-	SchemaVersion  int                  `json:"schema_version"`
-	Window         StatsWindow          `json:"window"`
-	Filters        StatsFilters         `json:"filters"`
-	Totals         StatsTotals          `json:"totals"`
-	Distributions  StatsDistributions   `json:"distributions"`
-	Archetypes     StatsArchetypes      `json:"archetypes"`
-	Velocity       StatsVelocity        `json:"velocity"`
-	ToolMix        StatsToolMix         `json:"tool_mix"`
-	ModelMix       StatsModelMix        `json:"model_mix"`
-	Adoption       *StatsAdoption       `json:"adoption,omitempty"`
-	AgentPortfolio StatsAgentPortfolio  `json:"agent_portfolio"`
-	CacheEconomics *StatsCacheEconomics `json:"cache_economics,omitempty"`
-	Temporal       StatsTemporal        `json:"temporal"`
-	OutcomeStats   *StatsOutcomeStats   `json:"outcome_stats,omitempty"`
-	Outcomes       *StatsOutcomes       `json:"outcomes,omitempty"`
-	GeneratedAt    string               `json:"generated_at"`
+	SchemaVersion     int                  `json:"schema_version"`
+	Window            StatsWindow          `json:"window"`
+	Filters           StatsFilters         `json:"filters"`
+	Totals            StatsTotals          `json:"totals"`
+	Distributions     StatsDistributions   `json:"distributions"`
+	Archetypes        StatsArchetypes      `json:"archetypes"`
+	Velocity          StatsVelocity        `json:"velocity"`
+	ToolMix           StatsToolMix         `json:"tool_mix"`
+	ModelMix          StatsModelMix        `json:"model_mix"`
+	Adoption          *StatsAdoption       `json:"adoption,omitempty"`
+	AgentPortfolio    StatsAgentPortfolio  `json:"agent_portfolio"`
+	CacheEconomics    *StatsCacheEconomics `json:"cache_economics,omitempty"`
+	Temporal          StatsTemporal        `json:"temporal"`
+	OutcomeStats      *StatsOutcomeStats   `json:"outcome_stats,omitempty"`
+	Outcomes          *StatsOutcomes       `json:"outcomes,omitempty"`
+	CursorAttribution *CursorAttribution   `json:"cursor_attribution,omitempty"`
+	GeneratedAt       string               `json:"generated_at"`
 }
 
 type StatsWindow struct {
@@ -189,4 +190,26 @@ type StatsOutcomes struct {
 	ToolRetryRate         float64        `json:"tool_retry_rate"`
 	CompactionsPerSession float64        `json:"compactions_per_session"`
 	AvgEditChurn          float64        `json:"avg_edit_churn"`
+}
+
+type CursorAttribution struct {
+	ScoredCommits        int64                     `json:"scored_commits"`
+	LinesAdded           int64                     `json:"lines_added"`
+	LinesDeleted         int64                     `json:"lines_deleted"`
+	TabLinesAdded        int64                     `json:"tab_lines_added"`
+	TabLinesDeleted      int64                     `json:"tab_lines_deleted"`
+	ComposerLinesAdded   int64                     `json:"composer_lines_added"`
+	ComposerLinesDeleted int64                     `json:"composer_lines_deleted"`
+	HumanLinesAdded      int64                     `json:"human_lines_added"`
+	HumanLinesDeleted    int64                     `json:"human_lines_deleted"`
+	BlankLinesAdded      int64                     `json:"blank_lines_added"`
+	BlankLinesDeleted    int64                     `json:"blank_lines_deleted"`
+	AIAuthoredPct        float64                   `json:"ai_authored_pct"`
+	ConversationCounts   []CursorConversationCount `json:"conversation_counts,omitempty"`
+}
+
+type CursorConversationCount struct {
+	Model string `json:"model"`
+	Mode  string `json:"mode"`
+	Count int64  `json:"count"`
 }

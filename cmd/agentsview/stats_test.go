@@ -218,6 +218,24 @@ func TestPrintStatsHuman_Populated(t *testing.T) {
 			CompactionsPerSession: 0.1,
 			AvgEditChurn:          1.2,
 		},
+		CursorAttribution: &db.CursorAttribution{
+			ScoredCommits:        2,
+			LinesAdded:           30,
+			LinesDeleted:         12,
+			TabLinesAdded:        8,
+			TabLinesDeleted:      2,
+			ComposerLinesAdded:   3,
+			ComposerLinesDeleted: 1,
+			HumanLinesAdded:      19,
+			HumanLinesDeleted:    9,
+			BlankLinesAdded:      4,
+			BlankLinesDeleted:    0,
+			AIAuthoredPct:        11.0 / 30.0,
+			ConversationCounts: []db.CursorConversationCount{
+				{Model: "claude-3.5-sonnet", Mode: "composer", Count: 2},
+				{Model: "claude-3.5-sonnet", Mode: "tab", Count: 1},
+			},
+		},
 		GeneratedAt: "2026-04-18T00:00:00Z",
 	}
 
@@ -240,11 +258,14 @@ func TestPrintStatsHuman_Populated(t *testing.T) {
 		"Temporal",
 		"Outcome stats",
 		"Outcomes",
+		"Cursor attribution",
 	)
 
 	// Thousands separators must be applied to large counts.
 	assert.Contains(t, out, "11,905",
 		"expected thousands separator for 11,905")
+	assert.Contains(t, out, "claude-3.5-sonnet / composer",
+		"expected cursor conversation row")
 }
 
 // TestPrintStatsHuman_Empty guards the zero-session short
@@ -269,7 +290,8 @@ func TestPrintStatsHuman_Empty(t *testing.T) {
 		"expected zero-session placeholder in output")
 	// No optional section headers should appear.
 	assertContainsNone(t, out,
-		"Archetypes", "Velocity", "Cache economics", "Outcomes")
+		"Archetypes", "Velocity", "Cache economics", "Outcomes",
+		"Cursor attribution")
 }
 
 // TestFmtInt64 covers the thousands-separator helper.
