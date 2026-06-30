@@ -329,6 +329,10 @@ func duckLiteral(s string) string {
 // RedactQuackURL removes common token query fields from a URL before logging.
 func RedactQuackURL(rawURL string) string {
 	transport := strings.TrimPrefix(rawURL, "quack:")
+	if !strings.HasPrefix(transport, "http://") &&
+		!strings.HasPrefix(transport, "https://") {
+		return "quack:" + redactNativeQuackTransport(transport)
+	}
 	u, err := neturl.Parse(transport)
 	if err != nil {
 		return "quack:<redacted>"
@@ -341,7 +345,29 @@ func RedactQuackURL(rawURL string) string {
 		}
 	}
 	u.RawQuery = q.Encode()
+	u.Fragment = ""
 	return "quack:" + u.String()
+}
+
+func redactNativeQuackTransport(transport string) string {
+	transport = strings.SplitN(transport, "#", 2)[0]
+	base, rawQuery, hasQuery := strings.Cut(transport, "?")
+	if at := strings.LastIndex(base, "@"); at >= 0 {
+		base = base[at+1:]
+	}
+	if !hasQuery {
+		return base
+	}
+	q, err := neturl.ParseQuery(rawQuery)
+	if err != nil {
+		return base
+	}
+	for key := range q {
+		if isSecretURLQueryKey(key) {
+			q.Set(key, "<redacted>")
+		}
+	}
+	return base + "?" + q.Encode()
 }
 
 // ValidateQuackServeURI rejects accidental public Quack exposure unless the

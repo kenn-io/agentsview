@@ -77,6 +77,17 @@ describe("i18n locale selection", () => {
     expect(Object.keys(zhCN).sort()).toEqual(Object.keys(en).sort());
   });
 
+  it("points auth recovery at pre-auth token sources", () => {
+    expect(en.app_auth_description).toContain("~/.agentsview/config.toml");
+    expect(en.app_auth_description).toContain("AGENTSVIEW_AUTH_TOKEN");
+    expect(en.app_auth_description).not.toContain("server's console");
+    expect(en.app_auth_description).not.toContain("settings page");
+    expect(zhCN.app_auth_description).toContain("~/.agentsview/config.toml");
+    expect(zhCN.app_auth_description).toContain("AGENTSVIEW_AUTH_TOKEN");
+    expect(zhCN.app_auth_description).not.toContain("服务器控制台");
+    expect(zhCN.app_auth_description).not.toContain("设置页");
+  });
+
   it("renders generated Paraglide messages for each supported locale", () => {
     runtime.setLocale("en", { reload: false });
     expect(m.nav_sessions()).toBe("Sessions");

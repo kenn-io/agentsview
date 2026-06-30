@@ -100,6 +100,20 @@ func TestRedactQuackURL(t *testing.T) {
 	assert.Contains(t, got, "x=1")
 }
 
+func TestRedactQuackURLNativeTransport(t *testing.T) {
+	got := RedactQuackURL(
+		"quack:account:credential0@duck.example.com:9494/db?token=credential1&x=1#credential2",
+	)
+
+	assert.NotContains(t, got, "account")
+	assert.NotContains(t, got, "credential0")
+	assert.NotContains(t, got, "credential1")
+	assert.NotContains(t, got, "credential2")
+	assert.Contains(t, got, "token=%3Credacted%3E")
+	assert.Contains(t, got, "x=1")
+	assert.NotContains(t, got, "#")
+}
+
 func TestSyncStateTargetForConfigScopesRemoteURLWithoutSecrets(t *testing.T) {
 	base := config.DuckDBConfig{
 		URL:   "quack:https://user:secret@duck.example.com/db?token=secret&x=1#frag",

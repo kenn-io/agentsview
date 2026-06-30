@@ -1,6 +1,6 @@
 {
   "app_auth_title": "需要身份验证",
-  "app_auth_description": "此服务器需要 auth token 才能访问。请输入服务器控制台或设置页显示的 token。",
+  "app_auth_description": "此服务器需要 auth token 才能访问。请输入 ~/.agentsview/config.toml 中的 auth_token 或 AGENTSVIEW_AUTH_TOKEN。",
   "app_auth_placeholder": "粘贴 auth token",
   "app_auth_authenticate": "验证",
   "app_auth_disconnect_reset": "断开并重置",

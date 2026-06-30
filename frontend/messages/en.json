@@ -1,6 +1,6 @@
 {
   "app_auth_title": "Authentication Required",
-  "app_auth_description": "This server requires an auth token to access. Enter the token shown on the server's console or settings page.",
+  "app_auth_description": "This server requires an auth token to access. Enter the auth_token from ~/.agentsview/config.toml or AGENTSVIEW_AUTH_TOKEN.",
   "app_auth_placeholder": "Paste auth token",
   "app_auth_authenticate": "Authenticate",
   "app_auth_disconnect_reset": "Disconnect and reset",
