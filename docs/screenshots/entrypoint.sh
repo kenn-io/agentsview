@@ -52,6 +52,13 @@ machine_name = "dev-laptop"
 allow_insecure = true
 TOML
 
+# AGENTSVIEW_NO_DAEMON=1 keeps this an in-process push. Since 0.35.0
+# (#909) an archive-write command like `pg push` otherwise auto-starts a
+# detached background daemon on the default port 8080. That daemon
+# outlives the push, so the later `serve --port 8090` finds it and reports
+# "already running" instead of binding 8090, leaving the SQLite server
+# down. Direct in-process work avoids spawning the competing daemon.
+AGENTSVIEW_NO_DAEMON=1 \
 AGENTSVIEW_DATA_DIR="$DATA_DIR" \
 CLAUDE_PROJECTS_DIR="$EMPTY_DIR" \
 CODEX_SESSIONS_DIR="$EMPTY_DIR" \
@@ -82,6 +89,9 @@ echo "PG data ready (two machines)."
 # on the embedded fallback catalog instead of reaching the
 # network from inside the container.
 echo "Seeding usage pricing..."
+# Same in-process requirement as the pg push above: never auto-start the
+# background daemon that would later block `serve --port 8090`.
+AGENTSVIEW_NO_DAEMON=1 \
 AGENTSVIEW_DATA_DIR="$DATA_DIR" \
 CLAUDE_PROJECTS_DIR="$EMPTY_DIR" \
 CODEX_SESSIONS_DIR="$EMPTY_DIR" \
