@@ -242,6 +242,40 @@ func scanPGSession(
 	return s, nil
 }
 
+func (s *Store) FindSessionIDsByPartial(
+	ctx context.Context, partial string, limit int,
+) ([]string, error) {
+	if partial == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+	rows, err := s.pg.QueryContext(ctx,
+		`SELECT id FROM sessions
+		 WHERE id LIKE $1 AND deleted_at IS NULL
+		 ORDER BY COALESCE(ended_at, started_at, created_at) DESC
+		 LIMIT $2`,
+		"%"+partial+"%", limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"finding sessions by partial id %q: %w",
+			partial, err,
+		)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // scanPGSessionRows iterates rows and scans each.
 func scanPGSessionRows(
 	rows *sql.Rows,

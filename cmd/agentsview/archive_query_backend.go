@@ -73,7 +73,9 @@ func resolveArchiveQueryBackendWithConfig(
 			case policy.ReadOnlyDaemon == archiveQueryRejectReadOnlyDaemon:
 				return nil, nil, readOnlySessionUsageDaemonError(tr.URL)
 			case policy.ReadOnlyDaemon == archiveQuerySkipReadOnlyDaemon:
-				return nil, nil, readOnlySessionUsageDaemonError(tr.URL)
+				return nil, nil, readOnlyArchiveQueryDaemonError(
+					tr.URL, policy.DirectReadOnlyAction,
+				)
 			default:
 				return nil, nil, fmt.Errorf(
 					"unknown read-only daemon policy %d",
@@ -125,6 +127,16 @@ func directReadOnlyArchiveQueryError(
 		action = "query directly"
 	}
 	return fmt.Errorf("%s; refusing to %s", reason, action)
+}
+
+func readOnlyArchiveQueryDaemonError(url string, action string) error {
+	if action == "" {
+		action = "query directly"
+	}
+	return fmt.Errorf(
+		"daemon at %s is read-only; stop it to %s",
+		url, action,
+	)
 }
 
 func openArchiveQueryDB(

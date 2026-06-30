@@ -72,6 +72,23 @@ func (b *httpBackend) Get(
 	return &out, nil
 }
 
+func (b *httpBackend) FindSessionIDsByPartial(
+	ctx context.Context, partial string, limit int,
+) ([]string, error) {
+	q := url.Values{}
+	q.Set("partial", partial)
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	var out struct {
+		IDs []string `json:"ids"`
+	}
+	if err := b.getJSON(ctx, "/api/v1/sessions/resolve-id?"+q.Encode(), &out); err != nil {
+		return nil, err
+	}
+	return out.IDs, nil
+}
+
 func (b *httpBackend) List(
 	ctx context.Context, f ListFilter,
 ) (*SessionList, error) {

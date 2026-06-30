@@ -146,6 +146,40 @@ func scanSessionRows(rows *sql.Rows) ([]db.Session, error) {
 	return sessions, rows.Err()
 }
 
+func (s *Store) FindSessionIDsByPartial(
+	ctx context.Context, partial string, limit int,
+) ([]string, error) {
+	if partial == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 5
+	}
+	rows, err := s.duck.QueryContext(ctx,
+		`SELECT id FROM sessions
+		 WHERE id LIKE ? AND deleted_at IS NULL
+		 ORDER BY COALESCE(ended_at, started_at, created_at) DESC
+		 LIMIT ?`,
+		"%"+partial+"%", limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"finding sessions by partial id %q: %w",
+			partial, err,
+		)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func formatDBTime(v any) string {
 	switch t := v.(type) {
 	case nil:

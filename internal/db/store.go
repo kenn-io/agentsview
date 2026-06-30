@@ -30,6 +30,7 @@ type Store interface {
 	GetSidebarSessionIndex(ctx context.Context, f SessionFilter) (SidebarSessionIndex, error)
 	GetSession(ctx context.Context, id string) (*Session, error)
 	GetSessionFull(ctx context.Context, id string) (*Session, error)
+	FindSessionIDsByPartial(ctx context.Context, partial string, limit int) ([]string, error)
 	GetChildSessions(ctx context.Context, parentID string) ([]Session, error)
 
 	// Messages.

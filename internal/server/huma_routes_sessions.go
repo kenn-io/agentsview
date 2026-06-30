@@ -26,6 +26,7 @@ func (s *Server) registerSessionRoutes() {
 
 	get(s, group, "/sessions", "List sessions", s.humaListSessions)
 	get(s, group, "/sessions/sidebar-index", "List sidebar sessions", s.humaSidebarSessionIndex)
+	get(s, group, "/sessions/resolve-id", "Resolve session IDs", s.humaResolveSessionIDs)
 	get(s, group, "/sessions/{id}", "Get session", s.humaGetSession)
 	get(s, group, "/sessions/{id}/messages", "List session messages", s.humaGetMessages)
 	get(s, group, "/sessions/{id}/tool-calls", "List session tool calls", s.humaToolCalls)
@@ -93,6 +94,15 @@ type messageListInput struct {
 type searchSessionInput struct {
 	ID    string `path:"id" required:"true" doc:"Session ID"`
 	Query string `query:"q" doc:"Search query"`
+}
+
+type resolveSessionIDsInput struct {
+	Partial string `query:"partial" required:"true" doc:"Session ID substring"`
+	Limit   int    `query:"limit" minimum:"0" maximum:"1000" doc:"Maximum number of matching IDs"`
+}
+
+type resolveSessionIDsResponse struct {
+	IDs []string `json:"ids"`
 }
 
 func (in *sessionFilterInput) listFilter() (service.ListFilter, error) {
@@ -204,6 +214,25 @@ func (s *Server) humaSidebarSessionIndex(
 		return nil, serverError(err)
 	}
 	return &jsonOutput[db.SidebarSessionIndex]{Body: index}, nil
+}
+
+func (s *Server) humaResolveSessionIDs(
+	ctx context.Context,
+	in *resolveSessionIDsInput,
+) (*jsonOutput[resolveSessionIDsResponse], error) {
+	ids, err := s.sessions.FindSessionIDsByPartial(ctx, in.Partial, in.Limit)
+	if err != nil {
+		if handled := handleHumaContextError(err); handled != nil {
+			return nil, handled
+		}
+		if handled := handleHumaReadOnly(err); handled != nil {
+			return nil, handled
+		}
+		return nil, serverError(err)
+	}
+	return &jsonOutput[resolveSessionIDsResponse]{
+		Body: resolveSessionIDsResponse{IDs: ids},
+	}, nil
 }
 
 func (s *Server) humaGetSession(

@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"net/http"
 	"path/filepath"
 	"testing"
 
@@ -295,6 +297,56 @@ func TestResolveHealthSessionIDExactMatchCanBeOutsideHealthList(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "child-session", got)
+}
+
+func TestResolveHealthSessionIDPartialMatchCanBeOutsideHealthList(t *testing.T) {
+	dir := t.TempDir()
+	database, err := db.Open(filepath.Join(dir, "test.db"))
+	require.NoError(t, err, "open db")
+	t.Cleanup(func() { database.Close() })
+
+	for i := range maxHealthLimit {
+		started := fmt.Sprintf("2026-04-15T12:%02d:%02dZ", i/60, i%60)
+		require.NoError(t, database.UpsertSession(db.Session{
+			ID:      fmt.Sprintf("newer-session-%03d", i),
+			Project: "p", Machine: "m", Agent: "claude",
+			MessageCount: 1, StartedAt: &started,
+		}), "upsert newer session")
+	}
+	oldStarted := "2020-01-01T00:00:00Z"
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "old-partial-target", Project: "p", Machine: "m",
+		Agent: "codex", MessageCount: 1, StartedAt: &oldStarted,
+	}), "upsert old partial target")
+
+	got, err := resolveHealthSessionID(
+		context.Background(),
+		service.NewDirectBackend(database, nil),
+		"partial-target",
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, "old-partial-target", got)
+}
+
+func TestResolveHealthSessionIDUsesDaemonPartialLookup(t *testing.T) {
+	var gotQuery string
+	ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
+		"/api/v1/sessions/resolve-id": func(w http.ResponseWriter, r *http.Request) {
+			gotQuery = r.URL.Query().Get("partial")
+			writeJSONResponse(w, `{"ids":["old-partial-target"]}`)
+		},
+	})
+
+	got, err := resolveHealthSessionID(
+		context.Background(),
+		service.NewHTTPBackend(ts.URL, "", false),
+		"partial-target",
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, "partial-target", gotQuery)
+	assert.Equal(t, "old-partial-target", got)
 }
 
 func TestResolveHealthSessionIDExactMatchStillChecksShortIDAmbiguity(

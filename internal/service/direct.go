@@ -62,6 +62,12 @@ func (b *directBackend) Get(
 	return buildSessionDetail(s), nil
 }
 
+func (b *directBackend) FindSessionIDsByPartial(
+	ctx context.Context, partial string, limit int,
+) ([]string, error) {
+	return b.db.FindSessionIDsByPartial(ctx, partial, limit)
+}
+
 // buildSessionDetail wraps a db.Session with its computed health
 // breakdown. The same shape is returned by GET /api/v1/sessions/{id}.
 func buildSessionDetail(s *db.Session) *SessionDetail {

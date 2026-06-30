@@ -51,6 +51,7 @@ func TestResolveArchiveQueryBackendRefusesReadOnlyDaemonForFreshQueries(t *testi
 	}
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "read-only")
+	assert.NotContains(t, err.Error(), "--pg")
 	assert.False(t, called)
 }
 

@@ -123,15 +123,11 @@ func resolveHealthSessionID(
 	if err != nil {
 		return "", err
 	}
-	page, err := svc.List(ctx, healthListFilter(maxHealthLimit))
+	matches, err := svc.FindSessionIDsByPartial(
+		ctx, partial, resolveLookupLimit,
+	)
 	if err != nil {
 		return "", err
-	}
-	matches := make([]string, 0, len(page.Sessions))
-	for _, sess := range page.Sessions {
-		if strings.Contains(sess.ID, partial) {
-			matches = append(matches, sess.ID)
-		}
 	}
 	if exactDetail != nil {
 		for _, m := range matches {
