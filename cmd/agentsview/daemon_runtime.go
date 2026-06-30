@@ -23,7 +23,7 @@ import (
 
 const (
 	daemonService          = "agentsview"
-	daemonAPIVersion       = 1
+	daemonAPIVersion       = 2
 	runtimeReadOnly        = "read_only"
 	runtimeHost            = "host"
 	runtimePort            = "port"

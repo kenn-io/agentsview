@@ -138,7 +138,7 @@ func New(
 		opt(s)
 	}
 	if s.version.APIVersion == 0 {
-		s.version.APIVersion = 1
+		s.version.APIVersion = 2
 	}
 	if s.version.DataVersion == 0 {
 		s.version.DataVersion = db.CurrentDataVersion()

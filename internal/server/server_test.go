@@ -4130,7 +4130,7 @@ func TestGetVersion(t *testing.T) {
 		)
 	}
 	assert.True(t, resp.InsightGenerationAvailable)
-	assert.Equal(t, 1, resp.APIVersion)
+	assert.Equal(t, 2, resp.APIVersion)
 	assert.Equal(t, db.CurrentDataVersion(), resp.DataVersion)
 }
 
@@ -4144,7 +4144,7 @@ func TestGetVersion_Default(t *testing.T) {
 	if resp.Version != "" {
 		t.Errorf("version = %q, want empty", resp.Version)
 	}
-	assert.Equal(t, 1, resp.APIVersion)
+	assert.Equal(t, 2, resp.APIVersion)
 	assert.Equal(t, db.CurrentDataVersion(), resp.DataVersion)
 }
 
