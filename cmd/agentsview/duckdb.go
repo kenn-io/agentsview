@@ -55,7 +55,9 @@ func runDuckDBPush(cfg DuckDBPushConfig) {
 		fatal("duckdb push: %v", err)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(
+		context.Background(), duckDBPushShutdownSignals()...,
+	)
 	defer stop()
 
 	backend, cleanup, err := resolveArchiveWriteBackend(ctx, appCfg)
@@ -94,6 +96,10 @@ func runDuckDBPush(cfg DuckDBPushConfig) {
 	if result.Errors > 0 {
 		fatal("duckdb push: %d session(s) failed", result.Errors)
 	}
+}
+
+func duckDBPushShutdownSignals() []os.Signal {
+	return []os.Signal{os.Interrupt, syscall.SIGTERM}
 }
 
 func runDuckDBStatus() {

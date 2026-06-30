@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -64,6 +66,13 @@ func TestResolveDuckDBPushProjects(t *testing.T) {
 			}, cfg)
 		},
 	)
+}
+
+func TestDuckDBPushShutdownSignalsIncludeSIGTERM(t *testing.T) {
+	signals := duckDBPushShutdownSignals()
+
+	assert.Contains(t, signals, os.Interrupt)
+	assert.Contains(t, signals, syscall.SIGTERM)
 }
 
 func TestArchiveWriteBackendDuckDBPushPostsToDaemon(t *testing.T) {
