@@ -41,6 +41,10 @@ func runServeStatus(cfg config.Config) {
 		}
 		return
 	}
+	if IsDaemonStarting(cfg.DataDir) {
+		fmt.Println("agentsview is starting up.")
+		return
+	}
 	if readOnly != nil {
 		for _, line := range serveStatusLines(readOnly) {
 			fmt.Println(line)
@@ -53,10 +57,6 @@ func runServeStatus(cfg config.Config) {
 				"to health checks.\n",
 			recs[0].PID,
 		)
-		return
-	}
-	if IsDaemonStarting(cfg.DataDir) {
-		fmt.Println("agentsview is starting up.")
 		return
 	}
 	fmt.Println("No agentsview server is running.")

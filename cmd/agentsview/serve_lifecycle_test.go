@@ -127,6 +127,24 @@ func TestRunServeStatusPrefersIncompatibleWritableOverReadOnly(t *testing.T) {
 	assert.NotContains(t, out, "mode:    read-only")
 }
 
+func TestRunServeStatusPrefersStartingOverReadOnly(t *testing.T) {
+	dir := runtimeTestDir(t)
+	readOnlyHost, readOnlyPort := testPingServer(t)
+	_, err := WriteDaemonRuntime(
+		dir, readOnlyHost, readOnlyPort, "1.0.0", true,
+	)
+	require.NoError(t, err)
+	MarkDaemonStarting(dir)
+	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+
+	out := captureStdout(t, func() {
+		runServeStatus(config.Config{DataDir: dir})
+	})
+
+	assert.Contains(t, out, "agentsview is starting up.")
+	assert.NotContains(t, out, "mode:    read-only")
+}
+
 func newPingDaemonWithPID(t *testing.T, pid int) testDaemonEndpoint {
 	t.Helper()
 	ts := httptest.NewServer(daemon.NewPingHandler(daemon.PingHandlerOptions{

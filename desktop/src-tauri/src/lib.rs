@@ -33,6 +33,7 @@ const READY_POLL_INTERVAL: Duration = Duration::from_millis(125);
 const STATUS_POLL_MAX_INTERVAL: Duration = Duration::from_secs(1);
 const STATUS_PROBE_TIMEOUT: Duration = Duration::from_millis(1250);
 const STATUS_PROBE_FAILURE_NOTICE_AFTER: u32 = 10;
+const STATUS_PROBE_FAILURE_FAIL_AFTER: u32 = 30;
 const LOGIN_SHELL_ENV_TIMEOUT: Duration = Duration::from_secs(3);
 const UPDATE_SIDECAR_STOP_TIMEOUT: Duration = Duration::from_secs(10);
 const DATA_VERSION_TOO_NEW_EXIT_CODE: i32 = 3;
@@ -1536,6 +1537,22 @@ fn poll_background_status_after_launcher_exit(window: WebviewWindow, generation:
                 }
                 BackendStatusProbe::Unavailable => {
                     failed_status_probes += 1;
+                    if status_probe_failures_should_stop(failed_status_probes) {
+                        spawn_startup_error_render(
+                            window,
+                            "AgentsView backend status is unavailable",
+                            "The background launcher exited, but the desktop app could not confirm backend status.",
+                            startup_failure_detail(
+                                format!(
+                                    "`agentsview serve status` failed, timed out, or returned no usable output after {failed_status_probes} attempts."
+                                )
+                                .as_str(),
+                                "",
+                            )
+                            .as_str(),
+                        );
+                        return;
+                    }
                     if failed_status_probes == STATUS_PROBE_FAILURE_NOTICE_AFTER {
                         let _ = window.eval(
                             "window.__setStatus(\
@@ -1574,6 +1591,10 @@ fn background_status_poll_interval(failed_status_probes: u32) -> Duration {
     READY_POLL_INTERVAL
         .saturating_mul(multiplier)
         .min(STATUS_POLL_MAX_INTERVAL)
+}
+
+fn status_probe_failures_should_stop(failed_status_probes: u32) -> bool {
+    failed_status_probes >= STATUS_PROBE_FAILURE_FAIL_AFTER
 }
 
 async fn probe_backend_status(handle: &AppHandle) -> BackendStatusProbe {
@@ -2836,6 +2857,17 @@ mod tests {
             background_status_poll_interval(u32::MAX),
             Duration::from_secs(1)
         );
+    }
+
+    #[test]
+    fn status_probe_failures_stop_after_bounded_threshold() {
+        assert!(!status_probe_failures_should_stop(
+            STATUS_PROBE_FAILURE_FAIL_AFTER - 1
+        ));
+        assert!(status_probe_failures_should_stop(
+            STATUS_PROBE_FAILURE_FAIL_AFTER
+        ));
+        assert!(status_probe_failures_should_stop(u32::MAX));
     }
 
     #[test]

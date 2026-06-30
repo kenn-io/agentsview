@@ -198,13 +198,29 @@ desktop-windows-installer:
 	cd desktop && npm ci && npm run tauri:build:windows
 	mkdir -p $(DESKTOP_DIST_DIR)/windows
 	rm -f $(DESKTOP_DIST_DIR)/windows/*.exe
-	@exe_count=$$(find desktop/src-tauri/target/release/bundle/nsis \
-		-maxdepth 1 -type f -name '*.exe' | wc -l | tr -d ' '); \
-	if [ "$$exe_count" -eq 0 ]; then \
-		echo "error: no Windows installer (.exe) found in bundle output" >&2; \
+	@bundle_dir="desktop/src-tauri/target/release/bundle/nsis"; \
+	target_triple="$${TAURI_ENV_TARGET_TRIPLE:-$${CARGO_BUILD_TARGET:-}}"; \
+	if [ -z "$$target_triple" ] && command -v rustc >/dev/null 2>&1; then \
+		host_triple=$$(rustc -vV | awk '/^host: /{print $$2}'); \
+		if [ "$$host_triple" = "aarch64-pc-windows-msvc" ]; then \
+			target_triple="$$host_triple"; \
+		fi; \
+	fi; \
+	if [ -n "$$target_triple" ] && \
+		[ -d "desktop/src-tauri/target/$$target_triple/release/bundle/nsis" ]; then \
+		bundle_dir="desktop/src-tauri/target/$$target_triple/release/bundle/nsis"; \
+	fi; \
+	if [ ! -d "$$bundle_dir" ]; then \
+		echo "error: Windows bundle output directory not found: $$bundle_dir" >&2; \
 		exit 1; \
 	fi; \
-	find desktop/src-tauri/target/release/bundle/nsis \
+	exe_count=$$(find "$$bundle_dir" \
+		-maxdepth 1 -type f -name '*.exe' | wc -l | tr -d ' '); \
+	if [ "$$exe_count" -eq 0 ]; then \
+		echo "error: no Windows installer (.exe) found in $$bundle_dir" >&2; \
+		exit 1; \
+	fi; \
+	find "$$bundle_dir" \
 		-maxdepth 1 -type f -name '*.exe' \
 		-exec cp {} $(DESKTOP_DIST_DIR)/windows/ \;; \
 	echo "Copied $$exe_count Windows installer(s) to $(DESKTOP_DIST_DIR)/windows/"

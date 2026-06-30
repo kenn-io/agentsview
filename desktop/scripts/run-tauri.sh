@@ -23,7 +23,7 @@ detect_host_triple() {
   echo "$host"
 }
 
-resolve_target_triple() {
+resolve_build_target_arg() {
   if [ -n "${TAURI_ENV_TARGET_TRIPLE:-}" ]; then
     echo "$TAURI_ENV_TARGET_TRIPLE"
     return 0
@@ -32,7 +32,16 @@ resolve_target_triple() {
     echo "$CARGO_BUILD_TARGET"
     return 0
   fi
-  detect_host_triple
+
+  # Tauri currently defaults to x64 on native Windows ARM64 shells in some
+  # Node/npm environments, while prepare-sidecar builds the ARM64 sidecar from
+  # rustc's host triple. Pin only that host so the app and sidecar match,
+  # leaving other native builds on Tauri's default target/release layout.
+  local host
+  host="$(detect_host_triple)"
+  if [ "$host" = "aarch64-pc-windows-msvc" ]; then
+    echo "$host"
+  fi
 }
 
 has_explicit_target() {
@@ -54,10 +63,12 @@ trap cleanup EXIT INT TERM
 
 args=("$@")
 if [ "${args[0]:-}" = "build" ] && ! has_explicit_target "$@"; then
-  target_triple="$(resolve_target_triple)"
-  export TAURI_ENV_TARGET_TRIPLE="$target_triple"
-  args=("build" "--target" "$target_triple" "${args[@]:1}")
-  echo "Building Tauri target: $target_triple"
+  target_triple="$(resolve_build_target_arg)"
+  if [ -n "$target_triple" ]; then
+    export TAURI_ENV_TARGET_TRIPLE="$target_triple"
+    args=("build" "--target" "$target_triple" "${args[@]:1}")
+    echo "Building Tauri target: $target_triple"
+  fi
 fi
 
 tauri "${args[@]}"
