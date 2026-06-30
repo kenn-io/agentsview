@@ -200,7 +200,7 @@ func ensureTransportContext(
 			if err := guardDaemonAutoStartConfig(*cfg); err != nil {
 				return transport{}, err
 			}
-			cfg.NoSync = tr.Runtime.NoSync
+			cfg.NoSync = cfg.NoSync || tr.Runtime.NoSync
 			rt, err := startBackgroundServeForTransport(
 				ctx, cfg, waitTimeout,
 			)
@@ -220,7 +220,7 @@ func ensureTransportContext(
 			if err := guardDaemonAutoStartConfig(*cfg); err != nil {
 				return transport{}, err
 			}
-			cfg.NoSync = rt.NoSync
+			cfg.NoSync = cfg.NoSync || rt.NoSync
 			rt, err := startBackgroundServeForTransport(
 				ctx, cfg, waitTimeout,
 			)

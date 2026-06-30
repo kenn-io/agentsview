@@ -270,6 +270,33 @@ func TestResolveHealthSessionIDMatchesDisplayedShortID(t *testing.T) {
 	assert.Equal(t, "abcdef1234567890", got)
 }
 
+func TestResolveHealthSessionIDExactMatchCanBeOutsideHealthList(t *testing.T) {
+	dir := t.TempDir()
+	database, err := db.Open(filepath.Join(dir, "test.db"))
+	require.NoError(t, err, "open db")
+	t.Cleanup(func() { database.Close() })
+
+	parentID := "parent-session"
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: parentID, Project: "p", Machine: "m", Agent: "claude",
+		MessageCount: 2, UserMessageCount: 2,
+	}), "upsert parent session")
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "child-session", Project: "p", Machine: "m", Agent: "codex",
+		MessageCount: 2, UserMessageCount: 2,
+		ParentSessionID: &parentID, RelationshipType: "subagent",
+	}), "upsert child session")
+
+	got, err := resolveHealthSessionID(
+		context.Background(),
+		service.NewDirectBackend(database, nil),
+		"child-session",
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, "child-session", got)
+}
+
 func TestResolveSessionID(t *testing.T) {
 	dir := t.TempDir()
 	database, err := db.Open(filepath.Join(dir, "test.db"))

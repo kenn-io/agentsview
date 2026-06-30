@@ -119,6 +119,13 @@ func resolveHealthSessionID(
 	if partial == "" {
 		return "", nil
 	}
+	detail, err := svc.Get(ctx, partial)
+	if err != nil {
+		return "", err
+	}
+	if detail != nil {
+		return partial, nil
+	}
 	page, err := svc.List(ctx, healthListFilter(maxHealthLimit))
 	if err != nil {
 		return "", err
