@@ -55,6 +55,11 @@ rm -f "$OUTPUT"
     if [ -z "$trimmed" ]; then
       continue
     fi
+    # Skip comment lines so a terms file can document itself. Without this a
+    # bare '#' becomes the pattern '%#%', which matches almost every session.
+    case "$trimmed" in
+      '#'*) continue ;;
+    esac
 
     pattern="$(printf '%s' "$trimmed" | tr '[:upper:]' '[:lower:]')"
     pattern="${pattern//\\/\\\\}"

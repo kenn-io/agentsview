@@ -131,3 +131,90 @@ func TestExtractDBBlocksTermsAcrossCoveredColumns(t *testing.T) {
 			"message content, git_branch, tool file_path, and skill_name must "+
 			"all be dropped")
 }
+
+// TestExtractDBTermsFileSkipsCommentsAndBlanks pins the terms-file format:
+// comment lines (leading '#') and blank lines are ignored. A bare '#' must
+// not become the pattern '%#%', which would match nearly every transcript and
+// drop almost all sessions.
+func TestExtractDBTermsFileSkipsCommentsAndBlanks(t *testing.T) {
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		t.Skip("sqlite3 CLI not available")
+	}
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+
+	tempDir := t.TempDir()
+	srcPath := filepath.Join(tempDir, "source.db")
+	d, err := avdb.Open(srcPath)
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+
+	conn, err := sql.Open("sqlite3", srcPath)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	const ts = "2026-06-01T12:00:00.000Z"
+	seed := func(id, content string) {
+		_, err := conn.Exec(
+			`INSERT INTO sessions (id, project, created_at, started_at)
+			 VALUES (?, 'agentsview', ?, '')`,
+			id, ts,
+		)
+		require.NoError(t, err)
+		_, err = conn.Exec(
+			`INSERT INTO messages (session_id, ordinal, role, content)
+			 VALUES (?, 0, 'user', ?)`,
+			id, content,
+		)
+		require.NoError(t, err)
+	}
+	// Clean session whose transcript contains '#' (a markdown heading). If a
+	// bare '#' comment line leaked through as the pattern '%#%', this session
+	// would be dropped.
+	seed("s_keep", "## Heading\nordinary notes, nothing blocked here")
+	// Session referencing the one real blocked term.
+	seed("s_drop", "spent the day on ghosthub internals")
+
+	_, err = conn.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	termsFile := filepath.Join(tempDir, "terms.txt")
+	require.NoError(t, os.WriteFile(termsFile, []byte(
+		"# a comment line, ignored\n"+
+			"#\n"+
+			"   # indented comment, ignored\n"+
+			"\n"+
+			"ghosthub\n",
+	), 0o600))
+
+	outPath := filepath.Join(tempDir, "out.db")
+	scriptPath := filepath.Join("..", "docs", "screenshots", "extract-db.sh")
+	cmd := exec.Command("bash", scriptPath, srcPath, outPath)
+	cmd.Env = append(
+		os.Environ(),
+		"SCREENSHOT_BLOCKED_TERMS=",
+		"SCREENSHOT_BLOCKED_TERMS_FILE="+termsFile,
+	)
+	out, err := cmd.CombinedOutput()
+	require.NoErrorf(t, err, "extract-db.sh failed: %s", out)
+
+	outConn, err := sql.Open("sqlite3", outPath)
+	require.NoError(t, err)
+	defer outConn.Close()
+	rows, err := outConn.Query("SELECT id FROM sessions ORDER BY id")
+	require.NoError(t, err)
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		require.NoError(t, rows.Scan(&id))
+		ids = append(ids, id)
+	}
+	require.NoError(t, rows.Err())
+
+	assert.Equal(t, []string{"s_keep"}, ids,
+		"comment and blank lines must be skipped: the clean session containing "+
+			"'#' must survive and only the real term may drop a session")
+}
