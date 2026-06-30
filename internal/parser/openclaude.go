@@ -350,6 +350,8 @@ func parseOpenClaudeSession(
 		userCount   int
 		sessionID   = strings.TrimSuffix(filepath.Base(path), ".jsonl")
 		sessionName string
+		customTitle string
+		aiTitle     string
 		cwd         string
 		gitBranch   string
 	)
@@ -362,6 +364,19 @@ func parseOpenClaudeSession(
 		lastLine = line
 		if !gjson.Valid(line) {
 			malformedLines++
+			continue
+		}
+
+		switch strings.TrimSpace(gjson.Get(line, "type").Str) {
+		case "custom-title":
+			if v := strings.TrimSpace(gjson.Get(line, "customTitle").Str); v != "" {
+				customTitle = v
+			}
+			continue
+		case "ai-title":
+			if v := strings.TrimSpace(gjson.Get(line, "aiTitle").Str); v != "" {
+				aiTitle = v
+			}
 			continue
 		}
 
@@ -502,6 +517,12 @@ func parseOpenClaudeSession(
 		return nil, nil, nil
 	}
 
+	if customTitle != "" {
+		sessionName = customTitle
+	} else if aiTitle != "" {
+		sessionName = aiTitle
+	}
+
 	project = firstNonEmptyJSONLString(project, GetProjectName(filepath.Base(filepath.Dir(path))))
 	if project == "" {
 		project = "unknown"
@@ -528,7 +549,24 @@ func parseOpenClaudeSession(
 			Mtime: info.ModTime().UnixNano(),
 		},
 	}
+	accumulateMessageTokenUsage(sess, messages)
+	sess.TerminationStatus = Classify(
+		openClaudeSemanticMessages(messages),
+		lastAssistantStopReason(openClaudeSemanticMessages(messages)),
+		isTruncated,
+	)
 	return sess, messages, nil
+}
+
+func openClaudeSemanticMessages(messages []ParsedMessage) []ParsedMessage {
+	filtered := make([]ParsedMessage, 0, len(messages))
+	for _, msg := range messages {
+		if msg.IsSystem {
+			continue
+		}
+		filtered = append(filtered, msg)
+	}
+	return filtered
 }
 
 func openClaudeSessionID(id string) string {

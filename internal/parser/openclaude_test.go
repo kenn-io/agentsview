@@ -23,6 +23,7 @@ func TestOpenClaudeProviderCapabilities(t *testing.T) {
 	require.True(t, ok, "AgentOpenClaude missing from Registry")
 	assert.True(t, def.FileBased)
 	assert.Equal(t, "OPENCLAUDE_PROJECTS_DIR", def.EnvVar)
+	assert.Equal(t, "OPENCLAUDE_CONFIG_DIR", def.DefaultRootEnvVar)
 	assert.Equal(t, "openclaude_project_dirs", def.ConfigKey)
 	assert.Equal(t, []string{".openclaude/projects"}, def.DefaultDirs)
 	assert.Equal(t, "openclaude:", def.IDPrefix)
@@ -55,11 +56,28 @@ func TestOpenClaudeDiscoverParseAndFindSource(t *testing.T) {
 			"uuid":       "u2",
 			"parentUuid": "u1",
 			"message": map[string]any{
-				"role": "assistant",
+				"role":        "assistant",
+				"stop_reason": "end_turn",
+				"usage": map[string]any{
+					"input_tokens":                12,
+					"cache_creation_input_tokens": 3,
+					"cache_read_input_tokens":     2,
+					"output_tokens":               7,
+				},
 				"content": []map[string]any{
 					{"type": "text", "text": "reply"},
 				},
 			},
+		}),
+		buildMetadataLine(map[string]any{
+			"type":      "ai-title",
+			"timestamp": tsEarlyS1,
+			"aiTitle":   "AI title",
+		}),
+		buildMetadataLine(map[string]any{
+			"type":        "custom-title",
+			"timestamp":   tsEarlyS5,
+			"customTitle": "User title",
 		}),
 		buildMetadataLine(map[string]any{
 			"type":       "system",
@@ -110,12 +128,23 @@ func TestOpenClaudeDiscoverParseAndFindSource(t *testing.T) {
 	assert.Equal(t, "openclaude:session-123", result.Session.ID)
 	assert.Equal(t, "my_project", result.Session.Project)
 	assert.Equal(t, "hello from openclaude", result.Session.FirstMessage)
+	assert.Equal(t, "User title", result.Session.SessionName)
 	assert.Equal(t, 1, result.Session.UserMessageCount)
+	assert.Equal(t, TerminationAwaitingUser, result.Session.TerminationStatus)
+	assert.Equal(t, 7, result.Session.TotalOutputTokens)
+	assert.Equal(t, 17, result.Session.PeakContextTokens)
+	assert.True(t, result.Session.HasTotalOutputTokens)
+	assert.True(t, result.Session.HasPeakContextTokens)
 	assert.Equal(t, "hash-123", result.Session.File.Hash)
 	require.Len(t, result.Messages, 3)
 
 	assert.Equal(t, RoleUser, result.Messages[0].Role)
 	assert.Equal(t, RoleAssistant, result.Messages[1].Role)
+	assert.Equal(t, "end_turn", result.Messages[1].StopReason)
+	assert.Equal(t, 7, result.Messages[1].OutputTokens)
+	assert.Equal(t, 17, result.Messages[1].ContextTokens)
+	assert.True(t, result.Messages[1].HasOutputTokens)
+	assert.True(t, result.Messages[1].HasContextTokens)
 	assert.Equal(t, RoleAssistant, result.Messages[2].Role)
 	assert.True(t, result.Messages[2].IsSystem)
 	assert.True(t, result.Messages[2].IsCompactBoundary)
