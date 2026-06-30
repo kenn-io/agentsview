@@ -69,6 +69,11 @@ for platform in "${expected_platforms[@]}"; do
         exit 1
     fi
 
+    if ! jq -e --arg platform "$platform" '.platforms[$platform].url | select(type == "string" and length > 0)' >/dev/null <<<"$manifest"; then
+        error "updater manifest missing url for $platform"
+        exit 1
+    fi
+
     if ! jq -e --arg platform "$platform" '.platforms[$platform].signature | type == "string" and length > 0' >/dev/null <<<"$manifest"; then
         error "updater manifest missing signature for $platform"
         exit 1

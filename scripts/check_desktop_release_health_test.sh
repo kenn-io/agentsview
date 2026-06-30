@@ -127,14 +127,19 @@ cat >"$tmp/latest.json" <<'EOF'
 {
   "version": "0.34.5",
   "platforms": {
-    "darwin-aarch64": {},
+    "darwin-aarch64": {
+      "url": "https://github.com/kenn-io/agentsview/releases/download/updater/AgentsView_aarch64.app.tar.gz"
+    },
     "darwin-x86_64": {
+      "url": "https://github.com/kenn-io/agentsview/releases/download/updater/AgentsView_x86_64.app.tar.gz",
       "signature": "YWJjCg=="
     },
     "windows-x86_64": {
+      "url": "https://github.com/kenn-io/agentsview/releases/download/updater/AgentsView_0.34.5_x64-setup.nsis.zip",
       "signature": "YWJjCg=="
     },
     "linux-x86_64": {
+      "url": "https://github.com/kenn-io/agentsview/releases/download/updater/AgentsView_0.34.5_amd64.AppImage.tar.gz",
       "signature": "YWJjCg=="
     }
   }
@@ -143,6 +148,61 @@ EOF
 assert_failure_contains \
     "manifest with missing updater signature fails" \
     "updater manifest missing signature for darwin-aarch64" \
+    run_checker "$tmp" "v0.34.5"
+
+cat >"$tmp/latest.json" <<'EOF'
+{
+  "version": "0.34.5",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "YWJjCg=="
+    },
+    "darwin-x86_64": {
+      "url": "https://github.com/kenn-io/agentsview/releases/download/updater/AgentsView_x86_64.app.tar.gz",
+      "signature": "YWJjCg=="
+    },
+    "windows-x86_64": {
+      "url": "https://github.com/kenn-io/agentsview/releases/download/updater/AgentsView_0.34.5_x64-setup.nsis.zip",
+      "signature": "YWJjCg=="
+    },
+    "linux-x86_64": {
+      "url": "https://github.com/kenn-io/agentsview/releases/download/updater/AgentsView_0.34.5_amd64.AppImage.tar.gz",
+      "signature": "YWJjCg=="
+    }
+  }
+}
+EOF
+assert_failure_contains \
+    "manifest with missing updater URL fails" \
+    "updater manifest missing url for darwin-aarch64" \
+    run_checker "$tmp" "v0.34.5"
+
+cat >"$tmp/latest.json" <<'EOF'
+{
+  "version": "0.34.5",
+  "platforms": {
+    "darwin-aarch64": {
+      "url": "",
+      "signature": "YWJjCg=="
+    },
+    "darwin-x86_64": {
+      "url": "https://github.com/kenn-io/agentsview/releases/download/updater/AgentsView_x86_64.app.tar.gz",
+      "signature": "YWJjCg=="
+    },
+    "windows-x86_64": {
+      "url": "https://github.com/kenn-io/agentsview/releases/download/updater/AgentsView_0.34.5_x64-setup.nsis.zip",
+      "signature": "YWJjCg=="
+    },
+    "linux-x86_64": {
+      "url": "https://github.com/kenn-io/agentsview/releases/download/updater/AgentsView_0.34.5_amd64.AppImage.tar.gz",
+      "signature": "YWJjCg=="
+    }
+  }
+}
+EOF
+assert_failure_contains \
+    "manifest with empty updater URL fails" \
+    "updater manifest missing url for darwin-aarch64" \
     run_checker "$tmp" "v0.34.5"
 
 cat >"$tmp/latest.json" <<'EOF'
@@ -168,12 +228,15 @@ cat >"$tmp/latest.json" <<'EOF'
   "version": "0.34.5",
   "platforms": {
     "darwin-aarch64": {
+      "url": "https://github.com/kenn-io/agentsview/releases/download/updater/AgentsView_aarch64.app.tar.gz",
       "signature": "YWJjCg=="
     },
     "darwin-x86_64": {
+      "url": "https://github.com/kenn-io/agentsview/releases/download/updater/AgentsView_x86_64.app.tar.gz",
       "signature": "YWJjCg=="
     },
     "windows-x86_64": {
+      "url": "https://github.com/kenn-io/agentsview/releases/download/updater/AgentsView_0.34.5_x64-setup.nsis.zip",
       "signature": "YWJjCg=="
     },
     "linux-x86_64": {
