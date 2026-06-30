@@ -416,7 +416,7 @@ func newHealthCommand() *cobra.Command {
 		Args:         cobra.MaximumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			cfg.JSON = outputFormat(cmd) == "json"
-			runHealth(args, cfg)
+			runHealth(cmd, args, cfg)
 		},
 	}
 	registerFormatFlags(cmd.Flags())

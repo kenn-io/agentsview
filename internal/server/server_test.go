@@ -549,6 +549,8 @@ func TestOpenAPIEndpointDocumentsExistingAPIRoutes(t *testing.T) {
 	assert.Contains(t, spec.Paths["/api/v1/sessions/{id}/messages"], "get")
 	require.Contains(t, spec.Paths, "/api/v1/settings")
 	assert.Contains(t, spec.Paths["/api/v1/settings"], "put")
+	require.Contains(t, spec.Paths, "/api/v1/session-stats")
+	assert.Contains(t, spec.Paths["/api/v1/session-stats"], "get")
 }
 
 func TestOpenAPIEndpointKeepsUsageSummaryContract(t *testing.T) {

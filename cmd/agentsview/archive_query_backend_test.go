@@ -13,18 +13,25 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-func TestResolveArchiveQueryBackendNoSyncDoesNotAutostartDaemon(t *testing.T) {
+func TestResolveArchiveQueryBackendNoSyncStartsNoSyncDaemon(t *testing.T) {
 	testDataDir(t)
-	forbidStartBackgroundServeForTransport(t,
-		"--no-sync archive query must not auto-start a daemon")
+	var started bool
+	stubStartBackgroundServeForTransport(t, func(
+		_ context.Context, cfg *config.Config, _ time.Duration,
+	) (*DaemonRuntime, error) {
+		started = true
+		assert.True(t, cfg.NoSync)
+		return &DaemonRuntime{Host: "127.0.0.1", Port: 12345}, nil
+	})
 
 	backend := resolveTestArchiveQueryBackend(t, defaultArchiveQueryPolicy(
 		func(p *archiveQueryPolicy) { p.NoSync = true },
 	))
-	assert.IsType(t, localArchiveQueryBackend{}, backend)
+	assert.True(t, started)
+	assert.IsType(t, daemonArchiveQueryBackend{}, backend)
 }
 
-func TestResolveArchiveQueryBackendSkipsReadOnlyDaemonForFreshQueries(t *testing.T) {
+func TestResolveArchiveQueryBackendRefusesReadOnlyDaemonForFreshQueries(t *testing.T) {
 	dataDir := testDataDir(t)
 
 	var called bool
@@ -36,8 +43,14 @@ func TestResolveArchiveQueryBackendSkipsReadOnlyDaemonForFreshQueries(t *testing
 	})
 	registerTestRuntime(t, dataDir, ts.URL, true)
 
-	backend := resolveTestArchiveQueryBackend(t, defaultArchiveQueryPolicy(nil))
-	assert.IsType(t, localArchiveQueryBackend{}, backend)
+	_, cleanup, err := resolveArchiveQueryBackend(
+		context.Background(), defaultArchiveQueryPolicy(nil),
+	)
+	if cleanup != nil {
+		t.Cleanup(cleanup)
+	}
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read-only")
 	assert.False(t, called)
 }
 

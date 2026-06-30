@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/update"
 )
 
@@ -14,12 +15,24 @@ func (s *Server) registerMetadataRoutes() {
 	get(s, group, "/machines", "List machines", s.humaListMachines)
 	get(s, group, "/agents", "List agents", s.humaListAgents)
 	get(s, group, "/stats", "Get stats", s.humaGetStats)
+	get(s, group, "/session-stats", "Get session stats", s.humaGetSessionStats)
 	get(s, group, "/version", "Get server version", s.humaGetVersion)
 	get(s, group, "/update/check", "Check for updates", s.humaCheckUpdate)
 }
 
 type statsInput struct {
 	BoolIncludeInput
+}
+
+type sessionStatsInput struct {
+	Since                 string   `query:"since" doc:"Start of window"`
+	Until                 string   `query:"until" doc:"End of window"`
+	Agent                 string   `query:"agent" doc:"Filter by agent"`
+	IncludeProjects       []string `query:"include_project" doc:"Restrict to these projects"`
+	ExcludeProjects       []string `query:"exclude_project" doc:"Exclude these projects"`
+	Timezone              string   `query:"timezone" doc:"IANA timezone name"`
+	IncludeGitOutcomes    bool     `query:"include_git_outcomes" doc:"Include git-derived outcome stats"`
+	IncludeGitHubOutcomes bool     `query:"include_github_outcomes" doc:"Include GitHub PR outcome stats"`
 }
 
 type projectsResponse struct {
@@ -43,6 +56,32 @@ func (s *Server) humaGetStats(
 		return nil, serverError(err)
 	}
 	return &jsonOutput[db.Stats]{Body: stats}, nil
+}
+
+func (s *Server) humaGetSessionStats(
+	ctx context.Context,
+	in *sessionStatsInput,
+) (*jsonOutput[*service.SessionStats], error) {
+	stats, err := s.sessions.Stats(ctx, service.StatsFilter{
+		Since:                 in.Since,
+		Until:                 in.Until,
+		Agent:                 in.Agent,
+		IncludeProjects:       in.IncludeProjects,
+		ExcludeProjects:       in.ExcludeProjects,
+		Timezone:              in.Timezone,
+		IncludeGitOutcomes:    in.IncludeGitOutcomes,
+		IncludeGitHubOutcomes: in.IncludeGitHubOutcomes,
+	})
+	if err != nil {
+		if handled := handleHumaContextError(err); handled != nil {
+			return nil, handled
+		}
+		if handled := handleHumaReadOnly(err); handled != nil {
+			return nil, handled
+		}
+		return nil, internalError("session stats error", err)
+	}
+	return &jsonOutput[*service.SessionStats]{Body: stats}, nil
 }
 
 func (s *Server) humaListProjects(

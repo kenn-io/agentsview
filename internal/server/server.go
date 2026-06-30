@@ -100,13 +100,13 @@ func New(
 		log.Fatalf("embedded frontend not found: %v", err)
 	}
 
-	// Pick the backend that matches the concrete store. A local
-	// *db.DB plus a sync engine yields a full read/write backend;
-	// any other combination (PG reader, or local DB with nil
-	// engine when used by a read-only daemon) yields a read-only
-	// backend whose Sync returns db.ErrReadOnly.
+	// Pick the backend that matches the concrete store. A local *db.DB uses
+	// the direct backend even when the sync engine is nil; direct Sync already
+	// returns db.ErrReadOnly without an engine, while read APIs such as stats
+	// still need the local handle. Non-SQLite stores use the generic read-only
+	// backend.
 	var sessions service.SessionService
-	if local, ok := database.(*db.DB); ok && engine != nil {
+	if local, ok := database.(*db.DB); ok {
 		sessions = service.NewDirectBackend(local, engine)
 	} else {
 		sessions = service.NewReadOnlyBackend(database)

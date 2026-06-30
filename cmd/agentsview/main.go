@@ -464,15 +464,19 @@ func schemaUpgradeHint(err error) error {
 	if !db.IsSchemaUpgradeRequired(err) {
 		return err
 	}
-	return fmt.Errorf(
-		"%w\n\n"+
-			"This database was written by an older agentsview version and "+
-			"must be upgraded before it can be read. The upgrade runs when a "+
-			"writable daemon starts, so restart the daemon to let it run:\n"+
-			"  - desktop app: quit and relaunch it\n"+
-			"  - CLI: run `agentsview serve --replace`",
-		err,
-	)
+	return appendDaemonRestartUpgradeHint(err)
+}
+
+func appendDaemonRestartUpgradeHint(err error) error {
+	return fmt.Errorf("%w\n\n%s", err, daemonRestartUpgradeHint())
+}
+
+func daemonRestartUpgradeHint() string {
+	return "This database was written by an older agentsview version and " +
+		"must be upgraded before it can be read. The upgrade runs when a " +
+		"writable daemon starts, so restart the daemon to let it run:\n" +
+		"  - desktop app: quit and relaunch it\n" +
+		"  - CLI: run `agentsview serve --replace`"
 }
 
 func openWriteDB(

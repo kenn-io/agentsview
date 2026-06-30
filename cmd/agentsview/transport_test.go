@@ -271,7 +271,21 @@ func TestDetectTransport_IncompatibleDaemonSetsDirectReason(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, transportDirect, tr.Mode)
 	assert.True(t, tr.DirectReadOnly)
+	assert.True(t, tr.DirectIncompatible)
 	assert.Contains(t, tr.DirectReason, "API version")
+}
+
+func TestDetectTransport_LocalDaemonUnreachableDoesNotSetDirectIncompatible(t *testing.T) {
+	t.Parallel()
+	dir := daemonRuntimeDir(t)
+	writeUnreachableDaemonRuntime(t, dir, false)
+
+	tr, err := detectTransport(dir, "", 100*time.Millisecond)
+	require.NoError(t, err)
+	assert.Equal(t, transportDirect, tr.Mode)
+	assert.True(t, tr.DirectReadOnly)
+	assert.False(t, tr.DirectIncompatible)
+	assert.Equal(t, errLocalDaemonUnreachable.Error(), tr.DirectReason)
 }
 
 // TestDetectTransport_DaemonStarting simulates a server that's
@@ -292,14 +306,50 @@ func TestDetectTransport_DaemonStarting_FallsBackToDirect(t *testing.T) {
 	assert.Equal(t, transportDirect, tr.Mode)
 }
 
-func TestEnsureTransport_ReadIntentDoesNotStartDaemon(t *testing.T) {
+func TestEnsureTransport_ReadIntentStartsDaemon(t *testing.T) {
 	dir := daemonRuntimeDir(t)
 	cfg := config.Config{DataDir: dir}
-	forbidStartBackgroundServeForTransport(t, "read intent must not start a daemon")
+	var started bool
+	stubStartBackgroundServeForTransport(t, func(
+		_ context.Context, gotCfg *config.Config, wait time.Duration,
+	) (*DaemonRuntime, error) {
+		started = true
+		assert.Equal(t, dir, gotCfg.DataDir)
+		assert.Equal(t, backgroundAutoStartReadyTimeout, wait)
+		return &DaemonRuntime{
+			Host: "127.0.0.1",
+			Port: 12345,
+		}, nil
+	})
 
-	tr, err := ensureTransport(&cfg, transportIntentRead, 100*time.Millisecond)
+	tr, err := ensureTransport(&cfg, transportIntentRead, 0)
 	require.NoError(t, err)
-	assert.Equal(t, transportDirect, tr.Mode)
+	assert.True(t, started)
+	assert.Equal(t, transportHTTP, tr.Mode)
+	assert.Equal(t, "http://127.0.0.1:12345", tr.URL)
+}
+
+func TestEnsureTransport_ReadIntentNoDaemonEnvRefusesDirectRead(t *testing.T) {
+	dir := daemonRuntimeDir(t)
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
+	cfg := config.Config{DataDir: dir}
+	forbidStartBackgroundServeForTransport(t,
+		"AGENTSVIEW_NO_DAEMON must suppress daemon start")
+
+	_, err := ensureTransport(&cfg, transportIntentRead, 100*time.Millisecond)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "direct SQLite reads are not supported")
+}
+
+func TestEnsureTransport_ReadIntentUnreachableDaemonRefusesDirectRead(t *testing.T) {
+	dir := daemonRuntimeDir(t)
+	writeUnreachableDaemonRuntime(t, dir, false)
+	cfg := config.Config{DataDir: dir}
+	forbidStartBackgroundServeForTransport(t,
+		"unreachable live daemon must not trigger a second start")
+
+	_, err := ensureTransport(&cfg, transportIntentRead, 100*time.Millisecond)
+	require.ErrorIs(t, err, errLocalDaemonUnreachable)
 }
 
 func TestEnsureTransport_ArchiveWriteStartsDaemon(t *testing.T) {
@@ -430,6 +480,35 @@ func TestEnsureTransport_ArchiveWriteRestartsIncompatibleOlderDaemon(t *testing.
 	cfg := config.Config{DataDir: dir}
 	tr, err := ensureTransport(
 		&cfg, transportIntentArchiveWrite, 100*time.Millisecond,
+	)
+	require.NoError(t, err)
+	assert.True(t, started)
+	assert.Equal(t, transportHTTP, tr.Mode)
+	assert.Equal(t, "http://127.0.0.1:23456", tr.URL)
+}
+
+func TestEnsureTransport_ReadIntentRestartsIncompatibleOlderDaemon(t *testing.T) {
+	dir := daemonRuntimeDir(t)
+	host, port := testPingServer(t)
+	writeIncompatibleDaemonRuntime(t, dir, host, port, "1.0.0", true)
+
+	setTestVersion(t, "1.1.0")
+
+	var started bool
+	stubStartBackgroundServeForTransport(t, func(
+		_ context.Context, gotCfg *config.Config, _ time.Duration,
+	) (*DaemonRuntime, error) {
+		started = true
+		assert.True(t, gotCfg.NoSync)
+		return &DaemonRuntime{
+			Host: "127.0.0.1",
+			Port: 23456,
+		}, nil
+	})
+
+	cfg := config.Config{DataDir: dir}
+	tr, err := ensureTransport(
+		&cfg, transportIntentRead, 100*time.Millisecond,
 	)
 	require.NoError(t, err)
 	assert.True(t, started)
@@ -845,6 +924,26 @@ func TestNewService_DirectReadOnly(t *testing.T) {
 	require.NotNil(t, svc)
 	require.NotNil(t, cleanup)
 	cleanup()
+}
+
+func TestNewService_DirectIncompatibleRefusesWithoutOpeningDB(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "missing.db")
+	cfg := config.Config{DBPath: dbPath}
+
+	svc, cleanup, err := newService(cfg, transport{
+		Mode:               transportDirect,
+		DirectReadOnly:     true,
+		DirectIncompatible: true,
+		DirectReason:       "daemon data version 52 is incompatible with client data version 57",
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, svc)
+	assert.Nil(t, cleanup)
+	assert.Contains(t, err.Error(), "daemon data version 52 is incompatible")
+	assert.Contains(t, err.Error(), "agentsview serve --replace")
+	assert.NoFileExists(t, dbPath)
 }
 
 func TestNewService_DirectModeMissingDBDoesNotCreate(t *testing.T) {

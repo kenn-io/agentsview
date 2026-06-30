@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -60,6 +62,7 @@ func setupGoldenStatsDataDir(t *testing.T) string {
 // unmarshal into whichever shape they need.
 func runDefaultStatsJSON(t *testing.T) string {
 	t.Helper()
+	registerSQLiteDaemonRuntime(t, os.Getenv("AGENTSVIEW_DATA_DIR"))
 	out, err := executeCommand(newRootCommand(),
 		"stats",
 		"--format", "json",
@@ -299,6 +302,51 @@ func TestStatsCommand_OutcomeFlagsRegistered(t *testing.T) {
 		assert.NotNil(t, cmd.Flags().Lookup(name),
 			"missing --%s flag", name)
 	}
+}
+
+func TestStatsCommandUsesDiscoveredDaemon(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+
+	var gotQuery url.Values
+	ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
+		"/api/v1/session-stats": func(w http.ResponseWriter, r *http.Request) {
+			gotQuery = r.URL.Query()
+			writeJSONResponse(w, `{
+				"schema_version": 1,
+				"window": {
+					"since": "2026-04-01T00:00:00Z",
+					"until": "2026-04-15T00:00:00Z",
+					"days": 14
+				},
+				"filters": {
+					"agent": "codex",
+					"projects_excluded": [],
+					"timezone": "UTC"
+				},
+				"totals": {"sessions_all": 5}
+			}`)
+		},
+	})
+	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
+
+	out, err := executeCommand(newRootCommand(),
+		"stats",
+		"--format", "json",
+		"--since", "2026-04-01",
+		"--until", "2026-04-15",
+		"--agent", "codex",
+		"--timezone", "UTC",
+	)
+
+	require.NoError(t, err, "stats output:\n%s", out)
+	assert.Equal(t, "2026-04-01", gotQuery.Get("since"))
+	assert.Equal(t, "2026-04-15", gotQuery.Get("until"))
+	assert.Equal(t, "codex", gotQuery.Get("agent"))
+	assert.Equal(t, "UTC", gotQuery.Get("timezone"))
+
+	var got db.SessionStats
+	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	assert.Equal(t, 5, got.Totals.SessionsAll)
 }
 
 // updateGolden toggles regeneration of stats_golden.json.

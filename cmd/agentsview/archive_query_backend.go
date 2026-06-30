@@ -73,7 +73,7 @@ func resolveArchiveQueryBackendWithConfig(
 			case policy.ReadOnlyDaemon == archiveQueryRejectReadOnlyDaemon:
 				return nil, nil, readOnlySessionUsageDaemonError(tr.URL)
 			case policy.ReadOnlyDaemon == archiveQuerySkipReadOnlyDaemon:
-				// Fall through to the local read-only archive below.
+				return nil, nil, readOnlySessionUsageDaemonError(tr.URL)
 			default:
 				return nil, nil, fmt.Errorf(
 					"unknown read-only daemon policy %d",
@@ -106,7 +106,10 @@ func resolveArchiveQueryTransport(
 	if policy.AutoStart && !policy.NoSync {
 		return ensureTransport(cfg, transportIntentArchiveWrite, 0)
 	}
-	return detectTransport(cfg.DataDir, cfg.AuthToken, 0)
+	if policy.NoSync {
+		cfg.NoSync = true
+	}
+	return ensureTransport(cfg, transportIntentRead, 0)
 }
 
 func directReadOnlyArchiveQueryError(

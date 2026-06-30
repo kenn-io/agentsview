@@ -494,10 +494,16 @@ func TestRunUsageDailyOfflineUsesReadOnlyDBWhenWriteLockHeld(t *testing.T) {
 		"offline read-only usage must preserve custom pricing")
 }
 
-func TestArchiveQueryBackendNoSyncDoesNotAutostartDaemonForDailyUsage(t *testing.T) {
+func TestArchiveQueryBackendNoSyncStartsNoSyncDaemonForDailyUsage(t *testing.T) {
 	newAgentDataDir(t)
-	forbidStartBackgroundServeForTransport(t,
-		"--no-sync usage must not auto-start a daemon")
+	var started bool
+	stubStartBackgroundServeForTransport(t, func(
+		_ context.Context, cfg *config.Config, _ time.Duration,
+	) (*DaemonRuntime, error) {
+		started = true
+		assert.True(t, cfg.NoSync)
+		return &DaemonRuntime{Host: "127.0.0.1", Port: 12345}, nil
+	})
 
 	backend := resolveTestArchiveQueryBackend(t, defaultArchiveQueryPolicy(
 		func(p *archiveQueryPolicy) {
@@ -505,10 +511,11 @@ func TestArchiveQueryBackendNoSyncDoesNotAutostartDaemonForDailyUsage(t *testing
 			p.AutoStart = true
 		},
 	))
-	assert.IsType(t, localArchiveQueryBackend{}, backend)
+	assert.True(t, started)
+	assert.IsType(t, daemonArchiveQueryBackend{}, backend)
 }
 
-func TestArchiveQueryBackendIgnoresReadOnlyDaemonForDailyUsage(t *testing.T) {
+func TestArchiveQueryBackendRefusesReadOnlyDaemonForDailyUsage(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 
 	var called bool
@@ -518,10 +525,16 @@ func TestArchiveQueryBackendIgnoresReadOnlyDaemonForDailyUsage(t *testing.T) {
 	})
 	registerTestRuntime(t, dataDir, ts.URL, true)
 
-	backend := resolveTestArchiveQueryBackend(t, defaultArchiveQueryPolicy(
-		func(p *archiveQueryPolicy) { p.AutoStart = true },
-	))
-	assert.IsType(t, localArchiveQueryBackend{}, backend)
+	_, cleanup, err := resolveArchiveQueryBackend(
+		context.Background(), defaultArchiveQueryPolicy(
+			func(p *archiveQueryPolicy) { p.AutoStart = true },
+		),
+	)
+	if cleanup != nil {
+		t.Cleanup(cleanup)
+	}
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read-only")
 	assert.False(t, called)
 }
 

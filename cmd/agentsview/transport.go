@@ -44,12 +44,13 @@ var waitForDaemonStartupForTransport = WaitForDaemonStartupContext
 // transport captures how to reach the session-data layer from a
 // CLI subcommand. Either the HTTP daemon (URL set) or the local DB.
 type transport struct {
-	Mode           transportMode
-	URL            string
-	ReadOnly       bool // daemon runtime ReadOnly flag (true for mirror serve)
-	DirectReadOnly bool // writable daemon owns DB but is not reachable
-	DirectReason   string
-	Runtime        *DaemonRuntime
+	Mode               transportMode
+	URL                string
+	ReadOnly           bool // daemon runtime ReadOnly flag (true for pg serve)
+	DirectReadOnly     bool // writable daemon owns DB but is not reachable
+	DirectIncompatible bool // live daemon owns DB but cannot serve this client
+	DirectReason       string
+	Runtime            *DaemonRuntime
 }
 
 type customPricingStore interface {
@@ -131,13 +132,16 @@ func detectTransportContext(
 	}
 	if IsLocalDaemonActive(dataDir, authToken) {
 		reason := errLocalDaemonUnreachable.Error()
+		incompatible := false
 		if _, err := FindIncompatibleDaemonRuntime(dataDir, authToken); err != nil {
 			reason = err.Error()
+			incompatible = true
 		}
 		return transport{
-			Mode:           transportDirect,
-			DirectReadOnly: true,
-			DirectReason:   reason,
+			Mode:               transportDirect,
+			DirectReadOnly:     true,
+			DirectIncompatible: incompatible,
+			DirectReason:       reason,
 		}, nil
 	}
 	return transport{Mode: transportDirect}, nil
@@ -165,7 +169,8 @@ func ensureTransportContext(
 	if err := ctx.Err(); err != nil {
 		return transport{}, err
 	}
-	if intent == transportIntentArchiveWrite && waitTimeout <= 0 {
+	if (intent == transportIntentRead || intent == transportIntentArchiveWrite) &&
+		waitTimeout <= 0 {
 		waitTimeout = backgroundAutoStartReadyTimeout
 	}
 	if intent == transportIntentArchiveWrite {
@@ -205,7 +210,8 @@ func ensureTransportContext(
 		}
 		return tr, nil
 	}
-	if intent == transportIntentArchiveWrite && !daemonAutostartDisabled() {
+	if (intent == transportIntentRead || intent == transportIntentArchiveWrite) &&
+		!daemonAutostartDisabled() {
 		if rt, err := FindIncompatibleDaemonRuntime(
 			cfg.DataDir, cfg.AuthToken,
 		); err != nil && rt != nil &&
@@ -223,7 +229,36 @@ func ensureTransportContext(
 			return transportFromRuntime(rt), nil
 		}
 	}
-	if intent == transportIntentRead || daemonAutostartDisabled() {
+	if intent == transportIntentRead {
+		if daemonAutostartDisabled() {
+			return transport{}, errors.New(
+				"daemon autostart is disabled; direct SQLite reads are " +
+					"not supported for this command. Start a daemon with " +
+					"`agentsview serve --background` or unset " +
+					"AGENTSVIEW_NO_DAEMON",
+			)
+		}
+		if tr.DirectReadOnly {
+			if tr.DirectReason != "" {
+				if tr.DirectReason == errLocalDaemonUnreachable.Error() {
+					return transport{}, errLocalDaemonUnreachable
+				}
+				return transport{}, appendDaemonRestartUpgradeHint(
+					errors.New(tr.DirectReason),
+				)
+			}
+			return transport{}, errLocalDaemonUnreachable
+		}
+		if err := guardDaemonAutoStartConfig(*cfg); err != nil {
+			return transport{}, err
+		}
+		rt, err := startBackgroundServeForTransport(ctx, cfg, waitTimeout)
+		if err != nil {
+			return transport{}, err
+		}
+		return transportFromRuntime(rt), nil
+	}
+	if daemonAutostartDisabled() {
 		return tr, nil
 	}
 	if tr.DirectReadOnly {
@@ -378,6 +413,9 @@ func newService(
 		return service.NewHTTPBackend(tr.URL, cfg.AuthToken, tr.ReadOnly),
 			func() {}, nil
 	default:
+		if err := directIncompatibleDaemonError(tr); err != nil {
+			return nil, nil, err
+		}
 		d, err := openReadOnlyDB(cfg)
 		if err != nil {
 			return nil, nil, fmt.Errorf(
@@ -389,6 +427,17 @@ func newService(
 		// is handled via the HTTP daemon when one is running.
 		return service.NewDirectBackend(d, nil), cleanup, nil
 	}
+}
+
+func directIncompatibleDaemonError(tr transport) error {
+	if !tr.DirectIncompatible {
+		return nil
+	}
+	reason := strings.TrimSpace(tr.DirectReason)
+	if reason == "" {
+		reason = "local daemon is incompatible with this agentsview client"
+	}
+	return appendDaemonRestartUpgradeHint(errors.New(reason))
 }
 
 // newPGReadService builds a read-only SessionService over the

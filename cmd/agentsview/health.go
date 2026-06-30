@@ -10,8 +10,9 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"go.kenn.io/agentsview/internal/config"
+	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 // HealthConfig configures the `health` command.
@@ -25,28 +26,27 @@ const (
 	maxHealthLimit     = db.MaxSessionLimit
 )
 
-func runHealth(args []string, cfg HealthConfig) {
-	appCfg, err := config.LoadMinimal()
+func runHealth(cmd *cobra.Command, args []string, cfg HealthConfig) {
+	svc, cleanup, err := resolveService(cmd)
 	if err != nil {
-		fatal("loading config: %v", err)
+		fatal("resolving service: %v", err)
 	}
-	database, err := openReadOnlyDB(appCfg)
-	if err != nil {
-		fatal("opening database: %v", err)
-	}
-	defer database.Close()
+	defer cleanup()
 
-	ctx := context.Background()
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	if len(args) == 0 {
-		runHealthList(ctx, database, cfg)
+		runHealthList(ctx, svc, cfg)
 		return
 	}
-	runHealthDetail(ctx, database, args[0], cfg.JSON)
+	runHealthDetail(ctx, svc, args[0], cfg.JSON)
 }
 
 func runHealthList(
-	ctx context.Context, database *db.DB, cfg HealthConfig,
+	ctx context.Context, svc service.SessionService, cfg HealthConfig,
 ) {
 	limit := cfg.Limit
 	if limit <= 0 {
@@ -56,7 +56,7 @@ func runHealthList(
 		limit = maxHealthLimit
 	}
 
-	page, err := database.ListSessions(ctx, db.SessionFilter{
+	page, err := svc.List(ctx, service.ListFilter{
 		Limit: limit,
 	})
 	if err != nil {
@@ -76,19 +76,14 @@ func runHealthList(
 }
 
 func runHealthDetail(
-	ctx context.Context, database *db.DB,
+	ctx context.Context, svc service.SessionService,
 	sessionID string, asJSON bool,
 ) {
-	resolved, err := resolveSessionID(ctx, database, sessionID)
+	resolved, err := resolveServiceSessionID(ctx, svc, sessionID)
 	if err != nil {
 		fatal("resolving session id: %v", err)
 	}
-	if resolved == "" {
-		fmt.Fprintf(os.Stderr,
-			"session not found: %s\n", sessionID)
-		os.Exit(1)
-	}
-	sess, err := database.GetSessionFull(ctx, resolved)
+	sess, err := svc.Get(ctx, resolved)
 	if err != nil {
 		fatal("getting session: %v", err)
 	}
@@ -102,7 +97,7 @@ func runHealthDetail(
 		writeJSON(os.Stdout, sess)
 		return
 	}
-	printHealthDetail(os.Stdout, *sess)
+	printHealthDetail(os.Stdout, sess.Session)
 }
 
 // resolveLookupLimit caps the partial-match query for

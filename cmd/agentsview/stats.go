@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -138,25 +137,10 @@ func registerStatsFlags(
 		"Include GitHub PR outcome stats via gh (implies --include-git-outcomes)")
 }
 
-// openStatsService opens a read-only SessionService scoped to the local SQLite
-// archive. The stats command deliberately bypasses resolveService
-// (and the HTTP daemon transport) because the daemon does not yet
-// expose a /stats endpoint.
 func openStatsService(
 	cmd *cobra.Command,
 ) (service.SessionService, func(), error) {
-	cfg, err := config.LoadPFlags(cmd.Flags())
-	if err != nil {
-		return nil, nil, fmt.Errorf("loading config: %w", err)
-	}
-	d, err := openReadOnlyDB(cfg)
-	if err != nil {
-		return nil, nil, fmt.Errorf("opening db: %w", err)
-	}
-	cleanup := func() { d.Close() }
-	// Pass a typed *db.DB so directBackend.Stats has the local handle
-	// it needs; engine is nil because the CLI never syncs.
-	return service.NewDirectBackend(d, nil), cleanup, nil
+	return resolveService(cmd)
 }
 
 // printStatsHuman renders a human-readable summary of a SessionStats

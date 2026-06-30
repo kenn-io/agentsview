@@ -60,6 +60,7 @@ func TestSecretsScan_DirectMode_Scans(t *testing.T) {
 		Content: "my key " + secret + " here",
 	}}))
 	require.NoError(t, d.Close())
+	registerSQLiteWritableDaemonRuntime(t, dataDir)
 
 	out, err := executeCommand(newRootCommand(),
 		"secrets", "scan", "--backfill", "--format", "json")
@@ -94,6 +95,7 @@ func TestSecretsScan_DirectMode_DeniesAgentsviewFixtures(t *testing.T) {
 		Content: "fixture token " + secret,
 	}}))
 	require.NoError(t, d.Close())
+	registerSQLiteWritableDaemonRuntime(t, dataDir)
 
 	out, err := executeCommand(newRootCommand(),
 		"secrets", "scan", "--backfill", "--format", "json")
@@ -129,6 +131,7 @@ func TestSecretsScanHint_ShownOnCandidate(t *testing.T) {
 	if err := d.Close(); err != nil {
 		t.Fatal(err)
 	}
+	registerSQLiteWritableDaemonRuntime(t, dataDir)
 	out, err := executeCommand(newRootCommand(),
 		"secrets", "scan", "--backfill")
 	if err != nil {
@@ -161,6 +164,7 @@ func TestSecretsScanHint_SuppressedWhenDefiniteOnly(t *testing.T) {
 	if err := d.Close(); err != nil {
 		t.Fatal(err)
 	}
+	registerSQLiteWritableDaemonRuntime(t, dataDir)
 	out, err := executeCommand(newRootCommand(),
 		"secrets", "scan", "--backfill")
 	if err != nil {
@@ -189,6 +193,7 @@ func TestSecretsScanHint_SuppressedInJSON(t *testing.T) {
 	if err := d.Close(); err != nil {
 		t.Fatal(err)
 	}
+	registerSQLiteWritableDaemonRuntime(t, dataDir)
 	out, err := executeCommand(newRootCommand(),
 		"secrets", "scan", "--backfill", "--format", "json")
 	if err != nil {

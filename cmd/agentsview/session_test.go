@@ -23,6 +23,8 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/server"
+	agentsync "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/kit/daemon"
 )
 
@@ -263,6 +265,7 @@ func seedEmptyArchive(t *testing.T, dataDir string) {
 	d, err := db.Open(filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
+	registerSQLiteDaemonRuntime(t, dataDir)
 }
 
 // seedSessionWithOpts is like seedSession but allows mutation of
@@ -294,6 +297,53 @@ func seedSessionWithOpts(
 	}
 	require.NoError(t, d.UpsertSession(s))
 	require.NoError(t, d.Close())
+	registerSQLiteDaemonRuntime(t, dataDir)
+}
+
+func registerSQLiteDaemonRuntime(t *testing.T, dataDir string) {
+	t.Helper()
+	registerSQLiteDaemonRuntimeWithEngine(t, dataDir, false)
+}
+
+func registerSQLiteWritableDaemonRuntime(t *testing.T, dataDir string) {
+	t.Helper()
+	registerSQLiteDaemonRuntimeWithEngine(t, dataDir, true)
+}
+
+func registerSQLiteDaemonRuntimeWithEngine(
+	t *testing.T, dataDir string, writable bool,
+) {
+	t.Helper()
+	cfg, err := config.LoadMinimal()
+	require.NoError(t, err)
+	if cfg.DataDir != dataDir {
+		cfg.DataDir = dataDir
+		cfg.DBPath = sessionsDBPath(dataDir)
+	}
+	database, err := openDB(cfg)
+	require.NoError(t, err)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := ln.Addr().(*net.TCPAddr).Port
+	cfg.Host = "127.0.0.1"
+	cfg.Port = port
+	cfg.WriteTimeout = 30 * time.Second
+	var engine *agentsync.Engine
+	if writable {
+		engine = agentsync.NewEngine(database, agentsync.EngineConfig{
+			Ephemeral: true,
+		})
+	}
+	srv := server.New(cfg, database, engine)
+	ts := httptest.NewUnstartedServer(srv.Handler())
+	ts.Listener = ln
+	ts.Start()
+	t.Cleanup(func() {
+		ts.Close()
+		database.Close()
+		RemoveDaemonRuntime(dataDir)
+	})
+	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 }
 
 func TestSessionGet_JSON(t *testing.T) {
