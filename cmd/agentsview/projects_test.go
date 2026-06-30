@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -47,4 +48,28 @@ func TestFetchHTTPProjects(t *testing.T) {
 		{Name: "alpha", SessionCount: 3},
 		{Name: "beta", SessionCount: 1},
 	}, projects)
+}
+
+func TestFetchHTTPProjectsTimesOutStalledDaemon(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		<-r.Context().Done()
+	}))
+	defer ts.Close()
+
+	oldClient := projectsHTTPClient
+	projectsHTTPClient = &http.Client{Timeout: 20 * time.Millisecond}
+	t.Cleanup(func() { projectsHTTPClient = oldClient })
+
+	_, err := fetchHTTPProjects(
+		context.Background(),
+		transport{Mode: transportHTTP, URL: ts.URL},
+		"",
+		false,
+		false,
+	)
+
+	require.Error(t, err)
 }

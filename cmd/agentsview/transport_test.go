@@ -901,6 +901,41 @@ auth_token = "generated-token"
 	), tr.URL)
 }
 
+func TestEnsureTransportReadAdoptsAuthAfterDaemonStartupWait(t *testing.T) {
+	dir := daemonRuntimeDir(t)
+	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
+	unlockStart := holdExternalDaemonStartLock(t, dir)
+
+	const token = "generated-token"
+	newHost, newPort := testAuthenticatedPingServer(t, token)
+	published := make(chan error, 1)
+	go func() {
+		time.Sleep(2 * startProbeTick)
+		writeTestConfig(t, dir, `require_auth = true
+auth_token = "generated-token"
+`)
+		_, err := WriteDaemonRuntimeWithAuth(
+			dir, newHost, newPort, version, false, true,
+		)
+		unlockStart()
+		published <- err
+	}()
+
+	cfg := config.Config{DataDir: dir}
+	tr, err := ensureTransport(
+		&cfg, transportIntentRead, time.Second,
+	)
+
+	require.NoError(t, <-published)
+	require.NoError(t, err)
+	assert.Equal(t, token, cfg.AuthToken)
+	assert.True(t, cfg.RequireAuth)
+	assert.Equal(t, transportHTTP, tr.Mode)
+	assert.Equal(t, "http://"+net.JoinHostPort(
+		newHost, strconv.Itoa(newPort),
+	), tr.URL)
+}
+
 func TestWaitForBackgroundLaunchBeforeArchiveWriteRejectsFileDataDir(
 	t *testing.T,
 ) {

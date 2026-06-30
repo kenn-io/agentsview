@@ -190,6 +190,18 @@ func ensureTransportContext(
 	if err != nil {
 		return transport{}, err
 	}
+	if intent == transportIntentRead && cfg.AuthToken == "" &&
+		tr.Mode == transportDirect && tr.DirectReadOnly {
+		adoptBackgroundLaunchConfig(cfg)
+		if cfg.AuthToken != "" {
+			tr, err = detectTransportContext(
+				ctx, cfg.DataDir, cfg.AuthToken, waitTimeout,
+			)
+			if err != nil {
+				return transport{}, err
+			}
+		}
+	}
 	if tr.Mode == transportHTTP {
 		if (intent == transportIntentRead ||
 			intent == transportIntentArchiveWrite) &&

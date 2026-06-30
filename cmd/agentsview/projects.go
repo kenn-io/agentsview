@@ -11,10 +11,13 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
+
+var projectsHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 func runProjects(jsonOutput bool) {
 	appCfg, err := config.LoadMinimal()
@@ -59,7 +62,7 @@ func fetchHTTPProjects(
 	if authToken != "" {
 		req.Header.Set("Authorization", "Bearer "+authToken)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := projectsHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
