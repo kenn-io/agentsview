@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -205,23 +204,22 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
 }
 
-func TestWriteDuckDBQuackServeStartupDoesNotPrintGeneratedToken(t *testing.T) {
+func TestWriteDuckDBQuackServeStartupDoesNotPrintToken(t *testing.T) {
 	var out bytes.Buffer
 	const token = "plain-quack-secret-token"
 
 	writeDuckDBQuackServeStartup(
 		&out,
 		duckDBQuackServeStartup{
-			Path:      "/tmp/agentsview.duckdb",
-			Bind:      "quack:127.0.0.1:9494",
-			Info:      quackServeInfo{ListenURI: "quack:127.0.0.1:9494"},
-			Generated: true,
+			Path: "/tmp/agentsview.duckdb",
+			Bind: "quack:127.0.0.1:9494",
+			Info: quackServeInfo{ListenURI: "quack:127.0.0.1:9494"},
 		},
 	)
 
 	got := out.String()
 	assert.NotContains(t, got, token)
-	assert.Contains(t, got, "Token:       generated but not shown")
+	assert.Contains(t, got, "Token:       configured")
 }
 
 // wantDuckDBDaemonPush is the expected shape of a DuckDB daemon push request.
@@ -276,61 +274,41 @@ func duckDBPushDaemonServerAt(
 }
 
 func TestResolveQuackServeToken(t *testing.T) {
-	generateErr := errors.New("generate failed")
 	tests := []struct {
 		name       string
 		flagToken  string
 		configured string
-		generated  string
-		genErr     error
 		wantToken  string
-		wantGen    bool
-		wantErr    bool
+		wantErr    string
 	}{
 		{
 			name:       "flag token wins",
 			flagToken:  "flag-token",
 			configured: "config-token",
-			generated:  "generated-token",
 			wantToken:  "flag-token",
 		},
 		{
-			name:       "configured token used before generation",
+			name:       "configured token used",
 			configured: "config-token",
-			generated:  "generated-token",
 			wantToken:  "config-token",
 		},
 		{
-			name:      "generates token when none configured",
-			generated: "generated-token",
-			wantToken: "generated-token",
-			wantGen:   true,
-		},
-		{
-			name:    "generator error returned",
-			genErr:  generateErr,
-			wantErr: true,
+			name:    "requires explicit token",
+			wantErr: "token is required",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			called := false
-			token, generated, err := resolveQuackServeToken(
+			token, err := resolveQuackServeToken(
 				tt.flagToken, tt.configured,
-				func() (string, error) {
-					called = true
-					return tt.generated, tt.genErr
-				},
 			)
-			if tt.wantErr {
+			if tt.wantErr != "" {
 				require.Error(t, err)
-				assert.True(t, called)
+				assert.Contains(t, err.Error(), tt.wantErr)
 				return
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantToken, token)
-			assert.Equal(t, tt.wantGen, generated)
-			assert.Equal(t, tt.wantGen, called)
 		})
 	}
 }

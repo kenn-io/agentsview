@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
 	"errors"
@@ -299,11 +298,9 @@ func runDuckDBQuackServe(cfg DuckDBQuackServeConfig) {
 	); err != nil {
 		fatal("duckdb quack serve: %v", err)
 	}
-	token, generated, err := resolveQuackServeToken(
-		cfg.Token, duckCfg.Token, generateQuackToken,
-	)
+	token, err := resolveQuackServeToken(cfg.Token, duckCfg.Token)
 	if err != nil {
-		fatal("duckdb quack serve: generating token: %v", err)
+		fatal("duckdb quack serve: %v", err)
 	}
 
 	conn, err := duckdbsync.Open(duckCfg.Path)
@@ -346,20 +343,18 @@ func runDuckDBQuackServe(cfg DuckDBQuackServeConfig) {
 	}()
 
 	writeDuckDBQuackServeStartup(os.Stdout, duckDBQuackServeStartup{
-		Path:      duckCfg.Path,
-		Bind:      cfg.Bind,
-		Info:      info,
-		Generated: generated,
+		Path: duckCfg.Path,
+		Bind: cfg.Bind,
+		Info: info,
 	})
 
 	<-ctx.Done()
 }
 
 type duckDBQuackServeStartup struct {
-	Path      string
-	Bind      string
-	Info      quackServeInfo
-	Generated bool
+	Path string
+	Bind string
+	Info quackServeInfo
 }
 
 func writeDuckDBQuackServeStartup(
@@ -375,37 +370,22 @@ func writeDuckDBQuackServeStartup(
 	if startup.Info.HTTPURL != "" {
 		fmt.Fprintf(out, "HTTP URL:    %s\n", startup.Info.HTTPURL)
 	}
-	if startup.Generated {
-		fmt.Fprintln(out, "Token:       generated but not shown")
-	} else {
-		fmt.Fprintln(out, "Token:       configured")
-	}
+	fmt.Fprintln(out, "Token:       configured")
 	fmt.Fprintln(out, "Press Ctrl+C to stop.")
 }
 
 func resolveQuackServeToken(
 	flagToken, configuredToken string,
-	generate func() (string, error),
-) (string, bool, error) {
+) (string, error) {
 	if flagToken != "" {
-		return flagToken, false, nil
+		return flagToken, nil
 	}
 	if configuredToken != "" {
-		return configuredToken, false, nil
+		return configuredToken, nil
 	}
-	token, err := generate()
-	if err != nil {
-		return "", false, err
-	}
-	return token, true, nil
-}
-
-func generateQuackToken() (string, error) {
-	var buf [32]byte
-	if _, err := rand.Read(buf[:]); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(buf[:]), nil
+	return "", fmt.Errorf(
+		"token is required; set --token, AGENTSVIEW_DUCKDB_TOKEN, or [duckdb].token",
+	)
 }
 
 func identifyQuackNode(ctx context.Context, conn *sql.DB, machine string) {
