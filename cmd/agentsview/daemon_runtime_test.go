@@ -276,6 +276,10 @@ func startExternalDaemonStartLockHelper(t *testing.T, dataDir string) io.Closer 
 		_ = cmd.Process.Kill()
 		require.Equal(t, "ready", strings.TrimSpace(line))
 	}
+	require.Eventually(t, func() bool {
+		return isExternalDaemonStarting(dataDir)
+	}, 2*time.Second, 10*time.Millisecond,
+		"external daemon start lock should be visible to parent")
 	return stdin
 }
 
