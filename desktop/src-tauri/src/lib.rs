@@ -1439,13 +1439,17 @@ fn poll_background_status_after_launcher_exit(window: WebviewWindow, generation:
     tauri::async_runtime::spawn(async move {
         let started = Instant::now();
         let mut failed_status_probes = 0;
+        let mut status_poll_backoff_attempts = 0;
         let mut long_startup_notice_shown = false;
         let mut unhealthy_since: Option<Instant> = None;
         loop {
             if !background_status_poll_is_current(&handle, generation) {
                 return;
             }
-            match probe_backend_status(&handle).await {
+            let status = probe_backend_status(&handle).await;
+            status_poll_backoff_attempts =
+                next_background_status_poll_attempts(&status, status_poll_backoff_attempts);
+            match status {
                 BackendStatusProbe::Ready(port) => {
                     if !background_status_poll_is_current(&handle, generation) {
                         return;
@@ -1568,7 +1572,10 @@ fn poll_background_status_after_launcher_exit(window: WebviewWindow, generation:
                      'AgentsView is still preparing the local archive. Large migrations or full resyncs can take many minutes.');",
                 );
             }
-            tokio::time::sleep(background_status_poll_interval(failed_status_probes)).await;
+            tokio::time::sleep(background_status_poll_interval(
+                status_poll_backoff_attempts,
+            ))
+            .await;
         }
     });
 }
@@ -1581,8 +1588,8 @@ fn background_status_poll_is_current(handle: &AppHandle, generation: u64) -> boo
         == generation
 }
 
-fn background_status_poll_interval(failed_status_probes: u32) -> Duration {
-    let multiplier = match failed_status_probes {
+fn background_status_poll_interval(backoff_attempts: u32) -> Duration {
+    let multiplier = match backoff_attempts {
         0..=8 => 1,
         9..=16 => 2,
         17..=24 => 4,
@@ -1591,6 +1598,19 @@ fn background_status_poll_interval(failed_status_probes: u32) -> Duration {
     READY_POLL_INTERVAL
         .saturating_mul(multiplier)
         .min(STATUS_POLL_MAX_INTERVAL)
+}
+
+fn next_background_status_poll_attempts(status: &BackendStatusProbe, current: u32) -> u32 {
+    match status {
+        BackendStatusProbe::Starting(_)
+        | BackendStatusProbe::Unhealthy(_)
+        | BackendStatusProbe::Unavailable => current.saturating_add(1),
+        BackendStatusProbe::Ready(_)
+        | BackendStatusProbe::NotRunning(_)
+        | BackendStatusProbe::Incompatible(_)
+        | BackendStatusProbe::ReadOnly(_)
+        | BackendStatusProbe::Unusable(_) => current,
+    }
 }
 
 fn status_probe_failures_should_stop(failed_status_probes: u32) -> bool {
@@ -2856,6 +2876,34 @@ mod tests {
         assert_eq!(
             background_status_poll_interval(u32::MAX),
             Duration::from_secs(1)
+        );
+    }
+
+    #[test]
+    fn status_poll_backoff_counts_non_ready_statuses() {
+        let mut attempts = 0;
+
+        attempts = next_background_status_poll_attempts(
+            &BackendStatusProbe::Starting("agentsview is starting up.".to_string()),
+            attempts,
+        );
+        assert_eq!(attempts, 1);
+
+        attempts = next_background_status_poll_attempts(
+            &BackendStatusProbe::Unhealthy("health checks are not responding".to_string()),
+            attempts,
+        );
+        assert_eq!(attempts, 2);
+
+        attempts = next_background_status_poll_attempts(&BackendStatusProbe::Unavailable, attempts);
+        assert_eq!(attempts, 3);
+
+        attempts = next_background_status_poll_attempts(&BackendStatusProbe::Ready(8080), attempts);
+        assert_eq!(attempts, 3);
+
+        assert_eq!(
+            next_background_status_poll_attempts(&BackendStatusProbe::Unavailable, u32::MAX),
+            u32::MAX
         );
     }
 
