@@ -1,0 +1,124 @@
+package parser
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestOpenClaudeProviderCapabilities(t *testing.T) {
+	caps := openClaudeProviderCapabilities()
+	require.True(t, caps.Source.DiscoverSources == CapabilitySupported)
+	require.True(t, caps.Source.WatchSources == CapabilitySupported)
+	require.True(t, caps.Source.ClassifyChangedPath == CapabilitySupported)
+	require.True(t, caps.Source.FindSource == CapabilitySupported)
+	require.True(t, caps.Source.ForceReplaceOnParse == CapabilitySupported)
+
+	def, ok := AgentByType(AgentOpenClaude)
+	require.True(t, ok, "AgentOpenClaude missing from Registry")
+	assert.True(t, def.FileBased)
+	assert.Equal(t, "OPENCLAUDE_PROJECTS_DIR", def.EnvVar)
+	assert.Equal(t, "openclaude_project_dirs", def.ConfigKey)
+	assert.Equal(t, []string{".openclaude/projects"}, def.DefaultDirs)
+	assert.Equal(t, "openclaude:", def.IDPrefix)
+	assert.Empty(t, def.WatchSubdirs)
+	assert.Nil(t, def.WatchRootsFunc)
+}
+
+func TestOpenClaudeDiscoverParseAndFindSource(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "my-project")
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+
+	path := filepath.Join(projectDir, "session-123.jsonl")
+	content := strings.Join([]string{
+		buildMetadataLine(map[string]any{
+			"type":       "user",
+			"timestamp":  tsEarly,
+			"uuid":       "u1",
+			"parentUuid": "",
+			"cwd":        "/workspace/my-project",
+			"gitBranch":  "main",
+			"message": map[string]any{
+				"role":    "user",
+				"content": "hello from openclaude",
+			},
+		}),
+		buildMetadataLine(map[string]any{
+			"type":       "assistant",
+			"timestamp":  tsEarlyS1,
+			"uuid":       "u2",
+			"parentUuid": "u1",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": "reply"},
+				},
+			},
+		}),
+		buildMetadataLine(map[string]any{
+			"type":       "system",
+			"subtype":    "compact_boundary",
+			"timestamp":  tsEarlyS5,
+			"uuid":       "u3",
+			"parentUuid": "u2",
+			"message": map[string]any{
+				"content": []map[string]any{
+					{"type": "text", "text": "Compact summary"},
+				},
+			},
+		}),
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	provider, ok := NewProvider(AgentOpenClaude, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, path, discovered[0].Key)
+	assert.Equal(t, "my-project", discovered[0].ProjectHint)
+
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		FullSessionID: "openclaude:session-123",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, path, found.Key)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source:      discovered[0],
+		Fingerprint: SourceFingerprint{Hash: "hash-123"},
+		Machine:     "devbox",
+	})
+	require.NoError(t, err)
+	require.True(t, outcome.ResultSetComplete)
+	require.True(t, outcome.ForceReplace)
+	require.Len(t, outcome.Results, 1)
+
+	result := outcome.Results[0].Result
+	assert.Equal(t, AgentOpenClaude, result.Session.Agent)
+	assert.Equal(t, "openclaude:session-123", result.Session.ID)
+	assert.Equal(t, "my_project", result.Session.Project)
+	assert.Equal(t, "hello from openclaude", result.Session.FirstMessage)
+	assert.Equal(t, 1, result.Session.UserMessageCount)
+	assert.Equal(t, "hash-123", result.Session.File.Hash)
+	require.Len(t, result.Messages, 3)
+
+	assert.Equal(t, RoleUser, result.Messages[0].Role)
+	assert.Equal(t, RoleAssistant, result.Messages[1].Role)
+	assert.Equal(t, RoleAssistant, result.Messages[2].Role)
+	assert.True(t, result.Messages[2].IsSystem)
+	assert.True(t, result.Messages[2].IsCompactBoundary)
+	assert.Equal(t, "compact_boundary", result.Messages[2].SourceSubtype)
+	assert.Contains(t, result.Messages[2].Content, "Compact summary")
+}

@@ -297,6 +297,7 @@ thread JSON files.
 | Antigravity           | `~/.gemini/antigravity/`                                                                                                                                                |
 | Antigravity CLI       | `~/.gemini/antigravity-cli/` (see note below)                                                                                                                           |
 | Claude Code           | `~/.claude/projects/`                                                                                                                                                   |
+| OpenClaude            | `~/.openclaude/projects/`                                                                                                                                               |
 | Claude Cowork         | `~/Library/Application Support/Claude/local-agent-mode-sessions/` (macOS)                                                                                               |
 | Codex                 | `~/.codex/sessions/`                                                                                                                                                    |
 | Copilot CLI           | `~/.copilot/`                                                                                                                                                           |

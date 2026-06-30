@@ -11,6 +11,7 @@ type AgentType string
 
 const (
 	AgentClaude         AgentType = "claude"
+	AgentOpenClaude     AgentType = "openclaude"
 	AgentCowork         AgentType = "cowork"
 	AgentCodex          AgentType = "codex"
 	AgentCopilot        AgentType = "copilot"
@@ -97,6 +98,15 @@ var Registry = []AgentDef{
 		DefaultDirs:       []string{".claude/projects"},
 		IDPrefix:          "",
 		FileBased:         true,
+	},
+	{
+		Type:        AgentOpenClaude,
+		DisplayName: "OpenClaude",
+		EnvVar:      "OPENCLAUDE_PROJECTS_DIR",
+		ConfigKey:   "openclaude_project_dirs",
+		DefaultDirs: []string{".openclaude/projects"},
+		IDPrefix:    "openclaude:",
+		FileBased:   true,
 	},
 	{
 		Type:         AgentCowork,

@@ -135,6 +135,7 @@ func TestAgentByType(t *testing.T) {
 		want  bool
 	}{
 		{AgentClaude, true},
+		{AgentOpenClaude, true},
 		{AgentCodex, true},
 		{AgentCopilot, true},
 		{AgentGemini, true},
@@ -169,6 +170,12 @@ func TestAgentByPrefix(t *testing.T) {
 			"claude no prefix",
 			"abc-123",
 			AgentClaude,
+			true,
+		},
+		{
+			"openclaude prefix",
+			"openclaude:session-id",
+			AgentOpenClaude,
 			true,
 		},
 		{
@@ -309,6 +316,7 @@ func TestRegistryCompleteness(t *testing.T) {
 	// previously did.
 	allTypes := []AgentType{
 		AgentClaude,
+		AgentOpenClaude,
 		AgentCowork,
 		AgentCodex,
 		AgentCopilot,
@@ -508,6 +516,16 @@ func TestOpenCodeRegistryEntry(t *testing.T) {
 	}
 	require.Truef(t, slices.Equal(def.WatchSubdirs, want),
 		"OpenCode WatchSubdirs = %v, want %v", def.WatchSubdirs, want)
+}
+
+func TestOpenClaudeRegistryEntry(t *testing.T) {
+	def, ok := AgentByType(AgentOpenClaude)
+	require.True(t, ok, "AgentOpenClaude missing from Registry")
+	require.True(t, def.FileBased, "OpenClaude FileBased")
+	assert.Equal(t, "OPENCLAUDE_PROJECTS_DIR", def.EnvVar)
+	assert.Equal(t, "openclaude_project_dirs", def.ConfigKey)
+	assert.Equal(t, []string{".openclaude/projects"}, def.DefaultDirs)
+	assert.Equal(t, "openclaude:", def.IDPrefix)
 }
 
 func TestCoworkRegistryEntry(t *testing.T) {
@@ -926,6 +944,12 @@ func TestAgentByPrefixRemote(t *testing.T) {
 			"remote claude",
 			"devbox1~abc-123",
 			AgentClaude,
+			true,
+		},
+		{
+			"remote openclaude",
+			"devbox1~openclaude:session-id",
+			AgentOpenClaude,
 			true,
 		},
 		{

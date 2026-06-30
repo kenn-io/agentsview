@@ -400,6 +400,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newAmpProviderFactory(def)
 	case AgentClaude:
 		return newClaudeProviderFactory(def)
+	case AgentOpenClaude:
+		return newOpenClaudeProviderFactory(def)
 	case AgentClaudeAI:
 		return newImportOnlyProviderFactory(def)
 	case AgentCommandCode:
