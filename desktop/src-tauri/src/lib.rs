@@ -1696,7 +1696,9 @@ fn status_output_is_unhealthy(output: &str) -> bool {
 }
 
 fn status_output_is_starting(output: &str) -> bool {
-    output.trim() == "agentsview is starting up."
+    output
+        .lines()
+        .any(|line| line.trim() == "agentsview is starting up.")
 }
 
 fn combined_probe_output(stdout: &str, stderr: &str) -> String {
@@ -3495,6 +3497,19 @@ agentsview running at http://127.0.0.1:18082 (pid 123)
         assert_eq!(
             classify_backend_status_output("agentsview is starting up.", ""),
             BackendStatusProbe::Starting("agentsview is starting up.".to_string())
+        );
+    }
+
+    #[test]
+    fn classify_backend_status_output_keeps_starting_with_stderr_diagnostics() {
+        assert_eq!(
+            classify_backend_status_output(
+                "agentsview is starting up.\n",
+                "warning: using default config"
+            ),
+            BackendStatusProbe::Starting(
+                "agentsview is starting up.\nwarning: using default config".to_string()
+            )
         );
     }
 
