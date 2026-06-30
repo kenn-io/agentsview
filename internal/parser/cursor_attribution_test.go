@@ -93,7 +93,7 @@ func seedCursorAttributionDBTest(t *testing.T) string {
 		CREATE TABLE scored_commits (
 			commitHash TEXT PRIMARY KEY,
 			scoredAt INTEGER NOT NULL,
-			commitDate INTEGER NOT NULL,
+			commitDate TEXT NOT NULL,
 			linesAdded INTEGER NOT NULL DEFAULT 0,
 			linesDeleted INTEGER NOT NULL DEFAULT 0,
 			tabLinesAdded INTEGER NOT NULL DEFAULT 0,
@@ -118,6 +118,12 @@ func seedCursorAttributionDBTest(t *testing.T) string {
 
 	first := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC).UnixMilli()
 	second := time.Date(2026, 6, 1, 13, 0, 0, 0, time.UTC).UnixMilli()
+	insideA := time.Date(2026, 6, 1, 8, 0, 0, 0,
+		time.FixedZone("EDT", -4*60*60))
+	insideB := time.Date(2026, 6, 3, 10, 0, 0, 0,
+		time.FixedZone("EDT", -4*60*60))
+	outside := time.Date(2026, 6, 1, 15, 0, 0, 0,
+		time.FixedZone("EDT", -4*60*60))
 
 	_, err = conn.Exec(`
 		INSERT INTO scored_commits (
@@ -132,12 +138,12 @@ func seedCursorAttributionDBTest(t *testing.T) string {
 			('c2', ?, ?, 6, 2, 0, 0, 1, 0, 4, 1, 1, 0),
 			('c3', ?, ?, 99, 1, 50, 0, 40, 0, 9, 0, 0, 0)
 	`,
-		time.Date(2026, 5, 31, 23, 0, 0, 0, time.UTC).UnixMilli(),
 		first,
-		time.Date(2026, 6, 3, 0, 0, 0, 0, time.UTC).UnixMilli(),
+		formatCursorCommitDate(insideA),
 		second,
-		first,
+		formatCursorCommitDate(insideB),
 		time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC).UnixMilli(),
+		formatCursorCommitDate(outside),
 	)
 	require.NoError(t, err)
 	_, err = conn.Exec(`
@@ -149,4 +155,8 @@ func seedCursorAttributionDBTest(t *testing.T) string {
 	`, first, second, second, second)
 	require.NoError(t, err)
 	return path
+}
+
+func formatCursorCommitDate(t time.Time) string {
+	return t.Format("Mon Jan 2 15:04:05 2006 -0700")
 }

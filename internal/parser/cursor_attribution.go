@@ -68,7 +68,7 @@ func LoadCursorAttribution(
 			COALESCE(SUM(blankLinesAdded), 0),
 			COALESCE(SUM(blankLinesDeleted), 0)
 		FROM scored_commits
-		WHERE commitDate >= ? AND commitDate < ?`,
+		WHERE scoredAt >= ? AND scoredAt < ?`,
 		timeToMillis(from), timeToMillis(to),
 	).Scan(
 		&attr.ScoredCommits,

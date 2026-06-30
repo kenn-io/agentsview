@@ -56,7 +56,7 @@ func newDirectTestSvc(t *testing.T) (service.SessionService, *directTestEnv) {
 type cursorCommitFixture struct {
 	commitHash           string
 	scoredAt             int64
-	commitDate           int64
+	commitDate           string
 	linesAdded           int64
 	linesDeleted         int64
 	tabLinesAdded        int64
@@ -75,6 +75,10 @@ type cursorConversationFixture struct {
 	updatedAt int64
 }
 
+func formatCursorCommitDate(t time.Time) string {
+	return t.Format("Mon Jan 2 15:04:05 2006 -0700")
+}
+
 func seedCursorAttributionDB(
 	t *testing.T,
 	commits []cursorCommitFixture,
@@ -91,7 +95,7 @@ func seedCursorAttributionDB(
 		CREATE TABLE scored_commits (
 			commitHash TEXT PRIMARY KEY,
 			scoredAt INTEGER NOT NULL,
-			commitDate INTEGER NOT NULL,
+			commitDate TEXT NOT NULL,
 			linesAdded INTEGER NOT NULL DEFAULT 0,
 			linesDeleted INTEGER NOT NULL DEFAULT 0,
 			tabLinesAdded INTEGER NOT NULL DEFAULT 0,
@@ -175,8 +179,8 @@ func TestDirectBackend_Stats_CursorAttribution(t *testing.T) {
 		[]cursorCommitFixture{
 			{
 				commitHash:         "c1",
-				scoredAt:           now.Add(48 * time.Hour).UnixMilli(),
-				commitDate:         now.Add(-110 * time.Minute).UnixMilli(),
+				scoredAt:           now.Add(-110 * time.Minute).UnixMilli(),
+				commitDate:         formatCursorCommitDate(now.Add(48 * time.Hour)),
 				linesAdded:         12,
 				linesDeleted:       4,
 				tabLinesAdded:      6,
@@ -187,7 +191,7 @@ func TestDirectBackend_Stats_CursorAttribution(t *testing.T) {
 			{
 				commitHash:         "c2",
 				scoredAt:           now.Add(-90 * time.Minute).UnixMilli(),
-				commitDate:         now.Add(-90 * time.Minute).UnixMilli(),
+				commitDate:         formatCursorCommitDate(now.Add(-90 * time.Minute)),
 				linesAdded:         6,
 				linesDeleted:       2,
 				composerLinesAdded: 2,
@@ -254,7 +258,7 @@ func TestDirectBackend_Stats_CursorAttributionIgnoredForProjectFilters(
 		[]cursorCommitFixture{{
 			commitHash:         "c1",
 			scoredAt:           now.Add(-30 * time.Minute).UnixMilli(),
-			commitDate:         now.Add(-30 * time.Minute).UnixMilli(),
+			commitDate:         formatCursorCommitDate(now.Add(-30 * time.Minute)),
 			linesAdded:         9,
 			tabLinesAdded:      4,
 			composerLinesAdded: 2,
