@@ -73,14 +73,14 @@ agentsview duckdb serve
 |------|---------|-------------|
 | `--bind` | `quack:127.0.0.1:9494` | Quack bind URI |
 | `--path` | `[duckdb].path` | DuckDB mirror file to expose |
-| `--token` | (generated) | Quack authentication token |
+| `--token` | (required unless configured) | Quack authentication token |
 | `--allow-insecure` | `false` | Allow binding beyond loopback |
 
 Safety defaults:
 
 - The Quack listener binds to loopback (`127.0.0.1`) by default.
-- A token is required; if you don't pass one, a token is
-  generated and printed so clients can authenticate.
+- A token is required from `--token`, `AGENTSVIEW_DUCKDB_TOKEN`, or
+  `[duckdb].token`; the token value is never printed.
 - Binding to a non-loopback address requires the explicit
   `--allow-insecure` flag. Quack speaks plain HTTP, so put it
   behind TLS, a VPN, or an SSH tunnel before exposing it beyond

@@ -127,6 +127,17 @@ func TestSyncStateTargetForConfigScopesRemoteURLWithoutSecrets(t *testing.T) {
 	got := SyncStateTargetForConfig(base)
 	require.NotEmpty(t, got)
 	assert.Equal(t, got, SyncStateTargetForConfig(sameTargetDifferentSecrets))
+	assert.NotEqual(t, got, SyncStateTargetForConfig(config.DuckDBConfig{
+		URL: "quack:https://duck-other.example.com/db?x=1",
+	}))
+	assert.NotEqual(t, got, SyncStateTargetForConfig(config.DuckDBConfig{
+		URL: "quack:https://duck.example.com/other-db?x=1",
+	}))
+	assert.NotEqual(t, SyncStateTargetForConfig(config.DuckDBConfig{
+		URL: "quack:https://duck.example.com/db?keyspace=alpha",
+	}), SyncStateTargetForConfig(config.DuckDBConfig{
+		URL: "quack:https://duck.example.com/db?keyspace=beta",
+	}))
 	assert.NotContains(t, got, "secret")
 	assert.NotContains(t, got, "first-token")
 	assert.NotContains(t, got, "second-token")

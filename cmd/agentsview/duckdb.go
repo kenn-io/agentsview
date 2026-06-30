@@ -56,7 +56,7 @@ func runDuckDBPush(cfg DuckDBPushConfig) {
 	}
 
 	ctx, stop := signal.NotifyContext(
-		context.Background(), duckDBPushShutdownSignals()...,
+		context.Background(), duckDBLongRunningSignals()...,
 	)
 	defer stop()
 
@@ -98,7 +98,7 @@ func runDuckDBPush(cfg DuckDBPushConfig) {
 	}
 }
 
-func duckDBPushShutdownSignals() []os.Signal {
+func duckDBLongRunningSignals() []os.Signal {
 	return []os.Signal{os.Interrupt, syscall.SIGTERM}
 }
 
@@ -201,8 +201,7 @@ func runDuckDBServe(appCfg config.Config, basePath string) {
 	}
 
 	ctx, stop := signal.NotifyContext(
-		context.Background(),
-		os.Interrupt, syscall.SIGTERM,
+		context.Background(), duckDBLongRunningSignals()...,
 	)
 	defer stop()
 
@@ -317,7 +316,7 @@ func runDuckDBQuackServe(cfg DuckDBQuackServeConfig) {
 	defer conn.Close()
 
 	ctx, stop := signal.NotifyContext(
-		context.Background(), os.Interrupt, syscall.SIGTERM,
+		context.Background(), duckDBLongRunningSignals()...,
 	)
 	defer stop()
 

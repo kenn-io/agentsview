@@ -18,6 +18,12 @@ import (
 	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 )
 
+func TestDuckDBLongRunningSignalsIncludeSIGTERM(t *testing.T) {
+	signals := duckDBLongRunningSignals()
+	assert.Contains(t, signals, os.Interrupt)
+	assert.Contains(t, signals, syscall.SIGTERM)
+}
+
 func TestResolveDuckDBPushProjects(t *testing.T) {
 	tests := []projectResolutionCase[DuckDBPushConfig]{
 		{
@@ -66,13 +72,6 @@ func TestResolveDuckDBPushProjects(t *testing.T) {
 			}, cfg)
 		},
 	)
-}
-
-func TestDuckDBPushShutdownSignalsIncludeSIGTERM(t *testing.T) {
-	signals := duckDBPushShutdownSignals()
-
-	assert.Contains(t, signals, os.Interrupt)
-	assert.Contains(t, signals, syscall.SIGTERM)
 }
 
 func TestArchiveWriteBackendDuckDBPushPostsToDaemon(t *testing.T) {

@@ -143,23 +143,7 @@ func (s *Sync) Status(ctx context.Context) (SyncStatus, error) {
 	if err := s.EnsureSchema(ctx); err != nil {
 		return SyncStatus{}, err
 	}
-	if err := s.duck.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM sessions WHERE machine = ?`,
-		s.machine,
-	).Scan(&status.DuckDBSessions); err != nil {
-		return SyncStatus{}, fmt.Errorf("counting duckdb sessions: %w", err)
-	}
-	if err := s.duck.QueryRowContext(ctx,
-		`SELECT COUNT(*)
-		 FROM messages
-		 WHERE session_id IN (
-			SELECT id FROM sessions WHERE machine = ?
-		 )`,
-		s.machine,
-	).Scan(&status.DuckDBMessages); err != nil {
-		return SyncStatus{}, fmt.Errorf("counting duckdb messages: %w", err)
-	}
-	return status, nil
+	return readMachineStatus(ctx, s.duck, s.machine, status.LastPushAt)
 }
 
 // Push syncs local sessions and dependent rows to DuckDB.

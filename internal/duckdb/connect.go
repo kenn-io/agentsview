@@ -94,11 +94,23 @@ func canonicalDuckDBSyncTarget(rawURL string) string {
 
 func isSecretURLQueryKey(key string) bool {
 	lower := strings.ToLower(key)
-	return lower == "auth" ||
-		strings.Contains(lower, "token") ||
-		strings.Contains(lower, "secret") ||
-		strings.Contains(lower, "password") ||
-		strings.Contains(lower, "key")
+	return isCredentialQueryKey(lower, "auth") ||
+		isCredentialQueryKey(lower, "token") ||
+		isCredentialQueryKey(lower, "secret") ||
+		isCredentialQueryKey(lower, "password") ||
+		isCredentialQueryKey(lower, "key")
+}
+
+func isCredentialQueryKey(key, credential string) bool {
+	if key == credential {
+		return true
+	}
+	for _, sep := range []string{"_", "-", "."} {
+		if strings.HasSuffix(key, sep+credential) {
+			return true
+		}
+	}
+	return false
 }
 
 // ReadStatusFromConfig reads DuckDB/Quack row counts without requiring a local
