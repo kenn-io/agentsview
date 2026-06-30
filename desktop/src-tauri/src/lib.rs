@@ -27,7 +27,7 @@ use tauri_plugin_updater::UpdaterExt;
 
 const HOST: &str = "127.0.0.1";
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
-const DAEMON_STARTUP_TIMEOUT: Duration = Duration::from_secs(300);
+const DAEMON_STARTUP_LONG_NOTICE_AFTER: Duration = Duration::from_secs(300);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(125);
 const STATUS_POLL_MAX_INTERVAL: Duration = Duration::from_secs(1);
 const STATUS_PROBE_TIMEOUT: Duration = Duration::from_millis(1250);
@@ -88,6 +88,15 @@ struct SidecarStdoutUpdate {
     redacted_chunk: String,
     status: Option<String>,
     port: Option<u16>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum BackendStatusProbe {
+    Ready(u16),
+    Starting(String),
+    NotRunning(String),
+    Incompatible(String),
+    Unavailable,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -980,8 +989,10 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u6
     thread::spawn(move || {
         thread::sleep(READY_TIMEOUT);
         if !timeout_state.load(Ordering::SeqCst) {
-            let _ = timeout_window
-                .eval("window.__setStatus('AgentsView backend did not become ready in time.');");
+            let _ = timeout_window.eval(
+                "window.__setStatus(\
+                 'AgentsView backend is still starting. Large migrations or initial syncs can take several minutes.');",
+            );
         }
     });
 
@@ -1425,42 +1436,78 @@ fn poll_background_status_after_launcher_exit(window: WebviewWindow, generation:
         .background_status_poll_generation
         .store(generation, Ordering::SeqCst);
     tauri::async_runtime::spawn(async move {
-        let deadline = Instant::now() + DAEMON_STARTUP_TIMEOUT;
+        let started = Instant::now();
         let mut failed_status_probes = 0;
-        while Instant::now() < deadline {
+        let mut long_startup_notice_shown = false;
+        loop {
             if !background_status_poll_is_current(&handle, generation) {
                 return;
             }
-            if let Some(port) = probe_backend_status(&handle).await {
-                if !background_status_poll_is_current(&handle, generation) {
+            match probe_backend_status(&handle).await {
+                BackendStatusProbe::Ready(port) => {
+                    if !background_status_poll_is_current(&handle, generation) {
+                        return;
+                    }
+                    save_sidecar_port(&handle, port);
+                    let _ = window.eval(
+                        "window.__setStage(2); \
+                         window.__setStatus('Connecting to interface...');",
+                    );
+                    redirect_when_ready(window.clone(), port);
                     return;
                 }
-                save_sidecar_port(&handle, port);
-                let _ = window.eval(
-                    "window.__setStage(2); \
-                     window.__setStatus('Connecting to interface...');",
-                );
-                redirect_when_ready(window.clone(), port);
-                return;
+                BackendStatusProbe::Starting(status) => {
+                    failed_status_probes = 0;
+                    if !long_startup_notice_shown && !status.trim().is_empty() {
+                        let escaped = status.replace('\\', "\\\\").replace('\'', "\\'");
+                        let _ = window.eval(
+                            format!("window.__setStatus('{escaped}');").as_str(),
+                        );
+                    }
+                }
+                BackendStatusProbe::NotRunning(status) => {
+                    spawn_startup_error_render(
+                        window,
+                        "AgentsView backend stopped",
+                        "The background launcher exited, and no AgentsView server is running.",
+                        startup_failure_detail(
+                            "The background backend disappeared before it became ready.",
+                            status.as_str(),
+                        )
+                        .as_str(),
+                    );
+                    return;
+                }
+                BackendStatusProbe::Incompatible(status) => {
+                    spawn_startup_error_render(
+                        window,
+                        "AgentsView backend is incompatible",
+                        "AgentsView found a running backend that this desktop app cannot use.",
+                        status.as_str(),
+                    );
+                    return;
+                }
+                BackendStatusProbe::Unavailable => {
+                    failed_status_probes += 1;
+                    if failed_status_probes == STATUS_PROBE_FAILURE_NOTICE_AFTER {
+                        let _ = window.eval(
+                            "window.__setStatus(\
+                             'Waiting for background daemon status. Check serve.log if this persists.');",
+                        );
+                    }
+                }
             }
-            failed_status_probes += 1;
-            if failed_status_probes == STATUS_PROBE_FAILURE_NOTICE_AFTER {
+            if !long_startup_notice_shown
+                && started.elapsed() >= DAEMON_STARTUP_LONG_NOTICE_AFTER
+            {
+                long_startup_notice_shown = true;
                 let _ = window.eval(
                     "window.__setStatus(\
-                     'Waiting for background daemon status. Check serve.log if this persists.');",
+                     'AgentsView is still preparing the local archive. Large migrations or full resyncs can take many minutes.');",
                 );
             }
             tokio::time::sleep(background_status_poll_interval(failed_status_probes)).await;
         }
-        if !background_status_poll_is_current(&handle, generation) {
-            return;
-        }
-        spawn_startup_error_render(
-            window,
-            "AgentsView backend did not become ready",
-            "The background launcher exited, but no writable daemon became available.",
-            "The desktop app waited several minutes for `agentsview serve status` to report a writable backend.",
-        );
     });
 }
 
@@ -1484,21 +1531,32 @@ fn background_status_poll_interval(failed_status_probes: u32) -> Duration {
         .min(STATUS_POLL_MAX_INTERVAL)
 }
 
-async fn probe_backend_status(handle: &AppHandle) -> Option<u16> {
-    let mut command = handle.shell().sidecar("agentsview").ok()?;
+async fn probe_backend_status(handle: &AppHandle) -> BackendStatusProbe {
+    let Ok(mut command) = handle.shell().sidecar("agentsview") else {
+        return BackendStatusProbe::Unavailable;
+    };
     for (key, value) in sidecar_env() {
         command = command.env(key, value);
     }
-    let (mut rx, child) = command.args(sidecar_status_args()).spawn().ok()?;
+    let Ok((mut rx, child)) = command.args(sidecar_status_args()).spawn() else {
+        return BackendStatusProbe::Unavailable;
+    };
     let mut stdout_buffer = String::new();
+    let mut stderr_buffer = String::new();
     let status = tokio::time::timeout(STATUS_PROBE_TIMEOUT, async {
         while let Some(event) = rx.recv().await {
             match event {
                 CommandEvent::Stdout(bytes) => {
                     stdout_buffer.push_str(String::from_utf8_lossy(&bytes).as_ref());
                 }
+                CommandEvent::Stderr(bytes) => {
+                    stderr_buffer.push_str(String::from_utf8_lossy(&bytes).as_ref());
+                }
                 CommandEvent::Terminated(_) => {
-                    return Ok(parse_writable_listening_port_from_status(&stdout_buffer));
+                    return Ok(classify_backend_status_output(
+                        stdout_buffer.as_str(),
+                        stderr_buffer.as_str(),
+                    ));
                 }
                 CommandEvent::Error(err) => {
                     eprintln!("[agentsview:error] {err}");
@@ -1507,15 +1565,44 @@ async fn probe_backend_status(handle: &AppHandle) -> Option<u16> {
                 _ => {}
             }
         }
-        Ok(None)
+        Ok(BackendStatusProbe::Unavailable)
     })
     .await;
     match status {
-        Ok(Ok(port)) => port,
+        Ok(Ok(status)) => status,
         Ok(Err(())) | Err(_) => {
             let _ = child.kill();
-            None
+            BackendStatusProbe::Unavailable
         }
+    }
+}
+
+fn classify_backend_status_output(stdout: &str, stderr: &str) -> BackendStatusProbe {
+    if let Some(port) = parse_writable_listening_port_from_status(stdout) {
+        return BackendStatusProbe::Ready(port);
+    }
+
+    let detail = combined_probe_output(stdout, stderr);
+    if detail.contains("No agentsview server is running.") {
+        return BackendStatusProbe::NotRunning(detail);
+    }
+    if detail.contains("incompatible running writable daemon") {
+        return BackendStatusProbe::Incompatible(detail);
+    }
+    if detail.trim().is_empty() {
+        return BackendStatusProbe::Unavailable;
+    }
+    BackendStatusProbe::Starting(detail)
+}
+
+fn combined_probe_output(stdout: &str, stderr: &str) -> String {
+    let stdout = stdout.trim();
+    let stderr = stderr.trim();
+    match (stdout.is_empty(), stderr.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => stdout.to_string(),
+        (true, false) => stderr.to_string(),
+        (false, false) => format!("{stdout}\n{stderr}"),
     }
 }
 
@@ -3239,11 +3326,59 @@ mode:    read-only
     fn parse_writable_listening_port_from_status_accepts_writable_daemon() {
         let output = "\
 agentsview running at http://127.0.0.1:18082 (pid 123)
-mode:    writable
+  mode:    writable
 ";
         assert_eq!(
             parse_writable_listening_port_from_status(output),
             Some(18082)
+        );
+    }
+
+    #[test]
+    fn classify_backend_status_output_detects_ready_daemon() {
+        let output = "\
+agentsview running at http://127.0.0.1:18082 (pid 123)
+  mode:    writable
+";
+
+        assert_eq!(
+            classify_backend_status_output(output, ""),
+            BackendStatusProbe::Ready(18082)
+        );
+    }
+
+    #[test]
+    fn classify_backend_status_output_keeps_starting_state_open_ended() {
+        assert_eq!(
+            classify_backend_status_output("agentsview is starting up.", ""),
+            BackendStatusProbe::Starting("agentsview is starting up.".to_string())
+        );
+        assert_eq!(
+            classify_backend_status_output(
+                "agentsview process running (pid 123) but not responding to health checks.",
+                "",
+            ),
+            BackendStatusProbe::Starting(
+                "agentsview process running (pid 123) but not responding to health checks."
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn classify_backend_status_output_reports_absent_or_incompatible_daemon() {
+        assert_eq!(
+            classify_backend_status_output("No agentsview server is running.", ""),
+            BackendStatusProbe::NotRunning("No agentsview server is running.".to_string())
+        );
+        assert_eq!(
+            classify_backend_status_output(
+                "agentsview found an incompatible running writable daemon.",
+                "",
+            ),
+            BackendStatusProbe::Incompatible(
+                "agentsview found an incompatible running writable daemon.".to_string()
+            )
         );
     }
 
