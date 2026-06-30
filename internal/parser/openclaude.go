@@ -370,7 +370,7 @@ func parseOpenClaudeSession(
 
 		switch strings.TrimSpace(gjson.Get(line, "type").Str) {
 		case "attachment":
-			if qc, ok := extractQueuedCommand(line); ok {
+			if qc, ok := extractOpenClaudeQueuedCommand(line); ok {
 				queuedCommands = append(queuedCommands, qc)
 			}
 			continue
@@ -600,6 +600,29 @@ func openClaudeSemanticMessages(messages []ParsedMessage) []ParsedMessage {
 		filtered = append(filtered, msg)
 	}
 	return filtered
+}
+
+func extractOpenClaudeQueuedCommand(line string) (claudeQueuedCommand, bool) {
+	attachment := gjson.Get(line, "attachment")
+	if attachment.Get("type").Str != "queued_command" {
+		return claudeQueuedCommand{}, false
+	}
+	if attachment.Get("commandMode").Str != "prompt" {
+		return claudeQueuedCommand{}, false
+	}
+	if attachment.Get("isMeta").Bool() || attachment.Get("origin").Exists() {
+		return claudeQueuedCommand{}, false
+	}
+
+	prompt, _, _, _, _, _ := ExtractTextContent(attachment.Get("prompt"))
+	if strings.TrimSpace(prompt) == "" {
+		return claudeQueuedCommand{}, false
+	}
+
+	return claudeQueuedCommand{
+		prompt:    prompt,
+		timestamp: extractTimestamp(line),
+	}, true
 }
 
 func openClaudeSessionID(id string) string {

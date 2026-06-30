@@ -172,8 +172,22 @@ func TestOpenClaudeQueuedCommandAttachment(t *testing.T) {
 			"type":      "attachment",
 			"timestamp": tsEarlyS1,
 			"attachment": map[string]any{
-				"type":   "queued_command",
-				"prompt": "/resume next step",
+				"type":        "queued_command",
+				"commandMode": "prompt",
+				"prompt": []map[string]any{
+					{"type": "text", "text": "/resume next step"},
+					{"type": "text", "text": "with context"},
+				},
+			},
+		}),
+		buildMetadataLine(map[string]any{
+			"type":      "attachment",
+			"timestamp": "2024-01-01T10:00:02Z",
+			"attachment": map[string]any{
+				"type":        "queued_command",
+				"commandMode": "prompt",
+				"origin":      "task-notification",
+				"prompt":      "ignored queued prompt",
 			},
 		}),
 		buildMetadataLine(map[string]any{
@@ -208,7 +222,7 @@ func TestOpenClaudeQueuedCommandAttachment(t *testing.T) {
 
 	result := outcome.Results[0].Result
 	require.Len(t, result.Messages, 3)
-	assert.Equal(t, "/resume next step", result.Messages[1].Content)
+	assert.Equal(t, "/resume next step\nwith context", result.Messages[1].Content)
 	assert.Equal(t, "queued_command", result.Messages[1].SourceSubtype)
 	assert.Equal(t, RoleUser, result.Messages[1].Role)
 	assert.Equal(t, 2, result.Session.UserMessageCount)
