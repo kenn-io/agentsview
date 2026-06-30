@@ -248,6 +248,82 @@ func TestOpenClaudeQueuedCommandAttachment(t *testing.T) {
 	assert.Equal(t, "first prompt", result.Session.FirstMessage)
 }
 
+func TestOpenClaudeSkipsMetaUserMessages(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "meta-project")
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+
+	path := filepath.Join(projectDir, "session-meta.jsonl")
+	content := strings.Join([]string{
+		buildMetadataLine(map[string]any{
+			"type":      "user",
+			"timestamp": tsEarly,
+			"isMeta":    true,
+			"uuid":      "m1",
+			"message": map[string]any{
+				"role":    "user",
+				"content": "hidden meta prompt",
+			},
+		}),
+		buildMetadataLine(map[string]any{
+			"type":      "user",
+			"timestamp": tsEarlyS1,
+			"uuid":      "u1",
+			"message": map[string]any{
+				"role":    "user",
+				"content": "real prompt",
+			},
+		}),
+		buildMetadataLine(map[string]any{
+			"type":      "assistant",
+			"timestamp": "2024-01-01T10:00:02Z",
+			"uuid":      "a1",
+			"message": map[string]any{
+				"role":        "assistant",
+				"stop_reason": "end_turn",
+				"content": []map[string]any{
+					{"type": "text", "text": "real reply"},
+				},
+			},
+		}),
+		buildMetadataLine(map[string]any{
+			"type":      "user",
+			"timestamp": "2024-01-01T10:00:03Z",
+			"isMeta":    true,
+			"uuid":      "m2",
+			"message": map[string]any{
+				"role":    "user",
+				"content": "hidden trailing meta",
+			},
+		}),
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	provider, ok := NewProvider(AgentOpenClaude, ProviderConfig{
+		Roots: []string{root},
+	})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: discovered[0],
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+
+	result := outcome.Results[0].Result
+	require.Len(t, result.Messages, 2)
+	assert.Equal(t, "real prompt", result.Session.FirstMessage)
+	assert.Equal(t, 1, result.Session.UserMessageCount)
+	assert.Equal(t, TerminationAwaitingUser, result.Session.TerminationStatus)
+	assert.Equal(t, RoleUser, result.Messages[0].Role)
+	assert.Equal(t, "real prompt", result.Messages[0].Content)
+	assert.Equal(t, RoleAssistant, result.Messages[1].Role)
+}
+
 func TestOpenClaudeDiscoverParseSubagentRelationship(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(

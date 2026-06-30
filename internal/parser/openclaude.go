@@ -442,6 +442,9 @@ func parseOpenClaudeSession(
 		default:
 			continue
 		}
+		if role == "user" && gjson.Get(line, "isMeta").Bool() {
+			continue
+		}
 
 		content := gjson.Get(line, "message.content")
 		text, thinkingText, hasThinking, hasToolUse, toolCalls, toolResults :=
