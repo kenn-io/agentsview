@@ -460,6 +460,7 @@
   "shared_no_sessions_in_range": "No sessions in range",
   "shared_none": "None",
   "shared_other": "Other",
+  "shared_no_branch": "(no branch)",
   "shared_unknown": "unknown",
   "analytics_refresh": "Refresh analytics",
   "analytics_export_csv": "Export CSV",

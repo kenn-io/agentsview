@@ -197,6 +197,16 @@ export interface MachinesResponse {
   machines: string[];
 }
 
+/** Matches Go BranchInfo struct in internal/db/sessions.go */
+export interface BranchInfo {
+  project: string;
+  branch: string;
+}
+
+export interface BranchesResponse {
+  branches: BranchInfo[];
+}
+
 /** Matches Go AgentInfo struct */
 export interface AgentInfo {
   name: string;
