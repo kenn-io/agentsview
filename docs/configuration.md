@@ -169,6 +169,7 @@ can still be parsed.
 | Antigravity (IDE)     | `~/.gemini/antigravity/`                                                         | SQLite database per session                                                                                                     |
 | Antigravity CLI       | `~/.gemini/antigravity-cli/`                                                     | SQLite `conversations/<uuid>.db`, `<uuid>.trajectory.json` sidecars, or encrypted `.pb` files plus `brain/` and `history.jsonl` |
 | Claude Code           | `~/.claude/projects/`                                                            | JSONL per session                                                                                                               |
+| OpenClaude            | `~/.openclaude/projects/`                                                        | JSONL per session                                                                                                               |
 | Claude Cowork         | (platform-specific, see below)                                                   | Claude Desktop cowork sessions                                                                                                  |
 | Codex                 | `~/.codex/sessions/` and `~/.codex/archived_sessions/`                           | JSONL per session                                                                                                               |
 | Command Code          | `~/.commandcode/projects/`                                                       | JSONL per session, optional `.meta.json` sidecar                                                                                |
@@ -364,6 +365,8 @@ export AMP_DIR=~/custom/amp # historical local Amp threads only
 export ANTIGRAVITY_DIR=~/custom/antigravity
 export ANTIGRAVITY_CLI_DIR=~/custom/antigravity-cli
 export CLAUDE_PROJECTS_DIR=~/custom/claude
+export OPENCLAUDE_PROJECTS_DIR=~/custom/openclaude/projects
+export OPENCLAUDE_CONFIG_DIR=~/custom/openclaude
 export COWORK_DIR=~/custom/cowork
 export CODEX_SESSIONS_DIR=~/custom/codex
 export COMMANDCODE_PROJECTS_DIR=~/custom/commandcode
@@ -419,7 +422,8 @@ codex_sessions_dirs = [
 ```
 
 The corresponding fields are `aider_dirs`, `amp_dirs`, `antigravity_dirs`,
-`antigravity_cli_dirs`, `claude_project_dirs`, `cowork_dirs`,
+`antigravity_cli_dirs`, `claude_project_dirs`, `openclaude_project_dirs`,
+`cowork_dirs`,
 `codex_sessions_dirs`, `commandcode_project_dirs`, `copilot_dirs`,
 `cortex_dirs`, `cursor_project_dirs`, `deepseek_tui_sessions_dirs`,
 `forge_dirs`, `gemini_dirs`, `gptme_dirs`, `hermes_sessions_dirs`, `iflow_dirs`,

@@ -343,17 +343,18 @@ func parseOpenClaudeSession(
 	malformedLines := 0
 	ordinal := 0
 	var (
-		messages    []ParsedMessage
-		startedAt   time.Time
-		endedAt     time.Time
-		firstUser   string
-		userCount   int
-		sessionID   = strings.TrimSuffix(filepath.Base(path), ".jsonl")
-		sessionName string
-		customTitle string
-		aiTitle     string
-		cwd         string
-		gitBranch   string
+		messages       []ParsedMessage
+		queuedCommands []claudeQueuedCommand
+		startedAt      time.Time
+		endedAt        time.Time
+		firstUser      string
+		userCount      int
+		sessionID      = strings.TrimSuffix(filepath.Base(path), ".jsonl")
+		sessionName    string
+		customTitle    string
+		aiTitle        string
+		cwd            string
+		gitBranch      string
 	)
 
 	for {
@@ -368,6 +369,11 @@ func parseOpenClaudeSession(
 		}
 
 		switch strings.TrimSpace(gjson.Get(line, "type").Str) {
+		case "attachment":
+			if qc, ok := extractQueuedCommand(line); ok {
+				queuedCommands = append(queuedCommands, qc)
+			}
+			continue
 		case "custom-title":
 			if v := strings.TrimSpace(gjson.Get(line, "customTitle").Str); v != "" {
 				customTitle = v
@@ -513,8 +519,22 @@ func parseOpenClaudeSession(
 		!gjson.Valid(lastLine) &&
 		!fileEndsWithNewline(f, info.Size())
 
-	if len(messages) == 0 {
+	if len(messages) == 0 && len(queuedCommands) == 0 {
 		return nil, nil, nil
+	}
+
+	if len(queuedCommands) > 0 {
+		messages = mergeQueuedCommands(messages, queuedCommands, 0)
+		firstUser, userCount = firstMessageAndUserCount(messages)
+		for _, qc := range queuedCommands {
+			if qc.timestamp.After(endedAt) {
+				endedAt = qc.timestamp
+			}
+			if !qc.timestamp.IsZero() &&
+				(startedAt.IsZero() || qc.timestamp.Before(startedAt)) {
+				startedAt = qc.timestamp
+			}
+		}
 	}
 
 	if customTitle != "" {

@@ -152,6 +152,69 @@ func TestOpenClaudeDiscoverParseAndFindSource(t *testing.T) {
 	assert.Contains(t, result.Messages[2].Content, "Compact summary")
 }
 
+func TestOpenClaudeQueuedCommandAttachment(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "queue-project")
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+
+	path := filepath.Join(projectDir, "session-queue.jsonl")
+	content := strings.Join([]string{
+		buildMetadataLine(map[string]any{
+			"type":      "user",
+			"timestamp": tsEarly,
+			"uuid":      "u1",
+			"message": map[string]any{
+				"role":    "user",
+				"content": "first prompt",
+			},
+		}),
+		buildMetadataLine(map[string]any{
+			"type":      "attachment",
+			"timestamp": tsEarlyS1,
+			"attachment": map[string]any{
+				"type":   "queued_command",
+				"prompt": "/resume next step",
+			},
+		}),
+		buildMetadataLine(map[string]any{
+			"type":       "assistant",
+			"timestamp":  tsEarlyS5,
+			"uuid":       "u2",
+			"parentUuid": "u1",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": "reply"},
+				},
+			},
+		}),
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	provider, ok := NewProvider(AgentOpenClaude, ProviderConfig{
+		Roots: []string{root},
+	})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: discovered[0],
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+
+	result := outcome.Results[0].Result
+	require.Len(t, result.Messages, 3)
+	assert.Equal(t, "/resume next step", result.Messages[1].Content)
+	assert.Equal(t, "queued_command", result.Messages[1].SourceSubtype)
+	assert.Equal(t, RoleUser, result.Messages[1].Role)
+	assert.Equal(t, 2, result.Session.UserMessageCount)
+	assert.Equal(t, "first prompt", result.Session.FirstMessage)
+}
+
 func TestOpenClaudeDiscoverParseSubagentRelationship(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(
