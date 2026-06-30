@@ -387,7 +387,9 @@ func (b *localArchiveWriteBackend) DuckDBPush(
 	projects []string,
 	excludeProjects []string,
 ) (duckdbsync.PushResult, error) {
-	return b.duckDBPush(ctx, duckCfg, cfg, projects, excludeProjects, "")
+	return b.duckDBPush(
+		ctx, duckCfg, cfg, projects, excludeProjects, "", false,
+	)
 }
 
 func (b *localArchiveWriteBackend) duckDBPush(
@@ -397,6 +399,7 @@ func (b *localArchiveWriteBackend) duckDBPush(
 	projects []string,
 	excludeProjects []string,
 	syncStateTarget string,
+	useConfigURL bool,
 ) (duckdbsync.PushResult, error) {
 	didResync := runLocalSync(ctx, b.appCfg, b.database, cfg.Full)
 	if err := ctx.Err(); err != nil {
@@ -406,14 +409,22 @@ func (b *localArchiveWriteBackend) duckDBPush(
 
 	fmt.Println("Opening DuckDB mirror...")
 	connectStart := time.Now()
-	syncer, err := duckdbsync.NewFromConfig(
-		duckCfg, b.database,
-		duckdbsync.SyncOptions{
-			Projects:        projects,
-			ExcludeProjects: excludeProjects,
-			SyncStateTarget: syncStateTarget,
-		},
-	)
+	opts := duckdbsync.SyncOptions{
+		Projects:        projects,
+		ExcludeProjects: excludeProjects,
+		SyncStateTarget: syncStateTarget,
+	}
+	var syncer *duckdbsync.Sync
+	var err error
+	if useConfigURL {
+		syncer, err = duckdbsync.NewFromConfig(
+			duckCfg, b.database, opts,
+		)
+	} else {
+		syncer, err = duckdbsync.New(
+			duckCfg.Path, b.database, duckCfg.MachineName, opts,
+		)
+	}
 	if err != nil {
 		return duckdbsync.PushResult{}, err
 	}
@@ -461,7 +472,7 @@ func (b *localArchiveWriteBackend) QuackPush(
 	}
 	return b.duckDBPush(ctx, duckCfg, DuckDBPushConfig{
 		Full: cfg.Full,
-	}, projects, excludeProjects, quackSyncStateTarget)
+	}, projects, excludeProjects, quackSyncStateTarget, true)
 }
 
 func (b *localArchiveWriteBackend) QuackPushWatch(
