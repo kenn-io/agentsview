@@ -338,3 +338,49 @@ func TestListSessions_SortNullsLast(t *testing.T) {
 	// Ascending with NULLs last, paginated across the sentinel boundary.
 	require.Equal(t, []string{"h20", "h80", "hnull"}, walked)
 }
+
+func TestFindSessionIDsByPartialLiteralCaseSensitivePG(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_partial_lookup_test"
+
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	local := testDB(t)
+	for _, id := range []string{"abc_def", "abcXdef", "abc%def", "ABCdef"} {
+		require.NoError(t, local.UpsertSession(db.Session{
+			ID: id, Project: "proj", Machine: "local",
+			Agent: "claude", MessageCount: 1,
+		}), "upsert %q", id)
+	}
+
+	syncer := &Sync{
+		pg:         pg,
+		local:      local,
+		machine:    "test-machine",
+		schema:     schema,
+		schemaDone: true,
+	}
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err, "Push")
+
+	store := &Store{pg: pg}
+	got, err := store.FindSessionIDsByPartial(ctx, "c_d", 10)
+	require.NoError(t, err, "underscore lookup")
+	assert.Equal(t, []string{"abc_def"}, got)
+
+	got, err = store.FindSessionIDsByPartial(ctx, "c%d", 10)
+	require.NoError(t, err, "percent lookup")
+	assert.Equal(t, []string{"abc%def"}, got)
+
+	got, err = store.FindSessionIDsByPartial(ctx, "abc", 10)
+	require.NoError(t, err, "case-sensitive lookup")
+	assert.ElementsMatch(t, []string{"abc_def", "abcXdef", "abc%def"}, got)
+	assert.NotContains(t, got, "ABCdef")
+}
