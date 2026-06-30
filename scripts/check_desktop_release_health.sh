@@ -40,13 +40,47 @@ if [ "$manifest_version" != "$version" ]; then
     exit 1
 fi
 
-while IFS=$'\t' read -r platform signature; do
+expected_platforms=(
+    "darwin-aarch64"
+    "darwin-x86_64"
+    "windows-x86_64"
+    "linux-x86_64"
+)
+
+expected_platforms_list() {
+    local label="" platform
+    for platform in "${expected_platforms[@]}"; do
+        if [ -n "$label" ]; then
+            label+=", "
+        fi
+        label+="$platform"
+    done
+    printf "%s" "$label"
+}
+
+if ! jq -e '.platforms | type == "object"' >/dev/null <<<"$manifest"; then
+    error "updater manifest platforms must be an object with signatures for $(expected_platforms_list)"
+    exit 1
+fi
+
+for platform in "${expected_platforms[@]}"; do
+    if ! jq -e --arg platform "$platform" '.platforms[$platform] | type == "object"' >/dev/null <<<"$manifest"; then
+        error "updater manifest missing platform $platform"
+        exit 1
+    fi
+
+    if ! jq -e --arg platform "$platform" '.platforms[$platform].signature | type == "string" and length > 0' >/dev/null <<<"$manifest"; then
+        error "updater manifest missing signature for $platform"
+        exit 1
+    fi
+
+    signature="$(jq -r --arg platform "$platform" '.platforms[$platform].signature' <<<"$manifest")"
     if [ -z "$signature" ] ||
         ! [[ "$signature" =~ ^[A-Za-z0-9+/]+={0,2}$ ]] ||
         [ $(( ${#signature} % 4 )) -ne 0 ]; then
         error "updater manifest signature for $platform is not a base64 payload"
         exit 1
     fi
-done < <(jq -r '.platforms // {} | to_entries[] | [.key, (.value.signature // "")] | @tsv' <<<"$manifest")
+done
 
 echo "Desktop release health OK for $tag"

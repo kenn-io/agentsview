@@ -100,6 +100,52 @@ assert_failure_contains \
     run_checker "$tmp" "v0.34.5"
 
 cat >"$tmp/latest.json" <<'EOF'
+{"version":"0.34.5"}
+EOF
+assert_failure_contains \
+    "manifest without updater platforms fails" \
+    "updater manifest platforms must be an object with signatures for darwin-aarch64, darwin-x86_64, windows-x86_64, linux-x86_64" \
+    run_checker "$tmp" "v0.34.5"
+
+cat >"$tmp/latest.json" <<'EOF'
+{"version":"0.34.5","platforms":{}}
+EOF
+assert_failure_contains \
+    "manifest with empty updater platforms fails" \
+    "updater manifest missing platform darwin-aarch64" \
+    run_checker "$tmp" "v0.34.5"
+
+cat >"$tmp/latest.json" <<'EOF'
+{"version":"0.34.5","platforms":[]}
+EOF
+assert_failure_contains \
+    "manifest with non-object updater platforms fails" \
+    "updater manifest platforms must be an object with signatures for darwin-aarch64, darwin-x86_64, windows-x86_64, linux-x86_64" \
+    run_checker "$tmp" "v0.34.5"
+
+cat >"$tmp/latest.json" <<'EOF'
+{
+  "version": "0.34.5",
+  "platforms": {
+    "darwin-aarch64": {},
+    "darwin-x86_64": {
+      "signature": "YWJjCg=="
+    },
+    "windows-x86_64": {
+      "signature": "YWJjCg=="
+    },
+    "linux-x86_64": {
+      "signature": "YWJjCg=="
+    }
+  }
+}
+EOF
+assert_failure_contains \
+    "manifest with missing updater signature fails" \
+    "updater manifest missing signature for darwin-aarch64" \
+    run_checker "$tmp" "v0.34.5"
+
+cat >"$tmp/latest.json" <<'EOF'
 {
   "version": "0.34.5",
   "platforms": {
@@ -121,6 +167,15 @@ cat >"$tmp/latest.json" <<'EOF'
 {
   "version": "0.34.5",
   "platforms": {
+    "darwin-aarch64": {
+      "signature": "YWJjCg=="
+    },
+    "darwin-x86_64": {
+      "signature": "YWJjCg=="
+    },
+    "windows-x86_64": {
+      "signature": "YWJjCg=="
+    },
     "linux-x86_64": {
       "url": "https://github.com/kenn-io/agentsview/releases/download/updater/AgentsView_0.34.5_amd64.AppImage.tar.gz",
       "signature": "Public signature: YWJjCg=="

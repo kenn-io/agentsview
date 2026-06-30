@@ -44,7 +44,23 @@ assert_failure_contains() {
 write_fixture() {
     local dir="$1" version="$2"
     cat >"$dir/latest.json" <<EOF
-{"version":"${version}"}
+{
+  "version": "${version}",
+  "platforms": {
+    "darwin-aarch64": {
+      "signature": "YWJjCg=="
+    },
+    "darwin-x86_64": {
+      "signature": "YWJjCg=="
+    },
+    "windows-x86_64": {
+      "signature": "YWJjCg=="
+    },
+    "linux-x86_64": {
+      "signature": "YWJjCg=="
+    }
+  }
+}
 EOF
 }
 
