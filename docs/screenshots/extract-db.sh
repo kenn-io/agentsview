@@ -68,13 +68,16 @@ rm -f "$OUTPUT"
   done <<<"$BLOCKED_TERMS"
 } >"$BLOCKED_PATTERNS_SQL"
 
-# Snapshot the full database with SQLite's online backup. A plain cp
-# of a WAL-mode database misses committed data still sitting in the
-# -wal file and reads a torn image while a live writer (a running
-# `agentsview serve`) is checkpointing, surfacing as "database disk
-# image is malformed". The backup API copies a consistent snapshot,
-# including the WAL, without touching the source.
-sqlite3 "$SOURCE" ".backup '$OUTPUT'"
+# Snapshot the full database with VACUUM INTO. A plain cp of a
+# WAL-mode database reads a torn image and misses committed data still
+# in the -wal file, surfacing as "database disk image is malformed".
+# The online backup API (.backup) avoids that but restarts from
+# scratch every time a live `agentsview serve` writes through its own
+# connection, so it never converges against a busy daemon. VACUUM INTO
+# reads one snapshot-isolated pass that concurrent writes do not
+# restart, and does not touch the source. The target must not exist
+# (rm -f above guarantees that).
+sqlite3 "$SOURCE" "VACUUM INTO '$OUTPUT'"
 
 # Delete sessions (and related data) for non-matching projects.
 # The heredoc delimiter is quoted so bash does NOT expand $ or
