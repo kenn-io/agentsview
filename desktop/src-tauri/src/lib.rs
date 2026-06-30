@@ -98,6 +98,8 @@ enum BackendStatusProbe {
     Unhealthy(String),
     NotRunning(String),
     Incompatible(String),
+    ReadOnly(String),
+    Unusable(String),
     Unavailable,
 }
 
@@ -1048,11 +1050,7 @@ fn forward_sidecar_logs(mut rx: CommandRx, window: WebviewWindow, generation: u6
                         String::from_utf8_lossy(&line_bytes).as_ref(),
                     );
                     emit_redacted_sidecar_stderr_chunk(redacted_stderr.as_str());
-                    push_startup_output(
-                        &startup_output,
-                        "stderr",
-                        redacted_stderr.as_str(),
-                    );
+                    push_startup_output(&startup_output, "stderr", redacted_stderr.as_str());
                 }
                 CommandEvent::Terminated(payload) => {
                     let flushed_stdout = flush_pending_sidecar_log_record(
@@ -1464,9 +1462,7 @@ fn poll_background_status_after_launcher_exit(window: WebviewWindow, generation:
                     unhealthy_since = None;
                     if !long_startup_notice_shown && !status.trim().is_empty() {
                         let escaped = status.replace('\\', "\\\\").replace('\'', "\\'");
-                        let _ = window.eval(
-                            format!("window.__setStatus('{escaped}');").as_str(),
-                        );
+                        let _ = window.eval(format!("window.__setStatus('{escaped}');").as_str());
                     }
                 }
                 BackendStatusProbe::Unhealthy(status) => {
@@ -1512,6 +1508,32 @@ fn poll_background_status_after_launcher_exit(window: WebviewWindow, generation:
                     );
                     return;
                 }
+                BackendStatusProbe::ReadOnly(status) => {
+                    spawn_startup_error_render(
+                        window,
+                        "AgentsView backend is read-only",
+                        "AgentsView Desktop needs a writable local backend to sync and migrate the archive.",
+                        startup_failure_detail(
+                            "A read-only backend is running for this archive, but desktop startup requires a writable daemon.",
+                            status.as_str(),
+                        )
+                        .as_str(),
+                    );
+                    return;
+                }
+                BackendStatusProbe::Unusable(status) => {
+                    spawn_startup_error_render(
+                        window,
+                        "AgentsView backend status is unusable",
+                        "The background launcher exited, but the backend did not report a usable writable server.",
+                        startup_failure_detail(
+                            "The status command returned output that is not a ready writable daemon or an active startup lock.",
+                            status.as_str(),
+                        )
+                        .as_str(),
+                    );
+                    return;
+                }
                 BackendStatusProbe::Unavailable => {
                     failed_status_probes += 1;
                     if failed_status_probes == STATUS_PROBE_FAILURE_NOTICE_AFTER {
@@ -1522,9 +1544,7 @@ fn poll_background_status_after_launcher_exit(window: WebviewWindow, generation:
                     }
                 }
             }
-            if !long_startup_notice_shown
-                && started.elapsed() >= DAEMON_STARTUP_LONG_NOTICE_AFTER
-            {
+            if !long_startup_notice_shown && started.elapsed() >= DAEMON_STARTUP_LONG_NOTICE_AFTER {
                 long_startup_notice_shown = true;
                 let _ = window.eval(
                     "window.__setStatus(\
@@ -1620,12 +1640,22 @@ fn classify_backend_status_output(stdout: &str, stderr: &str) -> BackendStatusPr
     if detail.trim().is_empty() {
         return BackendStatusProbe::Unavailable;
     }
-    BackendStatusProbe::Starting(detail)
+    if status_output_is_read_only(detail.as_str()) {
+        return BackendStatusProbe::ReadOnly(detail);
+    }
+    if status_output_is_starting(detail.as_str()) {
+        return BackendStatusProbe::Starting(detail);
+    }
+    BackendStatusProbe::Unusable(detail)
 }
 
 fn status_output_is_unhealthy(output: &str) -> bool {
     output.contains("agentsview process running")
         && output.contains("not responding to health checks")
+}
+
+fn status_output_is_starting(output: &str) -> bool {
+    output.trim() == "agentsview is starting up."
 }
 
 fn combined_probe_output(stdout: &str, stderr: &str) -> String {
@@ -3399,6 +3429,29 @@ agentsview running at http://127.0.0.1:18082 (pid 123)
                 "agentsview process running (pid 123) but not responding to health checks."
                     .to_string()
             )
+        );
+    }
+
+    #[test]
+    fn classify_backend_status_output_rejects_read_only_daemon() {
+        let output = "\
+agentsview running at http://127.0.0.1:18082
+  pid:     123
+  version: v0.35.0
+  mode:    read-only
+";
+
+        assert_eq!(
+            classify_backend_status_output(output, ""),
+            BackendStatusProbe::ReadOnly(output.trim().to_string())
+        );
+    }
+
+    #[test]
+    fn classify_backend_status_output_rejects_unknown_non_startup_status() {
+        assert_eq!(
+            classify_backend_status_output("agentsview status is unexpected.", ""),
+            BackendStatusProbe::Unusable("agentsview status is unexpected.".to_string())
         );
     }
 
