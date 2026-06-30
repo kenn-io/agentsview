@@ -19,6 +19,42 @@ require_cmd mksquashfs
 require_cmd tar
 require_cmd unsquashfs
 
+normalize_signature_file() {
+  local signature="$1"
+  local tmp="${signature}.tmp"
+
+  awk '
+    /^Public signature:$/ {
+      getline
+      print
+      found = 1
+      exit
+    }
+    END {
+      if (!found) {
+        exit 2
+      }
+    }
+  ' "$signature" > "$tmp" || cp "$signature" "$tmp"
+
+  tr -d '[:space:]' < "$tmp" > "$signature"
+  rm -f "$tmp"
+
+  if ! grep -Eq '^[A-Za-z0-9+/]+={0,2}$' "$signature"; then
+    echo "error: signer output for $signature is not a base64 signature payload" >&2
+    exit 1
+  fi
+
+  local len
+  len="$(wc -c < "$signature" | tr -d '[:space:]')"
+  if [ $((len % 4)) -ne 0 ]; then
+    echo "error: signer output for $signature has invalid base64 length" >&2
+    exit 1
+  fi
+
+  printf '\n' >> "$signature"
+}
+
 find_squashfs_offset() {
   local appimage="$1"
   local candidate
@@ -50,6 +86,7 @@ refresh_updater_archive() {
 
   if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || [ -n "${TAURI_SIGNING_PRIVATE_KEY_PATH:-}" ]; then
     npx tauri signer sign "$archive" > "$signature"
+    normalize_signature_file "$signature"
   elif [ -f "$signature" ]; then
     echo "error: refreshed $archive but cannot refresh $signature without a Tauri signing key" >&2
     exit 1

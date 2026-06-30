@@ -29,10 +29,24 @@ else
     manifest="$(curl -fsSL "https://github.com/${repo}/releases/download/updater/latest.json")"
 fi
 
+if ! jq -e . >/dev/null 2>&1 <<<"$manifest"; then
+    error "updater manifest is not valid JSON"
+    exit 1
+fi
+
 manifest_version="$(jq -r '.version // ""' <<<"$manifest")"
 if [ "$manifest_version" != "$version" ]; then
     error "updater manifest version ${manifest_version:-<empty>} does not match expected $version"
     exit 1
 fi
+
+while IFS=$'\t' read -r platform signature; do
+    if [ -z "$signature" ] ||
+        ! [[ "$signature" =~ ^[A-Za-z0-9+/]+={0,2}$ ]] ||
+        [ $(( ${#signature} % 4 )) -ne 0 ]; then
+        error "updater manifest signature for $platform is not a base64 payload"
+        exit 1
+    fi
+done < <(jq -r '.platforms // {} | to_entries[] | [.key, (.value.signature // "")] | @tsv' <<<"$manifest")
 
 echo "Desktop release health OK for $tag"
