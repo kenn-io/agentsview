@@ -11,6 +11,8 @@ import (
 	"go.kenn.io/agentsview/internal/postgres"
 )
 
+const quackPushSyncStateTarget = "quack"
+
 func (s *Server) registerPushRoutes() {
 	group := newRouteGroup(s.api, "/api/v1/push", "Push")
 
@@ -91,6 +93,20 @@ func (s *Server) quackPushConfig(
 	return s.cfg.ResolveQuack()
 }
 
+func duckDBPushSyncOptions(req daemonPushRequest) duckdbsync.SyncOptions {
+	return duckdbsync.SyncOptions{
+		Projects:        req.Projects,
+		ExcludeProjects: req.ExcludeProjects,
+		SyncStateTarget: req.SyncStateTarget,
+	}
+}
+
+func quackPushSyncOptions(req daemonPushRequest) duckdbsync.SyncOptions {
+	opts := duckDBPushSyncOptions(req)
+	opts.SyncStateTarget = quackPushSyncStateTarget
+	return opts
+}
+
 func (s *Server) humaPGPush(
 	ctx context.Context,
 	in *daemonPushInput,
@@ -160,13 +176,9 @@ func (s *Server) humaDuckDBPush(
 	var result duckdbsync.PushResult
 	_, err = engine.SyncThenRun(ctx, in.Body.Full, nil,
 		func(forceFull bool) error {
-			syncer, err := duckdbsync.NewFromConfig(
-				duckCfg, local,
-				duckdbsync.SyncOptions{
-					Projects:        in.Body.Projects,
-					ExcludeProjects: in.Body.ExcludeProjects,
-					SyncStateTarget: in.Body.SyncStateTarget,
-				},
+			syncer, err := duckdbsync.New(
+				duckCfg.Path, local, duckCfg.MachineName,
+				duckDBPushSyncOptions(in.Body),
 			)
 			if err != nil {
 				return err
@@ -216,11 +228,7 @@ func (s *Server) humaQuackPush(
 		func(forceFull bool) error {
 			syncer, err := duckdbsync.NewFromConfig(
 				duckCfg, local,
-				duckdbsync.SyncOptions{
-					Projects:        in.Body.Projects,
-					ExcludeProjects: in.Body.ExcludeProjects,
-					SyncStateTarget: in.Body.SyncStateTarget,
-				},
+				quackPushSyncOptions(in.Body),
 			)
 			if err != nil {
 				return err

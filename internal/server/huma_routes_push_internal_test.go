@@ -161,6 +161,16 @@ func TestQuackPushConfigRequestOverrideSkipsDaemonEnvResolution(t *testing.T) {
 	assert.Equal(t, "secret", got.Token)
 }
 
+func TestQuackPushSyncOptionsForceQuackScope(t *testing.T) {
+	got := quackPushSyncOptions(daemonPushRequest{
+		Projects:        []string{"alpha"},
+		SyncStateTarget: "duckdb",
+	})
+
+	assert.Equal(t, []string{"alpha"}, got.Projects)
+	assert.Equal(t, "quack", got.SyncStateTarget)
+}
+
 func TestSyncRemotesRouteIsStreaming(t *testing.T) {
 	s := testServer(t, 30)
 	spec := readOpenAPISpec(t, s.Handler())
