@@ -528,11 +528,14 @@ func parseOpenClaudeSession(
 		project = "unknown"
 	}
 
+	parentSessionID, relationshipType := openClaudeRelationship(path, sessionID)
 	sess := &ParsedSession{
 		ID:               openClaudeSessionID(sessionID),
 		Project:          project,
 		Machine:          machine,
 		Agent:            AgentOpenClaude,
+		ParentSessionID:  parentSessionID,
+		RelationshipType: relationshipType,
 		Cwd:              cwd,
 		GitBranch:        gitBranch,
 		FirstMessage:     firstUser,
@@ -556,6 +559,16 @@ func parseOpenClaudeSession(
 		isTruncated,
 	)
 	return sess, messages, nil
+}
+
+func openClaudeRelationship(
+	path, sessionID string,
+) (string, RelationshipType) {
+	parent := claudeCompanionParentSessionID(path, sessionID)
+	if parent == "" {
+		return "", RelNone
+	}
+	return openClaudeSessionID(parent), RelSubagent
 }
 
 func openClaudeSemanticMessages(messages []ParsedMessage) []ParsedMessage {

@@ -151,3 +151,61 @@ func TestOpenClaudeDiscoverParseAndFindSource(t *testing.T) {
 	assert.Equal(t, "compact_boundary", result.Messages[2].SourceSubtype)
 	assert.Contains(t, result.Messages[2].Content, "Compact summary")
 }
+
+func TestOpenClaudeDiscoverParseSubagentRelationship(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(
+		root,
+		"proj-name",
+		"parent-123",
+		"subagents",
+		"tasks",
+		"agent-worker.jsonl",
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(strings.Join([]string{
+		buildMetadataLine(map[string]any{
+			"type":      "user",
+			"timestamp": tsEarly,
+			"uuid":      "u1",
+			"message": map[string]any{
+				"role":    "user",
+				"content": "subagent prompt",
+			},
+		}),
+		buildMetadataLine(map[string]any{
+			"type":       "assistant",
+			"timestamp":  tsEarlyS1,
+			"uuid":       "u2",
+			"parentUuid": "u1",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{
+					{"type": "text", "text": "subagent reply"},
+				},
+			},
+		}),
+	}, "\n")+"\n"), 0o644))
+
+	provider, ok := NewProvider(AgentOpenClaude, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source:  discovered[0],
+		Machine: "devbox",
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+
+	result := outcome.Results[0].Result
+	assert.Equal(t, "openclaude:agent-worker", result.Session.ID)
+	assert.Equal(t, "openclaude:parent-123", result.Session.ParentSessionID)
+	assert.Equal(t, RelSubagent, result.Session.RelationshipType)
+}
