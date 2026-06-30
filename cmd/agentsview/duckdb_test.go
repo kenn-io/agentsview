@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -200,6 +201,25 @@ func TestArchiveWriteBackendQuackPushWatchReResolvesDaemon(t *testing.T) {
 	assert.Equal(t, 1, startupPushes)
 	assert.GreaterOrEqual(t, resolvedPushes, 1)
 	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
+}
+
+func TestWriteDuckDBQuackServeStartupDoesNotPrintGeneratedToken(t *testing.T) {
+	var out bytes.Buffer
+	const token = "plain-quack-secret-token"
+
+	writeDuckDBQuackServeStartup(
+		&out,
+		duckDBQuackServeStartup{
+			Path:      "/tmp/agentsview.duckdb",
+			Bind:      "quack:127.0.0.1:9494",
+			Info:      quackServeInfo{ListenURI: "quack:127.0.0.1:9494"},
+			Generated: true,
+		},
+	)
+
+	got := out.String()
+	assert.NotContains(t, got, token)
+	assert.Contains(t, got, "Token:       generated")
 }
 
 // wantDuckDBDaemonPush is the expected shape of a DuckDB daemon push request.

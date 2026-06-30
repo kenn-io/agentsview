@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -322,23 +323,42 @@ func runDuckDBQuackServe(cfg DuckDBQuackServeConfig) {
 		}
 	}()
 
-	fmt.Printf("DuckDB file: %s\n", duckCfg.Path)
-	if info.ListenURI != "" {
-		fmt.Printf("Quack URI:   %s\n", info.ListenURI)
-	} else {
-		fmt.Printf("Quack URI:   %s\n", cfg.Bind)
-	}
-	if info.HTTPURL != "" {
-		fmt.Printf("HTTP URL:    %s\n", info.HTTPURL)
-	}
-	if generated {
-		fmt.Printf("Token:       %s\n", token)
-	} else {
-		fmt.Println("Token:       configured")
-	}
-	fmt.Println("Press Ctrl+C to stop.")
+	writeDuckDBQuackServeStartup(os.Stdout, duckDBQuackServeStartup{
+		Path:      duckCfg.Path,
+		Bind:      cfg.Bind,
+		Info:      info,
+		Generated: generated,
+	})
 
 	<-ctx.Done()
+}
+
+type duckDBQuackServeStartup struct {
+	Path      string
+	Bind      string
+	Info      quackServeInfo
+	Generated bool
+}
+
+func writeDuckDBQuackServeStartup(
+	out io.Writer,
+	startup duckDBQuackServeStartup,
+) {
+	fmt.Fprintf(out, "DuckDB file: %s\n", startup.Path)
+	if startup.Info.ListenURI != "" {
+		fmt.Fprintf(out, "Quack URI:   %s\n", startup.Info.ListenURI)
+	} else {
+		fmt.Fprintf(out, "Quack URI:   %s\n", startup.Bind)
+	}
+	if startup.Info.HTTPURL != "" {
+		fmt.Fprintf(out, "HTTP URL:    %s\n", startup.Info.HTTPURL)
+	}
+	if startup.Generated {
+		fmt.Fprintln(out, "Token:       generated")
+	} else {
+		fmt.Fprintln(out, "Token:       configured")
+	}
+	fmt.Fprintln(out, "Press Ctrl+C to stop.")
 }
 
 func resolveQuackServeToken(
@@ -383,22 +403,31 @@ func identifyQuackNode(ctx context.Context, conn *sql.DB, machine string) {
 type quackServeInfo struct {
 	ListenURI string
 	HTTPURL   string
-	AuthToken string
 }
 
 func startQuackServer(
 	ctx context.Context, conn *sql.DB, bind, token string, allowOther bool,
 ) (quackServeInfo, error) {
-	query := `CALL quack_serve(?, token => ?)`
+	query := `SELECT listen_uri, listen_url FROM quack_serve(?, token => ?)`
 	args := []any{bind, token}
 	if allowOther {
-		query = `CALL quack_serve(?, token => ?, allow_other_hostname => ?)`
+		query = `SELECT listen_uri, listen_url FROM quack_serve(?, token => ?, allow_other_hostname => ?)`
 		args = append(args, allowOther)
 	}
-	if _, err := conn.ExecContext(ctx, query, args...); err != nil {
+	var listenURI, httpURL sql.NullString
+	if err := conn.QueryRowContext(ctx, query, args...).Scan(
+		&listenURI, &httpURL,
+	); err != nil {
 		return quackServeInfo{}, fmt.Errorf("starting quack server: %w", err)
 	}
-	return quackServeInfo{ListenURI: bind, AuthToken: token}, nil
+	info := quackServeInfo{ListenURI: bind}
+	if listenURI.Valid && listenURI.String != "" {
+		info.ListenURI = listenURI.String
+	}
+	if httpURL.Valid {
+		info.HTTPURL = httpURL.String
+	}
+	return info, nil
 }
 
 func resolveDuckDBPushProjects(

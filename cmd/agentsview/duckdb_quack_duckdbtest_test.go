@@ -17,6 +17,7 @@ import (
 )
 
 func TestStartQuackServerAllowsAuthenticatedAttach(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "serve.duckdb")
 	bind := "quack:127.0.0.1:" + freeQuackServePort(t)
@@ -88,6 +89,7 @@ func TestStartQuackServerAllowsAuthenticatedAttach(t *testing.T) {
 }
 
 func TestStartQuackServerServesAgentsviewMirror(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "serve-agentsview.duckdb")
 	bind := "quack:127.0.0.1:" + freeQuackServePort(t)

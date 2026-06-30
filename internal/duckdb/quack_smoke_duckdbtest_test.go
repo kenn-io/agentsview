@@ -16,6 +16,7 @@ import (
 )
 
 func TestQuackLoopbackAttachRoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "agentsview-quack.duckdb")
 	uri := "quack:127.0.0.1:" + freeTCPPort(t)
@@ -56,11 +57,18 @@ func TestQuackLoopbackAttachRoundTrip(t *testing.T) {
 	)
 	require.NoError(t, err, "insert seed row")
 
-	_, err = server.ExecContext(ctx,
-		`CALL quack_serve(?, token => ?)`,
+	var listenURI, listenURL sql.NullString
+	err = server.QueryRowContext(ctx,
+		`SELECT listen_uri, listen_url FROM quack_serve(?, token => ?)`,
 		uri, token,
-	)
+	).Scan(&listenURI, &listenURL)
 	require.NoError(t, err, "start quack server")
+	if listenURI.Valid && listenURI.String != "" {
+		uri = listenURI.String
+	}
+	if listenURL.Valid {
+		assert.NotContains(t, listenURL.String, token)
+	}
 	t.Cleanup(func() {
 		_, stopErr := server.ExecContext(ctx, `CALL quack_stop(?)`, uri)
 		require.NoError(t, stopErr, "stop quack server")
