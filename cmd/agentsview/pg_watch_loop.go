@@ -34,6 +34,7 @@ type pushLoop struct {
 	floor    <-chan time.Time
 	after    func(time.Duration) <-chan time.Time
 	push     func(ctx context.Context, reason pushReason) error
+	label    string
 	// flushTimeout bounds the final shutdown-flush push. Zero means
 	// no bound (used in tests that inject a fake pusher).
 	flushTimeout time.Duration
@@ -45,6 +46,14 @@ func newPushLoop(
 	debounce, interval time.Duration,
 	push func(context.Context, pushReason) error,
 ) (*pushLoop, *time.Ticker) {
+	return newPushLoopWithLabel("pg watch", debounce, interval, push)
+}
+
+func newPushLoopWithLabel(
+	label string,
+	debounce, interval time.Duration,
+	push func(context.Context, pushReason) error,
+) (*pushLoop, *time.Ticker) {
 	ticker := time.NewTicker(interval)
 	return &pushLoop{
 		debounce:     debounce,
@@ -52,6 +61,7 @@ func newPushLoop(
 		floor:        ticker.C,
 		after:        time.After,
 		push:         push,
+		label:        label,
 		flushTimeout: defaultFlushTimeout,
 	}, ticker
 }
@@ -102,6 +112,6 @@ func (l *pushLoop) Run(ctx context.Context) {
 
 func (l *pushLoop) doPush(ctx context.Context, reason pushReason) {
 	if err := l.push(ctx, reason); err != nil {
-		log.Printf("pg watch: push (%s) failed: %v", reason, err)
+		log.Printf("%s: push (%s) failed: %v", l.label, reason, err)
 	}
 }

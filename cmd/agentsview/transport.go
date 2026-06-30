@@ -15,6 +15,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/update"
@@ -46,7 +47,7 @@ var waitForDaemonStartupForTransport = WaitForDaemonStartupContext
 type transport struct {
 	Mode           transportMode
 	URL            string
-	ReadOnly       bool // daemon runtime ReadOnly flag (true for pg serve)
+	ReadOnly       bool // daemon runtime ReadOnly flag (true for mirror serve)
 	DirectReadOnly bool // writable daemon owns DB but is not reachable
 	DirectReason   string
 	Runtime        *DaemonRuntime
@@ -64,6 +65,22 @@ var openPGReadStore = func(
 	store, err := postgres.NewStore(
 		pgCfg.URL, pgCfg.Schema, pgCfg.AllowInsecure,
 	)
+	if err != nil {
+		return nil, nil, err
+	}
+	return store, func() { _ = store.Close() }, nil
+}
+
+var openQuackReadStore = func(
+	cfg config.Config,
+	quackCfg config.QuackConfig,
+) (db.Store, func(), error) {
+	applyClassifierConfig(cfg)
+	duckCfg, err := quackDuckDBConfig(quackCfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	store, err := duckdbsync.NewStoreFromConfig(duckCfg)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -404,6 +421,24 @@ func newPGReadService(
 			cleanup()
 		}
 		return nil, nil, fmt.Errorf("opening pg store: %w", err)
+	}
+	if len(cfg.CustomModelPricing) > 0 {
+		if priced, ok := store.(customPricingStore); ok {
+			priced.SetCustomPricing(cfg.CustomModelPricing)
+		}
+	}
+	return service.NewReadOnlyBackend(store), cleanup, nil
+}
+
+func newQuackReadService(
+	cfg config.Config, quackCfg config.QuackConfig,
+) (service.SessionService, func(), error) {
+	store, cleanup, err := openQuackReadStore(cfg, quackCfg)
+	if err != nil {
+		if cleanup != nil {
+			cleanup()
+		}
+		return nil, nil, fmt.Errorf("opening quack store: %w", err)
 	}
 	if len(cfg.CustomModelPricing) > 0 {
 		if priced, ok := store.(customPricingStore); ok {

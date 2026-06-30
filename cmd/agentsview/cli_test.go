@@ -42,6 +42,7 @@ func TestRootHelpShowsKeySectionsAndCommands(t *testing.T) {
 		"serve                  Start server",
 		"duckdb status          Show DuckDB sync status",
 		"pg push                Push local data to PostgreSQL",
+		"quack push             Push local data to Quack",
 		"usage daily            Daily cost summary",
 		"completion             Generate the autocompletion script for the specified shell",
 		"Flags:",
@@ -70,6 +71,17 @@ func TestRootHelpShowsDuckDBEnvironment(t *testing.T) {
 		assert.Contains(t, help, want, "help missing %q", want)
 	}
 	assert.NotContains(t, help, "env-token")
+}
+
+func TestRootHelpShowsQuackEnvironment(t *testing.T) {
+	help, err := executeCommand(newRootCommand(), "--help")
+	require.NoError(t, err, "Execute")
+	for _, want := range []string{
+		"AGENTSVIEW_QUACK_URL",
+		"AGENTSVIEW_QUACK_TOKEN",
+	} {
+		assert.Contains(t, help, want, "help missing %q", want)
+	}
 }
 
 func TestRootHelpDocumentsCopilotExportDir(t *testing.T) {

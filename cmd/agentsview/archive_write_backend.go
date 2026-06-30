@@ -31,6 +31,22 @@ type archiveWriteBackend interface {
 		projects []string,
 		excludeProjects []string,
 	) (duckdbsync.PushResult, error)
+	QuackPush(
+		ctx context.Context,
+		quackCfg config.QuackConfig,
+		cfg QuackPushConfig,
+		projects []string,
+		excludeProjects []string,
+	) (duckdbsync.PushResult, error)
+	QuackPushWatch(
+		ctx context.Context,
+		quackCfg config.QuackConfig,
+		cfg QuackPushConfig,
+		projects []string,
+		excludeProjects []string,
+		debounce time.Duration,
+		interval time.Duration,
+	) error
 	PGPushWatch(
 		ctx context.Context,
 		target pgTargetSelection,
@@ -105,12 +121,110 @@ func (b daemonArchiveWriteBackend) PGPush(
 	)
 }
 
+func (b daemonArchiveWriteBackend) QuackPush(
+	ctx context.Context,
+	quackCfg config.QuackConfig,
+	cfg QuackPushConfig,
+	projects []string,
+	excludeProjects []string,
+) (duckdbsync.PushResult, error) {
+	return postDaemonPush[duckdbsync.PushResult](
+		ctx, b.tr, b.appCfg.AuthToken, "/api/v1/push/quack",
+		daemonPushRequest{
+			Full:            cfg.Full,
+			Projects:        projects,
+			ExcludeProjects: excludeProjects,
+			Quack:           &quackCfg,
+			SyncStateTarget: quackSyncStateTarget,
+		},
+	)
+}
+
 func (b daemonArchiveWriteBackend) DuckDBPush(
 	ctx context.Context,
 	duckCfg config.DuckDBConfig,
 	cfg DuckDBPushConfig,
 	projects []string,
 	excludeProjects []string,
+) (duckdbsync.PushResult, error) {
+	return b.duckDBPush(ctx, duckCfg, cfg, projects, excludeProjects, "")
+}
+
+func (b daemonArchiveWriteBackend) QuackPushWatch(
+	ctx context.Context,
+	quackCfg config.QuackConfig,
+	cfg QuackPushConfig,
+	projects []string,
+	excludeProjects []string,
+	debounce time.Duration,
+	interval time.Duration,
+) error {
+	if interval <= 0 {
+		interval = defaultWatchInterval
+	}
+	if debounce <= 0 {
+		debounce = defaultWatchDebounce
+	}
+	push := func(pctx context.Context, reason pushReason, full bool) error {
+		pushCfg := cfg
+		pushCfg.Full = full
+		backend := archiveWriteBackend(b)
+		cleanup := func() {}
+		if reason != reasonStartup {
+			var err error
+			backend, cleanup, err = resolveArchiveWriteBackend(
+				pctx, b.appCfg,
+			)
+			if err != nil {
+				return err
+			}
+		}
+		defer cleanup()
+		res, err := backend.QuackPush(
+			pctx, quackCfg, pushCfg, projects, excludeProjects,
+		)
+		if err != nil {
+			return err
+		}
+		logQuackWatchPushResult(res, reason)
+		return nil
+	}
+	if err := push(ctx, reasonStartup, cfg.Full); err != nil {
+		log.Printf("quack watch: initial daemon push failed: %v", err)
+	}
+
+	loop, ticker := newPushLoopWithLabel(
+		"quack watch", debounce, interval,
+		func(c context.Context, r pushReason) error {
+			return push(c, r, false)
+		},
+	)
+	defer ticker.Stop()
+
+	stopWatcher, unwatchedDirs := startFileWatcher(b.appCfg, nil,
+		func(_ []string) {
+			loop.NotifyDirty()
+		},
+	)
+	defer stopWatcher()
+	if len(unwatchedDirs) > 0 {
+		log.Printf(
+			"quack watch: %d root(s) not watched; relying on the %s floor for coverage",
+			len(unwatchedDirs), interval,
+		)
+	}
+
+	loop.Run(ctx)
+	return nil
+}
+
+func (b daemonArchiveWriteBackend) duckDBPush(
+	ctx context.Context,
+	duckCfg config.DuckDBConfig,
+	cfg DuckDBPushConfig,
+	projects []string,
+	excludeProjects []string,
+	syncStateTarget string,
 ) (duckdbsync.PushResult, error) {
 	duckCfg, err := absolutizeDuckDBPath(duckCfg)
 	if err != nil {
@@ -123,6 +237,7 @@ func (b daemonArchiveWriteBackend) DuckDBPush(
 			Projects:        projects,
 			ExcludeProjects: excludeProjects,
 			DuckDB:          &duckCfg,
+			SyncStateTarget: syncStateTarget,
 		},
 	)
 }
@@ -272,6 +387,17 @@ func (b *localArchiveWriteBackend) DuckDBPush(
 	projects []string,
 	excludeProjects []string,
 ) (duckdbsync.PushResult, error) {
+	return b.duckDBPush(ctx, duckCfg, cfg, projects, excludeProjects, "")
+}
+
+func (b *localArchiveWriteBackend) duckDBPush(
+	ctx context.Context,
+	duckCfg config.DuckDBConfig,
+	cfg DuckDBPushConfig,
+	projects []string,
+	excludeProjects []string,
+	syncStateTarget string,
+) (duckdbsync.PushResult, error) {
 	didResync := runLocalSync(ctx, b.appCfg, b.database, cfg.Full)
 	if err := ctx.Err(); err != nil {
 		return duckdbsync.PushResult{}, err
@@ -280,11 +406,12 @@ func (b *localArchiveWriteBackend) DuckDBPush(
 
 	fmt.Println("Opening DuckDB mirror...")
 	connectStart := time.Now()
-	syncer, err := duckdbsync.New(
-		duckCfg.Path, b.database, duckCfg.MachineName,
+	syncer, err := duckdbsync.NewFromConfig(
+		duckCfg, b.database,
 		duckdbsync.SyncOptions{
 			Projects:        projects,
 			ExcludeProjects: excludeProjects,
+			SyncStateTarget: syncStateTarget,
 		},
 	)
 	if err != nil {
@@ -319,6 +446,76 @@ func (b *localArchiveWriteBackend) DuckDBPush(
 		return duckdbsync.PushResult{}, err
 	}
 	return result, nil
+}
+
+func (b *localArchiveWriteBackend) QuackPush(
+	ctx context.Context,
+	quackCfg config.QuackConfig,
+	cfg QuackPushConfig,
+	projects []string,
+	excludeProjects []string,
+) (duckdbsync.PushResult, error) {
+	duckCfg, err := quackDuckDBConfig(quackCfg)
+	if err != nil {
+		return duckdbsync.PushResult{}, err
+	}
+	return b.duckDBPush(ctx, duckCfg, DuckDBPushConfig{
+		Full: cfg.Full,
+	}, projects, excludeProjects, quackSyncStateTarget)
+}
+
+func (b *localArchiveWriteBackend) QuackPushWatch(
+	ctx context.Context,
+	quackCfg config.QuackConfig,
+	cfg QuackPushConfig,
+	projects []string,
+	exclude []string,
+	debounce time.Duration,
+	interval time.Duration,
+) error {
+	if interval <= 0 {
+		interval = defaultWatchInterval
+	}
+	if debounce <= 0 {
+		debounce = defaultWatchDebounce
+	}
+	push := func(pctx context.Context, reason pushReason, full bool) error {
+		pushCfg := cfg
+		pushCfg.Full = full
+		res, err := b.QuackPush(pctx, quackCfg, pushCfg, projects, exclude)
+		if err != nil {
+			return err
+		}
+		logQuackWatchPushResult(res, reason)
+		return nil
+	}
+	if err := push(ctx, reasonStartup, cfg.Full); err != nil {
+		log.Printf("quack watch: initial push failed: %v", err)
+	}
+
+	loop, ticker := newPushLoopWithLabel(
+		"quack watch", debounce, interval,
+		func(c context.Context, r pushReason) error {
+			return push(c, r, false)
+		},
+	)
+	defer ticker.Stop()
+
+	stopWatcher, unwatchedDirs := startFileWatcher(b.appCfg, nil,
+		func(_ []string) {
+			loop.NotifyDirty()
+		},
+	)
+	defer stopWatcher()
+	if len(unwatchedDirs) > 0 {
+		log.Printf(
+			"quack watch: %d root(s) not watched; relying on the %s floor for coverage",
+			len(unwatchedDirs), interval,
+		)
+	}
+
+	loop.Run(ctx)
+	return nil
 }
 
 func (b *localArchiveWriteBackend) PGPushWatch(

@@ -2212,6 +2212,15 @@ func TestPGPushLocalNoSyncDaemonReachesConfigValidation(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "pg push: url not configured")
 }
 
+func TestQuackPushLocalNoSyncDaemonReachesConfigValidation(t *testing.T) {
+	te := setupNoSyncMode(t)
+
+	w := te.post(t, "/api/v1/push/quack", `{"full":false}`)
+
+	assertStatus(t, w, http.StatusBadRequest)
+	assert.Contains(t, w.Body.String(), "quack push: url not configured")
+}
+
 func TestCORSPreflightRejectsBadOrigin(t *testing.T) {
 	te := setup(t)
 

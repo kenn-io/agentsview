@@ -37,6 +37,11 @@ func newSessionExportCommand() *cobra.Command {
 					"session export: local-only command; --pg not supported",
 				)
 			}
+			if quackReadRequested(cmd) {
+				return fmt.Errorf(
+					"session export: local-only command; --quack not supported",
+				)
+			}
 			cfg, err := config.LoadPFlags(cmd.Flags())
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)

@@ -83,6 +83,11 @@ func sessionUsageDataForCommand(
 				"--server and --pg are mutually exclusive",
 			)
 		}
+		if quackReadRequested(cmd) {
+			return nil, tokenUseExitErr, fmt.Errorf(
+				"--server and --quack are mutually exclusive",
+			)
+		}
 		token, err := explicitServerToken(cmd)
 		if err != nil {
 			return nil, tokenUseExitErr, err
@@ -93,12 +98,24 @@ func sessionUsageDataForCommand(
 	if err != nil {
 		return nil, tokenUseExitErr, fmt.Errorf("loading config: %w", err)
 	}
+	if pgReadRequested(cmd) && quackReadRequested(cmd) {
+		return nil, tokenUseExitErr, fmt.Errorf(
+			"--pg and --quack are mutually exclusive",
+		)
+	}
 	if pgReadRequested(cmd) {
 		pgCfg, _, err := resolvePGReadConfig(cmd, cfg)
 		if err != nil {
 			return nil, tokenUseExitErr, err
 		}
 		return pgSessionUsageData(cfg, pgCfg, sessionID)
+	}
+	if quackReadRequested(cmd) {
+		quackCfg, _, err := resolveQuackReadConfig(cmd, cfg)
+		if err != nil {
+			return nil, tokenUseExitErr, err
+		}
+		return quackSessionUsageData(cfg, quackCfg, sessionID)
 	}
 	backend, cleanup, err := resolveArchiveQueryBackendWithConfig(
 		ctx,
@@ -118,8 +135,8 @@ func sessionUsageDataForCommand(
 
 func readOnlySessionUsageDaemonError(url string) error {
 	return fmt.Errorf(
-		"daemon at %s is read-only; use --pg to query "+
-			"PostgreSQL usage, or stop it to refresh local "+
+		"daemon at %s is read-only; use --pg or --quack to query "+
+			"a read-only mirror, or stop it to refresh local "+
 			"session usage",
 		url,
 	)
@@ -191,7 +208,33 @@ func pgSessionUsageData(
 	if cleanup != nil {
 		defer cleanup()
 	}
+	return storeSessionUsageData("pg", cfg, store, sessionID)
+}
 
+func quackSessionUsageData(
+	cfg config.Config, quackCfg config.QuackConfig, sessionID string,
+) (*sessionUsageOutput, int, error) {
+	store, cleanup, err := openQuackReadStore(cfg, quackCfg)
+	if err != nil {
+		if cleanup != nil {
+			cleanup()
+		}
+		return nil, tokenUseExitErr, fmt.Errorf(
+			"opening quack store: %w", err,
+		)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+	return storeSessionUsageData("quack", cfg, store, sessionID)
+}
+
+func storeSessionUsageData(
+	storeName string,
+	cfg config.Config,
+	store db.Store,
+	sessionID string,
+) (*sessionUsageOutput, int, error) {
 	if len(cfg.CustomModelPricing) > 0 {
 		if priced, ok := store.(customPricingStore); ok {
 			priced.SetCustomPricing(cfg.CustomModelPricing)
@@ -203,7 +246,7 @@ func pgSessionUsageData(
 	if err != nil {
 		if !strings.HasPrefix(err.Error(), "session not found:") {
 			return nil, tokenUseExitErr,
-				fmt.Errorf("resolving pg session id: %w", err)
+				fmt.Errorf("resolving %s session id: %w", storeName, err)
 		}
 		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
 		return nil, tokenUseExitNotFound, nil
@@ -212,7 +255,7 @@ func pgSessionUsageData(
 	u, err := store.GetSessionUsage(ctx, resolvedID)
 	if err != nil {
 		return nil, tokenUseExitErr,
-			fmt.Errorf("querying pg session usage: %w", err)
+			fmt.Errorf("querying %s session usage: %w", storeName, err)
 	}
 	if u == nil {
 		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)

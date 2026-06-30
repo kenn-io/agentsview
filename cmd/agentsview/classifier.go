@@ -83,7 +83,7 @@ func guardClassifierRebuild(tr transport) error {
 	if tr.Mode == transportHTTP {
 		return errors.New(
 			"local daemon is serving on " + tr.URL +
-				"; stop 'agentsview serve' (or 'pg serve') " +
+				"; stop 'agentsview serve' or the read-only mirror serve " +
 				"before running 'classifier rebuild'",
 		)
 	}

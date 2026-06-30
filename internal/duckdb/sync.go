@@ -31,6 +31,7 @@ type Sync struct {
 	duck            *sql.DB
 	local           *db.DB
 	machine         string
+	syncStateScope  string
 	projects        []string
 	excludeProjects []string
 
@@ -44,6 +45,7 @@ type Sync struct {
 type SyncOptions struct {
 	Projects        []string
 	ExcludeProjects []string
+	SyncStateTarget string
 }
 
 // PushResult summarizes a DuckDB push operation.
@@ -88,6 +90,7 @@ func New(
 		duck:            duck,
 		local:           local,
 		machine:         machine,
+		syncStateScope:  opts.SyncStateTarget,
 		projects:        opts.Projects,
 		excludeProjects: opts.ExcludeProjects,
 	}, nil
@@ -108,6 +111,13 @@ func (s *Sync) isFiltered() bool {
 	return len(s.projects) > 0 || len(s.excludeProjects) > 0
 }
 
+func (s *Sync) syncStateKey(key string) string {
+	if s.syncStateScope == "" {
+		return key
+	}
+	return key + ":" + s.syncStateScope
+}
+
 // EnsureSchema creates or additively migrates the DuckDB mirror schema.
 func (s *Sync) EnsureSchema(ctx context.Context) error {
 	s.schemaMu.Lock()
@@ -124,9 +134,10 @@ func (s *Sync) EnsureSchema(ctx context.Context) error {
 
 // Status returns current DuckDB mirror row counts.
 func (s *Sync) Status(ctx context.Context) (SyncStatus, error) {
-	lastPush, err := s.local.GetSyncState(lastPushStateKey)
+	lastPushKey := s.syncStateKey(lastPushStateKey)
+	lastPush, err := s.local.GetSyncState(lastPushKey)
 	if err != nil {
-		log.Printf("warning: reading %s: %v", lastPushStateKey, err)
+		log.Printf("warning: reading %s: %v", lastPushKey, err)
 	}
 	status := SyncStatus{Machine: s.machine, LastPushAt: lastPush}
 	if err := s.EnsureSchema(ctx); err != nil {
@@ -167,9 +178,10 @@ func (s *Sync) Push(
 		return result, err
 	}
 
-	lastPush, err := s.local.GetSyncState(lastPushStateKey)
+	lastPushKey := s.syncStateKey(lastPushStateKey)
+	lastPush, err := s.local.GetSyncState(lastPushKey)
 	if err != nil {
-		return result, fmt.Errorf("reading %s: %w", lastPushStateKey, err)
+		return result, fmt.Errorf("reading %s: %w", lastPushKey, err)
 	}
 	if full {
 		lastPush = ""
@@ -233,7 +245,10 @@ func (s *Sync) Push(
 	}
 	priorFingerprints := map[string]string{}
 	if !full {
-		priorFingerprints, err = readSyncFingerprints(s.local)
+		priorFingerprints, err = readSyncFingerprintsWithKey(
+			s.local,
+			s.syncStateKey(lastPushBoundaryStateKey),
+		)
 		if err != nil {
 			return result, err
 		}
@@ -297,7 +312,7 @@ func (s *Sync) Push(
 		// Clear the global watermark so the next unfiltered push
 		// starts from scratch; finalizeState then persists fresh
 		// fingerprints keyed at cutoff for later filtered runs.
-		if err := clearDuckDBSyncState(s.local); err != nil {
+		if err := clearDuckDBSyncState(s.local, s.syncStateScope); err != nil {
 			return result, err
 		}
 	}
@@ -354,31 +369,42 @@ func (s *Sync) finalizeState(
 			boundaryKey = cutoff
 		}
 		return writeSyncFingerprints(
-			s.local, boundaryKey, pushed, priorFingerprints, sessionFingerprints,
+			s.local, s.syncStateKey(lastPushBoundaryStateKey),
+			boundaryKey, pushed, priorFingerprints, sessionFingerprints,
 		)
 	}
-	if err := s.local.SetSyncState(lastPushStateKey, cutoff); err != nil {
-		return fmt.Errorf("updating %s: %w", lastPushStateKey, err)
+	lastPushKey := s.syncStateKey(lastPushStateKey)
+	if err := s.local.SetSyncState(lastPushKey, cutoff); err != nil {
+		return fmt.Errorf("updating %s: %w", lastPushKey, err)
 	}
 	return writeSyncFingerprints(
-		s.local, cutoff, pushed, priorFingerprints, sessionFingerprints,
+		s.local, s.syncStateKey(lastPushBoundaryStateKey),
+		cutoff, pushed, priorFingerprints, sessionFingerprints,
 	)
 }
 
-func clearDuckDBSyncState(local *db.DB) error {
-	if err := local.SetSyncState(lastPushStateKey, ""); err != nil {
-		return fmt.Errorf("clearing %s: %w", lastPushStateKey, err)
+func clearDuckDBSyncState(local *db.DB, scope string) error {
+	lastPushKey := scopedDuckDBSyncStateKey(lastPushStateKey, scope)
+	if err := local.SetSyncState(lastPushKey, ""); err != nil {
+		return fmt.Errorf("clearing %s: %w", lastPushKey, err)
 	}
-	if err := local.SetSyncState(lastPushBoundaryStateKey, ""); err != nil {
-		return fmt.Errorf("clearing %s: %w", lastPushBoundaryStateKey, err)
+	boundaryKey := scopedDuckDBSyncStateKey(lastPushBoundaryStateKey, scope)
+	if err := local.SetSyncState(boundaryKey, ""); err != nil {
+		return fmt.Errorf("clearing %s: %w", boundaryKey, err)
 	}
 	return nil
 }
 
 func readSyncFingerprints(local *db.DB) (map[string]string, error) {
-	raw, err := local.GetSyncState(lastPushBoundaryStateKey)
+	return readSyncFingerprintsWithKey(local, lastPushBoundaryStateKey)
+}
+
+func readSyncFingerprintsWithKey(
+	local *db.DB, key string,
+) (map[string]string, error) {
+	raw, err := local.GetSyncState(key)
 	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", lastPushBoundaryStateKey, err)
+		return nil, fmt.Errorf("reading %s: %w", key, err)
 	}
 	if raw == "" {
 		return map[string]string{}, nil
@@ -395,6 +421,7 @@ func readSyncFingerprints(local *db.DB) (map[string]string, error) {
 
 func writeSyncFingerprints(
 	local *db.DB,
+	key string,
 	cutoff string,
 	sessions []db.Session,
 	priorFingerprints map[string]string,
@@ -416,12 +443,19 @@ func writeSyncFingerprints(
 	}
 	data, err := json.Marshal(state)
 	if err != nil {
-		return fmt.Errorf("encoding %s: %w", lastPushBoundaryStateKey, err)
+		return fmt.Errorf("encoding %s: %w", key, err)
 	}
-	if err := local.SetSyncState(lastPushBoundaryStateKey, string(data)); err != nil {
-		return fmt.Errorf("writing %s: %w", lastPushBoundaryStateKey, err)
+	if err := local.SetSyncState(key, string(data)); err != nil {
+		return fmt.Errorf("writing %s: %w", key, err)
 	}
 	return nil
+}
+
+func scopedDuckDBSyncStateKey(key, scope string) string {
+	if scope == "" {
+		return key
+	}
+	return key + ":" + scope
 }
 
 func normalizeStoredFingerprint(value string) string {

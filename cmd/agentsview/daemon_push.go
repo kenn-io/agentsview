@@ -19,6 +19,7 @@ type daemonPushRequest struct {
 	ExcludeProjects        []string             `json:"exclude_projects,omitempty"`
 	PG                     *config.PGConfig     `json:"pg,omitempty"`
 	DuckDB                 *config.DuckDBConfig `json:"duckdb,omitempty"`
+	Quack                  *config.QuackConfig  `json:"quack,omitempty"`
 	SyncStateTarget        string               `json:"sync_state_target,omitempty"`
 	MigrateLegacySyncState bool                 `json:"migrate_legacy_sync_state,omitempty"`
 }

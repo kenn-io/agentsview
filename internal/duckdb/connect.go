@@ -1,6 +1,7 @@
 package duckdb
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // Open opens a local DuckDB file for the agentsview mirror backend.
@@ -32,6 +34,70 @@ func Open(path string) (*sql.DB, error) {
 	return db, nil
 }
 
+// ReadLastPushAt reads the local DuckDB push watermark for the optional
+// PG-compatible target scope.
+func ReadLastPushAt(local *db.DB, syncStateTarget string) (string, error) {
+	if local == nil {
+		return "", fmt.Errorf("local sync state is required")
+	}
+	return local.GetSyncState(
+		scopedDuckDBSyncStateKey(lastPushStateKey, syncStateTarget),
+	)
+}
+
+// ReadStatusFromConfig reads DuckDB/Quack row counts without requiring a local
+// Sync handle. Callers pass any local last-push watermark they want displayed.
+func ReadStatusFromConfig(
+	ctx context.Context,
+	cfg config.DuckDBConfig,
+	lastPush string,
+) (SyncStatus, error) {
+	if cfg.MachineName == "" {
+		return SyncStatus{}, fmt.Errorf("machine name must not be empty")
+	}
+	store, err := NewStoreFromConfig(cfg)
+	if err != nil {
+		return SyncStatus{}, err
+	}
+	defer store.Close()
+	return readUnscopedStatus(ctx, store.DB(), cfg.MachineName, lastPush)
+}
+
+func readUnscopedStatus(
+	ctx context.Context,
+	duck *sql.DB,
+	machine string,
+	lastPush string,
+) (SyncStatus, error) {
+	status := SyncStatus{Machine: machine, LastPushAt: lastPush}
+	if err := duck.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sessions`,
+	).Scan(&status.DuckDBSessions); err != nil {
+		if isMissingDuckDBTable(err) {
+			return status, nil
+		}
+		return SyncStatus{}, fmt.Errorf("counting duckdb sessions: %w", err)
+	}
+	if err := duck.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM messages`,
+	).Scan(&status.DuckDBMessages); err != nil {
+		if isMissingDuckDBTable(err) {
+			return status, nil
+		}
+		return SyncStatus{}, fmt.Errorf("counting duckdb messages: %w", err)
+	}
+	return status, nil
+}
+
+func isMissingDuckDBTable(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "does not exist") ||
+		strings.Contains(message, "table with name")
+}
+
 // NewStoreFromConfig opens either a local DuckDB mirror file or a remote
 // Quack endpoint. Quack endpoints are attached as the default catalog so the
 // Store's unqualified read queries work for both local and remote modes.
@@ -42,8 +108,51 @@ func NewStoreFromConfig(cfg config.DuckDBConfig) (*Store, error) {
 	return NewStore(cfg.Path)
 }
 
+// NewFromConfig opens either a local DuckDB mirror file or a remote Quack
+// endpoint for push sync.
+func NewFromConfig(
+	cfg config.DuckDBConfig, local *db.DB, opts SyncOptions,
+) (*Sync, error) {
+	if local == nil {
+		return nil, fmt.Errorf("local db is required")
+	}
+	if cfg.MachineName == "" {
+		return nil, fmt.Errorf("machine name must not be empty")
+	}
+	var (
+		duck *sql.DB
+		err  error
+	)
+	if cfg.URL != "" {
+		duck, err = OpenQuack(cfg.URL, cfg.Token, cfg.AllowInsecure)
+	} else {
+		duck, err = Open(cfg.Path)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &Sync{
+		duck:            duck,
+		local:           local,
+		machine:         cfg.MachineName,
+		syncStateScope:  opts.SyncStateTarget,
+		projects:        opts.Projects,
+		excludeProjects: opts.ExcludeProjects,
+	}, nil
+}
+
 // NewQuackStore attaches a remote DuckDB exposed over Quack.
 func NewQuackStore(rawURL, token string, allowInsecure bool) (*Store, error) {
+	conn, err := OpenQuack(rawURL, token, allowInsecure)
+	if err != nil {
+		return nil, err
+	}
+	return NewStoreFromDB(conn), nil
+}
+
+// OpenQuack opens an in-memory DuckDB client and attaches a remote DuckDB
+// exposed over Quack as the default catalog.
+func OpenQuack(rawURL, token string, allowInsecure bool) (*sql.DB, error) {
 	if err := ValidateQuackClientURL(rawURL, token, allowInsecure); err != nil {
 		return nil, err
 	}
@@ -81,7 +190,7 @@ func NewQuackStore(rawURL, token string, allowInsecure bool) (*Store, error) {
 		conn.Close()
 		return nil, fmt.Errorf("selecting quack catalog: %w", err)
 	}
-	return NewStoreFromDB(conn), nil
+	return conn, nil
 }
 
 func configureDuckDBThreads(db *sql.DB) error {

@@ -38,6 +38,10 @@ func newSessionCommand() *cobra.Command {
 		"pg", false,
 		"Read session data from configured PostgreSQL",
 	)
+	cmd.PersistentFlags().Bool(
+		"quack", false,
+		"Read session data from configured Quack",
+	)
 
 	cmd.AddCommand(newSessionGetCommand())
 	cmd.AddCommand(newSessionUsageCommand())
@@ -64,6 +68,11 @@ func resolveService(
 				"--server and --pg are mutually exclusive",
 			)
 		}
+		if quackReadRequested(cmd) {
+			return nil, nil, errors.New(
+				"--server and --quack are mutually exclusive",
+			)
+		}
 		token, err := explicitServerToken(cmd)
 		if err != nil {
 			return nil, nil, err
@@ -77,12 +86,24 @@ func resolveService(
 			"loading config: %w", err,
 		)
 	}
+	if pgReadRequested(cmd) && quackReadRequested(cmd) {
+		return nil, nil, errors.New(
+			"--pg and --quack are mutually exclusive",
+		)
+	}
 	pgCfg, usePG, err := resolvePGReadConfig(cmd, cfg)
 	if err != nil {
 		return nil, nil, err
 	}
 	if usePG {
 		return newPGReadService(cfg, pgCfg)
+	}
+	quackCfg, useQuack, err := resolveQuackReadConfig(cmd, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	if useQuack {
+		return newQuackReadService(cfg, quackCfg)
 	}
 	tr, err := ensureTransport(&cfg, transportIntentRead, 0)
 	if err != nil {
@@ -93,9 +114,9 @@ func resolveService(
 
 // resolveWritableService constructs a write-capable SessionService:
 // HTTP when a writable daemon is reachable, otherwise a direct
-// backend wired with a real sync.Engine. It refuses read-only
-// daemons (pg serve) and unreachable writable daemons. Callers MUST defer the returned
-// cleanup. Read-only commands should use resolveService instead.
+// backend wired with a real sync.Engine. It refuses read-only daemons
+// and unreachable writable daemons. Callers MUST defer the returned cleanup.
+// Read-only commands should use resolveService instead.
 func resolveWritableService(
 	cmd *cobra.Command,
 ) (service.SessionService, func(), error) {
@@ -117,6 +138,11 @@ func resolveWritableServiceWithIntent(
 				"--server and --pg are mutually exclusive",
 			)
 		}
+		if quackReadRequested(cmd) {
+			return nil, nil, errors.New(
+				"--server and --quack are mutually exclusive",
+			)
+		}
 		token, err := explicitServerToken(cmd)
 		if err != nil {
 			return nil, nil, err
@@ -127,6 +153,11 @@ func resolveWritableServiceWithIntent(
 	if pgReadRequested(cmd) {
 		return nil, nil, errors.New(
 			"--pg is read-only and cannot be used with write commands",
+		)
+	}
+	if quackReadRequested(cmd) {
+		return nil, nil, errors.New(
+			"--quack is read-only and cannot be used with write commands",
 		)
 	}
 	cfg, err := config.LoadPFlags(cmd.Flags())
@@ -144,8 +175,9 @@ func resolveWritableServiceWithIntent(
 	}
 	if tr.Mode == transportHTTP && tr.ReadOnly {
 		return nil, nil, fmt.Errorf(
-			"daemon at %s is read-only (pg serve); cannot write: stop "+
-				"'pg serve' and use the local DB, or start a local daemon",
+			"daemon at %s is read-only; cannot write: stop the "+
+				"read-only serve process and use the local DB, "+
+				"or start a local daemon",
 			tr.URL,
 		)
 	}
@@ -186,6 +218,33 @@ func pgReadRequested(cmd *cobra.Command) bool {
 		return false
 	}
 	v, err := cmd.Flags().GetBool("pg")
+	return err == nil && v
+}
+
+func resolveQuackReadConfig(
+	cmd *cobra.Command, cfg config.Config,
+) (config.QuackConfig, bool, error) {
+	if !quackReadRequested(cmd) {
+		return config.QuackConfig{}, false, nil
+	}
+	quackCfg, err := cfg.ResolveQuack()
+	if err != nil {
+		return config.QuackConfig{}, false,
+			fmt.Errorf("resolving quack config: %w", err)
+	}
+	if quackCfg.URL == "" {
+		return config.QuackConfig{}, false, errors.New(
+			"quack url not configured; set AGENTSVIEW_QUACK_URL or configure [quack].url",
+		)
+	}
+	return quackCfg, true, nil
+}
+
+func quackReadRequested(cmd *cobra.Command) bool {
+	if cmd == nil {
+		return false
+	}
+	v, err := cmd.Flags().GetBool("quack")
 	return err == nil && v
 }
 
