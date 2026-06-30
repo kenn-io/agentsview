@@ -995,66 +995,6 @@ func TestLoadFile_PGConfig(t *testing.T) {
 	}
 }
 
-func TestLoadFile_QuackConfig(t *testing.T) {
-	f := newConfigFixture(t)
-	f.WriteTOML(t, map[string]any{
-		"quack": map[string]any{
-			"url":              "quack:https://duck.example.test",
-			"token":            "configured-token",
-			"allow_insecure":   true,
-			"projects":         []string{"alpha"},
-			"exclude_projects": []string{"beta"},
-		},
-	})
-
-	cfg := f.LoadMinimal(t)
-	resolved, err := cfg.ResolveQuack()
-	require.NoError(t, err)
-	assert.Equal(t, QuackConfig{
-		URL:             "quack:https://duck.example.test",
-		Token:           "configured-token",
-		AllowInsecure:   true,
-		Projects:        []string{"alpha"},
-		ExcludeProjects: []string{"beta"},
-	}, resolved)
-}
-
-func TestLoadFile_QuackEnvOverridesConfig(t *testing.T) {
-	f := newConfigFixture(t)
-	f.WriteTOML(t, map[string]any{
-		"quack": map[string]any{
-			"url":   "quack:https://duck.example.test",
-			"token": "configured-token",
-		},
-	})
-	t.Setenv("AGENTSVIEW_QUACK_URL", "quack:https://env-duck.example.test")
-	t.Setenv("AGENTSVIEW_QUACK_TOKEN", "env-token")
-
-	cfg := f.LoadMinimal(t)
-	resolved, err := cfg.ResolveQuack()
-	require.NoError(t, err)
-	assert.Equal(t, "quack:https://env-duck.example.test", resolved.URL)
-	assert.Equal(t, "env-token", resolved.Token)
-}
-
-func TestQuackConfigAsDuckDBConfig(t *testing.T) {
-	quack := QuackConfig{
-		URL:             "quack:https://duck.example.test",
-		Token:           "secret-token",
-		AllowInsecure:   true,
-		Projects:        []string{"alpha"},
-		ExcludeProjects: []string{"beta"},
-	}
-
-	assert.Equal(t, DuckDBConfig{
-		URL:             "quack:https://duck.example.test",
-		Token:           "secret-token",
-		AllowInsecure:   true,
-		Projects:        []string{"alpha"},
-		ExcludeProjects: []string{"beta"},
-	}, quack.AsDuckDBConfig())
-}
-
 func TestResolvePGTarget_NamedTargets(t *testing.T) {
 	cfg := Config{
 		DefaultPG: "work",

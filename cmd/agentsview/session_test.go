@@ -105,12 +105,6 @@ type pgReadStoreStub struct {
 	PG            config.PGConfig
 }
 
-type quackReadStoreStub struct {
-	Opened        bool
-	CleanupCalled bool
-	Quack         config.QuackConfig
-}
-
 // stubPGReadStore replaces openPGReadStore with one that returns store,
 // records the PGConfig it was called with, and restores the original on
 // cleanup. The caller owns the lifecycle of store; the stub's cleanup only
@@ -127,21 +121,6 @@ func stubPGReadStore(t *testing.T, store db.Store) *pgReadStoreStub {
 		return store, func() { stub.CleanupCalled = true }, nil
 	}
 	t.Cleanup(func() { openPGReadStore = orig })
-	return stub
-}
-
-func stubQuackReadStore(t *testing.T, store db.Store) *quackReadStoreStub {
-	t.Helper()
-	stub := &quackReadStoreStub{}
-	orig := openQuackReadStore
-	openQuackReadStore = func(
-		_ config.Config, quackCfg config.QuackConfig,
-	) (db.Store, func(), error) {
-		stub.Opened = true
-		stub.Quack = quackCfg
-		return store, func() { stub.CleanupCalled = true }, nil
-	}
-	t.Cleanup(func() { openQuackReadStore = orig })
 	return stub
 }
 
@@ -268,8 +247,6 @@ func TestSessionHelp_ShowsSubcommands(t *testing.T) {
 		"expected --format persistent flag in help")
 	assert.Contains(t, help, "--pg",
 		"expected --pg persistent flag in help")
-	assert.Contains(t, help, "--quack",
-		"expected --quack persistent flag in help")
 }
 
 // seedSession opens the SQLite DB at dataDir/sessions.db, inserts
@@ -1288,33 +1265,6 @@ func TestSessionUsage_PGFlagUsesPGStore(t *testing.T) {
 	assert.Equal(t, "pg-session", out.SessionID)
 	assert.Equal(t, "pg-project", out.Project)
 	assert.Equal(t, 42, out.TotalOutputTokens)
-	assert.False(t, out.ServerRunning)
-}
-
-func TestSessionUsage_QuackFlagUsesQuackStore(t *testing.T) {
-	dataDir := newAgentDataDir(t)
-	t.Setenv("AGENTSVIEW_QUACK_URL", "quack:https://duck.example.test")
-	t.Setenv("AGENTSVIEW_QUACK_TOKEN", "secret")
-
-	quackDB, err := db.Open(filepath.Join(dataDir, "quack.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { quackDB.Close() })
-	seedUsageSession(t, quackDB, "quack-session", "quack-project", "codex", 84)
-
-	stub := stubQuackReadStore(t, quackDB)
-
-	cmd := sessionUsageCommand(t, "session", "usage", "quack-session", "--quack")
-
-	out, code, err := sessionUsageDataForCommand(cmd, "quack-session")
-	require.NoError(t, err)
-	require.NotNil(t, out)
-	assert.True(t, stub.Opened, "expected session usage --quack to open Quack store")
-	assert.Equal(t, "quack:https://duck.example.test", stub.Quack.URL)
-	assert.Equal(t, "secret", stub.Quack.Token)
-	assert.Equal(t, tokenUseExitOK, code)
-	assert.Equal(t, "quack-session", out.SessionID)
-	assert.Equal(t, "quack-project", out.Project)
-	assert.Equal(t, 84, out.TotalOutputTokens)
 	assert.False(t, out.ServerRunning)
 }
 

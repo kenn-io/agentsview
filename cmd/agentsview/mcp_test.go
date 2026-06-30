@@ -99,7 +99,6 @@ func TestNewMCPCommand_Wiring(t *testing.T) {
 
 	for _, name := range []string{
 		"http", "http-allow-insecure", "server", "server-token-file", "pg",
-		"quack",
 	} {
 		assert.NotNil(t, cmd.Flags().Lookup(name), "missing flag --%s", name)
 	}
@@ -147,37 +146,6 @@ func TestResolveMCPServicePGFlagUsesPGReadStore(t *testing.T) {
 	assert.Equal(t, "pg-session", res.Sessions[0].ID)
 	assert.Equal(t, "postgres://example.test/agentsview", stub.PG.URL)
 	assert.Equal(t, "custom_schema", stub.PG.Schema)
-}
-
-func TestResolveMCPServiceQuackFlagUsesQuackReadStore(t *testing.T) {
-	dataDir := newAgentDataDir(t)
-	remoteDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_QUACK_URL", "quack:https://duck.example.test")
-	t.Setenv("AGENTSVIEW_QUACK_TOKEN", "secret")
-	seedSession(t, dataDir, "local-session", "local")
-	seedSession(t, remoteDir, "quack-session", "remote")
-
-	remoteDB, err := db.Open(filepath.Join(remoteDir, "sessions.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = remoteDB.Close() })
-	stub := stubQuackReadStore(t, remoteDB)
-	forbidStartBackgroundServeForTransport(t,
-		"agentsview mcp --quack must use the Quack read store, not the daemon")
-
-	cmd := newMCPCommand()
-	cmd.SetArgs([]string{"--quack"})
-	require.NoError(t, cmd.ParseFlags([]string{"--quack"}))
-
-	svc, cleanup, err := resolveMCPService(cmd)
-	require.NoError(t, err)
-	t.Cleanup(cleanup)
-
-	res, err := svc.List(context.Background(), service.ListFilter{Limit: 10})
-	require.NoError(t, err)
-	require.Len(t, res.Sessions, 1)
-	assert.Equal(t, "quack-session", res.Sessions[0].ID)
-	assert.Equal(t, "quack:https://duck.example.test", stub.Quack.URL)
-	assert.Equal(t, "secret", stub.Quack.Token)
 }
 
 func TestMCPDaemonServiceStartsDaemonForEachOperation(t *testing.T) {

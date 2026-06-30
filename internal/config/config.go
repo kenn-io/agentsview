@@ -101,26 +101,6 @@ type DuckDBConfig struct {
 	ExcludeProjects []string `toml:"exclude_projects" json:"exclude_projects,omitempty"`
 }
 
-// QuackConfig holds remote Quack endpoint settings for the standalone
-// Quack sync/read backend.
-type QuackConfig struct {
-	URL             string   `toml:"url" json:"url"`
-	Token           string   `toml:"token" json:"token,omitempty"`
-	AllowInsecure   bool     `toml:"allow_insecure" json:"allow_insecure"`
-	Projects        []string `toml:"projects" json:"projects,omitempty"`
-	ExcludeProjects []string `toml:"exclude_projects" json:"exclude_projects,omitempty"`
-}
-
-func (q QuackConfig) AsDuckDBConfig() DuckDBConfig {
-	return DuckDBConfig{
-		URL:             q.URL,
-		Token:           q.Token,
-		AllowInsecure:   q.AllowInsecure,
-		Projects:        q.Projects,
-		ExcludeProjects: q.ExcludeProjects,
-	}
-}
-
 // AutomatedConfig holds user-supplied additions to the
 // automated-session classifier. Parse-only; all semantic
 // normalization (trim, dedupe, length cap, built-in overlap
@@ -192,7 +172,6 @@ type Config struct {
 	DefaultPG            string                 `json:"default_pg,omitempty" toml:"default_pg"`
 	PGTargets            map[string]PGConfig    `json:"-" toml:"-"`
 	DuckDB               DuckDBConfig           `json:"duckdb,omitempty" toml:"duckdb"`
-	Quack                QuackConfig            `json:"quack,omitempty" toml:"quack"`
 	Automated            AutomatedConfig        `json:"automated,omitempty" toml:"automated"`
 	Agent                map[string]AgentConfig `json:"agent,omitempty" toml:"agent"`
 	WriteTimeout         time.Duration          `json:"-" toml:"-"`
@@ -700,7 +679,6 @@ func (c *Config) applyConfigTOML(data string) error {
 		DefaultPG                      string                     `toml:"default_pg"`
 		PG                             PGConfig                   `toml:"pg"`
 		DuckDB                         DuckDBConfig               `toml:"duckdb"`
-		Quack                          QuackConfig                `toml:"quack"`
 		Automated                      AutomatedConfig            `toml:"automated"`
 		Agent                          map[string]AgentConfig     `toml:"agent"`
 		EventsCoalesceInterval         time.Duration              `toml:"events_coalesce_interval"`
@@ -810,21 +788,6 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if file.DuckDB.ExcludeProjects != nil && c.DuckDB.ExcludeProjects == nil {
 		c.DuckDB.ExcludeProjects = file.DuckDB.ExcludeProjects
-	}
-	if file.Quack.URL != "" && c.Quack.URL == "" {
-		c.Quack.URL = file.Quack.URL
-	}
-	if file.Quack.Token != "" && c.Quack.Token == "" {
-		c.Quack.Token = file.Quack.Token
-	}
-	if file.Quack.AllowInsecure {
-		c.Quack.AllowInsecure = true
-	}
-	if file.Quack.Projects != nil && c.Quack.Projects == nil {
-		c.Quack.Projects = file.Quack.Projects
-	}
-	if file.Quack.ExcludeProjects != nil && c.Quack.ExcludeProjects == nil {
-		c.Quack.ExcludeProjects = file.Quack.ExcludeProjects
 	}
 	// IsDefined distinguishes "unset" (leave default 10s) from an
 	// explicit "0s" (disable coalescing). Checking != 0 would silently
@@ -1048,12 +1011,6 @@ func (c *Config) loadEnv() {
 	}
 	if v := os.Getenv("AGENTSVIEW_DUCKDB_MACHINE"); v != "" {
 		c.DuckDB.MachineName = v
-	}
-	if v := os.Getenv("AGENTSVIEW_QUACK_URL"); v != "" {
-		c.Quack.URL = v
-	}
-	if v := os.Getenv("AGENTSVIEW_QUACK_TOKEN"); v != "" {
-		c.Quack.Token = v
 	}
 	if v := os.Getenv("AGENTSVIEW_DISABLE_UPDATE_CHECK"); v != "" {
 		c.DisableUpdateCheck = v == "1" || v == "true"
@@ -1917,27 +1874,6 @@ func (c *Config) ResolveDuckDB() (DuckDBConfig, error) {
 		duck.MachineName = h
 	}
 	return duck, nil
-}
-
-// ResolveQuack returns a copy of Quack config with environment variables
-// expanded in URL and token.
-func (c *Config) ResolveQuack() (QuackConfig, error) {
-	quack := c.Quack
-	if quack.URL != "" {
-		expanded, err := expandBracedEnv(quack.URL)
-		if err != nil {
-			return quack, fmt.Errorf("expanding url: %w", err)
-		}
-		quack.URL = expanded
-	}
-	if quack.Token != "" {
-		expanded, err := expandBracedEnv(quack.Token)
-		if err != nil {
-			return quack, fmt.Errorf("expanding token: %w", err)
-		}
-		quack.Token = expanded
-	}
-	return quack, nil
 }
 
 var (

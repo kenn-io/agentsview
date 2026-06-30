@@ -107,10 +107,10 @@ func TestPGPushRejectsIncludeAndExcludeProjects(t *testing.T) {
 		"projects and exclude_projects are mutually exclusive")
 }
 
-func TestQuackPushRejectsIncludeAndExcludeProjects(t *testing.T) {
+func TestDuckDBPushRejectsIncludeAndExcludeProjects(t *testing.T) {
 	s := testServerWithConfig(config.Config{})
 
-	_, err := s.humaQuackPush(context.Background(), &daemonPushInput{
+	_, err := s.humaDuckDBPush(context.Background(), &daemonPushInput{
 		Body: daemonPushRequest{
 			Projects:        []string{"alpha"},
 			ExcludeProjects: []string{"beta"},
@@ -141,34 +141,6 @@ func TestDuckDBPushConfigRequestOverrideSkipsDaemonEnvResolution(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "/tmp/agentsview.duckdb", got.Path)
 	assert.Equal(t, "workstation", got.MachineName)
-}
-
-func TestQuackPushConfigRequestOverrideSkipsDaemonEnvResolution(t *testing.T) {
-	const envName = "AGENTSVIEW_TEST_MISSING_QUACK_URL_25053"
-	s := testServerWithConfig(config.Config{
-		Quack: config.QuackConfig{URL: missingEnvRef(t, envName)},
-	})
-	req := daemonPushRequest{
-		Quack: &config.QuackConfig{
-			URL:   "quack:https://duck.example.test",
-			Token: "secret",
-		},
-	}
-
-	got, err := s.quackPushConfig(req)
-	require.NoError(t, err)
-	assert.Equal(t, "quack:https://duck.example.test", got.URL)
-	assert.Equal(t, "secret", got.Token)
-}
-
-func TestQuackPushSyncOptionsForceQuackScope(t *testing.T) {
-	got := quackPushSyncOptions(daemonPushRequest{
-		Projects:        []string{"alpha"},
-		SyncStateTarget: "duckdb",
-	})
-
-	assert.Equal(t, []string{"alpha"}, got.Projects)
-	assert.Equal(t, "quack", got.SyncStateTarget)
 }
 
 func TestSyncRemotesRouteIsStreaming(t *testing.T) {

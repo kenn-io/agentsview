@@ -25,6 +25,9 @@ type DuckDBPushConfig struct {
 	ProjectsFlag    string
 	ExcludeProjects string
 	AllProjects     bool
+	Watch           bool
+	Debounce        time.Duration
+	Interval        time.Duration
 }
 
 type DuckDBQuackServeConfig struct {
@@ -62,6 +65,21 @@ func runDuckDBPush(cfg DuckDBPushConfig) {
 	}
 	defer cleanup()
 
+	if cfg.Watch {
+		fmt.Printf(
+			"agentsview duckdb watch: pushing to DuckDB "+
+				"(debounce %s, floor %s)\n",
+			cfg.Debounce, cfg.Interval,
+		)
+		if err := backend.DuckDBPushWatch(
+			ctx, duckCfg, cfg, projects, excludeProjects,
+			cfg.Debounce, cfg.Interval,
+		); err != nil {
+			fatal("duckdb watch: %v", err)
+		}
+		return
+	}
+
 	result, err := backend.DuckDBPush(
 		ctx, duckCfg, cfg, projects, excludeProjects,
 	)
@@ -89,29 +107,33 @@ func runDuckDBStatus() {
 	}
 	setupLogFile(appCfg.DataDir)
 
-	database, err := openReadOnlyDB(appCfg)
-	if err != nil {
-		fatal("opening database: %v", err)
-	}
-	defer database.Close()
-
 	duckCfg, err := appCfg.ResolveDuckDB()
 	if err != nil {
 		fatal("duckdb status: %v", err)
 	}
-	syncer, err := duckdbsync.New(
-		duckCfg.Path, database, duckCfg.MachineName,
-		duckdbsync.SyncOptions{},
-	)
+	lastPush := ""
+	database, err := openReadOnlyDB(appCfg)
 	if err != nil {
-		fatal("duckdb status: %v", err)
+		if duckCfg.URL == "" {
+			fatal("opening database: %v", err)
+		}
+		log.Printf(
+			"warning: reading local duckdb status watermark: %v",
+			err,
+		)
+	} else {
+		defer database.Close()
+		lastPush, err = duckdbsync.ReadLastPushAt(database, "")
+		if err != nil {
+			log.Printf("warning: reading duckdb last push: %v", err)
+			lastPush = ""
+		}
 	}
-	defer syncer.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	status, err := syncer.Status(ctx)
+	status, err := duckdbsync.ReadStatusFromConfig(ctx, duckCfg, lastPush)
 	if err != nil {
 		fatal("duckdb status: %v", err)
 	}
@@ -231,7 +253,7 @@ func runDuckDBServe(appCfg config.Config, basePath string) {
 		defer RemoveDaemonRuntime(rt.Cfg.DataDir)
 	}
 	if rt.Cfg.RequireAuth && rt.Cfg.AuthToken != "" {
-		fmt.Printf("Auth token: %s\n", rt.Cfg.AuthToken)
+		fmt.Println("Auth enabled. Token is configured.")
 	}
 	if rt.PublicURL == rt.LocalURL {
 		fmt.Printf(
@@ -354,7 +376,7 @@ func writeDuckDBQuackServeStartup(
 		fmt.Fprintf(out, "HTTP URL:    %s\n", startup.Info.HTTPURL)
 	}
 	if startup.Generated {
-		fmt.Fprintln(out, "Token:       generated")
+		fmt.Fprintln(out, "Token:       generated but not shown")
 	} else {
 		fmt.Fprintln(out, "Token:       configured")
 	}

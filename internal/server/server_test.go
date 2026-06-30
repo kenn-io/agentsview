@@ -2212,7 +2212,7 @@ func TestPGPushLocalNoSyncDaemonReachesConfigValidation(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "pg push: url not configured")
 }
 
-func TestDuckDBPushLocalNoSyncDaemonIgnoresConfiguredRemoteURL(t *testing.T) {
+func TestDuckDBPushLocalNoSyncDaemonWritesConfiguredPath(t *testing.T) {
 	te := setupNoSyncMode(t)
 	target := filepath.Join(t.TempDir(), "agentsview.duckdb")
 	body, err := json.Marshal(struct {
@@ -2222,7 +2222,6 @@ func TestDuckDBPushLocalNoSyncDaemonIgnoresConfiguredRemoteURL(t *testing.T) {
 		Full: true,
 		DuckDB: config.DuckDBConfig{
 			Path:        target,
-			URL:         "quack:https://duck.example.test",
 			MachineName: "workstation",
 		},
 	})
@@ -2232,15 +2231,6 @@ func TestDuckDBPushLocalNoSyncDaemonIgnoresConfiguredRemoteURL(t *testing.T) {
 
 	assertStatus(t, w, http.StatusOK)
 	assert.FileExists(t, target)
-}
-
-func TestQuackPushLocalNoSyncDaemonReachesConfigValidation(t *testing.T) {
-	te := setupNoSyncMode(t)
-
-	w := te.post(t, "/api/v1/push/quack", `{"full":false}`)
-
-	assertStatus(t, w, http.StatusBadRequest)
-	assert.Contains(t, w.Body.String(), "quack push: url not configured")
 }
 
 func TestCORSPreflightRejectsBadOrigin(t *testing.T) {

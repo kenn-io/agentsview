@@ -83,11 +83,6 @@ func sessionUsageDataForCommand(
 				"--server and --pg are mutually exclusive",
 			)
 		}
-		if quackReadRequested(cmd) {
-			return nil, tokenUseExitErr, fmt.Errorf(
-				"--server and --quack are mutually exclusive",
-			)
-		}
 		token, err := explicitServerToken(cmd)
 		if err != nil {
 			return nil, tokenUseExitErr, err
@@ -98,24 +93,12 @@ func sessionUsageDataForCommand(
 	if err != nil {
 		return nil, tokenUseExitErr, fmt.Errorf("loading config: %w", err)
 	}
-	if pgReadRequested(cmd) && quackReadRequested(cmd) {
-		return nil, tokenUseExitErr, fmt.Errorf(
-			"--pg and --quack are mutually exclusive",
-		)
-	}
 	if pgReadRequested(cmd) {
 		pgCfg, _, err := resolvePGReadConfig(cmd, cfg)
 		if err != nil {
 			return nil, tokenUseExitErr, err
 		}
 		return pgSessionUsageData(cfg, pgCfg, sessionID)
-	}
-	if quackReadRequested(cmd) {
-		quackCfg, _, err := resolveQuackReadConfig(cmd, cfg)
-		if err != nil {
-			return nil, tokenUseExitErr, err
-		}
-		return quackSessionUsageData(cfg, quackCfg, sessionID)
 	}
 	backend, cleanup, err := resolveArchiveQueryBackendWithConfig(
 		ctx,
@@ -135,7 +118,7 @@ func sessionUsageDataForCommand(
 
 func readOnlySessionUsageDaemonError(url string) error {
 	return fmt.Errorf(
-		"daemon at %s is read-only; use --pg or --quack to query "+
+		"daemon at %s is read-only; use --pg to query "+
 			"a read-only mirror, or stop it to refresh local "+
 			"session usage",
 		url,
@@ -209,24 +192,6 @@ func pgSessionUsageData(
 		defer cleanup()
 	}
 	return storeSessionUsageData("pg", cfg, store, sessionID)
-}
-
-func quackSessionUsageData(
-	cfg config.Config, quackCfg config.QuackConfig, sessionID string,
-) (*sessionUsageOutput, int, error) {
-	store, cleanup, err := openQuackReadStore(cfg, quackCfg)
-	if err != nil {
-		if cleanup != nil {
-			cleanup()
-		}
-		return nil, tokenUseExitErr, fmt.Errorf(
-			"opening quack store: %w", err,
-		)
-	}
-	if cleanup != nil {
-		defer cleanup()
-	}
-	return storeSessionUsageData("quack", cfg, store, sessionID)
 }
 
 func storeSessionUsageData(

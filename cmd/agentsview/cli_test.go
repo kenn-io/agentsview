@@ -42,7 +42,7 @@ func TestRootHelpShowsKeySectionsAndCommands(t *testing.T) {
 		"serve                  Start server",
 		"duckdb status          Show DuckDB sync status",
 		"pg push                Push local data to PostgreSQL",
-		"quack push             Push local data to Quack",
+		"duckdb quack           Quack remote protocol commands",
 		"usage daily            Daily cost summary",
 		"completion             Generate the autocompletion script for the specified shell",
 		"Flags:",
@@ -76,12 +76,8 @@ func TestRootHelpShowsDuckDBEnvironment(t *testing.T) {
 func TestRootHelpShowsQuackEnvironment(t *testing.T) {
 	help, err := executeCommand(newRootCommand(), "--help")
 	require.NoError(t, err, "Execute")
-	for _, want := range []string{
-		"AGENTSVIEW_QUACK_URL",
-		"AGENTSVIEW_QUACK_TOKEN",
-	} {
-		assert.Contains(t, help, want, "help missing %q", want)
-	}
+	assert.NotContains(t, help, "AGENTSVIEW_QUACK_URL")
+	assert.NotContains(t, help, "AGENTSVIEW_QUACK_TOKEN")
 }
 
 func TestRootHelpDocumentsCopilotExportDir(t *testing.T) {
@@ -99,6 +95,9 @@ func TestDuckDBPushHelpShowsProjectFlags(t *testing.T) {
 		"--projects",
 		"--exclude-projects",
 		"--all-projects",
+		"--watch",
+		"--debounce",
+		"--interval",
 	} {
 		assert.Contains(t, help, want)
 	}

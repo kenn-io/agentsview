@@ -98,7 +98,6 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newActivityCommand())
 	root.AddCommand(newPGCommand())
 	root.AddCommand(newDuckDBCommand())
-	root.AddCommand(newQuackCommand())
 	root.AddCommand(newSessionCommand())
 	root.AddCommand(newMCPCommand())
 	root.AddCommand(newStatsCommand())
@@ -673,6 +672,9 @@ func newDuckDBPushCommand() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.ProjectsFlag, "projects", "", "Comma-separated list of projects to push (inclusive)")
 	cmd.Flags().StringVar(&cfg.ExcludeProjects, "exclude-projects", "", "Comma-separated list of projects to exclude from push")
 	cmd.Flags().BoolVar(&cfg.AllProjects, "all-projects", false, "Ignore configured project filters for this run")
+	cmd.Flags().BoolVar(&cfg.Watch, "watch", false, "Continue watching local files and pushing changes")
+	cmd.Flags().DurationVar(&cfg.Debounce, "debounce", defaultWatchDebounce, "Coalesce window after a change before pushing (--watch only)")
+	cmd.Flags().DurationVar(&cfg.Interval, "interval", defaultWatchInterval, "Periodic floor push interval (--watch only)")
 	return cmd
 }
 
@@ -813,8 +815,6 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  AGENTSVIEW_DUCKDB_TOKEN Quack authentication token")
 	fmt.Fprintln(w, "  AGENTSVIEW_DUCKDB_MACHINE")
 	fmt.Fprintln(w, "                          Machine name for DuckDB sync")
-	fmt.Fprintln(w, "  AGENTSVIEW_QUACK_URL    Quack connection URL for sync")
-	fmt.Fprintln(w, "  AGENTSVIEW_QUACK_TOKEN  Quack authentication token")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Watcher excludes:")
 	fmt.Fprintln(w, "  Add \"watch_exclude_patterns\" to ~/.agentsview/config.toml")

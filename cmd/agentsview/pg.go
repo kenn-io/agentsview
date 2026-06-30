@@ -483,7 +483,7 @@ func runPGServe(appCfg config.Config, basePath string) {
 	}
 
 	if rt.Cfg.RequireAuth && rt.Cfg.AuthToken != "" {
-		fmt.Printf("Auth token: %s\n", rt.Cfg.AuthToken)
+		fmt.Println("Auth enabled. Token is configured.")
 	}
 	if rt.PublicURL == rt.LocalURL {
 		fmt.Printf(

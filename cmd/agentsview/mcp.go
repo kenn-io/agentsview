@@ -120,14 +120,12 @@ Add to your MCP client config (e.g. Claude Desktop):
 
 	// Transport-selection flags, mirroring the `session` command.
 	// Implicit local SQLite reads are daemon-backed; explicit --server
-	// and --pg/--quack select their requested remote/read-store backends.
+	// and --pg select their requested remote/read-store backends.
 	cmd.Flags().String("server", "", "Remote daemon URL")
 	cmd.Flags().String("server-token-file", "",
 		"File containing bearer token for explicit --server requests")
 	cmd.Flags().Bool("pg", false,
 		"Read session data from configured PostgreSQL")
-	cmd.Flags().Bool("quack", false,
-		"Read session data from configured Quack")
 
 	return cmd
 }
@@ -146,11 +144,6 @@ func resolveMCPService(
 				"--server and --pg are mutually exclusive",
 			)
 		}
-		if quackReadRequested(cmd) {
-			return nil, nil, errors.New(
-				"--server and --quack are mutually exclusive",
-			)
-		}
 		token, err := explicitServerToken(cmd)
 		if err != nil {
 			return nil, nil, err
@@ -162,24 +155,12 @@ func resolveMCPService(
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
-	if pgReadRequested(cmd) && quackReadRequested(cmd) {
-		return nil, nil, errors.New(
-			"--pg and --quack are mutually exclusive",
-		)
-	}
 	pgCfg, usePG, err := resolvePGReadConfig(cmd, cfg)
 	if err != nil {
 		return nil, nil, err
 	}
 	if usePG {
 		return newPGReadService(cfg, pgCfg)
-	}
-	quackCfg, useQuack, err := resolveQuackReadConfig(cmd, cfg)
-	if err != nil {
-		return nil, nil, err
-	}
-	if useQuack {
-		return newQuackReadService(cfg, quackCfg)
 	}
 	return newMCPDaemonService(cfg), func() {}, nil
 }

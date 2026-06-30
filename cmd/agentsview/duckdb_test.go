@@ -118,8 +118,8 @@ func TestArchiveWriteBackendDuckDBPushAbsolutizesRelativeDaemonPath(t *testing.T
 	require.NoError(t, err)
 }
 
-func TestArchiveWriteBackendQuackPushPostsToDaemon(t *testing.T) {
-	ts := quackPushDaemonServer(t, wantDuckDBDaemonPush{
+func TestArchiveWriteBackendDuckDBPushPostsRemoteURLToDaemon(t *testing.T) {
+	ts := duckDBPushDaemonServer(t, wantDuckDBDaemonPush{
 		auth:            "Bearer secret",
 		full:            true,
 		projects:        []string{"a"},
@@ -136,14 +136,14 @@ func TestArchiveWriteBackendQuackPushPostsToDaemon(t *testing.T) {
 	backend := newDaemonArchiveWriteBackendForTest(
 		config.Config{AuthToken: "secret"}, ts.URL,
 	)
-	result, err := backend.QuackPush(
+	result, err := backend.DuckDBPush(
 		context.Background(),
-		config.QuackConfig{
+		config.DuckDBConfig{
 			URL:           "quack:https://duck.example.test",
 			Token:         "quack-token",
 			AllowInsecure: true,
 		},
-		QuackPushConfig{Full: true},
+		DuckDBPushConfig{Full: true},
 		[]string{"a"},
 		[]string{"b"},
 	)
@@ -152,23 +152,24 @@ func TestArchiveWriteBackendQuackPushPostsToDaemon(t *testing.T) {
 	assert.Equal(t, 3, result.MessagesPushed)
 }
 
-func TestArchiveWriteBackendQuackPushWatchReResolvesDaemon(t *testing.T) {
+func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 	dataDir := t.TempDir()
 	ctx, cancel := context.WithCancel(context.Background())
 	var startupPushes int
-	startup := pushRuntimeServer(t, "/api/v1/push/quack", func(
+	startup := pushRuntimeServer(t, "/api/v1/push/duckdb", func(
 		w http.ResponseWriter,
 		r *http.Request,
 	) {
 		startupPushes++
 		var req daemonPushRequest
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-		require.NotNil(t, req.Quack)
-		assert.Equal(t, "quack:https://duck.example.test", req.Quack.URL)
+		require.NotNil(t, req.DuckDB)
+		assert.Equal(t, "quack:https://duck.example.test", req.DuckDB.URL)
+		assert.Equal(t, "secret", req.DuckDB.Token)
 		writeTestJSON(t, w, duckdbsync.PushResult{SessionsPushed: 1})
 	})
 	var resolvedPushes int
-	resolved := pushRuntimeServer(t, "/api/v1/push/quack", func(
+	resolved := pushRuntimeServer(t, "/api/v1/push/duckdb", func(
 		w http.ResponseWriter,
 		r *http.Request,
 	) {
@@ -176,8 +177,9 @@ func TestArchiveWriteBackendQuackPushWatchReResolvesDaemon(t *testing.T) {
 		cancel()
 		var req daemonPushRequest
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-		require.NotNil(t, req.Quack)
-		assert.Equal(t, "quack:https://duck.example.test", req.Quack.URL)
+		require.NotNil(t, req.DuckDB)
+		assert.Equal(t, "quack:https://duck.example.test", req.DuckDB.URL)
+		assert.Equal(t, "secret", req.DuckDB.Token)
 		writeTestJSON(t, w, duckdbsync.PushResult{SessionsPushed: 1})
 	})
 	registerTestRuntime(t, dataDir, resolved.URL, false)
@@ -185,13 +187,13 @@ func TestArchiveWriteBackendQuackPushWatchReResolvesDaemon(t *testing.T) {
 	backend := newDaemonArchiveWriteBackendForTest(
 		config.Config{DataDir: dataDir}, startup.URL,
 	)
-	err := backend.QuackPushWatch(
+	err := backend.DuckDBPushWatch(
 		ctx,
-		config.QuackConfig{
+		config.DuckDBConfig{
 			URL:   "quack:https://duck.example.test",
 			Token: "secret",
 		},
-		QuackPushConfig{},
+		DuckDBPushConfig{},
 		nil,
 		nil,
 		time.Millisecond,
@@ -219,7 +221,7 @@ func TestWriteDuckDBQuackServeStartupDoesNotPrintGeneratedToken(t *testing.T) {
 
 	got := out.String()
 	assert.NotContains(t, got, token)
-	assert.Contains(t, got, "Token:       generated")
+	assert.Contains(t, got, "Token:       generated but not shown")
 }
 
 // wantDuckDBDaemonPush is the expected shape of a DuckDB daemon push request.
@@ -246,15 +248,6 @@ func duckDBPushDaemonServer(
 	return duckDBPushDaemonServerAt(t, "/api/v1/push/duckdb", want, result)
 }
 
-func quackPushDaemonServer(
-	t *testing.T,
-	want wantDuckDBDaemonPush,
-	result duckdbsync.PushResult,
-) *httptest.Server {
-	t.Helper()
-	return duckDBPushDaemonServerAt(t, "/api/v1/push/quack", want, result)
-}
-
 func duckDBPushDaemonServerAt(
 	t *testing.T,
 	path string,
@@ -272,19 +265,12 @@ func duckDBPushDaemonServerAt(
 		assert.Equal(t, want.full, req.Full)
 		assert.Equal(t, want.projects, req.Projects)
 		assert.Equal(t, want.excludeProjects, req.ExcludeProjects)
-		if path == "/api/v1/push/quack" {
-			require.NotNil(t, req.Quack)
-			assert.Equal(t, want.url, req.Quack.URL)
-			assert.Equal(t, want.token, req.Quack.Token)
-			assert.Equal(t, want.allowInsecure, req.Quack.AllowInsecure)
-		} else {
-			require.NotNil(t, req.DuckDB)
-			assert.Equal(t, want.path, req.DuckDB.Path)
-			assert.Equal(t, want.url, req.DuckDB.URL)
-			assert.Equal(t, want.token, req.DuckDB.Token)
-			assert.Equal(t, want.machineName, req.DuckDB.MachineName)
-			assert.Equal(t, want.allowInsecure, req.DuckDB.AllowInsecure)
-		}
+		require.NotNil(t, req.DuckDB)
+		assert.Equal(t, want.path, req.DuckDB.Path)
+		assert.Equal(t, want.url, req.DuckDB.URL)
+		assert.Equal(t, want.token, req.DuckDB.Token)
+		assert.Equal(t, want.machineName, req.DuckDB.MachineName)
+		assert.Equal(t, want.allowInsecure, req.DuckDB.AllowInsecure)
 		writeTestJSON(t, w, result)
 	})
 }

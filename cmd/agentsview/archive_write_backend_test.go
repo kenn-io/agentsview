@@ -34,15 +34,13 @@ func TestLocalArchiveWriteBackendDuckDBPushStopsAfterCanceledLocalSync(t *testin
 		})
 }
 
-func TestLocalArchiveWriteBackendDuckDBPushIgnoresConfiguredRemoteURL(t *testing.T) {
+func TestLocalArchiveWriteBackendDuckDBPushUsesConfiguredRemoteURL(t *testing.T) {
 	backend := testLocalArchiveWriteBackend(t)
-	target := filepath.Join(t.TempDir(), "agentsview.duckdb")
 
 	captureStdout(t, func() {
 		_, err := backend.DuckDBPush(
 			context.Background(),
 			config.DuckDBConfig{
-				Path:        target,
 				URL:         "quack:https://duck.example.test",
 				MachineName: "workstation",
 			},
@@ -50,10 +48,9 @@ func TestLocalArchiveWriteBackendDuckDBPushIgnoresConfiguredRemoteURL(t *testing
 			nil,
 			nil,
 		)
-		require.NoError(t, err)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "duckdb quack token is required")
 	})
-
-	assert.FileExists(t, target)
 }
 
 func TestRunPGWatchStartupSyncFallsBackAfterAbortedResync(t *testing.T) {

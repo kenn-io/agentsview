@@ -130,7 +130,7 @@ func runServeBackground(
 	}
 	if cfg.RequireAuth {
 		if cfg.AuthToken != "" {
-			fmt.Printf("Auth enabled. Token: %s\n", cfg.AuthToken)
+			fmt.Println("Auth enabled. Token is configured.")
 		}
 	}
 

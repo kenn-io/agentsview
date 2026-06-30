@@ -104,12 +104,10 @@ func runServe(cfg config.Config, opts serveOptions) {
 		log.Fatalf("Failed to generate auth token: %v", err)
 	}
 	if cfg.RequireAuth {
-		// A background child redirects stdout to serve.log; printing the
-		// token there would persist it to a file. The parent already
-		// printed the token to the invoking terminal, so the child stays
-		// quiet about it.
+		// Startup output may be captured by service managers or log files,
+		// so never write the bearer token itself.
 		if cfg.AuthToken != "" && !runningAsBackgroundChild() {
-			fmt.Printf("Auth enabled. Token: %s\n", cfg.AuthToken)
+			fmt.Println("Auth enabled. Token is configured.")
 		}
 	}
 
