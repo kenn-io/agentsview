@@ -23,12 +23,13 @@ func TestLoadCursorAttribution_Happy(t *testing.T) {
 	require.NotNil(t, got)
 
 	assert.Equal(t, int64(2), got.ScoredCommits)
-	assert.Equal(t, int64(15), got.LinesAdded)
+	assert.Equal(t, int64(18), got.LinesAdded)
 	assert.Equal(t, int64(6), got.LinesDeleted)
 	assert.Equal(t, int64(6), got.TabLinesAdded)
 	assert.Equal(t, int64(4), got.ComposerLinesAdded)
 	assert.Equal(t, int64(5), got.HumanLinesAdded)
-	assert.InDelta(t, 10.0/15.0, got.AIAuthoredPct, 1e-9)
+	assert.Equal(t, int64(3), got.BlankLinesAdded)
+	assert.InDelta(t, 10.0/18.0, got.AIAuthoredPct, 1e-9)
 	require.Len(t, got.ConversationCounts, 2)
 	assert.Equal(t, "model-a", got.ConversationCounts[0].Model)
 	assert.Equal(t, "composer", got.ConversationCounts[0].Mode)
@@ -59,6 +60,7 @@ func seedCursorAttributionDBTest(t *testing.T) string {
 		CREATE TABLE scored_commits (
 			commitHash TEXT PRIMARY KEY,
 			scoredAt INTEGER NOT NULL,
+			commitDate INTEGER NOT NULL,
 			linesAdded INTEGER NOT NULL DEFAULT 0,
 			linesDeleted INTEGER NOT NULL DEFAULT 0,
 			tabLinesAdded INTEGER NOT NULL DEFAULT 0,
@@ -86,16 +88,24 @@ func seedCursorAttributionDBTest(t *testing.T) string {
 
 	_, err = conn.Exec(`
 		INSERT INTO scored_commits (
-			commitHash, scoredAt,
+			commitHash, scoredAt, commitDate,
 			linesAdded, linesDeleted,
 			tabLinesAdded, tabLinesDeleted,
 			composerLinesAdded, composerLinesDeleted,
 			humanLinesAdded, humanLinesDeleted,
 			blankLinesAdded, blankLinesDeleted
 		) VALUES
-			('c1', ?, 10, 4, 6, 1, 3, 1, 1, 2, 0, 0),
-			('c2', ?, 5, 2, 0, 0, 1, 0, 4, 1, 0, 0)
-	`, first, second)
+			('c1', ?, ?, 12, 4, 6, 1, 3, 1, 1, 2, 2, 0),
+			('c2', ?, ?, 6, 2, 0, 0, 1, 0, 4, 1, 1, 0),
+			('c3', ?, ?, 99, 1, 50, 0, 40, 0, 9, 0, 0, 0)
+	`,
+		time.Date(2026, 5, 31, 23, 0, 0, 0, time.UTC).UnixMilli(),
+		first,
+		time.Date(2026, 6, 3, 0, 0, 0, 0, time.UTC).UnixMilli(),
+		second,
+		first,
+		time.Date(2026, 6, 3, 10, 0, 0, 0, time.UTC).UnixMilli(),
+	)
 	require.NoError(t, err)
 	_, err = conn.Exec(`
 		INSERT INTO conversation_summaries (model, mode, updatedAt) VALUES

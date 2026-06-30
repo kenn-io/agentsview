@@ -56,6 +56,7 @@ func newDirectTestSvc(t *testing.T) (service.SessionService, *directTestEnv) {
 type cursorCommitFixture struct {
 	commitHash           string
 	scoredAt             int64
+	commitDate           int64
 	linesAdded           int64
 	linesDeleted         int64
 	tabLinesAdded        int64
@@ -90,6 +91,7 @@ func seedCursorAttributionDB(
 		CREATE TABLE scored_commits (
 			commitHash TEXT PRIMARY KEY,
 			scoredAt INTEGER NOT NULL,
+			commitDate INTEGER NOT NULL,
 			linesAdded INTEGER NOT NULL DEFAULT 0,
 			linesDeleted INTEGER NOT NULL DEFAULT 0,
 			tabLinesAdded INTEGER NOT NULL DEFAULT 0,
@@ -115,14 +117,14 @@ func seedCursorAttributionDB(
 	for _, commit := range commits {
 		_, err := conn.Exec(`
 			INSERT INTO scored_commits (
-				commitHash, scoredAt,
+				commitHash, scoredAt, commitDate,
 				linesAdded, linesDeleted,
 				tabLinesAdded, tabLinesDeleted,
 				composerLinesAdded, composerLinesDeleted,
 				humanLinesAdded, humanLinesDeleted,
 				blankLinesAdded, blankLinesDeleted
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			commit.commitHash, commit.scoredAt,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			commit.commitHash, commit.scoredAt, commit.commitDate,
 			commit.linesAdded, commit.linesDeleted,
 			commit.tabLinesAdded, commit.tabLinesDeleted,
 			commit.composerLinesAdded, commit.composerLinesDeleted,
@@ -173,20 +175,24 @@ func TestDirectBackend_Stats_CursorAttribution(t *testing.T) {
 		[]cursorCommitFixture{
 			{
 				commitHash:         "c1",
-				scoredAt:           now.Add(-110 * time.Minute).UnixMilli(),
-				linesAdded:         10,
+				scoredAt:           now.Add(48 * time.Hour).UnixMilli(),
+				commitDate:         now.Add(-110 * time.Minute).UnixMilli(),
+				linesAdded:         12,
 				linesDeleted:       4,
 				tabLinesAdded:      6,
 				composerLinesAdded: 2,
 				humanLinesAdded:    4,
+				blankLinesAdded:    2,
 			},
 			{
 				commitHash:         "c2",
 				scoredAt:           now.Add(-90 * time.Minute).UnixMilli(),
-				linesAdded:         5,
+				commitDate:         now.Add(-90 * time.Minute).UnixMilli(),
+				linesAdded:         6,
 				linesDeleted:       2,
 				composerLinesAdded: 2,
 				humanLinesAdded:    1,
+				blankLinesAdded:    1,
 			},
 		},
 		[]cursorConversationFixture{
@@ -212,8 +218,8 @@ func TestDirectBackend_Stats_CursorAttribution(t *testing.T) {
 	require.NotNil(t, stats)
 	require.NotNil(t, stats.CursorAttribution)
 	assert.Equal(t, int64(2), stats.CursorAttribution.ScoredCommits)
-	assert.Equal(t, int64(15), stats.CursorAttribution.LinesAdded)
-	assert.InDelta(t, 10.0/15.0, stats.CursorAttribution.AIAuthoredPct, 1e-9)
+	assert.Equal(t, int64(18), stats.CursorAttribution.LinesAdded)
+	assert.InDelta(t, 10.0/18.0, stats.CursorAttribution.AIAuthoredPct, 1e-9)
 	require.Len(t, stats.CursorAttribution.ConversationCounts, 1)
 	assert.Equal(
 		t,
@@ -237,6 +243,36 @@ func TestDirectBackend_Stats_CursorAttributionIgnoredForNonCursorFilter(
 	require.NoError(t, err)
 	require.NotNil(t, stats)
 	assert.Nil(t, stats.CursorAttribution)
+}
+
+func TestDirectBackend_Stats_CursorAttributionIgnoredForProjectFilters(
+	t *testing.T,
+) {
+	svc, _ := newDirectTestSvc(t)
+	now := time.Now().UTC()
+	path := seedCursorAttributionDB(t,
+		[]cursorCommitFixture{{
+			commitHash:         "c1",
+			scoredAt:           now.Add(-30 * time.Minute).UnixMilli(),
+			commitDate:         now.Add(-30 * time.Minute).UnixMilli(),
+			linesAdded:         9,
+			tabLinesAdded:      4,
+			composerLinesAdded: 2,
+			humanLinesAdded:    3,
+		}},
+		nil,
+	)
+	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB", path)
+
+	for _, filter := range []service.StatsFilter{
+		{Since: "28d", Agent: "cursor", IncludeProjects: []string{"proj"}},
+		{Since: "28d", Agent: "cursor", ExcludeProjects: []string{"proj"}},
+	} {
+		stats, err := svc.Stats(context.Background(), filter)
+		require.NoError(t, err)
+		require.NotNil(t, stats)
+		assert.Nil(t, stats.CursorAttribution)
+	}
 }
 
 func TestDirectBackend_Get_HealthBreakdownIncludesHeuristics(

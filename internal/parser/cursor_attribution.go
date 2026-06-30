@@ -68,7 +68,7 @@ func LoadCursorAttribution(
 			COALESCE(SUM(blankLinesAdded), 0),
 			COALESCE(SUM(blankLinesDeleted), 0)
 		FROM scored_commits
-		WHERE scoredAt >= ? AND scoredAt < ?`,
+		WHERE commitDate >= ? AND commitDate < ?`,
 		timeToMillis(from), timeToMillis(to),
 	).Scan(
 		&attr.ScoredCommits,
@@ -132,7 +132,7 @@ func LoadCursorAttribution(
 	}
 
 	aiLines := attr.TabLinesAdded + attr.ComposerLinesAdded
-	denom := aiLines + attr.HumanLinesAdded
+	denom := attr.LinesAdded
 	if denom > 0 {
 		attr.AIAuthoredPct = float64(aiLines) / float64(denom)
 	}

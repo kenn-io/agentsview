@@ -741,6 +741,9 @@ func attachCursorAttribution(stats *SessionStats, f StatsFilter) {
 }
 
 func shouldLoadCursorAttribution(f StatsFilter) bool {
+	if len(f.IncludeProjects) > 0 || len(f.ExcludeProjects) > 0 {
+		return false
+	}
 	agents := strings.Split(f.Agent, ",")
 	seen := 0
 	for _, agent := range agents {
