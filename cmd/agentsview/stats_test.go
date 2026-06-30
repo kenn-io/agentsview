@@ -50,6 +50,8 @@ func assertContainsNone(t *testing.T, out string, banned ...string) {
 func setupGoldenStatsDataDir(t *testing.T) string {
 	t.Helper()
 	dataDir := newAgentDataDir(t)
+	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB",
+		filepath.Join(dataDir, "missing-cursor-attribution.db"))
 	// TZ is normally pinned by --timezone=UTC, but the environment can
 	// still leak into date parsing on some platforms; pin it too.
 	t.Setenv("TZ", "UTC")
