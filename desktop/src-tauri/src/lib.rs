@@ -28,6 +28,7 @@ use tauri_plugin_updater::UpdaterExt;
 const HOST: &str = "127.0.0.1";
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const DAEMON_STARTUP_LONG_NOTICE_AFTER: Duration = Duration::from_secs(300);
+const DAEMON_UNHEALTHY_GRACE: Duration = Duration::from_secs(15);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(125);
 const STATUS_POLL_MAX_INTERVAL: Duration = Duration::from_secs(1);
 const STATUS_PROBE_TIMEOUT: Duration = Duration::from_millis(1250);
@@ -94,6 +95,7 @@ struct SidecarStdoutUpdate {
 enum BackendStatusProbe {
     Ready(u16),
     Starting(String),
+    Unhealthy(String),
     NotRunning(String),
     Incompatible(String),
     Unavailable,
@@ -1439,6 +1441,7 @@ fn poll_background_status_after_launcher_exit(window: WebviewWindow, generation:
         let started = Instant::now();
         let mut failed_status_probes = 0;
         let mut long_startup_notice_shown = false;
+        let mut unhealthy_since: Option<Instant> = None;
         loop {
             if !background_status_poll_is_current(&handle, generation) {
                 return;
@@ -1458,12 +1461,34 @@ fn poll_background_status_after_launcher_exit(window: WebviewWindow, generation:
                 }
                 BackendStatusProbe::Starting(status) => {
                     failed_status_probes = 0;
+                    unhealthy_since = None;
                     if !long_startup_notice_shown && !status.trim().is_empty() {
                         let escaped = status.replace('\\', "\\\\").replace('\'', "\\'");
                         let _ = window.eval(
                             format!("window.__setStatus('{escaped}');").as_str(),
                         );
                     }
+                }
+                BackendStatusProbe::Unhealthy(status) => {
+                    failed_status_probes = 0;
+                    let first_seen = unhealthy_since.get_or_insert_with(Instant::now);
+                    if first_seen.elapsed() >= DAEMON_UNHEALTHY_GRACE {
+                        spawn_startup_error_render(
+                            window,
+                            "AgentsView backend is not responding",
+                            "A backend process is running, but it is not answering health checks.",
+                            startup_failure_detail(
+                                "The daemon runtime record points to a live process, but repeated health checks did not get a usable response.",
+                                status.as_str(),
+                            )
+                            .as_str(),
+                        );
+                        return;
+                    }
+                    let _ = window.eval(
+                        "window.__setStatus(\
+                         'AgentsView found a backend process, but health checks are not responding yet.');",
+                    );
                 }
                 BackendStatusProbe::NotRunning(status) => {
                     spawn_startup_error_render(
@@ -1589,10 +1614,18 @@ fn classify_backend_status_output(stdout: &str, stderr: &str) -> BackendStatusPr
     if detail.contains("incompatible running writable daemon") {
         return BackendStatusProbe::Incompatible(detail);
     }
+    if status_output_is_unhealthy(detail.as_str()) {
+        return BackendStatusProbe::Unhealthy(detail);
+    }
     if detail.trim().is_empty() {
         return BackendStatusProbe::Unavailable;
     }
     BackendStatusProbe::Starting(detail)
+}
+
+fn status_output_is_unhealthy(output: &str) -> bool {
+    output.contains("agentsview process running")
+        && output.contains("not responding to health checks")
 }
 
 fn combined_probe_output(stdout: &str, stderr: &str) -> String {
@@ -3353,12 +3386,16 @@ agentsview running at http://127.0.0.1:18082 (pid 123)
             classify_backend_status_output("agentsview is starting up.", ""),
             BackendStatusProbe::Starting("agentsview is starting up.".to_string())
         );
+    }
+
+    #[test]
+    fn classify_backend_status_output_detects_unhealthy_daemon() {
         assert_eq!(
             classify_backend_status_output(
                 "agentsview process running (pid 123) but not responding to health checks.",
                 "",
             ),
-            BackendStatusProbe::Starting(
+            BackendStatusProbe::Unhealthy(
                 "agentsview process running (pid 123) but not responding to health checks."
                     .to_string()
             )
