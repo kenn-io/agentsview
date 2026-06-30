@@ -18,6 +18,40 @@ func IsCopilotAgent(agent string) bool {
 	return agent == "copilot" || agent == "vscode-copilot" || agent == "visualstudio-copilot"
 }
 
+// IsCopilotAgentFilter reports whether a (possibly comma-separated) agent
+// filter selects only Copilot agents — every non-empty entry is a Copilot
+// agent and there is at least one. The Usage agent filter supports
+// comma-separated lists (e.g. "copilot,vscode-copilot"), so the no-token-data
+// hint must treat such a list as Copilot rather than exact-matching the raw
+// string.
+func IsCopilotAgentFilter(agentFilter string) bool {
+	matched := false
+	for part := range strings.SplitSeq(agentFilter, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if !IsCopilotAgent(part) {
+			return false
+		}
+		matched = true
+	}
+	return matched
+}
+
+// NoTokenData reports whether a daily-usage total carries neither token
+// data nor cost: every token counter, the cost total, and any Copilot AI
+// credits are zero. It distinguishes a window whose sessions simply do not
+// record token usage from one that genuinely has no sessions.
+func NoTokenData(t UsageTotals) bool {
+	return t.InputTokens == 0 &&
+		t.OutputTokens == 0 &&
+		t.CacheCreationTokens == 0 &&
+		t.CacheReadTokens == 0 &&
+		t.TotalCost == 0 &&
+		t.CopilotAICredits == 0
+}
+
 func lookupModelRates(
 	pricing map[string]modelRates, model string,
 ) (modelRates, bool) {
