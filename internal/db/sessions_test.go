@@ -70,6 +70,29 @@ func TestFindSessionIDsByPartial(t *testing.T) {
 	assert.Nil(t, got, "empty input")
 }
 
+func TestFindSessionIDsByPartialLiteralCaseSensitive(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "abc_def", "proj")
+	insertSession(t, d, "abcXdef", "proj")
+	insertSession(t, d, "abc%def", "proj")
+	insertSession(t, d, "ABCdef", "proj")
+
+	ctx := context.Background()
+
+	got, err := d.FindSessionIDsByPartial(ctx, "c_d", 10)
+	require.NoError(t, err, "underscore lookup")
+	assert.Equal(t, []string{"abc_def"}, got)
+
+	got, err = d.FindSessionIDsByPartial(ctx, "c%d", 10)
+	require.NoError(t, err, "percent lookup")
+	assert.Equal(t, []string{"abc%def"}, got)
+
+	got, err = d.FindSessionIDsByPartial(ctx, "abc", 10)
+	require.NoError(t, err, "case-sensitive lookup")
+	assert.ElementsMatch(t, []string{"abc_def", "abcXdef", "abc%def"}, got)
+	assert.NotContains(t, got, "ABCdef")
+}
+
 func TestListSessions_OutcomeFilter(t *testing.T) {
 	d := testDB(t)
 

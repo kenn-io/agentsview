@@ -332,7 +332,7 @@ func TestResolveHealthSessionIDPartialMatchCanBeOutsideHealthList(t *testing.T) 
 func TestResolveHealthSessionIDUsesDaemonPartialLookup(t *testing.T) {
 	var gotQuery string
 	ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
-		"/api/v1/sessions/resolve-id": func(w http.ResponseWriter, r *http.Request) {
+		"/api/v1/session-ids/resolve": func(w http.ResponseWriter, r *http.Request) {
 			gotQuery = r.URL.Query().Get("partial")
 			writeJSONResponse(w, `{"ids":["old-partial-target"]}`)
 		},

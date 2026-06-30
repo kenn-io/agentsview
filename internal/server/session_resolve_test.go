@@ -12,7 +12,7 @@ func TestResolveSessionIDsEndpoint(t *testing.T) {
 	te.seedSession(t, "older-partial-match", "alpha", 2)
 	te.seedSession(t, "newer-other-session", "alpha", 2)
 
-	w := te.get(t, "/api/v1/sessions/resolve-id?partial=partial&limit=10")
+	w := te.get(t, "/api/v1/session-ids/resolve?partial=partial&limit=10")
 
 	assertStatus(t, w, http.StatusOK)
 	resp := decode[struct {

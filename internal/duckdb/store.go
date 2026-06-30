@@ -157,10 +157,10 @@ func (s *Store) FindSessionIDsByPartial(
 	}
 	rows, err := s.duck.QueryContext(ctx,
 		`SELECT id FROM sessions
-		 WHERE id LIKE ? AND deleted_at IS NULL
+		 WHERE strpos(id, ?) > 0 AND deleted_at IS NULL
 		 ORDER BY COALESCE(ended_at, started_at, created_at) DESC
 		 LIMIT ?`,
-		"%"+partial+"%", limit,
+		partial, limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf(

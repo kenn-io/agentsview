@@ -32,6 +32,34 @@ func TestDuckDBStoreContract(t *testing.T) {
 	}
 }
 
+func TestDuckDBFindSessionIDsByPartialLiteralCaseSensitive(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	for _, id := range []string{"abc_def", "abcXdef", "abc%def", "ABCdef"} {
+		require.NoError(t, local.UpsertSession(db.Session{
+			ID: id, Project: "proj", Machine: "test",
+			Agent: "claude", MessageCount: 1,
+		}), "upsert %q", id)
+	}
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	_, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	got, err := store.FindSessionIDsByPartial(ctx, "c_d", 10)
+	require.NoError(t, err, "underscore lookup")
+	assert.Equal(t, []string{"abc_def"}, got)
+
+	got, err = store.FindSessionIDsByPartial(ctx, "c%d", 10)
+	require.NoError(t, err, "percent lookup")
+	assert.Equal(t, []string{"abc%def"}, got)
+
+	got, err = store.FindSessionIDsByPartial(ctx, "abc", 10)
+	require.NoError(t, err, "case-sensitive lookup")
+	assert.ElementsMatch(t, []string{"abc_def", "abcXdef", "abc%def"}, got)
+	assert.NotContains(t, got, "ABCdef")
+}
+
 func duckContractSessionsCursorsAndMetadata(
 	t *testing.T, store *Store, fixture syncFixture,
 ) {

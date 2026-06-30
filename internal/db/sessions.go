@@ -1445,8 +1445,8 @@ func (db *DB) RefreshSessionName(id string, sessionName *string) error {
 	return err
 }
 
-// FindSessionIDsByPartial returns up to limit session IDs that
-// contain the given substring. Used by CLI lookups so users can
+// FindSessionIDsByPartial returns up to limit session IDs that contain the
+// given literal, case-sensitive substring. Used by CLI lookups so users can
 // reference sessions by a short prefix shown in list output.
 // Excludes soft-deleted sessions.
 func (db *DB) FindSessionIDsByPartial(
@@ -1460,14 +1460,14 @@ func (db *DB) FindSessionIDsByPartial(
 	}
 	rows, err := db.getReader().QueryContext(ctx,
 		`SELECT id FROM sessions
-		 WHERE id LIKE ? AND deleted_at IS NULL
+		 WHERE instr(id, ?) > 0 AND deleted_at IS NULL
 		 ORDER BY COALESCE(
 		     NULLIF(ended_at, ''),
 		     NULLIF(started_at, ''),
 		     created_at
 		 ) DESC
 		 LIMIT ?`,
-		"%"+partial+"%", limit,
+		partial, limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf(

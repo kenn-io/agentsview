@@ -26,7 +26,7 @@ func (s *Server) registerSessionRoutes() {
 
 	get(s, group, "/sessions", "List sessions", s.humaListSessions)
 	get(s, group, "/sessions/sidebar-index", "List sidebar sessions", s.humaSidebarSessionIndex)
-	get(s, group, "/sessions/resolve-id", "Resolve session IDs", s.humaResolveSessionIDs)
+	get(s, group, "/session-ids/resolve", "Resolve session IDs", s.humaResolveSessionIDs)
 	get(s, group, "/sessions/{id}", "Get session", s.humaGetSession)
 	get(s, group, "/sessions/{id}/messages", "List session messages", s.humaGetMessages)
 	get(s, group, "/sessions/{id}/tool-calls", "List session tool calls", s.humaToolCalls)

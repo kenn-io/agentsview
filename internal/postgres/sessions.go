@@ -253,10 +253,10 @@ func (s *Store) FindSessionIDsByPartial(
 	}
 	rows, err := s.pg.QueryContext(ctx,
 		`SELECT id FROM sessions
-		 WHERE id LIKE $1 AND deleted_at IS NULL
+		 WHERE strpos(id, $1) > 0 AND deleted_at IS NULL
 		 ORDER BY COALESCE(ended_at, started_at, created_at) DESC
 		 LIMIT $2`,
-		"%"+partial+"%", limit,
+		partial, limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf(

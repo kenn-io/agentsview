@@ -23,6 +23,9 @@ var ErrSearchUnavailable = errors.New("search not available")
 // (proxies to a running daemon).
 type SessionService interface {
 	Get(ctx context.Context, id string) (*SessionDetail, error)
+	// FindSessionIDsByPartial returns IDs containing partial as a literal,
+	// case-sensitive substring, ordered by most recent activity and capped by
+	// limit.
 	FindSessionIDsByPartial(ctx context.Context, partial string, limit int) ([]string, error)
 	List(ctx context.Context, f ListFilter) (*SessionList, error)
 	Messages(ctx context.Context, id string, f MessageFilter) (*MessageList, error)

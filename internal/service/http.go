@@ -83,7 +83,7 @@ func (b *httpBackend) FindSessionIDsByPartial(
 	var out struct {
 		IDs []string `json:"ids"`
 	}
-	if err := b.getJSON(ctx, "/api/v1/sessions/resolve-id?"+q.Encode(), &out); err != nil {
+	if err := b.getJSON(ctx, "/api/v1/session-ids/resolve?"+q.Encode(), &out); err != nil {
 		return nil, err
 	}
 	return out.IDs, nil
