@@ -349,6 +349,31 @@ func TestStatsCommandUsesDiscoveredDaemon(t *testing.T) {
 	assert.Equal(t, 5, got.Totals.SessionsAll)
 }
 
+func TestStatsCommandReportsDaemonValidationError(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+
+	var called bool
+	ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
+		"/api/v1/session-stats": func(w http.ResponseWriter, r *http.Request) {
+			called = true
+			w.WriteHeader(http.StatusBadRequest)
+			writeJSONResponse(w, `{"error":"invalid timezone: Fake/Zone"}`)
+		},
+	})
+	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
+
+	out, err := executeCommand(newRootCommand(),
+		"stats",
+		"--format", "json",
+		"--timezone", "Fake/Zone",
+	)
+
+	require.Error(t, err, "stats output:\n%s", out)
+	assert.True(t, called, "stats should use the discovered daemon")
+	assert.Contains(t, err.Error(), "HTTP 400")
+	assert.Contains(t, err.Error(), "invalid timezone: Fake/Zone")
+}
+
 func TestStatsCommandSkipsReadOnlyDaemon(t *testing.T) {
 	dataDir := setupGoldenStatsDataDir(t)
 

@@ -29,6 +29,13 @@ type StatsFilter struct {
 	GHToken               string
 }
 
+// StatsInputError marks invalid user-supplied stats filters so HTTP
+// transports can return 400 instead of treating validation failures as server
+// faults.
+type StatsInputError struct{ Msg string }
+
+func (e *StatsInputError) Error() string { return e.Msg }
+
 // GetSessionStats computes the v1 session-stats JSON response.
 // Sections are populated in order so each step can reuse the per-session
 // rows (and derived sessionIDs) loaded once by loadSessionsInWindow.
@@ -37,11 +44,11 @@ func (db *DB) GetSessionStats(
 ) (*SessionStats, error) {
 	tz, err := resolveTimezone(f.Timezone)
 	if err != nil {
-		return nil, fmt.Errorf("resolving timezone: %w", err)
+		return nil, &StatsInputError{Msg: "invalid timezone: " + f.Timezone}
 	}
 	from, to, days, err := windowBounds(f, time.Now())
 	if err != nil {
-		return nil, fmt.Errorf("resolving window: %w", err)
+		return nil, &StatsInputError{Msg: err.Error()}
 	}
 
 	// Root-only rows drive every consumer (distributions, velocity,

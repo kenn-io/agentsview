@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"errors"
+	"net/http"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
@@ -83,6 +85,10 @@ func (s *Server) humaGetSessionStats(
 		}
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
+		}
+		var inputErr *db.StatsInputError
+		if errors.As(err, &inputErr) {
+			return nil, apiError(http.StatusBadRequest, inputErr.Msg)
 		}
 		return nil, internalError("session stats error", err)
 	}
