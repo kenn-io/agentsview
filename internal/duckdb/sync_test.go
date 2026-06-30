@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 
 	"github.com/stretchr/testify/assert"
@@ -669,6 +670,29 @@ func TestSyncStatusCountsDuckDBRows(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "test-machine", status.Machine)
 	assert.NotEmpty(t, status.LastPushAt)
+	assert.Equal(t, 2, status.DuckDBSessions)
+	assert.Equal(t, 3, status.DuckDBMessages)
+}
+
+func TestReadStatusFromConfigCountsMachineScopedDuckDBRows(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	seedDuckDBSyncFixture(t, local)
+	target := filepath.Join(t.TempDir(), "status.duckdb")
+	syncer := newTestSync(t, target, local, SyncOptions{})
+
+	_, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	insertOtherMachineDuckSession(t, syncer.DB())
+	require.NoError(t, syncer.Close())
+
+	status, err := ReadStatusFromConfig(ctx, config.DuckDBConfig{
+		Path:        target,
+		MachineName: "test-machine",
+	}, "2026-06-30T12:00:00.000Z")
+	require.NoError(t, err)
+	assert.Equal(t, "test-machine", status.Machine)
+	assert.Equal(t, "2026-06-30T12:00:00.000Z", status.LastPushAt)
 	assert.Equal(t, 2, status.DuckDBSessions)
 	assert.Equal(t, 3, status.DuckDBMessages)
 }

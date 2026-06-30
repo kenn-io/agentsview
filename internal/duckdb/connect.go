@@ -60,10 +60,10 @@ func ReadStatusFromConfig(
 		return SyncStatus{}, err
 	}
 	defer store.Close()
-	return readUnscopedStatus(ctx, store.DB(), cfg.MachineName, lastPush)
+	return readMachineStatus(ctx, store.DB(), cfg.MachineName, lastPush)
 }
 
-func readUnscopedStatus(
+func readMachineStatus(
 	ctx context.Context,
 	duck *sql.DB,
 	machine string,
@@ -71,7 +71,8 @@ func readUnscopedStatus(
 ) (SyncStatus, error) {
 	status := SyncStatus{Machine: machine, LastPushAt: lastPush}
 	if err := duck.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM sessions`,
+		`SELECT COUNT(*) FROM sessions WHERE machine = ?`,
+		machine,
 	).Scan(&status.DuckDBSessions); err != nil {
 		if isMissingDuckDBTable(err) {
 			return status, nil
@@ -79,7 +80,12 @@ func readUnscopedStatus(
 		return SyncStatus{}, fmt.Errorf("counting duckdb sessions: %w", err)
 	}
 	if err := duck.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM messages`,
+		`SELECT COUNT(*)
+		 FROM messages
+		 WHERE session_id IN (
+			SELECT id FROM sessions WHERE machine = ?
+		 )`,
+		machine,
 	).Scan(&status.DuckDBMessages); err != nil {
 		if isMissingDuckDBTable(err) {
 			return status, nil
