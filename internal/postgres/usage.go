@@ -120,6 +120,11 @@ func appendPGUsageSessionFilterClauses(
 	where = appendCSV(where, "s.agent", f.Agent, true)
 	where = appendCSV(where, "s.project", f.Project, true)
 	where = appendCSV(where, "s.machine", f.Machine, true)
+	if f.GitBranch != "" {
+		where += "\n\tAND " + db.BranchPairPredicate(
+			"s.project", "s.git_branch", f.GitBranch,
+			func(s string) string { return pb.add(s) })
+	}
 	where = appendCSV(where, "s.project", f.ExcludeProject, false)
 	where = appendCSV(where, "s.agent", f.ExcludeAgent, false)
 
@@ -692,8 +697,11 @@ func pgCursorUsageRowsSQLForBounds(
 	pb *paramBuilder, f db.UsageFilter, b pgUsageBounds,
 ) (string, bool) {
 	hasTermFilter := f.Termination != "" && f.Termination != "all"
+	// Cursor usage rows carry no project or git branch and bypass the session
+	// filter, so any filter they cannot satisfy (project, machine, branch)
+	// must exclude them entirely rather than let them leak into totals.
 	if f.Project != "" || f.ExcludeProject != "" ||
-		f.Machine != "" || f.MinUserMessages > 0 ||
+		f.Machine != "" || f.GitBranch != "" || f.MinUserMessages > 0 ||
 		f.ExcludeOneShot || hasTermFilter || f.ActiveSince != "" {
 		return "", false
 	}

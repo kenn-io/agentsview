@@ -828,6 +828,8 @@ func createPartialIndexesPG(ctx context.Context, db *sql.DB) error {
 	indexes := []string{
 		`CREATE INDEX IF NOT EXISTS idx_sessions_cwd
 		 ON sessions(cwd) WHERE cwd != ''`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_project_git_branch
+		 ON sessions(project, git_branch) WHERE git_branch != ''`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_compact_boundary
 		 ON messages(session_id, ordinal) WHERE is_compact_boundary = TRUE`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_sidechain

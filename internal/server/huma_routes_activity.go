@@ -16,15 +16,16 @@ func (s *Server) registerActivityRoutes() {
 }
 
 type activityReportInput struct {
-	Preset   string `query:"preset" enum:"day,week,month,custom" doc:"Range preset"`
-	Date     string `query:"date" format:"date" doc:"Calendar day (YYYY-MM-DD) for presets"`
-	From     string `query:"from" doc:"Range start (RFC3339) for custom ranges"`
-	To       string `query:"to" doc:"Range end (RFC3339) for custom ranges"`
-	Timezone string `query:"timezone" doc:"IANA timezone name"`
-	Bucket   string `query:"bucket" enum:"5m,15m,1h,1d,1w" doc:"Timeline bucket size override"`
-	Project  string `query:"project" doc:"Filter by project"`
-	Agent    string `query:"agent" doc:"Filter by agent"`
-	Machine  string `query:"machine" doc:"Filter by machine"`
+	Preset    string `query:"preset" enum:"day,week,month,custom" doc:"Range preset"`
+	Date      string `query:"date" format:"date" doc:"Calendar day (YYYY-MM-DD) for presets"`
+	From      string `query:"from" doc:"Range start (RFC3339) for custom ranges"`
+	To        string `query:"to" doc:"Range end (RFC3339) for custom ranges"`
+	Timezone  string `query:"timezone" doc:"IANA timezone name"`
+	Bucket    string `query:"bucket" enum:"5m,15m,1h,1d,1w" doc:"Timeline bucket size override"`
+	Project   string `query:"project" doc:"Filter by project"`
+	GitBranch string `query:"git_branch" doc:"Filter by git branch; opaque (project, branch) tokens from the /branches endpoint"`
+	Agent     string `query:"agent" doc:"Filter by agent"`
+	Machine   string `query:"machine" doc:"Filter by machine"`
 	// Automation classes the report: "all" (default) keeps both, "interactive"
 	// drops automated sessions, "automated" drops interactive ones. Empty is
 	// treated as "all"; any other value is rejected.
@@ -63,7 +64,8 @@ func (s *Server) humaActivityReport(
 	// analytics which excludes them by default. The automation class is the
 	// caller's choice (default "all" keeps both automated and interactive).
 	f := db.AnalyticsFilter{
-		Timezone: tz, Project: in.Project, Agent: in.Agent, Machine: in.Machine,
+		Timezone: tz, Project: in.Project, GitBranch: in.GitBranch,
+		Agent: in.Agent, Machine: in.Machine,
 		ExcludeOneShot:     false,
 		ExcludeAutomated:   excludeAutomated,
 		ExcludeInteractive: excludeInteractive,

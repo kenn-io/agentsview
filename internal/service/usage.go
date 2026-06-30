@@ -20,6 +20,7 @@ type UsageRequest struct {
 	Agent            string `json:"agent,omitempty"`
 	Project          string `json:"project,omitempty"`
 	Machine          string `json:"machine,omitempty"`
+	GitBranch        string `json:"git_branch,omitempty"`
 	ExcludeProject   string `json:"exclude_project,omitempty"`
 	ExcludeAgent     string `json:"exclude_agent,omitempty"`
 	ExcludeModel     string `json:"exclude_model,omitempty"`
@@ -87,6 +88,7 @@ func BuildUsageFilter(req UsageRequest) (db.UsageFilter, error) {
 		Agent:             req.Agent,
 		Project:           req.Project,
 		Machine:           req.Machine,
+		GitBranch:         req.GitBranch,
 		ExcludeProject:    req.ExcludeProject,
 		ExcludeAgent:      req.ExcludeAgent,
 		ExcludeModel:      req.ExcludeModel,

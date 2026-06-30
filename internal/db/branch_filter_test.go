@@ -1,0 +1,177 @@
+package db
+
+import (
+	"context"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestGetDailyUsageGitBranchFilter(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	seed := []struct {
+		id, project, branch string
+		input, output       int
+	}{
+		{"a", "proj-a", "main", 100, 10},
+		{"b", "proj-a", "feature-x", 200, 20},
+		{"c", "proj-b", "main", 300, 30},
+		{"d", "proj-a", "", 400, 40},
+		{"e", "proj-a", "unknown", 500, 50},
+	}
+	for _, s := range seed {
+		input, output := s.input, s.output
+		insertSession(t, d, s.id, s.project, func(sess *Session) {
+			sess.GitBranch = s.branch
+			sess.StartedAt = new("2026-05-14T10:00:00Z")
+			sess.UserMessageCount = 2
+		})
+		require.NoError(t, d.ReplaceSessionUsageEvents(s.id, []UsageEvent{{
+			SessionID:    s.id,
+			Source:       "session",
+			Model:        "gpt-5.4",
+			InputTokens:  input,
+			OutputTokens: output,
+			DedupKey:     s.id + "-key",
+		}}), "replace usage event for %s", s.id)
+	}
+
+	daily, err := d.GetDailyUsage(ctx, UsageFilter{
+		From:      "2026-05-14",
+		To:        "2026-05-14",
+		GitBranch: EncodeBranchFilterToken("proj-a", "main"),
+	})
+	require.NoError(t, err, "GetDailyUsage")
+	require.Len(t, daily.Daily, 1, "one day")
+	assert.Equal(t, 100, daily.Daily[0].InputTokens,
+		"usage filter uses scoped (project, branch), not branch name alone")
+}
+
+func TestSplitBranchFilterTokens(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want []BranchInfo
+	}{
+		{"empty", "", []BranchInfo{}},
+		{
+			name: "round trip single",
+			in:   EncodeBranchFilterToken("alpha", "main"),
+			want: []BranchInfo{{Project: "alpha", Branch: "main"}},
+		},
+		{
+			name: "multiple",
+			in: encodeBranchFilterTokensForTest(
+				BranchInfo{Project: "alpha", Branch: "feat/x"},
+				BranchInfo{Project: "beta", Branch: "main"},
+			),
+			want: []BranchInfo{
+				{Project: "alpha", Branch: "feat/x"},
+				{Project: "beta", Branch: "main"},
+			},
+		},
+		{
+			name: "comma in branch name round-trips",
+			in:   EncodeBranchFilterToken("proj", "wip,test"),
+			want: []BranchInfo{{Project: "proj", Branch: "wip,test"}},
+		},
+		{
+			name: "drops blank and separator-less tokens",
+			in:   branchListSep + EncodeBranchFilterToken("alpha", "main") + branchListSep + "noseparator",
+			want: []BranchInfo{{Project: "alpha", Branch: "main"}},
+		},
+		{
+			name: "empty branch component survives",
+			in:   EncodeBranchFilterToken("alpha", ""),
+			want: []BranchInfo{{Project: "alpha", Branch: ""}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, SplitBranchFilterTokens(tt.in))
+		})
+	}
+}
+
+func TestGetBranches(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "s1", "alpha", func(s *Session) {
+		s.GitBranch = "main"
+		s.UserMessageCount = 5
+	})
+	insertSession(t, d, "s2", "alpha", func(s *Session) {
+		s.GitBranch = "feat/x"
+		s.UserMessageCount = 5
+	})
+	insertSession(t, d, "s3", "beta", func(s *Session) {
+		s.GitBranch = "main"
+		s.UserMessageCount = 5
+	})
+	insertSession(t, d, "s4", "alpha", func(s *Session) {
+		s.GitBranch = ""
+		s.UserMessageCount = 5
+	})
+	insertSession(t, d, "s5", "gamma", func(s *Session) {
+		s.GitBranch = "solo"
+		s.UserMessageCount = 1
+	})
+
+	all, err := d.GetBranches(context.Background(), false, false)
+	require.NoError(t, err, "GetBranches includeAll")
+	assert.Equal(t, []BranchInfo{
+		{Project: "alpha", Branch: "feat/x"},
+		{Project: "alpha", Branch: "main"},
+		{Project: "beta", Branch: "main"},
+		{Project: "gamma", Branch: "solo"},
+	}, all, "distinct (project, branch) pairs, ordered, empty excluded")
+
+	filtered, err := d.GetBranches(context.Background(), true, false)
+	require.NoError(t, err, "GetBranches excludeOneShot")
+	assert.NotContains(t, filtered, BranchInfo{Project: "gamma", Branch: "solo"},
+		"one-shot branch excluded when excludeOneShot is set")
+}
+
+func TestSessionFilterGitBranchComposite(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "alpha-main", "alpha", func(s *Session) {
+		s.GitBranch = "main"
+	})
+	insertSession(t, d, "alpha-feat", "alpha", func(s *Session) {
+		s.GitBranch = "feat/x"
+	})
+	insertSession(t, d, "beta-main", "beta", func(s *Session) {
+		s.GitBranch = "main"
+	})
+	insertSession(t, d, "alpha-empty", "alpha", func(s *Session) {
+		s.GitBranch = ""
+	})
+	insertSession(t, d, "alpha-unknown", "alpha", func(s *Session) {
+		s.GitBranch = "unknown"
+	})
+
+	// Filtering by (alpha, main) must not match (beta, main): the grain is
+	// (project, branch), so same-named branches across projects stay distinct.
+	requireSessions(t, d, SessionFilter{
+		GitBranch: EncodeBranchFilterToken("alpha", "main"),
+	}, []string{"alpha-main"})
+
+	requireSessions(t, d, SessionFilter{
+		GitBranch: encodeBranchFilterTokensForTest(
+			BranchInfo{Project: "alpha", Branch: "feat/x"},
+			BranchInfo{Project: "beta", Branch: "main"},
+		),
+	}, []string{"alpha-feat", "beta-main"})
+
+	requireSessions(t, d, SessionFilter{
+		GitBranch: EncodeBranchFilterToken("alpha", ""),
+	}, []string{"alpha-empty"})
+
+	requireSessions(t, d, SessionFilter{
+		GitBranch: EncodeBranchFilterToken("alpha", "unknown"),
+	}, []string{"alpha-unknown"})
+}

@@ -2309,3 +2309,74 @@ func newSyncedStore(t *testing.T) (*Store, syncFixture) {
 	require.NoError(t, err)
 	return NewStoreFromDB(syncer.DB()), fixture
 }
+
+func TestDuckDBBranchDimension(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "claude-test", InputPerMTok: 3, OutputPerMTok: 15,
+	}}))
+
+	seed := []struct {
+		id, project, branch string
+		input, output       int
+	}{
+		{"d-a", "alpha", "main", 100, 10},
+		{"d-b", "alpha", "feature-x", 200, 20},
+		{"d-c", "beta", "main", 300, 30},
+		{"d-d", "alpha", "", 400, 40},
+		{"d-e", "alpha", "unknown", 500, 50},
+	}
+	var writes []db.SessionBatchWrite
+	for _, s := range seed {
+		sess := syncSession(s.id, s.project, s.id+" first", "2026-02-01T12:00:00.000Z", 1)
+		sess.GitBranch = s.branch
+		writes = append(writes, db.SessionBatchWrite{
+			Session: sess,
+			// A token-free user message so only the usage event below feeds the
+			// usage totals (syncMessage would inject a stray input token).
+			Messages: []db.Message{{
+				SessionID:     s.id,
+				Ordinal:       0,
+				Role:          "user",
+				Content:       s.id + " first",
+				Timestamp:     "2026-02-01T12:00:00.000Z",
+				ContentLength: len(s.id + " first"),
+			}},
+			UsageEvents: []db.UsageEvent{{
+				Source: "session", Model: "claude-test",
+				InputTokens: s.input, OutputTokens: s.output,
+				OccurredAt: "2026-02-01T12:01:00.000Z", DedupKey: s.id + "-usage",
+			}},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		})
+	}
+	_, err := local.WriteSessionBatchAtomic(writes)
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	branches, err := store.GetBranches(ctx, false, false)
+	require.NoError(t, err)
+	assert.Equal(t, []db.BranchInfo{
+		{Project: "alpha", Branch: "feature-x"},
+		{Project: "alpha", Branch: "main"},
+		{Project: "alpha", Branch: "unknown"},
+		{Project: "beta", Branch: "main"},
+	}, branches)
+
+	filtered, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-01-01", To: "2026-12-31",
+		GitBranch: db.EncodeBranchFilterToken("alpha", "main"),
+	})
+	require.NoError(t, err)
+	total := 0
+	for _, day := range filtered.Daily {
+		total += day.InputTokens
+	}
+	assert.Equal(t, 100, total, "branch filter restricts usage to alpha/main")
+}
