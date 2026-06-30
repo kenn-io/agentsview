@@ -119,12 +119,9 @@ func resolveHealthSessionID(
 	if partial == "" {
 		return "", nil
 	}
-	detail, err := svc.Get(ctx, partial)
+	exactDetail, err := svc.Get(ctx, partial)
 	if err != nil {
 		return "", err
-	}
-	if detail != nil {
-		return partial, nil
 	}
 	page, err := svc.List(ctx, healthListFilter(maxHealthLimit))
 	if err != nil {
@@ -135,6 +132,14 @@ func resolveHealthSessionID(
 		if strings.Contains(sess.ID, partial) {
 			matches = append(matches, sess.ID)
 		}
+	}
+	if exactDetail != nil {
+		for _, m := range matches {
+			if m != partial && shortID(m) == partial {
+				return "", ambiguousMatchErr(partial, matches)
+			}
+		}
+		return partial, nil
 	}
 	switch len(matches) {
 	case 0:

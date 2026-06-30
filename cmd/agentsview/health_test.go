@@ -297,6 +297,35 @@ func TestResolveHealthSessionIDExactMatchCanBeOutsideHealthList(t *testing.T) {
 	assert.Equal(t, "child-session", got)
 }
 
+func TestResolveHealthSessionIDExactMatchStillChecksShortIDAmbiguity(
+	t *testing.T,
+) {
+	dir := t.TempDir()
+	database, err := db.Open(filepath.Join(dir, "test.db"))
+	require.NoError(t, err, "open db")
+	t.Cleanup(func() { database.Close() })
+
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "abcdef12", Project: "p", Machine: "m",
+		Agent: "claude", MessageCount: 1,
+	}), "upsert exact session")
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "abcdef1234567890", Project: "p", Machine: "m",
+		Agent: "codex", MessageCount: 1,
+	}), "upsert short-id collision")
+
+	got, err := resolveHealthSessionID(
+		context.Background(),
+		service.NewDirectBackend(database, nil),
+		"abcdef12",
+	)
+
+	require.Error(t, err)
+	assert.Empty(t, got)
+	assert.Contains(t, err.Error(), "ambiguous")
+	assert.Contains(t, err.Error(), "abcdef1234567890")
+}
+
 func TestResolveSessionID(t *testing.T) {
 	dir := t.TempDir()
 	database, err := db.Open(filepath.Join(dir, "test.db"))

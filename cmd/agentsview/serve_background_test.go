@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"testing"
 	"time"
@@ -1399,6 +1400,43 @@ func TestRunServeBackgroundKeepsInvocationNoSyncWhenReplacingSyncingDaemon(
 	)
 
 	assert.Equal(t, []string{"serve", "--no-sync"}, gotArgs)
+}
+
+func TestRefreshServeDaemonReplacementDecisionKeepsStopConfirmedOriginal(
+	t *testing.T,
+) {
+	dir := runtimeTestDir(t)
+	ln, oldPort := freeTCPListener(t)
+	require.NoError(t, ln.Close())
+	liveCreateTime, ok := processCreateTimeMillis(os.Getpid())
+	if !ok {
+		t.Skip("process create time is unavailable on this platform")
+	}
+	rec := daemonRuntimeRecord(
+		"127.0.0.1", oldPort,
+		withRuntimeVersion("1.0.0"),
+		withRuntimeMetadata(
+			runtimeCreateTime, strconv.FormatInt(liveCreateTime, 10),
+		),
+	)
+	writeRuntimeRecordFixture(t, dir, rec)
+	require.Nil(t, FindDaemonRuntime(dir),
+		"precondition: runtime record must be live but unprobeable")
+	original := daemonRuntimeFromRecord(rec)
+	require.True(t, stopTargetConfirmed(original.Record, ""))
+
+	got := refreshServeDaemonReplacementDecision(
+		config.Config{DataDir: dir},
+		serveReplacementOptions{},
+		serveReplacementDecision{
+			Action:  serveReplacementAuto,
+			Runtime: original,
+		},
+	)
+
+	assert.Equal(t, serveReplacementAuto, got.Action)
+	require.NotNil(t, got.Runtime)
+	assert.Equal(t, oldPort, got.Runtime.Port)
 }
 
 func TestEnsureBackgroundServeConcurrentLaunchConvergesOnDaemon(t *testing.T) {

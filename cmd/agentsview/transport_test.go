@@ -443,6 +443,28 @@ func TestEnsureTransport_ReadIntentRestartsOlderDaemon(t *testing.T) {
 	assert.Equal(t, "http://127.0.0.1:23456", tr.URL)
 }
 
+func TestEnsureTransport_ReadIntentNoDaemonEnvRefusesOlderDaemon(
+	t *testing.T,
+) {
+	dir := daemonRuntimeDir(t)
+	host, port := testPingServer(t)
+	writeDaemonRuntimeForTest(t, dir, host, port, "1.0.0", false)
+
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
+	setTestVersion(t, "1.1.0")
+	forbidStartBackgroundServeForTransport(t,
+		"AGENTSVIEW_NO_DAEMON must suppress daemon replacement")
+
+	cfg := config.Config{DataDir: dir}
+	tr, err := ensureTransport(
+		&cfg, transportIntentRead, 100*time.Millisecond,
+	)
+
+	require.Error(t, err)
+	assert.Equal(t, transport{}, tr)
+	assert.Contains(t, err.Error(), "daemon restart required")
+}
+
 func TestEnsureTransport_ReadIntentPreservesExplicitNoSyncWhenRestartingOlderDaemon(
 	t *testing.T,
 ) {

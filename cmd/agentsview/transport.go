@@ -195,6 +195,11 @@ func ensureTransportContext(
 			intent == transportIntentArchiveWrite) &&
 			shouldUpgradeDaemonRuntime(tr.Runtime, version) {
 			if daemonAutostartDisabled() {
+				if intent == transportIntentRead {
+					return transport{}, appendDaemonRestartUpgradeHint(
+						errors.New("daemon restart required: running daemon is older than this client"),
+					)
+				}
 				return tr, nil
 			}
 			if err := guardDaemonAutoStartConfig(*cfg); err != nil {
