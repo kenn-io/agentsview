@@ -946,3 +946,22 @@ func TestPrintSyncSummaryAnomalySection(t *testing.T) {
 		assert.Less(t, idx, anomalyIdx)
 	})
 }
+
+func TestSchemaUpgradeHint(t *testing.T) {
+	t.Run("guides outdated-schema errors to a daemon restart", func(t *testing.T) {
+		base := &db.SchemaUpgradeRequiredError{
+			Table:  "tool_calls",
+			Column: "file_path",
+		}
+		got := schemaUpgradeHint(base)
+		// The original error stays wrappable so logs keep the detail, and the
+		// hint names the command that actually runs the pending migration.
+		assert.ErrorIs(t, got, base)
+		assert.Contains(t, got.Error(), "agentsview serve --replace")
+	})
+
+	t.Run("passes unrelated errors through unchanged", func(t *testing.T) {
+		base := errors.New("disk is on fire")
+		assert.Equal(t, base, schemaUpgradeHint(base))
+	})
+}

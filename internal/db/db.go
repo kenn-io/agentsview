@@ -834,6 +834,34 @@ func tableColumns(
 	return out, nil
 }
 
+// SchemaUpgradeRequiredError reports that a read-only open failed because the
+// on-disk archive is missing a column the current binary's schema defines. The
+// file is not corrupt: it was written by an older agentsview version and has
+// not been migrated yet. Read-only opens never run migrations, so the archive
+// can only be upgraded by a writable process (the daemon). Callers can detect
+// this with IsSchemaUpgradeRequired and point the user at restarting the daemon
+// so the migration runs. The Error text preserves the historical
+// "schema missing <table>.<column>" wording so existing diagnostics still match.
+type SchemaUpgradeRequiredError struct {
+	Table  string
+	Column string
+}
+
+func (e *SchemaUpgradeRequiredError) Error() string {
+	return fmt.Sprintf(
+		"opening read-only database: schema missing %s.%s",
+		e.Table, e.Column,
+	)
+}
+
+// IsSchemaUpgradeRequired reports whether err indicates a read-only open failed
+// because the archive predates this binary's schema and needs a writable
+// migration to run.
+func IsSchemaUpgradeRequired(err error) bool {
+	var target *SchemaUpgradeRequiredError
+	return errors.As(err, &target)
+}
+
 func checkReadOnlySchemaCompatibility(conn *sql.DB) error {
 	required, err := readOnlyRequiredSchema()
 	if err != nil {
@@ -850,10 +878,10 @@ func checkReadOnlySchemaCompatibility(conn *sql.DB) error {
 		}
 		for _, column := range columns {
 			if !have[column] {
-				return fmt.Errorf(
-					"opening read-only database: schema missing %s.%s",
-					table, column,
-				)
+				return &SchemaUpgradeRequiredError{
+					Table:  table,
+					Column: column,
+				}
 			}
 		}
 	}

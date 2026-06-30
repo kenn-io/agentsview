@@ -443,7 +443,7 @@ func openReadOnlyDB(cfg config.Config) (*db.DB, error) {
 	applyClassifierConfig(cfg)
 	database, err := db.OpenReadOnly(cfg.DBPath)
 	if err != nil {
-		return nil, err
+		return nil, schemaUpgradeHint(err)
 	}
 	applyCustomPricing(database, cfg)
 	if err := applyCursorSecret(database, cfg); err != nil {
@@ -451,6 +451,28 @@ func openReadOnlyDB(cfg config.Config) (*db.DB, error) {
 		return nil, err
 	}
 	return database, nil
+}
+
+// schemaUpgradeHint augments a read-only open failure with actionable guidance
+// when the archive is simply older than this binary. The pending migration only
+// runs on a writable open, which read-only commands never perform, so the user
+// must let the daemon (re)start to upgrade the archive. Without this, the raw
+// "schema missing tool_calls.file_path" error leaves upgraders with no path
+// forward; it is the failure reported in issue #929 after a version bump while
+// an older daemon still owned the archive.
+func schemaUpgradeHint(err error) error {
+	if !db.IsSchemaUpgradeRequired(err) {
+		return err
+	}
+	return fmt.Errorf(
+		"%w\n\n"+
+			"This database was written by an older agentsview version and "+
+			"must be upgraded before it can be read. The upgrade runs when a "+
+			"writable daemon starts, so restart the daemon to let it run:\n"+
+			"  - desktop app: quit and relaunch it\n"+
+			"  - CLI: run `agentsview serve --replace`",
+		err,
+	)
 }
 
 func openWriteDB(
