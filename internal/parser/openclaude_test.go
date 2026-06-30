@@ -182,6 +182,25 @@ func TestOpenClaudeQueuedCommandAttachment(t *testing.T) {
 		}),
 		buildMetadataLine(map[string]any{
 			"type":      "attachment",
+			"timestamp": "2024-01-01T10:00:01.500Z",
+			"attachment": map[string]any{
+				"type":        "queued_command",
+				"commandMode": "task-notification",
+				"prompt":      "ignored non-prompt queued command",
+			},
+		}),
+		buildMetadataLine(map[string]any{
+			"type":      "attachment",
+			"timestamp": "2024-01-01T10:00:01.750Z",
+			"attachment": map[string]any{
+				"type":        "queued_command",
+				"commandMode": "prompt",
+				"isMeta":      true,
+				"prompt":      "ignored meta queued command",
+			},
+		}),
+		buildMetadataLine(map[string]any{
+			"type":      "attachment",
 			"timestamp": "2024-01-01T10:00:02Z",
 			"attachment": map[string]any{
 				"type":        "queued_command",
