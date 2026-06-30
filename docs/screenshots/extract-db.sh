@@ -125,7 +125,8 @@ WHERE s.project IN (SELECT name FROM screenshot_projects)
       COALESCE(s.display_name, '') || char(10) ||
       COALESCE(s.session_name, '') || char(10) ||
       COALESCE(s.cwd, '') || char(10) ||
-      COALESCE(s.file_path, '')
+      COALESCE(s.file_path, '') || char(10) ||
+      COALESCE(s.git_branch, '')
     ) LIKE p.pattern ESCAPE '\'
   )
   AND NOT EXISTS (
@@ -144,7 +145,9 @@ WHERE s.project IN (SELECT name FROM screenshot_projects)
     JOIN screenshot_blocked_patterns p
       ON lower(
         COALESCE(tc.input_json, '') || char(10) ||
-        COALESCE(tc.result_content, '')
+        COALESCE(tc.result_content, '') || char(10) ||
+        COALESCE(tc.file_path, '') || char(10) ||
+        COALESCE(tc.skill_name, '')
       ) LIKE p.pattern ESCAPE '\'
     WHERE tc.session_id = s.id
   )
