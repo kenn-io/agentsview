@@ -349,6 +349,33 @@ func TestStatsCommandUsesDiscoveredDaemon(t *testing.T) {
 	assert.Equal(t, 5, got.Totals.SessionsAll)
 }
 
+func TestStatsCommandSkipsReadOnlyDaemon(t *testing.T) {
+	dataDir := setupGoldenStatsDataDir(t)
+
+	var called bool
+	ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
+		"/api/v1/session-stats": func(w http.ResponseWriter, r *http.Request) {
+			called = true
+			http.Error(w, "pg session stats unavailable", http.StatusNotImplemented)
+		},
+	})
+	registerTestRuntime(t, dataDir, ts.URL, true)
+
+	out, err := executeCommand(newRootCommand(),
+		"stats",
+		"--format", "json",
+		"--since", "2026-04-01",
+		"--until", "2026-04-15",
+		"--timezone", "UTC",
+	)
+
+	require.NoError(t, err, "stats output:\n%s", out)
+	assert.False(t, called, "read-only daemon stats endpoint should be skipped")
+	var got db.SessionStats
+	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	assert.Equal(t, len(goldenFixtureSessions), got.Totals.SessionsAll)
+}
+
 // updateGolden toggles regeneration of stats_golden.json.
 // Pass `go test ./cmd/agentsview -run TestStatsGolden -update`
 // after intentionally changing the fixture or the stats pipeline.

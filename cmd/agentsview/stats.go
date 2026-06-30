@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -140,7 +141,22 @@ func registerStatsFlags(
 func openStatsService(
 	cmd *cobra.Command,
 ) (service.SessionService, func(), error) {
-	return resolveService(cmd)
+	cfg, err := config.LoadPFlags(cmd.Flags())
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading config: %w", err)
+	}
+	tr, err := ensureTransport(&cfg, transportIntentRead, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	if tr.Mode == transportHTTP && tr.ReadOnly {
+		d, err := openReadOnlyDB(cfg)
+		if err != nil {
+			return nil, nil, fmt.Errorf("opening db: %w", err)
+		}
+		return service.NewDirectBackend(d, nil), func() { d.Close() }, nil
+	}
+	return newService(cfg, tr)
 }
 
 // printStatsHuman renders a human-readable summary of a SessionStats
