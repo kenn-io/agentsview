@@ -410,6 +410,39 @@ func TestEnsureTransport_ArchiveWriteRestartsOlderDaemon(t *testing.T) {
 	assert.Equal(t, "http://127.0.0.1:23456", tr.URL)
 }
 
+func TestEnsureTransport_ReadIntentRestartsOlderDaemon(t *testing.T) {
+	dir := daemonRuntimeDir(t)
+	host, port := testPingServer(t)
+	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
+		dir, host, port, "1.0.0", false, false, true,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
+
+	setTestVersion(t, "1.1.0")
+
+	var started bool
+	stubStartBackgroundServeForTransport(t, func(
+		_ context.Context, gotCfg *config.Config, _ time.Duration,
+	) (*DaemonRuntime, error) {
+		started = true
+		assert.True(t, gotCfg.NoSync)
+		return &DaemonRuntime{
+			Host: "127.0.0.1",
+			Port: 23456,
+		}, nil
+	})
+
+	cfg := config.Config{DataDir: dir}
+	tr, err := ensureTransport(
+		&cfg, transportIntentRead, 100*time.Millisecond,
+	)
+	require.NoError(t, err)
+	assert.True(t, started)
+	assert.Equal(t, transportHTTP, tr.Mode)
+	assert.Equal(t, "http://127.0.0.1:23456", tr.URL)
+}
+
 func TestEnsureTransport_ArchiveWriteNoDaemonEnvKeepsOlderDaemon(t *testing.T) {
 	dir := daemonRuntimeDir(t)
 	host, port := testPingServer(t)

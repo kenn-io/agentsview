@@ -191,7 +191,8 @@ func ensureTransportContext(
 		return transport{}, err
 	}
 	if tr.Mode == transportHTTP {
-		if intent == transportIntentArchiveWrite &&
+		if (intent == transportIntentRead ||
+			intent == transportIntentArchiveWrite) &&
 			shouldUpgradeDaemonRuntime(tr.Runtime, version) {
 			if daemonAutostartDisabled() {
 				return tr, nil

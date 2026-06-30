@@ -62,6 +62,10 @@ func (s *Server) humaGetSessionStats(
 	ctx context.Context,
 	in *sessionStatsInput,
 ) (*jsonOutput[*service.SessionStats], error) {
+	githubToken := ""
+	if in.IncludeGitHubOutcomes {
+		githubToken = s.githubToken(ctx)
+	}
 	stats, err := s.sessions.Stats(ctx, service.StatsFilter{
 		Since:                 in.Since,
 		Until:                 in.Until,
@@ -71,6 +75,7 @@ func (s *Server) humaGetSessionStats(
 		Timezone:              in.Timezone,
 		IncludeGitOutcomes:    in.IncludeGitOutcomes,
 		IncludeGitHubOutcomes: in.IncludeGitHubOutcomes,
+		GHToken:               githubToken,
 	})
 	if err != nil {
 		if handled := handleHumaContextError(err); handled != nil {

@@ -56,9 +56,7 @@ func runHealthList(
 		limit = maxHealthLimit
 	}
 
-	page, err := svc.List(ctx, service.ListFilter{
-		Limit: limit,
-	})
+	page, err := svc.List(ctx, healthListFilter(limit))
 	if err != nil {
 		fatal("listing sessions: %v", err)
 	}
@@ -79,9 +77,14 @@ func runHealthDetail(
 	ctx context.Context, svc service.SessionService,
 	sessionID string, asJSON bool,
 ) {
-	resolved, err := resolveServiceSessionID(ctx, svc, sessionID)
+	resolved, err := resolveHealthSessionID(ctx, svc, sessionID)
 	if err != nil {
 		fatal("resolving session id: %v", err)
+	}
+	if resolved == "" {
+		fmt.Fprintf(os.Stderr,
+			"session not found: %s\n", sessionID)
+		os.Exit(1)
 	}
 	sess, err := svc.Get(ctx, resolved)
 	if err != nil {
@@ -98,6 +101,57 @@ func runHealthDetail(
 		return
 	}
 	printHealthDetail(os.Stdout, sess.Session)
+}
+
+func healthListFilter(limit int) service.ListFilter {
+	return service.ListFilter{
+		Limit:            limit,
+		IncludeOneShot:   true,
+		IncludeAutomated: true,
+	}
+}
+
+func resolveHealthSessionID(
+	ctx context.Context,
+	svc service.SessionService,
+	partial string,
+) (string, error) {
+	if partial == "" {
+		return "", nil
+	}
+	page, err := svc.List(ctx, healthListFilter(maxHealthLimit))
+	if err != nil {
+		return "", err
+	}
+	matches := make([]string, 0, len(page.Sessions))
+	for _, sess := range page.Sessions {
+		if strings.Contains(sess.ID, partial) {
+			matches = append(matches, sess.ID)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return "", nil
+	case 1:
+		return matches[0], nil
+	}
+
+	exact := ""
+	for _, m := range matches {
+		if m == partial {
+			exact = m
+			break
+		}
+	}
+	if exact != "" {
+		for _, m := range matches {
+			if m != exact && shortID(m) == partial {
+				return "", ambiguousMatchErr(partial, matches)
+			}
+		}
+		return exact, nil
+	}
+	return "", ambiguousMatchErr(partial, matches)
 }
 
 // resolveLookupLimit caps the partial-match query for
