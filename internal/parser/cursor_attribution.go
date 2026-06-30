@@ -93,8 +93,8 @@ func LoadCursorAttribution(
 			COUNT(*)
 		FROM conversation_summaries
 		WHERE updatedAt >= ? AND updatedAt < ?
-		GROUP BY model, mode
-		ORDER BY COUNT(*) DESC, model, mode`,
+		GROUP BY COALESCE(model, ''), COALESCE(mode, '')
+		ORDER BY COUNT(*) DESC, COALESCE(model, ''), COALESCE(mode, '')`,
 		timeToMillis(from), timeToMillis(to),
 	)
 	if err != nil {

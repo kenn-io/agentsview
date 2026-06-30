@@ -33,7 +33,7 @@ func TestLoadCursorAttribution_Happy(t *testing.T) {
 	require.Len(t, got.ConversationCounts, 2)
 	assert.Equal(t, "model-a", got.ConversationCounts[0].Model)
 	assert.Equal(t, "composer", got.ConversationCounts[0].Mode)
-	assert.Equal(t, int64(2), got.ConversationCounts[0].Count)
+	assert.Equal(t, int64(3), got.ConversationCounts[0].Count)
 }
 
 func TestLoadCursorAttribution_MissingDB(t *testing.T) {
@@ -46,6 +46,39 @@ func TestLoadCursorAttribution_MissingDB(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Nil(t, got)
+}
+
+func TestLoadCursorAttribution_NormalizesEmptyConversationKeys(t *testing.T) {
+	path := seedCursorAttributionDBTest(t)
+	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB", path)
+
+	conn, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	ts := time.Date(2026, 6, 1, 14, 0, 0, 0, time.UTC).UnixMilli()
+	_, err = conn.Exec(`
+		INSERT INTO conversation_summaries (model, mode, updatedAt) VALUES
+			(NULL, NULL, ?),
+			('', '', ?)
+	`, ts, ts)
+	require.NoError(t, err)
+
+	got, err := LoadCursorAttribution(
+		time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+
+	emptyRows := 0
+	for _, entry := range got.ConversationCounts {
+		if entry.Model == "" && entry.Mode == "" {
+			emptyRows++
+			assert.Equal(t, int64(2), entry.Count)
+		}
+	}
+	assert.Equal(t, 1, emptyRows)
 }
 
 func seedCursorAttributionDBTest(t *testing.T) string {
@@ -76,8 +109,8 @@ func seedCursorAttributionDBTest(t *testing.T) string {
 	require.NoError(t, err)
 	_, err = conn.Exec(`
 		CREATE TABLE conversation_summaries (
-			model TEXT NOT NULL,
-			mode TEXT NOT NULL,
+			model TEXT,
+			mode TEXT,
 			updatedAt INTEGER NOT NULL
 		)
 	`)
@@ -111,8 +144,9 @@ func seedCursorAttributionDBTest(t *testing.T) string {
 		INSERT INTO conversation_summaries (model, mode, updatedAt) VALUES
 			('model-a', 'composer', ?),
 			('model-a', 'composer', ?),
+			('model-a', 'composer', ?),
 			('model-a', 'tab', ?)
-	`, first, second, second)
+	`, first, second, second, second)
 	require.NoError(t, err)
 	return path
 }
