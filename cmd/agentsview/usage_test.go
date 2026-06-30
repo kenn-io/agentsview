@@ -1164,3 +1164,81 @@ func (f *pricingFetchRecorder) fetch() ([]pricing.ModelPricing, error) {
 	f.calls++
 	return f.rows, f.err
 }
+
+// zeroTotalsCopilotUsageJSON is a daily-usage summary with sessions present
+// but zero token/cost totals — the "no token data" case.
+const zeroTotalsCopilotUsageJSON = `{
+  "daily": [],
+  "totals": {"inputTokens":0,"outputTokens":0,"cacheCreationTokens":0,"cacheReadTokens":0,"totalCost":0},
+  "sessionCounts": {"total":2,"byProject":{},"byAgent":{"copilot":2}}
+}`
+
+func TestRunUsageDailyHintsNoTokenDataForCopilot(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSONResponse(w, zeroTotalsCopilotUsageJSON)
+	})
+	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
+
+	stderr := captureStderr(t, func() {
+		runUsageDaily(UsageDailyConfig{Agent: "copilot", Timezone: "UTC"})
+	})
+
+	assert.Contains(t, stderr, "Copilot")
+	assert.Contains(t, stderr, "monthly")
+}
+
+func TestRunUsageDailyNoHintWithoutAgentFilter(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSONResponse(w, zeroTotalsCopilotUsageJSON)
+	})
+	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
+
+	stderr := captureStderr(t, func() {
+		runUsageDaily(UsageDailyConfig{Timezone: "UTC"})
+	})
+
+	assert.NotContains(t, stderr, "token")
+}
+
+func TestRunUsageDailyNoHintWhenDataPresent(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSONResponse(w, sampleDailyUsageJSON)
+	})
+	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
+
+	stderr := captureStderr(t, func() {
+		runUsageDaily(UsageDailyConfig{Agent: "codex", Timezone: "UTC"})
+	})
+
+	assert.NotContains(t, stderr, "token-usage")
+}
+
+func TestNoTokenDataNote(t *testing.T) {
+	zero := db.UsageTotals{}
+	withData := db.UsageTotals{OutputTokens: 5}
+	copilotNote := "note: GitHub Copilot bills via a monthly request quota " +
+		"and does not record per-message token usage."
+	cases := []struct {
+		name   string
+		agent  string
+		totals db.UsageTotals
+		want   string
+	}{
+		{"no agent filter", "", zero, ""},
+		{"non-copilot agent with zero totals", "codex", zero, ""},
+		{"copilot with token data", "copilot", withData, ""},
+		{"copilot with zero totals", "copilot", zero, copilotNote},
+		{"vscode-copilot with zero totals", "vscode-copilot", zero, copilotNote},
+		{"all-copilot CSV filter", "copilot,vscode-copilot", zero, copilotNote},
+		{"mixed CSV filter", "copilot,claude", zero, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want,
+				noTokenDataNote(tc.agent, tc.totals))
+		})
+	}
+}
