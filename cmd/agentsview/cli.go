@@ -744,7 +744,7 @@ func newDuckDBQuackCommand() *cobra.Command {
 	)
 	serveCmd.Flags().StringVar(
 		&serveCfg.Token, "token", "",
-		"Quack authentication token (generated if omitted)",
+		"Quack authentication token (required unless configured)",
 	)
 	serveCmd.Flags().BoolVar(
 		&serveCfg.AllowInsecure, "allow-insecure", false,

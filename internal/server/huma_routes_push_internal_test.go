@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 )
 
 type openAPISpec struct {
@@ -141,6 +142,21 @@ func TestDuckDBPushConfigRequestOverrideSkipsDaemonEnvResolution(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "/tmp/agentsview.duckdb", got.Path)
 	assert.Equal(t, "workstation", got.MachineName)
+}
+
+func TestDuckDBPushSyncOptionsDerivesRemoteTargetScope(t *testing.T) {
+	duckCfg := config.DuckDBConfig{
+		URL:   "quack:https://duck.example.test?token=secret",
+		Token: "other-secret",
+	}
+
+	got := duckDBPushSyncOptions(daemonPushRequest{
+		Projects: []string{"alpha"},
+	}, duckCfg)
+
+	assert.Equal(t, []string{"alpha"}, got.Projects)
+	assert.Equal(t, duckdbsync.SyncStateTargetForConfig(duckCfg), got.SyncStateTarget)
+	assert.NotContains(t, got.SyncStateTarget, "secret")
 }
 
 func TestSyncRemotesRouteIsStreaming(t *testing.T) {

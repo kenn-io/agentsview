@@ -5,6 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 )
 
 func TestValidateQuackClientURL(t *testing.T) {
@@ -85,10 +86,39 @@ func TestValidateQuackClientURL(t *testing.T) {
 }
 
 func TestRedactQuackURL(t *testing.T) {
-	got := RedactQuackURL("quack:https://duck.example.com/db?token=secret&x=1")
-	assert.NotContains(t, got, "secret")
+	got := RedactQuackURL(
+		"quack:https://account:credential0@duck.example.com/db?token=credential1&password=credential2&api_key=credential3&x=1",
+	)
+	assert.NotContains(t, got, "account")
+	assert.NotContains(t, got, "credential0")
+	assert.NotContains(t, got, "credential1")
+	assert.NotContains(t, got, "credential2")
+	assert.NotContains(t, got, "credential3")
 	assert.Contains(t, got, "token=%3Credacted%3E")
+	assert.Contains(t, got, "password=%3Credacted%3E")
+	assert.Contains(t, got, "api_key=%3Credacted%3E")
 	assert.Contains(t, got, "x=1")
+}
+
+func TestSyncStateTargetForConfigScopesRemoteURLWithoutSecrets(t *testing.T) {
+	base := config.DuckDBConfig{
+		URL:   "quack:https://user:secret@duck.example.com/db?token=secret&x=1#frag",
+		Token: "first-token",
+	}
+	sameTargetDifferentSecrets := config.DuckDBConfig{
+		URL:   "quack:https://other:changed@duck.example.com/db?token=changed&x=1#other",
+		Token: "second-token",
+	}
+
+	got := SyncStateTargetForConfig(base)
+	require.NotEmpty(t, got)
+	assert.Equal(t, got, SyncStateTargetForConfig(sameTargetDifferentSecrets))
+	assert.NotContains(t, got, "secret")
+	assert.NotContains(t, got, "first-token")
+	assert.NotContains(t, got, "second-token")
+	assert.Empty(t, SyncStateTargetForConfig(config.DuckDBConfig{
+		Path: "/tmp/agentsview.duckdb",
+	}))
 }
 
 func TestValidateQuackServeURI(t *testing.T) {

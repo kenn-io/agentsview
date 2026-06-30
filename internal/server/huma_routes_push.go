@@ -72,11 +72,18 @@ func (s *Server) duckDBPushConfig(
 	return s.cfg.ResolveDuckDB()
 }
 
-func duckDBPushSyncOptions(req daemonPushRequest) duckdbsync.SyncOptions {
+func duckDBPushSyncOptions(
+	req daemonPushRequest,
+	duckCfg config.DuckDBConfig,
+) duckdbsync.SyncOptions {
+	syncStateTarget := req.SyncStateTarget
+	if syncStateTarget == "" {
+		syncStateTarget = duckdbsync.SyncStateTargetForConfig(duckCfg)
+	}
 	return duckdbsync.SyncOptions{
 		Projects:        req.Projects,
 		ExcludeProjects: req.ExcludeProjects,
-		SyncStateTarget: req.SyncStateTarget,
+		SyncStateTarget: syncStateTarget,
 	}
 }
 
@@ -152,6 +159,7 @@ func (s *Server) humaDuckDBPush(
 	}
 
 	engine := s.syncEngineForLocal(local)
+	opts := duckDBPushSyncOptions(in.Body, duckCfg)
 	var result duckdbsync.PushResult
 	_, err = engine.SyncThenRun(ctx, in.Body.Full, nil,
 		func(forceFull bool) error {
@@ -159,12 +167,12 @@ func (s *Server) humaDuckDBPush(
 			var err error
 			if duckCfg.URL != "" {
 				syncer, err = duckdbsync.NewFromConfig(
-					duckCfg, local, duckDBPushSyncOptions(in.Body),
+					duckCfg, local, opts,
 				)
 			} else {
 				syncer, err = duckdbsync.New(
 					duckCfg.Path, local, duckCfg.MachineName,
-					duckDBPushSyncOptions(in.Body),
+					opts,
 				)
 			}
 			if err != nil {

@@ -111,6 +111,7 @@ func runDuckDBStatus() {
 		fatal("duckdb status: %v", err)
 	}
 	lastPush := ""
+	syncStateTarget := duckdbsync.SyncStateTargetForConfig(duckCfg)
 	database, err := openReadOnlyDB(appCfg)
 	if err != nil {
 		if duckCfg.URL == "" {
@@ -122,7 +123,7 @@ func runDuckDBStatus() {
 		)
 	} else {
 		defer database.Close()
-		lastPush, err = duckdbsync.ReadLastPushAt(database, "")
+		lastPush, err = duckdbsync.ReadLastPushAt(database, syncStateTarget)
 		if err != nil {
 			log.Printf("warning: reading duckdb last push: %v", err)
 			lastPush = ""

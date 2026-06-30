@@ -204,6 +204,9 @@ func (b daemonArchiveWriteBackend) duckDBPush(
 	if err != nil {
 		return duckdbsync.PushResult{}, err
 	}
+	if syncStateTarget == "" {
+		syncStateTarget = duckdbsync.SyncStateTargetForConfig(duckCfg)
+	}
 	return postDaemonPush[duckdbsync.PushResult](
 		ctx, b.tr, b.appCfg.AuthToken, "/api/v1/push/duckdb",
 		daemonPushRequest{
@@ -379,6 +382,9 @@ func (b *localArchiveWriteBackend) duckDBPush(
 		return duckdbsync.PushResult{}, err
 	}
 	forceFull := cfg.Full || didResync
+	if syncStateTarget == "" {
+		syncStateTarget = duckdbsync.SyncStateTargetForConfig(duckCfg)
+	}
 
 	fmt.Println("Opening DuckDB mirror...")
 	connectStart := time.Now()

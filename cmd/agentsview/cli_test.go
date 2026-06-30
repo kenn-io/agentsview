@@ -122,10 +122,12 @@ func TestDuckDBQuackServeHelpShowsSafetyFlags(t *testing.T) {
 		"--bind",
 		"--path",
 		"--token",
+		"required",
 		"--allow-insecure",
 	} {
 		assert.Contains(t, help, want)
 	}
+	assert.NotContains(t, help, "generated if omitted")
 }
 
 func TestOpenAPICommandEmitsSpec(t *testing.T) {

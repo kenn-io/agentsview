@@ -118,14 +118,20 @@ func TestArchiveWriteBackendDuckDBPushAbsolutizesRelativeDaemonPath(t *testing.T
 }
 
 func TestArchiveWriteBackendDuckDBPushPostsRemoteURLToDaemon(t *testing.T) {
+	duckCfg := config.DuckDBConfig{
+		URL:           "quack:https://duck.example.test",
+		Token:         "quack-token",
+		AllowInsecure: true,
+	}
 	ts := duckDBPushDaemonServer(t, wantDuckDBDaemonPush{
 		auth:            "Bearer secret",
 		full:            true,
 		projects:        []string{"a"},
 		excludeProjects: []string{"b"},
-		url:             "quack:https://duck.example.test",
-		token:           "quack-token",
-		allowInsecure:   true,
+		url:             duckCfg.URL,
+		token:           duckCfg.Token,
+		allowInsecure:   duckCfg.AllowInsecure,
+		syncStateTarget: duckdbsync.SyncStateTargetForConfig(duckCfg),
 	}, duckdbsync.PushResult{
 		SessionsPushed: 2,
 		MessagesPushed: 3,
@@ -137,11 +143,7 @@ func TestArchiveWriteBackendDuckDBPushPostsRemoteURLToDaemon(t *testing.T) {
 	)
 	result, err := backend.DuckDBPush(
 		context.Background(),
-		config.DuckDBConfig{
-			URL:           "quack:https://duck.example.test",
-			Token:         "quack-token",
-			AllowInsecure: true,
-		},
+		duckCfg,
 		DuckDBPushConfig{Full: true},
 		[]string{"a"},
 		[]string{"b"},
@@ -233,6 +235,7 @@ type wantDuckDBDaemonPush struct {
 	token           string
 	machineName     string
 	allowInsecure   bool
+	syncStateTarget string
 }
 
 // duckDBPushDaemonServer starts a daemon test server on the DuckDB push route
@@ -269,6 +272,7 @@ func duckDBPushDaemonServerAt(
 		assert.Equal(t, want.token, req.DuckDB.Token)
 		assert.Equal(t, want.machineName, req.DuckDB.MachineName)
 		assert.Equal(t, want.allowInsecure, req.DuckDB.AllowInsecure)
+		assert.Equal(t, want.syncStateTarget, req.SyncStateTarget)
 		writeTestJSON(t, w, result)
 	})
 }
