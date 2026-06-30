@@ -636,7 +636,11 @@ func SplitBranchFilterTokens(s string) []BranchInfo {
 		if !ok {
 			continue
 		}
-		out = append(out, BranchInfo{Project: project, Branch: branch})
+		out = append(out, BranchInfo{
+			Project: project,
+			Branch:  branch,
+			Token:   EncodeBranchFilterToken(project, branch),
+		})
 	}
 	return out
 }

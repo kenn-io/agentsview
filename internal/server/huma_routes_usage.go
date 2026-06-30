@@ -163,6 +163,7 @@ func (s *Server) computeUsageComparison(
 		Agent:            f.Agent,
 		Project:          f.Project,
 		Machine:          f.Machine,
+		GitBranch:        f.GitBranch,
 		Model:            f.Model,
 		ExcludeProject:   f.ExcludeProject,
 		ExcludeAgent:     f.ExcludeAgent,

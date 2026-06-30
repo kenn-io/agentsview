@@ -530,6 +530,7 @@ func (s *Store) GetBranches(ctx context.Context, excludeOneShot, excludeAutomate
 		if err := rows.Scan(&bi.Project, &bi.Branch); err != nil {
 			return nil, fmt.Errorf("scanning duckdb branch: %w", err)
 		}
+		bi.Token = db.EncodeBranchFilterToken(bi.Project, bi.Branch)
 		out = append(out, bi)
 	}
 	return out, rows.Err()
@@ -1039,7 +1040,7 @@ func contentCandidateMatches(candidates []duckContentCandidate) []db.ContentMatc
 func contentSessionFilter(f db.ContentSearchFilter) db.SessionFilter {
 	return db.SessionFilter{
 		Project: f.Project, ExcludeProject: f.ExcludeProject,
-		Machine: f.Machine, Agent: f.Agent,
+		Machine: f.Machine, GitBranch: f.GitBranch, Agent: f.Agent,
 		Date: f.Date, DateFrom: f.DateFrom, DateTo: f.DateTo,
 		ActiveSince:      f.ActiveSince,
 		ExcludeOneShot:   !f.IncludeOneShot,

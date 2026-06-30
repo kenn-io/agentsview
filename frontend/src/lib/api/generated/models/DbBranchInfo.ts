@@ -5,5 +5,6 @@
 export type DbBranchInfo = {
   branch: string;
   project: string;
+  token: string;
 };
 

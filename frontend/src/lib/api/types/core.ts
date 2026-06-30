@@ -201,6 +201,7 @@ export interface MachinesResponse {
 export interface BranchInfo {
   project: string;
   branch: string;
+  token: string;
 }
 
 export interface BranchesResponse {

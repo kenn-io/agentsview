@@ -1080,6 +1080,54 @@ func TestSearchContentRegexOrdersBySessionRecency(t *testing.T) {
 	assert.Equal(t, "a-old-regex", got.Matches[1].SessionID)
 }
 
+func TestSearchContentGitBranchFilter(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	alphaMain := syncSession("branch-alpha-main", "alpha", "main session", "2026-01-11T00:00:00Z", 1)
+	alphaMain.GitBranch = "main"
+	alphaFeature := syncSession("branch-alpha-feature", "alpha", "feature session", "2026-01-11T00:01:00Z", 1)
+	alphaFeature.GitBranch = "feature"
+	betaMain := syncSession("branch-beta-main", "beta", "beta session", "2026-01-11T00:02:00Z", 1)
+	betaMain.GitBranch = "main"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+		{
+			Session:         alphaMain,
+			Messages:        []db.Message{syncMessage(alphaMain.ID, 0, "user", "BRANCHNEEDLE alpha main", "2026-01-11T00:00:00Z")},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+		{
+			Session:         alphaFeature,
+			Messages:        []db.Message{syncMessage(alphaFeature.ID, 0, "user", "BRANCHNEEDLE alpha feature", "2026-01-11T00:01:00Z")},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+		{
+			Session:         betaMain,
+			Messages:        []db.Message{syncMessage(betaMain.ID, 0, "user", "BRANCHNEEDLE beta main", "2026-01-11T00:02:00Z")},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+	})
+	require.NoError(t, err)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
+		Pattern:        "BRANCHNEEDLE",
+		Mode:           "substring",
+		Sources:        []string{"messages"},
+		GitBranch:      db.EncodeBranchFilterToken("alpha", "main"),
+		IncludeOneShot: true,
+		Limit:          10,
+	})
+	require.NoError(t, err)
+	require.Len(t, got.Matches, 1)
+	assert.Equal(t, alphaMain.ID, got.Matches[0].SessionID)
+}
+
 func TestSearchContentSubstringPaginatesAfterGlobalOrdering(t *testing.T) {
 	ctx := context.Background()
 	store, _ := newSyncedStore(t)
@@ -2363,10 +2411,26 @@ func TestDuckDBBranchDimension(t *testing.T) {
 	branches, err := store.GetBranches(ctx, false, false)
 	require.NoError(t, err)
 	assert.Equal(t, []db.BranchInfo{
-		{Project: "alpha", Branch: "feature-x"},
-		{Project: "alpha", Branch: "main"},
-		{Project: "alpha", Branch: "unknown"},
-		{Project: "beta", Branch: "main"},
+		{
+			Project: "alpha",
+			Branch:  "feature-x",
+			Token:   db.EncodeBranchFilterToken("alpha", "feature-x"),
+		},
+		{
+			Project: "alpha",
+			Branch:  "main",
+			Token:   db.EncodeBranchFilterToken("alpha", "main"),
+		},
+		{
+			Project: "alpha",
+			Branch:  "unknown",
+			Token:   db.EncodeBranchFilterToken("alpha", "unknown"),
+		},
+		{
+			Project: "beta",
+			Branch:  "main",
+			Token:   db.EncodeBranchFilterToken("beta", "main"),
+		},
 	}, branches)
 
 	filtered, err := store.GetDailyUsage(ctx, db.UsageFilter{

@@ -8,6 +8,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func branchInfoForTest(project, branch string) BranchInfo {
+	return BranchInfo{
+		Project: project,
+		Branch:  branch,
+		Token:   EncodeBranchFilterToken(project, branch),
+	}
+}
+
 func TestGetDailyUsageGitBranchFilter(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
@@ -60,7 +68,7 @@ func TestSplitBranchFilterTokens(t *testing.T) {
 		{
 			name: "round trip single",
 			in:   EncodeBranchFilterToken("alpha", "main"),
-			want: []BranchInfo{{Project: "alpha", Branch: "main"}},
+			want: []BranchInfo{branchInfoForTest("alpha", "main")},
 		},
 		{
 			name: "multiple",
@@ -69,24 +77,24 @@ func TestSplitBranchFilterTokens(t *testing.T) {
 				BranchInfo{Project: "beta", Branch: "main"},
 			),
 			want: []BranchInfo{
-				{Project: "alpha", Branch: "feat/x"},
-				{Project: "beta", Branch: "main"},
+				branchInfoForTest("alpha", "feat/x"),
+				branchInfoForTest("beta", "main"),
 			},
 		},
 		{
 			name: "comma in branch name round-trips",
 			in:   EncodeBranchFilterToken("proj", "wip,test"),
-			want: []BranchInfo{{Project: "proj", Branch: "wip,test"}},
+			want: []BranchInfo{branchInfoForTest("proj", "wip,test")},
 		},
 		{
 			name: "drops blank and separator-less tokens",
 			in:   branchListSep + EncodeBranchFilterToken("alpha", "main") + branchListSep + "noseparator",
-			want: []BranchInfo{{Project: "alpha", Branch: "main"}},
+			want: []BranchInfo{branchInfoForTest("alpha", "main")},
 		},
 		{
 			name: "empty branch component survives",
 			in:   EncodeBranchFilterToken("alpha", ""),
-			want: []BranchInfo{{Project: "alpha", Branch: ""}},
+			want: []BranchInfo{branchInfoForTest("alpha", "")},
 		},
 	}
 	for _, tt := range tests {
@@ -123,15 +131,15 @@ func TestGetBranches(t *testing.T) {
 	all, err := d.GetBranches(context.Background(), false, false)
 	require.NoError(t, err, "GetBranches includeAll")
 	assert.Equal(t, []BranchInfo{
-		{Project: "alpha", Branch: "feat/x"},
-		{Project: "alpha", Branch: "main"},
-		{Project: "beta", Branch: "main"},
-		{Project: "gamma", Branch: "solo"},
+		branchInfoForTest("alpha", "feat/x"),
+		branchInfoForTest("alpha", "main"),
+		branchInfoForTest("beta", "main"),
+		branchInfoForTest("gamma", "solo"),
 	}, all, "distinct (project, branch) pairs, ordered, empty excluded")
 
 	filtered, err := d.GetBranches(context.Background(), true, false)
 	require.NoError(t, err, "GetBranches excludeOneShot")
-	assert.NotContains(t, filtered, BranchInfo{Project: "gamma", Branch: "solo"},
+	assert.NotContains(t, filtered, branchInfoForTest("gamma", "solo"),
 		"one-shot branch excluded when excludeOneShot is set")
 }
 

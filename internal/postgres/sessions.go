@@ -1101,6 +1101,7 @@ func (s *Store) GetBranches(
 		if err := rows.Scan(&bi.Project, &bi.Branch); err != nil {
 			return nil, fmt.Errorf("scanning branch: %w", err)
 		}
+		bi.Token = db.EncodeBranchFilterToken(bi.Project, bi.Branch)
 		branches = append(branches, bi)
 	}
 	return branches, rows.Err()

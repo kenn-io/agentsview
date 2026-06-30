@@ -2424,6 +2424,7 @@ func (db *DB) GetMachines(
 type BranchInfo struct {
 	Project string `json:"project"`
 	Branch  string `json:"branch"`
+	Token   string `json:"token"`
 }
 
 // GetBranches returns distinct (project, git_branch) pairs for sessions with a
@@ -2462,6 +2463,7 @@ func (db *DB) GetBranches(
 		if err := rows.Scan(&bi.Project, &bi.Branch); err != nil {
 			return nil, fmt.Errorf("scanning branch: %w", err)
 		}
+		bi.Token = EncodeBranchFilterToken(bi.Project, bi.Branch)
 		branches = append(branches, bi)
 	}
 	return branches, rows.Err()
