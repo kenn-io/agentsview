@@ -74,6 +74,22 @@ rsync -a \
 bash "$ROOT/screenshots/extract-db.sh" \
   "$SOURCE_DB" "$CONTEXT/test-sessions.db"
 
+# Resolve a session that contains thinking blocks. Such sessions are rare
+# and never recent, so the thinking-blocks screenshot navigates straight to
+# this id rather than hunting through thousands of list rows. Pick the
+# session with the most thinking messages for a representative capture.
+THINKING_SESSION_ID=$(sqlite3 "$CONTEXT/test-sessions.db" \
+  "SELECT session_id FROM messages
+   WHERE COALESCE(thinking_text, '') != ''
+   GROUP BY session_id
+   ORDER BY COUNT(*) DESC, session_id
+   LIMIT 1" 2>/dev/null || true)
+if [ -n "$THINKING_SESSION_ID" ]; then
+  echo "Thinking-block session: $THINKING_SESSION_ID"
+else
+  echo "Warning: no session with thinking blocks found; thinking-blocks screenshot may be skipped"
+fi
+
 # Copy screenshot pipeline files
 cp -r "$ROOT/screenshots/" "$CONTEXT/screenshots/"
 cp "$ROOT/screenshots/Dockerfile" "$CONTEXT/Dockerfile"
@@ -97,6 +113,7 @@ mkdir -p "$OUTPUT_DIR"
 echo "Running screenshot capture..."
 docker run --rm \
   -v "$OUTPUT_DIR:/output" \
+  -e SCREENSHOT_THINKING_SESSION_ID="$THINKING_SESSION_ID" \
   "$IMAGE_NAME" "$@"
 
 echo ""
