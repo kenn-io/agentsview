@@ -58,7 +58,7 @@ daemon_idle_timeout = "20m"
 | `github_token`                      | Optional saved GitHub token for Gist publishing                                                              |
 | `result_content_blocked_categories` | Tool categories whose result content is not stored (default: `["Read", "Glob"]`)                             |
 | `require_auth`                      | Require bearer-token authentication for API access                                                           |
-| `auth_token`                        | Auto-generated 256-bit bearer token for remote access                                                        |
+| `auth_token`                        | Auto-generated 256-bit bearer token for remote access; can be overridden with `AGENTSVIEW_AUTH_TOKEN`        |
 | `public_url`                        | Public URL for hostname/proxy access and origin validation                                                   |
 | `public_origins`                    | Array of additional trusted CORS origins                                                                     |
 | `daemon_idle_timeout`               | Idle timeout for detached `serve --background` daemons; set to `"0s"` to keep them alive                     |
@@ -78,6 +78,11 @@ requests, if no token is saved, it then tries `AGENTSVIEW_GITHUB_TOKEN` and then
 UI Settings page or the API endpoint `POST /api/v1/config/github` when you want
 AgentsView to publish gists. Remote access fields can be configured via the
 Settings page or CLI flags — see [Remote Access](/remote-access/) for details.
+
+When `require_auth` is enabled, the browser login prompt accepts the configured
+`auth_token`. The value can come from `~/.agentsview/config.toml` or from the
+`AGENTSVIEW_AUTH_TOKEN` environment variable; the environment variable wins when
+both are set.
 
 !!! note
 

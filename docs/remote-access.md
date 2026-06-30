@@ -29,15 +29,10 @@ When this command runs inside WSL, AgentsView advertises the WSL `eth0` address
 instead of `127.0.0.1` so the printed URL is usable from the Windows host and
 nearby LAN clients. An explicit `--public-url` still takes precedence.
 
-When auth is enabled, AgentsView generates a token if needed and prints it on
-startup:
-
-```
-Auth enabled. Token: <token>
-```
-
-Open `http://<your-ip>:8080` from another device and configure the token in the
-frontend, or send it in an `Authorization` header.
+When auth is enabled, AgentsView generates a token if needed and stores it in
+`~/.agentsview/config.toml`. Open `http://<your-ip>:8080` from another device
+and enter the configured token in the frontend, or send it in an
+`Authorization` header.
 
 !!! note
 
@@ -54,7 +49,8 @@ Authorization: Bearer <token>
 
 The token is stored in `config.toml` as `auth_token`. It is generated
 automatically the first time auth is enabled, so you do not need to mint one
-manually.
+manually. For supervised services or temporary overrides, set
+`AGENTSVIEW_AUTH_TOKEN`; it takes precedence over the config file.
 
 Auth is enforced on API routes, not on static assets. That means a browser can
 load the HTML shell, but API requests fail with `401` until the correct token is
@@ -290,19 +286,19 @@ tls_key = "/path/to/key.pem"
 allowed_subnets = ["192.168.1.0/24"]
 ```
 
-| Field                   | Description                                        |
-| ----------------------- | -------------------------------------------------- |
-| `require_auth`          | Require bearer-token authentication for API access |
-| `auth_token`            | Auto-generated 256-bit bearer token                |
-| `public_url`            | Public URL for host/origin validation              |
-| `public_origins`        | Additional trusted CORS origins                    |
-| `proxy.mode`            | Managed proxy mode (`caddy`)                       |
-| `proxy.bin`             | Path to proxy binary                               |
-| `proxy.bind_host`       | Interface for proxy to bind                        |
-| `proxy.public_port`     | External port for proxy                            |
-| `proxy.tls_cert`        | TLS certificate path                               |
-| `proxy.tls_key`         | TLS key path                                       |
-| `proxy.allowed_subnets` | CIDR allowlist for proxy connections               |
+| Field                   | Description                                                                |
+| ----------------------- | -------------------------------------------------------------------------- |
+| `require_auth`          | Require bearer-token authentication for API access                         |
+| `auth_token`            | Auto-generated 256-bit bearer token; overridden by `AGENTSVIEW_AUTH_TOKEN` |
+| `public_url`            | Public URL for host/origin validation                                      |
+| `public_origins`        | Additional trusted CORS origins                                            |
+| `proxy.mode`            | Managed proxy mode (`caddy`)                                               |
+| `proxy.bin`             | Path to proxy binary                                                       |
+| `proxy.bind_host`       | Interface for proxy to bind                                                |
+| `proxy.public_port`     | External port for proxy                                                    |
+| `proxy.tls_cert`        | TLS certificate path                                                       |
+| `proxy.tls_key`         | TLS key path                                                               |
+| `proxy.allowed_subnets` | CIDR allowlist for proxy connections                                       |
 
 For LAN access you still need a non-loopback bind such as
 `agentsview serve --host 0.0.0.0`. `require_auth` controls API auth; it does not

@@ -730,7 +730,7 @@ func (c *Config) applyConfigTOML(data string) error {
 	if file.Terminal.Mode != "" {
 		c.Terminal = file.Terminal
 	}
-	if file.AuthToken != "" {
+	if file.AuthToken != "" && c.AuthToken == "" {
 		c.AuthToken = file.AuthToken
 	}
 	c.RequireAuth = file.RequireAuth || file.RemoteAccess
@@ -972,6 +972,9 @@ func (c *Config) loadEnv() {
 	}
 	if v := dataDirFromEnv(); v != "" {
 		c.DataDir = v
+	}
+	if v := os.Getenv("AGENTSVIEW_AUTH_TOKEN"); v != "" {
+		c.AuthToken = v
 	}
 	if v := os.Getenv("AGENTSVIEW_PG_URL"); v != "" {
 		c.pgEnvOverrides.URL = v

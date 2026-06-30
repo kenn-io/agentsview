@@ -3,16 +3,15 @@ title: DuckDB Mirror
 description: Mirror the local SQLite archive into DuckDB and serve it locally or over the Quack remote protocol
 ---
 
-As of 0.33.0, AgentsView can mirror its local SQLite archive into
-a DuckDB database and serve the read-only web UI from that
-mirror — either from the local file or remotely over DuckDB's
-Quack protocol. SQLite remains the source of truth for ingestion;
-the mirror is populated by an explicit push, the same one-way
-model as [PostgreSQL sync](/pg-sync/).
+As of 0.33.0, AgentsView can mirror its local SQLite archive into a DuckDB
+database and serve the read-only web UI from that mirror — either from the local
+file or remotely over DuckDB's Quack protocol. SQLite remains the source of
+truth for ingestion; the mirror is populated by `duckdb push` or
+`duckdb push --watch`, the same one-way model as [PostgreSQL sync](/pg-sync/).
 
-This is useful when you want a portable single-file analytics
-copy of your archive, or want to query your sessions with DuckDB
-directly, without standing up a PostgreSQL server.
+This is useful when you want a portable single-file analytics copy of your
+archive, or want to query your sessions with DuckDB directly, without standing
+up a PostgreSQL server.
 
 !!! warning "Experimental"
     The DuckDB backend is new in 0.33.0, and Quack is a beta DuckDB
@@ -30,30 +29,39 @@ agentsview duckdb status
 
 # Serve the read-only web UI from the mirror
 agentsview duckdb serve
+
+# Keep the mirror current in the foreground
+agentsview duckdb push --watch
 ```
 
-`duckdb push` accepts the same project-filter flags as
+`duckdb push` accepts the same project-filter and foreground watcher flags as
 [`pg push`](/pg-sync/#project-filtering):
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--full` | `false` | Force full local resync and DuckDB push |
-| `--projects` | | Comma-separated projects to push (inclusive) |
-| `--exclude-projects` | | Comma-separated projects to exclude from push |
-| `--all-projects` | `false` | Ignore configured project filters for this run |
+| Flag                 | Default | Description                                                    |
+| -------------------- | ------- | -------------------------------------------------------------- |
+| `--full`             | `false` | Force full local resync and DuckDB push                        |
+| `--projects`         |         | Comma-separated projects to push (inclusive)                   |
+| `--exclude-projects` |         | Comma-separated projects to exclude from push                  |
+| `--all-projects`     | `false` | Ignore configured project filters for this run                 |
+| `--watch`            | `false` | Run continuously, pushing on change plus a periodic floor      |
+| `--debounce`         | `30s`   | Coalesce window after a change before pushing (`--watch` only) |
+| `--interval`         | `15m`   | Periodic floor push interval (`--watch` only)                  |
+
+With `--watch`, AgentsView performs one initial sync and DuckDB push, then keeps
+running until interrupted. Shutdown via `Ctrl+C` or `SIGTERM` cancels the
+watcher cleanly.
 
 `duckdb serve` accepts the same serve flags as
-[`pg serve`](/pg-sync/#agentsview-pg-serve) (`--host`, `--port`,
-`--base-path`, proxy and TLS flags) and is read-only in the same
-way — no uploads, file watching, or local sync.
+[`pg serve`](/pg-sync/#agentsview-pg-serve) (`--host`, `--port`, `--base-path`,
+proxy and TLS flags) and is read-only in the same way — no uploads, file
+watching, or local sync.
 
 ## Quack Remote Access
 
-[Quack](https://duckdb.org/docs/current/core_extensions/quack)
-is DuckDB's remote-access extension: it turns a DuckDB instance
-into a server that other DuckDB clients can attach to over
-`quack:` URIs. AgentsView uses it to serve the web UI on one
-machine from a mirror that lives on another:
+[Quack](https://duckdb.org/docs/current/core_extensions/quack) is DuckDB's
+remote-access extension: it turns a DuckDB instance into a server that other
+DuckDB clients can attach to over `quack:` URIs. AgentsView uses it to serve the
+web UI on one machine from a mirror that lives on another:
 
 ```bash
 # Machine A: expose the local mirror over loopback Quack
@@ -69,12 +77,12 @@ agentsview duckdb serve
 
 `duckdb quack serve` flags:
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--bind` | `quack:127.0.0.1:9494` | Quack bind URI |
-| `--path` | `[duckdb].path` | DuckDB mirror file to expose |
-| `--token` | (required unless configured) | Quack authentication token |
-| `--allow-insecure` | `false` | Allow binding beyond loopback |
+| Flag               | Default                      | Description                |
+| ------------------ | ---------------------------- | -------------------------- |
+| `--bind`           | `quack:127.0.0.1:9494`       | Quack bind URI             |
+| `--path`           | `[duckdb].path`              | DuckDB mirror file to expose |
+| `--token`          | (required unless configured) | Quack authentication token |
+| `--allow-insecure` | `false`                      | Allow binding beyond loopback |
 
 Safety defaults:
 
@@ -88,8 +96,7 @@ Safety defaults:
 
 ## Configuration
 
-DuckDB settings live in a `[duckdb]` section of
-`~/.agentsview/config.toml`:
+DuckDB settings live in a `[duckdb]` section of `~/.agentsview/config.toml`:
 
 ```toml
 [duckdb]
@@ -102,38 +109,35 @@ projects = ["alpha", "beta"]
 # or: exclude_projects = ["scratch"]
 ```
 
-| Field | Default | Description |
-|-------|---------|-------------|
-| `path` | `~/.agentsview/sessions.duckdb` | Local DuckDB mirror file |
-| `url` | | Remote Quack endpoint for `duckdb serve` (`quack:` URI) |
-| `token` | | Quack authentication token |
-| `machine_name` | OS hostname | Identifies the pushing machine |
-| `allow_insecure` | `false` | Allow plain-HTTP Quack beyond loopback |
-| `projects` | | Array of project names to include in push |
-| `exclude_projects` | | Array of project names to exclude from push |
+| Field              | Default                         | Description                                                                                 |
+| ------------------ | ------------------------------- | ------------------------------------------------------------------------------------------- |
+| `path`             | `~/.agentsview/sessions.duckdb` | Local DuckDB mirror file                                                                    |
+| `url`              |                                 | Remote Quack endpoint for `duckdb push`, `duckdb status`, and `duckdb serve` (`quack:` URI) |
+| `token`            |                                 | Quack authentication token                                                                  |
+| `machine_name`     | OS hostname                     | Identifies the pushing machine                                                              |
+| `allow_insecure`   | `false`                         | Allow plain-HTTP Quack beyond loopback                                                      |
+| `projects`         |                                 | Array of project names to include in push                                                   |
+| `exclude_projects` |                                 | Array of project names to exclude from push                                                 |
 
 Environment variables override the config file:
 
-| Variable | Description |
-|----------|-------------|
-| `AGENTSVIEW_DUCKDB_PATH` | Local DuckDB mirror file path |
-| `AGENTSVIEW_DUCKDB_URL` | Remote Quack endpoint URL |
-| `AGENTSVIEW_DUCKDB_TOKEN` | Quack authentication token |
-| `AGENTSVIEW_DUCKDB_MACHINE` | Machine name override |
+| Variable                    | Description                   |
+| --------------------------- | ----------------------------- |
+| `AGENTSVIEW_DUCKDB_PATH`    | Local DuckDB mirror file path |
+| `AGENTSVIEW_DUCKDB_URL`     | Remote Quack endpoint URL for push, status, and serve |
+| `AGENTSVIEW_DUCKDB_TOKEN`   | Quack authentication token    |
+| `AGENTSVIEW_DUCKDB_MACHINE` | Machine name override         |
 
 ## Limitations
 
-- **One-way mirror** — data flows from SQLite to DuckDB only,
-  via explicit `duckdb push`. There is no watch mode yet; rerun
-  the push to refresh the mirror.
-- **Search is unindexed** — DuckDB-backed search uses
-  substring/regex matching rather than the FTS5 index that
-  local SQLite serving uses, so content search is slower on
-  large archives.
-- **No Windows ARM64 support** — the upstream
-  `duckdb-go-bindings` ship no prebuilt DuckDB library for
-  `windows/arm64`, so `agentsview duckdb` subcommands report a
-  clear error on that platform. Everything SQLite-backed works
-  normally. On all other platforms the DuckDB driver is linked
-  into the standard binary (which grows it considerably — this
-  is expected).
+- **One-way mirror** — data flows from SQLite to DuckDB only, via `duckdb push`
+  or the foreground `duckdb push --watch` process. DuckDB and Quack are read
+  backends; they do not ingest session files directly.
+- **Search is unindexed** — DuckDB-backed search uses substring/regex matching
+  rather than the FTS5 index that local SQLite serving uses, so content search
+  is slower on large archives.
+- **No Windows ARM64 support** — the upstream `duckdb-go-bindings` ship no
+  prebuilt DuckDB library for `windows/arm64`, so `agentsview duckdb`
+  subcommands report a clear error on that platform. Everything SQLite-backed
+  works normally. On all other platforms the DuckDB driver is linked into the
+  standard binary (which grows it considerably — this is expected).

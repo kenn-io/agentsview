@@ -328,6 +328,19 @@ func TestLoadMinimal_PreservesCursorAdminEnvOverFile(t *testing.T) {
 	assert.Equal(t, "env-user", cfg.CursorAdminUserID)
 }
 
+func TestLoadMinimal_PreservesAuthTokenEnvOverFile(t *testing.T) {
+	dir := setupTestEnv(t)
+	writeConfig(t, dir, map[string]any{
+		"auth_token": "file-token",
+	})
+	t.Setenv("AGENTSVIEW_AUTH_TOKEN", "env-token")
+
+	cfg, err := LoadMinimal()
+	require.NoError(t, err)
+
+	assert.Equal(t, "env-token", cfg.AuthToken)
+}
+
 func TestLoad_AppliesExplicitFlags(t *testing.T) {
 	cfg, err := loadConfigFromFlags(t, "-host", "0.0.0.0", "-port", "9090")
 	require.NoError(t, err)
