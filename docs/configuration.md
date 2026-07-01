@@ -31,6 +31,8 @@ self-exits after an idle period. Read-only CLI commands can still open
 `AGENTSVIEW_NO_DAEMON=1` for scripts or CI jobs that must never auto-start a
 daemon.
 
+Cursor attribution stats read `~/.cursor/ai-tracking/ai-code-tracking.db` by default. Set `AGENTSVIEW_CURSOR_ATTRIBUTION_DB` when Cursor stores that database somewhere else on the host you are inspecting.
+
 ## Config File
 
 The config file at `~/.agentsview/config.toml` is auto-created on first run. It

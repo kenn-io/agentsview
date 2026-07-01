@@ -335,6 +335,7 @@ thread JSON files.
 
 Each directory can be overridden with an environment variable. See the
 [configuration docs](https://agentsview.io/configuration/) for details.
+Cursor attribution stats read `~/.cursor/ai-tracking/ai-code-tracking.db` by default and can be redirected with `AGENTSVIEW_CURSOR_ATTRIBUTION_DB`.
 
 ### Aider: per-repo Markdown logs
 

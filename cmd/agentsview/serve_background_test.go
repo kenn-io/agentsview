@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -814,6 +817,70 @@ func TestEnsureBackgroundServeReplacementWaitsForExternalStartLock(
 			assert.Equal(t, newPort, rt.Port)
 		})
 	}
+}
+
+func TestEnsureBackgroundServeReprobesWhenExternalStartupFinishesBeforeWait(
+	t *testing.T,
+) {
+	dir := runtimeTestDir(t)
+	setTestVersion(t, "1.1.0")
+	unlockStart := holdExternalDaemonStartLock(t, dir)
+
+	newDaemon := newPingDaemon(t)
+	published := make(chan error, 1)
+	ping := daemon.NewPingHandler(daemon.PingHandlerOptions{
+		Service: daemonService,
+		Version: "test",
+	})
+	var publishOnce sync.Once
+	oldServer := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter, r *http.Request,
+	) {
+		publishOnce.Do(func() {
+			RemoveDaemonRuntime(dir)
+			_, err := WriteDaemonRuntime(
+				dir, newDaemon.Host, newDaemon.Port, "1.1.0", false,
+			)
+			unlockStart()
+			published <- err
+		})
+		ping.ServeHTTP(w, r)
+	}))
+	t.Cleanup(oldServer.Close)
+	oldDaemon := serverEndpoint(t, oldServer)
+	_, err := WriteDaemonRuntime(
+		dir, oldDaemon.Host, oldDaemon.Port, "1.0.0", false,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
+
+	forbidStopDaemonRuntimeForUpgrade(t,
+		"auto-start replacement must re-probe after foreground startup wins")
+	oldStart := startServeBackgroundProcessForEnsure
+	startServeBackgroundProcessForEnsure = func(
+		config.Config, []string,
+	) (*exec.Cmd, string, error) {
+		t.Fatal("auto-start must not spawn after foreground startup wins")
+		return nil, "", nil
+	}
+	t.Cleanup(func() {
+		startServeBackgroundProcessForEnsure = oldStart
+	})
+
+	cfg := config.Config{DataDir: dir}
+	rt, err := ensureBackgroundServe(
+		context.Background(), &cfg, time.Second,
+	)
+
+	select {
+	case publishErr := <-published:
+		require.NoError(t, publishErr)
+	case <-time.After(time.Second):
+		t.Fatal("old daemon probe did not publish replacement runtime")
+	}
+	require.NoError(t, err)
+	require.NotNil(t, rt)
+	assert.Equal(t, newDaemon.Port, rt.Port)
 }
 
 func TestEnsureBackgroundServeLaunchLoserReplacesStaleDaemonAfterStartup(

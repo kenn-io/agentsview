@@ -3,6 +3,7 @@ package service_test
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -51,6 +53,104 @@ func newDirectTestSvc(t *testing.T) (service.SessionService, *directTestEnv) {
 	return service.NewDirectBackend(d, nil), &directTestEnv{db: d}
 }
 
+type cursorCommitFixture struct {
+	commitHash           string
+	scoredAt             int64
+	commitDate           string
+	linesAdded           int64
+	linesDeleted         int64
+	tabLinesAdded        int64
+	tabLinesDeleted      int64
+	composerLinesAdded   int64
+	composerLinesDeleted int64
+	humanLinesAdded      int64
+	humanLinesDeleted    int64
+	blankLinesAdded      int64
+	blankLinesDeleted    int64
+}
+
+type cursorConversationFixture struct {
+	model     string
+	mode      string
+	updatedAt int64
+}
+
+func formatCursorCommitDate(t time.Time) string {
+	return t.Format("Mon Jan 2 15:04:05 2006 -0700")
+}
+
+func seedCursorAttributionDB(
+	t *testing.T,
+	commits []cursorCommitFixture,
+	conversations []cursorConversationFixture,
+) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ai-code-tracking.db")
+	conn, err := sql.Open("sqlite3", path)
+	require.NoError(t, err, "open cursor attribution db")
+	t.Cleanup(func() { _ = conn.Close() })
+
+	_, err = conn.Exec(`
+		CREATE TABLE scored_commits (
+			commitHash TEXT PRIMARY KEY,
+			scoredAt INTEGER NOT NULL,
+			commitDate TEXT NOT NULL,
+			linesAdded INTEGER NOT NULL DEFAULT 0,
+			linesDeleted INTEGER NOT NULL DEFAULT 0,
+			tabLinesAdded INTEGER NOT NULL DEFAULT 0,
+			tabLinesDeleted INTEGER NOT NULL DEFAULT 0,
+			composerLinesAdded INTEGER NOT NULL DEFAULT 0,
+			composerLinesDeleted INTEGER NOT NULL DEFAULT 0,
+			humanLinesAdded INTEGER NOT NULL DEFAULT 0,
+			humanLinesDeleted INTEGER NOT NULL DEFAULT 0,
+			blankLinesAdded INTEGER NOT NULL DEFAULT 0,
+			blankLinesDeleted INTEGER NOT NULL DEFAULT 0
+		)
+	`)
+	require.NoError(t, err, "create scored_commits table")
+	_, err = conn.Exec(`
+		CREATE TABLE conversation_summaries (
+			model TEXT NOT NULL,
+			mode TEXT NOT NULL,
+			updatedAt INTEGER NOT NULL
+		)
+	`)
+	require.NoError(t, err, "create conversation_summaries table")
+
+	for _, commit := range commits {
+		_, err := conn.Exec(`
+			INSERT INTO scored_commits (
+				commitHash, scoredAt, commitDate,
+				linesAdded, linesDeleted,
+				tabLinesAdded, tabLinesDeleted,
+				composerLinesAdded, composerLinesDeleted,
+				humanLinesAdded, humanLinesDeleted,
+				blankLinesAdded, blankLinesDeleted
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			commit.commitHash, commit.scoredAt, commit.commitDate,
+			commit.linesAdded, commit.linesDeleted,
+			commit.tabLinesAdded, commit.tabLinesDeleted,
+			commit.composerLinesAdded, commit.composerLinesDeleted,
+			commit.humanLinesAdded, commit.humanLinesDeleted,
+			commit.blankLinesAdded, commit.blankLinesDeleted,
+		)
+		require.NoError(t, err, "insert scored_commit %s", commit.commitHash)
+	}
+
+	for i, convo := range conversations {
+		_, err := conn.Exec(`
+			INSERT INTO conversation_summaries (
+				model, mode, updatedAt
+			) VALUES (?, ?, ?)`,
+			convo.model, convo.mode, convo.updatedAt,
+		)
+		require.NoError(t, err, "insert conversation_summary %d", i)
+	}
+
+	return path
+}
+
 func TestDirectBackend_Get_Roundtrip(t *testing.T) {
 	t.Parallel()
 	svc, env := newDirectTestSvc(t)
@@ -60,6 +160,219 @@ func TestDirectBackend_Get_Roundtrip(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, detail)
 	assert.Equal(t, sessionID, detail.ID)
+}
+
+func TestDirectBackend_Stats_CursorAttribution(t *testing.T) {
+	svc, env := newDirectTestSvc(t)
+	now := time.Now().UTC()
+	startedAt := now.Add(-2 * time.Hour).Format(time.RFC3339)
+	dbtest.SeedSession(t, env.db, "cursor-1", "proj",
+		func(s *db.Session) {
+			s.Agent = "cursor"
+			s.MessageCount = 2
+			s.UserMessageCount = 1
+			s.StartedAt = &startedAt
+		},
+	)
+
+	path := seedCursorAttributionDB(t,
+		[]cursorCommitFixture{
+			{
+				commitHash:         "c1",
+				scoredAt:           now.Add(-110 * time.Minute).UnixMilli(),
+				commitDate:         formatCursorCommitDate(now.Add(48 * time.Hour)),
+				linesAdded:         12,
+				linesDeleted:       4,
+				tabLinesAdded:      6,
+				composerLinesAdded: 2,
+				humanLinesAdded:    4,
+				blankLinesAdded:    2,
+			},
+			{
+				commitHash:         "c2",
+				scoredAt:           now.Add(-90 * time.Minute).UnixMilli(),
+				commitDate:         formatCursorCommitDate(now.Add(-90 * time.Minute)),
+				linesAdded:         6,
+				linesDeleted:       2,
+				composerLinesAdded: 2,
+				humanLinesAdded:    1,
+				blankLinesAdded:    1,
+			},
+		},
+		[]cursorConversationFixture{
+			{
+				model:     "claude-3.5-sonnet",
+				mode:      "composer",
+				updatedAt: now.Add(-110 * time.Minute).UnixMilli(),
+			},
+			{
+				model:     "claude-3.5-sonnet",
+				mode:      "composer",
+				updatedAt: now.Add(-90 * time.Minute).UnixMilli(),
+			},
+		},
+	)
+	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB", path)
+
+	stats, err := svc.Stats(context.Background(), service.StatsFilter{
+		Since: "28d",
+		Agent: "cursor",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, stats)
+	require.NotNil(t, stats.CursorAttribution)
+	assert.Equal(t, int64(2), stats.CursorAttribution.ScoredCommits)
+	assert.Equal(t, int64(18), stats.CursorAttribution.LinesAdded)
+	assert.InDelta(t, 10.0/18.0, stats.CursorAttribution.AIAuthoredPct, 1e-9)
+	require.Len(t, stats.CursorAttribution.ConversationCounts, 1)
+	assert.Equal(
+		t,
+		"claude-3.5-sonnet",
+		stats.CursorAttribution.ConversationCounts[0].Model,
+	)
+}
+
+func TestDirectBackend_Stats_CursorAttributionIgnoredForNonCursorFilter(
+	t *testing.T,
+) {
+	svc, _ := newDirectTestSvc(t)
+	badPath := filepath.Join(t.TempDir(), "ai-code-tracking.db")
+	require.NoError(t, os.WriteFile(badPath, []byte("not sqlite"), 0o600))
+	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB", badPath)
+
+	stats, err := svc.Stats(context.Background(), service.StatsFilter{
+		Since: "28d",
+		Agent: "codex",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, stats)
+	assert.Nil(t, stats.CursorAttribution)
+}
+
+func TestDirectBackend_Stats_CursorAttributionIgnoredForProjectFilters(
+	t *testing.T,
+) {
+	svc, _ := newDirectTestSvc(t)
+	now := time.Now().UTC()
+	path := seedCursorAttributionDB(t,
+		[]cursorCommitFixture{{
+			commitHash:         "c1",
+			scoredAt:           now.Add(-30 * time.Minute).UnixMilli(),
+			commitDate:         formatCursorCommitDate(now.Add(-30 * time.Minute)),
+			linesAdded:         9,
+			tabLinesAdded:      4,
+			composerLinesAdded: 2,
+			humanLinesAdded:    3,
+		}},
+		nil,
+	)
+	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB", path)
+
+	for _, filter := range []service.StatsFilter{
+		{Since: "28d", Agent: "cursor", IncludeProjects: []string{"proj"}},
+		{Since: "28d", Agent: "cursor", ExcludeProjects: []string{"proj"}},
+	} {
+		stats, err := svc.Stats(context.Background(), filter)
+		require.NoError(t, err)
+		require.NotNil(t, stats)
+		assert.Nil(t, stats.CursorAttribution)
+	}
+}
+
+func TestDirectBackend_Stats_CursorAttributionLoadedForAllAgentFilter(
+	t *testing.T,
+) {
+	svc, env := newDirectTestSvc(t)
+	now := time.Now().UTC()
+	startedAt := now.Add(-45 * time.Minute).Format(time.RFC3339)
+	dbtest.SeedSession(t, env.db, "cursor-1", "proj",
+		func(s *db.Session) {
+			s.Agent = "cursor"
+			s.MessageCount = 2
+			s.UserMessageCount = 1
+			s.StartedAt = &startedAt
+		},
+	)
+	dbtest.SeedSession(t, env.db, "codex-1", "proj",
+		func(s *db.Session) {
+			s.Agent = "codex"
+			s.MessageCount = 2
+			s.UserMessageCount = 1
+			s.StartedAt = &startedAt
+		},
+	)
+
+	path := seedCursorAttributionDB(t,
+		[]cursorCommitFixture{{
+			commitHash:         "c1",
+			scoredAt:           now.Add(-30 * time.Minute).UnixMilli(),
+			commitDate:         formatCursorCommitDate(now.Add(-30 * time.Minute)),
+			linesAdded:         9,
+			tabLinesAdded:      4,
+			composerLinesAdded: 2,
+			humanLinesAdded:    3,
+		}},
+		nil,
+	)
+	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB", path)
+
+	stats, err := svc.Stats(context.Background(), service.StatsFilter{
+		Since: "28d",
+		Agent: "all",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, stats)
+	assert.Equal(t, 2, stats.Totals.SessionsAll)
+	require.NotNil(t, stats.CursorAttribution)
+	assert.Equal(t, int64(1), stats.CursorAttribution.ScoredCommits)
+}
+
+func TestDirectBackend_Stats_CursorAttributionIgnoredWhenAllMixedWithNonCursorFilter(
+	t *testing.T,
+) {
+	svc, env := newDirectTestSvc(t)
+	now := time.Now().UTC()
+	startedAt := now.Add(-45 * time.Minute).Format(time.RFC3339)
+	dbtest.SeedSession(t, env.db, "cursor-1", "proj",
+		func(s *db.Session) {
+			s.Agent = "cursor"
+			s.MessageCount = 2
+			s.UserMessageCount = 1
+			s.StartedAt = &startedAt
+		},
+	)
+	dbtest.SeedSession(t, env.db, "codex-1", "proj",
+		func(s *db.Session) {
+			s.Agent = "codex"
+			s.MessageCount = 2
+			s.UserMessageCount = 1
+			s.StartedAt = &startedAt
+		},
+	)
+
+	path := seedCursorAttributionDB(t,
+		[]cursorCommitFixture{{
+			commitHash:         "c1",
+			scoredAt:           now.Add(-30 * time.Minute).UnixMilli(),
+			commitDate:         formatCursorCommitDate(now.Add(-30 * time.Minute)),
+			linesAdded:         9,
+			tabLinesAdded:      4,
+			composerLinesAdded: 2,
+			humanLinesAdded:    3,
+		}},
+		nil,
+	)
+	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB", path)
+
+	stats, err := svc.Stats(context.Background(), service.StatsFilter{
+		Since: "28d",
+		Agent: "all, codex",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, stats)
+	assert.Equal(t, 1, stats.Totals.SessionsAll)
+	assert.Equal(t, "codex", stats.Filters.Agent)
+	assert.Nil(t, stats.CursorAttribution)
 }
 
 func TestDirectBackend_Get_HealthBreakdownIncludesHeuristics(
