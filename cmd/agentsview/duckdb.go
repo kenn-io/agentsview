@@ -10,6 +10,8 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sort"
+	"strings"
 	"syscall"
 	"time"
 
@@ -54,6 +56,13 @@ func runDuckDBPush(cfg DuckDBPushConfig) {
 	if err != nil {
 		fatal("duckdb push: %v", err)
 	}
+	if err := duckdbsync.ValidatePushTarget(duckCfg); err != nil {
+		fatal("duckdb push: %v", err)
+	}
+	syncStateTarget := duckdbsync.SyncStateTargetForConfig(duckCfg)
+	writeDuckDBPushPlan(
+		os.Stdout, duckCfg, cfg, projects, excludeProjects, syncStateTarget,
+	)
 
 	ctx, stop := signal.NotifyContext(
 		context.Background(), duckDBLongRunningSignals()...,
@@ -87,6 +96,7 @@ func runDuckDBPush(cfg DuckDBPushConfig) {
 	if err != nil {
 		fatal("duckdb push: %v", err)
 	}
+	writeDuckDBPushDiagnostics(os.Stdout, result)
 	fmt.Printf(
 		"Pushed %d sessions, %d messages to DuckDB in %s\n",
 		result.SessionsPushed,
@@ -96,6 +106,84 @@ func runDuckDBPush(cfg DuckDBPushConfig) {
 	if result.Errors > 0 {
 		fatal("duckdb push: %d session(s) failed", result.Errors)
 	}
+}
+
+func writeDuckDBPushPlan(
+	w io.Writer,
+	duckCfg config.DuckDBConfig,
+	cfg DuckDBPushConfig,
+	projects []string,
+	excludeProjects []string,
+	syncStateTarget string,
+) {
+	target := "local file " + duckCfg.Path
+	if duckCfg.URL != "" {
+		target = "remote Quack endpoint"
+	}
+	mode := "incremental"
+	if cfg.Full {
+		mode = "full"
+	}
+	scope := "default"
+	if syncStateTarget != "" {
+		scope = syncStateTarget
+	}
+	fmt.Fprintf(
+		w,
+		"DuckDB push target: %s; machine %q; mode %s; sync scope %s\n",
+		target, duckCfg.MachineName, mode, scope,
+	)
+	fmt.Fprintf(
+		w, "DuckDB push filters: %s\n",
+		formatDuckDBPushFilters(projects, excludeProjects),
+	)
+}
+
+func writeDuckDBPushDiagnostics(w io.Writer, result duckdbsync.PushResult) {
+	if result.Diagnostics.Cutoff == "" {
+		return
+	}
+	fmt.Fprintf(
+		w,
+		"DuckDB push source: local %s; candidates %s; skipped unchanged %s; stale deleted %d\n",
+		formatDuckDBPushSessionCounts(result.Diagnostics.LocalSessions),
+		formatDuckDBPushSessionCounts(result.Diagnostics.CandidateSessions),
+		formatDuckDBPushSessionCounts(result.Diagnostics.SkippedUnchangedSessions),
+		result.Diagnostics.DeletedStaleSessions,
+	)
+	fmt.Fprintf(
+		w,
+		"DuckDB push wrote: sessions %s, messages %d\n",
+		formatDuckDBPushSessionCounts(result.Diagnostics.PushedSessions),
+		result.MessagesPushed,
+	)
+}
+
+func formatDuckDBPushFilters(projects []string, excludeProjects []string) string {
+	switch {
+	case len(projects) > 0:
+		return "include projects " + strings.Join(projects, ", ")
+	case len(excludeProjects) > 0:
+		return "exclude projects " + strings.Join(excludeProjects, ", ")
+	default:
+		return "all projects"
+	}
+}
+
+func formatDuckDBPushSessionCounts(counts duckdbsync.PushSessionCounts) string {
+	if len(counts.ByAgent) == 0 {
+		return fmt.Sprintf("%d", counts.Total)
+	}
+	agents := make([]string, 0, len(counts.ByAgent))
+	for agent := range counts.ByAgent {
+		agents = append(agents, agent)
+	}
+	sort.Strings(agents)
+	parts := make([]string, 0, len(agents))
+	for _, agent := range agents {
+		parts = append(parts, fmt.Sprintf("%s=%d", agent, counts.ByAgent[agent]))
+	}
+	return fmt.Sprintf("%d (%s)", counts.Total, strings.Join(parts, ", "))
 }
 
 func duckDBLongRunningSignals() []os.Signal {
@@ -210,9 +298,15 @@ func runDuckDBServe(appCfg config.Config, basePath string) {
 			fatal("duckdb serve: schema migration failed: %v", err)
 		}
 	}
-	if err := duckdbsync.CheckSchemaCompat(ctx, store.DB()); err != nil {
+	var schemaErr error
+	if duckCfg.URL == "" {
+		schemaErr = duckdbsync.CheckSchemaCompat(ctx, store.DB())
+	} else {
+		schemaErr = duckdbsync.CheckSchemaCompatViaQuack(ctx, store.DB())
+	}
+	if schemaErr != nil {
 		fatal("duckdb serve: schema incompatible: %v\n"+
-			"Run 'agentsview duckdb push --full' to repopulate the mirror.", err)
+			"Run 'agentsview duckdb push --full' to repopulate the mirror.", schemaErr)
 	}
 
 	rtOpts := serveRuntimeOptions{

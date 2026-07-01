@@ -303,6 +303,43 @@ func TestSanitizeMessageContentLengthDelta(t *testing.T) {
 	})
 }
 
+func TestSanitizeMessageStripsNULFromResultContent(t *testing.T) {
+	resultRaw := "tool\x00result"
+	resultClean := "toolresult"
+	eventRaw := "event\x00content"
+	eventClean := "eventcontent"
+	m := db.Message{
+		Role: "assistant",
+		ToolCalls: []db.ToolCall{{
+			ToolUseID:           "tu1",
+			ToolName:            "Bash",
+			Category:            "Bash",
+			ResultContent:       resultRaw,
+			ResultContentLength: len(resultRaw),
+			ResultEvents: []db.ToolResultEvent{{
+				Source:        "wait_output",
+				Status:        "completed",
+				Content:       eventRaw,
+				ContentLength: len(eventRaw),
+			}},
+		}},
+	}
+
+	stats := sanitizeMessage(&m)
+
+	require.Len(t, m.ToolCalls, 1)
+	tc := m.ToolCalls[0]
+	assert.Equal(t, resultClean, tc.ResultContent)
+	assert.Equal(t, len(resultClean), tc.ResultContentLength)
+	require.Len(t, tc.ResultEvents, 1)
+	assert.Equal(t, eventClean, tc.ResultEvents[0].Content)
+	assert.Equal(t, len(eventClean), tc.ResultEvents[0].ContentLength)
+	assert.Equal(t, 2, stats.ControlCharsStripped)
+
+	second := sanitizeMessage(&m)
+	assert.Equal(t, validationStats{}, second, "second pass must be a no-op")
+}
+
 func TestSanitizeUsageEvent(t *testing.T) {
 	ev := db.UsageEvent{
 		Source:                   "api\x1bcall",
@@ -426,6 +463,19 @@ func TestValidateAndSanitizeIdempotent(t *testing.T) {
 			OutputTokens:  -10,
 			Timestamp:     "2999-01-01T00:00:00Z",
 			SourceUUID:    "uuid\x00val",
+			ToolCalls: []db.ToolCall{{
+				ToolUseID:           "tu1",
+				ToolName:            "Bash",
+				Category:            "Bash",
+				ResultContent:       "tool\x00result",
+				ResultContentLength: len("tool\x00result"),
+				ResultEvents: []db.ToolResultEvent{{
+					Source:        "wait_output",
+					Status:        "completed",
+					Content:       "event\x00content",
+					ContentLength: len("event\x00content"),
+				}},
+			}},
 		},
 		{
 			Role:      "assistant",

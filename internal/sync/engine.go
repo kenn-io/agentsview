@@ -3428,9 +3428,10 @@ type processResult struct {
 	// forceReplace requests full message replacement on write,
 	// even when the existing rows would otherwise be left in
 	// place. Set when a fall-through to full parse is recovering
-	// from a cross-sync streaming split: the new merged messages
-	// reuse the existing ordinals, so the default append-only
-	// writeMessages would silently drop the rewrite.
+	// from stale stored rows, such as an atomic file replacement
+	// or cross-sync streaming split. In those cases the parsed
+	// messages can reuse existing ordinals, so the default
+	// append-only writeMessages would silently drop the rewrite.
 	forceReplace bool
 	cacheKey     string
 	// retrySessionIDs carries provider per-result data-version state.
@@ -3647,11 +3648,16 @@ func (e *Engine) processProviderFile(
 	// parse entirely. This reproduces the legacy process arm's
 	// shouldSkipFile gate so an unchanged session is not re-parsed on
 	// every full sync.
-	if mtime, fresh := e.providerSingleSessionFresh(ctx, provider, source, file); fresh {
+	sourceForceReplace := false
+	if mtime, fresh, forceReplace := e.providerSingleSessionFresh(
+		ctx, provider, source, file,
+	); fresh {
 		return processResult{
 			skip:  true,
 			mtime: mtime,
 		}, true
+	} else if forceReplace {
+		sourceForceReplace = true
 	}
 	if freshMtime, fresh := e.providerSourceFreshBeforeFingerprint(source, file); fresh {
 		return processResult{
@@ -3720,7 +3726,7 @@ func (e *Engine) processProviderFile(
 		incRes.cacheKey = cacheKey
 		return incRes, true
 	}
-	incForceReplace := incRes.forceReplace
+	incForceReplace := sourceForceReplace || incRes.forceReplace
 
 	// DB-stored fingerprint skip. The provider has no database handle, so the
 	// engine reproduces the legacy DB-aware skip that single-session JSONL
@@ -3730,7 +3736,7 @@ func (e *Engine) processProviderFile(
 	// engine). For Codex this also folds in the session_index.jsonl sidecar:
 	// a shared index mtime bump that did not change this session's title must
 	// not trigger a reparse.
-	if !e.forceParse && !file.ForceParse &&
+	if !incForceReplace && !e.forceParse && !file.ForceParse &&
 		e.shouldSkipProviderSourceByDB(file, fingerprint) {
 		return processResult{
 			skip:        true,
@@ -3751,7 +3757,7 @@ func (e *Engine) processProviderFile(
 	// a provider whose fingerprint mtime differs from the stored value simply
 	// reparses, matching the prior behavior. Claude and Cowork have their own
 	// earlier freshness checks; this is the generic fallback for the rest.
-	if !e.forceParse && !file.ForceParse &&
+	if !incForceReplace && !e.forceParse && !file.ForceParse &&
 		e.providerSourceUnchangedInDB(source, fingerprint) {
 		return processResult{
 			skip:      true,
@@ -4446,7 +4452,7 @@ func (e *Engine) providerSingleSessionFresh(
 	provider parser.Provider,
 	source parser.SourceRef,
 	file parser.DiscoveredFile,
-) (int64, bool) {
+) (int64, bool, bool) {
 	// Match the legacy shouldSkipFile gate, which keyed off the
 	// engine-wide forceParse (parse-diff) flag only. A per-file
 	// ForceParse (set by SyncSingleSession to bypass the error skip
@@ -4454,7 +4460,7 @@ func (e *Engine) providerSingleSessionFresh(
 	// is still skipped so a single-session resync does not, for example,
 	// reapply a worktree project mapping to a file that has not changed.
 	if e.forceParse {
-		return 0, false
+		return 0, false, false
 	}
 	// Claude is the single-physical-file provider that takes the
 	// append-only incremental path. Its source stem is the session ID,
@@ -4462,15 +4468,15 @@ func (e *Engine) providerSingleSessionFresh(
 	// can later split the file into several sessions.
 	if provider.Capabilities().Source.IncrementalAppend !=
 		parser.CapabilitySupported {
-		return 0, false
+		return 0, false, false
 	}
 	path := providerDiscoveredPath(source)
 	if path == "" {
-		return 0, false
+		return 0, false, false
 	}
 	sessionID := claudeSessionIDFromPath(path)
 	if sessionID == "" {
-		return 0, false
+		return 0, false, false
 	}
 	lookupPath := path
 	if e.pathRewriter != nil {
@@ -4480,16 +4486,32 @@ func (e *Engine) providerSingleSessionFresh(
 	if err != nil {
 		info, err = os.Stat(path)
 		if err != nil {
-			return 0, false
+			return 0, false, false
 		}
 	}
 	if !e.shouldSkipFile(sessionID, info) {
-		return 0, false
+		return 0, false, false
+	}
+	if e.providerIncrementalIdentityChanged(lookupPath, info) {
+		return 0, false, true
 	}
 	sess, _ := e.db.GetSession(ctx, e.idPrefix+sessionID)
 	return info.ModTime().UnixNano(), sess != nil &&
 		sess.Project != "" &&
-		!parser.NeedsProjectReparse(sess.Project)
+		!parser.NeedsProjectReparse(sess.Project), false
+}
+
+func (e *Engine) providerIncrementalIdentityChanged(
+	lookupPath string,
+	info os.FileInfo,
+) bool {
+	if e.pathRewriter != nil {
+		// Remote imports rewrite per-run temp paths to stable source paths;
+		// the temp inode is expected to change between identical downloads.
+		return false
+	}
+	curInode, curDevice := getFileIdentity(info)
+	return e.db.FileIdentityChanged(lookupPath, curInode, curDevice)
 }
 
 func (e *Engine) providerSourceFreshBeforeFingerprint(
@@ -4722,7 +4744,7 @@ func (e *Engine) tryIncrementalJSONL(
 	// state. Only check when both sides have a known identity
 	// (non-zero); zeros mean the data is missing or the
 	// platform doesn't expose inode/device (Windows).
-	if inc.FileInode != 0 && inc.FileDevice != 0 {
+	if e.pathRewriter == nil && inc.FileInode != 0 && inc.FileDevice != 0 {
 		curInode, curDevice := getFileIdentity(info)
 		if curInode != 0 && curDevice != 0 &&
 			(curInode != inc.FileInode ||

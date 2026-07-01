@@ -2,7 +2,9 @@ package duckdb
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"slices"
 	"sort"
@@ -25,7 +27,7 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 		return nil
 	}
 
-	existing, err := listDuckModelPricing(ctx, s.duck)
+	existing, err := s.listDuckModelPricing(ctx)
 	if err != nil {
 		return err
 	}
@@ -44,8 +46,9 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 
 	for i := 0; i < len(prices); i += duckPricingUpsertBatch {
 		end := min(i+duckPricingUpsertBatch, len(prices))
-		query, args := duckPricingUpsertStatement(prices[i:end])
-		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+		batch := prices[i:end]
+		query, args := duckPricingUpsertStatement(batch)
+		if err := s.execMutation(ctx, tx, query, args...); err != nil {
 			return fmt.Errorf(
 				"syncing duckdb pricing batch starting at %d: %w",
 				i, err,
@@ -91,8 +94,9 @@ func duckPricingUpsertStatement(prices []db.ModelPricing) (string, []any) {
 	return b.String(), args
 }
 
-func listDuckModelPricing(ctx context.Context, duck *sql.DB) ([]db.ModelPricing, error) {
-	rows, err := duck.QueryContext(ctx,
+func (s *Sync) listDuckModelPricing(ctx context.Context) ([]db.ModelPricing, error) {
+	rows, err := queryDuckDBContext(
+		ctx, s.duck, s.connectionKind, s.quack,
 		`SELECT model_pattern, input_per_mtok,
 			output_per_mtok, cache_creation_per_mtok,
 			cache_read_per_mtok, updated_at
@@ -147,7 +151,7 @@ func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
 		_ = tx.Rollback()
 	}()
 
-	if err := bulkInsertCursorUsageEvents(ctx, tx, events); err != nil {
+	if err := s.bulkInsertCursorUsageEvents(ctx, tx, events); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -186,14 +190,14 @@ func (s *Sync) replaceStarredSessions(
 	}
 	if s.isFiltered() {
 		for _, sess := range sessions {
-			if _, err := tx.ExecContext(ctx,
+			if err := s.execMutation(ctx, tx,
 				`DELETE FROM starred_sessions WHERE session_id = ?`, sess.ID,
 			); err != nil {
 				return fmt.Errorf("clearing duckdb starred session %s: %w", sess.ID, err)
 			}
 		}
 	} else {
-		if _, err := tx.ExecContext(ctx, `
+		if err := s.execMutation(ctx, tx, `
 			DELETE FROM starred_sessions
 			WHERE session_id IN (
 				SELECT id FROM sessions WHERE machine = ?
@@ -217,49 +221,38 @@ func (s *Sync) replaceStarredSessions(
 }
 
 func (s *Sync) pushSession(
-	ctx context.Context, tx *sql.Tx, sess db.Session,
+	ctx context.Context, exec duckMutationExecutor, sess db.Session,
 ) (int, error) {
-	if err := upsertSession(ctx, tx, sess, s.machine); err != nil {
+	if err := s.upsertSession(ctx, exec, sess); err != nil {
 		return 0, err
 	}
-	if err := replaceSessionDependents(ctx, tx, sess.ID); err != nil {
+	if err := s.replaceSessionDependents(ctx, exec, sess.ID); err != nil {
 		return 0, err
 	}
-	if err := s.replaceUsageEvents(ctx, tx, sess.ID); err != nil {
+	if err := s.replaceUsageEvents(ctx, exec, sess.ID); err != nil {
 		return 0, err
 	}
 	msgs, err := s.local.GetAllMessages(ctx, sess.ID)
 	if err != nil {
 		return 0, fmt.Errorf("reading local messages for %s: %w", sess.ID, err)
 	}
-	if err := insertMessages(ctx, tx, msgs); err != nil {
+	if err := insertMessages(ctx, exec, msgs); err != nil {
 		return 0, err
 	}
-	toolCallKeys, err := upsertToolCalls(ctx, tx, msgs)
-	if err != nil {
+	if err := s.replaceToolRows(ctx, exec, sess.ID, msgs); err != nil {
 		return 0, err
 	}
-	eventKeys, err := upsertToolResultEvents(ctx, tx, msgs)
-	if err != nil {
+	if err := s.replaceSecretFindings(ctx, exec, sess.ID); err != nil {
 		return 0, err
 	}
-	if err := deleteStaleToolCalls(ctx, tx, sess.ID, toolCallKeys); err != nil {
-		return 0, err
-	}
-	if err := deleteStaleToolResultEvents(ctx, tx, sess.ID, eventKeys); err != nil {
-		return 0, err
-	}
-	if err := s.replaceSecretFindings(ctx, tx, sess.ID); err != nil {
-		return 0, err
-	}
-	if err := s.replacePinnedMessages(ctx, tx, sess.ID); err != nil {
+	if err := s.replacePinnedMessages(ctx, exec, sess.ID); err != nil {
 		return 0, err
 	}
 	return len(msgs), nil
 }
 
-func replaceSessionDependents(
-	ctx context.Context, tx *sql.Tx, sessionID string,
+func (s *Sync) replaceSessionDependents(
+	ctx context.Context, exec duckMutationExecutor, sessionID string,
 ) error {
 	for _, stmt := range []string{
 		`DELETE FROM pinned_messages WHERE session_id = ?`,
@@ -267,14 +260,14 @@ func replaceSessionDependents(
 		`DELETE FROM usage_events WHERE session_id = ?`,
 		`DELETE FROM messages WHERE session_id = ?`,
 	} {
-		if _, err := tx.ExecContext(ctx, stmt, sessionID); err != nil {
+		if err := s.execMutation(ctx, exec, stmt, sessionID); err != nil {
 			return fmt.Errorf("clearing duckdb session dependents: %w", err)
 		}
 	}
 	return nil
 }
 
-func deleteHardDeletedMirrorSessions(
+func (s *Sync) deleteHardDeletedMirrorSessions(
 	ctx context.Context, tx *sql.Tx, localSessions []db.Session,
 	machine string, projects, excludeProjects []string,
 ) ([]string, error) {
@@ -308,14 +301,16 @@ func deleteHardDeletedMirrorSessions(
 	}
 	sort.Strings(stale)
 	for _, id := range stale {
-		if err := deleteMirrorSession(ctx, tx, id); err != nil {
+		if err := s.deleteMirrorSession(ctx, tx, id); err != nil {
 			return nil, err
 		}
 	}
 	return stale, nil
 }
 
-func deleteMirrorSession(ctx context.Context, tx *sql.Tx, sessionID string) error {
+func (s *Sync) deleteMirrorSession(
+	ctx context.Context, tx *sql.Tx, sessionID string,
+) error {
 	for _, stmt := range []string{
 		`DELETE FROM pinned_messages WHERE session_id = ?`,
 		`DELETE FROM starred_sessions WHERE session_id = ?`,
@@ -326,7 +321,7 @@ func deleteMirrorSession(ctx context.Context, tx *sql.Tx, sessionID string) erro
 		`DELETE FROM messages WHERE session_id = ?`,
 		`DELETE FROM sessions WHERE id = ?`,
 	} {
-		if _, err := tx.ExecContext(ctx, stmt, sessionID); err != nil {
+		if err := s.execMutation(ctx, tx, stmt, sessionID); err != nil {
 			return fmt.Errorf("deleting hard-deleted duckdb session %s: %w", sessionID, err)
 		}
 	}
@@ -343,10 +338,317 @@ func projectInSyncScope(project string, projects, excludeProjects []string) bool
 	return !slices.Contains(excludeProjects, project)
 }
 
-func upsertSession(
-	ctx context.Context, tx *sql.Tx, sess db.Session, machine string,
+func (s *Sync) execMutation(
+	ctx context.Context, exec duckMutationExecutor, stmt string, args ...any,
 ) error {
-	_, err := tx.ExecContext(ctx, `
+	if s.connectionKind != duckDBQuackClientConnection {
+		_, err := exec.ExecContext(ctx, stmt, args...)
+		return err
+	}
+	if _, ok := exec.(*duckRemoteMutationBatch); ok {
+		_, err := exec.ExecContext(ctx, stmt, args...)
+		return err
+	}
+	// Quack attachments can accept plain inserts, but DELETE, UPDATE, and
+	// ON CONFLICT are planned against proxy storage and currently fail with
+	// GetStorageInfo errors. Run those mutations on the server-side base DB.
+	sqlText, err := duckSQLWithArgs(stmt, args...)
+	if err != nil {
+		return err
+	}
+	_, err = exec.ExecContext(ctx, "FROM "+quackAttachmentName+".query(?)", sqlText)
+	return err
+}
+
+type duckMutationExecutor interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+const duckRemoteMutationCoalesceMaxBytes = 16 << 20
+
+type duckRemoteMutationBatch struct {
+	statements     []string
+	statementBytes int
+}
+
+func (b *duckRemoteMutationBatch) ExecContext(
+	_ context.Context, stmt string, args ...any,
+) (sql.Result, error) {
+	sqlText, err := duckSQLWithArgs(stmt, args...)
+	if err != nil {
+		return nil, err
+	}
+	b.statements = append(b.statements, sqlText)
+	b.statementBytes += len(sqlText)
+	return duckNoopResult{}, nil
+}
+
+func (b *duckRemoteMutationBatch) Len() int {
+	return len(b.statements)
+}
+
+func (b *duckRemoteMutationBatch) appendBatch(other *duckRemoteMutationBatch) {
+	if other == nil || other.Len() == 0 {
+		return
+	}
+	b.statements = append(b.statements, other.statements...)
+	b.statementBytes += other.statementBytes
+}
+
+type duckNoopResult struct{}
+
+func (duckNoopResult) LastInsertId() (int64, error) { return 0, nil }
+func (duckNoopResult) RowsAffected() (int64, error) { return 0, nil }
+
+func (s *Sync) execRemoteMutationBatch(
+	ctx context.Context, label string, batch *duckRemoteMutationBatch, coalesce bool,
+) error {
+	exec := s.execRemoteSQLNoRetry
+	if coalesce {
+		exec = s.execRemoteSQLRetry
+	}
+	return execDuckRemoteMutationBatch(ctx, exec, label, batch, coalesce)
+}
+
+func appendDuckRemoteMutationBatch(
+	ctx context.Context,
+	execCoalesced func(context.Context, string) error,
+	execStatement func(context.Context, string) error,
+	label string,
+	current *duckRemoteMutationBatch,
+	next *duckRemoteMutationBatch,
+	maxBytes int,
+) (*duckRemoteMutationBatch, error) {
+	if current == nil {
+		current = &duckRemoteMutationBatch{}
+	}
+	if next == nil || next.Len() == 0 {
+		return current, nil
+	}
+	if maxBytes <= 0 {
+		maxBytes = duckRemoteMutationCoalesceMaxBytes
+	}
+	if next.transactionBytes() > maxBytes {
+		if err := execDuckRemoteMutationBatch(ctx, execCoalesced, label, current, true); err != nil {
+			return current, err
+		}
+		if err := execDuckRemoteMutationBatch(ctx, execStatement, label, next, false); err != nil {
+			return &duckRemoteMutationBatch{}, err
+		}
+		return &duckRemoteMutationBatch{}, nil
+	}
+	if current.Len() > 0 && current.combinedTransactionBytes(next) > maxBytes {
+		if err := execDuckRemoteMutationBatch(ctx, execCoalesced, label, current, true); err != nil {
+			return current, err
+		}
+		current = &duckRemoteMutationBatch{}
+	}
+	current.appendBatch(next)
+	return current, nil
+}
+
+func execDuckRemoteMutationBatch(
+	ctx context.Context,
+	exec func(context.Context, string) error,
+	label string,
+	batch *duckRemoteMutationBatch,
+	coalesce bool,
+) (err error) {
+	if batch.Len() == 0 {
+		return nil
+	}
+	if coalesce {
+		if err := exec(ctx, batch.transactionSQL()); err != nil {
+			if rollbackErr := exec(ctx, "ROLLBACK"); rollbackErr != nil {
+				return fmt.Errorf("%w; rollback %s: %v", err, label, rollbackErr)
+			}
+			return err
+		}
+		return nil
+	}
+	if err := exec(ctx, "BEGIN TRANSACTION"); err != nil {
+		return fmt.Errorf("begin %s: %w", label, err)
+	}
+	needsRollback := true
+	defer func() {
+		if !needsRollback {
+			return
+		}
+		rollbackErr := exec(ctx, "ROLLBACK")
+		if err != nil && rollbackErr != nil {
+			err = fmt.Errorf("%w; rollback %s: %v", err, label, rollbackErr)
+		}
+	}()
+	for i, stmt := range batch.statements {
+		if err := exec(ctx, stmt); err != nil {
+			return fmt.Errorf(
+				"execute %s statement %d/%d: %w",
+				label, i+1, batch.Len(), err,
+			)
+		}
+	}
+	if err := exec(ctx, "COMMIT"); err != nil {
+		return fmt.Errorf("commit %s: %w", label, err)
+	}
+	needsRollback = false
+	return nil
+}
+
+func execDuckRemoteMutationBatchWithStatementFallback(
+	ctx context.Context,
+	execCoalesced func(context.Context, string) error,
+	execStatement func(context.Context, string) error,
+	label string,
+	batch *duckRemoteMutationBatch,
+) error {
+	if err := execDuckRemoteMutationBatch(ctx, execCoalesced, label, batch, true); err != nil {
+		if ctx.Err() != nil || isStaleQuackConnectionError(err) {
+			return err
+		}
+		return execDuckRemoteMutationBatch(ctx, execStatement, label, batch, false)
+	}
+	return nil
+}
+
+func (b *duckRemoteMutationBatch) transactionSQL() string {
+	var sqlText strings.Builder
+	sqlText.WriteString("BEGIN TRANSACTION;\n")
+	for _, stmt := range b.statements {
+		sqlText.WriteString(stmt)
+		sqlText.WriteString(";\n")
+	}
+	sqlText.WriteString("COMMIT")
+	return sqlText.String()
+}
+
+func (b *duckRemoteMutationBatch) transactionBytes() int {
+	if b == nil || b.Len() == 0 {
+		return 0
+	}
+	return len("BEGIN TRANSACTION;\n") +
+		b.statementBytes +
+		len(";\n")*b.Len() +
+		len("COMMIT")
+}
+
+func (b *duckRemoteMutationBatch) combinedTransactionBytes(
+	other *duckRemoteMutationBatch,
+) int {
+	if b == nil || b.Len() == 0 {
+		return other.transactionBytes()
+	}
+	if other == nil || other.Len() == 0 {
+		return b.transactionBytes()
+	}
+	return len("BEGIN TRANSACTION;\n") +
+		b.statementBytes + other.statementBytes +
+		len(";\n")*(b.Len()+other.Len()) +
+		len("COMMIT")
+}
+
+func (s *Sync) execRemoteSQLRetry(ctx context.Context, sqlText string) error {
+	if s.quack != nil {
+		return s.quack.execRemote(ctx, sqlText, true)
+	}
+	return s.execRemoteSQLNoRetry(ctx, sqlText)
+}
+
+func (s *Sync) execRemoteSQLNoRetry(ctx context.Context, sqlText string) error {
+	if s.quack != nil {
+		return s.quack.execRemote(ctx, sqlText, false)
+	}
+	_, err := s.duck.ExecContext(ctx, "FROM "+quackAttachmentName+".query(?)", sqlText)
+	return err
+}
+
+func duckSQLWithArgs(stmt string, args ...any) (string, error) {
+	var b strings.Builder
+	argIndex := 0
+	for _, r := range stmt {
+		if r != '?' {
+			b.WriteRune(r)
+			continue
+		}
+		if argIndex >= len(args) {
+			return "", fmt.Errorf("duckdb remote statement missing argument")
+		}
+		lit, err := duckValueLiteral(args[argIndex])
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(lit)
+		argIndex++
+	}
+	if argIndex != len(args) {
+		return "", fmt.Errorf("duckdb remote statement has unused argument")
+	}
+	return b.String(), nil
+}
+
+func duckValueLiteral(v any) (string, error) {
+	switch value := v.(type) {
+	case nil:
+		return "NULL", nil
+	case string:
+		return duckRemoteStringLiteral(value)
+	case *string:
+		if value == nil {
+			return "NULL", nil
+		}
+		return duckRemoteStringLiteral(*value)
+	case int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64:
+		return fmt.Sprint(value), nil
+	case *int:
+		if value == nil {
+			return "NULL", nil
+		}
+		return fmt.Sprint(*value), nil
+	case *int64:
+		if value == nil {
+			return "NULL", nil
+		}
+		return fmt.Sprint(*value), nil
+	case *float64:
+		if value == nil {
+			return "NULL", nil
+		}
+		return fmt.Sprint(*value), nil
+	case bool:
+		if value {
+			return "TRUE", nil
+		}
+		return "FALSE", nil
+	case time.Time:
+		return "TIMESTAMP " + duckLiteral(
+			value.UTC().Format("2006-01-02 15:04:05.999999"),
+		), nil
+	default:
+		return "", fmt.Errorf("unsupported duckdb remote argument type %T", v)
+	}
+}
+
+func duckRemoteStringLiteral(s string) (string, error) {
+	s = strings.ReplaceAll(s, "\x00", "")
+	for {
+		var tagBytes [16]byte
+		if _, err := rand.Read(tagBytes[:]); err != nil {
+			return "", fmt.Errorf("generating duckdb string literal tag: %w", err)
+		}
+		tag := "agentsview_" + hex.EncodeToString(tagBytes[:])
+		delimiter := "$" + tag + "$"
+		if strings.Contains(s, delimiter) {
+			continue
+		}
+		return delimiter + s + delimiter, nil
+	}
+}
+
+func (s *Sync) upsertSession(
+	ctx context.Context, exec duckMutationExecutor, sess db.Session,
+) error {
+	query := `
 		INSERT INTO sessions (
 			id, project, machine, agent,
 			first_message, display_name, session_name, started_at, ended_at,
@@ -373,7 +675,8 @@ func upsertSession(
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?
-		)
+		)`
+	query += `
 		ON CONFLICT(id) DO UPDATE SET
 			project = excluded.project,
 			machine = excluded.machine,
@@ -435,7 +738,16 @@ func upsertSession(
 			created_at = excluded.created_at,
 			termination_status = excluded.termination_status,
 			secret_leak_count = excluded.secret_leak_count,
-			secrets_rules_version = excluded.secrets_rules_version`,
+			secrets_rules_version = excluded.secrets_rules_version`
+
+	if err := s.execMutation(ctx, exec, query, sessionInsertArgs(sess, s.machine)...); err != nil {
+		return fmt.Errorf("writing duckdb session %s: %w", sess.ID, err)
+	}
+	return nil
+}
+
+func sessionInsertArgs(sess db.Session, machine string) []any {
+	return []any{
 		sess.ID, sess.Project, machine, sess.Agent,
 		nilString(sess.FirstMessage), nilString(sess.DisplayName),
 		nilString(sess.SessionName),
@@ -466,16 +778,14 @@ func upsertSession(
 		sess.IsTruncated, nilTime(sess.DeletedAt),
 		timeValue(sess.CreatedAt), nilString(sess.TerminationStatus),
 		sess.SecretLeakCount, sess.SecretsRulesVersion,
-	)
-	if err != nil {
-		return fmt.Errorf("upserting duckdb session %s: %w", sess.ID, err)
 	}
-	return nil
 }
 
-func insertMessages(ctx context.Context, tx *sql.Tx, msgs []db.Message) error {
+func insertMessages(
+	ctx context.Context, exec duckMutationExecutor, msgs []db.Message,
+) error {
 	for _, m := range msgs {
-		if _, err := tx.ExecContext(ctx, `
+		if _, err := exec.ExecContext(ctx, `
 			INSERT INTO messages (
 				id, session_id, ordinal, role, content, thinking_text,
 				timestamp, has_thinking, has_tool_use, content_length,
@@ -500,45 +810,36 @@ func insertMessages(ctx context.Context, tx *sql.Tx, msgs []db.Message) error {
 	return nil
 }
 
-type duckToolCallKey struct {
-	messageID int64
-	callIndex int
+func (s *Sync) replaceToolRows(
+	ctx context.Context, exec duckMutationExecutor, sessionID string, msgs []db.Message,
+) error {
+	if err := s.execMutation(ctx, exec,
+		`DELETE FROM tool_result_events WHERE session_id = ?`,
+		sessionID,
+	); err != nil {
+		return fmt.Errorf("clearing duckdb tool_result_events for %s: %w", sessionID, err)
+	}
+	if err := s.execMutation(ctx, exec,
+		`DELETE FROM tool_calls WHERE session_id = ?`,
+		sessionID,
+	); err != nil {
+		return fmt.Errorf("clearing duckdb tool_calls for %s: %w", sessionID, err)
+	}
+	if err := insertToolCalls(ctx, exec, msgs); err != nil {
+		return err
+	}
+	if err := insertToolResultEvents(ctx, exec, msgs); err != nil {
+		return err
+	}
+	return nil
 }
 
-type duckToolResultEventKey struct {
-	ordinal    int
-	callIndex  int
-	eventIndex int
-}
-
-func upsertToolCalls(ctx context.Context, tx *sql.Tx, msgs []db.Message) ([]duckToolCallKey, error) {
-	keys := []duckToolCallKey{}
+func insertToolCalls(
+	ctx context.Context, exec duckMutationExecutor, msgs []db.Message,
+) error {
 	for _, m := range msgs {
 		for i, tc := range m.ToolCalls {
-			key := duckToolCallKey{messageID: m.ID, callIndex: i}
-			keys = append(keys, key)
-			res, err := tx.ExecContext(ctx, `
-				UPDATE tool_calls SET
-					tool_name = ?, category = ?, tool_use_id = ?,
-					input_json = ?, skill_name = ?,
-					result_content_length = ?, result_content = ?,
-					subagent_session_id = ?, file_path = ?
-				WHERE session_id = ? AND message_id = ? AND call_index = ?`,
-				tc.ToolName, tc.Category, tc.ToolUseID,
-				nilEmpty(tc.InputJSON), nilEmpty(tc.SkillName),
-				nilZero(tc.ResultContentLength), nilEmpty(tc.ResultContent),
-				nilEmpty(tc.SubagentSessionID), nilEmpty(tc.FilePath),
-				m.SessionID, m.ID, i,
-			)
-			if err != nil {
-				return nil, fmt.Errorf("updating duckdb tool_call %s/%d/%d: %w",
-					m.SessionID, m.Ordinal, i, err)
-			}
-			affected, _ := res.RowsAffected()
-			if affected > 0 {
-				continue
-			}
-			if _, err := tx.ExecContext(ctx, `
+			if _, err := exec.ExecContext(ctx, `
 				INSERT INTO tool_calls (
 					message_id, session_id, tool_name, category,
 					call_index, tool_use_id, input_json, skill_name,
@@ -551,50 +852,21 @@ func upsertToolCalls(ctx context.Context, tx *sql.Tx, msgs []db.Message) ([]duck
 				nilEmpty(tc.ResultContent), nilEmpty(tc.SubagentSessionID),
 				nilEmpty(tc.FilePath),
 			); err != nil {
-				return nil, fmt.Errorf("inserting duckdb tool_call %s/%d/%d: %w",
+				return fmt.Errorf("inserting duckdb tool_call %s/%d/%d: %w",
 					m.SessionID, m.Ordinal, i, err)
 			}
 		}
 	}
-	return keys, nil
+	return nil
 }
 
-func upsertToolResultEvents(
-	ctx context.Context, tx *sql.Tx, msgs []db.Message,
-) ([]duckToolResultEventKey, error) {
-	keys := []duckToolResultEventKey{}
+func insertToolResultEvents(
+	ctx context.Context, exec duckMutationExecutor, msgs []db.Message,
+) error {
 	for _, m := range msgs {
 		for i, tc := range m.ToolCalls {
 			for _, ev := range tc.ResultEvents {
-				key := duckToolResultEventKey{
-					ordinal:    m.Ordinal,
-					callIndex:  i,
-					eventIndex: ev.EventIndex,
-				}
-				keys = append(keys, key)
-				res, err := tx.ExecContext(ctx, `
-					UPDATE tool_result_events SET
-						tool_use_id = ?, agent_id = ?, subagent_session_id = ?,
-						source = ?, status = ?, content = ?,
-						content_length = ?, timestamp = ?
-					WHERE session_id = ?
-						AND tool_call_message_ordinal = ?
-						AND call_index = ?
-						AND event_index = ?`,
-					nilEmpty(ev.ToolUseID), nilEmpty(ev.AgentID),
-					nilEmpty(ev.SubagentSessionID), ev.Source, ev.Status,
-					ev.Content, ev.ContentLength, timeValue(ev.Timestamp),
-					m.SessionID, m.Ordinal, i, ev.EventIndex,
-				)
-				if err != nil {
-					return nil, fmt.Errorf("updating duckdb tool_result_event %s/%d/%d: %w",
-						m.SessionID, m.Ordinal, i, err)
-				}
-				affected, _ := res.RowsAffected()
-				if affected > 0 {
-					continue
-				}
-				if _, err := tx.ExecContext(ctx, `
+				if _, err := exec.ExecContext(ctx, `
 					INSERT INTO tool_result_events (
 						session_id, tool_call_message_ordinal, call_index,
 						tool_use_id, agent_id, subagent_session_id,
@@ -607,111 +879,41 @@ func upsertToolResultEvents(
 					ev.Content, ev.ContentLength, timeValue(ev.Timestamp),
 					ev.EventIndex,
 				); err != nil {
-					return nil, fmt.Errorf("inserting duckdb tool_result_event %s/%d/%d: %w",
+					return fmt.Errorf("inserting duckdb tool_result_event %s/%d/%d: %w",
 						m.SessionID, m.Ordinal, i, err)
 				}
 			}
 		}
 	}
-	return keys, nil
-}
-
-func deleteStaleToolCalls(
-	ctx context.Context, tx *sql.Tx, sessionID string, keep []duckToolCallKey,
-) error {
-	keepSet := make(map[duckToolCallKey]bool, len(keep))
-	for _, key := range keep {
-		keepSet[key] = true
-	}
-	rows, err := tx.QueryContext(ctx,
-		`SELECT message_id, call_index FROM tool_calls WHERE session_id = ?`,
-		sessionID,
-	)
-	if err != nil {
-		return fmt.Errorf("listing duckdb tool_calls for stale delete %s: %w", sessionID, err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var key duckToolCallKey
-		if err := rows.Scan(&key.messageID, &key.callIndex); err != nil {
-			return err
-		}
-		if keepSet[key] {
-			continue
-		}
-		if _, err := tx.ExecContext(ctx,
-			`DELETE FROM tool_calls WHERE session_id = ? AND message_id = ? AND call_index = ?`,
-			sessionID, key.messageID, key.callIndex,
-		); err != nil {
-			return fmt.Errorf("deleting stale duckdb tool_call %s: %w", sessionID, err)
-		}
-	}
-	return rows.Err()
-}
-
-func deleteStaleToolResultEvents(
-	ctx context.Context, tx *sql.Tx, sessionID string, keep []duckToolResultEventKey,
-) error {
-	keepSet := make(map[duckToolResultEventKey]bool, len(keep))
-	for _, key := range keep {
-		keepSet[key] = true
-	}
-	rows, err := tx.QueryContext(ctx, `
-		SELECT tool_call_message_ordinal, call_index, event_index
-		FROM tool_result_events
-		WHERE session_id = ?`,
-		sessionID,
-	)
-	if err != nil {
-		return fmt.Errorf("listing duckdb tool_result_events for stale delete %s: %w", sessionID, err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var key duckToolResultEventKey
-		if err := rows.Scan(&key.ordinal, &key.callIndex, &key.eventIndex); err != nil {
-			return err
-		}
-		if keepSet[key] {
-			continue
-		}
-		if _, err := tx.ExecContext(ctx, `
-			DELETE FROM tool_result_events
-			WHERE session_id = ?
-				AND tool_call_message_ordinal = ?
-				AND call_index = ?
-				AND event_index = ?`,
-			sessionID, key.ordinal, key.callIndex, key.eventIndex,
-		); err != nil {
-			return fmt.Errorf("deleting stale duckdb tool_result_event %s: %w", sessionID, err)
-		}
-	}
-	return rows.Err()
+	return nil
 }
 
 func (s *Sync) replaceUsageEvents(
-	ctx context.Context, tx *sql.Tx, sessionID string,
+	ctx context.Context, exec duckMutationExecutor, sessionID string,
 ) error {
 	events, err := s.local.GetUsageEvents(ctx, sessionID)
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx,
+	if err := s.execMutation(ctx, exec,
 		`DELETE FROM usage_events WHERE session_id = ?`,
 		sessionID,
 	); err != nil {
 		return fmt.Errorf("clearing duckdb usage_events for %s: %w", sessionID, err)
 	}
 	for _, ev := range events {
-		if err := insertUsageEvent(ctx, tx, ev); err != nil {
+		if err := insertUsageEvent(ctx, exec, ev); err != nil {
 			return fmt.Errorf("inserting duckdb usage_event %s: %w", sessionID, err)
 		}
 	}
 	return nil
 }
 
-func insertUsageEvent(ctx context.Context, tx *sql.Tx, ev db.UsageEvent) error {
+func insertUsageEvent(
+	ctx context.Context, exec duckMutationExecutor, ev db.UsageEvent,
+) error {
 	ordinal, cost, occurredAt := usageEventNullableValues(ev)
-	if _, err := tx.ExecContext(ctx, `
+	if _, err := exec.ExecContext(ctx, `
 		INSERT INTO usage_events (
 			id, session_id, message_ordinal, source, model,
 			input_tokens, output_tokens,
@@ -730,7 +932,7 @@ func insertUsageEvent(ctx context.Context, tx *sql.Tx, ev db.UsageEvent) error {
 	return nil
 }
 
-func bulkInsertCursorUsageEvents(
+func (s *Sync) bulkInsertCursorUsageEvents(
 	ctx context.Context, tx *sql.Tx, events []db.CursorUsageEvent,
 ) error {
 	if len(events) == 0 {
@@ -776,7 +978,7 @@ func bulkInsertCursorUsageEvents(
 			)
 		}
 		b.WriteString(` ON CONFLICT DO NOTHING`)
-		if _, err := tx.ExecContext(ctx, b.String(), args...); err != nil {
+		if err := s.execMutation(ctx, tx, b.String(), args...); err != nil {
 			return fmt.Errorf("bulk inserting duckdb cursor_usage_events: %w", err)
 		}
 	}
@@ -800,14 +1002,14 @@ func usageEventNullableValues(ev db.UsageEvent) (any, any, any) {
 }
 
 func (s *Sync) replaceSecretFindings(
-	ctx context.Context, tx *sql.Tx, sessionID string,
+	ctx context.Context, exec duckMutationExecutor, sessionID string,
 ) error {
 	findings, err := s.local.SessionSecretFindings(ctx, sessionID)
 	if err != nil {
 		return err
 	}
 	for _, f := range findings {
-		if _, err := tx.ExecContext(ctx, `
+		if _, err := exec.ExecContext(ctx, `
 			INSERT INTO secret_findings (
 				session_id, rule_name, confidence, location_kind,
 				message_ordinal, call_index, event_index,
@@ -826,14 +1028,14 @@ func (s *Sync) replaceSecretFindings(
 }
 
 func (s *Sync) replacePinnedMessages(
-	ctx context.Context, tx *sql.Tx, sessionID string,
+	ctx context.Context, exec duckMutationExecutor, sessionID string,
 ) error {
 	pins, err := s.local.ListPinnedMessages(ctx, sessionID, "")
 	if err != nil {
 		return err
 	}
 	for _, p := range pins {
-		if _, err := tx.ExecContext(ctx, `
+		if _, err := exec.ExecContext(ctx, `
 			INSERT INTO pinned_messages (
 				id, session_id, message_id, ordinal, note, created_at
 			) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -850,7 +1052,7 @@ func (s *Sync) replacePinnedMessages(
 func (s *Sync) replaceAllPinnedMessages(
 	ctx context.Context, tx *sql.Tx, sessions []db.Session,
 ) error {
-	if _, err := tx.ExecContext(ctx, `
+	if err := s.execMutation(ctx, tx, `
 		DELETE FROM pinned_messages
 		WHERE session_id IN (
 			SELECT id FROM sessions WHERE machine = ?
@@ -869,7 +1071,7 @@ func (s *Sync) replaceScopedPinnedMessages(
 	ctx context.Context, tx *sql.Tx, sessions []db.Session,
 ) error {
 	for _, sess := range sessions {
-		if _, err := tx.ExecContext(ctx,
+		if err := s.execMutation(ctx, tx,
 			`DELETE FROM pinned_messages WHERE session_id = ?`, sess.ID,
 		); err != nil {
 			return fmt.Errorf("clearing duckdb pinned_messages for %s: %w", sess.ID, err)

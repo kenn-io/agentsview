@@ -1746,6 +1746,29 @@ func (db *DB) GetSessionForIncremental(
 	return &info, true
 }
 
+// FileIdentityChanged reports whether any active session row for path has a
+// known file identity that differs from the current file identity.
+func (db *DB) FileIdentityChanged(path string, inode, device int64) bool {
+	if path == "" || inode == 0 || device == 0 {
+		return false
+	}
+
+	var count int
+	err := db.getReader().QueryRow(
+		`SELECT COUNT(*)
+		 FROM sessions
+		 WHERE file_path = ?
+		   AND deleted_at IS NULL
+		   AND file_inode IS NOT NULL
+		   AND file_device IS NOT NULL
+		   AND file_inode != 0
+		   AND file_device != 0
+		   AND (file_inode != ? OR file_device != ?)`,
+		path, inode, device,
+	).Scan(&count)
+	return err == nil && count > 0
+}
+
 // UpdateSessionIncremental updates only the fields that change
 // during an incremental append: ended_at, message_count,
 // user_message_count, file_size, file_mtime, optional file_hash, and token

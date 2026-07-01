@@ -7864,6 +7864,194 @@ func TestIncrementalSync_ClaudeSameSizeFileReplaceUsesFullParse(t *testing.T) {
 	assert.Equal(t, "bravo", msgs[1].Content)
 }
 
+func TestIncrementalSync_ClaudeSameSizeSameMtimeFileReplaceUsesFullParse(
+	t *testing.T,
+) {
+	if runtime.GOOS == "windows" {
+		t.Skip("identity tracking is a no-op on Windows")
+	}
+	env := setupTestEnv(t)
+
+	original := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("first", tsZero),
+		testjsonl.ClaudeAssistantJSON("alpha", tsZeroS5),
+	)
+	path := env.writeClaudeSession(
+		t, "proj", "same-size-same-mtime-replace.jsonl", original,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	full, err := env.db.GetSessionFull(
+		context.Background(), "same-size-same-mtime-replace",
+	)
+	require.NoError(t, err, "GetSessionFull")
+	require.NotNil(t, full.FileInode, "file_inode not populated after initial sync")
+	origInode := *full.FileInode
+	info, err := os.Stat(path)
+	require.NoError(t, err, "stat original")
+	originalMtime := info.ModTime()
+
+	replacement := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("third", tsZero),
+		testjsonl.ClaudeAssistantJSON("bravo", tsZeroS5),
+	)
+	require.Len(t, replacement, len(original), "replacement fixture must keep same byte size")
+	tmp := path + ".tmp"
+	require.NoError(t, os.WriteFile(tmp, []byte(replacement), 0o644), "write replacement")
+	require.NoError(t, os.Rename(tmp, path), "rename replacement")
+	require.NoError(t, os.Chtimes(path, originalMtime, originalMtime), "restore replacement mtime")
+
+	env.engine.SyncPaths([]string{path})
+
+	msgs := fetchMessages(t, env.db, "same-size-same-mtime-replace")
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "third", msgs[0].Content)
+	assert.Equal(t, "bravo", msgs[1].Content)
+	full, err = env.db.GetSessionFull(
+		context.Background(), "same-size-same-mtime-replace",
+	)
+	require.NoError(t, err, "GetSessionFull after replace")
+	require.NotNil(t, full.FileInode, "file_inode cleared after replace")
+	assert.NotEqual(t, origInode, *full.FileInode)
+}
+
+func TestIncrementalSync_ClaudeForkSameSizeSameMtimeFileReplaceUsesFullParse(
+	t *testing.T,
+) {
+	if runtime.GOOS == "windows" {
+		t.Skip("identity tracking is a no-op on Windows")
+	}
+	env := setupTestEnv(t)
+
+	original := testjsonl.NewSessionBuilder().
+		AddClaudeUserWithUUID("2024-01-01T10:00:00Z", "start", "a", "").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:01Z", "ok", "b", "a").
+		AddClaudeUserWithUUID("2024-01-01T10:00:02Z", "step2", "c", "b").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:03Z", "ok2", "d", "c").
+		AddClaudeUserWithUUID("2024-01-01T10:00:04Z", "step3", "e", "d").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:05Z", "ok3", "f", "e").
+		AddClaudeUserWithUUID("2024-01-01T10:00:06Z", "step4", "g", "f").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:07Z", "ok4", "h", "g").
+		AddClaudeUserWithUUID("2024-01-01T10:00:08Z", "step5", "k", "h").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:09Z", "ok5", "l", "k").
+		AddClaudeUserWithUUID("2024-01-01T10:01:00Z", "fork-start", "i", "b").
+		AddClaudeAssistantWithUUID("2024-01-01T10:01:01Z", "fork-ok", "j", "i").
+		String()
+	path := env.writeClaudeSession(
+		t, "proj", "same-size-same-mtime-fork-replace.jsonl", original,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	assertSessionMessageCount(t, env.db, "same-size-same-mtime-fork-replace", 10)
+	assertSessionMessageCount(t, env.db, "same-size-same-mtime-fork-replace-i", 2)
+	full, err := env.db.GetSessionFull(
+		context.Background(), "same-size-same-mtime-fork-replace",
+	)
+	require.NoError(t, err, "GetSessionFull")
+	require.NotNil(t, full.FileInode, "file_inode not populated after initial sync")
+	origInode := *full.FileInode
+	info, err := os.Stat(path)
+	require.NoError(t, err, "stat original")
+	originalMtime := info.ModTime()
+
+	replacement := testjsonl.NewSessionBuilder().
+		AddClaudeUserWithUUID("2024-01-01T10:00:00Z", "START", "a", "").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:01Z", "no", "b", "a").
+		AddClaudeUserWithUUID("2024-01-01T10:00:02Z", "STEP2", "c", "b").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:03Z", "NO2", "d", "c").
+		AddClaudeUserWithUUID("2024-01-01T10:00:04Z", "STEP3", "e", "d").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:05Z", "NO3", "f", "e").
+		AddClaudeUserWithUUID("2024-01-01T10:00:06Z", "STEP4", "g", "f").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:07Z", "NO4", "h", "g").
+		AddClaudeUserWithUUID("2024-01-01T10:00:08Z", "STEP5", "k", "h").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:09Z", "NO5", "l", "k").
+		AddClaudeUserWithUUID("2024-01-01T10:01:00Z", "fork-other", "i", "b").
+		AddClaudeAssistantWithUUID("2024-01-01T10:01:01Z", "FORK-NO", "j", "i").
+		String()
+	require.Len(t, replacement, len(original), "replacement fixture must keep same byte size")
+	tmp := path + ".tmp"
+	require.NoError(t, os.WriteFile(tmp, []byte(replacement), 0o644), "write replacement")
+	require.NoError(t, os.Rename(tmp, path), "rename replacement")
+	require.NoError(t, os.Chtimes(path, originalMtime, originalMtime), "restore replacement mtime")
+
+	env.engine.SyncPaths([]string{path})
+
+	msgs := fetchMessages(t, env.db, "same-size-same-mtime-fork-replace")
+	require.Len(t, msgs, 10)
+	assert.Equal(t, "START", msgs[0].Content)
+	assert.Equal(t, "NO5", msgs[9].Content)
+	forkMsgs := fetchMessages(t, env.db, "same-size-same-mtime-fork-replace-i")
+	require.Len(t, forkMsgs, 2)
+	assert.Equal(t, "fork-other", forkMsgs[0].Content)
+	assert.Equal(t, "FORK-NO", forkMsgs[1].Content)
+	full, err = env.db.GetSessionFull(
+		context.Background(), "same-size-same-mtime-fork-replace",
+	)
+	require.NoError(t, err, "GetSessionFull after replace")
+	require.NotNil(t, full.FileInode, "file_inode cleared after replace")
+	assert.NotEqual(t, origInode, *full.FileInode)
+}
+
+func TestIncrementalSync_ClaudePathRewriterIgnoresTempInodeChange(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("identity tracking is a no-op on Windows")
+	}
+	db := dbtest.OpenTestDB(t)
+	firstRoot := t.TempDir()
+	secondRoot := t.TempDir()
+	const remoteRoot = "/home/test/.claude/projects"
+	rewriter := func(p string) string {
+		for _, root := range []string{firstRoot, secondRoot} {
+			rel, err := filepath.Rel(root, p)
+			if err == nil && !strings.HasPrefix(rel, "..") {
+				return "host:" + filepath.ToSlash(
+					filepath.Join(remoteRoot, rel),
+				)
+			}
+		}
+		return "host:" + filepath.ToSlash(p)
+	}
+	content := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("first", tsZero),
+		testjsonl.ClaudeAssistantJSON("alpha", tsZeroS5),
+	)
+	firstPath := filepath.Join(firstRoot, "proj", "remote-same.jsonl")
+	dbtest.WriteTestFile(t, firstPath, []byte(content))
+	firstInfo, err := os.Stat(firstPath)
+	require.NoError(t, err, "stat first temp copy")
+	firstEngine := sync.NewEngine(db, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {firstRoot},
+		},
+		Machine:      "host",
+		IDPrefix:     "host~",
+		PathRewriter: rewriter,
+		Ephemeral:    true,
+	})
+	runSyncAndAssert(t, firstEngine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+
+	secondPath := filepath.Join(secondRoot, "proj", "remote-same.jsonl")
+	dbtest.WriteTestFile(t, secondPath, []byte(content))
+	require.NoError(t,
+		os.Chtimes(secondPath, firstInfo.ModTime(), firstInfo.ModTime()),
+		"preserve remote mtime on second temp copy",
+	)
+	secondEngine := sync.NewEngine(db, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {secondRoot},
+		},
+		Machine:      "host",
+		IDPrefix:     "host~",
+		PathRewriter: rewriter,
+		Ephemeral:    true,
+	})
+	runSyncAndAssert(t, secondEngine, sync.SyncStats{
+		TotalSessions: 1, Synced: 0, Skipped: 1,
+	})
+}
+
 func TestIncrementalSync_ClaudeSameSizeInPlaceRewriteClearsStaleRows(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 

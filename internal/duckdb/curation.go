@@ -17,7 +17,7 @@ func (s *Store) UnstarSession(sessionID string) error {
 }
 
 func (s *Store) ListStarredSessionIDs(ctx context.Context) ([]string, error) {
-	rows, err := s.duck.QueryContext(ctx, `
+	rows, err := s.queryContext(ctx, `
 		SELECT session_id FROM starred_sessions
 		ORDER BY created_at DESC, session_id DESC`)
 	if err != nil {
@@ -53,7 +53,7 @@ func (s *Store) ListPinnedMessages(
 	var rows *sql.Rows
 	var err error
 	if sessionID != "" {
-		rows, err = s.duck.QueryContext(ctx, `
+		rows, err = s.queryContext(ctx, `
 			SELECT id, session_id, message_id, ordinal, note, created_at
 			FROM pinned_messages
 			WHERE session_id = ?
@@ -75,7 +75,7 @@ func (s *Store) ListPinnedMessages(
 			args = append(args, project)
 		}
 		query += " ORDER BY p.created_at DESC, p.id DESC LIMIT 500"
-		rows, err = s.duck.QueryContext(ctx, query, args...)
+		rows, err = s.queryContext(ctx, query, args...)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("listing duckdb pinned messages: %w", err)

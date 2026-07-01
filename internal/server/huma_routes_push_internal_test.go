@@ -133,6 +133,25 @@ func TestDuckDBPushRejectsIncludeAndExcludeProjects(t *testing.T) {
 		"projects and exclude_projects are mutually exclusive")
 }
 
+func TestDuckDBPushRejectsMissingQuackTokenAsBadRequest(t *testing.T) {
+	s := testServer(t, 30)
+
+	_, err := s.humaDuckDBPush(context.Background(), &daemonPushInput{
+		Body: daemonPushRequest{
+			DuckDB: &config.DuckDBConfig{
+				URL:         "quack:https://duck.example.test",
+				MachineName: "workstation",
+			},
+		},
+	})
+	require.Error(t, err)
+
+	var statusErr interface{ GetStatus() int }
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
+	assert.Contains(t, err.Error(), "duckdb quack token is required")
+}
+
 func TestDuckDBPushConfigRequestOverrideSkipsDaemonEnvResolution(t *testing.T) {
 	const envName = "AGENTSVIEW_TEST_MISSING_DUCKDB_PATH_25053"
 	s := testServerWithConfig(config.Config{

@@ -53,6 +53,29 @@ func TestLocalArchiveWriteBackendDuckDBPushUsesConfiguredRemoteURL(t *testing.T)
 	})
 }
 
+func TestLocalArchiveWriteBackendDuckDBPushValidatesRemoteBeforeLocalSync(t *testing.T) {
+	backend := testLocalArchiveWriteBackend(t)
+
+	var err error
+	out := captureStdout(t, func() {
+		_, err = backend.DuckDBPush(
+			context.Background(),
+			config.DuckDBConfig{
+				URL:         "quack:https://duck.example.test",
+				MachineName: "workstation",
+			},
+			DuckDBPushConfig{Full: true},
+			nil,
+			nil,
+		)
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duckdb quack token is required")
+	assert.NotContains(t, out, "Database:")
+	assert.NotContains(t, out, "Opening DuckDB mirror")
+}
+
 func TestRunPGWatchStartupSyncFallsBackAfterAbortedResync(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 	missingPath := filepath.Join(t.TempDir(), "missing.jsonl")

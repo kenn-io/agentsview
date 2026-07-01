@@ -241,6 +241,11 @@ import (
 // classification, so historical skill usage is backfilled on
 // re-parse.)
 //
+// (58: Persisted message/result content sanitization now covers
+// tool_calls.result_content and tool_result_events.content. Existing rows
+// need re-parsing so NUL/control bytes accepted by SQLite are stripped before
+// they can poison DuckDB mirrors.)
+//
 // (57: Antigravity-CLI transcript fidelity classification. Re-parsing
 // populates transcript_fidelity ("full"/"summary") on existing
 // Antigravity CLI rows so sessions built from summary transcripts are
@@ -265,7 +270,7 @@ import (
 // (51: Gemini cumulative-to-delta token reparse.)
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 57
+const dataVersion = 58
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

@@ -302,7 +302,7 @@ func requireReadOnlySchemaCompatibilityFails(
 
 func TestOpenReadOnlyAllowsMissingFTSTable(t *testing.T) {
 	path := createClosedTestDB(t, tempDBPath(t, "sessions.db"), nil)
-	execRawSQLite(t, path, "DROP TABLE messages_fts")
+	execRawSQLite(t, path, "DROP TABLE IF EXISTS messages_fts")
 
 	readonly, err := OpenReadOnly(path)
 	require.NoError(t, err)

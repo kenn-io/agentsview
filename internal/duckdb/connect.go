@@ -5,15 +5,19 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	neturl "net/url"
 	"runtime"
 	"strings"
+	"sync"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
+
+const quackAttachmentName = "agentsview_remote"
 
 // Open opens a local DuckDB file for the agentsview mirror backend.
 func Open(path string) (*sql.DB, error) {
@@ -128,17 +132,22 @@ func ReadStatusFromConfig(
 		return SyncStatus{}, err
 	}
 	defer store.Close()
-	return readMachineStatus(ctx, store.DB(), cfg.MachineName, lastPush)
+	return readMachineStatus(
+		ctx, store.DB(), store.connectionKind, store.quack,
+		cfg.MachineName, lastPush,
+	)
 }
 
 func readMachineStatus(
 	ctx context.Context,
 	duck *sql.DB,
+	connectionKind duckDBConnectionKind,
+	quack *quackClient,
 	machine string,
 	lastPush string,
 ) (SyncStatus, error) {
 	status := SyncStatus{Machine: machine, LastPushAt: lastPush}
-	if err := duck.QueryRowContext(ctx,
+	if err := queryDuckDBRowContext(ctx, duck, connectionKind, quack,
 		`SELECT COUNT(*) FROM sessions WHERE machine = ?`,
 		machine,
 	).Scan(&status.DuckDBSessions); err != nil {
@@ -147,7 +156,7 @@ func readMachineStatus(
 		}
 		return SyncStatus{}, fmt.Errorf("counting duckdb sessions: %w", err)
 	}
-	if err := duck.QueryRowContext(ctx,
+	if err := queryDuckDBRowContext(ctx, duck, connectionKind, quack,
 		`SELECT COUNT(*)
 		 FROM messages
 		 WHERE session_id IN (
@@ -182,23 +191,35 @@ func NewStoreFromConfig(cfg config.DuckDBConfig) (*Store, error) {
 	return NewStore(cfg.Path)
 }
 
+// ValidatePushTarget validates remote DuckDB push targets without opening a
+// DuckDB connection. Local file targets are validated when opened.
+func ValidatePushTarget(cfg config.DuckDBConfig) error {
+	if cfg.URL == "" {
+		return nil
+	}
+	return ValidateQuackClientURL(cfg.URL, cfg.Token, cfg.AllowInsecure)
+}
+
 // NewFromConfig opens either a local DuckDB mirror file or a remote Quack
 // endpoint for push sync.
 func NewFromConfig(
 	cfg config.DuckDBConfig, local *db.DB, opts SyncOptions,
 ) (*Sync, error) {
-	if local == nil {
-		return nil, fmt.Errorf("local db is required")
-	}
-	if cfg.MachineName == "" {
-		return nil, fmt.Errorf("machine name must not be empty")
+	if err := validateSyncInputs(local, cfg.MachineName); err != nil {
+		return nil, err
 	}
 	var (
-		duck *sql.DB
-		err  error
+		duck           *sql.DB
+		quack          *quackClient
+		err            error
+		connectionKind = duckDBBaseConnection
 	)
 	if cfg.URL != "" {
-		duck, err = OpenQuack(cfg.URL, cfg.Token, cfg.AllowInsecure)
+		quack, err = openQuackClient(cfg.URL, cfg.Token, cfg.AllowInsecure)
+		if err == nil {
+			duck = quack.DB()
+		}
+		connectionKind = duckDBQuackClientConnection
 	} else {
 		duck, err = Open(cfg.Path)
 	}
@@ -212,21 +233,44 @@ func NewFromConfig(
 		syncStateScope:  opts.SyncStateTarget,
 		projects:        opts.Projects,
 		excludeProjects: opts.ExcludeProjects,
+		connectionKind:  connectionKind,
+		quack:           quack,
 	}, nil
 }
 
 // NewQuackStore attaches a remote DuckDB exposed over Quack.
 func NewQuackStore(rawURL, token string, allowInsecure bool) (*Store, error) {
-	conn, err := OpenQuack(rawURL, token, allowInsecure)
+	client, err := openQuackClient(rawURL, token, allowInsecure)
 	if err != nil {
 		return nil, err
 	}
-	return NewStoreFromDB(conn), nil
+	return &Store{
+		duck:           client.DB(),
+		quack:          client,
+		connectionKind: duckDBQuackClientConnection,
+	}, nil
 }
 
 // OpenQuack opens an in-memory DuckDB client and attaches a remote DuckDB
 // exposed over Quack as the default catalog.
 func OpenQuack(rawURL, token string, allowInsecure bool) (*sql.DB, error) {
+	client, err := openQuackClient(rawURL, token, allowInsecure)
+	if err != nil {
+		return nil, err
+	}
+	return client.DB(), nil
+}
+
+type quackClient struct {
+	duck       *sql.DB
+	rawURL     string
+	token      string
+	reattachMu sync.Mutex
+}
+
+func openQuackClient(
+	rawURL, token string, allowInsecure bool,
+) (*quackClient, error) {
 	if err := ValidateQuackClientURL(rawURL, token, allowInsecure); err != nil {
 		return nil, err
 	}
@@ -249,22 +293,218 @@ func OpenQuack(rawURL, token string, allowInsecure bool) (*sql.DB, error) {
 		conn.Close()
 		return nil, fmt.Errorf("loading quack extension: %w", err)
 	}
-	attach := "ATTACH " + duckLiteral(rawURL) + " AS agentsview_remote"
+	client := &quackClient{
+		duck:   conn,
+		rawURL: rawURL,
+		token:  token,
+	}
+	if err := client.attach(context.Background()); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return client, nil
+}
+
+func (q *quackClient) DB() *sql.DB { return q.duck }
+
+func (q *quackClient) attach(ctx context.Context) error {
+	conn, err := q.duck.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("opening duckdb client connection: %w", err)
+	}
+	defer conn.Close()
+	return q.attachConn(ctx, conn)
+}
+
+func (q *quackClient) attachConn(ctx context.Context, conn *sql.Conn) error {
+	if _, err := conn.ExecContext(ctx, quackAttachSQL(q.rawURL, q.token)); err != nil {
+		return fmt.Errorf(
+			"attaching quack endpoint %s: %w", RedactQuackURL(q.rawURL),
+			redactQuackClientError(err, q.rawURL, q.token),
+		)
+	}
+	if _, err := conn.ExecContext(ctx, "USE "+quackAttachmentName); err != nil {
+		return fmt.Errorf("selecting quack catalog: %w", err)
+	}
+	return nil
+}
+
+func quackAttachSQL(rawURL, token string) string {
+	attach := "ATTACH " + duckLiteral(rawURL) + " AS " + quackAttachmentName
 	if token != "" {
 		attach += " (TOKEN " + duckLiteral(token) + ")"
 	}
-	if _, err := conn.Exec(attach); err != nil {
-		conn.Close()
+	return attach
+}
+
+func (q *quackClient) reattachLocked(ctx context.Context) error {
+	conn, err := q.duck.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("opening duckdb client connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "USE memory"); err != nil {
+		return fmt.Errorf("selecting local duckdb catalog: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, "DETACH "+quackAttachmentName); err != nil {
+		if !isMissingQuackAttachmentError(err) {
+			return fmt.Errorf(
+				"detaching quack endpoint %s: %w",
+				RedactQuackURL(q.rawURL), err,
+			)
+		}
+	}
+	return q.attachConn(ctx, conn)
+}
+
+func redactQuackClientError(err error, rawURL, token string) error {
+	if err == nil {
+		return nil
+	}
+	msg := redactQuackClientErrorMessage(err.Error(), rawURL, token)
+	return errors.New(msg)
+}
+
+func redactQuackClientErrorMessage(message, rawURL, token string) string {
+	redactedURL := RedactQuackURL(rawURL)
+	message = redactQuackErrorValue(message, rawURL, redactedURL)
+	if transport, ok := strings.CutPrefix(rawURL, "quack:"); ok {
+		redactedTransport := strings.TrimPrefix(redactedURL, "quack:")
+		message = redactQuackErrorValue(message, transport, redactedTransport)
+	}
+	message = redactQuackURLCredentialValues(message, rawURL)
+	message = redactQuackErrorValue(message, token, "<redacted>")
+	return message
+}
+
+func redactQuackErrorValue(message, value, replacement string) string {
+	if value == "" {
+		return message
+	}
+	message = strings.ReplaceAll(message, value, replacement)
+	return strings.ReplaceAll(message, duckLiteral(value), duckLiteral(replacement))
+}
+
+func redactQuackURLCredentialValues(message, rawURL string) string {
+	transport := strings.TrimPrefix(rawURL, "quack:")
+	if strings.HasPrefix(transport, "http://") ||
+		strings.HasPrefix(transport, "https://") {
+		return redactHTTPQuackURLCredentialValues(message, transport)
+	}
+	return redactNativeQuackCredentialValues(message, transport)
+}
+
+func redactHTTPQuackURLCredentialValues(message, transport string) string {
+	u, err := neturl.Parse(transport)
+	if err != nil {
+		return message
+	}
+	if username := u.User.Username(); username != "" {
+		message = redactQuackErrorValue(message, username, "<redacted>")
+	}
+	if password, ok := u.User.Password(); ok {
+		message = redactQuackErrorValue(message, password, "<redacted>")
+	}
+	for key, values := range u.Query() {
+		if !isSecretURLQueryKey(key) {
+			continue
+		}
+		for _, value := range values {
+			message = redactQuackErrorValue(message, value, "<redacted>")
+		}
+	}
+	return message
+}
+
+func redactNativeQuackCredentialValues(message, transport string) string {
+	transport = strings.SplitN(transport, "#", 2)[0]
+	base, rawQuery, hasQuery := strings.Cut(transport, "?")
+	if userinfo, _, ok := strings.Cut(base, "@"); ok {
+		for value := range strings.SplitSeq(userinfo, ":") {
+			message = redactQuackErrorValue(message, value, "<redacted>")
+		}
+	}
+	if !hasQuery {
+		return message
+	}
+	q, err := neturl.ParseQuery(rawQuery)
+	if err != nil {
+		return message
+	}
+	for key, values := range q {
+		if !isSecretURLQueryKey(key) {
+			continue
+		}
+		for _, value := range values {
+			message = redactQuackErrorValue(message, value, "<redacted>")
+		}
+	}
+	return message
+}
+
+func (q *quackClient) queryRemote(
+	ctx context.Context, sqlText string, retryStale bool,
+) (*sql.Rows, error) {
+	query := "SELECT * FROM " + quackAttachmentName + ".query(?)"
+	rows, err := q.duck.QueryContext(ctx, query, sqlText)
+	if err == nil || !retryStale || !isStaleQuackConnectionError(err) ||
+		ctx.Err() != nil {
+		return rows, err
+	}
+	q.reattachMu.Lock()
+	defer q.reattachMu.Unlock()
+	if reattachErr := q.reattachLocked(ctx); reattachErr != nil {
 		return nil, fmt.Errorf(
-			"attaching quack endpoint %s: %w",
-			RedactQuackURL(rawURL), err,
+			"%w; reattaching quack endpoint %s: %v",
+			err, RedactQuackURL(q.rawURL), reattachErr,
 		)
 	}
-	if _, err := conn.Exec("USE agentsview_remote"); err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("selecting quack catalog: %w", err)
+	return q.duck.QueryContext(ctx, query, sqlText)
+}
+
+func (q *quackClient) execRemote(
+	ctx context.Context, sqlText string, retryStale bool,
+) error {
+	query := "FROM " + quackAttachmentName + ".query(?)"
+	_, err := q.duck.ExecContext(ctx, query, sqlText)
+	if err == nil || !retryStale || !isStaleQuackConnectionError(err) ||
+		ctx.Err() != nil {
+		return err
 	}
-	return conn, nil
+	q.reattachMu.Lock()
+	defer q.reattachMu.Unlock()
+	if reattachErr := q.reattachLocked(ctx); reattachErr != nil {
+		return fmt.Errorf(
+			"%w; reattaching quack endpoint %s: %v",
+			err, RedactQuackURL(q.rawURL), reattachErr,
+		)
+	}
+	_, err = q.duck.ExecContext(ctx, query, sqlText)
+	return err
+}
+
+func isStaleQuackConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "invalid connection id") ||
+		isMissingQuackAttachmentError(err) ||
+		(strings.Contains(msg, "failed to send message") &&
+			strings.Contains(msg, "bad gateway"))
+}
+
+func isMissingQuackAttachmentError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "does not exist") &&
+		!strings.Contains(msg, "database not found") {
+		return false
+	}
+	return strings.Contains(msg, strings.ToLower(quackAttachmentName)) ||
+		strings.Contains(msg, "table function with name query")
 }
 
 func configureDuckDBThreads(db *sql.DB) error {
@@ -293,7 +533,9 @@ func ValidateQuackClientURL(rawURL, token string, allowInsecure bool) error {
 		return fmt.Errorf("duckdb url must start with quack")
 	}
 	if token == "" {
-		return fmt.Errorf("duckdb quack token is required")
+		return fmt.Errorf(
+			"duckdb quack token is required; set AGENTSVIEW_DUCKDB_TOKEN or [duckdb].token",
+		)
 	}
 	transport := strings.TrimPrefix(rawURL, "quack:")
 	if !strings.HasPrefix(transport, "http://") &&

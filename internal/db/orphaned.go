@@ -205,6 +205,9 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 	if err := copySessionDataForIDs(ctx, tx, "_orphaned_ids"); err != nil {
 		return 0, fmt.Errorf("copying orphaned data: %w", err)
 	}
+	if err := sanitizeCopiedSessionContent(ctx, tx, "_orphaned_ids"); err != nil {
+		return 0, fmt.Errorf("sanitizing orphaned data: %w", err)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf(
@@ -291,6 +294,9 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) (int, error) {
 
 	if err := copySessionDataForIDs(ctx, tx, "_trashed_ids"); err != nil {
 		return 0, fmt.Errorf("copying trashed data: %w", err)
+	}
+	if err := sanitizeCopiedSessionContent(ctx, tx, "_trashed_ids"); err != nil {
+		return 0, fmt.Errorf("sanitizing trashed data: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -786,6 +792,271 @@ func copySessionDataForIDs(
 		return err
 	}
 	return nil
+}
+
+func sanitizeCopiedSessionContent(
+	ctx context.Context,
+	tx *sql.Tx,
+	tempIDsTable string,
+) error {
+	if err := sanitizeCopiedMessageContent(ctx, tx, tempIDsTable); err != nil {
+		return err
+	}
+	if err := sanitizeCopiedToolCallInputs(ctx, tx, tempIDsTable); err != nil {
+		return err
+	}
+	if err := sanitizeCopiedToolCallResults(ctx, tx, tempIDsTable); err != nil {
+		return err
+	}
+	return sanitizeCopiedToolResultEvents(ctx, tx, tempIDsTable)
+}
+
+type copiedTextUpdate struct {
+	id      int64
+	content string
+	length  int
+}
+
+func sanitizeCopiedMessageContent(
+	ctx context.Context,
+	tx *sql.Tx,
+	tempIDsTable string,
+) error {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id, content, content_length
+		 FROM main.messages
+		 WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)`,
+	)
+	if err != nil {
+		return fmt.Errorf("querying copied messages: %w", err)
+	}
+	defer rows.Close()
+
+	var updates []copiedTextUpdate
+	for rows.Next() {
+		var row copiedTextUpdate
+		var storedLength int
+		if err := rows.Scan(&row.id, &row.content, &storedLength); err != nil {
+			return fmt.Errorf("scanning copied message: %w", err)
+		}
+		sanitized := SanitizeUTF8(row.content)
+		if sanitized == row.content {
+			continue
+		}
+		row.length = sanitizedCopiedTextLength(
+			row.content, sanitized, storedLength,
+		)
+		row.content = sanitized
+		updates = append(updates, row)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating copied messages: %w", err)
+	}
+	for _, row := range updates {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE main.messages
+			 SET content = ?, content_length = ?
+			 WHERE id = ?`,
+			row.content, row.length, row.id,
+		); err != nil {
+			return fmt.Errorf("updating copied message %d: %w", row.id, err)
+		}
+	}
+	return nil
+}
+
+type copiedNullableTextUpdate struct {
+	id      int64
+	content any
+	length  any
+}
+
+func sanitizeCopiedToolCallInputs(
+	ctx context.Context,
+	tx *sql.Tx,
+	tempIDsTable string,
+) error {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id, input_json
+		 FROM main.tool_calls
+		 WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)
+		   AND input_json IS NOT NULL`,
+	)
+	if err != nil {
+		return fmt.Errorf("querying copied tool call inputs: %w", err)
+	}
+	defer rows.Close()
+
+	var updates []copiedNullableTextUpdate
+	for rows.Next() {
+		var row copiedNullableTextUpdate
+		var content sql.NullString
+		if err := rows.Scan(&row.id, &content); err != nil {
+			return fmt.Errorf("scanning copied tool call input: %w", err)
+		}
+		if !content.Valid {
+			continue
+		}
+		sanitized := SanitizeUTF8(content.String)
+		if sanitized == content.String {
+			continue
+		}
+		if sanitized == "" {
+			row.content = nil
+		} else {
+			row.content = sanitized
+		}
+		updates = append(updates, row)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating copied tool call inputs: %w", err)
+	}
+	for _, row := range updates {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE main.tool_calls
+			 SET input_json = ?
+			 WHERE id = ?`,
+			row.content, row.id,
+		); err != nil {
+			return fmt.Errorf("updating copied tool call input %d: %w", row.id, err)
+		}
+	}
+	return nil
+}
+
+func sanitizeCopiedToolCallResults(
+	ctx context.Context,
+	tx *sql.Tx,
+	tempIDsTable string,
+) error {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id, result_content, result_content_length
+		 FROM main.tool_calls
+		 WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)
+		   AND result_content IS NOT NULL`,
+	)
+	if err != nil {
+		return fmt.Errorf("querying copied tool calls: %w", err)
+	}
+	defer rows.Close()
+
+	var updates []copiedNullableTextUpdate
+	for rows.Next() {
+		var id int64
+		var content sql.NullString
+		var storedLength sql.NullInt64
+		if err := rows.Scan(&id, &content, &storedLength); err != nil {
+			return fmt.Errorf("scanning copied tool call: %w", err)
+		}
+		if !content.Valid {
+			continue
+		}
+		sanitized := SanitizeUTF8(content.String)
+		if sanitized == content.String {
+			continue
+		}
+		update := copiedNullableTextUpdate{id: id}
+		if sanitized == "" {
+			update.content = nil
+		} else {
+			update.content = sanitized
+		}
+		update.length = sanitizedCopiedNullableTextLength(
+			content.String, sanitized, storedLength,
+		)
+		updates = append(updates, update)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating copied tool calls: %w", err)
+	}
+	for _, row := range updates {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE main.tool_calls
+			 SET result_content = ?, result_content_length = ?
+			 WHERE id = ?`,
+			row.content, row.length, row.id,
+		); err != nil {
+			return fmt.Errorf("updating copied tool call %d: %w", row.id, err)
+		}
+	}
+	return nil
+}
+
+func sanitizeCopiedToolResultEvents(
+	ctx context.Context,
+	tx *sql.Tx,
+	tempIDsTable string,
+) error {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id, content, content_length
+		 FROM main.tool_result_events
+		 WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)`,
+	)
+	if err != nil {
+		return fmt.Errorf("querying copied tool result events: %w", err)
+	}
+	defer rows.Close()
+
+	var updates []copiedTextUpdate
+	for rows.Next() {
+		var row copiedTextUpdate
+		var storedLength int
+		if err := rows.Scan(&row.id, &row.content, &storedLength); err != nil {
+			return fmt.Errorf("scanning copied tool result event: %w", err)
+		}
+		sanitized := SanitizeUTF8(row.content)
+		if sanitized == row.content {
+			continue
+		}
+		row.length = sanitizedCopiedTextLength(
+			row.content, sanitized, storedLength,
+		)
+		row.content = sanitized
+		updates = append(updates, row)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating copied tool result events: %w", err)
+	}
+	for _, row := range updates {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE main.tool_result_events
+			 SET content = ?, content_length = ?
+			 WHERE id = ?`,
+			row.content, row.length, row.id,
+		); err != nil {
+			return fmt.Errorf(
+				"updating copied tool result event %d: %w",
+				row.id, err,
+			)
+		}
+	}
+	return nil
+}
+
+func sanitizedCopiedTextLength(
+	original, sanitized string,
+	storedLength int,
+) int {
+	removed := len(original) - len(sanitized)
+	if removed > 0 {
+		subtractRemovedBytes(&storedLength, removed)
+	}
+	return storedLength
+}
+
+func sanitizedCopiedNullableTextLength(
+	original, sanitized string,
+	storedLength sql.NullInt64,
+) any {
+	if !storedLength.Valid {
+		return nil
+	}
+	length := int(storedLength.Int64)
+	removed := len(original) - len(sanitized)
+	if removed > 0 {
+		subtractRemovedBytes(&length, removed)
+	}
+	return int64(length)
 }
 
 func copyPinnedMessagesForIDs(

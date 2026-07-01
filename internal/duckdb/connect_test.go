@@ -1,6 +1,7 @@
 package duckdb
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -85,6 +86,21 @@ func TestValidateQuackClientURL(t *testing.T) {
 	}
 }
 
+func TestIsStaleQuackConnectionError(t *testing.T) {
+	assert.True(t, isStaleQuackConnectionError(
+		errors.New("Invalid Input Error: Invalid connection id"),
+	))
+	assert.True(t, isStaleQuackConnectionError(
+		errors.New("IO Error: Failed to send message: Bad Gateway"),
+	))
+	assert.True(t, isStaleQuackConnectionError(
+		errors.New("Catalog Error: Table Function with name query does not exist!"),
+	))
+	assert.False(t, isStaleQuackConnectionError(
+		errors.New("Catalog Error: Table with name sessions does not exist"),
+	))
+}
+
 func TestRedactQuackURL(t *testing.T) {
 	got := RedactQuackURL(
 		"quack:https://account:credential0@duck.example.com/db?token=credential1&password=credential2&api_key=credential3&x=1",
@@ -112,6 +128,28 @@ func TestRedactQuackURLNativeTransport(t *testing.T) {
 	assert.Contains(t, got, "token=%3Credacted%3E")
 	assert.Contains(t, got, "x=1")
 	assert.NotContains(t, got, "#")
+}
+
+func TestRedactQuackClientErrorScrubsAttachSecrets(t *testing.T) {
+	rawURL := "quack:https://account:credential0@duck.example.com/db?token=credential1&x=1"
+	token := "credential2'quoted"
+	err := redactQuackClientError(
+		errors.New(
+			"Parser Error near "+quackAttachSQL(rawURL, token)+
+				"; IO Error connecting to https://account:credential0@DUCK.EXAMPLE.COM:443/db?x=1&token=credential1",
+		),
+		rawURL,
+		token,
+	)
+	msg := err.Error()
+
+	assert.NotContains(t, msg, "account")
+	assert.NotContains(t, msg, "credential0")
+	assert.NotContains(t, msg, "credential1")
+	assert.NotContains(t, msg, "credential2")
+	assert.NotContains(t, msg, "credential2''quoted")
+	assert.Contains(t, msg, "<redacted>")
+	assert.Contains(t, msg, "duck.example.com")
 }
 
 func TestSyncStateTargetForConfigScopesRemoteURLWithoutSecrets(t *testing.T) {

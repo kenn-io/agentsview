@@ -1351,10 +1351,14 @@ func TestProcessAntigravityBrainOnlyUpdateNotSkipped(t *testing.T) {
 	// Brain-only update: the conversation DB files are untouched.
 	brainDir := filepath.Join(root, "brain", id)
 	require.NoError(t, os.MkdirAll(brainDir, 0o755))
+	brainPath := filepath.Join(brainDir, "task.md")
 	require.NoError(t, os.WriteFile(
-		filepath.Join(brainDir, "task.md"),
-		[]byte("brain artifact body"), 0o644,
+		brainPath, []byte("brain artifact body"), 0o644,
 	))
+	info, err := os.Stat(dbPath)
+	require.NoError(t, err)
+	brainTime := info.ModTime().Add(5 * time.Second)
+	require.NoError(t, os.Chtimes(brainPath, brainTime, brainTime))
 
 	res = e.processFile(ctx, file)
 	require.False(t, res.skip,

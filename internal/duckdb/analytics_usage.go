@@ -79,7 +79,7 @@ func (s *Store) analyticsSessionsFiltered(
 	where, args := duckBuildAnalyticsWhere(
 		f, "COALESCE(s.started_at, s.created_at)", "s.",
 		includeDate, includeTime)
-	rows, err := s.duck.QueryContext(ctx, `
+	rows, err := s.queryContext(ctx, `
 		SELECT id, project, machine, agent, first_message,
 			COALESCE(display_name, session_name) AS display_name,
 			started_at, ended_at, created_at, message_count,
@@ -523,7 +523,7 @@ func (s *Store) getAnalyticsModelsForSessionIDs(
 	models := map[string]bool{}
 	err := duckQueryChunked(sessionIDs, func(chunk []string) error {
 		ph, args := duckInPlaceholders(chunk)
-		rows, err := s.duck.QueryContext(ctx, `
+		rows, err := s.queryContext(ctx, `
 			SELECT DISTINCT model
 			FROM messages
 			WHERE session_id IN `+ph+`
@@ -575,7 +575,7 @@ func (s *Store) getAnalyticsModelsForSessionIDsFiltered(
 	models := map[string]bool{}
 	err := duckQueryChunked(unique, func(chunk []string) error {
 		ph, args := duckInPlaceholders(chunk)
-		rows, err := s.duck.QueryContext(ctx, `
+		rows, err := s.queryContext(ctx, `
 			SELECT model, timestamp
 			FROM messages
 			WHERE session_id IN `+ph+`
@@ -814,7 +814,7 @@ func (s *Store) GetAnalyticsSummary(
 				) top_projects
 			)::DOUBLE / NULLIF(SUM(message_count), 0), 3), 0) AS concentration
 		FROM filtered`
-	rows, err := s.duck.QueryContext(ctx, query, queryArgs...)
+	rows, err := s.queryContext(ctx, query, queryArgs...)
 	if err != nil {
 		return db.AnalyticsSummary{}, fmt.Errorf("querying duckdb analytics summary: %w", err)
 	}
@@ -847,7 +847,7 @@ func (s *Store) GetAnalyticsSummary(
 		return db.AnalyticsSummary{}, fmt.Errorf("closing duckdb analytics summary rows: %w", err)
 	}
 
-	agentRows, err := s.duck.QueryContext(ctx, `
+	agentRows, err := s.queryContext(ctx, `
 		WITH filtered AS (
 			SELECT s.agent, s.message_count
 			FROM sessions s
@@ -915,7 +915,7 @@ func (s *Store) getAnalyticsFilteredToolCallCounts(
 	loc := analyticsLocation(f.Timezone)
 	err := duckQueryChunked(sessionIDs, func(chunk []string) error {
 		ph, args := duckInPlaceholders(chunk)
-		rows, err := s.duck.QueryContext(ctx, `
+		rows, err := s.queryContext(ctx, `
 			SELECT tc.session_id, m.model, m.timestamp, COUNT(*)
 			FROM tool_calls tc
 			JOIN messages m
@@ -1064,7 +1064,7 @@ func (s *Store) queryActivityBuckets(
 		queryArgs = append(queryArgs, modelArgs...)
 		queryArgs = append(queryArgs, modelArgs...)
 	}
-	rows, err := s.duck.QueryContext(ctx, `
+	rows, err := s.queryContext(ctx, `
 		WITH filtered_sessions AS (
 			SELECT s.id, s.message_count, `+localDate+` AS local_date
 			FROM sessions s
@@ -1149,7 +1149,7 @@ func (s *Store) addActivityAgentCounts(
 	if _, modelArgs := duckAnalyticsCSVPredicate("m.model", f.Model); len(modelArgs) > 0 {
 		queryArgs = append(queryArgs, modelArgs...)
 	}
-	rows, err := s.duck.QueryContext(ctx, `
+	rows, err := s.queryContext(ctx, `
 		WITH filtered_sessions AS (
 			SELECT s.id, s.agent, `+localDate+` AS local_date
 			FROM sessions s
@@ -1312,7 +1312,7 @@ func (s *Store) GetAnalyticsHeatmap(
 	}
 	queryArgs := append([]any{}, localDateArgs...)
 	queryArgs = append(queryArgs, args...)
-	rows, err := s.duck.QueryContext(ctx, `
+	rows, err := s.queryContext(ctx, `
 		SELECT `+localDate+` AS local_date, `+valueExpr+` AS value
 		FROM sessions s
 		WHERE `+where+`
@@ -1504,7 +1504,7 @@ func (s *Store) GetAnalyticsHourOfWeek(
 	localTime, localTimeArgs := duckAnalyticsLocalTimeExpr("m.timestamp", f)
 	queryArgs := append([]any{}, args...)
 	queryArgs = append(queryArgs, localTimeArgs...)
-	rows, err := s.duck.QueryContext(ctx, `
+	rows, err := s.queryContext(ctx, `
 		WITH filtered_sessions AS (
 			SELECT s.id
 			FROM sessions s
@@ -1730,7 +1730,7 @@ func (s *Store) analyticsAutonomyBuckets(
 		args[i] = id
 		placeholders[i] = "?"
 	}
-	rows, err := s.duck.QueryContext(ctx, `
+	rows, err := s.queryContext(ctx, `
 		SELECT session_id,
 			SUM(CASE WHEN role = 'user' AND is_system = FALSE THEN 1 ELSE 0 END) AS user_count,
 			SUM(CASE WHEN role = 'assistant' AND has_tool_use = TRUE THEN 1 ELSE 0 END) AS tool_count
@@ -1826,7 +1826,7 @@ func (s *Store) GetAnalyticsTools(
 		}
 		query += `
 				GROUP BY tc.session_id, tc.category, m.timestamp`
-		rows, qErr := s.duck.QueryContext(ctx, query, args...)
+		rows, qErr := s.queryContext(ctx, query, args...)
 		if qErr != nil {
 			return qErr
 		}
@@ -1928,7 +1928,7 @@ func (s *Store) GetAnalyticsSkills(
 		ph, args := duckInPlaceholders(chunk)
 		modelPred, modelArgs := duckAnalyticsCSVPredicate("m.model", f.Model)
 		args = append(args, modelArgs...)
-		rows, qErr := s.duck.QueryContext(ctx,
+		rows, qErr := s.queryContext(ctx,
 			`SELECT tc.session_id, TRIM(COALESCE(tc.skill_name, '')),
 				COUNT(*), m.timestamp
 				FROM tool_calls tc
@@ -2133,7 +2133,7 @@ func (s *Store) velocityMessages(
 		return out, nil
 	}
 	args, placeholders := stringInArgs(sessionIDs)
-	rows, err := s.duck.QueryContext(ctx, `
+	rows, err := s.queryContext(ctx, `
 		SELECT session_id, ordinal, role, timestamp, content_length
 		FROM messages
 		WHERE session_id IN (`+strings.Join(placeholders, ",")+`)
@@ -2202,7 +2202,7 @@ func (s *Store) velocityToolCounts(
 		return out, nil
 	}
 	args, placeholders := stringInArgs(sessionIDs)
-	rows, err := s.duck.QueryContext(ctx, `
+	rows, err := s.queryContext(ctx, `
 		SELECT session_id, COUNT(*)
 		FROM tool_calls
 		WHERE session_id IN (`+strings.Join(placeholders, ",")+`)
@@ -2495,7 +2495,7 @@ func (s *Store) GetAnalyticsTopSessions(
 		FROM sessions s
 		WHERE ` + where + `
 		ORDER BY ` + orderExpr + limitClause
-	rows, err := s.duck.QueryContext(ctx, query, args...)
+	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return db.TopSessionsResponse{}, fmt.Errorf("querying duckdb analytics top sessions: %w", err)
 	}
@@ -2647,7 +2647,7 @@ func (s *Store) duckPopulateFrustrationMarkers(
 		FROM messages
 		WHERE role = 'user' AND session_id IN (` +
 		strings.Join(placeholders, ",") + `)`
-	msgRows, err := s.duck.QueryContext(ctx, q, args...)
+	msgRows, err := s.queryContext(ctx, q, args...)
 	if err != nil {
 		return fmt.Errorf("querying duckdb frustration markers: %w", err)
 	}
@@ -2733,7 +2733,7 @@ func (s *Store) duckSignalMessages(
 	}
 	q += `
 		ORDER BY session_id, ordinal`
-	msgRows, err := s.duck.QueryContext(ctx, q, args...)
+	msgRows, err := s.queryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying duckdb signal messages: %w", err)
 	}
@@ -2804,7 +2804,7 @@ func (s *Store) GetTrendsTerms(
 		}
 		return t.In(loc), true
 	}
-	rows, err := s.duck.QueryContext(ctx, `
+	rows, err := s.queryContext(ctx, `
 		SELECT m.session_id, m.ordinal, m.role, m.is_system,
 			COALESCE(m.model, ''), m.content, m.timestamp,
 			s.started_at, s.created_at
@@ -2899,7 +2899,7 @@ type duckRates struct {
 }
 
 func (s *Store) loadPricing(ctx context.Context) (map[string]duckRates, error) {
-	rows, err := s.duck.QueryContext(ctx, `
+	rows, err := s.queryContext(ctx, `
 		SELECT model_pattern, input_per_mtok, output_per_mtok,
 			cache_creation_per_mtok, cache_read_per_mtok
 		FROM model_pricing`)
@@ -3477,7 +3477,7 @@ func (s *Store) dailyUsageAggregateRows(
 		FROM usage_localized
 		GROUP BY local_date, project, agent, model
 		ORDER BY local_date ASC, project ASC, agent ASC, model ASC`
-	rows, err := s.duck.QueryContext(ctx, query, args...)
+	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying duckdb daily usage aggregates: %w", err)
 	}
@@ -3704,7 +3704,7 @@ func (s *Store) sessionUsageAggregateRows(
 		FROM usage_localized
 		GROUP BY session_id, project, agent, model
 		ORDER BY session_id ASC, model ASC`
-	rows, err := s.duck.QueryContext(ctx, query, args...)
+	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying duckdb session usage aggregates: %w", err)
 	}

@@ -842,9 +842,9 @@ func TestCurrentDataVersionGoalContextFiltering(t *testing.T) {
 		"Codex goal-context filtering requires a data version bump")
 }
 
-func TestCurrentDataVersionTranscriptFidelity(t *testing.T) {
-	assert.Equal(t, 57, CurrentDataVersion(),
-		"antigravity-cli transcript fidelity requires a data version bump")
+func TestCurrentDataVersionResultContentNULSanitization(t *testing.T) {
+	assert.Equal(t, 58, CurrentDataVersion(),
+		"message/result content NUL sanitization requires a data version bump")
 }
 
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
@@ -5488,6 +5488,41 @@ func TestGetSessionForIncremental(t *testing.T) {
 		assert.True(t, got.HasTotalOutputTokens, "stored HasTotalOutputTokens = false, want true")
 		assert.True(t, got.HasPeakContextTokens, "stored HasPeakContextTokens = false, want true")
 	})
+}
+
+func TestFileIdentityChanged(t *testing.T) {
+	d := testDB(t)
+	path := "/tmp/sessions/forked.jsonl"
+
+	requireNoError(t, d.UpsertSession(Session{
+		ID:         "fork-main",
+		Agent:      "claude",
+		FilePath:   new(path),
+		FileInode:  new(int64(10)),
+		FileDevice: new(int64(20)),
+	}), "upsert fork-main")
+	requireNoError(t, d.UpsertSession(Session{
+		ID:         "fork-side",
+		Agent:      "claude",
+		FilePath:   new(path),
+		FileInode:  new(int64(10)),
+		FileDevice: new(int64(20)),
+	}), "upsert fork-side")
+
+	assert.False(t, d.FileIdentityChanged(path, 10, 20), "same identity changed")
+	assert.True(t, d.FileIdentityChanged(path, 11, 20), "different inode unchanged")
+	assert.True(t, d.FileIdentityChanged(path, 10, 21), "different device unchanged")
+	assert.False(t, d.FileIdentityChanged(path, 0, 20), "zero inode changed")
+	assert.False(t, d.FileIdentityChanged(path, 10, 0), "zero device changed")
+	assert.False(t, d.FileIdentityChanged("/tmp/sessions/missing.jsonl", 11, 20), "missing path changed")
+
+	legacyPath := "/tmp/sessions/legacy.jsonl"
+	requireNoError(t, d.UpsertSession(Session{
+		ID:       "legacy",
+		Agent:    "claude",
+		FilePath: new(legacyPath),
+	}), "upsert legacy")
+	assert.False(t, d.FileIdentityChanged(legacyPath, 1, 1), "missing stored identity changed")
 }
 
 func TestUpdateSessionIncremental(t *testing.T) {

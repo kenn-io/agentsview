@@ -58,7 +58,7 @@ func (s *Store) ListSecretFindings(
 		where += " AND " + strings.Join(preds, " AND ")
 	}
 	args = append(args, f.Limit+1, f.Cursor)
-	rows, err := s.duck.QueryContext(ctx, `
+	rows, err := s.queryContext(ctx, `
 		SELECT sf.session_id, sf.rule_name, sf.confidence,
 			sf.location_kind, sf.message_ordinal, sf.call_index,
 			sf.event_index, sf.match_start, sf.match_end,

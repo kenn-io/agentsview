@@ -36,17 +36,13 @@ import (
 //     blanked. Empty-string handling is preserved as-is so downstream
 //     localTime treats a blanked timestamp as invalid.
 //
-// DELIBERATE EXCLUSION: Message.TokenUsage (json.RawMessage) and the
-// nested ToolCalls/ToolResults string fields are intentionally NOT run
-// through the central sanitizer here. They are sanitized symmetrically by
-// the local fingerprint builders and the pg-push path, so idempotency and
-// backend parity still hold. Usage aggregation separately clamps numeric
-// TokenUsage fields as it reads them, so a retained corrupt raw value cannot
-// inflate dashboards or estimated cost; leaving these nested values out only
-// means local SQLite columns may retain control bytes in those nested values.
-// Expanding sanitization into nested structures is deferred to a
-// follow-up to avoid changing the bytes fingerprints are computed over in
-// this commit.
+// Message.TokenUsage (json.RawMessage), tool-call input JSON, and transient
+// ToolResults.ContentRaw are intentionally not run through this pass. They are
+// raw provider payloads, not persisted display text. Persisted result content
+// (tool_calls.result_content and tool_result_events.content) follows the same
+// text contract as Message.Content, with length fields reduced by the
+// stripped-byte delta so re-ingest rewrites historical poison rows into the
+// stable stored shape.
 //
 // CRITICAL idempotency invariant: SanitizeUTF8 is the shared
 // sanitization seam used here, by the local fingerprint builders, and
@@ -159,14 +155,9 @@ func SanitizeMessage(m *Message) ValidationStats {
 	// which would false-fire forever when stored content was stripped but
 	// its length stayed raw; the reconcile path sanitizes re-parsed
 	// content before comparing, so the lengths stay aligned.
-	origLen := len(m.Content)
-	sanitizeStringField(&m.Content, &stats)
-	if removed := origLen - len(m.Content); removed > 0 {
-		m.ContentLength -= removed
-		if m.ContentLength < 0 {
-			m.ContentLength = 0
-		}
-	}
+	sanitizeLengthTrackedString(
+		&m.Content, &m.ContentLength, &stats,
+	)
 	origThinkingLen := len(m.ThinkingText)
 	sanitizeStringField(&m.ThinkingText, &stats)
 	if removed := origThinkingLen - len(m.ThinkingText); removed > 0 {
@@ -189,6 +180,10 @@ func SanitizeMessage(m *Message) ValidationStats {
 	sanitizeStringField(&m.SourceUUID, &stats)
 	sanitizeStringField(&m.SourceParentUUID, &stats)
 
+	for i := range m.ToolCalls {
+		sanitizeToolCallResultContent(&m.ToolCalls[i], &stats)
+	}
+
 	sanitizeStringField(&m.Model, &stats)
 	if ClampModel(&m.Model) {
 		stats.ModelClamped++
@@ -206,6 +201,21 @@ func SanitizeMessage(m *Message) ValidationStats {
 	}
 
 	return stats
+}
+
+func sanitizeToolCallResultContent(
+	tc *ToolCall, stats *ValidationStats,
+) {
+	sanitizeLengthTrackedString(
+		&tc.ResultContent, &tc.ResultContentLength, stats,
+	)
+	for i := range tc.ResultEvents {
+		sanitizeLengthTrackedString(
+			&tc.ResultEvents[i].Content,
+			&tc.ResultEvents[i].ContentLength,
+			stats,
+		)
+	}
 }
 
 // SanitizeUsageEvent applies the contract to a single usage event row.
@@ -319,6 +329,23 @@ func sanitizeStringPtrField(p *string, stats *ValidationStats) {
 		return
 	}
 	sanitizeStringField(p, stats)
+}
+
+func sanitizeLengthTrackedString(
+	p *string, length *int, stats *ValidationStats,
+) {
+	origLen := len(*p)
+	sanitizeStringField(p, stats)
+	if removed := origLen - len(*p); removed > 0 {
+		subtractRemovedBytes(length, removed)
+	}
+}
+
+func subtractRemovedBytes(length *int, removed int) {
+	*length -= removed
+	if *length < 0 {
+		*length = 0
+	}
 }
 
 // ClampModel truncates an over-long model id in place and reports

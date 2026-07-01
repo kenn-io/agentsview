@@ -3,10 +3,12 @@
 package duckdb
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -48,6 +50,660 @@ func TestSyncFullPushCreatesExpectedRows(t *testing.T) {
 		fixture.alphaID,
 	).Scan(&firstMessage))
 	assert.Equal(t, "alpha first", firstMessage)
+}
+
+func TestSyncPushContinuesAfterSessionError(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+		{
+			Session: syncSession(
+				"duck-bad", "alpha", "bad first",
+				"2026-01-10T00:00:00.000Z", 1,
+			),
+			Messages: []db.Message{
+				syncMessage(
+					"duck-bad", 0, "user", "bad first",
+					"not-a-timestamp",
+				),
+			},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+		{
+			Session: syncSession(
+				"duck-good", "alpha", "good first",
+				"2026-01-11T00:00:00.000Z", 1,
+			),
+			Messages: []db.Message{
+				syncMessage(
+					"duck-good", 0, "user", "good first",
+					"2026-01-11T00:00:00.000Z",
+				),
+			},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+	})
+	require.NoError(t, err)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	var progress []PushProgress
+
+	result, err := syncer.Push(ctx, true, func(p PushProgress) {
+		progress = append(progress, p)
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, result.SessionsPushed)
+	assert.Equal(t, 1, result.MessagesPushed)
+	assert.Equal(t, 1, result.Errors)
+	assertDuckDBCountWhere(t, syncer.DB(), "sessions", "id = ?", "duck-good", 1)
+	assertDuckDBCountWhere(t, syncer.DB(), "sessions", "id = ?", "duck-bad", 0)
+	assertDuckDBCountWhere(t, syncer.DB(), "messages", "session_id = ?", "duck-good", 1)
+	require.NotEmpty(t, progress)
+	last := progress[len(progress)-1]
+	assert.Equal(t, 2, last.SessionsDone)
+	assert.Equal(t, 2, last.SessionsTotal)
+	assert.Equal(t, 1, last.MessagesDone)
+	assert.Equal(t, 1, last.Errors)
+
+	watermark, err := local.GetSyncState(lastPushStateKey)
+	require.NoError(t, err)
+	assert.Empty(t, watermark)
+
+	_, err = local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: syncSession(
+			"duck-bad", "alpha", "bad repaired",
+			"2026-01-10T00:00:00.000Z", 1,
+		),
+		Messages: []db.Message{
+			syncMessage(
+				"duck-bad", 0, "user", "bad repaired",
+				"2026-01-10T00:00:00.000Z",
+			),
+		},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	second, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, second.Errors)
+	assertDuckDBCountWhere(t, syncer.DB(), "sessions", "id = ?", "duck-bad", 1)
+	assertDuckDBCountWhere(t, syncer.DB(), "messages", "session_id = ?", "duck-bad", 1)
+	watermark, err = local.GetSyncState(lastPushStateKey)
+	require.NoError(t, err)
+	assert.NotEmpty(t, watermark)
+}
+
+func TestSyncPushSkipsCurationRefreshAfterSessionError(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	sessionID := "duck-bad-curation"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: syncSession(
+			sessionID, "alpha", "bad curation",
+			"2026-01-10T00:00:00.000Z", 1,
+		),
+		Messages: []db.Message{
+			syncMessage(
+				sessionID, 0, "user", "bad curation",
+				"not-a-timestamp",
+			),
+		},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	ok, err := local.StarSession(sessionID)
+	require.NoError(t, err)
+	require.True(t, ok)
+	msgs, err := local.GetAllMessages(ctx, sessionID)
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	note := "bad pin"
+	_, err = local.PinMessage(sessionID, msgs[0].ID, &note)
+	require.NoError(t, err)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+
+	result, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Errors)
+	assertDuckDBCountWhere(t, syncer.DB(), "sessions", "id = ?", sessionID, 0)
+	assertDuckDBCountWhere(t, syncer.DB(), "pinned_messages", "session_id = ?", sessionID, 0)
+	assertDuckDBCountWhere(t, syncer.DB(), "starred_sessions", "session_id = ?", sessionID, 0)
+}
+
+func TestPushSessionBatchReturnsContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	local := newLocalDB(t)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	var result PushResult
+	var pushed []db.Session
+
+	err := syncer.pushSessionBatch(
+		ctx,
+		[]db.Session{syncSession(
+			"duck-canceled", "alpha", "canceled",
+			"2026-01-10T00:00:00.000Z", 1,
+		)},
+		0, 1, &result, &pushed, nil,
+	)
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 0, result.Errors)
+	assert.Empty(t, pushed)
+}
+
+func TestPushSessionBatchLogsAbandonedSessionsAfterContextCancel(
+	t *testing.T,
+) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	local := newLocalDB(t)
+	sessions := make([]db.Session, 0, 3)
+	writes := make([]db.SessionBatchWrite, 0, 3)
+	for i := range 3 {
+		sessionID := fmt.Sprintf("duck-cancel-fallback-%d", i)
+		sess := syncSession(
+			sessionID, "alpha", "cancel fallback",
+			"2026-01-10T00:00:00.000Z", 1,
+		)
+		sessions = append(sessions, sess)
+		writes = append(writes, db.SessionBatchWrite{
+			Session: sess,
+			Messages: []db.Message{
+				syncMessage(
+					sessionID, 0, "user", "cancel fallback",
+					"not-a-timestamp",
+				),
+			},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		})
+	}
+	_, err := local.WriteSessionBatchAtomic(writes)
+	require.NoError(t, err)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	var result PushResult
+	var pushed []db.Session
+	var logs bytes.Buffer
+	oldLog := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(oldLog) })
+
+	err = syncer.pushSessionBatch(
+		ctx, sessions, 0, len(sessions), &result, &pushed,
+		func(p PushProgress) {
+			if p.SessionsDone == 1 {
+				cancel()
+			}
+		},
+	)
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 3, result.Errors)
+	assert.Empty(t, pushed)
+	gotLogs := logs.String()
+	assert.Equal(t, 1, strings.Count(gotLogs, "skipping session"))
+	assert.Contains(t, gotLogs, "abandoning 2 sessions")
+}
+
+func TestSyncPushReportsSessionDiagnosticsByAgent(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	seedDuckDBSyncFixture(t, local)
+	codexID := "duck-sync-codex"
+	codexSession := syncSession(
+		codexID, "gamma", "codex first",
+		"2026-01-12T00:00:00.000Z", 1,
+	)
+	codexSession.Agent = "codex"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: codexSession,
+		Messages: []db.Message{
+			syncMessage(
+				codexID, 0, "user", "codex first",
+				"2026-01-12T00:00:00.000Z",
+			),
+		},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+
+	result, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+
+	wantByAgent := map[string]int{"claude": 2, "codex": 1}
+	assert.True(t, result.Diagnostics.Full)
+	assert.Empty(t, result.Diagnostics.LastPushAt)
+	assert.Equal(t, 3, result.Diagnostics.LocalSessions.Total)
+	assert.Equal(t, wantByAgent, result.Diagnostics.LocalSessions.ByAgent)
+	assert.Equal(t, 3, result.Diagnostics.CandidateSessions.Total)
+	assert.Equal(t, wantByAgent, result.Diagnostics.CandidateSessions.ByAgent)
+	assert.Equal(t, 0, result.Diagnostics.SkippedUnchangedSessions.Total)
+	assert.Empty(t, result.Diagnostics.SkippedUnchangedSessions.ByAgent)
+	assert.Equal(t, 3, result.Diagnostics.PushedSessions.Total)
+	assert.Equal(t, wantByAgent, result.Diagnostics.PushedSessions.ByAgent)
+	assert.NotEmpty(t, result.Diagnostics.Cutoff)
+}
+
+func TestSyncPushReportsProgressAcrossBatchBoundaries(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	count := duckSessionPushBatchSize + 1
+	writes := make([]db.SessionBatchWrite, 0, count)
+	for i := range count {
+		sessionID := fmt.Sprintf("duck-batch-%03d", i)
+		ts := fmt.Sprintf("2026-01-12T00:%02d:00.000Z", i%60)
+		writes = append(writes, db.SessionBatchWrite{
+			Session: syncSession(
+				sessionID, "alpha", "batch first", ts, 1,
+			),
+			Messages: []db.Message{
+				syncMessage(
+					sessionID, 0, "user", "batch first", ts,
+				),
+			},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		})
+	}
+	_, err := local.WriteSessionBatchAtomic(writes)
+	require.NoError(t, err)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	var progress []PushProgress
+
+	result, err := syncer.Push(ctx, true, func(p PushProgress) {
+		progress = append(progress, p)
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, count, result.SessionsPushed)
+	assert.Equal(t, count, result.MessagesPushed)
+	assert.Equal(t, 0, result.Errors)
+	require.Len(t, progress, count)
+	assert.Equal(t, duckSessionPushBatchSize, progress[duckSessionPushBatchSize-1].SessionsDone)
+	assert.Equal(t, count, progress[duckSessionPushBatchSize].SessionsDone)
+	assert.Equal(t, count, progress[duckSessionPushBatchSize].SessionsTotal)
+	assert.Equal(t, count, progress[duckSessionPushBatchSize].MessagesDone)
+}
+
+func TestDuckValueLiteralFormatsTimestampWithoutZone(t *testing.T) {
+	got, err := duckValueLiteral(time.Date(
+		2026, time.January, 10, 3, 4, 5, 123456789, time.UTC,
+	))
+	require.NoError(t, err)
+
+	assert.Equal(t, "TIMESTAMP '2026-01-10 03:04:05.123456'", got)
+}
+
+func TestDuckSQLWithArgsExecutesQuotedMultilineString(t *testing.T) {
+	ctx := context.Background()
+	duck := openTestDuckDB(t)
+	want := "first line\nquoted ' value\ncontains $$ delimiter text"
+
+	stmt, err := duckSQLWithArgs(`SELECT ?`, want)
+	require.NoError(t, err)
+
+	var got string
+	require.NoError(t, duck.QueryRowContext(ctx, stmt).Scan(&got))
+	assert.Equal(t, want, got)
+}
+
+func TestDuckSQLWithArgsStripsNULFromStringLiteral(t *testing.T) {
+	ctx := context.Background()
+	duck := openTestDuckDB(t)
+
+	stmt, err := duckSQLWithArgs(`SELECT ?`, "before\x00after")
+	require.NoError(t, err)
+
+	var got string
+	require.NoError(t, duck.QueryRowContext(ctx, stmt).Scan(&got))
+	assert.Equal(t, "beforeafter", got)
+}
+
+func TestDuckSQLWithArgsExecutesStringPointer(t *testing.T) {
+	ctx := context.Background()
+	duck := openTestDuckDB(t)
+	want := "pinned note\nquoted ' value"
+
+	stmt, err := duckSQLWithArgs(`SELECT ?`, &want)
+	require.NoError(t, err)
+
+	var got string
+	require.NoError(t, duck.QueryRowContext(ctx, stmt).Scan(&got))
+	assert.Equal(t, want, got)
+}
+
+func TestExecDuckRemoteMutationBatchCoalescesSuccessfulBatch(t *testing.T) {
+	ctx := context.Background()
+	batch := &duckRemoteMutationBatch{}
+	_, err := batch.ExecContext(ctx, `INSERT INTO remote_test VALUES (?)`, 1)
+	require.NoError(t, err)
+	_, err = batch.ExecContext(ctx, `DELETE FROM remote_test WHERE id = ?`, 2)
+	require.NoError(t, err)
+	var calls []string
+
+	err = execDuckRemoteMutationBatch(
+		ctx,
+		func(_ context.Context, sqlText string) error {
+			calls = append(calls, sqlText)
+			return nil
+		},
+		"test batch",
+		batch,
+		true,
+	)
+	require.NoError(t, err)
+
+	require.Len(t, calls, 1)
+	assert.Equal(t, `BEGIN TRANSACTION;
+INSERT INTO remote_test VALUES (1);
+DELETE FROM remote_test WHERE id = 2;
+COMMIT`, calls[0])
+}
+
+func TestExecDuckRemoteMutationBatchCoalescedFailureRollsBack(t *testing.T) {
+	ctx := context.Background()
+	batch := &duckRemoteMutationBatch{}
+	_, err := batch.ExecContext(ctx, `INSERT INTO remote_test VALUES (?)`, 1)
+	require.NoError(t, err)
+	var calls []string
+
+	err = execDuckRemoteMutationBatch(
+		ctx,
+		func(_ context.Context, sqlText string) error {
+			calls = append(calls, sqlText)
+			if sqlText == "ROLLBACK" {
+				return nil
+			}
+			return fmt.Errorf("batch failed")
+		},
+		"test batch",
+		batch,
+		true,
+	)
+
+	require.ErrorContains(t, err, "batch failed")
+	require.Len(t, calls, 2)
+	assert.Contains(t, calls[0], "BEGIN TRANSACTION")
+	assert.Equal(t, "ROLLBACK", calls[1])
+}
+
+func TestExecDuckRemoteMutationBatchCoalescedRollbackFailureIsWrapped(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	batch := &duckRemoteMutationBatch{}
+	_, err := batch.ExecContext(ctx, `INSERT INTO remote_test VALUES (?)`, 1)
+	require.NoError(t, err)
+
+	err = execDuckRemoteMutationBatch(
+		ctx,
+		func(_ context.Context, sqlText string) error {
+			if sqlText == "ROLLBACK" {
+				return fmt.Errorf("rollback failed")
+			}
+			return fmt.Errorf("batch failed")
+		},
+		"test batch",
+		batch,
+		true,
+	)
+
+	require.ErrorContains(t, err, "batch failed")
+	assert.ErrorContains(t, err, "rollback test batch")
+	assert.ErrorContains(t, err, "rollback failed")
+}
+
+func TestAppendDuckRemoteMutationBatchFlushesBeforeByteBudget(t *testing.T) {
+	ctx := context.Background()
+	first := &duckRemoteMutationBatch{}
+	_, err := first.ExecContext(ctx,
+		`INSERT INTO remote_test VALUES (?, ?)`, 1, "first",
+	)
+	require.NoError(t, err)
+	second := &duckRemoteMutationBatch{}
+	_, err = second.ExecContext(ctx,
+		`INSERT INTO remote_test VALUES (?, ?)`, 2, "second",
+	)
+	require.NoError(t, err)
+	maxBytes := first.combinedTransactionBytes(second) - 1
+	current := &duckRemoteMutationBatch{}
+	var calls []string
+	exec := func(_ context.Context, sqlText string) error {
+		calls = append(calls, sqlText)
+		return nil
+	}
+
+	current, err = appendDuckRemoteMutationBatch(
+		ctx, exec, exec, "test batch", current, first, maxBytes,
+	)
+	require.NoError(t, err)
+	current, err = appendDuckRemoteMutationBatch(
+		ctx, exec, exec, "test batch", current, second, maxBytes,
+	)
+	require.NoError(t, err)
+	require.Len(t, calls, 1)
+	assert.Contains(t, calls[0], "$")
+	assert.Contains(t, calls[0], "first")
+	assert.NotContains(t, calls[0], "second")
+
+	require.NoError(t, execDuckRemoteMutationBatch(
+		ctx, exec, "test batch", current, true,
+	))
+	require.Len(t, calls, 2)
+	assert.Contains(t, calls[1], "second")
+}
+
+func TestAppendDuckRemoteMutationBatchUsesStatementModeForOversizeSession(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	oversize := &duckRemoteMutationBatch{}
+	_, err := oversize.ExecContext(ctx,
+		`INSERT INTO remote_test VALUES (?, ?)`, 1, strings.Repeat("x", 64),
+	)
+	require.NoError(t, err)
+	maxBytes := oversize.transactionBytes() - 1
+	var calls []string
+
+	current, err := appendDuckRemoteMutationBatch(
+		ctx,
+		func(_ context.Context, sqlText string) error {
+			calls = append(calls, sqlText)
+			return nil
+		},
+		func(_ context.Context, sqlText string) error {
+			calls = append(calls, sqlText)
+			return nil
+		},
+		"oversize session",
+		&duckRemoteMutationBatch{},
+		oversize,
+		maxBytes,
+	)
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, current.Len())
+	assert.Equal(t, "BEGIN TRANSACTION", calls[0])
+	assert.Contains(t, calls[1], "INSERT INTO remote_test")
+	assert.Equal(t, "COMMIT", calls[2])
+}
+
+func TestAppendDuckRemoteMutationBatchFlushesCurrentBeforeOversizeSession(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	current := &duckRemoteMutationBatch{}
+	_, err := current.ExecContext(ctx,
+		`INSERT INTO remote_test VALUES (?, ?)`, 1, "current",
+	)
+	require.NoError(t, err)
+	oversize := &duckRemoteMutationBatch{}
+	_, err = oversize.ExecContext(ctx,
+		`INSERT INTO remote_test VALUES (?, ?)`, 2, strings.Repeat("x", 64),
+	)
+	require.NoError(t, err)
+	maxBytes := oversize.transactionBytes() - 1
+	var calls []string
+
+	next, err := appendDuckRemoteMutationBatch(
+		ctx,
+		func(_ context.Context, sqlText string) error {
+			calls = append(calls, sqlText)
+			return nil
+		},
+		func(_ context.Context, sqlText string) error {
+			calls = append(calls, sqlText)
+			return nil
+		},
+		"oversize session",
+		current,
+		oversize,
+		maxBytes,
+	)
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, next.Len())
+	require.Len(t, calls, 4)
+	assert.Equal(t, current.transactionSQL(), calls[0])
+	assert.Equal(t, "BEGIN TRANSACTION", calls[1])
+	assert.Contains(t, calls[2], "INSERT INTO remote_test")
+	assert.Contains(t, calls[2], strings.Repeat("x", 64))
+	assert.Equal(t, "COMMIT", calls[3])
+}
+
+func TestExecDuckRemoteMutationBatchStatementModePinpointsFailure(t *testing.T) {
+	ctx := context.Background()
+	batch := &duckRemoteMutationBatch{}
+	_, err := batch.ExecContext(ctx, `INSERT INTO remote_test VALUES (?)`, 1)
+	require.NoError(t, err)
+	_, err = batch.ExecContext(ctx, `DELETE FROM remote_test WHERE id = ?`, 2)
+	require.NoError(t, err)
+	var calls []string
+
+	err = execDuckRemoteMutationBatch(
+		ctx,
+		func(_ context.Context, sqlText string) error {
+			calls = append(calls, sqlText)
+			if strings.HasPrefix(sqlText, "DELETE") {
+				return fmt.Errorf("delete failed")
+			}
+			return nil
+		},
+		"test session",
+		batch,
+		false,
+	)
+	require.Error(t, err)
+
+	assert.Contains(t, err.Error(), "execute test session statement 2/2")
+	assert.Equal(t, []string{
+		"BEGIN TRANSACTION",
+		"INSERT INTO remote_test VALUES (1)",
+		"DELETE FROM remote_test WHERE id = 2",
+		"ROLLBACK",
+	}, calls)
+}
+
+func TestExecDuckRemoteMutationBatchFallbackLocalizesNonStaleFailure(t *testing.T) {
+	ctx := context.Background()
+	batch := &duckRemoteMutationBatch{}
+	_, err := batch.ExecContext(ctx, `INSERT INTO remote_test VALUES (?)`, 1)
+	require.NoError(t, err)
+	_, err = batch.ExecContext(ctx, `DELETE FROM remote_test WHERE id = ?`, 2)
+	require.NoError(t, err)
+	var coalescedCalls []string
+	var statementCalls []string
+
+	err = execDuckRemoteMutationBatchWithStatementFallback(
+		ctx,
+		func(_ context.Context, sqlText string) error {
+			coalescedCalls = append(coalescedCalls, sqlText)
+			if sqlText == "ROLLBACK" {
+				return nil
+			}
+			return fmt.Errorf("coalesced failure")
+		},
+		func(_ context.Context, sqlText string) error {
+			statementCalls = append(statementCalls, sqlText)
+			if strings.HasPrefix(sqlText, "DELETE") {
+				return fmt.Errorf("delete failed")
+			}
+			return nil
+		},
+		"test session",
+		batch,
+	)
+	require.Error(t, err)
+
+	assert.Equal(t, []string{batch.transactionSQL(), "ROLLBACK"}, coalescedCalls)
+	assert.Contains(t, err.Error(), "execute test session statement 2/2")
+	assert.Equal(t, []string{
+		"BEGIN TRANSACTION",
+		"INSERT INTO remote_test VALUES (1)",
+		"DELETE FROM remote_test WHERE id = 2",
+		"ROLLBACK",
+	}, statementCalls)
+}
+
+func TestExecDuckRemoteMutationBatchFallbackDoesNotRetryStaleFailure(t *testing.T) {
+	ctx := context.Background()
+	batch := &duckRemoteMutationBatch{}
+	_, err := batch.ExecContext(ctx, `INSERT INTO remote_test VALUES (?)`, 1)
+	require.NoError(t, err)
+	var statementCalls []string
+
+	err = execDuckRemoteMutationBatchWithStatementFallback(
+		ctx,
+		func(_ context.Context, sqlText string) error {
+			if sqlText == "ROLLBACK" {
+				return nil
+			}
+			return fmt.Errorf("Invalid Input Error: Invalid connection id")
+		},
+		func(_ context.Context, sqlText string) error {
+			statementCalls = append(statementCalls, sqlText)
+			return nil
+		},
+		"test session",
+		batch,
+	)
+	require.ErrorContains(t, err, "Invalid connection id")
+	assert.Empty(t, statementCalls)
+}
+
+func TestDuckValueLiteralFormatsNullableNumericPointers(t *testing.T) {
+	score := 88
+	fileSize := int64(4096)
+	contextPressure := 0.875
+
+	tests := []struct {
+		name string
+		in   any
+		want string
+	}{
+		{name: "int pointer", in: &score, want: "88"},
+		{name: "int64 pointer", in: &fileSize, want: "4096"},
+		{name: "float64 pointer", in: &contextPressure, want: "0.875"},
+		{name: "nil int pointer", in: (*int)(nil), want: "NULL"},
+		{name: "nil int64 pointer", in: (*int64)(nil), want: "NULL"},
+		{name: "nil float64 pointer", in: (*float64)(nil), want: "NULL"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := duckValueLiteral(tt.in)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func TestSessionFingerprintsStoreDigestOnly(t *testing.T) {
