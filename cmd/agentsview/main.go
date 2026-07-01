@@ -1077,7 +1077,10 @@ func collectProviderWatchRoots(
 
 func isSymlinkPath(path string) bool {
 	info, err := os.Lstat(path)
-	return err == nil && info.Mode()&os.ModeSymlink != 0
+	if err != nil || info == nil {
+		return false
+	}
+	return info.Mode()&os.ModeSymlink != 0
 }
 
 func appendUniqueString(values []string, value string) []string {
