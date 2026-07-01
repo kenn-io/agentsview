@@ -2035,13 +2035,18 @@ func (e *Engine) discoverProviderSources(
 			continue
 		}
 		currentSources := providerSourcePathSet(sources)
+		forceParseSources := map[string]struct{}{}
 		if agentType == parser.AgentVSCopilot {
-			sources = append(
-				sources,
+			missingSources, forceSources :=
 				e.visualStudioCopilotMissingVS2026PollSources(
 					ctx, provider, filteredRoots, currentSources,
-				)...,
-			)
+				)
+			sources = append(sources, missingSources...)
+			maps.Copy(forceParseSources, forceSources)
+		}
+		forceParseSource := func(sourcePath string) bool {
+			_, ok := forceParseSources[filepath.Clean(sourcePath)]
+			return ok
 		}
 		// Forge, Piebald, and Warp are DB-backed providers: a shared SQLite
 		// DB hosts every session. Full-sync change detection and counting
@@ -2070,6 +2075,9 @@ func (e *Engine) discoverProviderSources(
 				Agent:           agent,
 				ProviderSource:  &sourceCopy,
 				ProviderProcess: true,
+			}
+			if forceParseSource(sourcePath) {
+				discovered.ForceParse = true
 			}
 			// S3-aware source sets carry the durable object metadata in the
 			// Opaque payload. Thread it into the DiscoveredFile so the S3 sync
@@ -2112,10 +2120,11 @@ func (e *Engine) visualStudioCopilotMissingVS2026PollSources(
 	provider parser.Provider,
 	roots []string,
 	currentSources map[string]struct{},
-) []parser.SourceRef {
+) ([]parser.SourceRef, map[string]struct{}) {
 	watchRoots := providerChangedPathWatchRoots(ctx, provider, roots)
 	var out []parser.SourceRef
 	seenHints := make(map[string]struct{})
+	forceParseSources := make(map[string]struct{})
 	for _, watchRoot := range watchRoots {
 		hints, err := e.db.ListStoredSourcePathHints(
 			string(parser.AgentVSCopilot), []string{watchRoot},
@@ -2150,6 +2159,7 @@ func (e *Engine) visualStudioCopilotMissingVS2026PollSources(
 					continue
 				}
 				path := filepath.Clean(sourcePath)
+				forceParseSources[path] = struct{}{}
 				if _, exists := currentSources[path]; !exists {
 					currentSources[path] = struct{}{}
 					out = append(out, current)
@@ -2187,11 +2197,12 @@ func (e *Engine) visualStudioCopilotMissingVS2026PollSources(
 					continue
 				}
 				currentSources[path] = struct{}{}
+				forceParseSources[path] = struct{}{}
 				out = append(out, tombstone)
 			}
 		}
 	}
-	return out
+	return out, forceParseSources
 }
 
 func visualStudioCopilotVS2026PollCanTombstone(
@@ -2360,6 +2371,10 @@ func (e *Engine) filterFilesByMtime(
 	out := files[:0]
 	codexIndexRefresh := make(map[string][]parser.DiscoveredFile)
 	for _, f := range files {
+		if f.ForceParse {
+			out = append(out, f)
+			continue
+		}
 		mtime, err := e.discoveredFileEffectiveMtime(ctx, f)
 		if err != nil {
 			out = append(out, f)
