@@ -446,9 +446,11 @@ func (db *DB) DecodeCursor(s string) (SessionCursor, error) {
 
 // SessionFilter specifies how to query sessions.
 type SessionFilter struct {
-	Project          string
-	ExcludeProject   string // exclude sessions with this project name
-	Machine          string
+	Project        string
+	ExcludeProject string // exclude sessions with this project name
+	Machine        string
+	// GitBranch is a branchListSep-joined list of opaque (project, branch) tokens (EncodeBranchFilterToken).
+	GitBranch        string
 	Agent            string
 	Date             string   // exact date YYYY-MM-DD
 	DateFrom         string   // range start (inclusive)
@@ -2415,6 +2417,56 @@ func (db *DB) GetMachines(
 		machines = append(machines, m)
 	}
 	return machines, rows.Err()
+}
+
+// BranchInfo is a (project, branch) pair, keyed by project so same-named
+// branches across repos stay distinct.
+type BranchInfo struct {
+	Project string `json:"project"`
+	Branch  string `json:"branch"`
+	Token   string `json:"token"`
+}
+
+// GetBranches returns distinct (project, git_branch) pairs for sessions with a
+// recorded branch. Scoping matches GetProjects/GetAgents (root sessions with
+// messages) so the dropdown reflects real work rather than subagents.
+func (db *DB) GetBranches(
+	ctx context.Context,
+	excludeOneShot, excludeAutomated bool,
+) ([]BranchInfo, error) {
+	q := `SELECT DISTINCT project, git_branch
+		FROM sessions
+		WHERE message_count > 0
+		  AND relationship_type NOT IN ('subagent', 'fork')
+		  AND deleted_at IS NULL
+		  AND git_branch != ''`
+	if excludeOneShot {
+		if !excludeAutomated {
+			q += " AND (user_message_count > 1 OR is_automated = 1)"
+		} else {
+			q += " AND user_message_count > 1"
+		}
+	}
+	if excludeAutomated {
+		q += " AND is_automated = 0"
+	}
+	q += " ORDER BY project, git_branch"
+	rows, err := db.getReader().QueryContext(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("querying branches: %w", err)
+	}
+	defer rows.Close()
+
+	branches := []BranchInfo{}
+	for rows.Next() {
+		var bi BranchInfo
+		if err := rows.Scan(&bi.Project, &bi.Branch); err != nil {
+			return nil, fmt.Errorf("scanning branch: %w", err)
+		}
+		bi.Token = EncodeBranchFilterToken(bi.Project, bi.Branch)
+		branches = append(branches, bi)
+	}
+	return branches, rows.Err()
 }
 
 // scanSessionRows iterates rows and scans each using

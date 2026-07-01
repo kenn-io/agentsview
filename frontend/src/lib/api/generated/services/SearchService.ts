@@ -80,6 +80,7 @@ export class SearchService {
     project,
     excludeProject,
     machine,
+    gitBranch,
     agent,
     date,
     dateFrom,
@@ -123,6 +124,10 @@ export class SearchService {
      * Filter by machine
      */
     machine?: string,
+    /**
+     * Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+     */
+    gitBranch?: string,
     /**
      * Filter by agent
      */
@@ -176,6 +181,7 @@ export class SearchService {
         'project': project,
         'exclude_project': excludeProject,
         'machine': machine,
+        'git_branch': gitBranch,
         'agent': agent,
         'date': date,
         'date_from': dateFrom,

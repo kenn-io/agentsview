@@ -9,6 +9,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func encodeBranchFilterTokensForTest(branches ...BranchInfo) string {
+	tokens := make([]string, 0, len(branches))
+	for _, branch := range branches {
+		tokens = append(tokens,
+			EncodeBranchFilterToken(branch.Project, branch.Branch))
+	}
+	return strings.Join(tokens, branchListSep)
+}
+
 func TestBuildSessionFilterSQLRendersEquivalentDialectFilters(t *testing.T) {
 	minToolFailures := 2
 	filter := SessionFilter{
@@ -187,6 +196,77 @@ func TestBuildSessionFilterSQLHandlesEmptyCSVFilters(t *testing.T) {
 
 	assert.Contains(t, normalizeSQL(got), "1 = 0")
 	assert.Empty(t, args)
+}
+
+func TestBuildSessionFilterSQLRendersBranchPairs(t *testing.T) {
+	filter := SessionFilter{
+		Machine: "laptop",
+		GitBranch: encodeBranchFilterTokensForTest(
+			BranchInfo{Project: "alpha", Branch: ""},
+			BranchInfo{Project: "alpha", Branch: "unknown"},
+		),
+		Agent: "claude",
+	}
+
+	tests := []struct {
+		name      string
+		dialect   QueryDialect
+		wantParts []string
+	}{
+		{
+			name:    "sqlite",
+			dialect: SQLiteQueryDialect(),
+			wantParts: []string{
+				"machine = ?",
+				"((project = ? AND git_branch = ?) OR (project = ? AND git_branch = ?))",
+				"agent = ?",
+			},
+		},
+		{
+			name:    "postgres",
+			dialect: PostgresQueryDialect(),
+			wantParts: []string{
+				"machine = $1",
+				"((project = $2 AND git_branch = $3) OR (project = $4 AND git_branch = $5))",
+				"agent = $6",
+			},
+		},
+		{
+			name:    "duckdb",
+			dialect: DuckDBQueryDialect(),
+			wantParts: []string{
+				"machine = ?",
+				"((project = ? AND git_branch = ?) OR (project = ? AND git_branch = ?))",
+				"agent = ?",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, args := BuildSessionFilterSQL(filter, tt.dialect)
+			normalized := normalizeSQL(got)
+
+			for _, part := range tt.wantParts {
+				assert.Contains(t, normalized, normalizeSQL(part))
+			}
+			assert.Equal(t, []any{"laptop", "alpha", "", "alpha", "unknown", "claude"}, args)
+		})
+	}
+}
+
+func TestBranchPairClauseArgsKeepsEmptyBranchDistinct(t *testing.T) {
+	tokens := encodeBranchFilterTokensForTest(
+		BranchInfo{Project: "alpha", Branch: ""},
+		BranchInfo{Project: "alpha", Branch: "unknown"},
+	)
+
+	got, args := BranchPairClauseArgs("project", "git_branch", tokens, nil)
+
+	assert.Equal(t,
+		"((project = ? AND git_branch = ?) OR (project = ? AND git_branch = ?))",
+		normalizeSQL(got))
+	assert.Equal(t, []any{"alpha", "", "alpha", "unknown"}, args)
 }
 
 func TestSessionCursorFragmentsAreParameterized(t *testing.T) {

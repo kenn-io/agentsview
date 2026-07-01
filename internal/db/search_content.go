@@ -34,6 +34,8 @@ type ContentSearchFilter struct {
 	Project, ExcludeProject, Machine, Agent           string
 	Date, DateFrom, DateTo, ActiveSince               string
 	IncludeChildren, IncludeAutomated, IncludeOneShot bool
+	// GitBranch is a branchListSep-joined list of opaque (project, branch) tokens (EncodeBranchFilterToken).
+	GitBranch string
 
 	// RevealSecrets returns raw snippets. It defaults false so snippets are
 	// secret-redacted unless a caller (the localhost-gated reveal path)
@@ -88,7 +90,7 @@ func sessionScopeSubquery(f ContentSearchFilter) (string, []any) {
 	// (scanned over every session at sync), not from search defaults.
 	sf := SessionFilter{
 		Project: f.Project, ExcludeProject: f.ExcludeProject,
-		Machine: f.Machine, Agent: f.Agent,
+		Machine: f.Machine, GitBranch: f.GitBranch, Agent: f.Agent,
 		Date: f.Date, DateFrom: f.DateFrom, DateTo: f.DateTo,
 		ActiveSince:      f.ActiveSince,
 		ExcludeOneShot:   !f.IncludeOneShot,

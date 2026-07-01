@@ -59,6 +59,15 @@ func insertCSSession(
 	require.NoError(t, err, "insert session %s", id)
 }
 
+func setCSSessionBranch(t *testing.T, store *Store, id, branch string) {
+	t.Helper()
+	_, err := store.DB().Exec(
+		`UPDATE sessions SET git_branch = $1 WHERE id = $2`,
+		branch, id,
+	)
+	require.NoError(t, err, "set session branch %s", id)
+}
+
 // insertCSMessage inserts a message; isSystem=true sets is_system.
 func insertCSMessage(
 	t *testing.T, store *Store,
@@ -349,6 +358,38 @@ func TestPGSearchContentProjectFilter(t *testing.T) {
 		assert.Equal(t, "alpha", m.Project, "project filter leak")
 	}
 	assert.NotEmpty(t, got.Matches, "expected matches in alpha project")
+}
+
+func TestPGSearchContentGitBranchFilter(t *testing.T) {
+	store := setupContentSearch(t)
+	insertCSSession(t, store, "cs-branch-alpha-main", "alpha", "claude",
+		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+	setCSSessionBranch(t, store, "cs-branch-alpha-main", "main")
+	insertCSMessage(t, store, "cs-branch-alpha-main", 0, "user",
+		"BRANCHNEEDLE alpha main", "2026-05-01T10:00:00Z", false)
+	insertCSSession(t, store, "cs-branch-alpha-feature", "alpha", "claude",
+		"2026-05-01T11:00:00Z", "2026-05-01T11:30:00Z")
+	setCSSessionBranch(t, store, "cs-branch-alpha-feature", "feature")
+	insertCSMessage(t, store, "cs-branch-alpha-feature", 0, "user",
+		"BRANCHNEEDLE alpha feature", "2026-05-01T11:00:00Z", false)
+	insertCSSession(t, store, "cs-branch-beta-main", "beta", "claude",
+		"2026-05-01T12:00:00Z", "2026-05-01T12:30:00Z")
+	setCSSessionBranch(t, store, "cs-branch-beta-main", "main")
+	insertCSMessage(t, store, "cs-branch-beta-main", 0, "user",
+		"BRANCHNEEDLE beta main", "2026-05-01T12:00:00Z", false)
+
+	ctx := context.Background()
+	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
+		Pattern:        "BRANCHNEEDLE",
+		Mode:           "substring",
+		Sources:        []string{"messages"},
+		GitBranch:      db.EncodeBranchFilterToken("alpha", "main"),
+		IncludeOneShot: true,
+		Limit:          50,
+	})
+	require.NoError(t, err)
+	require.Len(t, got.Matches, 1)
+	assert.Equal(t, "cs-branch-alpha-main", got.Matches[0].SessionID)
 }
 
 // TestPGSearchContentPagination verifies Limit+1 sentinel and NextCursor.

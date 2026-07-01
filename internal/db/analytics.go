@@ -87,10 +87,12 @@ func queryChunkedSize(
 
 // AnalyticsFilter is the shared filter for all analytics queries.
 type AnalyticsFilter struct {
-	From             string // ISO date YYYY-MM-DD, inclusive
-	To               string // ISO date YYYY-MM-DD, inclusive
-	Machine          string // optional machine filter
-	Project          string // optional project filter
+	From    string // ISO date YYYY-MM-DD, inclusive
+	To      string // ISO date YYYY-MM-DD, inclusive
+	Machine string // optional machine filter
+	Project string // optional project filter
+	// GitBranch is a branchListSep-joined list of opaque (project, branch) tokens (EncodeBranchFilterToken).
+	GitBranch        string
 	Agent            string // optional agent filter
 	Model            string // optional model filter
 	Timezone         string // IANA timezone for day bucketing
@@ -352,6 +354,12 @@ func (f AnalyticsFilter) buildWhereWithDate(
 	if f.Project != "" {
 		preds = append(preds, "project = ?")
 		args = append(args, f.Project)
+	}
+
+	if f.GitBranch != "" {
+		var clause string
+		clause, args = BranchPairClauseArgs("project", "git_branch", f.GitBranch, args)
+		preds = append(preds, clause)
 	}
 
 	if f.Agent != "" {

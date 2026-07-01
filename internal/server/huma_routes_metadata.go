@@ -15,6 +15,7 @@ func (s *Server) registerMetadataRoutes() {
 
 	get(s, group, "/projects", "List projects", s.humaListProjects)
 	get(s, group, "/machines", "List machines", s.humaListMachines)
+	get(s, group, "/branches", "List branches", s.humaListBranches)
 	get(s, group, "/agents", "List agents", s.humaListAgents)
 	get(s, group, "/stats", "Get stats", s.humaGetStats)
 	get(s, group, "/session-stats", "Get session stats", s.humaGetSessionStats)
@@ -43,6 +44,10 @@ type projectsResponse struct {
 
 type machinesResponse struct {
 	Machines []string `json:"machines"`
+}
+
+type branchesResponse struct {
+	Branches []db.BranchInfo `json:"branches"`
 }
 
 type agentsResponse struct {
@@ -115,6 +120,17 @@ func (s *Server) humaListMachines(
 		return nil, serverError(err)
 	}
 	return &jsonOutput[machinesResponse]{Body: machinesResponse{Machines: machines}}, nil
+}
+
+func (s *Server) humaListBranches(
+	ctx context.Context,
+	in *statsInput,
+) (*jsonOutput[branchesResponse], error) {
+	branches, err := s.db.GetBranches(ctx, !in.IncludeOneShot, !in.IncludeAutomated)
+	if err != nil {
+		return nil, serverError(err)
+	}
+	return &jsonOutput[branchesResponse]{Body: branchesResponse{Branches: branches}}, nil
 }
 
 func (s *Server) humaListAgents(

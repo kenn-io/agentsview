@@ -344,3 +344,46 @@ func TestActivityReportEndpoint_AutomationFilter(t *testing.T) {
 		})
 	}
 }
+
+// TestActivityReportEndpoint_GitBranchFilter guards that /activity/report honors
+// the git_branch filter (it previously ignored the param).
+func TestActivityReportEndpoint_GitBranchFilter(t *testing.T) {
+	te := setup(t)
+	seed := []struct {
+		id, branch, started, ended string
+		times                      []string
+	}{
+		{"b1", "main", activityDate + "T10:00:00Z", activityDate + "T10:08:00Z",
+			[]string{activityDate + "T10:00:00Z", activityDate + "T10:02:00Z",
+				activityDate + "T10:05:00Z", activityDate + "T10:07:00Z"}},
+		{"b2", "feature-x", activityDate + "T10:01:00Z", activityDate + "T10:09:00Z",
+			[]string{activityDate + "T10:01:00Z", activityDate + "T10:03:00Z",
+				activityDate + "T10:06:00Z", activityDate + "T10:08:00Z"}},
+	}
+	for _, e := range seed {
+		started, ended, branch := e.started, e.ended, e.branch
+		te.seedSession(t, e.id, "alpha", len(e.times), func(s *db.Session) {
+			s.GitBranch = branch
+			s.StartedAt = &started
+			s.EndedAt = &ended
+		})
+		times := e.times
+		te.seedMessages(t, e.id, len(times), func(i int, m *db.Message) {
+			m.Timestamp = times[i]
+		})
+	}
+
+	all := te.get(t, buildPathURL("/api/v1/activity/report", map[string]string{
+		"preset": "day", "date": activityDate, "timezone": "UTC",
+	}))
+	assertStatus(t, all, http.StatusOK)
+	assert.Equal(t, 2, decode[activity.Report](t, all).Totals.Sessions)
+
+	filtered := te.get(t, buildPathURL("/api/v1/activity/report", map[string]string{
+		"preset": "day", "date": activityDate, "timezone": "UTC",
+		"git_branch": db.EncodeBranchFilterToken("alpha", "main"),
+	}))
+	assertStatus(t, filtered, http.StatusOK)
+	assert.Equal(t, 1, decode[activity.Report](t, filtered).Totals.Sessions,
+		"git_branch filter restricts the activity report to alpha/main")
+}

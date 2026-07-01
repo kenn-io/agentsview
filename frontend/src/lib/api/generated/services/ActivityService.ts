@@ -20,6 +20,7 @@ export class ActivityService {
     timezone,
     bucket,
     project,
+    gitBranch,
     agent,
     machine,
     automation = 'all',
@@ -53,6 +54,10 @@ export class ActivityService {
      */
     project?: string,
     /**
+     * Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+     */
+    gitBranch?: string,
+    /**
      * Filter by agent
      */
     agent?: string,
@@ -76,6 +81,7 @@ export class ActivityService {
         'timezone': timezone,
         'bucket': bucket,
         'project': project,
+        'git_branch': gitBranch,
         'agent': agent,
         'machine': machine,
         'automation': automation,

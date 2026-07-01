@@ -115,6 +115,8 @@ type ContentSearchRequest struct {
 	Project, ExcludeProject, Machine, Agent           string
 	Date, DateFrom, DateTo, ActiveSince               string
 	IncludeChildren, IncludeAutomated, IncludeOneShot bool
+	// GitBranch is a branchListSep-joined list of opaque (project, branch) tokens (EncodeBranchFilterToken).
+	GitBranch string
 
 	Limit  int `json:"limit,omitempty"`
 	Cursor int `json:"cursor,omitempty"`
@@ -186,6 +188,7 @@ type ListFilter struct {
 	Project          string `json:"project,omitempty"`
 	ExcludeProject   string `json:"exclude_project,omitempty"`
 	Machine          string `json:"machine,omitempty"`
+	GitBranch        string `json:"git_branch,omitempty"`
 	Agent            string `json:"agent,omitempty"`
 	Date             string `json:"date,omitempty"`
 	DateFrom         string `json:"date_from,omitempty"`

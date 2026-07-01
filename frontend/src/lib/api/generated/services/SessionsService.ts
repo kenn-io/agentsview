@@ -59,6 +59,7 @@ export class SessionsService {
     project,
     excludeProject,
     machine,
+    gitBranch,
     agent,
     date,
     dateFrom,
@@ -93,6 +94,10 @@ export class SessionsService {
      * Filter by machine
      */
     machine?: string,
+    /**
+     * Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+     */
+    gitBranch?: string,
     /**
      * Filter by agent
      */
@@ -185,6 +190,7 @@ export class SessionsService {
         'project': project,
         'exclude_project': excludeProject,
         'machine': machine,
+        'git_branch': gitBranch,
         'agent': agent,
         'date': date,
         'date_from': dateFrom,
@@ -231,6 +237,7 @@ export class SessionsService {
     project,
     excludeProject,
     machine,
+    gitBranch,
     agent,
     date,
     dateFrom,
@@ -265,6 +272,10 @@ export class SessionsService {
      * Filter by machine
      */
     machine?: string,
+    /**
+     * Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+     */
+    gitBranch?: string,
     /**
      * Filter by agent
      */
@@ -357,6 +368,7 @@ export class SessionsService {
         'project': project,
         'exclude_project': excludeProject,
         'machine': machine,
+        'git_branch': gitBranch,
         'agent': agent,
         'date': date,
         'date_from': dateFrom,

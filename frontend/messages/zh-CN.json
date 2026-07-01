@@ -449,6 +449,7 @@
   "shared_no_sessions_in_range": "此范围内无会话",
   "shared_none": "无",
   "shared_other": "其他",
+  "shared_no_branch": "（无分支）",
   "shared_unknown": "未知",
   "analytics_refresh": "刷新分析",
   "analytics_export_csv": "导出 CSV",
