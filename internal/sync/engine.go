@@ -2034,6 +2034,15 @@ func (e *Engine) discoverProviderSources(
 			failures++
 			continue
 		}
+		currentSources := providerSourcePathSet(sources)
+		if agentType == parser.AgentVSCopilot {
+			sources = append(
+				sources,
+				e.visualStudioCopilotMissingVS2026PollSources(
+					ctx, provider, filteredRoots, currentSources,
+				)...,
+			)
+		}
 		// Forge, Piebald, and Warp are DB-backed providers: a shared SQLite
 		// DB hosts every session. Full-sync change detection and counting
 		// run through their dedicated provider-driven DB sync phase
@@ -2084,6 +2093,122 @@ func (e *Engine) discoverProviderSources(
 		}
 	}
 	return files, failures
+}
+
+func providerSourcePathSet(sources []parser.SourceRef) map[string]struct{} {
+	seen := make(map[string]struct{}, len(sources))
+	for _, source := range sources {
+		path := providerDiscoveredPath(source)
+		if path == "" {
+			continue
+		}
+		seen[filepath.Clean(path)] = struct{}{}
+	}
+	return seen
+}
+
+func (e *Engine) visualStudioCopilotMissingVS2026PollSources(
+	ctx context.Context,
+	provider parser.Provider,
+	roots []string,
+	currentSources map[string]struct{},
+) []parser.SourceRef {
+	watchRoots := providerChangedPathWatchRoots(ctx, provider, roots)
+	var out []parser.SourceRef
+	seenHints := make(map[string]struct{})
+	for _, watchRoot := range watchRoots {
+		hints, err := e.db.ListStoredSourcePathHints(
+			string(parser.AgentVSCopilot), []string{watchRoot},
+		)
+		if err != nil {
+			log.Printf(
+				"%s provider poll stored hints: %v",
+				parser.AgentVSCopilot, err,
+			)
+			continue
+		}
+		for _, hint := range hints {
+			hint = filepath.Clean(hint)
+			if _, seen := seenHints[hint]; seen {
+				continue
+			}
+			seenHints[hint] = struct{}{}
+			container, conversationID, ok :=
+				parser.SplitVisualStudioCopilotVirtualPath(hint)
+			if !ok ||
+				!parser.IsVisualStudioCopilotVS2026SessionPath(container) {
+				continue
+			}
+			if _, ok := currentSources[hint]; ok {
+				continue
+			}
+			if current, ok := e.visualStudioCopilotCurrentPollSource(
+				ctx, provider, conversationID,
+			); ok {
+				sourcePath := providerDiscoveredPath(current)
+				if sourcePath == "" {
+					continue
+				}
+				path := filepath.Clean(sourcePath)
+				if _, exists := currentSources[path]; !exists {
+					currentSources[path] = struct{}{}
+					out = append(out, current)
+				}
+				continue
+			}
+			tombstones, err := provider.SourcesForChangedPath(
+				ctx,
+				parser.ChangedPathRequest{
+					Path:              hint,
+					EventKind:         "remove",
+					WatchRoot:         watchRoot,
+					StoredSourcePaths: []string{hint},
+				},
+			)
+			if err != nil {
+				log.Printf(
+					"%s provider poll tombstone: %v",
+					parser.AgentVSCopilot, err,
+				)
+				continue
+			}
+			for _, tombstone := range tombstones {
+				sourcePath := providerDiscoveredPath(tombstone)
+				if sourcePath == "" {
+					continue
+				}
+				path := filepath.Clean(sourcePath)
+				if _, exists := currentSources[path]; exists {
+					continue
+				}
+				currentSources[path] = struct{}{}
+				out = append(out, tombstone)
+			}
+		}
+	}
+	return out
+}
+
+func (e *Engine) visualStudioCopilotCurrentPollSource(
+	ctx context.Context,
+	provider parser.Provider,
+	conversationID string,
+) (parser.SourceRef, bool) {
+	current, ok, err := provider.FindSource(
+		ctx,
+		parser.FindSourceRequest{
+			RawSessionID:       conversationID,
+			RequireFreshSource: true,
+		},
+	)
+	if err != nil {
+		log.Printf(
+			"%s provider poll source lookup: %v",
+			parser.AgentVSCopilot, err,
+		)
+		return parser.SourceRef{}, false
+	}
+	return current, ok
 }
 
 // expandCodexProviderDuplicates re-adds the on-disk duplicate paths of each

@@ -51,6 +51,12 @@ func isVisualStudioCopilotConversationPath(path string) bool {
 		isVisualStudioCopilotVS2026SessionPath(path)
 }
 
+// IsVisualStudioCopilotVS2026SessionPath reports whether path names a Visual
+// Studio 2026 Copilot one-file conversation source.
+func IsVisualStudioCopilotVS2026SessionPath(path string) bool {
+	return isVisualStudioCopilotVS2026SessionPath(path)
+}
+
 func isVisualStudioCopilotVS2026SessionPath(path string) bool {
 	if !isVisualStudioCopilotVS2026SessionFileName(filepath.Base(path)) {
 		return false

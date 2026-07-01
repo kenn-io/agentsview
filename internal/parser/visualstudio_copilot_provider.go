@@ -3,6 +3,7 @@ package parser
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -294,11 +295,14 @@ func vsCopilotWatchRoots(roots []string) []WatchRoot {
 		if root == "" || root == "." {
 			continue
 		}
+		includeSessionRoots := true
 		switch visualStudioCopilotVS2026RootKind(root) {
+		case visualStudioCopilotVS2026SessionsRoot:
+			out = append(out, vsCopilotVS2026SessionWatchRoot(root))
+			includeSessionRoots = false
 		case visualStudioCopilotVS2026VSRoot,
 			visualStudioCopilotVS2026CopilotChatRoot,
-			visualStudioCopilotVS2026ThreadRoot,
-			visualStudioCopilotVS2026SessionsRoot:
+			visualStudioCopilotVS2026ThreadRoot:
 			out = append(out, WatchRoot{
 				Path:         root,
 				Recursive:    true,
@@ -321,8 +325,100 @@ func vsCopilotWatchRoots(roots []string) []WatchRoot {
 				})
 			}
 		}
+		if includeSessionRoots {
+			for _, sessionsRoot := range visualStudioCopilotVS2026SessionRoots(root) {
+				out = append(out, vsCopilotVS2026SessionWatchRoot(sessionsRoot))
+			}
+		}
 	}
 	return out
+}
+
+func vsCopilotVS2026SessionWatchRoot(root string) WatchRoot {
+	return WatchRoot{
+		Path:         root,
+		Recursive:    false,
+		IncludeGlobs: []string{"*"},
+		DebounceKey:  string(AgentVSCopilot) + ":sessions:" + root,
+	}
+}
+
+func visualStudioCopilotVS2026SessionRoots(root string) []string {
+	root = filepath.Clean(root)
+	var roots []string
+	switch visualStudioCopilotVS2026RootKind(root) {
+	case visualStudioCopilotVS2026SessionsRoot:
+		roots = append(roots, root)
+	case visualStudioCopilotVS2026ThreadRoot:
+		if sessionsRoot, ok := visualStudioCopilotChildDir(root, "sessions"); ok {
+			roots = append(roots, sessionsRoot)
+		}
+	case visualStudioCopilotVS2026CopilotChatRoot:
+		roots = visualStudioCopilotVS2026SessionRootsInCopilotChatRoot(root)
+	case visualStudioCopilotVS2026VSRoot:
+		roots = visualStudioCopilotVS2026SessionRootsInVSRoot(root)
+	default:
+		if vsRoot, ok := visualStudioCopilotChildDir(root, ".vs"); ok {
+			roots = visualStudioCopilotVS2026SessionRootsInVSRoot(vsRoot)
+		}
+	}
+	sort.Strings(roots)
+	return slices.Compact(roots)
+}
+
+func visualStudioCopilotVS2026SessionRootsInVSRoot(
+	vsRoot string,
+) []string {
+	solutions, err := os.ReadDir(vsRoot)
+	if err != nil {
+		return nil
+	}
+	out := []string{}
+	for _, solution := range solutions {
+		if !isDirOrSymlink(solution, vsRoot) {
+			continue
+		}
+		copilotChatRoot, ok := visualStudioCopilotChildDir(
+			filepath.Join(vsRoot, solution.Name()),
+			"copilot-chat",
+		)
+		if !ok {
+			continue
+		}
+		out = append(
+			out,
+			visualStudioCopilotVS2026SessionRootsInCopilotChatRoot(
+				copilotChatRoot,
+			)...,
+		)
+	}
+	sort.Strings(out)
+	return slices.Compact(out)
+}
+
+func visualStudioCopilotVS2026SessionRootsInCopilotChatRoot(
+	copilotChatRoot string,
+) []string {
+	threads, err := os.ReadDir(copilotChatRoot)
+	if err != nil {
+		return nil
+	}
+	out := []string{}
+	for _, thread := range threads {
+		if !isDirOrSymlink(thread, copilotChatRoot) {
+			continue
+		}
+		sessionsRoot, ok := visualStudioCopilotChildDir(
+			filepath.Join(copilotChatRoot, thread.Name()),
+			"sessions",
+		)
+		if !ok {
+			continue
+		}
+		out = append(out, sessionsRoot)
+	}
+	sort.Strings(out)
+	return slices.Compact(out)
 }
 
 // vsCopilotClassifyPath maps a stored or changed path to its trace container and

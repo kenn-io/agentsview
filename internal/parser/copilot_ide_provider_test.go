@@ -408,15 +408,23 @@ func TestVisualStudioCopilotProviderSupportsVS2026RootModes(
 			require.NoError(t, err)
 			switch tc.name {
 			case "project root":
-				require.Len(t, plan.Roots, 2)
+				require.Len(t, plan.Roots, 3)
 				assert.Equal(t, root, plan.Roots[0].Path)
 				assert.False(t, plan.Roots[0].Recursive)
 				assert.Equal(t, vsRoot, plan.Roots[1].Path)
 				assert.True(t, plan.Roots[1].Recursive)
-			default:
+				assert.Equal(t, filepath.Dir(sessionPath), plan.Roots[2].Path)
+				assert.False(t, plan.Roots[2].Recursive)
+			case "sessions root":
 				require.Len(t, plan.Roots, 1)
 				assert.Equal(t, tc.root, plan.Roots[0].Path)
+				assert.False(t, plan.Roots[0].Recursive)
+			default:
+				require.Len(t, plan.Roots, 2)
+				assert.Equal(t, tc.root, plan.Roots[0].Path)
 				assert.True(t, plan.Roots[0].Recursive)
+				assert.Equal(t, filepath.Dir(sessionPath), plan.Roots[1].Path)
+				assert.False(t, plan.Roots[1].Recursive)
 			}
 
 			discovered, err := provider.Discover(context.Background())
@@ -550,11 +558,13 @@ func TestVisualStudioCopilotProviderDiscoversMixedCaseVS2026Layout(
 
 	plan, err := provider.WatchPlan(context.Background())
 	require.NoError(t, err)
-	require.Len(t, plan.Roots, 2)
+	require.Len(t, plan.Roots, 3)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.False(t, plan.Roots[0].Recursive)
 	assert.Equal(t, vsRoot, plan.Roots[1].Path)
 	assert.True(t, plan.Roots[1].Recursive)
+	assert.Equal(t, filepath.Dir(sessionPath), plan.Roots[2].Path)
+	assert.False(t, plan.Roots[2].Recursive)
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
@@ -629,9 +639,11 @@ func TestVisualStudioCopilotProviderDiscoversSymlinkedVS2026Dirs(
 
 	plan, err := provider.WatchPlan(context.Background())
 	require.NoError(t, err)
-	require.Len(t, plan.Roots, 2)
+	require.Len(t, plan.Roots, 3)
 	assert.Equal(t, vsRoot, plan.Roots[1].Path)
 	assert.True(t, plan.Roots[1].Recursive)
+	assert.Equal(t, filepath.Dir(sessionPath), plan.Roots[2].Path)
+	assert.False(t, plan.Roots[2].Recursive)
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
