@@ -4856,7 +4856,8 @@ func TestMiMoCodeSessionDiffStorageWatcherEvents(t *testing.T) {
 // stale skip-cache entry at an unchanged session mtime would suppress a
 // child-driven update.
 func TestSyncPathsMiMoCodeStorageIgnoresStaleSessionSkipCache(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentMiMoCode)
 	storage := createMiMoCodeStorageFixture(t, env.mimocodeDir)
 	const sessionID = "mimo-storage-skip-cache"
 	sessionPath := storage.addSession(
@@ -4910,7 +4911,7 @@ func TestSyncPathsMiMoCodeStorageIgnoresStaleSessionSkipCache(t *testing.T) {
 func TestKiloPreservesStorageArchiveAgainstSQLiteFallback(t *testing.T) {
 	t.Parallel()
 
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentKilo)
 	storage := createOpenCodeStorageFixture(t, env.kiloDir)
 	const sessionID = "kilo-hybrid-preserve"
 	storage.addSession(
@@ -5376,7 +5377,8 @@ func TestSyncSingleSessionOpenCodeStoragePreservedUpdateDoesNotEmit(
 func TestSyncPathsOpenCodeStorageMissingMessagePreservesArchive(
 	t *testing.T,
 ) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
 	sessionID := "oc-missing-message-paths"
@@ -5474,7 +5476,8 @@ func TestSyncPathsOpenCodeStoragePreservedUpdateDoesNotEmitOrCountSynced(
 func TestSyncPathsOpenCodeStorageMissingPartDirPreservesArchive(
 	t *testing.T,
 ) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
 	sessionID := "oc-missing-part-paths"
@@ -9316,7 +9319,7 @@ func TestSyncAllOpenCodeExcludedNotCountedAsFailed(
 ) {
 	t.Parallel()
 
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 
 	// Create an OpenCode DB with a session.
 	oc := createOpenCodeDB(t, env.opencodeDir)
@@ -9357,7 +9360,7 @@ func TestSyncAllOpenCodeExcludedNotCountedAsFailed(
 func TestSyncSingleSessionExcludedIsNoOp(t *testing.T) {
 	t.Parallel()
 
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	content := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "hello").
@@ -9385,7 +9388,7 @@ func TestSyncSingleSessionExcludedIsNoOp(t *testing.T) {
 func TestSyncAllTrashedSessionIsSkippedAndCached(t *testing.T) {
 	t.Parallel()
 
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	content := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "hello").
@@ -9419,7 +9422,7 @@ func TestSyncAllTrashedSessionIsSkippedAndCached(t *testing.T) {
 func TestSyncAllTrashedSessionAppendUsesSkipPath(t *testing.T) {
 	t.Parallel()
 
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	content := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "hello").
@@ -9459,7 +9462,7 @@ func TestSyncAllTrashedSessionAppendUsesSkipPath(t *testing.T) {
 func TestSyncSingleSessionTrashedIsNoOp(t *testing.T) {
 	t.Parallel()
 
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	content := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "hello").
@@ -9485,7 +9488,7 @@ func TestSyncSingleSessionOpenCodeExcludedIsNoOp(
 ) {
 	t.Parallel()
 
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 
 	oc := createOpenCodeDB(t, env.opencodeDir)
 	oc.addProject(t, "proj1", "/tmp/proj1")
