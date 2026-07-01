@@ -143,6 +143,7 @@ func mainConvoMsgs() []shelleyMsg {
 }
 
 func TestSyncSingleSessionShelleyUsesVirtualSourcePath(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := createShelleyDB(t, dir)
 	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
@@ -167,6 +168,7 @@ func TestSyncSingleSessionShelleyUsesVirtualSourcePath(t *testing.T) {
 }
 
 func TestSyncSingleSessionShelleyForceRewritesUnchangedSession(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := createShelleyDB(t, dir)
 	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
@@ -194,6 +196,7 @@ func TestSyncSingleSessionShelleyForceRewritesUnchangedSession(t *testing.T) {
 }
 
 func TestSyncPathsShelleyDeletedPhysicalDBPreservesSessions(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := createShelleyDB(t, dir)
 	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
@@ -220,6 +223,7 @@ func TestSyncPathsShelleyDeletedPhysicalDBPreservesSessions(t *testing.T) {
 // conversation's updated_at, not fall through to os.Stat (which fails on a
 // virtual path and returns 0, which the watcher reads as "source gone").
 func TestSourceMtimeShelleyResolvesVirtualPath(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := createShelleyDB(t, dir)
 	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
@@ -232,6 +236,7 @@ func TestSourceMtimeShelleyResolvesVirtualPath(t *testing.T) {
 }
 
 func TestSyncAllShelleyIngestsConversations(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := createShelleyDB(t, dir)
 	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
@@ -267,6 +272,7 @@ func TestSyncAllShelleyIngestsConversations(t *testing.T) {
 }
 
 func TestSyncShelleyRemotePathRewriterSkip(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := createShelleyDB(t, dir)
 	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
@@ -322,6 +328,7 @@ func TestSyncShelleyRemotePathRewriterSkip(t *testing.T) {
 // content. Shelley is a Zed-style single-DB agent, so it re-syncs fresh
 // (Synced > 0) rather than relying on archive-preservation accounting.
 func TestResyncAllShelleyRebuildsFromDB(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := createShelleyDB(t, dir)
 	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
@@ -342,6 +349,7 @@ func TestResyncAllShelleyRebuildsFromDB(t *testing.T) {
 // orphan-copy, satisfying the archive-preservation requirement
 // (existing session data must survive when source rows disappear).
 func TestResyncAllShelleyPreservesRemovedConversation(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := createShelleyDB(t, dir)
 	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",

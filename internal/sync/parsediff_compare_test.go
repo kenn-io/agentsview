@@ -1103,6 +1103,7 @@ func TestFingerprintTwinMatchesDB(t *testing.T) {
 // through the real pipeline compares as identical against itself,
 // covering the session row, message metadata, and usage events.
 func TestCompareStoredSessionRoundTrip(t *testing.T) {
+	t.Parallel()
 	d := openTestDB(t)
 	e := NewEngine(d, EngineConfig{Machine: "test-machine"})
 
@@ -1184,6 +1185,7 @@ func TestCompareStoredSessionRoundTrip(t *testing.T) {
 // TestCompareStoredSessionDetectsDrift mutates one stored column and
 // expects the comparator to attribute it through the database path.
 func TestCompareStoredSessionDetectsDrift(t *testing.T) {
+	t.Parallel()
 	d := openTestDB(t)
 	e := NewEngine(d, EngineConfig{Machine: "test-machine"})
 
@@ -1270,6 +1272,7 @@ func pdWriteSingleMessageSession(
 // catches a message-body change the token fingerprint cannot see: only
 // the content length moves, model and tokens are unchanged.
 func TestCompareStoredSessionDetectsContentDrift(t *testing.T) {
+	t.Parallel()
 	ts := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
 	e, d, pw := pdWriteSingleMessageSession(t, "pd-content", parser.ParsedMessage{
 		Ordinal: 0, Role: parser.RoleAssistant,
@@ -1297,6 +1300,7 @@ func TestCompareStoredSessionDetectsContentDrift(t *testing.T) {
 // mismatch confined to a non-model/token field (is_sidechain) is
 // surfaced as message_metadata rather than silently reported identical.
 func TestCompareStoredSessionDetectsMetadataDrift(t *testing.T) {
+	t.Parallel()
 	ts := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
 	e, d, pw := pdWriteSingleMessageSession(t, "pd-meta", parser.ParsedMessage{
 		Ordinal: 0, Role: parser.RoleAssistant,
@@ -1392,6 +1396,7 @@ func pdWriteToolSession(
 // twins against their DB queries through the real write pipeline, the
 // way TestFingerprintTwinMatchesDB does for the message fingerprints.
 func TestToolCallAndFlagsFingerprintTwinsMatchDB(t *testing.T) {
+	t.Parallel()
 	e, d, pw := pdWriteToolSession(t, "pd-tool-twin")
 	prepared, msgs, ok := e.prepareSessionWrite(pw, nil)
 	require.True(t, ok)
@@ -1410,6 +1415,7 @@ func TestToolCallAndFlagsFingerprintTwinsMatchDB(t *testing.T) {
 }
 
 func TestToolCallDiffDetectsFilePath(t *testing.T) {
+	t.Parallel()
 	base := db.ToolCall{
 		ToolName: "Edit", Category: "Edit", ToolUseID: "t1",
 		InputJSON: `{"x":1}`, FilePath: "a.go",
@@ -1465,6 +1471,7 @@ func TestCompareStoredSessionDetectsToolCallDrift(t *testing.T) {
 // per-message flag (has_thinking) is caught only via the flags
 // fingerprint triggering the tier-2 comparison.
 func TestCompareStoredSessionDetectsFlagDrift(t *testing.T) {
+	t.Parallel()
 	e, d, pw := pdWriteToolSession(t, "pd-flag-drift")
 	pw.msgs[1].HasThinking = false
 	prepared, msgs, ok := e.prepareSessionWrite(pw, nil)

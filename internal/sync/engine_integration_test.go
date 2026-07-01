@@ -3614,7 +3614,8 @@ func TestSyncPathsClaudeRejectsNested(t *testing.T) {
 // when content changes in place (same ordinals, different
 // text/tool data).
 func TestSyncEngineOpenCodeBulkSync(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 
 	oc := createOpenCodeDB(t, env.opencodeDir)
 	oc.addProject(t, "proj-1", "/home/user/code/myapp")

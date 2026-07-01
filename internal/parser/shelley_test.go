@@ -284,6 +284,7 @@ func TestParseShelleySubagentRelationship(t *testing.T) {
 }
 
 func TestDiscoverAndFindShelley(t *testing.T) {
+	t.Parallel()
 	root, dbPath, db := newShelleyTestDB(t)
 	seedShelleyMainConversation(t, db)
 
