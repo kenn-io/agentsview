@@ -70,11 +70,48 @@ func TestParseDiffProviderAuthoritativeAgentsAreDiscoverable(t *testing.T) {
 		parser.AgentClaude,
 		parser.AgentCowork,
 		parser.AgentHermes,
+		// DB-backed provider-authoritative agents: discoverable through
+		// their providers even though FileBased is false.
+		parser.AgentForge,
+		parser.AgentPiebald,
+		parser.AgentWarp,
 	} {
 		def, ok := parser.AgentByType(agent)
 		require.True(t, ok, "agent %s", agent)
 		assert.True(t, engine.parseDiffAgentDiscoverable(def),
 			"parse-diff engine must include provider-authoritative %s", agent)
+	}
+}
+
+// TestParseDiffDBBackedAgentsAreDiscoverable pins the specific contract this
+// change adds: the DB-backed provider-authoritative agents are FileBased=false
+// yet still admitted by the parse-diff discoverability gate, because the gate
+// keys on the provider factory, not FileBased.
+func TestParseDiffDBBackedAgentsAreDiscoverable(t *testing.T) {
+	engine := NewDiffEngine(dbtest.OpenTestDB(t), EngineConfig{})
+	for _, agent := range []parser.AgentType{
+		parser.AgentForge,
+		parser.AgentPiebald,
+		parser.AgentWarp,
+	} {
+		def, ok := parser.AgentByType(agent)
+		require.True(t, ok, "agent %s", agent)
+		assert.False(t, def.FileBased,
+			"%s is expected to be DB-backed (FileBased=false)", agent)
+		assert.True(t, engine.parseDiffAgentDiscoverable(def),
+			"DB-backed %s must be discoverable by parse-diff", agent)
+	}
+
+	// Import-only agents are still rejected: they are not
+	// provider-authoritative and have no source to re-parse.
+	for _, agent := range []parser.AgentType{
+		parser.AgentClaudeAI,
+		parser.AgentChatGPT,
+	} {
+		def, ok := parser.AgentByType(agent)
+		require.True(t, ok, "agent %s", agent)
+		assert.False(t, engine.parseDiffAgentDiscoverable(def),
+			"import-only %s must not be discoverable by parse-diff", agent)
 	}
 }
 
