@@ -634,7 +634,8 @@ func (e *testEnv) writeNestedCursorSession(
 }
 
 func TestSyncEngineIntegration(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	content := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsEarly, "Hello", "/Users/alice/code/my-app").
@@ -667,7 +668,8 @@ func TestSyncEngineIntegration(t *testing.T) {
 }
 
 func TestSyncEngineWorktreesShareProject(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	root := t.TempDir()
 	mainRepo := filepath.Join(root, "agentsview")
@@ -713,7 +715,8 @@ func TestSyncEngineWorktreesShareProject(t *testing.T) {
 }
 
 func TestSyncEngineWorktreeProjectWhenPathMissing(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	mainContent := testjsonl.NewSessionBuilder().
 		AddRaw(`{"type":"user","timestamp":"2024-01-01T10:00:00Z","cwd":"/Users/wesm/code/agentsview","gitBranch":"main","message":{"content":"hello"}}`).
@@ -741,7 +744,8 @@ func TestSyncEngineWorktreeProjectWhenPathMissing(t *testing.T) {
 }
 
 func TestSyncEngineAppliesWorktreeProjectMapping(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	assert.Equal(t, "local", env.engine.Machine())
 
@@ -781,7 +785,8 @@ func TestSyncEngineAppliesWorktreeProjectMapping(t *testing.T) {
 }
 
 func TestSyncSingleSessionAppliesWorktreeProjectMapping(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	root := t.TempDir()
 	worktreePrefix := filepath.Join(root, "my-app.worktrees")
@@ -820,7 +825,8 @@ func TestSyncSingleSessionAppliesWorktreeProjectMapping(t *testing.T) {
 func TestSyncSingleSessionSkippedClaudeDoesNotApplyWorktreeProjectMapping(
 	t *testing.T,
 ) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	root := t.TempDir()
 	worktreePrefix := filepath.Join(root, "my-app.worktrees")
@@ -875,7 +881,8 @@ func TestSyncSingleSessionSkippedClaudeDoesNotApplyWorktreeProjectMapping(
 func TestSyncAllSkippedClaudeDoesNotApplyWorktreeProjectMapping(
 	t *testing.T,
 ) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	root := t.TempDir()
 	worktreePrefix := filepath.Join(root, "my-app.worktrees")
@@ -929,7 +936,8 @@ func TestSyncAllSkippedClaudeDoesNotApplyWorktreeProjectMapping(
 func TestSyncPathsSkippedClaudeDoesNotApplyWorktreeProjectMapping(
 	t *testing.T,
 ) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	root := t.TempDir()
 	worktreePrefix := filepath.Join(root, "my-app.worktrees")
@@ -991,7 +999,8 @@ func TestSyncPathsSkippedClaudeDoesNotApplyWorktreeProjectMapping(
 func TestSyncSingleSessionIncrementalAppliesWorktreeProjectMapping(
 	t *testing.T,
 ) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	root := t.TempDir()
 	worktreePrefix := filepath.Join(root, "my-app.worktrees")
@@ -1048,7 +1057,8 @@ func TestSyncSingleSessionIncrementalAppliesWorktreeProjectMapping(
 func TestSyncAllIncrementalAppliesWorktreeProjectMapping(
 	t *testing.T,
 ) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	root := t.TempDir()
 	worktreePrefix := filepath.Join(root, "my-app.worktrees")
@@ -1143,7 +1153,8 @@ func TestResyncAllAppliesWorktreeProjectMappingDuringBulkWrites(
 }
 
 func TestResyncAllExcludesExistingClaudeUsageProbe(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	const sessionID = "usage-probe"
 	usageCmd := "<command-name>/usage</command-name>\n" +
@@ -1189,7 +1200,8 @@ func TestResyncAllExcludesExistingClaudeUsageProbe(t *testing.T) {
 }
 
 func TestSyncEngineCodex(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
 
 	content := testjsonl.NewSessionBuilder().
 		AddCodexMeta(tsEarly, "test-uuid", "/home/user/code/api", "user").
@@ -1479,7 +1491,7 @@ func TestSyncEngineProgressDoneCatchesResyncDBBackedWork(t *testing.T) {
 }
 
 func TestSyncEngineHashSkip(t *testing.T) {
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	content := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "msg1").
@@ -1716,7 +1728,8 @@ func TestSyncAllClaudeDuplicatePathRewriterKeepsStoredPreferred(t *testing.T) {
 }
 
 func TestSyncEngineSkipCache(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	// Write malformed content that produces 0 valid messages
 	path := env.writeClaudeSession(
@@ -1750,7 +1763,8 @@ func TestSyncEngineSkipCache(t *testing.T) {
 }
 
 func TestSyncEngineFileAppend(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	initial := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "first").
@@ -1784,7 +1798,8 @@ func TestSyncEngineFileAppend(t *testing.T) {
 func TestSyncSingleSessionReplacesContent(
 	t *testing.T,
 ) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	original := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "original question").
@@ -1822,7 +1837,8 @@ func TestSyncSingleSessionReplacesContent(
 }
 
 func TestSyncSingleSessionHash(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	content := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "hello").
@@ -1838,7 +1854,8 @@ func TestSyncSingleSessionHash(t *testing.T) {
 }
 
 func TestSyncSingleSessionHashCodex(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
 
 	uuid := "a1b2c3d4-1234-5678-9abc-def012345678"
 	content := testjsonl.NewSessionBuilder().
@@ -1861,7 +1878,8 @@ func TestSyncSingleSessionHashCodex(t *testing.T) {
 func TestSyncAllImportsCodexExec(
 	t *testing.T,
 ) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
 
 	uuid := "e5f6a7b8-5678-9012-cdef-123456789012"
 	// Exec-originated sessions should be imported during the
@@ -1893,7 +1911,8 @@ func TestSyncAllImportsCodexExec(
 func TestSyncAllImportsCodexExecFromLegacySkipCache(
 	t *testing.T,
 ) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
 
 	uuid := "f6a7b8c9-6789-0123-def0-234567890123"
 	content := testjsonl.NewSessionBuilder().
@@ -2014,7 +2033,7 @@ func TestCodexExecMigrationIdempotent(t *testing.T) {
 }
 
 func TestSyncEngineTombstoneClearOnMtimeChange(t *testing.T) {
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	// Write something that produces 0 messages but parses OK
 	path := env.writeClaudeSession(
@@ -2039,7 +2058,7 @@ func TestSyncEngineTombstoneClearOnMtimeChange(t *testing.T) {
 }
 
 func TestSyncSingleSessionProjectFallback(t *testing.T) {
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	// 1. Create a session in a directory "default-proj"
 	content := testjsonl.NewSessionBuilder().
@@ -2085,7 +2104,7 @@ func TestSyncSingleSessionProjectFallback(t *testing.T) {
 }
 
 func TestSyncEngineNoTrailingNewline(t *testing.T) {
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	content := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsEarly, "Hello").
@@ -2102,7 +2121,7 @@ func TestSyncEngineNoTrailingNewline(t *testing.T) {
 }
 
 func TestSyncPathsClaude(t *testing.T) {
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	content := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "Hello").
@@ -2130,7 +2149,7 @@ func TestSyncPathsClaude(t *testing.T) {
 }
 
 func TestSyncPathsOnlyProcessesChanged(t *testing.T) {
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	content1 := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "msg1").
@@ -2165,7 +2184,7 @@ func TestSyncPathsOnlyProcessesChanged(t *testing.T) {
 }
 
 func TestSyncPathsIgnoresNonSessionFiles(t *testing.T) {
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	// SyncPaths with non-session paths: no panic, no error
 	env.engine.SyncPaths([]string{
@@ -4217,7 +4236,7 @@ func TestSyncPathsOpenCodeStorageChildRetryWithoutSessionMtimeChange(
 ) {
 	t.Parallel()
 
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
 	sessionPath := oc.addSession(
@@ -4274,7 +4293,7 @@ func TestSyncPathsOpenCodeStorageChildUpdateAdvancesSessionMtime(
 ) {
 	t.Parallel()
 
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
 	sessionPath := oc.addSession(
@@ -4977,7 +4996,7 @@ func TestResyncAllAllowsKiloSQLiteOnlySessions(t *testing.T) {
 func TestSyncAllSinceOpenCodeStoragePicksUpUsagePartUpdate(t *testing.T) {
 	t.Parallel()
 
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
 	sessionPath := oc.addSession(
@@ -5057,7 +5076,7 @@ func TestSyncAllSinceOpenCodeStoragePicksUpUsagePartUpdate(t *testing.T) {
 func TestSyncAllOpenCodeStorageReparsesUnchangedSessionsIdempotently(t *testing.T) {
 	t.Parallel()
 
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
 	oc.addSession(
@@ -5091,7 +5110,7 @@ func TestSyncAllOpenCodeStorageReparsesUnchangedSessionsIdempotently(t *testing.
 func TestSyncAllOpenCodeStorageMissingMessagePreservesArchive(t *testing.T) {
 	t.Parallel()
 
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
 	sessionPath := oc.addSession(
@@ -5139,7 +5158,7 @@ func TestSyncAllOpenCodeStoragePreservesLegacySQLiteArchive(
 ) {
 	t.Parallel()
 
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	sqlite := createOpenCodeDB(t, env.opencodeDir)
 	sqlite.addProject(t, "proj-1", "/home/user/code/myapp")
 
@@ -5199,7 +5218,7 @@ func TestSyncAllOpenCodeStoragePreservesLegacySQLiteArchive(
 func TestSyncAllOpenCodeStorageMissingPartDirPreservesArchive(t *testing.T) {
 	t.Parallel()
 
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
 	sessionPath := oc.addSession(
@@ -5249,7 +5268,7 @@ func TestSyncSingleSessionOpenCodeStorageMissingMessagePreservesArchive(
 ) {
 	t.Parallel()
 
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
 	sessionID := "oc-missing-message-single"
