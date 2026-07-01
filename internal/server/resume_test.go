@@ -1,12 +1,15 @@
 package server
 
 import (
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -55,6 +58,85 @@ func TestShellQuote(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestCommandWithCleanup(t *testing.T) {
+	assert.Equal(t,
+		"claude < prompt.txt; rm -f -- 'prompt.txt'",
+		commandWithCleanup("claude < prompt.txt", "prompt.txt"),
+	)
+	assert.Equal(t,
+		"claude < prompt.txt",
+		commandWithCleanup("claude < prompt.txt", ""),
+	)
+}
+
+func TestClaudeMessagePointResponseCommandUsesPOSIXShellOffWindows(
+	t *testing.T,
+) {
+	cwd := t.TempDir()
+	promptPath := filepath.Join(t.TempDir(), "prompt file.txt")
+
+	got := claudeMessagePointResponseCommand(promptPath, true, cwd, "linux")
+
+	want := "cd " + shellQuote(cwd) + " && claude --dangerously-skip-permissions < " +
+		shellQuote(promptPath) + "; rm -f -- " + shellQuote(promptPath)
+	assert.Equal(t, want, got)
+}
+
+func TestClaudeMessagePointResponseCommandUsesPowerShellOnWindows(
+	t *testing.T,
+) {
+	promptPath := `C:\Users\Ada\AppData\Local\Temp\prompt's file.txt`
+	cwd := `C:\Users\Ada\source\agentsview`
+
+	got := claudeMessagePointResponseCommand(
+		promptPath, true, cwd, "windows",
+	)
+
+	const prefix = "powershell.exe -NoProfile -EncodedCommand "
+	require.True(t, strings.HasPrefix(got, prefix), "command = %q", got)
+	assert.NotContains(t, got, " < ")
+	assert.NotContains(t, got, "rm -f --")
+
+	script := decodePowerShellEncodedCommandForTest(
+		t, strings.TrimPrefix(got, prefix),
+	)
+	assert.Contains(t, script,
+		"Set-Location -LiteralPath 'C:\\Users\\Ada\\source\\agentsview'")
+	assert.Contains(t, script,
+		"Get-Content -Raw -Encoding UTF8 -LiteralPath "+
+			"'C:\\Users\\Ada\\AppData\\Local\\Temp\\prompt''s file.txt' | "+
+			"& 'claude' --dangerously-skip-permissions")
+	assert.Contains(t, script,
+		"Remove-Item -LiteralPath "+
+			"'C:\\Users\\Ada\\AppData\\Local\\Temp\\prompt''s file.txt' "+
+			"-Force -ErrorAction SilentlyContinue")
+	assert.NotContains(t, script, " < ")
+	assert.NotContains(t, script, "rm -f --")
+}
+
+func decodePowerShellEncodedCommandForTest(
+	t *testing.T, encoded string,
+) string {
+	t.Helper()
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	require.NoError(t, err)
+	require.Zero(t, len(raw)%2, "UTF-16LE byte length must be even")
+
+	codeUnits := make([]uint16, len(raw)/2)
+	for i := range codeUnits {
+		codeUnits[i] = binary.LittleEndian.Uint16(raw[i*2:])
+	}
+	return string(utf16.Decode(codeUnits))
+}
+
+func TestClaudeMessagePointPromptPathIsUniquePerLaunch(t *testing.T) {
+	first, err := claudeMessagePointPromptPath("sess-1", 2)
+	require.NoError(t, err)
+	second, err := claudeMessagePointPromptPath("sess-1", 2)
+	require.NoError(t, err)
+	assert.NotEqual(t, first, second)
 }
 
 func TestDetectTerminalLinux_NoTerminal(t *testing.T) {

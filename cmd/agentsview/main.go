@@ -111,7 +111,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 		}
 	}
 
-	cont, releaseForegroundReplacement, err := prepareForegroundServeDaemon(
+	cont, releaseForegroundServeLaunch, err := prepareForegroundServeDaemon(
 		&cfg,
 		serveReplacementOptions{
 			Replace:        opts.ReplaceDaemon,
@@ -124,7 +124,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 	if !cont {
 		return
 	}
-	defer releaseForegroundReplacement()
+	defer releaseForegroundServeLaunch()
 
 	// Acquire the daemon start lock immediately after config setup,
 	// before opening the DB, so token-use never sees a window
@@ -281,7 +281,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 		runtimeRecordDataDir = rt.Cfg.DataDir
 		UnmarkDaemonStarting(rt.Cfg.DataDir)
 	}
-	releaseForegroundReplacement()
+	releaseForegroundServeLaunch()
 	if idleTracker != nil {
 		idleTracker.Touch()
 		go idleTracker.Run(ctx)
@@ -513,7 +513,7 @@ func rejectLiveWritableDaemonBeforeDirectWrite(cfg config.Config) error {
 		)
 	}
 	if isBackgroundLaunchActive(dataDir) &&
-		!ownsForegroundReplacementLaunchLock(dataDir) &&
+		!ownsForegroundServeLaunchLock(dataDir) &&
 		!runningAsBackgroundChild() {
 		return fmt.Errorf(
 			"local daemon launch is in progress and owns the SQLite archive; " +

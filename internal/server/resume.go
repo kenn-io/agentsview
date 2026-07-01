@@ -2,6 +2,8 @@ package server
 
 import (
 	"bufio"
+	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"net/url"
 	"os"
@@ -9,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/google/shlex"
 	"github.com/tidwall/gjson"
@@ -21,6 +24,7 @@ import (
 type resumeRequest struct {
 	SkipPermissions bool   `json:"skip_permissions,omitempty"`
 	ForkSession     bool   `json:"fork_session,omitempty"`
+	FromOrdinal     *int   `json:"from_ordinal,omitempty"`
 	CommandOnly     bool   `json:"command_only,omitempty"`
 	OpenerID        string `json:"opener_id,omitempty"`
 }
@@ -91,6 +95,182 @@ func commandWithCwd(cmd, cwd string) string {
 		return cmd
 	}
 	return fmt.Sprintf("cd %s && %s", shellQuote(cwd), cmd)
+}
+
+func commandWithCleanup(cmd, cleanupPath string) string {
+	if cleanupPath == "" {
+		return cmd
+	}
+	return cmd + "; rm -f -- " + shellQuote(cleanupPath)
+}
+
+func claudeMessagePointLaunchCommand(
+	promptPath string, skipPermissions bool,
+) string {
+	cmd := "claude"
+	if skipPermissions {
+		cmd += " --dangerously-skip-permissions"
+	}
+	cmd += " < " + shellQuote(promptPath)
+	return commandWithCleanup(cmd, promptPath)
+}
+
+func claudeMessagePointResponseCommand(
+	promptPath string, skipPermissions bool, cwd string, goos string,
+) string {
+	if goos == "windows" {
+		return claudeMessagePointWindowsCommand(
+			promptPath, skipPermissions, cwd,
+		)
+	}
+	return commandWithCwd(
+		claudeMessagePointLaunchCommand(promptPath, skipPermissions),
+		cwd,
+	)
+}
+
+func claudeMessagePointWindowsCommand(
+	promptPath string, skipPermissions bool, cwd string,
+) string {
+	script := claudeMessagePointWindowsScript(
+		promptPath, skipPermissions, cwd,
+	)
+	return "powershell.exe -NoProfile -EncodedCommand " +
+		powerShellEncodedCommand(script)
+}
+
+func claudeMessagePointWindowsScript(
+	promptPath string, skipPermissions bool, cwd string,
+) string {
+	var b strings.Builder
+	b.WriteString("try { ")
+	if cwd != "" {
+		b.WriteString("Set-Location -LiteralPath ")
+		b.WriteString(powerShellSingleQuote(cwd))
+		b.WriteString("; ")
+	}
+	b.WriteString("Get-Content -Raw -Encoding UTF8 -LiteralPath ")
+	b.WriteString(powerShellSingleQuote(promptPath))
+	b.WriteString(" | & 'claude'")
+	if skipPermissions {
+		b.WriteString(" --dangerously-skip-permissions")
+	}
+	b.WriteString(" } finally { Remove-Item -LiteralPath ")
+	b.WriteString(powerShellSingleQuote(promptPath))
+	b.WriteString(" -Force -ErrorAction SilentlyContinue }")
+	return b.String()
+}
+
+func powerShellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+func powerShellEncodedCommand(script string) string {
+	codeUnits := utf16.Encode([]rune(script))
+	raw := make([]byte, len(codeUnits)*2)
+	for i, unit := range codeUnits {
+		binary.LittleEndian.PutUint16(raw[i*2:], unit)
+	}
+	return base64.StdEncoding.EncodeToString(raw)
+}
+
+func claudeMessagePointPromptPath(sessionID string, ordinal int) (string, error) {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(cacheDir, "agentsview", "claude-message-points")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	prefix := sanitizeFilename(
+		fmt.Sprintf("%s-ordinal-%d-", sessionID, ordinal),
+	)
+	f, err := os.CreateTemp(dir, prefix+"*.txt")
+	if err != nil {
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
+}
+
+func renderClaudeMessagePointPrompt(
+	session *db.Session, msgs []db.Message, ordinal int,
+) string {
+	var b strings.Builder
+	b.WriteString("You are continuing a Claude Code conversation forked from AgentsView.\n")
+	b.WriteString("Treat the transcript below as the full context through the selected message ordinal.\n")
+	b.WriteString("Continue the conversation from the next turn.\n\n")
+	b.WriteString("Session: ")
+	b.WriteString(session.ID)
+	b.WriteString("\n")
+	if session.Project != "" {
+		b.WriteString("Project: ")
+		b.WriteString(session.Project)
+		b.WriteString("\n")
+	}
+	fmt.Fprintf(&b, "Fork point ordinal: %d\n\n", ordinal)
+	b.WriteString("Transcript:\n")
+	for _, msg := range msgs {
+		fmt.Fprintf(&b, "\n## Message %d\n", msg.Ordinal)
+		b.WriteString("Role: ")
+		b.WriteString(msg.Role)
+		b.WriteString("\n")
+		if msg.Timestamp != "" {
+			b.WriteString("Timestamp: ")
+			b.WriteString(msg.Timestamp)
+			b.WriteString("\n")
+		}
+		if msg.Model != "" {
+			b.WriteString("Model: ")
+			b.WriteString(msg.Model)
+			b.WriteString("\n")
+		}
+		if body := renderClaudeMessagePointMessage(msg); body != "" {
+			b.WriteString("\n")
+			b.WriteString(body)
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
+}
+
+func renderClaudeMessagePointMessage(msg db.Message) string {
+	var parts []string
+	if msg.Content != "" {
+		parts = append(parts, msg.Content)
+	}
+	for _, tc := range msg.ToolCalls {
+		header := tc.ToolName
+		if header == "" {
+			header = "Tool"
+		}
+		parts = append(parts, "["+header+"]")
+		if tc.InputJSON != "" {
+			parts = append(parts, tc.InputJSON)
+		}
+		if tc.ResultContent != "" {
+			parts = append(parts, tc.ResultContent)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func writeClaudeMessagePointPrompt(
+	session *db.Session, msgs []db.Message, ordinal int,
+) (string, error) {
+	path, err := claudeMessagePointPromptPath(session.ID, ordinal)
+	if err != nil {
+		return "", err
+	}
+	prompt := renderClaudeMessagePointPrompt(session, msgs, ordinal)
+	if err := os.WriteFile(path, []byte(prompt), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // resumeLaunchCwd returns the cwd a terminal launcher should apply for
