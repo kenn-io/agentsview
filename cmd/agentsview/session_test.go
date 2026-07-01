@@ -444,61 +444,52 @@ func TestSessionGet_BareIDFindsPrefixed(t *testing.T) {
 	assert.Equal(t, "codex:"+bareID, got["id"])
 }
 
-func TestSessionList_JSONShape(t *testing.T) {
-	dataDir := newAgentDataDir(t)
-	seedSessionsWithOpts(t, dataDir,
-		sessionSeed{id: "s-a", project: "proj"},
-		sessionSeed{id: "s-b", project: "proj"},
-	)
-
-	out, err := executeCommand(newRootCommand(),
-		"session", "list", "--format", "json")
-	require.NoError(t, err)
-
-	got := decodeCLIJSON[cliSessionList](t, out)
-	assert.Equal(t, 2, got.Total)
-	assert.Len(t, got.Sessions, 2)
-}
-
-func TestSessionListColdReadOnlyCursorRoundTrip(t *testing.T) {
-	dataDir := newAgentDataDir(t)
-	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
-	seedSessionsWithOpts(t, dataDir,
-		sessionSeed{id: "s-a", project: "proj"},
-		sessionSeed{id: "s-b", project: "proj"},
-		sessionSeed{id: "s-c", project: "proj"},
-	)
-
-	out, err := executeCommand(newRootCommand(),
-		"session", "list", "--format", "json", "--limit", "1")
-	require.NoError(t, err)
-
-	first := decodeCLIJSON[cliSessionList](t, out)
-	require.NotEmpty(t, first.NextCursor)
-
-	out, err = executeCommand(newRootCommand(),
-		"session", "list", "--format", "json",
-		"--limit", "1", "--cursor", first.NextCursor)
-	require.NoError(t, err)
-
-	second := decodeCLIJSON[cliSessionList](t, out)
-	assert.Len(t, second.Sessions, 1)
-}
-
-func TestSessionList_FilterByProject(t *testing.T) {
+func TestSessionList_ReadOnlyFixture(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 	seedSessionsWithOpts(t, dataDir,
 		sessionSeed{id: "s-a", project: "p1"},
 		sessionSeed{id: "s-b", project: "p2"},
+		sessionSeed{id: "s-c", project: "p3"},
 	)
 
-	out, err := executeCommand(newRootCommand(),
-		"session", "list", "--project", "p1", "--format", "json")
-	require.NoError(t, err)
+	t.Run("json shape", func(t *testing.T) {
+		out, err := executeCommand(newRootCommand(),
+			"session", "list", "--format", "json")
+		require.NoError(t, err)
 
-	got := decodeCLIJSON[cliSessionList](t, out)
-	require.Len(t, got.Sessions, 1)
-	assert.Equal(t, "s-a", got.Sessions[0]["id"])
+		got := decodeCLIJSON[cliSessionList](t, out)
+		assert.Equal(t, 3, got.Total)
+		assert.Len(t, got.Sessions, 3)
+	})
+
+	t.Run("cold read-only cursor round trip", func(t *testing.T) {
+		t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
+
+		out, err := executeCommand(newRootCommand(),
+			"session", "list", "--format", "json", "--limit", "1")
+		require.NoError(t, err)
+
+		first := decodeCLIJSON[cliSessionList](t, out)
+		require.NotEmpty(t, first.NextCursor)
+
+		out, err = executeCommand(newRootCommand(),
+			"session", "list", "--format", "json",
+			"--limit", "1", "--cursor", first.NextCursor)
+		require.NoError(t, err)
+
+		second := decodeCLIJSON[cliSessionList](t, out)
+		assert.Len(t, second.Sessions, 1)
+	})
+
+	t.Run("filter by project", func(t *testing.T) {
+		out, err := executeCommand(newRootCommand(),
+			"session", "list", "--project", "p1", "--format", "json")
+		require.NoError(t, err)
+
+		got := decodeCLIJSON[cliSessionList](t, out)
+		require.Len(t, got.Sessions, 1)
+		assert.Equal(t, "s-a", got.Sessions[0]["id"])
+	})
 }
 
 func TestSessionList_ServerFlagUsesHTTP(t *testing.T) {
