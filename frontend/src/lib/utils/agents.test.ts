@@ -4,6 +4,8 @@ import {
   agentColor,
   agentForeground,
   agentLabel,
+  isCopilotAgent,
+  isCopilotAgentFilter,
 } from "./agents.js";
 
 describe("KNOWN_AGENTS", () => {
@@ -170,5 +172,35 @@ describe("agentLabel", () => {
   it("capitalizes simple agent names", () => {
     expect(agentLabel("claude")).toBe("Claude");
     expect(agentLabel("gemini")).toBe("Gemini");
+  });
+});
+
+describe("isCopilotAgent", () => {
+  it("matches the three Copilot variants", () => {
+    expect(isCopilotAgent("copilot")).toBe(true);
+    expect(isCopilotAgent("vscode-copilot")).toBe(true);
+    expect(isCopilotAgent("visualstudio-copilot")).toBe(true);
+  });
+
+  it("rejects other agents", () => {
+    expect(isCopilotAgent("claude")).toBe(false);
+    expect(isCopilotAgent("codex")).toBe(false);
+    expect(isCopilotAgent("")).toBe(false);
+  });
+});
+
+describe("isCopilotAgentFilter", () => {
+  it("matches single and CSV all-Copilot filters", () => {
+    expect(isCopilotAgentFilter("copilot")).toBe(true);
+    expect(isCopilotAgentFilter("copilot,vscode-copilot")).toBe(true);
+    expect(isCopilotAgentFilter(" copilot , visualstudio-copilot ")).toBe(true);
+    expect(isCopilotAgentFilter("copilot,")).toBe(true);
+  });
+
+  it("rejects empty, mixed, and non-Copilot filters", () => {
+    expect(isCopilotAgentFilter("")).toBe(false);
+    expect(isCopilotAgentFilter(",")).toBe(false);
+    expect(isCopilotAgentFilter("copilot,claude")).toBe(false);
+    expect(isCopilotAgentFilter("claude")).toBe(false);
   });
 });

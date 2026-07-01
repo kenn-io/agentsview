@@ -110,6 +110,10 @@ export interface UsageSummaryResponse {
   sessionCounts: UsageSessionCounts;
   cacheStats: CacheStats;
   comparison?: UsageComparison;
+  // matchingSessions counts sessions matching the filter independent of usage
+  // rows (0 unless an agent filter is set) — distinguishes "filtered sessions
+  // exist but record no token data" from "no matching sessions".
+  matchingSessions?: number;
 }
 
 export interface TopSessionEntry {
