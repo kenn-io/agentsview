@@ -105,24 +105,30 @@ func TestListStoredSourcePathHintsBatchesRootsWithoutTruncating(t *testing.T) {
 	d := testDB(t)
 	base := t.TempDir()
 	var roots []string
+	var seeds []storedSourcePathSeed
 	var want []string
 	for i := range storedSourcePathHintRootBatchSize + 17 {
 		root := filepath.Join(base, fmt.Sprintf("root-%03d", i))
 		roots = append(roots, root)
 		if i == 0 || i == storedSourcePathHintRootBatchSize+16 {
 			path := filepath.Join(root, "session.jsonl")
-			insertSessionWithSourcePath(
-				t, d, fmt.Sprintf("claude:match-%03d", i), "claude", path,
-			)
+			seeds = append(seeds, storedSourcePathSeed{
+				id:    fmt.Sprintf("claude:match-%03d", i),
+				agent: "claude",
+				path:  path,
+			})
 			want = append(want, path)
 		}
 	}
 	for i := range 250 {
 		path := filepath.Join(base, "unrelated", fmt.Sprintf("%03d.jsonl", i))
-		insertSessionWithSourcePath(
-			t, d, fmt.Sprintf("claude:unrelated-%03d", i), "claude", path,
-		)
+		seeds = append(seeds, storedSourcePathSeed{
+			id:    fmt.Sprintf("claude:unrelated-%03d", i),
+			agent: "claude",
+			path:  path,
+		})
 	}
+	insertSessionsWithSourcePaths(t, d, seeds)
 
 	got, err := d.ListStoredSourcePathHints("claude", roots)
 
@@ -171,4 +177,37 @@ func insertSessionWithSourcePath(
 			s.FilePath = &path
 		},
 	}, opts...)...)
+}
+
+type storedSourcePathSeed struct {
+	id    string
+	agent string
+	path  string
+}
+
+func insertSessionsWithSourcePaths(
+	t *testing.T,
+	d *DB,
+	seeds []storedSourcePathSeed,
+) {
+	t.Helper()
+
+	writes := make([]SessionBatchWrite, 0, len(seeds))
+	for _, seed := range seeds {
+		path := seed.path
+		writes = append(writes, SessionBatchWrite{
+			Session: Session{
+				ID:           seed.id,
+				Project:      "proj",
+				Machine:      defaultMachine,
+				Agent:        seed.agent,
+				MessageCount: 1,
+				FilePath:     &path,
+			},
+			DataVersion: CurrentDataVersion(),
+		})
+	}
+	result, err := d.WriteSessionBatchAtomic(writes)
+	require.NoError(t, err, "insert source path sessions")
+	require.Equal(t, len(seeds), result.WrittenSessions, "WrittenSessions")
 }
