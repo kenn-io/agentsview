@@ -42,6 +42,8 @@ The command pulls together several categories of information:
   (= `abandoned` or `errored`), and `unknown` (= `unknown` plus
   any unrecognized value). The rollup applies to both the human
   summary and the JSON `outcomes` block.
+- **Cursor attribution** — optional Cursor AI code-attribution
+  totals from the host-local Cursor attribution database.
 
 ## Automation Scope
 
@@ -85,19 +87,25 @@ agentsview stats --agent claude --include-project my-app
 | `--exclude-project` | | Repeatable project blocklist |
 | `--timezone` | local | Timezone used for temporal reporting |
 
-## Local-Only Behavior
+## Data Scope
 
-Unlike `agentsview session`, this command currently reads the local
-SQLite archive directly. It does **not** proxy through a running
-AgentsView daemon.
+Session-derived stats summarize the selected window in the local
+AgentsView archive. When the command talks to a local SQLite daemon, the
+daemon answers from that same archive. If it falls back to a direct
+read-only SQLite open, it reads the archive file directly.
 
-That means:
+Cursor attribution is different: it is not synced session data. When
+present, the `cursor_attribution` block is read live from the Cursor
+attribution database on the host answering the stats request:
+`~/.cursor/ai-tracking/ai-code-tracking.db` by default, or the path in
+`AGENTSVIEW_CURSOR_ATTRIBUTION_DB`.
 
-- a running `agentsview serve` process is not required
-- the command reflects whatever is already present in the local
-  archive
-- if you want the newest session data first, run
-  `agentsview sync` or `agentsview serve` before using it
+That means Cursor attribution is machine-local. It is not aggregated
+across synced machines, is not pushed to PostgreSQL, and is not available
+from PostgreSQL read-only serving. Project filters cannot be represented
+against Cursor's attribution database, so project-filtered stats report
+`cursor_attribution.status: "unsupported_filter"` instead of silently
+reporting zero attribution.
 
 ## Human Output
 
@@ -145,6 +153,13 @@ Optional blocks may also appear:
 - `adoption`
 - `outcome_stats`
 - `outcomes`
+- `cursor_attribution`
+
+`cursor_attribution.status` reports whether the machine-local Cursor
+database produced records for the requested window. Current statuses are
+`available`, `empty`, `unavailable`, `error`, and `unsupported_filter`.
+Check `cursor_attribution.warnings` before interpreting zero counters as
+zero Cursor activity.
 
 Even though the JSON currently includes a version number, it is still
 best to treat it as experimental and additive: expect new fields,

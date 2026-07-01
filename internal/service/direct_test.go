@@ -221,6 +221,8 @@ func TestDirectBackend_Stats_CursorAttribution(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, stats)
 	require.NotNil(t, stats.CursorAttribution)
+	assert.Equal(t, "available", stats.CursorAttribution.Status)
+	assert.Equal(t, "machine_local", stats.CursorAttribution.Scope)
 	assert.Equal(t, int64(2), stats.CursorAttribution.ScoredCommits)
 	assert.Equal(t, int64(18), stats.CursorAttribution.LinesAdded)
 	assert.InDelta(t, 10.0/18.0, stats.CursorAttribution.AIAuthoredPct, 1e-9)
@@ -249,7 +251,46 @@ func TestDirectBackend_Stats_CursorAttributionIgnoredForNonCursorFilter(
 	assert.Nil(t, stats.CursorAttribution)
 }
 
-func TestDirectBackend_Stats_CursorAttributionIgnoredForProjectFilters(
+func TestDirectBackend_Stats_CursorAttributionReportsMissingDB(t *testing.T) {
+	svc, _ := newDirectTestSvc(t)
+	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB",
+		filepath.Join(t.TempDir(), "missing.db"))
+
+	stats, err := svc.Stats(context.Background(), service.StatsFilter{
+		Since: "28d",
+		Agent: "cursor",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, stats)
+	require.NotNil(t, stats.CursorAttribution)
+	assert.Equal(t, "unavailable", stats.CursorAttribution.Status)
+	assert.Equal(t, "machine_local", stats.CursorAttribution.Scope)
+	require.NotEmpty(t, stats.CursorAttribution.Warnings)
+	assert.Contains(t, stats.CursorAttribution.Warnings[0],
+		"Cursor attribution database is unavailable")
+}
+
+func TestDirectBackend_Stats_CursorAttributionReportsLoadError(t *testing.T) {
+	svc, _ := newDirectTestSvc(t)
+	badPath := filepath.Join(t.TempDir(), "ai-code-tracking.db")
+	require.NoError(t, os.WriteFile(badPath, []byte("not sqlite"), 0o600))
+	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB", badPath)
+
+	stats, err := svc.Stats(context.Background(), service.StatsFilter{
+		Since: "28d",
+		Agent: "cursor",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, stats)
+	require.NotNil(t, stats.CursorAttribution)
+	assert.Equal(t, "error", stats.CursorAttribution.Status)
+	assert.Equal(t, "machine_local", stats.CursorAttribution.Scope)
+	require.NotEmpty(t, stats.CursorAttribution.Warnings)
+	assert.Contains(t, stats.CursorAttribution.Warnings[0],
+		"failed to load Cursor attribution")
+}
+
+func TestDirectBackend_Stats_CursorAttributionReportsUnsupportedProjectFilters(
 	t *testing.T,
 ) {
 	svc, _ := newDirectTestSvc(t)
@@ -275,7 +316,13 @@ func TestDirectBackend_Stats_CursorAttributionIgnoredForProjectFilters(
 		stats, err := svc.Stats(context.Background(), filter)
 		require.NoError(t, err)
 		require.NotNil(t, stats)
-		assert.Nil(t, stats.CursorAttribution)
+		require.NotNil(t, stats.CursorAttribution)
+		assert.Equal(t, "unsupported_filter",
+			stats.CursorAttribution.Status)
+		assert.Equal(t, "machine_local", stats.CursorAttribution.Scope)
+		require.NotEmpty(t, stats.CursorAttribution.Warnings)
+		assert.Contains(t, stats.CursorAttribution.Warnings[0],
+			"cannot be scoped by project filters")
 	}
 }
 

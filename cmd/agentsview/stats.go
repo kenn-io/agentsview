@@ -459,6 +459,24 @@ func printOutcomes(w io.Writer, o *db.StatsOutcomes) {
 
 func printCursorAttribution(w io.Writer, c *db.CursorAttribution) {
 	fmt.Fprintln(w, "Cursor attribution")
+	if c.Status != "" {
+		fmt.Fprintf(w, "  Status:             %s\n", c.Status)
+	}
+	if c.Scope != "" {
+		fmt.Fprintf(w, "  Scope:              %s\n", c.Scope)
+	}
+	for _, warning := range c.Warnings {
+		fmt.Fprintf(w, "  Warning:            %s\n", warning)
+	}
+	switch c.Status {
+	case "unavailable", "error", "unsupported_filter":
+		fmt.Fprintln(w)
+		return
+	case "empty":
+		fmt.Fprintln(w, "  Records:            none in window")
+		fmt.Fprintln(w)
+		return
+	}
 	fmt.Fprintf(w, "  Scored commits:      %s\n",
 		fmtInt64(c.ScoredCommits))
 	fmt.Fprintf(w, "  Lines added/deleted: %s / %s\n",

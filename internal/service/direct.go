@@ -723,22 +723,44 @@ func (b *directBackend) Stats(
 }
 
 func attachCursorAttribution(stats *SessionStats, f StatsFilter) {
-	if stats == nil || !shouldLoadCursorAttribution(f) {
+	if stats == nil {
+		return
+	}
+	switch cursorAttributionDecision(f) {
+	case cursorAttributionSkip:
+		return
+	case cursorAttributionUnsupportedProjectFilter:
+		stats.CursorAttribution = cursorAttributionStatus(
+			"unsupported_filter",
+			"Cursor attribution is machine-local and cannot be scoped by project filters",
+		)
 		return
 	}
 	from, err := time.Parse(time.RFC3339, stats.Window.Since)
 	if err != nil {
+		stats.CursorAttribution = cursorAttributionStatus(
+			"error",
+			"failed to parse stats window for Cursor attribution",
+		)
 		return
 	}
 	to, err := time.Parse(time.RFC3339, stats.Window.Until)
 	if err != nil {
+		stats.CursorAttribution = cursorAttributionStatus(
+			"error",
+			"failed to parse stats window for Cursor attribution",
+		)
 		return
 	}
-	attr, err := parser.LoadCursorAttribution(from, to)
-	if err != nil || attr == nil {
+	attr, status, err := parser.LoadCursorAttribution(from, to)
+	if err != nil {
+		stats.CursorAttribution = cursorAttributionStatus(
+			"error",
+			"failed to load Cursor attribution: "+err.Error(),
+		)
 		return
 	}
-	stats.CursorAttribution = mapCursorAttribution(attr)
+	stats.CursorAttribution = mapCursorAttribution(attr, status)
 }
 
 func normalizeStatsAgentFilter(raw string) string {
@@ -754,12 +776,19 @@ func normalizeStatsAgentFilter(raw string) string {
 	return strings.Join(filtered, ",")
 }
 
-func shouldLoadCursorAttribution(f StatsFilter) bool {
-	if len(f.IncludeProjects) > 0 || len(f.ExcludeProjects) > 0 {
-		return false
-	}
+type cursorAttributionLoadDecision int
+
+const (
+	cursorAttributionLoad cursorAttributionLoadDecision = iota
+	cursorAttributionSkip
+	cursorAttributionUnsupportedProjectFilter
+	cursorAttributionScopeMachineLocal = "machine_local"
+)
+
+func cursorAttributionDecision(f StatsFilter) cursorAttributionLoadDecision {
 	agents := strings.Split(normalizeStatsAgentFilter(f.Agent), ",")
 	seen := 0
+	hasCursor := false
 	for _, agent := range agents {
 		agent = strings.TrimSpace(agent)
 		if agent == "" {
@@ -767,19 +796,34 @@ func shouldLoadCursorAttribution(f StatsFilter) bool {
 		}
 		seen++
 		if agent == "cursor" {
-			return true
+			hasCursor = true
 		}
 	}
-	return seen == 0
+	if seen > 0 && !hasCursor {
+		return cursorAttributionSkip
+	}
+	if len(f.IncludeProjects) > 0 || len(f.ExcludeProjects) > 0 {
+		return cursorAttributionUnsupportedProjectFilter
+	}
+	return cursorAttributionLoad
 }
 
 func mapCursorAttribution(
 	attr *parser.CursorAttribution,
+	status parser.CursorAttributionStatus,
 ) *db.CursorAttribution {
 	if attr == nil {
-		return nil
+		out := cursorAttributionStatus(string(status), "")
+		if status == parser.CursorAttributionUnavailable {
+			out.Warnings = []string{
+				"Cursor attribution database is unavailable on this machine",
+			}
+		}
+		return out
 	}
 	out := &db.CursorAttribution{
+		Status:               string(status),
+		Scope:                cursorAttributionScopeMachineLocal,
 		ScoredCommits:        attr.ScoredCommits,
 		LinesAdded:           attr.LinesAdded,
 		LinesDeleted:         attr.LinesDeleted,
@@ -810,6 +854,17 @@ func mapCursorAttribution(
 				Count: entry.Count,
 			},
 		)
+	}
+	return out
+}
+
+func cursorAttributionStatus(status, warning string) *db.CursorAttribution {
+	out := &db.CursorAttribution{
+		Status: status,
+		Scope:  cursorAttributionScopeMachineLocal,
+	}
+	if warning != "" {
+		out.Warnings = []string{warning}
 	}
 	return out
 }

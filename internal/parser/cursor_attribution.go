@@ -27,6 +27,14 @@ type CursorAttribution struct {
 	ConversationCounts   []CursorConversationCount `json:"conversation_counts,omitempty"`
 }
 
+type CursorAttributionStatus string
+
+const (
+	CursorAttributionAvailable   CursorAttributionStatus = "available"
+	CursorAttributionEmpty       CursorAttributionStatus = "empty"
+	CursorAttributionUnavailable CursorAttributionStatus = "unavailable"
+)
+
 type CursorConversationCount struct {
 	Model string `json:"model"`
 	Mode  string `json:"mode"`
@@ -35,21 +43,21 @@ type CursorConversationCount struct {
 
 func LoadCursorAttribution(
 	from, to time.Time,
-) (*CursorAttribution, error) {
+) (*CursorAttribution, CursorAttributionStatus, error) {
 	dbPath := cursorAttributionDBPath()
 	if dbPath == "" {
-		return nil, nil
+		return nil, CursorAttributionUnavailable, nil
 	}
 	if _, err := os.Stat(dbPath); err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, CursorAttributionUnavailable, nil
 		}
-		return nil, fmt.Errorf("stat cursor attribution db: %w", err)
+		return nil, "", fmt.Errorf("stat cursor attribution db: %w", err)
 	}
 
 	conn, err := openCursorAttributionDB(dbPath)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer conn.Close()
 
@@ -83,7 +91,7 @@ func LoadCursorAttribution(
 		&attr.BlankLinesAdded,
 		&attr.BlankLinesDeleted,
 	); err != nil {
-		return nil, fmt.Errorf("querying scored_commits: %w", err)
+		return nil, "", fmt.Errorf("querying scored_commits: %w", err)
 	}
 
 	rows, err := conn.Query(
@@ -98,7 +106,7 @@ func LoadCursorAttribution(
 		timeToMillis(from), timeToMillis(to),
 	)
 	if err != nil {
-		return nil, fmt.Errorf(
+		return nil, "", fmt.Errorf(
 			"querying conversation_summaries: %w", err,
 		)
 	}
@@ -109,7 +117,7 @@ func LoadCursorAttribution(
 		if err := rows.Scan(
 			&entry.Model, &entry.Mode, &entry.Count,
 		); err != nil {
-			return nil, fmt.Errorf(
+			return nil, "", fmt.Errorf(
 				"scanning conversation_summaries: %w", err,
 			)
 		}
@@ -118,7 +126,7 @@ func LoadCursorAttribution(
 		)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf(
+		return nil, "", fmt.Errorf(
 			"iterating conversation_summaries: %w", err,
 		)
 	}
@@ -128,7 +136,7 @@ func LoadCursorAttribution(
 		attr.LinesAdded == 0 &&
 		attr.LinesDeleted == 0 &&
 		len(attr.ConversationCounts) == 0 {
-		return nil, nil
+		return nil, CursorAttributionEmpty, nil
 	}
 
 	aiLines := attr.TabLinesAdded + attr.ComposerLinesAdded
@@ -137,7 +145,7 @@ func LoadCursorAttribution(
 		attr.AIAuthoredPct = float64(aiLines) / float64(denom)
 	}
 
-	return attr, nil
+	return attr, CursorAttributionAvailable, nil
 }
 
 func cursorAttributionDBPath() string {

@@ -334,8 +334,11 @@ thread JSON files.
 | Zencoder              | `~/.zencoder/sessions/`                                                                                                                                                 |
 
 Each directory can be overridden with an environment variable. See the
-[configuration docs](https://agentsview.io/configuration/) for details.
-Cursor attribution stats read `~/.cursor/ai-tracking/ai-code-tracking.db` by default and can be redirected with `AGENTSVIEW_CURSOR_ATTRIBUTION_DB`.
+[configuration docs](https://agentsview.io/configuration/) for details. Cursor
+attribution stats are a live, machine-local read from
+`~/.cursor/ai-tracking/ai-code-tracking.db` by default and can be redirected
+with `AGENTSVIEW_CURSOR_ATTRIBUTION_DB`; they are not synced or aggregated
+through PostgreSQL.
 
 ### Aider: per-repo Markdown logs
 
@@ -363,7 +366,11 @@ its `# aider chat started at ...` header (written in local time, assumed UTC).
 
 ### JetBrains Copilot via exporter
 
-JetBrains IDEs store Copilot chat in a Nitrite database that agentsview does not read directly. The supported path today is to export those sessions to Copilot JSONL with [copilot-jetbrains-exporter](https://github.com/MCBoarder289/copilot-jetbrains-exporter), then point agentsview at that output directory.
+JetBrains IDEs store Copilot chat in a Nitrite database that agentsview does not
+read directly. The supported path today is to export those sessions to Copilot
+JSONL with
+[copilot-jetbrains-exporter](https://github.com/MCBoarder289/copilot-jetbrains-exporter),
+then point agentsview at that output directory.
 
 ```bash
 # Export JetBrains Copilot sessions to JSONL
@@ -379,7 +386,8 @@ Or in `~/.agentsview/config.toml`:
 copilot_dirs = ["~/.copilot/jetbrains-sessions"]
 ```
 
-Re-run the exporter after new JetBrains Copilot sessions if you want agentsview to pick up fresh conversations from that source.
+Re-run the exporter after new JetBrains Copilot sessions if you want agentsview
+to pick up fresh conversations from that source.
 
 ### Antigravity CLI: high-resolution transcripts
 
@@ -391,8 +399,8 @@ structured tool calls, results, reasoning, and diffs -- comes from a
 back to **summary mode**: a heuristic decode of the raw `.db` steps (prompts and
 tool-call names only), or for `.pb` sessions your prompts from `history.jsonl`
 plus any plain-text artifacts under `brain/` (plans, walkthroughs, checkpoints).
-Summary-mode sessions show a "Summary mode" badge in the detail header that links
-here.
+Summary-mode sessions show a "Summary mode" badge in the detail header that
+links here.
 
 To unlock full transcripts for `.db` and `.pb` sessions alike, run
 [agy-reader](https://github.com/mjacobs/agy-reader) alongside agentsview.

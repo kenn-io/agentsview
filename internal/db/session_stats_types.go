@@ -193,6 +193,9 @@ type StatsOutcomes struct {
 }
 
 type CursorAttribution struct {
+	Status               string                    `json:"status"`
+	Scope                string                    `json:"scope"`
+	Warnings             []string                  `json:"warnings,omitempty"`
 	ScoredCommits        int64                     `json:"scored_commits"`
 	LinesAdded           int64                     `json:"lines_added"`
 	LinesDeleted         int64                     `json:"lines_deleted"`
