@@ -186,6 +186,8 @@ func (p *piebaldTestDB) addChatWithFork(t *testing.T, chatID int64) {
 }
 
 func TestSyncSingleSessionPiebaldFork(t *testing.T) {
+	t.Parallel()
+
 	env := setupTestEnv(t)
 	piebald := createPiebaldDB(t, env.piebaldDir)
 	piebald.addChatWithFork(t, 42)
@@ -206,6 +208,8 @@ func TestSyncSingleSessionPiebaldFork(t *testing.T) {
 }
 
 func TestSyncSingleSessionPiebaldUnknownFork(t *testing.T) {
+	t.Parallel()
+
 	env := setupTestEnv(t)
 	piebald := createPiebaldDB(t, env.piebaldDir)
 	piebald.addChatWithFork(t, 42)

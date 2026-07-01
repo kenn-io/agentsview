@@ -9183,6 +9183,8 @@ func TestResyncAllPreservesPGPushMarkerID(t *testing.T) {
 func TestSyncAllOpenCodeExcludedNotCountedAsFailed(
 	t *testing.T,
 ) {
+	t.Parallel()
+
 	env := setupTestEnv(t)
 
 	// Create an OpenCode DB with a session.
@@ -9222,6 +9224,8 @@ func TestSyncAllOpenCodeExcludedNotCountedAsFailed(
 // calling SyncSingleSession on a permanently deleted
 // (excluded) session returns nil, not an error.
 func TestSyncSingleSessionExcludedIsNoOp(t *testing.T) {
+	t.Parallel()
+
 	env := setupTestEnv(t)
 
 	content := testjsonl.NewSessionBuilder().
@@ -9248,6 +9252,8 @@ func TestSyncSingleSessionExcludedIsNoOp(t *testing.T) {
 }
 
 func TestSyncAllTrashedSessionIsSkippedAndCached(t *testing.T) {
+	t.Parallel()
+
 	env := setupTestEnv(t)
 
 	content := testjsonl.NewSessionBuilder().
@@ -9280,6 +9286,8 @@ func TestSyncAllTrashedSessionIsSkippedAndCached(t *testing.T) {
 }
 
 func TestSyncAllTrashedSessionAppendUsesSkipPath(t *testing.T) {
+	t.Parallel()
+
 	env := setupTestEnv(t)
 
 	content := testjsonl.NewSessionBuilder().
@@ -9318,6 +9326,8 @@ func TestSyncAllTrashedSessionAppendUsesSkipPath(t *testing.T) {
 }
 
 func TestSyncSingleSessionTrashedIsNoOp(t *testing.T) {
+	t.Parallel()
+
 	env := setupTestEnv(t)
 
 	content := testjsonl.NewSessionBuilder().
@@ -9342,6 +9352,8 @@ func TestSyncSingleSessionTrashedIsNoOp(t *testing.T) {
 func TestSyncSingleSessionOpenCodeExcludedIsNoOp(
 	t *testing.T,
 ) {
+	t.Parallel()
+
 	env := setupTestEnv(t)
 
 	oc := createOpenCodeDB(t, env.opencodeDir)
