@@ -89,13 +89,11 @@ func (w *Watcher) Events(
 	ctx context.Context, sessionID string,
 ) <-chan struct{} {
 	ch := make(chan struct{})
+	lastCount, lastDBVersion, _ := w.db.GetSessionVersion(
+		sessionID,
+	)
 	go func() {
 		defer close(ch)
-
-		// Seed initial state from the database.
-		lastCount, lastDBVersion, _ := w.db.GetSessionVersion(
-			sessionID,
-		)
 
 		if w.engine == nil {
 			// PG read mode: poll GetSessionVersion only,
