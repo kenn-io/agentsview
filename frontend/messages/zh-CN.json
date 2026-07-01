@@ -1551,6 +1551,7 @@
   "usage_refresh_data": "刷新用量数据",
   "usage_vs_prior": "{pct}% 较上期",
   "usage_total_cost": "总成本",
+  "usage_summary_unsupported_copilot_no_token_data": "此范围内匹配到了 Copilot 会话，但 Copilot 不会记录每条消息的 token 用量。",
   "usage_copilot_credits": "Copilot AI 积分",
   "usage_input_tokens": "输入 Token",
   "usage_cached_suffix": "+{tokens} 已缓存",
