@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -44,174 +43,139 @@ func syntheticAWSAccessKey(seed string) string {
 	return "AKIA" + string(body)
 }
 
-// TestSecretsScan_DirectMode_Scans verifies `secrets scan` is wired with a
-// real sync.Engine in direct mode (no daemon). A nil-engine direct backend
-// would make ScanSecrets return db.ErrReadOnly; instead the scan must run and
-// find the seeded secret.
-func TestSecretsScan_DirectMode_Scans(t *testing.T) {
-	dataDir := testDataDir(t)
-	seedSession(t, dataDir, "leaky", "proj")
-
-	d, err := db.OpenPreparedTestDB(filepath.Join(dataDir, "sessions.db"))
-	require.NoError(t, err)
-	secret := syntheticAWSAccessKey(t.Name())
-	require.NoError(t, d.InsertMessages([]db.Message{{
-		SessionID: "leaky", Ordinal: 0, Role: "user",
-		Content: "my key " + secret + " here",
-	}}))
-	require.NoError(t, d.Close())
-	registerSQLiteWritableDaemonRuntime(t, dataDir)
-
-	out, err := executeCommand(newRootCommand(),
-		"secrets", "scan", "--backfill", "--format", "json")
-	require.NoError(t, err, "secrets scan failed (engine not plumbed?)")
-	var got struct {
-		Scanned       int `json:"scanned"`
-		WithSecrets   int `json:"with_secrets"`
-		TotalFindings int `json:"total_findings"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(out), &got),
-		"scan output not JSON: %q", out)
-	assert.GreaterOrEqual(t, got.Scanned, 1,
-		"expected the seeded secret to be found, got %+v", got)
-	assert.GreaterOrEqual(t, got.WithSecrets, 1,
-		"expected the seeded secret to be found, got %+v", got)
-	assert.GreaterOrEqual(t, got.TotalFindings, 1,
-		"expected the seeded secret to be found, got %+v", got)
-}
-
-func TestSecretsScan_DirectMode_DeniesAgentsviewFixtures(t *testing.T) {
-	dataDir := testDataDir(t)
-	seedSession(t, dataDir, "fixture", "proj")
-
-	d, err := db.OpenPreparedTestDB(filepath.Join(dataDir, "sessions.db"))
-	require.NoError(t, err)
-	secret := strings.Join([]string{
+func TestSecretsScanFixture(t *testing.T) {
+	const candidateSecret = "SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6 here"
+	fixtureSecret := strings.Join([]string{
 		"ghp_", "M7qL8r", "P2sT5u", "V9wX3y",
 		"Z6aB1c", "D4eF7g", "H0iJ2k",
 	}, "")
-	require.NoError(t, d.InsertMessages([]db.Message{{
-		SessionID: "fixture", Ordinal: 0, Role: "user",
-		Content: "fixture token " + secret,
-	}}))
+
+	setupSecretsScanFixture(t,
+		secretsScanSeed{
+			id:      "leaky-json",
+			project: "scan-positive",
+			content: "my key " + syntheticAWSAccessKey(t.Name()+"/positive") + " here",
+		},
+		secretsScanSeed{
+			id:      "fixture",
+			project: "fixture-deny",
+			content: "fixture token " + fixtureSecret,
+		},
+		secretsScanSeed{
+			id:      "candidate-human",
+			project: "hint-candidate-human",
+			content: candidateSecret,
+		},
+		secretsScanSeed{
+			id:      "definite-human",
+			project: "hint-definite",
+			content: "my key " + syntheticAWSAccessKey(t.Name()+"/definite") + " here",
+		},
+		secretsScanSeed{
+			id:      "candidate-json",
+			project: "hint-candidate-json",
+			content: candidateSecret,
+		},
+	)
+
+	t.Run("direct mode scans", func(t *testing.T) {
+		out, err := executeCommand(newRootCommand(),
+			"secrets", "scan", "--backfill",
+			"--project", "scan-positive", "--format", "json")
+		require.NoError(t, err, "secrets scan failed (engine not plumbed?)")
+		var got struct {
+			Scanned       int `json:"scanned"`
+			WithSecrets   int `json:"with_secrets"`
+			TotalFindings int `json:"total_findings"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(out), &got),
+			"scan output not JSON: %q", out)
+		assert.GreaterOrEqual(t, got.Scanned, 1,
+			"expected the seeded secret to be found, got %+v", got)
+		assert.GreaterOrEqual(t, got.WithSecrets, 1,
+			"expected the seeded secret to be found, got %+v", got)
+		assert.GreaterOrEqual(t, got.TotalFindings, 1,
+			"expected the seeded secret to be found, got %+v", got)
+	})
+
+	t.Run("denies agentsview fixtures", func(t *testing.T) {
+		out, err := executeCommand(newRootCommand(),
+			"secrets", "scan", "--backfill",
+			"--project", "fixture-deny", "--format", "json")
+		require.NoError(t, err, "secrets scan failed")
+		var got struct {
+			Scanned       int `json:"scanned"`
+			WithSecrets   int `json:"with_secrets"`
+			TotalFindings int `json:"total_findings"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(out), &got),
+			"scan output not JSON: %q", out)
+		assert.Equal(t, 1, got.Scanned, "fixture should be suppressed, got %+v", got)
+		assert.Equal(t, 0, got.WithSecrets, "fixture should be suppressed, got %+v", got)
+		assert.Equal(t, 0, got.TotalFindings, "fixture should be suppressed, got %+v", got)
+	})
+
+	t.Run("hint shown on candidate", func(t *testing.T) {
+		out, err := executeCommand(newRootCommand(),
+			"secrets", "scan", "--backfill",
+			"--project", "hint-candidate-human")
+		require.NoError(t, err, "secrets scan")
+		assert.Contains(t, out, "Candidate findings are hidden")
+		assert.Contains(t, out, "--confidence all")
+	})
+
+	t.Run("hint suppressed when definite only", func(t *testing.T) {
+		out, err := executeCommand(newRootCommand(),
+			"secrets", "scan", "--backfill",
+			"--project", "hint-definite")
+		require.NoError(t, err, "secrets scan")
+		assert.NotContains(t, out, "Candidate findings are hidden")
+	})
+
+	t.Run("hint suppressed in json", func(t *testing.T) {
+		out, err := executeCommand(newRootCommand(),
+			"secrets", "scan", "--backfill",
+			"--project", "hint-candidate-json", "--format", "json")
+		require.NoError(t, err, "secrets scan")
+		assert.NotContains(t, out, "Candidate findings are hidden")
+		var sum struct {
+			CandidateFindings int `json:"candidate_findings"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(out), &sum),
+			"expected JSON output, got: %s", out)
+		assert.NotZero(t, sum.CandidateFindings)
+	})
+}
+
+type secretsScanSeed struct {
+	id      string
+	project string
+	content string
+}
+
+func setupSecretsScanFixture(t *testing.T, seeds ...secretsScanSeed) {
+	t.Helper()
+	dataDir := testDataDir(t)
+	sessionSeeds := make([]sessionSeed, 0, len(seeds))
+	messages := make([]db.Message, 0, len(seeds))
+	for _, seed := range seeds {
+		sessionSeeds = append(sessionSeeds, sessionSeed{
+			id:      seed.id,
+			project: seed.project,
+		})
+		messages = append(messages, db.Message{
+			SessionID: seed.id,
+			Ordinal:   0,
+			Role:      "user",
+			Content:   seed.content,
+		})
+	}
+	seedSessionArchiveRows(t, dataDir, sessionSeeds...)
+	d, err := db.OpenPreparedTestDB(sessionsDBPath(dataDir))
+	require.NoError(t, err)
+	require.NoError(t, d.InsertMessages(messages))
 	require.NoError(t, d.Close())
 	registerSQLiteWritableDaemonRuntime(t, dataDir)
-
-	out, err := executeCommand(newRootCommand(),
-		"secrets", "scan", "--backfill", "--format", "json")
-	require.NoError(t, err, "secrets scan failed")
-	var got struct {
-		Scanned       int `json:"scanned"`
-		WithSecrets   int `json:"with_secrets"`
-		TotalFindings int `json:"total_findings"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(out), &got),
-		"scan output not JSON: %q", out)
-	assert.Equal(t, 1, got.Scanned, "fixture should be suppressed, got %+v", got)
-	assert.Equal(t, 0, got.WithSecrets, "fixture should be suppressed, got %+v", got)
-	assert.Equal(t, 0, got.TotalFindings, "fixture should be suppressed, got %+v", got)
-}
-
-// TestSecretsScanHint_ShownOnCandidate verifies the hint is printed
-// when at least one candidate finding exists and output is not JSON.
-func TestSecretsScanHint_ShownOnCandidate(t *testing.T) {
-	dataDir := testDataDir(t)
-	seedSession(t, dataDir, "leaky", "proj")
-	d, err := db.OpenPreparedTestDB(filepath.Join(dataDir, "sessions.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Candidate finding only (high-entropy assignment), no definite leak.
-	if err := d.InsertMessages([]db.Message{{
-		SessionID: "leaky", Ordinal: 0, Role: "user",
-		Content: "SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6 here",
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.Close(); err != nil {
-		t.Fatal(err)
-	}
-	registerSQLiteWritableDaemonRuntime(t, dataDir)
-	out, err := executeCommand(newRootCommand(),
-		"secrets", "scan", "--backfill")
-	if err != nil {
-		t.Fatalf("secrets scan: %v", err)
-	}
-	if !strings.Contains(out, "Candidate findings are hidden") {
-		t.Errorf("expected hint in output, got: %s", out)
-	}
-	if !strings.Contains(out, "--confidence all") {
-		t.Errorf("expected hint to mention --confidence all, got: %s", out)
-	}
-}
-
-// TestSecretsScanHint_SuppressedWhenDefiniteOnly verifies the hint is
-// NOT printed when only definite findings exist.
-func TestSecretsScanHint_SuppressedWhenDefiniteOnly(t *testing.T) {
-	dataDir := testDataDir(t)
-	seedSession(t, dataDir, "leaky", "proj")
-	d, err := db.OpenPreparedTestDB(filepath.Join(dataDir, "sessions.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	secret := syntheticAWSAccessKey(t.Name())
-	if err := d.InsertMessages([]db.Message{{
-		SessionID: "leaky", Ordinal: 0, Role: "user",
-		Content: "my key " + secret + " here",
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.Close(); err != nil {
-		t.Fatal(err)
-	}
-	registerSQLiteWritableDaemonRuntime(t, dataDir)
-	out, err := executeCommand(newRootCommand(),
-		"secrets", "scan", "--backfill")
-	if err != nil {
-		t.Fatalf("secrets scan: %v", err)
-	}
-	if strings.Contains(out, "Candidate findings are hidden") {
-		t.Errorf("hint should be absent for definite-only scan, got: %s", out)
-	}
-}
-
-// TestSecretsScanHint_SuppressedInJSON verifies the hint is NOT printed
-// in JSON mode even when candidates exist.
-func TestSecretsScanHint_SuppressedInJSON(t *testing.T) {
-	dataDir := testDataDir(t)
-	seedSession(t, dataDir, "leaky", "proj")
-	d, err := db.OpenPreparedTestDB(filepath.Join(dataDir, "sessions.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := d.InsertMessages([]db.Message{{
-		SessionID: "leaky", Ordinal: 0, Role: "user",
-		Content: "SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6 here",
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.Close(); err != nil {
-		t.Fatal(err)
-	}
-	registerSQLiteWritableDaemonRuntime(t, dataDir)
-	out, err := executeCommand(newRootCommand(),
-		"secrets", "scan", "--backfill", "--format", "json")
-	if err != nil {
-		t.Fatalf("secrets scan: %v", err)
-	}
-	if strings.Contains(out, "Candidate findings are hidden") {
-		t.Errorf("hint should be absent in JSON mode, got: %s", out)
-	}
-	var sum struct {
-		CandidateFindings int `json:"candidate_findings"`
-	}
-	if err := json.Unmarshal([]byte(out), &sum); err != nil {
-		t.Fatalf("expected JSON output, got: %s", out)
-	}
-	if sum.CandidateFindings == 0 {
-		t.Errorf("expected candidate_findings > 0, got %d",
-			sum.CandidateFindings)
-	}
 }
 
 func TestPrintSecretFindingsHuman(t *testing.T) {
