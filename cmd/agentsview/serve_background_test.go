@@ -1109,11 +1109,11 @@ func TestEnsureBackgroundServeLaunchLoserIgnoresReadOnlyRuntimeDuringReplacement
 	published := make(chan error, 1)
 	go func() {
 		time.Sleep(2 * startProbeTick())
-		_ = launchLock.Unlock()
-		time.Sleep(2 * startProbeTick())
 		_, err := WriteDaemonRuntime(
 			dir, writableHost, writablePort, version, false,
 		)
+		UnmarkDaemonStarting(dir)
+		_ = launchLock.Unlock()
 		published <- err
 	}()
 
