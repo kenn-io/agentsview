@@ -34,12 +34,20 @@ type Sync struct {
 	syncStateScope  string
 	projects        []string
 	excludeProjects []string
+	connectionKind  duckDBConnectionKind
 
 	closeOnce sync.Once
 	closeErr  error
 	schemaMu  sync.Mutex
 	schemaOK  bool
 }
+
+type duckDBConnectionKind int
+
+const (
+	duckDBBaseConnection duckDBConnectionKind = iota
+	duckDBQuackClientConnection
+)
 
 // SyncOptions holds optional DuckDB push-scope filters.
 type SyncOptions struct {
@@ -76,11 +84,8 @@ type SyncStatus struct {
 func New(
 	path string, local *db.DB, machine string, opts SyncOptions,
 ) (*Sync, error) {
-	if local == nil {
-		return nil, fmt.Errorf("local db is required")
-	}
-	if machine == "" {
-		return nil, fmt.Errorf("machine name must not be empty")
+	if err := validateSyncInputs(local, machine); err != nil {
+		return nil, err
 	}
 	duck, err := Open(path)
 	if err != nil {
@@ -94,6 +99,16 @@ func New(
 		projects:        opts.Projects,
 		excludeProjects: opts.ExcludeProjects,
 	}, nil
+}
+
+func validateSyncInputs(local *db.DB, machine string) error {
+	if local == nil {
+		return fmt.Errorf("local db is required")
+	}
+	if machine == "" {
+		return fmt.Errorf("machine name must not be empty")
+	}
+	return nil
 }
 
 // DB returns the underlying DuckDB connection.
@@ -125,7 +140,8 @@ func (s *Sync) EnsureSchema(ctx context.Context) error {
 	if s.schemaOK {
 		return nil
 	}
-	if err := EnsureSchema(ctx, s.duck); err != nil {
+	opts := schemaOptions{createIndexes: s.connectionKind != duckDBQuackClientConnection}
+	if err := ensureSchema(ctx, s.duck, opts); err != nil {
 		return err
 	}
 	s.schemaOK = true
@@ -249,7 +265,7 @@ func (s *Sync) Push(
 	defer func() { _ = tx.Rollback() }()
 
 	var staleIDs []string
-	staleIDs, err = deleteHardDeletedMirrorSessions(
+	staleIDs, err = s.deleteHardDeletedMirrorSessions(
 		ctx, tx, allLocalSessions, s.machine, s.projects, s.excludeProjects,
 	)
 	if err != nil {

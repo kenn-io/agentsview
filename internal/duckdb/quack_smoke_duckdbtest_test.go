@@ -13,6 +13,8 @@ import (
 	_ "github.com/duckdb/duckdb-go/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 )
 
 func TestQuackLoopbackAttachRoundTrip(t *testing.T) {
@@ -118,6 +120,177 @@ func TestQuackLoopbackAttachRoundTrip(t *testing.T) {
 		"query row written through quack attachment",
 	)
 	assert.Equal(t, 42, remoteValue)
+}
+
+func TestQuackClientSyncEnsureSchemaSkipsRemoteIndexes(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "agentsview-quack-schema.duckdb")
+	uri := "quack:127.0.0.1:" + freeTCPPort(t)
+	const token = "agentsview-duckdbtest-token-0002"
+
+	server := openQuackMirrorServer(t, ctx, path, uri, token)
+	require.NoError(t, EnsureSchema(ctx, server), "prepare server schema")
+
+	local := newLocalDB(t)
+	syncer, err := NewFromConfig(
+		config.DuckDBConfig{
+			URL:         uri,
+			Token:       token,
+			MachineName: "quack-client",
+		},
+		local,
+		SyncOptions{},
+	)
+	require.NoError(t, err, "open Quack-backed sync")
+	t.Cleanup(func() {
+		require.NoError(t, syncer.Close(), "close Quack-backed sync")
+	})
+
+	require.NoError(t, syncer.EnsureSchema(ctx), "ensure schema through Quack")
+	assertDuckDBIndexExists(t, server, "tool_calls", "idx_tool_calls_file_path")
+}
+
+func TestQuackClientSyncEnsureSchemaRequiresPreparedServerMetadata(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "agentsview-quack-metadata.duckdb")
+	uri := "quack:127.0.0.1:" + freeTCPPort(t)
+	const token = "agentsview-duckdbtest-token-0004"
+
+	server := openQuackMirrorServer(t, ctx, path, uri, token)
+	require.NoError(t, EnsureSchema(ctx, server), "prepare server schema")
+	_, err := server.ExecContext(ctx,
+		`DELETE FROM sync_metadata WHERE key = ?`,
+		schemaVersionMetadataKey,
+	)
+	require.NoError(t, err, "remove server schema metadata")
+
+	local := newLocalDB(t)
+	syncer, err := NewFromConfig(
+		config.DuckDBConfig{
+			URL:         uri,
+			Token:       token,
+			MachineName: "quack-client",
+		},
+		local,
+		SyncOptions{},
+	)
+	require.NoError(t, err, "open Quack-backed sync")
+	t.Cleanup(func() {
+		require.NoError(t, syncer.Close(), "close Quack-backed sync")
+	})
+
+	err = syncer.EnsureSchema(ctx)
+	require.Error(t, err, "schema metadata should be required through Quack")
+	assert.Contains(t, err.Error(), "missing "+schemaVersionMetadataKey)
+	assert.NotContains(t, err.Error(), "GetStorageInfo")
+}
+
+func TestQuackClientSyncPushWritesThroughAttachment(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "agentsview-quack-push.duckdb")
+	uri := "quack:127.0.0.1:" + freeTCPPort(t)
+	const token = "agentsview-duckdbtest-token-0003"
+
+	server := openQuackMirrorServer(t, ctx, path, uri, token)
+	require.NoError(t, EnsureSchema(ctx, server), "prepare server schema")
+
+	local := newLocalDB(t)
+	fixture := seedDuckDBSyncFixture(t, local)
+	require.NoError(t, local.InsertCursorUsageEvents([]db.CursorUsageEvent{
+		{
+			OccurredAt:       "2026-01-10T00:03:00Z",
+			Model:            "cursor-model-a",
+			Kind:             "usage",
+			InputTokens:      11,
+			OutputTokens:     7,
+			CacheWriteTokens: 5,
+			CacheReadTokens:  3,
+			ChargedCents:     1.25,
+			CursorTokenFee:   0.75,
+			UserID:           "cursor-user-a",
+			UserEmail:        "cursor-a@example.invalid",
+			DedupKey:         "cursor-quack-a",
+		},
+		{
+			OccurredAt:     "2026-01-10T00:04:00Z",
+			Model:          "cursor-model-b",
+			Kind:           "usage",
+			InputTokens:    13,
+			OutputTokens:   9,
+			ChargedCents:   1.50,
+			CursorTokenFee: 0.50,
+			UserID:         "cursor-user-b",
+			UserEmail:      "cursor-b@example.invalid",
+			IsHeadless:     true,
+			DedupKey:       "cursor-quack-b",
+		},
+	}), "InsertCursorUsageEvents")
+	syncer, err := NewFromConfig(
+		config.DuckDBConfig{
+			URL:         uri,
+			Token:       token,
+			MachineName: "quack-client",
+		},
+		local,
+		SyncOptions{},
+	)
+	require.NoError(t, err, "open Quack-backed sync")
+	t.Cleanup(func() {
+		require.NoError(t, syncer.Close(), "close Quack-backed sync")
+	})
+
+	result, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err, "push through Quack")
+	assert.Equal(t, 2, result.SessionsPushed)
+	assert.Equal(t, 3, result.MessagesPushed)
+
+	var machine string
+	require.NoError(t,
+		server.QueryRowContext(ctx,
+			`SELECT machine FROM sessions WHERE id = ?`,
+			fixture.alphaID,
+		).Scan(&machine),
+		"query pushed session on server",
+	)
+	assert.Equal(t, "quack-client", machine)
+	assertDuckDBCount(t, server, "messages", 3)
+	assertDuckDBCount(t, server, "cursor_usage_events", 2)
+	assertDuckDBIndexExists(t, server, "tool_calls", "idx_tool_calls_file_path")
+}
+
+func openQuackMirrorServer(
+	t *testing.T, ctx context.Context, path, uri, token string,
+) *sql.DB {
+	t.Helper()
+	server, err := Open(path)
+	require.NoError(t, err, "open server DuckDB file")
+	t.Cleanup(func() {
+		require.NoError(t, server.Close(), "close server DuckDB file")
+	})
+	_, err = server.ExecContext(ctx, "INSTALL quack")
+	require.NoError(t, err, "install quack extension")
+	_, err = server.ExecContext(ctx, "LOAD quack")
+	require.NoError(t, err, "load quack extension")
+	_, err = server.ExecContext(ctx, `CALL quack_serve(?, token => ?)`, uri, token)
+	require.NoError(t, err, "start quack server")
+	t.Cleanup(func() {
+		_, stopErr := server.ExecContext(context.Background(), `CALL quack_stop(?)`, uri)
+		require.NoError(t, stopErr, "stop quack server")
+	})
+	return server
+}
+
+func assertDuckDBIndexExists(
+	t *testing.T, conn *sql.DB, tableName, indexName string,
+) {
+	t.Helper()
+	var count int
+	require.NoError(t, conn.QueryRow(`
+		SELECT count(*) FROM duckdb_indexes()
+		WHERE table_name = ?
+		  AND index_name = ?`, tableName, indexName).Scan(&count),
+		"query duckdb_indexes")
+	assert.Equal(t, 1, count, "%s must exist on %s", indexName, tableName)
 }
 
 func freeTCPPort(t *testing.T) string {

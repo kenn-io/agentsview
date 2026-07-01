@@ -531,12 +531,23 @@ var mirrorTables = []tableSpec{
 	},
 }
 
+type schemaOptions struct {
+	createIndexes bool
+}
+
 // EnsureSchema creates and additively migrates the DuckDB mirror schema.
 func EnsureSchema(ctx context.Context, db *sql.DB) error {
+	return ensureSchema(ctx, db, schemaOptions{createIndexes: true})
+}
+
+func ensureSchema(ctx context.Context, db *sql.DB, opts schemaOptions) error {
 	for _, table := range mirrorTables {
 		if _, err := db.ExecContext(ctx, table.create); err != nil {
 			return fmt.Errorf("creating duckdb table %s: %w", table.name, err)
 		}
+	}
+	if !opts.createIndexes {
+		return CheckSchemaCompat(ctx, db)
 	}
 
 	existing, err := loadColumns(ctx, db)
@@ -584,15 +595,20 @@ func EnsureSchema(ctx context.Context, db *sql.DB) error {
 	if err := dropQuackIncompatibleTimestampDefaults(ctx, db); err != nil {
 		return err
 	}
-	recordUsageDedupIndexMigration, err := migrateUsageEventsDedupIndex(ctx, db)
-	if err != nil {
-		return err
-	}
 
-	for _, table := range mirrorTables {
-		for _, stmt := range table.indexes {
-			if _, err := db.ExecContext(ctx, stmt); err != nil {
-				return fmt.Errorf("creating duckdb index for %s: %w", table.name, err)
+	recordUsageDedupIndexMigration := false
+	if opts.createIndexes {
+		var err error
+		recordUsageDedupIndexMigration, err = migrateUsageEventsDedupIndex(ctx, db)
+		if err != nil {
+			return err
+		}
+
+		for _, table := range mirrorTables {
+			for _, stmt := range table.indexes {
+				if _, err := db.ExecContext(ctx, stmt); err != nil {
+					return fmt.Errorf("creating duckdb index for %s: %w", table.name, err)
+				}
 			}
 		}
 	}
@@ -713,6 +729,17 @@ func metadataKeyExists(ctx context.Context, db *sql.DB, key string) (bool, error
 func recordMetadataKey(
 	ctx context.Context, db *sql.DB, key string, value string,
 ) error {
+	var existing string
+	err := db.QueryRowContext(ctx,
+		`SELECT value FROM sync_metadata WHERE key = ?`,
+		key,
+	).Scan(&existing)
+	if err == nil && existing == value {
+		return nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("checking duckdb metadata key %s: %w", key, err)
+	}
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO sync_metadata (key, value)
 		VALUES (?, ?)
