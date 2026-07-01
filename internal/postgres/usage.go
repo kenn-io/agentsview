@@ -670,48 +670,43 @@ func pgDailyUsageRowsSQLForBounds(
 
 // pgMatchingUsageRowsSQLForBounds mirrors pgDailyUsageRowsSQLForBounds's
 // bounded-branch CTE shape, but is built from the relaxed
-// pgUsageMatchingMessageEligibility predicate and folds the session-wide
-// model-match clause into each branch instead of filtering per row, so
-// GetUsageMatchingSessionCount's Model/ExcludeModel semantics stay
-// bit-for-bit identical to the unbounded path. Only used by
+// pgUsageMatchingMessageEligibility predicate, so GetUsageMatchingSessionCount
+// only relaxes the token-usage requirement and keeps the same per-row
+// Model/ExcludeModel filtering as the normal bounded path. Only used by
 // GetUsageMatchingSessionCount's bounded branch.
 func pgMatchingUsageRowsSQLForBounds(
 	pb *paramBuilder, f db.UsageFilter, b pgUsageBounds,
 ) string {
 	messageTimestampSourceWhere := pgUsageMatchingMessageSourceEligibility +
 		"\n\tAND m.timestamp IS NOT NULL"
+	messageTimestampSourceWhere = appendPGUsageSourceFilterClauses(
+		messageTimestampSourceWhere, pb, f, "m.model")
 	messageTimestampSourceWhere = appendPGUsageColumnBounds(
 		messageTimestampSourceWhere, "m.timestamp", b)
 
 	eventTimestampSourceWhere := pgUsageEventSourceEligibility +
 		"\n\tAND ue.occurred_at IS NOT NULL"
+	eventTimestampSourceWhere = appendPGUsageSourceFilterClauses(
+		eventTimestampSourceWhere, pb, f, "ue.model")
 	eventTimestampSourceWhere = appendPGUsageColumnBounds(
 		eventTimestampSourceWhere, "ue.occurred_at", b)
 
 	messageTimestampJoinWhere := appendPGUsageSessionFilterClauses(
 		pgUsageSessionEligibility, pb, f)
-	messageTimestampJoinWhere = appendPGUsageSessionModelMatchClauses(
-		messageTimestampJoinWhere, pb, f)
 	eventTimestampJoinWhere := appendPGUsageSessionFilterClauses(
 		pgUsageSessionEligibility, pb, f)
-	eventTimestampJoinWhere = appendPGUsageSessionModelMatchClauses(
-		eventTimestampJoinWhere, pb, f)
 
 	messageFallbackWhere := pgUsageMatchingMessageEligibility +
 		"\n\tAND m.timestamp IS NULL"
-	messageFallbackWhere = appendPGUsageSessionFilterClauses(
-		messageFallbackWhere, pb, f)
-	messageFallbackWhere = appendPGUsageSessionModelMatchClauses(
-		messageFallbackWhere, pb, f)
+	messageFallbackWhere = appendPGUsageBranchFilterClauses(
+		messageFallbackWhere, pb, f, "m.model")
 	messageFallbackWhere = appendPGUsageColumnBounds(
 		messageFallbackWhere, "s.started_at", b)
 
 	eventFallbackWhere := pgUsageEventEligibility +
 		"\n\tAND ue.occurred_at IS NULL"
-	eventFallbackWhere = appendPGUsageSessionFilterClauses(
-		eventFallbackWhere, pb, f)
-	eventFallbackWhere = appendPGUsageSessionModelMatchClauses(
-		eventFallbackWhere, pb, f)
+	eventFallbackWhere = appendPGUsageBranchFilterClauses(
+		eventFallbackWhere, pb, f, "ue.model")
 	eventFallbackWhere = appendPGUsageColumnBounds(
 		eventFallbackWhere, "s.started_at", b)
 

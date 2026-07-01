@@ -867,10 +867,9 @@ func usageRowsSQLForBounds(
 
 // usageMatchingSessionRowsSQLForBounds mirrors usageRowsSQLForBounds's
 // bounded-branch CTE shape, but is built from the relaxed
-// usageMatchingMessageEligibility predicate and folds the session-wide
-// model-match clause into each branch instead of filtering per row, so
-// GetUsageMatchingSessionCount's Model/ExcludeModel semantics stay
-// bit-for-bit identical to the unbounded path. Only used by
+// usageMatchingMessageEligibility predicate, so GetUsageMatchingSessionCount
+// only relaxes the token-usage requirement and keeps the same per-row
+// Model/ExcludeModel filtering as the normal bounded path. Only used by
 // GetUsageMatchingSessionCount's bounded branch.
 func usageMatchingSessionRowsSQLForBounds(
 	f UsageFilter, b usageBounds,
@@ -879,34 +878,35 @@ func usageMatchingSessionRowsSQLForBounds(
 		"\n\tAND m.timestamp IS NOT NULL" +
 		"\n\tAND m.timestamp != ''"
 	var messageTimestampArgs []any
+	messageTimestampSourceWhere, messageTimestampArgs =
+		f.appendUsageSourceFilterClauses(
+			messageTimestampSourceWhere, messageTimestampArgs, "m.model")
 	messageTimestampSourceWhere, messageTimestampArgs = appendUsageColumnBounds(
 		messageTimestampSourceWhere, "m.timestamp", b, messageTimestampArgs)
 
 	eventTimestampSourceWhere := usageEventSourceEligibility +
 		"\n\tAND ue.occurred_at IS NOT NULL"
 	var eventTimestampArgs []any
+	eventTimestampSourceWhere, eventTimestampArgs =
+		f.appendUsageSourceFilterClauses(
+			eventTimestampSourceWhere, eventTimestampArgs, "ue.model")
 	eventTimestampSourceWhere, eventTimestampArgs = appendUsageColumnBounds(
 		eventTimestampSourceWhere, "ue.occurred_at", b, eventTimestampArgs)
 
 	var messageTimestampJoinArgs []any
 	messageTimestampJoinWhere, messageTimestampJoinArgs :=
 		f.appendUsageSessionFilterClauses(usageSessionEligibility, messageTimestampJoinArgs)
-	messageTimestampJoinWhere, messageTimestampJoinArgs =
-		f.appendUsageSessionModelMatchClauses(messageTimestampJoinWhere, messageTimestampJoinArgs)
 
 	var eventTimestampJoinArgs []any
 	eventTimestampJoinWhere, eventTimestampJoinArgs :=
 		f.appendUsageSessionFilterClauses(usageSessionEligibility, eventTimestampJoinArgs)
-	eventTimestampJoinWhere, eventTimestampJoinArgs =
-		f.appendUsageSessionModelMatchClauses(eventTimestampJoinWhere, eventTimestampJoinArgs)
 
 	messageFallbackWhere := usageMatchingMessageEligibility +
 		"\n\tAND NULLIF(m.timestamp, '') IS NULL"
 	var messageFallbackArgs []any
 	messageFallbackWhere, messageFallbackArgs =
-		f.appendUsageSessionFilterClauses(messageFallbackWhere, messageFallbackArgs)
-	messageFallbackWhere, messageFallbackArgs =
-		f.appendUsageSessionModelMatchClauses(messageFallbackWhere, messageFallbackArgs)
+		f.appendUsageBranchFilterClauses(
+			messageFallbackWhere, messageFallbackArgs, "m.model")
 	messageFallbackWhere, messageFallbackArgs = appendUsageColumnBounds(
 		messageFallbackWhere, "s.started_at", b, messageFallbackArgs)
 
@@ -914,9 +914,8 @@ func usageMatchingSessionRowsSQLForBounds(
 		"\n\tAND ue.occurred_at IS NULL"
 	var eventFallbackArgs []any
 	eventFallbackWhere, eventFallbackArgs =
-		f.appendUsageSessionFilterClauses(eventFallbackWhere, eventFallbackArgs)
-	eventFallbackWhere, eventFallbackArgs =
-		f.appendUsageSessionModelMatchClauses(eventFallbackWhere, eventFallbackArgs)
+		f.appendUsageBranchFilterClauses(
+			eventFallbackWhere, eventFallbackArgs, "ue.model")
 	eventFallbackWhere, eventFallbackArgs = appendUsageColumnBounds(
 		eventFallbackWhere, "s.started_at", b, eventFallbackArgs)
 

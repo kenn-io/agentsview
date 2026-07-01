@@ -517,6 +517,51 @@ func TestStoreGetUsageMatchingSessionCountCountsCopilotSessionByMessageTimestamp
 	assert.Equal(t, 1, count)
 }
 
+// TestStoreGetUsageMatchingSessionCountModelFilterAppliesToBoundedRow
+// guards against the model/exclude-model predicate matching session-wide
+// instead of on the in-range message row: a session with an out-of-range
+// message on the filtered model but an in-range message on a different
+// model must not match a Model filter for the out-of-range model.
+func TestStoreGetUsageMatchingSessionCountModelFilterAppliesToBoundedRow(
+	t *testing.T,
+) {
+	_, store := prepareUsageSchema(t, "agentsview_usage_matching_sessions_model_test")
+
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at, ended_at,
+			message_count, user_message_count
+		) VALUES
+			('copilot-mixed-model', 'test-machine', 'proj-a', 'copilot',
+			 '2026-02-08T10:00:00Z'::timestamptz,
+			 '2026-02-10T12:00:00Z'::timestamptz, 2, 1)`)
+	require.NoError(t, err, "insert sessions")
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp, content_length,
+			model, token_usage
+		) VALUES
+			('copilot-mixed-model', 0, 'assistant', 'copilot',
+			 '2026-02-08T10:00:00Z'::timestamptz, 7,
+			 'gpt-5.3-codex', ''),
+			('copilot-mixed-model', 1, 'assistant', 'claude',
+			 '2026-02-10T12:00:00Z'::timestamptz, 6,
+			 'claude-sonnet', '')`)
+	require.NoError(t, err, "insert messages")
+
+	count, err := store.GetUsageMatchingSessionCount(ctx, db.UsageFilter{
+		From:     "2026-02-10",
+		To:       "2026-02-10",
+		Timezone: "UTC",
+		Agent:    "copilot",
+		Model:    "gpt-5.3-codex",
+	})
+	require.NoError(t, err, "GetUsageMatchingSessionCount")
+	assert.Equal(t, 0, count,
+		"out-of-range message's model must not match the bounded window")
+}
+
 func TestStoreGetUsageSessionCountsDedupesSourceUUIDFallback(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_counts_source_uuid_test")
 

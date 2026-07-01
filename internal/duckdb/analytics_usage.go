@@ -3180,9 +3180,9 @@ func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 // COALESCE(m.timestamp, s.started_at) / COALESCE(ue.occurred_at,
 // s.started_at) directly, so this mirrors that shape but relaxes the
 // message predicate (no token_usage requirement — Copilot messages never
-// populate it) and folds the session-wide model-match clause into each
-// branch instead of filtering per row, preserving
-// GetUsageMatchingSessionCount's existing Model/ExcludeModel semantics.
+// populate it), keeping the same per-row Model/ExcludeModel filtering as
+// duckUsageRawSQL so GetUsageMatchingSessionCount's semantics only relax
+// the token-usage requirement.
 func duckMatchingUsageRawSQL(f db.UsageFilter) (string, []any) {
 	bounds := duckUsageBoundsForFilter(f)
 
@@ -3191,10 +3191,10 @@ func duckMatchingUsageRawSQL(f db.UsageFilter) (string, []any) {
 			AND m.model != '<synthetic>'
 			AND s.deleted_at IS NULL`
 	var messageArgs []any
+	messageWhere, messageArgs = appendDuckUsageSourceFilterClauses(
+		messageWhere, messageArgs, "m.model", f)
 	messageWhere, messageArgs = appendDuckUsageSessionFilterClauses(
 		messageWhere, messageArgs, f, "")
-	messageWhere, messageArgs = appendDuckUsageSessionModelMatchClauses(
-		messageWhere, messageArgs, f)
 	messageWhere, messageArgs = appendDuckUsageColumnBounds(
 		messageWhere, "COALESCE(m.timestamp, s.started_at)", bounds, messageArgs)
 
@@ -3202,10 +3202,10 @@ func duckMatchingUsageRawSQL(f db.UsageFilter) (string, []any) {
 			ue.model != ''
 			AND s.deleted_at IS NULL`
 	var eventArgs []any
+	eventWhere, eventArgs = appendDuckUsageSourceFilterClauses(
+		eventWhere, eventArgs, "ue.model", f)
 	eventWhere, eventArgs = appendDuckUsageSessionFilterClauses(
 		eventWhere, eventArgs, f, "")
-	eventWhere, eventArgs = appendDuckUsageSessionModelMatchClauses(
-		eventWhere, eventArgs, f)
 	eventWhere, eventArgs = appendDuckUsageColumnBounds(
 		eventWhere, "COALESCE(ue.occurred_at, s.started_at)", bounds, eventArgs)
 

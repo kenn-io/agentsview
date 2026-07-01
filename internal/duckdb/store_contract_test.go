@@ -417,6 +417,66 @@ func TestDuckDBGetUsageMatchingSessionCountCountsCopilotSessionByMessageTimestam
 	require.Equal(t, 1, count)
 }
 
+// TestDuckDBGetUsageMatchingSessionCountModelFilterAppliesToBoundedRow
+// guards against the model/exclude-model predicate matching session-wide
+// instead of on the in-range message row: a session with an out-of-range
+// message on the filtered model but an in-range message on a different
+// model must not match a Model filter for the out-of-range model.
+func TestDuckDBGetUsageMatchingSessionCountModelFilterAppliesToBoundedRow(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	startedAt := "2026-02-08T10:00:00Z"
+	endedAt := "2026-02-10T12:00:00Z"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: db.Session{
+			ID:               "duck-copilot-mixed-model",
+			Project:          "alpha",
+			Machine:          "test-machine",
+			Agent:            "copilot",
+			StartedAt:        &startedAt,
+			EndedAt:          &endedAt,
+			MessageCount:     2,
+			UserMessageCount: 1,
+		},
+		Messages: []db.Message{
+			{
+				SessionID:  "duck-copilot-mixed-model",
+				Ordinal:    0,
+				Role:       "assistant",
+				Timestamp:  "2026-02-08T10:00:00Z",
+				Model:      "gpt-5.3-codex",
+				TokenUsage: nil,
+			},
+			{
+				SessionID:  "duck-copilot-mixed-model",
+				Ordinal:    1,
+				Role:       "assistant",
+				Timestamp:  "2026-02-10T12:00:00Z",
+				Model:      "claude-sonnet",
+				TokenUsage: nil,
+			},
+		},
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err, "seed mixed-model copilot session")
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	count, err := store.GetUsageMatchingSessionCount(ctx, db.UsageFilter{
+		From: "2026-02-10", To: "2026-02-10",
+		Timezone: "UTC", Agent: "copilot",
+		Model: "gpt-5.3-codex",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 0, count,
+		"out-of-range message's model must not match the bounded window")
+}
+
 func duckSessionIDs(sessions []db.Session) []string {
 	ids := make([]string, len(sessions))
 	for i, session := range sessions {
