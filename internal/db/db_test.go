@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"database/sql/driver"
 	"encoding/base64"
@@ -304,10 +305,133 @@ func testDB(t *testing.T) *DB {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
-	d, err := Open(path)
+	d, err := openCopiedTestDB(path)
 	require.NoError(t, err, "opening test db")
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
 	return d
+}
+
+var (
+	testDBTemplateOnce sync.Once
+	testDBTemplatePath string
+	testDBTemplateDir  string
+	testDBTemplateErr  error
+)
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if testDBTemplateDir != "" {
+		_ = os.RemoveAll(testDBTemplateDir)
+	}
+	os.Exit(code)
+}
+
+func openCopiedTestDB(path string) (*DB, error) {
+	if err := copyTestDBTemplate(path); err != nil {
+		return nil, err
+	}
+	return openPreparedTestDB(path)
+}
+
+func copyTestDBTemplate(dst string) error {
+	testDBTemplateOnce.Do(func() {
+		testDBTemplateDir, testDBTemplateErr = os.MkdirTemp(
+			"", "agentsview-db-template-*",
+		)
+		if testDBTemplateErr != nil {
+			testDBTemplateErr = fmt.Errorf(
+				"creating db template dir: %w",
+				testDBTemplateErr,
+			)
+			return
+		}
+
+		testDBTemplatePath = filepath.Join(testDBTemplateDir, "test.db")
+		var template *DB
+		template, testDBTemplateErr = Open(testDBTemplatePath)
+		if testDBTemplateErr != nil {
+			testDBTemplateErr = fmt.Errorf(
+				"opening db template: %w",
+				testDBTemplateErr,
+			)
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := template.CheckpointWALTruncate(ctx); err != nil {
+			testDBTemplateErr = fmt.Errorf(
+				"checkpointing db template: %w",
+				err,
+			)
+		}
+		if err := template.Close(); err != nil && testDBTemplateErr == nil {
+			testDBTemplateErr = fmt.Errorf(
+				"closing db template: %w",
+				err,
+			)
+		}
+	})
+	if testDBTemplateErr != nil {
+		return testDBTemplateErr
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return fmt.Errorf("creating test db dir: %w", err)
+	}
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if err := copyTemplateDBFile(
+			testDBTemplatePath+suffix,
+			dst+suffix,
+			suffix == "",
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func copyTemplateDBFile(src, dst string, required bool) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		if !required && errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("reading test db template %s: %w", src, err)
+	}
+	if err := os.WriteFile(dst, data, 0o600); err != nil {
+		return fmt.Errorf("writing test db copy %s: %w", dst, err)
+	}
+	return nil
+}
+
+func openPreparedTestDB(path string) (*DB, error) {
+	writer, err := sql.Open("sqlite3", makeDSN(path, false))
+	if err != nil {
+		return nil, fmt.Errorf("opening prepared test writer: %w", err)
+	}
+	writer.SetMaxOpenConns(1)
+	if err := configureWAL(writer); err != nil {
+		writer.Close()
+		return nil, fmt.Errorf("configuring prepared test wal: %w", err)
+	}
+
+	reader, err := sql.Open("sqlite3", makeDSN(path, true))
+	if err != nil {
+		writer.Close()
+		return nil, fmt.Errorf("opening prepared test reader: %w", err)
+	}
+	reader.SetMaxOpenConns(4)
+
+	d := &DB{path: path}
+	d.writer.Store(writer)
+	d.reader.Store(reader)
+	d.cursorSecret = make([]byte, 32)
+	if _, err := rand.Read(d.cursorSecret); err != nil {
+		writer.Close()
+		reader.Close()
+		return nil, fmt.Errorf("generating prepared test cursor secret: %w", err)
+	}
+	d.startWALCheckpointLoop()
+	return d, nil
 }
 
 // Ptr returns a pointer to v.

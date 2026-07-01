@@ -252,6 +252,7 @@ func TestHealthListFilterIncludesAllSessions(t *testing.T) {
 }
 
 func TestResolveHealthSessionIDMatchesDisplayedShortID(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	database, err := db.Open(filepath.Join(dir, "test.db"))
 	require.NoError(t, err, "open db")
@@ -273,6 +274,7 @@ func TestResolveHealthSessionIDMatchesDisplayedShortID(t *testing.T) {
 }
 
 func TestResolveHealthSessionIDExactMatchCanBeOutsideHealthList(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	database, err := db.Open(filepath.Join(dir, "test.db"))
 	require.NoError(t, err, "open db")
@@ -300,24 +302,29 @@ func TestResolveHealthSessionIDExactMatchCanBeOutsideHealthList(t *testing.T) {
 }
 
 func TestResolveHealthSessionIDPartialMatchCanBeOutsideHealthList(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	database, err := db.Open(filepath.Join(dir, "test.db"))
 	require.NoError(t, err, "open db")
 	t.Cleanup(func() { database.Close() })
 
+	writes := make([]db.SessionBatchWrite, 0, maxHealthLimit+1)
 	for i := range maxHealthLimit {
 		started := fmt.Sprintf("2026-04-15T12:%02d:%02dZ", i/60, i%60)
-		require.NoError(t, database.UpsertSession(db.Session{
+		writes = append(writes, db.SessionBatchWrite{Session: db.Session{
 			ID:      fmt.Sprintf("newer-session-%03d", i),
 			Project: "p", Machine: "m", Agent: "claude",
 			MessageCount: 1, StartedAt: &started,
-		}), "upsert newer session")
+		}})
 	}
 	oldStarted := "2020-01-01T00:00:00Z"
-	require.NoError(t, database.UpsertSession(db.Session{
+	writes = append(writes, db.SessionBatchWrite{Session: db.Session{
 		ID: "old-partial-target", Project: "p", Machine: "m",
 		Agent: "codex", MessageCount: 1, StartedAt: &oldStarted,
-	}), "upsert old partial target")
+	}})
+	result, err := database.WriteSessionBatchAtomic(writes)
+	require.NoError(t, err, "seed health sessions")
+	require.Equal(t, maxHealthLimit+1, result.WrittenSessions)
 
 	got, err := resolveHealthSessionID(
 		context.Background(),

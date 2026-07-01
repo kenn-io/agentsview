@@ -375,6 +375,7 @@ func TestAnalyticsModelFilter(t *testing.T) {
 }
 
 func TestAnalyticsModelFilterGoTimePath(t *testing.T) {
+	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -434,6 +435,7 @@ func TestAnalyticsModelFilterGoTimePath(t *testing.T) {
 }
 
 func TestAnalyticsSummaryModelFilterCountsOnlyMatchingMessages(t *testing.T) {
+	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -798,6 +800,7 @@ func TestGetAnalyticsActivityModelFilterCountsOnlyMatchingMessages(
 func TestGetAnalyticsActivityModelFilterKeepsNullTimestampSessionsWithoutTimeFilter(
 	t *testing.T,
 ) {
+	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -837,6 +840,7 @@ func TestGetAnalyticsActivityModelFilterKeepsNullTimestampSessionsWithoutTimeFil
 func TestGetAnalyticsActivityModelAndHourFilterUseSameMessage(
 	t *testing.T,
 ) {
+	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 

@@ -23,7 +23,7 @@ func createClosedTestDB(
 	seed func(*DB),
 ) string {
 	t.Helper()
-	d, err := Open(path)
+	d, err := openCopiedTestDB(path)
 	require.NoError(t, err)
 	if seed != nil {
 		seed(d)
@@ -182,6 +182,7 @@ func TestOpenReadOnlyRejectsMissingMigratedColumn(t *testing.T) {
 }
 
 func TestOpenReadOnlyRejectsMissingReadColumn(t *testing.T) {
+	t.Parallel()
 	basePath := createClosedTestDB(t, tempDBPath(t, "sessions.db"), nil)
 	tests := []struct {
 		name   string
@@ -207,6 +208,7 @@ func TestOpenReadOnlyRejectsMissingReadColumn(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			path := copyClosedTestDB(t, basePath)
 			execRawSQLite(t, path,
 				"ALTER TABLE "+tt.table+" DROP COLUMN "+tt.column)
@@ -217,6 +219,7 @@ func TestOpenReadOnlyRejectsMissingReadColumn(t *testing.T) {
 }
 
 func TestOpenReadOnlyRejectsMissingReadTable(t *testing.T) {
+	t.Parallel()
 	basePath := createClosedTestDB(t, tempDBPath(t, "sessions.db"), nil)
 	tests := []struct {
 		table  string
@@ -231,6 +234,7 @@ func TestOpenReadOnlyRejectsMissingReadTable(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.table, func(t *testing.T) {
+			t.Parallel()
 			path := copyClosedTestDB(t, basePath)
 			execRawSQLite(t, path, "DROP TABLE "+tt.table)
 			requireOpenReadOnlyFails(t, path,
