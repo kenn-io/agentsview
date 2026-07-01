@@ -129,6 +129,79 @@ func TestAntigravitySchemaLabel(t *testing.T) {
 	}
 }
 
+// TestDecodeConfidence exercises the single-source-of-truth confidence rule
+// derived from an agent name and its source_version label. It covers the
+// agent gate against SourceVersion being a generic field set by other parsers.
+func TestDecodeConfidence(t *testing.T) {
+	tests := []struct {
+		name          string
+		agent         string
+		sourceVersion string
+		want          string
+	}{
+		{
+			name:          "antigravity known range is high",
+			agent:         string(AgentAntigravity),
+			sourceVersion: "1.0.7-1.0.10",
+			want:          DecodeConfidenceHigh,
+		},
+		{
+			name:          "antigravity-cli known range is high",
+			agent:         string(AgentAntigravityCLI),
+			sourceVersion: "1.0.7-1.0.10",
+			want:          DecodeConfidenceHigh,
+		},
+		{
+			name:          "antigravity unknown schema is low",
+			agent:         string(AgentAntigravity),
+			sourceVersion: antigravitySchemaUnknownPrefix + "abc123def456",
+			want:          DecodeConfidenceLow,
+		},
+		{
+			name:          "antigravity-cli unknown schema is low",
+			agent:         string(AgentAntigravityCLI),
+			sourceVersion: antigravitySchemaUnknownPrefix + "abc123def456",
+			want:          DecodeConfidenceLow,
+		},
+		{
+			name:          "antigravity empty source_version yields no value",
+			agent:         string(AgentAntigravity),
+			sourceVersion: "",
+			want:          "",
+		},
+		{
+			name:          "antigravity-cli empty source_version yields no value",
+			agent:         string(AgentAntigravityCLI),
+			sourceVersion: "",
+			want:          "",
+		},
+		{
+			name:          "piebald generic label yields no value",
+			agent:         string(AgentPiebald),
+			sourceVersion: "piebald-appdb-v1",
+			want:          "",
+		},
+		{
+			name:          "commandcode generic label yields no value",
+			agent:         string(AgentCommandCode),
+			sourceVersion: "2",
+			want:          "",
+		},
+		{
+			name:          "other agent with agy-schema-shaped label yields no value",
+			agent:         string(AgentClaude),
+			sourceVersion: antigravitySchemaUnknownPrefix + "abc123def456",
+			want:          "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want,
+				DecodeConfidence(tt.agent, tt.sourceVersion))
+		})
+	}
+}
+
 // TestAntigravitySchemaFingerprintBaseline verifies the Go fingerprint of the
 // real baseline schema matches agy-reader's recorded sha256, so the
 // known-label mapping actually fires on real databases.
