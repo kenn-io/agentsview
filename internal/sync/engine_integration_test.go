@@ -197,36 +197,48 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 	return env
 }
 
-func setupSingleAgentTestEnv(t *testing.T, agent parser.AgentType) *testEnv {
+func setupFocusedTestEnv(t *testing.T, agents ...parser.AgentType) *testEnv {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 
-	dir := t.TempDir()
 	env := &testEnv{db: dbtest.OpenTestDB(t)}
-	switch agent {
-	case parser.AgentOpenCode:
-		env.opencodeDir = dir
-	case parser.AgentKilo:
-		env.kiloDir = dir
-	case parser.AgentKiro:
-		env.kiroDir = dir
-	default:
-		t.Fatalf("unsupported single-agent test fixture for %s", agent)
+	agentDirs := make(map[parser.AgentType][]string, len(agents))
+	for _, agent := range agents {
+		dir := t.TempDir()
+		switch agent {
+		case parser.AgentClaude:
+			env.claudeDir = dir
+		case parser.AgentOpenCode:
+			env.opencodeDir = dir
+		case parser.AgentKilo:
+			env.kiloDir = dir
+		case parser.AgentPiebald:
+			env.piebaldDir = dir
+		case parser.AgentKiro:
+			env.kiroDir = dir
+		default:
+			t.Fatalf("unsupported focused test fixture for %s", agent)
+		}
+		agentDirs[agent] = []string{dir}
 	}
 
 	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			agent: {dir},
-		},
-		Machine: "local",
+		AgentDirs: agentDirs,
+		Machine:   "local",
 	})
 	return env
 }
 
+func setupSingleAgentTestEnv(t *testing.T, agent parser.AgentType) *testEnv {
+	t.Helper()
+	return setupFocusedTestEnv(t, agent)
+}
+
 func TestSyncEngineKiroSQLiteCurrentStore(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
 	ks := createKiroSQLiteDB(t, env.kiroDir)
 	ks.addSession(
 		t, "/home/user/code/kiro-app", "sqlite-session",
@@ -257,7 +269,8 @@ func TestSyncEngineKiroSQLiteCurrentStore(t *testing.T) {
 }
 
 func TestSyncEngineKiroSQLiteUnchangedRowSkippedOnResync(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
 	ks := createKiroSQLiteDB(t, env.kiroDir)
 	ks.addSession(
 		t, "/home/user/code/kiro-app", "sqlite-session",
@@ -279,7 +292,8 @@ func TestSyncEngineKiroSQLiteUnchangedRowSkippedOnResync(t *testing.T) {
 }
 
 func TestSyncEngineKiroSQLiteWatchReplacesMessages(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
 	ks := createKiroSQLiteDB(t, env.kiroDir)
 	ks.addSession(
 		t, "/home/user/code/kiro-app", "sqlite-session",
@@ -314,7 +328,7 @@ func TestSyncEngineKiroSQLiteWatchReplacesMessages(t *testing.T) {
 
 func TestSyncEngineKiroSQLiteVirtualPathReplacesMessages(t *testing.T) {
 	t.Parallel()
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
 	ks := createKiroSQLiteDB(t, env.kiroDir)
 	ks.addSession(
 		t, "/home/user/code/kiro-app", "sqlite-session",
@@ -350,7 +364,8 @@ func TestSyncEngineKiroSQLiteVirtualPathReplacesMessages(t *testing.T) {
 }
 
 func TestSyncEngineKiroSQLiteCurrentStoreShadowsLegacy(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
 	ks := createKiroSQLiteDB(t, env.kiroDir)
 	ks.addSession(
 		t, "/home/user/code/current-kiro", "overlap-session",
@@ -416,7 +431,8 @@ func TestSyncRootsSinceKiroLegacyShadowedBySQLiteOutsideScope(t *testing.T) {
 }
 
 func TestSyncEngineKiroLegacyOnlySyncPath(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
 	writeLegacyKiroSession(
 		t, env.kiroDir, "legacy-only-session",
 		"legacy-only should sync",
@@ -431,7 +447,8 @@ func TestSyncEngineKiroLegacyOnlySyncPath(t *testing.T) {
 }
 
 func TestSyncEngineKiroSQLiteMalformedUpdatePreservesArchive(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
 	ks := createKiroSQLiteDB(t, env.kiroDir)
 	ks.addSession(
 		t, "/home/user/code/kiro-app", "sqlite-session",
@@ -1152,7 +1169,8 @@ func TestSyncEngineCodex(t *testing.T) {
 }
 
 func TestSyncEngineProgress(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupFocusedTestEnv(t, parser.AgentClaude, parser.AgentPiebald)
 
 	msg := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "msg").
@@ -1200,7 +1218,7 @@ func TestSyncEngineProgress(t *testing.T) {
 
 func TestSyncEngineProgressEmitsPhaseDoneOnce(t *testing.T) {
 	t.Parallel()
-	env := setupTestEnv(t)
+	env := setupFocusedTestEnv(t, parser.AgentClaude, parser.AgentPiebald)
 
 	msg := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "msg").
@@ -1241,7 +1259,8 @@ func TestSyncEngineProgressEmitsPhaseDoneOnce(t *testing.T) {
 }
 
 func TestSyncEngineCurrentProgressDuringSync(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	msg := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "msg").
@@ -1266,7 +1285,8 @@ func TestSyncEngineCurrentProgressDuringSync(t *testing.T) {
 }
 
 func TestSyncEngineCurrentProgressClearedAfterSyncPaths(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	msg := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "msg").
@@ -1280,7 +1300,8 @@ func TestSyncEngineCurrentProgressClearedAfterSyncPaths(t *testing.T) {
 }
 
 func TestResyncAllEmitsFTSRebuildHint(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 	if !env.db.HasFTS() {
 		t.Skip("FTS unavailable")
 	}
@@ -1316,7 +1337,8 @@ func TestResyncAllEmitsFTSRebuildHint(t *testing.T) {
 // wall-clock time to the preceding "Disabling temporary search index updates"
 // phase, which actually completes instantly.
 func TestResyncAllReportsDiscoveryBeforeSyncing(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	msg := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "findable prompt").
@@ -1356,7 +1378,8 @@ func TestResyncAllReportsDiscoveryBeforeSyncing(t *testing.T) {
 // daemon-driven `agentsview sync` shows no terminal feedback for the entire
 // (sometimes multi-minute) discovery walk.
 func TestSyncAllReportsDiscoveryBeforeSyncing(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	msg := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "findable prompt").
@@ -1391,7 +1414,7 @@ func TestSyncAllReportsDiscoveryBeforeSyncing(t *testing.T) {
 
 func TestSyncEngineProgressDoneCatchesResyncDBBackedWork(t *testing.T) {
 	t.Parallel()
-	env := setupTestEnv(t)
+	env := setupFocusedTestEnv(t, parser.AgentClaude, parser.AgentPiebald)
 
 	msg := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "msg").
@@ -3832,7 +3855,8 @@ func TestSyncSingleSessionOpenCodeSQLiteFallbackPreservesStorageArchive(
 }
 
 func TestSyncPathsOpenCodeSQLiteDBEvent(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeDB(t, env.opencodeDir)
 	oc.addProject(t, "proj-1", "/home/user/code/myapp")
 
@@ -3885,7 +3909,8 @@ func TestSyncPathsOpenCodeSQLiteDBEvent(t *testing.T) {
 func TestSyncAllOpenCodeSQLiteFallbackPreservesStorageArchive(
 	t *testing.T,
 ) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
 
 	sessionID := "oc-sqlite-bulk-preserve"
@@ -3950,7 +3975,8 @@ func TestSyncAllOpenCodeSQLiteFallbackPreservesStorageArchive(
 func TestSyncPathsOpenCodeSQLiteDBEventIgnoresStaleSkipCache(
 	t *testing.T,
 ) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeDB(t, env.opencodeDir)
 	oc.addProject(t, "proj-1", "/home/user/code/myapp")
 
@@ -4012,7 +4038,7 @@ func TestSyncPathsOpenCodeSQLiteDBEventContinuesPastBadSession(
 	t *testing.T,
 ) {
 	t.Parallel()
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeDB(t, env.opencodeDir)
 	oc.addProject(t, "proj-1", "/home/user/code/myapp")
 
@@ -4088,7 +4114,8 @@ func TestSyncPathsOpenCodeSQLiteDBEventContinuesPastBadSession(
 func TestSyncAllOpenCodeSQLiteReparsesStaleDataVersion(
 	t *testing.T,
 ) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeDB(t, env.opencodeDir)
 	oc.addProject(t, "proj-1", "/home/user/code/myapp")
 
@@ -4415,7 +4442,7 @@ func TestSourceMtimeOpenCodeStorageTracksMessageDirRemoval(
 
 func TestSourceMtimeOpenCodeSQLiteUsesSessionTime(t *testing.T) {
 	t.Parallel()
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeDB(t, env.opencodeDir)
 	oc.addProject(t, "proj-1", "/home/user/code/myapp")
 	oc.addSession(
@@ -4433,7 +4460,8 @@ func TestSourceMtimeOpenCodeSQLiteUsesSessionTime(t *testing.T) {
 }
 
 func TestOpenCodeHybridRootSyncsSQLiteSessions(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
 	storage.addSession(
 		t, "global", "oc-hybrid-storage",
@@ -4584,7 +4612,7 @@ func TestFindSourceFileSkipsHybridRootMissingSession(t *testing.T) {
 // — otherwise a stale SQLite row could overwrite live storage data.
 func TestOpenCodeHybridRootStorageWinsOnDuplicateID(t *testing.T) {
 	t.Parallel()
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
 	const sessionID = "oc-hybrid-dup"
 	storage.addSession(
