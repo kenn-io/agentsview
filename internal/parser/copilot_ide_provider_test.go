@@ -523,6 +523,52 @@ func TestVisualStudioCopilotProviderClassifiesMixedCaseVS2026Layout(
 	}
 }
 
+func TestVisualStudioCopilotProviderDiscoversMixedCaseVS2026Layout(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	vsRoot := filepath.Join(root, ".VS")
+	conversationID := "5bc5f6d7-9a6e-4f9c-8f3c-b7be2e7d9f20"
+	sessionPath := filepath.Join(
+		vsRoot, "SampleApp", "Copilot-Chat", "thread", "Sessions",
+		conversationID,
+	)
+	writeSourceFile(t, sessionPath, vsCopilotTraceLineJSON(
+		conversationID,
+		"chat gpt-5.5", "1781293600000000000", "1781293610000000000",
+		map[string]string{
+			"gen_ai.operation.name": "chat",
+			"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Run the tests."}]}]`,
+		},
+	)+"\n")
+
+	provider, ok := NewProvider(AgentVSCopilot, ProviderConfig{
+		Roots: []string{root},
+	})
+	require.True(t, ok)
+	virtualPath := VisualStudioCopilotVirtualPath(sessionPath, conversationID)
+
+	plan, err := provider.WatchPlan(context.Background())
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 2)
+	assert.Equal(t, root, plan.Roots[0].Path)
+	assert.False(t, plan.Roots[0].Recursive)
+	assert.Equal(t, vsRoot, plan.Roots[1].Path)
+	assert.True(t, plan.Roots[1].Recursive)
+
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, virtualPath, discovered[0].DisplayPath)
+
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: conversationID,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, virtualPath, found.DisplayPath)
+}
+
 func TestVisualStudioCopilotProviderCanonicalizesMixedLegacyAndVS2026Sources(
 	t *testing.T,
 ) {

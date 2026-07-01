@@ -162,17 +162,21 @@ func discoverVisualStudioCopilotVS2026SessionFiles(
 	case visualStudioCopilotVS2026SessionsRoot:
 		return discoverVisualStudioCopilotVS2026SessionFilesInDirectory(root)
 	case visualStudioCopilotVS2026ThreadRoot:
-		return discoverVisualStudioCopilotVS2026SessionFilesInDirectory(
-			filepath.Join(root, "sessions"),
-		)
+		sessionsRoot, ok := visualStudioCopilotChildDir(root, "sessions")
+		if !ok {
+			return nil
+		}
+		return discoverVisualStudioCopilotVS2026SessionFilesInDirectory(sessionsRoot)
 	case visualStudioCopilotVS2026CopilotChatRoot:
 		return discoverVisualStudioCopilotVS2026SessionFilesInCopilotChatRoot(root)
 	case visualStudioCopilotVS2026VSRoot:
 		return discoverVisualStudioCopilotVS2026SessionFilesInVSRoot(root)
 	default:
-		return discoverVisualStudioCopilotVS2026SessionFilesInVSRoot(
-			filepath.Join(root, ".vs"),
-		)
+		vsRoot, ok := visualStudioCopilotChildDir(root, ".vs")
+		if !ok {
+			return nil
+		}
+		return discoverVisualStudioCopilotVS2026SessionFilesInVSRoot(vsRoot)
 	}
 }
 
@@ -188,10 +192,17 @@ func discoverVisualStudioCopilotVS2026SessionFilesInVSRoot(
 		if !solution.IsDir() {
 			continue
 		}
+		copilotChatRoot, ok := visualStudioCopilotChildDir(
+			filepath.Join(vsRoot, solution.Name()),
+			"copilot-chat",
+		)
+		if !ok {
+			continue
+		}
 		out = append(
 			out,
 			discoverVisualStudioCopilotVS2026SessionFilesInCopilotChatRoot(
-				filepath.Join(vsRoot, solution.Name(), "copilot-chat"),
+				copilotChatRoot,
 			)...,
 		)
 	}
@@ -211,10 +222,17 @@ func discoverVisualStudioCopilotVS2026SessionFilesInCopilotChatRoot(
 		if !thread.IsDir() {
 			continue
 		}
+		sessionsRoot, ok := visualStudioCopilotChildDir(
+			filepath.Join(copilotChatRoot, thread.Name()),
+			"sessions",
+		)
+		if !ok {
+			continue
+		}
 		out = append(
 			out,
 			discoverVisualStudioCopilotVS2026SessionFilesInDirectory(
-				filepath.Join(copilotChatRoot, thread.Name(), "sessions"),
+				sessionsRoot,
 			)...,
 		)
 	}
@@ -251,6 +269,24 @@ func discoverVisualStudioCopilotVS2026SessionFilesInDirectory(
 	return out
 }
 
+func visualStudioCopilotChildDir(parent, name string) (string, bool) {
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return "", false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && entry.Name() == name {
+			return filepath.Join(parent, entry.Name()), true
+		}
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && strings.EqualFold(entry.Name(), name) {
+			return filepath.Join(parent, entry.Name()), true
+		}
+	}
+	return "", false
+}
+
 func vsCopilotWatchRoots(roots []string) []WatchRoot {
 	out := make([]WatchRoot, 0, len(roots)*2)
 	for _, root := range roots {
@@ -276,8 +312,7 @@ func vsCopilotWatchRoots(roots []string) []WatchRoot {
 				IncludeGlobs: []string{"*_VSGitHubCopilot_traces.jsonl"},
 				DebounceKey:  string(AgentVSCopilot) + ":traces:" + root,
 			})
-			vsRoot := filepath.Join(root, ".vs")
-			if info, err := os.Stat(vsRoot); err == nil && info.IsDir() {
+			if vsRoot, ok := visualStudioCopilotChildDir(root, ".vs"); ok {
 				out = append(out, WatchRoot{
 					Path:         vsRoot,
 					Recursive:    true,
