@@ -2707,10 +2707,31 @@ func BenchmarkGetDailyUsage(b *testing.B) {
 }
 
 func TestGetDailyUsage_PricingPrecedence(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	requireNoError(t, d.UpsertModelPricing([]ModelPricing{
+		{
+			ModelPattern: "db-only-model",
+			InputPerMTok: 1.0, OutputPerMTok: 4.0,
+		},
+		{
+			ModelPattern: "custom-overrides-model",
+			InputPerMTok: 1.0, OutputPerMTok: 4.0,
+		},
+		{
+			ModelPattern: "db-model",
+			InputPerMTok: 3.0, OutputPerMTok: 10.0,
+		},
+	}), "UpsertModelPricing")
+	d.SetCustomPricing(map[string]config.CustomModelRate{
+		"custom-overrides-model": {Input: 2.0, Output: 8.0},
+		"my-custom-model":        {Input: 1.5, Output: 6.0},
+		"other-model":            {Input: 99.0, Output: 99.0},
+	})
+
 	tests := []struct {
 		name     string
-		dbRates  []ModelPricing
-		custom   map[string]config.CustomModelRate
 		model    string
 		input    int // input tokens
 		output   int // output tokens
@@ -2718,24 +2739,20 @@ func TestGetDailyUsage_PricingPrecedence(t *testing.T) {
 	}{
 		{
 			name:     "db pricing only",
-			dbRates:  []ModelPricing{{ModelPattern: "acme-ultra-2.1", InputPerMTok: 1.0, OutputPerMTok: 4.0}},
-			model:    "acme-ultra-2.1",
+			model:    "db-only-model",
 			input:    1_000_000,
 			output:   100_000,
 			wantCost: 1.4, // 1M*$1/M + 100k*$4/M
 		},
 		{
 			name:     "custom overrides db for same model",
-			dbRates:  []ModelPricing{{ModelPattern: "acme-ultra-2.1", InputPerMTok: 1.0, OutputPerMTok: 4.0}},
-			custom:   map[string]config.CustomModelRate{"acme-ultra-2.1": {Input: 2.0, Output: 8.0}},
-			model:    "acme-ultra-2.1",
+			model:    "custom-overrides-model",
 			input:    1_000_000,
 			output:   100_000,
 			wantCost: 2.8, // 1M*$2/M + 100k*$8/M
 		},
 		{
 			name:     "custom for unknown model, no db entry",
-			custom:   map[string]config.CustomModelRate{"my-custom-model": {Input: 1.5, Output: 6.0}},
 			model:    "my-custom-model",
 			input:    500_000,
 			output:   50_000,
@@ -2750,8 +2767,6 @@ func TestGetDailyUsage_PricingPrecedence(t *testing.T) {
 		},
 		{
 			name:     "custom only affects targeted model",
-			dbRates:  []ModelPricing{{ModelPattern: "db-model", InputPerMTok: 3.0, OutputPerMTok: 10.0}},
-			custom:   map[string]config.CustomModelRate{"other-model": {Input: 99.0, Output: 99.0}},
 			model:    "db-model",
 			input:    1_000_000,
 			output:   100_000,
@@ -2759,33 +2774,37 @@ func TestGetDailyUsage_PricingPrecedence(t *testing.T) {
 		},
 	}
 
+	for i, tt := range tests {
+		sessionID := "pricing-" + strconv.Itoa(i)
+		insertSession(t, d, sessionID, "proj", func(s *Session) {
+			s.StartedAt = new("2024-06-15T10:00:00Z")
+		})
+		insertMessages(t, d, Message{
+			SessionID: sessionID,
+			Ordinal:   0,
+			Role:      "assistant",
+			Timestamp: "2024-06-15T10:30:00Z",
+			Model:     tt.model,
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":` + strconv.Itoa(tt.input) +
+					`,"output_tokens":` + strconv.Itoa(tt.output) + `}`,
+			),
+		})
+	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			d := testDB(t)
-			if len(tt.dbRates) > 0 {
-				requireNoError(t, d.UpsertModelPricing(tt.dbRates), "UpsertModelPricing")
-			}
-			if tt.custom != nil {
-				d.SetCustomPricing(tt.custom)
-			}
-
-			insertSession(t, d, "s1", "proj", func(s *Session) {
-				s.StartedAt = new("2024-06-15T10:00:00Z")
-			})
-			insertMessages(t, d, Message{
-				SessionID:  "s1",
-				Ordinal:    0,
-				Role:       "assistant",
-				Timestamp:  "2024-06-15T10:30:00Z",
-				Model:      tt.model,
-				TokenUsage: json.RawMessage(`{"input_tokens":` + strconv.Itoa(tt.input) + `,"output_tokens":` + strconv.Itoa(tt.output) + `}`),
-			})
-
-			result, err := d.GetDailyUsage(context.Background(), UsageFilter{
-				From: "2024-06-01", To: "2024-06-30",
+			result, err := d.GetDailyUsage(ctx, UsageFilter{
+				From:  "2024-06-01",
+				To:    "2024-06-30",
+				Model: tt.model,
 			})
 			requireNoError(t, err, "GetDailyUsage")
 
+			assert.Equal(t, tt.input, result.Totals.InputTokens,
+				"InputTokens")
+			assert.Equal(t, tt.output, result.Totals.OutputTokens,
+				"OutputTokens")
 			assert.InDelta(t, tt.wantCost, result.Totals.TotalCost, 0.01,
 				"TotalCost")
 		})
@@ -3001,89 +3020,94 @@ func TestGetSessionUsage_NotFound(t *testing.T) {
 	assert.Nil(t, u, "usage")
 }
 
-// TestGetDailyUsage_CopilotAICreditsComputed verifies AI credits are computed
+// TestGetDailyUsage_CopilotAICredits verifies AI credits are computed only
 // from priced Copilot usage: costUSD / 0.01.
-func TestGetDailyUsage_CopilotAICreditsComputed(t *testing.T) {
+func TestGetDailyUsage_CopilotAICredits(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 
-	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
-		ModelPattern:         "gpt-4",
-		InputPerMTok:         15.0,
-		OutputPerMTok:        60.0,
-		CacheCreationPerMTok: 15.0,
-		CacheReadPerMTok:     6.0,
-	}}))
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{
+		{
+			ModelPattern:         "gpt-4",
+			InputPerMTok:         15.0,
+			OutputPerMTok:        60.0,
+			CacheCreationPerMTok: 15.0,
+			CacheReadPerMTok:     6.0,
+		},
+		{
+			ModelPattern:         "claude-opus-4-6",
+			InputPerMTok:         3.0,
+			OutputPerMTok:        15.0,
+			CacheCreationPerMTok: 3.75,
+			CacheReadPerMTok:     0.30,
+		},
+	}))
 
-	insertSession(t, d, "copilot:aicredits", "proj", func(s *Session) {
-		s.Agent = "copilot"
-		s.StartedAt = new("2024-06-15T10:00:00Z")
-		s.EndedAt = new("2024-06-15T11:00:00Z")
-	})
+	tests := []struct {
+		name        string
+		sessionID   string
+		agent       string
+		model       string
+		inputRate   float64
+		outputRate  float64
+		wantCredits bool
+	}{
+		{
+			name:        "copilot credits computed",
+			sessionID:   "copilot:aicredits",
+			agent:       "copilot",
+			model:       "gpt-4",
+			inputRate:   15.0,
+			outputRate:  60.0,
+			wantCredits: true,
+		},
+		{
+			name:       "non copilot has no credits",
+			sessionID:  "claude:nocredits",
+			agent:      "claude-code",
+			model:      "claude-opus-4-6",
+			inputRate:  3.0,
+			outputRate: 15.0,
+		},
+	}
 
-	insertMessages(t, d, Message{
-		SessionID: "copilot:aicredits",
-		Ordinal:   0,
-		Role:      "assistant",
-		Timestamp: "2024-06-15T10:30:00Z",
-		Model:     "gpt-4",
-		TokenUsage: json.RawMessage(`{
-			"input_tokens": 1000,
-			"output_tokens": 500
-		}`),
-	})
+	for _, tt := range tests {
+		insertSession(t, d, tt.sessionID, "proj", func(s *Session) {
+			s.Agent = tt.agent
+			s.StartedAt = new("2024-06-15T10:00:00Z")
+			s.EndedAt = new("2024-06-15T11:00:00Z")
+		})
+		insertMessages(t, d, Message{
+			SessionID: tt.sessionID,
+			Ordinal:   0,
+			Role:      "assistant",
+			Timestamp: "2024-06-15T10:30:00Z",
+			Model:     tt.model,
+			TokenUsage: json.RawMessage(`{
+				"input_tokens": 1000,
+				"output_tokens": 500
+			}`),
+		})
+	}
 
-	result, err := d.GetDailyUsage(ctx, UsageFilter{
-		From: "2024-06-01",
-		To:   "2024-06-30",
-	})
-	requireNoError(t, err, "GetDailyUsage")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := d.GetDailyUsage(ctx, UsageFilter{
+				From:  "2024-06-01",
+				To:    "2024-06-30",
+				Agent: tt.agent,
+			})
+			requireNoError(t, err, "GetDailyUsage")
 
-	wantCost := (1000*15.0 + 500*60.0) / 1_000_000
-	wantCredits := wantCost / 0.01
-	assert.InDelta(t, wantCost, result.Totals.TotalCost, 1e-9, "TotalCost")
-	assert.InDelta(t, wantCredits, result.Totals.CopilotAICredits, 1e-6, "CopilotAICredits")
-}
-
-// TestGetDailyUsage_NoAICreditsNonCopilot verifies non-Copilot agents do
-// not emit CopilotAICredits even when priced.
-func TestGetDailyUsage_NoAICreditsNonCopilot(t *testing.T) {
-	d := testDB(t)
-	ctx := context.Background()
-
-	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
-		ModelPattern:         "claude-opus-4-6",
-		InputPerMTok:         3.0,
-		OutputPerMTok:        15.0,
-		CacheCreationPerMTok: 3.75,
-		CacheReadPerMTok:     0.30,
-	}}))
-
-	insertSession(t, d, "claude:nocredits", "proj", func(s *Session) {
-		s.Agent = "claude-code"
-		s.StartedAt = new("2024-06-15T10:00:00Z")
-		s.EndedAt = new("2024-06-15T11:00:00Z")
-	})
-
-	insertMessages(t, d, Message{
-		SessionID: "claude:nocredits",
-		Ordinal:   0,
-		Role:      "assistant",
-		Timestamp: "2024-06-15T10:30:00Z",
-		Model:     "claude-opus-4-6",
-		TokenUsage: json.RawMessage(`{
-			"input_tokens": 1000,
-			"output_tokens": 500
-		}`),
-	})
-
-	result, err := d.GetDailyUsage(ctx, UsageFilter{
-		From: "2024-06-01",
-		To:   "2024-06-30",
-	})
-	requireNoError(t, err, "GetDailyUsage")
-
-	wantCost := (1000*3.0 + 500*15.0) / 1_000_000
-	assert.InDelta(t, wantCost, result.Totals.TotalCost, 1e-9, "TotalCost")
-	assert.Equal(t, 0.0, result.Totals.CopilotAICredits, "CopilotAICredits should be 0")
+			wantCost := (1000*tt.inputRate + 500*tt.outputRate) / 1_000_000
+			wantCredits := 0.0
+			if tt.wantCredits {
+				wantCredits = wantCost / 0.01
+			}
+			assert.InDelta(t, wantCost, result.Totals.TotalCost, 1e-9,
+				"TotalCost")
+			assert.InDelta(t, wantCredits, result.Totals.CopilotAICredits,
+				1e-6, "CopilotAICredits")
+		})
+	}
 }
