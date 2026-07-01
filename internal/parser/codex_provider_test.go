@@ -330,7 +330,6 @@ func TestCodexProviderChangedPathClassifiesRemovedTranscript(t *testing.T) {
 }
 
 func TestCodexProviderIndexPathClassifiesAllSiblingSources(t *testing.T) {
-	t.Parallel()
 
 	base := t.TempDir()
 	root := filepath.Join(base, "sessions")

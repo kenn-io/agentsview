@@ -10,7 +10,6 @@ import (
 )
 
 func TestKiloProviderParseRelabelsOpenCodeSession(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
 	sessionPath := filepath.Join(
 		root, "storage", "session", "global", "ses_kilo.json",

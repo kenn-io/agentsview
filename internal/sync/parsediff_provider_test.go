@@ -79,7 +79,6 @@ func TestParseDiffProviderAuthoritativeAgentsAreDiscoverable(t *testing.T) {
 }
 
 func TestSyncAllDiscoversProviderSources(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "provider-only-sync.jsonl")
 	require.NoError(t, os.WriteFile(sourcePath, []byte("{}\n"), 0o644))

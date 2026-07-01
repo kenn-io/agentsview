@@ -150,7 +150,6 @@ func insertInsightFixtures(t *testing.T, d *DB, entries []Insight) []int64 {
 }
 
 func TestListInsights(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
 
 	seedFiltersData := func(t *testing.T, d *DB) []int64 {
@@ -287,7 +286,6 @@ func TestListInsights(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
 			d := testDB(t)
 			ids := tt.seed(t, d)
 			got, err := d.ListInsights(ctx, tt.filter)

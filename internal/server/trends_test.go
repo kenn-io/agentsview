@@ -13,7 +13,6 @@ import (
 )
 
 func TestTrendsTermsEndpoint(t *testing.T) {
-	t.Parallel()
 	te := setup(t)
 	start := "2024-06-01T09:00:00Z"
 	te.seedSession(t, "s1", "alpha", 2, func(s *db.Session) {
@@ -48,7 +47,6 @@ func TestTrendsTermsEndpoint(t *testing.T) {
 }
 
 func TestTrendsTermsValidation(t *testing.T) {
-	t.Parallel()
 	te := setup(t)
 
 	t.Run("missing term", func(t *testing.T) {

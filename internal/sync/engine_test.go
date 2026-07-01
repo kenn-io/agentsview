@@ -3001,7 +3001,6 @@ func (f emitterFunc) Emit(scope string) { f(scope) }
 // released, TryLock returns true. No goroutines, no wall-clock
 // timeouts — deterministic under load.
 func TestEngine_SyncPathsEmitsAfterSyncMuReleased(t *testing.T) {
-	t.Parallel()
 	fx := newEngineFixture(t)
 
 	var acquired atomic.Bool
@@ -3787,7 +3786,6 @@ func TestEngine_ClassifyOnePathReasonixDeletedTranscriptIgnored(t *testing.T) {
 }
 
 func TestEngine_SyncPathsReasonixMetadataOnlySessionFieldUpdate(t *testing.T) {
-	t.Parallel()
 	db := openTestDB(t)
 	reasonixDir := t.TempDir()
 	engine := NewEngine(db, EngineConfig{
@@ -3950,7 +3948,6 @@ func TestEngine_SyncSingleSessionReasonixDeletedMetadataClearsProject(t *testing
 }
 
 func TestEngine_SyncPathsReasonixMalformedMetadataPreservesSessionFields(t *testing.T) {
-	t.Parallel()
 	db := openTestDB(t)
 	reasonixDir := t.TempDir()
 	engine := NewEngine(db, EngineConfig{
@@ -3999,7 +3996,6 @@ func TestEngine_SyncPathsReasonixMalformedMetadataPreservesSessionFields(t *test
 }
 
 func TestEngine_SyncPathsReasonixMalformedMetadataRecoveryUpdatesSession(t *testing.T) {
-	t.Parallel()
 	db := openTestDB(t)
 	reasonixDir := t.TempDir()
 	engine := NewEngine(db, EngineConfig{

@@ -249,7 +249,6 @@ func TestSyncVibeMetaPromotionRemovesFallbackID(t *testing.T) {
 // this path, both the fallback and the canonical row would linger and
 // double-count messages and usage.
 func TestSyncSingleSessionVibeMetaPromotionRemovesFallbackID(t *testing.T) {
-	t.Parallel()
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}

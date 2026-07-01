@@ -1563,7 +1563,6 @@ func TestSidebarIndexPaginatesByDescendantFreshness(t *testing.T) {
 }
 
 func TestSidebarIndexValidatesParams(t *testing.T) {
-	t.Parallel()
 	te := setup(t)
 
 	tests := []string{
@@ -1577,7 +1576,6 @@ func TestSidebarIndexValidatesParams(t *testing.T) {
 
 	for _, path := range tests {
 		t.Run(path, func(t *testing.T) {
-			t.Parallel()
 			w := te.get(t, path)
 			assertStatus(t, w, http.StatusBadRequest)
 		})
@@ -3233,7 +3231,6 @@ func TestExportSession_HTMLContent(t *testing.T) {
 }
 
 func TestUploadSessionVariants(t *testing.T) {
-	t.Parallel()
 
 	te := setup(t)
 
@@ -3410,7 +3407,6 @@ func TestUploadSessionVariants(t *testing.T) {
 }
 
 func TestUploadSession_Errors(t *testing.T) {
-	t.Parallel()
 	te := setup(t)
 
 	tests := []struct {
@@ -3450,7 +3446,6 @@ func TestUploadSession_Errors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
 			w := te.upload(t,
 				tt.filename, tt.content, tt.query)
 			assertStatus(t, w, http.StatusBadRequest)
@@ -3459,7 +3454,6 @@ func TestUploadSession_Errors(t *testing.T) {
 }
 
 func TestUploadSession_ExcludedOrTrashedConflict(t *testing.T) {
-	t.Parallel()
 
 	tests := []struct {
 		name  string
@@ -3489,7 +3483,6 @@ func TestUploadSession_ExcludedOrTrashedConflict(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
 			te := setup(t)
 			const id = "upload-conflict"
 			tt.setup(t, te, id)
@@ -3512,7 +3505,6 @@ func TestUploadSession_ExcludedOrTrashedConflict(t *testing.T) {
 }
 
 func TestUploadSession_MultiSessionConflictDoesNotPartiallyWrite(t *testing.T) {
-	t.Parallel()
 
 	te := setup(t)
 
@@ -3556,7 +3548,6 @@ func TestUploadSession_MultiSessionConflictDoesNotPartiallyWrite(t *testing.T) {
 }
 
 func TestUploadSession_ReuploadPreservesPins(t *testing.T) {
-	t.Parallel()
 
 	te := setup(t)
 
@@ -3597,7 +3588,6 @@ func TestUploadSession_ReuploadPreservesPins(t *testing.T) {
 }
 
 func TestUploadSession_EmptyFile(t *testing.T) {
-	t.Parallel()
 	te := setup(t)
 
 	w := te.upload(t, "empty.jsonl", "",

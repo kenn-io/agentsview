@@ -13,7 +13,6 @@ import (
 )
 
 func TestOpenCodeProviderStorageSourceMethods(t *testing.T) {
-	t.Parallel()
 
 	root := t.TempDir()
 	sessionPath := writeOpenCodeProviderStorageSession(
@@ -114,7 +113,6 @@ func TestOpenCodeProviderStorageSourceMethods(t *testing.T) {
 }
 
 func TestOpenCodeProviderSQLiteSourceMethods(t *testing.T) {
-	t.Parallel()
 
 	fixture := openCodeSQLiteProviderReadFixture(t)
 	root := fixture.Root
@@ -191,7 +189,6 @@ func TestOpenCodeProviderSQLiteSourceMethods(t *testing.T) {
 // reopening the DB per row via OpenCodeSQLiteSessionExists. Every row read from
 // the DB must surface as a discoverable source with its dbPath#id virtual path.
 func TestOpenCodeProviderSQLiteDiscoversAllListedSessions(t *testing.T) {
-	t.Parallel()
 
 	fixture := openCodeSQLiteProviderReadFixture(t)
 	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{
@@ -209,7 +206,6 @@ func TestOpenCodeProviderSQLiteDiscoversAllListedSessions(t *testing.T) {
 }
 
 func TestOpenCodeProviderHybridDiscoveryFiltersSQLiteDuplicate(t *testing.T) {
-	t.Parallel()
 
 	root := t.TempDir()
 	storagePath := writeOpenCodeProviderStorageSession(
@@ -243,7 +239,6 @@ func TestOpenCodeProviderHybridDiscoveryFiltersSQLiteDuplicate(t *testing.T) {
 }
 
 func TestOpenCodeProviderDiscoveryToleratesCorruptSQLiteDB(t *testing.T) {
-	t.Parallel()
 
 	root := t.TempDir()
 	storagePath := writeOpenCodeProviderStorageSession(
@@ -265,7 +260,6 @@ func TestOpenCodeProviderDiscoveryToleratesCorruptSQLiteDB(t *testing.T) {
 }
 
 func TestOpenCodeFamilyProviderRelabelsForks(t *testing.T) {
-	t.Parallel()
 
 	for _, tc := range []struct {
 		agent         AgentType
@@ -277,7 +271,6 @@ func TestOpenCodeFamilyProviderRelabelsForks(t *testing.T) {
 		{agent: AgentMiMoCode, sessionSubdir: "session_diff", prefix: "mimocode:", project: "mimo-app"},
 	} {
 		t.Run(string(tc.agent), func(t *testing.T) {
-			t.Parallel()
 
 			root := t.TempDir()
 			sessionPath := writeOpenCodeProviderStorageSession(

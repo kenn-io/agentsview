@@ -743,7 +743,6 @@ func TestParseOpenCodeFile_StorageStepFinishTokens(t *testing.T) {
 }
 
 func TestParseOpenCodeDB_TitleFallback(t *testing.T) {
-	t.Parallel()
 	dbPath, seeder, db := newTestDB(t)
 	defer db.Close()
 

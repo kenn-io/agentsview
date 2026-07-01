@@ -267,7 +267,6 @@ func TestPruner_PruneScenarios(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
 			d := dbtest.OpenTestDB(t)
 			dbtest.SeedSession(t, d, "s1", "test", func(s *db.Session) {
 				s.EndedAt = new("2024-01-01T00:00:00Z")

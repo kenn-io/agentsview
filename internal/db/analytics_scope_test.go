@@ -9,7 +9,6 @@ import (
 )
 
 func TestResolveAnalyticsMessageScope(t *testing.T) {
-	t.Parallel()
 	const (
 		sessionA = "scope-sess-a"
 		sessionB = "scope-sess-b"
@@ -71,7 +70,6 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 	}
 
 	t.Run("blank model returns nil", func(t *testing.T) {
-		t.Parallel()
 		d := setup(t)
 		scope, err := d.resolveAnalyticsMessageScope(
 			context.Background(),
@@ -84,7 +82,6 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 	})
 
 	t.Run("matching session has rows", func(t *testing.T) {
-		t.Parallel()
 		d := setup(t)
 		scope, err := d.resolveAnalyticsMessageScope(
 			context.Background(),
@@ -109,7 +106,6 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 	})
 
 	t.Run("StatsBySession counts user and assistant", func(t *testing.T) {
-		t.Parallel()
 		d := setup(t)
 		scope, err := d.resolveAnalyticsMessageScope(
 			context.Background(),
@@ -129,7 +125,6 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 	})
 
 	t.Run("TimingBySession returns one entry per row", func(t *testing.T) {
-		t.Parallel()
 		d := setup(t)
 		scope, err := d.resolveAnalyticsMessageScope(
 			context.Background(),
@@ -146,7 +141,6 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 	})
 
 	t.Run("includeContent=false omits content", func(t *testing.T) {
-		t.Parallel()
 		d := setup(t)
 		scope, err := d.resolveAnalyticsMessageScope(
 			context.Background(),
@@ -165,7 +159,6 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 	})
 
 	t.Run("includeContent=true populates content", func(t *testing.T) {
-		t.Parallel()
 		d := setup(t)
 		scope, err := d.resolveAnalyticsMessageScope(
 			context.Background(),
@@ -185,7 +178,6 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 	})
 
 	t.Run("deduplicates sessionIDs", func(t *testing.T) {
-		t.Parallel()
 		d := setup(t)
 		// Pass sessionA twice; resolver must not error or double-count.
 		scope, err := d.resolveAnalyticsMessageScope(

@@ -451,7 +451,6 @@ func TestParseCodexSessionInfersSkillName(t *testing.T) {
 }
 
 func TestParseCodexSessionInfersSkillNameFromSessionCwd(t *testing.T) {
-	t.Parallel()
 
 	path := writeTestSkill(t, "index", "data-analytics:index")
 	cwd := filepath.Dir(filepath.Dir(filepath.Dir(path)))
@@ -471,7 +470,6 @@ func TestParseCodexSessionInfersSkillNameFromSessionCwd(t *testing.T) {
 }
 
 func TestParseCodexSessionFromInfersSkillNameFromSeededCwd(t *testing.T) {
-	t.Parallel()
 
 	path := writeTestSkill(t, "index", "data-analytics:index")
 	cwd := filepath.Dir(filepath.Dir(filepath.Dir(path)))

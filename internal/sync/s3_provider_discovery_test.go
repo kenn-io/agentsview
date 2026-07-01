@@ -21,7 +21,6 @@ import (
 // parse path (providers read local files), and the threaded Machine/size/mtime
 // must drive the same namespaced result as direct S3 discovery.
 func TestProcessFileS3ProviderDiscoveredRoutesToS3Path(t *testing.T) {
-	t.Parallel()
 	database := openTestDB(t)
 	path := "s3://bucket/laptop/raw/claude/test-proj/shared-id.jsonl"
 	content := testjsonl.NewSessionBuilder().

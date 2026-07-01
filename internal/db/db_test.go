@@ -679,7 +679,6 @@ func TestOpenDataVersionBump_SurvivesRestart(t *testing.T) {
 }
 
 func TestMigration_ResultContentColumn(t *testing.T) {
-	t.Parallel()
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
@@ -1100,7 +1099,6 @@ func TestSessionParentSessionID(t *testing.T) {
 }
 
 func TestGetChildSessions(t *testing.T) {
-	t.Parallel()
 	d := testDB(t)
 
 	// Insert a parent session.
@@ -1186,7 +1184,6 @@ func TestGetChildSessions(t *testing.T) {
 }
 
 func TestListSessions(t *testing.T) {
-	t.Parallel()
 	d := testDB(t)
 
 	for i := range 5 {
@@ -2977,7 +2974,6 @@ func TestResolveToolCallsPanicsOnLengthMismatch(t *testing.T) {
 }
 
 func TestToolCallNewColumns(t *testing.T) {
-	t.Parallel()
 	d := testDB(t)
 	insertSession(t, d, "s1", "proj")
 	insertMessages(t, d, Message{
@@ -3013,7 +3009,6 @@ func TestToolCallNewColumns(t *testing.T) {
 }
 
 func TestToolCallSkillName(t *testing.T) {
-	t.Parallel()
 	d := testDB(t)
 	insertSession(t, d, "s1", "proj")
 	insertMessages(t, d, Message{
@@ -3343,7 +3338,6 @@ func TestReopen(t *testing.T) {
 }
 
 func TestReopenAfterSwap(t *testing.T) {
-	t.Parallel()
 
 	dir := t.TempDir()
 	origPath := filepath.Join(dir, "orig.db")
@@ -3513,7 +3507,6 @@ func TestConcurrentReadsWhileReopen(t *testing.T) {
 }
 
 func TestExportedReaderAcquiredBeforeReopenStaysUsable(t *testing.T) {
-	t.Parallel()
 	d := testDB(t)
 	insertSession(t, d, "s1", "proj")
 
@@ -3617,7 +3610,6 @@ func TestCloseAfterCloseConnectionsReopen(t *testing.T) {
 }
 
 func TestCopyInsightsFrom(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 
 	// Source DB with insights.
@@ -3652,7 +3644,6 @@ func TestCopyInsightsFrom(t *testing.T) {
 }
 
 func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	ctx := context.Background()
 
@@ -3715,7 +3706,6 @@ func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
 }
 
 func TestCopyOrphanedDataFrom(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 
 	// Source (old) DB with two sessions: s1 and s2.
@@ -3803,7 +3793,6 @@ func TestCopyOrphanedDataFrom(t *testing.T) {
 // an orphan — but genuine Codex orphans (file gone) and SQLite-backed
 // agents that share a file_path across sessions must still be copied.
 func TestCopyOrphanedDataFrom_SkipsStaleCodexForkRows(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	forkFile := filepath.Join(dir, "fork.jsonl")
 	goneFile := filepath.Join(dir, "gone.jsonl")
@@ -3864,7 +3853,6 @@ func TestCopyOrphanedDataFrom_SkipsStaleCodexForkRows(t *testing.T) {
 }
 
 func TestCopyOrphanedDataFrom_NoOrphans(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 
 	srcPath := filepath.Join(dir, "old.db")
@@ -3884,7 +3872,6 @@ func TestCopyOrphanedDataFrom_NoOrphans(t *testing.T) {
 }
 
 func TestCopyOrphanedDataFrom_PreservesCopiedDetails(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 
 	srcPath := filepath.Join(dir, "old.db")
@@ -4073,7 +4060,6 @@ func TestCopyOrphanedDataFrom_PreservesCopiedDetails(t *testing.T) {
 }
 
 func TestCopyTrashedDataFromPreservesPins(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	ctx := context.Background()
 
@@ -4117,7 +4103,6 @@ func TestCopyTrashedDataFromPreservesPins(t *testing.T) {
 }
 
 func TestCopyOrphanedDataFrom_AtomicOnFailure(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 
 	// Create source DB with a session and messages.
@@ -4160,7 +4145,6 @@ func TestCopyOrphanedDataFrom_AtomicOnFailure(t *testing.T) {
 }
 
 func TestCopyOrphanedDataFrom_LegacyNoIsSystem(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 
 	// Source DB with is_system column removed to simulate
@@ -4442,7 +4426,6 @@ func TestVibeCanonicalDeleteExcludesFallbackAlias(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
 
 			d := testDB(t)
 			insertSession(t, d, tc.id, "p", func(s *Session) {
@@ -4510,7 +4493,6 @@ func TestEmptyTrashExcludes(t *testing.T) {
 }
 
 func TestCopyExcludedSessionsFrom(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 
 	// Source DB with excluded sessions.
@@ -4545,7 +4527,6 @@ func TestCopyExcludedSessionsFrom(t *testing.T) {
 }
 
 func TestCopySyncStateFrom_NoSourceTable(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 
 	// Source DB with no tables (legacy DB shape missing pg_sync_state).
@@ -4573,7 +4554,6 @@ func TestCopySyncStateFrom_NoSourceTable(t *testing.T) {
 }
 
 func TestCopySyncStateFrom_OnlyCopiesDurablePGKeys(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 
 	srcPath := filepath.Join(dir, "src.db")
@@ -4611,7 +4591,6 @@ func TestCopySyncStateFrom_OnlyCopiesDurablePGKeys(t *testing.T) {
 }
 
 func TestCopySyncStateFrom_PropagatesErrors(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 
 	// Source is not a valid SQLite database, so probing state fails.
@@ -4635,7 +4614,6 @@ func TestCopySyncStateFrom_PropagatesErrors(t *testing.T) {
 }
 
 func TestCopySessionMetadataFrom(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	ctx := context.Background()
 
@@ -4709,7 +4687,6 @@ func TestCopySessionMetadataFrom(t *testing.T) {
 }
 
 func TestCopySessionMetadataCopiesFromSource(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	ctx := context.Background()
 
@@ -4739,7 +4716,6 @@ func TestCopySessionMetadataCopiesFromSource(t *testing.T) {
 }
 
 func TestCopySessionMetadataPreservesWorktreeProjectMappings(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	ctx := context.Background()
 
@@ -4780,7 +4756,6 @@ func TestCopySessionMetadataPreservesWorktreeProjectMappings(t *testing.T) {
 }
 
 func TestCopySessionMetadataPreservesClears(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	ctx := context.Background()
 
@@ -5225,7 +5200,6 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 }
 
 func TestOpenRepairsLegacyCurrentSchemaTokenCoverageOnce(t *testing.T) {
-	t.Parallel()
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "current-token-flags.db")
@@ -5784,7 +5758,6 @@ func TestSystemMessageFingerprint(t *testing.T) {
 }
 
 func TestToolCallCountAndFingerprint(t *testing.T) {
-	t.Parallel()
 
 	d := testDB(t)
 	sess := Session{ID: "tc-sess", Project: "p", Machine: "local", Agent: "claude"}
@@ -5810,7 +5783,6 @@ func TestToolCallCountAndFingerprint(t *testing.T) {
 }
 
 func TestToolCallFingerprintIncludesStableFields(t *testing.T) {
-	t.Parallel()
 
 	d := testDB(t)
 	for _, id := range []string{"tc-old", "tc-new"} {
@@ -5856,7 +5828,6 @@ func TestToolCallFingerprintIncludesStableFields(t *testing.T) {
 }
 
 func TestToolCallFingerprintHandlesEmptyToolUseID(t *testing.T) {
-	t.Parallel()
 
 	d := testDB(t)
 	err := d.UpsertSession(Session{
@@ -6112,7 +6083,6 @@ func TestMessagesUsageCoveringIndex(t *testing.T) {
 // a freshly-opened DB, reopens, and verifies the migration restores
 // both without losing existing session data.
 func TestMigration_TerminationStatusColumn(t *testing.T) {
-	t.Parallel()
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")

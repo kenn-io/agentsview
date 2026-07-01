@@ -243,7 +243,6 @@ func TestAgProtoLengthOverflow(t *testing.T) {
 // truncates instead of failing, so a payload past the budget keeps
 // its decoded prefix rather than losing all content.
 func TestAgProtoFieldBudget(t *testing.T) {
-	t.Parallel()
 
 	// One field per two bytes: tag 0x08 (field 1, varint), value 0.
 	dense := func(fields int) []byte {
@@ -418,7 +417,6 @@ func TestAntigravityCLIDiscoverAndParseDB(t *testing.T) {
 }
 
 func TestAntigravityCLIProjectFallbackPromptAndProximity(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
 	id := "f0f0f0f0-f1f1-f2f2-f3f3-f4f4f4f4f4f4"
 
@@ -439,7 +437,6 @@ func TestAntigravityCLIProjectFallbackPromptAndProximity(t *testing.T) {
 }
 
 func TestAntigravityCLIProjectFallbackStrictWindow(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
 	id := "e0e0e0e0-e1e1-e2e2-e3e3-e4e4e4e4e4e4"
 
@@ -459,7 +456,6 @@ func TestAntigravityCLIProjectFallbackStrictWindow(t *testing.T) {
 }
 
 func TestAntigravityCLIProjectFallbackAmbiguous(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
 	id := "d0d0d0d0-d1d1-d2d2-d3d3-d4d4d4d4d4d4"
 
@@ -480,7 +476,6 @@ func TestAntigravityCLIProjectFallbackAmbiguous(t *testing.T) {
 }
 
 func TestAntigravityCLIProjectFallbackShortPrompt(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
 	id := "c0c0c0c0-c1c1-c2c2-c3c3-c4c4c4c4c4c4"
 
@@ -1962,7 +1957,6 @@ func TestAntigravityCLIDBCoveringSidecarRescuesUndecodableRows(t *testing.T) {
 }
 
 func TestAntigravityCLISidecarWinsKeepsTokenUsage(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
 	id := "dddddddd-eeee-ffff-0000-111111111111"
 	mustMkdir(t, filepath.Join(root, "conversations"))
@@ -3377,9 +3371,7 @@ func TestDecodeAntigravityStepToolOnlyAssistantStep(t *testing.T) {
 }
 
 func TestAntigravityCLITranscriptFidelity(t *testing.T) {
-	t.Parallel()
 	t.Run("covering sidecar is full", func(t *testing.T) {
-		t.Parallel()
 		root := t.TempDir()
 		id := "11111111-2222-3333-4444-555555555555"
 		mustMkdir(t, filepath.Join(root, "conversations"))
@@ -3396,7 +3388,6 @@ func TestAntigravityCLITranscriptFidelity(t *testing.T) {
 	})
 
 	t.Run("heuristic db decode (no covering sidecar) is summary", func(t *testing.T) {
-		t.Parallel()
 		root := t.TempDir()
 		id := "22222222-3333-4444-5555-666666666666"
 		mustMkdir(t, filepath.Join(root, "conversations"))
@@ -3416,7 +3407,6 @@ func TestAntigravityCLITranscriptFidelity(t *testing.T) {
 	})
 
 	t.Run("partial sidecar over undecodable db is summary", func(t *testing.T) {
-		t.Parallel()
 		root := t.TempDir()
 		id := "33333333-4444-5555-6666-777777777777"
 		mustMkdir(t, filepath.Join(root, "conversations"))
@@ -3433,7 +3423,6 @@ func TestAntigravityCLITranscriptFidelity(t *testing.T) {
 	})
 
 	t.Run("legacy .pb sidecar is full", func(t *testing.T) {
-		t.Parallel()
 		root := t.TempDir()
 		id := "44444444-5555-6666-7777-888888888888"
 		mustMkdir(t, filepath.Join(root, "conversations"))
@@ -3447,7 +3436,6 @@ func TestAntigravityCLITranscriptFidelity(t *testing.T) {
 	})
 
 	t.Run("history+brain only is summary", func(t *testing.T) {
-		t.Parallel()
 		root := t.TempDir()
 		id := "55555555-6666-7777-8888-999999999999"
 		mustMkdir(t, filepath.Join(root, "conversations"))

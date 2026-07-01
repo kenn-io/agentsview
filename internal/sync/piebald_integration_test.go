@@ -190,7 +190,6 @@ func (p *piebaldTestDB) addChatWithFork(t *testing.T, chatID int64) {
 }
 
 func TestSyncPiebaldSingleBulkAndIncremental(t *testing.T) {
-	t.Parallel()
 
 	env := setupSingleAgentTestEnv(t, parser.AgentPiebald)
 	piebald := createPiebaldDB(t, env.piebaldDir)

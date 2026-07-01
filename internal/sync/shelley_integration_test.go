@@ -178,7 +178,6 @@ func mainConvoMsgs() []shelleyMsg {
 }
 
 func TestSyncSingleSessionShelleyUsesVirtualSourcePath(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	dbPath := createShelleyMainDB(t, dir)
 
@@ -200,7 +199,6 @@ func TestSyncSingleSessionShelleyUsesVirtualSourcePath(t *testing.T) {
 }
 
 func TestSyncSingleSessionShelleyForceRewritesUnchangedSession(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	dbPath := createShelleyMainDB(t, dir)
 
@@ -225,7 +223,6 @@ func TestSyncSingleSessionShelleyForceRewritesUnchangedSession(t *testing.T) {
 }
 
 func TestSyncPathsShelleyDeletedPhysicalDBPreservesSessions(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	dbPath := createShelleyMainDB(t, dir)
 
@@ -249,7 +246,6 @@ func TestSyncPathsShelleyDeletedPhysicalDBPreservesSessions(t *testing.T) {
 // conversation's updated_at, not fall through to os.Stat (which fails on a
 // virtual path and returns 0, which the watcher reads as "source gone").
 func TestSourceMtimeShelleyResolvesVirtualPath(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	createShelleyMainDB(t, dir)
 
@@ -259,7 +255,6 @@ func TestSourceMtimeShelleyResolvesVirtualPath(t *testing.T) {
 }
 
 func TestShelleySyncAllAndResyncAllArchiveBehavior(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	dbPath := createShelleyMainDB(t, dir)
 	seedShelleyConvo(t, dbPath, "cAUX1", "aux", "/home/u/dev/app",
@@ -323,7 +318,6 @@ func TestShelleySyncAllAndResyncAllArchiveBehavior(t *testing.T) {
 }
 
 func TestSyncShelleyRemotePathRewriterSkip(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	dbPath := createShelleyMainDB(t, dir)
 

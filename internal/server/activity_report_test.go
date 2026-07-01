@@ -70,7 +70,6 @@ func seedActivityReportFixture(t *testing.T, te *testEnv) {
 }
 
 func TestActivityReportEndpoint_Presets(t *testing.T) {
-	t.Parallel()
 	te := setup(t)
 	seedActivityReportFixture(t, te)
 
@@ -126,7 +125,6 @@ func TestActivityReportEndpoint_Presets(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
 			w := te.get(t, buildPathURL("/api/v1/activity/report", tc.params))
 			assertStatus(t, w, http.StatusOK)
 			tc.check(t, decode[activity.Report](t, w))
@@ -142,7 +140,6 @@ func TestActivityReportEndpoint_Presets(t *testing.T) {
 // MUST appear in the report. A refactor flipping those flags to match
 // the analytics defaults would drop these sessions and fail here.
 func TestActivityReportEndpoint_IncludesOneShotAndAutomated(t *testing.T) {
-	t.Parallel()
 
 	te := setup(t)
 
@@ -195,7 +192,6 @@ func TestActivityReportEndpoint_IncludesOneShotAndAutomated(t *testing.T) {
 }
 
 func TestActivityReportEndpoint_Validation(t *testing.T) {
-	t.Parallel()
 
 	te := setup(t)
 
@@ -264,7 +260,6 @@ func TestActivityReportEndpoint_Validation(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
 			w := te.get(t, buildPathURL("/api/v1/activity/report", tc.params))
 			assertStatus(t, w, http.StatusBadRequest)
 		})
@@ -277,7 +272,6 @@ func TestActivityReportEndpoint_Validation(t *testing.T) {
 // "automated" drops interactive ones. It also confirms the response Totals
 // carry the automated/interactive session-count split.
 func TestActivityReportEndpoint_AutomationFilter(t *testing.T) {
-	t.Parallel()
 
 	te := setup(t)
 
@@ -327,7 +321,6 @@ func TestActivityReportEndpoint_AutomationFilter(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
 			params := map[string]string{
 				"preset": "day", "date": activityDate, "timezone": "UTC",
 			}

@@ -348,7 +348,6 @@ func TestUpsertSessionTerminationStatus(t *testing.T) {
 }
 
 func TestListSessionsTerminationFilter(t *testing.T) {
-	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 

@@ -162,7 +162,6 @@ func seedForgeConversation(t *testing.T, seeder *ForgeSeeder) {
 }
 
 func TestParseForgeDB_StandardConversation(t *testing.T) {
-	t.Parallel()
 	dbPath, seeder, db := newForgeTestDB(t)
 	defer db.Close()
 	seedForgeConversation(t, seeder)

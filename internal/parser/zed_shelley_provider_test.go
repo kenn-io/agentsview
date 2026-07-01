@@ -29,7 +29,6 @@ func TestZedProviderCapabilities(t *testing.T) {
 }
 
 func TestZedProviderSourceMethods(t *testing.T) {
-	t.Parallel()
 
 	fixture := zedProviderReadFixture(t)
 	root := fixture.Root
@@ -82,7 +81,6 @@ func TestZedProviderSourceMethods(t *testing.T) {
 }
 
 func TestZedProviderParsePhysicalAndVirtualSources(t *testing.T) {
-	t.Parallel()
 
 	fixture := zedProviderReadFixture(t)
 	root := fixture.Root
@@ -126,7 +124,6 @@ func TestZedProviderParsePhysicalAndVirtualSources(t *testing.T) {
 }
 
 func TestZedProviderFingerprintIncludesWALSiblings(t *testing.T) {
-	t.Parallel()
 
 	root := t.TempDir()
 	dbPath := filepath.Join(root, zedThreadsDBRelPath)
@@ -418,7 +415,6 @@ func TestShelleyProviderCapabilities(t *testing.T) {
 }
 
 func TestShelleyProviderSourceMethods(t *testing.T) {
-	t.Parallel()
 
 	fixture := shelleyProviderReadFixture(t)
 	root := fixture.Root
@@ -470,7 +466,6 @@ func TestShelleyProviderSourceMethods(t *testing.T) {
 }
 
 func TestShelleyProviderParsePhysicalAndVirtualSources(t *testing.T) {
-	t.Parallel()
 
 	fixture := shelleyProviderReadFixture(t)
 	root := fixture.Root
@@ -513,7 +508,6 @@ func TestShelleyProviderParsePhysicalAndVirtualSources(t *testing.T) {
 }
 
 func TestShelleyProviderFingerprintChangesForSameSecondRewrite(t *testing.T) {
-	t.Parallel()
 
 	root, _, db := newShelleyTestDB(t)
 	seedShelleyMainConversation(t, db)
@@ -546,7 +540,6 @@ func TestShelleyProviderFingerprintChangesForSameSecondRewrite(t *testing.T) {
 }
 
 func TestShelleyProviderFingerprintIncludesWALSiblings(t *testing.T) {
-	t.Parallel()
 
 	root, dbPath, db := newShelleyTestDB(t)
 	seedShelleyMainConversation(t, db)

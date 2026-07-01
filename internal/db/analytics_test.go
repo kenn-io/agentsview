@@ -375,7 +375,6 @@ func TestAnalyticsModelFilter(t *testing.T) {
 }
 
 func TestAnalyticsModelFilterGoTimePath(t *testing.T) {
-	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -435,7 +434,6 @@ func TestAnalyticsModelFilterGoTimePath(t *testing.T) {
 }
 
 func TestAnalyticsSummaryModelFilterCountsOnlyMatchingMessages(t *testing.T) {
-	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -800,7 +798,6 @@ func TestGetAnalyticsActivityModelFilterCountsOnlyMatchingMessages(
 func TestGetAnalyticsActivityModelFilterKeepsNullTimestampSessionsWithoutTimeFilter(
 	t *testing.T,
 ) {
-	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -840,7 +837,6 @@ func TestGetAnalyticsActivityModelFilterKeepsNullTimestampSessionsWithoutTimeFil
 func TestGetAnalyticsActivityModelAndHourFilterUseSameMessage(
 	t *testing.T,
 ) {
-	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -2122,11 +2118,9 @@ func TestGetAnalyticsVelocity_Metrics(t *testing.T) {
 }
 
 func TestGetAnalyticsVelocity_EdgeCases(t *testing.T) {
-	t.Parallel()
 	ctx := context.Background()
 
 	t.Run("LargeCycleExcluded", func(t *testing.T) {
-		t.Parallel()
 		d := testDB(t)
 		insertConversation(t, d, "v2", "proj", "claude", "2024-06-01T09:00:00Z", []time.Duration{
 			0, 45 * time.Minute,
@@ -2137,7 +2131,6 @@ func TestGetAnalyticsVelocity_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("EmptyTimestampsSkipped", func(t *testing.T) {
-		t.Parallel()
 		d := testDB(t)
 		insertSession(t, d, "v3", "proj", func(s *Session) {
 			s.StartedAt = new("2024-06-01T09:00:00Z")
@@ -2154,7 +2147,6 @@ func TestGetAnalyticsVelocity_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("AssistantBeforeUser", func(t *testing.T) {
-		t.Parallel()
 		d := testDB(t)
 		insertSession(t, d, "v4", "proj", func(s *Session) {
 			s.StartedAt = new("2024-06-01T09:00:00Z")
@@ -2172,7 +2164,6 @@ func TestGetAnalyticsVelocity_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("OrdinalVsTimestampSkew", func(t *testing.T) {
-		t.Parallel()
 		d := testDB(t)
 		insertSession(t, d, "v5", "proj", func(s *Session) {
 			s.StartedAt = new("2024-06-01T09:00:00Z")
@@ -2190,7 +2181,6 @@ func TestGetAnalyticsVelocity_EdgeCases(t *testing.T) {
 	})
 
 	t.Run("NegativeDeltaClampsToZero", func(t *testing.T) {
-		t.Parallel()
 		d := testDB(t)
 		insertSession(t, d, "v6", "proj", func(s *Session) {
 			s.StartedAt = new("2024-06-01T09:00:00Z")
@@ -2431,7 +2421,6 @@ func TestVelocityChunkedQuery(t *testing.T) {
 // is treated as an invalid timestamp and excluded while the rest of the
 // session's messages still drive velocity metrics.
 func TestGetAnalyticsVelocity_NullTimestamp(t *testing.T) {
-	t.Parallel()
 
 	d := testDB(t)
 	ctx := context.Background()
@@ -2486,7 +2475,6 @@ func TestPercentileFloat(t *testing.T) {
 }
 
 func TestGetAnalyticsTools(t *testing.T) {
-	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 

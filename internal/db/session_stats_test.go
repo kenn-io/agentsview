@@ -2446,7 +2446,6 @@ func TestGetSessionStats_Adoption_Happy(t *testing.T) {
 // *StatsAdoption with ClaudeOnly=false would misrepresent a pure codex
 // workload as having legitimate all-zero adoption signal.
 func TestGetSessionStats_Adoption_NoClaude(t *testing.T) {
-	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -2561,7 +2560,6 @@ func statsOutcomeRepo(t *testing.T) string {
 // contract distinguishes "gh not configured" (nil) from "gh configured,
 // zero PRs" (pointer to 0).
 func TestGetSessionStats_OutcomeStats_Happy(t *testing.T) {
-	t.Parallel()
 	skipIfNoGit(t)
 	d := testDB(t)
 	ctx := context.Background()

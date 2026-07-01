@@ -14,7 +14,6 @@ import (
 )
 
 func TestKiroProviderSourceMethods(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
 	dbPath, db := newKiroProviderSQLiteDBAt(t, root)
 	seedKiroSQLiteSession(
@@ -81,7 +80,6 @@ func TestKiroProviderSourceMethods(t *testing.T) {
 }
 
 func TestKiroProviderParsePhysicalVirtualAndLegacySources(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
 	dbPath, db := newKiroProviderSQLiteDBAt(t, root)
 	seedKiroSQLiteSession(

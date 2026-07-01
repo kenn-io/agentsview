@@ -25,7 +25,6 @@ func listSortedIDs(t *testing.T, d *DB, f SessionFilter) []string {
 // explicit absolute Descending so the default-direction logic is exercised
 // separately (TestListSessions_SortDefaultDirection).
 func TestListSessions_SortAscDesc(t *testing.T) {
-	t.Parallel()
 	cases := []struct {
 		name    string
 		orderBy string
@@ -202,7 +201,6 @@ func TestListSessions_SortAscDesc(t *testing.T) {
 	for i, tc := range cases {
 		project := caseProjects[i]
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
 
 			gotAsc := listSortedIDs(t, d, filterWith(func(f *SessionFilter) {
 				f.Project = project

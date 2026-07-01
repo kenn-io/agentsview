@@ -91,7 +91,6 @@ func TestAssetPublishersRejectUnexpectedFiles(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
 
 			tempDir := t.TempDir()
 			repo := filepath.Join(tempDir, "repo")

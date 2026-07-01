@@ -179,7 +179,6 @@ func parseDiffGeminiContent(sessionID, hash string) string {
 // back identical on every session, with no field counts and no
 // listed sessions.
 func TestParseDiffCleanArchiveIsIdentical(t *testing.T) {
-	t.Parallel()
 	env := setupFocusedTestEnv(t, parser.AgentClaude, parser.AgentCodex)
 
 	// pd-alpha carries thinking, a tool_use/tool_result pair, and a
@@ -219,7 +218,6 @@ func TestParseDiffCleanArchiveIsIdentical(t *testing.T) {
 // with the expected field names while an untouched control session
 // stays identical.
 func TestParseDiffDetectsStoredDrift(t *testing.T) {
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	ids := []string{
@@ -358,7 +356,6 @@ func TestParseDiffDetectsStoredDrift(t *testing.T) {
 // producing a report. The run must complete and surface the now-empty
 // stored timestamp as ordinary message_metadata drift.
 func TestParseDiffToleratesNullStoredTimestamp(t *testing.T) {
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	env.writeClaudeSession(t, "test-proj", "pd-nullts.jsonl",
@@ -409,7 +406,6 @@ func TestParseDiffToleratesNullStoredTimestamp(t *testing.T) {
 // per-message flag, a full-replace-agent session-metadata field, and the
 // informational-for-incremental rule on a Claude session.
 func TestParseDiffDetectsExtendedFieldDrift(t *testing.T) {
-	t.Parallel()
 	env := setupFocusedTestEnv(t, parser.AgentClaude, parser.AgentGemini)
 
 	// Two rich Claude sessions (thinking + tool_use/result + system),
@@ -500,7 +496,6 @@ func TestParseDiffDetectsExtendedFieldDrift(t *testing.T) {
 // stored drift is detected but not repaired, and nothing is persisted
 // (no skip cache entries, no row rewrites).
 func TestParseDiffWritesNothing(t *testing.T) {
-	t.Parallel()
 	env := setupFocusedTestEnv(t, parser.AgentClaude, parser.AgentGemini)
 
 	env.writeClaudeSession(t, "test-proj", "pd-keep.jsonl",
@@ -550,7 +545,6 @@ func TestParseDiffWritesNothing(t *testing.T) {
 // file even when the sync engine's size/mtime/skip-cache layers
 // would skip it, by appending to a source file without re-syncing.
 func TestParseDiffBypassesSkipLayers(t *testing.T) {
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	path := env.writeClaudeSession(t, "test-proj", "pd-skip.jsonl",
@@ -614,10 +608,8 @@ func TestParseDiffBypassesSkipLayers(t *testing.T) {
 // buckets: skipped (source missing), new on disk, pending resync,
 // and parse error.
 func TestParseDiffBuckets(t *testing.T) {
-	t.Parallel()
 
 	t.Run("source missing", func(t *testing.T) {
-		t.Parallel()
 		env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 		path := env.writeClaudeSession(
 			t, "test-proj", "pd-gone.jsonl",
@@ -641,7 +633,6 @@ func TestParseDiffBuckets(t *testing.T) {
 	})
 
 	t.Run("new on disk", func(t *testing.T) {
-		t.Parallel()
 		env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 		env.writeClaudeSession(t, "test-proj", "pd-base.jsonl",
 			parseDiffClaudeContent("base prompt", "base reply"))
@@ -664,7 +655,6 @@ func TestParseDiffBuckets(t *testing.T) {
 	})
 
 	t.Run("pending resync", func(t *testing.T) {
-		t.Parallel()
 		env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 		env.writeClaudeSession(t, "test-proj", "pd-stale.jsonl",
 			parseDiffClaudeContent("stale prompt", "stale reply"))
@@ -702,7 +692,6 @@ func TestParseDiffBuckets(t *testing.T) {
 	})
 
 	t.Run("parse error", func(t *testing.T) {
-		t.Parallel()
 		env := setupFocusedTestEnv(t, parser.AgentClaude, parser.AgentGemini)
 		env.writeClaudeSession(t, "test-proj", "pd-ok.jsonl",
 			parseDiffClaudeContent("ok prompt", "ok reply"))
@@ -734,7 +723,6 @@ func TestParseDiffBuckets(t *testing.T) {
 // TestParseDiffLimitNewestFirst verifies Limit samples files newest
 // mtime first and reports the unexamined sessions as skipped.
 func TestParseDiffLimitNewestFirst(t *testing.T) {
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	base := time.Now()
@@ -785,7 +773,6 @@ func TestParseDiffLimitNewestFirst(t *testing.T) {
 // requested agents and that agents without an on-disk source to
 // re-parse are rejected.
 func TestParseDiffAgentScope(t *testing.T) {
-	t.Parallel()
 	env := setupFocusedTestEnv(t, parser.AgentClaude, parser.AgentCodex)
 
 	env.writeClaudeSession(t, "test-proj", "pd-claude.jsonl",
@@ -833,7 +820,6 @@ func TestParseDiffAgentScope(t *testing.T) {
 }
 
 func TestParseDiffCoversProviderAuthoritativePiFamily(t *testing.T) {
-	t.Parallel()
 	env := setupFocusedTestEnv(t, parser.AgentPi, parser.AgentOMP)
 	env.writeSession(
 		t,
@@ -868,7 +854,6 @@ func TestParseDiffCoversProviderAuthoritativePiFamily(t *testing.T) {
 // surface here as the session being skipped/"not discovered" with
 // Examined 0 rather than compared.
 func TestParseDiffCoversKiroSQLite(t *testing.T) {
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
 	ks := createKiroSQLiteDB(t, env.kiroDir)
 	ks.addSession(
@@ -902,7 +887,6 @@ func TestParseDiffCoversKiroSQLite(t *testing.T) {
 // discovery would leave the legacy session "not discovered" and let
 // --fail-on-change pass without vetting it.
 func TestParseDiffCoversMixedOpenCodeRoot(t *testing.T) {
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 
 	// File-backed storage session: this makes ResolveOpenCodeSource
@@ -966,7 +950,6 @@ func TestParseDiffCoversMixedOpenCodeRoot(t *testing.T) {
 // root that still carries DB-only sessions in kilo.db must have BOTH
 // sources re-parsed.
 func TestParseDiffCoversMixedKiloRoot(t *testing.T) {
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentKilo)
 
 	// File-backed storage session: this makes ResolveKiloSource pick storage
@@ -1028,7 +1011,6 @@ func TestParseDiffCoversMixedKiloRoot(t *testing.T) {
 // Examined:1/Identical:1 means the stored conversation was matched and
 // vetted, not bucketed as skipped/"not discovered".
 func TestParseDiffCoversShelley(t *testing.T) {
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentShelley)
 	dbPath := createShelleyDB(t, env.shelleyDir)
 	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
@@ -1056,7 +1038,6 @@ func TestParseDiffCoversShelley(t *testing.T) {
 // stripVirtualSourceSuffix mapping shelley.db#id back to shelley.db so
 // the parse error keyed by the real DB path matches the stored rows.
 func TestParseDiffShelleyDBErrorAttributed(t *testing.T) {
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentShelley)
 	dbPath := createShelleyDB(t, env.shelleyDir)
 	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
@@ -1094,7 +1075,6 @@ func TestParseDiffShelleyDBErrorAttributed(t *testing.T) {
 // being silently dropped (unstored) or misclassified as presence
 // drift (stored), so --fail-on-change stays trustworthy.
 func TestParseDiffKiroSQLitePerSessionError(t *testing.T) {
-	t.Parallel()
 
 	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
 	ks := createKiroSQLiteDB(t, env.kiroDir)
@@ -1152,7 +1132,6 @@ func TestParseDiffKiroSQLitePerSessionError(t *testing.T) {
 // being silently dropped, so --fail-on-change stays trustworthy even
 // for a session that was never stored.
 func TestParseDiffKiloSQLitePerSessionError(t *testing.T) {
-	t.Parallel()
 
 	env := setupSingleAgentTestEnv(t, parser.AgentKilo)
 	ks := createKiloDB(t, env.kiloDir)
@@ -1207,7 +1186,6 @@ func TestParseDiffKiloSQLitePerSessionError(t *testing.T) {
 // not touched stays a real DiffChanged so a genuine regression is never
 // masked.
 func TestParseDiffRacedSourceSkew(t *testing.T) {
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	racedPath := env.writeClaudeSession(t, "test-proj", "pd-raced.jsonl",
@@ -1274,7 +1252,6 @@ func TestParseDiffRacedSourceSkew(t *testing.T) {
 // must NOT trip --fail-on-change, so a concurrent daemon write can never
 // turn a vet run red on its own.
 func TestParseDiffRacedAloneDoesNotFail(t *testing.T) {
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	racedPath := env.writeClaudeSession(t, "test-proj", "pd-solo.jsonl",
@@ -1306,7 +1283,6 @@ func TestParseDiffRacedAloneDoesNotFail(t *testing.T) {
 // leaves it identical, not raced (the raced reclass only applies when
 // there is a real change to mask).
 func TestParseDiffRacedDoesNotMaskCleanRun(t *testing.T) {
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	path := env.writeClaudeSession(t, "test-proj", "pd-clean.jsonl",
@@ -1338,7 +1314,6 @@ func TestParseDiffRacedDoesNotMaskCleanRun(t *testing.T) {
 // real parser regressions on DB-backed agents are never hidden from
 // --fail-on-change.
 func TestParseDiffDBBackedSourceNotMaskedAsRaced(t *testing.T) {
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
 	ks := createKiroSQLiteDB(t, env.kiroDir)
 	const (
@@ -1425,7 +1400,6 @@ func TestParseDiffCodexIndexSkewDoesNotMaskTranscriptDrift(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
-	t.Parallel()
 	root := t.TempDir()
 	codexDir := filepath.Join(root, "sessions")
 	require.NoError(t, os.MkdirAll(codexDir, 0o755))
@@ -1498,7 +1472,6 @@ func TestParseDiffCodexTranscriptSkewUsesTranscriptStoredMtime(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
-	t.Parallel()
 	root := t.TempDir()
 	codexDir := filepath.Join(root, "sessions")
 	require.NoError(t, os.MkdirAll(codexDir, 0o755))
@@ -1576,7 +1549,6 @@ func TestParseDiffCodexIncrementalAppendDoesNotLookRaced(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
 
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229e3"
@@ -1628,7 +1600,6 @@ func TestParseDiffCodexLegacyStaleIncrementalHashDoesNotLookRaced(t *testing.T) 
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
 
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229e5"
@@ -1693,7 +1664,6 @@ func TestParseDiffCodexFullParsePartialTailDoesNotLookRaced(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
 
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229e6"
@@ -1746,7 +1716,6 @@ func TestParseDiffCodexIncrementalPartialTailDoesNotLookRaced(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
 
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229e4"
@@ -1849,7 +1818,6 @@ func TestParseDiffHermesSharedStateDBNotMaskedAsRaced(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
-	t.Parallel()
 	root := t.TempDir()
 	sessionsDir := filepath.Join(root, "sessions")
 	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
@@ -1910,7 +1878,6 @@ func TestParseDiffHermesSharedStateDBNotMaskedAsRaced(t *testing.T) {
 // driven into rewriting the archive. The refusal is a no-op (zero stats,
 // nil error) and persists nothing.
 func TestParseDiffEngineRefusesWrites(t *testing.T) {
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	path := env.writeClaudeSession(t, "test-proj", "pd-guard.jsonl",
@@ -2000,10 +1967,8 @@ func TestParseDiffEngineRefusesWrites(t *testing.T) {
 }
 
 func TestParseDiffPresenceSweep(t *testing.T) {
-	t.Parallel()
 
 	t.Run("current-version row no longer emitted", func(t *testing.T) {
-		t.Parallel()
 		env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 		path := env.writeClaudeSession(t, "test-proj", "pd-real.jsonl",
 			parseDiffClaudeContent("real prompt", "real reply"))
@@ -2039,7 +2004,6 @@ func TestParseDiffPresenceSweep(t *testing.T) {
 	})
 
 	t.Run("stale row no longer emitted is pending resync", func(t *testing.T) {
-		t.Parallel()
 		env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 		path := env.writeClaudeSession(t, "test-proj", "pd-real.jsonl",
 			parseDiffClaudeContent("real prompt", "real reply"))

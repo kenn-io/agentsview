@@ -693,7 +693,6 @@ func TestFindOpenCodeSourceFilePrefersStorage(t *testing.T) {
 }
 
 func TestFindOpenCodeSourceFileFallsBackToSQLiteInHybridRoot(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(
 		filepath.Join(root, "storage", "session", "global"),
@@ -713,7 +712,6 @@ func TestFindOpenCodeSourceFileFallsBackToSQLiteInHybridRoot(t *testing.T) {
 // "" so the engine's FindSourceFile loop continues to later roots
 // where the session actually lives.
 func TestFindOpenCodeSourceFileReturnsEmptyWhenSessionMissing(t *testing.T) {
-	t.Parallel()
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(
 		filepath.Join(root, "storage", "session", "global"),

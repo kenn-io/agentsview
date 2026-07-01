@@ -118,7 +118,6 @@ func TestSourceMtimeCoworkIncludesMetaMtime(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
-	t.Parallel()
 
 	coworkDir := t.TempDir()
 	testDB := dbtest.OpenTestDB(t)
@@ -149,7 +148,6 @@ func TestSyncPathsCoworkReplacesUpdatedMessageOrdinal(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
-	t.Parallel()
 
 	coworkDir := t.TempDir()
 	testDB := dbtest.OpenTestDB(t)

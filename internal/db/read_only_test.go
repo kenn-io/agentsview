@@ -182,7 +182,6 @@ func TestOpenReadOnlyRejectsMissingMigratedColumn(t *testing.T) {
 }
 
 func TestReadOnlySchemaCompatibilityRejectsMissingReadColumn(t *testing.T) {
-	t.Parallel()
 	tests := []struct {
 		name   string
 		table  string
@@ -218,7 +217,6 @@ func TestReadOnlySchemaCompatibilityRejectsMissingReadColumn(t *testing.T) {
 }
 
 func TestOpenReadOnlyRejectsMissingReadTable(t *testing.T) {
-	t.Parallel()
 	basePath := createClosedTestDB(t, tempDBPath(t, "sessions.db"), nil)
 	tests := []struct {
 		table  string
@@ -233,7 +231,6 @@ func TestOpenReadOnlyRejectsMissingReadTable(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.table, func(t *testing.T) {
-			t.Parallel()
 			path := copyClosedTestDB(t, basePath)
 			execRawSQLite(t, path, "DROP TABLE "+tt.table)
 			requireOpenReadOnlyFails(t, path,

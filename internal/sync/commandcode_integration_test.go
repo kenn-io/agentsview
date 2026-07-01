@@ -106,7 +106,6 @@ func TestSyncAllSinceCommandCodeMetaArrivalTriggersResync(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
-	t.Parallel()
 
 	commandCodeDir := t.TempDir()
 	testDB := dbtest.OpenTestDB(t)

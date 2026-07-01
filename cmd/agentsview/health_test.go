@@ -252,7 +252,6 @@ func TestHealthListFilterIncludesAllSessions(t *testing.T) {
 }
 
 func TestResolveHealthSessionIDMatchesDisplayedShortID(t *testing.T) {
-	t.Parallel()
 	database := dbtest.OpenTestDB(t)
 
 	require.NoError(t, database.UpsertSession(db.Session{
@@ -271,7 +270,6 @@ func TestResolveHealthSessionIDMatchesDisplayedShortID(t *testing.T) {
 }
 
 func TestResolveHealthSessionIDExactMatchCanBeOutsideHealthList(t *testing.T) {
-	t.Parallel()
 	database := dbtest.OpenTestDB(t)
 
 	parentID := "parent-session"
@@ -296,7 +294,6 @@ func TestResolveHealthSessionIDExactMatchCanBeOutsideHealthList(t *testing.T) {
 }
 
 func TestResolveHealthSessionIDPartialMatchCanBeOutsideHealthList(t *testing.T) {
-	t.Parallel()
 	database := dbtest.OpenTestDB(t)
 
 	writes := make([]db.SessionBatchWrite, 0, maxHealthLimit+1)
@@ -350,7 +347,6 @@ func TestResolveHealthSessionIDUsesDaemonPartialLookup(t *testing.T) {
 func TestResolveHealthSessionIDExactMatchStillChecksShortIDAmbiguity(
 	t *testing.T,
 ) {
-	t.Parallel()
 	database := dbtest.OpenTestDB(t)
 
 	require.NoError(t, database.UpsertSession(db.Session{
@@ -375,7 +371,6 @@ func TestResolveHealthSessionIDExactMatchStillChecksShortIDAmbiguity(
 }
 
 func TestResolveSessionID(t *testing.T) {
-	t.Parallel()
 	database := dbtest.OpenTestDB(t)
 
 	upsert := func(id string) {
@@ -446,7 +441,6 @@ func TestResolveSessionID(t *testing.T) {
 // with timestamps that push the collider past position 5 and
 // confirm ambiguity is still reported.
 func TestResolveSessionIDCollisionBeyondTopFew(t *testing.T) {
-	t.Parallel()
 	database := dbtest.OpenTestDB(t)
 
 	upsert := func(id string, started string) {

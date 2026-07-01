@@ -11,7 +11,6 @@ import (
 )
 
 func TestListStoredSourcePathHintsScopesByAgentAndRoot(t *testing.T) {
-	t.Parallel()
 
 	d := testDB(t)
 	root := t.TempDir()
@@ -47,7 +46,6 @@ func TestListStoredSourcePathHintsScopesByAgentAndRoot(t *testing.T) {
 }
 
 func TestListStoredSourcePathHintsHandlesHashPathsAndVirtualSuffixes(t *testing.T) {
-	t.Parallel()
 
 	d := testDB(t)
 	base := t.TempDir()
@@ -82,7 +80,6 @@ func TestListStoredSourcePathHintsHandlesHashPathsAndVirtualSuffixes(t *testing.
 }
 
 func TestListStoredSourcePathHintsEscapesLikeWildcards(t *testing.T) {
-	t.Parallel()
 
 	d := testDB(t)
 	base := t.TempDir()
@@ -100,7 +97,6 @@ func TestListStoredSourcePathHintsEscapesLikeWildcards(t *testing.T) {
 }
 
 func TestListStoredSourcePathHintsBatchesRootsWithoutTruncating(t *testing.T) {
-	t.Parallel()
 
 	d := testDB(t)
 	base := t.TempDir()
@@ -137,7 +133,6 @@ func TestListStoredSourcePathHintsBatchesRootsWithoutTruncating(t *testing.T) {
 }
 
 func TestStoredSourcePathHintsLookupUsesAgentFilePathIndex(t *testing.T) {
-	t.Parallel()
 
 	d := testDB(t)
 	root := t.TempDir()

@@ -118,7 +118,6 @@ func storeContractSQLiteTemplate(t *testing.T) (string, storeContractFixture) {
 }
 
 func TestStoreContract(t *testing.T) {
-	t.Parallel()
 
 	tests := []struct {
 		name string
@@ -134,10 +133,8 @@ func TestStoreContract(t *testing.T) {
 
 	for _, backend := range storeContractBackends() {
 		t.Run(backend.name, func(t *testing.T) {
-			t.Parallel()
 			for _, tt := range tests {
 				t.Run(tt.name, func(t *testing.T) {
-					t.Parallel()
 					store := backend.open(t)
 					fixture := backend.seed(t, store)
 					tt.run(t, store, fixture, backend)

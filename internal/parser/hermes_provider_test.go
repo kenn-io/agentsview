@@ -11,7 +11,6 @@ import (
 )
 
 func TestHermesProviderTranscriptSourceMethods(t *testing.T) {
-	t.Parallel()
 
 	root := t.TempDir()
 	jsonlPath := filepath.Join(root, "child.jsonl")
@@ -92,7 +91,6 @@ func TestHermesProviderTranscriptSourceMethods(t *testing.T) {
 }
 
 func TestHermesProviderStateDBSourceMethods(t *testing.T) {
-	t.Parallel()
 
 	root := t.TempDir()
 	sessionsDir := filepath.Join(root, "sessions")
@@ -191,7 +189,6 @@ func TestHermesProviderStateDBSourceMethods(t *testing.T) {
 }
 
 func TestHermesProviderArchiveWatchRoots(t *testing.T) {
-	t.Parallel()
 
 	root := t.TempDir()
 	sessionsDir := filepath.Join(root, "sessions")
@@ -236,10 +233,8 @@ func TestHermesProviderArchiveWatchRoots(t *testing.T) {
 }
 
 func TestHermesProviderArchiveWatchRootsBeforeArchiveComplete(t *testing.T) {
-	t.Parallel()
 
 	t.Run("state db exists before sessions directory", func(t *testing.T) {
-		t.Parallel()
 
 		root := t.TempDir()
 		createHermesStateDB(t, root)
@@ -272,7 +267,6 @@ func TestHermesProviderArchiveWatchRootsBeforeArchiveComplete(t *testing.T) {
 	})
 
 	t.Run("direct state db root before file exists", func(t *testing.T) {
-		t.Parallel()
 
 		root := t.TempDir()
 		stateDB := filepath.Join(root, "state.db")
@@ -305,7 +299,6 @@ func TestHermesProviderArchiveWatchRootsBeforeArchiveComplete(t *testing.T) {
 	})
 
 	t.Run("sessions directory root before state db exists", func(t *testing.T) {
-		t.Parallel()
 
 		root := t.TempDir()
 		stateDB := filepath.Join(root, "state.db")
@@ -340,7 +333,6 @@ func TestHermesProviderArchiveWatchRootsBeforeArchiveComplete(t *testing.T) {
 }
 
 func TestHermesProviderParse(t *testing.T) {
-	t.Parallel()
 
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "child.jsonl")
@@ -375,7 +367,6 @@ func TestHermesProviderParse(t *testing.T) {
 }
 
 func TestHermesProviderParseStateDB(t *testing.T) {
-	t.Parallel()
 
 	root := t.TempDir()
 	sessionsDir := filepath.Join(root, "sessions")
@@ -439,7 +430,6 @@ func TestHermesProviderParseStateDB(t *testing.T) {
 }
 
 func TestHermesProviderFindSourceDoesNotReturnStateDBForMissingRawID(t *testing.T) {
-	t.Parallel()
 
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "sessions"), 0o755))
@@ -461,7 +451,6 @@ func TestHermesProviderFindSourceDoesNotReturnStateDBForMissingRawID(t *testing.
 }
 
 func TestHermesProviderFindSourceFallsBackToTranscriptWhenStateDBUnreadable(t *testing.T) {
-	t.Parallel()
 
 	root := t.TempDir()
 	sessionsDir := filepath.Join(root, "sessions")

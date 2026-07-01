@@ -25,7 +25,6 @@ const antigravityCLITestSchema = `
 `
 
 func TestSyncEngineAntigravityCLI_HappyPath(t *testing.T) {
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
 	uuid := "33333333-4444-5555-6666-777777777777"
 
@@ -117,7 +116,6 @@ func TestSyncEngineAntigravityCLI_HappyPath(t *testing.T) {
 }
 
 func TestSyncEngineAntigravityCLI_SidecarUpdates(t *testing.T) {
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
 	syncUUID := "44444444-5555-6666-7777-888888888888"
 	sinceUUID := "77777777-8888-9999-0000-111111111111"
@@ -199,7 +197,6 @@ func TestSyncEngineAntigravityCLI_SidecarUpdates(t *testing.T) {
 }
 
 func TestSyncEngineAntigravityCLI_SyncAllSinceReSyncsDBWalUpdate(t *testing.T) {
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
 	uuid := "22222222-3333-4444-5555-777777777777"
 	sessionID := "antigravity-cli:" + uuid
@@ -253,7 +250,6 @@ func TestSyncEngineAntigravityCLI_SyncAllSinceReSyncsDBWalUpdate(t *testing.T) {
 }
 
 func TestSyncEngineAntigravityCLI_MalformedSidecarFallback(t *testing.T) {
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
 	uuid := "55555555-6666-7777-8888-999999999999"
 
@@ -284,7 +280,6 @@ func TestSyncEngineAntigravityCLI_MalformedSidecarFallback(t *testing.T) {
 }
 
 func TestSyncEngineAntigravityCLI_DBFallbackRetries(t *testing.T) {
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
 	malformedUUID := "77777777-8888-9999-aaaa-bbbbbbbbbbbb"
 	filteredUUID := "88888888-9999-aaaa-bbbb-cccccccccccc"
@@ -350,7 +345,6 @@ func TestSyncEngineAntigravityCLI_DBFallbackRetries(t *testing.T) {
 }
 
 func TestSyncEngineAntigravityCLI_NeedsRetryReplacesCurrentMessages(t *testing.T) {
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
 	uuid := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 	sessionID := "antigravity-cli:" + uuid
@@ -392,7 +386,6 @@ func TestSyncEngineAntigravityCLI_NeedsRetryReplacesCurrentMessages(t *testing.T
 }
 
 func TestSyncSingleSessionAntigravityCLI_DBDecodeFallbackRetries(t *testing.T) {
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
 	uuid := "99999999-aaaa-bbbb-cccc-dddddddddddd"
 	sessionID := "antigravity-cli:" + uuid
@@ -457,7 +450,6 @@ func writeAntigravityCLIInferredProjectFixture(
 }
 
 func TestSyncEngineAntigravityCLI_InferredProjectWithoutConversationID(t *testing.T) {
-	t.Parallel()
 	base := time.UnixMilli(1716244800000)
 	// Display differs from the stored prompt in case and extra
 	// leading/trailing/internal whitespace; only the normalized
@@ -483,7 +475,6 @@ func TestSyncEngineAntigravityCLI_InferredProjectWithoutConversationID(t *testin
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
 			env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
 			uuid := "ab12cd34-1111-2222-3333-444455556666"
 			sessionID := "antigravity-cli:" + uuid
@@ -508,7 +499,6 @@ func TestSyncEngineAntigravityCLI_InferredProjectWithoutConversationID(t *testin
 }
 
 func TestSyncSingleSessionAntigravityCLI_InferredProjectWithoutConversationID(t *testing.T) {
-	t.Parallel()
 	base := time.UnixMilli(1716244800000)
 	env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
 	uuid := "cd34ef56-7777-8888-9999-aaaabbbbcccc"
@@ -528,7 +518,6 @@ func TestSyncSingleSessionAntigravityCLI_InferredProjectWithoutConversationID(t 
 }
 
 func TestSyncPathsAntigravityCLIHistoryOnlyUpdateRefreshesProject(t *testing.T) {
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
 	uuid := "de45fa67-8888-9999-aaaa-bbbbccccdddd"
 	sessionID := "antigravity-cli:" + uuid
@@ -563,7 +552,6 @@ func TestSyncPathsAntigravityCLIHistoryOnlyUpdateRefreshesProject(t *testing.T) 
 }
 
 func TestSyncPathsAntigravityCLIHistoryRetagClearsRemovedProject(t *testing.T) {
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
 	removedID := "ee45fa67-8888-9999-aaaa-bbbbccccdddd"
 	retaggedID := "ff45fa67-8888-9999-aaaa-bbbbccccdddd"
@@ -617,7 +605,6 @@ func TestSyncPathsAntigravityCLIHistoryRetagClearsRemovedProject(t *testing.T) {
 }
 
 func TestSyncEngineAntigravityCLI_MissingPbOrphanSidecar(t *testing.T) {
-	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
 	uuid := "66666666-7777-8888-9999-000000000000"
 

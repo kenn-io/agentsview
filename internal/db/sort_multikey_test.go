@@ -183,7 +183,6 @@ func TestResolveSort(t *testing.T) {
 // id tie-breaker following the last term's direction. Both the structured Sort
 // field and the OrderBy string spell out the same ordering and must agree.
 func TestListSessions_MultiKeySort(t *testing.T) {
-	t.Parallel()
 
 	asc, desc := false, true
 	d := testDB(t)
@@ -214,7 +213,6 @@ func TestListSessions_MultiKeySort(t *testing.T) {
 	want := []string{"mk-e", "mk-a", "mk-b", "mk-d", "mk-c"}
 
 	t.Run("structured Sort", func(t *testing.T) {
-		t.Parallel()
 
 		got := listSortedIDs(t, d, filterWith(func(f *SessionFilter) {
 			f.Sort = []SortKey{
@@ -226,7 +224,6 @@ func TestListSessions_MultiKeySort(t *testing.T) {
 	})
 
 	t.Run("OrderBy string", func(t *testing.T) {
-		t.Parallel()
 
 		got := listSortedIDs(t, d, filterWith(func(f *SessionFilter) {
 			f.OrderBy = "messages:asc,started:desc"
