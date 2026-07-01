@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	stdlibsync "sync"
 	"testing"
 	"time"
 
@@ -55,6 +56,12 @@ type shelleyMsg struct {
 	created  string
 }
 
+var (
+	shelleyMainTemplateOnce  stdlibsync.Once
+	shelleyMainTemplateBytes []byte
+	shelleyMainTemplateErr   error
+)
+
 func createShelleyDB(t *testing.T, dir string) string {
 	t.Helper()
 	dbPath := filepath.Join(dir, "shelley.db")
@@ -66,6 +73,31 @@ func createShelleyDB(t *testing.T, dir string) string {
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err, "open shelley test db")
 	defer db.Close()
+	return dbPath
+}
+
+func createShelleyMainDB(t *testing.T, dir string) string {
+	t.Helper()
+	shelleyMainTemplateOnce.Do(func() {
+		templateDir, err := os.MkdirTemp("", "agentsview-shelley-main-*")
+		if err != nil {
+			shelleyMainTemplateErr = err
+			return
+		}
+		defer os.RemoveAll(templateDir)
+
+		dbPath := createShelleyDB(t, templateDir)
+		seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
+			"claude-sonnet-4-6", "", true,
+			"2026-06-15T10:00:00Z", "2026-06-15T10:00:06Z", mainConvoMsgs())
+		shelleyMainTemplateBytes, shelleyMainTemplateErr = os.ReadFile(dbPath)
+	})
+	require.NoError(t, shelleyMainTemplateErr, "build Shelley main fixture")
+
+	dbPath := filepath.Join(dir, "shelley.db")
+	require.NoError(t, os.MkdirAll(dir, 0o755), "create Shelley fixture dir")
+	require.NoError(t, os.WriteFile(dbPath, shelleyMainTemplateBytes, 0o600),
+		"copy Shelley main fixture")
 	return dbPath
 }
 
@@ -148,10 +180,7 @@ func mainConvoMsgs() []shelleyMsg {
 func TestSyncSingleSessionShelleyUsesVirtualSourcePath(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	dbPath := createShelleyDB(t, dir)
-	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
-		"claude-sonnet-4-6", "", true,
-		"2026-06-15T10:00:00Z", "2026-06-15T10:00:06Z", mainConvoMsgs())
+	dbPath := createShelleyMainDB(t, dir)
 
 	engine, database := newShelleyEngine(t, dir)
 
@@ -173,10 +202,7 @@ func TestSyncSingleSessionShelleyUsesVirtualSourcePath(t *testing.T) {
 func TestSyncSingleSessionShelleyForceRewritesUnchangedSession(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	dbPath := createShelleyDB(t, dir)
-	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
-		"claude-sonnet-4-6", "", true,
-		"2026-06-15T10:00:00Z", "2026-06-15T10:00:06Z", mainConvoMsgs())
+	dbPath := createShelleyMainDB(t, dir)
 
 	engine, database := newShelleyEngine(t, dir)
 	require.NoError(t, engine.SyncSingleSession("shelley:cMAIN1"))
@@ -201,10 +227,7 @@ func TestSyncSingleSessionShelleyForceRewritesUnchangedSession(t *testing.T) {
 func TestSyncPathsShelleyDeletedPhysicalDBPreservesSessions(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	dbPath := createShelleyDB(t, dir)
-	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
-		"claude-sonnet-4-6", "", true,
-		"2026-06-15T10:00:00Z", "2026-06-15T10:00:06Z", mainConvoMsgs())
+	dbPath := createShelleyMainDB(t, dir)
 
 	engine, database := newShelleyEngine(t, dir)
 	stats := engine.SyncAll(context.Background(), nil)
@@ -228,10 +251,7 @@ func TestSyncPathsShelleyDeletedPhysicalDBPreservesSessions(t *testing.T) {
 func TestSourceMtimeShelleyResolvesVirtualPath(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	dbPath := createShelleyDB(t, dir)
-	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
-		"claude-sonnet-4-6", "", true,
-		"2026-06-15T10:00:00Z", "2026-06-15T10:00:06Z", mainConvoMsgs())
+	createShelleyMainDB(t, dir)
 
 	engine, _ := newShelleyEngine(t, dir)
 	assert.Positive(t, engine.SourceMtime("shelley:cMAIN1"),
@@ -241,10 +261,7 @@ func TestSourceMtimeShelleyResolvesVirtualPath(t *testing.T) {
 func TestShelleySyncAllAndResyncAllArchiveBehavior(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	dbPath := createShelleyDB(t, dir)
-	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
-		"claude-sonnet-4-6", "", true,
-		"2026-06-15T10:00:00Z", "2026-06-15T10:00:06Z", mainConvoMsgs())
+	dbPath := createShelleyMainDB(t, dir)
 	seedShelleyConvo(t, dbPath, "cAUX1", "aux", "/home/u/dev/app",
 		"claude-sonnet-4-6", "", true,
 		"2026-06-15T10:01:00Z", "2026-06-15T10:01:10Z", []shelleyMsg{
@@ -308,10 +325,7 @@ func TestShelleySyncAllAndResyncAllArchiveBehavior(t *testing.T) {
 func TestSyncShelleyRemotePathRewriterSkip(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	dbPath := createShelleyDB(t, dir)
-	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
-		"claude-sonnet-4-6", "", true,
-		"2026-06-15T10:00:00Z", "2026-06-15T10:00:06Z", mainConvoMsgs())
+	dbPath := createShelleyMainDB(t, dir)
 
 	database := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(database, sync.EngineConfig{
