@@ -34,6 +34,12 @@ func (readOnlyUsageSpy) GetUsageSessionCounts(
 	return db.UsageSessionCounts{}, db.ErrReadOnly
 }
 
+func (readOnlyUsageSpy) GetUsageMatchingSessionCount(
+	_ context.Context, _ db.UsageFilter,
+) (int, error) {
+	return 0, db.ErrReadOnly
+}
+
 // TestUsageHandlers_ReturnNotImplementedOnReadOnlyStore locks
 // in the Postgres-backend contract: when the underlying Store
 // reports a usage query as unavailable (db.ErrReadOnly), both

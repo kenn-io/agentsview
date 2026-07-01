@@ -1956,6 +1956,217 @@ func TestGetUsageSessionCounts(t *testing.T) {
 	assert.Nil(t, dailyNoCounts.SessionCounts.ByAgent)
 }
 
+func TestGetUsageMatchingSessionCount(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "copilot-empty", "proj-a", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2024-06-15T10:00:00Z")
+		s.EndedAt = new("2024-06-15T10:00:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "copilot-empty", Ordinal: 0,
+		Role: "assistant", Timestamp: "2024-06-15T10:00:00Z",
+		Model: "gpt-5.3-codex",
+	})
+
+	insertSession(t, d, "claude-usage", "proj-a", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = new("2024-06-15T11:00:00Z")
+		s.EndedAt = new("2024-06-15T11:00:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "claude-usage", Ordinal: 0,
+		Role: "assistant", Timestamp: "2024-06-15T11:00:00Z",
+		Model: "claude-sonnet",
+		TokenUsage: json.RawMessage(
+			`{"input_tokens":100,"output_tokens":50}`),
+	})
+
+	tests := []struct {
+		name   string
+		filter UsageFilter
+		want   int
+	}{
+		{
+			name: "counts copilot sessions without usage rows",
+			filter: UsageFilter{
+				From: "2024-06-15", To: "2024-06-15",
+				Timezone: "UTC", Agent: "copilot",
+			},
+			want: 1,
+		},
+		{
+			name: "respects model filters from session messages",
+			filter: UsageFilter{
+				From: "2024-06-15", To: "2024-06-15",
+				Timezone: "UTC", Agent: "copilot", Model: "gpt-5.3-codex",
+			},
+			want: 1,
+		},
+		{
+			name: "excludes sessions when model is excluded",
+			filter: UsageFilter{
+				From: "2024-06-15", To: "2024-06-15",
+				Timezone: "UTC", Agent: "copilot", ExcludeModel: "gpt-5.3-codex",
+			},
+			want: 0,
+		},
+		{
+			name: "respects date range",
+			filter: UsageFilter{
+				From: "2024-06-16", To: "2024-06-16",
+				Timezone: "UTC", Agent: "copilot",
+			},
+			want: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := d.GetUsageMatchingSessionCount(ctx, tt.filter)
+			requireNoError(t, err, "GetUsageMatchingSessionCount")
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestGetUsageMatchingSessionCount_UsesMessageTimestampNotSessionActivity
+// guards against regressing to session-activity bounding: a Copilot
+// session whose started_at/ended_at fall outside the requested window but
+// whose message is timestamped inside it must still be counted, because
+// GetDailyUsage and GetUsageSessionCounts already bound on message/event
+// timestamps, not session activity.
+func TestGetUsageMatchingSessionCount_UsesMessageTimestampNotSessionActivity(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "copilot-late-message", "proj-a", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2026-02-08T10:00:00Z")
+		s.EndedAt = new("2026-02-08T10:00:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "copilot-late-message", Ordinal: 0,
+		Role: "assistant", Timestamp: "2026-02-10T12:00:00Z",
+		Model:      "gpt-5.3-codex",
+		TokenUsage: nil,
+	})
+
+	insertSession(t, d, "copilot-out-of-range", "proj-a", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2026-02-08T10:00:00Z")
+		s.EndedAt = new("2026-02-08T10:00:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "copilot-out-of-range", Ordinal: 0,
+		Role: "assistant", Timestamp: "2026-02-08T10:00:00Z",
+		Model:      "gpt-5.3-codex",
+		TokenUsage: nil,
+	})
+
+	filter := UsageFilter{
+		From: "2026-02-10", To: "2026-02-10",
+		Timezone: "UTC", Agent: "copilot",
+	}
+
+	got, err := d.GetUsageMatchingSessionCount(ctx, filter)
+	requireNoError(t, err, "GetUsageMatchingSessionCount")
+	assert.Equal(t, 1, got)
+}
+
+// TestGetUsageMatchingSessionCount_ModelFilterAppliesToBoundedRow guards
+// against the model/exclude-model predicate being applied session-wide
+// instead of to the in-range message/event row: a session with an
+// out-of-range message on the filtered model but an in-range message on a
+// different model must not match a Model filter for the out-of-range
+// model, and must not be excluded by an ExcludeModel filter for the
+// out-of-range model either.
+func TestGetUsageMatchingSessionCount_ModelFilterAppliesToBoundedRow(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "copilot-mixed-model", "proj-a", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2026-02-08T10:00:00Z")
+		s.EndedAt = new("2026-02-10T12:00:00Z")
+	})
+	insertMessages(t, d,
+		Message{
+			SessionID: "copilot-mixed-model", Ordinal: 0,
+			Role: "assistant", Timestamp: "2026-02-08T10:00:00Z",
+			Model:      "gpt-5.3-codex",
+			TokenUsage: nil,
+		},
+		Message{
+			SessionID: "copilot-mixed-model", Ordinal: 1,
+			Role: "assistant", Timestamp: "2026-02-10T12:00:00Z",
+			Model:      "claude-sonnet",
+			TokenUsage: nil,
+		},
+	)
+
+	inRangeFilter := UsageFilter{
+		From: "2026-02-10", To: "2026-02-10",
+		Timezone: "UTC", Agent: "copilot",
+	}
+
+	got, err := d.GetUsageMatchingSessionCount(ctx, UsageFilter{
+		From: inRangeFilter.From, To: inRangeFilter.To,
+		Timezone: inRangeFilter.Timezone, Agent: inRangeFilter.Agent,
+		Model: "gpt-5.3-codex",
+	})
+	requireNoError(t, err, "GetUsageMatchingSessionCount with Model")
+	assert.Equal(t, 0, got,
+		"out-of-range message's model must not match the bounded window")
+
+	got, err = d.GetUsageMatchingSessionCount(ctx, UsageFilter{
+		From: inRangeFilter.From, To: inRangeFilter.To,
+		Timezone: inRangeFilter.Timezone, Agent: inRangeFilter.Agent,
+		ExcludeModel: "gpt-5.3-codex",
+	})
+	requireNoError(t, err, "GetUsageMatchingSessionCount with ExcludeModel")
+	assert.Equal(t, 1, got,
+		"in-range message's model is not excluded, so the session must still count")
+}
+
+// TestGetUsageMatchingSessionCount_CountsAssistantMessageWithNoModel
+// guards against gating matching-session eligibility on m.model != ”:
+// some Copilot assistant messages parse before a model name is known, so
+// an assistant message with an empty Model must still count toward the
+// matching-session total when no Model/ExcludeModel filter narrows it.
+func TestGetUsageMatchingSessionCount_CountsAssistantMessageWithNoModel(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "copilot-no-model", "proj-a", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2026-02-10T10:00:00Z")
+		s.EndedAt = new("2026-02-10T10:00:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "copilot-no-model", Ordinal: 0,
+		Role: "assistant", Timestamp: "2026-02-10T10:00:00Z",
+		Model:      "",
+		TokenUsage: nil,
+	})
+
+	got, err := d.GetUsageMatchingSessionCount(ctx, UsageFilter{
+		From: "2026-02-10", To: "2026-02-10",
+		Timezone: "UTC", Agent: "copilot",
+	})
+	requireNoError(t, err, "GetUsageMatchingSessionCount")
+	assert.Equal(t, 1, got,
+		"assistant message with no model must still count without a model filter")
+}
+
 func TestNewUsageSessionCounts(t *testing.T) {
 	counts := NewUsageSessionCounts(map[string]UsageSessionInfo{
 		"s1": {Project: "proj-a", Agent: "claude"},

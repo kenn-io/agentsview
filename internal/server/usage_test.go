@@ -131,6 +131,23 @@ func seedUsageEnv(t *testing.T, te *testEnv) {
 	}
 }
 
+func seedCopilotNoTokenSession(t *testing.T, te *testEnv, id string) {
+	t.Helper()
+	te.seedSession(t, id, "alpha", 1, func(sess *db.Session) {
+		ts := "2024-06-01T09:00:00Z"
+		sess.Agent = "copilot"
+		sess.StartedAt = &ts
+		sess.EndedAt = &ts
+		sess.UserMessageCount = 1
+	})
+	te.seedMessages(t, id, 1, func(_ int, m *db.Message) {
+		m.Role = "assistant"
+		m.Timestamp = "2024-06-01T09:00:00Z"
+		m.Model = "gpt-5.3-codex"
+		m.TokenUsage = nil
+	})
+}
+
 func TestHandleUsageSummaryJSONShape(t *testing.T) {
 	te := setup(t)
 	seedUsageEnv(t, te)
@@ -161,6 +178,44 @@ func TestHandleUsageSummaryJSONShape(t *testing.T) {
 	assert.NotEmpty(t, resp.ProjectTotals)
 	assert.NotEmpty(t, resp.ModelTotals)
 	assert.NotEmpty(t, resp.AgentTotals)
+}
+
+func TestHandleUsageSummaryIncludesUnsupportedCopilotSignal(t *testing.T) {
+	te := setup(t)
+	seedCopilotNoTokenSession(t, te, "copilot-unsupported")
+
+	w := te.get(t, buildPathURL("/api/v1/usage/summary",
+		map[string]string{
+			"from":     "2024-06-01",
+			"to":       "2024-06-01",
+			"timezone": "UTC",
+			"agent":    "copilot",
+		}))
+	assertStatus(t, w, http.StatusOK)
+
+	resp := decode[server.UsageSummaryResponse](t, w)
+	require.NotNil(t, resp.UnsupportedUsage)
+	assert.Equal(t, service.UnsupportedUsageKindCopilotNoTokenData, resp.UnsupportedUsage.Kind)
+	assert.Equal(t, 0, resp.SessionCounts.Total)
+	assert.Equal(t, 0.0, resp.Totals.TotalCost)
+}
+
+func TestHandleUsageSummarySkipsUnsupportedCopilotSignalForMixedFilters(t *testing.T) {
+	te := setup(t)
+	seedCopilotNoTokenSession(t, te, "copilot-unsupported")
+	seedUsageEnv(t, te)
+
+	w := te.get(t, buildPathURL("/api/v1/usage/summary",
+		map[string]string{
+			"from":     "2024-06-01",
+			"to":       "2024-06-02",
+			"timezone": "UTC",
+			"agent":    "copilot,claude",
+		}))
+	assertStatus(t, w, http.StatusOK)
+
+	resp := decode[server.UsageSummaryResponse](t, w)
+	assert.Nil(t, resp.UnsupportedUsage)
 }
 
 func TestHandleUsageSummaryIncludesCursorUsageEvents(t *testing.T) {

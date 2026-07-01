@@ -112,6 +112,15 @@ func (c *usageProbeConn) QueryContext(
 			},
 		}, nil
 	}
+	if strings.Contains(normalized, "coalesce(s.ended_at, s.started_at, s.created_at) as session_activity_at") {
+		ts := time.Date(2024, 6, 15, 10, 0, 0, 0, time.UTC)
+		return &usageProbeRows{
+			columns: []string{"id", "session_activity_at"},
+			values: [][]driver.Value{
+				{"copilot-empty", ts},
+			},
+		}, nil
+	}
 	if strings.Contains(normalized, "from (") &&
 		strings.Contains(normalized, "from messages") {
 		ts := time.Date(2024, 6, 15, 10, 0, 0, 0, time.UTC)
@@ -285,6 +294,74 @@ func TestPGUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {
 	require.Len(t, pb.args, 2)
 	assert.Equal(t, "2024-05-31T10:00:00Z", pb.args[0])
 	assert.Equal(t, "2024-07-01T13:59:59Z", pb.args[1])
+}
+
+// TestPGGetUsageMatchingSessionCountUsesSessionQuery exercises the
+// unbounded (no From/To) code path, which still queries `sessions`
+// directly and relies on the probe mock's
+// "coalesce(s.ended_at, s.started_at, s.created_at) as
+// session_activity_at" branch. Bounded filters now take the
+// timestamped-CTE path (see TestPGMatchingUsageRowsSQLForBoundsRelaxesTokenEligibility
+// for that SQL shape) and are not exercised by this probe-mock test.
+func TestPGGetUsageMatchingSessionCountUsesSessionQuery(t *testing.T) {
+	state := &usageProbeState{}
+	store := &Store{
+		pg: newUsageProbeDB(t, state),
+	}
+
+	count, err := store.GetUsageMatchingSessionCount(context.Background(), db.UsageFilter{
+		Agent: "copilot",
+		Model: "gpt-5.3-codex",
+	})
+	require.NoError(t, err, "GetUsageMatchingSessionCount")
+	assert.Equal(t, 1, count)
+
+	state.mu.Lock()
+	queries := append([]string(nil), state.queries...)
+	state.mu.Unlock()
+	require.NotEmpty(t, queries)
+
+	last := strings.ToLower(queries[len(queries)-1])
+	assert.Contains(t, last, "from sessions s")
+	assert.Contains(t, last, "exists (")
+	assert.Contains(t, last, "from messages m")
+	assert.Contains(t, last, "from usage_events ue")
+	assert.Contains(t, last, "s.agent = ")
+	assert.Contains(t, last, "m.model = ")
+}
+
+// TestPGMatchingUsageRowsSQLForBoundsRelaxesTokenEligibility asserts the
+// bounded matching-session query relaxes token eligibility (no
+// m.token_usage check) and model-presence eligibility (m.role = 'assistant'
+// instead of m.model != ”, since some Copilot assistant messages parse
+// before a model name is known) while filtering Model/ExcludeModel
+// directly on the bounded message/event row, matching the normal bounded
+// path instead of folding in a session-wide model-match EXISTS clause.
+// Mirrors TestPGUsageRowQueryPushesDateBoundsIntoUnion's direct-call style
+// with no live DB and no probe mock.
+func TestPGMatchingUsageRowsSQLForBoundsRelaxesTokenEligibility(t *testing.T) {
+	pb := &paramBuilder{}
+	f := db.UsageFilter{
+		From:  "2024-06-01",
+		To:    "2024-06-30",
+		Model: "gpt-5.3-codex",
+	}
+	bounds := pgUsageBoundsForFilter(pb, f)
+	query := pgMatchingUsageRowsSQLForBounds(pb, f, bounds)
+
+	normalized := strings.ToLower(query)
+	assert.Contains(t, normalized, "message_timestamp_rows as materialized")
+	assert.Contains(t, normalized, "usage_event_timestamp_rows as materialized")
+	assert.Contains(t, normalized, "m.role = 'assistant'")
+	assert.NotContains(t, normalized, "m.model != ''")
+	assert.NotContains(t, normalized, "m.token_usage != ''")
+	// Model is filtered on the bounded row directly, not via a
+	// session-wide EXISTS: each of the four branches (message-timestamp
+	// source, event-timestamp source, message fallback, event fallback)
+	// applies its own m.model/ue.model comparison, no EXISTS subqueries.
+	assert.Equal(t, 0, strings.Count(normalized, "exists ("))
+	assert.Equal(t, 2, strings.Count(normalized, "m.model = "))
+	assert.Equal(t, 2, strings.Count(normalized, "ue.model = "))
 }
 
 func TestPGTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {

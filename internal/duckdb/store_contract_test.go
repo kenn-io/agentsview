@@ -306,6 +306,225 @@ func requireReadOnlyDuck(t *testing.T, err error) {
 	assert.True(t, errors.Is(err, db.ErrReadOnly), "expected ErrReadOnly, got %v", err)
 }
 
+func TestDuckDBGetUsageMatchingSessionCountCountsCopilotSessionsWithoutUsageRows(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	ts := "2024-06-15T10:00:00Z"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: db.Session{
+			ID:               "duck-copilot-empty",
+			Project:          "alpha",
+			Machine:          "test-machine",
+			Agent:            "copilot",
+			StartedAt:        &ts,
+			EndedAt:          &ts,
+			MessageCount:     1,
+			UserMessageCount: 1,
+		},
+		Messages: []db.Message{{
+			SessionID:  "duck-copilot-empty",
+			Ordinal:    0,
+			Role:       "assistant",
+			Timestamp:  ts,
+			Model:      "gpt-5.3-codex",
+			TokenUsage: nil,
+		}},
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err, "seed copilot session")
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	count, err := store.GetUsageMatchingSessionCount(ctx, db.UsageFilter{
+		From:     "2024-06-15",
+		To:       "2024-06-15",
+		Timezone: "UTC",
+		Agent:    "copilot",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+}
+
+func TestDuckDBGetUsageMatchingSessionCountCountsCopilotSessionByMessageTimestampOutsideSessionWindow(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	activityTS := "2026-02-08T10:00:00Z"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+		{
+			Session: db.Session{
+				ID:               "duck-copilot-late-message",
+				Project:          "alpha",
+				Machine:          "test-machine",
+				Agent:            "copilot",
+				StartedAt:        &activityTS,
+				EndedAt:          &activityTS,
+				MessageCount:     1,
+				UserMessageCount: 1,
+			},
+			Messages: []db.Message{{
+				SessionID:  "duck-copilot-late-message",
+				Ordinal:    0,
+				Role:       "assistant",
+				Timestamp:  "2026-02-10T12:00:00Z",
+				Model:      "gpt-5.3-codex",
+				TokenUsage: nil,
+			}},
+			ReplaceMessages: true,
+		},
+		{
+			Session: db.Session{
+				ID:               "duck-copilot-out-of-range",
+				Project:          "alpha",
+				Machine:          "test-machine",
+				Agent:            "copilot",
+				StartedAt:        &activityTS,
+				EndedAt:          &activityTS,
+				MessageCount:     1,
+				UserMessageCount: 1,
+			},
+			Messages: []db.Message{{
+				SessionID:  "duck-copilot-out-of-range",
+				Ordinal:    0,
+				Role:       "assistant",
+				Timestamp:  activityTS,
+				Model:      "gpt-5.3-codex",
+				TokenUsage: nil,
+			}},
+			ReplaceMessages: true,
+		},
+	})
+	require.NoError(t, err, "seed copilot sessions")
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	count, err := store.GetUsageMatchingSessionCount(ctx, db.UsageFilter{
+		From:     "2026-02-10",
+		To:       "2026-02-10",
+		Timezone: "UTC",
+		Agent:    "copilot",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+}
+
+// TestDuckDBGetUsageMatchingSessionCountModelFilterAppliesToBoundedRow
+// guards against the model/exclude-model predicate matching session-wide
+// instead of on the in-range message row: a session with an out-of-range
+// message on the filtered model but an in-range message on a different
+// model must not match a Model filter for the out-of-range model.
+func TestDuckDBGetUsageMatchingSessionCountModelFilterAppliesToBoundedRow(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	startedAt := "2026-02-08T10:00:00Z"
+	endedAt := "2026-02-10T12:00:00Z"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: db.Session{
+			ID:               "duck-copilot-mixed-model",
+			Project:          "alpha",
+			Machine:          "test-machine",
+			Agent:            "copilot",
+			StartedAt:        &startedAt,
+			EndedAt:          &endedAt,
+			MessageCount:     2,
+			UserMessageCount: 1,
+		},
+		Messages: []db.Message{
+			{
+				SessionID:  "duck-copilot-mixed-model",
+				Ordinal:    0,
+				Role:       "assistant",
+				Timestamp:  "2026-02-08T10:00:00Z",
+				Model:      "gpt-5.3-codex",
+				TokenUsage: nil,
+			},
+			{
+				SessionID:  "duck-copilot-mixed-model",
+				Ordinal:    1,
+				Role:       "assistant",
+				Timestamp:  "2026-02-10T12:00:00Z",
+				Model:      "claude-sonnet",
+				TokenUsage: nil,
+			},
+		},
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err, "seed mixed-model copilot session")
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	count, err := store.GetUsageMatchingSessionCount(ctx, db.UsageFilter{
+		From: "2026-02-10", To: "2026-02-10",
+		Timezone: "UTC", Agent: "copilot",
+		Model: "gpt-5.3-codex",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 0, count,
+		"out-of-range message's model must not match the bounded window")
+}
+
+// TestDuckDBGetUsageMatchingSessionCountCountsAssistantMessageWithNoModel
+// guards against gating matching-session eligibility on m.model != ”:
+// some Copilot assistant messages parse before a model name is known, so
+// an assistant message with an empty Model must still count toward the
+// matching-session total when no Model/ExcludeModel filter narrows it.
+func TestDuckDBGetUsageMatchingSessionCountCountsAssistantMessageWithNoModel(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	ts := "2026-02-10T10:00:00Z"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: db.Session{
+			ID:               "duck-copilot-no-model",
+			Project:          "alpha",
+			Machine:          "test-machine",
+			Agent:            "copilot",
+			StartedAt:        &ts,
+			EndedAt:          &ts,
+			MessageCount:     1,
+			UserMessageCount: 1,
+		},
+		Messages: []db.Message{{
+			SessionID:  "duck-copilot-no-model",
+			Ordinal:    0,
+			Role:       "assistant",
+			Timestamp:  ts,
+			Model:      "",
+			TokenUsage: nil,
+		}},
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err, "seed no-model copilot session")
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	count, err := store.GetUsageMatchingSessionCount(ctx, db.UsageFilter{
+		From: "2026-02-10", To: "2026-02-10",
+		Timezone: "UTC", Agent: "copilot",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, count,
+		"assistant message with no model must still count without a model filter")
+}
+
 func duckSessionIDs(sessions []db.Session) []string {
 	ids := make([]string, len(sessions))
 	for i, session := range sessions {

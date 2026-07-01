@@ -54,36 +54,51 @@ type CacheStats struct {
 	SavingsVsUncached   float64 `json:"savingsVsUncached"`
 }
 
+type UnsupportedUsage struct {
+	Kind string `json:"kind"`
+}
+
 // UsageSummaryResponse preserves the public OpenAPI schema for
 // GET /api/v1/usage/summary while the handler delegates assembly to
 // the transport-neutral service layer.
 type UsageSummaryResponse struct {
-	From          string                `json:"from"`
-	To            string                `json:"to"`
-	Totals        db.UsageTotals        `json:"totals"`
-	Daily         []db.DailyUsageEntry  `json:"daily"`
-	ProjectTotals []ProjectTotal        `json:"projectTotals"`
-	ModelTotals   []ModelTotal          `json:"modelTotals"`
-	AgentTotals   []AgentTotal          `json:"agentTotals"`
-	SessionCounts db.UsageSessionCounts `json:"sessionCounts"`
-	CacheStats    CacheStats            `json:"cacheStats"`
-	Comparison    *Comparison           `json:"comparison,omitempty"`
+	From             string                `json:"from"`
+	To               string                `json:"to"`
+	Totals           db.UsageTotals        `json:"totals"`
+	Daily            []db.DailyUsageEntry  `json:"daily"`
+	ProjectTotals    []ProjectTotal        `json:"projectTotals"`
+	ModelTotals      []ModelTotal          `json:"modelTotals"`
+	AgentTotals      []AgentTotal          `json:"agentTotals"`
+	SessionCounts    db.UsageSessionCounts `json:"sessionCounts"`
+	CacheStats       CacheStats            `json:"cacheStats"`
+	UnsupportedUsage *UnsupportedUsage     `json:"unsupportedUsage,omitempty"`
+	Comparison       *Comparison           `json:"comparison,omitempty"`
 }
 
 func usageSummaryResponseFromService(
 	res *service.UsageSummaryResult,
 ) UsageSummaryResponse {
 	return UsageSummaryResponse{
-		From:          res.From,
-		To:            res.To,
-		Totals:        res.Totals,
-		Daily:         res.Daily,
-		ProjectTotals: projectTotalsFromService(res.ProjectTotals),
-		ModelTotals:   modelTotalsFromService(res.ModelTotals),
-		AgentTotals:   agentTotalsFromService(res.AgentTotals),
-		SessionCounts: res.SessionCounts,
-		CacheStats:    cacheStatsFromService(res.CacheStats),
+		From:             res.From,
+		To:               res.To,
+		Totals:           res.Totals,
+		Daily:            res.Daily,
+		ProjectTotals:    projectTotalsFromService(res.ProjectTotals),
+		ModelTotals:      modelTotalsFromService(res.ModelTotals),
+		AgentTotals:      agentTotalsFromService(res.AgentTotals),
+		SessionCounts:    res.SessionCounts,
+		CacheStats:       cacheStatsFromService(res.CacheStats),
+		UnsupportedUsage: unsupportedUsageFromService(res.UnsupportedUsage),
 	}
+}
+
+func unsupportedUsageFromService(
+	in *service.UnsupportedUsage,
+) *UnsupportedUsage {
+	if in == nil {
+		return nil
+	}
+	return &UnsupportedUsage{Kind: in.Kind}
 }
 
 func projectTotalsFromService(in []service.ProjectTotal) []ProjectTotal {
