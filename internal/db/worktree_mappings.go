@@ -549,6 +549,7 @@ func applyWorktreeMappingMatchCwdFromSiblings(
 		project string
 	}
 	candidatesBySibling := map[string][]siblingCandidate{}
+	unresolvedBySibling := map[string]bool{}
 	for _, row := range rows {
 		key := siblingKey(row)
 		if key == "" || row.cwd == "" {
@@ -556,6 +557,7 @@ func applyWorktreeMappingMatchCwdFromSiblings(
 		}
 		project, ok := resolveProject(row, row.cwd)
 		if !ok {
+			unresolvedBySibling[key] = true
 			continue
 		}
 		candidates := candidatesBySibling[key]
@@ -573,11 +575,12 @@ func applyWorktreeMappingMatchCwdFromSiblings(
 		}
 	}
 
-	// Only fall back when every non-empty sibling resolves to the same
-	// project; conflicting siblings mean the fallback would be a guess.
+	// Only fall back when every non-empty sibling resolves to a mapping and
+	// all of them agree on the same project; an unmapped sibling or
+	// conflicting projects mean the fallback would be a guess.
 	fallbackBySibling := map[string]string{}
 	for key, candidates := range candidatesBySibling {
-		if len(candidates) == 1 {
+		if len(candidates) == 1 && !unresolvedBySibling[key] {
 			fallbackBySibling[key] = candidates[0].cwd
 		}
 	}
