@@ -11,6 +11,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1095,77 +1096,55 @@ func TestParseDiffShelleyDBErrorAttributed(t *testing.T) {
 func TestParseDiffKiroSQLitePerSessionError(t *testing.T) {
 	t.Parallel()
 
-	t.Run("stored session turned malformed", func(t *testing.T) {
-		t.Parallel()
-		env := setupSingleAgentTestEnv(t, parser.AgentKiro)
-		ks := createKiroSQLiteDB(t, env.kiroDir)
-		ks.addSession(
-			t, "/home/user/code/kiro-app", "sqlite-session",
-			readKiroSQLiteFixture(t, "standard_payload.json"),
-			1779012000000, 1779012030000,
-		)
-		runSyncAndAssert(t, env.engine, sync.SyncStats{
-			TotalSessions: 1, Synced: 1,
-		})
-
-		ks.updateSession(t, "sqlite-session", "{corrupt", 1779012060000)
-
-		report := runParseDiff(t, env, sync.ParseDiffOptions{
-			Agents: []parser.AgentType{parser.AgentKiro},
-		})
-		assert.Equal(t, sync.ParseDiffTotals{
-			ParseErrors: 1,
-		}, report.Totals,
-			"a malformed stored session is a parse error, not presence drift")
-		assert.Empty(t, report.FieldCounts,
-			"no presence diff for a session that failed to parse")
-
-		sd := findSessionDiff(report, "kiro:sqlite-session")
-		require.NotNil(t, sd, "stored session must be attributed by ID")
-		assert.Equal(t, sync.DiffParseError, sd.Class, "class")
-		assert.Contains(t, sd.Reason, "malformed payload", "reason")
-		assert.True(t, report.HasFailures(),
-			"per-session parse errors must trip --fail-on-change")
+	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
+	ks := createKiroSQLiteDB(t, env.kiroDir)
+	standard := readKiroSQLiteFixture(t, "standard_payload.json")
+	ks.addSession(
+		t, "/home/user/code/kiro-app", "sqlite-session",
+		standard, 1779012000000, 1779012030000,
+	)
+	ks.addSession(
+		t, "/home/user/code/kiro-app", "good-session",
+		standard, 1779012100000, 1779012130000,
+	)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 2, Synced: 2,
 	})
 
-	t.Run("unstored malformed session still reported", func(t *testing.T) {
-		t.Parallel()
-		env := setupSingleAgentTestEnv(t, parser.AgentKiro)
-		ks := createKiroSQLiteDB(t, env.kiroDir)
-		ks.addSession(
-			t, "/home/user/code/kiro-app", "good-session",
-			readKiroSQLiteFixture(t, "standard_payload.json"),
-			1779012000000, 1779012030000,
-		)
-		runSyncAndAssert(t, env.engine, sync.SyncStats{
-			TotalSessions: 1, Synced: 1,
-		})
+	ks.updateSession(t, "sqlite-session", "{corrupt", 1779012060000)
+	// Never synced: written to the store after the sync.
+	ks.addSession(
+		t, "/home/user/code/kiro-app", "bad-session",
+		"{corrupt", 1779012040000, 1779012050000,
+	)
 
-		// Never synced: written to the store after the sync.
-		ks.addSession(
-			t, "/home/user/code/kiro-app", "bad-session",
-			"{corrupt", 1779012040000, 1779012050000,
-		)
+	report := runParseDiff(t, env, sync.ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentKiro},
+	})
+	assert.Equal(t, sync.ParseDiffTotals{
+		Examined: 1, Identical: 1, ParseErrors: 2,
+	}, report.Totals,
+		"good session compared; both malformed sessions are parse errors")
+	assert.Empty(t, report.FieldCounts,
+		"no presence diff for sessions that failed to parse")
 
-		report := runParseDiff(t, env, sync.ParseDiffOptions{
-			Agents: []parser.AgentType{parser.AgentKiro},
-		})
-		assert.Equal(t, sync.ParseDiffTotals{
-			Examined: 1, Identical: 1, ParseErrors: 1,
-		}, report.Totals,
-			"good session compared; bad session is a parse error")
+	stored := findSessionDiff(report, "kiro:sqlite-session")
+	require.NotNil(t, stored, "stored session must be attributed by ID")
+	assert.Equal(t, sync.DiffParseError, stored.Class, "stored class")
+	assert.Contains(t, stored.Reason, "malformed payload", "stored reason")
 
-		var errEntry *sync.SessionDiff
-		for i := range report.Sessions {
-			if report.Sessions[i].Class == sync.DiffParseError {
-				errEntry = &report.Sessions[i]
-			}
+	var unstored *sync.SessionDiff
+	for i := range report.Sessions {
+		if report.Sessions[i].Class == sync.DiffParseError &&
+			strings.Contains(report.Sessions[i].FilePath, "bad-session") {
+			unstored = &report.Sessions[i]
 		}
-		require.NotNil(t, errEntry, "parse error entry listed")
-		assert.Contains(t, errEntry.FilePath, "data.sqlite3#bad-session",
-			"error attributed to the per-session virtual path")
-		assert.True(t, report.HasFailures(), "HasFailures")
-	})
+	}
+	require.NotNil(t, unstored, "unstored parse error entry listed")
+	assert.Contains(t, unstored.FilePath, "data.sqlite3#bad-session",
+		"error attributed to the per-session virtual path")
+	assert.True(t, report.HasFailures(),
+		"per-session parse errors must trip --fail-on-change")
 }
 
 // TestParseDiffKiloSQLitePerSessionError proves a malformed session
