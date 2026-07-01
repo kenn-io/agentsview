@@ -716,8 +716,6 @@ func TestParseTimestamp(t *testing.T) {
 }
 
 func TestClaudeSessionTimestampSemantics(t *testing.T) {
-	t.Parallel()
-
 	t.Run("snapshot.timestamp fallback", func(t *testing.T) {
 		content := testjsonl.ClaudeSnapshotJSON("2024-06-15T12:00:00Z")
 		sess, msgs := parseClaudeTestFile(

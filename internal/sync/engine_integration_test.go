@@ -197,6 +197,34 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 	return env
 }
 
+func setupSingleAgentTestEnv(t *testing.T, agent parser.AgentType) *testEnv {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	dir := t.TempDir()
+	env := &testEnv{db: dbtest.OpenTestDB(t)}
+	switch agent {
+	case parser.AgentOpenCode:
+		env.opencodeDir = dir
+	case parser.AgentKilo:
+		env.kiloDir = dir
+	case parser.AgentKiro:
+		env.kiroDir = dir
+	default:
+		t.Fatalf("unsupported single-agent test fixture for %s", agent)
+	}
+
+	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			agent: {dir},
+		},
+		Machine: "local",
+	})
+	return env
+}
+
 func TestSyncEngineKiroSQLiteCurrentStore(t *testing.T) {
 	env := setupTestEnv(t)
 	ks := createKiroSQLiteDB(t, env.kiroDir)
@@ -4841,7 +4869,7 @@ func TestKiloPreservesStorageArchiveAgainstSQLiteFallback(t *testing.T) {
 func TestResyncAllAllowsKiloSQLiteOnlySessions(t *testing.T) {
 	t.Parallel()
 
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentKilo)
 	sqlite := createKiloDB(t, env.kiloDir)
 	sqlite.addProject(t, "proj-1", "/home/user/code/kilo-app")
 	sqlite.addSession(
@@ -6656,7 +6684,7 @@ func TestResyncAllAbortsOnEmptyDiscovery(t *testing.T) {
 func TestResyncAllOpenCodeOnly(t *testing.T) {
 	t.Parallel()
 
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 
 	oc := createOpenCodeDB(t, env.opencodeDir)
 	oc.addProject(t, "proj-1", "/home/user/code/myapp")
@@ -6712,7 +6740,7 @@ func TestResyncAllOpenCodeOnly(t *testing.T) {
 func TestResyncAllKiroSQLiteOnly(t *testing.T) {
 	t.Parallel()
 
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
 	ks := createKiroSQLiteDB(t, env.kiroDir)
 	ks.addSession(
 		t, "/home/user/code/kiro-app", "kiro-resync-only",
@@ -6786,7 +6814,7 @@ func TestResyncAllOpenCodeStorageArchivePreservesStaleSQLiteFallback(
 	t *testing.T,
 ) {
 	t.Parallel()
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
 
 	sessionID := "oc-storage-to-sqlite"
@@ -6847,7 +6875,7 @@ func TestResyncAllKiloStorageArchivePreservesStaleSQLiteFallback(
 ) {
 	t.Parallel()
 
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentKilo)
 	storage := createOpenCodeStorageFixture(t, env.kiloDir)
 
 	sessionID := "kilo-storage-to-sqlite"
@@ -6909,7 +6937,7 @@ func TestResyncAllOpenCodeStorageArchiveAllowsNewerSQLiteFallback(
 ) {
 	t.Parallel()
 
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
 
 	sessionID := "oc-storage-to-newer-sqlite"
@@ -6971,7 +6999,7 @@ func TestResyncAllOpenCodeStorageMissingMessagePreservesArchive(
 	t *testing.T,
 ) {
 	t.Parallel()
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
 	sessionID := "oc-resync-missing-message"
