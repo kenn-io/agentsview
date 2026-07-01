@@ -606,15 +606,11 @@ func TestSessionList_PGFlagUsesPGReadStore(t *testing.T) {
 
 func TestSessionList_ConfiguredPGWithoutFlagUsesSQLite(t *testing.T) {
 	localDir := newAgentDataDir(t)
-	remoteDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_PG_URL", "postgres://example.test/from-env")
 
 	seedSession(t, localDir, "local-session", "local")
-	seedSessionArchiveRows(t, remoteDir,
-		sessionSeed{id: "pg-session", project: "remote"})
 
-	remoteDB := dbtest.OpenTestDBAt(t, sessionsDBPath(remoteDir))
-	stub := stubPGReadStore(t, remoteDB)
+	forbidPGReadStore(t)
 
 	out, err := executeCommand(newRootCommand(),
 		"session", "list", "--format", "json")
@@ -624,7 +620,6 @@ func TestSessionList_ConfiguredPGWithoutFlagUsesSQLite(t *testing.T) {
 	assert.Equal(t, 1, got.Total)
 	require.Len(t, got.Sessions, 1)
 	assert.Equal(t, "local-session", got.Sessions[0]["id"])
-	assert.Empty(t, stub.PG.URL, "configured PG sync URL must not select PG reads")
 }
 
 func TestSessionList_PGFlagRequiresURL(t *testing.T) {
@@ -1297,17 +1292,13 @@ func TestSessionUsage_ConfiguredPGWithoutFlagUsesSQLite(t *testing.T) {
 	localDB := dbtest.OpenTestDBAt(t, sessionsDBPath(dataDir))
 	seedUsageSession(t, localDB, "local-session", "local-project", "codex", 24)
 
-	pgDB := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "pg.db"))
-	seedUsageSession(t, pgDB, "pg-session", "pg-project", "codex", 42)
-
-	stub := stubPGReadStore(t, pgDB)
+	forbidPGReadStore(t)
 
 	cmd := sessionUsageCommand(t, "session", "usage", "local-session")
 
 	out, code, err := sessionUsageDataForCommand(cmd, "local-session")
 	require.NoError(t, err)
 	require.NotNil(t, out)
-	assert.False(t, stub.Opened, "configured PG sync URL must not select PG reads")
 	assert.Equal(t, tokenUseExitOK, code)
 	assert.Equal(t, "local-session", out.SessionID)
 	assert.Equal(t, "local-project", out.Project)
