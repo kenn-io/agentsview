@@ -4782,6 +4782,8 @@ func TestSyncPathsMiMoCodeStorageIgnoresStaleSessionSkipCache(t *testing.T) {
 }
 
 func TestKiloPreservesStorageArchiveAgainstSQLiteFallback(t *testing.T) {
+	t.Parallel()
+
 	env := setupTestEnv(t)
 	storage := createOpenCodeStorageFixture(t, env.kiloDir)
 	const sessionID = "kilo-hybrid-preserve"
@@ -4868,6 +4870,8 @@ func TestResyncAllAllowsKiloSQLiteOnlySessions(t *testing.T) {
 }
 
 func TestSyncAllSinceOpenCodeStoragePicksUpUsagePartUpdate(t *testing.T) {
+	t.Parallel()
+
 	env := setupTestEnv(t)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
@@ -4946,6 +4950,8 @@ func TestSyncAllSinceOpenCodeStoragePicksUpUsagePartUpdate(t *testing.T) {
 // the provider facade rather than taking the legacy DB-mtime skip; the
 // re-parse must be idempotent and keep the same content.
 func TestSyncAllOpenCodeStorageReparsesUnchangedSessionsIdempotently(t *testing.T) {
+	t.Parallel()
+
 	env := setupTestEnv(t)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
@@ -4978,6 +4984,8 @@ func TestSyncAllOpenCodeStorageReparsesUnchangedSessionsIdempotently(t *testing.
 }
 
 func TestSyncAllOpenCodeStorageMissingMessagePreservesArchive(t *testing.T) {
+	t.Parallel()
+
 	env := setupTestEnv(t)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
@@ -5024,6 +5032,8 @@ func TestSyncAllOpenCodeStorageMissingMessagePreservesArchive(t *testing.T) {
 func TestSyncAllOpenCodeStoragePreservesLegacySQLiteArchive(
 	t *testing.T,
 ) {
+	t.Parallel()
+
 	env := setupTestEnv(t)
 	sqlite := createOpenCodeDB(t, env.opencodeDir)
 	sqlite.addProject(t, "proj-1", "/home/user/code/myapp")
@@ -5082,6 +5092,8 @@ func TestSyncAllOpenCodeStoragePreservesLegacySQLiteArchive(
 }
 
 func TestSyncAllOpenCodeStorageMissingPartDirPreservesArchive(t *testing.T) {
+	t.Parallel()
+
 	env := setupTestEnv(t)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
@@ -5130,6 +5142,8 @@ func TestSyncAllOpenCodeStorageMissingPartDirPreservesArchive(t *testing.T) {
 func TestSyncSingleSessionOpenCodeStorageMissingMessagePreservesArchive(
 	t *testing.T,
 ) {
+	t.Parallel()
+
 	env := setupTestEnv(t)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
