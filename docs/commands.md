@@ -553,7 +553,9 @@ agentsview duckdb quack serve   # expose the mirror over Quack
 `--all-projects` / `--watch` / `--debounce` / `--interval` flags as `pg push`.
 With `[duckdb].url` or `AGENTSVIEW_DUCKDB_URL`, `duckdb push`, `duckdb status`,
 and `duckdb serve` target the remote Quack endpoint; otherwise they use the
-local mirror file. `duckdb serve` accepts the same serve flags as `pg serve`.
+local mirror file. When `[duckdb].path` or `AGENTSVIEW_DUCKDB_PATH` is set,
+`duckdb quack serve` exposes that same mirror by default unless `--path`
+overrides it. `duckdb serve` accepts the same serve flags as `pg serve`.
 The DuckDB backend is unavailable on Windows ARM64 (the upstream bindings ship
 no prebuilt library for that platform); all other commands work normally there.
 

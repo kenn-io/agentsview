@@ -38,6 +38,7 @@ A local-first desktop and web app for browsing, searching, and analyzing your pa
 
 <div class="agent-grid">
   <a class="agent-chip" data-agent="claude-code" href="https://www.anthropic.com/claude-code" target="_blank" rel="noopener"><span class="agent-chip__glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-claude"/></svg></span><span class="agent-chip__name">Claude Code</span></a>
+  <a class="agent-chip" data-agent="openclaude" href="/configuration/#session-discovery"><span class="agent-chip__glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-claude"/></svg></span><span class="agent-chip__name">OpenClaude</span></a>
   <a class="agent-chip" data-agent="codex" href="https://openai.com/codex/" target="_blank" rel="noopener"><span class="agent-chip__glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-openai"/></svg></span><span class="agent-chip__name">Codex</span></a>
   <a class="agent-chip" data-agent="gemini" href="https://github.com/google-gemini/gemini-cli" target="_blank" rel="noopener"><span class="agent-chip__glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-gemini"/></svg></span><span class="agent-chip__name">Gemini</span></a>
   <a class="agent-chip" data-agent="copilot" href="https://github.com/features/copilot" target="_blank" rel="noopener"><span class="agent-chip__glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-copilot"/></svg></span><span class="agent-chip__name">Copilot</span></a>
@@ -242,8 +243,8 @@ to a shared database for team or multi-machine setups.
 -   **Multi-Agent Support**
 
     Works with [dozens of AI coding session sources](/configuration/#session-discovery)
-    including Claude Code, Codex, Copilot, Cursor, Gemini,
-    OpenHands, Aider, Claude Cowork, DeepSeek TUI, gptme,
+    including Claude Code, OpenClaude, Codex, Copilot, Cursor,
+    Gemini, OpenHands, Aider, Claude Cowork, DeepSeek TUI, gptme,
     Kilo, MiMoCode, Mistral Vibe, OhMyPi, QwenPaw, Reasonix,
     Shelley, and Visual Studio Copilot. Auto-discovers session
     directories so there's nothing to configure.

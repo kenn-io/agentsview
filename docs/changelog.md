@@ -3,6 +3,47 @@ title: Changelog
 description: Release history for AgentsView
 ---
 
+## 0.35.1
+<small>2026-06-30</small>
+
+**New features**
+
+- Add **OpenClaude session support** so AgentsView can discover, import, and
+  display OpenClaude JSONL sessions alongside Claude Code and other local
+  agents.
+- Add **Copilot CLI usage guidance** for records that include aggregate usage
+  metadata but do not include per-message token counts.
+
+**Improvements**
+
+- Reuse the configured **DuckDB mirror path** for Quack sync so `duckdb push`,
+  `duckdb status`, `duckdb serve`, and `duckdb quack serve` stay pointed at the
+  same mirror by default.
+- Improve **DuckDB and Quack sync behavior and coverage**.
+
+**Bug fixes**
+
+- Require **daemon transport** for CLI read commands that depend on
+  daemon-backed data.
+- Surface **desktop backend startup failures** clearly instead of hiding the
+  underlying error.
+- Validate **desktop updater signatures** before applying updates.
+
+**Acknowledgements**
+
+- Thanks to [Rod Boev](https://github.com/rodboev) for OpenClaude session
+  support.
+- Thanks to [Matthew Jacobs](https://github.com/mjacobs) for Copilot CLI usage
+  guidance when usage records do not include per-message token counts.
+- Thanks to [Phillip Cloud](https://github.com/cpcloud) for reusing the
+  configured DuckDB path for Quack sync and improving DuckDB/Quack coverage.
+- Thanks to [Marius van Niekerk](https://github.com/mariusvniekerk) for the
+  daemon-transport requirement on CLI read commands.
+- Thanks to [Wes McKinney](https://github.com/wesm) for desktop backend error
+  surfacing, desktop updater signature validation, and release documentation.
+
+---
+
 ## 0.35.0
 <small>2026-06-29</small>
 

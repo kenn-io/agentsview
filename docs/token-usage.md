@@ -350,6 +350,14 @@ dotted version numbers, so the parser normalizes names such as
 Upgrading to 0.32.0 bumps the parser data version so existing
 Copilot CLI sessions are re-indexed with the new usage rows.
 
+Some Copilot CLI records include `session.shutdown.modelMetrics`
+totals but omit per-message `assistant.message.outputTokens`.
+AgentsView can still use the aggregate model totals where they are
+complete, but it cannot reconstruct per-message output-token rows
+from those records. As of 0.35.1, the CLI reports that limitation
+directly instead of implying that the session has no usage data at
+all.
+
 ### VS Code Copilot Token Metrics
 
 As of 0.34.0, VS Code Copilot chat sessions also contribute when

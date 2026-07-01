@@ -51,6 +51,12 @@ With `--watch`, AgentsView performs one initial sync and DuckDB push, then keeps
 running until interrupted. Shutdown via `Ctrl+C` or `SIGTERM` cancels the
 watcher cleanly.
 
+When `[duckdb].path` or `AGENTSVIEW_DUCKDB_PATH` is configured, all local
+DuckDB commands use that same mirror file by default, including
+`duckdb quack serve`. Use `duckdb quack serve --path ...` only when you want to
+expose a different mirror than the one used by `duckdb push`, `duckdb status`,
+and `duckdb serve`.
+
 `duckdb serve` accepts the same serve flags as
 [`pg serve`](/pg-sync/#agentsview-pg-serve) (`--host`, `--port`, `--base-path`,
 proxy and TLS flags) and is read-only in the same way — no uploads, file
