@@ -474,6 +474,17 @@ func (te *testEnv) seedMessages(
 	t *testing.T, sessionID string, count int, mods ...func(i int, m *db.Message),
 ) {
 	t.Helper()
+	msgs := buildTestMessages(sessionID, count, mods...)
+	if err := te.db.ReplaceSessionMessages(
+		sessionID, msgs,
+	); err != nil {
+		t.Fatalf("seeding messages: %v", err)
+	}
+}
+
+func buildTestMessages(
+	sessionID string, count int, mods ...func(i int, m *db.Message),
+) []db.Message {
 	msgs := make([]db.Message, count)
 	for i := range count {
 		role := "user"
@@ -492,11 +503,7 @@ func (te *testEnv) seedMessages(
 			mod(i, &msgs[i])
 		}
 	}
-	if err := te.db.ReplaceSessionMessages(
-		sessionID, msgs,
-	); err != nil {
-		t.Fatalf("seeding messages: %v", err)
-	}
+	return msgs
 }
 
 // requireFTS skips the test when the database lacks FTS5 support.

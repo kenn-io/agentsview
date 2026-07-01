@@ -51,6 +51,7 @@ func seedAnalyticsEnv(t *testing.T, te *testEnv) seedStats {
 	projects := make(map[string]bool)
 	agents := make(map[string]bool)
 	days := make(map[string]bool)
+	writes := make([]db.SessionBatchWrite, 0, len(entries))
 
 	for _, s := range entries {
 		projects[s.project] = true
@@ -61,15 +62,7 @@ func seedAnalyticsEnv(t *testing.T, te *testEnv) seedStats {
 
 		stats.TotalMessages += s.msgs
 		started := s.started
-		te.seedSession(t, s.id, s.project, s.msgs,
-			func(sess *db.Session) {
-				sess.Agent = s.agent
-				sess.StartedAt = &started
-				sess.EndedAt = &started
-				sess.FirstMessage = new("Hello")
-			},
-		)
-		te.seedMessages(t, s.id, s.msgs,
+		msgs := buildTestMessages(s.id, s.msgs,
 			func(i int, m *db.Message) {
 				// Skill analytics now buckets and filters by message
 				// timestamp, so align messages with the session window.
@@ -91,7 +84,25 @@ func seedAnalyticsEnv(t *testing.T, te *testEnv) seedStats {
 				}
 			},
 		)
+		writes = append(writes, db.SessionBatchWrite{
+			Session: db.Session{
+				ID:               s.id,
+				Project:          s.project,
+				Machine:          "test",
+				Agent:            s.agent,
+				MessageCount:     s.msgs,
+				UserMessageCount: max(s.msgs, 2),
+				StartedAt:        &started,
+				EndedAt:          &started,
+				FirstMessage:     new("Hello"),
+			},
+			Messages: msgs,
+		})
 	}
+	result, err := te.db.WriteSessionBatchAtomic(writes)
+	require.NoError(t, err)
+	require.Equal(t, len(entries), result.WrittenSessions)
+	require.Equal(t, stats.TotalMessages, result.WrittenMessages)
 
 	stats.ActiveProjects = len(projects)
 	stats.Agents = len(agents)
@@ -126,20 +137,27 @@ func seedAnalyticsTokenEnv(t *testing.T, te *testEnv) seedStats {
 	}
 
 	var stats seedStats
+	writes := make([]db.SessionBatchWrite, 0, len(entries))
 	for _, s := range entries {
 		stats.TotalSessions++
 		stats.TotalMessages += s.msgs
-		te.seedSession(t, s.id, s.project, s.msgs,
-			func(sess *db.Session) {
-				sess.Agent = s.agent
-				sess.StartedAt = &s.started
-				sess.EndedAt = &s.started
-				sess.FirstMessage = new("Token seeded")
-				sess.TotalOutputTokens = s.outputTokens
-				sess.HasTotalOutputTokens = s.hasTokens
+		started := s.started
+		writes = append(writes, db.SessionBatchWrite{
+			Session: db.Session{
+				ID:                   s.id,
+				Project:              s.project,
+				Machine:              "test",
+				Agent:                s.agent,
+				MessageCount:         s.msgs,
+				UserMessageCount:     max(s.msgs, 2),
+				StartedAt:            &started,
+				EndedAt:              &started,
+				FirstMessage:         new("Token seeded"),
+				TotalOutputTokens:    s.outputTokens,
+				HasTotalOutputTokens: s.hasTokens,
 			},
-		)
-		te.seedMessages(t, s.id, s.msgs)
+			Messages: buildTestMessages(s.id, s.msgs),
+		})
 		if s.hasTokens {
 			stats.TotalOutputTokens += s.outputTokens
 			stats.TokenReportingSessions++
@@ -148,6 +166,10 @@ func seedAnalyticsTokenEnv(t *testing.T, te *testEnv) seedStats {
 			}
 		}
 	}
+	result, err := te.db.WriteSessionBatchAtomic(writes)
+	require.NoError(t, err)
+	require.Equal(t, stats.TotalSessions, result.WrittenSessions)
+	require.Equal(t, stats.TotalMessages, result.WrittenMessages)
 
 	return stats
 }
