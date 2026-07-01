@@ -277,131 +277,96 @@ func assignFocusedAgentDir(
 	}
 }
 
-func TestSyncEngineKiroSQLiteCurrentStore(t *testing.T) {
+func TestSyncEngineKiroSQLiteUpdatePaths(t *testing.T) {
 	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
 	ks := createKiroSQLiteDB(t, env.kiroDir)
-	ks.addSession(
-		t, "/home/user/code/kiro-app", "sqlite-session",
-		readKiroSQLiteFixture(t, "standard_payload.json"),
-		1779012000000, 1779012030000,
+
+	const (
+		createdAt = int64(1779012000000)
+		updatedAt = int64(1779012030000)
 	)
+	standardPayload := readKiroSQLiteFixture(t, "standard_payload.json")
+	overlapPayload := readKiroSQLiteFixture(t, "overlap_payload.json")
+	malformedPayload := readKiroSQLiteFixture(t, "malformed_payload.txt")
+
+	for _, id := range []string{
+		"full-sync-session",
+		"physical-path-session",
+		"virtual-path-session",
+		"malformed-session",
+	} {
+		ks.addSession(
+			t, "/home/user/code/kiro-app", id,
+			standardPayload, createdAt, updatedAt,
+		)
+	}
 
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 1, Synced: 1, Skipped: 0,
+		TotalSessions: 4, Synced: 4, Skipped: 0,
 	})
-	assertSessionProject(t, env.db, "kiro:sqlite-session", "kiro_app")
-	assertSessionMessageCount(t, env.db, "kiro:sqlite-session", 4)
-	source := env.engine.FindSourceFile("kiro:sqlite-session")
-	want := filepath.Join(env.kiroDir, "data.sqlite3") + "#sqlite-session"
+	assertSessionProject(t, env.db, "kiro:full-sync-session", "kiro_app")
+	assertSessionMessageCount(t, env.db, "kiro:full-sync-session", 4)
+	source := env.engine.FindSourceFile("kiro:full-sync-session")
+	want := filepath.Join(env.kiroDir, "data.sqlite3") + "#full-sync-session"
 	require.Equal(t, want, source)
-	got, wantMtime := env.engine.SourceMtime("kiro:sqlite-session"), int64(1779012030000)*1_000_000
+	got, wantMtime := env.engine.SourceMtime("kiro:full-sync-session"), updatedAt*1_000_000
 	require.Equal(t, wantMtime, got)
-
-	ks.updateSession(
-		t, "sqlite-session",
-		readKiroSQLiteFixture(t, "overlap_payload.json"),
-		1779015610000,
+	assertMessageContent(t, env.db, "kiro:physical-path-session",
+		"Build the Kiro parser",
+		"I can do that.",
+		"Read the source first",
+		"[Other: execute_bash]",
 	)
-	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 1, Synced: 1, Skipped: 0,
-	})
-	assertSessionMessageCount(t, env.db, "kiro:sqlite-session", 2)
-}
-
-func TestSyncEngineKiroSQLiteUnchangedRowSkippedOnResync(t *testing.T) {
-	t.Parallel()
-	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
-	ks := createKiroSQLiteDB(t, env.kiroDir)
-	ks.addSession(
-		t, "/home/user/code/kiro-app", "sqlite-session",
-		readKiroSQLiteFixture(t, "standard_payload.json"),
-		1779012000000, 1779012030000,
+	assertMessageContent(t, env.db, "kiro:virtual-path-session",
+		"Build the Kiro parser",
+		"I can do that.",
+		"Read the source first",
+		"[Other: execute_bash]",
 	)
-
-	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 1, Synced: 1, Skipped: 0,
-	})
 
 	// A second full sync with the Kiro DB unchanged must not rewrite the row
-	// (Synced stays 0). Kiro fans data.sqlite3 out to one session per row, so
-	// without Kiro in the unchanged-result filter the row is reparsed and
-	// rewritten on every sync (Synced would be 1).
+	// (Synced stays 0). After the initial fan-out, unchanged Kiro SQLite
+	// sources are accounted as the single provider DB path.
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
 		TotalSessions: 1, Synced: 0, Skipped: 0,
 	})
-}
 
-func TestSyncEngineKiroSQLiteWatchReplacesMessages(t *testing.T) {
-	t.Parallel()
-	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
-	ks := createKiroSQLiteDB(t, env.kiroDir)
-	ks.addSession(
-		t, "/home/user/code/kiro-app", "sqlite-session",
-		readKiroSQLiteFixture(t, "standard_payload.json"),
-		1779012000000, 1779012030000,
-	)
-
+	ks.updateSession(t, "full-sync-session", overlapPayload, 1779015610000)
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
 		TotalSessions: 1, Synced: 1, Skipped: 0,
 	})
-	assertSessionMessageCount(t, env.db, "kiro:sqlite-session", 4)
-	assertMessageContent(t, env.db, "kiro:sqlite-session",
-		"Build the Kiro parser",
-		"I can do that.",
-		"Read the source first",
-		"[Other: execute_bash]",
-	)
+	assertSessionMessageCount(t, env.db, "kiro:full-sync-session", 2)
 
-	ks.updateSession(
-		t, "sqlite-session",
-		readKiroSQLiteFixture(t, "overlap_payload.json"),
-		1779015610000,
-	)
+	ks.updateSession(t, "physical-path-session", overlapPayload, 1779015620000)
 	env.engine.SyncPaths([]string{ks.path})
 
-	assertSessionMessageCount(t, env.db, "kiro:sqlite-session", 2)
-	assertMessageContent(t, env.db, "kiro:sqlite-session",
+	assertSessionMessageCount(t, env.db, "kiro:physical-path-session", 2)
+	assertMessageContent(t, env.db, "kiro:physical-path-session",
 		"Current store should win",
 		"Using the SQLite version.",
 	)
-}
 
-func TestSyncEngineKiroSQLiteVirtualPathReplacesMessages(t *testing.T) {
-	t.Parallel()
-	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
-	ks := createKiroSQLiteDB(t, env.kiroDir)
-	ks.addSession(
-		t, "/home/user/code/kiro-app", "sqlite-session",
-		readKiroSQLiteFixture(t, "standard_payload.json"),
-		1779012000000, 1779012030000,
-	)
-
-	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 1, Synced: 1, Skipped: 0,
-	})
-	assertSessionMessageCount(t, env.db, "kiro:sqlite-session", 4)
-	assertMessageContent(t, env.db, "kiro:sqlite-session",
-		"Build the Kiro parser",
-		"I can do that.",
-		"Read the source first",
-		"[Other: execute_bash]",
-	)
-
-	ks.updateSession(
-		t, "sqlite-session",
-		readKiroSQLiteFixture(t, "overlap_payload.json"),
-		1779015610000,
-	)
+	ks.updateSession(t, "virtual-path-session", overlapPayload, 1779015630000)
 	env.engine.SyncPaths([]string{
-		parser.KiroSQLiteVirtualPath(ks.path, "sqlite-session"),
+		parser.KiroSQLiteVirtualPath(ks.path, "virtual-path-session"),
 	})
 
-	assertSessionMessageCount(t, env.db, "kiro:sqlite-session", 2)
-	assertMessageContent(t, env.db, "kiro:sqlite-session",
+	assertSessionMessageCount(t, env.db, "kiro:virtual-path-session", 2)
+	assertMessageContent(t, env.db, "kiro:virtual-path-session",
 		"Current store should win",
 		"Using the SQLite version.",
 	)
+
+	ks.updateSession(t, "malformed-session", malformedPayload, 1779015640000)
+	// Kiro is provider-authoritative: the database is rediscovered and
+	// re-parsed (TotalSessions counts the source), but the malformed payload
+	// yields no parseable session, so nothing is written and the previously
+	// archived session is preserved.
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 0, Skipped: 0,
+	})
+	assertSessionMessageCount(t, env.db, "kiro:malformed-session", 4)
 }
 
 func TestSyncEngineKiroSQLiteCurrentStoreShadowsLegacy(t *testing.T) {
@@ -488,34 +453,6 @@ func TestSyncEngineKiroLegacyOnlySyncPath(t *testing.T) {
 		t, env.db, "kiro:legacy-only-session", "legacy_kiro",
 	)
 	assertSessionMessageCount(t, env.db, "kiro:legacy-only-session", 2)
-}
-
-func TestSyncEngineKiroSQLiteMalformedUpdatePreservesArchive(t *testing.T) {
-	t.Parallel()
-	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
-	ks := createKiroSQLiteDB(t, env.kiroDir)
-	ks.addSession(
-		t, "/home/user/code/kiro-app", "sqlite-session",
-		readKiroSQLiteFixture(t, "standard_payload.json"),
-		1779012000000, 1779012030000,
-	)
-	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 1, Synced: 1, Skipped: 0,
-	})
-
-	ks.updateSession(
-		t, "sqlite-session",
-		readKiroSQLiteFixture(t, "malformed_payload.txt"),
-		1779012040000,
-	)
-	// Kiro is provider-authoritative: the database is rediscovered and
-	// re-parsed (TotalSessions counts the source), but the malformed payload
-	// yields no parseable session, so nothing is written and the previously
-	// archived session is preserved.
-	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 1, Synced: 0, Skipped: 0,
-	})
-	assertSessionMessageCount(t, env.db, "kiro:sqlite-session", 4)
 }
 
 type fakeEmitter struct {

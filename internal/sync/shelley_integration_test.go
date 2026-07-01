@@ -238,7 +238,7 @@ func TestSourceMtimeShelleyResolvesVirtualPath(t *testing.T) {
 		"SourceMtime must resolve the virtual path, not return 0")
 }
 
-func TestSyncAllShelleyIngestsConversations(t *testing.T) {
+func TestShelleySyncAllAndResyncAllArchiveBehavior(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	dbPath := createShelleyDB(t, dir)
@@ -253,14 +253,23 @@ func TestSyncAllShelleyIngestsConversations(t *testing.T) {
 			{2, "agent", `{"Role":1,"Content":[{"Type":2,"Text":"ok"}]}`,
 				"", "2026-06-15T10:01:10Z"},
 		})
+	seedShelleyConvo(t, dbPath, "cGONE1", "gone", "/home/u/dev/app",
+		"claude-sonnet-4-6", "", true,
+		"2026-06-15T09:00:00Z", "2026-06-15T09:00:10Z", []shelleyMsg{
+			{1, "user", `{"Role":0,"Content":[{"Type":2,"Text":"old work"}]}`,
+				"", "2026-06-15T09:00:00Z"},
+			{2, "agent", `{"Role":1,"Content":[{"Type":2,"Text":"old reply"}]}`,
+				"", "2026-06-15T09:00:10Z"},
+		})
 
 	engine, database := newShelleyEngine(t, dir)
 	stats := engine.SyncAll(context.Background(), nil)
 	require.False(t, stats.Aborted, "sync aborted: %+v", stats)
-	assert.Equal(t, 2, stats.Synced, "synced count")
+	assert.Equal(t, 3, stats.Synced, "synced count")
 
 	assertSessionMessageCount(t, database, "shelley:cMAIN1", 2)
 	assertSessionMessageCount(t, database, "shelley:cAUX1", 2)
+	assertSessionMessageCount(t, database, "shelley:cGONE1", 2)
 	assertToolCallCount(t, database, "shelley:cMAIN1", 1)
 	assertMessageContent(t, database, "shelley:cAUX1", "second", "ok")
 
@@ -272,6 +281,28 @@ func TestSyncAllShelleyIngestsConversations(t *testing.T) {
 		"shelley:cMAIN1",
 	).Scan(&resultContent), "query tool result content")
 	assert.Contains(t, resultContent, "file1", "tool result preserved on tool call")
+
+	// Remove cGONE1 from the source DB entirely, then verify a full resync
+	// rebuilds present conversations and preserves the removed conversation
+	// from the old archive.
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = conn.Exec(`DELETE FROM messages WHERE conversation_id = 'cGONE1'`)
+	require.NoError(t, err)
+	_, err = conn.Exec(`DELETE FROM conversations WHERE conversation_id = 'cGONE1'`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	stats = engine.ResyncAll(context.Background(), nil)
+	assert.False(t, stats.Aborted, "resync aborted: %+v", stats)
+	assert.NotZero(t, stats.Synced, "resync should re-parse fresh")
+
+	assertSessionMessageCount(t, database, "shelley:cMAIN1", 2)
+	assertSessionMessageCount(t, database, "shelley:cAUX1", 2)
+	gone, err := database.GetSession(context.Background(), "shelley:cGONE1")
+	require.NoError(t, err)
+	require.NotNil(t, gone, "removed conversation should survive resync")
+	assert.Equal(t, 2, gone.MessageCount, "preserved message count")
 }
 
 func TestSyncShelleyRemotePathRewriterSkip(t *testing.T) {
@@ -324,71 +355,6 @@ func TestSyncShelleyRemotePathRewriterSkip(t *testing.T) {
 		"local_modified_at after second sync")
 	assert.Equal(t, *before.LocalModifiedAt, *after.LocalModifiedAt,
 		"skip lookup must use the rewritten virtual path")
-}
-
-// TestResyncAllShelleyRebuildsFromDB verifies that a full resync
-// re-parses the present Shelley DB without aborting and preserves
-// content. Shelley is a Zed-style single-DB agent, so it re-syncs fresh
-// (Synced > 0) rather than relying on archive-preservation accounting.
-func TestResyncAllShelleyRebuildsFromDB(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	dbPath := createShelleyDB(t, dir)
-	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
-		"claude-sonnet-4-6", "", true,
-		"2026-06-15T10:00:00Z", "2026-06-15T10:00:06Z", mainConvoMsgs())
-
-	engine, database := newShelleyEngine(t, dir)
-	require.False(t, engine.SyncAll(context.Background(), nil).Aborted)
-
-	stats := engine.ResyncAll(context.Background(), nil)
-	assert.False(t, stats.Aborted, "resync aborted: %+v", stats)
-	assert.NotZero(t, stats.Synced, "resync should re-parse fresh")
-	assertSessionMessageCount(t, database, "shelley:cMAIN1", 2)
-}
-
-// TestResyncAllShelleyPreservesRemovedConversation verifies that a
-// conversation deleted from the source DB survives a resync via
-// orphan-copy, satisfying the archive-preservation requirement
-// (existing session data must survive when source rows disappear).
-func TestResyncAllShelleyPreservesRemovedConversation(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	dbPath := createShelleyDB(t, dir)
-	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
-		"claude-sonnet-4-6", "", true,
-		"2026-06-15T10:00:00Z", "2026-06-15T10:00:06Z", mainConvoMsgs())
-	seedShelleyConvo(t, dbPath, "cGONE1", "gone", "/home/u/dev/app",
-		"claude-sonnet-4-6", "", true,
-		"2026-06-15T09:00:00Z", "2026-06-15T09:00:10Z", []shelleyMsg{
-			{1, "user", `{"Role":0,"Content":[{"Type":2,"Text":"old work"}]}`,
-				"", "2026-06-15T09:00:00Z"},
-			{2, "agent", `{"Role":1,"Content":[{"Type":2,"Text":"old reply"}]}`,
-				"", "2026-06-15T09:00:10Z"},
-		})
-
-	engine, database := newShelleyEngine(t, dir)
-	require.False(t, engine.SyncAll(context.Background(), nil).Aborted)
-	assertSessionMessageCount(t, database, "shelley:cGONE1", 2)
-
-	// Remove cGONE1 from the source DB entirely.
-	conn, err := sql.Open("sqlite3", dbPath)
-	require.NoError(t, err)
-	_, err = conn.Exec(`DELETE FROM messages WHERE conversation_id = 'cGONE1'`)
-	require.NoError(t, err)
-	_, err = conn.Exec(`DELETE FROM conversations WHERE conversation_id = 'cGONE1'`)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
-
-	stats := engine.ResyncAll(context.Background(), nil)
-	assert.False(t, stats.Aborted, "resync aborted: %+v", stats)
-
-	// cMAIN1 re-parsed, cGONE1 preserved from the old DB.
-	assertSessionMessageCount(t, database, "shelley:cMAIN1", 2)
-	gone, err := database.GetSession(context.Background(), "shelley:cGONE1")
-	require.NoError(t, err)
-	require.NotNil(t, gone, "removed conversation should survive resync")
-	assert.Equal(t, 2, gone.MessageCount, "preserved message count")
 }
 
 // TestSyncShelleyForceReplaceOnInPlaceUpdate verifies that when a
