@@ -88,12 +88,12 @@ func TestExtractProjectFromCwdWithBranchContext_GitWorktreeMainRoot(t *testing.T
 	mainRepo := filepath.Join(root, "agentsview")
 	mustMkdirAll(t, mainRepo)
 	gitRun(t, mainRepo, "init", "-q", "-b", "main")
-	gitRun(t, mainRepo, "config", "user.email", "test@example.com")
-	gitRun(t, mainRepo, "config", "user.name", "Test User")
-	gitRun(t, mainRepo, "config", "commit.gpgsign", "false")
-	mustWriteFile(t, filepath.Join(mainRepo, "README.md"), "seed\n")
-	gitRun(t, mainRepo, "add", "-A")
-	gitRun(t, mainRepo, "commit", "-q", "-m", "seed")
+	gitRun(t, mainRepo,
+		"-c", "user.email=test@example.com",
+		"-c", "user.name=Test User",
+		"-c", "commit.gpgsign=false",
+		"commit", "--allow-empty", "-q", "-m", "seed",
+	)
 
 	worktree := filepath.Join(root, "agentsview-feature")
 	gitRun(t, mainRepo, "worktree", "add", "-q", "-b", "feature", worktree)
