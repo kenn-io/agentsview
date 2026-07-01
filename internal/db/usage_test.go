@@ -1208,7 +1208,7 @@ func TestGetDailyUsage_DedupesByClaudeMessageAndRequestID(t *testing.T) {
 	assert.Equal(t, 55000, day.CacheReadTokens, "cache_rd")
 }
 
-func TestGetDailyUsage_DedupesBySourceUUIDWhenClaudePairIncomplete(t *testing.T) {
+func TestGetDailyUsage_DedupKeyVariants(t *testing.T) {
 	d := testDB(t)
 	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
 		ModelPattern:         "claude-opus-4-6",
@@ -1218,90 +1218,84 @@ func TestGetDailyUsage_DedupesBySourceUUIDWhenClaudePairIncomplete(t *testing.T)
 		CacheReadPerMTok:     1.50,
 	}}), "seed pricing")
 
-	insertSession(t, d, "s-main", "proj", func(s *Session) {
+	insertSession(t, d, "source-main", "proj", func(s *Session) {
 		s.Agent = "claude"
 		s.StartedAt = new("2026-04-10T10:00:00Z")
 		s.EndedAt = new("2026-04-10T10:05:00Z")
 	})
-	insertSession(t, d, "s-fork", "proj", func(s *Session) {
+	insertSession(t, d, "source-fork", "proj", func(s *Session) {
 		s.Agent = "claude"
 		s.StartedAt = new("2026-04-10T10:01:00Z")
 		s.EndedAt = new("2026-04-10T10:06:00Z")
-		s.ParentSessionID = new("s-main")
+		s.ParentSessionID = new("source-main")
 		s.RelationshipType = "fork"
+	})
+	insertSession(t, d, "missing-keys", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = new("2026-04-11T10:00:00Z")
+		s.EndedAt = new("2026-04-11T10:05:00Z")
 	})
 
 	shared := json.RawMessage(`{"input_tokens":100,"output_tokens":500,"cache_creation_input_tokens":1000,"cache_read_input_tokens":50000}`)
 	unique := json.RawMessage(`{"input_tokens":20,"output_tokens":80,"cache_creation_input_tokens":200,"cache_read_input_tokens":5000}`)
+	missingKeysUsage := json.RawMessage(`{"input_tokens":0,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}`)
 
 	insertMessages(t, d,
 		Message{
-			SessionID: "s-main", Ordinal: 0,
+			SessionID: "source-main", Ordinal: 0,
 			Role: "assistant", Timestamp: "2026-04-10T10:02:00Z",
-			Model: "claude-opus-4-6", TokenUsage: shared,
+			Model: "claude-opus-4-6", TokenUsage: shared, HasOutputTokens: true,
 			ClaudeMessageID: "msg_dup", SourceUUID: "source_dup",
 		},
 		Message{
-			SessionID: "s-fork", Ordinal: 0,
+			SessionID: "source-fork", Ordinal: 0,
 			Role: "assistant", Timestamp: "2026-04-10T10:02:00Z",
-			Model: "claude-opus-4-6", TokenUsage: shared,
+			Model: "claude-opus-4-6", TokenUsage: shared, HasOutputTokens: true,
 			ClaudeMessageID: "msg_dup", SourceUUID: "source_dup",
 		},
 		Message{
-			SessionID: "s-fork", Ordinal: 1,
+			SessionID: "source-fork", Ordinal: 1,
 			Role: "assistant", Timestamp: "2026-04-10T10:03:00Z",
-			Model: "claude-opus-4-6", TokenUsage: unique,
+			Model: "claude-opus-4-6", TokenUsage: unique, HasOutputTokens: true,
 			ClaudeMessageID: "msg_uniq", SourceUUID: "source_uniq",
+		},
+		Message{
+			SessionID: "missing-keys", Ordinal: 0,
+			Role: "assistant", Timestamp: "2026-04-11T10:02:00Z",
+			Model: "claude-opus-4-6", TokenUsage: missingKeysUsage,
+			HasOutputTokens: true,
+		},
+		Message{
+			SessionID: "missing-keys", Ordinal: 1,
+			Role: "assistant", Timestamp: "2026-04-11T10:02:00Z",
+			Model: "claude-opus-4-6", TokenUsage: missingKeysUsage,
+			HasOutputTokens: true,
 		},
 	)
 
-	result, err := d.GetDailyUsage(context.Background(), UsageFilter{
-		From: "2026-04-10", To: "2026-04-10", Timezone: "UTC",
+	t.Run("dedupes by source uuid when claude pair incomplete", func(t *testing.T) {
+		result, err := d.GetDailyUsage(context.Background(), UsageFilter{
+			From: "2026-04-10", To: "2026-04-10", Timezone: "UTC",
+		})
+		require.NoError(t, err, "GetDailyUsage")
+		require.Len(t, result.Daily, 1, "daily entries =")
+		day := result.Daily[0]
+		assert.Equal(t, 120, day.InputTokens, "input")
+		assert.Equal(t, 580, day.OutputTokens, "output")
+		assert.Equal(t, 1200, day.CacheCreationTokens, "cache_cr")
+		assert.Equal(t, 55000, day.CacheReadTokens, "cache_rd")
 	})
-	require.NoError(t, err, "GetDailyUsage")
-	require.Len(t, result.Daily, 1, "daily entries =")
-	day := result.Daily[0]
-	assert.Equal(t, 120, day.InputTokens, "input")
-	assert.Equal(t, 580, day.OutputTokens, "output")
-	assert.Equal(t, 1200, day.CacheCreationTokens, "cache_cr")
-	assert.Equal(t, 55000, day.CacheReadTokens, "cache_rd")
-}
 
-func TestGetDailyUsage_MissingDedupKeysCountedEveryTime(t *testing.T) {
-	d := testDB(t)
-	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
-		ModelPattern:  "claude-opus-4-6",
-		OutputPerMTok: 75.0,
-	}}), "seed pricing")
-
-	mustExec := func(q string, args ...any) {
-		t.Helper()
-		_, err := d.getWriter().Exec(q, args...)
-		require.NoError(t, err, "exec %q", q)
-	}
-	mustExec(`INSERT INTO sessions (id, project, machine, agent, started_at, ended_at)
-	          VALUES ('s1', 'proj', 'local', 'claude', ?, ?)`,
-		"2026-04-10T10:00:00Z", "2026-04-10T10:05:00Z")
-
-	usage := `{"input_tokens":0,"output_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}`
-	for _, ord := range []int{0, 1} {
-		mustExec(`INSERT INTO messages
-			(session_id, ordinal, role, content, timestamp,
-			 model, token_usage,
-			 claude_message_id, claude_request_id,
-			 has_output_tokens)
-			VALUES ('s1', ?, 'assistant', '', '2026-04-10T10:02:00Z',
-			        'claude-opus-4-6', ?, '', '', 1)`, ord, usage)
-	}
-
-	result, err := d.GetDailyUsage(context.Background(), UsageFilter{
-		From: "2026-04-10", To: "2026-04-10", Timezone: "UTC",
+	t.Run("missing dedup keys counted every time", func(t *testing.T) {
+		result, err := d.GetDailyUsage(context.Background(), UsageFilter{
+			From: "2026-04-11", To: "2026-04-11", Timezone: "UTC",
+		})
+		require.NoError(t, err, "GetDailyUsage")
+		require.Len(t, result.Daily, 1,
+			"output want 20 (both no-key rows counted): %v", result.Daily)
+		assert.Equal(t, 20, result.Daily[0].OutputTokens,
+			"output want 20 (both no-key rows counted): %v", result.Daily)
 	})
-	require.NoError(t, err, "GetDailyUsage")
-	require.Len(t, result.Daily, 1,
-		"output want 20 (both no-key rows counted): %v", result.Daily)
-	assert.Equal(t, 20, result.Daily[0].OutputTokens,
-		"output want 20 (both no-key rows counted): %v", result.Daily)
 }
 
 func TestGetDailyUsageLongLivedSession(t *testing.T) {
