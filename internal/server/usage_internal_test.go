@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -132,6 +133,19 @@ func TestUsageComparisonScansPriorPeriodOnly(t *testing.T) {
 	assert.Equal(t, "2024-05-31", out.PriorTo)
 	assert.Equal(t, 1.0, out.PriorTotalCost)
 	assert.Equal(t, 2.0, out.DeltaPct)
+}
+
+func TestUsageComparisonCopiesGitBranchFilterToPriorPeriod(t *testing.T) {
+	spy := &usageSummaryCountsSpy{}
+	s := newRoutedTestServerWithStore(t, spy)
+	branch := db.EncodeBranchFilterToken("alpha", "main")
+
+	w := serveGet(t, s,
+		"/api/v1/usage/comparison?"+oneDayUsageRange+"&current_cost=3&git_branch="+url.QueryEscape(branch))
+	assertRecorderStatus(t, w, http.StatusOK)
+
+	require.Len(t, spy.filters, 1)
+	assert.Equal(t, branch, spy.filters[0].GitBranch)
 }
 
 func TestUsageComparisonRequiresCurrentCost(t *testing.T) {

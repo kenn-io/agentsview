@@ -113,6 +113,7 @@ func filterToQuery(f ListFilter) url.Values {
 	setIfNotEmpty("project", f.Project)
 	setIfNotEmpty("exclude_project", f.ExcludeProject)
 	setIfNotEmpty("machine", f.Machine)
+	setIfNotEmpty("git_branch", f.GitBranch)
 	setIfNotEmpty("agent", f.Agent)
 	setIfNotEmpty("date", f.Date)
 	setIfNotEmpty("date_from", f.DateFrom)
@@ -388,6 +389,7 @@ func (b *httpBackend) SearchContent(
 		"project":         req.Project,
 		"exclude_project": req.ExcludeProject,
 		"machine":         req.Machine,
+		"git_branch":      req.GitBranch,
 		"agent":           req.Agent,
 		"date":            req.Date,
 		"date_from":       req.DateFrom,
@@ -431,6 +433,7 @@ func (b *httpBackend) UsageSummary(
 		"agent":           req.Agent,
 		"project":         req.Project,
 		"machine":         req.Machine,
+		"git_branch":      req.GitBranch,
 		"exclude_project": req.ExcludeProject,
 		"exclude_agent":   req.ExcludeAgent,
 		"exclude_model":   req.ExcludeModel,

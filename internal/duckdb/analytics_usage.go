@@ -210,6 +210,11 @@ func duckBuildAnalyticsWhere(
 		preds = append(preds, q("project")+" = ?")
 		args = append(args, f.Project)
 	}
+	if f.GitBranch != "" {
+		var clause string
+		clause, args = db.BranchPairClauseArgs(q("project"), q("git_branch"), f.GitBranch, args)
+		preds = append(preds, clause)
+	}
 	if f.Agent != "" {
 		preds, args = appendDuckAnalyticsCSVFilter(preds, args, q("agent"), f.Agent)
 	}
@@ -3031,6 +3036,11 @@ func appendDuckUsageSessionFilterClauses(
 	where, args = appendDuckUsageCSVFilter(where, args, "s.agent", f.Agent, true)
 	where, args = appendDuckUsageCSVFilter(where, args, "s.project", f.Project, true)
 	where, args = appendDuckUsageCSVFilter(where, args, "s.machine", f.Machine, true)
+	if f.GitBranch != "" {
+		var clause string
+		clause, args = db.BranchPairClauseArgs("s.project", "s.git_branch", f.GitBranch, args)
+		where += "\n\t\t\tAND " + clause
+	}
 	where, args = appendDuckUsageCSVFilter(where, args, "s.project", f.ExcludeProject, false)
 	where, args = appendDuckUsageCSVFilter(where, args, "s.agent", f.ExcludeAgent, false)
 	if sessionID != "" {
@@ -3178,8 +3188,11 @@ func duckCursorUsageRowsSQLForBounds(
 	f db.UsageFilter, b duckUsageBounds,
 ) (string, []any, bool) {
 	hasTermFilter := f.Termination != "" && f.Termination != "all"
+	// Cursor usage rows carry no project or git branch and bypass the session
+	// filter, so any filter they cannot satisfy (project, machine, branch)
+	// must exclude them entirely rather than let them leak into totals.
 	if f.Project != "" || f.ExcludeProject != "" ||
-		f.Machine != "" || f.MinUserMessages > 0 ||
+		f.Machine != "" || f.GitBranch != "" || f.MinUserMessages > 0 ||
 		f.ExcludeOneShot || hasTermFilter ||
 		f.ActiveSince != "" {
 		return "", nil, false

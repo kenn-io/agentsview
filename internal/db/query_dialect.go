@@ -483,6 +483,11 @@ func sessionFilterPredicates(
 		preds = append(preds,
 			inPredicate(q("machine"), splitCSV(f.Machine), b))
 	}
+	if f.GitBranch != "" {
+		preds = append(preds, BranchPairPredicate(
+			q("project"), q("git_branch"), f.GitBranch,
+			func(s string) string { return b.Add(s) }))
+	}
 	if f.Agent != "" {
 		preds = append(preds,
 			inPredicate(q("agent"), splitCSV(f.Agent), b))
@@ -604,6 +609,75 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+// The separators are unit/record separators so comma-delimited filters can
+// carry project or branch names containing commas.
+const (
+	branchFilterSep = "\x1f"
+	branchListSep   = "\x1e"
+)
+
+// EncodeBranchFilterToken builds the opaque (project, branch) filter token.
+// Keying by (project, branch) keeps same-named branches across repos distinct;
+// the frontend passes the token back verbatim.
+func EncodeBranchFilterToken(project, branch string) string {
+	return project + branchFilterSep + branch
+}
+
+// SplitBranchFilterTokens decodes a branchListSep-joined list of
+// EncodeBranchFilterToken values into (project, branch) pairs, dropping blank or
+// separator-less tokens. Shared across backends so they decode identically.
+func SplitBranchFilterTokens(s string) []BranchInfo {
+	parts := strings.Split(s, branchListSep)
+	out := make([]BranchInfo, 0, len(parts))
+	for _, p := range parts {
+		project, branch, ok := strings.Cut(p, branchFilterSep)
+		if !ok {
+			continue
+		}
+		out = append(out, BranchInfo{
+			Project: project,
+			Branch:  branch,
+			Token:   EncodeBranchFilterToken(project, branch),
+		})
+	}
+	return out
+}
+
+// BranchPairPredicate uses OR-of-ANDs instead of row-value IN for backend
+// portability. An empty decoded pair set returns false so invalid filters do
+// not broaden to all rows.
+func BranchPairPredicate(
+	projectCol, branchCol, tokens string, placeholder func(string) string,
+) string {
+	pairs := SplitBranchFilterTokens(tokens)
+	if len(pairs) == 0 {
+		return "1 = 0"
+	}
+	parts := make([]string, len(pairs))
+	for i, p := range pairs {
+		parts[i] = "(" + projectCol + " = " + placeholder(p.Project) +
+			" AND " + branchCol + " = " + placeholder(p.Branch) + ")"
+	}
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	return "(" + strings.Join(parts, " OR ") + ")"
+}
+
+// BranchPairClauseArgs is the raw-args ("?" placeholder) form of
+// BranchPairPredicate.
+func BranchPairClauseArgs(
+	projectCol, branchCol, tokens string, args []any,
+) (string, []any) {
+	clause := BranchPairPredicate(
+		projectCol, branchCol, tokens,
+		func(v string) string {
+			args = append(args, v)
+			return "?"
+		})
+	return clause, args
 }
 
 func nonEmpty(values []string) []string {

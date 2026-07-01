@@ -92,11 +92,13 @@ func (r *modelRateResolver) lookup(model string) (modelRates, bool) {
 // UsageFilter controls the date range, agent, and timezone
 // for daily usage aggregation queries.
 type UsageFilter struct {
-	From              string // YYYY-MM-DD, inclusive
-	To                string // YYYY-MM-DD, inclusive
-	Agent             string // "" for all; supports comma-separated
-	Project           string // "" for all; supports comma-separated
-	Machine           string // "" for all; supports comma-separated
+	From    string // YYYY-MM-DD, inclusive
+	To      string // YYYY-MM-DD, inclusive
+	Agent   string // "" for all; supports comma-separated
+	Project string // "" for all; supports comma-separated
+	Machine string // "" for all; supports comma-separated
+	// GitBranch is a branchListSep-joined list of opaque (project, branch) tokens (EncodeBranchFilterToken).
+	GitBranch         string
 	Model             string // "" for all; supports comma-separated
 	ExcludeProject    string // comma-separated projects to exclude
 	ExcludeAgent      string // comma-separated agents to exclude
@@ -194,6 +196,11 @@ func (f UsageFilter) appendUsageSessionFilterClauses(
 	where, args = appendCSV(where, args, "s.agent", f.Agent, true)
 	where, args = appendCSV(where, args, "s.project", f.Project, true)
 	where, args = appendCSV(where, args, "s.machine", f.Machine, true)
+	if f.GitBranch != "" {
+		var clause string
+		clause, args = BranchPairClauseArgs("s.project", "s.git_branch", f.GitBranch, args)
+		where += "\n\tAND " + clause
+	}
 	where, args = appendCSV(where, args, "s.project", f.ExcludeProject, false)
 	where, args = appendCSV(where, args, "s.agent", f.ExcludeAgent, false)
 
@@ -845,8 +852,11 @@ func cursorUsageRowsSQLForBounds(
 	f UsageFilter, b usageBounds,
 ) (string, []any, bool) {
 	termPred, _ := buildUsageTerminationPredSQLite(f.Termination)
+	// Cursor usage rows carry no project or git branch and bypass the session
+	// filter, so any filter they cannot satisfy (project, machine, branch)
+	// must exclude them entirely rather than let them leak into totals.
 	if f.Project != "" || f.ExcludeProject != "" ||
-		f.Machine != "" || f.MinUserMessages > 0 ||
+		f.Machine != "" || f.GitBranch != "" || f.MinUserMessages > 0 ||
 		f.ExcludeOneShot || termPred != "" ||
 		f.ActiveSince != "" {
 		return "", nil, false
