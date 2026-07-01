@@ -516,6 +516,75 @@ describe("SessionBreadcrumb", () => {
     });
   });
 
+  describe("malformed-lines badge", () => {
+    it("shows the badge with the line count when parser_malformed_lines is positive", async () => {
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: {
+          session: makeSession("claude", {
+            parser_malformed_lines: 3,
+          }),
+          onBack: () => {},
+        },
+      });
+      await tick();
+      const badge = document.querySelector(".malformed-badge");
+      expect(badge).toBeTruthy();
+      expect(badge?.textContent?.trim()).toBe("3 malformed lines");
+      expect(badge?.getAttribute("title")).toBe(
+        "3 lines in the source file could not be parsed",
+      );
+      unmount(component);
+    });
+
+    it("uses singular wording for exactly one malformed line", async () => {
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: {
+          session: makeSession("claude", {
+            parser_malformed_lines: 1,
+          }),
+          onBack: () => {},
+        },
+      });
+      await tick();
+      const badge = document.querySelector(".malformed-badge");
+      expect(badge?.textContent?.trim()).toBe("1 malformed line");
+      expect(badge?.getAttribute("title")).toBe(
+        "1 line in the source file could not be parsed",
+      );
+      unmount(component);
+    });
+
+    it("hides the badge when parser_malformed_lines is zero", async () => {
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: {
+          session: makeSession("claude", {
+            parser_malformed_lines: 0,
+          }),
+          onBack: () => {},
+        },
+      });
+      await tick();
+      expect(document.querySelector(".malformed-badge")).toBeNull();
+      unmount(component);
+    });
+
+    it("hides the badge when parser_malformed_lines is absent", async () => {
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: {
+          session: makeSession("claude"),
+          onBack: () => {},
+        },
+      });
+      await tick();
+      expect(document.querySelector(".malformed-badge")).toBeNull();
+      unmount(component);
+    });
+  });
+
   it("hides local-only actions for remote sessions", async () => {
     const component = mount(SessionBreadcrumb, {
       target: document.body,
