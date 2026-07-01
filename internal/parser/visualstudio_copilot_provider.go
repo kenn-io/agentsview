@@ -275,12 +275,12 @@ func visualStudioCopilotChildDir(parent, name string) (string, bool) {
 		return "", false
 	}
 	for _, entry := range entries {
-		if entry.IsDir() && entry.Name() == name {
+		if isDirOrSymlink(entry, parent) && entry.Name() == name {
 			return filepath.Join(parent, entry.Name()), true
 		}
 	}
 	for _, entry := range entries {
-		if entry.IsDir() && strings.EqualFold(entry.Name(), name) {
+		if isDirOrSymlink(entry, parent) && strings.EqualFold(entry.Name(), name) {
 			return filepath.Join(parent, entry.Name()), true
 		}
 	}

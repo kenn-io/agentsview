@@ -569,6 +569,73 @@ func TestVisualStudioCopilotProviderDiscoversMixedCaseVS2026Layout(
 	assert.Equal(t, virtualPath, found.DisplayPath)
 }
 
+func TestVisualStudioCopilotProviderDiscoversSymlinkedVS2026Dirs(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	targetRoot := t.TempDir()
+	targetVSRoot := filepath.Join(targetRoot, "vs-data")
+	targetSolutionRoot := filepath.Join(targetVSRoot, "SampleApp")
+	targetCopilotChatRoot := filepath.Join(targetRoot, "chat-data")
+	targetThreadRoot := filepath.Join(targetCopilotChatRoot, "thread")
+	targetSessionsRoot := filepath.Join(targetRoot, "sessions-data")
+	require.NoError(t, os.MkdirAll(targetSolutionRoot, 0o755))
+	require.NoError(t, os.MkdirAll(targetThreadRoot, 0o755))
+	require.NoError(t, os.MkdirAll(targetSessionsRoot, 0o755))
+
+	vsRoot := filepath.Join(root, ".VS")
+	if err := os.Symlink(targetVSRoot, vsRoot); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	require.NoError(t, os.Symlink(
+		targetCopilotChatRoot,
+		filepath.Join(targetSolutionRoot, "Copilot-Chat"),
+	))
+	require.NoError(t, os.Symlink(
+		targetSessionsRoot,
+		filepath.Join(targetThreadRoot, "Sessions"),
+	))
+
+	conversationID := "5bc5f6d7-9a6e-4f9c-8f3c-b7be2e7d9f20"
+	writeSourceFile(t, filepath.Join(targetSessionsRoot, conversationID),
+		vsCopilotTraceLineJSON(
+			conversationID,
+			"chat gpt-5.5", "1781293600000000000", "1781293610000000000",
+			map[string]string{
+				"gen_ai.operation.name": "chat",
+				"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Run the tests."}]}]`,
+			},
+		)+"\n")
+	sessionPath := filepath.Join(
+		vsRoot, "SampleApp", "Copilot-Chat", "thread", "Sessions",
+		conversationID,
+	)
+	virtualPath := VisualStudioCopilotVirtualPath(sessionPath, conversationID)
+
+	provider, ok := NewProvider(AgentVSCopilot, ProviderConfig{
+		Roots: []string{root},
+	})
+	require.True(t, ok)
+
+	plan, err := provider.WatchPlan(context.Background())
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 2)
+	assert.Equal(t, vsRoot, plan.Roots[1].Path)
+	assert.True(t, plan.Roots[1].Recursive)
+
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, virtualPath, discovered[0].DisplayPath)
+
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: conversationID,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, virtualPath, found.DisplayPath)
+}
+
 func TestVisualStudioCopilotProviderCanonicalizesMixedLegacyAndVS2026Sources(
 	t *testing.T,
 ) {
