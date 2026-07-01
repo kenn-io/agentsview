@@ -545,6 +545,21 @@ func waitForExternalServeStartupBeforeReplacement(
 		ctx, dataDir, authToken, waitTimeout,
 	)
 	if !waited {
+		// A foreground startup can take the start lock immediately after the
+		// replacement decision is made. Recheck once before stopping the
+		// incumbent daemon so we do not cut across that handoff.
+		timer := time.NewTimer(startProbeTick())
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false, ctx.Err()
+		case <-timer.C:
+		}
+		_, waited, err = waitForExternalServeStartup(
+			ctx, dataDir, authToken, waitTimeout,
+		)
+	}
+	if !waited {
 		return false, nil
 	}
 	if err != nil && (errors.Is(err, errServeStartupInProgress) ||
