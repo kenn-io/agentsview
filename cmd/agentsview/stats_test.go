@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 )
 
 // renderStatsHuman renders stats through printStatsHuman and returns the
@@ -505,9 +506,7 @@ func TestStatsReadOnlyOpenAppliesCustomPricing(t *testing.T) {
 // propagated, so PRsOpened/PRsMerged stay nil regardless.
 func buildGoldenFixtureDB(t *testing.T, dbPath string) {
 	t.Helper()
-	d, err := db.Open(dbPath)
-	require.NoError(t, err, "open fixture db")
-	t.Cleanup(func() { d.Close() })
+	d := dbtest.OpenTestDBAt(t, dbPath)
 
 	require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{
 		{

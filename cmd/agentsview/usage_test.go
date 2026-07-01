@@ -808,7 +808,7 @@ func TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination(t *testing.
 	assert.Equal(t, float64(1), requests[0]["page"])
 	assert.Equal(t, float64(2), requests[1]["page"])
 
-	database, err := db.Open(filepath.Join(dataDir, "sessions.db"))
+	database, err := db.OpenPreparedTestDB(filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, err, "open archive db")
 	t.Cleanup(func() { database.Close() })
 

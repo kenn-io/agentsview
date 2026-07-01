@@ -9,17 +9,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-// newTestDB opens a fresh SQLite DB in a temp dir for a single test.
+// newTestDB opens a fresh SQLite DB for a single test.
 func newTestDB(t *testing.T) *db.DB {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "test.db")
-	d, err := db.Open(path)
-	require.NoError(t, err, "opening test db")
-	t.Cleanup(func() { d.Close() })
-	return d
+	return dbtest.OpenTestDB(t)
 }
 
 // upsertSession inserts a session with minimal required fields.

@@ -52,7 +52,7 @@ func TestSecretsScan_DirectMode_Scans(t *testing.T) {
 	dataDir := testDataDir(t)
 	seedSession(t, dataDir, "leaky", "proj")
 
-	d, err := db.Open(filepath.Join(dataDir, "sessions.db"))
+	d, err := db.OpenPreparedTestDB(filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, err)
 	secret := syntheticAWSAccessKey(t.Name())
 	require.NoError(t, d.InsertMessages([]db.Message{{
@@ -84,7 +84,7 @@ func TestSecretsScan_DirectMode_DeniesAgentsviewFixtures(t *testing.T) {
 	dataDir := testDataDir(t)
 	seedSession(t, dataDir, "fixture", "proj")
 
-	d, err := db.Open(filepath.Join(dataDir, "sessions.db"))
+	d, err := db.OpenPreparedTestDB(filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, err)
 	secret := strings.Join([]string{
 		"ghp_", "M7qL8r", "P2sT5u", "V9wX3y",
@@ -117,7 +117,7 @@ func TestSecretsScan_DirectMode_DeniesAgentsviewFixtures(t *testing.T) {
 func TestSecretsScanHint_ShownOnCandidate(t *testing.T) {
 	dataDir := testDataDir(t)
 	seedSession(t, dataDir, "leaky", "proj")
-	d, err := db.Open(filepath.Join(dataDir, "sessions.db"))
+	d, err := db.OpenPreparedTestDB(filepath.Join(dataDir, "sessions.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestSecretsScanHint_ShownOnCandidate(t *testing.T) {
 func TestSecretsScanHint_SuppressedWhenDefiniteOnly(t *testing.T) {
 	dataDir := testDataDir(t)
 	seedSession(t, dataDir, "leaky", "proj")
-	d, err := db.Open(filepath.Join(dataDir, "sessions.db"))
+	d, err := db.OpenPreparedTestDB(filepath.Join(dataDir, "sessions.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestSecretsScanHint_SuppressedWhenDefiniteOnly(t *testing.T) {
 func TestSecretsScanHint_SuppressedInJSON(t *testing.T) {
 	dataDir := testDataDir(t)
 	seedSession(t, dataDir, "leaky", "proj")
-	d, err := db.Open(filepath.Join(dataDir, "sessions.db"))
+	d, err := db.OpenPreparedTestDB(filepath.Join(dataDir, "sessions.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
