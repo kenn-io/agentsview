@@ -293,6 +293,67 @@ func startExternalDaemonStartLockHelper(t *testing.T, dataDir string) io.Closer 
 	return stdin
 }
 
+func holdExternalBackgroundLaunchLock(t *testing.T, dataDir string) func() {
+	t.Helper()
+	stdin := startExternalBackgroundLaunchLockHelper(t, dataDir)
+
+	var once sync.Once
+	unlock := func() {
+		once.Do(func() { _ = stdin.Close() })
+	}
+	t.Cleanup(unlock)
+	return unlock
+}
+
+func startExternalBackgroundLaunchLockHelper(
+	t *testing.T,
+	dataDir string,
+) io.Closer {
+	t.Helper()
+	cmd := exec.Command(
+		os.Args[0],
+		"-test.run=^TestHoldExternalBackgroundLaunchLockHelperProcess$",
+	)
+	cmd.Env = append(
+		os.Environ(),
+		"AGENTSVIEW_HOLD_EXTERNAL_BACKGROUND_LAUNCH_LOCK_HELPER=1",
+		"AGENTSVIEW_HOLD_EXTERNAL_BACKGROUND_LAUNCH_LOCK_DATA_DIR="+dataDir,
+	)
+	stdin, err := cmd.StdinPipe()
+	require.NoError(t, err)
+	stdout, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	cmd.Stderr = os.Stderr
+	require.NoError(t, cmd.Start())
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	t.Cleanup(func() {
+		_ = stdin.Close()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			_ = cmd.Process.Kill()
+			<-done
+		}
+	})
+
+	line, err := bufio.NewReader(stdout).ReadString('\n')
+	if err != nil {
+		_ = cmd.Process.Kill()
+		require.NoError(t, err)
+	}
+	if strings.TrimSpace(line) != "ready" {
+		_ = cmd.Process.Kill()
+		require.Equal(t, "ready", strings.TrimSpace(line))
+	}
+	require.Eventually(t, func() bool {
+		return isBackgroundLaunchActive(dataDir)
+	}, 2*time.Second, 10*time.Millisecond,
+		"external background launch lock should be visible to parent")
+	return stdin
+}
+
 func TestHoldExternalDaemonStartLockHelperProcess(t *testing.T) {
 	if os.Getenv("AGENTSVIEW_HOLD_EXTERNAL_START_LOCK_HELPER") != "1" {
 		return
@@ -302,6 +363,26 @@ func TestHoldExternalDaemonStartLockHelperProcess(t *testing.T) {
 	lockPath, err := runtimeStore(dataDir).LockPath()
 	require.NoError(t, err)
 	lock := flock.New(lockPath)
+	locked, err := lock.TryLock()
+	require.NoError(t, err)
+	require.True(t, locked)
+	fmt.Println("ready")
+	_, _ = io.Copy(io.Discard, os.Stdin)
+	require.NoError(t, lock.Unlock())
+}
+
+func TestHoldExternalBackgroundLaunchLockHelperProcess(t *testing.T) {
+	if os.Getenv(
+		"AGENTSVIEW_HOLD_EXTERNAL_BACKGROUND_LAUNCH_LOCK_HELPER",
+	) != "1" {
+		return
+	}
+	dataDir := os.Getenv(
+		"AGENTSVIEW_HOLD_EXTERNAL_BACKGROUND_LAUNCH_LOCK_DATA_DIR",
+	)
+	require.NotEmpty(t, dataDir)
+	require.NoError(t, os.MkdirAll(dataDir, 0o700))
+	lock := flock.New(backgroundLaunchLockPath(dataDir))
 	locked, err := lock.TryLock()
 	require.NoError(t, err)
 	require.True(t, locked)

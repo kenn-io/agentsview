@@ -1119,9 +1119,7 @@ func TestEnsureBackgroundServeLaunchLoserIgnoresReadOnlyRuntimeDuringReplacement
 	setStartProbeTickForTest(t, 25*time.Millisecond)
 
 	dir := runtimeTestDir(t)
-	launchLock, ok := acquireBackgroundLaunchLock(dir)
-	require.True(t, ok)
-	t.Cleanup(func() { _ = launchLock.Unlock() })
+	releaseLaunchLock := holdExternalBackgroundLaunchLock(t, dir)
 	MarkDaemonStarting(dir)
 	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 
@@ -1140,7 +1138,7 @@ func TestEnsureBackgroundServeLaunchLoserIgnoresReadOnlyRuntimeDuringReplacement
 			dir, writableHost, writablePort, version, false,
 		)
 		UnmarkDaemonStarting(dir)
-		_ = launchLock.Unlock()
+		releaseLaunchLock()
 		published <- err
 	}()
 
