@@ -167,6 +167,18 @@ type zedThreadFixture struct {
 	data      []byte
 }
 
+const zedThreadsTestSchema = `CREATE TABLE threads (
+	id TEXT PRIMARY KEY,
+	summary TEXT NOT NULL,
+	updated_at TEXT NOT NULL,
+	data_type TEXT NOT NULL,
+	data BLOB NOT NULL,
+	parent_id TEXT,
+	folder_paths TEXT,
+	folder_paths_order TEXT,
+	created_at TEXT
+)`
+
 func createZedThreadsDB(
 	t *testing.T,
 	dbPath string,
@@ -174,23 +186,15 @@ func createZedThreadsDB(
 ) {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
+	copySQLiteSchemaTemplate(
+		t, dbPath, "zed threads", &zedSchemaOnce,
+		&zedSchemaBytes, &zedSchemaErr,
+		zedThreadsTestSchema,
+	)
 
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	defer db.Close()
-
-	_, err = db.Exec(`CREATE TABLE threads (
-		id TEXT PRIMARY KEY,
-		summary TEXT NOT NULL,
-		updated_at TEXT NOT NULL,
-		data_type TEXT NOT NULL,
-		data BLOB NOT NULL,
-		parent_id TEXT,
-		folder_paths TEXT,
-		folder_paths_order TEXT,
-		created_at TEXT
-	)`)
-	require.NoError(t, err)
 
 	for _, thread := range threads {
 		_, err = db.Exec(`INSERT INTO threads (

@@ -191,6 +191,10 @@ var (
 	shelleySchemaBytes []byte
 	shelleySchemaErr   error
 
+	zedSchemaOnce  stdsync.Once
+	zedSchemaBytes []byte
+	zedSchemaErr   error
+
 	kiroSQLiteFixtureCache stdsync.Map
 )
 
