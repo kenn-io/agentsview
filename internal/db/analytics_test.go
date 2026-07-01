@@ -2398,56 +2398,23 @@ func TestGetAnalyticsVelocityModelFilterUsesMatchingComplexityBucket(t *testing.
 }
 
 func TestVelocityChunkedQuery(t *testing.T) {
-	d := testDB(t)
+	d := openChunkedAnalyticsFixtureDB(t)
 	ctx := context.Background()
-
-	// Seed >maxSQLVars sessions to exercise chunked IN-clause logic.
-	const n = maxSQLVars + 1
-	writes := make([]SessionBatchWrite, 0, n)
-	for i := range n {
-		id := fmt.Sprintf("chunk-%d", i)
-		writes = append(writes, SessionBatchWrite{
-			Session: Session{
-				ID:               id,
-				Project:          "proj",
-				Machine:          defaultMachine,
-				Agent:            "claude",
-				MessageCount:     2,
-				UserMessageCount: 1,
-				StartedAt:        new("2024-06-01T09:00:00Z"),
-				FirstMessage:     new("q"),
-			},
-			Messages: []Message{
-				{
-					SessionID: id, Ordinal: 0, Role: "user",
-					Content: "q", ContentLength: 1,
-					Timestamp: "2024-06-01T09:00:00Z",
-				},
-				{
-					SessionID: id, Ordinal: 1,
-					Role:    "assistant",
-					Content: "a", ContentLength: 1,
-					Timestamp: "2024-06-01T09:00:10Z",
-				},
-			},
-		})
-	}
-	result, err := d.WriteSessionBatchAtomic(writes)
-	require.NoError(t, err)
-	require.Equal(t, n, result.WrittenSessions)
-	require.Equal(t, 2*n, result.WrittenMessages)
 
 	// Velocity must not fail even with >500 sessions
 	resp, err := d.GetAnalyticsVelocity(ctx, baseFilter())
 	require.NoError(t, err,
-		"GetAnalyticsVelocity with %d sessions", n)
-	assert.Equal(t, n, resp.ByComplexity[0].Sessions, "sessions")
+		"GetAnalyticsVelocity with %d sessions",
+		chunkedAnalyticsFixtureSessionCount)
+	assert.Equal(t, chunkedAnalyticsFixtureSessionCount,
+		resp.ByComplexity[0].Sessions, "sessions")
 
 	// SessionShape must not fail either
 	shape, err := d.GetAnalyticsSessionShape(ctx, baseFilter())
 	require.NoError(t, err,
-		"GetAnalyticsSessionShape with %d sessions", n)
-	assert.Equal(t, n, shape.Count, "Count")
+		"GetAnalyticsSessionShape with %d sessions",
+		chunkedAnalyticsFixtureSessionCount)
+	assert.Equal(t, chunkedAnalyticsFixtureSessionCount, shape.Count, "Count")
 }
 
 // TestGetAnalyticsVelocity_NullTimestamp guards against the velocity scan

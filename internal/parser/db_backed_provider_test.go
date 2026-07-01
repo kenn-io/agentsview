@@ -307,6 +307,7 @@ func TestDBBackedProviderStoredVirtualPathFreshness(t *testing.T) {
 }
 
 func TestDBBackedProviderRejectsInvalidStoredVirtualPaths(t *testing.T) {
+	t.Parallel()
 	dbPath, seeder, db := newForgeTestDB(t)
 	defer db.Close()
 	seedForgeConversation(t, seeder)

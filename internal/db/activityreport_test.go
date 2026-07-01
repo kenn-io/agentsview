@@ -603,40 +603,8 @@ func forceReaderVarLimit(t *testing.T, d *DB, limit int) {
 // on such builds. The fetch must instead chunk small enough to stay within the
 // limit while still aggregating usage across every chunk.
 func TestGetActivityReport_ManySessionsWithinSQLiteVarLimit(t *testing.T) {
-	d := testDB(t)
+	d := openChunkedAnalyticsFixtureDB(t)
 	ctx := context.Background()
-
-	// More candidate sessions than maxSQLVars, so the usage fetch must chunk.
-	const n = maxSQLVars + 1
-	writes := make([]SessionBatchWrite, 0, n)
-	for i := range n {
-		sid := fmt.Sprintf("s%04d", i)
-		writes = append(writes, SessionBatchWrite{
-			Session: Session{
-				ID:           sid,
-				Project:      "proj1",
-				Machine:      defaultMachine,
-				Agent:        "claude",
-				MessageCount: 1,
-				StartedAt:    Ptr("2026-06-16T10:00:00Z"),
-				EndedAt:      Ptr("2026-06-16T10:01:00Z"),
-				FirstMessage: Ptr("x"),
-			},
-			Messages: []Message{{
-				SessionID:  sid,
-				Ordinal:    0,
-				Role:       "assistant",
-				Content:    "x",
-				Timestamp:  "2026-06-16T10:00:00Z",
-				Model:      "claude-sonnet-4-20250514",
-				TokenUsage: json.RawMessage(`{"input_tokens":100,"output_tokens":10}`),
-			}},
-		})
-	}
-	result, err := d.WriteSessionBatchAtomic(writes)
-	require.NoError(t, err)
-	require.Equal(t, n, result.WrittenSessions)
-	require.Equal(t, n, result.WrittenMessages)
 
 	forceReaderVarLimit(t, d, 999)
 
@@ -648,9 +616,10 @@ func TestGetActivityReport_ManySessionsWithinSQLiteVarLimit(t *testing.T) {
 	require.Error(t, probeErr, "reader variable limit was not constrained")
 
 	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
-		dayQuery(t, "2026-06-16", "UTC"))
+		dayQuery(t, "2024-06-01", "UTC"))
 	require.NoError(t, err)
-	assert.Len(t, reportSessionIDs(r.BySession), n,
+	assert.Len(t, reportSessionIDs(r.BySession),
+		chunkedAnalyticsFixtureSessionCount,
 		"every candidate session survives id chunking")
 	assert.Positive(t, r.Totals.OutputTokens,
 		"usage aggregated across all id chunks")

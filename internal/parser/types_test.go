@@ -693,6 +693,7 @@ func TestFindOpenCodeSourceFilePrefersStorage(t *testing.T) {
 }
 
 func TestFindOpenCodeSourceFileFallsBackToSQLiteInHybridRoot(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(
 		filepath.Join(root, "storage", "session", "global"),

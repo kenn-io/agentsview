@@ -1426,6 +1426,7 @@ func TestToolCallDiffDetectsFilePath(t *testing.T) {
 // for the new fields: a session with tool calls, a thinking block, and a
 // system message must compare identical against itself.
 func TestCompareStoredSessionRoundTripToolCalls(t *testing.T) {
+	t.Parallel()
 	e, d, pw := pdWriteToolSession(t, "pd-tool-rt")
 	prepared, msgs, ok := e.prepareSessionWrite(pw, nil)
 	require.True(t, ok)
@@ -1444,6 +1445,7 @@ func TestCompareStoredSessionRoundTripToolCalls(t *testing.T) {
 // token/role/content/flags fingerprints move, so it surfaces only if the
 // tool-call fingerprint triggers the tier-2 comparison.
 func TestCompareStoredSessionDetectsToolCallDrift(t *testing.T) {
+	t.Parallel()
 	e, d, pw := pdWriteToolSession(t, "pd-tool-drift")
 	pw.msgs[1].ToolCalls[0].ToolName = "Grep"
 	prepared, msgs, ok := e.prepareSessionWrite(pw, nil)

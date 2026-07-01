@@ -207,32 +207,7 @@ func setupFocusedTestEnv(t *testing.T, agents ...parser.AgentType) *testEnv {
 	agentDirs := make(map[parser.AgentType][]string, len(agents))
 	for _, agent := range agents {
 		dir := t.TempDir()
-		switch agent {
-		case parser.AgentClaude:
-			env.claudeDir = dir
-		case parser.AgentCodex:
-			env.codexDir = dir
-		case parser.AgentOpenCode:
-			env.opencodeDir = dir
-		case parser.AgentKilo:
-			env.kiloDir = dir
-		case parser.AgentMiMoCode:
-			env.mimocodeDir = dir
-		case parser.AgentPiebald:
-			env.piebaldDir = dir
-		case parser.AgentPi:
-			env.piDir = dir
-		case parser.AgentOMP:
-			env.ompDir = dir
-		case parser.AgentKiro:
-			env.kiroDir = dir
-		case parser.AgentShelley:
-			env.shelleyDir = dir
-		case parser.AgentAntigravityCLI:
-			env.antigravityCLIDir = dir
-		default:
-			t.Fatalf("unsupported focused test fixture for %s", agent)
-		}
+		assignFocusedAgentDir(t, env, agent, dir)
 		agentDirs[agent] = []string{dir}
 	}
 
@@ -246,6 +221,58 @@ func setupFocusedTestEnv(t *testing.T, agents ...parser.AgentType) *testEnv {
 func setupSingleAgentTestEnv(t *testing.T, agent parser.AgentType) *testEnv {
 	t.Helper()
 	return setupFocusedTestEnv(t, agent)
+}
+
+func setupSingleAgentTestEnvWithDirs(
+	t *testing.T, agent parser.AgentType, dirs []string,
+) *testEnv {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	require.NotEmpty(t, dirs, "focused fixture dirs")
+
+	env := &testEnv{db: dbtest.OpenTestDB(t)}
+	assignFocusedAgentDir(t, env, agent, dirs[0])
+	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			agent: dirs,
+		},
+		Machine: "local",
+	})
+	return env
+}
+
+func assignFocusedAgentDir(
+	t *testing.T, env *testEnv, agent parser.AgentType, dir string,
+) {
+	t.Helper()
+	switch agent {
+	case parser.AgentClaude:
+		env.claudeDir = dir
+	case parser.AgentCodex:
+		env.codexDir = dir
+	case parser.AgentOpenCode:
+		env.opencodeDir = dir
+	case parser.AgentKilo:
+		env.kiloDir = dir
+	case parser.AgentMiMoCode:
+		env.mimocodeDir = dir
+	case parser.AgentPiebald:
+		env.piebaldDir = dir
+	case parser.AgentPi:
+		env.piDir = dir
+	case parser.AgentOMP:
+		env.ompDir = dir
+	case parser.AgentKiro:
+		env.kiroDir = dir
+	case parser.AgentShelley:
+		env.shelleyDir = dir
+	case parser.AgentAntigravityCLI:
+		env.antigravityCLIDir = dir
+	default:
+		t.Fatalf("unsupported focused test fixture for %s", agent)
+	}
 }
 
 func TestSyncEngineKiroSQLiteCurrentStore(t *testing.T) {
@@ -421,9 +448,12 @@ func TestSyncEngineKiroSQLiteCurrentStoreShadowsLegacy(t *testing.T) {
 }
 
 func TestSyncRootsSinceKiroLegacyShadowedBySQLiteOutsideScope(t *testing.T) {
+	t.Parallel()
 	legacyRoot := t.TempDir()
 	sqliteRoot := t.TempDir()
-	env := setupTestEnv(t, WithKiroDirs([]string{legacyRoot, sqliteRoot}))
+	env := setupSingleAgentTestEnvWithDirs(
+		t, parser.AgentKiro, []string{legacyRoot, sqliteRoot},
+	)
 
 	ks := createKiroSQLiteDB(t, sqliteRoot)
 	ks.addSession(
@@ -3037,12 +3067,15 @@ func TestSyncPathsCodexArchivedDuplicateEventPinsChangedFile(t *testing.T) {
 }
 
 func TestSyncSingleSessionCodexPreservesStoredArchivedDuplicate(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	codexDir := filepath.Join(root, "sessions")
 	archivedDir := filepath.Join(root, "archived_sessions")
 	require.NoError(t, os.MkdirAll(codexDir, 0o755))
 	require.NoError(t, os.MkdirAll(archivedDir, 0o755))
-	env := setupTestEnv(t, WithCodexDirs([]string{codexDir, archivedDir}))
+	env := setupSingleAgentTestEnvWithDirs(
+		t, parser.AgentCodex, []string{codexDir, archivedDir},
+	)
 
 	uuid := "f7a8b9ca-7890-1234-ef01-456789012347"
 	archivedContent := testjsonl.NewSessionBuilder().
@@ -6685,7 +6718,8 @@ func TestResyncAllConcurrentReads(t *testing.T) {
 // returns zero files (e.g. session directories are temporarily
 // inaccessible or misconfigured).
 func TestResyncAllAbortsOnEmptyDiscovery(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	// Seed existing data via initial sync.
 	content := testjsonl.NewSessionBuilder().
