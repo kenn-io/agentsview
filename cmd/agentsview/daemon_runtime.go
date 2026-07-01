@@ -633,7 +633,10 @@ func isExternalDaemonStarting(dataDir string) bool {
 	lock := flock.New(path)
 	locked, err := lock.TryLock()
 	if err != nil {
-		return false
+		// On Windows, probing a lock held by a helper process can report an
+		// error instead of a clean locked=false result. Treat uncertainty as
+		// active startup so replacement does not stop the incumbent daemon.
+		return true
 	}
 	if locked {
 		_ = lock.Unlock()

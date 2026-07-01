@@ -189,10 +189,9 @@ func TestRunServeBackgroundReplaceWaitsForExternalStartLock(t *testing.T) {
 	published := make(chan error, 1)
 	go func() {
 		time.Sleep(2 * startProbeTick())
-		RemoveDaemonRuntime(dir)
-		_, err := WriteDaemonRuntime(dir, newHost, newPort, "dev", false)
-		unlockStart()
-		published <- err
+		published <- publishDaemonRuntimeAndUnlockWhenVisible(
+			dir, newHost, newPort, "dev", unlockStart,
+		)
 	}()
 
 	out := captureStdout(t, func() {
@@ -206,6 +205,31 @@ func TestRunServeBackgroundReplaceWaitsForExternalStartLock(t *testing.T) {
 	require.NoError(t, <-published)
 	assert.Contains(t, out, "agentsview already running at")
 	assert.Contains(t, out, fmt.Sprintf(":%d", newPort))
+}
+
+func publishDaemonRuntimeAndUnlockWhenVisible(
+	dataDir, host string, port int, version string, unlock func(),
+) error {
+	RemoveDaemonRuntime(dataDir)
+	_, err := WriteDaemonRuntime(dataDir, host, port, version, false)
+	if err != nil {
+		unlock()
+		return err
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if rt := FindDaemonRuntime(dataDir); rt != nil &&
+			!rt.ReadOnly && rt.Port == port {
+			unlock()
+			return nil
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	unlock()
+	return fmt.Errorf(
+		"published daemon runtime %s:%d was not visible before unlock",
+		host, port,
+	)
 }
 
 func TestRunServeBackgroundReplaceContinuesAfterExternalStartupAbort(
@@ -769,12 +793,9 @@ func TestEnsureBackgroundServeReplacementWaitsForExternalStartLock(
 			published := make(chan error, 1)
 			go func() {
 				time.Sleep(2 * startProbeTick())
-				RemoveDaemonRuntime(dir)
-				_, err := WriteDaemonRuntime(
-					dir, newHost, newPort, "1.1.0", false,
+				published <- publishDaemonRuntimeAndUnlockWhenVisible(
+					dir, newHost, newPort, "1.1.0", unlockStart,
 				)
-				unlockStart()
-				published <- err
 			}()
 
 			cfg := config.Config{DataDir: dir}
