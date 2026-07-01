@@ -60,8 +60,8 @@ func isVisualStudioCopilotVS2026SessionPath(path string) bool {
 	if len(parts) < 4 {
 		return false
 	}
-	return parts[len(parts)-1] == "sessions" &&
-		parts[len(parts)-3] == "copilot-chat"
+	return strings.EqualFold(parts[len(parts)-1], "sessions") &&
+		strings.EqualFold(parts[len(parts)-3], "copilot-chat")
 }
 
 func isVisualStudioCopilotVS2026SessionFileName(name string) bool {

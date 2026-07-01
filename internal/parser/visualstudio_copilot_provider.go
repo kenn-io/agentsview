@@ -389,18 +389,18 @@ func visualStudioCopilotVS2026SessionUnderRoot(
 	case visualStudioCopilotVS2026SessionsRoot:
 		return len(parts) == 1
 	case visualStudioCopilotVS2026ThreadRoot:
-		return len(parts) == 2 && parts[0] == "sessions"
+		return len(parts) == 2 && strings.EqualFold(parts[0], "sessions")
 	case visualStudioCopilotVS2026CopilotChatRoot:
-		return len(parts) == 3 && parts[1] == "sessions"
+		return len(parts) == 3 && strings.EqualFold(parts[1], "sessions")
 	case visualStudioCopilotVS2026VSRoot:
 		return len(parts) == 5 &&
-			parts[1] == "copilot-chat" &&
-			parts[3] == "sessions"
+			strings.EqualFold(parts[1], "copilot-chat") &&
+			strings.EqualFold(parts[3], "sessions")
 	default:
 		return len(parts) == 6 &&
 			strings.EqualFold(parts[0], ".vs") &&
-			parts[2] == "copilot-chat" &&
-			parts[4] == "sessions"
+			strings.EqualFold(parts[2], "copilot-chat") &&
+			strings.EqualFold(parts[4], "sessions")
 	}
 }
 

@@ -471,6 +471,58 @@ func TestVisualStudioCopilotProviderSupportsVS2026RootModes(
 	}
 }
 
+func TestVisualStudioCopilotProviderClassifiesMixedCaseVS2026Layout(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	conversationID := "5bc5f6d7-9a6e-4f9c-8f3c-b7be2e7d9f20"
+	sessionPath := filepath.Join(
+		root, ".VS", "SampleApp", "Copilot-Chat", "thread", "Sessions",
+		conversationID,
+	)
+	writeSourceFile(t, sessionPath, vsCopilotTraceLineJSON(
+		conversationID,
+		"chat gpt-5.5", "1781293600000000000", "1781293610000000000",
+		map[string]string{
+			"gen_ai.operation.name": "chat",
+			"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Run the tests."}]}]`,
+		},
+	)+"\n")
+
+	virtualPath := VisualStudioCopilotVirtualPath(sessionPath, conversationID)
+	cases := []struct {
+		name string
+		root string
+	}{
+		{name: "project root", root: root},
+		{name: ".vs root", root: filepath.Join(root, ".VS")},
+		{name: "copilot-chat root", root: filepath.Join(root, ".VS", "SampleApp", "Copilot-Chat")},
+		{name: "thread root", root: filepath.Join(root, ".VS", "SampleApp", "Copilot-Chat", "thread")},
+		{name: "sessions root", root: filepath.Join(root, ".VS", "SampleApp", "Copilot-Chat", "thread", "Sessions")},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			provider, ok := NewProvider(AgentVSCopilot, ProviderConfig{
+				Roots: []string{tc.root},
+			})
+			require.True(t, ok)
+
+			changed, err := provider.SourcesForChangedPath(
+				context.Background(),
+				ChangedPathRequest{
+					Path:      sessionPath,
+					EventKind: "write",
+					WatchRoot: tc.root,
+				},
+			)
+			require.NoError(t, err)
+			require.Len(t, changed, 1)
+			assert.Equal(t, virtualPath, changed[0].DisplayPath)
+		})
+	}
+}
+
 func TestVisualStudioCopilotProviderCanonicalizesMixedLegacyAndVS2026Sources(
 	t *testing.T,
 ) {
