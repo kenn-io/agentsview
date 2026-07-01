@@ -3883,17 +3883,17 @@ func TestCopyOrphanedDataFrom_NoOrphans(t *testing.T) {
 		"expected 0 orphaned sessions, got %d", count)
 }
 
-func TestCopyOrphanedDataFrom_WithToolCalls(t *testing.T) {
+func TestCopyOrphanedDataFrom_PreservesCopiedDetails(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
-	// Source DB with session s1 that has tool_calls.
 	srcPath := filepath.Join(dir, "old.db")
 	srcDB := testDBAtPath(t, srcPath, "src")
-	insertSession(t, srcDB, "s1", "proj")
+
+	insertSession(t, srcDB, "tool-call", "proj")
 	insertMessages(t, srcDB,
-		userMsg("s1", 0, "hello"),
-		asstMsg("s1", 1, "used a tool"),
+		userMsg("tool-call", 0, "hello"),
+		asstMsg("tool-call", 1, "used a tool"),
 	)
 	_, err := srcDB.getWriter().Exec(`
 		INSERT INTO tool_calls
@@ -3902,61 +3902,23 @@ func TestCopyOrphanedDataFrom_WithToolCalls(t *testing.T) {
 		SELECT id, session_id, 'Bash', 'command',
 			'tu_123'
 		FROM messages
-		WHERE session_id = 's1' AND ordinal = 1`,
+		WHERE session_id = 'tool-call' AND ordinal = 1`,
 	)
 	requireNoError(t, err, "insert tool_call")
-	srcDB.Close()
 
-	// Empty destination DB.
-	dstPath := filepath.Join(dir, "new.db")
-	dstDB := testDBAtPath(t, dstPath, "dst")
-	defer dstDB.Close()
-
-	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
-	requireNoError(t, err, "CopyOrphanedDataFrom")
-	require.Equal(t, 1, count, "expected 1 orphaned, got")
-
-	// Verify tool_call was copied with correct message_id
-	// mapping.
-	var toolName, toolUseID string
-	var msgID int
-	err = dstDB.getReader().QueryRow(`
-		SELECT tc.message_id, tc.tool_name, tc.tool_use_id
-		FROM tool_calls tc
-		WHERE tc.session_id = 's1'`,
-	).Scan(&msgID, &toolName, &toolUseID)
-	requireNoError(t, err, "query tool_call")
-	assert.Equal(t, "Bash", toolName, "tool_name")
-	assert.Equal(t, "tu_123", toolUseID, "tool_use_id")
-
-	// Verify the message_id FK is valid.
-	var ordinal int
-	err = dstDB.getReader().QueryRow(
-		"SELECT ordinal FROM messages WHERE id = ?", msgID,
-	).Scan(&ordinal)
-	requireNoError(t, err, "verify FK")
-	assert.Equal(t, 1, ordinal, "tool_call message ordinal")
-}
-
-func TestCopyOrphanedDataFrom_WithToolResultEvents(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-
-	srcPath := filepath.Join(dir, "old.db")
-	srcDB := testDBAtPath(t, srcPath, "src")
-	insertSession(t, srcDB, "s1", "proj")
+	insertSession(t, srcDB, "tool-result", "proj")
 	insertMessages(t, srcDB,
-		userMsg("s1", 0, "hello"),
-		asstMsg("s1", 1, "waited on child"),
+		userMsg("tool-result", 0, "hello"),
+		asstMsg("tool-result", 1, "waited on child"),
 	)
-	_, err := srcDB.getWriter().Exec(`
+	_, err = srcDB.getWriter().Exec(`
 		INSERT INTO tool_calls
 			(message_id, session_id, tool_name, category,
 			 tool_use_id, result_content_length, result_content)
 		SELECT id, session_id, 'wait', 'Other',
 			'call_wait', 23, 'Finished successfully'
 		FROM messages
-		WHERE session_id = 's1' AND ordinal = 1`,
+		WHERE session_id = 'tool-result' AND ordinal = 1`,
 	)
 	requireNoError(t, err, "insert tool_call")
 	_, err = srcDB.getWriter().Exec(`
@@ -3966,12 +3928,52 @@ func TestCopyOrphanedDataFrom_WithToolResultEvents(t *testing.T) {
 			 source, status, content, content_length,
 			 timestamp, event_index)
 		VALUES
-			('s1', 1, 0, 'call_wait', 'agent-1', 'codex:agent-1',
+			('tool-result', 1, 0, 'call_wait', 'agent-1', 'codex:agent-1',
 			 'wait_output', 'completed', 'Finished successfully',
 			 23, '2026-03-27T18:00:00Z', 0)`,
 	)
 	requireNoError(t, err, "insert tool_result_event")
-	srcDB.Close()
+
+	insertSession(t, srcDB, "system", "proj")
+	systemMsg := userMsg("system", 0, "system init")
+	systemMsg.IsSystem = true
+	insertMessages(t, srcDB, systemMsg, asstMsg("system", 1, "reply"))
+
+	insertSession(t, srcDB, "token", "proj", func(s *Session) {
+		s.TotalOutputTokens = 5000
+		s.PeakContextTokens = 120000
+		s.HasTotalOutputTokens = true
+		s.HasPeakContextTokens = true
+	})
+	tokenMsg := asstMsg("token", 0, "response")
+	tokenMsg.Model = "claude-opus-4-20250514"
+	tokenMsg.TokenUsage = json.RawMessage(`{"output_tokens":500}`)
+	tokenMsg.ContextTokens = 80000
+	tokenMsg.OutputTokens = 500
+	tokenMsg.HasContextTokens = true
+	tokenMsg.HasOutputTokens = true
+	insertMessages(t, srcDB, tokenMsg)
+
+	insertSession(t, srcDB, "named", "proj", func(s *Session) {
+		s.SessionName = Ptr("Agent Generated Name")
+	})
+	insertMessages(t, srcDB, userMsg("named", 0, "hello"))
+
+	insertSession(t, srcDB, "file-call", "proj")
+	insertMessages(t, srcDB,
+		userMsg("file-call", 0, "hello"),
+		asstMsg("file-call", 1, "used a tool"),
+	)
+	_, err = srcDB.getWriter().Exec(`
+		INSERT INTO tool_calls
+			(message_id, session_id, tool_name, category,
+			 tool_use_id, input_json, file_path, call_index)
+		SELECT id, session_id, 'Edit', 'Edit',
+			'tu_fp1', '{"file_path":"/repo/main.go"}', '/repo/main.go', 0
+		FROM messages
+		WHERE session_id = 'file-call' AND ordinal = 1`)
+	require.NoError(t, err, "insert file path tool_call")
+	require.NoError(t, srcDB.Close(), "Close src")
 
 	dstPath := filepath.Join(dir, "new.db")
 	dstDB := testDBAtPath(t, dstPath, "dst")
@@ -3979,18 +3981,95 @@ func TestCopyOrphanedDataFrom_WithToolResultEvents(t *testing.T) {
 
 	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
 	requireNoError(t, err, "CopyOrphanedDataFrom")
-	require.Equal(t, 1, count, "expected 1 orphaned, got")
+	require.Equal(t, 6, count, "expected orphaned session count")
 
-	msgs, err := dstDB.GetAllMessages(context.Background(), "s1")
-	requireNoError(t, err, "GetAllMessages")
-	require.Len(t, msgs, 2, "messages len =")
-	require.Len(t, msgs[1].ToolCalls, 1, "tool calls len =")
-	tc := msgs[1].ToolCalls[0]
-	require.Equal(t, "Finished successfully", tc.ResultContent, "result_content")
-	require.Len(t, tc.ResultEvents, 1, "result events len =")
-	require.Equal(t, "wait_output", tc.ResultEvents[0].Source, "event source")
-	require.Equal(t, "codex:agent-1",
-		tc.ResultEvents[0].SubagentSessionID, "subagent_session_id")
+	ctx := context.Background()
+
+	t.Run("tool call message mapping", func(t *testing.T) {
+		var toolName, toolUseID string
+		var msgID int
+		err := dstDB.getReader().QueryRow(`
+			SELECT tc.message_id, tc.tool_name, tc.tool_use_id
+			FROM tool_calls tc
+			WHERE tc.session_id = 'tool-call'`,
+		).Scan(&msgID, &toolName, &toolUseID)
+		requireNoError(t, err, "query tool_call")
+		assert.Equal(t, "Bash", toolName, "tool_name")
+		assert.Equal(t, "tu_123", toolUseID, "tool_use_id")
+
+		var ordinal int
+		err = dstDB.getReader().QueryRow(
+			"SELECT ordinal FROM messages WHERE id = ?", msgID,
+		).Scan(&ordinal)
+		requireNoError(t, err, "verify FK")
+		assert.Equal(t, 1, ordinal, "tool_call message ordinal")
+	})
+
+	t.Run("tool result events", func(t *testing.T) {
+		msgs, err := dstDB.GetAllMessages(ctx, "tool-result")
+		requireNoError(t, err, "GetAllMessages")
+		require.Len(t, msgs, 2, "messages len =")
+		require.Len(t, msgs[1].ToolCalls, 1, "tool calls len =")
+		tc := msgs[1].ToolCalls[0]
+		require.Equal(t, "Finished successfully", tc.ResultContent,
+			"result_content")
+		require.Len(t, tc.ResultEvents, 1, "result events len =")
+		require.Equal(t, "wait_output", tc.ResultEvents[0].Source,
+			"event source")
+		require.Equal(t, "codex:agent-1",
+			tc.ResultEvents[0].SubagentSessionID, "subagent_session_id")
+	})
+
+	t.Run("system flags", func(t *testing.T) {
+		msgs, err := dstDB.GetMessages(ctx, "system", 0, 100, true)
+		requireNoError(t, err, "GetMessages")
+		require.Len(t, msgs, 2, "expected 2 messages")
+		assert.True(t, msgs[0].IsSystem, "ordinal 0: is_system should be true")
+		assert.False(t, msgs[1].IsSystem, "ordinal 1: is_system should be false")
+	})
+
+	t.Run("token metadata", func(t *testing.T) {
+		s, err := dstDB.GetSession(ctx, "token")
+		requireNoError(t, err, "GetSession token")
+		require.NotNil(t, s, "orphaned session token not found")
+		assert.Equal(t, 5000, s.TotalOutputTokens, "TotalOutputTokens")
+		assert.Equal(t, 120000, s.PeakContextTokens, "PeakContextTokens")
+		assert.True(t, s.HasTotalOutputTokens, "HasTotalOutputTokens should be true")
+		assert.True(t, s.HasPeakContextTokens, "HasPeakContextTokens should be true")
+
+		msgs, err := dstDB.GetMessages(ctx, "token", 0, 100, true)
+		requireNoError(t, err, "GetMessages token")
+		require.Len(t, msgs, 1, "expected 1 message")
+		m := msgs[0]
+		assert.Equal(t, "claude-opus-4-20250514", m.Model, "Model")
+		assert.Equal(t, 80000, m.ContextTokens, "ContextTokens")
+		assert.Equal(t, 500, m.OutputTokens, "OutputTokens")
+		assert.True(t, m.HasContextTokens, "HasContextTokens should be true")
+		assert.True(t, m.HasOutputTokens, "HasOutputTokens should be true")
+		assert.NotEmpty(t, m.TokenUsage, "TokenUsage should be preserved")
+	})
+
+	t.Run("session name", func(t *testing.T) {
+		s, err := dstDB.GetSession(ctx, "named")
+		requireNoError(t, err, "GetSession named")
+		require.NotNil(t, s, "orphaned session named not found in dst")
+		require.NotNil(t, s.DisplayName,
+			"DisplayName should be populated via COALESCE")
+		assert.Equal(t, "Agent Generated Name", *s.DisplayName,
+			"DisplayName via COALESCE(display_name, session_name)")
+	})
+
+	t.Run("tool call file path and call index", func(t *testing.T) {
+		var fp sql.NullString
+		var ci int
+		require.NoError(t, dstDB.getReader().QueryRow(`
+			SELECT file_path, call_index FROM tool_calls
+			WHERE session_id = 'file-call'`,
+		).Scan(&fp, &ci))
+		assert.True(t, fp.Valid, "file_path should be non-NULL after copy")
+		assert.Equal(t, "/repo/main.go", fp.String, "file_path value")
+		assert.Equal(t, 0, ci, "call_index value")
+	})
 }
 
 func TestCopyTrashedDataFromPreservesPins(t *testing.T) {
@@ -4080,38 +4159,6 @@ func TestCopyOrphanedDataFrom_AtomicOnFailure(t *testing.T) {
 		len(page.Sessions))
 }
 
-func TestCopyOrphanedDataFrom_IsSystem(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-
-	// Source DB with a session containing a system message.
-	srcPath := filepath.Join(dir, "old.db")
-	srcDB := testDBAtPath(t, srcPath, "src")
-	insertSession(t, srcDB, "s1", "proj")
-	m := userMsg("s1", 0, "system init")
-	m.IsSystem = true
-	insertMessages(t, srcDB, m, asstMsg("s1", 1, "reply"))
-	srcDB.Close()
-
-	// Empty destination.
-	dstPath := filepath.Join(dir, "new.db")
-	dstDB := testDBAtPath(t, dstPath, "dst")
-	defer dstDB.Close()
-
-	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
-	requireNoError(t, err, "CopyOrphanedDataFrom")
-	require.Equal(t, 1, count, "expected 1 orphaned, got")
-
-	// Verify is_system was preserved.
-	msgs, err := dstDB.GetMessages(
-		context.Background(), "s1", 0, 100, true,
-	)
-	requireNoError(t, err, "GetMessages")
-	require.Len(t, msgs, 2, "expected 2 messages")
-	assert.True(t, msgs[0].IsSystem, "ordinal 0: is_system should be true")
-	assert.False(t, msgs[1].IsSystem, "ordinal 1: is_system should be false")
-}
-
 func TestCopyOrphanedDataFrom_LegacyNoIsSystem(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -4177,94 +4224,6 @@ func TestCopyOrphanedDataFrom_LegacyNoIsSystem(t *testing.T) {
 	requireNoError(t, err, "GetMessages")
 	require.Len(t, msgs, 1, "expected 1 message")
 	assert.False(t, msgs[0].IsSystem, "is_system should default to false")
-}
-
-func TestCopyOrphanedDataFrom_TokenMetadata(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-
-	// Source DB with session-level and message-level token data.
-	srcPath := filepath.Join(dir, "old.db")
-	srcDB := testDBAtPath(t, srcPath, "src")
-	insertSession(t, srcDB, "s1", "proj", func(s *Session) {
-		s.TotalOutputTokens = 5000
-		s.PeakContextTokens = 120000
-		s.HasTotalOutputTokens = true
-		s.HasPeakContextTokens = true
-	})
-	msg := asstMsg("s1", 0, "response")
-	msg.Model = "claude-opus-4-20250514"
-	msg.TokenUsage = json.RawMessage(
-		`{"output_tokens":500}`,
-	)
-	msg.ContextTokens = 80000
-	msg.OutputTokens = 500
-	msg.HasContextTokens = true
-	msg.HasOutputTokens = true
-	insertMessages(t, srcDB, msg)
-	srcDB.Close()
-
-	// Empty destination.
-	dstPath := filepath.Join(dir, "new.db")
-	dstDB := testDBAtPath(t, dstPath, "dst")
-	defer dstDB.Close()
-
-	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
-	requireNoError(t, err, "CopyOrphanedDataFrom")
-	require.Equal(t, 1, count, "expected 1 orphaned, got")
-
-	// Session token metadata must survive the copy.
-	ctx := context.Background()
-	s, err := dstDB.GetSession(ctx, "s1")
-	requireNoError(t, err, "GetSession s1")
-	require.NotNil(t, s, "orphaned session s1 not found")
-	assert.Equal(t, 5000, s.TotalOutputTokens, "TotalOutputTokens")
-	assert.Equal(t, 120000, s.PeakContextTokens, "PeakContextTokens")
-	assert.True(t, s.HasTotalOutputTokens, "HasTotalOutputTokens should be true")
-	assert.True(t, s.HasPeakContextTokens, "HasPeakContextTokens should be true")
-
-	// Message token metadata must survive the copy.
-	msgs, err := dstDB.GetMessages(ctx, "s1", 0, 100, true)
-	requireNoError(t, err, "GetMessages s1")
-	require.Len(t, msgs, 1, "expected 1 message")
-	m := msgs[0]
-	assert.Equal(t, "claude-opus-4-20250514", m.Model, "Model")
-	assert.Equal(t, 80000, m.ContextTokens, "ContextTokens")
-	assert.Equal(t, 500, m.OutputTokens, "OutputTokens")
-	assert.True(t, m.HasContextTokens, "HasContextTokens should be true")
-	assert.True(t, m.HasOutputTokens, "HasOutputTokens should be true")
-	assert.NotEmpty(t, m.TokenUsage, "TokenUsage should be preserved")
-}
-
-func TestCopyOrphanedDataFrom_SessionName(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-
-	// Source DB: one session with an agent-provided session_name.
-	srcPath := filepath.Join(dir, "old.db")
-	srcDB := testDBAtPath(t, srcPath, "src")
-	insertSession(t, srcDB, "s1", "proj", func(s *Session) {
-		s.SessionName = Ptr("Agent Generated Name")
-	})
-	insertMessages(t, srcDB, userMsg("s1", 0, "hello"))
-	srcDB.Close()
-
-	// Empty destination.
-	dstPath := filepath.Join(dir, "new.db")
-	dstDB := testDBAtPath(t, dstPath, "dst")
-	defer dstDB.Close()
-
-	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
-	requireNoError(t, err, "CopyOrphanedDataFrom")
-	require.Equal(t, 1, count, "expected 1 orphaned session")
-
-	// session_name must survive the orphan copy (visible via COALESCE).
-	ctx := context.Background()
-	s, err := dstDB.GetSession(ctx, "s1")
-	requireNoError(t, err, "GetSession s1")
-	require.NotNil(t, s, "orphaned session s1 not found in dst")
-	require.NotNil(t, s.DisplayName, "DisplayName should be populated via COALESCE")
-	assert.Equal(t, "Agent Generated Name", *s.DisplayName, "DisplayName via COALESCE(display_name, session_name)")
 }
 
 func TestGetAgentsExcludesEmptyAgent(t *testing.T) {
@@ -6398,49 +6357,6 @@ func seedSessionWithMessage(t *testing.T, d *DB, sessionID string) {
 	t.Helper()
 	insertSession(t, d, sessionID, "proj")
 	insertMessages(t, d, userMsg(sessionID, 0, "hello"))
-}
-
-func TestCopyOrphanedDataFrom_PreservesFilePathAndCallIndex(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-
-	// Source DB: session s1 with a tool_call that has file_path + call_index.
-	srcPath := filepath.Join(dir, "old.db")
-	srcDB := testDBAtPath(t, srcPath, "src")
-	insertSession(t, srcDB, "s1", "proj")
-	insertMessages(t, srcDB,
-		userMsg("s1", 0, "hello"),
-		asstMsg("s1", 1, "used a tool"),
-	)
-	_, err := srcDB.getWriter().Exec(`
-		INSERT INTO tool_calls
-			(message_id, session_id, tool_name, category,
-			 tool_use_id, input_json, file_path, call_index)
-		SELECT id, session_id, 'Edit', 'Edit',
-			'tu_fp1', '{"file_path":"/repo/main.go"}', '/repo/main.go', 0
-		FROM messages
-		WHERE session_id = 's1' AND ordinal = 1`)
-	require.NoError(t, err, "insert src tool_call")
-	srcDB.Close()
-
-	// Destination DB: empty.
-	dstPath := filepath.Join(dir, "new.db")
-	dstDB := testDBAtPath(t, dstPath, "dst")
-	defer dstDB.Close()
-
-	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
-	require.NoError(t, err, "CopyOrphanedDataFrom")
-	require.Equal(t, 1, count, "orphaned session count")
-
-	var fp sql.NullString
-	var ci int
-	require.NoError(t, dstDB.getReader().QueryRow(`
-		SELECT file_path, call_index FROM tool_calls
-		WHERE session_id = 's1'`,
-	).Scan(&fp, &ci))
-	assert.True(t, fp.Valid, "file_path should be non-NULL after copy")
-	assert.Equal(t, "/repo/main.go", fp.String, "file_path value")
-	assert.Equal(t, 0, ci, "call_index value")
 }
 
 // clearToolCallFieldBackfillSentinel removes the one-time backfill marker so a
