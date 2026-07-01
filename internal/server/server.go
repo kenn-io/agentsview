@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	httppprof "net/http/pprof"
 	"net/url"
 	"sort"
 	"strconv"
@@ -88,6 +89,11 @@ type Server struct {
 	// into the SPA's index.html.
 	basePath string
 	idle     *IdleTracker
+
+	// pprofEnabled registers net/http/pprof handlers under
+	// /debug/pprof/ so a running daemon can be profiled. Off by
+	// default; enabled by the hidden serve --pprof flag.
+	pprofEnabled bool
 }
 
 // New creates a new Server.
@@ -253,6 +259,12 @@ func WithIdleTracker(t *IdleTracker) Option {
 	return func(s *Server) { s.idle = t }
 }
 
+// WithPprof enables the net/http/pprof handlers under
+// /debug/pprof/ for live profiling of a running daemon.
+func WithPprof(enabled bool) Option {
+	return func(s *Server) { s.pprofEnabled = enabled }
+}
+
 func (s *Server) humaConfig() huma.Config {
 	version := s.version.Version
 	if version == "" {
@@ -281,6 +293,14 @@ func (s *Server) routes() {
 	configureHumaErrors()
 	s.api = humago.New(s.mux, s.humaConfig())
 	s.registerTypedAPIRoutes()
+
+	if s.pprofEnabled {
+		s.mux.HandleFunc("/debug/pprof/", httppprof.Index)
+		s.mux.HandleFunc("/debug/pprof/cmdline", httppprof.Cmdline)
+		s.mux.HandleFunc("/debug/pprof/profile", httppprof.Profile)
+		s.mux.HandleFunc("/debug/pprof/symbol", httppprof.Symbol)
+		s.mux.HandleFunc("/debug/pprof/trace", httppprof.Trace)
+	}
 
 	// SPA fallback: serve embedded frontend
 	// Do not use timeout handler for static assets to avoid buffering.

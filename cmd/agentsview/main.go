@@ -87,6 +87,7 @@ func warnMissingDirs(dirs []string, label string) {
 type serveOptions struct {
 	ReplaceDaemon  bool
 	NoSyncExplicit bool
+	Pprof          bool
 }
 
 func runServe(cfg config.Config, opts serveOptions) {
@@ -252,6 +253,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 		server.WithBaseContext(ctx),
 		server.WithBroadcaster(broadcaster),
 		server.WithIdleTracker(idleTracker),
+		server.WithPprof(opts.Pprof),
 	)
 
 	rt, err := startServerWithOptionalCaddy(ctx, cfg, srv, rtOpts)

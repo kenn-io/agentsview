@@ -124,6 +124,7 @@ func newServeCommand() *cobra.Command {
 	var background bool
 	var checkDataVersion bool
 	var replace bool
+	var pprofEnabled bool
 	cmd := &cobra.Command{
 		Use:          "serve",
 		Short:        "Start server",
@@ -150,6 +151,7 @@ func newServeCommand() *cobra.Command {
 			runServe(mustLoadConfig(cmd), serveOptions{
 				ReplaceDaemon:  replace,
 				NoSyncExplicit: cmd.Flags().Changed("no-sync"),
+				Pprof:          pprofEnabled,
 			})
 			return nil
 		},
@@ -173,6 +175,13 @@ func newServeCommand() *cobra.Command {
 		"Check whether the configured database is compatible with this binary",
 	)
 	_ = cmd.Flags().MarkHidden("check-data-version")
+	cmd.Flags().BoolVar(
+		&pprofEnabled,
+		"pprof",
+		false,
+		"Serve net/http/pprof under /debug/pprof (developer use)",
+	)
+	_ = cmd.Flags().MarkHidden("pprof")
 	config.RegisterServePFlags(cmd.Flags())
 	cmd.AddCommand(newServeStatusCommand())
 	cmd.AddCommand(newServeStopCommand())
