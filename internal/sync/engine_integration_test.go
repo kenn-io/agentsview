@@ -254,6 +254,8 @@ func assignFocusedAgentDir(
 		env.codexDir = dir
 	case parser.AgentOpenCode:
 		env.opencodeDir = dir
+	case parser.AgentGemini:
+		env.geminiDir = dir
 	case parser.AgentKilo:
 		env.kiloDir = dir
 	case parser.AgentMiMoCode:
