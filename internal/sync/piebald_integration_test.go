@@ -8,6 +8,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 )
 
@@ -188,7 +189,7 @@ func (p *piebaldTestDB) addChatWithFork(t *testing.T, chatID int64) {
 func TestSyncSingleSessionPiebaldFork(t *testing.T) {
 	t.Parallel()
 
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentPiebald)
 	piebald := createPiebaldDB(t, env.piebaldDir)
 	piebald.addChatWithFork(t, 42)
 
@@ -210,7 +211,7 @@ func TestSyncSingleSessionPiebaldFork(t *testing.T) {
 func TestSyncSingleSessionPiebaldUnknownFork(t *testing.T) {
 	t.Parallel()
 
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentPiebald)
 	piebald := createPiebaldDB(t, env.piebaldDir)
 	piebald.addChatWithFork(t, 42)
 
@@ -223,7 +224,9 @@ func TestSyncSingleSessionPiebaldUnknownFork(t *testing.T) {
 }
 
 func TestSyncEnginePiebaldBulkSync(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+
+	env := setupSingleAgentTestEnv(t, parser.AgentPiebald)
 	piebald := createPiebaldDB(t, env.piebaldDir)
 	piebald.addChat(t, 42, "Piebald Bulk Sync", "Please add Piebald support.", "Added Piebald support.", "2026-05-01T10:05:00Z")
 
@@ -240,7 +243,7 @@ func TestSyncEnginePiebaldBulkSync(t *testing.T) {
 func TestSyncSingleSessionPiebald(t *testing.T) {
 	t.Parallel()
 
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentPiebald)
 	piebald := createPiebaldDB(t, env.piebaldDir)
 	piebald.addChat(t, 7, "Single Piebald", "One chat.", "One answer.", "2026-05-01T10:05:00Z")
 
@@ -263,7 +266,9 @@ func TestSyncSingleSessionPiebald(t *testing.T) {
 }
 
 func TestSyncPiebaldMultiChatIncremental(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+
+	env := setupSingleAgentTestEnv(t, parser.AgentPiebald)
 	piebald := createPiebaldDB(t, env.piebaldDir)
 	piebald.addChat(t, 1, "Chat A", "Prompt A.", "Answer A.", "2026-05-01T10:01:00Z")
 	piebald.addChat(t, 2, "Chat B", "Prompt B.", "Answer B.", "2026-05-01T10:02:00Z")

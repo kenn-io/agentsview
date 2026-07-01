@@ -853,7 +853,7 @@ func TestParseDiffCoversProviderAuthoritativePiFamily(t *testing.T) {
 // Examined 0 rather than compared.
 func TestParseDiffCoversKiroSQLite(t *testing.T) {
 	t.Parallel()
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
 	ks := createKiroSQLiteDB(t, env.kiroDir)
 	ks.addSession(
 		t, "/home/user/code/kiro-app", "sqlite-session",
@@ -887,7 +887,7 @@ func TestParseDiffCoversKiroSQLite(t *testing.T) {
 // --fail-on-change pass without vetting it.
 func TestParseDiffCoversMixedOpenCodeRoot(t *testing.T) {
 	t.Parallel()
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 
 	// File-backed storage session: this makes ResolveOpenCodeSource
 	// pick storage mode for the root.
@@ -950,7 +950,8 @@ func TestParseDiffCoversMixedOpenCodeRoot(t *testing.T) {
 // root that still carries DB-only sessions in kilo.db must have BOTH
 // sources re-parsed.
 func TestParseDiffCoversMixedKiloRoot(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentKilo)
 
 	// File-backed storage session: this makes ResolveKiloSource pick storage
 	// mode for the root.
@@ -1011,7 +1012,8 @@ func TestParseDiffCoversMixedKiloRoot(t *testing.T) {
 // Examined:1/Identical:1 means the stored conversation was matched and
 // vetted, not bucketed as skipped/"not discovered".
 func TestParseDiffCoversShelley(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentShelley)
 	dbPath := createShelleyDB(t, env.shelleyDir)
 	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
 		"claude-sonnet-4-6", "", true,
@@ -1038,7 +1040,8 @@ func TestParseDiffCoversShelley(t *testing.T) {
 // stripVirtualSourceSuffix mapping shelley.db#id back to shelley.db so
 // the parse error keyed by the real DB path matches the stored rows.
 func TestParseDiffShelleyDBErrorAttributed(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentShelley)
 	dbPath := createShelleyDB(t, env.shelleyDir)
 	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
 		"claude-sonnet-4-6", "", true,
@@ -1079,7 +1082,7 @@ func TestParseDiffKiroSQLitePerSessionError(t *testing.T) {
 
 	t.Run("stored session turned malformed", func(t *testing.T) {
 		t.Parallel()
-		env := setupTestEnv(t)
+		env := setupSingleAgentTestEnv(t, parser.AgentKiro)
 		ks := createKiroSQLiteDB(t, env.kiroDir)
 		ks.addSession(
 			t, "/home/user/code/kiro-app", "sqlite-session",
@@ -1112,7 +1115,7 @@ func TestParseDiffKiroSQLitePerSessionError(t *testing.T) {
 
 	t.Run("unstored malformed session still reported", func(t *testing.T) {
 		t.Parallel()
-		env := setupTestEnv(t)
+		env := setupSingleAgentTestEnv(t, parser.AgentKiro)
 		ks := createKiroSQLiteDB(t, env.kiroDir)
 		ks.addSession(
 			t, "/home/user/code/kiro-app", "good-session",

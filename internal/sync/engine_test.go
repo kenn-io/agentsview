@@ -3787,6 +3787,7 @@ func TestEngine_ClassifyOnePathReasonixDeletedTranscriptIgnored(t *testing.T) {
 }
 
 func TestEngine_SyncPathsReasonixMetadataOnlySessionFieldUpdate(t *testing.T) {
+	t.Parallel()
 	db := openTestDB(t)
 	reasonixDir := t.TempDir()
 	engine := NewEngine(db, EngineConfig{

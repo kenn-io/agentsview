@@ -226,6 +226,8 @@ func setupFocusedTestEnv(t *testing.T, agents ...parser.AgentType) *testEnv {
 			env.ompDir = dir
 		case parser.AgentKiro:
 			env.kiroDir = dir
+		case parser.AgentShelley:
+			env.shelleyDir = dir
 		case parser.AgentAntigravityCLI:
 			env.antigravityCLIDir = dir
 		default:
@@ -1075,7 +1077,7 @@ func TestResyncAllAppliesWorktreeProjectMappingDuringBulkWrites(
 	t *testing.T,
 ) {
 	t.Parallel()
-	env := setupTestEnv(t)
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	root := t.TempDir()
 	worktreePrefix := filepath.Join(root, "my-app.worktrees")
