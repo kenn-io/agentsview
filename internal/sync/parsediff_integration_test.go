@@ -769,7 +769,8 @@ func TestParseDiffLimitNewestFirst(t *testing.T) {
 // requested agents and that agents without an on-disk source to
 // re-parse are rejected.
 func TestParseDiffAgentScope(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupFocusedTestEnv(t, parser.AgentClaude, parser.AgentCodex)
 
 	env.writeClaudeSession(t, "test-proj", "pd-claude.jsonl",
 		parseDiffClaudeContent("claude prompt", "claude reply"))
@@ -816,7 +817,8 @@ func TestParseDiffAgentScope(t *testing.T) {
 }
 
 func TestParseDiffCoversProviderAuthoritativePiFamily(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupFocusedTestEnv(t, parser.AgentPi, parser.AgentOMP)
 	env.writeSession(
 		t,
 		env.piDir,

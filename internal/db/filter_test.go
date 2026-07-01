@@ -242,6 +242,7 @@ func TestSessionFilterExcludeProject(t *testing.T) {
 }
 
 func TestSessionFilterMachineMultiSelect(t *testing.T) {
+	t.Parallel()
 	d := testDB(t)
 
 	insertSession(t, d, "laptop", "proj", func(s *Session) {

@@ -49,6 +49,8 @@ func storeContractBackends() []storeContractBackend {
 }
 
 func TestStoreContract(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name string
 		run  func(t *testing.T, store Store, fixture storeContractFixture, backend storeContractBackend)
@@ -62,9 +64,13 @@ func TestStoreContract(t *testing.T) {
 	}
 
 	for _, backend := range storeContractBackends() {
+		backend := backend
 		t.Run(backend.name, func(t *testing.T) {
+			t.Parallel()
 			for _, tt := range tests {
+				tt := tt
 				t.Run(tt.name, func(t *testing.T) {
+					t.Parallel()
 					store := backend.open(t)
 					fixture := backend.seed(t, store)
 					tt.run(t, store, fixture, backend)

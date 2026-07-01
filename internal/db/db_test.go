@@ -1094,6 +1094,7 @@ func TestSessionParentSessionID(t *testing.T) {
 }
 
 func TestGetChildSessions(t *testing.T) {
+	t.Parallel()
 	d := testDB(t)
 
 	// Insert a parent session.
@@ -1179,6 +1180,7 @@ func TestGetChildSessions(t *testing.T) {
 }
 
 func TestListSessions(t *testing.T) {
+	t.Parallel()
 	d := testDB(t)
 
 	for i := range 5 {
@@ -3503,6 +3505,7 @@ func TestConcurrentReadsWhileReopen(t *testing.T) {
 }
 
 func TestExportedReaderAcquiredBeforeReopenStaysUsable(t *testing.T) {
+	t.Parallel()
 	d := testDB(t)
 	insertSession(t, d, "s1", "proj")
 

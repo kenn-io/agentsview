@@ -210,6 +210,8 @@ func setupFocusedTestEnv(t *testing.T, agents ...parser.AgentType) *testEnv {
 		switch agent {
 		case parser.AgentClaude:
 			env.claudeDir = dir
+		case parser.AgentCodex:
+			env.codexDir = dir
 		case parser.AgentOpenCode:
 			env.opencodeDir = dir
 		case parser.AgentKilo:
@@ -218,6 +220,10 @@ func setupFocusedTestEnv(t *testing.T, agents ...parser.AgentType) *testEnv {
 			env.mimocodeDir = dir
 		case parser.AgentPiebald:
 			env.piebaldDir = dir
+		case parser.AgentPi:
+			env.piDir = dir
+		case parser.AgentOMP:
+			env.ompDir = dir
 		case parser.AgentKiro:
 			env.kiroDir = dir
 		case parser.AgentAntigravityCLI:
@@ -1630,6 +1636,7 @@ func TestSyncPathsClaudeDuplicateTouchedStaleDoesNotBeatPreferred(t *testing.T) 
 }
 
 func TestSyncAllClaudeDuplicatePathRewriterKeepsStoredPreferred(t *testing.T) {
+	t.Parallel()
 	liveDir := t.TempDir()
 	archiveDir := t.TempDir()
 	database := dbtest.OpenTestDB(t)
@@ -3545,7 +3552,8 @@ func TestSyncPathsClaudeRejectsNonAgentInSubagents(t *testing.T) {
 }
 
 func TestSyncPathsClaudeRejectsNested(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	content := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "Hello").

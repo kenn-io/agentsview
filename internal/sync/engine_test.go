@@ -3001,6 +3001,7 @@ func (f emitterFunc) Emit(scope string) { f(scope) }
 // released, TryLock returns true. No goroutines, no wall-clock
 // timeouts — deterministic under load.
 func TestEngine_SyncPathsEmitsAfterSyncMuReleased(t *testing.T) {
+	t.Parallel()
 	fx := newEngineFixture(t)
 
 	var acquired atomic.Bool
