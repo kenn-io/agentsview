@@ -80,6 +80,9 @@ type Store interface {
 	GetDailyUsage(ctx context.Context, f UsageFilter) (DailyUsageResult, error)
 	GetTopSessionsByCost(ctx context.Context, f UsageFilter, limit int) ([]TopSessionEntry, error)
 	GetUsageSessionCounts(ctx context.Context, f UsageFilter) (UsageSessionCounts, error)
+	// CountSessionsForUsage counts sessions matching a usage filter from the
+	// sessions table, independent of whether they recorded token usage.
+	CountSessionsForUsage(ctx context.Context, f UsageFilter) (int, error)
 	GetSessionUsage(ctx context.Context, sessionID string) (*SessionUsage, error)
 
 	// Stars.
