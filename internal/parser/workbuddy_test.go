@@ -74,6 +74,8 @@ func TestDiscoverWorkBuddySessions(t *testing.T) {
 }
 
 func TestParseWorkBuddySession(t *testing.T) {
+	t.Parallel()
+
 	tmp := t.TempDir()
 	cwd := filepath.Join(tmp, "cwd", "proj")
 	require.NoError(t, os.MkdirAll(cwd, 0o755))
@@ -131,6 +133,8 @@ func TestParseWorkBuddySessionDoesNotDoubleCountOpenAICachedTokens(t *testing.T)
 }
 
 func TestParseWorkBuddySessionUsesCwdProjectAndFileSessionID(t *testing.T) {
+	t.Parallel()
+
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "stored-project", "22222222-2222-4222-8222-222222222222.jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))

@@ -288,6 +288,8 @@ func TestCodexInsertMessage_PreservesChronologyOnSameOrdinal(t *testing.T) {
 }
 
 func TestParseCodexSession_FunctionCalls(t *testing.T) {
+	t.Parallel()
+
 	t.Run("function calls", func(t *testing.T) {
 		content := loadFixture(t, "codex/function_calls.jsonl")
 		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
@@ -1144,6 +1146,8 @@ func TestParseCodexSession_TurnContextModel(t *testing.T) {
 }
 
 func TestParseCodexSession_TokenUsage(t *testing.T) {
+	t.Parallel()
+
 	t.Run("token_count attached to assistant message", func(t *testing.T) {
 		content := testjsonl.JoinJSONL(
 			testjsonl.CodexSessionMetaJSON("tu-1", "/tmp", "user", tsEarly),
@@ -1447,6 +1451,8 @@ func TestParseCodexSessionFrom_ForkReplaySpansOffset(t *testing.T) {
 }
 
 func TestParseCodexSession_EdgeCases(t *testing.T) {
+	t.Parallel()
+
 	t.Run("skips system messages", func(t *testing.T) {
 		content := testjsonl.JoinJSONL(
 			testjsonl.CodexSessionMetaJSON("abc", "/tmp", "user", tsEarly),

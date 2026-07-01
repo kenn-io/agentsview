@@ -82,6 +82,7 @@ func TestExtractProjectFromCwd_Git(t *testing.T) {
 
 func TestExtractProjectFromCwdWithBranchContext_GitWorktreeMainRoot(t *testing.T) {
 	skipIfNoGit(t)
+	t.Parallel()
 
 	root := t.TempDir()
 	mainRepo := filepath.Join(root, "agentsview")

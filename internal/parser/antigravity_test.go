@@ -243,6 +243,8 @@ func TestAgProtoLengthOverflow(t *testing.T) {
 // truncates instead of failing, so a payload past the budget keeps
 // its decoded prefix rather than losing all content.
 func TestAgProtoFieldBudget(t *testing.T) {
+	t.Parallel()
+
 	// One field per two bytes: tag 0x08 (field 1, varint), value 0.
 	dense := func(fields int) []byte {
 		return bytes.Repeat([]byte{0x08, 0x00}, fields)
