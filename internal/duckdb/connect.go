@@ -223,7 +223,10 @@ func NewQuackStore(rawURL, token string, allowInsecure bool) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewStoreFromDB(conn), nil
+	return &Store{
+		duck:           conn,
+		connectionKind: duckDBQuackClientConnection,
+	}, nil
 }
 
 // OpenQuack opens an in-memory DuckDB client and attaches a remote DuckDB

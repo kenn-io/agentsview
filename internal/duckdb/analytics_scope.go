@@ -69,7 +69,7 @@ func (s *Store) resolveAnalyticsMessageScope(
 	if err := duckQueryChunked(unique, func(chunk []string) error {
 		reducer := db.NewScopeReducer(flt, emit)
 		ph, args := duckInPlaceholders(chunk)
-		rows, err := s.duck.QueryContext(ctx, `
+		rows, err := s.queryContext(ctx, `
 			SELECT session_id, ordinal, role, is_system, COALESCE(model, ''),
 				has_thinking, has_tool_use, timestamp,
 				output_tokens, has_output_tokens, content_length, `+contentExpr+`

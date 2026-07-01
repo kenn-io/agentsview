@@ -237,6 +237,81 @@ func TestQuackClientSyncEnsureSchemaRejectsUnmigratedServerSchema(t *testing.T) 
 	assert.NotContains(t, err.Error(), "GetStorageInfo")
 }
 
+func TestQuackStoreAnalyticsDashboardReads(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "agentsview-quack-analytics.duckdb")
+	uri := "quack:127.0.0.1:" + freeTCPPort(t)
+	const token = "agentsview-duckdbtest-token-0006"
+
+	server := openQuackMirrorServer(t, ctx, path, uri, token)
+	require.NoError(t, EnsureSchema(ctx, server), "prepare server schema")
+
+	local := newLocalDB(t)
+	seedDuckDBSyncFixture(t, local)
+	syncer, err := NewFromConfig(
+		config.DuckDBConfig{
+			URL:         uri,
+			Token:       token,
+			MachineName: "quack-client",
+		},
+		local,
+		SyncOptions{},
+	)
+	require.NoError(t, err, "open Quack-backed sync")
+	t.Cleanup(func() {
+		require.NoError(t, syncer.Close(), "close Quack-backed sync")
+	})
+
+	result, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err, "push analytics fixture through Quack")
+	assert.Equal(t, 2, result.SessionsPushed)
+	assert.Equal(t, 3, result.MessagesPushed)
+
+	store, err := NewQuackStore(uri, token, false)
+	require.NoError(t, err, "open Quack-backed store")
+	t.Cleanup(func() {
+		require.NoError(t, store.Close(), "close Quack-backed store")
+	})
+
+	filter := db.AnalyticsFilter{
+		From:     "2026-01-10",
+		To:       "2026-01-11",
+		Timezone: "UTC",
+	}
+	page, err := store.ListSessions(ctx, db.SessionFilter{Limit: 10})
+	require.NoError(t, err, "list sessions through Quack")
+	assert.Len(t, page.Sessions, 2)
+
+	sidebar, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{})
+	require.NoError(t, err, "read sidebar session index through Quack")
+	assert.Equal(t, 2, sidebar.Total)
+
+	search, err := store.Search(ctx, db.SearchFilter{Query: "alpha", Limit: 10})
+	require.NoError(t, err, "search sessions through Quack")
+	assert.NotEmpty(t, search.Results)
+
+	ordinals, err := store.SearchSession(ctx, "duck-sync-alpha", "duck result")
+	require.NoError(t, err, "search session through Quack")
+	assert.NotEmpty(t, ordinals)
+
+	activity, err := store.GetAnalyticsActivity(ctx, filter, "day")
+	require.NoError(t, err, "read activity analytics through Quack")
+	assert.NotEmpty(t, activity.Series)
+
+	hours, err := store.GetAnalyticsHourOfWeek(ctx, filter)
+	require.NoError(t, err, "read hour-of-week analytics through Quack")
+	assert.NotEmpty(t, hours.Cells)
+
+	top, err := store.GetAnalyticsTopSessions(ctx, filter, "messages")
+	require.NoError(t, err, "read top sessions through Quack")
+	require.NotEmpty(t, top.Sessions)
+	assert.Equal(t, "duck-sync-alpha", top.Sessions[0].ID)
+
+	tools, err := store.GetAnalyticsTools(ctx, filter)
+	require.NoError(t, err, "read tool analytics through Quack")
+	assert.Equal(t, 1, tools.TotalCalls)
+}
+
 func TestQuackClientSyncPushWritesThroughAttachment(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "agentsview-quack-push.duckdb")
