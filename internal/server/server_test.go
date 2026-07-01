@@ -98,11 +98,7 @@ func setupWithServerOpts(
 	dir := tempDirWithRetryCleanup(t)
 	dbPath := filepath.Join(dir, "test.db")
 
-	database, err := db.Open(dbPath)
-	if err != nil {
-		t.Fatalf("opening db: %v", err)
-	}
-	t.Cleanup(func() { database.Close() })
+	database := dbtest.OpenTestDBAt(t, dbPath)
 
 	claudeDir := filepath.Join(dir, "claude")
 	codexDir := filepath.Join(dir, "codex")
@@ -193,11 +189,7 @@ func setupPGMode(t *testing.T) *testEnv {
 	dir := tempDirWithRetryCleanup(t)
 	dbPath := filepath.Join(dir, "test.db")
 
-	database, err := db.Open(dbPath)
-	if err != nil {
-		t.Fatalf("opening db: %v", err)
-	}
-	t.Cleanup(func() { database.Close() })
+	database := dbtest.OpenTestDBAt(t, dbPath)
 
 	cfg := config.Config{
 		Host:         "127.0.0.1",
@@ -223,11 +215,7 @@ func setupNoSyncMode(t *testing.T) *testEnv {
 	dir := tempDirWithRetryCleanup(t)
 	dbPath := filepath.Join(dir, "test.db")
 
-	database, err := db.Open(dbPath)
-	if err != nil {
-		t.Fatalf("opening db: %v", err)
-	}
-	t.Cleanup(func() { database.Close() })
+	database := dbtest.OpenTestDBAt(t, dbPath)
 
 	cfg := config.Config{
 		Host:         "127.0.0.1",

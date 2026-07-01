@@ -26,12 +26,7 @@ import (
 
 func openTestDB(t *testing.T) *db.DB {
 	t.Helper()
-	d, err := db.Open(
-		filepath.Join(t.TempDir(), "test.db"),
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() { d.Close() })
-	return d
+	return dbtest.OpenTestDB(t)
 }
 
 // fakeFileInfo implements os.FileInfo for test use.

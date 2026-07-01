@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 )
 
 func TestBuildServiceSpec_RequiresURL(t *testing.T) {
@@ -220,9 +220,7 @@ func TestWarnUninheritedServiceEnv(t *testing.T) {
 }
 
 func TestReadServiceLastPush_UsesDefaultTargetScope(t *testing.T) {
-	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
-	require.NoError(t, err)
-	defer local.Close()
+	local := dbtest.OpenTestDB(t)
 
 	require.NoError(t, local.SetSyncState(
 		"last_push_at:work",
@@ -240,9 +238,7 @@ func TestReadServiceLastPush_UsesDefaultTargetScope(t *testing.T) {
 }
 
 func TestReadServiceLastPush_ReadsLegacyDefaultStateWithoutMigration(t *testing.T) {
-	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
-	require.NoError(t, err)
-	defer local.Close()
+	local := dbtest.OpenTestDB(t)
 
 	require.NoError(t, local.SetSyncState(
 		"last_push_at",

@@ -3,13 +3,13 @@ package server
 import (
 	"encoding/json"
 	"net/http"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 )
 
 // seedRecentEdit inserts a session and a message with one Edit tool call into
@@ -53,9 +53,7 @@ func seedRecentEdit(
 // TestRecentEditsReturnsFiles confirms the endpoint returns seeded files in
 // the response body with the expected fields populated.
 func TestRecentEditsReturnsFiles(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := dbtest.OpenTestDB(t)
 
 	seedRecentEdit(t, database, "proj", "s1", 1, 0, "main.go", "2026-06-24T10:00:00Z")
 
@@ -75,9 +73,7 @@ func TestRecentEditsReturnsFiles(t *testing.T) {
 // TestRecentEditsHasMoreTrue confirms has_more is true when the number of
 // file groups exceeds the requested limit.
 func TestRecentEditsHasMoreTrue(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := dbtest.OpenTestDB(t)
 
 	// Three distinct (project, file_path) groups.
 	seedRecentEdit(t, database, "proj", "s1", 1, 0, "a.go", "2026-06-24T10:00:00Z")
@@ -97,9 +93,7 @@ func TestRecentEditsHasMoreTrue(t *testing.T) {
 // TestRecentEditsProjectFilter confirms the project query param narrows
 // results to only that project's files.
 func TestRecentEditsProjectFilter(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := dbtest.OpenTestDB(t)
 
 	seedRecentEdit(t, database, "alpha", "sAlpha", 1, 0, "a.go", "2026-06-24T10:00:00Z")
 	seedRecentEdit(t, database, "beta", "sBeta", 1, 0, "b.go", "2026-06-24T10:00:00Z")
@@ -117,9 +111,7 @@ func TestRecentEditsProjectFilter(t *testing.T) {
 
 // TestRecentEditsOffset confirms offset skips the first N file groups.
 func TestRecentEditsOffset(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := dbtest.OpenTestDB(t)
 
 	// Two files; a.go has the newer timestamp so it ranks first.
 	seedRecentEdit(t, database, "proj", "s1", 1, 0, "a.go", "2026-06-24T10:00:00Z")
