@@ -307,23 +307,6 @@ func (s *Sync) Push(
 	return result, nil
 }
 
-func clearSessionTables(ctx context.Context, tx *sql.Tx) error {
-	for _, stmt := range []string{
-		`DELETE FROM pinned_messages`,
-		`DELETE FROM secret_findings`,
-		`DELETE FROM tool_result_events`,
-		`DELETE FROM tool_calls`,
-		`DELETE FROM usage_events`,
-		`DELETE FROM messages`,
-		`DELETE FROM sessions`,
-	} {
-		if _, err := tx.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("clearing duckdb full-push session table: %w", err)
-		}
-	}
-	return nil
-}
-
 func (s *Sync) sessionCount(ctx context.Context) (int, error) {
 	var count int
 	if err := s.duck.QueryRowContext(ctx,
@@ -377,10 +360,6 @@ func clearDuckDBSyncState(local *db.DB, scope string) error {
 		return fmt.Errorf("clearing %s: %w", boundaryKey, err)
 	}
 	return nil
-}
-
-func readSyncFingerprints(local *db.DB) (map[string]string, error) {
-	return readSyncFingerprintsWithKey(local, lastPushBoundaryStateKey)
 }
 
 func readSyncFingerprintsWithKey(

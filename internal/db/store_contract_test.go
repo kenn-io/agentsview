@@ -133,11 +133,9 @@ func TestStoreContract(t *testing.T) {
 	}
 
 	for _, backend := range storeContractBackends() {
-		backend := backend
 		t.Run(backend.name, func(t *testing.T) {
 			t.Parallel()
 			for _, tt := range tests {
-				tt := tt
 				t.Run(tt.name, func(t *testing.T) {
 					t.Parallel()
 					store := backend.open(t)

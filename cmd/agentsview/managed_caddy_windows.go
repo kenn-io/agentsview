@@ -62,7 +62,7 @@ func newCaddyGuard(cmd *exec.Cmd) (caddyGuard, error) {
 		_ = windows.CloseHandle(job)
 		return noopCaddyGuard{}, fmt.Errorf("opening caddy process: %w", err)
 	}
-	defer windows.CloseHandle(proc)
+	defer func() { _ = windows.CloseHandle(proc) }()
 
 	if err := windows.AssignProcessToJobObject(job, proc); err != nil {
 		_ = windows.CloseHandle(job)

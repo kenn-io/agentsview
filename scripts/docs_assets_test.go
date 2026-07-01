@@ -441,15 +441,6 @@ func git(t *testing.T, dir string, args ...string) {
 	require.NoError(t, err, string(output))
 }
 
-func gitOutput(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	output, err := cmd.Output()
-	require.NoError(t, err)
-	return strings.TrimSpace(string(output))
-}
-
 func gitBareWorkTree(
 	t *testing.T, bareRepo, workTree string, env []string, args ...string,
 ) {

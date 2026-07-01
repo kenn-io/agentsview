@@ -18,8 +18,7 @@ const schemaVersionMetadataKey = "agentsview_schema_version"
 const defaultRepairMetadataKey = "agentsview_default_repair_v1"
 const usageDedupIndexMetadataKey = "agentsview_usage_dedup_index_v1"
 
-// duckDBSchemaNotes documents intentional differences from the SQLite primary
-// archive and the PostgreSQL remote mirror:
+// DuckDB schema notes:
 //
 //   - DuckDB stores timestamps as TIMESTAMP for mirror tables; read queries
 //     should cast/format them to text when scanning into db.Session/db.Message.
@@ -32,13 +31,6 @@ const usageDedupIndexMetadataKey = "agentsview_usage_dedup_index_v1"
 //   - DuckDB Quack currently rejects catalogs with TIMESTAMP DEFAULT
 //     current_timestamp columns, so mirror timestamp columns avoid dynamic
 //     defaults and writers supply current_timestamp explicitly where needed.
-const duckDBSchemaNotes = `
-DuckDB stores timestamps as TIMESTAMP.
-DuckDB BOOLEAN columns scan into Go bools.
-SQLite INTEGER PRIMARY KEY rowids are mirrored as BIGINT values.
-DuckDB does not support SQLite FTS5 or PostgreSQL GIN indexes here.
-DuckDB Quack rejects TIMESTAMP DEFAULT current_timestamp columns.
-`
 
 type tableSpec struct {
 	name    string

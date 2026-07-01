@@ -1576,7 +1576,6 @@ func TestSidebarIndexValidatesParams(t *testing.T) {
 	}
 
 	for _, path := range tests {
-		path := path
 		t.Run(path, func(t *testing.T) {
 			t.Parallel()
 			w := te.get(t, path)
@@ -3450,7 +3449,6 @@ func TestUploadSession_Errors(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			w := te.upload(t,
@@ -3490,7 +3488,6 @@ func TestUploadSession_ExcludedOrTrashedConflict(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			te := setup(t)

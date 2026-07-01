@@ -237,18 +237,6 @@ func TestCheckSchemaCompatPassesAfterEnsureSchema(t *testing.T) {
 	require.NoError(t, CheckSchemaCompat(ctx, db), "CheckSchemaCompat")
 }
 
-func TestSchemaDocumentsDuckDBDifferences(t *testing.T) {
-	for _, want := range []string{
-		"DuckDB stores timestamps as TIMESTAMP",
-		"DuckDB BOOLEAN columns scan into Go bools",
-		"SQLite INTEGER PRIMARY KEY rowids are mirrored as BIGINT",
-		"DuckDB does not support SQLite FTS5 or PostgreSQL GIN indexes here",
-		"DuckDB Quack rejects TIMESTAMP DEFAULT current_timestamp columns",
-	} {
-		assert.Contains(t, duckDBSchemaNotes, want)
-	}
-}
-
 // TestEnsureSchemaCreatesToolCallsFilePathIndex verifies the DuckDB mirror
 // builds idx_tool_calls_file_path, the parity counterpart to SQLite's
 // Recent Edits index. DuckDB has no partial indexes, so it omits the

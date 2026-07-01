@@ -276,7 +276,6 @@ func TestOpenCodeFamilyProviderRelabelsForks(t *testing.T) {
 		{agent: AgentKilo, sessionSubdir: "session", prefix: "kilo:", project: "kilo-app"},
 		{agent: AgentMiMoCode, sessionSubdir: "session_diff", prefix: "mimocode:", project: "mimo-app"},
 	} {
-		tc := tc
 		t.Run(string(tc.agent), func(t *testing.T) {
 			t.Parallel()
 

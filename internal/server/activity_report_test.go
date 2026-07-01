@@ -125,7 +125,6 @@ func TestActivityReportEndpoint_Presets(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			w := te.get(t, buildPathURL("/api/v1/activity/report", tc.params))
@@ -264,7 +263,6 @@ func TestActivityReportEndpoint_Validation(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			w := te.get(t, buildPathURL("/api/v1/activity/report", tc.params))
@@ -328,7 +326,6 @@ func TestActivityReportEndpoint_AutomationFilter(t *testing.T) {
 		{"automated drops interactive", "automated", 1, 0, []string{"automated"}},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			params := map[string]string{
