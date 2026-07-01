@@ -189,13 +189,16 @@ func (p *piebaldTestDB) addChatWithFork(t *testing.T, chatID int64) {
 	p.addTextPart(t, 1201, 201, 0, "Fork answer", false)
 }
 
-func TestSyncSingleSessionPiebald(t *testing.T) {
+func TestSyncPiebaldSingleBulkAndIncremental(t *testing.T) {
 	t.Parallel()
 
 	env := setupSingleAgentTestEnv(t, parser.AgentPiebald)
 	piebald := createPiebaldDB(t, env.piebaldDir)
 	piebald.addChatWithFork(t, 42)
 	piebald.addChat(t, 7, "Single Piebald", "One chat.", "One answer.", "2026-05-01T10:05:00Z")
+	piebald.addChat(t, 100, "Piebald Bulk Sync", "Please add Piebald support.", "Added Piebald support.", "2026-05-01T10:06:00Z")
+	piebald.addChat(t, 301, "Chat A", "Prompt A.", "Answer A.", "2026-05-01T10:01:00Z")
+	piebald.addChat(t, 302, "Chat B", "Prompt B.", "Answer B.", "2026-05-01T10:02:00Z")
 
 	t.Run("fork", func(t *testing.T) {
 		require.NoError(t, env.engine.SyncSingleSession("piebald:42-200"), "SyncSingleSession(fork)")
@@ -240,35 +243,25 @@ func TestSyncSingleSessionPiebald(t *testing.T) {
 		require.True(t, ok, "session file info not found")
 		assert.Equal(t, mtime, storedMtime)
 	})
-}
-
-func TestSyncPiebaldBulkAndIncremental(t *testing.T) {
-	t.Parallel()
-
-	env := setupSingleAgentTestEnv(t, parser.AgentPiebald)
-	piebald := createPiebaldDB(t, env.piebaldDir)
-	piebald.addChat(t, 42, "Piebald Bulk Sync", "Please add Piebald support.", "Added Piebald support.", "2026-05-01T10:05:00Z")
-	piebald.addChat(t, 1, "Chat A", "Prompt A.", "Answer A.", "2026-05-01T10:01:00Z")
-	piebald.addChat(t, 2, "Chat B", "Prompt B.", "Answer B.", "2026-05-01T10:02:00Z")
 
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 3, Synced: 3, Skipped: 0})
-	assertSessionProject(t, env.db, "piebald:42", "app")
-	assertSessionMessageCount(t, env.db, "piebald:42", 2)
-	assertMessageRoles(t, env.db, "piebald:42", "user", "assistant")
-	assertToolCallCount(t, env.db, "piebald:42", 1)
-	assertMessageContent(t, env.db, "piebald:42", "Please add Piebald support.", "Added Piebald support.")
+	assertSessionProject(t, env.db, "piebald:100", "app")
+	assertSessionMessageCount(t, env.db, "piebald:100", 2)
+	assertMessageRoles(t, env.db, "piebald:100", "user", "assistant")
+	assertToolCallCount(t, env.db, "piebald:100", 1)
+	assertMessageContent(t, env.db, "piebald:100", "Please add Piebald support.", "Added Piebald support.")
 
-	_, storedMtimeA, okA := env.db.GetSessionFileInfo("piebald:1")
+	_, storedMtimeA, okA := env.db.GetSessionFileInfo("piebald:301")
 	require.True(t, okA, "session A file info not found after initial sync")
 
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 0, Synced: 0, Skipped: 0})
 
 	piebald.mustExec(t, "update B updated_at",
-		`UPDATE chats SET updated_at = '2026-05-01T10:03:00Z' WHERE id = 2`,
+		`UPDATE chats SET updated_at = '2026-05-01T10:03:00Z' WHERE id = 302`,
 	)
 
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 1, Synced: 1, Skipped: 0})
-	_, storedMtimeA2, okA2 := env.db.GetSessionFileInfo("piebald:1")
+	_, storedMtimeA2, okA2 := env.db.GetSessionFileInfo("piebald:301")
 	require.True(t, okA2, "session A file info not found after partial sync")
 	assert.Equal(t, storedMtimeA, storedMtimeA2, "A's stored mtime changed")
 }
