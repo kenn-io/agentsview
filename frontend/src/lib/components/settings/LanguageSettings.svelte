@@ -26,6 +26,10 @@
       name: "zh-CN",
       label: m.settings_language_simplified_chinese(),
     },
+    {
+      name: "zh-TW",
+      label: m.settings_language_traditional_chinese(),
+    },
   ]);
 
   function handleLocaleSelect(value: string) {

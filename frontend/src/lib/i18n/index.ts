@@ -7,7 +7,7 @@ export { m } from "../paraglide/messages.js";
 
 export const DEFAULT_LOCALE = "en";
 export const LOCALE_STORAGE_KEY = "agentsview-locale";
-export const SUPPORTED_LOCALES = ["en", "zh-CN"] as const;
+export const SUPPORTED_LOCALES = ["en", "zh-CN", "zh-TW"] as const;
 
 export type SupportedLocale = typeof SUPPORTED_LOCALES[number];
 
@@ -21,6 +21,13 @@ function matchingLocale(value: string | null | undefined): SupportedLocale | nul
   if (normalized === "en" || normalized.startsWith("en-")) return "en";
   if (normalized === "zh-cn" || normalized.startsWith("zh-hans")) {
     return "zh-CN";
+  }
+  if (
+    normalized === "zh-tw" ||
+    normalized.startsWith("zh-tw-") ||
+    normalized.startsWith("zh-hant")
+  ) {
+    return "zh-TW";
   }
   return null;
 }
