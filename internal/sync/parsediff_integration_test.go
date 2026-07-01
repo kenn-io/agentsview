@@ -599,7 +599,10 @@ func TestParseDiffBypassesSkipLayers(t *testing.T) {
 // buckets: skipped (source missing), new on disk, pending resync,
 // and parse error.
 func TestParseDiffBuckets(t *testing.T) {
+	t.Parallel()
+
 	t.Run("source missing", func(t *testing.T) {
+		t.Parallel()
 		env := setupTestEnv(t)
 		path := env.writeClaudeSession(
 			t, "test-proj", "pd-gone.jsonl",
@@ -623,6 +626,7 @@ func TestParseDiffBuckets(t *testing.T) {
 	})
 
 	t.Run("new on disk", func(t *testing.T) {
+		t.Parallel()
 		env := setupTestEnv(t)
 		env.writeClaudeSession(t, "test-proj", "pd-base.jsonl",
 			parseDiffClaudeContent("base prompt", "base reply"))
@@ -645,6 +649,7 @@ func TestParseDiffBuckets(t *testing.T) {
 	})
 
 	t.Run("pending resync", func(t *testing.T) {
+		t.Parallel()
 		env := setupTestEnv(t)
 		env.writeClaudeSession(t, "test-proj", "pd-stale.jsonl",
 			parseDiffClaudeContent("stale prompt", "stale reply"))
@@ -682,6 +687,7 @@ func TestParseDiffBuckets(t *testing.T) {
 	})
 
 	t.Run("parse error", func(t *testing.T) {
+		t.Parallel()
 		env := setupTestEnv(t)
 		env.writeClaudeSession(t, "test-proj", "pd-ok.jsonl",
 			parseDiffClaudeContent("ok prompt", "ok reply"))
