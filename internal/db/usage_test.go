@@ -2032,6 +2032,52 @@ func TestGetUsageMatchingSessionCount(t *testing.T) {
 	}
 }
 
+// TestGetUsageMatchingSessionCount_UsesMessageTimestampNotSessionActivity
+// guards against regressing to session-activity bounding: a Copilot
+// session whose started_at/ended_at fall outside the requested window but
+// whose message is timestamped inside it must still be counted, because
+// GetDailyUsage and GetUsageSessionCounts already bound on message/event
+// timestamps, not session activity.
+func TestGetUsageMatchingSessionCount_UsesMessageTimestampNotSessionActivity(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "copilot-late-message", "proj-a", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2026-02-08T10:00:00Z")
+		s.EndedAt = new("2026-02-08T10:00:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "copilot-late-message", Ordinal: 0,
+		Role: "assistant", Timestamp: "2026-02-10T12:00:00Z",
+		Model:      "gpt-5.3-codex",
+		TokenUsage: nil,
+	})
+
+	insertSession(t, d, "copilot-out-of-range", "proj-a", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2026-02-08T10:00:00Z")
+		s.EndedAt = new("2026-02-08T10:00:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "copilot-out-of-range", Ordinal: 0,
+		Role: "assistant", Timestamp: "2026-02-08T10:00:00Z",
+		Model:      "gpt-5.3-codex",
+		TokenUsage: nil,
+	})
+
+	filter := UsageFilter{
+		From: "2026-02-10", To: "2026-02-10",
+		Timezone: "UTC", Agent: "copilot",
+	}
+
+	got, err := d.GetUsageMatchingSessionCount(ctx, filter)
+	requireNoError(t, err, "GetUsageMatchingSessionCount")
+	assert.Equal(t, 1, got)
+}
+
 func TestNewUsageSessionCounts(t *testing.T) {
 	counts := NewUsageSessionCounts(map[string]UsageSessionInfo{
 		"s1": {Project: "proj-a", Agent: "claude"},

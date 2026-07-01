@@ -338,6 +338,22 @@ const usageMessageSourceEligibility = `
     AND m.model != ''
     AND m.model != '<synthetic>'`
 
+// usageMatchingMessageEligibility is usageMessageEligibility with the
+// token-presence requirement removed. GetUsageMatchingSessionCount counts
+// sessions that have usage-shaped activity even when the agent (e.g.
+// Copilot) never records per-message tokens, so it must not gate on
+// m.token_usage the way every token/cost query does. Do not reuse this
+// for usageRowQuery or its callers — see the usageMessageEligibility
+// doc comment above.
+const usageMatchingMessageEligibility = `
+    m.model != ''
+    AND m.model != '<synthetic>'
+    AND s.deleted_at IS NULL`
+
+const usageMatchingMessageSourceEligibility = `
+    m.model != ''
+    AND m.model != '<synthetic>'`
+
 const usageEventEligibility = `
     ue.model != ''
     AND s.deleted_at IS NULL`
@@ -833,6 +849,81 @@ func usageRowsSQLForBounds(
 		eventTimestampJoinWhere,
 		messageFallbackWhere,
 		eventFallbackWhere,
+	)
+	args := make(
+		[]any, 0,
+		len(messageTimestampArgs)+len(eventTimestampArgs)+
+			len(messageTimestampJoinArgs)+len(eventTimestampJoinArgs)+
+			len(messageFallbackArgs)+len(eventFallbackArgs),
+	)
+	args = append(args, messageTimestampArgs...)
+	args = append(args, eventTimestampArgs...)
+	args = append(args, messageTimestampJoinArgs...)
+	args = append(args, eventTimestampJoinArgs...)
+	args = append(args, messageFallbackArgs...)
+	args = append(args, eventFallbackArgs...)
+	return rowsSQL, args
+}
+
+// usageMatchingSessionRowsSQLForBounds mirrors usageRowsSQLForBounds's
+// bounded-branch CTE shape, but is built from the relaxed
+// usageMatchingMessageEligibility predicate and folds the session-wide
+// model-match clause into each branch instead of filtering per row, so
+// GetUsageMatchingSessionCount's Model/ExcludeModel semantics stay
+// bit-for-bit identical to the unbounded path. Only used by
+// GetUsageMatchingSessionCount's bounded branch.
+func usageMatchingSessionRowsSQLForBounds(
+	f UsageFilter, b usageBounds,
+) (string, []any) {
+	messageTimestampSourceWhere := usageMatchingMessageSourceEligibility +
+		"\n\tAND m.timestamp IS NOT NULL" +
+		"\n\tAND m.timestamp != ''"
+	var messageTimestampArgs []any
+	messageTimestampSourceWhere, messageTimestampArgs = appendUsageColumnBounds(
+		messageTimestampSourceWhere, "m.timestamp", b, messageTimestampArgs)
+
+	eventTimestampSourceWhere := usageEventSourceEligibility +
+		"\n\tAND ue.occurred_at IS NOT NULL"
+	var eventTimestampArgs []any
+	eventTimestampSourceWhere, eventTimestampArgs = appendUsageColumnBounds(
+		eventTimestampSourceWhere, "ue.occurred_at", b, eventTimestampArgs)
+
+	var messageTimestampJoinArgs []any
+	messageTimestampJoinWhere, messageTimestampJoinArgs :=
+		f.appendUsageSessionFilterClauses(usageSessionEligibility, messageTimestampJoinArgs)
+	messageTimestampJoinWhere, messageTimestampJoinArgs =
+		f.appendUsageSessionModelMatchClauses(messageTimestampJoinWhere, messageTimestampJoinArgs)
+
+	var eventTimestampJoinArgs []any
+	eventTimestampJoinWhere, eventTimestampJoinArgs :=
+		f.appendUsageSessionFilterClauses(usageSessionEligibility, eventTimestampJoinArgs)
+	eventTimestampJoinWhere, eventTimestampJoinArgs =
+		f.appendUsageSessionModelMatchClauses(eventTimestampJoinWhere, eventTimestampJoinArgs)
+
+	messageFallbackWhere := usageMatchingMessageEligibility +
+		"\n\tAND NULLIF(m.timestamp, '') IS NULL"
+	var messageFallbackArgs []any
+	messageFallbackWhere, messageFallbackArgs =
+		f.appendUsageSessionFilterClauses(messageFallbackWhere, messageFallbackArgs)
+	messageFallbackWhere, messageFallbackArgs =
+		f.appendUsageSessionModelMatchClauses(messageFallbackWhere, messageFallbackArgs)
+	messageFallbackWhere, messageFallbackArgs = appendUsageColumnBounds(
+		messageFallbackWhere, "s.started_at", b, messageFallbackArgs)
+
+	eventFallbackWhere := usageEventEligibility +
+		"\n\tAND ue.occurred_at IS NULL"
+	var eventFallbackArgs []any
+	eventFallbackWhere, eventFallbackArgs =
+		f.appendUsageSessionFilterClauses(eventFallbackWhere, eventFallbackArgs)
+	eventFallbackWhere, eventFallbackArgs =
+		f.appendUsageSessionModelMatchClauses(eventFallbackWhere, eventFallbackArgs)
+	eventFallbackWhere, eventFallbackArgs = appendUsageColumnBounds(
+		eventFallbackWhere, "s.started_at", b, eventFallbackArgs)
+
+	rowsSQL := dailyUsageRowsSQLWithTimestampCTEs(
+		messageTimestampSourceWhere, eventTimestampSourceWhere,
+		messageTimestampJoinWhere, eventTimestampJoinWhere,
+		messageFallbackWhere, eventFallbackWhere,
 	)
 	args := make(
 		[]any, 0,
@@ -2436,42 +2527,58 @@ func (db *DB) GetUsageSessionCounts(
 }
 
 // GetUsageMatchingSessionCount counts sessions that match the usage filter
-// even when they have no token-bearing usage rows.
+// even when they have no token-bearing usage rows. Bounded ranges are
+// resolved against the timestamps of the sessions' messages/usage_events
+// rows (falling back to s.started_at for rows with no timestamp of their
+// own), the same shape usageRowsSQLForBounds uses, so a session whose
+// started_at/ended_at fall outside the window but whose message activity
+// falls inside it is still counted.
 func (db *DB) GetUsageMatchingSessionCount(
 	ctx context.Context, f UsageFilter,
 ) (int, error) {
-	loc := f.location()
+	bounds := usageBoundsForFilter(f)
 
-	where, args := f.appendUsageSessionFilterClauses(
-		usageSessionEligibility, nil,
-	)
-	where, args = f.appendUsageSessionModelMatchClauses(where, args)
-	where, args = appendUsageColumnBounds(
-		where,
-		usageSessionActivityExprSQLite(),
-		usageBoundsForFilter(f),
-		args,
-	)
+	if !bounds.bounded() {
+		where, args := f.appendUsageSessionFilterClauses(usageSessionEligibility, nil)
+		where, args = f.appendUsageSessionModelMatchClauses(where, args)
 
-	rows, err := db.getReader().QueryContext(ctx, `
-		SELECT s.id, `+usageSessionActivityExprSQLite()+`
-		FROM sessions s
-		WHERE `+where, args...)
+		// Keep selecting session_activity_at even though it's unused here:
+		// this is the original query's WHERE/SELECT shape, unchanged, so
+		// nothing downstream (tests, tooling) that matches on this SQL
+		// text needs to change for the unbounded path.
+		rows, err := db.getReader().QueryContext(ctx, `
+			SELECT s.id, `+usageSessionActivityExprSQLite()+`
+			FROM sessions s WHERE `+where, args...)
+		if err != nil {
+			return 0, fmt.Errorf("querying matching usage sessions: %w", err)
+		}
+		defer rows.Close()
+		count := 0
+		for rows.Next() {
+			count++
+		}
+		if err := rows.Err(); err != nil {
+			return 0, fmt.Errorf("iterating matching usage sessions: %w", err)
+		}
+		return count, nil
+	}
+
+	rowsSQL, args := usageMatchingSessionRowsSQLForBounds(f, bounds)
+	rows, err := db.getReader().QueryContext(
+		ctx, dailyUsageRowSelectFromRows(rowsSQL), args...)
 	if err != nil {
 		return 0, fmt.Errorf("querying matching usage sessions: %w", err)
 	}
 	defer rows.Close()
 
-	count := 0
+	loc := f.location()
+	seen := make(map[string]struct{})
 	for rows.Next() {
-		var (
-			id string
-			ts string
-		)
-		if err := rows.Scan(&id, &ts); err != nil {
+		r, err := scanDailyUsageRow(rows)
+		if err != nil {
 			return 0, fmt.Errorf("scanning matching usage session: %w", err)
 		}
-		date := localDate(ts, loc)
+		date := localDate(r.ts, loc)
 		if date == "" {
 			continue
 		}
@@ -2481,11 +2588,10 @@ func (db *DB) GetUsageMatchingSessionCount(
 		if f.To != "" && date > f.To {
 			continue
 		}
-		count++
+		seen[r.sessionID] = struct{}{}
 	}
 	if err := rows.Err(); err != nil {
 		return 0, fmt.Errorf("iterating matching usage sessions: %w", err)
 	}
-
-	return count, nil
+	return len(seen), nil
 }

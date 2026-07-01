@@ -24,6 +24,15 @@ const pgUsageMessageSourceEligibility = `
 	AND m.model != ''
 	AND m.model != '<synthetic>'`
 
+const pgUsageMatchingMessageEligibility = `
+	m.model != ''
+	AND m.model != '<synthetic>'
+	AND s.deleted_at IS NULL`
+
+const pgUsageMatchingMessageSourceEligibility = `
+	m.model != ''
+	AND m.model != '<synthetic>'`
+
 const pgUsageEventEligibility = `
 	ue.model != ''
 	AND s.deleted_at IS NULL`
@@ -656,6 +665,60 @@ func pgDailyUsageRowsSQLForBounds(
 		eventTimestampJoinWhere,
 		messageFallbackWhere,
 		eventFallbackWhere,
+	)
+}
+
+// pgMatchingUsageRowsSQLForBounds mirrors pgDailyUsageRowsSQLForBounds's
+// bounded-branch CTE shape, but is built from the relaxed
+// pgUsageMatchingMessageEligibility predicate and folds the session-wide
+// model-match clause into each branch instead of filtering per row, so
+// GetUsageMatchingSessionCount's Model/ExcludeModel semantics stay
+// bit-for-bit identical to the unbounded path. Only used by
+// GetUsageMatchingSessionCount's bounded branch.
+func pgMatchingUsageRowsSQLForBounds(
+	pb *paramBuilder, f db.UsageFilter, b pgUsageBounds,
+) string {
+	messageTimestampSourceWhere := pgUsageMatchingMessageSourceEligibility +
+		"\n\tAND m.timestamp IS NOT NULL"
+	messageTimestampSourceWhere = appendPGUsageColumnBounds(
+		messageTimestampSourceWhere, "m.timestamp", b)
+
+	eventTimestampSourceWhere := pgUsageEventSourceEligibility +
+		"\n\tAND ue.occurred_at IS NOT NULL"
+	eventTimestampSourceWhere = appendPGUsageColumnBounds(
+		eventTimestampSourceWhere, "ue.occurred_at", b)
+
+	messageTimestampJoinWhere := appendPGUsageSessionFilterClauses(
+		pgUsageSessionEligibility, pb, f)
+	messageTimestampJoinWhere = appendPGUsageSessionModelMatchClauses(
+		messageTimestampJoinWhere, pb, f)
+	eventTimestampJoinWhere := appendPGUsageSessionFilterClauses(
+		pgUsageSessionEligibility, pb, f)
+	eventTimestampJoinWhere = appendPGUsageSessionModelMatchClauses(
+		eventTimestampJoinWhere, pb, f)
+
+	messageFallbackWhere := pgUsageMatchingMessageEligibility +
+		"\n\tAND m.timestamp IS NULL"
+	messageFallbackWhere = appendPGUsageSessionFilterClauses(
+		messageFallbackWhere, pb, f)
+	messageFallbackWhere = appendPGUsageSessionModelMatchClauses(
+		messageFallbackWhere, pb, f)
+	messageFallbackWhere = appendPGUsageColumnBounds(
+		messageFallbackWhere, "s.started_at", b)
+
+	eventFallbackWhere := pgUsageEventEligibility +
+		"\n\tAND ue.occurred_at IS NULL"
+	eventFallbackWhere = appendPGUsageSessionFilterClauses(
+		eventFallbackWhere, pb, f)
+	eventFallbackWhere = appendPGUsageSessionModelMatchClauses(
+		eventFallbackWhere, pb, f)
+	eventFallbackWhere = appendPGUsageColumnBounds(
+		eventFallbackWhere, "s.started_at", b)
+
+	return pgDailyUsageRowsSQLWithTimestampCTEs(
+		messageTimestampSourceWhere, eventTimestampSourceWhere,
+		messageTimestampJoinWhere, eventTimestampJoinWhere,
+		messageFallbackWhere, eventFallbackWhere,
 	)
 }
 
@@ -1722,45 +1785,65 @@ func appendPGUsageSessionModelMatchClauses(
 	)`
 }
 
+// GetUsageMatchingSessionCount counts sessions that match the usage filter
+// even when they have no token-bearing usage rows. Bounded ranges are
+// resolved against the timestamps of the sessions' messages/usage_events
+// rows (falling back to s.started_at for rows with no timestamp of their
+// own), the same shape pgDailyUsageRowsSQLForBounds uses, so a session
+// whose started_at/ended_at fall outside the window but whose message
+// activity falls inside it is still counted.
 func (s *Store) GetUsageMatchingSessionCount(
 	ctx context.Context, f db.UsageFilter,
 ) (int, error) {
 	pb := &paramBuilder{}
-	where := appendPGUsageSessionFilterClauses(
-		pgUsageSessionEligibility, pb, f,
-	)
-	where = appendPGUsageSessionModelMatchClauses(where, pb, f)
-	if f.From != "" {
-		where += "\n\tAND COALESCE(s.ended_at, s.started_at, s.created_at) >= " +
-			pb.add(paddedUTCBound(f.From+"T00:00:00Z", -14)) + "::timestamptz"
-	}
-	if f.To != "" {
-		where += "\n\tAND COALESCE(s.ended_at, s.started_at, s.created_at) <= " +
-			pb.add(paddedUTCBound(f.To+"T23:59:59Z", 14)) + "::timestamptz"
-	}
 
-	rows, err := s.pg.QueryContext(ctx, `
+	if f.From == "" && f.To == "" {
+		where := appendPGUsageSessionFilterClauses(pgUsageSessionEligibility, pb, f)
+		where = appendPGUsageSessionModelMatchClauses(where, pb, f)
+
+		// Keep selecting session_activity_at even though it's unused
+		// here: this is the original query's WHERE/SELECT shape,
+		// unchanged, so internal/postgres/usage_unit_test.go's probe-mock
+		// string match (which keys off this literal SQL text) still
+		// finds this branch for the unbounded case.
+		rows, err := s.pg.QueryContext(ctx, `
 SELECT
 	s.id,
 	COALESCE(s.ended_at, s.started_at, s.created_at) AS session_activity_at
 FROM sessions s
 WHERE `+where, pb.args...)
+		if err != nil {
+			return 0, fmt.Errorf("querying matching usage sessions: %w", err)
+		}
+		defer rows.Close()
+		count := 0
+		for rows.Next() {
+			count++
+		}
+		if err := rows.Err(); err != nil {
+			return 0, fmt.Errorf("iterating matching usage sessions: %w", err)
+		}
+		return count, nil
+	}
+
+	bounds := pgUsageBoundsForFilter(pb, f)
+	rowsSQL := pgMatchingUsageRowsSQLForBounds(pb, f, bounds)
+
+	rows, err := s.pg.QueryContext(
+		ctx, pgDailyUsageRowSelectFromRows(rowsSQL), pb.args...)
 	if err != nil {
 		return 0, fmt.Errorf("querying matching usage sessions: %w", err)
 	}
 	defer rows.Close()
 
 	loc := usageLocation(f)
-	count := 0
+	seen := make(map[string]struct{})
 	for rows.Next() {
-		var (
-			id string
-			ts sql.NullTime
-		)
-		if err := rows.Scan(&id, &ts); err != nil {
+		r, err := scanPGDailyUsageRow(rows)
+		if err != nil {
 			return 0, fmt.Errorf("scanning matching usage session: %w", err)
 		}
-		date := usageDate(ts, loc)
+		date := usageDate(r.ts, loc)
 		if date == "" {
 			continue
 		}
@@ -1770,11 +1853,10 @@ WHERE `+where, pb.args...)
 		if f.To != "" && date > f.To {
 			continue
 		}
-		count++
+		seen[r.sessionID] = struct{}{}
 	}
 	if err := rows.Err(); err != nil {
 		return 0, fmt.Errorf("iterating matching usage sessions: %w", err)
 	}
-
-	return count, nil
+	return len(seen), nil
 }

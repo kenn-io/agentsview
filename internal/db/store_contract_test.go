@@ -676,6 +676,53 @@ func TestStoreContractGetUsageMatchingSessionCountCountsCopilotSessionsWithoutUs
 	require.Equal(t, 1, count)
 }
 
+func TestStoreContractGetUsageMatchingSessionCountCountsCopilotSessionByMessageTimestampOutsideSessionWindow(
+	t *testing.T,
+) {
+	store, ok := openStoreContractSQLiteFixtureDB(t).(*DB)
+	require.True(t, ok, "sqlite fixture should expose *DB")
+	ctx := context.Background()
+
+	insertSession(t, store, "contract-copilot-late-message", "alpha", func(s *Session) {
+		ts := "2026-02-08T10:00:00Z"
+		s.Agent = "copilot"
+		s.StartedAt = &ts
+		s.EndedAt = &ts
+	})
+	insertMessages(t, store, Message{
+		SessionID:  "contract-copilot-late-message",
+		Ordinal:    0,
+		Role:       "assistant",
+		Timestamp:  "2026-02-10T12:00:00Z",
+		Model:      "gpt-5.3-codex",
+		TokenUsage: nil,
+	})
+
+	insertSession(t, store, "contract-copilot-out-of-range", "alpha", func(s *Session) {
+		ts := "2026-02-08T10:00:00Z"
+		s.Agent = "copilot"
+		s.StartedAt = &ts
+		s.EndedAt = &ts
+	})
+	insertMessages(t, store, Message{
+		SessionID:  "contract-copilot-out-of-range",
+		Ordinal:    0,
+		Role:       "assistant",
+		Timestamp:  "2026-02-08T10:00:00Z",
+		Model:      "gpt-5.3-codex",
+		TokenUsage: nil,
+	})
+
+	count, err := store.GetUsageMatchingSessionCount(ctx, UsageFilter{
+		From:     "2026-02-10",
+		To:       "2026-02-10",
+		Timezone: "UTC",
+		Agent:    "copilot",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+}
+
 func seedStoreContractSQLite(
 	t *testing.T,
 	store Store,

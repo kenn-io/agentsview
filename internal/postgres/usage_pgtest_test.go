@@ -476,6 +476,47 @@ func TestStoreGetUsageMatchingSessionCountCountsCopilotSessionsWithoutUsageRows(
 	assert.Equal(t, 1, count)
 }
 
+func TestStoreGetUsageMatchingSessionCountCountsCopilotSessionByMessageTimestampOutsideSessionWindow(
+	t *testing.T,
+) {
+	_, store := prepareUsageSchema(t, "agentsview_usage_matching_sessions_late_test")
+
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at, ended_at,
+			message_count, user_message_count
+		) VALUES
+			('copilot-late-message', 'test-machine', 'proj-a', 'copilot',
+			 '2026-02-08T10:00:00Z'::timestamptz,
+			 '2026-02-08T10:00:00Z'::timestamptz, 1, 1),
+			('copilot-out-of-range', 'test-machine', 'proj-a', 'copilot',
+			 '2026-02-08T10:00:00Z'::timestamptz,
+			 '2026-02-08T10:00:00Z'::timestamptz, 1, 1)`)
+	require.NoError(t, err, "insert sessions")
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp, content_length,
+			model, token_usage
+		) VALUES
+			('copilot-late-message', 0, 'assistant', 'copilot',
+			 '2026-02-10T12:00:00Z'::timestamptz, 7,
+			 'gpt-5.3-codex', ''),
+			('copilot-out-of-range', 0, 'assistant', 'copilot',
+			 '2026-02-08T10:00:00Z'::timestamptz, 7,
+			 'gpt-5.3-codex', '')`)
+	require.NoError(t, err, "insert messages")
+
+	count, err := store.GetUsageMatchingSessionCount(ctx, db.UsageFilter{
+		From:     "2026-02-10",
+		To:       "2026-02-10",
+		Timezone: "UTC",
+		Agent:    "copilot",
+	})
+	require.NoError(t, err, "GetUsageMatchingSessionCount")
+	assert.Equal(t, 1, count)
+}
+
 func TestStoreGetUsageSessionCountsDedupesSourceUUIDFallback(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_counts_source_uuid_test")
 

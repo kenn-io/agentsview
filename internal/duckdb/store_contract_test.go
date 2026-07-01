@@ -350,6 +350,73 @@ func TestDuckDBGetUsageMatchingSessionCountCountsCopilotSessionsWithoutUsageRows
 	require.Equal(t, 1, count)
 }
 
+func TestDuckDBGetUsageMatchingSessionCountCountsCopilotSessionByMessageTimestampOutsideSessionWindow(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	activityTS := "2026-02-08T10:00:00Z"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+		{
+			Session: db.Session{
+				ID:               "duck-copilot-late-message",
+				Project:          "alpha",
+				Machine:          "test-machine",
+				Agent:            "copilot",
+				StartedAt:        &activityTS,
+				EndedAt:          &activityTS,
+				MessageCount:     1,
+				UserMessageCount: 1,
+			},
+			Messages: []db.Message{{
+				SessionID:  "duck-copilot-late-message",
+				Ordinal:    0,
+				Role:       "assistant",
+				Timestamp:  "2026-02-10T12:00:00Z",
+				Model:      "gpt-5.3-codex",
+				TokenUsage: nil,
+			}},
+			ReplaceMessages: true,
+		},
+		{
+			Session: db.Session{
+				ID:               "duck-copilot-out-of-range",
+				Project:          "alpha",
+				Machine:          "test-machine",
+				Agent:            "copilot",
+				StartedAt:        &activityTS,
+				EndedAt:          &activityTS,
+				MessageCount:     1,
+				UserMessageCount: 1,
+			},
+			Messages: []db.Message{{
+				SessionID:  "duck-copilot-out-of-range",
+				Ordinal:    0,
+				Role:       "assistant",
+				Timestamp:  activityTS,
+				Model:      "gpt-5.3-codex",
+				TokenUsage: nil,
+			}},
+			ReplaceMessages: true,
+		},
+	})
+	require.NoError(t, err, "seed copilot sessions")
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	count, err := store.GetUsageMatchingSessionCount(ctx, db.UsageFilter{
+		From:     "2026-02-10",
+		To:       "2026-02-10",
+		Timezone: "UTC",
+		Agent:    "copilot",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+}
+
 func duckSessionIDs(sessions []db.Session) []string {
 	ids := make([]string, len(sessions))
 	for i, session := range sessions {

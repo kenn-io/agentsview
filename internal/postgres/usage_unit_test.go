@@ -296,6 +296,13 @@ func TestPGUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {
 	assert.Equal(t, "2024-07-01T13:59:59Z", pb.args[1])
 }
 
+// TestPGGetUsageMatchingSessionCountUsesSessionQuery exercises the
+// unbounded (no From/To) code path, which still queries `sessions`
+// directly and relies on the probe mock's
+// "coalesce(s.ended_at, s.started_at, s.created_at) as
+// session_activity_at" branch. Bounded filters now take the
+// timestamped-CTE path (see TestPGMatchingUsageRowsSQLForBoundsRelaxesTokenEligibility
+// for that SQL shape) and are not exercised by this probe-mock test.
 func TestPGGetUsageMatchingSessionCountUsesSessionQuery(t *testing.T) {
 	state := &usageProbeState{}
 	store := &Store{
@@ -303,11 +310,8 @@ func TestPGGetUsageMatchingSessionCountUsesSessionQuery(t *testing.T) {
 	}
 
 	count, err := store.GetUsageMatchingSessionCount(context.Background(), db.UsageFilter{
-		From:     "2024-06-15",
-		To:       "2024-06-15",
-		Timezone: "UTC",
-		Agent:    "copilot",
-		Model:    "gpt-5.3-codex",
+		Agent: "copilot",
+		Model: "gpt-5.3-codex",
 	})
 	require.NoError(t, err, "GetUsageMatchingSessionCount")
 	assert.Equal(t, 1, count)
@@ -324,6 +328,34 @@ func TestPGGetUsageMatchingSessionCountUsesSessionQuery(t *testing.T) {
 	assert.Contains(t, last, "from usage_events ue")
 	assert.Contains(t, last, "s.agent = ")
 	assert.Contains(t, last, "m.model = ")
+}
+
+// TestPGMatchingUsageRowsSQLForBoundsRelaxesTokenEligibility asserts the
+// bounded matching-session query relaxes token eligibility (no
+// m.token_usage check) while still folding in the session-wide
+// model-match EXISTS clause, mirroring
+// TestPGUsageRowQueryPushesDateBoundsIntoUnion's direct-call style with
+// no live DB and no probe mock.
+func TestPGMatchingUsageRowsSQLForBoundsRelaxesTokenEligibility(t *testing.T) {
+	pb := &paramBuilder{}
+	f := db.UsageFilter{
+		From:  "2024-06-01",
+		To:    "2024-06-30",
+		Model: "gpt-5.3-codex",
+	}
+	bounds := pgUsageBoundsForFilter(pb, f)
+	query := pgMatchingUsageRowsSQLForBounds(pb, f, bounds)
+
+	normalized := strings.ToLower(query)
+	assert.Contains(t, normalized, "message_timestamp_rows as materialized")
+	assert.Contains(t, normalized, "usage_event_timestamp_rows as materialized")
+	assert.Contains(t, normalized, "m.model != ''")
+	assert.NotContains(t, normalized, "m.token_usage != ''")
+	// Each of the four branches (message-timestamp join, event-timestamp
+	// join, message fallback, event fallback) folds in the session-wide
+	// model-match clause, which itself emits one EXISTS for messages and
+	// one for usage_events - 4 branches * 2 EXISTS each.
+	assert.Equal(t, 8, strings.Count(normalized, "exists ("))
 }
 
 func TestPGTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {
