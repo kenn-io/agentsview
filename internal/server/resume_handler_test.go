@@ -94,6 +94,19 @@ func assertNoMessagePointPrompts(
 	assert.Empty(t, matches)
 }
 
+func assertMessagePointCommandForRuntime(t *testing.T, command string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		assert.Contains(t, command,
+			"powershell.exe -NoProfile -EncodedCommand ")
+		assert.NotContains(t, command, " < ")
+		assert.NotContains(t, command, "rm -f --")
+		return
+	}
+	assert.Contains(t, command, "claude <")
+	assert.Contains(t, command, "rm -f --")
+}
+
 func TestResumeSession(t *testing.T) {
 	te := setup(t)
 
@@ -305,25 +318,28 @@ func TestResumeSession(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.False(t, resp.Launched, "expected launched=false for command_only")
-		assert.Contains(t, resp.Command, "claude <")
-		assert.Contains(t, resp.Command, "< '")
-		assert.Contains(t, resp.Command, "rm -f --")
+		assertMessagePointCommandForRuntime(t, resp.Command)
+		if runtime.GOOS != "windows" {
+			assert.Contains(t, resp.Command, "< '")
+		}
 		assertSamePath(t, "cwd", resp.Cwd, projectDir)
 
-		idx := strings.LastIndex(resp.Command, "< ")
-		require.Greater(t, idx, 0, "command = %q", resp.Command)
-		extracted := strings.TrimSpace(resp.Command[idx+2:])
-		if semi := strings.Index(extracted, ";"); semi >= 0 {
-			extracted = strings.TrimSpace(extracted[:semi])
-		}
-		extracted = strings.TrimPrefix(extracted, "'")
-		extracted = strings.TrimSuffix(extracted, "'")
 		promptPath := findSingleMessagePointPrompt(t, "sess-2", 1)
-		assertSamePath(t, "prompt file", extracted, promptPath)
+		if runtime.GOOS != "windows" {
+			idx := strings.LastIndex(resp.Command, "< ")
+			require.Greater(t, idx, 0, "command = %q", resp.Command)
+			extracted := strings.TrimSpace(resp.Command[idx+2:])
+			if semi := strings.Index(extracted, ";"); semi >= 0 {
+				extracted = strings.TrimSpace(extracted[:semi])
+			}
+			extracted = strings.TrimPrefix(extracted, "'")
+			extracted = strings.TrimSuffix(extracted, "'")
+			assertSamePath(t, "prompt file", extracted, promptPath)
+		}
 
-		data, err := os.ReadFile(extracted)
+		data, err := os.ReadFile(promptPath)
 		require.NoError(t, err)
-		t.Cleanup(func() { _ = os.Remove(extracted) })
+		t.Cleanup(func() { _ = os.Remove(promptPath) })
 		text := string(data)
 		assert.Contains(t, text, "Message A")
 		assert.Contains(t, text, "Message B")
@@ -355,7 +371,7 @@ func TestResumeSession(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.False(t, resp.Launched, "expected launched=false for command_only")
-		assert.Contains(t, resp.Command, "claude <")
+		assertMessagePointCommandForRuntime(t, resp.Command)
 		assertSamePath(t, "cwd", resp.Cwd, projectDir)
 
 		promptPath := findSingleMessagePointPrompt(t, "sess-sparse", 3)
@@ -467,8 +483,7 @@ func TestResumeSession(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.False(t, resp.Launched)
-		assert.Contains(t, resp.Command, "claude <")
-		assert.Contains(t, resp.Command, "rm -f --")
+		assertMessagePointCommandForRuntime(t, resp.Command)
 		promptPath := findSingleMessagePointPrompt(t, "sess-remote-copy", 1)
 		t.Cleanup(func() { _ = os.Remove(promptPath) })
 	})

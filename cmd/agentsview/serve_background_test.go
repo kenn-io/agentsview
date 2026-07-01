@@ -1122,6 +1122,13 @@ func TestEnsureBackgroundServeLaunchLoserIgnoresReadOnlyRuntimeDuringReplacement
 	releaseLaunchLock := holdExternalBackgroundLaunchLock(t, dir)
 	MarkDaemonStarting(dir)
 	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+	oldStartProcess := startServeBackgroundProcessForEnsure
+	startServeBackgroundProcessForEnsure = func(
+		config.Config, []string,
+	) (*exec.Cmd, string, error) {
+		return nil, "", fmt.Errorf("start should not run")
+	}
+	t.Cleanup(func() { startServeBackgroundProcessForEnsure = oldStartProcess })
 
 	readOnlyHost, readOnlyPort := testPingServer(t)
 	_, err := WriteDaemonRuntime(
@@ -1134,8 +1141,8 @@ func TestEnsureBackgroundServeLaunchLoserIgnoresReadOnlyRuntimeDuringReplacement
 	published := make(chan error, 1)
 	go func() {
 		time.Sleep(2 * startProbeTick())
-		_, err := WriteDaemonRuntime(
-			dir, writableHost, writablePort, version, false,
+		err := publishDaemonRuntimeWhenVisible(
+			dir, writableHost, writablePort, version,
 		)
 		UnmarkDaemonStarting(dir)
 		releaseLaunchLock()
