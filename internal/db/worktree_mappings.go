@@ -542,15 +542,43 @@ func applyMappingToSessionRow(
 func applyWorktreeMappingMatchCwdFromSiblings(
 	rows []worktreeMappingSessionRow,
 	siblingKey func(worktreeMappingSessionRow) string,
+	resolveProject func(row worktreeMappingSessionRow, cwd string) (string, bool),
 ) {
-	fallbackBySibling := map[string]string{}
+	type siblingCandidate struct {
+		cwd     string
+		project string
+	}
+	candidatesBySibling := map[string][]siblingCandidate{}
 	for _, row := range rows {
 		key := siblingKey(row)
 		if key == "" || row.cwd == "" {
 			continue
 		}
-		if _, ok := fallbackBySibling[key]; !ok {
-			fallbackBySibling[key] = row.cwd
+		project, ok := resolveProject(row, row.cwd)
+		if !ok {
+			continue
+		}
+		candidates := candidatesBySibling[key]
+		alreadySeen := false
+		for _, candidate := range candidates {
+			if candidate.project == project {
+				alreadySeen = true
+				break
+			}
+		}
+		if !alreadySeen {
+			candidatesBySibling[key] = append(
+				candidates, siblingCandidate{cwd: row.cwd, project: project},
+			)
+		}
+	}
+
+	// Only fall back when every non-empty sibling resolves to the same
+	// project; conflicting siblings mean the fallback would be a guess.
+	fallbackBySibling := map[string]string{}
+	for key, candidates := range candidatesBySibling {
+		if len(candidates) == 1 {
+			fallbackBySibling[key] = candidates[0].cwd
 		}
 	}
 
@@ -684,6 +712,12 @@ func (db *DB) applyWorktreeProjectMappings(
 
 	applyWorktreeMappingMatchCwdFromSiblings(rowsForMachine, func(row worktreeMappingSessionRow) string {
 		return strings.TrimSpace(row.filePath)
+	}, func(row worktreeMappingSessionRow, cwd string) (string, bool) {
+		mapping, ok := bestWorktreeProjectMapping(mappings, cwd)
+		if !ok {
+			return "", false
+		}
+		return mapping.Project, true
 	})
 
 	for _, row := range rowsForMachine {
@@ -899,10 +933,6 @@ func (db *DB) applyWorktreeProjectMappingsToSessionsByPath(
 		return ApplyWorktreeProjectMappingsResult{}, nil
 	}
 
-	applyWorktreeMappingMatchCwdFromSiblings(sessions, func(row worktreeMappingSessionRow) string {
-		return row.machine + "|" + strings.TrimSpace(row.filePath)
-	})
-
 	mappingsByMachine, err := loadActiveWorktreeMappingsByMachineTx(
 		ctx, tx, machines,
 	)
@@ -911,6 +941,16 @@ func (db *DB) applyWorktreeProjectMappingsToSessionsByPath(
 			"loading active worktree mappings: %w", err,
 		)
 	}
+
+	applyWorktreeMappingMatchCwdFromSiblings(sessions, func(row worktreeMappingSessionRow) string {
+		return row.machine + "|" + strings.TrimSpace(row.filePath)
+	}, func(row worktreeMappingSessionRow, cwd string) (string, bool) {
+		mapping, ok := bestWorktreeProjectMapping(mappingsByMachine[row.machine], cwd)
+		if !ok {
+			return "", false
+		}
+		return mapping.Project, true
+	})
 
 	var result ApplyWorktreeProjectMappingsResult
 	for _, session := range sessions {

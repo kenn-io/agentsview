@@ -234,6 +234,57 @@ func TestApplyWorktreeProjectMappings_EmptyCwdSiblingFallback(t *testing.T) {
 	assert.Equal(t, "", emptyRow.Cwd, "stored cwd unchanged")
 }
 
+func TestApplyWorktreeProjectMappings_EmptyCwdConflictingSiblingsNoFallback(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	filePath := filepath.Join(root, "session.jsonl")
+	prefixA := filepath.Join(root, "repo-a.worktrees")
+	prefixB := filepath.Join(root, "repo-b.worktrees")
+
+	_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
+		Machine: "laptop", PathPrefix: prefixA, Project: "repo-a", Enabled: true,
+	})
+	require.NoError(t, err, "create mapping A")
+	_, err = d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
+		Machine: "laptop", PathPrefix: prefixB, Project: "repo-b", Enabled: true,
+	})
+	require.NoError(t, err, "create mapping B")
+
+	require.NoError(t, d.UpsertSession(Session{
+		ID:       "empty-cwd",
+		Project:  "stale",
+		Machine:  "laptop",
+		Agent:    "claude",
+		Cwd:      "",
+		FilePath: &filePath,
+	}), "insert empty cwd row")
+	require.NoError(t, d.UpsertSession(Session{
+		ID:       "reference-a",
+		Project:  "stale",
+		Machine:  "laptop",
+		Agent:    "claude",
+		Cwd:      filepath.Join(prefixA, "feat"),
+		FilePath: &filePath,
+	}), "insert reference row resolving to mapping A")
+	require.NoError(t, d.UpsertSession(Session{
+		ID:       "reference-b",
+		Project:  "stale",
+		Machine:  "laptop",
+		Agent:    "claude",
+		Cwd:      filepath.Join(prefixB, "feat"),
+		FilePath: &filePath,
+	}), "insert reference row resolving to mapping B")
+
+	result, err := d.ApplyWorktreeProjectMappings(ctx, "laptop")
+	require.NoError(t, err, "apply mappings")
+	assert.Equal(t, 2, result.MatchedSessions, "matched sessions")
+	assert.Equal(t, 2, result.UpdatedSessions, "updated sessions")
+	assertSessionProject(t, d, "empty-cwd", "stale")
+	assertSessionProject(t, d, "reference-a", "repo_a")
+	assertSessionProject(t, d, "reference-b", "repo_b")
+}
+
 func TestApplyWorktreeProjectMappings_EmptyCwdNoSiblingNoUpdate(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
@@ -348,6 +399,59 @@ func TestApplyWorktreeProjectMappingsToSessionsByPath_EmptyCwdSiblingFallback(
 	assert.Equal(t, 2, result.UpdatedSessions, "updated sessions")
 	assertSessionProject(t, d, "empty-cwd", "repo")
 	assertSessionProject(t, d, "reference", "repo")
+}
+
+func TestApplyWorktreeProjectMappingsToSessionsByPath_EmptyCwdConflictingSiblingsNoFallback(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	filePath := filepath.Join(root, "session.jsonl")
+	prefixA := filepath.Join(root, "repo-a.worktrees")
+	prefixB := filepath.Join(root, "repo-b.worktrees")
+
+	_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
+		Machine: "laptop", PathPrefix: prefixA, Project: "repo-a", Enabled: true,
+	})
+	require.NoError(t, err, "create mapping A")
+	_, err = d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
+		Machine: "laptop", PathPrefix: prefixB, Project: "repo-b", Enabled: true,
+	})
+	require.NoError(t, err, "create mapping B")
+
+	require.NoError(t, d.UpsertSession(Session{
+		ID:       "empty-cwd",
+		Project:  "stale",
+		Machine:  "laptop",
+		Agent:    "claude",
+		Cwd:      "",
+		FilePath: &filePath,
+	}), "insert empty cwd row")
+	require.NoError(t, d.UpsertSession(Session{
+		ID:       "reference-a",
+		Project:  "stale",
+		Machine:  "laptop",
+		Agent:    "claude",
+		Cwd:      filepath.Join(prefixA, "feat"),
+		FilePath: &filePath,
+	}), "insert reference row resolving to mapping A")
+	require.NoError(t, d.UpsertSession(Session{
+		ID:       "reference-b",
+		Project:  "stale",
+		Machine:  "laptop",
+		Agent:    "claude",
+		Cwd:      filepath.Join(prefixB, "feat"),
+		FilePath: &filePath,
+	}), "insert reference row resolving to mapping B")
+
+	result, err := d.ApplyWorktreeProjectMappingsToSessionsByPath(ctx, filePath)
+	require.NoError(t, err, "apply mappings by path")
+	assert.Equal(t, 2, result.MatchedSessions, "matched sessions")
+	assert.Equal(t, 2, result.UpdatedSessions, "updated sessions")
+	assertSessionProject(t, d, "empty-cwd", "stale")
+	assertSessionProject(t, d, "reference-a", "repo_a")
+	assertSessionProject(t, d, "reference-b", "repo_b")
 }
 
 func TestApplyWorktreeProjectMappingsToSessionsByPath_EmptyCwdOnlyEmptySiblingsNoMatch(
