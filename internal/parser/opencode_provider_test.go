@@ -13,6 +13,8 @@ import (
 )
 
 func TestOpenCodeProviderStorageSourceMethods(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	sessionPath := writeOpenCodeProviderStorageSession(
 		t, root, "session", "ses_provider", "opencode-app", "Provider Session",
@@ -112,14 +114,12 @@ func TestOpenCodeProviderStorageSourceMethods(t *testing.T) {
 }
 
 func TestOpenCodeProviderSQLiteSourceMethods(t *testing.T) {
-	root := t.TempDir()
-	dbPath, seeder, db := newTestDBAt(t, filepath.Join(root, "opencode.db"))
-	defer db.Close()
-	seeder.AddProject("prj_1", "/home/user/code/sqlite-app")
-	seeder.AddSession("ses_sqlite", "prj_1", "", "SQLite Session", 1700000000000, 1700000060000)
-	seeder.AddMessage("msg_1", "ses_sqlite", 1700000000000, 1700000000000, `{"role":"user"}`)
-	seeder.AddPart("prt_1", "msg_1", "ses_sqlite", 1700000000000, 1700000000000, `{"type":"text","text":"Hello from sqlite"}`)
-	virtualPath := OpenCodeSQLiteVirtualPath(dbPath, "ses_sqlite")
+	t.Parallel()
+
+	fixture := openCodeSQLiteProviderReadFixture(t)
+	root := fixture.Root
+	dbPath := fixture.DBPath
+	virtualPath := fixture.SQLiteVirtualPath
 
 	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{
 		Roots:   []string{root},
@@ -135,9 +135,8 @@ func TestOpenCodeProviderSQLiteSourceMethods(t *testing.T) {
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
-	require.Len(t, discovered, 1)
-	assert.Equal(t, virtualPath, discovered[0].DisplayPath)
-	assert.Equal(t, virtualPath, discovered[0].FingerprintKey)
+	requireSourcePathsMatch(t, discovered, fixture.AllVirtualPaths)
+	requireContainsSourcePath(t, discovered, virtualPath)
 
 	for _, path := range []string{dbPath, dbPath + "-wal"} {
 		changed, err := provider.SourcesForChangedPath(
@@ -145,12 +144,11 @@ func TestOpenCodeProviderSQLiteSourceMethods(t *testing.T) {
 			ChangedPathRequest{Path: path, EventKind: "write", WatchRoot: root},
 		)
 		require.NoError(t, err)
-		require.Len(t, changed, 1)
-		assert.Equal(t, virtualPath, changed[0].DisplayPath)
+		requireSourcePathsMatch(t, changed, fixture.AllVirtualPaths)
 	}
 
 	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
-		FullSessionID: "host~opencode:ses_sqlite",
+		FullSessionID: "host~opencode:" + fixture.TargetSessionID,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -175,11 +173,14 @@ func TestOpenCodeProviderSQLiteSourceMethods(t *testing.T) {
 	assert.Equal(t, "devbox", result.Result.Session.Machine)
 	assert.Equal(t, "Hello from sqlite", result.Result.Messages[0].Content)
 
-	require.NoError(t, db.Close())
-	require.NoError(t, os.Remove(dbPath), "remove sqlite db")
-	removed, err := provider.SourcesForChangedPath(
+	removedRoot, removedDBPath := newRemovedOpenCodeDBPath(t)
+	removedProvider, ok := NewProvider(AgentOpenCode, ProviderConfig{
+		Roots: []string{removedRoot},
+	})
+	require.True(t, ok)
+	removed, err := removedProvider.SourcesForChangedPath(
 		context.Background(),
-		ChangedPathRequest{Path: dbPath, EventKind: "remove", WatchRoot: root},
+		ChangedPathRequest{Path: removedDBPath, EventKind: "remove", WatchRoot: removedRoot},
 	)
 	require.NoError(t, err)
 	assert.Empty(t, removed, "removed sqlite DBs have no stateless virtual source list")
@@ -190,39 +191,26 @@ func TestOpenCodeProviderSQLiteSourceMethods(t *testing.T) {
 // reopening the DB per row via OpenCodeSQLiteSessionExists. Every row read from
 // the DB must surface as a discoverable source with its dbPath#id virtual path.
 func TestOpenCodeProviderSQLiteDiscoversAllListedSessions(t *testing.T) {
-	root := t.TempDir()
-	dbPath, seeder, db := newTestDBAt(t, filepath.Join(root, "opencode.db"))
-	defer db.Close()
-	seeder.AddProject("prj_1", "/home/user/code/sqlite-app")
-	ids := []string{"ses_a", "ses_b", "ses_c"}
-	for i, id := range ids {
-		start := int64(1700000000000 + i*1000)
-		seeder.AddSession(id, "prj_1", "", "Session "+id, start, start+60000)
-	}
+	t.Parallel()
 
+	fixture := openCodeSQLiteProviderReadFixture(t)
 	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{
-		Roots:   []string{root},
+		Roots:   []string{fixture.Root},
 		Machine: "devbox",
 	})
 	require.True(t, ok)
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
-	require.Len(t, discovered, len(ids))
-
-	want := make([]string, len(ids))
-	for i, id := range ids {
-		want[i] = OpenCodeSQLiteVirtualPath(dbPath, id)
-	}
-	got := make([]string, len(discovered))
-	for i, src := range discovered {
-		got[i] = src.DisplayPath
+	requireSourcePathsMatch(t, discovered, fixture.AllVirtualPaths)
+	for _, src := range discovered {
 		assert.Equal(t, src.DisplayPath, src.FingerprintKey)
 	}
-	assert.ElementsMatch(t, want, got)
 }
 
 func TestOpenCodeProviderHybridDiscoveryFiltersSQLiteDuplicate(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	storagePath := writeOpenCodeProviderStorageSession(
 		t, root, "session", "ses_dup", "storage-app", "Storage Session",
@@ -255,6 +243,8 @@ func TestOpenCodeProviderHybridDiscoveryFiltersSQLiteDuplicate(t *testing.T) {
 }
 
 func TestOpenCodeProviderDiscoveryToleratesCorruptSQLiteDB(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	storagePath := writeOpenCodeProviderStorageSession(
 		t, root, "session", "ses_valid", "storage-app", "Valid Session",
@@ -275,6 +265,8 @@ func TestOpenCodeProviderDiscoveryToleratesCorruptSQLiteDB(t *testing.T) {
 }
 
 func TestOpenCodeFamilyProviderRelabelsForks(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		agent         AgentType
 		sessionSubdir string
@@ -284,7 +276,10 @@ func TestOpenCodeFamilyProviderRelabelsForks(t *testing.T) {
 		{agent: AgentKilo, sessionSubdir: "session", prefix: "kilo:", project: "kilo-app"},
 		{agent: AgentMiMoCode, sessionSubdir: "session_diff", prefix: "mimocode:", project: "mimo-app"},
 	} {
+		tc := tc
 		t.Run(string(tc.agent), func(t *testing.T) {
+			t.Parallel()
+
 			root := t.TempDir()
 			sessionPath := writeOpenCodeProviderStorageSession(
 				t, root, tc.sessionSubdir, "ses_provider", tc.project, "Provider Session",

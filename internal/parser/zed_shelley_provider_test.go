@@ -29,18 +29,12 @@ func TestZedProviderCapabilities(t *testing.T) {
 }
 
 func TestZedProviderSourceMethods(t *testing.T) {
-	root := t.TempDir()
-	dbPath := filepath.Join(root, zedThreadsDBRelPath)
-	threadID := "10431c84-c47b-4e6c-b2df-f9f3b9ad025b"
-	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
-	createZedThreadsDBAt(t, dbPath, []zedTestThread{{
-		id:        threadID,
-		summary:   "Provider thread",
-		createdAt: "2026-06-08T09:12:41Z",
-		updatedAt: "2026-06-08T09:14:10Z",
-		dataType:  "json",
-		data:      []byte(`{"messages":[{"User":{"content":[{"Text":"Hello Zed"}]}}]}`),
-	}})
+	t.Parallel()
+
+	fixture := zedProviderReadFixture(t)
+	root := fixture.Root
+	dbPath := fixture.DBPath
+	threadID := fixture.FirstThreadID
 	virtualPath := ZedSQLiteVirtualPath(dbPath, threadID)
 
 	provider, ok := NewProvider(AgentZed, ProviderConfig{
@@ -88,29 +82,12 @@ func TestZedProviderSourceMethods(t *testing.T) {
 }
 
 func TestZedProviderParsePhysicalAndVirtualSources(t *testing.T) {
-	root := t.TempDir()
-	dbPath := filepath.Join(root, zedThreadsDBRelPath)
-	threadOne := "10431c84-c47b-4e6c-b2df-f9f3b9ad025b"
-	threadTwo := "20431c84-c47b-4e6c-b2df-f9f3b9ad025b"
-	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
-	createZedThreadsDBAt(t, dbPath, []zedTestThread{
-		{
-			id:        threadOne,
-			summary:   "First thread",
-			createdAt: "2026-06-08T09:12:41Z",
-			updatedAt: "2026-06-08T09:14:10Z",
-			dataType:  "json",
-			data:      []byte(`{"messages":[{"User":{"content":[{"Text":"First"}]}}]}`),
-		},
-		{
-			id:        threadTwo,
-			summary:   "Second thread",
-			createdAt: "2026-06-08T09:15:41Z",
-			updatedAt: "2026-06-08T09:16:10Z",
-			dataType:  "json",
-			data:      []byte(`{"messages":[{"User":{"content":[{"Text":"Second"}]}}]}`),
-		},
-	})
+	t.Parallel()
+
+	fixture := zedProviderReadFixture(t)
+	root := fixture.Root
+	threadOne := fixture.FirstThreadID
+	threadTwo := fixture.SecondThreadID
 
 	provider, ok := NewProvider(AgentZed, ProviderConfig{
 		Roots:   []string{root},
@@ -149,6 +126,8 @@ func TestZedProviderParsePhysicalAndVirtualSources(t *testing.T) {
 }
 
 func TestZedProviderFingerprintIncludesWALSiblings(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	dbPath := filepath.Join(root, zedThreadsDBRelPath)
 	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
@@ -439,8 +418,11 @@ func TestShelleyProviderCapabilities(t *testing.T) {
 }
 
 func TestShelleyProviderSourceMethods(t *testing.T) {
-	root, dbPath, db := newShelleyTestDB(t)
-	seedShelleyMainConversation(t, db)
+	t.Parallel()
+
+	fixture := shelleyProviderReadFixture(t)
+	root := fixture.Root
+	dbPath := fixture.DBPath
 	virtualPath := ShelleyVirtualPath(dbPath, "cMAIN1")
 
 	provider, ok := NewProvider(AgentShelley, ProviderConfig{
@@ -488,16 +470,11 @@ func TestShelleyProviderSourceMethods(t *testing.T) {
 }
 
 func TestShelleyProviderParsePhysicalAndVirtualSources(t *testing.T) {
-	root, dbPath, db := newShelleyTestDB(t)
-	seedShelleyMainConversation(t, db)
-	seedShelleyConversation(
-		t, db, "cAUX1", "Auxiliary", "/home/user/dev/aux",
-		"claude-sonnet-4-6", "", true,
-		"2026-06-15T11:00:00Z", "2026-06-15T11:03:00Z",
-	)
-	seedShelleyMessage(t, db, "cAUX1", 1, 1, "user",
-		`{"Role":0,"Content":[{"Type":2,"Text":"Aux request"}]}`,
-		"", "", "2026-06-15T11:00:00Z")
+	t.Parallel()
+
+	fixture := shelleyProviderReadFixture(t)
+	root := fixture.Root
+	dbPath := fixture.DBPath
 
 	provider, ok := NewProvider(AgentShelley, ProviderConfig{
 		Roots:   []string{root},
@@ -536,6 +513,8 @@ func TestShelleyProviderParsePhysicalAndVirtualSources(t *testing.T) {
 }
 
 func TestShelleyProviderFingerprintChangesForSameSecondRewrite(t *testing.T) {
+	t.Parallel()
+
 	root, _, db := newShelleyTestDB(t)
 	seedShelleyMainConversation(t, db)
 
@@ -567,6 +546,8 @@ func TestShelleyProviderFingerprintChangesForSameSecondRewrite(t *testing.T) {
 }
 
 func TestShelleyProviderFingerprintIncludesWALSiblings(t *testing.T) {
+	t.Parallel()
+
 	root, dbPath, db := newShelleyTestDB(t)
 	seedShelleyMainConversation(t, db)
 
