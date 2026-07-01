@@ -338,6 +338,9 @@ func TestMain(m *testing.M) {
 	if statsOutcomeRepoDir != "" {
 		_ = os.RemoveAll(statsOutcomeRepoDir)
 	}
+	if statsOutcomeEmptyRepoDir != "" {
+		_ = os.RemoveAll(statsOutcomeEmptyRepoDir)
+	}
 	os.Exit(code)
 }
 

@@ -2546,6 +2546,10 @@ var (
 	statsOutcomeRepoOnce sync.Once
 	statsOutcomeRepoDir  string
 	statsOutcomeRepoPath string
+
+	statsOutcomeEmptyRepoOnce sync.Once
+	statsOutcomeEmptyRepoDir  string
+	statsOutcomeEmptyRepoPath string
 )
 
 func statsOutcomeRepo(t *testing.T) string {
@@ -2574,6 +2578,19 @@ func statsOutcomeRepo(t *testing.T) string {
 	return statsOutcomeRepoPath
 }
 
+func statsOutcomeEmptyRepo(t *testing.T) string {
+	t.Helper()
+	statsOutcomeEmptyRepoOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "agentsview-stats-outcome-empty-*")
+		require.NoError(t, err, "create empty stats outcome repo dir")
+		statsOutcomeEmptyRepoDir = dir
+		statsOutcomeEmptyRepoPath = filepath.Join(dir, "repo")
+		statsInitRepoAt(t, statsOutcomeEmptyRepoPath)
+	})
+
+	return statsOutcomeEmptyRepoPath
+}
+
 // TestGetSessionStats_OutcomeStats_DefaultDisabled verifies that plain
 // stats runs do not touch git-derived outcome aggregation, even when
 // sessions carry cwd values inside a real repository.
@@ -2583,7 +2600,7 @@ func TestGetSessionStats_OutcomeStats_DefaultDisabled(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 
-	repo := statsOutcomeRepo(t)
+	repo := statsOutcomeEmptyRepo(t)
 	insertSessionFixture(t, d, sessionFixture{
 		id: "os-default", agent: "claude", userMsgs: 5,
 		startedAt: hoursAgo(5), cwd: repo,
