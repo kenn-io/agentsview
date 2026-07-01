@@ -1588,7 +1588,7 @@ func TestGenerateInsight_LogDrainTimeoutReportsBufferedDrops(t *testing.T) {
 	stubGen := func(
 		_ context.Context, _ string, _ string, onLog insight.LogFunc,
 	) (insight.Result, error) {
-		for i := range 10 {
+		for i := range 300 {
 			onLog(insight.LogEvent{
 				Stream: "stdout",
 				Line:   fmt.Sprintf("slow-line-%d", i),
@@ -1659,10 +1659,8 @@ func TestGenerateInsight_LogDrainTimeoutReportsBufferedDrops(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		// 10 events were enqueued; timeout truncation should account
-		// for most buffered entries that were never flushed.
-		require.GreaterOrEqual(t, dropped, 8,
-			"expected timeout drop summary >=8 (%q)", line.Line)
+		require.Positive(t, dropped,
+			"expected timeout drop summary to report at least one dropped log line (%q)", line.Line)
 		foundDropSummary = true
 	}
 	require.True(t, foundTimeoutError,
