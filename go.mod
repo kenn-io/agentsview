@@ -17,14 +17,14 @@ require (
 	github.com/minio/minio-go/v7 v7.2.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
-	github.com/shirou/gopsutil/v4 v4.26.5
+	github.com/shirou/gopsutil/v4 v4.26.6
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.43.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.43.0
 	github.com/tidwall/gjson v1.19.0
-	go.kenn.io/kit v0.1.7
+	go.kenn.io/kit v0.1.8
 	golang.org/x/mod v0.37.0
 	golang.org/x/sync v0.21.0
 	golang.org/x/sys v0.46.0
