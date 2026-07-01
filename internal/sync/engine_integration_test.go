@@ -2042,15 +2042,22 @@ func TestSyncPathsClaude(t *testing.T) {
 	content := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "Hello").
 		String()
+	untouchedContent := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsZero, "Untouched").
+		String()
 
 	path := env.writeClaudeSession(
 		t, "test-proj", "paths-test.jsonl", content,
 	)
+	env.writeClaudeSession(
+		t, "test-proj", "paths-untouched.jsonl", untouchedContent,
+	)
 
 	// Initial full sync
-	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 1 + 0, Synced: 1, Skipped: 0})
+	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 2 + 0, Synced: 2, Skipped: 0})
 
 	assertSessionMessageCount(t, env.db, "paths-test", 1)
+	assertSessionMessageCount(t, env.db, "paths-untouched", 1)
 
 	// Append a message (changes size and hash)
 	appended := content + testjsonl.NewSessionBuilder().
@@ -2062,41 +2069,7 @@ func TestSyncPathsClaude(t *testing.T) {
 	env.engine.SyncPaths([]string{path})
 
 	assertSessionMessageCount(t, env.db, "paths-test", 2)
-}
-
-func TestSyncPathsOnlyProcessesChanged(t *testing.T) {
-	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
-
-	content1 := testjsonl.NewSessionBuilder().
-		AddClaudeUser(tsZero, "msg1").
-		String()
-	content2 := testjsonl.NewSessionBuilder().
-		AddClaudeUser(tsZero, "msg2").
-		String()
-
-	path1 := env.writeClaudeSession(
-		t, "proj", "session-1.jsonl", content1,
-	)
-	env.writeClaudeSession(
-		t, "proj", "session-2.jsonl", content2,
-	)
-
-	// Initial full sync
-	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 2 + 0, Synced: 2, Skipped: 0})
-
-	// Only modify session-1
-	appended := content1 + testjsonl.NewSessionBuilder().
-		AddClaudeAssistant(tsZeroS5, "reply").
-		String()
-	os.WriteFile(path1, []byte(appended), 0o644)
-
-	// SyncPaths with just session-1
-	env.engine.SyncPaths([]string{path1})
-
-	// session-1 should have 2 messages
-	assertSessionMessageCount(t, env.db, "session-1", 2)
-	// session-2 should still have 1 message (untouched)
-	assertSessionMessageCount(t, env.db, "session-2", 1)
+	assertSessionMessageCount(t, env.db, "paths-untouched", 1)
 }
 
 func TestSyncPathsIgnoresNonSessionFiles(t *testing.T) {
