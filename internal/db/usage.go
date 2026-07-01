@@ -339,19 +339,22 @@ const usageMessageSourceEligibility = `
     AND m.model != '<synthetic>'`
 
 // usageMatchingMessageEligibility is usageMessageEligibility with the
-// token-presence requirement removed. GetUsageMatchingSessionCount counts
-// sessions that have usage-shaped activity even when the agent (e.g.
-// Copilot) never records per-message tokens, so it must not gate on
-// m.token_usage the way every token/cost query does. Do not reuse this
-// for usageRowQuery or its callers — see the usageMessageEligibility
-// doc comment above.
+// token-presence requirement removed and the model-presence requirement
+// relaxed to a role check. GetUsageMatchingSessionCount counts sessions
+// that have usage-shaped activity even when the agent (e.g. Copilot)
+// never records per-message tokens or, for some assistant messages, a
+// model name, so it must not gate on m.token_usage or m.model != ” the
+// way every token/cost query does; Model/ExcludeModel filters are applied
+// separately and still narrow the match when set. Do not reuse this for
+// usageRowQuery or its callers — see the usageMessageEligibility doc
+// comment above.
 const usageMatchingMessageEligibility = `
-    m.model != ''
+    m.role = 'assistant'
     AND m.model != '<synthetic>'
     AND s.deleted_at IS NULL`
 
 const usageMatchingMessageSourceEligibility = `
-    m.model != ''
+    m.role = 'assistant'
     AND m.model != '<synthetic>'`
 
 const usageEventEligibility = `

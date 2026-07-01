@@ -562,6 +562,47 @@ func TestStoreGetUsageMatchingSessionCountModelFilterAppliesToBoundedRow(
 		"out-of-range message's model must not match the bounded window")
 }
 
+// TestStoreGetUsageMatchingSessionCountCountsAssistantMessageWithNoModel
+// guards against gating matching-session eligibility on m.model != ”:
+// some Copilot assistant messages parse before a model name is known, so
+// an assistant message with an empty model must still count toward the
+// matching-session total when no Model/ExcludeModel filter narrows it.
+func TestStoreGetUsageMatchingSessionCountCountsAssistantMessageWithNoModel(
+	t *testing.T,
+) {
+	_, store := prepareUsageSchema(t, "agentsview_usage_matching_sessions_no_model_test")
+
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at, ended_at,
+			message_count, user_message_count
+		) VALUES
+			('copilot-no-model', 'test-machine', 'proj-a', 'copilot',
+			 '2026-02-10T10:00:00Z'::timestamptz,
+			 '2026-02-10T10:00:00Z'::timestamptz, 1, 1)`)
+	require.NoError(t, err, "insert sessions")
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp, content_length,
+			model, token_usage
+		) VALUES
+			('copilot-no-model', 0, 'assistant', 'copilot',
+			 '2026-02-10T10:00:00Z'::timestamptz, 7,
+			 '', '')`)
+	require.NoError(t, err, "insert messages")
+
+	count, err := store.GetUsageMatchingSessionCount(ctx, db.UsageFilter{
+		From:     "2026-02-10",
+		To:       "2026-02-10",
+		Timezone: "UTC",
+		Agent:    "copilot",
+	})
+	require.NoError(t, err, "GetUsageMatchingSessionCount")
+	assert.Equal(t, 1, count,
+		"assistant message with no model must still count without a model filter")
+}
+
 func TestStoreGetUsageSessionCountsDedupesSourceUUIDFallback(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_counts_source_uuid_test")
 

@@ -2135,6 +2135,38 @@ func TestGetUsageMatchingSessionCount_ModelFilterAppliesToBoundedRow(
 		"in-range message's model is not excluded, so the session must still count")
 }
 
+// TestGetUsageMatchingSessionCount_CountsAssistantMessageWithNoModel
+// guards against gating matching-session eligibility on m.model != ”:
+// some Copilot assistant messages parse before a model name is known, so
+// an assistant message with an empty Model must still count toward the
+// matching-session total when no Model/ExcludeModel filter narrows it.
+func TestGetUsageMatchingSessionCount_CountsAssistantMessageWithNoModel(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "copilot-no-model", "proj-a", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2026-02-10T10:00:00Z")
+		s.EndedAt = new("2026-02-10T10:00:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "copilot-no-model", Ordinal: 0,
+		Role: "assistant", Timestamp: "2026-02-10T10:00:00Z",
+		Model:      "",
+		TokenUsage: nil,
+	})
+
+	got, err := d.GetUsageMatchingSessionCount(ctx, UsageFilter{
+		From: "2026-02-10", To: "2026-02-10",
+		Timezone: "UTC", Agent: "copilot",
+	})
+	requireNoError(t, err, "GetUsageMatchingSessionCount")
+	assert.Equal(t, 1, got,
+		"assistant message with no model must still count without a model filter")
+}
+
 func TestNewUsageSessionCounts(t *testing.T) {
 	counts := NewUsageSessionCounts(map[string]UsageSessionInfo{
 		"s1": {Project: "proj-a", Agent: "claude"},

@@ -3179,15 +3179,18 @@ func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 // (duckUsageRawSQL) already bounds each row source on
 // COALESCE(m.timestamp, s.started_at) / COALESCE(ue.occurred_at,
 // s.started_at) directly, so this mirrors that shape but relaxes the
-// message predicate (no token_usage requirement — Copilot messages never
-// populate it), keeping the same per-row Model/ExcludeModel filtering as
-// duckUsageRawSQL so GetUsageMatchingSessionCount's semantics only relax
-// the token-usage requirement.
+// message predicate: no token_usage requirement (Copilot messages never
+// populate it) and no model-presence requirement (some Copilot assistant
+// messages parse before a model name is known), scoping to assistant rows
+// via m.role instead. Model/ExcludeModel filters are still applied
+// per-row via appendDuckUsageSourceFilterClauses, same as duckUsageRawSQL,
+// so GetUsageMatchingSessionCount's semantics only relax the token-usage
+// and model-presence requirements.
 func duckMatchingUsageRawSQL(f db.UsageFilter) (string, []any) {
 	bounds := duckUsageBoundsForFilter(f)
 
 	messageWhere := `
-			m.model != ''
+			m.role = 'assistant'
 			AND m.model != '<synthetic>'
 			AND s.deleted_at IS NULL`
 	var messageArgs []any

@@ -332,11 +332,13 @@ func TestPGGetUsageMatchingSessionCountUsesSessionQuery(t *testing.T) {
 
 // TestPGMatchingUsageRowsSQLForBoundsRelaxesTokenEligibility asserts the
 // bounded matching-session query relaxes token eligibility (no
-// m.token_usage check) while filtering Model/ExcludeModel directly on the
-// bounded message/event row, matching the normal bounded path instead of
-// folding in a session-wide model-match EXISTS clause. Mirrors
-// TestPGUsageRowQueryPushesDateBoundsIntoUnion's direct-call style with
-// no live DB and no probe mock.
+// m.token_usage check) and model-presence eligibility (m.role = 'assistant'
+// instead of m.model != ”, since some Copilot assistant messages parse
+// before a model name is known) while filtering Model/ExcludeModel
+// directly on the bounded message/event row, matching the normal bounded
+// path instead of folding in a session-wide model-match EXISTS clause.
+// Mirrors TestPGUsageRowQueryPushesDateBoundsIntoUnion's direct-call style
+// with no live DB and no probe mock.
 func TestPGMatchingUsageRowsSQLForBoundsRelaxesTokenEligibility(t *testing.T) {
 	pb := &paramBuilder{}
 	f := db.UsageFilter{
@@ -350,7 +352,8 @@ func TestPGMatchingUsageRowsSQLForBoundsRelaxesTokenEligibility(t *testing.T) {
 	normalized := strings.ToLower(query)
 	assert.Contains(t, normalized, "message_timestamp_rows as materialized")
 	assert.Contains(t, normalized, "usage_event_timestamp_rows as materialized")
-	assert.Contains(t, normalized, "m.model != ''")
+	assert.Contains(t, normalized, "m.role = 'assistant'")
+	assert.NotContains(t, normalized, "m.model != ''")
 	assert.NotContains(t, normalized, "m.token_usage != ''")
 	// Model is filtered on the bounded row directly, not via a
 	// session-wide EXISTS: each of the four branches (message-timestamp

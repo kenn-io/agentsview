@@ -25,12 +25,12 @@ const pgUsageMessageSourceEligibility = `
 	AND m.model != '<synthetic>'`
 
 const pgUsageMatchingMessageEligibility = `
-	m.model != ''
+	m.role = 'assistant'
 	AND m.model != '<synthetic>'
 	AND s.deleted_at IS NULL`
 
 const pgUsageMatchingMessageSourceEligibility = `
-	m.model != ''
+	m.role = 'assistant'
 	AND m.model != '<synthetic>'`
 
 const pgUsageEventEligibility = `

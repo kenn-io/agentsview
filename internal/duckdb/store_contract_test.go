@@ -477,6 +477,54 @@ func TestDuckDBGetUsageMatchingSessionCountModelFilterAppliesToBoundedRow(
 		"out-of-range message's model must not match the bounded window")
 }
 
+// TestDuckDBGetUsageMatchingSessionCountCountsAssistantMessageWithNoModel
+// guards against gating matching-session eligibility on m.model != ”:
+// some Copilot assistant messages parse before a model name is known, so
+// an assistant message with an empty Model must still count toward the
+// matching-session total when no Model/ExcludeModel filter narrows it.
+func TestDuckDBGetUsageMatchingSessionCountCountsAssistantMessageWithNoModel(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	ts := "2026-02-10T10:00:00Z"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: db.Session{
+			ID:               "duck-copilot-no-model",
+			Project:          "alpha",
+			Machine:          "test-machine",
+			Agent:            "copilot",
+			StartedAt:        &ts,
+			EndedAt:          &ts,
+			MessageCount:     1,
+			UserMessageCount: 1,
+		},
+		Messages: []db.Message{{
+			SessionID:  "duck-copilot-no-model",
+			Ordinal:    0,
+			Role:       "assistant",
+			Timestamp:  ts,
+			Model:      "",
+			TokenUsage: nil,
+		}},
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err, "seed no-model copilot session")
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	count, err := store.GetUsageMatchingSessionCount(ctx, db.UsageFilter{
+		From: "2026-02-10", To: "2026-02-10",
+		Timezone: "UTC", Agent: "copilot",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, count,
+		"assistant message with no model must still count without a model filter")
+}
+
 func duckSessionIDs(sessions []db.Session) []string {
 	ids := make([]string, len(sessions))
 	for i, session := range sessions {
