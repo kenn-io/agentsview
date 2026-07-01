@@ -50,6 +50,47 @@ func TestSyncFullPushCreatesExpectedRows(t *testing.T) {
 	assert.Equal(t, "alpha first", firstMessage)
 }
 
+func TestSyncPushReportsSessionDiagnosticsByAgent(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	seedDuckDBSyncFixture(t, local)
+	codexID := "duck-sync-codex"
+	codexSession := syncSession(
+		codexID, "gamma", "codex first",
+		"2026-01-12T00:00:00.000Z", 1,
+	)
+	codexSession.Agent = "codex"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: codexSession,
+		Messages: []db.Message{
+			syncMessage(
+				codexID, 0, "user", "codex first",
+				"2026-01-12T00:00:00.000Z",
+			),
+		},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+
+	result, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+
+	wantByAgent := map[string]int{"claude": 2, "codex": 1}
+	assert.True(t, result.Diagnostics.Full)
+	assert.Empty(t, result.Diagnostics.LastPushAt)
+	assert.Equal(t, 3, result.Diagnostics.LocalSessions.Total)
+	assert.Equal(t, wantByAgent, result.Diagnostics.LocalSessions.ByAgent)
+	assert.Equal(t, 3, result.Diagnostics.CandidateSessions.Total)
+	assert.Equal(t, wantByAgent, result.Diagnostics.CandidateSessions.ByAgent)
+	assert.Equal(t, 0, result.Diagnostics.SkippedUnchangedSessions.Total)
+	assert.Empty(t, result.Diagnostics.SkippedUnchangedSessions.ByAgent)
+	assert.Equal(t, 3, result.Diagnostics.PushedSessions.Total)
+	assert.Equal(t, wantByAgent, result.Diagnostics.PushedSessions.ByAgent)
+	assert.NotEmpty(t, result.Diagnostics.Cutoff)
+}
+
 func TestDuckValueLiteralFormatsTimestampWithoutZone(t *testing.T) {
 	got, err := duckValueLiteral(time.Date(
 		2026, time.January, 10, 3, 4, 5, 123456789, time.UTC,
@@ -57,6 +98,19 @@ func TestDuckValueLiteralFormatsTimestampWithoutZone(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "TIMESTAMP '2026-01-10 03:04:05.123456'", got)
+}
+
+func TestDuckSQLWithArgsExecutesQuotedMultilineString(t *testing.T) {
+	ctx := context.Background()
+	duck := openTestDuckDB(t)
+	want := "first line\nquoted ' value\ncontains $$ delimiter text"
+
+	stmt, err := duckSQLWithArgs(`SELECT ?`, want)
+	require.NoError(t, err)
+
+	var got string
+	require.NoError(t, duck.QueryRowContext(ctx, stmt).Scan(&got))
+	assert.Equal(t, want, got)
 }
 
 func TestDuckValueLiteralFormatsNullableNumericPointers(t *testing.T) {

@@ -2,7 +2,9 @@ package duckdb
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"slices"
 	"sort"
@@ -393,7 +395,7 @@ func duckValueLiteral(v any) (string, error) {
 	case nil:
 		return "NULL", nil
 	case string:
-		return duckLiteral(value), nil
+		return duckRemoteStringLiteral(value)
 	case int, int8, int16, int32, int64,
 		uint, uint8, uint16, uint32, uint64,
 		float32, float64:
@@ -424,6 +426,21 @@ func duckValueLiteral(v any) (string, error) {
 		), nil
 	default:
 		return "", fmt.Errorf("unsupported duckdb remote argument type %T", v)
+	}
+}
+
+func duckRemoteStringLiteral(s string) (string, error) {
+	for {
+		var tagBytes [16]byte
+		if _, err := rand.Read(tagBytes[:]); err != nil {
+			return "", fmt.Errorf("generating duckdb string literal tag: %w", err)
+		}
+		tag := "agentsview_" + hex.EncodeToString(tagBytes[:])
+		delimiter := "$" + tag + "$"
+		if strings.Contains(s, delimiter) {
+			continue
+		}
+		return delimiter + s + delimiter, nil
 	}
 }
 

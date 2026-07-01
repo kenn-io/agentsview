@@ -248,6 +248,10 @@ func TestQuackStoreAnalyticsDashboardReads(t *testing.T) {
 
 	local := newLocalDB(t)
 	seedDuckDBSyncFixture(t, local)
+	seedDuckEdit(
+		t, local, "alpha", "duck-sync-edit",
+		0, 0, "src/main.go", "2026-01-10T02:00:00Z",
+	)
 	syncer, err := NewFromConfig(
 		config.DuckDBConfig{
 			URL:         uri,
@@ -264,8 +268,8 @@ func TestQuackStoreAnalyticsDashboardReads(t *testing.T) {
 
 	result, err := syncer.Push(ctx, true, nil)
 	require.NoError(t, err, "push analytics fixture through Quack")
-	assert.Equal(t, 2, result.SessionsPushed)
-	assert.Equal(t, 3, result.MessagesPushed)
+	assert.Equal(t, 3, result.SessionsPushed)
+	assert.Equal(t, 4, result.MessagesPushed)
 
 	store, err := NewQuackStore(uri, token, false)
 	require.NoError(t, err, "open Quack-backed store")
@@ -280,11 +284,11 @@ func TestQuackStoreAnalyticsDashboardReads(t *testing.T) {
 	}
 	page, err := store.ListSessions(ctx, db.SessionFilter{Limit: 10})
 	require.NoError(t, err, "list sessions through Quack")
-	assert.Len(t, page.Sessions, 2)
+	assert.Len(t, page.Sessions, 3)
 
 	sidebar, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{})
 	require.NoError(t, err, "read sidebar session index through Quack")
-	assert.Equal(t, 2, sidebar.Total)
+	assert.Equal(t, 3, sidebar.Total)
 
 	search, err := store.Search(ctx, db.SearchFilter{Query: "alpha", Limit: 10})
 	require.NoError(t, err, "search sessions through Quack")
@@ -309,7 +313,20 @@ func TestQuackStoreAnalyticsDashboardReads(t *testing.T) {
 
 	tools, err := store.GetAnalyticsTools(ctx, filter)
 	require.NoError(t, err, "read tool analytics through Quack")
-	assert.Equal(t, 1, tools.TotalCalls)
+	assert.Equal(t, 2, tools.TotalCalls)
+
+	edits, err := store.RecentEdits(ctx, db.RecentEditsParams{})
+	require.NoError(t, err, "read recent edits through Quack")
+	require.NotEmpty(t, edits.Files)
+	assert.Equal(t, "src/main.go", edits.Files[0].FilePath)
+
+	report, err := store.GetActivityReport(
+		ctx,
+		db.AnalyticsFilter{Timezone: "UTC"},
+		duckDayQuery(t, "2026-01-10", "UTC"),
+	)
+	require.NoError(t, err, "read activity report through Quack")
+	assert.GreaterOrEqual(t, report.Totals.Sessions, 1)
 }
 
 func TestQuackClientSyncPushWritesThroughAttachment(t *testing.T) {
@@ -385,7 +402,8 @@ func TestQuackClientSyncPushWritesThroughAttachment(t *testing.T) {
 	assertDuckDBIndexExists(t, server, "tool_calls", "idx_tool_calls_file_path")
 
 	mutatedAt := "2026-01-10T03:04:05.123456Z"
-	mutatedResult := "duck result changed"
+	mutatedResult := "duck result changed\nquoted ' output\ncontains $$ delimiter"
+	mutatedFilePath := "src/quoted ' file\ncontains $$ delimiter"
 	_, err = local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
 		Session: syncSession(
 			fixture.alphaID, "alpha", "alpha changed", mutatedAt, 2,
@@ -404,6 +422,7 @@ func TestQuackClientSyncPushWritesThroughAttachment(t *testing.T) {
 					SkillName: "duck-grep",
 					ToolUseID: "tool-alpha",
 					InputJSON: `{"query":"changed"}`,
+					FilePath:  mutatedFilePath,
 					ResultEvents: []db.ToolResultEvent{{
 						Source:        "tool",
 						Status:        "complete",
@@ -459,20 +478,21 @@ func TestQuackClientSyncPushWritesThroughAttachment(t *testing.T) {
 		startedAt.UTC(),
 	)
 
-	var toolName, category, skillName, inputJSON string
+	var toolName, category, skillName, inputJSON, filePath string
 	require.NoError(t,
 		server.QueryRowContext(ctx, `
-			SELECT tool_name, category, skill_name, input_json
+			SELECT tool_name, category, skill_name, input_json, file_path
 			FROM tool_calls
 			WHERE session_id = ? AND message_id = ? AND call_index = ?`,
 			fixture.alphaID, assistantMessage.ID, 0,
-		).Scan(&toolName, &category, &skillName, &inputJSON),
+		).Scan(&toolName, &category, &skillName, &inputJSON, &filePath),
 		"query updated tool_call",
 	)
 	assert.Equal(t, "grep", toolName)
 	assert.Equal(t, "search", category)
 	assert.Equal(t, "duck-grep", skillName)
 	assert.Equal(t, `{"query":"changed"}`, inputJSON)
+	assert.Equal(t, mutatedFilePath, filePath)
 
 	var resultStatus, resultContent string
 	require.NoError(t,

@@ -157,6 +157,9 @@ func (s *Server) humaDuckDBPush(
 	if err != nil {
 		return nil, apiError(http.StatusBadRequest, err.Error())
 	}
+	if err := duckdbsync.ValidatePushTarget(duckCfg); err != nil {
+		return nil, apiError(http.StatusBadRequest, err.Error())
+	}
 
 	engine := s.syncEngineForLocal(local)
 	opts := duckDBPushSyncOptions(in.Body, duckCfg)

@@ -184,6 +184,15 @@ func NewStoreFromConfig(cfg config.DuckDBConfig) (*Store, error) {
 	return NewStore(cfg.Path)
 }
 
+// ValidatePushTarget validates remote DuckDB push targets without opening a
+// DuckDB connection. Local file targets are validated when opened.
+func ValidatePushTarget(cfg config.DuckDBConfig) error {
+	if cfg.URL == "" {
+		return nil
+	}
+	return ValidateQuackClientURL(cfg.URL, cfg.Token, cfg.AllowInsecure)
+}
+
 // NewFromConfig opens either a local DuckDB mirror file or a remote Quack
 // endpoint for push sync.
 func NewFromConfig(
@@ -298,7 +307,9 @@ func ValidateQuackClientURL(rawURL, token string, allowInsecure bool) error {
 		return fmt.Errorf("duckdb url must start with quack")
 	}
 	if token == "" {
-		return fmt.Errorf("duckdb quack token is required")
+		return fmt.Errorf(
+			"duckdb quack token is required; set AGENTSVIEW_DUCKDB_TOKEN or [duckdb].token",
+		)
 	}
 	transport := strings.TrimPrefix(rawURL, "quack:")
 	if !strings.HasPrefix(transport, "http://") &&
