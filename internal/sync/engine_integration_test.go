@@ -4730,37 +4730,6 @@ func TestKiloPreservesStorageArchiveAgainstSQLiteFallback(t *testing.T) {
 	)
 }
 
-func TestResyncAllAllowsKiloSQLiteOnlySessions(t *testing.T) {
-	t.Parallel()
-
-	env := setupSingleAgentTestEnv(t, parser.AgentKilo)
-	sqlite := createKiloDB(t, env.kiloDir)
-	sqlite.addProject(t, "proj-1", "/home/user/code/kilo-app")
-	sqlite.addSession(
-		t, "sqlite-only", "proj-1",
-		1704067200000, 1704067205000,
-	)
-	sqlite.addMessage(
-		t, "sqlite-msg-a1", "sqlite-only", "assistant",
-		1704067201000,
-	)
-	sqlite.addTextPart(
-		t, "sqlite-part-a1", "sqlite-only", "sqlite-msg-a1",
-		"sqlite-only kilo reply", 1704067201000,
-	)
-
-	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 1,
-		Synced:        1,
-	})
-	stats := env.engine.ResyncAll(context.Background(), nil)
-
-	assert.False(t, stats.Aborted)
-	assertMessageContent(
-		t, env.db, "kilo:sqlite-only", "sqlite-only kilo reply",
-	)
-}
-
 func TestSyncAllSinceOpenCodeStoragePicksUpUsagePartUpdate(t *testing.T) {
 	t.Parallel()
 
@@ -6545,63 +6514,6 @@ func TestResyncAllAbortsOnEmptyDiscovery(t *testing.T) {
 	assertSessionMessageCount(t, env.db, "keep", 2)
 }
 
-// TestResyncAllOpenCodeOnly verifies that ResyncAll succeeds
-// when only OpenCode sessions exist (no file-based sessions).
-// The empty-discovery guard must not abort when OpenCode
-// sessions are synced.
-func TestResyncAllOpenCodeOnly(t *testing.T) {
-	t.Parallel()
-
-	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
-
-	oc := createOpenCodeDB(t, env.opencodeDir)
-	oc.addProject(t, "proj-1", "/home/user/code/myapp")
-
-	sessionID := "oc-resync-only"
-	var timeCreated int64 = 1704067200000
-	var timeUpdated int64 = 1704067205000
-
-	oc.addSession(
-		t, sessionID, "proj-1",
-		timeCreated, timeUpdated,
-	)
-	oc.addMessage(
-		t, "msg-u1", sessionID, "user", timeCreated,
-	)
-	oc.addMessage(
-		t, "msg-a1", sessionID, "assistant",
-		timeCreated+1,
-	)
-	oc.addTextPart(
-		t, "part-u1", sessionID, "msg-u1",
-		"hello opencode", timeCreated,
-	)
-	oc.addTextPart(
-		t, "part-a1", sessionID, "msg-a1",
-		"hi there", timeCreated+1,
-	)
-
-	// Initial sync populates the DB with OpenCode sessions.
-	env.engine.SyncAll(context.Background(), nil)
-	agentviewID := "opencode:" + sessionID
-	assertSessionMessageCount(t, env.db, agentviewID, 2)
-
-	// ResyncAll must not abort — OpenCode sessions should
-	// survive even though file discovery returns zero.
-	stats := env.engine.ResyncAll(context.Background(), nil)
-
-	for _, w := range stats.Warnings {
-		require.False(t, strings.Contains(w, "resync aborted"), "ResyncAll aborted for OpenCode-only "+"dataset: %s", w)
-	}
-	require.NotZero(t, stats.Synced, "expected OpenCode sessions to be synced")
-
-	assertSessionMessageCount(t, env.db, agentviewID, 2)
-	assertMessageContent(
-		t, env.db, agentviewID,
-		"hello opencode", "hi there",
-	)
-}
-
 // TestResyncAllKiroSQLiteOnly verifies that current-store Kiro
 // sessions do not trip the empty-discovery guard simply because
 // they are DB-backed rather than JSONL-backed.
@@ -6655,14 +6567,22 @@ func TestResyncAllMixedOpenCodeRootsKeepsSQLiteFallback(t *testing.T) {
 	oc.addMessage(
 		t, "msg-u1", sessionID, "user", timeCreated,
 	)
+	oc.addMessage(
+		t, "msg-a1", sessionID, "assistant",
+		timeCreated+1,
+	)
 	oc.addTextPart(
 		t, "part-u1", sessionID, "msg-u1",
 		"hello sqlite fallback", timeCreated,
 	)
+	oc.addTextPart(
+		t, "part-a1", sessionID, "msg-a1",
+		"hi sqlite fallback", timeCreated+1,
+	)
 
 	env.engine.SyncAll(context.Background(), nil)
 	agentviewID := "opencode:" + sessionID
-	assertSessionMessageCount(t, env.db, agentviewID, 1)
+	assertSessionMessageCount(t, env.db, agentviewID, 2)
 
 	stats := env.engine.ResyncAll(context.Background(), nil)
 
@@ -6671,10 +6591,11 @@ func TestResyncAllMixedOpenCodeRootsKeepsSQLiteFallback(t *testing.T) {
 	}
 	require.NotZero(t, stats.Synced, "expected SQLite fallback OpenCode session to be synced")
 
-	assertSessionMessageCount(t, env.db, agentviewID, 1)
+	assertSessionMessageCount(t, env.db, agentviewID, 2)
 	assertMessageContent(
 		t, env.db, agentviewID,
 		"hello sqlite fallback",
+		"hi sqlite fallback",
 	)
 }
 
@@ -6826,6 +6747,35 @@ func TestResyncAllKiloStorageArchivePreservesStaleSQLiteFallback(
 	}
 	require.Equal(t, 0, stats.Synced, "stats.Synced = %d, want 0", stats.Synced)
 
+	assertMessageContent(
+		t, env.db, "kilo:"+sessionID,
+		"hello kilo storage",
+	)
+
+	sqliteOnlyID := "kilo-sqlite-only"
+	sqlite.addSession(
+		t, sqliteOnlyID, "proj-1",
+		1704067210000, 1704067215000,
+	)
+	sqlite.addMessage(
+		t, "sqlite-only-msg-a1", sqliteOnlyID, "assistant",
+		1704067211000,
+	)
+	sqlite.addTextPart(
+		t, "sqlite-only-part-a1", sqliteOnlyID, "sqlite-only-msg-a1",
+		"sqlite-only kilo reply", 1704067211000,
+	)
+
+	stats = env.engine.ResyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "ResyncAll aborted for Kilo SQLite-only session")
+	for _, w := range stats.Warnings {
+		require.False(t, strings.Contains(w, "resync aborted"), "ResyncAll aborted for Kilo SQLite-only session: %s", w)
+	}
+	require.NotZero(t, stats.Synced, "expected Kilo SQLite-only session to be synced")
+	assertMessageContent(
+		t, env.db, "kilo:"+sqliteOnlyID,
+		"sqlite-only kilo reply",
+	)
 	assertMessageContent(
 		t, env.db, "kilo:"+sessionID,
 		"hello kilo storage",
