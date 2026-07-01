@@ -3200,6 +3200,8 @@ func TestExportSession_HTMLContent(t *testing.T) {
 }
 
 func TestUploadSession(t *testing.T) {
+	t.Parallel()
+
 	te := setup(t)
 
 	assistantWithUsage, err := json.Marshal(map[string]any{
@@ -3293,6 +3295,8 @@ func TestUploadSession(t *testing.T) {
 }
 
 func TestUploadSessionSanitizesParsedRows(t *testing.T) {
+	t.Parallel()
+
 	te := setup(t)
 
 	rawInput := db.MaxPlausibleTokens + 200
@@ -3342,6 +3346,8 @@ func TestUploadSessionSanitizesParsedRows(t *testing.T) {
 }
 
 func TestUploadSession_InfersRelationshipType(t *testing.T) {
+	t.Parallel()
+
 	te := setup(t)
 
 	// Build a session whose first entry has a different sessionId,
@@ -3378,6 +3384,8 @@ func TestUploadSession_InfersRelationshipType(t *testing.T) {
 
 func TestUploadSession_Errors(t *testing.T) {
 	t.Parallel()
+	te := setup(t)
+
 	tests := []struct {
 		name     string
 		filename string
@@ -3414,9 +3422,9 @@ func TestUploadSession_Errors(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			te := setup(t)
 			w := te.upload(t,
 				tt.filename, tt.content, tt.query)
 			assertStatus(t, w, http.StatusBadRequest)
@@ -3425,6 +3433,8 @@ func TestUploadSession_Errors(t *testing.T) {
 }
 
 func TestUploadSession_ExcludedOrTrashedConflict(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name  string
 		setup func(t *testing.T, te *testEnv, id string)
@@ -3452,7 +3462,9 @@ func TestUploadSession_ExcludedOrTrashedConflict(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			te := setup(t)
 			const id = "upload-conflict"
 			tt.setup(t, te, id)
@@ -3475,6 +3487,8 @@ func TestUploadSession_ExcludedOrTrashedConflict(t *testing.T) {
 }
 
 func TestUploadSession_MultiSessionConflictDoesNotPartiallyWrite(t *testing.T) {
+	t.Parallel()
+
 	te := setup(t)
 
 	const filename = "upload-multi-conflict.jsonl"
@@ -3517,6 +3531,8 @@ func TestUploadSession_MultiSessionConflictDoesNotPartiallyWrite(t *testing.T) {
 }
 
 func TestUploadSession_ReuploadPreservesPins(t *testing.T) {
+	t.Parallel()
+
 	te := setup(t)
 
 	initial := testjsonl.NewSessionBuilder().
