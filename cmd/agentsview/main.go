@@ -305,6 +305,10 @@ func runServe(cfg config.Config, opts serveOptions) {
 	startTelemetryPings(ctx, telemetryReporter)
 
 	if engine != nil {
+		// Registered before stopWatcher so LIFO defer order stops
+		// the watcher first, then Close flushes any pending
+		// debounced signal recomputes.
+		defer engine.Close()
 		stopWatcher, unwatchedDirs := startFileWatcher(
 			cfg, engine, func(paths []string) {
 				idleTracker.Do(func() {

@@ -130,6 +130,12 @@ type Engine struct {
 	// toDBUsageEvents). Reset at the start of each sync run and folded
 	// into the returned SyncStats before the run completes.
 	anomalies anomalyAccumulator
+
+	// signalSched debounces the O(session history) signal/secret
+	// recompute triggered by incremental writes, so streaming
+	// sessions don't rescan their whole history on every appended
+	// line. Close flushes and stops it.
+	signalSched *signalScheduler
 }
 
 // PhaseStats returns the engine's phase counter. The values reflect only
@@ -206,7 +212,7 @@ func NewEngine(
 		maps.Copy(providerModes, cfg.ProviderMigrationModes)
 	}
 
-	return &Engine{
+	e := &Engine{
 		db:                      database,
 		agentDirs:               dirs,
 		machine:                 cfg.Machine,
@@ -221,6 +227,24 @@ func NewEngine(
 		providerFactories:       providerFactoryMap(providerFactories),
 		providerMigrationModes:  providerModes,
 	}
+	e.signalSched = newSignalScheduler(
+		signalRecomputeInterval, signalRecomputeQuiet,
+		func(sessionID string) {
+			// Errors are logged inside recomputeSignalsFromDB and
+			// are non-fatal: the next write or flush retries.
+			_ = e.recomputeSignalsFromDB(
+				context.Background(), sessionID,
+			)
+		},
+	)
+	return e
+}
+
+// Close flushes any pending debounced signal recomputes and stops
+// the scheduler. Call once when the engine's owner shuts down;
+// safe to call repeatedly.
+func (e *Engine) Close() {
+	e.signalSched.stop()
 }
 
 func providerFactoryMap(
@@ -6280,12 +6304,14 @@ func (e *Engine) writeIncremental(
 		return err
 	}
 
-	// Errors here are already logged by recomputeSignalsFromDB
-	// and are non-fatal for incremental sync; the next
-	// incremental write will retry.
-	_ = e.recomputeSignalsFromDB(
-		context.Background(), inc.sessionID,
-	)
+	// Signal/secret recompute costs O(session history), so it is
+	// debounced per session instead of running on every appended
+	// line: the first write after a quiet period recomputes
+	// inline, writes during a streaming burst coalesce into one
+	// recompute per interval plus a trailing flush. Recompute
+	// errors are logged inside recomputeSignalsFromDB and are
+	// non-fatal; a later write or flush retries.
+	e.signalSched.markDirty(inc.sessionID)
 
 	return nil
 }
