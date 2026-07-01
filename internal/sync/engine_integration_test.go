@@ -9197,50 +9197,55 @@ func TestResyncAllPreservesPGPushMarkerID(t *testing.T) {
 	assert.Equal(t, "marker-123", got)
 }
 
-func TestSyncAllOpenCodeExcludedNotCountedAsFailed(
-	t *testing.T,
-) {
+func TestOpenCodeExcludedSessionsAreSkipped(t *testing.T) {
 	t.Parallel()
 
 	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 
-	// Create an OpenCode DB with a session.
 	oc := createOpenCodeDB(t, env.opencodeDir)
 	oc.addProject(t, "proj1", "/tmp/proj1")
-	oc.addSession(t, "oc-excl-1", "proj1", 1000, 1000)
-	oc.addMessage(t, "msg1", "oc-excl-1", "user", 1000)
+	oc.addSession(t, "oc-excl-sync", "proj1", 1000, 1000)
+	oc.addMessage(t, "msg-sync", "oc-excl-sync", "user", 1000)
 	oc.addTextPart(
-		t, "part1", "oc-excl-1", "msg1", "hi", 1000,
+		t, "part-sync", "oc-excl-sync", "msg-sync", "hi", 1000,
+	)
+	oc.addSession(t, "oc-excl-single", "proj1", 1000, 1000)
+	oc.addMessage(
+		t, "msg-single", "oc-excl-single", "user", 1000,
+	)
+	oc.addTextPart(
+		t, "part-single", "oc-excl-single", "msg-single",
+		"hello", 1000,
 	)
 
-	// Initial sync to get the session into the DB.
 	env.engine.SyncAll(context.Background(), nil)
 
-	sess, err := env.db.GetSession(
-		context.Background(), "opencode:oc-excl-1",
-	)
-	require.NoError(t, err, "opencode session not found after sync")
-	require.NotNil(t, sess, "opencode session not found after sync")
+	syncSessionID := "opencode:oc-excl-sync"
+	singleSessionID := "opencode:oc-excl-single"
+	assertSessionMessageCount(t, env.db, syncSessionID, 1)
+	assertSessionMessageCount(t, env.db, singleSessionID, 1)
 
 	// Permanently delete the session (marks it excluded).
-	err = env.db.DeleteSession(
-		"opencode:oc-excl-1",
-	)
-	require.NoError(t, err, "delete session")
+	require.NoError(t, env.db.DeleteSession(syncSessionID), "delete sync session")
+	require.NoError(t, env.db.DeleteSession(singleSessionID), "delete single session")
 
-	// Bump the time_updated so the next sync picks it up.
-	oc.updateSessionTime(t, "oc-excl-1", 2000)
+	// Bump time_updated so the parser would normally pick them up.
+	oc.updateSessionTime(t, "oc-excl-sync", 2000)
+	oc.updateSessionTime(t, "oc-excl-single", 2000)
 
-	// Sync again — the excluded session should not be
-	// counted as a failure.
+	// Sync again: excluded sessions should not be counted as failures.
 	stats := env.engine.SyncAll(context.Background(), nil)
-	assert.LessOrEqual(t, stats.Failed, 0, "Failed = %d, want 0 (excluded session "+"should not count as failure)", stats.Failed)
+	assert.Equal(t, 0, stats.Failed,
+		"excluded OpenCode session should not count as failure")
+
+	require.NoError(t, env.engine.SyncSingleSession(singleSessionID),
+		"SyncSingleSession on excluded OpenCode session returned error")
 }
 
-// TestSyncSingleSessionExcludedIsNoOp verifies that
-// calling SyncSingleSession on a permanently deleted
-// (excluded) session returns nil, not an error.
-func TestSyncSingleSessionExcludedIsNoOp(t *testing.T) {
+// TestSyncSingleSessionDeletedClaudeIsNoOp verifies that calling
+// SyncSingleSession on permanently deleted or soft-deleted Claude sessions
+// returns nil, not an error.
+func TestSyncSingleSessionDeletedClaudeIsNoOp(t *testing.T) {
 	t.Parallel()
 
 	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
@@ -9253,19 +9258,25 @@ func TestSyncSingleSessionExcludedIsNoOp(t *testing.T) {
 	env.writeClaudeSession(
 		t, "test-proj", "excl-single.jsonl", content,
 	)
+	env.writeClaudeSession(
+		t, "test-proj", "trashed-single.jsonl", content,
+	)
 
 	env.engine.SyncAll(context.Background(), nil)
 	assertSessionMessageCount(t, env.db, "excl-single", 2)
+	assertSessionMessageCount(t, env.db, "trashed-single", 2)
 
 	// Permanently delete → marks it excluded.
 	err := env.db.DeleteSession(
 		"excl-single",
 	)
 	require.NoError(t, err, "DeleteSession")
+	require.NoError(t, env.db.SoftDeleteSession("trashed-single"), "SoftDeleteSession")
 
-	// SyncSingleSession should silently skip, not error.
 	require.NoError(t, env.engine.SyncSingleSession("excl-single"),
 		"SyncSingleSession on excluded session returned error")
+	require.NoError(t, env.engine.SyncSingleSession("trashed-single"),
+		"SyncSingleSession on trashed session returned error")
 }
 
 func TestSyncAllTrashedSessionIsSkippedAndCached(t *testing.T) {
@@ -9340,62 +9351,6 @@ func TestSyncAllTrashedSessionAppendUsesSkipPath(t *testing.T) {
 	require.NoError(t, err, "GetSessionFull")
 	require.NotNil(t, full, "MessageCount = nil, want preserved count 2")
 	require.Equal(t, 2, full.MessageCount, "MessageCount = %v, want preserved count 2", full)
-}
-
-func TestSyncSingleSessionTrashedIsNoOp(t *testing.T) {
-	t.Parallel()
-
-	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
-
-	content := testjsonl.NewSessionBuilder().
-		AddClaudeUser(tsZero, "hello").
-		AddClaudeAssistant(tsZeroS5, "hi").
-		String()
-
-	env.writeClaudeSession(
-		t, "test-proj", "trashed-single.jsonl", content,
-	)
-	env.engine.SyncAll(context.Background(), nil)
-	assertSessionMessageCount(t, env.db, "trashed-single", 2)
-
-	require.NoError(t, env.db.SoftDeleteSession("trashed-single"), "SoftDeleteSession")
-
-	require.NoError(t, env.engine.SyncSingleSession("trashed-single"), "SyncSingleSession on trashed session "+"returned error")
-}
-
-// TestSyncSingleSessionOpenCodeExcludedIsNoOp verifies that
-// calling SyncSingleSession on an excluded OpenCode session
-// returns nil.
-func TestSyncSingleSessionOpenCodeExcludedIsNoOp(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
-
-	oc := createOpenCodeDB(t, env.opencodeDir)
-	oc.addProject(t, "proj1", "/tmp/proj1")
-	oc.addSession(t, "oc-excl-single", "proj1", 1000, 1000)
-	oc.addMessage(
-		t, "msg1", "oc-excl-single", "user", 1000,
-	)
-	oc.addTextPart(
-		t, "p1", "oc-excl-single", "msg1",
-		"hello", 1000,
-	)
-
-	env.engine.SyncAll(context.Background(), nil)
-
-	sessionID := "opencode:oc-excl-single"
-	assertSessionMessageCount(t, env.db, sessionID, 1)
-
-	require.NoError(t, env.db.DeleteSession(sessionID), "DeleteSession")
-
-	// Bump time so parser would normally pick it up.
-	oc.updateSessionTime(t, "oc-excl-single", 2000)
-
-	require.NoError(t, env.engine.SyncSingleSession(sessionID),
-		"SyncSingleSession on excluded OpenCode session returned error")
 }
 
 func TestIncrementalSync_ClaudeClearOnlyRepairedOnAppend(t *testing.T) {
