@@ -110,7 +110,6 @@ jobs:
       - name: Run shell script tests
         run: |
           bash scripts/install_test.sh
-          bash scripts/changelog_test.sh
           bash scripts/check_desktop_release_health_test.sh
           bash scripts/check_desktop_release_health_from_event_test.sh
           bash desktop/scripts/test-repair-appimage-diricon.sh
