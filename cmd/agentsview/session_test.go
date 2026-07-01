@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/server"
 	agentsync "go.kenn.io/agentsview/internal/sync"
@@ -262,9 +263,7 @@ func seedSession(t *testing.T, dataDir, id, project string) {
 
 func seedEmptyArchive(t *testing.T, dataDir string) {
 	t.Helper()
-	d, err := db.Open(filepath.Join(dataDir, "sessions.db"))
-	require.NoError(t, err)
-	require.NoError(t, d.Close())
+	dbtest.EnsureTestDBAt(t, sessionsDBPath(dataDir))
 	registerSQLiteDaemonRuntime(t, dataDir)
 }
 
@@ -278,9 +277,16 @@ func seedSessionWithOpts(
 	mut func(*db.Session),
 ) {
 	t.Helper()
-	d, err := db.Open(filepath.Join(dataDir, "sessions.db"))
+	dbPath := sessionsDBPath(dataDir)
+	dbtest.EnsureTestDBAt(t, dbPath)
+	d, err := db.OpenPreparedTestDB(dbPath)
 	require.NoError(t, err)
-	t.Cleanup(func() { d.Close() })
+	closed := false
+	t.Cleanup(func() {
+		if !closed {
+			_ = d.Close()
+		}
+	})
 	// UserMessageCount >= 2 so seeded sessions pass the default
 	// ExcludeOneShot filter in `session list` (one-shot means
 	// user_message_count <= 1). See internal/db/analytics.go.
@@ -296,7 +302,9 @@ func seedSessionWithOpts(
 		mut(&s)
 	}
 	require.NoError(t, d.UpsertSession(s))
-	require.NoError(t, d.Close())
+	err = d.Close()
+	closed = true
+	require.NoError(t, err)
 	registerSQLiteDaemonRuntime(t, dataDir)
 }
 
@@ -559,9 +567,7 @@ func TestSessionList_PGFlagUsesPGReadStore(t *testing.T) {
 	seedSession(t, localDir, "local-session", "local")
 	seedSession(t, remoteDir, "pg-session", "remote")
 
-	remoteDB, err := db.Open(filepath.Join(remoteDir, "sessions.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = remoteDB.Close() })
+	remoteDB := dbtest.OpenTestDBAt(t, sessionsDBPath(remoteDir))
 	stub := stubPGReadStore(t, remoteDB)
 
 	out, err := executeCommand(newRootCommand(),
@@ -585,9 +591,7 @@ func TestSessionList_ConfiguredPGWithoutFlagUsesSQLite(t *testing.T) {
 	seedSession(t, localDir, "local-session", "local")
 	seedSession(t, remoteDir, "pg-session", "remote")
 
-	remoteDB, err := db.Open(filepath.Join(remoteDir, "sessions.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = remoteDB.Close() })
+	remoteDB := dbtest.OpenTestDBAt(t, sessionsDBPath(remoteDir))
 	stub := stubPGReadStore(t, remoteDB)
 
 	out, err := executeCommand(newRootCommand(),

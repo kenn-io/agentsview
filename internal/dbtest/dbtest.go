@@ -73,16 +73,38 @@ func MkdirTempWithCleanup(t *testing.T, pattern string) string {
 func OpenTestDB(t *testing.T) *db.DB {
 	t.Helper()
 	dir := MkdirTempWithCleanup(t, "agentsview-dbtest-*")
-	path := filepath.Join(dir, "test.db")
-	if err := copyTestDBTemplate(path); err != nil {
-		t.Fatalf("copying test db template: %v", err)
-	}
+	return OpenTestDBAt(t, filepath.Join(dir, "test.db"))
+}
+
+// OpenTestDBAt opens a temporary SQLite database at path for testing, creating
+// it from the shared current-schema template when it does not exist. The
+// database is automatically closed when the test completes.
+func OpenTestDBAt(t *testing.T, path string) *db.DB {
+	t.Helper()
+	EnsureTestDBAt(t, path)
 	d, err := db.OpenPreparedTestDB(path)
 	if err != nil {
 		t.Fatalf("opening test db: %v", err)
 	}
 	t.Cleanup(func() { d.Close() })
 	return d
+}
+
+// EnsureTestDBAt creates a current-schema SQLite test database at path when it
+// does not already exist. Existing files are left intact so callers can reopen
+// and add more fixture rows without losing earlier writes.
+func EnsureTestDBAt(t *testing.T, path string) {
+	t.Helper()
+	_, err := os.Stat(path)
+	if err == nil {
+		return
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("checking test db %s: %v", path, err)
+	}
+	if err := copyTestDBTemplate(path); err != nil {
+		t.Fatalf("copying test db template: %v", err)
+	}
 }
 
 var (

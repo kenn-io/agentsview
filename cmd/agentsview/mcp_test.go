@@ -16,6 +16,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -125,9 +126,7 @@ func TestResolveMCPServicePGFlagUsesPGReadStore(t *testing.T) {
 	seedSession(t, dataDir, "local-session", "local")
 	seedSession(t, remoteDir, "pg-session", "remote")
 
-	remoteDB, err := db.Open(filepath.Join(remoteDir, "sessions.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = remoteDB.Close() })
+	remoteDB := dbtest.OpenTestDBAt(t, filepath.Join(remoteDir, "sessions.db"))
 	stub := stubPGReadStore(t, remoteDB)
 	forbidStartBackgroundServeForTransport(t,
 		"agentsview mcp --pg must use the PG read store, not the daemon")
