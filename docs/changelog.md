@@ -6,11 +6,6 @@ description: Release history for AgentsView
 ## 0.35.2
 <small>2026-06-30</small>
 
-**Improvements**
-
-- Refresh **command documentation, DuckDB and Quack sync docs, token usage
-  guidance, and the 0.35.1 release notes**.
-
 **Bug fixes**
 
 - Fix **PostgreSQL push sync** so skipped ownership conflicts no longer block
@@ -18,8 +13,6 @@ description: Release history for AgentsView
 
 **Acknowledgements**
 
-- Thanks to [Wes McKinney](https://github.com/wesm) for release documentation
-  and command, DuckDB, and token usage documentation updates.
 - Thanks to [leejuhanKr](https://github.com/leejuhanKr) for fixing PostgreSQL
   push sync behavior around skipped ownership conflicts.
 

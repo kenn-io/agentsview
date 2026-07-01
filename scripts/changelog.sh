@@ -66,6 +66,9 @@ Please generate a concise, user-focused changelog. Group changes into sections l
 - Bug Fixes
 
 Focus on user-visible changes. Skip internal refactoring unless it affects users.
+Do NOT mention documentation-only changes, including docs, changelog, release
+note, README, website copy, screenshot, or generated docs asset updates, unless
+the documentation is the user-facing product being released.
 Keep descriptions brief (one line each). Use present tense.
 Do NOT mention bugs that were introduced and fixed within this same release cycle.
 ${EXTRA_INSTRUCTIONS:+
