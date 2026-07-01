@@ -123,6 +123,7 @@ func testDB(t *testing.T) *db.DB {
 }
 
 func TestImportClaudeAI(t *testing.T) {
+	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -147,6 +148,7 @@ func TestImportClaudeAI(t *testing.T) {
 }
 
 func TestImportClaudeAIIncludesAttachmentContent(t *testing.T) {
+	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -171,6 +173,7 @@ func TestImportClaudeAIIncludesAttachmentContent(t *testing.T) {
 }
 
 func TestImportClaudeAIReimportRefreshesAttachmentContent(t *testing.T) {
+	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -208,6 +211,7 @@ func TestImportClaudeAIReimportRefreshesAttachmentContent(t *testing.T) {
 }
 
 func TestImportClaudeAI_ReimportSkipsUnchanged(t *testing.T) {
+	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -237,6 +241,7 @@ func TestImportClaudeAI_ReimportSkipsUnchanged(t *testing.T) {
 func TestImportClaudeAI_PreservesDisplayNameOnReimport(
 	t *testing.T,
 ) {
+	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -278,6 +283,7 @@ const testChatGPTConv = `[{
 }]`
 
 func TestImportChatGPT(t *testing.T) {
+	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -302,6 +308,7 @@ func TestImportChatGPT(t *testing.T) {
 }
 
 func TestImportChatGPTSanitizesParserRows(t *testing.T) {
+	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -353,6 +360,7 @@ func TestImportChatGPTSanitizesParserRows(t *testing.T) {
 }
 
 func TestImportAdvancesLocalModifiedAt(t *testing.T) {
+	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -373,6 +381,7 @@ func TestImportAdvancesLocalModifiedAt(t *testing.T) {
 }
 
 func TestImportSkipPathBumpsLocalModifiedAt(t *testing.T) {
+	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -413,6 +422,7 @@ func TestImportSkipPathBumpsLocalModifiedAt(t *testing.T) {
 }
 
 func TestImportSetsDisplayName(t *testing.T) {
+	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -430,6 +440,7 @@ func TestImportSetsDisplayName(t *testing.T) {
 }
 
 func TestImportChatGPT_UpdatesSessionNameOnReimport(t *testing.T) {
+	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -469,6 +480,7 @@ func TestImportChatGPT_UpdatesSessionNameOnReimport(t *testing.T) {
 }
 
 func TestImportChatGPTSanitizesSessionNameOnReimport(t *testing.T) {
+	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -503,6 +515,7 @@ func TestImportChatGPTSanitizesSessionNameOnReimport(t *testing.T) {
 }
 
 func TestImportChatGPT_ReimportPreservesExistingFields(t *testing.T) {
+	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -550,6 +563,7 @@ func TestImportChatGPT_ReimportPreservesExistingFields(t *testing.T) {
 }
 
 func TestImportChatGPT_SkipsExisting(t *testing.T) {
+	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 

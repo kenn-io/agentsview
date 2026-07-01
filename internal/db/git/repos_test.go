@@ -18,9 +18,7 @@ func initBareRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
 	gitRun(t, repo, nil, "init", "-q", "-b", "main")
-	gitRun(t, repo, nil, "config", "user.email", "test@example.com")
-	gitRun(t, repo, nil, "config", "user.name", "Test User")
-	gitRun(t, repo, nil, "config", "commit.gpgsign", "false")
+	configureTestRepoIdentity(t, repo)
 	return repo
 }
 
@@ -91,8 +89,7 @@ func TestDiscoverRepos_LinkedWorktreeResolves(t *testing.T) {
 	repo := initBareRepo(t)
 	// `git worktree add` requires at least one commit in the source
 	// repo, so seed one before linking.
-	writeFile(t, repo, "seed.txt", []byte("seed\n"))
-	commitAs(t, repo, "test@example.com", "Test User", "seed")
+	gitRun(t, repo, nil, "commit", "--allow-empty", "-q", "-m", "seed")
 
 	worktreeRoot := filepath.Join(t.TempDir(), "wt")
 	gitRun(t, repo, nil,

@@ -38,12 +38,24 @@ func initRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
 	gitRun(t, repo, nil, "init", "-q", "-b", "main")
-	gitRun(t, repo, nil, "config", "user.email", "test@example.com")
-	gitRun(t, repo, nil, "config", "user.name", "Test User")
-	// Disable signing so tests don't hang on a GPG/passphrase prompt
-	// when the user's global config has signing enabled.
-	gitRun(t, repo, nil, "config", "commit.gpgsign", "false")
+	configureTestRepoIdentity(t, repo)
 	return repo
+}
+
+func configureTestRepoIdentity(t *testing.T, repo string) {
+	t.Helper()
+	configPath := filepath.Join(repo, ".git", "config")
+	f, err := os.OpenFile(configPath, os.O_APPEND|os.O_WRONLY, 0)
+	require.NoError(t, err, "open git config")
+	defer func() { require.NoError(t, f.Close(), "close git config") }()
+	_, err = f.WriteString(`
+[user]
+	email = test@example.com
+	name = Test User
+[commit]
+	gpgsign = false
+`)
+	require.NoError(t, err, "write git config")
 }
 
 // writeFile writes content under repo/relpath, creating parents as needed.
