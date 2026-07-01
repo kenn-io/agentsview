@@ -2546,10 +2546,6 @@ var (
 	statsOutcomeRepoOnce sync.Once
 	statsOutcomeRepoDir  string
 	statsOutcomeRepoPath string
-
-	statsOutcomeEmptyRepoOnce sync.Once
-	statsOutcomeEmptyRepoDir  string
-	statsOutcomeEmptyRepoPath string
 )
 
 func statsOutcomeRepo(t *testing.T) string {
@@ -2578,42 +2574,10 @@ func statsOutcomeRepo(t *testing.T) string {
 	return statsOutcomeRepoPath
 }
 
-func statsOutcomeEmptyRepo(t *testing.T) string {
-	t.Helper()
-	statsOutcomeEmptyRepoOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "agentsview-stats-outcome-empty-*")
-		require.NoError(t, err, "create empty stats outcome repo dir")
-		statsOutcomeEmptyRepoDir = dir
-		statsOutcomeEmptyRepoPath = filepath.Join(dir, "repo")
-		statsInitRepoAt(t, statsOutcomeEmptyRepoPath)
-	})
-
-	return statsOutcomeEmptyRepoPath
-}
-
-// TestGetSessionStats_OutcomeStats_DefaultDisabled verifies that plain
-// stats runs do not touch git-derived outcome aggregation, even when
-// sessions carry cwd values inside a real repository.
-func TestGetSessionStats_OutcomeStats_DefaultDisabled(t *testing.T) {
-	t.Parallel()
-	skipIfNoGit(t)
-	d := testDB(t)
-	ctx := context.Background()
-
-	repo := statsOutcomeEmptyRepo(t)
-	insertSessionFixture(t, d, sessionFixture{
-		id: "os-default", agent: "claude", userMsgs: 5,
-		startedAt: hoursAgo(5), cwd: repo,
-	})
-
-	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
-	require.NoError(t, err, "GetSessionStats")
-	require.Nil(t, stats.OutcomeStats, "OutcomeStats")
-}
-
 // TestGetSessionStats_OutcomeStats_Happy seeds sessions whose cwd
-// points inside a real fixture repo and asserts that the outcome_stats
-// section surfaces the author-filtered commit totals. PRsOpened /
+// points inside a real fixture repo, verifies outcome_stats is off by
+// default, and asserts that enabling it surfaces the author-filtered
+// commit totals. PRsOpened /
 // PRsMerged must stay nil because no GHToken is supplied — the JSON
 // contract distinguishes "gh not configured" (nil) from "gh configured,
 // zero PRs" (pointer to 0).
@@ -2638,7 +2602,11 @@ func TestGetSessionStats_OutcomeStats_Happy(t *testing.T) {
 		startedAt: hoursAgo(4), cwd: sub,
 	})
 
-	stats, err := d.GetSessionStats(ctx, StatsFilter{
+	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
+	require.NoError(t, err, "GetSessionStats without git outcomes")
+	require.Nil(t, stats.OutcomeStats, "OutcomeStats")
+
+	stats, err = d.GetSessionStats(ctx, StatsFilter{
 		Since: "28d", IncludeGitOutcomes: true,
 	})
 	require.NoError(t, err, "GetSessionStats")

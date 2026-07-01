@@ -4,8 +4,12 @@ import (
 	"context"
 	"errors"
 	"math"
+	"os"
+	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,15 +41,80 @@ func storeContractBackends() []storeContractBackend {
 			name: "sqlite",
 			open: func(t *testing.T) Store {
 				t.Helper()
-				return testDB(t)
+				return openStoreContractSQLiteFixtureDB(t)
 			},
 			seed: func(t *testing.T, store Store) storeContractFixture {
 				t.Helper()
-				return seedStoreContractSQLite(t, store)
+				return storeContractSQLiteFixtureForTest(t)
 			},
 			supportsLocalWrites: true,
 		},
 	}
+}
+
+var (
+	storeContractSQLiteTemplateOnce    sync.Once
+	storeContractSQLiteTemplateDir     string
+	storeContractSQLiteTemplatePath    string
+	storeContractSQLiteTemplateFixture storeContractFixture
+	storeContractSQLiteTemplateErr     error
+)
+
+func openStoreContractSQLiteFixtureDB(t *testing.T) Store {
+	t.Helper()
+	src, _ := storeContractSQLiteTemplate(t)
+
+	dst := filepath.Join(t.TempDir(), "test.db")
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		require.NoError(t,
+			copyTemplateDBFile(src+suffix, dst+suffix, suffix == ""),
+			"copy store-contract fixture %q", suffix)
+	}
+	d, err := OpenPreparedTestDB(dst)
+	require.NoError(t, err, "open store-contract fixture")
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	return d
+}
+
+func storeContractSQLiteFixtureForTest(t *testing.T) storeContractFixture {
+	t.Helper()
+	_, fixture := storeContractSQLiteTemplate(t)
+	return fixture
+}
+
+func storeContractSQLiteTemplate(t *testing.T) (string, storeContractFixture) {
+	t.Helper()
+	storeContractSQLiteTemplateOnce.Do(func() {
+		storeContractSQLiteTemplateDir, storeContractSQLiteTemplateErr =
+			os.MkdirTemp("", "agentsview-store-contract-*")
+		if storeContractSQLiteTemplateErr != nil {
+			return
+		}
+		storeContractSQLiteTemplatePath = filepath.Join(
+			storeContractSQLiteTemplateDir, "test.db")
+		storeContractSQLiteTemplateErr = copyTestDBTemplate(
+			storeContractSQLiteTemplatePath)
+		if storeContractSQLiteTemplateErr != nil {
+			return
+		}
+
+		var d *DB
+		d, storeContractSQLiteTemplateErr = OpenPreparedTestDB(
+			storeContractSQLiteTemplatePath)
+		if storeContractSQLiteTemplateErr != nil {
+			return
+		}
+		storeContractSQLiteTemplateFixture = seedStoreContractSQLite(t, d)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		storeContractSQLiteTemplateErr = d.CheckpointWALTruncate(ctx)
+		if closeErr := d.Close(); storeContractSQLiteTemplateErr == nil {
+			storeContractSQLiteTemplateErr = closeErr
+		}
+	})
+	require.NoError(t, storeContractSQLiteTemplateErr,
+		"build store-contract fixture")
+	return storeContractSQLiteTemplatePath, storeContractSQLiteTemplateFixture
 }
 
 func TestStoreContract(t *testing.T) {

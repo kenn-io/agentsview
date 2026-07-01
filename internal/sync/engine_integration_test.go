@@ -1180,52 +1180,44 @@ func TestSyncEngineProgress(t *testing.T) {
 	var progressCalls int
 	var firstTotal int
 	var last sync.Progress
+	var events []sync.Progress
 	env.engine.SyncAll(context.Background(), func(p sync.Progress) {
 		progressCalls++
 		if firstTotal == 0 {
 			firstTotal = p.SessionsTotal
 		}
 		last = p
+		events = append(events, p)
 	})
 
 	assert.NotZero(t, progressCalls, "expected progress callbacks")
 	assert.Equal(t, 4, firstTotal, "first progress total = %d, want 4", firstTotal)
 	assert.Equal(t, 4, last.SessionsDone, "last progress = %d/%d, want 4/4", last.SessionsDone, last.SessionsTotal)
 	assert.Equal(t, 4, last.SessionsTotal, "last progress = %d/%d, want 4/4", last.SessionsDone, last.SessionsTotal)
+	requireProgressDoneOnce(t, events, 4)
 
 	progressCalls = 0
 	firstTotal = 0
 	last = sync.Progress{}
+	events = nil
 	env.engine.SyncAll(context.Background(), func(p sync.Progress) {
 		progressCalls++
 		if firstTotal == 0 {
 			firstTotal = p.SessionsTotal
 		}
 		last = p
+		events = append(events, p)
 	})
 	assert.NotZero(t, progressCalls, "expected progress callbacks on second sync")
 	assert.Equal(t, 4, firstTotal, "second first progress total = %d, want 4", firstTotal)
 	assert.Equal(t, 4, last.SessionsDone, "second last progress = %d/%d, want 4/4", last.SessionsDone, last.SessionsTotal)
 	assert.Equal(t, 4, last.SessionsTotal, "second last progress = %d/%d, want 4/4", last.SessionsDone, last.SessionsTotal)
+	requireProgressDoneOnce(t, events, 4)
 }
 
-func TestSyncEngineProgressEmitsPhaseDoneOnce(t *testing.T) {
-	t.Parallel()
-	env := setupFocusedTestEnv(t, parser.AgentClaude, parser.AgentPiebald)
-
-	msg := testjsonl.NewSessionBuilder().
-		AddClaudeUser(tsZero, "msg").
-		String()
-	env.writeClaudeSession(t, "test-proj", "a.jsonl", msg)
-
-	piebald := createPiebaldDB(t, env.piebaldDir)
-	piebald.addChat(t, 1, "Chat A", "Prompt A.", "Answer A.", "2026-05-01T10:01:00Z")
-
-	var events []sync.Progress
-	env.engine.SyncAll(context.Background(), func(p sync.Progress) {
-		events = append(events, p)
-	})
-
+func requireProgressDoneOnce(t *testing.T, events []sync.Progress, wantTotal int) {
+	t.Helper()
+	require.NotEmpty(t, events, "expected progress callbacks")
 	var doneCount int
 	var firstDoneIdx = -1
 	for i, e := range events {
@@ -1239,8 +1231,8 @@ func TestSyncEngineProgressEmitsPhaseDoneOnce(t *testing.T) {
 	require.Equal(t, 1, doneCount, "PhaseDone emitted %d times, want exactly 1; events=%+v", doneCount, events)
 	require.Equal(t, len(events)-1, firstDoneIdx, "PhaseDone at index %d, want last event (index %d)", firstDoneIdx, len(events)-1)
 	last := events[len(events)-1]
-	require.Equal(t, last.SessionsTotal, last.SessionsDone, "final progress = %d/%d, want 2/2", last.SessionsDone, last.SessionsTotal)
-	require.Equal(t, 2, last.SessionsTotal, "final progress = %d/%d, want 2/2", last.SessionsDone, last.SessionsTotal)
+	require.Equal(t, last.SessionsTotal, last.SessionsDone, "final progress = %d/%d, want done", last.SessionsDone, last.SessionsTotal)
+	require.Equal(t, wantTotal, last.SessionsTotal, "final progress = %d/%d, want %d/%d", last.SessionsDone, last.SessionsTotal, wantTotal, wantTotal)
 	var peakMessages int
 	for _, e := range events {
 		if e.MessagesIndexed > peakMessages {
@@ -1380,30 +1372,6 @@ func TestSyncAllReportsDiscoveryBeforeSyncing(t *testing.T) {
 	assert.False(t, events[discoveryIdx].Resync,
 		"incremental sync discovery should not be flagged as a full resync")
 	assert.Contains(t, events[discoveryIdx].Detail, "Discovering sessions")
-}
-
-func TestSyncEngineProgressDoneCatchesResyncDBBackedWork(t *testing.T) {
-	t.Parallel()
-	env := setupFocusedTestEnv(t, parser.AgentClaude, parser.AgentPiebald)
-
-	msg := testjsonl.NewSessionBuilder().
-		AddClaudeUser(tsZero, "msg").
-		String()
-	env.writeClaudeSession(t, "test-proj", "a.jsonl", msg)
-
-	piebald := createPiebaldDB(t, env.piebaldDir)
-	piebald.addChat(t, 1, "Chat A", "Prompt A.", "Answer A.", "2026-05-01T10:01:00Z")
-	piebald.addChat(t, 2, "Chat B", "Prompt B.", "Answer B.", "2026-05-01T10:02:00Z")
-
-	var seen []sync.Progress
-	env.engine.SyncAll(context.Background(), func(p sync.Progress) {
-		seen = append(seen, p)
-	})
-	require.NotEmpty(t, seen, "expected progress callbacks")
-	last := seen[len(seen)-1]
-	require.Equal(t, sync.PhaseDone, last.Phase, "last phase = %q, want done", last.Phase)
-	require.Equal(t, last.SessionsTotal, last.SessionsDone, "last progress = %d/%d, want 3/3", last.SessionsDone, last.SessionsTotal)
-	require.Equal(t, 3, last.SessionsTotal, "last progress = %d/%d, want 3/3", last.SessionsDone, last.SessionsTotal)
 }
 
 func TestSyncEngineHashSkip(t *testing.T) {

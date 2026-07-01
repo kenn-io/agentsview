@@ -341,11 +341,11 @@ func TestMain(m *testing.M) {
 	if dailyUsageFixtureDir != "" {
 		_ = os.RemoveAll(dailyUsageFixtureDir)
 	}
+	if storeContractSQLiteTemplateDir != "" {
+		_ = os.RemoveAll(storeContractSQLiteTemplateDir)
+	}
 	if statsOutcomeRepoDir != "" {
 		_ = os.RemoveAll(statsOutcomeRepoDir)
-	}
-	if statsOutcomeEmptyRepoDir != "" {
-		_ = os.RemoveAll(statsOutcomeEmptyRepoDir)
 	}
 	os.Exit(code)
 }
@@ -686,8 +686,7 @@ func TestMigration_ResultContentColumn(t *testing.T) {
 
 	// Create a DB with the current schema then drop the
 	// result_content column to simulate a pre-migration DB.
-	d, err := Open(path)
-	requireNoError(t, err, "initial open")
+	d := testDBAtPath(t, path, "initial migration db")
 	insertSession(t, d, "s1", "proj")
 	insertMessages(t, d,
 		userMsg("s1", 0, "hello"),
@@ -773,8 +772,7 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
 
-	d, err := Open(path)
-	requireNoError(t, err, "initial open")
+	d := testDBAtPath(t, path, "initial migration db")
 	insertSession(t, d, "s1", "proj")
 	d.Close()
 
@@ -6160,8 +6158,7 @@ func TestMigration_TerminationStatusColumn(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
 
-	d, err := Open(path)
-	requireNoError(t, err, "initial open")
+	d := testDBAtPath(t, path, "initial migration db")
 	insertSession(t, d, "s1", "proj")
 	d.Close()
 
