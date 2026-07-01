@@ -1,6 +1,8 @@
 package server_test
 
 import (
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -94,17 +97,48 @@ func assertNoMessagePointPrompts(
 	assert.Empty(t, matches)
 }
 
-func assertMessagePointCommandForRuntime(t *testing.T, command string) {
+func assertMessagePointCommandForRuntime(
+	t *testing.T, command string, promptPath string,
+) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
-		assert.Contains(t, command,
-			"powershell.exe -NoProfile -EncodedCommand ")
+		script := decodeMessagePointPowerShellCommandForTest(t, command)
+		quotedPromptPath := powerShellSingleQuoteForTest(promptPath)
+		assert.Contains(t, script,
+			"Get-Content -Raw -Encoding UTF8 -LiteralPath "+
+				quotedPromptPath)
+		assert.Contains(t, script,
+			"Remove-Item -LiteralPath "+quotedPromptPath+
+				" -Force -ErrorAction SilentlyContinue")
 		assert.NotContains(t, command, " < ")
 		assert.NotContains(t, command, "rm -f --")
+		assert.NotContains(t, script, " < ")
+		assert.NotContains(t, script, "rm -f --")
 		return
 	}
 	assert.Contains(t, command, "claude <")
 	assert.Contains(t, command, "rm -f --")
+}
+
+func decodeMessagePointPowerShellCommandForTest(
+	t *testing.T, command string,
+) string {
+	t.Helper()
+	const prefix = "powershell.exe -NoProfile -EncodedCommand "
+	require.True(t, strings.HasPrefix(command, prefix), "command = %q", command)
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(command, prefix))
+	require.NoError(t, err)
+	require.Zero(t, len(raw)%2, "UTF-16LE byte length must be even")
+
+	codeUnits := make([]uint16, len(raw)/2)
+	for i := range codeUnits {
+		codeUnits[i] = binary.LittleEndian.Uint16(raw[i*2:])
+	}
+	return string(utf16.Decode(codeUnits))
+}
+
+func powerShellSingleQuoteForTest(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
 func TestResumeSession(t *testing.T) {
@@ -318,13 +352,13 @@ func TestResumeSession(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.False(t, resp.Launched, "expected launched=false for command_only")
-		assertMessagePointCommandForRuntime(t, resp.Command)
+		promptPath := findSingleMessagePointPrompt(t, "sess-2", 1)
+		assertMessagePointCommandForRuntime(t, resp.Command, promptPath)
 		if runtime.GOOS != "windows" {
 			assert.Contains(t, resp.Command, "< '")
 		}
 		assertSamePath(t, "cwd", resp.Cwd, projectDir)
 
-		promptPath := findSingleMessagePointPrompt(t, "sess-2", 1)
 		if runtime.GOOS != "windows" {
 			idx := strings.LastIndex(resp.Command, "< ")
 			require.Greater(t, idx, 0, "command = %q", resp.Command)
@@ -371,10 +405,9 @@ func TestResumeSession(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.False(t, resp.Launched, "expected launched=false for command_only")
-		assertMessagePointCommandForRuntime(t, resp.Command)
-		assertSamePath(t, "cwd", resp.Cwd, projectDir)
-
 		promptPath := findSingleMessagePointPrompt(t, "sess-sparse", 3)
+		assertMessagePointCommandForRuntime(t, resp.Command, promptPath)
+		assertSamePath(t, "cwd", resp.Cwd, projectDir)
 		t.Cleanup(func() { _ = os.Remove(promptPath) })
 
 		data, err := os.ReadFile(promptPath)
@@ -483,8 +516,8 @@ func TestResumeSession(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.False(t, resp.Launched)
-		assertMessagePointCommandForRuntime(t, resp.Command)
 		promptPath := findSingleMessagePointPrompt(t, "sess-remote-copy", 1)
+		assertMessagePointCommandForRuntime(t, resp.Command, promptPath)
 		t.Cleanup(func() { _ = os.Remove(promptPath) })
 	})
 
