@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -25,9 +25,7 @@ func newRemoteSyncServer(t *testing.T) (*Server, http.Handler, string) {
 	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
-	database, err := db.Open(dbPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	database := dbtest.OpenTestDBAt(t, dbPath)
 	claudeDir := filepath.Join(dir, "claude")
 	require.NoError(t, os.MkdirAll(claudeDir, 0o755))
 	sessionPath := filepath.Join(claudeDir, "session.jsonl")

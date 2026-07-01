@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 )
 
 func TestDoctorSyncCurrentDatabaseReportsNormalStartupSync(t *testing.T) {
@@ -149,8 +150,7 @@ func TestInspectDoctorDBCountsAntigravityCLISummaryMode(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "sessions.db")
 
-	database, err := db.Open(dbPath)
-	require.NoError(t, err, "open db")
+	database := dbtest.OpenTestDBAt(t, dbPath)
 	require.NoError(t, database.UpsertSession(db.Session{
 		ID:                 "agy-summary",
 		Agent:              "antigravity-cli",

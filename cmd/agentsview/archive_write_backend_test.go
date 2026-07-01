@@ -137,9 +137,7 @@ func testLocalArchiveWriteBackend(t *testing.T) *localArchiveWriteBackend {
 	t.Helper()
 	dataDir := t.TempDir()
 	dbPath := filepath.Join(dataDir, "sessions.db")
-	database, err := db.Open(dbPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { database.Close() })
+	database := dbtest.OpenTestDBAt(t, dbPath)
 
 	return &localArchiveWriteBackend{
 		appCfg: config.Config{

@@ -21,6 +21,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/insight"
 	"go.kenn.io/agentsview/internal/server"
 )
@@ -370,9 +371,7 @@ func TestGenerateInsight_DefaultAgent(t *testing.T) {
 func TestGenerateInsight_PersistsWithReadOnlyStore(t *testing.T) {
 	dir := tempDirWithRetryCleanup(t)
 	dbPath := filepath.Join(dir, "test.db")
-	database, err := db.Open(dbPath)
-	require.NoError(t, err, "opening db")
-	t.Cleanup(func() { database.Close() })
+	database := dbtest.OpenTestDBAt(t, dbPath)
 
 	store := &readOnlyInsightPersistStore{Store: database}
 	cfg := config.Config{
@@ -426,9 +425,7 @@ func TestGenerateInsight_PersistsWithReadOnlyStore(t *testing.T) {
 func TestGenerateInsight_StaysBlockedForReadOnlyStoreWithoutInsightWrites(t *testing.T) {
 	dir := tempDirWithRetryCleanup(t)
 	dbPath := filepath.Join(dir, "test.db")
-	database, err := db.Open(dbPath)
-	require.NoError(t, err, "opening db")
-	t.Cleanup(func() { database.Close() })
+	database := dbtest.OpenTestDBAt(t, dbPath)
 
 	var called bool
 	cfg := config.Config{

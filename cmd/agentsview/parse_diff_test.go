@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
@@ -738,8 +739,7 @@ func TestDoParseDiff_FailOnChangeDirections(t *testing.T) {
 	// A phantom stored row under that file at the current data version:
 	// the re-parse never emits this id, so it reports as a presence
 	// change (HasFailures() == true).
-	d, err := db.Open(filepath.Join(dataDir, "sessions.db"))
-	require.NoError(t, err)
+	d := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, d.UpsertSession(db.Session{
 		ID: "phantom-session", Project: "proj", Machine: "m",
 		Agent: "claude", MessageCount: 4, UserMessageCount: 2,
@@ -793,8 +793,7 @@ func TestDoParseDiff_RacedSessionDoesNotFail(t *testing.T) {
 	require.NoError(t, os.WriteFile(srcPath, []byte(content), 0o644))
 
 	dbPath := filepath.Join(dataDir, "sessions.db")
-	d, err := db.Open(dbPath)
-	require.NoError(t, err)
+	d := dbtest.OpenTestDBAt(t, dbPath)
 	engine := sync.NewEngine(d, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {claudeDir},
@@ -862,8 +861,7 @@ func TestDoParseDiff_UntouchedDriftStillFails(t *testing.T) {
 	require.NoError(t, os.WriteFile(srcPath, []byte(content), 0o644))
 
 	dbPath := filepath.Join(dataDir, "sessions.db")
-	d, err := db.Open(dbPath)
-	require.NoError(t, err)
+	d := dbtest.OpenTestDBAt(t, dbPath)
 	engine := sync.NewEngine(d, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {claudeDir},

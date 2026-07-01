@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/server"
@@ -297,9 +298,7 @@ func TestStartRemoteHostSync_EmitsAfterSuccess(t *testing.T) {
 }
 
 func TestRemoteHostSyncFuncSerializesWithEngineExclusiveLock(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	database := dbtest.OpenTestDB(t)
 	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{},
 		Machine:   "local",
@@ -366,9 +365,7 @@ func TestRemoteHostSyncFuncSerializesWithEngineExclusiveLock(t *testing.T) {
 }
 
 func TestRemoteHostSyncFuncUsesCallerContext(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	database := dbtest.OpenTestDB(t)
 	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{},
 		Machine:   "local",
@@ -389,15 +386,13 @@ func TestRemoteHostSyncFuncUsesCallerContext(t *testing.T) {
 		},
 	)
 
-	_, err = syncFn()
+	_, err := syncFn()
 
 	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestRemoteHostSyncFuncDispatchesHTTPTransport(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	database := dbtest.OpenTestDB(t)
 	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{},
 		Machine:   "local",

@@ -680,7 +680,7 @@ func TestSessionList_MinToolFailuresZero(t *testing.T) {
 // timestamps one minute apart starting at 2026-04-01T00:00:00Z.
 func seedMessages(t *testing.T, dataDir, sessionID string, n int) {
 	t.Helper()
-	d, err := db.Open(filepath.Join(dataDir, "sessions.db"))
+	d, err := db.OpenPreparedTestDB(filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { d.Close() })
 
@@ -762,7 +762,7 @@ func seedMessagesWithToolCalls(
 	t *testing.T, dataDir, sessionID string, n int,
 ) {
 	t.Helper()
-	d, err := db.Open(filepath.Join(dataDir, "sessions.db"))
+	d, err := db.OpenPreparedTestDB(filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { d.Close() })
 
@@ -1272,14 +1272,10 @@ func TestSessionUsage_ConfiguredPGWithoutFlagUsesSQLite(t *testing.T) {
 	t.Setenv("AGENTSVIEW_PG_URL", "postgres://example.test/agentsview")
 	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 
-	localDB, err := db.Open(sessionsDBPath(dataDir))
-	require.NoError(t, err)
-	t.Cleanup(func() { localDB.Close() })
+	localDB := dbtest.OpenTestDBAt(t, sessionsDBPath(dataDir))
 	seedUsageSession(t, localDB, "local-session", "local-project", "codex", 24)
 
-	pgDB, err := db.Open(filepath.Join(dataDir, "pg.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { pgDB.Close() })
+	pgDB := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "pg.db"))
 	seedUsageSession(t, pgDB, "pg-session", "pg-project", "codex", 42)
 
 	stub := stubPGReadStore(t, pgDB)
@@ -1301,9 +1297,7 @@ func TestSessionUsage_PGFlagUsesPGStore(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 	t.Setenv("AGENTSVIEW_PG_URL", "postgres://example.test/agentsview")
 
-	pgDB, err := db.Open(filepath.Join(dataDir, "pg.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { pgDB.Close() })
+	pgDB := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "pg.db"))
 	seedUsageSession(t, pgDB, "pg-session", "pg-project", "codex", 42)
 
 	stub := stubPGReadStore(t, pgDB)
@@ -1328,9 +1322,7 @@ func TestSessionUsage_PGFlagResolvesBareSessionID(t *testing.T) {
 
 	bareID := "019da6a6-8c67-7c23-b102-ef48502852d0"
 	storedID := "codex:" + bareID
-	pgDB, err := db.Open(filepath.Join(dataDir, "pg.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { pgDB.Close() })
+	pgDB := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "pg.db"))
 	seedUsageSession(t, pgDB, storedID, "pg-project", "codex", 42)
 
 	stubPGReadStore(t, pgDB)
@@ -1352,9 +1344,7 @@ func TestSessionUsage_PGFlagResolvesColonBearingRawSessionID(t *testing.T) {
 
 	rawID := "project-hash:session-uuid"
 	storedID := "kimi:" + rawID
-	pgDB, err := db.Open(filepath.Join(dataDir, "pg.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { pgDB.Close() })
+	pgDB := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "pg.db"))
 	seedUsageSession(t, pgDB, storedID, "pg-project", "kimi", 84)
 
 	stubPGReadStore(t, pgDB)

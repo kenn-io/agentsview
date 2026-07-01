@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 )
 
 const testConversationsJSON = `[
@@ -116,10 +117,7 @@ const testConversationsWithoutAttachmentJSON = `[{
 
 func testDB(t *testing.T) *db.DB {
 	t.Helper()
-	d, err := db.Open(t.TempDir() + "/test.db")
-	require.NoError(t, err)
-	t.Cleanup(func() { d.Close() })
-	return d
+	return dbtest.OpenTestDB(t)
 }
 
 func TestImportClaudeAI(t *testing.T) {
