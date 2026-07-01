@@ -69,56 +69,70 @@ func seedActivityReportFixture(t *testing.T, te *testEnv) {
 	}
 }
 
-func TestActivityReportEndpoint_Day(t *testing.T) {
+func TestActivityReportEndpoint_Presets(t *testing.T) {
 	t.Parallel()
 	te := setup(t)
 	seedActivityReportFixture(t, te)
-	w := te.get(t, buildPathURL("/api/v1/activity/report", map[string]string{
-		"preset": "day", "date": activityDate, "timezone": "UTC",
-	}))
-	assertStatus(t, w, http.StatusOK)
-	resp := decode[activity.Report](t, w)
-	assert.Equal(t, 2, resp.Peak.Agents)
-	assert.Equal(t, 2, resp.Totals.Sessions)
-	assert.Equal(t, "minute", resp.BucketUnit)
-	assert.False(t, resp.Partial)
-}
 
-func TestActivityReportEndpoint_Week(t *testing.T) {
-	te := setup(t)
-	seedActivityReportFixture(t, te)
-	w := te.get(t, buildPathURL("/api/v1/activity/report", map[string]string{
-		"preset": "week", "date": activityDate, "timezone": "UTC",
-	}))
-	assertStatus(t, w, http.StatusOK)
-	resp := decode[activity.Report](t, w)
-	assert.Equal(t, "hour", resp.BucketUnit, "a 7-day week auto-buckets hourly")
-	assert.Equal(t, 168, resp.BucketCount)
-}
+	tests := []struct {
+		name   string
+		params map[string]string
+		check  func(t *testing.T, resp activity.Report)
+	}{
+		{
+			name: "day",
+			params: map[string]string{
+				"preset": "day", "date": activityDate, "timezone": "UTC",
+			},
+			check: func(t *testing.T, resp activity.Report) {
+				assert.Equal(t, 2, resp.Peak.Agents)
+				assert.Equal(t, 2, resp.Totals.Sessions)
+				assert.Equal(t, "minute", resp.BucketUnit)
+				assert.False(t, resp.Partial)
+			},
+		},
+		{
+			name: "week",
+			params: map[string]string{
+				"preset": "week", "date": activityDate, "timezone": "UTC",
+			},
+			check: func(t *testing.T, resp activity.Report) {
+				assert.Equal(t, "hour", resp.BucketUnit, "a 7-day week auto-buckets hourly")
+				assert.Equal(t, 168, resp.BucketCount)
+			},
+		},
+		{
+			name: "month",
+			params: map[string]string{
+				"preset": "month", "date": activityDate, "timezone": "UTC",
+			},
+			check: func(t *testing.T, resp activity.Report) {
+				assert.Equal(t, "day", resp.BucketUnit, "a 30-day month auto-buckets daily")
+			},
+		},
+		{
+			name: "custom",
+			params: map[string]string{
+				"preset":   "custom",
+				"from":     activityDate + "T00:00:00Z",
+				"to":       activityDate + "T23:59:59Z",
+				"timezone": "UTC",
+			},
+			check: func(t *testing.T, resp activity.Report) {
+				assert.Equal(t, 2, resp.Totals.Sessions)
+			},
+		},
+	}
 
-func TestActivityReportEndpoint_Month(t *testing.T) {
-	te := setup(t)
-	seedActivityReportFixture(t, te)
-	w := te.get(t, buildPathURL("/api/v1/activity/report", map[string]string{
-		"preset": "month", "date": activityDate, "timezone": "UTC",
-	}))
-	assertStatus(t, w, http.StatusOK)
-	resp := decode[activity.Report](t, w)
-	assert.Equal(t, "day", resp.BucketUnit, "a 30-day month auto-buckets daily")
-}
-
-func TestActivityReportEndpoint_Custom(t *testing.T) {
-	te := setup(t)
-	seedActivityReportFixture(t, te)
-	w := te.get(t, buildPathURL("/api/v1/activity/report", map[string]string{
-		"preset":   "custom",
-		"from":     activityDate + "T00:00:00Z",
-		"to":       activityDate + "T23:59:59Z",
-		"timezone": "UTC",
-	}))
-	assertStatus(t, w, http.StatusOK)
-	resp := decode[activity.Report](t, w)
-	assert.Equal(t, 2, resp.Totals.Sessions)
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			w := te.get(t, buildPathURL("/api/v1/activity/report", tc.params))
+			assertStatus(t, w, http.StatusOK)
+			tc.check(t, decode[activity.Report](t, w))
+		})
+	}
 }
 
 // TestActivityReportEndpoint_IncludesOneShotAndAutomated locks in the
@@ -129,6 +143,8 @@ func TestActivityReportEndpoint_Custom(t *testing.T) {
 // MUST appear in the report. A refactor flipping those flags to match
 // the analytics defaults would drop these sessions and fail here.
 func TestActivityReportEndpoint_IncludesOneShotAndAutomated(t *testing.T) {
+	t.Parallel()
+
 	te := setup(t)
 
 	// One-shot: a single user message (user_message_count = 1).
@@ -179,68 +195,82 @@ func TestActivityReportEndpoint_IncludesOneShotAndAutomated(t *testing.T) {
 		"both one-shot and automated sessions count toward the total")
 }
 
-func TestActivityReportEndpoint_BadDate(t *testing.T) {
-	te := setup(t)
-	w := te.get(t, buildPathURL("/api/v1/activity/report", map[string]string{
-		"preset": "day", "date": "not-a-date", "timezone": "UTC",
-	}))
-	assertStatus(t, w, http.StatusBadRequest)
-}
+func TestActivityReportEndpoint_Validation(t *testing.T) {
+	t.Parallel()
 
-func TestActivityReportEndpoint_BadTimezone(t *testing.T) {
 	te := setup(t)
-	w := te.get(t, buildPathURL("/api/v1/activity/report", map[string]string{
-		"preset": "day", "date": activityDate, "timezone": "Fake/Zone",
-	}))
-	assertStatus(t, w, http.StatusBadRequest)
-}
 
-func TestActivityReportEndpoint_CustomMissingBound(t *testing.T) {
-	te := setup(t)
-	w := te.get(t, buildPathURL("/api/v1/activity/report", map[string]string{
-		"preset": "custom", "from": activityDate + "T00:00:00Z",
-	}))
-	assertStatus(t, w, http.StatusBadRequest)
-}
-
-func TestActivityReportEndpoint_FromAfterTo(t *testing.T) {
-	te := setup(t)
-	w := te.get(t, buildPathURL("/api/v1/activity/report", map[string]string{
-		"preset": "custom",
-		"from":   activityDate + "T12:00:00Z",
-		"to":     activityDate + "T00:00:00Z",
-	}))
-	assertStatus(t, w, http.StatusBadRequest)
-}
-
-func TestActivityReportEndpoint_ZeroLengthRange(t *testing.T) {
-	te := setup(t)
 	ts := activityDate + "T00:00:00Z"
-	w := te.get(t, buildPathURL("/api/v1/activity/report", map[string]string{
-		"preset": "custom", "from": ts, "to": ts,
-	}))
-	assertStatus(t, w, http.StatusBadRequest)
-}
+	tests := []struct {
+		name   string
+		params map[string]string
+	}{
+		{
+			name: "bad date",
+			params: map[string]string{
+				"preset": "day", "date": "not-a-date", "timezone": "UTC",
+			},
+		},
+		{
+			name: "bad timezone",
+			params: map[string]string{
+				"preset": "day", "date": activityDate, "timezone": "Fake/Zone",
+			},
+		},
+		{
+			name: "custom missing bound",
+			params: map[string]string{
+				"preset": "custom", "from": activityDate + "T00:00:00Z",
+			},
+		},
+		{
+			name: "from after to",
+			params: map[string]string{
+				"preset": "custom",
+				"from":   activityDate + "T12:00:00Z",
+				"to":     activityDate + "T00:00:00Z",
+			},
+		},
+		{
+			name: "zero length range",
+			params: map[string]string{
+				"preset": "custom", "from": ts, "to": ts,
+			},
+		},
+		{
+			name: "range exceeds year",
+			params: map[string]string{
+				"preset": "custom",
+				"from":   "2026-01-01T00:00:00Z",
+				"to":     "2027-01-02T00:00:00Z",
+			},
+		},
+		{
+			name: "bucket count cap",
+			params: map[string]string{
+				"preset": "custom",
+				"from":   "2026-01-01T00:00:00Z",
+				"to":     "2026-12-31T00:00:00Z",
+				"bucket": "5m",
+			},
+		},
+		{
+			name: "bad automation",
+			params: map[string]string{
+				"preset": "day", "date": activityDate, "timezone": "UTC",
+				"automation": "bogus",
+			},
+		},
+	}
 
-func TestActivityReportEndpoint_RangeExceedsYear(t *testing.T) {
-	te := setup(t)
-	w := te.get(t, buildPathURL("/api/v1/activity/report", map[string]string{
-		"preset": "custom",
-		"from":   "2026-01-01T00:00:00Z",
-		"to":     "2027-01-02T00:00:00Z",
-	}))
-	assertStatus(t, w, http.StatusBadRequest)
-}
-
-func TestActivityReportEndpoint_BucketCountCap(t *testing.T) {
-	te := setup(t)
-	w := te.get(t, buildPathURL("/api/v1/activity/report", map[string]string{
-		"preset": "custom",
-		"from":   "2026-01-01T00:00:00Z",
-		"to":     "2026-12-31T00:00:00Z",
-		"bucket": "5m",
-	}))
-	assertStatus(t, w, http.StatusBadRequest)
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			w := te.get(t, buildPathURL("/api/v1/activity/report", tc.params))
+			assertStatus(t, w, http.StatusBadRequest)
+		})
+	}
 }
 
 // TestActivityReportEndpoint_AutomationFilter confirms the activity endpoint's
@@ -249,6 +279,8 @@ func TestActivityReportEndpoint_BucketCountCap(t *testing.T) {
 // "automated" drops interactive ones. It also confirms the response Totals
 // carry the automated/interactive session-count split.
 func TestActivityReportEndpoint_AutomationFilter(t *testing.T) {
+	t.Parallel()
+
 	te := setup(t)
 
 	// Automated: a single-turn session whose first message matches a known
@@ -296,7 +328,9 @@ func TestActivityReportEndpoint_AutomationFilter(t *testing.T) {
 		{"automated drops interactive", "automated", 1, 0, []string{"automated"}},
 	}
 	for _, tc := range tests {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			params := map[string]string{
 				"preset": "day", "date": activityDate, "timezone": "UTC",
 			}
@@ -319,13 +353,4 @@ func TestActivityReportEndpoint_AutomationFilter(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestActivityReportEndpoint_BadAutomation(t *testing.T) {
-	te := setup(t)
-	w := te.get(t, buildPathURL("/api/v1/activity/report", map[string]string{
-		"preset": "day", "date": activityDate, "timezone": "UTC",
-		"automation": "bogus",
-	}))
-	assertStatus(t, w, http.StatusBadRequest)
 }

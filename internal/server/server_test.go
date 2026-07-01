@@ -1527,6 +1527,8 @@ func TestSidebarIndexPaginatesByDescendantFreshness(t *testing.T) {
 
 func TestSidebarIndexValidatesParams(t *testing.T) {
 	t.Parallel()
+	te := setup(t)
+
 	tests := []string{
 		"/api/v1/sessions/sidebar-index?min_messages=bad",
 		"/api/v1/sessions/sidebar-index?max_messages=bad",
@@ -1537,9 +1539,9 @@ func TestSidebarIndexValidatesParams(t *testing.T) {
 	}
 
 	for _, path := range tests {
+		path := path
 		t.Run(path, func(t *testing.T) {
 			t.Parallel()
-			te := setup(t)
 			w := te.get(t, path)
 			assertStatus(t, w, http.StatusBadRequest)
 		})
