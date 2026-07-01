@@ -33,21 +33,22 @@ type doctorAgentRoot struct {
 }
 
 type doctorSyncReport struct {
-	Config                config.Config
-	DBExists              bool
-	DBReadable            bool
-	DBError               error
-	UserVersion           *int
-	SessionCounts         []doctorDataVersionCount
-	SessionCountsErr      error
-	AntigravityCLITotal   int
-	AntigravityCLISummary int
-	SummaryModeErr        error
-	TempFiles             []string
-	AgentRoots            []doctorAgentRoot
-	DebugLines            []string
-	DebugLogErr           error
-	HasResyncFailureLog   bool
+	Config                   config.Config
+	DBExists                 bool
+	DBReadable               bool
+	DBError                  error
+	UserVersion              *int
+	SessionCounts            []doctorDataVersionCount
+	SessionCountsErr         error
+	AntigravityCLITotal      int
+	AntigravityCLISummary    int
+	AntigravityUnknownSchema int
+	AntigravityCountsErr     error
+	TempFiles                []string
+	AgentRoots               []doctorAgentRoot
+	DebugLines               []string
+	DebugLogErr              error
+	HasResyncFailureLog      bool
 }
 
 func newDoctorCommand() *cobra.Command {
@@ -94,7 +95,8 @@ func collectDoctorSyncReport(cfg config.Config) doctorSyncReport {
 		report.UserVersion, report.SessionCounts,
 		report.SessionCountsErr,
 		report.AntigravityCLITotal, report.AntigravityCLISummary,
-		report.SummaryModeErr = inspectDoctorDB(cfg.DBPath)
+		report.AntigravityUnknownSchema,
+		report.AntigravityCountsErr = inspectDoctorDB(cfg.DBPath)
 	report.TempFiles = listDoctorResyncTempFiles(cfg.DBPath)
 	report.AgentRoots = collectDoctorAgentRoots(cfg)
 	report.DebugLines, report.DebugLogErr = readDoctorDebugLines(
@@ -117,29 +119,30 @@ func inspectDoctorDB(
 	countsErr error,
 	antigravityCLITotal int,
 	antigravityCLISummary int,
-	summaryModeErr error,
+	antigravityUnknownSchema int,
+	antigravityCountsErr error,
 ) {
 	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return false, false, nil, nil, nil, nil, 0, 0, nil
+			return false, false, nil, nil, nil, nil, 0, 0, 0, nil
 		}
-		return false, false, err, nil, nil, nil, 0, 0, nil
+		return false, false, err, nil, nil, nil, 0, 0, 0, nil
 	}
 	if info.IsDir() {
 		return true, false, fmt.Errorf("database path is a directory"),
-			nil, nil, nil, 0, 0, nil
+			nil, nil, nil, 0, 0, 0, nil
 	}
 
 	conn, err := sql.Open("sqlite3", doctorReadOnlyDSN(path))
 	if err != nil {
-		return true, false, err, nil, nil, nil, 0, 0, nil
+		return true, false, err, nil, nil, nil, 0, 0, 0, nil
 	}
 	defer conn.Close()
 
 	var version int
 	if err := conn.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
-		return true, false, err, nil, nil, nil, 0, 0, nil
+		return true, false, err, nil, nil, nil, 0, 0, 0, nil
 	}
 	readable = true
 	userVersion = &version
@@ -149,31 +152,39 @@ func inspectDoctorDB(
 			"GROUP BY data_version ORDER BY data_version",
 	)
 	if err != nil {
-		return true, readable, nil, userVersion, nil, err, 0, 0, nil
+		return true, readable, nil, userVersion, nil, err, 0, 0, 0, nil
 	}
 	defer rows.Close()
 
 	for rows.Next() {
 		var row doctorDataVersionCount
 		if err := rows.Scan(&row.Version, &row.Count); err != nil {
-			return true, readable, nil, userVersion, counts, err, 0, 0, nil
+			return true, readable, nil, userVersion, counts, err, 0, 0, 0, nil
 		}
 		counts = append(counts, row)
 	}
 	if err := rows.Err(); err != nil {
-		return true, readable, nil, userVersion, counts, err, 0, 0, nil
+		return true, readable, nil, userVersion, counts, err, 0, 0, 0, nil
 	}
 
-	var total, summary int
+	// One scan collects both Antigravity operator counts: antigravity-cli
+	// summary-mode sessions (transcript fidelity) and sessions on an
+	// unrecognized schema across both Antigravity agents (decode confidence).
+	var total, summary, unknownSchema int
 	row := conn.QueryRow(
-		"SELECT COUNT(*), " +
-			"COUNT(*) FILTER (WHERE transcript_fidelity = 'summary') " +
-			"FROM sessions WHERE agent = 'antigravity-cli'",
+		"SELECT " +
+			"COUNT(*) FILTER (WHERE agent = 'antigravity-cli'), " +
+			"COUNT(*) FILTER (WHERE agent = 'antigravity-cli' " +
+			"AND transcript_fidelity = 'summary'), " +
+			"COUNT(*) FILTER (WHERE agent IN ('antigravity', 'antigravity-cli') " +
+			"AND source_version LIKE 'agy-schema:%') " +
+			"FROM sessions",
 	)
-	if err := row.Scan(&total, &summary); err != nil {
-		return true, readable, nil, userVersion, counts, nil, 0, 0, err
+	if err := row.Scan(&total, &summary, &unknownSchema); err != nil {
+		return true, readable, nil, userVersion, counts, nil, 0, 0, 0, err
 	}
-	return true, readable, nil, userVersion, counts, nil, total, summary, nil
+	return true, readable, nil, userVersion, counts, nil,
+		total, summary, unknownSchema, nil
 }
 
 func doctorReadOnlyDSN(path string) string {
@@ -299,6 +310,7 @@ func writeDoctorSyncReport(w io.Writer, report doctorSyncReport) {
 
 	writeDoctorSessionCounts(w, report)
 	writeDoctorSummaryMode(w, report)
+	writeDoctorUnknownSchema(w, report)
 	writeDoctorTempFiles(w, report.TempFiles)
 	writeDoctorAgentRoots(w, report.AgentRoots)
 	writeDoctorDebugEvidence(w, report)
@@ -347,7 +359,7 @@ func writeDoctorSessionCounts(w io.Writer, report doctorSyncReport) {
 }
 
 func writeDoctorSummaryMode(w io.Writer, report doctorSyncReport) {
-	if report.SummaryModeErr != nil || report.AntigravityCLISummary == 0 {
+	if report.AntigravityCountsErr != nil || report.AntigravityCLISummary == 0 {
 		return
 	}
 	fmt.Fprintf(w,
@@ -355,6 +367,22 @@ func writeDoctorSummaryMode(w io.Writer, report doctorSyncReport) {
 			"  -> install agy-reader for full transcripts: "+
 			"https://github.com/mjacobs/agy-reader\n",
 		report.AntigravityCLITotal, report.AntigravityCLISummary)
+}
+
+// writeDoctorUnknownSchema surfaces Antigravity sessions decoded from an
+// unrecognized (newer) schema fingerprint (source_version "agy-schema:..."),
+// where the heuristic decode may be incomplete or wrong. It stays silent on a
+// clean archive or when the antigravity-counts query failed.
+func writeDoctorUnknownSchema(w io.Writer, report doctorSyncReport) {
+	if report.AntigravityCountsErr != nil ||
+		report.AntigravityUnknownSchema == 0 {
+		return
+	}
+	fmt.Fprintf(w,
+		"%d session(s) on unrecognized Antigravity schema (agy-schema:...)\n"+
+			"  -> a newer Antigravity build changed the schema; "+
+			"the decode is heuristic and may be incomplete\n",
+		report.AntigravityUnknownSchema)
 }
 
 func writeDoctorTempFiles(w io.Writer, files []string) {
