@@ -214,6 +214,8 @@ func setupFocusedTestEnv(t *testing.T, agents ...parser.AgentType) *testEnv {
 			env.opencodeDir = dir
 		case parser.AgentKilo:
 			env.kiloDir = dir
+		case parser.AgentMiMoCode:
+			env.mimocodeDir = dir
 		case parser.AgentPiebald:
 			env.piebaldDir = dir
 		case parser.AgentKiro:
@@ -4738,7 +4740,8 @@ func TestKiloStorageRewriteReplacesMessages(t *testing.T) {
 // rewrite exercises the message/part classification branch, which
 // resolves the session file under session_diff to advance the message.
 func TestMiMoCodeSessionDiffStorageWatcherEvents(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentMiMoCode)
 	storage := createMiMoCodeStorageFixture(t, env.mimocodeDir)
 	const sessionID = "mimo-storage-watch"
 	sessionPath := storage.addSession(
@@ -7956,7 +7959,8 @@ func TestIncrementalSync_ClaudeAppend(t *testing.T) {
 }
 
 func TestIncrementalSync_ClaudeFilteredTailAdvancesNextOrdinal(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	initial := testjsonl.JoinJSONL(
 		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"go"},"cwd":"/tmp"}`,

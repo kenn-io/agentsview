@@ -3948,6 +3948,7 @@ func TestEngine_SyncSingleSessionReasonixDeletedMetadataClearsProject(t *testing
 }
 
 func TestEngine_SyncPathsReasonixMalformedMetadataPreservesSessionFields(t *testing.T) {
+	t.Parallel()
 	db := openTestDB(t)
 	reasonixDir := t.TempDir()
 	engine := NewEngine(db, EngineConfig{

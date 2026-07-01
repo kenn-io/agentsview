@@ -1958,6 +1958,7 @@ func TestAntigravityCLIDBCoveringSidecarRescuesUndecodableRows(t *testing.T) {
 }
 
 func TestAntigravityCLISidecarWinsKeepsTokenUsage(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	id := "dddddddd-eeee-ffff-0000-111111111111"
 	mustMkdir(t, filepath.Join(root, "conversations"))

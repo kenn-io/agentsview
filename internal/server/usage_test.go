@@ -164,6 +164,7 @@ func TestHandleUsageSummaryJSONShape(t *testing.T) {
 }
 
 func TestHandleUsageSummaryIncludesCursorUsageEvents(t *testing.T) {
+	t.Parallel()
 	te := setup(t)
 
 	require.NoError(t, te.db.InsertCursorUsageEvents([]db.CursorUsageEvent{{

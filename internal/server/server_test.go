@@ -3554,6 +3554,7 @@ func TestUploadSession_ReuploadPreservesPins(t *testing.T) {
 }
 
 func TestUploadSession_EmptyFile(t *testing.T) {
+	t.Parallel()
 	te := setup(t)
 
 	w := te.upload(t, "empty.jsonl", "",

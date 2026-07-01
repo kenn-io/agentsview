@@ -367,6 +367,7 @@ func TestHumaSyncSessionLocalNoSyncResyncsStaleDB(t *testing.T) {
 }
 
 func TestHumaSyncSessionCanceledPreResyncReturnsNil(t *testing.T) {
+	t.Parallel()
 	f := newSyncRouteFixture(t, withStaleDB())
 	require.True(t, f.db.NeedsResync())
 
