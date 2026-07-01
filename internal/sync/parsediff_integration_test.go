@@ -844,6 +844,7 @@ func TestParseDiffCoversProviderAuthoritativePiFamily(t *testing.T) {
 // surface here as the session being skipped/"not discovered" with
 // Examined 0 rather than compared.
 func TestParseDiffCoversKiroSQLite(t *testing.T) {
+	t.Parallel()
 	env := setupTestEnv(t)
 	ks := createKiroSQLiteDB(t, env.kiroDir)
 	ks.addSession(
@@ -877,6 +878,7 @@ func TestParseDiffCoversKiroSQLite(t *testing.T) {
 // discovery would leave the legacy session "not discovered" and let
 // --fail-on-change pass without vetting it.
 func TestParseDiffCoversMixedOpenCodeRoot(t *testing.T) {
+	t.Parallel()
 	env := setupTestEnv(t)
 
 	// File-backed storage session: this makes ResolveOpenCodeSource

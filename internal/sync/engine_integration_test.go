@@ -285,6 +285,7 @@ func TestSyncEngineKiroSQLiteWatchReplacesMessages(t *testing.T) {
 }
 
 func TestSyncEngineKiroSQLiteVirtualPathReplacesMessages(t *testing.T) {
+	t.Parallel()
 	env := setupTestEnv(t)
 	ks := createKiroSQLiteDB(t, env.kiroDir)
 	ks.addSession(
@@ -4551,6 +4552,7 @@ func TestFindSourceFileSkipsHybridRootMissingSession(t *testing.T) {
 // even when its time_updated is newer than the storage file mtime
 // — otherwise a stale SQLite row could overwrite live storage data.
 func TestOpenCodeHybridRootStorageWinsOnDuplicateID(t *testing.T) {
+	t.Parallel()
 	env := setupTestEnv(t)
 	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
 	const sessionID = "oc-hybrid-dup"
@@ -6766,6 +6768,7 @@ func TestResyncAllMixedOpenCodeRootsKeepsSQLiteFallback(t *testing.T) {
 func TestResyncAllOpenCodeStorageArchivePreservesStaleSQLiteFallback(
 	t *testing.T,
 ) {
+	t.Parallel()
 	env := setupTestEnv(t)
 	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
 
@@ -6950,6 +6953,7 @@ func TestResyncAllOpenCodeStorageArchiveAllowsNewerSQLiteFallback(
 func TestResyncAllOpenCodeStorageMissingMessagePreservesArchive(
 	t *testing.T,
 ) {
+	t.Parallel()
 	env := setupTestEnv(t)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 

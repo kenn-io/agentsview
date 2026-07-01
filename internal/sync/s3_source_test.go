@@ -261,6 +261,7 @@ func TestFilterFilesByMtimeKeepsS3ChangedFingerprint(t *testing.T) {
 }
 
 func TestFilterFilesByMtimeKeepsS3ChangedSize(t *testing.T) {
+	t.Parallel()
 	database := openTestDB(t)
 	path := "s3://bucket/laptop/raw/claude/test-proj/size.jsonl"
 	mtime := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC).UnixNano()

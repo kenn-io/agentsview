@@ -8,6 +8,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	stdsync "sync"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -173,6 +174,57 @@ type kiroSQLiteTestDB struct {
 	db   *sql.DB
 }
 
+var (
+	openCodeLikeSchemaOnce  stdsync.Once
+	openCodeLikeSchemaBytes []byte
+	openCodeLikeSchemaErr   error
+
+	kiroSQLiteSchemaOnce  stdsync.Once
+	kiroSQLiteSchemaBytes []byte
+	kiroSQLiteSchemaErr   error
+
+	kiroSQLiteFixtureCache stdsync.Map
+)
+
+const openCodeLikeSchema = `
+	CREATE TABLE project (
+		id TEXT PRIMARY KEY,
+		worktree TEXT NOT NULL
+	);
+	CREATE TABLE session (
+		id TEXT PRIMARY KEY,
+		project_id TEXT NOT NULL,
+		parent_id TEXT,
+		title TEXT,
+		time_created INTEGER NOT NULL,
+		time_updated INTEGER NOT NULL
+	);
+	CREATE TABLE message (
+		id TEXT PRIMARY KEY,
+		session_id TEXT NOT NULL,
+		data TEXT NOT NULL,
+		time_created INTEGER NOT NULL
+	);
+	CREATE TABLE part (
+		id TEXT PRIMARY KEY,
+		session_id TEXT NOT NULL,
+		message_id TEXT NOT NULL,
+		data TEXT NOT NULL,
+		time_created INTEGER NOT NULL
+	);
+`
+
+const kiroSQLiteSchema = `
+	CREATE TABLE conversations_v2 (
+		key TEXT NOT NULL,
+		conversation_id TEXT NOT NULL,
+		value TEXT NOT NULL,
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL,
+		PRIMARY KEY (key, conversation_id)
+	);
+`
+
 // createOpenCodeDB creates a minimal OpenCode SQLite database
 // with the required schema (project, session, message, part
 // tables). Returns a handle for inserting test data.
@@ -194,71 +246,102 @@ func createOpenCodeLikeDB(
 	t *testing.T, path, label string,
 ) *openCodeTestDB {
 	t.Helper()
+	copySQLiteSchemaTemplate(
+		t, path, label, &openCodeLikeSchemaOnce,
+		&openCodeLikeSchemaBytes, &openCodeLikeSchemaErr,
+		openCodeLikeSchema,
+	)
 	d, err := sql.Open("sqlite3", path)
 	require.NoError(t, err, "opening %s test db", label)
 	t.Cleanup(func() { d.Close() })
-
-	schema := `
-		CREATE TABLE project (
-			id TEXT PRIMARY KEY,
-			worktree TEXT NOT NULL
-		);
-		CREATE TABLE session (
-			id TEXT PRIMARY KEY,
-			project_id TEXT NOT NULL,
-			parent_id TEXT,
-			title TEXT,
-			time_created INTEGER NOT NULL,
-			time_updated INTEGER NOT NULL
-		);
-		CREATE TABLE message (
-			id TEXT PRIMARY KEY,
-			session_id TEXT NOT NULL,
-			data TEXT NOT NULL,
-			time_created INTEGER NOT NULL
-		);
-		CREATE TABLE part (
-			id TEXT PRIMARY KEY,
-			session_id TEXT NOT NULL,
-			message_id TEXT NOT NULL,
-			data TEXT NOT NULL,
-			time_created INTEGER NOT NULL
-		);
-	`
-	_, err = d.Exec(schema)
-	require.NoError(t, err, "creating %s schema", label)
 	return &openCodeTestDB{path: path, db: d}
 }
 
 func createKiroSQLiteDB(t *testing.T, dir string) *kiroSQLiteTestDB {
 	t.Helper()
 	path := filepath.Join(dir, "data.sqlite3")
+	copySQLiteSchemaTemplate(
+		t, path, "kiro sqlite", &kiroSQLiteSchemaOnce,
+		&kiroSQLiteSchemaBytes, &kiroSQLiteSchemaErr,
+		kiroSQLiteSchema,
+	)
 	d, err := sql.Open("sqlite3", path)
 	require.NoError(t, err, "opening kiro sqlite test db")
 	t.Cleanup(func() { d.Close() })
-	schema := `
-		CREATE TABLE conversations_v2 (
-			key TEXT NOT NULL,
-			conversation_id TEXT NOT NULL,
-			value TEXT NOT NULL,
-			created_at INTEGER NOT NULL,
-			updated_at INTEGER NOT NULL,
-			PRIMARY KEY (key, conversation_id)
-		);
-	`
-	_, err = d.Exec(schema)
-	require.NoError(t, err, "creating kiro sqlite schema")
 	return &kiroSQLiteTestDB{path: path, db: d}
+}
+
+func copySQLiteSchemaTemplate(
+	t *testing.T,
+	path, label string,
+	once *stdsync.Once,
+	templateBytes *[]byte,
+	templateErr *error,
+	schema string,
+) {
+	t.Helper()
+	bytes := sqliteSchemaTemplateBytes(
+		t, label, once, templateBytes, templateErr, schema,
+	)
+	require.NoError(t, os.WriteFile(path, bytes, 0o644),
+		"copy %s schema template", label)
+}
+
+func sqliteSchemaTemplateBytes(
+	t *testing.T,
+	label string,
+	once *stdsync.Once,
+	templateBytes *[]byte,
+	templateErr *error,
+	schema string,
+) []byte {
+	t.Helper()
+	once.Do(func() {
+		dir, err := os.MkdirTemp("", "agentsview-"+label+"-schema-*")
+		if err != nil {
+			*templateErr = fmt.Errorf("create %s schema template dir: %w", label, err)
+			return
+		}
+		defer os.RemoveAll(dir)
+
+		path := filepath.Join(dir, "template.db")
+		d, err := sql.Open("sqlite3", path)
+		if err != nil {
+			*templateErr = fmt.Errorf("open %s schema template: %w", label, err)
+			return
+		}
+		if _, err = d.Exec(schema); err != nil {
+			_ = d.Close()
+			*templateErr = fmt.Errorf("create %s schema template: %w", label, err)
+			return
+		}
+		if err = d.Close(); err != nil {
+			*templateErr = fmt.Errorf("close %s schema template: %w", label, err)
+			return
+		}
+		*templateBytes, err = os.ReadFile(path)
+		if err != nil {
+			*templateErr = fmt.Errorf("read %s schema template: %w", label, err)
+		}
+	})
+	require.NoError(t, *templateErr, "prepare %s schema template", label)
+	require.NotEmpty(t, *templateBytes, "prepare %s schema template", label)
+	return *templateBytes
 }
 
 func readKiroSQLiteFixture(t *testing.T, name string) string {
 	t.Helper()
+	if v, ok := kiroSQLiteFixtureCache.Load(name); ok {
+		return v.(string)
+	}
 	path := filepath.Join(
 		"..", "parser", "testdata", "kiro_sqlite", name,
 	)
 	data, err := os.ReadFile(path)
 	require.NoError(t, err, "read kiro sqlite fixture %s", name)
-	return string(data)
+	value := string(data)
+	v, _ := kiroSQLiteFixtureCache.LoadOrStore(name, value)
+	return v.(string)
 }
 
 func (ks *kiroSQLiteTestDB) addSession(
