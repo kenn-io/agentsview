@@ -2156,6 +2156,11 @@ func (e *Engine) visualStudioCopilotMissingVS2026PollSources(
 				}
 				continue
 			}
+			if !visualStudioCopilotVS2026PollCanTombstone(
+				roots, container,
+			) {
+				continue
+			}
 			tombstones, err := provider.SourcesForChangedPath(
 				ctx,
 				parser.ChangedPathRequest{
@@ -2187,6 +2192,31 @@ func (e *Engine) visualStudioCopilotMissingVS2026PollSources(
 		}
 	}
 	return out
+}
+
+func visualStudioCopilotVS2026PollCanTombstone(
+	roots []string,
+	container string,
+) bool {
+	if container == "" {
+		return false
+	}
+	container = filepath.Clean(container)
+	if parser.IsRegularFile(container) {
+		return false
+	}
+	if !reachableDir(filepath.Dir(container)) {
+		return false
+	}
+	return slices.ContainsFunc(roots, func(root string) bool {
+		root = filepath.Clean(root)
+		return samePathOrDescendant(container, root) && reachableDir(root)
+	})
+}
+
+func reachableDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info != nil && info.IsDir()
 }
 
 func (e *Engine) visualStudioCopilotCurrentPollSource(
