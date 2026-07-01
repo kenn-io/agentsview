@@ -116,123 +116,84 @@ func TestSyncEngineAntigravityCLI_HappyPath(t *testing.T) {
 	assert.Equal(t, "listing files now", msgs[1].Content)
 }
 
-func TestSyncEngineAntigravityCLI_ReSyncOnSidecarUpdate(t *testing.T) {
+func TestSyncEngineAntigravityCLI_SidecarUpdates(t *testing.T) {
 	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
-	uuid := "44444444-5555-6666-7777-888888888888"
+	syncUUID := "44444444-5555-6666-7777-888888888888"
+	sinceUUID := "77777777-8888-9999-0000-111111111111"
 
 	convDir := filepath.Join(env.antigravityCLIDir, "conversations")
 	require.NoError(t, os.MkdirAll(convDir, 0o755))
 
-	// Write history
-	historyLine := `{"conversationId": "` + uuid + `", "workspace": "/home/user/workspace-abc", "timestamp": 1716244800000, "display": "History Prompt"}` + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(env.antigravityCLIDir, "history.jsonl"), []byte(historyLine), 0o644))
+	history := `{"conversationId": "` + syncUUID + `", "workspace": "/home/user/workspace-abc", "timestamp": 1716244800000, "display": "History Prompt"}` + "\n" +
+		`{"conversationId": "` + sinceUUID + `", "workspace": "/home/user/workspace-since", "timestamp": 1716244800000, "display": "History Prompt Since"}` + "\n"
+	require.NoError(t, os.WriteFile(
+		filepath.Join(env.antigravityCLIDir, "history.jsonl"),
+		[]byte(history), 0o644,
+	))
 
-	// Write .pb file
-	pbPath := filepath.Join(convDir, uuid+".pb")
-	require.NoError(t, os.WriteFile(pbPath, []byte("dummy-pb"), 0o644))
+	syncPBPath := filepath.Join(convDir, syncUUID+".pb")
+	require.NoError(t, os.WriteFile(syncPBPath, []byte("dummy-pb"), 0o644))
+	sincePBPath := filepath.Join(convDir, sinceUUID+".pb")
+	require.NoError(t, os.WriteFile(sincePBPath, []byte("dummy-pb"), 0o644))
+	oldTime := time.Now().Add(-48 * time.Hour)
+	require.NoError(t, os.Chtimes(sincePBPath, oldTime, oldTime))
 
-	// Sync 1: pb exists, sidecar does not. Should sync fallback history.
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 1,
-		Synced:        1,
+		TotalSessions: 2,
+		Synced:        2,
 		Skipped:       0,
 	})
 
-	assertSessionMessageCount(t, env.db, "antigravity-cli:"+uuid, 1)
-	msgs := fetchMessages(t, env.db, "antigravity-cli:"+uuid)
+	assertSessionMessageCount(t, env.db, "antigravity-cli:"+syncUUID, 1)
+	msgs := fetchMessages(t, env.db, "antigravity-cli:"+syncUUID)
 	require.Len(t, msgs, 1)
 	assert.Equal(t, "History Prompt", msgs[0].Content)
+	assertSessionMessageCount(t, env.db, "antigravity-cli:"+sinceUUID, 1)
+	msgs = fetchMessages(t, env.db, "antigravity-cli:"+sinceUUID)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "History Prompt Since", msgs[0].Content)
 
-	// Sync 2: Run again immediately without any changes -> should skip
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 1,
+		TotalSessions: 2,
 		Synced:        0,
+		Skipped:       2,
+	})
+
+	time.Sleep(10 * time.Millisecond)
+	trajPath := filepath.Join(convDir, syncUUID+".trajectory.json")
+	trajectoryJSON := antigravityCLISingleUserTrajectory(
+		syncUUID, "New Prompt from Trajectory",
+	)
+	require.NoError(t, os.WriteFile(trajPath, []byte(trajectoryJSON), 0o644))
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 2,
+		Synced:        1,
 		Skipped:       1,
 	})
 
-	// Make sure we sleep briefly to ensure mod time changes if filesystem is low-res
-	time.Sleep(10 * time.Millisecond)
-
-	// Write sidecar .trajectory.json
-	trajectoryJSON := `{
-		"trajectoryId": "` + uuid + `",
-		"steps": [
-			{
-				"type": "CORTEX_STEP_TYPE_USER_INPUT",
-				"status": "STATUS_COMPLETED",
-				"metadata": {
-					"createdAt": "2026-05-20T22:45:00Z"
-				},
-				"userInput": {
-					"userResponse": "New Prompt from Trajectory"
-				}
-			}
-		]
-	}`
-	trajPath := filepath.Join(convDir, uuid+".trajectory.json")
-	require.NoError(t, os.WriteFile(trajPath, []byte(trajectoryJSON), 0o644))
-
-	// Sync 3: sidecar added. Effective mtime and size changed -> should re-sync!
-	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 1,
-		Synced:        1,
-		Skipped:       0,
-	})
-
-	assertSessionMessageCount(t, env.db, "antigravity-cli:"+uuid, 1)
-	msgs = fetchMessages(t, env.db, "antigravity-cli:"+uuid)
+	assertSessionMessageCount(t, env.db, "antigravity-cli:"+syncUUID, 1)
+	msgs = fetchMessages(t, env.db, "antigravity-cli:"+syncUUID)
 	require.Len(t, msgs, 1)
 	assert.Equal(t, "New Prompt from Trajectory", msgs[0].Content)
-}
 
-func TestSyncEngineAntigravityCLI_SyncAllSinceReSyncsSidecarUpdate(t *testing.T) {
-	t.Parallel()
-	env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
-	uuid := "77777777-8888-9999-0000-111111111111"
-
-	convDir := filepath.Join(env.antigravityCLIDir, "conversations")
-	require.NoError(t, os.MkdirAll(convDir, 0o755))
-
-	historyLine := `{"conversationId": "` + uuid + `", "workspace": "/home/user/workspace-since", "timestamp": 1716244800000, "display": "History Prompt"}` + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(env.antigravityCLIDir, "history.jsonl"), []byte(historyLine), 0o644))
-
-	pbPath := filepath.Join(convDir, uuid+".pb")
-	require.NoError(t, os.WriteFile(pbPath, []byte("dummy-pb"), 0o644))
-	oldTime := time.Now().Add(-48 * time.Hour)
-	require.NoError(t, os.Chtimes(pbPath, oldTime, oldTime))
-
-	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 1,
-		Synced:        1,
-		Skipped:       0,
-	})
-	assertSessionMessageCount(t, env.db, "antigravity-cli:"+uuid, 1)
-
-	cutoff := time.Now().Add(-1 * time.Hour)
 	time.Sleep(10 * time.Millisecond)
-	trajectoryJSON := `{
-		"trajectoryId": "` + uuid + `",
-		"steps": [
-			{
-				"type": "CORTEX_STEP_TYPE_USER_INPUT",
-				"status": "STATUS_COMPLETED",
-				"metadata": {
-					"createdAt": "2026-05-20T22:45:00Z"
-				},
-				"userInput": {
-					"userResponse": "Prompt from SyncAllSince Trajectory"
-				}
-			}
-		]
-	}`
-	trajPath := filepath.Join(convDir, uuid+".trajectory.json")
-	require.NoError(t, os.WriteFile(trajPath, []byte(trajectoryJSON), 0o644))
+	cutoff := time.Now()
+	time.Sleep(10 * time.Millisecond)
+
+	sinceTrajPath := filepath.Join(convDir, sinceUUID+".trajectory.json")
+	sinceTrajectoryJSON := antigravityCLISingleUserTrajectory(
+		sinceUUID, "Prompt from SyncAllSince Trajectory",
+	)
+	require.NoError(t, os.WriteFile(
+		sinceTrajPath, []byte(sinceTrajectoryJSON), 0o644,
+	))
 
 	stats := env.engine.SyncAllSince(context.Background(), cutoff, nil)
 	require.Equal(t, 1, stats.Synced, "synced = %d, want 1", stats.Synced)
 
-	msgs := fetchMessages(t, env.db, "antigravity-cli:"+uuid)
+	msgs = fetchMessages(t, env.db, "antigravity-cli:"+sinceUUID)
 	require.Len(t, msgs, 1)
 	assert.Equal(t, "Prompt from SyncAllSince Trajectory", msgs[0].Content)
 }
@@ -322,51 +283,70 @@ func TestSyncEngineAntigravityCLI_MalformedSidecarFallback(t *testing.T) {
 	assert.Equal(t, "History Prompt", msgs[0].Content)
 }
 
-func TestSyncEngineAntigravityCLI_DBDecodeFallbackRetries(t *testing.T) {
+func TestSyncEngineAntigravityCLI_DBFallbackRetries(t *testing.T) {
 	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
-	uuid := "77777777-8888-9999-aaaa-bbbbbbbbbbbb"
-	sessionID := "antigravity-cli:" + uuid
+	malformedUUID := "77777777-8888-9999-aaaa-bbbbbbbbbbbb"
+	filteredUUID := "88888888-9999-aaaa-bbbb-cccccccccccc"
+	malformedSessionID := "antigravity-cli:" + malformedUUID
+	filteredSessionID := "antigravity-cli:" + filteredUUID
 
 	convDir := filepath.Join(env.antigravityCLIDir, "conversations")
 	require.NoError(t, os.MkdirAll(convDir, 0o755))
 
-	historyLine := `{"conversationId": "` + uuid + `", "workspace": "/home/user/workspace-db", "timestamp": 1716244800000, "display": "History Prompt"}` + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(env.antigravityCLIDir, "history.jsonl"), []byte(historyLine), 0o644))
+	history := `{"conversationId": "` + malformedUUID + `", "workspace": "/home/user/workspace-db", "timestamp": 1716244800000, "display": "History Prompt"}` + "\n" +
+		`{"conversationId": "` + filteredUUID + `", "workspace": "/home/user/workspace-db-filtered", "timestamp": 1716244800000, "display": "Filtered History Prompt"}` + "\n"
+	require.NoError(t, os.WriteFile(
+		filepath.Join(env.antigravityCLIDir, "history.jsonl"),
+		[]byte(history), 0o644,
+	))
 
-	dbPath := filepath.Join(convDir, uuid+".db")
-	require.NoError(t, os.WriteFile(dbPath, []byte("not a sqlite database"), 0o644))
+	malformedDBPath := filepath.Join(convDir, malformedUUID+".db")
+	require.NoError(t, os.WriteFile(malformedDBPath, []byte("not a sqlite database"), 0o644))
+	filteredDBPath := filepath.Join(convDir, filteredUUID+".db")
+	createAntigravityCLIUndisplayableStepDB(t, filteredDBPath)
 
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 1,
-		Synced:        1,
+		TotalSessions: 2,
+		Synced:        2,
 		Skipped:       0,
 	})
 
-	assertSessionMessageCount(t, env.db, sessionID, 1)
-	msgs := fetchMessages(t, env.db, sessionID)
+	assertSessionMessageCount(t, env.db, malformedSessionID, 1)
+	msgs := fetchMessages(t, env.db, malformedSessionID)
 	require.Len(t, msgs, 1)
 	assert.Equal(t, "History Prompt", msgs[0].Content)
-	assert.Less(t, env.db.GetSessionDataVersion(sessionID), db.CurrentDataVersion(),
+	assert.Less(t, env.db.GetSessionDataVersion(malformedSessionID), db.CurrentDataVersion(),
 		"degraded DB fallback should stay stale so unchanged syncs retry")
+	assertSessionMessageCount(t, env.db, filteredSessionID, 1)
+	msgs = fetchMessages(t, env.db, filteredSessionID)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "Filtered History Prompt", msgs[0].Content)
+	assert.Less(t, env.db.GetSessionDataVersion(filteredSessionID), db.CurrentDataVersion(),
+		"DB fallback after dropping all raw steps should stay stale so unchanged syncs retry")
 
-	require.NoError(t, env.db.SetSessionDataVersion(sessionID, db.CurrentDataVersion()))
+	require.NoError(t, env.db.SetSessionDataVersion(malformedSessionID, db.CurrentDataVersion()))
+	require.NoError(t, env.db.SetSessionDataVersion(filteredSessionID, db.CurrentDataVersion()))
 	require.NoError(t, env.db.ResetAllMtimes(), "force fallback rewrite")
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 1,
-		Synced:        1,
+		TotalSessions: 2,
+		Synced:        2,
 		Skipped:       0,
 	})
-	assert.Less(t, env.db.GetSessionDataVersion(sessionID), db.CurrentDataVersion(),
+	assert.Less(t, env.db.GetSessionDataVersion(malformedSessionID), db.CurrentDataVersion(),
 		"DB decode fallback should demote previously current rows")
+	assert.Less(t, env.db.GetSessionDataVersion(filteredSessionID), db.CurrentDataVersion(),
+		"DB fallback after dropping all raw steps should demote previously current rows")
 
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 1,
-		Synced:        1,
+		TotalSessions: 2,
+		Synced:        2,
 		Skipped:       0,
 	})
-	assert.Less(t, env.db.GetSessionDataVersion(sessionID), db.CurrentDataVersion(),
+	assert.Less(t, env.db.GetSessionDataVersion(malformedSessionID), db.CurrentDataVersion(),
 		"unchanged DB decode fallback should keep retrying")
+	assert.Less(t, env.db.GetSessionDataVersion(filteredSessionID), db.CurrentDataVersion(),
+		"unchanged DB fallback after dropping all raw steps should keep retrying")
 }
 
 func TestSyncEngineAntigravityCLI_NeedsRetryReplacesCurrentMessages(t *testing.T) {
@@ -409,53 +389,6 @@ func TestSyncEngineAntigravityCLI_NeedsRetryReplacesCurrentMessages(t *testing.T
 	assert.Equal(t, "History Prompt", msgs[0].Content)
 	assert.Less(t, env.db.GetSessionDataVersion(sessionID), db.CurrentDataVersion(),
 		"retry fallback should be written before the row is demoted")
-}
-
-func TestSyncEngineAntigravityCLI_DBUndisplayableStepsFallbackRetries(t *testing.T) {
-	t.Parallel()
-	env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
-	uuid := "88888888-9999-aaaa-bbbb-cccccccccccc"
-	sessionID := "antigravity-cli:" + uuid
-
-	convDir := filepath.Join(env.antigravityCLIDir, "conversations")
-	require.NoError(t, os.MkdirAll(convDir, 0o755))
-
-	historyLine := `{"conversationId": "` + uuid + `", "workspace": "/home/user/workspace-db-filtered", "timestamp": 1716244800000, "display": "History Prompt"}` + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(env.antigravityCLIDir, "history.jsonl"), []byte(historyLine), 0o644))
-
-	dbPath := filepath.Join(convDir, uuid+".db")
-	createAntigravityCLIUndisplayableStepDB(t, dbPath)
-
-	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 1,
-		Synced:        1,
-		Skipped:       0,
-	})
-
-	assertSessionMessageCount(t, env.db, sessionID, 1)
-	msgs := fetchMessages(t, env.db, sessionID)
-	require.Len(t, msgs, 1)
-	assert.Equal(t, "History Prompt", msgs[0].Content)
-	assert.Less(t, env.db.GetSessionDataVersion(sessionID), db.CurrentDataVersion(),
-		"DB fallback after dropping all raw steps should stay stale so unchanged syncs retry")
-
-	require.NoError(t, env.db.SetSessionDataVersion(sessionID, db.CurrentDataVersion()))
-	require.NoError(t, env.db.ResetAllMtimes(), "force fallback rewrite")
-	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 1,
-		Synced:        1,
-		Skipped:       0,
-	})
-	assert.Less(t, env.db.GetSessionDataVersion(sessionID), db.CurrentDataVersion(),
-		"DB fallback after dropping all raw steps should demote previously current rows")
-
-	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 1,
-		Synced:        1,
-		Skipped:       0,
-	})
-	assert.Less(t, env.db.GetSessionDataVersion(sessionID), db.CurrentDataVersion(),
-		"unchanged DB fallback after dropping all raw steps should keep retrying")
 }
 
 func TestSyncSingleSessionAntigravityCLI_DBDecodeFallbackRetries(t *testing.T) {
@@ -719,6 +652,24 @@ func createAntigravityCLIDisplayStepDB(t *testing.T, path, prompt string) {
 	defer conn.Close()
 
 	insertAntigravityCLIStep(t, conn, 0, 14, prompt)
+}
+
+func antigravityCLISingleUserTrajectory(uuid, prompt string) string {
+	return fmt.Sprintf(`{
+		"trajectoryId": %q,
+		"steps": [
+			{
+				"type": "CORTEX_STEP_TYPE_USER_INPUT",
+				"status": "STATUS_COMPLETED",
+				"metadata": {
+					"createdAt": "2026-05-20T22:45:00Z"
+				},
+				"userInput": {
+					"userResponse": %q
+				}
+			}
+		]
+	}`, uuid, prompt)
 }
 
 func copyAntigravityCLITestSchemaTemplate(t *testing.T, path string) {
