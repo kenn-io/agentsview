@@ -487,7 +487,7 @@ func (s *Store) GetSessionVersion(id string) (int, int64, bool) {
 	var fileMtime sql.NullInt64
 	var fileHash sql.NullString
 	var updated any
-	err := s.duck.QueryRow(
+	err := s.queryRowContext(context.Background(),
 		`SELECT message_count, file_mtime, file_hash,
 		        COALESCE(local_modified_at, ended_at, started_at, created_at)
 		 FROM sessions WHERE id = ?`,

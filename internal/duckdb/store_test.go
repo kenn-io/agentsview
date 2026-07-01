@@ -4,11 +4,15 @@ package duckdb
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +23,88 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type sessionVersionProbeDriver struct{}
+
+type sessionVersionProbeConn struct{}
+
+type sessionVersionProbeRows struct {
+	columns []string
+	values  [][]driver.Value
+	next    int
+}
+
+var sessionVersionProbeRegisterOnce sync.Once
+
+func newSessionVersionProbeStore(t *testing.T) *Store {
+	t.Helper()
+	sessionVersionProbeRegisterOnce.Do(func() {
+		sql.Register("agentsview_session_version_probe", sessionVersionProbeDriver{})
+	})
+	duck, err := sql.Open("agentsview_session_version_probe", t.Name())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, duck.Close()) })
+	return &Store{
+		duck:           duck,
+		connectionKind: duckDBQuackClientConnection,
+	}
+}
+
+func (sessionVersionProbeDriver) Open(string) (driver.Conn, error) {
+	return sessionVersionProbeConn{}, nil
+}
+
+func (sessionVersionProbeConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("prepare not implemented")
+}
+
+func (sessionVersionProbeConn) Close() error { return nil }
+
+func (sessionVersionProbeConn) Begin() (driver.Tx, error) {
+	return nil, errors.New("begin not implemented")
+}
+
+func (sessionVersionProbeConn) QueryContext(
+	_ context.Context, query string, args []driver.NamedValue,
+) (driver.Rows, error) {
+	if !strings.Contains(query, quackAttachmentName+".query(?)") {
+		return nil, errors.New("direct session version query should not be used")
+	}
+	if len(args) != 1 {
+		return nil, fmt.Errorf("remote query got %d args, want 1", len(args))
+	}
+	sqlText, ok := args[0].Value.(string)
+	if !ok {
+		return nil, fmt.Errorf("remote query arg has type %T", args[0].Value)
+	}
+	if !strings.Contains(sqlText, "FROM sessions WHERE id") {
+		return nil, fmt.Errorf("unexpected remote query: %s", sqlText)
+	}
+	return &sessionVersionProbeRows{
+		columns: []string{
+			"message_count", "file_mtime", "file_hash", "updated_at",
+		},
+		values: [][]driver.Value{{
+			int64(7), int64(123), "hash",
+			"2026-01-10T00:00:00Z",
+		}},
+	}, nil
+}
+
+func (r *sessionVersionProbeRows) Columns() []string {
+	return r.columns
+}
+
+func (r *sessionVersionProbeRows) Close() error { return nil }
+
+func (r *sessionVersionProbeRows) Next(dest []driver.Value) error {
+	if r.next >= len(r.values) {
+		return io.EOF
+	}
+	copy(dest, r.values[r.next])
+	r.next++
+	return nil
+}
 
 func TestDecodeCursorClearsLegacyTotal(t *testing.T) {
 	store := &Store{}
@@ -35,6 +121,21 @@ func TestDecodeCursorClearsLegacyTotal(t *testing.T) {
 
 	assert.Equal(t, "legacy-cursor", got.ID)
 	assert.Equal(t, 0, got.Total)
+}
+
+func TestQuackStoreGetSessionVersionUsesRemoteQuery(t *testing.T) {
+	store := newSessionVersionProbeStore(t)
+
+	count, marker, ok := store.GetSessionVersion("quoted ' session")
+
+	require.True(t, ok)
+	assert.Equal(t, 7, count)
+	assert.Equal(t,
+		db.SessionVersionMarker(
+			"123", "hash", "2026-01-10T00:00:00Z",
+		),
+		marker,
+	)
 }
 
 func TestStoreReadsSessionsMessagesAndMetadata(t *testing.T) {
