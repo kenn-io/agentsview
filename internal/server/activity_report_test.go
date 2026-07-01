@@ -70,6 +70,7 @@ func seedActivityReportFixture(t *testing.T, te *testEnv) {
 }
 
 func TestActivityReportEndpoint_Day(t *testing.T) {
+	t.Parallel()
 	te := setup(t)
 	seedActivityReportFixture(t, te)
 	w := te.get(t, buildPathURL("/api/v1/activity/report", map[string]string{

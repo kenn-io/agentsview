@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 )
 
@@ -442,7 +443,8 @@ func TestSyncEngineAntigravityCLI_DBUndisplayableStepsFallbackRetries(t *testing
 }
 
 func TestSyncSingleSessionAntigravityCLI_DBDecodeFallbackRetries(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
 	uuid := "99999999-aaaa-bbbb-cccc-dddddddddddd"
 	sessionID := "antigravity-cli:" + uuid
 
@@ -506,6 +508,7 @@ func writeAntigravityCLIInferredProjectFixture(
 }
 
 func TestSyncEngineAntigravityCLI_InferredProjectWithoutConversationID(t *testing.T) {
+	t.Parallel()
 	base := time.UnixMilli(1716244800000)
 	// Display differs from the stored prompt in case and extra
 	// leading/trailing/internal whitespace; only the normalized
@@ -531,7 +534,8 @@ func TestSyncEngineAntigravityCLI_InferredProjectWithoutConversationID(t *testin
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			env := setupTestEnv(t)
+			t.Parallel()
+			env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
 			uuid := "ab12cd34-1111-2222-3333-444455556666"
 			sessionID := "antigravity-cli:" + uuid
 

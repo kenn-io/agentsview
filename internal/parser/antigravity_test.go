@@ -3372,6 +3372,7 @@ func TestDecodeAntigravityStepToolOnlyAssistantStep(t *testing.T) {
 }
 
 func TestAntigravityCLITranscriptFidelity(t *testing.T) {
+	t.Parallel()
 	t.Run("covering sidecar is full", func(t *testing.T) {
 		root := t.TempDir()
 		id := "11111111-2222-3333-4444-555555555555"

@@ -218,6 +218,8 @@ func setupFocusedTestEnv(t *testing.T, agents ...parser.AgentType) *testEnv {
 			env.piebaldDir = dir
 		case parser.AgentKiro:
 			env.kiroDir = dir
+		case parser.AgentAntigravityCLI:
+			env.antigravityCLIDir = dir
 		default:
 			t.Fatalf("unsupported focused test fixture for %s", agent)
 		}
@@ -5449,7 +5451,8 @@ func TestSyncPathsOpenCodeStorageMissingPartDirPreservesArchive(
 func TestSyncSingleSessionOpenCodeStorageMissingPartPreservesArchive(
 	t *testing.T,
 ) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
 	sessionID := "oc-missing-part-single"
@@ -8220,7 +8223,8 @@ func TestIncrementalSync_ClaudeSameSizeFileReplaceUsesFullParse(t *testing.T) {
 }
 
 func TestIncrementalSync_ClaudeSameSizeInPlaceRewriteClearsStaleRows(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	original := testjsonl.JoinJSONL(
 		testjsonl.ClaudeUserJSON("first", tsZero),
@@ -8268,7 +8272,8 @@ func TestIncrementalSync_ClaudeSameSizeInPlaceRewriteClearsStaleRows(t *testing.
 // so the chunk merge collapses both snapshots into one assistant
 // message instead of two.
 func TestIncrementalSync_ClaudeMidStreamSplitFallsBackToFullParse(t *testing.T) {
-	env := setupTestEnv(t)
+	t.Parallel()
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	first, err := json.Marshal(map[string]any{
 		"type":      "assistant",

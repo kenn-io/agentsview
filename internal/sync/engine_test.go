@@ -3996,6 +3996,7 @@ func TestEngine_SyncPathsReasonixMalformedMetadataPreservesSessionFields(t *test
 }
 
 func TestEngine_SyncPathsReasonixMalformedMetadataRecoveryUpdatesSession(t *testing.T) {
+	t.Parallel()
 	db := openTestDB(t)
 	reasonixDir := t.TempDir()
 	engine := NewEngine(db, EngineConfig{

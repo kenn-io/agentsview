@@ -1526,6 +1526,7 @@ func TestSidebarIndexPaginatesByDescendantFreshness(t *testing.T) {
 }
 
 func TestSidebarIndexValidatesParams(t *testing.T) {
+	t.Parallel()
 	tests := []string{
 		"/api/v1/sessions/sidebar-index?min_messages=bad",
 		"/api/v1/sessions/sidebar-index?max_messages=bad",
@@ -1537,6 +1538,7 @@ func TestSidebarIndexValidatesParams(t *testing.T) {
 
 	for _, path := range tests {
 		t.Run(path, func(t *testing.T) {
+			t.Parallel()
 			te := setup(t)
 			w := te.get(t, path)
 			assertStatus(t, w, http.StatusBadRequest)
@@ -3373,6 +3375,7 @@ func TestUploadSession_InfersRelationshipType(t *testing.T) {
 }
 
 func TestUploadSession_Errors(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		filename string
@@ -3410,6 +3413,7 @@ func TestUploadSession_Errors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			te := setup(t)
 			w := te.upload(t,
 				tt.filename, tt.content, tt.query)

@@ -342,6 +342,7 @@ func TestHumaSyncSessionRouteIsNotWriteTimeoutWrapped(t *testing.T) {
 }
 
 func TestHumaTriggerSyncLocalNoSyncResyncsStaleDB(t *testing.T) {
+	t.Parallel()
 	f := newSyncRouteFixture(t, withStaleDB())
 	f.writeClaudeSession(t, "proj/session.jsonl", "stale no sync route")
 	require.True(t, f.db.NeedsResync())
