@@ -34,7 +34,7 @@ type serveReplacementDecision struct {
 	Reason           string
 }
 
-var foregroundReplacementLaunchLocks sync.Map
+var foregroundServeLaunchLocks sync.Map
 
 func prepareForegroundServeDaemon(
 	cfg *config.Config, opts serveReplacementOptions,
@@ -46,7 +46,17 @@ func prepareForegroundServeDaemon(
 	decision := decideServeDaemonReplacement(*cfg, opts)
 	switch decision.Action {
 	case serveReplacementNone:
-		return true, noRelease, nil
+		if runningAsBackgroundChild() {
+			return true, noRelease, nil
+		}
+		// A normal foreground start marks the daemon as starting after this
+		// function returns. Hold the launch lock first so background
+		// replacement cannot stop an incumbent during that handoff.
+		releaseLaunchLock, err := acquireForegroundServeLaunchLock(*cfg)
+		if err != nil {
+			return false, noRelease, err
+		}
+		return true, releaseLaunchLock, nil
 	case serveReplacementUseExisting:
 		rt := decision.Runtime
 		if rt != nil {
@@ -62,7 +72,7 @@ func prepareForegroundServeDaemon(
 		); err != nil {
 			return false, noRelease, err
 		}
-		releaseReplacementLock, err := acquireForegroundReplacementLock(*cfg)
+		releaseReplacementLock, err := acquireForegroundServeLaunchLock(*cfg)
 		if err != nil {
 			return false, noRelease, err
 		}
@@ -100,7 +110,7 @@ func prepareForegroundServeDaemon(
 	}
 }
 
-func acquireForegroundReplacementLock(cfg config.Config) (func(), error) {
+func acquireForegroundServeLaunchLock(cfg config.Config) (func(), error) {
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("creating data dir: %w", err)
 	}
@@ -112,15 +122,15 @@ func acquireForegroundReplacementLock(cfg config.Config) (func(), error) {
 		)
 	}
 	path := backgroundLaunchLockPath(cfg.DataDir)
-	foregroundReplacementLaunchLocks.Store(path, struct{}{})
+	foregroundServeLaunchLocks.Store(path, struct{}{})
 	return sync.OnceFunc(func() {
-		foregroundReplacementLaunchLocks.Delete(path)
+		foregroundServeLaunchLocks.Delete(path)
 		_ = lock.Unlock()
 	}), nil
 }
 
-func ownsForegroundReplacementLaunchLock(dataDir string) bool {
-	_, ok := foregroundReplacementLaunchLocks.Load(
+func ownsForegroundServeLaunchLock(dataDir string) bool {
+	_, ok := foregroundServeLaunchLocks.Load(
 		backgroundLaunchLockPath(dataDir),
 	)
 	return ok

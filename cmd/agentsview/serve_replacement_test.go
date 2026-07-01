@@ -215,6 +215,68 @@ func TestPrepareForegroundServeDaemonRefusesReplacementWhenBackgroundLaunchHeld(
 	assert.NotNil(t, FindDaemonRuntime(dir))
 }
 
+func TestPrepareForegroundServeDaemonRefusesFreshStartWhenBackgroundLaunchHeld(
+	t *testing.T,
+) {
+	dir := runtimeTestDir(t)
+	launchLock, ok := acquireBackgroundLaunchLock(dir)
+	require.True(t, ok)
+	t.Cleanup(func() { require.NoError(t, launchLock.Unlock()) })
+
+	cont, release, err := prepareForegroundServeDaemon(
+		&config.Config{DataDir: dir}, serveReplacementOptions{},
+	)
+	t.Cleanup(release)
+
+	assert.False(t, cont)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "background")
+	assert.False(t, IsDaemonStarting(dir))
+}
+
+func TestPrepareForegroundServeDaemonKeepsLaunchLockForFreshStart(
+	t *testing.T,
+) {
+	dir := runtimeTestDir(t)
+
+	cont, release, err := prepareForegroundServeDaemon(
+		&config.Config{DataDir: dir}, serveReplacementOptions{},
+	)
+	t.Cleanup(release)
+
+	require.NoError(t, err)
+	assert.True(t, cont)
+	launchLock, ok := acquireBackgroundLaunchLock(dir)
+	if ok {
+		require.NoError(t, launchLock.Unlock())
+	}
+	assert.False(t, ok,
+		"foreground startup must hold launch lock until startup handoff")
+
+	release()
+	launchLock, ok = acquireBackgroundLaunchLock(dir)
+	require.True(t, ok)
+	require.NoError(t, launchLock.Unlock())
+}
+
+func TestPrepareForegroundServeDaemonBackgroundChildUsesParentLaunchLock(
+	t *testing.T,
+) {
+	dir := runtimeTestDir(t)
+	launchLock, ok := acquireBackgroundLaunchLock(dir)
+	require.True(t, ok)
+	t.Cleanup(func() { require.NoError(t, launchLock.Unlock()) })
+	t.Setenv(backgroundChildEnvVar, "1")
+
+	cont, release, err := prepareForegroundServeDaemon(
+		&config.Config{DataDir: dir}, serveReplacementOptions{},
+	)
+	t.Cleanup(release)
+
+	require.NoError(t, err)
+	assert.True(t, cont)
+}
+
 func TestPrepareForegroundServeDaemonStopsUnderBackgroundLaunchLock(
 	t *testing.T,
 ) {
