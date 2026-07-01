@@ -317,13 +317,7 @@ func (s multiSessionContainerSourceSet) changedPathTombstones(
 func multiSessionMatchOwnsContainer(
 	match multiSessionMatch,
 ) bool {
-	base := filepath.Base(match.Container)
-	if match.MemberID == base {
-		return true
-	}
-	return isVisualStudioCopilotVS2026SessionID(match.MemberID) &&
-		isVisualStudioCopilotVS2026SessionID(base) &&
-		strings.EqualFold(match.MemberID, base)
+	return multiSessionMemberOwnsContainer(match.MemberID, match.Container)
 }
 
 func (s multiSessionContainerSourceSet) FindSource(
@@ -478,7 +472,20 @@ func (s multiSessionContainerSourceSet) skipOutcome(src multiSessionSource) Pars
 }
 
 func multiSessionSourceOwnsContainer(src multiSessionSource) bool {
-	return src.MemberID != "" && src.MemberID == filepath.Base(src.Container)
+	return multiSessionMemberOwnsContainer(src.MemberID, src.Container)
+}
+
+func multiSessionMemberOwnsContainer(memberID, container string) bool {
+	if memberID == "" {
+		return false
+	}
+	base := filepath.Base(container)
+	if memberID == base {
+		return true
+	}
+	return isVisualStudioCopilotVS2026SessionID(memberID) &&
+		isVisualStudioCopilotVS2026SessionID(base) &&
+		strings.EqualFold(memberID, base)
 }
 
 func (s multiSessionContainerSourceSet) memberPresent(src multiSessionSource) bool {
