@@ -64,6 +64,7 @@ export interface Session {
   health_score_basis?: string[] | null;
   health_penalties?: Record<string, number> | null;
   transcript_fidelity?: string;
+  parser_malformed_lines?: number;
   created_at: string;
 }
 
