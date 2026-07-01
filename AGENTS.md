@@ -43,6 +43,15 @@ Instructions for autonomous coding agents working in this repository.
   different implementation, explain why and keep the observable behavior the
   same.
 
+## Localization
+
+- Keep frontend message catalogs synchronized. When adding, removing, or
+  renaming user-facing message keys in `frontend/messages/*.json`, update
+  every locale listed in `frontend/project.inlang/settings.json` in the same
+  turn and keep the key sets identical across locales.
+- After message catalog or localized component changes, run
+  `npm run i18n:compile` and `npm run check` from `frontend/` when practical.
+
 ## Test Style
 
 - Go tests use `github.com/stretchr/testify` for assertions. Use `require.X`
