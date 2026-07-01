@@ -599,8 +599,7 @@ func ensureSchema(ctx context.Context, db *sql.DB, opts schemaOptions) error {
 		return err
 	}
 
-	recordUsageDedupIndexMigration := false
-	recordUsageDedupIndexMigration, err = migrateUsageEventsDedupIndex(ctx, db)
+	recordUsageDedupIndexMigration, err := migrateUsageEventsDedupIndex(ctx, db)
 	if err != nil {
 		return err
 	}
