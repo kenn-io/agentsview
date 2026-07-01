@@ -1064,6 +1064,8 @@ func TestParseDiffShelleyDBErrorAttributed(t *testing.T) {
 // being silently dropped (unstored) or misclassified as presence
 // drift (stored), so --fail-on-change stays trustworthy.
 func TestParseDiffKiroSQLitePerSessionError(t *testing.T) {
+	t.Parallel()
+
 	t.Run("stored session turned malformed", func(t *testing.T) {
 		env := setupTestEnv(t)
 		ks := createKiroSQLiteDB(t, env.kiroDir)
@@ -1140,6 +1142,8 @@ func TestParseDiffKiroSQLitePerSessionError(t *testing.T) {
 // being silently dropped, so --fail-on-change stays trustworthy even
 // for a session that was never stored.
 func TestParseDiffKiloSQLitePerSessionError(t *testing.T) {
+	t.Parallel()
+
 	env := setupTestEnv(t)
 	ks := createKiloDB(t, env.kiloDir)
 	ks.addProject(t, "proj-1", "/home/user/code/kilo-app")

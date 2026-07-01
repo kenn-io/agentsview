@@ -234,6 +234,8 @@ func TestSyncEnginePiebaldBulkSync(t *testing.T) {
 }
 
 func TestSyncSingleSessionPiebald(t *testing.T) {
+	t.Parallel()
+
 	env := setupTestEnv(t)
 	piebald := createPiebaldDB(t, env.piebaldDir)
 	piebald.addChat(t, 7, "Single Piebald", "One chat.", "One answer.", "2026-05-01T10:05:00Z")

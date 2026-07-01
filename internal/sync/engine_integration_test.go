@@ -3015,6 +3015,8 @@ func TestSyncSingleSessionCodexPreservesStoredArchivedDuplicate(t *testing.T) {
 }
 
 func TestSyncPathsGeminiRejectsWrongStructure(t *testing.T) {
+	t.Parallel()
+
 	env := setupTestEnv(t)
 
 	sessionID := "gem-wrong-struct"
@@ -4105,6 +4107,8 @@ func TestSyncAllOpenCodeSQLiteReparsesStaleDataVersion(
 func TestSyncPathsOpenCodeStorageChildRetryWithoutSessionMtimeChange(
 	t *testing.T,
 ) {
+	t.Parallel()
+
 	env := setupTestEnv(t)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
@@ -4160,6 +4164,8 @@ func TestSyncPathsOpenCodeStorageChildRetryWithoutSessionMtimeChange(
 func TestSyncPathsOpenCodeStorageChildUpdateAdvancesSessionMtime(
 	t *testing.T,
 ) {
+	t.Parallel()
+
 	env := setupTestEnv(t)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
@@ -4824,6 +4830,8 @@ func TestKiloPreservesStorageArchiveAgainstSQLiteFallback(t *testing.T) {
 }
 
 func TestResyncAllAllowsKiloSQLiteOnlySessions(t *testing.T) {
+	t.Parallel()
+
 	env := setupTestEnv(t)
 	sqlite := createKiloDB(t, env.kiloDir)
 	sqlite.addProject(t, "proj-1", "/home/user/code/kilo-app")
@@ -6625,6 +6633,8 @@ func TestResyncAllAbortsOnEmptyDiscovery(t *testing.T) {
 // The empty-discovery guard must not abort when OpenCode
 // sessions are synced.
 func TestResyncAllOpenCodeOnly(t *testing.T) {
+	t.Parallel()
+
 	env := setupTestEnv(t)
 
 	oc := createOpenCodeDB(t, env.opencodeDir)
@@ -6679,6 +6689,8 @@ func TestResyncAllOpenCodeOnly(t *testing.T) {
 // sessions do not trip the empty-discovery guard simply because
 // they are DB-backed rather than JSONL-backed.
 func TestResyncAllKiroSQLiteOnly(t *testing.T) {
+	t.Parallel()
+
 	env := setupTestEnv(t)
 	ks := createKiroSQLiteDB(t, env.kiroDir)
 	ks.addSession(
@@ -6811,6 +6823,8 @@ func TestResyncAllOpenCodeStorageArchivePreservesStaleSQLiteFallback(
 func TestResyncAllKiloStorageArchivePreservesStaleSQLiteFallback(
 	t *testing.T,
 ) {
+	t.Parallel()
+
 	env := setupTestEnv(t)
 	storage := createOpenCodeStorageFixture(t, env.kiloDir)
 
@@ -6871,6 +6885,8 @@ func TestResyncAllKiloStorageArchivePreservesStaleSQLiteFallback(
 func TestResyncAllOpenCodeStorageArchiveAllowsNewerSQLiteFallback(
 	t *testing.T,
 ) {
+	t.Parallel()
+
 	env := setupTestEnv(t)
 	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
 
@@ -7189,6 +7205,7 @@ func TestSyncPathsClassifyFallsThrough(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
+	t.Parallel()
 
 	// Use a shared parent dir so both agent roots overlap:
 	// cursorDir = parent/cursor
