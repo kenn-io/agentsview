@@ -24,6 +24,8 @@ const largeSessionFixtureToken = "ftslargefixture"
 const largeSessionNeighborPrefix = "large-session-neighbor"
 
 var (
+	largeSessionTemplateBuildMu sync.Mutex
+
 	largeSessionOnlyOnce sync.Once
 	largeSessionOnlyDir  string
 	largeSessionOnlyPath string
@@ -85,6 +87,8 @@ func buildLargeSessionFixtureTemplate(
 	t *testing.T, withFKPoison bool,
 ) (string, string) {
 	t.Helper()
+	largeSessionTemplateBuildMu.Lock()
+	defer largeSessionTemplateBuildMu.Unlock()
 
 	dir, err := os.MkdirTemp("", "agentsview-large-session-*")
 	require.NoError(t, err, "create large-session fixture dir")
@@ -101,7 +105,7 @@ func buildLargeSessionFixtureTemplate(
 		seedCrossSessionFKGrowth(t, d, largeSessionNeighborPrefix)
 		poisonMessagesDeleteTrigger(t, d)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), largeSessionPerfCeiling)
 	defer cancel()
 	require.NoError(t, d.CheckpointWALTruncate(ctx),
 		"checkpoint large-session template")
