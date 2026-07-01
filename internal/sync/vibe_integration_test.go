@@ -303,7 +303,7 @@ func TestSyncSingleSessionVibeMetaPromotionRemovesFallbackID(t *testing.T) {
 	assert.Nil(t, gone, "stale fallback session row must be deleted")
 }
 
-func TestSyncVibeMetaPromotionHonorsDeletedFallbackID(t *testing.T) {
+func TestSyncVibeMetaPromotionHonorsHiddenFallbackIDs(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -317,90 +317,82 @@ func TestSyncVibeMetaPromotionHonorsDeletedFallbackID(t *testing.T) {
 		Machine: "local",
 	})
 
-	dirName := "session_20260616_083518_abc123"
-	sessionDir := filepath.Join(vibeDir, dirName)
-	require.NoError(t, os.MkdirAll(sessionDir, 0o755), "mkdir vibe session dir")
-	messagesPath := filepath.Join(sessionDir, "messages.jsonl")
-	require.NoError(t, os.WriteFile(
-		messagesPath,
-		[]byte(`{"role":"user","content":"hello vibe"}`+"\n"),
-		0o644,
-	), "write messages.jsonl")
-
-	fallbackID := "vibe:" + dirName
-	engine.SyncPaths([]string{messagesPath})
-	assertSessionState(t, testDB, fallbackID, nil)
-	require.NoError(t, testDB.DeleteSession(fallbackID), "delete fallback")
-	assert.True(t, testDB.IsSessionExcluded(fallbackID),
-		"fallback ID should be permanently excluded")
-
-	sessionID := "abc123def-0000-0000-0000-000000000000"
-	metaPath := filepath.Join(sessionDir, "meta.json")
-	require.NoError(t, os.WriteFile(
-		metaPath,
-		[]byte(`{"session_id":"`+sessionID+`","title":"Promoted"}`+"\n"),
-		0o644,
-	), "write meta.json")
-	future := time.Now().Add(time.Hour)
-	require.NoError(t, os.Chtimes(metaPath, future, future))
-
-	engine.SyncPaths([]string{messagesPath})
-
-	canonical, err := testDB.GetSession(context.Background(), "vibe:"+sessionID)
-	require.NoError(t, err)
-	assert.Nil(t, canonical,
-		"promoted canonical ID must not resurrect deleted fallback session")
-}
-
-func TestSyncVibeMetaPromotionHonorsTrashedFallbackID(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test")
+	tests := []struct {
+		name      string
+		dirName   string
+		sessionID string
+		hide      func(*testing.T, string)
+		wantMsg   string
+	}{
+		{
+			name:      "deleted fallback",
+			dirName:   "session_20260616_083518_deleted",
+			sessionID: "abc123def-0000-0000-0000-000000000001",
+			hide: func(t *testing.T, fallbackID string) {
+				t.Helper()
+				require.NoError(t, testDB.DeleteSession(fallbackID),
+					"delete fallback")
+				assert.True(t, testDB.IsSessionExcluded(fallbackID),
+					"fallback ID should be permanently excluded")
+			},
+			wantMsg: "promoted canonical ID must not resurrect deleted fallback session",
+		},
+		{
+			name:      "trashed fallback",
+			dirName:   "session_20260616_083518_trashed",
+			sessionID: "abc123def-0000-0000-0000-000000000002",
+			hide: func(t *testing.T, fallbackID string) {
+				t.Helper()
+				require.NoError(t, testDB.SoftDeleteSession(fallbackID),
+					"trash fallback")
+				trashed, err := testDB.GetSessionFull(
+					context.Background(), fallbackID,
+				)
+				require.NoError(t, err)
+				require.NotNil(t, trashed, "trashed fallback row")
+				require.NotNil(t, trashed.DeletedAt,
+					"fallback should be trashed")
+			},
+			wantMsg: "promoted canonical ID must not resurrect trashed fallback session",
+		},
 	}
 
-	vibeDir := t.TempDir()
-	testDB := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(testDB, sync.EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentVibe: {vibeDir},
-		},
-		Machine: "local",
-	})
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sessionDir := filepath.Join(vibeDir, tt.dirName)
+			require.NoError(t, os.MkdirAll(sessionDir, 0o755),
+				"mkdir vibe session dir")
+			messagesPath := filepath.Join(sessionDir, "messages.jsonl")
+			require.NoError(t, os.WriteFile(
+				messagesPath,
+				[]byte(`{"role":"user","content":"hello vibe"}`+"\n"),
+				0o644,
+			), "write messages.jsonl")
 
-	dirName := "session_20260616_083518_abc123"
-	sessionDir := filepath.Join(vibeDir, dirName)
-	require.NoError(t, os.MkdirAll(sessionDir, 0o755), "mkdir vibe session dir")
-	messagesPath := filepath.Join(sessionDir, "messages.jsonl")
-	require.NoError(t, os.WriteFile(
-		messagesPath,
-		[]byte(`{"role":"user","content":"hello vibe"}`+"\n"),
-		0o644,
-	), "write messages.jsonl")
+			fallbackID := "vibe:" + tt.dirName
+			engine.SyncPaths([]string{messagesPath})
+			assertSessionState(t, testDB, fallbackID, nil)
+			tt.hide(t, fallbackID)
 
-	fallbackID := "vibe:" + dirName
-	engine.SyncPaths([]string{messagesPath})
-	assertSessionState(t, testDB, fallbackID, nil)
-	require.NoError(t, testDB.SoftDeleteSession(fallbackID), "trash fallback")
-	trashed, err := testDB.GetSessionFull(context.Background(), fallbackID)
-	require.NoError(t, err)
-	require.NotNil(t, trashed, "trashed fallback row")
-	require.NotNil(t, trashed.DeletedAt, "fallback should be trashed")
+			metaPath := filepath.Join(sessionDir, "meta.json")
+			require.NoError(t, os.WriteFile(
+				metaPath,
+				[]byte(`{"session_id":"`+tt.sessionID+
+					`","title":"Promoted"}`+"\n"),
+				0o644,
+			), "write meta.json")
+			future := time.Now().Add(time.Duration(i+1) * time.Hour)
+			require.NoError(t, os.Chtimes(metaPath, future, future))
 
-	sessionID := "abc123def-0000-0000-0000-000000000000"
-	metaPath := filepath.Join(sessionDir, "meta.json")
-	require.NoError(t, os.WriteFile(
-		metaPath,
-		[]byte(`{"session_id":"`+sessionID+`","title":"Promoted"}`+"\n"),
-		0o644,
-	), "write meta.json")
-	future := time.Now().Add(time.Hour)
-	require.NoError(t, os.Chtimes(metaPath, future, future))
+			engine.SyncPaths([]string{messagesPath})
 
-	engine.SyncPaths([]string{messagesPath})
-
-	canonical, err := testDB.GetSession(context.Background(), "vibe:"+sessionID)
-	require.NoError(t, err)
-	assert.Nil(t, canonical,
-		"promoted canonical ID must not resurrect trashed fallback session")
+			canonical, err := testDB.GetSession(
+				context.Background(), "vibe:"+tt.sessionID,
+			)
+			require.NoError(t, err)
+			assert.Nil(t, canonical, tt.wantMsg)
+		})
+	}
 }
 
 func TestSyncVibeRemotePromotionIgnoresDeletedLocalFallbackID(t *testing.T) {
@@ -523,7 +515,7 @@ func TestSyncVibeRemotePromotionIgnoresTrashedLocalFallbackID(t *testing.T) {
 	})
 }
 
-func TestSyncVibeMissingMetaHonorsDeletedCanonicalID(t *testing.T) {
+func TestSyncVibeMissingMetaHonorsHiddenCanonicalIDs(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -537,72 +529,71 @@ func TestSyncVibeMissingMetaHonorsDeletedCanonicalID(t *testing.T) {
 		Machine: "local",
 	})
 
-	dirName := "session_20260616_083518_abc123"
-	sessionID := "abc123def-0000-0000-0000-000000000000"
-	messagesPath, metaPath := writeVibeSyncFixture(
-		t, vibeDir, dirName, sessionID, "Canonical",
-	)
-	canonicalID := "vibe:" + sessionID
-	fallbackID := "vibe:" + dirName
-
-	engine.SyncPaths([]string{messagesPath})
-	assertSessionState(t, testDB, canonicalID, nil)
-	require.NoError(t, testDB.DeleteSession(canonicalID), "delete canonical")
-	assert.True(t, testDB.IsSessionExcluded(canonicalID),
-		"canonical ID should be permanently excluded")
-
-	require.NoError(t, os.Remove(metaPath), "remove meta.json")
-	future := time.Now().Add(time.Hour)
-	require.NoError(t, os.Chtimes(messagesPath, future, future))
-
-	engine.SyncPaths([]string{messagesPath})
-
-	fallback, err := testDB.GetSession(context.Background(), fallbackID)
-	require.NoError(t, err)
-	assert.Nil(t, fallback,
-		"fallback ID must not resurrect deleted canonical session")
-}
-
-func TestSyncVibeMissingMetaHonorsTrashedCanonicalID(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test")
+	tests := []struct {
+		name      string
+		dirName   string
+		sessionID string
+		hide      func(*testing.T, string)
+		wantMsg   string
+	}{
+		{
+			name:      "deleted canonical",
+			dirName:   "session_20260616_083518_deleted_canonical",
+			sessionID: "abc123def-0000-0000-0000-000000000101",
+			hide: func(t *testing.T, canonicalID string) {
+				t.Helper()
+				require.NoError(t, testDB.DeleteSession(canonicalID),
+					"delete canonical")
+				assert.True(t, testDB.IsSessionExcluded(canonicalID),
+					"canonical ID should be permanently excluded")
+			},
+			wantMsg: "fallback ID must not resurrect deleted canonical session",
+		},
+		{
+			name:      "trashed canonical",
+			dirName:   "session_20260616_083518_trashed_canonical",
+			sessionID: "abc123def-0000-0000-0000-000000000102",
+			hide: func(t *testing.T, canonicalID string) {
+				t.Helper()
+				require.NoError(t, testDB.SoftDeleteSession(canonicalID),
+					"trash canonical")
+				trashed, err := testDB.GetSessionFull(
+					context.Background(), canonicalID,
+				)
+				require.NoError(t, err)
+				require.NotNil(t, trashed, "trashed canonical row")
+				require.NotNil(t, trashed.DeletedAt,
+					"canonical should be trashed")
+			},
+			wantMsg: "fallback ID must not resurrect trashed canonical session",
+		},
 	}
 
-	vibeDir := t.TempDir()
-	testDB := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(testDB, sync.EngineConfig{
-		AgentDirs: map[parser.AgentType][]string{
-			parser.AgentVibe: {vibeDir},
-		},
-		Machine: "local",
-	})
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			messagesPath, metaPath := writeVibeSyncFixture(
+				t, vibeDir, tt.dirName, tt.sessionID, "Canonical",
+			)
+			canonicalID := "vibe:" + tt.sessionID
+			fallbackID := "vibe:" + tt.dirName
 
-	dirName := "session_20260616_083518_abc123"
-	sessionID := "abc123def-0000-0000-0000-000000000000"
-	messagesPath, metaPath := writeVibeSyncFixture(
-		t, vibeDir, dirName, sessionID, "Canonical",
-	)
-	canonicalID := "vibe:" + sessionID
-	fallbackID := "vibe:" + dirName
+			engine.SyncPaths([]string{messagesPath})
+			assertSessionState(t, testDB, canonicalID, nil)
+			tt.hide(t, canonicalID)
 
-	engine.SyncPaths([]string{messagesPath})
-	assertSessionState(t, testDB, canonicalID, nil)
-	require.NoError(t, testDB.SoftDeleteSession(canonicalID), "trash canonical")
-	trashed, err := testDB.GetSessionFull(context.Background(), canonicalID)
-	require.NoError(t, err)
-	require.NotNil(t, trashed, "trashed canonical row")
-	require.NotNil(t, trashed.DeletedAt, "canonical should be trashed")
+			require.NoError(t, os.Remove(metaPath), "remove meta.json")
+			future := time.Now().Add(time.Duration(i+1) * time.Hour)
+			require.NoError(t, os.Chtimes(messagesPath, future, future))
 
-	require.NoError(t, os.Remove(metaPath), "remove meta.json")
-	future := time.Now().Add(time.Hour)
-	require.NoError(t, os.Chtimes(messagesPath, future, future))
+			engine.SyncPaths([]string{messagesPath})
 
-	engine.SyncPaths([]string{messagesPath})
-
-	fallback, err := testDB.GetSession(context.Background(), fallbackID)
-	require.NoError(t, err)
-	assert.Nil(t, fallback,
-		"fallback ID must not resurrect trashed canonical session")
+			fallback, err := testDB.GetSession(
+				context.Background(), fallbackID,
+			)
+			require.NoError(t, err)
+			assert.Nil(t, fallback, tt.wantMsg)
+		})
+	}
 }
 
 func TestSyncVibeMissingMetaKeepsTrashedFallbackID(t *testing.T) {
