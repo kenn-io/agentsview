@@ -446,8 +446,10 @@ func TestSessionGet_BareIDFindsPrefixed(t *testing.T) {
 
 func TestSessionList_JSONShape(t *testing.T) {
 	dataDir := newAgentDataDir(t)
-	seedSession(t, dataDir, "s-a", "proj")
-	seedSession(t, dataDir, "s-b", "proj")
+	seedSessionsWithOpts(t, dataDir,
+		sessionSeed{id: "s-a", project: "proj"},
+		sessionSeed{id: "s-b", project: "proj"},
+	)
 
 	out, err := executeCommand(newRootCommand(),
 		"session", "list", "--format", "json")
@@ -461,9 +463,11 @@ func TestSessionList_JSONShape(t *testing.T) {
 func TestSessionListColdReadOnlyCursorRoundTrip(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
-	seedSession(t, dataDir, "s-a", "proj")
-	seedSession(t, dataDir, "s-b", "proj")
-	seedSession(t, dataDir, "s-c", "proj")
+	seedSessionsWithOpts(t, dataDir,
+		sessionSeed{id: "s-a", project: "proj"},
+		sessionSeed{id: "s-b", project: "proj"},
+		sessionSeed{id: "s-c", project: "proj"},
+	)
 
 	out, err := executeCommand(newRootCommand(),
 		"session", "list", "--format", "json", "--limit", "1")
@@ -483,8 +487,10 @@ func TestSessionListColdReadOnlyCursorRoundTrip(t *testing.T) {
 
 func TestSessionList_FilterByProject(t *testing.T) {
 	dataDir := newAgentDataDir(t)
-	seedSession(t, dataDir, "s-a", "p1")
-	seedSession(t, dataDir, "s-b", "p2")
+	seedSessionsWithOpts(t, dataDir,
+		sessionSeed{id: "s-a", project: "p1"},
+		sessionSeed{id: "s-b", project: "p2"},
+	)
 
 	out, err := executeCommand(newRootCommand(),
 		"session", "list", "--project", "p1", "--format", "json")
@@ -586,8 +592,10 @@ func TestSessionList_PGFlagUsesPGReadStore(t *testing.T) {
 	t.Setenv("AGENTSVIEW_PG_URL", "postgres://example.test/agentsview")
 	t.Setenv("AGENTSVIEW_PG_SCHEMA", "custom_schema")
 
-	seedSession(t, localDir, "local-session", "local")
-	seedSession(t, remoteDir, "pg-session", "remote")
+	seedSessionArchiveRows(t, localDir,
+		sessionSeed{id: "local-session", project: "local"})
+	seedSessionArchiveRows(t, remoteDir,
+		sessionSeed{id: "pg-session", project: "remote"})
 
 	remoteDB := dbtest.OpenTestDBAt(t, sessionsDBPath(remoteDir))
 	stub := stubPGReadStore(t, remoteDB)
@@ -611,7 +619,8 @@ func TestSessionList_ConfiguredPGWithoutFlagUsesSQLite(t *testing.T) {
 	t.Setenv("AGENTSVIEW_PG_URL", "postgres://example.test/from-env")
 
 	seedSession(t, localDir, "local-session", "local")
-	seedSession(t, remoteDir, "pg-session", "remote")
+	seedSessionArchiveRows(t, remoteDir,
+		sessionSeed{id: "pg-session", project: "remote"})
 
 	remoteDB := dbtest.OpenTestDBAt(t, sessionsDBPath(remoteDir))
 	stub := stubPGReadStore(t, remoteDB)
