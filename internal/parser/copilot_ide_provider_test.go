@@ -365,6 +365,58 @@ func TestVisualStudioCopilotProviderTombstonesDeletedVS2026SessionFile(
 	assert.Equal(t, virtualPath, deleted[0].DisplayPath)
 }
 
+func TestVisualStudioCopilotProviderCanonicalizesVS2026SessionFileIDCase(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	conversationID := "5bc5f6d7-9a6e-4f9c-8f3c-b7be2e7d9f20"
+	upperID := strings.ToUpper(conversationID)
+	sessionPath := filepath.Join(
+		root, ".vs", "SampleApp", "copilot-chat", "thread", "sessions",
+		upperID,
+	)
+	traceData := vsCopilotTraceLineJSON(
+		conversationID,
+		"chat gpt-5.5", "1781293600000000000", "1781293610000000000",
+		map[string]string{
+			"gen_ai.operation.name": "chat",
+			"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Run the tests."}]}]`,
+		},
+	) + "\n"
+	legacyPath := filepath.Join(
+		root,
+		"20260612T194439_257709a3_VSGitHubCopilot_traces.jsonl",
+	)
+	writeSourceFile(t, legacyPath, traceData)
+	writeSourceFile(t, sessionPath, traceData)
+	older := time.Date(2026, 6, 12, 0, 0, 0, 0, time.UTC)
+	newer := time.Date(2026, 6, 13, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(legacyPath, older, older))
+	require.NoError(t, os.Chtimes(sessionPath, newer, newer))
+
+	provider, ok := NewProvider(AgentVSCopilot, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	virtualPath := VisualStudioCopilotVirtualPath(sessionPath, conversationID)
+	assert.Equal(t, virtualPath, discovered[0].DisplayPath)
+
+	fingerprint, err := provider.Fingerprint(context.Background(), discovered[0])
+	require.NoError(t, err)
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source:      discovered[0],
+		Fingerprint: fingerprint,
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t,
+		"visualstudio-copilot:"+conversationID,
+		outcome.Results[0].Result.Session.ID,
+	)
+}
+
 func TestVisualStudioCopilotProviderSupportsVS2026RootModes(
 	t *testing.T,
 ) {

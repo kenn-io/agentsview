@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // multi_session_container.go provides a reusable source-set, provider, and
@@ -316,7 +317,13 @@ func (s multiSessionContainerSourceSet) changedPathTombstones(
 func multiSessionMatchOwnsContainer(
 	match multiSessionMatch,
 ) bool {
-	return match.MemberID == filepath.Base(match.Container)
+	base := filepath.Base(match.Container)
+	if match.MemberID == base {
+		return true
+	}
+	return isVisualStudioCopilotVS2026SessionID(match.MemberID) &&
+		isVisualStudioCopilotVS2026SessionID(base) &&
+		strings.EqualFold(match.MemberID, base)
 }
 
 func (s multiSessionContainerSourceSet) FindSource(

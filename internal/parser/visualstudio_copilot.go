@@ -20,7 +20,20 @@ import (
 // A single physical trace file can hold spans for multiple conversations, so
 // each conversation is tracked as its own work item under this virtual path.
 func VisualStudioCopilotVirtualPath(tracePath, conversationID string) string {
+	conversationID = canonicalVisualStudioCopilotConversationID(conversationID)
 	return VirtualSourcePath(tracePath, conversationID)
+}
+
+func canonicalVisualStudioCopilotConversationID(id string) string {
+	if isVisualStudioCopilotVS2026SessionID(id) {
+		return strings.ToLower(id)
+	}
+	return id
+}
+
+func sameVisualStudioCopilotConversationID(a, b string) bool {
+	return canonicalVisualStudioCopilotConversationID(a) ==
+		canonicalVisualStudioCopilotConversationID(b)
 }
 
 // SplitVisualStudioCopilotVirtualPath splits a <traceFile>#<conversationID>
@@ -157,6 +170,7 @@ type vsCopilotTraceValue struct {
 func parseVisualStudioCopilotConversation(
 	tracePath, conversationID, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
+	conversationID = canonicalVisualStudioCopilotConversationID(conversationID)
 	if conversationID == "" {
 		return nil, nil, nil
 	}
@@ -237,7 +251,9 @@ func visualStudioCopilotConversationSpans(
 	}
 	var spans []vsCopilotSpan
 	for _, span := range own {
-		if span.attrMap["gen_ai.conversation.id"] == conversationID {
+		if sameVisualStudioCopilotConversationID(
+			span.attrMap["gen_ai.conversation.id"], conversationID,
+		) {
 			spans = append(spans, span)
 		}
 	}
@@ -263,7 +279,9 @@ func VisualStudioCopilotFileConversationIDs(path string) ([]string, error) {
 	seen := map[string]struct{}{}
 	var ids []string
 	for _, span := range spans {
-		id := span.attrMap["gen_ai.conversation.id"]
+		id := canonicalVisualStudioCopilotConversationID(
+			span.attrMap["gen_ai.conversation.id"],
+		)
 		if id == "" {
 			continue
 		}
@@ -377,6 +395,7 @@ func writeVisualStudioCopilotConversationFile(
 func visualStudioCopilotConversationLine(
 	line []byte, conversationID string,
 ) ([]byte, bool) {
+	conversationID = canonicalVisualStudioCopilotConversationID(conversationID)
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(line, &top); err != nil {
 		return nil, false
@@ -487,7 +506,9 @@ func visualStudioCopilotFilterScopeSpan(
 	kept := make([]json.RawMessage, 0, len(spans))
 	modified := false
 	for _, sp := range spans {
-		if visualStudioCopilotSpanConversationID(sp) == conversationID {
+		if sameVisualStudioCopilotConversationID(
+			visualStudioCopilotSpanConversationID(sp), conversationID,
+		) {
 			kept = append(kept, sp)
 		} else {
 			modified = true
@@ -523,7 +544,9 @@ func visualStudioCopilotSpanConversationID(span json.RawMessage) string {
 	}
 	for _, attr := range s.Attributes {
 		if attr.Key == "gen_ai.conversation.id" {
-			return attr.Value.StringValue
+			return canonicalVisualStudioCopilotConversationID(
+				attr.Value.StringValue,
+			)
 		}
 	}
 	return ""
@@ -600,7 +623,9 @@ func visualStudioCopilotSiblingTraceSpans(
 			return nil, err
 		}
 		for _, span := range candidateSpans {
-			if span.attrMap["gen_ai.conversation.id"] == conversationID {
+			if sameVisualStudioCopilotConversationID(
+				span.attrMap["gen_ai.conversation.id"], conversationID,
+			) {
 				spans = append(spans, span)
 			}
 		}

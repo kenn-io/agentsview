@@ -434,12 +434,15 @@ func vsCopilotClassifyPath(
 	if tracePath, conversationID, ok :=
 		splitVisualStudioCopilotVirtualPath(path); ok {
 		if isVisualStudioCopilotVS2026SessionPath(tracePath) {
+			conversationID = canonicalVisualStudioCopilotConversationID(
+				conversationID,
+			)
 			if !visualStudioCopilotVS2026SessionUnderRoot(root, tracePath) ||
 				(!allowMissing && !IsRegularFile(tracePath)) {
 				return multiSessionMatch{}, false
 			}
 			return multiSessionMatch{
-				Path:        path,
+				Path:        VisualStudioCopilotVirtualPath(tracePath, conversationID),
 				Container:   tracePath,
 				MemberID:    conversationID,
 				ProjectHint: "visualstudio",
@@ -457,6 +460,9 @@ func vsCopilotClassifyPath(
 	}
 	if isVisualStudioCopilotVS2026SessionPath(path) &&
 		visualStudioCopilotVS2026SessionUnderRoot(root, path) {
+		conversationID := canonicalVisualStudioCopilotConversationID(
+			filepath.Base(path),
+		)
 		if allowMissing && !IsRegularFile(path) {
 			return multiSessionMatch{
 				Path:        path,
@@ -465,9 +471,9 @@ func vsCopilotClassifyPath(
 			}, true
 		}
 		return multiSessionMatch{
-			Path:        VisualStudioCopilotVirtualPath(path, filepath.Base(path)),
+			Path:        VisualStudioCopilotVirtualPath(path, conversationID),
 			Container:   path,
-			MemberID:    filepath.Base(path),
+			MemberID:    conversationID,
 			ProjectHint: "visualstudio",
 		}, true
 	}
@@ -493,12 +499,13 @@ func vsCopilotFindMember(root, rawID string) (multiSessionMatch, bool) {
 // conversation ID, deduplicating across legacy traces and VS 2026 session
 // files with the same newest-mtime, then path tie-breaker used by discovery.
 func findVisualStudioCopilotSourceFile(root, rawID string) string {
+	rawID = canonicalVisualStudioCopilotConversationID(rawID)
 	if root == "" || !IsValidSessionID(rawID) {
 		return ""
 	}
 	for _, file := range discoverVisualStudioCopilotSessionFilesUnderRoot(root) {
 		_, conversationID, ok := splitVisualStudioCopilotVirtualPath(file.Path)
-		if ok && conversationID == rawID {
+		if ok && sameVisualStudioCopilotConversationID(conversationID, rawID) {
 			return file.Path
 		}
 	}
@@ -639,6 +646,7 @@ func splitVisualStudioCopilotVirtualPath(
 		!IsValidSessionID(conversationID) {
 		return "", "", false
 	}
+	conversationID = canonicalVisualStudioCopilotConversationID(conversationID)
 	return tracePath, conversationID, true
 }
 
