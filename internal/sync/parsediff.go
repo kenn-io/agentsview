@@ -483,17 +483,18 @@ func (e *Engine) parseDiffSourceReliableForRaced(
 	if stripVirtualSourceSuffix(sourcePath) != sourcePath {
 		return false
 	}
-	// Only agents with a literal on-disk source -- the same discoverability
-	// condition resolveParseDiffAgents uses -- read a file whose mtime
-	// populated file_mtime. An unknown or non-authoritative agent has no such
-	// basis; a DB-backed agent's source is virtual and was already gated out
-	// above, so what remains here is a literal-file provider-authoritative
-	// source.
+	// Only a literal-file agent reads a source whose os.Stat mtime is a
+	// per-session race signal that populated file_mtime. FileBased is exactly
+	// that predicate, so it is required here even though the discoverability
+	// gate no longer consults it: a DB-backed agent (FileBased == false) is
+	// never reliable for the raced guard. Its real sources are virtual and were
+	// gated out above; requiring FileBased also fails closed on the impossible
+	// non-virtual DB path rather than trusting a shared store's composite mtime.
 	def, ok := parser.AgentByType(agent)
 	if !ok {
 		return false
 	}
-	return e.parseDiffAgentDiscoverable(def)
+	return def.FileBased && e.parseDiffAgentDiscoverable(def)
 }
 
 // parseDiffLiveMtime resolves a session's live source mtime for the raced
