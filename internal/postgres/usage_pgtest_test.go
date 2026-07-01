@@ -434,6 +434,48 @@ func TestStoreGetUsageSessionCountsDedupesClaudeKeys(t *testing.T) {
 	assert.False(t, ok, "proj-b should have been deduped out: %#v", counts.ByProject)
 }
 
+func TestStoreGetUsageMatchingSessionCountCountsCopilotSessionsWithoutUsageRows(
+	t *testing.T,
+) {
+	_, store := prepareUsageSchema(t, "agentsview_usage_matching_sessions_test")
+
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at, ended_at,
+			message_count, user_message_count
+		) VALUES
+			('copilot-empty', 'test-machine', 'proj-a', 'copilot',
+			 '2026-03-12T10:00:00Z'::timestamptz,
+			 '2026-03-12T10:00:00Z'::timestamptz, 1, 1),
+			('claude-usage', 'test-machine', 'proj-a', 'claude',
+			 '2026-03-12T11:00:00Z'::timestamptz,
+			 '2026-03-12T11:00:00Z'::timestamptz, 1, 1)`)
+	require.NoError(t, err, "insert sessions")
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp, content_length,
+			model, token_usage
+		) VALUES
+			('copilot-empty', 0, 'assistant', 'copilot',
+			 '2026-03-12T10:00:00Z'::timestamptz, 7,
+			 'gpt-5.3-codex', ''),
+			('claude-usage', 0, 'assistant', 'claude',
+			 '2026-03-12T11:00:00Z'::timestamptz, 6,
+			 'claude-sonnet-4-20250514', '{"input_tokens":1}')`)
+	require.NoError(t, err, "insert messages")
+
+	count, err := store.GetUsageMatchingSessionCount(ctx, db.UsageFilter{
+		From:     "2026-03-12",
+		To:       "2026-03-12",
+		Timezone: "UTC",
+		Agent:    "copilot",
+		Model:    "gpt-5.3-codex",
+	})
+	require.NoError(t, err, "GetUsageMatchingSessionCount")
+	assert.Equal(t, 1, count)
+}
+
 func TestStoreGetUsageSessionCountsDedupesSourceUUIDFallback(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_counts_source_uuid_test")
 

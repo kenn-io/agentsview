@@ -178,6 +178,22 @@ describe("UsageStore filter persistence", () => {
     expect(usage.excludedAgents).toBe("");
   });
 
+  it("preserves unsupported usage metadata when comparison data is merged", async () => {
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce({
+      ...usageSummary(0),
+      unsupportedUsage: { kind: "copilot-no-token-data" },
+    });
+
+    const { usage } = await loadStore();
+    await usage.fetchSummary();
+    await Promise.resolve();
+
+    expect(usage.summary?.unsupportedUsage).toEqual({
+      kind: "copilot-no-token-data",
+    });
+    expect(usage.summary?.comparison).toEqual(usageComparison());
+  });
+
   it("falls back to defaults on corrupted localStorage", async () => {
     localStorage.setItem("usage-filters", "not json");
     const { usage } = await loadStore();

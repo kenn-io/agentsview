@@ -121,6 +121,13 @@
       ? usage.selectedModels.split(",").filter(Boolean)
       : [],
   );
+  const unsupportedUsageMessage = $derived.by(() => {
+    const kind = usage.summary?.unsupportedUsage?.kind;
+    if (kind === "copilot-no-token-data") {
+      return m.usage_summary_unsupported_copilot_no_token_data();
+    }
+    return "";
+  });
   const sessionUrlParams = $derived(
     filtersToParams(sessions.filters),
   );
@@ -428,6 +435,12 @@
       <div class="query-progress" aria-hidden="true"></div>
     {/if}
 
+    {#if unsupportedUsageMessage}
+      <div class="usage-note" role="status">
+        {unsupportedUsageMessage}
+      </div>
+    {/if}
+
     <UsageSummaryCards />
 
     <div class="chart-panel wide">
@@ -490,6 +503,15 @@
     gap: 16px;
     position: relative;
     transition: opacity 0.12s;
+  }
+
+  .usage-note {
+    padding: 12px 14px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-muted);
+    border-left: 4px solid var(--accent-blue);
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
   }
 
   .usage-content.querying {

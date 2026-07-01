@@ -224,6 +224,42 @@ func (f UsageFilter) appendUsageSessionFilterClauses(
 	return where, args
 }
 
+func (f UsageFilter) appendUsageSessionModelMatchClauses(
+	where string, args []any,
+) (string, []any) {
+	if strings.TrimSpace(f.Model) == "" && strings.TrimSpace(f.ExcludeModel) == "" {
+		return where, args
+	}
+
+	var messageArgs []any
+	messageWhere, messageArgs := f.appendUsageSourceFilterClauses(
+		"m.model != ''", messageArgs, "m.model",
+	)
+	var eventArgs []any
+	eventWhere, eventArgs := f.appendUsageSourceFilterClauses(
+		"ue.model != ''", eventArgs, "ue.model",
+	)
+
+	where += `
+	AND (
+		EXISTS (
+			SELECT 1
+			FROM messages m
+			WHERE m.session_id = s.id
+				AND ` + messageWhere + `
+		)
+		OR EXISTS (
+			SELECT 1
+			FROM usage_events ue
+			WHERE ue.session_id = s.id
+				AND ` + eventWhere + `
+		)
+	)`
+	args = append(args, messageArgs...)
+	args = append(args, eventArgs...)
+	return where, args
+}
+
 func buildUsageTerminationPredSQLite(status string) (string, []any) {
 	if status == "" || status == "all" {
 		return "", nil
@@ -708,6 +744,10 @@ func usageBoundsForFilter(f UsageFilter) usageBounds {
 		b.to = paddedUTCBound(f.To+"T23:59:59Z", 14)
 	}
 	return b
+}
+
+func usageSessionActivityExprSQLite() string {
+	return "COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at)"
 }
 
 func appendUsageColumnBounds(
@@ -2393,4 +2433,59 @@ func (db *DB) GetUsageSessionCounts(
 	}
 
 	return out, nil
+}
+
+// GetUsageMatchingSessionCount counts sessions that match the usage filter
+// even when they have no token-bearing usage rows.
+func (db *DB) GetUsageMatchingSessionCount(
+	ctx context.Context, f UsageFilter,
+) (int, error) {
+	loc := f.location()
+
+	where, args := f.appendUsageSessionFilterClauses(
+		usageSessionEligibility, nil,
+	)
+	where, args = f.appendUsageSessionModelMatchClauses(where, args)
+	where, args = appendUsageColumnBounds(
+		where,
+		usageSessionActivityExprSQLite(),
+		usageBoundsForFilter(f),
+		args,
+	)
+
+	rows, err := db.getReader().QueryContext(ctx, `
+		SELECT s.id, `+usageSessionActivityExprSQLite()+`
+		FROM sessions s
+		WHERE `+where, args...)
+	if err != nil {
+		return 0, fmt.Errorf("querying matching usage sessions: %w", err)
+	}
+	defer rows.Close()
+
+	count := 0
+	for rows.Next() {
+		var (
+			id string
+			ts string
+		)
+		if err := rows.Scan(&id, &ts); err != nil {
+			return 0, fmt.Errorf("scanning matching usage session: %w", err)
+		}
+		date := localDate(ts, loc)
+		if date == "" {
+			continue
+		}
+		if f.From != "" && date < f.From {
+			continue
+		}
+		if f.To != "" && date > f.To {
+			continue
+		}
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterating matching usage sessions: %w", err)
+	}
+
+	return count, nil
 }

@@ -160,19 +160,26 @@ type CacheStats struct {
 	SavingsVsUncached   float64 `json:"savingsVsUncached"`
 }
 
+const UnsupportedUsageKindCopilotNoTokenData = "copilot-no-token-data"
+
+type UnsupportedUsage struct {
+	Kind string `json:"kind"`
+}
+
 // UsageSummaryResult is the transport-neutral usage-summary response, the
 // JSON shape served by GET /api/v1/usage/summary. The prior-period
 // comparison is a separate endpoint, so it is intentionally absent here.
 type UsageSummaryResult struct {
-	From          string                `json:"from"`
-	To            string                `json:"to"`
-	Totals        db.UsageTotals        `json:"totals"`
-	Daily         []db.DailyUsageEntry  `json:"daily"`
-	ProjectTotals []ProjectTotal        `json:"projectTotals"`
-	ModelTotals   []ModelTotal          `json:"modelTotals"`
-	AgentTotals   []AgentTotal          `json:"agentTotals"`
-	SessionCounts db.UsageSessionCounts `json:"sessionCounts"`
-	CacheStats    CacheStats            `json:"cacheStats"`
+	From             string                `json:"from"`
+	To               string                `json:"to"`
+	Totals           db.UsageTotals        `json:"totals"`
+	Daily            []db.DailyUsageEntry  `json:"daily"`
+	ProjectTotals    []ProjectTotal        `json:"projectTotals"`
+	ModelTotals      []ModelTotal          `json:"modelTotals"`
+	AgentTotals      []AgentTotal          `json:"agentTotals"`
+	SessionCounts    db.UsageSessionCounts `json:"sessionCounts"`
+	CacheStats       CacheStats            `json:"cacheStats"`
+	UnsupportedUsage *UnsupportedUsage     `json:"unsupportedUsage,omitempty"`
 }
 
 // buildUsageSummary assembles a UsageSummaryResult from a daily-usage

@@ -6,6 +6,7 @@ import type { CacheStats } from './CacheStats';
 import type { Comparison } from './Comparison';
 import type { DbUsageSessionCounts } from './DbUsageSessionCounts';
 import type { DbUsageTotals } from './DbUsageTotals';
+import type { UnsupportedUsage } from './UnsupportedUsage';
 export type UsageSummaryResponse = {
   agentTotals: any[] | null;
   cacheStats: CacheStats;
@@ -17,5 +18,5 @@ export type UsageSummaryResponse = {
   sessionCounts: DbUsageSessionCounts;
   to: string;
   totals: DbUsageTotals;
+  unsupportedUsage?: UnsupportedUsage;
 };
-

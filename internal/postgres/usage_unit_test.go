@@ -112,6 +112,15 @@ func (c *usageProbeConn) QueryContext(
 			},
 		}, nil
 	}
+	if strings.Contains(normalized, "coalesce(s.ended_at, s.started_at, s.created_at) as session_activity_at") {
+		ts := time.Date(2024, 6, 15, 10, 0, 0, 0, time.UTC)
+		return &usageProbeRows{
+			columns: []string{"id", "session_activity_at"},
+			values: [][]driver.Value{
+				{"copilot-empty", ts},
+			},
+		}, nil
+	}
 	if strings.Contains(normalized, "from (") &&
 		strings.Contains(normalized, "from messages") {
 		ts := time.Date(2024, 6, 15, 10, 0, 0, 0, time.UTC)
@@ -285,6 +294,36 @@ func TestPGUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {
 	require.Len(t, pb.args, 2)
 	assert.Equal(t, "2024-05-31T10:00:00Z", pb.args[0])
 	assert.Equal(t, "2024-07-01T13:59:59Z", pb.args[1])
+}
+
+func TestPGGetUsageMatchingSessionCountUsesSessionQuery(t *testing.T) {
+	state := &usageProbeState{}
+	store := &Store{
+		pg: newUsageProbeDB(t, state),
+	}
+
+	count, err := store.GetUsageMatchingSessionCount(context.Background(), db.UsageFilter{
+		From:     "2024-06-15",
+		To:       "2024-06-15",
+		Timezone: "UTC",
+		Agent:    "copilot",
+		Model:    "gpt-5.3-codex",
+	})
+	require.NoError(t, err, "GetUsageMatchingSessionCount")
+	assert.Equal(t, 1, count)
+
+	state.mu.Lock()
+	queries := append([]string(nil), state.queries...)
+	state.mu.Unlock()
+	require.NotEmpty(t, queries)
+
+	last := strings.ToLower(queries[len(queries)-1])
+	assert.Contains(t, last, "from sessions s")
+	assert.Contains(t, last, "exists (")
+	assert.Contains(t, last, "from messages m")
+	assert.Contains(t, last, "from usage_events ue")
+	assert.Contains(t, last, "s.agent = ")
+	assert.Contains(t, last, "m.model = ")
 }
 
 func TestPGTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {

@@ -3741,6 +3741,95 @@ func (s *Store) GetUsageSessionCounts(
 	return out, nil
 }
 
+func appendDuckUsageSessionModelMatchClauses(
+	where string, args []any, f db.UsageFilter,
+) (string, []any) {
+	if strings.TrimSpace(f.Model) == "" && strings.TrimSpace(f.ExcludeModel) == "" {
+		return where, args
+	}
+
+	var messageArgs []any
+	messageWhere, messageArgs := appendDuckUsageSourceFilterClauses(
+		"m.model != ''", messageArgs, "m.model", f,
+	)
+	var eventArgs []any
+	eventWhere, eventArgs := appendDuckUsageSourceFilterClauses(
+		"ue.model != ''", eventArgs, "ue.model", f,
+	)
+
+	where += `
+		AND (
+			EXISTS (
+				SELECT 1
+				FROM messages m
+				WHERE m.session_id = s.id
+					AND ` + messageWhere + `
+			)
+			OR EXISTS (
+				SELECT 1
+				FROM usage_events ue
+				WHERE ue.session_id = s.id
+					AND ` + eventWhere + `
+			)
+		)`
+	args = append(args, messageArgs...)
+	args = append(args, eventArgs...)
+	return where, args
+}
+
+func (s *Store) GetUsageMatchingSessionCount(
+	ctx context.Context, f db.UsageFilter,
+) (int, error) {
+	where, args := appendDuckUsageSessionFilterClauses(
+		"1=1", nil, f, "",
+	)
+	where, args = appendDuckUsageSessionModelMatchClauses(where, args, f)
+	if f.From != "" {
+		where += "\n\t\t\tAND COALESCE(s.ended_at, s.started_at, s.created_at) >= CAST(? AS TIMESTAMP)"
+		args = append(args, duckUsagePaddedUTCBound(f.From+"T00:00:00Z", -14))
+	}
+	if f.To != "" {
+		where += "\n\t\t\tAND COALESCE(s.ended_at, s.started_at, s.created_at) <= CAST(? AS TIMESTAMP)"
+		args = append(args, duckUsagePaddedUTCBound(f.To+"T23:59:59Z", 14))
+	}
+
+	rows, err := s.duck.QueryContext(ctx, `
+		SELECT s.id, COALESCE(s.ended_at, s.started_at, s.created_at)
+		FROM sessions s
+		WHERE `+where, args...)
+	if err != nil {
+		return 0, fmt.Errorf("querying matching usage sessions: %w", err)
+	}
+	defer rows.Close()
+
+	count := 0
+	for rows.Next() {
+		var (
+			id string
+			ts any
+		)
+		if err := rows.Scan(&id, &ts); err != nil {
+			return 0, fmt.Errorf("scanning matching usage session: %w", err)
+		}
+		date := analyticsLocalDate(formatDBTime(ts), f.Timezone)
+		if date == "" {
+			continue
+		}
+		if f.From != "" && date < f.From {
+			continue
+		}
+		if f.To != "" && date > f.To {
+			continue
+		}
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterating matching usage sessions: %w", err)
+	}
+
+	return count, nil
+}
+
 func (s *Store) GetSessionUsage(
 	ctx context.Context, sessionID string,
 ) (*db.SessionUsage, error) {

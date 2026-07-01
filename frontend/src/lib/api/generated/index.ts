@@ -148,6 +148,7 @@ export type { SyncSyncStats } from './models/SyncSyncStats';
 export { TerminalConfigBody } from './models/TerminalConfigBody';
 export type { TerminalResponse } from './models/TerminalResponse';
 export type { TrashResponse } from './models/TrashResponse';
+export type { UnsupportedUsage } from './models/UnsupportedUsage';
 export type { UpdateCheckResponse } from './models/UpdateCheckResponse';
 export type { UploadSessionResponse } from './models/UploadSessionResponse';
 export type { UsageSummaryResponse } from './models/UsageSummaryResponse';

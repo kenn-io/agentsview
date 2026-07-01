@@ -1956,6 +1956,82 @@ func TestGetUsageSessionCounts(t *testing.T) {
 	assert.Nil(t, dailyNoCounts.SessionCounts.ByAgent)
 }
 
+func TestGetUsageMatchingSessionCount(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "copilot-empty", "proj-a", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2024-06-15T10:00:00Z")
+		s.EndedAt = new("2024-06-15T10:00:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "copilot-empty", Ordinal: 0,
+		Role: "assistant", Timestamp: "2024-06-15T10:00:00Z",
+		Model: "gpt-5.3-codex",
+	})
+
+	insertSession(t, d, "claude-usage", "proj-a", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = new("2024-06-15T11:00:00Z")
+		s.EndedAt = new("2024-06-15T11:00:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "claude-usage", Ordinal: 0,
+		Role: "assistant", Timestamp: "2024-06-15T11:00:00Z",
+		Model: "claude-sonnet",
+		TokenUsage: json.RawMessage(
+			`{"input_tokens":100,"output_tokens":50}`),
+	})
+
+	tests := []struct {
+		name   string
+		filter UsageFilter
+		want   int
+	}{
+		{
+			name: "counts copilot sessions without usage rows",
+			filter: UsageFilter{
+				From: "2024-06-15", To: "2024-06-15",
+				Timezone: "UTC", Agent: "copilot",
+			},
+			want: 1,
+		},
+		{
+			name: "respects model filters from session messages",
+			filter: UsageFilter{
+				From: "2024-06-15", To: "2024-06-15",
+				Timezone: "UTC", Agent: "copilot", Model: "gpt-5.3-codex",
+			},
+			want: 1,
+		},
+		{
+			name: "excludes sessions when model is excluded",
+			filter: UsageFilter{
+				From: "2024-06-15", To: "2024-06-15",
+				Timezone: "UTC", Agent: "copilot", ExcludeModel: "gpt-5.3-codex",
+			},
+			want: 0,
+		},
+		{
+			name: "respects date range",
+			filter: UsageFilter{
+				From: "2024-06-16", To: "2024-06-16",
+				Timezone: "UTC", Agent: "copilot",
+			},
+			want: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := d.GetUsageMatchingSessionCount(ctx, tt.filter)
+			requireNoError(t, err, "GetUsageMatchingSessionCount")
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestNewUsageSessionCounts(t *testing.T) {
 	counts := NewUsageSessionCounts(map[string]UsageSessionInfo{
 		"s1": {Project: "proj-a", Agent: "claude"},

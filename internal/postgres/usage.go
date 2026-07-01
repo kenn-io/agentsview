@@ -1690,3 +1690,91 @@ func (s *Store) GetUsageSessionCounts(
 	}
 	return out, nil
 }
+
+func appendPGUsageSessionModelMatchClauses(
+	where string, pb *paramBuilder, f db.UsageFilter,
+) string {
+	if strings.TrimSpace(f.Model) == "" && strings.TrimSpace(f.ExcludeModel) == "" {
+		return where
+	}
+
+	messageWhere := appendPGUsageSourceFilterClauses(
+		"m.model != ''", pb, f, "m.model",
+	)
+	eventWhere := appendPGUsageSourceFilterClauses(
+		"ue.model != ''", pb, f, "ue.model",
+	)
+
+	return where + `
+	AND (
+		EXISTS (
+			SELECT 1
+			FROM messages m
+			WHERE m.session_id = s.id
+				AND ` + messageWhere + `
+		)
+		OR EXISTS (
+			SELECT 1
+			FROM usage_events ue
+			WHERE ue.session_id = s.id
+				AND ` + eventWhere + `
+		)
+	)`
+}
+
+func (s *Store) GetUsageMatchingSessionCount(
+	ctx context.Context, f db.UsageFilter,
+) (int, error) {
+	pb := &paramBuilder{}
+	where := appendPGUsageSessionFilterClauses(
+		pgUsageSessionEligibility, pb, f,
+	)
+	where = appendPGUsageSessionModelMatchClauses(where, pb, f)
+	if f.From != "" {
+		where += "\n\tAND COALESCE(s.ended_at, s.started_at, s.created_at) >= " +
+			pb.add(paddedUTCBound(f.From+"T00:00:00Z", -14)) + "::timestamptz"
+	}
+	if f.To != "" {
+		where += "\n\tAND COALESCE(s.ended_at, s.started_at, s.created_at) <= " +
+			pb.add(paddedUTCBound(f.To+"T23:59:59Z", 14)) + "::timestamptz"
+	}
+
+	rows, err := s.pg.QueryContext(ctx, `
+SELECT
+	s.id,
+	COALESCE(s.ended_at, s.started_at, s.created_at) AS session_activity_at
+FROM sessions s
+WHERE `+where, pb.args...)
+	if err != nil {
+		return 0, fmt.Errorf("querying matching usage sessions: %w", err)
+	}
+	defer rows.Close()
+
+	loc := usageLocation(f)
+	count := 0
+	for rows.Next() {
+		var (
+			id string
+			ts sql.NullTime
+		)
+		if err := rows.Scan(&id, &ts); err != nil {
+			return 0, fmt.Errorf("scanning matching usage session: %w", err)
+		}
+		date := usageDate(ts, loc)
+		if date == "" {
+			continue
+		}
+		if f.From != "" && date < f.From {
+			continue
+		}
+		if f.To != "" && date > f.To {
+			continue
+		}
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterating matching usage sessions: %w", err)
+	}
+
+	return count, nil
+}

@@ -1,7 +1,120 @@
-import { describe, expect, it } from "vite-plus/test";
+import {
+  afterEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vite-plus/test";
+import { mount, tick, unmount } from "svelte";
+import { router } from "../../stores/router.svelte.js";
+import { sessions } from "../../stores/sessions.svelte.js";
+import { usage } from "../../stores/usage.svelte.js";
 import source from "./UsagePage.svelte?raw";
+// @ts-ignore
+import UsagePage from "./UsagePage.svelte";
+
+async function flushEffects() {
+  await tick();
+  await Promise.resolve();
+  await tick();
+}
+
+let component: ReturnType<typeof mount> | undefined;
+
+function usageSummaryWithUnsupported(kind?: string) {
+  return {
+    from: "2024-06-01",
+    to: "2024-06-01",
+    totals: {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      totalCost: 0,
+    },
+    daily: [],
+    projectTotals: [],
+    modelTotals: [],
+    agentTotals: [],
+    sessionCounts: {
+      total: 0,
+      byProject: {},
+      byAgent: {},
+    },
+    cacheStats: {
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      uncachedInputTokens: 0,
+      outputTokens: 0,
+      hitRate: 0,
+      savingsVsUncached: 0,
+    },
+    ...(kind ? { unsupportedUsage: { kind } } : {}),
+  };
+}
+
+afterEach(() => {
+  if (component) {
+    unmount(component);
+    component = undefined;
+  }
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  document.body.innerHTML = "";
+  router.route = "sessions";
+  router.params = {};
+  router.sessionId = null;
+  usage.summary = null;
+  usage.topSessions = null;
+  usage.errors.summary = null;
+  sessions.projects = [];
+});
 
 describe("UsagePage refresh behavior", () => {
+  it("renders the unsupported Copilot note from the summary contract", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+
+    router.route = "usage";
+    router.params = {};
+    usage.summary = usageSummaryWithUnsupported("copilot-no-token-data");
+
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+
+    expect(document.body.textContent).toContain(
+      "Copilot sessions matched this range",
+    );
+  });
+
+  it("keeps the note hidden without an unsupported usage signal", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+
+    router.route = "usage";
+    router.params = {};
+    usage.summary = usageSummaryWithUnsupported();
+
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+
+    expect(document.body.textContent).not.toContain(
+      "Copilot sessions matched this range",
+    );
+  });
+
   it("does not auto-refresh usage scans from SSE updates", () => {
     expect(source).not.toContain("subscribeDebounced");
     expect(source).not.toContain("REFRESH_MS");

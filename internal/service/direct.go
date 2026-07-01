@@ -566,7 +566,19 @@ func (b *directBackend) UsageSummary(
 	if err != nil {
 		return nil, err
 	}
-	return buildUsageSummary(f, result), nil
+	summary := buildUsageSummary(f, result)
+	if db.IsCopilotAgentFilter(f.Agent) && db.NoTokenData(result.Totals) {
+		matchingSessions, err := b.db.GetUsageMatchingSessionCount(ctx, f)
+		if err != nil {
+			return nil, err
+		}
+		if matchingSessions > 0 {
+			summary.UnsupportedUsage = &UnsupportedUsage{
+				Kind: UnsupportedUsageKindCopilotNoTokenData,
+			}
+		}
+	}
+	return summary, nil
 }
 
 // SearchContent maps the transport-neutral request to a

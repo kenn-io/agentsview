@@ -99,6 +99,10 @@ export interface UsageComparison {
   deltaPct: number;
 }
 
+export interface UnsupportedUsage {
+  kind: string;
+}
+
 export interface UsageSummaryResponse {
   from: string;
   to: string;
@@ -109,6 +113,7 @@ export interface UsageSummaryResponse {
   agentTotals: AgentTotal[];
   sessionCounts: UsageSessionCounts;
   cacheStats: CacheStats;
+  unsupportedUsage?: UnsupportedUsage;
   comparison?: UsageComparison;
 }
 
