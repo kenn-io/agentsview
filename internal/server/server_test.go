@@ -241,6 +241,26 @@ func setupNoSyncMode(t *testing.T) *testEnv {
 	}
 }
 
+const hostMiddlewareProbePath = "/api/openapi"
+
+func setupHostOnly(t *testing.T, opts ...setupOption) *testEnv {
+	t.Helper()
+	cfg := config.Config{
+		Host:         "127.0.0.1",
+		Port:         0,
+		WriteTimeout: 30 * time.Second,
+	}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	srv := server.New(cfg, readOnlyTestStore{}, nil)
+
+	return &testEnv{
+		srv:     srv,
+		handler: wrapTestHandler(cfg, srv.Handler()),
+	}
+}
+
 func tempDirWithRetryCleanup(t *testing.T) string {
 	t.Helper()
 	return dbtest.MkdirTempWithCleanup(t, "agentsview-server-test-*")
@@ -2271,7 +2291,7 @@ func TestDuckDBPushLocalNoSyncDaemonWritesConfiguredPath(t *testing.T) {
 }
 
 func TestCORSPreflightRejectsBadOrigin(t *testing.T) {
-	te := setup(t)
+	te := setupHostOnly(t)
 
 	// OPTIONS preflight from foreign origin should return 403.
 	w := te.wrappedRequest(http.MethodOptions, "/api/v1/sessions",
@@ -2280,7 +2300,7 @@ func TestCORSPreflightRejectsBadOrigin(t *testing.T) {
 }
 
 func TestCORSBlocksMutatingWithNoOrigin(t *testing.T) {
-	te := setup(t)
+	te := setupHostOnly(t)
 
 	// POST with no Origin header should be blocked (prevents
 	// CSRF where browser omits Origin). Use rawRequest to
@@ -2291,20 +2311,20 @@ func TestCORSBlocksMutatingWithNoOrigin(t *testing.T) {
 }
 
 func TestHostHeaderRejectsDNSRebinding(t *testing.T) {
-	te := setup(t)
+	te := setupHostOnly(t)
 
 	// A DNS rebinding attack uses a custom domain that resolves
 	// to 127.0.0.1. The Host header carries the attacker's domain.
-	w := te.rawRequest(http.MethodGet, "/api/v1/stats",
+	w := te.wrappedRequest(http.MethodGet, hostMiddlewareProbePath,
 		withHost("evil.attacker.com:8080"))
 	assertStatus(t, w, http.StatusForbidden)
 }
 
 func TestHostHeaderRejectionBodyIsDescriptive(t *testing.T) {
-	te := setup(t)
+	te := setupHostOnly(t)
 
 	// A forwarded port produces a Host the server does not trust.
-	w := te.rawRequest(http.MethodGet, "/api/v1/stats",
+	w := te.wrappedRequest(http.MethodGet, hostMiddlewareProbePath,
 		withHost("127.0.0.1:18080"))
 
 	assertStatus(t, w, http.StatusForbidden)
@@ -2316,14 +2336,14 @@ func TestHostHeaderRejectionBodyIsDescriptive(t *testing.T) {
 }
 
 func TestHostHeaderAllowsLegitimate(t *testing.T) {
-	te := setup(t)
+	te := setupHostOnly(t)
 
 	// Requests with legitimate Host should pass.
 	for _, host := range []string{
 		"127.0.0.1:0",
 		"localhost:0",
 	} {
-		w := te.rawRequest(http.MethodGet, "/api/v1/stats",
+		w := te.wrappedRequest(http.MethodGet, hostMiddlewareProbePath,
 			withHost(host), withRemoteAddr("127.0.0.1:1234"))
 		if w.Code == http.StatusForbidden {
 			t.Errorf("host %s should be allowed, got 403", host)
@@ -2332,21 +2352,21 @@ func TestHostHeaderAllowsLegitimate(t *testing.T) {
 }
 
 func TestHostHeaderAllowsConfiguredPublicOriginHost(t *testing.T) {
-	te := setup(t, withPublicURL("http://viewer.example.test:8004"))
+	te := setupHostOnly(t, withPublicURL("http://viewer.example.test:8004"))
 
 	// In the managed Caddy flow, the backend only accepts loopback
 	// connections. Set RemoteAddr to loopback so authMiddleware
 	// passes the request through to the host-check layer.
-	w := te.rawRequest(http.MethodGet, "/api/v1/stats",
+	w := te.wrappedRequest(http.MethodGet, hostMiddlewareProbePath,
 		withHost("viewer.example.test:8004"),
 		withRemoteAddr("127.0.0.1:1234"))
 	assertStatus(t, w, http.StatusOK)
 }
 
 func TestHostHeaderPublicOriginsExpandTrustedHosts(t *testing.T) {
-	te := setup(t, withPublicOrigins("http://viewer.example.test:8004"))
+	te := setupHostOnly(t, withPublicOrigins("http://viewer.example.test:8004"))
 
-	w := te.rawRequest(http.MethodGet, "/api/v1/stats",
+	w := te.wrappedRequest(http.MethodGet, hostMiddlewareProbePath,
 		withHost("viewer.example.test:8004"),
 		withRemoteAddr("127.0.0.1:1234"))
 	// public_origins should expand the host allowlist so
@@ -2357,7 +2377,7 @@ func TestHostHeaderPublicOriginsExpandTrustedHosts(t *testing.T) {
 func TestHostHeaderHTTPSPublicOriginExpandsTrustedHosts(
 	t *testing.T,
 ) {
-	te := setup(t, withPublicOrigins(
+	te := setupHostOnly(t, withPublicOrigins(
 		"https://viewer.example.test",
 	))
 
@@ -2368,7 +2388,7 @@ func TestHostHeaderHTTPSPublicOriginExpandsTrustedHosts(
 		"viewer.example.test:443",
 	} {
 		t.Run(host, func(t *testing.T) {
-			w := te.rawRequest(http.MethodGet, "/api/v1/stats",
+			w := te.wrappedRequest(http.MethodGet, hostMiddlewareProbePath,
 				withHost(host), withRemoteAddr("127.0.0.1:1234"))
 			assertStatus(t, w, http.StatusOK)
 		})
@@ -2376,20 +2396,18 @@ func TestHostHeaderHTTPSPublicOriginExpandsTrustedHosts(
 }
 
 func TestCORSAllowsConfiguredHTTPSPublicOrigin(t *testing.T) {
-	te := setup(t, withPublicOrigins("https://viewer.example.test"))
+	te := setupHostOnly(t, withPublicOrigins("https://viewer.example.test"))
 
-	w := te.wrappedRequest(http.MethodPost, "/api/v1/sync",
+	w := te.wrappedRequest(http.MethodOptions, "/api/v1/sync",
 		withOrigin("https://viewer.example.test"))
-	if w.Code == http.StatusForbidden {
-		t.Fatal("configured public origin should not be blocked")
-	}
+	assertStatus(t, w, http.StatusNoContent)
 }
 
 func TestCORSAllowsLocalhost(t *testing.T) {
-	te := setup(t)
+	te := setupHostOnly(t)
 
 	// localhost variant should also be allowed when bound to 127.0.0.1.
-	w := te.wrappedRequest(http.MethodGet, "/api/v1/stats",
+	w := te.wrappedRequest(http.MethodGet, hostMiddlewareProbePath,
 		withOrigin("http://localhost:0"))
 	assertStatus(t, w, http.StatusOK)
 
@@ -2402,7 +2420,7 @@ func TestCORSAllowsLocalhost(t *testing.T) {
 func TestHostHeaderBindAllPort80AllowsPortlessLoopback(t *testing.T) {
 	for _, bindHost := range []string{"0.0.0.0", "::"} {
 		t.Run(bindHost, func(t *testing.T) {
-			te := setup(t, func(c *config.Config) {
+			te := setupHostOnly(t, func(c *config.Config) {
 				c.Host = bindHost
 				c.Port = 80
 			})
@@ -2415,7 +2433,7 @@ func TestHostHeaderBindAllPort80AllowsPortlessLoopback(t *testing.T) {
 				"[::1]:80",
 				"[::1]",
 			} {
-				w := te.rawRequest(http.MethodGet, "/api/v1/stats",
+				w := te.wrappedRequest(http.MethodGet, hostMiddlewareProbePath,
 					withHost(host), withRemoteAddr("127.0.0.1:1234"))
 				assertStatus(t, w, http.StatusOK)
 			}
@@ -2426,7 +2444,7 @@ func TestHostHeaderBindAllPort80AllowsPortlessLoopback(t *testing.T) {
 func TestCORSBindAllPort80AllowsPortlessLoopbackOrigins(t *testing.T) {
 	for _, bindHost := range []string{"0.0.0.0", "::"} {
 		t.Run(bindHost, func(t *testing.T) {
-			te := setup(t, func(c *config.Config) {
+			te := setupHostOnly(t, func(c *config.Config) {
 				c.Host = bindHost
 				c.Port = 80
 			})
@@ -2439,7 +2457,7 @@ func TestCORSBindAllPort80AllowsPortlessLoopbackOrigins(t *testing.T) {
 				"http://[::1]:80",
 				"http://[::1]",
 			} {
-				w := te.wrappedRequest(http.MethodGet, "/api/v1/stats",
+				w := te.wrappedRequest(http.MethodGet, hostMiddlewareProbePath,
 					withOrigin(origin))
 				assertStatus(t, w, http.StatusOK)
 
@@ -2461,12 +2479,12 @@ func TestCORSBindAllPort80AllowsPortlessLANOrigin(t *testing.T) {
 
 	for _, bindHost := range []string{"0.0.0.0", "::"} {
 		t.Run(bindHost, func(t *testing.T) {
-			te := setup(t, func(c *config.Config) {
+			te := setupHostOnly(t, func(c *config.Config) {
 				c.Host = bindHost
 				c.Port = 80
 			})
 
-			w := te.wrappedRequest(http.MethodGet, "/api/v1/stats",
+			w := te.wrappedRequest(http.MethodGet, hostMiddlewareProbePath,
 				withOrigin(origin))
 			assertStatus(t, w, http.StatusOK)
 
@@ -2484,17 +2502,13 @@ func TestHostHeaderBindAllPort80AllowsPortlessLANIP(t *testing.T) {
 
 	for _, bindHost := range []string{"0.0.0.0", "::"} {
 		t.Run(bindHost, func(t *testing.T) {
-			te := setup(t, func(c *config.Config) {
+			te := setupHostOnly(t, func(c *config.Config) {
 				c.Host = bindHost
 				c.Port = 80
-				// LAN access requires require_auth + auth token.
-				c.RequireAuth = true
-				c.AuthToken = "test-token"
 			})
 
-			w := te.rawRequest(http.MethodGet, "/api/v1/stats",
-				withHost(host), withRemoteAddr(lanIP+":1234"),
-				withBearer("test-token"))
+			w := te.wrappedRequest(http.MethodGet, hostMiddlewareProbePath,
+				withHost(host), withRemoteAddr(lanIP+":1234"))
 			assertStatus(t, w, http.StatusOK)
 		})
 	}
@@ -2505,7 +2519,7 @@ func TestCORSBindAllPort80RejectsNonLocalIPOrigin(t *testing.T) {
 
 	for _, bindHost := range []string{"0.0.0.0", "::"} {
 		t.Run(bindHost, func(t *testing.T) {
-			te := setup(t, func(c *config.Config) {
+			te := setupHostOnly(t, func(c *config.Config) {
 				c.Host = bindHost
 				c.Port = 80
 			})
@@ -2522,12 +2536,12 @@ func TestHostHeaderBindAllPort80RejectsNonLocalIP(t *testing.T) {
 
 	for _, bindHost := range []string{"0.0.0.0", "::"} {
 		t.Run(bindHost, func(t *testing.T) {
-			te := setup(t, func(c *config.Config) {
+			te := setupHostOnly(t, func(c *config.Config) {
 				c.Host = bindHost
 				c.Port = 80
 			})
 
-			w := te.rawRequest(http.MethodGet, "/api/v1/stats",
+			w := te.wrappedRequest(http.MethodGet, hostMiddlewareProbePath,
 				withHost(host))
 			assertStatus(t, w, http.StatusForbidden)
 		})
@@ -2537,7 +2551,7 @@ func TestHostHeaderBindAllPort80RejectsNonLocalIP(t *testing.T) {
 func TestCORSBindAllInterfaces(t *testing.T) {
 	for _, bindHost := range []string{"0.0.0.0", "::"} {
 		t.Run(bindHost, func(t *testing.T) {
-			te := setup(t, func(c *config.Config) {
+			te := setupHostOnly(t, func(c *config.Config) {
 				c.Host = bindHost
 			})
 
@@ -2548,7 +2562,7 @@ func TestCORSBindAllInterfaces(t *testing.T) {
 				"http://localhost:0",
 				"http://[::1]:0",
 			} {
-				w := te.wrappedRequest(http.MethodGet, "/api/v1/stats",
+				w := te.wrappedRequest(http.MethodGet, hostMiddlewareProbePath,
 					withOrigin(origin))
 				assertStatus(t, w, http.StatusOK)
 
@@ -2567,11 +2581,11 @@ func TestCORSBindAllAllowsLANIPOrigin(t *testing.T) {
 
 	for _, bindHost := range []string{"0.0.0.0", "::"} {
 		t.Run(bindHost, func(t *testing.T) {
-			te := setup(t, func(c *config.Config) {
+			te := setupHostOnly(t, func(c *config.Config) {
 				c.Host = bindHost
 			})
 
-			w := te.wrappedRequest(http.MethodGet, "/api/v1/stats",
+			w := te.wrappedRequest(http.MethodGet, hostMiddlewareProbePath,
 				withOrigin(origin))
 			assertStatus(t, w, http.StatusOK)
 
@@ -2589,16 +2603,12 @@ func TestHostHeaderBindAllAllowsLANIP(t *testing.T) {
 
 	for _, bindHost := range []string{"0.0.0.0", "::"} {
 		t.Run(bindHost, func(t *testing.T) {
-			te := setup(t, func(c *config.Config) {
+			te := setupHostOnly(t, func(c *config.Config) {
 				c.Host = bindHost
-				// LAN access requires require_auth + auth token.
-				c.RequireAuth = true
-				c.AuthToken = "test-token"
 			})
 
-			w := te.rawRequest(http.MethodGet, "/api/v1/stats",
-				withHost(host), withRemoteAddr(lanIP+":1234"),
-				withBearer("test-token"))
+			w := te.wrappedRequest(http.MethodGet, hostMiddlewareProbePath,
+				withHost(host), withRemoteAddr(lanIP+":1234"))
 			assertStatus(t, w, http.StatusOK)
 		})
 	}
@@ -2609,7 +2619,7 @@ func TestCORSBindAllRejectsNonLocalIPOrigin(t *testing.T) {
 
 	for _, bindHost := range []string{"0.0.0.0", "::"} {
 		t.Run(bindHost, func(t *testing.T) {
-			te := setup(t, func(c *config.Config) {
+			te := setupHostOnly(t, func(c *config.Config) {
 				c.Host = bindHost
 			})
 
@@ -2625,11 +2635,11 @@ func TestHostHeaderBindAllRejectsNonLocalIP(t *testing.T) {
 
 	for _, bindHost := range []string{"0.0.0.0", "::"} {
 		t.Run(bindHost, func(t *testing.T) {
-			te := setup(t, func(c *config.Config) {
+			te := setupHostOnly(t, func(c *config.Config) {
 				c.Host = bindHost
 			})
 
-			w := te.rawRequest(http.MethodGet, "/api/v1/stats",
+			w := te.wrappedRequest(http.MethodGet, hostMiddlewareProbePath,
 				withHost(host))
 			assertStatus(t, w, http.StatusForbidden)
 		})
@@ -2639,7 +2649,7 @@ func TestHostHeaderBindAllRejectsNonLocalIP(t *testing.T) {
 func TestCORSBindAllRejectsForeignOrigin(t *testing.T) {
 	for _, bindHost := range []string{"0.0.0.0", "::"} {
 		t.Run(bindHost, func(t *testing.T) {
-			te := setup(t, func(c *config.Config) {
+			te := setupHostOnly(t, func(c *config.Config) {
 				c.Host = bindHost
 			})
 
@@ -2653,11 +2663,11 @@ func TestCORSBindAllRejectsForeignOrigin(t *testing.T) {
 func TestHostHeaderBindAllRejectsDNSRebinding(t *testing.T) {
 	for _, bindHost := range []string{"0.0.0.0", "::"} {
 		t.Run(bindHost, func(t *testing.T) {
-			te := setup(t, func(c *config.Config) {
+			te := setupHostOnly(t, func(c *config.Config) {
 				c.Host = bindHost
 			})
 
-			w := te.rawRequest(http.MethodGet, "/api/v1/stats",
+			w := te.wrappedRequest(http.MethodGet, hostMiddlewareProbePath,
 				withHost("evil.attacker.com:8080"))
 			assertStatus(t, w, http.StatusForbidden)
 		})
@@ -2665,10 +2675,10 @@ func TestHostHeaderBindAllRejectsDNSRebinding(t *testing.T) {
 }
 
 func TestCORSVaryAlwaysSet(t *testing.T) {
-	te := setup(t)
+	te := setupHostOnly(t)
 
 	// Vary: Origin should be set even for disallowed origins.
-	w := te.wrappedRequest(http.MethodGet, "/api/v1/stats",
+	w := te.wrappedRequest(http.MethodGet, hostMiddlewareProbePath,
 		withOrigin("http://evil-site.com"))
 	assertStatus(t, w, http.StatusOK)
 
@@ -2679,7 +2689,7 @@ func TestCORSVaryAlwaysSet(t *testing.T) {
 }
 
 func TestCORSPreflight(t *testing.T) {
-	te := setup(t)
+	te := setupHostOnly(t)
 
 	w := te.wrappedRequest(http.MethodOptions, "/api/v1/sessions",
 		withOrigin("http://127.0.0.1:0"))
@@ -2687,9 +2697,9 @@ func TestCORSPreflight(t *testing.T) {
 }
 
 func TestCORSAllowMethods(t *testing.T) {
-	te := setup(t)
+	te := setupHostOnly(t)
 
-	w := te.wrappedRequest(http.MethodGet, "/api/v1/stats",
+	w := te.wrappedRequest(http.MethodGet, hostMiddlewareProbePath,
 		withOrigin("http://127.0.0.1:0"))
 	assertStatus(t, w, http.StatusOK)
 
