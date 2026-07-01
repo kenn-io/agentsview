@@ -11,6 +11,8 @@ import (
 )
 
 func TestListStoredSourcePathHintsScopesByAgentAndRoot(t *testing.T) {
+	t.Parallel()
+
 	d := testDB(t)
 	root := t.TempDir()
 	watchRoot := filepath.Join(root, "db")
@@ -45,6 +47,8 @@ func TestListStoredSourcePathHintsScopesByAgentAndRoot(t *testing.T) {
 }
 
 func TestListStoredSourcePathHintsHandlesHashPathsAndVirtualSuffixes(t *testing.T) {
+	t.Parallel()
+
 	d := testDB(t)
 	base := t.TempDir()
 
@@ -78,6 +82,8 @@ func TestListStoredSourcePathHintsHandlesHashPathsAndVirtualSuffixes(t *testing.
 }
 
 func TestListStoredSourcePathHintsEscapesLikeWildcards(t *testing.T) {
+	t.Parallel()
+
 	d := testDB(t)
 	base := t.TempDir()
 	root := filepath.Join(base, "db%!_root")
@@ -94,6 +100,8 @@ func TestListStoredSourcePathHintsEscapesLikeWildcards(t *testing.T) {
 }
 
 func TestListStoredSourcePathHintsBatchesRootsWithoutTruncating(t *testing.T) {
+	t.Parallel()
+
 	d := testDB(t)
 	base := t.TempDir()
 	var roots []string
@@ -123,6 +131,8 @@ func TestListStoredSourcePathHintsBatchesRootsWithoutTruncating(t *testing.T) {
 }
 
 func TestStoredSourcePathHintsLookupUsesAgentFilePathIndex(t *testing.T) {
+	t.Parallel()
+
 	d := testDB(t)
 	root := t.TempDir()
 	explainSQL, args := storedSourcePathHintQuery("claude", []string{root})

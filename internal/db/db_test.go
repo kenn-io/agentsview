@@ -5807,6 +5807,8 @@ func TestSystemMessageFingerprint(t *testing.T) {
 }
 
 func TestToolCallCountAndFingerprint(t *testing.T) {
+	t.Parallel()
+
 	d := testDB(t)
 	sess := Session{ID: "tc-sess", Project: "p", Machine: "local", Agent: "claude"}
 	err := d.UpsertSession(sess)
@@ -5831,6 +5833,8 @@ func TestToolCallCountAndFingerprint(t *testing.T) {
 }
 
 func TestToolCallFingerprintIncludesStableFields(t *testing.T) {
+	t.Parallel()
+
 	d := testDB(t)
 	for _, id := range []string{"tc-old", "tc-new"} {
 		err := d.UpsertSession(Session{
@@ -5875,6 +5879,8 @@ func TestToolCallFingerprintIncludesStableFields(t *testing.T) {
 }
 
 func TestToolCallFingerprintHandlesEmptyToolUseID(t *testing.T) {
+	t.Parallel()
+
 	d := testDB(t)
 	err := d.UpsertSession(Session{
 		ID: "tc-empty-id", Project: "p", Machine: "local", Agent: "cursor",
