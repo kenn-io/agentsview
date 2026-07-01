@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"math"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +17,114 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 )
+
+var (
+	dailyUsageFixtureOnce sync.Once
+	dailyUsageFixtureDir  string
+	dailyUsageFixturePath string
+)
+
+func openDailyUsageFixtureDB(t *testing.T) *DB {
+	t.Helper()
+
+	dailyUsageFixtureOnce.Do(func() {
+		dailyUsageFixtureDir, dailyUsageFixturePath =
+			buildDailyUsageFixtureTemplate(t)
+	})
+
+	dst := filepath.Join(t.TempDir(), "test.db")
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		require.NoError(t,
+			copyTemplateDBFile(
+				dailyUsageFixturePath+suffix, dst+suffix, suffix == "",
+			),
+			"copy daily usage fixture %q", suffix)
+	}
+	d, err := OpenPreparedTestDB(dst)
+	require.NoError(t, err, "open daily usage fixture")
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	return d
+}
+
+func buildDailyUsageFixtureTemplate(t *testing.T) (string, string) {
+	t.Helper()
+
+	dir, err := os.MkdirTemp("", "agentsview-daily-usage-*")
+	require.NoError(t, err, "create daily usage fixture dir")
+	path := filepath.Join(dir, "test.db")
+	require.NoError(t, copyTestDBTemplate(path),
+		"copy base db template for daily usage fixture")
+
+	d, err := OpenPreparedTestDB(path)
+	require.NoError(t, err, "open daily usage template")
+	seedDailyUsageFixture(t, d)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.NoError(t, d.CheckpointWALTruncate(ctx),
+		"checkpoint daily usage template")
+	require.NoError(t, d.Close(), "close daily usage template")
+	return dir, path
+}
+
+func seedDailyUsageFixture(t *testing.T, d *DB) {
+	t.Helper()
+
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{
+		{ModelPattern: "model-a", InputPerMTok: 2.0,
+			OutputPerMTok: 10.0},
+		{ModelPattern: "gpt-5", InputPerMTok: 2.5,
+			OutputPerMTok: 10.0},
+	}), "UpsertModelPricing")
+
+	type combo struct {
+		project string
+		agent   string
+	}
+	combos := []combo{
+		{"proj-a", "claude"},
+		{"proj-a", "codex"},
+		{"proj-b", "claude"},
+		{"proj-b", "codex"},
+	}
+	for i, c := range combos {
+		sid := "usage-fixture-" + strconv.Itoa(i)
+		insertSession(t, d, sid, c.project, func(s *Session) {
+			s.Agent = c.agent
+			s.StartedAt = Ptr("2024-06-15T10:00:00Z")
+		})
+		insertMessages(t, d,
+			Message{
+				SessionID:  sid,
+				Ordinal:    0,
+				Role:       "assistant",
+				Timestamp:  "2024-06-15T10:30:00Z",
+				Model:      "model-a",
+				TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
+			},
+			Message{
+				SessionID:  sid,
+				Ordinal:    1,
+				Role:       "assistant",
+				Timestamp:  "2024-06-15T10:31:00Z",
+				Model:      "gpt-5",
+				TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
+			},
+		)
+	}
+
+	insertSession(t, d, "usage-fixture-no-price", "proj-unknown", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = Ptr("2024-07-15T10:00:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID:  "usage-fixture-no-price",
+		Ordinal:    0,
+		Role:       "assistant",
+		Timestamp:  "2024-07-15T10:30:00Z",
+		Model:      "unknown-model",
+		TokenUsage: json.RawMessage(`{"input_tokens":500,"output_tokens":250}`),
+	})
+}
 
 func TestGetDailyUsageEmpty(t *testing.T) {
 	d := testDB(t)
@@ -861,25 +972,12 @@ func TestGetDailyUsageMultipleDaysAndModels(t *testing.T) {
 
 func TestGetDailyUsageNoPricing(t *testing.T) {
 	t.Parallel()
-	d := testDB(t)
+	d := openDailyUsageFixtureDB(t)
 	ctx := context.Background()
 
-	insertSession(t, d, "sess1", "proj1", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = new("2024-06-15T10:00:00Z")
-	})
-	insertMessages(t, d, Message{
-		SessionID:  "sess1",
-		Ordinal:    0,
-		Role:       "assistant",
-		Timestamp:  "2024-06-15T10:30:00Z",
-		Model:      "unknown-model",
-		TokenUsage: json.RawMessage(`{"input_tokens":500,"output_tokens":250}`),
-	})
-
 	result, err := d.GetDailyUsage(ctx, UsageFilter{
-		From: "2024-06-01",
-		To:   "2024-06-30",
+		From: "2024-07-01",
+		To:   "2024-07-31",
 	})
 	requireNoError(t, err, "GetDailyUsage no pricing")
 
@@ -1268,40 +1366,8 @@ func TestGetDailyUsageLongLivedSession(t *testing.T) {
 func TestGetDailyUsageProjectFilter(t *testing.T) {
 	t.Parallel()
 
-	d := testDB(t)
+	d := openDailyUsageFixtureDB(t)
 	ctx := context.Background()
-
-	requireNoError(t, d.UpsertModelPricing([]ModelPricing{{
-		ModelPattern:  "claude-sonnet",
-		InputPerMTok:  3.0,
-		OutputPerMTok: 15.0,
-	}}), "UpsertModelPricing")
-
-	insertSession(t, d, "sess-a", "proj-a", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = new("2024-06-15T10:00:00Z")
-	})
-	insertMessages(t, d, Message{
-		SessionID:  "sess-a",
-		Ordinal:    0,
-		Role:       "assistant",
-		Timestamp:  "2024-06-15T10:30:00Z",
-		Model:      "claude-sonnet",
-		TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
-	})
-
-	insertSession(t, d, "sess-b", "proj-b", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = new("2024-06-15T10:00:00Z")
-	})
-	insertMessages(t, d, Message{
-		SessionID:  "sess-b",
-		Ordinal:    0,
-		Role:       "assistant",
-		Timestamp:  "2024-06-15T10:30:00Z",
-		Model:      "claude-sonnet",
-		TokenUsage: json.RawMessage(`{"input_tokens":2000,"output_tokens":1000}`),
-	})
 
 	result, err := d.GetDailyUsage(ctx, UsageFilter{
 		From:    "2024-06-01",
@@ -1312,45 +1378,15 @@ func TestGetDailyUsageProjectFilter(t *testing.T) {
 
 	require.Len(t, result.Daily, 1, "got")
 	day := result.Daily[0]
-	assert.Equal(t, 1000, day.InputTokens, "InputTokens")
-	assert.Equal(t, 1000, result.Totals.InputTokens, "Totals.InputTokens")
+	assert.Equal(t, 4000, day.InputTokens, "InputTokens")
+	assert.Equal(t, 4000, result.Totals.InputTokens, "Totals.InputTokens")
 }
 
 func TestGetDailyUsageModelFilter(t *testing.T) {
 	t.Parallel()
 
-	d := testDB(t)
+	d := openDailyUsageFixtureDB(t)
 	ctx := context.Background()
-
-	requireNoError(t, d.UpsertModelPricing([]ModelPricing{
-		{ModelPattern: "claude-sonnet", InputPerMTok: 3.0,
-			OutputPerMTok: 15.0},
-		{ModelPattern: "gpt-5", InputPerMTok: 2.5,
-			OutputPerMTok: 10.0},
-	}), "UpsertModelPricing")
-
-	insertSession(t, d, "sess1", "proj1", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = new("2024-06-15T10:00:00Z")
-	})
-	insertMessages(t, d,
-		Message{
-			SessionID:  "sess1",
-			Ordinal:    0,
-			Role:       "assistant",
-			Timestamp:  "2024-06-15T10:30:00Z",
-			Model:      "claude-sonnet",
-			TokenUsage: json.RawMessage(`{"input_tokens":2000,"output_tokens":800}`),
-		},
-		Message{
-			SessionID:  "sess1",
-			Ordinal:    1,
-			Role:       "assistant",
-			Timestamp:  "2024-06-15T10:31:00Z",
-			Model:      "gpt-5",
-			TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
-		},
-	)
 
 	result, err := d.GetDailyUsage(ctx, UsageFilter{
 		From:  "2024-06-01",
@@ -1361,47 +1397,15 @@ func TestGetDailyUsageModelFilter(t *testing.T) {
 
 	require.Len(t, result.Daily, 1, "got")
 	day := result.Daily[0]
-	assert.Equal(t, 1000, day.InputTokens, "InputTokens")
+	assert.Equal(t, 4000, day.InputTokens, "InputTokens")
 	assert.Equal(t, []string{"gpt-5"}, day.ModelsUsed, "ModelsUsed")
 }
 
 func TestGetDailyUsageProjectBreakdowns(t *testing.T) {
 	t.Parallel()
 
-	d := testDB(t)
+	d := openDailyUsageFixtureDB(t)
 	ctx := context.Background()
-
-	requireNoError(t, d.UpsertModelPricing([]ModelPricing{{
-		ModelPattern:  "claude-sonnet",
-		InputPerMTok:  3.0,
-		OutputPerMTok: 15.0,
-	}}), "UpsertModelPricing")
-
-	insertSession(t, d, "sess-a", "proj-a", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = new("2024-06-15T10:00:00Z")
-	})
-	insertMessages(t, d, Message{
-		SessionID:  "sess-a",
-		Ordinal:    0,
-		Role:       "assistant",
-		Timestamp:  "2024-06-15T10:30:00Z",
-		Model:      "claude-sonnet",
-		TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
-	})
-
-	insertSession(t, d, "sess-b", "proj-b", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = new("2024-06-15T10:00:00Z")
-	})
-	insertMessages(t, d, Message{
-		SessionID:  "sess-b",
-		Ordinal:    0,
-		Role:       "assistant",
-		Timestamp:  "2024-06-15T10:30:00Z",
-		Model:      "claude-sonnet",
-		TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
-	})
 
 	result, err := d.GetDailyUsage(ctx, UsageFilter{
 		From:       "2024-06-01",
@@ -1426,7 +1430,7 @@ func TestGetDailyUsageProjectBreakdowns(t *testing.T) {
 			"missing ProjectBreakdown for %s", name) {
 			continue
 		}
-		assert.Equal(t, 1000, pb.InputTokens,
+		assert.Equal(t, 4000, pb.InputTokens,
 			"%s InputTokens", name)
 	}
 	assert.InDelta(t, day.TotalCost, projCostSum, 1e-9,
@@ -1434,40 +1438,10 @@ func TestGetDailyUsageProjectBreakdowns(t *testing.T) {
 }
 
 func TestGetDailyUsageAgentBreakdowns(t *testing.T) {
-	d := testDB(t)
+	t.Parallel()
+
+	d := openDailyUsageFixtureDB(t)
 	ctx := context.Background()
-
-	requireNoError(t, d.UpsertModelPricing([]ModelPricing{{
-		ModelPattern:  "claude-sonnet",
-		InputPerMTok:  3.0,
-		OutputPerMTok: 15.0,
-	}}), "UpsertModelPricing")
-
-	insertSession(t, d, "sess-claude", "proj1", func(s *Session) {
-		s.Agent = "claude"
-		s.StartedAt = new("2024-06-15T10:00:00Z")
-	})
-	insertMessages(t, d, Message{
-		SessionID:  "sess-claude",
-		Ordinal:    0,
-		Role:       "assistant",
-		Timestamp:  "2024-06-15T10:30:00Z",
-		Model:      "claude-sonnet",
-		TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
-	})
-
-	insertSession(t, d, "sess-codex", "proj1", func(s *Session) {
-		s.Agent = "codex"
-		s.StartedAt = new("2024-06-15T10:00:00Z")
-	})
-	insertMessages(t, d, Message{
-		SessionID:  "sess-codex",
-		Ordinal:    0,
-		Role:       "assistant",
-		Timestamp:  "2024-06-15T10:30:00Z",
-		Model:      "claude-sonnet",
-		TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
-	})
 
 	result, err := d.GetDailyUsage(ctx, UsageFilter{
 		From:       "2024-06-01",
@@ -1492,7 +1466,7 @@ func TestGetDailyUsageAgentBreakdowns(t *testing.T) {
 			"missing AgentBreakdown for %s", name) {
 			continue
 		}
-		assert.Equal(t, 1000, ab.InputTokens,
+		assert.Equal(t, 4000, ab.InputTokens,
 			"%s InputTokens", name)
 	}
 	assert.InDelta(t, day.TotalCost, agentCostSum, 1e-9,
@@ -1500,53 +1474,10 @@ func TestGetDailyUsageAgentBreakdowns(t *testing.T) {
 }
 
 func TestGetDailyUsageBreakdownInvariant(t *testing.T) {
-	d := testDB(t)
+	t.Parallel()
+
+	d := openDailyUsageFixtureDB(t)
 	ctx := context.Background()
-
-	requireNoError(t, d.UpsertModelPricing([]ModelPricing{
-		{ModelPattern: "model-a", InputPerMTok: 2.0,
-			OutputPerMTok: 10.0},
-		{ModelPattern: "model-b", InputPerMTok: 4.0,
-			OutputPerMTok: 20.0},
-	}), "UpsertModelPricing")
-
-	// 2 projects x 2 agents = 4 sessions, each with 2 messages
-	// from different models.
-	type combo struct {
-		project string
-		agent   string
-	}
-	combos := []combo{
-		{"proj-a", "claude"},
-		{"proj-a", "codex"},
-		{"proj-b", "claude"},
-		{"proj-b", "codex"},
-	}
-	for i, c := range combos {
-		sid := "sess-" + strconv.Itoa(i)
-		insertSession(t, d, sid, c.project, func(s *Session) {
-			s.Agent = c.agent
-			s.StartedAt = new("2024-06-15T10:00:00Z")
-		})
-		insertMessages(t, d,
-			Message{
-				SessionID:  sid,
-				Ordinal:    0,
-				Role:       "assistant",
-				Timestamp:  "2024-06-15T10:30:00Z",
-				Model:      "model-a",
-				TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
-			},
-			Message{
-				SessionID:  sid,
-				Ordinal:    1,
-				Role:       "assistant",
-				Timestamp:  "2024-06-15T10:31:00Z",
-				Model:      "model-b",
-				TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
-			},
-		)
-	}
 
 	result, err := d.GetDailyUsage(ctx, UsageFilter{
 		From:       "2024-06-01",

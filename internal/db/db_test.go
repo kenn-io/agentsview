@@ -338,6 +338,9 @@ func TestMain(m *testing.M) {
 	if chunkedAnalyticsDir != "" {
 		_ = os.RemoveAll(chunkedAnalyticsDir)
 	}
+	if dailyUsageFixtureDir != "" {
+		_ = os.RemoveAll(dailyUsageFixtureDir)
+	}
 	if statsOutcomeRepoDir != "" {
 		_ = os.RemoveAll(statsOutcomeRepoDir)
 	}
