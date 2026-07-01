@@ -1169,10 +1169,14 @@ func TestSyncEngineProgress(t *testing.T) {
 		AddClaudeUser(tsZero, "msg").
 		String()
 
+	var firstClaudePath string
 	for _, name := range []string{"a", "b", "c"} {
-		env.writeClaudeSession(
+		path := env.writeClaudeSession(
 			t, "test-proj", name+".jsonl", msg,
 		)
+		if firstClaudePath == "" {
+			firstClaudePath = path
+		}
 	}
 	piebald := createPiebaldDB(t, env.piebaldDir)
 	piebald.addChat(t, 42, "Piebald", "Prompt.", "Answer.", "2026-05-01T10:05:00Z")
@@ -1181,6 +1185,7 @@ func TestSyncEngineProgress(t *testing.T) {
 	var firstTotal int
 	var last sync.Progress
 	var events []sync.Progress
+	var seenCurrent sync.Progress
 	env.engine.SyncAll(context.Background(), func(p sync.Progress) {
 		progressCalls++
 		if firstTotal == 0 {
@@ -1188,6 +1193,13 @@ func TestSyncEngineProgress(t *testing.T) {
 		}
 		last = p
 		events = append(events, p)
+		if seenCurrent.Phase == "" {
+			current, ok := env.engine.CurrentProgress()
+			require.True(t, ok, "CurrentProgress should be available during sync")
+			assert.Equal(t, p.Phase, current.Phase, "current progress phase")
+			assert.Equal(t, p.SessionsTotal, current.SessionsTotal, "current progress total")
+			seenCurrent = current
+		}
 	})
 
 	assert.NotZero(t, progressCalls, "expected progress callbacks")
@@ -1195,6 +1207,10 @@ func TestSyncEngineProgress(t *testing.T) {
 	assert.Equal(t, 4, last.SessionsDone, "last progress = %d/%d, want 4/4", last.SessionsDone, last.SessionsTotal)
 	assert.Equal(t, 4, last.SessionsTotal, "last progress = %d/%d, want 4/4", last.SessionsDone, last.SessionsTotal)
 	requireProgressDoneOnce(t, events, 4)
+	require.NotEmpty(t, seenCurrent.Phase, "expected progress to be observed")
+	_, ok := env.engine.CurrentProgress()
+	assert.False(t, ok, "CurrentProgress should be cleared after sync")
+	requireDiscoveryBeforeSyncing(t, events, false)
 
 	progressCalls = 0
 	firstTotal = 0
@@ -1213,6 +1229,32 @@ func TestSyncEngineProgress(t *testing.T) {
 	assert.Equal(t, 4, last.SessionsDone, "second last progress = %d/%d, want 4/4", last.SessionsDone, last.SessionsTotal)
 	assert.Equal(t, 4, last.SessionsTotal, "second last progress = %d/%d, want 4/4", last.SessionsDone, last.SessionsTotal)
 	requireProgressDoneOnce(t, events, 4)
+
+	env.engine.SyncPaths([]string{firstClaudePath})
+	_, ok = env.engine.CurrentProgress()
+	assert.False(t, ok, "CurrentProgress should be cleared after SyncPaths")
+
+	var resyncEvents []sync.Progress
+	stats := env.engine.ResyncAll(context.Background(), func(p sync.Progress) {
+		resyncEvents = append(resyncEvents, p)
+	})
+	require.False(t, stats.Aborted, "resync aborted: %+v", stats.Warnings)
+
+	if env.db.HasFTS() {
+		var fts sync.Progress
+		for _, event := range resyncEvents {
+			if event.Phase == sync.PhaseRebuildingSearch {
+				fts = event
+				break
+			}
+		}
+		require.Equal(t, sync.PhaseRebuildingSearch, fts.Phase, "missing FTS rebuild progress event; events=%+v", resyncEvents)
+		assert.True(t, fts.Resync, "FTS progress should identify full resync")
+		assert.Contains(t, fts.Detail, "Rebuilding search index")
+		assert.Contains(t, fts.Hint, "may take a while")
+	}
+
+	requireDiscoveryBeforeSyncing(t, resyncEvents, true)
 }
 
 func requireProgressDoneOnce(t *testing.T, events []sync.Progress, wantTotal int) {
@@ -1243,77 +1285,8 @@ func requireProgressDoneOnce(t *testing.T, events []sync.Progress, wantTotal int
 		"final MessagesIndexed = %d regressed from peak %d", last.MessagesIndexed, peakMessages)
 }
 
-func TestSyncEngineCurrentProgressDuringSync(t *testing.T) {
-	t.Parallel()
-	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
-
-	msg := testjsonl.NewSessionBuilder().
-		AddClaudeUser(tsZero, "msg").
-		String()
-	env.writeClaudeSession(t, "test-proj", "a.jsonl", msg)
-
-	var seen sync.Progress
-	env.engine.SyncAll(context.Background(), func(p sync.Progress) {
-		if seen.Phase != "" {
-			return
-		}
-		current, ok := env.engine.CurrentProgress()
-		require.True(t, ok, "CurrentProgress should be available during sync")
-		assert.Equal(t, p.Phase, current.Phase, "current progress phase")
-		assert.Equal(t, p.SessionsTotal, current.SessionsTotal, "current progress total")
-		seen = current
-	})
-
-	require.NotEmpty(t, seen.Phase, "expected progress to be observed")
-	_, ok := env.engine.CurrentProgress()
-	assert.False(t, ok, "CurrentProgress should be cleared after sync")
-}
-
-func TestSyncEngineCurrentProgressClearedAfterSyncPaths(t *testing.T) {
-	t.Parallel()
-	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
-
-	msg := testjsonl.NewSessionBuilder().
-		AddClaudeUser(tsZero, "msg").
-		String()
-	path := env.writeClaudeSession(t, "test-proj", "a.jsonl", msg)
-
-	env.engine.SyncPaths([]string{path})
-
-	_, ok := env.engine.CurrentProgress()
-	assert.False(t, ok, "CurrentProgress should be cleared after SyncPaths")
-}
-
-func TestResyncAllProgressEvents(t *testing.T) {
-	t.Parallel()
-	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
-
-	msg := testjsonl.NewSessionBuilder().
-		AddClaudeUser(tsZero, "findable prompt").
-		AddClaudeAssistant(tsZeroS5, "findable response").
-		String()
-	env.writeClaudeSession(t, "test-proj", "a.jsonl", msg)
-
-	var events []sync.Progress
-	stats := env.engine.ResyncAll(context.Background(), func(p sync.Progress) {
-		events = append(events, p)
-	})
-	require.False(t, stats.Aborted, "resync aborted: %+v", stats.Warnings)
-
-	if env.db.HasFTS() {
-		var fts sync.Progress
-		for _, event := range events {
-			if event.Phase == sync.PhaseRebuildingSearch {
-				fts = event
-				break
-			}
-		}
-		require.Equal(t, sync.PhaseRebuildingSearch, fts.Phase, "missing FTS rebuild progress event; events=%+v", events)
-		assert.True(t, fts.Resync, "FTS progress should identify full resync")
-		assert.Contains(t, fts.Detail, "Rebuilding search index")
-		assert.Contains(t, fts.Hint, "may take a while")
-	}
-
+func requireDiscoveryBeforeSyncing(t *testing.T, events []sync.Progress, wantResync bool) {
+	t.Helper()
 	discoveryIdx, syncingIdx := -1, -1
 	for i, event := range events {
 		if event.Phase == sync.PhaseDiscovering && discoveryIdx == -1 {
@@ -1329,48 +1302,8 @@ func TestResyncAllProgressEvents(t *testing.T) {
 		"missing syncing progress event; events=%+v", events)
 	assert.Less(t, discoveryIdx, syncingIdx,
 		"discovery must be reported before syncing")
-	assert.True(t, events[discoveryIdx].Resync,
-		"discovery progress should identify full resync")
-	assert.Contains(t, events[discoveryIdx].Detail, "Discovering sessions")
-}
-
-// TestSyncAllReportsDiscoveryBeforeSyncing verifies an incremental SyncAll
-// emits a discovery phase before its first syncing event. syncAllLocked walks
-// every source before emitting any syncing progress, so without this marker a
-// daemon-driven `agentsview sync` shows no terminal feedback for the entire
-// (sometimes multi-minute) discovery walk.
-func TestSyncAllReportsDiscoveryBeforeSyncing(t *testing.T) {
-	t.Parallel()
-	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
-
-	msg := testjsonl.NewSessionBuilder().
-		AddClaudeUser(tsZero, "findable prompt").
-		AddClaudeAssistant(tsZeroS5, "findable response").
-		String()
-	env.writeClaudeSession(t, "test-proj", "a.jsonl", msg)
-
-	var events []sync.Progress
-	env.engine.SyncAll(context.Background(), func(p sync.Progress) {
-		events = append(events, p)
-	})
-
-	discoveryIdx, syncingIdx := -1, -1
-	for i, event := range events {
-		if event.Phase == sync.PhaseDiscovering && discoveryIdx == -1 {
-			discoveryIdx = i
-		}
-		if event.Phase == sync.PhaseSyncing && syncingIdx == -1 {
-			syncingIdx = i
-		}
-	}
-	require.NotEqual(t, -1, discoveryIdx,
-		"missing discovery progress event; events=%+v", events)
-	require.NotEqual(t, -1, syncingIdx,
-		"missing syncing progress event; events=%+v", events)
-	assert.Less(t, discoveryIdx, syncingIdx,
-		"discovery must be reported before syncing")
-	assert.False(t, events[discoveryIdx].Resync,
-		"incremental sync discovery should not be flagged as a full resync")
+	assert.Equal(t, wantResync, events[discoveryIdx].Resync,
+		"discovery progress resync flag")
 	assert.Contains(t, events[discoveryIdx].Detail, "Discovering sessions")
 }
 
