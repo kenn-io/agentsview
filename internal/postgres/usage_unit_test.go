@@ -332,8 +332,9 @@ func TestPGGetUsageMatchingSessionCountUsesSessionQuery(t *testing.T) {
 
 // TestPGMatchingUsageRowsSQLForBoundsRelaxesTokenEligibility asserts the
 // bounded matching-session query relaxes token eligibility (no
-// m.token_usage check) while still folding in the session-wide
-// model-match EXISTS clause, mirroring
+// m.token_usage check) while filtering Model/ExcludeModel directly on the
+// bounded message/event row, matching the normal bounded path instead of
+// folding in a session-wide model-match EXISTS clause. Mirrors
 // TestPGUsageRowQueryPushesDateBoundsIntoUnion's direct-call style with
 // no live DB and no probe mock.
 func TestPGMatchingUsageRowsSQLForBoundsRelaxesTokenEligibility(t *testing.T) {
@@ -351,11 +352,13 @@ func TestPGMatchingUsageRowsSQLForBoundsRelaxesTokenEligibility(t *testing.T) {
 	assert.Contains(t, normalized, "usage_event_timestamp_rows as materialized")
 	assert.Contains(t, normalized, "m.model != ''")
 	assert.NotContains(t, normalized, "m.token_usage != ''")
-	// Each of the four branches (message-timestamp join, event-timestamp
-	// join, message fallback, event fallback) folds in the session-wide
-	// model-match clause, which itself emits one EXISTS for messages and
-	// one for usage_events - 4 branches * 2 EXISTS each.
-	assert.Equal(t, 8, strings.Count(normalized, "exists ("))
+	// Model is filtered on the bounded row directly, not via a
+	// session-wide EXISTS: each of the four branches (message-timestamp
+	// source, event-timestamp source, message fallback, event fallback)
+	// applies its own m.model/ue.model comparison, no EXISTS subqueries.
+	assert.Equal(t, 0, strings.Count(normalized, "exists ("))
+	assert.Equal(t, 2, strings.Count(normalized, "m.model = "))
+	assert.Equal(t, 2, strings.Count(normalized, "ue.model = "))
 }
 
 func TestPGTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {
