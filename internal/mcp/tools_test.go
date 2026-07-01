@@ -627,6 +627,77 @@ func TestGetMessages_NextFromUsesScannedNotVisible(t *testing.T) {
 		"next_from advances past scanned ordinal 1, not visible ordinal 0")
 }
 
+// The schemas promise that message_count counts every stored message across
+// all roles (system included), and that a full get_messages pagination sweep
+// reconciles against it: returned messages plus filtered add up to
+// message_count for any roles filter. This pins that contract so a refactor
+// of either code path cannot silently break it (issue #944).
+func TestGetMessages_FilteredReconcilesWithMessageCount(t *testing.T) {
+	ts, d := newTestToolset(t)
+	// A realistic mix: user/assistant turns, an is_system-flagged row, a
+	// tool dump, and a legacy system-prefixed user row (parsed before
+	// is_system was backfilled, so the flag is unset). message_count is
+	// the row total, mirroring the sync engine's write-time derivation.
+	msgs := []db.Message{
+		dbtest.UserMsg("s1", 0, "hello"),
+		dbtest.AsstMsg("s1", 1, "hi"),
+		{
+			SessionID: "s1", Ordinal: 2, Role: "system",
+			Content: "sys", IsSystem: true, ContentLength: 3,
+		},
+		{
+			SessionID: "s1", Ordinal: 3, Role: "tool",
+			Content: "tool output", ContentLength: 11,
+		},
+		dbtest.UserMsg("s1", 4,
+			"This session is being continued from a previous conversation"),
+		dbtest.AsstMsg("s1", 5, "more"),
+		{
+			SessionID: "s1", Ordinal: 6, Role: "tool",
+			Content: "tool output 2", ContentLength: 13,
+		},
+		dbtest.UserMsg("s1", 7, "bye"),
+	}
+	dbtest.SeedSessionWithMessages(t, d, "s1", "proj", msgs,
+		dbtest.WithMessageCounts(len(msgs), 3))
+
+	_, ov, err := ts.sessionOverview(context.Background(), nil,
+		sessionOverviewIn{SessionID: "s1"})
+	require.NoError(t, err)
+	require.Equal(t, len(msgs), ov.Session.MessageCount)
+
+	tests := []struct {
+		name  string
+		roles []string
+	}{
+		{"default roles", nil},
+		{"user assistant tool", []string{"user", "assistant", "tool"}},
+		{"tool only", []string{"tool"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			returned, filtered := 0, 0
+			var from *int
+			for range len(msgs) + 1 { // bounded: a sweep never needs more pages
+				_, out, err := ts.getMessages(context.Background(), nil,
+					getMessagesIn{
+						SessionID: "s1", Direction: "asc",
+						Limit: 3, From: from, Roles: tt.roles,
+					})
+				require.NoError(t, err)
+				returned += len(out.Messages)
+				filtered += out.Filtered
+				if out.NextFrom == nil {
+					break
+				}
+				from = out.NextFrom
+			}
+			assert.Equal(t, ov.Session.MessageCount, returned+filtered,
+				"returned + filtered must reconcile to message_count")
+		})
+	}
+}
+
 // search_sessions must exclude a session active now even when its search
 // result carries no ended_at/started_at (empty SessionEndedAt), by falling
 // back to created_at like search_content -- mirroring the canonical
