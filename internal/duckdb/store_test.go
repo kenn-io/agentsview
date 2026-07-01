@@ -87,6 +87,91 @@ func TestStoreReadsSessionsMessagesAndMetadata(t *testing.T) {
 	assert.Equal(t, []string{"test-machine"}, machines)
 }
 
+func TestStoreGetStatsPreservesRootAndScopeFilters(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, syncer.EnsureSchema(ctx))
+	duck := syncer.DB()
+	store := NewStoreFromDB(duck)
+
+	insertSession := func(
+		id, project, relationship, ts string,
+		messageCount, userMessageCount int,
+		automated bool,
+	) {
+		t.Helper()
+		_, err := duck.ExecContext(ctx, `
+			INSERT INTO sessions (
+				id, project, machine, agent, message_count,
+				user_message_count, relationship_type, is_automated,
+				started_at, created_at
+			) VALUES (
+				?, ?, 'stats-machine', 'claude', ?, ?, ?, ?,
+				CAST(? AS TIMESTAMP), CAST(? AS TIMESTAMP)
+			)`,
+			id, project, messageCount, userMessageCount, relationship,
+			automated, ts, ts,
+		)
+		require.NoError(t, err)
+	}
+
+	insertSession(
+		"stats-human", "alpha", "root", "2026-01-01 00:00:00",
+		2, 2, false,
+	)
+	insertSession(
+		"stats-one-shot", "beta", "root", "2026-01-02 00:00:00",
+		1, 1, false,
+	)
+	insertSession(
+		"stats-automated", "bot", "root", "2026-01-03 00:00:00",
+		1, 1, true,
+	)
+	insertSession(
+		"stats-subagent", "child", "subagent", "2026-01-04 00:00:00",
+		1, 2, false,
+	)
+	insertSession(
+		"stats-fork", "fork", "fork", "2026-01-05 00:00:00",
+		1, 2, false,
+	)
+	insertSession(
+		"stats-empty", "empty", "root", "2026-01-06 00:00:00",
+		0, 2, false,
+	)
+	insertSession(
+		"stats-deleted", "deleted", "root", "2026-01-07 00:00:00",
+		1, 2, false,
+	)
+	_, err := duck.ExecContext(ctx,
+		`UPDATE sessions SET deleted_at = CAST(? AS TIMESTAMP) WHERE id = ?`,
+		"2026-01-08 00:00:00", "stats-deleted",
+	)
+	require.NoError(t, err)
+
+	assertStats := func(
+		name string,
+		excludeOneShot, excludeAutomated bool,
+		wantSessions, wantMessages, wantProjects int,
+	) {
+		t.Helper()
+		stats, err := store.GetStats(ctx, excludeOneShot, excludeAutomated)
+		require.NoError(t, err, name)
+		assert.Equal(t, wantSessions, stats.SessionCount, name)
+		assert.Equal(t, wantMessages, stats.MessageCount, name)
+		assert.Equal(t, wantProjects, stats.ProjectCount, name)
+		assert.Equal(t, 1, stats.MachineCount, name)
+		require.NotNil(t, stats.EarliestSession, name)
+		assert.Equal(t, "2026-01-01T00:00:00Z", *stats.EarliestSession, name)
+	}
+
+	assertStats("include all root sessions", false, false, 3, 4, 3)
+	assertStats("exclude one-shot keeps automated", true, false, 2, 3, 2)
+	assertStats("exclude automated keeps human one-shot", false, true, 2, 3, 2)
+	assertStats("exclude one-shot and automated", true, true, 1, 2, 1)
+}
+
 func TestStoreMessageIDJoinsAreSessionScoped(t *testing.T) {
 	ctx := context.Background()
 	store, fixture := newSyncedStore(t)
