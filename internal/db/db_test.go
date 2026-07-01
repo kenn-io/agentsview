@@ -4469,6 +4469,8 @@ func TestVibeCanonicalDeleteExcludesFallbackAlias(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			d := testDB(t)
 			insertSession(t, d, tc.id, "p", func(s *Session) {
 				s.Agent = "vibe"

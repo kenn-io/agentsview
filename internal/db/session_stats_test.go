@@ -2566,37 +2566,12 @@ func statsOutcomeRepo(t *testing.T) string {
 			"a.txt", "a1\na2\na3\na4\na5\n", "c2")
 		statsCommitFile(t, statsOutcomeRepoPath,
 			"b.txt", "b1\nb2\nb3\nb4\n", "c3")
+		require.NoError(t, os.MkdirAll(
+			filepath.Join(statsOutcomeRepoPath, "subdir"), 0o755,
+		), "mkdir stats outcome subdir")
 	})
 
-	repo := filepath.Join(t.TempDir(), "repo")
-	copyStatsRepo(t, statsOutcomeRepoPath, repo)
-	return repo
-}
-
-func copyStatsRepo(t *testing.T, src, dst string) {
-	t.Helper()
-	require.NoError(t, filepath.WalkDir(src, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			return os.MkdirAll(target, info.Mode().Perm())
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(target, data, info.Mode().Perm())
-	}), "copy stats outcome repo")
+	return statsOutcomeRepoPath
 }
 
 // TestGetSessionStats_OutcomeStats_DefaultDisabled verifies that plain
@@ -2637,8 +2612,6 @@ func TestGetSessionStats_OutcomeStats_Happy(t *testing.T) {
 	// one in a subdirectory. Both should collapse to the same repo and
 	// counted once in ReposActive.
 	sub := filepath.Join(repo, "subdir")
-	err := os.MkdirAll(sub, 0o755)
-	require.NoError(t, err, "mkdir sub")
 	insertSessionFixture(t, d, sessionFixture{
 		id: "os1", agent: "claude", userMsgs: 5,
 		startedAt: hoursAgo(5), cwd: repo,
