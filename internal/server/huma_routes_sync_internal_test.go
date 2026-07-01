@@ -72,9 +72,7 @@ func newSyncRouteFixture(
 	}
 
 	if cfg.stale {
-		database, err := db.Open(dbPath)
-		require.NoError(t, err)
-		require.NoError(t, database.Close())
+		dbtest.EnsureTestDBAt(t, dbPath)
 		markDBStale(t, dbPath)
 	}
 
@@ -317,6 +315,7 @@ func TestHumaSyncStatusUsesExistingOnDemandEngine(t *testing.T) {
 }
 
 func TestHumaSyncSessionLocalNoSyncUsesOnDemandEngine(t *testing.T) {
+	t.Parallel()
 	f := newSyncRouteFixture(t)
 	sessionPath := f.writeClaudeSession(t, "proj/session.jsonl", "no sync route")
 	w := postSessionSync(t, f.handler, sessionPath)
@@ -354,6 +353,7 @@ func TestHumaTriggerSyncLocalNoSyncResyncsStaleDB(t *testing.T) {
 }
 
 func TestHumaSyncSessionLocalNoSyncResyncsStaleDB(t *testing.T) {
+	t.Parallel()
 	f := newSyncRouteFixture(t, withStaleDB())
 	sessionPath := f.writeClaudeSession(t, "proj/session.jsonl",
 		"stale session sync route")
@@ -382,6 +382,7 @@ func TestHumaSyncSessionCanceledPreResyncReturnsNil(t *testing.T) {
 }
 
 func TestHumaSyncSessionCanceledServiceSyncReturnsNil(t *testing.T) {
+	t.Parallel()
 	f := newSyncRouteFixture(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
