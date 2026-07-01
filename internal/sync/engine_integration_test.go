@@ -1355,12 +1355,9 @@ func TestSyncEngineCurrentProgressClearedAfterSyncPaths(t *testing.T) {
 	assert.False(t, ok, "CurrentProgress should be cleared after SyncPaths")
 }
 
-func TestResyncAllEmitsFTSRebuildHint(t *testing.T) {
+func TestResyncAllProgressEvents(t *testing.T) {
 	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
-	if !env.db.HasFTS() {
-		t.Skip("FTS unavailable")
-	}
 
 	msg := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "findable prompt").
@@ -1374,39 +1371,19 @@ func TestResyncAllEmitsFTSRebuildHint(t *testing.T) {
 	})
 	require.False(t, stats.Aborted, "resync aborted: %+v", stats.Warnings)
 
-	var fts sync.Progress
-	for _, event := range events {
-		if event.Phase == sync.PhaseRebuildingSearch {
-			fts = event
-			break
+	if env.db.HasFTS() {
+		var fts sync.Progress
+		for _, event := range events {
+			if event.Phase == sync.PhaseRebuildingSearch {
+				fts = event
+				break
+			}
 		}
+		require.Equal(t, sync.PhaseRebuildingSearch, fts.Phase, "missing FTS rebuild progress event; events=%+v", events)
+		assert.True(t, fts.Resync, "FTS progress should identify full resync")
+		assert.Contains(t, fts.Detail, "Rebuilding search index")
+		assert.Contains(t, fts.Hint, "may take a while")
 	}
-	require.Equal(t, sync.PhaseRebuildingSearch, fts.Phase, "missing FTS rebuild progress event; events=%+v", events)
-	assert.True(t, fts.Resync, "FTS progress should identify full resync")
-	assert.Contains(t, fts.Detail, "Rebuilding search index")
-	assert.Contains(t, fts.Hint, "may take a while")
-}
-
-// TestResyncAllReportsDiscoveryBeforeSyncing verifies the resync emits a
-// distinct discovery phase before the first syncing event. Without it, the
-// silent discovery walk is mislabeled: the progress printer credits its
-// wall-clock time to the preceding "Disabling temporary search index updates"
-// phase, which actually completes instantly.
-func TestResyncAllReportsDiscoveryBeforeSyncing(t *testing.T) {
-	t.Parallel()
-	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
-
-	msg := testjsonl.NewSessionBuilder().
-		AddClaudeUser(tsZero, "findable prompt").
-		AddClaudeAssistant(tsZeroS5, "findable response").
-		String()
-	env.writeClaudeSession(t, "test-proj", "a.jsonl", msg)
-
-	var events []sync.Progress
-	stats := env.engine.ResyncAll(context.Background(), func(p sync.Progress) {
-		events = append(events, p)
-	})
-	require.False(t, stats.Aborted, "resync aborted: %+v", stats.Warnings)
 
 	discoveryIdx, syncingIdx := -1, -1
 	for i, event := range events {
