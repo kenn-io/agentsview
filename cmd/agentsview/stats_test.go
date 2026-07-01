@@ -534,7 +534,7 @@ func buildGoldenFixtureTemplateFiles(t *testing.T) (map[string][]byte, error) {
 	}()
 
 	seedGoldenFixtureDB(t, d)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := d.CheckpointWALTruncate(ctx); err != nil {
 		return nil, fmt.Errorf("checkpoint golden fixture template: %w", err)

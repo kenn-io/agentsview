@@ -351,8 +351,23 @@ func TestMain(m *testing.M) {
 }
 
 func openCopiedTestDB(path string) (*DB, error) {
-	if err := copyTestDBTemplate(path); err != nil {
-		return nil, err
+	return openTestDBWithTemplate(path, copyTestDBTemplate)
+}
+
+func openTestDBWithTemplate(
+	path string, copyTemplate func(string) error,
+) (*DB, error) {
+	if err := copyTemplate(path); err != nil {
+		// The shared template is only a setup-cost optimization.
+		// Never let a template failure poison every test in the
+		// binary; build this database from scratch instead.
+		fmt.Fprintf(os.Stderr,
+			"db test: template unavailable, creating %s from scratch: %v\n",
+			path, err)
+		for _, suffix := range []string{"", "-wal", "-shm"} {
+			_ = os.Remove(path + suffix)
+		}
+		return Open(path)
 	}
 	return OpenPreparedTestDB(path)
 }
@@ -380,13 +395,19 @@ func copyTestDBTemplate(dst string) error {
 			)
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		// Checkpointing keeps the copied template compact, but it
+		// is best-effort: the copy below carries the -wal/-shm
+		// files along, so a checkpoint that cannot finish in time
+		// (slow Windows CI runners) must not fail the build. The
+		// timeout is generous because this runs once per binary.
+		ctx, cancel := context.WithTimeout(
+			context.Background(), 30*time.Second,
+		)
 		defer cancel()
 		if err := template.CheckpointWALTruncate(ctx); err != nil {
-			testDBTemplateErr = fmt.Errorf(
-				"checkpointing db template: %w",
-				err,
-			)
+			fmt.Fprintf(os.Stderr,
+				"db test: template wal checkpoint failed, copying wal as-is: %v\n",
+				err)
 		}
 		if err := template.Close(); err != nil && testDBTemplateErr == nil {
 			testDBTemplateErr = fmt.Errorf(
