@@ -370,9 +370,8 @@ func newTestDBAt(
 	dbPath string,
 ) (string, *OpenCodeSeeder, *sql.DB) {
 	t.Helper()
+	copyOpenCodeSchemaTemplate(t, dbPath)
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err, "open test db")
-	_, err = db.Exec(openCodeSchema)
-	require.NoError(t, err, "create schema")
 	return dbPath, &OpenCodeSeeder{db: db, t: t}, db
 }
