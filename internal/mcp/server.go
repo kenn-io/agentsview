@@ -91,7 +91,10 @@ func newServer(opts ServeOptions) *mcp.Server {
 		Name: ToolGetMessages,
 		Description: "Read a slice of one session's transcript, paginated by message ordinal. Defaults " +
 			"return only user and assistant messages, each truncated to 2000 characters; truncated " +
-			"messages are flagged so you can re-fetch with a higher max_chars_per_message.",
+			"messages are flagged so you can re-fetch with a higher max_chars_per_message. Each page " +
+			"reports how many scanned messages the role/system filter dropped as filtered, so across a " +
+			"full pagination sweep, returned plus filtered messages add up to the session's " +
+			"message_count (which counts all stored messages, system included).",
 		Annotations: readOnly,
 	}, t.getMessages)
 

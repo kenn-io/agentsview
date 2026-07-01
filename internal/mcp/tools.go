@@ -176,8 +176,8 @@ type sessionRow struct {
 	Name             string `json:"name"`
 	StartedAt        string `json:"started_at"`
 	EndedAt          string `json:"ended_at"`
-	MessageCount     int    `json:"message_count"`
-	UserMessageCount int    `json:"user_message_count"`
+	MessageCount     int    `json:"message_count" jsonschema:"Total stored messages for the session across all roles, including system messages. get_messages always drops system messages, so no roles filter makes its returned count match this; reconcile instead via message_count = returned + filtered summed over a full get_messages pagination sweep."`
+	UserMessageCount int    `json:"user_message_count" jsonschema:"Stored user-role messages, excluding those flagged as system-injected."`
 	OutputTokens     int64  `json:"output_tokens,omitempty"`
 	Outcome          string `json:"outcome,omitempty"`
 	HealthGrade      string `json:"health_grade,omitempty"`
@@ -332,12 +332,11 @@ type messageOut struct {
 
 type getMessagesOut struct {
 	Messages []messageOut `json:"messages"`
-	Filtered int          `json:"filtered,omitempty"`
-	// NextFrom is the from anchor for the next page when more messages may
-	// remain. It is set off the last scanned ordinal (not the last visible
+	Filtered int          `json:"filtered,omitempty" jsonschema:"How many of this page's scanned messages were excluded by the role/system filter (omitted when zero). Summed across a full pagination sweep, filtered plus the returned messages adds up to the session's message_count."`
+	// NextFrom is set off the last scanned ordinal (not the last visible
 	// one), so paging stays reliable even though filtering can make a page
-	// return fewer than the limit. An empty follow-up result means the end.
-	NextFrom *int `json:"next_from,omitempty"`
+	// return fewer than the limit.
+	NextFrom *int `json:"next_from,omitempty" jsonschema:"Anchor for the next page's from parameter when more messages may remain; absent means the end. Filtering can make a page return fewer than limit messages, so keep paging until next_from is absent, not until a page comes back short."`
 }
 
 func (t *toolset) getMessages(
