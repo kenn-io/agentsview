@@ -105,6 +105,21 @@ func TestQuackLoopbackAttachRoundTrip(t *testing.T) {
 	)
 	assert.Equal(t, 41, got)
 
+	_, err = client.ExecContext(ctx, `FROM remote_db.query(?)`,
+		`INSERT INTO local_seed VALUES ('seed', 43)
+		 ON CONFLICT(id) DO UPDATE SET value = excluded.value`,
+	)
+	require.NoError(t, err, "upsert seed row through quack query")
+
+	require.NoError(t,
+		server.QueryRowContext(ctx,
+			`SELECT value FROM local_seed WHERE id = ?`,
+			"seed",
+		).Scan(&got),
+		"query upserted seed row on server",
+	)
+	assert.Equal(t, 43, got)
+
 	_, err = client.ExecContext(ctx,
 		`CREATE TABLE remote_db.remote_write
 		 AS SELECT 'client'::TEXT AS id, 42::INTEGER AS value`,
@@ -256,6 +271,14 @@ func TestQuackClientSyncPushWritesThroughAttachment(t *testing.T) {
 	assertDuckDBCount(t, server, "messages", 3)
 	assertDuckDBCount(t, server, "cursor_usage_events", 2)
 	assertDuckDBIndexExists(t, server, "tool_calls", "idx_tool_calls_file_path")
+
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err, "repeat push through Quack")
+	assertDuckDBCount(t, server, "sessions", 2)
+	assertDuckDBCount(t, server, "messages", 3)
+	assertDuckDBCount(t, server, "tool_calls", 1)
+	assertDuckDBCount(t, server, "tool_result_events", 1)
+	assertDuckDBCount(t, server, "cursor_usage_events", 2)
 
 	store, err := NewQuackStore(uri, token, false)
 	require.NoError(t, err, "open Quack-backed store")

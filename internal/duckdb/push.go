@@ -45,24 +45,8 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	for i := 0; i < len(prices); i += duckPricingUpsertBatch {
 		end := min(i+duckPricingUpsertBatch, len(prices))
 		batch := prices[i:end]
-		if s.connectionKind == duckDBQuackClientConnection {
-			for _, price := range batch {
-				if err := s.execDelete(ctx, tx,
-					`DELETE FROM model_pricing WHERE model_pattern = ?`,
-					price.ModelPattern,
-				); err != nil {
-					return fmt.Errorf(
-						"clearing duckdb pricing %s: %w",
-						price.ModelPattern, err,
-					)
-				}
-			}
-		}
-		query, args := duckPricingStatement(
-			batch,
-			s.connectionKind != duckDBQuackClientConnection,
-		)
-		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+		query, args := duckPricingUpsertStatement(batch)
+		if err := s.execMutation(ctx, tx, query, args...); err != nil {
 			return fmt.Errorf(
 				"syncing duckdb pricing batch starting at %d: %w",
 				i, err,
@@ -77,7 +61,7 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 
 const duckPricingUpsertBatch = 100
 
-func duckPricingStatement(prices []db.ModelPricing, upsert bool) (string, []any) {
+func duckPricingUpsertStatement(prices []db.ModelPricing) (string, []any) {
 	var b strings.Builder
 	b.WriteString(`INSERT INTO model_pricing (
 		model_pattern, input_per_mtok, output_per_mtok,
@@ -97,9 +81,6 @@ func duckPricingStatement(prices []db.ModelPricing, upsert bool) (string, []any)
 			p.CacheReadPerMTok,
 			p.UpdatedAt,
 		)
-	}
-	if !upsert {
-		return b.String(), args
 	}
 	b.WriteString(`
 	ON CONFLICT(model_pattern) DO UPDATE SET
@@ -206,14 +187,14 @@ func (s *Sync) replaceStarredSessions(
 	}
 	if s.isFiltered() {
 		for _, sess := range sessions {
-			if err := s.execDelete(ctx, tx,
+			if err := s.execMutation(ctx, tx,
 				`DELETE FROM starred_sessions WHERE session_id = ?`, sess.ID,
 			); err != nil {
 				return fmt.Errorf("clearing duckdb starred session %s: %w", sess.ID, err)
 			}
 		}
 	} else {
-		if err := s.execDelete(ctx, tx, `
+		if err := s.execMutation(ctx, tx, `
 			DELETE FROM starred_sessions
 			WHERE session_id IN (
 				SELECT id FROM sessions WHERE machine = ?
@@ -239,20 +220,11 @@ func (s *Sync) replaceStarredSessions(
 func (s *Sync) pushSession(
 	ctx context.Context, tx *sql.Tx, sess db.Session,
 ) (int, error) {
-	if s.connectionKind == duckDBQuackClientConnection {
-		if err := s.deleteMirrorSession(ctx, tx, sess.ID); err != nil {
-			return 0, err
-		}
-		if err := insertSession(ctx, tx, sess, s.machine); err != nil {
-			return 0, err
-		}
-	} else {
-		if err := upsertSession(ctx, tx, sess, s.machine); err != nil {
-			return 0, err
-		}
-		if err := replaceSessionDependents(ctx, tx, sess.ID); err != nil {
-			return 0, err
-		}
+	if err := s.upsertSession(ctx, tx, sess); err != nil {
+		return 0, err
+	}
+	if err := s.replaceSessionDependents(ctx, tx, sess.ID); err != nil {
+		return 0, err
 	}
 	if err := s.replaceUsageEvents(ctx, tx, sess.ID); err != nil {
 		return 0, err
@@ -264,15 +236,11 @@ func (s *Sync) pushSession(
 	if err := insertMessages(ctx, tx, msgs); err != nil {
 		return 0, err
 	}
-	toolCallKeys, err := upsertToolCalls(
-		ctx, tx, msgs, s.connectionKind != duckDBQuackClientConnection,
-	)
+	toolCallKeys, err := s.upsertToolCalls(ctx, tx, msgs)
 	if err != nil {
 		return 0, err
 	}
-	eventKeys, err := upsertToolResultEvents(
-		ctx, tx, msgs, s.connectionKind != duckDBQuackClientConnection,
-	)
+	eventKeys, err := s.upsertToolResultEvents(ctx, tx, msgs)
 	if err != nil {
 		return 0, err
 	}
@@ -291,7 +259,7 @@ func (s *Sync) pushSession(
 	return len(msgs), nil
 }
 
-func replaceSessionDependents(
+func (s *Sync) replaceSessionDependents(
 	ctx context.Context, tx *sql.Tx, sessionID string,
 ) error {
 	for _, stmt := range []string{
@@ -300,7 +268,7 @@ func replaceSessionDependents(
 		`DELETE FROM usage_events WHERE session_id = ?`,
 		`DELETE FROM messages WHERE session_id = ?`,
 	} {
-		if _, err := tx.ExecContext(ctx, stmt, sessionID); err != nil {
+		if err := s.execMutation(ctx, tx, stmt, sessionID); err != nil {
 			return fmt.Errorf("clearing duckdb session dependents: %w", err)
 		}
 	}
@@ -361,7 +329,7 @@ func (s *Sync) deleteMirrorSession(
 		`DELETE FROM messages WHERE session_id = ?`,
 		`DELETE FROM sessions WHERE id = ?`,
 	} {
-		if err := s.execDelete(ctx, tx, stmt, sessionID); err != nil {
+		if err := s.execMutation(ctx, tx, stmt, sessionID); err != nil {
 			return fmt.Errorf("deleting hard-deleted duckdb session %s: %w", sessionID, err)
 		}
 	}
@@ -378,13 +346,16 @@ func projectInSyncScope(project string, projects, excludeProjects []string) bool
 	return !slices.Contains(excludeProjects, project)
 }
 
-func (s *Sync) execDelete(
+func (s *Sync) execMutation(
 	ctx context.Context, tx *sql.Tx, stmt string, args ...any,
 ) error {
 	if s.connectionKind != duckDBQuackClientConnection {
 		_, err := tx.ExecContext(ctx, stmt, args...)
 		return err
 	}
+	// Quack attachments can accept plain inserts, but DELETE, UPDATE, and
+	// ON CONFLICT are planned against proxy storage and currently fail with
+	// GetStorageInfo errors. Run those mutations on the server-side base DB.
 	sqlText, err := duckSQLWithArgs(stmt, args...)
 	if err != nil {
 		return err
@@ -423,12 +394,40 @@ func duckValueLiteral(v any) (string, error) {
 		return "NULL", nil
 	case string:
 		return duckLiteral(value), nil
+	case *string:
+		if value == nil {
+			return "NULL", nil
+		}
+		return duckLiteral(*value), nil
 	case int, int8, int16, int32, int64,
 		uint, uint8, uint16, uint32, uint64,
 		float32, float64:
 		return fmt.Sprint(value), nil
+	case *int:
+		if value == nil {
+			return "NULL", nil
+		}
+		return fmt.Sprint(*value), nil
+	case *int64:
+		if value == nil {
+			return "NULL", nil
+		}
+		return fmt.Sprint(*value), nil
+	case *float64:
+		if value == nil {
+			return "NULL", nil
+		}
+		return fmt.Sprint(*value), nil
 	case bool:
 		if value {
+			return "TRUE", nil
+		}
+		return "FALSE", nil
+	case *bool:
+		if value == nil {
+			return "NULL", nil
+		}
+		if *value {
 			return "TRUE", nil
 		}
 		return "FALSE", nil
@@ -439,20 +438,8 @@ func duckValueLiteral(v any) (string, error) {
 	}
 }
 
-func insertSession(
-	ctx context.Context, tx *sql.Tx, sess db.Session, machine string,
-) error {
-	return writeSession(ctx, tx, sess, machine, false)
-}
-
-func upsertSession(
-	ctx context.Context, tx *sql.Tx, sess db.Session, machine string,
-) error {
-	return writeSession(ctx, tx, sess, machine, true)
-}
-
-func writeSession(
-	ctx context.Context, tx *sql.Tx, sess db.Session, machine string, upsert bool,
+func (s *Sync) upsertSession(
+	ctx context.Context, tx *sql.Tx, sess db.Session,
 ) error {
 	query := `
 		INSERT INTO sessions (
@@ -482,8 +469,7 @@ func writeSession(
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?
 		)`
-	if upsert {
-		query += `
+	query += `
 		ON CONFLICT(id) DO UPDATE SET
 			project = excluded.project,
 			machine = excluded.machine,
@@ -546,10 +532,8 @@ func writeSession(
 			termination_status = excluded.termination_status,
 			secret_leak_count = excluded.secret_leak_count,
 			secrets_rules_version = excluded.secrets_rules_version`
-	}
 
-	_, err := tx.ExecContext(ctx, query, sessionInsertArgs(sess, machine)...)
-	if err != nil {
+	if err := s.execMutation(ctx, tx, query, sessionInsertArgs(sess, s.machine)...); err != nil {
 		return fmt.Errorf("writing duckdb session %s: %w", sess.ID, err)
 	}
 	return nil
@@ -628,16 +612,20 @@ type duckToolResultEventKey struct {
 	eventIndex int
 }
 
-func upsertToolCalls(
-	ctx context.Context, tx *sql.Tx, msgs []db.Message, updateExisting bool,
+func (s *Sync) upsertToolCalls(
+	ctx context.Context, tx *sql.Tx, msgs []db.Message,
 ) ([]duckToolCallKey, error) {
 	keys := []duckToolCallKey{}
 	for _, m := range msgs {
 		for i, tc := range m.ToolCalls {
 			key := duckToolCallKey{messageID: m.ID, callIndex: i}
 			keys = append(keys, key)
-			if updateExisting {
-				res, err := tx.ExecContext(ctx, `
+			exists, err := toolCallExists(ctx, tx, m.SessionID, key)
+			if err != nil {
+				return nil, err
+			}
+			if exists {
+				if err := s.execMutation(ctx, tx, `
 					UPDATE tool_calls SET
 						tool_name = ?, category = ?, tool_use_id = ?,
 						input_json = ?, skill_name = ?,
@@ -649,15 +637,11 @@ func upsertToolCalls(
 					nilZero(tc.ResultContentLength), nilEmpty(tc.ResultContent),
 					nilEmpty(tc.SubagentSessionID), nilEmpty(tc.FilePath),
 					m.SessionID, m.ID, i,
-				)
-				if err != nil {
+				); err != nil {
 					return nil, fmt.Errorf("updating duckdb tool_call %s/%d/%d: %w",
 						m.SessionID, m.Ordinal, i, err)
 				}
-				affected, _ := res.RowsAffected()
-				if affected > 0 {
-					continue
-				}
+				continue
 			}
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO tool_calls (
@@ -680,8 +664,24 @@ func upsertToolCalls(
 	return keys, nil
 }
 
-func upsertToolResultEvents(
-	ctx context.Context, tx *sql.Tx, msgs []db.Message, updateExisting bool,
+func toolCallExists(
+	ctx context.Context, tx *sql.Tx, sessionID string, key duckToolCallKey,
+) (bool, error) {
+	var exists bool
+	err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM tool_calls
+			WHERE session_id = ? AND message_id = ? AND call_index = ?
+		)`, sessionID, key.messageID, key.callIndex).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("checking duckdb tool_call %s/%d/%d: %w",
+			sessionID, key.messageID, key.callIndex, err)
+	}
+	return exists, nil
+}
+
+func (s *Sync) upsertToolResultEvents(
+	ctx context.Context, tx *sql.Tx, msgs []db.Message,
 ) ([]duckToolResultEventKey, error) {
 	keys := []duckToolResultEventKey{}
 	for _, m := range msgs {
@@ -693,8 +693,12 @@ func upsertToolResultEvents(
 					eventIndex: ev.EventIndex,
 				}
 				keys = append(keys, key)
-				if updateExisting {
-					res, err := tx.ExecContext(ctx, `
+				exists, err := toolResultEventExists(ctx, tx, m.SessionID, key)
+				if err != nil {
+					return nil, err
+				}
+				if exists {
+					if err := s.execMutation(ctx, tx, `
 						UPDATE tool_result_events SET
 							tool_use_id = ?, agent_id = ?, subagent_session_id = ?,
 							source = ?, status = ?, content = ?,
@@ -707,15 +711,11 @@ func upsertToolResultEvents(
 						nilEmpty(ev.SubagentSessionID), ev.Source, ev.Status,
 						ev.Content, ev.ContentLength, timeValue(ev.Timestamp),
 						m.SessionID, m.Ordinal, i, ev.EventIndex,
-					)
-					if err != nil {
+					); err != nil {
 						return nil, fmt.Errorf("updating duckdb tool_result_event %s/%d/%d: %w",
 							m.SessionID, m.Ordinal, i, err)
 					}
-					affected, _ := res.RowsAffected()
-					if affected > 0 {
-						continue
-					}
+					continue
 				}
 				if _, err := tx.ExecContext(ctx, `
 					INSERT INTO tool_result_events (
@@ -737,6 +737,25 @@ func upsertToolResultEvents(
 		}
 	}
 	return keys, nil
+}
+
+func toolResultEventExists(
+	ctx context.Context, tx *sql.Tx, sessionID string, key duckToolResultEventKey,
+) (bool, error) {
+	var exists bool
+	err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM tool_result_events
+			WHERE session_id = ?
+				AND tool_call_message_ordinal = ?
+				AND call_index = ?
+				AND event_index = ?
+		)`, sessionID, key.ordinal, key.callIndex, key.eventIndex).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("checking duckdb tool_result_event %s/%d/%d/%d: %w",
+			sessionID, key.ordinal, key.callIndex, key.eventIndex, err)
+	}
+	return exists, nil
 }
 
 func (s *Sync) deleteStaleToolCalls(
@@ -762,7 +781,7 @@ func (s *Sync) deleteStaleToolCalls(
 		if keepSet[key] {
 			continue
 		}
-		if err := s.execDelete(ctx, tx,
+		if err := s.execMutation(ctx, tx,
 			`DELETE FROM tool_calls WHERE session_id = ? AND message_id = ? AND call_index = ?`,
 			sessionID, key.messageID, key.callIndex,
 		); err != nil {
@@ -797,7 +816,7 @@ func (s *Sync) deleteStaleToolResultEvents(
 		if keepSet[key] {
 			continue
 		}
-		if err := s.execDelete(ctx, tx, `
+		if err := s.execMutation(ctx, tx, `
 			DELETE FROM tool_result_events
 			WHERE session_id = ?
 				AND tool_call_message_ordinal = ?
@@ -818,7 +837,7 @@ func (s *Sync) replaceUsageEvents(
 	if err != nil {
 		return err
 	}
-	if err := s.execDelete(ctx, tx,
+	if err := s.execMutation(ctx, tx,
 		`DELETE FROM usage_events WHERE session_id = ?`,
 		sessionID,
 	); err != nil {
@@ -859,32 +878,10 @@ func (s *Sync) bulkInsertCursorUsageEvents(
 	if len(events) == 0 {
 		return nil
 	}
-	replaceExisting := s.connectionKind == duckDBQuackClientConnection
 	const cursorBatch = 100
 	for i := 0; i < len(events); i += cursorBatch {
 		end := min(i+cursorBatch, len(events))
 		batch := events[i:end]
-		if replaceExisting {
-			seen := make(map[string]bool, len(batch))
-			filtered := batch[:0]
-			for _, ev := range batch {
-				if seen[ev.DedupKey] {
-					continue
-				}
-				seen[ev.DedupKey] = true
-				filtered = append(filtered, ev)
-				if err := s.execDelete(ctx, tx,
-					`DELETE FROM cursor_usage_events WHERE dedup_key = ?`,
-					ev.DedupKey,
-				); err != nil {
-					return fmt.Errorf(
-						"clearing duckdb cursor_usage_event %s: %w",
-						ev.DedupKey, err,
-					)
-				}
-			}
-			batch = filtered
-		}
 
 		var b strings.Builder
 		b.WriteString(`INSERT INTO cursor_usage_events (
@@ -920,10 +917,8 @@ func (s *Sync) bulkInsertCursorUsageEvents(
 				db.SanitizeUTF8(ev.DedupKey),
 			)
 		}
-		if !replaceExisting {
-			b.WriteString(` ON CONFLICT DO NOTHING`)
-		}
-		if _, err := tx.ExecContext(ctx, b.String(), args...); err != nil {
+		b.WriteString(` ON CONFLICT DO NOTHING`)
+		if err := s.execMutation(ctx, tx, b.String(), args...); err != nil {
 			return fmt.Errorf("bulk inserting duckdb cursor_usage_events: %w", err)
 		}
 	}
@@ -997,7 +992,7 @@ func (s *Sync) replacePinnedMessages(
 func (s *Sync) replaceAllPinnedMessages(
 	ctx context.Context, tx *sql.Tx, sessions []db.Session,
 ) error {
-	if err := s.execDelete(ctx, tx, `
+	if err := s.execMutation(ctx, tx, `
 		DELETE FROM pinned_messages
 		WHERE session_id IN (
 			SELECT id FROM sessions WHERE machine = ?
@@ -1016,7 +1011,7 @@ func (s *Sync) replaceScopedPinnedMessages(
 	ctx context.Context, tx *sql.Tx, sessions []db.Session,
 ) error {
 	for _, sess := range sessions {
-		if err := s.execDelete(ctx, tx,
+		if err := s.execMutation(ctx, tx,
 			`DELETE FROM pinned_messages WHERE session_id = ?`, sess.ID,
 		); err != nil {
 			return fmt.Errorf("clearing duckdb pinned_messages for %s: %w", sess.ID, err)
