@@ -1070,6 +1070,7 @@ func TestParseDiffKiroSQLitePerSessionError(t *testing.T) {
 	t.Parallel()
 
 	t.Run("stored session turned malformed", func(t *testing.T) {
+		t.Parallel()
 		env := setupTestEnv(t)
 		ks := createKiroSQLiteDB(t, env.kiroDir)
 		ks.addSession(
@@ -1102,6 +1103,7 @@ func TestParseDiffKiroSQLitePerSessionError(t *testing.T) {
 	})
 
 	t.Run("unstored malformed session still reported", func(t *testing.T) {
+		t.Parallel()
 		env := setupTestEnv(t)
 		ks := createKiroSQLiteDB(t, env.kiroDir)
 		ks.addSession(
@@ -1610,6 +1612,7 @@ func TestParseDiffCodexLegacyStaleIncrementalHashDoesNotLookRaced(t *testing.T) 
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
+	t.Parallel()
 	env := setupTestEnv(t)
 
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229e5"
@@ -1674,6 +1677,7 @@ func TestParseDiffCodexFullParsePartialTailDoesNotLookRaced(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
+	t.Parallel()
 	env := setupTestEnv(t)
 
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229e6"

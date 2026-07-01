@@ -644,6 +644,7 @@ func TestFilterFilesByMtimeKeepsS3CodexMissingIndexWhenTitleStored(t *testing.T)
 }
 
 func TestPickPreferredCodexDiscoveredFileUsesS3MachinePrefix(t *testing.T) {
+	t.Parallel()
 	database := openTestDB(t)
 	const uuid = "11111111-1111-4111-8111-111111111111"
 	root := "s3://bucket/laptop/raw/codex"

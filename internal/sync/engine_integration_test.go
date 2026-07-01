@@ -1019,6 +1019,7 @@ func TestSyncAllIncrementalAppliesWorktreeProjectMapping(
 func TestResyncAllAppliesWorktreeProjectMappingDuringBulkWrites(
 	t *testing.T,
 ) {
+	t.Parallel()
 	env := setupTestEnv(t)
 
 	root := t.TempDir()
@@ -1170,6 +1171,7 @@ func TestSyncEngineProgress(t *testing.T) {
 }
 
 func TestSyncEngineProgressEmitsPhaseDoneOnce(t *testing.T) {
+	t.Parallel()
 	env := setupTestEnv(t)
 
 	msg := testjsonl.NewSessionBuilder().
@@ -4384,6 +4386,7 @@ func TestSourceMtimeOpenCodeStorageTracksMessageDirRemoval(
 }
 
 func TestSourceMtimeOpenCodeSQLiteUsesSessionTime(t *testing.T) {
+	t.Parallel()
 	env := setupTestEnv(t)
 	oc := createOpenCodeDB(t, env.opencodeDir)
 	oc.addProject(t, "proj-1", "/home/user/code/myapp")
