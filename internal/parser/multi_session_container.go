@@ -2,7 +2,11 @@ package parser
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 )
 
 // multi_session_container.go provides a reusable source-set, provider, and
@@ -244,11 +248,14 @@ func (s multiSessionContainerSourceSet) SourcesForChangedPath(
 		if !ok {
 			continue
 		}
-		sources := []SourceRef{s.sourceRef(root, match)}
-		sources = append(
-			sources,
-			s.changedPathTombstones(root, match, req.StoredSourcePaths)...,
-		)
+		tombstones := s.changedPathTombstones(root, match, req.StoredSourcePaths)
+		sources := make([]SourceRef, 0, 1+len(tombstones))
+		if req.EventKind != "remove" ||
+			len(tombstones) == 0 ||
+			IsRegularFile(match.Container) {
+			sources = append(sources, s.sourceRef(root, match))
+		}
+		sources = append(sources, tombstones...)
 		return sources, nil
 	}
 	return nil, nil
@@ -259,9 +266,10 @@ func (s multiSessionContainerSourceSet) SourcesForChangedPath(
 // file still exists. The whole-container source re-writes the surviving
 // members; without these, a member row deleted from a still-present container
 // is never force-replaced and a stale session lingers, diverging from the
-// db-backed providers that drop it. A vanished container yields no tombstones,
-// preserving the archive when the whole source file disappears (per the
-// persistent-archive rule).
+// db-backed providers that drop it. A vanished shared container still yields no
+// tombstones, preserving the archive when the whole source file disappears; a
+// vanished one-file-per-member container emits the stored member tombstone so
+// the deleted row is force-replaced instead of lingering forever.
 func (s multiSessionContainerSourceSet) changedPathTombstones(
 	root string,
 	changed multiSessionMatch,
@@ -270,9 +278,7 @@ func (s multiSessionContainerSourceSet) changedPathTombstones(
 	if changed.MemberID != "" || changed.Container == "" {
 		return nil
 	}
-	if !IsRegularFile(changed.Container) {
-		return nil
-	}
+	containerExists := IsRegularFile(changed.Container)
 	var tombstones []SourceRef
 	seen := make(map[string]struct{})
 	for _, stored := range storedPaths {
@@ -283,7 +289,20 @@ func (s multiSessionContainerSourceSet) changedPathTombstones(
 		if !samePath(match.Container, changed.Container) {
 			continue
 		}
-		if s.memberPresent(match.toSource(root)) {
+		if !containerExists {
+			if !multiSessionMatchOwnsContainer(match) {
+				continue
+			}
+			if current, ok := s.cfg.findMember(root, match.MemberID); ok &&
+				!samePath(current.Container, match.Container) {
+				if _, dup := seen[current.Path]; dup {
+					continue
+				}
+				seen[current.Path] = struct{}{}
+				tombstones = append(tombstones, s.sourceRef(root, current))
+				continue
+			}
+		} else if s.memberPresent(match.toSource(root)) {
 			continue
 		}
 		if _, dup := seen[match.Path]; dup {
@@ -293,6 +312,12 @@ func (s multiSessionContainerSourceSet) changedPathTombstones(
 		tombstones = append(tombstones, s.sourceRef(root, match))
 	}
 	return tombstones
+}
+
+func multiSessionMatchOwnsContainer(
+	match multiSessionMatch,
+) bool {
+	return multiSessionMemberOwnsContainer(match.MemberID, match.Container)
 }
 
 func (s multiSessionContainerSourceSet) FindSource(
@@ -358,7 +383,12 @@ func (s multiSessionContainerSourceSet) Fingerprint(
 	}
 	fingerprint, err := s.cfg.fingerprint(src)
 	if err != nil {
-		return SourceFingerprint{}, err
+		if errors.Is(err, os.ErrNotExist) &&
+			multiSessionSourceOwnsContainer(src) {
+			fingerprint = SourceFingerprint{}
+		} else {
+			return SourceFingerprint{}, err
+		}
 	}
 	fingerprint.Key = firstNonEmptyJSONLString(
 		source.FingerprintKey, source.Key, src.Path,
@@ -416,13 +446,19 @@ func (s multiSessionContainerSourceSet) parse(
 }
 
 // skipOutcome builds the "no session" outcome for a container/member that
-// produced no results. When the backing container file is gone, the stored
-// sessions must be preserved (the archive survives a vanished source file), so
-// it skips without ForceReplace, which would delete them. When the container is
-// still present, the member row or contents were genuinely removed, so it
-// force-replaces to drop the now-absent stored sessions.
+// produced no results. When the backing container file is gone, whole-container
+// sources preserve the stored sessions because the archive survives a vanished
+// source file. Member tombstones for one-file-per-member layouts still
+// force-replace so a deleted session row does not linger forever.
 func (s multiSessionContainerSourceSet) skipOutcome(src multiSessionSource) ParseOutcome {
 	if src.Container != "" && !IsRegularFile(src.Container) {
+		if multiSessionSourceOwnsContainer(src) {
+			return ParseOutcome{
+				ResultSetComplete: true,
+				ForceReplace:      true,
+				SkipReason:        SkipNoSession,
+			}
+		}
 		return ParseOutcome{
 			ResultSetComplete: true,
 			SkipReason:        SkipNoSession,
@@ -433,6 +469,23 @@ func (s multiSessionContainerSourceSet) skipOutcome(src multiSessionSource) Pars
 		ForceReplace:      true,
 		SkipReason:        SkipNoSession,
 	}
+}
+
+func multiSessionSourceOwnsContainer(src multiSessionSource) bool {
+	return multiSessionMemberOwnsContainer(src.MemberID, src.Container)
+}
+
+func multiSessionMemberOwnsContainer(memberID, container string) bool {
+	if memberID == "" {
+		return false
+	}
+	base := filepath.Base(container)
+	if memberID == base {
+		return true
+	}
+	return isVisualStudioCopilotVS2026SessionID(memberID) &&
+		isVisualStudioCopilotVS2026SessionID(base) &&
+		strings.EqualFold(memberID, base)
 }
 
 func (s multiSessionContainerSourceSet) memberPresent(src multiSessionSource) bool {

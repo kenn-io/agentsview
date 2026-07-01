@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -391,10 +392,11 @@ func isVibeReplacement(requestedID string, detail *SessionDetail) bool {
 }
 
 // resolveSessionIDByPath returns the single session id whose
-// file_path equals the given absolute path. When a JSONL file
-// produces multiple sessions (e.g. Claude forked transcripts),
-// sync returns an ambiguity error instead of picking arbitrarily,
-// so the caller can disambiguate via `session sync <id>`.
+// file_path equals the given absolute path or a virtual key backed
+// by it. When a physical file produces multiple sessions (e.g.
+// Claude forked transcripts), sync returns an ambiguity error
+// instead of picking arbitrarily, so the caller can disambiguate via
+// `session sync <id>`.
 // Only called from Sync after it has verified b.local != nil.
 func (b *directBackend) resolveSessionIDByPath(
 	ctx context.Context, path string,
@@ -405,10 +407,10 @@ func (b *directBackend) resolveSessionIDByPath(
 	queryArgs := []any{path}
 	// Visual Studio Copilot stores file_path as a virtual sync key
 	// <traceFile>#<conversationID>, so an exact match on the physical
-	// trace path never resolves. Also match every conversation synced
-	// from that trace; multiple matches fall through to the ambiguity
-	// error below, exactly like a multi-session JSONL file.
-	if parser.IsVisualStudioCopilotTraceFile(path) {
+	// container path never resolves. Also match every conversation
+	// synced from that container; multiple matches fall through to the
+	// ambiguity error below, exactly like a multi-session JSONL file.
+	if isVisualStudioCopilotVirtualContainerPath(path) {
 		q = `SELECT id FROM sessions
 			WHERE file_path = ? OR file_path LIKE ? ESCAPE '\'
 			ORDER BY created_at DESC`
@@ -451,6 +453,16 @@ func (b *directBackend) resolveSessionIDByPath(
 			len(ids), path, ids,
 		)
 	}
+}
+
+func isVisualStudioCopilotVirtualContainerPath(path string) bool {
+	if parser.IsVisualStudioCopilotTraceFile(path) {
+		return true
+	}
+	_, _, ok := parser.SplitVisualStudioCopilotVirtualPath(
+		parser.VisualStudioCopilotVirtualPath(path, filepath.Base(path)),
+	)
+	return ok
 }
 
 // Watch returns a stream of events for the given session,

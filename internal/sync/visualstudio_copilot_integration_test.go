@@ -245,6 +245,147 @@ func TestFindSourceFileVisualStudioCopilotReturnsVirtualPath(t *testing.T) {
 		"mtime must resolve the virtual path to the physical trace")
 }
 
+func TestSyncRootsSinceVisualStudioCopilotPollTombstonesDeletedVS2026Session(
+	t *testing.T,
+) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	conversationID := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
+	sessionID := "visualstudio-copilot:" + conversationID
+	sessionPath := filepath.Join(
+		root, ".vs", "SampleApp", "copilot-chat", "thread", "sessions",
+		conversationID,
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(
+		vsCopilotTraceLine(conversationID, "d1", "chat gpt-5.5",
+			"1781293600000000000", "1781293610000000000",
+			map[string]string{
+				"gen_ai.operation.name": "chat",
+				"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Hello."}]}]`,
+			})+"\n"), 0o644))
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentVSCopilot: {root},
+		},
+		Machine: "local",
+	})
+	require.NotZero(t, engine.SyncAll(context.Background(), nil).Synced)
+	assertSessionMessageCount(t, database, sessionID, 1)
+
+	require.NoError(t, os.Remove(sessionPath))
+	engine.SyncRootsSince(context.Background(), []string{root}, time.Time{}, nil)
+
+	gone, err := database.GetSession(context.Background(), sessionID)
+	require.NoError(t, err)
+	assert.Nil(t, gone,
+		"unwatched polling must tombstone deleted VS 2026 session files")
+}
+
+func TestSyncRootsSinceVisualStudioCopilotPollPreservesVS2026SessionWhenRootMissing(
+	t *testing.T,
+) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	parent := t.TempDir()
+	root := filepath.Join(parent, "workspace")
+	conversationID := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
+	sessionID := "visualstudio-copilot:" + conversationID
+	sessionPath := filepath.Join(
+		root, ".vs", "SampleApp", "copilot-chat", "thread", "sessions",
+		conversationID,
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(
+		vsCopilotTraceLine(conversationID, "d1", "chat gpt-5.5",
+			"1781293600000000000", "1781293610000000000",
+			map[string]string{
+				"gen_ai.operation.name": "chat",
+				"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Hello."}]}]`,
+			})+"\n"), 0o644))
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentVSCopilot: {root},
+		},
+		Machine: "local",
+	})
+	require.NotZero(t, engine.SyncAll(context.Background(), nil).Synced)
+	assertSessionMessageCount(t, database, sessionID, 1)
+
+	require.NoError(t, os.RemoveAll(root))
+	engine.SyncRootsSince(context.Background(), []string{root}, time.Time{}, nil)
+
+	preserved, err := database.GetSession(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, preserved,
+		"polling must preserve archived VS 2026 sessions when the root is unavailable")
+	assertSessionMessageCount(t, database, sessionID, 1)
+}
+
+func TestSyncRootsSinceVisualStudioCopilotRecanonicalizesDeletedVS2026SessionToOldLegacyTrace(
+	t *testing.T,
+) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	conversationID := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
+	sessionID := "visualstudio-copilot:" + conversationID
+	data := vsCopilotTraceLine(conversationID, "d1", "chat gpt-5.5",
+		"1781293600000000000", "1781293610000000000",
+		map[string]string{
+			"gen_ai.operation.name": "chat",
+			"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Hello."}]}]`,
+		}) + "\n"
+	legacyPath := filepath.Join(
+		root, "20260612T194439_257709a3_VSGitHubCopilot_traces.jsonl",
+	)
+	sessionPath := filepath.Join(
+		root, ".vs", "SampleApp", "copilot-chat", "thread", "sessions",
+		conversationID,
+	)
+	require.NoError(t, os.WriteFile(legacyPath, []byte(data), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+	require.NoError(t, os.WriteFile(sessionPath, []byte(data), 0o644))
+	legacyMtime := time.Date(2026, 6, 11, 0, 0, 0, 0, time.UTC)
+	sessionMtime := time.Date(2026, 6, 13, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(legacyPath, legacyMtime, legacyMtime))
+	require.NoError(t, os.Chtimes(sessionPath, sessionMtime, sessionMtime))
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentVSCopilot: {root},
+		},
+		Machine: "local",
+	})
+	require.NotZero(t, engine.SyncAll(context.Background(), nil).Synced)
+	vsVirtualPath := parser.VisualStudioCopilotVirtualPath(
+		sessionPath, conversationID,
+	)
+	require.Equal(t, vsVirtualPath, database.GetSessionFilePath(sessionID))
+
+	require.NoError(t, os.Remove(sessionPath))
+	stats := engine.SyncRootsSince(
+		context.Background(), []string{root},
+		time.Date(2026, 6, 12, 0, 0, 0, 0, time.UTC), nil,
+	)
+	require.NotZero(t, stats.Synced)
+
+	legacyVirtualPath := parser.VisualStudioCopilotVirtualPath(
+		legacyPath, conversationID,
+	)
+	assert.Equal(t, legacyVirtualPath, database.GetSessionFilePath(sessionID))
+	assertSessionMessageCount(t, database, sessionID, 1)
+}
+
 // TestSyncSingleSessionContextVisualStudioCopilotPreservesProject verifies that
 // a single-session re-sync keeps the stored project rather than overwriting it
 // with the provider's default project.

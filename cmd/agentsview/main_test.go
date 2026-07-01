@@ -271,6 +271,36 @@ func TestCollectWatchRootsPreservesDirsSharingWatchRoot(t *testing.T) {
 	assert.ElementsMatch(t, []string{sessionsDir, archivedDir}, roots[0].dirs)
 }
 
+func TestCollectWatchRootsPollsRecursiveSymlinkProviderRoot(t *testing.T) {
+	root := t.TempDir()
+	targetVSRoot := filepath.Join(t.TempDir(), "vs-target")
+	sessionsRoot := filepath.Join(
+		targetVSRoot, "SampleApp", "copilot-chat", "thread", "sessions",
+	)
+	require.NoError(t, os.MkdirAll(sessionsRoot, 0o755))
+	requireSymlinkOrSkip(t, targetVSRoot, filepath.Join(root, ".VS"))
+	cfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentVSCopilot: {root},
+		},
+	}
+
+	roots, unwatchedDirs := collectWatchRoots(cfg)
+
+	require.Len(t, roots, 2)
+	assert.Equal(t, root, roots[0].root)
+	assert.True(t, roots[0].shallow)
+	assert.Equal(t, []string{root}, roots[0].dirs)
+	assert.Equal(
+		t,
+		filepath.Join(root, ".VS", "SampleApp", "copilot-chat", "thread", "sessions"),
+		roots[1].root,
+	)
+	assert.True(t, roots[1].shallow)
+	assert.Equal(t, []string{root}, roots[1].dirs)
+	assert.ElementsMatch(t, []string{root}, unwatchedDirs)
+}
+
 // fakeEmitter records Emit calls; safe for concurrent use.
 type fakeEmitter struct {
 	count atomic.Int64
