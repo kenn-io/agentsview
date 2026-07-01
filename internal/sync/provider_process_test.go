@@ -17,6 +17,8 @@ import (
 )
 
 func TestProcessFileProviderForgeVirtualSource(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	dbPath := writeProcessProviderForgeDB(t, root)
 	engine := NewEngine(openTestDB(t), EngineConfig{
@@ -45,6 +47,8 @@ func TestProcessFileProviderForgeVirtualSource(t *testing.T) {
 }
 
 func TestProcessFileProviderSkipsStoredFreshSource(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	dbPath := writeProcessProviderForgeDB(t, root)
 	virtualPath := dbPath + "#conv-001"
@@ -89,6 +93,8 @@ func TestProcessFileProviderSkipsStoredFreshSource(t *testing.T) {
 }
 
 func TestProcessFileProviderPiebaldVirtualSource(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "app.db")
 	piebaldDB := openProcessProviderPiebaldDB(t, dbPath)
@@ -124,6 +130,8 @@ func TestProcessFileProviderPiebaldVirtualSource(t *testing.T) {
 // the legacy syncPiebald/piebaldPendingSessionIDs skip and the Forge
 // SkipsStoredFreshSource behavior; the in-memory skip cache stays empty.
 func TestProcessFileProviderPiebaldSkipsStoredFreshSource(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "app.db")
 	piebaldDB := openProcessProviderPiebaldDB(t, dbPath)
@@ -169,6 +177,8 @@ func TestProcessFileProviderPiebaldSkipsStoredFreshSource(t *testing.T) {
 }
 
 func TestProcessFileProviderWarpVirtualSource(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "warp.sqlite")
 	warpDB := openProcessProviderWarpDB(t, dbPath)
@@ -196,6 +206,8 @@ func TestProcessFileProviderWarpVirtualSource(t *testing.T) {
 }
 
 func TestProcessFileUsesProviderDBBackedFamily(t *testing.T) {
+	t.Parallel()
+
 	for _, agent := range []parser.AgentType{
 		parser.AgentForge,
 		parser.AgentPiebald,
@@ -207,6 +219,8 @@ func TestProcessFileUsesProviderDBBackedFamily(t *testing.T) {
 }
 
 func TestProcessFileProviderAuthoritativeUsesInjectedProvider(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(t, root, "owned.jsonl")
 	provider := newProcessFixtureProvider(
@@ -256,6 +270,8 @@ func TestProcessFileProviderAuthoritativeUsesInjectedProvider(t *testing.T) {
 }
 
 func TestProcessFileProviderAuthoritativeKeepsRetryStatePerResult(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(t, root, "retry.jsonl")
 	provider := newProcessFixtureProvider(
@@ -302,6 +318,8 @@ func TestProcessFileProviderAuthoritativeKeepsRetryStatePerResult(t *testing.T) 
 }
 
 func TestProcessFileProviderAuthoritativeSuppressesUncleanSkipCache(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(t, root, "unclean.jsonl")
 	provider := newProcessFixtureProvider(
@@ -335,6 +353,8 @@ func TestProcessFileProviderAuthoritativeSuppressesUncleanSkipCache(t *testing.T
 }
 
 func TestProcessFileProviderAuthoritativeUsesSkipReasonCacheKey(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(t, root, "skip.jsonl")
 	source := processFixtureSource(sourcePath)
@@ -362,6 +382,8 @@ func TestProcessFileProviderAuthoritativeUsesSkipReasonCacheKey(t *testing.T) {
 }
 
 func TestProcessFileProviderAuthoritativeForceParseAllowsStaleSourceLookup(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(t, root, "force.jsonl")
 	provider := newProcessFixtureProvider(
@@ -397,6 +419,8 @@ func TestProcessFileProviderAuthoritativeForceParseAllowsStaleSourceLookup(t *te
 }
 
 func TestProcessFileProviderAuthoritativeNotFoundFails(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(t, root, "missing.jsonl")
 	provider := newProcessFixtureProvider(
@@ -418,6 +442,8 @@ func TestProcessFileProviderAuthoritativeNotFoundFails(t *testing.T) {
 }
 
 func TestSyncSingleSessionProviderAuthoritativeBypassesProviderSkipCache(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(t, root, "single.jsonl")
 	source := processFixtureSource(sourcePath)

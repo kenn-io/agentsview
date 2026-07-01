@@ -16,6 +16,8 @@ import (
 )
 
 func TestSyncSingleSessionZedUsesVirtualSourcePath(t *testing.T) {
+	t.Parallel()
+
 	zedDir := t.TempDir()
 	dbPath := filepath.Join(zedDir, "threads", "threads.db")
 	createZedThreadsDB(t, dbPath, []zedThreadFixture{
@@ -60,6 +62,8 @@ func TestSyncSingleSessionZedUsesVirtualSourcePath(t *testing.T) {
 }
 
 func TestSyncSingleSessionZedForceRewritesUnchangedSession(t *testing.T) {
+	t.Parallel()
+
 	zedDir := t.TempDir()
 	dbPath := filepath.Join(zedDir, "threads", "threads.db")
 	createZedThreadsDB(t, dbPath, []zedThreadFixture{{
@@ -96,6 +100,8 @@ func TestSyncSingleSessionZedForceRewritesUnchangedSession(t *testing.T) {
 }
 
 func TestSyncPathsZedDeletedPhysicalDBPreservesSessions(t *testing.T) {
+	t.Parallel()
+
 	zedDir := t.TempDir()
 	dbPath := filepath.Join(zedDir, "threads", "threads.db")
 	createZedThreadsDB(t, dbPath, []zedThreadFixture{{
@@ -128,6 +134,8 @@ func TestSyncPathsZedDeletedPhysicalDBPreservesSessions(t *testing.T) {
 }
 
 func TestSyncSingleSessionZedMissingThreadReturnsNotFound(t *testing.T) {
+	t.Parallel()
+
 	zedDir := t.TempDir()
 	createZedThreadsDB(t, filepath.Join(zedDir, "threads", "threads.db"), []zedThreadFixture{{
 		id:        "exists",

@@ -29,78 +29,78 @@ func TestListSessions_SortAscDesc(t *testing.T) {
 	cases := []struct {
 		name    string
 		orderBy string
-		setup   func(t *testing.T, d *DB)
+		setup   func(t *testing.T, d *DB, project string)
 		// wantAsc is the order with Descending=false; desc is its reverse.
 		wantAsc []string
 	}{
 		{
 			name:    "recent",
 			orderBy: "recent",
-			setup: func(t *testing.T, d *DB) {
-				insertSession(t, d, "r-old", "p", func(s *Session) { s.EndedAt = Ptr("2024-01-01T00:00:00Z") })
-				insertSession(t, d, "r-mid", "p", func(s *Session) { s.EndedAt = Ptr("2024-02-01T00:00:00Z") })
-				insertSession(t, d, "r-new", "p", func(s *Session) { s.EndedAt = Ptr("2024-03-01T00:00:00Z") })
+			setup: func(t *testing.T, d *DB, project string) {
+				insertSession(t, d, "r-old", project, func(s *Session) { s.EndedAt = Ptr("2024-01-01T00:00:00Z") })
+				insertSession(t, d, "r-mid", project, func(s *Session) { s.EndedAt = Ptr("2024-02-01T00:00:00Z") })
+				insertSession(t, d, "r-new", project, func(s *Session) { s.EndedAt = Ptr("2024-03-01T00:00:00Z") })
 			},
 			wantAsc: []string{"r-old", "r-mid", "r-new"},
 		},
 		{
 			name:    "started",
 			orderBy: "started",
-			setup: func(t *testing.T, d *DB) {
-				insertSession(t, d, "s-old", "p", func(s *Session) { s.StartedAt = Ptr("2024-01-01T00:00:00Z") })
-				insertSession(t, d, "s-mid", "p", func(s *Session) { s.StartedAt = Ptr("2024-02-01T00:00:00Z") })
-				insertSession(t, d, "s-new", "p", func(s *Session) { s.StartedAt = Ptr("2024-03-01T00:00:00Z") })
+			setup: func(t *testing.T, d *DB, project string) {
+				insertSession(t, d, "s-old", project, func(s *Session) { s.StartedAt = Ptr("2024-01-01T00:00:00Z") })
+				insertSession(t, d, "s-mid", project, func(s *Session) { s.StartedAt = Ptr("2024-02-01T00:00:00Z") })
+				insertSession(t, d, "s-new", project, func(s *Session) { s.StartedAt = Ptr("2024-03-01T00:00:00Z") })
 			},
 			wantAsc: []string{"s-old", "s-mid", "s-new"},
 		},
 		{
 			name:    "messages",
 			orderBy: "messages",
-			setup: func(t *testing.T, d *DB) {
-				insertSession(t, d, "m1", "p", func(s *Session) { s.MessageCount = 1 })
-				insertSession(t, d, "m5", "p", func(s *Session) { s.MessageCount = 5 })
-				insertSession(t, d, "m9", "p", func(s *Session) { s.MessageCount = 9 })
+			setup: func(t *testing.T, d *DB, project string) {
+				insertSession(t, d, "m1", project, func(s *Session) { s.MessageCount = 1 })
+				insertSession(t, d, "m5", project, func(s *Session) { s.MessageCount = 5 })
+				insertSession(t, d, "m9", project, func(s *Session) { s.MessageCount = 9 })
 			},
 			wantAsc: []string{"m1", "m5", "m9"},
 		},
 		{
 			name:    "user-messages",
 			orderBy: "user-messages",
-			setup: func(t *testing.T, d *DB) {
-				insertSession(t, d, "u1", "p", func(s *Session) { s.UserMessageCount = 1 })
-				insertSession(t, d, "u4", "p", func(s *Session) { s.UserMessageCount = 4 })
-				insertSession(t, d, "u8", "p", func(s *Session) { s.UserMessageCount = 8 })
+			setup: func(t *testing.T, d *DB, project string) {
+				insertSession(t, d, "u1", project, func(s *Session) { s.UserMessageCount = 1 })
+				insertSession(t, d, "u4", project, func(s *Session) { s.UserMessageCount = 4 })
+				insertSession(t, d, "u8", project, func(s *Session) { s.UserMessageCount = 8 })
 			},
 			wantAsc: []string{"u1", "u4", "u8"},
 		},
 		{
 			name:    "output-tokens",
 			orderBy: "output-tokens",
-			setup: func(t *testing.T, d *DB) {
-				insertSession(t, d, "o100", "p", func(s *Session) { s.TotalOutputTokens = 100 })
-				insertSession(t, d, "o500", "p", func(s *Session) { s.TotalOutputTokens = 500 })
-				insertSession(t, d, "o900", "p", func(s *Session) { s.TotalOutputTokens = 900 })
+			setup: func(t *testing.T, d *DB, project string) {
+				insertSession(t, d, "o100", project, func(s *Session) { s.TotalOutputTokens = 100 })
+				insertSession(t, d, "o500", project, func(s *Session) { s.TotalOutputTokens = 500 })
+				insertSession(t, d, "o900", project, func(s *Session) { s.TotalOutputTokens = 900 })
 			},
 			wantAsc: []string{"o100", "o500", "o900"},
 		},
 		{
 			name:    "peak-context",
 			orderBy: "peak-context",
-			setup: func(t *testing.T, d *DB) {
-				insertSession(t, d, "pc1", "p", func(s *Session) { s.PeakContextTokens = 1000 })
-				insertSession(t, d, "pc2", "p", func(s *Session) { s.PeakContextTokens = 2000 })
-				insertSession(t, d, "pc3", "p", func(s *Session) { s.PeakContextTokens = 3000 })
+			setup: func(t *testing.T, d *DB, project string) {
+				insertSession(t, d, "pc1", project, func(s *Session) { s.PeakContextTokens = 1000 })
+				insertSession(t, d, "pc2", project, func(s *Session) { s.PeakContextTokens = 2000 })
+				insertSession(t, d, "pc3", project, func(s *Session) { s.PeakContextTokens = 3000 })
 			},
 			wantAsc: []string{"pc1", "pc2", "pc3"},
 		},
 		{
 			name:    "failures",
 			orderBy: "failures",
-			setup: func(t *testing.T, d *DB) {
-				insertSession(t, d, "f0", "p")
-				insertSession(t, d, "f3", "p")
+			setup: func(t *testing.T, d *DB, project string) {
+				insertSession(t, d, "f0", project)
+				insertSession(t, d, "f3", project)
 				updateSignals(t, d, "f3", SessionSignalUpdate{ToolFailureSignalCount: 3})
-				insertSession(t, d, "f7", "p")
+				insertSession(t, d, "f7", project)
 				updateSignals(t, d, "f7", SessionSignalUpdate{ToolFailureSignalCount: 7})
 			},
 			wantAsc: []string{"f0", "f3", "f7"},
@@ -108,11 +108,11 @@ func TestListSessions_SortAscDesc(t *testing.T) {
 		{
 			name:    "retries",
 			orderBy: "retries",
-			setup: func(t *testing.T, d *DB) {
-				insertSession(t, d, "rt0", "p")
-				insertSession(t, d, "rt2", "p")
+			setup: func(t *testing.T, d *DB, project string) {
+				insertSession(t, d, "rt0", project)
+				insertSession(t, d, "rt2", project)
 				updateSignals(t, d, "rt2", SessionSignalUpdate{ToolRetryCount: 2})
-				insertSession(t, d, "rt6", "p")
+				insertSession(t, d, "rt6", project)
 				updateSignals(t, d, "rt6", SessionSignalUpdate{ToolRetryCount: 6})
 			},
 			wantAsc: []string{"rt0", "rt2", "rt6"},
@@ -120,11 +120,11 @@ func TestListSessions_SortAscDesc(t *testing.T) {
 		{
 			name:    "edit-churn",
 			orderBy: "edit-churn",
-			setup: func(t *testing.T, d *DB) {
-				insertSession(t, d, "ec0", "p")
-				insertSession(t, d, "ec4", "p")
+			setup: func(t *testing.T, d *DB, project string) {
+				insertSession(t, d, "ec0", project)
+				insertSession(t, d, "ec4", project)
 				updateSignals(t, d, "ec4", SessionSignalUpdate{EditChurnCount: 4})
-				insertSession(t, d, "ec8", "p")
+				insertSession(t, d, "ec8", project)
 				updateSignals(t, d, "ec8", SessionSignalUpdate{EditChurnCount: 8})
 			},
 			wantAsc: []string{"ec0", "ec4", "ec8"},
@@ -132,11 +132,11 @@ func TestListSessions_SortAscDesc(t *testing.T) {
 		{
 			name:    "compactions",
 			orderBy: "compactions",
-			setup: func(t *testing.T, d *DB) {
-				insertSession(t, d, "c0", "p")
-				insertSession(t, d, "c1", "p")
+			setup: func(t *testing.T, d *DB, project string) {
+				insertSession(t, d, "c0", project)
+				insertSession(t, d, "c1", project)
 				updateSignals(t, d, "c1", SessionSignalUpdate{CompactionCount: 1})
-				insertSession(t, d, "c5", "p")
+				insertSession(t, d, "c5", project)
 				updateSignals(t, d, "c5", SessionSignalUpdate{CompactionCount: 5})
 			},
 			wantAsc: []string{"c0", "c1", "c5"},
@@ -144,12 +144,12 @@ func TestListSessions_SortAscDesc(t *testing.T) {
 		{
 			name:    "context-pressure",
 			orderBy: "context-pressure",
-			setup: func(t *testing.T, d *DB) {
-				insertSession(t, d, "cp2", "p")
+			setup: func(t *testing.T, d *DB, project string) {
+				insertSession(t, d, "cp2", project)
 				updateSignals(t, d, "cp2", SessionSignalUpdate{ContextPressureMax: Ptr(0.2)})
-				insertSession(t, d, "cp5", "p")
+				insertSession(t, d, "cp5", project)
 				updateSignals(t, d, "cp5", SessionSignalUpdate{ContextPressureMax: Ptr(0.5)})
-				insertSession(t, d, "cp9", "p")
+				insertSession(t, d, "cp9", project)
 				updateSignals(t, d, "cp9", SessionSignalUpdate{ContextPressureMax: Ptr(0.9)})
 			},
 			wantAsc: []string{"cp2", "cp5", "cp9"},
@@ -157,12 +157,12 @@ func TestListSessions_SortAscDesc(t *testing.T) {
 		{
 			name:    "health",
 			orderBy: "health",
-			setup: func(t *testing.T, d *DB) {
-				insertSession(t, d, "h20", "p")
+			setup: func(t *testing.T, d *DB, project string) {
+				insertSession(t, d, "h20", project)
 				updateSignals(t, d, "h20", SessionSignalUpdate{HealthScore: Ptr(20)})
-				insertSession(t, d, "h60", "p")
+				insertSession(t, d, "h60", project)
 				updateSignals(t, d, "h60", SessionSignalUpdate{HealthScore: Ptr(60)})
-				insertSession(t, d, "h95", "p")
+				insertSession(t, d, "h95", project)
 				updateSignals(t, d, "h95", SessionSignalUpdate{HealthScore: Ptr(95)})
 			},
 			wantAsc: []string{"h20", "h60", "h95"},
@@ -170,11 +170,11 @@ func TestListSessions_SortAscDesc(t *testing.T) {
 		{
 			name:    "secrets",
 			orderBy: "secrets",
-			setup: func(t *testing.T, d *DB) {
-				insertSession(t, d, "sec0", "p")
-				insertSession(t, d, "sec2", "p")
+			setup: func(t *testing.T, d *DB, project string) {
+				insertSession(t, d, "sec0", project)
+				insertSession(t, d, "sec2", project)
 				require.NoError(t, d.ReplaceSessionSecretFindings("sec2", nil, 2, "v1"))
-				insertSession(t, d, "sec5", "p")
+				insertSession(t, d, "sec5", project)
 				require.NoError(t, d.ReplaceSessionSecretFindings("sec5", nil, 5, "v1"))
 			},
 			wantAsc: []string{"sec0", "sec2", "sec5"},
@@ -182,22 +182,30 @@ func TestListSessions_SortAscDesc(t *testing.T) {
 		{
 			name:    "id",
 			orderBy: "id",
-			setup: func(t *testing.T, d *DB) {
-				insertSession(t, d, "id-a", "p")
-				insertSession(t, d, "id-b", "p")
-				insertSession(t, d, "id-c", "p")
+			setup: func(t *testing.T, d *DB, project string) {
+				insertSession(t, d, "id-a", project)
+				insertSession(t, d, "id-b", project)
+				insertSession(t, d, "id-c", project)
 			},
 			wantAsc: []string{"id-a", "id-b", "id-c"},
 		},
 	}
 
-	for _, tc := range cases {
+	d := testDB(t)
+	caseProjects := make([]string, len(cases))
+	for i, tc := range cases {
+		project := fmt.Sprintf("sort-case-%02d", i)
+		caseProjects[i] = project
+		tc.setup(t, d, project)
+	}
+
+	for i, tc := range cases {
+		project := caseProjects[i]
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			d := testDB(t)
-			tc.setup(t, d)
 
 			gotAsc := listSortedIDs(t, d, filterWith(func(f *SessionFilter) {
+				f.Project = project
 				f.OrderBy = tc.orderBy
 				f.Descending = Ptr(false)
 			}))
@@ -205,6 +213,7 @@ func TestListSessions_SortAscDesc(t *testing.T) {
 
 			wantDesc := reversed(tc.wantAsc)
 			gotDesc := listSortedIDs(t, d, filterWith(func(f *SessionFilter) {
+				f.Project = project
 				f.OrderBy = tc.orderBy
 				f.Descending = Ptr(true)
 			}))
