@@ -1121,6 +1121,7 @@ func TestSyncAllVisualStudioCopilotSkipCacheUsesCompositeFingerprint(t *testing.
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
+	t.Parallel()
 	tracesDir := t.TempDir()
 	conversationID := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
 	sessionID := "visualstudio-copilot:" + conversationID

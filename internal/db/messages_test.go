@@ -3,9 +3,11 @@ package db
 import (
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +19,19 @@ const largeSessionPerfCeiling = 10 * time.Second
 const crossSessionNeighborCount = 40
 const crossSessionToolCallsPerNeighbor = 250
 const crossSessionToolCallTotal = crossSessionNeighborCount * crossSessionToolCallsPerNeighbor
+const largeSessionFixtureID = "large-session-fixture"
+const largeSessionFixtureToken = "ftslargefixture"
+const largeSessionNeighborPrefix = "large-session-neighbor"
+
+var (
+	largeSessionOnlyOnce sync.Once
+	largeSessionOnlyDir  string
+	largeSessionOnlyPath string
+
+	largeSessionPoisonOnce sync.Once
+	largeSessionPoisonDir  string
+	largeSessionPoisonPath string
+)
 
 func largeSessionMessages(sessionID, blobToken string) []Message {
 	const n = 1000
@@ -34,6 +49,64 @@ func largeSessionMessages(sessionID, blobToken string) []Message {
 		Timestamp:     tsZero,
 	}
 	return msgs
+}
+
+func openLargeSessionFixtureDB(t *testing.T, withFKPoison bool) *DB {
+	t.Helper()
+
+	var src string
+	if withFKPoison {
+		largeSessionPoisonOnce.Do(func() {
+			largeSessionPoisonDir, largeSessionPoisonPath =
+				buildLargeSessionFixtureTemplate(t, true)
+		})
+		src = largeSessionPoisonPath
+	} else {
+		largeSessionOnlyOnce.Do(func() {
+			largeSessionOnlyDir, largeSessionOnlyPath =
+				buildLargeSessionFixtureTemplate(t, false)
+		})
+		src = largeSessionOnlyPath
+	}
+
+	dst := filepath.Join(t.TempDir(), "test.db")
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		require.NoError(t,
+			copyTemplateDBFile(src+suffix, dst+suffix, suffix == ""),
+			"copy large-session fixture %q", suffix)
+	}
+	d, err := OpenPreparedTestDB(dst)
+	require.NoError(t, err, "open large-session fixture")
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	return d
+}
+
+func buildLargeSessionFixtureTemplate(
+	t *testing.T, withFKPoison bool,
+) (string, string) {
+	t.Helper()
+
+	dir, err := os.MkdirTemp("", "agentsview-large-session-*")
+	require.NoError(t, err, "create large-session fixture dir")
+	path := filepath.Join(dir, "test.db")
+	require.NoError(t, copyTestDBTemplate(path),
+		"copy base db template for large-session fixture")
+
+	d, err := OpenPreparedTestDB(path)
+	require.NoError(t, err, "open large-session template")
+	insertSession(t, d, largeSessionFixtureID, "proj")
+	insertMessages(t, d,
+		largeSessionMessages(largeSessionFixtureID, largeSessionFixtureToken)...)
+	if withFKPoison {
+		seedCrossSessionFKGrowth(t, d, largeSessionNeighborPrefix)
+		poisonMessagesDeleteTrigger(t, d)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.NoError(t, d.CheckpointWALTruncate(ctx),
+		"checkpoint large-session template")
+	require.NoError(t, d.Close(), "close large-session template")
+	return dir, path
 }
 
 func seedCrossSessionFKGrowth(t *testing.T, d *DB, sessionID string) {
@@ -400,28 +473,24 @@ func TestReplaceSessionMessages_LargeSession(t *testing.T) {
 		t.Skip("skipping perf test in -short mode")
 	}
 	t.Parallel()
-	d := testDB(t)
+	d := openLargeSessionFixtureDB(t, false)
 	requireFTS(t, d)
-	const sessionID = "perf-large"
-	const blobToken = "ftsreplxxx"
-	insertSession(t, d, sessionID, "proj")
-	insertMessages(t, d, largeSessionMessages(sessionID, blobToken)...)
 
 	// Replace with a different small set so the delete path has to
 	// remove all 1000 rows including the 5MB blob.
 	repl := make([]Message, 0, 10)
 	for i := range 10 {
-		repl = append(repl, userMsg(sessionID, i, "after"))
+		repl = append(repl, userMsg(largeSessionFixtureID, i, "after"))
 	}
 	start := time.Now()
-	require.NoError(t, d.ReplaceSessionMessages(sessionID, repl),
+	require.NoError(t, d.ReplaceSessionMessages(largeSessionFixtureID, repl),
 		"ReplaceSessionMessages")
 	elapsed := time.Since(start)
 	require.LessOrEqual(t, elapsed, largeSessionPerfCeiling,
 		"ReplaceSessionMessages took %s, want < 10s (per-row FTS trigger regression?)",
 		elapsed.Round(time.Millisecond))
 
-	got, err := d.GetAllMessages(context.Background(), sessionID)
+	got, err := d.GetAllMessages(context.Background(), largeSessionFixtureID)
 	require.NoError(t, err, "GetAllMessages after replace")
 	require.Len(t, got, len(repl), "after replace")
 
@@ -430,7 +499,7 @@ func TestReplaceSessionMessages_LargeSession(t *testing.T) {
 	// session rows. Should be zero. If the messages_ad trigger
 	// restoration failed silently or the bulk-delete INSERT...SELECT
 	// got skipped, stale tokens would still resolve here.
-	assertNoFTSLeak(t, d, blobToken)
+	assertNoFTSLeak(t, d, largeSessionFixtureToken)
 }
 
 func TestWriteSessionBatch_ReplaceMessagesLargeSession(t *testing.T) {
@@ -438,24 +507,17 @@ func TestWriteSessionBatch_ReplaceMessagesLargeSession(t *testing.T) {
 		t.Skip("skipping perf test in -short mode")
 	}
 	t.Parallel()
-	d := testDB(t)
+	d := openLargeSessionFixtureDB(t, true)
 	requireFTS(t, d)
-
-	const targetID = "batch-large"
-	const blobToken = "ftsbatchyyy"
-	insertSession(t, d, targetID, "proj")
-	insertMessages(t, d, largeSessionMessages(targetID, blobToken)...)
-	seedCrossSessionFKGrowth(t, d, "batch-neighbor")
-	poisonMessagesDeleteTrigger(t, d)
 
 	repl := make([]Message, 0, 10)
 	for i := range 10 {
-		repl = append(repl, userMsg(targetID, i, "after"))
+		repl = append(repl, userMsg(largeSessionFixtureID, i, "after"))
 	}
 	start := time.Now()
 	result, err := d.WriteSessionBatch([]SessionBatchWrite{{
 		Session: Session{
-			ID:               targetID,
+			ID:               largeSessionFixtureID,
 			Project:          "proj",
 			Machine:          defaultMachine,
 			Agent:            defaultAgent,
@@ -474,16 +536,16 @@ func TestWriteSessionBatch_ReplaceMessagesLargeSession(t *testing.T) {
 		"WriteSessionBatch replace took %s, want < 10s (per-row FTS trigger regression?)",
 		elapsed.Round(time.Millisecond))
 
-	got, err := d.GetAllMessages(context.Background(), targetID)
+	got, err := d.GetAllMessages(context.Background(), largeSessionFixtureID)
 	require.NoError(t, err, "GetAllMessages after batch replace")
 	require.Len(t, got, len(repl), "after batch replace")
-	assertNoFTSLeak(t, d, blobToken)
+	assertNoFTSLeak(t, d, largeSessionFixtureToken)
 	requireMessagesDeleteTriggerRestored(t, d)
 
 	var neighborToolCalls int
 	err = d.getReader().QueryRow(
 		"SELECT count(*) FROM tool_calls WHERE session_id LIKE ?",
-		"batch-neighbor-%",
+		largeSessionNeighborPrefix+"-%",
 	).Scan(&neighborToolCalls)
 	require.NoError(t, err, "neighbor tool_calls count")
 	assert.Equal(t, crossSessionToolCallTotal, neighborToolCalls,

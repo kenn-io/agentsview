@@ -322,6 +322,12 @@ func TestMain(m *testing.M) {
 	if testDBTemplateDir != "" {
 		_ = os.RemoveAll(testDBTemplateDir)
 	}
+	if largeSessionOnlyDir != "" {
+		_ = os.RemoveAll(largeSessionOnlyDir)
+	}
+	if largeSessionPoisonDir != "" {
+		_ = os.RemoveAll(largeSessionPoisonDir)
+	}
 	os.Exit(code)
 }
 
@@ -2950,6 +2956,7 @@ func TestResolveToolCallsPanicsOnLengthMismatch(t *testing.T) {
 }
 
 func TestToolCallNewColumns(t *testing.T) {
+	t.Parallel()
 	d := testDB(t)
 	insertSession(t, d, "s1", "proj")
 	insertMessages(t, d, Message{
@@ -2985,6 +2992,7 @@ func TestToolCallNewColumns(t *testing.T) {
 }
 
 func TestToolCallSkillName(t *testing.T) {
+	t.Parallel()
 	d := testDB(t)
 	insertSession(t, d, "s1", "proj")
 	insertMessages(t, d, Message{

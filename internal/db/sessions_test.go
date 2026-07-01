@@ -14,31 +14,24 @@ func TestDeleteSession_LargeSessionFTSDelete(t *testing.T) {
 		t.Skip("skipping perf test in -short mode")
 	}
 	t.Parallel()
-	d := testDB(t)
+	d := openLargeSessionFixtureDB(t, true)
 	requireFTS(t, d)
 
-	const targetID = "delete-large"
-	const blobToken = "ftsdeletezzz"
-	insertSession(t, d, targetID, "proj")
-	insertMessages(t, d, largeSessionMessages(targetID, blobToken)...)
-	seedCrossSessionFKGrowth(t, d, "delete-neighbor")
-	poisonMessagesDeleteTrigger(t, d)
-
 	start := time.Now()
-	require.NoError(t, d.DeleteSession(targetID), "DeleteSession")
+	require.NoError(t, d.DeleteSession(largeSessionFixtureID), "DeleteSession")
 	elapsed := time.Since(start)
 	require.LessOrEqual(t, elapsed, largeSessionPerfCeiling,
 		"DeleteSession took %s, want < 10s (per-row FTS trigger regression?)",
 		elapsed.Round(time.Millisecond))
 
-	requireSessionGone(t, d, targetID)
-	assertNoFTSLeak(t, d, blobToken)
+	requireSessionGone(t, d, largeSessionFixtureID)
+	assertNoFTSLeak(t, d, largeSessionFixtureToken)
 	requireMessagesDeleteTriggerRestored(t, d)
 
 	var neighborPins int
 	err := d.getReader().QueryRow(
 		"SELECT count(*) FROM pinned_messages WHERE session_id LIKE ?",
-		"delete-neighbor-%",
+		largeSessionNeighborPrefix+"-%",
 	).Scan(&neighborPins)
 	require.NoError(t, err, "neighbor pins count")
 	assert.Equal(t, crossSessionNeighborCount, neighborPins,
@@ -355,6 +348,7 @@ func TestUpsertSessionTerminationStatus(t *testing.T) {
 }
 
 func TestListSessionsTerminationFilter(t *testing.T) {
+	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 

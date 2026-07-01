@@ -1359,6 +1359,7 @@ func TestSyncAllReportsDiscoveryBeforeSyncing(t *testing.T) {
 }
 
 func TestSyncEngineProgressDoneCatchesResyncDBBackedWork(t *testing.T) {
+	t.Parallel()
 	env := setupTestEnv(t)
 
 	msg := testjsonl.NewSessionBuilder().
@@ -3979,6 +3980,7 @@ func TestSyncPathsOpenCodeSQLiteDBEventIgnoresStaleSkipCache(
 func TestSyncPathsOpenCodeSQLiteDBEventContinuesPastBadSession(
 	t *testing.T,
 ) {
+	t.Parallel()
 	env := setupTestEnv(t)
 	oc := createOpenCodeDB(t, env.opencodeDir)
 	oc.addProject(t, "proj-1", "/home/user/code/myapp")

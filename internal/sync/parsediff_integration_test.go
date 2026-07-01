@@ -208,6 +208,7 @@ func TestParseDiffCleanArchiveIsIdentical(t *testing.T) {
 // with the expected field names while an untouched control session
 // stays identical.
 func TestParseDiffDetectsStoredDrift(t *testing.T) {
+	t.Parallel()
 	env := setupTestEnv(t)
 
 	ids := []string{

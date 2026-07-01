@@ -860,6 +860,7 @@ func TestGetDailyUsageMultipleDaysAndModels(t *testing.T) {
 }
 
 func TestGetDailyUsageNoPricing(t *testing.T) {
+	t.Parallel()
 	d := testDB(t)
 	ctx := context.Background()
 
