@@ -1,15 +1,22 @@
 package server_test
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 )
 
 const basePath = "/api/v1/analytics/"
@@ -174,6 +181,123 @@ func seedAnalyticsTokenEnv(t *testing.T, te *testEnv) seedStats {
 	return stats
 }
 
+type analyticsDBFixture struct {
+	files map[string][]byte
+	stats seedStats
+}
+
+var (
+	analyticsFixtureOnce sync.Once
+	analyticsFixture     analyticsDBFixture
+	analyticsFixtureErr  error
+
+	analyticsTokenFixtureOnce sync.Once
+	analyticsTokenFixture     analyticsDBFixture
+	analyticsTokenFixtureErr  error
+)
+
+func setupAnalyticsEnv(t *testing.T) (*testEnv, seedStats) {
+	t.Helper()
+	fixture := analyticsFixtureFor(t,
+		&analyticsFixtureOnce,
+		&analyticsFixture,
+		&analyticsFixtureErr,
+		"analytics",
+		seedAnalyticsEnv,
+	)
+	return setupWithDBTemplate(t, fixture.files), fixture.stats
+}
+
+func setupAnalyticsTokenEnv(t *testing.T) (*testEnv, seedStats) {
+	t.Helper()
+	fixture := analyticsFixtureFor(t,
+		&analyticsTokenFixtureOnce,
+		&analyticsTokenFixture,
+		&analyticsTokenFixtureErr,
+		"analytics-token",
+		seedAnalyticsTokenEnv,
+	)
+	return setupWithDBTemplate(t, fixture.files), fixture.stats
+}
+
+func analyticsFixtureFor(
+	t *testing.T,
+	once *sync.Once,
+	fixture *analyticsDBFixture,
+	fixtureErr *error,
+	name string,
+	seed func(*testing.T, *testEnv) seedStats,
+) analyticsDBFixture {
+	t.Helper()
+	once.Do(func() {
+		*fixture, *fixtureErr = buildAnalyticsDBFixture(t, name, seed)
+	})
+	require.NoError(t, *fixtureErr)
+	return *fixture
+}
+
+func buildAnalyticsDBFixture(
+	t *testing.T,
+	name string,
+	seed func(*testing.T, *testEnv) seedStats,
+) (analyticsDBFixture, error) {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "agentsview-server-"+name+"-*")
+	if err != nil {
+		return analyticsDBFixture{}, fmt.Errorf(
+			"creating analytics fixture dir: %w", err,
+		)
+	}
+	defer os.RemoveAll(dir)
+
+	path := filepath.Join(dir, "test.db")
+	dbtest.EnsureTestDBAt(t, path)
+	database, err := db.OpenPreparedTestDB(path)
+	if err != nil {
+		return analyticsDBFixture{}, fmt.Errorf(
+			"opening analytics fixture db: %w", err,
+		)
+	}
+	stats := seed(t, &testEnv{db: database})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	checkpointErr := database.CheckpointWALTruncate(ctx)
+	closeErr := database.Close()
+	if checkpointErr != nil {
+		return analyticsDBFixture{}, fmt.Errorf(
+			"checkpointing analytics fixture db: %w", checkpointErr,
+		)
+	}
+	if closeErr != nil {
+		return analyticsDBFixture{}, fmt.Errorf(
+			"closing analytics fixture db: %w", closeErr,
+		)
+	}
+	files, err := readClosedDBFiles(path)
+	if err != nil {
+		return analyticsDBFixture{}, err
+	}
+	return analyticsDBFixture{files: files, stats: stats}, nil
+}
+
+func readClosedDBFiles(path string) (map[string][]byte, error) {
+	files := make(map[string][]byte, 3)
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		data, err := os.ReadFile(path + suffix)
+		if err != nil {
+			if suffix != "" && errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, fmt.Errorf(
+				"reading analytics fixture db %s: %w",
+				path+suffix, err,
+			)
+		}
+		files[suffix] = data
+	}
+	return files, nil
+}
+
 // buildPathURL constructs an API URL for a given full path and parameters.
 func buildPathURL(fullPath string, params map[string]string) string {
 	u, _ := url.Parse(fullPath)
@@ -205,8 +329,7 @@ func buildURLWithRange(path string, params map[string]string) string {
 }
 
 func TestAnalyticsSummary(t *testing.T) {
-	te := setup(t)
-	stats := seedAnalyticsEnv(t, te)
+	te, stats := setupAnalyticsEnv(t)
 
 	t.Run("OK", func(t *testing.T) {
 		w := te.get(t, buildURLWithRange("summary", map[string]string{"timezone": "UTC"}))
@@ -248,8 +371,7 @@ func TestAnalyticsSummary(t *testing.T) {
 }
 
 func TestAnalyticsSummary_OutputTokenCoverage(t *testing.T) {
-	te := setup(t)
-	stats := seedAnalyticsTokenEnv(t, te)
+	te, stats := setupAnalyticsTokenEnv(t)
 
 	w := te.get(t, buildURLWithRange("summary", map[string]string{"timezone": "UTC"}))
 	assertStatus(t, w, http.StatusOK)
@@ -293,8 +415,7 @@ func TestAnalyticsSummary_DateValidation(t *testing.T) {
 }
 
 func TestAnalyticsErrorRedaction(t *testing.T) {
-	te := setup(t)
-	seedAnalyticsEnv(t, te)
+	te, _ := setupAnalyticsEnv(t)
 
 	// Valid request should succeed
 	w := te.get(t, buildURLWithRange("summary", nil))
@@ -327,8 +448,7 @@ func TestAnalyticsErrorRedaction(t *testing.T) {
 }
 
 func TestAnalyticsSignalSessionsRejectsUnsupportedSignal(t *testing.T) {
-	te := setup(t)
-	seedAnalyticsEnv(t, te)
+	te, _ := setupAnalyticsEnv(t)
 
 	w := te.get(t, buildURLWithRange("signal-sessions",
 		map[string]string{"signal": "not_a_signal"}))
@@ -336,8 +456,7 @@ func TestAnalyticsSignalSessionsRejectsUnsupportedSignal(t *testing.T) {
 }
 
 func TestAnalyticsEndpoints_DefaultParams(t *testing.T) {
-	te := setup(t)
-	seedAnalyticsEnv(t, te)
+	te, _ := setupAnalyticsEnv(t)
 
 	endpoints := []string{
 		"summary",
@@ -509,8 +628,7 @@ func TestDateFilterValidation(t *testing.T) {
 }
 
 func TestAnalyticsActivity(t *testing.T) {
-	te := setup(t)
-	stats := seedAnalyticsEnv(t, te)
+	te, stats := setupAnalyticsEnv(t)
 
 	tests := []struct {
 		name        string
@@ -555,8 +673,7 @@ func TestAnalyticsActivity(t *testing.T) {
 }
 
 func TestAnalyticsHeatmap(t *testing.T) {
-	te := setup(t)
-	stats := seedAnalyticsEnv(t, te)
+	te, stats := setupAnalyticsEnv(t)
 
 	tests := []struct {
 		name        string
@@ -668,8 +785,7 @@ func TestAnalyticsHeatmap(t *testing.T) {
 }
 
 func TestAnalyticsHeatmap_OutputTokens(t *testing.T) {
-	te := setup(t)
-	stats := seedAnalyticsTokenEnv(t, te)
+	te, stats := setupAnalyticsTokenEnv(t)
 
 	w := te.get(t, buildURLWithRange("heatmap", map[string]string{
 		"timezone": "UTC",
@@ -690,9 +806,7 @@ func TestAnalyticsHeatmap_OutputTokens(t *testing.T) {
 func TestAnalyticsHeatmap_OutputTokensNoReporting(
 	t *testing.T,
 ) {
-	te := setup(t)
-	// Seed standard analytics data (no token coverage).
-	seedAnalyticsEnv(t, te)
+	te, _ := setupAnalyticsEnv(t)
 
 	w := te.get(t, buildURLWithRange("heatmap", map[string]string{
 		"timezone": "UTC",
@@ -707,8 +821,7 @@ func TestAnalyticsHeatmap_OutputTokensNoReporting(
 }
 
 func TestAnalyticsProjects(t *testing.T) {
-	te := setup(t)
-	stats := seedAnalyticsEnv(t, te)
+	te, stats := setupAnalyticsEnv(t)
 
 	t.Run("OK", func(t *testing.T) {
 		w := te.get(t, buildURLWithRange("projects", nil))
@@ -734,8 +847,7 @@ func TestAnalyticsProjects(t *testing.T) {
 }
 
 func TestAnalyticsHourOfWeek(t *testing.T) {
-	te := setup(t)
-	seedAnalyticsEnv(t, te)
+	te, _ := setupAnalyticsEnv(t)
 
 	t.Run("OK", func(t *testing.T) {
 		w := te.get(t, buildURLWithRange("hour-of-week", map[string]string{"timezone": "UTC"}))
@@ -747,8 +859,7 @@ func TestAnalyticsHourOfWeek(t *testing.T) {
 }
 
 func TestAnalyticsSessionShape(t *testing.T) {
-	te := setup(t)
-	stats := seedAnalyticsEnv(t, te)
+	te, stats := setupAnalyticsEnv(t)
 
 	t.Run("OK", func(t *testing.T) {
 		w := te.get(t, buildURLWithRange("sessions", map[string]string{"timezone": "UTC"}))
@@ -760,8 +871,7 @@ func TestAnalyticsSessionShape(t *testing.T) {
 }
 
 func TestAnalyticsVelocity(t *testing.T) {
-	te := setup(t)
-	stats := seedAnalyticsEnv(t, te)
+	te, stats := setupAnalyticsEnv(t)
 
 	t.Run("OK", func(t *testing.T) {
 		w := te.get(t, buildURLWithRange("velocity", map[string]string{"timezone": "UTC"}))
@@ -773,8 +883,7 @@ func TestAnalyticsVelocity(t *testing.T) {
 }
 
 func TestAnalyticsTools(t *testing.T) {
-	te := setup(t)
-	stats := seedAnalyticsEnv(t, te)
+	te, stats := setupAnalyticsEnv(t)
 
 	t.Run("OK", func(t *testing.T) {
 		w := te.get(t, buildURLWithRange("tools", map[string]string{"timezone": "UTC"}))
@@ -801,8 +910,7 @@ func TestAnalyticsTools(t *testing.T) {
 }
 
 func TestAnalyticsSkills(t *testing.T) {
-	te := setup(t)
-	stats := seedAnalyticsEnv(t, te)
+	te, stats := setupAnalyticsEnv(t)
 
 	t.Run("OK", func(t *testing.T) {
 		w := te.get(t, buildURLWithRange("skills", map[string]string{"timezone": "UTC"}))
@@ -830,8 +938,7 @@ func TestAnalyticsSkills(t *testing.T) {
 }
 
 func TestAnalyticsTopSessions(t *testing.T) {
-	te := setup(t)
-	stats := seedAnalyticsEnv(t, te)
+	te, stats := setupAnalyticsEnv(t)
 
 	tests := []struct {
 		name       string
@@ -885,8 +992,7 @@ func TestAnalyticsTopSessions(t *testing.T) {
 }
 
 func TestAnalyticsTopSessions_OutputTokens(t *testing.T) {
-	te := setup(t)
-	stats := seedAnalyticsTokenEnv(t, te)
+	te, stats := setupAnalyticsTokenEnv(t)
 
 	w := te.get(t, buildURLWithRange("top-sessions", map[string]string{
 		"timezone": "UTC",

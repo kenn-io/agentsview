@@ -95,9 +95,29 @@ func setupWithServerOpts(
 	srvOpts []server.Option,
 	opts ...setupOption,
 ) *testEnv {
+	return setupWithServerOptsAndDBTemplate(t, srvOpts, nil, opts...)
+}
+
+func setupWithDBTemplate(
+	t *testing.T,
+	dbFiles map[string][]byte,
+	opts ...setupOption,
+) *testEnv {
+	return setupWithServerOptsAndDBTemplate(t, nil, dbFiles, opts...)
+}
+
+func setupWithServerOptsAndDBTemplate(
+	t *testing.T,
+	srvOpts []server.Option,
+	dbFiles map[string][]byte,
+	opts ...setupOption,
+) *testEnv {
 	t.Helper()
 	dir := tempDirWithRetryCleanup(t)
 	dbPath := filepath.Join(dir, "test.db")
+	if dbFiles != nil {
+		writeDBTemplateFiles(t, dbPath, dbFiles)
+	}
 
 	database := dbtest.OpenTestDBAt(t, dbPath)
 
@@ -144,6 +164,23 @@ func setupWithServerOpts(
 		broadcaster: broadcaster,
 		claudeDir:   claudeDir,
 		dataDir:     dir,
+	}
+}
+
+func writeDBTemplateFiles(
+	t *testing.T,
+	dbPath string,
+	files map[string][]byte,
+) {
+	t.Helper()
+	require.Contains(t, files, "", "db template is missing main file")
+	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		data, ok := files[suffix]
+		if !ok {
+			continue
+		}
+		require.NoError(t, os.WriteFile(dbPath+suffix, data, 0o600))
 	}
 }
 
