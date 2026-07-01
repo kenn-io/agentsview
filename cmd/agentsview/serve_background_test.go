@@ -210,24 +210,29 @@ func TestRunServeBackgroundReplaceWaitsForExternalStartLock(t *testing.T) {
 func publishDaemonRuntimeAndUnlockWhenVisible(
 	dataDir, host string, port int, version string, unlock func(),
 ) error {
+	err := publishDaemonRuntimeWhenVisible(dataDir, host, port, version)
+	unlock()
+	return err
+}
+
+func publishDaemonRuntimeWhenVisible(
+	dataDir, host string, port int, version string,
+) error {
 	RemoveDaemonRuntime(dataDir)
 	_, err := WriteDaemonRuntime(dataDir, host, port, version, false)
 	if err != nil {
-		unlock()
 		return err
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if rt := FindDaemonRuntime(dataDir); rt != nil &&
 			!rt.ReadOnly && rt.Port == port {
-			unlock()
 			return nil
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	unlock()
 	return fmt.Errorf(
-		"published daemon runtime %s:%d was not visible before unlock",
+		"published daemon runtime %s:%d was not visible",
 		host, port,
 	)
 }
@@ -1039,8 +1044,9 @@ func TestEnsureBackgroundServeLaunchLoserWaitsThroughReplacementGap(
 	published := make(chan error, 1)
 	go func() {
 		time.Sleep(2 * startProbeTick())
-		_, err := WriteDaemonRuntime(dir, newHost, newPort, version, false)
-		published <- err
+		published <- publishDaemonRuntimeWhenVisible(
+			dir, newHost, newPort, version,
+		)
 	}()
 
 	cfg := config.Config{DataDir: dir}
