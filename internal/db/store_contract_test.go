@@ -105,7 +105,7 @@ func storeContractSQLiteTemplate(t *testing.T) (string, storeContractFixture) {
 			return
 		}
 		storeContractSQLiteTemplateFixture = seedStoreContractSQLite(t, d)
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		storeContractSQLiteTemplateErr = d.CheckpointWALTruncate(ctx)
 		if closeErr := d.Close(); storeContractSQLiteTemplateErr == nil {

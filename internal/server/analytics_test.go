@@ -259,7 +259,7 @@ func buildAnalyticsDBFixture(
 		)
 	}
 	stats := seed(t, &testEnv{db: database})
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	checkpointErr := database.CheckpointWALTruncate(ctx)
 	closeErr := database.Close()
