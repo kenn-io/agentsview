@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -137,8 +138,7 @@ func TestCheckDocsRejectsCorruptedMarkdownSyntax(t *testing.T) {
 
 	cmd := exec.Command("bash", checkScript)
 	cmd.Dir = repo
-	pythonPath, err := exec.LookPath("python3")
-	require.NoError(t, err)
+	pythonPath := requireRunnablePython3(t)
 	cmd.Env = append(envWithout("PATH", "PYTHON"), "PYTHON="+pythonPath, "PATH=/usr/bin:/bin")
 	output, err := cmd.CombinedOutput()
 
@@ -178,8 +178,7 @@ func TestCheckDocsRequiresRipgrepForMediaReferenceChecks(t *testing.T) {
 	require.NoError(t, err)
 	cmd := exec.Command(bashPath, checkScript)
 	cmd.Dir = repo
-	pythonPath, err := exec.LookPath("python3")
-	require.NoError(t, err)
+	pythonPath := requireRunnablePython3(t)
 	emptyBin := filepath.Join(tempDir, "empty-bin")
 	require.NoError(t, os.MkdirAll(emptyBin, 0o755))
 	cmd.Env = append(envWithout("PATH", "PYTHON"), "PYTHON="+pythonPath, "PATH="+emptyBin)
@@ -197,8 +196,7 @@ func TestBuiltSiteCheckRequiresMarkdownCompanions(t *testing.T) {
 	checkScript := installScript(t, repo, filepath.Join("docs", "scripts", "check_built_site.py"))
 	writeMinimalBuiltDocsSite(t, filepath.Join(repo, "docs", "site"))
 
-	pythonPath, err := exec.LookPath("python3")
-	require.NoError(t, err)
+	pythonPath := requireRunnablePython3(t)
 	cmd := exec.Command(pythonPath, checkScript)
 	cmd.Dir = filepath.Join(repo, "docs")
 	output, err := cmd.CombinedOutput()
@@ -215,6 +213,22 @@ func installScript(t *testing.T, repo, scriptRel string) string {
 	require.NoError(t, os.MkdirAll(filepath.Dir(scriptPath), 0o755))
 	require.NoError(t, os.WriteFile(scriptPath, script, 0o755))
 	return scriptPath
+}
+
+func requireRunnablePython3(t *testing.T) string {
+	t.Helper()
+	pythonPath, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skipf("python3 not available on PATH: %v", err)
+	}
+	cmd := exec.Command(pythonPath, "--version")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("python3 is not runnable: %v\n%s", err, out)
+		}
+		require.NoError(t, err, "python3 --version\n%s", out)
+	}
+	return pythonPath
 }
 
 func writeMinimalBuiltDocsSite(t *testing.T, siteDir string) {

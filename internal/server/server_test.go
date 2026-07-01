@@ -2246,6 +2246,10 @@ func TestPGPushLocalNoSyncDaemonReachesConfigValidation(t *testing.T) {
 }
 
 func TestDuckDBPushLocalNoSyncDaemonWritesConfiguredPath(t *testing.T) {
+	if runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
+		t.Skip("duckdb-go-bindings does not ship a windows/arm64 library")
+	}
+
 	te := setupNoSyncMode(t)
 	target := filepath.Join(t.TempDir(), "agentsview.duckdb")
 	body, err := json.Marshal(struct {

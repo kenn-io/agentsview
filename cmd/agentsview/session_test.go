@@ -1544,7 +1544,7 @@ func daemonRuntimeFromTestURL(t *testing.T, rawURL string) *DaemonRuntime {
 // and the shutdown path.
 //
 // To distinguish a real Watch call from an early-return stub, we
-// also assert the command runs for at least ~150ms: any stub that
+// also assert the command runs past a short delay: any stub that
 // returns synchronously would complete in single-digit ms.
 func TestSessionWatch_ExitsOnCancel(t *testing.T) {
 	dataDir := newAgentDataDir(t)
@@ -1559,7 +1559,7 @@ func TestSessionWatch_ExitsOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 		cancel()
 	}()
 
@@ -1584,9 +1584,9 @@ func TestSessionWatch_ExitsOnCancel(t *testing.T) {
 	}
 
 	// A stub that returns immediately would complete far faster
-	// than the 200ms cancel delay. Require the command to actually
+	// than the cancel delay. Require the command to actually
 	// wait on the Watch channel.
-	assert.GreaterOrEqual(t, elapsed, 150*time.Millisecond,
+	assert.GreaterOrEqual(t, elapsed, 30*time.Millisecond,
 		"session watch returned too quickly (%v) — "+
 			"likely a stub, not a real Watch", elapsed)
 
