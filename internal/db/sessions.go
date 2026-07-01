@@ -2427,9 +2427,10 @@ type BranchInfo struct {
 	Token   string `json:"token"`
 }
 
-// GetBranches returns distinct (project, git_branch) pairs for sessions with a
-// recorded branch. Scoping matches GetProjects/GetAgents (root sessions with
-// messages) so the dropdown reflects real work rather than subagents.
+// GetBranches returns distinct (project, git_branch) pairs, including the empty
+// branch used for sessions with no recorded branch. Scoping matches
+// GetProjects/GetAgents (root sessions with messages) so the dropdown reflects
+// real work rather than subagents.
 func (db *DB) GetBranches(
 	ctx context.Context,
 	excludeOneShot, excludeAutomated bool,
@@ -2438,8 +2439,7 @@ func (db *DB) GetBranches(
 		FROM sessions
 		WHERE message_count > 0
 		  AND relationship_type NOT IN ('subagent', 'fork')
-		  AND deleted_at IS NULL
-		  AND git_branch != ''`
+		  AND deleted_at IS NULL`
 	if excludeOneShot {
 		if !excludeAutomated {
 			q += " AND (user_message_count > 1 OR is_automated = 1)"

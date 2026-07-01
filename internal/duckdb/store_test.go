@@ -2413,6 +2413,11 @@ func TestDuckDBBranchDimension(t *testing.T) {
 	assert.Equal(t, []db.BranchInfo{
 		{
 			Project: "alpha",
+			Branch:  "",
+			Token:   db.EncodeBranchFilterToken("alpha", ""),
+		},
+		{
+			Project: "alpha",
 			Branch:  "feature-x",
 			Token:   db.EncodeBranchFilterToken("alpha", "feature-x"),
 		},

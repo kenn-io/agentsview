@@ -1101,8 +1101,8 @@ func (s *Store) GetMachines(
 	return machines, rows.Err()
 }
 
-// GetBranches mirrors db.DB.GetBranches: distinct (project, branch) pairs scoped
-// to root sessions with messages, matching GetProjects/GetAgents.
+// GetBranches mirrors db.DB.GetBranches: distinct (project, branch) pairs,
+// including the empty no-branch value, scoped to root sessions with messages.
 func (s *Store) GetBranches(
 	ctx context.Context,
 	excludeOneShot, excludeAutomated bool,
@@ -1110,8 +1110,7 @@ func (s *Store) GetBranches(
 	q := `SELECT DISTINCT project, git_branch FROM sessions
 		WHERE message_count > 0
 		  AND relationship_type NOT IN ('subagent', 'fork')
-		  AND deleted_at IS NULL
-		  AND git_branch != ''`
+		  AND deleted_at IS NULL`
 	if excludeOneShot {
 		if !excludeAutomated {
 			q += " AND (user_message_count > 1 OR is_automated = TRUE)"

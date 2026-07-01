@@ -552,7 +552,7 @@ func (s *Store) GetBranches(ctx context.Context, excludeOneShot, excludeAutomate
 	rows, err := s.duck.QueryContext(ctx,
 		`SELECT DISTINCT project, git_branch FROM sessions WHERE `+
 			rootSessionWhere(excludeOneShot, excludeAutomated)+
-			` AND git_branch != '' ORDER BY project, git_branch`,
+			` ORDER BY project, git_branch`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("querying duckdb branches: %w", err)

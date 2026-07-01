@@ -131,11 +131,12 @@ func TestGetBranches(t *testing.T) {
 	all, err := d.GetBranches(context.Background(), false, false)
 	require.NoError(t, err, "GetBranches includeAll")
 	assert.Equal(t, []BranchInfo{
+		branchInfoForTest("alpha", ""),
 		branchInfoForTest("alpha", "feat/x"),
 		branchInfoForTest("alpha", "main"),
 		branchInfoForTest("beta", "main"),
 		branchInfoForTest("gamma", "solo"),
-	}, all, "distinct (project, branch) pairs, ordered, empty excluded")
+	}, all, "distinct (project, branch) pairs, ordered, empty branch included")
 
 	filtered, err := d.GetBranches(context.Background(), true, false)
 	require.NoError(t, err, "GetBranches excludeOneShot")
