@@ -10,129 +10,59 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetSessionTiming_Solo(t *testing.T) {
+func TestGetSessionTiming_ReadOnlyFixture(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 
-	timingInsertSession(t, d, "s1",
+	timingInsertSession(t, d, "solo",
 		"2026-04-26T10:00:00Z", "2026-04-26T10:00:30Z")
-	timingInsertMessage(t, d, "s1", 0, "user",
+	timingInsertMessage(t, d, "solo", 0, "user",
 		"go", "2026-04-26T10:00:00Z", false)
-	timingInsertMessage(t, d, "s1", 1, "assistant",
+	timingInsertMessage(t, d, "solo", 1, "assistant",
 		"running test", "2026-04-26T10:00:01Z", true)
-	timingInsertToolCall(t, d, "s1", timingMsgID(t, d, "s1", 1),
+	timingInsertToolCall(t, d, "solo", timingMsgID(t, d, "solo", 1),
 		"tu_1", "Bash", "Bash", "")
-	timingInsertMessage(t, d, "s1", 2, "user",
+	timingInsertMessage(t, d, "solo", 2, "user",
 		"ok", "2026-04-26T10:00:30Z", false)
 
-	got, err := d.GetSessionTiming(ctx, "s1")
-	require.NoError(t, err, "GetSessionTiming")
-	assert.Equal(t, 1, got.TurnCount, "TurnCount")
-	assert.Equal(t, 1, got.ToolCallCount, "ToolCallCount")
-	assert.False(t, got.Running, "Running")
-	require.Len(t, got.Turns, 1, "len(Turns)")
-	require.NotNil(t, got.Turns[0].DurationMs, "turn duration")
-	assert.Equal(t, int64(29_000), *got.Turns[0].DurationMs, "turn duration")
-	require.NotNil(t, got.Turns[0].Calls[0].DurationMs, "call duration")
-	assert.Equal(t, int64(29_000), *got.Turns[0].Calls[0].DurationMs, "call duration")
-}
-
-func TestGetSessionTiming_LastMessageFallsBackToSessionEnd(t *testing.T) {
-	d := testDB(t)
-	ctx := context.Background()
-
-	timingInsertSession(t, d, "s1",
+	timingInsertSession(t, d, "fallback",
 		"2026-04-26T10:00:00Z", "2026-04-26T10:00:30Z")
-	timingInsertMessage(t, d, "s1", 0, "user",
+	timingInsertMessage(t, d, "fallback", 0, "user",
 		"run", "2026-04-26T10:00:00Z", false)
-	timingInsertMessage(t, d, "s1", 1, "assistant",
+	timingInsertMessage(t, d, "fallback", 1, "assistant",
 		"doing", "2026-04-26T10:00:10Z", true)
-	timingInsertToolCall(t, d, "s1", timingMsgID(t, d, "s1", 1),
+	timingInsertToolCall(t, d, "fallback",
+		timingMsgID(t, d, "fallback", 1),
 		"tu_1", "Bash", "Bash", "")
 
-	got, err := d.GetSessionTiming(ctx, "s1")
-	require.NoError(t, err, "GetSessionTiming")
-	require.NotNil(t, got.Turns[0].DurationMs,
-		"turn duration nil, want 20000 (fallback to ended_at)")
-	assert.Equal(t, int64(20_000), *got.Turns[0].DurationMs,
-		"turn duration (fallback to ended_at)")
-	require.NotNil(t, got.Turns[0].Calls[0].DurationMs, "call duration")
-	assert.Equal(t, int64(20_000), *got.Turns[0].Calls[0].DurationMs,
-		"call duration (solo non-subagent inherits turn duration)")
-}
-
-func TestGetSessionTiming_RunningSessionLastTurnNull(t *testing.T) {
-	t.Parallel()
-
-	d := testDB(t)
-	ctx := context.Background()
-
-	timingInsertSession(t, d, "s1",
+	timingInsertSession(t, d, "running",
 		"2026-04-26T10:00:00Z", "")
-	timingInsertMessage(t, d, "s1", 0, "user",
+	timingInsertMessage(t, d, "running", 0, "user",
 		"run", "2026-04-26T10:00:00Z", false)
-	timingInsertMessage(t, d, "s1", 1, "assistant",
+	timingInsertMessage(t, d, "running", 1, "assistant",
 		"doing", "2026-04-26T10:00:10Z", true)
-	timingInsertToolCall(t, d, "s1", timingMsgID(t, d, "s1", 1),
+	timingInsertToolCall(t, d, "running",
+		timingMsgID(t, d, "running", 1),
 		"tu_1", "Bash", "Bash", "")
 
-	got, err := d.GetSessionTiming(ctx, "s1")
-	require.NoError(t, err, "GetSessionTiming")
-	assert.True(t, got.Running, "Running")
-	assert.Nil(t, got.Turns[0].DurationMs, "turn duration (running)")
-}
-
-func TestGetSessionTiming_NonMonotonicTimestampClampsNull(t *testing.T) {
-	t.Parallel()
-
-	d := testDB(t)
-	ctx := context.Background()
-
-	timingInsertSession(t, d, "s1",
+	timingInsertSession(t, d, "non-monotonic",
 		"2026-04-26T10:00:00Z", "2026-04-26T10:00:30Z")
-	timingInsertMessage(t, d, "s1", 0, "user",
+	timingInsertMessage(t, d, "non-monotonic", 0, "user",
 		"run", "2026-04-26T10:00:20Z", false)
-	timingInsertMessage(t, d, "s1", 1, "assistant",
+	timingInsertMessage(t, d, "non-monotonic", 1, "assistant",
 		"broken", "2026-04-26T10:00:25Z", true)
-	timingInsertToolCall(t, d, "s1", timingMsgID(t, d, "s1", 1),
+	timingInsertToolCall(t, d, "non-monotonic",
+		timingMsgID(t, d, "non-monotonic", 1),
 		"tu_1", "Bash", "Bash", "")
-	timingInsertMessage(t, d, "s1", 2, "user",
+	timingInsertMessage(t, d, "non-monotonic", 2, "user",
 		"ok", "2026-04-26T10:00:00Z", false)
 
-	got, err := d.GetSessionTiming(ctx, "s1")
-	require.NoError(t, err, "GetSessionTiming")
-	assert.Nil(t, got.Turns[0].DurationMs, "turn duration (clamp)")
-}
-
-func TestGetSessionTiming_NoToolUseHasNoTurnDuration(t *testing.T) {
-	d := testDB(t)
-	ctx := context.Background()
-
-	timingInsertSession(t, d, "s1",
+	timingInsertSession(t, d, "no-tool-duration",
 		"2026-04-26T10:00:00Z", "2026-04-26T10:00:30Z")
-	timingInsertMessage(t, d, "s1", 0, "user",
+	timingInsertMessage(t, d, "no-tool-duration", 0, "user",
 		"hi", "2026-04-26T10:00:00Z", false)
-	timingInsertMessage(t, d, "s1", 1, "assistant",
+	timingInsertMessage(t, d, "no-tool-duration", 1, "assistant",
 		"hi back", "2026-04-26T10:00:01Z", false)
-
-	got, err := d.GetSessionTiming(ctx, "s1")
-	require.NoError(t, err, "GetSessionTiming")
-	assert.Equal(t, 0, got.TurnCount, "TurnCount")
-}
-
-// TestActiveGapCapConstantsAgree guards the two spellings of the active
-// gap cap against drifting apart: the velocity metric uses the seconds
-// form and the active-duration SQL uses the milliseconds form.
-func TestActiveGapCapConstantsAgree(t *testing.T) {
-	assert.Equal(
-		t, ActiveGapCapMs, int(ActiveGapCapSec*1000),
-		"ActiveGapCapMs must equal ActiveGapCapSec in milliseconds",
-	)
-}
-
-func TestGetSessionTiming_MarshalsEmptyCollectionsAsArrays(t *testing.T) {
-	d := testDB(t)
-	ctx := context.Background()
 
 	timingInsertSession(t, d, "notool",
 		"2026-04-26T10:00:00Z", "2026-04-26T10:00:30Z")
@@ -155,28 +85,6 @@ func TestGetSessionTiming_MarshalsEmptyCollectionsAsArrays(t *testing.T) {
 	timingInsertMessage(t, d, "missing-calls", 2, "user",
 		"done", "2026-04-26T10:00:30Z", false)
 
-	missingCalls, err := d.GetSessionTiming(ctx, "missing-calls")
-	require.NoError(t, err, "GetSessionTiming(missing-calls)")
-	require.Len(t, missingCalls.Turns, 1, "len(Turns)")
-	require.NotNil(t, missingCalls.Turns[0].Calls,
-		"Turn Calls is nil, want empty slice")
-
-	payload, err := json.Marshal(missingCalls)
-	require.NoError(t, err, "Marshal timing")
-	body := string(payload)
-	for _, field := range []string{
-		`"by_category":null`,
-		`"turns":null`,
-		`"calls":null`,
-	} {
-		assert.NotContains(t, body, field, "timing JSON contains %s", field)
-	}
-}
-
-func TestGetSessionTiming_SubagentExactDuration(t *testing.T) {
-	d := testDB(t)
-	ctx := context.Background()
-
 	timingInsertSession(t, d, "parent",
 		"2026-04-26T10:00:00Z", "2026-04-26T10:05:00Z")
 	timingInsertSession(t, d, "child",
@@ -191,21 +99,98 @@ func TestGetSessionTiming_SubagentExactDuration(t *testing.T) {
 	timingInsertMessage(t, d, "parent", 2, "user",
 		"done", "2026-04-26T10:02:16Z", false)
 
-	got, err := d.GetSessionTiming(ctx, "parent")
-	require.NoError(t, err, "GetSessionTiming")
-	dms := got.Turns[0].Calls[0].DurationMs
-	require.NotNil(t, dms, "subagent duration")
-	assert.Equal(t, int64(134_000), *dms, "subagent duration")
-	assert.Equal(t, 1, got.SubagentCount, "SubagentCount")
+	t.Run("solo", func(t *testing.T) {
+		got, err := d.GetSessionTiming(ctx, "solo")
+		require.NoError(t, err, "GetSessionTiming")
+		assert.Equal(t, 1, got.TurnCount, "TurnCount")
+		assert.Equal(t, 1, got.ToolCallCount, "ToolCallCount")
+		assert.False(t, got.Running, "Running")
+		require.Len(t, got.Turns, 1, "len(Turns)")
+		require.NotNil(t, got.Turns[0].DurationMs, "turn duration")
+		assert.Equal(t, int64(29_000), *got.Turns[0].DurationMs, "turn duration")
+		require.NotNil(t, got.Turns[0].Calls[0].DurationMs, "call duration")
+		assert.Equal(t, int64(29_000), *got.Turns[0].Calls[0].DurationMs, "call duration")
+	})
+
+	t.Run("last message falls back to session end", func(t *testing.T) {
+		got, err := d.GetSessionTiming(ctx, "fallback")
+		require.NoError(t, err, "GetSessionTiming")
+		require.NotNil(t, got.Turns[0].DurationMs,
+			"turn duration nil, want 20000 (fallback to ended_at)")
+		assert.Equal(t, int64(20_000), *got.Turns[0].DurationMs,
+			"turn duration (fallback to ended_at)")
+		require.NotNil(t, got.Turns[0].Calls[0].DurationMs, "call duration")
+		assert.Equal(t, int64(20_000), *got.Turns[0].Calls[0].DurationMs,
+			"call duration (solo non-subagent inherits turn duration)")
+	})
+
+	t.Run("running session last turn null", func(t *testing.T) {
+		got, err := d.GetSessionTiming(ctx, "running")
+		require.NoError(t, err, "GetSessionTiming")
+		assert.True(t, got.Running, "Running")
+		assert.Nil(t, got.Turns[0].DurationMs, "turn duration (running)")
+	})
+
+	t.Run("non-monotonic timestamp clamps null", func(t *testing.T) {
+		got, err := d.GetSessionTiming(ctx, "non-monotonic")
+		require.NoError(t, err, "GetSessionTiming")
+		assert.Nil(t, got.Turns[0].DurationMs, "turn duration (clamp)")
+	})
+
+	t.Run("no tool use has no turn duration", func(t *testing.T) {
+		got, err := d.GetSessionTiming(ctx, "no-tool-duration")
+		require.NoError(t, err, "GetSessionTiming")
+		assert.Equal(t, 0, got.TurnCount, "TurnCount")
+	})
+
+	t.Run("marshals empty collections as arrays", func(t *testing.T) {
+		noTool, err := d.GetSessionTiming(ctx, "notool")
+		require.NoError(t, err, "GetSessionTiming(notool)")
+		require.NotNil(t, noTool.ByCategory, "ByCategory is nil, want empty slice")
+		require.NotNil(t, noTool.Turns, "Turns is nil, want empty slice")
+
+		missingCalls, err := d.GetSessionTiming(ctx, "missing-calls")
+		require.NoError(t, err, "GetSessionTiming(missing-calls)")
+		require.Len(t, missingCalls.Turns, 1, "len(Turns)")
+		require.NotNil(t, missingCalls.Turns[0].Calls,
+			"Turn Calls is nil, want empty slice")
+
+		payload, err := json.Marshal(missingCalls)
+		require.NoError(t, err, "Marshal timing")
+		body := string(payload)
+		for _, field := range []string{
+			`"by_category":null`,
+			`"turns":null`,
+			`"calls":null`,
+		} {
+			assert.NotContains(t, body, field, "timing JSON contains %s", field)
+		}
+	})
+
+	t.Run("subagent exact duration", func(t *testing.T) {
+		got, err := d.GetSessionTiming(ctx, "parent")
+		require.NoError(t, err, "GetSessionTiming")
+		dms := got.Turns[0].Calls[0].DurationMs
+		require.NotNil(t, dms, "subagent duration")
+		assert.Equal(t, int64(134_000), *dms, "subagent duration")
+		assert.Equal(t, 1, got.SubagentCount, "SubagentCount")
+	})
+
+	t.Run("missing session returns nil", func(t *testing.T) {
+		got, err := d.GetSessionTiming(ctx, "no-such")
+		require.NoError(t, err, "GetSessionTiming")
+		assert.Nil(t, got, "GetSessionTiming")
+	})
 }
 
-func TestGetSessionTiming_MissingSessionReturnsNil(t *testing.T) {
-	d := testDB(t)
-	ctx := context.Background()
-
-	got, err := d.GetSessionTiming(ctx, "no-such")
-	require.NoError(t, err, "GetSessionTiming")
-	assert.Nil(t, got, "GetSessionTiming")
+// TestActiveGapCapConstantsAgree guards the two spellings of the active
+// gap cap against drifting apart: the velocity metric uses the seconds
+// form and the active-duration SQL uses the milliseconds form.
+func TestActiveGapCapConstantsAgree(t *testing.T) {
+	assert.Equal(
+		t, ActiveGapCapMs, int(ActiveGapCapSec*1000),
+		"ActiveGapCapMs must equal ActiveGapCapSec in milliseconds",
+	)
 }
 
 func TestMakeInputPreview(t *testing.T) {

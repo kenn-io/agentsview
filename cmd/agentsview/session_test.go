@@ -444,14 +444,42 @@ func TestSessionGetVariants(t *testing.T) {
 func TestSessionList_ReadOnlyFixture(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 	seedSessionsWithOpts(t, dataDir,
-		sessionSeed{id: "s-a", project: "p1"},
-		sessionSeed{id: "s-b", project: "p2"},
-		sessionSeed{id: "s-c", project: "p3"},
+		sessionSeed{id: "s-a", project: "shape"},
+		sessionSeed{id: "s-b", project: "shape"},
+		sessionSeed{id: "s-c", project: "shape"},
+		sessionSeed{id: "p1-only", project: "p1"},
+		sessionSeed{id: "lo", project: "sort-count", mut: func(s *db.Session) {
+			s.MessageCount = 2
+		}},
+		sessionSeed{id: "mid", project: "sort-count", mut: func(s *db.Session) {
+			s.MessageCount = 5
+		}},
+		sessionSeed{id: "hi", project: "sort-count", mut: func(s *db.Session) {
+			s.MessageCount = 9
+		}},
+		sessionSeed{id: "a", project: "sort-multi", mut: func(s *db.Session) {
+			s.MessageCount = 1
+			s.StartedAt = new("2024-03-01T00:00:00Z")
+		}},
+		sessionSeed{id: "b", project: "sort-multi", mut: func(s *db.Session) {
+			s.MessageCount = 1
+			s.StartedAt = new("2024-01-01T00:00:00Z")
+		}},
+		sessionSeed{id: "c", project: "sort-multi", mut: func(s *db.Session) {
+			s.MessageCount = 2
+			s.StartedAt = new("2024-02-01T00:00:00Z")
+		}},
+		sessionSeed{id: "old", project: "sort-empty", mut: func(s *db.Session) {
+			s.EndedAt = new("2024-01-01T00:00:00Z")
+		}},
+		sessionSeed{id: "new", project: "sort-empty", mut: func(s *db.Session) {
+			s.EndedAt = new("2024-03-01T00:00:00Z")
+		}},
 	)
 
 	t.Run("json shape", func(t *testing.T) {
 		out, err := executeCommand(newRootCommand(),
-			"session", "list", "--format", "json")
+			"session", "list", "--project", "shape", "--format", "json")
 		require.NoError(t, err)
 
 		got := decodeCLIJSON[cliSessionList](t, out)
@@ -463,14 +491,15 @@ func TestSessionList_ReadOnlyFixture(t *testing.T) {
 		t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 
 		out, err := executeCommand(newRootCommand(),
-			"session", "list", "--format", "json", "--limit", "1")
+			"session", "list", "--project", "shape",
+			"--format", "json", "--limit", "1")
 		require.NoError(t, err)
 
 		first := decodeCLIJSON[cliSessionList](t, out)
 		require.NotEmpty(t, first.NextCursor)
 
 		out, err = executeCommand(newRootCommand(),
-			"session", "list", "--format", "json",
+			"session", "list", "--project", "shape", "--format", "json",
 			"--limit", "1", "--cursor", first.NextCursor)
 		require.NoError(t, err)
 
@@ -485,7 +514,77 @@ func TestSessionList_ReadOnlyFixture(t *testing.T) {
 
 		got := decodeCLIJSON[cliSessionList](t, out)
 		require.Len(t, got.Sessions, 1)
-		assert.Equal(t, "s-a", got.Sessions[0]["id"])
+		assert.Equal(t, "p1-only", got.Sessions[0]["id"])
+	})
+
+	t.Run("sort and reverse", func(t *testing.T) {
+		// --sort messages defaults to ascending.
+		out, err := executeCommand(newRootCommand(),
+			"session", "list", "--project", "sort-count",
+			"--sort", "messages", "--format", "json")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"lo", "mid", "hi"},
+			sessionListIDs(t, out))
+
+		// --reverse flips it to descending.
+		out, err = executeCommand(newRootCommand(),
+			"session", "list", "--project", "sort-count",
+			"--sort", "messages", "--reverse", "--format", "json")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"hi", "mid", "lo"},
+			sessionListIDs(t, out))
+
+		// -r is the shorthand for --reverse.
+		out, err = executeCommand(newRootCommand(),
+			"session", "list", "--project", "sort-count",
+			"--sort", "messages", "-r", "--format", "json")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"hi", "mid", "lo"},
+			sessionListIDs(t, out))
+	})
+
+	t.Run("multi-key sort", func(t *testing.T) {
+		// Per-key directions: messages asc, then started desc.
+		out, err := executeCommand(newRootCommand(),
+			"session", "list", "--project", "sort-multi",
+			"--sort", "messages:asc,started:desc", "--format", "json")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"a", "b", "c"},
+			sessionListIDs(t, out))
+
+		// --reverse flips only the unsuffixed key (messages -> desc); the
+		// explicit started:asc is left untouched.
+		out, err = executeCommand(newRootCommand(),
+			"session", "list", "--project", "sort-multi",
+			"--sort", "messages,started:asc", "-r", "--format", "json")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"c", "b", "a"},
+			sessionListIDs(t, out))
+	})
+
+	t.Run("empty sort reverse", func(t *testing.T) {
+		// Default recent is newest-first.
+		out, err := executeCommand(newRootCommand(),
+			"session", "list", "--project", "sort-empty",
+			"--sort", "", "--format", "json")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"new", "old"}, sessionListIDs(t, out))
+
+		// --reverse on the empty (default) sort flips recent to
+		// oldest-first.
+		out, err = executeCommand(newRootCommand(),
+			"session", "list", "--project", "sort-empty",
+			"--sort", "", "--reverse", "--format", "json")
+		require.NoError(t, err)
+		assert.Equal(t, []string{"old", "new"}, sessionListIDs(t, out))
+	})
+
+	t.Run("invalid sort", func(t *testing.T) {
+		_, err := executeCommand(newRootCommand(),
+			"session", "list", "--project", "sort-count",
+			"--sort", "bogus", "--format", "json")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid sort")
 	})
 }
 
