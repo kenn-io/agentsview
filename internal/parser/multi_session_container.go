@@ -292,6 +292,15 @@ func (s multiSessionContainerSourceSet) changedPathTombstones(
 			if !multiSessionMatchOwnsContainer(match) {
 				continue
 			}
+			if current, ok := s.cfg.findMember(root, match.MemberID); ok &&
+				!samePath(current.Container, match.Container) {
+				if _, dup := seen[current.Path]; dup {
+					continue
+				}
+				seen[current.Path] = struct{}{}
+				tombstones = append(tombstones, s.sourceRef(root, current))
+				continue
+			}
 		} else if s.memberPresent(match.toSource(root)) {
 			continue
 		}
