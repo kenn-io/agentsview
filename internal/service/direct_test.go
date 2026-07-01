@@ -352,6 +352,41 @@ func TestDirectBackend_Sync_VSCopilotPhysicalPathResolvesSession(t *testing.T) {
 	assert.Equal(t, sessionID, detail.ID)
 }
 
+// TestDirectBackend_Sync_VSCopilotVS2026PhysicalPathResolvesSession verifies
+// that syncing a Visual Studio 2026 Copilot session by its physical session
+// file resolves the single session whose stored file_path is the
+// <sessionFile>#<conversationID> virtual key for that file.
+func TestDirectBackend_Sync_VSCopilotVS2026PhysicalPathResolvesSession(
+	t *testing.T,
+) {
+	t.Parallel()
+	d := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(d, sync.EngineConfig{Ephemeral: true})
+	svc := service.NewDirectBackend(d, engine)
+
+	convID := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
+	sessionPath := filepath.Join(
+		"/workspace", ".vs", "SampleApp", "copilot-chat", "thread",
+		"sessions", convID,
+	)
+	virtual := parser.VisualStudioCopilotVirtualPath(sessionPath, convID)
+	sessionID := "visualstudio-copilot:" + convID
+	require.NoError(t, d.UpsertSession(db.Session{
+		ID:       sessionID,
+		Project:  "visualstudio",
+		Machine:  "local",
+		Agent:    "visualstudio-copilot",
+		FilePath: &virtual,
+	}))
+
+	detail, err := svc.Sync(context.Background(), service.SyncInput{
+		Path: sessionPath,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, detail)
+	assert.Equal(t, sessionID, detail.ID)
+}
+
 // TestDirectBackend_Sync_VSCopilotPhysicalPathAmbiguous verifies that a
 // physical trace file backing several conversations still yields the
 // disambiguation error rather than picking one arbitrarily.
