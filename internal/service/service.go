@@ -10,6 +10,7 @@ import (
 	"io"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // ErrSearchUnavailable is returned by Search when the backing store has
@@ -137,7 +138,11 @@ type SessionDetail struct {
 }
 
 // MarshalJSON preserves the grouped db.Session quality_signals field
-// while also exposing detail-only health explanation fields.
+// while also exposing detail-only health explanation fields and the
+// derived Antigravity decode-confidence marker. decode_confidence is a
+// derive-on-read field: it carries no persisted column and is computed
+// from the session's agent and source_version via parser.DecodeConfidence
+// so the "agy-schema:" prefix knowledge stays Go-only.
 func (d SessionDetail) MarshalJSON() ([]byte, error) {
 	type sessionAlias db.Session
 	return json.Marshal(struct {
@@ -145,11 +150,13 @@ func (d SessionDetail) MarshalJSON() ([]byte, error) {
 		QualitySignals   *db.QualitySignals `json:"quality_signals,omitempty"`
 		HealthScoreBasis []string           `json:"health_score_basis,omitempty"`
 		HealthPenalties  map[string]int     `json:"health_penalties,omitempty"`
+		DecodeConfidence string             `json:"decode_confidence,omitempty"`
 	}{
 		sessionAlias:     sessionAlias(d.Session),
 		QualitySignals:   d.StoredQualitySignals(),
 		HealthScoreBasis: d.HealthScoreBasis,
 		HealthPenalties:  d.HealthPenalties,
+		DecodeConfidence: parser.DecodeConfidence(d.Agent, d.SourceVersion),
 	})
 }
 
