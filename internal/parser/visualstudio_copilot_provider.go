@@ -189,7 +189,7 @@ func discoverVisualStudioCopilotVS2026SessionFilesInVSRoot(
 	}
 	out := []DiscoveredFile{}
 	for _, solution := range solutions {
-		if !solution.IsDir() {
+		if !isDirOrSymlink(solution, vsRoot) {
 			continue
 		}
 		copilotChatRoot, ok := visualStudioCopilotChildDir(
@@ -219,7 +219,7 @@ func discoverVisualStudioCopilotVS2026SessionFilesInCopilotChatRoot(
 	}
 	out := []DiscoveredFile{}
 	for _, thread := range threads {
-		if !thread.IsDir() {
+		if !isDirOrSymlink(thread, copilotChatRoot) {
 			continue
 		}
 		sessionsRoot, ok := visualStudioCopilotChildDir(

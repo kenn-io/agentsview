@@ -575,11 +575,13 @@ func TestVisualStudioCopilotProviderDiscoversSymlinkedVS2026Dirs(
 	root := t.TempDir()
 	targetRoot := t.TempDir()
 	targetVSRoot := filepath.Join(targetRoot, "vs-data")
-	targetSolutionRoot := filepath.Join(targetVSRoot, "SampleApp")
+	targetSolutionRoot := filepath.Join(targetRoot, "solution-data")
 	targetCopilotChatRoot := filepath.Join(targetRoot, "chat-data")
-	targetThreadRoot := filepath.Join(targetCopilotChatRoot, "thread")
+	targetThreadRoot := filepath.Join(targetRoot, "thread-data")
 	targetSessionsRoot := filepath.Join(targetRoot, "sessions-data")
+	require.NoError(t, os.MkdirAll(targetVSRoot, 0o755))
 	require.NoError(t, os.MkdirAll(targetSolutionRoot, 0o755))
+	require.NoError(t, os.MkdirAll(targetCopilotChatRoot, 0o755))
 	require.NoError(t, os.MkdirAll(targetThreadRoot, 0o755))
 	require.NoError(t, os.MkdirAll(targetSessionsRoot, 0o755))
 
@@ -588,8 +590,16 @@ func TestVisualStudioCopilotProviderDiscoversSymlinkedVS2026Dirs(
 		t.Skipf("symlink not supported: %v", err)
 	}
 	require.NoError(t, os.Symlink(
+		targetSolutionRoot,
+		filepath.Join(targetVSRoot, "SampleApp"),
+	))
+	require.NoError(t, os.Symlink(
 		targetCopilotChatRoot,
 		filepath.Join(targetSolutionRoot, "Copilot-Chat"),
+	))
+	require.NoError(t, os.Symlink(
+		targetThreadRoot,
+		filepath.Join(targetCopilotChatRoot, "thread"),
 	))
 	require.NoError(t, os.Symlink(
 		targetSessionsRoot,
