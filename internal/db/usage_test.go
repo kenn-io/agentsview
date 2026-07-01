@@ -1266,6 +1266,8 @@ func TestGetDailyUsageLongLivedSession(t *testing.T) {
 }
 
 func TestGetDailyUsageProjectFilter(t *testing.T) {
+	t.Parallel()
+
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -1315,6 +1317,8 @@ func TestGetDailyUsageProjectFilter(t *testing.T) {
 }
 
 func TestGetDailyUsageModelFilter(t *testing.T) {
+	t.Parallel()
+
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -1362,6 +1366,8 @@ func TestGetDailyUsageModelFilter(t *testing.T) {
 }
 
 func TestGetDailyUsageProjectBreakdowns(t *testing.T) {
+	t.Parallel()
+
 	d := testDB(t)
 	ctx := context.Background()
 

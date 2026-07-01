@@ -183,31 +183,30 @@ func TestResolveSort(t *testing.T) {
 // id tie-breaker following the last term's direction. Both the structured Sort
 // field and the OrderBy string spell out the same ordering and must agree.
 func TestListSessions_MultiKeySort(t *testing.T) {
+	t.Parallel()
+
 	asc, desc := false, true
-	seed := func(t *testing.T) *DB {
-		d := testDB(t)
-		insertSession(t, d, "mk-a", "p", func(s *Session) {
-			s.MessageCount = 1
-			s.StartedAt = Ptr("2024-03-01T00:00:00Z")
-		})
-		insertSession(t, d, "mk-b", "p", func(s *Session) {
-			s.MessageCount = 1
-			s.StartedAt = Ptr("2024-01-01T00:00:00Z")
-		})
-		insertSession(t, d, "mk-c", "p", func(s *Session) {
-			s.MessageCount = 2
-			s.StartedAt = Ptr("2024-02-01T00:00:00Z")
-		})
-		insertSession(t, d, "mk-d", "p", func(s *Session) {
-			s.MessageCount = 2
-			s.StartedAt = Ptr("2024-05-01T00:00:00Z")
-		})
-		insertSession(t, d, "mk-e", "p", func(s *Session) {
-			s.MessageCount = 1
-			s.StartedAt = Ptr("2024-03-01T00:00:00Z") // ties mk-a on (messages, started)
-		})
-		return d
-	}
+	d := testDB(t)
+	insertSession(t, d, "mk-a", "p", func(s *Session) {
+		s.MessageCount = 1
+		s.StartedAt = Ptr("2024-03-01T00:00:00Z")
+	})
+	insertSession(t, d, "mk-b", "p", func(s *Session) {
+		s.MessageCount = 1
+		s.StartedAt = Ptr("2024-01-01T00:00:00Z")
+	})
+	insertSession(t, d, "mk-c", "p", func(s *Session) {
+		s.MessageCount = 2
+		s.StartedAt = Ptr("2024-02-01T00:00:00Z")
+	})
+	insertSession(t, d, "mk-d", "p", func(s *Session) {
+		s.MessageCount = 2
+		s.StartedAt = Ptr("2024-05-01T00:00:00Z")
+	})
+	insertSession(t, d, "mk-e", "p", func(s *Session) {
+		s.MessageCount = 1
+		s.StartedAt = Ptr("2024-03-01T00:00:00Z") // ties mk-a on (messages, started)
+	})
 
 	// messages asc, started desc, id desc (tie-breaker follows last term):
 	//   msgs=1: started desc -> {a,e}(03), b(01); a/e tie -> id desc -> e,a
@@ -215,7 +214,8 @@ func TestListSessions_MultiKeySort(t *testing.T) {
 	want := []string{"mk-e", "mk-a", "mk-b", "mk-d", "mk-c"}
 
 	t.Run("structured Sort", func(t *testing.T) {
-		d := seed(t)
+		t.Parallel()
+
 		got := listSortedIDs(t, d, filterWith(func(f *SessionFilter) {
 			f.Sort = []SortKey{
 				{Key: "messages", Descending: &asc},
@@ -226,7 +226,8 @@ func TestListSessions_MultiKeySort(t *testing.T) {
 	})
 
 	t.Run("OrderBy string", func(t *testing.T) {
-		d := seed(t)
+		t.Parallel()
+
 		got := listSortedIDs(t, d, filterWith(func(f *SessionFilter) {
 			f.OrderBy = "messages:asc,started:desc"
 		}))

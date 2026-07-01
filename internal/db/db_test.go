@@ -676,6 +676,8 @@ func TestOpenDataVersionBump_SurvivesRestart(t *testing.T) {
 }
 
 func TestMigration_ResultContentColumn(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
 
@@ -3340,6 +3342,8 @@ func TestReopen(t *testing.T) {
 }
 
 func TestReopenAfterSwap(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	origPath := filepath.Join(dir, "orig.db")
 	tempPath := filepath.Join(dir, "temp.db")
@@ -5261,6 +5265,8 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 }
 
 func TestOpenRepairsLegacyCurrentSchemaTokenCoverageOnce(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "current-token-flags.db")
 
@@ -6146,6 +6152,8 @@ func TestMessagesUsageCoveringIndex(t *testing.T) {
 // a freshly-opened DB, reopens, and verifies the migration restores
 // both without losing existing session data.
 func TestMigration_TerminationStatusColumn(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
 

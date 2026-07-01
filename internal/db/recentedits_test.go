@@ -183,6 +183,8 @@ func TestRecentEditsTruncationAndHasMore(t *testing.T) {
 }
 
 func TestRecentEditsNullTimestampsSortLast(t *testing.T) {
+	t.Parallel()
+
 	d := testDB(t)
 	ctx := context.Background()
 

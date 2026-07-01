@@ -2431,6 +2431,8 @@ func TestVelocityChunkedQuery(t *testing.T) {
 // is treated as an invalid timestamp and excluded while the rest of the
 // session's messages still drive velocity metrics.
 func TestGetAnalyticsVelocity_NullTimestamp(t *testing.T) {
+	t.Parallel()
+
 	d := testDB(t)
 	ctx := context.Background()
 

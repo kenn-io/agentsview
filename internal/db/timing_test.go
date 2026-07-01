@@ -62,6 +62,8 @@ func TestGetSessionTiming_LastMessageFallsBackToSessionEnd(t *testing.T) {
 }
 
 func TestGetSessionTiming_RunningSessionLastTurnNull(t *testing.T) {
+	t.Parallel()
+
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -81,6 +83,8 @@ func TestGetSessionTiming_RunningSessionLastTurnNull(t *testing.T) {
 }
 
 func TestGetSessionTiming_NonMonotonicTimestampClampsNull(t *testing.T) {
+	t.Parallel()
+
 	d := testDB(t)
 	ctx := context.Background()
 
