@@ -310,6 +310,13 @@ func testDB(t *testing.T) *DB {
 	return d
 }
 
+func testDBAtPath(t *testing.T, path, label string) *DB {
+	t.Helper()
+	d, err := openCopiedTestDB(path)
+	require.NoError(t, err, "opening %s", label)
+	return d
+}
+
 var (
 	testDBTemplateOnce sync.Once
 	testDBTemplatePath string
@@ -3593,13 +3600,13 @@ func TestCloseAfterCloseConnectionsReopen(t *testing.T) {
 }
 
 func TestCopyInsightsFrom(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// Source DB with insights.
 	srcPath := filepath.Join(dir, "src.db")
-	srcDB, err := Open(srcPath)
-	requireNoError(t, err, "Open src")
-	_, err = srcDB.InsertInsight(Insight{
+	srcDB := testDBAtPath(t, srcPath, "src")
+	_, err := srcDB.InsertInsight(Insight{
 		Type:     "daily_activity",
 		DateFrom: "2025-01-15",
 		DateTo:   "2025-01-15",
@@ -3611,8 +3618,7 @@ func TestCopyInsightsFrom(t *testing.T) {
 
 	// Destination DB (empty).
 	dstPath := filepath.Join(dir, "dst.db")
-	dstDB, err := Open(dstPath)
-	requireNoError(t, err, "Open dst")
+	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 
 	// Copy insights from source.
@@ -3629,12 +3635,12 @@ func TestCopyInsightsFrom(t *testing.T) {
 }
 
 func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	ctx := context.Background()
 
 	srcPath := filepath.Join(dir, "src.db")
-	srcDB, err := Open(srcPath)
-	require.NoError(t, err, "Open src")
+	srcDB := testDBAtPath(t, srcPath, "src")
 	require.NoError(t, srcDB.InsertCursorUsageEvents([]CursorUsageEvent{
 		{
 			OccurredAt:       "2026-05-14T10:05:00Z",
@@ -3670,8 +3676,7 @@ func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
 	defer srcDB.Close()
 
 	dstPath := filepath.Join(dir, "dst.db")
-	dstDB, err := Open(dstPath)
-	require.NoError(t, err, "Open dst")
+	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 	require.NoError(t, dstDB.InsertCursorUsageEvents([]CursorUsageEvent{{
 		OccurredAt:   "2026-01-01T00:00:00Z",
@@ -3693,12 +3698,12 @@ func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
 }
 
 func TestCopyOrphanedDataFrom(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// Source (old) DB with two sessions: s1 and s2.
 	srcPath := filepath.Join(dir, "old.db")
-	srcDB, err := Open(srcPath)
-	requireNoError(t, err, "Open src")
+	srcDB := testDBAtPath(t, srcPath, "src")
 	insertSession(t, srcDB, "s1", "proj", func(s *Session) {
 		s.Agent = "claude"
 	})
@@ -3712,7 +3717,7 @@ func TestCopyOrphanedDataFrom(t *testing.T) {
 	)
 	// Insert tool_calls for s1 via raw SQL since
 	// insertToolCallsTx is unexported.
-	_, err = srcDB.getWriter().Exec(`
+	_, err := srcDB.getWriter().Exec(`
 		INSERT INTO tool_calls
 			(message_id, session_id, tool_name, category)
 		SELECT id, session_id, 'Read', 'file'
@@ -3725,8 +3730,7 @@ func TestCopyOrphanedDataFrom(t *testing.T) {
 	// Destination (new) DB: only has s1 (re-synced from
 	// file). s2 is orphaned (file gone).
 	dstPath := filepath.Join(dir, "new.db")
-	dstDB, err := Open(dstPath)
-	requireNoError(t, err, "Open dst")
+	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 	insertSession(t, dstDB, "s1", "proj", func(s *Session) {
 		s.Agent = "claude"
@@ -3782,14 +3786,14 @@ func TestCopyOrphanedDataFrom(t *testing.T) {
 // an orphan — but genuine Codex orphans (file gone) and SQLite-backed
 // agents that share a file_path across sessions must still be copied.
 func TestCopyOrphanedDataFrom_SkipsStaleCodexForkRows(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	forkFile := filepath.Join(dir, "fork.jsonl")
 	goneFile := filepath.Join(dir, "gone.jsonl")
 	sharedDB := filepath.Join(dir, "chats.db")
 
 	srcPath := filepath.Join(dir, "old.db")
-	srcDB, err := Open(srcPath)
-	require.NoError(t, err, "Open src")
+	srcDB := testDBAtPath(t, srcPath, "src")
 	// Stale pre-fix row: the fork file stored under the parent's id.
 	insertSession(t, srcDB, "codex:parent-1", "proj", func(s *Session) {
 		s.Agent = "codex"
@@ -3810,8 +3814,7 @@ func TestCopyOrphanedDataFrom_SkipsStaleCodexForkRows(t *testing.T) {
 	srcDB.Close()
 
 	dstPath := filepath.Join(dir, "new.db")
-	dstDB, err := Open(dstPath)
-	require.NoError(t, err, "Open dst")
+	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 	// The fork file reparsed under the fork's own id.
 	insertSession(t, dstDB, "codex:fork-1", "proj", func(s *Session) {
@@ -3844,17 +3847,16 @@ func TestCopyOrphanedDataFrom_SkipsStaleCodexForkRows(t *testing.T) {
 }
 
 func TestCopyOrphanedDataFrom_NoOrphans(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	srcPath := filepath.Join(dir, "old.db")
-	srcDB, err := Open(srcPath)
-	requireNoError(t, err, "Open src")
+	srcDB := testDBAtPath(t, srcPath, "src")
 	insertSession(t, srcDB, "s1", "proj")
 	srcDB.Close()
 
 	dstPath := filepath.Join(dir, "new.db")
-	dstDB, err := Open(dstPath)
-	requireNoError(t, err, "Open dst")
+	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 	insertSession(t, dstDB, "s1", "proj")
 
@@ -3865,18 +3867,18 @@ func TestCopyOrphanedDataFrom_NoOrphans(t *testing.T) {
 }
 
 func TestCopyOrphanedDataFrom_WithToolCalls(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// Source DB with session s1 that has tool_calls.
 	srcPath := filepath.Join(dir, "old.db")
-	srcDB, err := Open(srcPath)
-	requireNoError(t, err, "Open src")
+	srcDB := testDBAtPath(t, srcPath, "src")
 	insertSession(t, srcDB, "s1", "proj")
 	insertMessages(t, srcDB,
 		userMsg("s1", 0, "hello"),
 		asstMsg("s1", 1, "used a tool"),
 	)
-	_, err = srcDB.getWriter().Exec(`
+	_, err := srcDB.getWriter().Exec(`
 		INSERT INTO tool_calls
 			(message_id, session_id, tool_name, category,
 			 tool_use_id)
@@ -3890,8 +3892,7 @@ func TestCopyOrphanedDataFrom_WithToolCalls(t *testing.T) {
 
 	// Empty destination DB.
 	dstPath := filepath.Join(dir, "new.db")
-	dstDB, err := Open(dstPath)
-	requireNoError(t, err, "Open dst")
+	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 
 	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
@@ -3921,17 +3922,17 @@ func TestCopyOrphanedDataFrom_WithToolCalls(t *testing.T) {
 }
 
 func TestCopyOrphanedDataFrom_WithToolResultEvents(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	srcPath := filepath.Join(dir, "old.db")
-	srcDB, err := Open(srcPath)
-	requireNoError(t, err, "Open src")
+	srcDB := testDBAtPath(t, srcPath, "src")
 	insertSession(t, srcDB, "s1", "proj")
 	insertMessages(t, srcDB,
 		userMsg("s1", 0, "hello"),
 		asstMsg("s1", 1, "waited on child"),
 	)
-	_, err = srcDB.getWriter().Exec(`
+	_, err := srcDB.getWriter().Exec(`
 		INSERT INTO tool_calls
 			(message_id, session_id, tool_name, category,
 			 tool_use_id, result_content_length, result_content)
@@ -3956,8 +3957,7 @@ func TestCopyOrphanedDataFrom_WithToolResultEvents(t *testing.T) {
 	srcDB.Close()
 
 	dstPath := filepath.Join(dir, "new.db")
-	dstDB, err := Open(dstPath)
-	requireNoError(t, err, "Open dst")
+	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 
 	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
@@ -3977,12 +3977,12 @@ func TestCopyOrphanedDataFrom_WithToolResultEvents(t *testing.T) {
 }
 
 func TestCopyTrashedDataFromPreservesPins(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	ctx := context.Background()
 
 	srcPath := filepath.Join(dir, "old.db")
-	srcDB, err := Open(srcPath)
-	requireNoError(t, err, "Open src")
+	srcDB := testDBAtPath(t, srcPath, "src")
 	insertSession(t, srcDB, "s1", "proj")
 	insertMessages(t, srcDB,
 		userMsg("s1", 0, "keep this pinned"),
@@ -3998,8 +3998,7 @@ func TestCopyTrashedDataFromPreservesPins(t *testing.T) {
 	srcDB.Close()
 
 	dstPath := filepath.Join(dir, "new.db")
-	dstDB, err := Open(dstPath)
-	requireNoError(t, err, "Open dst")
+	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 
 	count, err := dstDB.CopyTrashedDataFrom(srcPath)
@@ -4022,12 +4021,12 @@ func TestCopyTrashedDataFromPreservesPins(t *testing.T) {
 }
 
 func TestCopyOrphanedDataFrom_AtomicOnFailure(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// Create source DB with a session and messages.
 	srcPath := filepath.Join(dir, "old.db")
-	srcDB, err := Open(srcPath)
-	requireNoError(t, err, "Open src")
+	srcDB := testDBAtPath(t, srcPath, "src")
 	insertSession(t, srcDB, "s1", "proj")
 	insertMessages(t, srcDB, userMsg("s1", 0, "hello"))
 	srcDB.Close()
@@ -4044,8 +4043,7 @@ func TestCopyOrphanedDataFrom_AtomicOnFailure(t *testing.T) {
 
 	// Empty destination.
 	dstPath := filepath.Join(dir, "new.db")
-	dstDB, err := Open(dstPath)
-	requireNoError(t, err, "Open dst")
+	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 
 	// CopyOrphanedDataFrom should fail on the message
@@ -4066,12 +4064,12 @@ func TestCopyOrphanedDataFrom_AtomicOnFailure(t *testing.T) {
 }
 
 func TestCopyOrphanedDataFrom_IsSystem(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// Source DB with a session containing a system message.
 	srcPath := filepath.Join(dir, "old.db")
-	srcDB, err := Open(srcPath)
-	requireNoError(t, err, "Open src")
+	srcDB := testDBAtPath(t, srcPath, "src")
 	insertSession(t, srcDB, "s1", "proj")
 	m := userMsg("s1", 0, "system init")
 	m.IsSystem = true
@@ -4080,8 +4078,7 @@ func TestCopyOrphanedDataFrom_IsSystem(t *testing.T) {
 
 	// Empty destination.
 	dstPath := filepath.Join(dir, "new.db")
-	dstDB, err := Open(dstPath)
-	requireNoError(t, err, "Open dst")
+	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 
 	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
@@ -4099,13 +4096,13 @@ func TestCopyOrphanedDataFrom_IsSystem(t *testing.T) {
 }
 
 func TestCopyOrphanedDataFrom_LegacyNoIsSystem(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// Source DB with is_system column removed to simulate
 	// a legacy database.
 	srcPath := filepath.Join(dir, "old.db")
-	srcDB, err := Open(srcPath)
-	requireNoError(t, err, "Open src")
+	srcDB := testDBAtPath(t, srcPath, "src")
 	insertSession(t, srcDB, "s1", "proj")
 	insertMessages(t, srcDB, userMsg("s1", 0, "hello"))
 	srcDB.Close()
@@ -4148,8 +4145,7 @@ func TestCopyOrphanedDataFrom_LegacyNoIsSystem(t *testing.T) {
 
 	// Empty destination (has is_system column).
 	dstPath := filepath.Join(dir, "new.db")
-	dstDB, err := Open(dstPath)
-	requireNoError(t, err, "Open dst")
+	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 
 	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
@@ -4167,12 +4163,12 @@ func TestCopyOrphanedDataFrom_LegacyNoIsSystem(t *testing.T) {
 }
 
 func TestCopyOrphanedDataFrom_TokenMetadata(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// Source DB with session-level and message-level token data.
 	srcPath := filepath.Join(dir, "old.db")
-	srcDB, err := Open(srcPath)
-	requireNoError(t, err, "Open src")
+	srcDB := testDBAtPath(t, srcPath, "src")
 	insertSession(t, srcDB, "s1", "proj", func(s *Session) {
 		s.TotalOutputTokens = 5000
 		s.PeakContextTokens = 120000
@@ -4193,8 +4189,7 @@ func TestCopyOrphanedDataFrom_TokenMetadata(t *testing.T) {
 
 	// Empty destination.
 	dstPath := filepath.Join(dir, "new.db")
-	dstDB, err := Open(dstPath)
-	requireNoError(t, err, "Open dst")
+	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 
 	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
@@ -4225,12 +4220,12 @@ func TestCopyOrphanedDataFrom_TokenMetadata(t *testing.T) {
 }
 
 func TestCopyOrphanedDataFrom_SessionName(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// Source DB: one session with an agent-provided session_name.
 	srcPath := filepath.Join(dir, "old.db")
-	srcDB, err := Open(srcPath)
-	requireNoError(t, err, "Open src")
+	srcDB := testDBAtPath(t, srcPath, "src")
 	insertSession(t, srcDB, "s1", "proj", func(s *Session) {
 		s.SessionName = Ptr("Agent Generated Name")
 	})
@@ -4239,8 +4234,7 @@ func TestCopyOrphanedDataFrom_SessionName(t *testing.T) {
 
 	// Empty destination.
 	dstPath := filepath.Join(dir, "new.db")
-	dstDB, err := Open(dstPath)
-	requireNoError(t, err, "Open dst")
+	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 
 	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
@@ -4538,12 +4532,12 @@ func TestEmptyTrashExcludes(t *testing.T) {
 }
 
 func TestCopyExcludedSessionsFrom(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// Source DB with excluded sessions.
 	srcPath := filepath.Join(dir, "src.db")
-	srcDB, err := Open(srcPath)
-	requireNoError(t, err, "Open src")
+	srcDB := testDBAtPath(t, srcPath, "src")
 
 	insertSession(t, srcDB, "s1", "p")
 	requireNoError(t, srcDB.DeleteSession("s1"), "DeleteSession")
@@ -4553,12 +4547,11 @@ func TestCopyExcludedSessionsFrom(t *testing.T) {
 
 	// Destination DB (empty, simulates fresh resync DB).
 	dstPath := filepath.Join(dir, "dst.db")
-	dstDB, err := Open(dstPath)
-	requireNoError(t, err, "Open dst")
+	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 
 	// Copy excluded sessions.
-	err = dstDB.CopyExcludedSessionsFrom(srcPath)
+	err := dstDB.CopyExcludedSessionsFrom(srcPath)
 	require.NoError(t, err, "CopyExcludedSessionsFrom")
 
 	// s1 should be excluded in destination.
@@ -4574,6 +4567,7 @@ func TestCopyExcludedSessionsFrom(t *testing.T) {
 }
 
 func TestCopySyncStateFrom_NoSourceTable(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// Source DB with no tables (legacy DB shape missing pg_sync_state).
@@ -4583,8 +4577,7 @@ func TestCopySyncStateFrom_NoSourceTable(t *testing.T) {
 	require.NoError(t, srcConn.Close(), "close src")
 
 	dstPath := filepath.Join(dir, "dst.db")
-	dstDB, err := Open(dstPath)
-	require.NoError(t, err, "Open dst")
+	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 
 	// Seed a marker that should be preserved when source has none.
@@ -4602,11 +4595,11 @@ func TestCopySyncStateFrom_NoSourceTable(t *testing.T) {
 }
 
 func TestCopySyncStateFrom_OnlyCopiesDurablePGKeys(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	srcPath := filepath.Join(dir, "src.db")
-	srcDB, err := Open(srcPath)
-	require.NoError(t, err, "Open src")
+	srcDB := testDBAtPath(t, srcPath, "src")
 	require.NoError(t, srcDB.SetSyncState("pg_push_marker_id", "marker-123"),
 		"seed source marker")
 	require.NoError(t, srcDB.SetSyncState("last_sync_started_at", "old-start"),
@@ -4616,15 +4609,14 @@ func TestCopySyncStateFrom_OnlyCopiesDurablePGKeys(t *testing.T) {
 	require.NoError(t, srcDB.Close(), "Close src")
 
 	dstPath := filepath.Join(dir, "dst.db")
-	dstDB, err := Open(dstPath)
-	require.NoError(t, err, "Open dst")
+	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 	require.NoError(t, dstDB.SetSyncState("last_sync_started_at", "new-start"),
 		"seed destination started")
 	require.NoError(t, dstDB.SetSyncState("last_sync_finished_at", "new-finish"),
 		"seed destination finished")
 
-	err = dstDB.CopySyncStateFrom(srcPath)
+	err := dstDB.CopySyncStateFrom(srcPath)
 	require.NoError(t, err, "CopySyncStateFrom")
 
 	gotMarker, err := dstDB.GetSyncState("pg_push_marker_id")
@@ -4641,6 +4633,7 @@ func TestCopySyncStateFrom_OnlyCopiesDurablePGKeys(t *testing.T) {
 }
 
 func TestCopySyncStateFrom_PropagatesErrors(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// Source is not a valid SQLite database, so probing state fails.
@@ -4649,13 +4642,12 @@ func TestCopySyncStateFrom_PropagatesErrors(t *testing.T) {
 		"write invalid source")
 
 	dstPath := filepath.Join(dir, "dst.db")
-	dstDB, err := Open(dstPath)
-	require.NoError(t, err, "Open dst")
+	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 	require.NoError(t, dstDB.SetSyncState("pg_push_marker_id", "safe"),
 		"seed destination sync state")
 
-	err = dstDB.CopySyncStateFrom(srcPath)
+	err := dstDB.CopySyncStateFrom(srcPath)
 	require.Error(t, err, "CopySyncStateFrom")
 	require.ErrorContains(t, err, "attaching source db")
 
@@ -4665,13 +4657,13 @@ func TestCopySyncStateFrom_PropagatesErrors(t *testing.T) {
 }
 
 func TestCopySessionMetadataFrom(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	ctx := context.Background()
 
 	// Source DB: session with display_name, deleted_at, and a pin.
 	srcPath := filepath.Join(dir, "src.db")
-	srcDB, err := Open(srcPath)
-	requireNoError(t, err, "Open src")
+	srcDB := testDBAtPath(t, srcPath, "src")
 	insertSession(t, srcDB, "s1", "proj")
 	insertMessages(t, srcDB, Message{
 		SessionID: "s1", Ordinal: 1, Role: "user",
@@ -4693,8 +4685,7 @@ func TestCopySessionMetadataFrom(t *testing.T) {
 
 	// Destination DB: same session re-synced (no user metadata).
 	dstPath := filepath.Join(dir, "dst.db")
-	dstDB, err := Open(dstPath)
-	requireNoError(t, err, "Open dst")
+	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 	insertSession(t, dstDB, "s1", "proj")
 	insertMessages(t, dstDB, Message{
@@ -4740,13 +4731,13 @@ func TestCopySessionMetadataFrom(t *testing.T) {
 }
 
 func TestCopySessionMetadataCopiesFromSource(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	ctx := context.Background()
 
 	// Source DB: session with display_name and deleted_at set.
 	srcPath := filepath.Join(dir, "src.db")
-	srcDB, err := Open(srcPath)
-	requireNoError(t, err, "Open src")
+	srcDB := testDBAtPath(t, srcPath, "src")
 	insertSession(t, srcDB, "s1", "proj")
 	name := "my-name"
 	requireNoError(t, srcDB.RenameSession("s1", &name), "Rename src")
@@ -4755,8 +4746,7 @@ func TestCopySessionMetadataCopiesFromSource(t *testing.T) {
 
 	// Destination DB: same session, freshly synced (NULL metadata).
 	dstPath := filepath.Join(dir, "dst.db")
-	dstDB, err := Open(dstPath)
-	requireNoError(t, err, "Open dst")
+	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 	insertSession(t, dstDB, "s1", "proj")
 
@@ -4771,15 +4761,15 @@ func TestCopySessionMetadataCopiesFromSource(t *testing.T) {
 }
 
 func TestCopySessionMetadataPreservesWorktreeProjectMappings(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	ctx := context.Background()
 
 	srcPath := filepath.Join(dir, "src.db")
 	srcPrefix := filepath.Join(dir, "src.worktrees")
 	dstPrefix := filepath.Join(dir, "dst.worktrees")
-	srcDB, err := Open(srcPath)
-	requireNoError(t, err, "Open src")
-	_, err = srcDB.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
+	srcDB := testDBAtPath(t, srcPath, "src")
+	_, err := srcDB.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: srcPrefix, Project: "src-repo", Enabled: true,
 	})
 	requireNoError(t, err, "CreateWorktreeProjectMapping src")
@@ -4790,8 +4780,7 @@ func TestCopySessionMetadataPreservesWorktreeProjectMappings(t *testing.T) {
 	srcDB.Close()
 
 	dstPath := filepath.Join(dir, "dst.db")
-	dstDB, err := Open(dstPath)
-	requireNoError(t, err, "Open dst")
+	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 	_, err = dstDB.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: dstPrefix, Project: "dst-repo", Enabled: true,
@@ -4813,22 +4802,21 @@ func TestCopySessionMetadataPreservesWorktreeProjectMappings(t *testing.T) {
 }
 
 func TestCopySessionMetadataPreservesClears(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	ctx := context.Background()
 
 	// Source DB: session was renamed and trashed, then user
 	// cleared the name and restored (both columns now NULL).
 	srcPath := filepath.Join(dir, "src.db")
-	srcDB, err := Open(srcPath)
-	requireNoError(t, err, "Open src")
+	srcDB := testDBAtPath(t, srcPath, "src")
 	insertSession(t, srcDB, "s1", "proj")
 	srcDB.Close()
 	// Session has NULL display_name and NULL deleted_at.
 
 	// Destination DB: freshly synced — also NULL.
 	dstPath := filepath.Join(dir, "dst.db")
-	dstDB, err := Open(dstPath)
-	requireNoError(t, err, "Open dst")
+	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 	insertSession(t, dstDB, "s1", "proj")
 
@@ -6385,18 +6373,18 @@ func seedSessionWithMessage(t *testing.T, d *DB, sessionID string) {
 }
 
 func TestCopyOrphanedDataFrom_PreservesFilePathAndCallIndex(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	// Source DB: session s1 with a tool_call that has file_path + call_index.
 	srcPath := filepath.Join(dir, "old.db")
-	srcDB, err := Open(srcPath)
-	require.NoError(t, err, "open src")
+	srcDB := testDBAtPath(t, srcPath, "src")
 	insertSession(t, srcDB, "s1", "proj")
 	insertMessages(t, srcDB,
 		userMsg("s1", 0, "hello"),
 		asstMsg("s1", 1, "used a tool"),
 	)
-	_, err = srcDB.getWriter().Exec(`
+	_, err := srcDB.getWriter().Exec(`
 		INSERT INTO tool_calls
 			(message_id, session_id, tool_name, category,
 			 tool_use_id, input_json, file_path, call_index)
@@ -6409,8 +6397,7 @@ func TestCopyOrphanedDataFrom_PreservesFilePathAndCallIndex(t *testing.T) {
 
 	// Destination DB: empty.
 	dstPath := filepath.Join(dir, "new.db")
-	dstDB, err := Open(dstPath)
-	require.NoError(t, err, "open dst")
+	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
 
 	count, err := dstDB.CopyOrphanedDataFrom(srcPath)

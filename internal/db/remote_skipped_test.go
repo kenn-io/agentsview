@@ -11,6 +11,7 @@ import (
 )
 
 func TestRemoteSkippedFiles_InitiallyEmpty(t *testing.T) {
+	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 
 	loaded, err := d.LoadRemoteSkippedFiles("devbox1")
@@ -19,6 +20,7 @@ func TestRemoteSkippedFiles_InitiallyEmpty(t *testing.T) {
 }
 
 func TestRemoteSkippedFiles_RoundTrip(t *testing.T) {
+	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 
 	entries := map[string]int64{
@@ -35,6 +37,7 @@ func TestRemoteSkippedFiles_RoundTrip(t *testing.T) {
 }
 
 func TestRemoteSkippedFiles_HostIsolation(t *testing.T) {
+	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 
 	entries := map[string]int64{
@@ -56,6 +59,7 @@ func TestRemoteSkippedFiles_HostIsolation(t *testing.T) {
 }
 
 func TestRemoteSkippedFiles_ReplaceOverwrites(t *testing.T) {
+	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 
 	first := map[string]int64{
@@ -79,6 +83,7 @@ func TestRemoteSkippedFiles_ReplaceOverwrites(t *testing.T) {
 func TestRemoteSkippedFiles_ReplaceDoesNotAffectOtherHosts(
 	t *testing.T,
 ) {
+	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 
 	host1 := map[string]int64{"/a.jsonl": 100}
