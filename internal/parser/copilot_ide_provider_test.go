@@ -577,6 +577,34 @@ func TestVisualStudioCopilotProviderDeletesVS2026SessionTombstone(
 	assert.Empty(t, outcome.Results)
 }
 
+func TestVisualStudioCopilotProviderFindSourceRejectsMissingVS2026VirtualPath(
+	t *testing.T,
+) {
+	root := t.TempDir()
+	conversationID := "5bc5f6d7-9a6e-4f9c-8f3c-b7be2e7d9f20"
+	sessionPath := filepath.Join(
+		root, ".vs", "SampleApp", "copilot-chat", "thread", "sessions",
+		conversationID,
+	)
+	virtualPath := VisualStudioCopilotVirtualPath(sessionPath, conversationID)
+
+	provider, ok := NewProvider(AgentVSCopilot, ProviderConfig{
+		Roots: []string{root},
+	})
+	require.True(t, ok)
+
+	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID:       conversationID,
+		StoredFilePath:     virtualPath,
+		FingerprintKey:     virtualPath,
+		RequireFreshSource: true,
+		PreferStoredSource: true,
+	})
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.Empty(t, found.DisplayPath)
+}
+
 func TestVisualStudioCopilotProviderRejectsOutsideVS2026SessionLayout(
 	t *testing.T,
 ) {

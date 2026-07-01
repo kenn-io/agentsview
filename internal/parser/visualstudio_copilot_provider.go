@@ -291,9 +291,10 @@ func vsCopilotWatchRoots(roots []string) []WatchRoot {
 }
 
 // vsCopilotClassifyPath maps a stored or changed path to its trace container and
-// conversation. A virtual path always requires its backing trace to exist; a
-// bare trace path relaxes the regular-file check under allowMissing so a deleted
-// trace still classifies for changed-path tombstones.
+// conversation. A virtual path normally requires its backing container to exist;
+// VS 2026 one-file member tombstones relax that under allowMissing. A bare trace
+// path also relaxes the regular-file check under allowMissing so a deleted trace
+// still classifies for changed-path tombstones.
 func vsCopilotClassifyPath(
 	root, path string, allowMissing bool,
 ) (multiSessionMatch, bool) {
@@ -302,7 +303,8 @@ func vsCopilotClassifyPath(
 	if tracePath, conversationID, ok :=
 		splitVisualStudioCopilotVirtualPath(path); ok {
 		if isVisualStudioCopilotVS2026SessionPath(tracePath) {
-			if !visualStudioCopilotVS2026SessionUnderRoot(root, tracePath) {
+			if !visualStudioCopilotVS2026SessionUnderRoot(root, tracePath) ||
+				(!allowMissing && !IsRegularFile(tracePath)) {
 				return multiSessionMatch{}, false
 			}
 			return multiSessionMatch{
