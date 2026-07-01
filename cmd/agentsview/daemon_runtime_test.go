@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,6 +35,15 @@ func requirePOSIXSignals(t *testing.T, reason string) {
 	if runtime.GOOS == "windows" {
 		t.Skip(reason)
 	}
+}
+
+func setStartProbeTickForTest(t *testing.T, tick time.Duration) {
+	t.Helper()
+	require.Positive(t, tick)
+	old := time.Duration(atomic.SwapInt64(&startProbeTickNanos, int64(tick)))
+	t.Cleanup(func() {
+		atomic.StoreInt64(&startProbeTickNanos, int64(old))
+	})
 }
 
 // startSleepProcess starts a long-lived child process and reaps it during

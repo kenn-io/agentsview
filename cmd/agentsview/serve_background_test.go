@@ -164,6 +164,8 @@ func TestRunServeBackgroundGeneratesAuthTokenForRemoteSync(t *testing.T) {
 }
 
 func TestRunServeBackgroundReplaceWaitsForExternalStartLock(t *testing.T) {
+	setStartProbeTickForTest(t, 25*time.Millisecond)
+
 	dir := runtimeTestDir(t)
 	oldHost, oldPort := testPingServer(t)
 	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
@@ -186,7 +188,7 @@ func TestRunServeBackgroundReplaceWaitsForExternalStartLock(t *testing.T) {
 	newHost, newPort := testPingServer(t)
 	published := make(chan error, 1)
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(2 * startProbeTick())
 		RemoveDaemonRuntime(dir)
 		_, err := WriteDaemonRuntime(dir, newHost, newPort, "dev", false)
 		unlockStart()
@@ -209,6 +211,8 @@ func TestRunServeBackgroundReplaceWaitsForExternalStartLock(t *testing.T) {
 func TestRunServeBackgroundReplaceContinuesAfterExternalStartupAbort(
 	t *testing.T,
 ) {
+	setStartProbeTickForTest(t, 25*time.Millisecond)
+
 	dir := runtimeTestDir(t)
 	oldHost, oldPort := testPingServer(t)
 	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
@@ -247,7 +251,7 @@ func TestRunServeBackgroundReplaceContinuesAfterExternalStartupAbort(
 
 	released := make(chan struct{})
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(2 * startProbeTick())
 		unlockStart()
 		close(released)
 	}()
@@ -265,6 +269,8 @@ func TestRunServeBackgroundReplaceContinuesAfterExternalStartupAbort(
 func TestRunServeBackgroundReplaceKeepsSameVersionTargetAfterStartupAbort(
 	t *testing.T,
 ) {
+	setStartProbeTickForTest(t, 25*time.Millisecond)
+
 	dir := runtimeTestDir(t)
 	oldHost, oldPort := testPingServer(t)
 	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
@@ -303,7 +309,7 @@ func TestRunServeBackgroundReplaceKeepsSameVersionTargetAfterStartupAbort(
 
 	released := make(chan struct{})
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(2 * startProbeTick())
 		unlockStart()
 		close(released)
 	}()
@@ -321,6 +327,8 @@ func TestRunServeBackgroundReplaceKeepsSameVersionTargetAfterStartupAbort(
 func TestRunServeBackgroundReplaceKeepsUnresponsiveTargetAfterStartupAbort(
 	t *testing.T,
 ) {
+	setStartProbeTickForTest(t, 25*time.Millisecond)
+
 	dir := runtimeTestDir(t)
 	ln, oldPort := freeTCPListener(t)
 	require.NoError(t, ln.Close())
@@ -363,7 +371,7 @@ func TestRunServeBackgroundReplaceKeepsUnresponsiveTargetAfterStartupAbort(
 
 	released := make(chan struct{})
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(2 * startProbeTick())
 		unlockStart()
 		close(released)
 	}()
@@ -708,6 +716,8 @@ func TestEnsureBackgroundServeChecksTooNewDatabaseBeforeReplacingIncompatibleDae
 func TestEnsureBackgroundServeReplacementWaitsForExternalStartLock(
 	t *testing.T,
 ) {
+	setStartProbeTickForTest(t, 25*time.Millisecond)
+
 	tests := []struct {
 		name         string
 		writeRuntime func(t *testing.T, dir, host string, port int)
@@ -758,7 +768,7 @@ func TestEnsureBackgroundServeReplacementWaitsForExternalStartLock(
 			newHost, newPort := testPingServer(t)
 			published := make(chan error, 1)
 			go func() {
-				time.Sleep(50 * time.Millisecond)
+				time.Sleep(2 * startProbeTick())
 				RemoveDaemonRuntime(dir)
 				_, err := WriteDaemonRuntime(
 					dir, newHost, newPort, "1.1.0", false,
@@ -783,6 +793,8 @@ func TestEnsureBackgroundServeReplacementWaitsForExternalStartLock(
 func TestEnsureBackgroundServeLaunchLoserReplacesStaleDaemonAfterStartup(
 	t *testing.T,
 ) {
+	setStartProbeTickForTest(t, 25*time.Millisecond)
+
 	dir := runtimeTestDir(t)
 	oldHost, oldPort := testPingServer(t)
 	_, err := WriteDaemonRuntime(dir, oldHost, oldPort, "1.0.0", false)
@@ -825,7 +837,7 @@ func TestEnsureBackgroundServeLaunchLoserReplacesStaleDaemonAfterStartup(
 
 	released := make(chan struct{})
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(2 * startProbeTick())
 		unlockStart()
 		_ = launchLock.Unlock()
 		close(released)
@@ -844,6 +856,8 @@ func TestEnsureBackgroundServeLaunchLoserReplacesStaleDaemonAfterStartup(
 func TestEnsureBackgroundServeReplacesStaleDaemonAfterExternalStartupAbort(
 	t *testing.T,
 ) {
+	setStartProbeTickForTest(t, 25*time.Millisecond)
+
 	dir := runtimeTestDir(t)
 	oldHost, oldPort := testPingServer(t)
 	_, err := WriteDaemonRuntime(dir, oldHost, oldPort, "1.0.0", false)
@@ -882,7 +896,7 @@ func TestEnsureBackgroundServeReplacesStaleDaemonAfterExternalStartupAbort(
 
 	released := make(chan struct{})
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(2 * startProbeTick())
 		unlockStart()
 		close(released)
 	}()
@@ -959,6 +973,8 @@ func TestEnsureBackgroundServeIgnoresIncompatibleReadOnlyDaemon(t *testing.T) {
 func TestEnsureBackgroundServeLaunchLoserReportsIncompatibleDaemon(
 	t *testing.T,
 ) {
+	setStartProbeTickForTest(t, 25*time.Millisecond)
+
 	dir := runtimeTestDir(t)
 	launchLock, ok := acquireBackgroundLaunchLock(dir)
 	require.True(t, ok)
@@ -973,7 +989,7 @@ func TestEnsureBackgroundServeLaunchLoserReportsIncompatibleDaemon(
 
 	cfg := config.Config{DataDir: dir}
 	rt, err := ensureBackgroundServe(
-		context.Background(), &cfg, 100*time.Millisecond,
+		context.Background(), &cfg, 50*time.Millisecond,
 	)
 	require.Error(t, err)
 	assert.Nil(t, rt)
@@ -984,6 +1000,8 @@ func TestEnsureBackgroundServeLaunchLoserReportsIncompatibleDaemon(
 func TestEnsureBackgroundServeLaunchLoserWaitsThroughReplacementGap(
 	t *testing.T,
 ) {
+	setStartProbeTickForTest(t, 25*time.Millisecond)
+
 	dir := runtimeTestDir(t)
 	launchLock, ok := acquireBackgroundLaunchLock(dir)
 	require.True(t, ok)
@@ -999,7 +1017,7 @@ func TestEnsureBackgroundServeLaunchLoserWaitsThroughReplacementGap(
 	newHost, newPort := testPingServer(t)
 	published := make(chan error, 1)
 	go func() {
-		time.Sleep(2 * startProbeTick)
+		time.Sleep(2 * startProbeTick())
 		_, err := WriteDaemonRuntime(dir, newHost, newPort, version, false)
 		published <- err
 	}()
@@ -1018,6 +1036,8 @@ func TestEnsureBackgroundServeLaunchLoserWaitsThroughReplacementGap(
 func TestEnsureBackgroundServeChecksTooNewDatabaseAfterStartupWait(
 	t *testing.T,
 ) {
+	setStartProbeTickForTest(t, 25*time.Millisecond)
+
 	dir := runtimeTestDir(t)
 	dbPath := writeTooNewSQLiteDB(t, dir)
 	setTestVersion(t, "1.1.0")
@@ -1043,7 +1063,7 @@ func TestEnsureBackgroundServeChecksTooNewDatabaseAfterStartupWait(
 	oldHost, oldPort := testPingServer(t)
 	errCh := make(chan error, 1)
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(2 * startProbeTick())
 		_, err := writeRuntimeRecordForTest(dir, daemonRuntimeRecord(
 			oldHost, oldPort,
 			withRuntimeVersion("1.0.0"),
@@ -1069,6 +1089,8 @@ func TestEnsureBackgroundServeChecksTooNewDatabaseAfterStartupWait(
 func TestEnsureBackgroundServeLaunchLoserIgnoresReadOnlyRuntimeDuringReplacement(
 	t *testing.T,
 ) {
+	setStartProbeTickForTest(t, 25*time.Millisecond)
+
 	dir := runtimeTestDir(t)
 	launchLock, ok := acquireBackgroundLaunchLock(dir)
 	require.True(t, ok)
@@ -1086,9 +1108,9 @@ func TestEnsureBackgroundServeLaunchLoserIgnoresReadOnlyRuntimeDuringReplacement
 	writableHost, writablePort := testPingServer(t)
 	published := make(chan error, 1)
 	go func() {
-		time.Sleep(2 * startProbeTick)
+		time.Sleep(2 * startProbeTick())
 		_ = launchLock.Unlock()
-		time.Sleep(2 * startProbeTick)
+		time.Sleep(2 * startProbeTick())
 		_, err := WriteDaemonRuntime(
 			dir, writableHost, writablePort, version, false,
 		)
@@ -1110,6 +1132,8 @@ func TestEnsureBackgroundServeLaunchLoserIgnoresReadOnlyRuntimeDuringReplacement
 func TestEnsureBackgroundServeReplacesIncompatibleDaemonAfterStartupWait(
 	t *testing.T,
 ) {
+	setStartProbeTickForTest(t, 25*time.Millisecond)
+
 	dir := runtimeTestDir(t)
 	oldVersion := version
 	version = "1.1.0"
@@ -1156,7 +1180,7 @@ func TestEnsureBackgroundServeReplacesIncompatibleDaemonAfterStartupWait(
 	oldHost, oldPort := testPingServer(t)
 	errCh := make(chan error, 1)
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(2 * startProbeTick())
 		_, err := writeRuntimeRecordForTest(dir, daemonRuntimeRecord(
 			oldHost, oldPort,
 			withRuntimeVersion("1.0.0"),
@@ -1440,6 +1464,8 @@ func TestRefreshServeDaemonReplacementDecisionKeepsStopConfirmedOriginal(
 }
 
 func TestEnsureBackgroundServeConcurrentLaunchConvergesOnDaemon(t *testing.T) {
+	setStartProbeTickForTest(t, 25*time.Millisecond)
+
 	dir := runtimeTestDir(t)
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	launchLock, ok := acquireBackgroundLaunchLock(dir)
@@ -1453,7 +1479,7 @@ func TestEnsureBackgroundServeConcurrentLaunchConvergesOnDaemon(t *testing.T) {
 	host, port := testPingServer(t)
 	errCh := make(chan error, 1)
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(2 * startProbeTick())
 		MarkDaemonStarting(dir)
 		_, err := WriteDaemonRuntime(dir, host, port, "test", false)
 		if err == nil {

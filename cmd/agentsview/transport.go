@@ -331,7 +331,7 @@ func waitForBackgroundLaunchBeforeArchiveWrite(
 		if remaining <= 0 {
 			return true, errServeStartupInProgress
 		}
-		timer := time.NewTimer(min(remaining, startProbeTick))
+		timer := time.NewTimer(min(remaining, startProbeTick()))
 		select {
 		case <-ctx.Done():
 			timer.Stop()

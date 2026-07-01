@@ -14,22 +14,23 @@ import (
 // before now, so the --resume/--active window can be exercised against a
 // real clock. user_message_count stays >= 2 to clear the default
 // one-shot filter.
-func seedActivity(t *testing.T, dataDir, id string, ago time.Duration) {
-	t.Helper()
+func activitySeed(id string, ago time.Duration) sessionSeed {
 	ts := time.Now().Add(-ago).UTC().Format(time.RFC3339)
-	seedSessionWithOpts(t, dataDir, id, "p", func(s *db.Session) {
+	return sessionSeed{id: id, project: "p", mut: func(s *db.Session) {
 		s.StartedAt = new(ts)
 		s.EndedAt = new(ts)
-	})
+	}}
 }
 
 func TestSessionList_ResumeFiltersToActiveWindow(t *testing.T) {
+	dataDir := testDataDir(t)
+	seedSessionsWithOpts(t, dataDir,
+		activitySeed("fresh", 2*time.Minute),
+		activitySeed("stale", 2*time.Hour),
+	)
+
 	for _, flag := range []string{"--resume", "--active"} {
 		t.Run(flag, func(t *testing.T) {
-			dataDir := testDataDir(t)
-			seedActivity(t, dataDir, "fresh", 2*time.Minute)
-			seedActivity(t, dataDir, "stale", 2*time.Hour)
-
 			out, err := executeCommand(newRootCommand(),
 				"session", "list", flag, "--format", "json")
 			require.NoError(t, err)
@@ -42,8 +43,10 @@ func TestSessionList_ResumeFiltersToActiveWindow(t *testing.T) {
 
 func TestSessionList_NoResumeShowsAll(t *testing.T) {
 	dataDir := testDataDir(t)
-	seedActivity(t, dataDir, "fresh", 2*time.Minute)
-	seedActivity(t, dataDir, "stale", 2*time.Hour)
+	seedSessionsWithOpts(t, dataDir,
+		activitySeed("fresh", 2*time.Minute),
+		activitySeed("stale", 2*time.Hour),
+	)
 
 	out, err := executeCommand(newRootCommand(),
 		"session", "list", "--format", "json")
@@ -58,8 +61,10 @@ func TestSessionList_NoResumeShowsAll(t *testing.T) {
 // window to include older sessions.
 func TestSessionList_ResumeRespectsExplicitActiveSince(t *testing.T) {
 	dataDir := testDataDir(t)
-	seedActivity(t, dataDir, "fresh", 2*time.Minute)
-	seedActivity(t, dataDir, "stale", 2*time.Hour)
+	seedSessionsWithOpts(t, dataDir,
+		activitySeed("fresh", 2*time.Minute),
+		activitySeed("stale", 2*time.Hour),
+	)
 
 	wide := time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
 	out, err := executeCommand(newRootCommand(),
@@ -70,8 +75,10 @@ func TestSessionList_ResumeRespectsExplicitActiveSince(t *testing.T) {
 
 func TestSessionList_ResumeHumanOutput(t *testing.T) {
 	dataDir := testDataDir(t)
-	seedActivity(t, dataDir, "fresh", 2*time.Minute)
-	seedActivity(t, dataDir, "stale", 2*time.Hour)
+	seedSessionsWithOpts(t, dataDir,
+		activitySeed("fresh", 2*time.Minute),
+		activitySeed("stale", 2*time.Hour),
+	)
 
 	out, err := executeCommand(newRootCommand(), "session", "list", "--resume")
 	require.NoError(t, err)

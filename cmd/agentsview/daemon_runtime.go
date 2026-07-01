@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -34,8 +35,14 @@ const (
 	runtimeCreateTime      = "create_time"
 	runtimeCaddyPID        = "caddy_pid"
 	runtimeCaddyCreateTime = "caddy_create_time"
-	startProbeTick         = 250 * time.Millisecond
+	defaultStartProbeTick  = 250 * time.Millisecond
 )
+
+var startProbeTickNanos int64 = int64(defaultStartProbeTick)
+
+func startProbeTick() time.Duration {
+	return time.Duration(atomic.LoadInt64(&startProbeTickNanos))
+}
 
 // DaemonRuntime is the agentsview-specific view of a kit daemon runtime record.
 type DaemonRuntime struct {
@@ -706,7 +713,8 @@ func WaitForDaemonStartupContext(
 		if !IsDaemonStarting(dataDir) {
 			return false
 		}
-		timer := time.NewTimer(startProbeTick)
+		wait := min(time.Until(deadline), startProbeTick())
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			timer.Stop()

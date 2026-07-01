@@ -638,6 +638,8 @@ func TestEnsureTransport_ReadIntentRestartsIncompatibleOlderDaemon(t *testing.T)
 func TestEnsureTransport_ArchiveWriteRestartsIncompatibleDaemonAfterExternalStartupAbort(
 	t *testing.T,
 ) {
+	setStartProbeTickForTest(t, 25*time.Millisecond)
+
 	dir := daemonRuntimeDir(t)
 	host, port := testPingServer(t)
 	writeIncompatibleDaemonRuntime(t, dir, host, port, "1.0.0", true)
@@ -660,7 +662,7 @@ func TestEnsureTransport_ArchiveWriteRestartsIncompatibleDaemonAfterExternalStar
 
 	released := make(chan struct{})
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(2 * startProbeTick())
 		unlockStart()
 		close(released)
 	}()
@@ -795,6 +797,8 @@ func TestEnsureTransport_ArchiveWriteUsesAutoStartWaitForStartingDaemon(
 func TestDetectTransportWaitsForExternalStartLockBeforeReturningRuntime(
 	t *testing.T,
 ) {
+	setStartProbeTickForTest(t, 25*time.Millisecond)
+
 	dir := daemonRuntimeDir(t)
 	oldHost, oldPort := testPingServer(t)
 	writeDaemonRuntimeForTest(t, dir, oldHost, oldPort, "1.0.0", false)
@@ -803,7 +807,7 @@ func TestDetectTransportWaitsForExternalStartLockBeforeReturningRuntime(
 	newHost, newPort := testPingServer(t)
 	published := make(chan error, 1)
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(2 * startProbeTick())
 		RemoveDaemonRuntime(dir)
 		_, err := WriteDaemonRuntime(dir, newHost, newPort, "1.1.0", false)
 		unlockStart()
@@ -825,6 +829,8 @@ func TestDetectTransportWaitsForExternalStartLockBeforeReturningRuntime(
 func TestEnsureTransportArchiveWriteWaitsForBackgroundReplacementLock(
 	t *testing.T,
 ) {
+	setStartProbeTickForTest(t, 25*time.Millisecond)
+
 	dir := daemonRuntimeDir(t)
 	oldHost, oldPort := testPingServer(t)
 	writeDaemonRuntimeForTest(t, dir, oldHost, oldPort, version, false)
@@ -835,7 +841,7 @@ func TestEnsureTransportArchiveWriteWaitsForBackgroundReplacementLock(
 	newHost, newPort := testPingServer(t)
 	published := make(chan error, 1)
 	go func() {
-		time.Sleep(2 * startProbeTick)
+		time.Sleep(2 * startProbeTick())
 		RemoveDaemonRuntime(dir)
 		_, err := WriteDaemonRuntime(dir, newHost, newPort, version, false)
 		if err == nil {
@@ -860,6 +866,8 @@ func TestEnsureTransportArchiveWriteWaitsForBackgroundReplacementLock(
 func TestEnsureTransportArchiveWriteAdoptsAuthAfterBackgroundLaunchWait(
 	t *testing.T,
 ) {
+	setStartProbeTickForTest(t, 25*time.Millisecond)
+
 	dir := daemonRuntimeDir(t)
 	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
 	oldHost, oldPort := testPingServer(t)
@@ -872,7 +880,7 @@ func TestEnsureTransportArchiveWriteAdoptsAuthAfterBackgroundLaunchWait(
 	newHost, newPort := testAuthenticatedPingServer(t, token)
 	published := make(chan error, 1)
 	go func() {
-		time.Sleep(2 * startProbeTick)
+		time.Sleep(2 * startProbeTick())
 		writeTestConfig(t, dir, `require_auth = true
 auth_token = "generated-token"
 `)
@@ -902,6 +910,8 @@ auth_token = "generated-token"
 }
 
 func TestEnsureTransportReadAdoptsAuthAfterDaemonStartupWait(t *testing.T) {
+	setStartProbeTickForTest(t, 25*time.Millisecond)
+
 	dir := daemonRuntimeDir(t)
 	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
 	unlockStart := holdExternalDaemonStartLock(t, dir)
@@ -910,7 +920,7 @@ func TestEnsureTransportReadAdoptsAuthAfterDaemonStartupWait(t *testing.T) {
 	newHost, newPort := testAuthenticatedPingServer(t, token)
 	published := make(chan error, 1)
 	go func() {
-		time.Sleep(2 * startProbeTick)
+		time.Sleep(2 * startProbeTick())
 		writeTestConfig(t, dir, `require_auth = true
 auth_token = "generated-token"
 `)

@@ -29,9 +29,17 @@ func sessionListIDs(t *testing.T, out string) []string {
 
 func TestSessionList_SortAndReverse(t *testing.T) {
 	dataDir := testDataDir(t)
-	seedSessionWithOpts(t, dataDir, "lo", "p", func(s *db.Session) { s.MessageCount = 2 })
-	seedSessionWithOpts(t, dataDir, "mid", "p", func(s *db.Session) { s.MessageCount = 5 })
-	seedSessionWithOpts(t, dataDir, "hi", "p", func(s *db.Session) { s.MessageCount = 9 })
+	seedSessionsWithOpts(t, dataDir,
+		sessionSeed{id: "lo", project: "p", mut: func(s *db.Session) {
+			s.MessageCount = 2
+		}},
+		sessionSeed{id: "mid", project: "p", mut: func(s *db.Session) {
+			s.MessageCount = 5
+		}},
+		sessionSeed{id: "hi", project: "p", mut: func(s *db.Session) {
+			s.MessageCount = 9
+		}},
+	)
 
 	// --sort messages defaults to ascending.
 	out, err := executeCommand(newRootCommand(),
@@ -54,18 +62,20 @@ func TestSessionList_SortAndReverse(t *testing.T) {
 
 func TestSessionList_MultiKeySort(t *testing.T) {
 	dataDir := testDataDir(t)
-	seedSessionWithOpts(t, dataDir, "a", "p", func(s *db.Session) {
-		s.MessageCount = 1
-		s.StartedAt = new("2024-03-01T00:00:00Z")
-	})
-	seedSessionWithOpts(t, dataDir, "b", "p", func(s *db.Session) {
-		s.MessageCount = 1
-		s.StartedAt = new("2024-01-01T00:00:00Z")
-	})
-	seedSessionWithOpts(t, dataDir, "c", "p", func(s *db.Session) {
-		s.MessageCount = 2
-		s.StartedAt = new("2024-02-01T00:00:00Z")
-	})
+	seedSessionsWithOpts(t, dataDir,
+		sessionSeed{id: "a", project: "p", mut: func(s *db.Session) {
+			s.MessageCount = 1
+			s.StartedAt = new("2024-03-01T00:00:00Z")
+		}},
+		sessionSeed{id: "b", project: "p", mut: func(s *db.Session) {
+			s.MessageCount = 1
+			s.StartedAt = new("2024-01-01T00:00:00Z")
+		}},
+		sessionSeed{id: "c", project: "p", mut: func(s *db.Session) {
+			s.MessageCount = 2
+			s.StartedAt = new("2024-02-01T00:00:00Z")
+		}},
+	)
 
 	// Per-key directions: messages asc, then started desc.
 	out, err := executeCommand(newRootCommand(),
@@ -86,12 +96,14 @@ func TestSessionList_MultiKeySort(t *testing.T) {
 // ascending) rather than silently no-opping.
 func TestSessionList_EmptySortReverse(t *testing.T) {
 	dataDir := testDataDir(t)
-	seedSessionWithOpts(t, dataDir, "old", "p", func(s *db.Session) {
-		s.EndedAt = new("2024-01-01T00:00:00Z")
-	})
-	seedSessionWithOpts(t, dataDir, "new", "p", func(s *db.Session) {
-		s.EndedAt = new("2024-03-01T00:00:00Z")
-	})
+	seedSessionsWithOpts(t, dataDir,
+		sessionSeed{id: "old", project: "p", mut: func(s *db.Session) {
+			s.EndedAt = new("2024-01-01T00:00:00Z")
+		}},
+		sessionSeed{id: "new", project: "p", mut: func(s *db.Session) {
+			s.EndedAt = new("2024-03-01T00:00:00Z")
+		}},
+	)
 
 	// Default recent is newest-first.
 	out, err := executeCommand(newRootCommand(),

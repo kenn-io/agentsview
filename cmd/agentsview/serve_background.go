@@ -505,7 +505,7 @@ func waitForExternalServeStartup(
 		if remaining <= 0 {
 			return nil, true, errServeStartupInProgress
 		}
-		wait := min(remaining, startProbeTick)
+		wait := min(remaining, startProbeTick())
 		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
@@ -663,7 +663,8 @@ func waitForBackgroundLaunchOwner(
 				return
 			}
 		}
-		timer := time.NewTimer(startProbeTick)
+		wait := min(time.Until(deadline), startProbeTick())
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -799,7 +800,7 @@ func waitForBackgroundServeReady(
 ) (*DaemonRuntime, error) {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
-	ticker := time.NewTicker(startProbeTick)
+	ticker := time.NewTicker(startProbeTick())
 	defer ticker.Stop()
 
 	for {

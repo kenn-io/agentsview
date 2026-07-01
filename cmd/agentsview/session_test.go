@@ -261,6 +261,12 @@ func seedSession(t *testing.T, dataDir, id, project string) {
 	seedSessionWithOpts(t, dataDir, id, project, nil)
 }
 
+type sessionSeed struct {
+	id      string
+	project string
+	mut     func(*db.Session)
+}
+
 func seedEmptyArchive(t *testing.T, dataDir string) {
 	t.Helper()
 	dbtest.EnsureTestDBAt(t, sessionsDBPath(dataDir))
@@ -277,6 +283,21 @@ func seedSessionWithOpts(
 	mut func(*db.Session),
 ) {
 	t.Helper()
+	seedSessionsWithOpts(t, dataDir, sessionSeed{
+		id:      id,
+		project: project,
+		mut:     mut,
+	})
+}
+
+func seedSessionsWithOpts(t *testing.T, dataDir string, seeds ...sessionSeed) {
+	t.Helper()
+	seedSessionArchiveRows(t, dataDir, seeds...)
+	registerSQLiteDaemonRuntime(t, dataDir)
+}
+
+func seedSessionArchiveRows(t *testing.T, dataDir string, seeds ...sessionSeed) {
+	t.Helper()
 	dbPath := sessionsDBPath(dataDir)
 	dbtest.EnsureTestDBAt(t, dbPath)
 	d, err := db.OpenPreparedTestDB(dbPath)
@@ -287,25 +308,26 @@ func seedSessionWithOpts(
 			_ = d.Close()
 		}
 	})
-	// UserMessageCount >= 2 so seeded sessions pass the default
-	// ExcludeOneShot filter in `session list` (one-shot means
-	// user_message_count <= 1). See internal/db/analytics.go.
-	s := db.Session{
-		ID:               id,
-		Project:          project,
-		Machine:          "m",
-		Agent:            "claude",
-		MessageCount:     4,
-		UserMessageCount: 2,
+	for _, seed := range seeds {
+		// UserMessageCount >= 2 so seeded sessions pass the default
+		// ExcludeOneShot filter in `session list` (one-shot means
+		// user_message_count <= 1). See internal/db/analytics.go.
+		s := db.Session{
+			ID:               seed.id,
+			Project:          seed.project,
+			Machine:          "m",
+			Agent:            "claude",
+			MessageCount:     4,
+			UserMessageCount: 2,
+		}
+		if seed.mut != nil {
+			seed.mut(&s)
+		}
+		require.NoError(t, d.UpsertSession(s))
 	}
-	if mut != nil {
-		mut(&s)
-	}
-	require.NoError(t, d.UpsertSession(s))
 	err = d.Close()
 	closed = true
 	require.NoError(t, err)
-	registerSQLiteDaemonRuntime(t, dataDir)
 }
 
 func registerSQLiteDaemonRuntime(t *testing.T, dataDir string) {

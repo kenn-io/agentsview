@@ -354,7 +354,7 @@ func waitForProcessExit(pid int, timeout time.Duration) bool {
 		if !daemon.ProcessAlive(pid) {
 			return true
 		}
-		time.Sleep(startProbeTick)
+		time.Sleep(startProbeTick())
 	}
 	return !daemon.ProcessAlive(pid)
 }
