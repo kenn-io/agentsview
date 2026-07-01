@@ -183,6 +183,10 @@ var (
 	kiroSQLiteSchemaBytes []byte
 	kiroSQLiteSchemaErr   error
 
+	antigravityCLISchemaOnce  stdsync.Once
+	antigravityCLISchemaBytes []byte
+	antigravityCLISchemaErr   error
+
 	piebaldSchemaOnce  stdsync.Once
 	piebaldSchemaBytes []byte
 	piebaldSchemaErr   error

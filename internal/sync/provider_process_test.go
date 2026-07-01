@@ -3,8 +3,10 @@ package sync
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
+	stdsync "sync"
 	"testing"
 	"time"
 
@@ -15,6 +17,80 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 )
+
+var (
+	processProviderPiebaldSchemaOnce  stdsync.Once
+	processProviderPiebaldSchemaBytes []byte
+	processProviderPiebaldSchemaErr   error
+)
+
+const processProviderPiebaldSchema = `
+	CREATE TABLE projects (
+		id INTEGER PRIMARY KEY,
+		directory TEXT NOT NULL,
+		name TEXT NOT NULL
+	);
+	CREATE TABLE chats (
+		id INTEGER PRIMARY KEY,
+		title TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		is_deleted BOOLEAN NOT NULL DEFAULT 0,
+		message_count INTEGER NOT NULL DEFAULT 0,
+		current_directory TEXT,
+		worktree_path TEXT,
+		branch_name TEXT,
+		project_id INTEGER
+	);
+	CREATE TABLE messages (
+		id INTEGER PRIMARY KEY,
+		parent_chat_id INTEGER NOT NULL,
+		parent_message_id INTEGER,
+		role TEXT NOT NULL,
+		model TEXT,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		input_tokens BIGINT,
+		output_tokens BIGINT,
+		reasoning_tokens BIGINT,
+		cache_read_tokens BIGINT,
+		cache_write_tokens BIGINT,
+		status TEXT NOT NULL,
+		finish_reason TEXT,
+		error TEXT,
+		enabled INTEGER NOT NULL DEFAULT 1
+	);
+	CREATE TABLE message_parts (
+		id INTEGER PRIMARY KEY,
+		parent_chat_message_id INTEGER NOT NULL,
+		part_index INTEGER NOT NULL,
+		part_type TEXT NOT NULL
+	);
+	CREATE TABLE message_part_text (
+		message_part_id INTEGER PRIMARY KEY,
+		is_thinking BOOLEAN NOT NULL DEFAULT FALSE
+	);
+	CREATE TABLE message_content_nodes (
+		id INTEGER PRIMARY KEY,
+		parent_text_part_id INTEGER NOT NULL,
+		node_index INTEGER NOT NULL,
+		node_type TEXT NOT NULL
+	);
+	CREATE TABLE message_node_text (
+		node_id INTEGER PRIMARY KEY,
+		content TEXT NOT NULL
+	);
+	CREATE TABLE message_part_tool_call (
+		message_part_id INTEGER PRIMARY KEY,
+		provider_tool_use_id TEXT NOT NULL,
+		tool_name TEXT NOT NULL,
+		tool_input TEXT NOT NULL,
+		tool_result TEXT,
+		tool_error TEXT,
+		tool_state TEXT NOT NULL DEFAULT 'pending',
+		sub_agent_chat_id INTEGER
+	);
+`
 
 func TestProcessFileProviderForgeVirtualSource(t *testing.T) {
 	t.Parallel()
@@ -694,79 +770,48 @@ func (p *processFixtureProvider) Parse(
 
 func openProcessProviderPiebaldDB(t *testing.T, path string) *sql.DB {
 	t.Helper()
+	copyProcessProviderPiebaldSchemaTemplate(t, path)
 	database, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 
-	_, err = database.Exec(`
-		CREATE TABLE projects (
-			id INTEGER PRIMARY KEY,
-			directory TEXT NOT NULL,
-			name TEXT NOT NULL
-		);
-		CREATE TABLE chats (
-			id INTEGER PRIMARY KEY,
-			title TEXT NOT NULL,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			is_deleted BOOLEAN NOT NULL DEFAULT 0,
-			message_count INTEGER NOT NULL DEFAULT 0,
-			current_directory TEXT,
-			worktree_path TEXT,
-			branch_name TEXT,
-			project_id INTEGER
-		);
-		CREATE TABLE messages (
-			id INTEGER PRIMARY KEY,
-			parent_chat_id INTEGER NOT NULL,
-			parent_message_id INTEGER,
-			role TEXT NOT NULL,
-			model TEXT,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			input_tokens BIGINT,
-			output_tokens BIGINT,
-			reasoning_tokens BIGINT,
-			cache_read_tokens BIGINT,
-			cache_write_tokens BIGINT,
-			status TEXT NOT NULL,
-			finish_reason TEXT,
-			error TEXT,
-			enabled INTEGER NOT NULL DEFAULT 1
-		);
-		CREATE TABLE message_parts (
-			id INTEGER PRIMARY KEY,
-			parent_chat_message_id INTEGER NOT NULL,
-			part_index INTEGER NOT NULL,
-			part_type TEXT NOT NULL
-		);
-		CREATE TABLE message_part_text (
-			message_part_id INTEGER PRIMARY KEY,
-			is_thinking BOOLEAN NOT NULL DEFAULT FALSE
-		);
-		CREATE TABLE message_content_nodes (
-			id INTEGER PRIMARY KEY,
-			parent_text_part_id INTEGER NOT NULL,
-			node_index INTEGER NOT NULL,
-			node_type TEXT NOT NULL
-		);
-		CREATE TABLE message_node_text (
-			node_id INTEGER PRIMARY KEY,
-			content TEXT NOT NULL
-		);
-		CREATE TABLE message_part_tool_call (
-			message_part_id INTEGER PRIMARY KEY,
-			provider_tool_use_id TEXT NOT NULL,
-			tool_name TEXT NOT NULL,
-			tool_input TEXT NOT NULL,
-			tool_result TEXT,
-			tool_error TEXT,
-			tool_state TEXT NOT NULL DEFAULT 'pending',
-			sub_agent_chat_id INTEGER
-		);
-	`)
-	require.NoError(t, err)
 	return database
+}
+
+func copyProcessProviderPiebaldSchemaTemplate(t *testing.T, path string) {
+	t.Helper()
+	processProviderPiebaldSchemaOnce.Do(func() {
+		processProviderPiebaldSchemaBytes, processProviderPiebaldSchemaErr =
+			buildProcessProviderPiebaldSchemaTemplate()
+	})
+	require.NoError(t, processProviderPiebaldSchemaErr)
+	require.NoError(t, os.WriteFile(path, processProviderPiebaldSchemaBytes, 0o644))
+}
+
+func buildProcessProviderPiebaldSchemaTemplate() ([]byte, error) {
+	dir, err := os.MkdirTemp("", "agentsview-process-piebald-schema-*")
+	if err != nil {
+		return nil, fmt.Errorf("create piebald provider schema dir: %w", err)
+	}
+	defer os.RemoveAll(dir)
+
+	path := filepath.Join(dir, "template.db")
+	database, err := sql.Open("sqlite3", path)
+	if err != nil {
+		return nil, fmt.Errorf("open piebald provider schema template: %w", err)
+	}
+	if _, err = database.Exec(processProviderPiebaldSchema); err != nil {
+		_ = database.Close()
+		return nil, fmt.Errorf("create piebald provider schema template: %w", err)
+	}
+	if err = database.Close(); err != nil {
+		return nil, fmt.Errorf("close piebald provider schema template: %w", err)
+	}
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read piebald provider schema template: %w", err)
+	}
+	return bytes, nil
 }
 
 func seedProcessProviderPiebaldChat(t *testing.T, database *sql.DB) {

@@ -16,6 +16,14 @@ import (
 	"go.kenn.io/agentsview/internal/sync"
 )
 
+const antigravityCLITestSchema = `
+	CREATE TABLE steps (
+		idx integer,
+		step_type integer NOT NULL DEFAULT 0,
+		step_payload blob,
+		PRIMARY KEY (idx))
+`
+
 func TestSyncEngineAntigravityCLI_HappyPath(t *testing.T) {
 	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
@@ -697,20 +705,29 @@ func TestSyncEngineAntigravityCLI_MissingPbOrphanSidecar(t *testing.T) {
 
 func createAntigravityCLIUndisplayableStepDB(t *testing.T, path string) {
 	t.Helper()
+	copyAntigravityCLITestSchemaTemplate(t, path)
 	conn := openAntigravityCLITestDB(t, path)
 	defer conn.Close()
 
-	createAntigravityCLITestStepsTable(t, conn)
 	insertAntigravityCLIStep(t, conn, 0, 14, "MODEL_PLACEHOLDER_0")
 }
 
 func createAntigravityCLIDisplayStepDB(t *testing.T, path, prompt string) {
 	t.Helper()
+	copyAntigravityCLITestSchemaTemplate(t, path)
 	conn := openAntigravityCLITestDB(t, path)
 	defer conn.Close()
 
-	createAntigravityCLITestStepsTable(t, conn)
 	insertAntigravityCLIStep(t, conn, 0, 14, prompt)
+}
+
+func copyAntigravityCLITestSchemaTemplate(t *testing.T, path string) {
+	t.Helper()
+	copySQLiteSchemaTemplate(
+		t, path, "antigravity cli", &antigravityCLISchemaOnce,
+		&antigravityCLISchemaBytes, &antigravityCLISchemaErr,
+		antigravityCLITestSchema,
+	)
 }
 
 func openAntigravityCLITestDB(t *testing.T, path string) *sql.DB {
@@ -731,16 +748,6 @@ func openAntigravityCLITestWALDB(t *testing.T, path string) *sql.DB {
 	require.NoError(t, err, "disable WAL autocheckpoint")
 
 	return conn
-}
-
-func createAntigravityCLITestStepsTable(t *testing.T, conn *sql.DB) {
-	t.Helper()
-	_, err := conn.Exec(`CREATE TABLE steps (
-		idx integer,
-		step_type integer NOT NULL DEFAULT 0,
-		step_payload blob,
-		PRIMARY KEY (idx))`)
-	require.NoError(t, err, "create steps table")
 }
 
 func insertAntigravityCLIStep(
