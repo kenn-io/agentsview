@@ -943,7 +943,14 @@ func markSessionAliasBackfillDone(local syncStateStore) error {
 func completeSessionAliasBackfill(
 	local syncStateStore, needed bool, result PushResult,
 ) error {
-	if !needed || result.Errors > 0 || result.SkippedConflicts > 0 {
+	// Skipped ownership conflicts are sessions owned by another machine on
+	// the hub; this host neither can nor should re-push them, so they do not
+	// indicate an incomplete backfill of this host's own sessions. Only real
+	// push errors (this host's own sessions that failed to push) should defer
+	// the marker and re-force a full push. Gating on skipped conflicts made
+	// the one-time alias backfill impossible to complete on any shared hub —
+	// every push saw the marker missing and fell back to a full sweep.
+	if !needed || result.Errors > 0 {
 		return nil
 	}
 	return markSessionAliasBackfillDone(local)

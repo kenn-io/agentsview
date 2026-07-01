@@ -163,7 +163,7 @@ func TestSessionAliasBackfillForcesOneFullPush(t *testing.T) {
 	assert.False(t, needed)
 }
 
-func TestCompleteSessionAliasBackfillRequiresCleanPush(t *testing.T) {
+func TestCompleteSessionAliasBackfillMarksDoneUnlessErrors(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		res  PushResult
@@ -171,7 +171,14 @@ func TestCompleteSessionAliasBackfillRequiresCleanPush(t *testing.T) {
 	}{
 		{name: "clean", want: "1"},
 		{name: "errors", res: PushResult{Errors: 1}},
-		{name: "skipped conflicts", res: PushResult{SkippedConflicts: 1}},
+		// Skipped ownership conflicts are other machines' sessions this host
+		// can never push; they must not block the one-time backfill marker,
+		// or a shared hub can never leave the forced-full-push state.
+		{name: "skipped conflicts", res: PushResult{SkippedConflicts: 1}, want: "1"},
+		{
+			name: "errors with skipped conflicts",
+			res:  PushResult{Errors: 1, SkippedConflicts: 2},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &syncStateStoreStub{}
