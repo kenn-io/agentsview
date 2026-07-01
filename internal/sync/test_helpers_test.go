@@ -183,6 +183,14 @@ var (
 	kiroSQLiteSchemaBytes []byte
 	kiroSQLiteSchemaErr   error
 
+	piebaldSchemaOnce  stdsync.Once
+	piebaldSchemaBytes []byte
+	piebaldSchemaErr   error
+
+	shelleySchemaOnce  stdsync.Once
+	shelleySchemaBytes []byte
+	shelleySchemaErr   error
+
 	kiroSQLiteFixtureCache stdsync.Map
 )
 

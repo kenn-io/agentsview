@@ -58,11 +58,14 @@ type shelleyMsg struct {
 func createShelleyDB(t *testing.T, dir string) string {
 	t.Helper()
 	dbPath := filepath.Join(dir, "shelley.db")
+	copySQLiteSchemaTemplate(
+		t, dbPath, "shelley", &shelleySchemaOnce,
+		&shelleySchemaBytes, &shelleySchemaErr,
+		shelleyTestSchema,
+	)
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err, "open shelley test db")
 	defer db.Close()
-	_, err = db.Exec(shelleyTestSchema)
-	require.NoError(t, err, "create shelley schema")
 	return dbPath
 }
 

@@ -17,82 +17,85 @@ type piebaldTestDB struct {
 	db   *sql.DB
 }
 
+const piebaldTestSchema = `
+	CREATE TABLE projects (
+		id INTEGER PRIMARY KEY,
+		directory TEXT NOT NULL,
+		name TEXT NOT NULL
+	);
+	CREATE TABLE chats (
+		id INTEGER PRIMARY KEY,
+		title TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		is_deleted BOOLEAN NOT NULL DEFAULT 0,
+		message_count INTEGER NOT NULL DEFAULT 0,
+		current_directory TEXT,
+		worktree_path TEXT,
+		branch_name TEXT,
+		project_id INTEGER
+	);
+	CREATE TABLE messages (
+		id INTEGER PRIMARY KEY,
+		parent_chat_id INTEGER NOT NULL,
+		parent_message_id INTEGER,
+		role TEXT NOT NULL,
+		model TEXT,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		input_tokens BIGINT,
+		output_tokens BIGINT,
+		reasoning_tokens BIGINT,
+		cache_read_tokens BIGINT,
+		cache_write_tokens BIGINT,
+		status TEXT NOT NULL,
+		finish_reason TEXT,
+		error TEXT,
+		enabled INTEGER NOT NULL DEFAULT 1
+	);
+	CREATE TABLE message_parts (
+		id INTEGER PRIMARY KEY,
+		parent_chat_message_id INTEGER NOT NULL,
+		part_index INTEGER NOT NULL,
+		part_type TEXT NOT NULL
+	);
+	CREATE TABLE message_part_text (
+		message_part_id INTEGER PRIMARY KEY,
+		is_thinking BOOLEAN NOT NULL DEFAULT FALSE
+	);
+	CREATE TABLE message_content_nodes (
+		id INTEGER PRIMARY KEY,
+		parent_text_part_id INTEGER NOT NULL,
+		node_index INTEGER NOT NULL,
+		node_type TEXT NOT NULL
+	);
+	CREATE TABLE message_node_text (
+		node_id INTEGER PRIMARY KEY,
+		content TEXT NOT NULL
+	);
+	CREATE TABLE message_part_tool_call (
+		message_part_id INTEGER PRIMARY KEY,
+		provider_tool_use_id TEXT NOT NULL,
+		tool_name TEXT NOT NULL,
+		tool_input TEXT NOT NULL,
+		tool_result TEXT,
+		tool_error TEXT,
+		tool_state TEXT NOT NULL DEFAULT 'pending',
+		sub_agent_chat_id INTEGER
+	);
+`
+
 func createPiebaldDB(t *testing.T, dir string) *piebaldTestDB {
 	t.Helper()
 	path := filepath.Join(dir, "app.db")
+	copySQLiteSchemaTemplate(
+		t, path, "piebald", &piebaldSchemaOnce,
+		&piebaldSchemaBytes, &piebaldSchemaErr,
+		piebaldTestSchema,
+	)
 	d, err := sql.Open("sqlite3", path)
 	require.NoError(t, err, "opening piebald test db")
 	t.Cleanup(func() { d.Close() })
-
-	schema := `
-		CREATE TABLE projects (
-			id INTEGER PRIMARY KEY,
-			directory TEXT NOT NULL,
-			name TEXT NOT NULL
-		);
-		CREATE TABLE chats (
-			id INTEGER PRIMARY KEY,
-			title TEXT NOT NULL,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			is_deleted BOOLEAN NOT NULL DEFAULT 0,
-			message_count INTEGER NOT NULL DEFAULT 0,
-			current_directory TEXT,
-			worktree_path TEXT,
-			branch_name TEXT,
-			project_id INTEGER
-		);
-		CREATE TABLE messages (
-			id INTEGER PRIMARY KEY,
-			parent_chat_id INTEGER NOT NULL,
-			parent_message_id INTEGER,
-			role TEXT NOT NULL,
-			model TEXT,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			input_tokens BIGINT,
-			output_tokens BIGINT,
-			reasoning_tokens BIGINT,
-			cache_read_tokens BIGINT,
-			cache_write_tokens BIGINT,
-			status TEXT NOT NULL,
-			finish_reason TEXT,
-			error TEXT,
-			enabled INTEGER NOT NULL DEFAULT 1
-		);
-		CREATE TABLE message_parts (
-			id INTEGER PRIMARY KEY,
-			parent_chat_message_id INTEGER NOT NULL,
-			part_index INTEGER NOT NULL,
-			part_type TEXT NOT NULL
-		);
-		CREATE TABLE message_part_text (
-			message_part_id INTEGER PRIMARY KEY,
-			is_thinking BOOLEAN NOT NULL DEFAULT FALSE
-		);
-		CREATE TABLE message_content_nodes (
-			id INTEGER PRIMARY KEY,
-			parent_text_part_id INTEGER NOT NULL,
-			node_index INTEGER NOT NULL,
-			node_type TEXT NOT NULL
-		);
-		CREATE TABLE message_node_text (
-			node_id INTEGER PRIMARY KEY,
-			content TEXT NOT NULL
-		);
-		CREATE TABLE message_part_tool_call (
-			message_part_id INTEGER PRIMARY KEY,
-			provider_tool_use_id TEXT NOT NULL,
-			tool_name TEXT NOT NULL,
-			tool_input TEXT NOT NULL,
-			tool_result TEXT,
-			tool_error TEXT,
-			tool_state TEXT NOT NULL DEFAULT 'pending',
-			sub_agent_chat_id INTEGER
-		);
-	`
-	_, err = d.Exec(schema)
-	require.NoError(t, err, "creating piebald schema")
 	return &piebaldTestDB{path: path, db: d}
 }
 
