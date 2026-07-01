@@ -181,9 +181,8 @@ func TestOpenReadOnlyRejectsMissingMigratedColumn(t *testing.T) {
 	requireOpenReadOnlyFails(t, path, "schema missing sessions.display_name")
 }
 
-func TestOpenReadOnlyRejectsMissingReadColumn(t *testing.T) {
+func TestReadOnlySchemaCompatibilityRejectsMissingReadColumn(t *testing.T) {
 	t.Parallel()
-	basePath := createClosedTestDB(t, tempDBPath(t, "sessions.db"), nil)
 	tests := []struct {
 		name   string
 		table  string
@@ -208,11 +207,11 @@ func TestOpenReadOnlyRejectsMissingReadColumn(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			path := copyClosedTestDB(t, basePath)
-			execRawSQLite(t, path,
-				"ALTER TABLE "+tt.table+" DROP COLUMN "+tt.column)
-			requireOpenReadOnlyFails(t, path,
+			conn := openReadOnlySchemaProbe(t)
+			_, err := conn.Exec(
+				"ALTER TABLE " + tt.table + " DROP COLUMN " + tt.column)
+			require.NoError(t, err)
+			requireReadOnlySchemaCompatibilityFails(t, conn,
 				"schema missing "+tt.table+"."+tt.column)
 		})
 	}
@@ -281,6 +280,27 @@ func readOnlyTableColumns(
 	require.NoError(t, rows.Err())
 	require.NotEmpty(t, columns)
 	return columns
+}
+
+func openReadOnlySchemaProbe(t *testing.T) *sql.DB {
+	t.Helper()
+	conn, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	_, err = conn.Exec(schemaSQL)
+	require.NoError(t, err)
+	return conn
+}
+
+func requireReadOnlySchemaCompatibilityFails(
+	t *testing.T,
+	conn *sql.DB,
+	contains string,
+) {
+	t.Helper()
+	err := checkReadOnlySchemaCompatibility(conn)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), contains)
 }
 
 func TestOpenReadOnlyAllowsMissingFTSTable(t *testing.T) {
