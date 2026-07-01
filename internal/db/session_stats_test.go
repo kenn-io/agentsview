@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -2510,18 +2511,13 @@ func statsRunGit(t *testing.T, repo string, env []string, args ...string) {
 		strings.Join(args, " "), out)
 }
 
-// statsInitRepo creates a fresh git repo under t.TempDir() with a
-// deterministic author identity (test@example.com). Signing is disabled
-// so the tests don't hang on a GPG prompt when the host has commit
-// signing enabled globally.
-func statsInitRepo(t *testing.T) string {
+func statsInitRepoAt(t *testing.T, repo string) {
 	t.Helper()
-	repo := t.TempDir()
+	require.NoError(t, os.MkdirAll(repo, 0o755), "mkdir repo")
 	statsRunGit(t, repo, nil, "init", "-q", "-b", "main")
 	statsRunGit(t, repo, nil, "config", "user.email", "test@example.com")
 	statsRunGit(t, repo, nil, "config", "user.name", "Test User")
 	statsRunGit(t, repo, nil, "config", "commit.gpgsign", "false")
-	return repo
 }
 
 // statsCommitFile writes content into repo/relpath, stages it, and
@@ -2546,6 +2542,63 @@ func statsCommitFile(
 	statsRunGit(t, repo, env, "commit", "-q", "-m", message)
 }
 
+var (
+	statsOutcomeRepoOnce sync.Once
+	statsOutcomeRepoDir  string
+	statsOutcomeRepoPath string
+)
+
+func statsOutcomeRepo(t *testing.T) string {
+	t.Helper()
+	statsOutcomeRepoOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "agentsview-stats-outcome-*")
+		require.NoError(t, err, "create stats outcome repo dir")
+		statsOutcomeRepoDir = dir
+		statsOutcomeRepoPath = filepath.Join(dir, "repo")
+		statsInitRepoAt(t, statsOutcomeRepoPath)
+		// Three commits by test@example.com with known LOC counts.
+		//   c1 a.txt:      +3 -0 (new file, 3 lines)
+		//   c2 a.txt:      +2 -0 (append 2 lines)
+		//   c3 b.txt:      +4 -0 (new file, 4 lines)
+		statsCommitFile(t, statsOutcomeRepoPath,
+			"a.txt", "a1\na2\na3\n", "c1")
+		statsCommitFile(t, statsOutcomeRepoPath,
+			"a.txt", "a1\na2\na3\na4\na5\n", "c2")
+		statsCommitFile(t, statsOutcomeRepoPath,
+			"b.txt", "b1\nb2\nb3\nb4\n", "c3")
+	})
+
+	repo := filepath.Join(t.TempDir(), "repo")
+	copyStatsRepo(t, statsOutcomeRepoPath, repo)
+	return repo
+}
+
+func copyStatsRepo(t *testing.T, src, dst string) {
+	t.Helper()
+	require.NoError(t, filepath.WalkDir(src, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return os.MkdirAll(target, info.Mode().Perm())
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, info.Mode().Perm())
+	}), "copy stats outcome repo")
+}
+
 // TestGetSessionStats_OutcomeStats_DefaultDisabled verifies that plain
 // stats runs do not touch git-derived outcome aggregation, even when
 // sessions carry cwd values inside a real repository.
@@ -2555,8 +2608,7 @@ func TestGetSessionStats_OutcomeStats_DefaultDisabled(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 
-	repo := statsInitRepo(t)
-	statsCommitFile(t, repo, "a.txt", "a1\n", "c1")
+	repo := statsOutcomeRepo(t)
 	insertSessionFixture(t, d, sessionFixture{
 		id: "os-default", agent: "claude", userMsgs: 5,
 		startedAt: hoursAgo(5), cwd: repo,
@@ -2579,14 +2631,7 @@ func TestGetSessionStats_OutcomeStats_Happy(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 
-	repo := statsInitRepo(t)
-	// Three commits by test@example.com with known LOC counts.
-	//   c1 a.txt:      +3 -0 (new file, 3 lines)
-	//   c2 a.txt:      +2 -0 (append 2 lines)
-	//   c3 b.txt:      +4 -0 (new file, 4 lines)
-	statsCommitFile(t, repo, "a.txt", "a1\na2\na3\n", "c1")
-	statsCommitFile(t, repo, "a.txt", "a1\na2\na3\na4\na5\n", "c2")
-	statsCommitFile(t, repo, "b.txt", "b1\nb2\nb3\nb4\n", "c3")
+	repo := statsOutcomeRepo(t)
 
 	// Two Claude sessions with cwds inside the repo — one at the root,
 	// one in a subdirectory. Both should collapse to the same repo and

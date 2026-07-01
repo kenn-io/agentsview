@@ -335,6 +335,9 @@ func TestMain(m *testing.M) {
 	if largeSessionPoisonDir != "" {
 		_ = os.RemoveAll(largeSessionPoisonDir)
 	}
+	if statsOutcomeRepoDir != "" {
+		_ = os.RemoveAll(statsOutcomeRepoDir)
+	}
 	os.Exit(code)
 }
 
