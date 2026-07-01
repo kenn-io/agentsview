@@ -644,6 +644,38 @@ func contractLocalOnlyMethods(
 	require.NoError(t, store.DeleteInsight(insightID))
 }
 
+func TestStoreContractGetUsageMatchingSessionCountCountsCopilotSessionsWithoutUsageRows(
+	t *testing.T,
+) {
+	store, ok := openStoreContractSQLiteFixtureDB(t).(*DB)
+	require.True(t, ok, "sqlite fixture should expose *DB")
+	ctx := context.Background()
+
+	insertSession(t, store, "contract-copilot-empty", "alpha", func(s *Session) {
+		ts := "2026-01-12T16:00:00Z"
+		s.Agent = "copilot"
+		s.StartedAt = &ts
+		s.EndedAt = &ts
+	})
+	insertMessages(t, store, Message{
+		SessionID:  "contract-copilot-empty",
+		Ordinal:    0,
+		Role:       "assistant",
+		Timestamp:  "2026-01-12T16:00:00Z",
+		Model:      "gpt-5.3-codex",
+		TokenUsage: nil,
+	})
+
+	count, err := store.GetUsageMatchingSessionCount(ctx, UsageFilter{
+		From:     "2026-01-12",
+		To:       "2026-01-12",
+		Timezone: "UTC",
+		Agent:    "copilot",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+}
+
 func seedStoreContractSQLite(
 	t *testing.T,
 	store Store,

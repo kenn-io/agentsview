@@ -306,6 +306,50 @@ func requireReadOnlyDuck(t *testing.T, err error) {
 	assert.True(t, errors.Is(err, db.ErrReadOnly), "expected ErrReadOnly, got %v", err)
 }
 
+func TestDuckDBGetUsageMatchingSessionCountCountsCopilotSessionsWithoutUsageRows(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	ts := "2024-06-15T10:00:00Z"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: db.Session{
+			ID:               "duck-copilot-empty",
+			Project:          "alpha",
+			Machine:          "test-machine",
+			Agent:            "copilot",
+			StartedAt:        &ts,
+			EndedAt:          &ts,
+			MessageCount:     1,
+			UserMessageCount: 1,
+		},
+		Messages: []db.Message{{
+			SessionID:  "duck-copilot-empty",
+			Ordinal:    0,
+			Role:       "assistant",
+			Timestamp:  ts,
+			Model:      "gpt-5.3-codex",
+			TokenUsage: nil,
+		}},
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err, "seed copilot session")
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	count, err := store.GetUsageMatchingSessionCount(ctx, db.UsageFilter{
+		From:     "2024-06-15",
+		To:       "2024-06-15",
+		Timezone: "UTC",
+		Agent:    "copilot",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+}
+
 func duckSessionIDs(sessions []db.Session) []string {
 	ids := make([]string, len(sessions))
 	for i, session := range sessions {
