@@ -1690,3 +1690,38 @@ func (s *Store) GetUsageSessionCounts(
 	}
 	return out, nil
 }
+
+// CountSessionsForUsage counts sessions matching a usage filter directly
+// from the sessions table, independent of whether they recorded token
+// usage. Mirrors the SQLite implementation (internal/db/usage.go): base
+// message_count/deleted_at predicates, the shared session filter clauses,
+// and an interval overlap against the half-open UTC window bounds from
+// db.UsageActivityBoundsUTC. PostgreSQL stores real timestamptz columns,
+// so the endpoints use NULL-aware COALESCE rather than empty-string
+// NULLIF.
+func (s *Store) CountSessionsForUsage(
+	ctx context.Context, f db.UsageFilter,
+) (int, error) {
+	pb := &paramBuilder{}
+	where := "s.message_count > 0\n\tAND s.deleted_at IS NULL"
+	where = appendPGUsageSessionFilterClauses(where, pb, f)
+
+	lo, hi := db.UsageActivityBoundsUTC(f)
+	if hi != "" {
+		where += "\n\tAND COALESCE(s.started_at, s.created_at) < " +
+			pb.add(hi) + "::timestamptz"
+	}
+	if lo != "" {
+		where += "\n\tAND COALESCE(s.ended_at, s.started_at, s.created_at) >= " +
+			pb.add(lo) + "::timestamptz"
+	}
+
+	query := "SELECT COUNT(DISTINCT s.id) FROM sessions s WHERE " + where
+	var count int
+	if err := s.pg.QueryRowContext(
+		ctx, query, pb.args...,
+	).Scan(&count); err != nil {
+		return 0, fmt.Errorf("counting sessions for usage: %w", err)
+	}
+	return count, nil
+}
