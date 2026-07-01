@@ -32,6 +32,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/sessionwatch"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -1094,16 +1095,58 @@ func TestHumaScanSecretsEmitsSummaryEvent(t *testing.T) {
 func (te *testEnv) waitForSSEEvent(t *testing.T, w *flushRecorder, expectedEvent string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
-	ticker := time.NewTicker(50 * time.Millisecond)
+	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 
-	for time.Now().Before(deadline) {
-		<-ticker.C
-		events := parseSSE(w.BodyString())
-		for _, e := range events {
-			if e.Event == expectedEvent {
-				return
-			}
+	for {
+		if hasSSEEvent(w, expectedEvent) {
+			return
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		select {
+		case <-ticker.C:
+		case <-time.After(remaining):
+		}
+	}
+	t.Fatalf("timed out waiting for event: %s, got: %s", expectedEvent, w.BodyString())
+}
+
+func hasSSEEvent(w *flushRecorder, expectedEvent string) bool {
+	events := parseSSE(w.BodyString())
+	for _, e := range events {
+		if e.Event == expectedEvent {
+			return true
+		}
+	}
+	return false
+}
+
+func (te *testEnv) emitUntilSSEEvent(
+	t *testing.T,
+	w *flushRecorder,
+	scope string,
+	expectedEvent string,
+	timeout time.Duration,
+) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		te.broadcaster.Emit(scope)
+		if hasSSEEvent(w, expectedEvent) {
+			return
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		select {
+		case <-ticker.C:
+		case <-time.After(remaining):
 		}
 	}
 	t.Fatalf("timed out waiting for event: %s, got: %s", expectedEvent, w.BodyString())
@@ -3589,6 +3632,11 @@ func TestTriggerSync_SSE(t *testing.T) {
 }
 
 func TestWatchSession_Events(t *testing.T) {
+	const watchPoll = 25 * time.Millisecond
+	t.Cleanup(sessionwatch.SetTimingsForTest(
+		watchPoll, 50*time.Millisecond,
+	))
+
 	te := setup(t)
 
 	b := testjsonl.NewSessionBuilder().
@@ -3621,7 +3669,7 @@ func TestWatchSession_Events(t *testing.T) {
 		close(done)
 	}()
 
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(2 * watchPoll)
 
 	updated := content + testjsonl.NewSessionBuilder().
 		AddClaudeAssistant(tsZeroS5, "response").
@@ -3642,6 +3690,11 @@ func TestWatchSession_Events(t *testing.T) {
 }
 
 func TestWatchSession_FileDisappearAndResolve(t *testing.T) {
+	const watchPoll = 25 * time.Millisecond
+	t.Cleanup(sessionwatch.SetTimingsForTest(
+		watchPoll, 50*time.Millisecond,
+	))
+
 	te := setup(t)
 
 	b := testjsonl.NewSessionBuilder().
@@ -3675,7 +3728,7 @@ func TestWatchSession_FileDisappearAndResolve(t *testing.T) {
 	}()
 
 	// Let the monitor start and record the initial mtime.
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(2 * watchPoll)
 
 	// Delete the source file to simulate disappearance.
 	if err := os.Remove(sessionPath); err != nil {
@@ -3684,7 +3737,7 @@ func TestWatchSession_FileDisappearAndResolve(t *testing.T) {
 
 	// Wait for at least one poll tick to notice the missing
 	// file and clear the cached path.
-	time.Sleep(2 * time.Second)
+	time.Sleep(2 * watchPoll)
 
 	// Recreate the file with updated content at a NEW location
 	// so we verify that FindSourceFile re-scans and the
@@ -4199,14 +4252,9 @@ func TestEvents_StreamsDataChangedAfterSync(t *testing.T) {
 		close(done)
 	}()
 
-	// Give the handler time to subscribe.
-	time.Sleep(100 * time.Millisecond)
-
 	// Emit directly via the broadcaster to isolate the handler
 	// from sync engine timing.
-	te.broadcaster.Emit("messages")
-
-	te.waitForSSEEvent(t, w, "data_changed", 3*time.Second)
+	te.emitUntilSSEEvent(t, w, "messages", "data_changed", 3*time.Second)
 	cancel()
 	<-done
 }
@@ -4225,10 +4273,7 @@ func TestEvents_StreamsInLocalNoSyncMode(t *testing.T) {
 		close(done)
 	}()
 
-	time.Sleep(100 * time.Millisecond)
-	te.broadcaster.Emit("sessions")
-
-	te.waitForSSEEvent(t, w, "data_changed", 3*time.Second)
+	te.emitUntilSSEEvent(t, w, "sessions", "data_changed", 3*time.Second)
 	cancel()
 	<-done
 }
@@ -4271,9 +4316,7 @@ func TestEvents_AuthViaQueryTokenSucceeds(t *testing.T) {
 		close(done)
 	}()
 
-	time.Sleep(100 * time.Millisecond)
-	te.broadcaster.Emit("messages")
-	te.waitForSSEEvent(t, w, "data_changed", 2*time.Second)
+	te.emitUntilSSEEvent(t, w, "messages", "data_changed", 2*time.Second)
 
 	cancel()
 	<-done
@@ -4295,9 +4338,7 @@ func TestEvents_AuthViaBearerHeaderSucceeds(t *testing.T) {
 		close(done)
 	}()
 
-	time.Sleep(100 * time.Millisecond)
-	te.broadcaster.Emit("messages")
-	te.waitForSSEEvent(t, w, "data_changed", 2*time.Second)
+	te.emitUntilSSEEvent(t, w, "messages", "data_changed", 2*time.Second)
 
 	cancel()
 	<-done

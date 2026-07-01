@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/sessionwatch"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
@@ -20,7 +21,11 @@ import (
 func TestServerTimeouts(t *testing.T) {
 	// Set a very short WriteTimeout to verify SSE is exempt.
 	writeTimeout := 100 * time.Millisecond
-	sleepDuration := 500 * time.Millisecond
+	sleepDuration := 300 * time.Millisecond
+	const watchPoll = 25 * time.Millisecond
+	t.Cleanup(sessionwatch.SetTimingsForTest(
+		watchPoll, 50*time.Millisecond,
+	))
 
 	te := setup(t, withWriteTimeout(writeTimeout))
 

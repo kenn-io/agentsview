@@ -16,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/sessionwatch"
 )
 
 // httpBackendEnv is a running in-memory HTTP test server backed by a
@@ -358,6 +359,11 @@ func TestHTTPBackend_Sync_RemoteReadOnly(t *testing.T) {
 
 func TestHTTPBackend_Watch_ReceivesSessionUpdated(t *testing.T) {
 	t.Parallel()
+	const watchPoll = 25 * time.Millisecond
+	t.Cleanup(sessionwatch.SetTimingsForTest(
+		watchPoll, 50*time.Millisecond,
+	))
+
 	env := newHTTPBackendEnv(t)
 	env.SeedSession(t, "s-watch", "my-app", dbtest.WithMessageCount(1))
 
@@ -374,15 +380,14 @@ func TestHTTPBackend_Watch_ReceivesSessionUpdated(t *testing.T) {
 	// change and emits a session_updated event. Give the server
 	// handler a moment to start polling before we mutate so the
 	// new baseline matches the pre-update count.
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(2 * watchPoll)
 	env.SeedSession(t, "s-watch", "my-app", dbtest.WithMessageCount(2))
 
-	// PollInterval is 1.5s. Allow up to 6s before giving up so the
-	// test is robust against scheduling jitter. The watch stream now
+	// The watch stream now
 	// also emits an initial session.timing snapshot on connect plus
 	// follow-up session.timing events alongside session_updated;
 	// skip past them and assert on session_updated specifically.
-	ev := requireWatchEvent(t, ch, "session_updated", 6*time.Second)
+	ev := requireWatchEvent(t, ch, "session_updated", 2*time.Second)
 	assert.Equal(t, "s-watch", ev.Data)
 }
 

@@ -52,8 +52,8 @@ type readOnlyInsightPersistStore struct {
 
 func fastInsightLogDrainTimeouts() server.Option {
 	return server.WithInsightLogDrainTimeouts(
+		20*time.Millisecond,
 		50*time.Millisecond,
-		150*time.Millisecond,
 	)
 }
 
@@ -1463,7 +1463,7 @@ func TestGenerateInsight_LogDropSummaryAndCompletion(t *testing.T) {
 	stubGen := func(
 		_ context.Context, _ string, _ string, onLog insight.LogFunc,
 	) (insight.Result, error) {
-		for i := range 5000 {
+		for i := range 1000 {
 			onLog(insight.LogEvent{
 				Stream: "stdout",
 				Line:   fmt.Sprintf("line-%d", i),
@@ -1487,7 +1487,7 @@ func TestGenerateInsight_LogDropSummaryAndCompletion(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := &slowFlushRecorder{
 		ResponseRecorder: httptest.NewRecorder(),
-		delay:            4 * time.Millisecond,
+		delay:            time.Millisecond,
 	}
 
 	done := make(chan struct{})
@@ -1558,7 +1558,7 @@ func TestGenerateInsight_LogDrainTimeoutReturnsWithoutHang(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := &slowLogRecorder{
 		ResponseRecorder: httptest.NewRecorder(),
-		delay:            75 * time.Millisecond,
+		delay:            35 * time.Millisecond,
 	}
 
 	started := time.Now()
@@ -1613,7 +1613,7 @@ func TestGenerateInsight_LogDrainTimeoutReportsBufferedDrops(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	w := &firstLogDelayRecorder{
 		ResponseRecorder: httptest.NewRecorder(),
-		delay:            75 * time.Millisecond,
+		delay:            35 * time.Millisecond,
 	}
 
 	done := make(chan struct{})
@@ -1759,7 +1759,7 @@ func TestGenerateInsight_LogDrainTimeoutForceUnblocksAndNoPostReturnWrites(t *te
 	select {
 	case <-w.PostReturnAttempted():
 		require.Fail(t, "expected no writes after handler return")
-	case <-time.After(300 * time.Millisecond):
+	case <-time.After(100 * time.Millisecond):
 	}
 	require.Zero(t, w.PostReturnWrites(), "expected no writes after handler return")
 
