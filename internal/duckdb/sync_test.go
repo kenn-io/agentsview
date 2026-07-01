@@ -13,6 +13,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -704,12 +705,7 @@ type syncFixture struct {
 
 func newLocalDB(t *testing.T) *db.DB {
 	t.Helper()
-	local, err := db.Open(filepath.Join(t.TempDir(), "local.sqlite"))
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, local.Close())
-	})
-	return local
+	return dbtest.OpenTestDB(t)
 }
 
 func newTestSync(

@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
 	"database/sql/driver"
 	"encoding/base64"
@@ -330,7 +329,7 @@ func openCopiedTestDB(path string) (*DB, error) {
 	if err := copyTestDBTemplate(path); err != nil {
 		return nil, err
 	}
-	return openPreparedTestDB(path)
+	return OpenPreparedTestDB(path)
 }
 
 func copyTestDBTemplate(dst string) error {
@@ -401,37 +400,6 @@ func copyTemplateDBFile(src, dst string, required bool) error {
 		return fmt.Errorf("writing test db copy %s: %w", dst, err)
 	}
 	return nil
-}
-
-func openPreparedTestDB(path string) (*DB, error) {
-	writer, err := sql.Open("sqlite3", makeDSN(path, false))
-	if err != nil {
-		return nil, fmt.Errorf("opening prepared test writer: %w", err)
-	}
-	writer.SetMaxOpenConns(1)
-	if err := configureWAL(writer); err != nil {
-		writer.Close()
-		return nil, fmt.Errorf("configuring prepared test wal: %w", err)
-	}
-
-	reader, err := sql.Open("sqlite3", makeDSN(path, true))
-	if err != nil {
-		writer.Close()
-		return nil, fmt.Errorf("opening prepared test reader: %w", err)
-	}
-	reader.SetMaxOpenConns(4)
-
-	d := &DB{path: path}
-	d.writer.Store(writer)
-	d.reader.Store(reader)
-	d.cursorSecret = make([]byte, 32)
-	if _, err := rand.Read(d.cursorSecret); err != nil {
-		writer.Close()
-		reader.Close()
-		return nil, fmt.Errorf("generating prepared test cursor secret: %w", err)
-	}
-	d.startWALCheckpointLoop()
-	return d, nil
 }
 
 // Ptr returns a pointer to v.

@@ -3,10 +3,13 @@
 package dbtest
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -71,12 +74,80 @@ func OpenTestDB(t *testing.T) *db.DB {
 	t.Helper()
 	dir := MkdirTempWithCleanup(t, "agentsview-dbtest-*")
 	path := filepath.Join(dir, "test.db")
-	d, err := db.Open(path)
+	if err := copyTestDBTemplate(path); err != nil {
+		t.Fatalf("copying test db template: %v", err)
+	}
+	d, err := db.OpenPreparedTestDB(path)
 	if err != nil {
 		t.Fatalf("opening test db: %v", err)
 	}
 	t.Cleanup(func() { d.Close() })
 	return d
+}
+
+var (
+	testDBTemplateOnce  sync.Once
+	testDBTemplateFiles map[string][]byte
+	testDBTemplateErr   error
+)
+
+func copyTestDBTemplate(dst string) error {
+	testDBTemplateOnce.Do(func() {
+		testDBTemplateFiles, testDBTemplateErr = buildTestDBTemplate()
+	})
+	if testDBTemplateErr != nil {
+		return testDBTemplateErr
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return fmt.Errorf("creating test db dir: %w", err)
+	}
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		data, ok := testDBTemplateFiles[suffix]
+		if !ok {
+			continue
+		}
+		if err := os.WriteFile(dst+suffix, data, 0o600); err != nil {
+			return fmt.Errorf("writing test db copy %s: %w", dst+suffix, err)
+		}
+	}
+	return nil
+}
+
+func buildTestDBTemplate() (map[string][]byte, error) {
+	dir, err := os.MkdirTemp("", "agentsview-dbtest-template-*")
+	if err != nil {
+		return nil, fmt.Errorf("creating db template dir: %w", err)
+	}
+	defer os.RemoveAll(dir)
+
+	path := filepath.Join(dir, "test.db")
+	template, err := db.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("opening db template: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	checkpointErr := template.CheckpointWALTruncate(ctx)
+	closeErr := template.Close()
+	if checkpointErr != nil {
+		return nil, fmt.Errorf("checkpointing db template: %w", checkpointErr)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("closing db template: %w", closeErr)
+	}
+
+	files := make(map[string][]byte, 3)
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		data, err := os.ReadFile(path + suffix)
+		if err != nil {
+			if suffix != "" && errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, fmt.Errorf("reading db template %s: %w", path+suffix, err)
+		}
+		files[suffix] = data
+	}
+	return files, nil
 }
 
 // SeedMessages inserts messages into the database, failing the
