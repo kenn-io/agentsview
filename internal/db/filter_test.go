@@ -1341,23 +1341,6 @@ func TestSidebarSessionIndexPagedKeepsContinuationUnderLiveParent(t *testing.T) 
 	requireSidebarIndexIDs(t, index.Sessions, []string{"root", "continuation-child"})
 }
 
-func TestSidebarSessionIndexReturnsDisplayName(t *testing.T) {
-	d := testDB(t)
-
-	sessionName := "Named session"
-	insertSession(t, d, "named", "proj", func(s *Session) {
-		s.SessionName = &sessionName
-		s.MessageCount = 3
-		s.UserMessageCount = 2
-	})
-
-	index, err := d.GetSidebarSessionIndex(context.Background(), SessionFilter{})
-	require.NoError(t, err, "GetSidebarSessionIndex")
-	require.Len(t, index.Sessions, 1)
-	require.NotNil(t, index.Sessions[0].DisplayName, "display_name via COALESCE")
-	assert.Equal(t, sessionName, *index.Sessions[0].DisplayName, "display_name via COALESCE")
-}
-
 func TestSidebarIndexDisplayNameResolvesViaCoalesce(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

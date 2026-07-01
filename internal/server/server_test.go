@@ -2146,6 +2146,10 @@ func TestListMachines_ExcludeOneShotDefault(t *testing.T) {
 		s.Machine = "desktop"
 		s.UserMessageCount = 5
 	})
+	te.seedSession(t, "s3", "other-app", 3, func(s *db.Session) {
+		s.Machine = "desktop"
+		s.UserMessageCount = 5
+	})
 
 	// Default: exclude one-shot sessions.
 	w := te.get(t, "/api/v1/machines")
@@ -2168,21 +2172,14 @@ func TestListMachines_ExcludeOneShotDefault(t *testing.T) {
 		t.Fatalf("include: expected 2 machines, got %d",
 			len(resp.Machines))
 	}
-}
 
-func TestListProjects(t *testing.T) {
-	te := setup(t)
-	te.seedSession(t, "s1", "my-app", 5)
-	te.seedSession(t, "s2", "my-app", 3)
-	te.seedSession(t, "s3", "other-app", 1)
-
-	w := te.get(t, "/api/v1/projects")
+	w = te.get(t, "/api/v1/projects")
 	assertStatus(t, w, http.StatusOK)
 
-	resp := decode[projectListResponse](t, w)
-	if len(resp.Projects) != 2 {
+	projects := decode[projectListResponse](t, w)
+	if len(projects.Projects) != 2 {
 		t.Fatalf("expected 2 projects, got %d",
-			len(resp.Projects))
+			len(projects.Projects))
 	}
 }
 
@@ -3236,187 +3233,181 @@ func TestExportSession_HTMLContent(t *testing.T) {
 	}
 }
 
-func TestUploadSession(t *testing.T) {
+func TestUploadSessionVariants(t *testing.T) {
 	t.Parallel()
 
 	te := setup(t)
 
-	assistantWithUsage, err := json.Marshal(map[string]any{
-		"type":      "assistant",
-		"timestamp": tsEarlyS5,
-		"message": map[string]any{
-			"model": "claude-sonnet-4-20250514",
-			"usage": map[string]any{
-				"input_tokens":                100,
-				"cache_creation_input_tokens": 200,
-				"cache_read_input_tokens":     200,
-				"output_tokens":               200,
+	t.Run("stores token metadata", func(t *testing.T) {
+		assistantWithUsage, err := json.Marshal(map[string]any{
+			"type":      "assistant",
+			"timestamp": tsEarlyS5,
+			"message": map[string]any{
+				"model": "claude-sonnet-4-20250514",
+				"usage": map[string]any{
+					"input_tokens":                100,
+					"cache_creation_input_tokens": 200,
+					"cache_read_input_tokens":     200,
+					"output_tokens":               200,
+				},
+				"content": []map[string]any{
+					{"type": "text", "text": "Hi!"},
+				},
 			},
-			"content": []map[string]any{
-				{"type": "text", "text": "Hi!"},
-			},
-		},
+		})
+		if err != nil {
+			t.Fatalf("marshal assistant fixture: %v", err)
+		}
+
+		content := testjsonl.NewSessionBuilder().
+			AddClaudeUser(tsEarly, "Hello upload").
+			AddRaw(string(assistantWithUsage)).
+			String()
+
+		w := te.upload(t, "upload-test.jsonl", content,
+			"project=myproj&machine=remote")
+		assertStatus(t, w, http.StatusOK)
+
+		resp := decode[uploadResponse](t, w)
+		if resp.SessionID != "upload-test" {
+			t.Errorf("session_id = %v", resp.SessionID)
+		}
+		if resp.Project != "myproj" {
+			t.Errorf("project = %v", resp.Project)
+		}
+		if resp.Machine != "remote" {
+			t.Errorf("machine = %v", resp.Machine)
+		}
+		if resp.Messages != 2 {
+			t.Errorf("messages = %v", resp.Messages)
+		}
+
+		sess, err := te.db.GetSession(context.Background(), "upload-test")
+		if err != nil {
+			t.Fatalf("GetSession: %v", err)
+		}
+		if sess == nil {
+			t.Fatal("session not found in DB")
+			return
+		}
+		if sess.Project != "myproj" {
+			t.Errorf("stored project = %q", sess.Project)
+		}
+		if !sess.HasTotalOutputTokens {
+			t.Error("stored HasTotalOutputTokens = false, want true")
+		}
+		if !sess.HasPeakContextTokens {
+			t.Error("stored HasPeakContextTokens = false, want true")
+		}
+		if sess.TotalOutputTokens != 200 {
+			t.Errorf("stored TotalOutputTokens = %d, want 200",
+				sess.TotalOutputTokens)
+		}
+		if sess.PeakContextTokens != 500 {
+			t.Errorf("stored PeakContextTokens = %d, want 500",
+				sess.PeakContextTokens)
+		}
+
+		msgs, err := te.db.GetMessages(context.Background(), "upload-test", 0, 10, true)
+		if err != nil {
+			t.Fatalf("GetMessages: %v", err)
+		}
+		if len(msgs) != 2 {
+			t.Fatalf("message count = %d, want 2", len(msgs))
+		}
+		if !msgs[1].HasContextTokens {
+			t.Error("assistant HasContextTokens = false, want true")
+		}
+		if !msgs[1].HasOutputTokens {
+			t.Error("assistant HasOutputTokens = false, want true")
+		}
+		if msgs[1].OutputTokens != 200 {
+			t.Errorf("assistant OutputTokens = %d, want 200", msgs[1].OutputTokens)
+		}
+		if msgs[1].ContextTokens != 500 {
+			t.Errorf("assistant ContextTokens = %d, want 500", msgs[1].ContextTokens)
+		}
 	})
-	if err != nil {
-		t.Fatalf("marshal assistant fixture: %v", err)
-	}
 
-	content := testjsonl.NewSessionBuilder().
-		AddClaudeUser(tsEarly, "Hello upload").
-		AddRaw(string(assistantWithUsage)).
-		String()
-
-	w := te.upload(t, "upload-test.jsonl", content,
-		"project=myproj&machine=remote")
-	assertStatus(t, w, http.StatusOK)
-
-	resp := decode[uploadResponse](t, w)
-	if resp.SessionID != "upload-test" {
-		t.Errorf("session_id = %v", resp.SessionID)
-	}
-	if resp.Project != "myproj" {
-		t.Errorf("project = %v", resp.Project)
-	}
-	if resp.Machine != "remote" {
-		t.Errorf("machine = %v", resp.Machine)
-	}
-	if resp.Messages != 2 {
-		t.Errorf("messages = %v", resp.Messages)
-	}
-
-	sess, err := te.db.GetSession(context.Background(), "upload-test")
-	if err != nil {
-		t.Fatalf("GetSession: %v", err)
-	}
-	if sess == nil {
-		t.Fatal("session not found in DB")
-		return
-	}
-	if sess.Project != "myproj" {
-		t.Errorf("stored project = %q", sess.Project)
-	}
-	if !sess.HasTotalOutputTokens {
-		t.Error("stored HasTotalOutputTokens = false, want true")
-	}
-	if !sess.HasPeakContextTokens {
-		t.Error("stored HasPeakContextTokens = false, want true")
-	}
-	if sess.TotalOutputTokens != 200 {
-		t.Errorf("stored TotalOutputTokens = %d, want 200",
-			sess.TotalOutputTokens)
-	}
-	if sess.PeakContextTokens != 500 {
-		t.Errorf("stored PeakContextTokens = %d, want 500",
-			sess.PeakContextTokens)
-	}
-
-	msgs, err := te.db.GetMessages(context.Background(), "upload-test", 0, 10, true)
-	if err != nil {
-		t.Fatalf("GetMessages: %v", err)
-	}
-	if len(msgs) != 2 {
-		t.Fatalf("message count = %d, want 2", len(msgs))
-	}
-	if !msgs[1].HasContextTokens {
-		t.Error("assistant HasContextTokens = false, want true")
-	}
-	if !msgs[1].HasOutputTokens {
-		t.Error("assistant HasOutputTokens = false, want true")
-	}
-	if msgs[1].OutputTokens != 200 {
-		t.Errorf("assistant OutputTokens = %d, want 200", msgs[1].OutputTokens)
-	}
-	if msgs[1].ContextTokens != 500 {
-		t.Errorf("assistant ContextTokens = %d, want 500", msgs[1].ContextTokens)
-	}
-}
-
-func TestUploadSessionSanitizesParsedRows(t *testing.T) {
-	t.Parallel()
-
-	te := setup(t)
-
-	rawInput := db.MaxPlausibleTokens + 200
-	rawOutput := db.MaxPlausibleTokens + 100
-	longModel := strings.Repeat("m", 160)
-	assistantWithBadUsage, err := json.Marshal(map[string]any{
-		"type":      "assistant",
-		"timestamp": tsEarlyS5,
-		"message": map[string]any{
-			"model": longModel,
-			"usage": map[string]any{
-				"input_tokens":  rawInput,
-				"output_tokens": rawOutput,
+	t.Run("sanitizes parsed rows", func(t *testing.T) {
+		rawInput := db.MaxPlausibleTokens + 200
+		rawOutput := db.MaxPlausibleTokens + 100
+		longModel := strings.Repeat("m", 160)
+		assistantWithBadUsage, err := json.Marshal(map[string]any{
+			"type":      "assistant",
+			"timestamp": tsEarlyS5,
+			"message": map[string]any{
+				"model": longModel,
+				"usage": map[string]any{
+					"input_tokens":  rawInput,
+					"output_tokens": rawOutput,
+				},
+				"content": []map[string]any{
+					{"type": "text", "text": "Hi!"},
+				},
 			},
-			"content": []map[string]any{
-				{"type": "text", "text": "Hi!"},
-			},
-		},
-	})
-	require.NoError(t, err)
+		})
+		require.NoError(t, err)
 
-	content := testjsonl.NewSessionBuilder().
-		AddClaudeUser(tsEarly, "Hello \x1b[31mupload\x07").
-		AddRaw(string(assistantWithBadUsage)).
-		String()
+		content := testjsonl.NewSessionBuilder().
+			AddClaudeUser(tsEarly, "Hello \x1b[31mupload\x07").
+			AddRaw(string(assistantWithBadUsage)).
+			String()
 
-	w := te.upload(t, "upload-sanitize.jsonl", content,
-		"project=myproj&machine=remote")
-	assertStatus(t, w, http.StatusOK)
+		w := te.upload(t, "upload-sanitize.jsonl", content,
+			"project=myproj&machine=remote")
+		assertStatus(t, w, http.StatusOK)
 
-	msgs, err := te.db.GetMessages(
-		context.Background(), "upload-sanitize", 0, 10, true,
-	)
-	require.NoError(t, err)
-	require.Len(t, msgs, 2)
-	assert.Equal(t, "Hello [31mupload", msgs[0].Content)
-	assert.Equal(t, len("Hello [31mupload"), msgs[0].ContentLength)
-	assert.Len(t, msgs[1].Model, 128)
-	assert.Equal(t, db.MaxPlausibleTokens, msgs[1].ContextTokens)
-	assert.Equal(t, db.MaxPlausibleTokens, msgs[1].OutputTokens)
-
-	sess, err := te.db.GetSession(context.Background(), "upload-sanitize")
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Equal(t, db.MaxPlausibleTokens, sess.TotalOutputTokens)
-	assert.Equal(t, db.MaxPlausibleTokens, sess.PeakContextTokens)
-}
-
-func TestUploadSession_InfersRelationshipType(t *testing.T) {
-	t.Parallel()
-
-	te := setup(t)
-
-	// Build a session whose first entry has a different sessionId,
-	// making it a child session. The filename starts with "agent-"
-	// so it should be inferred as a subagent.
-	content := testjsonl.NewSessionBuilder().
-		AddClaudeUserWithSessionID(
-			tsEarly, "Run task", "parent-session",
-		).
-		AddClaudeAssistant(tsEarlyS5, "Done.").
-		String()
-
-	w := te.upload(t, "agent-task42.jsonl", content,
-		"project=myproj&machine=remote")
-	assertStatus(t, w, http.StatusOK)
-
-	sess, err := te.db.GetSession(
-		context.Background(), "agent-task42",
-	)
-	if err != nil {
-		t.Fatalf("GetSession: %v", err)
-	}
-	if sess == nil {
-		t.Fatal("session not found in DB")
-		return
-	}
-	if sess.RelationshipType != "subagent" {
-		t.Errorf(
-			"RelationshipType = %q, want %q",
-			sess.RelationshipType, "subagent",
+		msgs, err := te.db.GetMessages(
+			context.Background(), "upload-sanitize", 0, 10, true,
 		)
-	}
+		require.NoError(t, err)
+		require.Len(t, msgs, 2)
+		assert.Equal(t, "Hello [31mupload", msgs[0].Content)
+		assert.Equal(t, len("Hello [31mupload"), msgs[0].ContentLength)
+		assert.Len(t, msgs[1].Model, 128)
+		assert.Equal(t, db.MaxPlausibleTokens, msgs[1].ContextTokens)
+		assert.Equal(t, db.MaxPlausibleTokens, msgs[1].OutputTokens)
+
+		sess, err := te.db.GetSession(context.Background(), "upload-sanitize")
+		require.NoError(t, err)
+		require.NotNil(t, sess)
+		assert.Equal(t, db.MaxPlausibleTokens, sess.TotalOutputTokens)
+		assert.Equal(t, db.MaxPlausibleTokens, sess.PeakContextTokens)
+	})
+
+	t.Run("infers relationship type", func(t *testing.T) {
+		// Build a session whose first entry has a different sessionId,
+		// making it a child session. The filename starts with "agent-"
+		// so it should be inferred as a subagent.
+		content := testjsonl.NewSessionBuilder().
+			AddClaudeUserWithSessionID(
+				tsEarly, "Run task", "parent-session",
+			).
+			AddClaudeAssistant(tsEarlyS5, "Done.").
+			String()
+
+		w := te.upload(t, "agent-task42.jsonl", content,
+			"project=myproj&machine=remote")
+		assertStatus(t, w, http.StatusOK)
+
+		sess, err := te.db.GetSession(
+			context.Background(), "agent-task42",
+		)
+		if err != nil {
+			t.Fatalf("GetSession: %v", err)
+		}
+		if sess == nil {
+			t.Fatal("session not found in DB")
+			return
+		}
+		if sess.RelationshipType != "subagent" {
+			t.Errorf(
+				"RelationshipType = %q, want %q",
+				sess.RelationshipType, "subagent",
+			)
+		}
+	})
 }
 
 func TestUploadSession_Errors(t *testing.T) {

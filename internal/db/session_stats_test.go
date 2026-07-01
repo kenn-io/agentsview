@@ -692,9 +692,12 @@ func TestGetSessionStats_Distributions(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 
-	// Five sessions chosen to place one row in each interesting bucket
+	// Seven sessions chosen to place rows in each interesting bucket
 	// for duration and peak_context. is_automated drives the scope_human
-	// filter: a,b → automation (isAutomated=true); c,d,e → human.
+	// filter: a,b,g → automation (isAutomated=true); c,d,e,f → human.
+	// f is intentionally a short non-automated session: duration scope_human
+	// includes it, while user_messages scope_human filters values below 2.
+	// g is intentionally multi-turn automation so scope_human excludes it.
 	fixtures := []struct {
 		id             string
 		userMsgs       int
@@ -709,6 +712,8 @@ func TestGetSessionStats_Distributions(t *testing.T) {
 		{"c", 3, 25_000, 10.0, 6, 3, false},
 		{"d", 10, 60_000, 25.0, 15, 10, false},
 		{"e", 30, 150_000, 120.0, 30, 30, false},
+		{"f", 1, 12_000, 3.0, 0, 0, false},
+		{"g", 4, 75_000, 30.0, 0, 0, true},
 	}
 	for _, f := range fixtures {
 		insertSessionFixture(t, d, sessionFixture{
@@ -728,19 +733,20 @@ func TestGetSessionStats_Distributions(t *testing.T) {
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
 	require.NoError(t, err, "GetSessionStats")
 
-	// duration scope_all: 0.5→bucket0, 0.9→bucket0, 10→bucket2,
-	// 25→bucket3, 120→bucket5 (top).
+	// duration scope_all: 0.5→bucket0, 0.9→bucket0, 3→bucket1,
+	// 10→bucket2, 25/30→bucket3, 120→bucket5 (top).
 	gotAll := stats.Distributions.DurationMinutes.ScopeAll.Buckets
-	wantCountsAll := []int{2, 0, 1, 1, 0, 1}
+	wantCountsAll := []int{2, 1, 1, 2, 0, 1}
 	require.Len(t, gotAll, len(wantCountsAll),
 		"duration scope_all buckets")
 	for i, w := range wantCountsAll {
 		assert.Equal(t, w, gotAll[i].Count,
 			"duration scope_all bucket %d", i)
 	}
-	// duration scope_human (c,d,e): bucket2=1, bucket3=1, bucket5=1.
+	// duration scope_human (c,d,e,f): bucket1=1, bucket2=1,
+	// bucket3=1, bucket5=1.
 	gotHuman := stats.Distributions.DurationMinutes.ScopeHuman.Buckets
-	wantCountsHuman := []int{0, 0, 1, 1, 0, 1}
+	wantCountsHuman := []int{0, 1, 1, 1, 0, 1}
 	require.Len(t, gotHuman, len(wantCountsHuman),
 		"duration scope_human buckets")
 	for i, w := range wantCountsHuman {
@@ -749,20 +755,20 @@ func TestGetSessionStats_Distributions(t *testing.T) {
 	}
 
 	// Means (arithmetic over included sessions).
-	wantAllMean := (0.5 + 0.9 + 10 + 25 + 120) / 5.0
+	wantAllMean := (0.5 + 0.9 + 10 + 25 + 120 + 3 + 30) / 7.0
 	gotAllMean := stats.Distributions.DurationMinutes.ScopeAll.Mean
 	assert.InDelta(t, wantAllMean, gotAllMean, 0.01,
 		"duration scope_all mean")
-	wantHumanMean := (10.0 + 25.0 + 120.0) / 3.0
+	wantHumanMean := (10.0 + 25.0 + 120.0 + 3.0) / 4.0
 	gotHumanMean := stats.Distributions.DurationMinutes.ScopeHuman.Mean
 	assert.InDelta(t, wantHumanMean, gotHumanMean, 0.01,
 		"duration scope_human mean")
 
 	// user_messages scope_all uses userMessagesEdgesAll
 	// ([0,2),[2,6),[6,16),[16,31),[31,51),[51,inf)):
-	// 0→0, 1→0, 3→1, 10→2, 30→3.
+	// 0→0, 1→0, 3→1, 10→2, 30→3, 1→0, 4→1.
 	gotUM := stats.Distributions.UserMessages.ScopeAll.Buckets
-	wantUM := []int{2, 1, 1, 1, 0, 0}
+	wantUM := []int{3, 2, 1, 1, 0, 0}
 	require.Len(t, gotUM, len(wantUM),
 		"user_messages scope_all buckets")
 	for i, w := range wantUM {
@@ -770,7 +776,9 @@ func TestGetSessionStats_Distributions(t *testing.T) {
 			"user_messages scope_all bucket %d", i)
 	}
 	// user_messages scope_human uses userMessagesEdgesHuman (5 buckets,
-	// dropping the automation band): 3→0, 10→1, 30→2.
+	// dropping the automation band): 3→0, 10→1, 30→2. The short
+	// non-automated session with userMsgs=1 is filtered out before
+	// mean and bucket accumulation.
 	gotUMH := stats.Distributions.UserMessages.ScopeHuman.Buckets
 	wantUMH := []int{1, 1, 1, 0, 0}
 	require.Len(t, gotUMH, len(wantUMH),
@@ -779,17 +787,22 @@ func TestGetSessionStats_Distributions(t *testing.T) {
 		assert.Equal(t, w, gotUMH[i].Count,
 			"user_messages scope_human bucket %d", i)
 	}
+	assert.InDelta(t, (3.0+10.0+30.0)/3.0,
+		stats.Distributions.UserMessages.ScopeHuman.Mean, 0.01,
+		"user_messages scope_human mean filters values below 2")
 
-	// peak_context scope_all: 2k→0, 8k→0, 25k→1, 60k→2, 150k→4.
+	// peak_context scope_all: 2k/8k→0, 12k/25k→1,
+	// 60k/75k→2, 150k→4.
 	gotPCAll := stats.Distributions.PeakContextTokens.ScopeAll.Buckets
-	wantPCAll := []int{2, 1, 1, 0, 1, 0}
+	wantPCAll := []int{2, 2, 2, 0, 1, 0}
 	for i, w := range wantPCAll {
 		assert.Equal(t, w, gotPCAll[i].Count,
 			"peak_context scope_all bucket %d", i)
 	}
-	// peak_context scope_human (c,d,e): 25k→1, 60k→2, 150k→4.
+	// peak_context scope_human (c,d,e,f): 12k/25k→1,
+	// 60k→2, 150k→4.
 	gotPC := stats.Distributions.PeakContextTokens.ScopeHuman.Buckets
-	assert.Equal(t, 1, gotPC[1].Count,
+	assert.Equal(t, 2, gotPC[1].Count,
 		"peak_context scope_human: %+v", gotPC)
 	assert.Equal(t, 1, gotPC[2].Count,
 		"peak_context scope_human: %+v", gotPC)
@@ -812,40 +825,6 @@ func TestGetSessionStats_Distributions(t *testing.T) {
 		assert.Equal(t, w, gotTPT[i].Count,
 			"tools_per_turn scope_all bucket %d", i)
 	}
-}
-
-func Test_computeDistributions_scopeHuman_flag(t *testing.T) {
-	d := testDB(t)
-	// Short non-automated: must count in scope_human.
-	insertSessionFixture(t, d, sessionFixture{
-		id: "short-human", userMsgs: 1, durationMin: 3,
-		startedAt: hoursAgo(1), isAutomated: false,
-	})
-	// Multi-turn automated: must be excluded from scope_human.
-	insertSessionFixture(t, d, sessionFixture{
-		id: "auto-long", userMsgs: 4, durationMin: 30,
-		startedAt: hoursAgo(1), isAutomated: true,
-	})
-
-	got, err := d.GetSessionStats(t.Context(), StatsFilter{Since: "1d"})
-	require.NoError(t, err, "GetSessionStats")
-	// scope_all has both rows — mean ~= 16.5.
-	allMean := got.Distributions.DurationMinutes.ScopeAll.Mean
-	require.InDelta(t, 16.5, allMean, 1.5,
-		"scope_all duration mean")
-	// scope_human has only the non-automated short session — mean ~= 3.
-	humanMean := got.Distributions.DurationMinutes.ScopeHuman.Mean
-	require.InDelta(t, 3.0, humanMean, 1.0,
-		"scope_human duration mean (short-human only)")
-
-	humanUserMessages := got.Distributions.UserMessages.ScopeHuman
-	require.Equal(t, 0.0, humanUserMessages.Mean,
-		"scope_human user_messages mean want 0 (<2 filtered)")
-	bucketedHumanMessages := 0
-	for _, bucket := range humanUserMessages.Buckets {
-		bucketedHumanMessages += bucket.Count
-	}
-	require.Equal(t, 0, bucketedHumanMessages, "scope_human user_messages bucket total")
 }
 
 func TestGetSessionStats_Distributions_NullPeakContext(t *testing.T) {
