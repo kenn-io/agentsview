@@ -540,7 +540,7 @@ func TestArchiveQueryBackendRefusesReadOnlyDaemonForDailyUsage(t *testing.T) {
 
 func TestArchiveQueryBackendOfflineSkipsDaemonForDailyUsage(t *testing.T) {
 	dataDir := newAgentDataDir(t)
-	buildGoldenFixtureDB(t, sessionsDBPath(dataDir))
+	copyGoldenFixtureDB(t, sessionsDBPath(dataDir))
 
 	var called bool
 	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {

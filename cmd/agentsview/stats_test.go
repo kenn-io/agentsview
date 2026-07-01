@@ -2,20 +2,22 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
 )
 
 // renderStatsHuman renders stats through printStatsHuman and returns the
@@ -54,7 +56,7 @@ func setupGoldenStatsDataDir(t *testing.T) string {
 	// TZ is normally pinned by --timezone=UTC, but the environment can
 	// still leak into date parsing on some platforms; pin it too.
 	t.Setenv("TZ", "UTC")
-	buildGoldenFixtureDB(t, sessionsDBPath(dataDir))
+	copyGoldenFixtureDB(t, sessionsDBPath(dataDir))
 	return dataDir
 }
 
@@ -486,7 +488,80 @@ func TestStatsReadOnlyOpenAppliesCustomPricing(t *testing.T) {
 		"custom pricing should be applied to the read-only stats DB handle")
 }
 
-// buildGoldenFixtureDB seeds a deterministic session set into a fresh
+var (
+	goldenFixtureTemplateOnce  sync.Once
+	goldenFixtureTemplateFiles map[string][]byte
+	goldenFixtureTemplateErr   error
+)
+
+func copyGoldenFixtureDB(t *testing.T, dbPath string) {
+	t.Helper()
+	goldenFixtureTemplateOnce.Do(func() {
+		goldenFixtureTemplateFiles, goldenFixtureTemplateErr =
+			buildGoldenFixtureTemplateFiles(t)
+	})
+	require.NoError(t, goldenFixtureTemplateErr, "build golden fixture template")
+	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755),
+		"create golden fixture dir")
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		data, ok := goldenFixtureTemplateFiles[suffix]
+		if !ok {
+			continue
+		}
+		require.NoError(t, os.WriteFile(dbPath+suffix, data, 0o600),
+			"copy golden fixture db%s", suffix)
+	}
+}
+
+func buildGoldenFixtureTemplateFiles(t *testing.T) (map[string][]byte, error) {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "agentsview-golden-stats-*")
+	if err != nil {
+		return nil, fmt.Errorf("create golden fixture template dir: %w", err)
+	}
+	defer os.RemoveAll(dir)
+
+	dbPath := filepath.Join(dir, "sessions.db")
+	d, err := db.Open(dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("open golden fixture template db: %w", err)
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			_ = d.Close()
+		}
+	}()
+
+	seedGoldenFixtureDB(t, d)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := d.CheckpointWALTruncate(ctx); err != nil {
+		return nil, fmt.Errorf("checkpoint golden fixture template: %w", err)
+	}
+	if err := d.Close(); err != nil {
+		return nil, fmt.Errorf("close golden fixture template: %w", err)
+	}
+	closed = true
+
+	files := make(map[string][]byte, 3)
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		data, err := os.ReadFile(dbPath + suffix)
+		if err != nil {
+			if suffix != "" && errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, fmt.Errorf(
+				"read golden fixture template %s: %w",
+				dbPath+suffix, err,
+			)
+		}
+		files[suffix] = data
+	}
+	return files, nil
+}
+
+// seedGoldenFixtureDB seeds a deterministic session set into a fresh
 // SQLite database at dbPath. The fixture exercises the full v1 schema:
 //
 //   - Three agents (claude, codex, cursor) so agent_portfolio has variety.
@@ -504,10 +579,8 @@ func TestStatsReadOnlyOpenAppliesCustomPricing(t *testing.T) {
 // No cwd is set on any session so outcome_stats stays nil (git
 // integration is out of scope for this test). No GH_TOKEN env is
 // propagated, so PRsOpened/PRsMerged stay nil regardless.
-func buildGoldenFixtureDB(t *testing.T, dbPath string) {
+func seedGoldenFixtureDB(t *testing.T, d *db.DB) {
 	t.Helper()
-	d := dbtest.OpenTestDBAt(t, dbPath)
-
 	require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{
 		{
 			ModelPattern:         "claude-sonnet-4-20250514",
