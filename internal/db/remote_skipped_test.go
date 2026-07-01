@@ -10,98 +10,91 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 )
 
-func TestRemoteSkippedFiles_InitiallyEmpty(t *testing.T) {
-	t.Parallel()
+func TestRemoteSkippedFiles(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 
-	loaded, err := d.LoadRemoteSkippedFiles("devbox1")
-	require.NoError(t, err, "LoadRemoteSkippedFiles")
-	require.Empty(t, loaded)
-}
+	t.Run("initially empty", func(t *testing.T) {
+		loaded, err := d.LoadRemoteSkippedFiles("empty-host")
+		require.NoError(t, err, "LoadRemoteSkippedFiles")
+		require.Empty(t, loaded)
+	})
 
-func TestRemoteSkippedFiles_RoundTrip(t *testing.T) {
-	t.Parallel()
-	d := dbtest.OpenTestDB(t)
+	t.Run("round trip", func(t *testing.T) {
+		entries := map[string]int64{
+			"/home/user/.claude/sessions/a.jsonl": 1000,
+			"/home/user/.claude/sessions/b.jsonl": 2000,
+			"/home/user/.claude/sessions/c.jsonl": 3000,
+		}
+		require.NoError(t,
+			d.ReplaceRemoteSkippedFiles("roundtrip-host", entries))
 
-	entries := map[string]int64{
-		"/home/user/.claude/sessions/a.jsonl": 1000,
-		"/home/user/.claude/sessions/b.jsonl": 2000,
-		"/home/user/.claude/sessions/c.jsonl": 3000,
-	}
-	require.NoError(t, d.ReplaceRemoteSkippedFiles("devbox1", entries))
+		loaded, err := d.LoadRemoteSkippedFiles("roundtrip-host")
+		require.NoError(t, err, "LoadRemoteSkippedFiles")
+		assert.True(t, maps.Equal(loaded, entries),
+			"loaded %v, want %v", loaded, entries)
+	})
 
-	loaded, err := d.LoadRemoteSkippedFiles("devbox1")
-	require.NoError(t, err, "LoadRemoteSkippedFiles")
-	assert.True(t, maps.Equal(loaded, entries),
-		"loaded %v, want %v", loaded, entries)
-}
+	t.Run("host isolation", func(t *testing.T) {
+		entries := map[string]int64{
+			"/a.jsonl": 100,
+			"/b.jsonl": 200,
+		}
+		require.NoError(t,
+			d.ReplaceRemoteSkippedFiles("isolation-host-1", entries))
 
-func TestRemoteSkippedFiles_HostIsolation(t *testing.T) {
-	t.Parallel()
-	d := dbtest.OpenTestDB(t)
+		// Different host should return empty.
+		loaded, err := d.LoadRemoteSkippedFiles("isolation-host-2")
+		require.NoError(t, err, "LoadRemoteSkippedFiles isolation-host-2")
+		require.Empty(t, loaded, "isolation-host-2 should be empty")
 
-	entries := map[string]int64{
-		"/a.jsonl": 100,
-		"/b.jsonl": 200,
-	}
-	require.NoError(t, d.ReplaceRemoteSkippedFiles("devbox1", entries))
+		// Original host still has its entries.
+		loaded, err = d.LoadRemoteSkippedFiles("isolation-host-1")
+		require.NoError(t, err, "LoadRemoteSkippedFiles isolation-host-1")
+		assert.True(t, maps.Equal(loaded, entries),
+			"isolation-host-1: loaded %v, want %v", loaded, entries)
+	})
 
-	// Different host should return empty.
-	loaded, err := d.LoadRemoteSkippedFiles("devbox2")
-	require.NoError(t, err, "LoadRemoteSkippedFiles devbox2")
-	require.Empty(t, loaded, "devbox2 should be empty")
+	t.Run("replace overwrites", func(t *testing.T) {
+		first := map[string]int64{
+			"/a.jsonl": 100,
+			"/b.jsonl": 200,
+		}
+		require.NoError(t,
+			d.ReplaceRemoteSkippedFiles("replace-host", first))
 
-	// Original host still has its entries.
-	loaded, err = d.LoadRemoteSkippedFiles("devbox1")
-	require.NoError(t, err, "LoadRemoteSkippedFiles devbox1")
-	assert.True(t, maps.Equal(loaded, entries),
-		"devbox1: loaded %v, want %v", loaded, entries)
-}
+		// Replace with different entries.
+		second := map[string]int64{
+			"/c.jsonl": 300,
+		}
+		require.NoError(t,
+			d.ReplaceRemoteSkippedFiles("replace-host", second))
 
-func TestRemoteSkippedFiles_ReplaceOverwrites(t *testing.T) {
-	t.Parallel()
-	d := dbtest.OpenTestDB(t)
+		loaded, err := d.LoadRemoteSkippedFiles("replace-host")
+		require.NoError(t, err, "LoadRemoteSkippedFiles")
+		require.Len(t, loaded, 1)
+		assert.Equal(t, int64(300), loaded["/c.jsonl"])
+	})
 
-	first := map[string]int64{
-		"/a.jsonl": 100,
-		"/b.jsonl": 200,
-	}
-	require.NoError(t, d.ReplaceRemoteSkippedFiles("devbox1", first))
+	t.Run("replace does not affect other hosts", func(t *testing.T) {
+		host1 := map[string]int64{"/a.jsonl": 100}
+		host2 := map[string]int64{"/b.jsonl": 200}
 
-	// Replace with different entries.
-	second := map[string]int64{
-		"/c.jsonl": 300,
-	}
-	require.NoError(t, d.ReplaceRemoteSkippedFiles("devbox1", second))
+		require.NoError(t,
+			d.ReplaceRemoteSkippedFiles("replace-other-1", host1))
+		require.NoError(t,
+			d.ReplaceRemoteSkippedFiles("replace-other-2", host2))
 
-	loaded, err := d.LoadRemoteSkippedFiles("devbox1")
-	require.NoError(t, err, "LoadRemoteSkippedFiles")
-	require.Len(t, loaded, 1)
-	assert.Equal(t, int64(300), loaded["/c.jsonl"])
-}
+		// Replace replace-other-1 with empty; replace-other-2 unaffected.
+		require.NoError(t,
+			d.ReplaceRemoteSkippedFiles("replace-other-1", map[string]int64{}))
 
-func TestRemoteSkippedFiles_ReplaceDoesNotAffectOtherHosts(
-	t *testing.T,
-) {
-	t.Parallel()
-	d := dbtest.OpenTestDB(t)
+		loaded1, err := d.LoadRemoteSkippedFiles("replace-other-1")
+		require.NoError(t, err, "LoadRemoteSkippedFiles replace-other-1")
+		require.Empty(t, loaded1, "replace-other-1 should be empty")
 
-	host1 := map[string]int64{"/a.jsonl": 100}
-	host2 := map[string]int64{"/b.jsonl": 200}
-
-	require.NoError(t, d.ReplaceRemoteSkippedFiles("devbox1", host1))
-	require.NoError(t, d.ReplaceRemoteSkippedFiles("devbox2", host2))
-
-	// Replace devbox1 with empty — devbox2 unaffected.
-	require.NoError(t,
-		d.ReplaceRemoteSkippedFiles("devbox1", map[string]int64{}))
-
-	loaded1, err := d.LoadRemoteSkippedFiles("devbox1")
-	require.NoError(t, err, "LoadRemoteSkippedFiles devbox1")
-	require.Empty(t, loaded1, "devbox1 should be empty")
-
-	loaded2, err := d.LoadRemoteSkippedFiles("devbox2")
-	require.NoError(t, err, "LoadRemoteSkippedFiles devbox2")
-	assert.True(t, maps.Equal(loaded2, host2),
-		"devbox2: loaded %v, want %v", loaded2, host2)
+		loaded2, err := d.LoadRemoteSkippedFiles("replace-other-2")
+		require.NoError(t, err, "LoadRemoteSkippedFiles replace-other-2")
+		assert.True(t, maps.Equal(loaded2, host2),
+			"replace-other-2: loaded %v, want %v", loaded2, host2)
+	})
 }
