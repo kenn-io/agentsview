@@ -1051,14 +1051,13 @@ func (s *Server) humaResumeSession(
 		if err != nil {
 			return nil, internalError("resume: prompt render failed", err)
 		}
-		cmd := "claude"
-		if req.SkipPermissions {
-			cmd += " --dangerously-skip-permissions"
-		}
-		cmd += " < " + shellQuote(promptPath)
-		cleanupCmd := commandWithCleanup(cmd, promptPath)
 		launchDir, _ := resolveResumePaths(session)
-		responseCmd := commandWithCwd(cleanupCmd, launchDir)
+		launchCmd := claudeMessagePointLaunchCommand(
+			promptPath, req.SkipPermissions,
+		)
+		responseCmd := claudeMessagePointResponseCommand(
+			promptPath, req.SkipPermissions, launchDir, runtime.GOOS,
+		)
 		if req.CommandOnly {
 			return &jsonOutput[resumeResponse]{
 				Body: resumeResponse{
@@ -1080,7 +1079,6 @@ func (s *Server) humaResumeSession(
 				},
 			}, nil
 		}
-		launchCmd := cleanupCmd
 		detectCwd := launchDir
 		if termCfg.Mode == string(terminalModeAuto) {
 			detectCwd = resumeLaunchCwd(

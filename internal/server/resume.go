@@ -2,6 +2,8 @@ package server
 
 import (
 	"bufio"
+	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"net/url"
 	"os"
@@ -9,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/google/shlex"
 	"github.com/tidwall/gjson"
@@ -99,6 +102,76 @@ func commandWithCleanup(cmd, cleanupPath string) string {
 		return cmd
 	}
 	return cmd + "; rm -f -- " + shellQuote(cleanupPath)
+}
+
+func claudeMessagePointLaunchCommand(
+	promptPath string, skipPermissions bool,
+) string {
+	cmd := "claude"
+	if skipPermissions {
+		cmd += " --dangerously-skip-permissions"
+	}
+	cmd += " < " + shellQuote(promptPath)
+	return commandWithCleanup(cmd, promptPath)
+}
+
+func claudeMessagePointResponseCommand(
+	promptPath string, skipPermissions bool, cwd string, goos string,
+) string {
+	if goos == "windows" {
+		return claudeMessagePointWindowsCommand(
+			promptPath, skipPermissions, cwd,
+		)
+	}
+	return commandWithCwd(
+		claudeMessagePointLaunchCommand(promptPath, skipPermissions),
+		cwd,
+	)
+}
+
+func claudeMessagePointWindowsCommand(
+	promptPath string, skipPermissions bool, cwd string,
+) string {
+	script := claudeMessagePointWindowsScript(
+		promptPath, skipPermissions, cwd,
+	)
+	return "powershell.exe -NoProfile -EncodedCommand " +
+		powerShellEncodedCommand(script)
+}
+
+func claudeMessagePointWindowsScript(
+	promptPath string, skipPermissions bool, cwd string,
+) string {
+	var b strings.Builder
+	b.WriteString("try { ")
+	if cwd != "" {
+		b.WriteString("Set-Location -LiteralPath ")
+		b.WriteString(powerShellSingleQuote(cwd))
+		b.WriteString("; ")
+	}
+	b.WriteString("Get-Content -Raw -Encoding UTF8 -LiteralPath ")
+	b.WriteString(powerShellSingleQuote(promptPath))
+	b.WriteString(" | & 'claude'")
+	if skipPermissions {
+		b.WriteString(" --dangerously-skip-permissions")
+	}
+	b.WriteString(" } finally { Remove-Item -LiteralPath ")
+	b.WriteString(powerShellSingleQuote(promptPath))
+	b.WriteString(" -Force -ErrorAction SilentlyContinue }")
+	return b.String()
+}
+
+func powerShellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+func powerShellEncodedCommand(script string) string {
+	codeUnits := utf16.Encode([]rune(script))
+	raw := make([]byte, len(codeUnits)*2)
+	for i, unit := range codeUnits {
+		binary.LittleEndian.PutUint16(raw[i*2:], unit)
+	}
+	return base64.StdEncoding.EncodeToString(raw)
 }
 
 func claudeMessagePointPromptPath(sessionID string, ordinal int) (string, error) {
