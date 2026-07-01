@@ -394,11 +394,6 @@ func duckValueLiteral(v any) (string, error) {
 		return "NULL", nil
 	case string:
 		return duckLiteral(value), nil
-	case *string:
-		if value == nil {
-			return "NULL", nil
-		}
-		return duckLiteral(*value), nil
 	case int, int8, int16, int32, int64,
 		uint, uint8, uint16, uint32, uint64,
 		float32, float64:
@@ -423,16 +418,10 @@ func duckValueLiteral(v any) (string, error) {
 			return "TRUE", nil
 		}
 		return "FALSE", nil
-	case *bool:
-		if value == nil {
-			return "NULL", nil
-		}
-		if *value {
-			return "TRUE", nil
-		}
-		return "FALSE", nil
 	case time.Time:
-		return "TIMESTAMP " + duckLiteral(value.UTC().Format(time.RFC3339Nano)), nil
+		return "TIMESTAMP " + duckLiteral(
+			value.UTC().Format("2006-01-02 15:04:05.999999"),
+		), nil
 	default:
 		return "", fmt.Errorf("unsupported duckdb remote argument type %T", v)
 	}

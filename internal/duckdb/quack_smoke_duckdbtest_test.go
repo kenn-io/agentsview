@@ -9,6 +9,7 @@ import (
 	"net"
 	"path/filepath"
 	"testing"
+	"time"
 
 	_ "github.com/duckdb/duckdb-go/v2"
 	"github.com/stretchr/testify/assert"
@@ -308,12 +309,140 @@ func TestQuackClientSyncPushWritesThroughAttachment(t *testing.T) {
 	assertDuckDBCount(t, server, "cursor_usage_events", 2)
 	assertDuckDBIndexExists(t, server, "tool_calls", "idx_tool_calls_file_path")
 
-	_, err = syncer.Push(ctx, true, nil)
-	require.NoError(t, err, "repeat push through Quack")
+	mutatedAt := "2026-01-10T03:04:05.123456Z"
+	mutatedResult := "duck result changed"
+	_, err = local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: syncSession(
+			fixture.alphaID, "alpha", "alpha changed", mutatedAt, 2,
+		),
+		Messages: []db.Message{
+			syncMessage(
+				fixture.alphaID, 0, "user", "alpha changed", mutatedAt,
+			),
+			syncMessage(
+				fixture.alphaID, 1, "assistant",
+				"alpha changed assistant",
+				"2026-01-10T03:04:06.000Z",
+				db.ToolCall{
+					ToolName:  "grep",
+					Category:  "search",
+					SkillName: "duck-grep",
+					ToolUseID: "tool-alpha",
+					InputJSON: `{"query":"changed"}`,
+					ResultEvents: []db.ToolResultEvent{{
+						Source:        "tool",
+						Status:        "complete",
+						Content:       mutatedResult,
+						Timestamp:     "2026-01-10T03:04:07.000Z",
+						EventIndex:    0,
+						ContentLength: len(mutatedResult),
+					}},
+				},
+			),
+		},
+		DataVersion:     2,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err, "mutate local alpha session")
+
+	mutatedMessages, err := local.GetAllMessages(ctx, fixture.alphaID)
+	require.NoError(t, err, "read mutated local messages")
+	require.Len(t, mutatedMessages, 2)
+	assistantMessage := mutatedMessages[1]
+	_, err = server.ExecContext(ctx, `
+		INSERT INTO tool_calls (
+			message_id, session_id, tool_name, category, call_index,
+			tool_use_id, input_json, skill_name
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		assistantMessage.ID, fixture.alphaID, "stale-tool", "stale",
+		0, "stale-tool-use", `{"query":"stale"}`, "stale-skill",
+	)
+	require.NoError(t, err, "seed stale matching remote tool_call")
+
+	result, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err, "mutated repeat push through Quack")
+	assert.Equal(t, 2, result.SessionsPushed)
+	assert.Equal(t, 3, result.MessagesPushed)
 	assertDuckDBCount(t, server, "sessions", 2)
 	assertDuckDBCount(t, server, "messages", 3)
 	assertDuckDBCount(t, server, "tool_calls", 1)
 	assertDuckDBCount(t, server, "tool_result_events", 1)
+	assertDuckDBCount(t, server, "cursor_usage_events", 2)
+
+	var firstMessage string
+	var startedAt time.Time
+	require.NoError(t,
+		server.QueryRowContext(ctx,
+			`SELECT first_message, started_at FROM sessions WHERE id = ?`,
+			fixture.alphaID,
+		).Scan(&firstMessage, &startedAt),
+		"query mutated session",
+	)
+	assert.Equal(t, "alpha changed", firstMessage)
+	assert.Equal(t,
+		time.Date(2026, time.January, 10, 3, 4, 5, 123456000, time.UTC),
+		startedAt.UTC(),
+	)
+
+	var toolName, category, skillName, inputJSON string
+	require.NoError(t,
+		server.QueryRowContext(ctx, `
+			SELECT tool_name, category, skill_name, input_json
+			FROM tool_calls
+			WHERE session_id = ? AND message_id = ? AND call_index = ?`,
+			fixture.alphaID, assistantMessage.ID, 0,
+		).Scan(&toolName, &category, &skillName, &inputJSON),
+		"query updated tool_call",
+	)
+	assert.Equal(t, "grep", toolName)
+	assert.Equal(t, "search", category)
+	assert.Equal(t, "duck-grep", skillName)
+	assert.Equal(t, `{"query":"changed"}`, inputJSON)
+
+	var resultStatus, resultContent string
+	require.NoError(t,
+		server.QueryRowContext(ctx, `
+			SELECT status, content
+			FROM tool_result_events
+			WHERE session_id = ?
+			  AND tool_call_message_ordinal = ?
+			  AND call_index = ?
+			  AND event_index = ?`,
+			fixture.alphaID, 1, 0, 0,
+		).Scan(&resultStatus, &resultContent),
+		"query updated tool_result_event",
+	)
+	assert.Equal(t, "complete", resultStatus)
+	assert.Equal(t, mutatedResult, resultContent)
+
+	shrunkenAt := "2026-01-10T04:00:00.000Z"
+	_, err = local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: syncSession(
+			fixture.alphaID, "alpha", "alpha without tool", shrunkenAt, 2,
+		),
+		Messages: []db.Message{
+			syncMessage(
+				fixture.alphaID, 0, "user", "alpha without tool", shrunkenAt,
+			),
+			syncMessage(
+				fixture.alphaID, 1, "assistant",
+				"alpha assistant without tool",
+				"2026-01-10T04:00:01.000Z",
+			),
+		},
+		DataVersion:     3,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err, "shrink local alpha tool set")
+
+	result, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err, "shrunken repeat push through Quack")
+	assert.Equal(t, 2, result.SessionsPushed)
+	assert.Equal(t, 3, result.MessagesPushed)
+	assertDuckDBCount(t, server, "sessions", 2)
+	assertDuckDBCount(t, server, "messages", 3)
+	assertDuckDBCount(t, server, "tool_calls", 0)
+	assertDuckDBCount(t, server, "tool_result_events", 0)
 	assertDuckDBCount(t, server, "cursor_usage_events", 2)
 
 	store, err := NewQuackStore(uri, token, false)

@@ -532,8 +532,7 @@ var mirrorTables = []tableSpec{
 }
 
 type schemaOptions struct {
-	createIndexes        bool
-	checkRepairsViaQuack bool
+	createIndexes bool
 }
 
 // EnsureSchema creates and additively migrates the DuckDB mirror schema.
@@ -551,14 +550,7 @@ func ensureSchema(ctx context.Context, db *sql.DB, opts schemaOptions) error {
 		if err := checkSchemaShapeCompat(ctx, db); err != nil {
 			return err
 		}
-		if opts.checkRepairsViaQuack {
-			return checkSchemaRepairsViaQuack(ctx, db)
-		}
-		pendingRepairs, err := pendingSchemaRepairs(ctx, db)
-		if err != nil {
-			return err
-		}
-		return schemaRepairError(pendingRepairs)
+		return checkSchemaRepairsViaQuack(ctx, db)
 	}
 
 	existing, err := loadColumns(ctx, db)
@@ -608,18 +600,15 @@ func ensureSchema(ctx context.Context, db *sql.DB, opts schemaOptions) error {
 	}
 
 	recordUsageDedupIndexMigration := false
-	if opts.createIndexes {
-		var err error
-		recordUsageDedupIndexMigration, err = migrateUsageEventsDedupIndex(ctx, db)
-		if err != nil {
-			return err
-		}
+	recordUsageDedupIndexMigration, err = migrateUsageEventsDedupIndex(ctx, db)
+	if err != nil {
+		return err
+	}
 
-		for _, table := range mirrorTables {
-			for _, stmt := range table.indexes {
-				if _, err := db.ExecContext(ctx, stmt); err != nil {
-					return fmt.Errorf("creating duckdb index for %s: %w", table.name, err)
-				}
+	for _, table := range mirrorTables {
+		for _, stmt := range table.indexes {
+			if _, err := db.ExecContext(ctx, stmt); err != nil {
+				return fmt.Errorf("creating duckdb index for %s: %w", table.name, err)
 			}
 		}
 	}
@@ -943,19 +932,9 @@ func checkSchemaRepairsViaQuack(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("checking duckdb schema repairs through quack: %w", err)
 	}
-	defer func() {
-		_ = rows.Close()
-	}()
-	var pendingRepairs []string
-	for rows.Next() {
-		var issue string
-		if err := rows.Scan(&issue); err != nil {
-			return fmt.Errorf("scanning duckdb schema repair check: %w", err)
-		}
-		pendingRepairs = append(pendingRepairs, issue)
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterating duckdb schema repair check: %w", err)
+	pendingRepairs, err := collectSchemaRepairIssues(rows)
+	if err != nil {
+		return err
 	}
 	return schemaRepairError(pendingRepairs)
 }
@@ -965,6 +944,10 @@ func pendingSchemaRepairs(ctx context.Context, db *sql.DB) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("checking duckdb schema repairs: %w", err)
 	}
+	return collectSchemaRepairIssues(rows)
+}
+
+func collectSchemaRepairIssues(rows *sql.Rows) ([]string, error) {
 	defer func() {
 		_ = rows.Close()
 	}()
@@ -1021,7 +1004,7 @@ func pendingSchemaRepairsQuery() string {
 			SELECT 1
 			FROM information_schema.table_constraints
 			WHERE table_schema = current_schema()
-			  AND table_name = 'messages'
+			  AND lower(table_name) = 'messages'
 			  AND constraint_type = 'PRIMARY KEY'
 		)
 		UNION ALL

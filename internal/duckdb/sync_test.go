@@ -50,6 +50,42 @@ func TestSyncFullPushCreatesExpectedRows(t *testing.T) {
 	assert.Equal(t, "alpha first", firstMessage)
 }
 
+func TestDuckValueLiteralFormatsTimestampWithoutZone(t *testing.T) {
+	got, err := duckValueLiteral(time.Date(
+		2026, time.January, 10, 3, 4, 5, 123456789, time.UTC,
+	))
+	require.NoError(t, err)
+
+	assert.Equal(t, "TIMESTAMP '2026-01-10 03:04:05.123456'", got)
+}
+
+func TestDuckValueLiteralFormatsNullableNumericPointers(t *testing.T) {
+	score := 88
+	fileSize := int64(4096)
+	contextPressure := 0.875
+
+	tests := []struct {
+		name string
+		in   any
+		want string
+	}{
+		{name: "int pointer", in: &score, want: "88"},
+		{name: "int64 pointer", in: &fileSize, want: "4096"},
+		{name: "float64 pointer", in: &contextPressure, want: "0.875"},
+		{name: "nil int pointer", in: (*int)(nil), want: "NULL"},
+		{name: "nil int64 pointer", in: (*int64)(nil), want: "NULL"},
+		{name: "nil float64 pointer", in: (*float64)(nil), want: "NULL"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := duckValueLiteral(tt.in)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestSessionFingerprintsStoreDigestOnly(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)

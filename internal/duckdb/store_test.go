@@ -117,36 +117,36 @@ func TestStoreGetStatsPreservesRootAndScopeFilters(t *testing.T) {
 	}
 
 	insertSession(
-		"stats-human", "alpha", "root", "2026-01-01 00:00:00",
-		2, 2, false,
-	)
-	insertSession(
-		"stats-one-shot", "beta", "root", "2026-01-02 00:00:00",
-		1, 1, false,
-	)
-	insertSession(
-		"stats-automated", "bot", "root", "2026-01-03 00:00:00",
-		1, 1, true,
-	)
-	insertSession(
-		"stats-subagent", "child", "subagent", "2026-01-04 00:00:00",
+		"stats-fork", "fork", "fork", "2025-12-26 00:00:00",
 		1, 2, false,
 	)
 	insertSession(
-		"stats-fork", "fork", "fork", "2026-01-05 00:00:00",
+		"stats-subagent", "child", "subagent", "2025-12-27 00:00:00",
 		1, 2, false,
 	)
 	insertSession(
-		"stats-empty", "empty", "root", "2026-01-06 00:00:00",
+		"stats-empty", "empty", "root", "2025-12-28 00:00:00",
 		0, 2, false,
 	)
 	insertSession(
-		"stats-deleted", "deleted", "root", "2026-01-07 00:00:00",
+		"stats-deleted", "deleted", "root", "2025-12-29 00:00:00",
 		1, 2, false,
+	)
+	insertSession(
+		"stats-one-shot", "beta", "root", "2025-12-30 00:00:00",
+		1, 1, false,
+	)
+	insertSession(
+		"stats-automated", "bot", "root", "2025-12-31 00:00:00",
+		1, 1, true,
+	)
+	insertSession(
+		"stats-human", "alpha", "root", "2026-01-01 00:00:00",
+		2, 2, false,
 	)
 	_, err := duck.ExecContext(ctx,
 		`UPDATE sessions SET deleted_at = CAST(? AS TIMESTAMP) WHERE id = ?`,
-		"2026-01-08 00:00:00", "stats-deleted",
+		"2026-01-02 00:00:00", "stats-deleted",
 	)
 	require.NoError(t, err)
 
@@ -154,6 +154,7 @@ func TestStoreGetStatsPreservesRootAndScopeFilters(t *testing.T) {
 		name string,
 		excludeOneShot, excludeAutomated bool,
 		wantSessions, wantMessages, wantProjects int,
+		wantEarliest string,
 	) {
 		t.Helper()
 		stats, err := store.GetStats(ctx, excludeOneShot, excludeAutomated)
@@ -163,13 +164,25 @@ func TestStoreGetStatsPreservesRootAndScopeFilters(t *testing.T) {
 		assert.Equal(t, wantProjects, stats.ProjectCount, name)
 		assert.Equal(t, 1, stats.MachineCount, name)
 		require.NotNil(t, stats.EarliestSession, name)
-		assert.Equal(t, "2026-01-01T00:00:00Z", *stats.EarliestSession, name)
+		assert.Equal(t, wantEarliest, *stats.EarliestSession, name)
 	}
 
-	assertStats("include all root sessions", false, false, 3, 4, 3)
-	assertStats("exclude one-shot keeps automated", true, false, 2, 3, 2)
-	assertStats("exclude automated keeps human one-shot", false, true, 2, 3, 2)
-	assertStats("exclude one-shot and automated", true, true, 1, 2, 1)
+	assertStats(
+		"include all root sessions", false, false, 3, 4, 3,
+		"2025-12-30T00:00:00Z",
+	)
+	assertStats(
+		"exclude one-shot keeps automated", true, false, 2, 3, 2,
+		"2025-12-31T00:00:00Z",
+	)
+	assertStats(
+		"exclude automated keeps human one-shot", false, true, 2, 3, 2,
+		"2025-12-30T00:00:00Z",
+	)
+	assertStats(
+		"exclude one-shot and automated", true, true, 1, 2, 1,
+		"2026-01-01T00:00:00Z",
+	)
 }
 
 func TestStoreMessageIDJoinsAreSessionScoped(t *testing.T) {
