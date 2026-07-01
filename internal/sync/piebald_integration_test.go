@@ -242,34 +242,26 @@ func TestSyncSingleSessionPiebald(t *testing.T) {
 	})
 }
 
-func TestSyncEnginePiebaldBulkSync(t *testing.T) {
+func TestSyncPiebaldBulkAndIncremental(t *testing.T) {
 	t.Parallel()
 
 	env := setupSingleAgentTestEnv(t, parser.AgentPiebald)
 	piebald := createPiebaldDB(t, env.piebaldDir)
 	piebald.addChat(t, 42, "Piebald Bulk Sync", "Please add Piebald support.", "Added Piebald support.", "2026-05-01T10:05:00Z")
+	piebald.addChat(t, 1, "Chat A", "Prompt A.", "Answer A.", "2026-05-01T10:01:00Z")
+	piebald.addChat(t, 2, "Chat B", "Prompt B.", "Answer B.", "2026-05-01T10:02:00Z")
 
-	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 1, Synced: 1, Skipped: 0})
+	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 3, Synced: 3, Skipped: 0})
 	assertSessionProject(t, env.db, "piebald:42", "app")
 	assertSessionMessageCount(t, env.db, "piebald:42", 2)
 	assertMessageRoles(t, env.db, "piebald:42", "user", "assistant")
 	assertToolCallCount(t, env.db, "piebald:42", 1)
 	assertMessageContent(t, env.db, "piebald:42", "Please add Piebald support.", "Added Piebald support.")
 
-	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 0, Synced: 0, Skipped: 0})
-}
-
-func TestSyncPiebaldMultiChatIncremental(t *testing.T) {
-	t.Parallel()
-
-	env := setupSingleAgentTestEnv(t, parser.AgentPiebald)
-	piebald := createPiebaldDB(t, env.piebaldDir)
-	piebald.addChat(t, 1, "Chat A", "Prompt A.", "Answer A.", "2026-05-01T10:01:00Z")
-	piebald.addChat(t, 2, "Chat B", "Prompt B.", "Answer B.", "2026-05-01T10:02:00Z")
-
-	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 2, Synced: 2, Skipped: 0})
 	_, storedMtimeA, okA := env.db.GetSessionFileInfo("piebald:1")
 	require.True(t, okA, "session A file info not found after initial sync")
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 0, Synced: 0, Skipped: 0})
 
 	piebald.mustExec(t, "update B updated_at",
 		`UPDATE chats SET updated_at = '2026-05-01T10:03:00Z' WHERE id = 2`,
