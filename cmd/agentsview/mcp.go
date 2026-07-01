@@ -306,6 +306,16 @@ func (s *mcpDaemonService) UsageSummary(
 	return svc.UsageSummary(ctx, req)
 }
 
+func (s *mcpDaemonService) UsagePairwiseComparison(
+	ctx context.Context, req service.UsagePairwiseComparisonRequest,
+) (*service.UsagePairwiseComparisonResponse, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return svc.UsagePairwiseComparison(ctx, req)
+}
+
 func (s *mcpDaemonService) ListSecrets(
 	ctx context.Context, f service.SecretListFilter,
 ) (*service.SecretFindingList, error) {

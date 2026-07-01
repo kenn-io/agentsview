@@ -39,22 +39,27 @@ try {
     capture: true,
   });
   writeFileSync(specPath, spec);
-  run(
-    "npx",
-    [
-      "openapi",
-      "-i",
-      specPath,
-      "-o",
-      "src/lib/api/generated",
-      "-c",
-      "fetch",
-      "--useOptions",
-      "--indent",
-      "2",
-    ],
-    { cwd: frontendDir },
-  );
+  const openapiArgs = [
+    "openapi",
+    "-i",
+    specPath,
+    "-o",
+    "src/lib/api/generated",
+    "-c",
+    "fetch",
+    "--useOptions",
+    "--indent",
+    "2",
+  ];
+  if (process.platform === "win32") {
+    run(
+      process.env.ComSpec ?? "cmd.exe",
+      ["/d", "/s", "/c", "npx.cmd", ...openapiArgs],
+      { cwd: frontendDir },
+    );
+  } else {
+    run("npx", openapiArgs, { cwd: frontendDir });
+  }
 } finally {
   rmSync(tempDir, { recursive: true, force: true });
 }

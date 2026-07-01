@@ -92,4 +92,9 @@ describe("UsagePage refresh behavior", () => {
     expect(initBlock).not.toContain("parseFiltersFromParams(params)");
     expect(initBlock).not.toContain("sessions.initFromParams(params)");
   });
+
+  it("mounts the pairwise comparison panel additively", () => {
+    expect(source).toContain("UsagePairwiseComparisonPanel");
+    expect(source).toContain("<UsagePairwiseComparisonPanel />");
+  });
 });
