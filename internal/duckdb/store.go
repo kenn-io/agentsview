@@ -465,12 +465,14 @@ func (s *Store) GetStats(ctx context.Context, excludeOneShot, excludeAutomated b
 	filter := rootSessionWhere(excludeOneShot, excludeAutomated)
 	query := fmt.Sprintf(`
 		SELECT
-			(SELECT COUNT(*) FROM sessions WHERE %s),
-			(SELECT COALESCE(SUM(message_count), 0) FROM sessions WHERE %s),
-			(SELECT COUNT(DISTINCT project) FROM sessions WHERE %s),
-			(SELECT COUNT(DISTINCT machine) FROM sessions WHERE %s),
-			(SELECT MIN(COALESCE(started_at, created_at)) FROM sessions WHERE %s)`,
-		filter, filter, filter, filter, filter)
+			COUNT(*),
+			COALESCE(SUM(message_count), 0),
+			COUNT(DISTINCT project),
+			COUNT(DISTINCT machine),
+			MIN(COALESCE(started_at, created_at))
+		FROM sessions
+		WHERE %s`,
+		filter)
 	var stats db.Stats
 	var earliest any
 	if err := s.duck.QueryRowContext(ctx, query).Scan(

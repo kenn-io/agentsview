@@ -256,6 +256,20 @@ func TestQuackClientSyncPushWritesThroughAttachment(t *testing.T) {
 	assertDuckDBCount(t, server, "messages", 3)
 	assertDuckDBCount(t, server, "cursor_usage_events", 2)
 	assertDuckDBIndexExists(t, server, "tool_calls", "idx_tool_calls_file_path")
+
+	store, err := NewQuackStore(uri, token, false)
+	require.NoError(t, err, "open Quack-backed store")
+	t.Cleanup(func() {
+		require.NoError(t, store.Close(), "close Quack-backed store")
+	})
+
+	stats, err := store.GetStats(ctx, false, false)
+	require.NoError(t, err, "read stats through Quack")
+	assert.Equal(t, 2, stats.SessionCount)
+	assert.Equal(t, 3, stats.MessageCount)
+	assert.Equal(t, 2, stats.ProjectCount)
+	assert.Equal(t, 1, stats.MachineCount)
+	assert.NotNil(t, stats.EarliestSession)
 }
 
 func openQuackMirrorServer(
