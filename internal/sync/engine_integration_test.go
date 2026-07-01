@@ -6890,31 +6890,45 @@ func TestResyncAllMixedOpenCodeRootsKeepsSQLiteFallback(t *testing.T) {
 	)
 }
 
-func TestResyncAllOpenCodeStorageArchivePreservesStaleSQLiteFallback(
+func TestResyncAllOpenCodeStorageArchiveHandlesSQLiteFallbackFreshness(
 	t *testing.T,
 ) {
 	t.Parallel()
 	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
 
-	sessionID := "oc-storage-to-sqlite"
+	staleSessionID := "oc-storage-to-stale-sqlite"
 	storage.addSession(
-		t, "global", sessionID,
-		"/home/user/code/myapp", "Storage Then SQLite",
+		t, "global", staleSessionID,
+		"/home/user/code/myapp", "Storage Then Stale SQLite",
 		1704067200000, 1704067205000,
 	)
 	storage.addMessage(
-		t, sessionID, "msg-u1", "user",
+		t, staleSessionID, "msg-stale-u1", "user",
 		1704067200000, nil,
 	)
 	storage.addTextPart(
-		t, sessionID, "msg-u1", "part-u1",
-		"hello storage", 1704067200000,
+		t, staleSessionID, "msg-stale-u1", "part-stale-u1",
+		"hello stale storage", 1704067200000,
+	)
+	newerSessionID := "oc-storage-to-newer-sqlite"
+	storage.addSession(
+		t, "global", newerSessionID,
+		"/home/user/code/myapp", "Storage Then Newer SQLite",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, newerSessionID, "msg-newer-u1", "user",
+		1704067200000, nil,
+	)
+	storage.addTextPart(
+		t, newerSessionID, "msg-newer-u1", "part-newer-u1",
+		"hello newer storage", 1704067200000,
 	)
 
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 1,
-		Synced:        1,
+		TotalSessions: 2,
+		Synced:        2,
 		Skipped:       0,
 	})
 
@@ -6926,27 +6940,45 @@ func TestResyncAllOpenCodeStorageArchivePreservesStaleSQLiteFallback(
 	oc := createOpenCodeDB(t, env.opencodeDir)
 	oc.addProject(t, "proj-1", "/home/user/code/myapp")
 	oc.addSession(
-		t, sessionID, "proj-1",
+		t, staleSessionID, "proj-1",
 		1704067200000, 1704067209000,
 	)
 	oc.addMessage(
-		t, "msg-u1", sessionID, "user",
+		t, "msg-stale-u1", staleSessionID, "user",
 		1704067200000,
 	)
 	oc.addTextPart(
-		t, "part-u1", sessionID, "msg-u1",
-		"hello sqlite fallback", 1704067200000,
+		t, "part-stale-u1", staleSessionID, "msg-stale-u1",
+		"hello stale sqlite fallback", 1704067200000,
+	)
+
+	sqliteUpdatedAt := time.Now().Add(2 * time.Second).UnixMilli()
+	oc.addSession(
+		t, newerSessionID, "proj-1",
+		1704067200000, sqliteUpdatedAt,
+	)
+	oc.addMessage(
+		t, "msg-newer-u1", newerSessionID, "user",
+		1704067200000,
+	)
+	oc.addTextPart(
+		t, "part-newer-u1", newerSessionID, "msg-newer-u1",
+		"hello newer sqlite fallback", 1704067200000,
 	)
 
 	stats := env.engine.ResyncAll(context.Background(), nil)
 	for _, w := range stats.Warnings {
-		require.False(t, strings.Contains(w, "resync aborted"), "ResyncAll aborted for storage->sqlite fallback: %s", w)
+		require.False(t, strings.Contains(w, "resync aborted"), "ResyncAll aborted for storage->sqlite freshness: %s", w)
 	}
-	require.Equal(t, 0, stats.Synced, "stats.Synced = %d, want 0", stats.Synced)
+	require.NotZero(t, stats.Synced, "expected newer sqlite fallback to be synced")
 
 	assertMessageContent(
-		t, env.db, "opencode:"+sessionID,
-		"hello storage",
+		t, env.db, "opencode:"+staleSessionID,
+		"hello stale storage",
+	)
+	assertMessageContent(
+		t, env.db, "opencode:"+newerSessionID,
+		"hello newer sqlite fallback",
 	)
 }
 
@@ -7009,69 +7041,6 @@ func TestResyncAllKiloStorageArchivePreservesStaleSQLiteFallback(
 	assertMessageContent(
 		t, env.db, "kilo:"+sessionID,
 		"hello kilo storage",
-	)
-}
-
-func TestResyncAllOpenCodeStorageArchiveAllowsNewerSQLiteFallback(
-	t *testing.T,
-) {
-	t.Parallel()
-
-	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
-	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
-
-	sessionID := "oc-storage-to-newer-sqlite"
-	storage.addSession(
-		t, "global", sessionID,
-		"/home/user/code/myapp", "Storage Then Newer SQLite",
-		1704067200000, 1704067205000,
-	)
-	storage.addMessage(
-		t, sessionID, "msg-u1", "user",
-		1704067200000, nil,
-	)
-	storage.addTextPart(
-		t, sessionID, "msg-u1", "part-u1",
-		"hello storage", 1704067200000,
-	)
-
-	runSyncAndAssert(t, env.engine, sync.SyncStats{
-		TotalSessions: 1,
-		Synced:        1,
-		Skipped:       0,
-	})
-
-	err := os.RemoveAll(
-		filepath.Join(env.opencodeDir, "storage"),
-	)
-	require.NoError(t, err, "remove storage tree")
-
-	sqliteUpdatedAt := time.Now().Add(2 * time.Second).UnixMilli()
-
-	oc := createOpenCodeDB(t, env.opencodeDir)
-	oc.addProject(t, "proj-1", "/home/user/code/myapp")
-	oc.addSession(
-		t, sessionID, "proj-1",
-		1704067200000, sqliteUpdatedAt,
-	)
-	oc.addMessage(
-		t, "msg-u1", sessionID, "user",
-		1704067200000,
-	)
-	oc.addTextPart(
-		t, "part-u1", sessionID, "msg-u1",
-		"hello newer sqlite fallback", 1704067200000,
-	)
-
-	stats := env.engine.ResyncAll(context.Background(), nil)
-	for _, w := range stats.Warnings {
-		require.False(t, strings.Contains(w, "resync aborted"), "ResyncAll aborted for newer storage->sqlite fallback: %s", w)
-	}
-	require.NotZero(t, stats.Synced, "expected newer sqlite fallback to be synced")
-
-	assertMessageContent(
-		t, env.db, "opencode:"+sessionID,
-		"hello newer sqlite fallback",
 	)
 }
 
