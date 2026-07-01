@@ -189,41 +189,57 @@ func (p *piebaldTestDB) addChatWithFork(t *testing.T, chatID int64) {
 	p.addTextPart(t, 1201, 201, 0, "Fork answer", false)
 }
 
-func TestSyncSingleSessionPiebaldFork(t *testing.T) {
+func TestSyncSingleSessionPiebald(t *testing.T) {
 	t.Parallel()
 
 	env := setupSingleAgentTestEnv(t, parser.AgentPiebald)
 	piebald := createPiebaldDB(t, env.piebaldDir)
 	piebald.addChatWithFork(t, 42)
+	piebald.addChat(t, 7, "Single Piebald", "One chat.", "One answer.", "2026-05-01T10:05:00Z")
 
-	require.NoError(t, env.engine.SyncSingleSession("piebald:42-200"), "SyncSingleSession(fork)")
-	assertSessionMessageCount(t, env.db, "piebald:42-200", 2)
-	assertSessionMessageCount(t, env.db, "piebald:42", 4)
+	t.Run("fork", func(t *testing.T) {
+		require.NoError(t, env.engine.SyncSingleSession("piebald:42-200"), "SyncSingleSession(fork)")
+		assertSessionMessageCount(t, env.db, "piebald:42-200", 2)
+		assertSessionMessageCount(t, env.db, "piebald:42", 4)
 
-	src := env.engine.FindSourceFile("piebald:42-200")
-	// Piebald is a provider-authoritative DB-backed provider. A fork session
-	// resolves to its base chat virtual <db>#<chatID> path, matching the
-	// stored session file_path the provider re-parses.
-	wantSrc := filepath.Join(env.piebaldDir, "app.db") + "#42"
-	assert.Equal(t, wantSrc, src)
+		src := env.engine.FindSourceFile("piebald:42-200")
+		// Piebald is a provider-authoritative DB-backed provider. A fork session
+		// resolves to its base chat virtual <db>#<chatID> path, matching the
+		// stored session file_path the provider re-parses.
+		wantSrc := filepath.Join(env.piebaldDir, "app.db") + "#42"
+		assert.Equal(t, wantSrc, src)
 
-	mtime := env.engine.SourceMtime("piebald:42-200")
-	assert.NotZero(t, mtime, "SourceMtime(fork) returned zero")
-}
+		mtime := env.engine.SourceMtime("piebald:42-200")
+		assert.NotZero(t, mtime, "SourceMtime(fork) returned zero")
+	})
 
-func TestSyncSingleSessionPiebaldUnknownFork(t *testing.T) {
-	t.Parallel()
+	t.Run("unknown fork", func(t *testing.T) {
+		err := env.engine.SyncSingleSession("piebald:42-999")
+		require.Error(t, err, "SyncSingleSession(piebald:42-999) returned nil; want not-found error")
+		src := env.engine.FindSourceFile("piebald:42-999")
+		assert.Empty(t, src, "FindSourceFile(piebald:42-999)")
+		mtime := env.engine.SourceMtime("piebald:42-999")
+		assert.Zero(t, mtime, "SourceMtime(piebald:42-999)")
+	})
 
-	env := setupSingleAgentTestEnv(t, parser.AgentPiebald)
-	piebald := createPiebaldDB(t, env.piebaldDir)
-	piebald.addChatWithFork(t, 42)
+	t.Run("chat", func(t *testing.T) {
+		require.NoError(t, env.engine.SyncSingleSession("piebald:7"), "SyncSingleSession")
+		assertSessionProject(t, env.db, "piebald:7", "app")
+		assertSessionMessageCount(t, env.db, "piebald:7", 2)
 
-	err := env.engine.SyncSingleSession("piebald:42-999")
-	require.Error(t, err, "SyncSingleSession(piebald:42-999) returned nil; want not-found error")
-	src := env.engine.FindSourceFile("piebald:42-999")
-	assert.Empty(t, src, "FindSourceFile(piebald:42-999)")
-	mtime := env.engine.SourceMtime("piebald:42-999")
-	assert.Zero(t, mtime, "SourceMtime(piebald:42-999)")
+		src := env.engine.FindSourceFile("piebald:7")
+		// Piebald resolves the per-session virtual <db>#<chatID> path the provider
+		// parses, matching the stored session file_path.
+		wantSrc := filepath.Join(env.piebaldDir, "app.db") + "#7"
+		assert.Equal(t, wantSrc, src)
+
+		mtime := env.engine.SourceMtime("piebald:7")
+		require.NotZero(t, mtime, "SourceMtime returned zero")
+
+		_, storedMtime, ok := env.db.GetSessionFileInfo("piebald:7")
+		require.True(t, ok, "session file info not found")
+		assert.Equal(t, mtime, storedMtime)
+	})
 }
 
 func TestSyncEnginePiebaldBulkSync(t *testing.T) {
@@ -241,31 +257,6 @@ func TestSyncEnginePiebaldBulkSync(t *testing.T) {
 	assertMessageContent(t, env.db, "piebald:42", "Please add Piebald support.", "Added Piebald support.")
 
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 0, Synced: 0, Skipped: 0})
-}
-
-func TestSyncSingleSessionPiebald(t *testing.T) {
-	t.Parallel()
-
-	env := setupSingleAgentTestEnv(t, parser.AgentPiebald)
-	piebald := createPiebaldDB(t, env.piebaldDir)
-	piebald.addChat(t, 7, "Single Piebald", "One chat.", "One answer.", "2026-05-01T10:05:00Z")
-
-	require.NoError(t, env.engine.SyncSingleSession("piebald:7"), "SyncSingleSession")
-	assertSessionProject(t, env.db, "piebald:7", "app")
-	assertSessionMessageCount(t, env.db, "piebald:7", 2)
-
-	src := env.engine.FindSourceFile("piebald:7")
-	// Piebald resolves the per-session virtual <db>#<chatID> path the provider
-	// parses, matching the stored session file_path.
-	wantSrc := filepath.Join(env.piebaldDir, "app.db") + "#7"
-	assert.Equal(t, wantSrc, src)
-
-	mtime := env.engine.SourceMtime("piebald:7")
-	require.NotZero(t, mtime, "SourceMtime returned zero")
-
-	_, storedMtime, ok := env.db.GetSessionFileInfo("piebald:7")
-	require.True(t, ok, "session file info not found")
-	assert.Equal(t, mtime, storedMtime)
 }
 
 func TestSyncPiebaldMultiChatIncremental(t *testing.T) {
