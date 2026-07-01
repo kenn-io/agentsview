@@ -210,9 +210,15 @@ func runDuckDBServe(appCfg config.Config, basePath string) {
 			fatal("duckdb serve: schema migration failed: %v", err)
 		}
 	}
-	if err := duckdbsync.CheckSchemaCompat(ctx, store.DB()); err != nil {
+	var schemaErr error
+	if duckCfg.URL == "" {
+		schemaErr = duckdbsync.CheckSchemaCompat(ctx, store.DB())
+	} else {
+		schemaErr = duckdbsync.CheckSchemaCompatViaQuack(ctx, store.DB())
+	}
+	if schemaErr != nil {
 		fatal("duckdb serve: schema incompatible: %v\n"+
-			"Run 'agentsview duckdb push --full' to repopulate the mirror.", err)
+			"Run 'agentsview duckdb push --full' to repopulate the mirror.", schemaErr)
 	}
 
 	rtOpts := serveRuntimeOptions{

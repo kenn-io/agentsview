@@ -162,6 +162,10 @@ func TestQuackClientSyncEnsureSchemaSkipsRemoteIndexes(t *testing.T) {
 	})
 
 	require.NoError(t, syncer.EnsureSchema(ctx), "ensure schema through Quack")
+	require.NoError(t,
+		CheckSchemaCompatViaQuack(ctx, syncer.DB()),
+		"check schema compatibility through Quack",
+	)
 	assertDuckDBIndexExists(t, server, "tool_calls", "idx_tool_calls_file_path")
 }
 
@@ -197,6 +201,38 @@ func TestQuackClientSyncEnsureSchemaRequiresPreparedServerMetadata(t *testing.T)
 	err = syncer.EnsureSchema(ctx)
 	require.Error(t, err, "schema metadata should be required through Quack")
 	assert.Contains(t, err.Error(), "missing "+schemaVersionMetadataKey)
+	assert.NotContains(t, err.Error(), "GetStorageInfo")
+}
+
+func TestQuackClientSyncEnsureSchemaRejectsUnmigratedServerSchema(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "agentsview-quack-unmigrated.duckdb")
+	uri := "quack:127.0.0.1:" + freeTCPPort(t)
+	const token = "agentsview-duckdbtest-token-0005"
+
+	server := openQuackMirrorServer(t, ctx, path, uri, token)
+	require.NoError(t, EnsureSchema(ctx, server), "prepare server schema")
+	recreateMessagesWithIDPrimaryKey(t, ctx, server)
+
+	local := newLocalDB(t)
+	syncer, err := NewFromConfig(
+		config.DuckDBConfig{
+			URL:         uri,
+			Token:       token,
+			MachineName: "quack-client",
+		},
+		local,
+		SyncOptions{},
+	)
+	require.NoError(t, err, "open Quack-backed sync")
+	t.Cleanup(func() {
+		require.NoError(t, syncer.Close(), "close Quack-backed sync")
+	})
+
+	err = syncer.EnsureSchema(ctx)
+	require.Error(t, err, "unmigrated server schema should be rejected through Quack")
+	assert.Contains(t, err.Error(), "messages.id primary key")
+	assert.NotContains(t, err.Error(), "base table")
 	assert.NotContains(t, err.Error(), "GetStorageInfo")
 }
 

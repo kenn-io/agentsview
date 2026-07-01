@@ -140,7 +140,11 @@ func (s *Sync) EnsureSchema(ctx context.Context) error {
 	if s.schemaOK {
 		return nil
 	}
-	opts := schemaOptions{createIndexes: s.connectionKind != duckDBQuackClientConnection}
+	isQuackClient := s.connectionKind == duckDBQuackClientConnection
+	opts := schemaOptions{
+		createIndexes:        !isQuackClient,
+		checkRepairsViaQuack: isQuackClient,
+	}
 	if err := ensureSchema(ctx, s.duck, opts); err != nil {
 		return err
 	}
