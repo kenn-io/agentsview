@@ -82,7 +82,7 @@ func OpenTestDB(t *testing.T) *db.DB {
 func OpenTestDBAt(t *testing.T, path string) *db.DB {
 	t.Helper()
 	EnsureTestDBAt(t, path)
-	d, err := db.OpenPreparedTestDB(path)
+	d, err := db.Open(path)
 	if err != nil {
 		t.Fatalf("opening test db: %v", err)
 	}

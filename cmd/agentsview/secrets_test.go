@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -171,7 +172,8 @@ func setupSecretsScanFixture(t *testing.T, seeds ...secretsScanSeed) {
 		})
 	}
 	seedSessionArchiveRows(t, dataDir, sessionSeeds...)
-	d, err := db.OpenPreparedTestDB(sessionsDBPath(dataDir))
+	dbtest.EnsureTestDBAt(t, sessionsDBPath(dataDir))
+	d, err := db.Open(sessionsDBPath(dataDir))
 	require.NoError(t, err)
 	require.NoError(t, d.InsertMessages(messages))
 	require.NoError(t, d.Close())

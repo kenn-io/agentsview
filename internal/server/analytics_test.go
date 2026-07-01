@@ -252,7 +252,7 @@ func buildAnalyticsDBFixture(
 
 	path := filepath.Join(dir, "test.db")
 	dbtest.EnsureTestDBAt(t, path)
-	database, err := db.OpenPreparedTestDB(path)
+	database, err := db.Open(path)
 	if err != nil {
 		return analyticsDBFixture{}, fmt.Errorf(
 			"opening analytics fixture db: %w", err,

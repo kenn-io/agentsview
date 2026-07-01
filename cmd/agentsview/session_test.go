@@ -300,7 +300,7 @@ func seedSessionArchiveRows(t *testing.T, dataDir string, seeds ...sessionSeed) 
 	t.Helper()
 	dbPath := sessionsDBPath(dataDir)
 	dbtest.EnsureTestDBAt(t, dbPath)
-	d, err := db.OpenPreparedTestDB(dbPath)
+	d, err := db.Open(dbPath)
 	require.NoError(t, err)
 	closed := false
 	t.Cleanup(func() {
@@ -793,7 +793,7 @@ func TestSessionList_MinToolFailuresZero(t *testing.T) {
 // timestamps one minute apart starting at 2026-04-01T00:00:00Z.
 func seedMessages(t *testing.T, dataDir, sessionID string, n int) {
 	t.Helper()
-	d, err := db.OpenPreparedTestDB(filepath.Join(dataDir, "sessions.db"))
+	d, err := db.Open(filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { d.Close() })
 
@@ -870,7 +870,7 @@ func seedMessagesWithToolCalls(
 	t *testing.T, dataDir, sessionID string, n int,
 ) {
 	t.Helper()
-	d, err := db.OpenPreparedTestDB(filepath.Join(dataDir, "sessions.db"))
+	d, err := db.Open(filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { d.Close() })
 

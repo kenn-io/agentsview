@@ -17,6 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/cursorusage"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/pricing"
 )
 
@@ -808,9 +809,7 @@ func TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination(t *testing.
 	assert.Equal(t, float64(1), requests[0]["page"])
 	assert.Equal(t, float64(2), requests[1]["page"])
 
-	database, err := db.OpenPreparedTestDB(filepath.Join(dataDir, "sessions.db"))
-	require.NoError(t, err, "open archive db")
-	t.Cleanup(func() { database.Close() })
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 
 	var count int
 	require.NoError(t, database.Reader().QueryRow(

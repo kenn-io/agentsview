@@ -358,7 +358,6 @@ func TestHTTPBackend_Sync_RemoteReadOnly(t *testing.T) {
 }
 
 func TestHTTPBackend_Watch_ReceivesSessionUpdated(t *testing.T) {
-	t.Parallel()
 	const watchPoll = 25 * time.Millisecond
 	t.Cleanup(sessionwatch.SetTimingsForTest(
 		watchPoll, 50*time.Millisecond,
