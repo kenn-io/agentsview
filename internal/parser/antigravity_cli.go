@@ -310,7 +310,7 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 func loadAntigravityCLIDBSteps(
 	path string,
 ) (antigravityStepLoadResult, error) {
-	dsn := "file:" + path + "?mode=ro&immutable=0"
+	dsn := "file:" + sqliteURIPath(path) + "?mode=ro&immutable=0"
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return antigravityStepLoadResult{}, fmt.Errorf(

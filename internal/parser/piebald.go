@@ -94,7 +94,7 @@ func parsePiebaldSessionResults(dbPath, chatID, machine string) ([]ParseResult, 
 }
 
 func openPiebaldDB(dbPath string) (*sql.DB, error) {
-	dsn := "file:" + dbPath + "?mode=ro&_busy_timeout=3000"
+	dsn := "file:" + sqliteURIPath(dbPath) + "?mode=ro&_busy_timeout=3000"
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("opening piebald db %s: %w", dbPath, err)

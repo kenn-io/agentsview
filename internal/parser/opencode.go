@@ -213,7 +213,7 @@ func parseOpenCodeStorageFile(
 }
 
 func openOpenCodeDB(dbPath string) (*sql.DB, error) {
-	dsn := "file:" + dbPath +
+	dsn := "file:" + sqliteURIPath(dbPath) +
 		"?mode=ro&_busy_timeout=3000"
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {

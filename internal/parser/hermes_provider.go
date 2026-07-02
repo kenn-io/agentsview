@@ -268,7 +268,7 @@ func (s hermesSourceSet) FindSource(
 }
 
 func hermesStateDBHasSession(stateDB string, rawID string) (bool, error) {
-	conn, err := sql.Open("sqlite3", "file:"+stateDB+"?mode=ro")
+	conn, err := sql.Open("sqlite3", "file:"+sqliteURIPath(stateDB)+"?mode=ro")
 	if err != nil {
 		return false, fmt.Errorf("open hermes state db: %w", err)
 	}

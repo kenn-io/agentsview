@@ -3,7 +3,9 @@ package parser
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -668,7 +670,13 @@ func (s openCodeFormatSourceSet) sourcesForChangedPathInRoot(
 
 func sqliteWALHasFrames(path string) bool {
 	info, err := os.Stat(path)
-	if err != nil || info == nil {
+	if err != nil {
+		// Only a missing WAL is a definitive no-op. Other stat failures fail
+		// open so a real update is synced instead of silently dropped; at
+		// worst that costs one redundant sync.
+		return !errors.Is(err, fs.ErrNotExist)
+	}
+	if info == nil {
 		return false
 	}
 	return info.Mode().IsRegular() && info.Size() > sqliteWALHeaderSize

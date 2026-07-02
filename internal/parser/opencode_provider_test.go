@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -230,6 +231,27 @@ func TestOpenCodeProviderIgnoresNonDataSQLiteSidecars(t *testing.T) {
 			assert.Empty(t, changed)
 		})
 	}
+}
+
+func TestSQLiteWALHasFramesFailsOpenOnStatError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("directory-permission stat failures are not portable to Windows")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory permissions")
+	}
+
+	locked := filepath.Join(t.TempDir(), "locked")
+	require.NoError(t, os.Mkdir(locked, 0o700))
+	walPath := filepath.Join(locked, "opencode.db-wal")
+	require.NoError(t, os.WriteFile(walPath, make([]byte, 64), 0o600))
+	require.NoError(t, os.Chmod(locked, 0o000))
+	t.Cleanup(func() {
+		require.NoError(t, os.Chmod(locked, 0o700))
+	})
+
+	assert.True(t, sqliteWALHasFrames(walPath),
+		"stat errors other than not-exist must fail open so real WAL updates are not dropped")
 }
 
 func TestOpenCodeProviderReadsLiveSQLiteWAL(t *testing.T) {
