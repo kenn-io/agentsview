@@ -197,6 +197,8 @@
       }
     }
   ],
+  "session_breadcrumb_antigravity_decode_confidence_low": "未识别架构",
+  "session_breadcrumb_antigravity_decode_confidence_low_tooltip": "此会话来自无法识别的（更新版本）Antigravity 构建。解码为启发式推断，可能不完整或有误。",
   "session_find_find_in_session": "在会话中查找",
   "session_find_placeholder": "在会话中查找...",
   "session_find_search_query": "搜索关键词",

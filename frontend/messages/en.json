@@ -202,6 +202,8 @@
       }
     }
   ],
+  "session_breadcrumb_antigravity_decode_confidence_low": "Unverified schema",
+  "session_breadcrumb_antigravity_decode_confidence_low_tooltip": "This session came from an unrecognized (newer) Antigravity build. The decode is heuristic and may be incomplete or wrong.",
   "session_find_find_in_session": "Find in session",
   "session_find_placeholder": "Find in session...",
   "session_find_search_query": "Search query",

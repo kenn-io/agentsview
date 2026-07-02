@@ -92,6 +92,16 @@ type AnomalyStats struct {
 	// MalformedLinesTotal is the grand total across all agents.
 	MalformedLinesTotal int `json:"malformed_lines_total,omitempty"`
 
+	// UnknownSchemaSessionsByAgent maps an agent type to the number of
+	// sessions written this run that were decoded from an unrecognized
+	// (newer) Antigravity schema -- source_version carries an "agy-schema:"
+	// marker, so the heuristic decode may be incomplete or wrong. Unlike the
+	// malformed-line counter this counts whole SESSIONS, not lines. Only
+	// non-zero agents are present.
+	UnknownSchemaSessionsByAgent map[string]int `json:"unknown_schema_sessions_by_agent,omitempty"`
+	// UnknownSchemaSessionsTotal is the grand total across all agents.
+	UnknownSchemaSessionsTotal int `json:"unknown_schema_sessions_total,omitempty"`
+
 	// Sanitize aggregates the central validation/sanitization fix counts
 	// across every session, message, and usage event written this run.
 	Sanitize SanitizeStats `json:"sanitize,omitzero"`
@@ -123,7 +133,9 @@ func (s SanitizeStats) IsZero() bool {
 // IsZero reports whether the run observed no anomalies at all, so the CLI
 // summary can omit the anomaly section entirely on clean runs.
 func (a AnomalyStats) IsZero() bool {
-	return a.MalformedLinesTotal == 0 && a.Sanitize.IsZero()
+	return a.MalformedLinesTotal == 0 &&
+		a.UnknownSchemaSessionsTotal == 0 &&
+		a.Sanitize.IsZero()
 }
 
 // RecordMalformedLines attributes n parser malformed lines to the given
@@ -140,6 +152,20 @@ func (a *AnomalyStats) RecordMalformedLines(agent string, n int) {
 	a.MalformedLinesTotal += n
 }
 
+// RecordUnknownSchemaSessions attributes n unrecognized-schema sessions to the
+// given agent and updates the grand total. A non-positive count is ignored so
+// clean agents do not appear in the per-agent breakdown.
+func (a *AnomalyStats) RecordUnknownSchemaSessions(agent string, n int) {
+	if n <= 0 {
+		return
+	}
+	if a.UnknownSchemaSessionsByAgent == nil {
+		a.UnknownSchemaSessionsByAgent = make(map[string]int)
+	}
+	a.UnknownSchemaSessionsByAgent[agent] += n
+	a.UnknownSchemaSessionsTotal += n
+}
+
 // addSanitize accumulates the per-category counts from one
 // validateAndSanitize pass into the aggregate.
 func (a *AnomalyStats) addSanitize(v validationStats) {
@@ -154,6 +180,9 @@ func (a *AnomalyStats) addSanitize(v validationStats) {
 func (a *AnomalyStats) merge(o AnomalyStats) {
 	for agent, n := range o.MalformedLinesByAgent {
 		a.RecordMalformedLines(agent, n)
+	}
+	for agent, n := range o.UnknownSchemaSessionsByAgent {
+		a.RecordUnknownSchemaSessions(agent, n)
 	}
 	a.Sanitize.ControlCharsStripped += o.Sanitize.ControlCharsStripped
 	a.Sanitize.ModelClamped += o.Sanitize.ModelClamped
@@ -210,6 +239,16 @@ func (a *anomalyAccumulator) recordMalformedLines(
 		a.malformedFiles[sourcePath] = true
 	}
 	a.stats.RecordMalformedLines(agent, n)
+}
+
+// recordUnknownSchemaSession attributes one unrecognized-schema session to the
+// given agent. Unlike malformed lines this counts whole sessions, so it is not
+// deduplicated per source path: a source that forks into several sessions
+// records each fork.
+func (a *anomalyAccumulator) recordUnknownSchemaSession(agent string) {
+	a.mu.Lock()
+	a.stats.RecordUnknownSchemaSessions(agent, 1)
+	a.mu.Unlock()
 }
 
 // recordSanitize accumulates one validateAndSanitize pass's fix counts.

@@ -72,7 +72,13 @@ func (b *directBackend) FindSessionIDsByPartial(
 // buildSessionDetail wraps a db.Session with its computed health
 // breakdown. The same shape is returned by GET /api/v1/sessions/{id}.
 func buildSessionDetail(s *db.Session) *SessionDetail {
-	detail := &SessionDetail{Session: *s}
+	detail := &SessionDetail{
+		Session: *s,
+		// Derive-on-read: no persisted column. Computed once here from the
+		// session's agent and source_version so MarshalJSON just passes the
+		// field through and the HTTP backend round-trips it.
+		DecodeConfidence: parser.DecodeConfidence(s.Agent, s.SourceVersion),
+	}
 	if s.HealthScore != nil {
 		result := signals.ComputeHealthScore(signals.ScoreInput{
 			Outcome:                s.Outcome,

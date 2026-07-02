@@ -139,10 +139,22 @@ type SessionDetail struct {
 	db.Session
 	HealthScoreBasis []string       `json:"health_score_basis,omitempty"`
 	HealthPenalties  map[string]int `json:"health_penalties,omitempty"`
+	// DecodeConfidence is a derive-on-read Antigravity marker: it has no
+	// persisted column. The serving side (buildSessionDetail) computes it
+	// once from the session's agent and source_version via
+	// parser.DecodeConfidence, so the "agy-schema:" prefix knowledge stays
+	// Go-only. It is a real reflected field so Huma/OpenAPI and the generated
+	// TypeScript client document and type the response property; MarshalJSON
+	// passes the field through and UnmarshalJSON restores it so the HTTP
+	// backend round-trips it rather than dropping it.
+	DecodeConfidence string `json:"decode_confidence,omitempty"`
 }
 
 // MarshalJSON preserves the grouped db.Session quality_signals field
-// while also exposing detail-only health explanation fields.
+// while also exposing the detail-only health explanation fields and the
+// derived Antigravity decode-confidence marker. DecodeConfidence is passed
+// through from the field populated at construction (see buildSessionDetail),
+// not recomputed here.
 func (d SessionDetail) MarshalJSON() ([]byte, error) {
 	type sessionAlias db.Session
 	return json.Marshal(struct {
@@ -150,16 +162,19 @@ func (d SessionDetail) MarshalJSON() ([]byte, error) {
 		QualitySignals   *db.QualitySignals `json:"quality_signals,omitempty"`
 		HealthScoreBasis []string           `json:"health_score_basis,omitempty"`
 		HealthPenalties  map[string]int     `json:"health_penalties,omitempty"`
+		DecodeConfidence string             `json:"decode_confidence,omitempty"`
 	}{
 		sessionAlias:     sessionAlias(d.Session),
 		QualitySignals:   d.StoredQualitySignals(),
 		HealthScoreBasis: d.HealthScoreBasis,
 		HealthPenalties:  d.HealthPenalties,
+		DecodeConfidence: d.DecodeConfidence,
 	})
 }
 
-// UnmarshalJSON preserves the grouped quality_signals object when
-// SessionDetail is decoded by the HTTP-backed service.
+// UnmarshalJSON preserves the grouped quality_signals object and the
+// derived decode_confidence marker when SessionDetail is decoded by the
+// HTTP-backed service.
 func (d *SessionDetail) UnmarshalJSON(data []byte) error {
 	type sessionAlias db.Session
 	var v struct {
@@ -167,6 +182,7 @@ func (d *SessionDetail) UnmarshalJSON(data []byte) error {
 		QualitySignals   *db.QualitySignals `json:"quality_signals"`
 		HealthScoreBasis []string           `json:"health_score_basis"`
 		HealthPenalties  map[string]int     `json:"health_penalties"`
+		DecodeConfidence string             `json:"decode_confidence"`
 	}
 	if err := json.Unmarshal(data, &v); err != nil {
 		return err
@@ -175,6 +191,7 @@ func (d *SessionDetail) UnmarshalJSON(data []byte) error {
 	d.ApplyQualitySignals(v.QualitySignals)
 	d.HealthScoreBasis = v.HealthScoreBasis
 	d.HealthPenalties = v.HealthPenalties
+	d.DecodeConfidence = v.DecodeConfidence
 	return nil
 }
 

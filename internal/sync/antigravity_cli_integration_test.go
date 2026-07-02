@@ -24,6 +24,17 @@ const antigravityCLITestSchema = `
 		PRIMARY KEY (idx))
 `
 
+// agyCLIUnknownSchemaAnomaly is the anomaly a run produces when it writes n
+// antigravity-cli sessions from the minimal test schema above. That schema is
+// not the recognized agy baseline, so its fingerprint maps to an "agy-schema:"
+// source_version and the decode-confidence rule flags it as low confidence.
+func agyCLIUnknownSchemaAnomaly(n int) sync.AnomalyStats {
+	return sync.AnomalyStats{
+		UnknownSchemaSessionsByAgent: map[string]int{"antigravity-cli": n},
+		UnknownSchemaSessionsTotal:   n,
+	}
+}
+
 func TestSyncEngineAntigravityCLI_HappyPath(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
 	uuid := "33333333-4444-5555-6666-777777777777"
@@ -214,6 +225,7 @@ func TestSyncEngineAntigravityCLI_SyncAllSinceReSyncsDBWalUpdate(t *testing.T) {
 		TotalSessions: 1,
 		Synced:        1,
 		Skipped:       0,
+		Anomalies:     agyCLIUnknownSchemaAnomaly(1),
 	})
 
 	baseInfo, err := os.Stat(dbPath)
@@ -305,6 +317,7 @@ func TestSyncEngineAntigravityCLI_DBFallbackRetries(t *testing.T) {
 		TotalSessions: 2,
 		Synced:        2,
 		Skipped:       0,
+		Anomalies:     agyCLIUnknownSchemaAnomaly(1),
 	})
 
 	assertSessionMessageCount(t, env.db, malformedSessionID, 1)
@@ -327,6 +340,7 @@ func TestSyncEngineAntigravityCLI_DBFallbackRetries(t *testing.T) {
 		TotalSessions: 2,
 		Synced:        2,
 		Skipped:       0,
+		Anomalies:     agyCLIUnknownSchemaAnomaly(1),
 	})
 	assert.Less(t, env.db.GetSessionDataVersion(malformedSessionID), db.CurrentDataVersion(),
 		"DB decode fallback should demote previously current rows")
@@ -337,6 +351,7 @@ func TestSyncEngineAntigravityCLI_DBFallbackRetries(t *testing.T) {
 		TotalSessions: 2,
 		Synced:        2,
 		Skipped:       0,
+		Anomalies:     agyCLIUnknownSchemaAnomaly(1),
 	})
 	assert.Less(t, env.db.GetSessionDataVersion(malformedSessionID), db.CurrentDataVersion(),
 		"unchanged DB decode fallback should keep retrying")
@@ -365,6 +380,7 @@ func TestSyncEngineAntigravityCLI_NeedsRetryReplacesCurrentMessages(t *testing.T
 		TotalSessions: 1,
 		Synced:        1,
 		Skipped:       0,
+		Anomalies:     agyCLIUnknownSchemaAnomaly(1),
 	})
 	assertSessionMessageCount(t, env.db, sessionID, 2)
 	assert.Equal(t, db.CurrentDataVersion(), env.db.GetSessionDataVersion(sessionID))
@@ -487,6 +503,7 @@ func TestSyncEngineAntigravityCLI_InferredProjectWithoutConversationID(t *testin
 				TotalSessions: 1,
 				Synced:        1,
 				Skipped:       0,
+				Anomalies:     agyCLIUnknownSchemaAnomaly(1),
 			})
 
 			assertSessionProject(t, env.db, sessionID, tt.wantProject)
@@ -534,6 +551,7 @@ func TestSyncPathsAntigravityCLIHistoryOnlyUpdateRefreshesProject(t *testing.T) 
 		TotalSessions: 1,
 		Synced:        1,
 		Skipped:       0,
+		Anomalies:     agyCLIUnknownSchemaAnomaly(1),
 	})
 	assertSessionProject(t, env.db, sessionID, "")
 
@@ -584,6 +602,7 @@ func TestSyncPathsAntigravityCLIHistoryRetagClearsRemovedProject(t *testing.T) {
 		TotalSessions: 2,
 		Synced:        2,
 		Skipped:       0,
+		Anomalies:     agyCLIUnknownSchemaAnomaly(2),
 	})
 	assertSessionProject(t, env.db, removedSessionID, "/home/user/removed")
 	assertSessionProject(t, env.db, retaggedSessionID, "/home/user/retagged")

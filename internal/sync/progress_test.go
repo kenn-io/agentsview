@@ -103,6 +103,85 @@ func TestAnomalyStats_RecordMalformedLines(t *testing.T) {
 	}
 }
 
+func TestAnomalyStats_RecordUnknownSchemaSessions(t *testing.T) {
+	tests := []struct {
+		name    string
+		records []struct {
+			agent string
+			n     int
+		}
+		wantByAgent map[string]int
+		wantTotal   int
+	}{
+		{
+			name:        "clean run records nothing",
+			wantByAgent: nil,
+			wantTotal:   0,
+		},
+		{
+			name: "zero and negative counts are ignored",
+			records: []struct {
+				agent string
+				n     int
+			}{
+				{"antigravity", 0},
+				{"antigravity-cli", -2},
+			},
+			wantByAgent: nil,
+			wantTotal:   0,
+		},
+		{
+			name: "per-agent breakdown plus grand total",
+			records: []struct {
+				agent string
+				n     int
+			}{
+				{"antigravity", 1},
+				{"antigravity-cli", 2},
+				{"antigravity", 1},
+			},
+			wantByAgent: map[string]int{"antigravity": 2, "antigravity-cli": 2},
+			wantTotal:   4,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var a AnomalyStats
+			for _, r := range tt.records {
+				a.RecordUnknownSchemaSessions(r.agent, r.n)
+			}
+			assert.Equal(t, tt.wantByAgent, a.UnknownSchemaSessionsByAgent)
+			assert.Equal(t, tt.wantTotal, a.UnknownSchemaSessionsTotal)
+		})
+	}
+}
+
+// TestAnomalyAccumulator_RecordUnknownSchemaSession verifies whole-session
+// accumulation per agent (no per-source dedup) and that a reset clears it.
+func TestAnomalyAccumulator_RecordUnknownSchemaSession(t *testing.T) {
+	var acc anomalyAccumulator
+	acc.reset()
+
+	acc.recordUnknownSchemaSession("antigravity")
+	acc.recordUnknownSchemaSession("antigravity")
+	acc.recordUnknownSchemaSession("antigravity-cli")
+
+	var stats SyncStats
+	acc.applyTo(&stats)
+	assert.Equal(t, 3, stats.Anomalies.UnknownSchemaSessionsTotal)
+	assert.Equal(t, map[string]int{"antigravity": 2, "antigravity-cli": 1},
+		stats.Anomalies.UnknownSchemaSessionsByAgent)
+	assert.False(t, stats.Anomalies.IsZero())
+
+	// A fresh run starts from zero.
+	acc.reset()
+	var next SyncStats
+	acc.applyTo(&next)
+	assert.True(t, next.Anomalies.IsZero())
+	assert.Zero(t, next.Anomalies.UnknownSchemaSessionsTotal)
+	assert.Nil(t, next.Anomalies.UnknownSchemaSessionsByAgent)
+}
+
 func TestAnomalyAccumulator_Aggregate(t *testing.T) {
 	var acc anomalyAccumulator
 	acc.reset()
@@ -183,6 +262,11 @@ func TestAnomalyStats_IsZero(t *testing.T) {
 		{
 			name: "malformed only",
 			a:    AnomalyStats{MalformedLinesTotal: 1},
+			want: false,
+		},
+		{
+			name: "unknown schema only",
+			a:    AnomalyStats{UnknownSchemaSessionsTotal: 1},
 			want: false,
 		},
 		{

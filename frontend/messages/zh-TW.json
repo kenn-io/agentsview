@@ -197,6 +197,8 @@
       }
     }
   ],
+  "session_breadcrumb_antigravity_decode_confidence_low": "未識別架構",
+  "session_breadcrumb_antigravity_decode_confidence_low_tooltip": "此會話來自無法識別的（較新版本）Antigravity 建置。解碼為啟發式推斷，可能不完整或有誤。",
   "session_find_find_in_session": "在會話中查找",
   "session_find_placeholder": "在會話中查找...",
   "session_find_search_query": "搜索關鍵詞",

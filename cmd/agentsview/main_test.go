@@ -920,6 +920,22 @@ func TestFormatAnomalySummary(t *testing.T) {
 				"timestamps blanked: 1",
 			},
 		},
+		{
+			name: "unknown schema sessions only",
+			anomalies: agentsync.AnomalyStats{
+				UnknownSchemaSessionsByAgent: map[string]int{
+					"antigravity": 2, "antigravity-cli": 1,
+				},
+				UnknownSchemaSessionsTotal: 3,
+			},
+			wantContain: []string{
+				"Parser anomalies (this run):",
+				"unrecognized schema sessions: 3 total",
+				"antigravity: 2",
+				"antigravity-cli: 1",
+			},
+			wantOmit: []string{"malformed lines", "sanitized fields"},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

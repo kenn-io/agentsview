@@ -574,6 +574,12 @@
           count: session.parser_malformed_lines,
         })}</span>
       {/if}
+      {#if (session.agent === "antigravity" || session.agent === "antigravity-cli") && session.decode_confidence === "low"}
+        <span
+          class="decode-badge"
+          title={m.session_breadcrumb_antigravity_decode_confidence_low_tooltip()}
+        >{m.session_breadcrumb_antigravity_decode_confidence_low()}</span>
+      {/if}
       {#if session.started_at}
         <span class="session-time">
           {new Date(session.started_at).toLocaleDateString(
@@ -904,6 +910,21 @@
     border: 1px solid color-mix(in srgb, var(--accent-amber, #e0a458) 40%, transparent);
     white-space: nowrap;
     cursor: default;
+  }
+
+  .decode-badge {
+    font-size: 9px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    flex-shrink: 0;
+    color: var(--accent-red, #e55);
+    background: color-mix(in srgb, var(--accent-red, #e55) 16%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-red, #e55) 45%, transparent);
+    white-space: nowrap;
+    cursor: help;
   }
 
   .session-time {

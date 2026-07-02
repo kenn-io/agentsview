@@ -118,8 +118,10 @@ func TestDoctorSyncNewerDatabaseReportsRefusedStartup(t *testing.T) {
 func TestWriteDoctorSummaryMode(t *testing.T) {
 	var buf bytes.Buffer
 	writeDoctorSummaryMode(&buf, doctorSyncReport{
-		AntigravityCLITotal:   12,
-		AntigravityCLISummary: 5,
+		doctorDBInspection: doctorDBInspection{
+			AntigravityCLITotal:   12,
+			AntigravityCLISummary: 5,
+		},
 	})
 	out := buf.String()
 	assert.Contains(t, out, "antigravity-cli")
@@ -131,7 +133,9 @@ func TestWriteDoctorSummaryMode(t *testing.T) {
 func TestWriteDoctorSummaryModeSilentWhenNone(t *testing.T) {
 	var buf bytes.Buffer
 	writeDoctorSummaryMode(&buf, doctorSyncReport{
-		AntigravityCLITotal: 12, AntigravityCLISummary: 0,
+		doctorDBInspection: doctorDBInspection{
+			AntigravityCLITotal: 12, AntigravityCLISummary: 0,
+		},
 	})
 	assert.NotContains(t, buf.String(), "summary mode")
 }
@@ -139,9 +143,44 @@ func TestWriteDoctorSummaryModeSilentWhenNone(t *testing.T) {
 func TestWriteDoctorSummaryModeSilentOnErr(t *testing.T) {
 	var buf bytes.Buffer
 	writeDoctorSummaryMode(&buf, doctorSyncReport{
-		AntigravityCLITotal:   12,
-		AntigravityCLISummary: 5,
-		SummaryModeErr:        errors.New("query failed"),
+		doctorDBInspection: doctorDBInspection{
+			AntigravityCLITotal:   12,
+			AntigravityCLISummary: 5,
+			AntigravityCountsErr:  errors.New("query failed"),
+		},
+	})
+	assert.Empty(t, buf.String())
+}
+
+func TestWriteDoctorUnknownSchema(t *testing.T) {
+	var buf bytes.Buffer
+	writeDoctorUnknownSchema(&buf, doctorSyncReport{
+		doctorDBInspection: doctorDBInspection{
+			AntigravityUnknownSchema: 3,
+		},
+	})
+	out := buf.String()
+	assert.Contains(t, out, "3 session(s) on unrecognized Antigravity schema")
+	assert.Contains(t, out, "agy-schema:")
+}
+
+func TestWriteDoctorUnknownSchemaSilentWhenNone(t *testing.T) {
+	var buf bytes.Buffer
+	writeDoctorUnknownSchema(&buf, doctorSyncReport{
+		doctorDBInspection: doctorDBInspection{
+			AntigravityUnknownSchema: 0,
+		},
+	})
+	assert.Empty(t, buf.String())
+}
+
+func TestWriteDoctorUnknownSchemaSilentOnErr(t *testing.T) {
+	var buf bytes.Buffer
+	writeDoctorUnknownSchema(&buf, doctorSyncReport{
+		doctorDBInspection: doctorDBInspection{
+			AntigravityUnknownSchema: 3,
+			AntigravityCountsErr:     errors.New("query failed"),
+		},
 	})
 	assert.Empty(t, buf.String())
 }
@@ -173,10 +212,53 @@ func TestInspectDoctorDBCountsAntigravityCLISummaryMode(t *testing.T) {
 	}), "upsert other-agent session")
 	require.NoError(t, database.Close(), "close db")
 
-	_, _, _, _, _, _, total, summary, summaryErr := inspectDoctorDB(dbPath)
-	require.NoError(t, summaryErr, "summary mode query")
-	assert.Equal(t, 2, total, "AntigravityCLITotal")
-	assert.Equal(t, 1, summary, "AntigravityCLISummary")
+	insp := inspectDoctorDB(dbPath)
+	require.NoError(t, insp.AntigravityCountsErr, "antigravity counts query")
+	assert.Equal(t, 2, insp.AntigravityCLITotal, "AntigravityCLITotal")
+	assert.Equal(t, 1, insp.AntigravityCLISummary, "AntigravityCLISummary")
+}
+
+// TestInspectDoctorDBCountsUnknownSchema verifies the unrecognized-schema
+// count spans both Antigravity agents and excludes known-range labels and
+// other agents that carry a generic source_version.
+func TestInspectDoctorDBCountsUnknownSchema(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "sessions.db")
+
+	database := dbtest.OpenTestDBAt(t, dbPath)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:            "agy-ide-unknown",
+		Agent:         "antigravity",
+		Machine:       "local",
+		Project:       "proj",
+		SourceVersion: "agy-schema:abc123def456",
+	}), "upsert IDE unknown-schema session")
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:            "agy-cli-unknown",
+		Agent:         "antigravity-cli",
+		Machine:       "local",
+		Project:       "proj",
+		SourceVersion: "agy-schema:abc123def456",
+	}), "upsert CLI unknown-schema session")
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:            "agy-known",
+		Agent:         "antigravity-cli",
+		Machine:       "local",
+		Project:       "proj",
+		SourceVersion: "1.0.7-1.0.10",
+	}), "upsert known-range session")
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:            "piebald-generic",
+		Agent:         "piebald",
+		Machine:       "local",
+		Project:       "proj",
+		SourceVersion: "piebald-appdb-v1",
+	}), "upsert non-antigravity session")
+	require.NoError(t, database.Close(), "close db")
+
+	insp := inspectDoctorDB(dbPath)
+	require.NoError(t, insp.AntigravityCountsErr, "antigravity counts query")
+	assert.Equal(t, 2, insp.AntigravityUnknownSchema, "AntigravityUnknownSchema")
 }
 
 func TestDoctorSyncReportStatErrorDoesNotRenderAsMissingDatabase(t *testing.T) {
@@ -185,8 +267,10 @@ func TestDoctorSyncReportStatErrorDoesNotRenderAsMissingDatabase(t *testing.T) {
 			DataDir: "/data",
 			DBPath:  "/data/sessions.db",
 		},
-		DBExists: false,
-		DBError:  errors.New("stat /data/sessions.db: permission denied"),
+		doctorDBInspection: doctorDBInspection{
+			DBExists: false,
+			DBError:  errors.New("stat /data/sessions.db: permission denied"),
+		},
 	}
 
 	var out bytes.Buffer

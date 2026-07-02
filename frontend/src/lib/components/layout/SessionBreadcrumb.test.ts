@@ -585,6 +585,85 @@ describe("SessionBreadcrumb", () => {
     });
   });
 
+  describe("decode-confidence badge", () => {
+    it("shows the badge for low-confidence antigravity", async () => {
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: {
+          session: makeSession("antigravity", {
+            decode_confidence: "low",
+          }),
+          onBack: () => {},
+        },
+      });
+      await tick();
+      const badge = document.querySelector(".decode-badge");
+      expect(badge).toBeTruthy();
+      expect(badge?.textContent?.trim().toLowerCase()).toContain(
+        "unverified schema",
+      );
+      unmount(component);
+    });
+
+    it("shows the badge for low-confidence antigravity-cli", async () => {
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: {
+          session: makeSession("antigravity-cli", {
+            decode_confidence: "low",
+          }),
+          onBack: () => {},
+        },
+      });
+      await tick();
+      expect(document.querySelector(".decode-badge")).toBeTruthy();
+      unmount(component);
+    });
+
+    it("hides the badge for high confidence", async () => {
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: {
+          session: makeSession("antigravity", {
+            decode_confidence: "high",
+          }),
+          onBack: () => {},
+        },
+      });
+      await tick();
+      expect(document.querySelector(".decode-badge")).toBeNull();
+      unmount(component);
+    });
+
+    it("hides the badge when confidence is absent", async () => {
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: {
+          session: makeSession("antigravity"),
+          onBack: () => {},
+        },
+      });
+      await tick();
+      expect(document.querySelector(".decode-badge")).toBeNull();
+      unmount(component);
+    });
+
+    it("hides the badge for non-antigravity agents", async () => {
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: {
+          session: makeSession("claude", {
+            decode_confidence: "low",
+          }),
+          onBack: () => {},
+        },
+      });
+      await tick();
+      expect(document.querySelector(".decode-badge")).toBeNull();
+      unmount(component);
+    });
+  });
+
   it("hides local-only actions for remote sessions", async () => {
     const component = mount(SessionBreadcrumb, {
       target: document.body,

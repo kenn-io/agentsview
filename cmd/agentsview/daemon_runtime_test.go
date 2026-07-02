@@ -239,6 +239,44 @@ func runtimeTestDir(t *testing.T) string {
 	return dir
 }
 
+// TestSameProcessStartMarkerNeverReportsExternal hammers the race between
+// markDaemonStarting's flock-acquire-then-register sequence and the
+// isExternalDaemonStarting probe: a start marker owned by this process must
+// never be classified as an external daemon startup, even mid-acquisition.
+// Misclassification makes waitForExternalServeStartup return before the
+// same-process owner publishes its runtime record, which surfaced as a flaky
+// "serve --background is already in progress" error in
+// TestEnsureBackgroundServeConcurrentLaunchConvergesOnDaemon.
+func TestSameProcessStartMarkerNeverReportsExternal(t *testing.T) {
+	dir := runtimeTestDir(t)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			MarkDaemonStarting(dir)
+			UnmarkDaemonStarting(dir)
+		}
+	})
+	t.Cleanup(func() {
+		close(stop)
+		wg.Wait()
+		UnmarkDaemonStarting(dir)
+	})
+
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		require.False(t, isExternalDaemonStarting(dir),
+			"same-process start marker reported as external")
+	}
+}
+
 func holdExternalDaemonStartLock(t *testing.T, dataDir string) func() {
 	t.Helper()
 	stdin := startExternalDaemonStartLockHelper(t, dataDir)

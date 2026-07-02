@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"strconv"
+	"strings"
 )
 
 // Antigravity session databases carry no literal product version: PRAGMA
@@ -113,4 +114,44 @@ func antigravitySourceVersion(db *sql.DB) string {
 		return ""
 	}
 	return antigravitySchemaLabel(fp)
+}
+
+// DecodeConfidence values classify how much trust the schema-fingerprint
+// decode of an Antigravity session warrants. They are consumed by the
+// session-detail badge (as string literals) and the operator surfaces.
+const (
+	DecodeConfidenceHigh = "high"
+	DecodeConfidenceLow  = "low"
+)
+
+// DecodeConfidence reports how much to trust the heuristic decode of an
+// Antigravity session, derived purely from its already-computed source_version
+// label (see antigravitySchemaLabel). It is the single source of truth for the
+// rule, shared by the service layer (session-detail badge), the doctor
+// diagnostics, and the sync anomaly counter, so the "agy-schema:" prefix
+// knowledge stays in one place next to the label logic.
+//
+// The agent gate is mandatory: SourceVersion is a generic field that other
+// parsers also populate (piebald.go sets "piebald-appdb-v1", commandcode.go
+// sets "2"), so a non-empty label alone must never imply confidence. Both the
+// IDE agent ("antigravity") and the CLI agent ("antigravity-cli") classify
+// identically because both .db parse paths compute the same fingerprint.
+//
+//   - antigravity / antigravity-cli with an "agy-schema:" label (an
+//     unrecognized, newer schema) -> "low": the decode is heuristic and may be
+//     incomplete or wrong.
+//   - antigravity / antigravity-cli with any other non-empty label (a known
+//     release range) -> "high".
+//   - empty label, or any other agent -> "" (no value, no badge).
+func DecodeConfidence(agent, sourceVersion string) string {
+	if agent != string(AgentAntigravity) && agent != string(AgentAntigravityCLI) {
+		return ""
+	}
+	if sourceVersion == "" {
+		return ""
+	}
+	if strings.HasPrefix(sourceVersion, antigravitySchemaUnknownPrefix) {
+		return DecodeConfidenceLow
+	}
+	return DecodeConfidenceHigh
 }

@@ -5643,6 +5643,13 @@ func (e *Engine) prepareSessionWrite(
 	e.anomalies.recordMalformedLines(
 		s.Agent, pw.sess.File.Path, s.ParserMalformedLines,
 	)
+	// An Antigravity session decoded from an unrecognized (newer) schema
+	// carries an "agy-schema:" source_version; count it as an early warning
+	// that a new agy build may have broken the heuristic decode. Reuse the
+	// single-source-of-truth rule so the agent gate stays in one place.
+	if parser.DecodeConfidence(s.Agent, s.SourceVersion) == parser.DecodeConfidenceLow {
+		e.anomalies.recordUnknownSchemaSession(s.Agent)
+	}
 
 	// A per-row token clamp must not leave an inflated value stranded in a
 	// row-derived session total while the row that produced it was clamped.

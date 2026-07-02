@@ -836,6 +836,19 @@ func formatAnomalySummary(a sync.AnomalyStats) string {
 			)
 		}
 	}
+	if a.UnknownSchemaSessionsTotal > 0 {
+		fmt.Fprintf(&b,
+			"  unrecognized schema sessions: %d total\n",
+			a.UnknownSchemaSessionsTotal,
+		)
+		for _, agent := range slices.Sorted(
+			maps.Keys(a.UnknownSchemaSessionsByAgent),
+		) {
+			fmt.Fprintf(&b,
+				"    %s: %d\n", agent, a.UnknownSchemaSessionsByAgent[agent],
+			)
+		}
+	}
 	if !a.Sanitize.IsZero() {
 		fmt.Fprintf(&b,
 			"  sanitized fields: %d total\n", a.Sanitize.Total(),
