@@ -3625,14 +3625,14 @@ func (s *Store) GetDailyUsage(
 	result.Totals.CacheSavings = roundCost(totalSavings)
 	result.Totals.TotalCost = roundCost(result.Totals.TotalCost)
 
-	var copilotCost float64
+	var aiCreditCost float64
 	for key, b := range accum {
 		if parser.AgentNameUsesAICredits(key.agent) {
-			copilotCost += b.cost
+			aiCreditCost += b.cost
 		}
 	}
-	if copilotCost > 0 {
-		result.Totals.CopilotAICredits = copilotCost / 0.01
+	if aiCreditCost > 0 {
+		result.Totals.CopilotAICredits = aiCreditCost / 0.01
 	}
 
 	if result.Daily == nil {

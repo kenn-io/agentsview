@@ -1829,14 +1829,14 @@ func (db *DB) GetDailyUsage(
 		}
 		totals.CacheSavings = totalSavings
 
-		var copilotCost float64
+		var aiCreditCost float64
 		for key, b := range accum {
 			if parser.AgentNameUsesAICredits(key.agent) {
-				copilotCost += b.cost
+				aiCreditCost += b.cost
 			}
 		}
-		if copilotCost > 0 {
-			totals.CopilotAICredits = copilotCost / 0.01
+		if aiCreditCost > 0 {
+			totals.CopilotAICredits = aiCreditCost / 0.01
 		}
 		var sessionCounts UsageSessionCounts
 		if seenSessions != nil {
@@ -2004,16 +2004,16 @@ func (db *DB) GetDailyUsage(
 
 	totals.CacheSavings = totalSavings
 
-	var copilotCost float64
+	var aiCreditCost float64
 	for _, d := range daily {
 		for _, ab := range d.AgentBreakdowns {
 			if parser.AgentNameUsesAICredits(ab.Agent) {
-				copilotCost += ab.Cost
+				aiCreditCost += ab.Cost
 			}
 		}
 	}
-	if copilotCost > 0 {
-		totals.CopilotAICredits = copilotCost / 0.01
+	if aiCreditCost > 0 {
+		totals.CopilotAICredits = aiCreditCost / 0.01
 	}
 
 	var sessionCounts UsageSessionCounts
