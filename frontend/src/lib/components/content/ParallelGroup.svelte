@@ -70,7 +70,7 @@
 <style>
   .parallel-group {
     border-left: 2px solid var(--cat-mixed);
-    background: rgba(255, 255, 255, 0.025);
+    background: color-mix(in srgb, var(--text-primary) 3%, transparent);
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
     margin: 6px 0;
     padding: 4px 0;
@@ -79,7 +79,7 @@
   .pg-header {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-4);
     padding: 5px 12px 7px;
     font-family: var(--font-mono);
     font-size: 10px;
@@ -90,7 +90,7 @@
     font-weight: 500;
   }
   .pg-count {
-    background: rgba(255, 255, 255, 0.06);
+    background: color-mix(in srgb, var(--text-primary) 6%, transparent);
     padding: 1px 7px;
     border-radius: 999px;
     font-size: 9px;
@@ -114,7 +114,7 @@
     border-radius: 0;
   }
   .pg-members :global(.tool-block + .tool-block) {
-    border-top: 1px solid rgba(255, 255, 255, 0.04);
+    border-top: 1px solid color-mix(in srgb, var(--text-primary) 4%, transparent);
   }
   .pg-members :global(.tool-block:last-child) {
     border-bottom-right-radius: var(--radius-sm);

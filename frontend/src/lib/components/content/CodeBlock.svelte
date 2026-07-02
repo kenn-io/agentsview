@@ -69,6 +69,7 @@
   });
 </script>
 
+<!-- kit-ui-check-ignore: deliberately not kit-ui CodeBlock — copy must stay controlled through utils/clipboard.js (kit CodeBlock hardcodes self-managed CopyButton text mode) and the pre element hosts in-session find marks -->
 <div class="code-block">
   <CopyButton
     class="code-copy"
@@ -91,6 +92,7 @@
 </div>
 
 <style>
+  /* kit-ui-check-ignore: app-owned code block (controlled copy + search marks), see markup note above */
   .code-block {
     position: relative;
     background: var(--code-bg);
@@ -106,6 +108,7 @@
     z-index: 1;
   }
 
+  /* kit-ui-check-ignore: app-owned code block (controlled copy + search marks), see markup note above */
   .code-block:hover :global(.code-copy.kit-copy-btn) {
     opacity: 1;
   }
@@ -117,7 +120,9 @@
     font-weight: 500;
     color: var(--code-text);
     opacity: 0.5;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    /* --code-bg is dark in both themes, so derive the hairline from
+       --code-text rather than a theme-flipping border token. */
+    border-bottom: 1px solid color-mix(in srgb, var(--code-text) 8%, transparent);
   }
 
   .code-content {
@@ -133,7 +138,7 @@
     font-family: inherit;
   }
 
-  @media (max-width: 767px) {
+  @media (max-width: 760px) {
     .code-content {
       max-width: calc(100vw - 32px);
     }

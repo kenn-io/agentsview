@@ -610,7 +610,7 @@
   .stat-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 10px;
+    gap: var(--space-4);
     font-family: var(--font-mono);
     font-size: 11px;
   }
@@ -670,7 +670,7 @@
     transition: background 0.12s, opacity 0.18s, border-color 0.12s;
   }
   .agg-row:hover {
-    background: rgba(255, 255, 255, 0.03);
+    background: color-mix(in srgb, var(--text-primary) 3%, transparent);
   }
   .agg-row.active {
     background: color-mix(in srgb, var(--ring, transparent) 10%, transparent);
@@ -708,8 +708,8 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+    border: 1px solid color-mix(in srgb, var(--text-primary) 12%, transparent);
     padding: 2px 6px;
     border-radius: var(--radius-sm);
     font-family: var(--font-mono);
@@ -718,7 +718,7 @@
     color: var(--text-primary);
   }
   .filter-chip:hover {
-    background: rgba(255, 255, 255, 0.08);
+    background: color-mix(in srgb, var(--text-primary) 8%, transparent);
   }
   .filter-chip .x {
     display: inline-flex;
@@ -799,21 +799,22 @@
   }
 
   /* Calls section --------------------------------------------------- */
-  /* Copied verbatim from
+  /* Adapted from
      docs/superpowers/specs/2026-04-26-session-duration-ux-mockup.html
-     (.scale-axis and .calls rules, lines 498–516). */
+     (.scale-axis and .calls rules, lines 498–516), with the mockup's raw
+     colors mapped to theme tokens. */
   .scale-axis {
     display: flex;
     justify-content: space-between;
     font-family: ui-monospace, monospace;
     font-size: 9px;
-    color: #666;
+    color: var(--text-muted);
     padding: 0 4px 5px;
-    border-bottom: 1px solid #232323;
+    border-bottom: 1px solid var(--border-muted);
     margin-bottom: 8px;
   }
   .scale-axis .now {
-    color: #6ad0a8;
+    color: var(--running-fg);
     font-weight: 500;
   }
   .calls {

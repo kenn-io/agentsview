@@ -589,7 +589,7 @@
     border: 1px solid var(--border-default);
     border-radius: 8px;
     padding: 10px 18px;
-    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 6px 24px var(--overlay-bg);
     z-index: 10000;
     font-size: 13px;
     color: var(--text-primary);

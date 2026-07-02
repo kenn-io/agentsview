@@ -423,7 +423,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 7px;
+    gap: var(--space-4);
     height: 34px;
     font-size: 12px;
     font-weight: 500;
@@ -499,7 +499,7 @@
     padding: 24px;
     border: 2px dashed var(--border-default);
     cursor: pointer;
-    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.03);
+    box-shadow: inset 0 1px 3px color-mix(in srgb, var(--overlay-bg) 10%, transparent);
   }
 
   .zone-empty:hover {
@@ -572,7 +572,7 @@
   .file-row {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-4);
     width: 100%;
   }
 

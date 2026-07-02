@@ -186,7 +186,7 @@
   .bar-list {
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: var(--space-2);
   }
 
   .bar-row {

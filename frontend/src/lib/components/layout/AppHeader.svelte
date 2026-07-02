@@ -1011,7 +1011,7 @@
   .sync-btn {
     width: auto;
     min-width: 56px;
-    gap: 5px;
+    gap: var(--space-2);
     padding: 0 9px;
     font-size: 11px;
     font-weight: 500;
@@ -1029,7 +1029,7 @@
     height: 26px;
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: var(--space-2);
     padding: 0 10px;
     border-radius: var(--radius-sm);
     font-size: 11px;

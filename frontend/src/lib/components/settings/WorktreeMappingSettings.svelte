@@ -311,13 +311,13 @@
   .form-grid {
     display: grid;
     grid-template-columns: 1fr 160px;
-    gap: 10px;
+    gap: var(--space-5);
   }
 
   .field {
     display: flex;
     flex-direction: column;
-    gap: 5px;
+    gap: var(--space-3);
     min-width: 0;
   }
 
@@ -340,7 +340,7 @@
   .enabled-toggle {
     display: flex;
     align-items: center;
-    gap: 7px;
+    gap: var(--space-4);
     color: var(--text-secondary);
     font-size: 12px;
   }

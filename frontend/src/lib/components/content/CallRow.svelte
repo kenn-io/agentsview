@@ -110,15 +110,16 @@
 </div>
 
 <style>
-  /* Copied verbatim from
+  /* Adapted from
      docs/superpowers/specs/2026-04-26-session-duration-ux-mockup.html
-     (.call rules, lines 517–605). The .cn color is set via inline style
+     (.call rules, lines 517–605), with the mockup's raw dark-theme colors
+     mapped to theme tokens. The .cn color is set via inline style
      from categoryToken() rather than via .cn.read/.bash/etc class
      modifiers — that's the only structural deviation. */
   .call {
     display: grid;
     grid-template-columns: 14px 38px 1fr 56px 56px;
-    gap: 5px;
+    gap: var(--space-2);
     align-items: center;
     padding: 4px 5px;
     font-size: 10px;
@@ -128,21 +129,21 @@
     cursor: pointer;
   }
   .call.interactive:hover {
-    background: rgba(255, 255, 255, 0.04);
+    background: color-mix(in srgb, var(--text-primary) 4%, transparent);
   }
   .call .chev {
     background: transparent;
     border: 0;
     padding: 0;
     cursor: pointer;
-    color: #666;
+    color: var(--text-muted);
     font: inherit;
     font-size: 10px;
     transition: transform 0.15s;
   }
   .call.expanded .chev {
     transform: rotate(90deg);
-    color: #ccc;
+    color: var(--text-secondary);
   }
   .call .chev.spacer {
     visibility: hidden;
@@ -155,7 +156,7 @@
   .call .ca {
     font-family: ui-monospace, monospace;
     font-size: 10px;
-    color: #888;
+    color: var(--text-muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -178,7 +179,7 @@
     opacity: 0.55;
     background-image: repeating-linear-gradient(
       45deg,
-      rgba(255, 255, 255, 0.18) 0 3px,
+      color-mix(in srgb, var(--text-primary) 18%, transparent) 0 3px,
       transparent 3px 6px
     );
   }
@@ -194,16 +195,16 @@
     transform-origin: left center;
   }
   .call.slow .cbar-wrap {
-    background: rgba(242, 144, 112, 0.1);
+    background: var(--slow-bg);
   }
   .call .cd {
     font-family: ui-monospace, monospace;
     font-size: 10px;
-    color: #999;
+    color: var(--text-secondary);
     text-align: right;
   }
   .call .cd.slow {
-    color: #f29070;
+    color: var(--slow-fg);
     display: flex;
     align-items: center;
     justify-content: flex-end;
@@ -215,14 +216,14 @@
     width: 4px;
     height: 4px;
     border-radius: 50%;
-    background: #f29070;
+    background: var(--slow-fg);
   }
   .call .cd.live {
     color: var(--running-fg);
     animation: duration-pulse 1.6s ease-in-out infinite;
   }
   .call .cd.muted {
-    color: #666;
+    color: var(--text-muted);
   }
   .call.dimmed {
     opacity: 0.3;

@@ -605,10 +605,10 @@
     font-family: var(--font-mono);
     font-size: 10px;
     color: var(--text-muted);
-    background: rgba(255, 255, 255, 0.04);
+    background: color-mix(in srgb, var(--text-primary) 4%, transparent);
     padding: 2px 8px;
     border-radius: var(--radius-sm);
-    border: 1px solid rgba(255, 255, 255, 0.04);
+    border: 1px solid color-mix(in srgb, var(--text-primary) 4%, transparent);
     white-space: nowrap;
     flex-shrink: 0;
   }

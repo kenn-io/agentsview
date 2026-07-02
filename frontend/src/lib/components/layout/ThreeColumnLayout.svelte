@@ -506,7 +506,7 @@
     -webkit-user-select: none;
   }
 
-  @media (max-width: 767px) {
+  @media (max-width: 760px) {
     .sidebar {
       position: fixed;
       top: var(--header-height, 40px);

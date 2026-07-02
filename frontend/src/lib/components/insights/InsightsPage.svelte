@@ -1375,7 +1375,7 @@
     padding: 18px;
     display: flex;
     flex-direction: column;
-    gap: 18px;
+    gap: var(--space-6);
   }
 
   .section-block {
@@ -1485,7 +1485,7 @@
   .summary-grid {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 10px;
+    gap: var(--space-5);
   }
 
   .summary-card,
@@ -1642,7 +1642,7 @@
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    gap: 10px;
+    gap: var(--space-4);
     padding: 10px;
     border-radius: var(--radius-sm);
     background: var(--bg-inset);
@@ -1667,7 +1667,7 @@
   .driver-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto auto auto;
-    gap: 10px;
+    gap: var(--space-4);
     align-items: baseline;
     width: 100%;
     min-height: 24px;
@@ -1712,7 +1712,7 @@
     height: 42px;
     display: flex;
     align-items: end;
-    gap: 3px;
+    gap: var(--space-1);
     padding: 6px 0 2px;
     border-top: 1px solid var(--border-muted);
     position: relative;
@@ -1770,7 +1770,7 @@
   .example-row {
     display: grid;
     grid-template-columns: minmax(90px, 0.35fr) 1fr;
-    gap: 10px;
+    gap: var(--space-4);
     font-size: 12px;
   }
 
@@ -1791,7 +1791,7 @@
 
   .evidence-panel {
     display: grid;
-    gap: 10px;
+    gap: var(--space-5);
     padding: 12px;
     background: var(--bg-surface);
     border: 1px solid var(--border-muted);
@@ -1875,13 +1875,13 @@
   .recommendation-list {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
+    gap: var(--space-5);
   }
 
   .recommendation {
     padding: 12px;
     display: grid;
-    gap: 7px;
+    gap: var(--space-3);
   }
 
   .recommendation strong {
@@ -1905,7 +1905,7 @@
     grid-template-columns:
       minmax(180px, 220px) minmax(130px, 160px)
       minmax(240px, 1fr) auto;
-    gap: 10px;
+    gap: var(--space-5);
     align-items: end;
     padding: 12px;
     background: var(--bg-surface);
@@ -1915,7 +1915,7 @@
 
   .generated-control {
     display: grid;
-    gap: 5px;
+    gap: var(--space-2);
     min-width: 0;
   }
 
@@ -2282,7 +2282,7 @@
     }
   }
 
-  @media (max-width: 980px) {
+  @media (max-width: 900px) {
     .toolbar,
     .section-heading {
       align-items: stretch;

@@ -199,7 +199,7 @@
   .pinned-header {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-4);
     margin-bottom: 28px;
   }
 
@@ -389,7 +389,7 @@
   .pin-card-meta {
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: var(--space-2);
     font-size: 10px;
     color: var(--text-muted);
     background: none;

@@ -994,13 +994,13 @@
     padding: 4px;
     min-width: 200px;
     z-index: 100;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+    box-shadow: var(--shadow-lg);
   }
 
   .open-menu-item {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-4);
     width: 100%;
     padding: 6px 10px;
     font-size: 13px;
@@ -1215,7 +1215,7 @@
     background: var(--bg-surface);
     border: 1px solid var(--border-default);
     border-radius: 6px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+    box-shadow: var(--shadow-lg);
     padding: 4px 0;
     min-width: 120px;
   }
@@ -1249,7 +1249,7 @@
     );
   }
 
-  @media (max-width: 767px) {
+  @media (max-width: 760px) {
     .breadcrumb-meta {
       gap: 4px;
     }
