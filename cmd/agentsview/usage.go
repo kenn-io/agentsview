@@ -192,18 +192,18 @@ func runUsageDaily(cfg UsageDailyConfig) {
 }
 
 // noTokenDataNote returns a one-line stderr note for a zero usage result when
-// the user has filtered to a Copilot agent, which bills via a monthly request
-// quota rather than per-token and records no per-message token usage. It
-// returns "" when the filter is not a Copilot agent or real token/cost data
-// exists. This is an agent-property statement (issue #349) shown in response to
-// an explicit --agent the user typed, so it needs no session-presence check;
-// it is appropriate even for an empty window.
+// the user has filtered to a Copilot agent whose records do not include token
+// or cost data that agentsview can total. It returns "" when the filter is not
+// a Copilot agent or real token/cost data exists. This is an agent-property
+// statement (issue #349) shown in response to an explicit --agent the user
+// typed, so it needs no session-presence check; it is appropriate even for an
+// empty window.
 func noTokenDataNote(agent string, totals db.UsageTotals) string {
 	if !db.IsCopilotAgentFilter(agent) || !db.NoTokenData(totals) {
 		return ""
 	}
-	return "note: GitHub Copilot bills via a monthly request quota and " +
-		"does not record per-message token usage."
+	return "note: these GitHub Copilot records do not include token " +
+		"or cost data that agentsview can total."
 }
 
 type UsageStatuslineConfig struct {

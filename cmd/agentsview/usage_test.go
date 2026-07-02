@@ -1197,7 +1197,7 @@ func TestRunUsageDailyHintsNoTokenDataForCopilot(t *testing.T) {
 	})
 
 	assert.Contains(t, stderr, "Copilot")
-	assert.Contains(t, stderr, "monthly")
+	assert.Contains(t, stderr, "do not include token or cost data")
 }
 
 func TestRunUsageDailyNoHintWithoutAgentFilter(t *testing.T) {
@@ -1231,8 +1231,8 @@ func TestRunUsageDailyNoHintWhenDataPresent(t *testing.T) {
 func TestNoTokenDataNote(t *testing.T) {
 	zero := db.UsageTotals{}
 	withData := db.UsageTotals{OutputTokens: 5}
-	copilotNote := "note: GitHub Copilot bills via a monthly request quota " +
-		"and does not record per-message token usage."
+	copilotNote := "note: these GitHub Copilot records do not include token " +
+		"or cost data that agentsview can total."
 	cases := []struct {
 		name   string
 		agent  string
