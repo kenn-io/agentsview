@@ -251,6 +251,94 @@ func TestPushSessionBatchLogsAbandonedSessionsAfterContextCancel(
 	assert.Contains(t, gotLogs, "abandoning 2 sessions")
 }
 
+func TestPushSessionBatchBacksOffAndRetriesBatchAfterTimeout(t *testing.T) {
+	ctx := context.Background()
+	sessions := []db.Session{
+		syncSession(
+			"duck-timeout-batch-1", "alpha", "timeout one",
+			"2026-01-10T00:00:00.000Z", 1,
+		),
+		syncSession(
+			"duck-timeout-batch-2", "alpha", "timeout two",
+			"2026-01-10T00:01:00.000Z", 2,
+		),
+	}
+	var result PushResult
+	var pushed []db.Session
+	timeoutErr := fmt.Errorf(
+		"IO Error: Failed to send message: IO Error: Timeout was reached error for HTTP POST to '<url>'",
+	)
+	tryCalls := 0
+	waitCalls := 0
+	pushSingleCalls := 0
+
+	err := pushSessionBatchWith(
+		ctx, sessions, 0, len(sessions), &result, &pushed, nil,
+		func(_ context.Context, got []db.Session) ([]int, error) {
+			tryCalls++
+			assert.Equal(t, sessions, got)
+			if tryCalls == 1 {
+				return nil, timeoutErr
+			}
+			return []int{1, 2}, nil
+		},
+		func(context.Context, db.Session) (int, error) {
+			pushSingleCalls++
+			return 0, fmt.Errorf("individual retry should not run")
+		},
+		func(context.Context) error {
+			waitCalls++
+			return nil
+		},
+	)
+	require.NoError(t, err)
+
+	assert.Equal(t, 2, tryCalls)
+	assert.Equal(t, 1, waitCalls)
+	assert.Equal(t, 0, pushSingleCalls)
+	assert.Equal(t, 2, result.SessionsPushed)
+	assert.Equal(t, 3, result.MessagesPushed)
+	assert.Equal(t, 0, result.Errors)
+	assert.Equal(t, sessions, pushed)
+}
+
+func TestPushSessionBatchReturnsRepeatedTimeoutWithoutIndividualRetry(t *testing.T) {
+	ctx := context.Background()
+	sessions := []db.Session{
+		syncSession(
+			"duck-timeout-batch-repeat", "alpha", "timeout",
+			"2026-01-10T00:00:00.000Z", 1,
+		),
+	}
+	var result PushResult
+	var pushed []db.Session
+	timeoutErr := fmt.Errorf(
+		"IO Error: Failed to send message: IO Error: Timeout was reached error for HTTP POST to '<url>'",
+	)
+	tryCalls := 0
+	pushSingleCalls := 0
+
+	err := pushSessionBatchWith(
+		ctx, sessions, 0, len(sessions), &result, &pushed, nil,
+		func(context.Context, []db.Session) ([]int, error) {
+			tryCalls++
+			return nil, timeoutErr
+		},
+		func(context.Context, db.Session) (int, error) {
+			pushSingleCalls++
+			return 0, fmt.Errorf("individual retry should not run")
+		},
+		func(context.Context) error { return nil },
+	)
+	require.Error(t, err)
+
+	assert.True(t, isDuckRemoteMutationTimeoutError(err))
+	assert.Equal(t, 2, tryCalls)
+	assert.Equal(t, 0, pushSingleCalls)
+	assert.Equal(t, 0, result.Errors)
+	assert.Empty(t, pushed)
+}
+
 func TestSyncPushReportsSessionDiagnosticsByAgent(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
@@ -435,6 +523,33 @@ func TestExecDuckRemoteMutationBatchCoalescedFailureRollsBack(t *testing.T) {
 	assert.Equal(t, "ROLLBACK", calls[1])
 }
 
+func TestExecDuckRemoteMutationBatchCoalescedTimeoutSkipsRollback(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	batch := &duckRemoteMutationBatch{}
+	_, err := batch.ExecContext(ctx, `INSERT INTO remote_test VALUES (?)`, 1)
+	require.NoError(t, err)
+	var calls []string
+
+	err = execDuckRemoteMutationBatch(
+		ctx,
+		func(_ context.Context, sqlText string) error {
+			calls = append(calls, sqlText)
+			return fmt.Errorf(
+				"IO Error: Failed to send message: IO Error: Timeout was reached error for HTTP POST to '<url>'",
+			)
+		},
+		"test batch",
+		batch,
+		true,
+	)
+
+	require.Error(t, err)
+	assert.True(t, isDuckRemoteMutationTimeoutError(err))
+	assert.Equal(t, []string{batch.transactionSQL()}, calls)
+}
+
 func TestExecDuckRemoteMutationBatchCoalescedRollbackFailureIsWrapped(
 	t *testing.T,
 ) {
@@ -461,6 +576,28 @@ func TestExecDuckRemoteMutationBatchCoalescedRollbackFailureIsWrapped(
 	assert.ErrorContains(t, err, "rollback failed")
 }
 
+func TestDuckRemoteMutationDefaultBudgetFitsQuackTimeout(t *testing.T) {
+	assert.GreaterOrEqual(t, duckRemoteMutationCoalesceMaxBytes, 2<<20)
+	assert.LessOrEqual(t, duckRemoteMutationCoalesceMaxBytes, 4<<20)
+}
+
+func TestDuckRemoteMutationBatchByteAccountingMatchesRenderedTransaction(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	batch := &duckRemoteMutationBatch{}
+	_, err := batch.ExecContext(ctx,
+		`INSERT INTO remote_test VALUES (?, ?)`, 1, "first",
+	)
+	require.NoError(t, err)
+	_, err = batch.ExecContext(ctx,
+		`INSERT INTO remote_test VALUES (?, ?)`, 2, "second",
+	)
+	require.NoError(t, err)
+
+	assert.Equal(t, len(batch.transactionSQL()), batch.transactionBytes())
+}
+
 func TestAppendDuckRemoteMutationBatchFlushesBeforeByteBudget(t *testing.T) {
 	ctx := context.Background()
 	first := &duckRemoteMutationBatch{}
@@ -482,11 +619,11 @@ func TestAppendDuckRemoteMutationBatchFlushesBeforeByteBudget(t *testing.T) {
 	}
 
 	current, err = appendDuckRemoteMutationBatch(
-		ctx, exec, exec, "test batch", current, first, maxBytes,
+		ctx, exec, "test batch", current, first, maxBytes,
 	)
 	require.NoError(t, err)
 	current, err = appendDuckRemoteMutationBatch(
-		ctx, exec, exec, "test batch", current, second, maxBytes,
+		ctx, exec, "test batch", current, second, maxBytes,
 	)
 	require.NoError(t, err)
 	require.Len(t, calls, 1)
@@ -501,24 +638,30 @@ func TestAppendDuckRemoteMutationBatchFlushesBeforeByteBudget(t *testing.T) {
 	assert.Contains(t, calls[1], "second")
 }
 
-func TestAppendDuckRemoteMutationBatchUsesStatementModeForOversizeSession(
+func TestAppendDuckRemoteMutationBatchSplitsOversizeSessionCoalesced(
 	t *testing.T,
 ) {
 	ctx := context.Background()
 	oversize := &duckRemoteMutationBatch{}
 	_, err := oversize.ExecContext(ctx,
-		`INSERT INTO remote_test VALUES (?, ?)`, 1, strings.Repeat("x", 64),
+		`INSERT INTO remote_test VALUES (?, ?)`, 1, "aaaaa",
 	)
 	require.NoError(t, err)
-	maxBytes := oversize.transactionBytes() - 1
+	_, err = oversize.ExecContext(ctx,
+		`INSERT INTO remote_test VALUES (?, ?)`, 2, "bbbbb",
+	)
+	require.NoError(t, err)
+	_, err = oversize.ExecContext(ctx,
+		`INSERT INTO remote_test VALUES (?, ?)`, 3, "ccccc",
+	)
+	require.NoError(t, err)
+	oneStatement := &duckRemoteMutationBatch{statements: oversize.statements[:1]}
+	oneStatement.statementBytes = len(oversize.statements[0])
+	maxBytes := oneStatement.transactionBytes()
 	var calls []string
 
 	current, err := appendDuckRemoteMutationBatch(
 		ctx,
-		func(_ context.Context, sqlText string) error {
-			calls = append(calls, sqlText)
-			return nil
-		},
 		func(_ context.Context, sqlText string) error {
 			calls = append(calls, sqlText)
 			return nil
@@ -531,9 +674,15 @@ func TestAppendDuckRemoteMutationBatchUsesStatementModeForOversizeSession(
 	require.NoError(t, err)
 
 	assert.Equal(t, 0, current.Len())
-	assert.Equal(t, "BEGIN TRANSACTION", calls[0])
-	assert.Contains(t, calls[1], "INSERT INTO remote_test")
-	assert.Equal(t, "COMMIT", calls[2])
+	require.Len(t, calls, 3)
+	assert.Contains(t, calls[0], "VALUES (1, ")
+	assert.Contains(t, calls[1], "VALUES (2, ")
+	assert.Contains(t, calls[2], "VALUES (3, ")
+	for _, call := range calls {
+		assert.Contains(t, call, "BEGIN TRANSACTION")
+		assert.Contains(t, call, "COMMIT")
+		assert.LessOrEqual(t, len(call), maxBytes)
+	}
 }
 
 func TestAppendDuckRemoteMutationBatchFlushesCurrentBeforeOversizeSession(
@@ -547,18 +696,20 @@ func TestAppendDuckRemoteMutationBatchFlushesCurrentBeforeOversizeSession(
 	require.NoError(t, err)
 	oversize := &duckRemoteMutationBatch{}
 	_, err = oversize.ExecContext(ctx,
-		`INSERT INTO remote_test VALUES (?, ?)`, 2, strings.Repeat("x", 64),
+		`INSERT INTO remote_test VALUES (?, ?)`, 2, "bbbbb",
 	)
 	require.NoError(t, err)
-	maxBytes := oversize.transactionBytes() - 1
+	_, err = oversize.ExecContext(ctx,
+		`INSERT INTO remote_test VALUES (?, ?)`, 3, "ccccc",
+	)
+	require.NoError(t, err)
+	oneStatement := &duckRemoteMutationBatch{statements: oversize.statements[:1]}
+	oneStatement.statementBytes = len(oversize.statements[0])
+	maxBytes := oneStatement.transactionBytes()
 	var calls []string
 
 	next, err := appendDuckRemoteMutationBatch(
 		ctx,
-		func(_ context.Context, sqlText string) error {
-			calls = append(calls, sqlText)
-			return nil
-		},
 		func(_ context.Context, sqlText string) error {
 			calls = append(calls, sqlText)
 			return nil
@@ -571,12 +722,15 @@ func TestAppendDuckRemoteMutationBatchFlushesCurrentBeforeOversizeSession(
 	require.NoError(t, err)
 
 	assert.Equal(t, 0, next.Len())
-	require.Len(t, calls, 4)
+	require.Len(t, calls, 3)
 	assert.Equal(t, current.transactionSQL(), calls[0])
-	assert.Equal(t, "BEGIN TRANSACTION", calls[1])
-	assert.Contains(t, calls[2], "INSERT INTO remote_test")
-	assert.Contains(t, calls[2], strings.Repeat("x", 64))
-	assert.Equal(t, "COMMIT", calls[3])
+	assert.Contains(t, calls[1], "VALUES (2, ")
+	assert.Contains(t, calls[2], "VALUES (3, ")
+	for _, call := range calls[1:] {
+		assert.Contains(t, call, "BEGIN TRANSACTION")
+		assert.Contains(t, call, "COMMIT")
+		assert.LessOrEqual(t, len(call), maxBytes)
+	}
 }
 
 func TestExecDuckRemoteMutationBatchStatementModePinpointsFailure(t *testing.T) {
@@ -676,6 +830,38 @@ func TestExecDuckRemoteMutationBatchFallbackDoesNotRetryStaleFailure(t *testing.
 		batch,
 	)
 	require.ErrorContains(t, err, "Invalid connection id")
+	assert.Empty(t, statementCalls)
+}
+
+func TestExecDuckRemoteMutationBatchFallbackDoesNotRetryTimeout(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	batch := &duckRemoteMutationBatch{}
+	_, err := batch.ExecContext(ctx, `INSERT INTO remote_test VALUES (?)`, 1)
+	require.NoError(t, err)
+	var coalescedCalls []string
+	var statementCalls []string
+
+	err = execDuckRemoteMutationBatchWithStatementFallback(
+		ctx,
+		func(_ context.Context, sqlText string) error {
+			coalescedCalls = append(coalescedCalls, sqlText)
+			return fmt.Errorf(
+				"IO Error: Failed to send message: IO Error: Timeout was reached error for HTTP POST to '<url>'",
+			)
+		},
+		func(_ context.Context, sqlText string) error {
+			statementCalls = append(statementCalls, sqlText)
+			return nil
+		},
+		"test session",
+		batch,
+	)
+	require.Error(t, err)
+
+	assert.True(t, isDuckRemoteMutationTimeoutError(err))
+	assert.Equal(t, []string{batch.transactionSQL()}, coalescedCalls)
 	assert.Empty(t, statementCalls)
 }
 

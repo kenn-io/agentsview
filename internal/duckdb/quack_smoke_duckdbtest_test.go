@@ -862,6 +862,94 @@ func TestQuackRemoteMutationBatchCoalescesAgainstServer(t *testing.T) {
 	assertDuckDBCount(t, server, "remote_batch_test", 2)
 }
 
+func TestQuackRemoteMutationBatchChunksRepairInterruptedSession(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "agentsview-quack-chunks.duckdb")
+	uri := "quack:127.0.0.1:" + freeTCPPort(t)
+	const token = "agentsview-duckdbtest-token-0009"
+
+	server := openQuackMirrorServer(t, ctx, path, uri, token)
+	_, err := server.ExecContext(ctx,
+		`CREATE TABLE remote_chunk_repair_test (
+			session_id VARCHAR,
+			ordinal INTEGER,
+			content VARCHAR,
+			PRIMARY KEY(session_id, ordinal)
+		)`,
+	)
+	require.NoError(t, err, "create remote chunk repair test table")
+	client := openQuackClientAttachment(t, ctx, uri, token)
+	execRemote := func(ctx context.Context, sqlText string) error {
+		_, err := client.ExecContext(
+			ctx, "FROM "+quackAttachmentName+".query(?)", sqlText,
+		)
+		return err
+	}
+
+	const sessionID = "chunk-repair-session"
+	_, err = server.ExecContext(ctx,
+		`INSERT INTO remote_chunk_repair_test VALUES (?, ?, ?)`,
+		sessionID, 99, "stale",
+	)
+	require.NoError(t, err, "seed stale remote row")
+
+	batch := &duckRemoteMutationBatch{}
+	_, err = batch.ExecContext(ctx,
+		`DELETE FROM remote_chunk_repair_test WHERE session_id = ?`, sessionID,
+	)
+	require.NoError(t, err)
+	deleteOnly := &duckRemoteMutationBatch{statements: batch.statements[:1]}
+	deleteOnly.statementBytes = len(batch.statements[0])
+	for i, content := range []string{"one", "two", "three"} {
+		_, err = batch.ExecContext(ctx,
+			`INSERT INTO remote_chunk_repair_test VALUES (?, ?, ?)`,
+			sessionID, i, content,
+		)
+		require.NoError(t, err)
+	}
+	chunks := batch.chunks(deleteOnly.transactionBytes())
+	require.Greater(t, len(chunks), 1)
+	require.Contains(t, chunks[0].transactionSQL(), "DELETE FROM")
+	require.NotContains(t, chunks[0].transactionSQL(), "INSERT INTO")
+
+	require.NoError(t, execDuckRemoteMutationBatch(
+		ctx, execRemote, "quack interrupted chunk", chunks[0], true,
+	))
+	assertDuckDBCountWhere(
+		t, server, "remote_chunk_repair_test", "session_id = ?", sessionID, 0,
+	)
+
+	require.NoError(t, execDuckRemoteMutationBatchChunks(
+		ctx, execRemote, "quack repaired chunks", batch,
+		deleteOnly.transactionBytes(),
+	))
+	rows, err := server.QueryContext(ctx,
+		`SELECT ordinal, content
+		 FROM remote_chunk_repair_test
+		 WHERE session_id = ?
+		 ORDER BY ordinal`,
+		sessionID,
+	)
+	require.NoError(t, err, "read repaired chunk rows")
+	defer rows.Close()
+	type row struct {
+		ordinal int
+		content string
+	}
+	var got []row
+	for rows.Next() {
+		var r row
+		require.NoError(t, rows.Scan(&r.ordinal, &r.content))
+		got = append(got, r)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []row{
+		{ordinal: 0, content: "one"},
+		{ordinal: 1, content: "two"},
+		{ordinal: 2, content: "three"},
+	}, got)
+}
+
 type duckMirrorSessionState struct {
 	FirstMessage         string
 	MessageCount         int

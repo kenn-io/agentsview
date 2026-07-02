@@ -380,6 +380,8 @@ func (s *Sync) withDuckTx(
 
 const duckSessionPushBatchSize = 100
 
+const duckRemoteMutationTimeoutBackoff = 30 * time.Second
+
 func (s *Sync) pushSessionBatch(
 	ctx context.Context,
 	sessions []db.Session,
@@ -389,7 +391,42 @@ func (s *Sync) pushSessionBatch(
 	pushed *[]db.Session,
 	onProgress func(PushProgress),
 ) error {
-	messagesBySession, err := s.tryPushSessionBatch(ctx, sessions)
+	return pushSessionBatchWith(
+		ctx, sessions, offset, total, result, pushed, onProgress,
+		s.tryPushSessionBatch, s.pushSingleSession, waitAfterRemoteMutationTimeout,
+	)
+}
+
+func pushSessionBatchWith(
+	ctx context.Context,
+	sessions []db.Session,
+	offset int,
+	total int,
+	result *PushResult,
+	pushed *[]db.Session,
+	onProgress func(PushProgress),
+	tryBatch func(context.Context, []db.Session) ([]int, error),
+	pushSingle func(context.Context, db.Session) (int, error),
+	waitAfterTimeout func(context.Context) error,
+) error {
+	messagesBySession, err := tryBatch(ctx, sessions)
+	if err != nil {
+		if fatalErr := fatalDuckPushError(ctx, err); fatalErr != nil {
+			return fatalErr
+		}
+		if isDuckRemoteMutationTimeoutError(err) {
+			log.Printf(
+				"duckdbsync: session batch starting at %d timed out; waiting before retrying batch: %v",
+				offset, err,
+			)
+			if waitAfterTimeout != nil {
+				if waitErr := waitAfterTimeout(ctx); waitErr != nil {
+					return waitErr
+				}
+			}
+			messagesBySession, err = tryBatch(ctx, sessions)
+		}
+	}
 	if err == nil {
 		for i, sess := range sessions {
 			result.SessionsPushed++
@@ -404,6 +441,9 @@ func (s *Sync) pushSessionBatch(
 	if err := fatalDuckPushError(ctx, err); err != nil {
 		return err
 	}
+	if isDuckRemoteMutationTimeoutError(err) {
+		return err
+	}
 	log.Printf(
 		"duckdbsync: session batch starting at %d failed; retrying sessions individually: %v",
 		offset, err,
@@ -415,7 +455,7 @@ func (s *Sync) pushSessionBatch(
 				total, result, onProgress,
 			)
 		}
-		messages, err := s.pushSingleSession(ctx, sess)
+		messages, err := pushSingle(ctx, sess)
 		if err != nil {
 			if err := fatalDuckPushError(ctx, err); err != nil {
 				return abandonDuckPushFallback(
@@ -433,6 +473,21 @@ func (s *Sync) pushSessionBatch(
 		reportDuckPushProgress(offset+i+1, total, result, onProgress)
 	}
 	return nil
+}
+
+func waitAfterRemoteMutationTimeout(ctx context.Context) error {
+	return sleepContext(ctx, duckRemoteMutationTimeoutBackoff)
+}
+
+func sleepContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func abandonDuckPushFallback(
@@ -526,7 +581,6 @@ func (s *Sync) tryPushRemoteSessionBatch(
 		batch, err = appendDuckRemoteMutationBatch(
 			ctx,
 			s.execRemoteSQLRetry,
-			s.execRemoteSQLNoRetry,
 			"duckdb remote session batch",
 			batch,
 			sessionBatch,
@@ -580,7 +634,14 @@ func (s *Sync) execSingleRemoteMutationBatch(
 	ctx context.Context, label string, batch *duckRemoteMutationBatch,
 ) error {
 	if batch.transactionBytes() > duckRemoteMutationCoalesceMaxBytes {
-		return s.execRemoteMutationBatch(ctx, label, batch, false)
+		return execDuckRemoteMutationBatchChunksWithStatementFallback(
+			ctx,
+			s.execRemoteSQLRetry,
+			s.execRemoteSQLNoRetry,
+			label,
+			batch,
+			duckRemoteMutationCoalesceMaxBytes,
+		)
 	}
 	return execDuckRemoteMutationBatchWithStatementFallback(
 		ctx, s.execRemoteSQLRetry, s.execRemoteSQLNoRetry, label, batch,

@@ -364,7 +364,7 @@ type duckMutationExecutor interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
-const duckRemoteMutationCoalesceMaxBytes = 16 << 20
+const duckRemoteMutationCoalesceMaxBytes = 2 << 20
 
 type duckRemoteMutationBatch struct {
 	statements     []string
@@ -413,7 +413,6 @@ func (s *Sync) execRemoteMutationBatch(
 func appendDuckRemoteMutationBatch(
 	ctx context.Context,
 	execCoalesced func(context.Context, string) error,
-	execStatement func(context.Context, string) error,
 	label string,
 	current *duckRemoteMutationBatch,
 	next *duckRemoteMutationBatch,
@@ -429,10 +428,14 @@ func appendDuckRemoteMutationBatch(
 		maxBytes = duckRemoteMutationCoalesceMaxBytes
 	}
 	if next.transactionBytes() > maxBytes {
-		if err := execDuckRemoteMutationBatch(ctx, execCoalesced, label, current, true); err != nil {
+		if err := execDuckRemoteMutationBatch(
+			ctx, execCoalesced, label, current, true,
+		); err != nil {
 			return current, err
 		}
-		if err := execDuckRemoteMutationBatch(ctx, execStatement, label, next, false); err != nil {
+		if err := execDuckRemoteMutationBatchChunks(
+			ctx, execCoalesced, label, next, maxBytes,
+		); err != nil {
 			return &duckRemoteMutationBatch{}, err
 		}
 		return &duckRemoteMutationBatch{}, nil
@@ -459,6 +462,9 @@ func execDuckRemoteMutationBatch(
 	}
 	if coalesce {
 		if err := exec(ctx, batch.transactionSQL()); err != nil {
+			if isDuckRemoteMutationTimeoutError(err) {
+				return err
+			}
 			if rollbackErr := exec(ctx, "ROLLBACK"); rollbackErr != nil {
 				return fmt.Errorf("%w; rollback %s: %v", err, label, rollbackErr)
 			}
@@ -502,10 +508,45 @@ func execDuckRemoteMutationBatchWithStatementFallback(
 	batch *duckRemoteMutationBatch,
 ) error {
 	if err := execDuckRemoteMutationBatch(ctx, execCoalesced, label, batch, true); err != nil {
-		if ctx.Err() != nil || isStaleQuackConnectionError(err) {
+		if ctx.Err() != nil ||
+			isStaleQuackConnectionError(err) ||
+			isDuckRemoteMutationTimeoutError(err) {
 			return err
 		}
 		return execDuckRemoteMutationBatch(ctx, execStatement, label, batch, false)
+	}
+	return nil
+}
+
+func execDuckRemoteMutationBatchChunks(
+	ctx context.Context,
+	exec func(context.Context, string) error,
+	label string,
+	batch *duckRemoteMutationBatch,
+	maxBytes int,
+) error {
+	for _, chunk := range batch.chunks(maxBytes) {
+		if err := execDuckRemoteMutationBatch(ctx, exec, label, chunk, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func execDuckRemoteMutationBatchChunksWithStatementFallback(
+	ctx context.Context,
+	execCoalesced func(context.Context, string) error,
+	execStatement func(context.Context, string) error,
+	label string,
+	batch *duckRemoteMutationBatch,
+	maxBytes int,
+) error {
+	for _, chunk := range batch.chunks(maxBytes) {
+		if err := execDuckRemoteMutationBatchWithStatementFallback(
+			ctx, execCoalesced, execStatement, label, chunk,
+		); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -544,6 +585,39 @@ func (b *duckRemoteMutationBatch) combinedTransactionBytes(
 		b.statementBytes + other.statementBytes +
 		len(";\n")*(b.Len()+other.Len()) +
 		len("COMMIT")
+}
+
+func (b *duckRemoteMutationBatch) chunks(maxBytes int) []*duckRemoteMutationBatch {
+	if b == nil || b.Len() == 0 {
+		return nil
+	}
+	if maxBytes <= 0 {
+		maxBytes = duckRemoteMutationCoalesceMaxBytes
+	}
+	var chunks []*duckRemoteMutationBatch
+	current := &duckRemoteMutationBatch{}
+	for _, stmt := range b.statements {
+		next := &duckRemoteMutationBatch{
+			statements:     []string{stmt},
+			statementBytes: len(stmt),
+		}
+		if current.Len() > 0 && current.combinedTransactionBytes(next) > maxBytes {
+			chunks = append(chunks, current)
+			current = &duckRemoteMutationBatch{}
+		}
+		current.appendBatch(next)
+	}
+	if current.Len() > 0 {
+		chunks = append(chunks, current)
+	}
+	return chunks
+}
+
+func isDuckRemoteMutationTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "timeout was reached")
 }
 
 func (s *Sync) execRemoteSQLRetry(ctx context.Context, sqlText string) error {
