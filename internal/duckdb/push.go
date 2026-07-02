@@ -364,11 +364,14 @@ type duckMutationExecutor interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
-const duckRemoteMutationCoalesceMaxBytes = 2 << 20
+const (
+	duckRemoteMutationCoalesceMaxBytes = 2 << 20
+	duckRemoteInsertCoalesceMaxRows    = 256
+	duckRemoteInsertCoalesceMaxBytes   = 1 << 20
+)
 
 type duckRemoteMutationBatch struct {
-	statements     []string
-	statementBytes int
+	statements []string
 }
 
 func (b *duckRemoteMutationBatch) ExecContext(
@@ -379,7 +382,6 @@ func (b *duckRemoteMutationBatch) ExecContext(
 		return nil, err
 	}
 	b.statements = append(b.statements, sqlText)
-	b.statementBytes += len(sqlText)
 	return duckNoopResult{}, nil
 }
 
@@ -392,7 +394,6 @@ func (b *duckRemoteMutationBatch) appendBatch(other *duckRemoteMutationBatch) {
 		return
 	}
 	b.statements = append(b.statements, other.statements...)
-	b.statementBytes += other.statementBytes
 }
 
 type duckNoopResult struct{}
@@ -551,8 +552,9 @@ func execDuckRemoteMutationBatchChunksWithStatementFallback(
 
 func (b *duckRemoteMutationBatch) transactionSQL() string {
 	var sqlText strings.Builder
+	statements := b.renderedStatements()
 	sqlText.WriteString("BEGIN TRANSACTION;\n")
-	for _, stmt := range b.statements {
+	for _, stmt := range statements {
 		sqlText.WriteString(stmt)
 		sqlText.WriteString(";\n")
 	}
@@ -564,9 +566,20 @@ func (b *duckRemoteMutationBatch) transactionBytes() int {
 	if b == nil || b.Len() == 0 {
 		return 0
 	}
+	return duckRemoteTransactionBytes(b.renderedStatements())
+}
+
+func duckRemoteTransactionBytes(statements []string) int {
+	if len(statements) == 0 {
+		return 0
+	}
+	statementBytes := 0
+	for _, stmt := range statements {
+		statementBytes += len(stmt)
+	}
 	return len("BEGIN TRANSACTION;\n") +
-		b.statementBytes +
-		len(";\n")*b.Len() +
+		statementBytes +
+		len(";\n")*len(statements) +
 		len("COMMIT")
 }
 
@@ -579,10 +592,14 @@ func (b *duckRemoteMutationBatch) combinedTransactionBytes(
 	if other == nil || other.Len() == 0 {
 		return b.transactionBytes()
 	}
-	return len("BEGIN TRANSACTION;\n") +
-		b.statementBytes + other.statementBytes +
-		len(";\n")*(b.Len()+other.Len()) +
-		len("COMMIT")
+	statements := make([]string, 0, b.Len()+other.Len())
+	statements = append(statements, b.statements...)
+	statements = append(statements, other.statements...)
+	return duckRemoteTransactionBytes(coalesceDuckRemoteInsertStatements(
+		statements,
+		duckRemoteInsertCoalesceMaxRows,
+		duckRemoteInsertCoalesceMaxBytes,
+	))
 }
 
 func (b *duckRemoteMutationBatch) chunks(maxBytes int) []*duckRemoteMutationBatch {
@@ -596,8 +613,7 @@ func (b *duckRemoteMutationBatch) chunks(maxBytes int) []*duckRemoteMutationBatc
 	current := &duckRemoteMutationBatch{}
 	for _, stmt := range b.statements {
 		next := &duckRemoteMutationBatch{
-			statements:     []string{stmt},
-			statementBytes: len(stmt),
+			statements: []string{stmt},
 		}
 		if current.Len() > 0 && current.combinedTransactionBytes(next) > maxBytes {
 			chunks = append(chunks, current)
@@ -609,6 +625,182 @@ func (b *duckRemoteMutationBatch) chunks(maxBytes int) []*duckRemoteMutationBatc
 		chunks = append(chunks, current)
 	}
 	return chunks
+}
+
+func (b *duckRemoteMutationBatch) renderedStatements() []string {
+	if b == nil || b.Len() == 0 {
+		return nil
+	}
+	return coalesceDuckRemoteInsertStatements(
+		b.statements,
+		duckRemoteInsertCoalesceMaxRows,
+		duckRemoteInsertCoalesceMaxBytes,
+	)
+}
+
+func coalesceDuckRemoteInsertStatements(
+	statements []string, maxRows int, maxBytes int,
+) []string {
+	if len(statements) == 0 {
+		return nil
+	}
+	if maxRows <= 0 {
+		maxRows = duckRemoteInsertCoalesceMaxRows
+	}
+	if maxBytes <= 0 {
+		maxBytes = duckRemoteInsertCoalesceMaxBytes
+	}
+	out := make([]string, 0, len(statements))
+	var pending duckRemoteInsertGroup
+	hasPending := false
+	flush := func() {
+		if !hasPending {
+			return
+		}
+		out = append(out, pending.SQL())
+		pending = duckRemoteInsertGroup{}
+		hasPending = false
+	}
+	for _, stmt := range statements {
+		prefix, tuple, ok := splitDuckRemoteSimpleInsert(stmt)
+		if !ok {
+			flush()
+			out = append(out, stmt)
+			continue
+		}
+		if !hasPending || pending.prefix != prefix {
+			flush()
+			pending = duckRemoteInsertGroup{prefix: prefix}
+			hasPending = true
+		}
+		if pending.rows > 0 && (pending.rows+1 > maxRows ||
+			pending.bytes+len(", ")+len(tuple) > maxBytes) {
+			flush()
+			pending = duckRemoteInsertGroup{prefix: prefix}
+			hasPending = true
+		}
+		pending.Append(tuple)
+	}
+	flush()
+	return out
+}
+
+type duckRemoteInsertGroup struct {
+	prefix string
+	tuples []string
+	rows   int
+	bytes  int
+}
+
+func (g *duckRemoteInsertGroup) Append(tuple string) {
+	if g.rows == 0 {
+		g.bytes = len(g.prefix)
+	} else {
+		g.bytes += len(", ")
+	}
+	g.tuples = append(g.tuples, tuple)
+	g.rows++
+	g.bytes += len(tuple)
+}
+
+func (g duckRemoteInsertGroup) SQL() string {
+	return g.prefix + strings.Join(g.tuples, ", ")
+}
+
+func splitDuckRemoteSimpleInsert(stmt string) (string, string, bool) {
+	trimmed := strings.TrimSpace(stmt)
+	upper := strings.ToUpper(trimmed)
+	if !strings.HasPrefix(upper, "INSERT INTO ") {
+		return "", "", false
+	}
+	valuesIndex := strings.Index(upper, " VALUES ")
+	if valuesIndex < 0 {
+		return "", "", false
+	}
+	prefix := strings.TrimSpace(trimmed[:valuesIndex]) + " VALUES "
+	rest := strings.TrimSpace(trimmed[valuesIndex+len(" VALUES "):])
+	tuple, suffix, ok := duckSQLLeadingParenthesizedExpression(rest)
+	if !ok || strings.TrimSpace(suffix) != "" {
+		return "", "", false
+	}
+	return prefix, tuple, true
+}
+
+func duckSQLLeadingParenthesizedExpression(sqlText string) (
+	string, string, bool,
+) {
+	if !strings.HasPrefix(sqlText, "(") {
+		return "", "", false
+	}
+	depth := 0
+	for i := 0; i < len(sqlText); {
+		switch sqlText[i] {
+		case '$':
+			delimiter, ok := duckDollarQuoteDelimiterAt(sqlText, i)
+			if ok {
+				next := strings.Index(sqlText[i+len(delimiter):], delimiter)
+				if next < 0 {
+					return "", "", false
+				}
+				i += len(delimiter) + next + len(delimiter)
+				continue
+			}
+		case '\'':
+			next, ok := duckSingleQuotedLiteralEnd(sqlText, i)
+			if !ok {
+				return "", "", false
+			}
+			i = next
+			continue
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return sqlText[:i+1], sqlText[i+1:], true
+			}
+			if depth < 0 {
+				return "", "", false
+			}
+		}
+		i++
+	}
+	return "", "", false
+}
+
+func duckDollarQuoteDelimiterAt(sqlText string, start int) (string, bool) {
+	if start >= len(sqlText) || sqlText[start] != '$' {
+		return "", false
+	}
+	i := start + 1
+	for i < len(sqlText) && duckDollarQuoteTagByte(sqlText[i]) {
+		i++
+	}
+	if i >= len(sqlText) || sqlText[i] != '$' {
+		return "", false
+	}
+	return sqlText[start : i+1], true
+}
+
+func duckDollarQuoteTagByte(b byte) bool {
+	return b == '_' ||
+		('0' <= b && b <= '9') ||
+		('A' <= b && b <= 'Z') ||
+		('a' <= b && b <= 'z')
+}
+
+func duckSingleQuotedLiteralEnd(sqlText string, start int) (int, bool) {
+	for i := start + 1; i < len(sqlText); i++ {
+		if sqlText[i] != '\'' {
+			continue
+		}
+		if i+1 < len(sqlText) && sqlText[i+1] == '\'' {
+			i++
+			continue
+		}
+		return i + 1, true
+	}
+	return 0, false
 }
 
 func isDuckRemoteMutationTimeoutError(err error) bool {

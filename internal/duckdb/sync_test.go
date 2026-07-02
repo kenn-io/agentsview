@@ -598,6 +598,186 @@ func TestDuckRemoteMutationBatchByteAccountingMatchesRenderedTransaction(
 	assert.Equal(t, len(batch.transactionSQL()), batch.transactionBytes())
 }
 
+func TestDuckRemoteMutationBatchCoalescesAdjacentInsertStatements(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	batch := &duckRemoteMutationBatch{}
+	_, err := batch.ExecContext(ctx,
+		`DELETE FROM remote_test WHERE session_id = ?`, "session-1",
+	)
+	require.NoError(t, err)
+	for i := range 3 {
+		_, err = batch.ExecContext(ctx,
+			`INSERT INTO remote_test (session_id, ordinal) VALUES (?, ?)`,
+			"session-1", i,
+		)
+		require.NoError(t, err)
+	}
+
+	sqlText := batch.transactionSQL()
+
+	assert.Equal(t, 1, strings.Count(sqlText, "INSERT INTO remote_test"))
+	assert.Contains(t, sqlText,
+		"INSERT INTO remote_test (session_id, ordinal) VALUES ("+
+			"$agentsview_")
+	assert.Contains(t, sqlText, ", 0), (")
+	assert.Contains(t, sqlText, ", 1), (")
+	assert.Contains(t, sqlText, ", 2);")
+	assert.Less(t, batch.transactionBytes(), len(strings.Join(batch.statements, ";\n")))
+}
+
+func TestDuckRemoteMutationBatchInsertCoalescingSplitsByRowLimit(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	batch := &duckRemoteMutationBatch{}
+	for i := range 257 {
+		_, err := batch.ExecContext(ctx,
+			`INSERT INTO remote_test (session_id, ordinal) VALUES (?, ?)`,
+			"session-1", i,
+		)
+		require.NoError(t, err)
+	}
+
+	sqlText := batch.transactionSQL()
+
+	assert.Equal(t, 2, strings.Count(sqlText, "INSERT INTO remote_test"))
+}
+
+func TestDuckRemoteMutationBatchCoalescedInsertMatchesPerRowExecution(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	coalescedDB := openTestDuckDB(t)
+	perRowDB := openTestDuckDB(t)
+	for _, conn := range []*sql.DB{coalescedDB, perRowDB} {
+		_, err := conn.ExecContext(ctx,
+			`CREATE TABLE remote_test (
+				session_id VARCHAR,
+				ordinal INTEGER,
+				content VARCHAR
+			)`,
+		)
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx,
+			`INSERT INTO remote_test VALUES ('session-1', 99, 'stale')`,
+		)
+		require.NoError(t, err)
+	}
+	batch := &duckRemoteMutationBatch{}
+	_, err := batch.ExecContext(ctx,
+		`DELETE FROM remote_test WHERE session_id = ?`, "session-1",
+	)
+	require.NoError(t, err)
+	for _, row := range []struct {
+		ordinal int
+		content string
+	}{
+		{ordinal: 0, content: "first"},
+		{ordinal: 1, content: "second"},
+		{ordinal: 2, content: "third"},
+	} {
+		_, err = batch.ExecContext(ctx,
+			`INSERT INTO remote_test (session_id, ordinal, content) VALUES (?, ?, ?)`,
+			"session-1", row.ordinal, row.content,
+		)
+		require.NoError(t, err)
+	}
+
+	_, err = coalescedDB.ExecContext(ctx, batch.transactionSQL())
+	require.NoError(t, err)
+	require.NoError(t, execDuckRemoteMutationBatch(
+		ctx,
+		func(ctx context.Context, sqlText string) error {
+			_, err := perRowDB.ExecContext(ctx, sqlText)
+			return err
+		},
+		"per-row equivalence",
+		batch,
+		false,
+	))
+
+	assert.Equal(
+		t,
+		readRemoteTestRows(t, ctx, perRowDB),
+		readRemoteTestRows(t, ctx, coalescedDB),
+	)
+}
+
+type remoteTestRow struct {
+	SessionID string
+	Ordinal   int
+	Content   string
+}
+
+func readRemoteTestRows(
+	t *testing.T, ctx context.Context, conn *sql.DB,
+) []remoteTestRow {
+	t.Helper()
+	rows, err := conn.QueryContext(ctx,
+		`SELECT session_id, ordinal, content
+		 FROM remote_test
+		 ORDER BY session_id, ordinal, content`,
+	)
+	require.NoError(t, err)
+	defer rows.Close()
+	var out []remoteTestRow
+	for rows.Next() {
+		var row remoteTestRow
+		require.NoError(t, rows.Scan(
+			&row.SessionID, &row.Ordinal, &row.Content,
+		))
+		out = append(out, row)
+	}
+	require.NoError(t, rows.Err())
+	return out
+}
+
+func TestDuckRemoteMutationBatchFallbackKeepsPerRowInsertAttribution(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	batch := &duckRemoteMutationBatch{}
+	_, err := batch.ExecContext(ctx, `INSERT INTO remote_test VALUES (?)`, 1)
+	require.NoError(t, err)
+	_, err = batch.ExecContext(ctx, `INSERT INTO remote_test VALUES (?)`, 2)
+	require.NoError(t, err)
+	var coalescedCalls []string
+	var statementCalls []string
+
+	err = execDuckRemoteMutationBatchWithStatementFallback(
+		ctx,
+		func(_ context.Context, sqlText string) error {
+			coalescedCalls = append(coalescedCalls, sqlText)
+			if sqlText == "ROLLBACK" {
+				return nil
+			}
+			return fmt.Errorf("coalesced failure")
+		},
+		func(_ context.Context, sqlText string) error {
+			statementCalls = append(statementCalls, sqlText)
+			if sqlText == "INSERT INTO remote_test VALUES (2)" {
+				return fmt.Errorf("poison row")
+			}
+			return nil
+		},
+		"test session",
+		batch,
+	)
+	require.Error(t, err)
+
+	require.NotEmpty(t, coalescedCalls)
+	assert.Equal(t, 1, strings.Count(coalescedCalls[0], "INSERT INTO remote_test"))
+	assert.Contains(t, err.Error(), "execute test session statement 2/2")
+	assert.Equal(t, []string{
+		"BEGIN TRANSACTION",
+		"INSERT INTO remote_test VALUES (1)",
+		"INSERT INTO remote_test VALUES (2)",
+		"ROLLBACK",
+	}, statementCalls)
+}
+
 func TestAppendDuckRemoteMutationBatchFlushesBeforeByteBudget(t *testing.T) {
 	ctx := context.Background()
 	first := &duckRemoteMutationBatch{}
@@ -656,7 +836,6 @@ func TestAppendDuckRemoteMutationBatchSplitsOversizeSessionCoalesced(
 	)
 	require.NoError(t, err)
 	oneStatement := &duckRemoteMutationBatch{statements: oversize.statements[:1]}
-	oneStatement.statementBytes = len(oversize.statements[0])
 	maxBytes := oneStatement.transactionBytes()
 	var calls []string
 
@@ -704,7 +883,6 @@ func TestAppendDuckRemoteMutationBatchFlushesCurrentBeforeOversizeSession(
 	)
 	require.NoError(t, err)
 	oneStatement := &duckRemoteMutationBatch{statements: oversize.statements[:1]}
-	oneStatement.statementBytes = len(oversize.statements[0])
 	maxBytes := oneStatement.transactionBytes()
 	var calls []string
 

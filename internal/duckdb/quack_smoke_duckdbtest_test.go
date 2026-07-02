@@ -899,7 +899,6 @@ func TestQuackRemoteMutationBatchChunksRepairInterruptedSession(t *testing.T) {
 	)
 	require.NoError(t, err)
 	deleteOnly := &duckRemoteMutationBatch{statements: batch.statements[:1]}
-	deleteOnly.statementBytes = len(batch.statements[0])
 	for i, content := range []string{"one", "two", "three"} {
 		_, err = batch.ExecContext(ctx,
 			`INSERT INTO remote_chunk_repair_test VALUES (?, ?, ?)`,
