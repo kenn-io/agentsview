@@ -1,3 +1,5 @@
+import { hashColor } from "@kenn-io/kit-ui/utils/color-hash";
+
 export const PROJECT_PALETTE: readonly string[] = [
   "var(--accent-blue)",
   "var(--accent-purple)",
@@ -13,17 +15,10 @@ export const PROJECT_PALETTE: readonly string[] = [
   "var(--accent-lime)",
 ] as const;
 
-const FALLBACK = "var(--text-muted)";
-
-function djb2(s: string): number {
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) {
-    h = ((h << 5) + h + s.charCodeAt(i)) | 0;
-  }
-  return Math.abs(h);
-}
-
+// Delegates to kit-ui's hashColor but deliberately keeps the app's own
+// palette instead of kit-ui's DEFAULT_HASH_PALETTE: the palettes differ in
+// order and content, so switching would reshuffle every project's
+// established identity color.
 export function projectColor(name: string): string {
-  if (!name) return FALLBACK;
-  return PROJECT_PALETTE[djb2(name) % PROJECT_PALETTE.length]!;
+  return hashColor(name, PROJECT_PALETTE);
 }

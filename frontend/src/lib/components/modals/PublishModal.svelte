@@ -11,6 +11,7 @@
   } from "../../api/generated/index";
   import { configureGeneratedClient } from "../../api/runtime.js";
   import type { PublishResponse } from "../../api/types.js";
+  import { copyToClipboard } from "../../utils/clipboard.js";
 
   type View = "setup" | "progress" | "success" | "error";
 
@@ -114,10 +115,6 @@
         err instanceof Error ? err.message : m.publish_failed();
       view = "error";
     }
-  }
-
-  function copyToClipboard(text: string) {
-    navigator.clipboard.writeText(text);
   }
 
   onDestroy(() => {

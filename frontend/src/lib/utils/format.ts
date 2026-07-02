@@ -1,4 +1,15 @@
+import { formatTokenCount } from "@kenn-io/kit-ui/utils/format";
 import { formatDateTime, m } from "../i18n/index.js";
+
+// These four helpers are byte-identical to kit-ui's implementations; the
+// locale-aware / app-specific formatters below stay local. Note kit-ui keeps
+// `truncate` in its time module, not format.
+export {
+  formatCost,
+  formatNumber,
+  formatTokenCount,
+} from "@kenn-io/kit-ui/utils/format";
+export { truncate } from "@kenn-io/kit-ui/utils/time";
 
 const MINUTE = 60;
 const HOUR = 3600;
@@ -51,12 +62,6 @@ export function formatTimestamp(
   });
 }
 
-/** Truncates a string with ellipsis */
-export function truncate(s: string, maxLen: number): string {
-  if (s.length <= maxLen) return s;
-  return s.slice(0, maxLen - 1) + "\u2026";
-}
-
 /** Formats an agent name for display */
 export function formatAgentName(
   agent: string | null | undefined,
@@ -64,22 +69,6 @@ export function formatAgentName(
   if (!agent) return "Unknown";
   // Capitalize first letter
   return agent.charAt(0).toUpperCase() + agent.slice(1);
-}
-
-/** Formats a number with commas */
-export function formatNumber(n: number): string {
-  return n.toLocaleString();
-}
-
-/** Formats a token count as a compact string (e.g. 1.2k, 3.5M) */
-export function formatTokenCount(n: number): string {
-  if (n < 1000) return String(n);
-  if (n < 1_000_000) {
-    const k = Math.floor(n / 100) / 10;
-    return k % 1 === 0 ? `${Math.floor(k)}k` : `${k}k`;
-  }
-  const m = Math.floor(n / 100_000) / 10;
-  return m % 1 === 0 ? `${Math.floor(m)}M` : `${m}M`;
 }
 
 export function formatTokenUsage(
@@ -98,13 +87,6 @@ export function formatTokenUsage(
     : "— out";
 
   return `${contextLabel} / ${outputLabel}`;
-}
-
-/** Formats a USD cost as a compact string (e.g. $0.42, $12.34, $123) */
-export function formatCost(v: number): string {
-  if (v > 0 && v < 0.01) return "<$0.01";
-  if (v >= 100) return `$${v.toFixed(0)}`;
-  return `$${v.toFixed(2)}`;
 }
 
 let nonceCounter = 0;

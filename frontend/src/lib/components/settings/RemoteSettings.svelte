@@ -1,6 +1,7 @@
 <script lang="ts">
   import { m } from "../../i18n/index.js";
   import SettingsSection from "./SettingsSection.svelte";
+  import { copyToClipboard } from "../../utils/clipboard.js";
   import { settings } from "../../stores/settings.svelte.js";
   import {
     getServerUrl,
@@ -80,7 +81,9 @@
 
   function handleCopyToken() {
     if (!settings.authToken) return;
-    navigator.clipboard.writeText(settings.authToken);
+    // Fire-and-forget like the previous navigator.clipboard call: the
+    // copied indicator flips immediately regardless of the async result.
+    void copyToClipboard(settings.authToken);
     copied = true;
     setTimeout(() => (copied = false), 2000);
   }
