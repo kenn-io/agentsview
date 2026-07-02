@@ -588,17 +588,6 @@ func (b *duckRemoteMutationBatch) transactionBytes() int {
 	)
 }
 
-func duckRemoteTransactionBytes(statements []string) int {
-	if len(statements) == 0 {
-		return 0
-	}
-	statementBytes := 0
-	for _, stmt := range statements {
-		statementBytes += len(stmt)
-	}
-	return duckRemoteTransactionBytesFor(statementBytes, len(statements))
-}
-
 func duckRemoteTransactionBytesFor(statementBytes, statementCount int) int {
 	if statementCount == 0 {
 		return 0
@@ -692,15 +681,6 @@ func duckRemoteInsertMaxBytesForTransaction(maxBytes int) int {
 	return min(maxBytes-statementOverhead, duckRemoteInsertCoalesceMaxBytes)
 }
 
-func (b *duckRemoteMutationBatch) renderedStatements() []string {
-	rendered := b.rendered()
-	out := make([]string, 0, len(rendered))
-	for _, stmt := range rendered {
-		out = append(out, stmt.sql)
-	}
-	return out
-}
-
 func (b *duckRemoteMutationBatch) rendered() []duckRemoteRenderedStatement {
 	if b == nil || b.Len() == 0 {
 		return nil
@@ -719,17 +699,6 @@ func (b *duckRemoteMutationBatch) rendered() []duckRemoteRenderedStatement {
 	}
 	b.renderedValid = true
 	return b.renderedStatementsCache
-}
-
-func coalesceDuckRemoteInsertStatements(
-	statements []string, maxRows int, maxBytes int,
-) []string {
-	rendered := renderDuckRemoteMutationStatements(statements, maxRows, maxBytes)
-	out := make([]string, 0, len(rendered))
-	for _, stmt := range rendered {
-		out = append(out, stmt.sql)
-	}
-	return out
 }
 
 func renderDuckRemoteMutationStatements(
