@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { EmptyState } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { TrashIcon } from "../../icons.js";
   import { onMount } from "svelte";
@@ -84,11 +85,11 @@
   {#if loading}
     <div class="loading-state">{m.trash_loading()}</div>
   {:else if trashedSessions.length === 0}
-    <div class="empty-state">
-      <TrashIcon size="40" strokeWidth="1.6" class="empty-icon" aria-hidden="true" />
-      <p class="empty-title">{m.trash_empty()}</p>
-      <p class="empty-desc-text">{m.trash_empty_desc()}</p>
-    </div>
+    <EmptyState title={m.trash_empty()} description={m.trash_empty_desc()}>
+      {#snippet icon()}
+        <TrashIcon size="40" strokeWidth="1.6" aria-hidden="true" />
+      {/snippet}
+    </EmptyState>
   {:else}
     <div class="trash-header">
       <TrashIcon size="18" strokeWidth="2" class="trash-icon" aria-hidden="true" />
@@ -198,29 +199,6 @@
     color: var(--text-muted);
     padding: 40px 0;
     font-size: 13px;
-  }
-
-  .empty-state {
-    text-align: center;
-    padding: 60px 20px;
-    color: var(--text-muted);
-  }
-
-  :global(.empty-icon) {
-    opacity: 0.15;
-    margin-bottom: 16px;
-  }
-
-  .empty-title {
-    font-size: 16px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    margin: 0 0 6px;
-  }
-
-  .empty-desc-text {
-    font-size: 13px;
-    margin: 0;
   }
 
   .trash-list {

@@ -7,7 +7,8 @@
   import { router } from "../../stores/router.svelte.js";
   import { formatTokenCount } from "../../utils/format.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
-  import StatusDot from "../common/StatusDot.svelte";
+  import { StatusDot } from "@kenn-io/kit-ui";
+  import { sessionStatusLabel } from "../../utils/sessionStatus.js";
   import { m } from "../../i18n/index.js";
 
   function truncate(text: string, max: number): string {
@@ -145,6 +146,7 @@
     <div class="session-list">
       {#each analytics.topSessions.sessions as session, i}
         {@const label = sessionLabel(session)}
+        {@const status = getSessionStatus(session)}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div
@@ -153,7 +155,7 @@
         >
           <span class="rank">{i + 1}</span>
           <span class="session-status">
-            <StatusDot session={session} size={7} />
+            <StatusDot {status} label={sessionStatusLabel(status)} size={7} />
           </span>
           <div class="session-info">
             <span class="session-label">

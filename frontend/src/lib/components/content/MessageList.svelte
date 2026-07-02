@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
+  import { EmptyState } from "@kenn-io/kit-ui";
   import type { Virtualizer } from "@tanstack/virtual-core";
   import { messages } from "../../stores/messages.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
@@ -528,16 +529,13 @@
 </script>
 
 {#if !sessions.activeSessionId}
-  <div class="empty-state">
-    <div class="empty-icon">
+  <EmptyState title={m.message_list_empty()}>
+    {#snippet icon()}
       <MessageSquareIcon size="36" strokeWidth="1.5" aria-hidden="true" />
-    </div>
-    <p class="empty-text">{m.message_list_empty()}</p>
-  </div>
+    {/snippet}
+  </EmptyState>
 {:else if messages.loading && messages.messages.length === 0}
-  <div class="empty-state">
-    <p class="empty-text">{m.message_list_loading()}</p>
-  </div>
+  <EmptyState title={m.message_list_loading()} />
 {:else}
   <SessionFindBar />
   <div
@@ -617,25 +615,6 @@
     outline: 2px solid var(--accent-blue);
     outline-offset: -2px;
     border-radius: var(--radius-md, 6px);
-  }
-
-  .empty-state {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    color: var(--text-muted);
-    gap: 12px;
-  }
-
-  .empty-icon {
-    opacity: 0.25;
-  }
-
-  .empty-text {
-    font-size: 14px;
-    font-weight: 500;
   }
 
   /* ── Compact layout ── */

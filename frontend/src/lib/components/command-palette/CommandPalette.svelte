@@ -1,5 +1,6 @@
 <script lang="ts">
   import { m } from "../../i18n/index.js";
+  import { KbdBadge } from "@kenn-io/kit-ui";
   import { SearchIcon } from "../../icons.js";
   import { tick, onDestroy, untrack } from "svelte";
   import { ui } from "../../stores/ui.svelte.js";
@@ -168,7 +169,7 @@
         value={inputValue}
         oninput={handleInput}
       />
-      <kbd class="esc-hint">⎋</kbd>
+      <KbdBadge keys={["⎋"]} ariaLabel="Escape" />
     </div>
 
     <div class="palette-results">
@@ -302,16 +303,6 @@
 
   .palette-input::placeholder {
     color: var(--text-muted);
-  }
-
-  .esc-hint {
-    font-size: 10px;
-    padding: 1px 5px;
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-sm);
-    color: var(--text-muted);
-    background: var(--bg-inset);
-    font-family: var(--font-sans);
   }
 
   .palette-results {

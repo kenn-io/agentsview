@@ -73,6 +73,7 @@
     <div class="shortcuts-list">
       {#each shortcuts as shortcut}
         <div class="shortcut-row">
+          <!-- kit-ui-check-ignore: reference list enumerates compound alternatives ("j / ↓") and must stay visible on touch, where KbdBadge hides itself -->
           <kbd class="shortcut-key">{shortcut.key}</kbd>
           <span class="shortcut-action">{shortcut.action}</span>
         </div>

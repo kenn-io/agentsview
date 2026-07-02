@@ -318,14 +318,14 @@ describe("TopSessions", () => {
       // age comparisons fail and they fall straight into the
       // unclean tier.
       expect(
-        document.querySelectorAll(".status-dot--unclean").length,
+        document.querySelectorAll(".kit-status-dot--unclean").length,
       ).toBe(2);
 
       // The clean and NULL sessions resolve to "quiet" — a
       // transparent dot is still rendered so the layout column
       // stays consistent.
       expect(
-        document.querySelectorAll(".status-dot--quiet").length,
+        document.querySelectorAll(".kit-status-dot--quiet").length,
       ).toBe(2);
 
       unmount(component);
