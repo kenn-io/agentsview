@@ -214,6 +214,66 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
 }
 
+func TestWriteDuckDBPushPlanOmitsRemoteSecrets(t *testing.T) {
+	var out bytes.Buffer
+	duckCfg := config.DuckDBConfig{
+		URL:         "quack:https://user:duck-secret@duck.example.test/path?token=duck-secret",
+		Token:       "duck-token",
+		MachineName: "workstation",
+	}
+
+	writeDuckDBPushPlan(
+		&out,
+		duckCfg,
+		DuckDBPushConfig{Full: true},
+		[]string{"alpha", "beta"},
+		nil,
+		"url-abc123",
+	)
+
+	got := out.String()
+	assert.Contains(t, got, "DuckDB push target: remote Quack endpoint")
+	assert.Contains(t, got, `machine "workstation"`)
+	assert.Contains(t, got, "mode full")
+	assert.Contains(t, got, "sync scope url-abc123")
+	assert.Contains(t, got, "DuckDB push filters: include projects alpha, beta")
+	assert.NotContains(t, got, duckCfg.URL)
+	assert.NotContains(t, got, duckCfg.Token)
+	assert.NotContains(t, got, "duck-secret")
+}
+
+func TestWriteDuckDBPushDiagnosticsIncludesAgentBreakdown(t *testing.T) {
+	var out bytes.Buffer
+
+	writeDuckDBPushDiagnostics(&out, duckdbsync.PushResult{
+		SessionsPushed: 3,
+		MessagesPushed: 7,
+		Diagnostics: duckdbsync.PushDiagnostics{
+			Cutoff: "2026-07-01T12:00:00.000Z",
+			LocalSessions: duckdbsync.PushSessionCounts{
+				Total:   3,
+				ByAgent: map[string]int{"codex": 1, "claude": 2},
+			},
+			CandidateSessions: duckdbsync.PushSessionCounts{
+				Total:   3,
+				ByAgent: map[string]int{"codex": 1, "claude": 2},
+			},
+			SkippedUnchangedSessions: duckdbsync.PushSessionCounts{
+				Total: 0,
+			},
+			PushedSessions: duckdbsync.PushSessionCounts{
+				Total:   3,
+				ByAgent: map[string]int{"codex": 1, "claude": 2},
+			},
+			DeletedStaleSessions: 1,
+		},
+	})
+
+	got := out.String()
+	assert.Contains(t, got, "DuckDB push source: local 3 (claude=2, codex=1); candidates 3 (claude=2, codex=1); skipped unchanged 0; stale deleted 1")
+	assert.Contains(t, got, "DuckDB push wrote: sessions 3 (claude=2, codex=1), messages 7")
+}
+
 func TestWriteDuckDBQuackServeStartupDoesNotPrintToken(t *testing.T) {
 	var out bytes.Buffer
 	const token = "plain-quack-secret-token"

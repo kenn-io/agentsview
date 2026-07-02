@@ -180,6 +180,61 @@ func TestEnsureSchemaMigratesMessagesIDPrimaryKey(t *testing.T) {
 	assertDuckDBCountWhere(t, db, "messages", "id = ?", int64(1), 2)
 }
 
+func TestCheckSchemaCompatRejectsPendingNonIndexRepairs(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("messages id primary key", func(t *testing.T) {
+		db := openTestDuckDB(t)
+		require.NoError(t, EnsureSchema(ctx, db), "EnsureSchema")
+		recreateMessagesWithIDPrimaryKey(t, ctx, db)
+
+		err := CheckSchemaCompat(ctx, db)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "messages.id primary key")
+	})
+
+	t.Run("missing default repair metadata", func(t *testing.T) {
+		db := openTestDuckDB(t)
+		require.NoError(t, EnsureSchema(ctx, db), "EnsureSchema")
+		_, err := db.ExecContext(ctx,
+			`DELETE FROM sync_metadata WHERE key = ?`,
+			defaultRepairMetadataKey,
+		)
+		require.NoError(t, err)
+
+		err = CheckSchemaCompat(ctx, db)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), defaultRepairMetadataKey)
+	})
+
+	t.Run("missing usage repair metadata", func(t *testing.T) {
+		db := openTestDuckDB(t)
+		require.NoError(t, EnsureSchema(ctx, db), "EnsureSchema")
+		_, err := db.ExecContext(ctx,
+			`DELETE FROM sync_metadata WHERE key = ?`,
+			usageDedupIndexMetadataKey,
+		)
+		require.NoError(t, err)
+
+		err = CheckSchemaCompat(ctx, db)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), usageDedupIndexMetadataKey)
+	})
+
+	t.Run("quack incompatible timestamp default", func(t *testing.T) {
+		db := openTestDuckDB(t)
+		require.NoError(t, EnsureSchema(ctx, db), "EnsureSchema")
+		_, err := db.ExecContext(ctx,
+			`ALTER TABLE starred_sessions ALTER COLUMN created_at SET DEFAULT current_timestamp`,
+		)
+		require.NoError(t, err)
+
+		err = CheckSchemaCompat(ctx, db)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "starred_sessions.created_at")
+	})
+}
+
 func TestEnsureSchemaDropsQuackIncompatibleTimestampDefaults(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDuckDB(t)
@@ -267,6 +322,25 @@ func openTestDuckDB(t *testing.T) *sql.DB {
 		require.NoError(t, db.Close(), "close DuckDB")
 	})
 	return db
+}
+
+func recreateMessagesWithIDPrimaryKey(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	_, err := db.ExecContext(ctx, `DROP TABLE messages`)
+	require.NoError(t, err)
+	create := strings.Replace(
+		mirrorTableCreate("messages"),
+		"id BIGINT,",
+		"id BIGINT PRIMARY KEY,",
+		1,
+	)
+	require.NotEqual(t, mirrorTableCreate("messages"), create)
+	_, err = db.ExecContext(ctx, create)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO messages (id, session_id, ordinal, role, content)
+		VALUES (1, 'from-other-machine', 0, 'user', 'kept')`)
+	require.NoError(t, err)
 }
 
 func tableExists(t *testing.T, db *sql.DB, table string) bool {

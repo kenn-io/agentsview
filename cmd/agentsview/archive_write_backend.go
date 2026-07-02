@@ -200,6 +200,9 @@ func (b daemonArchiveWriteBackend) duckDBPush(
 	excludeProjects []string,
 	syncStateTarget string,
 ) (duckdbsync.PushResult, error) {
+	if err := duckdbsync.ValidatePushTarget(duckCfg); err != nil {
+		return duckdbsync.PushResult{}, err
+	}
 	duckCfg, err := absolutizeDuckDBPath(duckCfg)
 	if err != nil {
 		return duckdbsync.PushResult{}, err
@@ -377,6 +380,9 @@ func (b *localArchiveWriteBackend) duckDBPush(
 	excludeProjects []string,
 	syncStateTarget string,
 ) (duckdbsync.PushResult, error) {
+	if err := duckdbsync.ValidatePushTarget(duckCfg); err != nil {
+		return duckdbsync.PushResult{}, err
+	}
 	didResync := runLocalSync(ctx, b.appCfg, b.database, cfg.Full)
 	if err := ctx.Err(); err != nil {
 		return duckdbsync.PushResult{}, err
@@ -493,6 +499,18 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 }
 
 func logDuckDBWatchPushResult(res duckdbsync.PushResult, reason pushReason) {
+	if res.Diagnostics.Cutoff != "" {
+		log.Printf(
+			"duckdb watch: source local %s; candidates %s; skipped unchanged %s; stale deleted %d; wrote sessions %s, messages %d (%s)",
+			formatDuckDBPushSessionCounts(res.Diagnostics.LocalSessions),
+			formatDuckDBPushSessionCounts(res.Diagnostics.CandidateSessions),
+			formatDuckDBPushSessionCounts(res.Diagnostics.SkippedUnchangedSessions),
+			res.Diagnostics.DeletedStaleSessions,
+			formatDuckDBPushSessionCounts(res.Diagnostics.PushedSessions),
+			res.MessagesPushed,
+			reason,
+		)
+	}
 	if res.Errors > 0 {
 		log.Printf(
 			"duckdb watch: pushed %d sessions, %d messages, %d errors (%s)",

@@ -15,6 +15,8 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
+const quackAttachmentName = "agentsview_remote"
+
 // Open opens a local DuckDB file for the agentsview mirror backend.
 func Open(path string) (*sql.DB, error) {
 	if path == "" {
@@ -128,17 +130,20 @@ func ReadStatusFromConfig(
 		return SyncStatus{}, err
 	}
 	defer store.Close()
-	return readMachineStatus(ctx, store.DB(), cfg.MachineName, lastPush)
+	return readMachineStatus(
+		ctx, store.DB(), store.connectionKind, cfg.MachineName, lastPush,
+	)
 }
 
 func readMachineStatus(
 	ctx context.Context,
 	duck *sql.DB,
+	connectionKind duckDBConnectionKind,
 	machine string,
 	lastPush string,
 ) (SyncStatus, error) {
 	status := SyncStatus{Machine: machine, LastPushAt: lastPush}
-	if err := duck.QueryRowContext(ctx,
+	if err := queryDuckDBRowContext(ctx, duck, connectionKind,
 		`SELECT COUNT(*) FROM sessions WHERE machine = ?`,
 		machine,
 	).Scan(&status.DuckDBSessions); err != nil {
@@ -147,7 +152,7 @@ func readMachineStatus(
 		}
 		return SyncStatus{}, fmt.Errorf("counting duckdb sessions: %w", err)
 	}
-	if err := duck.QueryRowContext(ctx,
+	if err := queryDuckDBRowContext(ctx, duck, connectionKind,
 		`SELECT COUNT(*)
 		 FROM messages
 		 WHERE session_id IN (
@@ -182,23 +187,31 @@ func NewStoreFromConfig(cfg config.DuckDBConfig) (*Store, error) {
 	return NewStore(cfg.Path)
 }
 
+// ValidatePushTarget validates remote DuckDB push targets without opening a
+// DuckDB connection. Local file targets are validated when opened.
+func ValidatePushTarget(cfg config.DuckDBConfig) error {
+	if cfg.URL == "" {
+		return nil
+	}
+	return ValidateQuackClientURL(cfg.URL, cfg.Token, cfg.AllowInsecure)
+}
+
 // NewFromConfig opens either a local DuckDB mirror file or a remote Quack
 // endpoint for push sync.
 func NewFromConfig(
 	cfg config.DuckDBConfig, local *db.DB, opts SyncOptions,
 ) (*Sync, error) {
-	if local == nil {
-		return nil, fmt.Errorf("local db is required")
-	}
-	if cfg.MachineName == "" {
-		return nil, fmt.Errorf("machine name must not be empty")
+	if err := validateSyncInputs(local, cfg.MachineName); err != nil {
+		return nil, err
 	}
 	var (
-		duck *sql.DB
-		err  error
+		duck           *sql.DB
+		err            error
+		connectionKind = duckDBBaseConnection
 	)
 	if cfg.URL != "" {
 		duck, err = OpenQuack(cfg.URL, cfg.Token, cfg.AllowInsecure)
+		connectionKind = duckDBQuackClientConnection
 	} else {
 		duck, err = Open(cfg.Path)
 	}
@@ -212,6 +225,7 @@ func NewFromConfig(
 		syncStateScope:  opts.SyncStateTarget,
 		projects:        opts.Projects,
 		excludeProjects: opts.ExcludeProjects,
+		connectionKind:  connectionKind,
 	}, nil
 }
 
@@ -221,7 +235,10 @@ func NewQuackStore(rawURL, token string, allowInsecure bool) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewStoreFromDB(conn), nil
+	return &Store{
+		duck:           conn,
+		connectionKind: duckDBQuackClientConnection,
+	}, nil
 }
 
 // OpenQuack opens an in-memory DuckDB client and attaches a remote DuckDB
@@ -249,7 +266,7 @@ func OpenQuack(rawURL, token string, allowInsecure bool) (*sql.DB, error) {
 		conn.Close()
 		return nil, fmt.Errorf("loading quack extension: %w", err)
 	}
-	attach := "ATTACH " + duckLiteral(rawURL) + " AS agentsview_remote"
+	attach := "ATTACH " + duckLiteral(rawURL) + " AS " + quackAttachmentName
 	if token != "" {
 		attach += " (TOKEN " + duckLiteral(token) + ")"
 	}
@@ -260,7 +277,7 @@ func OpenQuack(rawURL, token string, allowInsecure bool) (*sql.DB, error) {
 			RedactQuackURL(rawURL), err,
 		)
 	}
-	if _, err := conn.Exec("USE agentsview_remote"); err != nil {
+	if _, err := conn.Exec("USE " + quackAttachmentName); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("selecting quack catalog: %w", err)
 	}
@@ -293,7 +310,9 @@ func ValidateQuackClientURL(rawURL, token string, allowInsecure bool) error {
 		return fmt.Errorf("duckdb url must start with quack")
 	}
 	if token == "" {
-		return fmt.Errorf("duckdb quack token is required")
+		return fmt.Errorf(
+			"duckdb quack token is required; set AGENTSVIEW_DUCKDB_TOKEN or [duckdb].token",
+		)
 	}
 	transport := strings.TrimPrefix(rawURL, "quack:")
 	if !strings.HasPrefix(transport, "http://") &&

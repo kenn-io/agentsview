@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,12 +35,20 @@ type Sync struct {
 	syncStateScope  string
 	projects        []string
 	excludeProjects []string
+	connectionKind  duckDBConnectionKind
 
 	closeOnce sync.Once
 	closeErr  error
 	schemaMu  sync.Mutex
 	schemaOK  bool
 }
+
+type duckDBConnectionKind int
+
+const (
+	duckDBBaseConnection duckDBConnectionKind = iota
+	duckDBQuackClientConnection
+)
 
 // SyncOptions holds optional DuckDB push-scope filters.
 type SyncOptions struct {
@@ -54,6 +63,25 @@ type PushResult struct {
 	MessagesPushed int
 	Errors         int
 	Duration       time.Duration
+	Diagnostics    PushDiagnostics
+}
+
+// PushDiagnostics summarizes how a DuckDB push selected sessions.
+type PushDiagnostics struct {
+	Full                     bool
+	LastPushAt               string
+	Cutoff                   string
+	LocalSessions            PushSessionCounts
+	CandidateSessions        PushSessionCounts
+	SkippedUnchangedSessions PushSessionCounts
+	PushedSessions           PushSessionCounts
+	DeletedStaleSessions     int
+}
+
+// PushSessionCounts summarizes a set of sessions without exposing content.
+type PushSessionCounts struct {
+	Total   int
+	ByAgent map[string]int
 }
 
 // PushProgress is reported after each pushed session.
@@ -76,11 +104,8 @@ type SyncStatus struct {
 func New(
 	path string, local *db.DB, machine string, opts SyncOptions,
 ) (*Sync, error) {
-	if local == nil {
-		return nil, fmt.Errorf("local db is required")
-	}
-	if machine == "" {
-		return nil, fmt.Errorf("machine name must not be empty")
+	if err := validateSyncInputs(local, machine); err != nil {
+		return nil, err
 	}
 	duck, err := Open(path)
 	if err != nil {
@@ -94,6 +119,16 @@ func New(
 		projects:        opts.Projects,
 		excludeProjects: opts.ExcludeProjects,
 	}, nil
+}
+
+func validateSyncInputs(local *db.DB, machine string) error {
+	if local == nil {
+		return fmt.Errorf("local db is required")
+	}
+	if machine == "" {
+		return fmt.Errorf("machine name must not be empty")
+	}
+	return nil
 }
 
 // DB returns the underlying DuckDB connection.
@@ -125,7 +160,10 @@ func (s *Sync) EnsureSchema(ctx context.Context) error {
 	if s.schemaOK {
 		return nil
 	}
-	if err := EnsureSchema(ctx, s.duck); err != nil {
+	opts := schemaOptions{
+		createIndexes: s.connectionKind != duckDBQuackClientConnection,
+	}
+	if err := ensureSchema(ctx, s.duck, opts); err != nil {
 		return err
 	}
 	s.schemaOK = true
@@ -143,7 +181,9 @@ func (s *Sync) Status(ctx context.Context) (SyncStatus, error) {
 	if err := s.EnsureSchema(ctx); err != nil {
 		return SyncStatus{}, err
 	}
-	return readMachineStatus(ctx, s.duck, s.machine, status.LastPushAt)
+	return readMachineStatus(
+		ctx, s.duck, s.connectionKind, s.machine, status.LastPushAt,
+	)
 }
 
 // Push syncs local sessions and dependent rows to DuckDB.
@@ -186,6 +226,9 @@ func (s *Sync) Push(
 	}
 
 	cutoff := time.Now().UTC().Format(localSyncTimestampLayout)
+	result.Diagnostics.Full = full
+	result.Diagnostics.LastPushAt = lastPush
+	result.Diagnostics.Cutoff = cutoff
 	sessions, err := s.local.ListSessionsModifiedBetween(
 		ctx, lastPush, cutoff, s.projects, s.excludeProjects,
 	)
@@ -223,10 +266,13 @@ func (s *Sync) Push(
 	if err != nil {
 		return result, fmt.Errorf("listing local sessions: %w", err)
 	}
+	result.Diagnostics.LocalSessions = countPushSessions(allLocalSessions)
 	sessionFingerprints, err := s.sessionFingerprints(ctx, sessions)
 	if err != nil {
 		return result, err
 	}
+	candidateSessions := append([]db.Session(nil), sessions...)
+	result.Diagnostics.CandidateSessions = countPushSessions(candidateSessions)
 	priorFingerprints := map[string]string{}
 	if !full {
 		priorFingerprints, err = readSyncFingerprintsWithKey(
@@ -237,6 +283,9 @@ func (s *Sync) Push(
 			return result, err
 		}
 		sessions = filterUnchangedSessions(sessions, priorFingerprints, sessionFingerprints)
+		result.Diagnostics.SkippedUnchangedSessions = skippedPushSessions(
+			candidateSessions, sessions,
+		)
 	}
 	sort.Slice(sessions, func(i, j int) bool {
 		return sessions[i].ID < sessions[j].ID
@@ -249,7 +298,7 @@ func (s *Sync) Push(
 	defer func() { _ = tx.Rollback() }()
 
 	var staleIDs []string
-	staleIDs, err = deleteHardDeletedMirrorSessions(
+	staleIDs, err = s.deleteHardDeletedMirrorSessions(
 		ctx, tx, allLocalSessions, s.machine, s.projects, s.excludeProjects,
 	)
 	if err != nil {
@@ -258,6 +307,7 @@ func (s *Sync) Push(
 	for _, id := range staleIDs {
 		delete(priorFingerprints, id)
 	}
+	result.Diagnostics.DeletedStaleSessions = len(staleIDs)
 
 	pushed := make([]db.Session, 0, len(sessions))
 	for i, sess := range sessions {
@@ -277,6 +327,7 @@ func (s *Sync) Push(
 			})
 		}
 	}
+	result.Diagnostics.PushedSessions = countPushSessions(pushed)
 	if !s.isFiltered() {
 		if err := s.replaceAllPinnedMessages(ctx, tx, allLocalSessions); err != nil {
 			return result, err
@@ -305,6 +356,40 @@ func (s *Sync) Push(
 	}
 	result.Duration = time.Since(start)
 	return result, nil
+}
+
+func countPushSessions(sessions []db.Session) PushSessionCounts {
+	counts := PushSessionCounts{Total: len(sessions)}
+	if len(sessions) == 0 {
+		return counts
+	}
+	counts.ByAgent = make(map[string]int)
+	for _, sess := range sessions {
+		agent := strings.TrimSpace(sess.Agent)
+		if agent == "" {
+			agent = "unknown"
+		}
+		counts.ByAgent[agent]++
+	}
+	return counts
+}
+
+func skippedPushSessions(
+	candidates []db.Session,
+	pushed []db.Session,
+) PushSessionCounts {
+	pushedIDs := make(map[string]struct{}, len(pushed))
+	for _, sess := range pushed {
+		pushedIDs[sess.ID] = struct{}{}
+	}
+	skipped := make([]db.Session, 0, len(candidates)-len(pushed))
+	for _, sess := range candidates {
+		if _, ok := pushedIDs[sess.ID]; ok {
+			continue
+		}
+		skipped = append(skipped, sess)
+	}
+	return countPushSessions(skipped)
 }
 
 func (s *Sync) sessionCount(ctx context.Context) (int, error) {

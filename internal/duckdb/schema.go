@@ -531,12 +531,26 @@ var mirrorTables = []tableSpec{
 	},
 }
 
+type schemaOptions struct {
+	createIndexes bool
+}
+
 // EnsureSchema creates and additively migrates the DuckDB mirror schema.
 func EnsureSchema(ctx context.Context, db *sql.DB) error {
+	return ensureSchema(ctx, db, schemaOptions{createIndexes: true})
+}
+
+func ensureSchema(ctx context.Context, db *sql.DB, opts schemaOptions) error {
 	for _, table := range mirrorTables {
 		if _, err := db.ExecContext(ctx, table.create); err != nil {
 			return fmt.Errorf("creating duckdb table %s: %w", table.name, err)
 		}
+	}
+	if !opts.createIndexes {
+		if err := checkSchemaShapeCompat(ctx, db); err != nil {
+			return err
+		}
+		return checkSchemaRepairsViaQuack(ctx, db)
 	}
 
 	existing, err := loadColumns(ctx, db)
@@ -584,6 +598,7 @@ func EnsureSchema(ctx context.Context, db *sql.DB) error {
 	if err := dropQuackIncompatibleTimestampDefaults(ctx, db); err != nil {
 		return err
 	}
+
 	recordUsageDedupIndexMigration, err := migrateUsageEventsDedupIndex(ctx, db)
 	if err != nil {
 		return err
@@ -713,6 +728,17 @@ func metadataKeyExists(ctx context.Context, db *sql.DB, key string) (bool, error
 func recordMetadataKey(
 	ctx context.Context, db *sql.DB, key string, value string,
 ) error {
+	var existing string
+	err := db.QueryRowContext(ctx,
+		`SELECT value FROM sync_metadata WHERE key = ?`,
+		key,
+	).Scan(&existing)
+	if err == nil && existing == value {
+		return nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("checking duckdb metadata key %s: %w", key, err)
+	}
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO sync_metadata (key, value)
 		VALUES (?, ?)
@@ -823,6 +849,24 @@ func columnDefaultLiteral(def string) (string, bool) {
 // CheckSchemaCompat verifies that the DuckDB mirror has the required
 // read/push tables and columns. It does not mutate the database.
 func CheckSchemaCompat(ctx context.Context, db *sql.DB) error {
+	if err := checkSchemaShapeCompat(ctx, db); err != nil {
+		return err
+	}
+	pendingRepairs, err := pendingSchemaRepairs(ctx, db)
+	if err != nil {
+		return err
+	}
+	return schemaRepairError(pendingRepairs)
+}
+
+func CheckSchemaCompatViaQuack(ctx context.Context, db *sql.DB) error {
+	if err := checkSchemaShapeCompat(ctx, db); err != nil {
+		return err
+	}
+	return checkSchemaRepairsViaQuack(ctx, db)
+}
+
+func checkSchemaShapeCompat(ctx context.Context, db *sql.DB) error {
 	existing, err := loadColumns(ctx, db)
 	if err != nil {
 		return err
@@ -875,7 +919,102 @@ func CheckSchemaCompat(ctx context.Context, db *sql.DB) error {
 			got, SchemaVersion,
 		)
 	}
+
 	return nil
+}
+
+func checkSchemaRepairsViaQuack(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx,
+		"SELECT issue FROM "+quackAttachmentName+".query(?)",
+		pendingSchemaRepairsQuery(),
+	)
+	if err != nil {
+		return fmt.Errorf("checking duckdb schema repairs through quack: %w", err)
+	}
+	pendingRepairs, err := collectSchemaRepairIssues(rows)
+	if err != nil {
+		return err
+	}
+	return schemaRepairError(pendingRepairs)
+}
+
+func pendingSchemaRepairs(ctx context.Context, db *sql.DB) ([]string, error) {
+	rows, err := db.QueryContext(ctx, pendingSchemaRepairsQuery())
+	if err != nil {
+		return nil, fmt.Errorf("checking duckdb schema repairs: %w", err)
+	}
+	return collectSchemaRepairIssues(rows)
+}
+
+func collectSchemaRepairIssues(rows *sql.Rows) ([]string, error) {
+	defer func() {
+		_ = rows.Close()
+	}()
+	var pendingRepairs []string
+	for rows.Next() {
+		var issue string
+		if err := rows.Scan(&issue); err != nil {
+			return nil, fmt.Errorf("scanning duckdb schema repair check: %w", err)
+		}
+		pendingRepairs = append(pendingRepairs, issue)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating duckdb schema repair check: %w", err)
+	}
+	return pendingRepairs, nil
+}
+
+func schemaRepairError(pendingRepairs []string) error {
+	if len(pendingRepairs) == 0 {
+		return nil
+	}
+	sort.Strings(pendingRepairs)
+	return fmt.Errorf(
+		"duckdb schema incompatible; run full DuckDB schema migration on the base database; pending repairs: %s",
+		strings.Join(pendingRepairs, ", "),
+	)
+}
+
+func pendingSchemaRepairsQuery() string {
+	metadataValues := []string{
+		"(" + duckLiteral(defaultRepairMetadataKey) + ")",
+		"(" + duckLiteral(usageDedupIndexMetadataKey) + ")",
+	}
+	defaultValues := make([]string, len(quackIncompatibleTimestampDefaults))
+	for i, spec := range quackIncompatibleTimestampDefaults {
+		defaultValues[i] = "(" + duckLiteral(spec.table) + ", " +
+			duckLiteral(spec.column) + ")"
+	}
+	return `
+		WITH required_metadata(key) AS (
+			VALUES ` + strings.Join(metadataValues, ", ") + `
+		),
+		checked_defaults(table_name, column_name) AS (
+			VALUES ` + strings.Join(defaultValues, ", ") + `
+		)
+		SELECT 'missing ' || key AS issue
+		FROM required_metadata m
+		WHERE NOT EXISTS (
+			SELECT 1 FROM sync_metadata sm WHERE sm.key = m.key
+		)
+		UNION ALL
+		SELECT 'messages.id primary key' AS issue
+		WHERE EXISTS (
+			SELECT 1
+			FROM information_schema.table_constraints
+			WHERE table_schema = current_schema()
+			  AND lower(table_name) = 'messages'
+			  AND constraint_type = 'PRIMARY KEY'
+		)
+		UNION ALL
+		SELECT lower(c.table_name) || '.' || lower(c.column_name) ||
+			' current_timestamp default' AS issue
+		FROM information_schema.columns c
+		JOIN checked_defaults d
+		  ON lower(c.table_name) = d.table_name
+		 AND lower(c.column_name) = d.column_name
+		WHERE c.table_schema = current_schema()
+		  AND lower(coalesce(c.column_default, '')) LIKE '%current_timestamp%'`
 }
 
 func loadColumns(ctx context.Context, db *sql.DB) (map[string]map[string]bool, error) {

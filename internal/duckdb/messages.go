@@ -21,7 +21,7 @@ func (s *Store) GetMessages(
 		dir = "DESC"
 		op = "<="
 	}
-	rows, err := s.duck.QueryContext(ctx, `
+	rows, err := s.queryContext(ctx, `
 		SELECT id, session_id, ordinal, role, content, thinking_text,
 			timestamp, has_thinking, has_tool_use, content_length,
 			is_system, model, token_usage, context_tokens, output_tokens,
@@ -49,7 +49,7 @@ func (s *Store) GetMessages(
 }
 
 func (s *Store) GetAllMessages(ctx context.Context, sessionID string) ([]db.Message, error) {
-	rows, err := s.duck.QueryContext(ctx, `
+	rows, err := s.queryContext(ctx, `
 		SELECT id, session_id, ordinal, role, content, thinking_text,
 			timestamp, has_thinking, has_tool_use, content_length,
 			is_system, model, token_usage, context_tokens, output_tokens,
@@ -109,7 +109,7 @@ func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message) error {
 	for i, msg := range msgs {
 		index[msg.Ordinal] = i
 	}
-	rows, err := s.duck.QueryContext(ctx, `
+	rows, err := s.queryContext(ctx, `
 		SELECT m.ordinal, tc.call_index, tc.tool_name, tc.category,
 			COALESCE(tc.tool_use_id, ''), COALESCE(tc.input_json, ''),
 			COALESCE(tc.skill_name, ''), COALESCE(tc.result_content_length, 0),
@@ -156,7 +156,7 @@ func (s *Store) attachToolCalls(ctx context.Context, msgs []db.Message) error {
 func (s *Store) attachToolResultEvents(
 	ctx context.Context, msgs []db.Message, index map[int]int, sessionID string,
 ) error {
-	rows, err := s.duck.QueryContext(ctx, `
+	rows, err := s.queryContext(ctx, `
 		SELECT tool_call_message_ordinal, call_index,
 			COALESCE(tool_use_id, ''), COALESCE(agent_id, ''),
 			COALESCE(subagent_session_id, ''), source, status,
@@ -284,7 +284,7 @@ func (s *Store) GetSessionTiming(ctx context.Context, sessionID string) (*db.Ses
 func (s *Store) queryTurnRows(
 	ctx context.Context, sess *db.Session,
 ) ([]db.TurnRow, error) {
-	rows, err := s.duck.QueryContext(ctx, `
+	rows, err := s.queryContext(ctx, `
 		SELECT id, ordinal, timestamp, has_tool_use
 		FROM messages
 		WHERE session_id = ?
@@ -329,7 +329,7 @@ func (s *Store) queryTurnRows(
 func (s *Store) queryCallRows(
 	ctx context.Context, sessionID string,
 ) ([]db.CallRow, error) {
-	rows, err := s.duck.QueryContext(ctx, `
+	rows, err := s.queryContext(ctx, `
 		SELECT tc.message_id, COALESCE(tc.tool_use_id, ''),
 			tc.tool_name, tc.category, tc.skill_name,
 			tc.subagent_session_id, COALESCE(tc.input_json, ''),

@@ -73,7 +73,7 @@ ORDER BY fp.last_edited_at DESC NULLS LAST, fp.last_session_id DESC,
 		qArgs = append(qArgs, "%"+db.EscapeLikePattern(p.Search)+"%")
 	}
 	qArgs = append(qArgs, p.Limit+1, p.Offset, p.MaxEditsPerFile)
-	rows, err := s.duck.QueryContext(ctx, query, qArgs...)
+	rows, err := s.queryContext(ctx, query, qArgs...)
 	if err != nil {
 		return db.RecentEditsResult{}, fmt.Errorf("querying duckdb recent edits: %w", err)
 	}

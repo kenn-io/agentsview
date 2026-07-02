@@ -108,7 +108,7 @@ func (s *Store) activityReportSessions(
 			s.started_at, s.created_at) >= CAST(? AS TIMESTAMP)
 		AND COALESCE(s.started_at, s.created_at) < CAST(? AS TIMESTAMP)`
 
-	rows, err := s.duck.QueryContext(ctx, query, args...)
+	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, nil, fmt.Errorf(
 			"querying duckdb activity report sessions: %w", err)
@@ -157,7 +157,7 @@ func (s *Store) activityReportActivity(
 			AND timestamp IS NOT NULL
 		ORDER BY session_id, ordinal`
 
-	rows, err := s.duck.QueryContext(ctx, query, args...)
+	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"querying duckdb activity report activity: %w", err)
@@ -236,7 +236,7 @@ func (s *Store) activityReportUsage(
 	args = append(args, idArgs...) // event-source IN
 	args = append(args, lowerBound, upperBound)
 
-	rows, err := s.duck.QueryContext(ctx, query, args...)
+	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying duckdb activity report usage: %w", err)
 	}
