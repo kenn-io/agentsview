@@ -19,7 +19,7 @@ import {
 } from "../api/runtime.js";
 import { sessions } from "./sessions.svelte.js";
 import { perf, type PerfEntryStatus } from "./perf.svelte.js";
-import { daysAgo, today } from "../utils/dates.js";
+import { rollingRange, today } from "../utils/dates.js";
 
 type AnalyticsParams = Parameters<
   typeof AnalyticsService.getApiV1AnalyticsSummary
@@ -52,7 +52,7 @@ type Panel =
 type FetchResult = "ok" | "error" | "aborted";
 
 class AnalyticsStore {
-  from: string = $state(daysAgo(365));
+  from: string = $state(rollingRange(365).from);
   to: string = $state(today());
   isPinned: boolean = $state(false);
   windowDays: number = $state(365);
@@ -552,8 +552,9 @@ class AnalyticsStore {
 
   private rollDates(): void {
     if (this.isPinned) return;
-    this.from = daysAgo(this.windowDays);
-    this.to = today();
+    const { from, to } = rollingRange(this.windowDays);
+    this.from = from;
+    this.to = to;
   }
 
   async fetchAll() {

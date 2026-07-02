@@ -1211,20 +1211,20 @@ describe("UsageStore rolling default date range", () => {
     const { usage } = await loadStore();
     expect(usage.isPinned).toBe(false);
     expect(usage.windowDays).toBe(30);
-    expect(usage.from).toBe("2026-03-26");
+    expect(usage.from).toBe("2026-03-27");
     expect(usage.to).toBe("2026-04-25");
   });
 
   it("fetchAll re-derives from/to against the current clock while unpinned", async () => {
     const { usage } = await loadStore();
 
-    expect(usage.from).toBe("2026-03-26");
+    expect(usage.from).toBe("2026-03-27");
     expect(usage.to).toBe("2026-04-25");
 
     vi.setSystemTime(new Date("2026-04-26T12:00:00"));
     await usage.fetchAll();
 
-    expect(usage.from).toBe("2026-03-27");
+    expect(usage.from).toBe("2026-03-28");
     expect(usage.to).toBe("2026-04-26");
   });
 
@@ -1252,19 +1252,19 @@ describe("UsageStore rolling default date range", () => {
 
     expect(usage.isPinned).toBe(false);
     expect(usage.windowDays).toBe(7);
-    expect(usage.from).toBe("2026-04-18");
+    expect(usage.from).toBe("2026-04-19");
     expect(usage.to).toBe("2026-04-25");
   });
 
   it("after setRollingWindow, fetchAll keeps rolling", async () => {
     const { usage } = await loadStore();
     usage.setRollingWindow(7);
-    expect(usage.from).toBe("2026-04-18");
+    expect(usage.from).toBe("2026-04-19");
 
     vi.setSystemTime(new Date("2026-04-26T12:00:00"));
     await usage.fetchAll();
 
-    expect(usage.from).toBe("2026-04-19");
+    expect(usage.from).toBe("2026-04-20");
     expect(usage.to).toBe("2026-04-26");
   });
 });

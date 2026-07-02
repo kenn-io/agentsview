@@ -12,7 +12,7 @@ import {
 } from "../api/runtime.js";
 import { sessions } from "./sessions.svelte.js";
 import { perf, type PerfEntryStatus } from "./perf.svelte.js";
-import { daysAgo, today } from "../utils/dates.js";
+import { rollingRange, today } from "../utils/dates.js";
 
 type UsageParams = Parameters<typeof UsageService.getApiV1UsageSummary>[0];
 type UsagePairwiseParams =
@@ -98,8 +98,8 @@ function saveToggles(t: Toggles): void {
 const DEFAULT_WINDOW_DAYS = 30;
 
 // 100 years is well beyond any realistic session history and stays
-// inside Date#setDate's safe range, so daysAgo(MAX_WINDOW_DAYS) always
-// produces a valid YYYY-MM-DD string.
+// inside Date#setDate's safe range, so rollingRange(MAX_WINDOW_DAYS)
+// always produces valid YYYY-MM-DD strings.
 const MAX_WINDOW_DAYS = 36500;
 
 const USAGE_FILTERS_KEY = "usage-filters";
@@ -182,7 +182,7 @@ function samePairwiseSelection(
 }
 
 class UsageStore {
-  from: string = $state(daysAgo(DEFAULT_WINDOW_DAYS));
+  from: string = $state(rollingRange(DEFAULT_WINDOW_DAYS).from);
   to: string = $state(today());
   isPinned: boolean = $state(false);
   windowDays: number = $state(DEFAULT_WINDOW_DAYS);
@@ -537,8 +537,9 @@ class UsageStore {
 
   private rollDates(): void {
     if (this.isPinned) return;
-    this.from = daysAgo(this.windowDays);
-    this.to = today();
+    const { from, to } = rollingRange(this.windowDays);
+    this.from = from;
+    this.to = to;
   }
 
   async fetchAll() {

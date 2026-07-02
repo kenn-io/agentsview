@@ -972,20 +972,20 @@ describe("AnalyticsStore rolling default date range", () => {
     const { analytics } = await loadAnalyticsStore();
     expect(analytics.isPinned).toBe(false);
     expect(analytics.windowDays).toBe(365);
-    expect(analytics.from).toBe("2025-04-25");
+    expect(analytics.from).toBe("2025-04-26");
     expect(analytics.to).toBe("2026-04-25");
   });
 
   it("fetchAll re-derives from/to against the current clock while unpinned", async () => {
     const { analytics } = await loadAnalyticsStore();
 
-    expect(analytics.from).toBe("2025-04-25");
+    expect(analytics.from).toBe("2025-04-26");
     expect(analytics.to).toBe("2026-04-25");
 
     vi.setSystemTime(new Date("2026-04-26T12:00:00"));
     await analytics.fetchAll();
 
-    expect(analytics.from).toBe("2025-04-26");
+    expect(analytics.from).toBe("2025-04-27");
     expect(analytics.to).toBe("2026-04-26");
   });
 
@@ -1013,19 +1013,19 @@ describe("AnalyticsStore rolling default date range", () => {
 
     expect(analytics.isPinned).toBe(false);
     expect(analytics.windowDays).toBe(7);
-    expect(analytics.from).toBe("2026-04-18");
+    expect(analytics.from).toBe("2026-04-19");
     expect(analytics.to).toBe("2026-04-25");
   });
 
   it("after setRollingWindow, fetchAll keeps rolling", async () => {
     const { analytics } = await loadAnalyticsStore();
     analytics.setRollingWindow(7);
-    expect(analytics.from).toBe("2026-04-18");
+    expect(analytics.from).toBe("2026-04-19");
 
     vi.setSystemTime(new Date("2026-04-26T12:00:00"));
     await analytics.fetchAll();
 
-    expect(analytics.from).toBe("2026-04-19");
+    expect(analytics.from).toBe("2026-04-20");
     expect(analytics.to).toBe("2026-04-26");
   });
 
@@ -1078,11 +1078,11 @@ describe("AnalyticsStore rolling default date range", () => {
     vi.setSystemTime(new Date("2026-04-26T12:00:00"));
     await analytics.fetchSignalsForInsights();
 
-    expect(analytics.from).toBe("2026-04-19");
+    expect(analytics.from).toBe("2026-04-20");
     expect(analytics.to).toBe("2026-04-26");
     expect(analyticsService.getApiV1AnalyticsSignals).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        from: "2026-04-19",
+        from: "2026-04-20",
         to: "2026-04-26",
       }),
     );
