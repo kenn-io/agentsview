@@ -17,102 +17,102 @@
 
 /* Light theme (default) — app-specific tokens */
 :root {
-  /* Deliberate override: kit-ui's --accent-teal is cyan-leaning (#0891b2),
+  /* Deliberate override: kit-ui's --accent-teal is cyan-leaning,
      which would collide with --accent-cyan below. agentsview uses teal and
      cyan as distinct agent-identity hues, so keep the greener teal. */
-  --accent-teal: #0d9488;
+  --accent-teal: #0d9488; /* kit-ui-check-ignore: app token definition */
   /* Extra identity accents beyond kit-ui's core set */
-  --accent-rose: #e11d48;
-  --accent-coral: #f34e3f;
-  --accent-black: #2d2d2d;
-  --accent-indigo: #6366f1;
-  --accent-orange: #e09040;
-  --accent-sky: #0284c7;
-  --accent-pink: #ec4899;
-  --accent-lime: #65a30d;
-  --accent-cyan: #0891b2;
-  --accent-violet: #7c3aed;
+  --accent-rose: #e11d48; /* kit-ui-check-ignore: app token definition */
+  --accent-coral: #f34e3f; /* kit-ui-check-ignore: app token definition */
+  --accent-black: #2d2d2d; /* kit-ui-check-ignore: app token definition */
+  --accent-indigo: #6366f1; /* kit-ui-check-ignore: app token definition */
+  --accent-orange: #e09040; /* kit-ui-check-ignore: app token definition */
+  --accent-sky: #0284c7; /* kit-ui-check-ignore: app token definition */
+  --accent-pink: #ec4899; /* kit-ui-check-ignore: app token definition */
+  --accent-lime: #65a30d; /* kit-ui-check-ignore: app token definition */
+  --accent-cyan: #0891b2; /* kit-ui-check-ignore: app token definition */
+  --accent-violet: #7c3aed; /* kit-ui-check-ignore: app token definition */
   /* ALL --accent-*-foreground pairs are agentsview-owned, including the
      ones for kit-ui's core accents (blue/purple/amber/green/red/teal):
      kit-ui defines no foreground tokens, and these inks are tuned for the
      agent-identity badge fills. Anyone changing a kit-ui core accent must
      re-check the matching foreground here for contrast. */
-  --accent-blue-foreground: #ffffff;
-  --accent-rose-foreground: #ffffff;
-  --accent-purple-foreground: #ffffff;
-  --accent-amber-foreground: #07111f;
-  --accent-green-foreground: #07111f;
-  --accent-coral-foreground: #07111f;
-  --accent-black-foreground: #ffffff;
-  --accent-teal-foreground: #07111f;
-  --accent-red-foreground: #ffffff;
-  --accent-indigo-foreground: #000000;
-  --accent-orange-foreground: #07111f;
-  --accent-sky-foreground: #07111f;
-  --accent-pink-foreground: #07111f;
-  --accent-lime-foreground: #07111f;
-  --accent-cyan-foreground: #07111f;
-  --accent-violet-foreground: #ffffff;
+  --accent-blue-foreground: #ffffff; /* kit-ui-check-ignore: app token definition */
+  --accent-rose-foreground: #ffffff; /* kit-ui-check-ignore: app token definition */
+  --accent-purple-foreground: #ffffff; /* kit-ui-check-ignore: app token definition */
+  --accent-amber-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-green-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-coral-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-black-foreground: #ffffff; /* kit-ui-check-ignore: app token definition */
+  --accent-teal-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-red-foreground: #ffffff; /* kit-ui-check-ignore: app token definition */
+  --accent-indigo-foreground: #000000; /* kit-ui-check-ignore: app token definition */
+  --accent-orange-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-sky-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-pink-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-lime-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-cyan-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-violet-foreground: #ffffff; /* kit-ui-check-ignore: app token definition */
   /* Tool-category color map (see internal/parser/taxonomy.go for normalized values) */
-  --cat-read:  #4a7ba8; /* Read, Grep, Glob */
-  --cat-edit:  #5a8b3a; /* Edit, Write */
-  --cat-bash:  #d4a35a; /* Bash */
-  --cat-task:  #c45a5a; /* Task / sub-agents */
-  --cat-tool:  #7a5fa8; /* Tool: Skills, MCP, misc */
-  --cat-other: #888888; /* Other */
-  --cat-mixed: #4a4a4a; /* Mixed: parallel-group rail, no-dominant */
+  --cat-read:  #4a7ba8; /* Read, Grep, Glob */ /* kit-ui-check-ignore: app token definition */
+  --cat-edit:  #5a8b3a; /* Edit, Write */ /* kit-ui-check-ignore: app token definition */
+  --cat-bash:  #d4a35a; /* Bash */ /* kit-ui-check-ignore: app token definition */
+  --cat-task:  #c45a5a; /* Task / sub-agents */ /* kit-ui-check-ignore: app token definition */
+  --cat-tool:  #7a5fa8; /* Tool: Skills, MCP, misc */ /* kit-ui-check-ignore: app token definition */
+  --cat-other: #888888; /* Other */ /* kit-ui-check-ignore: app token definition */
+  --cat-mixed: #4a4a4a; /* Mixed: parallel-group rail, no-dominant */ /* kit-ui-check-ignore: app token definition */
   /* Duration UX state colors */
-  --slow-fg:    #f29070;
-  --slow-bg:    rgba(242, 144, 112, 0.12);
-  --slow-ring:  rgba(242, 144, 112, 0.20);
-  --running-fg: #6ad0a8;
-  --running-bg: rgba(106, 208, 168, 0.12);
-  --running-ring: rgba(106, 208, 168, 0.22);
-  --user-bg: #eef2ff;
-  --assistant-bg: #faf9ff;
-  --thinking-bg: #f5f3ff;
-  --tool-bg: #fffbf0;
-  --code-bg: #1e1e2e;
-  --code-text: #cdd6f4;
-  --viewport-indicator: rgba(0, 0, 0, 0.08);
+  --slow-fg:    #f29070; /* kit-ui-check-ignore: app token definition */
+  --slow-bg:    rgba(242, 144, 112, 0.12); /* kit-ui-check-ignore: app token definition */
+  --slow-ring:  rgba(242, 144, 112, 0.20); /* kit-ui-check-ignore: app token definition */
+  --running-fg: #6ad0a8; /* kit-ui-check-ignore: app token definition */
+  --running-bg: rgba(106, 208, 168, 0.12); /* kit-ui-check-ignore: app token definition */
+  --running-ring: rgba(106, 208, 168, 0.22); /* kit-ui-check-ignore: app token definition */
+  --user-bg: #eef2ff; /* kit-ui-check-ignore: app token definition */
+  --assistant-bg: #faf9ff; /* kit-ui-check-ignore: app token definition */
+  --thinking-bg: #f5f3ff; /* kit-ui-check-ignore: app token definition */
+  --tool-bg: #fffbf0; /* kit-ui-check-ignore: app token definition */
+  --code-bg: #1e1e2e; /* kit-ui-check-ignore: app token definition */
+  --code-text: #cdd6f4; /* kit-ui-check-ignore: app token definition */
+  --viewport-indicator: rgba(0, 0, 0, 0.08); /* kit-ui-check-ignore: app token definition */
 }
 
 /* Dark theme — app-specific tokens */
 :root.dark {
-  --accent-teal: #2dd4bf;
-  --accent-rose: #fb7185;
-  --accent-coral: #f34e3f;
-  --accent-black: #b0b0b0;
-  --accent-indigo: #818cf8;
-  --accent-orange: #f0a050;
-  --accent-sky: #38bdf8;
-  --accent-pink: #f472b6;
-  --accent-lime: #a3e635;
-  --accent-cyan: #22d3ee;
-  --accent-violet: #a78bfa;
-  --accent-blue-foreground: #07111f;
-  --accent-rose-foreground: #07111f;
-  --accent-purple-foreground: #07111f;
-  --accent-amber-foreground: #07111f;
-  --accent-green-foreground: #07111f;
-  --accent-coral-foreground: #07111f;
-  --accent-black-foreground: #07111f;
-  --accent-teal-foreground: #07111f;
-  --accent-red-foreground: #07111f;
-  --accent-indigo-foreground: #07111f;
-  --accent-orange-foreground: #07111f;
-  --accent-sky-foreground: #07111f;
-  --accent-pink-foreground: #07111f;
-  --accent-lime-foreground: #07111f;
-  --accent-cyan-foreground: #07111f;
-  --accent-violet-foreground: #07111f;
-  --user-bg: #111827;
-  --assistant-bg: #141220;
-  --thinking-bg: #1a1530;
-  --tool-bg: #1a1508;
-  --code-bg: #0d0d14;
-  --code-text: #cdd6f4;
-  --viewport-indicator: rgba(255, 255, 255, 0.08);
+  --accent-teal: #2dd4bf; /* kit-ui-check-ignore: app token definition */
+  --accent-rose: #fb7185; /* kit-ui-check-ignore: app token definition */
+  --accent-coral: #f34e3f; /* kit-ui-check-ignore: app token definition */
+  --accent-black: #b0b0b0; /* kit-ui-check-ignore: app token definition */
+  --accent-indigo: #818cf8; /* kit-ui-check-ignore: app token definition */
+  --accent-orange: #f0a050; /* kit-ui-check-ignore: app token definition */
+  --accent-sky: #38bdf8; /* kit-ui-check-ignore: app token definition */
+  --accent-pink: #f472b6; /* kit-ui-check-ignore: app token definition */
+  --accent-lime: #a3e635; /* kit-ui-check-ignore: app token definition */
+  --accent-cyan: #22d3ee; /* kit-ui-check-ignore: app token definition */
+  --accent-violet: #a78bfa; /* kit-ui-check-ignore: app token definition */
+  --accent-blue-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-rose-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-purple-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-amber-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-green-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-coral-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-black-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-teal-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-red-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-indigo-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-orange-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-sky-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-pink-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-lime-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-cyan-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-violet-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --user-bg: #111827; /* kit-ui-check-ignore: app token definition */
+  --assistant-bg: #141220; /* kit-ui-check-ignore: app token definition */
+  --thinking-bg: #1a1530; /* kit-ui-check-ignore: app token definition */
+  --tool-bg: #1a1508; /* kit-ui-check-ignore: app token definition */
+  --code-bg: #0d0d14; /* kit-ui-check-ignore: app token definition */
+  --code-text: #cdd6f4; /* kit-ui-check-ignore: app token definition */
+  --viewport-indicator: rgba(255, 255, 255, 0.08); /* kit-ui-check-ignore: app token definition */
 }
 
 html,

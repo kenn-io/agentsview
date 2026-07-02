@@ -14,7 +14,7 @@
     "preview": "vp preview",
     "precheck": "npm run i18n:compile",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "check:kit-ui": "kit-ui-check src --disable raw-color && kit-ui-check src/App.svelte src/lib --rules raw-color",
+    "check:kit-ui": "kit-ui-check src",
     "test": "vp test run",
     "e2e": "playwright test"
   },

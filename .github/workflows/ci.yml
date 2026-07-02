@@ -56,8 +56,9 @@ jobs:
         working-directory: frontend
 
       - name: Design-system conformance (kit-ui-check)
-        # app.css is exempt from raw-color: it defines the app's token layer,
-        # so raw color values there are definitional.
+        # Full rule set over all of src; legitimate exceptions carry inline
+        # kit-ui-check-ignore markers with reasons (e.g. the app token
+        # definitions in app.css).
         run: npm run check:kit-ui
         working-directory: frontend
 
