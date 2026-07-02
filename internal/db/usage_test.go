@@ -2122,6 +2122,64 @@ func TestCountSessionsForUsage_MultiDayOverlap(t *testing.T) {
 	assert.Equal(t, 2, n, "multi-day overlap and no-end fallback both count")
 }
 
+// TestCountSessionsForUsage_FractionalSecondBoundary guards the numeric
+// (julianday) window comparison against lexical text sorting of
+// RFC3339Nano timestamps. Stored timestamps can carry sub-second
+// fractions ("...T00:00:00.5Z") while UsageActivityBoundsUTC formats the
+// bounds at whole-second RFC3339 ("...T00:00:00Z"). Because '.' (0x2E)
+// sorts before 'Z' (0x5A), a plain string compare puts "00.5Z" *before*
+// "00Z", so a session 0.5s inside the inclusive lower bound would be
+// wrongly dropped and one 0.5s past the exclusive upper bound wrongly
+// kept. Both directions must be decided numerically.
+func TestCountSessionsForUsage_FractionalSecondBoundary(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("half-second after lo counts (non-UTC)", func(t *testing.T) {
+		d := testDB(t)
+
+		// America/New_York is UTC-4 in June (EDT), so the local
+		// 2024-06-15 day maps to lo=2024-06-15T04:00:00Z (inclusive).
+		// A session ending 0.5s after lo is inside the window and must
+		// count, even though "04:00:00.5Z" sorts lexically before the
+		// whole-second bound "04:00:00Z".
+		insertSession(t, d, "lo-plus-half", "proj-a", func(s *Session) {
+			s.Agent = "copilot"
+			s.StartedAt = new("2024-06-15T04:00:00.5Z")
+			s.EndedAt = new("2024-06-15T04:00:00.5Z")
+		})
+
+		n, err := d.CountSessionsForUsage(ctx, UsageFilter{
+			From: "2024-06-15", To: "2024-06-15",
+			Timezone: "America/New_York",
+		})
+		require.NoError(t, err, "CountSessionsForUsage")
+		assert.Equal(t, 1, n,
+			"session 0.5s after the inclusive lower bound must count")
+	})
+
+	t.Run("half-second after exclusive hi is excluded", func(t *testing.T) {
+		d := testDB(t)
+
+		// UTC 2024-06-15 window: lo=2024-06-15T00:00:00Z,
+		// hi=2024-06-16T00:00:00Z (exclusive). A session starting 0.5s
+		// after hi is outside the window and must not count, even though
+		// "2024-06-16T00:00:00.5Z" sorts lexically before the
+		// whole-second bound "2024-06-16T00:00:00Z".
+		insertSession(t, d, "hi-plus-half", "proj-a", func(s *Session) {
+			s.Agent = "copilot"
+			s.StartedAt = new("2024-06-16T00:00:00.5Z")
+			s.EndedAt = new("2024-06-16T00:00:00.5Z")
+		})
+
+		n, err := d.CountSessionsForUsage(ctx, UsageFilter{
+			From: "2024-06-15", To: "2024-06-15", Timezone: "UTC",
+		})
+		require.NoError(t, err, "CountSessionsForUsage")
+		assert.Equal(t, 0, n,
+			"session 0.5s past the exclusive upper bound must not count")
+	})
+}
+
 func TestNewUsageSessionCounts(t *testing.T) {
 	counts := NewUsageSessionCounts(map[string]UsageSessionInfo{
 		"s1": {Project: "proj-a", Agent: "claude"},

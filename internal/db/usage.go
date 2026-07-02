@@ -2428,10 +2428,17 @@ func (db *DB) GetUsageSessionCounts(
 //
 // The window is an interval overlap between each session's [start, end] and
 // the filter's half-open UTC bounds (see UsageActivityBoundsUTC), which is
-// DST-safe and matches GetDailyUsage's local-date semantics. Session
-// predicates (CSV agent/project/machine, exclude_*, min/scope/termination)
-// reuse appendUsageSessionFilterClauses so this count and the daily-usage
-// query filter sessions identically.
+// DST-safe and matches GetDailyUsage's local-date semantics. The bound
+// comparisons wrap both operands in julianday() so RFC3339Nano timestamps
+// with sub-second fractions ("...T00:00:00.5Z") sort numerically rather
+// than lexically against the whole-second bounds: a plain text compare
+// would put "00.5Z" before "00Z" (because '.' < 'Z') and misplace sessions
+// straddling a bound by a fraction of a second. julianday() of unparseable
+// text yields NULL, which fails the comparison and excludes the row -- a
+// strict improvement over lexically comparing garbage. Session predicates
+// (CSV agent/project/machine, exclude_*, min/scope/termination) reuse
+// appendUsageSessionFilterClauses so this count and the daily-usage query
+// filter sessions identically.
 func (db *DB) CountSessionsForUsage(
 	ctx context.Context, f UsageFilter,
 ) (int, error) {
@@ -2441,11 +2448,11 @@ func (db *DB) CountSessionsForUsage(
 
 	lo, hi := UsageActivityBoundsUTC(f)
 	if hi != "" {
-		where += "\n\tAND COALESCE(NULLIF(s.started_at, ''), s.created_at) < ?"
+		where += "\n\tAND julianday(COALESCE(NULLIF(s.started_at, ''), s.created_at)) < julianday(?)"
 		args = append(args, hi)
 	}
 	if lo != "" {
-		where += "\n\tAND COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at) >= ?"
+		where += "\n\tAND julianday(COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at)) >= julianday(?)"
 		args = append(args, lo)
 	}
 
