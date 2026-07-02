@@ -3741,6 +3741,40 @@ func (s *Store) GetUsageSessionCounts(
 	return out, nil
 }
 
+// CountSessionsForUsage counts sessions matching a usage filter directly
+// from the sessions table, independent of whether they recorded token
+// usage. Mirrors the SQLite and PostgreSQL implementations: base
+// message_count/deleted_at predicates, the shared session filter clauses,
+// and an interval overlap against the half-open UTC bounds from
+// db.UsageActivityBoundsUTC. DuckDB stores real TIMESTAMP columns, so the
+// endpoints use NULL-aware COALESCE with CAST(? AS TIMESTAMP) bounds.
+func (s *Store) CountSessionsForUsage(
+	ctx context.Context, f db.UsageFilter,
+) (int, error) {
+	where := "s.message_count > 0\n\t\t\tAND s.deleted_at IS NULL"
+	var args []any
+	where, args = appendDuckUsageSessionFilterClauses(where, args, f, "")
+
+	lo, hi := db.UsageActivityBoundsUTC(f)
+	if hi != "" {
+		where += "\n\t\t\tAND COALESCE(s.started_at, s.created_at) < CAST(? AS TIMESTAMP)"
+		args = append(args, hi)
+	}
+	if lo != "" {
+		where += "\n\t\t\tAND COALESCE(s.ended_at, s.started_at, s.created_at) >= CAST(? AS TIMESTAMP)"
+		args = append(args, lo)
+	}
+
+	query := "SELECT COUNT(DISTINCT s.id) FROM sessions s WHERE " + where
+	var count int
+	if err := s.duck.QueryRowContext(
+		ctx, query, args...,
+	).Scan(&count); err != nil {
+		return 0, fmt.Errorf("counting sessions for usage: %w", err)
+	}
+	return count, nil
+}
+
 func (s *Store) GetSessionUsage(
 	ctx context.Context, sessionID string,
 ) (*db.SessionUsage, error) {

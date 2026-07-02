@@ -1956,6 +1956,230 @@ func TestGetUsageSessionCounts(t *testing.T) {
 	assert.Nil(t, dailyNoCounts.SessionCounts.ByAgent)
 }
 
+// TestCountSessionsForUsage_NoTokenSessionCounted proves the whole point
+// of the method: a Copilot session with messages but no token usage has no
+// usage rows, so GetUsageSessionCounts misses it, yet CountSessionsForUsage
+// still counts it from the sessions table.
+func TestCountSessionsForUsage_NoTokenSessionCounted(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Copilot session with a message that carries NO token usage.
+	insertSession(t, d, "copilot-1", "proj-a", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2024-06-15T10:00:00Z")
+		s.EndedAt = new("2024-06-15T10:05:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "copilot-1", Ordinal: 0,
+		Role: "assistant", Timestamp: "2024-06-15T10:01:00Z",
+		Model: "gpt-4o", // no TokenUsage
+	})
+
+	f := UsageFilter{From: "2024-06-01", To: "2024-06-30", Timezone: "UTC"}
+
+	n, err := d.CountSessionsForUsage(ctx, f)
+	require.NoError(t, err, "CountSessionsForUsage")
+	assert.Equal(t, 1, n, "no-token session must be counted")
+
+	// GetUsageSessionCounts (usage-row derived) misses the no-token session.
+	counts, err := d.GetUsageSessionCounts(ctx, f)
+	require.NoError(t, err, "GetUsageSessionCounts")
+	assert.Equal(t, 0, counts.Total,
+		"usage-row count misses the no-token session")
+}
+
+// TestCountSessionsForUsage_ExcludesDeletedAndEmpty verifies soft-deleted
+// and zero-message sessions never contribute to the presence count.
+func TestCountSessionsForUsage_ExcludesDeletedAndEmpty(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "live", "proj-a", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2024-06-15T10:00:00Z")
+	})
+	insertSession(t, d, "deleted", "proj-a", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2024-06-15T10:00:00Z")
+	})
+	require.NoError(t, d.SoftDeleteSession("deleted"), "SoftDeleteSession")
+	insertSession(t, d, "empty", "proj-a", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2024-06-15T10:00:00Z")
+		s.MessageCount = 0
+	})
+
+	n, err := d.CountSessionsForUsage(ctx, UsageFilter{
+		From: "2024-06-01", To: "2024-06-30", Timezone: "UTC",
+	})
+	require.NoError(t, err, "CountSessionsForUsage")
+	assert.Equal(t, 1, n, "only the live non-empty session counts")
+}
+
+// TestCountSessionsForUsage_FilterPredicates checks that CSV agent filters
+// and exclude_project are honored the same way the daily-usage query
+// filters sessions.
+func TestCountSessionsForUsage_FilterPredicates(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "cop-a", "proj-a", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2024-06-15T10:00:00Z")
+	})
+	insertSession(t, d, "vscop-a", "proj-a", func(s *Session) {
+		s.Agent = "vscode-copilot"
+		s.StartedAt = new("2024-06-15T10:00:00Z")
+	})
+	insertSession(t, d, "cop-b", "proj-b", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2024-06-15T10:00:00Z")
+	})
+	insertSession(t, d, "claude-a", "proj-a", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = new("2024-06-15T10:00:00Z")
+	})
+
+	base := UsageFilter{From: "2024-06-01", To: "2024-06-30", Timezone: "UTC"}
+
+	t.Run("CSV agent filter", func(t *testing.T) {
+		f := base
+		f.Agent = "copilot,vscode-copilot"
+		n, err := d.CountSessionsForUsage(ctx, f)
+		require.NoError(t, err)
+		assert.Equal(t, 3, n, "three Copilot-family sessions, claude excluded")
+	})
+
+	t.Run("CSV agent filter with exclude_project", func(t *testing.T) {
+		f := base
+		f.Agent = "copilot,vscode-copilot"
+		f.ExcludeProject = "proj-b"
+		n, err := d.CountSessionsForUsage(ctx, f)
+		require.NoError(t, err)
+		assert.Equal(t, 2, n, "proj-b Copilot session excluded")
+	})
+}
+
+// TestCountSessionsForUsage_TimezoneDayBoundary checks the DST-safe local
+// day window: a session at 23:30 local time on the filtered day counts,
+// while one just past local midnight (the next day) does not.
+func TestCountSessionsForUsage_TimezoneDayBoundary(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// America/New_York is UTC-4 in June (EDT).
+	// local 2024-06-15 23:30 == UTC 2024-06-16 03:30 -> in-window.
+	insertSession(t, d, "late", "proj-a", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2024-06-16T03:30:00Z")
+		s.EndedAt = new("2024-06-16T03:35:00Z")
+	})
+	// local 2024-06-16 00:15 == UTC 2024-06-16 04:15 -> next local day.
+	insertSession(t, d, "past-midnight", "proj-a", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2024-06-16T04:15:00Z")
+		s.EndedAt = new("2024-06-16T04:20:00Z")
+	})
+
+	n, err := d.CountSessionsForUsage(ctx, UsageFilter{
+		From: "2024-06-15", To: "2024-06-15", Timezone: "America/New_York",
+	})
+	require.NoError(t, err, "CountSessionsForUsage")
+	assert.Equal(t, 1, n, "only the 23:30-local session is in the local day")
+}
+
+// TestCountSessionsForUsage_MultiDayOverlap verifies a session spanning
+// several days counts for any window its interval overlaps, and that an
+// empty-string ended_at falls back to started_at for the upper endpoint.
+func TestCountSessionsForUsage_MultiDayOverlap(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Spans 2024-06-10 .. 2024-06-20, overlapping the single-day window.
+	insertSession(t, d, "multi-day", "proj-a", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2024-06-10T10:00:00Z")
+		s.EndedAt = new("2024-06-20T10:00:00Z")
+	})
+	// Empty ended_at: upper endpoint falls back to started_at (in-window).
+	insertSession(t, d, "no-end", "proj-a", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2024-06-15T10:00:00Z")
+		s.EndedAt = new("")
+	})
+	// A session entirely before the window must not count.
+	insertSession(t, d, "before", "proj-a", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2024-06-01T10:00:00Z")
+		s.EndedAt = new("2024-06-02T10:00:00Z")
+	})
+
+	n, err := d.CountSessionsForUsage(ctx, UsageFilter{
+		From: "2024-06-15", To: "2024-06-15", Timezone: "UTC",
+	})
+	require.NoError(t, err, "CountSessionsForUsage")
+	assert.Equal(t, 2, n, "multi-day overlap and no-end fallback both count")
+}
+
+// TestCountSessionsForUsage_FractionalSecondBoundary guards the numeric
+// (julianday) window comparison against lexical text sorting of
+// RFC3339Nano timestamps. Stored timestamps can carry sub-second
+// fractions ("...T00:00:00.5Z") while UsageActivityBoundsUTC formats the
+// bounds at whole-second RFC3339 ("...T00:00:00Z"). Because '.' (0x2E)
+// sorts before 'Z' (0x5A), a plain string compare puts "00.5Z" *before*
+// "00Z", so a session 0.5s inside the inclusive lower bound would be
+// wrongly dropped and one 0.5s past the exclusive upper bound wrongly
+// kept. Both directions must be decided numerically.
+func TestCountSessionsForUsage_FractionalSecondBoundary(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("half-second after lo counts (non-UTC)", func(t *testing.T) {
+		d := testDB(t)
+
+		// America/New_York is UTC-4 in June (EDT), so the local
+		// 2024-06-15 day maps to lo=2024-06-15T04:00:00Z (inclusive).
+		// A session ending 0.5s after lo is inside the window and must
+		// count, even though "04:00:00.5Z" sorts lexically before the
+		// whole-second bound "04:00:00Z".
+		insertSession(t, d, "lo-plus-half", "proj-a", func(s *Session) {
+			s.Agent = "copilot"
+			s.StartedAt = new("2024-06-15T04:00:00.5Z")
+			s.EndedAt = new("2024-06-15T04:00:00.5Z")
+		})
+
+		n, err := d.CountSessionsForUsage(ctx, UsageFilter{
+			From: "2024-06-15", To: "2024-06-15",
+			Timezone: "America/New_York",
+		})
+		require.NoError(t, err, "CountSessionsForUsage")
+		assert.Equal(t, 1, n,
+			"session 0.5s after the inclusive lower bound must count")
+	})
+
+	t.Run("half-second after exclusive hi is excluded", func(t *testing.T) {
+		d := testDB(t)
+
+		// UTC 2024-06-15 window: lo=2024-06-15T00:00:00Z,
+		// hi=2024-06-16T00:00:00Z (exclusive). A session starting 0.5s
+		// after hi is outside the window and must not count, even though
+		// "2024-06-16T00:00:00.5Z" sorts lexically before the
+		// whole-second bound "2024-06-16T00:00:00Z".
+		insertSession(t, d, "hi-plus-half", "proj-a", func(s *Session) {
+			s.Agent = "copilot"
+			s.StartedAt = new("2024-06-16T00:00:00.5Z")
+			s.EndedAt = new("2024-06-16T00:00:00.5Z")
+		})
+
+		n, err := d.CountSessionsForUsage(ctx, UsageFilter{
+			From: "2024-06-15", To: "2024-06-15", Timezone: "UTC",
+		})
+		require.NoError(t, err, "CountSessionsForUsage")
+		assert.Equal(t, 0, n,
+			"session 0.5s past the exclusive upper bound must not count")
+	})
+}
+
 func TestNewUsageSessionCounts(t *testing.T) {
 	counts := NewUsageSessionCounts(map[string]UsageSessionInfo{
 		"s1": {Project: "proj-a", Agent: "claude"},

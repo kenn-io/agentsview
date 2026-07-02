@@ -100,6 +100,82 @@ func TestDirectBackend_UsageSummary_EmptyRange(t *testing.T) {
 	assert.NotNil(t, res.ProjectTotals, "folds should be non-nil slices")
 }
 
+// usageCountSpy is a db.Store that stubs the two methods
+// directBackend.UsageSummary reaches for and records how the presence
+// count was queried. Every other Store method stays nil because the usage
+// path never calls them.
+type usageCountSpy struct {
+	db.Store
+	countCalls  int
+	countFilter db.UsageFilter
+	countResult int
+	countErr    error
+}
+
+func (s *usageCountSpy) GetDailyUsage(
+	_ context.Context, _ db.UsageFilter,
+) (db.DailyUsageResult, error) {
+	return db.DailyUsageResult{
+		Daily:  []db.DailyUsageEntry{},
+		Totals: db.UsageTotals{},
+	}, nil
+}
+
+func (s *usageCountSpy) CountSessionsForUsage(
+	_ context.Context, f db.UsageFilter,
+) (int, error) {
+	s.countCalls++
+	s.countFilter = f
+	return s.countResult, s.countErr
+}
+
+func TestDirectBackend_UsageSummary_MatchingSessions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("agent filter populates matchingSessions", func(t *testing.T) {
+		t.Parallel()
+		spy := &usageCountSpy{countResult: 7}
+		be := service.NewReadOnlyBackend(spy)
+
+		res, err := be.UsageSummary(context.Background(), service.UsageRequest{
+			From: "2024-06-01", To: "2024-06-02", Agent: "copilot",
+		})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		assert.Equal(t, 1, spy.countCalls,
+			"presence count queried once under an agent filter")
+		assert.Equal(t, "copilot", spy.countFilter.Agent,
+			"count uses the same agent filter")
+		assert.Equal(t, 7, res.MatchingSessions)
+	})
+
+	t.Run("no agent filter skips the count", func(t *testing.T) {
+		t.Parallel()
+		spy := &usageCountSpy{countResult: 7}
+		be := service.NewReadOnlyBackend(spy)
+
+		res, err := be.UsageSummary(context.Background(), service.UsageRequest{
+			From: "2024-06-01", To: "2024-06-02",
+		})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		assert.Zero(t, spy.countCalls,
+			"presence count not queried on an unfiltered load")
+		assert.Zero(t, res.MatchingSessions)
+	})
+
+	t.Run("count error propagates", func(t *testing.T) {
+		t.Parallel()
+		spy := &usageCountSpy{countErr: errors.New("boom")}
+		be := service.NewReadOnlyBackend(spy)
+
+		_, err := be.UsageSummary(context.Background(), service.UsageRequest{
+			From: "2024-06-01", To: "2024-06-02", Agent: "copilot",
+		})
+		require.Error(t, err)
+	})
+}
+
 func TestHTTPBackend_UsageSummary_Roundtrip(t *testing.T) {
 	t.Parallel()
 	env := newHTTPBackendEnv(t)

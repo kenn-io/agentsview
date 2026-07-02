@@ -68,21 +68,27 @@ type UsageSummaryResponse struct {
 	SessionCounts db.UsageSessionCounts `json:"sessionCounts"`
 	CacheStats    CacheStats            `json:"cacheStats"`
 	Comparison    *Comparison           `json:"comparison,omitempty"`
+	// MatchingSessions counts sessions matching the filter independent of usage
+	// rows (0 unless an agent filter is set). It lets the UI tell "filtered
+	// sessions exist but record no token data" apart from "no matching
+	// sessions", which SessionCounts (usage-derived) cannot.
+	MatchingSessions int `json:"matchingSessions"`
 }
 
 func usageSummaryResponseFromService(
 	res *service.UsageSummaryResult,
 ) UsageSummaryResponse {
 	return UsageSummaryResponse{
-		From:          res.From,
-		To:            res.To,
-		Totals:        res.Totals,
-		Daily:         res.Daily,
-		ProjectTotals: projectTotalsFromService(res.ProjectTotals),
-		ModelTotals:   modelTotalsFromService(res.ModelTotals),
-		AgentTotals:   agentTotalsFromService(res.AgentTotals),
-		SessionCounts: res.SessionCounts,
-		CacheStats:    cacheStatsFromService(res.CacheStats),
+		From:             res.From,
+		To:               res.To,
+		Totals:           res.Totals,
+		Daily:            res.Daily,
+		ProjectTotals:    projectTotalsFromService(res.ProjectTotals),
+		ModelTotals:      modelTotalsFromService(res.ModelTotals),
+		AgentTotals:      agentTotalsFromService(res.AgentTotals),
+		SessionCounts:    res.SessionCounts,
+		CacheStats:       cacheStatsFromService(res.CacheStats),
+		MatchingSessions: res.MatchingSessions,
 	}
 }
 

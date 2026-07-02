@@ -1,6 +1,8 @@
 <script lang="ts">
   import { usage } from "../../stores/usage.svelte.js";
+  import { sessions } from "../../stores/sessions.svelte.js";
   import { m } from "../../i18n/index.js";
+  import { isCopilotAgentFilter } from "../../utils/agents.js";
 
   function fmtCost(v: number): string {
     return `$${v.toFixed(2)}`;
@@ -154,6 +156,29 @@
     ];
     return baseCards;
   });
+
+  // noTokenHint explains all-zeros usage when the view is filtered to a
+  // Copilot agent, which bills via a monthly quota and records no per-message
+  // token data — so the $0.00 cards are not misread as "spent nothing"
+  // (issue #349). It fires only when matching sessions actually exist
+  // (summary.matchingSessions, a sessions-table count independent of usage
+  // rows), so an empty window does not look like "Copilot sessions found but
+  // no usage". null = no hint.
+  const noTokenHint = $derived.by(() => {
+    const s = usage.summary;
+    if (!s || !isCopilotAgentFilter(sessions.filters.agent)) return null;
+    if ((s.matchingSessions ?? 0) <= 0) return null;
+    const t = s.totals;
+    const hasData =
+      t.inputTokens !== 0 ||
+      t.outputTokens !== 0 ||
+      t.cacheCreationTokens !== 0 ||
+      t.cacheReadTokens !== 0 ||
+      t.totalCost !== 0 ||
+      (t.copilotAICredits ?? 0) !== 0;
+    if (hasData) return null;
+    return m.usage_no_token_data_hint_copilot();
+  });
 </script>
 
 <div class="summary-cards">
@@ -179,6 +204,10 @@
   {/each}
 </div>
 
+{#if noTokenHint}
+  <p class="no-token-hint">{noTokenHint}</p>
+{/if}
+
 {#if usage.errors.summary}
   <div class="error-bar">
     <span>{usage.errors.summary}</span>
@@ -196,6 +225,12 @@
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
+  }
+
+  .no-token-hint {
+    margin: 8px 0 0;
+    font-size: 0.85em;
+    color: var(--text-muted);
   }
 
   .card {

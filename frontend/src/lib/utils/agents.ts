@@ -107,3 +107,29 @@ export function agentLabel(agent: string): string {
   if (meta?.label) return meta.label;
   return agent.charAt(0).toUpperCase() + agent.slice(1);
 }
+
+const COPILOT_AGENTS = new Set([
+  "copilot",
+  "vscode-copilot",
+  "visualstudio-copilot",
+]);
+
+// isCopilotAgent mirrors db.IsCopilotAgent (internal/db/usage.go): the agents
+// that bill via Copilot's monthly request quota rather than per-token.
+export function isCopilotAgent(agent: string): boolean {
+  return COPILOT_AGENTS.has(agent);
+}
+
+// isCopilotAgentFilter mirrors db.IsCopilotAgentFilter: true when a
+// (possibly comma-separated) agent filter selects only Copilot agents — every
+// non-empty entry is a Copilot agent and there is at least one.
+export function isCopilotAgentFilter(agentFilter: string): boolean {
+  let matched = false;
+  for (const raw of agentFilter.split(",")) {
+    const part = raw.trim();
+    if (part === "") continue;
+    if (!isCopilotAgent(part)) return false;
+    matched = true;
+  }
+  return matched;
+}

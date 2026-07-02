@@ -566,7 +566,19 @@ func (b *directBackend) UsageSummary(
 	if err != nil {
 		return nil, err
 	}
-	return buildUsageSummary(f, result), nil
+	summary := buildUsageSummary(f, result)
+	// The no-token-data hint only applies under an explicit agent filter, so
+	// only then pay for a sessions-table presence count. This count is
+	// independent of usage rows, so it still finds non-tokenized sessions
+	// (e.g. Copilot) that GetDailyUsage's usage rows would miss.
+	if f.Agent != "" {
+		n, err := b.db.CountSessionsForUsage(ctx, f)
+		if err != nil {
+			return nil, err
+		}
+		summary.MatchingSessions = n
+	}
+	return summary, nil
 }
 
 // SearchContent maps the transport-neutral request to a

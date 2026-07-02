@@ -729,6 +729,7 @@
   "usage_uncached_input": "Uncached Input",
   "usage_output": "Output",
   "usage_no_token_data": "No token data",
+  "usage_no_token_data_hint_copilot": "GitHub Copilot bills via a monthly request quota and doesn't record per-message token usage.",
   "usage_saved_vs_uncached": "{cost} saved vs uncached",
   "usage_more_than_uncached": "{cost} more than uncached",
   "usage_top_sessions_by_cost": "Top Sessions by Cost",

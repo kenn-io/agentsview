@@ -276,6 +276,30 @@ func (f UsageFilter) location() *time.Location {
 	return loc
 }
 
+// UsageActivityBoundsUTC converts a UsageFilter's inclusive local date range
+// (From/To as "2006-01-02" strings interpreted in the filter's timezone) into
+// exact half-open UTC RFC3339 bounds [lo, hi): lo is midnight of From, hi is
+// midnight of the day after To (exclusive). An empty From or To yields an empty
+// string so callers can skip that clause. Using ParseInLocation keeps the
+// conversion DST-safe and matches GetDailyUsage's localDate(ts, loc) window
+// semantics exactly, without the ±14h padding + post-scan filter the row
+// queries use. Shared so the SQLite, PostgreSQL, and DuckDB
+// CountSessionsForUsage implementations bound identically.
+func UsageActivityBoundsUTC(f UsageFilter) (lo, hi string) {
+	loc := f.location()
+	if f.From != "" {
+		if t, err := time.ParseInLocation("2006-01-02", f.From, loc); err == nil {
+			lo = t.UTC().Format(time.RFC3339)
+		}
+	}
+	if f.To != "" {
+		if t, err := time.ParseInLocation("2006-01-02", f.To, loc); err == nil {
+			hi = t.AddDate(0, 0, 1).UTC().Format(time.RFC3339)
+		}
+	}
+	return lo, hi
+}
+
 // usageMessageEligibility is the WHERE-clause fragment that selects
 // messages eligible for usage / cost aggregation. Every usage query
 // (GetDailyUsage, GetUsageSessionCounts, GetTopSessionsByCost) MUST
@@ -2393,4 +2417,51 @@ func (db *DB) GetUsageSessionCounts(
 	}
 
 	return out, nil
+}
+
+// CountSessionsForUsage counts sessions matching a usage filter directly
+// from the sessions table, independent of whether they recorded token
+// usage. Non-tokenized sessions (e.g. Copilot, which bills via a monthly
+// request quota) have no usage rows, so GetUsageSessionCounts would miss
+// them; this presence count lets the UI tell "filtered sessions exist but
+// record no token data" apart from "no matching sessions at all".
+//
+// The window is an interval overlap between each session's [start, end] and
+// the filter's half-open UTC bounds (see UsageActivityBoundsUTC), which is
+// DST-safe and matches GetDailyUsage's local-date semantics. The bound
+// comparisons wrap both operands in julianday() so RFC3339Nano timestamps
+// with sub-second fractions ("...T00:00:00.5Z") sort numerically rather
+// than lexically against the whole-second bounds: a plain text compare
+// would put "00.5Z" before "00Z" (because '.' < 'Z') and misplace sessions
+// straddling a bound by a fraction of a second. julianday() of unparseable
+// text yields NULL, which fails the comparison and excludes the row -- a
+// strict improvement over lexically comparing garbage. Session predicates
+// (CSV agent/project/machine, exclude_*, min/scope/termination) reuse
+// appendUsageSessionFilterClauses so this count and the daily-usage query
+// filter sessions identically.
+func (db *DB) CountSessionsForUsage(
+	ctx context.Context, f UsageFilter,
+) (int, error) {
+	where := "s.message_count > 0\n\tAND s.deleted_at IS NULL"
+	var args []any
+	where, args = f.appendUsageSessionFilterClauses(where, args)
+
+	lo, hi := UsageActivityBoundsUTC(f)
+	if hi != "" {
+		where += "\n\tAND julianday(COALESCE(NULLIF(s.started_at, ''), s.created_at)) < julianday(?)"
+		args = append(args, hi)
+	}
+	if lo != "" {
+		where += "\n\tAND julianday(COALESCE(NULLIF(s.ended_at, ''), NULLIF(s.started_at, ''), s.created_at)) >= julianday(?)"
+		args = append(args, lo)
+	}
+
+	query := "SELECT COUNT(DISTINCT s.id) FROM sessions s WHERE " + where
+	var count int
+	if err := db.getReader().QueryRowContext(
+		ctx, query, args...,
+	).Scan(&count); err != nil {
+		return 0, fmt.Errorf("counting sessions for usage: %w", err)
+	}
+	return count, nil
 }

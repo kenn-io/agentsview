@@ -173,6 +173,13 @@ type UsageSummaryResult struct {
 	AgentTotals   []AgentTotal          `json:"agentTotals"`
 	SessionCounts db.UsageSessionCounts `json:"sessionCounts"`
 	CacheStats    CacheStats            `json:"cacheStats"`
+	// MatchingSessions counts sessions matching the active filter from the
+	// sessions table, independent of whether they recorded token usage. It is
+	// only populated when an agent filter is set (the no-token-data hint only
+	// applies then), and lets the UI distinguish "filtered sessions exist but
+	// record no token data" from "no matching sessions at all" — a distinction
+	// SessionCounts (usage-derived) cannot make.
+	MatchingSessions int `json:"matchingSessions"`
 }
 
 // buildUsageSummary assembles a UsageSummaryResult from a daily-usage

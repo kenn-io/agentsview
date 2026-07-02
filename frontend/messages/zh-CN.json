@@ -708,6 +708,7 @@
   "usage_uncached_input": "未缓存输入",
   "usage_output": "输出",
   "usage_no_token_data": "无 token 数据",
+  "usage_no_token_data_hint_copilot": "GitHub Copilot 按每月请求配额计费，不记录每条消息的 token 用量。",
   "usage_saved_vs_uncached": "相比未缓存节省 {cost}",
   "usage_more_than_uncached": "比未缓存多 {cost}",
   "usage_top_sessions_by_cost": "按成本排序的热门会话",
