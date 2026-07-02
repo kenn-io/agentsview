@@ -75,9 +75,15 @@ App-level glue that remains local:
   `Typeahead` for project selection. Use kit-ui `Typeahead` directly for other
   bounded option lists.
 - `frontend/src/lib/components/shared/RangePicker.svelte` is a thin wrapper over
-  kit-ui `RangePicker` that injects localized strings and maps the app's
-  selection API; date-range resolution stays in
+  kit-ui `DateRangePicker` that injects localized strings, the app locale, and
+  maps the app's selection API; date-range resolution stays in
   `frontend/src/lib/components/shared/rangeSelection.ts`.
+- `frontend/src/lib/components/shared/RefreshControl.svelte` wraps kit-ui
+  `RefreshControl`, injecting the localized age formatter and app locale.
+- kit-ui components with a `locale` prop (DateRangePicker, RefreshControl,
+  Calendar) should receive `locale={getLocale()}` from the i18n facade so
+  their date formatting follows the app language setting instead of the
+  browser locale; the shared wrappers above do this.
 - `frontend/src/lib/components/content/SessionFindBar.svelte` wires kit-ui
   `FindBar` to the in-session search store.
 - `frontend/src/lib/components/settings/SettingsSection.svelte` owns settings
@@ -96,14 +102,13 @@ the new props through the app wrappers. Do not work around them with unsupported
 props or forked styles.
 
 - `Modal`'s close-X `aria-label` is hardcoded English; needs a label prop.
-- `RefreshControl` renders its freshness label with kit-ui's English
-  `formatRefreshAge`; needs a `formatAge` injection prop (in progress
-  upstream) plus a thin app wrapper passing the localized formatter.
-- `RangePicker`'s `weekOfLabel` is prefix-only, so date-first locales (zh
-  `"{date}所在周"`) lose their word order; needs `{date}` placeholder
-  substitution (in progress upstream).
 - `TopBar` cannot express "no active tab"; on routes that are not tabs
   (settings), the first tab renders as current.
+
+Resolved upstream (adopted at the current pin): `RefreshControl` takes a
+`formatAge` prop, `DateRangePicker`'s `weekOfLabel` substitutes a `{date}`
+placeholder, and both take a `locale` prop — the shared wrappers inject all
+three.
 
 ## Legacy Exceptions
 

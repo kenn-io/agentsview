@@ -95,7 +95,7 @@ describe("TrendsPage", () => {
     // Open the unified range picker. The default 2024 span doesn't match any
     // rolling preset, so it opens on the Custom tab with the From/To inputs.
     const trigger = document.querySelector<HTMLButtonElement>(
-      "button.kit-range-picker__trigger",
+      "button.kit-date-range-picker__trigger",
     );
     expect(trigger).not.toBeNull();
     trigger!.click();

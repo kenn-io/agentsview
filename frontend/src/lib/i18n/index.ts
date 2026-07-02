@@ -4,6 +4,10 @@ import {
 } from "../paraglide/runtime.js";
 
 export { m } from "../paraglide/messages.js";
+// Current BCP 47 tag (en / zh-CN / zh-TW) for kit-ui components that take a
+// `locale` prop, so their date/tooltip formatting follows the app language
+// setting instead of the browser locale.
+export { getLocale };
 
 export const DEFAULT_LOCALE = "en";
 export const LOCALE_STORAGE_KEY = "agentsview-locale";

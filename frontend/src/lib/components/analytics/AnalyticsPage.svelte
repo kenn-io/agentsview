@@ -40,7 +40,7 @@
   } from "../../stores/yokedDates.svelte.js";
   import { rollingRange } from "../../utils/dates.js";
   import { exportAnalyticsCSV } from "../../utils/csv-export.js";
-  import { RefreshControl } from "@kenn-io/kit-ui";
+  import RefreshControl from "../shared/RefreshControl.svelte";
   import { m } from "../../i18n/index.js";
 
   const SESSION_ANALYTICS_WINDOW_PARAM = "window_days";

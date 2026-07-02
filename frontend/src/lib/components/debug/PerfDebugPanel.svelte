@@ -31,7 +31,7 @@
 
 {#if perf.panelOpen}
   <section
-    class="perf-panel"
+    class="perf-panel kit-popover-card"
     aria-label={m.perf_aria_label()}
   >
     <header class="perf-header">
@@ -108,10 +108,7 @@
     max-height: min(520px, calc(100vh - 96px));
     display: flex;
     flex-direction: column;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-lg);
+    /* card chrome comes from the shared kit-popover-card class */
     color: var(--text-primary);
     overflow: hidden;
   }

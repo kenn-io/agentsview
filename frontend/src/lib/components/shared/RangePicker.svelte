@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { RangePicker as KitRangePicker, type RangePreset } from "@kenn-io/kit-ui";
-  import { m } from "../../i18n/index.js";
+  import { DateRangePicker as KitRangePicker, type RangePreset } from "@kenn-io/kit-ui";
+  import { getLocale, m } from "../../i18n/index.js";
   import { RELATIVE_PRESETS, type RangeSelection } from "./rangeSelection.js";
 
   // Thin wrapper over kit-ui's RangePicker: same call-site API as the old
@@ -49,10 +49,10 @@
     m.shared_range_last_days({ count: 0 }).replace("0", "{days}"),
   );
 
-  // kit-ui appends the week-start date after this label, so only the static
-  // text of the app template survives. Date-first locales (zh) lose their
-  // word order here until kit-ui grows a date-position slot.
-  const weekOfLabel = $derived(m.shared_range_week_of({ date: "" }).trim());
+  // kit-ui substitutes "{date}" into this template itself, so pass the app
+  // message through with its slot intact — date-first locales (zh,
+  // "{date}所在周") keep their word order.
+  const weekOfLabel = $derived(m.shared_range_week_of({ date: "{date}" }));
 </script>
 
 <KitRangePicker
@@ -66,6 +66,7 @@
   {presets}
   {lastDaysLabel}
   {weekOfLabel}
+  locale={getLocale()}
   relativeTabLabel={m.shared_range_tab_relative()}
   calendarTabLabel={m.shared_range_tab_calendar()}
   customTabLabel={m.shared_range_tab_custom()}

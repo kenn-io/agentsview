@@ -152,7 +152,7 @@
 
 {#if open}
   <div
-    class="filter-dropdown"
+    class="filter-dropdown kit-popover-card"
     class:left={align === "left"}
     bind:this={dropdownRef}
   >
@@ -445,10 +445,7 @@
     overflow-x: hidden;
     overscroll-behavior: contain;
     scrollbar-gutter: stable;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-lg);
+    /* card chrome comes from the shared kit-popover-card class */
     padding: 8px;
     z-index: 100;
     text-transform: none;

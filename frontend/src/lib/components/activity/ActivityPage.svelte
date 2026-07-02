@@ -16,7 +16,8 @@
     type PanelDateState,
   } from "../../stores/yokedDates.svelte.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
-  import { RefreshControl, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
+  import { Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
+  import RefreshControl from "../shared/RefreshControl.svelte";
   import {
     addDays,
     endOfMonth,

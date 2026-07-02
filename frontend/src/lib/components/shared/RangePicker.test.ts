@@ -69,10 +69,10 @@ describe("RangePicker", () => {
     setup();
     await openPanel();
     for (const t of ["Relative", "Calendar", "Custom"]) {
-      expect(screen.getByRole("tab", { name: t })).toBeTruthy();
+      expect(screen.getByRole("radio", { name: t })).toBeTruthy();
     }
     expect(
-      screen.getByRole("tab", { name: "Relative" }).getAttribute("aria-selected"),
+      screen.getByRole("radio", { name: "Relative" }).getAttribute("aria-checked"),
     ).toBe("true");
   });
 
@@ -87,7 +87,7 @@ describe("RangePicker", () => {
     vi.setSystemTime(new Date("2026-06-17T12:00:00Z"));
     const { onSelect } = setup();
     await openPanel();
-    await fireEvent.click(screen.getByRole("tab", { name: "Calendar" }));
+    await fireEvent.click(screen.getByRole("radio", { name: "Calendar" }));
     await fireEvent.click(screen.getByRole("button", { name: "Week" }));
     expect(onSelect).toHaveBeenLastCalledWith({
       mode: "calendar",
@@ -107,7 +107,7 @@ describe("RangePicker", () => {
     vi.setSystemTime(new Date("2026-06-17T12:00:00Z"));
     const { onSelect } = setup();
     await openPanel();
-    await fireEvent.click(screen.getByRole("tab", { name: "Custom" }));
+    await fireEvent.click(screen.getByRole("radio", { name: "Custom" }));
     const inputs = screen.getAllByDisplayValue(/2026-/);
     const from = inputs[0] as HTMLInputElement;
     await fireEvent.input(from, { target: { value: "2026-01-01" } });
@@ -121,9 +121,9 @@ describe("RangePicker", () => {
     vi.setSystemTime(new Date("2026-06-17T12:00:00Z"));
     setup({ mode: "custom", from: "2020-01-01", to: "2020-01-31" });
     await openPanel();
-    await fireEvent.click(screen.getByRole("tab", { name: "Relative" }));
+    await fireEvent.click(screen.getByRole("radio", { name: "Relative" }));
     await fireEvent.click(screen.getByRole("button", { name: "7d" }));
-    await fireEvent.click(screen.getByRole("tab", { name: "Custom" }));
+    await fireEvent.click(screen.getByRole("radio", { name: "Custom" }));
     // kit-ui seeds "last 7 days" inclusively of today (from = today - 6), so
     // the field shows 2026-06-11 where the old component prefilled -06-10.
     // This only affects the prefill; committed ranges still resolve through

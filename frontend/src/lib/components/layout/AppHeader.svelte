@@ -395,7 +395,7 @@
           </button>
 
           {#if showBlockFilter}
-            <div class="block-filter-dropdown" bind:this={filterDropRef}>
+            <div class="block-filter-dropdown kit-popover-card" bind:this={filterDropRef}>
               <div class="block-filter-title">{m.header_transcript_visibility()}</div>
               {#each ALL_BLOCK_TYPES as bt}
                 {@const visible = ui.isBlockVisible(bt)}
@@ -480,7 +480,7 @@
         </button>
 
         {#if showExportMenu}
-          <div class="export-dropdown" bind:this={exportDropRef}>
+          <div class="export-dropdown kit-popover-card" bind:this={exportDropRef}>
             <button
               class="overflow-item"
               onclick={() => {
@@ -539,7 +539,7 @@
         </button>
 
         {#if showPublishMenu}
-          <div class="export-dropdown" bind:this={publishDropRef}>
+          <div class="export-dropdown kit-popover-card" bind:this={publishDropRef}>
             <button
               class="overflow-item"
               onclick={() => openPublish(false)}
@@ -571,7 +571,7 @@
         </button>
 
         {#if showOverflow}
-          <div class="overflow-dropdown" bind:this={overflowDropRef}>
+          <div class="overflow-dropdown kit-popover-card" bind:this={overflowDropRef}>
             <button
               class="overflow-item"
               onclick={() => { ui.cycleLayout(); showOverflow = false; }}
@@ -881,10 +881,7 @@
     right: 0;
     margin-top: 4px;
     width: 190px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-lg);
+    /* card chrome comes from the shared kit-popover-card class */
     padding: 6px 0;
     z-index: 100;
     animation: dropdown-in 0.12s ease-out;
@@ -1068,10 +1065,7 @@
     right: 0;
     margin-top: 4px;
     width: 220px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-lg);
+    /* card chrome comes from the shared kit-popover-card class */
     padding: 4px 0;
     z-index: 100;
     animation: dropdown-in 0.12s ease-out;
@@ -1106,10 +1100,7 @@
     right: 0;
     margin-top: 4px;
     width: 180px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-lg);
+    /* card chrome comes from the shared kit-popover-card class */
     padding: 4px 0;
     z-index: 100;
     animation: dropdown-in 0.12s ease-out;
