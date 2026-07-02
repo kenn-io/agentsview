@@ -32,6 +32,11 @@
   --accent-lime: #65a30d;
   --accent-cyan: #0891b2;
   --accent-violet: #7c3aed;
+  /* ALL --accent-*-foreground pairs are agentsview-owned, including the
+     ones for kit-ui's core accents (blue/purple/amber/green/red/teal):
+     kit-ui defines no foreground tokens, and these inks are tuned for the
+     agent-identity badge fills. Anyone changing a kit-ui core accent must
+     re-check the matching foreground here for contrast. */
   --accent-blue-foreground: #ffffff;
   --accent-rose-foreground: #ffffff;
   --accent-purple-foreground: #ffffff;
