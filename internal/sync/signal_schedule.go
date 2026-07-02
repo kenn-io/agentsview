@@ -97,9 +97,21 @@ func (s *signalScheduler) tick() {
 	s.runAll(s.takeDue(false))
 }
 
-// flushAll immediately recomputes every deferred session.
+// flushAll immediately recomputes every deferred session. Callers
+// must not hold the engine's sync lock: recomputes go through the
+// deferred callback, which takes it.
 func (s *signalScheduler) flushAll() {
 	s.runAll(s.takeDue(true))
+}
+
+// flushAllInline immediately recomputes every deferred session via
+// the inline callback. For callers already holding the engine's
+// sync lock (the context markDirty's inline runs execute under),
+// where the deferred callback would deadlock.
+func (s *signalScheduler) flushAllInline() {
+	for _, id := range s.takeDue(true) {
+		s.run(id)
+	}
 }
 
 // stop cancels the pending flush timer, waits for any timer

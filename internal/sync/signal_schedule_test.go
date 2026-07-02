@@ -316,6 +316,30 @@ func TestSignalSchedulerStopWaitsForInflightTimerRun(t *testing.T) {
 		"stop must return once the in-flight recompute finishes")
 }
 
+// TestSignalSchedulerFlushAllInlineUsesInlinePath covers the flush
+// variant for callers already holding the engine's sync lock: it
+// must recompute pending sessions via the inline callback, never
+// the deferred (lock-taking) one, and leave the scheduler running.
+func TestSignalSchedulerFlushAllInlineUsesInlinePath(t *testing.T) {
+	h := newSchedulerHarness(10*time.Second, 2*time.Second)
+
+	h.sched.markDirty("s1")
+	h.advance(1 * time.Second)
+	h.sched.markDirty("s1")
+	require.Len(t, h.runsSnapshot(), 1, "second mark should defer")
+
+	h.sched.flushAllInline()
+	assert.Equal(t, []string{"s1", "s1"}, h.runsSnapshot(),
+		"inline flush should recompute every pending session")
+	assert.Empty(t, h.deferredSnapshot(),
+		"inline flush must not use the deferred path")
+
+	h.advance(1 * time.Second)
+	h.sched.markDirty("s1")
+	assert.Len(t, h.runsSnapshot(), 2,
+		"scheduler must keep debouncing after an inline flush")
+}
+
 // TestSignalSchedulerRoutesDeferredRunsSeparately pins which runs go
 // through the deferred path (timer ticks, flushes) versus the inline
 // path (leading edge, stopped pass-through). The engine wraps only
@@ -416,9 +440,48 @@ func TestWriteIncrementalDebouncesSignalRecompute(t *testing.T) {
 	assert.Equal(t, 1, secretLeakCount(t, fx, sid),
 		"second write within interval should defer the recompute")
 
-	fx.engine.signalSched.flushAll()
+	fx.engine.FlushSignals()
 	assert.Equal(t, 2, secretLeakCount(t, fx, sid),
 		"flush should persist the deferred recompute")
+
+	// FlushSignals must leave the scheduler running: another write
+	// inside the interval defers again instead of running inline.
+	fx.appendClaudeMessage(t, path, "key AKIA2PLVWX6QR8ZKN4TJ leaked")
+	fx.engine.SyncPaths([]string{path})
+	assert.Equal(t, 2, secretLeakCount(t, fx, sid),
+		"scheduler must keep debouncing after FlushSignals")
+	fx.engine.FlushSignals()
+	assert.Equal(t, 3, secretLeakCount(t, fx, sid),
+		"third secret must flush, proving the deferral was real")
+}
+
+// TestSyncThenRunFlushesSignalsBeforeWork mirrors the PG/DuckDB push
+// endpoints: work scans SQLite rows while syncMu is held, so any
+// deferred signal recompute must be flushed before work runs or the
+// push carries stale fields such as secret_leak_count.
+func TestSyncThenRunFlushesSignalsBeforeWork(t *testing.T) {
+	fx := newEngineFixture(t)
+	path := fx.writeClaudeSession(t, "proj", "sig-flush.jsonl", "hello")
+	fx.engine.SyncAll(context.Background(), nil)
+	sid := fx.sessionIDFor(t, path)
+
+	fx.appendClaudeMessage(t, path, "key AKIA7QHWN2DKR4FYPLJM leaked")
+	fx.engine.SyncPaths([]string{path})
+	require.Equal(t, 1, secretLeakCount(t, fx, sid))
+	fx.appendClaudeMessage(t, path, "key AKIA9XKQV3ZTN8WMB2RC leaked")
+	fx.engine.SyncPaths([]string{path})
+	require.Equal(t, 1, secretLeakCount(t, fx, sid),
+		"second write within interval should defer the recompute")
+
+	var seen int
+	_, err := fx.engine.SyncThenRun(context.Background(), false, nil,
+		func(bool) error {
+			seen = secretLeakCount(t, fx, sid)
+			return nil
+		})
+	require.NoError(t, err)
+	assert.Equal(t, 2, seen,
+		"work must observe flushed signal fields before pushing")
 }
 
 func TestSignalSchedulerRealTimerFlushes(t *testing.T) {

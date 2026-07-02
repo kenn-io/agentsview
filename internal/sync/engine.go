@@ -259,6 +259,16 @@ func (e *Engine) Close() {
 	e.signalSched.stop()
 }
 
+// FlushSignals immediately recomputes signals for sessions with a
+// pending debounced recompute, leaving the scheduler running. Push
+// paths that read SQLite rows outside a sync operation call it
+// first so pushed sessions carry current signal fields. Callers
+// must not hold syncMu; work running inside SyncThenRun is flushed
+// by the engine instead.
+func (e *Engine) FlushSignals() {
+	e.signalSched.flushAll()
+}
+
 func providerFactoryMap(
 	factories []parser.ProviderFactory,
 ) map[parser.AgentType]parser.ProviderFactory {
@@ -1611,6 +1621,10 @@ func (e *Engine) SyncThenRun(
 	if ctx.Err() != nil {
 		return stats, ctx.Err()
 	}
+	// work typically scans and pushes SQLite rows, so flush any
+	// deferred signal recomputes first (inline: syncMu is held) or
+	// pushed sessions could carry stale signal/secret fields.
+	e.signalSched.flushAllInline()
 	if err := work(full || didResync); err != nil {
 		return stats, err
 	}

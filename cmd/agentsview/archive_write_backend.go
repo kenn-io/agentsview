@@ -547,6 +547,10 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 	pusher := &pgPusher{
 		localSync: func(c context.Context) error {
 			engine.SyncAll(c, nil)
+			// The push scans SQLite rows right after this returns;
+			// flush deferred signal recomputes so pushed sessions
+			// carry current signal/secret fields.
+			engine.FlushSignals()
 			return nil
 		},
 		connect: func() (pgTarget, error) {
