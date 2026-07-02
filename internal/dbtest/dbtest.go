@@ -95,6 +95,13 @@ func OpenTestDBAt(t *testing.T, path string) *db.DB {
 // and add more fixture rows without losing earlier writes.
 func EnsureTestDBAt(t *testing.T, path string) {
 	t.Helper()
+	ensureTestDBAtWith(t, path, copyTestDBTemplate)
+}
+
+func ensureTestDBAtWith(
+	t *testing.T, path string, copyTemplate func(string) error,
+) {
+	t.Helper()
 	_, err := os.Stat(path)
 	if err == nil {
 		return
@@ -102,8 +109,22 @@ func EnsureTestDBAt(t *testing.T, path string) {
 	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("checking test db %s: %v", path, err)
 	}
-	if err := copyTestDBTemplate(path); err != nil {
-		t.Fatalf("copying test db template: %v", err)
+	if err := copyTemplate(path); err != nil {
+		// The shared template is only a setup-cost optimization.
+		// Never let a template failure poison every test in the
+		// binary; build this database from scratch instead.
+		t.Logf("test db template unavailable, creating %s from scratch: %v",
+			path, err)
+		for _, suffix := range []string{"", "-wal", "-shm"} {
+			_ = os.Remove(path + suffix)
+		}
+		d, openErr := db.Open(path)
+		if openErr != nil {
+			t.Fatalf("creating test db from scratch: %v", openErr)
+		}
+		if closeErr := d.Close(); closeErr != nil {
+			t.Fatalf("closing scratch test db: %v", closeErr)
+		}
 	}
 }
 
@@ -147,18 +168,19 @@ func buildTestDBTemplate() (map[string][]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening db template: %w", err)
 	}
-	// The deadline only guards against a hung checkpoint: flushing
-	// the schema-creation WAL can take well over a second on slow
-	// Windows CI disks under parallel package load.
+	// Checkpointing keeps the copied template compact, but it is best-effort:
+	// the copy below carries the -wal/-shm files along, so a checkpoint that
+	// cannot finish in time must not fail the build. The generous deadline only
+	// guards against a hung checkpoint on slow Windows CI disks.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	checkpointErr := template.CheckpointWALTruncate(ctx)
-	closeErr := template.Close()
-	if checkpointErr != nil {
-		return nil, fmt.Errorf("checkpointing db template: %w", checkpointErr)
+	if err := template.CheckpointWALTruncate(ctx); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"dbtest: template wal checkpoint failed, copying wal as-is: %v\n",
+			err)
 	}
-	if closeErr != nil {
-		return nil, fmt.Errorf("closing db template: %w", closeErr)
+	if err := template.Close(); err != nil {
+		return nil, fmt.Errorf("closing db template: %w", err)
 	}
 
 	files := make(map[string][]byte, 3)
