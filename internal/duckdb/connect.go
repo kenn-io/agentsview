@@ -385,6 +385,17 @@ func redactQuackErrorValue(message, value, replacement string) string {
 	return strings.ReplaceAll(message, duckLiteral(value), duckLiteral(replacement))
 }
 
+func redactQuackCredentialValue(message, value string) string {
+	message = redactQuackErrorValue(message, value, "<redacted>")
+	if escaped := neturl.QueryEscape(value); escaped != value {
+		message = redactQuackErrorValue(message, escaped, "<redacted>")
+	}
+	if escaped := neturl.PathEscape(value); escaped != value {
+		message = redactQuackErrorValue(message, escaped, "<redacted>")
+	}
+	return message
+}
+
 func redactQuackURLCredentialValues(message, rawURL string) string {
 	transport := strings.TrimPrefix(rawURL, "quack:")
 	if strings.HasPrefix(transport, "http://") ||
@@ -400,17 +411,17 @@ func redactHTTPQuackURLCredentialValues(message, transport string) string {
 		return message
 	}
 	if username := u.User.Username(); username != "" {
-		message = redactQuackErrorValue(message, username, "<redacted>")
+		message = redactQuackCredentialValue(message, username)
 	}
 	if password, ok := u.User.Password(); ok {
-		message = redactQuackErrorValue(message, password, "<redacted>")
+		message = redactQuackCredentialValue(message, password)
 	}
 	for key, values := range u.Query() {
 		if !isSecretURLQueryKey(key) {
 			continue
 		}
 		for _, value := range values {
-			message = redactQuackErrorValue(message, value, "<redacted>")
+			message = redactQuackCredentialValue(message, value)
 		}
 	}
 	return message
@@ -419,9 +430,14 @@ func redactHTTPQuackURLCredentialValues(message, transport string) string {
 func redactNativeQuackCredentialValues(message, transport string) string {
 	transport = strings.SplitN(transport, "#", 2)[0]
 	base, rawQuery, hasQuery := strings.Cut(transport, "?")
-	if userinfo, _, ok := strings.Cut(base, "@"); ok {
+	base = strings.TrimPrefix(base, "//")
+	if scheme, rest, ok := strings.Cut(base, "://"); ok && scheme != "" {
+		base = rest
+	}
+	if at := strings.LastIndex(base, "@"); at >= 0 {
+		userinfo := base[:at]
 		for value := range strings.SplitSeq(userinfo, ":") {
-			message = redactQuackErrorValue(message, value, "<redacted>")
+			message = redactQuackCredentialValue(message, value)
 		}
 	}
 	if !hasQuery {
@@ -436,7 +452,7 @@ func redactNativeQuackCredentialValues(message, transport string) string {
 			continue
 		}
 		for _, value := range values {
-			message = redactQuackErrorValue(message, value, "<redacted>")
+			message = redactQuackCredentialValue(message, value)
 		}
 	}
 	return message

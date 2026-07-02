@@ -152,6 +152,42 @@ func TestRedactQuackClientErrorScrubsAttachSecrets(t *testing.T) {
 	assert.Contains(t, msg, "duck.example.com")
 }
 
+func TestRedactQuackClientErrorScrubsNativeDoubleSlashUserinfo(t *testing.T) {
+	rawURL := "quack://account:credential0@duck.example.com:9494/db?token=credential1&x=1"
+	err := redactQuackClientError(
+		errors.New(
+			"IO Error connecting to account:credential0@duck.example.com:9494/db?x=1&token=credential1",
+		),
+		rawURL,
+		"credential2",
+	)
+	msg := err.Error()
+
+	assert.NotContains(t, msg, "account")
+	assert.NotContains(t, msg, "credential0")
+	assert.NotContains(t, msg, "credential1")
+	assert.Contains(t, msg, "duck.example.com")
+}
+
+func TestRedactQuackClientErrorScrubsEncodedCredentialValues(t *testing.T) {
+	rawURL := "quack:https://account:p%40ss@duck.example.com/db?token=s%2Bcret&x=1"
+	err := redactQuackClientError(
+		errors.New(
+			"IO Error connecting to https://account:p%40ss@duck.example.com/db?x=1&token=s%2Bcret",
+		),
+		rawURL,
+		"attach-token",
+	)
+	msg := err.Error()
+
+	assert.NotContains(t, msg, "account")
+	assert.NotContains(t, msg, "p%40ss")
+	assert.NotContains(t, msg, "p@ss")
+	assert.NotContains(t, msg, "s%2Bcret")
+	assert.NotContains(t, msg, "s+cret")
+	assert.Contains(t, msg, "duck.example.com")
+}
+
 func TestSyncStateTargetForConfigScopesRemoteURLWithoutSecrets(t *testing.T) {
 	base := config.DuckDBConfig{
 		URL:   "quack:https://user:secret@duck.example.com/db?token=secret&x=1#frag",
