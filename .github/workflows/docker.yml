@@ -60,6 +60,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ steps.vars.outputs.image }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=semver,pattern={{version}}
           labels: |
             org.opencontainers.image.title=agentsview
