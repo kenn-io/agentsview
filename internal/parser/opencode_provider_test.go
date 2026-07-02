@@ -130,20 +130,21 @@ func TestOpenCodeProviderSQLiteSourceMethods(t *testing.T) {
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)
+	assert.Equal(t, []string{
+		"*.json", "opencode.db", "opencode.db-wal",
+	}, plan.Roots[0].IncludeGlobs)
 
 	discovered, err := provider.Discover(context.Background())
 	require.NoError(t, err)
 	requireSourcePathsMatch(t, discovered, fixture.AllVirtualPaths)
 	requireContainsSourcePath(t, discovered, virtualPath)
 
-	for _, path := range []string{dbPath, dbPath + "-wal"} {
-		changed, err := provider.SourcesForChangedPath(
-			context.Background(),
-			ChangedPathRequest{Path: path, EventKind: "write", WatchRoot: root},
-		)
-		require.NoError(t, err)
-		requireSourcePathsMatch(t, changed, fixture.AllVirtualPaths)
-	}
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{Path: dbPath, EventKind: "write", WatchRoot: root},
+	)
+	require.NoError(t, err)
+	requireSourcePathsMatch(t, changed, fixture.AllVirtualPaths)
 
 	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
 		FullSessionID: "host~opencode:" + fixture.TargetSessionID,
@@ -182,6 +183,95 @@ func TestOpenCodeProviderSQLiteSourceMethods(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Empty(t, removed, "removed sqlite DBs have no stateless virtual source list")
+}
+
+func TestOpenCodeProviderIgnoresNonDataSQLiteSidecars(t *testing.T) {
+	tests := []struct {
+		name      string
+		suffix    string
+		create    bool
+		size      int
+		remove    bool
+		eventKind string
+	}{
+		{name: "missing WAL", suffix: "-wal", eventKind: "remove"},
+		{name: "empty WAL", suffix: "-wal", create: true, eventKind: "write"},
+		{name: "partial WAL", suffix: "-wal", create: true, size: 3, eventKind: "write"},
+		{name: "header-only WAL", suffix: "-wal", create: true, size: 32, eventKind: "write"},
+		{name: "removed WAL", suffix: "-wal", create: true, size: 64, remove: true, eventKind: "remove"},
+		{name: "SHM", suffix: "-shm", create: true, size: 32 * 1024, eventKind: "write"},
+		{name: "unknown sidecar", suffix: "-backup", create: true, size: 64, eventKind: "write"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := openCodeSQLiteProviderReadFixture(t)
+			path := fixture.DBPath + tc.suffix
+			if tc.create {
+				require.NoError(t, os.WriteFile(path, make([]byte, tc.size), 0o600))
+			}
+			if tc.remove {
+				require.NoError(t, os.Remove(path))
+			}
+
+			provider, ok := NewProvider(AgentOpenCode, ProviderConfig{
+				Roots: []string{fixture.Root},
+			})
+			require.True(t, ok)
+			changed, err := provider.SourcesForChangedPath(
+				context.Background(),
+				ChangedPathRequest{
+					Path:      path,
+					EventKind: tc.eventKind,
+					WatchRoot: fixture.Root,
+				},
+			)
+			require.NoError(t, err)
+			assert.Empty(t, changed)
+		})
+	}
+}
+
+func TestOpenCodeProviderReadsLiveSQLiteWAL(t *testing.T) {
+	dbPath, seeder, writer := newTestDB(t)
+	defer writer.Close()
+
+	var journalMode string
+	require.NoError(t, writer.QueryRow("PRAGMA journal_mode=WAL").Scan(&journalMode))
+	require.Equal(t, "wal", journalMode)
+	_, err := writer.Exec("PRAGMA wal_autocheckpoint=0")
+	require.NoError(t, err)
+	seedStandardSession(t, seeder)
+
+	walPath := dbPath + "-wal"
+	walInfo, err := os.Stat(walPath)
+	require.NoError(t, err)
+	require.Greater(t, walInfo.Size(), sqliteWALHeaderSize)
+
+	provider, ok := NewProvider(AgentOpenCode, ProviderConfig{
+		Roots:   []string{filepath.Dir(dbPath)},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{
+			Path:      walPath,
+			EventKind: "write",
+			WatchRoot: filepath.Dir(dbPath),
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: changed[0],
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	assert.Equal(t, "opencode:ses_abc", outcome.Results[0].Result.Session.ID)
+	assert.Equal(t, "Sure, I can help with Go.",
+		outcome.Results[0].Result.Messages[1].Content)
 }
 
 // TestOpenCodeProviderSQLiteDiscoversAllListedSessions guards the refactor that

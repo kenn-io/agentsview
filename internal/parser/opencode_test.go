@@ -259,6 +259,23 @@ func TestParseOpenCodeDB_StandardSession(t *testing.T) {
 	assertEq(t, "msg[1].Content", s.Messages[1].Content, "Sure, I can help with Go.")
 }
 
+func TestOpenOpenCodeDBDoesNotForceWALMode(t *testing.T) {
+	dbPath, _, writer := newTestDB(t)
+	require.NoError(t, writer.Close())
+
+	reader, err := openOpenCodeDB(dbPath)
+	require.NoError(t, err)
+	defer reader.Close()
+	_, err = reader.Exec("CREATE TABLE must_stay_read_only (id INTEGER)")
+	require.Error(t, err, "OpenCode source databases must stay read-only")
+
+	var journalMode string
+	require.NoError(t, reader.QueryRow("PRAGMA journal_mode").Scan(&journalMode))
+	assert.Equal(t, "delete", journalMode)
+	assert.NoFileExists(t, dbPath+"-wal")
+	assert.NoFileExists(t, dbPath+"-shm")
+}
+
 func TestParseOpenCodeFile_StorageSession(t *testing.T) {
 	root := t.TempDir()
 	sessionPath := filepath.Join(

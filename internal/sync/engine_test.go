@@ -3158,9 +3158,11 @@ func TestEngine_ClassifyPathsOpenCodeSQLiteWALFile(
 	})
 
 	dbPath := filepath.Join(opencodeDir, "opencode.db")
-	seedOpenCodeSQLiteSession(t, dbPath, "ses_wal")
+	seedOpenCodeSQLiteWALSession(t, dbPath, "ses_wal")
 	walPath := filepath.Join(opencodeDir, "opencode.db-wal")
-	require.NoError(t, os.WriteFile(walPath, []byte("wal"), 0o644), "WriteFile(%q)", walPath)
+	walInfo, err := os.Stat(walPath)
+	require.NoError(t, err, "Stat(%q)", walPath)
+	require.Greater(t, walInfo.Size(), int64(32), "WAL must contain transaction frames")
 
 	files := engine.classifyPaths([]string{walPath})
 	require.Len(t, files, 1)
@@ -3171,9 +3173,11 @@ func TestEngine_ClassifyPathsOpenCodeSQLiteWALFile(
 	assert.Equal(t, parser.AgentOpenCode, files[0].Agent)
 }
 
-// seedOpenCodeSQLiteSession creates a minimal OpenCode-shaped SQLite database
-// with a single session row so changed-path classification can enumerate it.
-func seedOpenCodeSQLiteSession(t *testing.T, dbPath, sessionID string) {
+// seedOpenCodeSQLiteWALSession creates a minimal OpenCode-shaped SQLite
+// database and keeps its writer open with the session commit held in the WAL.
+// This exercises the same uncheckpointed state produced by a live OpenCode
+// process rather than using a synthetic sidecar that SQLite cannot read.
+func seedOpenCodeSQLiteWALSession(t *testing.T, dbPath, sessionID string) {
 	t.Helper()
 	d, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err, "open opencode db")
@@ -3203,6 +3207,11 @@ func seedOpenCodeSQLiteSession(t *testing.T, dbPath, sessionID string) {
 		);
 	`)
 	require.NoError(t, err, "create opencode schema")
+	var journalMode string
+	require.NoError(t, d.QueryRow("PRAGMA journal_mode=WAL").Scan(&journalMode))
+	require.Equal(t, "wal", journalMode)
+	_, err = d.Exec("PRAGMA wal_autocheckpoint=0")
+	require.NoError(t, err, "disable WAL autocheckpoint")
 	_, err = d.Exec(
 		"INSERT INTO project (id, worktree) VALUES ('prj_1', '/home/user/code/app')",
 	)
