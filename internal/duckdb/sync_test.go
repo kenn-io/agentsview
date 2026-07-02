@@ -954,12 +954,12 @@ func TestExecDuckRemoteMutationBatchOversizeUsesStatementModeTransaction(
 	require.NoError(t, err)
 
 	assert.Empty(t, coalescedCalls)
-	require.Len(t, statementCalls, 5)
+	require.Len(t, statementCalls, 3)
 	assert.Equal(t, "BEGIN TRANSACTION", statementCalls[0])
 	assert.Contains(t, statementCalls[1], "INSERT INTO remote_test VALUES (1, $")
-	assert.Contains(t, statementCalls[2], "INSERT INTO remote_test VALUES (2, $")
-	assert.Contains(t, statementCalls[3], "INSERT INTO remote_test VALUES (3, $")
-	assert.Equal(t, "COMMIT", statementCalls[4])
+	assert.Contains(t, statementCalls[1], "), (2, $")
+	assert.Contains(t, statementCalls[1], "), (3, $")
+	assert.Equal(t, "COMMIT", statementCalls[2])
 }
 
 func TestAppendDuckRemoteMutationBatchRejectsOversizeSessionAfterFlush(

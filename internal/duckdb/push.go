@@ -502,6 +502,35 @@ func execDuckRemoteMutationBatch(
 		}
 		return nil
 	}
+	return execDuckRemoteMutationStatements(ctx, exec, label, batch.statements)
+}
+
+func execDuckRemoteMutationRenderedStatements(
+	ctx context.Context,
+	exec func(context.Context, string) error,
+	label string,
+	batch *duckRemoteMutationBatch,
+) error {
+	if batch.Len() == 0 {
+		return nil
+	}
+	rendered := batch.rendered()
+	statements := make([]string, 0, len(rendered))
+	for _, stmt := range rendered {
+		statements = append(statements, stmt.sql)
+	}
+	return execDuckRemoteMutationStatements(ctx, exec, label, statements)
+}
+
+func execDuckRemoteMutationStatements(
+	ctx context.Context,
+	exec func(context.Context, string) error,
+	label string,
+	statements []string,
+) (err error) {
+	if len(statements) == 0 {
+		return nil
+	}
 	if err := exec(ctx, "BEGIN TRANSACTION"); err != nil {
 		return fmt.Errorf("begin %s: %w", label, err)
 	}
@@ -515,11 +544,11 @@ func execDuckRemoteMutationBatch(
 			err = fmt.Errorf("%w; rollback %s: %v", err, label, rollbackErr)
 		}
 	}()
-	for i, stmt := range batch.statements {
+	for i, stmt := range statements {
 		if err := exec(ctx, stmt); err != nil {
 			return fmt.Errorf(
 				"execute %s statement %d/%d: %w",
-				label, i+1, batch.Len(), err,
+				label, i+1, len(statements), err,
 			)
 		}
 	}
@@ -560,7 +589,9 @@ func execDuckRemoteMutationBatchOversizeWithStatementFallback(
 		maxBytes = duckRemoteMutationCoalesceMaxBytes
 	}
 	if batch.transactionBytes() > maxBytes {
-		return execDuckRemoteMutationBatch(ctx, execStatement, label, batch, false)
+		return execDuckRemoteMutationRenderedStatements(
+			ctx, execStatement, label, batch,
+		)
 	}
 	return execDuckRemoteMutationBatchWithStatementFallback(
 		ctx, execCoalesced, execStatement, label, batch,
