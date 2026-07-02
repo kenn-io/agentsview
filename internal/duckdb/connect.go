@@ -474,11 +474,13 @@ func nativeQuackUserinfo(base string) string {
 	if !strings.Contains(userinfoHead, ":") {
 		return ""
 	}
-	reattachedAuthority, _, _ := strings.Cut(base[at+1:], "/")
-	if !nativeQuackLooksLikeAuthority(reattachedAuthority) {
-		return ""
+	reattachedAuthority, _, hasReattachedPath := strings.Cut(base[at+1:], "/")
+	if nativeQuackLooksLikeAuthority(reattachedAuthority) ||
+		(hasReattachedPath && reattachedAuthority != "" &&
+			!nativeQuackLooksLikeAuthority(userinfoHead)) {
+		return userinfo
 	}
-	return base[:at]
+	return ""
 }
 
 func nativeQuackLooksLikeAuthority(authority string) bool {

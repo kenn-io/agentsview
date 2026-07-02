@@ -204,6 +204,23 @@ func TestRedactQuackClientErrorScrubsNativeRawSlashPassword(t *testing.T) {
 	assert.Contains(t, msg, "duck.example.com")
 }
 
+func TestRedactQuackClientErrorScrubsNativeRawSlashPasswordDotlessHost(t *testing.T) {
+	rawURL := "quack://account:pa/ss@myhost/db?token=credential1&x=1"
+	err := redactQuackClientError(
+		errors.New(
+			"IO Error connecting to account:pa/ss@myhost/db?x=1&token=credential1",
+		),
+		rawURL,
+		"credential2",
+	)
+	msg := err.Error()
+
+	assert.NotContains(t, msg, "account")
+	assert.NotContains(t, msg, "pa/ss")
+	assert.NotContains(t, msg, "credential1")
+	assert.Contains(t, msg, "myhost")
+}
+
 func TestRedactQuackClientErrorScrubsNativeSchemeUserinfo(t *testing.T) {
 	rawURL := "quack:tcp://account:credential0@duck.example.com:9494/db?token=credential1&x=1"
 	err := redactQuackClientError(
