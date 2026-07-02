@@ -31,7 +31,7 @@ test.describe("session termination status", () => {
 
     // Surviving session renders the unclean StatusDot.
     await expect(
-      page.locator(".status-dot--unclean").first(),
+      page.locator(".kit-status-dot--unclean").first(),
     ).toBeVisible();
   });
 
@@ -42,7 +42,7 @@ test.describe("session termination status", () => {
     // when no session is selected.
     await page.goto("/");
     await expect(
-      page.locator(".status-dot--unclean").first(),
+      page.locator(".kit-status-dot--unclean").first(),
     ).toBeVisible();
   });
 

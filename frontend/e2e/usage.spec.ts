@@ -152,7 +152,8 @@ test.describe("Usage page", () => {
     page,
   }) => {
     const usageBtn = page.locator(
-      '.nav-btn[aria-label="Usage"]',
+      ".kit-top-bar__tabs .kit-top-bar__tab",
+      { hasText: "Usage" },
     );
     await expect(usageBtn).toBeVisible();
     await expect(usageBtn).toHaveClass(/active/);
