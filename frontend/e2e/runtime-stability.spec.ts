@@ -7,8 +7,12 @@ const DEPTH_ERROR_RE =
 
 // Svelte 5 fires each_key_duplicate warnings when virtual-scroll
 // items shift keys during rapid filter/sort transitions. These
-// are cosmetic — the DOM recovers immediately.
-const KNOWN_SVELTE_WARNINGS_RE = /each_key_duplicate/;
+// are cosmetic — the DOM recovers immediately. WebKit additionally
+// reports the benign "ResizeObserver loop completed with undelivered
+// notifications" when kit-ui's TopBar re-lays-out inside its own
+// ResizeObserver measurement — the loop is settled on the next frame.
+const KNOWN_SVELTE_WARNINGS_RE =
+  /each_key_duplicate|ResizeObserver loop completed with undelivered notifications/;
 
 // Test-fixture assumptions: project-alpha has sessions with 2
 // and 5+ messages, totalling 10 sessions across all projects

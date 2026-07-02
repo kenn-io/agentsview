@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { SessionsPage } from "./pages/sessions-page";
+import { clickNavTab } from "./helpers/nav";
 
 // Test-fixture assumptions: project-alpha has 2 sessions,
 // project-beta has 3, project-duration has 1 (the duration UX
@@ -69,13 +70,13 @@ test.describe("Session list", () => {
     await expect(page).toHaveURL(/[?&]project=project-alpha/);
 
     // Switch to Usage; the sessions URL leaves view.
-    await page.locator('.kit-top-bar__tabs .kit-top-bar__tab', { hasText: "Usage" }).click();
+    await clickNavTab(page, "Usage");
     await expect(page).toHaveURL(/\/usage/);
 
     // Return to Sessions. The bare /sessions navigation should
     // re-acquire the filter from localStorage and reflect it
     // back into the URL so it matches what's displayed.
-    await page.locator('.kit-top-bar__tabs .kit-top-bar__tab', { hasText: "Sessions" }).click();
+    await clickNavTab(page, "Sessions");
     await expect(page).toHaveURL(/[?&]project=project-alpha/);
   });
 });

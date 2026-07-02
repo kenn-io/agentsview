@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { expectActiveNavTab } from "./helpers/nav";
 
 test.describe("Usage page", () => {
   test.beforeEach(async ({ page }) => {
@@ -148,15 +149,10 @@ test.describe("Usage page", () => {
     await expect(trigger).toContainText("All");
   });
 
-  test("top nav shows Usage button as active", async ({
+  test("top nav shows Usage as the active destination", async ({
     page,
   }) => {
-    const usageBtn = page.locator(
-      ".kit-top-bar__tabs .kit-top-bar__tab",
-      { hasText: "Usage" },
-    );
-    await expect(usageBtn).toBeVisible();
-    await expect(usageBtn).toHaveClass(/active/);
+    await expectActiveNavTab(page, "Usage");
   });
 
   test("URL updates when filter changes", async ({ page }) => {

@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { clickNavTab } from "./helpers/nav";
 
 // The fixture session created by createRecentEditsFixture in
 // cmd/testfixture/main.go. It carries an Edit tool call on
@@ -19,9 +20,7 @@ test.describe("Recent Edits feed", () => {
     page,
   }) => {
     // Recent Edits is a top-level TopBar tab since the kit-ui migration.
-    await page
-      .locator(".kit-top-bar__tabs .kit-top-bar__tab", { hasText: "Recent Edits" })
-      .click();
+    await clickNavTab(page, "Recent Edits");
 
     // The page container and heading should appear.
     await expect(
@@ -42,9 +41,7 @@ test.describe("Recent Edits feed", () => {
     page,
   }) => {
     // Navigate to Recent Edits via its TopBar tab.
-    await page
-      .locator(".kit-top-bar__tabs .kit-top-bar__tab", { hasText: "Recent Edits" })
-      .click();
+    await clickNavTab(page, "Recent Edits");
 
     await expect(
       page.locator(".re-file-row").first(),
