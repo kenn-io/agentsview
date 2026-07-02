@@ -231,12 +231,10 @@ GitHub Actions service container in `.github/workflows/ci.yml`.
   `internal/web/dist/`.
 - The frontend depends on `@kenn-io/kit-ui` as a git dependency pinned to a
   commit (`github:kenn-io/kit-ui#<commit>` in `frontend/package.json`). The
-  repository is private, so `npm ci`/`npm install` need git credentials for
-  `github.com/kenn-io/kit-ui`: locally an SSH key or credential helper that
-  can read the repo, in CI the `kit-ui-auth` composite action (backed by the
-  `KIT_UI_TOKEN` secret), and in Docker builds a `kit_ui_token` BuildKit
-  secret. Bump the dependency by changing the commit hash in
-  `frontend/package.json` and running `npm install`.
+  repository is public, so `npm ci`/`npm install` clone it anonymously over
+  HTTPS with no credentials; the only requirement is git on PATH. Bump the
+  dependency by changing the commit hash in `frontend/package.json` and
+  running `npm install`.
 
 ## Conventions
 

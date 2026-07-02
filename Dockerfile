@@ -4,20 +4,11 @@ WORKDIR /src/frontend
 
 COPY frontend/package.json frontend/package-lock.json ./
 
-# @kenn-io/kit-ui is a private GitHub git dependency
-# (github:kenn-io/kit-ui#<commit> in frontend/package.json), so npm ci needs
-# git credentials for kenn-io/kit-ui. Pass a token with contents:read as a
-# BuildKit secret so it never lands in an image layer:
-#   docker buildx build --secret id=kit_ui_token,env=KIT_UI_TOKEN .
-# The GIT_CONFIG_* variables rewrite only that repository's ssh URL to
-# token-authenticated HTTPS for this single RUN.
-RUN --mount=type=secret,id=kit_ui_token \
-    GIT_CONFIG_COUNT=2 \
-    GIT_CONFIG_KEY_0="url.https://x-access-token:$(cat /run/secrets/kit_ui_token)@github.com/kenn-io/kit-ui.insteadOf" \
-    GIT_CONFIG_VALUE_0="ssh://git@github.com/kenn-io/kit-ui" \
-    GIT_CONFIG_KEY_1="url.https://x-access-token:$(cat /run/secrets/kit_ui_token)@github.com/kenn-io/kit-ui.insteadOf" \
-    GIT_CONFIG_VALUE_1="git@github.com:kenn-io/kit-ui" \
-    npm ci
+# @kenn-io/kit-ui is a commit-pinned git dependency
+# (github:kenn-io/kit-ui#<commit> in frontend/package.json); the repository
+# is public, so npm clones it anonymously over HTTPS (git ships in the
+# node:bookworm image).
+RUN npm ci
 
 COPY frontend/ ./
 RUN npm run build

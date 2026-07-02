@@ -71,11 +71,6 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          # npm ci inside the frontend-build stage fetches the private
-          # @kenn-io/kit-ui git dependency; the token rides a BuildKit
-          # secret so it never lands in an image layer.
-          secrets: |
-            kit_ui_token=${{ secrets.KIT_UI_TOKEN }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}

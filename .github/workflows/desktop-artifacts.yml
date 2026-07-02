@@ -106,11 +106,6 @@ jobs:
         if: env.AGENTSVIEW_TARGET_TRIPLE != ''
         run: rustup target add "$AGENTSVIEW_TARGET_TRIPLE"
 
-      - name: Authorize kit-ui git dependency
-        uses: ./.github/actions/kit-ui-auth
-        with:
-          token: ${{ secrets.KIT_UI_TOKEN }}
-
       - name: Install desktop dependencies
         run: npm ci
         working-directory: desktop
