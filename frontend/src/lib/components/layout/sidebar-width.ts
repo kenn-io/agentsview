@@ -1,9 +1,13 @@
+import { BREAKPOINTS } from "@kenn-io/kit-ui";
+
 export const SIDEBAR_WIDTH_KEY = "agentsview-sidebar-width";
 export const SIDEBAR_WIDTH_DEFAULT = 260;
 export const SIDEBAR_WIDTH_MIN = 220;
 export const SIDEBAR_WIDTH_STORAGE_MAX = 520;
 export const SIDEBAR_CONTENT_MIN = 480;
-export const SIDEBAR_DESKTOP_BREAKPOINT = 768;
+// Desktop starts one pixel past kit-ui's medium breakpoint so JS layout
+// logic agrees with the (max-width: 760px) CSS rules and ui.isMobileViewport.
+export const SIDEBAR_DESKTOP_BREAKPOINT = BREAKPOINTS.medium + 1;
 
 export function clampStoredSidebarWidth(value: unknown): number {
   const numericValue =

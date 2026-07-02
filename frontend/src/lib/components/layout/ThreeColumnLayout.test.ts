@@ -228,8 +228,7 @@ describe("ThreeColumnLayout", () => {
     );
     expect(recentEdits).not.toBeUndefined();
 
-    // The header More menu that also hosts Recent Edits is display:none under
-    // 768px, so the mobile nav button is the only way mobile users reach it.
+    // The header More menu that also hosts Recent Edits is display:none under    // the medium breakpoint, so the mobile nav button is the only way mobile users reach it.
     const navigate = vi
       .spyOn(router, "navigate")
       .mockImplementation(() => true);
@@ -238,13 +237,13 @@ describe("ThreeColumnLayout", () => {
     navigate.mockRestore();
   });
 
-  it("renders the resize handle at the 768px layout breakpoint", async () => {
+  it("renders the resize handle at the desktop layout breakpoint", async () => {
     const expectedWidth = getClampedSidebarWidthForLayout(
       320,
-      768,
+      SIDEBAR_DESKTOP_BREAKPOINT,
     );
 
-    setViewportWidth(768);
+    setViewportWidth(SIDEBAR_DESKTOP_BREAKPOINT);
     ui.sidebarOpen = true;
     ui.setSidebarWidth(320);
 

@@ -18,7 +18,9 @@ describe("sidebar width helpers", () => {
     expect(SIDEBAR_WIDTH_MIN).toBe(220);
     expect(SIDEBAR_WIDTH_STORAGE_MAX).toBe(520);
     expect(SIDEBAR_CONTENT_MIN).toBe(480);
-    expect(SIDEBAR_DESKTOP_BREAKPOINT).toBe(768);
+    // One pixel past kit-ui BREAKPOINTS.medium (760), pairing with the
+    // (max-width: 760px) CSS rules.
+    expect(SIDEBAR_DESKTOP_BREAKPOINT).toBe(761);
   });
 
   it("falls back to the default for invalid stored values", () => {
@@ -45,9 +47,9 @@ describe("sidebar width helpers", () => {
     expect(clampStoredSidebarWidth("999")).toBe(SIDEBAR_WIDTH_STORAGE_MAX);
   });
 
-  it("treats 768px and wider as desktop layout", () => {
-    expect(isDesktopSidebarLayout(767)).toBe(false);
-    expect(isDesktopSidebarLayout(768)).toBe(true);
+  it("treats widths past the medium breakpoint as desktop layout", () => {
+    expect(isDesktopSidebarLayout(760)).toBe(false);
+    expect(isDesktopSidebarLayout(761)).toBe(true);
   });
 
   it("never clamps the layout width below the sidebar minimum", () => {
