@@ -718,49 +718,71 @@ func (b *directBackend) Stats(
 	if err != nil {
 		return nil, err
 	}
-	attachCursorAttribution(stats, f)
+	stats.CodeAttribution = collectCodeAttribution(f, stats)
 	return stats, nil
 }
 
-func attachCursorAttribution(stats *SessionStats, f StatsFilter) {
+func collectCodeAttribution(
+	f StatsFilter,
+	stats *SessionStats,
+) *db.CodeAttribution {
 	if stats == nil {
-		return
+		return nil
 	}
+	sources := []db.CodeAttributionSource{}
+	if source, ok := collectCursorAttribution(f, stats); ok {
+		sources = append(sources, source)
+	}
+	if len(sources) == 0 {
+		return nil
+	}
+	slices.SortFunc(sources, func(a, b db.CodeAttributionSource) int {
+		if n := strings.Compare(a.Provider, b.Provider); n != 0 {
+			return n
+		}
+		if n := strings.Compare(a.Scope, b.Scope); n != 0 {
+			return n
+		}
+		return strings.Compare(a.Status, b.Status)
+	})
+	return &db.CodeAttribution{Sources: sources}
+}
+
+func collectCursorAttribution(
+	f StatsFilter,
+	stats *SessionStats,
+) (db.CodeAttributionSource, bool) {
 	switch cursorAttributionDecision(f) {
 	case cursorAttributionSkip:
-		return
+		return db.CodeAttributionSource{}, false
 	case cursorAttributionUnsupportedProjectFilter:
-		stats.CursorAttribution = cursorAttributionStatus(
+		return cursorAttributionSource(
 			"unsupported_filter",
 			"Cursor attribution is machine-local and cannot be scoped by project filters",
-		)
-		return
+		), true
 	}
 	from, err := time.Parse(time.RFC3339, stats.Window.Since)
 	if err != nil {
-		stats.CursorAttribution = cursorAttributionStatus(
+		return cursorAttributionSource(
 			"error",
 			"failed to parse stats window for Cursor attribution",
-		)
-		return
+		), true
 	}
 	to, err := time.Parse(time.RFC3339, stats.Window.Until)
 	if err != nil {
-		stats.CursorAttribution = cursorAttributionStatus(
+		return cursorAttributionSource(
 			"error",
 			"failed to parse stats window for Cursor attribution",
-		)
-		return
+		), true
 	}
 	attr, status, err := parser.LoadCursorAttribution(from, to)
 	if err != nil {
-		stats.CursorAttribution = cursorAttributionStatus(
+		return cursorAttributionSource(
 			"error",
 			"failed to load Cursor attribution: "+err.Error(),
-		)
-		return
+		), true
 	}
-	stats.CursorAttribution = mapCursorAttribution(attr, status)
+	return mapCursorAttributionSource(attr, status), true
 }
 
 func normalizeStatsAgentFilter(raw string) string {
@@ -808,12 +830,12 @@ func cursorAttributionDecision(f StatsFilter) cursorAttributionLoadDecision {
 	return cursorAttributionLoad
 }
 
-func mapCursorAttribution(
+func mapCursorAttributionSource(
 	attr *parser.CursorAttribution,
 	status parser.CursorAttributionStatus,
-) *db.CursorAttribution {
+) db.CodeAttributionSource {
 	if attr == nil {
-		out := cursorAttributionStatus(string(status), "")
+		out := cursorAttributionSource(string(status), "")
 		if status == parser.CursorAttributionUnavailable {
 			out.Warnings = []string{
 				"Cursor attribution database is unavailable on this machine",
@@ -821,9 +843,8 @@ func mapCursorAttribution(
 		}
 		return out
 	}
-	out := &db.CursorAttribution{
-		Status:               string(status),
-		Scope:                cursorAttributionScopeMachineLocal,
+	out := cursorAttributionSource(string(status), "")
+	out.Metrics = &db.CursorAttributionMetrics{
 		ScoredCommits:        attr.ScoredCommits,
 		LinesAdded:           attr.LinesAdded,
 		LinesDeleted:         attr.LinesDeleted,
@@ -840,14 +861,14 @@ func mapCursorAttribution(
 	if len(attr.ConversationCounts) == 0 {
 		return out
 	}
-	out.ConversationCounts = make(
+	out.Metrics.ConversationCounts = make(
 		[]db.CursorConversationCount,
 		0,
 		len(attr.ConversationCounts),
 	)
 	for _, entry := range attr.ConversationCounts {
-		out.ConversationCounts = append(
-			out.ConversationCounts,
+		out.Metrics.ConversationCounts = append(
+			out.Metrics.ConversationCounts,
 			db.CursorConversationCount{
 				Model: entry.Model,
 				Mode:  entry.Mode,
@@ -858,10 +879,11 @@ func mapCursorAttribution(
 	return out
 }
 
-func cursorAttributionStatus(status, warning string) *db.CursorAttribution {
-	out := &db.CursorAttribution{
-		Status: status,
-		Scope:  cursorAttributionScopeMachineLocal,
+func cursorAttributionSource(status, warning string) db.CodeAttributionSource {
+	out := db.CodeAttributionSource{
+		Provider: "cursor",
+		Status:   status,
+		Scope:    cursorAttributionScopeMachineLocal,
 	}
 	if warning != "" {
 		out.Warnings = []string{warning}

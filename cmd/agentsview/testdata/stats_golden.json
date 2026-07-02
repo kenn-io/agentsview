@@ -89,23 +89,16 @@
     "dollars_saved_vs_uncached": 2.373315,
     "dollars_spent": 6.751545
   },
-  "cursor_attribution": {
-    "ai_authored_pct": 0,
-    "blank_lines_added": 0,
-    "blank_lines_deleted": 0,
-    "composer_lines_added": 0,
-    "composer_lines_deleted": 0,
-    "human_lines_added": 0,
-    "human_lines_deleted": 0,
-    "lines_added": 0,
-    "lines_deleted": 0,
-    "scope": "machine_local",
-    "scored_commits": 0,
-    "status": "unavailable",
-    "tab_lines_added": 0,
-    "tab_lines_deleted": 0,
-    "warnings": [
-      "Cursor attribution database is unavailable on this machine"
+  "code_attribution": {
+    "sources": [
+      {
+        "provider": "cursor",
+        "scope": "machine_local",
+        "status": "unavailable",
+        "warnings": [
+          "Cursor attribution database is unavailable on this machine"
+        ]
+      }
     ]
   },
   "distributions": {

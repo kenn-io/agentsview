@@ -31,8 +31,8 @@ self-exits after an idle period. Read-only CLI commands can still open
 `AGENTSVIEW_NO_DAEMON=1` for scripts or CI jobs that must never auto-start a
 daemon.
 
-Cursor attribution stats are a live, machine-local read from
-`~/.cursor/ai-tracking/ai-code-tracking.db` by default. Set
+The Cursor source in code attribution stats is a live, machine-local read
+from `~/.cursor/ai-tracking/ai-code-tracking.db` by default. Set
 `AGENTSVIEW_CURSOR_ATTRIBUTION_DB` when Cursor stores that database
 somewhere else on the host answering the stats request. The attribution
 database is not synced into AgentsView's archive and is not pushed to

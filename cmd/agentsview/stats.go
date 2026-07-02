@@ -173,8 +173,8 @@ func printStatsHuman(w io.Writer, stats *service.SessionStats) error {
 	if stats.Totals.SessionsAll == 0 {
 		fmt.Fprintln(ew, "Totals")
 		fmt.Fprintln(ew, "  (no sessions in window)")
-		if stats.CursorAttribution != nil {
-			printCursorAttribution(ew, stats.CursorAttribution)
+		if stats.CodeAttribution != nil {
+			printCodeAttribution(ew, stats.CodeAttribution)
 		}
 		return ew.err
 	}
@@ -198,8 +198,8 @@ func printStatsHuman(w io.Writer, stats *service.SessionStats) error {
 	if stats.Outcomes != nil {
 		printOutcomes(ew, stats.Outcomes)
 	}
-	if stats.CursorAttribution != nil {
-		printCursorAttribution(ew, stats.CursorAttribution)
+	if stats.CodeAttribution != nil {
+		printCodeAttribution(ew, stats.CodeAttribution)
 	}
 	return ew.err
 }
@@ -457,26 +457,38 @@ func printOutcomes(w io.Writer, o *db.StatsOutcomes) {
 	fmt.Fprintln(w)
 }
 
-func printCursorAttribution(w io.Writer, c *db.CursorAttribution) {
-	fmt.Fprintln(w, "Cursor attribution")
-	if c.Status != "" {
-		fmt.Fprintf(w, "  Status:             %s\n", c.Status)
+func printCodeAttribution(w io.Writer, c *db.CodeAttribution) {
+	fmt.Fprintln(w, "Code attribution")
+	for _, source := range c.Sources {
+		printCodeAttributionSource(w, source)
 	}
-	if c.Scope != "" {
-		fmt.Fprintf(w, "  Scope:              %s\n", c.Scope)
+	fmt.Fprintln(w)
+}
+
+func printCodeAttributionSource(w io.Writer, s db.CodeAttributionSource) {
+	fmt.Fprintf(w, "  Source:             %s\n", s.Provider)
+	if s.Status != "" {
+		fmt.Fprintf(w, "  Status:             %s\n", s.Status)
 	}
-	for _, warning := range c.Warnings {
+	if s.Scope != "" {
+		fmt.Fprintf(w, "  Scope:              %s\n", s.Scope)
+	}
+	for _, warning := range s.Warnings {
 		fmt.Fprintf(w, "  Warning:            %s\n", warning)
 	}
-	switch c.Status {
+	switch s.Status {
 	case "unavailable", "error", "unsupported_filter":
-		fmt.Fprintln(w)
 		return
 	case "empty":
 		fmt.Fprintln(w, "  Records:            none in window")
-		fmt.Fprintln(w)
 		return
 	}
+	if s.Provider == "cursor" && s.Metrics != nil {
+		printCursorAttributionMetrics(w, s.Metrics)
+	}
+}
+
+func printCursorAttributionMetrics(w io.Writer, c *db.CursorAttributionMetrics) {
 	fmt.Fprintf(w, "  Scored commits:      %s\n",
 		fmtInt64(c.ScoredCommits))
 	fmt.Fprintf(w, "  Lines added/deleted: %s / %s\n",
@@ -508,7 +520,6 @@ func printCursorAttribution(w io.Writer, c *db.CursorAttribution) {
 		}
 		tw.Flush()
 	}
-	fmt.Fprintln(w)
 }
 
 // formatGrades renders a grade histogram in canonical A..F order so

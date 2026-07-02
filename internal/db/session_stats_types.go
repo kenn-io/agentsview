@@ -13,23 +13,23 @@ package db
 // reporter's agentsview_version, not schema_version, for non-bump
 // changes.
 type SessionStats struct {
-	SchemaVersion     int                  `json:"schema_version"`
-	Window            StatsWindow          `json:"window"`
-	Filters           StatsFilters         `json:"filters"`
-	Totals            StatsTotals          `json:"totals"`
-	Distributions     StatsDistributions   `json:"distributions"`
-	Archetypes        StatsArchetypes      `json:"archetypes"`
-	Velocity          StatsVelocity        `json:"velocity"`
-	ToolMix           StatsToolMix         `json:"tool_mix"`
-	ModelMix          StatsModelMix        `json:"model_mix"`
-	Adoption          *StatsAdoption       `json:"adoption,omitempty"`
-	AgentPortfolio    StatsAgentPortfolio  `json:"agent_portfolio"`
-	CacheEconomics    *StatsCacheEconomics `json:"cache_economics,omitempty"`
-	Temporal          StatsTemporal        `json:"temporal"`
-	OutcomeStats      *StatsOutcomeStats   `json:"outcome_stats,omitempty"`
-	Outcomes          *StatsOutcomes       `json:"outcomes,omitempty"`
-	CursorAttribution *CursorAttribution   `json:"cursor_attribution,omitempty"`
-	GeneratedAt       string               `json:"generated_at"`
+	SchemaVersion   int                  `json:"schema_version"`
+	Window          StatsWindow          `json:"window"`
+	Filters         StatsFilters         `json:"filters"`
+	Totals          StatsTotals          `json:"totals"`
+	Distributions   StatsDistributions   `json:"distributions"`
+	Archetypes      StatsArchetypes      `json:"archetypes"`
+	Velocity        StatsVelocity        `json:"velocity"`
+	ToolMix         StatsToolMix         `json:"tool_mix"`
+	ModelMix        StatsModelMix        `json:"model_mix"`
+	Adoption        *StatsAdoption       `json:"adoption,omitempty"`
+	AgentPortfolio  StatsAgentPortfolio  `json:"agent_portfolio"`
+	CacheEconomics  *StatsCacheEconomics `json:"cache_economics,omitempty"`
+	Temporal        StatsTemporal        `json:"temporal"`
+	OutcomeStats    *StatsOutcomeStats   `json:"outcome_stats,omitempty"`
+	Outcomes        *StatsOutcomes       `json:"outcomes,omitempty"`
+	CodeAttribution *CodeAttribution     `json:"code_attribution,omitempty"`
+	GeneratedAt     string               `json:"generated_at"`
 }
 
 type StatsWindow struct {
@@ -192,10 +192,19 @@ type StatsOutcomes struct {
 	AvgEditChurn          float64        `json:"avg_edit_churn"`
 }
 
-type CursorAttribution struct {
-	Status               string                    `json:"status"`
-	Scope                string                    `json:"scope"`
-	Warnings             []string                  `json:"warnings,omitempty"`
+type CodeAttribution struct {
+	Sources []CodeAttributionSource `json:"sources,omitempty"`
+}
+
+type CodeAttributionSource struct {
+	Provider string                    `json:"provider"`
+	Scope    string                    `json:"scope"`
+	Status   string                    `json:"status"`
+	Warnings []string                  `json:"warnings,omitempty"`
+	Metrics  *CursorAttributionMetrics `json:"metrics,omitempty"`
+}
+
+type CursorAttributionMetrics struct {
 	ScoredCommits        int64                     `json:"scored_commits"`
 	LinesAdded           int64                     `json:"lines_added"`
 	LinesDeleted         int64                     `json:"lines_deleted"`

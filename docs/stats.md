@@ -42,8 +42,8 @@ The command pulls together several categories of information:
   (= `abandoned` or `errored`), and `unknown` (= `unknown` plus
   any unrecognized value). The rollup applies to both the human
   summary and the JSON `outcomes` block.
-- **Cursor attribution** — optional Cursor AI code-attribution
-  totals from the host-local Cursor attribution database.
+- **Code attribution** — optional AI-authored code attribution from
+  host-local attribution sources such as Cursor.
 
 ## Automation Scope
 
@@ -94,17 +94,18 @@ AgentsView archive. When the command talks to a local SQLite daemon, the
 daemon answers from that same archive. If it falls back to a direct
 read-only SQLite open, it reads the archive file directly.
 
-Cursor attribution is different: it is not synced session data. When
-present, the `cursor_attribution` block is read live from the Cursor
-attribution database on the host answering the stats request:
+Code attribution is different: it is not synced session data. When
+present, the Cursor source in the `code_attribution.sources` array is
+read live from the Cursor attribution database on the host answering
+the stats request:
 `~/.cursor/ai-tracking/ai-code-tracking.db` by default, or the path in
 `AGENTSVIEW_CURSOR_ATTRIBUTION_DB`.
 
-That means Cursor attribution is machine-local. It is not aggregated
+That means the Cursor source is machine-local. It is not aggregated
 across synced machines, is not pushed to PostgreSQL, and is not available
 from PostgreSQL read-only serving. Project filters cannot be represented
-against Cursor's attribution database, so project-filtered stats report
-`cursor_attribution.status: "unsupported_filter"` instead of silently
+against Cursor's attribution database, so project-filtered stats include
+a Cursor source with `status: "unsupported_filter"` instead of silently
 reporting zero attribution.
 
 ## Human Output
@@ -124,6 +125,7 @@ on the data available in the selected window, you may see:
 - `Temporal`
 - `Outcome stats`
 - `Outcomes`
+- `Code attribution`
 
 Some sections are optional. For example, git-based outcome stats are
 omitted when AgentsView cannot derive any repos from the sessions in
@@ -153,13 +155,18 @@ Optional blocks may also appear:
 - `adoption`
 - `outcome_stats`
 - `outcomes`
-- `cursor_attribution`
+- `code_attribution`
 
-`cursor_attribution.status` reports whether the machine-local Cursor
-database produced records for the requested window. Current statuses are
-`available`, `empty`, `unavailable`, `error`, and `unsupported_filter`.
-Check `cursor_attribution.warnings` before interpreting zero counters as
-zero Cursor activity.
+`code_attribution.sources` lists attribution sources that contributed to
+the selected stats request. Each source carries `provider`, `scope`,
+`status`, optional `warnings`, and provider-specific `metrics`. The
+Cursor source currently uses `scope: "machine_local"`.
+
+Current source statuses are `available`, `empty`, `unavailable`, `error`,
+and `unsupported_filter`. Check a source's `warnings` before interpreting
+missing metrics or zero counters as zero AI code activity. If an agent
+filter excludes Cursor, the Cursor source is omitted. If no source
+contributes, the whole `code_attribution` block is omitted.
 
 Even though the JSON currently includes a version number, it is still
 best to treat it as experimental and additive: expect new fields,

@@ -220,17 +220,18 @@ func TestDirectBackend_Stats_CursorAttribution(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, stats)
-	require.NotNil(t, stats.CursorAttribution)
-	assert.Equal(t, "available", stats.CursorAttribution.Status)
-	assert.Equal(t, "machine_local", stats.CursorAttribution.Scope)
-	assert.Equal(t, int64(2), stats.CursorAttribution.ScoredCommits)
-	assert.Equal(t, int64(18), stats.CursorAttribution.LinesAdded)
-	assert.InDelta(t, 10.0/18.0, stats.CursorAttribution.AIAuthoredPct, 1e-9)
-	require.Len(t, stats.CursorAttribution.ConversationCounts, 1)
+	source := requireCursorAttributionSource(t, stats)
+	assert.Equal(t, "available", source.Status)
+	assert.Equal(t, "machine_local", source.Scope)
+	require.NotNil(t, source.Metrics)
+	assert.Equal(t, int64(2), source.Metrics.ScoredCommits)
+	assert.Equal(t, int64(18), source.Metrics.LinesAdded)
+	assert.InDelta(t, 10.0/18.0, source.Metrics.AIAuthoredPct, 1e-9)
+	require.Len(t, source.Metrics.ConversationCounts, 1)
 	assert.Equal(
 		t,
 		"claude-3.5-sonnet",
-		stats.CursorAttribution.ConversationCounts[0].Model,
+		source.Metrics.ConversationCounts[0].Model,
 	)
 }
 
@@ -248,7 +249,7 @@ func TestDirectBackend_Stats_CursorAttributionIgnoredForNonCursorFilter(
 	})
 	require.NoError(t, err)
 	require.NotNil(t, stats)
-	assert.Nil(t, stats.CursorAttribution)
+	assert.Nil(t, stats.CodeAttribution)
 }
 
 func TestDirectBackend_Stats_CursorAttributionReportsMissingDB(t *testing.T) {
@@ -262,11 +263,12 @@ func TestDirectBackend_Stats_CursorAttributionReportsMissingDB(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, stats)
-	require.NotNil(t, stats.CursorAttribution)
-	assert.Equal(t, "unavailable", stats.CursorAttribution.Status)
-	assert.Equal(t, "machine_local", stats.CursorAttribution.Scope)
-	require.NotEmpty(t, stats.CursorAttribution.Warnings)
-	assert.Contains(t, stats.CursorAttribution.Warnings[0],
+	source := requireCursorAttributionSource(t, stats)
+	assert.Equal(t, "unavailable", source.Status)
+	assert.Equal(t, "machine_local", source.Scope)
+	assert.Nil(t, source.Metrics)
+	require.NotEmpty(t, source.Warnings)
+	assert.Contains(t, source.Warnings[0],
 		"Cursor attribution database is unavailable")
 }
 
@@ -282,11 +284,12 @@ func TestDirectBackend_Stats_CursorAttributionReportsLoadError(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, stats)
-	require.NotNil(t, stats.CursorAttribution)
-	assert.Equal(t, "error", stats.CursorAttribution.Status)
-	assert.Equal(t, "machine_local", stats.CursorAttribution.Scope)
-	require.NotEmpty(t, stats.CursorAttribution.Warnings)
-	assert.Contains(t, stats.CursorAttribution.Warnings[0],
+	source := requireCursorAttributionSource(t, stats)
+	assert.Equal(t, "error", source.Status)
+	assert.Equal(t, "machine_local", source.Scope)
+	assert.Nil(t, source.Metrics)
+	require.NotEmpty(t, source.Warnings)
+	assert.Contains(t, source.Warnings[0],
 		"failed to load Cursor attribution")
 }
 
@@ -316,12 +319,12 @@ func TestDirectBackend_Stats_CursorAttributionReportsUnsupportedProjectFilters(
 		stats, err := svc.Stats(context.Background(), filter)
 		require.NoError(t, err)
 		require.NotNil(t, stats)
-		require.NotNil(t, stats.CursorAttribution)
-		assert.Equal(t, "unsupported_filter",
-			stats.CursorAttribution.Status)
-		assert.Equal(t, "machine_local", stats.CursorAttribution.Scope)
-		require.NotEmpty(t, stats.CursorAttribution.Warnings)
-		assert.Contains(t, stats.CursorAttribution.Warnings[0],
+		source := requireCursorAttributionSource(t, stats)
+		assert.Equal(t, "unsupported_filter", source.Status)
+		assert.Equal(t, "machine_local", source.Scope)
+		assert.Nil(t, source.Metrics)
+		require.NotEmpty(t, source.Warnings)
+		assert.Contains(t, source.Warnings[0],
 			"cannot be scoped by project filters")
 	}
 }
@@ -370,8 +373,9 @@ func TestDirectBackend_Stats_CursorAttributionLoadedForAllAgentFilter(
 	require.NoError(t, err)
 	require.NotNil(t, stats)
 	assert.Equal(t, 2, stats.Totals.SessionsAll)
-	require.NotNil(t, stats.CursorAttribution)
-	assert.Equal(t, int64(1), stats.CursorAttribution.ScoredCommits)
+	source := requireCursorAttributionSource(t, stats)
+	require.NotNil(t, source.Metrics)
+	assert.Equal(t, int64(1), source.Metrics.ScoredCommits)
 }
 
 func TestDirectBackend_Stats_CursorAttributionIgnoredWhenAllMixedWithNonCursorFilter(
@@ -419,7 +423,19 @@ func TestDirectBackend_Stats_CursorAttributionIgnoredWhenAllMixedWithNonCursorFi
 	require.NotNil(t, stats)
 	assert.Equal(t, 1, stats.Totals.SessionsAll)
 	assert.Equal(t, "codex", stats.Filters.Agent)
-	assert.Nil(t, stats.CursorAttribution)
+	assert.Nil(t, stats.CodeAttribution)
+}
+
+func requireCursorAttributionSource(
+	t *testing.T,
+	stats *service.SessionStats,
+) db.CodeAttributionSource {
+	t.Helper()
+	require.NotNil(t, stats.CodeAttribution)
+	require.Len(t, stats.CodeAttribution.Sources, 1)
+	source := stats.CodeAttribution.Sources[0]
+	assert.Equal(t, "cursor", source.Provider)
+	return source
 }
 
 func TestDirectBackend_Get_HealthBreakdownIncludesHeuristics(
