@@ -1,5 +1,16 @@
 FROM --platform=$BUILDPLATFORM node:24-bookworm AS frontend-build
 
+# @kenn-io/kit-ui is consumed as a sibling source checkout
+# (file:../../kit-ui in frontend/package.json), supplied as a named build
+# context pointing at a kenn-io/kit-ui checkout — pin it to the commit in
+# .github/kit-ui-ref:
+#   docker buildx build --build-context kit-ui=../kit-ui .
+# Its dev dependencies must be installed because the frontend build loads
+# kit-ui's svelte.config.js.
+COPY --from=kit-ui . /kit-ui
+WORKDIR /kit-ui
+RUN npm install --no-audit --no-fund
+
 WORKDIR /src/frontend
 
 COPY frontend/package.json frontend/package-lock.json ./

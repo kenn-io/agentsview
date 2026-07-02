@@ -44,6 +44,11 @@ jobs:
       - name: Install Rust target
         run: rustup target add "$AGENTSVIEW_TARGET_TRIPLE"
 
+      - name: Check out kit-ui (sibling source dependency)
+        uses: ./.github/actions/checkout-kit-ui
+        with:
+          token: ${{ secrets.KIT_UI_TOKEN }}
+
       - name: Install desktop dependencies
         run: npm ci
         working-directory: desktop
@@ -179,6 +184,11 @@ jobs:
           install: mingw-w64-x86_64-gcc
           path-type: inherit
 
+      - name: Check out kit-ui (sibling source dependency)
+        uses: ./.github/actions/checkout-kit-ui
+        with:
+          token: ${{ secrets.KIT_UI_TOKEN }}
+
       - name: Install desktop dependencies
         run: npm ci
         working-directory: desktop
@@ -271,6 +281,11 @@ jobs:
             libwebkit2gtk-4.1-dev libgtk-3-dev \
             libappindicator3-dev librsvg2-dev \
             patchelf squashfs-tools xdg-utils
+
+      - name: Check out kit-ui (sibling source dependency)
+        uses: ./.github/actions/checkout-kit-ui
+        with:
+          token: ${{ secrets.KIT_UI_TOKEN }}
 
       - name: Install desktop dependencies
         run: npm ci
