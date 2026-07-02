@@ -232,6 +232,11 @@ func TestUsageCapabilityConsumersRouteThroughParser(t *testing.T) {
 			path:     "../service/direct.go",
 			required: "parser.AgentFilterLacksPerMessageTokenData",
 		},
+		{
+			name:     "cli unsupported usage",
+			path:     "../../cmd/agentsview/usage.go",
+			required: "parser.AgentFilterLacksPerMessageTokenData",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

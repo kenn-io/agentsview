@@ -17,6 +17,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/sync"
 )
@@ -199,7 +200,8 @@ func runUsageDaily(cfg UsageDailyConfig) {
 // typed, so it needs no session-presence check; it is appropriate even for an
 // empty window.
 func noTokenDataNote(agent string, totals db.UsageTotals) string {
-	if !db.IsCopilotAgentFilter(agent) || !db.NoTokenData(totals) {
+	if !parser.AgentFilterLacksPerMessageTokenData(agent) ||
+		!db.NoTokenData(totals) {
 		return ""
 	}
 	return "note: these GitHub Copilot records do not include token " +
