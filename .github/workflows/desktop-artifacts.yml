@@ -106,8 +106,8 @@ jobs:
         if: env.AGENTSVIEW_TARGET_TRIPLE != ''
         run: rustup target add "$AGENTSVIEW_TARGET_TRIPLE"
 
-      - name: Check out kit-ui (sibling source dependency)
-        uses: ./.github/actions/checkout-kit-ui
+      - name: Authorize kit-ui git dependency
+        uses: ./.github/actions/kit-ui-auth
         with:
           token: ${{ secrets.KIT_UI_TOKEN }}
 
