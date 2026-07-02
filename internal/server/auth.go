@@ -60,13 +60,23 @@ func hasForwardingHeader(r *http.Request) bool {
 		r.Header.Get("Forwarded") != ""
 }
 
-// authMiddleware enforces Bearer token authentication for /api/ routes,
-// including /api/ping, when require_auth is enabled. Non-API routes
-// such as static assets are never gated.
+// protectedPath reports whether a path is subject to bearer auth and
+// Host validation: every /api/ route, plus /debug/pprof/ when the
+// profiling handlers are mounted. With pprof disabled the path is
+// SPA fallback and stays ungated like other static assets.
+func (s *Server) protectedPath(path string) bool {
+	return strings.HasPrefix(path, "/api/") ||
+		(s.pprofEnabled && strings.HasPrefix(path, "/debug/pprof/"))
+}
+
+// authMiddleware enforces Bearer token authentication for protected
+// routes (/api/ including /api/ping, and /debug/pprof/ when enabled)
+// when require_auth is on. Non-protected routes such as static
+// assets are never gated.
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Only gate /api/ routes — static assets are always served.
-		if !strings.HasPrefix(r.URL.Path, "/api/") {
+		// Static assets are always served.
+		if !s.protectedPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}

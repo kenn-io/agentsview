@@ -418,6 +418,7 @@ func (s *Server) Handler() http.Handler {
 		s.authMiddleware(
 			hostCheckMiddleware(
 				allowedHosts, bindAll, s.cfg.Port, bindAllIPs,
+				s.protectedPath,
 				corsMiddleware(
 					allowedOrigins, bindAll, s.cfg.Port, bindAllIPs,
 					gzipMiddleware(logMiddleware(s.mux)),
@@ -619,13 +620,15 @@ func buildAllowedHosts(
 }
 
 // hostCheckMiddleware validates the Host header against expected
-// values to prevent DNS rebinding attacks. Only applied to /api/
-// routes — the SPA fallback is left accessible for flexibility.
+// values to prevent DNS rebinding attacks. Only applied to paths the
+// protected predicate matches (API routes, and pprof when enabled) —
+// the SPA fallback is left accessible for flexibility.
 func hostCheckMiddleware(
-	allowedHosts map[string]bool, bindAll bool, port int, allowedIPs map[string]bool, next http.Handler,
+	allowedHosts map[string]bool, bindAll bool, port int, allowedIPs map[string]bool,
+	protected func(path string) bool, next http.Handler,
 ) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") {
+		if protected(r.URL.Path) {
 			// Authenticated remote requests bypass host checks.
 			if isRemoteAuth(r) {
 				next.ServeHTTP(w, r)
