@@ -169,6 +169,59 @@ func TestRedactQuackClientErrorScrubsNativeDoubleSlashUserinfo(t *testing.T) {
 	assert.Contains(t, msg, "duck.example.com")
 }
 
+func TestRedactQuackClientErrorScrubsNativeRawAtPassword(t *testing.T) {
+	rawURL := "quack://account:pa@ss@duck.example.com:9494/db?token=credential1&x=1"
+	err := redactQuackClientError(
+		errors.New(
+			"IO Error connecting to account:pa@ss@duck.example.com:9494/db?x=1&token=credential1",
+		),
+		rawURL,
+		"credential2",
+	)
+	msg := err.Error()
+
+	assert.NotContains(t, msg, "account")
+	assert.NotContains(t, msg, "pa@ss")
+	assert.NotContains(t, msg, "ss@duck")
+	assert.NotContains(t, msg, "credential1")
+	assert.Contains(t, msg, "duck.example.com")
+}
+
+func TestRedactQuackClientErrorScrubsNativeSchemeUserinfo(t *testing.T) {
+	rawURL := "quack:tcp://account:credential0@duck.example.com:9494/db?token=credential1&x=1"
+	err := redactQuackClientError(
+		errors.New(
+			"IO Error connecting to account:credential0@duck.example.com:9494/db?x=1&token=credential1",
+		),
+		rawURL,
+		"credential2",
+	)
+	msg := err.Error()
+
+	assert.NotContains(t, msg, "account")
+	assert.NotContains(t, msg, "credential0")
+	assert.NotContains(t, msg, "credential1")
+	assert.Contains(t, msg, "duck.example.com")
+}
+
+func TestRedactQuackClientErrorPreservesNativeHostWithAtInPath(t *testing.T) {
+	rawURL := "quack://account:credential0@duck.example.com:9494/db@v2?token=credential1&x=1"
+	err := redactQuackClientError(
+		errors.New(
+			"IO Error connecting to account:credential0@duck.example.com:9494/db@v2?x=1&token=credential1",
+		),
+		rawURL,
+		"credential2",
+	)
+	msg := err.Error()
+
+	assert.NotContains(t, msg, "account")
+	assert.NotContains(t, msg, "credential0")
+	assert.NotContains(t, msg, "credential1")
+	assert.Contains(t, msg, "duck.example.com")
+	assert.Contains(t, msg, "db@v2")
+}
+
 func TestRedactQuackClientErrorScrubsEncodedCredentialValues(t *testing.T) {
 	rawURL := "quack:https://account:p%40ss@duck.example.com/db?token=s%2Bcret&x=1"
 	err := redactQuackClientError(

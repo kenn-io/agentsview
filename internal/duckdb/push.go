@@ -401,13 +401,11 @@ func (duckNoopResult) LastInsertId() (int64, error) { return 0, nil }
 func (duckNoopResult) RowsAffected() (int64, error) { return 0, nil }
 
 func (s *Sync) execRemoteMutationBatch(
-	ctx context.Context, label string, batch *duckRemoteMutationBatch, coalesce bool,
+	ctx context.Context, label string, batch *duckRemoteMutationBatch,
 ) error {
-	exec := s.execRemoteSQLNoRetry
-	if coalesce {
-		exec = s.execRemoteSQLRetry
-	}
-	return execDuckRemoteMutationBatch(ctx, exec, label, batch, coalesce)
+	return execDuckRemoteMutationBatch(
+		ctx, s.execRemoteSQLRetry, label, batch, true,
+	)
 }
 
 func appendDuckRemoteMutationBatch(

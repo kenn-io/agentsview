@@ -434,8 +434,9 @@ func redactNativeQuackCredentialValues(message, transport string) string {
 	if scheme, rest, ok := strings.Cut(base, "://"); ok && scheme != "" {
 		base = rest
 	}
-	if at := strings.LastIndex(base, "@"); at >= 0 {
-		userinfo := base[:at]
+	authority, _, _ := strings.Cut(base, "/")
+	if at := strings.LastIndex(authority, "@"); at >= 0 {
+		userinfo := authority[:at]
 		for value := range strings.SplitSeq(userinfo, ":") {
 			message = redactQuackCredentialValue(message, value)
 		}

@@ -591,7 +591,7 @@ func (s *Sync) tryPushRemoteSessionBatch(
 		}
 		messagesBySession[i] = messages
 	}
-	if err := s.execRemoteMutationBatch(ctx, "duckdb remote session batch", batch, true); err != nil {
+	if err := s.execRemoteMutationBatch(ctx, "duckdb remote session batch", batch); err != nil {
 		return nil, err
 	}
 	return messagesBySession, nil
