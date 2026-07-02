@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/parser"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/signals"
 )
@@ -3625,14 +3624,12 @@ func (s *Store) GetDailyUsage(
 	result.Totals.CacheSavings = roundCost(totalSavings)
 	result.Totals.TotalCost = roundCost(result.Totals.TotalCost)
 
-	var aiCreditCost float64
+	var aiCredits float64
 	for key, b := range accum {
-		if parser.AgentNameUsesAICredits(key.agent) {
-			aiCreditCost += b.cost
-		}
+		aiCredits += db.AICreditsFromCost(key.agent, b.cost)
 	}
-	if aiCreditCost > 0 {
-		result.Totals.CopilotAICredits = aiCreditCost / 0.01
+	if aiCredits > 0 {
+		result.Totals.CopilotAICredits = aiCredits
 	}
 
 	if result.Daily == nil {
@@ -3958,10 +3955,7 @@ func (s *Store) GetSessionUsage(
 	if len(unpriced) == 0 && hasRows {
 		out.HasCost = true
 		out.CostUSD = roundCost(totalCost)
-	}
-	if parser.AgentNameUsesAICredits(sess.Agent) &&
-		out.HasCost && out.CostUSD > 0 {
-		out.AICredits = out.CostUSD / 0.01
+		out.AICredits = db.AICreditsFromCost(sess.Agent, out.CostUSD)
 	}
 	return out, nil
 }

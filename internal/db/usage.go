@@ -15,6 +15,22 @@ import (
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
+// aiCreditUSD is the USD value of one AI credit for agents whose cost
+// is denominated in AI credits (the AICreditsDenominated capability).
+const aiCreditUSD = 0.01
+
+// AICreditsFromCost converts a USD cost into AI credits when the
+// agent's cost is denominated in AI credits, and returns 0 otherwise.
+// It is the single home of the credit conversion shared by the SQLite,
+// PostgreSQL, and DuckDB usage paths; a per-agent credit rate would
+// slot in here rather than at each accumulation site.
+func AICreditsFromCost(agent string, costUSD float64) float64 {
+	if costUSD == 0 || !parser.AgentNameUsesAICredits(agent) {
+		return 0
+	}
+	return costUSD / aiCreditUSD
+}
+
 // NoTokenData reports whether a daily-usage total carries neither token
 // data nor cost: every token counter, the cost total, and any Copilot AI
 // credits are zero. It distinguishes a window whose sessions simply do not
@@ -1829,14 +1845,12 @@ func (db *DB) GetDailyUsage(
 		}
 		totals.CacheSavings = totalSavings
 
-		var aiCreditCost float64
+		var aiCredits float64
 		for key, b := range accum {
-			if parser.AgentNameUsesAICredits(key.agent) {
-				aiCreditCost += b.cost
-			}
+			aiCredits += AICreditsFromCost(key.agent, b.cost)
 		}
-		if aiCreditCost > 0 {
-			totals.CopilotAICredits = aiCreditCost / 0.01
+		if aiCredits > 0 {
+			totals.CopilotAICredits = aiCredits
 		}
 		var sessionCounts UsageSessionCounts
 		if seenSessions != nil {
@@ -2004,16 +2018,14 @@ func (db *DB) GetDailyUsage(
 
 	totals.CacheSavings = totalSavings
 
-	var aiCreditCost float64
+	var aiCredits float64
 	for _, d := range daily {
 		for _, ab := range d.AgentBreakdowns {
-			if parser.AgentNameUsesAICredits(ab.Agent) {
-				aiCreditCost += ab.Cost
-			}
+			aiCredits += AICreditsFromCost(ab.Agent, ab.Cost)
 		}
 	}
-	if aiCreditCost > 0 {
-		totals.CopilotAICredits = aiCreditCost / 0.01
+	if aiCredits > 0 {
+		totals.CopilotAICredits = aiCredits
 	}
 
 	var sessionCounts UsageSessionCounts
@@ -2320,9 +2332,7 @@ func (db *DB) GetSessionUsage(
 	}
 	if out.HasCost {
 		out.CostUSD = cost
-	}
-	if parser.AgentNameUsesAICredits(sess.Agent) && out.HasCost {
-		out.AICredits = cost / 0.01
+		out.AICredits = AICreditsFromCost(sess.Agent, cost)
 	}
 	if len(unpricedSet) > 0 {
 		out.UnpricedModels = sortedSetKeys(unpricedSet)

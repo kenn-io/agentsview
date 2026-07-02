@@ -3460,3 +3460,23 @@ func TestGetDailyUsage_CopilotAICredits(t *testing.T) {
 		})
 	}
 }
+
+func TestAICreditsFromCost(t *testing.T) {
+	cases := []struct {
+		name  string
+		agent string
+		cost  float64
+		want  float64
+	}{
+		{"copilot converts at a cent per credit", "copilot", 0.42, 42},
+		{"zero cost yields zero credits", "copilot", 0, 0},
+		{"non-credit agent yields zero", "claude", 3.5, 0},
+		{"unknown agent yields zero", "unknown-agent", 3.5, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.InDelta(t, tc.want,
+				AICreditsFromCost(tc.agent, tc.cost), 1e-9)
+		})
+	}
+}

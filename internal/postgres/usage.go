@@ -11,7 +11,6 @@ import (
 
 	"github.com/tidwall/gjson"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/parser"
 )
 
 const pgUsageMessageEligibility = `
@@ -1129,9 +1128,7 @@ func (s *Store) GetSessionUsage(
 	}
 	if out.HasCost {
 		out.CostUSD = cost
-	}
-	if parser.AgentNameUsesAICredits(sess.Agent) && out.HasCost {
-		out.AICredits = cost / 0.01
+		out.AICredits = db.AICreditsFromCost(sess.Agent, cost)
 	}
 	if len(unpricedSet) > 0 {
 		out.UnpricedModels = sortedStringSetKeys(unpricedSet)
@@ -1356,14 +1353,12 @@ func (s *Store) GetDailyUsage(
 		}
 		totals.CacheSavings = totalSavings
 
-		var aiCreditCost float64
+		var aiCredits float64
 		for key, b := range accum {
-			if parser.AgentNameUsesAICredits(key.agent) {
-				aiCreditCost += b.cost
-			}
+			aiCredits += db.AICreditsFromCost(key.agent, b.cost)
 		}
-		if aiCreditCost > 0 {
-			totals.CopilotAICredits = aiCreditCost / 0.01
+		if aiCredits > 0 {
+			totals.CopilotAICredits = aiCredits
 		}
 
 		var sessionCounts db.UsageSessionCounts
@@ -1517,16 +1512,14 @@ func (s *Store) GetDailyUsage(
 	}
 	totals.CacheSavings = totalSavings
 
-	var aiCreditCost float64
+	var aiCredits float64
 	for _, d := range daily {
 		for _, ab := range d.AgentBreakdowns {
-			if parser.AgentNameUsesAICredits(ab.Agent) {
-				aiCreditCost += ab.Cost
-			}
+			aiCredits += db.AICreditsFromCost(ab.Agent, ab.Cost)
 		}
 	}
-	if aiCreditCost > 0 {
-		totals.CopilotAICredits = aiCreditCost / 0.01
+	if aiCredits > 0 {
+		totals.CopilotAICredits = aiCredits
 	}
 
 	var sessionCounts db.UsageSessionCounts
