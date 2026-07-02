@@ -668,8 +668,10 @@ func (s openCodeFormatSourceSet) sourcesForChangedPathInRoot(
 
 func sqliteWALHasFrames(path string) bool {
 	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular() &&
-		info.Size() > sqliteWALHeaderSize
+	if err != nil || info == nil {
+		return false
+	}
+	return info.Mode().IsRegular() && info.Size() > sqliteWALHeaderSize
 }
 
 func (s openCodeFormatSourceSet) sourceForRawID(root, sessionID string) (SourceRef, bool) {
