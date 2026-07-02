@@ -162,9 +162,9 @@ func TestAgentUsageCapabilities(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.wantNoToken,
-				AgentLacksPerMessageTokenData(tc.agent))
+				AgentNameLacksPerMessageTokenData(string(tc.agent)))
 			assert.Equal(t, tc.wantCredits,
-				AgentUsesAICredits(tc.agent))
+				AgentNameUsesAICredits(string(tc.agent)))
 		})
 	}
 }

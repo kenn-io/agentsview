@@ -27,7 +27,10 @@ func TestAgentUsageCapabilityHelpersFailClosedAndDiverge(t *testing.T) {
 		},
 	)
 
-	assert.True(t, parser.AgentNameLacksPerMessageTokenData(" no-token-only "))
+	// Names match registry types exactly; only the CSV filter parser
+	// trims, so a padded name fails closed at the name level.
+	assert.False(t, parser.AgentNameLacksPerMessageTokenData(" no-token-only "))
+	assert.True(t, parser.AgentNameLacksPerMessageTokenData("no-token-only"))
 	assert.False(t, parser.AgentNameUsesAICredits("no-token-only"))
 	assert.False(t, parser.AgentNameLacksPerMessageTokenData("ai-credit-only"))
 	assert.True(t, parser.AgentNameUsesAICredits("ai-credit-only"))
@@ -43,9 +46,4 @@ func TestAgentUsageCapabilityHelpersFailClosedAndDiverge(t *testing.T) {
 	assert.False(t, parser.AgentFilterLacksPerMessageTokenData(","))
 	assert.False(t, parser.AgentFilterLacksPerMessageTokenData("copilot,claude"))
 	assert.False(t, parser.AgentFilterLacksPerMessageTokenData("unknown-agent"))
-	assert.True(t, parser.AgentFilterUsesAICredits("copilot, ai-credit-only"))
-	assert.False(t, parser.AgentFilterUsesAICredits(""))
-	assert.False(t, parser.AgentFilterUsesAICredits("no-token-only"))
-	assert.False(t, parser.AgentFilterUsesAICredits("copilot,claude"))
-	assert.False(t, parser.AgentFilterUsesAICredits("unknown-agent"))
 }

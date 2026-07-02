@@ -641,38 +641,27 @@ func AgentByType(t AgentType) (AgentDef, bool) {
 	return AgentDef{}, false
 }
 
-func AgentLacksPerMessageTokenData(t AgentType) bool {
-	def, ok := AgentByType(t)
+// AgentNameLacksPerMessageTokenData reports whether the named agent
+// records no per-message token data. Names match registry types
+// exactly and unknown names fail closed; CSV filter parsing trims its
+// parts before calling.
+func AgentNameLacksPerMessageTokenData(agent string) bool {
+	def, ok := AgentByType(AgentType(agent))
 	return ok && def.Usage.NoPerMessageTokenData
 }
 
-func AgentUsesAICredits(t AgentType) bool {
-	def, ok := AgentByType(t)
+// AgentNameUsesAICredits reports whether the named agent's cost is
+// denominated in AI credits rather than USD.
+func AgentNameUsesAICredits(agent string) bool {
+	def, ok := AgentByType(AgentType(agent))
 	return ok && def.Usage.AICreditsDenominated
 }
 
-func AgentNameLacksPerMessageTokenData(agent string) bool {
-	agent = strings.TrimSpace(agent)
-	if agent == "" {
-		return false
-	}
-	return AgentLacksPerMessageTokenData(AgentType(agent))
-}
-
-func AgentNameUsesAICredits(agent string) bool {
-	agent = strings.TrimSpace(agent)
-	if agent == "" {
-		return false
-	}
-	return AgentUsesAICredits(AgentType(agent))
-}
-
+// AgentFilterLacksPerMessageTokenData reports whether a (possibly
+// comma-separated) agent filter selects only agents without
+// per-message token data, with at least one entry.
 func AgentFilterLacksPerMessageTokenData(agentFilter string) bool {
 	return agentFilterMatches(agentFilter, AgentNameLacksPerMessageTokenData)
-}
-
-func AgentFilterUsesAICredits(agentFilter string) bool {
-	return agentFilterMatches(agentFilter, AgentNameUsesAICredits)
 }
 
 func agentFilterMatches(agentFilter string, match func(string) bool) bool {
@@ -704,9 +693,10 @@ func AgentIsCopilot(t AgentType) bool {
 }
 
 // AgentNameIsCopilot reports whether the agent name identifies a
-// Copilot-family agent.
+// Copilot-family agent. Names match exactly, like the capability
+// helpers above.
 func AgentNameIsCopilot(agent string) bool {
-	return AgentIsCopilot(AgentType(strings.TrimSpace(agent)))
+	return AgentIsCopilot(AgentType(agent))
 }
 
 // AgentFilterIsCopilot reports whether a (possibly comma-separated)
