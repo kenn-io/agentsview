@@ -274,13 +274,15 @@ describe("yoked date adapters", () => {
       }),
     ).toEqual({});
 
+    // A 365-day rolling window now spans exactly 365 calendar days inclusive
+    // of today, which fits the Activity limit; 366 is the first size beyond it.
     expect(
       rangeToActivityParams(
         {
           from: "2025-06-19",
           to: "2026-06-19",
           mode: "rolling",
-          windowDays: 365,
+          windowDays: 366,
           updatedAt: 123,
         },
         new Date("2026-06-19T12:00:00"),
@@ -320,7 +322,7 @@ describe("yoked date adapters", () => {
     try {
       vi.setSystemTime(new Date("2026-06-19T12:00:00"));
       const range = {
-        from: "2026-05-20",
+        from: "2026-05-21",
         to: "2026-06-19",
         mode: "rolling" as const,
         windowDays: 30,
@@ -329,12 +331,12 @@ describe("yoked date adapters", () => {
 
       expect(rangeToActivityParams(range)).toEqual({
         preset: "custom",
-        from: "2026-05-20",
+        from: "2026-05-21",
         to: "2026-06-19",
         window_days: "30",
       });
       expect(rangeToInsightParams(range)).toEqual({
-        date_from: "2026-05-20",
+        date_from: "2026-05-21",
         date_to: "2026-06-19",
         window_days: "30",
       });
@@ -347,7 +349,7 @@ describe("yoked date adapters", () => {
     expect(
       rangeToPanelDate(
         {
-          from: "2026-05-20",
+          from: "2026-05-21",
           to: "2026-06-19",
           mode: "rolling",
           windowDays: 30,
@@ -356,7 +358,7 @@ describe("yoked date adapters", () => {
         new Date("2026-07-04T12:00:00"),
       ),
     ).toEqual({
-      from: "2026-06-04",
+      from: "2026-06-05",
       to: "2026-07-04",
       mode: "rolling",
       windowDays: 30,

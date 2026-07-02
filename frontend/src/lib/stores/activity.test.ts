@@ -205,7 +205,7 @@ describe("load", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
       vi.setSystemTime(new Date("2026-06-19T12:00:00"));
-      activity.setCustomRange("2026-05-20", "2026-06-19", 30);
+      activity.setCustomRange("2026-05-21", "2026-06-19", 30);
       const replaceParams =
         routerMod.router.replaceParams as ReturnType<typeof vi.fn>;
       replaceParams.mockClear();
@@ -216,16 +216,16 @@ describe("load", () => {
 
       const arg = api.getActivityReport.mock.calls.at(-1)![0];
       expect(arg.from).toBe(
-        new Date("2026-05-21T00:00:00").toISOString(),
+        new Date("2026-05-22T00:00:00").toISOString(),
       );
       expect(arg.to).toBe(
         new Date("2026-06-21T00:00:00").toISOString(),
       );
-      expect(activity.from).toBe("2026-05-21");
+      expect(activity.from).toBe("2026-05-22");
       expect(activity.to).toBe("2026-06-20");
       expect(replaceParams.mock.calls.at(-1)?.[0]).toMatchObject({
         preset: "custom",
-        from: "2026-05-21",
+        from: "2026-05-22",
         to: "2026-06-20",
         window_days: "30",
       });
@@ -470,7 +470,7 @@ describe("url state", () => {
       });
 
       expect(activity.preset).toBe("custom");
-      expect(activity.from).toBe("2026-05-20");
+      expect(activity.from).toBe("2026-05-21");
       expect(activity.to).toBe("2026-06-19");
       expect(activity.rollingWindowDays).toBe(30);
     } finally {

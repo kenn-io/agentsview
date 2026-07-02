@@ -35,12 +35,18 @@ export function allFromDate(earliestSession: string | null | undefined): string 
   return daysAgo(365);
 }
 
+/**
+ * "Last N days" spans N calendar days inclusive of today — today plus the
+ * N−1 preceding dates. Matches kit-ui's RangePicker, which seeds the Custom
+ * tab and labels presets with the same semantics, and rollingRange() in
+ * utils/dates.ts.
+ */
 export function presetRange(
   days: number,
   earliestSession: string | null | undefined,
 ): DateRange {
   return {
-    from: days === 0 ? allFromDate(earliestSession) : daysAgo(days),
+    from: days === 0 ? allFromDate(earliestSession) : daysAgo(days - 1),
     to: todayStr(),
   };
 }

@@ -34,7 +34,7 @@ describe("session route params", () => {
   it("preserves direct rolling links during first materialized date writeback", () => {
     const params = sessionRouteParamsForFilters(
       {
-        date_from: "2026-05-21",
+        date_from: "2026-05-22",
         date_to: "2026-06-20",
       },
       { window_days: "30" },
@@ -42,7 +42,7 @@ describe("session route params", () => {
     );
 
     expect(params).toEqual({
-      date_from: "2026-05-21",
+      date_from: "2026-05-22",
       date_to: "2026-06-20",
       window_days: "30",
     });
@@ -51,11 +51,11 @@ describe("session route params", () => {
   it("preserves stale materialized rolling links after date rollover", () => {
     const params = sessionRouteParamsForFilters(
       {
-        date_from: "2026-05-21",
+        date_from: "2026-05-22",
         date_to: "2026-06-20",
       },
       {
-        date_from: "2026-05-20",
+        date_from: "2026-05-21",
         date_to: "2026-06-19",
         window_days: "30",
       },
@@ -63,7 +63,7 @@ describe("session route params", () => {
     );
 
     expect(params).toEqual({
-      date_from: "2026-05-21",
+      date_from: "2026-05-22",
       date_to: "2026-06-20",
       window_days: "30",
     });

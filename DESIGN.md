@@ -83,6 +83,28 @@ App-level glue that remains local:
 - `frontend/src/lib/components/settings/SettingsSection.svelte` owns settings
   section framing.
 
+Relative date ranges follow kit-ui semantics: "Last N days" spans N calendar
+days inclusive of today. `presetRange()` (dateRangeSelector.ts) and
+`rollingRange()` (utils/dates.ts) must stay consistent with each other and with
+kit-ui's `RangePicker`, which seeds its Custom tab from the same math.
+
+### Known kit-ui gaps (tracked upstream)
+
+These gaps ship with the current kit-ui pin and are resolved by adding props
+upstream, then bumping the commit hash in `frontend/package.json` and threading
+the new props through the app wrappers. Do not work around them with unsupported
+props or forked styles.
+
+- `Modal`'s close-X `aria-label` is hardcoded English; needs a label prop.
+- `RefreshControl` renders its freshness label with kit-ui's English
+  `formatRefreshAge`; needs a `formatAge` injection prop (in progress
+  upstream) plus a thin app wrapper passing the localized formatter.
+- `RangePicker`'s `weekOfLabel` is prefix-only, so date-first locales (zh
+  `"{date}所在周"`) lose their word order; needs `{date}` placeholder
+  substitution (in progress upstream).
+- `TopBar` cannot express "no active tab"; on routes that are not tabs
+  (settings), the first tab renders as current.
+
 ## Legacy Exceptions
 
 Some existing activity components still contain native `<select>` controls and

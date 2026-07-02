@@ -27,7 +27,7 @@ describe("date helpers", () => {
 
   it("computes rolling ranges from an explicit clock", () => {
     expect(rollingRange(30, new Date(2024, 5, 10, 12, 0, 0))).toEqual({
-      from: "2024-05-11",
+      from: "2024-05-12",
       to: "2024-06-10",
     });
   });
