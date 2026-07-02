@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/timeutil"
 )
 
@@ -165,6 +166,20 @@ type CacheStats struct {
 
 const UnsupportedUsageKindNoTokenData = "no-token-data"
 const UnsupportedUsageKindCopilotNoTokenData = "copilot-no-token-data"
+
+// UnsupportedUsageKindForAgentFilter returns the unsupported-usage
+// kind for an agent filter whose agents record no per-message token
+// data: the Copilot-specific kind when the filter selects only
+// Copilot-family agents, and the generic kind otherwise. Copilot
+// branding keys on agent identity, not on the AI-credits capability,
+// so another credits-denominated agent degrades to the generic kind
+// instead of being described as Copilot.
+func UnsupportedUsageKindForAgentFilter(agentFilter string) string {
+	if parser.AgentFilterIsCopilot(agentFilter) {
+		return UnsupportedUsageKindCopilotNoTokenData
+	}
+	return UnsupportedUsageKindNoTokenData
+}
 
 type UnsupportedUsage struct {
 	Kind string `json:"kind"`

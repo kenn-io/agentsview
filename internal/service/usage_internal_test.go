@@ -6,6 +6,8 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/parsertest"
 )
 
 func TestComputeCacheStats_SavingsPassThrough(t *testing.T) {
@@ -61,4 +63,52 @@ func TestComputeCacheStats_UncachedPassesInputThrough(t *testing.T) {
 	assert.Equal(t, 100, cs.UncachedInputTokens)
 	assert.Equal(t, 200, cs.CacheReadTokens)
 	assert.Equal(t, 50, cs.CacheCreationTokens)
+}
+
+// TestUnsupportedUsageKindForAgentFilter pins Copilot branding to Copilot
+// identity: an agent that merely shares Copilot's capabilities (no token
+// data, AI-credits denominated) must degrade to the generic kind, not be
+// described as Copilot. No t.Parallel: it stubs the parser registry.
+func TestUnsupportedUsageKindForAgentFilter(t *testing.T) {
+	parsertest.StubAgentDefs(t, parser.AgentDef{
+		Type:        parser.AgentType("credit-note-agent"),
+		DisplayName: "Credit Note Agent",
+		Usage: parser.UsageCapabilities{
+			NoPerMessageTokenData: true,
+			AICreditsDenominated:  true,
+		},
+	})
+
+	cases := []struct {
+		name   string
+		filter string
+		want   string
+	}{
+		{
+			name:   "all-copilot filter",
+			filter: "copilot,vscode-copilot",
+			want:   UnsupportedUsageKindCopilotNoTokenData,
+		},
+		{
+			name:   "non-copilot agent with copilot capabilities",
+			filter: "credit-note-agent",
+			want:   UnsupportedUsageKindNoTokenData,
+		},
+		{
+			name:   "copilot mixed with non-copilot",
+			filter: "copilot,credit-note-agent",
+			want:   UnsupportedUsageKindNoTokenData,
+		},
+		{
+			name:   "empty filter",
+			filter: "",
+			want:   UnsupportedUsageKindNoTokenData,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want,
+				UnsupportedUsageKindForAgentFilter(tc.filter))
+		})
+	}
 }

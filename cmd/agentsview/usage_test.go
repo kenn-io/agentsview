@@ -1231,13 +1231,23 @@ func TestRunUsageDailyNoHintWhenDataPresent(t *testing.T) {
 }
 
 func TestNoTokenDataNote(t *testing.T) {
-	parsertest.StubAgentDefs(t, parser.AgentDef{
-		Type:        parser.AgentType("no-token-agent"),
-		DisplayName: "No Token Agent",
-		Usage: parser.UsageCapabilities{
-			NoPerMessageTokenData: true,
+	parsertest.StubAgentDefs(t,
+		parser.AgentDef{
+			Type:        parser.AgentType("no-token-agent"),
+			DisplayName: "No Token Agent",
+			Usage: parser.UsageCapabilities{
+				NoPerMessageTokenData: true,
+			},
 		},
-	})
+		parser.AgentDef{
+			Type:        parser.AgentType("credit-note-agent"),
+			DisplayName: "Credit Note Agent",
+			Usage: parser.UsageCapabilities{
+				NoPerMessageTokenData: true,
+				AICreditsDenominated:  true,
+			},
+		},
+	)
 
 	zero := db.UsageTotals{}
 	withData := db.UsageTotals{OutputTokens: 5}
@@ -1257,6 +1267,7 @@ func TestNoTokenDataNote(t *testing.T) {
 		{"vscode-copilot with zero totals", "vscode-copilot", zero, copilotNote},
 		{"all-copilot CSV filter", "copilot,vscode-copilot", zero, copilotNote},
 		{"non-copilot no-token agent", "no-token-agent", zero, genericNote},
+		{"non-copilot ai-credit agent", "credit-note-agent", zero, genericNote},
 		{"mixed CSV filter", "copilot,claude", zero, ""},
 	}
 	for _, tc := range cases {

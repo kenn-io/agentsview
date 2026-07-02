@@ -690,6 +690,32 @@ func agentFilterMatches(agentFilter string, match func(string) bool) bool {
 	return matched
 }
 
+// AgentIsCopilot reports whether t is one of the GitHub Copilot
+// family agents. Copilot-specific user-facing wording keys on this
+// identity; the usage capabilities above intentionally do not imply
+// it, so a future agent can adopt NoPerMessageTokenData or
+// AICreditsDenominated without inheriting Copilot messaging.
+func AgentIsCopilot(t AgentType) bool {
+	switch t {
+	case AgentCopilot, AgentVSCodeCopilot, AgentVSCopilot:
+		return true
+	}
+	return false
+}
+
+// AgentNameIsCopilot reports whether the agent name identifies a
+// Copilot-family agent.
+func AgentNameIsCopilot(agent string) bool {
+	return AgentIsCopilot(AgentType(strings.TrimSpace(agent)))
+}
+
+// AgentFilterIsCopilot reports whether a (possibly comma-separated)
+// agent filter selects only Copilot-family agents, with at least one
+// entry.
+func AgentFilterIsCopilot(agentFilter string) bool {
+	return agentFilterMatches(agentFilter, AgentNameIsCopilot)
+}
+
 // StripHostPrefix splits a remote session ID into its host
 // and raw ID parts. Remote IDs use the form "host~rawID"
 // where the "~" separator avoids conflict with both agent

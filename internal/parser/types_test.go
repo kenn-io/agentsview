@@ -169,6 +169,48 @@ func TestAgentUsageCapabilities(t *testing.T) {
 	}
 }
 
+func TestAgentCopilotIdentity(t *testing.T) {
+	tests := []struct {
+		name  string
+		agent AgentType
+		want  bool
+	}{
+		{"copilot", AgentCopilot, true},
+		{"vscode copilot", AgentVSCodeCopilot, true},
+		{"visual studio copilot", AgentVSCopilot, true},
+		{"claude", AgentClaude, false},
+		{"unknown", AgentType("unknown-agent"), false},
+		{"empty", AgentType(""), false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, AgentIsCopilot(tc.agent))
+			assert.Equal(t, tc.want, AgentNameIsCopilot(string(tc.agent)))
+		})
+	}
+}
+
+func TestAgentFilterIsCopilot(t *testing.T) {
+	tests := []struct {
+		name   string
+		filter string
+		want   bool
+	}{
+		{"empty", "", false},
+		{"single copilot", "copilot", true},
+		{"all-copilot CSV with spaces", " copilot , visualstudio-copilot ", true},
+		{"trailing comma", "copilot,vscode-copilot,", true},
+		{"mixed CSV", "copilot,claude", false},
+		{"only commas", ",", false},
+		{"single non-copilot", "claude", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, AgentFilterIsCopilot(tc.filter))
+		})
+	}
+}
+
 func TestAgentByType(t *testing.T) {
 	tests := []struct {
 		input AgentType
