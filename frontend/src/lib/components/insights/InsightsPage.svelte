@@ -1902,18 +1902,12 @@
 
   /* The generated-archive grids have hard minimum column widths (controls:
      180+130+240px; layout: a 240px list rail), so they collapse on available
-     CONTENT width via a container query rather than the viewport-width media
-     gate below — with the sidebar open, a ~950px viewport leaves far less
-     room than a viewport breakpoint assumes. */
+     CONTENT width via a container query (declared after both base grid rules
+     — same specificity, so it must win on source order) rather than the
+     viewport-width media gate below — with the sidebar open, a ~950px
+     viewport leaves far less room than a viewport breakpoint assumes. */
   .generated-block {
     container-type: inline-size;
-  }
-
-  @container (max-width: 760px) {
-    .generated-controls,
-    .generated-layout {
-      grid-template-columns: 1fr;
-    }
   }
 
   .generated-controls {
@@ -2004,6 +1998,13 @@
     grid-template-columns: minmax(240px, 320px) 1fr;
     gap: 12px;
     align-items: start;
+  }
+
+  @container (max-width: 760px) {
+    .generated-controls,
+    .generated-layout {
+      grid-template-columns: 1fr;
+    }
   }
 
   .generated-list {
