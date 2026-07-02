@@ -864,6 +864,43 @@ func TestOpenAPIEndpointDocumentsQualitySignalResponses(t *testing.T) {
 		"sessions item schema")
 }
 
+// TestOpenAPIEndpointDocumentsDecodeConfidence guards that the derived
+// decode_confidence marker is a reflected field on the session-detail response
+// schema, so Huma/OpenAPI and the generated TypeScript client document and type
+// it. It is a detail-only derive-on-read field with no persisted column, so it
+// must appear on ServiceSessionDetail but not on the plain DbSession schema.
+func TestOpenAPIEndpointDocumentsDecodeConfidence(t *testing.T) {
+	te := setup(t)
+
+	w := te.get(t, "/api/openapi.json")
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	type openAPISchema struct {
+		Type       any                      `json:"type"`
+		Properties map[string]openAPISchema `json:"properties"`
+	}
+	var spec struct {
+		Components struct {
+			Schemas map[string]openAPISchema `json:"schemas"`
+		} `json:"components"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+
+	detail, ok := spec.Components.Schemas["ServiceSessionDetail"]
+	require.True(t, ok, "schema ServiceSessionDetail missing")
+	prop, ok := detail.Properties["decode_confidence"]
+	require.True(t, ok,
+		"ServiceSessionDetail should document the derived decode_confidence field")
+	assert.Equal(t, "string", prop.Type,
+		"decode_confidence should be typed as a string")
+
+	dbSession, ok := spec.Components.Schemas["DbSession"]
+	require.True(t, ok, "schema DbSession missing")
+	_, present := dbSession.Properties["decode_confidence"]
+	assert.False(t, present,
+		"decode_confidence is detail-only and must not leak into DbSession")
+}
+
 func TestOpenAPIEndpointDocumentsImportResponseContentTypes(t *testing.T) {
 	te := setup(t)
 
