@@ -17,6 +17,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/parsertest"
 )
 
 var (
@@ -3317,13 +3318,13 @@ func TestGetSessionUsage_NotFound(t *testing.T) {
 }
 
 func TestGetSessionUsage_AICreditsCapability(t *testing.T) {
-	defer withParserAgentDefs(t, parser.AgentDef{
+	parsertest.StubAgentDefs(t, parser.AgentDef{
 		Type:        parser.AgentType("ai-credit-agent"),
 		DisplayName: "AI Credit Agent",
 		Usage: parser.UsageCapabilities{
 			AICreditsDenominated: true,
 		},
-	})()
+	})
 
 	d := testDB(t)
 	ctx := context.Background()
@@ -3354,13 +3355,13 @@ func TestGetSessionUsage_AICreditsCapability(t *testing.T) {
 // TestGetDailyUsage_CopilotAICredits verifies AI credits are computed from
 // agents with the parser AI-credit capability: costUSD / 0.01.
 func TestGetDailyUsage_CopilotAICredits(t *testing.T) {
-	defer withParserAgentDefs(t, parser.AgentDef{
+	parsertest.StubAgentDefs(t, parser.AgentDef{
 		Type:        parser.AgentType("ai-credit-agent"),
 		DisplayName: "AI Credit Agent",
 		Usage: parser.UsageCapabilities{
 			AICreditsDenominated: true,
 		},
-	})()
+	})
 
 	d := testDB(t)
 	ctx := context.Background()
@@ -3457,14 +3458,5 @@ func TestGetDailyUsage_CopilotAICredits(t *testing.T) {
 			assert.InDelta(t, wantCredits, result.Totals.CopilotAICredits,
 				1e-6, "CopilotAICredits")
 		})
-	}
-}
-
-func withParserAgentDefs(t *testing.T, defs ...parser.AgentDef) func() {
-	t.Helper()
-	orig := append([]parser.AgentDef(nil), parser.Registry...)
-	parser.Registry = append(parser.Registry, defs...)
-	return func() {
-		parser.Registry = orig
 	}
 }

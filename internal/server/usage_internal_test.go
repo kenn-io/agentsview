@@ -12,6 +12,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/parsertest"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -229,13 +230,13 @@ func TestUsageSummarySetsUnsupportedUsageForCopilotNoTokenData(t *testing.T) {
 }
 
 func TestUsageSummarySetsUnsupportedUsageFromAgentCapability(t *testing.T) {
-	defer withServerParserAgentDefs(t, parser.AgentDef{
+	parsertest.StubAgentDefs(t, parser.AgentDef{
 		Type:        parser.AgentType("no-token-agent"),
 		DisplayName: "No Token Agent",
 		Usage: parser.UsageCapabilities{
 			NoPerMessageTokenData: true,
 		},
-	})()
+	})
 
 	spy := &usageSummaryCountsSpy{
 		matchingSessionCount: 1,
@@ -326,13 +327,4 @@ func TestUsagePairwiseComparisonOpenAPIRequiresSideParams(t *testing.T) {
 	assert.True(t, required["left_value"])
 	assert.True(t, required["right_dimension"])
 	assert.True(t, required["right_value"])
-}
-
-func withServerParserAgentDefs(t *testing.T, defs ...parser.AgentDef) func() {
-	t.Helper()
-	orig := append([]parser.AgentDef(nil), parser.Registry...)
-	parser.Registry = append(parser.Registry, defs...)
-	return func() {
-		parser.Registry = orig
-	}
 }
