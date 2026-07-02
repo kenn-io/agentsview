@@ -69,13 +69,13 @@ test.describe("Session list", () => {
     await expect(page).toHaveURL(/[?&]project=project-alpha/);
 
     // Switch to Usage; the sessions URL leaves view.
-    await page.locator('.nav-btn[aria-label="Usage"]').click();
+    await page.locator('.kit-top-bar__tabs .kit-top-bar__tab', { hasText: "Usage" }).click();
     await expect(page).toHaveURL(/\/usage/);
 
     // Return to Sessions. The bare /sessions navigation should
     // re-acquire the filter from localStorage and reflect it
     // back into the URL so it matches what's displayed.
-    await page.locator('.nav-btn[aria-label="Sessions"]').click();
+    await page.locator('.kit-top-bar__tabs .kit-top-bar__tab', { hasText: "Sessions" }).click();
     await expect(page).toHaveURL(/[?&]project=project-alpha/);
   });
 });

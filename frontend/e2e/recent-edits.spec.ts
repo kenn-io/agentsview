@@ -18,10 +18,9 @@ test.describe("Recent Edits feed", () => {
   test("page renders with a file row from fixture data", async ({
     page,
   }) => {
-    // Open the More navigation menu.
-    await page.getByLabel("More navigation").click();
+    // Recent Edits is a top-level TopBar tab since the kit-ui migration.
     await page
-      .locator(".more-item", { hasText: "Recent Edits" })
+      .locator(".kit-top-bar__tabs .kit-top-bar__tab", { hasText: "Recent Edits" })
       .click();
 
     // The page container and heading should appear.
@@ -42,10 +41,9 @@ test.describe("Recent Edits feed", () => {
   test("expand file row and jump to session transcript", async ({
     page,
   }) => {
-    // Navigate to Recent Edits.
-    await page.getByLabel("More navigation").click();
+    // Navigate to Recent Edits via its TopBar tab.
     await page
-      .locator(".more-item", { hasText: "Recent Edits" })
+      .locator(".kit-top-bar__tabs .kit-top-bar__tab", { hasText: "Recent Edits" })
       .click();
 
     await expect(

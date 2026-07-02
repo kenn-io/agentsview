@@ -29,7 +29,7 @@ test.describe("Session count consistency", () => {
     const listCount = parseInt(listMatch![1].replace(/,/g, ""), 10);
 
     // 2. Status bar (bottom left) — uses /api/v1/stats
-    const statusBar = page.locator(".status-left");
+    const statusBar = page.locator(".kit-status-bar__section--left");
     await expect(statusBar).toContainText("sessions", { timeout: 5_000 });
     const statusText = await statusBar.textContent();
     const statsMatch = statusText?.match(/(\d[\d,]*)\s+sessions/);

@@ -221,11 +221,15 @@ GitHub Actions service container in `.github/workflows/ci.yml`.
 - Node.js and npm are required to build the Svelte frontend embedded under
   `internal/web/dist/`.
 - The frontend depends on `@kenn-io/kit-ui` as a git dependency pinned to a
-  commit (`github:kenn-io/kit-ui#<commit>` in `frontend/package.json`). The
-  repository is public, so `npm ci`/`npm install` clone it anonymously over
-  HTTPS with no credentials; the only requirement is git on PATH. Bump the
-  dependency by changing the commit hash in `frontend/package.json` and
-  running `npm install`.
+  commit (`git+https://github.com/kenn-io/kit-ui.git#<commit>` in
+  `frontend/package.json`). The repository is public, so `npm ci`/
+  `npm install` clone it anonymously over HTTPS with no credentials; the only
+  requirement is git on PATH. The lockfile records the dependency as
+  `git+ssh://git@github.com/...` — that is npm's canonical form for
+  GitHub-hosted git deps and cannot be changed, but npm still fetches over
+  anonymous HTTPS (verified with SSH disabled and a cold cache); do not "fix"
+  it. Bump the dependency by changing the commit hash in `frontend/package.json`
+  and running `npm install`.
 
 ## Conventions
 
