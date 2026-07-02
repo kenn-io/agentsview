@@ -2073,6 +2073,37 @@ func TestParseDiffProviderVirtualSQLiteLimitUsesExactSource(t *testing.T) {
 	}
 }
 
+// TestParseDiffDBBackedLimitOrdersByDiscoveryMtime pins the ordering fix at the
+// sorter boundary: two DB-backed virtual sources whose paths sort in the
+// opposite order to their per-session mtimes. Before the fix both stat to 0 and
+// --limit keeps the lexicographically-earlier (older) path, cutting the newer
+// session; the sorter must instead honor SourceRef.DiscoveryMTimeNS and keep the
+// newer one.
+func TestParseDiffDBBackedLimitOrdersByDiscoveryMtime(t *testing.T) {
+	dbPath := "/tmp/.forge.db"
+	// "a-older" sorts before "z-newer" as a path but carries the older mtime.
+	olderPath := dbPath + "#a-older"
+	newerPath := dbPath + "#z-newer"
+	older := parser.SourceRef{Provider: parser.AgentForge, DiscoveryMTimeNS: 100}
+	newer := parser.SourceRef{Provider: parser.AgentForge, DiscoveryMTimeNS: 200}
+
+	kept, cutPaths, limited := sortAndLimitParseDiffFiles(
+		[]parser.DiscoveredFile{
+			{Path: olderPath, Agent: parser.AgentForge, ProviderSource: &older},
+			{Path: newerPath, Agent: parser.AgentForge, ProviderSource: &newer},
+		},
+		1,
+	)
+
+	require.True(t, limited)
+	require.Len(t, kept, 1)
+	assert.Equal(t, newerPath, kept[0].Path,
+		"newer per-session mtime must be sampled even though its path sorts later")
+	assert.Len(t, cutPaths, 1)
+	assert.True(t, cutPaths[olderPath],
+		"the older session must be the one cut by --limit")
+}
+
 func TestParseDiffReportHasFailures(t *testing.T) {
 	tests := []struct {
 		name   string

@@ -243,3 +243,57 @@ func TestParseDiffDBBackedLimitScopesPerSession(t *testing.T) {
 		"cut DB-backed session must read as not-sampled, "+
 			"not 'database-backed agent'")
 }
+
+// TestParseDiffDBBackedLimitOrdersByPerSessionMtime is the ordering acid test.
+// A shared .forge.db holds two conversations whose virtual-path order (by
+// conversation ID) is the opposite of their updated_at order: forge-a sorts
+// lexicographically first but is older, forge-b sorts later but is newer. Under
+// --limit 1 the newest session must be the one sampled, so forge-a is cut.
+// Before the ordering fix both virtual sources stat to mtime 0, --limit
+// tie-breaks on the lexicographically-earlier path, forge-a is sampled instead,
+// and the newer forge-b is dropped -- so this asserted skip would be
+// "forge:forge-b" and the test would fail.
+func TestParseDiffDBBackedLimitOrdersByPerSessionMtime(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentForge)
+	forge := createForgeDB(t, env.forgeDir)
+	// forge-a: sorts first by path, older updated_at.
+	forge.addConversation(
+		t, "forge-a", "Older A",
+		forgeTestContext("Prompt A.", "Answer A."),
+		"2026-05-01 09:00:00", "2026-05-01 09:00:00",
+		`{"input_tokens":100,"output_tokens":20}`,
+	)
+	// forge-b: sorts later by path, newer updated_at.
+	forge.addConversation(
+		t, "forge-b", "Newer B",
+		forgeTestContext("Prompt B.", "Answer B."),
+		"2026-06-01 09:00:00", "2026-06-01 09:00:00",
+		`{"input_tokens":120,"output_tokens":25}`,
+	)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 2, Synced: 2})
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentForge},
+		Limit:  1,
+	})
+
+	assert.True(t, report.FilesLimited, "files limited")
+	assert.Equal(t, sync.ParseDiffTotals{
+		Examined: 1, Identical: 1, Skipped: 1,
+	}, report.Totals, "the newer conversation is sampled, the older cut")
+
+	// A clean identical sample is not listed, so the sole listed session is the
+	// cut (older) one -- and it must be forge-a, proving the newer forge-b won
+	// the --limit slot by mtime rather than by lexicographic path.
+	var skipped []sync.SessionDiff
+	for _, s := range report.Sessions {
+		if s.Class == sync.DiffSkipped {
+			skipped = append(skipped, s)
+		}
+	}
+	require.Len(t, skipped, 1, "exactly one skipped session listed")
+	assert.Equal(t, "forge:forge-a", skipped[0].SessionID,
+		"the older conversation must be the one cut by --limit")
+	assert.Contains(t, skipped[0].Reason, "limit",
+		"cut session reads as not-sampled")
+}

@@ -341,6 +341,10 @@ func sortAndLimitParseDiffFiles(
 ) ([]parser.DiscoveredFile, map[string]bool, bool) {
 	mtimes := make(map[string]int64, len(files))
 	for _, f := range files {
+		if m, ok := parseDiffDiscoveryMtime(f); ok {
+			mtimes[f.Path] = m
+			continue
+		}
 		m, err := discoveredFileMtime(f)
 		if err != nil {
 			m = 0
@@ -365,6 +369,24 @@ func sortAndLimitParseDiffFiles(
 		files = files[:limit]
 	}
 	return files, cutPaths, limited
+}
+
+// parseDiffDiscoveryMtime returns a per-source mtime captured at provider
+// discovery when the source carries one. The DB-backed providers (Forge,
+// Piebald, Warp) fan a shared SQLite store out to one virtual
+// "<db>#<sessionID>" source per session; those paths have no on-disk existence,
+// so discoveredFileMtime's os.Stat fallback fails and yields 0. With every
+// virtual source pinned to 0, the --limit sampler would order them
+// lexicographically by path and could cut the newest sessions. The provider
+// stamps SourceRef.DiscoveryMTimeNS with each session's real mtime during
+// Discover, so use it directly for ordering here. Ordering only: raced-guard
+// reliability (parseDiffSourceReliableForRaced) and skip-cache/data-version
+// freshness are unaffected.
+func parseDiffDiscoveryMtime(f parser.DiscoveredFile) (int64, bool) {
+	if f.ProviderSource == nil || f.ProviderSource.DiscoveryMTimeNS == 0 {
+		return 0, false
+	}
+	return f.ProviderSource.DiscoveryMTimeNS, true
 }
 
 func parseDiffSourceKey(path string) string {

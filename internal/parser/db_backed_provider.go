@@ -190,11 +190,14 @@ func (s dbBackedSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 			return nil, err
 		}
 		for _, meta := range metas {
-			addJSONLSource(
-				s.newSourceRef(root, dbPath, meta.SessionID, meta.VirtualPath),
-				&sources,
-				seen,
-			)
+			ref := s.newSourceRef(root, dbPath, meta.SessionID, meta.VirtualPath)
+			// Carry the per-session mtime captured here so parse-diff's --limit
+			// sampler can order these virtual "<db>#<sessionID>" sources by each
+			// session's real mtime rather than stat'ing a path that has no
+			// on-disk existence. Ordering metadata only: skip-cache and
+			// data-version freshness still resolve through Fingerprint.
+			ref.DiscoveryMTimeNS = meta.FileMtime
+			addJSONLSource(ref, &sources, seen)
 		}
 	}
 	sortJSONLSources(sources)
