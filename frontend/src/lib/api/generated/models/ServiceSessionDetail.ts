@@ -10,6 +10,7 @@ export type ServiceSessionDetail = {
   context_pressure_max?: number;
   created_at: string;
   cwd?: string;
+  decode_confidence?: string;
   deleted_at?: string;
   display_name?: string;
   edit_churn_count: number;

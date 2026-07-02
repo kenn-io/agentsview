@@ -1,4 +1,4 @@
-package service_test
+package service
 
 import (
 	"encoding/json"
@@ -8,14 +8,16 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/service"
 )
 
-// TestSessionDetailDecodeConfidenceJSON verifies the derive-on-read
-// decode_confidence field the detail endpoint emits: it appears as "low" for
-// an Antigravity session on an unrecognized schema, and is omitted for known
-// schemas, empty labels, and other agents that carry a generic source_version.
-func TestSessionDetailDecodeConfidenceJSON(t *testing.T) {
+// TestSessionDetailDecodeConfidence verifies the derive-on-read
+// decode_confidence field the detail endpoint emits. buildSessionDetail derives
+// it once from the session's agent and source_version, MarshalJSON passes the
+// stored field through, and UnmarshalJSON restores it so the HTTP backend
+// round-trips it. It is "low" for an Antigravity session on an unrecognized
+// schema, "high" for a known range, and omitted for empty labels and other
+// agents that carry a generic source_version.
+func TestSessionDetailDecodeConfidence(t *testing.T) {
 	tests := []struct {
 		name          string
 		agent         string
@@ -38,7 +40,7 @@ func TestSessionDetailDecodeConfidenceJSON(t *testing.T) {
 			wantValue:     "low",
 		},
 		{
-			name:          "antigravity known range omitted (high not surfaced as badge)",
+			name:          "antigravity known range emits high",
 			agent:         "antigravity",
 			sourceVersion: "1.0.7-1.0.10",
 			wantPresent:   true,
@@ -59,13 +61,19 @@ func TestSessionDetailDecodeConfidenceJSON(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			detail := service.SessionDetail{
-				Session: db.Session{
-					ID:            "s1",
-					Agent:         tt.agent,
-					SourceVersion: tt.sourceVersion,
-				},
+			detail := buildSessionDetail(&db.Session{
+				ID:            "s1",
+				Agent:         tt.agent,
+				SourceVersion: tt.sourceVersion,
+			})
+			if tt.wantPresent {
+				assert.Equal(t, tt.wantValue, detail.DecodeConfidence,
+					"buildSessionDetail should derive DecodeConfidence")
+			} else {
+				assert.Empty(t, detail.DecodeConfidence,
+					"DecodeConfidence should be empty")
 			}
+
 			raw, err := json.Marshal(detail)
 			require.NoError(t, err)
 
@@ -78,6 +86,14 @@ func TestSessionDetailDecodeConfidenceJSON(t *testing.T) {
 			if tt.wantPresent {
 				assert.Equal(t, tt.wantValue, got)
 			}
+
+			// The HTTP backend decodes the response into a SessionDetail, so the
+			// field must round-trip rather than being dropped.
+			var roundTripped SessionDetail
+			require.NoError(t, json.Unmarshal(raw, &roundTripped))
+			assert.Equal(t, detail.DecodeConfidence,
+				roundTripped.DecodeConfidence,
+				"decode_confidence should round-trip through UnmarshalJSON")
 		})
 	}
 }
