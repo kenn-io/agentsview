@@ -2,6 +2,7 @@ package parser
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -10,6 +11,37 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// Cursor owns and actively writes ai-code-tracking.db; agentsview must
+// never hold a writable handle on it.
+func TestOpenCursorAttributionDB_ReadOnly(t *testing.T) {
+	path := seedCursorAttributionDBTest(t)
+
+	conn, err := openCursorAttributionDB(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	_, err = conn.Exec(
+		`INSERT INTO conversation_summaries (model, mode, updatedAt)
+		 VALUES ('m', 'tab', 0)`,
+	)
+	require.ErrorContains(t, err, "readonly database",
+		"attribution db handle must reject writes")
+}
+
+func TestOpenCursorAttributionDB_DoesNotCreateMissingDB(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing.db")
+
+	conn, err := openCursorAttributionDB(missing)
+	if err == nil {
+		_ = conn.Close()
+	}
+	require.Error(t, err,
+		"read-only open of a missing db must fail, not create it")
+	_, statErr := os.Stat(missing)
+	assert.True(t, os.IsNotExist(statErr),
+		"open must not create the attribution db file")
+}
 
 func TestLoadCursorAttribution_Happy(t *testing.T) {
 	path := seedCursorAttributionDBTest(t)

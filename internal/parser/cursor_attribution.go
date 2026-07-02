@@ -160,9 +160,12 @@ func cursorAttributionDBPath() string {
 }
 
 func openCursorAttributionDB(path string) (*sql.DB, error) {
+	// The file: prefix is required for go-sqlite3 to honor mode=ro;
+	// without it the query string is dropped and the live Cursor db
+	// would be opened read-write.
 	conn, err := sql.Open(
 		"sqlite3",
-		path+"?mode=ro&_busy_timeout=3000",
+		"file:"+path+"?mode=ro&_busy_timeout=3000",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("opening cursor attribution db: %w", err)
