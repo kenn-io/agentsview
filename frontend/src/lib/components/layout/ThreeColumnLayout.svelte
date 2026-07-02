@@ -426,6 +426,7 @@
   .resize-handle {
     position: relative;
     flex-shrink: 0;
+    /* kit-ui-check-ignore: pointer-capture resizer with persisted width and test contract predates kit-ui SplitResizeHandle; swapping (and gaining keyboard resize) is tracked as a follow-up */
     cursor: col-resize;
     touch-action: none;
     transition: background-color 120ms ease;
@@ -499,6 +500,7 @@
   }
 
   :global(body.sidebar-resizing) {
+    /* kit-ui-check-ignore: body-level drag cursor for the sidebar resizer above */
     cursor: col-resize;
     user-select: none;
     -webkit-user-select: none;
@@ -523,6 +525,7 @@
     .sidebar-backdrop {
       display: block;
       position: fixed;
+      /* kit-ui-check-ignore: scrim behind the mobile sidebar drawer, not a dialog — Modal's centered panel/focus-trap chrome does not apply */
       inset: 0;
       background: var(--overlay-bg);
       z-index: 49;

@@ -58,5 +58,25 @@ export function installFallbackStorage(name: StorageName): void {
   });
 }
 
+/** jsdom has no ResizeObserver; kit-ui's TopBar/FitStages measure with it.
+ * A no-op stub keeps them mountable in tests — measurement-driven collapse
+ * simply never fires, so components render their expanded state. */
+export function installFallbackResizeObserver(): void {
+  if (typeof globalThis.ResizeObserver !== "undefined") return;
+
+  class FallbackResizeObserver {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+
+  Object.defineProperty(globalThis, "ResizeObserver", {
+    value: FallbackResizeObserver,
+    configurable: true,
+    writable: true,
+  });
+}
+
 installFallbackStorage("localStorage");
+installFallbackResizeObserver();
 initI18n();

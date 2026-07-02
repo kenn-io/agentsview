@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
+  import { Button, Modal, Spinner } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -10,7 +11,6 @@
   } from "../../api/generated/index";
   import { configureGeneratedClient } from "../../api/runtime.js";
   import type { PublishResponse } from "../../api/types.js";
-  import { XIcon } from "../../icons.js";
 
   type View = "setup" | "progress" | "success" | "error";
 
@@ -120,16 +120,6 @@
     navigator.clipboard.writeText(text);
   }
 
-  function handleOverlayClick(e: MouseEvent) {
-    if (
-      (e.target as HTMLElement).classList.contains(
-        "modal-overlay",
-      )
-    ) {
-      closeModal();
-    }
-  }
-
   onDestroy(() => {
     closed = true;
   });
@@ -137,155 +127,130 @@
   init();
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div
-  class="modal-overlay"
-  onclick={handleOverlayClick}
-  onkeydown={(e) => {
-    if (e.key === "Escape") closeModal();
-  }}
+{#snippet actions()}
+  {#if view === "setup"}
+    <a
+      class="token-link"
+      href="https://github.com/settings/tokens/new?scopes=gist"
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      {m.publish_create_token()}
+    </a>
+    <Button
+      label={m.publish_save_and_publish()}
+      tone="info"
+      surface="solid"
+      disabled={!tokenInput.trim()}
+      onclick={handleSaveToken}
+    />
+  {:else if view === "success"}
+    <Button
+      label={m.publish_open_in_browser()}
+      tone="info"
+      surface="solid"
+      onclick={() => window.open(result!.view_url, "_blank")}
+    />
+    <Button
+      label={m.publish_close_btn()}
+      tone="neutral"
+      surface="outline"
+      onclick={closeModal}
+    />
+  {:else if view === "error"}
+    <Button
+      label={m.publish_retry()}
+      tone="info"
+      surface="solid"
+      onclick={doPublish}
+    />
+    <Button
+      label={m.publish_close_btn()}
+      tone="neutral"
+      surface="outline"
+      onclick={closeModal}
+    />
+  {/if}
+{/snippet}
+
+<Modal
+  title={publishSecret ? m.publish_title_secret() : m.publish_title_public()}
+  width="440px"
+  onclose={closeModal}
+  footer={view === "progress" ? undefined : actions}
 >
-  <div class="modal-panel publish-panel">
-    <div class="modal-header">
-      <h3 class="modal-title">
-        {publishSecret ? m.publish_title_secret() : m.publish_title_public()}
-      </h3>
-      <button
-        class="modal-close"
-        onclick={closeModal}
-        title={m.publish_close()}
-        aria-label={m.publish_close()}
-      >
-        <XIcon size="14" strokeWidth="2.2" aria-hidden="true" />
-      </button>
+  {#if view === "setup"}
+    <p class="setup-text">
+      {m.publish_setup_text({ scope: "gist" })}
+    </p>
+    <input
+      class="token-input"
+      type="password"
+      placeholder="ghp_..."
+      bind:value={tokenInput}
+      onkeydown={(e) => {
+        if (e.key === "Enter") handleSaveToken();
+      }}
+    />
+
+  {:else if view === "progress"}
+    <div class="progress-view">
+      <Spinner />
+      <p>
+        {publishSecret ? m.publish_creating_secret() : m.publish_creating_public()}
+      </p>
     </div>
 
-    <div class="modal-body">
-      {#if view === "setup"}
-        <p class="setup-text">
-          {m.publish_setup_text({ scope: "gist" })}
-        </p>
-        <input
-          class="token-input"
-          type="password"
-          placeholder="ghp_..."
-          bind:value={tokenInput}
-          onkeydown={(e) => {
-            if (e.key === "Enter") handleSaveToken();
-          }}
-        />
-        <div class="setup-actions">
-          <a
-            class="token-link"
-            href="https://github.com/settings/tokens/new?scopes=gist"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            {m.publish_create_token()}
-          </a>
-          <button
-            class="modal-btn modal-btn-primary"
-            onclick={handleSaveToken}
-            disabled={!tokenInput.trim()}
-          >
-            {m.publish_save_and_publish()}
-          </button>
+  {:else if view === "success" && result}
+    <div class="success-view">
+      <div class="url-field">
+        <label class="url-label" for="publish-view-url">
+          {m.publish_view_url()}
+        </label>
+        <div class="url-row">
+          <input
+            id="publish-view-url"
+            class="url-input"
+            type="text"
+            readonly
+            value={result.view_url}
+          />
+          <Button
+            class="btn-copy"
+            label={m.publish_copy()}
+            size="sm"
+            onclick={() => copyToClipboard(result!.view_url)}
+          />
         </div>
-
-      {:else if view === "progress"}
-        <div class="progress-view">
-          <div class="modal-spinner"></div>
-          <p>
-            {publishSecret ? m.publish_creating_secret() : m.publish_creating_public()}
-          </p>
+      </div>
+      <div class="url-field">
+        <label class="url-label" for="publish-gist-url">
+          {m.publish_gist_url()}
+        </label>
+        <div class="url-row">
+          <input
+            id="publish-gist-url"
+            class="url-input"
+            type="text"
+            readonly
+            value={result.gist_url}
+          />
+          <Button
+            class="btn-copy"
+            label={m.publish_copy()}
+            size="sm"
+            onclick={() => copyToClipboard(result!.gist_url)}
+          />
         </div>
-
-      {:else if view === "success" && result}
-        <div class="success-view">
-          <div class="url-field">
-            <label class="url-label" for="publish-view-url">
-              {m.publish_view_url()}
-            </label>
-            <div class="url-row">
-              <input
-                id="publish-view-url"
-                class="url-input"
-                type="text"
-                readonly
-                value={result.view_url}
-              />
-              <button
-                class="modal-btn btn-copy"
-                onclick={() => copyToClipboard(result!.view_url)}
-              >
-                {m.publish_copy()}
-              </button>
-            </div>
-          </div>
-          <div class="url-field">
-            <label class="url-label" for="publish-gist-url">
-              {m.publish_gist_url()}
-            </label>
-            <div class="url-row">
-              <input
-                id="publish-gist-url"
-                class="url-input"
-                type="text"
-                readonly
-                value={result.gist_url}
-              />
-              <button
-                class="modal-btn btn-copy"
-                onclick={() => copyToClipboard(result!.gist_url)}
-              >
-                {m.publish_copy()}
-              </button>
-            </div>
-          </div>
-          <div class="success-actions">
-            <button
-              class="modal-btn modal-btn-primary"
-              onclick={() => window.open(result!.view_url, "_blank")}
-            >
-              {m.publish_open_in_browser()}
-            </button>
-            <button
-              class="modal-btn"
-              onclick={closeModal}
-            >
-              {m.publish_close_btn()}
-            </button>
-          </div>
-        </div>
-
-      {:else if view === "error"}
-        <div class="error-view">
-          <p class="modal-error">{errorMessage}</p>
-          <div class="error-actions">
-            <button
-              class="modal-btn modal-btn-primary"
-              onclick={doPublish}
-            >
-              {m.publish_retry()}
-            </button>
-            <button
-              class="modal-btn"
-              onclick={closeModal}
-            >
-              {m.publish_close_btn()}
-            </button>
-          </div>
-        </div>
-      {/if}
+      </div>
     </div>
-  </div>
-</div>
+
+  {:else if view === "error"}
+    <p class="modal-error-text">{errorMessage}</p>
+  {/if}
+</Modal>
 
 <style>
-  .publish-panel {
-    width: 440px;
-  }
-
   .setup-text {
     font-size: 12px;
     color: var(--text-secondary);
@@ -309,7 +274,6 @@
     font-size: 12px;
     font-family: var(--font-mono);
     color: var(--text-primary);
-    margin-bottom: 12px;
   }
 
   .token-input:focus {
@@ -317,13 +281,8 @@
     border-color: var(--accent-blue);
   }
 
-  .setup-actions {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
   .token-link {
+    margin-right: auto;
     font-size: 11px;
     color: var(--accent-blue);
     text-decoration: none;
@@ -381,26 +340,17 @@
     min-width: 0;
   }
 
-  .btn-copy {
+  .url-row :global(.btn-copy) {
     flex-shrink: 0;
   }
 
-  .success-actions {
-    display: flex;
-    gap: 8px;
-    justify-content: flex-end;
-    margin-top: 4px;
-  }
-
-  .error-view {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-
-  .error-actions {
-    display: flex;
-    gap: 8px;
-    justify-content: flex-end;
+  .modal-error-text {
+    font-size: var(--font-size-sm);
+    color: var(--accent-red, #f85149);
+    background: var(--bg-inset);
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--accent-red, #f85149);
+    word-break: break-word;
   }
 </style>

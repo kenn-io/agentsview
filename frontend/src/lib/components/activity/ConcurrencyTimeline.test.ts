@@ -204,13 +204,15 @@ function minuteReport(overrides: Partial<Report> = {}): Report {
 }
 
 async function chooseOverlayMetric(target: HTMLElement, label: string) {
-  const trigger = target.querySelector<HTMLButtonElement>(".overlay-toggle .typeahead-trigger");
+  const trigger = target.querySelector<HTMLButtonElement>(
+    ".overlay-toggle .kit-typeahead__trigger",
+  );
   expect(trigger).toBeTruthy();
   await fireEvent.click(trigger!);
   await tick();
 
   const option = Array.from(
-    target.querySelectorAll<HTMLElement>(".overlay-toggle .typeahead-option"),
+    target.querySelectorAll<HTMLElement>(".overlay-toggle .kit-typeahead__option"),
   ).find((el) => el.textContent?.trim() === label);
   expect(option).toBeTruthy();
   await fireEvent.mouseDown(option!);

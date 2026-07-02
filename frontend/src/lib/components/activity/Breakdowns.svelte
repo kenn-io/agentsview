@@ -116,7 +116,7 @@
 <div class="breakdowns">
   <div class="breakdowns-header">
     <h3 class="breakdowns-title">{m.activity_breakdown()}</h3>
-    <div class="header-right">
+    <div class="panel-actions">
       <div class="legend" aria-hidden="true">
         <span class="legend-item">
           <span class="swatch interactive"></span>{m.activity_interactive()}
@@ -215,7 +215,7 @@
     color: var(--text-primary);
   }
 
-  .header-right {
+  .panel-actions {
     display: flex;
     align-items: center;
     gap: 12px;

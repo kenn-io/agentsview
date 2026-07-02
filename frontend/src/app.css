@@ -70,9 +70,6 @@
   --code-bg: #1e1e2e;
   --code-text: #cdd6f4;
   --viewport-indicator: rgba(0, 0, 0, 0.08);
-  /* Deliberate override: agentsview's header is 40px on desktop (kit-ui
-     defaults to 44px); the touch bump below keeps layout offsets in sync. */
-  --header-height: 40px;
 }
 
 /* Dark theme — app-specific tokens */
@@ -111,7 +108,6 @@
   --code-bg: #0d0d14;
   --code-text: #cdd6f4;
   --viewport-indicator: rgba(255, 255, 255, 0.08);
-  --header-height: 40px;
 }
 
 html,
@@ -238,124 +234,7 @@ mark.search-highlight--current {
   outline-offset: 1px;
 }
 
-/* Modal shared styles */
-.modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: var(--overlay-bg);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-}
-
-.modal-panel {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md);
-  overflow: hidden;
-}
-
-.modal-panel .modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border-default);
-}
-
-.modal-panel .modal-title {
-  font-size: var(--font-size-md);
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.modal-panel .modal-close {
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 16px;
-  color: var(--text-muted);
-  border-radius: var(--radius-sm);
-}
-
-.modal-panel .modal-close:hover {
-  background: var(--bg-surface-hover);
-  color: var(--text-primary);
-}
-
-.modal-panel .modal-body {
-  padding: 16px;
-}
-
-.modal-panel .modal-btn {
-  height: 28px;
-  padding: 0 12px;
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  cursor: pointer;
-  background: var(--bg-surface-hover);
-  color: var(--text-secondary);
-  border: 1px solid var(--border-default);
-}
-
-.modal-panel .modal-btn:hover {
-  background: var(--bg-inset);
-  color: var(--text-primary);
-}
-
-.modal-panel .modal-btn-primary {
-  background: var(--accent-blue);
-  color: var(--accent-blue-foreground);
-  border-color: var(--accent-blue);
-}
-
-.modal-panel .modal-btn-primary:hover {
-  opacity: 0.9;
-}
-
-.modal-panel .modal-btn-primary:disabled {
-  opacity: var(--opacity-disabled);
-  cursor: not-allowed;
-}
-
-.modal-panel .modal-error {
-  font-size: var(--font-size-sm);
-  color: var(--accent-red, #f85149);
-  background: var(--bg-inset);
-  padding: 8px 12px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--accent-red, #f85149);
-  word-break: break-word;
-}
-
-.modal-panel .modal-spinner {
-  width: 24px;
-  height: 24px;
-  border: 2px solid var(--border-default);
-  border-top-color: var(--accent-blue);
-  border-radius: 50%;
-  animation: modal-spin 0.8s linear infinite;
-}
-
-@keyframes modal-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 @keyframes duration-pulse {
   0%, 100% { opacity: 1; }
   50%      { opacity: 0.55; }
-}
-
-/* Enlarge header on touch devices so layout offsets stay in sync */
-@media (pointer: coarse) {
-  :root {
-    --header-height: 44px;
-  }
 }

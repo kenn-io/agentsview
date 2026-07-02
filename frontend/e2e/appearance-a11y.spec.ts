@@ -148,18 +148,21 @@ test.describe("Appearance accessibility", () => {
     const sp = new SessionsPage(page);
     await sp.goto();
 
+    // Primary/solid actions (kit-ui Button, modal confirm buttons) pair
+    // --accent-blue fills with --accent-blue-foreground ink; kit-ui's own
+    // styles are component-scoped, so measure the token pairing directly.
     const primaryButtonColors = await page.evaluate(() => {
-      const panel = document.createElement("div");
-      panel.className = "modal-panel";
-      panel.innerHTML = '<button class="modal-btn modal-btn-primary">Save</button>';
-      document.body.append(panel);
-      const button = panel.querySelector("button")!;
+      const button = document.createElement("button");
+      button.textContent = "Save";
+      button.style.background = "var(--accent-blue)";
+      button.style.color = "var(--accent-blue-foreground)";
+      document.body.append(button);
       const styles = getComputedStyle(button);
       const result = {
         background: styles.backgroundColor,
         foreground: styles.color,
       };
-      panel.remove();
+      button.remove();
       return result;
     });
     expectReadableContrast(primaryButtonColors);

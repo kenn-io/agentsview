@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { StatusBar } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { sync } from "../../stores/sync.svelte.js";
   import { perf } from "../../stores/perf.svelte.js";
@@ -72,27 +73,29 @@
   });
 </script>
 
-<footer class="status-bar">
-  <div class="status-left">
+<StatusBar>
+  {#snippet left()}
     {#if sync.stats}
-      <span>{m.status_bar_sessions({
-        count: sync.stats.session_count,
-        countLabel: formatNumber(sync.stats.session_count),
-      })}</span>
-      <span class="sep">&middot;</span>
-      <span>{m.status_bar_messages({
-        count: sync.stats.message_count,
-        countLabel: formatNumber(sync.stats.message_count),
-      })}</span>
-      <span class="sep">&middot;</span>
-      <span>{m.status_bar_projects({
-        count: sync.stats.project_count,
-        countLabel: formatNumber(sync.stats.project_count),
-      })}</span>
+      <span class="counts">
+        <span>{m.status_bar_sessions({
+          count: sync.stats.session_count,
+          countLabel: formatNumber(sync.stats.session_count),
+        })}</span>
+        <span class="sep">&middot;</span>
+        <span>{m.status_bar_messages({
+          count: sync.stats.message_count,
+          countLabel: formatNumber(sync.stats.message_count),
+        })}</span>
+        <span class="sep">&middot;</span>
+        <span>{m.status_bar_projects({
+          count: sync.stats.project_count,
+          countLabel: formatNumber(sync.stats.project_count),
+        })}</span>
+      </span>
     {/if}
-  </div>
+  {/snippet}
 
-  <div class="status-right">
+  {#snippet right()}
     <button
       class="perf-toggle"
       class:active={perf.panelOpen}
@@ -198,29 +201,17 @@
         {sync.serverVersion.version}
       </button>
     {/if}
-  </div>
-</footer>
+  {/snippet}
+</StatusBar>
 
 <style>
-  .status-bar {
-    height: var(--status-bar-height, 24px);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 14px;
-    background: var(--bg-surface);
-    border-top: 1px solid var(--border-default);
-    font-size: 10px;
-    color: var(--text-muted);
-    flex-shrink: 0;
-    letter-spacing: 0.01em;
-  }
-
-  .status-left,
-  .status-right {
+  .counts {
     display: flex;
     align-items: center;
     gap: 4px;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
   }
 
   .sep {
@@ -340,8 +331,8 @@
     color: var(--text-secondary);
   }
 
-  @media (max-width: 767px) {
-    .status-left {
+  @media (max-width: 760px) {
+    .counts {
       display: none;
     }
   }

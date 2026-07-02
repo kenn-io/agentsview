@@ -1,8 +1,16 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterAll, beforeAll } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/svelte";
 
 import RangePicker from "./RangePicker.svelte";
 import type { RangeSelection } from "./rangeSelection.js";
+
+// The wrapper renders kit-ui's RangePicker, whose popover tracks panel
+// resizes; jsdom has no ResizeObserver, so stub one for panel-open tests.
+class ResizeObserverStub {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+}
 
 const relative30: RangeSelection = { mode: "relative", days: 30 };
 
@@ -17,17 +25,47 @@ async function openPanel() {
   await fireEvent.click(screen.getAllByRole("button")[0]!);
 }
 
+let originalResizeObserver: typeof ResizeObserver | undefined;
+
+beforeAll(() => {
+  originalResizeObserver = globalThis.ResizeObserver;
+  Object.defineProperty(globalThis, "ResizeObserver", {
+    configurable: true,
+    writable: true,
+    value: ResizeObserverStub,
+  });
+});
+
+afterAll(() => {
+  Object.defineProperty(globalThis, "ResizeObserver", {
+    configurable: true,
+    writable: true,
+    value: originalResizeObserver,
+  });
+});
+
 beforeEach(() => {
   vi.useRealTimers();
 });
 
 describe("RangePicker", () => {
-  it("shows the current selection on the trigger", () => {
+  it("shows the localized preset label on the trigger", () => {
     setup();
     expect(screen.getByRole("button", { name: /Last 30 days/ })).toBeTruthy();
   });
 
-  it("opens to the tab matching the selection mode", async () => {
+  it("templates non-preset relative windows through the app message", () => {
+    // Exercises the wrapper's "{days}" template mapping for lastDaysLabel.
+    setup({ mode: "relative", days: 14 });
+    expect(screen.getByRole("button", { name: /Last 14 days/ })).toBeTruthy();
+  });
+
+  it("labels a calendar week selection on the trigger", () => {
+    setup({ mode: "calendar", unit: "week", anchor: "2026-06-17" });
+    expect(screen.getByRole("button", { name: /Week of Jun 15/ })).toBeTruthy();
+  });
+
+  it("opens to the tab matching the selection mode with localized tabs", async () => {
     setup();
     await openPanel();
     for (const t of ["Relative", "Calendar", "Custom"]) {
@@ -45,7 +83,7 @@ describe("RangePicker", () => {
     expect(onSelect).toHaveBeenCalledWith({ mode: "relative", days: 7 });
   });
 
-  it("emits a calendar selection and steps the period", async () => {
+  it("emits a calendar selection from the unit pills and month grid", async () => {
     vi.setSystemTime(new Date("2026-06-17T12:00:00Z"));
     const { onSelect } = setup();
     await openPanel();
@@ -56,7 +94,8 @@ describe("RangePicker", () => {
       unit: "week",
       anchor: "2026-06-17",
     });
-    await fireEvent.click(screen.getByRole("button", { name: "Next period" }));
+    // The old stepper is a month grid now; picking a day moves the anchor.
+    await fireEvent.click(screen.getByRole("button", { name: "Jun 24, 2026" }));
     expect(onSelect).toHaveBeenLastCalledWith({
       mode: "calendar",
       unit: "week",
@@ -78,11 +117,6 @@ describe("RangePicker", () => {
     );
   });
 
-  it("labels a calendar week selection on the trigger", () => {
-    setup({ mode: "calendar", unit: "week", anchor: "2026-06-17" });
-    expect(screen.getByRole("button", { name: /Week of Jun 15/ })).toBeTruthy();
-  });
-
   it("syncs the Custom tab to a preset chosen while open", async () => {
     vi.setSystemTime(new Date("2026-06-17T12:00:00Z"));
     setup({ mode: "custom", from: "2020-01-01", to: "2020-01-31" });
@@ -90,9 +124,12 @@ describe("RangePicker", () => {
     await fireEvent.click(screen.getByRole("tab", { name: "Relative" }));
     await fireEvent.click(screen.getByRole("button", { name: "7d" }));
     await fireEvent.click(screen.getByRole("tab", { name: "Custom" }));
-    // 7 days before 2026-06-17 is 2026-06-10; the stale 2020 seed is gone.
+    // kit-ui seeds "last 7 days" inclusively of today (from = today - 6), so
+    // the field shows 2026-06-11 where the old component prefilled -06-10.
+    // This only affects the prefill; committed ranges still resolve through
+    // the app's own resolveRange().
     const from = screen.getAllByDisplayValue(/2026-/)[0] as HTMLInputElement;
-    expect(from.value).toBe("2026-06-10");
+    expect(from.value).toBe("2026-06-11");
   });
 
   it("normalizes a reversed custom range before emitting", async () => {

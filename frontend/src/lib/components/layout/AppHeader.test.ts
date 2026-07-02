@@ -162,17 +162,41 @@ describe("AppHeader export actions", () => {
     component = mount(AppHeader, { target: document.body });
     await tick();
 
-    const moreButton = document.querySelector<HTMLButtonElement>(
-      'button[aria-label="More navigation"]',
+    const sidebarButton = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Toggle sidebar"]',
     );
     const shortcutsButton = document.querySelector<HTMLButtonElement>(
       'button[aria-label="Keyboard shortcuts"]',
     );
 
-    expect(moreButton).not.toBeNull();
-    expect(moreButton?.title).toBe("More navigation");
+    expect(sidebarButton).not.toBeNull();
+    expect(sidebarButton?.title).toBe("Toggle sidebar (b)");
     expect(shortcutsButton).not.toBeNull();
     expect(shortcutsButton?.title).toBe("Keyboard shortcuts (?)");
+  });
+
+  it("renders every route as a primary-nav tab", async () => {
+    component = mount(AppHeader, { target: document.body });
+    await tick();
+
+    const nav = document.querySelector('nav[aria-label="Primary navigation"]');
+    expect(nav).not.toBeNull();
+    // jsdom measures every width as 0, so TopBar renders the collapsed
+    // dropdown; the measurement probe always carries the full tab row.
+    const labels = Array.from(
+      nav!.querySelectorAll<HTMLElement>(".kit-top-bar__probe .kit-top-bar__tab"),
+    ).map((b) => b.textContent?.trim());
+    for (const expected of [
+      "Sessions",
+      "Usage",
+      "Activity",
+      "Trends",
+      "Pinned",
+      "Insights",
+      "Trash",
+    ]) {
+      expect(labels).toContain(expected);
+    }
   });
 
   it("distinguishes global sync from page refresh controls", async () => {
@@ -218,9 +242,6 @@ describe("AppHeader export actions", () => {
     component = mount(AppHeader, { target: document.body });
     await tick();
 
-    expect(
-      document.querySelector<HTMLButtonElement>('button[aria-label="会话"]'),
-    ).not.toBeNull();
     expect(
       document.querySelector<HTMLButtonElement>('button[aria-label="同步会话"]'),
     ).not.toBeNull();

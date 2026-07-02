@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { EmptyState, Spinner } from "@kenn-io/kit-ui";
+  import { EmptyState, Spinner, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { InsightsService } from "../../api/generated/index";
   import { configureGeneratedClient } from "../../api/runtime.js";
@@ -14,9 +14,6 @@
   import { highlightCodeFences } from "../../utils/highlight-fences.js";
   import type { Insight, InsightsResponse, AgentName } from "../../api/types.js";
   import { LightbulbIcon, PlusIcon } from "../../icons.js";
-  import OptionTypeahead, {
-    type TypeaheadOption,
-  } from "../layout/OptionTypeahead.svelte";
 
   let {
     dateFrom,
@@ -191,7 +188,7 @@
 
   {#snippet agentPicker()}
     <div class="agent-typeahead">
-      <OptionTypeahead
+      <Typeahead
         options={agentOptions}
         value={insights.agent}
         disabled={generationUnavailable}

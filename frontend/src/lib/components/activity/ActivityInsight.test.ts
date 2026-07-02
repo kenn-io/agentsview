@@ -53,7 +53,19 @@ vi.mock("../../stores/router.svelte.js", () => ({
 
 import ActivityInsight from "./ActivityInsight.svelte";
 
+// jsdom has no ResizeObserver; the kit-ui Typeahead observes its open
+// option list to keep the fixed-position popover placed correctly.
+class ResizeObserverMock {
+  observe = vi.fn();
+  disconnect = vi.fn();
+}
+
 beforeEach(() => {
+  Object.defineProperty(globalThis, "ResizeObserver", {
+    configurable: true,
+    writable: true,
+    value: ResizeObserverMock,
+  });
   for (const m of Object.values(mocks)) {
     if (typeof m === "function") m.mockReset();
   }

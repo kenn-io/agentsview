@@ -1,16 +1,13 @@
+// Label/stepping helpers (rangeLabel, calendarLabel, stepAnchor,
+// defaultForMode) moved into kit-ui's RangePicker with the shared-component
+// migration; only the app-side selection/resolution semantics live here now.
 import { describe, expect, it, vi } from "vite-plus/test";
-import { setLocale } from "../../i18n/index.js";
 
 import {
-  calendarLabel,
-  defaultForMode,
   periodBounds,
-  rangeLabel,
   resolveRange,
   selectionFromRange,
   selectionFromWindow,
-  stepAnchor,
-  type RangeSelection,
 } from "./rangeSelection.js";
 
 describe("periodBounds", () => {
@@ -43,23 +40,6 @@ describe("periodBounds", () => {
   });
 });
 
-describe("stepAnchor", () => {
-  it("steps a day", () => {
-    expect(stepAnchor("day", "2026-06-17", 1)).toBe("2026-06-18");
-    expect(stepAnchor("day", "2026-06-17", -1)).toBe("2026-06-16");
-  });
-
-  it("steps a week by seven days", () => {
-    expect(stepAnchor("week", "2026-06-17", 1)).toBe("2026-06-24");
-    expect(stepAnchor("week", "2026-06-17", -1)).toBe("2026-06-10");
-  });
-
-  it("steps a month and clamps the day to the target month", () => {
-    expect(stepAnchor("month", "2026-01-31", 1)).toBe("2026-02-28");
-    expect(stepAnchor("month", "2026-03-15", -1)).toBe("2026-02-15");
-  });
-});
-
 describe("resolveRange", () => {
   it("resolves a relative window ending today", () => {
     vi.setSystemTime(new Date("2026-04-25T12:00:00Z"));
@@ -86,98 +66,6 @@ describe("resolveRange", () => {
     expect(
       resolveRange({ mode: "custom", from: "2026-01-01", to: "2026-01-31" }),
     ).toEqual({ from: "2026-01-01", to: "2026-01-31" });
-  });
-});
-
-describe("calendarLabel", () => {
-  it("labels each unit", () => {
-    setLocale("en");
-    expect(calendarLabel("day", "2026-06-17")).toBe("Jun 17, 2026");
-    expect(calendarLabel("week", "2026-06-17")).toBe("Week of Jun 15");
-    expect(calendarLabel("month", "2026-02-14")).toBe("February 2026");
-  });
-
-  it("localizes calendar labels", () => {
-    setLocale("zh-CN");
-
-    expect(calendarLabel("day", "2026-06-17")).toBe("2026年6月17日");
-    expect(calendarLabel("week", "2026-06-17")).toBe("6月15日所在周");
-    expect(calendarLabel("month", "2026-02-14")).toBe("2026年2月");
-
-    setLocale("en");
-  });
-});
-
-describe("rangeLabel", () => {
-  it("labels relative presets and an unknown day count", () => {
-    setLocale("en");
-    expect(rangeLabel({ mode: "relative", days: 30 })).toBe("Last 30 days");
-    expect(rangeLabel({ mode: "relative", days: 0 })).toBe("All time");
-    expect(rangeLabel({ mode: "relative", days: 14 })).toBe("Last 14 days");
-  });
-
-  it("labels calendar and custom selections", () => {
-    expect(
-      rangeLabel({ mode: "calendar", unit: "week", anchor: "2026-06-17" }),
-    ).toBe("Week of Jun 15");
-    expect(
-      rangeLabel({ mode: "custom", from: "2026-05-20", to: "2026-06-19" }),
-    ).toBe("May 20 - Jun 19");
-    expect(
-      rangeLabel({ mode: "custom", from: "2026-06-19", to: "2026-06-19" }),
-    ).toBe("Jun 19");
-  });
-
-  it("localizes relative and custom range labels", () => {
-    setLocale("zh-CN");
-
-    expect(rangeLabel({ mode: "relative", days: 30 })).toBe("最近 30 天");
-    expect(rangeLabel({ mode: "relative", days: 0 })).toBe("全部时间");
-    expect(rangeLabel({ mode: "relative", days: 14 })).toBe("最近 14 天");
-    expect(
-      rangeLabel({ mode: "calendar", unit: "week", anchor: "2026-06-17" }),
-    ).toBe("6月15日所在周");
-    expect(
-      rangeLabel({ mode: "custom", from: "", to: "" }),
-    ).toBe("自定义范围");
-    expect(
-      rangeLabel({ mode: "custom", from: "2026-05-20", to: "2026-06-19" }),
-    ).toBe("5月20日 - 6月19日");
-
-    setLocale("en");
-  });
-});
-
-describe("defaultForMode", () => {
-  const custom: RangeSelection = {
-    mode: "custom",
-    from: "2026-05-20",
-    to: "2026-06-19",
-  };
-
-  it("seeds calendar from the current range end", () => {
-    expect(defaultForMode("calendar", custom)).toEqual({
-      mode: "calendar",
-      unit: "week",
-      anchor: "2026-06-19",
-    });
-  });
-
-  it("seeds custom from the current resolved range", () => {
-    expect(
-      defaultForMode("custom", {
-        mode: "calendar",
-        unit: "week",
-        anchor: "2026-06-17",
-      }),
-    ).toEqual({ mode: "custom", from: "2026-06-15", to: "2026-06-21" });
-  });
-
-  it("defaults relative to 30 days", () => {
-    expect(defaultForMode("relative", custom)).toEqual({
-      mode: "relative",
-      days: 30,
-    });
   });
 });
 

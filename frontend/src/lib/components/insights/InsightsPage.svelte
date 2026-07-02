@@ -32,8 +32,7 @@
     SignalCalibration,
     SignalSessionExample,
   } from "../../api/types.js";
-  import { CopyButton, IconButton } from "@kenn-io/kit-ui";
-  import OptionTypeahead from "../layout/OptionTypeahead.svelte";
+  import { CopyButton, IconButton, Typeahead } from "@kenn-io/kit-ui";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import RangePicker from "../shared/RangePicker.svelte";
   import {
@@ -739,7 +738,7 @@
         value={analytics.project}
         onselect={handleProjectChange}
       />
-      <OptionTypeahead
+      <Typeahead
         options={agentOptions}
         value={analytics.agent}
         fallbackLabel={analytics.agent
@@ -752,7 +751,7 @@
       />
       <label class="toolbar-scope">
         <span>{m.insights_page_session_scope()}</span>
-        <OptionTypeahead
+        <Typeahead
           options={scopeOptions}
           value={analytics.automatedScope}
           fallbackLabel={m.insights_page_scope_no_automated()}
@@ -1066,7 +1065,7 @@
       <div class="generated-controls">
         <label class="generated-control">
           <span>{m.insights_page_template_label()}</span>
-          <OptionTypeahead
+          <Typeahead
             options={templateOptions}
             value={insights.cannedKind}
             fallbackLabel={cannedKindLabel(insights.cannedKind)}
@@ -1079,7 +1078,7 @@
 
         <label class="generated-control">
           <span>{m.insights_page_generator_label()}</span>
-          <OptionTypeahead
+          <Typeahead
             options={generationAgentOptions}
             value={insights.agent}
             fallbackLabel={agentLabel(insights.agent)}
@@ -1340,26 +1339,27 @@
     white-space: nowrap;
   }
 
-  .filter-group :global(.typeahead),
-  .toolbar-scope :global(.typeahead),
-  .generated-control :global(.typeahead) {
+  .filter-group :global(.kit-typeahead),
+  .toolbar-scope :global(.kit-typeahead),
+  .generated-control :global(.kit-typeahead) {
     min-width: 0;
     max-width: none;
     width: 100%;
   }
 
-  .filter-group > :global(.typeahead:first-child) {
-    --typeahead-list-min-width: min(360px, calc(100vw - 32px));
+  /* The kit-ui Typeahead list pins to the trigger width, so size the
+     trigger itself (the old --typeahead-list-min-width knob is retired). */
+  .filter-group > :global(.kit-typeahead:first-child) {
     flex: 0 1 220px;
     min-width: 180px;
     max-width: 260px;
   }
 
-  .filter-group > :global(.typeahead:nth-child(2)) {
+  .filter-group > :global(.kit-typeahead:nth-child(2)) {
     flex: 0 0 120px;
   }
 
-  .toolbar-scope :global(.typeahead) {
+  .toolbar-scope :global(.kit-typeahead) {
     flex: 0 0 128px;
     width: 128px;
   }

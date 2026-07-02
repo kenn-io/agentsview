@@ -1,7 +1,7 @@
 <script lang="ts">
+  import { Typeahead } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import type { ProjectInfo } from "../../api/types/core.js";
-  import OptionTypeahead from "./OptionTypeahead.svelte";
 
   interface Props {
     projects: ProjectInfo[];
@@ -33,7 +33,7 @@
   );
 </script>
 
-<OptionTypeahead
+<Typeahead
   {options}
   {value}
   fallbackLabel={displayValue}

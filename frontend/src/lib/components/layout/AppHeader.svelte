@@ -1,7 +1,13 @@
 <script lang="ts">
   import { m } from "../../i18n/index.js";
   import {
-    ActivityIcon,
+    FitStages,
+    KbdBadge,
+    Spinner,
+    TopBar,
+    type TopBarTab,
+  } from "@kenn-io/kit-ui";
+  import {
     AlignJustifyIcon,
     ArrowDownIcon,
     ArrowDownWideNarrowIcon,
@@ -11,16 +17,13 @@
     CopyIcon,
     DatabaseBackupIcon,
     DownloadIcon,
-    EllipsisIcon,
     FunnelIcon,
     GlobeIcon,
-    Grid2x2Icon,
-    LayoutGridIcon,
-    LayoutListIcon,
     LinkIcon,
     ListCollapseIcon,
     LockIcon,
     LogsIcon,
+    LayoutListIcon,
     MenuIcon,
     MoonIcon,
     MoreHorizontalIcon,
@@ -33,11 +36,10 @@
     ui,
     ALL_BLOCK_TYPES,
     type BlockType,
-    type TranscriptMode,
   } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
-  import { router } from "../../stores/router.svelte.js";
+  import { router, type Route } from "../../stores/router.svelte.js";
   import {
     downloadExport,
     getMarkdownExportUrl,
@@ -58,7 +60,6 @@
   let copiedMarkdownLinkTimer:
     | ReturnType<typeof setTimeout>
     | undefined;
-  let moreOpen = $state(false);
   let filterBtnRef: HTMLButtonElement | undefined =
     $state(undefined);
   let filterDropRef: HTMLDivElement | undefined =
@@ -75,10 +76,38 @@
     $state(undefined);
   let overflowDropRef: HTMLDivElement | undefined =
     $state(undefined);
-  let moreBtnRef: HTMLButtonElement | undefined =
-    $state(undefined);
-  let moreDropRef: HTMLDivElement | undefined =
-    $state(undefined);
+
+  /** True while TopBar has collapsed the nav tabs into its dropdown —
+   * side-region snippets read it to drop their labels. */
+  let navCollapsed = $state(false);
+
+  const NAV_ROUTES = [
+    "sessions",
+    "usage",
+    "activity",
+    "trends",
+    "pinned",
+    "insights",
+    "trash",
+    "recent-edits",
+  ] as const;
+
+  const tabs: TopBarTab[] = $derived([
+    { id: "sessions", label: m.nav_sessions() },
+    { id: "usage", label: m.nav_usage() },
+    { id: "activity", label: m.nav_activity() },
+    { id: "trends", label: m.nav_trends() },
+    { id: "pinned", label: m.nav_pinned() },
+    { id: "insights", label: m.nav_insights() },
+    { id: "trash", label: m.nav_trash() },
+    { id: "recent-edits", label: m.nav_recent_edits() },
+  ]);
+
+  const activeTab = $derived(
+    (NAV_ROUTES as readonly string[]).includes(router.route)
+      ? router.route
+      : "",
+  );
 
   const BLOCK_LABELS: Record<BlockType, () => string> = {
     user: m.header_transcript_blocks_user,
@@ -140,6 +169,10 @@
     ui.activeModal = "publish";
     showPublishMenu = false;
     showOverflow = false;
+  }
+
+  function openCommandPalette() {
+    ui.activeModal = "commandPalette";
   }
 
   const hasActiveSession = $derived(
@@ -232,33 +265,6 @@
         true,
       );
   });
-
-  // Close More dropdown on outside click or Escape
-  $effect(() => {
-    if (!moreOpen) return;
-    function onClickOutside(e: MouseEvent) {
-      const target = e.target as Node;
-      if (
-        moreBtnRef?.contains(target) ||
-        moreDropRef?.contains(target)
-      )
-        return;
-      moreOpen = false;
-    }
-    function onKeydown(e: KeyboardEvent) {
-      if (e.key === "Escape") moreOpen = false;
-    }
-    document.addEventListener("click", onClickOutside, true);
-    document.addEventListener("keydown", onKeydown);
-    return () => {
-      document.removeEventListener(
-        "click",
-        onClickOutside,
-        true,
-      );
-      document.removeEventListener("keydown", onKeydown);
-    };
-  });
 </script>
 
 {#snippet messageLayoutIcon(size: string)}
@@ -273,8 +279,38 @@
   {/if}
 {/snippet}
 
-<header class="header">
-  <div class="header-left">
+{#snippet searchField()}
+  <button
+    class="search-hint"
+    onclick={openCommandPalette}
+    title={m.nav_search_sessions_shortcut({ shortcut: `${modKey} K` })}
+  >
+    <SearchIcon size="12" strokeWidth="2" aria-hidden="true" />
+    <span class="search-hint-text">{m.nav_search_sessions()}</span>
+    <KbdBadge keys={[modKey, "K"]} joiner="compact" />
+  </button>
+{/snippet}
+
+{#snippet searchIconOnly()}
+  <button
+    class="search-hint search-hint--icon"
+    onclick={openCommandPalette}
+    title={m.nav_search_sessions_shortcut({ shortcut: `${modKey} K` })}
+    aria-label={m.nav_search_sessions()}
+  >
+    <SearchIcon size="12" strokeWidth="2" aria-hidden="true" />
+  </button>
+{/snippet}
+
+<TopBar
+  {tabs}
+  active={activeTab}
+  onchange={(id) => router.navigate(id as Route)}
+  bind:collapsed={navCollapsed}
+  searchMinWidth={navCollapsed ? 48 : 220}
+  ariaLabel={m.nav_primary()}
+>
+  {#snippet left()}
     <button
       class="hamburger"
       onclick={() => {
@@ -305,101 +341,20 @@
       <span class="header-title">AgentsView</span>
     </button>
 
-    <ProjectTypeahead
-      projects={sessions.projects}
-      value={sessions.filters.project}
-      onselect={(v) => sessions.setProjectFilter(v)}
-    />
+    <span class="project-picker">
+      <ProjectTypeahead
+        projects={sessions.projects}
+        value={sessions.filters.project}
+        onselect={(v) => sessions.setProjectFilter(v)}
+      />
+    </span>
+  {/snippet}
 
-    <button
-      class="nav-btn"
-      class:active={router.route === "sessions"}
-      onclick={() => router.navigate("sessions")}
-      title={m.nav_sessions()}
-      aria-label={m.nav_sessions()}
-    >
-      <LayoutGridIcon size="12" strokeWidth="2" aria-hidden="true" />
-      <span class="nav-label">{m.nav_sessions()}</span>
-    </button>
+  {#snippet search()}
+    <FitStages class="search-fit" stages={[searchField, searchIconOnly]} />
+  {/snippet}
 
-    <button
-      class="nav-btn"
-      class:active={router.route === "usage"}
-      onclick={() => router.navigate("usage")}
-      title={m.nav_token_usage()}
-      aria-label={m.nav_usage()}
-    >
-      <Grid2x2Icon size="12" strokeWidth="2" aria-hidden="true" />
-      <span class="nav-label">{m.nav_usage()}</span>
-    </button>
-
-    <button
-      class="nav-btn"
-      class:active={router.route === "activity"}
-      onclick={() => router.navigate("activity")}
-      title={m.nav_activity()}
-      aria-label={m.nav_activity()}
-    >
-      <ActivityIcon size="12" strokeWidth="2" aria-hidden="true" />
-      <span class="nav-label">{m.nav_activity()}</span>
-    </button>
-
-    <div class="more-wrap">
-      <button
-        class="nav-btn"
-        class:active={router.route === "trends" || router.route === "pinned" || router.route === "insights" || router.route === "trash" || router.route === "recent-edits" || moreOpen}
-        bind:this={moreBtnRef}
-        onclick={() => { moreOpen = !moreOpen; }}
-        title={m.nav_more_navigation()}
-        aria-label={m.nav_more_navigation()}
-        aria-expanded={moreOpen}
-      >
-        <EllipsisIcon size="12" strokeWidth="2.4" aria-hidden="true" />
-        <span class="nav-label">{m.nav_more()}</span>
-      </button>
-      {#if moreOpen}
-        <div class="more-dropdown" role="menu" bind:this={moreDropRef}>
-          <button class="more-item" role="menuitem"
-            class:active={router.route === "trends"}
-            onclick={() => { router.navigate("trends"); moreOpen = false; }}>
-            {m.nav_trends()}
-          </button>
-          <button class="more-item" role="menuitem"
-            class:active={router.route === "pinned"}
-            onclick={() => { router.navigate("pinned"); moreOpen = false; }}>
-            {m.nav_pinned()}
-          </button>
-          <button class="more-item" role="menuitem"
-            class:active={router.route === "insights"}
-            onclick={() => { router.navigate("insights"); moreOpen = false; }}>
-            {m.nav_insights()}
-          </button>
-          <button class="more-item" role="menuitem"
-            class:active={router.route === "trash"}
-            onclick={() => { router.navigate("trash"); moreOpen = false; }}>
-            {m.nav_trash()}
-          </button>
-          <button class="more-item" role="menuitem"
-            class:active={router.route === "recent-edits"}
-            onclick={() => { router.navigate("recent-edits"); moreOpen = false; }}>
-            {m.nav_recent_edits()}
-          </button>
-        </div>
-      {/if}
-    </div>
-  </div>
-
-  <button
-    class="search-hint"
-    onclick={() => (ui.activeModal = "commandPalette")}
-    title={m.nav_search_sessions_shortcut({ shortcut: `${modKey} K` })}
-  >
-    <SearchIcon size="12" strokeWidth="2" aria-hidden="true" />
-    <span class="search-hint-text">{m.nav_search_sessions()}</span>
-    <kbd class="search-hint-kbd">{modKey} K</kbd>
-  </button>
-
-  <div class="header-right">
+  {#snippet right()}
     {#if hasActiveSession}
       <!-- Transcript controls: mode pills + filter, grouped visually -->
       <div class="transcript-strip">
@@ -684,8 +639,12 @@
       title={sync.readOnly ? m.header_actions_refresh_data_shortcut() : m.header_actions_sync_sessions_shortcut()}
       aria-label={sync.readOnly ? m.header_actions_refresh_data() : m.header_actions_sync_sessions()}
     >
-      <DatabaseBackupIcon size="14" strokeWidth="2" aria-hidden="true" />
-      <span class="sync-label">{sync.readOnly ? m.header_actions_refresh() : m.header_actions_sync()}</span>
+      {#if sync.syncing}
+        <span class="sync-spinner" aria-hidden="true"><Spinner size={13} /></span>
+      {:else}
+        <DatabaseBackupIcon size="14" strokeWidth="2" aria-hidden="true" />
+      {/if}
+      <span class="sync-label" class:collapsed={navCollapsed}>{sync.readOnly ? m.header_actions_refresh() : m.header_actions_sync()}</span>
     </button>
 
     <button
@@ -700,7 +659,7 @@
       aria-label={m.header_actions_import_conversations()}
     >
       <DownloadIcon size="12" strokeWidth="2" aria-hidden="true" />
-      <span class="import-label">{m.header_actions_import()}</span>
+      <span class="import-label" class:collapsed={navCollapsed}>{m.header_actions_import()}</span>
     </button>
 
     <span class="header-divider"></span>
@@ -736,8 +695,8 @@
     >
       ?
     </button>
-  </div>
-</header>
+  {/snippet}
+</TopBar>
 
 <ImportModal
   bind:open={showImportModal}
@@ -749,25 +708,6 @@
 />
 
 <style>
-  .header {
-    height: var(--header-height, 40px);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 10px;
-    background: var(--bg-surface);
-    border-bottom: 1px solid var(--border-default);
-    flex-shrink: 0;
-    gap: 8px;
-  }
-
-  .header-left {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-  }
-
   .header-home {
     display: flex;
     align-items: center;
@@ -794,84 +734,29 @@
     letter-spacing: -0.01em;
   }
 
-  .nav-btn {
-    height: 26px;
+  .project-picker {
     display: flex;
-    align-items: center;
-    gap: 5px;
-    padding: 0 10px;
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--text-muted);
-    cursor: pointer;
-    white-space: nowrap;
-    transition: background 0.12s, color 0.12s;
+    min-width: 0;
   }
 
-  .nav-btn:hover {
-    background: var(--bg-surface-hover);
-    color: var(--text-primary);
-  }
-
-  .nav-btn.active {
-    color: var(--accent-blue);
-    background: color-mix(
-      in srgb,
-      var(--accent-blue) 8%,
-      transparent
-    );
-  }
-
-  .more-wrap {
-    position: relative;
-  }
-
-  .more-dropdown {
-    position: absolute;
-    top: calc(100% + 4px);
-    left: 0;
-    min-width: 140px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-md);
+  /* FitStages' sizing contract: the host is sized by the flexible search
+   * region, never by its own content. */
+  :global(.search-fit) {
+    width: 100%;
     display: flex;
-    flex-direction: column;
-    padding: 4px;
-    z-index: 20;
-    animation: dropdown-in 0.12s ease-out;
-  }
-
-  .more-item {
-    padding: 6px 10px;
-    font-size: 12px;
-    color: var(--text-secondary);
-    border-radius: var(--radius-sm);
-    text-align: left;
-    background: transparent;
-    border: none;
-    cursor: pointer;
-    transition: background 0.08s, color 0.08s;
-  }
-
-  .more-item:hover {
-    background: var(--bg-surface-hover);
-    color: var(--text-primary);
-  }
-
-  .more-item.active {
-    color: var(--text-primary);
-    font-weight: 500;
-    background: var(--bg-inset);
+    justify-content: center;
   }
 
   .search-hint {
     height: 26px;
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 6px;
     padding: 0 10px;
+    min-width: 220px;
+    width: 100%;
+    max-width: 340px;
     background: var(--bg-inset);
     border: 1px solid var(--border-muted);
     border-radius: var(--radius-md);
@@ -882,6 +767,12 @@
     transition: border-color 0.15s, box-shadow 0.15s;
   }
 
+  .search-hint--icon {
+    min-width: 0;
+    width: auto;
+    padding: 0 8px;
+  }
+
   .search-hint:hover {
     border-color: var(--border-default);
     box-shadow: var(--shadow-sm);
@@ -889,24 +780,6 @@
 
   .search-hint-text {
     color: var(--text-muted);
-  }
-
-  .search-hint-kbd {
-    font-size: 10px;
-    padding: 0 4px;
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-sm);
-    color: var(--text-muted);
-    background: var(--bg-surface);
-    font-family: var(--font-sans);
-    line-height: 16px;
-  }
-
-  .header-right {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    flex-shrink: 0;
   }
 
   /* ── Transcript strip: mode pills + filter ── */
@@ -1130,8 +1003,9 @@
     color: var(--text-secondary);
   }
 
-  .header-btn.syncing :global(svg) {
-    animation: spin 1s linear infinite;
+  .sync-spinner {
+    display: flex;
+    align-items: center;
   }
 
   .sync-btn {
@@ -1141,6 +1015,13 @@
     padding: 0 9px;
     font-size: 11px;
     font-weight: 500;
+  }
+
+  /* Labels drop while the nav tabs are collapsed, keeping the side
+     regions lean at tight widths (TopBar's side regions never shrink). */
+  .sync-label.collapsed,
+  .import-label.collapsed {
+    display: none;
   }
 
   /* ── Import button (icon + label) ── */
@@ -1195,11 +1076,6 @@
     z-index: 100;
     animation: dropdown-in 0.12s ease-out;
     transform-origin: top right;
-  }
-
-  @keyframes spin {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
   }
 
   .hamburger {
@@ -1263,42 +1139,18 @@
     color: var(--text-muted);
   }
 
-  /* ── Responsive ── */
+  /* ── Responsive ──
+   * Nav tabs and the search field degrade by measurement (TopBar +
+   * FitStages); only the app-owned side-region content still uses the
+   * shared layout breakpoints. */
 
-  /* 1024px: Hide nav button labels + search text/kbd */
-  @media (max-width: 1023px) {
-    .nav-label,
-    .import-label {
+  /* 760px: hide the project picker; collapse layout/export/publish into
+   * the overflow menu; shrink mode pills to single letters */
+  @media (max-width: 760px) {
+    .project-picker {
       display: none;
     }
 
-    .search-hint-text {
-      display: none;
-    }
-
-    .search-hint-kbd {
-      display: none;
-    }
-
-    .hamburger {
-      display: flex;
-    }
-  }
-
-  /* 767px: Hide nav buttons and typeahead */
-  @media (max-width: 767px) {
-    .header-left .nav-btn,
-    .header-left .more-wrap {
-      display: none;
-    }
-
-    .header-left :global(.typeahead) {
-      display: none;
-    }
-  }
-
-  /* 699px: Collapse layout/export/publish into overflow menu */
-  @media (max-width: 699px) {
     .collapsible {
       display: none;
     }
@@ -1327,8 +1179,8 @@
     }
   }
 
-  /* 549px: Minimal mode — collapse further */
-  @media (max-width: 549px) {
+  /* 640px: minimal mode — collapse further */
+  @media (max-width: 640px) {
     .header-title {
       display: none;
     }
@@ -1336,21 +1188,11 @@
     .search-hint {
       padding: 0 8px;
     }
-
-    .header {
-      padding: 0 6px;
-      gap: 4px;
-    }
-
-    .header-left {
-      gap: 6px;
-    }
   }
 
   /* Touch targets for coarse pointers */
   @media (pointer: coarse) {
     .header-btn,
-    .nav-btn,
     .hamburger,
     .import-btn {
       min-width: 44px;

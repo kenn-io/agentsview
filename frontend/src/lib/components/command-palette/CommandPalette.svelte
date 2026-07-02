@@ -259,6 +259,7 @@
 <style>
   .palette-overlay {
     position: fixed;
+    /* kit-ui-check-ignore: top-aligned command-palette overlay with palette-owned focus handling; kit-ui Modal's centered dialog chrome does not apply — adopting kit-ui CommandPalette wholesale is tracked as a follow-up */
     inset: 0;
     background: var(--overlay-bg);
     display: flex;

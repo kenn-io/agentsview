@@ -2,9 +2,7 @@
   import { formatDateTime, m } from "../../i18n/index.js";
   import type { Report } from "../../api/types.js";
   import { activeSessionsInSlot } from "./activeSessions.js";
-  import OptionTypeahead, {
-    type TypeaheadOption,
-  } from "../layout/OptionTypeahead.svelte";
+  import { Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
   import type {
     ActivityBucket,
     ActivityReportInterval,
@@ -453,7 +451,7 @@
 <div class="timeline">
   <div class="timeline-header">
     <h3 class="timeline-title">{m.activity_concurrency()}</h3>
-    <div class="header-right">
+    <div class="panel-actions">
       <div class="legend" aria-hidden="true">
         <span class="legend-item">
           <span class="swatch interactive"></span>{m.activity_interactive()}
@@ -464,7 +462,7 @@
       </div>
       <div class="overlay-toggle">
         <span>{m.activity_overlay()}</span>
-        <OptionTypeahead
+        <Typeahead
           options={overlayOptions}
           value={overlayMetric}
           fallbackLabel={m.activity_overlay_none()}
@@ -654,7 +652,7 @@
     color: var(--text-primary);
   }
 
-  .header-right {
+  .panel-actions {
     display: flex;
     align-items: center;
     gap: 12px;
@@ -694,9 +692,8 @@
     gap: 4px;
     font-size: 10px;
     color: var(--text-muted);
-  }
-
-  .overlay-toggle :global(.typeahead) {
+    /* kit-ui Typeahead sizing knobs; custom properties inherit into the
+       child .kit-typeahead. */
     --typeahead-min-width: 86px;
     --typeahead-max-width: 96px;
     --typeahead-control-height: 22px;

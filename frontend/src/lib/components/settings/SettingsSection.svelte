@@ -4,20 +4,15 @@
   let {
     title,
     description = "",
-    allowOverflow = false,
     children,
   }: {
     title: string;
     description?: string;
-    /** Let absolutely-positioned children (e.g. a typeahead dropdown)
-     * escape the section box instead of being clipped by its rounded
-     * overflow. */
-    allowOverflow?: boolean;
     children: Snippet;
   } = $props();
 </script>
 
-<section class="settings-section" class:allow-overflow={allowOverflow}>
+<section class="settings-section">
   <div class="section-header">
     <h3 class="section-title">{title}</h3>
     {#if description}
@@ -35,12 +30,6 @@
     border-radius: var(--radius-lg);
     background: var(--bg-surface);
     overflow: hidden;
-  }
-
-  /* Allow a child dropdown/typeahead popover to overflow the section
-     box. The header keeps its own rounded clipping via border-radius. */
-  .settings-section.allow-overflow {
-    overflow: visible;
   }
 
   .section-header {
