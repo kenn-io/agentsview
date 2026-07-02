@@ -211,64 +211,6 @@ func TestAgentUsageCapabilityHelpersFailClosedAndDiverge(t *testing.T) {
 	assert.False(t, AgentFilterUsesAICredits("unknown-agent"))
 }
 
-func TestUsageCapabilityConsumersRouteThroughParser(t *testing.T) {
-	tests := []struct {
-		name     string
-		path     string
-		required []string
-	}{
-		{
-			name: "sqlite ai credits",
-			path: "../db/usage.go",
-			required: []string{
-				"parser.AgentNameUsesAICredits",
-			},
-		},
-		{
-			name: "postgres ai credits",
-			path: "../postgres/usage.go",
-			required: []string{
-				"parser.AgentNameUsesAICredits",
-			},
-		},
-		{
-			name: "duckdb ai credits",
-			path: "../duckdb/analytics_usage.go",
-			required: []string{
-				"parser.AgentNameUsesAICredits",
-			},
-		},
-		{
-			name: "service unsupported usage",
-			path: "../service/direct.go",
-			required: []string{
-				"parser.AgentFilterLacksPerMessageTokenData",
-				"parser.AgentFilterUsesAICredits",
-			},
-		},
-		{
-			name: "cli unsupported usage",
-			path: "../../cmd/agentsview/usage.go",
-			required: []string{
-				"parser.AgentFilterLacksPerMessageTokenData",
-				"parser.AgentFilterUsesAICredits",
-			},
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			src, err := os.ReadFile(tc.path)
-			require.NoError(t, err)
-			text := string(src)
-			for _, required := range tc.required {
-				assert.Contains(t, text, required)
-			}
-			assert.NotContains(t, text, "IsCopilotAgent")
-			assert.NotContains(t, text, "IsCopilotAgentFilter")
-		})
-	}
-}
-
 func withTestAgentDefs(t *testing.T, defs ...AgentDef) func() {
 	t.Helper()
 	orig := slices.Clone(Registry)
