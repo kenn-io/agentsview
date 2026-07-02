@@ -1,0 +1,55 @@
+name: Checkout kit-ui
+description: >-
+  Makes the frontend's "@kenn-io/kit-ui" source dependency
+  (file:../../kit-ui in frontend/package.json) resolvable from a clean CI
+  checkout. Clones kenn-io/kit-ui as a sibling of the repository checkout,
+  pins it to the commit recorded in .github/kit-ui-ref, and (unless
+  disabled) installs its dev dependencies — the app build loads kit-ui's
+  svelte.config.js, which imports them. kit-ui is a private repository, so
+  pass a token with contents:read on kenn-io/kit-ui; an unauthenticated
+  clone is attempted as a fallback so this keeps working if the repository
+  ever becomes public.
+
+inputs:
+  token:
+    description: >-
+      Token with contents:read on kenn-io/kit-ui (fine-grained PAT or
+      GitHub App installation token), normally secrets.KIT_UI_TOKEN.
+    required: false
+    default: ""
+  install-dependencies:
+    description: >-
+      Run npm install inside the kit-ui checkout. Disable when the
+      checkout is only used as a docker build context, where the
+      Dockerfile installs dependencies itself and a host node_modules
+      would bloat the context.
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Clone kenn-io/kit-ui at the pinned commit
+      shell: bash
+      env:
+        KIT_UI_TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+        dest="$GITHUB_WORKSPACE/../kit-ui"
+        ref="$(tr -d '[:space:]' < "$GITHUB_WORKSPACE/.github/kit-ui-ref")"
+        rm -rf "$dest"
+        if [ -n "$KIT_UI_TOKEN" ]; then
+          git clone --quiet "https://x-access-token:${KIT_UI_TOKEN}@github.com/kenn-io/kit-ui.git" "$dest"
+          # Keep the token out of the on-disk git config.
+          git -C "$dest" remote set-url origin "https://github.com/kenn-io/kit-ui.git"
+        elif ! git clone --quiet "https://github.com/kenn-io/kit-ui.git" "$dest"; then
+          echo "::error::Cannot clone kenn-io/kit-ui. The repository is private: provision a token with contents:read on kenn-io/kit-ui as the KIT_UI_TOKEN repository secret and pass it to this action." >&2
+          exit 1
+        fi
+        git -C "$dest" checkout --quiet --detach "$ref"
+        echo "kit-ui pinned at $(git -C "$dest" log -1 --oneline)"
+
+    - name: Install kit-ui dependencies
+      if: inputs.install-dependencies == 'true'
+      shell: bash
+      run: cd "$GITHUB_WORKSPACE/../kit-ui" && npm install --no-audit --no-fund
