@@ -114,6 +114,31 @@ describe("UsagePage refresh behavior", () => {
     );
   });
 
+  it("renders a generic unsupported usage note for unknown kinds", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+
+    router.route = "usage";
+    router.params = {};
+    usage.summary = usageSummaryWithUnsupported("future-no-token-data");
+
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+
+    expect(document.body.textContent).toContain(
+      "Some matching sessions do not expose token usage data",
+    );
+    expect(document.body.textContent).not.toContain(
+      "Copilot sessions matched this range",
+    );
+  });
+
   it("does not auto-refresh usage scans from SSE updates", () => {
     expect(source).not.toContain("subscribeDebounced");
     expect(source).not.toContain("REFRESH_MS");

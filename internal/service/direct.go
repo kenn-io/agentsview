@@ -586,7 +586,8 @@ func (b *directBackend) UsageSummary(
 		return nil, err
 	}
 	summary := buildUsageSummary(f, result)
-	if db.IsCopilotAgentFilter(f.Agent) && db.NoTokenData(result.Totals) {
+	if parser.AgentFilterLacksPerMessageTokenData(f.Agent) &&
+		db.NoTokenData(result.Totals) {
 		matchingSessions, err := b.db.GetUsageMatchingSessionCount(ctx, f)
 		if err != nil {
 			return nil, err

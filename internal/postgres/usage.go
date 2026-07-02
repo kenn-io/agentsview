@@ -11,6 +11,7 @@ import (
 
 	"github.com/tidwall/gjson"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 const pgUsageMessageEligibility = `
@@ -1129,7 +1130,7 @@ func (s *Store) GetSessionUsage(
 	if out.HasCost {
 		out.CostUSD = cost
 	}
-	if db.IsCopilotAgent(sess.Agent) && out.HasCost {
+	if parser.AgentNameUsesAICredits(sess.Agent) && out.HasCost {
 		out.AICredits = cost / 0.01
 	}
 	if len(unpricedSet) > 0 {
@@ -1357,7 +1358,7 @@ func (s *Store) GetDailyUsage(
 
 		var copilotCost float64
 		for key, b := range accum {
-			if db.IsCopilotAgent(key.agent) {
+			if parser.AgentNameUsesAICredits(key.agent) {
 				copilotCost += b.cost
 			}
 		}
@@ -1519,7 +1520,7 @@ func (s *Store) GetDailyUsage(
 	var copilotCost float64
 	for _, d := range daily {
 		for _, ab := range d.AgentBreakdowns {
-			if db.IsCopilotAgent(ab.Agent) {
+			if parser.AgentNameUsesAICredits(ab.Agent) {
 				copilotCost += ab.Cost
 			}
 		}

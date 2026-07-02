@@ -129,6 +129,131 @@ func TestInferTokenPresence(t *testing.T) {
 	}
 }
 
+func TestAgentUsageCapabilities(t *testing.T) {
+	tests := []struct {
+		name        string
+		agent       AgentType
+		wantNoToken bool
+		wantCredits bool
+	}{
+		{
+			name:        "copilot",
+			agent:       AgentCopilot,
+			wantNoToken: true,
+			wantCredits: true,
+		},
+		{
+			name:        "vscode copilot",
+			agent:       AgentVSCodeCopilot,
+			wantNoToken: true,
+			wantCredits: true,
+		},
+		{
+			name:        "visual studio copilot",
+			agent:       AgentVSCopilot,
+			wantNoToken: true,
+			wantCredits: true,
+		},
+		{
+			name:  "claude",
+			agent: AgentClaude,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.wantNoToken,
+				AgentLacksPerMessageTokenData(tc.agent))
+			assert.Equal(t, tc.wantCredits,
+				AgentUsesAICredits(tc.agent))
+		})
+	}
+}
+
+func TestAgentUsageCapabilityHelpersFailClosedAndDiverge(t *testing.T) {
+	restore := withTestAgentDefs(t,
+		AgentDef{
+			Type:        AgentType("no-token-only"),
+			DisplayName: "No Token Only",
+			Usage: UsageCapabilities{
+				NoPerMessageTokenData: true,
+			},
+		},
+		AgentDef{
+			Type:        AgentType("ai-credit-only"),
+			DisplayName: "AI Credit Only",
+			Usage: UsageCapabilities{
+				AICreditsDenominated: true,
+			},
+		},
+	)
+	defer restore()
+
+	assert.True(t, AgentNameLacksPerMessageTokenData(" no-token-only "))
+	assert.False(t, AgentNameUsesAICredits("no-token-only"))
+	assert.False(t, AgentNameLacksPerMessageTokenData("ai-credit-only"))
+	assert.True(t, AgentNameUsesAICredits("ai-credit-only"))
+	assert.False(t, AgentNameLacksPerMessageTokenData(""))
+	assert.False(t, AgentNameUsesAICredits(""))
+	assert.False(t, AgentNameLacksPerMessageTokenData("unknown-agent"))
+	assert.False(t, AgentNameUsesAICredits("unknown-agent"))
+
+	assert.True(t, AgentFilterLacksPerMessageTokenData(
+		"copilot, vscode-copilot,no-token-only,",
+	))
+	assert.False(t, AgentFilterLacksPerMessageTokenData(""))
+	assert.False(t, AgentFilterLacksPerMessageTokenData(","))
+	assert.False(t, AgentFilterLacksPerMessageTokenData("copilot,claude"))
+	assert.False(t, AgentFilterLacksPerMessageTokenData("unknown-agent"))
+}
+
+func TestUsageCapabilityConsumersRouteThroughParser(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		required string
+	}{
+		{
+			name:     "sqlite ai credits",
+			path:     "../db/usage.go",
+			required: "parser.AgentNameUsesAICredits",
+		},
+		{
+			name:     "postgres ai credits",
+			path:     "../postgres/usage.go",
+			required: "parser.AgentNameUsesAICredits",
+		},
+		{
+			name:     "duckdb ai credits",
+			path:     "../duckdb/analytics_usage.go",
+			required: "parser.AgentNameUsesAICredits",
+		},
+		{
+			name:     "service unsupported usage",
+			path:     "../service/direct.go",
+			required: "parser.AgentFilterLacksPerMessageTokenData",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			src, err := os.ReadFile(tc.path)
+			require.NoError(t, err)
+			text := string(src)
+			assert.Contains(t, text, tc.required)
+			assert.NotContains(t, text, "IsCopilotAgent")
+			assert.NotContains(t, text, "IsCopilotAgentFilter")
+		})
+	}
+}
+
+func withTestAgentDefs(t *testing.T, defs ...AgentDef) func() {
+	t.Helper()
+	orig := slices.Clone(Registry)
+	Registry = append(Registry, defs...)
+	return func() {
+		Registry = orig
+	}
+}
+
 func TestAgentByType(t *testing.T) {
 	tests := []struct {
 		input AgentType

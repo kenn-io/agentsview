@@ -26,26 +26,3 @@ func TestNoTokenData(t *testing.T) {
 		})
 	}
 }
-
-func TestIsCopilotAgentFilter(t *testing.T) {
-	cases := []struct {
-		name   string
-		filter string
-		want   bool
-	}{
-		{"empty", "", false},
-		{"single copilot", "copilot", true},
-		{"vscode copilot", "vscode-copilot", true},
-		{"all-copilot CSV", "copilot,vscode-copilot,visualstudio-copilot", true},
-		{"CSV with spaces", " copilot , vscode-copilot ", true},
-		{"mixed CSV", "copilot,claude", false},
-		{"single non-copilot", "claude", false},
-		{"trailing comma", "copilot,", true},
-		{"only commas", ",", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, IsCopilotAgentFilter(tc.filter))
-		})
-	}
-}

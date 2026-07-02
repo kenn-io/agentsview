@@ -1603,6 +1603,7 @@
   "usage_pairwise_cost_per_session": "每會話成本",
   "usage_pairwise_total_tokens": "總 Token",
   "usage_pairwise_tokens_per_session": "每會話 Token",
+  "usage_summary_unsupported_generic": "部分匹配工作階段未提供 token 用量資料。",
   "usage_copilot_credits": "Copilot AI 積分",
   "usage_input_tokens": "輸入 Token",
   "usage_cached_suffix": "+{tokens} 已緩存",

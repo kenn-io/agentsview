@@ -11,33 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/parser"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
-
-func IsCopilotAgent(agent string) bool {
-	return agent == "copilot" || agent == "vscode-copilot" || agent == "visualstudio-copilot"
-}
-
-// IsCopilotAgentFilter reports whether a (possibly comma-separated) agent
-// filter selects only Copilot agents — every non-empty entry is a Copilot
-// agent and there is at least one. The Usage agent filter supports
-// comma-separated lists (e.g. "copilot,vscode-copilot"), so the no-token-data
-// hint must treat such a list as Copilot rather than exact-matching the raw
-// string.
-func IsCopilotAgentFilter(agentFilter string) bool {
-	matched := false
-	for part := range strings.SplitSeq(agentFilter, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		if !IsCopilotAgent(part) {
-			return false
-		}
-		matched = true
-	}
-	return matched
-}
 
 // NoTokenData reports whether a daily-usage total carries neither token
 // data nor cost: every token counter, the cost total, and any Copilot AI
@@ -1855,7 +1831,7 @@ func (db *DB) GetDailyUsage(
 
 		var copilotCost float64
 		for key, b := range accum {
-			if IsCopilotAgent(key.agent) {
+			if parser.AgentNameUsesAICredits(key.agent) {
 				copilotCost += b.cost
 			}
 		}
@@ -2031,7 +2007,7 @@ func (db *DB) GetDailyUsage(
 	var copilotCost float64
 	for _, d := range daily {
 		for _, ab := range d.AgentBreakdowns {
-			if IsCopilotAgent(ab.Agent) {
+			if parser.AgentNameUsesAICredits(ab.Agent) {
 				copilotCost += ab.Cost
 			}
 		}
@@ -2345,7 +2321,7 @@ func (db *DB) GetSessionUsage(
 	if out.HasCost {
 		out.CostUSD = cost
 	}
-	if IsCopilotAgent(sess.Agent) && out.HasCost {
+	if parser.AgentNameUsesAICredits(sess.Agent) && out.HasCost {
 		out.AICredits = cost / 0.01
 	}
 	if len(unpricedSet) > 0 {

@@ -127,6 +127,9 @@
     if (kind === "copilot-no-token-data") {
       return m.usage_summary_unsupported_copilot_no_token_data();
     }
+    if (kind) {
+      return m.usage_summary_unsupported_generic();
+    }
     return "";
   });
   const sessionUrlParams = $derived(

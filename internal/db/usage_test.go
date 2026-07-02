@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 var (
@@ -3315,9 +3316,52 @@ func TestGetSessionUsage_NotFound(t *testing.T) {
 	assert.Nil(t, u, "usage")
 }
 
-// TestGetDailyUsage_CopilotAICredits verifies AI credits are computed only
-// from priced Copilot usage: costUSD / 0.01.
+func TestGetSessionUsage_AICreditsCapability(t *testing.T) {
+	defer withParserAgentDefs(t, parser.AgentDef{
+		Type:        parser.AgentType("ai-credit-agent"),
+		DisplayName: "AI Credit Agent",
+		Usage: parser.UsageCapabilities{
+			AICreditsDenominated: true,
+		},
+	})()
+
+	d := testDB(t)
+	ctx := context.Background()
+	seedOpusPricing(t, d)
+
+	insertSession(t, d, "ai-credit-agent:s1", "proj", func(s *Session) {
+		s.Agent = "ai-credit-agent"
+		s.StartedAt = new("2026-05-20T10:00:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "ai-credit-agent:s1",
+		Ordinal:   0,
+		Role:      "assistant",
+		Timestamp: "2026-05-20T10:30:00Z",
+		Model:     "claude-opus-4-6",
+		TokenUsage: json.RawMessage(
+			`{"input_tokens":1000,"output_tokens":500}`),
+	})
+
+	u, err := d.GetSessionUsage(ctx, "ai-credit-agent:s1")
+	requireNoError(t, err, "GetSessionUsage")
+	require.NotNil(t, u, "usage is nil")
+	assert.True(t, u.HasCost, "HasCost = false, want true")
+	assert.InDelta(t, 0.0175, u.CostUSD, 1e-9, "CostUSD")
+	assert.InDelta(t, 1.75, u.AICredits, 1e-9, "AICredits")
+}
+
+// TestGetDailyUsage_CopilotAICredits verifies AI credits are computed from
+// agents with the parser AI-credit capability: costUSD / 0.01.
 func TestGetDailyUsage_CopilotAICredits(t *testing.T) {
+	defer withParserAgentDefs(t, parser.AgentDef{
+		Type:        parser.AgentType("ai-credit-agent"),
+		DisplayName: "AI Credit Agent",
+		Usage: parser.UsageCapabilities{
+			AICreditsDenominated: true,
+		},
+	})()
+
 	d := testDB(t)
 	ctx := context.Background()
 
@@ -3351,6 +3395,15 @@ func TestGetDailyUsage_CopilotAICredits(t *testing.T) {
 			name:        "copilot credits computed",
 			sessionID:   "copilot:aicredits",
 			agent:       "copilot",
+			model:       "gpt-4",
+			inputRate:   15.0,
+			outputRate:  60.0,
+			wantCredits: true,
+		},
+		{
+			name:        "non copilot capability credits computed",
+			sessionID:   "ai-credit-agent:aicredits",
+			agent:       "ai-credit-agent",
 			model:       "gpt-4",
 			inputRate:   15.0,
 			outputRate:  60.0,
@@ -3404,5 +3457,14 @@ func TestGetDailyUsage_CopilotAICredits(t *testing.T) {
 			assert.InDelta(t, wantCredits, result.Totals.CopilotAICredits,
 				1e-6, "CopilotAICredits")
 		})
+	}
+}
+
+func withParserAgentDefs(t *testing.T, defs ...parser.AgentDef) func() {
+	t.Helper()
+	orig := append([]parser.AgentDef(nil), parser.Registry...)
+	parser.Registry = append(parser.Registry, defs...)
+	return func() {
+		parser.Registry = orig
 	}
 }
