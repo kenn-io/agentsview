@@ -915,7 +915,7 @@ func TestAppendDuckRemoteMutationBatchFlushesBeforeByteBudget(t *testing.T) {
 	assert.Contains(t, calls[1], "second")
 }
 
-func TestAppendDuckRemoteMutationBatchSplitsOversizeSessionCoalesced(
+func TestExecDuckRemoteMutationBatchOversizeUsesStatementModeTransaction(
 	t *testing.T,
 ) {
 	ctx := context.Background()
@@ -934,34 +934,35 @@ func TestAppendDuckRemoteMutationBatchSplitsOversizeSessionCoalesced(
 	require.NoError(t, err)
 	oneStatement := &duckRemoteMutationBatch{statements: oversize.statements[:1]}
 	maxBytes := oneStatement.transactionBytes()
-	var calls []string
+	var coalescedCalls []string
+	var statementCalls []string
 
-	current, err := appendDuckRemoteMutationBatch(
+	err = execDuckRemoteMutationBatchOversizeWithStatementFallback(
 		ctx,
 		func(_ context.Context, sqlText string) error {
-			calls = append(calls, sqlText)
+			coalescedCalls = append(coalescedCalls, sqlText)
+			return nil
+		},
+		func(_ context.Context, sqlText string) error {
+			statementCalls = append(statementCalls, sqlText)
 			return nil
 		},
 		"oversize session",
-		&duckRemoteMutationBatch{},
 		oversize,
 		maxBytes,
 	)
 	require.NoError(t, err)
 
-	assert.Equal(t, 0, current.Len())
-	require.Len(t, calls, 3)
-	assert.Contains(t, calls[0], "VALUES (1, ")
-	assert.Contains(t, calls[1], "VALUES (2, ")
-	assert.Contains(t, calls[2], "VALUES (3, ")
-	for _, call := range calls {
-		assert.Contains(t, call, "BEGIN TRANSACTION")
-		assert.Contains(t, call, "COMMIT")
-		assert.LessOrEqual(t, len(call), maxBytes)
-	}
+	assert.Empty(t, coalescedCalls)
+	require.Len(t, statementCalls, 5)
+	assert.Equal(t, "BEGIN TRANSACTION", statementCalls[0])
+	assert.Contains(t, statementCalls[1], "INSERT INTO remote_test VALUES (1, $")
+	assert.Contains(t, statementCalls[2], "INSERT INTO remote_test VALUES (2, $")
+	assert.Contains(t, statementCalls[3], "INSERT INTO remote_test VALUES (3, $")
+	assert.Equal(t, "COMMIT", statementCalls[4])
 }
 
-func TestAppendDuckRemoteMutationBatchFlushesCurrentBeforeOversizeSession(
+func TestAppendDuckRemoteMutationBatchRejectsOversizeSessionAfterFlush(
 	t *testing.T,
 ) {
 	ctx := context.Background()
@@ -994,18 +995,11 @@ func TestAppendDuckRemoteMutationBatchFlushesCurrentBeforeOversizeSession(
 		oversize,
 		maxBytes,
 	)
-	require.NoError(t, err)
+	require.ErrorContains(t, err, "exceeds remote mutation coalesce budget")
 
 	assert.Equal(t, 0, next.Len())
-	require.Len(t, calls, 3)
+	require.Len(t, calls, 1)
 	assert.Equal(t, current.transactionSQL(), calls[0])
-	assert.Contains(t, calls[1], "VALUES (2, ")
-	assert.Contains(t, calls[2], "VALUES (3, ")
-	for _, call := range calls[1:] {
-		assert.Contains(t, call, "BEGIN TRANSACTION")
-		assert.Contains(t, call, "COMMIT")
-		assert.LessOrEqual(t, len(call), maxBytes)
-	}
 }
 
 func TestExecDuckRemoteMutationBatchStatementModePinpointsFailure(t *testing.T) {

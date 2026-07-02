@@ -458,18 +458,17 @@ func appendDuckRemoteMutationBatch(
 	if maxBytes <= 0 {
 		maxBytes = duckRemoteMutationCoalesceMaxBytes
 	}
-	if next.transactionBytes() > maxBytes {
+	nextBytes := next.transactionBytes()
+	if nextBytes > maxBytes {
 		if err := execDuckRemoteMutationBatch(
 			ctx, execCoalesced, label, current, true,
 		); err != nil {
 			return current, err
 		}
-		if err := execDuckRemoteMutationBatchChunks(
-			ctx, execCoalesced, label, next, maxBytes,
-		); err != nil {
-			return &duckRemoteMutationBatch{}, err
-		}
-		return &duckRemoteMutationBatch{}, nil
+		return &duckRemoteMutationBatch{}, fmt.Errorf(
+			"duckdb remote mutation batch exceeds remote mutation coalesce budget: %d > %d",
+			nextBytes, maxBytes,
+		)
 	}
 	if current.Len() > 0 && current.combinedTransactionBytes(next) > maxBytes {
 		if err := execDuckRemoteMutationBatch(ctx, execCoalesced, label, current, true); err != nil {
@@ -549,22 +548,7 @@ func execDuckRemoteMutationBatchWithStatementFallback(
 	return nil
 }
 
-func execDuckRemoteMutationBatchChunks(
-	ctx context.Context,
-	exec func(context.Context, string) error,
-	label string,
-	batch *duckRemoteMutationBatch,
-	maxBytes int,
-) error {
-	for _, chunk := range batch.chunks(maxBytes) {
-		if err := execDuckRemoteMutationBatch(ctx, exec, label, chunk, true); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func execDuckRemoteMutationBatchChunksWithStatementFallback(
+func execDuckRemoteMutationBatchOversizeWithStatementFallback(
 	ctx context.Context,
 	execCoalesced func(context.Context, string) error,
 	execStatement func(context.Context, string) error,
@@ -572,14 +556,15 @@ func execDuckRemoteMutationBatchChunksWithStatementFallback(
 	batch *duckRemoteMutationBatch,
 	maxBytes int,
 ) error {
-	for _, chunk := range batch.chunks(maxBytes) {
-		if err := execDuckRemoteMutationBatchWithStatementFallback(
-			ctx, execCoalesced, execStatement, label, chunk,
-		); err != nil {
-			return err
-		}
+	if maxBytes <= 0 {
+		maxBytes = duckRemoteMutationCoalesceMaxBytes
 	}
-	return nil
+	if batch.transactionBytes() > maxBytes {
+		return execDuckRemoteMutationBatch(ctx, execStatement, label, batch, false)
+	}
+	return execDuckRemoteMutationBatchWithStatementFallback(
+		ctx, execCoalesced, execStatement, label, batch,
+	)
 }
 
 func (b *duckRemoteMutationBatch) transactionSQL() string {
@@ -629,72 +614,6 @@ func (b *duckRemoteMutationBatch) combinedTransactionBytes(
 		b.renderedStatementBytes+other.renderedStatementBytes,
 		len(left)+len(right),
 	)
-}
-
-func (b *duckRemoteMutationBatch) chunks(maxBytes int) []*duckRemoteMutationBatch {
-	if b == nil || b.Len() == 0 {
-		return nil
-	}
-	if maxBytes <= 0 {
-		maxBytes = duckRemoteMutationCoalesceMaxBytes
-	}
-	var chunks []*duckRemoteMutationBatch
-	currentStart := -1
-	currentEnd := 0
-	currentStatementBytes := 0
-	currentStatementCount := 0
-	rendered := b.renderedForMaxTransactionBytes(maxBytes)
-	flush := func() {
-		if currentStatementCount == 0 {
-			return
-		}
-		statements := append([]string(nil), b.statements[currentStart:currentEnd]...)
-		chunks = append(chunks, &duckRemoteMutationBatch{statements: statements})
-		currentStart = -1
-		currentEnd = 0
-		currentStatementBytes = 0
-		currentStatementCount = 0
-	}
-	for _, stmt := range rendered {
-		nextStatementBytes := currentStatementBytes + len(stmt.sql)
-		nextStatementCount := currentStatementCount + 1
-		if currentStatementCount > 0 &&
-			duckRemoteTransactionBytesFor(
-				nextStatementBytes, nextStatementCount,
-			) > maxBytes {
-			flush()
-		}
-		if currentStart < 0 {
-			currentStart = stmt.start
-		}
-		currentEnd = stmt.end
-		currentStatementBytes += len(stmt.sql)
-		currentStatementCount++
-	}
-	flush()
-	return chunks
-}
-
-func (b *duckRemoteMutationBatch) renderedForMaxTransactionBytes(
-	maxBytes int,
-) []duckRemoteRenderedStatement {
-	insertMaxBytes := duckRemoteInsertMaxBytesForTransaction(maxBytes)
-	if insertMaxBytes >= duckRemoteInsertCoalesceMaxBytes {
-		return b.rendered()
-	}
-	return renderDuckRemoteMutationStatements(
-		b.statements,
-		duckRemoteInsertCoalesceMaxRows,
-		insertMaxBytes,
-	)
-}
-
-func duckRemoteInsertMaxBytesForTransaction(maxBytes int) int {
-	statementOverhead := len("BEGIN TRANSACTION;\n") + len(";\n") + len("COMMIT")
-	if maxBytes <= statementOverhead {
-		return 1
-	}
-	return min(maxBytes-statementOverhead, duckRemoteInsertCoalesceMaxBytes)
 }
 
 func (b *duckRemoteMutationBatch) rendered() []duckRemoteRenderedStatement {

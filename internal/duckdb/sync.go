@@ -569,6 +569,8 @@ func (s *Sync) tryPushSessionBatch(
 func (s *Sync) tryPushRemoteSessionBatch(
 	ctx context.Context, sessions []db.Session,
 ) ([]int, error) {
+	const batchLabel = "duckdb remote session batch"
+
 	batch := &duckRemoteMutationBatch{}
 	messagesBySession := make([]int, len(sessions))
 
@@ -578,10 +580,23 @@ func (s *Sync) tryPushRemoteSessionBatch(
 		if err != nil {
 			return nil, fmt.Errorf("pushing duckdb remote session %s: %w", sess.ID, err)
 		}
+		if sessionBatch.transactionBytes() > duckRemoteMutationCoalesceMaxBytes {
+			if err := s.execRemoteMutationBatch(ctx, batchLabel, batch); err != nil {
+				return nil, err
+			}
+			batch = &duckRemoteMutationBatch{}
+			if err := s.execSingleRemoteMutationBatch(
+				ctx, "duckdb remote session "+sess.ID, sessionBatch,
+			); err != nil {
+				return nil, err
+			}
+			messagesBySession[i] = messages
+			continue
+		}
 		batch, err = appendDuckRemoteMutationBatch(
 			ctx,
 			s.execRemoteSQLRetry,
-			"duckdb remote session batch",
+			batchLabel,
 			batch,
 			sessionBatch,
 			duckRemoteMutationCoalesceMaxBytes,
@@ -591,7 +606,7 @@ func (s *Sync) tryPushRemoteSessionBatch(
 		}
 		messagesBySession[i] = messages
 	}
-	if err := s.execRemoteMutationBatch(ctx, "duckdb remote session batch", batch); err != nil {
+	if err := s.execRemoteMutationBatch(ctx, batchLabel, batch); err != nil {
 		return nil, err
 	}
 	return messagesBySession, nil
@@ -633,18 +648,13 @@ func (s *Sync) pushSingleRemoteSession(ctx context.Context, sess db.Session) (in
 func (s *Sync) execSingleRemoteMutationBatch(
 	ctx context.Context, label string, batch *duckRemoteMutationBatch,
 ) error {
-	if batch.transactionBytes() > duckRemoteMutationCoalesceMaxBytes {
-		return execDuckRemoteMutationBatchChunksWithStatementFallback(
-			ctx,
-			s.execRemoteSQLRetry,
-			s.execRemoteSQLNoRetry,
-			label,
-			batch,
-			duckRemoteMutationCoalesceMaxBytes,
-		)
-	}
-	return execDuckRemoteMutationBatchWithStatementFallback(
-		ctx, s.execRemoteSQLRetry, s.execRemoteSQLNoRetry, label, batch,
+	return execDuckRemoteMutationBatchOversizeWithStatementFallback(
+		ctx,
+		s.execRemoteSQLRetry,
+		s.execRemoteSQLNoRetry,
+		label,
+		batch,
+		duckRemoteMutationCoalesceMaxBytes,
 	)
 }
 
