@@ -44,8 +44,8 @@ jobs:
       - name: Install Rust target
         run: rustup target add "$AGENTSVIEW_TARGET_TRIPLE"
 
-      - name: Check out kit-ui (sibling source dependency)
-        uses: ./.github/actions/checkout-kit-ui
+      - name: Authorize kit-ui git dependency
+        uses: ./.github/actions/kit-ui-auth
         with:
           token: ${{ secrets.KIT_UI_TOKEN }}
 
@@ -184,8 +184,8 @@ jobs:
           install: mingw-w64-x86_64-gcc
           path-type: inherit
 
-      - name: Check out kit-ui (sibling source dependency)
-        uses: ./.github/actions/checkout-kit-ui
+      - name: Authorize kit-ui git dependency
+        uses: ./.github/actions/kit-ui-auth
         with:
           token: ${{ secrets.KIT_UI_TOKEN }}
 
@@ -282,8 +282,8 @@ jobs:
             libappindicator3-dev librsvg2-dev \
             patchelf squashfs-tools xdg-utils
 
-      - name: Check out kit-ui (sibling source dependency)
-        uses: ./.github/actions/checkout-kit-ui
+      - name: Authorize kit-ui git dependency
+        uses: ./.github/actions/kit-ui-auth
         with:
           token: ${{ secrets.KIT_UI_TOKEN }}
 

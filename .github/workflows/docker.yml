@@ -27,14 +27,6 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Check out kit-ui (sibling source dependency)
-        uses: ./.github/actions/checkout-kit-ui
-        with:
-          token: ${{ secrets.KIT_UI_TOKEN }}
-          # The Dockerfile installs kit-ui's dependencies inside the build;
-          # a host node_modules would only bloat the build context.
-          install-dependencies: "false"
-
       - name: Restore pricing snapshot
         run: go run ./internal/pricing/cmd/litellm-snapshot -restore
 
@@ -79,8 +71,11 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          build-contexts: |
-            kit-ui=${{ github.workspace }}/../kit-ui
+          # npm ci inside the frontend-build stage fetches the private
+          # @kenn-io/kit-ui git dependency; the token rides a BuildKit
+          # secret so it never lands in an image layer.
+          secrets: |
+            kit_ui_token=${{ secrets.KIT_UI_TOKEN }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}

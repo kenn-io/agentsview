@@ -229,12 +229,14 @@ GitHub Actions service container in `.github/workflows/ci.yml`.
   not apply.
 - Node.js and npm are required to build the Svelte frontend embedded under
   `internal/web/dist/`.
-- The frontend depends on `@kenn-io/kit-ui` as a sibling source checkout: clone
-  `github.com/kenn-io/kit-ui` next to this repository (so the
-  `file:../../kit-ui` path in `frontend/package.json` resolves) and run
-  `npm install` inside it once. CI pins the kit-ui commit in
-  `.github/kit-ui-ref` via the `checkout-kit-ui` composite action; Docker
-  builds take it as a named `kit-ui` build context.
+- The frontend depends on `@kenn-io/kit-ui` as a git dependency pinned to a
+  commit (`github:kenn-io/kit-ui#<commit>` in `frontend/package.json`). The
+  repository is private, so `npm ci`/`npm install` need git credentials for
+  `github.com/kenn-io/kit-ui`: locally an SSH key or credential helper that
+  can read the repo, in CI the `kit-ui-auth` composite action (backed by the
+  `KIT_UI_TOKEN` secret), and in Docker builds a `kit_ui_token` BuildKit
+  secret. Bump the dependency by changing the commit hash in
+  `frontend/package.json` and running `npm install`.
 
 ## Conventions
 

@@ -18,7 +18,7 @@
     "e2e": "playwright test"
   },
   "dependencies": {
-    "@kenn-io/kit-ui": "file:../../kit-ui",
+    "@kenn-io/kit-ui": "github:kenn-io/kit-ui#c76a816531fccbc7e39df3efc17ca45aca12e7fe",
     "@lucide/svelte": "1.21.0",
     "@tanstack/virtual-core": "3.17.1",
     "dompurify": "3.4.11",
