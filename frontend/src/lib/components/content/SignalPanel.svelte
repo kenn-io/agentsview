@@ -55,7 +55,7 @@
 
 <div class="signal-panel">
   {#if !hasUsefulData}
-    <div class="empty-state">
+    <div class="no-signal-note">
       {m.signal_panel_not_enough_activity()}
     </div>
   {:else}
@@ -158,7 +158,7 @@
     align-items: center;
     flex-wrap: wrap;
   }
-  .empty-state {
+  .no-signal-note {
     color: var(--text-muted);
     font-style: italic;
   }

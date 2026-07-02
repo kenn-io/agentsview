@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { EmptyState } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import {
     CheckIcon,
@@ -102,20 +103,16 @@
   {#if pins.loading}
     <div class="loading-state">{m.pinned_loading()}</div>
   {:else if pins.pins.length === 0 && sessions.filters.project}
-    <div class="empty-state">
-      <p class="empty-title">{m.pinned_none_for_project()}</p>
-      <p class="empty-desc">
-        {m.pinned_none_for_project_hint()}
-      </p>
-    </div>
+    <EmptyState
+      title={m.pinned_none_for_project()}
+      description={m.pinned_none_for_project_hint()}
+    />
   {:else if pins.pins.length === 0}
-    <div class="empty-state">
-      <PinIcon size="40" strokeWidth="1.6" class="empty-icon" aria-hidden="true" />
-      <p class="empty-title">{m.pinned_none()}</p>
-      <p class="empty-desc">
-        {m.pinned_none_hint()}
-      </p>
-    </div>
+    <EmptyState title={m.pinned_none()} description={m.pinned_none_hint()}>
+      {#snippet icon()}
+        <PinIcon size="40" strokeWidth="1.6" aria-hidden="true" />
+      {/snippet}
+    </EmptyState>
   {:else}
     <div class="pin-list">
       {#each pins.pins as pin (pin.id)}
@@ -236,29 +233,6 @@
     color: var(--text-muted);
     padding: 40px 0;
     font-size: 13px;
-  }
-
-  .empty-state {
-    text-align: center;
-    padding: 60px 20px;
-    color: var(--text-muted);
-  }
-
-  :global(.empty-icon) {
-    opacity: 0.15;
-    margin-bottom: 16px;
-  }
-
-  .empty-title {
-    font-size: 16px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    margin: 0 0 6px;
-  }
-
-  .empty-desc {
-    font-size: 13px;
-    margin: 0;
   }
 
   .pin-list {

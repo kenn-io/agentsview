@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { EmptyState, Spinner } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { InsightsService } from "../../api/generated/index";
   import { configureGeneratedClient } from "../../api/runtime.js";
@@ -207,7 +208,7 @@
     <div class="state muted">{m.activity_insight_loading()}</div>
   {:else if generating}
     <div class="state generating">
-      <span class="spinner"></span>
+      <span aria-hidden="true"><Spinner size={12} /></span>
       <span>{m.activity_insight_generating_phase({ phase })}</span>
     </div>
   {:else if error}
@@ -233,23 +234,18 @@
       {@html renderMarkdown(insight.content)}
     </article>
   {:else}
-    <div class="empty-state">
-      <span class="empty-text">
-        {m.activity_insight_empty_text()}
-      </span>
-      <div class="gen-row">
-        {@render agentPicker()}
-        <button
-          class="generate-btn"
-          onclick={handleGenerate}
-          disabled={generationUnavailable}
-          title={unavailableTitle}
-        >
-          <PlusIcon size="12" strokeWidth="2.2" aria-hidden="true" />
-          {m.activity_insight_generate()}
-        </button>
-      </div>
-    </div>
+    <EmptyState title={m.activity_insight_empty_text()}>
+      {@render agentPicker()}
+      <button
+        class="generate-btn"
+        onclick={handleGenerate}
+        disabled={generationUnavailable}
+        title={unavailableTitle}
+      >
+        <PlusIcon size="12" strokeWidth="2.2" aria-hidden="true" />
+        {m.activity_insight_generate()}
+      </button>
+    </EmptyState>
   {/if}
 </section>
 
@@ -311,31 +307,6 @@
     color: var(--accent-red);
   }
 
-  .spinner {
-    width: 12px;
-    height: 12px;
-    border: 1.5px solid var(--accent-blue);
-    border-top-color: transparent;
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-    flex-shrink: 0;
-  }
-
-  .empty-state {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 12px;
-    padding: 8px 0;
-  }
-
-  .empty-text {
-    font-size: 12px;
-    color: var(--text-muted);
-    line-height: 1.5;
-    max-width: 420px;
-  }
-
   .gen-row {
     display: flex;
     align-items: center;
@@ -379,15 +350,6 @@
     opacity: 0.45;
     box-shadow: none;
     cursor: default;
-  }
-
-  @keyframes spin {
-    from {
-      transform: rotate(0deg);
-    }
-    to {
-      transform: rotate(360deg);
-    }
   }
 
   /* ── Markdown Content ── */

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { m } from "../../i18n/index.js";
   import {
+    getSessionStatus,
     sessions,
     type SessionGroupInput,
   } from "../../stores/sessions.svelte.js";
@@ -18,7 +19,8 @@
     UserRoundIcon,
     UsersRoundIcon,
   } from "../../icons.js";
-  import StatusDot from "../common/StatusDot.svelte";
+  import { StatusDot } from "@kenn-io/kit-ui";
+  import { sessionStatusLabel } from "../../utils/sessionStatus.js";
   import { router } from "../../stores/router.svelte.js";
 
   interface Props {
@@ -72,6 +74,8 @@
     selectMode = false,
     selected = false,
   }: Props = $props();
+
+  let sessionStatus = $derived(getSessionStatus(session, groupSessions));
 
   let isActive = $derived.by(() => {
     const aid = sessions.activeSessionId;
@@ -375,7 +379,7 @@
     </button>
   {/if}
 
-  <StatusDot {session} {groupSessions} size={6} />
+  <StatusDot status={sessionStatus} label={sessionStatusLabel(sessionStatus)} size={6} />
 
 
   <div class="session-info">

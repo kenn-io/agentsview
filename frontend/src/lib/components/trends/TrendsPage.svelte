@@ -13,6 +13,7 @@
   import { rollingRange } from "../../utils/dates.js";
   import type { TrendsGranularity } from "../../api/types.js";
   import { ChartColumnIcon, ChevronDownIcon } from "../../icons.js";
+  import { Spinner } from "@kenn-io/kit-ui";
   import RangePicker from "../shared/RangePicker.svelte";
   import {
     resolveRange,
@@ -333,7 +334,7 @@
       />
       {#if trends.loading.terms}
         <div class="loading-overlay" role="status" aria-live="polite">
-          <span class="loading-spinner" aria-hidden="true"></span>
+          <span aria-hidden="true"><Spinner size={18} /></span>
           <span>{m.trends_computing()}</span>
         </div>
       {/if}
@@ -655,21 +656,6 @@
     font-size: 13px;
     font-weight: 600;
     pointer-events: none;
-  }
-
-  .loading-spinner {
-    width: 18px;
-    height: 18px;
-    border: 2px solid var(--border-default);
-    border-top-color: var(--accent-blue);
-    border-radius: 999px;
-    animation: trends-spin 800ms linear infinite;
-  }
-
-  @keyframes trends-spin {
-    to {
-      transform: rotate(360deg);
-    }
   }
 
   @media (max-width: 820px) {
