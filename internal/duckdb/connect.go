@@ -462,14 +462,51 @@ func nativeQuackUserinfo(base string) string {
 	if at := strings.LastIndex(authority, "@"); at >= 0 {
 		return authority[:at]
 	}
-	if !hasPath || !strings.Contains(authority, ":") {
+	if !hasPath {
 		return ""
 	}
 	at := strings.LastIndex(base, "@")
 	if at < 0 {
 		return ""
 	}
+	userinfo := base[:at]
+	userinfoHead, _, _ := strings.Cut(userinfo, "/")
+	if !strings.Contains(userinfoHead, ":") {
+		return ""
+	}
+	reattachedAuthority, _, _ := strings.Cut(base[at+1:], "/")
+	if !nativeQuackLooksLikeAuthority(reattachedAuthority) {
+		return ""
+	}
 	return base[:at]
+}
+
+func nativeQuackLooksLikeAuthority(authority string) bool {
+	if authority == "" {
+		return false
+	}
+	host := authority
+	if maybeHost, maybePort, ok := strings.Cut(authority, ":"); ok {
+		if maybeHost != "" && allDigits(maybePort) {
+			return true
+		}
+		host = maybeHost
+	}
+	return strings.Contains(host, ".") ||
+		strings.EqualFold(host, "localhost") ||
+		net.ParseIP(host) != nil
+}
+
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (q *quackClient) queryRemote(

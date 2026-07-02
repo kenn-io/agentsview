@@ -402,8 +402,24 @@ func (b *duckRemoteMutationBatch) appendBatch(other *duckRemoteMutationBatch) {
 	if other == nil || other.Len() == 0 {
 		return
 	}
+	oldLen := len(b.statements)
+	preserveRendered := b.renderedValid
+	rendered := b.renderedStatementsCache
+	renderedBytes := b.renderedStatementBytes
 	b.statements = append(b.statements, other.statements...)
-	b.invalidateRendered()
+	if !preserveRendered {
+		b.invalidateRendered()
+		return
+	}
+	for _, stmt := range other.rendered() {
+		stmt.start += oldLen
+		stmt.end += oldLen
+		rendered = append(rendered, stmt)
+		renderedBytes += len(stmt.sql)
+	}
+	b.renderedStatementsCache = rendered
+	b.renderedStatementBytes = renderedBytes
+	b.renderedValid = true
 }
 
 func (b *duckRemoteMutationBatch) invalidateRendered() {

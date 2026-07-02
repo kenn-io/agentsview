@@ -804,6 +804,59 @@ func TestDuckRemoteMutationBatchCombinedTransactionBytesUsesCachedRendering(
 	assert.Zero(t, allocs)
 }
 
+func TestDuckRemoteMutationBatchAppendBatchPreservesRenderedCache(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	current := &duckRemoteMutationBatch{}
+	first := &duckRemoteMutationBatch{}
+	_, err := first.ExecContext(ctx,
+		`INSERT INTO remote_test VALUES (?, ?)`, 1, strings.Repeat("a", 32),
+	)
+	require.NoError(t, err)
+	second := &duckRemoteMutationBatch{}
+	_, err = second.ExecContext(ctx,
+		`INSERT INTO remote_test VALUES (?, ?)`, 2, strings.Repeat("b", 32),
+	)
+	require.NoError(t, err)
+	third := &duckRemoteMutationBatch{}
+	_, err = third.ExecContext(ctx,
+		`INSERT INTO remote_test VALUES (?, ?)`, 3, strings.Repeat("c", 32),
+	)
+	require.NoError(t, err)
+
+	current.appendBatch(first)
+	require.Positive(t, current.combinedTransactionBytes(second))
+	current.appendBatch(second)
+	require.Positive(t, third.transactionBytes())
+	allocs := testing.AllocsPerRun(100, func() {
+		_ = current.combinedTransactionBytes(third)
+	})
+
+	assert.Zero(t, allocs)
+}
+
+func TestDuckRemoteMutationBatchAppendPreservesRenderedCache(t *testing.T) {
+	ctx := context.Background()
+	current := &duckRemoteMutationBatch{}
+	_, err := current.ExecContext(ctx,
+		`INSERT INTO remote_test VALUES (?, ?)`, 1, strings.Repeat("x", 32),
+	)
+	require.NoError(t, err)
+	next := &duckRemoteMutationBatch{}
+	_, err = next.ExecContext(ctx,
+		`INSERT INTO remote_test VALUES (?, ?)`, 2, strings.Repeat("y", 32),
+	)
+	require.NoError(t, err)
+
+	require.Positive(t, current.combinedTransactionBytes(next))
+	require.True(t, current.renderedValid)
+	current.appendBatch(next)
+
+	assert.True(t, current.renderedValid)
+	assert.Len(t, current.rendered(), 2)
+}
+
 func TestSplitDuckRemoteSimpleInsertAllocatesOnlyReturnedPrefix(
 	t *testing.T,
 ) {

@@ -239,6 +239,23 @@ func TestRedactQuackClientErrorPreservesNativeHostWithAtInPath(t *testing.T) {
 	assert.Contains(t, msg, "db@v2")
 }
 
+func TestRedactQuackClientErrorPreservesNativeHostPortWithAtInPath(t *testing.T) {
+	rawURL := "quack://duck.example.com:9494/db@v2?token=credential1&x=1"
+	err := redactQuackClientError(
+		errors.New(
+			"IO Error connecting to duck.example.com:9494/db@v2?x=1&token=credential1",
+		),
+		rawURL,
+		"credential2",
+	)
+	msg := err.Error()
+
+	assert.NotContains(t, msg, "credential1")
+	assert.Contains(t, msg, "duck.example.com")
+	assert.Contains(t, msg, "9494")
+	assert.Contains(t, msg, "db@v2")
+}
+
 func TestRedactQuackClientErrorScrubsEncodedCredentialValues(t *testing.T) {
 	rawURL := "quack:https://account:p%40ss@duck.example.com/db?token=s%2Bcret&x=1"
 	err := redactQuackClientError(
