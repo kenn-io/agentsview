@@ -132,7 +132,7 @@ describe("UsagePage refresh behavior", () => {
     await flushEffects();
 
     expect(document.body.textContent).toContain(
-      "Some matching sessions do not expose token usage data",
+      "Matching sessions do not expose token usage data",
     );
     expect(document.body.textContent).not.toContain(
       "Copilot sessions matched this range",
