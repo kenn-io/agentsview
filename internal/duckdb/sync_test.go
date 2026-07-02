@@ -778,6 +778,50 @@ func TestDuckRemoteMutationBatchFallbackKeepsPerRowInsertAttribution(
 	}, statementCalls)
 }
 
+func TestDuckRemoteMutationBatchCombinedTransactionBytesUsesCachedRendering(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	batch := &duckRemoteMutationBatch{}
+	for i := range 50 {
+		_, err := batch.ExecContext(ctx,
+			`INSERT INTO remote_test VALUES (?, ?)`, i, strings.Repeat("x", 32),
+		)
+		require.NoError(t, err)
+	}
+	next := &duckRemoteMutationBatch{}
+	_, err := next.ExecContext(ctx,
+		`INSERT INTO remote_test VALUES (?, ?)`, 51, strings.Repeat("y", 32),
+	)
+	require.NoError(t, err)
+
+	require.Positive(t, batch.transactionBytes())
+	require.Positive(t, next.transactionBytes())
+	allocs := testing.AllocsPerRun(100, func() {
+		_ = batch.combinedTransactionBytes(next)
+	})
+
+	assert.Zero(t, allocs)
+}
+
+func TestSplitDuckRemoteSimpleInsertAllocatesOnlyReturnedPrefix(
+	t *testing.T,
+) {
+	literal, err := duckRemoteStringLiteral(strings.Repeat("x", 4096))
+	require.NoError(t, err)
+	stmt := "INSERT INTO remote_test VALUES (" + literal + ")"
+	prefix, tuple, ok := splitDuckRemoteSimpleInsert(stmt)
+	require.True(t, ok)
+	assert.Equal(t, "INSERT INTO remote_test VALUES ", prefix)
+	assert.Contains(t, tuple, strings.Repeat("x", 128))
+
+	allocs := testing.AllocsPerRun(100, func() {
+		_, _, _ = splitDuckRemoteSimpleInsert(stmt)
+	})
+
+	assert.LessOrEqual(t, allocs, 1.0)
+}
+
 func TestAppendDuckRemoteMutationBatchFlushesBeforeByteBudget(t *testing.T) {
 	ctx := context.Background()
 	first := &duckRemoteMutationBatch{}

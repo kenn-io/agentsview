@@ -434,9 +434,7 @@ func redactNativeQuackCredentialValues(message, transport string) string {
 	if scheme, rest, ok := strings.Cut(base, "://"); ok && scheme != "" {
 		base = rest
 	}
-	authority, _, _ := strings.Cut(base, "/")
-	if at := strings.LastIndex(authority, "@"); at >= 0 {
-		userinfo := authority[:at]
+	if userinfo := nativeQuackUserinfo(base); userinfo != "" {
 		for value := range strings.SplitSeq(userinfo, ":") {
 			message = redactQuackCredentialValue(message, value)
 		}
@@ -457,6 +455,21 @@ func redactNativeQuackCredentialValues(message, transport string) string {
 		}
 	}
 	return message
+}
+
+func nativeQuackUserinfo(base string) string {
+	authority, _, hasPath := strings.Cut(base, "/")
+	if at := strings.LastIndex(authority, "@"); at >= 0 {
+		return authority[:at]
+	}
+	if !hasPath || !strings.Contains(authority, ":") {
+		return ""
+	}
+	at := strings.LastIndex(base, "@")
+	if at < 0 {
+		return ""
+	}
+	return base[:at]
 }
 
 func (q *quackClient) queryRemote(

@@ -371,7 +371,15 @@ const (
 )
 
 type duckRemoteMutationBatch struct {
-	statements []string
+	statements              []string
+	renderedValid           bool
+	renderedStatementsCache []duckRemoteRenderedStatement
+	renderedStatementBytes  int
+}
+
+type duckRemoteRenderedStatement struct {
+	sql        string
+	start, end int
 }
 
 func (b *duckRemoteMutationBatch) ExecContext(
@@ -382,6 +390,7 @@ func (b *duckRemoteMutationBatch) ExecContext(
 		return nil, err
 	}
 	b.statements = append(b.statements, sqlText)
+	b.invalidateRendered()
 	return duckNoopResult{}, nil
 }
 
@@ -394,6 +403,13 @@ func (b *duckRemoteMutationBatch) appendBatch(other *duckRemoteMutationBatch) {
 		return
 	}
 	b.statements = append(b.statements, other.statements...)
+	b.invalidateRendered()
+}
+
+func (b *duckRemoteMutationBatch) invalidateRendered() {
+	b.renderedValid = false
+	b.renderedStatementsCache = nil
+	b.renderedStatementBytes = 0
 }
 
 type duckNoopResult struct{}
@@ -552,10 +568,10 @@ func execDuckRemoteMutationBatchChunksWithStatementFallback(
 
 func (b *duckRemoteMutationBatch) transactionSQL() string {
 	var sqlText strings.Builder
-	statements := b.renderedStatements()
+	statements := b.rendered()
 	sqlText.WriteString("BEGIN TRANSACTION;\n")
 	for _, stmt := range statements {
-		sqlText.WriteString(stmt)
+		sqlText.WriteString(stmt.sql)
 		sqlText.WriteString(";\n")
 	}
 	sqlText.WriteString("COMMIT")
@@ -566,7 +582,10 @@ func (b *duckRemoteMutationBatch) transactionBytes() int {
 	if b == nil || b.Len() == 0 {
 		return 0
 	}
-	return duckRemoteTransactionBytes(b.renderedStatements())
+	statements := b.rendered()
+	return duckRemoteTransactionBytesFor(
+		b.renderedStatementBytes, len(statements),
+	)
 }
 
 func duckRemoteTransactionBytes(statements []string) int {
@@ -577,9 +596,16 @@ func duckRemoteTransactionBytes(statements []string) int {
 	for _, stmt := range statements {
 		statementBytes += len(stmt)
 	}
+	return duckRemoteTransactionBytesFor(statementBytes, len(statements))
+}
+
+func duckRemoteTransactionBytesFor(statementBytes, statementCount int) int {
+	if statementCount == 0 {
+		return 0
+	}
 	return len("BEGIN TRANSACTION;\n") +
 		statementBytes +
-		len(";\n")*len(statements) +
+		len(";\n")*statementCount +
 		len("COMMIT")
 }
 
@@ -592,14 +618,12 @@ func (b *duckRemoteMutationBatch) combinedTransactionBytes(
 	if other == nil || other.Len() == 0 {
 		return b.transactionBytes()
 	}
-	statements := make([]string, 0, b.Len()+other.Len())
-	statements = append(statements, b.statements...)
-	statements = append(statements, other.statements...)
-	return duckRemoteTransactionBytes(coalesceDuckRemoteInsertStatements(
-		statements,
-		duckRemoteInsertCoalesceMaxRows,
-		duckRemoteInsertCoalesceMaxBytes,
-	))
+	left := b.rendered()
+	right := other.rendered()
+	return duckRemoteTransactionBytesFor(
+		b.renderedStatementBytes+other.renderedStatementBytes,
+		len(left)+len(right),
+	)
 }
 
 func (b *duckRemoteMutationBatch) chunks(maxBytes int) []*duckRemoteMutationBatch {
@@ -610,37 +634,107 @@ func (b *duckRemoteMutationBatch) chunks(maxBytes int) []*duckRemoteMutationBatc
 		maxBytes = duckRemoteMutationCoalesceMaxBytes
 	}
 	var chunks []*duckRemoteMutationBatch
-	current := &duckRemoteMutationBatch{}
-	for _, stmt := range b.statements {
-		next := &duckRemoteMutationBatch{
-			statements: []string{stmt},
+	currentStart := -1
+	currentEnd := 0
+	currentStatementBytes := 0
+	currentStatementCount := 0
+	rendered := b.renderedForMaxTransactionBytes(maxBytes)
+	flush := func() {
+		if currentStatementCount == 0 {
+			return
 		}
-		if current.Len() > 0 && current.combinedTransactionBytes(next) > maxBytes {
-			chunks = append(chunks, current)
-			current = &duckRemoteMutationBatch{}
+		statements := append([]string(nil), b.statements[currentStart:currentEnd]...)
+		chunks = append(chunks, &duckRemoteMutationBatch{statements: statements})
+		currentStart = -1
+		currentEnd = 0
+		currentStatementBytes = 0
+		currentStatementCount = 0
+	}
+	for _, stmt := range rendered {
+		nextStatementBytes := currentStatementBytes + len(stmt.sql)
+		nextStatementCount := currentStatementCount + 1
+		if currentStatementCount > 0 &&
+			duckRemoteTransactionBytesFor(
+				nextStatementBytes, nextStatementCount,
+			) > maxBytes {
+			flush()
 		}
-		current.appendBatch(next)
+		if currentStart < 0 {
+			currentStart = stmt.start
+		}
+		currentEnd = stmt.end
+		currentStatementBytes += len(stmt.sql)
+		currentStatementCount++
 	}
-	if current.Len() > 0 {
-		chunks = append(chunks, current)
-	}
+	flush()
 	return chunks
 }
 
+func (b *duckRemoteMutationBatch) renderedForMaxTransactionBytes(
+	maxBytes int,
+) []duckRemoteRenderedStatement {
+	insertMaxBytes := duckRemoteInsertMaxBytesForTransaction(maxBytes)
+	if insertMaxBytes >= duckRemoteInsertCoalesceMaxBytes {
+		return b.rendered()
+	}
+	return renderDuckRemoteMutationStatements(
+		b.statements,
+		duckRemoteInsertCoalesceMaxRows,
+		insertMaxBytes,
+	)
+}
+
+func duckRemoteInsertMaxBytesForTransaction(maxBytes int) int {
+	statementOverhead := len("BEGIN TRANSACTION;\n") + len(";\n") + len("COMMIT")
+	if maxBytes <= statementOverhead {
+		return 1
+	}
+	return min(maxBytes-statementOverhead, duckRemoteInsertCoalesceMaxBytes)
+}
+
 func (b *duckRemoteMutationBatch) renderedStatements() []string {
+	rendered := b.rendered()
+	out := make([]string, 0, len(rendered))
+	for _, stmt := range rendered {
+		out = append(out, stmt.sql)
+	}
+	return out
+}
+
+func (b *duckRemoteMutationBatch) rendered() []duckRemoteRenderedStatement {
 	if b == nil || b.Len() == 0 {
 		return nil
 	}
-	return coalesceDuckRemoteInsertStatements(
+	if b.renderedValid {
+		return b.renderedStatementsCache
+	}
+	b.renderedStatementsCache = renderDuckRemoteMutationStatements(
 		b.statements,
 		duckRemoteInsertCoalesceMaxRows,
 		duckRemoteInsertCoalesceMaxBytes,
 	)
+	b.renderedStatementBytes = 0
+	for _, stmt := range b.renderedStatementsCache {
+		b.renderedStatementBytes += len(stmt.sql)
+	}
+	b.renderedValid = true
+	return b.renderedStatementsCache
 }
 
 func coalesceDuckRemoteInsertStatements(
 	statements []string, maxRows int, maxBytes int,
 ) []string {
+	rendered := renderDuckRemoteMutationStatements(statements, maxRows, maxBytes)
+	out := make([]string, 0, len(rendered))
+	for _, stmt := range rendered {
+		out = append(out, stmt.sql)
+	}
+	return out
+}
+
+func renderDuckRemoteMutationStatements(
+	statements []string, maxRows int, maxBytes int,
+) []duckRemoteRenderedStatement {
 	if len(statements) == 0 {
 		return nil
 	}
@@ -650,36 +744,40 @@ func coalesceDuckRemoteInsertStatements(
 	if maxBytes <= 0 {
 		maxBytes = duckRemoteInsertCoalesceMaxBytes
 	}
-	out := make([]string, 0, len(statements))
+	out := make([]duckRemoteRenderedStatement, 0, len(statements))
 	var pending duckRemoteInsertGroup
 	hasPending := false
 	flush := func() {
 		if !hasPending {
 			return
 		}
-		out = append(out, pending.SQL())
+		out = append(out, pending.RenderedStatement())
 		pending = duckRemoteInsertGroup{}
 		hasPending = false
 	}
-	for _, stmt := range statements {
+	for i, stmt := range statements {
 		prefix, tuple, ok := splitDuckRemoteSimpleInsert(stmt)
 		if !ok {
 			flush()
-			out = append(out, stmt)
+			out = append(out, duckRemoteRenderedStatement{
+				sql:   stmt,
+				start: i,
+				end:   i + 1,
+			})
 			continue
 		}
 		if !hasPending || pending.prefix != prefix {
 			flush()
-			pending = duckRemoteInsertGroup{prefix: prefix}
+			pending = duckRemoteInsertGroup{prefix: prefix, start: i}
 			hasPending = true
 		}
 		if pending.rows > 0 && (pending.rows+1 > maxRows ||
 			pending.bytes+len(", ")+len(tuple) > maxBytes) {
 			flush()
-			pending = duckRemoteInsertGroup{prefix: prefix}
+			pending = duckRemoteInsertGroup{prefix: prefix, start: i}
 			hasPending = true
 		}
-		pending.Append(tuple)
+		pending.Append(tuple, i+1)
 	}
 	flush()
 	return out
@@ -690,9 +788,11 @@ type duckRemoteInsertGroup struct {
 	tuples []string
 	rows   int
 	bytes  int
+	start  int
+	end    int
 }
 
-func (g *duckRemoteInsertGroup) Append(tuple string) {
+func (g *duckRemoteInsertGroup) Append(tuple string, end int) {
 	if g.rows == 0 {
 		g.bytes = len(g.prefix)
 	} else {
@@ -701,19 +801,23 @@ func (g *duckRemoteInsertGroup) Append(tuple string) {
 	g.tuples = append(g.tuples, tuple)
 	g.rows++
 	g.bytes += len(tuple)
+	g.end = end
 }
 
-func (g duckRemoteInsertGroup) SQL() string {
-	return g.prefix + strings.Join(g.tuples, ", ")
+func (g duckRemoteInsertGroup) RenderedStatement() duckRemoteRenderedStatement {
+	return duckRemoteRenderedStatement{
+		sql:   g.prefix + strings.Join(g.tuples, ", "),
+		start: g.start,
+		end:   g.end,
+	}
 }
 
 func splitDuckRemoteSimpleInsert(stmt string) (string, string, bool) {
 	trimmed := strings.TrimSpace(stmt)
-	upper := strings.ToUpper(trimmed)
-	if !strings.HasPrefix(upper, "INSERT INTO ") {
+	if !duckASCIIHasPrefixFold(trimmed, "INSERT INTO ") {
 		return "", "", false
 	}
-	valuesIndex := strings.Index(upper, " VALUES ")
+	valuesIndex := duckSQLValuesKeywordIndex(trimmed)
 	if valuesIndex < 0 {
 		return "", "", false
 	}
@@ -724,6 +828,42 @@ func splitDuckRemoteSimpleInsert(stmt string) (string, string, bool) {
 		return "", "", false
 	}
 	return prefix, tuple, true
+}
+
+func duckSQLValuesKeywordIndex(sqlText string) int {
+	const valuesKeyword = " VALUES "
+	for i := len("INSERT INTO "); i+len(valuesKeyword) <= len(sqlText); i++ {
+		if duckASCIIEqualFoldAt(sqlText, i, valuesKeyword) {
+			return i
+		}
+	}
+	return -1
+}
+
+func duckASCIIHasPrefixFold(s, prefix string) bool {
+	if len(s) < len(prefix) {
+		return false
+	}
+	return duckASCIIEqualFoldAt(s, 0, prefix)
+}
+
+func duckASCIIEqualFoldAt(s string, start int, pattern string) bool {
+	if start < 0 || start+len(pattern) > len(s) {
+		return false
+	}
+	for i := range len(pattern) {
+		if duckASCIIFold(s[start+i]) != duckASCIIFold(pattern[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func duckASCIIFold(b byte) byte {
+	if b >= 'a' && b <= 'z' {
+		return b - 'a' + 'A'
+	}
+	return b
 }
 
 func duckSQLLeadingParenthesizedExpression(sqlText string) (
