@@ -468,7 +468,7 @@ func newForgeProviderFactory(def AgentDef) ProviderFactory {
 func forgeProviderSpec() dbBackedProviderSpec {
 	return dbBackedProviderSpec{
 		agent:  AgentForge,
-		dbName: forgeDBFilename,
+		dbName: ForgeDBFilename,
 		findDB: forgeDBPath,
 		listMeta: func(dbPath string) ([]dbBackedSessionMeta, error) {
 			metas, err := ListForgeSessionMeta(dbPath)
@@ -499,7 +499,7 @@ func newPiebaldProviderFactory(def AgentDef) ProviderFactory {
 func piebaldProviderSpec() dbBackedProviderSpec {
 	return dbBackedProviderSpec{
 		agent:  AgentPiebald,
-		dbName: piebaldDBFilename,
+		dbName: PiebaldDBFilename,
 		findDB: piebaldDBPath,
 		listMeta: func(dbPath string) ([]dbBackedSessionMeta, error) {
 			metas, err := ListPiebaldSessionMeta(dbPath)
@@ -530,7 +530,7 @@ func newWarpProviderFactory(def AgentDef) ProviderFactory {
 func warpProviderSpec() dbBackedProviderSpec {
 	return dbBackedProviderSpec{
 		agent:  AgentWarp,
-		dbName: warpDBFilename,
+		dbName: WarpDBFilename,
 		findDB: warpDBPath,
 		listMeta: func(dbPath string) ([]dbBackedSessionMeta, error) {
 			metas, err := ListWarpSessionMeta(dbPath)

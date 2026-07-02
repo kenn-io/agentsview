@@ -405,18 +405,8 @@ func parseDiffSourceKey(path string) string {
 // database as one source; those key by the stripped database path.
 var perSessionDBVirtualSourceBases = []string{
 	"opencode.db", "kilo.db", "mimocode.db",
-	warpDBFile, forgeDBFile, piebaldDBFile,
+	parser.WarpDBFilename, parser.ForgeDBFilename, parser.PiebaldDBFilename,
 }
-
-// warpDBFile, forgeDBFile, and piebaldDBFile mirror the unexported DB
-// filenames the parser package assigns each DB-backed provider. They are
-// duplicated here (like the opencode-family literals above) because the parser
-// constants are unexported.
-const (
-	warpDBFile    = "warp.sqlite"
-	forgeDBFile   = ".forge.db"
-	piebaldDBFile = "app.db"
-)
 
 func isPerSessionDBVirtualSource(path string) bool {
 	for _, base := range perSessionDBVirtualSourceBases {

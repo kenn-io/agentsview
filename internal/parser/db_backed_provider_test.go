@@ -74,7 +74,7 @@ func TestForgeProviderSourceMethodsAndParse(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	assertDBBackedWatchPlan(t, provider, root, forgeDBFilename)
+	assertDBBackedWatchPlan(t, provider, root, ForgeDBFilename)
 	assertDBBackedDiscoverFindFingerprint(
 		t, provider, root, dbPath, "conv-001",
 	)
@@ -109,7 +109,7 @@ func TestPiebaldProviderSourceMethodsAndParse(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	assertDBBackedWatchPlan(t, provider, root, piebaldDBFilename)
+	assertDBBackedWatchPlan(t, provider, root, PiebaldDBFilename)
 	assertDBBackedDiscoverFindFingerprint(
 		t, provider, root, dbPath, "42",
 	)
@@ -152,7 +152,7 @@ func TestWarpProviderSourceMethodsAndParse(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	assertDBBackedWatchPlan(t, provider, root, warpDBFilename)
+	assertDBBackedWatchPlan(t, provider, root, WarpDBFilename)
 	assertDBBackedDiscoverFindFingerprint(
 		t, provider, root, dbPath, "conv-001",
 	)
@@ -328,7 +328,7 @@ func TestDBBackedProviderRejectsInvalidStoredVirtualPaths(t *testing.T) {
 	for _, path := range []string{
 		dbPath + "#",
 		filepath.Join(root, "forge-copy.db") + "#conv-001",
-		filepath.Join(root, "nested", forgeDBFilename) + "#conv-001",
+		filepath.Join(root, "nested", ForgeDBFilename) + "#conv-001",
 	} {
 		_, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
 			StoredFilePath:     path,
