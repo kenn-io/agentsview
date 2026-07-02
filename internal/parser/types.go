@@ -668,13 +668,21 @@ func AgentNameUsesAICredits(agent string) bool {
 }
 
 func AgentFilterLacksPerMessageTokenData(agentFilter string) bool {
+	return agentFilterMatches(agentFilter, AgentNameLacksPerMessageTokenData)
+}
+
+func AgentFilterUsesAICredits(agentFilter string) bool {
+	return agentFilterMatches(agentFilter, AgentNameUsesAICredits)
+}
+
+func agentFilterMatches(agentFilter string, match func(string) bool) bool {
 	matched := false
 	for part := range strings.SplitSeq(agentFilter, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}
-		if !AgentNameLacksPerMessageTokenData(part) {
+		if !match(part) {
 			return false
 		}
 		matched = true

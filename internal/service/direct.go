@@ -593,8 +593,12 @@ func (b *directBackend) UsageSummary(
 			return nil, err
 		}
 		if matchingSessions > 0 {
+			kind := UnsupportedUsageKindNoTokenData
+			if parser.AgentFilterUsesAICredits(f.Agent) {
+				kind = UnsupportedUsageKindCopilotNoTokenData
+			}
 			summary.UnsupportedUsage = &UnsupportedUsage{
-				Kind: UnsupportedUsageKindCopilotNoTokenData,
+				Kind: kind,
 			}
 		}
 	}

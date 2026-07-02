@@ -204,38 +204,55 @@ func TestAgentUsageCapabilityHelpersFailClosedAndDiverge(t *testing.T) {
 	assert.False(t, AgentFilterLacksPerMessageTokenData(","))
 	assert.False(t, AgentFilterLacksPerMessageTokenData("copilot,claude"))
 	assert.False(t, AgentFilterLacksPerMessageTokenData("unknown-agent"))
+	assert.True(t, AgentFilterUsesAICredits("copilot, ai-credit-only"))
+	assert.False(t, AgentFilterUsesAICredits(""))
+	assert.False(t, AgentFilterUsesAICredits("no-token-only"))
+	assert.False(t, AgentFilterUsesAICredits("copilot,claude"))
+	assert.False(t, AgentFilterUsesAICredits("unknown-agent"))
 }
 
 func TestUsageCapabilityConsumersRouteThroughParser(t *testing.T) {
 	tests := []struct {
 		name     string
 		path     string
-		required string
+		required []string
 	}{
 		{
-			name:     "sqlite ai credits",
-			path:     "../db/usage.go",
-			required: "parser.AgentNameUsesAICredits",
+			name: "sqlite ai credits",
+			path: "../db/usage.go",
+			required: []string{
+				"parser.AgentNameUsesAICredits",
+			},
 		},
 		{
-			name:     "postgres ai credits",
-			path:     "../postgres/usage.go",
-			required: "parser.AgentNameUsesAICredits",
+			name: "postgres ai credits",
+			path: "../postgres/usage.go",
+			required: []string{
+				"parser.AgentNameUsesAICredits",
+			},
 		},
 		{
-			name:     "duckdb ai credits",
-			path:     "../duckdb/analytics_usage.go",
-			required: "parser.AgentNameUsesAICredits",
+			name: "duckdb ai credits",
+			path: "../duckdb/analytics_usage.go",
+			required: []string{
+				"parser.AgentNameUsesAICredits",
+			},
 		},
 		{
-			name:     "service unsupported usage",
-			path:     "../service/direct.go",
-			required: "parser.AgentFilterLacksPerMessageTokenData",
+			name: "service unsupported usage",
+			path: "../service/direct.go",
+			required: []string{
+				"parser.AgentFilterLacksPerMessageTokenData",
+				"parser.AgentFilterUsesAICredits",
+			},
 		},
 		{
-			name:     "cli unsupported usage",
-			path:     "../../cmd/agentsview/usage.go",
-			required: "parser.AgentFilterLacksPerMessageTokenData",
+			name: "cli unsupported usage",
+			path: "../../cmd/agentsview/usage.go",
+			required: []string{
+				"parser.AgentFilterLacksPerMessageTokenData",
+				"parser.AgentFilterUsesAICredits",
+			},
 		},
 	}
 	for _, tc := range tests {
@@ -243,7 +260,9 @@ func TestUsageCapabilityConsumersRouteThroughParser(t *testing.T) {
 			src, err := os.ReadFile(tc.path)
 			require.NoError(t, err)
 			text := string(src)
-			assert.Contains(t, text, tc.required)
+			for _, required := range tc.required {
+				assert.Contains(t, text, required)
+			}
 			assert.NotContains(t, text, "IsCopilotAgent")
 			assert.NotContains(t, text, "IsCopilotAgentFilter")
 		})

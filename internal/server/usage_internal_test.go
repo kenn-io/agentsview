@@ -259,7 +259,7 @@ func TestUsageSummarySetsUnsupportedUsageFromAgentCapability(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.NotNil(t, resp.UnsupportedUsage)
 	assert.Equal(t,
-		service.UnsupportedUsageKindCopilotNoTokenData,
+		service.UnsupportedUsageKindNoTokenData,
 		resp.UnsupportedUsage.Kind,
 	)
 	assertUsageQueryCalls(t, spy, 1, 0, 1)

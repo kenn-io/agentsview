@@ -18,6 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/cursorusage"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pricing"
 )
 
@@ -1229,10 +1230,19 @@ func TestRunUsageDailyNoHintWhenDataPresent(t *testing.T) {
 }
 
 func TestNoTokenDataNote(t *testing.T) {
+	defer withUsageParserAgentDefs(t, parser.AgentDef{
+		Type:        parser.AgentType("no-token-agent"),
+		DisplayName: "No Token Agent",
+		Usage: parser.UsageCapabilities{
+			NoPerMessageTokenData: true,
+		},
+	})()
+
 	zero := db.UsageTotals{}
 	withData := db.UsageTotals{OutputTokens: 5}
 	copilotNote := "note: these GitHub Copilot records do not include token " +
 		"or cost data that agentsview can total."
+	genericNote := "note: matching sessions do not record per-message token usage."
 	cases := []struct {
 		name   string
 		agent  string
@@ -1245,6 +1255,7 @@ func TestNoTokenDataNote(t *testing.T) {
 		{"copilot with zero totals", "copilot", zero, copilotNote},
 		{"vscode-copilot with zero totals", "vscode-copilot", zero, copilotNote},
 		{"all-copilot CSV filter", "copilot,vscode-copilot", zero, copilotNote},
+		{"non-copilot no-token agent", "no-token-agent", zero, genericNote},
 		{"mixed CSV filter", "copilot,claude", zero, ""},
 	}
 	for _, tc := range cases {
@@ -1252,5 +1263,14 @@ func TestNoTokenDataNote(t *testing.T) {
 			assert.Equal(t, tc.want,
 				noTokenDataNote(tc.agent, tc.totals))
 		})
+	}
+}
+
+func withUsageParserAgentDefs(t *testing.T, defs ...parser.AgentDef) func() {
+	t.Helper()
+	orig := append([]parser.AgentDef(nil), parser.Registry...)
+	parser.Registry = append(parser.Registry, defs...)
+	return func() {
+		parser.Registry = orig
 	}
 }

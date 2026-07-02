@@ -163,6 +163,7 @@ type CacheStats struct {
 	SavingsVsUncached   float64 `json:"savingsVsUncached"`
 }
 
+const UnsupportedUsageKindNoTokenData = "no-token-data"
 const UnsupportedUsageKindCopilotNoTokenData = "copilot-no-token-data"
 
 type UnsupportedUsage struct {
