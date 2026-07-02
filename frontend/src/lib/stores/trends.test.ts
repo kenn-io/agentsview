@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { trends } from "./trends.svelte.js";
+import { selectionFromRange } from "../components/shared/rangeSelection.js";
 import { TrendsService } from "../api/generated/index";
 import type { TrendsTermsResponse } from "../api/types.js";
+
+// Capture the store's shipped default range at import time, before the
+// beforeEach reset overwrites it.
+const DEFAULT_RANGE = { from: trends.from, to: trends.to };
 
 vi.mock("../api/runtime.js", () => ({
   configureGeneratedClient: vi.fn(),
@@ -108,5 +113,26 @@ describe("TrendsStore.fetchTerms", () => {
     expect(trendsService.getApiV1TrendsTerms).toHaveBeenCalledWith(
       expect.objectContaining({ granularity: "month" }),
     );
+  });
+});
+
+describe("TrendsStore default range", () => {
+  it("ships a 1y rolling default recognized as the relative preset", () => {
+    // Under the shared N-days-inclusive semantics, the default must resolve
+    // to the 365-day relative preset, not a 366-day custom range — otherwise
+    // TrendsPage's selectionFromRange() would show the default as custom.
+    const selection = selectionFromRange(
+      DEFAULT_RANGE.from,
+      DEFAULT_RANGE.to,
+    );
+    expect(selection).toEqual({ mode: "relative", days: 365 });
+  });
+
+  it("spans 365 calendar days inclusive of the end date", () => {
+    const from = new Date(`${DEFAULT_RANGE.from}T00:00:00`);
+    const to = new Date(`${DEFAULT_RANGE.to}T00:00:00`);
+    const dayMs = 24 * 60 * 60 * 1000;
+    const spanDays = Math.round((to.getTime() - from.getTime()) / dayMs) + 1;
+    expect(spanDays).toBe(365);
   });
 });

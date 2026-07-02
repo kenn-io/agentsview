@@ -3,7 +3,7 @@ import {
 } from "../api/generated/index";
 import type { TrendsTermsResponse } from "../api/types.js";
 import { callGenerated } from "../api/runtime.js";
-import { daysAgo, today } from "../utils/dates.js";
+import { rollingRange } from "../utils/dates.js";
 import { perf } from "./perf.svelte.js";
 
 type TrendsTermsParams = Parameters<
@@ -16,9 +16,15 @@ export type TrendsGranularity = NonNullable<
 const DEFAULT_TERMS =
   "load bearing | load-bearing\nseam\nblast radius";
 
+// Default to a rolling one-year window under the shared N-days-inclusive
+// semantics (today plus the preceding 364 days), so selectionFromRange()
+// recognizes the default as the "1y" preset rather than a 366-day custom
+// range. The default is rolling; TrendsPage keeps window_days=365.
+const DEFAULT_RANGE = rollingRange(365);
+
 class TrendsStore {
-  from: string = $state(daysAgo(365));
-  to: string = $state(today());
+  from: string = $state(DEFAULT_RANGE.from);
+  to: string = $state(DEFAULT_RANGE.to);
   granularity: TrendsGranularity = $state("week");
   normalized: boolean = $state(false);
   termText: string = $state(DEFAULT_TERMS);
