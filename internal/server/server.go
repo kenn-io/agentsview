@@ -888,15 +888,26 @@ func (s *Server) Serve(ln net.Listener) error {
 	return srv.Serve(ln)
 }
 
-// Shutdown gracefully shuts down the HTTP server.
+// Shutdown gracefully shuts down the HTTP server, then closes the
+// server-owned on-demand sync engine (if one was lazily created) so
+// its pending debounced signal recomputes flush while the DB is
+// still open. Injected engines are closed by their owner.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.mu.RLock()
 	srv := s.httpSrv
 	s.mu.RUnlock()
-	if srv == nil {
-		return nil
+	var err error
+	if srv != nil {
+		err = srv.Shutdown(ctx)
 	}
-	return srv.Shutdown(ctx)
+	s.mu.Lock()
+	engine := s.onDemandEngine
+	s.onDemandEngine = nil
+	s.mu.Unlock()
+	if engine != nil {
+		engine.Close()
+	}
+	return err
 }
 
 // FindAvailablePort finds an available port starting from the

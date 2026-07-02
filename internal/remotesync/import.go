@@ -53,6 +53,7 @@ func (im Importer) ImportExtracted(
 		Ephemeral:               true,
 		BlockedResultCategories: im.BlockedResultCategories,
 	})
+	defer engine.Close()
 
 	if !im.Full {
 		remoteCache, err := im.DB.LoadRemoteSkippedFiles(im.Host)

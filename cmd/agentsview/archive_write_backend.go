@@ -534,6 +534,7 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 		Machine:                 "local",
 		BlockedResultCategories: b.appCfg.ResultContentBlockedCategories,
 	})
+	defer engine.Close()
 
 	didResync, err := runPGWatchStartupSync(ctx, engine, cfg.Full)
 	if err != nil {
