@@ -52,27 +52,47 @@ func (s *Store) Close() error { return s.duck.Close() }
 func (s *Store) queryContext(
 	ctx context.Context, query string, args ...any,
 ) (*sql.Rows, error) {
-	if s.connectionKind != duckDBQuackClientConnection {
-		return s.duck.QueryContext(ctx, query, args...)
+	return queryDuckDBContext(ctx, s.duck, s.connectionKind, query, args...)
+}
+
+func (s *Store) queryRowContext(
+	ctx context.Context, query string, args ...any,
+) interface{ Scan(...any) error } {
+	return queryDuckDBRowContext(ctx, s.duck, s.connectionKind, query, args...)
+}
+
+func queryDuckDBContext(
+	ctx context.Context,
+	duck *sql.DB,
+	connectionKind duckDBConnectionKind,
+	query string,
+	args ...any,
+) (*sql.Rows, error) {
+	if connectionKind != duckDBQuackClientConnection {
+		return duck.QueryContext(ctx, query, args...)
 	}
 	sqlText, err := duckSQLWithArgs(query, args...)
 	if err != nil {
 		return nil, err
 	}
-	return s.duck.QueryContext(
+	return duck.QueryContext(
 		ctx,
 		"SELECT * FROM "+quackAttachmentName+".query(?)",
 		sqlText,
 	)
 }
 
-func (s *Store) queryRowContext(
-	ctx context.Context, query string, args ...any,
+func queryDuckDBRowContext(
+	ctx context.Context,
+	duck *sql.DB,
+	connectionKind duckDBConnectionKind,
+	query string,
+	args ...any,
 ) interface{ Scan(...any) error } {
-	if s.connectionKind != duckDBQuackClientConnection {
-		return s.duck.QueryRowContext(ctx, query, args...)
+	if connectionKind != duckDBQuackClientConnection {
+		return duck.QueryRowContext(ctx, query, args...)
 	}
-	rows, err := s.queryContext(ctx, query, args...)
+	rows, err := queryDuckDBContext(ctx, duck, connectionKind, query, args...)
 	return duckSingleRow{rows: rows, err: err}
 }
 

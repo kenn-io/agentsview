@@ -388,6 +388,23 @@ func TestQuackClientSyncPushWritesThroughAttachment(t *testing.T) {
 	assert.Equal(t, 2, result.SessionsPushed)
 	assert.Equal(t, 3, result.MessagesPushed)
 
+	status, err := syncer.Status(ctx)
+	require.NoError(t, err, "read Quack-backed sync status")
+	assert.Equal(t, "quack-client", status.Machine)
+	assert.Equal(t, 2, status.DuckDBSessions)
+	assert.Equal(t, 3, status.DuckDBMessages)
+
+	configStatus, err := ReadStatusFromConfig(ctx, config.DuckDBConfig{
+		URL:         uri,
+		Token:       token,
+		MachineName: "quack-client",
+	}, "2026-06-30T12:00:00.000Z")
+	require.NoError(t, err, "read Quack-backed status from config")
+	assert.Equal(t, "quack-client", configStatus.Machine)
+	assert.Equal(t, "2026-06-30T12:00:00.000Z", configStatus.LastPushAt)
+	assert.Equal(t, 2, configStatus.DuckDBSessions)
+	assert.Equal(t, 3, configStatus.DuckDBMessages)
+
 	var machine string
 	require.NoError(t,
 		server.QueryRowContext(ctx,

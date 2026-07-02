@@ -130,17 +130,20 @@ func ReadStatusFromConfig(
 		return SyncStatus{}, err
 	}
 	defer store.Close()
-	return readMachineStatus(ctx, store.DB(), cfg.MachineName, lastPush)
+	return readMachineStatus(
+		ctx, store.DB(), store.connectionKind, cfg.MachineName, lastPush,
+	)
 }
 
 func readMachineStatus(
 	ctx context.Context,
 	duck *sql.DB,
+	connectionKind duckDBConnectionKind,
 	machine string,
 	lastPush string,
 ) (SyncStatus, error) {
 	status := SyncStatus{Machine: machine, LastPushAt: lastPush}
-	if err := duck.QueryRowContext(ctx,
+	if err := queryDuckDBRowContext(ctx, duck, connectionKind,
 		`SELECT COUNT(*) FROM sessions WHERE machine = ?`,
 		machine,
 	).Scan(&status.DuckDBSessions); err != nil {
@@ -149,7 +152,7 @@ func readMachineStatus(
 		}
 		return SyncStatus{}, fmt.Errorf("counting duckdb sessions: %w", err)
 	}
-	if err := duck.QueryRowContext(ctx,
+	if err := queryDuckDBRowContext(ctx, duck, connectionKind,
 		`SELECT COUNT(*)
 		 FROM messages
 		 WHERE session_id IN (

@@ -181,7 +181,9 @@ func (s *Sync) Status(ctx context.Context) (SyncStatus, error) {
 	if err := s.EnsureSchema(ctx); err != nil {
 		return SyncStatus{}, err
 	}
-	return readMachineStatus(ctx, s.duck, s.machine, status.LastPushAt)
+	return readMachineStatus(
+		ctx, s.duck, s.connectionKind, s.machine, status.LastPushAt,
+	)
 }
 
 // Push syncs local sessions and dependent rows to DuckDB.
