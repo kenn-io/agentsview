@@ -144,7 +144,7 @@ describe("MessageContent", () => {
       "var(--accent-blue-foreground)",
     );
     const copyButton = document.querySelector<HTMLButtonElement>(
-      "button.copy-btn",
+      "button.kit-copy-btn",
     );
     expect(copyButton?.getAttribute("aria-label")).toBe("复制消息");
     expect(copyButton?.getAttribute("title")).toBe("复制消息");
@@ -263,7 +263,7 @@ describe("MessageContent", () => {
 
     await tick();
     const copyButton = document.querySelector<HTMLButtonElement>(
-      'button.copy-btn[aria-label="Copy code block"]',
+      'button.kit-copy-btn[aria-label="Copy code block"]',
     );
     expect(copyButton).not.toBeNull();
     expect(copyButton!.querySelector("svg")).not.toBeNull();

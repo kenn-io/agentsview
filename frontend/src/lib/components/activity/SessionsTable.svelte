@@ -3,11 +3,8 @@
   import type { Report } from "../../api/types.js";
   import type { ActivitySessionRow } from "../../api/generated/index";
   import { router } from "../../stores/router.svelte.js";
-  import {
-    ArrowDownIcon,
-    ArrowUpIcon,
-    XIcon,
-  } from "../../icons.js";
+  import { XIcon } from "../../icons.js";
+  import { TableHeaderCell } from "@kenn-io/kit-ui";
 
   let {
     report,
@@ -175,10 +172,6 @@
     { key: "first_active", label: m.activity_window() },
   ]);
 
-  function ariaSort(key: SortKey): "ascending" | "descending" | "none" {
-    if (sortKey !== key) return "none";
-    return sortDir === "asc" ? "ascending" : "descending";
-  }
 </script>
 
 <div class="sessions-table">
@@ -209,34 +202,17 @@
       <table class="table">
         <thead>
           <tr>
-            <th class="col-session" scope="col">{m.activity_session()}</th>
-            <th class="col-model" scope="col">{m.activity_model()}</th>
+            <TableHeaderCell label={m.activity_session()} />
+            <TableHeaderCell label={m.activity_model()} />
             {#each sortColumns as col}
-              <th
-                class="col-sortable"
-                class:col-num={col.key === "agent_minutes" ||
-                  col.key === "cost"}
-                scope="col"
-                aria-sort={ariaSort(col.key)}
-              >
-                <button
-                  class="sort-btn"
-                  type="button"
-                  data-sort-key={col.key}
-                  onclick={() => setSort(col.key)}
-                >
-                  {col.label}
-                  {#if sortKey === col.key}
-                    <span class="sort-arrow">
-                      {#if sortDir === "asc"}
-                        <ArrowUpIcon size="10" strokeWidth="2.2" aria-hidden="true" />
-                      {:else}
-                        <ArrowDownIcon size="10" strokeWidth="2.2" aria-hidden="true" />
-                      {/if}
-                    </span>
-                  {/if}
-                </button>
-              </th>
+              <TableHeaderCell
+                class="sort-{col.key}"
+                label={col.label}
+                sortable
+                numeric={col.key === "agent_minutes" || col.key === "cost"}
+                sortDirection={sortKey === col.key ? sortDir : null}
+                onsort={() => setSort(col.key)}
+              />
             {/each}
           </tr>
         </thead>
@@ -365,53 +341,17 @@
     font-size: 11px;
   }
 
-  thead th {
+  /* The header cells come from kit-ui TableHeaderCell; the local table
+     shell keeps them pinned while the body scrolls. */
+  .table :global(thead th) {
     position: sticky;
     top: 0;
     z-index: 1;
-    background: var(--bg-inset);
-    text-align: left;
-    font-weight: 600;
-    color: var(--text-muted);
-    padding: 6px 8px;
-    border-bottom: 1px solid var(--border-muted);
-    white-space: nowrap;
-  }
-
-  th.col-num {
-    text-align: right;
   }
 
   .col-num {
     text-align: right;
     font-family: var(--font-mono);
-  }
-
-  .sort-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    background: none;
-    border: none;
-    padding: 0;
-    font: inherit;
-    font-weight: 600;
-    color: inherit;
-    cursor: pointer;
-  }
-
-  .sort-btn:hover {
-    color: var(--text-primary);
-  }
-
-  .sort-arrow {
-    display: inline-flex;
-    align-items: center;
-    color: var(--accent-blue);
-  }
-
-  .col-num .sort-btn {
-    flex-direction: row-reverse;
   }
 
   tbody td {

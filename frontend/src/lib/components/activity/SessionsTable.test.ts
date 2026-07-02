@@ -145,7 +145,7 @@ describe("SessionsTable", () => {
     await tick();
 
     const costHeader = document.querySelector(
-      '[data-sort-key="cost"]',
+      "th.sort-cost button",
     ) as HTMLElement | null;
     expect(costHeader).toBeTruthy();
     costHeader!.dispatchEvent(new MouseEvent("click", { bubbles: true }));

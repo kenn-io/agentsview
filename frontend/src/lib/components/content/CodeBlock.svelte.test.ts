@@ -37,7 +37,7 @@ describe("CodeBlock syntax highlighting and search marks", () => {
     await tick();
 
     const copyButton = document.querySelector<HTMLButtonElement>(
-      "button.copy-btn",
+      "button.kit-copy-btn",
     );
     expect(copyButton?.getAttribute("aria-label")).toBe("复制代码块");
     expect(copyButton?.getAttribute("title")).toBe("复制代码");

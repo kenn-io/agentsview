@@ -3,7 +3,7 @@
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { applyHighlight, applyMarks, clearMarks, escapeHTML } from "../../utils/highlight.js";
   import { highlightToHtml } from "../../utils/syntax-highlight.js";
-  import CopyButton from "../shared/CopyButton.svelte";
+  import { CopyButton } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
 
   interface Props {
@@ -51,6 +51,8 @@
     };
   });
 
+  // Copy stays controlled (rather than kit-ui CopyButton's self-managed
+  // text mode) so it goes through the app's clipboard util.
   async function handleCopy() {
     const ok = await copyToClipboard(content);
     if (!ok) return;
@@ -70,6 +72,7 @@
 <div class="code-block">
   <CopyButton
     class="code-copy"
+    revealOnHover
     {copied}
     ariaLabel={m.code_block_copy_code_block()}
     copiedAriaLabel={m.code_block_copied_code_block()}
@@ -96,14 +99,14 @@
     overflow: hidden;
   }
 
-  :global(.code-copy.copy-btn) {
+  :global(.code-copy.kit-copy-btn) {
     position: absolute;
     top: 6px;
     right: 6px;
     z-index: 1;
   }
 
-  .code-block:hover :global(.code-copy.copy-btn) {
+  .code-block:hover :global(.code-copy.kit-copy-btn) {
     opacity: 1;
   }
 

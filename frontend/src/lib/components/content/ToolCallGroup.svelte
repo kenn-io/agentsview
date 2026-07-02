@@ -13,7 +13,7 @@
   import { liveTick } from "../../stores/liveTick.svelte.js";
   import ToolBlock from "./ToolBlock.svelte";
   import ParallelGroup from "./ParallelGroup.svelte";
-  import CopyButton from "../shared/CopyButton.svelte";
+  import { CopyButton } from "@kenn-io/kit-ui";
   import { displayToolName } from "../../utils/toolDisplay.js";
   import { SettingsIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
@@ -128,6 +128,7 @@
     </span>
     <span class="group-label">{label}</span>
     <CopyButton
+      revealOnHover
       {copied}
       ariaLabel={m.tool_call_group_copy_tool_calls()}
       copiedAriaLabel={m.tool_call_group_copied_tool_calls()}
@@ -220,7 +221,7 @@
     margin-left: auto;
   }
 
-  .tool-group:hover :global(.copy-btn) {
+  .tool-group:hover :global(.kit-copy-btn) {
     opacity: 1;
   }
 

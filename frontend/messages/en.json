@@ -1453,6 +1453,7 @@
   "pinned_collapse": "Collapse",
   "pinned_expand": "Expand",
   "pinned_copy_message": "Copy message",
+  "pinned_copied_message": "Copied message",
   "pinned_unpin": "Unpin",
   "settings_agent_dir_title": "Agent Directories",
   "settings_agent_dir_description": "Directories scanned for session data. Configured via environment variables or config file.",

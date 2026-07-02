@@ -1418,6 +1418,7 @@
   "pinned_collapse": "收起",
   "pinned_expand": "展开",
   "pinned_copy_message": "复制消息",
+  "pinned_copied_message": "已复制消息",
   "pinned_unpin": "取消固定",
   "settings_agent_dir_title": "代理目录",
   "settings_agent_dir_description": "用于扫描会话数据的目录。通过环境变量或配置文件配置。",

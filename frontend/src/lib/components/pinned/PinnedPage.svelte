@@ -1,9 +1,7 @@
 <script lang="ts">
-  import { EmptyState } from "@kenn-io/kit-ui";
+  import { CopyButton, EmptyState } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import {
-    CheckIcon,
-    CopyIcon,
     ExternalLinkIcon,
     PinIcon,
     XIcon,
@@ -168,17 +166,14 @@
                   {isExpanded ? m.pinned_collapse() : m.pinned_expand()}
                 </button>
               {/if}
-              <button
-                class="copy-btn"
+              <CopyButton
+                copied={copiedId === pin.id}
+                ariaLabel={m.pinned_copy_message()}
+                copiedAriaLabel={m.pinned_copied_message()}
                 title={m.pinned_copy_message()}
+                copiedTitle={m.pinned_copied_message()}
                 onclick={() => handleCopy(pin.id, pin.content)}
-              >
-                {#if copiedId === pin.id}
-                  <CheckIcon size="12" strokeWidth="2.4" aria-hidden="true" />
-                {:else}
-                  <CopyIcon size="12" strokeWidth="2" aria-hidden="true" />
-                {/if}
-              </button>
+              />
               <button
                 class="unpin-btn"
                 title={m.pinned_unpin()}
@@ -450,26 +445,6 @@
   .unpin-btn:hover {
     background: color-mix(in srgb, var(--accent-red, #e55) 12%, transparent);
     color: var(--accent-red, #e55);
-  }
-
-  .copy-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 26px;
-    border: none;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--text-muted);
-    cursor: pointer;
-    flex-shrink: 0;
-    transition: background 0.15s, color 0.15s;
-  }
-
-  .copy-btn:hover {
-    background: var(--bg-surface-hover);
-    color: var(--text-secondary);
   }
 
   /* Make expanded cards span full width in grid */

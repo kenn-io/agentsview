@@ -29,7 +29,7 @@
   import ParallelGroup from "./ParallelGroup.svelte";
   import CodeBlock from "./CodeBlock.svelte";
   import SkillBlock from "./SkillBlock.svelte";
-  import CopyButton from "../shared/CopyButton.svelte";
+  import { CopyButton } from "@kenn-io/kit-ui";
   import { ui } from "../../stores/ui.svelte.js";
   import { pins } from "../../stores/pins.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -379,6 +379,7 @@
       {roleLabel}
     </span>
     <CopyButton
+      revealOnHover
       {copied}
       ariaLabel={m.message_content_copy_message()}
       copiedAriaLabel={m.message_content_copied_message()}
@@ -625,7 +626,7 @@
     animation: duration-pulse 1.6s ease-in-out infinite;
   }
 
-  .message:hover :global(.copy-btn) {
+  .message:hover :global(.kit-copy-btn) {
     opacity: 1;
   }
 

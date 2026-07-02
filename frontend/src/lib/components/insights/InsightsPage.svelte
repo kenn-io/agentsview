@@ -32,7 +32,7 @@
     SignalCalibration,
     SignalSessionExample,
   } from "../../api/types.js";
-  import CopyButton from "../shared/CopyButton.svelte";
+  import { CopyButton, IconButton } from "@kenn-io/kit-ui";
   import OptionTypeahead from "../layout/OptionTypeahead.svelte";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import RangePicker from "../shared/RangePicker.svelte";
@@ -764,16 +764,16 @@
       </label>
     </div>
 
-    <button
-      class="icon-btn"
+    <IconButton
+      class="toolbar-refresh"
       onclick={handleRefresh}
       title={m.insights_page_refresh()}
-      aria-label={m.insights_page_refresh()}
+      ariaLabel={m.insights_page_refresh()}
     >
       <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
         <path d="M8 3a5 5 0 00-4.546 2.914.5.5 0 01-.908-.418A6 6 0 0114 8a.5.5 0 01-1 0 5 5 0 00-5-5zm4.546 7.086a.5.5 0 01.908.418A6 6 0 012 8a.5.5 0 011 0 5 5 0 005 5 5 5 0 004.546-2.914z"/>
       </svg>
-    </button>
+    </IconButton>
   </header>
 
   <main class="content">
@@ -1364,20 +1364,8 @@
     width: 128px;
   }
 
-  .icon-btn {
-    width: 28px;
-    height: 28px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: var(--radius-sm);
-    color: var(--text-muted);
+  :global(.toolbar-refresh.kit-icon-button) {
     margin-left: auto;
-  }
-
-  .icon-btn:hover {
-    background: var(--bg-surface-hover);
-    color: var(--text-primary);
   }
 
   .content {
@@ -2113,13 +2101,12 @@
     flex-shrink: 0;
   }
 
-  .generated-actions :global(.insight-link-copy.copy-btn) {
-    opacity: 1;
+  .generated-actions :global(.insight-link-copy.kit-copy-btn) {
     border: 1px solid var(--border-muted);
     background: var(--bg-inset);
   }
 
-  .generated-actions :global(.insight-link-copy.copy-btn:hover) {
+  .generated-actions :global(.insight-link-copy.kit-copy-btn:hover) {
     border-color: var(--border-default);
   }
 
@@ -2302,7 +2289,7 @@
       flex-direction: column;
     }
 
-    .icon-btn {
+    :global(.toolbar-refresh.kit-icon-button) {
       margin-left: 0;
     }
 
