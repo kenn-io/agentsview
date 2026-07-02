@@ -130,6 +130,12 @@ type Engine struct {
 	// toDBUsageEvents). Reset at the start of each sync run and folded
 	// into the returned SyncStats before the run completes.
 	anomalies anomalyAccumulator
+
+	// signalSched debounces the O(session history) signal/secret
+	// recompute triggered by incremental writes, so streaming
+	// sessions don't rescan their whole history on every appended
+	// line. Close flushes and stops it.
+	signalSched *signalScheduler
 }
 
 // PhaseStats returns the engine's phase counter. The values reflect only
@@ -206,7 +212,7 @@ func NewEngine(
 		maps.Copy(providerModes, cfg.ProviderMigrationModes)
 	}
 
-	return &Engine{
+	e := &Engine{
 		db:                      database,
 		agentDirs:               dirs,
 		machine:                 cfg.Machine,
@@ -221,6 +227,36 @@ func NewEngine(
 		providerFactories:       providerFactoryMap(providerFactories),
 		providerMigrationModes:  providerModes,
 	}
+	// Errors are logged inside recomputeSignalsFromDB and are
+	// non-fatal: the next write or flush retries.
+	recompute := func(sessionID string) {
+		_ = e.recomputeSignalsFromDB(
+			context.Background(), sessionID,
+		)
+	}
+	e.signalSched = newSignalScheduler(
+		signalRecomputeInterval, signalRecomputeQuiet,
+		// Inline runs happen from markDirty inside writeIncremental,
+		// whose callers already hold syncMu.
+		recompute,
+		// Timer and flush runs happen outside any sync operation, so
+		// they take syncMu themselves: otherwise a delayed recompute
+		// could read an older message snapshot and overwrite signals
+		// just written by a concurrent incremental or full sync.
+		func(sessionID string) {
+			e.syncMu.Lock()
+			defer e.syncMu.Unlock()
+			recompute(sessionID)
+		},
+	)
+	return e
+}
+
+// Close flushes any pending debounced signal recomputes and stops
+// the scheduler. Call once when the engine's owner shuts down;
+// safe to call repeatedly.
+func (e *Engine) Close() {
+	e.signalSched.stop()
 }
 
 func providerFactoryMap(
@@ -605,6 +641,17 @@ func (e *Engine) classifyProviderChangedPath(
 		})
 		def := provider.Definition()
 		watchRoots := providerChangedPathWatchRoots(ctx, provider, roots)
+		// Every SourcesForChangedPath implementation resolves the
+		// changed path within the provider's configured roots or plan
+		// watch roots (stored-path hints are already scoped to the
+		// watch root by the query), so an agent whose roots cannot
+		// contain the path never claims it. Skip it before the
+		// per-root stored-hint DB queries, which otherwise run for
+		// every registered agent on every watcher event.
+		if !changedPathWithinAnyRoot(path, roots) &&
+			!changedPathWithinAnyRoot(path, watchRoots) {
+			continue
+		}
 		for _, watchRoot := range watchRoots {
 			storedSourcePaths, err := e.db.ListStoredSourcePathHints(
 				string(def.Type),
@@ -6280,12 +6327,14 @@ func (e *Engine) writeIncremental(
 		return err
 	}
 
-	// Errors here are already logged by recomputeSignalsFromDB
-	// and are non-fatal for incremental sync; the next
-	// incremental write will retry.
-	_ = e.recomputeSignalsFromDB(
-		context.Background(), inc.sessionID,
-	)
+	// Signal/secret recompute costs O(session history), so it is
+	// debounced per session instead of running on every appended
+	// line: the first write after a quiet period recomputes
+	// inline, writes during a streaming burst coalesce into one
+	// recompute per interval plus a trailing flush. Recompute
+	// errors are logged inside recomputeSignalsFromDB and are
+	// non-fatal; a later write or flush retries.
+	e.signalSched.markDirty(inc.sessionID)
 
 	return nil
 }

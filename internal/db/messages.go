@@ -221,19 +221,8 @@ func insertMessagesTx(
 		for i, m := range batch {
 			id := nextID + int64(start+i)
 			ids[start+i] = id
-			args = append(args,
-				id,
-				m.SessionID, m.Ordinal, m.Role, m.Content,
-				m.ThinkingText,
-				m.Timestamp, m.HasThinking, m.HasToolUse,
-				m.ContentLength, m.IsSystem,
-				m.Model, string(m.TokenUsage),
-				m.ContextTokens, m.OutputTokens,
-				m.HasContextTokens, m.HasOutputTokens,
-				m.ClaudeMessageID, m.ClaudeRequestID,
-				m.SourceType, m.SourceSubtype, m.SourceUUID,
-				m.SourceParentUUID, m.IsSidechain, m.IsCompactBoundary,
-			)
+			args = append(args, id)
+			args = append(args, messageInsertArgs(m)...)
 		}
 		query := fmt.Sprintf(
 			"INSERT INTO messages (id, %s) VALUES %s",
@@ -587,13 +576,23 @@ func (db *DB) ReplaceSessionMessages(
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
+	// Prefer an in-place diff (append/merge shapes from streaming
+	// syncs) so unchanged rows keep their rowids, pins, and FTS
+	// entries; fall back to the full delete+reinsert for
+	// truncations, reorders, and wholesale rewrites.
+	plan, useDiff := db.planStoredMessageDiff(sessionID, msgs)
+
 	tx, err := db.getWriter().Begin()
 	if err != nil {
 		return fmt.Errorf("beginning tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := replaceSessionMessagesTx(tx, sessionID, msgs); err != nil {
+	if useDiff {
+		if err := applySessionMessageDiffTx(tx, sessionID, plan); err != nil {
+			return err
+		}
+	} else if err := replaceSessionMessagesTx(tx, sessionID, msgs); err != nil {
 		return err
 	}
 	if err := updateSessionAutomationFromMessagesTx(tx, sessionID); err != nil {
@@ -721,13 +720,21 @@ func (db *DB) ReplaceSessionContent(
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
+	// Same diff-vs-full decision as ReplaceSessionMessages: this is
+	// the hot path for streaming chunk-merge full-parse fallbacks.
+	plan, useDiff := db.planStoredMessageDiff(sessionID, msgs)
+
 	tx, err := db.getWriter().Begin()
 	if err != nil {
 		return fmt.Errorf("beginning tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := replaceSessionMessagesTx(tx, sessionID, msgs); err != nil {
+	if useDiff {
+		if err := applySessionMessageDiffTx(tx, sessionID, plan); err != nil {
+			return err
+		}
+	} else if err := replaceSessionMessagesTx(tx, sessionID, msgs); err != nil {
 		return err
 	}
 	if err := updateSessionAutomationFromMessagesTx(tx, sessionID); err != nil {

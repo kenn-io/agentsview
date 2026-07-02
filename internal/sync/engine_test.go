@@ -4314,7 +4314,9 @@ func TestWriteIncrementalBlanksImplausibleEndedAt(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			database := openTestDB(t)
-			e := &Engine{db: database}
+			// writeIncremental needs the signal scheduler, so build
+			// via NewEngine rather than a bare struct literal.
+			e := NewEngine(database, EngineConfig{})
 
 			plausibleEnd := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
 			start := plausibleEnd.Add(-time.Hour)
@@ -4384,7 +4386,9 @@ func TestWriteIncrementalBlanksImplausibleEndedAt(t *testing.T) {
 // ended_at must still update the column.
 func TestWriteIncrementalKeepsPlausibleEndedAt(t *testing.T) {
 	database := openTestDB(t)
-	e := &Engine{db: database}
+	// writeIncremental needs the signal scheduler, so build via
+	// NewEngine rather than a bare struct literal.
+	e := NewEngine(database, EngineConfig{})
 
 	start := time.Date(2026, 6, 20, 10, 0, 0, 0, time.UTC)
 	firstEnd := start.Add(time.Hour)
