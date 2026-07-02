@@ -147,7 +147,10 @@ func buildTestDBTemplate() (map[string][]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening db template: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	// The deadline only guards against a hung checkpoint: flushing
+	// the schema-creation WAL can take well over a second on slow
+	// Windows CI disks under parallel package load.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	checkpointErr := template.CheckpointWALTruncate(ctx)
 	closeErr := template.Close()

@@ -54,7 +54,7 @@ func buildChunkedAnalyticsFixtureTemplate(t *testing.T) (string, string) {
 	d, err := OpenPreparedTestDB(path)
 	require.NoError(t, err, "open chunked analytics template")
 	seedChunkedAnalyticsFixture(t, d)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	require.NoError(t, d.CheckpointWALTruncate(ctx),
 		"checkpoint chunked analytics template")
