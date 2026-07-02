@@ -12,7 +12,8 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-const forgeDBFilename = ".forge.db"
+// ForgeDBFilename is the Forge session store filename inside its data dir.
+const ForgeDBFilename = ".forge.db"
 
 // ForgeSessionMeta is lightweight metadata for a session,
 // used to detect changes without parsing messages.
@@ -27,7 +28,7 @@ func forgeDBPath(dir string) string {
 	if dir == "" {
 		return ""
 	}
-	path := filepath.Join(dir, forgeDBFilename)
+	path := filepath.Join(dir, ForgeDBFilename)
 	info, err := os.Stat(path)
 	if err != nil || info.IsDir() {
 		return ""

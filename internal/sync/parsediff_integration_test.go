@@ -49,6 +49,7 @@ func parseDiffAgentDirs(env *testEnv) map[parser.AgentType][]string {
 	add(parser.AgentOpenCode, env.opencodeDir)
 	add(parser.AgentForge, env.forgeDir)
 	add(parser.AgentPiebald, env.piebaldDir)
+	add(parser.AgentWarp, env.warpDir)
 	add(parser.AgentIflow, env.iflowDir)
 	add(parser.AgentAmp, env.ampDir)
 	add(parser.AgentPi, env.piDir)

@@ -190,11 +190,14 @@ func (s dbBackedSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 			return nil, err
 		}
 		for _, meta := range metas {
-			addJSONLSource(
-				s.newSourceRef(root, dbPath, meta.SessionID, meta.VirtualPath),
-				&sources,
-				seen,
-			)
+			ref := s.newSourceRef(root, dbPath, meta.SessionID, meta.VirtualPath)
+			// Carry the per-session mtime captured here so parse-diff's --limit
+			// sampler can order these virtual "<db>#<sessionID>" sources by each
+			// session's real mtime rather than stat'ing a path that has no
+			// on-disk existence. Ordering metadata only: skip-cache and
+			// data-version freshness still resolve through Fingerprint.
+			ref.DiscoveryMTimeNS = meta.FileMtime
+			addJSONLSource(ref, &sources, seen)
 		}
 	}
 	sortJSONLSources(sources)
@@ -465,7 +468,7 @@ func newForgeProviderFactory(def AgentDef) ProviderFactory {
 func forgeProviderSpec() dbBackedProviderSpec {
 	return dbBackedProviderSpec{
 		agent:  AgentForge,
-		dbName: forgeDBFilename,
+		dbName: ForgeDBFilename,
 		findDB: forgeDBPath,
 		listMeta: func(dbPath string) ([]dbBackedSessionMeta, error) {
 			metas, err := ListForgeSessionMeta(dbPath)
@@ -496,7 +499,7 @@ func newPiebaldProviderFactory(def AgentDef) ProviderFactory {
 func piebaldProviderSpec() dbBackedProviderSpec {
 	return dbBackedProviderSpec{
 		agent:  AgentPiebald,
-		dbName: piebaldDBFilename,
+		dbName: PiebaldDBFilename,
 		findDB: piebaldDBPath,
 		listMeta: func(dbPath string) ([]dbBackedSessionMeta, error) {
 			metas, err := ListPiebaldSessionMeta(dbPath)
@@ -527,7 +530,7 @@ func newWarpProviderFactory(def AgentDef) ProviderFactory {
 func warpProviderSpec() dbBackedProviderSpec {
 	return dbBackedProviderSpec{
 		agent:  AgentWarp,
-		dbName: warpDBFilename,
+		dbName: WarpDBFilename,
 		findDB: warpDBPath,
 		listMeta: func(dbPath string) ([]dbBackedSessionMeta, error) {
 			metas, err := ListWarpSessionMeta(dbPath)

@@ -34,6 +34,7 @@ type testEnv struct {
 	mimocodeDir       string
 	forgeDir          string
 	piebaldDir        string
+	warpDir           string
 	iflowDir          string
 	ampDir            string
 	piDir             string
@@ -115,6 +116,7 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 		mimocodeDir:       t.TempDir(),
 		forgeDir:          t.TempDir(),
 		piebaldDir:        t.TempDir(),
+		warpDir:           t.TempDir(),
 		iflowDir:          t.TempDir(),
 		ampDir:            t.TempDir(),
 		piDir:             t.TempDir(),
@@ -183,6 +185,7 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 			parser.AgentMiMoCode:       {env.mimocodeDir},
 			parser.AgentForge:          {env.forgeDir},
 			parser.AgentPiebald:        {env.piebaldDir},
+			parser.AgentWarp:           {env.warpDir},
 			parser.AgentIflow:          {env.iflowDir},
 			parser.AgentAmp:            {env.ampDir},
 			parser.AgentPi:             {env.piDir},
@@ -262,6 +265,10 @@ func assignFocusedAgentDir(
 		env.mimocodeDir = dir
 	case parser.AgentPiebald:
 		env.piebaldDir = dir
+	case parser.AgentForge:
+		env.forgeDir = dir
+	case parser.AgentWarp:
+		env.warpDir = dir
 	case parser.AgentPi:
 		env.piDir = dir
 	case parser.AgentOMP:

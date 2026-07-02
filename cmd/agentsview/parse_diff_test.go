@@ -58,20 +58,27 @@ func TestParseDiff_UnknownAgentListsSupported(t *testing.T) {
 		assert.Contains(t, err.Error(), want,
 			"error should list supported agent %q", want)
 	}
-	for _, unwanted := range []string{"forge", "piebald", "warp"} {
+	// The DB-backed provider-authoritative agents are re-parseable through
+	// their providers, so they appear in the supported list too.
+	for _, want := range []string{"forge", "piebald", "warp"} {
+		assert.Contains(t, err.Error(), want,
+			"error should list supported DB-backed agent %q", want)
+	}
+	// Import-only agents remain unsupported and must not be listed.
+	for _, unwanted := range []string{"claude-ai", "chatgpt"} {
 		assert.NotContains(t, err.Error(), unwanted,
-			"error should not list unsupported agent %q", unwanted)
+			"error should not list import-only agent %q", unwanted)
 	}
 }
 
 func TestParseDiff_RejectsAgentsWithoutOnDiskSource(t *testing.T) {
+	// Only import-only agents have no source to re-parse. The DB-backed
+	// provider-authoritative agents (Forge/Piebald/Warp) are re-parseable
+	// through their providers and are covered as supported elsewhere.
 	tests := []struct {
 		name  string
 		agent string
 	}{
-		{"database-backed forge", "forge"},
-		{"database-backed piebald", "piebald"},
-		{"database-backed warp", "warp"},
 		{"import-only claude-ai", "claude-ai"},
 		{"import-only chatgpt", "chatgpt"},
 	}
@@ -122,6 +129,11 @@ func TestParseDiffAgentTypes(t *testing.T) {
 			want: []string{"omp"},
 		},
 		{
+			name: "db-backed provider-authoritative agents",
+			in:   []string{"forge", "piebald", "warp"},
+			want: []string{"forge", "piebald", "warp"},
+		},
+		{
 			name: "trims and lowercases",
 			in:   []string{" Claude "},
 			want: []string{"claude"},
@@ -137,8 +149,8 @@ func TestParseDiffAgentTypes(t *testing.T) {
 			wantErr: `unknown agent "nope"`,
 		},
 		{
-			name:    "db-backed agent",
-			in:      []string{"forge"},
+			name:    "import-only agent",
+			in:      []string{"claude-ai"},
 			wantErr: "no on-disk source to re-parse",
 		},
 	}
@@ -168,12 +180,13 @@ func TestParseDiffSupportedAgentsIncludesProviderAuthoritativeAgents(t *testing.
 	supported := parseDiffSupportedAgents()
 	modes := parser.ProviderMigrationModes()
 	// Build the expected set from the registry so the contract covers every
-	// current file-based, provider-authoritative agent and stays correct as
-	// the migration manifest changes, rather than a hand-maintained subset.
+	// current provider-authoritative agent and stays correct as the migration
+	// manifest changes, rather than a hand-maintained subset. FileBased is not
+	// part of the gate: DB-backed provider-authoritative agents
+	// (Forge/Piebald/Warp) are re-parseable through their providers too.
 	checked := 0
 	for _, def := range parser.Registry {
-		if !def.FileBased ||
-			modes[def.Type] != parser.ProviderMigrationProviderAuthoritative {
+		if modes[def.Type] != parser.ProviderMigrationProviderAuthoritative {
 			continue
 		}
 		checked++
@@ -183,7 +196,23 @@ func TestParseDiffSupportedAgentsIncludesProviderAuthoritativeAgents(t *testing.
 			"parse-diff supported list must include %s", def.Type)
 	}
 	require.Positive(t, checked,
-		"expected at least one file-based provider-authoritative agent")
+		"expected at least one provider-authoritative agent")
+
+	// Explicitly pin the DB-backed provider-authoritative agents so a
+	// regression that re-adds a FileBased gate to the parse-diff support
+	// check is caught by name, not just by the registry-wide sweep above.
+	for _, agent := range []parser.AgentType{
+		parser.AgentForge, parser.AgentPiebald, parser.AgentWarp,
+	} {
+		def, ok := parser.AgentByType(agent)
+		require.True(t, ok, "agent %s", agent)
+		assert.False(t, def.FileBased,
+			"%s is expected to be DB-backed (FileBased=false)", agent)
+		assert.True(t, parseDiffAgentSupported(def),
+			"DB-backed %s must be supported by parse-diff", agent)
+		assert.Contains(t, supported, string(agent),
+			"parse-diff supported list must include DB-backed %s", agent)
+	}
 }
 
 func TestParseDiff_EmptyArchiveRunsClean(t *testing.T) {

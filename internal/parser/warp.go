@@ -10,7 +10,8 @@ import (
 	"time"
 )
 
-const warpDBFilename = "warp.sqlite"
+// WarpDBFilename is the Warp session store filename inside its data dir.
+const WarpDBFilename = "warp.sqlite"
 
 // WarpSessionMeta is lightweight metadata for a session,
 // used to detect changes without parsing messages.
@@ -486,7 +487,7 @@ func parseWarpTimestamp(s string) time.Time {
 // warpDBPath returns the path to warp.sqlite inside the
 // given directory, or "" if it doesn't exist.
 func warpDBPath(dir string) string {
-	candidate := filepath.Join(dir, warpDBFilename)
+	candidate := filepath.Join(dir, WarpDBFilename)
 	if _, err := os.Stat(candidate); err == nil {
 		return candidate
 	}

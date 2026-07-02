@@ -176,6 +176,16 @@ type SourceRef struct {
 	FingerprintKey string
 	// ProjectHint is advisory metadata for UI grouping and may be empty.
 	ProjectHint string
+	// DiscoveryMTimeNS is an optional per-source modification time in Unix
+	// nanoseconds captured at discovery. Providers whose sources are virtual --
+	// a shared store fanned out to one source per session, where DisplayPath is
+	// "<db>#<sessionID>" and os.Stat cannot resolve a real mtime -- set it so
+	// ordering consumers (parse-diff's --limit sampler) can rank sources by each
+	// session's real mtime instead of a failed stat that collapses to 0. Zero
+	// means unset. It is advisory ordering metadata only: it is never persisted
+	// and must not be used for skip-cache or data-version freshness, which go
+	// through Fingerprint.
+	DiscoveryMTimeNS int64
 	// Opaque is in-memory-only source state: never persisted and never required
 	// for lookup from persisted rows, so any source that must survive a restart
 	// has to be recoverable from Key, DisplayPath, FingerprintKey,
