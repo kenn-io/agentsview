@@ -76,7 +76,12 @@ func syncService(
 		AgentDirs: cfg.AgentDirs,
 		Machine:   "local",
 	})
-	cleanup := func() { closeWriteDB(d, lock) }
+	// Close the engine before the DB so pending debounced signal
+	// recomputes flush while the DB is still open.
+	cleanup := func() {
+		engine.Close()
+		closeWriteDB(d, lock)
+	}
 	return service.NewDirectBackend(d, engine), cleanup, nil
 }
 

@@ -302,6 +302,7 @@ func ensureFreshData(
 			AgentDirs: appCfg.AgentDirs,
 			Machine:   "local",
 		})
+		defer engine.Close()
 		fmt.Fprintln(os.Stderr,
 			"Data version changed, running full resync...")
 		t := time.Now()
@@ -324,6 +325,7 @@ func ensureFreshData(
 		AgentDirs: appCfg.AgentDirs,
 		Machine:   "local",
 	})
+	defer engine.Close()
 
 	since := engine.LastSyncStartedAt()
 	if !since.IsZero() {

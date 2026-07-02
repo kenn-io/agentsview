@@ -453,6 +453,7 @@ func runLocalSync(
 		Machine:                 "local",
 		BlockedResultCategories: appCfg.ResultContentBlockedCategories,
 	})
+	defer engine.Close()
 
 	didResync := full || database.NeedsResync()
 	if didResync {

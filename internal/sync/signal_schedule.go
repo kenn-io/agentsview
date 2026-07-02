@@ -36,14 +36,22 @@ type signalScheduler struct {
 	deferredRun func(sessionID string)
 
 	// now and afterFunc are injectable for deterministic tests.
+	// afterFunc returns a cancel function reporting whether the
+	// callback was stopped before it started running.
 	now       func() time.Time
-	afterFunc func(d time.Duration, f func())
+	afterFunc func(d time.Duration, f func()) (cancel func() bool)
 
-	mu         sync.Mutex
-	last       map[string]time.Time // sessionID -> last recompute
-	dirty      map[string]time.Time // sessionID -> last deferred mark
-	timerArmed bool
-	stopped    bool
+	// inflight counts armed flush timers whose callbacks have not
+	// finished, so stop can wait for a recompute already running
+	// on the timer goroutine before its owner closes the DB.
+	inflight sync.WaitGroup
+
+	mu          sync.Mutex
+	last        map[string]time.Time // sessionID -> last recompute
+	dirty       map[string]time.Time // sessionID -> last deferred mark
+	timerArmed  bool
+	timerCancel func() bool
+	stopped     bool
 }
 
 func newSignalScheduler(
@@ -56,9 +64,11 @@ func newSignalScheduler(
 		run:         run,
 		deferredRun: deferredRun,
 		now:         time.Now,
-		afterFunc:   func(d time.Duration, f func()) { time.AfterFunc(d, f) },
-		last:        make(map[string]time.Time),
-		dirty:       make(map[string]time.Time),
+		afterFunc: func(d time.Duration, f func()) func() bool {
+			return time.AfterFunc(d, f).Stop
+		},
+		last:  make(map[string]time.Time),
+		dirty: make(map[string]time.Time),
 	}
 }
 
@@ -92,13 +102,27 @@ func (s *signalScheduler) flushAll() {
 	s.runAll(s.takeDue(true))
 }
 
-// stop flushes pending recomputes and puts the scheduler in
-// pass-through mode: later marks recompute inline and no timers
-// are armed. Used at engine shutdown; safe to call repeatedly.
+// stop cancels the pending flush timer, waits for any timer
+// callback already running (so no recompute is still using the DB
+// when stop returns), flushes remaining deferred recomputes, and
+// puts the scheduler in pass-through mode: later marks recompute
+// inline and no timers are armed. Used at engine shutdown; safe to
+// call repeatedly.
 func (s *signalScheduler) stop() {
 	s.mu.Lock()
 	s.stopped = true
+	cancel := s.timerCancel
+	armed := s.timerArmed
+	s.timerArmed = false
+	s.timerCancel = nil
 	s.mu.Unlock()
+	// A successful cancel means the callback will never run, so its
+	// inflight slot is released here; otherwise the callback is
+	// already running (or about to) and releases it itself.
+	if armed && cancel != nil && cancel() {
+		s.inflight.Done()
+	}
+	s.inflight.Wait()
 	s.flushAll()
 }
 
@@ -144,14 +168,19 @@ func (s *signalScheduler) armLocked() {
 		return
 	}
 	s.timerArmed = true
-	s.afterFunc(s.quiet, s.onTimer)
+	s.inflight.Add(1)
+	s.timerCancel = s.afterFunc(s.quiet, s.onTimer)
 }
 
 // onTimer is the flush-timer callback: flush what is due, then
-// re-arm while sessions remain dirty.
+// re-arm while sessions remain dirty. The deferred Done runs after
+// any re-arm's Add, so the inflight count never dips to zero while
+// a follow-up timer is pending.
 func (s *signalScheduler) onTimer() {
+	defer s.inflight.Done()
 	s.mu.Lock()
 	s.timerArmed = false
+	s.timerCancel = nil
 	s.mu.Unlock()
 
 	s.tick()

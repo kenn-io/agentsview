@@ -258,6 +258,9 @@ func (b localArchiveQueryBackend) SessionUsage(
 			fmt.Fprintf(os.Stderr,
 				"warning: sync failed: %v\n", syncErr)
 		}
+		// Flush pending debounced signal recomputes before the
+		// usage query reads the session.
+		engine.Close()
 	}
 
 	u, err := b.database.GetSessionUsage(ctx, resolvedID)

@@ -10,13 +10,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type harnessTimer struct {
+	f        func()
+	fired    bool
+	canceled bool
+}
+
 type schedulerHarness struct {
 	mu       sync.Mutex
 	sched    *signalScheduler
 	clock    time.Time
 	runs     []string
 	deferred []string
-	armed    []func()
+	armed    []*harnessTimer
 }
 
 func newSchedulerHarness(interval, quiet time.Duration) *schedulerHarness {
@@ -38,10 +44,20 @@ func newSchedulerHarness(interval, quiet time.Duration) *schedulerHarness {
 		defer h.mu.Unlock()
 		return h.clock
 	}
-	h.sched.afterFunc = func(_ time.Duration, f func()) {
+	h.sched.afterFunc = func(_ time.Duration, f func()) func() bool {
 		h.mu.Lock()
-		h.armed = append(h.armed, f)
+		ht := &harnessTimer{f: f}
+		h.armed = append(h.armed, ht)
 		h.mu.Unlock()
+		return func() bool {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if ht.fired || ht.canceled {
+				return false
+			}
+			ht.canceled = true
+			return true
+		}
 	}
 	return h
 }
@@ -64,22 +80,36 @@ func (h *schedulerHarness) deferredSnapshot() []string {
 	return append([]string(nil), h.deferred...)
 }
 
+// armedCount returns the number of pending (not fired, not
+// canceled) timers.
 func (h *schedulerHarness) armedCount() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return len(h.armed)
+	n := 0
+	for _, ht := range h.armed {
+		if !ht.fired && !ht.canceled {
+			n++
+		}
+	}
+	return n
 }
 
-// fireTimer invokes the oldest armed timer callback, simulating
+// fireTimer invokes the oldest pending timer callback, simulating
 // its expiry regardless of the fake clock.
 func (h *schedulerHarness) fireTimer(t *testing.T) {
 	t.Helper()
 	h.mu.Lock()
-	require.NotEmpty(t, h.armed, "no timer armed")
-	f := h.armed[0]
-	h.armed = h.armed[1:]
+	var pending *harnessTimer
+	for _, ht := range h.armed {
+		if !ht.fired && !ht.canceled {
+			pending = ht
+			break
+		}
+	}
+	require.NotNil(t, pending, "no timer armed")
+	pending.fired = true
 	h.mu.Unlock()
-	f()
+	pending.f()
 }
 
 func TestSignalSchedulerFirstMarkRunsInline(t *testing.T) {
@@ -210,25 +240,80 @@ func TestSignalSchedulerStopFlushesAndRunsInlineAfter(t *testing.T) {
 	h.sched.markDirty("s1")
 	require.Len(t, h.runsSnapshot(), 1)
 
-	armedBefore := h.armedCount()
+	require.Equal(t, 1, h.armedCount(),
+		"deferral should have armed the flush timer")
 	h.sched.stop()
 	assert.Len(t, h.runsSnapshot(), 2,
 		"stop should flush pending recomputes")
+	assert.Zero(t, h.armedCount(),
+		"stop should cancel the pending flush timer")
 
 	h.sched.markDirty("s1")
 	assert.Len(t, h.runsSnapshot(), 3,
 		"marks after stop should recompute inline")
-	assert.Equal(t, armedBefore, h.armedCount(),
+	assert.Zero(t, h.armedCount(),
 		"stopped scheduler must not arm new timers")
 
-	// A timer armed before stop must fire as a no-op.
-	h.fireTimer(t)
-	assert.Len(t, h.runsSnapshot(), 3,
-		"stale timer firing after stop should do nothing")
-	assert.Zero(t, h.armedCount(),
-		"stale timer must not re-arm after stop")
-
 	h.sched.stop() // double-stop must not panic
+}
+
+// TestSignalSchedulerStopWaitsForInflightTimerRun guards the
+// shutdown ordering Engine.Close relies on: a recompute already
+// running on the timer goroutine must finish before stop returns,
+// or the owner could close the DB underneath it.
+func TestSignalSchedulerStopWaitsForInflightTimerRun(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var mu sync.Mutex
+	clock := time.Unix(1_700_000_000, 0)
+	sched := newSignalScheduler(10*time.Second, 2*time.Second,
+		func(string) {},
+		func(string) {
+			close(started)
+			<-release
+		},
+	)
+	sched.now = func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return clock
+	}
+	var timerCB func()
+	sched.afterFunc = func(_ time.Duration, f func()) func() bool {
+		timerCB = f
+		return func() bool { return false }
+	}
+
+	sched.markDirty("s1") // leading edge, inline
+	sched.markDirty("s1") // defers and arms the timer
+	require.NotNil(t, timerCB, "deferral should arm the flush timer")
+
+	// The timer fires after the quiet delay and the deferred run
+	// blocks, simulating a recompute in the middle of DB work.
+	mu.Lock()
+	clock = clock.Add(3 * time.Second)
+	mu.Unlock()
+	go timerCB()
+	<-started
+
+	stopDone := make(chan struct{})
+	go func() {
+		sched.stop()
+		close(stopDone)
+	}()
+	stopped := func() bool {
+		select {
+		case <-stopDone:
+			return true
+		default:
+			return false
+		}
+	}
+	assert.Never(t, stopped, 100*time.Millisecond, 10*time.Millisecond,
+		"stop must wait for the in-flight timer recompute")
+	close(release)
+	require.Eventually(t, stopped, 2*time.Second, 5*time.Millisecond,
+		"stop must return once the in-flight recompute finishes")
 }
 
 // TestSignalSchedulerRoutesDeferredRunsSeparately pins which runs go
