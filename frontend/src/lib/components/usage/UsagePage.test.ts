@@ -10,7 +10,6 @@ import { router } from "../../stores/router.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { usage } from "../../stores/usage.svelte.js";
 import source from "./UsagePage.svelte?raw";
-// @ts-ignore
 import UsagePage from "./UsagePage.svelte";
 
 async function flushEffects() {

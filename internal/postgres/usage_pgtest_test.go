@@ -603,6 +603,72 @@ func TestStoreGetUsageMatchingSessionCountCountsAssistantMessageWithNoModel(
 		"assistant message with no model must still count without a model filter")
 }
 
+// TestStoreGetUsageMatchingSessionCountUnboundedMatchesBoundedSemantics
+// guards against the unbounded (no From/To) branch drifting from the
+// bounded branch: soft-deleted sessions and sessions without
+// assistant/event activity must not count, and empty-model assistant
+// messages must survive an ExcludeModel filter, exactly as on the
+// bounded path.
+func TestStoreGetUsageMatchingSessionCountUnboundedMatchesBoundedSemantics(
+	t *testing.T,
+) {
+	_, store := prepareUsageSchema(t, "agentsview_usage_matching_sessions_unbounded_test")
+
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at, ended_at,
+			message_count, user_message_count, deleted_at
+		) VALUES
+			('copilot-live', 'test-machine', 'proj-a', 'copilot',
+			 '2026-03-01T10:00:00Z'::timestamptz,
+			 '2026-03-01T10:00:00Z'::timestamptz, 1, 1, NULL),
+			('copilot-trashed', 'test-machine', 'proj-a', 'copilot',
+			 '2026-03-01T10:00:00Z'::timestamptz,
+			 '2026-03-01T10:00:00Z'::timestamptz, 1, 1,
+			 '2026-03-02T00:00:00Z'::timestamptz),
+			('copilot-user-only', 'test-machine', 'proj-a', 'copilot',
+			 '2026-03-01T10:00:00Z'::timestamptz,
+			 '2026-03-01T10:00:00Z'::timestamptz, 1, 1, NULL)`)
+	require.NoError(t, err, "insert sessions")
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp, content_length,
+			model, token_usage
+		) VALUES
+			('copilot-live', 0, 'assistant', 'copilot',
+			 '2026-03-01T10:00:00Z'::timestamptz, 7,
+			 '', ''),
+			('copilot-trashed', 0, 'assistant', 'copilot',
+			 '2026-03-01T10:00:00Z'::timestamptz, 7,
+			 'gpt-5.3-codex', ''),
+			('copilot-user-only', 0, 'user', 'hello',
+			 '2026-03-01T10:00:00Z'::timestamptz, 5,
+			 '', '')`)
+	require.NoError(t, err, "insert messages")
+
+	unbounded := db.UsageFilter{Timezone: "UTC", Agent: "copilot"}
+	count, err := store.GetUsageMatchingSessionCount(ctx, unbounded)
+	require.NoError(t, err, "GetUsageMatchingSessionCount unbounded")
+	assert.Equal(t, 1, count,
+		"soft-deleted and assistant-less sessions must not count unbounded")
+
+	bounded := unbounded
+	bounded.From = "2026-03-01"
+	bounded.To = "2026-03-01"
+	boundedCount, err := store.GetUsageMatchingSessionCount(ctx, bounded)
+	require.NoError(t, err, "GetUsageMatchingSessionCount bounded")
+	assert.Equal(t, count, boundedCount,
+		"bounded and unbounded requests must match the same sessions")
+
+	excluded := unbounded
+	excluded.ExcludeModel = "gpt-5.3-codex"
+	excludedCount, err := store.GetUsageMatchingSessionCount(ctx, excluded)
+	require.NoError(t, err, "GetUsageMatchingSessionCount exclude-model")
+	assert.Equal(t, 1, excludedCount,
+		"empty-model assistant message must survive an ExcludeModel filter")
+}
+
 func TestStoreGetUsageSessionCountsDedupesSourceUUIDFallback(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_counts_source_uuid_test")
 

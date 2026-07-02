@@ -2167,6 +2167,102 @@ func TestGetUsageMatchingSessionCount_CountsAssistantMessageWithNoModel(
 		"assistant message with no model must still count without a model filter")
 }
 
+// TestGetUsageMatchingSessionCount_UnboundedMatchesBoundedSemantics guards
+// against the unbounded (no From/To) branch drifting from the bounded
+// branch: both must require an assistant, non-synthetic message (or a
+// usage_events row with a model), both must admit empty-model assistant
+// messages, and Model/ExcludeModel must narrow the same rows.
+func TestGetUsageMatchingSessionCount_UnboundedMatchesBoundedSemantics(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "copilot-user-only", "proj-a", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2026-03-01T10:00:00Z")
+		s.EndedAt = new("2026-03-01T10:00:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "copilot-user-only", Ordinal: 0,
+		Role: "user", Timestamp: "2026-03-01T10:00:00Z",
+	})
+
+	insertSession(t, d, "copilot-synthetic-only", "proj-a", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2026-03-01T11:00:00Z")
+		s.EndedAt = new("2026-03-01T11:00:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "copilot-synthetic-only", Ordinal: 0,
+		Role: "assistant", Timestamp: "2026-03-01T11:00:00Z",
+		Model: "<synthetic>",
+	})
+
+	insertSession(t, d, "copilot-no-model-msg", "proj-a", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2026-03-01T12:00:00Z")
+		s.EndedAt = new("2026-03-01T12:00:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "copilot-no-model-msg", Ordinal: 0,
+		Role: "assistant", Timestamp: "2026-03-01T12:00:00Z",
+		Model: "",
+	})
+
+	insertSession(t, d, "copilot-no-messages", "proj-a", func(s *Session) {
+		s.Agent = "copilot"
+		s.StartedAt = new("2026-03-01T13:00:00Z")
+		s.EndedAt = new("2026-03-01T13:00:00Z")
+	})
+
+	tests := []struct {
+		name   string
+		filter UsageFilter
+		want   int
+	}{
+		{
+			name:   "unbounded requires assistant or event activity",
+			filter: UsageFilter{Timezone: "UTC", Agent: "copilot"},
+			// Only copilot-no-model-msg has a qualifying assistant
+			// message; user-only, synthetic-only, and message-less
+			// sessions must not count.
+			want: 1,
+		},
+		{
+			name: "unbounded exclude-model keeps empty-model assistant messages",
+			filter: UsageFilter{
+				Timezone: "UTC", Agent: "copilot",
+				ExcludeModel: "gpt-5.3-codex",
+			},
+			want: 1,
+		},
+		{
+			name: "unbounded model filter narrows to matching rows",
+			filter: UsageFilter{
+				Timezone: "UTC", Agent: "copilot", Model: "gpt-5.3-codex",
+			},
+			want: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := d.GetUsageMatchingSessionCount(ctx, tt.filter)
+			requireNoError(t, err, "GetUsageMatchingSessionCount")
+			assert.Equal(t, tt.want, got)
+
+			bounded := tt.filter
+			bounded.From = "2026-03-01"
+			bounded.To = "2026-03-01"
+			boundedGot, err := d.GetUsageMatchingSessionCount(ctx, bounded)
+			requireNoError(t, err, "GetUsageMatchingSessionCount bounded")
+			assert.Equal(t, got, boundedGot,
+				"bounded and unbounded requests must match the same sessions")
+		})
+	}
+}
+
 func TestNewUsageSessionCounts(t *testing.T) {
 	counts := NewUsageSessionCounts(map[string]UsageSessionInfo{
 		"s1": {Project: "proj-a", Agent: "claude"},

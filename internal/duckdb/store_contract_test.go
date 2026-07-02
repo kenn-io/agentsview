@@ -525,6 +525,111 @@ func TestDuckDBGetUsageMatchingSessionCountCountsAssistantMessageWithNoModel(
 		"assistant message with no model must still count without a model filter")
 }
 
+// TestDuckDBGetUsageMatchingSessionCountUnboundedMatchesBoundedSemantics
+// guards against the unbounded (no From/To) branch drifting from the
+// bounded branch: soft-deleted sessions must be excluded (backend parity
+// with SQLite/PG, which seed their unbounded WHERE with the deleted_at
+// eligibility), sessions without assistant/event activity must not count,
+// and empty-model assistant messages must survive an ExcludeModel filter.
+func TestDuckDBGetUsageMatchingSessionCountUnboundedMatchesBoundedSemantics(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	ts := "2026-03-01T10:00:00Z"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+		{
+			Session: db.Session{
+				ID:               "duck-copilot-live",
+				Project:          "alpha",
+				Machine:          "test-machine",
+				Agent:            "copilot",
+				StartedAt:        &ts,
+				EndedAt:          &ts,
+				MessageCount:     1,
+				UserMessageCount: 1,
+			},
+			Messages: []db.Message{{
+				SessionID:  "duck-copilot-live",
+				Ordinal:    0,
+				Role:       "assistant",
+				Timestamp:  ts,
+				Model:      "",
+				TokenUsage: nil,
+			}},
+			ReplaceMessages: true,
+		},
+		{
+			Session: db.Session{
+				ID:               "duck-copilot-trashed",
+				Project:          "alpha",
+				Machine:          "test-machine",
+				Agent:            "copilot",
+				StartedAt:        &ts,
+				EndedAt:          &ts,
+				MessageCount:     1,
+				UserMessageCount: 1,
+			},
+			Messages: []db.Message{{
+				SessionID:  "duck-copilot-trashed",
+				Ordinal:    0,
+				Role:       "assistant",
+				Timestamp:  ts,
+				Model:      "gpt-5.3-codex",
+				TokenUsage: nil,
+			}},
+			ReplaceMessages: true,
+		},
+		{
+			Session: db.Session{
+				ID:               "duck-copilot-user-only",
+				Project:          "alpha",
+				Machine:          "test-machine",
+				Agent:            "copilot",
+				StartedAt:        &ts,
+				EndedAt:          &ts,
+				MessageCount:     1,
+				UserMessageCount: 1,
+			},
+			Messages: []db.Message{{
+				SessionID: "duck-copilot-user-only",
+				Ordinal:   0,
+				Role:      "user",
+				Timestamp: ts,
+			}},
+			ReplaceMessages: true,
+		},
+	})
+	require.NoError(t, err, "seed copilot sessions")
+	require.NoError(t, local.SoftDeleteSession("duck-copilot-trashed"))
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	unbounded := db.UsageFilter{Timezone: "UTC", Agent: "copilot"}
+	count, err := store.GetUsageMatchingSessionCount(ctx, unbounded)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count,
+		"soft-deleted and assistant-less sessions must not count unbounded")
+
+	bounded := unbounded
+	bounded.From = "2026-03-01"
+	bounded.To = "2026-03-01"
+	boundedCount, err := store.GetUsageMatchingSessionCount(ctx, bounded)
+	require.NoError(t, err)
+	assert.Equal(t, count, boundedCount,
+		"bounded and unbounded requests must match the same sessions")
+
+	excluded := unbounded
+	excluded.ExcludeModel = "gpt-5.3-codex"
+	excludedCount, err := store.GetUsageMatchingSessionCount(ctx, excluded)
+	require.NoError(t, err)
+	assert.Equal(t, 1, excludedCount,
+		"empty-model assistant message must survive an ExcludeModel filter")
+}
+
 func duckSessionIDs(sessions []db.Session) []string {
 	ids := make([]string, len(sessions))
 	for i, session := range sessions {

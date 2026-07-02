@@ -3101,31 +3101,60 @@ SELECT
 FROM cursor_usage_events cu
 WHERE %s`
 
-func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
-	bounds := duckUsageBoundsForFilter(f)
-	messageWhere := `
+const duckUsageMessageEligibility = `
 			m.token_usage != ''
 			AND m.model != ''
 			AND m.model != '<synthetic>'
 			AND s.deleted_at IS NULL`
+
+// duckUsageMatchingMessageSourceEligibility is the message-only half of
+// duckUsageMessageEligibility with the token-presence requirement removed
+// and the model-presence requirement relaxed to a role check, for
+// GetUsageMatchingSessionCount. See the usageMatchingMessageEligibility
+// doc comment in internal/db.
+const duckUsageMatchingMessageSourceEligibility = `
+			m.role = 'assistant'
+			AND m.model != '<synthetic>'`
+
+const duckUsageMatchingMessageEligibility = duckUsageMatchingMessageSourceEligibility + `
+			AND s.deleted_at IS NULL`
+
+const duckUsageEventSourceEligibility = `
+			ue.model != ''`
+
+const duckUsageEventEligibility = duckUsageEventSourceEligibility + `
+			AND s.deleted_at IS NULL`
+
+// duckUsageSourceWheres builds the message/event WHERE clauses shared by
+// duckUsageRawSQL and duckMatchingUsageRawSQL; the two callers differ only
+// in the message eligibility predicate.
+func duckUsageSourceWheres(
+	f db.UsageFilter, sessionID, messageEligibility string, b duckUsageBounds,
+) (string, []any, string, []any) {
+	messageWhere := messageEligibility
 	var messageArgs []any
 	messageWhere, messageArgs = appendDuckUsageSourceFilterClauses(
 		messageWhere, messageArgs, "m.model", f)
 	messageWhere, messageArgs = appendDuckUsageSessionFilterClauses(
 		messageWhere, messageArgs, f, sessionID)
 	messageWhere, messageArgs = appendDuckUsageColumnBounds(
-		messageWhere, "COALESCE(m.timestamp, s.started_at)", bounds, messageArgs)
+		messageWhere, "COALESCE(m.timestamp, s.started_at)", b, messageArgs)
 
-	eventWhere := `
-			ue.model != ''
-			AND s.deleted_at IS NULL`
+	eventWhere := duckUsageEventEligibility
 	var eventArgs []any
 	eventWhere, eventArgs = appendDuckUsageSourceFilterClauses(
 		eventWhere, eventArgs, "ue.model", f)
 	eventWhere, eventArgs = appendDuckUsageSessionFilterClauses(
 		eventWhere, eventArgs, f, sessionID)
 	eventWhere, eventArgs = appendDuckUsageColumnBounds(
-		eventWhere, "COALESCE(ue.occurred_at, s.started_at)", bounds, eventArgs)
+		eventWhere, "COALESCE(ue.occurred_at, s.started_at)", b, eventArgs)
+
+	return messageWhere, messageArgs, eventWhere, eventArgs
+}
+
+func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
+	messageWhere, messageArgs, eventWhere, eventArgs := duckUsageSourceWheres(
+		f, sessionID, duckUsageMessageEligibility, duckUsageBoundsForFilter(f))
 
 	query := fmt.Sprintf(`
 		SELECT m.session_id AS session_id, m.ordinal AS message_ordinal,
@@ -3175,42 +3204,16 @@ func duckUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 }
 
 // duckMatchingUsageRawSQL builds the bounded-range row source for
-// GetUsageMatchingSessionCount. DuckDB's normal usage query
-// (duckUsageRawSQL) already bounds each row source on
-// COALESCE(m.timestamp, s.started_at) / COALESCE(ue.occurred_at,
-// s.started_at) directly, so this mirrors that shape but relaxes the
-// message predicate: no token_usage requirement (Copilot messages never
-// populate it) and no model-presence requirement (some Copilot assistant
-// messages parse before a model name is known), scoping to assistant rows
-// via m.role instead. Model/ExcludeModel filters are still applied
-// per-row via appendDuckUsageSourceFilterClauses, same as duckUsageRawSQL,
-// so GetUsageMatchingSessionCount's semantics only relax the token-usage
-// and model-presence requirements.
+// GetUsageMatchingSessionCount. It shares duckUsageRawSQL's WHERE
+// assembly (via duckUsageSourceWheres) but relaxes the message predicate:
+// no token_usage requirement (Copilot messages never populate it) and no
+// model-presence requirement (some Copilot assistant messages parse
+// before a model name is known), scoping to assistant rows via m.role
+// instead. Model/ExcludeModel filters are still applied per-row, same as
+// duckUsageRawSQL.
 func duckMatchingUsageRawSQL(f db.UsageFilter) (string, []any) {
-	bounds := duckUsageBoundsForFilter(f)
-
-	messageWhere := `
-			m.role = 'assistant'
-			AND m.model != '<synthetic>'
-			AND s.deleted_at IS NULL`
-	var messageArgs []any
-	messageWhere, messageArgs = appendDuckUsageSourceFilterClauses(
-		messageWhere, messageArgs, "m.model", f)
-	messageWhere, messageArgs = appendDuckUsageSessionFilterClauses(
-		messageWhere, messageArgs, f, "")
-	messageWhere, messageArgs = appendDuckUsageColumnBounds(
-		messageWhere, "COALESCE(m.timestamp, s.started_at)", bounds, messageArgs)
-
-	eventWhere := `
-			ue.model != ''
-			AND s.deleted_at IS NULL`
-	var eventArgs []any
-	eventWhere, eventArgs = appendDuckUsageSourceFilterClauses(
-		eventWhere, eventArgs, "ue.model", f)
-	eventWhere, eventArgs = appendDuckUsageSessionFilterClauses(
-		eventWhere, eventArgs, f, "")
-	eventWhere, eventArgs = appendDuckUsageColumnBounds(
-		eventWhere, "COALESCE(ue.occurred_at, s.started_at)", bounds, eventArgs)
+	messageWhere, messageArgs, eventWhere, eventArgs := duckUsageSourceWheres(
+		f, "", duckUsageMatchingMessageEligibility, duckUsageBoundsForFilter(f))
 
 	query := fmt.Sprintf(`
 		SELECT m.session_id AS session_id,
@@ -3798,20 +3801,20 @@ func (s *Store) GetUsageSessionCounts(
 	return out, nil
 }
 
-func appendDuckUsageSessionModelMatchClauses(
+// appendDuckUsageMatchingActivityClauses requires the session to have at
+// least one row that GetUsageMatchingSessionCount's bounded branch would
+// count, mirroring appendUsageMatchingActivityClauses in internal/db so
+// bounded and unbounded requests agree on which sessions match.
+func appendDuckUsageMatchingActivityClauses(
 	where string, args []any, f db.UsageFilter,
 ) (string, []any) {
-	if strings.TrimSpace(f.Model) == "" && strings.TrimSpace(f.ExcludeModel) == "" {
-		return where, args
-	}
-
 	var messageArgs []any
 	messageWhere, messageArgs := appendDuckUsageSourceFilterClauses(
-		"m.model != ''", messageArgs, "m.model", f,
+		duckUsageMatchingMessageSourceEligibility, messageArgs, "m.model", f,
 	)
 	var eventArgs []any
 	eventWhere, eventArgs := appendDuckUsageSourceFilterClauses(
-		"ue.model != ''", eventArgs, "ue.model", f,
+		duckUsageEventSourceEligibility, eventArgs, "ue.model", f,
 	)
 
 	where += `
@@ -3844,24 +3847,16 @@ func (s *Store) GetUsageMatchingSessionCount(
 	ctx context.Context, f db.UsageFilter,
 ) (int, error) {
 	if f.From == "" && f.To == "" {
-		where, args := appendDuckUsageSessionFilterClauses("1=1", nil, f, "")
-		where, args = appendDuckUsageSessionModelMatchClauses(where, args, f)
+		where, args := appendDuckUsageSessionFilterClauses(
+			"s.deleted_at IS NULL", nil, f, "")
+		where, args = appendDuckUsageMatchingActivityClauses(where, args, f)
 
-		// Keep selecting the activity column even though it's unused
-		// here: the original query's WHERE/SELECT shape, unchanged.
-		rows, err := s.duck.QueryContext(ctx, `
-			SELECT s.id, COALESCE(s.ended_at, s.started_at, s.created_at)
-			FROM sessions s WHERE `+where, args...)
+		var count int
+		err := s.duck.QueryRowContext(ctx, `
+			SELECT COUNT(*)
+			FROM sessions s WHERE `+where, args...).Scan(&count)
 		if err != nil {
 			return 0, fmt.Errorf("querying matching usage sessions: %w", err)
-		}
-		defer rows.Close()
-		count := 0
-		for rows.Next() {
-			count++
-		}
-		if err := rows.Err(); err != nil {
-			return 0, fmt.Errorf("iterating matching usage sessions: %w", err)
 		}
 		return count, nil
 	}

@@ -112,12 +112,12 @@ func (c *usageProbeConn) QueryContext(
 			},
 		}, nil
 	}
-	if strings.Contains(normalized, "coalesce(s.ended_at, s.started_at, s.created_at) as session_activity_at") {
-		ts := time.Date(2024, 6, 15, 10, 0, 0, 0, time.UTC)
+	if strings.Contains(normalized, "select count(*)") &&
+		strings.Contains(normalized, "from sessions s") {
 		return &usageProbeRows{
-			columns: []string{"id", "session_activity_at"},
+			columns: []string{"count"},
 			values: [][]driver.Value{
-				{"copilot-empty", ts},
+				{int64(1)},
 			},
 		}, nil
 	}
@@ -297,10 +297,9 @@ func TestPGUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {
 }
 
 // TestPGGetUsageMatchingSessionCountUsesSessionQuery exercises the
-// unbounded (no From/To) code path, which still queries `sessions`
-// directly and relies on the probe mock's
-// "coalesce(s.ended_at, s.started_at, s.created_at) as
-// session_activity_at" branch. Bounded filters now take the
+// unbounded (no From/To) code path, which counts sessions directly with
+// EXISTS subqueries built from the same relaxed matching eligibility
+// predicates as the bounded branch. Bounded filters take the
 // timestamped-CTE path (see TestPGMatchingUsageRowsSQLForBoundsRelaxesTokenEligibility
 // for that SQL shape) and are not exercised by this probe-mock test.
 func TestPGGetUsageMatchingSessionCountUsesSessionQuery(t *testing.T) {
@@ -322,12 +321,18 @@ func TestPGGetUsageMatchingSessionCountUsesSessionQuery(t *testing.T) {
 	require.NotEmpty(t, queries)
 
 	last := strings.ToLower(queries[len(queries)-1])
+	assert.Contains(t, last, "select count(*)")
 	assert.Contains(t, last, "from sessions s")
 	assert.Contains(t, last, "exists (")
 	assert.Contains(t, last, "from messages m")
 	assert.Contains(t, last, "from usage_events ue")
 	assert.Contains(t, last, "s.agent = ")
 	assert.Contains(t, last, "m.model = ")
+	// The message EXISTS uses the relaxed matching eligibility: assistant
+	// rows without requiring a model name, so empty-model Copilot
+	// assistant messages match the same way they do on the bounded path.
+	assert.Contains(t, last, "m.role = 'assistant'")
+	assert.NotContains(t, last, "m.model != ''")
 }
 
 // TestPGMatchingUsageRowsSQLForBoundsRelaxesTokenEligibility asserts the

@@ -626,7 +626,19 @@ func pgDailyUsageRowsSQLForBounds(
 		return pgDailyUsageRowsSQLWithWhere(messageWhere, eventWhere)
 	}
 
-	messageTimestampSourceWhere := pgUsageMessageSourceEligibility +
+	return pgBoundedDailyUsageRowsSQL(
+		pb, f, b, pgUsageMessageSourceEligibility, pgUsageMessageEligibility)
+}
+
+// pgBoundedDailyUsageRowsSQL builds the bounded-branch CTE row source
+// shared by pgDailyUsageRowsSQLForBounds (token-eligible rows) and
+// pgMatchingUsageRowsSQLForBounds (relaxed matching rows). The two
+// callers differ only in the message eligibility predicates.
+func pgBoundedDailyUsageRowsSQL(
+	pb *paramBuilder, f db.UsageFilter, b pgUsageBounds,
+	messageSourceEligibility, messageEligibility string,
+) string {
+	messageTimestampSourceWhere := messageSourceEligibility +
 		"\n\tAND m.timestamp IS NOT NULL"
 	messageTimestampSourceWhere = appendPGUsageSourceFilterClauses(
 		messageTimestampSourceWhere, pb, f, "m.model")
@@ -645,7 +657,7 @@ func pgDailyUsageRowsSQLForBounds(
 	eventTimestampJoinWhere := appendPGUsageSessionFilterClauses(
 		pgUsageSessionEligibility, pb, f)
 
-	messageFallbackWhere := pgUsageMessageEligibility +
+	messageFallbackWhere := messageEligibility +
 		"\n\tAND m.timestamp IS NULL"
 	messageFallbackWhere = appendPGUsageBranchFilterClauses(
 		messageFallbackWhere, pb, f, "m.model")
@@ -668,53 +680,17 @@ func pgDailyUsageRowsSQLForBounds(
 	)
 }
 
-// pgMatchingUsageRowsSQLForBounds mirrors pgDailyUsageRowsSQLForBounds's
-// bounded-branch CTE shape, but is built from the relaxed
-// pgUsageMatchingMessageEligibility predicate, so GetUsageMatchingSessionCount
-// only relaxes the token-usage requirement and keeps the same per-row
-// Model/ExcludeModel filtering as the normal bounded path. Only used by
-// GetUsageMatchingSessionCount's bounded branch.
+// pgMatchingUsageRowsSQLForBounds is pgDailyUsageRowsSQLForBounds's
+// bounded branch built from the relaxed pgUsageMatchingMessageEligibility
+// predicates, so GetUsageMatchingSessionCount only relaxes the token-usage
+// and model-presence requirements and keeps the same per-row
+// Model/ExcludeModel filtering as the normal bounded path.
 func pgMatchingUsageRowsSQLForBounds(
 	pb *paramBuilder, f db.UsageFilter, b pgUsageBounds,
 ) string {
-	messageTimestampSourceWhere := pgUsageMatchingMessageSourceEligibility +
-		"\n\tAND m.timestamp IS NOT NULL"
-	messageTimestampSourceWhere = appendPGUsageSourceFilterClauses(
-		messageTimestampSourceWhere, pb, f, "m.model")
-	messageTimestampSourceWhere = appendPGUsageColumnBounds(
-		messageTimestampSourceWhere, "m.timestamp", b)
-
-	eventTimestampSourceWhere := pgUsageEventSourceEligibility +
-		"\n\tAND ue.occurred_at IS NOT NULL"
-	eventTimestampSourceWhere = appendPGUsageSourceFilterClauses(
-		eventTimestampSourceWhere, pb, f, "ue.model")
-	eventTimestampSourceWhere = appendPGUsageColumnBounds(
-		eventTimestampSourceWhere, "ue.occurred_at", b)
-
-	messageTimestampJoinWhere := appendPGUsageSessionFilterClauses(
-		pgUsageSessionEligibility, pb, f)
-	eventTimestampJoinWhere := appendPGUsageSessionFilterClauses(
-		pgUsageSessionEligibility, pb, f)
-
-	messageFallbackWhere := pgUsageMatchingMessageEligibility +
-		"\n\tAND m.timestamp IS NULL"
-	messageFallbackWhere = appendPGUsageBranchFilterClauses(
-		messageFallbackWhere, pb, f, "m.model")
-	messageFallbackWhere = appendPGUsageColumnBounds(
-		messageFallbackWhere, "s.started_at", b)
-
-	eventFallbackWhere := pgUsageEventEligibility +
-		"\n\tAND ue.occurred_at IS NULL"
-	eventFallbackWhere = appendPGUsageBranchFilterClauses(
-		eventFallbackWhere, pb, f, "ue.model")
-	eventFallbackWhere = appendPGUsageColumnBounds(
-		eventFallbackWhere, "s.started_at", b)
-
-	return pgDailyUsageRowsSQLWithTimestampCTEs(
-		messageTimestampSourceWhere, eventTimestampSourceWhere,
-		messageTimestampJoinWhere, eventTimestampJoinWhere,
-		messageFallbackWhere, eventFallbackWhere,
-	)
+	return pgBoundedDailyUsageRowsSQL(
+		pb, f, b,
+		pgUsageMatchingMessageSourceEligibility, pgUsageMatchingMessageEligibility)
 }
 
 func pgUsageRowQuery(pb *paramBuilder, f db.UsageFilter) string {
@@ -1749,18 +1725,18 @@ func (s *Store) GetUsageSessionCounts(
 	return out, nil
 }
 
-func appendPGUsageSessionModelMatchClauses(
+// appendPGUsageMatchingActivityClauses requires the session to have at
+// least one row that GetUsageMatchingSessionCount's bounded branch would
+// count, mirroring appendUsageMatchingActivityClauses in internal/db so
+// bounded and unbounded requests agree on which sessions match.
+func appendPGUsageMatchingActivityClauses(
 	where string, pb *paramBuilder, f db.UsageFilter,
 ) string {
-	if strings.TrimSpace(f.Model) == "" && strings.TrimSpace(f.ExcludeModel) == "" {
-		return where
-	}
-
 	messageWhere := appendPGUsageSourceFilterClauses(
-		"m.model != ''", pb, f, "m.model",
+		pgUsageMatchingMessageSourceEligibility, pb, f, "m.model",
 	)
 	eventWhere := appendPGUsageSourceFilterClauses(
-		"ue.model != ''", pb, f, "ue.model",
+		pgUsageEventSourceEligibility, pb, f, "ue.model",
 	)
 
 	return where + `
@@ -1794,29 +1770,15 @@ func (s *Store) GetUsageMatchingSessionCount(
 
 	if f.From == "" && f.To == "" {
 		where := appendPGUsageSessionFilterClauses(pgUsageSessionEligibility, pb, f)
-		where = appendPGUsageSessionModelMatchClauses(where, pb, f)
+		where = appendPGUsageMatchingActivityClauses(where, pb, f)
 
-		// Keep selecting session_activity_at even though it's unused
-		// here: this is the original query's WHERE/SELECT shape,
-		// unchanged, so internal/postgres/usage_unit_test.go's probe-mock
-		// string match (which keys off this literal SQL text) still
-		// finds this branch for the unbounded case.
-		rows, err := s.pg.QueryContext(ctx, `
-SELECT
-	s.id,
-	COALESCE(s.ended_at, s.started_at, s.created_at) AS session_activity_at
+		var count int
+		err := s.pg.QueryRowContext(ctx, `
+SELECT COUNT(*)
 FROM sessions s
-WHERE `+where, pb.args...)
+WHERE `+where, pb.args...).Scan(&count)
 		if err != nil {
 			return 0, fmt.Errorf("querying matching usage sessions: %w", err)
-		}
-		defer rows.Close()
-		count := 0
-		for rows.Next() {
-			count++
-		}
-		if err := rows.Err(); err != nil {
-			return 0, fmt.Errorf("iterating matching usage sessions: %w", err)
 		}
 		return count, nil
 	}
