@@ -125,6 +125,7 @@ func runServeBackgroundCommand(
 func runServeBackground(
 	cfg config.Config, args []string, opts serveReplacementOptions,
 ) {
+	replacementCheckStarted := time.Now()
 	if err := ensureServeAuthToken(&cfg); err != nil {
 		fatal("serve background: generating auth token: %v", err)
 	}
@@ -147,12 +148,14 @@ func runServeBackground(
 		}
 		return
 	case serveReplacementAuto, serveReplacementExplicit:
+		waitedForExternalStartup := false
 		if waited, err := waitForExternalServeStartupBeforeReplacement(
 			context.Background(),
 			cfg.DataDir,
 			cfg.AuthToken,
 			backgroundServeReadyTimeout,
 		); waited {
+			waitedForExternalStartup = true
 			if err != nil {
 				if errors.Is(err, errServeStartupInProgress) {
 					fmt.Println(errServeStartupInProgress.Error() + ".")
@@ -161,7 +164,10 @@ func runServeBackground(
 				fatal("serve background: %v", err)
 			}
 		}
-		decision = refreshServeDaemonReplacementDecision(cfg, opts, decision)
+		decision = refreshServeDaemonReplacementDecision(
+			cfg, opts, decision, waitedForExternalStartup,
+			replacementCheckStarted,
+		)
 		switch decision.Action {
 		case serveReplacementNone:
 		case serveReplacementUseExisting:
@@ -562,6 +568,8 @@ func refreshServeDaemonReplacementDecision(
 	cfg config.Config,
 	opts serveReplacementOptions,
 	original serveReplacementDecision,
+	waitedForExternalStartup bool,
+	replacementCheckStarted time.Time,
 ) serveReplacementDecision {
 	if !opts.Replace {
 		decision := decideServeDaemonReplacement(cfg, opts)
@@ -578,11 +586,25 @@ func refreshServeDaemonReplacementDecision(
 		!sameDaemonReplacementTarget(original.Runtime, decision.Runtime) {
 		return decision
 	}
+	// A foreground startup may publish its runtime while still holding the
+	// start lock. If that startup wins, reuse the daemon it just published
+	// instead of treating --replace as permission to stop it.
+	if waitedForExternalStartup &&
+		decision.Action == serveReplacementUseExisting &&
+		daemonRuntimeStartedAfter(decision.Runtime, replacementCheckStarted) {
+		return decision
+	}
 	if decision.Runtime == nil &&
 		replacementTargetStillStopConfirmed(cfg, original.Runtime) {
 		return original
 	}
 	return decideServeDaemonReplacement(cfg, opts)
+}
+
+func daemonRuntimeStartedAfter(rt *DaemonRuntime, started time.Time) bool {
+	return rt != nil &&
+		!rt.Record.StartedAt.IsZero() &&
+		rt.Record.StartedAt.After(started)
 }
 
 func serveReplacementTargetChanged(

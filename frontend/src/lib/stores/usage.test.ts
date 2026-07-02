@@ -8,6 +8,7 @@ import {
 } from "vite-plus/test";
 import type {
   UsageComparison,
+  UsagePairwiseComparisonResponse,
   UsageSummaryResponse,
 } from "../api/types/usage.js";
 
@@ -23,8 +24,42 @@ const usageServiceMocks = vi.hoisted(() => ({
       totalCost: 0,
     },
     daily: [],
-    projectTotals: [],
-    modelTotals: [],
+    projectTotals: [
+      {
+        project: "alpha",
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        cost: 0,
+      },
+      {
+        project: "beta",
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        cost: 0,
+      },
+    ],
+    modelTotals: [
+      {
+        model: "claude-sonnet-4-20250514",
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        cost: 0,
+      },
+      {
+        model: "gpt-4o",
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        cost: 0,
+      },
+    ],
     agentTotals: [],
     sessionCounts: {
       total: 0,
@@ -46,6 +81,50 @@ const usageServiceMocks = vi.hoisted(() => ({
     priorTotalCost: 1,
     deltaPct: 0.5,
   }),
+  getApiV1UsagePairwiseComparison: vi.fn().mockResolvedValue({
+    left: {
+      totalCost: 1,
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      totalTokens: 15,
+      sessionCount: 1,
+      costPerSession: 1,
+      tokensPerSession: 15,
+    },
+    right: {
+      totalCost: 2,
+      inputTokens: 20,
+      outputTokens: 10,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      totalTokens: 30,
+      sessionCount: 2,
+      costPerSession: 1,
+      tokensPerSession: 15,
+    },
+    deltas: {
+      totalCostDelta: 1,
+      totalCostDeltaRatio: 1,
+      inputTokensDelta: 10,
+      inputTokensDeltaRatio: 1,
+      outputTokensDelta: 5,
+      outputTokensDeltaRatio: 1,
+      cacheCreationDelta: 0,
+      cacheCreationDeltaRatio: null,
+      cacheReadDelta: 0,
+      cacheReadDeltaRatio: null,
+      totalTokensDelta: 15,
+      totalTokensDeltaRatio: 1,
+      sessionCountDelta: 1,
+      sessionCountDeltaRatio: 1,
+      costPerSessionDelta: 0,
+      costPerSessionRatio: 0,
+      tokensPerSessionDelta: 0,
+      tokensPerSessionRatio: 0,
+    },
+  }),
   getApiV1UsageTopSessions: vi.fn().mockResolvedValue([]),
 }));
 
@@ -62,6 +141,8 @@ vi.mock("../api/generated/index", () => ({
     getApiV1UsageSummary: usageServiceMocks.getApiV1UsageSummary,
     getApiV1UsageComparison:
       usageServiceMocks.getApiV1UsageComparison,
+    getApiV1UsagePairwiseComparison:
+      usageServiceMocks.getApiV1UsagePairwiseComparison,
     getApiV1UsageTopSessions: usageServiceMocks.getApiV1UsageTopSessions,
   },
 }));
@@ -107,8 +188,42 @@ function usageSummary(totalCost = 0): UsageSummaryResponse {
       totalCost,
     },
     daily: [],
-    projectTotals: [],
-    modelTotals: [],
+    projectTotals: [
+      {
+        project: "alpha",
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        cost: 0,
+      },
+      {
+        project: "beta",
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        cost: 0,
+      },
+    ],
+    modelTotals: [
+      {
+        model: "claude-sonnet-4-20250514",
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        cost: 0,
+      },
+      {
+        model: "gpt-4o",
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        cost: 0,
+      },
+    ],
     agentTotals: [],
     sessionCounts: {
       total: 0,
@@ -132,6 +247,108 @@ function usageComparison(): UsageComparison {
     priorTo: "2023-12-31",
     priorTotalCost: 1,
     deltaPct: 0.5,
+  };
+}
+
+function usageSummaryWithOptions(options: {
+  totalCost?: number;
+  projects?: string[];
+  models?: string[];
+} = {}): UsageSummaryResponse {
+  const totalCost = options.totalCost ?? 0;
+  const projects = options.projects ?? ["alpha", "beta"];
+  const models = options.models ?? [
+    "claude-sonnet-4-20250514",
+    "gpt-4o",
+  ];
+  return {
+    from: "2024-01-01",
+    to: "2024-01-31",
+    totals: {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      totalCost,
+    },
+    daily: [],
+    projectTotals: projects.map((project) => ({
+      project,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost: 0,
+    })),
+    modelTotals: models.map((model) => ({
+      model,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost: 0,
+    })),
+    agentTotals: [],
+    sessionCounts: {
+      total: 0,
+      byProject: {},
+      byAgent: {},
+    },
+    cacheStats: {
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      uncachedInputTokens: 0,
+      outputTokens: 0,
+      hitRate: 0,
+      savingsVsUncached: 0,
+    },
+  };
+}
+
+function usagePairwiseComparison(): UsagePairwiseComparisonResponse {
+  return {
+    left: {
+      totalCost: 1,
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      totalTokens: 15,
+      sessionCount: 1,
+      costPerSession: 1,
+      tokensPerSession: 15,
+    },
+    right: {
+      totalCost: 2,
+      inputTokens: 20,
+      outputTokens: 10,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      totalTokens: 30,
+      sessionCount: 2,
+      costPerSession: 1,
+      tokensPerSession: 15,
+    },
+    deltas: {
+      totalCostDelta: 1,
+      totalCostDeltaRatio: 1,
+      inputTokensDelta: 10,
+      inputTokensDeltaRatio: 1,
+      outputTokensDelta: 5,
+      outputTokensDeltaRatio: 1,
+      cacheCreationDelta: 0,
+      cacheCreationDeltaRatio: null,
+      cacheReadDelta: 0,
+      cacheReadDeltaRatio: null,
+      totalTokensDelta: 15,
+      totalTokensDeltaRatio: 1,
+      sessionCountDelta: 1,
+      sessionCountDeltaRatio: 1,
+      costPerSessionDelta: 0,
+      costPerSessionRatio: 0,
+      tokensPerSessionDelta: 0,
+      tokensPerSessionRatio: 0,
+    },
   };
 }
 
@@ -301,6 +518,195 @@ describe("UsageStore session filter params", () => {
     );
   });
 
+  it("stores pairwise comparison data from the generated API", async () => {
+    const { usage } = await loadStore();
+
+    await usage.fetchAll();
+
+    expect(
+      usageServiceMocks.getApiV1UsagePairwiseComparison,
+    ).toHaveBeenCalledTimes(1);
+    expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
+  });
+
+  it("clears stale pairwise results before refetching after a selector change", async () => {
+    const { usage } = await loadStore();
+
+    await usage.fetchAll();
+    expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
+
+    usageServiceMocks.getApiV1UsagePairwiseComparison.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+
+    usage.setPairwiseSide("left", { value: "gpt-4o" });
+
+    expect(usage.pairwiseSelection.left.value).toBe("gpt-4o");
+    expect(usage.pairwiseComparison).toBeNull();
+  });
+
+  it("clears stale pairwise results when a summary refresh rewrites the selection", async () => {
+    const { usage } = await loadStore();
+
+    await usage.fetchAll();
+    expect(usage.pairwiseSelection).toEqual({
+      left: {
+        dimension: "model",
+        value: "claude-sonnet-4-20250514",
+      },
+      right: {
+        dimension: "model",
+        value: "gpt-4o",
+      },
+    });
+    expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
+
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce(
+      usageSummaryWithOptions({
+        projects: ["beta", "gamma"],
+        models: ["gpt-4o"],
+      }),
+    );
+    usageServiceMocks.getApiV1UsagePairwiseComparison.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+
+    void usage.fetchAll();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(usage.pairwiseSelection).toEqual({
+      left: { dimension: "project", value: "beta" },
+      right: { dimension: "project", value: "gamma" },
+    });
+    expect(usage.pairwiseComparison).toBeNull();
+  });
+
+  it("clears stale pairwise results when filters change without selector changes", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { usage } = await loadStore();
+
+      await usage.fetchAll();
+      expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
+
+      usageServiceMocks.getApiV1UsagePairwiseComparison.mockRejectedValueOnce(
+        new Error("pairwise failed"),
+      );
+
+      usage.applyDateRange("2024-02-01", "2024-02-29");
+      await usage.fetchAll();
+
+      expect(usage.pairwiseSelection).toEqual({
+        left: {
+          dimension: "model",
+          value: "claude-sonnet-4-20250514",
+        },
+        right: {
+          dimension: "model",
+          value: "gpt-4o",
+        },
+      });
+      expect(usage.pairwiseComparison).toBeNull();
+      expect(usage.errors.pairwise).toBe("pairwise failed");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("clears pairwise loading when an aborted first load resolves to no selection", async () => {
+    const { usage } = await loadStore();
+
+    usageServiceMocks.getApiV1UsagePairwiseComparison.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+
+    void usage.fetchAll();
+    await vi.waitFor(() =>
+      expect(
+        usageServiceMocks.getApiV1UsagePairwiseComparison,
+      ).toHaveBeenCalledTimes(1),
+    );
+
+    expect(usage.loading.pairwise).toBe(true);
+
+    usageServiceMocks.getApiV1UsageSummary.mockResolvedValueOnce(
+      usageSummaryWithOptions({
+        projects: [],
+        models: ["gpt-4o"],
+      }),
+    );
+
+    await usage.fetchAll();
+
+    expect(usage.pairwiseSelection).toEqual({
+      left: { dimension: "model", value: "" },
+      right: { dimension: "model", value: "" },
+    });
+    expect(usage.loading.pairwise).toBe(false);
+    expect(usage.pairwiseComparison).toBeNull();
+  });
+
+  it("clears pairwise loading when a refresh aborts first load and summary fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { usage } = await loadStore();
+
+      usageServiceMocks.getApiV1UsagePairwiseComparison.mockImplementationOnce(
+        () => new Promise(() => {}),
+      );
+
+      void usage.fetchAll();
+      await vi.waitFor(() =>
+        expect(
+          usageServiceMocks.getApiV1UsagePairwiseComparison,
+        ).toHaveBeenCalledTimes(1),
+      );
+
+      expect(usage.loading.pairwise).toBe(true);
+
+      usageServiceMocks.getApiV1UsageSummary.mockRejectedValueOnce(
+        new Error("summary failed"),
+      );
+
+      await usage.fetchAll();
+
+      expect(usage.loading.pairwise).toBe(false);
+      expect(usage.pairwiseComparison).toBeNull();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("clears pairwise querying when a selector change leaves no comparable values", async () => {
+    const { usage } = await loadStore();
+
+    usageServiceMocks.getApiV1UsagePairwiseComparison.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+
+    void usage.fetchAll();
+    await vi.waitFor(() =>
+      expect(
+        usageServiceMocks.getApiV1UsagePairwiseComparison,
+      ).toHaveBeenCalledTimes(1),
+    );
+
+    usage.summary = usageSummaryWithOptions({
+      projects: [],
+      models: ["gpt-4o"],
+    });
+
+    usage.setPairwiseSide("left", { dimension: "project" });
+
+    expect(usage.pairwiseSelection.left).toEqual({
+      dimension: "project",
+      value: "",
+    });
+    expect(usage.loading.pairwise).toBe(false);
+    expect(usage.querying.pairwise).toBe(false);
+  });
+
   it("records full refresh time and clears new-data hints", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
@@ -384,6 +790,12 @@ describe("UsageStore session filter params", () => {
         });
       },
     );
+    usageServiceMocks.getApiV1UsagePairwiseComparison.mockImplementationOnce(
+      () => {
+        calls.push("pairwise");
+        return Promise.resolve(usagePairwiseComparison());
+      },
+    );
 
     const { usage } = await loadStore();
     const fetch = usage.fetchAll();
@@ -392,38 +804,16 @@ describe("UsageStore session filter params", () => {
     expect(calls).toEqual(["summary", "topSessions"]);
     expect(usage.summary).toBeNull();
 
-    resolveSummary?.({
-      from: "2024-01-01",
-      to: "2024-01-31",
-      totals: {
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheCreationTokens: 0,
-        cacheReadTokens: 0,
-        totalCost: 0,
-      },
-      daily: [],
-      projectTotals: [],
-      modelTotals: [],
-      agentTotals: [],
-      sessionCounts: {
-        total: 0,
-        byProject: {},
-        byAgent: {},
-      },
-      cacheStats: {
-        cacheReadTokens: 0,
-        cacheCreationTokens: 0,
-        uncachedInputTokens: 0,
-        outputTokens: 0,
-        hitRate: 0,
-        savingsVsUncached: 0,
-      },
-    });
+    resolveSummary?.(usageSummary());
     await fetch;
     await Promise.resolve();
 
-    expect(calls).toEqual(["summary", "topSessions", "comparison"]);
+    expect(calls).toEqual([
+      "summary",
+      "topSessions",
+      "comparison",
+      "pairwise",
+    ]);
     expect(usage.summary).not.toBeNull();
     expect(usage.summary?.comparison).toEqual({
       priorFrom: "2023-12-01",
@@ -431,10 +821,21 @@ describe("UsageStore session filter params", () => {
       priorTotalCost: 1,
       deltaPct: 0.5,
     });
+    expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
     expect(
       usageServiceMocks.getApiV1UsageComparison,
     ).toHaveBeenCalledWith(
       expect.objectContaining({ currentCost: 0 }),
+    );
+    expect(
+      usageServiceMocks.getApiV1UsagePairwiseComparison,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        leftDimension: expect.any(String),
+        leftValue: expect.any(String),
+        rightDimension: expect.any(String),
+        rightValue: expect.any(String),
+      }),
     );
   });
 
@@ -644,6 +1045,9 @@ describe("UsageStore session filter params", () => {
       usageServiceMocks.getApiV1UsageComparison,
     ).toHaveBeenCalledTimes(1);
     expect(
+      usageServiceMocks.getApiV1UsagePairwiseComparison,
+    ).toHaveBeenCalledTimes(1);
+    expect(
       usageServiceMocks.getApiV1UsageTopSessions,
     ).not.toHaveBeenCalled();
     expect(usage.summary?.comparison).toEqual({
@@ -652,6 +1056,90 @@ describe("UsageStore session filter params", () => {
       priorTotalCost: 1,
       deltaPct: 0.5,
     });
+    expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
+  });
+
+  it("clears stale pairwise data and ignores late selector responses", async () => {
+    const { usage } = await loadStore();
+
+    await usage.fetchAll();
+    expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
+
+    let resolveFirst:
+      | ((value: UsagePairwiseComparisonResponse) => void)
+      | undefined;
+    let resolveSecond:
+      | ((value: UsagePairwiseComparisonResponse) => void)
+      | undefined;
+    usageServiceMocks.getApiV1UsagePairwiseComparison
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecond = resolve;
+          }),
+      );
+
+    usage.setPairwiseSide("left", { dimension: "project" });
+    await Promise.resolve();
+    expect(usage.pairwiseComparison).toBeNull();
+    expect(usage.loading.pairwise).toBe(true);
+
+    usage.setPairwiseSide("right", {
+      dimension: "project",
+      value: "alpha",
+    });
+    await Promise.resolve();
+
+    resolveFirst?.({
+      ...usagePairwiseComparison(),
+      left: {
+        ...usagePairwiseComparison().left,
+        totalCost: 99,
+      },
+    });
+    await Promise.resolve();
+    expect(usage.pairwiseComparison).toBeNull();
+
+    const latest = {
+      ...usagePairwiseComparison(),
+      left: {
+        ...usagePairwiseComparison().left,
+        totalCost: 3,
+      },
+      deltas: {
+        ...usagePairwiseComparison().deltas,
+        totalCostDelta: 2,
+        totalCostDeltaRatio: 2,
+      },
+    };
+    resolveSecond?.(latest);
+    await vi.waitFor(() => {
+      expect(usage.pairwiseComparison).toEqual(latest);
+    });
+    expect(
+      usageServiceMocks.getApiV1UsagePairwiseComparison,
+    ).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        leftDimension: "project",
+      }),
+    );
+    expect(
+      usageServiceMocks.getApiV1UsagePairwiseComparison,
+    ).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        leftDimension: "project",
+        rightDimension: "project",
+        rightValue: "alpha",
+      }),
+    );
   });
 
   it("aborts stale summary requests when a newer fetch starts", async () => {

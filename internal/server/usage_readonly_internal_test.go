@@ -65,6 +65,11 @@ func TestUsageHandlers_ReturnNotImplementedOnReadOnlyStore(
 			path: "/api/v1/usage/top-sessions?" +
 				"from=2024-06-01&to=2024-06-03",
 		},
+		{
+			name: "pairwise",
+			path: "/api/v1/usage/pairwise-comparison?" +
+				"from=2024-06-01&to=2024-06-03&left_dimension=model&left_value=claude-sonnet-4-20250514&right_dimension=project&right_value=beta",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

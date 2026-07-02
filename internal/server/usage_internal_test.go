@@ -251,3 +251,41 @@ func TestUsageSummarySkipsUnsupportedUsageForMixedAgentFilters(t *testing.T) {
 	assert.Nil(t, resp.UnsupportedUsage)
 	assertUsageQueryCalls(t, spy, 1, 0, 0)
 }
+
+func TestUsagePairwiseComparisonScansTwoDailyFilters(t *testing.T) {
+	spy := &usageSummaryCountsSpy{}
+	s := newRoutedTestServerWithStore(t, spy)
+
+	w := serveGet(t, s,
+		"/api/v1/usage/pairwise-comparison?"+oneDayUsageRange+
+			"&left_dimension=model&left_value=claude-sonnet-4-20250514"+
+			"&right_dimension=project&right_value=beta")
+	assertRecorderStatus(t, w, http.StatusOK)
+
+	assert.Equal(t, 2, spy.dailyCalls)
+	require.Len(t, spy.filters, 2)
+	assert.Equal(t, "claude-sonnet-4-20250514", spy.filters[0].Model)
+	assert.Equal(t, "", spy.filters[0].Project)
+	assert.Equal(t, "", spy.filters[1].Model)
+	assert.Equal(t, "beta", spy.filters[1].Project)
+	assert.False(t, spy.filters[0].SkipSessionCounts)
+	assert.False(t, spy.filters[1].SkipSessionCounts)
+}
+
+func TestUsagePairwiseComparisonOpenAPIRequiresSideParams(t *testing.T) {
+	s := testServer(t, 30)
+	spec := readOpenAPISpec(t, s.Handler())
+	op := requireOpenAPIOperation(t, spec, "get", "/api/v1/usage/pairwise-comparison")
+
+	required := map[string]bool{}
+	for _, parameter := range op.Parameters {
+		if parameter.In == "query" {
+			required[parameter.Name] = parameter.Required
+		}
+	}
+
+	assert.True(t, required["left_dimension"])
+	assert.True(t, required["left_value"])
+	assert.True(t, required["right_dimension"])
+	assert.True(t, required["right_value"])
+}

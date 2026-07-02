@@ -479,6 +479,70 @@ func (b *httpBackend) UsageSummary(
 	return &out, nil
 }
 
+func (b *httpBackend) UsagePairwiseComparison(
+	ctx context.Context, req UsagePairwiseComparisonRequest,
+) (*UsagePairwiseComparisonResponse, error) {
+	q := url.Values{}
+	for k, v := range map[string]string{
+		"from":            req.From,
+		"to":              req.To,
+		"timezone":        req.Timezone,
+		"agent":           req.Agent,
+		"project":         req.Project,
+		"machine":         req.Machine,
+		"git_branch":      req.GitBranch,
+		"exclude_project": req.ExcludeProject,
+		"exclude_agent":   req.ExcludeAgent,
+		"exclude_model":   req.ExcludeModel,
+		"active_since":    req.ActiveSince,
+		"termination":     req.Termination,
+	} {
+		if v != "" {
+			q.Set(k, v)
+		}
+	}
+	if req.LeftDimension != "" {
+		q.Set("left_dimension", req.LeftDimension)
+	}
+	if req.LeftValue != "" {
+		q.Set("left_value", req.LeftValue)
+	}
+	if req.RightDimension != "" {
+		q.Set("right_dimension", req.RightDimension)
+	}
+	if req.RightValue != "" {
+		q.Set("right_value", req.RightValue)
+	}
+	if req.MinUserMessages > 0 {
+		q.Set("min_user_messages", strconv.Itoa(req.MinUserMessages))
+	}
+	if req.NoDefaultRange {
+		q.Set("no_default_range", "true")
+	}
+	// Include explicit booleans to preserve source defaults.
+	q.Set("include_one_shot", strconv.FormatBool(req.IncludeOneShot))
+	q.Set("include_automated", strconv.FormatBool(req.IncludeAutomated))
+	if req.Model != "" {
+		q.Set("model", req.Model)
+	}
+
+	var out UsagePairwiseComparisonResponse
+	err := b.getJSON(
+		ctx,
+		"/api/v1/usage/pairwise-comparison?"+q.Encode(),
+		&out,
+	)
+	if errors.Is(err, errHTTPNotImplemented) {
+		return nil, fmt.Errorf(
+			"usage pairwise comparison: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func (b *httpBackend) ListSecrets(
 	ctx context.Context, f SecretListFilter,
 ) (*SecretFindingList, error) {

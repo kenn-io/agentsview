@@ -22,6 +22,7 @@
     type RangeSelection,
   } from "../shared/rangeSelection.js";
   import UsageSummaryCards from "./UsageSummaryCards.svelte";
+  import UsagePairwiseComparisonPanel from "./UsagePairwiseComparisonPanel.svelte";
   import CostTimeSeriesChart from "./CostTimeSeriesChart.svelte";
   import AttributionPanel from "./AttributionPanel.svelte";
   import TopSessionsTable from "./TopSessionsTable.svelte";
@@ -452,12 +453,16 @@
     </div>
 
     <div class="bottom-grid">
-      <div class="chart-panel">
+      <div class="chart-panel bounded">
         <TopSessionsTable />
       </div>
-      <div class="chart-panel">
+      <div class="chart-panel bounded">
         <CacheEfficiencyPanel />
       </div>
+    </div>
+
+    <div class="chart-panel wide">
+      <UsagePairwiseComparisonPanel />
     </div>
   </div>
 </div>
@@ -559,6 +564,12 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 12px;
+    align-items: start;
+  }
+
+  .chart-panel.bounded {
+    max-height: min(420px, 48vh);
+    overflow: auto;
   }
 
   @media (max-width: 800px) {

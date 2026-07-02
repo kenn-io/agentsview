@@ -19,7 +19,14 @@ type openAPISpec struct {
 }
 
 type openAPIOperation struct {
-	Responses map[string]openAPIResponse `json:"responses"`
+	Parameters []openAPIParameter         `json:"parameters"`
+	Responses  map[string]openAPIResponse `json:"responses"`
+}
+
+type openAPIParameter struct {
+	In       string `json:"in"`
+	Name     string `json:"name"`
+	Required bool   `json:"required"`
 }
 
 type openAPIResponse struct {

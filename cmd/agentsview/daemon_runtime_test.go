@@ -152,6 +152,10 @@ func withRuntimeVersion(v string) runtimeRecordOption {
 	return func(rec *daemon.RuntimeRecord) { rec.Version = v }
 }
 
+func withRuntimeStartedAt(startedAt time.Time) runtimeRecordOption {
+	return func(rec *daemon.RuntimeRecord) { rec.StartedAt = startedAt }
+}
+
 func withRuntimePID(pid int) runtimeRecordOption {
 	return func(rec *daemon.RuntimeRecord) { rec.PID = pid }
 }
@@ -414,6 +418,22 @@ func newPingDaemon(t *testing.T) testDaemonEndpoint {
 	}))
 	t.Cleanup(ts.Close)
 	return serverEndpoint(t, ts)
+}
+
+func newPingDaemonWithProbeSignal(t *testing.T) (testDaemonEndpoint, <-chan struct{}) {
+	t.Helper()
+	pinged := make(chan struct{})
+	var pingedOnce sync.Once
+	ping := daemon.NewPingHandler(daemon.PingHandlerOptions{
+		Service: daemonService,
+		Version: "test",
+	})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pingedOnce.Do(func() { close(pinged) })
+		ping.ServeHTTP(w, r)
+	}))
+	t.Cleanup(ts.Close)
+	return serverEndpoint(t, ts), pinged
 }
 
 func testPingServer(t *testing.T) (host string, port int) {

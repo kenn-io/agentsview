@@ -1,5 +1,7 @@
 import type {
   UsageComparison,
+  UsagePairwiseComparisonResponse,
+  UsagePairwiseDimension,
   UsageSummaryResponse,
   TopUsageSessionsResponse,
 } from "../api/types/usage.js";
@@ -13,13 +15,24 @@ import { perf, type PerfEntryStatus } from "./perf.svelte.js";
 import { daysAgo, today } from "../utils/dates.js";
 
 type UsageParams = Parameters<typeof UsageService.getApiV1UsageSummary>[0];
-type UsagePanel = "summary" | "comparison" | "topSessions";
+type UsagePairwiseParams =
+  Parameters<typeof UsageService.getApiV1UsagePairwiseComparison>[0];
+type UsagePanel = "summary" | "comparison" | "pairwise" | "topSessions";
 type FetchResult = "ok" | "error" | "aborted";
 type LoadedUsageSummary = {
   version: number;
   summary: UsageSummaryResponse;
   params: UsageParams;
 };
+export type UsagePairwiseSide = "left" | "right";
+export interface UsagePairwiseSideSelection {
+  dimension: UsagePairwiseDimension;
+  value: string;
+}
+export interface UsagePairwiseSelection {
+  left: UsagePairwiseSideSelection;
+  right: UsagePairwiseSideSelection;
+}
 
 export type GroupBy = "project" | "model" | "agent";
 export type TimeSeriesView = "stacked-area" | "bars" | "lines";
@@ -149,7 +162,24 @@ function joinCsvParts(...parts: string[]): string {
   return out.join(",");
 }
 
-type Endpoint = "summary" | "topSessions";
+type Endpoint = "summary" | "pairwise" | "topSessions";
+
+function emptyPairwiseSelection(): UsagePairwiseSelection {
+  return {
+    left: { dimension: "model", value: "" },
+    right: { dimension: "model", value: "" },
+  };
+}
+
+function samePairwiseSelection(
+  left: UsagePairwiseSelection,
+  right: UsagePairwiseSelection,
+): boolean {
+  return left.left.dimension === right.left.dimension &&
+    left.left.value === right.left.value &&
+    left.right.dimension === right.right.dimension &&
+    left.right.value === right.right.value;
+}
 
 class UsageStore {
   from: string = $state(daysAgo(DEFAULT_WINDOW_DAYS));
@@ -174,18 +204,29 @@ class UsageStore {
   }
 
   summary = $state<UsageSummaryResponse | null>(null);
+  pairwiseComparison =
+    $state<UsagePairwiseComparisonResponse | null>(null);
+  pairwiseSelection = $state<UsagePairwiseSelection>(
+    emptyPairwiseSelection(),
+  );
   topSessions = $state<TopUsageSessionsResponse | null>(null);
   lastUpdatedAt: number | null = $state(null);
   hasNewData: boolean = $state(false);
 
-  loading = $state({ summary: false, topSessions: false });
+  loading = $state({
+    summary: false,
+    pairwise: false,
+    topSessions: false,
+  });
   querying = $state<Record<UsagePanel, boolean>>({
     summary: false,
     comparison: false,
+    pairwise: false,
     topSessions: false,
   });
   errors = $state<Record<Endpoint, string | null>>({
     summary: null,
+    pairwise: null,
     topSessions: null,
   });
 
@@ -193,6 +234,7 @@ class UsageStore {
 
   private versions: Record<Endpoint, number> = {
     summary: 0,
+    pairwise: 0,
     topSessions: 0,
   };
   private fetchAllVersion = 0;
@@ -247,6 +289,76 @@ class UsageStore {
     return p;
   }
 
+  get pairwiseModelOptions(): string[] {
+    return (this.summary?.modelTotals ?? []).map((entry) => entry.model);
+  }
+
+  get pairwiseProjectOptions(): string[] {
+    return (this.summary?.projectTotals ?? []).map((entry) => entry.project);
+  }
+
+  private pairwiseOptionsFor(
+    dimension: UsagePairwiseDimension,
+  ): string[] {
+    return dimension === "project"
+      ? this.pairwiseProjectOptions
+      : this.pairwiseModelOptions;
+  }
+
+  private preferredPairwiseValue(
+    dimension: UsagePairwiseDimension,
+    fallback: string,
+  ): string {
+    const options = this.pairwiseOptionsFor(dimension);
+    for (const option of options) {
+      if (option !== fallback) return option;
+    }
+    return options[0] ?? "";
+  }
+
+  private ensurePairwiseSelection(): boolean {
+    const current = this.pairwiseSelection;
+    const currentLeftOptions = this.pairwiseOptionsFor(current.left.dimension);
+    const currentRightOptions = this.pairwiseOptionsFor(current.right.dimension);
+    const leftValid = current.left.value !== "" &&
+      currentLeftOptions.includes(current.left.value);
+    const rightValid = current.right.value !== "" &&
+      currentRightOptions.includes(current.right.value);
+    if (leftValid && rightValid) return false;
+
+    const modelOptions = this.pairwiseModelOptions;
+    const projectOptions = this.pairwiseProjectOptions;
+    let next = emptyPairwiseSelection();
+    if (modelOptions.length >= 2) {
+      next = {
+        left: { dimension: "model", value: modelOptions[0] ?? "" },
+        right: { dimension: "model", value: modelOptions[1] ?? "" },
+      };
+    } else if (projectOptions.length >= 2) {
+      next = {
+        left: { dimension: "project", value: projectOptions[0] ?? "" },
+        right: { dimension: "project", value: projectOptions[1] ?? "" },
+      };
+    } else if (modelOptions.length > 0 && projectOptions.length > 0) {
+      next = {
+        left: { dimension: "model", value: modelOptions[0] ?? "" },
+        right: { dimension: "project", value: projectOptions[0] ?? "" },
+      };
+    } else {
+      next = emptyPairwiseSelection();
+    }
+    if (samePairwiseSelection(current, next)) {
+      return false;
+    }
+    this.pairwiseSelection = next;
+    return true;
+  }
+
+  private clearPairwiseComparisonState(): void {
+    this.pairwiseComparison = null;
+    this.errors.pairwise = null;
+  }
+
   applyDateRange(from: string, to: string) {
     this.isPinned = true;
     this.from = from;
@@ -267,6 +379,33 @@ class UsageStore {
   setRollingWindow(days: number) {
     this.applyRollingWindow(days);
     this.fetchAll();
+  }
+
+  setPairwiseSide(
+    side: UsagePairwiseSide,
+    updates: Partial<UsagePairwiseSideSelection>,
+  ): void {
+    const next: UsagePairwiseSelection = {
+      left: { ...this.pairwiseSelection.left },
+      right: { ...this.pairwiseSelection.right },
+    };
+    const prev = next[side];
+    const dimension = updates.dimension ?? prev.dimension;
+    const options = this.pairwiseOptionsFor(dimension);
+    const value = updates.value ??
+      (options.includes(prev.value) && prev.dimension === dimension
+        ? prev.value
+        : this.preferredPairwiseValue(
+            dimension,
+            next[side === "left" ? "right" : "left"].value,
+          ));
+
+    next[side] = { dimension, value };
+    this.pairwiseSelection = next;
+    if (this.summary) {
+      this.clearPairwiseComparisonState();
+      void this.fetchPairwise(this.versions.summary, this.baseParams());
+    }
   }
 
   // Toggle an item's exclusion. Clicking an included item
@@ -404,6 +543,7 @@ class UsageStore {
 
   async fetchAll() {
     const fetchVersion = ++this.fetchAllVersion;
+    this.invalidatePanel("pairwise");
     this.invalidatePanel("topSessions");
     this.rollDates();
     saveUsageFilters(this);
@@ -418,18 +558,20 @@ class UsageStore {
       await topSessionsPromise;
       return;
     }
-    const [topSessionsResult, comparisonResult] = await Promise.all([
+    const [topSessionsResult, comparisonResult, pairwiseResult] = await Promise.all([
       topSessionsPromise,
       this.fetchComparison(
         loadedSummary.version,
         loadedSummary.summary,
         loadedSummary.params,
       ),
+      this.fetchPairwise(loadedSummary.version, loadedSummary.params),
     ]);
     if (
       fetchVersion === this.fetchAllVersion &&
       topSessionsResult === "ok" &&
-      comparisonResult === "ok"
+      comparisonResult === "ok" &&
+      pairwiseResult === "ok"
     ) {
       this.markRefreshComplete();
     }
@@ -441,6 +583,7 @@ class UsageStore {
     const loadComparison = options.loadComparison ?? true;
     const v = ++this.versions.summary;
     this.abortPanel("comparison");
+    this.abortPanel("pairwise");
     const signal = this.nextAbortSignal("summary");
     // Only show the skeleton when we don't already have data to
     // display. Refetches triggered by live events or filter changes
@@ -461,9 +604,12 @@ class UsageStore {
       if (this.versions.summary === v) {
         this.summary = data;
         this.errors.summary = null;
+        this.ensurePairwiseSelection();
+        this.clearPairwiseComparisonState();
         const loaded = { version: v, summary: data, params };
         if (loadComparison) {
           void this.fetchComparison(v, data, params);
+          void this.fetchPairwise(v, params);
         }
         return loaded;
       }
@@ -543,6 +689,91 @@ class UsageStore {
     }
   }
 
+  private currentPairwiseParams(
+    params: UsageParams,
+  ): UsagePairwiseParams | null {
+    const selection = this.pairwiseSelection;
+    if (!selection.left.value || !selection.right.value) {
+      return null;
+    }
+    return {
+      ...params,
+      leftDimension: selection.left.dimension,
+      leftValue: selection.left.value,
+      rightDimension: selection.right.dimension,
+      rightValue: selection.right.value,
+    };
+  }
+
+  private async fetchPairwise(
+    summaryVersion: number,
+    params: UsageParams,
+  ): Promise<FetchResult> {
+    if (this.versions.summary !== summaryVersion) return "aborted";
+    const pairwiseVersion = ++this.versions.pairwise;
+    const request = this.currentPairwiseParams(params);
+    if (!request) {
+      this.pairwiseComparison = null;
+      this.errors.pairwise = null;
+      this.loading.pairwise = false;
+      this.abortPanel("pairwise");
+      return "ok";
+    }
+    const signal = this.nextAbortSignal("pairwise");
+    const isFirstLoad = this.pairwiseComparison === null;
+    if (isFirstLoad) this.loading.pairwise = true;
+    if (isFirstLoad) this.errors.pairwise = null;
+    const started = performance.now();
+    let status: Extract<PerfEntryStatus, "ok" | "error" | "aborted"> = "ok";
+    try {
+      const comparison = await callGenerated(() =>
+        UsageService.getApiV1UsagePairwiseComparison(request),
+        signal,
+      ) as unknown as UsagePairwiseComparisonResponse;
+      if (
+        this.versions.summary === summaryVersion &&
+        this.versions.pairwise === pairwiseVersion
+      ) {
+        this.pairwiseComparison = comparison;
+        this.errors.pairwise = null;
+        return "ok";
+      }
+      return "aborted";
+    } catch (e) {
+      if (isAbortError(e)) {
+        status = "aborted";
+        return "aborted";
+      }
+      status = "error";
+      if (
+        this.versions.summary === summaryVersion &&
+        this.versions.pairwise === pairwiseVersion
+      ) {
+        if (this.pairwiseComparison === null) {
+          this.errors.pairwise =
+            e instanceof Error ? e.message : "Failed to load";
+        } else {
+          console.warn("usage.fetchPairwise failed:", e);
+        }
+      }
+      return "error";
+    } finally {
+      perf.recordPanel({
+        route: "usage",
+        name: "pairwise",
+        durationMs: performance.now() - started,
+        status,
+      });
+      this.clearAbortSignal("pairwise", signal);
+      if (
+        this.versions.summary === summaryVersion &&
+        this.versions.pairwise === pairwiseVersion
+      ) {
+        this.loading.pairwise = false;
+      }
+    }
+  }
+
   async fetchTopSessions(
     params: UsageParams | null = null,
   ): Promise<FetchResult> {
@@ -604,6 +835,9 @@ class UsageStore {
     this.abortControllers[panel]?.abort();
     delete this.abortControllers[panel];
     this.querying[panel] = false;
+    if (panel === "pairwise") {
+      this.loading.pairwise = false;
+    }
   }
 
   private nextAbortSignal(panel: UsagePanel): AbortSignal {

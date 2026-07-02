@@ -15,6 +15,10 @@ func (s *Server) registerUsageRoutes() {
 
 	get(s, group, "/summary", "Get usage summary", s.humaUsageSummary)
 	get(s, group, "/comparison", "Get usage comparison", s.humaUsageComparison)
+	get(
+		s, group, "/pairwise-comparison",
+		"Get usage pairwise comparison", s.humaUsagePairwiseComparison,
+	)
 	get(s, group, "/top-sessions", "Get top usage sessions", s.humaUsageTopSessions)
 }
 
@@ -50,6 +54,14 @@ type usageComparisonInput struct {
 	CurrentCost float64 `query:"current_cost" required:"true" doc:"Current period total cost"`
 }
 
+type usagePairwiseComparisonInput struct {
+	UsageFilterInput
+	LeftDimension  string `query:"left_dimension" required:"true" doc:"Left-side comparison dimension"`
+	LeftValue      string `query:"left_value" required:"true" doc:"Left-side comparison value"`
+	RightDimension string `query:"right_dimension" required:"true" doc:"Right-side comparison dimension"`
+	RightValue     string `query:"right_value" required:"true" doc:"Right-side comparison value"`
+}
+
 // usageRequestFromInput maps the HTTP query-param struct to the
 // transport-neutral service.UsageRequest.
 func usageRequestFromInput(in UsageFilterInput) service.UsageRequest {
@@ -74,6 +86,28 @@ func usageRequestFromInput(in UsageFilterInput) service.UsageRequest {
 		Breakdowns:       &in.Breakdowns,
 		SessionCounts:    &in.SessionCounts,
 	}
+}
+
+func usagePairwiseRequestFromInput(
+	in usagePairwiseComparisonInput,
+) (service.UsagePairwiseComparisonRequest, error) {
+	if in.LeftDimension == "" || in.LeftValue == "" {
+		return service.UsagePairwiseComparisonRequest{}, &service.UsageInputError{
+			Msg: "left side requires left_dimension and left_value",
+		}
+	}
+	if in.RightDimension == "" || in.RightValue == "" {
+		return service.UsagePairwiseComparisonRequest{}, &service.UsageInputError{
+			Msg: "right side requires right_dimension and right_value",
+		}
+	}
+	return service.UsagePairwiseComparisonRequest{
+		UsageRequest:   usageRequestFromInput(in.UsageFilterInput),
+		LeftDimension:  in.LeftDimension,
+		LeftValue:      in.LeftValue,
+		RightDimension: in.RightDimension,
+		RightValue:     in.RightValue,
+	}, nil
 }
 
 // usageFilterFromInput validates and builds a db.UsageFilter via the
@@ -139,6 +173,37 @@ func (s *Server) humaUsageComparison(
 		return nil, internalError("usage comparison error", err)
 	}
 	return &jsonOutput[Comparison]{Body: *comparison}, nil
+}
+
+func (s *Server) humaUsagePairwiseComparison(
+	ctx context.Context,
+	in *usagePairwiseComparisonInput,
+) (*jsonOutput[service.UsagePairwiseComparisonResponse], error) {
+	req, err := usagePairwiseRequestFromInput(*in)
+	if err != nil {
+		var ue *service.UsageInputError
+		if errors.As(err, &ue) {
+			return nil, apiError(http.StatusBadRequest, ue.Msg)
+		}
+		return nil, err
+	}
+	comparison, err := s.sessions.UsagePairwiseComparison(ctx, req)
+	if err != nil {
+		var ue *service.UsageInputError
+		if errors.As(err, &ue) {
+			return nil, apiError(http.StatusBadRequest, ue.Msg)
+		}
+		if handled := handleHumaContextError(err); handled != nil {
+			return nil, handled
+		}
+		if handled := handleHumaReadOnly(err); handled != nil {
+			return nil, handled
+		}
+		return nil, internalError("usage pairwise comparison error", err)
+	}
+	return &jsonOutput[service.UsagePairwiseComparisonResponse]{
+		Body: *comparison,
+	}, nil
 }
 
 func (s *Server) computeUsageComparison(

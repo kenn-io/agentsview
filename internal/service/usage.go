@@ -4,6 +4,7 @@ package service
 
 import (
 	"sort"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -184,6 +185,61 @@ type UsageSummaryResult struct {
 	UnsupportedUsage *UnsupportedUsage     `json:"unsupportedUsage,omitempty"`
 }
 
+// UsagePairwiseComparisonSide holds aggregate and derived
+// metrics for one side of a pairwise comparison.
+type UsagePairwiseComparisonSide struct {
+	TotalCost           float64  `json:"totalCost"`
+	InputTokens         int      `json:"inputTokens"`
+	OutputTokens        int      `json:"outputTokens"`
+	CacheCreationTokens int      `json:"cacheCreationTokens"`
+	CacheReadTokens     int      `json:"cacheReadTokens"`
+	TotalTokens         int      `json:"totalTokens"`
+	SessionCount        int      `json:"sessionCount"`
+	CostPerSession      *float64 `json:"costPerSession,omitempty"`
+	TokensPerSession    *float64 `json:"tokensPerSession,omitempty"`
+}
+
+// UsagePairwiseComparisonDelta reports absolute and relative differences
+// for each metric between right and left sides.
+type UsagePairwiseComparisonDelta struct {
+	TotalCostDelta          float64  `json:"totalCostDelta"`
+	TotalCostDeltaRatio     *float64 `json:"totalCostDeltaRatio"`
+	InputTokensDelta        int      `json:"inputTokensDelta"`
+	InputTokensDeltaRatio   *float64 `json:"inputTokensDeltaRatio"`
+	OutputTokensDelta       int      `json:"outputTokensDelta"`
+	OutputTokensDeltaRatio  *float64 `json:"outputTokensDeltaRatio"`
+	CacheCreationDelta      int      `json:"cacheCreationDelta"`
+	CacheCreationDeltaRatio *float64 `json:"cacheCreationDeltaRatio"`
+	CacheReadDelta          int      `json:"cacheReadDelta"`
+	CacheReadDeltaRatio     *float64 `json:"cacheReadDeltaRatio"`
+	TotalTokensDelta        int      `json:"totalTokensDelta"`
+	TotalTokensDeltaRatio   *float64 `json:"totalTokensDeltaRatio"`
+	SessionCountDelta       int      `json:"sessionCountDelta"`
+	SessionCountDeltaRatio  *float64 `json:"sessionCountDeltaRatio"`
+	CostPerSessionDelta     *float64 `json:"costPerSessionDelta"`
+	CostPerSessionRatio     *float64 `json:"costPerSessionRatio"`
+	TokensPerSessionDelta   *float64 `json:"tokensPerSessionDelta"`
+	TokensPerSessionRatio   *float64 `json:"tokensPerSessionRatio"`
+}
+
+// UsagePairwiseComparisonResponse is the backend-computed response
+// for model/project pairwise usage comparisons.
+type UsagePairwiseComparisonResponse struct {
+	Left   UsagePairwiseComparisonSide  `json:"left"`
+	Right  UsagePairwiseComparisonSide  `json:"right"`
+	Deltas UsagePairwiseComparisonDelta `json:"deltas"`
+}
+
+// UsagePairwiseComparisonRequest holds shared usage filters plus one
+// extra include filter per side.
+type UsagePairwiseComparisonRequest struct {
+	UsageRequest
+	LeftDimension  string `json:"left_dimension,omitempty"`
+	LeftValue      string `json:"left_value,omitempty"`
+	RightDimension string `json:"right_dimension,omitempty"`
+	RightValue     string `json:"right_value,omitempty"`
+}
+
 // buildUsageSummary assembles a UsageSummaryResult from a daily-usage
 // query result over the [from, to] range.
 func buildUsageSummary(
@@ -323,4 +379,207 @@ func computeCacheStats(t db.UsageTotals) CacheStats {
 		cs.HitRate = float64(t.CacheReadTokens) / float64(denominator)
 	}
 	return cs
+}
+
+func BuildUsagePairwiseComparisonResult(
+	left db.DailyUsageResult,
+	right db.DailyUsageResult,
+) UsagePairwiseComparisonResponse {
+	leftSide := usagePairwiseSideFromResult(left)
+	rightSide := usagePairwiseSideFromResult(right)
+	return UsagePairwiseComparisonResponse{
+		Left:   leftSide,
+		Right:  rightSide,
+		Deltas: pairwiseDeltas(leftSide, rightSide),
+	}
+}
+
+func BuildUsagePairwiseFilters(
+	req UsagePairwiseComparisonRequest,
+) (
+	db.UsageFilter,
+	bool,
+	db.UsageFilter,
+	bool,
+	error,
+) {
+	base, err := BuildUsageFilter(req.UsageRequest)
+	if err != nil {
+		return db.UsageFilter{}, false, db.UsageFilter{}, false, err
+	}
+
+	left, err := applyPairwiseDimension(
+		base,
+		req.LeftDimension,
+		req.LeftValue,
+		"left",
+	)
+	if err != nil {
+		return db.UsageFilter{}, false, db.UsageFilter{}, false, err
+	}
+	right, err := applyPairwiseDimension(
+		base,
+		req.RightDimension,
+		req.RightValue,
+		"right",
+	)
+	if err != nil {
+		return db.UsageFilter{}, false, db.UsageFilter{}, false, err
+	}
+	return left.filter, left.empty, right.filter, right.empty, nil
+}
+
+func intersectCSV(base, add string) (string, bool) {
+	if add == "" {
+		return base, base != ""
+	}
+	if base == "" {
+		return add, true
+	}
+	addSet := map[string]struct{}{}
+	for _, token := range splitCSVTokens(add) {
+		addSet[token] = struct{}{}
+	}
+	out := make([]string, 0)
+	seen := map[string]struct{}{}
+	for _, token := range splitCSVTokens(base) {
+		if _, ok := addSet[token]; !ok {
+			continue
+		}
+		if _, seenOk := seen[token]; seenOk {
+			continue
+		}
+		seen[token] = struct{}{}
+		out = append(out, token)
+	}
+	if len(out) == 0 {
+		return "", false
+	}
+	return joinCSVTokens(out), true
+}
+
+func splitCSVTokens(raw string) []string {
+	out := make([]string, 0)
+	for token := range strings.SplitSeq(raw, ",") {
+		trimmed := strings.TrimSpace(token)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func joinCSVTokens(tokens []string) string {
+	return strings.Join(tokens, ",")
+}
+
+type pairwiseFilterResult struct {
+	filter db.UsageFilter
+	empty  bool
+}
+
+func applyPairwiseDimension(
+	base db.UsageFilter, dimension, value string,
+	label string,
+) (pairwiseFilterResult, error) {
+	filter := base
+	if value == "" {
+		return pairwiseFilterResult{},
+			&UsageInputError{Msg: label + "_value is required"}
+	}
+	var ok bool
+	switch dimension {
+	case "model":
+		filter.Model, ok = intersectCSV(filter.Model, value)
+		return pairwiseFilterResult{filter: filter, empty: !ok}, nil
+	case "project":
+		filter.Project, ok = intersectCSV(filter.Project, value)
+		return pairwiseFilterResult{filter: filter, empty: !ok}, nil
+	case "":
+		return pairwiseFilterResult{},
+			&UsageInputError{Msg: label + "_dimension is required"}
+	default:
+		return pairwiseFilterResult{},
+			&UsageInputError{
+				Msg: label + "_dimension must be model or project",
+			}
+	}
+}
+
+func safePerTurnDenominator(count int) bool {
+	return count > 0
+}
+
+func maybeFloatRatio(left, delta float64) *float64 {
+	if left == 0 {
+		return nil
+	}
+	r := delta / left
+	return &r
+}
+
+func usagePairwiseSideFromResult(r db.DailyUsageResult) UsagePairwiseComparisonSide {
+	total := r.Totals
+	side := UsagePairwiseComparisonSide{
+		TotalCost:           total.TotalCost,
+		InputTokens:         total.InputTokens,
+		OutputTokens:        total.OutputTokens,
+		CacheCreationTokens: total.CacheCreationTokens,
+		CacheReadTokens:     total.CacheReadTokens,
+		SessionCount:        r.SessionCounts.Total,
+	}
+	side.TotalTokens = side.InputTokens + side.OutputTokens +
+		side.CacheCreationTokens + side.CacheReadTokens
+	if safePerTurnDenominator(r.SessionCounts.Total) {
+		costPerSession := side.TotalCost / float64(r.SessionCounts.Total)
+		tokensPerSession := float64(side.TotalTokens) / float64(r.SessionCounts.Total)
+		side.CostPerSession = &costPerSession
+		side.TokensPerSession = &tokensPerSession
+	}
+	return side
+}
+
+func pairwiseDeltas(left, right UsagePairwiseComparisonSide) UsagePairwiseComparisonDelta {
+	costPerSessionDelta, costPerSessionRatio := deltaWithRatio(
+		left.CostPerSession, right.CostPerSession,
+	)
+	tokensPerSessionDelta, tokensPerSessionRatio := deltaWithRatio(
+		left.TokensPerSession, right.TokensPerSession,
+	)
+	totalCostDelta := right.TotalCost - left.TotalCost
+	inputTokensDelta := right.InputTokens - left.InputTokens
+	outputTokensDelta := right.OutputTokens - left.OutputTokens
+	cacheCreationDelta := right.CacheCreationTokens - left.CacheCreationTokens
+	cacheReadDelta := right.CacheReadTokens - left.CacheReadTokens
+	totalTokensDelta := right.TotalTokens - left.TotalTokens
+	sessionCountDelta := right.SessionCount - left.SessionCount
+	return UsagePairwiseComparisonDelta{
+		TotalCostDelta:          totalCostDelta,
+		TotalCostDeltaRatio:     maybeFloatRatio(left.TotalCost, totalCostDelta),
+		InputTokensDelta:        inputTokensDelta,
+		InputTokensDeltaRatio:   maybeFloatRatio(float64(left.InputTokens), float64(inputTokensDelta)),
+		OutputTokensDelta:       outputTokensDelta,
+		OutputTokensDeltaRatio:  maybeFloatRatio(float64(left.OutputTokens), float64(outputTokensDelta)),
+		CacheCreationDelta:      cacheCreationDelta,
+		CacheCreationDeltaRatio: maybeFloatRatio(float64(left.CacheCreationTokens), float64(cacheCreationDelta)),
+		CacheReadDelta:          cacheReadDelta,
+		CacheReadDeltaRatio:     maybeFloatRatio(float64(left.CacheReadTokens), float64(cacheReadDelta)),
+		TotalTokensDelta:        totalTokensDelta,
+		TotalTokensDeltaRatio:   maybeFloatRatio(float64(left.TotalTokens), float64(totalTokensDelta)),
+		SessionCountDelta:       sessionCountDelta,
+		SessionCountDeltaRatio:  maybeFloatRatio(float64(left.SessionCount), float64(sessionCountDelta)),
+		CostPerSessionDelta:     costPerSessionDelta,
+		CostPerSessionRatio:     costPerSessionRatio,
+		TokensPerSessionDelta:   tokensPerSessionDelta,
+		TokensPerSessionRatio:   tokensPerSessionRatio,
+	}
+}
+
+func deltaWithRatio(left, right *float64) (*float64, *float64) {
+	if left == nil || right == nil {
+		return nil, nil
+	}
+	delta := *right - *left
+	return &delta, maybeFloatRatio(*left, delta)
 }

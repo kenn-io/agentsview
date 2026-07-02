@@ -148,6 +148,55 @@ func seedCopilotNoTokenSession(t *testing.T, te *testEnv, id string) {
 	})
 }
 
+func seedUsagePairwiseEnv(t *testing.T, te *testEnv) {
+	t.Helper()
+
+	type entry struct {
+		id      string
+		project string
+		started string
+		model   string
+		usage   json.RawMessage
+	}
+
+	entries := []entry{
+		{
+			id:      "pairwise-alpha-sonnet",
+			project: "alpha",
+			started: "2024-06-01T09:00:00Z",
+			model:   "claude-sonnet-4-20250514",
+			usage: json.RawMessage(
+				`{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":10,"cache_read_input_tokens":20}`,
+			),
+		},
+		{
+			id:      "pairwise-beta-gpt",
+			project: "beta",
+			started: "2024-06-01T10:00:00Z",
+			model:   "gpt-4o",
+			usage: json.RawMessage(
+				`{"input_tokens":30,"output_tokens":15,"cache_creation_input_tokens":0,"cache_read_input_tokens":5}`,
+			),
+		},
+	}
+
+	for _, e := range entries {
+		te.seedSession(t, e.id, e.project, 2, func(sess *db.Session) {
+			sess.Agent = "claude"
+			sess.StartedAt = &e.started
+			sess.EndedAt = &e.started
+			sess.UserMessageCount = 1
+		})
+		te.seedMessages(t, e.id, 2, func(_ int, m *db.Message) {
+			m.Timestamp = e.started
+			if m.Role == "assistant" {
+				m.Model = e.model
+				m.TokenUsage = e.usage
+			}
+		})
+	}
+}
+
 func TestHandleUsageSummaryJSONShape(t *testing.T) {
 	te := setup(t)
 	seedUsageEnv(t, te)
@@ -287,6 +336,71 @@ func TestHandleUsageTopSessionsLimit(t *testing.T) {
 	assert.LessOrEqual(t, len(entries), 1)
 }
 
+func TestHandleUsagePairwiseComparisonJSONShape(t *testing.T) {
+	te := setup(t)
+	seedUsagePairwiseEnv(t, te)
+
+	w := te.get(t, buildPathURL(
+		"/api/v1/usage/pairwise-comparison",
+		map[string]string{
+			"from":            "2024-06-01",
+			"to":              "2024-06-01",
+			"timezone":        "UTC",
+			"left_dimension":  "model",
+			"left_value":      "claude-sonnet-4-20250514",
+			"right_dimension": "project",
+			"right_value":     "beta",
+		},
+	))
+	assertStatus(t, w, http.StatusOK)
+
+	var raw map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
+	assert.Contains(t, raw, "left")
+	assert.Contains(t, raw, "right")
+	assert.Contains(t, raw, "deltas")
+
+	resp := decode[service.UsagePairwiseComparisonResponse](t, w)
+	assert.Equal(t, 1, resp.Left.SessionCount)
+	assert.Equal(t, 1, resp.Right.SessionCount)
+}
+
+func TestHandleUsagePairwiseComparisonValidation(t *testing.T) {
+	te := setup(t)
+
+	cases := []map[string]string{
+		{
+			"from":            "2024-06-01",
+			"to":              "2024-06-01",
+			"timezone":        "UTC",
+			"left_dimension":  "model",
+			"left_value":      "claude-sonnet-4-20250514",
+			"right_dimension": "machine",
+			"right_value":     "beta",
+		},
+		{
+			"from":            "2024-06-01",
+			"to":              "2024-06-01",
+			"timezone":        "UTC",
+			"right_dimension": "model",
+			"right_value":     "gpt-4o",
+		},
+		{
+			"from":           "2024-06-01",
+			"to":             "2024-06-01",
+			"timezone":       "UTC",
+			"left_dimension": "model",
+		},
+	}
+	for _, q := range cases {
+		w := te.get(t, buildPathURL(
+			"/api/v1/usage/pairwise-comparison",
+			q,
+		))
+		assertStatus(t, w, http.StatusBadRequest)
+	}
+}
+
 // TestUsageSummaryErrorRedaction verifies internal errors
 // don't leak DB details.
 func TestUsageSummaryErrorRedaction(t *testing.T) {
@@ -308,6 +422,7 @@ func TestUsageRoutesRegistered(t *testing.T) {
 
 	endpoints := []string{
 		"/api/v1/usage/summary",
+		"/api/v1/usage/pairwise-comparison",
 		"/api/v1/usage/top-sessions",
 	}
 	for _, ep := range endpoints {

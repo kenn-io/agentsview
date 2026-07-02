@@ -204,4 +204,23 @@ describe("UsagePage refresh behavior", () => {
     expect(initBlock).not.toContain("parseFiltersFromParams(params)");
     expect(initBlock).not.toContain("sessions.initFromParams(params)");
   });
+
+  it("mounts the pairwise comparison panel additively", () => {
+    expect(source).toContain("UsagePairwiseComparisonPanel");
+    expect(source).toContain("<UsagePairwiseComparisonPanel />");
+  });
+
+  it("keeps pairwise comparison below bounded secondary usage panels", () => {
+    const topSessionsIndex = source.indexOf("<TopSessionsTable />");
+    const cacheEfficiencyIndex = source.indexOf("<CacheEfficiencyPanel />");
+    const pairwiseIndex = source.indexOf("<UsagePairwiseComparisonPanel />");
+
+    expect(topSessionsIndex).toBeGreaterThan(-1);
+    expect(cacheEfficiencyIndex).toBeGreaterThan(-1);
+    expect(pairwiseIndex).toBeGreaterThan(cacheEfficiencyIndex);
+    expect(pairwiseIndex).toBeGreaterThan(topSessionsIndex);
+    expect(source).toContain('class="chart-panel bounded"');
+    expect(source).toContain("max-height:");
+    expect(source).toContain("overflow: auto;");
+  });
 });

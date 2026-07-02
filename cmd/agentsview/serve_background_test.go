@@ -170,9 +170,9 @@ func TestRunServeBackgroundReplaceWaitsForExternalStartLock(t *testing.T) {
 	setStartProbeTickForTest(t, 25*time.Millisecond)
 
 	dir := runtimeTestDir(t)
-	oldHost, oldPort := testPingServer(t)
+	oldEndpoint, oldProbed := newPingDaemonWithProbeSignal(t)
 	writeRuntimeRecordFixture(t, dir, daemonRuntimeRecord(
-		oldHost, oldPort, withRuntimeVersion("1.0.0"),
+		oldEndpoint.Host, oldEndpoint.Port, withRuntimeVersion("1.0.0"),
 	))
 	setTestVersion(t, "dev")
 	unlockStart := holdExternalDaemonStartLock(t, dir)
@@ -191,7 +191,12 @@ func TestRunServeBackgroundReplaceWaitsForExternalStartLock(t *testing.T) {
 	newHost, newPort := testPingServer(t)
 	published := make(chan error, 1)
 	go func() {
-		time.Sleep(2 * startProbeTick())
+		select {
+		case <-oldProbed:
+		case <-time.After(2 * time.Second):
+			published <- fmt.Errorf("old daemon was not probed")
+			return
+		}
 		published <- publishDaemonRuntimeAndUnlockWhenVisible(
 			dir, newHost, newPort, "dev", unlockStart,
 		)
@@ -1555,11 +1560,46 @@ func TestRefreshServeDaemonReplacementDecisionKeepsStopConfirmedOriginal(
 			Action:  serveReplacementAuto,
 			Runtime: original,
 		},
+		false,
+		time.Time{},
 	)
 
 	assert.Equal(t, serveReplacementAuto, got.Action)
 	require.NotNil(t, got.Runtime)
 	assert.Equal(t, oldPort, got.Runtime.Port)
+}
+
+func TestRefreshServeDaemonReplacementDecisionKeepsStartupPublishedRuntime(
+	t *testing.T,
+) {
+	dir := runtimeTestDir(t)
+	setTestVersion(t, "dev")
+
+	host, port := testPingServer(t)
+	replacementCheckStarted := time.Date(
+		2026, time.January, 1, 0, 0, 0, 0, time.UTC,
+	)
+	rec := daemonRuntimeRecord(
+		host, port,
+		withRuntimeVersion("dev"),
+		withRuntimeStartedAt(replacementCheckStarted.Add(time.Minute)),
+	)
+	writeRuntimeRecordFixture(t, dir, rec)
+
+	got := refreshServeDaemonReplacementDecision(
+		config.Config{DataDir: dir},
+		serveReplacementOptions{Replace: true},
+		serveReplacementDecision{
+			Action:  serveReplacementExplicit,
+			Runtime: daemonRuntimeFromRecord(rec),
+		},
+		true,
+		replacementCheckStarted,
+	)
+
+	assert.Equal(t, serveReplacementUseExisting, got.Action)
+	require.NotNil(t, got.Runtime)
+	assert.Equal(t, port, got.Runtime.Port)
 }
 
 func TestEnsureBackgroundServeConcurrentLaunchConvergesOnDaemon(t *testing.T) {

@@ -11,9 +11,11 @@ import { analytics } from "../../stores/analytics.svelte.js";
 import { router } from "../../stores/router.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
-import source from "./AnalyticsPage.svelte?raw";
+import sourceRaw from "./AnalyticsPage.svelte?raw";
 // @ts-ignore
 import AnalyticsPage from "./AnalyticsPage.svelte";
+
+const source = sourceRaw.replace(/\r\n/g, "\n");
 
 async function flushEffects() {
   await tick();
@@ -197,12 +199,11 @@ describe("AnalyticsPage refresh behavior", () => {
 
   it("only seeds saved yoke dates during initial URL hydration", () => {
     const seedIndex = source.indexOf("const seed = yokedDates.seedForPanel()");
-    const guardedSeedIndex = source.indexOf(
-      "if (firstRun) {\n          const seed = yokedDates.seedForPanel()",
-    );
+    const firstRunIndex = source.indexOf("if (firstRun) {");
 
     expect(seedIndex).toBeGreaterThan(-1);
-    expect(guardedSeedIndex).toBeGreaterThan(-1);
+    expect(firstRunIndex).toBeGreaterThan(-1);
+    expect(seedIndex).toBeGreaterThan(firstRunIndex);
   });
 
   it("treats drill-down clears as analytics date changes", () => {
@@ -238,13 +239,13 @@ describe("AnalyticsPage refresh behavior", () => {
       "function sessionAnalyticsDateUrlSignature",
     );
     const helperEnd = source.indexOf(
-      "\n\n  function clearSessionDateFilters",
+      "function clearSessionDateFilters",
       helperStart,
     );
     const helperBlock = source.slice(helperStart, helperEnd);
     const effectStart = source.indexOf("const dateSignature =");
     const effectEnd = source.indexOf(
-      "\n\n  onDestroy",
+      "onDestroy(() => {",
       effectStart,
     );
     const effectBlock = source.slice(effectStart, effectEnd);
@@ -271,7 +272,7 @@ describe("AnalyticsPage refresh behavior", () => {
   it("does not use the rolling fallback when cleared session date filters remove URL dates", () => {
     const noStateStart = source.indexOf("if (!state) {");
     const noStateEnd = source.indexOf(
-      "\n\n      let changed = false;\n      let sessionChanged = false;",
+      "let changed = false;\n      let sessionChanged = false;",
       noStateStart,
     );
     const noStateBlock = source.slice(noStateStart, noStateEnd);

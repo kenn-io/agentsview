@@ -3,6 +3,7 @@ package service_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -14,6 +15,99 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/service"
 )
+
+func seedPairwiseUsageFixture(t *testing.T, d *db.DB) {
+	t.Helper()
+
+	type usageSeed struct {
+		id      string
+		project string
+		started string
+		model   string
+		input   int
+		output  int
+		create  int
+		read    int
+	}
+
+	seeds := []usageSeed{
+		{
+			id:      "usage-alpha-sonnet",
+			project: "alpha",
+			started: "2024-06-01T09:00:00Z",
+			model:   "claude-sonnet-4-20250514",
+			input:   100,
+			output:  50,
+			create:  10,
+			read:    20,
+		},
+		{
+			id:      "usage-beta-gpt",
+			project: "beta",
+			started: "2024-06-01T10:00:00Z",
+			model:   "gpt-4o",
+			input:   30,
+			output:  15,
+			create:  0,
+			read:    5,
+		},
+		{
+			id:      "usage-beta-sonnet",
+			project: "beta",
+			started: "2024-06-01T11:00:00Z",
+			model:   "claude-sonnet-4-20250514",
+			input:   70,
+			output:  35,
+			create:  0,
+			read:    0,
+		},
+	}
+
+	for _, seed := range seeds {
+		started := seed.started
+		dbtest.SeedSessionWithMessages(
+			t,
+			d,
+			seed.id,
+			seed.project,
+			[]db.Message{
+				dbtest.UserMsg(seed.id, 0, "compare usage"),
+				assistantUsageMsg(seed.id, 1, seed),
+			},
+			dbtest.WithMessageCounts(2, 1),
+			func(s *db.Session) {
+				s.Agent = "claude"
+				s.StartedAt = &started
+				s.EndedAt = &started
+			},
+		)
+	}
+}
+
+func assistantUsageMsg(
+	sessionID string, ordinal int, seed struct {
+		id      string
+		project string
+		started string
+		model   string
+		input   int
+		output  int
+		create  int
+		read    int
+	},
+) db.Message {
+	msg := dbtest.AsstMsg(sessionID, ordinal, "done")
+	msg.Timestamp = seed.started
+	msg.Model = seed.model
+	msg.TokenUsage = fmt.Appendf(nil,
+		`{"input_tokens":%d,"output_tokens":%d,"cache_creation_input_tokens":%d,"cache_read_input_tokens":%d}`,
+		seed.input,
+		seed.output,
+		seed.create,
+		seed.read,
+	)
+	return msg
+}
 
 func TestBuildUsageFilter_ValidMapping(t *testing.T) {
 	t.Parallel()
@@ -166,4 +260,332 @@ func TestHTTPBackend_UsageSummary_ReadOnly(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, db.ErrReadOnly),
 		"501 should map to db.ErrReadOnly, got %v", err)
+}
+
+func TestBuildUsagePairwiseFilters_Validation(t *testing.T) {
+	t.Parallel()
+
+	_, _, _, _, err := service.BuildUsagePairwiseFilters(
+		service.UsagePairwiseComparisonRequest{
+			UsageRequest:   service.UsageRequest{From: "2024-06-01", To: "2024-06-02"},
+			LeftDimension:  "model",
+			LeftValue:      "claude-sonnet-4-20250514",
+			RightDimension: "machine",
+			RightValue:     "host-a",
+		},
+	)
+	require.Error(t, err)
+	var ue *service.UsageInputError
+	assert.True(t, errors.As(err, &ue))
+	assert.Equal(t, "right_dimension must be model or project", ue.Msg)
+}
+
+func TestBuildUsagePairwiseFilters_PreservesNonComparedBaseFilters(t *testing.T) {
+	t.Parallel()
+
+	left, leftEmpty, right, rightEmpty, err := service.BuildUsagePairwiseFilters(
+		service.UsagePairwiseComparisonRequest{
+			UsageRequest: service.UsageRequest{
+				From:     "2024-06-01",
+				To:       "2024-06-03",
+				Timezone: "UTC",
+				Model:    "model-a,model-b",
+				Project:  "alpha,beta",
+			},
+			LeftDimension:  "model",
+			LeftValue:      "model-b",
+			RightDimension: "project",
+			RightValue:     "beta",
+		},
+	)
+	require.NoError(t, err)
+	assert.False(t, leftEmpty)
+	assert.False(t, rightEmpty)
+	assert.Equal(t, "model-b", left.Model)
+	assert.Equal(t, "alpha,beta", left.Project)
+	assert.Equal(t, "model-a,model-b", right.Model)
+	assert.Equal(t, "beta", right.Project)
+}
+
+func TestBuildUsagePairwiseFilters_ConflictingBaseFilterMarksEmptySide(t *testing.T) {
+	t.Parallel()
+
+	left, leftEmpty, right, rightEmpty, err := service.BuildUsagePairwiseFilters(
+		service.UsagePairwiseComparisonRequest{
+			UsageRequest: service.UsageRequest{
+				From:  "2024-06-01",
+				To:    "2024-06-03",
+				Model: "gpt-4o",
+			},
+			LeftDimension:  "model",
+			LeftValue:      "claude-sonnet-4-20250514",
+			RightDimension: "model",
+			RightValue:     "gpt-4o",
+		},
+	)
+	require.NoError(t, err)
+	assert.True(t, leftEmpty)
+	assert.False(t, rightEmpty)
+	assert.Empty(t, left.Model)
+	assert.Equal(t, "gpt-4o", right.Model)
+}
+
+func TestDirectBackend_UsagePairwiseComparison_ModelVsModel(t *testing.T) {
+	t.Parallel()
+
+	d := dbtest.OpenTestDB(t)
+	seedPairwiseUsageFixture(t, d)
+	be := service.NewDirectBackend(d, nil)
+
+	res, err := be.UsagePairwiseComparison(
+		context.Background(),
+		service.UsagePairwiseComparisonRequest{
+			UsageRequest: service.UsageRequest{
+				From:           "2024-06-01",
+				To:             "2024-06-01",
+				Timezone:       "UTC",
+				IncludeOneShot: true,
+			},
+			LeftDimension:  "model",
+			LeftValue:      "claude-sonnet-4-20250514",
+			RightDimension: "model",
+			RightValue:     "gpt-4o",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Equal(t, 2, res.Left.SessionCount)
+	assert.Equal(t, 285, res.Left.TotalTokens)
+	assert.Equal(t, 1, res.Right.SessionCount)
+	assert.Equal(t, 50, res.Right.TotalTokens)
+	assert.Equal(t, -235, res.Deltas.TotalTokensDelta)
+	require.NotNil(t, res.Left.CostPerSession)
+	require.NotNil(t, res.Right.CostPerSession)
+}
+
+func TestDirectBackend_UsagePairwiseComparison_ProjectVsModel(t *testing.T) {
+	t.Parallel()
+
+	d := dbtest.OpenTestDB(t)
+	seedPairwiseUsageFixture(t, d)
+	be := service.NewDirectBackend(d, nil)
+
+	res, err := be.UsagePairwiseComparison(
+		context.Background(),
+		service.UsagePairwiseComparisonRequest{
+			UsageRequest: service.UsageRequest{
+				From:           "2024-06-01",
+				To:             "2024-06-01",
+				Timezone:       "UTC",
+				IncludeOneShot: true,
+			},
+			LeftDimension:  "project",
+			LeftValue:      "beta",
+			RightDimension: "model",
+			RightValue:     "gpt-4o",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Equal(t, 2, res.Left.SessionCount)
+	assert.Equal(t, 155, res.Left.TotalTokens)
+	assert.Equal(t, 1, res.Right.SessionCount)
+	assert.Equal(t, 50, res.Right.TotalTokens)
+}
+
+func TestDirectBackend_UsagePairwiseComparison_ZeroDataSide(t *testing.T) {
+	t.Parallel()
+
+	d := dbtest.OpenTestDB(t)
+	seedPairwiseUsageFixture(t, d)
+	be := service.NewDirectBackend(d, nil)
+
+	res, err := be.UsagePairwiseComparison(
+		context.Background(),
+		service.UsagePairwiseComparisonRequest{
+			UsageRequest: service.UsageRequest{
+				From:           "2024-06-01",
+				To:             "2024-06-01",
+				Timezone:       "UTC",
+				IncludeOneShot: true,
+			},
+			LeftDimension:  "project",
+			LeftValue:      "missing-project",
+			RightDimension: "model",
+			RightValue:     "gpt-4o",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Zero(t, res.Left.SessionCount)
+	assert.Zero(t, res.Left.TotalTokens)
+	assert.Nil(t, res.Left.CostPerSession)
+	assert.Nil(t, res.Deltas.TotalCostDeltaRatio)
+}
+
+func TestDirectBackend_UsagePairwiseComparison_ConflictingBaseFilterReturnsZeroData(t *testing.T) {
+	t.Parallel()
+
+	d := dbtest.OpenTestDB(t)
+	seedPairwiseUsageFixture(t, d)
+	be := service.NewDirectBackend(d, nil)
+
+	res, err := be.UsagePairwiseComparison(
+		context.Background(),
+		service.UsagePairwiseComparisonRequest{
+			UsageRequest: service.UsageRequest{
+				From:           "2024-06-01",
+				To:             "2024-06-01",
+				Timezone:       "UTC",
+				Model:          "gpt-4o",
+				IncludeOneShot: true,
+			},
+			LeftDimension:  "model",
+			LeftValue:      "claude-sonnet-4-20250514",
+			RightDimension: "model",
+			RightValue:     "gpt-4o",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Zero(t, res.Left.SessionCount)
+	assert.Zero(t, res.Left.TotalTokens)
+	assert.Equal(t, 1, res.Right.SessionCount)
+	assert.Equal(t, 50, res.Right.TotalTokens)
+}
+
+func TestDirectBackend_UsagePairwiseComparison_DoesNotUseSentinelFilterValues(t *testing.T) {
+	t.Parallel()
+
+	d := dbtest.OpenTestDB(t)
+	seedPairwiseUsageFixture(t, d)
+	started := "2024-06-01T12:00:00Z"
+	dbtest.SeedSessionWithMessages(
+		t,
+		d,
+		"usage-sentinel-model",
+		"sentinel-project",
+		[]db.Message{
+			dbtest.UserMsg("usage-sentinel-model", 0, "compare usage"),
+			assistantUsageMsg("usage-sentinel-model", 1, struct {
+				id      string
+				project string
+				started string
+				model   string
+				input   int
+				output  int
+				create  int
+				read    int
+			}{
+				id:      "usage-sentinel-model",
+				project: "sentinel-project",
+				started: started,
+				model:   "__agentsview_no_match__",
+				input:   999,
+				output:  999,
+				create:  0,
+				read:    0,
+			}),
+		},
+		dbtest.WithMessageCounts(2, 1),
+		func(s *db.Session) {
+			s.Agent = "claude"
+			s.StartedAt = &started
+			s.EndedAt = &started
+		},
+	)
+	be := service.NewDirectBackend(d, nil)
+
+	res, err := be.UsagePairwiseComparison(
+		context.Background(),
+		service.UsagePairwiseComparisonRequest{
+			UsageRequest: service.UsageRequest{
+				From:           "2024-06-01",
+				To:             "2024-06-01",
+				Timezone:       "UTC",
+				Model:          "gpt-4o",
+				IncludeOneShot: true,
+			},
+			LeftDimension:  "model",
+			LeftValue:      "claude-sonnet-4-20250514",
+			RightDimension: "model",
+			RightValue:     "gpt-4o",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Zero(t, res.Left.SessionCount)
+	assert.Zero(t, res.Left.TotalTokens)
+	assert.Equal(t, 1, res.Right.SessionCount)
+	assert.Equal(t, 50, res.Right.TotalTokens)
+}
+
+func TestHTTPBackend_UsagePairwiseComparison_Roundtrip(t *testing.T) {
+	t.Parallel()
+
+	env := newHTTPBackendEnv(t)
+	seedPairwiseUsageFixture(t, env.DB)
+	svc := env.Backend("", false)
+
+	res, err := svc.UsagePairwiseComparison(
+		context.Background(),
+		service.UsagePairwiseComparisonRequest{
+			UsageRequest: service.UsageRequest{
+				From:           "2024-06-01",
+				To:             "2024-06-01",
+				Timezone:       "UTC",
+				IncludeOneShot: true,
+			},
+			LeftDimension:  "model",
+			LeftValue:      "claude-sonnet-4-20250514",
+			RightDimension: "model",
+			RightValue:     "gpt-4o",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Equal(t, 2, res.Left.SessionCount)
+	assert.Equal(t, 1, res.Right.SessionCount)
+}
+
+func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
+	t.Parallel()
+
+	var queryValues map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			queryValues = map[string]string{
+				"left_dimension":  r.URL.Query().Get("left_dimension"),
+				"left_value":      r.URL.Query().Get("left_value"),
+				"right_dimension": r.URL.Query().Get("right_dimension"),
+				"right_value":     r.URL.Query().Get("right_value"),
+				"git_branch":      r.URL.Query().Get("git_branch"),
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"left":{"sessionCount":1,"totalTokens":12},"right":{"sessionCount":2,"totalTokens":34},"deltas":{"sessionCountDelta":1,"totalTokensDelta":22}}`))
+		},
+	))
+	t.Cleanup(srv.Close)
+	svc := service.NewHTTPBackend(srv.URL, "", false)
+
+	res, err := svc.UsagePairwiseComparison(
+		context.Background(),
+		service.UsagePairwiseComparisonRequest{
+			UsageRequest: service.UsageRequest{
+				GitBranch: "alpha/main",
+			},
+			LeftDimension:  "project",
+			LeftValue:      "alpha",
+			RightDimension: "model",
+			RightValue:     "gpt-4o",
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	assert.Equal(t, "project", queryValues["left_dimension"])
+	assert.Equal(t, "alpha", queryValues["left_value"])
+	assert.Equal(t, "model", queryValues["right_dimension"])
+	assert.Equal(t, "gpt-4o", queryValues["right_value"])
+	assert.Equal(t, "alpha/main", queryValues["git_branch"])
+	assert.Equal(t, 22, res.Deltas.TotalTokensDelta)
 }
