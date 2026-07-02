@@ -183,7 +183,7 @@ describe("TrendsPage", () => {
 
     expect(mocks.getApiV1TrendsTerms).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        from: "2026-05-20",
+        from: "2026-05-21",
         to: "2026-06-19",
       }),
     );
@@ -216,14 +216,14 @@ describe("TrendsPage", () => {
 
     expect(mocks.getApiV1TrendsTerms).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        from: "2026-05-21",
+        from: "2026-05-22",
         to: "2026-06-20",
       }),
     );
-    expect(window.location.search).toContain("from=2026-05-21");
+    expect(window.location.search).toContain("from=2026-05-22");
     expect(window.location.search).toContain("to=2026-06-20");
     expect(yokedDates.range).toMatchObject({
-      from: "2026-05-21",
+      from: "2026-05-22",
       to: "2026-06-20",
       mode: "rolling",
       windowDays: 30,
@@ -252,11 +252,11 @@ describe("TrendsPage", () => {
 
     expect(mocks.getApiV1TrendsTerms).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        from: "2026-05-21",
+        from: "2026-05-22",
         to: "2026-06-20",
       }),
     );
-    expect(window.location.search).toContain("from=2026-05-21");
+    expect(window.location.search).toContain("from=2026-05-22");
     expect(window.location.search).toContain("to=2026-06-20");
   });
 

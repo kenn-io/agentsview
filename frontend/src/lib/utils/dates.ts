@@ -15,13 +15,19 @@ export function today(): string {
   return localDateStr(new Date());
 }
 
+/**
+ * "Last N days" spans N calendar days inclusive of today — today plus the
+ * N−1 preceding dates. Must stay consistent with presetRange() in
+ * dateRangeSelector.ts and kit-ui's RangePicker, which seeds and labels
+ * ranges with the same semantics.
+ */
 export function rollingRange(
   days: number,
   now: Date = new Date(),
 ): { from: string; to: string } {
   const to = new Date(now);
   const from = new Date(to);
-  from.setDate(from.getDate() - days);
+  from.setDate(from.getDate() - Math.max(0, days - 1));
   return {
     from: localDateStr(from),
     to: localDateStr(to),

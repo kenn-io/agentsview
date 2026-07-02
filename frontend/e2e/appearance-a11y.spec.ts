@@ -148,24 +148,16 @@ test.describe("Appearance accessibility", () => {
     const sp = new SessionsPage(page);
     await sp.goto();
 
-    // Primary/solid actions (kit-ui Button, modal confirm buttons) pair
-    // --accent-blue fills with --accent-blue-foreground ink; kit-ui's own
-    // styles are component-scoped, so measure the token pairing directly.
-    const primaryButtonColors = await page.evaluate(() => {
-      const button = document.createElement("button");
-      button.textContent = "Save";
-      button.style.background = "var(--accent-blue)";
-      button.style.color = "var(--accent-blue-foreground)";
-      document.body.append(button);
-      const styles = getComputedStyle(button);
-      const result = {
-        background: styles.backgroundColor,
-        foreground: styles.color,
-      };
-      button.remove();
-      return result;
-    });
-    expectReadableContrast(primaryButtonColors);
+    // Measure a real kit-ui primary/solid Button (the Import modal's
+    // confirm action) rather than a synthetic element, so a kit-ui Button
+    // styling regression fails this test. Computed color/background still
+    // reflect the tone tokens while the button is disabled.
+    await page.locator(".import-btn").click();
+    const solidButton = page.locator(".kit-button--solid.kit-button--info");
+    await expect(solidButton).toBeVisible();
+    expectReadableContrast(await elementColors(solidButton));
+    await page.keyboard.press("Escape");
+    await expect(solidButton).toBeHidden();
 
     await sp.selectFirstSession();
     const agentBadge = page.locator(".agent-badge").first();

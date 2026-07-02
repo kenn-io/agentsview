@@ -44,7 +44,7 @@ describe("resolveRange", () => {
   it("resolves a relative window ending today", () => {
     vi.setSystemTime(new Date("2026-04-25T12:00:00Z"));
     expect(resolveRange({ mode: "relative", days: 30 })).toEqual({
-      from: "2026-03-26",
+      from: "2026-03-27",
       to: "2026-04-25",
     });
   });
@@ -111,7 +111,7 @@ describe("selectionFromWindow", () => {
 describe("selectionFromRange", () => {
   it("recognizes a span matching a relative preset", () => {
     vi.setSystemTime(new Date("2026-04-25T12:00:00Z"));
-    expect(selectionFromRange("2025-04-25", "2026-04-25")).toEqual({
+    expect(selectionFromRange("2025-04-26", "2026-04-25")).toEqual({
       mode: "relative",
       days: 365,
     });
