@@ -7,28 +7,25 @@
   padding: 0;
 }
 
-/* Light theme (default) — cool, high-contrast, readable */
+/*
+ * Shared design tokens (backgrounds, text, borders, the core accent set,
+ * shadows, radii, fonts, type scale, spacing ladder, chrome heights, and the
+ * high-contrast overrides) come from @kenn-io/kit-ui/theme.css, imported in
+ * main.ts before this file. Only agentsview-specific tokens and deliberate
+ * overrides live here.
+ */
+
+/* Light theme (default) — app-specific tokens */
 :root {
-  --bg-primary: #f5f6f8;
-  --bg-surface: #ffffff;
-  --bg-surface-hover: #f0f1f4;
-  --bg-inset: #ecedf2;
-  --border-default: #d8dae2;
-  --border-muted: #e4e6ec;
-  --text-primary: #181b24;
-  --text-secondary: #555b6e;
-  --text-muted: #878ea0;
-  --accent-blue: #2563eb;
+  /* Deliberate override: kit-ui's --accent-teal is cyan-leaning (#0891b2),
+     which would collide with --accent-cyan below. agentsview uses teal and
+     cyan as distinct agent-identity hues, so keep the greener teal. */
+  --accent-teal: #0d9488;
+  /* Extra identity accents beyond kit-ui's core set */
   --accent-rose: #e11d48;
-  --accent-purple: #7c3aed;
-  --accent-amber: #d97706;
-  --accent-green: #059669;
   --accent-coral: #f34e3f;
   --accent-black: #2d2d2d;
-  --accent-teal: #0d9488;
-  --accent-red: #dc2626;
   --accent-indigo: #6366f1;
-  --accent-teal: #0d9488;
   --accent-orange: #e09040;
   --accent-sky: #0284c7;
   --accent-pink: #ec4899;
@@ -66,56 +63,25 @@
   --running-fg: #6ad0a8;
   --running-bg: rgba(106, 208, 168, 0.12);
   --running-ring: rgba(106, 208, 168, 0.22);
-  /* Status-only color reserved for the "awaiting user input"
-     bubble. Warm muted gold so it doesn't clash with the green
-     working pulse, the amber stale dot, the red unclean dot, or
-     any of the agent-identity colors above. */
-  --status-waiting: #a48a55;
   --user-bg: #eef2ff;
   --assistant-bg: #faf9ff;
   --thinking-bg: #f5f3ff;
   --tool-bg: #fffbf0;
   --code-bg: #1e1e2e;
   --code-text: #cdd6f4;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.08);
-  --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.1);
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont,
-    "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
-  --font-mono: "JetBrains Mono", "SF Mono", "Fira Code",
-    "Fira Mono", Menlo, Consolas, monospace;
   --viewport-indicator: rgba(0, 0, 0, 0.08);
-  --overlay-bg: rgba(0, 0, 0, 0.3);
+  /* Deliberate override: agentsview's header is 40px on desktop (kit-ui
+     defaults to 44px); the touch bump below keeps layout offsets in sync. */
   --header-height: 40px;
-  --status-bar-height: 24px;
-  color-scheme: light;
 }
 
-/* Dark theme */
+/* Dark theme — app-specific tokens */
 :root.dark {
-  --bg-primary: #0d0d12;
-  --bg-surface: #16161e;
-  --bg-surface-hover: #1f1f2a;
-  --bg-inset: #111116;
-  --border-default: #2b2b38;
-  --border-muted: #232330;
-  --text-primary: #e4e6eb;
-  --text-secondary: #9ea5b4;
-  --text-muted: #6c7385;
-  --accent-blue: #60a5fa;
+  --accent-teal: #2dd4bf;
   --accent-rose: #fb7185;
-  --accent-purple: #a78bfa;
-  --accent-amber: #fbbf24;
-  --accent-green: #34d399;
   --accent-coral: #f34e3f;
   --accent-black: #b0b0b0;
-  --accent-teal: #2dd4bf;
-  --accent-red: #f87171;
   --accent-indigo: #818cf8;
-  --accent-teal: #2dd4bf;
   --accent-orange: #f0a050;
   --accent-sky: #38bdf8;
   --accent-pink: #f472b6;
@@ -138,51 +104,14 @@
   --accent-lime-foreground: #07111f;
   --accent-cyan-foreground: #07111f;
   --accent-violet-foreground: #07111f;
-  /* Lighter champagne for dark mode — keeps the same warm-gold
-     identity without disappearing into the dark surface. */
-  --status-waiting: #d4b878;
   --user-bg: #111827;
   --assistant-bg: #141220;
   --thinking-bg: #1a1530;
   --tool-bg: #1a1508;
   --code-bg: #0d0d14;
   --code-text: #cdd6f4;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
-  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.35);
-  --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.4);
   --viewport-indicator: rgba(255, 255, 255, 0.08);
-  --overlay-bg: rgba(0, 0, 0, 0.6);
   --header-height: 40px;
-  --status-bar-height: 24px;
-  color-scheme: dark;
-}
-
-/* High contrast — overrides neutral text/border tokens (and
-   --accent-blue, which colors links, focus rings, and filled accents) to
-   clear WCAG AA. Semantic/identity tokens (--cat-*, --slow-*,
-   --running-*, --status-waiting, --user-bg, data-viz palettes) are
-   intentionally left unchanged so meaning is preserved. */
-:root.high-contrast {
-  --text-primary: #000000;
-  --text-secondary: #2a2f3a;
-  --text-muted: #44495a;
-  --border-default: #6b7080;
-  --border-muted: #7d8290;
-  --accent-blue: #0a47c2;
-}
-
-:root.dark.high-contrast {
-  --text-primary: #ffffff;
-  --text-secondary: #d4d8e0;
-  --text-muted: #b8bdc9;
-  --border-default: #8a8f9e;
-  --border-muted: #6e7282;
-  --accent-blue: #8ab8ff;
-}
-
-:root.high-contrast :focus-visible {
-  outline-width: 3px;
-  outline-offset: 2px;
 }
 
 html,
@@ -190,7 +119,6 @@ body {
   height: 100%;
   overflow: hidden;
   font-family: var(--font-sans);
-  font-size: 13px;
   line-height: 1.5;
   color: var(--text-primary);
   background: var(--bg-primary);
@@ -198,6 +126,10 @@ body {
   -moz-osx-font-smoothing: grayscale;
   font-feature-settings: "cv11", "ss01";
   text-rendering: optimizeLegibility;
+}
+
+body {
+  font-size: var(--font-size-root);
 }
 
 #app {
@@ -233,7 +165,7 @@ body {
 
 /* Focus visible */
 :focus-visible {
-  outline: 2px solid var(--accent-blue);
+  outline: var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -247,7 +179,7 @@ button {
 }
 
 button:disabled {
-  opacity: 0.5;
+  opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }
 
@@ -262,7 +194,7 @@ select {
 code,
 pre {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 
 pre {
@@ -334,7 +266,7 @@ mark.search-highlight--current {
 }
 
 .modal-panel .modal-title {
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -363,7 +295,7 @@ mark.search-highlight--current {
   height: 28px;
   padding: 0 12px;
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 500;
   cursor: pointer;
   background: var(--bg-surface-hover);
@@ -387,12 +319,12 @@ mark.search-highlight--current {
 }
 
 .modal-panel .modal-btn-primary:disabled {
-  opacity: 0.5;
+  opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }
 
 .modal-panel .modal-error {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--accent-red, #f85149);
   background: var(--bg-inset);
   padding: 8px 12px;
