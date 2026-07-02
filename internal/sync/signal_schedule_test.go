@@ -11,20 +11,28 @@ import (
 )
 
 type schedulerHarness struct {
-	mu    sync.Mutex
-	sched *signalScheduler
-	clock time.Time
-	runs  []string
-	armed []func()
+	mu       sync.Mutex
+	sched    *signalScheduler
+	clock    time.Time
+	runs     []string
+	deferred []string
+	armed    []func()
 }
 
 func newSchedulerHarness(interval, quiet time.Duration) *schedulerHarness {
 	h := &schedulerHarness{clock: time.Unix(1_700_000_000, 0)}
-	h.sched = newSignalScheduler(interval, quiet, func(id string) {
+	record := func(id string) {
 		h.mu.Lock()
 		h.runs = append(h.runs, id)
 		h.mu.Unlock()
-	})
+	}
+	h.sched = newSignalScheduler(interval, quiet, record,
+		func(id string) {
+			h.mu.Lock()
+			h.deferred = append(h.deferred, id)
+			h.mu.Unlock()
+			record(id)
+		})
 	h.sched.now = func() time.Time {
 		h.mu.Lock()
 		defer h.mu.Unlock()
@@ -48,6 +56,12 @@ func (h *schedulerHarness) runsSnapshot() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return append([]string(nil), h.runs...)
+}
+
+func (h *schedulerHarness) deferredSnapshot() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.deferred...)
 }
 
 func (h *schedulerHarness) armedCount() int {
@@ -217,6 +231,74 @@ func TestSignalSchedulerStopFlushesAndRunsInlineAfter(t *testing.T) {
 	h.sched.stop() // double-stop must not panic
 }
 
+// TestSignalSchedulerRoutesDeferredRunsSeparately pins which runs go
+// through the deferred path (timer ticks, flushes) versus the inline
+// path (leading edge, stopped pass-through). The engine wraps only
+// deferred runs in the sync lock, so misrouting either way would
+// mean recomputes racing sync writes or a self-deadlock.
+func TestSignalSchedulerRoutesDeferredRunsSeparately(t *testing.T) {
+	h := newSchedulerHarness(10*time.Second, 2*time.Second)
+
+	h.sched.markDirty("s1")
+	assert.Empty(t, h.deferredSnapshot(),
+		"leading-edge run must use the inline path")
+
+	h.advance(1 * time.Second)
+	h.sched.markDirty("s1")
+	h.advance(2 * time.Second)
+	h.sched.tick()
+	assert.Equal(t, []string{"s1"}, h.deferredSnapshot(),
+		"tick flushes must use the deferred path")
+
+	h.advance(1 * time.Second)
+	h.sched.markDirty("s1")
+	h.sched.flushAll()
+	assert.Equal(t, []string{"s1", "s1"}, h.deferredSnapshot(),
+		"flushAll must use the deferred path")
+
+	h.sched.stop()
+	h.sched.markDirty("s1")
+	assert.Equal(t, []string{"s1", "s1"}, h.deferredSnapshot(),
+		"stopped pass-through marks must stay inline")
+	assert.Len(t, h.runsSnapshot(), 4,
+		"every mark and flush must still recompute exactly once")
+}
+
+// TestDeferredSignalRecomputeSerializesWithSync verifies the engine
+// wires deferred recomputes through syncMu: a flush racing an
+// in-flight sync must wait for it, so a delayed recompute can never
+// read an older message snapshot and then overwrite signals written
+// by that sync.
+func TestDeferredSignalRecomputeSerializesWithSync(t *testing.T) {
+	fx := newEngineFixture(t)
+	e := fx.engine
+
+	// First mark runs inline; the second defers so the flush below
+	// has pending work.
+	e.signalSched.markDirty("sess-lock")
+	e.signalSched.markDirty("sess-lock")
+
+	e.syncMu.Lock()
+	done := make(chan struct{})
+	go func() {
+		e.signalSched.flushAll()
+		close(done)
+	}()
+	flushed := func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}
+	assert.Never(t, flushed, 100*time.Millisecond, 10*time.Millisecond,
+		"deferred recompute must wait for the in-flight sync operation")
+	e.syncMu.Unlock()
+	require.Eventually(t, flushed, 2*time.Second, 5*time.Millisecond,
+		"deferred recompute must run once the sync lock is released")
+}
+
 // secretLeakCount reads the session's persisted secret_leak_count
 // signal, the observable for whether a recompute has run.
 func secretLeakCount(t *testing.T, fx *engineFixture, sessionID string) int {
@@ -257,13 +339,13 @@ func TestWriteIncrementalDebouncesSignalRecompute(t *testing.T) {
 func TestSignalSchedulerRealTimerFlushes(t *testing.T) {
 	var mu sync.Mutex
 	var runs int
+	run := func(string) {
+		mu.Lock()
+		runs++
+		mu.Unlock()
+	}
 	sched := newSignalScheduler(
-		50*time.Millisecond, 10*time.Millisecond,
-		func(string) {
-			mu.Lock()
-			runs++
-			mu.Unlock()
-		},
+		50*time.Millisecond, 10*time.Millisecond, run, run,
 	)
 
 	sched.markDirty("s1")

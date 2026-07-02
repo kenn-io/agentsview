@@ -28,7 +28,12 @@ const (
 type signalScheduler struct {
 	interval time.Duration
 	quiet    time.Duration
-	run      func(sessionID string)
+	// run recomputes inline from markDirty, whose callers already
+	// hold the engine's sync lock. deferredRun recomputes from the
+	// flush timer and explicit flushes, which run outside any sync
+	// operation and must serialize with sync writes themselves.
+	run         func(sessionID string)
+	deferredRun func(sessionID string)
 
 	// now and afterFunc are injectable for deterministic tests.
 	now       func() time.Time
@@ -42,16 +47,18 @@ type signalScheduler struct {
 }
 
 func newSignalScheduler(
-	interval, quiet time.Duration, run func(sessionID string),
+	interval, quiet time.Duration,
+	run, deferredRun func(sessionID string),
 ) *signalScheduler {
 	return &signalScheduler{
-		interval:  interval,
-		quiet:     quiet,
-		run:       run,
-		now:       time.Now,
-		afterFunc: func(d time.Duration, f func()) { time.AfterFunc(d, f) },
-		last:      make(map[string]time.Time),
-		dirty:     make(map[string]time.Time),
+		interval:    interval,
+		quiet:       quiet,
+		run:         run,
+		deferredRun: deferredRun,
+		now:         time.Now,
+		afterFunc:   func(d time.Duration, f func()) { time.AfterFunc(d, f) },
+		last:        make(map[string]time.Time),
+		dirty:       make(map[string]time.Time),
 	}
 }
 
@@ -97,7 +104,7 @@ func (s *signalScheduler) stop() {
 
 func (s *signalScheduler) runAll(sessionIDs []string) {
 	for _, id := range sessionIDs {
-		s.run(id)
+		s.deferredRun(id)
 	}
 }
 

@@ -227,14 +227,26 @@ func NewEngine(
 		providerFactories:       providerFactoryMap(providerFactories),
 		providerMigrationModes:  providerModes,
 	}
+	// Errors are logged inside recomputeSignalsFromDB and are
+	// non-fatal: the next write or flush retries.
+	recompute := func(sessionID string) {
+		_ = e.recomputeSignalsFromDB(
+			context.Background(), sessionID,
+		)
+	}
 	e.signalSched = newSignalScheduler(
 		signalRecomputeInterval, signalRecomputeQuiet,
+		// Inline runs happen from markDirty inside writeIncremental,
+		// whose callers already hold syncMu.
+		recompute,
+		// Timer and flush runs happen outside any sync operation, so
+		// they take syncMu themselves: otherwise a delayed recompute
+		// could read an older message snapshot and overwrite signals
+		// just written by a concurrent incremental or full sync.
 		func(sessionID string) {
-			// Errors are logged inside recomputeSignalsFromDB and
-			// are non-fatal: the next write or flush retries.
-			_ = e.recomputeSignalsFromDB(
-				context.Background(), sessionID,
-			)
+			e.syncMu.Lock()
+			defer e.syncMu.Unlock()
+			recompute(sessionID)
 		},
 	)
 	return e
