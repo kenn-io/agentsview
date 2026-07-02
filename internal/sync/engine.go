@@ -239,14 +239,16 @@ func NewEngine(
 		// Inline runs happen from markDirty inside writeIncremental,
 		// whose callers already hold syncMu.
 		recompute,
-		// Timer and flush runs happen outside any sync operation, so
-		// they take syncMu themselves: otherwise a delayed recompute
-		// could read an older message snapshot and overwrite signals
-		// just written by a concurrent incremental or full sync.
-		func(sessionID string) {
+		// Timer and flush passes happen outside any sync operation,
+		// so they take syncMu around the whole claim-and-recompute
+		// pass: otherwise a delayed recompute could read an older
+		// message snapshot and overwrite signals just written by a
+		// concurrent sync, or claim a session and block while a
+		// locked pre-push flush finds nothing left to recompute.
+		func(flush func()) {
 			e.syncMu.Lock()
 			defer e.syncMu.Unlock()
-			recompute(sessionID)
+			flush()
 		},
 	)
 	return e

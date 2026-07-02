@@ -29,11 +29,14 @@ type signalScheduler struct {
 	interval time.Duration
 	quiet    time.Duration
 	// run recomputes inline from markDirty, whose callers already
-	// hold the engine's sync lock. deferredRun recomputes from the
-	// flush timer and explicit flushes, which run outside any sync
-	// operation and must serialize with sync writes themselves.
-	run         func(sessionID string)
-	deferredRun func(sessionID string)
+	// hold the engine's sync lock. exclusive wraps deferred flushes
+	// (timer ticks, flushAll), which run outside any sync operation:
+	// it acquires that lock around the whole claim-and-recompute
+	// pass, so sessions are never claimed out of the dirty map by a
+	// goroutine that then blocks — a concurrent locked flush would
+	// see an empty map and push stale rows.
+	run       func(sessionID string)
+	exclusive func(flush func())
 
 	// now and afterFunc are injectable for deterministic tests.
 	// afterFunc returns a cancel function reporting whether the
@@ -56,14 +59,15 @@ type signalScheduler struct {
 
 func newSignalScheduler(
 	interval, quiet time.Duration,
-	run, deferredRun func(sessionID string),
+	run func(sessionID string),
+	exclusive func(flush func()),
 ) *signalScheduler {
 	return &signalScheduler{
-		interval:    interval,
-		quiet:       quiet,
-		run:         run,
-		deferredRun: deferredRun,
-		now:         time.Now,
+		interval:  interval,
+		quiet:     quiet,
+		run:       run,
+		exclusive: exclusive,
+		now:       time.Now,
 		afterFunc: func(d time.Duration, f func()) func() bool {
 			return time.AfterFunc(d, f).Stop
 		},
@@ -92,24 +96,29 @@ func (s *signalScheduler) markDirty(sessionID string) {
 }
 
 // tick flushes deferred sessions whose interval has elapsed or
-// that have been quiet long enough.
+// that have been quiet long enough. Callers must not hold the
+// engine's sync lock: the pass runs inside exclusive, which takes
+// it before claiming anything.
 func (s *signalScheduler) tick() {
-	s.runAll(s.takeDue(false))
+	s.exclusive(func() { s.flushDue(false) })
 }
 
 // flushAll immediately recomputes every deferred session. Callers
-// must not hold the engine's sync lock: recomputes go through the
-// deferred callback, which takes it.
+// must not hold the engine's sync lock (see tick).
 func (s *signalScheduler) flushAll() {
-	s.runAll(s.takeDue(true))
+	s.exclusive(func() { s.flushDue(true) })
 }
 
-// flushAllInline immediately recomputes every deferred session via
-// the inline callback. For callers already holding the engine's
-// sync lock (the context markDirty's inline runs execute under),
-// where the deferred callback would deadlock.
+// flushAllInline immediately recomputes every deferred session
+// without entering exclusive. For callers already holding the
+// engine's sync lock (the context markDirty's inline runs execute
+// under), where exclusive would deadlock.
 func (s *signalScheduler) flushAllInline() {
-	for _, id := range s.takeDue(true) {
+	s.flushDue(true)
+}
+
+func (s *signalScheduler) flushDue(all bool) {
+	for _, id := range s.takeDue(all) {
 		s.run(id)
 	}
 }
@@ -136,12 +145,6 @@ func (s *signalScheduler) stop() {
 	}
 	s.inflight.Wait()
 	s.flushAll()
-}
-
-func (s *signalScheduler) runAll(sessionIDs []string) {
-	for _, id := range sessionIDs {
-		s.deferredRun(id)
-	}
 }
 
 // takeDue removes and returns the sessions ready to recompute,

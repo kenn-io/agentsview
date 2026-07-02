@@ -17,12 +17,13 @@ type harnessTimer struct {
 }
 
 type schedulerHarness struct {
-	mu       sync.Mutex
-	sched    *signalScheduler
-	clock    time.Time
-	runs     []string
-	deferred []string
-	armed    []*harnessTimer
+	mu          sync.Mutex
+	sched       *signalScheduler
+	clock       time.Time
+	runs        []string
+	deferred    []string // runs that happened inside exclusive
+	inExclusive bool
+	armed       []*harnessTimer
 }
 
 func newSchedulerHarness(interval, quiet time.Duration) *schedulerHarness {
@@ -30,14 +31,20 @@ func newSchedulerHarness(interval, quiet time.Duration) *schedulerHarness {
 	record := func(id string) {
 		h.mu.Lock()
 		h.runs = append(h.runs, id)
+		if h.inExclusive {
+			h.deferred = append(h.deferred, id)
+		}
 		h.mu.Unlock()
 	}
 	h.sched = newSignalScheduler(interval, quiet, record,
-		func(id string) {
+		func(flush func()) {
 			h.mu.Lock()
-			h.deferred = append(h.deferred, id)
+			h.inExclusive = true
 			h.mu.Unlock()
-			record(id)
+			flush()
+			h.mu.Lock()
+			h.inExclusive = false
+			h.mu.Unlock()
 		})
 	h.sched.now = func() time.Time {
 		h.mu.Lock()
@@ -264,13 +271,15 @@ func TestSignalSchedulerStopFlushesAndRunsInlineAfter(t *testing.T) {
 func TestSignalSchedulerStopWaitsForInflightTimerRun(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
+	var startedOnce sync.Once
 	var mu sync.Mutex
 	clock := time.Unix(1_700_000_000, 0)
 	sched := newSignalScheduler(10*time.Second, 2*time.Second,
 		func(string) {},
-		func(string) {
-			close(started)
+		func(flush func()) {
+			startedOnce.Do(func() { close(started) })
 			<-release
+			flush()
 		},
 	)
 	sched.now = func() time.Time {
@@ -340,10 +349,10 @@ func TestSignalSchedulerFlushAllInlineUsesInlinePath(t *testing.T) {
 		"scheduler must keep debouncing after an inline flush")
 }
 
-// TestSignalSchedulerRoutesDeferredRunsSeparately pins which runs go
-// through the deferred path (timer ticks, flushes) versus the inline
-// path (leading edge, stopped pass-through). The engine wraps only
-// deferred runs in the sync lock, so misrouting either way would
+// TestSignalSchedulerRoutesDeferredRunsSeparately pins which runs
+// happen inside the exclusive section (timer ticks, flushes) versus
+// directly (leading edge, stopped pass-through). The engine takes
+// the sync lock only in exclusive, so misrouting either way would
 // mean recomputes racing sync writes or a self-deadlock.
 func TestSignalSchedulerRoutesDeferredRunsSeparately(t *testing.T) {
 	h := newSchedulerHarness(10*time.Second, 2*time.Second)
@@ -406,6 +415,70 @@ func TestDeferredSignalRecomputeSerializesWithSync(t *testing.T) {
 	e.syncMu.Unlock()
 	require.Eventually(t, flushed, 2*time.Second, 5*time.Millisecond,
 		"deferred recompute must run once the sync lock is released")
+}
+
+// TestLockedFlushSeesSessionClaimedByBlockedTimer reproduces the
+// claim-then-block race: the flush timer fires while a sync holds
+// syncMu. The timer must not claim sessions out of the dirty map
+// before it can recompute under the lock — otherwise the sync's own
+// pre-push flush (flushAllInline in SyncThenRun) sees no pending
+// work and pushes stale signal fields.
+func TestLockedFlushSeesSessionClaimedByBlockedTimer(t *testing.T) {
+	fx := newEngineFixture(t)
+	e := fx.engine
+
+	// Capture the flush timer instead of arming a real one.
+	var timerCB func()
+	e.signalSched.afterFunc = func(_ time.Duration, f func()) func() bool {
+		timerCB = f
+		return func() bool { return false }
+	}
+
+	path := fx.writeClaudeSession(t, "proj", "sig-race.jsonl", "hello")
+	e.SyncAll(context.Background(), nil)
+	sid := fx.sessionIDFor(t, path)
+
+	fx.appendClaudeMessage(t, path, "key AKIA7QHWN2DKR4FYPLJM leaked")
+	e.SyncPaths([]string{path})
+	require.Equal(t, 1, secretLeakCount(t, fx, sid))
+	fx.appendClaudeMessage(t, path, "key AKIA9XKQV3ZTN8WMB2RC leaked")
+	e.SyncPaths([]string{path})
+	require.Equal(t, 1, secretLeakCount(t, fx, sid),
+		"second write within interval should defer the recompute")
+	require.NotNil(t, timerCB, "deferral should arm the flush timer")
+
+	// The quiet delay has elapsed by the time the timer fires, so
+	// its takeDue pass considers the session due.
+	e.signalSched.now = func() time.Time {
+		return time.Now().Add(3 * time.Second)
+	}
+
+	// A sync is in progress when the timer fires.
+	e.syncMu.Lock()
+	timerDone := make(chan struct{})
+	go func() {
+		timerCB()
+		close(timerDone)
+	}()
+	// Give the timer goroutine time to reach the lock (and, in the
+	// buggy ordering, to claim the session before blocking).
+	time.Sleep(50 * time.Millisecond)
+
+	// The sync now flushes before its push work, as SyncThenRun does.
+	e.signalSched.flushAllInline()
+	seen := secretLeakCount(t, fx, sid)
+	e.syncMu.Unlock()
+
+	assert.Equal(t, 2, seen,
+		"locked flush must recompute sessions the blocked timer would handle")
+	require.Eventually(t, func() bool {
+		select {
+		case <-timerDone:
+			return true
+		default:
+			return false
+		}
+	}, 2*time.Second, 5*time.Millisecond, "timer callback must finish")
 }
 
 // secretLeakCount reads the session's persisted secret_leak_count
@@ -493,7 +566,8 @@ func TestSignalSchedulerRealTimerFlushes(t *testing.T) {
 		mu.Unlock()
 	}
 	sched := newSignalScheduler(
-		50*time.Millisecond, 10*time.Millisecond, run, run,
+		50*time.Millisecond, 10*time.Millisecond, run,
+		func(flush func()) { flush() },
 	)
 
 	sched.markDirty("s1")
