@@ -629,6 +629,17 @@ func (e *Engine) classifyProviderChangedPath(
 		})
 		def := provider.Definition()
 		watchRoots := providerChangedPathWatchRoots(ctx, provider, roots)
+		// Every SourcesForChangedPath implementation resolves the
+		// changed path within the provider's configured roots or plan
+		// watch roots (stored-path hints are already scoped to the
+		// watch root by the query), so an agent whose roots cannot
+		// contain the path never claims it. Skip it before the
+		// per-root stored-hint DB queries, which otherwise run for
+		// every registered agent on every watcher event.
+		if !changedPathWithinAnyRoot(path, roots) &&
+			!changedPathWithinAnyRoot(path, watchRoots) {
+			continue
+		}
 		for _, watchRoot := range watchRoots {
 			storedSourcePaths, err := e.db.ListStoredSourcePathHints(
 				string(def.Type),
