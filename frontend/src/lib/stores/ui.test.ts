@@ -751,8 +751,10 @@ describe("UIStore", () => {
 
     it("should initialize sidebar closed on narrow viewport", async () => {
       const originalMatchMedia = window.matchMedia;
+      // The store watches kit-ui's MEDIA.medium (max-width: 760px), so a
+      // matching query means a narrow viewport.
       window.matchMedia = vi.fn().mockReturnValue({
-        matches: false,
+        matches: true,
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
       }) as unknown as typeof window.matchMedia;
@@ -768,8 +770,9 @@ describe("UIStore", () => {
 
     it("should initialize sidebar open on wide viewport", async () => {
       const originalMatchMedia = window.matchMedia;
+      // max-width: 760px does not match on a wide viewport.
       window.matchMedia = vi.fn().mockReturnValue({
-        matches: true,
+        matches: false,
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
       }) as unknown as typeof window.matchMedia;

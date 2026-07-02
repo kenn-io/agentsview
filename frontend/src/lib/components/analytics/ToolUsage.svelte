@@ -243,7 +243,7 @@
   .bar-list {
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: var(--space-2);
   }
 
   .bar-row {
@@ -302,7 +302,7 @@
   .trend-chart {
     display: flex;
     align-items: flex-end;
-    gap: 3px;
+    gap: var(--space-2);
     height: 80px;
     padding-top: 4px;
   }

@@ -232,7 +232,7 @@
   .re-header {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-4);
     margin-bottom: 24px;
     color: var(--text-muted);
   }
@@ -270,7 +270,7 @@
   .re-toolbar {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-5);
     margin-bottom: 20px;
   }
 
@@ -329,7 +329,7 @@
   .re-file-row {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-4);
     width: 100%;
     padding: 10px 14px;
     text-align: left;
@@ -389,7 +389,7 @@
   .re-edit {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-4);
     width: 100%;
     padding: 8px 14px 8px 24px;
     text-align: left;

@@ -497,7 +497,7 @@
   .session-item {
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: var(--space-2);
     width: 100%;
     height: 42px;
     padding: 0 10px;
@@ -592,7 +592,7 @@
     display: flex;
     flex-direction: column;
     align-items: flex-end;
-    gap: 3px;
+    gap: var(--space-1);
     min-width: 0;
     flex-shrink: 0;
     margin-left: 4px;
@@ -763,7 +763,7 @@
     background: var(--bg-surface);
     border: 1px solid var(--border-default);
     border-radius: 6px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+    box-shadow: var(--shadow-lg);
     padding: 4px 0;
     min-width: 120px;
   }

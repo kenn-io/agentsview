@@ -106,12 +106,13 @@
 </div>
 
 <style>
-  /* Copied verbatim from
+  /* Adapted from
      docs/superpowers/specs/2026-04-26-session-duration-ux-mockup.html
-     (.sa-expand rules, lines 671–692). */
+     (.sa-expand rules, lines 671–692), with the mockup's raw colors mapped
+     to theme tokens (the mockup's rail red is exactly --cat-task). */
   .sa-expand {
-    background: rgba(196, 90, 90, 0.04);
-    border-left: 2px solid #c45a5a;
+    background: color-mix(in srgb, var(--cat-task) 4%, transparent);
+    border-left: 2px solid var(--cat-task);
     margin: 2px 0 4px 26px;
     padding: 4px 4px 4px 0;
     border-radius: 0 3px 3px 0;
@@ -119,7 +120,9 @@
   .sa-expand .sa-eh {
     font-family: ui-monospace, monospace;
     font-size: 9px;
-    color: #c47a7a;
+    /* Mockup used a lighter tint of the task red; mix --cat-task toward
+       the foreground so it stays readable on both themes. */
+    color: color-mix(in srgb, var(--cat-task) 80%, var(--text-primary));
     text-transform: uppercase;
     letter-spacing: 0.5px;
     padding: 2px 8px 5px;
@@ -127,7 +130,7 @@
     justify-content: space-between;
   }
   .sa-expand .sa-eh-meta {
-    color: #888;
+    color: var(--text-muted);
     text-transform: none;
     letter-spacing: 0;
   }

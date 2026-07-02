@@ -226,7 +226,7 @@
     height: 18px;
     display: flex;
     align-items: center;
-    gap: 3px;
+    gap: var(--space-2);
     padding: 0 5px;
     border-radius: var(--radius-sm);
     color: var(--text-muted);

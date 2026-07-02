@@ -153,7 +153,7 @@
   .trash-header {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-4);
     margin-bottom: 8px;
   }
 

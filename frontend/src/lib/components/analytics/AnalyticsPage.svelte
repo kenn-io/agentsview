@@ -728,7 +728,7 @@
     margin: 12px 0;
   }
 
-  @media (max-width: 800px) {
+  @media (max-width: 760px) {
     .chart-grid {
       grid-template-columns: 1fr;
     }

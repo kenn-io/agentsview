@@ -2,6 +2,7 @@ import {
   getHighContrast,
   initTheme,
   isDark,
+  MEDIA,
   setHighContrast,
   setThemeMode,
 } from "@kenn-io/kit-ui";
@@ -406,14 +407,16 @@ class UIStore {
         }
       });
 
-      // Initialize sidebar based on viewport width
+      // Initialize sidebar based on viewport width. MEDIA.medium is the same
+      // 760px query the component CSS uses, so the store and stylesheets
+      // agree on where mobile layout starts.
       if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
-        const mq = window.matchMedia("(min-width: 768px)");
-        this.sidebarOpen = mq.matches;
-        this.isMobileViewport = !mq.matches;
+        const mq = window.matchMedia(MEDIA.medium);
+        this.sidebarOpen = !mq.matches;
+        this.isMobileViewport = mq.matches;
         const onChange = (e: MediaQueryListEvent) => {
-          this.sidebarOpen = e.matches;
-          this.isMobileViewport = !e.matches;
+          this.sidebarOpen = !e.matches;
+          this.isMobileViewport = e.matches;
         };
         if (mq.addEventListener) {
           mq.addEventListener("change", onChange);

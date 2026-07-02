@@ -539,7 +539,7 @@
     gap: 12px;
   }
 
-  @media (max-width: 800px) {
+  @media (max-width: 760px) {
     .bottom-grid {
       grid-template-columns: 1fr;
     }

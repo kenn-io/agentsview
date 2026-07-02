@@ -295,7 +295,7 @@
   .state {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-4);
     font-size: 12px;
     color: var(--text-muted);
   }
@@ -320,7 +320,7 @@
   .generate-btn {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: var(--space-2);
     height: 28px;
     padding: 0 12px;
     border-radius: var(--radius-sm);
@@ -330,12 +330,12 @@
     color: var(--accent-blue-foreground);
     letter-spacing: 0.01em;
     transition: opacity 0.12s, transform 0.1s, box-shadow 0.12s;
-    box-shadow: 0 1px 2px rgba(37, 99, 235, 0.2);
+    box-shadow: 0 1px 2px color-mix(in srgb, var(--accent-blue) 20%, transparent);
   }
 
   .generate-btn:hover:not(:disabled) {
     opacity: 0.92;
-    box-shadow: 0 2px 6px rgba(37, 99, 235, 0.3);
+    box-shadow: 0 2px 6px color-mix(in srgb, var(--accent-blue) 30%, transparent);
   }
 
   .generate-btn:active:not(:disabled) {

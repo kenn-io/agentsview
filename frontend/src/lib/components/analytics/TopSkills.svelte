@@ -357,7 +357,7 @@
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 10px;
+    gap: var(--space-5);
     min-width: 0;
     padding: 0 4px 6px;
     color: var(--text-muted);
@@ -410,7 +410,7 @@
   .trend-chart {
     display: flex;
     align-items: flex-end;
-    gap: 3px;
+    gap: var(--space-2);
     height: 72px;
     padding-top: 4px;
   }

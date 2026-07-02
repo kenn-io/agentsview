@@ -224,7 +224,7 @@
   .legend {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-5);
   }
 
   .legend-item {
@@ -302,7 +302,7 @@
   .bar-list {
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: var(--space-2);
   }
 
   .bar-row {

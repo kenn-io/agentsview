@@ -197,7 +197,9 @@
   }
 
   .tile-value {
-    fill: rgba(255, 255, 255, 0.85);
+    /* White regardless of theme: drawn over saturated per-agent tile fills */
+    fill: white;
+    fill-opacity: 0.85;
     font-size: 11px;
     font-weight: 500;
     font-family: var(--font-mono);
@@ -205,7 +207,9 @@
   }
 
   .tile-meta {
-    fill: rgba(255, 255, 255, 0.7);
+    /* White regardless of theme: drawn over saturated per-agent tile fills */
+    fill: white;
+    fill-opacity: 0.7;
     font-size: 9px;
     font-family: var(--font-sans);
     pointer-events: none;

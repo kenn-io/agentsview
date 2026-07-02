@@ -305,7 +305,7 @@
   .filter-badge {
     display: inline-flex;
     align-items: center;
-    gap: 5px;
+    gap: var(--space-2);
     height: 20px;
     padding: 0 6px 0 8px;
     border: 1px solid var(--accent-blue);

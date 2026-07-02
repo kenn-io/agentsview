@@ -297,7 +297,7 @@
     color: var(--text-primary);
     border-bottom: 1px solid var(--bg-inset);
   }
-  @media (max-width: 767px) {
+  @media (max-width: 760px) {
     .health-summary-cards {
       grid-template-columns: repeat(2, 1fr);
     }

@@ -661,7 +661,7 @@
   .legend {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-5);
   }
 
   .legend-item {

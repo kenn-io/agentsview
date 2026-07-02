@@ -870,7 +870,7 @@
   .sub-group-header {
     display: flex;
     align-items: center;
-    gap: 5px;
+    gap: var(--space-2);
     width: 100%;
     height: 28px;
     font-size: 11px;
