@@ -204,14 +204,16 @@ func TestCopyOrphanedDataSanitizesCopiedContent(t *testing.T) {
 }
 
 // TestCopySkipsSanitizeForSanitizedSource guards the resync fast
-// path: archives written at or above sanitizedSourceDataVersion have
-// passed SanitizeUTF8 on every write path, so the row-by-row sanitize
-// pass is skipped and stored bytes survive the copy verbatim.
+// path: each sanitize pass is skipped once the source data version
+// proves ingest already sanitized that field — content/results at
+// sanitizedSourceDataVersion, input_json at the later
+// sanitizedInputSourceDataVersion — and skipped rows survive the
+// copy verbatim.
 func TestCopySkipsSanitizeForSanitizedSource(t *testing.T) {
 	const rawContent = "nul\x00byte\x01kept"
 	const rawToolInput = "{\"cmd\":\"a\x00b\x01\"}"
 	const rawToolResult = "result\x00kept\x01"
-	tests := []struct {
+	copies := []struct {
 		name  string
 		trash bool
 		copy  func(dst *DB, srcPath string) (int, error)
@@ -230,75 +232,88 @@ func TestCopySkipsSanitizeForSanitizedSource(t *testing.T) {
 			},
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			dir := t.TempDir()
-			srcPath := filepath.Join(dir, "old.db")
-			srcDB := testDBAtPath(t, srcPath, "src")
-			insertSession(t, srcDB, "sess", "proj")
-			insertMessages(t, srcDB, userMsg("sess", 0, "clean"))
-			_, err := srcDB.getWriter().ExecContext(ctx,
-				`UPDATE messages SET content = ? WHERE session_id = ?`,
-				rawContent, "sess",
-			)
-			require.NoError(t, err, "plant raw content")
-			var messageID int64
-			require.NoError(t, srcDB.getWriter().QueryRowContext(ctx,
-				`SELECT id FROM messages WHERE session_id = ?`, "sess",
-			).Scan(&messageID), "read message id")
-			_, err = srcDB.getWriter().ExecContext(ctx,
-				`INSERT INTO tool_calls (
-					message_id, session_id, tool_name, category,
-					tool_use_id, input_json, result_content_length,
-					result_content, call_index
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				messageID, "sess", "Bash", "execution", "tool-1",
-				rawToolInput, len(rawToolResult), rawToolResult, 0,
-			)
-			require.NoError(t, err, "plant raw tool call")
-			var srcVersion int
-			require.NoError(t, srcDB.getWriter().QueryRowContext(
-				ctx, "PRAGMA user_version",
-			).Scan(&srcVersion), "read source data version")
-			require.GreaterOrEqual(t,
-				srcVersion, sanitizedSourceDataVersion,
-				"fresh test DB must count as sanitized",
-			)
-			if tt.trash {
-				require.NoError(t, srcDB.SoftDeleteSession("sess"),
-					"soft delete source session")
-			}
-			require.NoError(t, srcDB.Close(), "close source")
+	versions := []struct {
+		name          string
+		sourceVersion int
+		wantInput     string
+	}{
+		{
+			// Ingest at v58 sanitized content and results but not
+			// input_json, so only the input pass runs for it.
+			name:          "content-sanitized source pays input pass",
+			sourceVersion: sanitizedSourceDataVersion,
+			wantInput:     SanitizeUTF8(rawToolInput),
+		},
+		{
+			// A source at the input watermark is fully clean; every
+			// pass is skipped and rows copy verbatim.
+			name:          "fully sanitized source copies verbatim",
+			sourceVersion: sanitizedInputSourceDataVersion,
+			wantInput:     rawToolInput,
+		},
+	}
+	for _, cp := range copies {
+		for _, ver := range versions {
+			t.Run(cp.name+"/"+ver.name, func(t *testing.T) {
+				ctx := context.Background()
+				dir := t.TempDir()
+				srcPath := filepath.Join(dir, "old.db")
+				srcDB := testDBAtPath(t, srcPath, "src")
+				insertSession(t, srcDB, "sess", "proj")
+				insertMessages(t, srcDB, userMsg("sess", 0, "clean"))
+				_, err := srcDB.getWriter().ExecContext(ctx,
+					`UPDATE messages SET content = ? WHERE session_id = ?`,
+					rawContent, "sess",
+				)
+				require.NoError(t, err, "plant raw content")
+				var messageID int64
+				require.NoError(t, srcDB.getWriter().QueryRowContext(ctx,
+					`SELECT id FROM messages WHERE session_id = ?`, "sess",
+				).Scan(&messageID), "read message id")
+				_, err = srcDB.getWriter().ExecContext(ctx,
+					`INSERT INTO tool_calls (
+						message_id, session_id, tool_name, category,
+						tool_use_id, input_json, result_content_length,
+						result_content, call_index
+					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					messageID, "sess", "Bash", "execution", "tool-1",
+					rawToolInput, len(rawToolResult), rawToolResult, 0,
+				)
+				require.NoError(t, err, "plant raw tool call")
+				_, err = srcDB.getWriter().ExecContext(ctx, fmt.Sprintf(
+					"PRAGMA user_version = %d", ver.sourceVersion,
+				))
+				require.NoError(t, err, "set source data version")
+				if cp.trash {
+					require.NoError(t, srcDB.SoftDeleteSession("sess"),
+						"soft delete source session")
+				}
+				require.NoError(t, srcDB.Close(), "close source")
 
-			dstDB := testDBAtPath(t, filepath.Join(dir, "new.db"), "dst")
-			defer dstDB.Close()
-			count, err := tt.copy(dstDB, srcPath)
-			require.NoError(t, err, "copy from source")
-			require.Equal(t, 1, count, "copied sessions")
+				dstDB := testDBAtPath(t, filepath.Join(dir, "new.db"), "dst")
+				defer dstDB.Close()
+				count, err := cp.copy(dstDB, srcPath)
+				require.NoError(t, err, "copy from source")
+				require.Equal(t, 1, count, "copied sessions")
 
-			var got string
-			require.NoError(t, dstDB.getReader().QueryRowContext(ctx,
-				`SELECT content FROM messages WHERE session_id = ?`,
-				"sess",
-			).Scan(&got), "query copied message")
-			assert.Equal(t, rawContent, got,
-				"sanitized source must copy verbatim")
+				var got string
+				require.NoError(t, dstDB.getReader().QueryRowContext(ctx,
+					`SELECT content FROM messages WHERE session_id = ?`,
+					"sess",
+				).Scan(&got), "query copied message")
+				assert.Equal(t, rawContent, got,
+					"content-sanitized source must copy content verbatim")
 
-			// input_json is exempt from the fast path: ingest did
-			// not sanitize it until after v58, so the copy cleans
-			// it regardless of source version. Result content is
-			// ingest-covered and copies verbatim.
-			var gotInput, gotResult string
-			require.NoError(t, dstDB.getReader().QueryRowContext(ctx,
-				`SELECT input_json, result_content
-				 FROM tool_calls WHERE session_id = ?`,
-				"sess",
-			).Scan(&gotInput, &gotResult), "query copied tool call")
-			assert.Equal(t, SanitizeUTF8(rawToolInput), gotInput,
-				"tool input must sanitize even for sanitized sources")
-			assert.Equal(t, rawToolResult, gotResult,
-				"tool result must copy verbatim for sanitized sources")
-		})
+				var gotInput, gotResult string
+				require.NoError(t, dstDB.getReader().QueryRowContext(ctx,
+					`SELECT input_json, result_content
+					 FROM tool_calls WHERE session_id = ?`,
+					"sess",
+				).Scan(&gotInput, &gotResult), "query copied tool call")
+				assert.Equal(t, ver.wantInput, gotInput)
+				assert.Equal(t, rawToolResult, gotResult,
+					"tool result must copy verbatim for sanitized sources")
+			})
+		}
 	}
 }

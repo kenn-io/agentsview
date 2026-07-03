@@ -206,7 +206,7 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		return 0, fmt.Errorf("copying orphaned data: %w", err)
 	}
 	if err := sanitizeCopiedSessionContent(
-		ctx, tx, "_orphaned_ids", sourceContentSanitized(ctx, tx),
+		ctx, tx, "_orphaned_ids", copiedSourceDataVersion(ctx, tx),
 	); err != nil {
 		return 0, fmt.Errorf("sanitizing orphaned data: %w", err)
 	}
@@ -298,7 +298,7 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) (int, error) {
 		return 0, fmt.Errorf("copying trashed data: %w", err)
 	}
 	if err := sanitizeCopiedSessionContent(
-		ctx, tx, "_trashed_ids", sourceContentSanitized(ctx, tx),
+		ctx, tx, "_trashed_ids", copiedSourceDataVersion(ctx, tx),
 	); err != nil {
 		return 0, fmt.Errorf("sanitizing trashed data: %w", err)
 	}
@@ -799,48 +799,56 @@ func copySessionDataForIDs(
 }
 
 // sanitizedSourceDataVersion is the first data version at which write
-// paths into an archive sanitize content: dataVersion 58 forced a full
-// resync that re-ingested live sessions through SanitizeUTF8 and ran
-// the copy-time sanitize pass over preserved orphans, and later
-// writers sanitize at ingest. Copying from a source at or above this
-// version skips most of the row-by-row sanitize pass, which otherwise
-// dominates resync time on large archives. Exception: ingest did not
-// sanitize tool_calls.input_json until after v58 shipped, so the copy
-// path cleans that column unconditionally regardless of source
-// version. Bump to the then-current dataVersion if SanitizeUTF8 ever
-// gains rules that must apply to already-stored rows.
-const sanitizedSourceDataVersion = 58
+// paths into an archive sanitize message content, tool result content,
+// and tool result events: dataVersion 58 forced a full resync that
+// re-ingested live sessions through SanitizeUTF8 and ran the copy-time
+// sanitize pass over preserved orphans, and later writers sanitize at
+// ingest. Copying from a source at or above this version skips those
+// row-by-row passes, which otherwise dominate resync time on large
+// archives.
+//
+// sanitizedInputSourceDataVersion is the same watermark for
+// tool_calls.input_json, which ingest did not sanitize until
+// dataVersion 59. Sources between the two versions only pay the
+// single-column input pass.
+//
+// Bump the relevant constant to the then-current dataVersion if
+// SanitizeUTF8 ever gains rules that must apply to already-stored
+// rows.
+const (
+	sanitizedSourceDataVersion      = 58
+	sanitizedInputSourceDataVersion = 59
+)
 
-// sourceContentSanitized reports whether the attached old_db is known
-// to contain only SanitizeUTF8-clean content. Read errors are logged
-// and treated as not sanitized so the copy conservatively
-// re-sanitizes.
-func sourceContentSanitized(ctx context.Context, tx *sql.Tx) bool {
+// copiedSourceDataVersion reads the attached old_db's data version.
+// Read errors are logged and returned as 0 so the copy conservatively
+// re-sanitizes everything.
+func copiedSourceDataVersion(ctx context.Context, tx *sql.Tx) int {
 	var version int
 	if err := tx.QueryRowContext(
 		ctx, "PRAGMA old_db.user_version",
 	).Scan(&version); err != nil {
 		log.Printf("resync: reading source data version: %v", err)
-		return false
+		return 0
 	}
-	return version >= sanitizedSourceDataVersion
+	return version
 }
 
 func sanitizeCopiedSessionContent(
 	ctx context.Context,
 	tx *sql.Tx,
 	tempIDsTable string,
-	sourceSanitized bool,
+	sourceVersion int,
 ) error {
-	// tool_calls.input_json was not sanitized at ingest until after
-	// dataVersion 58 shipped, so even a source at the sanitized
-	// version can carry NUL/control bytes there. Always clean it;
-	// the remaining passes cover fields every v58+ write path
-	// already sanitizes, so they run only for older sources.
-	if err := sanitizeCopiedToolCallInputs(ctx, tx, tempIDsTable); err != nil {
-		return err
+	// Each pass runs only when the source predates the version at
+	// which ingest started sanitizing that field, so a v58 source
+	// upgrading to v59 pays only the single-column input pass.
+	if sourceVersion < sanitizedInputSourceDataVersion {
+		if err := sanitizeCopiedToolCallInputs(ctx, tx, tempIDsTable); err != nil {
+			return err
+		}
 	}
-	if sourceSanitized {
+	if sourceVersion >= sanitizedSourceDataVersion {
 		return nil
 	}
 	if err := sanitizeCopiedMessageContent(ctx, tx, tempIDsTable); err != nil {

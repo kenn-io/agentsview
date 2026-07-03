@@ -241,6 +241,12 @@ import (
 // classification, so historical skill usage is backfilled on
 // re-parse.)
 //
+// (59: Ingest sanitization now covers tool_calls.input_json, which v58
+// left raw. Existing live rows need re-parsing so NUL/control bytes in
+// stored inputs are stripped before they can poison PostgreSQL/DuckDB
+// pushes; orphaned/trashed rows are cleaned by the copy-time input pass
+// during the same resync.)
+//
 // (58: Persisted message/result content sanitization now covers
 // tool_calls.result_content and tool_result_events.content. Existing rows
 // need re-parsing so NUL/control bytes accepted by SQLite are stripped before
@@ -270,7 +276,7 @@ import (
 // (51: Gemini cumulative-to-delta token reparse.)
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 58
+const dataVersion = 59
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

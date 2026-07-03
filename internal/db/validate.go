@@ -36,13 +36,15 @@ import (
 //     blanked. Empty-string handling is preserved as-is so downstream
 //     localTime treats a blanked timestamp as invalid.
 //
-// Message.TokenUsage (json.RawMessage), tool-call input JSON, and transient
+// Message.TokenUsage (json.RawMessage) and transient
 // ToolResults.ContentRaw are intentionally not run through this pass. They are
 // raw provider payloads, not persisted display text. Persisted result content
 // (tool_calls.result_content and tool_result_events.content) follows the same
 // text contract as Message.Content, with length fields reduced by the
 // stripped-byte delta so re-ingest rewrites historical poison rows into the
-// stable stored shape.
+// stable stored shape. Persisted tool-call input JSON (tool_calls.input_json,
+// as of dataVersion 59) is sanitized without length tracking since no length
+// column exists for it.
 //
 // CRITICAL idempotency invariant: SanitizeUTF8 is the shared
 // sanitization seam used here, by the local fingerprint builders, and
