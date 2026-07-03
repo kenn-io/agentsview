@@ -795,6 +795,32 @@ func BranchPairClauseArgs(
 	return clause, args
 }
 
+// BranchPairExcludePredicate is the exclude-filter counterpart to
+// BranchPairPredicate: matches rows whose (project, branch) pair is none of
+// the given tokens. An empty or fully malformed token list excludes nothing
+// (NOT of the include side's fail-closed "1 = 0") — omitting an exclude
+// filter must never narrow results.
+func BranchPairExcludePredicate(
+	projectCol, branchCol, tokens string, placeholder func(string) string,
+) string {
+	return "NOT (" +
+		BranchPairPredicate(projectCol, branchCol, tokens, placeholder) + ")"
+}
+
+// BranchPairExcludeClauseArgs is the raw-args ("?" placeholder) form of
+// BranchPairExcludePredicate.
+func BranchPairExcludeClauseArgs(
+	projectCol, branchCol, tokens string, args []any,
+) (string, []any) {
+	clause := BranchPairExcludePredicate(
+		projectCol, branchCol, tokens,
+		func(v string) string {
+			args = append(args, v)
+			return "?"
+		})
+	return clause, args
+}
+
 func nonEmpty(values []string) []string {
 	out := make([]string, 0, len(values))
 	for _, v := range values {

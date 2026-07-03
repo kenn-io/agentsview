@@ -36,6 +36,7 @@ function usageSummaryWithUnsupported(kind?: string) {
     projectTotals: [],
     modelTotals: [],
     agentTotals: [],
+    branchTotals: [],
     sessionCounts: {
       total: 0,
       byProject: {},

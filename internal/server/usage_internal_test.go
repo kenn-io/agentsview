@@ -233,6 +233,19 @@ func TestUsageComparisonCopiesResolvedProjectExclusionToPriorPeriod(
 		spy.filters[0].ExcludeProjectLabels)
 }
 
+func TestUsageComparisonCopiesExcludeGitBranchFilterToPriorPeriod(t *testing.T) {
+	spy := &usageSummaryCountsSpy{}
+	s := newRoutedTestServerWithStore(t, spy)
+	branch := db.EncodeBranchFilterToken("alpha", "main")
+
+	w := serveGet(t, s,
+		"/api/v1/usage/comparison?"+oneDayUsageRange+"&current_cost=3&exclude_git_branch="+url.QueryEscape(branch))
+	assertRecorderStatus(t, w, http.StatusOK)
+
+	require.Len(t, spy.filters, 1)
+	assert.Equal(t, branch, spy.filters[0].ExcludeGitBranch)
+}
+
 func TestUsageComparisonRequiresCurrentCost(t *testing.T) {
 	spy := &usageSummaryCountsSpy{}
 	s := newRoutedTestServerWithStore(t, spy)

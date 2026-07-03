@@ -3677,8 +3677,26 @@ func TestDuckDBBranchDimension(t *testing.T) {
 		},
 	}, branches, "pairs ordered by most recent activity, ties alphabetical")
 
+	wide := db.UsageFilter{From: "2026-01-01", To: "2026-12-31", Breakdowns: true}
+	daily, err := store.GetDailyUsage(ctx, wide)
+	require.NoError(t, err)
+	byKey := map[db.BranchInfo]int{}
+	for _, day := range daily.Daily {
+		for _, b := range day.BranchBreakdowns {
+			byKey[db.BranchInfo{Project: b.Project, Branch: b.Branch}] += b.InputTokens
+		}
+	}
+	require.Len(t, byKey, 5, "one bucket per distinct (project, branch)")
+	assert.Equal(t, 100, byKey[db.BranchInfo{Project: "alpha", Branch: "main"}])
+	assert.Equal(t, 200, byKey[db.BranchInfo{Project: "alpha", Branch: "feature-x"}])
+	assert.Equal(t, 300, byKey[db.BranchInfo{Project: "beta", Branch: "main"}],
+		"beta/main distinct from alpha/main")
+	assert.Equal(t, 400, byKey[db.BranchInfo{Project: "alpha", Branch: ""}],
+		"branchless usage keeps the raw empty branch")
+	assert.Equal(t, 500, byKey[db.BranchInfo{Project: "alpha", Branch: "unknown"}])
+
 	filtered, err := store.GetDailyUsage(ctx, db.UsageFilter{
-		From: "2026-01-01", To: "2026-12-31",
+		From: "2026-01-01", To: "2026-12-31", Breakdowns: true,
 		GitBranch: db.EncodeBranchFilterToken("alpha", "main"),
 	})
 	require.NoError(t, err)
@@ -3687,4 +3705,27 @@ func TestDuckDBBranchDimension(t *testing.T) {
 		total += day.InputTokens
 	}
 	assert.Equal(t, 100, total, "branch filter restricts usage to alpha/main")
+
+	excluded, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-01-01", To: "2026-12-31", Breakdowns: true,
+		ExcludeGitBranch: db.EncodeBranchFilterToken("alpha", "main"),
+	})
+	require.NoError(t, err)
+	total = 0
+	for _, day := range excluded.Daily {
+		total += day.InputTokens
+	}
+	assert.Equal(t, 1400, total,
+		"exclude filter drops only alpha/main, beta/main stays")
+
+	malformed, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From: "2026-01-01", To: "2026-12-31", Breakdowns: true,
+		ExcludeGitBranch: "no-separator-here",
+	})
+	require.NoError(t, err)
+	total = 0
+	for _, day := range malformed.Daily {
+		total += day.InputTokens
+	}
+	assert.Equal(t, 1500, total, "malformed exclude token excludes nothing")
 }

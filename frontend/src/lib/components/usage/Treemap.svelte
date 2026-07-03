@@ -20,6 +20,7 @@
 
   let containerEl: HTMLDivElement | undefined = $state();
   let width = $state(600);
+  const interactive = $derived(typeof onSelect === "function");
 
   $effect(() => {
     if (!containerEl) return;
@@ -104,17 +105,19 @@
         height={tile.height}
       />
     </clipPath>
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <g
       class="tile"
-      tabindex="0"
-      role="button"
-      aria-label={m.usage_hide_from_chart({ label: tile.label })}
-      onclick={() => onSelect?.(tile.id)}
-      onkeydown={(e) => handleKey(e, tile.id)}
+      class:interactive
+      tabindex={interactive ? 0 : undefined}
+      role={interactive ? "button" : undefined}
+      aria-label={interactive ? m.usage_hide_from_chart({ label: tile.label }) : undefined}
+      onclick={interactive ? () => onSelect?.(tile.id) : undefined}
+      onkeydown={interactive ? (e) => handleKey(e, tile.id) : undefined}
       clip-path="url(#{clipId})"
     >
-      <title>{m.usage_click_to_hide({ label: tile.label })}</title>
+      <title>{interactive ? m.usage_click_to_hide({ label: tile.label }) : tile.label}</title>
       <rect
         x={tile.x}
         y={tile.y}
@@ -171,11 +174,11 @@
     display: block;
   }
 
-  .tile {
+  .tile.interactive {
     cursor: pointer;
   }
 
-  .tile:hover rect {
+  .tile.interactive:hover rect {
     opacity: 0.92;
   }
 

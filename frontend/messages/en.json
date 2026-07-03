@@ -817,6 +817,7 @@
   "analytics_skill_trend_empty": "No skill usage data",
   "usage_model": "Model",
   "usage_models": "Models",
+  "usage_branch": "Branch",
   "usage_refresh": "Refresh usage data",
   "usage_summary_total_cost": "Total Cost",
   "usage_summary_copilot_ai_credits": "Copilot AI Credits",

@@ -25,6 +25,7 @@ type UsageRequest struct {
 	Project           string `json:"project,omitempty"`
 	Machine           string `json:"machine,omitempty"`
 	GitBranch         string `json:"git_branch,omitempty"`
+	ExcludeGitBranch  string `json:"exclude_git_branch,omitempty"`
 	ExcludeProject    string `json:"exclude_project,omitempty"`
 	ExcludeProjectKey string `json:"exclude_project_key,omitempty"`
 	ExcludeAgent      string `json:"exclude_agent,omitempty"`
@@ -189,9 +190,10 @@ func BuildUsageFilter(req UsageRequest) (db.UsageFilter, error) {
 		ProjectLabels: mergeResolvedProjectLabels(
 			req.Project, req.ProjectLabels,
 		),
-		Machine:        req.Machine,
-		GitBranch:      req.GitBranch,
-		ExcludeProject: req.ExcludeProject,
+		Machine:          req.Machine,
+		GitBranch:        req.GitBranch,
+		ExcludeGitBranch: req.ExcludeGitBranch,
+		ExcludeProject:   req.ExcludeProject,
 		ExcludeProjectLabels: mergeResolvedProjectLabels(
 			req.ExcludeProject, req.ExcludeProjectLabels,
 		),
@@ -265,6 +267,17 @@ type AgentTotal struct {
 	Cost                float64 `json:"cost"`
 }
 
+// BranchTotal holds range-wide token and cost totals per (project, branch).
+type BranchTotal struct {
+	Project             string  `json:"project"`
+	Branch              string  `json:"branch"`
+	InputTokens         int     `json:"inputTokens"`
+	OutputTokens        int     `json:"outputTokens"`
+	CacheCreationTokens int     `json:"cacheCreationTokens"`
+	CacheReadTokens     int     `json:"cacheReadTokens"`
+	Cost                float64 `json:"cost"`
+}
+
 // CacheStats summarizes cache hit/miss for the period.
 type CacheStats struct {
 	CacheReadTokens     int     `json:"cacheReadTokens"`
@@ -310,6 +323,7 @@ type UsageSummaryResult struct {
 	ProjectTotals    []ProjectTotal                    `json:"projectTotals"`
 	ModelTotals      []ModelTotal                      `json:"modelTotals"`
 	AgentTotals      []AgentTotal                      `json:"agentTotals"`
+	BranchTotals     []BranchTotal                     `json:"branchTotals"`
 	SessionCounts    db.UsageSessionCounts             `json:"sessionCounts"`
 	CacheStats       CacheStats                        `json:"cacheStats"`
 	UnsupportedUsage *UnsupportedUsage                 `json:"unsupportedUsage,omitempty"`
@@ -394,10 +408,12 @@ func buildUsageSummary(
 		out.ProjectTotals = foldProjectTotals(result.Daily)
 		out.ModelTotals = foldModelTotals(result.Daily)
 		out.AgentTotals = foldAgentTotals(result.Daily)
+		out.BranchTotals = foldBranchTotals(result.Daily)
 	} else {
 		out.ProjectTotals = []ProjectTotal{}
 		out.ModelTotals = []ModelTotal{}
 		out.AgentTotals = []AgentTotal{}
+		out.BranchTotals = []BranchTotal{}
 	}
 	return out
 }
@@ -497,6 +513,42 @@ func foldAgentTotals(daily []db.DailyUsageEntry) []AgentTotal {
 			return out[i].Cost > out[j].Cost
 		}
 		return out[i].Agent < out[j].Agent
+	})
+	return out
+}
+
+// foldBranchTotals sums daily (project, branch) breakdowns into range-wide
+// totals sorted by cost descending.
+func foldBranchTotals(daily []db.DailyUsageEntry) []BranchTotal {
+	type key struct{ project, branch string }
+	m := make(map[key]*BranchTotal)
+	for _, d := range daily {
+		for _, bb := range d.BranchBreakdowns {
+			k := key{project: bb.Project, branch: bb.Branch}
+			bt, ok := m[k]
+			if !ok {
+				bt = &BranchTotal{Project: bb.Project, Branch: bb.Branch}
+				m[k] = bt
+			}
+			bt.InputTokens += bb.InputTokens
+			bt.OutputTokens += bb.OutputTokens
+			bt.CacheCreationTokens += bb.CacheCreationTokens
+			bt.CacheReadTokens += bb.CacheReadTokens
+			bt.Cost += bb.Cost
+		}
+	}
+	out := make([]BranchTotal, 0, len(m))
+	for _, v := range m {
+		out = append(out, *v)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Cost != out[j].Cost {
+			return out[i].Cost > out[j].Cost
+		}
+		if out[i].Project != out[j].Project {
+			return out[i].Project < out[j].Project
+		}
+		return out[i].Branch < out[j].Branch
 	})
 	return out
 }

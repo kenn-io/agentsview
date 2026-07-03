@@ -4,6 +4,10 @@
     type GroupBy,
     type AttributionView,
   } from "../../stores/usage.svelte.js";
+  import {
+    branchFilterToken,
+    branchLabel,
+  } from "../../branchFilters.js";
   import { seriesColorMap } from "../../utils/projectColor.js";
   import Treemap from "./Treemap.svelte";
   import { m } from "../../i18n/index.js";
@@ -20,6 +24,7 @@
 
   const groupBy = $derived(usage.toggles.attribution.groupBy);
   const view = $derived(usage.toggles.attribution.view);
+  const noBranchLabel = $derived(m.shared_no_branch());
 
   interface Row {
     id: string;
@@ -50,6 +55,12 @@
         id: m.model,
         label: m.model,
         cost: m.cost,
+      }));
+    } else if (groupBy === "branch") {
+      items = s.branchTotals.map((b) => ({
+        id: branchFilterToken(b.project, b.branch),
+        label: branchLabel(b.project, b.branch, noBranchLabel),
+        cost: b.cost,
       }));
     } else {
       items = s.agentTotals.map((a) => ({
@@ -97,8 +108,10 @@
       usage.toggleProjectKey(id);
     } else if (groupBy === "agent") {
       usage.toggleAgent(id);
-    } else {
+    } else if (groupBy === "model") {
       usage.toggleModel(id);
+    } else if (groupBy === "branch") {
+      usage.toggleBranch(id);
     }
   }
 
@@ -136,6 +149,13 @@
           onclick={() => handleGroupByChange("agent")}
         >
           {m.analytics_col_agent()}
+        </button>
+        <button
+          class="toggle-btn"
+          class:active={groupBy === "branch"}
+          onclick={() => handleGroupByChange("branch")}
+        >
+          {m.usage_branch()}
         </button>
       </div>
       <div class="segment-toggle">

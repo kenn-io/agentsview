@@ -793,6 +793,7 @@
   "analytics_skill_trend_empty": "無 skill 使用數據",
   "usage_model": "模型",
   "usage_models": "模型",
+  "usage_branch": "分支",
   "usage_refresh": "刷新用量數據",
   "usage_summary_total_cost": "總成本",
   "usage_summary_copilot_ai_credits": "Copilot AI Credits",

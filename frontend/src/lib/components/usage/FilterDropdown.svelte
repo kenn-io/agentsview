@@ -11,14 +11,18 @@
 
   interface FilterItem {
     name: string;
+    /** Display label when name is an opaque identity (e.g. branch tokens). */
+    label?: string;
     count?: number;
   }
 
   interface Props {
     label: string;
     items: FilterItem[];
-    /** Comma-separated list of EXCLUDED item names. */
+    /** Separator-joined list of EXCLUDED item names. */
     excludedCsv: string;
+    /** List separator; branch tokens can contain commas. */
+    separator?: string;
     onToggle: (name: string) => void;
     onSelectAll?: () => void;
     onDeselectAll?: () => void;
@@ -30,6 +34,7 @@
     label,
     items,
     excludedCsv,
+    separator = ",",
     onToggle,
     onSelectAll,
     onDeselectAll,
@@ -38,7 +43,7 @@
   }: Props = $props();
 
   const filterSet = $derived(
-    new Set(excludedCsv ? excludedCsv.split(",") : []),
+    new Set(excludedCsv ? excludedCsv.split(separator) : []),
   );
 
   const filteredCount = $derived(filterSet.size);
@@ -60,11 +65,12 @@
         (i) => !filterSet.has(i.name),
       );
       if (visible) {
+        const display = visible.label ?? visible.name;
         const maxLen = 20;
-        if (visible.name.length > maxLen) {
-          return `${label}: ${visible.name.slice(0, maxLen)}...`;
+        if (display.length > maxLen) {
+          return `${label}: ${display.slice(0, maxLen)}...`;
         }
-        return `${label}: ${visible.name}`;
+        return `${label}: ${display}`;
       }
     }
     if (visibleCount === 0) return m.usage_filter_none({ label });
@@ -82,7 +88,7 @@
           : !filterSet.has(item.name);
       return {
         id: item.name,
-        label: item.name,
+        label: item.label ?? item.name,
         active: included,
         count: item.count,
         color: color?.(item.name),

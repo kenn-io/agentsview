@@ -103,6 +103,7 @@ function usageSummary(): UsageSummaryResponse {
     ],
     modelTotals: [],
     agentTotals: [],
+    branchTotals: [],
     sessionCounts: {
       total: 15,
       byProject: { agentsview: 15 },
@@ -175,23 +176,65 @@ describe("CostTimeSeriesChart", () => {
   });
 
   it("keeps projects with the same display label as distinct series", async () => {
-	usage.summary = usageSummary();
-	usage.summary.daily = [dailyEntry(0)];
-	usage.summary.daily[0]!.projectBreakdowns = [
-		{ ...usage.summary.daily[0]!.projectBreakdowns![0]!, cost: 6 },
-		{
-			...usage.summary.daily[0]!.projectBreakdowns![0]!,
-			project_key: "pl1:sha256:other-archive",
-			cost: 4,
-		},
-	];
+    usage.summary = usageSummary();
+    usage.summary.daily = [dailyEntry(0)];
+    usage.summary.daily[0]!.projectBreakdowns = [
+      { ...usage.summary.daily[0]!.projectBreakdowns![0]!, cost: 6 },
+      {
+        ...usage.summary.daily[0]!.projectBreakdowns![0]!,
+        project_key: "pl1:sha256:other-archive",
+        cost: 4,
+      },
+    ];
 
-	const component = mount(CostTimeSeriesChart, { target: document.body });
-	await tick();
+    const component = mount(CostTimeSeriesChart, { target: document.body });
+    await tick();
 
-	expect(document.querySelectorAll("path[opacity='0.7']")).toHaveLength(2);
-	expect(document.querySelectorAll(".legend-item")).toHaveLength(2);
-	unmount(component);
+    expect(document.querySelectorAll("path[opacity='0.7']")).toHaveLength(2);
+    expect(document.querySelectorAll(".legend-item")).toHaveLength(2);
+    unmount(component);
+  });
+
+  it("renders branch legend labels, not raw tokens", async () => {
+    const summary = usageSummary();
+    for (const day of summary.daily) {
+      day.branchBreakdowns = [
+        {
+          project: "agentsview",
+          branch: "main",
+          inputTokens: 80,
+          outputTokens: 40,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
+          cost: 8,
+        },
+        {
+          project: "agentsview",
+          branch: "",
+          inputTokens: 20,
+          outputTokens: 10,
+          cacheCreationTokens: 0,
+          cacheReadTokens: 0,
+          cost: 2,
+        },
+      ];
+    }
+    usage.summary = summary;
+    usage.toggles.timeSeries.groupBy = "branch";
+
+    const component = mount(CostTimeSeriesChart, {
+      target: document.body,
+    });
+    await tick();
+
+    const legendText = Array.from(
+      document.querySelectorAll(".legend-item"),
+    ).map((el) => el.textContent!.trim());
+    expect(legendText).toContain("agentsview/main");
+    expect(legendText).toContain("agentsview/(no branch)");
+    expect(document.body.textContent).not.toContain("\u001f");
+
+    unmount(component);
   });
 
   it("uses distinct active model colors for paths and legend dots", async () => {
