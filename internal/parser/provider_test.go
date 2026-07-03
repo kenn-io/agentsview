@@ -168,6 +168,19 @@ func TestProviderFactoryLookupRejectsMissingAgent(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestProviderFactoryByTypeDevin(t *testing.T) {
+	factory, ok := ProviderFactoryByType(AgentDevin)
+	require.True(t, ok)
+	assert.Equal(t, AgentDevin, factory.Definition().Type)
+
+	provider := factory.NewProvider(ProviderConfig{
+		Roots:   []string{"/tmp/devin"},
+		Machine: "devbox",
+	})
+	require.NotNil(t, provider)
+	assert.Equal(t, AgentDevin, provider.Definition().Type)
+}
+
 func TestProviderMigrationModesCoverRegistry(t *testing.T) {
 	err := ValidateProviderMigrationModes(
 		ProviderFactories(),

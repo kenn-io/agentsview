@@ -705,7 +705,7 @@ agentsview parse-diff --json > parser-report.json
 `parse-diff` is intended for parser development and release QA. Run it against a
 quiescent, freshly synced archive for the clearest signal. Import-only sources
 are skipped because there is no source file to re-parse. Provider-backed stores
-with authoritative local sources, including Warp, Forge, and Piebald, are
+with authoritative local sources, including Warp, Forge, Piebald, and Devin, are
 covered alongside normal file-backed agents.
 
 ______________________________________________________________________

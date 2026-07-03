@@ -229,6 +229,7 @@ func TestAgentByType(t *testing.T) {
 		{AgentVSCodeCopilot, true},
 		{AgentPi, true},
 		{AgentOMP, true},
+		{AgentDevin, true},
 		{AgentDeepSeekTUI, true},
 		{"unknown", false},
 	}
@@ -333,6 +334,12 @@ func TestAgentByPrefix(t *testing.T) {
 			true,
 		},
 		{
+			"devin prefix",
+			"devin:session-id",
+			AgentDevin,
+			true,
+		},
+		{
 			"zed prefix",
 			"zed:sess-id",
 			AgentZed,
@@ -426,6 +433,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentCortex,
 		AgentHermes,
 		AgentForge,
+		AgentDevin,
 		AgentPiebald,
 		AgentWarp,
 		AgentPositron,
@@ -651,6 +659,20 @@ func TestCommandCodeRegistryEntry(t *testing.T) {
 	require.True(t, def.FileBased, "Command Code FileBased")
 	assert.Equal(t, []string{".commandcode/projects"}, def.DefaultDirs)
 	assert.Equal(t, "commandcode:", def.IDPrefix)
+}
+
+func TestDevinRegistryEntry(t *testing.T) {
+	def, ok := AgentByType(AgentDevin)
+	require.True(t, ok, "AgentDevin missing from Registry")
+	require.False(t, def.FileBased, "Devin FileBased")
+	assert.Equal(t, "Devin", def.DisplayName)
+	assert.Equal(t, "DEVIN_DIR", def.EnvVar)
+	assert.Equal(t, "devin_dirs", def.ConfigKey)
+	assert.Equal(t, []string{
+		"Library/Application Support/devin",
+		".local/share/devin",
+	}, def.DefaultDirs)
+	assert.Equal(t, "devin:", def.IDPrefix)
 }
 
 func TestDeepSeekTUIRegistryEntry(t *testing.T) {
@@ -1044,6 +1066,12 @@ func TestAgentByPrefixRemote(t *testing.T) {
 			"remote copilot",
 			"server2~copilot:sess-id",
 			AgentCopilot,
+			true,
+		},
+		{
+			"remote devin",
+			"devbox1~devin:session-id",
+			AgentDevin,
 			true,
 		},
 		{

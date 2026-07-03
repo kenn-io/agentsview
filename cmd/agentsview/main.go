@@ -1030,12 +1030,16 @@ func collectWatchRoots(cfg config.Config) (roots []watchRoot, unwatchedDirs []st
 		})
 	}
 	for _, def := range parser.Registry {
-		if !def.FileBased {
-			continue
-		}
 		for _, d := range cfg.ResolveDirs(def.Type) {
+			_, hasProvider := parser.ProviderFactoryByType(def.Type)
 			if providerWatched, providerUnwatched := collectProviderWatchRoots(def, d, addRoot); providerWatched {
 				unwatchedDirs = append(unwatchedDirs, providerUnwatched...)
+				continue
+			}
+			if !def.FileBased {
+				if hasProvider {
+					unwatchedDirs = append(unwatchedDirs, d)
+				}
 				continue
 			}
 			fallbackUnwatched := collectLegacyWatchRoots(def, d, addRoot)

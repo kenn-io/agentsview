@@ -54,7 +54,7 @@ func TestParseDiffDiscoversProviderSources(t *testing.T) {
 	}
 }
 
-func TestParseDiffProviderAuthoritativeAgentsAreDiscoverable(t *testing.T) {
+func TestParseDiffSupportedAgentsAreDiscoverable(t *testing.T) {
 	engine := NewDiffEngine(dbtest.OpenTestDB(t), EngineConfig{})
 	for _, agent := range []parser.AgentType{
 		parser.AgentGptme,
@@ -66,6 +66,7 @@ func TestParseDiffProviderAuthoritativeAgentsAreDiscoverable(t *testing.T) {
 		parser.AgentQwenPaw,
 		parser.AgentOpenHands,
 		parser.AgentCursor,
+		parser.AgentDevin,
 		parser.AgentVibe,
 		parser.AgentClaude,
 		parser.AgentCowork,
@@ -79,7 +80,7 @@ func TestParseDiffProviderAuthoritativeAgentsAreDiscoverable(t *testing.T) {
 		def, ok := parser.AgentByType(agent)
 		require.True(t, ok, "agent %s", agent)
 		assert.True(t, engine.parseDiffAgentDiscoverable(def),
-			"parse-diff engine must include provider-authoritative %s", agent)
+			"parse-diff engine must include %s", agent)
 	}
 }
 
@@ -91,6 +92,7 @@ func TestParseDiffDBBackedAgentsAreDiscoverable(t *testing.T) {
 	engine := NewDiffEngine(dbtest.OpenTestDB(t), EngineConfig{})
 	for _, agent := range []parser.AgentType{
 		parser.AgentForge,
+		parser.AgentDevin,
 		parser.AgentPiebald,
 		parser.AgentWarp,
 	} {
@@ -287,6 +289,17 @@ func TestParseDiffProviderSourcesThreadsS3Metadata(t *testing.T) {
 	assert.Equal(t, int64(1779012030000)*1_000_000, f.SourceMtime)
 	assert.Equal(t, "s3-fingerprint", f.SourceFingerprint)
 	assert.Equal(t, "myproj", f.Project)
+}
+
+func TestParseDiffSourceReliableForRacedDevinVirtualPath(t *testing.T) {
+	engine := NewDiffEngine(dbtest.OpenTestDB(t), EngineConfig{})
+	assert.False(
+		t,
+		engine.parseDiffSourceReliableForRaced(
+			parser.AgentDevin,
+			filepath.Join("/tmp", "devin", "cli", "sessions.db")+"#session-001",
+		),
+	)
 }
 
 type s3ParseDiffProviderFactory struct {

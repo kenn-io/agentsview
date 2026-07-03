@@ -42,11 +42,11 @@ const (
 //     in SQL; suffix matches come back in most-recent order. If
 //     multiple suffix matches exist without an exact row, the
 //     most recent wins and an ambiguity warning is emitted.
-//  3. Canonical disk probe: when input begins with a registered
-//     agent prefix, strip the prefix and ask that agent's disk source
-//     lookup so a truly canonical-but-unsynced ID on disk still resolves.
-//  4. Raw disk probe: ask every file-based agent's disk source lookup
-//     with the raw input; the first hit yields "<prefix><input>".
+//  3. Canonical provider probe: when input begins with a registered
+//     agent prefix, strip the prefix and ask that agent's source lookup
+//     so a truly canonical-but-unsynced ID still resolves.
+//  4. Raw provider probe: ask every file-backed agent plus Devin for a
+//     raw-ID source lookup; the first hit yields "<prefix><input>".
 //  5. No match anywhere: returned unchanged with known=false.
 //
 // known reports whether resolution found evidence for the ID.
@@ -88,7 +88,7 @@ func resolveRawSessionID(
 	// before resolving the source (which rejects IDs with
 	// colons via IsValidSessionID).
 	for _, def := range parser.Registry {
-		if def.IDPrefix == "" || !def.FileBased ||
+		if def.IDPrefix == "" ||
 			!agentHasDiskSourceLookup(def) {
 			continue
 		}
@@ -109,7 +109,7 @@ func resolveRawSessionID(
 	// colon-bearing raw IDs (Kimi, OpenClaw, Kiro IDE) may
 	// match.
 	for _, def := range parser.Registry {
-		if !def.FileBased || !agentHasDiskSourceLookup(def) {
+		if !agentHasDiskSourceLookup(def) {
 			continue
 		}
 		for _, dir := range agentDirs[def.Type] {
@@ -122,10 +122,13 @@ func resolveRawSessionID(
 	return input, false
 }
 
-// agentHasDiskSourceLookup reports whether a session source can be located on
-// disk by raw ID for the agent, via its provider-authoritative provider's
-// FindSource.
+// agentHasDiskSourceLookup reports whether a session source can be located by
+// raw ID via the provider facade's FindSource path. This covers file-backed
+// agents plus Devin's provider-owned virtual session paths.
 func agentHasDiskSourceLookup(def parser.AgentDef) bool {
+	if !def.FileBased && def.Type != parser.AgentDevin {
+		return false
+	}
 	if parser.ProviderMigrationModes()[def.Type] !=
 		parser.ProviderMigrationProviderAuthoritative {
 		return false

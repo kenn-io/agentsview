@@ -42,6 +42,7 @@ const (
 	AgentHermes         AgentType = "hermes"
 	AgentWorkBuddy      AgentType = "workbuddy"
 	AgentForge          AgentType = "forge"
+	AgentDevin          AgentType = "devin"
 	AgentPiebald        AgentType = "piebald"
 	AgentWarp           AgentType = "warp"
 	AgentPositron       AgentType = "positron"
@@ -459,6 +460,18 @@ var Registry = []AgentDef{
 		DefaultDirs: []string{".forge"},
 		IDPrefix:    "forge:",
 		FileBased:   false,
+	},
+	{
+		Type:        AgentDevin,
+		DisplayName: "Devin",
+		EnvVar:      "DEVIN_DIR",
+		ConfigKey:   "devin_dirs",
+		DefaultDirs: []string{
+			"Library/Application Support/devin",
+			".local/share/devin",
+		},
+		IDPrefix:  "devin:",
+		FileBased: false,
 	},
 	{
 		Type:        AgentPiebald,

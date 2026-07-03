@@ -186,6 +186,7 @@ can still be parsed.
 | Codex                 | `~/.codex/sessions/` and `~/.codex/archived_sessions/`                           | JSONL per session                                                                                                               |
 | Command Code          | `~/.commandcode/projects/`                                                       | JSONL per session, optional `.meta.json` sidecar                                                                                |
 | Copilot CLI           | `~/.copilot/`                                                                    | JSONL per session under `session-state/`                                                                                        |
+| Devin CLI             | `~/.local/share/devin/` (Linux), `~/Library/Application Support/devin/` (macOS)             | Local CLI data rooted at the directory that contains `cli/`; session data is discovered under `<root>/cli/...`                 |
 | Cortex Code           | `~/.snowflake/cortex/conversations/`                                             | JSON / JSONL per session                                                                                                        |
 | Cursor                | `~/.cursor/projects/`                                                            | JSONL or plain-text transcripts                                                                                                 |
 | DeepSeek TUI          | `~/.codewhale/sessions/` and `~/.deepseek/sessions/`                             | JSON per session                                                                                                                |
@@ -271,6 +272,19 @@ log reports how many directories are watched this way:
 ```
 Watching 74 directories for changes (2 shallow) (76ms)
 ```
+
+**Devin CLI root:** Point `DEVIN_DIR` or `devin_dirs` at the local root that
+contains Devin's `cli/` directory, not at copied config or OAuth files. The
+default roots are `~/Library/Application Support/devin` on macOS and
+`~/.local/share/devin` on Linux, and AgentsView discovers session data under
+`<root>/cli/...`. When sharing a path publicly, redact parent directories and
+keep only the relevant tail, for example `.../Application Support/devin` or
+`.../.local/share/devin`.
+
+AgentsView intentionally ignores copied config/OAuth locations because those
+paths are not the session archive source and may contain sensitive account
+material. When filing bugs, share only the redacted local-share root and
+directory shape, never pasted tokens, OAuth files, or other secrets.
 
 **OpenCode storage backend:** As of 0.24.0, AgentsView reads both of OpenCode's
 layouts. If a `storage/session/` directory exists under the OpenCode root,
@@ -383,6 +397,7 @@ export COWORK_DIR=~/custom/cowork
 export CODEX_SESSIONS_DIR=~/custom/codex
 export COMMANDCODE_PROJECTS_DIR=~/custom/commandcode
 export COPILOT_DIR=~/custom/copilot
+export DEVIN_DIR=~/Library/Application\ Support/devin
 export CORTEX_DIR=~/custom/cortex
 export CURSOR_PROJECTS_DIR=~/custom/cursor
 export DEEPSEEK_TUI_SESSIONS_DIR=~/custom/deepseek/sessions
@@ -435,7 +450,7 @@ codex_sessions_dirs = [
 
 The corresponding fields are `aider_dirs`, `amp_dirs`, `antigravity_dirs`,
 `antigravity_cli_dirs`, `claude_project_dirs`, `openclaude_project_dirs`,
-`cowork_dirs`,
+`cowork_dirs`, `devin_dirs`,
 `codex_sessions_dirs`, `commandcode_project_dirs`, `copilot_dirs`,
 `cortex_dirs`, `cursor_project_dirs`, `deepseek_tui_sessions_dirs`,
 `forge_dirs`, `gemini_dirs`, `gptme_dirs`, `hermes_sessions_dirs`, `iflow_dirs`,

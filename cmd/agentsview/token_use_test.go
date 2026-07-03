@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
 
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
@@ -278,6 +280,49 @@ func TestResolveSessionID_ProviderAuthoritativeCursorOnDiskNotInDB(t *testing.T)
 	assert.True(t, known, "canonical provider disk probe")
 }
 
+func TestResolveSessionID_DevinCanonicalID_OnDiskNotInDB(t *testing.T) {
+	d := newTestDB(t)
+	ctx := context.Background()
+
+	root := t.TempDir()
+	cliDir := filepath.Join(root, "cli")
+	transcriptsDir := filepath.Join(cliDir, "transcripts")
+	require.NoError(t, os.MkdirAll(transcriptsDir, 0o755))
+	dbPath := filepath.Join(cliDir, "sessions.db")
+	devinDB, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, devinDB.Close()) })
+	_, err = devinDB.Exec(`
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			title TEXT,
+			working_directory TEXT,
+			model TEXT,
+			created_at INTEGER,
+			last_activity_at INTEGER,
+			hidden INTEGER NOT NULL DEFAULT 0
+		);
+		INSERT INTO sessions
+			(id, title, working_directory, model, created_at, last_activity_at, hidden)
+		VALUES
+			('session-123', 'Devin session', '/cwd/devin', 'devin-1', 1700000000000, 1700000001000, 0);
+	`)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(transcriptsDir, "session-123.json"),
+		[]byte(`{"messages":[]}`+"\n"),
+		0o644,
+	))
+
+	agentDirs := map[parser.AgentType][]string{
+		parser.AgentDevin: {root},
+	}
+	got, known := resolveRawSessionID(ctx, d, agentDirs, "devin:session-123")
+	assert.Equal(t, "devin:session-123", got)
+	assert.True(t, known,
+		"provider-backed Devin IDs should resolve via FindSource even though FileBased is false")
+}
+
 func TestResolveSessionID_RawOpenClawCollidesWithCodexPrefix(t *testing.T) {
 	d := newTestDB(t)
 	ctx := context.Background()
@@ -320,7 +365,7 @@ func TestResolveSessionID_UnderscoreID_NoFalseMatch(t *testing.T) {
 	assert.True(t, known)
 }
 
-func TestAgentHasDiskSourceLookupIncludesProviderAuthoritativeAgents(t *testing.T) {
+func TestAgentHasDiskSourceLookupIncludesFileBackedAgentsAndDevin(t *testing.T) {
 	for _, agent := range []parser.AgentType{
 		parser.AgentGptme,
 		parser.AgentPi,
@@ -331,6 +376,7 @@ func TestAgentHasDiskSourceLookupIncludesProviderAuthoritativeAgents(t *testing.
 		parser.AgentQwenPaw,
 		parser.AgentOpenHands,
 		parser.AgentCursor,
+		parser.AgentDevin,
 		parser.AgentVibe,
 		parser.AgentClaude,
 		parser.AgentCowork,
@@ -339,8 +385,12 @@ func TestAgentHasDiskSourceLookupIncludesProviderAuthoritativeAgents(t *testing.
 		def, ok := parser.AgentByType(agent)
 		require.True(t, ok, "agent %s", agent)
 		assert.True(t, agentHasDiskSourceLookup(def),
-			"token-use disk probe must include provider-authoritative %s", agent)
+			"token-use source probe must include %s", agent)
 	}
+	warpDef, ok := parser.AgentByType(parser.AgentWarp)
+	require.True(t, ok, "agent %s", parser.AgentWarp)
+	assert.False(t, agentHasDiskSourceLookup(warpDef),
+		"token-use source probe must exclude non-Devin non-file-backed agents")
 }
 
 func TestUsageExitCode_TokenData(t *testing.T) {

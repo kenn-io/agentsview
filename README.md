@@ -48,6 +48,13 @@ On first run, agentsview discovers sessions from every supported agent on your
 machine, syncs them into a local SQLite database, and serves a web UI at
 `http://127.0.0.1:8080`.
 
+For Devin CLI, point `DEVIN_DIR` or `devin_dirs` at the local root that contains
+`cli/` — for example `~/Library/Application Support/devin` on macOS,
+`~/.local/share/devin` on Linux, or a redacted path like
+`.../Application Support/devin`. AgentsView reads session data under
+`<root>/cli/...` and intentionally ignores copied config or OAuth paths. Do not
+paste tokens, OAuth files, or other secrets into bug reports.
+
 Claude and Codex sources can also be configured as `s3://` roots, so a central
 AgentsView instance can read sessions that other machines push to S3-compatible
 object storage. Add those roots to `claude_project_dirs` or
@@ -301,6 +308,7 @@ thread JSON files.
 | Claude Cowork         | `~/Library/Application Support/Claude/local-agent-mode-sessions/` (macOS)                                                                                               |
 | Codex                 | `~/.codex/sessions/`                                                                                                                                                    |
 | Copilot CLI           | `~/.copilot/`                                                                                                                                                           |
+| Devin CLI             | `~/.local/share/devin/` (Linux), `~/Library/Application Support/devin/` (macOS); point `DEVIN_DIR` / `devin_dirs` at the root that contains `cli/`                      |
 | Cortex Code           | `~/.snowflake/cortex/conversations/`                                                                                                                                    |
 | Cursor                | `~/.cursor/projects/`                                                                                                                                                   |
 | DeepSeek TUI          | `~/.codewhale/sessions/`, `~/.deepseek/sessions/`                                                                                                                       |

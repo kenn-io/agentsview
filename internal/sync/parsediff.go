@@ -18,8 +18,8 @@ type ParseDiffOptions struct {
 	// agent whose registered factory can Discover() and re-parse a source.
 	// That includes shared-SQLite DB-backed providers that fan a database
 	// out to one virtual source per session (Kiro, OpenCode, Forge,
-	// Piebald, Warp). Only import-only agents, which have no source to
-	// re-parse, are rejected with an error.
+	// Devin, Piebald, Warp). Only import-only agents, which have no
+	// source to re-parse, are rejected with an error.
 	Agents []parser.AgentType
 	// Limit caps the number of source files parsed, newest mtime first
 	// across all agents. 0 means no limit.
@@ -205,8 +205,8 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 	return report, nil
 }
 
-// parseDiffProviderSources discovers an agent's on-disk sources through
-// the provider facade. It is scoped to a single agent type so parse-diff
+// parseDiffProviderSources discovers an agent's sources through the provider
+// facade. It is scoped to a single agent type so parse-diff
 // respects the requested agent set.
 func (e *Engine) parseDiffProviderSources(
 	ctx context.Context,
@@ -272,12 +272,13 @@ func (e *Engine) parseDiffAgentDiscoverable(def parser.AgentDef) bool {
 	// A provider-authoritative agent with a registered factory exposes a
 	// working Discover()/Parse() the report-only run can re-parse, whether it
 	// reads literal per-session files (Claude, Codex) or a shared SQLite store
-	// its provider fans out to one virtual source per session (Kiro, OpenCode,
-	// and the DB-backed Forge/Piebald/Warp providers). FileBased is not
-	// consulted here: it distinguishes literal-file agents from DB-backed ones
-	// for the watcher and sync paths, but both kinds satisfy the same provider
-	// Discover() contract parse-diff needs. Import-only agents are not
-	// provider-authoritative, so the switch still rejects them.
+	// its provider fans out to one virtual source per session (Kiro,
+	// OpenCode, and the DB-backed Forge/Devin/Piebald/Warp providers).
+	// FileBased is not consulted here: it distinguishes literal-file agents
+	// from DB-backed ones for the watcher and sync paths, but both kinds
+	// satisfy the same provider Discover() contract parse-diff needs.
+	// Import-only agents are not provider-authoritative, so the switch still
+	// rejects them.
 	switch e.providerMigrationModes[def.Type] {
 	case parser.ProviderMigrationProviderAuthoritative:
 		factory, ok := e.providerFactories[def.Type]
@@ -289,7 +290,7 @@ func (e *Engine) parseDiffAgentDiscoverable(def parser.AgentDef) bool {
 
 // resolveParseDiffAgents validates the requested agent set against
 // the registry and returns the matching defs in registry order. Only
-// file-based agents with an on-disk source can be re-parsed.
+// agents with parse-diff support can be re-parsed.
 func (e *Engine) resolveParseDiffAgents(
 	requested []parser.AgentType,
 ) ([]parser.AgentDef, error) {
@@ -316,7 +317,7 @@ func (e *Engine) resolveParseDiffAgents(
 		}
 		if _, known := parser.AgentByType(t); known {
 			return nil, fmt.Errorf(
-				"agent %q has no on-disk source to re-parse; "+
+				"agent %q is not supported by parse-diff; "+
 					"supported agents: %s", t, supported,
 			)
 		}
@@ -425,6 +426,9 @@ func isPerSessionDBVirtualSource(path string) bool {
 // Copilot appends to its shared trace file, and the "#runIdx" suffix aider
 // appends to its shared history file.
 func stripVirtualSourceSuffix(path string) string {
+	if dbPath, _, ok := parser.ParseVirtualSourcePath(path); ok {
+		return dbPath
+	}
 	if tracePath, _, ok := parser.SplitVisualStudioCopilotVirtualPath(path); ok {
 		return tracePath
 	}
@@ -468,10 +472,12 @@ func stripVirtualSourceSuffix(path string) string {
 // it fails CLOSED rather than risk masking genuine parser drift:
 //
 //   - Virtual-path sources (Aider "#runIdx", Kiro/Zed/OpenCode/Kilo/MiMoCode
-//     "#rawID", Shelley, Forge/Piebald/Warp "#sessionID", Visual Studio Copilot
-//     "#conversationID"). Many sessions fan out of ONE physical source, so the
-//     source mtime is NOT a per-session signal. A shared DB's rows can carry
-//     advanced updated_at values, and Aider's File.Mtime is the whole
+//     "#rawID", Shelley, Forge/Devin/Piebald/Warp "#sessionID", Visual
+//     Studio Copilot "#conversationID"). Many sessions fan out of ONE
+//     physical source, so the source mtime is NOT a per-session signal. A
+//     shared DB's rows can carry advanced updated_at values, Devin's
+//     authoritative mtime is a provider-composite across DB metadata and
+//     transcript state, and Aider's File.Mtime is the whole
 //     .aider.chat.history.md file's mtime shared by every run in it --
 //     appending a new run bumps it for all runs -- so a newer mtime does not
 //     mean THIS session's parsed content was torn. Including them would mask
@@ -978,15 +984,16 @@ func (e *Engine) parseDiffSweepStored(
 			reason = "remote session"
 		case s.DeletedAt != nil:
 			reason = "trashed"
-		case defOK && !def.FileBased &&
+		case defOK && !eParseDiffAgentHasProviderSource(def) &&
 			def.EnvVar == "" && def.ConfigKey == "":
 			reason = "import-only agent"
 		case defOK && !def.FileBased && !e.parseDiffAgentDiscoverable(def):
 			// A DB-backed agent parse-diff cannot re-parse (no provider
 			// factory). Provider-authoritative DB-backed agents
-			// (Forge/Piebald/Warp) are discoverable, so they fall through
-			// to the source-based reasons below (not sampled / source
-			// missing / not discovered) just like literal-file agents.
+			// (Forge/Devin/Piebald/Warp) are discoverable, so they fall
+			// through to the source-based reasons below (not sampled /
+			// source missing / not discovered) just like literal-file
+			// agents.
 			reason = "database-backed agent"
 		case s.FilePath == nil || *s.FilePath == "":
 			reason = "source missing"
@@ -1012,6 +1019,16 @@ func (e *Engine) parseDiffSweepStored(
 			StoredDataVersion: s.DataVersion,
 		})
 		report.Totals.Skipped++
+	}
+}
+
+func eParseDiffAgentHasProviderSource(def parser.AgentDef) bool {
+	switch parser.ProviderMigrationModes()[def.Type] {
+	case parser.ProviderMigrationProviderAuthoritative:
+		_, ok := parser.ProviderFactoryByType(def.Type)
+		return ok
+	default:
+		return false
 	}
 }
 

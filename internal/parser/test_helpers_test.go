@@ -2,16 +2,228 @@ package parser
 
 import (
 	"bytes"
+	"database/sql"
 	"fmt"
 	"io"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const devinSyntheticSessionsSchema = `
+CREATE TABLE sessions (
+	id TEXT PRIMARY KEY,
+	title TEXT,
+	working_directory TEXT,
+	model TEXT,
+	created_at INTEGER,
+	last_activity_at INTEGER,
+	workspace_json TEXT,
+	metadata_json TEXT,
+	hidden INTEGER NOT NULL DEFAULT 0
+);
+`
+
+const devinSyntheticMessageNodesSchema = `
+CREATE TABLE message_nodes (
+	row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+	session_id TEXT NOT NULL,
+	node_id INTEGER NOT NULL,
+	parent_node_id INTEGER,
+	chat_message TEXT NOT NULL,
+	created_at INTEGER NOT NULL,
+	metadata TEXT
+);
+`
+
+type devinSessionRow struct {
+	ID                 string
+	Title              string
+	WorkingDirectory   string
+	Model              string
+	CreatedAtMillis    *int64
+	LastActivityMillis *int64
+	WorkspaceJSON      string
+	MetadataJSON       string
+	Hidden             bool
+}
+
+type devinTestFixture struct {
+	Root           string
+	CLIDir         string
+	TranscriptsDir string
+	DBPath         string
+}
+
+type devinSyntheticMessageNodeRow struct {
+	SessionID       string
+	NodeID          int64
+	ParentNodeID    *int64
+	ChatMessage     string
+	CreatedAtMillis int64
+	MetadataJSON    string
+}
+
+func newDevinTestFixture(t *testing.T, rows ...devinSessionRow) *devinTestFixture {
+	t.Helper()
+
+	root := t.TempDir()
+	cliDir := filepath.Join(root, "cli")
+	transcriptsDir := filepath.Join(cliDir, "transcripts")
+	require.NoError(t, os.MkdirAll(transcriptsDir, 0o755))
+
+	fixture := &devinTestFixture{
+		Root:           root,
+		CLIDir:         cliDir,
+		TranscriptsDir: transcriptsDir,
+		DBPath:         filepath.Join(cliDir, devinDBFilename),
+	}
+
+	initDevinTestDB(t, fixture.DBPath)
+	execDevinTestSQL(t, fixture.DBPath, devinSyntheticSessionsSchema)
+	execDevinTestSQL(t, fixture.DBPath, devinSyntheticMessageNodesSchema)
+	for _, row := range rows {
+		insertDevinSessionRow(t, fixture.DBPath, row)
+	}
+
+	return fixture
+}
+
+func initDevinTestDB(t *testing.T, dbPath string) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+}
+
+func insertDevinSessionRow(t *testing.T, dbPath string, row devinSessionRow) {
+	t.Helper()
+
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+
+	_, err = db.Exec(`
+		INSERT INTO sessions (
+			id,
+			title,
+			working_directory,
+			model,
+			created_at,
+			last_activity_at,
+			workspace_json,
+			metadata_json,
+			hidden
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		row.ID,
+		row.Title,
+		row.WorkingDirectory,
+		row.Model,
+		devinNullableMillis(row.CreatedAtMillis),
+		devinNullableMillis(row.LastActivityMillis),
+		devinNullableString(row.WorkspaceJSON),
+		devinNullableString(row.MetadataJSON),
+		row.Hidden,
+	)
+	require.NoError(t, err)
+}
+
+func devinNullableMillis(ms *int64) any {
+	if ms == nil {
+		return nil
+	}
+	return *ms
+}
+
+func devinNullableString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+func (f *devinTestFixture) writeTranscript(t *testing.T, sessionID, transcript string) string {
+	t.Helper()
+	transcriptPath := filepath.Join(f.TranscriptsDir, sessionID+".json")
+	require.NoError(t, os.WriteFile(transcriptPath, []byte(transcript), 0o644))
+	return transcriptPath
+}
+
+func (f *devinTestFixture) sessionVirtualPath(sessionID string) string {
+	return VirtualSourcePath(f.DBPath, sessionID)
+}
+
+func (f *devinTestFixture) insertMessageNodes(t *testing.T, rows ...devinSyntheticMessageNodeRow) {
+	t.Helper()
+	for _, row := range rows {
+		insertDevinMessageNodeRow(t, f.DBPath, row)
+	}
+}
+
+func newDevinSessionFixture(t *testing.T, row devinSessionRow, transcript string) (string, string) {
+	t.Helper()
+	fixture := newDevinTestFixture(t, row)
+	return fixture.DBPath, fixture.writeTranscript(t, row.ID, transcript)
+}
+
+func execDevinTestSQL(t *testing.T, dbPath, query string) {
+	t.Helper()
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+	_, err = db.Exec(query)
+	require.NoError(t, err)
+}
+
+func insertDevinMessageNodeRow(t *testing.T, dbPath string, row devinSyntheticMessageNodeRow) {
+	t.Helper()
+
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+
+	_, err = db.Exec(`
+		INSERT INTO message_nodes (
+			session_id,
+			node_id,
+			parent_node_id,
+			chat_message,
+			created_at,
+			metadata
+		) VALUES (?, ?, ?, ?, ?, ?)
+	`,
+		row.SessionID,
+		row.NodeID,
+		devinNullableInt64(row.ParentNodeID),
+		row.ChatMessage,
+		row.CreatedAtMillis,
+		devinNullableString(row.MetadataJSON),
+	)
+	require.NoError(t, err)
+}
+
+func devinNullableInt64(value *int64) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
+func devinMetaIDs(metas []DevinSessionMeta) []string {
+	ids := make([]string, 0, len(metas))
+	for _, meta := range metas {
+		ids = append(ids, meta.RawSessionID)
+	}
+	return ids
+}
 
 // parseChatGPTExport parses a ChatGPT export through the ChatGPT import-only
 // provider. It is the test harness replacement for the former

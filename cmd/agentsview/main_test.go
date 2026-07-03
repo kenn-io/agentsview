@@ -758,6 +758,44 @@ func TestCollectWatchRootsUsesAntigravityCLIHistoryRoot(t *testing.T) {
 	assert.False(t, brain.shallow)
 }
 
+func TestCollectWatchRootsIncludesDevinProviderRootsForNonFileAgent(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "cli", "transcripts"), 0o755))
+	writeTestFile(t, filepath.Join(root, "cli", "sessions.db"), []byte("sqlite"))
+
+	cfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentDevin: {root},
+		},
+	}
+
+	roots, unwatchedDirs := collectWatchRoots(cfg)
+
+	require.Empty(t, unwatchedDirs)
+	cliRoot, ok := findCollectedWatchRoot(roots, filepath.Join(root, "cli"))
+	require.True(t, ok, "devin cli root not collected")
+	assert.True(t, cliRoot.shallow)
+	assert.Equal(t, []string{root}, cliRoot.dirs)
+	transcriptsRoot, ok := findCollectedWatchRoot(roots, filepath.Join(root, "cli", "transcripts"))
+	require.True(t, ok, "devin transcripts root not collected")
+	assert.True(t, transcriptsRoot.shallow)
+	assert.Equal(t, []string{root}, transcriptsRoot.dirs)
+}
+
+func TestCollectWatchRootsMarksDevinRootUnwatchedWhenProviderPathsMissing(t *testing.T) {
+	root := t.TempDir()
+	cfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentDevin: {root},
+		},
+	}
+
+	roots, unwatchedDirs := collectWatchRoots(cfg)
+
+	assert.Empty(t, roots)
+	assert.Equal(t, []string{root}, unwatchedDirs)
+}
+
 func TestMissingWatchRootCoverageDoesNotTreatShallowAncestorAsRecursive(t *testing.T) {
 	root := filepath.Clean(filepath.Join(t.TempDir(), "state"))
 	shallowRoots := []watchRoot{{root: root, shallow: true}}

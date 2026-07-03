@@ -55,47 +55,13 @@ func ExtractTextContent(
 			// some tools populate only "arguments", so fall back to
 			// it when "input" is missing or empty.
 			hasToolUse = true
-			name := block.Get("name").Str
-			if name != "" {
-				input := block.Get("input")
-				if input.Raw == "" || input.Raw == "{}" {
-					if args := block.Get("arguments"); args.Exists() {
-						input = args
-					}
-				}
-				tc := ParsedToolCall{
-					ToolUseID: block.Get("id").Str,
-					ToolName:  name,
-					Category:  NormalizeToolCategory(name),
-					InputJSON: input.Raw,
-				}
-				switch name {
-				case "Skill":
-					tc.SkillName = input.Get("skill").Str
-				case "skill":
-					tc.SkillName = input.Get("skill").Str
-					if tc.SkillName == "" {
-						tc.SkillName = input.Get("name").Str
-					}
-				default:
-					tc.SkillName = inferToolSkillName(
-						name,
-						tc.InputJSON,
-					)
-				}
+			if tc, ok := parseToolCall(block); ok {
 				toolCalls = append(toolCalls, tc)
 			}
 			parts = append(parts, formatToolUse(block))
 		case "tool_result":
-			tuid := block.Get("tool_use_id").Str
-			if tuid != "" {
-				rc := block.Get("content")
-				cl := toolResultContentLength(rc)
-				toolResults = append(toolResults, ParsedToolResult{
-					ToolUseID:     tuid,
-					ContentLength: cl,
-					ContentRaw:    rc.Raw,
-				})
+			if tr, ok := parseToolResult(block); ok {
+				toolResults = append(toolResults, tr)
 			}
 		}
 		return true
@@ -104,6 +70,55 @@ func ExtractTextContent(
 	return strings.Join(parts, "\n"),
 		strings.Join(thinkingParts, "\n\n"),
 		hasThinking, hasToolUse, toolCalls, toolResults
+}
+
+func parseToolCall(block gjson.Result) (ParsedToolCall, bool) {
+	name := block.Get("name").Str
+	if name == "" {
+		return ParsedToolCall{}, false
+	}
+	input := toolCallInput(block)
+	tc := ParsedToolCall{
+		ToolUseID: block.Get("id").Str,
+		ToolName:  name,
+		Category:  NormalizeToolCategory(name),
+		InputJSON: input.Raw,
+	}
+	switch name {
+	case "Skill":
+		tc.SkillName = input.Get("skill").Str
+	case "skill":
+		tc.SkillName = input.Get("skill").Str
+		if tc.SkillName == "" {
+			tc.SkillName = input.Get("name").Str
+		}
+	default:
+		tc.SkillName = inferToolSkillName(name, tc.InputJSON)
+	}
+	return tc, true
+}
+
+func toolCallInput(block gjson.Result) gjson.Result {
+	input := block.Get("input")
+	if input.Raw == "" || input.Raw == "{}" {
+		if args := block.Get("arguments"); args.Exists() {
+			input = args
+		}
+	}
+	return input
+}
+
+func parseToolResult(block gjson.Result) (ParsedToolResult, bool) {
+	tuid := block.Get("tool_use_id").Str
+	if tuid == "" {
+		return ParsedToolResult{}, false
+	}
+	rc := block.Get("content")
+	return ParsedToolResult{
+		ToolUseID:     tuid,
+		ContentLength: toolResultContentLength(rc),
+		ContentRaw:    rc.Raw,
+	}, true
 }
 
 func toolResultContentLength(content gjson.Result) int {

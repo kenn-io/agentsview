@@ -203,6 +203,11 @@ func TestExtractTextContent(t *testing.T) {
 			`[]`,
 			"", false, false, nil,
 		},
+		{
+			"unknown and empty blocks ignored",
+			`[{"type":"unknown","value":"x"},{"type":"text","text":""},{"type":"thinking","thinking":""}]`,
+			"", false, false, nil,
+		},
 	}
 
 	for _, tt := range tests {

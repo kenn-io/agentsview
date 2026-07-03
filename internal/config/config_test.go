@@ -283,6 +283,17 @@ func TestDefault_SkipsAiderUntilConfigured(t *testing.T) {
 	assert.False(t, cfg.IsUserConfigured(parser.AgentAider))
 }
 
+func TestDefault_IncludesDevinLocalShareRoots(t *testing.T) {
+	cfg, err := Default()
+	require.NoError(t, err)
+
+	dirs := cfg.ResolveDirs(parser.AgentDevin)
+	require.Len(t, dirs, 2)
+	assert.True(t, strings.HasSuffix(dirs[0], filepath.Join("Library", "Application Support", "devin")), "dirs[0] = %q", dirs[0])
+	assert.True(t, strings.HasSuffix(dirs[1], filepath.Join(".local", "share", "devin")), "dirs[1] = %q", dirs[1])
+	assert.False(t, cfg.IsUserConfigured(parser.AgentDevin))
+}
+
 func TestLoadEnv_OverridesDataDir(t *testing.T) {
 	custom := setupTestEnv(t)
 
@@ -748,6 +759,46 @@ func TestResolveDirs_ClaudeConfigDirRootEnvVar(t *testing.T) {
 		assert.Equal(t, []string{"/from/config"},
 			cfg.ResolveDirs(parser.AgentClaude))
 		assert.True(t, cfg.IsUserConfigured(parser.AgentClaude))
+	})
+}
+
+func TestResolveDirs_DevinPrecedenceAndMergeRules(t *testing.T) {
+	t.Run("config overrides defaults", func(t *testing.T) {
+		cfg := loadMinimalWithConfig(t, map[string]any{
+			"devin_dirs": []string{"/from/config/devin"},
+		})
+
+		assert.Equal(t, []string{"/from/config/devin"},
+			cfg.ResolveDirs(parser.AgentDevin))
+		assert.True(t, cfg.IsUserConfigured(parser.AgentDevin))
+	})
+
+	t.Run("env overrides config", func(t *testing.T) {
+		f := newConfigFixture(t)
+		f.WriteTOML(t, map[string]any{
+			"devin_dirs": []string{"/from/config/devin"},
+		})
+		t.Setenv("DEVIN_DIR", "/from/env/devin")
+
+		cfg := f.LoadMinimal(t)
+
+		assert.Equal(t, []string{"/from/env/devin"},
+			cfg.ResolveDirs(parser.AgentDevin))
+		assert.True(t, cfg.IsUserConfigured(parser.AgentDevin))
+	})
+
+	t.Run("config file still applies when env unset", func(t *testing.T) {
+		f := newConfigFixture(t)
+		f.WriteTOML(t, map[string]any{
+			"devin_dirs": []string{"/from/config/devin", "/second/config/devin"},
+		})
+		t.Setenv("DEVIN_DIR", "")
+
+		cfg := f.LoadMinimal(t)
+
+		assert.Equal(t, []string{"/from/config/devin", "/second/config/devin"},
+			cfg.ResolveDirs(parser.AgentDevin))
+		assert.True(t, cfg.IsUserConfigured(parser.AgentDevin))
 	})
 }
 

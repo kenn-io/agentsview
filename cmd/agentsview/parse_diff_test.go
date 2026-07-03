@@ -60,7 +60,7 @@ func TestParseDiff_UnknownAgentListsSupported(t *testing.T) {
 	}
 	// The DB-backed provider-authoritative agents are re-parseable through
 	// their providers, so they appear in the supported list too.
-	for _, want := range []string{"forge", "piebald", "warp"} {
+	for _, want := range []string{"forge", "devin", "piebald", "warp"} {
 		assert.Contains(t, err.Error(), want,
 			"error should list supported DB-backed agent %q", want)
 	}
@@ -90,8 +90,7 @@ func TestParseDiff_RejectsAgentsWithoutOnDiskSource(t *testing.T) {
 				"parse-diff", "--agent", tc.agent)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), fmt.Sprintf(
-				"agent %q is not supported by parse-diff "+
-					"(no on-disk source to re-parse)", tc.agent))
+				"agent %q is not supported by parse-diff", tc.agent))
 		})
 	}
 }
@@ -130,8 +129,8 @@ func TestParseDiffAgentTypes(t *testing.T) {
 		},
 		{
 			name: "db-backed provider-authoritative agents",
-			in:   []string{"forge", "piebald", "warp"},
-			want: []string{"forge", "piebald", "warp"},
+			in:   []string{"forge", "devin", "piebald", "warp"},
+			want: []string{"forge", "devin", "piebald", "warp"},
 		},
 		{
 			name: "trims and lowercases",
@@ -151,7 +150,7 @@ func TestParseDiffAgentTypes(t *testing.T) {
 		{
 			name:    "import-only agent",
 			in:      []string{"claude-ai"},
-			wantErr: "no on-disk source to re-parse",
+			wantErr: "is not supported by parse-diff",
 		},
 	}
 	for _, tc := range tests {
@@ -183,15 +182,22 @@ func TestParseDiffSupportedAgentsIncludesProviderAuthoritativeAgents(t *testing.
 	// current provider-authoritative agent and stays correct as the migration
 	// manifest changes, rather than a hand-maintained subset. FileBased is not
 	// part of the gate: DB-backed provider-authoritative agents
-	// (Forge/Piebald/Warp) are re-parseable through their providers too.
+	// (Forge/Devin/Piebald/Warp) are re-parseable through their providers too.
 	checked := 0
 	for _, def := range parser.Registry {
 		if modes[def.Type] != parser.ProviderMigrationProviderAuthoritative {
 			continue
 		}
+		if _, ok := parser.ProviderFactoryByType(def.Type); !ok {
+			assert.False(t, parseDiffAgentSupported(def),
+				"parse-diff must exclude %s without a provider factory", def.Type)
+			assert.NotContains(t, supported, string(def.Type),
+				"parse-diff supported list must exclude %s without a provider factory", def.Type)
+			continue
+		}
 		checked++
 		assert.True(t, parseDiffAgentSupported(def),
-			"parse-diff support must include provider-authoritative %s", def.Type)
+			"parse-diff support must include %s", def.Type)
 		assert.Contains(t, supported, string(def.Type),
 			"parse-diff supported list must include %s", def.Type)
 	}
@@ -202,7 +208,8 @@ func TestParseDiffSupportedAgentsIncludesProviderAuthoritativeAgents(t *testing.
 	// regression that re-adds a FileBased gate to the parse-diff support
 	// check is caught by name, not just by the registry-wide sweep above.
 	for _, agent := range []parser.AgentType{
-		parser.AgentForge, parser.AgentPiebald, parser.AgentWarp,
+		parser.AgentForge, parser.AgentDevin,
+		parser.AgentPiebald, parser.AgentWarp,
 	} {
 		def, ok := parser.AgentByType(agent)
 		require.True(t, ok, "agent %s", agent)

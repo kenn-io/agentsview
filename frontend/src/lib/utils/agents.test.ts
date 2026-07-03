@@ -14,6 +14,7 @@ describe("KNOWN_AGENTS", () => {
       "cowork",
       "codex",
       "copilot",
+      "devin",
       "gemini",
       "opencode",
       "openhands",
@@ -61,6 +62,9 @@ describe("agentColor", () => {
     );
     expect(agentColor("copilot")).toBe(
       "var(--accent-amber)",
+    );
+    expect(agentColor("devin")).toBe(
+      "var(--accent-red)",
     );
     expect(agentColor("gemini")).toBe(
       "var(--accent-rose)",
@@ -156,6 +160,7 @@ describe("agentLabel", () => {
       "Visual Studio Copilot",
     );
     expect(agentLabel("openhands")).toBe("OpenHands");
+    expect(agentLabel("devin")).toBe("Devin");
     expect(agentLabel("openclaw")).toBe("OpenClaw");
     expect(agentLabel("qclaw")).toBe("QClaw");
     expect(agentLabel("iflow")).toBe("iFlow");

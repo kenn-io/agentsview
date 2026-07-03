@@ -1139,7 +1139,7 @@ Settings are organized into sections:
 |---------|----------------------|
 | Language | Interface language (English or Simplified Chinese) |
 | Appearance | Theme (light/dark), high-contrast mode, message layout, text size, block visibility, desktop zoom level |
-| Agent Directories | Custom paths for each agent's session files |
+| Agent Directories | Custom paths for each agent's session files. For Devin CLI, point at the local root that contains `cli/` (for example a redacted `.../Application Support/devin` path), not copied config or OAuth files. |
 | Terminal | Default terminal emulator for session resume |
 | Worktree Mappings | Map worktree paths back to their main project (see [Worktree Project Mappings](/configuration/#worktree-project-mappings)) |
 | GitHub | Personal access token for Gist publishing |

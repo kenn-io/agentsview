@@ -47,6 +47,7 @@ var providerMigrationModes = map[AgentType]ProviderMigrationMode{
 	AgentHermes:         ProviderMigrationProviderAuthoritative,
 	AgentWorkBuddy:      ProviderMigrationProviderAuthoritative,
 	AgentForge:          ProviderMigrationProviderAuthoritative,
+	AgentDevin:          ProviderMigrationProviderAuthoritative,
 	AgentPiebald:        ProviderMigrationProviderAuthoritative,
 	AgentWarp:           ProviderMigrationProviderAuthoritative,
 	AgentPositron:       ProviderMigrationProviderAuthoritative,

@@ -20,28 +20,35 @@ func TestBuildResolveScript(t *testing.T) {
 	assert.Contains(t, script, "CLAUDE_PROJECTS_DIR")
 	assert.Contains(t, script, "CLAUDE_CONFIG_DIR")
 
-	// Non-file-based agents must not appear.
+	// Only file-backed provider-authoritative agents belong in the resolver.
 	for _, def := range parser.Registry {
-		if def.FileBased {
+		marker := "\"" + string(def.Type) + ":"
+		want := def.FileBased &&
+			parser.ProviderMigrationModes()[def.Type] ==
+				parser.ProviderMigrationProviderAuthoritative
+		if want {
+			assert.Contains(t, script, marker,
+				"file-backed provider-authoritative agent %s missing from script", def.Type)
 			continue
 		}
-		marker := "\"" + string(def.Type) + ":"
 		assert.NotContains(t, script, marker,
-			"non-file-based agent %s in script", def.Type)
+			"unsupported agent %s must stay out of the SSH resolver", def.Type)
 	}
+}
 
-	// Every file-based, provider-authoritative agent has on-disk source
-	// roots that SSH sync must transfer, so it must appear in the script.
-	for _, def := range parser.Registry {
-		if !def.FileBased ||
-			parser.ProviderMigrationModes()[def.Type] !=
-				parser.ProviderMigrationProviderAuthoritative {
-			continue
-		}
-		marker := "\"" + string(def.Type) + ":"
-		assert.Contains(t, script, marker,
-			"provider-authoritative agent %s missing from script", def.Type)
-	}
+func TestResolveScriptExcludesDevinProviderRoot(t *testing.T) {
+	home := t.TempDir()
+	devinRoot := filepath.Join(home, ".local", "share", "devin")
+	require.NoError(t, os.MkdirAll(devinRoot, 0o755))
+
+	script := buildResolveScript()
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Env = []string{"HOME=" + home, "DEVIN_DIR=" + devinRoot}
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "resolve script failed: output: %s", out)
+
+	dirs, _ := parseResolvedDirs(string(out))
+	assert.NotContains(t, dirs, parser.AgentDevin)
 }
 
 func TestResolveScriptHonorsClaudeConfigDirRoot(t *testing.T) {

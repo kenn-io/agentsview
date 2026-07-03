@@ -242,8 +242,7 @@ func parseDiffAgentTypes(names []string) ([]parser.AgentType, error) {
 		}
 		if !parseDiffAgentSupported(def) {
 			return nil, fmt.Errorf(
-				"agent %q is not supported by parse-diff "+
-					"(no on-disk source to re-parse)",
+				"agent %q is not supported by parse-diff",
 				raw,
 			)
 		}
@@ -270,9 +269,9 @@ func parseDiffAgentSupported(def parser.AgentDef) bool {
 	// A provider-authoritative agent with a registered factory has a
 	// Discover()/Parse() parse-diff can re-parse, whether it reads literal
 	// per-session files or a shared SQLite store it fans out per session
-	// (Kiro, OpenCode, Forge, Piebald, Warp). FileBased is not consulted:
-	// import-only agents are already excluded because they are not
-	// provider-authoritative.
+	// (Kiro, OpenCode, Forge, Devin, Piebald, Warp). FileBased is not
+	// consulted: import-only agents are already excluded because they are
+	// not provider-authoritative.
 	switch parser.ProviderMigrationModes()[def.Type] {
 	case parser.ProviderMigrationProviderAuthoritative:
 		_, ok := parser.ProviderFactoryByType(def.Type)

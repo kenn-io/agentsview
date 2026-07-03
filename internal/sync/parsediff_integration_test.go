@@ -810,14 +810,15 @@ func TestParseDiffAgentScope(t *testing.T) {
 	assert.Equal(t, []string{"codex"}, report.Agents,
 		"report.Agents must reflect the scoped run")
 
-	// Database-backed agents have no on-disk source to re-parse.
+	// Import-only agents are outside parse-diff support.
 	_, err = engine.ParseDiff(
 		context.Background(), sync.ParseDiffOptions{
 			Agents: []parser.AgentType{parser.AgentClaudeAI},
 		},
 	)
 	require.Error(t, err,
-		"ParseDiff must reject database-backed agents")
+		"ParseDiff must reject import-only agents")
+	assert.ErrorContains(t, err, "is not supported by parse-diff")
 }
 
 func TestParseDiffCoversProviderAuthoritativePiFamily(t *testing.T) {

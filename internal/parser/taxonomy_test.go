@@ -26,6 +26,7 @@ func TestNormalizeToolCategory(t *testing.T) {
 		// Codex tools
 		{"shell_command", "Bash"},
 		{"exec_command", "Bash"},
+		{"list_files", "Read"},
 		{"apply_patch", "Edit"},
 		{"write_stdin", "Bash"},
 		{"shell", "Bash"},

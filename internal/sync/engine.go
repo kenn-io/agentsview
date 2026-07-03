@@ -3796,6 +3796,7 @@ func (e *Engine) processProviderFile(
 			noCacheSkip: true,
 		}, true
 	}
+	applyProviderFingerprintFileInfo(file.Agent, fingerprint, outcome.Results)
 	cleanCache := providerOutcomeAllowsCleanSkipCache(outcome)
 	if outcome.SkipReason != parser.SkipNone {
 		excludedSessionIDs := append([]string(nil), outcome.ExcludedSessionIDs...)
@@ -7349,17 +7350,19 @@ func (e *Engine) findProviderSourceFile(
 	return providerDiscoveredPath(source)
 }
 
-// providerSourceMtime resolves the source-backed mtime for a DB-backed
-// provider session through the provider facade. The provider fingerprint
-// mirrors the legacy List*SessionMeta last-modified value. Piebald fork IDs
-// (piebald:<chat>-<row>) resolve to their base chat source, so a fork is
-// confirmed by parsing the chat and checking the requested session ID is
-// actually produced before returning the chat mtime.
-func (e *Engine) providerDBSourceMtime(
+// providerSessionSourceMtime resolves a session's authoritative source-backed
+// mtime through the provider facade. It is used for sessions whose stored
+// file_path is provider-owned (for example a virtual <db>#<sessionID> path), so
+// SourceMtime stays on the same composite fingerprint basis sync uses for DB
+// freshness checks. Piebald fork IDs (piebald:<chat>-<row>) resolve to their
+// base chat source, so a fork is confirmed by parsing the chat and checking the
+// requested session ID is actually produced before returning the chat mtime.
+func (e *Engine) providerSessionSourceMtime(
 	ctx context.Context,
 	def parser.AgentDef,
 	sessionID string,
 	rawSessionID string,
+	storedPath string,
 ) int64 {
 	factory, ok := e.providerFactories[def.Type]
 	if !ok || factory == nil {
@@ -7370,8 +7373,12 @@ func (e *Engine) providerDBSourceMtime(
 		Machine: e.machine,
 	})
 	source, found, err := provider.FindSource(ctx, parser.FindSourceRequest{
-		RawSessionID:  rawSessionID,
-		FullSessionID: sessionID,
+		RawSessionID:       rawSessionID,
+		FullSessionID:      sessionID,
+		StoredFilePath:     storedPath,
+		FingerprintKey:     storedPath,
+		RequireFreshSource: true,
+		PreferStoredSource: true,
 	})
 	if err != nil {
 		log.Printf("%s provider source mtime lookup: %v", def.Type, err)
@@ -7400,6 +7407,10 @@ func (e *Engine) providerDBSourceMtime(
 		}
 	}
 	return fingerprint.MTimeNS
+}
+
+func providerSourcePathNeedsFingerprint(path string) bool {
+	return path != "" && parser.ResolveSourceFilePath(path) != path
 }
 
 // providerSessionIsFork reports whether the session ID addresses a fork child
@@ -7476,8 +7487,8 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 		// (which mirrors the legacy List*SessionMeta last-modified value).
 		// Non-provider, non-file-based agents have no local source.
 		if e.isProviderAuthoritative(def.Type) {
-			return e.providerDBSourceMtime(
-				context.Background(), def, sessionID, rawSessionID,
+			return e.providerSessionSourceMtime(
+				context.Background(), def, sessionID, rawSessionID, "",
 			)
 		}
 		return 0
@@ -7486,6 +7497,14 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 	path := e.FindSourceFile(sessionID)
 	if path == "" {
 		return 0
+	}
+	if e.isProviderAuthoritative(def.Type) &&
+		providerSourcePathNeedsFingerprint(path) {
+		if mtime := e.providerSessionSourceMtime(
+			context.Background(), def, sessionID, rawSessionID, path,
+		); mtime != 0 {
+			return mtime
+		}
 	}
 	if isS3SourcePath(path) {
 		stat := statS3Object
@@ -7596,6 +7615,27 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 		return 0
 	}
 	return info.ModTime().UnixNano()
+}
+
+func applyProviderFingerprintFileInfo(
+	agent parser.AgentType,
+	fingerprint parser.SourceFingerprint,
+	results []parser.ParseResultOutcome,
+) {
+	if agent != parser.AgentDevin {
+		return
+	}
+	for i := range results {
+		if fingerprint.Size != 0 {
+			results[i].Result.Session.File.Size = fingerprint.Size
+		}
+		if fingerprint.MTimeNS != 0 {
+			results[i].Result.Session.File.Mtime = fingerprint.MTimeNS
+		}
+		if fingerprint.Hash != "" {
+			results[i].Result.Session.File.Hash = fingerprint.Hash
+		}
+	}
 }
 
 // SyncSingleSession re-syncs a single session by its ID and
