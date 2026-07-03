@@ -8059,6 +8059,124 @@ func TestIncrementalSync_ClaudePathRewriterIgnoresTempInodeChange(t *testing.T) 
 	})
 }
 
+// TestIncrementalSync_ClaudePathRewriterSameSizeSameMtimeRewrite covers the
+// remote (path-rewritten) equivalent of the same-size, same-mtime in-place
+// rewrite. A remote re-download always lands on a fresh inode, so the inode net
+// is disabled for path-rewritten sources; only the content hash can tell an
+// unchanged re-download from a rewrite that kept the same size and mtime. The
+// content guard hashes the materialized download, so an unchanged copy must
+// still skip while a genuine same-size same-mtime rewrite must full-parse.
+func TestIncrementalSync_ClaudePathRewriterSameSizeSameMtimeRewrite(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("identity tracking is a no-op on Windows")
+	}
+
+	original := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("first", tsZero),
+		testjsonl.ClaudeAssistantJSON("alpha", tsZeroS5),
+	)
+	changed := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("third", tsZero),
+		testjsonl.ClaudeAssistantJSON("bravo", tsZeroS5),
+	)
+	require.Len(t, changed, len(original), "fixtures must keep same byte size")
+
+	const remoteRoot = "/home/test/.claude/projects"
+	mkRewriter := func(roots ...string) func(string) string {
+		return func(p string) string {
+			for _, root := range roots {
+				rel, err := filepath.Rel(root, p)
+				if err == nil && !strings.HasPrefix(rel, "..") {
+					return "host:" + filepath.ToSlash(
+						filepath.Join(remoteRoot, rel),
+					)
+				}
+			}
+			return "host:" + filepath.ToSlash(p)
+		}
+	}
+
+	tests := []struct {
+		name          string
+		second        string
+		wantSynced    int
+		wantSkipped   int
+		wantUser      string
+		wantAssistant string
+	}{
+		{
+			name:          "unchanged re-download skips",
+			second:        original,
+			wantSynced:    0,
+			wantSkipped:   1,
+			wantUser:      "first",
+			wantAssistant: "alpha",
+		},
+		{
+			name:          "same-size same-mtime rewrite full-parses",
+			second:        changed,
+			wantSynced:    1,
+			wantSkipped:   0,
+			wantUser:      "third",
+			wantAssistant: "bravo",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database := dbtest.OpenTestDB(t)
+			firstRoot := t.TempDir()
+			secondRoot := t.TempDir()
+			rewriter := mkRewriter(firstRoot, secondRoot)
+
+			firstPath := filepath.Join(firstRoot, "proj", "remote-rewrite.jsonl")
+			dbtest.WriteTestFile(t, firstPath, []byte(original))
+			firstInfo, err := os.Stat(firstPath)
+			require.NoError(t, err, "stat first temp copy")
+			firstEngine := sync.NewEngine(database, sync.EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentClaude: {firstRoot},
+				},
+				Machine:      "host",
+				IDPrefix:     "host~",
+				PathRewriter: rewriter,
+				Ephemeral:    true,
+			})
+			runSyncAndAssert(t, firstEngine, sync.SyncStats{
+				TotalSessions: 1, Synced: 1,
+			})
+
+			// Second temp copy: same byte size, same mtime, different inode.
+			// Only the content differs (or not, per the case).
+			secondPath := filepath.Join(secondRoot, "proj", "remote-rewrite.jsonl")
+			dbtest.WriteTestFile(t, secondPath, []byte(tt.second))
+			require.NoError(t,
+				os.Chtimes(secondPath, firstInfo.ModTime(), firstInfo.ModTime()),
+				"preserve remote mtime on second temp copy",
+			)
+			secondEngine := sync.NewEngine(database, sync.EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentClaude: {secondRoot},
+				},
+				Machine:      "host",
+				IDPrefix:     "host~",
+				PathRewriter: rewriter,
+				Ephemeral:    true,
+			})
+			runSyncAndAssert(t, secondEngine, sync.SyncStats{
+				TotalSessions: 1,
+				Synced:        tt.wantSynced,
+				Skipped:       tt.wantSkipped,
+			})
+
+			msgs := fetchMessages(t, database, "host~remote-rewrite")
+			require.Len(t, msgs, 2)
+			assert.Equal(t, tt.wantUser, msgs[0].Content)
+			assert.Equal(t, tt.wantAssistant, msgs[1].Content)
+		})
+	}
+}
+
 func TestIncrementalSync_ClaudeSameSizeInPlaceRewriteClearsStaleRows(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 

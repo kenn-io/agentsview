@@ -4482,8 +4482,14 @@ func (e *Engine) providerSingleSessionFresh(
 	if e.pathRewriter != nil {
 		lookupPath = e.pathRewriter(path)
 	}
+	// statPath is the on-disk file the stat came from: lookupPath when it
+	// resolves (local sync, where lookupPath == path), otherwise the physical
+	// source path (remote sync rewrites path to a non-local logical key). The
+	// content guard below hashes statPath, so it must be the openable file.
+	statPath := lookupPath
 	info, err := os.Stat(lookupPath)
 	if err != nil {
+		statPath = path
 		info, err = os.Stat(path)
 		if err != nil {
 			return 0, false, false
@@ -4496,7 +4502,7 @@ func (e *Engine) providerSingleSessionFresh(
 		return 0, false, true
 	}
 	if e.providerIncrementalContentChanged(
-		e.idPrefix+sessionID, lookupPath, info,
+		e.idPrefix+sessionID, statPath, info,
 	) {
 		return 0, false, true
 	}
@@ -4525,25 +4531,30 @@ func (e *Engine) providerIncrementalIdentityChanged(
 // guard against a same-size, same-mtime, same-inode in-place rewrite: two
 // fast writes landing in one filesystem mtime granule (or a coarse-mtime
 // filesystem) leave every stat signal identical, so only the content hash
-// distinguishes a genuine rewrite from an unchanged file. The stored file_hash
-// covers the stored file_size byte range, which shouldSkipFile has already
-// confirmed equals the current size, so the on-disk prefix hash is directly
-// comparable. Rows without a stored hash (legacy or non-fingerprinted) fall
-// back to trusting the size/mtime/identity signals, preserving prior behavior.
+// distinguishes a genuine rewrite from an unchanged file.
+//
+// hashPath is the physical file the stat came from -- the local path for
+// local sources, the materialized download for remote (path-rewritten)
+// sources. The stored file_hash is computed over those same materialized
+// bytes on both the full-parse (hashJSONLSourceFile) and incremental
+// (ComputeFileHashPrefix) paths, so the on-disk prefix hash is directly
+// comparable regardless of the logical key the row is stored under. That is
+// also why this is the correct freshness signal for remote sync: every
+// re-download gets a fresh inode, so the inode net is disabled to avoid a
+// false-positive re-parse, but identical content still hashes equal here while
+// a genuine rewrite does not. shouldSkipFile has already confirmed the stored
+// file_size equals the current size, so the prefix hash covers the stored byte
+// range. Rows without a stored hash (legacy or non-fingerprinted) fall back to
+// trusting the size/mtime/identity signals, preserving prior behavior.
 func (e *Engine) providerIncrementalContentChanged(
-	fullID, lookupPath string,
+	fullID, hashPath string,
 	info os.FileInfo,
 ) bool {
-	if e.pathRewriter != nil {
-		// Remote imports translate per-run temp paths; the stored hash is the
-		// remote source fingerprint and freshness is handled on that path.
-		return false
-	}
 	storedHash, ok := e.db.GetSessionFileHash(fullID)
 	if !ok || storedHash == "" {
 		return false
 	}
-	curHash, err := ComputeFileHashPrefix(lookupPath, info.Size())
+	curHash, err := ComputeFileHashPrefix(hashPath, info.Size())
 	if err != nil {
 		return false
 	}
