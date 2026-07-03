@@ -100,8 +100,8 @@ func TestParseBench(t *testing.T) {
 
 func testGates() []gate {
 	return []gate{
-		{unit: "allocs/op", maxRatio: 1.25, floor: 64},
-		{unit: "B/op", maxRatio: 1.35, floor: 16_384},
+		{unit: "allocs/op", maxRatio: 1.25, floor: 64, worstCase: true},
+		{unit: "B/op", maxRatio: 1.35, floor: 16_384, worstCase: true},
 		{
 			unit: "sec/op", maxRatio: 2.0, floor: 100_000e-9,
 			needSignificance: true,
@@ -251,20 +251,38 @@ func TestCompare(t *testing.T) {
 	}
 }
 
-// TestCompareMedianAcrossCounts pins that repeated -count runs are
-// summarized by their median, so one outlier run cannot fail the
-// gate on its own.
-func TestCompareMedianAcrossCounts(t *testing.T) {
-	old := benchSamples{
-		"BenchmarkFoo-8": {"allocs/op": {1000, 1000, 1000, 1000, 1000}},
-	}
-	// One wild outlier among otherwise-unchanged runs: the median
-	// stays 1000 and the gate must pass.
-	next := benchSamples{
-		"BenchmarkFoo-8": {"allocs/op": {1000, 1000, 9000, 1000, 1000}},
-	}
-	_, violations := compare(old, next, testGates())
-	assert.Empty(t, violations)
+// TestCompareOutlierRunPolicy pins the split policy for a single
+// outlier among repeated -count runs of one benchmark. allocs/op is
+// deterministic for identical code and iteration counts, so one
+// outlier run means a real intermittent allocation path and must
+// fail even though the median is unchanged. Wall-clock time is
+// summarized by its median, so one slow run on a noisy runner cannot
+// fail the gate on its own.
+func TestCompareOutlierRunPolicy(t *testing.T) {
+	t.Run("alloc outlier run fails", func(t *testing.T) {
+		old := benchSamples{
+			"BenchmarkFoo-8": {"allocs/op": {1000, 1000, 1000, 1000, 1000}},
+		}
+		next := benchSamples{
+			"BenchmarkFoo-8": {"allocs/op": {1000, 1000, 9000, 1000, 1000}},
+		}
+		_, violations := compare(old, next, testGates())
+		require.Len(t, violations, 1)
+		assert.Equal(t, "allocs/op", violations[0].unit)
+		assert.InDelta(t, 9000, violations[0].new, 1e-9,
+			"the worst run is what gets gated")
+	})
+
+	t.Run("time outlier run does not fail", func(t *testing.T) {
+		old := benchSamples{
+			"BenchmarkFoo-8": {"sec/op": noisy(1e-3, 6)},
+		}
+		next := benchSamples{
+			"BenchmarkFoo-8": {"sec/op": append(noisy(1e-3, 5), 9e-3)},
+		}
+		_, violations := compare(old, next, testGates())
+		assert.Empty(t, violations)
+	})
 }
 
 func TestViolationString(t *testing.T) {

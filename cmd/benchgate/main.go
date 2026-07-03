@@ -20,9 +20,14 @@
 // regression.
 //
 // Multiple runs of the same benchmark (-count=N) are kept as a
-// sample and summarized by their median. Benchmarks present on only
-// one side are reported but never fail the gate, so adding or
-// removing benchmarks in a PR does not wedge it.
+// sample. The baseline is summarized by its median; the candidate is
+// gated on its median for time but on its WORST run for allocs/op
+// and B/op — those are deterministic, so a single outlier run there
+// is a real intermittent allocation path, not noise, and must fail.
+// Gating is per benchmark: any one benchmark over its threshold
+// fails the gate; there is no cross-benchmark averaging. Benchmarks
+// present on only one side are reported but never fail the gate, so
+// adding or removing benchmarks in a PR does not wedge it.
 package main
 
 import (
@@ -46,15 +51,19 @@ import (
 type benchSamples map[string]map[string][]float64
 
 // gate is one metric's regression rule: fail when the candidate
-// median exceeds the baseline median by more than maxRatio, unless
-// the baseline is below floor (too small to compare meaningfully).
-// With needSignificance set, the samples must also differ
-// significantly under the benchmath comparison test — the benchstat
-// noise guard, used for wall-clock time.
+// exceeds the baseline median by more than maxRatio, unless the
+// baseline is below floor (too small to compare meaningfully). With
+// worstCase set, the candidate is judged by its worst (highest) run
+// rather than its median — for deterministic metrics, where any
+// outlier run is a real intermittent code path. With
+// needSignificance set, the samples must also differ significantly
+// under the benchmath comparison test — the benchstat noise guard,
+// used for wall-clock time.
 type gate struct {
 	unit             string
 	maxRatio         float64
 	floor            float64
+	worstCase        bool
 	needSignificance bool
 }
 
@@ -140,6 +149,11 @@ func compare(
 				Summary(oldSample, 0.95).Center
 			newCenter := benchmath.AssumeNothing.
 				Summary(newSample, 0.95).Center
+			if g.worstCase {
+				// Samples are sorted ascending; the worst
+				// candidate run is the last one.
+				newCenter = newSample.Values[len(newSample.Values)-1]
+			}
 			cls := benchunit.ClassOf(g.unit)
 
 			if oldCenter <= 0 || oldCenter < g.floor {
@@ -156,15 +170,26 @@ func compare(
 			ratio := newCenter / oldCenter
 			cmp := benchmath.AssumeNothing.Compare(oldSample, newSample)
 			significant := cmp.P < cmp.Alpha
-			detail := fmt.Sprintf(
-				"%s %s -> %s (%.2fx, limit %.2fx, %s)",
-				g.unit,
-				benchunit.Scale(oldCenter, cls),
-				benchunit.Scale(newCenter, cls),
-				ratio, g.maxRatio, cmp,
-			)
-			if g.needSignificance && !significant {
-				detail += " [not significant, not gated]"
+			var detail string
+			if g.worstCase {
+				detail = fmt.Sprintf(
+					"%s %s -> %s (%.2fx, limit %.2fx, worst of %d run(s))",
+					g.unit,
+					benchunit.Scale(oldCenter, cls),
+					benchunit.Scale(newCenter, cls),
+					ratio, g.maxRatio, len(newSample.Values),
+				)
+			} else {
+				detail = fmt.Sprintf(
+					"%s %s -> %s (%.2fx, limit %.2fx, %s)",
+					g.unit,
+					benchunit.Scale(oldCenter, cls),
+					benchunit.Scale(newCenter, cls),
+					ratio, g.maxRatio, cmp,
+				)
+				if g.needSignificance && !significant {
+					detail += " [not significant, not gated]"
+				}
 			}
 			parts = append(parts, detail)
 
@@ -260,8 +285,18 @@ func main() {
 	}
 
 	gates := []gate{
-		{unit: "allocs/op", maxRatio: *maxAllocRatio, floor: *allocFloor},
-		{unit: "B/op", maxRatio: *maxBytesRatio, floor: *bytesFloor},
+		{
+			unit:      "allocs/op",
+			maxRatio:  *maxAllocRatio,
+			floor:     *allocFloor,
+			worstCase: true,
+		},
+		{
+			unit:      "B/op",
+			maxRatio:  *maxBytesRatio,
+			floor:     *bytesFloor,
+			worstCase: true,
+		},
 		{
 			unit:             "sec/op",
 			maxRatio:         *maxTimeRatio,
