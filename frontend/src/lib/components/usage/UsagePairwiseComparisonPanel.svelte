@@ -1,7 +1,5 @@
 <script lang="ts">
-  import OptionTypeahead, {
-    type TypeaheadOption,
-  } from "../layout/OptionTypeahead.svelte";
+  import { Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
   import { usage } from "../../stores/usage.svelte.js";
   import { m } from "../../i18n/index.js";
   import type { UsagePairwiseDimension } from "../../api/types/usage.js";
@@ -183,7 +181,7 @@
         <label>
           <span>{m.usage_pairwise_dimension()}</span>
           <div class="pairwise-typeahead">
-            <OptionTypeahead
+            <Typeahead
               options={dimensionOptions}
               value={usage.pairwiseSelection.left.dimension}
               fallbackLabel={dimensionLabel(usage.pairwiseSelection.left.dimension)}
@@ -201,7 +199,7 @@
         <label>
           <span>{m.usage_pairwise_value()}</span>
           <div class="pairwise-typeahead">
-            <OptionTypeahead
+            <Typeahead
               options={typeaheadOptionsFor(usage.pairwiseSelection.left.dimension)}
               value={usage.pairwiseSelection.left.value}
               fallbackLabel={usage.pairwiseSelection.left.value || m.usage_pairwise_select_value()}
@@ -225,7 +223,7 @@
         <label>
           <span>{m.usage_pairwise_dimension()}</span>
           <div class="pairwise-typeahead">
-            <OptionTypeahead
+            <Typeahead
               options={dimensionOptions}
               value={usage.pairwiseSelection.right.dimension}
               fallbackLabel={dimensionLabel(usage.pairwiseSelection.right.dimension)}
@@ -243,7 +241,7 @@
         <label>
           <span>{m.usage_pairwise_value()}</span>
           <div class="pairwise-typeahead">
-            <OptionTypeahead
+            <Typeahead
               options={typeaheadOptionsFor(usage.pairwiseSelection.right.dimension)}
               value={usage.pairwiseSelection.right.value}
               fallbackLabel={usage.pairwiseSelection.right.value || m.usage_pairwise_select_value()}
@@ -270,11 +268,11 @@
       </button>
     </div>
   {:else if !hasSelection}
-    <div class="empty-state">
+    <div class="pairwise-note">
       {m.usage_pairwise_not_enough_data()}
     </div>
   {:else if usage.loading.pairwise && rows.length === 0}
-    <div class="empty-state">{m.shared_refresh()}</div>
+    <div class="pairwise-note">{m.shared_refresh()}</div>
   {:else if rows.length > 0}
     <div class="table-wrap">
       <table>
@@ -361,7 +359,7 @@
   .side-controls {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
+    gap: var(--space-5);
   }
 
   label {
@@ -374,9 +372,8 @@
 
   .pairwise-typeahead {
     min-width: 0;
-  }
-
-  .pairwise-typeahead :global(.typeahead) {
+    /* Custom properties inherit into the child kit-ui .kit-typeahead, so the
+       trigger fills its label column instead of kit-ui's default 180-300px. */
     --typeahead-min-width: 100%;
     --typeahead-max-width: 100%;
   }
@@ -423,7 +420,7 @@
     font-size: 11px;
   }
 
-  .empty-state,
+  .pairwise-note,
   .error-bar {
     padding: 12px;
     border: 1px solid var(--border-muted);
@@ -455,7 +452,7 @@
     color: var(--accent-red-foreground);
   }
 
-  @media (max-width: 800px) {
+  @media (max-width: 760px) {
     .selectors,
     .side-controls {
       grid-template-columns: 1fr;
