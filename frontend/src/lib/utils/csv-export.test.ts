@@ -111,6 +111,7 @@ describe("generateAnalyticsCSV", () => {
         { category: "Write", count: 40, pct: 40 },
       ],
       by_agent: [],
+      by_tool: [],
       trend: [],
     };
 
@@ -160,6 +161,7 @@ describe("generateAnalyticsCSV", () => {
         { category: "Read", count: 1, pct: 100 },
       ],
       by_agent: [],
+      by_tool: [],
       trend: [],
     };
 

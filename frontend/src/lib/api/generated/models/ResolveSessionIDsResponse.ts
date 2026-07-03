@@ -2,7 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-export type UnsupportedUsage = {
-  kind: string;
+export type ResolveSessionIDsResponse = {
+  ids: any[] | null;
 };
 

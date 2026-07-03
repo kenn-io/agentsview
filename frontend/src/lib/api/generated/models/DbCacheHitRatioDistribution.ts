@@ -2,7 +2,8 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-export type UnsupportedUsage = {
-  kind: string;
+export type DbCacheHitRatioDistribution = {
+  buckets: any[] | null;
+  overall: number;
 };
 

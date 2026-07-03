@@ -20,3 +20,4 @@ export type UsageSummaryResponse = {
   totals: DbUsageTotals;
   unsupportedUsage?: UnsupportedUsage;
 };
+

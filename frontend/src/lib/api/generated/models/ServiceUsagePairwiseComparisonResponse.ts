@@ -9,3 +9,4 @@ export type ServiceUsagePairwiseComparisonResponse = {
   left: ServiceUsagePairwiseComparisonSide;
   right: ServiceUsagePairwiseComparisonSide;
 };
+

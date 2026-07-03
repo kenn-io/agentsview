@@ -2582,6 +2582,15 @@ type ToolAgentBreakdown struct {
 	Categories []ToolCategoryCount `json:"categories"`
 }
 
+// ToolUsageAnalysis holds ranked usage for one concrete tool name.
+type ToolUsageAnalysis struct {
+	ToolName     string  `json:"tool_name"`
+	Category     string  `json:"category"`
+	CallCount    int     `json:"call_count"`
+	SessionCount int     `json:"session_count"`
+	Pct          float64 `json:"pct"`
+}
+
 // ToolTrendEntry holds tool call counts for one time bucket.
 type ToolTrendEntry struct {
 	Date  string         `json:"date"`
@@ -2593,6 +2602,7 @@ type ToolsAnalyticsResponse struct {
 	TotalCalls int                  `json:"total_calls"`
 	ByCategory []ToolCategoryCount  `json:"by_category"`
 	ByAgent    []ToolAgentBreakdown `json:"by_agent"`
+	ByTool     []ToolUsageAnalysis  `json:"by_tool"`
 	Trend      []ToolTrendEntry     `json:"trend"`
 }
 
@@ -2643,6 +2653,13 @@ type SkillAnalyticsRow struct {
 	Date       string
 	LastUsedAt string
 	Count      int
+}
+
+type toolUsageAccumulator struct {
+	toolName   string
+	category   string
+	callCount  int
+	sessionIDs map[string]struct{}
 }
 
 type skillUsageAccumulator struct {
@@ -2799,7 +2816,8 @@ func analyticsToolsQuery(
 	modelPred string,
 	includeMessageMeta bool,
 ) string {
-	query := `SELECT tc.session_id, tc.category, COUNT(*)`
+	query := `SELECT tc.session_id, tc.category,
+			TRIM(COALESCE(tc.tool_name, '')), COUNT(*)`
 	if includeMessageMeta {
 		query += `, COALESCE(m.timestamp, '')`
 	}
@@ -2817,7 +2835,8 @@ func analyticsToolsQuery(
 			AND ` + modelPred
 	}
 	query += `
-		GROUP BY tc.session_id, tc.category`
+		GROUP BY tc.session_id, tc.category,
+			TRIM(COALESCE(tc.tool_name, ''))`
 	if includeMessageMeta {
 		query += `, COALESCE(m.timestamp, '')`
 	}
@@ -2888,6 +2907,7 @@ func (db *DB) GetAnalyticsTools(
 	resp := ToolsAnalyticsResponse{
 		ByCategory: []ToolCategoryCount{},
 		ByAgent:    []ToolAgentBreakdown{},
+		ByTool:     []ToolUsageAnalysis{},
 		Trend:      []ToolTrendEntry{},
 	}
 
@@ -2899,6 +2919,7 @@ func (db *DB) GetAnalyticsTools(
 	type toolRow struct {
 		sessionID string
 		category  string
+		toolName  string
 		count     int
 		date      string
 	}
@@ -2922,10 +2943,10 @@ func (db *DB) GetAnalyticsTools(
 			}
 			defer rows.Close()
 			for rows.Next() {
-				var sid, cat, ts string
+				var sid, cat, toolName, ts string
 				var count int
 				if err := rows.Scan(
-					&sid, &cat, &count, &ts,
+					&sid, &cat, &toolName, &count, &ts,
 				); err != nil {
 					return fmt.Errorf(
 						"scanning tool_call: %w", err,
@@ -2944,6 +2965,7 @@ func (db *DB) GetAnalyticsTools(
 				toolRows = append(toolRows, toolRow{
 					sessionID: sid,
 					category:  cat,
+					toolName:  toolName,
 					count:     count,
 					date:      date,
 				})
@@ -2962,6 +2984,7 @@ func (db *DB) GetAnalyticsTools(
 	catCounts := make(map[string]int)
 	agentCats := make(map[string]map[string]int)    // agent → cat → count
 	trendBuckets := make(map[string]map[string]int) // week → cat → count
+	toolCounts := make(map[string]*toolUsageAccumulator)
 
 	for _, tr := range toolRows {
 		info := sessionMap[tr.sessionID]
@@ -2977,6 +3000,23 @@ func (db *DB) GetAnalyticsTools(
 			trendBuckets[week] = make(map[string]int)
 		}
 		trendBuckets[week][tr.category] += tr.count
+
+		name := tr.toolName
+		if name == "" {
+			name = "Unknown"
+		}
+		key := tr.category + "\x00" + name
+		acc := toolCounts[key]
+		if acc == nil {
+			acc = &toolUsageAccumulator{
+				toolName:   name,
+				category:   tr.category,
+				sessionIDs: map[string]struct{}{},
+			}
+			toolCounts[key] = acc
+		}
+		acc.callCount += tr.count
+		acc.sessionIDs[tr.sessionID] = struct{}{}
 	}
 
 	for _, count := range catCounts {
@@ -3054,6 +3094,29 @@ func (db *DB) GetAnalyticsTools(
 	}
 	sort.Slice(resp.Trend, func(i, j int) bool {
 		return resp.Trend[i].Date < resp.Trend[j].Date
+	})
+
+	resp.ByTool = make([]ToolUsageAnalysis, 0, len(toolCounts))
+	for _, acc := range toolCounts {
+		pct := math.Round(
+			float64(acc.callCount)/float64(resp.TotalCalls)*1000,
+		) / 10
+		resp.ByTool = append(resp.ByTool, ToolUsageAnalysis{
+			ToolName:     acc.toolName,
+			Category:     acc.category,
+			CallCount:    acc.callCount,
+			SessionCount: len(acc.sessionIDs),
+			Pct:          pct,
+		})
+	}
+	sort.Slice(resp.ByTool, func(i, j int) bool {
+		if resp.ByTool[i].CallCount != resp.ByTool[j].CallCount {
+			return resp.ByTool[i].CallCount > resp.ByTool[j].CallCount
+		}
+		if resp.ByTool[i].ToolName != resp.ByTool[j].ToolName {
+			return resp.ByTool[i].ToolName < resp.ByTool[j].ToolName
+		}
+		return resp.ByTool[i].Category < resp.ByTool[j].Category
 	})
 
 	return resp, nil

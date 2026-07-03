@@ -1,6 +1,9 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
-  import type { ToolCategoryCount } from "../../api/types.js";
+  import type {
+    ToolCategoryCount,
+    ToolUsageAnalysis,
+  } from "../../api/types.js";
   import { m } from "../../i18n/index.js";
 
   const CATEGORY_COLORS: Record<string, string> = {
@@ -29,6 +32,7 @@
   );
 
   const trendEntries = $derived(analytics.tools?.trend ?? []);
+  const toolRows = $derived(analytics.tools?.by_tool ?? []);
 
   const trendMax = $derived.by(() => {
     let max = 1;
@@ -44,6 +48,10 @@
 
   function barWidth(count: number): number {
     return (count / maxCount) * 100;
+  }
+
+  function toolPctLabel(tool: ToolUsageAnalysis): string {
+    return `${tool.pct}%`;
   }
 
   function trendBarHeight(total: number): number {
@@ -136,6 +144,32 @@
     </div>
   {:else if categories.length > 0}
     <div class="sections">
+      {#if toolRows.length > 0}
+        <div class="section">
+          <div class="tool-table">
+            {#each toolRows.slice(0, 8) as tool}
+              <div class="tool-row">
+                <span
+                  class="tool-dot"
+                  style="background: {colorFor(tool.category)}"
+                ></span>
+                <span class="tool-name" title={tool.tool_name}>
+                  {tool.tool_name}
+                </span>
+                <span class="tool-category">{tool.category}</span>
+                <span class="tool-count">
+                  {tool.call_count.toLocaleString()}
+                </span>
+                <span class="tool-sessions">
+                  {tool.session_count.toLocaleString()} sessions
+                </span>
+                <span class="tool-pct">{toolPctLabel(tool)}</span>
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
       <div class="section">
         <h4 class="section-title">{m.analytics_by_category()}</h4>
         <div class="bar-list">
@@ -238,6 +272,70 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
     margin-bottom: 6px;
+  }
+
+  .tool-table {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+
+  .tool-row {
+    display: grid;
+    grid-template-columns: 8px minmax(80px, 1fr) minmax(52px, 72px) 48px 72px 40px;
+    align-items: center;
+    gap: 8px;
+    min-height: 28px;
+    padding: 4px;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: 11px;
+  }
+
+  .tool-row:hover {
+    background: var(--bg-surface-hover);
+  }
+
+  .tool-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+
+  .tool-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+
+  .tool-category {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-muted);
+  }
+
+  .tool-count,
+  .tool-sessions,
+  .tool-pct {
+    text-align: right;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+  }
+
+  @media (max-width: 560px) {
+    .tool-row {
+      grid-template-columns: 8px minmax(0, 1fr) 44px 36px;
+    }
+
+    .tool-category,
+    .tool-sessions {
+      display: none;
+    }
   }
 
   .bar-list {

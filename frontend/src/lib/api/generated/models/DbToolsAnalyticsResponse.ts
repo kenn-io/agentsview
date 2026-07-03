@@ -5,6 +5,7 @@
 export type DbToolsAnalyticsResponse = {
   by_agent: any[] | null;
   by_category: any[] | null;
+  by_tool: any[] | null;
   total_calls: number;
   trend: any[] | null;
 };

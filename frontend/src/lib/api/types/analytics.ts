@@ -166,6 +166,14 @@ export interface ToolAgentBreakdown {
   categories: ToolCategoryCount[];
 }
 
+export interface ToolUsageAnalysis {
+  tool_name: string;
+  category: string;
+  call_count: number;
+  session_count: number;
+  pct: number;
+}
+
 export interface ToolTrendEntry {
   date: string;
   by_category: Record<string, number>;
@@ -175,6 +183,7 @@ export interface ToolsAnalyticsResponse {
   total_calls: number;
   by_category: ToolCategoryCount[];
   by_agent: ToolAgentBreakdown[];
+  by_tool: ToolUsageAnalysis[];
   trend: ToolTrendEntry[];
 }
 
