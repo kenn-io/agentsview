@@ -115,6 +115,7 @@ const sessionFullCols = `id, project, machine, agent,
 	cwd, git_branch, source_session_id, source_version,
 	transcript_fidelity,
 	parser_malformed_lines, is_truncated,
+	last_write_incremental,
 	deleted_at, termination_status, file_path, file_size, file_mtime,
 	next_ordinal, last_entry_uuid,
 	file_inode, file_device,
@@ -328,11 +329,20 @@ type Session struct {
 	FileMtime         *int64  `json:"file_mtime,omitempty"`
 	NextOrdinal       int     `json:"-"`
 	LastEntryUUID     *string `json:"-"`
-	FileInode         *int64  `json:"file_inode,omitempty"`
-	FileDevice        *int64  `json:"file_device,omitempty"`
-	FileHash          *string `json:"file_hash,omitempty"`
-	LocalModifiedAt   *string `json:"local_modified_at,omitempty"`
-	CreatedAt         string  `json:"created_at"`
+	// LastWriteIncremental is SQLite-only sync bookkeeping (like
+	// NextOrdinal): true when the last write to this row went through
+	// the incremental-append path (updateSessionIncrementalTx) instead
+	// of a full re-normalization (upsertSessionArgs, which always resets
+	// it to false). It is consumed only by parse-diff to classify benign
+	// incremental-vs-full skew and is json:"-" so it never leaks through
+	// the HTTP session API. Deliberately not mirrored to PG/DuckDB: their
+	// push column lists omit the whole sync-bookkeeping cluster.
+	LastWriteIncremental bool    `json:"-"`
+	FileInode            *int64  `json:"file_inode,omitempty"`
+	FileDevice           *int64  `json:"file_device,omitempty"`
+	FileHash             *string `json:"file_hash,omitempty"`
+	LocalModifiedAt      *string `json:"local_modified_at,omitempty"`
+	CreatedAt            string  `json:"created_at"`
 }
 
 // SessionCursor is the opaque pagination token. EndedAt carries the
@@ -1054,6 +1064,7 @@ func (db *DB) GetSessionFull(
 		&s.SourceSessionID, &s.SourceVersion,
 		&s.TranscriptFidelity,
 		&s.ParserMalformedLines, &s.IsTruncated,
+		&s.LastWriteIncremental,
 		&s.DeletedAt, &s.TerminationStatus, &s.FilePath, &s.FileSize,
 		&s.FileMtime, &s.NextOrdinal, &s.LastEntryUUID,
 		&s.FileInode, &s.FileDevice,
@@ -1206,10 +1217,11 @@ const upsertSessionSQL = `
 			source_version, transcript_fidelity,
 			parser_malformed_lines,
 			is_truncated,
+			last_write_incremental,
 			file_path, file_size, file_mtime,
 			next_ordinal, last_entry_uuid,
 			file_inode, file_device, file_hash
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			project = excluded.project,
 			machine = excluded.machine,
@@ -1237,6 +1249,9 @@ const upsertSessionSQL = `
 			transcript_fidelity = excluded.transcript_fidelity,
 			parser_malformed_lines = excluded.parser_malformed_lines,
 			is_truncated = excluded.is_truncated,
+			-- A full re-normalization always clears the incremental marker:
+			-- the excluded row carries the literal false from upsertSessionArgs.
+			last_write_incremental = excluded.last_write_incremental,
 			file_path = excluded.file_path,
 			file_size = excluded.file_size,
 			file_mtime = excluded.file_mtime,
@@ -1267,6 +1282,12 @@ func upsertSessionArgs(s Session) []any {
 		s.SourceVersion, s.TranscriptFidelity,
 		s.ParserMalformedLines,
 		s.IsTruncated,
+		// last_write_incremental is always false on the full-write path:
+		// this row was re-normalized, not incrementally appended. Passing
+		// the literal (rather than s.LastWriteIncremental) makes the reset
+		// structural, and the ON CONFLICT clause propagates it via
+		// excluded.last_write_incremental.
+		false,
 		s.FilePath, s.FileSize, s.FileMtime,
 		s.NextOrdinal, s.LastEntryUUID,
 		s.FileInode, s.FileDevice, s.FileHash,
@@ -1814,7 +1835,12 @@ func updateSessionIncrementalTx(
 			peak_context_tokens = ?,
 			has_total_output_tokens = ?,
 			has_peak_context_tokens = ?,
-			termination_status = NULL
+			termination_status = NULL,
+			-- Mark the row as last written by the incremental-append path.
+			-- The full-replace writer (upsertSessionArgs) resets this to
+			-- false; parse-diff reads it to classify benign
+			-- incremental-vs-full skew.
+			last_write_incremental = 1
 		WHERE id = ?`,
 		update.EndedAt, update.MsgCount, update.UserMsgCount,
 		update.FileSize, update.FileMtime,
@@ -3000,6 +3026,7 @@ func (db *DB) ListSessionsModifiedBetween(
 			&s.SourceSessionID, &s.SourceVersion,
 			&s.TranscriptFidelity,
 			&s.ParserMalformedLines, &s.IsTruncated,
+			&s.LastWriteIncremental,
 			&s.DeletedAt, &s.TerminationStatus, &s.FilePath, &s.FileSize,
 			&s.FileMtime, &s.NextOrdinal, &s.LastEntryUUID,
 			&s.FileInode, &s.FileDevice,

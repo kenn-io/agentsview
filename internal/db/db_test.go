@@ -5602,6 +5602,65 @@ func TestUpdateSessionIncremental(t *testing.T) {
 	assert.Equal(t, "abc123", *got.FileHash, "FileHash")
 }
 
+// TestLastWriteIncrementalMarker pins the parse-diff detection signal:
+// the full-write path (UpsertSession) leaves last_write_incremental
+// false, an incremental append (WriteSessionIncremental) sets it true,
+// and a later full write of the same ID resets it to false. This is the
+// per-session ground truth parse-diff reads to classify incremental
+// skew, so its set/reset behavior across both write paths must hold.
+func TestLastWriteIncrementalMarker(t *testing.T) {
+	d := testDB(t)
+
+	base := Session{
+		ID:               "inc-marker",
+		Project:          "proj",
+		Machine:          "test",
+		Agent:            "claude",
+		FirstMessage:     new("hello"),
+		StartedAt:        new("2024-01-15T10:00:00Z"),
+		MessageCount:     1,
+		UserMessageCount: 1,
+		FilePath:         new("/tmp/sessions/inc-marker.jsonl"),
+		FileSize:         new(int64(512)),
+		FileMtime:        new(int64(100)),
+	}
+	requireNoError(t, d.UpsertSession(base), "initial full upsert")
+
+	got, err := d.GetSessionFull(context.Background(), "inc-marker")
+	requireNoError(t, err, "get after full upsert")
+	require.NotNil(t, got, "session after full upsert")
+	assert.False(t, got.LastWriteIncremental,
+		"full write path must leave last_write_incremental false")
+
+	requireNoError(t, d.WriteSessionIncremental(
+		"inc-marker",
+		[]Message{asstMsg("inc-marker", 1, "appended reply")},
+		IncrementalSessionUpdate{
+			MsgCount:     2,
+			UserMsgCount: 1,
+			FileSize:     1024,
+			FileMtime:    200,
+			NextOrdinal:  2,
+		},
+	), "incremental write")
+
+	got, err = d.GetSessionFull(context.Background(), "inc-marker")
+	requireNoError(t, err, "get after incremental write")
+	require.NotNil(t, got, "session after incremental write")
+	assert.True(t, got.LastWriteIncremental,
+		"incremental append must set last_write_incremental true")
+
+	// A subsequent full re-normalization of the same ID clears it: this
+	// is the self-heal a full resync relies on to restore parse-diff
+	// scrutiny.
+	requireNoError(t, d.UpsertSession(base), "second full upsert")
+	got, err = d.GetSessionFull(context.Background(), "inc-marker")
+	requireNoError(t, err, "get after second full upsert")
+	require.NotNil(t, got, "session after second full upsert")
+	assert.False(t, got.LastWriteIncremental,
+		"a full re-normalization must clear last_write_incremental")
+}
+
 func TestIncrementalWriteAtomicityRollsBackMessages(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "atomic-target", "proj")

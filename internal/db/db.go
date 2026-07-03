@@ -1248,6 +1248,16 @@ func (db *DB) migrateColumns() error {
 			"ALTER TABLE sessions ADD COLUMN is_truncated INTEGER NOT NULL DEFAULT 0",
 		},
 		{
+			// Non-destructive column add: no dataVersion bump and no
+			// resync. The column defaults false and self-heals to true on
+			// the next incremental write of each row; a pre-migration
+			// archive simply reads false everywhere until then, which
+			// keeps parse-diff scrutiny conservative (drift is reported,
+			// never masked) rather than the reverse.
+			"sessions", "last_write_incremental",
+			"ALTER TABLE sessions ADD COLUMN last_write_incremental INTEGER NOT NULL DEFAULT 0",
+		},
+		{
 			"sessions", "file_inode",
 			"ALTER TABLE sessions ADD COLUMN file_inode INTEGER",
 		},
