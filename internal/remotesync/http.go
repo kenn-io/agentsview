@@ -214,11 +214,28 @@ func (hs HTTPSync) authorize(req *http.Request) {
 	req.Header.Set("Authorization", "Bearer "+hs.Token)
 }
 
+// StatusError reports a non-2xx response from a remote daemon's
+// remote-sync endpoints. Detail carries the (untrusted) response
+// body for local logs; user-facing summaries should rely on Code.
+type StatusError struct {
+	Code   int
+	Status string
+	Detail string
+}
+
+func (e *StatusError) Error() string {
+	msg := e.Detail
+	if msg == "" {
+		msg = e.Status
+	}
+	return fmt.Sprintf("remote sync %s: %s", e.Status, msg)
+}
+
 func httpStatusError(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	msg := strings.TrimSpace(string(body))
-	if msg == "" {
-		msg = resp.Status
+	return &StatusError{
+		Code:   resp.StatusCode,
+		Status: resp.Status,
+		Detail: strings.TrimSpace(string(body)),
 	}
-	return fmt.Errorf("remote sync %s: %s", resp.Status, msg)
 }

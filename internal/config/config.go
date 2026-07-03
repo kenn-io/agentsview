@@ -666,6 +666,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		CursorAdminAPIKey              string                     `toml:"cursor_admin_api_key"`
 		CursorAdminEmail               string                     `toml:"cursor_admin_email"`
 		CursorAdminUserID              string                     `toml:"cursor_admin_user_id"`
+		Host                           string                     `toml:"host"`
 		PublicURL                      string                     `toml:"public_url"`
 		PublicOrigins                  []string                   `toml:"public_origins"`
 		Proxy                          ProxyConfig                `toml:"proxy"`
@@ -708,6 +709,9 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if file.CursorAdminUserID != "" && c.CursorAdminUserID == "" {
 		c.CursorAdminUserID = file.CursorAdminUserID
+	}
+	if file.Host != "" {
+		c.Host = file.Host
 	}
 	if file.PublicURL != "" {
 		c.PublicURL = file.PublicURL

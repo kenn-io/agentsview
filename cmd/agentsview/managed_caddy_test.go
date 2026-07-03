@@ -90,9 +90,10 @@ func TestValidateServeConfigManagedCaddyAllowsHTTPS(t *testing.T) {
 
 func TestValidateServeConfigManagedCaddyRejectsNonLoopbackHost(t *testing.T) {
 	cfg := config.Config{
-		Host:      "0.0.0.0",
-		Port:      8080,
-		PublicURL: "http://viewer.example.test:8004",
+		Host:        "0.0.0.0",
+		Port:        8080,
+		PublicURL:   "http://viewer.example.test:8004",
+		RequireAuth: true,
 		Proxy: config.ProxyConfig{
 			Mode: "caddy",
 			Bin:  os.Args[0],
@@ -101,6 +102,53 @@ func TestValidateServeConfigManagedCaddyRejectsNonLoopbackHost(t *testing.T) {
 	err := validateServeConfig(cfg)
 	require.Error(t, err, "expected error for non-loopback backend host")
 	assert.Contains(t, err.Error(), "loopback backend host")
+}
+
+func TestValidateServeConfigNonLoopbackHostGuardrail(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     config.Config
+		wantErr string
+	}{
+		{
+			name: "config host without auth is rejected",
+			cfg: config.Config{
+				Host: "0.0.0.0", Port: 8080,
+			},
+			wantErr: "require_auth",
+		},
+		{
+			name: "config host with require_auth is allowed",
+			cfg: config.Config{
+				Host: "0.0.0.0", Port: 8080,
+				RequireAuth: true,
+			},
+		},
+		{
+			name: "explicit --host flag stays allowed without auth",
+			cfg: config.Config{
+				Host: "0.0.0.0", Port: 8080,
+				HostExplicit: true,
+			},
+		},
+		{
+			name: "loopback host needs no auth",
+			cfg: config.Config{
+				Host: "127.0.0.1", Port: 8080,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateServeConfig(tt.cfg)
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
 }
 
 func TestValidateServeConfigManagedCaddyRequiresAllowlistForNonLoopbackBind(t *testing.T) {

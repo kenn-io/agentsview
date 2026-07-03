@@ -64,6 +64,7 @@ daemon_idle_timeout = "20m"
 | `cursor_admin_user_id`              | Optional default Cursor Admin usage filter by member user ID                                                 |
 | `github_token`                      | Optional saved GitHub token for Gist publishing                                                              |
 | `result_content_blocked_categories` | Tool categories whose result content is not stored (default: `["Read", "Glob"]`)                             |
+| `host`                              | Interface the server binds to (default `127.0.0.1`); non-loopback values require `require_auth = true`       |
 | `require_auth`                      | Require bearer-token authentication for API access                                                           |
 | `auth_token`                        | Auto-generated 256-bit bearer token for remote access; can be overridden with `AGENTSVIEW_AUTH_TOKEN`        |
 | `public_url`                        | Public URL for hostname/proxy access and origin validation                                                   |
@@ -127,6 +128,16 @@ bearer token, even when the rest of that daemon has `require_auth = false`. The
 per-host `token` is required and must match the remote daemon's `auth_token`.
 Do not reuse the collector daemon's own `auth_token` for untrusted remote
 endpoints.
+
+The remote daemon must also listen on an interface the collector can reach.
+The server binds `127.0.0.1` by default, so set `host` in the remote
+machine's config.toml (requires `require_auth = true`) or start it with
+`serve --host`:
+
+```toml
+host = "0.0.0.0"
+require_auth = true
+```
 
 Detached daemons started with `agentsview serve --background` exit after
 `daemon_idle_timeout` when idle. Set it to zero on machines that should stay

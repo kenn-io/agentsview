@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -389,6 +390,10 @@ func (s *Server) runRemoteSyncHosts(
 		totals.Skipped += stats.Skipped
 		totals.Failed += stats.Failed
 		if err != nil {
+			// The raw error can embed the remote URL and response
+			// bodies, so it goes only to the local log; the API
+			// response carries the sanitized summary.
+			log.Printf("remote sync %s: %v", rh.Host, err)
 			failures = append(failures, remoteSyncFailure{
 				Host: remoteSyncFailureHost(rh),
 				Err:  remoteSyncFailureError(rh, err),
@@ -408,7 +413,7 @@ func remoteSyncFailureHost(rh config.RemoteHost) config.RemoteHost {
 
 func remoteSyncFailureError(rh config.RemoteHost, err error) string {
 	if rh.Transport == config.RemoteTransportHTTP {
-		return "HTTP remote sync failed"
+		return remotesync.FailureSummary(err)
 	}
 	return err.Error()
 }

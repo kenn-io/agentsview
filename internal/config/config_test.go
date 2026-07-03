@@ -390,6 +390,29 @@ func TestLoad_PublicOriginFlagOverridesConfigFile(t *testing.T) {
 	assert.Equal(t, "https://viewer.example.test,http://viewer.example.test:8004", got)
 }
 
+func TestLoad_HostFromConfigFile(t *testing.T) {
+	cfg := loadMinimalWithConfig(t, map[string]any{
+		"host": "0.0.0.0",
+	})
+
+	assert.Equal(t, "0.0.0.0", cfg.Host)
+	assert.False(t, cfg.HostExplicit,
+		"config-file host must not count as an explicit flag")
+}
+
+func TestLoad_HostFlagOverridesConfigFile(t *testing.T) {
+	tmp := setupTestEnv(t)
+	writeConfig(t, tmp, map[string]any{
+		"host": "0.0.0.0",
+	})
+
+	cfg, err := loadConfigFromFlags(t, "-host", "192.168.1.5")
+	require.NoError(t, err)
+
+	assert.Equal(t, "192.168.1.5", cfg.Host)
+	assert.True(t, cfg.HostExplicit)
+}
+
 func TestLoad_PublicOriginsFromConfigFile(t *testing.T) {
 	cfg := loadMinimalWithConfig(t, map[string]any{
 		"public_origins": []string{

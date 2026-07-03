@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -718,6 +719,43 @@ func TestSyncRemotesRedactsStoredHTTPConfigOnFailure(t *testing.T) {
 	assert.NotContains(t, resp.Failures[0].Err, "stored.example")
 	assert.NotContains(t, resp.Failures[0].Err, "secret")
 	assert.Equal(t, "HTTP remote sync failed", resp.Failures[0].Err)
+}
+
+func TestSyncRemotesClassifiesHTTPFailures(t *testing.T) {
+	stored := config.RemoteHost{
+		Host:      "devbox",
+		Transport: config.RemoteTransportHTTP,
+		URL:       "http://stored.example",
+		Token:     "stored.example-secret",
+	}
+	f := newSyncRouteFixture(t, withRemoteHosts(stored))
+	stubRunHTTPRemoteSync(t, func(
+		_ context.Context,
+		_ config.RemoteHost,
+		_ bool,
+	) (remotesync.SyncStats, error) {
+		return remotesync.SyncStats{}, fmt.Errorf(
+			"fetch targets: %w", &remotesync.StatusError{
+				Code:   401,
+				Status: "401 Unauthorized",
+				Detail: "bearer stored.example-secret rejected",
+			},
+		)
+	})
+
+	w := postRemoteSync(t, f.handler,
+		[]config.RemoteHost{{Host: "devbox"}},
+		withRemoteAddr("203.0.113.10:9999"))
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := decodeRecorder[remoteSyncResponse](t, w)
+	require.Len(t, resp.Failures, 1)
+	assert.Contains(t, resp.Failures[0].Err,
+		"rejected the sync token (401 Unauthorized)")
+	assert.Contains(t, resp.Failures[0].Err,
+		"must match the remote daemon's auth_token")
+	assert.NotContains(t, resp.Failures[0].Err, "stored.example",
+		"response body detail must not leak")
 }
 
 func TestRunHTTPRemoteSyncRequiresExplicitHTTPToken(t *testing.T) {

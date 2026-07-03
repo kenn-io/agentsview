@@ -25,6 +25,18 @@ Then start the server on a non-loopback interface:
 agentsview serve --host 0.0.0.0
 ```
 
+To make the bind persistent — so restarts, auto-started daemons, and reboots
+keep the server reachable — set `host` in `config.toml` instead of passing
+the flag each time:
+
+```toml
+host = "0.0.0.0"
+```
+
+A non-loopback `host` in `config.toml` requires `require_auth = true`; the
+server refuses to start rather than persistently exposing an unauthenticated
+API. The `--host` flag remains available for one-off unauthenticated binds.
+
 When this command runs inside WSL, AgentsView advertises the WSL `eth0` address
 instead of `127.0.0.1` so the printed URL is usable from the Windows host and
 nearby LAN clients. An explicit `--public-url` still takes precedence.
@@ -70,6 +82,12 @@ transport = "http"
 url = "http://devbox1.tailnet.ts.net:8080"
 token = "remote-token"
 ```
+
+The daemon on the remote machine must bind a non-loopback interface (set
+`host = "0.0.0.0"` with `require_auth = true` in its config.toml) or every
+sync fails with a connection-refused error. See
+[Remote Hosts](/configuration/#remote-hosts) for the full remote-side setup,
+including keeping detached daemons alive.
 
 Use `require_auth = true` on remote nodes when practical, or at minimum keep
 their generated `auth_token` configured. The remote archive endpoints always
