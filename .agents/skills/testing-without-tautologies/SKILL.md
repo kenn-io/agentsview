@@ -117,6 +117,21 @@ Apply these checks to every new or modified test:
     - Never read a script's source and assert that it contains a specific line,
       flag, or snippet.
 
+1. **Never write negative-existence tests**
+
+    - When removing or refactoring code, never add a test asserting that a
+      function, method, file, import, or symbol does not exist — grepping the
+      source tree, reflecting over types, or asserting a compile failure.
+    - Deletion is proven by the deletion itself: the code is gone, the build
+      compiles, and the behavior tests for the replacement pass. A
+      "still-deleted" test protects nothing, breaks legitimate future reuse of
+      the name, and outlives the migration it policed.
+    - If the concern is that the old path could silently come back into use, test
+      the new path's observable contract instead — the behavior that would
+      break if someone rewired it.
+    - Removing such guard tests is part of finishing a cleanup, not a test
+      coverage regression.
+
 ## Backend Parity
 
 When a behavior is required to match across SQLite and PostgreSQL, protect it on
@@ -168,3 +183,4 @@ If none fail, the test is probably tautological.
 - Hides expected values behind loops, formatters, builders, or helpers.
 - Greps source files (Go or shell) for implementation strings instead of
   observing behavior.
+- Asserts that a removed function, file, or symbol stays removed.
