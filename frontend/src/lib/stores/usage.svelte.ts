@@ -5,14 +5,17 @@ import type {
   UsageSummaryResponse,
   TopUsageSessionsResponse,
 } from "../api/types/usage.js";
-import { UsageService } from "../api/generated/index";
+import { MetadataService, UsageService } from "../api/generated/index";
 import {
   callGenerated,
+  configureGeneratedClient,
   isAbortError,
 } from "../api/runtime.js";
 import { sessions } from "./sessions.svelte.js";
 import { perf, type PerfEntryStatus } from "./perf.svelte.js";
 import { daysAgo, today } from "../utils/dates.js";
+import { BRANCH_LIST_SEP } from "../branchFilters.js";
+import type { BranchInfo } from "../api/types/core.js";
 
 type UsageParams = Parameters<typeof UsageService.getApiV1UsageSummary>[0];
 type UsagePairwiseParams =
@@ -34,7 +37,7 @@ export interface UsagePairwiseSelection {
   right: UsagePairwiseSideSelection;
 }
 
-export type GroupBy = "project" | "model" | "agent";
+export type GroupBy = "project" | "model" | "agent" | "branch";
 export type TimeSeriesView = "stacked-area" | "bars" | "lines";
 export type AttributionView = "treemap" | "list" | "bars";
 
@@ -53,7 +56,12 @@ function defaultToggles(): Toggles {
 }
 
 function isGroupBy(value: unknown): value is GroupBy {
-  return value === "project" || value === "model" || value === "agent";
+  return (
+    value === "project" ||
+    value === "model" ||
+    value === "agent" ||
+    value === "branch"
+  );
 }
 
 function loadToggles(): Toggles {
@@ -107,6 +115,7 @@ const USAGE_FILTERS_KEY = "usage-filters";
 export interface UsageFilterState {
   excludedProjects: string;
   excludedAgents: string;
+  excludedGitBranch: string;
   excludedModels: string;
   selectedModels: string;
 }
@@ -119,6 +128,7 @@ function loadUsageFilters(): UsageFilterState {
       return {
         excludedProjects: saved.excludedProjects ?? "",
         excludedAgents: saved.excludedAgents ?? "",
+        excludedGitBranch: saved.excludedGitBranch ?? "",
         excludedModels: "",
         selectedModels: saved.selectedModels ?? "",
       };
@@ -129,6 +139,7 @@ function loadUsageFilters(): UsageFilterState {
   return {
     excludedProjects: "",
     excludedAgents: "",
+    excludedGitBranch: "",
     excludedModels: "",
     selectedModels: "",
   };
@@ -139,6 +150,7 @@ function saveUsageFilters(f: UsageFilterState): void {
     const data: UsageFilterState = {
       excludedProjects: f.excludedProjects,
       excludedAgents: f.excludedAgents,
+      excludedGitBranch: f.excludedGitBranch,
       excludedModels: f.excludedModels,
       selectedModels: f.selectedModels,
     };
@@ -192,6 +204,7 @@ class UsageStore {
   // Initialized from localStorage to survive tab switches.
   excludedProjects: string = $state("");
   excludedAgents: string = $state("");
+  excludedGitBranch: string = $state("");
   excludedModels: string = $state("");
   selectedModels: string = $state("");
 
@@ -199,11 +212,15 @@ class UsageStore {
     const saved = loadUsageFilters();
     this.excludedProjects = saved.excludedProjects;
     this.excludedAgents = saved.excludedAgents;
+    this.excludedGitBranch = saved.excludedGitBranch;
     this.excludedModels = saved.excludedModels;
     this.selectedModels = saved.selectedModels;
   }
 
   summary = $state<UsageSummaryResponse | null>(null);
+  branches: BranchInfo[] = $state([]);
+  private branchesLoaded = false;
+  private branchesPromise: Promise<void> | null = null;
   pairwiseComparison =
     $state<UsagePairwiseComparisonResponse | null>(null);
   pairwiseSelection = $state<UsagePairwiseSelection>(
@@ -282,6 +299,9 @@ class UsageStore {
       );
     } else if (this.excludedProjects) {
       p.excludeProject = this.excludedProjects;
+    }
+    if (this.excludedGitBranch) {
+      p.excludeGitBranch = this.excludedGitBranch;
     }
     if (this.selectedModels) {
       p.model = this.selectedModels;
@@ -432,15 +452,43 @@ class UsageStore {
     this.fetchAll();
   }
 
-  private toggleCsv(csv: string, name: string): string {
-    const current = csv ? csv.split(",") : [];
+  async loadBranches(): Promise<void> {
+    if (this.branchesLoaded) return;
+    if (this.branchesPromise) return this.branchesPromise;
+    this.branchesPromise = (async () => {
+      try {
+        configureGeneratedClient();
+        const res = await MetadataService.getApiV1Branches({
+          includeOneShot: true,
+          includeAutomated: true,
+        }) as unknown as { branches: BranchInfo[] };
+        this.branches = res.branches;
+        this.branchesLoaded = true;
+      } catch {
+        // Non-fatal; the hidden-branches dropdown stays empty.
+      } finally {
+        this.branchesPromise = null;
+      }
+    })();
+    return this.branchesPromise;
+  }
+
+  toggleBranch(token: string): void {
+    this.excludedGitBranch = this.toggleCsv(
+      this.excludedGitBranch, token, BRANCH_LIST_SEP,
+    );
+    this.fetchAll();
+  }
+
+  private toggleCsv(csv: string, name: string, sep = ","): string {
+    const current = csv ? csv.split(sep) : [];
     const idx = current.indexOf(name);
     if (idx >= 0) {
       current.splice(idx, 1);
     } else {
       current.push(name);
     }
-    return current.join(",");
+    return current.join(sep);
   }
 
   // An item is "excluded" if it appears in the excluded CSV.
@@ -465,6 +513,13 @@ class UsageStore {
     return this.selectedModels.split(",").includes(name);
   }
 
+  isBranchExcluded(token: string): boolean {
+    if (!this.excludedGitBranch) return false;
+    return this.excludedGitBranch
+      .split(BRANCH_LIST_SEP)
+      .includes(token);
+  }
+
   selectAllProjects(): void {
     this.excludedProjects = "";
     this.fetchAll();
@@ -485,6 +540,16 @@ class UsageStore {
     this.fetchAll();
   }
 
+  selectAllBranches(): void {
+    this.excludedGitBranch = "";
+    this.fetchAll();
+  }
+
+  deselectAllBranches(all: string[]): void {
+    this.excludedGitBranch = all.join(BRANCH_LIST_SEP);
+    this.fetchAll();
+  }
+
   selectAllModels(): void {
     this.selectedModels = "";
     this.excludedModels = "";
@@ -500,13 +565,18 @@ class UsageStore {
   clearFilters(): void {
     this.excludedProjects = "";
     this.excludedAgents = "";
+    this.excludedGitBranch = "";
     this.excludedModels = "";
     this.selectedModels = "";
     this.fetchAll();
   }
 
   get hasActiveFilters(): boolean {
-    return this.excludedProjects !== "" || this.selectedModels !== "";
+    return (
+      this.excludedProjects !== "" ||
+      this.excludedGitBranch !== "" ||
+      this.selectedModels !== ""
+    );
   }
 
   get isQuerying(): boolean {
@@ -875,6 +945,7 @@ export interface UsageUrlState {
   windowDays: number;
   excludedProjects: string;
   excludedAgents: string;
+  excludedGitBranch: string;
   excludedModels: string;
   selectedModels: string;
 }
@@ -913,6 +984,9 @@ export function buildUsageUrlParams(
   }
   if (state.excludedProjects) {
     params["exclude_project"] = state.excludedProjects;
+  }
+  if (state.excludedGitBranch) {
+    params["exclude_git_branch"] = state.excludedGitBranch;
   }
   return params;
 }

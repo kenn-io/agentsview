@@ -9,6 +9,7 @@ import type { DbUsageTotals } from './DbUsageTotals';
 import type { UnsupportedUsage } from './UnsupportedUsage';
 export type UsageSummaryResponse = {
   agentTotals: any[] | null;
+  branchTotals: any[] | null;
   cacheStats: CacheStats;
   comparison?: Comparison;
   daily: any[] | null;

@@ -136,6 +136,11 @@ func appendPGUsageSessionFilterClauses(
 	}
 	where = appendCSV(where, "s.project", f.ExcludeProject, false)
 	where = appendCSV(where, "s.agent", f.ExcludeAgent, false)
+	if f.ExcludeGitBranch != "" {
+		where += "\n\tAND " + db.BranchPairExcludePredicate(
+			"s.project", "s.git_branch", f.ExcludeGitBranch,
+			func(s string) string { return pb.add(s) })
+	}
 
 	if f.MinUserMessages > 0 {
 		where += "\n\tAND s.user_message_count >= " +
@@ -305,7 +310,8 @@ SELECT
 	m.source_uuid,
 	'' AS usage_dedup_key,
 	s.project,
-	s.agent
+	s.agent,
+	s.git_branch
 FROM messages m
 JOIN sessions s ON m.session_id = s.id
 WHERE %s
@@ -332,7 +338,8 @@ SELECT
 		ELSE ue.session_id || ':' || ue.source || ':id:' || ue.id
 	END AS usage_dedup_key,
 	s.project,
-	s.agent
+	s.agent,
+	s.git_branch
 FROM usage_events ue
 JOIN sessions s ON s.id = ue.session_id
 WHERE %s`
@@ -355,7 +362,8 @@ SELECT
 	m.source_uuid,
 	'' AS usage_dedup_key,
 	s.project,
-	s.agent
+	s.agent,
+	s.git_branch
 FROM %s m
 JOIN sessions s ON m.session_id = s.id
 WHERE %s`
@@ -381,7 +389,8 @@ SELECT
 		ELSE ue.session_id || ':' || ue.source || ':id:' || ue.id
 	END AS usage_dedup_key,
 	s.project,
-	s.agent
+	s.agent,
+	s.git_branch
 FROM %s ue
 JOIN sessions s ON s.id = ue.session_id
 WHERE %s`
@@ -511,6 +520,7 @@ type pgDailyUsageScanRow struct {
 	usageDedupKey            string
 	project                  string
 	agent                    string
+	gitBranch                string
 }
 
 type pgTopSessionMetadata struct {
@@ -579,7 +589,8 @@ SELECT
 	u.source_uuid,
 	u.usage_dedup_key,
 	u.project,
-	u.agent
+	u.agent,
+	u.git_branch
 FROM (` + rowsSQL + `) u
 WHERE 1=1`
 }
@@ -723,7 +734,8 @@ SELECT
 	'' AS source_uuid,
 	cu.dedup_key AS usage_dedup_key,
 	'' AS project,
-	'cursor' AS agent
+	'cursor' AS agent,
+	'' AS git_branch
 FROM cursor_usage_events cu
 WHERE %s`
 
@@ -735,7 +747,8 @@ func pgCursorUsageRowsSQLForBounds(
 	// filter, so any filter they cannot satisfy (project, machine, branch)
 	// must exclude them entirely rather than let them leak into totals.
 	if f.Project != "" || f.ExcludeProject != "" ||
-		f.Machine != "" || f.GitBranch != "" || f.MinUserMessages > 0 ||
+		f.Machine != "" || f.GitBranch != "" || f.ExcludeGitBranch != "" ||
+		f.MinUserMessages > 0 ||
 		f.ExcludeOneShot || hasTermFilter || f.ActiveSince != "" {
 		return "", false
 	}
@@ -841,6 +854,7 @@ func scanPGDailyUsageRow(rows *sql.Rows) (pgDailyUsageScanRow, error) {
 		&r.usageDedupKey,
 		&r.project,
 		&r.agent,
+		&r.gitBranch,
 	)
 	return r, err
 }
@@ -1145,6 +1159,24 @@ func sortedStringSetKeys(set map[string]struct{}) []string {
 	return out
 }
 
+type usageBucket struct {
+	inputTok  int
+	outputTok int
+	cacheCr   int
+	cacheRd   int
+	cost      float64
+}
+
+func addUsageBucket[K comparable](m map[K]usageBucket, key K, b usageBucket) {
+	cur := m[key]
+	cur.inputTok += b.inputTok
+	cur.outputTok += b.outputTok
+	cur.cacheCr += b.cacheCr
+	cur.cacheRd += b.cacheRd
+	cur.cost += b.cost
+	m[key] = cur
+}
+
 // GetDailyUsage returns token usage and cost aggregated by day.
 func (s *Store) GetDailyUsage(
 	ctx context.Context, f db.UsageFilter,
@@ -1171,19 +1203,13 @@ func (s *Store) GetDailyUsage(
 	defer rows.Close()
 
 	type accumKey struct {
-		date    string
-		project string
-		agent   string
-		model   string
+		date      string
+		project   string
+		agent     string
+		model     string
+		gitBranch string
 	}
-	type bucket struct {
-		inputTok  int
-		outputTok int
-		cacheCr   int
-		cacheRd   int
-		cost      float64
-	}
-	accum := make(map[accumKey]*bucket)
+	accum := make(map[accumKey]*usageBucket)
 	seen := make(map[pgUsageDedupToken]struct{})
 	var seenSessions map[string]db.UsageSessionInfo
 	if !f.SkipSessionCounts {
@@ -1229,13 +1255,21 @@ func (s *Store) GetDailyUsage(
 			pgDailyUsageAmounts(r, rateResolver)
 		totalSavings += savings
 
+		// Leave gitBranch out of the accumulator key unless breakdowns are
+		// requested, so a plain totals query still sums one row per
+		// (date, project, agent, model) instead of splitting by branch too.
+		gitBranch := ""
+		if f.Breakdowns {
+			gitBranch = r.gitBranch
+		}
 		key := accumKey{
 			date: date, project: r.project,
 			agent: r.agent, model: r.model,
+			gitBranch: gitBranch,
 		}
 		b, ok := accum[key]
 		if !ok {
-			b = &bucket{}
+			b = &usageBucket{}
 			accum[key] = b
 		}
 		b.inputTok += inputTok
@@ -1372,45 +1406,35 @@ func (s *Store) GetDailyUsage(
 		}, nil
 	}
 
+	type branchMapKey struct {
+		project string
+		branch  string
+	}
 	type dayMaps struct {
-		models   map[string]bucket
-		projects map[string]bucket
-		agents   map[string]bucket
+		models   map[string]usageBucket
+		projects map[string]usageBucket
+		agents   map[string]usageBucket
+		branches map[branchMapKey]usageBucket
 	}
 	days := make(map[string]*dayMaps, 64)
 	for key, b := range accum {
 		dm, ok := days[key.date]
 		if !ok {
 			dm = &dayMaps{
-				models:   make(map[string]bucket, 4),
-				projects: make(map[string]bucket, 8),
-				agents:   make(map[string]bucket, 4),
+				models:   make(map[string]usageBucket, 4),
+				projects: make(map[string]usageBucket, 8),
+				agents:   make(map[string]usageBucket, 4),
+				branches: make(map[branchMapKey]usageBucket, 8),
 			}
 			days[key.date] = dm
 		}
-		cur := dm.models[key.model]
-		cur.inputTok += b.inputTok
-		cur.outputTok += b.outputTok
-		cur.cacheCr += b.cacheCr
-		cur.cacheRd += b.cacheRd
-		cur.cost += b.cost
-		dm.models[key.model] = cur
-
-		cur = dm.projects[key.project]
-		cur.inputTok += b.inputTok
-		cur.outputTok += b.outputTok
-		cur.cacheCr += b.cacheCr
-		cur.cacheRd += b.cacheRd
-		cur.cost += b.cost
-		dm.projects[key.project] = cur
-
-		cur = dm.agents[key.agent]
-		cur.inputTok += b.inputTok
-		cur.outputTok += b.outputTok
-		cur.cacheCr += b.cacheCr
-		cur.cacheRd += b.cacheRd
-		cur.cost += b.cost
-		dm.agents[key.agent] = cur
+		addUsageBucket(dm.models, key.model, *b)
+		addUsageBucket(dm.projects, key.project, *b)
+		addUsageBucket(dm.agents, key.agent, *b)
+		addUsageBucket(dm.branches, branchMapKey{
+			project: key.project,
+			branch:  key.gitBranch,
+		}, *b)
 	}
 
 	dateKeys := make([]string, 0, len(days))
@@ -1498,6 +1522,29 @@ func (s *Store) GetDailyUsage(
 			return abd[i].Agent < abd[j].Agent
 		})
 		entry.AgentBreakdowns = abd
+
+		bbd := make([]db.BranchBreakdown, 0, len(dm.branches))
+		for bk, b := range dm.branches {
+			bbd = append(bbd, db.BranchBreakdown{
+				Project:             bk.project,
+				Branch:              bk.branch,
+				InputTokens:         b.inputTok,
+				OutputTokens:        b.outputTok,
+				CacheCreationTokens: b.cacheCr,
+				CacheReadTokens:     b.cacheRd,
+				Cost:                b.cost,
+			})
+		}
+		sort.Slice(bbd, func(i, j int) bool {
+			if bbd[i].Cost != bbd[j].Cost {
+				return bbd[i].Cost > bbd[j].Cost
+			}
+			if bbd[i].Project != bbd[j].Project {
+				return bbd[i].Project < bbd[j].Project
+			}
+			return bbd[i].Branch < bbd[j].Branch
+		})
+		entry.BranchBreakdowns = bbd
 
 		daily = append(daily, entry)
 		totals.InputTokens += entry.InputTokens

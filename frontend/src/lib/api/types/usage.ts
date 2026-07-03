@@ -37,6 +37,16 @@ export interface AgentBreakdown {
   cost: number;
 }
 
+export interface BranchBreakdown {
+  project: string;
+  branch: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  cost: number;
+}
+
 export interface DailyUsageEntry {
   date: string;
   inputTokens: number;
@@ -48,6 +58,7 @@ export interface DailyUsageEntry {
   modelBreakdowns?: ModelBreakdown[];
   projectBreakdowns?: ProjectBreakdown[];
   agentBreakdowns?: AgentBreakdown[];
+  branchBreakdowns?: BranchBreakdown[];
 }
 
 export interface ProjectTotal {
@@ -70,6 +81,16 @@ export interface ModelTotal {
 
 export interface AgentTotal {
   agent: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  cost: number;
+}
+
+export interface BranchTotal {
+  project: string;
+  branch: string;
   inputTokens: number;
   outputTokens: number;
   cacheCreationTokens: number;
@@ -152,6 +173,7 @@ export interface UsageSummaryResponse {
   projectTotals: ProjectTotal[];
   modelTotals: ModelTotal[];
   agentTotals: AgentTotal[];
+  branchTotals: BranchTotal[];
   sessionCounts: UsageSessionCounts;
   cacheStats: CacheStats;
   unsupportedUsage?: UnsupportedUsage;

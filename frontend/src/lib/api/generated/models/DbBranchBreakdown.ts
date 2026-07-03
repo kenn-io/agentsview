@@ -2,17 +2,13 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-export type DbDailyUsageEntry = {
-  agentBreakdowns?: any[] | null;
-  branchBreakdowns?: any[] | null;
+export type DbBranchBreakdown = {
+  branch: string;
   cacheCreationTokens: number;
   cacheReadTokens: number;
-  date: string;
+  cost: number;
   inputTokens: number;
-  modelBreakdowns?: any[] | null;
-  modelsUsed: any[] | null;
   outputTokens: number;
-  projectBreakdowns?: any[] | null;
-  totalCost: number;
+  project: string;
 };
 

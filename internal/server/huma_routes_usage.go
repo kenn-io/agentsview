@@ -30,6 +30,7 @@ type UsageFilterInput struct {
 	Project          string `query:"project" doc:"Filter by project"`
 	Machine          string `query:"machine" doc:"Filter by machine"`
 	GitBranch        string `query:"git_branch" doc:"Filter by git branch; opaque (project, branch) tokens from the /branches endpoint"`
+	ExcludeGitBranch string `query:"exclude_git_branch" doc:"Exclude a git branch; opaque (project, branch) tokens from the /branches endpoint"`
 	ExcludeProject   string `query:"exclude_project" doc:"Exclude a project"`
 	ExcludeAgent     string `query:"exclude_agent" doc:"Exclude an agent"`
 	ExcludeModel     string `query:"exclude_model" doc:"Exclude a model"`
@@ -73,6 +74,7 @@ func usageRequestFromInput(in UsageFilterInput) service.UsageRequest {
 		Project:          in.Project,
 		Machine:          in.Machine,
 		GitBranch:        in.GitBranch,
+		ExcludeGitBranch: in.ExcludeGitBranch,
 		ExcludeProject:   in.ExcludeProject,
 		ExcludeAgent:     in.ExcludeAgent,
 		ExcludeModel:     in.ExcludeModel,
@@ -229,6 +231,7 @@ func (s *Server) computeUsageComparison(
 		Project:          f.Project,
 		Machine:          f.Machine,
 		GitBranch:        f.GitBranch,
+		ExcludeGitBranch: f.ExcludeGitBranch,
 		Model:            f.Model,
 		ExcludeProject:   f.ExcludeProject,
 		ExcludeAgent:     f.ExcludeAgent,

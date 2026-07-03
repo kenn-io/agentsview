@@ -44,6 +44,17 @@ type AgentTotal struct {
 	Cost                float64 `json:"cost"`
 }
 
+// BranchTotal holds range-wide token and cost totals per (project, branch).
+type BranchTotal struct {
+	Project             string  `json:"project"`
+	Branch              string  `json:"branch"`
+	InputTokens         int     `json:"inputTokens"`
+	OutputTokens        int     `json:"outputTokens"`
+	CacheCreationTokens int     `json:"cacheCreationTokens"`
+	CacheReadTokens     int     `json:"cacheReadTokens"`
+	Cost                float64 `json:"cost"`
+}
+
 // CacheStats summarizes cache hit/miss for the period.
 type CacheStats struct {
 	CacheReadTokens     int     `json:"cacheReadTokens"`
@@ -69,6 +80,7 @@ type UsageSummaryResponse struct {
 	ProjectTotals    []ProjectTotal        `json:"projectTotals"`
 	ModelTotals      []ModelTotal          `json:"modelTotals"`
 	AgentTotals      []AgentTotal          `json:"agentTotals"`
+	BranchTotals     []BranchTotal         `json:"branchTotals"`
 	SessionCounts    db.UsageSessionCounts `json:"sessionCounts"`
 	CacheStats       CacheStats            `json:"cacheStats"`
 	UnsupportedUsage *UnsupportedUsage     `json:"unsupportedUsage,omitempty"`
@@ -86,6 +98,7 @@ func usageSummaryResponseFromService(
 		ProjectTotals:    projectTotalsFromService(res.ProjectTotals),
 		ModelTotals:      modelTotalsFromService(res.ModelTotals),
 		AgentTotals:      agentTotalsFromService(res.AgentTotals),
+		BranchTotals:     branchTotalsFromService(res.BranchTotals),
 		SessionCounts:    res.SessionCounts,
 		CacheStats:       cacheStatsFromService(res.CacheStats),
 		UnsupportedUsage: unsupportedUsageFromService(res.UnsupportedUsage),
@@ -136,6 +149,22 @@ func agentTotalsFromService(in []service.AgentTotal) []AgentTotal {
 	for _, total := range in {
 		out = append(out, AgentTotal{
 			Agent:               total.Agent,
+			InputTokens:         total.InputTokens,
+			OutputTokens:        total.OutputTokens,
+			CacheCreationTokens: total.CacheCreationTokens,
+			CacheReadTokens:     total.CacheReadTokens,
+			Cost:                total.Cost,
+		})
+	}
+	return out
+}
+
+func branchTotalsFromService(in []service.BranchTotal) []BranchTotal {
+	out := make([]BranchTotal, 0, len(in))
+	for _, total := range in {
+		out = append(out, BranchTotal{
+			Project:             total.Project,
+			Branch:              total.Branch,
 			InputTokens:         total.InputTokens,
 			OutputTokens:        total.OutputTokens,
 			CacheCreationTokens: total.CacheCreationTokens,

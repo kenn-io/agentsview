@@ -90,7 +90,10 @@ type UsageFilter struct {
 	Project string // "" for all; supports comma-separated
 	Machine string // "" for all; supports comma-separated
 	// GitBranch is a branchListSep-joined list of opaque (project, branch) tokens (EncodeBranchFilterToken).
-	GitBranch         string
+	GitBranch string
+	// ExcludeGitBranch is a branchListSep-joined list of opaque (project, branch)
+	// tokens to exclude. Empty excludes nothing.
+	ExcludeGitBranch  string
 	Model             string // "" for all; supports comma-separated
 	ExcludeProject    string // comma-separated projects to exclude
 	ExcludeAgent      string // comma-separated agents to exclude
@@ -195,6 +198,12 @@ func (f UsageFilter) appendUsageSessionFilterClauses(
 	}
 	where, args = appendCSV(where, args, "s.project", f.ExcludeProject, false)
 	where, args = appendCSV(where, args, "s.agent", f.ExcludeAgent, false)
+	if f.ExcludeGitBranch != "" {
+		var clause string
+		clause, args = BranchPairExcludeClauseArgs(
+			"s.project", "s.git_branch", f.ExcludeGitBranch, args)
+		where += "\n\tAND " + clause
+	}
 
 	if f.MinUserMessages > 0 {
 		where += "\n\tAND s.user_message_count >= ?"
@@ -468,7 +477,8 @@ SELECT
 	m.source_uuid,
 	'' AS usage_dedup_key,
 	s.project,
-	s.agent
+	s.agent,
+	s.git_branch
 FROM messages m
 JOIN sessions s ON m.session_id = s.id
 WHERE %s
@@ -495,7 +505,8 @@ SELECT
 		ELSE ue.session_id || ':' || ue.source || ':id:' || ue.id
 	END AS usage_dedup_key,
 	s.project,
-	s.agent
+	s.agent,
+	s.git_branch
 FROM usage_events ue
 JOIN sessions s ON s.id = ue.session_id
 WHERE %s`
@@ -518,7 +529,8 @@ SELECT
 	m.source_uuid,
 	'' AS usage_dedup_key,
 	s.project,
-	s.agent
+	s.agent,
+	s.git_branch
 FROM %s m
 JOIN sessions s ON m.session_id = s.id
 WHERE %s`
@@ -544,7 +556,8 @@ SELECT
 		ELSE ue.session_id || ':' || ue.source || ':id:' || ue.id
 	END AS usage_dedup_key,
 	s.project,
-	s.agent
+	s.agent,
+	s.git_branch
 FROM %s ue
 JOIN sessions s ON s.id = ue.session_id
 WHERE %s`
@@ -675,6 +688,7 @@ type dailyUsageScanRow struct {
 	usageDedupKey            string
 	project                  string
 	agent                    string
+	gitBranch                string
 }
 
 type topSessionMetadata struct {
@@ -744,7 +758,8 @@ SELECT
 	u.source_uuid,
 	u.usage_dedup_key,
 	u.project,
-	u.agent
+	u.agent,
+	u.git_branch
 FROM (` + rowsSQL + `) u
 WHERE 1=1`
 }
@@ -921,7 +936,8 @@ SELECT
 	'' AS source_uuid,
 	cu.dedup_key AS usage_dedup_key,
 	'' AS project,
-	'cursor' AS agent
+	'cursor' AS agent,
+	'' AS git_branch
 FROM cursor_usage_events cu
 WHERE %s`
 
@@ -933,7 +949,8 @@ func cursorUsageRowsSQLForBounds(
 	// filter, so any filter they cannot satisfy (project, machine, branch)
 	// must exclude them entirely rather than let them leak into totals.
 	if f.Project != "" || f.ExcludeProject != "" ||
-		f.Machine != "" || f.GitBranch != "" || f.MinUserMessages > 0 ||
+		f.Machine != "" || f.GitBranch != "" || f.ExcludeGitBranch != "" ||
+		f.MinUserMessages > 0 ||
 		f.ExcludeOneShot || termPred != "" ||
 		f.ActiveSince != "" {
 		return "", nil, false
@@ -1043,6 +1060,7 @@ func scanDailyUsageRow(rows *sql.Rows) (dailyUsageScanRow, error) {
 		&r.usageDedupKey,
 		&r.project,
 		&r.agent,
+		&r.gitBranch,
 	)
 	return r, err
 }
@@ -1477,6 +1495,7 @@ type DailyUsageEntry struct {
 	ModelBreakdowns     []ModelBreakdown   `json:"modelBreakdowns,omitempty"`
 	ProjectBreakdowns   []ProjectBreakdown `json:"projectBreakdowns,omitempty"`
 	AgentBreakdowns     []AgentBreakdown   `json:"agentBreakdowns,omitempty"`
+	BranchBreakdowns    []BranchBreakdown  `json:"branchBreakdowns,omitempty"`
 }
 
 // ModelBreakdown holds per-model token and cost breakdown.
@@ -1502,6 +1521,17 @@ type ProjectBreakdown struct {
 // AgentBreakdown is the per-agent slice of a day's usage.
 type AgentBreakdown struct {
 	Agent               string  `json:"agent"`
+	InputTokens         int     `json:"inputTokens"`
+	OutputTokens        int     `json:"outputTokens"`
+	CacheCreationTokens int     `json:"cacheCreationTokens"`
+	CacheReadTokens     int     `json:"cacheReadTokens"`
+	Cost                float64 `json:"cost"`
+}
+
+// BranchBreakdown is keyed by the raw (project, branch) pair.
+type BranchBreakdown struct {
+	Project             string  `json:"project"`
+	Branch              string  `json:"branch"`
 	InputTokens         int     `json:"inputTokens"`
 	OutputTokens        int     `json:"outputTokens"`
 	CacheCreationTokens int     `json:"cacheCreationTokens"`
@@ -1601,6 +1631,24 @@ func paddedUTCBound(ts string, hours int) string {
 	return t.Add(time.Duration(hours) * time.Hour).Format(time.RFC3339)
 }
 
+type usageBucket struct {
+	inputTok  int
+	outputTok int
+	cacheCr   int
+	cacheRd   int
+	cost      float64
+}
+
+func addUsageBucket[K comparable](m map[K]usageBucket, key K, b usageBucket) {
+	cur := m[key]
+	cur.inputTok += b.inputTok
+	cur.outputTok += b.outputTok
+	cur.cacheCr += b.cacheCr
+	cur.cacheRd += b.cacheRd
+	cur.cost += b.cost
+	m[key] = cur
+}
+
 // GetDailyUsage returns token usage and cost aggregated by day.
 // It scans messages with non-empty token_usage JSON blobs,
 // parses them in Go (faster than SQLite's json_extract per row),
@@ -1634,22 +1682,15 @@ func (db *DB) GetDailyUsage(
 	}
 	defer rows.Close()
 
-	// 4-tuple key for per-(date, project, agent, model) accumulation.
 	type accumKey struct {
-		date    string
-		project string
-		agent   string
-		model   string
-	}
-	type bucket struct {
-		inputTok  int
-		outputTok int
-		cacheCr   int
-		cacheRd   int
-		cost      float64
+		date      string
+		project   string
+		agent     string
+		model     string
+		gitBranch string
 	}
 
-	accum := make(map[accumKey]*bucket)
+	accum := make(map[accumKey]*usageBucket)
 
 	seen := make(map[usageDedupToken]struct{})
 	var seenSessions map[string]UsageSessionInfo
@@ -1705,13 +1746,21 @@ func (db *DB) GetDailyUsage(
 			dailyUsageAmounts(r, rateResolver)
 		totalSavings += savings
 
+		// Leave gitBranch out of the accumulator key unless breakdowns are
+		// requested, so a plain totals query still sums one row per
+		// (date, project, agent, model) instead of splitting by branch too.
+		gitBranch := ""
+		if f.Breakdowns {
+			gitBranch = r.gitBranch
+		}
 		key := accumKey{
 			date: date, project: r.project,
 			agent: r.agent, model: r.model,
+			gitBranch: gitBranch,
 		}
 		b, ok := accum[key]
 		if !ok {
-			b = &bucket{}
+			b = &usageBucket{}
 			accum[key] = b
 		}
 		b.inputTok += inputTok
@@ -1728,7 +1777,7 @@ func (db *DB) GetDailyUsage(
 	// Two paths: without breakdowns (CLI, fast) and with breakdowns
 	// (web UI). The fast path uses the original (date, model)
 	// grouping with no extra column reads. The breakdown path adds
-	// project/agent dimensions and builds three decomposition slices.
+	// project/agent/branch dimensions and builds four decomposition slices.
 
 	if !f.Breakdowns {
 		// Fast path: group by (date, model) only.
@@ -1863,46 +1912,36 @@ func (db *DB) GetDailyUsage(
 		}, nil
 	}
 
-	// Breakdown path: single walk builds model/project/agent maps.
+	// Breakdown path: single walk builds model/project/agent/branch maps.
+	type branchMapKey struct {
+		project string
+		branch  string
+	}
 	type dayMaps struct {
-		models   map[string]bucket
-		projects map[string]bucket
-		agents   map[string]bucket
+		models   map[string]usageBucket
+		projects map[string]usageBucket
+		agents   map[string]usageBucket
+		branches map[branchMapKey]usageBucket
 	}
 	days := make(map[string]*dayMaps, 64)
 	for key, b := range accum {
 		dm, ok := days[key.date]
 		if !ok {
 			dm = &dayMaps{
-				models:   make(map[string]bucket, 4),
-				projects: make(map[string]bucket, 8),
-				agents:   make(map[string]bucket, 4),
+				models:   make(map[string]usageBucket, 4),
+				projects: make(map[string]usageBucket, 8),
+				agents:   make(map[string]usageBucket, 4),
+				branches: make(map[branchMapKey]usageBucket, 8),
 			}
 			days[key.date] = dm
 		}
-		cur := dm.models[key.model]
-		cur.inputTok += b.inputTok
-		cur.outputTok += b.outputTok
-		cur.cacheCr += b.cacheCr
-		cur.cacheRd += b.cacheRd
-		cur.cost += b.cost
-		dm.models[key.model] = cur
-
-		cur = dm.projects[key.project]
-		cur.inputTok += b.inputTok
-		cur.outputTok += b.outputTok
-		cur.cacheCr += b.cacheCr
-		cur.cacheRd += b.cacheRd
-		cur.cost += b.cost
-		dm.projects[key.project] = cur
-
-		cur = dm.agents[key.agent]
-		cur.inputTok += b.inputTok
-		cur.outputTok += b.outputTok
-		cur.cacheCr += b.cacheCr
-		cur.cacheRd += b.cacheRd
-		cur.cost += b.cost
-		dm.agents[key.agent] = cur
+		addUsageBucket(dm.models, key.model, *b)
+		addUsageBucket(dm.projects, key.project, *b)
+		addUsageBucket(dm.agents, key.agent, *b)
+		addUsageBucket(dm.branches, branchMapKey{
+			project: key.project,
+			branch:  key.gitBranch,
+		}, *b)
 	}
 
 	dateKeys := make([]string, 0, len(days))
@@ -2002,6 +2041,31 @@ func (db *DB) GetDailyUsage(
 			return abd[i].Agent < abd[j].Agent
 		})
 		entry.AgentBreakdowns = abd
+
+		bbd := make(
+			[]BranchBreakdown, 0, len(dm.branches),
+		)
+		for bk, b := range dm.branches {
+			bbd = append(bbd, BranchBreakdown{
+				Project:             bk.project,
+				Branch:              bk.branch,
+				InputTokens:         b.inputTok,
+				OutputTokens:        b.outputTok,
+				CacheCreationTokens: b.cacheCr,
+				CacheReadTokens:     b.cacheRd,
+				Cost:                b.cost,
+			})
+		}
+		sort.Slice(bbd, func(i, j int) bool {
+			if bbd[i].Cost != bbd[j].Cost {
+				return bbd[i].Cost > bbd[j].Cost
+			}
+			if bbd[i].Project != bbd[j].Project {
+				return bbd[i].Project < bbd[j].Project
+			}
+			return bbd[i].Branch < bbd[j].Branch
+		})
+		entry.BranchBreakdowns = bbd
 
 		daily = append(daily, entry)
 

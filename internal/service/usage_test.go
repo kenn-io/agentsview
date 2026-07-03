@@ -112,16 +112,20 @@ func assistantUsageMsg(
 func TestBuildUsageFilter_ValidMapping(t *testing.T) {
 	t.Parallel()
 	f, err := service.BuildUsageFilter(service.UsageRequest{
-		From:    "2024-06-01",
-		To:      "2024-06-15",
-		Project: "proj",
-		Agent:   "claude",
+		From:             "2024-06-01",
+		To:               "2024-06-15",
+		Project:          "proj",
+		Agent:            "claude",
+		GitBranch:        "proj\x1fmain",
+		ExcludeGitBranch: "proj\x1fdev",
 		// IncludeOneShot/IncludeAutomated default false -> exclude true.
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "2024-06-01", f.From)
 	assert.Equal(t, "2024-06-15", f.To)
 	assert.Equal(t, "proj", f.Project)
+	assert.Equal(t, "proj\x1fmain", f.GitBranch)
+	assert.Equal(t, "proj\x1fdev", f.ExcludeGitBranch)
 	assert.Equal(t, "UTC", f.Timezone, "empty timezone defaults to UTC")
 	assert.True(t, f.ExcludeOneShot, "IncludeOneShot=false -> ExcludeOneShot=true")
 	assert.True(t, f.ExcludeAutomated, "IncludeAutomated=false -> ExcludeAutomated=true")
@@ -241,6 +245,29 @@ func TestHTTPBackend_UsageSummary_SendsExplicitIncludeOneShot(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+func TestHTTPBackend_UsageSummary_SerializesBranchFilters(t *testing.T) {
+	t.Parallel()
+	var gitBranch, excludeGitBranch string
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			gitBranch = r.URL.Query().Get("git_branch")
+			excludeGitBranch = r.URL.Query().Get("exclude_git_branch")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"from":"x","to":"y"}`))
+		}))
+	t.Cleanup(srv.Close)
+	svc := service.NewHTTPBackend(srv.URL, "", false)
+
+	_, err := svc.UsageSummary(context.Background(), service.UsageRequest{
+		From: "2024-06-01", To: "2024-06-02",
+		GitBranch:        "alpha\x1fmain",
+		ExcludeGitBranch: "alpha\x1fdev",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "alpha\x1fmain", gitBranch)
+	assert.Equal(t, "alpha\x1fdev", excludeGitBranch)
 }
 
 // A read-only daemon (pg serve) returns 501 for usage; the HTTP backend
@@ -555,11 +582,12 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			queryValues = map[string]string{
-				"left_dimension":  r.URL.Query().Get("left_dimension"),
-				"left_value":      r.URL.Query().Get("left_value"),
-				"right_dimension": r.URL.Query().Get("right_dimension"),
-				"right_value":     r.URL.Query().Get("right_value"),
-				"git_branch":      r.URL.Query().Get("git_branch"),
+				"left_dimension":     r.URL.Query().Get("left_dimension"),
+				"left_value":         r.URL.Query().Get("left_value"),
+				"right_dimension":    r.URL.Query().Get("right_dimension"),
+				"right_value":        r.URL.Query().Get("right_value"),
+				"git_branch":         r.URL.Query().Get("git_branch"),
+				"exclude_git_branch": r.URL.Query().Get("exclude_git_branch"),
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"left":{"sessionCount":1,"totalTokens":12},"right":{"sessionCount":2,"totalTokens":34},"deltas":{"sessionCountDelta":1,"totalTokensDelta":22}}`))
@@ -572,7 +600,8 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 		context.Background(),
 		service.UsagePairwiseComparisonRequest{
 			UsageRequest: service.UsageRequest{
-				GitBranch: "alpha/main",
+				GitBranch:        "alpha/main",
+				ExcludeGitBranch: "alpha\x1fdev",
 			},
 			LeftDimension:  "project",
 			LeftValue:      "alpha",
@@ -587,5 +616,6 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 	assert.Equal(t, "model", queryValues["right_dimension"])
 	assert.Equal(t, "gpt-4o", queryValues["right_value"])
 	assert.Equal(t, "alpha/main", queryValues["git_branch"])
+	assert.Equal(t, "alpha\x1fdev", queryValues["exclude_git_branch"])
 	assert.Equal(t, 22, res.Deltas.TotalTokensDelta)
 }

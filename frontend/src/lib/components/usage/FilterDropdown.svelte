@@ -5,14 +5,18 @@
 
   interface FilterItem {
     name: string;
+    /** Display label when name is an opaque identity (e.g. branch tokens). */
+    label?: string;
     count?: number;
   }
 
   interface Props {
     label: string;
     items: FilterItem[];
-    /** Comma-separated list of EXCLUDED item names. */
+    /** Separator-joined list of EXCLUDED item names. */
     excludedCsv: string;
+    /** List separator; branch tokens can contain commas. */
+    separator?: string;
     onToggle: (name: string) => void;
     onSelectAll?: () => void;
     onDeselectAll?: () => void;
@@ -24,6 +28,7 @@
     label,
     items,
     excludedCsv,
+    separator = ",",
     onToggle,
     onSelectAll,
     onDeselectAll,
@@ -36,7 +41,7 @@
   let containerEl: HTMLDivElement | undefined = $state();
 
   const filterSet = $derived(
-    new Set(excludedCsv ? excludedCsv.split(",") : []),
+    new Set(excludedCsv ? excludedCsv.split(separator) : []),
   );
 
   const filteredCount = $derived(filterSet.size);
@@ -58,11 +63,12 @@
         (i) => !filterSet.has(i.name),
       );
       if (visible) {
+        const display = visible.label ?? visible.name;
         const maxLen = 20;
-        if (visible.name.length > maxLen) {
-          return `${label}: ${visible.name.slice(0, maxLen)}...`;
+        if (display.length > maxLen) {
+          return `${label}: ${display.slice(0, maxLen)}...`;
         }
-        return `${label}: ${visible.name}`;
+        return `${label}: ${display}`;
       }
     }
     if (visibleCount === 0) return m.usage_filter_none({ label });
@@ -77,7 +83,7 @@
   const filtered = $derived(
     search
       ? items.filter((i) =>
-          i.name.toLowerCase().includes(
+          (i.label ?? i.name).toLowerCase().includes(
             search.toLowerCase(),
           ),
         )
@@ -200,7 +206,7 @@
                 style:background={color(item.name)}
               ></span>
             {/if}
-            <span class="item-name">{item.name}</span>
+            <span class="item-name">{item.label ?? item.name}</span>
             {#if item.count !== undefined}
               <span class="item-count">{item.count}</span>
             {/if}
