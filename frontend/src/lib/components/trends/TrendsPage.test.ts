@@ -89,11 +89,16 @@ describe("TrendsPage", () => {
   });
 
   it("refreshes with the changed date value", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/trends?from=2024-01-01&to=2024-01-31",
+    );
     component = mount(TrendsPage, { target: document.body });
     await flushPromises();
 
-    // Open the unified range picker. The default 2024 span doesn't match any
-    // rolling preset, so it opens on the Custom tab with the From/To inputs.
+    // Open the unified range picker on the fixed query range so the From/To
+    // inputs are available.
     const trigger = document.querySelector<HTMLButtonElement>(
       "button.kit-date-range-picker__trigger",
     );
@@ -147,6 +152,24 @@ describe("TrendsPage", () => {
     await flushPromises();
 
     expect(document.body.textContent).toContain("one per line");
+  });
+
+  it("preserves the default rolling one-year range on bare trends URLs", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-20T12:00:00"));
+
+    component = mount(TrendsPage, { target: document.body });
+    await flushPromises();
+
+    expect(mocks.getApiV1TrendsTerms).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        from: "2025-06-21",
+        to: "2026-06-20",
+      }),
+    );
+    expect(window.location.search).toContain("window_days=365");
+    expect(window.location.search).toContain("from=2025-06-21");
+    expect(window.location.search).toContain("to=2026-06-20");
   });
 
   it("seeds bare trends URLs from the saved yoke range", async () => {

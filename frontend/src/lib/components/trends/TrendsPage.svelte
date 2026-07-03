@@ -38,9 +38,10 @@
     "var(--trend-black)",
   ] as const;
   const TREND_WINDOW_PARAM = "window_days";
+  const DEFAULT_TREND_WINDOW_DAYS = 365;
 
   let activeTerm: string | null = $state(null);
-  let trendsWindowDays: number | null = $state(null);
+  let trendsWindowDays: number | null = $state(DEFAULT_TREND_WINDOW_DAYS);
   const trendsPanelDate = $derived(currentTrendsPanelDate());
 
   const GRANULARITIES: TrendsGranularity[] = ["day", "week", "month"];
@@ -92,7 +93,7 @@
       trends.from = range.from;
       trends.to = range.to;
       trendsWindowDays = windowDays;
-    } else {
+    } else if (from || to) {
       if (from) trends.from = from;
       if (to) trends.to = to;
       trendsWindowDays = null;
@@ -230,6 +231,7 @@
     } else {
       seedTrendsYoke();
     }
+    materializeRollingWindow();
     writeUrl();
     trends.fetchTerms();
     document.addEventListener("click", onGroupByDocClick);
