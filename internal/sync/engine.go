@@ -4495,6 +4495,11 @@ func (e *Engine) providerSingleSessionFresh(
 	if e.providerIncrementalIdentityChanged(lookupPath, info) {
 		return 0, false, true
 	}
+	if e.providerIncrementalContentChanged(
+		e.idPrefix+sessionID, lookupPath, info,
+	) {
+		return 0, false, true
+	}
 	sess, _ := e.db.GetSession(ctx, e.idPrefix+sessionID)
 	return info.ModTime().UnixNano(), sess != nil &&
 		sess.Project != "" &&
@@ -4512,6 +4517,37 @@ func (e *Engine) providerIncrementalIdentityChanged(
 	}
 	curInode, curDevice := getFileIdentity(info)
 	return e.db.FileIdentityChanged(lookupPath, curInode, curDevice)
+}
+
+// providerIncrementalContentChanged reports whether a single-session JSONL
+// source whose size, mtime, and file identity already match the stored row
+// nonetheless holds different bytes than were last parsed. It is the last
+// guard against a same-size, same-mtime, same-inode in-place rewrite: two
+// fast writes landing in one filesystem mtime granule (or a coarse-mtime
+// filesystem) leave every stat signal identical, so only the content hash
+// distinguishes a genuine rewrite from an unchanged file. The stored file_hash
+// covers the stored file_size byte range, which shouldSkipFile has already
+// confirmed equals the current size, so the on-disk prefix hash is directly
+// comparable. Rows without a stored hash (legacy or non-fingerprinted) fall
+// back to trusting the size/mtime/identity signals, preserving prior behavior.
+func (e *Engine) providerIncrementalContentChanged(
+	fullID, lookupPath string,
+	info os.FileInfo,
+) bool {
+	if e.pathRewriter != nil {
+		// Remote imports translate per-run temp paths; the stored hash is the
+		// remote source fingerprint and freshness is handled on that path.
+		return false
+	}
+	storedHash, ok := e.db.GetSessionFileHash(fullID)
+	if !ok || storedHash == "" {
+		return false
+	}
+	curHash, err := ComputeFileHashPrefix(lookupPath, info.Size())
+	if err != nil {
+		return false
+	}
+	return curHash != storedHash
 }
 
 func (e *Engine) providerSourceFreshBeforeFingerprint(
@@ -4818,7 +4854,12 @@ func (e *Engine) tryIncrementalJSONL(
 	// the next sync.
 	newOffset := inc.FileSize + consumed
 	var incHash string
-	if agent == parser.AgentCodex {
+	// Refresh the stored content fingerprint on the incremental path. Codex
+	// needs it for parse-diff's raced-skew detection; Claude needs it so
+	// providerSingleSessionFresh can compare the stored hash against the
+	// on-disk bytes and catch a same-size, same-mtime, same-inode in-place
+	// rewrite that the size/mtime/identity skip signals cannot see.
+	if agent == parser.AgentCodex || agent == parser.AgentClaude {
 		if hash, err := ComputeFileHashPrefix(file.Path, newOffset); err == nil {
 			incHash = hash
 		}
@@ -6453,7 +6494,11 @@ func shouldReplaceFullParseMessages(
 // session metadata without overwriting columns that are not
 // recomputed during incremental parsing (e.g. parent_session_id,
 // relationship_type). Codex refreshes file_hash because parse-diff
-// uses it as the transcript fingerprint for raced-skew detection.
+// uses it as the transcript fingerprint for raced-skew detection;
+// Claude refreshes it so providerSingleSessionFresh can use the
+// stored hash as a content fingerprint against same-size in-place
+// rewrites. Other agents pass an empty hash, which COALESCE leaves
+// untouched.
 func (e *Engine) writeIncremental(
 	inc *incrementalUpdate,
 ) error {

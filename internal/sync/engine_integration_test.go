@@ -7579,14 +7579,21 @@ func TestIncrementalSync_ClaudeAppend(t *testing.T) {
 		assert.Equal(t, "inc-test", m.SessionID, "msgs[%d].SessionID = %q, want inc-test", i, m.SessionID)
 	}
 
-	// Metadata preserved (file_hash not cleared).
+	// file_hash is refreshed to the appended content's fingerprint (not
+	// cleared, not left on the pre-append snapshot) so the freshness gate can
+	// use it to detect a later same-size in-place rewrite.
 	updated, err := env.db.GetSessionFull(
 		context.Background(), "inc-test",
 	)
 	require.NoError(t, err, "GetSessionFull after incremental")
-	require.NotNil(t, updated.FileHash, "file_hash = nil, want %q (preserved)", origHash)
-	assert.Equal(t, origHash, *updated.FileHash,
-		"file_hash = %v, want %q (preserved)", updated.FileHash, origHash)
+	require.NotNil(t, updated.FileHash, "file_hash = nil, want appended-content hash")
+	require.NotEmpty(t, *updated.FileHash, "file_hash empty after incremental append")
+	assert.NotEqual(t, origHash, *updated.FileHash,
+		"file_hash = %q, want it refreshed away from the pre-append snapshot", origHash)
+	wantHash, err := sync.ComputeFileHash(path)
+	require.NoError(t, err, "hash appended file")
+	assert.Equal(t, wantHash, *updated.FileHash,
+		"file_hash does not match the appended file content")
 	assert.True(t, updated.HasTotalOutputTokens, "HasTotalOutputTokens = false, want true")
 	assert.True(t, updated.HasPeakContextTokens, "HasPeakContextTokens = false, want true")
 	assert.Equal(t, 200, updated.TotalOutputTokens, "TotalOutputTokens = %d, want 200", updated.TotalOutputTokens)
@@ -8091,6 +8098,70 @@ func TestIncrementalSync_ClaudeSameSizeInPlaceRewriteClearsStaleRows(t *testing.
 	msgs := fetchMessages(t, env.db, "same-size-in-place")
 	require.Len(t, msgs, 1)
 	assert.Contains(t, msgs[0].Content, "replacement")
+}
+
+// TestIncrementalSync_ClaudeSameSizeSameMtimeInPlaceRewriteUsesFullParse pins
+// the worst case for the stat-only fast-skip: a file rewritten in place (same
+// inode and device) with the same byte size and the same mtime. Two fast
+// successive writes landing in one filesystem mtime granule produce exactly
+// this state in the wild, and neither the size/mtime skip nor the inode net can
+// see the change. The engine must still detect the new content and full-parse
+// instead of serving the stale rows.
+func TestIncrementalSync_ClaudeSameSizeSameMtimeInPlaceRewriteUsesFullParse(
+	t *testing.T,
+) {
+	if runtime.GOOS == "windows" {
+		t.Skip("identity tracking is a no-op on Windows")
+	}
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+
+	original := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("first", tsZero),
+		testjsonl.ClaudeAssistantJSON("alpha", tsZeroS5),
+	)
+	path := env.writeClaudeSession(
+		t, "proj", "same-size-same-mtime-in-place.jsonl", original,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+	assertSessionMessageCount(t, env.db, "same-size-same-mtime-in-place", 2)
+
+	full, err := env.db.GetSessionFull(
+		context.Background(), "same-size-same-mtime-in-place",
+	)
+	require.NoError(t, err, "GetSessionFull")
+	require.NotNil(t, full.FileInode, "file_inode not populated after initial sync")
+	origInode := *full.FileInode
+	info, err := os.Stat(path)
+	require.NoError(t, err, "stat original")
+	originalMtime := info.ModTime()
+
+	replacement := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("third", tsZero),
+		testjsonl.ClaudeAssistantJSON("bravo", tsZeroS5),
+	)
+	require.Len(t, replacement, len(original), "replacement fixture must keep same byte size")
+
+	// Rewrite in place so the inode/device do not change, then restore the
+	// original mtime so size, mtime, inode, and device all match what the
+	// initial sync stored. Only the content differs.
+	require.NoError(t, os.WriteFile(path, []byte(replacement), 0o644), "in-place rewrite")
+	require.NoError(t, os.Chtimes(path, originalMtime, originalMtime), "restore mtime")
+
+	env.engine.SyncPaths([]string{path})
+
+	msgs := fetchMessages(t, env.db, "same-size-same-mtime-in-place")
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "third", msgs[0].Content)
+	assert.Equal(t, "bravo", msgs[1].Content)
+
+	full, err = env.db.GetSessionFull(
+		context.Background(), "same-size-same-mtime-in-place",
+	)
+	require.NoError(t, err, "GetSessionFull after replace")
+	require.NotNil(t, full.FileInode, "file_inode cleared after replace")
+	// The rewrite was in place, so the inode is unchanged: the fix must catch
+	// the content change through the stored hash, not the identity net.
+	assert.Equal(t, origInode, *full.FileInode)
 }
 
 // TestIncrementalSync_ClaudeMidStreamSplitFallsBackToFullParse covers
