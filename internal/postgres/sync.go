@@ -149,6 +149,7 @@ type Sync struct {
 	pg                     *sql.DB
 	local                  *db.DB
 	syncState              syncStateStore
+	aliasBackfillState     syncStateStore
 	machine                string
 	schema                 string
 	targetFingerprint      string
@@ -171,6 +172,13 @@ func (s *Sync) effectiveSyncState() syncStateStore {
 		return s.syncState
 	}
 	return s.local
+}
+
+func (s *Sync) aliasBackfillSyncStateOrDefault() syncStateStore {
+	if s.aliasBackfillState != nil {
+		return s.aliasBackfillState
+	}
+	return s.effectiveSyncState()
 }
 
 // SyncOptions holds optional configuration for a Sync instance.
@@ -239,6 +247,7 @@ func New(
 		opts.Projects,
 		opts.ExcludeProjects,
 	)
+	aliasBackfillStateScope := opts.SyncStateTarget
 	migrateLegacySyncState := opts.MigrateLegacySyncState &&
 		!hasProjectFilter(opts.Projects, opts.ExcludeProjects)
 
@@ -249,6 +258,11 @@ func New(
 			local,
 			syncStateScope,
 			migrateLegacySyncState,
+		),
+		aliasBackfillState: newScopedSyncStateStore(
+			local,
+			aliasBackfillStateScope,
+			false,
 		),
 		machine:                machine,
 		schema:                 schema,

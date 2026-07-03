@@ -70,6 +70,7 @@ func (s *Sync) Push(
 	start := time.Now()
 	var result PushResult
 	state := s.effectiveSyncState()
+	aliasBackfillState := s.aliasBackfillSyncStateOrDefault()
 
 	if err := CheckDataVersionCompat(ctx, s.pg); err != nil {
 		return result, err
@@ -132,9 +133,12 @@ func (s *Sync) Push(
 	legacyMarkerMachines := pushMarkerLegacyMachines(
 		markerMachine, markerMachineAliases,
 	)
+	// Keep the backfill marker scoped to target only; all other push
+	// state remains scoped by full effective sync state (including filter
+	// fingerprint when present).
 	aliasBackfillNeeded := false
 	full, aliasBackfillNeeded, err = applySessionAliasBackfillRequirement(
-		state, full,
+		aliasBackfillState, full,
 	)
 	if err != nil {
 		return result, err
@@ -339,7 +343,7 @@ func (s *Sync) Push(
 			return result, err
 		}
 		if err := completeSessionAliasBackfill(
-			state, aliasBackfillNeeded, result,
+			aliasBackfillState, aliasBackfillNeeded, result,
 		); err != nil {
 			return result, err
 		}
@@ -443,7 +447,7 @@ func (s *Sync) Push(
 		return result, err
 	}
 	if err := completeSessionAliasBackfill(
-		state, aliasBackfillNeeded, result,
+		aliasBackfillState, aliasBackfillNeeded, result,
 	); err != nil {
 		return result, err
 	}

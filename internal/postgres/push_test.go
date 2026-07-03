@@ -194,6 +194,115 @@ func TestCompleteSessionAliasBackfillMarksDoneUnlessErrors(t *testing.T) {
 	}
 }
 
+func TestSessionAliasBackfillRequirementUsesSyncAliasStateAcrossFilters(t *testing.T) {
+	filterScopeA := pushSyncStateScope(
+		"work",
+		[]string{"alpha"},
+		nil,
+	)
+	filterScopeB := pushSyncStateScope(
+		"work",
+		[]string{"beta"},
+		nil,
+	)
+
+	store := &syncStateStoreStub{}
+	syncA := &Sync{
+		syncState:          newScopedSyncStateStore(store, filterScopeA, false),
+		aliasBackfillState: newScopedSyncStateStore(store, "work", false),
+	}
+	syncB := &Sync{
+		syncState:          newScopedSyncStateStore(store, filterScopeB, false),
+		aliasBackfillState: newScopedSyncStateStore(store, "work", false),
+	}
+
+	full, needed, err := applySessionAliasBackfillRequirement(
+		syncA.aliasBackfillSyncStateOrDefault(), false,
+	)
+	require.NoError(t, err)
+	assert.True(t, full)
+	assert.True(t, needed)
+
+	require.NoError(t, completeSessionAliasBackfill(
+		syncA.aliasBackfillSyncStateOrDefault(),
+		true,
+		PushResult{},
+	))
+
+	full, needed, err = applySessionAliasBackfillRequirement(
+		syncB.aliasBackfillSyncStateOrDefault(), false,
+	)
+	require.NoError(t, err)
+	assert.False(t, full, "head behavior: target scope keeps marker across filters")
+	assert.False(t, needed, "head behavior: marker should not re-arm full push")
+	assert.Empty(t, store.values[sessionAliasBackfillStateKey+":"+filterScopeA])
+	assert.Empty(t, store.values[sessionAliasBackfillStateKey+":"+filterScopeB])
+	assert.Equal(t, "1", store.values[sessionAliasBackfillStateKey+":work"])
+}
+
+func TestSessionAliasBackfillStateFallsBackToEffectiveScope(t *testing.T) {
+	store := &syncStateStoreStub{}
+	scope := pushSyncStateScope("work", []string{"alpha"}, nil)
+	syncer := &Sync{
+		syncState: newScopedSyncStateStore(store, scope, false),
+	}
+
+	require.NoError(t, markSessionAliasBackfillDone(
+		syncer.aliasBackfillSyncStateOrDefault(),
+	))
+	assert.Equal(t, "1", store.values[sessionAliasBackfillStateKey+":"+scope])
+}
+
+func TestSessionAliasBackfillKeysStayFilteredForPushState(t *testing.T) {
+	filterScopeA := pushSyncStateScope("work", []string{"alpha"}, nil)
+	filterScopeB := pushSyncStateScope("work", []string{"beta"}, nil)
+	store := &syncStateStoreStub{}
+	syncA := &Sync{
+		syncState:          newScopedSyncStateStore(store, filterScopeA, false),
+		aliasBackfillState: newScopedSyncStateStore(store, "work", false),
+	}
+
+	require.NoError(t, syncA.effectiveSyncState().SetSyncState(
+		"last_push_at", "2026-03-11T12:00:00.000Z",
+	))
+	require.NoError(t, syncA.effectiveSyncState().SetSyncState(
+		lastPushBoundaryStateKey, `{"cutoff":"2026-03-11T12:00:00.000Z"}`,
+	))
+	require.NoError(t, syncA.effectiveSyncState().SetSyncState(
+		lastPushTargetFingerprintKey, "fp-1",
+	))
+	require.NoError(t, markSessionAliasBackfillDone(
+		syncA.aliasBackfillSyncStateOrDefault(),
+	))
+
+	assert.Equal(
+		t,
+		"2026-03-11T12:00:00.000Z",
+		store.values["last_push_at:"+filterScopeA],
+	)
+	assert.Equal(
+		t,
+		`{"cutoff":"2026-03-11T12:00:00.000Z"}`,
+		store.values[lastPushBoundaryStateKey+":"+filterScopeA],
+	)
+	assert.Equal(
+		t,
+		"fp-1",
+		store.values[lastPushTargetFingerprintKey+":"+filterScopeA],
+	)
+	assert.Empty(t, store.values["last_push_at:"+filterScopeB])
+	assert.Empty(t, store.values[lastPushBoundaryStateKey+":"+filterScopeB])
+	assert.Empty(t, store.values[lastPushTargetFingerprintKey+":"+filterScopeB])
+	assert.Empty(t, store.values[sessionAliasBackfillStateKey+":"+filterScopeA])
+	assert.Empty(t, store.values[sessionAliasBackfillStateKey+":"+filterScopeB])
+	assert.Equal(
+		t,
+		"1",
+		store.values[sessionAliasBackfillStateKey+":work"],
+	)
+	assert.Empty(t, store.values["last_push_at:work"])
+}
+
 func TestReadPushBoundaryStateValidity(t *testing.T) {
 	const cutoff = "2026-03-11T12:34:56.123Z"
 
