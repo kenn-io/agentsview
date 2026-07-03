@@ -65,6 +65,7 @@ func TestDevinProviderDiscoverFindParse(t *testing.T) {
 	assert.Equal(t, virtualPath, discovered[0].Key)
 	assert.Equal(t, virtualPath, discovered[0].DisplayPath)
 	assert.Equal(t, virtualPath, discovered[0].FingerprintKey)
+	assert.Equal(t, int64(1704103265000000000), discovered[0].DiscoveryMTimeNS)
 
 	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
 		Path:      filepath.Join(root, "cli", "transcripts", sessionID+".json"),
@@ -239,7 +240,7 @@ func TestDevinProviderMissingTranscriptUsesMessageNodeFallback(t *testing.T) {
 	assert.Equal(t, "fallback user", outcome.Results[0].Result.Messages[0].Content)
 }
 
-func TestDevinProviderMissingTranscriptWithoutDBMessagesReturnsRetryableSourceError(t *testing.T) {
+func TestDevinProviderMissingTranscriptWithoutDBMessagesReturnsProviderError(t *testing.T) {
 	const sessionID = "session-db-only-empty"
 	fixture := newDevinTestFixture(t,
 		devinSessionRow{ID: sessionID, Title: "DB only session", WorkingDirectory: "/tmp/db-only-project", Model: "db-only-model", CreatedAtMillis: new(int64(1704103200000)), LastActivityMillis: new(int64(1704103209000))},
@@ -253,16 +254,12 @@ func TestDevinProviderMissingTranscriptWithoutDBMessagesReturnsRetryableSourceEr
 	require.NoError(t, err)
 	require.True(t, ok)
 	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: source})
-	require.NoError(t, err)
-	assert.True(t, outcome.ResultSetComplete)
-	assert.False(t, outcome.ForceReplace)
+	require.Error(t, err)
 	assert.Empty(t, outcome.Results)
-	require.Len(t, outcome.SourceErrors, 1)
-	assert.Equal(t, source.FingerprintKey, outcome.SourceErrors[0].SourceKey)
-	assert.Equal(t, devinRedactedTranscriptPath(), outcome.SourceErrors[0].DisplayPath)
-	assert.Equal(t, "devin:"+sessionID, outcome.SourceErrors[0].SessionID)
-	assert.True(t, outcome.SourceErrors[0].Retryable)
-	assert.ErrorContains(t, outcome.SourceErrors[0].Err, "missing devin transcript")
+	assert.Empty(t, outcome.SourceErrors)
+	assert.ErrorContains(t, err, "missing devin transcript")
+	assert.NotContains(t, err.Error(), source.DisplayPath)
+	assert.NotContains(t, err.Error(), sessionID)
 }
 
 func TestDevinProviderCompositeFingerprintStableAndRedacted(t *testing.T) {
@@ -493,7 +490,7 @@ func TestDevinProviderHiddenRowFingerprintsTombstoneAndSkips(t *testing.T) {
 	assert.Empty(t, outcome.Results)
 }
 
-func TestDevinProviderCorruptTranscriptReturnsRetryableSourceError(t *testing.T) {
+func TestDevinProviderCorruptTranscriptReturnsProviderError(t *testing.T) {
 	const sessionID = "session-corrupt"
 	dbPath, transcriptPath := newDevinSessionFixture(t, devinSessionRow{ID: sessionID, Title: "Corrupt transcript", WorkingDirectory: "/tmp/app", Model: "db-model", CreatedAtMillis: new(int64(1704103199000)), LastActivityMillis: new(int64(1704103265000))}, `{"steps":[]}`)
 	root := filepath.Dir(filepath.Dir(dbPath))
@@ -507,18 +504,13 @@ func TestDevinProviderCorruptTranscriptReturnsRetryableSourceError(t *testing.T)
 	require.True(t, ok)
 
 	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: source})
-	require.NoError(t, err)
-	assert.True(t, outcome.ResultSetComplete)
-	assert.False(t, outcome.ForceReplace)
 	assert.Empty(t, outcome.Results)
-	require.Len(t, outcome.SourceErrors, 1)
-	sourceErr := outcome.SourceErrors[0]
-	assert.True(t, sourceErr.Retryable)
-	assert.Equal(t, devinRedactedTranscriptPath(), sourceErr.DisplayPath)
-	assert.ErrorContains(t, sourceErr.Err, "invalid devin transcript")
-	assert.NotContains(t, sourceErr.Err.Error(), transcriptPath)
-	assert.NotContains(t, sourceErr.Err.Error(), sessionID)
-	assert.NotContains(t, sourceErr.Err.Error(), "token-123")
+	assert.Empty(t, outcome.SourceErrors)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "invalid devin transcript")
+	assert.NotContains(t, err.Error(), transcriptPath)
+	assert.NotContains(t, err.Error(), sessionID)
+	assert.NotContains(t, err.Error(), "token-123")
 }
 
 func TestDevinProviderIgnoresCredentialPathsAndRedactsSecretBearingErrors(t *testing.T) {
@@ -567,13 +559,11 @@ func TestDevinProviderIgnoresCredentialPathsAndRedactsSecretBearingErrors(t *tes
 	assert.Equal(t, VirtualSourcePath(dbPath, sessionID), source.DisplayPath)
 
 	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: source})
-	require.NoError(t, err)
-	require.Len(t, outcome.SourceErrors, 1)
-	sourceErr := outcome.SourceErrors[0]
-	assert.True(t, sourceErr.Retryable)
-	assert.Equal(t, devinRedactedTranscriptPath(), sourceErr.DisplayPath)
-	assert.ErrorContains(t, sourceErr.Err, "invalid devin transcript")
-	assertDevinErrorRedacted(t, sourceErr.Err,
+	assert.Empty(t, outcome.Results)
+	assert.Empty(t, outcome.SourceErrors)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "invalid devin transcript")
+	assertDevinErrorRedacted(t, err,
 		secretSentinel,
 		"mcp/oauth",
 		"config",

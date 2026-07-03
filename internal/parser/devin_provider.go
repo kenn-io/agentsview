@@ -106,17 +106,7 @@ func (p *devinProvider) Parse(
 	}
 	var transcriptErr *devinTranscriptError
 	if errors.As(err, &transcriptErr) {
-		sourceKey := firstNonEmptyJSONLString(req.Source.FingerprintKey, req.Source.Key, src.virtualPath())
-		return ParseOutcome{
-			SourceErrors: []SourceError{{
-				SourceKey:   sourceKey,
-				DisplayPath: devinRedactedTranscriptPath(),
-				SessionID:   "devin:" + src.SessionID,
-				Err:         transcriptErr,
-				Retryable:   true,
-			}},
-			ResultSetComplete: true,
-		}, nil
+		return ParseOutcome{}, transcriptErr
 	}
 	if err != nil {
 		return ParseOutcome{}, err
@@ -171,7 +161,7 @@ func (s devinSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 			return nil, err
 		}
 		for _, meta := range metas {
-			addJSONLSource(s.newSourceRef(root, dbPath, meta.RawSessionID), &sources, seen)
+			addJSONLSource(s.newSourceRefWithMTime(root, dbPath, meta.RawSessionID, meta.FileMtime), &sources, seen)
 		}
 	}
 	sortJSONLSources(sources)
@@ -222,7 +212,7 @@ func (s devinSourceSet) SourcesForChangedPath(
 			sources := make([]SourceRef, 0, len(metas))
 			seen := make(map[string]struct{}, len(metas))
 			for _, meta := range metas {
-				addJSONLSource(s.newSourceRef(root, dbPath, meta.RawSessionID), &sources, seen)
+				addJSONLSource(s.newSourceRefWithMTime(root, dbPath, meta.RawSessionID, meta.FileMtime), &sources, seen)
 			}
 			for _, path := range req.StoredSourcePaths {
 				ref, ok := s.sourceRef(root, path, true)
@@ -503,7 +493,7 @@ func (s devinSourceSet) findByRawSessionID(root, rawID string, requireFresh bool
 	if meta == nil {
 		return SourceRef{}, false, nil
 	}
-	ref := s.newSourceRef(root, dbPath, rawID)
+	ref := s.newSourceRefWithMTime(root, dbPath, rawID, meta.FileMtime)
 	if requireFresh {
 		fresh, err := s.sourceExists(ref.Opaque.(devinSource))
 		if err != nil {
@@ -517,12 +507,17 @@ func (s devinSourceSet) findByRawSessionID(root, rawID string, requireFresh bool
 }
 
 func (s devinSourceSet) newSourceRef(root, dbPath, sessionID string) SourceRef {
+	return s.newSourceRefWithMTime(root, dbPath, sessionID, 0)
+}
+
+func (s devinSourceSet) newSourceRefWithMTime(root, dbPath, sessionID string, mtimeNS int64) SourceRef {
 	virtualPath := VirtualSourcePath(dbPath, sessionID)
 	return SourceRef{
-		Provider:       AgentDevin,
-		Key:            virtualPath,
-		DisplayPath:    virtualPath,
-		FingerprintKey: virtualPath,
+		Provider:         AgentDevin,
+		Key:              virtualPath,
+		DisplayPath:      virtualPath,
+		FingerprintKey:   virtualPath,
+		DiscoveryMTimeNS: mtimeNS,
 		Opaque: devinSource{
 			Root:      root,
 			DBPath:    dbPath,

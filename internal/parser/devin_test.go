@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -106,6 +107,29 @@ func TestOpenDevinDBUsesReadOnlyMode(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"session-readonly"}, devinMetaIDs(metas))
 	assert.NotEmpty(t, journalMode)
+}
+
+func TestOpenDevinDBWithSpecialCharPath(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "pro#ject %41")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	dbPath := filepath.Join(dir, devinDBFilename)
+
+	writer, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = writer.Exec("CREATE TABLE sessions (id TEXT); INSERT INTO sessions VALUES ('session-1')")
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	db, err := openDevinDB(dbPath)
+	require.NoError(t, err)
+	defer db.Close()
+
+	var count int
+	require.NoError(t, db.QueryRow("SELECT count(*) FROM sessions").Scan(&count))
+	assert.Equal(t, 1, count)
+
+	_, err = db.Exec("INSERT INTO sessions VALUES ('session-2')")
+	require.Error(t, err, "mode=ro must survive special characters in the path")
 }
 
 func TestParseDevinSession(t *testing.T) {

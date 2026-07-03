@@ -400,13 +400,14 @@ func parseDiffSourceKey(path string) string {
 
 // perSessionDBVirtualSourceBases lists the shared-SQLite database filenames
 // whose providers discover one virtual source per session (opencode.db#id,
-// warp.sqlite#id, ...). parse-diff keys these by their full virtual path, so a
+// sessions.db#id, warp.sqlite#id, ...). parse-diff keys these by their full
+// virtual path, so a
 // --limit sample or a per-session parse failure stays scoped to the single
 // session it names instead of fanning out across every sibling row in the same
 // physical database. Contrast Kiro/Zed/Shelley, whose providers discover the
 // database as one source; those key by the stripped database path.
 var perSessionDBVirtualSourceBases = []string{
-	"opencode.db", "kilo.db", "mimocode.db",
+	"opencode.db", "kilo.db", "mimocode.db", "sessions.db",
 	parser.WarpDBFilename, parser.ForgeDBFilename, parser.PiebaldDBFilename,
 }
 

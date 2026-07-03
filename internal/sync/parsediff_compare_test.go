@@ -2173,6 +2173,29 @@ func TestParseDiffProviderVirtualSQLiteLimitUsesExactSource(t *testing.T) {
 	}
 }
 
+func TestParseDiffDevinVirtualSQLiteLimitUsesExactSource(t *testing.T) {
+	dbPath := filepath.Join("/tmp", "devin", "cli", "sessions.db")
+	firstPath := parser.VirtualSourcePath(dbPath, "ses_one")
+	secondPath := parser.VirtualSourcePath(dbPath, "ses_two")
+	_, cutPaths, limited := sortAndLimitParseDiffFiles(
+		[]parser.DiscoveredFile{
+			{Path: firstPath, Agent: parser.AgentDevin},
+			{Path: secondPath, Agent: parser.AgentDevin},
+		},
+		1,
+	)
+
+	require.True(t, limited)
+	assert.Len(t, cutPaths, 1)
+	assert.False(t, cutPaths[dbPath])
+	for path := range cutPaths {
+		assert.True(t,
+			path == firstPath || path == secondPath,
+			"cut path %q must be one exact Devin virtual source", path,
+		)
+	}
+}
+
 // TestParseDiffDBBackedLimitOrdersByDiscoveryMtime pins the ordering fix at the
 // sorter boundary: two DB-backed virtual sources whose paths sort in the
 // opposite order to their per-session mtimes. Before the fix both stat to 0 and
