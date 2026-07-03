@@ -19,25 +19,25 @@
     "e2e": "playwright test"
   },
   "dependencies": {
-    "@kenn-io/kit-ui": "git+https://github.com/kenn-io/kit-ui.git#215d25278db71a95109164133b27a3eb539d5186",
+    "@kenn-io/kit-ui": "git+https://github.com/kenn-io/kit-ui.git#063a2ea19836e93ccc9002b65f75360b08e61980",
     "@lucide/svelte": "1.21.0",
-    "@tanstack/virtual-core": "3.17.1",
+    "@tanstack/virtual-core": "3.17.2",
     "dompurify": "3.4.11",
     "marked": "18.0.5",
-    "shiki": "4.2.0"
+    "shiki": "4.3.0"
   },
   "devDependencies": {
     "@inlang/paraglide-js": "^2.20.2",
     "@inlang/plugin-m-function-matcher": "^2.2.9",
     "@inlang/plugin-message-format": "^4.4.0",
-    "@playwright/test": "1.61.0",
+    "@playwright/test": "1.61.1",
     "@sveltejs/vite-plugin-svelte": "7.1.2",
     "@testing-library/svelte": "^5.3.1",
     "@tsconfig/svelte": "5.0.8",
     "jsdom": "29.1.1",
     "openapi-typescript-codegen": "^0.31.0",
-    "svelte": "5.56.3",
-    "svelte-check": "4.6.0",
+    "svelte": "5.56.4",
+    "svelte-check": "4.7.1",
     "typescript": "6.0.3",
     "vite": "npm:@voidzero-dev/vite-plus-core@0.2.1",
     "vite-plus": "0.2.1",
