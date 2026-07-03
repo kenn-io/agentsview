@@ -274,7 +274,10 @@ bench-backends: pricing-snapshot ensure-embed-dir
 # pattern in sync with .github/workflows/bench.yml.
 BENCH_GATE_PATTERN ?= ^(BenchmarkSyncAllColdArchive|BenchmarkSyncAllWarmNoop|BenchmarkSyncPathsIncrementalAppend|BenchmarkReplaceSessionMessagesStreamingMerge|BenchmarkInsertMessagesBatch|BenchmarkGetDailyUsage|BenchmarkScan|BenchmarkScanDefinite)$$
 BENCH_GATE_COUNT ?= 6
-BENCH_GATE_TIME ?= 500ms
+# Fixed iterations, not a duration: some gated benchmarks grow their
+# fixture as they iterate, so baseline and candidate must run the
+# same iteration count to measure identical workloads.
+BENCH_GATE_TIME ?= 20x
 bench-gate: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5" -run '^$$' \
 		-bench '$(BENCH_GATE_PATTERN)' -benchmem \

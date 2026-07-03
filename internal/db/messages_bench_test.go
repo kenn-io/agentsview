@@ -123,6 +123,12 @@ func BenchmarkReplaceSessionMessagesStreamingMerge(b *testing.B) {
 // BenchmarkInsertMessagesBatch measures bulk session ingest: one
 // session row plus a batch insert of its messages, the unit of work
 // the full-sync write pipeline performs per session.
+//
+// Each iteration adds a new session, so the database grows with the
+// iteration count and per-op cost is only comparable between runs
+// with the same count: the bench gate always runs with a fixed
+// -benchtime=Nx (see bench.yml and the Makefile) so baseline and
+// candidate insert into identically sized databases.
 func BenchmarkInsertMessagesBatch(b *testing.B) {
 	const batch = 200
 	d := openBenchDB(b)

@@ -50,7 +50,7 @@ sessions" or "the manifest is read once per root regardless of session count".
 its merge base on the same runner, then compares with `cmd/benchgate`:
 
 - `BenchmarkSyncAllWarmNoop` — full sync over an already-synced archive (stat +
-  skip work only; also self-asserts nothing is reparsed).
+  skip work only; also self-asserts nothing is re-synced or bulk-rewritten).
 - `BenchmarkSyncPathsIncrementalAppend` — absorb one appended line into a
   1,000-message session.
 - `BenchmarkSyncAllColdArchive` — first-sync ingest throughput.
@@ -61,23 +61,33 @@ its merge base on the same runner, then compares with `cmd/benchgate`:
 - `BenchmarkScan` / `BenchmarkScanDefinite` — secret-scan regex throughput.
 
 `benchgate` builds on `golang.org/x/perf`: `benchfmt` parses the output and
-`benchmath` — the statistics engine behind `benchstat` — summarizes each
-benchmark's `-count` runs by their median and tests significance (Mann-Whitney
-U). benchgate adds only the policy benchstat does not provide: thresholds,
-floors, and a failing exit code. It gates hard on `allocs/op` (limit 1.25x) and
-`B/op` (1.35x), which are deterministic for the same code on the same machine —
-an O(archive)-instead-of-O(delta) regression always blows them up. Time
-(`sec/op`) gets a loose 2.0x limit and must additionally be a statistically
-significant difference before it fails, so runner noise cannot flake a PR but
-algorithmic blowups still do. Baselines below a per-metric floor are not gated.
-Benchmarks that exist on only one side are reported but never fail, so adding or
-removing benchmarks cannot wedge a PR.
+`benchmath` — the statistics engine behind `benchstat` — summarizes samples and
+tests significance (Mann-Whitney U). benchgate adds only the policy benchstat
+does not provide: thresholds, floors, and a failing exit code. Gating is per
+benchmark — any single benchmark over its threshold fails the PR; nothing is
+averaged across benchmarks. It gates hard on `allocs/op` (limit 1.25x) and
+`B/op` (1.35x), which are deterministic for the same code and iteration count —
+an O(archive)-instead-of-O(delta) regression always blows them up. Those two
+compare the candidate's *worst* `-count` run against the baseline median, so
+even an intermittent extra-allocation path fails. Time (`sec/op`) compares
+medians with a loose 2.0x limit and must additionally be a statistically
+significant difference before it fails, so a single slow run on a noisy runner
+cannot flake a PR but algorithmic blowups still do. Baselines below a per-metric
+floor are not gated. Benchmarks that exist on only one side are reported but
+never fail, so adding or removing benchmarks cannot wedge a PR.
 
-Run locally:
+The gate always runs with a fixed `-benchtime=Nx` iteration count (not a
+duration): two of the benchmarks grow their fixture as they iterate, so the
+baseline and candidate must run the same number of iterations to measure
+identical workloads.
+
+Run locally, comparing your working tree against a baseline commit:
 
 ```bash
-make bench-gate                          # current tree
-git stash && make bench-gate > old.txt   # baseline, however you produce it
+make bench-gate > new.txt                # candidate: current tree
+git stash                                # or: git switch --detach origin/main
+make bench-gate > old.txt                # baseline
+git stash pop                            # restore the working tree
 go run ./cmd/benchgate -old old.txt -new new.txt
 ```
 
@@ -90,5 +100,11 @@ Cross-backend query benchmarks live separately in `internal/backendbench`
    `b.ReportAllocs()`, self-assert the invariant it protects where possible).
 1. Add its name to `BENCH_PATTERN` in `.github/workflows/bench.yml` **and**
    `BENCH_GATE_PATTERN` in the Makefile.
+1. Make sure its package is in `BENCH_PACKAGES` (bench.yml) and the Makefile
+   `bench-gate` package list — a name in the pattern whose package is not in
+   the list is silently never run, so it looks gated while measuring nothing.
 1. Keep per-op cost roughly in the 100µs–100ms band: below the benchgate floors
    nothing is gated, and far above it the job gets slow.
+1. If the benchmark's fixture grows across iterations, say so in its comment;
+   the fixed `-benchtime=Nx` keeps both sides comparable, but readers need to
+   know per-op cost depends on the iteration count.

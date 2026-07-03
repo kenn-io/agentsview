@@ -33,7 +33,12 @@ env:
   BENCH_PACKAGES: ./internal/sync ./internal/db ./internal/secrets
   BENCH_PATTERN: ^(BenchmarkSyncAllColdArchive|BenchmarkSyncAllWarmNoop|BenchmarkSyncPathsIncrementalAppend|BenchmarkReplaceSessionMessagesStreamingMerge|BenchmarkInsertMessagesBatch|BenchmarkGetDailyUsage|BenchmarkScan|BenchmarkScanDefinite)$
   BENCH_COUNT: "6"
-  BENCH_TIME: 500ms
+  # Fixed iterations (not a duration) so the baseline and candidate
+  # run identical workloads: two of the gated benchmarks grow their
+  # fixture as they iterate (appending to a session, adding sessions
+  # to a DB), and a duration-based -benchtime would let a slower side
+  # run fewer iterations against a different final size.
+  BENCH_TIME: 20x
 
 jobs:
   bench-gate:
@@ -68,16 +73,20 @@ jobs:
         # A failing merge-base run (or one with none of the gated
         # benchmarks yet) degrades to an empty baseline: benchgate
         # then reports every benchmark as new and passes, so a broken
-        # base never blocks a PR.
+        # base never blocks a PR. The baseline file is truncated on
+        # failure so partial output from packages that ran before the
+        # failure cannot gate against incomplete data.
         run: |
           base=$(git merge-base HEAD "origin/$BASE_REF")
           git worktree add /tmp/bench-base "$base"
           cd /tmp/bench-base
           go run ./internal/pricing/cmd/litellm-snapshot -restore || true
-          go test -tags "fts5" -run '^$' -bench "$BENCH_PATTERN" \
+          if ! go test -tags "fts5" -run '^$' -bench "$BENCH_PATTERN" \
             -benchmem -count "$BENCH_COUNT" -benchtime "$BENCH_TIME" \
-            -timeout 25m $BENCH_PACKAGES > /tmp/bench-old.txt \
-            || echo "merge-base benchmarks failed; comparing against empty baseline"
+            -timeout 25m $BENCH_PACKAGES > /tmp/bench-old.txt; then
+            echo "merge-base benchmarks failed; comparing against empty baseline"
+            : > /tmp/bench-old.txt
+          fi
 
       - name: Compare against merge base
         run: go run ./cmd/benchgate -old /tmp/bench-old.txt -new /tmp/bench-new.txt

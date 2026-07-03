@@ -141,7 +141,12 @@ func BenchmarkSyncAllWarmNoop(b *testing.B) {
 		stats := engine.SyncAll(ctx, nil)
 		if stats.Synced != 0 {
 			b.Fatalf(
-				"warm no-op sync reparsed %d sessions", stats.Synced,
+				"warm no-op sync re-synced %d sessions", stats.Synced,
+			)
+		}
+		if writes := engine.PhaseStats().BatchedWrites.Load(); writes != 0 {
+			b.Fatalf(
+				"warm no-op sync bulk-wrote %d sessions", writes,
 			)
 		}
 	}
@@ -151,6 +156,14 @@ func BenchmarkSyncAllWarmNoop(b *testing.B) {
 // appended JSONL line into a session that already stores
 // benchLargeSessionLines messages, the streaming write the serve
 // daemon performs thousands of times per day.
+//
+// The session grows by one message per iteration, so per-op cost is
+// only comparable between runs with the same iteration count: the
+// bench gate always runs with a fixed -benchtime=Nx (see bench.yml
+// and the Makefile) so baseline and candidate absorb appends into
+// identically sized sessions. Growth is deliberate — per-append cost
+// staying flat as the session grows is exactly the invariant this
+// benchmark protects.
 func BenchmarkSyncPathsIncrementalAppend(b *testing.B) {
 	dir := b.TempDir()
 	writeBenchClaudeArchive(b, dir, 1, benchLargeSessionLines)
