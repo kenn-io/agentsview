@@ -672,6 +672,98 @@ func TestProcessFileProviderDevinReparsesTranscriptOnlyChange(t *testing.T) {
 	assert.Equal(t, "Updated reply", second.results[0].Messages[1].Content)
 }
 
+func TestProcessFileProviderDevinSameSizeSameMtimeTranscriptRewriteReparses(t *testing.T) {
+	tests := []struct {
+		name      string
+		seedCache bool
+		freshSync bool
+	}{
+		{name: "skip cache", seedCache: true},
+		{name: "db freshness", freshSync: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			dbPath, transcriptPath := writeProcessProviderDevinFixture(
+				t,
+				root,
+				"session-same-mtime",
+				"Initial reply",
+				1700000000000,
+				1700000005000,
+			)
+			virtualPath := parser.VirtualSourcePath(dbPath, "session-same-mtime")
+			database := dbtest.OpenTestDB(t)
+			engine := NewEngine(database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentDevin: {root},
+				},
+				Machine: "devbox",
+			})
+
+			first := engine.processFile(context.Background(), parser.DiscoveredFile{
+				Path:  virtualPath,
+				Agent: parser.AgentDevin,
+			})
+			require.NoError(t, first.err)
+			require.Len(t, first.results, 1)
+			require.Len(t, first.results[0].Messages, 2)
+			assert.Equal(t, "Initial reply", first.results[0].Messages[1].Content)
+			initialMtime := first.results[0].Session.File.Mtime
+			initialHash := first.results[0].Session.File.Hash
+			require.NotZero(t, initialMtime)
+			require.NotEmpty(t, initialHash)
+
+			written, _, failed := engine.writeBatch(
+				[]pendingWrite{{
+					sess:         first.results[0].Session,
+					msgs:         first.results[0].Messages,
+					usageEvents:  first.results[0].UsageEvents,
+					forceReplace: first.forceReplace,
+				}},
+				syncWriteDefault,
+				false,
+			)
+			require.Equal(t, 0, failed)
+			require.Equal(t, 1, written)
+
+			infoBefore, err := os.Stat(transcriptPath)
+			require.NoError(t, err)
+			writeProcessProviderDevinTranscript(t, transcriptPath, "Changed reply")
+			initialTime := time.Unix(0, initialMtime)
+			require.NoError(t, os.Chtimes(transcriptPath, initialTime, initialTime))
+			infoAfter, err := os.Stat(transcriptPath)
+			require.NoError(t, err)
+			require.Equal(t, infoBefore.Size(), infoAfter.Size(),
+				"test must keep size stable so hash is the only freshness signal")
+
+			if tt.seedCache {
+				engine.cacheSkip(virtualPath, initialMtime)
+			}
+			if tt.freshSync {
+				engine = NewEngine(database, EngineConfig{
+					AgentDirs: map[parser.AgentType][]string{
+						parser.AgentDevin: {root},
+					},
+					Machine: "devbox",
+				})
+			}
+
+			second := engine.processFile(context.Background(), parser.DiscoveredFile{
+				Path:  virtualPath,
+				Agent: parser.AgentDevin,
+			})
+			require.NoError(t, second.err)
+			assert.False(t, second.skip)
+			require.Len(t, second.results, 1)
+			require.Len(t, second.results[0].Messages, 2)
+			assert.Equal(t, "Changed reply", second.results[0].Messages[1].Content)
+			assert.NotEqual(t, initialHash, second.results[0].Session.File.Hash)
+		})
+	}
+}
+
 func TestSyncAllProviderDevinMissingDBPreservesArchive(t *testing.T) {
 	root := t.TempDir()
 	dbPath, _ := writeProcessProviderDevinFixture(

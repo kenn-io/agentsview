@@ -4122,10 +4122,34 @@ func providerProcessCacheKey(
 	source parser.SourceRef,
 	fingerprint parser.SourceFingerprint,
 ) string {
+	agent := file.Agent
+	if agent == "" {
+		agent = source.Provider
+	}
+	key := ""
 	if key := plannedSkipKey(source, fingerprint); key != "" {
+		return providerProcessCacheKeyWithHash(key, agent, fingerprint)
+	}
+	key = file.Path
+	return providerProcessCacheKeyWithHash(key, agent, fingerprint)
+}
+
+func providerProcessCacheKeyWithHash(
+	key string,
+	agent parser.AgentType,
+	fingerprint parser.SourceFingerprint,
+) string {
+	if key == "" {
+		return ""
+	}
+	if fingerprint.Hash == "" || !providerFingerprintHashRequiredForFreshness(agent) {
 		return key
 	}
-	return file.Path
+	return key + "?source_hash=" + fingerprint.Hash
+}
+
+func providerFingerprintHashRequiredForFreshness(agent parser.AgentType) bool {
+	return agent == parser.AgentDevin
 }
 
 func processFileUsesProvider(agent parser.AgentType) bool {
@@ -4164,6 +4188,9 @@ func (e *Engine) shouldSkipProviderSource(
 		return false
 	}
 	if storedMtime != fingerprint.MTimeNS {
+		return false
+	}
+	if !e.providerFingerprintHashMatchesDB(agent, lookupPath, fingerprint) {
 		return false
 	}
 	return e.db.GetDataVersionByPath(lookupPath) >= db.CurrentDataVersion()
@@ -4380,6 +4407,9 @@ func (e *Engine) providerSourceUnchangedInDB(
 	if storedSize != fingerprint.Size || storedMtime != fingerprint.MTimeNS {
 		return false
 	}
+	if !e.providerFingerprintHashMatchesDB(source.Provider, lookupPath, fingerprint) {
+		return false
+	}
 	// A stale stored project (e.g. a generated roborev CI worktree name)
 	// must defeat the unchanged-source skip so the corrected project is
 	// reparsed, mirroring shouldSkipCodexFingerprint and the in-memory
@@ -4389,6 +4419,18 @@ func (e *Engine) providerSourceUnchangedInDB(
 		return false
 	}
 	return e.db.GetDataVersionByPath(lookupPath) >= db.CurrentDataVersion()
+}
+
+func (e *Engine) providerFingerprintHashMatchesDB(
+	agent parser.AgentType,
+	lookupPath string,
+	fingerprint parser.SourceFingerprint,
+) bool {
+	if fingerprint.Hash == "" || !providerFingerprintHashRequiredForFreshness(agent) {
+		return true
+	}
+	storedHash, ok := e.db.GetFileHashByPath(lookupPath)
+	return ok && storedHash == fingerprint.Hash
 }
 
 // shouldSkipByPath checks file size and mtime against what is
