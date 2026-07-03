@@ -2360,8 +2360,36 @@ func (db *DB) init() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	w := db.getWriter()
+
+	// Detect a brand-new database before the schema exists so
+	// creation-time markers can distinguish it from an upgraded one.
+	var sessionsTables int
+	if err := w.QueryRow(
+		"SELECT count(*) FROM sqlite_master" +
+			" WHERE type='table' AND name='sessions'",
+	).Scan(&sessionsTables); err != nil {
+		return fmt.Errorf("probing for existing schema: %w", err)
+	}
+
 	if _, err := w.Exec(schemaSQL); err != nil {
 		return err
+	}
+
+	if sessionsTables == 0 {
+		// Every row a fresh database will ever hold is written under
+		// the corrected findings-before-signals ordering, so the
+		// signals backfill can trust quality_signal_version from
+		// birth. Databases predating the fix lack this marker until
+		// one clean backfill pass heals any split rows.
+		if _, err := w.Exec(
+			`INSERT INTO stats (key, value) VALUES (?, 1)
+			 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+			signalsWriteOrderMarker,
+		); err != nil {
+			return fmt.Errorf(
+				"seeding signals write-order marker: %w", err,
+			)
+		}
 	}
 
 	// Add result_content column to tool_calls if not present

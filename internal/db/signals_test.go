@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -249,6 +250,114 @@ func TestBackfillSignalsMarkerOnlyOnSuccess(t *testing.T) {
 	require.NoError(t, err, "third call")
 	assert.Equal(t, 0, calls,
 		"third backfill should see 0 sessions (marker set after clean run)")
+}
+
+// TestFreshDatabaseSeedsWriteOrderMarker pins the grandfathering
+// contract: a database created by a corrected binary carries the
+// write-order marker from birth, so its backfill always trusts
+// quality_signal_version. Only databases predating the corrected
+// findings-before-signals ordering lack the marker.
+func TestFreshDatabaseSeedsWriteOrderMarker(t *testing.T) {
+	d, err := Open(filepath.Join(t.TempDir(), "fresh.db"))
+	require.NoError(t, err, "open fresh db")
+	defer d.Close()
+
+	var n int
+	require.NoError(t, d.getReader().QueryRow(
+		`SELECT count(*) FROM stats WHERE key = ? AND value != 0`,
+		signalsWriteOrderMarker,
+	).Scan(&n), "probe write-order marker")
+	assert.Equal(t, 1, n, "fresh database must seed the write-order marker")
+}
+
+// TestBackfillSignalsLegacyDBHealsSplitRows guards the upgrade path
+// for databases written under the old signals-then-findings ordering:
+// without the write-order marker and without a completion marker, the
+// backfill must keep the historical unfiltered walk so rows whose
+// version is current but whose findings write failed ("split rows")
+// are healed once. A clean pass sets both markers and switches later
+// runs to the filtered fast path.
+func TestBackfillSignalsLegacyDBHealsSplitRows(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// Simulate a database created before the corrected ordering.
+	_, err := d.getWriter().Exec(
+		`DELETE FROM stats WHERE key = ?`, signalsWriteOrderMarker,
+	)
+	require.NoError(t, err, "remove write-order marker")
+
+	insertSession(t, d, "split", "p")
+	insertSession(t, d, "stale", "p")
+	require.NoError(t, d.UpdateSessionSignals("split", SessionSignalUpdate{
+		QualitySignals: QualitySignals{
+			Version: CurrentQualitySignalVersion,
+		},
+	}), "seed split row at current version")
+
+	var calls []string
+	compute := func(_ context.Context, id string) error {
+		calls = append(calls, id)
+		return d.UpdateSessionSignals(id, SessionSignalUpdate{
+			QualitySignals: QualitySignals{
+				Version: CurrentQualitySignalVersion,
+			},
+		})
+	}
+	require.NoError(t, d.BackfillSignals(ctx, compute), "healing walk")
+	assert.ElementsMatch(t, []string{"split", "stale"}, calls,
+		"legacy walk must revisit split rows despite current versions")
+
+	// The clean pass set both markers: later runs are filtered.
+	calls = nil
+	require.NoError(t, d.BackfillSignals(ctx, compute), "second run")
+	assert.Empty(t, calls, "post-heal backfill must recompute nothing")
+}
+
+// TestBackfillSignalsLegacyDBWithCompletionMarkerStaysFiltered pins
+// upgrade parity for legacy databases whose last full walk completed
+// cleanly (completion marker set, proving no split rows existed
+// then): they take the filtered path immediately instead of paying
+// another full walk.
+func TestBackfillSignalsLegacyDBWithCompletionMarkerStaysFiltered(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	_, err := d.getWriter().Exec(
+		`DELETE FROM stats WHERE key = ?`, signalsWriteOrderMarker,
+	)
+	require.NoError(t, err, "remove write-order marker")
+	// Set only the legacy completion marker, as an old binary did.
+	_, err = d.getWriter().Exec(
+		`INSERT INTO stats (key, value) VALUES (?, 1)`,
+		signalsBackfillMarker,
+	)
+	require.NoError(t, err, "set legacy completion marker")
+
+	insertSession(t, d, "current", "p")
+	insertSession(t, d, "stale", "p")
+	require.NoError(t, d.UpdateSessionSignals("current", SessionSignalUpdate{
+		QualitySignals: QualitySignals{
+			Version: CurrentQualitySignalVersion,
+		},
+	}), "seed current row")
+
+	var calls []string
+	require.NoError(t, d.BackfillSignals(
+		ctx,
+		func(_ context.Context, id string) error {
+			calls = append(calls, id)
+			return d.UpdateSessionSignals(id, SessionSignalUpdate{
+				QualitySignals: QualitySignals{
+					Version: CurrentQualitySignalVersion,
+				},
+			})
+		},
+	), "BackfillSignals")
+	assert.Equal(t, []string{"stale"}, calls,
+		"completed legacy databases must stay on the filtered path")
 }
 
 // TestMessageWritesInvalidateQualitySignalVersion pins the staleness
