@@ -76,6 +76,11 @@ type violation struct {
 	maxRatio float64
 }
 
+type configIssue struct {
+	name string
+	msg  string
+}
+
 func (v violation) String() string {
 	cls := benchunit.ClassOf(v.unit)
 	return fmt.Sprintf(
@@ -120,7 +125,7 @@ func parseBench(reader *benchfmt.Reader) (benchSamples, error) {
 // and returns a human-readable report plus the violations.
 func compare(
 	oldRes, newRes benchSamples, gates []gate,
-) (report []string, violations []violation) {
+) (report []string, violations []violation, issues []configIssue) {
 	thresholds := benchmath.DefaultThresholds
 	names := make([]string, 0, len(newRes))
 	for name := range newRes {
@@ -166,18 +171,40 @@ func compare(
 				))
 				continue
 			}
+			if g.needSignificance && (len(oldSample.Values) < 5 || len(newSample.Values) < 5) {
+				issues = append(issues, configIssue{
+					name: name,
+					msg: fmt.Sprintf(
+						"%s needs at least 5 samples on both sides for significance gating (old=%d, new=%d)",
+						g.unit, len(oldSample.Values), len(newSample.Values),
+					),
+				})
+				parts = append(parts, fmt.Sprintf(
+					"%s %s -> %s (sample count too small for significance gating, not gated)",
+					g.unit,
+					benchunit.Scale(oldCenter, cls),
+					benchunit.Scale(newCenter, cls),
+				))
+				continue
+			}
 
 			ratio := newCenter / oldCenter
 			cmp := benchmath.AssumeNothing.Compare(oldSample, newSample)
 			significant := cmp.P < cmp.Alpha
 			var detail string
 			if g.worstCase {
+				// Also surface the baseline's worst run: the gate is
+				// deliberately candidate-worst vs baseline-median, so
+				// pre-existing baseline instability should at least
+				// be visible when reading a failure.
+				oldWorst := oldSample.Values[len(oldSample.Values)-1]
 				detail = fmt.Sprintf(
-					"%s %s -> %s (%.2fx, limit %.2fx, worst of %d run(s))",
+					"%s %s -> %s (%.2fx, limit %.2fx, worst of %d run(s), baseline worst %s)",
 					g.unit,
 					benchunit.Scale(oldCenter, cls),
 					benchunit.Scale(newCenter, cls),
 					ratio, g.maxRatio, len(newSample.Values),
+					benchunit.Scale(oldWorst, cls),
 				)
 			} else {
 				detail = fmt.Sprintf(
@@ -221,7 +248,7 @@ func compare(
 			name,
 		))
 	}
-	return report, violations
+	return report, violations, issues
 }
 
 func parseFile(path string) (benchSamples, error) {
@@ -242,16 +269,17 @@ func main() {
 	)
 	maxTimeRatio := flag.Float64(
 		"max-time-ratio", 2.0,
-		"fail when median sec/op exceeds baseline by this factor "+
-			"(only when the difference is statistically significant)",
+		"fail when candidate median sec/op exceeds baseline by this factor "+
+			"(only when the difference is statistically significant; needs at "+
+			"least 5 samples per side)",
 	)
 	maxAllocRatio := flag.Float64(
 		"max-alloc-ratio", 1.25,
-		"fail when median allocs/op exceeds baseline by this factor",
+		"fail when candidate worst-run allocs/op exceeds baseline median by this factor",
 	)
 	maxBytesRatio := flag.Float64(
 		"max-bytes-ratio", 1.35,
-		"fail when median B/op exceeds baseline by this factor",
+		"fail when candidate worst-run B/op exceeds baseline median by this factor",
 	)
 	timeFloorNs := flag.Float64(
 		"time-floor-ns", 100_000,
@@ -304,9 +332,17 @@ func main() {
 			needSignificance: true,
 		},
 	}
-	report, violations := compare(oldRes, newRes, gates)
+	report, violations, issues := compare(oldRes, newRes, gates)
 	for _, line := range report {
 		fmt.Println(line)
+	}
+	if len(issues) > 0 {
+		fmt.Println()
+		fmt.Println("benchgate: invalid benchmark configuration:")
+		for _, issue := range issues {
+			fmt.Printf("  %s: %s\n", issue.name, issue.msg)
+		}
+		os.Exit(2)
 	}
 	if len(newRes) == 0 {
 		fmt.Println("benchgate: candidate output contains no benchmarks")

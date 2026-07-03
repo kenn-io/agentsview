@@ -16,8 +16,11 @@ name: Bench Gate
 # that only catches algorithmic blowups; both sides run on the same
 # runner within one job, so the comparison is apples to apples.
 # Benchmarks that only exist on one side are reported but never fail
-# the gate. Keep BENCH_PATTERN in sync with the Makefile's
-# bench-gate target.
+# the gate — which is what makes running every benchmark in the
+# gated packages safe: a benchmark added by a PR has no baseline and
+# is reported without gating, then gates automatically once merged.
+# BENCH_PACKAGES is the gate boundary; keep it in sync with the
+# Makefile's bench-gate target.
 
 on:
   pull_request:
@@ -31,7 +34,9 @@ permissions:
 
 env:
   BENCH_PACKAGES: ./internal/sync ./internal/db ./internal/secrets
-  BENCH_PATTERN: ^(BenchmarkSyncAllColdArchive|BenchmarkSyncAllWarmNoop|BenchmarkSyncPathsIncrementalAppend|BenchmarkReplaceSessionMessagesStreamingMerge|BenchmarkInsertMessagesBatch|BenchmarkGetDailyUsage|BenchmarkScan|BenchmarkScanDefinite)$
+  # Must stay >= 5: benchgate's time gate needs at least 5 samples
+  # per side for the significance test and treats fewer as a
+  # configuration error.
   BENCH_COUNT: "6"
   # Fixed iterations (not a duration) so the baseline and candidate
   # run identical workloads: two of the gated benchmarks grow their
@@ -62,7 +67,7 @@ jobs:
           CGO_ENABLED: "1"
         run: |
           set -o pipefail
-          go test -tags "fts5" -run '^$' -bench "$BENCH_PATTERN" \
+          go test -tags "fts5" -run '^$' -bench . \
             -benchmem -count "$BENCH_COUNT" -benchtime "$BENCH_TIME" \
             -timeout 25m $BENCH_PACKAGES | tee /tmp/bench-new.txt
 
@@ -81,7 +86,7 @@ jobs:
           git worktree add /tmp/bench-base "$base"
           cd /tmp/bench-base
           go run ./internal/pricing/cmd/litellm-snapshot -restore || true
-          if ! go test -tags "fts5" -run '^$' -bench "$BENCH_PATTERN" \
+          if ! go test -tags "fts5" -run '^$' -bench . \
             -benchmem -count "$BENCH_COUNT" -benchtime "$BENCH_TIME" \
             -timeout 25m $BENCH_PACKAGES > /tmp/bench-old.txt; then
             echo "merge-base benchmarks failed; comparing against empty baseline"

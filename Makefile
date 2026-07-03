@@ -266,13 +266,15 @@ bench-backends: pricing-snapshot ensure-embed-dir
 		AGENTSVIEW_BENCH_MESSAGES_PER_SESSION=$(BENCH_BACKENDS_MESSAGES_PER_SESSION) \
 		CGO_ENABLED=1 go test -tags "fts5,benchdb" ./internal/backendbench $(BENCH_BACKENDS_FLAGS)
 
-# Hot-path benchmark gate. Runs the same benchmark set CI's bench.yml
-# compares against a PR's merge base (sync engine warm/cold/append,
-# message write paths, usage aggregation, secret scanning). Run it
-# before and after touching a sync or DB hot path, then compare with
+# Hot-path benchmark gate. Runs every benchmark in the gated packages
+# — the same set CI's bench.yml compares against a PR's merge base
+# (sync engine warm/cold/append, message write paths, usage
+# aggregation, secret scanning). Run it before and after touching a
+# sync or DB hot path, then compare with
 # `go run ./cmd/benchgate -old old.txt -new new.txt`. Keep the
-# pattern in sync with .github/workflows/bench.yml.
-BENCH_GATE_PATTERN ?= ^(BenchmarkSyncAllColdArchive|BenchmarkSyncAllWarmNoop|BenchmarkSyncPathsIncrementalAppend|BenchmarkReplaceSessionMessagesStreamingMerge|BenchmarkInsertMessagesBatch|BenchmarkGetDailyUsage|BenchmarkScan|BenchmarkScanDefinite)$$
+# package list in sync with BENCH_PACKAGES in bench.yml.
+# Count must stay >= 5: benchgate's time gate needs at least 5
+# samples per side for its significance test.
 BENCH_GATE_COUNT ?= 6
 # Fixed iterations, not a duration: some gated benchmarks grow their
 # fixture as they iterate, so baseline and candidate must run the
@@ -280,7 +282,7 @@ BENCH_GATE_COUNT ?= 6
 BENCH_GATE_TIME ?= 20x
 bench-gate: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5" -run '^$$' \
-		-bench '$(BENCH_GATE_PATTERN)' -benchmem \
+		-bench . -benchmem \
 		-count $(BENCH_GATE_COUNT) -benchtime $(BENCH_GATE_TIME) \
 		-timeout 25m ./internal/sync ./internal/db ./internal/secrets
 

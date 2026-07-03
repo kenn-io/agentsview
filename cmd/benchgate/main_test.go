@@ -167,10 +167,12 @@ func TestCompare(t *testing.T) {
 		{
 			name: "time blowup without significance is reported, not gated",
 			old: benchSamples{
-				"BenchmarkFoo-8": {"sec/op": {1e-3}},
+				"BenchmarkFoo-8": {"sec/op": noisy(1e-3, 5)},
 			},
 			new: benchSamples{
-				"BenchmarkFoo-8": {"sec/op": {5e-3}},
+				"BenchmarkFoo-8": {
+					"sec/op": append(noisy(1e-3, 4), 5e-3),
+				},
 			},
 			wantUnits:  nil,
 			wantReport: []string{"not significant, not gated"},
@@ -233,11 +235,12 @@ func TestCompare(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			report, violations := compare(tt.old, tt.new, testGates())
+			report, violations, issues := compare(tt.old, tt.new, testGates())
 			units := make([]string, 0, len(violations))
 			for _, v := range violations {
 				units = append(units, v.unit)
 			}
+			assert.Empty(t, issues)
 			if len(tt.wantUnits) == 0 {
 				assert.Empty(t, violations)
 			} else {
@@ -266,8 +269,9 @@ func TestCompareOutlierRunPolicy(t *testing.T) {
 		next := benchSamples{
 			"BenchmarkFoo-8": {"allocs/op": {1000, 1000, 9000, 1000, 1000}},
 		}
-		_, violations := compare(old, next, testGates())
+		_, violations, issues := compare(old, next, testGates())
 		require.Len(t, violations, 1)
+		assert.Empty(t, issues)
 		assert.Equal(t, "allocs/op", violations[0].unit)
 		assert.InDelta(t, 9000, violations[0].new, 1e-9,
 			"the worst run is what gets gated")
@@ -280,9 +284,19 @@ func TestCompareOutlierRunPolicy(t *testing.T) {
 		next := benchSamples{
 			"BenchmarkFoo-8": {"sec/op": append(noisy(1e-3, 5), 9e-3)},
 		}
-		_, violations := compare(old, next, testGates())
+		_, violations, issues := compare(old, next, testGates())
+		assert.Empty(t, issues)
 		assert.Empty(t, violations)
 	})
+}
+
+func TestCompareRequiresEnoughSamplesForTimeGate(t *testing.T) {
+	old := benchSamples{"BenchmarkFoo-8": {"sec/op": {1e-3}}}
+	next := benchSamples{"BenchmarkFoo-8": {"sec/op": {2e-3}}}
+	_, violations, issues := compare(old, next, testGates())
+	assert.Empty(t, violations)
+	require.Len(t, issues, 1)
+	assert.Contains(t, issues[0].msg, "at least 5 samples")
 }
 
 func TestViolationString(t *testing.T) {

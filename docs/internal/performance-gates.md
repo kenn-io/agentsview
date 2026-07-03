@@ -69,25 +69,38 @@ averaged across benchmarks. It gates hard on `allocs/op` (limit 1.25x) and
 `B/op` (1.35x), which are deterministic for the same code and iteration count —
 an O(archive)-instead-of-O(delta) regression always blows them up. Those two
 compare the candidate's *worst* `-count` run against the baseline median, so
-even an intermittent extra-allocation path fails. Time (`sec/op`) compares
-medians with a loose 2.0x limit and must additionally be a statistically
-significant difference before it fails, so a single slow run on a noisy runner
-cannot flake a PR but algorithmic blowups still do. Baselines below a per-metric
-floor are not gated. Benchmarks that exist on only one side are reported but
-never fail, so adding or removing benchmarks cannot wedge a PR.
+even an intermittent extra-allocation path fails. That is intentionally
+asymmetric: the baseline is treated as the historical reference, and candidate
+instability is what blocks the PR (failure lines include the baseline's worst
+run so pre-existing instability is visible). Time (`sec/op`) compares medians
+with a loose 2.0x limit and must additionally be a statistically significant
+difference before it fails, so a single slow run on a noisy runner cannot flake
+a PR but algorithmic blowups still do. Time gating requires at least 5 samples
+on both sides; smaller captures are reported as misconfigured rather than
+silently disabling the gate. Baselines below a per-metric floor are not gated.
+Benchmarks that exist on only one side are reported but never fail, so adding or
+removing benchmarks cannot wedge a PR.
 
 The gate always runs with a fixed `-benchtime=Nx` iteration count (not a
 duration): two of the benchmarks grow their fixture as they iterate, so the
 baseline and candidate must run the same number of iterations to measure
 identical workloads.
 
-Run locally, comparing your working tree against a baseline commit:
+Report identifiers are package-qualified benchmark names
+(`go.kenn.io/agentsview/internal/db.InsertMessagesBatch-18`) when the captured
+output carries `pkg:` metadata, falling back to the bare name when it does not
+(e.g. hand-trimmed captures). Do not mix captures with and without `pkg:` lines:
+the same benchmark would key differently and be treated as removed/new.
+
+Run locally, comparing your working tree against a baseline commit. Like CI, use
+a worktree for the baseline — checking out or stashing in place can leave
+candidate files (or your commits) in the baseline run:
 
 ```bash
 make bench-gate > new.txt                # candidate: current tree
-git stash                                # or: git switch --detach origin/main
-make bench-gate > old.txt                # baseline
-git stash pop                            # restore the working tree
+git worktree add /tmp/bench-base "$(git merge-base HEAD origin/main)"
+make -C /tmp/bench-base bench-gate > old.txt
+git worktree remove /tmp/bench-base
 go run ./cmd/benchgate -old old.txt -new new.txt
 ```
 
@@ -96,13 +109,16 @@ Cross-backend query benchmarks live separately in `internal/backendbench`
 
 ## Adding a benchmark to the gate
 
+Every benchmark in a gated package is gated — there is no per-name allowlist to
+maintain. A benchmark added by a PR has no baseline, so its first run is
+reported without gating; it gates automatically once merged.
+
 1. Write the benchmark next to the code it guards (`*_bench_test.go`,
    `b.ReportAllocs()`, self-assert the invariant it protects where possible).
-1. Add its name to `BENCH_PATTERN` in `.github/workflows/bench.yml` **and**
-   `BENCH_GATE_PATTERN` in the Makefile.
-1. Make sure its package is in `BENCH_PACKAGES` (bench.yml) and the Makefile
-   `bench-gate` package list — a name in the pattern whose package is not in
-   the list is silently never run, so it looks gated while measuring nothing.
+1. If its package is not already gated, add it to `BENCH_PACKAGES` in
+   `.github/workflows/bench.yml` **and** the Makefile `bench-gate` package
+   list — a benchmark outside the gated packages silently never runs, so it
+   looks gated while measuring nothing.
 1. Keep per-op cost roughly in the 100µs–100ms band: below the benchgate floors
    nothing is gated, and far above it the job gets slow.
 1. If the benchmark's fixture grows across iterations, say so in its comment;
