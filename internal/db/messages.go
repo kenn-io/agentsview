@@ -425,8 +425,31 @@ func (db *DB) InsertMessages(msgs []Message) error {
 		); err != nil {
 			return err
 		}
+		if err := invalidateSessionSignalsTx(tx, sessionID); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
+}
+
+// invalidateSessionSignalsTx zeroes quality_signal_version so the
+// startup backfill treats the session as stale. Every transaction
+// that changes message content but refreshes derived signals and
+// secret findings through separate follow-up writes must call this:
+// if those writes never land (crash, DB closed under a resync swap),
+// the zeroed version keeps the session eligible for recompute instead
+// of freezing pre-write derived data as current. Only the signal
+// update itself restores the version.
+func invalidateSessionSignalsTx(tx *sql.Tx, sessionID string) error {
+	if _, err := tx.Exec(
+		"UPDATE sessions SET quality_signal_version = 0 WHERE id = ?",
+		sessionID,
+	); err != nil {
+		return fmt.Errorf(
+			"invalidating signal version for %s: %w", sessionID, err,
+		)
+	}
+	return nil
 }
 
 func writeMessagesTx(tx *sql.Tx, msgs []Message) error {
@@ -477,6 +500,9 @@ func (db *DB) WriteSessionIncremental(
 		return err
 	}
 	if err := updateSessionAutomationFromMessagesTx(tx, sessionID); err != nil {
+		return err
+	}
+	if err := invalidateSessionSignalsTx(tx, sessionID); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -608,6 +634,9 @@ func (db *DB) ReplaceSessionMessages(
 	// --backfill re-scans). ReplaceSessionContent does not call this method; it
 	// supplies fresh findings via replaceSecretFindingsTx directly.
 	if err := replaceSecretFindingsTx(tx, sessionID, nil, 0, ""); err != nil {
+		return err
+	}
+	if err := invalidateSessionSignalsTx(tx, sessionID); err != nil {
 		return err
 	}
 	return tx.Commit()

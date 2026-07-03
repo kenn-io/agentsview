@@ -251,6 +251,74 @@ func TestBackfillSignalsMarkerOnlyOnSuccess(t *testing.T) {
 		"third backfill should see 0 sessions (marker set after clean run)")
 }
 
+// TestMessageWritesInvalidateQualitySignalVersion pins the staleness
+// contract the startup backfill depends on: any write that changes a
+// session's message content must zero quality_signal_version in the
+// same transaction. Derived signals and findings are refreshed by
+// separate follow-up writes; if those never land (crash, closed DB),
+// the zeroed version keeps the session eligible for the backfill
+// instead of freezing pre-append derived data as current. Only the
+// signal update itself restores the version.
+func TestMessageWritesInvalidateQualitySignalVersion(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name  string
+		write func(t *testing.T, d *DB, id string)
+	}{
+		{
+			name: "InsertMessages",
+			write: func(t *testing.T, d *DB, id string) {
+				require.NoError(t, d.InsertMessages([]Message{
+					{SessionID: id, Ordinal: 1, Role: "user",
+						Content: "appended"},
+				}), "InsertMessages")
+			},
+		},
+		{
+			name: "WriteSessionIncremental",
+			write: func(t *testing.T, d *DB, id string) {
+				require.NoError(t, d.WriteSessionIncremental(id,
+					[]Message{{SessionID: id, Ordinal: 1,
+						Role: "user", Content: "appended"}},
+					IncrementalSessionUpdate{
+						MsgCount: 2, UserMsgCount: 2, NextOrdinal: 2,
+					},
+				), "WriteSessionIncremental")
+			},
+		},
+		{
+			name: "ReplaceSessionMessages",
+			write: func(t *testing.T, d *DB, id string) {
+				require.NoError(t, d.ReplaceSessionMessages(id,
+					[]Message{{SessionID: id, Ordinal: 0,
+						Role: "user", Content: "rewritten"}},
+				), "ReplaceSessionMessages")
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			const id = "sess"
+			insertSession(t, d, id, "p")
+			insertMessages(t, d, userMsg(id, 0, "hello"))
+			require.NoError(t, d.UpdateSessionSignals(id, SessionSignalUpdate{
+				QualitySignals: QualitySignals{
+					Version: CurrentQualitySignalVersion,
+				},
+			}), "seed current signal version")
+
+			tt.write(t, d, id)
+
+			sess, err := d.GetSessionFull(ctx, id)
+			require.NoError(t, err, "GetSessionFull")
+			require.NotNil(t, sess)
+			assert.Zero(t, sess.QualitySignalVersion,
+				"message write must invalidate the signal version")
+		})
+	}
+}
+
 // TestBackfillSignalsSkipsCurrentVersionsWithoutMarker guards the
 // post-resync startup cost: a fresh DB has no completion marker, but
 // its sessions already carry current signals -- synced inline during
