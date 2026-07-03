@@ -764,6 +764,71 @@ func TestProcessFileProviderDevinSameSizeSameMtimeTranscriptRewriteReparses(t *t
 	}
 }
 
+func TestProcessFileProviderDevinRepeatedHashRewriteIgnoresStaleHashedCache(t *testing.T) {
+	root := t.TempDir()
+	dbPath, transcriptPath := writeProcessProviderDevinFixture(
+		t,
+		root,
+		"session-repeated-hash",
+		"Initial reply",
+		1700000000000,
+		1700000005000,
+	)
+	virtualPath := parser.VirtualSourcePath(dbPath, "session-repeated-hash")
+	file := parser.DiscoveredFile{
+		Path:  virtualPath,
+		Agent: parser.AgentDevin,
+	}
+	database := dbtest.OpenTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentDevin: {root},
+		},
+		Machine: "devbox",
+	})
+
+	first := engine.processFile(context.Background(), file)
+	require.NoError(t, first.err)
+	require.Len(t, first.results, 1)
+	require.Len(t, first.results[0].Messages, 2)
+	assert.Equal(t, "Initial reply", first.results[0].Messages[1].Content)
+	initialMtime := first.results[0].Session.File.Mtime
+	initialHash := first.results[0].Session.File.Hash
+	require.NotZero(t, initialMtime)
+	require.NotEmpty(t, initialHash)
+	require.Contains(t, first.cacheKey, "?source_hash="+initialHash)
+	writeProcessProviderDevinResult(t, engine, first)
+
+	engine.cacheSkip(first.cacheKey, initialMtime)
+
+	writeProcessProviderDevinTranscript(t, transcriptPath, "Changed reply")
+	initialTime := time.Unix(0, initialMtime)
+	require.NoError(t, os.Chtimes(transcriptPath, initialTime, initialTime))
+	second := engine.processFile(context.Background(), file)
+	require.NoError(t, second.err)
+	assert.False(t, second.skip)
+	require.Len(t, second.results, 1)
+	require.Len(t, second.results[0].Messages, 2)
+	assert.Equal(t, "Changed reply", second.results[0].Messages[1].Content)
+	changedHash := second.results[0].Session.File.Hash
+	require.NotEmpty(t, changedHash)
+	require.NotEqual(t, initialHash, changedHash)
+	require.Contains(t, second.cacheKey, "?source_hash="+changedHash)
+	writeProcessProviderDevinResult(t, engine, second)
+	engine.clearSkip(second.cacheKey)
+
+	writeProcessProviderDevinTranscript(t, transcriptPath, "Initial reply")
+	require.NoError(t, os.Chtimes(transcriptPath, initialTime, initialTime))
+
+	third := engine.processFile(context.Background(), file)
+	require.NoError(t, third.err)
+	assert.False(t, third.skip)
+	require.Len(t, third.results, 1)
+	require.Len(t, third.results[0].Messages, 2)
+	assert.Equal(t, "Initial reply", third.results[0].Messages[1].Content)
+	assert.Equal(t, initialHash, third.results[0].Session.File.Hash)
+}
+
 func TestSyncAllProviderDevinMissingDBPreservesArchive(t *testing.T) {
 	root := t.TempDir()
 	dbPath, _ := writeProcessProviderDevinFixture(
@@ -841,6 +906,27 @@ func writeProcessProviderForgeDB(t *testing.T, root string) string {
 	)
 	require.NoError(t, err)
 	return dbPath
+}
+
+func writeProcessProviderDevinResult(
+	t *testing.T,
+	engine *Engine,
+	result processResult,
+) {
+	t.Helper()
+	require.Len(t, result.results, 1)
+	written, _, failed := engine.writeBatch(
+		[]pendingWrite{{
+			sess:         result.results[0].Session,
+			msgs:         result.results[0].Messages,
+			usageEvents:  result.results[0].UsageEvents,
+			forceReplace: result.forceReplace,
+		}},
+		syncWriteDefault,
+		false,
+	)
+	require.Equal(t, 0, failed)
+	require.Equal(t, 1, written)
 }
 
 func writeProcessProviderDevinFixture(

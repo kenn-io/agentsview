@@ -3692,7 +3692,9 @@ func (e *Engine) processProviderFile(
 			// self-healing (e.g. a parser data-version bump or generated
 			// roborev CI worktree project): clear the entry and fall through
 			// to a full reparse, mirroring the legacy process arm.
-			if e.pathNeedsCachedSkipBypass(file.Path) {
+			if !e.providerSkipCacheEntryFreshInDB(file, source, fingerprint) {
+				e.clearSkip(cacheKey)
+			} else if e.pathNeedsCachedSkipBypass(file.Path) {
 				e.clearSkip(cacheKey)
 			} else {
 				return processResult{
@@ -4150,6 +4152,25 @@ func providerProcessCacheKeyWithHash(
 
 func providerFingerprintHashRequiredForFreshness(agent parser.AgentType) bool {
 	return agent == parser.AgentDevin
+}
+
+func (e *Engine) providerSkipCacheEntryFreshInDB(
+	file parser.DiscoveredFile,
+	source parser.SourceRef,
+	fingerprint parser.SourceFingerprint,
+) bool {
+	agent := file.Agent
+	if agent == "" {
+		agent = source.Provider
+	}
+	if fingerprint.Hash == "" || !providerFingerprintHashRequiredForFreshness(agent) {
+		return true
+	}
+	lookupPath := providerSkipLookupPath(file, source, fingerprint)
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(lookupPath)
+	}
+	return e.providerFingerprintHashMatchesDB(agent, lookupPath, fingerprint)
 }
 
 func processFileUsesProvider(agent parser.AgentType) bool {
