@@ -3,6 +3,69 @@ title: Changelog
 description: Release history for AgentsView
 ---
 
+## 0.36.1
+<small>2026-07-03</small>
+
+**New features**
+
+- Add **Devin CLI session support**. AgentsView now discovers Devin CLI roots,
+  reads local session data from the `cli/` subtree, parses Devin messages and
+  tool activity, includes Devin in supported-agent metadata, and documents the
+  safe root to share when filing bug reports.
+- Extend **`parse-diff` diagnostics** for sessions last written through the
+  incremental-append path. These rows are now classified as
+  `incremental_skew`, excluded from `--fail-on-change`, and accompanied by
+  guidance to run a full resync for a clean parser-drift baseline.
+- Report **Antigravity `gen_metadata` without usage anomalies** in sync
+  summaries, so operators can spot Antigravity records that contain generation
+  metadata but did not produce normalized usage totals.
+
+**Improvements**
+
+- Show clearer **startup and resync state** while AgentsView initializes.
+  Background startup now publishes the daemon PID, elapsed time, current phase,
+  progress detail, and log path for `agentsview serve status`, while full
+  resyncs print durable phase and completion lines.
+- Improve **remote sync configuration and error reporting**. HTTP remote sync
+  now validates configured hosts more directly, keeps ad hoc HTTP remotes
+  unsupported, and maps common failures such as token rejection, missing remote
+  endpoints, connection refusal, DNS failures, and timeouts to actionable
+  messages.
+- Refresh **frontend controls and dialogs** by migrating the Svelte UI to the
+  shared `@kenn-io/kit-ui` components, making filters, range pickers, dialogs,
+  settings controls, copy buttons, refresh controls, and related interaction
+  states more consistent across pages.
+
+**Bug fixes**
+
+- Discover **OhMyPi sessions with a leading title slot**, matching the current
+  OMP/Pi-style transcript shape instead of skipping those files.
+- Reparse **in-place Claude rewrites** even when the source file size and mtime
+  are unchanged, so same-length edits no longer leave stale stored messages.
+- Fix **data-version resync completion** so preserved orphaned sessions and
+  sessions copied through an aborted-resync fallback still receive the
+  backfills they need instead of being treated as fully rewritten.
+- Scope **PostgreSQL session-alias backfill markers per push target**, so one
+  PostgreSQL destination cannot incorrectly satisfy or block the required full
+  alias backfill for another target.
+
+**Acknowledgements**
+
+- Thanks to [Aaron Florey](https://github.com/aaronflorey) for Devin CLI
+  session discovery and parsing.
+- Thanks to [Matthew Jacobs](https://github.com/mjacobs) for `parse-diff`
+  incremental-skew diagnostics, OMP leading-title discovery, Antigravity
+  `gen_metadata` anomaly reporting, and the same-size same-mtime Claude rewrite
+  fix.
+- Thanks to [Wes McKinney](https://github.com/wesm) for startup transparency,
+  resync consistency fixes, and remote sync configuration and error reporting.
+- Thanks to [Marius van Niekerk](https://github.com/mariusvniekerk) for the
+  frontend migration to shared UI controls and dialogs.
+- Thanks to [Rod Boev](https://github.com/rodboev) for scoping PostgreSQL
+  session-alias backfill markers by target.
+
+---
+
 ## 0.36.0
 <small>2026-07-02</small>
 

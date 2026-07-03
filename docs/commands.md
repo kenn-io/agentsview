@@ -708,6 +708,21 @@ are skipped because there is no source file to re-parse. Provider-backed stores
 with authoritative local sources, including Warp, Forge, Piebald, and Devin, are
 covered alongside normal file-backed agents.
 
+The report distinguishes parser drift from comparison-basis skew:
+
+- `raced` means the source changed while `parse-diff` was running. It is
+  reported for review but does not fail `--fail-on-change`.
+- `incremental_skew` means the stored row was last written by an
+  incremental-append sync, so a fresh full re-parse can legitimately differ on
+  append-path metadata. It is also reported but excluded from
+  `--fail-on-change`.
+- `pending_resync` means the stored data version is behind the running binary;
+  the next data-version resync rewrites those rows.
+
+If the report includes `incremental_skew`, run a full resync before treating the
+archive as a clean parser-drift baseline. A full resync rewrites those rows
+through the normalization path and restores strict `parse-diff` scrutiny.
+
 ______________________________________________________________________
 
 ### `agentsview import`

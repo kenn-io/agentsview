@@ -129,6 +129,13 @@ per-host `token` is required and must match the remote daemon's `auth_token`.
 Do not reuse the collector daemon's own `auth_token` for untrusted remote
 endpoints.
 
+Each `remote_hosts.host` value must be unique. A configured HTTP host can be
+selected later with `agentsview sync --host <name>`, but ad hoc HTTP remotes are
+not supported; without a matching configured host, `--host` remains an SSH
+remote sync. HTTP failures are summarized with actionable messages for common
+cases such as token rejection, missing remote archive endpoints, connection
+refusal, DNS failures, and timeouts.
+
 The remote daemon must also listen on an interface the collector can reach.
 The server binds `127.0.0.1` by default, so set `host` in the remote
 machine's config.toml (requires `require_auth = true`) or start it with
@@ -628,7 +635,13 @@ full-text search indexes on message content.
 | `skipped_files`      | Cache of non-interactive session files                                       |
 | `messages_fts`       | FTS5 virtual table for full-text search                                      |
 
-The database is automatically migrated on startup when the schema changes.
+The database is automatically migrated on startup when the schema changes. When
+the stored data version is stale, AgentsView preserves the existing database and
+runs a full resync into a fresh temporary database. The resync then copies
+preserved/orphaned session data from the previous database before swapping
+atomically. If the full resync aborts, AgentsView falls back to an incremental
+sync and leaves the data-version marker stale so a later startup can retry the
+full rewrite.
 
 ## Sync Behavior
 
@@ -651,6 +664,20 @@ that metadata shows a parse may be needed.
 
 Files that fail to parse or contain no interactive content are cached in the
 `skipped_files` table and skipped on subsequent syncs until their mtime changes.
+
+Sync summaries include a `Parser anomalies (this run)` section whenever the
+current run observes parser or sanitizer anomalies. The section can include
+malformed-line counts, unrecognized Antigravity schema sessions,
+sanitized-field counts, and Antigravity `gen_metadata without usage` counts. A
+`gen_metadata without usage` entry means Antigravity supplied generation
+metadata for one or more records, but AgentsView could not derive normalized
+usage totals from those records during that sync.
+
+When a data-version resync runs, startup output prints durable phase and
+completion lines for the resync steps. Background daemons also publish startup
+state while they hold the start lock, so `agentsview serve status` can show the
+starting PID, elapsed time, current phase, progress detail, and log path before
+the HTTP server is ready.
 
 ### Large Watch Trees
 

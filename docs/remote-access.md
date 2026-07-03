@@ -100,6 +100,14 @@ The HTTP transport is intended for private networking such as Tailscale or an
 equivalent restricted overlay. Do not expose raw archive endpoints directly to
 the public internet.
 
+HTTP remote sync failures are summarized without echoing remote-controlled URLs
+or response bodies. Common summaries point at the specific fix: a rejected token
+means the collector's per-host `token` does not match the remote daemon's
+`auth_token`; a missing endpoint means the remote host needs a newer
+AgentsView; connection refusal usually means the daemon is not running, is still
+bound to loopback, or the URL port is wrong; DNS and timeout messages point back
+to the configured `url`.
+
 For always-available fleet nodes launched with `agentsview serve --background`,
 set:
 
