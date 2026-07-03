@@ -3,6 +3,8 @@
 /* tslint:disable */
 /* eslint-disable */
 export type SyncProgress = {
+  bytes_done?: number;
+  bytes_total?: number;
   current_project?: string;
   detail?: string;
   hint?: string;

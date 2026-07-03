@@ -2,7 +2,9 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-export type UnsupportedUsage = {
-  kind: string;
+export type DbStatsPercentiles = {
+  mean: number;
+  p50: number;
+  p90: number;
 };
 
