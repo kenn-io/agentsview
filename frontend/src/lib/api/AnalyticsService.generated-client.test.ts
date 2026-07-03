@@ -1,24 +1,24 @@
 import {
+  beforeEach,
   describe,
   expect,
   it,
   vi,
-  beforeEach,
 } from "vite-plus/test";
 
 const { request } = vi.hoisted(() => ({
   request: vi.fn(),
 }));
 
-vi.mock("../core/OpenAPI", () => ({
+vi.mock("./generated/core/OpenAPI", () => ({
   OpenAPI: {},
 }));
 
-vi.mock("../core/request", () => ({
+vi.mock("./generated/core/request", () => ({
   request,
 }));
 
-import { AnalyticsService } from "./AnalyticsService";
+import { AnalyticsService } from "./generated/services/AnalyticsService";
 
 describe("AnalyticsService signal sessions", () => {
   beforeEach(() => {
