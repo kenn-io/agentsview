@@ -1,0 +1,6 @@
+interface:
+  display_name: "Testing Without Tautologies"
+  short_description: "Write tests that can actually fail"
+  default_prompt: "Use $testing-without-tautologies to write or review tests that protect real behavior."
+policy:
+  allow_implicit_invocation: true
