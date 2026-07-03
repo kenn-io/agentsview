@@ -62,10 +62,10 @@ func ListDevinSessionMeta(dbPath string) ([]DevinSessionMeta, error) {
 		       COALESCE(model, ''),
 		       COALESCE(created_at, 0),
 		       last_activity_at,
-		       COALESCE(last_activity_at, created_at)
+		       COALESCE(last_activity_at, created_at, 0)
 		  FROM sessions
 		 WHERE COALESCE(hidden, 0) <> 1
-		 ORDER BY COALESCE(last_activity_at, created_at) DESC, id DESC
+		 ORDER BY COALESCE(last_activity_at, created_at, 0) DESC, id DESC
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("listing devin sessions: %w", err)
@@ -133,7 +133,7 @@ func getDevinSessionMeta(
 		       COALESCE(model, ''),
 		       COALESCE(created_at, 0),
 		       last_activity_at,
-		       COALESCE(last_activity_at, created_at)
+		       COALESCE(last_activity_at, created_at, 0)
 		  FROM sessions
 		 WHERE COALESCE(hidden, 0) <> 1
 		   AND id = ?
@@ -183,7 +183,7 @@ func (e *devinTranscriptError) Error() string {
 		devinRedactedSessionID(),
 	)
 	if e.cause != nil {
-		return msg + ": " + e.cause.Error()
+		return msg + ": " + devinTranscriptCauseMessage(e.cause)
 	}
 	return msg
 }
@@ -197,6 +197,20 @@ func (e *devinTranscriptError) Unwrap() error {
 
 func newDevinTranscriptError(op string, cause error) error {
 	return &devinTranscriptError{op: op, cause: cause}
+}
+
+func devinTranscriptCauseMessage(cause error) string {
+	var pathErr *os.PathError
+	if errors.As(cause, &pathErr) {
+		if pathErr.Op != "" && pathErr.Err != nil {
+			return pathErr.Op + ": " + pathErr.Err.Error()
+		}
+		if pathErr.Err != nil {
+			return pathErr.Err.Error()
+		}
+		return pathErr.Op
+	}
+	return cause.Error()
 }
 
 func devinRedactedTranscriptPath() string {

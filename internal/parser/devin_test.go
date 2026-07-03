@@ -57,6 +57,21 @@ func TestListDevinSessionMeta(t *testing.T) {
 	}
 }
 
+func TestListDevinSessionMetaAllowsMissingTimestamps(t *testing.T) {
+	fixture := newDevinTestFixture(t,
+		devinSessionRow{ID: "session-missing-times", Title: "Partial row", WorkingDirectory: "/cwd/partial", Model: "model-partial"},
+	)
+
+	metas, err := ListDevinSessionMeta(fixture.DBPath)
+	require.NoError(t, err)
+	require.Len(t, metas, 1)
+
+	assert.Equal(t, "session-missing-times", metas[0].RawSessionID)
+	assert.True(t, metas[0].CreatedAt.IsZero())
+	assert.True(t, metas[0].UpdatedAt.IsZero())
+	assert.Zero(t, metas[0].FileMtime)
+}
+
 func TestListDevinSessionMetaMissingDB(t *testing.T) {
 	metas, err := ListDevinSessionMeta(filepath.Join(t.TempDir(), "cli", devinDBFilename))
 	require.NoError(t, err)
@@ -357,6 +372,29 @@ func TestParseDevinSessionTranscriptFallbacks(t *testing.T) {
 	assert.False(t, sess.HasPeakContextTokens)
 }
 
+func TestParseDevinSessionAllowsMissingMetadataTimestamps(t *testing.T) {
+	const sessionID = "session-missing-times"
+	dbPath, _ := newDevinSessionFixture(t, devinSessionRow{
+		ID:               sessionID,
+		Title:            "Partial metadata",
+		WorkingDirectory: "/tmp/partial",
+		Model:            "db-model",
+	}, `{
+		"steps":[
+			{"step_id":"step-1","source":"user","message":"hello"}
+		]
+	}`)
+
+	sess, msgs, err := parseDevinSession(dbPath, sessionID, "local")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, msgs, 1)
+
+	assert.Equal(t, "devin:"+sessionID, sess.ID)
+	assert.True(t, sess.StartedAt.IsZero())
+	assert.True(t, sess.EndedAt.IsZero())
+}
+
 func TestParseDevinSessionEmptyTranscriptUsesDBMetadata(t *testing.T) {
 	const sessionID = "session-empty"
 	dbPath, _ := newDevinSessionFixture(t, devinSessionRow{
@@ -525,6 +563,25 @@ func TestParseDevinSessionCorruptTranscriptReturnsRedactedError(t *testing.T) {
 	assert.NotContains(t, err.Error(), transcriptPath)
 	assert.NotContains(t, err.Error(), sessionID)
 	assert.NotContains(t, err.Error(), "secret-value")
+}
+
+func TestDevinTranscriptPathErrorStaysRedacted(t *testing.T) {
+	const sessionID = "secret-session-id"
+	secretPath := filepath.Join(t.TempDir(), "cli", "transcripts", sessionID+".json")
+
+	err := newDevinTranscriptError("read", &os.PathError{
+		Op:   "open",
+		Path: secretPath,
+		Err:  os.ErrPermission,
+	})
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "read devin transcript")
+	assert.ErrorContains(t, err, devinRedactedTranscriptPath())
+	assert.ErrorContains(t, err, devinRedactedSessionID())
+	assert.ErrorContains(t, err, "permission denied")
+	assert.NotContains(t, err.Error(), secretPath)
+	assert.NotContains(t, err.Error(), sessionID)
 }
 
 func TestParseDevinSessionRedactsCredentialPathsAndTokenLikeValues(t *testing.T) {
