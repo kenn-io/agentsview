@@ -668,6 +668,8 @@ The report includes:
 - leftover resync temp files
 - configured/default agent roots and whether each exists
 - recent debug lines mentioning sync, data versions, warnings, or failures
+- Antigravity CLI summary-mode counts and Antigravity sessions decoded from
+  unrecognized `agy-schema:` fingerprints
 - a likely-cause summary when startup sync behavior looks abnormal
 
 ______________________________________________________________________
@@ -702,8 +704,9 @@ agentsview parse-diff --json > parser-report.json
 
 `parse-diff` is intended for parser development and release QA. Run it against a
 quiescent, freshly synced archive for the clearest signal. Import-only sources
-and non-file-backed agents are skipped because there is no source file to
-re-parse.
+are skipped because there is no source file to re-parse. Provider-backed stores
+with authoritative local sources, including Warp, Forge, and Piebald, are
+covered alongside normal file-backed agents.
 
 ______________________________________________________________________
 

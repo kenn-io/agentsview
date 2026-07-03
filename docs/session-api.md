@@ -108,6 +108,39 @@ use local SQLite unless `--pg` is supplied.
 | `--server-token-file <path>` | Bearer token file for an explicit `--server` URL. |
 | `--pg`                       | Read from configured PostgreSQL instead of SQLite. |
 
+## Shared metadata endpoints
+
+The web UI and generated API clients use shared metadata endpoints
+for filter options:
+
+```http
+GET /api/v1/projects
+GET /api/v1/machines
+GET /api/v1/branches
+GET /api/v1/agents
+```
+
+`GET /api/v1/branches` returns distinct `(project, branch)` pairs
+plus an opaque `token` field:
+
+```json
+{
+  "branches": [
+    {
+      "project": "myapp",
+      "branch": "main",
+      "token": "..."
+    }
+  ]
+}
+```
+
+Pass the returned token back as the `git_branch` query parameter on
+branch-aware endpoints. Treat it as opaque and URL-encode it in
+manual HTTP calls. The token is scoped by both project and branch,
+so `app-a/main` and `app-b/main` remain distinct, and an empty
+branch remains distinct from a literal `unknown` branch.
+
 ## Commands
 
 ### `agentsview session get`
@@ -127,6 +160,7 @@ agentsview session get <id> [--format json]
   "agent": "claude",
   "first_message": "...",
   "display_name": "...",
+  "git_branch": "main",
   "started_at": "2026-04-18T12:00:00Z",
   "ended_at": "2026-04-18T13:00:00Z",
   "message_count": 42,
@@ -136,12 +170,21 @@ agentsview session get <id> [--format json]
   "outcome": "completed",
   "health_score_basis": ["..."],
   "health_penalties": {"tool_retries": 5},
+  "parser_malformed_lines": 0,
   "secret_leak_count": 0
 }
 ```
 
 `health_score_basis` and `health_penalties` are populated when
 `health_score` is non-null. Both HTTP and CLI surfaces return them.
+
+`git_branch` is the branch captured at sync time when the parser or
+source metadata exposes it. `parser_malformed_lines` is non-zero
+when a parser recovered a session after skipping malformed source
+lines. Antigravity detail responses may also include
+`decode_confidence`; the value `low` means the session came from an
+unrecognized Antigravity schema fingerprint and was decoded
+heuristically.
 
 `secret_leak_count` (added in 0.30.0) counts definite-tier
 findings from [secret scanning](#secret-scanning) and is stamped
@@ -176,6 +219,7 @@ One-shot and automated sessions are excluded by default. Use the
 | `--project`           | `project`           | string                            |
 | `--exclude-project`   | `exclude_project`   | string                            |
 | `--machine`           | `machine`           | string                            |
+| —                     | `git_branch`        | opaque token from `GET /api/v1/branches` |
 | `--agent`             | `agent`             | string                            |
 | `--date`              | `date`              | `YYYY-MM-DD`                      |
 | `--date-from`         | `date_from`         | `YYYY-MM-DD`                      |
@@ -296,6 +340,55 @@ agentsview session tool-calls <id>
 
 `input_json` is a string — usually a serialized JSON object but may
 be a plain string (e.g. `"echo hello world"` from Codex).
+
+---
+
+### `POST /api/v1/sessions/{id}/resume`
+
+Resume a local session in its native agent, or return the command
+that would be launched. This is an HTTP-only surface used by the
+web UI's resume menu.
+
+```http
+POST /api/v1/sessions/{id}/resume
+```
+
+Request body:
+
+```json
+{
+  "skip_permissions": false,
+  "fork_session": false,
+  "from_ordinal": 17,
+  "command_only": false,
+  "opener_id": ""
+}
+```
+
+Response:
+
+```json
+{
+  "launched": true,
+  "terminal": "Terminal",
+  "command": "cd /repo && claude --resume abc-123",
+  "cwd": "/repo"
+}
+```
+
+`command_only: true` returns the command without launching a
+terminal. Read-only local mode can still return commands, but
+remote sessions and read-only remote serving cannot launch local
+programs.
+
+For Claude Code sessions, setting `fork_session: true` without
+`from_ordinal` appends Claude's native `--fork-session` flag to the
+normal resume command. Setting both `fork_session: true` and
+`from_ordinal` creates a message-point fork: AgentsView renders the
+transcript through that message ordinal into a temporary prompt and
+runs `claude < prompt` from the resolved session working directory.
+Message-point forks are Claude-only, require `fork_session`, reject
+`opener_id`, and return `404` when the ordinal is not present.
 
 ---
 
@@ -445,6 +538,7 @@ default; opt back in with `--include-one-shot`,
 | `--project`           | `project`           | string                                                 |
 | `--exclude-project`   | `exclude_project`   | string                                                 |
 | `--machine`           | `machine`           | string                                                 |
+| —                     | `git_branch`        | opaque token from `GET /api/v1/branches`               |
 | `--agent`             | `agent`             | string                                                 |
 | `--date`              | `date`              | `YYYY-MM-DD`                                           |
 | `--date-from`         | `date_from`         | `YYYY-MM-DD`                                           |
@@ -599,6 +693,7 @@ are also included by default and can be filtered with the
 | `timezone` | IANA timezone name; default `UTC` |
 | `bucket` | Optional bucket override: `5m`, `15m`, `1h`, `1d`, or `1w` |
 | `project` | Filter by project |
+| `git_branch` | Filter by opaque branch token from `GET /api/v1/branches` |
 | `agent` | Filter by agent |
 | `machine` | Filter by machine |
 | `automation` | `all`, `interactive`, or `automated`; default `all` |

@@ -560,6 +560,14 @@ health grade badge, and a copyable **Session ID**. Click the ID to
 copy it to the clipboard for sharing or lookup. Click the grade
 badge to toggle the signal panel.
 
+If a parser skipped malformed source lines while still recovering
+the session, the header shows a **Malformed lines** badge with the
+persisted `parser_malformed_lines` count. For Antigravity IDE and
+CLI sessions decoded from an unrecognized SQLite schema fingerprint,
+the header also shows **Unverified schema**. That badge means the
+session was decoded heuristically from a newer schema and may be
+incomplete.
+
 ### Message Layouts
 
 Four layouts control how messages are rendered. Cycle between
@@ -598,6 +606,15 @@ The header shows the role label, timestamp, and a **copy
 button** that appears on hover. Click it to copy the full
 message content to the clipboard — a checkmark confirms the
 copy for 1.5 seconds.
+
+Claude Code sessions also show a fork action on each message header
+when the local server can launch or return a command. Clicking it
+starts a new Claude run from the selected point by rendering the
+transcript through that message ordinal into a temporary prompt,
+starting `claude` in the session working directory, and removing the
+temporary prompt after launch. In read-only local mode the action
+copies the command instead of launching it; remote sessions cannot be
+forked from the browser.
 
 ### Thinking Blocks
 

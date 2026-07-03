@@ -49,6 +49,16 @@ invocation, it's also dramatically faster on large histories
     do not expose token usage. Warp records session-level totals, but
     those totals are not yet folded into the per-message cost report.
 
+When an agent filter selects only agents that do not expose
+per-message token rows, AgentsView reports that as an unsupported
+usage state instead of silently showing an empty chart. Copilot-family
+filters (`copilot`, `vscode-copilot`, and `visualstudio-copilot`) keep
+Copilot-specific wording; any other no-token agent falls back to a
+generic "matching sessions do not expose token usage data" message.
+Copilot AI-credit conversion is tracked separately from this
+no-token-data capability, so future agents can opt into either
+behavior independently.
+
 ### Cursor Admin Usage Events
 
 Cursor has two usage sources in AgentsView:
@@ -171,6 +181,34 @@ outliers and the remaining breakdown tells you where the
 smaller spend is going.
 
 ![Cost attribution treemap](/assets/generated/screenshots/usage-attribution.png)
+
+### Pairwise Cost Comparison
+
+The Usage page also includes **Comparative Cost Analysis** for
+side-by-side cost checks. Pick a dimension (**Project** or
+**Model**) and value for the left side, then pick the same or a
+different dimension and value for the right side. The comparison
+uses the page's active date range and shared filters, then asks the
+backend to compute both slices.
+
+The result table shows total cost, session count, cost per session,
+total tokens, tokens per session, input tokens, output tokens, the
+absolute delta from left to right, and the percent delta when a
+ratio can be computed. It is useful for questions such as "how much
+more expensive was project A than project B this week?" or "how do
+two models compare after normalizing by session count?"
+
+The same comparison is available over REST:
+
+```http
+GET /api/v1/usage/pairwise-comparison
+```
+
+Pass the normal usage filters plus `left_dimension`, `left_value`,
+`right_dimension`, and `right_value`. Supported dimensions are
+`project` and `model`. Branch-scoped comparisons use the shared
+`git_branch` usage filter with an opaque token from
+`GET /api/v1/branches`.
 
 ### Top Sessions by Cost
 

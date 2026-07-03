@@ -3,6 +3,101 @@ title: Changelog
 description: Release history for AgentsView
 ---
 
+## 0.36.0
+<small>2026-07-02</small>
+
+**New features**
+
+- Add **pairwise usage cost comparisons** to the Usage page and usage API. The
+  new comparison panel can compare any two project or model slices in the
+  current date/filter window and reports backend-computed cost, session count,
+  total tokens, cost per session, tokens per session, absolute deltas, and
+  percent deltas. The REST surface is
+  `GET /api/v1/usage/pairwise-comparison`.
+- Show **parser malformed-line badges** on session detail pages when a parser
+  preserved a session but skipped malformed source lines. The badge uses the
+  persisted `parser_malformed_lines` count already produced by parser/sync
+  validation, so users can spot partially recovered transcripts without opening
+  CLI sync logs.
+- Add **Traditional Chinese (`zh-TW`) localization** across the Svelte frontend
+  and register it as a supported locale alongside English and Simplified
+  Chinese.
+- Support **forking Claude sessions from a selected message**. Claude message
+  headers now expose a fork action that renders the transcript through the
+  selected ordinal into a temporary prompt and launches `claude` from the
+  session working directory, or returns a copyable command when launch is not
+  available.
+- Add **branch metadata and filter support** for session queries. The new
+  `GET /api/v1/branches` endpoint returns distinct `(project, branch)` pairs
+  with opaque filter tokens, and session, search, analytics, activity, and usage
+  endpoints accept those tokens as `git_branch`. Project-scoped tokens keep
+  same-named branches in different repositories distinct and preserve empty
+  branch values.
+- Flag **Antigravity sessions decoded from unrecognized schemas**. Antigravity
+  IDE and CLI parsers now fingerprint SQLite schemas into `source_version`;
+  unknown fingerprints get an `agy-schema:<prefix>` marker, session details
+  expose `decode_confidence: "low"`, sync summaries count the affected
+  sessions, `doctor sync` reports them, and the UI shows an **Unverified
+  schema** badge.
+
+**Improvements**
+
+- Improve **Cursor attribution in stats** so `agentsview stats` and the stats
+  service read the host-local Cursor attribution database with parity between
+  direct and daemon-backed execution. Cursor attribution remains machine-local
+  and reports unsupported project filters explicitly.
+- Extend **`parse-diff` coverage** to DB-backed Warp, Forge, and Piebald
+  sessions by allowing provider-authoritative sources, not only file-backed
+  parsers.
+- Reduce **daemon sync CPU usage while sessions are actively streaming** by
+  avoiding repeated skip-check work on hot files that are still being written.
+- Improve **unsupported usage reporting** from agent capabilities. Agents now
+  advertise whether they lack per-message token data and whether their costs are
+  denominated as Copilot AI Credits separately, so Copilot-family filters keep
+  Copilot-specific wording while other no-token agents get generic guidance.
+
+**Bug fixes**
+
+- Fix **DuckDB push schema setup through Quack** so remote Quack-backed pushes
+  initialize and validate the DuckDB schema correctly.
+- Fix **Visual Studio 2026 Copilot session parsing** for the current trace
+  layout while preserving the existing Visual Studio Copilot agent identity and
+  discovery paths.
+- Surface **unsupported Copilot usage filters** correctly in the Usage page and
+  API instead of showing an empty report without the Copilot no-token-data note.
+- Backfill **worktree mappings** for sessions that have empty working-directory
+  rows but can be matched from sibling sessions under the same mapping.
+- Prevent **OpenCode WAL watcher feedback loops** by reading OpenCode-family
+  SQLite databases through read-only file URIs, ignoring transient `-shm`
+  events, and only treating main database or data-bearing WAL changes as
+  meaningful.
+- Remove **outdated Copilot billing wording** from CLI usage output. The note
+  now says Copilot records do not include token or cost data AgentsView can
+  total, rather than referring to old billing terminology.
+
+**Acknowledgements**
+
+- Thanks to [Rod Boev](https://github.com/rodboev) for pairwise usage
+  comparisons, Cursor attribution parity, Claude message-point session forking,
+  worktree-mapping backfills, unsupported usage capability metadata, and usage
+  filter fixes.
+- Thanks to [Matthew Jacobs](https://github.com/mjacobs) for parser
+  malformed-line badges, Antigravity schema-confidence reporting,
+  provider-backed `parse-diff` coverage, the Copilot CLI wording fix, and MCP
+  schema documentation.
+- Thanks to [Linus](https://github.com/Playgrand-by-linus) for the Traditional
+  Chinese (`zh-TW`) localization.
+- Thanks to [Prateek Rungta](https://github.com/prateek) for the project-scoped
+  branch filter foundation.
+- Thanks to [Phillip Cloud](https://github.com/cpcloud) for the DuckDB/Quack
+  schema setup fix.
+- Thanks to [Trent Nelson](https://github.com/tpn) for preventing OpenCode WAL
+  watcher feedback loops.
+- Thanks to [Wes McKinney](https://github.com/wesm) for daemon sync CPU
+  reduction, Windows test-suite fixture reuse, and release documentation.
+
+---
+
 ## 0.35.2
 <small>2026-06-30</small>
 
