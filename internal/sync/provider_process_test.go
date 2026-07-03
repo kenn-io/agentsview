@@ -944,7 +944,6 @@ func writeProcessProviderDevinFixture(
 	dbPath := filepath.Join(cliDir, "sessions.db")
 	database, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = database.Close() })
 	_, err = database.Exec(`
 		CREATE TABLE sessions (
 			id TEXT PRIMARY KEY,
@@ -969,6 +968,7 @@ func writeProcessProviderDevinFixture(
 		lastActivityAtMS,
 	)
 	require.NoError(t, err)
+	require.NoError(t, database.Close())
 	transcriptPath := filepath.Join(transcriptsDir, sessionID+".json")
 	writeProcessProviderDevinTranscript(t, transcriptPath, assistantReply)
 	return dbPath, transcriptPath
