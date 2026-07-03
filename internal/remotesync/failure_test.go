@@ -83,6 +83,25 @@ func TestFailureSummary(t *testing.T) {
 				"500 Internal Server Error",
 		},
 		{
+			name: "remote-controlled reason phrase is ignored",
+			err: &StatusError{
+				Code:   401,
+				Status: "401 go-away token=abc123 leaked",
+			},
+			want: "HTTP remote sync failed: remote daemon rejected " +
+				"the sync token (401 Unauthorized); the token for " +
+				"this host in [[remote_hosts]] must match the remote " +
+				"daemon's auth_token",
+		},
+		{
+			name: "unknown status code renders numerically",
+			err: &StatusError{
+				Code:   599,
+				Status: "599 Vendor Specific Nonsense",
+			},
+			want: "HTTP remote sync failed: remote daemon returned 599",
+		},
+		{
 			name: "connection refused",
 			err:  dialRefused,
 			want: "HTTP remote sync failed: connection refused; " +

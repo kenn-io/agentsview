@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
+	"strconv"
 	"syscall"
 )
 
@@ -22,24 +24,27 @@ func FailureSummary(err error) string {
 
 	var statusErr *StatusError
 	if errors.As(err, &statusErr) {
+		// statusLabel derives the display text locally from the
+		// numeric code: the response status line (and Detail) are
+		// remote-controlled and must never reach the summary.
 		switch statusErr.Code {
 		case 401, 403:
 			return fmt.Sprintf(
 				"HTTP remote sync failed: remote daemon rejected the "+
 					"sync token (%s); the token for this host in "+
 					"[[remote_hosts]] must match the remote daemon's "+
-					"auth_token", statusErr.Status,
+					"auth_token", statusLabel(statusErr.Code),
 			)
 		case 404:
 			return fmt.Sprintf(
 				"HTTP remote sync failed: remote daemon has no "+
 					"remote-sync endpoints (%s); upgrade agentsview on "+
-					"the remote host", statusErr.Status,
+					"the remote host", statusLabel(statusErr.Code),
 			)
 		default:
 			return fmt.Sprintf(
 				"HTTP remote sync failed: remote daemon returned %s",
-				statusErr.Status,
+				statusLabel(statusErr.Code),
 			)
 		}
 	}
@@ -65,4 +70,14 @@ func FailureSummary(err error) string {
 	}
 
 	return generic
+}
+
+// statusLabel renders an HTTP status for user-facing messages using
+// only the locally-known status text for the code, never the
+// remote-supplied reason phrase.
+func statusLabel(code int) string {
+	if text := http.StatusText(code); text != "" {
+		return fmt.Sprintf("%d %s", code, text)
+	}
+	return strconv.Itoa(code)
 }

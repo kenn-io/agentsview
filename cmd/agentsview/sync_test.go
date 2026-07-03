@@ -870,3 +870,63 @@ func tsURL(t *testing.T, r *http.Request) string {
 	t.Helper()
 	return "http://" + r.Host
 }
+
+func TestRemoteFailureDisplaySanitizesHTTPErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		failure    remoteHostFailure
+		want       string
+		wantAbsent []string
+	}{
+		{
+			name: "http status failure uses sanitized summary",
+			failure: remoteHostFailure{
+				Host: config.RemoteHost{
+					Host:      "devbox",
+					Transport: config.RemoteTransportHTTP,
+				},
+				Err: &remotesync.StatusError{
+					Code:   401,
+					Status: "401 Unauthorized",
+					Detail: "bearer secret-token-123 rejected",
+				},
+			},
+			want: "HTTP remote sync failed: remote daemon rejected " +
+				"the sync token (401 Unauthorized); the token for " +
+				"this host in [[remote_hosts]] must match the remote " +
+				"daemon's auth_token",
+			wantAbsent: []string{"secret-token-123"},
+		},
+		{
+			name: "http transport collapses unknown raw errors",
+			failure: remoteHostFailure{
+				Host: config.RemoteHost{
+					Host:      "devbox",
+					Transport: config.RemoteTransportHTTP,
+				},
+				Err: errors.New(
+					`Get "http://devbox.tailnet.ts.net:8080": token=abc rejected`,
+				),
+			},
+			want:       "HTTP remote sync failed",
+			wantAbsent: []string{"tailnet.ts.net", "token=abc"},
+		},
+		{
+			name: "ssh transport keeps the raw error",
+			failure: remoteHostFailure{
+				Host: config.RemoteHost{Host: "buildbox"},
+				Err:  errors.New("ssh: permission denied"),
+			},
+			want: "ssh: permission denied",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := remoteFailureDisplay(tt.failure)
+			assert.Equal(t, tt.want, got)
+			for _, absent := range tt.wantAbsent {
+				assert.NotContains(t, got, absent)
+			}
+		})
+	}
+}

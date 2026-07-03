@@ -414,7 +414,8 @@ func runRemoteHosts(
 
 // reportRemoteFailures writes per-host failures to the debug log
 // and a summary to stderr, so unattended (cron) runs surface them
-// even though setupLogFile redirects log output to a file.
+// even though setupLogFile redirects log output to a file. The log
+// keeps the raw error; stderr gets the sanitized display form.
 func reportRemoteFailures(failures []remoteHostFailure) {
 	if len(failures) == 0 {
 		return
@@ -425,8 +426,21 @@ func reportRemoteFailures(failures []remoteHostFailure) {
 	fmt.Fprintf(os.Stderr,
 		"sync: %d remote host(s) failed:\n", len(failures))
 	for _, f := range failures {
-		fmt.Fprintf(os.Stderr, "  %s: %v\n", f.Host.Host, f.Err)
+		fmt.Fprintf(os.Stderr, "  %s: %s\n",
+			f.Host.Host, remoteFailureDisplay(f))
 	}
+}
+
+// remoteFailureDisplay renders a remote failure for user-facing
+// output. HTTP failures go through the sanitized summary because
+// their raw errors can embed the remote URL, response bodies, or
+// echoed tokens from a misbehaving endpoint; SSH errors are local
+// tool output and stay verbatim.
+func remoteFailureDisplay(f remoteHostFailure) string {
+	if f.Host.Transport == config.RemoteTransportHTTP {
+		return remotesync.FailureSummary(f.Err)
+	}
+	return f.Err.Error()
 }
 
 // runLocalSync runs a local sync (incremental or full resync).
