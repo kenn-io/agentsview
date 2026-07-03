@@ -5603,11 +5603,13 @@ func TestUpdateSessionIncremental(t *testing.T) {
 }
 
 // TestLastWriteIncrementalMarker pins the parse-diff detection signal:
-// the full-write path (UpsertSession) leaves last_write_incremental
+// a fresh full write (UpsertSession) leaves last_write_incremental
 // false, an incremental append (WriteSessionIncremental) sets it true,
-// and a later full write of the same ID resets it to false. This is the
-// per-session ground truth parse-diff reads to classify incremental
-// skew, so its set/reset behavior across both write paths must hold.
+// a bare UpsertSession afterward PRESERVES it (it rewrites only the
+// session row, not the still-incremental message rows), and only a full
+// message re-normalization (ReplaceSessionMessages) clears it. This is
+// the per-session ground truth parse-diff reads to classify incremental
+// skew, so its set/reset behavior across these write paths must hold.
 func TestLastWriteIncrementalMarker(t *testing.T) {
 	d := testDB(t)
 
@@ -5650,15 +5652,93 @@ func TestLastWriteIncrementalMarker(t *testing.T) {
 	assert.True(t, got.LastWriteIncremental,
 		"incremental append must set last_write_incremental true")
 
-	// A subsequent full re-normalization of the same ID clears it: this
-	// is the self-heal a full resync relies on to restore parse-diff
-	// scrutiny.
+	// A bare UpsertSession rewrites only the session row, not the message
+	// rows, so it must PRESERVE the marker: the stored messages are still
+	// the incrementally appended ones. Clearing here (as an earlier
+	// implementation did) would make parse-diff report that still-present
+	// benign skew as real drift after any routine append-only full-parse
+	// sync (Claude/Codex take ReplaceMessages=false).
 	requireNoError(t, d.UpsertSession(base), "second full upsert")
 	got, err = d.GetSessionFull(context.Background(), "inc-marker")
 	requireNoError(t, err, "get after second full upsert")
 	require.NotNil(t, got, "session after second full upsert")
+	assert.True(t, got.LastWriteIncremental,
+		"a bare session upsert must preserve the marker (messages not re-normalized)")
+
+	// A full message re-normalization clears it: this is the self-heal a
+	// full resync relies on to restore parse-diff scrutiny.
+	requireNoError(t, d.ReplaceSessionMessages(
+		"inc-marker",
+		[]Message{asstMsg("inc-marker", 1, "renormalized reply")},
+	), "full message replace")
+	got, err = d.GetSessionFull(context.Background(), "inc-marker")
+	requireNoError(t, err, "get after full message replace")
+	require.NotNil(t, got, "session after full message replace")
 	assert.False(t, got.LastWriteIncremental,
-		"a full re-normalization must clear last_write_incremental")
+		"a full message re-normalization must clear last_write_incremental")
+}
+
+// TestBatchWriteIncrementalMarkerReplaceMode pins the batch-path half of
+// the marker contract: the routine full-parse batch path takes
+// ReplaceMessages=false for append-only agents (Claude/Codex), where it
+// upserts the session row and appends new messages but does NOT rewrite
+// earlier incrementally written rows. That path must PRESERVE the marker;
+// only a ReplaceMessages=true batch, which deletes and reinserts every
+// row, may clear it. Without this, a single routine sync flips a benign
+// incremental_skew session into a spurious DiffChanged.
+func TestBatchWriteIncrementalMarkerReplaceMode(t *testing.T) {
+	d := testDB(t)
+
+	base := Session{
+		ID:               "batch-marker",
+		Project:          "proj",
+		Machine:          defaultMachine,
+		Agent:            "claude",
+		FirstMessage:     new("hello"),
+		StartedAt:        new("2024-01-15T10:00:00Z"),
+		MessageCount:     1,
+		UserMessageCount: 1,
+	}
+	requireNoError(t, d.UpsertSession(base), "initial upsert")
+	requireNoError(t, d.WriteSessionIncremental(
+		"batch-marker",
+		[]Message{asstMsg("batch-marker", 1, "appended reply")},
+		IncrementalSessionUpdate{MsgCount: 2, UserMsgCount: 1, NextOrdinal: 2},
+	), "incremental write")
+
+	got, err := d.GetSessionFull(context.Background(), "batch-marker")
+	requireNoError(t, err, "get after incremental write")
+	require.NotNil(t, got, "session after incremental write")
+	require.True(t, got.LastWriteIncremental, "marker set by incremental write")
+
+	// Append-only full-parse batch (ReplaceMessages=false): must preserve.
+	appendOnly := []Message{userMsg("batch-marker", 0, "hello"), asstMsg("batch-marker", 2, "next")}
+	_, err = d.WriteSessionBatch([]SessionBatchWrite{{
+		Session:         base,
+		Messages:        appendOnly,
+		DataVersion:     CurrentDataVersion(),
+		ReplaceMessages: false,
+	}})
+	requireNoError(t, err, "append-only batch write")
+	got, err = d.GetSessionFull(context.Background(), "batch-marker")
+	requireNoError(t, err, "get after append-only batch")
+	require.NotNil(t, got, "session after append-only batch")
+	assert.True(t, got.LastWriteIncremental,
+		"append-only batch (ReplaceMessages=false) must preserve the marker")
+
+	// Full-replace batch (ReplaceMessages=true): must clear.
+	_, err = d.WriteSessionBatch([]SessionBatchWrite{{
+		Session:         base,
+		Messages:        []Message{userMsg("batch-marker", 0, "hello")},
+		DataVersion:     CurrentDataVersion(),
+		ReplaceMessages: true,
+	}})
+	requireNoError(t, err, "full-replace batch write")
+	got, err = d.GetSessionFull(context.Background(), "batch-marker")
+	requireNoError(t, err, "get after full-replace batch")
+	require.NotNil(t, got, "session after full-replace batch")
+	assert.False(t, got.LastWriteIncremental,
+		"full-replace batch (ReplaceMessages=true) must clear the marker")
 }
 
 func TestIncrementalWriteAtomicityRollsBackMessages(t *testing.T) {

@@ -595,6 +595,11 @@ func (db *DB) ReplaceSessionMessages(
 	} else if err := replaceSessionMessagesTx(tx, sessionID, msgs); err != nil {
 		return err
 	}
+	// A full message replacement re-normalizes every row, so clear the
+	// incremental-append marker parse-diff reads (see resetIncrementalMarkerTx).
+	if err := resetIncrementalMarkerTx(tx, sessionID); err != nil {
+		return err
+	}
 	if err := updateSessionAutomationFromMessagesTx(tx, sessionID); err != nil {
 		return err
 	}
@@ -735,6 +740,11 @@ func (db *DB) ReplaceSessionContent(
 			return err
 		}
 	} else if err := replaceSessionMessagesTx(tx, sessionID, msgs); err != nil {
+		return err
+	}
+	// Every message row is now the full-parse shape, so this row is no
+	// longer incremental-append skew: clear the marker parse-diff reads.
+	if err := resetIncrementalMarkerTx(tx, sessionID); err != nil {
 		return err
 	}
 	if err := updateSessionAutomationFromMessagesTx(tx, sessionID); err != nil {

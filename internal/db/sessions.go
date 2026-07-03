@@ -1249,9 +1249,15 @@ const upsertSessionSQL = `
 			transcript_fidelity = excluded.transcript_fidelity,
 			parser_malformed_lines = excluded.parser_malformed_lines,
 			is_truncated = excluded.is_truncated,
-			-- A full re-normalization always clears the incremental marker:
-			-- the excluded row carries the literal false from upsertSessionArgs.
-			last_write_incremental = excluded.last_write_incremental,
+			-- last_write_incremental is deliberately NOT touched on conflict.
+			-- A bare upsert rewrites only the session row, not the message
+			-- rows, so it is not a re-normalization: the append-only full-parse
+			-- path (Claude/Codex, ReplaceMessages=false) upserts the session and
+			-- appends new messages while leaving earlier incrementally written
+			-- rows in place. Clearing the marker here would make parse-diff
+			-- report that still-present benign skew as real drift. The marker is
+			-- reset only by a genuine full message replacement
+			-- (resetIncrementalMarkerTx), and seeded false on fresh INSERT.
 			file_path = excluded.file_path,
 			file_size = excluded.file_size,
 			file_mtime = excluded.file_mtime,
@@ -1282,11 +1288,10 @@ func upsertSessionArgs(s Session) []any {
 		s.SourceVersion, s.TranscriptFidelity,
 		s.ParserMalformedLines,
 		s.IsTruncated,
-		// last_write_incremental is always false on the full-write path:
-		// this row was re-normalized, not incrementally appended. Passing
-		// the literal (rather than s.LastWriteIncremental) makes the reset
-		// structural, and the ON CONFLICT clause propagates it via
-		// excluded.last_write_incremental.
+		// last_write_incremental is seeded false on fresh INSERT: a brand-new
+		// row starts fully normalized. On conflict the column is left as-is
+		// (see upsertSessionSQL) because a bare upsert does not re-normalize
+		// the stored messages; only a full message replacement clears it.
 		false,
 		s.FilePath, s.FileSize, s.FileMtime,
 		s.NextOrdinal, s.LastEntryUUID,
@@ -1889,6 +1894,27 @@ func (db *DB) UpdateSessionIncremental(
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing incremental update tx: %w", err)
+	}
+	return nil
+}
+
+// resetIncrementalMarkerTx clears last_write_incremental after a full
+// message re-normalization. It is the counterpart to the marker set in
+// updateSessionIncrementalTx: parse-diff reads the marker to suppress
+// benign incremental-append skew, so only a path that actually rewrites
+// every message row to the full-parse shape (ReplaceSessionContent,
+// ReplaceSessionMessages, the batch ReplaceMessages branch) may clear it.
+// A bare UpsertSession or an append-only write must not, or the
+// suppression self-heals prematurely and still-present skew reappears as
+// spurious drift.
+func resetIncrementalMarkerTx(tx *sql.Tx, sessionID string) error {
+	if _, err := tx.Exec(
+		`UPDATE sessions SET last_write_incremental = 0 WHERE id = ?`,
+		sessionID,
+	); err != nil {
+		return fmt.Errorf(
+			"resetting incremental marker for %s: %w", sessionID, err,
+		)
 	}
 	return nil
 }

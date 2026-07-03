@@ -346,6 +346,13 @@ func writeOneSessionBatchTx(
 		if err := restorePinsTx(tx, write.Session.ID, pins); err != nil {
 			return 0, err
 		}
+		// A full message replacement re-normalizes every row, so this row is
+		// no longer incremental-append skew. The append-only branch
+		// (ReplaceMessages=false) deliberately leaves the marker untouched so
+		// earlier incrementally written rows stay flagged for parse-diff.
+		if err := resetIncrementalMarkerTx(tx, write.Session.ID); err != nil {
+			return 0, err
+		}
 	}
 	if err := updateSessionAutomationFromMessagesTx(
 		tx, write.Session.ID,
