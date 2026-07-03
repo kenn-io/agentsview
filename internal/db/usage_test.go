@@ -2910,7 +2910,7 @@ func TestExcludeModelFilter(t *testing.T) {
 }
 
 func BenchmarkGetDailyUsage(b *testing.B) {
-	d := testDB(&testing.T{})
+	d := testDB(b)
 	ctx := context.Background()
 
 	if err := d.UpsertModelPricing([]ModelPricing{

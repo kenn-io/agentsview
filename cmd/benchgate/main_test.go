@@ -10,20 +10,21 @@ import (
 	"golang.org/x/perf/benchfmt"
 )
 
-func parseString(t *testing.T, input string) benchSamples {
+func parseString(t *testing.T, input string) (benchSamples, []string) {
 	t.Helper()
-	got, err := parseBench(
+	got, syntaxErrs, err := parseBench(
 		benchfmt.NewReader(strings.NewReader(input), "test"),
 	)
 	require.NoError(t, err)
-	return got
+	return got, syntaxErrs
 }
 
 func TestParseBench(t *testing.T) {
 	tests := []struct {
-		name  string
-		input string
-		want  benchSamples
+		name       string
+		input      string
+		want       benchSamples
+		wantSyntax int
 	}{
 		{
 			name: "full benchmem line with tidied units",
@@ -65,9 +66,15 @@ func TestParseBench(t *testing.T) {
 		{
 			name: "log lines and headers are ignored",
 			input: "2026/07/03 10:20:36 discovered 40 files in 0s\n" +
-				"BenchmarkSync says hello\n" +
 				"cpu: Apple M5 Max\n",
 			want: benchSamples{},
+		},
+		{
+			name: "result line corrupted by interleaved log output is a syntax error",
+			input: "BenchmarkSyncAllWarmNoop-18   \t2026/07/03 15:39:07 discovered 40 files in 0s\n" +
+				"       5\t   3581975 ns/op\t  212433 B/op\t    2760 allocs/op\n",
+			want:       benchSamples{},
+			wantSyntax: 1,
 		},
 		{
 			name:  "custom ReportMetric units are kept",
@@ -82,7 +89,8 @@ func TestParseBench(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parseString(t, tt.input)
+			got, syntaxErrs := parseString(t, tt.input)
+			assert.Len(t, syntaxErrs, tt.wantSyntax)
 			require.Len(t, got, len(tt.want))
 			for name, wantUnits := range tt.want {
 				gotUnits, ok := got[name]
@@ -215,6 +223,37 @@ func TestCompare(t *testing.T) {
 			wantReport: []string{"missing from candidate"},
 		},
 		{
+			name: "gated unit missing from one side is reported, not gated",
+			old: benchSamples{
+				"BenchmarkFoo-8": {"sec/op": noisy(1e-3, 6)},
+			},
+			new: benchSamples{
+				"BenchmarkFoo-8": {
+					"sec/op":    noisy(1e-3, 6),
+					"allocs/op": {90000},
+				},
+			},
+			wantUnits:  nil,
+			wantReport: []string{"allocs/op missing from baseline, not gated"},
+		},
+		{
+			name: "custom ReportMetric unit is reported as ungated",
+			old: benchSamples{
+				"BenchmarkFoo-8": {
+					"sec/op":    noisy(1e-3, 6),
+					"things/op": {3},
+				},
+			},
+			new: benchSamples{
+				"BenchmarkFoo-8": {
+					"sec/op":    noisy(1e-3, 6),
+					"things/op": {900},
+				},
+			},
+			wantUnits:  nil,
+			wantReport: []string{"things/op has no gate, not gated"},
+		},
+		{
 			name: "multiple regressions are all reported",
 			old: benchSamples{
 				"BenchmarkFoo-8": {
@@ -290,13 +329,99 @@ func TestCompareOutlierRunPolicy(t *testing.T) {
 	})
 }
 
-func TestCompareRequiresEnoughSamplesForTimeGate(t *testing.T) {
-	old := benchSamples{"BenchmarkFoo-8": {"sec/op": {1e-3}}}
-	next := benchSamples{"BenchmarkFoo-8": {"sec/op": {2e-3}}}
-	_, violations, issues := compare(old, next, testGates())
-	assert.Empty(t, violations)
-	require.Len(t, issues, 1)
-	assert.Contains(t, issues[0].msg, "at least 5 samples")
+// TestCompareTimeGateSampleCounts pins the asymmetric sample-count
+// policy: too few candidate samples is a configuration error (the
+// candidate run is under the workflow's control), while a short
+// baseline is merely reported and not gated (the base run may
+// legitimately be partial).
+func TestCompareTimeGateSampleCounts(t *testing.T) {
+	t.Run("too few candidate samples is a config issue", func(t *testing.T) {
+		old := benchSamples{"BenchmarkFoo-8": {"sec/op": noisy(1e-3, 6)}}
+		next := benchSamples{"BenchmarkFoo-8": {"sec/op": {2e-3}}}
+		_, violations, issues := compare(old, next, testGates())
+		assert.Empty(t, violations)
+		require.Len(t, issues, 1)
+		assert.Contains(t, issues[0].msg, "at least 5 candidate samples")
+	})
+
+	t.Run("short baseline is reported, not a config issue", func(t *testing.T) {
+		old := benchSamples{"BenchmarkFoo-8": {"sec/op": {1e-3, 1e-3}}}
+		next := benchSamples{"BenchmarkFoo-8": {"sec/op": noisy(9e-3, 6)}}
+		report, violations, issues := compare(old, next, testGates())
+		assert.Empty(t, violations)
+		assert.Empty(t, issues)
+		assert.Contains(t, strings.Join(report, "\n"),
+			"baseline has only 2 sample(s)")
+	})
+}
+
+func TestRender(t *testing.T) {
+	sampleViolation := violation{
+		name: "BenchmarkFoo-8", unit: "allocs/op",
+		old: 1000, new: 2000, ratio: 2.0, maxRatio: 1.25,
+	}
+	tests := []struct {
+		name     string
+		r        results
+		wantCode int
+		wantOut  []string
+	}{
+		{
+			name:     "clean run passes",
+			r:        results{report: []string{"BenchmarkFoo-8: ok"}, newCount: 1},
+			wantCode: 0,
+			wantOut:  []string{"no regressions beyond thresholds"},
+		},
+		{
+			name: "violations exit 1",
+			r: results{
+				violations: []violation{sampleViolation},
+				newCount:   1,
+			},
+			wantCode: 1,
+			wantOut:  []string{"1 regression(s)", "allocs/op regressed 2.00x"},
+		},
+		{
+			name: "violations still print when a config issue forces exit 2",
+			r: results{
+				violations: []violation{sampleViolation},
+				issues:     []configIssue{{name: "BenchmarkFoo-8", msg: "too few"}},
+				newCount:   1,
+			},
+			wantCode: 2,
+			wantOut: []string{
+				"allocs/op regressed 2.00x",
+				"invalid benchmark configuration",
+			},
+		},
+		{
+			name: "corrupted capture exits 2 and is described",
+			r: results{
+				newCount:  1,
+				newSyntax: []string{"test:3: no iteration count"},
+			},
+			wantCode: 2,
+			wantOut: []string{
+				"candidate capture is corrupted",
+				"no iteration count",
+			},
+		},
+		{
+			name:     "empty candidate exits 2",
+			r:        results{newCount: 0},
+			wantCode: 2,
+			wantOut:  []string{"candidate output contains no benchmarks"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, code := render(tt.r)
+			assert.Equal(t, tt.wantCode, code)
+			for _, want := range tt.wantOut {
+				assert.Contains(t, out, want)
+			}
+		})
+	}
 }
 
 func TestViolationString(t *testing.T) {

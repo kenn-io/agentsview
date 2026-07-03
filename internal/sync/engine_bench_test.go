@@ -3,10 +3,13 @@ package sync
 import (
 	"context"
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
@@ -38,6 +41,19 @@ const (
 	defaultBenchSyncMessages = 30
 	benchLargeSessionLines   = 1000
 )
+
+// silenceBenchLogs discards the engine's global log output for the
+// duration of the benchmark. Log lines interleave with `go test
+// -bench` result lines on stdout, which corrupts them so benchfmt
+// cannot parse the benchmark — benchgate fails on such corruption,
+// and before it did, the corrupted benchmarks silently vanished
+// from the gate on both sides.
+func silenceBenchLogs(b *testing.B) {
+	b.Helper()
+	prev := log.Writer()
+	log.SetOutput(io.Discard)
+	b.Cleanup(func() { log.SetOutput(prev) })
+}
 
 func benchIntFromEnv(name string, def int) int {
 	raw := os.Getenv(name)
@@ -116,6 +132,7 @@ func openBenchEngine(b *testing.B, dir string) (*Engine, *db.DB) {
 // benchmark exists to protect — a warm no-op pass must not reparse
 // or rewrite anything.
 func BenchmarkSyncAllWarmNoop(b *testing.B) {
+	silenceBenchLogs(b)
 	sessions := benchIntFromEnv(
 		"AGENTSVIEW_BENCH_SYNC_SESSIONS", defaultBenchSyncSessions,
 	)
@@ -165,6 +182,7 @@ func BenchmarkSyncAllWarmNoop(b *testing.B) {
 // staying flat as the session grows is exactly the invariant this
 // benchmark protects.
 func BenchmarkSyncPathsIncrementalAppend(b *testing.B) {
+	silenceBenchLogs(b)
 	dir := b.TempDir()
 	writeBenchClaudeArchive(b, dir, 1, benchLargeSessionLines)
 	engine, database := openBenchEngine(b, dir)
@@ -185,14 +203,45 @@ func BenchmarkSyncPathsIncrementalAppend(b *testing.B) {
 	}
 	defer f.Close()
 
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := range b.N {
-		line := testjsonl.NewSessionBuilder().AddClaudeUser(
+	// The first append after a full sync triggers the leading-edge
+	// inline signal recompute — an O(stored history) message reload
+	// plus secret scan whose one-time cost would otherwise dominate
+	// the fixed 20-iteration measurement and mask steady-state
+	// per-append regressions. Absorb it before the timer starts so
+	// the timed loop measures the debounced steady state.
+	warmup := testjsonl.NewSessionBuilder().AddClaudeUser(
+		"2026-06-20T11:00:00Z", "warm-up append",
+	).String()
+	if _, err := f.WriteString(warmup); err != nil {
+		b.Fatalf("warm-up append: %v", err)
+	}
+	engine.SyncPaths([]string{path})
+
+	// Stretch the debounce window so the flush timer cannot fire
+	// inside the timed loop on a slow run: allocs/op is gated on the
+	// candidate's worst -count run, and one timer-driven O(history)
+	// recompute landing mid-loop would flake the gate. Engine.Close
+	// drains the deferred recompute during cleanup.
+	engine.signalSched.mu.Lock()
+	engine.signalSched.interval = time.Hour
+	engine.signalSched.quiet = time.Hour
+	engine.signalSched.mu.Unlock()
+
+	// Pre-build the appended lines: constructing Claude JSONL via
+	// testjsonl allocates (map + json.Marshal), and inside the timed
+	// loop that helper cost would be gated as if it were sync work.
+	lines := make([]string, b.N)
+	for i := range lines {
+		lines[i] = testjsonl.NewSessionBuilder().AddClaudeUser(
 			"2026-06-20T11:00:00Z",
 			fmt.Sprintf("streamed line %d", i),
 		).String()
-		if _, err := f.WriteString(line); err != nil {
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := range b.N {
+		if _, err := f.WriteString(lines[i]); err != nil {
 			b.Fatalf("append: %v", err)
 		}
 		engine.SyncPaths([]string{path})
@@ -203,10 +252,11 @@ func BenchmarkSyncPathsIncrementalAppend(b *testing.B) {
 	if err != nil {
 		b.Fatalf("GetAllMessages: %v", err)
 	}
-	if len(msgs) < benchLargeSessionLines+b.N {
+	want := benchLargeSessionLines + 1 + b.N // +1 for the warm-up append
+	if len(msgs) < want {
 		b.Fatalf(
 			"appends were not absorbed: stored %d messages, want >= %d",
-			len(msgs), benchLargeSessionLines+b.N,
+			len(msgs), want,
 		)
 	}
 }
@@ -214,6 +264,7 @@ func BenchmarkSyncPathsIncrementalAppend(b *testing.B) {
 // BenchmarkSyncAllColdArchive measures first-sync ingest throughput:
 // parse plus bulk write of a whole archive into a fresh database.
 func BenchmarkSyncAllColdArchive(b *testing.B) {
+	silenceBenchLogs(b)
 	sessions := benchIntFromEnv(
 		"AGENTSVIEW_BENCH_SYNC_SESSIONS", defaultBenchSyncSessions,
 	)
@@ -222,15 +273,15 @@ func BenchmarkSyncAllColdArchive(b *testing.B) {
 	)
 	dir := b.TempDir()
 	writeBenchClaudeArchive(b, dir, sessions, perSession)
+	dbDir := b.TempDir()
 	ctx := context.Background()
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := range b.N {
 		b.StopTimer()
-		database, err := db.Open(
-			filepath.Join(b.TempDir(), fmt.Sprintf("cold-%d.db", i)),
-		)
+		dbPath := filepath.Join(dbDir, fmt.Sprintf("cold-%d.db", i))
+		database, err := db.Open(dbPath)
 		if err != nil {
 			b.Fatalf("open bench db: %v", err)
 		}
@@ -254,6 +305,18 @@ func BenchmarkSyncAllColdArchive(b *testing.B) {
 		engine.Close()
 		if err := database.Close(); err != nil {
 			b.Fatalf("close bench db: %v", err)
+		}
+		// Drop this iteration's DB (and WAL/SHM sidecars) so disk
+		// usage stays O(1) instead of retaining b.N populated
+		// databases until the function returns.
+		stale, err := filepath.Glob(dbPath + "*")
+		if err != nil {
+			b.Fatalf("glob %s: %v", dbPath, err)
+		}
+		for _, p := range stale {
+			if err := os.Remove(p); err != nil {
+				b.Fatalf("remove %s: %v", p, err)
+			}
 		}
 		b.StartTimer()
 	}

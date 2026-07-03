@@ -27,13 +27,20 @@
 // Gating is per benchmark: any one benchmark over its threshold
 // fails the gate; there is no cross-benchmark averaging. Benchmarks
 // present on only one side are reported but never fail the gate, so
-// adding or removing benchmarks in a PR does not wedge it.
+// adding or removing benchmarks in a PR does not wedge it. A gated
+// unit missing from only one side (e.g. a capture taken without
+// -benchmem) is reported as not gated rather than skipped silently.
+//
+// Lines that look like benchmark results but fail to parse (for
+// example test log output interleaved into a result line) are a
+// corrupted capture: they are reported and the gate exits 2, because
+// the corrupted benchmark would otherwise silently vanish from both
+// sides and never gate again.
 package main
 
 import (
 	"flag"
 	"fmt"
-	"math"
 	"os"
 	"sort"
 	"strings"
@@ -42,6 +49,10 @@ import (
 	"golang.org/x/perf/benchmath"
 	"golang.org/x/perf/benchunit"
 )
+
+// minTimeSamples is the per-side sample count the sec/op
+// significance test needs before its verdict means anything.
+const minTimeSamples = 5
 
 // benchSamples collects every measured value per benchmark and unit:
 // benchmark key -> tidied unit (sec/op, B/op, allocs/op, ...) ->
@@ -76,6 +87,9 @@ type violation struct {
 	maxRatio float64
 }
 
+// configIssue describes a capture that cannot support the gate it
+// was given (e.g. too few candidate samples for significance
+// testing) — a CI configuration error, not a regression.
 type configIssue struct {
 	name string
 	msg  string
@@ -92,14 +106,21 @@ func (v violation) String() string {
 }
 
 // parseBench extracts benchmark samples from `go test -bench` output
-// using the official format parser. Non-result records (unit
-// metadata, syntax errors from stray output) are skipped. Values
-// arrive tidied by benchfmt: ns/op becomes sec/op, MB/s becomes B/s.
-func parseBench(reader *benchfmt.Reader) (benchSamples, error) {
+// using the official format parser. Values arrive tidied by
+// benchfmt: ns/op becomes sec/op, MB/s becomes B/s. Lines that look
+// like results but fail to parse are returned as syntax errors so a
+// corrupted capture is loud instead of silently missing benchmarks.
+func parseBench(
+	reader *benchfmt.Reader,
+) (benchSamples, []string, error) {
 	out := make(benchSamples)
+	var syntaxErrs []string
 	for reader.Scan() {
 		res, ok := reader.Result().(*benchfmt.Result)
 		if !ok {
+			if serr, isSyntax := reader.Result().(*benchfmt.SyntaxError); isSyntax {
+				syntaxErrs = append(syntaxErrs, serr.Error())
+			}
 			continue
 		}
 		name := string(res.Name.Full())
@@ -116,17 +137,113 @@ func parseBench(reader *benchfmt.Reader) (benchSamples, error) {
 		}
 	}
 	if err := reader.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return out, nil
+	return out, syntaxErrs, nil
+}
+
+// evalGate applies one gate to one benchmark's samples and returns
+// the report fragment plus an optional violation or config issue
+// (their name fields are filled in by the caller).
+func evalGate(
+	g gate, oldVals, newVals []float64,
+) (string, *violation, *configIssue) {
+	thresholds := benchmath.DefaultThresholds
+	oldSample := benchmath.NewSample(oldVals, &thresholds)
+	newSample := benchmath.NewSample(newVals, &thresholds)
+	oldCenter := benchmath.AssumeNothing.
+		Summary(oldSample, 0.95).Center
+	var newCenter float64
+	if g.worstCase {
+		// Samples are sorted ascending; the worst candidate run
+		// is the last one.
+		newCenter = newSample.Values[len(newSample.Values)-1]
+	} else {
+		newCenter = benchmath.AssumeNothing.
+			Summary(newSample, 0.95).Center
+	}
+	cls := benchunit.ClassOf(g.unit)
+	span := fmt.Sprintf(
+		"%s %s -> %s", g.unit,
+		benchunit.Scale(oldCenter, cls),
+		benchunit.Scale(newCenter, cls),
+	)
+
+	if oldCenter <= 0 || oldCenter < g.floor {
+		return fmt.Sprintf(
+			"%s (below %s floor, not gated)",
+			span, benchunit.Scale(g.floor, cls),
+		), nil, nil
+	}
+	if g.needSignificance && len(newVals) < minTimeSamples {
+		issue := &configIssue{msg: fmt.Sprintf(
+			"%s needs at least %d candidate samples for significance gating, got %d",
+			g.unit, minTimeSamples, len(newVals),
+		)}
+		return span + " (too few candidate samples, not gated)",
+			nil, issue
+	}
+	if g.needSignificance && len(oldVals) < minTimeSamples {
+		// A short baseline is not a configuration error: the base
+		// run may legitimately be partial (e.g. it failed part-way
+		// and the workflow gates against what it produced).
+		return fmt.Sprintf(
+			"%s (baseline has only %d sample(s), significance needs %d, not gated)",
+			span, len(oldVals), minTimeSamples,
+		), nil, nil
+	}
+
+	ratio := newCenter / oldCenter
+	detail, significant := gateDetail(
+		g, oldSample, newSample, span, ratio,
+	)
+	var v *violation
+	if ratio > g.maxRatio && (!g.needSignificance || significant) {
+		v = &violation{
+			unit: g.unit,
+			old:  oldCenter, new: newCenter,
+			ratio: ratio, maxRatio: g.maxRatio,
+		}
+	}
+	return detail, v, nil
+}
+
+// gateDetail renders the gated report fragment and, for
+// significance-gated units, runs the benchmath comparison.
+func gateDetail(
+	g gate, oldSample, newSample *benchmath.Sample,
+	span string, ratio float64,
+) (string, bool) {
+	if g.worstCase {
+		// Also surface the baseline's worst run: the gate is
+		// deliberately candidate-worst vs baseline-median, so
+		// pre-existing baseline instability should at least be
+		// visible when reading a failure.
+		cls := benchunit.ClassOf(g.unit)
+		oldWorst := oldSample.Values[len(oldSample.Values)-1]
+		return fmt.Sprintf(
+			"%s (%.2fx, limit %.2fx, worst of %d run(s), baseline worst %s)",
+			span, ratio, g.maxRatio, len(newSample.Values),
+			benchunit.Scale(oldWorst, cls),
+		), false
+	}
+	cmp := benchmath.AssumeNothing.Compare(oldSample, newSample)
+	significant := cmp.P < cmp.Alpha
+	detail := fmt.Sprintf(
+		"%s (%.2fx, limit %.2fx, %s)", span, ratio, g.maxRatio, cmp,
+	)
+	if g.needSignificance && !significant {
+		detail += " [not significant, not gated]"
+	}
+	return detail, significant
 }
 
 // compare applies the gates to every benchmark present in both maps
-// and returns a human-readable report plus the violations.
+// and returns a human-readable report plus the violations and
+// config issues.
 func compare(
 	oldRes, newRes benchSamples, gates []gate,
 ) (report []string, violations []violation, issues []configIssue) {
-	thresholds := benchmath.DefaultThresholds
 	names := make([]string, 0, len(newRes))
 	for name := range newRes {
 		names = append(names, name)
@@ -141,95 +258,15 @@ func compare(
 			))
 			continue
 		}
-		var parts []string
-		for _, g := range gates {
-			oldVals, okOld := oldUnits[g.unit]
-			newVals, okNew := newRes[name][g.unit]
-			if !okOld || !okNew {
-				continue
-			}
-			oldSample := benchmath.NewSample(oldVals, &thresholds)
-			newSample := benchmath.NewSample(newVals, &thresholds)
-			oldCenter := benchmath.AssumeNothing.
-				Summary(oldSample, 0.95).Center
-			newCenter := benchmath.AssumeNothing.
-				Summary(newSample, 0.95).Center
-			if g.worstCase {
-				// Samples are sorted ascending; the worst
-				// candidate run is the last one.
-				newCenter = newSample.Values[len(newSample.Values)-1]
-			}
-			cls := benchunit.ClassOf(g.unit)
-
-			if oldCenter <= 0 || oldCenter < g.floor {
-				parts = append(parts, fmt.Sprintf(
-					"%s %s -> %s (below %s floor, not gated)",
-					g.unit,
-					benchunit.Scale(oldCenter, cls),
-					benchunit.Scale(newCenter, cls),
-					benchunit.Scale(g.floor, cls),
-				))
-				continue
-			}
-			if g.needSignificance && (len(oldSample.Values) < 5 || len(newSample.Values) < 5) {
-				issues = append(issues, configIssue{
-					name: name,
-					msg: fmt.Sprintf(
-						"%s needs at least 5 samples on both sides for significance gating (old=%d, new=%d)",
-						g.unit, len(oldSample.Values), len(newSample.Values),
-					),
-				})
-				parts = append(parts, fmt.Sprintf(
-					"%s %s -> %s (sample count too small for significance gating, not gated)",
-					g.unit,
-					benchunit.Scale(oldCenter, cls),
-					benchunit.Scale(newCenter, cls),
-				))
-				continue
-			}
-
-			ratio := newCenter / oldCenter
-			cmp := benchmath.AssumeNothing.Compare(oldSample, newSample)
-			significant := cmp.P < cmp.Alpha
-			var detail string
-			if g.worstCase {
-				// Also surface the baseline's worst run: the gate is
-				// deliberately candidate-worst vs baseline-median, so
-				// pre-existing baseline instability should at least
-				// be visible when reading a failure.
-				oldWorst := oldSample.Values[len(oldSample.Values)-1]
-				detail = fmt.Sprintf(
-					"%s %s -> %s (%.2fx, limit %.2fx, worst of %d run(s), baseline worst %s)",
-					g.unit,
-					benchunit.Scale(oldCenter, cls),
-					benchunit.Scale(newCenter, cls),
-					ratio, g.maxRatio, len(newSample.Values),
-					benchunit.Scale(oldWorst, cls),
-				)
-			} else {
-				detail = fmt.Sprintf(
-					"%s %s -> %s (%.2fx, limit %.2fx, %s)",
-					g.unit,
-					benchunit.Scale(oldCenter, cls),
-					benchunit.Scale(newCenter, cls),
-					ratio, g.maxRatio, cmp,
-				)
-				if g.needSignificance && !significant {
-					detail += " [not significant, not gated]"
-				}
-			}
-			parts = append(parts, detail)
-
-			if ratio > g.maxRatio &&
-				(!g.needSignificance || significant) &&
-				!math.IsNaN(ratio) {
-				violations = append(violations, violation{
-					name: name, unit: g.unit,
-					old: oldCenter, new: newCenter,
-					ratio: ratio, maxRatio: g.maxRatio,
-				})
-			}
+		parts, vs, is := compareUnits(gates, oldUnits, newRes[name])
+		for i := range vs {
+			vs[i].name = name
 		}
+		for i := range is {
+			is[i].name = name
+		}
+		violations = append(violations, vs...)
+		issues = append(issues, is...)
 		report = append(report, fmt.Sprintf(
 			"%s: %s", name, strings.Join(parts, ", "),
 		))
@@ -251,16 +288,138 @@ func compare(
 	return report, violations, issues
 }
 
-func parseFile(path string) (benchSamples, error) {
+// compareUnits evaluates every gate for one benchmark, plus a note
+// for candidate units no gate covers (custom b.ReportMetric units
+// are collected but deliberately never gated).
+func compareUnits(
+	gates []gate, oldUnits, newUnits map[string][]float64,
+) (parts []string, vs []violation, is []configIssue) {
+	gated := make(map[string]bool, len(gates))
+	for _, g := range gates {
+		gated[g.unit] = true
+		oldVals, okOld := oldUnits[g.unit]
+		newVals, okNew := newUnits[g.unit]
+		switch {
+		case !okOld && !okNew:
+			// The benchmark doesn't emit this unit at all.
+			continue
+		case !okOld:
+			parts = append(parts, fmt.Sprintf(
+				"%s missing from baseline, not gated", g.unit,
+			))
+			continue
+		case !okNew:
+			parts = append(parts, fmt.Sprintf(
+				"%s missing from candidate, not gated", g.unit,
+			))
+			continue
+		}
+		part, v, issue := evalGate(g, oldVals, newVals)
+		parts = append(parts, part)
+		if v != nil {
+			vs = append(vs, *v)
+		}
+		if issue != nil {
+			is = append(is, *issue)
+		}
+	}
+	var custom []string
+	for unit := range newUnits {
+		if !gated[unit] {
+			custom = append(custom, unit)
+		}
+	}
+	sort.Strings(custom)
+	for _, unit := range custom {
+		parts = append(parts, fmt.Sprintf(
+			"%s has no gate, not gated", unit,
+		))
+	}
+	return parts, vs, is
+}
+
+func parseFile(path string) (benchSamples, []string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer f.Close()
 	return parseBench(benchfmt.NewReader(f, path))
 }
 
-func main() {
+// results bundles everything render needs to produce the final
+// output and exit code.
+type results struct {
+	report               []string
+	violations           []violation
+	issues               []configIssue
+	newCount             int
+	oldSyntax, newSyntax []string
+}
+
+// render formats the human-readable outcome and picks the exit
+// code: 2 for unusable input or configuration errors, 1 for
+// regressions, 0 otherwise. Violations always print, even when a
+// config issue or corrupted capture also occurred, so a detected
+// regression is never hidden behind an exit-2.
+func render(r results) (string, int) {
+	var b strings.Builder
+	for _, line := range r.report {
+		fmt.Fprintln(&b, line)
+	}
+	if len(r.violations) > 0 {
+		fmt.Fprintf(&b, "\nbenchgate: %d regression(s):\n",
+			len(r.violations))
+		for _, v := range r.violations {
+			fmt.Fprintf(&b, "  %s\n", v)
+		}
+	}
+	renderSyntax(&b, "baseline", r.oldSyntax)
+	renderSyntax(&b, "candidate", r.newSyntax)
+	if len(r.issues) > 0 {
+		fmt.Fprintln(&b, "\nbenchgate: invalid benchmark configuration:")
+		for _, issue := range r.issues {
+			fmt.Fprintf(&b, "  %s: %s\n", issue.name, issue.msg)
+		}
+	}
+	switch {
+	case len(r.oldSyntax)+len(r.newSyntax) > 0 || len(r.issues) > 0:
+		return b.String(), 2
+	case r.newCount == 0:
+		fmt.Fprintln(&b, "benchgate: candidate output contains no benchmarks")
+		return b.String(), 2
+	case len(r.violations) > 0:
+		return b.String(), 1
+	}
+	fmt.Fprintln(&b, "benchgate: no regressions beyond thresholds")
+	return b.String(), 0
+}
+
+// renderSyntax reports unparseable result lines in one capture. A
+// benchmark whose result line is corrupted (e.g. by interleaved log
+// output) parses on neither side and would otherwise vanish from
+// the gate without a trace.
+func renderSyntax(b *strings.Builder, side string, errs []string) {
+	if len(errs) == 0 {
+		return
+	}
+	fmt.Fprintf(
+		b,
+		"\nbenchgate: %s capture is corrupted (%d unparseable result line(s); benchmarks on those lines are not gated):\n",
+		side, len(errs),
+	)
+	for _, e := range errs {
+		fmt.Fprintf(b, "  %s\n", e)
+	}
+}
+
+// flags holds the parsed command line.
+type flags struct {
+	oldPath, newPath string
+	gates            []gate
+}
+
+func parseFlags() flags {
 	oldPath := flag.String(
 		"old", "", "baseline `go test -bench` output file",
 	)
@@ -271,7 +430,7 @@ func main() {
 		"max-time-ratio", 2.0,
 		"fail when candidate median sec/op exceeds baseline by this factor "+
 			"(only when the difference is statistically significant; needs at "+
-			"least 5 samples per side)",
+			"least 5 candidate samples)",
 	)
 	maxAllocRatio := flag.Float64(
 		"max-alloc-ratio", 1.25,
@@ -300,61 +459,54 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
+	return flags{
+		oldPath: *oldPath,
+		newPath: *newPath,
+		gates: []gate{
+			{
+				unit:      "allocs/op",
+				maxRatio:  *maxAllocRatio,
+				floor:     *allocFloor,
+				worstCase: true,
+			},
+			{
+				unit:      "B/op",
+				maxRatio:  *maxBytesRatio,
+				floor:     *bytesFloor,
+				worstCase: true,
+			},
+			{
+				unit:             "sec/op",
+				maxRatio:         *maxTimeRatio,
+				floor:            *timeFloorNs / 1e9,
+				needSignificance: true,
+			},
+		},
+	}
+}
 
-	oldRes, err := parseFile(*oldPath)
+func main() {
+	cfg := parseFlags()
+	oldRes, oldSyntax, err := parseFile(cfg.oldPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "benchgate: reading baseline: %v\n", err)
 		os.Exit(2)
 	}
-	newRes, err := parseFile(*newPath)
+	newRes, newSyntax, err := parseFile(cfg.newPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "benchgate: reading candidate: %v\n", err)
 		os.Exit(2)
 	}
 
-	gates := []gate{
-		{
-			unit:      "allocs/op",
-			maxRatio:  *maxAllocRatio,
-			floor:     *allocFloor,
-			worstCase: true,
-		},
-		{
-			unit:      "B/op",
-			maxRatio:  *maxBytesRatio,
-			floor:     *bytesFloor,
-			worstCase: true,
-		},
-		{
-			unit:             "sec/op",
-			maxRatio:         *maxTimeRatio,
-			floor:            *timeFloorNs / 1e9,
-			needSignificance: true,
-		},
-	}
-	report, violations, issues := compare(oldRes, newRes, gates)
-	for _, line := range report {
-		fmt.Println(line)
-	}
-	if len(issues) > 0 {
-		fmt.Println()
-		fmt.Println("benchgate: invalid benchmark configuration:")
-		for _, issue := range issues {
-			fmt.Printf("  %s: %s\n", issue.name, issue.msg)
-		}
-		os.Exit(2)
-	}
-	if len(newRes) == 0 {
-		fmt.Println("benchgate: candidate output contains no benchmarks")
-		os.Exit(2)
-	}
-	if len(violations) > 0 {
-		fmt.Println()
-		fmt.Printf("benchgate: %d regression(s):\n", len(violations))
-		for _, v := range violations {
-			fmt.Printf("  %s\n", v)
-		}
-		os.Exit(1)
-	}
-	fmt.Println("benchgate: no regressions beyond thresholds")
+	report, violations, issues := compare(oldRes, newRes, cfg.gates)
+	out, code := render(results{
+		report:     report,
+		violations: violations,
+		issues:     issues,
+		newCount:   len(newRes),
+		oldSyntax:  oldSyntax,
+		newSyntax:  newSyntax,
+	})
+	fmt.Print(out)
+	os.Exit(code)
 }

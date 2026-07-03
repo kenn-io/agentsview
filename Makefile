@@ -267,14 +267,15 @@ bench-backends: pricing-snapshot ensure-embed-dir
 		CGO_ENABLED=1 go test -tags "fts5,benchdb" ./internal/backendbench $(BENCH_BACKENDS_FLAGS)
 
 # Hot-path benchmark gate. Runs every benchmark in the gated packages
-# — the same set CI's bench.yml compares against a PR's merge base
 # (sync engine warm/cold/append, message write paths, usage
-# aggregation, secret scanning). Run it before and after touching a
-# sync or DB hot path, then compare with
-# `go run ./cmd/benchgate -old old.txt -new new.txt`. Keep the
-# package list in sync with BENCH_PACKAGES in bench.yml.
+# aggregation, secret scanning). This target is the single source of
+# truth for the gate configuration: CI's bench.yml runs it on both
+# the PR head and the merge base, then compares the outputs with
+# `go run ./cmd/benchgate -old old.txt -new new.txt`. Run it before
+# and after touching a sync or DB hot path.
+BENCH_GATE_PACKAGES ?= ./internal/sync ./internal/db ./internal/secrets
 # Count must stay >= 5: benchgate's time gate needs at least 5
-# samples per side for its significance test.
+# candidate samples for its significance test.
 BENCH_GATE_COUNT ?= 6
 # Fixed iterations, not a duration: some gated benchmarks grow their
 # fixture as they iterate, so baseline and candidate must run the
@@ -284,7 +285,7 @@ bench-gate: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5" -run '^$$' \
 		-bench . -benchmem \
 		-count $(BENCH_GATE_COUNT) -benchtime $(BENCH_GATE_TIME) \
-		-timeout 25m ./internal/sync ./internal/db ./internal/secrets
+		-timeout 25m $(BENCH_GATE_PACKAGES)
 
 # Start test PostgreSQL container
 postgres-up:

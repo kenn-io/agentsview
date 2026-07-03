@@ -300,13 +300,13 @@ const (
 	tsMidYear = "2024-06-01T10:00:00Z"
 )
 
-func testDB(t *testing.T) *DB {
-	t.Helper()
-	dir := t.TempDir()
+func testDB(tb testing.TB) *DB {
+	tb.Helper()
+	dir := tb.TempDir()
 	path := filepath.Join(dir, "test.db")
 	d, err := openCopiedTestDB(path)
-	require.NoError(t, err, "opening test db")
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	require.NoError(tb, err, "opening test db")
+	tb.Cleanup(func() { require.NoError(tb, d.Close()) })
 	return d
 }
 

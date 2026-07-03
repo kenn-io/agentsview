@@ -3,7 +3,6 @@ package db
 import (
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"testing"
 )
 
@@ -23,20 +22,6 @@ import (
 //
 // BenchmarkGetDailyUsage in usage_test.go covers the usage
 // aggregation scan (#309) and is part of the same CI gate.
-
-func openBenchDB(b *testing.B) *DB {
-	b.Helper()
-	d, err := Open(filepath.Join(b.TempDir(), "bench.db"))
-	if err != nil {
-		b.Fatalf("open bench db: %v", err)
-	}
-	b.Cleanup(func() {
-		if err := d.Close(); err != nil {
-			b.Errorf("close bench db: %v", err)
-		}
-	})
-	return d
-}
 
 // benchSessionMessages builds n alternating user/assistant messages.
 // Assistant messages carry a model and token_usage payload so writes
@@ -101,7 +86,7 @@ func seedBenchSession(
 // unchanged stored rows being rewritten.
 func BenchmarkReplaceSessionMessagesStreamingMerge(b *testing.B) {
 	const stored = 1000
-	d := openBenchDB(b)
+	d := testDB(b)
 	msgs := seedBenchSession(b, d, "bench-replace", stored)
 	last := len(msgs) - 1
 
@@ -131,7 +116,13 @@ func BenchmarkReplaceSessionMessagesStreamingMerge(b *testing.B) {
 // candidate insert into identically sized databases.
 func BenchmarkInsertMessagesBatch(b *testing.B) {
 	const batch = 200
-	d := openBenchDB(b)
+	d := testDB(b)
+
+	// Build the message fixture once: constructing 200 Message
+	// structs (~400 fmt.Sprintf calls) inside the timed loop would
+	// be gated as if it were ingest cost. Only the SessionID is
+	// rewritten per iteration, which allocates nothing.
+	msgs := benchSessionMessages("", batch)
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -145,9 +136,10 @@ func BenchmarkInsertMessagesBatch(b *testing.B) {
 		}); err != nil {
 			b.Fatalf("upsert session: %v", err)
 		}
-		if err := d.InsertMessages(
-			benchSessionMessages(sid, batch),
-		); err != nil {
+		for j := range msgs {
+			msgs[j].SessionID = sid
+		}
+		if err := d.InsertMessages(msgs); err != nil {
 			b.Fatalf("insert messages: %v", err)
 		}
 	}

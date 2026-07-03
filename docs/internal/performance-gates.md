@@ -46,8 +46,10 @@ sessions" or "the manifest is read once per root regardless of session count".
 
 ### 2. Benchmark gate (runs on every PR via `bench.yml`)
 
-`.github/workflows/bench.yml` runs a focused benchmark set on the PR head and
-its merge base on the same runner, then compares with `cmd/benchgate`:
+`.github/workflows/bench.yml` runs `make bench-gate` — the single source of
+truth for the gated package list, sample count, and iteration count — on the PR
+head and its merge base on the same runner, then compares the outputs with
+`cmd/benchgate`:
 
 - `BenchmarkSyncAllWarmNoop` — full sync over an already-synced archive (stat +
   skip work only; also self-asserts nothing is re-synced or bulk-rewritten).
@@ -75,11 +77,21 @@ instability is what blocks the PR (failure lines include the baseline's worst
 run so pre-existing instability is visible). Time (`sec/op`) compares medians
 with a loose 2.0x limit and must additionally be a statistically significant
 difference before it fails, so a single slow run on a noisy runner cannot flake
-a PR but algorithmic blowups still do. Time gating requires at least 5 samples
-on both sides; smaller captures are reported as misconfigured rather than
-silently disabling the gate. Baselines below a per-metric floor are not gated.
-Benchmarks that exist on only one side are reported but never fail, so adding or
-removing benchmarks cannot wedge a PR.
+a PR but algorithmic blowups still do. Time gating requires at least 5 candidate
+samples; fewer is reported as a configuration error (the candidate run is under
+the workflow's control), while a baseline with fewer than 5 samples — a
+legitimately partial base run — is reported and not gated. Baselines below a
+per-metric floor are not gated. Benchmarks that exist on only one side are
+reported but never fail, so adding or removing benchmarks cannot wedge a PR.
+Only `allocs/op`, `B/op`, and `sec/op` are gated: custom `b.ReportMetric` units
+are collected and reported as ungated, never enforced.
+
+Two failure modes are treated as loud configuration errors (exit 2) rather than
+silent gaps: a capture whose result lines fail to parse (for example test log
+output interleaved into a `Benchmark...` line — the sync benchmarks silence the
+engine's logger for exactly this reason), and a gated unit missing from one side
+only (for example a baseline captured without `-benchmem`) is reported as not
+gated instead of skipped invisibly.
 
 The gate always runs with a fixed `-benchtime=Nx` iteration count (not a
 duration): two of the benchmarks grow their fixture as they iterate, so the
@@ -115,12 +127,19 @@ reported without gating; it gates automatically once merged.
 
 1. Write the benchmark next to the code it guards (`*_bench_test.go`,
    `b.ReportAllocs()`, self-assert the invariant it protects where possible).
-1. If its package is not already gated, add it to `BENCH_PACKAGES` in
-   `.github/workflows/bench.yml` **and** the Makefile `bench-gate` package
-   list — a benchmark outside the gated packages silently never runs, so it
-   looks gated while measuring nothing.
+   If the code under test logs, silence the logger in the benchmark (see
+   `silenceBenchLogs` in `internal/sync/engine_bench_test.go`): interleaved
+   log output corrupts result lines and benchgate fails on the corruption.
+1. If its package is not already gated, add it to `BENCH_GATE_PACKAGES` in the
+   Makefile — a benchmark outside the gated packages silently never runs, so
+   it looks gated while measuring nothing. CI picks the list up from the
+   Makefile; each side of the comparison benchmarks its own commit's list, so
+   growing the gate cannot break the base run.
 1. Keep per-op cost roughly in the 100µs–100ms band: below the benchgate floors
    nothing is gated, and far above it the job gets slow.
+1. Keep per-iteration setup out of the timed region (`b.ResetTimer`, pre-built
+   fixtures): helper allocations inside the loop are gated as if they were
+   product cost and dilute or distort the ratio.
 1. If the benchmark's fixture grows across iterations, say so in its comment;
    the fixed `-benchtime=Nx` keeps both sides comparable, but readers need to
    know per-op cost depends on the iteration count.

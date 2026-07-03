@@ -11,19 +11,33 @@ name: Bench Gate
 #   - bulk ingest throughput (#411)
 #   - per-row query-shape regressions in usage aggregation (#309)
 #
-# cmd/benchgate gates on allocs/op and B/op (deterministic on a given
-# machine, tight thresholds) and on ns/op with a loose 2x threshold
-# that only catches algorithmic blowups; both sides run on the same
-# runner within one job, so the comparison is apples to apples.
+# Both sides run `make bench-gate` — the Makefile is the single
+# source of truth for the gated package list, sample count, and
+# iteration count — and cmd/benchgate compares the outputs. It gates
+# on allocs/op and B/op (deterministic on a given machine, tight
+# thresholds) and on ns/op with a loose 2x threshold that only
+# catches algorithmic blowups; both sides run on the same runner
+# within one job, so the comparison is apples to apples.
+#
 # Benchmarks that only exist on one side are reported but never fail
-# the gate — which is what makes running every benchmark in the
-# gated packages safe: a benchmark added by a PR has no baseline and
-# is reported without gating, then gates automatically once merged.
-# BENCH_PACKAGES is the gate boundary; keep it in sync with the
-# Makefile's bench-gate target.
+# the gate: a benchmark added by a PR has no baseline and is reported
+# without gating, then gates automatically once merged. Because each
+# side benchmarks its own Makefile's package list, a PR that adds a
+# package to the gate cannot break the base run. A partially failing
+# base run degrades to a partial baseline (whatever benchmarks it
+# produced still gate) rather than silently disabling the whole gate.
 
 on:
   pull_request:
+    # Docs/frontend-only PRs cannot change the gated Go paths. If
+    # this check is ever made required on branch protection, pair it
+    # with a no-op sibling workflow on the inverse paths.
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
+      - "Makefile"
+      - ".github/workflows/bench.yml"
 
 concurrency:
   group: bench-${{ github.head_ref || github.ref }}
@@ -31,19 +45,6 @@ concurrency:
 
 permissions:
   contents: read
-
-env:
-  BENCH_PACKAGES: ./internal/sync ./internal/db ./internal/secrets
-  # Must stay >= 5: benchgate's time gate needs at least 5 samples
-  # per side for the significance test and treats fewer as a
-  # configuration error.
-  BENCH_COUNT: "6"
-  # Fixed iterations (not a duration) so the baseline and candidate
-  # run identical workloads: two of the gated benchmarks grow their
-  # fixture as they iterate (appending to a session, adding sessions
-  # to a DB), and a duration-based -benchtime would let a slower side
-  # run fewer iterations against a different final size.
-  BENCH_TIME: 20x
 
 jobs:
   bench-gate:
@@ -59,38 +60,26 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Restore pricing snapshot
-        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
-
       - name: Run benchmarks (PR head)
-        env:
-          CGO_ENABLED: "1"
         run: |
-          set -o pipefail
-          go test -tags "fts5" -run '^$' -bench . \
-            -benchmem -count "$BENCH_COUNT" -benchtime "$BENCH_TIME" \
-            -timeout 25m $BENCH_PACKAGES | tee /tmp/bench-new.txt
+          set -euo pipefail
+          make -s bench-gate | tee /tmp/bench-new.txt
 
       - name: Run benchmarks (merge base)
         env:
-          CGO_ENABLED: "1"
           BASE_REF: ${{ github.base_ref }}
-        # A failing merge-base run (or one with none of the gated
-        # benchmarks yet) degrades to an empty baseline: benchgate
-        # then reports every benchmark as new and passes, so a broken
-        # base never blocks a PR. The baseline file is truncated on
-        # failure so partial output from packages that ran before the
-        # failure cannot gate against incomplete data.
+        # A failing merge-base run keeps whatever benchmark output it
+        # produced: go test emits results per package, so one broken
+        # package (or a base predating the bench-gate target) leaves
+        # a partial or empty baseline and benchgate gates only what
+        # exists on both sides. The warning makes the degraded run
+        # visible instead of a silently green vacuous pass.
         run: |
+          set -euo pipefail
           base=$(git merge-base HEAD "origin/$BASE_REF")
           git worktree add /tmp/bench-base "$base"
-          cd /tmp/bench-base
-          go run ./internal/pricing/cmd/litellm-snapshot -restore || true
-          if ! go test -tags "fts5" -run '^$' -bench . \
-            -benchmem -count "$BENCH_COUNT" -benchtime "$BENCH_TIME" \
-            -timeout 25m $BENCH_PACKAGES > /tmp/bench-old.txt; then
-            echo "merge-base benchmarks failed; comparing against empty baseline"
-            : > /tmp/bench-old.txt
+          if ! make -s -C /tmp/bench-base bench-gate > /tmp/bench-old.txt; then
+            echo "::warning title=Bench Gate::merge-base benchmark run exited non-zero; gating against its partial output"
           fi
 
       - name: Compare against merge base
