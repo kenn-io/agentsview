@@ -1361,11 +1361,14 @@ func TestParseDiffIncrementalAppendSkewNotCountedAsChange(t *testing.T) {
 	require.True(t, afterAppend.LastWriteIncremental,
 		"the incremental append must set the marker via real code")
 
-	// Seed a real (non-informational) first_message drift on both
-	// sessions so a re-parse detects a change for each.
+	// Seed drift on both sessions. The incrementally written pd-skew gets a
+	// per-message metadata (timestamp) diff -- the ordinal-shape surface a
+	// full re-parse can legitimately reshape, so the marker may suppress it.
+	// The full-write control pd-full gets a first_message diff so a re-parse
+	// detects a change there too.
 	mutateDB(t, env,
-		"UPDATE sessions SET first_message = ? WHERE id = ?",
-		"drifted first message", "pd-skew")
+		"UPDATE messages SET timestamp = ? WHERE session_id = ? AND ordinal = 0",
+		"2020-01-01T00:00:00Z", "pd-skew")
 	mutateDB(t, env,
 		"UPDATE sessions SET first_message = ? WHERE id = ?",
 		"drifted first message", "pd-full")
@@ -1376,7 +1379,7 @@ func TestParseDiffIncrementalAppendSkewNotCountedAsChange(t *testing.T) {
 		Examined: 2, Changed: 1, IncrementalSkew: 1,
 	}, report.Totals, "totals")
 	// Only the full-write session's drift contributes to FieldCounts; the
-	// incrementally written session's drift is suppressed.
+	// incrementally written session's metadata drift is suppressed.
 	assert.Equal(t, map[string]int{sync.FieldFirstMessage: 1},
 		report.FieldCounts,
 		"only the full-write change contributes to FieldCounts")
@@ -1388,7 +1391,7 @@ func TestParseDiffIncrementalAppendSkewNotCountedAsChange(t *testing.T) {
 	// The would-be change is attached for drill-down even though it is
 	// not counted, so an operator can see what the skew suppressed.
 	assert.Contains(t, sessionDiffFieldNames(skew, true),
-		sync.FieldFirstMessage,
+		sync.FieldMessageMetadata,
 		"skew field diff attached for drill-down")
 
 	changed := findSessionDiff(report, "pd-full")
@@ -1417,9 +1420,11 @@ func TestParseDiffIncrementalAppendSkewAloneDoesNotFail(t *testing.T) {
 
 	appendClaudeLineAndSyncIncremental(t, env, path,
 		claudeAppendedAssistantLine("appended reply", "2024-01-01T10:00:10Z"))
+	// A per-message metadata (timestamp) diff is the incremental-artifact
+	// surface the marker may suppress.
 	mutateDB(t, env,
-		"UPDATE sessions SET first_message = ? WHERE id = ?",
-		"drifted first message", "pd-solo-skew")
+		"UPDATE messages SET timestamp = ? WHERE session_id = ? AND ordinal = 0",
+		"2020-01-01T00:00:00Z", "pd-solo-skew")
 
 	report := runParseDiff(t, env, sync.ParseDiffOptions{})
 	assert.Equal(t, sync.ParseDiffTotals{
@@ -1429,6 +1434,50 @@ func TestParseDiffIncrementalAppendSkewAloneDoesNotFail(t *testing.T) {
 		"skew field diffs must be excluded from FieldCounts")
 	assert.False(t, report.HasFailures(),
 		"a skew session alone must not trip --fail-on-change")
+}
+
+// TestParseDiffIncrementalMarkerDoesNotMaskNonArtifactDrift is the direct
+// regression guard for the narrowing: an incrementally written session
+// (marker set) whose drift lands on a field OUTSIDE the incremental-artifact
+// allow-list -- here first_message, which is head-derived and byte-stable
+// across appends -- must stay a genuine DiffChanged and trip
+// --fail-on-change. The marker is session-level; a regression is
+// field-level, so the marker alone must not suppress it.
+func TestParseDiffIncrementalMarkerDoesNotMaskNonArtifactDrift(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
+
+	path := env.writeClaudeSession(t, "test-proj", "pd-nomask.jsonl",
+		parseDiffClaudeContent("nomask prompt", "nomask reply"))
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1, Synced: 1,
+	})
+	appendClaudeLineAndSyncIncremental(t, env, path,
+		claudeAppendedAssistantLine("appended reply", "2024-01-01T10:00:10Z"))
+
+	marked, err := env.db.GetSessionFull(context.Background(), "pd-nomask")
+	require.NoError(t, err, "GetSessionFull after append")
+	require.NotNil(t, marked, "session after append")
+	require.True(t, marked.LastWriteIncremental,
+		"the incremental append must set the marker via real code")
+
+	// first_message is not an incremental artifact: a diff there is genuine
+	// parser drift the marker must not mask.
+	mutateDB(t, env,
+		"UPDATE sessions SET first_message = ? WHERE id = ?",
+		"drifted first message", "pd-nomask")
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{})
+	assert.Equal(t, sync.ParseDiffTotals{
+		Examined: 1, Changed: 1,
+	}, report.Totals, "a non-artifact diff on a marked row must stay changed")
+	changed := findSessionDiff(report, "pd-nomask")
+	require.NotNil(t, changed, "session not listed")
+	assert.Equal(t, sync.DiffChanged, changed.Class,
+		"marker must not reclassify a first_message regression as skew")
+	assert.Equal(t, map[string]int{sync.FieldFirstMessage: 1},
+		report.FieldCounts, "the regression must contribute to FieldCounts")
+	assert.True(t, report.HasFailures(),
+		"a non-artifact regression on a marked row must trip --fail-on-change")
 }
 
 // TestParseDiffFullResyncClearsIncrementalSkew proves the resync-baseline
@@ -1446,10 +1495,11 @@ func TestParseDiffFullResyncClearsIncrementalSkew(t *testing.T) {
 	appendClaudeLineAndSyncIncremental(t, env, path,
 		claudeAppendedAssistantLine("appended reply", "2024-01-01T10:00:10Z"))
 
-	// Precondition: the incrementally written session is classified skew.
+	// Precondition: the incrementally written session, drifting on the
+	// per-message metadata (timestamp) artifact surface, is classified skew.
 	mutateDB(t, env,
-		"UPDATE sessions SET first_message = ? WHERE id = ?",
-		"drifted first message", "pd-heal")
+		"UPDATE messages SET timestamp = ? WHERE session_id = ? AND ordinal = 0",
+		"2020-01-01T00:00:00Z", "pd-heal")
 	report := runParseDiff(t, env, sync.ParseDiffOptions{})
 	skew := findSessionDiff(report, "pd-heal")
 	require.NotNil(t, skew, "skew session not listed pre-resync")
@@ -1469,8 +1519,8 @@ func TestParseDiffFullResyncClearsIncrementalSkew(t *testing.T) {
 		"a full resync must clear the incremental marker")
 
 	mutateDB(t, env,
-		"UPDATE sessions SET first_message = ? WHERE id = ?",
-		"drifted first message", "pd-heal")
+		"UPDATE messages SET timestamp = ? WHERE session_id = ? AND ordinal = 0",
+		"2020-01-01T00:00:00Z", "pd-heal")
 	report = runParseDiff(t, env, sync.ParseDiffOptions{})
 	changed := findSessionDiff(report, "pd-heal")
 	require.NotNil(t, changed, "session not listed post-resync")
@@ -1536,9 +1586,11 @@ func TestParseDiffRacedWinsOverIncrementalSkew(t *testing.T) {
 	appendClaudeLineAndSyncIncremental(t, env, path,
 		claudeAppendedAssistantLine("appended reply", "2024-01-01T10:00:10Z"))
 
+	// Seed a per-message metadata (timestamp) diff -- an incremental-artifact
+	// field, so this session would otherwise classify skew; raced must win.
 	mutateDB(t, env,
-		"UPDATE sessions SET first_message = ? WHERE id = ?",
-		"drifted first message", "pd-both")
+		"UPDATE messages SET timestamp = ? WHERE session_id = ? AND ordinal = 0",
+		"2020-01-01T00:00:00Z", "pd-both")
 
 	// Advance the source mtime past the snapshot so the session is BOTH
 	// raced and incrementally written.

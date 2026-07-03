@@ -738,19 +738,28 @@ func (e *Engine) parseDiffCollectFile(
 
 		// Incremental-append skew: the stored row was last written by the
 		// incremental-append path (last_write_incremental), so a full
-		// re-parse legitimately differs on the fields that path leaves
-		// frozen or recomputes. Only meaningful when there is a real change
-		// to reclassify, and only when the session was actually compared (a
-		// nil stored row cannot carry the flag). Ranked below raced -- if
-		// the source also demonstrably moved past its snapshot, the mtime
-		// race is the stronger, directly provable diagnosis -- so this is
-		// gated on !raced. Unlike the raced guard this needs no
-		// agent/source reliability check: the flag is per-session ground
-		// truth recorded by the exact write path being diagnosed, so it
-		// generalizes to whatever provider took the incremental path rather
-		// than a hardcoded agent list.
+		// re-parse legitimately differs on the ordinal-shape / per-message
+		// metadata surface. Only meaningful when there is a real change to
+		// reclassify, and only when the session was actually compared (a nil
+		// stored row cannot carry the flag). Ranked below raced -- if the
+		// source also demonstrably moved past its snapshot, the mtime race
+		// is the stronger, directly provable diagnosis -- so this is gated
+		// on !raced. Unlike the raced guard this needs no agent/source
+		// reliability check: the flag is per-session ground truth recorded
+		// by the exact write path being diagnosed, so it generalizes to
+		// whatever provider took the incremental path rather than a
+		// hardcoded agent list.
+		//
+		// The reclassification is confined to the incremental-artifact
+		// fields (diffsConfinedToIncrementalArtifacts): a marker alone is
+		// not enough, because it is session-level while a regression is
+		// field-level. A non-informational diff outside that allow-list
+		// (first_message, message_content, usage totals, tool_calls, ...) is
+		// genuine parser drift that must stay DiffChanged even on an
+		// incrementally written row, so the marker cannot mask it.
 		incrementalSkew := realDiffs > 0 && compare && !raced &&
-			stored != nil && stored.LastWriteIncremental
+			stored != nil && stored.LastWriteIncremental &&
+			diffsConfinedToIncrementalArtifacts(fields)
 
 		class, reason := classifyParseDiffSession(
 			pw.needsRetry,

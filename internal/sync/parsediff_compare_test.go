@@ -1607,6 +1607,78 @@ func TestParseDiffClassifyPrecedence(t *testing.T) {
 	}
 }
 
+func TestDiffsConfinedToIncrementalArtifacts(t *testing.T) {
+	tests := []struct {
+		name   string
+		fields []FieldDiff
+		want   bool
+	}{
+		{
+			name: "message_metadata alone is an incremental artifact",
+			fields: []FieldDiff{
+				{Field: FieldMessageMetadata},
+			},
+			want: true,
+		},
+		{
+			name: "informational session fields are ignored",
+			fields: []FieldDiff{
+				{Field: FieldTerminationStatus, Informational: true},
+				{Field: FieldSessionName, Informational: true},
+				{Field: FieldMessageMetadata},
+			},
+			want: true,
+		},
+		{
+			name:   "no diffs are vacuously confined",
+			fields: nil,
+			want:   true,
+		},
+		{
+			name: "first_message drift is not an artifact",
+			fields: []FieldDiff{
+				{Field: FieldFirstMessage},
+			},
+			want: false,
+		},
+		{
+			name: "message_content drift is not an artifact",
+			fields: []FieldDiff{
+				{Field: FieldMessageContent},
+			},
+			want: false,
+		},
+		{
+			name: "usage totals drift is not an artifact",
+			fields: []FieldDiff{
+				{Field: FieldTotalOutputTokens},
+			},
+			want: false,
+		},
+		{
+			name: "an artifact mixed with a non-artifact is not confined",
+			fields: []FieldDiff{
+				{Field: FieldMessageMetadata},
+				{Field: FieldFirstMessage},
+			},
+			want: false,
+		},
+		{
+			name: "tool_calls drift is not an artifact",
+			fields: []FieldDiff{
+				{Field: FieldToolCalls},
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want,
+				diffsConfinedToIncrementalArtifacts(tt.fields))
+		})
+	}
+}
+
 // TestParseDiffSourceRaced pins the conservative mtime-skew verdict: a
 // source that moved past the snapshot mtime (or whose mtime cannot be
 // resolved) is raced; one that is demonstrably at or before the snapshot

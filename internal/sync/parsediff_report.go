@@ -55,20 +55,27 @@ const (
 	// longer emits) is a separate signal and is not yet skew-guarded.
 	DiffRaced DiffClass = "raced"
 	// DiffIncrementalSkew: the comparison detected a non-informational
-	// change, but the stored row was last written through the
+	// change, the stored row was last written through the
 	// incremental-append path (sessions.last_write_incremental) rather
-	// than a full re-normalization. Claude and Codex append new JSONL
-	// tails without rewriting the whole session, so a fresh full re-parse
-	// legitimately differs on fields the incremental path leaves frozen
-	// or recomputes differently (message_metadata, ordinal-set shape),
-	// even at the current data_version and without a pending resync. The
-	// change is therefore comparison-basis skew, not parser drift, and is
-	// inconclusive. Like DiffRaced it is reported for drill-down but never
-	// counted as a failure: --fail-on-change must not trip on it. The
-	// tradeoff mirrors DiffRaced's -- this is a session-level suppression,
-	// so a genuine regression on an incrementally-written session is also
-	// masked until that row is fully resynced (which clears the marker and
-	// restores full scrutiny). A full resync gives the clean baseline; see
+	// than a full re-normalization, AND every non-informational diff is
+	// confined to the incremental-artifact allow-list
+	// (diffsConfinedToIncrementalArtifacts). Claude and Codex append new
+	// JSONL tails without rewriting the whole session, so a fresh full
+	// re-parse can legitimately differ on the ordinal-shape / per-message
+	// metadata surface (message_metadata) even at the current data_version
+	// and without a pending resync. That change is comparison-basis skew,
+	// not parser drift, and is inconclusive: like DiffRaced it is reported
+	// for drill-down but never counted as a failure.
+	//
+	// The confinement is what keeps the marker from masking real
+	// regressions: the marker is session-level, but a regression is
+	// field-level, so a non-informational diff on any other field
+	// (first_message, message_content, usage totals, tool_calls, the
+	// recomputed aggregates, ...) keeps the session DiffChanged and trips
+	// --fail-on-change even on an incrementally-written row. The frozen
+	// session fields the incremental path owns (termination_status,
+	// session_name, cwd, ...) are already marked informational and never
+	// reach this test. A full resync still gives the cleanest baseline; see
 	// the resync recommendation in the CLI report. Precedence is below
 	// DiffRaced: when a source both advanced past its snapshot mtime and
 	// was last written incrementally, raced wins because the advanced

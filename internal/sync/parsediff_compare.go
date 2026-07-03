@@ -365,6 +365,51 @@ func usesIncrementalAppend(agent string) bool {
 		agent == string(parser.AgentCodex)
 }
 
+// incrementalArtifactField reports whether a non-informational diff on
+// the named field can be a legitimate incremental-append-vs-full-reparse
+// artifact rather than parser drift. The incremental-append path appends
+// already-normalized message rows and recomputes the session aggregates
+// to absolute values, so per-message content/tokens/models/tool_calls,
+// the head-derived first_message/started_at, and the recomputed
+// aggregates all stay byte-stable against a full re-parse -- a difference
+// there is genuine drift the marker must not mask. Only the ordinal-shape
+// / per-message metadata surface (role/timestamp/flags/source ids, i.e.
+// FieldMessageMetadata) can legitimately reshape when a whole-file
+// re-parse aligns records differently than the tail parse did.
+//
+// Empirically -- parse-diff over the real archive -- even that surface
+// does not materialize for quiescent, current-version incremental rows
+// (0 skew, 0 changed across the Claude/Codex corpus; the only observed
+// per-message metadata drift was on a live-write raced session, which
+// outranks skew). So this allow-list is a deliberately conservative
+// safety net, not a routinely hit path: the session fields the
+// incremental path actually freezes are already marked Informational
+// (termination_status, session_name, cwd, ...) and never reach here.
+func incrementalArtifactField(field string) bool {
+	return field == FieldMessageMetadata
+}
+
+// diffsConfinedToIncrementalArtifacts reports whether every
+// non-informational diff is on the incremental-artifact allow-list, the
+// precondition for reclassifying a row last written incrementally as
+// benign incremental_skew. A single non-informational diff outside the
+// allow-list (first_message, message_content, usage totals, tool_calls,
+// aggregates, ...) is genuine parser drift the marker must not suppress,
+// so the caller keeps the session DiffChanged. Informational diffs (the
+// frozen session fields) are ignored: they never make a session change in
+// the first place.
+func diffsConfinedToIncrementalArtifacts(fields []FieldDiff) bool {
+	for _, f := range fields {
+		if f.Informational {
+			continue
+		}
+		if !incrementalArtifactField(f.Field) {
+			return false
+		}
+	}
+	return true
+}
+
 // tokenAggregateDiffers compares a session token aggregate as a
 // (value, has-flag) unit. A coverage-flag flip is a real difference
 // even when the numeric values match; values are only meaningful
@@ -1206,11 +1251,14 @@ func compareUsageEvents(
 //     than parser drift. Only meaningful when realDiffs > 0; an
 //     unchanged session is identical regardless of a mid-run write.
 //   - incrementalSkew: the stored row was last written through the
-//     incremental-append path, so a full re-parse legitimately differs on
-//     the fields that path leaves frozen or recomputes. Also only
-//     meaningful when realDiffs > 0. It sits below raced: when both apply,
-//     raced wins because the advanced mtime is the stronger, directly
-//     provable diagnosis.
+//     incremental-append path AND every non-informational diff is confined
+//     to the incremental-artifact allow-list (the caller folds
+//     diffsConfinedToIncrementalArtifacts into this flag), so a full
+//     re-parse legitimately differs only on the ordinal-shape surface. A
+//     regression on any other field keeps the session DiffChanged. Also
+//     only meaningful when realDiffs > 0. It sits below raced: when both
+//     apply, raced wins because the advanced mtime is the stronger,
+//     directly provable diagnosis.
 func classifyParseDiffSession(
 	needsRetry, prepared, hasStored, storedTrashed,
 	pendingResync bool,
