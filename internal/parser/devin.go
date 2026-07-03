@@ -218,11 +218,10 @@ func parseDevinSession(dbPath, rawSessionID, machine string) (*ParsedSession, []
 
 	transcriptPath := filepath.Join(filepath.Dir(dbPath), "transcripts", rawSessionID+".json")
 	info, err := os.Stat(transcriptPath)
-	transcriptPresent := err == nil
-	if err != nil && !os.IsNotExist(err) {
-		return nil, nil, newDevinTranscriptError("stat", err)
-	}
-	if !transcriptPresent {
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return nil, nil, newDevinTranscriptError("stat", err)
+		}
 		fallbackErr := newDevinTranscriptError("missing", nil)
 		sess, msgs, ok, err := parseDevinSessionFromMessageNodes(dbPath, rawSessionID, machine, meta)
 		if err == nil && ok {
@@ -300,10 +299,8 @@ func parseDevinSession(dbPath, rawSessionID, machine string) (*ParsedSession, []
 	)
 
 	fileInfo := devinBaseFileInfo(dbPath, rawSessionID)
-	if transcriptPresent {
-		fileInfo.Size = info.Size()
-		fileInfo.Mtime = info.ModTime().UnixNano()
-	}
+	fileInfo.Size = info.Size()
+	fileInfo.Mtime = info.ModTime().UnixNano()
 	devinApplyFileInfoTimes(&fileInfo, meta, endedAt)
 
 	sess := buildDevinParsedSession(meta, rawSessionID, machine, cwd, firstMessage, startedAt, endedAt, userMsgCount, messages, fileInfo)
