@@ -315,6 +315,16 @@ func runServe(cfg config.Config, opts serveOptions) {
 	applyCustomPricing(database, cfg)
 
 
+	// Apply the config-driven custom pricing map on top of the
+	// pricing that seedPricing just wrote into model_pricing so
+	// fork-private models (e.g. MiniMax-M3, internal/private
+	// endpoints) carry their owner's authoritative rates into
+	// every GetDailyUsage call. Without this, custom_model_pricing
+	// would only influence the CLI statusline / pg serve paths
+	// where applyCustomPricing runs explicitly, leaving the
+	// embedded server reading rates from model_pricing only.
+	applyCustomPricing(database, cfg)
+
 	rtOpts := serveRuntimeOptions{
 		Mode:          "serve",
 		RequestedPort: cfg.Port,
