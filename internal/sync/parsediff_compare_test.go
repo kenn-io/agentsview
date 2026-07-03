@@ -1495,22 +1495,23 @@ func pdFetchStored(t *testing.T, d *db.DB, id string) *db.Session {
 
 func TestParseDiffClassifyPrecedence(t *testing.T) {
 	tests := []struct {
-		name          string
-		needsRetry    bool
-		prepared      bool
-		hasStored     bool
-		storedTrashed bool
-		pendingResync bool
-		realDiffs     int
-		raced         bool
-		wantClass     DiffClass
-		wantReason    string
+		name            string
+		needsRetry      bool
+		prepared        bool
+		hasStored       bool
+		storedTrashed   bool
+		pendingResync   bool
+		realDiffs       int
+		raced           bool
+		incrementalSkew bool
+		wantClass       DiffClass
+		wantReason      string
 	}{
 		{
 			name:       "needs retry wins over everything",
 			needsRetry: true, prepared: false, hasStored: true,
 			storedTrashed: true, pendingResync: true, realDiffs: 3,
-			raced:      true,
+			raced: true, incrementalSkew: true,
 			wantClass:  DiffNeedsRetry,
 			wantReason: "transient low-fidelity parse; differences expected",
 		},
@@ -1545,10 +1546,31 @@ func TestParseDiffClassifyPrecedence(t *testing.T) {
 			wantClass: DiffPendingResync,
 		},
 		{
+			name:     "pending resync wins over incremental skew",
+			prepared: true, hasStored: true, pendingResync: true,
+			realDiffs: 2, incrementalSkew: true,
+			wantClass: DiffPendingResync,
+		},
+		{
 			name:     "raced wins over changed when source moved",
 			prepared: true, hasStored: true, realDiffs: 1, raced: true,
 			wantClass:  DiffRaced,
 			wantReason: "source file changed after snapshot (live-write skew)",
+		},
+		{
+			name:     "raced wins over incremental skew when both apply",
+			prepared: true, hasStored: true, realDiffs: 1,
+			raced: true, incrementalSkew: true,
+			wantClass:  DiffRaced,
+			wantReason: "source file changed after snapshot (live-write skew)",
+		},
+		{
+			name:     "incremental skew wins over changed",
+			prepared: true, hasStored: true, realDiffs: 1,
+			incrementalSkew: true,
+			wantClass:       DiffIncrementalSkew,
+			wantReason: "stored row last written incrementally " +
+				"(incremental-append skew)",
 		},
 		{
 			name:     "real diffs mean changed",
@@ -1561,6 +1583,12 @@ func TestParseDiffClassifyPrecedence(t *testing.T) {
 			wantClass: DiffIdentical,
 		},
 		{
+			name:     "incremental skew flag is inert without a real diff",
+			prepared: true, hasStored: true, realDiffs: 0,
+			incrementalSkew: true,
+			wantClass:       DiffIdentical,
+		},
+		{
 			name:     "no real diffs mean identical",
 			prepared: true, hasStored: true, realDiffs: 0,
 			wantClass: DiffIdentical,
@@ -1571,7 +1599,7 @@ func TestParseDiffClassifyPrecedence(t *testing.T) {
 			class, reason := classifyParseDiffSession(
 				tt.needsRetry, tt.prepared, tt.hasStored,
 				tt.storedTrashed, tt.pendingResync, tt.realDiffs,
-				tt.raced,
+				tt.raced, tt.incrementalSkew,
 			)
 			assert.Equal(t, tt.wantClass, class)
 			assert.Equal(t, tt.wantReason, reason)
@@ -2143,8 +2171,19 @@ func TestParseDiffReportHasFailures(t *testing.T) {
 			totals: ParseDiffTotals{Examined: 3, Identical: 2, Raced: 1},
 		},
 		{
+			name: "incremental-skew sessions alone do not fail",
+			totals: ParseDiffTotals{
+				Examined: 3, Identical: 2, IncrementalSkew: 1,
+			},
+		},
+		{
 			name:   "a real change still fails alongside raced sessions",
 			totals: ParseDiffTotals{Changed: 1, Raced: 2},
+			want:   true,
+		},
+		{
+			name:   "a real change still fails alongside incremental-skew",
+			totals: ParseDiffTotals{Changed: 1, IncrementalSkew: 2},
 			want:   true,
 		},
 	}

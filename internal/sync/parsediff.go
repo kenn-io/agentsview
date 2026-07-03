@@ -180,13 +180,14 @@ func (e *Engine) ParseDiff(ctx context.Context, opts ParseDiffOptions) (*ParseDi
 		report, storedSessions, resolvedSet,
 		len(opts.Agents) == 0, cutPaths, visited,
 	)
-	// Raced sessions were compared against a fresh parse just like the
-	// others, so they count toward Examined; they are simply not counted
-	// as drift. Keeping them in Examined also keeps VacuousResync honest:
-	// a run with comparable (raced) sessions is not "all pending resync".
+	// Raced and incremental-skew sessions were compared against a fresh
+	// parse just like the others, so they count toward Examined; they are
+	// simply not counted as drift. Keeping them in Examined also keeps
+	// VacuousResync honest: a run with comparable (raced or skew) sessions
+	// is not "all pending resync".
 	report.Totals.Examined = report.Totals.Identical +
 		report.Totals.Changed + report.Totals.PendingResync +
-		report.Totals.Raced
+		report.Totals.Raced + report.Totals.IncrementalSkew
 
 	sort.Slice(report.Sessions, func(i, j int) bool {
 		a, b := report.Sessions[i], report.Sessions[j]
@@ -735,6 +736,22 @@ func (e *Engine) parseDiffCollectFile(
 			}
 		}
 
+		// Incremental-append skew: the stored row was last written by the
+		// incremental-append path (last_write_incremental), so a full
+		// re-parse legitimately differs on the fields that path leaves
+		// frozen or recomputes. Only meaningful when there is a real change
+		// to reclassify, and only when the session was actually compared (a
+		// nil stored row cannot carry the flag). Ranked below raced -- if
+		// the source also demonstrably moved past its snapshot, the mtime
+		// race is the stronger, directly provable diagnosis -- so this is
+		// gated on !raced. Unlike the raced guard this needs no
+		// agent/source reliability check: the flag is per-session ground
+		// truth recorded by the exact write path being diagnosed, so it
+		// generalizes to whatever provider took the incremental path rather
+		// than a hardcoded agent list.
+		incrementalSkew := realDiffs > 0 && compare && !raced &&
+			stored != nil && stored.LastWriteIncremental
+
 		class, reason := classifyParseDiffSession(
 			pw.needsRetry,
 			ok,
@@ -743,6 +760,7 @@ func (e *Engine) parseDiffCollectFile(
 			stored != nil && stored.DataVersion < db.CurrentDataVersion(),
 			realDiffs,
 			raced,
+			incrementalSkew,
 		)
 
 		entry := SessionDiff{
@@ -786,6 +804,13 @@ func (e *Engine) parseDiffCollectFile(
 			// FieldCounts and from HasFailures so --fail-on-change stays
 			// trustworthy.
 			report.Totals.Raced++
+			report.Sessions = append(report.Sessions, entry)
+		case DiffIncrementalSkew:
+			// Inconclusive (incremental-vs-full skew): listed for
+			// visibility with its field diffs attached for drill-down, but
+			// excluded from FieldCounts and from HasFailures so
+			// --fail-on-change stays trustworthy, exactly like DiffRaced.
+			report.Totals.IncrementalSkew++
 			report.Sessions = append(report.Sessions, entry)
 		case DiffSkipped:
 			// A re-parsed but trashed session: counted with the rest

@@ -54,6 +54,26 @@ const (
 	// compare path only; the presence sweep (a stored ID a clean parse no
 	// longer emits) is a separate signal and is not yet skew-guarded.
 	DiffRaced DiffClass = "raced"
+	// DiffIncrementalSkew: the comparison detected a non-informational
+	// change, but the stored row was last written through the
+	// incremental-append path (sessions.last_write_incremental) rather
+	// than a full re-normalization. Claude and Codex append new JSONL
+	// tails without rewriting the whole session, so a fresh full re-parse
+	// legitimately differs on fields the incremental path leaves frozen
+	// or recomputes differently (message_metadata, ordinal-set shape),
+	// even at the current data_version and without a pending resync. The
+	// change is therefore comparison-basis skew, not parser drift, and is
+	// inconclusive. Like DiffRaced it is reported for drill-down but never
+	// counted as a failure: --fail-on-change must not trip on it. The
+	// tradeoff mirrors DiffRaced's -- this is a session-level suppression,
+	// so a genuine regression on an incrementally-written session is also
+	// masked until that row is fully resynced (which clears the marker and
+	// restores full scrutiny). A full resync gives the clean baseline; see
+	// the resync recommendation in the CLI report. Precedence is below
+	// DiffRaced: when a source both advanced past its snapshot mtime and
+	// was last written incrementally, raced wins because the advanced
+	// mtime is the stronger, directly-provable diagnosis.
+	DiffIncrementalSkew DiffClass = "incremental_skew"
 )
 
 // Compared-field names. Used as FieldDiff.Field values and
@@ -161,6 +181,13 @@ type ParseDiffTotals struct {
 	// because the on-disk source advanced past the snapshot mtime. They
 	// are inconclusive (live-write skew), so HasFailures excludes them.
 	Raced int `json:"raced"`
+	// IncrementalSkew counts sessions whose would-be change was
+	// reclassified because the stored row was last written through the
+	// incremental-append path (last_write_incremental), so a full re-parse
+	// legitimately differs. They are inconclusive comparison-basis skew,
+	// not parser drift, so HasFailures excludes them; they are still part
+	// of Examined because they were compared, exactly like Raced.
+	IncrementalSkew int `json:"incremental_skew"`
 	// InformationalOnly counts sessions classified identical whose only
 	// diffs are informational. Included in Identical.
 	InformationalOnly int `json:"informational_only"`

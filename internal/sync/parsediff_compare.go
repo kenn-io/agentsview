@@ -1205,11 +1205,17 @@ func compareUsageEvents(
 //     would-be change is a torn comparison against live content rather
 //     than parser drift. Only meaningful when realDiffs > 0; an
 //     unchanged session is identical regardless of a mid-run write.
+//   - incrementalSkew: the stored row was last written through the
+//     incremental-append path, so a full re-parse legitimately differs on
+//     the fields that path leaves frozen or recomputes. Also only
+//     meaningful when realDiffs > 0. It sits below raced: when both apply,
+//     raced wins because the advanced mtime is the stronger, directly
+//     provable diagnosis.
 func classifyParseDiffSession(
 	needsRetry, prepared, hasStored, storedTrashed,
 	pendingResync bool,
 	realDiffs int,
-	raced bool,
+	raced, incrementalSkew bool,
 ) (DiffClass, string) {
 	switch {
 	case needsRetry:
@@ -1232,6 +1238,12 @@ func classifyParseDiffSession(
 		// A change against a source the daemon (or an active session)
 		// rewrote after the snapshot: inconclusive, not parser drift.
 		return DiffRaced, "source file changed after snapshot (live-write skew)"
+	case realDiffs > 0 && incrementalSkew:
+		// A change against a row last written incrementally: a full
+		// re-parse legitimately diverges from the frozen/incremental
+		// state, so this is comparison-basis skew, not parser drift.
+		return DiffIncrementalSkew,
+			"stored row last written incrementally (incremental-append skew)"
 	case realDiffs > 0:
 		return DiffChanged, ""
 	default:
