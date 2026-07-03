@@ -283,6 +283,9 @@ class UsageStore {
     } else if (this.excludedProjects) {
       p.excludeProject = this.excludedProjects;
     }
+    if (this.excludedAgents) {
+      p.excludeAgent = this.excludedAgents;
+    }
     if (this.selectedModels) {
       p.model = this.selectedModels;
     }
@@ -506,7 +509,11 @@ class UsageStore {
   }
 
   get hasActiveFilters(): boolean {
-    return this.excludedProjects !== "" || this.selectedModels !== "";
+    return (
+      this.excludedProjects !== "" ||
+      this.excludedAgents !== "" ||
+      this.selectedModels !== ""
+    );
   }
 
   get isQuerying(): boolean {
@@ -913,6 +920,9 @@ export function buildUsageUrlParams(
   }
   if (state.excludedProjects) {
     params["exclude_project"] = state.excludedProjects;
+  }
+  if (state.excludedAgents) {
+    params["exclude_agent"] = state.excludedAgents;
   }
   return params;
 }

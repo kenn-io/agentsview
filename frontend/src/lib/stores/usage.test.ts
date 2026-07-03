@@ -518,6 +518,28 @@ describe("UsageStore session filter params", () => {
     );
   });
 
+  it("passes exclusion filters to usage endpoints", async () => {
+    const { usage } = await loadStore();
+
+    usage.excludedProjects = "proj-a,proj-b";
+    usage.excludedAgents = "codex";
+
+    await usage.fetchAll();
+
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        excludeProject: "proj-a,proj-b",
+        excludeAgent: "codex",
+      }),
+    );
+    expect(usageServiceMocks.getApiV1UsageTopSessions).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        excludeProject: "proj-a,proj-b",
+        excludeAgent: "codex",
+      }),
+    );
+  });
+
   it("stores pairwise comparison data from the generated API", async () => {
     const { usage } = await loadStore();
 
@@ -1284,6 +1306,7 @@ describe("buildUsageUrlParams", () => {
     });
     expect(params).toEqual({
       exclude_project: "p1",
+      exclude_agent: "a1",
       model: "m2",
     });
   });
