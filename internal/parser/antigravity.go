@@ -95,7 +95,7 @@ func (p *antigravityProvider) parseSession(
 	// schema cannot be read.
 	sourceVersion := antigravitySourceVersion(db)
 
-	messages, usageEvents, err := loadAntigravitySteps(db)
+	messages, usageEvents, hasGenMetadata, err := loadAntigravitySteps(db)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -175,6 +175,9 @@ func (p *antigravityProvider) parseSession(
 	}
 	accumulateMessageTokenUsage(sess, messages)
 	applyUsageEventTokenTotals(sess, usageEvents)
+	// gen_metadata rows with zero decoded usage events flag a possible
+	// token-block wire-format change. Derived from the final usageEvents.
+	sess.GenMetadataWithoutUsage = hasGenMetadata && len(usageEvents) == 0
 	for i := range usageEvents {
 		usageEvents[i].SessionID = sess.ID
 	}
@@ -187,18 +190,25 @@ func (p *antigravityProvider) parseSession(
 	return sess, messages, usageEvents, nil
 }
 
-func loadAntigravitySteps(db *sql.DB) ([]ParsedMessage, []ParsedUsageEvent, error) {
+func loadAntigravitySteps(
+	db *sql.DB,
+) ([]ParsedMessage, []ParsedUsageEvent, bool, error) {
 	result, err := loadAntigravityStepsWithRawCount(db)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
-	return result.messages, result.usageEvents, nil
+	return result.messages, result.usageEvents, result.hasGenMetadata, nil
 }
 
 type antigravityStepLoadResult struct {
 	messages     []ParsedMessage
 	usageEvents  []ParsedUsageEvent
 	rawStepCount int
+	// hasGenMetadata reports whether the steps DB carried a non-empty
+	// gen_metadata table. Paired with an empty usageEvents slice it flags a
+	// session whose gen_metadata rows failed to decode into usage -- an early
+	// warning that a newer agy build changed the token-block wire format.
+	hasGenMetadata bool
 	// sourceVersion is the schema-fingerprint label of the .db, set by the
 	// CLI loader while the DB is open. The IDE path computes it directly
 	// from its own handle via antigravitySourceVersion, so both classify
@@ -291,6 +301,7 @@ func loadAntigravityStepsWithRawCount(
 	}
 
 	var result antigravityStepLoadResult
+	result.hasGenMetadata = len(genMeta) > 0
 	for rows.Next() {
 		var (
 			idx      int

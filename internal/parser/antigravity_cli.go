@@ -105,6 +105,10 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 	var messages []ParsedMessage
 	var usageEvents []ParsedUsageEvent
 	var hasTrajectory bool
+	// hasGenMetadata records whether the .db source carried gen_metadata
+	// rows. Combined with the FINAL usageEvents (after the sidecar gap-fill
+	// below) it flags a gen_metadata table that decoded into zero usage.
+	var hasGenMetadata bool
 	transcriptFidelity := TranscriptFidelitySummary
 	// sourceVersion is the schema-fingerprint label of the .db source; it
 	// stays empty for legacy .pb and sidecar-only sessions where no schema
@@ -113,6 +117,7 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 	if ext == ".db" {
 		dbResult, dbErr := loadAntigravityCLIDBSteps(path)
 		sourceVersion = dbResult.sourceVersion
+		hasGenMetadata = dbResult.hasGenMetadata
 		// gen_metadata token usage describes the session's actual
 		// consumption no matter which transcript source wins below.
 		// The sidecar also extracts generatorMetadata usage, but
@@ -295,6 +300,10 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 	}
 	accumulateMessageTokenUsage(sess, messages)
 	applyUsageEventTokenTotals(sess, usageEvents)
+	// Flag gen_metadata that decoded into zero usage. Computed from the FINAL
+	// usageEvents, so a session whose gen_metadata failed to decode but whose
+	// trajectory sidecar supplied usage via the gap-fill above is not flagged.
+	sess.GenMetadataWithoutUsage = hasGenMetadata && len(usageEvents) == 0
 	for i := range usageEvents {
 		usageEvents[i].SessionID = sess.ID
 	}

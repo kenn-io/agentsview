@@ -802,15 +802,21 @@ type ParsedSession struct {
 	// decode. Empty means full (parser did not classify). Currently set
 	// only by the Antigravity CLI parser.
 	TranscriptFidelity string
-	MalformedLines     int
-	IsTruncated        bool
-	FirstMessage       string
-	SessionName        string
-	StartedAt          time.Time
-	EndedAt            time.Time
-	MessageCount       int
-	UserMessageCount   int
-	File               FileInfo
+	// GenMetadataWithoutUsage reports whether this Antigravity session's steps
+	// table carried gen_metadata rows but none decoded into a usage event --
+	// an early warning that a newer agy build changed the gen_metadata wire
+	// format the token-block heuristic depends on. Set by both Antigravity
+	// parsers; false for every other agent.
+	GenMetadataWithoutUsage bool
+	MalformedLines          int
+	IsTruncated             bool
+	FirstMessage            string
+	SessionName             string
+	StartedAt               time.Time
+	EndedAt                 time.Time
+	MessageCount            int
+	UserMessageCount        int
+	File                    FileInfo
 
 	// TerminationStatus describes how the session appears to have
 	// ended. Empty string = unknown (parser did not classify, or

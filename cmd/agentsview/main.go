@@ -849,6 +849,19 @@ func formatAnomalySummary(a sync.AnomalyStats) string {
 			)
 		}
 	}
+	if a.GenMetadataWithoutUsageTotal > 0 {
+		fmt.Fprintf(&b,
+			"  gen_metadata without usage: %d total\n",
+			a.GenMetadataWithoutUsageTotal,
+		)
+		for _, agent := range slices.Sorted(
+			maps.Keys(a.GenMetadataWithoutUsageByAgent),
+		) {
+			fmt.Fprintf(&b,
+				"    %s: %d\n", agent, a.GenMetadataWithoutUsageByAgent[agent],
+			)
+		}
+	}
 	if !a.Sanitize.IsZero() {
 		fmt.Fprintf(&b,
 			"  sanitized fields: %d total\n", a.Sanitize.Total(),

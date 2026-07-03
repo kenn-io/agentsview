@@ -5672,6 +5672,14 @@ func (e *Engine) prepareSessionWrite(
 	if parser.DecodeConfidence(s.Agent, s.SourceVersion) == parser.DecodeConfidenceLow {
 		e.anomalies.recordUnknownSchemaSession(s.Agent)
 	}
+	// An Antigravity session whose gen_metadata table carried rows but decoded
+	// into zero usage events warns that a newer agy build may have changed the
+	// gen_metadata wire format the token-block heuristic depends on. The flag
+	// is set by the parsers from the final usageEvents, so a sidecar-rescued
+	// session is not counted here.
+	if pw.sess.GenMetadataWithoutUsage {
+		e.anomalies.recordGenMetadataWithoutUsageSession(s.Agent)
+	}
 
 	// A per-row token clamp must not leave an inflated value stranded in a
 	// row-derived session total while the row that produced it was clamped.

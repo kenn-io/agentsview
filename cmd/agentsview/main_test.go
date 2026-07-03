@@ -936,6 +936,52 @@ func TestFormatAnomalySummary(t *testing.T) {
 			},
 			wantOmit: []string{"malformed lines", "sanitized fields"},
 		},
+		{
+			name: "gen_metadata without usage only",
+			anomalies: agentsync.AnomalyStats{
+				GenMetadataWithoutUsageByAgent: map[string]int{
+					"antigravity": 1, "antigravity-cli": 2,
+				},
+				GenMetadataWithoutUsageTotal: 3,
+			},
+			wantContain: []string{
+				"Parser anomalies (this run):",
+				"gen_metadata without usage: 3 total",
+				"antigravity: 1",
+				"antigravity-cli: 2",
+			},
+			wantOmit: []string{
+				"malformed lines",
+				"unrecognized schema sessions",
+				"sanitized fields",
+			},
+		},
+		{
+			name: "all sections present",
+			anomalies: agentsync.AnomalyStats{
+				MalformedLinesByAgent:          map[string]int{"gemini": 7},
+				MalformedLinesTotal:            7,
+				UnknownSchemaSessionsByAgent:   map[string]int{"antigravity": 2},
+				UnknownSchemaSessionsTotal:     2,
+				GenMetadataWithoutUsageByAgent: map[string]int{"antigravity-cli": 3},
+				GenMetadataWithoutUsageTotal:   3,
+				Sanitize: agentsync.SanitizeStats{
+					TokensClamped:     4,
+					TimestampsBlanked: 1,
+				},
+			},
+			wantContain: []string{
+				"malformed lines: 7 total",
+				"gemini: 7",
+				"unrecognized schema sessions: 2 total",
+				"antigravity: 2",
+				"gen_metadata without usage: 3 total",
+				"antigravity-cli: 3",
+				"sanitized fields: 5 total",
+				"tokens clamped: 4",
+				"timestamps blanked: 1",
+			},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

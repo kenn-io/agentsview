@@ -2839,6 +2839,184 @@ func TestAntigravityCLIZeroMessageKeepsUsageEvents(t *testing.T) {
 	assert.Equal(t, 3000, sess.PeakContextTokens)
 }
 
+// undecodableAntigravityGenMetadata builds a gen_metadata blob whose token
+// block is rejected by the heuristic (field 2 exceeds the plausibility cap),
+// so it decodes into no usage event even though the row is present.
+func undecodableAntigravityGenMetadata() []byte {
+	return encodePB([]pbField{
+		{num: 1, wire: pbWireVarint, varint: 1371},
+		{num: 2, wire: pbWireVarint, varint: 679261000}, // implausible input
+		{num: 3, wire: pbWireVarint, varint: 100},
+	})
+}
+
+// TestAntigravityGenMetadataWithoutUsageFlag exercises the IDE parser's
+// GenMetadataWithoutUsage flag: it is set only when the steps DB carried
+// gen_metadata rows that decoded into zero usage events. An absent or empty
+// gen_metadata table, or rows that decode into usage, leave it false.
+func TestAntigravityGenMetadataWithoutUsageFlag(t *testing.T) {
+	decodableStep := func(t *testing.T, db *sql.DB) {
+		t.Helper()
+		ts := encodePB([]pbField{{num: 1, wire: pbWireVarint, varint: 1779000100}})
+		asstPayload := encodePB([]pbField{
+			{num: 5, wire: pbWireBytes, bytes: ts},
+			{num: 17, wire: pbWireBytes, bytes: []byte("assistant response body goes here and is long")},
+		})
+		mustExec(t, db,
+			`INSERT INTO steps (idx, step_type, step_payload) VALUES (0, 17, ?)`,
+			asstPayload)
+	}
+	tests := []struct {
+		name     string
+		setupDB  func(t *testing.T, db *sql.DB)
+		wantFlag bool
+	}{
+		{
+			name: "no gen_metadata table",
+			setupDB: func(t *testing.T, db *sql.DB) {
+				createAntigravityStepTables(t, db)
+				decodableStep(t, db)
+			},
+			wantFlag: false,
+		},
+		{
+			name: "empty gen_metadata table",
+			setupDB: func(t *testing.T, db *sql.DB) {
+				createAntigravityStepTables(t, db)
+				mustExec(t, db, `CREATE TABLE gen_metadata (idx integer, data blob, size integer, PRIMARY KEY (idx))`)
+				decodableStep(t, db)
+			},
+			wantFlag: false,
+		},
+		{
+			name: "gen_metadata rows decode to usage",
+			setupDB: func(t *testing.T, db *sql.DB) {
+				createAntigravityStepTables(t, db)
+				mustExec(t, db, `CREATE TABLE gen_metadata (idx integer, data blob, size integer, PRIMARY KEY (idx))`)
+				decodableStep(t, db)
+				genData := createAntigravityMockGenMetadata(t, 2400, 180, 0, "Test Gemini 3.5")
+				mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (0, ?, ?)`, genData, len(genData))
+			},
+			wantFlag: false,
+		},
+		{
+			name: "gen_metadata rows all undecodable",
+			setupDB: func(t *testing.T, db *sql.DB) {
+				createAntigravityStepTables(t, db)
+				mustExec(t, db, `CREATE TABLE gen_metadata (idx integer, data blob, size integer, PRIMARY KEY (idx))`)
+				decodableStep(t, db)
+				blob := undecodableAntigravityGenMetadata()
+				mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (0, ?, ?)`, blob, len(blob))
+			},
+			wantFlag: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			id := "55555555-6666-7777-8888-abababababab"
+			mustMkdir(t, filepath.Join(root, "conversations"))
+			dbPath := filepath.Join(root, "conversations", id+".db")
+			db, err := sql.Open("sqlite3", dbPath)
+			require.NoError(t, err)
+			tt.setupDB(t, db)
+			require.NoError(t, db.Close())
+
+			sess, _, usageEvents, err := parseAntigravityTestSession(t,
+				dbPath, "test-project", "test-machine")
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantFlag, sess.GenMetadataWithoutUsage)
+			if tt.wantFlag {
+				assert.Empty(t, usageEvents,
+					"flag implies zero decoded usage events")
+			}
+		})
+	}
+}
+
+// TestAntigravityCLIGenMetadataWithoutUsageFlag covers the CLI parser's
+// critical timing: the flag is computed from the FINAL usageEvents, after the
+// trajectory-sidecar gap-fill. A session whose gen_metadata failed to decode
+// but whose sidecar supplied usage is NOT flagged; a session with neither
+// source of usage is.
+func TestAntigravityCLIGenMetadataWithoutUsageFlag(t *testing.T) {
+	tests := []struct {
+		name     string
+		setup    func(t *testing.T, root, id, dbPath string)
+		wantFlag bool
+		wantUsed bool // usage events expected on the parse result
+	}{
+		{
+			name: "undecodable gen_metadata rescued by sidecar usage",
+			setup: func(t *testing.T, root, id, dbPath string) {
+				db, err := sql.Open("sqlite3", dbPath)
+				require.NoError(t, err)
+				createAntigravityStepTables(t, db)
+				mustExec(t, db, `CREATE TABLE gen_metadata (idx integer, data blob, size integer, PRIMARY KEY (idx))`)
+				for i := range 2 {
+					mustExec(t, db,
+						`INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`,
+						i, 99, []byte{0xff, 0xff, 0xff})
+				}
+				blob := undecodableAntigravityGenMetadata()
+				mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (1, ?, ?)`, blob, len(blob))
+				require.NoError(t, db.Close())
+				// Covering sidecar carries generatorMetadata usage that fills
+				// the gap left by the undecodable gen_metadata.
+				genJSON := `[{
+					"stepIndices": [1],
+					"chatModel": {
+						"model": "MODEL_PLACEHOLDER_M20",
+						"usage": {"inputTokens": "1500", "outputTokens": "77"}
+					}
+				}]`
+				writeAntigravityTestSidecarWithGenMetadata(t, root, id, 2, genJSON)
+			},
+			wantFlag: false,
+			wantUsed: true,
+		},
+		{
+			name: "undecodable gen_metadata and no sidecar usage",
+			setup: func(t *testing.T, root, id, dbPath string) {
+				db, err := sql.Open("sqlite3", dbPath)
+				require.NoError(t, err)
+				createAntigravityStepTables(t, db)
+				mustExec(t, db, `CREATE TABLE gen_metadata (idx integer, data blob, size integer, PRIMARY KEY (idx))`)
+				mustExec(t, db,
+					`INSERT INTO steps (idx, step_type, step_payload) VALUES (0, 99, ?)`,
+					[]byte{0xff, 0xff, 0xff})
+				blob := undecodableAntigravityGenMetadata()
+				mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (0, ?, ?)`, blob, len(blob))
+				require.NoError(t, db.Close())
+				// No sidecar written: nothing fills the usage gap.
+			},
+			wantFlag: true,
+			wantUsed: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			id := "00000000-1111-2222-3333-cdcdcdcdcdcd"
+			mustMkdir(t, filepath.Join(root, "conversations"))
+			dbPath := filepath.Join(root, "conversations", id+".db")
+			tt.setup(t, root, id, dbPath)
+
+			sess, _, usageEvents, _, err := parseAntigravityCLITestSessionWithStatus(t,
+				dbPath, "", "test-machine")
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantFlag, sess.GenMetadataWithoutUsage)
+			if tt.wantUsed {
+				assert.NotEmpty(t, usageEvents,
+					"sidecar gap-fill should supply usage events")
+			} else {
+				assert.Empty(t, usageEvents,
+					"flag implies zero decoded usage events")
+			}
+		})
+	}
+}
+
 func TestAntigravityTokenUsageDynamicField(t *testing.T) {
 	root := t.TempDir()
 	id := "55555555-6666-7777-8888-999999999998"
