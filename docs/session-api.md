@@ -883,6 +883,7 @@ Response excerpt:
   "by_project": [{"key": "agentsview", "agent_minutes": 96.4, "cost": 4.20}],
   "by_model": [{"key": "claude-sonnet-4-6", "agent_minutes": 80.0, "cost": 3.10}],
   "by_agent": [{"key": "codex", "agent_minutes": 64.0, "cost": 2.85}],
+  "by_branch": [{"project": "agentsview", "branch": "main", "agent_minutes": 96.4, "cost": 4.20}],
   "by_session": [
     {
       "session_id": "codex:abc",
@@ -911,7 +912,9 @@ Response excerpt:
 ```
 
 Breakdown rows include total, automated, and interactive minutes and
-costs. Session rows with no reliable timestamped activity use
+costs. `by_branch` rows carry `project`/`branch` as separate fields; an
+empty `branch` means no recorded branch. Session rows with no reliable
+timestamped activity use
 `"timing_quality": "untimed"` and `agent_minutes: null`; they can
 still contribute cost and output tokens when usage rows exist.
 

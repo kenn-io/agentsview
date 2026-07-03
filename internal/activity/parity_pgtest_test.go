@@ -51,9 +51,10 @@ const paritySchema = "agentsview_daily_report_parity_test"
 // the parity fixture. Assistant messages carry token_usage JSON so cost is
 // exercised through the message-source usage path (no usage_events needed).
 type parityFixtureSession struct {
-	id      string
-	project string
-	model   string
+	id        string
+	project   string
+	gitBranch string
+	model     string
 	// events is an ordered (role, RFC3339-timestamp) list. Assistant rows get
 	// token_usage with the given outputTokens so they contribute cost.
 	events       []parityEvent
@@ -95,7 +96,7 @@ type parityEvent struct {
 func parityFixture() []parityFixtureSession {
 	return []parityFixtureSession{
 		{
-			id: "parity-a", project: "alpha", model: "model-x",
+			id: "parity-a", project: "alpha", gitBranch: "main", model: "model-x",
 			outputTokens: 1200,
 			events: []parityEvent{
 				{role: "user", ts: parityDate + "T10:00:00Z"},
@@ -105,7 +106,9 @@ func parityFixture() []parityFixtureSession {
 			},
 		},
 		{
-			id: "parity-b", project: "beta", model: "model-y",
+			// Same branch name "main" as parity-a but a different project; the
+			// (project, branch) grain must keep them in separate buckets.
+			id: "parity-b", project: "beta", gitBranch: "main", model: "model-y",
 			outputTokens: 800,
 			events: []parityEvent{
 				{role: "user", ts: parityDate + "T10:01:00Z"},
@@ -115,7 +118,8 @@ func parityFixture() []parityFixtureSession {
 			},
 		},
 		{
-			id: "parity-c", project: "alpha", model: "model-x",
+			// Second branch within alpha, so a project carries multiple branches.
+			id: "parity-c", project: "alpha", gitBranch: "feature-x", model: "model-x",
 			outputTokens: 300,
 			events: []parityEvent{
 				{role: "user", ts: parityDate + "T14:00:00Z"},
@@ -241,6 +245,7 @@ func paritySessionWrite(fs parityFixtureSession) db.SessionBatchWrite {
 	sess := db.Session{
 		ID:               fs.id,
 		Project:          fs.project,
+		GitBranch:        fs.gitBranch,
 		Machine:          "local",
 		Agent:            "claude",
 		FirstMessage:     &firstMsg,
@@ -382,6 +387,12 @@ func canonicalizeReport(r *activity.Report) {
 	})
 	sort.Slice(r.ByAgent, func(i, j int) bool {
 		return r.ByAgent[i].Key < r.ByAgent[j].Key
+	})
+	sort.Slice(r.ByBranch, func(i, j int) bool {
+		if r.ByBranch[i].Project != r.ByBranch[j].Project {
+			return r.ByBranch[i].Project < r.ByBranch[j].Project
+		}
+		return r.ByBranch[i].Branch < r.ByBranch[j].Branch
 	})
 	sort.Slice(r.BySession, func(i, j int) bool {
 		return r.BySession[i].SessionID < r.BySession[j].SessionID
@@ -527,4 +538,21 @@ func assertDayMinuteFixtureSanity(t *testing.T, r activity.Report) {
 		"the later fractional duplicate is dropped")
 	require.Equal(t, "model-x", bySession["parity-f"].PrimaryModel,
 		"zero-cost usage still reports its known model as primary")
+
+	// Empty branches survive only when they carry minutes or cost.
+	type branchKey struct{ project, branch string }
+	byBranch := map[branchKey]activity.BranchKeyMinutes{}
+	for _, b := range r.ByBranch {
+		byBranch[branchKey{b.Project, b.Branch}] = b
+	}
+	require.Contains(t, byBranch, branchKey{"alpha", "main"},
+		"alpha/main bucket")
+	require.Contains(t, byBranch, branchKey{"beta", "main"},
+		"beta/main is distinct from alpha/main under the (project, branch) grain")
+	require.Contains(t, byBranch, branchKey{"alpha", "feature-x"},
+		"a project can carry multiple branches")
+	require.Contains(t, byBranch, branchKey{"gamma", ""},
+		"empty branch bucket")
+	require.NotContains(t, byBranch, branchKey{"delta", ""},
+		"zero-cost zero-minute branch bucket is dropped like any zero row")
 }

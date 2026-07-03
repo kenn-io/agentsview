@@ -52,6 +52,16 @@ describe("ActivityPage refresh control layout", () => {
   });
 });
 
+describe("ActivityPage branch filter", () => {
+  it("wires the branch typeahead through the activity store", () => {
+    expect(source).toContain("activity.branches.map");
+    expect(source).toContain("options={branchOptions}");
+    expect(source).toContain("value={activity.branch}");
+    expect(source).toContain("onselect={onBranchChange}");
+    expect(source).toContain("activity.setBranch(value)");
+  });
+});
+
 describe("ActivityPage date yoke controls", () => {
   it("updates shared yoke state from the unified range picker", () => {
     expect(source).toContain("<RangePicker");

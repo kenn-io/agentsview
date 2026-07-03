@@ -65,7 +65,7 @@ function makeReport(overrides: Partial<Report> = {}): Report {
       automated_at_peak: 0,
     },
   ];
-  const report = {
+  return {
     peak: { agents: 3, at: "2026-06-16T06:00:00Z" },
     totals: {
       active_minutes: 50,
@@ -98,15 +98,6 @@ function makeReport(overrides: Partial<Report> = {}): Report {
     intervals: [],
     ...overrides,
   } as Report;
-  // Backfill the peak-automation split onto any bucket literal that omits it
-  // (most fixtures only set max_agents), so the stacked bars get real geometry
-  // instead of NaN. Unspecified buckets default to all-interactive.
-  report.buckets = (report.buckets ?? []).map((b) => ({
-    interactive_at_peak: b.max_agents,
-    automated_at_peak: 0,
-    ...b,
-  }));
-  return report;
 }
 
 function popoverReport(): Report {
@@ -123,6 +114,8 @@ function popoverReport(): Report {
         agent_minutes: 4,
         output_tokens: 0,
         cost: 0,
+        interactive_at_peak: 2,
+        automated_at_peak: 0,
       },
     ],
     by_session: [
@@ -181,6 +174,8 @@ function minuteReport(overrides: Partial<Report> = {}): Report {
         agent_minutes: 5,
         output_tokens: 10,
         cost: 0,
+        interactive_at_peak: 1,
+        automated_at_peak: 0,
       },
       {
         start: "2026-06-16T00:05:00Z",
@@ -189,6 +184,8 @@ function minuteReport(overrides: Partial<Report> = {}): Report {
         agent_minutes: 5,
         output_tokens: 20,
         cost: 0,
+        interactive_at_peak: 2,
+        automated_at_peak: 0,
       },
       {
         start: "2026-06-16T00:10:00Z",
@@ -197,8 +194,10 @@ function minuteReport(overrides: Partial<Report> = {}): Report {
         agent_minutes: 5,
         output_tokens: 5,
         cost: 0,
+        interactive_at_peak: 1,
+        automated_at_peak: 0,
       },
-    ] as Report["buckets"],
+    ],
     ...overrides,
   });
 }
@@ -432,6 +431,8 @@ describe("ConcurrencyTimeline", () => {
           agent_minutes: 1,
           output_tokens: 0,
           cost: 0,
+          interactive_at_peak: 1,
+          automated_at_peak: 0,
         },
         {
           start: "2026-06-16T10:05:00Z",
@@ -440,6 +441,8 @@ describe("ConcurrencyTimeline", () => {
           agent_minutes: 0,
           output_tokens: 0,
           cost: 0,
+          interactive_at_peak: 0,
+          automated_at_peak: 0,
         },
       ],
       by_session: [] as Report["by_session"],
@@ -549,6 +552,8 @@ describe("ConcurrencyTimeline", () => {
           agent_minutes: 10,
           output_tokens: 1,
           cost: 0,
+          interactive_at_peak: 1,
+          automated_at_peak: 0,
         },
         {
           start: "2026-06-16T00:00:00Z",
@@ -557,8 +562,10 @@ describe("ConcurrencyTimeline", () => {
           agent_minutes: 10,
           output_tokens: 1,
           cost: 0,
+          interactive_at_peak: 1,
+          automated_at_peak: 0,
         },
-      ] as Report["buckets"],
+      ],
     });
     render(ConcurrencyTimeline, { report: r });
     const bar = document.querySelector("rect[data-bucket-bar]") as Element;
@@ -584,8 +591,10 @@ describe("ConcurrencyTimeline", () => {
           agent_minutes: 20,
           output_tokens: 100,
           cost: 0,
+          interactive_at_peak: 2,
+          automated_at_peak: 0,
         },
-      ] as Report["buckets"],
+      ],
     });
     const target = document.createElement("div");
     document.body.appendChild(target);

@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mount, tick, unmount } from "svelte";
 import Breakdowns from "./Breakdowns.svelte";
 import type { Report } from "../../api/types.js";
+import { BRANCH_TOKEN_SEP } from "../../branchFilters.js";
 
 function makeReport(): Report {
   return {
@@ -40,6 +41,7 @@ function makeReport(): Report {
     ],
     by_model: [],
     by_agent: [],
+    by_branch: [],
     by_session: [],
     intervals: [],
     projects: {},
@@ -163,18 +165,46 @@ describe("Breakdowns", () => {
   });
 
   it("renders distinct project identities that share a display label", async () => {
-	const report = makeReport();
-	report.by_project = [
-		{ ...report.by_project![0], key: "same", project_key: "pl1:sha256:a" },
-		{ ...report.by_project![1], key: "same", project_key: "pl1:sha256:b" },
-	] as Report["by_project"];
-	const target = document.createElement("div");
-	document.body.appendChild(target);
-	const component = mount(Breakdowns, { target, props: { report } });
-	await tick();
+    const report = makeReport();
+    report.by_project = [
+      { ...report.by_project![0], key: "same", project_key: "pl1:sha256:a" },
+      { ...report.by_project![1], key: "same", project_key: "pl1:sha256:b" },
+    ] as Report["by_project"];
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const component = mount(Breakdowns, { target, props: { report } });
+    await tick();
 
-	expect(target.querySelectorAll(".bar-row")).toHaveLength(2);
-	unmount(component);
-	target.remove();
+    expect(target.querySelectorAll(".bar-row")).toHaveLength(2);
+    unmount(component);
+    target.remove();
+  });
+
+  it("renders branch rows as project/branch labels, never raw tokens", async () => {
+    const report = makeReport();
+    report.by_branch = [
+      {
+        project: "alpha", branch: "main", agent_minutes: 12, cost: 0,
+        interactive_agent_minutes: 12, automated_agent_minutes: 0,
+        interactive_cost: 0, automated_cost: 0,
+      },
+      {
+        project: "alpha", branch: "", agent_minutes: 3, cost: 0,
+        interactive_agent_minutes: 3, automated_agent_minutes: 0,
+        interactive_cost: 0, automated_cost: 0,
+      },
+    ];
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    const c = mount(Breakdowns, { target, props: { report } });
+    await tick();
+    const labels = [...target.querySelectorAll(".bar-label")].map(
+      (el) => el.textContent?.trim() ?? "",
+    );
+    expect(labels).toContain("alpha/main");
+    expect(labels).toContain("alpha/(no branch)");
+    expect(labels.some((l) => l.includes(BRANCH_TOKEN_SEP))).toBe(false);
+    unmount(c);
+    target.remove();
   });
 });

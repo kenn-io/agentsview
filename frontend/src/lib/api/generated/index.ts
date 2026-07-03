@@ -7,6 +7,7 @@ export { CancelablePromise, CancelError } from './core/CancelablePromise';
 export { OpenAPI } from './core/OpenAPI';
 export type { OpenAPIConfig } from './core/OpenAPI';
 
+export type { ActivityBranchKeyMinutes } from './models/ActivityBranchKeyMinutes';
 export type { ActivityBucket } from './models/ActivityBucket';
 export type { ActivityKeyMinutes } from './models/ActivityKeyMinutes';
 export type { ActivityPeak } from './models/ActivityPeak';

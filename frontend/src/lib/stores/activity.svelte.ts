@@ -1,4 +1,4 @@
-import type { AgentInfo, ProjectInfo } from "../api/types.js";
+import type { AgentInfo, BranchInfo, ProjectInfo } from "../api/types.js";
 import type { Report } from "../api/types/activity.js";
 import { ActivityService, MetadataService } from "../api/generated/index";
 import {
@@ -60,6 +60,7 @@ class ActivityStore {
   project: string = $state("");
   agent: string = $state("");
   machine: string = $state("");
+  branch: string = $state("");
   automation: Automation = $state("all");
   report: Report | null = $state(null);
   loading = $state(false);
@@ -75,13 +76,14 @@ class ActivityStore {
   hasNewData: boolean = $state(false);
 
   // Filter-option lists for the activity controls. Loaded with full
-  // inclusion (one-shot + automated) so every project/agent/machine
+  // inclusion (one-shot + automated) so every project/agent/machine/branch
   // that can appear in the always-inclusive activity report is also
   // selectable here — unlike the sidebar's lists, which honor the
   // sidebar include toggles.
   projects: ProjectInfo[] = $state([]);
   agents: AgentInfo[] = $state([]);
   machines: string[] = $state([]);
+  branches: BranchInfo[] = $state([]);
 
   private loadVersion = 0;
   private reportRead = new LatestRead();
@@ -169,9 +171,10 @@ class ActivityStore {
             | "15m"
             | "1h"
             | "1d"
-            | "1w"
-            | undefined,
+          | "1w"
+          | undefined,
           project: this.project || undefined,
+          gitBranch: this.branch || undefined,
           agent: this.agent || undefined,
           machine: this.machine || undefined,
           automation: this.automation,
@@ -269,6 +272,19 @@ class ActivityStore {
         if (isAbortError(e) || !this.filterOptionsRead.isCurrent(signal)) return;
         ok = false;
       }
+      try {
+        const res = (await callGenerated(
+          () => MetadataService.getApiV1Branches(opts),
+          signal,
+        )) as unknown as { branches: BranchInfo[] };
+        if (
+          ver === this.#filterOptionsVersion &&
+          this.filterOptionsRead.isCurrent(signal)
+        ) this.branches = res.branches;
+      } catch (e) {
+        if (isAbortError(e) || !this.filterOptionsRead.isCurrent(signal)) return;
+        ok = false;
+      }
       if (
         ver === this.#filterOptionsVersion &&
         this.filterOptionsRead.isCurrent(signal)
@@ -354,6 +370,7 @@ class ActivityStore {
     this.project = params.project ?? "";
     this.agent = params.agent ?? "";
     this.machine = params.machine ?? "";
+    this.branch = params.git_branch ?? "";
     this.automation = AUTOMATIONS.has(params.automation ?? "")
       ? (params.automation as Automation)
       : "all";
@@ -363,9 +380,9 @@ class ActivityStore {
    * Write the current range/preset/filter state to the URL through the router's
    * single replaceState path. `preset` is always included; `date` is included
    * for day/week/month when non-empty; `from`/`to` only for the custom preset;
-   * bucket/project/agent/machine only when non-empty; `automation` only when not
-   * the "all" default. Empty filters and preset-irrelevant fields are omitted so
-   * URLs stay minimal and deep-linkable.
+   * bucket/project/agent/machine/branch only when non-empty; `automation` only
+   * when not the "all" default. Empty filters and preset-irrelevant fields are
+   * omitted so URLs stay minimal and deep-linkable.
    */
   writeUrl() {
     const p: Record<string, string> = { preset: this.preset };
@@ -382,6 +399,7 @@ class ActivityStore {
     if (this.project) p.project = this.project;
     if (this.agent) p.agent = this.agent;
     if (this.machine) p.machine = this.machine;
+    if (this.branch) p.git_branch = this.branch;
     if (this.automation !== "all") p.automation = this.automation;
     router.replaceParams(p);
   }
@@ -476,6 +494,11 @@ class ActivityStore {
     this.writeUrl();
   }
 
+  setBranch(branch: string) {
+    this.branch = branch;
+    this.writeUrl();
+  }
+
   setAutomation(automation: Automation) {
     this.automation = automation;
     this.writeUrl();
@@ -485,8 +508,8 @@ class ActivityStore {
 export const activity = new ActivityStore();
 
 // Refresh the activity filter options after any sync/import, mirroring the
-// sessions store, so newly imported projects/agents/machines appear in the
-// activity controls without a full page reload. Only refetch when an
+// sessions store, so newly imported projects/agents/machines/branches appear
+// in the activity controls without a full page reload. Only refetch when an
 // ActivityPage is mounted; otherwise the invalidated cache is picked up lazily
 // by the next mount's loadFilterOptions(). The report itself is deliberately
 // not refetched here: that is driven by the manual refresh button and the

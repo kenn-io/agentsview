@@ -18,6 +18,7 @@
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import { Card, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
   import RefreshControl from "../shared/RefreshControl.svelte";
+  import { branchLabel } from "../../branchFilters.js";
   import {
     addDays,
     endOfMonth,
@@ -112,6 +113,17 @@
       label: machine,
       displayLabel: machine,
     })),
+  ]);
+  const branchOptions = $derived.by((): TypeaheadOption[] => [
+    {
+      name: "",
+      label: m.activity_all_branches(),
+      displayLabel: m.activity_all_branches(),
+    },
+    ...activity.branches.map((b) => {
+      const label = branchLabel(b.project, b.branch, m.shared_no_branch());
+      return { name: b.token, label, displayLabel: label };
+    }),
   ]);
   const automationOptions: TypeaheadOption[] = $derived([
     {
@@ -269,6 +281,11 @@
     activity.load();
   }
 
+  function onBranchChange(value: string) {
+    activity.setBranch(value);
+    activity.load();
+  }
+
   function onAutomationChange(value: string) {
     activity.setAutomation(value as Automation);
     activity.load();
@@ -353,6 +370,18 @@
         title={m.activity_filter_by_machine()}
         emptyLabel={m.activity_no_matching_machines()}
         onselect={onMachineChange}
+      />
+    </div>
+
+    <div class="toolbar-typeahead">
+      <Typeahead
+        options={branchOptions}
+        value={activity.branch}
+        fallbackLabel={m.activity_all_branches()}
+        placeholder={m.activity_filter_branches_placeholder()}
+        title={m.activity_filter_by_branch()}
+        emptyLabel={m.activity_no_matching_branches()}
+        onselect={onBranchChange}
       />
     </div>
 

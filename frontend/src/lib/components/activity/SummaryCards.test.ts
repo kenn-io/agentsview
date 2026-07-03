@@ -39,6 +39,7 @@ function makeReport(totals: Partial<Report["totals"]> = {}): Report {
     by_project: [],
     by_model: [],
     by_agent: [],
+    by_branch: [],
     by_session: [],
     intervals: [],
     projects: {},

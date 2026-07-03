@@ -6,6 +6,7 @@ const api = vi.hoisted(() => ({
   getProjects: vi.fn(),
   getAgents: vi.fn(),
   getMachines: vi.fn(),
+  getBranches: vi.fn(),
 }));
 
 const apiRuntimeMocks = vi.hoisted(() => ({
@@ -20,6 +21,7 @@ vi.mock("../api/generated/index", () => ({
     getApiV1Projects: api.getProjects,
     getApiV1Agents: api.getAgents,
     getApiV1Machines: api.getMachines,
+    getApiV1Branches: api.getBranches,
   },
 }));
 vi.mock("../api/runtime.js", () => ({
@@ -84,6 +86,7 @@ beforeEach(() => {
   api.getProjects.mockReset();
   api.getAgents.mockReset();
   api.getMachines.mockReset();
+  api.getBranches.mockReset();
   apiRuntimeMocks.callGenerated.mockReset();
   apiRuntimeMocks.callGenerated.mockImplementation(
     (request: () => Promise<unknown>, _signal?: AbortSignal) => request(),
@@ -91,6 +94,7 @@ beforeEach(() => {
   api.getProjects.mockResolvedValue({ projects: [] });
   api.getAgents.mockResolvedValue({ agents: [] });
   api.getMachines.mockResolvedValue({ machines: [] });
+  api.getBranches.mockResolvedValue({ branches: [] });
   activity.report = null;
   activity.loading = false;
   activity.error = null;
@@ -99,11 +103,13 @@ beforeEach(() => {
   activity.projects = [];
   activity.agents = [];
   activity.machines = [];
+  activity.branches = [];
   activity.setPreset("day");
   activity.setDate("2026-06-16");
   activity.setProject("");
   activity.setAgent("");
   activity.setMachine("");
+  activity.setBranch("");
   activity.setAutomation("all");
   // Reset the filter-option cache so each test exercises the fetch.
   activity.invalidateFilterOptions();
@@ -171,16 +177,18 @@ describe("load", () => {
     expect(activity.error).toBeNull();
   });
 
-  it("passes project/agent/machine filters", async () => {
+  it("passes project/agent/machine/branch filters", async () => {
     api.getActivityReport.mockResolvedValue(makeReport());
     activity.setProject("p1");
     activity.setAgent("claude");
     activity.setMachine("m1");
+    activity.setBranch("p1\x1fmain");
     await activity.load();
     const arg = api.getActivityReport.mock.calls.at(-1)![0];
     expect(arg.project).toBe("p1");
     expect(arg.agent).toBe("claude");
     expect(arg.machine).toBe("m1");
+    expect(arg.gitBranch).toBe("p1\x1fmain");
   });
 
   it("defaults the automation class to all", async () => {
@@ -316,6 +324,9 @@ describe("loadFilterOptions", () => {
     api.getMachines.mockResolvedValueOnce({
       machines: ["laptop", "desktop"],
     });
+    api.getBranches.mockResolvedValueOnce({
+      branches: [{ project: "proj-a", branch: "main", token: "proj-a\x1fmain" }],
+    });
 
     await activity.loadFilterOptions();
 
@@ -323,10 +334,14 @@ describe("loadFilterOptions", () => {
     expect(api.getProjects).toHaveBeenCalledWith(full);
     expect(api.getAgents).toHaveBeenCalledWith(full);
     expect(api.getMachines).toHaveBeenCalledWith(full);
+    expect(api.getBranches).toHaveBeenCalledWith(full);
 
     expect(activity.projects).toEqual([{ name: "proj-a", count: 1 }]);
     expect(activity.agents).toEqual([{ name: "claude", count: 2 }]);
     expect(activity.machines).toEqual(["laptop", "desktop"]);
+    expect(activity.branches).toEqual([
+      { project: "proj-a", branch: "main", token: "proj-a\x1fmain" },
+    ]);
   });
 
   it("fetches once across repeated calls", async () => {
