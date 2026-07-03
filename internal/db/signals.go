@@ -9,14 +9,6 @@ import (
 
 const signalsBackfillMarker = "session_quality_signals_v1"
 
-// signalsWriteOrderMarker records that every row this database holds
-// was written (or healed) under the corrected findings-before-signals
-// ordering, so quality_signal_version can be trusted as a completion
-// record. Seeded at database creation; databases predating the fix
-// lack it until one clean backfill pass heals any rows whose version
-// was bumped before their findings write failed.
-const signalsWriteOrderMarker = "signals_write_order_v1"
-
 // SessionSignalUpdate holds computed signal values to persist
 // on the sessions table.
 type SessionSignalUpdate struct {
@@ -181,47 +173,44 @@ func (db *DB) BackfillSignals(
 	computeFn func(ctx context.Context, sessionID string) error,
 ) error {
 	db.mu.Lock()
-	done, err := db.statsMarkerSet(signalsBackfillMarker)
-	if err != nil {
+	var done int
+	if err := db.getWriter().QueryRow(
+		`SELECT count(*)
+		 FROM stats
+		 WHERE key = ? AND value != 0`,
+		signalsBackfillMarker,
+	).Scan(&done); err != nil {
 		db.mu.Unlock()
 		return fmt.Errorf(
 			"probing signals backfill marker: %w", err,
 		)
 	}
-	orderFixed, err := db.statsMarkerSet(signalsWriteOrderMarker)
-	if err != nil {
-		db.mu.Unlock()
-		return fmt.Errorf(
-			"probing signals write-order marker: %w", err,
-		)
-	}
 	db.mu.Unlock()
 
-	// Filter on the stored signal version: quality_signal_version
-	// defaults to 0, so sessions that never had signals computed
-	// always qualify, while sessions already at the current version --
-	// synced inline during a resync, or copied as orphans from an
-	// already-backfilled archive -- are skipped. Post-resync databases
-	// lose the completion marker but keep current versions, so an
-	// unfiltered walk would recompute the entire archive for nothing.
+	// Filter on the stored signal version even when the completion
+	// marker is unset: quality_signal_version defaults to 0, so
+	// sessions that never had signals computed always qualify, while
+	// sessions already at the current version -- synced inline during
+	// a resync, or copied as orphans from an already-backfilled
+	// archive -- are skipped. Post-resync databases lose the marker
+	// but keep current versions, so an unfiltered walk would recompute
+	// the entire archive for nothing.
 	//
-	// Exception: a database created before the corrected
-	// findings-before-signals write ordering (no write-order marker)
-	// can hold rows whose version is current even though their
-	// findings write failed. When such a database also lacks a
-	// completion marker, keep the historical unfiltered walk so one
-	// clean pass heals those split rows; the markers set afterwards
-	// switch every later run to the filtered path. With the completion
-	// marker set, the last full walk completed with zero failures, so
-	// no split rows existed and the filter is safe -- matching what
-	// the old code did in that state.
-	query := `SELECT id FROM sessions WHERE message_count > 0`
-	var args []any
-	if orderFixed || done {
-		query += ` AND quality_signal_version < ?`
-		args = append(args, CurrentQualitySignalVersion)
-	}
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	// Accepted edge: a database written before findings persisted
+	// ahead of the version bump can hold rows whose version is
+	// current even though a findings write once failed mid-sequence.
+	// Those rows are not revisited here. They require a partial write
+	// failure that no later session write healed, the old code froze
+	// them identically whenever its completion marker was set, and a
+	// forced `secrets scan` (non-backfill) rewrites findings for
+	// every session. Healing them automatically would mean either
+	// permanent grandfathering state or a full-archive recompute at
+	// upgrade -- both worse than the edge.
+	rows, err := db.getReader().QueryContext(ctx,
+		`SELECT id FROM sessions
+		 WHERE message_count > 0 AND quality_signal_version < ?`,
+		CurrentQualitySignalVersion,
+	)
 	if err != nil {
 		return fmt.Errorf(
 			"querying backfill candidates: %w", err,
@@ -243,7 +232,7 @@ func (db *DB) BackfillSignals(
 		return err
 	}
 	if len(ids) == 0 {
-		if !done || !orderFixed {
+		if done == 0 {
 			return db.MarkSignalsBackfillDone()
 		}
 		return nil
@@ -297,38 +286,19 @@ func (db *DB) BackfillSignals(
 // MarkSignalsBackfillDone records that legacy signal backfill is
 // no longer needed for this database. Set after a fresh resync,
 // where every session is rewritten through the inline signal
-// path, so the post-resync BackfillSignals call is a no-op. Also
-// stamps the write-order marker: a clean pass (or a fully rewritten
-// database) leaves no rows from the old signals-then-findings
-// ordering unhealed.
+// path, so the post-resync BackfillSignals call is a no-op.
 func (db *DB) MarkSignalsBackfillDone() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	for _, key := range []string{
-		signalsBackfillMarker, signalsWriteOrderMarker,
-	} {
-		if _, err := db.getWriter().Exec(
-			`INSERT INTO stats (key, value) VALUES (?, 1)
-			 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-			key,
-		); err != nil {
-			return fmt.Errorf(
-				"storing signals marker %s: %w", key, err,
-			)
-		}
+	_, err := db.getWriter().Exec(
+		`INSERT INTO stats (key, value) VALUES (?, 1)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		signalsBackfillMarker,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"storing signals backfill marker: %w", err,
+		)
 	}
 	return nil
-}
-
-// statsMarkerSet reports whether the given stats key holds a non-zero
-// value. Callers hold db.mu.
-func (db *DB) statsMarkerSet(key string) (bool, error) {
-	var n int
-	if err := db.getWriter().QueryRow(
-		`SELECT count(*) FROM stats WHERE key = ? AND value != 0`,
-		key,
-	).Scan(&n); err != nil {
-		return false, err
-	}
-	return n > 0, nil
 }
