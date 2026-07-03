@@ -1,0 +1,83 @@
+name: Bench Gate
+
+# Compares hot-path benchmarks between the PR head and its merge
+# base, so performance regressions in the sync engine and DB write
+# paths fail the PR instead of shipping. The gated regression classes
+# have all shipped before:
+#
+#   - discovery/skip work scaling with archive size instead of new
+#     data (#912, the providerSourceUnchangedInDB gap)
+#   - O(session history) work per incremental append (#954)
+#   - bulk ingest throughput (#411)
+#   - per-row query-shape regressions in usage aggregation (#309)
+#
+# cmd/benchgate gates on allocs/op and B/op (deterministic on a given
+# machine, tight thresholds) and on ns/op with a loose 2x threshold
+# that only catches algorithmic blowups; both sides run on the same
+# runner within one job, so the comparison is apples to apples.
+# Benchmarks that only exist on one side are reported but never fail
+# the gate. Keep BENCH_PATTERN in sync with the Makefile's
+# bench-gate target.
+
+on:
+  pull_request:
+
+concurrency:
+  group: bench-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  BENCH_PACKAGES: ./internal/sync ./internal/db ./internal/secrets
+  BENCH_PATTERN: ^(BenchmarkSyncAllColdArchive|BenchmarkSyncAllWarmNoop|BenchmarkSyncPathsIncrementalAppend|BenchmarkReplaceSessionMessagesStreamingMerge|BenchmarkInsertMessagesBatch|BenchmarkGetDailyUsage|BenchmarkScan|BenchmarkScanDefinite)$
+  BENCH_COUNT: "6"
+  BENCH_TIME: 500ms
+
+jobs:
+  bench-gate:
+    name: Benchmark Gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      - name: Restore pricing snapshot
+        run: go run ./internal/pricing/cmd/litellm-snapshot -restore
+
+      - name: Run benchmarks (PR head)
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          set -o pipefail
+          go test -tags "fts5" -run '^$' -bench "$BENCH_PATTERN" \
+            -benchmem -count "$BENCH_COUNT" -benchtime "$BENCH_TIME" \
+            -timeout 25m $BENCH_PACKAGES | tee /tmp/bench-new.txt
+
+      - name: Run benchmarks (merge base)
+        env:
+          CGO_ENABLED: "1"
+          BASE_REF: ${{ github.base_ref }}
+        # A failing merge-base run (or one with none of the gated
+        # benchmarks yet) degrades to an empty baseline: benchgate
+        # then reports every benchmark as new and passes, so a broken
+        # base never blocks a PR.
+        run: |
+          base=$(git merge-base HEAD "origin/$BASE_REF")
+          git worktree add /tmp/bench-base "$base"
+          cd /tmp/bench-base
+          go run ./internal/pricing/cmd/litellm-snapshot -restore || true
+          go test -tags "fts5" -run '^$' -bench "$BENCH_PATTERN" \
+            -benchmem -count "$BENCH_COUNT" -benchtime "$BENCH_TIME" \
+            -timeout 25m $BENCH_PACKAGES > /tmp/bench-old.txt \
+            || echo "merge-base benchmarks failed; comparing against empty baseline"
+
+      - name: Compare against merge base
+        run: go run ./cmd/benchgate -old /tmp/bench-old.txt -new /tmp/bench-new.txt

@@ -20,7 +20,7 @@ AIR_BIN := $(shell if command -v air >/dev/null 2>&1; then command -v air; \
 	elif [ -x "$(GOPATH_FIRST)/bin/air" ]; then printf "%s" "$(GOPATH_FIRST)/bin/air"; \
 	fi)
 
-.PHONY: build build-release install frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short bench-backends test-postgres test-postgres-ci test-s3 postgres-up postgres-down test-ssh test-ssh-ci ssh-up ssh-down e2e e2e-duckdb vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot dev-snapshot help
+.PHONY: build build-release install frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short bench-backends bench-gate test-postgres test-postgres-ci test-s3 postgres-up postgres-down test-ssh test-ssh-ci ssh-up ssh-down e2e e2e-duckdb vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot dev-snapshot help
 
 # Ensure go:embed has at least one file (no-op if frontend is built)
 ensure-embed-dir:
@@ -266,6 +266,21 @@ bench-backends: pricing-snapshot ensure-embed-dir
 		AGENTSVIEW_BENCH_MESSAGES_PER_SESSION=$(BENCH_BACKENDS_MESSAGES_PER_SESSION) \
 		CGO_ENABLED=1 go test -tags "fts5,benchdb" ./internal/backendbench $(BENCH_BACKENDS_FLAGS)
 
+# Hot-path benchmark gate. Runs the same benchmark set CI's bench.yml
+# compares against a PR's merge base (sync engine warm/cold/append,
+# message write paths, usage aggregation, secret scanning). Run it
+# before and after touching a sync or DB hot path, then compare with
+# `go run ./cmd/benchgate -old old.txt -new new.txt`. Keep the
+# pattern in sync with .github/workflows/bench.yml.
+BENCH_GATE_PATTERN ?= ^(BenchmarkSyncAllColdArchive|BenchmarkSyncAllWarmNoop|BenchmarkSyncPathsIncrementalAppend|BenchmarkReplaceSessionMessagesStreamingMerge|BenchmarkInsertMessagesBatch|BenchmarkGetDailyUsage|BenchmarkScan|BenchmarkScanDefinite)$$
+BENCH_GATE_COUNT ?= 6
+BENCH_GATE_TIME ?= 500ms
+bench-gate: pricing-snapshot ensure-embed-dir
+	CGO_ENABLED=1 go test -tags "fts5" -run '^$$' \
+		-bench '$(BENCH_GATE_PATTERN)' -benchmem \
+		-count $(BENCH_GATE_COUNT) -benchtime $(BENCH_GATE_TIME) \
+		-timeout 25m ./internal/sync ./internal/db ./internal/secrets
+
 # Start test PostgreSQL container
 postgres-up:
 	docker compose -f docker-compose.test.yml up -d --wait
@@ -484,6 +499,7 @@ help:
 	@echo "  test           - Run all tests"
 	@echo "  test-short     - Run fast tests only"
 	@echo "  bench-backends - Benchmark SQLite, DuckDB, and PostgreSQL stores"
+	@echo "  bench-gate     - Run the hot-path benchmarks CI gates PRs on"
 	@echo "  test-postgres  - Run PostgreSQL integration tests"
 	@echo "  test-s3        - Run S3 discovery integration tests (Docker)"
 	@echo "  postgres-up    - Start test PostgreSQL container"
