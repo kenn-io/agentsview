@@ -1,15 +1,15 @@
 <script lang="ts">
   import { formatDateTime, m } from "../../i18n/index.js";
-  import type { Report } from "../../api/types.js";
+  import type {
+    Bucket,
+    Report,
+    ReportInterval,
+    SessionRow,
+  } from "../../api/types.js";
   import { activeSessionsInSlot } from "./activeSessions.js";
   import OptionTypeahead, {
     type TypeaheadOption,
   } from "../layout/OptionTypeahead.svelte";
-  import type {
-    ActivityBucket,
-    ActivityReportInterval,
-    ActivitySessionRow,
-  } from "../../api/generated/index";
 
   let {
     report,
@@ -35,11 +35,7 @@
   const TOP_PAD = 10;
   const TICK_TARGET = 4;
 
-  // buckets/by_* are typed `any[] | null` by the codegen, so cast
-  // to the generated element model for field-level type safety.
-  const buckets = $derived(
-    (report.buckets ?? []) as ActivityBucket[],
-  );
+  const buckets = $derived(report.buckets ?? []);
 
   let tooltip = $state<{ x: number; y: number; text: string } | null>(null);
 
@@ -88,7 +84,7 @@
     return `${dateLabel(startMs)}–${dateLabel(endMs - 1)}`;
   }
 
-  function fmtBucketRange(b: ActivityBucket): string {
+  function fmtBucketRange(b: Bucket): string {
     const startMs = Date.parse(b.start);
     const endMs = Date.parse(b.end);
     if (Number.isNaN(startMs) || Number.isNaN(endMs)) return "";
@@ -102,7 +98,7 @@
   // cost stay combined (the API does not break those down per bucket), so the
   // split annotation sits on "peak" alone and shows only when an automated
   // agent was running at the peak.
-  function showSlotTip(e: MouseEvent, b: ActivityBucket) {
+  function showSlotTip(e: MouseEvent, b: Bucket) {
     const rect = (e.currentTarget as Element).getBoundingClientRect();
     const peakSplit =
       b.automated_at_peak > 0
@@ -126,14 +122,10 @@
     tooltip = null;
   }
 
-  const intervals = $derived(
-    (report.intervals ?? []) as ActivityReportInterval[],
-  );
+  const intervals = $derived(report.intervals ?? []);
   const bySession = $derived(
-    new Map(
-      ((report.by_session ?? []) as ActivitySessionRow[]).map(
-        (r) => [r.session_id, r],
-      ),
+    new Map<string, SessionRow>(
+      (report.by_session ?? []).map((r) => [r.session_id, r]),
     ),
   );
 
@@ -186,7 +178,7 @@
     { name: "cost", label: m.activity_cost(), displayLabel: m.activity_cost() },
   ]);
 
-  function bucketOverlayValue(b: ActivityBucket): number {
+  function bucketOverlayValue(b: Bucket): number {
     return overlayMetric === "cost" ? b.cost : b.output_tokens;
   }
 
