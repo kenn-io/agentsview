@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http/httptest"
@@ -143,6 +144,63 @@ func TestRunServeStatusPrefersStartingOverReadOnly(t *testing.T) {
 
 	assert.Contains(t, out, "agentsview is starting up.")
 	assert.NotContains(t, out, "mode:    read-only")
+}
+
+func TestRunServeStatusReportsStartupProgress(t *testing.T) {
+	dir := runtimeTestDir(t)
+	MarkDaemonStarting(dir)
+	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+
+	// Backdated started_at keeps the elapsed assertion stable.
+	state, err := json.Marshal(startupState{
+		PID:       os.Getpid(),
+		StartedAt: time.Now().Add(-90 * time.Second),
+		Phase:     "full resync",
+		Detail:    "claude: 12/38 sessions (32%)",
+		LogPath:   serveLogPath(dir),
+		UpdatedAt: time.Now(),
+	})
+	require.NoError(t, err, "marshal startup state")
+	require.NoError(t, os.WriteFile(startupStatePath(dir), state, 0o600),
+		"write startup state")
+
+	out := captureStdout(t, func() {
+		runServeStatus(config.Config{DataDir: dir})
+	})
+
+	assert.Contains(t, out, "agentsview is starting up.")
+	assert.Contains(t, out, fmt.Sprintf("pid:     %d", os.Getpid()))
+	assert.Contains(t, out, "elapsed: 1m30s")
+	assert.Contains(t, out,
+		"phase:   full resync: claude: 12/38 sessions (32%)")
+	assert.Contains(t, out, "log:     "+serveLogPath(dir))
+}
+
+func TestRunServeStatusStartingWithoutStateFallsBack(t *testing.T) {
+	dir := runtimeTestDir(t)
+	MarkDaemonStarting(dir)
+	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+	require.NoError(t, os.WriteFile(
+		startupStatePath(dir), []byte("{corrupt"), 0o600,
+	), "plant corrupt state file")
+
+	out := captureStdout(t, func() {
+		runServeStatus(config.Config{DataDir: dir})
+	})
+
+	assert.Contains(t, out, "agentsview is starting up.")
+	assert.NotContains(t, out, "phase:")
+}
+
+func TestUnmarkDaemonStartingRemovesStartupState(t *testing.T) {
+	dir := runtimeTestDir(t)
+	MarkDaemonStarting(dir)
+	newStartupStateWriter(dir, time.Now).SetPhase("opening database")
+	require.NotNil(t, readStartupState(dir), "state written during startup")
+
+	UnmarkDaemonStarting(dir)
+	assert.Nil(t, readStartupState(dir),
+		"state must not outlive the start lock")
 }
 
 func newPingDaemonWithPID(t *testing.T, pid int) testDaemonEndpoint {

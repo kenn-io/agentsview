@@ -605,6 +605,9 @@ func UnmarkDaemonStarting(dataDir string) {
 	if !ok {
 		return
 	}
+	// Remove the startup snapshot before releasing the lock so the
+	// file never outlives the "starting" state readers trust it under.
+	removeStartupState(dataDir)
 	held := value.(heldStartLock)
 	_ = held.lock.Unlock()
 }

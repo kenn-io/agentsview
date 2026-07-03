@@ -716,7 +716,7 @@ func startServeBackgroundProcess(
 	if err != nil {
 		return nil, "", fmt.Errorf("finding executable: %w", err)
 	}
-	logPath := filepath.Join(cfg.DataDir, "serve.log")
+	logPath := serveLogPath(cfg.DataDir)
 	// 0o600: the child writes its startup output here, which can include
 	// auth details, so keep the log readable only by the owner.
 	logFile, err := os.OpenFile(

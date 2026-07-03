@@ -456,10 +456,13 @@ func runLocalSync(
 	defer engine.Close()
 
 	didResync := full || database.NeedsResync()
+	// No startup state writer: this is a one-shot CLI sync, not a
+	// daemon startup, so there is no start lock for status to read
+	// under.
 	if didResync {
-		runInitialResync(ctx, engine)
+		runInitialResync(ctx, engine, nil)
 	} else {
-		runInitialSync(ctx, engine)
+		runInitialSync(ctx, engine, nil)
 	}
 	engine.PhaseStats().Log("sync")
 

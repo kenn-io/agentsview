@@ -1,0 +1,146 @@
+// ABOUTME: startup-state.json publishes the starting daemon's pid, phase,
+// ABOUTME: and progress so `serve status` can report them during startup.
+package main
+
+import (
+	"encoding/json"
+	"log"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+)
+
+// startupStateFileName is the data-dir file holding the starting
+// daemon's progress snapshot. It exists exactly as long as the daemon
+// start lock is held; readers must only trust it while
+// IsDaemonStarting reports true.
+const startupStateFileName = "startup-state.json"
+
+// startupDetailThrottle bounds how often detail-only updates rewrite
+// the state file during high-frequency sync progress callbacks.
+const startupDetailThrottle = time.Second
+
+type startupState struct {
+	PID       int       `json:"pid"`
+	StartedAt time.Time `json:"started_at"`
+	Phase     string    `json:"phase"`
+	Detail    string    `json:"detail,omitempty"`
+	LogPath   string    `json:"log_path,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func startupStatePath(dataDir string) string {
+	return filepath.Join(dataDir, startupStateFileName)
+}
+
+// serveLogPath is where a background-launched serve child writes its
+// startup output.
+func serveLogPath(dataDir string) string {
+	return filepath.Join(dataDir, "serve.log")
+}
+
+// startupStateWriter persists throttled startup progress snapshots.
+// Write failures are logged once and otherwise ignored: startup
+// transparency must never break startup.
+type startupStateWriter struct {
+	mu        sync.Mutex
+	path      string
+	state     startupState
+	lastWrite time.Time
+	warnOnce  sync.Once
+	now       func() time.Time
+}
+
+func newStartupStateWriter(
+	dataDir string, now func() time.Time,
+) *startupStateWriter {
+	w := &startupStateWriter{
+		path: startupStatePath(dataDir),
+		now:  now,
+	}
+	w.state.PID = os.Getpid()
+	w.state.StartedAt = now()
+	if runningAsBackgroundChild() {
+		// Only a background child's output lands in serve.log; a
+		// foreground serve prints to the invoking terminal.
+		w.state.LogPath = serveLogPath(dataDir)
+	}
+	return w
+}
+
+// SetPhase records a phase transition and clears the previous phase's
+// detail. Phase changes persist immediately, bypassing the throttle.
+func (w *startupStateWriter) SetPhase(phase string) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.state.Phase = phase
+	w.state.Detail = ""
+	w.write()
+}
+
+// SetDetail records fine-grained progress within the current phase,
+// persisted at most once per startupDetailThrottle.
+func (w *startupStateWriter) SetDetail(detail string) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if detail == "" || detail == w.state.Detail {
+		return
+	}
+	w.state.Detail = detail
+	if w.now().Sub(w.lastWrite) < startupDetailThrottle {
+		return
+	}
+	w.write()
+}
+
+// write persists the current state atomically via temp file + rename
+// so readers never observe a partial JSON document. Callers hold w.mu.
+func (w *startupStateWriter) write() {
+	w.state.UpdatedAt = w.now()
+	data, err := json.Marshal(w.state)
+	if err != nil {
+		w.warn(err)
+		return
+	}
+	tmp := w.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		w.warn(err)
+		return
+	}
+	if err := os.Rename(tmp, w.path); err != nil {
+		w.warn(err)
+		return
+	}
+	w.lastWrite = w.now()
+}
+
+func (w *startupStateWriter) warn(err error) {
+	w.warnOnce.Do(func() {
+		log.Printf("warning: cannot write startup state: %v", err)
+	})
+}
+
+// readStartupState loads the startup snapshot, or nil when the file is
+// missing or unreadable (legacy daemon version, mid-write race).
+func readStartupState(dataDir string) *startupState {
+	data, err := os.ReadFile(startupStatePath(dataDir))
+	if err != nil {
+		return nil
+	}
+	var st startupState
+	if err := json.Unmarshal(data, &st); err != nil {
+		return nil
+	}
+	return &st
+}
+
+func removeStartupState(dataDir string) {
+	_ = os.Remove(startupStatePath(dataDir))
+}

@@ -43,6 +43,11 @@ func runServeStatus(cfg config.Config) {
 	}
 	if IsDaemonStarting(cfg.DataDir) {
 		fmt.Println("agentsview is starting up.")
+		for _, line := range serveStartingStatusLines(
+			readStartupState(cfg.DataDir), time.Now(),
+		) {
+			fmt.Println(line)
+		}
 		return
 	}
 	if readOnly != nil {
@@ -77,6 +82,37 @@ func serveStatusLines(rt *DaemonRuntime) []string {
 	}
 	if rt.ReadOnly {
 		lines = append(lines, "  mode:    read-only")
+	}
+	return lines
+}
+
+// serveStartingStatusLines renders the detail lines for a daemon that
+// holds the start lock, from its published startup state. A nil state
+// (legacy daemon version, unreadable or mid-write file) yields no
+// extra lines; the state is only trusted while the start lock is
+// held, so staleness needs no handling here.
+func serveStartingStatusLines(st *startupState, now time.Time) []string {
+	if st == nil {
+		return nil
+	}
+	var lines []string
+	if st.PID > 0 {
+		lines = append(lines, fmt.Sprintf("  pid:     %d", st.PID))
+	}
+	if !st.StartedAt.IsZero() {
+		if elapsed := now.Sub(st.StartedAt).Round(time.Second); elapsed >= 0 {
+			lines = append(lines, fmt.Sprintf("  elapsed: %s", elapsed))
+		}
+	}
+	if st.Phase != "" {
+		phase := st.Phase
+		if st.Detail != "" {
+			phase += ": " + st.Detail
+		}
+		lines = append(lines, "  phase:   "+phase)
+	}
+	if st.LogPath != "" {
+		lines = append(lines, "  log:     "+st.LogPath)
 	}
 	return lines
 }
