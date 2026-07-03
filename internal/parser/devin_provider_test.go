@@ -342,6 +342,30 @@ func TestDevinProviderFingerprintChangesWhenLastActivityChanges(t *testing.T) {
 	assert.NotEqual(t, before.Hash, after.Hash)
 }
 
+func TestDevinProviderFingerprintChangesWhenWorkingDirectoryChanges(t *testing.T) {
+	const sessionID = "session-cwd-change"
+	dbPath, _ := newDevinSessionFixture(t, devinSessionRow{ID: sessionID, Title: "CWD change", WorkingDirectory: "/tmp/app", Model: "db-model", CreatedAtMillis: new(int64(1704103200000)), LastActivityMillis: new(int64(1704103209000))}, `{"steps":[]}`)
+	root := filepath.Dir(filepath.Dir(dbPath))
+
+	provider, ok := NewProvider(AgentDevin, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: sessionID})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	before, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+
+	execDevinTestSQL(t, dbPath, `UPDATE sessions SET working_directory = '/tmp/renamed-app' WHERE id = 'session-cwd-change'`)
+
+	after, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+
+	assert.Equal(t, before.Key, after.Key)
+	assert.NotEqual(t, before.Hash, after.Hash)
+}
+
 func TestDevinProviderFingerprintWithoutTranscriptUsesDBFreshnessOnly(t *testing.T) {
 	const sessionID = "session-missing-transcript"
 	dbPath, transcriptPath := newDevinSessionFixture(t, devinSessionRow{ID: sessionID, Title: "DB only session", WorkingDirectory: "/tmp/app", Model: "db-model", CreatedAtMillis: new(int64(1704103200000)), LastActivityMillis: new(int64(1704103209000))}, `{"steps":[]}`)
@@ -364,6 +388,34 @@ func TestDevinProviderFingerprintWithoutTranscriptUsesDBFreshnessOnly(t *testing
 	assert.Zero(t, fingerprint.Size)
 	assert.NotEmpty(t, fingerprint.Hash)
 	assert.NotContains(t, fingerprint.Hash, transcriptPath)
+}
+
+func TestDevinProviderFingerprintWithoutTranscriptChangesWhenMessageNodesChange(t *testing.T) {
+	const sessionID = "session-message-node-change"
+	fixture := newDevinTestFixture(t,
+		devinSessionRow{ID: sessionID, Title: "DB messages", WorkingDirectory: "/tmp/app", Model: "db-model", CreatedAtMillis: new(int64(1704103200000)), LastActivityMillis: new(int64(1704103209000))},
+	)
+	fixture.insertMessageNodes(t,
+		devinSyntheticMessageNodeRow{SessionID: sessionID, NodeID: 1, ChatMessage: `{"role":"user","content":"alpha"}`, CreatedAtMillis: 1704103201000},
+	)
+
+	provider, ok := NewProvider(AgentDevin, ProviderConfig{Roots: []string{fixture.Root}})
+	require.True(t, ok)
+
+	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: sessionID})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	before, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+
+	execDevinTestSQL(t, fixture.DBPath, `UPDATE message_nodes SET chat_message = '{"role":"user","content":"omega"}' WHERE session_id = 'session-message-node-change'`)
+
+	after, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+
+	assert.Equal(t, before.Key, after.Key)
+	assert.NotEqual(t, before.Hash, after.Hash)
 }
 
 func TestDevinProviderRejectsInvalidStoredVirtualPaths(t *testing.T) {

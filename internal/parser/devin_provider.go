@@ -329,7 +329,7 @@ func (s devinSourceSet) Fingerprint(
 		return SourceFingerprint{}, newDevinTranscriptError("stat", err)
 	}
 	fingerprint.MTimeNS = maxDevinFingerprintMTime(meta, dbInfo, transcriptInfo)
-	hash, err := devinFingerprintHash(meta, transcriptPath, transcriptInfo)
+	hash, err := devinFingerprintHash(meta, src.DBPath, transcriptPath, transcriptInfo)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
@@ -370,23 +370,28 @@ func maxDevinFingerprintMTime(
 
 func devinFingerprintHash(
 	meta *DevinSessionMeta,
+	dbPath string,
 	transcriptPath string,
 	transcriptInfo os.FileInfo,
 ) (string, error) {
 	h := sha256.New()
 	if _, err := fmt.Fprintf(
 		h,
-		"session\x00%s\x00created\x00%d\x00last_activity\x00%d\x00updated\x00%d\x00title\x00%s\x00model\x00%s\x00",
+		"session\x00%s\x00created\x00%d\x00last_activity\x00%d\x00updated\x00%d\x00title\x00%s\x00cwd\x00%s\x00model\x00%s\x00",
 		meta.RawSessionID,
 		meta.CreatedAt.UnixMilli(),
 		meta.LastActivity.UnixMilli(),
 		meta.UpdatedAt.UnixMilli(),
 		meta.Title,
+		meta.CWD,
 		meta.Model,
 	); err != nil {
 		return "", err
 	}
 	if transcriptInfo == nil {
+		if err := devinAppendMessageNodesFingerprint(h, dbPath, meta.RawSessionID); err != nil {
+			return "", err
+		}
 		return fmt.Sprintf("%x", h.Sum(nil)), nil
 	}
 	if _, err := fmt.Fprintf(
@@ -406,6 +411,43 @@ func devinFingerprintHash(
 		return "", newDevinTranscriptError("hash", err)
 	}
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+func devinAppendMessageNodesFingerprint(h io.Writer, dbPath, rawSessionID string) error {
+	nodes, err := listDevinMessageNodes(dbPath, rawSessionID)
+	if err != nil {
+		return err
+	}
+	var maxCreatedAtMS int64
+	for _, node := range nodes {
+		if node.CreatedAtMS > maxCreatedAtMS {
+			maxCreatedAtMS = node.CreatedAtMS
+		}
+	}
+	if _, err := fmt.Fprintf(h, "message_nodes\x00count\x00%d\x00max_created\x00%d\x00", len(nodes), maxCreatedAtMS); err != nil {
+		return err
+	}
+	for _, node := range nodes {
+		if _, err := fmt.Fprintf(
+			h,
+			"row\x00%d\x00node\x00%d\x00parent_valid\x00%t\x00parent\x00%d\x00created\x00%d\x00chat_len\x00%d\x00",
+			node.RowID,
+			node.NodeID,
+			node.ParentNodeID.Valid,
+			node.ParentNodeID.Int64,
+			node.CreatedAtMS,
+			len(node.ChatMessage),
+		); err != nil {
+			return err
+		}
+		if _, err := io.WriteString(h, node.ChatMessage); err != nil {
+			return err
+		}
+		if _, err := io.WriteString(h, "\x00"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s devinSourceSet) sourceFromRef(source SourceRef) (devinSource, bool) {
