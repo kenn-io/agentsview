@@ -86,6 +86,58 @@ func TestDoctorSyncStaleDatabaseReportsLikelyAbortedResync(t *testing.T) {
 		"Likely cause: previous data-version resync likely aborted before completion")
 }
 
+func TestDoctorSyncReportsSessionsMissingSecretScan(t *testing.T) {
+	dataDir := testDataDir(t)
+	dbPath := filepath.Join(dataDir, "sessions.db")
+
+	database, err := db.Open(dbPath)
+	require.NoError(t, err, "open db")
+	for _, id := range []string{"suspect", "scanned"} {
+		require.NoError(t, database.UpsertSession(db.Session{
+			ID: id, Project: "proj", Machine: "local", Agent: "claude",
+			MessageCount: 1,
+		}), "insert session %s", id)
+	}
+	require.NoError(t, database.Close(), "close db")
+
+	// Both sessions carry current signals, but only "scanned" ever had
+	// findings persisted (any non-empty rules version).
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err, "raw sqlite open")
+	_, err = conn.Exec(
+		`UPDATE sessions SET quality_signal_version = ?`,
+		db.CurrentQualitySignalVersion,
+	)
+	require.NoError(t, err, "set current signal versions")
+	_, err = conn.Exec(
+		`UPDATE sessions SET secrets_rules_version = 'v-old'
+		 WHERE id = 'scanned'`,
+	)
+	require.NoError(t, err, "mark scanned session")
+	require.NoError(t, conn.Close(), "close raw sqlite")
+
+	out, err := executeCommand(newRootCommand(), "doctor", "sync")
+	require.NoError(t, err, "doctor sync")
+
+	assert.Contains(t, out,
+		"1 session(s) have current quality signals but no persisted secret scan")
+	assert.Contains(t, out, `run "agentsview secrets scan"`)
+}
+
+func TestDoctorSyncSilentWithoutMissingSecretScans(t *testing.T) {
+	dataDir := testDataDir(t)
+
+	database, err := db.Open(filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, err, "open db")
+	require.NoError(t, database.Close(), "close db")
+
+	out, err := executeCommand(newRootCommand(), "doctor", "sync")
+	require.NoError(t, err, "doctor sync")
+
+	assert.NotContains(t, out, "secrets scan",
+		"clean archives must not suggest a rescan")
+}
+
 func TestDoctorSyncNewerDatabaseReportsRefusedStartup(t *testing.T) {
 	dataDir := testDataDir(t)
 	dbPath := filepath.Join(dataDir, "sessions.db")

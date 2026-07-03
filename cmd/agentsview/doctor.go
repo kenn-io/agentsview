@@ -43,6 +43,8 @@ type doctorDBInspection struct {
 	AntigravityCLISummary    int
 	AntigravityUnknownSchema int
 	AntigravityCountsErr     error
+	MissingSecretScans       int
+	MissingSecretScansErr    error
 }
 
 type doctorSyncReport struct {
@@ -180,6 +182,23 @@ func inspectDoctorDB(path string) doctorDBInspection {
 	insp.AntigravityCLITotal = total
 	insp.AntigravityCLISummary = summary
 	insp.AntigravityUnknownSchema = unknownSchema
+
+	// Sessions with current quality signals but no persisted secret
+	// scan: the signature of a findings write that failed mid-sequence
+	// under a binary predating the findings-before-signals write
+	// ordering. The filtered signals backfill deliberately does not
+	// revisit them (see db.BackfillSignals), so surface them here.
+	if err := conn.QueryRow(
+		`SELECT COUNT(*) FROM sessions
+		 WHERE quality_signal_version >= ?
+		   AND secrets_rules_version = ''
+		   AND message_count > 0
+		   AND deleted_at IS NULL`,
+		db.CurrentQualitySignalVersion,
+	).Scan(&insp.MissingSecretScans); err != nil {
+		insp.MissingSecretScansErr = err
+		return insp
+	}
 	return insp
 }
 
@@ -307,6 +326,7 @@ func writeDoctorSyncReport(w io.Writer, report doctorSyncReport) {
 	writeDoctorSessionCounts(w, report)
 	writeDoctorSummaryMode(w, report)
 	writeDoctorUnknownSchema(w, report)
+	writeDoctorMissingSecretScans(w, report)
 	writeDoctorTempFiles(w, report.TempFiles)
 	writeDoctorAgentRoots(w, report.AgentRoots)
 	writeDoctorDebugEvidence(w, report)
@@ -379,6 +399,25 @@ func writeDoctorUnknownSchema(w io.Writer, report doctorSyncReport) {
 			"  -> a newer Antigravity build changed the schema; "+
 			"the decode is heuristic and may be incomplete\n",
 		report.AntigravityUnknownSchema)
+}
+
+// writeDoctorMissingSecretScans surfaces sessions whose quality
+// signals are current but whose secret findings were never persisted.
+// It stays silent on a clean archive or when the count query failed.
+// Detection is partial by design: a session whose earlier findings
+// write succeeded before a later one failed keeps a stale non-empty
+// rules version and is indistinguishable from a legitimately old scan.
+func writeDoctorMissingSecretScans(w io.Writer, report doctorSyncReport) {
+	if report.MissingSecretScansErr != nil ||
+		report.MissingSecretScans == 0 {
+		return
+	}
+	fmt.Fprintf(w,
+		"%d session(s) have current quality signals but no persisted "+
+			"secret scan\n"+
+			"  -> a findings write likely failed under an older version; "+
+			"run \"agentsview secrets scan\" to rescan and persist findings\n",
+		report.MissingSecretScans)
 }
 
 func writeDoctorTempFiles(w io.Writer, files []string) {
