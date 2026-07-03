@@ -2606,6 +2606,17 @@ type ToolsAnalyticsResponse struct {
 	Trend      []ToolTrendEntry     `json:"trend"`
 }
 
+// ToolAnalyticsRow is a backend-neutral intermediate row used to
+// aggregate concrete tool usage after native stores apply their filters.
+type ToolAnalyticsRow struct {
+	SessionID string
+	ToolName  string
+	Category  string
+	Agent     string
+	Date      string
+	Count     int
+}
+
 // SkillAgentBreakdown holds skill usage for one agent.
 type SkillAgentBreakdown struct {
 	Agent string `json:"agent"`
@@ -2660,6 +2671,155 @@ type toolUsageAccumulator struct {
 	category   string
 	callCount  int
 	sessionIDs map[string]struct{}
+}
+
+// BuildToolsAnalytics folds backend-neutral tool rows into the public
+// response shape. Tool names are trimmed and blank names are reported as
+// Unknown so legacy rows remain visible instead of disappearing.
+func BuildToolsAnalytics(rows []ToolAnalyticsRow) ToolsAnalyticsResponse {
+	resp := ToolsAnalyticsResponse{
+		ByCategory: []ToolCategoryCount{},
+		ByAgent:    []ToolAgentBreakdown{},
+		ByTool:     []ToolUsageAnalysis{},
+		Trend:      []ToolTrendEntry{},
+	}
+	if len(rows) == 0 {
+		return resp
+	}
+
+	catCounts := make(map[string]int)
+	agentCats := make(map[string]map[string]int)
+	trendBuckets := make(map[string]map[string]int)
+	toolCounts := make(map[string]*toolUsageAccumulator)
+
+	for _, row := range rows {
+		if row.Count <= 0 {
+			continue
+		}
+		catCounts[row.Category] += row.Count
+		resp.TotalCalls += row.Count
+
+		if agentCats[row.Agent] == nil {
+			agentCats[row.Agent] = make(map[string]int)
+		}
+		agentCats[row.Agent][row.Category] += row.Count
+
+		week := bucketDate(row.Date, "week")
+		if trendBuckets[week] == nil {
+			trendBuckets[week] = make(map[string]int)
+		}
+		trendBuckets[week][row.Category] += row.Count
+
+		name := strings.TrimSpace(row.ToolName)
+		if name == "" {
+			name = "Unknown"
+		}
+		key := row.Category + "\x00" + name
+		acc := toolCounts[key]
+		if acc == nil {
+			acc = &toolUsageAccumulator{
+				toolName:   name,
+				category:   row.Category,
+				sessionIDs: map[string]struct{}{},
+			}
+			toolCounts[key] = acc
+		}
+		acc.callCount += row.Count
+		if row.SessionID != "" {
+			acc.sessionIDs[row.SessionID] = struct{}{}
+		}
+	}
+
+	if resp.TotalCalls == 0 {
+		return resp
+	}
+
+	resp.ByCategory = make([]ToolCategoryCount, 0, len(catCounts))
+	for cat, count := range catCounts {
+		pct := math.Round(
+			float64(count)/float64(resp.TotalCalls)*1000,
+		) / 10
+		resp.ByCategory = append(resp.ByCategory,
+			ToolCategoryCount{
+				Category: cat, Count: count, Pct: pct,
+			})
+	}
+	sort.Slice(resp.ByCategory, func(i, j int) bool {
+		if resp.ByCategory[i].Count != resp.ByCategory[j].Count {
+			return resp.ByCategory[i].Count > resp.ByCategory[j].Count
+		}
+		return resp.ByCategory[i].Category < resp.ByCategory[j].Category
+	})
+
+	agentKeys := make([]string, 0, len(agentCats))
+	for agent := range agentCats {
+		agentKeys = append(agentKeys, agent)
+	}
+	sort.Strings(agentKeys)
+	resp.ByAgent = make([]ToolAgentBreakdown, 0, len(agentKeys))
+	for _, agent := range agentKeys {
+		cats := agentCats[agent]
+		total := 0
+		for _, c := range cats {
+			total += c
+		}
+		catList := make([]ToolCategoryCount, 0, len(cats))
+		for cat, count := range cats {
+			pct := math.Round(
+				float64(count)/float64(total)*1000,
+			) / 10
+			catList = append(catList, ToolCategoryCount{
+				Category: cat, Count: count, Pct: pct,
+			})
+		}
+		sort.Slice(catList, func(i, j int) bool {
+			if catList[i].Count != catList[j].Count {
+				return catList[i].Count > catList[j].Count
+			}
+			return catList[i].Category < catList[j].Category
+		})
+		resp.ByAgent = append(resp.ByAgent,
+			ToolAgentBreakdown{
+				Agent:      agent,
+				Total:      total,
+				Categories: catList,
+			})
+	}
+
+	resp.ByTool = make([]ToolUsageAnalysis, 0, len(toolCounts))
+	for _, acc := range toolCounts {
+		pct := math.Round(
+			float64(acc.callCount)/float64(resp.TotalCalls)*1000,
+		) / 10
+		resp.ByTool = append(resp.ByTool, ToolUsageAnalysis{
+			ToolName:     acc.toolName,
+			Category:     acc.category,
+			CallCount:    acc.callCount,
+			SessionCount: len(acc.sessionIDs),
+			Pct:          pct,
+		})
+	}
+	sort.Slice(resp.ByTool, func(i, j int) bool {
+		if resp.ByTool[i].CallCount != resp.ByTool[j].CallCount {
+			return resp.ByTool[i].CallCount > resp.ByTool[j].CallCount
+		}
+		if resp.ByTool[i].ToolName != resp.ByTool[j].ToolName {
+			return resp.ByTool[i].ToolName < resp.ByTool[j].ToolName
+		}
+		return resp.ByTool[i].Category < resp.ByTool[j].Category
+	})
+
+	resp.Trend = make([]ToolTrendEntry, 0, len(trendBuckets))
+	for week, cats := range trendBuckets {
+		resp.Trend = append(resp.Trend, ToolTrendEntry{
+			Date: week, ByCat: cats,
+		})
+	}
+	sort.Slice(resp.Trend, func(i, j int) bool {
+		return resp.Trend[i].Date < resp.Trend[j].Date
+	})
+
+	return resp
 }
 
 type skillUsageAccumulator struct {
@@ -2916,14 +3076,7 @@ func (db *DB) GetAnalyticsTools(
 	}
 
 	// Query tool_calls for filtered sessions (chunked).
-	type toolRow struct {
-		sessionID string
-		category  string
-		toolName  string
-		count     int
-		date      string
-	}
-	var toolRows []toolRow
+	var toolRows []ToolAnalyticsRow
 
 	err = queryChunked(sessionIDs,
 		func(chunk []string) error {
@@ -2962,12 +3115,13 @@ func (db *DB) GetAnalyticsTools(
 				if !keep {
 					continue
 				}
-				toolRows = append(toolRows, toolRow{
-					sessionID: sid,
-					category:  cat,
-					toolName:  toolName,
-					count:     count,
-					date:      date,
+				toolRows = append(toolRows, ToolAnalyticsRow{
+					SessionID: sid,
+					Category:  cat,
+					ToolName:  toolName,
+					Agent:     info.agent,
+					Count:     count,
+					Date:      date,
 				})
 			}
 			return rows.Err()
@@ -2980,146 +3134,7 @@ func (db *DB) GetAnalyticsTools(
 		return resp, nil
 	}
 
-	// Aggregate in Go.
-	catCounts := make(map[string]int)
-	agentCats := make(map[string]map[string]int)    // agent → cat → count
-	trendBuckets := make(map[string]map[string]int) // week → cat → count
-	toolCounts := make(map[string]*toolUsageAccumulator)
-
-	for _, tr := range toolRows {
-		info := sessionMap[tr.sessionID]
-		catCounts[tr.category] += tr.count
-
-		if agentCats[info.agent] == nil {
-			agentCats[info.agent] = make(map[string]int)
-		}
-		agentCats[info.agent][tr.category] += tr.count
-
-		week := bucketDate(tr.date, "week")
-		if trendBuckets[week] == nil {
-			trendBuckets[week] = make(map[string]int)
-		}
-		trendBuckets[week][tr.category] += tr.count
-
-		name := tr.toolName
-		if name == "" {
-			name = "Unknown"
-		}
-		key := tr.category + "\x00" + name
-		acc := toolCounts[key]
-		if acc == nil {
-			acc = &toolUsageAccumulator{
-				toolName:   name,
-				category:   tr.category,
-				sessionIDs: map[string]struct{}{},
-			}
-			toolCounts[key] = acc
-		}
-		acc.callCount += tr.count
-		acc.sessionIDs[tr.sessionID] = struct{}{}
-	}
-
-	for _, count := range catCounts {
-		resp.TotalCalls += count
-	}
-
-	// Build ByCategory sorted by count desc.
-	resp.ByCategory = make(
-		[]ToolCategoryCount, 0, len(catCounts),
-	)
-	for cat, count := range catCounts {
-		pct := math.Round(
-			float64(count)/float64(resp.TotalCalls)*1000,
-		) / 10
-		resp.ByCategory = append(resp.ByCategory,
-			ToolCategoryCount{
-				Category: cat, Count: count, Pct: pct,
-			})
-	}
-	sort.Slice(resp.ByCategory, func(i, j int) bool {
-		if resp.ByCategory[i].Count != resp.ByCategory[j].Count {
-			return resp.ByCategory[i].Count > resp.ByCategory[j].Count
-		}
-		return resp.ByCategory[i].Category < resp.ByCategory[j].Category
-	})
-
-	// Build ByAgent sorted alphabetically.
-	agentKeys := make([]string, 0, len(agentCats))
-	for k := range agentCats {
-		agentKeys = append(agentKeys, k)
-	}
-	sort.Strings(agentKeys)
-	resp.ByAgent = make(
-		[]ToolAgentBreakdown, 0, len(agentKeys),
-	)
-	for _, agent := range agentKeys {
-		cats := agentCats[agent]
-		total := 0
-		for _, c := range cats {
-			total += c
-		}
-		catList := make(
-			[]ToolCategoryCount, 0, len(cats),
-		)
-		for cat, count := range cats {
-			pct := math.Round(
-				float64(count)/float64(total)*1000,
-			) / 10
-			catList = append(catList, ToolCategoryCount{
-				Category: cat, Count: count, Pct: pct,
-			})
-		}
-		sort.Slice(catList, func(i, j int) bool {
-			if catList[i].Count != catList[j].Count {
-				return catList[i].Count > catList[j].Count
-			}
-			return catList[i].Category < catList[j].Category
-		})
-		resp.ByAgent = append(resp.ByAgent,
-			ToolAgentBreakdown{
-				Agent:      agent,
-				Total:      total,
-				Categories: catList,
-			})
-	}
-
-	// Build Trend sorted by date.
-	resp.Trend = make(
-		[]ToolTrendEntry, 0, len(trendBuckets),
-	)
-	for week, cats := range trendBuckets {
-		resp.Trend = append(resp.Trend, ToolTrendEntry{
-			Date: week, ByCat: cats,
-		})
-	}
-	sort.Slice(resp.Trend, func(i, j int) bool {
-		return resp.Trend[i].Date < resp.Trend[j].Date
-	})
-
-	resp.ByTool = make([]ToolUsageAnalysis, 0, len(toolCounts))
-	for _, acc := range toolCounts {
-		pct := math.Round(
-			float64(acc.callCount)/float64(resp.TotalCalls)*1000,
-		) / 10
-		resp.ByTool = append(resp.ByTool, ToolUsageAnalysis{
-			ToolName:     acc.toolName,
-			Category:     acc.category,
-			CallCount:    acc.callCount,
-			SessionCount: len(acc.sessionIDs),
-			Pct:          pct,
-		})
-	}
-	sort.Slice(resp.ByTool, func(i, j int) bool {
-		if resp.ByTool[i].CallCount != resp.ByTool[j].CallCount {
-			return resp.ByTool[i].CallCount > resp.ByTool[j].CallCount
-		}
-		if resp.ByTool[i].ToolName != resp.ByTool[j].ToolName {
-			return resp.ByTool[i].ToolName < resp.ByTool[j].ToolName
-		}
-		return resp.ByTool[i].Category < resp.ByTool[j].Category
-	})
-
-	return resp, nil
+	return BuildToolsAnalytics(toolRows), nil
 }
 
 // ResolveSkillRowTime resolves the timestamp for a single skill call and

@@ -437,6 +437,14 @@ func TestStoreGetAnalyticsToolsModelFilterCountsOnlyMatchingToolCalls(
 	assert.Equal(t, 1, catMap["Read"], "Read")
 	assert.Equal(t, 1, catMap["Bash"], "Bash")
 	assert.Zero(t, catMap["Grep"], "Grep")
+
+	toolMap := make(map[string]int)
+	for _, tool := range resp.ByTool {
+		toolMap[tool.ToolName] = tool.CallCount
+	}
+	assert.Equal(t, 1, toolMap["Read"], "Read tool")
+	assert.Equal(t, 1, toolMap["Bash"], "Bash tool")
+	assert.Zero(t, toolMap["Grep"], "Grep tool")
 }
 
 func TestStoreGetAnalyticsToolsModelAndHourFilterCountsOnlyMatchingHourToolCalls(
@@ -486,6 +494,10 @@ func TestStoreGetAnalyticsToolsModelAndHourFilterCountsOnlyMatchingHourToolCalls
 	require.Len(t, resp.ByCategory, 1, "len(ByCategory)")
 	assert.Equal(t, "Grep", resp.ByCategory[0].Category, "Category")
 	assert.Equal(t, 1, resp.ByCategory[0].Count, "Count")
+	require.Len(t, resp.ByTool, 1, "len(ByTool)")
+	assert.Equal(t, "Grep", resp.ByTool[0].ToolName, "ToolName")
+	assert.Equal(t, 1, resp.ByTool[0].CallCount, "CallCount")
+	assert.Equal(t, 1, resp.ByTool[0].SessionCount, "SessionCount")
 }
 
 func TestStoreGetAnalyticsSkillsModelFilterCountsOnlyMatchingSkillCalls(

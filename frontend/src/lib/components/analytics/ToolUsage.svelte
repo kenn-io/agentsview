@@ -327,7 +327,7 @@
     color: var(--text-muted);
   }
 
-  @media (max-width: 560px) {
+  @media (max-width: 640px) {
     .tool-row {
       grid-template-columns: 8px minmax(0, 1fr) 44px 36px;
     }

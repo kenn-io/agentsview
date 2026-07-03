@@ -1796,24 +1796,15 @@ func (s *Store) GetAnalyticsTools(
 		ids = append(ids, r.id)
 	}
 	if len(ids) == 0 {
-		return db.ToolsAnalyticsResponse{}, nil
+		return db.BuildToolsAnalytics(nil), nil
 	}
-	cats := map[string]int{}
-	agents := map[string]map[string]int{}
-	trends := map[string]map[string]int{}
-	total := 0
-	type toolRow struct {
-		sessionID string
-		category  string
-		count     int
-		date      string
-	}
-	var toolRows []toolRow
+	var toolRows []db.ToolAnalyticsRow
 	err = duckQueryChunked(ids, func(chunk []string) error {
 		ph, args := duckInPlaceholders(chunk)
 		modelPred, modelArgs := duckAnalyticsCSVPredicate("m.model", f.Model)
 		args = append(args, modelArgs...)
-		query := `SELECT tc.session_id, tc.category, COUNT(*),
+		query := `SELECT tc.session_id, tc.category,
+				TRIM(COALESCE(tc.tool_name, '')), COUNT(*),
 				m.timestamp
 				FROM tool_calls tc
 				LEFT JOIN messages m
@@ -1825,17 +1816,18 @@ func (s *Store) GetAnalyticsTools(
 				AND ` + modelPred
 		}
 		query += `
-				GROUP BY tc.session_id, tc.category, m.timestamp`
+				GROUP BY tc.session_id, tc.category,
+					TRIM(COALESCE(tc.tool_name, '')), m.timestamp`
 		rows, qErr := s.queryContext(ctx, query, args...)
 		if qErr != nil {
 			return qErr
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var sid, cat string
+			var sid, cat, toolName string
 			var ts any
 			var count int
-			if err := rows.Scan(&sid, &cat, &count, &ts); err != nil {
+			if err := rows.Scan(&sid, &cat, &toolName, &count, &ts); err != nil {
 				return err
 			}
 			r, ok := meta[sid]
@@ -1848,11 +1840,13 @@ func (s *Store) GetAnalyticsTools(
 			if !keep {
 				continue
 			}
-			toolRows = append(toolRows, toolRow{
-				sessionID: sid,
-				category:  cat,
-				count:     count,
-				date:      date,
+			toolRows = append(toolRows, db.ToolAnalyticsRow{
+				SessionID: sid,
+				Category:  cat,
+				ToolName:  toolName,
+				Agent:     r.agent,
+				Count:     count,
+				Date:      date,
 			})
 		}
 		return rows.Err()
@@ -1860,50 +1854,7 @@ func (s *Store) GetAnalyticsTools(
 	if err != nil {
 		return db.ToolsAnalyticsResponse{}, err
 	}
-	for _, tr := range toolRows {
-		r, ok := meta[tr.sessionID]
-		if !ok {
-			continue
-		}
-		total += tr.count
-		cats[tr.category] += tr.count
-		if agents[r.agent] == nil {
-			agents[r.agent] = map[string]int{}
-		}
-		agents[r.agent][tr.category] += tr.count
-		week := bucketAnalyticsDate(tr.date, "week")
-		if trends[week] == nil {
-			trends[week] = map[string]int{}
-		}
-		trends[week][tr.category] += tr.count
-	}
-	resp := db.ToolsAnalyticsResponse{TotalCalls: total}
-	for cat, count := range cats {
-		resp.ByCategory = append(resp.ByCategory, db.ToolCategoryCount{
-			Category: cat, Count: count, Pct: round1(float64(count) / float64(max(total, 1)) * 100),
-		})
-	}
-	sort.Slice(resp.ByCategory, func(i, j int) bool {
-		if resp.ByCategory[i].Count != resp.ByCategory[j].Count {
-			return resp.ByCategory[i].Count > resp.ByCategory[j].Count
-		}
-		return resp.ByCategory[i].Category < resp.ByCategory[j].Category
-	})
-	for _, agent := range sortedKeys(agents) {
-		breakdown := db.ToolAgentBreakdown{Agent: agent}
-		for cat, count := range agents[agent] {
-			breakdown.Total += count
-			breakdown.Categories = append(breakdown.Categories, db.ToolCategoryCount{Category: cat, Count: count})
-		}
-		for i := range breakdown.Categories {
-			breakdown.Categories[i].Pct = round1(float64(breakdown.Categories[i].Count) / float64(max(breakdown.Total, 1)) * 100)
-		}
-		resp.ByAgent = append(resp.ByAgent, breakdown)
-	}
-	for _, date := range sortedKeys(trends) {
-		resp.Trend = append(resp.Trend, db.ToolTrendEntry{Date: date, ByCat: trends[date]})
-	}
-	return resp, nil
+	return db.BuildToolsAnalytics(toolRows), nil
 }
 
 func (s *Store) GetAnalyticsSkills(
