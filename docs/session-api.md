@@ -170,7 +170,7 @@ agentsview session get <id> [--format json]
   "outcome": "completed",
   "health_score_basis": ["..."],
   "health_penalties": {"tool_retries": 5},
-  "parser_malformed_lines": 0,
+  "parser_malformed_lines": 3,
   "secret_leak_count": 0
 }
 ```
@@ -179,9 +179,10 @@ agentsview session get <id> [--format json]
 `health_score` is non-null. Both HTTP and CLI surfaces return them.
 
 `git_branch` is the branch captured at sync time when the parser or
-source metadata exposes it. `parser_malformed_lines` is non-zero
-when a parser recovered a session after skipping malformed source
-lines. Antigravity detail responses may also include
+source metadata exposes it; sessions with no recorded branch omit
+the field. `parser_malformed_lines` counts the malformed source
+lines a parser skipped while still recovering the session and is
+omitted when zero. Antigravity detail responses may also include
 `decode_confidence`; the value `low` means the session came from an
 unrecognized Antigravity schema fingerprint and was decoded
 heuristically.
@@ -377,9 +378,11 @@ Response:
 ```
 
 `command_only: true` returns the command without launching a
-terminal. Read-only local mode can still return commands, but
-remote sessions and read-only remote serving cannot launch local
-programs.
+terminal. When a launch is attempted but fails, the response still
+includes the command with `launched: false` and an `error` code of
+`no_terminal_found` or `launch_failed`. Read-only local mode can
+still return commands, but remote sessions and read-only remote
+serving cannot launch local programs.
 
 For Claude Code sessions, setting `fork_session: true` without
 `from_ordinal` appends Claude's native `--fork-session` flag to the

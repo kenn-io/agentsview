@@ -55,9 +55,10 @@ usage state instead of silently showing an empty chart. Copilot-family
 filters (`copilot`, `vscode-copilot`, and `visualstudio-copilot`) keep
 Copilot-specific wording; any other no-token agent falls back to a
 generic "matching sessions do not expose token usage data" message.
-Copilot AI-credit conversion is tracked separately from this
-no-token-data capability, so future agents can opt into either
-behavior independently.
+AI-credit cost denomination (surfaced as "Copilot AI Credits" for
+Copilot agents) is tracked as a separate capability from
+no-token-data, so future agents can opt into either behavior
+independently.
 
 ### Cursor Admin Usage Events
 

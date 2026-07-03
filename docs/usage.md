@@ -561,8 +561,8 @@ copy it to the clipboard for sharing or lookup. Click the grade
 badge to toggle the signal panel.
 
 If a parser skipped malformed source lines while still recovering
-the session, the header shows a **Malformed lines** badge with the
-persisted `parser_malformed_lines` count. For Antigravity IDE and
+the session, the header shows a malformed-lines badge with the
+persisted count (for example "3 malformed lines"). For Antigravity IDE and
 CLI sessions decoded from an unrecognized SQLite schema fingerprint,
 the header also shows **Unverified schema**. That badge means the
 session was decoded heuristically from a newer schema and may be

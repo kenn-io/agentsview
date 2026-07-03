@@ -53,8 +53,12 @@ description: Release history for AgentsView
   avoiding repeated skip-check work on hot files that are still being written.
 - Improve **unsupported usage reporting** from agent capabilities. Agents now
   advertise whether they lack per-message token data and whether their costs are
-  denominated as Copilot AI Credits separately, so Copilot-family filters keep
+  denominated in AI credits (surfaced as "Copilot AI Credits" for Copilot
+  agents) as separate capabilities, so Copilot-family filters keep
   Copilot-specific wording while other no-token agents get generic guidance.
+- Publish a **`stable` Docker image tag** on tagged releases. `stable` always
+  points at the most recent tagged release, while `latest` continues to track
+  `main` and exact version tags remain immutable.
 
 **Bug fixes**
 
@@ -79,8 +83,9 @@ description: Release history for AgentsView
 
 - Thanks to [Rod Boev](https://github.com/rodboev) for pairwise usage
   comparisons, Cursor attribution parity, Claude message-point session forking,
-  worktree-mapping backfills, unsupported usage capability metadata, and usage
-  filter fixes.
+  worktree-mapping backfills, unsupported usage capability metadata, usage
+  filter fixes, Visual Studio 2026 Copilot session parsing, and the `stable`
+  Docker image tag.
 - Thanks to [Matthew Jacobs](https://github.com/mjacobs) for parser
   malformed-line badges, Antigravity schema-confidence reporting,
   provider-backed `parse-diff` coverage, the Copilot CLI wording fix, and MCP
