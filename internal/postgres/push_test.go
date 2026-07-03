@@ -82,6 +82,144 @@ func (s *syncStateStoreStub) GetOrCreateSyncState(
 	return defaultValue, nil
 }
 
+type pushAliasRoutingDriver struct{}
+
+type pushAliasRoutingConn struct{}
+
+type pushAliasRoutingTx struct{}
+
+type pushAliasRoutingRows struct {
+	columns []string
+	values  [][]driver.Value
+	next    int
+}
+
+var pushAliasRoutingRegisterOnce sync.Once
+
+func newPushAliasRoutingDB(t *testing.T) *sql.DB {
+	t.Helper()
+	pushAliasRoutingRegisterOnce.Do(func() {
+		sql.Register("agentsview_push_alias_routing", pushAliasRoutingDriver{})
+	})
+
+	pg, err := sql.Open("agentsview_push_alias_routing", t.Name())
+	require.NoError(t, err, "open push-alias-routing db")
+	t.Cleanup(func() { _ = pg.Close() })
+	return pg
+}
+
+func (pushAliasRoutingDriver) Open(string) (driver.Conn, error) {
+	return &pushAliasRoutingConn{}, nil
+}
+
+func (c *pushAliasRoutingConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("prepare not implemented")
+}
+
+func (c *pushAliasRoutingConn) Close() error { return nil }
+
+func (c *pushAliasRoutingConn) Begin() (driver.Tx, error) {
+	return c.BeginTx(context.Background(), driver.TxOptions{})
+}
+
+func (c *pushAliasRoutingConn) BeginTx(
+	context.Context, driver.TxOptions,
+) (driver.Tx, error) {
+	return pushAliasRoutingTx{}, nil
+}
+
+func (c *pushAliasRoutingConn) CheckNamedValue(
+	*driver.NamedValue,
+) error {
+	return nil
+}
+
+func (c *pushAliasRoutingConn) ExecContext(
+	_ context.Context, query string, _ []driver.NamedValue,
+) (driver.Result, error) {
+	normalized := strings.ToLower(query)
+	switch {
+	case strings.Contains(normalized, "insert into model_pricing"):
+		return driver.RowsAffected(1), nil
+	case strings.Contains(normalized, "insert into sync_metadata"):
+		return driver.RowsAffected(1), nil
+	default:
+		return driver.RowsAffected(1), nil
+	}
+}
+
+func (c *pushAliasRoutingConn) QueryContext(
+	_ context.Context, query string, _ []driver.NamedValue,
+) (driver.Rows, error) {
+	normalized := strings.ToLower(query)
+	switch {
+	case strings.Contains(normalized, "select coalesce(max(data_version), 0) from sessions"):
+		return &pushAliasRoutingRows{
+			columns: []string{"coalesce"},
+			values:  [][]driver.Value{{0}},
+		}, nil
+	case strings.Contains(normalized, "from information_schema.tables"):
+		return &pushAliasRoutingRows{
+			columns: []string{"exists"},
+			values:  [][]driver.Value{{1}},
+		}, nil
+	case strings.Contains(normalized, "from pg_indexes"):
+		return &pushAliasRoutingRows{
+			columns: []string{"exists"},
+			values:  [][]driver.Value{{1}},
+		}, nil
+	case strings.Contains(normalized, "select exists ("):
+		return &pushAliasRoutingRows{
+			columns: []string{"exists"},
+			values:  [][]driver.Value{{false}},
+		}, nil
+	case strings.Contains(normalized, "select value from sync_metadata where key = $1"):
+		return &pushAliasRoutingRows{
+			columns: []string{"value"},
+		}, nil
+	case strings.Contains(normalized, "limit 0"):
+		return &pushAliasRoutingRows{
+			columns: []string{"probe"},
+		}, nil
+	case strings.Contains(normalized, "select model_pattern, input_per_mtok"):
+		return &pushAliasRoutingRows{
+			columns: []string{
+				"model_pattern",
+				"input_per_mtok",
+				"output_per_mtok",
+				"cache_creation_per_mtok",
+				"cache_read_per_mtok",
+				"updated_at",
+			},
+		}, nil
+	case strings.Contains(normalized, "select id from excluded_sessions"):
+		return &pushAliasRoutingRows{
+			columns: []string{"id"},
+		}, nil
+	default:
+		return &pushAliasRoutingRows{
+			columns: []string{"probe"},
+		}, nil
+	}
+}
+
+func (pushAliasRoutingTx) Commit() error { return nil }
+
+func (pushAliasRoutingTx) Rollback() error { return nil }
+
+func (r *pushAliasRoutingRows) Columns() []string { return r.columns }
+
+func (r *pushAliasRoutingRows) Close() error { return nil }
+
+func (r *pushAliasRoutingRows) Next(dest []driver.Value) error {
+	if r.next >= len(r.values) {
+		return io.EOF
+	}
+	copy(dest, r.values[r.next])
+	r.next++
+	return nil
+}
+
 func TestPushMarkerIDReturnsInsertWinner(t *testing.T) {
 	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
@@ -238,6 +376,68 @@ func TestSessionAliasBackfillRequirementUsesSyncAliasStateAcrossFilters(t *testi
 	assert.Empty(t, store.values[sessionAliasBackfillStateKey+":"+filterScopeA])
 	assert.Empty(t, store.values[sessionAliasBackfillStateKey+":"+filterScopeB])
 	assert.Equal(t, "1", store.values[sessionAliasBackfillStateKey+":work"])
+}
+
+func TestPushUsesTargetScopedAliasBackfillStateAcrossFilters(t *testing.T) {
+	filterScopeA := pushSyncStateScope("work", []string{"alpha"}, nil)
+	filterScopeB := pushSyncStateScope("work", []string{"beta"}, nil)
+	local := testDB(t)
+	pg := newPushAliasRoutingDB(t)
+	ctx := context.Background()
+
+	syncA := &Sync{
+		pg:                 pg,
+		local:              local,
+		syncState:          newScopedSyncStateStore(local, filterScopeA, false),
+		aliasBackfillState: newScopedSyncStateStore(local, "work", false),
+		machine:            "push-machine",
+		schema:             "agentsview",
+		targetFingerprint:  "target-fp",
+		syncStateTarget:    filterScopeA,
+		projects:           []string{"alpha"},
+		schemaDone:         true,
+	}
+	syncB := &Sync{
+		pg:                 pg,
+		local:              local,
+		syncState:          newScopedSyncStateStore(local, filterScopeB, false),
+		aliasBackfillState: newScopedSyncStateStore(local, "work", false),
+		machine:            "push-machine",
+		schema:             "agentsview",
+		targetFingerprint:  "target-fp",
+		syncStateTarget:    filterScopeB,
+		projects:           []string{"beta"},
+		schemaDone:         true,
+	}
+
+	_, err := syncA.Push(ctx, false, nil)
+	require.NoError(t, err)
+	_, err = syncB.Push(ctx, false, nil)
+	require.NoError(t, err)
+
+	targetMarker, err := local.GetSyncState(
+		sessionAliasBackfillStateKey + ":work",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "1", targetMarker)
+
+	filterMarkerB, err := local.GetSyncState(
+		sessionAliasBackfillStateKey + ":" + filterScopeB,
+	)
+	require.NoError(t, err)
+	assert.Empty(t, filterMarkerB)
+
+	filteredLastPushA, err := local.GetSyncState("last_push_at:" + filterScopeA)
+	require.NoError(t, err)
+	assert.NotEmpty(t, filteredLastPushA)
+
+	filteredLastPushB, err := local.GetSyncState("last_push_at:" + filterScopeB)
+	require.NoError(t, err)
+	assert.NotEmpty(t, filteredLastPushB)
+
+	unscopedLastPush, err := local.GetSyncState("last_push_at:work")
+	require.NoError(t, err)
+	assert.Empty(t, unscopedLastPush)
 }
 
 func TestSessionAliasBackfillStateFallsBackToEffectiveScope(t *testing.T) {
