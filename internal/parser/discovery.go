@@ -868,9 +868,12 @@ func ResolveGeminiProject(
 }
 
 // IsPiSessionFile reads the first non-blank line of path and returns true
-// when the JSON type field equals "session". The scanner buffer grows up to
-// 64 MiB to match parser.maxLineSize. Leading blank lines are skipped to
-// match lineReader behavior.
+// when the JSON type field equals "session". OMP (Oh My Pi) v16.3+ prefixes
+// session files with a fixed-width rewritable {"type":"title",...} slot
+// line, so title lines before the session header are skipped, matching the
+// header scan in parsePiLikeSession. The scanner buffer grows up to 64 MiB
+// to match parser.maxLineSize. Leading blank lines are skipped to match
+// lineReader behavior.
 func IsPiSessionFile(path string) bool {
 	f, err := os.Open(path)
 	if err != nil {
@@ -884,7 +887,11 @@ func IsPiSessionFile(path string) bool {
 		if line == "" {
 			continue
 		}
-		return gjson.Get(line, "type").Str == "session"
+		typ := gjson.Get(line, "type").Str
+		if typ == "title" {
+			continue
+		}
+		return typ == "session"
 	}
 	return false
 }

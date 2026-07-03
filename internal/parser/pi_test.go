@@ -125,6 +125,76 @@ func TestPiProviderParsesSessionInfoLastNameWins(t *testing.T) {
 	assert.Equal(t, "Final name", sess.SessionName)
 }
 
+// TestPiProviderParsesOMPTitleSlot verifies that OMP's fixed-width title
+// slot line before the session header is skipped and its title becomes the
+// session name (issue #959: OMP v16.3+ session files start with the slot,
+// not the session header).
+func TestPiProviderParsesOMPTitleSlot(t *testing.T) {
+	content := strings.Join([]string{
+		`{"type":"title","v":1,"title":"Build Bloom filter research artifact","source":"auto","updatedAt":"2026-07-03T06:32:44.479Z","pad":"    "}`,
+		`{"type":"session","version":3,"id":"omp-sess","timestamp":"2026-07-03T06:30:58.508Z","cwd":"/Users/alice/code/my-project","title":"Follow PROJECT.md instructions","titleSource":"auto"}`,
+		`{"type":"model_change","id":"mc-1","parentId":null,"timestamp":"2026-07-03T06:30:58.610Z","model":"anthropic/claude-opus-4-8"}`,
+		`{"type":"thinking_level_change","id":"tl-1","parentId":"mc-1","timestamp":"2026-07-03T06:30:58.611Z","thinkingLevel":"high"}`,
+		`{"type":"message","id":"msg-1","parentId":"tl-1","timestamp":"2026-07-03T06:31:00.000Z","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}`,
+		`{"type":"message","id":"msg-2","parentId":"msg-1","timestamp":"2026-07-03T06:31:05.000Z","message":{"role":"assistant","content":[{"type":"text","text":"hi"}],"model":"claude-opus-4-8","usage":{"input":2,"output":4}}}`,
+		"",
+	}, "\n")
+
+	sess, msgs := runPiParserTest(t, content)
+
+	assert.Equal(t, "pi:omp-sess", sess.ID)
+	assert.Equal(t, "/Users/alice/code/my-project", sess.Cwd)
+	assert.Equal(t, "Build Bloom filter research artifact", sess.SessionName,
+		"title slot title should become the session name")
+	assert.Equal(t, 2, sess.MessageCount,
+		"the title slot must not count as a message")
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "hello", sess.FirstMessage)
+}
+
+// TestPiProviderParsesOMPHeaderTitleFallback verifies that when the title
+// slot is empty (session not yet titled) the header's auto-generated title
+// is used instead.
+func TestPiProviderParsesOMPHeaderTitleFallback(t *testing.T) {
+	content := strings.Join([]string{
+		`{"type":"title","v":1,"title":"","updatedAt":"2026-07-03T06:30:58.508Z","pad":"    "}`,
+		`{"type":"session","version":3,"id":"omp-sess","timestamp":"2026-07-03T06:30:58.508Z","cwd":"/Users/alice/code/my-project","title":"Header auto title","titleSource":"auto"}`,
+		`{"type":"message","id":"msg-1","parentId":null,"timestamp":"2026-07-03T06:31:00.000Z","message":{"role":"user","content":"hello"}}`,
+		"",
+	}, "\n")
+
+	sess, _ := runPiParserTest(t, content)
+
+	assert.Equal(t, "Header auto title", sess.SessionName)
+}
+
+// TestPiProviderParsesOMPTitleSlotWinsOverSessionInfo pins the title
+// precedence: the slot is rewritten in place and always holds the current
+// title, so it outranks session_info renames and the header title.
+func TestPiProviderParsesOMPTitleSlotWinsOverSessionInfo(t *testing.T) {
+	content := strings.Join([]string{
+		`{"type":"title","v":1,"title":"Slot title","source":"user","updatedAt":"2026-07-03T06:32:00.000Z","pad":" "}`,
+		`{"type":"session","version":3,"id":"omp-sess","timestamp":"2026-07-03T06:30:58.508Z","cwd":"/Users/alice/code/my-project","title":"Header title"}`,
+		`{"type":"session_info","id":"info-1","parentId":null,"timestamp":"2026-07-03T06:31:00.000Z","name":"Info name"}`,
+		`{"type":"message","id":"msg-1","parentId":"info-1","timestamp":"2026-07-03T06:31:01.000Z","message":{"role":"user","content":"hello"}}`,
+		"",
+	}, "\n")
+
+	sess, _ := runPiParserTest(t, content)
+
+	assert.Equal(t, "Slot title", sess.SessionName)
+}
+
+// TestPiProviderParsesOMPTitleSlotWithoutHeader verifies that a file with
+// only a title slot and no session header is still rejected.
+func TestPiProviderParsesOMPTitleSlotWithoutHeader(t *testing.T) {
+	path := createTestFile(t, "pi-session.jsonl",
+		`{"type":"title","v":1,"title":"orphan","updatedAt":"2026-07-03T06:30:58.508Z","pad":" "}`+"\n")
+	_, _, err := parsePiTestSession(t, path, "my_project", "local")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not a pi session")
+}
+
 // TestPiProviderParsesUserMessages verifies user message content and ordinals
 // (PRSR-02, PRSR-01).
 func TestPiProviderParsesUserMessages(t *testing.T) {

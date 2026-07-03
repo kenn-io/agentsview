@@ -39,8 +39,11 @@ func parsePiLikeSession(
 
 	// --- Parse session header (first non-whitespace line) ---
 	// Skip whitespace-only lines to stay consistent with
-	// IsPiSessionFile in discovery.go which uses TrimSpace.
-	var headerLine string
+	// IsPiSessionFile in discovery.go which uses TrimSpace. OMP (Oh My Pi)
+	// v16.3+ prefixes the header with a fixed-width rewritable
+	// {"type":"title",...} slot line holding the current session title;
+	// skip it too (matching IsPiSessionFile) and keep its title.
+	var headerLine, slotTitle string
 	for {
 		line, ok := lr.next()
 		if !ok {
@@ -48,10 +51,15 @@ func parsePiLikeSession(
 				"not a pi session: missing session header in %s", path,
 			)
 		}
-		if strings.TrimSpace(line) != "" {
-			headerLine = line
-			break
+		if strings.TrimSpace(line) == "" {
+			continue
 		}
+		if gjson.Get(line, "type").Str == "title" {
+			slotTitle = gjson.Get(line, "title").Str
+			continue
+		}
+		headerLine = line
+		break
 	}
 
 	if !gjson.Valid(headerLine) {
@@ -68,6 +76,7 @@ func parsePiLikeSession(
 
 	sessionID := gjson.Get(headerLine, "id").Str
 	cwd := gjson.Get(headerLine, "cwd").Str
+	headerTitle := gjson.Get(headerLine, "title").Str
 	headerTimestamp := parseTimestamp(gjson.Get(headerLine, "timestamp").Str)
 
 	// If project was not passed in, derive from cwd.
@@ -239,6 +248,15 @@ func parsePiLikeSession(
 
 	if err := lr.Err(); err != nil {
 		return nil, nil, fmt.Errorf("reading pi %s: %w", path, err)
+	}
+
+	// Session name precedence: the OMP title slot is rewritten in place
+	// and always holds the current title, so it outranks session_info
+	// renames; the header title is the initial auto-generated fallback.
+	if slotTitle != "" {
+		sessionName = slotTitle
+	} else if sessionName == "" {
+		sessionName = headerTitle
 	}
 
 	// V1 fallback: derive session ID from filename.

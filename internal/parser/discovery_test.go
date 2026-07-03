@@ -1435,6 +1435,29 @@ func TestIsPiSessionFile(t *testing.T) {
 			"expected false for non-session JSON")
 	})
 
+	t.Run("OMPTitleSlotBeforeSession", func(t *testing.T) {
+		// OMP (Oh My Pi) v16.3+ writes a fixed-width rewritable title slot
+		// as the first line; the session header is on the second line.
+		f, err := os.CreateTemp(t.TempDir(), "omp-*.jsonl")
+		require.NoError(t, err)
+		_, _ = f.WriteString(
+			`{"type":"title","v":1,"title":"","updatedAt":"2026-07-02T09:48:32.328Z","pad":"      "}` + "\n" +
+				`{"type":"session","version":3,"id":"abc","timestamp":"2026-07-02T09:48:32.328Z","cwd":"/repos/x"}` + "\n")
+		f.Close()
+		assert.True(t, IsPiSessionFile(f.Name()),
+			"expected true for OMP file with title slot before session header")
+	})
+
+	t.Run("OMPTitleSlotWithoutSession", func(t *testing.T) {
+		f, err := os.CreateTemp(t.TempDir(), "omp-*.jsonl")
+		require.NoError(t, err)
+		_, _ = f.WriteString(
+			`{"type":"title","v":1,"title":"orphan","updatedAt":"2026-07-02T09:48:32.328Z","pad":" "}` + "\n")
+		f.Close()
+		assert.False(t, IsPiSessionFile(f.Name()),
+			"expected false for title slot with no session header")
+	})
+
 	t.Run("EmptyFile", func(t *testing.T) {
 		f, err := os.CreateTemp(t.TempDir(), "pi-*.jsonl")
 		require.NoError(t, err)

@@ -63,6 +63,41 @@ func TestOMPProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, sourcePath, changed[0].DisplayPath)
 }
 
+// TestOMPProviderDiscoversTitleSlotSession reproduces issue #959: OMP
+// v16.3+ writes a fixed-width title slot line before the session header,
+// so discovery must look past it instead of only sniffing the first line.
+func TestOMPProviderDiscoversTitleSlotSession(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "-repos-x", "2026-07-02T09-48-32-328Z_omp-slot.jsonl")
+	writeSourceFile(t, sourcePath, strings.Join([]string{
+		`{"type":"title","v":1,"title":"Fix the widget","source":"auto","updatedAt":"2026-07-02T09:50:00.000Z","pad":"   "}`,
+		`{"type":"session","version":3,"id":"omp-slot","timestamp":"2026-07-02T09:48:32.328Z","cwd":"/repos/x"}`,
+		`{"type":"message","id":"msg-1","parentId":null,"timestamp":"2026-07-02T09:48:44.939Z","message":{"role":"user","content":[{"type":"text","text":"just response ok"}]}}`,
+		"",
+	}, "\n"))
+
+	provider, ok := NewProvider(AgentOMP, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1,
+		"OMP session with leading title slot must be discovered")
+	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: discovered[0],
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	sess := outcome.Results[0].Result.Session
+	assert.Equal(t, "omp:omp-slot", sess.ID)
+	assert.Equal(t, "Fix the widget", sess.SessionName)
+}
+
 func TestPiProviderSourceMethods(t *testing.T) {
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "encoded-cwd", "session-123.jsonl")
