@@ -205,12 +205,10 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 	if err := copySessionDataForIDs(ctx, tx, "_orphaned_ids"); err != nil {
 		return 0, fmt.Errorf("copying orphaned data: %w", err)
 	}
-	if !sourceContentSanitized(ctx, tx) {
-		if err := sanitizeCopiedSessionContent(
-			ctx, tx, "_orphaned_ids",
-		); err != nil {
-			return 0, fmt.Errorf("sanitizing orphaned data: %w", err)
-		}
+	if err := sanitizeCopiedSessionContent(
+		ctx, tx, "_orphaned_ids", sourceContentSanitized(ctx, tx),
+	); err != nil {
+		return 0, fmt.Errorf("sanitizing orphaned data: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -299,12 +297,10 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) (int, error) {
 	if err := copySessionDataForIDs(ctx, tx, "_trashed_ids"); err != nil {
 		return 0, fmt.Errorf("copying trashed data: %w", err)
 	}
-	if !sourceContentSanitized(ctx, tx) {
-		if err := sanitizeCopiedSessionContent(
-			ctx, tx, "_trashed_ids",
-		); err != nil {
-			return 0, fmt.Errorf("sanitizing trashed data: %w", err)
-		}
+	if err := sanitizeCopiedSessionContent(
+		ctx, tx, "_trashed_ids", sourceContentSanitized(ctx, tx),
+	); err != nil {
+		return 0, fmt.Errorf("sanitizing trashed data: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -802,15 +798,17 @@ func copySessionDataForIDs(
 	return nil
 }
 
-// sanitizedSourceDataVersion is the first data version at which every
-// write path into an archive sanitizes content: dataVersion 58 forced
-// a full resync that re-ingested live sessions through SanitizeUTF8
-// and ran the copy-time sanitize pass over preserved orphans, and all
-// later writers sanitize at ingest. Copying from a source at or above
-// this version skips the row-by-row sanitize pass, which otherwise
-// dominates resync time on large archives. Bump to the then-current
-// dataVersion if SanitizeUTF8 ever gains rules that must apply to
-// already-stored rows.
+// sanitizedSourceDataVersion is the first data version at which write
+// paths into an archive sanitize content: dataVersion 58 forced a full
+// resync that re-ingested live sessions through SanitizeUTF8 and ran
+// the copy-time sanitize pass over preserved orphans, and later
+// writers sanitize at ingest. Copying from a source at or above this
+// version skips most of the row-by-row sanitize pass, which otherwise
+// dominates resync time on large archives. Exception: ingest did not
+// sanitize tool_calls.input_json until after v58 shipped, so the copy
+// path cleans that column unconditionally regardless of source
+// version. Bump to the then-current dataVersion if SanitizeUTF8 ever
+// gains rules that must apply to already-stored rows.
 const sanitizedSourceDataVersion = 58
 
 // sourceContentSanitized reports whether the attached old_db is known
@@ -832,11 +830,20 @@ func sanitizeCopiedSessionContent(
 	ctx context.Context,
 	tx *sql.Tx,
 	tempIDsTable string,
+	sourceSanitized bool,
 ) error {
-	if err := sanitizeCopiedMessageContent(ctx, tx, tempIDsTable); err != nil {
+	// tool_calls.input_json was not sanitized at ingest until after
+	// dataVersion 58 shipped, so even a source at the sanitized
+	// version can carry NUL/control bytes there. Always clean it;
+	// the remaining passes cover fields every v58+ write path
+	// already sanitizes, so they run only for older sources.
+	if err := sanitizeCopiedToolCallInputs(ctx, tx, tempIDsTable); err != nil {
 		return err
 	}
-	if err := sanitizeCopiedToolCallInputs(ctx, tx, tempIDsTable); err != nil {
+	if sourceSanitized {
+		return nil
+	}
+	if err := sanitizeCopiedMessageContent(ctx, tx, tempIDsTable); err != nil {
 		return err
 	}
 	if err := sanitizeCopiedToolCallResults(ctx, tx, tempIDsTable); err != nil {

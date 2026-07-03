@@ -90,13 +90,17 @@ func (w *startupStateWriter) SetDetail(detail string) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	// state.Detail only changes when a write happens, so this dedup
+	// compares against what a reader can actually see. Storing a
+	// throttled detail in memory first would make a stable detail
+	// match itself on every later call and never persist.
 	if detail == "" || detail == w.state.Detail {
 		return
 	}
-	w.state.Detail = detail
 	if w.now().Sub(w.lastWrite) < startupDetailThrottle {
 		return
 	}
+	w.state.Detail = detail
 	w.write()
 }
 

@@ -209,6 +209,8 @@ func TestCopyOrphanedDataSanitizesCopiedContent(t *testing.T) {
 // pass is skipped and stored bytes survive the copy verbatim.
 func TestCopySkipsSanitizeForSanitizedSource(t *testing.T) {
 	const rawContent = "nul\x00byte\x01kept"
+	const rawToolInput = "{\"cmd\":\"a\x00b\x01\"}"
+	const rawToolResult = "result\x00kept\x01"
 	tests := []struct {
 		name  string
 		trash bool
@@ -241,6 +243,20 @@ func TestCopySkipsSanitizeForSanitizedSource(t *testing.T) {
 				rawContent, "sess",
 			)
 			require.NoError(t, err, "plant raw content")
+			var messageID int64
+			require.NoError(t, srcDB.getWriter().QueryRowContext(ctx,
+				`SELECT id FROM messages WHERE session_id = ?`, "sess",
+			).Scan(&messageID), "read message id")
+			_, err = srcDB.getWriter().ExecContext(ctx,
+				`INSERT INTO tool_calls (
+					message_id, session_id, tool_name, category,
+					tool_use_id, input_json, result_content_length,
+					result_content, call_index
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				messageID, "sess", "Bash", "execution", "tool-1",
+				rawToolInput, len(rawToolResult), rawToolResult, 0,
+			)
+			require.NoError(t, err, "plant raw tool call")
 			var srcVersion int
 			require.NoError(t, srcDB.getWriter().QueryRowContext(
 				ctx, "PRAGMA user_version",
@@ -268,6 +284,21 @@ func TestCopySkipsSanitizeForSanitizedSource(t *testing.T) {
 			).Scan(&got), "query copied message")
 			assert.Equal(t, rawContent, got,
 				"sanitized source must copy verbatim")
+
+			// input_json is exempt from the fast path: ingest did
+			// not sanitize it until after v58, so the copy cleans
+			// it regardless of source version. Result content is
+			// ingest-covered and copies verbatim.
+			var gotInput, gotResult string
+			require.NoError(t, dstDB.getReader().QueryRowContext(ctx,
+				`SELECT input_json, result_content
+				 FROM tool_calls WHERE session_id = ?`,
+				"sess",
+			).Scan(&gotInput, &gotResult), "query copied tool call")
+			assert.Equal(t, SanitizeUTF8(rawToolInput), gotInput,
+				"tool input must sanitize even for sanitized sources")
+			assert.Equal(t, rawToolResult, gotResult,
+				"tool result must copy verbatim for sanitized sources")
 		})
 	}
 }

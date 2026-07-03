@@ -170,7 +170,10 @@ func TestRunServeStatusReportsStartupProgress(t *testing.T) {
 
 	assert.Contains(t, out, "agentsview is starting up.")
 	assert.Contains(t, out, fmt.Sprintf("pid:     %d", os.Getpid()))
-	assert.Contains(t, out, "elapsed: 1m30s")
+	// runServeStatus computes elapsed from a live clock, so allow a
+	// few seconds of scheduler slack; exact rendering is covered by
+	// the fixed-clock serveStartingStatusLines unit test.
+	assert.Regexp(t, `elapsed: 1m3[0-5]s`, out)
 	assert.Contains(t, out,
 		"phase:   full resync: claude: 12/38 sessions (32%)")
 	assert.Contains(t, out, "log:     "+serveLogPath(dir))

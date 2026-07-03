@@ -304,6 +304,8 @@ func TestSanitizeMessageContentLengthDelta(t *testing.T) {
 }
 
 func TestSanitizeMessageStripsNULFromResultContent(t *testing.T) {
+	inputRaw := "{\"cmd\":\"ls\x00 -la\"}"
+	inputClean := "{\"cmd\":\"ls -la\"}"
 	resultRaw := "tool\x00result"
 	resultClean := "toolresult"
 	eventRaw := "event\x00content"
@@ -314,6 +316,7 @@ func TestSanitizeMessageStripsNULFromResultContent(t *testing.T) {
 			ToolUseID:           "tu1",
 			ToolName:            "Bash",
 			Category:            "Bash",
+			InputJSON:           inputRaw,
 			ResultContent:       resultRaw,
 			ResultContentLength: len(resultRaw),
 			ResultEvents: []db.ToolResultEvent{{
@@ -329,12 +332,13 @@ func TestSanitizeMessageStripsNULFromResultContent(t *testing.T) {
 
 	require.Len(t, m.ToolCalls, 1)
 	tc := m.ToolCalls[0]
+	assert.Equal(t, inputClean, tc.InputJSON)
 	assert.Equal(t, resultClean, tc.ResultContent)
 	assert.Equal(t, len(resultClean), tc.ResultContentLength)
 	require.Len(t, tc.ResultEvents, 1)
 	assert.Equal(t, eventClean, tc.ResultEvents[0].Content)
 	assert.Equal(t, len(eventClean), tc.ResultEvents[0].ContentLength)
-	assert.Equal(t, 2, stats.ControlCharsStripped)
+	assert.Equal(t, 3, stats.ControlCharsStripped)
 
 	second := sanitizeMessage(&m)
 	assert.Equal(t, validationStats{}, second, "second pass must be a no-op")

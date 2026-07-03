@@ -42,11 +42,20 @@ func TestStartupStateDetailThrottle(t *testing.T) {
 	w := newStartupStateWriter(dir, now)
 	w.SetPhase("full resync")
 
-	// Within the throttle window: recorded in memory, not persisted.
+	// Within the throttle window: not persisted.
 	w.SetDetail("1/100 sessions")
 	st := readStartupState(dir)
 	require.NotNil(t, st)
 	assert.Empty(t, st.Detail, "detail must not persist inside the throttle window")
+
+	// The same stable detail must persist once the window passes
+	// (regression: a throttled detail was stored in memory and then
+	// deduplicated against itself forever).
+	step(startupDetailThrottle)
+	w.SetDetail("1/100 sessions")
+	st = readStartupState(dir)
+	require.NotNil(t, st)
+	assert.Equal(t, "1/100 sessions", st.Detail)
 
 	// Past the window the next detail persists.
 	step(startupDetailThrottle)

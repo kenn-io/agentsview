@@ -181,7 +181,7 @@ func SanitizeMessage(m *Message) ValidationStats {
 	sanitizeStringField(&m.SourceParentUUID, &stats)
 
 	for i := range m.ToolCalls {
-		sanitizeToolCallResultContent(&m.ToolCalls[i], &stats)
+		sanitizeToolCallContent(&m.ToolCalls[i], &stats)
 	}
 
 	sanitizeStringField(&m.Model, &stats)
@@ -203,9 +203,13 @@ func SanitizeMessage(m *Message) ValidationStats {
 	return stats
 }
 
-func sanitizeToolCallResultContent(
+func sanitizeToolCallContent(
 	tc *ToolCall, stats *ValidationStats,
 ) {
+	// InputJSON is raw model output and can carry NUL/control bytes
+	// just like result content; unsanitized rows break DuckDB pushes
+	// and force the resync copy path to re-scan them (#945).
+	sanitizeStringField(&tc.InputJSON, stats)
 	sanitizeLengthTrackedString(
 		&tc.ResultContent, &tc.ResultContentLength, stats,
 	)
