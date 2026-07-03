@@ -222,7 +222,9 @@ func TestBackfillSignalsMarkerOnlyOnSuccess(t *testing.T) {
 	require.Error(t, err, "expected error from partial backfill")
 
 	// Marker check: a second BackfillSignals call must NOT
-	// short-circuit since the marker is unset.
+	// short-circuit since the marker is unset. It resumes with
+	// only the failed session -- the two that succeeded already
+	// carry the current signal version.
 	calls := 0
 	err = d.BackfillSignals(
 		ctx,
@@ -232,8 +234,8 @@ func TestBackfillSignalsMarkerOnlyOnSuccess(t *testing.T) {
 		},
 	)
 	require.NoError(t, err, "retry")
-	assert.Equal(t, 3, calls,
-		"second backfill should see all sessions (marker not set after partial run)")
+	assert.Equal(t, 1, calls,
+		"second backfill should resume with only the failed session")
 
 	// Now the marker should be set; a third call short-circuits.
 	calls = 0
@@ -247,6 +249,49 @@ func TestBackfillSignalsMarkerOnlyOnSuccess(t *testing.T) {
 	require.NoError(t, err, "third call")
 	assert.Equal(t, 0, calls,
 		"third backfill should see 0 sessions (marker set after clean run)")
+}
+
+// TestBackfillSignalsSkipsCurrentVersionsWithoutMarker guards the
+// post-resync startup cost: a fresh DB has no completion marker, but
+// its sessions already carry current signals -- synced inline during
+// the resync or copied as orphans from an already-backfilled archive.
+// Backfill must recompute only sessions below the current signal
+// version instead of walking the whole archive.
+func TestBackfillSignalsSkipsCurrentVersionsWithoutMarker(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertSession(t, d, "current-1", "p")
+	insertSession(t, d, "current-2", "p")
+	insertSession(t, d, "stale", "p")
+
+	for _, id := range []string{"current-1", "current-2"} {
+		require.NoError(t, d.UpdateSessionSignals(id, SessionSignalUpdate{
+			QualitySignals: QualitySignals{
+				Version: CurrentQualitySignalVersion,
+			},
+		}), "UpdateSessionSignals %s", id)
+	}
+	require.NoError(t, d.UpdateSessionSignals("stale", SessionSignalUpdate{
+		QualitySignals: QualitySignals{
+			Version: CurrentQualitySignalVersion - 1,
+		},
+	}), "UpdateSessionSignals stale")
+
+	var calls []string
+	require.NoError(t, d.BackfillSignals(
+		ctx,
+		func(_ context.Context, id string) error {
+			calls = append(calls, id)
+			return d.UpdateSessionSignals(id, SessionSignalUpdate{
+				QualitySignals: QualitySignals{
+					Version: CurrentQualitySignalVersion,
+				},
+			})
+		},
+	), "BackfillSignals")
+	assert.Equal(t, []string{"stale"}, calls,
+		"backfill without marker must only recompute stale sessions")
 }
 
 func TestBackfillSignalsRecomputesStaleQualityVersions(t *testing.T) {

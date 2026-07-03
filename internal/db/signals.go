@@ -158,9 +158,11 @@ func (db *DB) PendingSignalSessions(
 	return ids, rows.Err()
 }
 
-// BackfillSignals runs a one-time computation of session
-// signals for all sessions. Guarded by a stats marker so it
-// only runs once. computeFn returns nil on success or an
+// BackfillSignals recomputes signals for every session whose stored
+// quality_signal_version is below the current one. A stats marker
+// records that a run completed cleanly; once set, later calls with
+// no stale sessions return without logging. computeFn returns nil
+// on success or an
 // error to signal that the per-session recompute could not
 // be completed (e.g. the DB connection went away during a
 // concurrent resync swap). The completion marker is only set
@@ -185,13 +187,19 @@ func (db *DB) BackfillSignals(
 	}
 	db.mu.Unlock()
 
-	query := `SELECT id FROM sessions WHERE message_count > 0`
-	args := []any{}
-	if done > 0 {
-		query += ` AND quality_signal_version < ?`
-		args = append(args, CurrentQualitySignalVersion)
-	}
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	// Filter on the stored signal version even when the completion
+	// marker is unset: quality_signal_version defaults to 0, so
+	// sessions that never had signals computed always qualify, while
+	// sessions already at the current version -- synced inline during
+	// a resync, or copied as orphans from an already-backfilled
+	// archive -- are skipped. Post-resync databases lose the marker
+	// but keep current versions, so an unfiltered walk would recompute
+	// the entire archive for nothing.
+	rows, err := db.getReader().QueryContext(ctx,
+		`SELECT id FROM sessions
+		 WHERE message_count > 0 AND quality_signal_version < ?`,
+		CurrentQualitySignalVersion,
+	)
 	if err != nil {
 		return fmt.Errorf(
 			"querying backfill candidates: %w", err,
@@ -219,14 +227,10 @@ func (db *DB) BackfillSignals(
 		return nil
 	}
 
-	if done > 0 {
-		log.Printf(
-			"backfill: recomputing %d stale session signals...",
-			len(ids),
-		)
-	} else {
-		log.Println("backfill: computing session signals...")
-	}
+	log.Printf(
+		"backfill: recomputing %d stale session signals...",
+		len(ids),
+	)
 
 	var failed int
 	for i, id := range ids {
