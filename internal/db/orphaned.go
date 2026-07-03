@@ -205,8 +205,12 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 	if err := copySessionDataForIDs(ctx, tx, "_orphaned_ids"); err != nil {
 		return 0, fmt.Errorf("copying orphaned data: %w", err)
 	}
-	if err := sanitizeCopiedSessionContent(ctx, tx, "_orphaned_ids"); err != nil {
-		return 0, fmt.Errorf("sanitizing orphaned data: %w", err)
+	if !sourceContentSanitized(ctx, tx) {
+		if err := sanitizeCopiedSessionContent(
+			ctx, tx, "_orphaned_ids",
+		); err != nil {
+			return 0, fmt.Errorf("sanitizing orphaned data: %w", err)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -295,8 +299,12 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) (int, error) {
 	if err := copySessionDataForIDs(ctx, tx, "_trashed_ids"); err != nil {
 		return 0, fmt.Errorf("copying trashed data: %w", err)
 	}
-	if err := sanitizeCopiedSessionContent(ctx, tx, "_trashed_ids"); err != nil {
-		return 0, fmt.Errorf("sanitizing trashed data: %w", err)
+	if !sourceContentSanitized(ctx, tx) {
+		if err := sanitizeCopiedSessionContent(
+			ctx, tx, "_trashed_ids",
+		); err != nil {
+			return 0, fmt.Errorf("sanitizing trashed data: %w", err)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -792,6 +800,32 @@ func copySessionDataForIDs(
 		return err
 	}
 	return nil
+}
+
+// sanitizedSourceDataVersion is the first data version at which every
+// write path into an archive sanitizes content: dataVersion 58 forced
+// a full resync that re-ingested live sessions through SanitizeUTF8
+// and ran the copy-time sanitize pass over preserved orphans, and all
+// later writers sanitize at ingest. Copying from a source at or above
+// this version skips the row-by-row sanitize pass, which otherwise
+// dominates resync time on large archives. Bump to the then-current
+// dataVersion if SanitizeUTF8 ever gains rules that must apply to
+// already-stored rows.
+const sanitizedSourceDataVersion = 58
+
+// sourceContentSanitized reports whether the attached old_db is known
+// to contain only SanitizeUTF8-clean content. Read errors are logged
+// and treated as not sanitized so the copy conservatively
+// re-sanitizes.
+func sourceContentSanitized(ctx context.Context, tx *sql.Tx) bool {
+	var version int
+	if err := tx.QueryRowContext(
+		ctx, "PRAGMA old_db.user_version",
+	).Scan(&version); err != nil {
+		log.Printf("resync: reading source data version: %v", err)
+		return false
+	}
+	return version >= sanitizedSourceDataVersion
 }
 
 func sanitizeCopiedSessionContent(
