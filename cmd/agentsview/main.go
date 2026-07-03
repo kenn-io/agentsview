@@ -229,12 +229,14 @@ func runServe(cfg config.Config, opts serveOptions) {
 		go startPeriodicSync(ctx, cfg, engine, database, idleTracker, validRemotes, broadcaster)
 	}
 
-	// Seed model_pricing after any resync swap so the new DB
-	// file (which doesn't carry pricing across the swap) is
-	// populated before the dashboard starts answering
-	// requests. Synchronous fallback upsert so the first
-	// usage page load does not observe an empty table;
-	// background LiteLLM refresh follows immediately.
+	// Seed model_pricing so a fresh database (first run, or a
+	// resync whose pricing copy failed) is populated before
+	// the dashboard starts answering requests. Resyncs also
+	// copy pricing across the swap themselves, since this seed
+	// only runs once per daemon lifetime. Synchronous fallback
+	// upsert so the first usage page load does not observe an
+	// empty table; background LiteLLM refresh follows
+	// immediately.
 	seedPricing(database)
 
 	rtOpts := serveRuntimeOptions{

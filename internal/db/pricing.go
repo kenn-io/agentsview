@@ -212,6 +212,50 @@ func (db *DB) SetPricingMeta(key, value string) error {
 	return nil
 }
 
+// CopyModelPricingFrom copies every model_pricing row (including
+// sentinel metadata rows such as the fallback-version and
+// refresh-attempt markers) from the database file at sourcePath.
+// Called during a resync so the rebuilt DB keeps pricing across the
+// swap; without it every usage cost reads as zero until the next
+// daemon startup re-seeds the table.
+func (db *DB) CopyModelPricingFrom(sourcePath string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	// Pin a single connection: ATTACH is connection-scoped and
+	// database/sql's pool doesn't guarantee the same underlying
+	// connection across separate Exec calls.
+	ctx := context.Background()
+	conn, err := db.getWriter().Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquiring connection: %w", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(
+		ctx, "ATTACH DATABASE ? AS old_db", sourcePath,
+	); err != nil {
+		return fmt.Errorf("attaching source db: %w", err)
+	}
+	defer func() {
+		_, _ = conn.ExecContext(ctx, "DETACH DATABASE old_db")
+	}()
+
+	if _, err := conn.ExecContext(ctx, `
+		INSERT OR REPLACE INTO model_pricing
+			(model_pattern, input_per_mtok, output_per_mtok,
+			 cache_creation_per_mtok, cache_read_per_mtok,
+			 updated_at)
+		SELECT model_pattern, input_per_mtok, output_per_mtok,
+			cache_creation_per_mtok, cache_read_per_mtok,
+			updated_at
+		FROM old_db.model_pricing`,
+	); err != nil {
+		return fmt.Errorf("copying model pricing: %w", err)
+	}
+	return nil
+}
+
 // InsertMissingModelPricing inserts pricing rows only for model
 // patterns not already present, leaving existing rows untouched.
 // Used by the direct CLI usage path to guarantee fallback rates

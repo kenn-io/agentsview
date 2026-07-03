@@ -6063,6 +6063,40 @@ func TestResyncAllPreservesInsights(t *testing.T) {
 	assert.Equal(t, "test insight survives resync", insights[0].Content, "insight content = %q, want preserved", insights[0].Content)
 }
 
+func TestResyncAllPreservesModelPricing(t *testing.T) {
+	env := setupTestEnv(t)
+
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "Hello").
+		AddClaudeAssistant(tsEarlyS5, "Hi there!").
+		String()
+
+	env.writeClaudeSession(
+		t, "test-proj", "pricing-test.jsonl", content,
+	)
+
+	env.engine.SyncAll(context.Background(), nil)
+	assertSessionMessageCount(t, env.db, "pricing-test", 2)
+
+	require.NoError(t, env.db.UpsertModelPricing([]db.ModelPricing{
+		{
+			ModelPattern:  "claude-opus-4-8",
+			InputPerMTok:  15,
+			OutputPerMTok: 75,
+		},
+	}), "UpsertModelPricing")
+
+	stats := env.engine.ResyncAll(context.Background(), nil)
+	require.NotZero(t, stats.Synced, "expected at least 1 synced session")
+
+	pricing, err := env.db.GetModelPricing("claude-opus-4-8")
+	require.NoError(t, err, "GetModelPricing")
+	require.NotNil(t, pricing,
+		"model pricing must survive the resync swap")
+	assert.Equal(t, 15.0, pricing.InputPerMTok, "input rate")
+	assert.Equal(t, 75.0, pricing.OutputPerMTok, "output rate")
+}
+
 // TestResyncAllAbortsOnFailures verifies that ResyncAll
 // does not swap the DB when sync has more failures than
 // successes.

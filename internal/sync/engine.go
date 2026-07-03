@@ -1361,6 +1361,23 @@ func (e *Engine) resyncAllLocked(
 		time.Since(tInsights).Round(time.Millisecond),
 	)
 
+	// Copy model pricing so usage costs survive the swap. The
+	// startup seed only runs once per daemon lifetime, so a
+	// resync triggered through the sync API would otherwise
+	// leave the rebuilt DB with an empty pricing table and
+	// every usage cost reading $0.00 until the next restart.
+	// Non-fatal: a failed copy degrades cost display but does
+	// not justify aborting the resync, and the next daemon
+	// startup re-seeds pricing.
+	if err := newDB.CopyModelPricingFrom(origPath); err != nil {
+		log.Printf("resync: copy model pricing: %v", err)
+		stats.Warnings = append(stats.Warnings,
+			"model pricing copy failed; usage costs show as $0.00 "+
+				"until the next daemon restart re-seeds pricing: "+
+				err.Error(),
+		)
+	}
+
 	// Copy orphaned sessions (source files gone) from the
 	// old DB so archived data is preserved. Failure aborts
 	// the swap to avoid losing archived sessions.

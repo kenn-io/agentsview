@@ -3664,6 +3664,49 @@ func TestCopyInsightsFrom(t *testing.T) {
 	assert.Equal(t, "test insight content", insights[0].Content, "content")
 }
 
+func TestCopyModelPricingFrom(t *testing.T) {
+	dir := t.TempDir()
+
+	// Source DB with pricing rows and a sentinel meta row.
+	srcPath := filepath.Join(dir, "src.db")
+	srcDB := testDBAtPath(t, srcPath, "src")
+	require.NoError(t, srcDB.UpsertModelPricing([]ModelPricing{
+		{
+			ModelPattern:         "claude-opus-4-8",
+			InputPerMTok:         15,
+			OutputPerMTok:        75,
+			CacheCreationPerMTok: 18.75,
+			CacheReadPerMTok:     1.5,
+		},
+	}), "UpsertModelPricing")
+	require.NoError(t,
+		srcDB.SetPricingMeta("_fallback_version", "v42"),
+		"SetPricingMeta")
+	srcDB.Close()
+
+	// Destination DB with a stale row for the same pattern.
+	dstPath := filepath.Join(dir, "dst.db")
+	dstDB := testDBAtPath(t, dstPath, "dst")
+	defer dstDB.Close()
+	require.NoError(t, dstDB.UpsertModelPricing([]ModelPricing{
+		{ModelPattern: "claude-opus-4-8", InputPerMTok: 1},
+	}), "UpsertModelPricing stale row")
+
+	require.NoError(t, dstDB.CopyModelPricingFrom(srcPath),
+		"CopyModelPricingFrom")
+
+	copied, err := dstDB.GetModelPricing("claude-opus-4-8")
+	require.NoError(t, err, "GetModelPricing")
+	require.NotNil(t, copied, "copied pattern present")
+	assert.Equal(t, 15.0, copied.InputPerMTok,
+		"source row replaces stale destination row")
+	assert.Equal(t, 75.0, copied.OutputPerMTok, "output rate")
+
+	meta, err := dstDB.GetPricingMeta("_fallback_version")
+	require.NoError(t, err, "GetPricingMeta")
+	assert.Equal(t, "v42", meta, "sentinel meta row copied")
+}
+
 func TestCopySessionMetadataFrom_PreservesCursorUsageEvents(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
