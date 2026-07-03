@@ -2,45 +2,60 @@
 // vs candidate) and exits non-zero when a benchmark regresses beyond
 // configured thresholds.
 //
+// Parsing and statistics come from golang.org/x/perf — benchfmt for
+// the benchmark format and benchmath (the engine behind benchstat)
+// for summaries and significance tests. benchgate only adds the
+// policy benchstat deliberately does not provide: thresholds, floors,
+// and a failing exit code for CI.
+//
 // It is the comparison step of the bench-gate CI workflow: allocs/op
 // and B/op are deterministic for the same code on the same machine,
-// so they get tight thresholds that catch O(archive)-instead-of-
-// O(delta) work regressions; ns/op is noisy on shared runners, so it
-// gets a loose threshold that only catches algorithmic blowups.
-// Small baselines below the per-metric floors are skipped entirely,
-// since a few extra allocations on a tiny benchmark is noise, not a
+// so they get tight ratio thresholds that catch O(archive)-instead-
+// of-O(delta) work regressions regardless of sample count; time
+// (sec/op) is noisy on shared runners, so it gets a loose threshold
+// and additionally must be a statistically significant difference
+// (Mann-Whitney U, as in benchstat) before it fails the gate.
+// Baselines below a per-metric floor are skipped entirely, since a
+// few extra allocations on a tiny benchmark is noise, not a
 // regression.
 //
-// Multiple runs of the same benchmark (-count=N) are aggregated by
-// taking the minimum per metric, the standard way to strip scheduler
-// and GC noise. Benchmarks present on only one side are reported but
-// never fail the gate, so adding or removing benchmarks in a PR does
-// not wedge it.
+// Multiple runs of the same benchmark (-count=N) are kept as a
+// sample and summarized by their median. Benchmarks present on only
+// one side are reported but never fail the gate, so adding or
+// removing benchmarks in a PR does not wedge it.
 package main
 
 import (
-	"bufio"
 	"flag"
 	"fmt"
-	"io"
+	"math"
 	"os"
 	"sort"
-	"strconv"
 	"strings"
+
+	"golang.org/x/perf/benchfmt"
+	"golang.org/x/perf/benchmath"
+	"golang.org/x/perf/benchunit"
 )
 
-// benchResult maps a metric unit (ns/op, B/op, allocs/op, or any
-// custom -benchmem/ReportMetric unit) to the best (lowest) value
-// observed across runs.
-type benchResult map[string]float64
+// benchSamples collects every measured value per benchmark and unit:
+// benchmark key -> tidied unit (sec/op, B/op, allocs/op, ...) ->
+// samples across -count runs. The key includes the package path when
+// the output carries one, so same-named benchmarks in different
+// packages never merge.
+type benchSamples map[string]map[string][]float64
 
-// gate is one metric's regression rule: fail when
-// candidate/baseline exceeds maxRatio, unless the baseline is below
-// floor (too small to compare meaningfully).
+// gate is one metric's regression rule: fail when the candidate
+// median exceeds the baseline median by more than maxRatio, unless
+// the baseline is below floor (too small to compare meaningfully).
+// With needSignificance set, the samples must also differ
+// significantly under the benchmath comparison test — the benchstat
+// noise guard, used for wall-clock time.
 type gate struct {
-	unit     string
-	maxRatio float64
-	floor    float64
+	unit             string
+	maxRatio         float64
+	floor            float64
+	needSignificance bool
 }
 
 // violation describes one gate failure.
@@ -53,60 +68,51 @@ type violation struct {
 }
 
 func (v violation) String() string {
+	cls := benchunit.ClassOf(v.unit)
 	return fmt.Sprintf(
-		"%s: %s regressed %.2fx (%.0f -> %.0f, limit %.2fx)",
-		v.name, v.unit, v.ratio, v.old, v.new, v.maxRatio,
+		"%s: %s regressed %.2fx (%s -> %s, limit %.2fx)",
+		v.name, v.unit, v.ratio,
+		benchunit.Scale(v.old, cls), benchunit.Scale(v.new, cls),
+		v.maxRatio,
 	)
 }
 
-// parseBench extracts benchmark results from `go test -bench`
-// output. Lines that do not look like benchmark result lines
-// (package headers, logs, PASS/ok trailers) are ignored. Repeated
-// names keep the minimum value per metric.
-func parseBench(r io.Reader) (map[string]benchResult, error) {
-	out := make(map[string]benchResult)
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
-	for scanner.Scan() {
-		fields := strings.Fields(scanner.Text())
-		if len(fields) < 4 ||
-			!strings.HasPrefix(fields[0], "Benchmark") {
+// parseBench extracts benchmark samples from `go test -bench` output
+// using the official format parser. Non-result records (unit
+// metadata, syntax errors from stray output) are skipped. Values
+// arrive tidied by benchfmt: ns/op becomes sec/op, MB/s becomes B/s.
+func parseBench(reader *benchfmt.Reader) (benchSamples, error) {
+	out := make(benchSamples)
+	for reader.Scan() {
+		res, ok := reader.Result().(*benchfmt.Result)
+		if !ok {
 			continue
 		}
-		// The second column is the iteration count; anything else
-		// (e.g. a log line that happens to start with "Benchmark")
-		// is not a result line.
-		if _, err := strconv.Atoi(fields[1]); err != nil {
-			continue
+		name := string(res.Name.Full())
+		if pkg := res.GetConfig("pkg"); pkg != "" {
+			name = pkg + "." + name
 		}
-		name := fields[0]
-		res := out[name]
-		if res == nil {
-			res = make(benchResult)
-			out[name] = res
+		units := out[name]
+		if units == nil {
+			units = make(map[string][]float64)
+			out[name] = units
 		}
-		for i := 2; i+1 < len(fields); i += 2 {
-			value, err := strconv.ParseFloat(fields[i], 64)
-			if err != nil {
-				break
-			}
-			unit := fields[i+1]
-			if prev, ok := res[unit]; !ok || value < prev {
-				res[unit] = value
-			}
+		for _, v := range res.Values {
+			units[v.Unit] = append(units[v.Unit], v.Value)
 		}
 	}
-	if err := scanner.Err(); err != nil {
+	if err := reader.Err(); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
 // compare applies the gates to every benchmark present in both maps
-// and returns the violations plus a human-readable report.
+// and returns a human-readable report plus the violations.
 func compare(
-	oldRes, newRes map[string]benchResult, gates []gate,
+	oldRes, newRes benchSamples, gates []gate,
 ) (report []string, violations []violation) {
+	thresholds := benchmath.DefaultThresholds
 	names := make([]string, 0, len(newRes))
 	for name := range newRes {
 		names = append(names, name)
@@ -114,7 +120,7 @@ func compare(
 	sort.Strings(names)
 
 	for _, name := range names {
-		oldBench, ok := oldRes[name]
+		oldUnits, ok := oldRes[name]
 		if !ok {
 			report = append(report, fmt.Sprintf(
 				"%s: new benchmark, no baseline to compare", name,
@@ -123,27 +129,51 @@ func compare(
 		}
 		var parts []string
 		for _, g := range gates {
-			oldV, okOld := oldBench[g.unit]
-			newV, okNew := newRes[name][g.unit]
+			oldVals, okOld := oldUnits[g.unit]
+			newVals, okNew := newRes[name][g.unit]
 			if !okOld || !okNew {
 				continue
 			}
-			if oldV < g.floor {
+			oldSample := benchmath.NewSample(oldVals, &thresholds)
+			newSample := benchmath.NewSample(newVals, &thresholds)
+			oldCenter := benchmath.AssumeNothing.
+				Summary(oldSample, 0.95).Center
+			newCenter := benchmath.AssumeNothing.
+				Summary(newSample, 0.95).Center
+			cls := benchunit.ClassOf(g.unit)
+
+			if oldCenter <= 0 || oldCenter < g.floor {
 				parts = append(parts, fmt.Sprintf(
-					"%s %.0f -> %.0f (below %.0f floor, not gated)",
-					g.unit, oldV, newV, g.floor,
+					"%s %s -> %s (below %s floor, not gated)",
+					g.unit,
+					benchunit.Scale(oldCenter, cls),
+					benchunit.Scale(newCenter, cls),
+					benchunit.Scale(g.floor, cls),
 				))
 				continue
 			}
-			ratio := newV / oldV
-			parts = append(parts, fmt.Sprintf(
-				"%s %.0f -> %.0f (%.2fx, limit %.2fx)",
-				g.unit, oldV, newV, ratio, g.maxRatio,
-			))
-			if ratio > g.maxRatio {
+
+			ratio := newCenter / oldCenter
+			cmp := benchmath.AssumeNothing.Compare(oldSample, newSample)
+			significant := cmp.P < cmp.Alpha
+			detail := fmt.Sprintf(
+				"%s %s -> %s (%.2fx, limit %.2fx, %s)",
+				g.unit,
+				benchunit.Scale(oldCenter, cls),
+				benchunit.Scale(newCenter, cls),
+				ratio, g.maxRatio, cmp,
+			)
+			if g.needSignificance && !significant {
+				detail += " [not significant, not gated]"
+			}
+			parts = append(parts, detail)
+
+			if ratio > g.maxRatio &&
+				(!g.needSignificance || significant) &&
+				!math.IsNaN(ratio) {
 				violations = append(violations, violation{
 					name: name, unit: g.unit,
-					old: oldV, new: newV,
+					old: oldCenter, new: newCenter,
 					ratio: ratio, maxRatio: g.maxRatio,
 				})
 			}
@@ -169,13 +199,13 @@ func compare(
 	return report, violations
 }
 
-func parseFile(path string) (map[string]benchResult, error) {
+func parseFile(path string) (benchSamples, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	return parseBench(f)
+	return parseBench(benchfmt.NewReader(f, path))
 }
 
 func main() {
@@ -187,19 +217,20 @@ func main() {
 	)
 	maxTimeRatio := flag.Float64(
 		"max-time-ratio", 2.0,
-		"fail when ns/op exceeds baseline by this factor",
+		"fail when median sec/op exceeds baseline by this factor "+
+			"(only when the difference is statistically significant)",
 	)
 	maxAllocRatio := flag.Float64(
 		"max-alloc-ratio", 1.25,
-		"fail when allocs/op exceeds baseline by this factor",
+		"fail when median allocs/op exceeds baseline by this factor",
 	)
 	maxBytesRatio := flag.Float64(
 		"max-bytes-ratio", 1.35,
-		"fail when B/op exceeds baseline by this factor",
+		"fail when median B/op exceeds baseline by this factor",
 	)
 	timeFloorNs := flag.Float64(
 		"time-floor-ns", 100_000,
-		"skip the ns/op gate when the baseline is below this",
+		"skip the time gate when the baseline is below this many ns",
 	)
 	allocFloor := flag.Float64(
 		"alloc-floor", 64,
@@ -231,7 +262,12 @@ func main() {
 	gates := []gate{
 		{unit: "allocs/op", maxRatio: *maxAllocRatio, floor: *allocFloor},
 		{unit: "B/op", maxRatio: *maxBytesRatio, floor: *bytesFloor},
-		{unit: "ns/op", maxRatio: *maxTimeRatio, floor: *timeFloorNs},
+		{
+			unit:             "sec/op",
+			maxRatio:         *maxTimeRatio,
+			floor:            *timeFloorNs / 1e9,
+			needSignificance: true,
+		},
 	}
 	report, violations := compare(oldRes, newRes, gates)
 	for _, line := range report {

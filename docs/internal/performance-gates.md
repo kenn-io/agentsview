@@ -60,13 +60,18 @@ its merge base on the same runner, then compares with `cmd/benchgate`:
 - `BenchmarkGetDailyUsage` — usage aggregation over 100k message rows.
 - `BenchmarkScan` / `BenchmarkScanDefinite` — secret-scan regex throughput.
 
-`benchgate` gates hard on `allocs/op` (limit 1.25x) and `B/op` (1.35x), which
-are deterministic for the same code on the same machine — an
-O(archive)-instead-of-O(delta) regression always blows them up. `ns/op` gets a
-loose 2.0x limit that catches algorithmic blowups while tolerating runner noise
-(each metric uses the minimum across `-count` runs). Baselines below a
-per-metric floor are not gated. Benchmarks that exist on only one side are
-reported but never fail, so adding or removing benchmarks cannot wedge a PR.
+`benchgate` builds on `golang.org/x/perf`: `benchfmt` parses the output and
+`benchmath` — the statistics engine behind `benchstat` — summarizes each
+benchmark's `-count` runs by their median and tests significance (Mann-Whitney
+U). benchgate adds only the policy benchstat does not provide: thresholds,
+floors, and a failing exit code. It gates hard on `allocs/op` (limit 1.25x) and
+`B/op` (1.35x), which are deterministic for the same code on the same machine —
+an O(archive)-instead-of-O(delta) regression always blows them up. Time
+(`sec/op`) gets a loose 2.0x limit and must additionally be a statistically
+significant difference before it fails, so runner noise cannot flake a PR but
+algorithmic blowups still do. Baselines below a per-metric floor are not gated.
+Benchmarks that exist on only one side are reported but never fail, so adding or
+removing benchmarks cannot wedge a PR.
 
 Run locally:
 
