@@ -265,7 +265,7 @@
     display: flex;
     justify-content: center;
     padding-top: 20vh;
-    z-index: 100;
+    z-index: var(--z-overlay);
   }
 
   .palette {

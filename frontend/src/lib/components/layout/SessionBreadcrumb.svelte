@@ -993,7 +993,7 @@
     border-radius: 8px;
     padding: 4px;
     min-width: 200px;
-    z-index: 100;
+    z-index: var(--z-popover);
     box-shadow: var(--shadow-lg);
   }
 
@@ -1210,7 +1210,7 @@
     position: absolute;
     top: 100%;
     right: 0;
-    z-index: 9999;
+    z-index: var(--z-popover);
     margin-top: 4px;
     background: var(--bg-surface);
     border: 1px solid var(--border-default);

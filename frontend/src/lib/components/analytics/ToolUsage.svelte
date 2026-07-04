@@ -346,7 +346,7 @@
     border-radius: var(--radius-sm);
     white-space: nowrap;
     pointer-events: none;
-    z-index: 100;
+    z-index: var(--z-tooltip);
   }
 
   .empty {

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { SearchInput } from "@kenn-io/kit-ui";
   import { PencilIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
   import { RecentEditsService } from "../../api/generated/index";
@@ -156,13 +157,14 @@
       value={sessions.filters.project}
       onselect={(v) => sessions.setProjectFilter(v)}
     />
-    <input
+    <SearchInput
       class="re-search"
-      type="search"
       bind:value={search}
       oninput={scheduleSearch}
       placeholder={m.recent_edits_search_placeholder()}
-      aria-label={m.recent_edits_search_placeholder()}
+      ariaLabel={m.recent_edits_search_placeholder()}
+      clearLabel={m.recent_edits_clear_search()}
+      block
     />
   </div>
 
@@ -274,25 +276,9 @@
     margin-bottom: 20px;
   }
 
-  .re-search {
+  .re-toolbar :global(.re-search) {
     flex: 1;
     min-width: 0;
-    font-size: 13px;
-    color: var(--text-primary);
-    background: var(--bg-surface);
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm);
-    padding: 6px 12px;
-    transition: border-color 0.12s;
-  }
-
-  .re-search::placeholder {
-    color: var(--text-muted);
-  }
-
-  .re-search:focus {
-    outline: none;
-    border-color: var(--accent-blue);
   }
 
   .re-loading {

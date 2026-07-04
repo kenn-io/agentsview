@@ -795,6 +795,7 @@
   "recent_edits_load_more": "Load more",
   "recent_edits_refresh": "Refresh",
   "recent_edits_search_placeholder": "Filter by file path",
+  "recent_edits_clear_search": "Clear file-path search",
   "activity_insight_unavailable_read_only": "Unavailable in read-only remote mode",
   "activity_insight_waiting_server": "Waiting for server version",
   "activity_insight_generate_insight": "Generate insight",

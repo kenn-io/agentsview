@@ -4,7 +4,7 @@ import {
   isAbortError,
   withAbort,
 } from "../api/runtime.js";
-import { debounce } from "../utils/debounce.js";
+import { debounce } from "@kenn-io/kit-ui";
 import type {
   SearchResponse,
   SearchResult,

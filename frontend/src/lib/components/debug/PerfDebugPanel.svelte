@@ -103,7 +103,7 @@
     position: fixed;
     right: 12px;
     bottom: calc(var(--status-bar-height, 24px) + 12px);
-    z-index: 10020;
+    z-index: var(--z-overlay);
     width: min(720px, calc(100vw - 24px));
     max-height: min(520px, calc(100vh - 96px));
     display: flex;

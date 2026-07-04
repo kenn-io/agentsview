@@ -7,6 +7,7 @@ import {
   observeWindowOffset,
   observeWindowRect,
   windowScroll,
+  // kit-ui-check-ignore: local wrapper preserves TanStack scroll reconciliation and measurement-cache semantics used by MessageList; replacing it with kit-ui VirtualList is a separate migration.
 } from "@tanstack/virtual-core";
 
 type PartialKeys<T, K extends keyof T> = Omit<T, K> &

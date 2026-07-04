@@ -883,7 +883,7 @@
     width: 190px;
     /* card chrome comes from the shared kit-popover-card class */
     padding: 6px 0;
-    z-index: 100;
+    z-index: var(--z-popover);
     animation: dropdown-in 0.12s ease-out;
     transform-origin: top right;
   }
@@ -1067,7 +1067,7 @@
     width: 220px;
     /* card chrome comes from the shared kit-popover-card class */
     padding: 4px 0;
-    z-index: 100;
+    z-index: var(--z-popover);
     animation: dropdown-in 0.12s ease-out;
     transform-origin: top right;
   }
@@ -1102,7 +1102,7 @@
     width: 180px;
     /* card chrome comes from the shared kit-popover-card class */
     padding: 4px 0;
-    z-index: 100;
+    z-index: var(--z-popover);
     animation: dropdown-in 0.12s ease-out;
     transform-origin: top right;
   }

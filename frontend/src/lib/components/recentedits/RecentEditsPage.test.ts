@@ -202,8 +202,9 @@ describe("RecentEditsPage", () => {
       await tick();
       await tick(); // initial load (call #1, no search)
 
-      const searchInput =
-        document.querySelector<HTMLInputElement>(".re-search");
+      const searchInput = document.querySelector<HTMLInputElement>(
+        'input[aria-label="Filter by file path"]',
+      );
       expect(searchInput).not.toBeNull();
       searchInput!.value = "config";
       searchInput!.dispatchEvent(new Event("input", { bubbles: true }));

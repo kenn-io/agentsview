@@ -759,7 +759,7 @@
 
   :global(.context-menu) {
     position: fixed;
-    z-index: 9999;
+    z-index: var(--z-popover);
     background: var(--bg-surface);
     border: 1px solid var(--border-default);
     border-radius: 6px;

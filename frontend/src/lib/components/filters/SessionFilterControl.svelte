@@ -447,7 +447,7 @@
     scrollbar-gutter: stable;
     /* card chrome comes from the shared kit-popover-card class */
     padding: 8px;
-    z-index: 100;
+    z-index: var(--z-popover);
     text-transform: none;
     letter-spacing: normal;
     animation: dropdown-in 0.12s ease-out;

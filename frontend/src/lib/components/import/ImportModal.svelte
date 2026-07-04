@@ -394,7 +394,7 @@
         type="file"
         accept={accepted}
         onchange={handleFileChange}
-        class="sr-only"
+        class="kit-sr-only"
       />
 
       {#if error}

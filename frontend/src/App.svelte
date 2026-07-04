@@ -545,6 +545,7 @@
 {/if}
 
 {#if sessions.recentlyDeleted.length > 0}
+  <!-- kit-ui-check-ignore: undo toast carries an inline restore action; kit-ui FlashBanner only supports text+dismiss today, so replacing this would change the delete/undo workflow. -->
   <div class="undo-toast">
     <span>{m.app_undo_session_deleted()}</span>
     <button
@@ -576,7 +577,7 @@
     overflow-y: auto;
   }
 
-
+  /* kit-ui-check-ignore: undo toast carries an inline restore action; kit-ui FlashBanner only supports text+dismiss today, so replacing this would change the delete/undo workflow. */
   .undo-toast {
     position: fixed;
     bottom: 40px;
@@ -590,7 +591,7 @@
     border-radius: 8px;
     padding: 10px 18px;
     box-shadow: 0 6px 24px var(--overlay-bg);
-    z-index: 10000;
+    z-index: var(--z-overlay);
     font-size: 13px;
     color: var(--text-primary);
     animation: slide-up 0.2s ease-out;

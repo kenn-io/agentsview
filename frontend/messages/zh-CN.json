@@ -770,6 +770,7 @@
   "recent_edits_load_more": "加载更多",
   "recent_edits_refresh": "刷新",
   "recent_edits_search_placeholder": "按文件路径筛选",
+  "recent_edits_clear_search": "清除文件路径搜索",
   "activity_insight_unavailable_read_only": "只读远程模式下不可用",
   "activity_insight_waiting_server": "正在等待服务器版本",
   "activity_insight_generate_insight": "生成洞察",
