@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -175,7 +176,13 @@ func NormalizeStoredRootPath(raw string) (normalized string, ok bool) {
 		return "", false
 	}
 	if looksWindowsDrivePath(raw) {
-		return normalizeWindowsDriveRootPath(raw), true
+		normalized := normalizeWindowsDriveRootPath(raw)
+		if runtime.GOOS == "windows" {
+			if resolved, ok := resolveStoredRootPath(normalized); ok {
+				return resolved, true
+			}
+		}
+		return normalized, true
 	}
 	if looksRemotePrefixed(raw) {
 		return "", false

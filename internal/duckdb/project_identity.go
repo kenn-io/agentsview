@@ -3,6 +3,7 @@ package duckdb
 import (
 	"context"
 	"fmt"
+	"path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -163,7 +164,13 @@ func (s *Store) legacyProjectIdentityCandidates(
 
 func duckLegacyProjectIdentityRoots(cwd, filePath string) []string {
 	var roots []string
-	for _, candidate := range []string{cwd, filepath.Dir(filePath)} {
+	candidates := []string{cwd}
+	if filePath = strings.TrimSpace(filePath); filePath != "" {
+		candidates = append(candidates, filepath.Dir(filePath))
+		slashPath := strings.ReplaceAll(filePath, "\\", "/")
+		candidates = append(candidates, path.Dir(slashPath))
+	}
+	for _, candidate := range candidates {
 		candidate = strings.TrimSpace(candidate)
 		if candidate == "" || candidate == "." {
 			continue
