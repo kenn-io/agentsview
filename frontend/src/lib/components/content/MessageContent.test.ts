@@ -9,6 +9,7 @@ import MessageContent from "./MessageContent.svelte";
 const copyToClipboardMock = vi.hoisted(() =>
   vi.fn().mockResolvedValue(true),
 );
+const renderMermaidMock = vi.hoisted(() => vi.fn());
 
 const forkSessionMock = vi.hoisted(() => vi.fn());
 const sessionsState = vi.hoisted(() => ({
@@ -78,6 +79,10 @@ vi.mock("../../utils/highlight.js", async () => {
 
 vi.mock("../../utils/clipboard.js", () => ({
   copyToClipboard: copyToClipboardMock,
+}));
+
+vi.mock("../../utils/mermaid.js", () => ({
+  renderMermaid: renderMermaidMock,
 }));
 
 type MessageWithTokenFlags = Message & {
@@ -553,6 +558,41 @@ describe("MessageContent", () => {
     await tick();
 
     expect(document.querySelector("button.fork-btn")).toBeNull();
+
+    unmount(component);
+  });
+
+  it("routes mermaid fences through MermaidBlock", async () => {
+    renderMermaidMock.mockResolvedValueOnce({
+      ok: true,
+      svg: '<svg data-testid="mermaid-diagram"></svg>',
+    });
+
+    const content = [
+      "Mermaid diagram:",
+      "",
+      "```mermaid",
+      "graph TD",
+      "A-->B",
+      "```",
+    ].join("\n");
+
+    const component = mount(MessageContent, {
+      target: document.body,
+      props: {
+        message: makeMessage({
+          content,
+          content_length: content.length,
+        }),
+      },
+    });
+
+    await tick();
+    await tick();
+
+    expect(document.body.textContent).toContain("Mermaid diagram:");
+    expect(document.querySelector('[data-testid="mermaid-diagram"]')).not.toBeNull();
+    expect(renderMermaidMock).toHaveBeenCalledWith("graph TD\nA-->B\n");
 
     unmount(component);
   });
