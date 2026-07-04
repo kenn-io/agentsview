@@ -860,7 +860,7 @@ func TestPostgresUsageCostsMessageReasoningTokens(t *testing.T) {
 			'pg-message-reasoning', 0, 'assistant', 'done',
 			'2026-05-14T10:30:00Z'::timestamptz, 4,
 			'gpt-5.4',
-			'{"input_tokens":1000,"output_tokens":0,"reasoning_tokens":500}'
+			'{"input_tokens":1000,"output_tokens":0,"reasoning_tokens":3000000000}'
 		)`)
 	require.NoError(t, err, "insert message")
 
@@ -873,13 +873,13 @@ func TestPostgresUsageCostsMessageReasoningTokens(t *testing.T) {
 	require.Len(t, daily.Daily, 1, "daily entries")
 	assert.Equal(t, 1000, daily.Totals.InputTokens)
 	assert.Zero(t, daily.Totals.OutputTokens)
-	assert.InDelta(t, 0.002, daily.Totals.TotalCost, 1e-12)
+	assert.InDelta(t, 4.001, daily.Totals.TotalCost, 1e-12)
 
 	usage, err := store.GetSessionUsage(ctx, "pg-message-reasoning")
 	require.NoError(t, err, "GetSessionUsage")
 	require.NotNil(t, usage)
 	assert.True(t, usage.HasCost)
-	assert.InDelta(t, 0.002, usage.CostUSD, 1e-12)
+	assert.InDelta(t, 4.001, usage.CostUSD, 1e-12)
 }
 
 func TestStoreGetDailyUsageSkipsCursorUsageForTerminationFilter(t *testing.T) {
