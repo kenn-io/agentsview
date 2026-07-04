@@ -286,19 +286,13 @@ func (s *Sync) Push(
 		if err != nil {
 			return result, err
 		}
-		sessions = filterUnchangedSessions(sessions, priorFingerprints, sessionFingerprints)
-		result.Diagnostics.SkippedUnchangedSessions = skippedPushSessions(
-			candidateSessions, sessions,
-		)
 	}
-	sort.Slice(sessions, func(i, j int) bool {
-		return sessions[i].ID < sessions[j].ID
-	})
 
 	var staleIDs []string
+	var mirrorSessionIDs map[string]bool
 	err = s.withDuckTx(ctx, "delete hard-deleted sessions", func(tx *sql.Tx) error {
 		var txErr error
-		staleIDs, txErr = s.deleteHardDeletedMirrorSessions(
+		staleIDs, mirrorSessionIDs, txErr = s.deleteHardDeletedMirrorSessions(
 			ctx, tx, allLocalSessions, s.machine, s.projects, s.excludeProjects,
 		)
 		return txErr
@@ -310,6 +304,16 @@ func (s *Sync) Push(
 		delete(priorFingerprints, id)
 	}
 	result.Diagnostics.DeletedStaleSessions = len(staleIDs)
+	if !full {
+		pruneMissingMirrorFingerprints(priorFingerprints, mirrorSessionIDs)
+		sessions = filterUnchangedSessions(sessions, priorFingerprints, sessionFingerprints)
+		result.Diagnostics.SkippedUnchangedSessions = skippedPushSessions(
+			candidateSessions, sessions,
+		)
+	}
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].ID < sessions[j].ID
+	})
 
 	pushed := make([]db.Session, 0, len(sessions))
 	for start := 0; start < len(sessions); start += duckSessionPushBatchSize {
@@ -875,6 +879,17 @@ func filterUnchangedSessions(
 		out = append(out, sess)
 	}
 	return out
+}
+
+func pruneMissingMirrorFingerprints(
+	priorFingerprints map[string]string,
+	mirrorSessionIDs map[string]bool,
+) {
+	for id := range priorFingerprints {
+		if !mirrorSessionIDs[id] {
+			delete(priorFingerprints, id)
+		}
+	}
 }
 
 func previousLocalSyncTimestamp(value string) (string, error) {

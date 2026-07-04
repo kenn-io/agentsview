@@ -352,6 +352,46 @@ func TestSyncCheckpointFailureDoesNotAdvanceWatermark(t *testing.T) {
 	assert.Empty(t, watermark)
 }
 
+func TestSyncCheckpointFailureAfterHardDeleteDoesNotKeepStaleFingerprint(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	fixture := seedDuckDBSyncFixture(t, local)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+
+	first, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, first.SessionsPushed)
+	firstWatermark, err := local.GetSyncState(lastPushStateKey)
+	require.NoError(t, err)
+	fingerprints, err := readSyncFingerprintsWithKey(local, lastPushBoundaryStateKey)
+	require.NoError(t, err)
+	require.Contains(t, fingerprints, fixture.betaID)
+
+	require.NoError(t, local.SoftDeleteSession(fixture.betaID))
+	deleted, err := local.DeleteSessionIfTrashed(fixture.betaID)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, deleted)
+	policy := &checkpointSpy{err: errors.New("checkpoint failed")}
+	syncer.maintenance = policy
+
+	_, err = syncer.Push(ctx, false, nil)
+	require.ErrorContains(t, err, "checkpoint failed")
+	assert.Equal(t, 1, policy.calls)
+	assertDuckDBCountWhere(t, syncer.DB(), "sessions", "id = ?", fixture.betaID, 0)
+	watermarkAfterFailure, err := local.GetSyncState(lastPushStateKey)
+	require.NoError(t, err)
+	assert.Equal(t, firstWatermark, watermarkAfterFailure)
+
+	policy.err = nil
+	retry, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Zero(t, retry.SessionsPushed)
+	assert.Equal(t, 1, policy.calls, "retry should only repair local sync state")
+	fingerprints, err = readSyncFingerprintsWithKey(local, lastPushBoundaryStateKey)
+	require.NoError(t, err)
+	assert.NotContains(t, fingerprints, fixture.betaID)
+}
+
 func TestSyncCheckpointPolicySkipsRemoteQuackTargets(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)

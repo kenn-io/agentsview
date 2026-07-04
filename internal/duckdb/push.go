@@ -316,42 +316,45 @@ func (s *Sync) replaceSessionDependents(
 func (s *Sync) deleteHardDeletedMirrorSessions(
 	ctx context.Context, tx *sql.Tx, localSessions []db.Session,
 	machine string, projects, excludeProjects []string,
-) ([]string, error) {
+) ([]string, map[string]bool, error) {
 	localIDs := make(map[string]bool, len(localSessions))
 	for _, sess := range localSessions {
 		localIDs[sess.ID] = true
 	}
+	mirrorIDs := make(map[string]bool)
 	rows, err := tx.QueryContext(ctx,
 		`SELECT id, project FROM sessions WHERE machine = ?`,
 		machine,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("listing duckdb sessions for deletion reconciliation: %w", err)
+		return nil, nil, fmt.Errorf("listing duckdb sessions for deletion reconciliation: %w", err)
 	}
 	defer rows.Close()
 	var stale []string
 	for rows.Next() {
 		var id, project string
 		if err := rows.Scan(&id, &project); err != nil {
-			return nil, fmt.Errorf("scanning duckdb session for deletion reconciliation: %w", err)
+			return nil, nil, fmt.Errorf("scanning duckdb session for deletion reconciliation: %w", err)
 		}
+		mirrorIDs[id] = true
 		if !projectInSyncScope(project, projects, excludeProjects) {
 			continue
 		}
 		if !localIDs[id] {
 			stale = append(stale, id)
+			delete(mirrorIDs, id)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	sort.Strings(stale)
 	for _, id := range stale {
 		if err := s.deleteMirrorSession(ctx, tx, id); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	return stale, nil
+	return stale, mirrorIDs, nil
 }
 
 func (s *Sync) deleteMirrorSession(
