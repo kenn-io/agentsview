@@ -18,6 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/pricing"
 )
 
 type exportSessionsDocument struct {
@@ -503,6 +504,81 @@ func firstExportSessionsCursor(t *testing.T) string {
 	doc := decodeExportSessionsDocument(t, stdout)
 	require.NotEmpty(t, doc.Cursor.Next)
 	return doc.Cursor.Next
+}
+
+func TestExportSessionsFallbackPricingOnUnseededArchive(t *testing.T) {
+	dataDir := testDataDir(t)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, database.SetDatabaseIDForTest(
+		context.Background(), "fallback-pricing-test-db"))
+
+	model := exactFallbackPricedModel(t)
+	insertExportSessionsTestSession(t, database, db.Session{
+		ID:               "fallback-priced",
+		Project:          "alpha",
+		Machine:          "local",
+		Agent:            "claude",
+		StartedAt:        dbtest.Ptr("2026-06-01T10:00:00Z"),
+		EndedAt:          dbtest.Ptr("2026-06-01T10:10:00Z"),
+		MessageCount:     3,
+		UserMessageCount: 2,
+	})
+	require.NoError(t, database.InsertMessages([]db.Message{
+		{
+			SessionID: "fallback-priced", Ordinal: 0, Role: "user",
+			Content: "question", ContentLength: len("question"),
+			Timestamp: "2026-06-01T10:00:00Z",
+		},
+		{
+			SessionID: "fallback-priced", Ordinal: 1, Role: "assistant",
+			Content: "answer", ContentLength: len("answer"),
+			Timestamp: "2026-06-01T10:05:00Z", Model: model,
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":1000,"output_tokens":500}`),
+		},
+		{
+			SessionID: "fallback-priced", Ordinal: 2, Role: "user",
+			Content: "follow up", ContentLength: len("follow up"),
+			Timestamp: "2026-06-01T10:06:00Z",
+		},
+	}), "insert messages")
+	require.NoError(t, database.Close(), "close seeded archive")
+
+	stdout, stderr, err := executeExportSessionsCommand(
+		newRootCommand(), "export", "sessions")
+	require.NoError(t, err, "export sessions on unseeded archive")
+	assert.Empty(t, stderr)
+
+	doc := decodeExportSessionsDocument(t, stdout)
+	require.Len(t, doc.Sessions, 1, "exported sessions")
+	usage := doc.Sessions[0].ModelUsage
+	require.NotNil(t, usage, "model usage")
+	assert.True(t, usage.HasCost,
+		"fallback-priced model %s should have cost", model)
+	assert.Greater(t, usage.CostUSD, 0.0, "fallback-priced cost")
+
+	fallback, ok := doc.Pricing["fallback"].(map[string]any)
+	require.True(t, ok, "pricing fallback block")
+	assert.Equal(t, true, fallback["used"], "fallback used")
+	assert.Contains(t, doc.Pricing["source"], "embedded",
+		"pricing source provenance")
+}
+
+// exactFallbackPricedModel returns an embedded fallback model pattern with
+// non-wildcard name and nonzero input/output rates, so lookups resolve
+// deterministically regardless of snapshot contents.
+func exactFallbackPricedModel(t *testing.T) string {
+	t.Helper()
+	for _, p := range pricing.FallbackPricing() {
+		if strings.ContainsAny(p.ModelPattern, "*/_") {
+			continue
+		}
+		if p.InputPerMTok > 0 && p.OutputPerMTok > 0 {
+			return p.ModelPattern
+		}
+	}
+	t.Fatal("no exact fallback-priced model in embedded snapshot")
+	return ""
 }
 
 func executeExportSessionsCommand(

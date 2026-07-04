@@ -289,6 +289,21 @@ func (db *DB) InsertMissingModelPricing(
 
 // GetModelPricing returns pricing for an exact model match.
 // Returns nil, nil if not found.
+// HasModelPricingRows reports whether any non-meta pricing rows are
+// stored, using the same meta-row exclusion as pricing map loads.
+func (db *DB) HasModelPricingRows(ctx context.Context) (bool, error) {
+	var exists bool
+	err := db.getReader().QueryRowContext(ctx,
+		`SELECT EXISTS(
+			SELECT 1 FROM model_pricing
+			WHERE model_pattern NOT LIKE '\_%' ESCAPE '\')`,
+	).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("checking pricing rows: %w", err)
+	}
+	return exists, nil
+}
+
 func (db *DB) GetModelPricing(
 	model string,
 ) (*ModelPricing, error) {

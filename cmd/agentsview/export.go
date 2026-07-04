@@ -203,6 +203,9 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 	defer database.Close()
 
 	ctx := cmd.Context()
+	if err := ensureExportSessionsPricing(ctx, database, appCfg); err != nil {
+		return err
+	}
 	databaseID, err := database.GetDatabaseID(ctx)
 	if err != nil {
 		if errors.Is(err, db.ErrDatabaseIDMissing) {
@@ -242,6 +245,25 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 		return nil
 	}
 	return enc.Encode(output)
+}
+
+// ensureExportSessionsPricing installs embedded fallback plus custom pricing
+// for archives whose model_pricing table was never seeded (fresh sync-only
+// archives, before serve or usage commands run). The read-only export cannot
+// seed the table, and the overlay would override newer fetched rows, so it is
+// gated on the table being empty.
+func ensureExportSessionsPricing(
+	ctx context.Context, database *db.DB, appCfg config.Config,
+) error {
+	seeded, err := database.HasModelPricingRows(ctx)
+	if err != nil {
+		return fmt.Errorf("checking export pricing: %w", err)
+	}
+	if seeded {
+		return nil
+	}
+	applyFallbackPricing(database, appCfg.CustomModelPricing)
+	return nil
 }
 
 func validateExportSessionsCursorFlags(flags *pflag.FlagSet) error {
