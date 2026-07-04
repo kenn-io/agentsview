@@ -451,6 +451,123 @@ func TestPiProviderParsesBranchedFrom(t *testing.T) {
 	})
 }
 
+// parsePiLikeTestSession parses content as the given pi-family agent
+// (AgentPi or AgentOMP) so tests can exercise provider-specific header
+// handling such as OMP's parentSession branch lineage. The project is
+// hard-coded so callers need not deal with cwd extraction.
+func parsePiLikeTestSession(
+	t *testing.T, agent AgentType, content string,
+) (*ParsedSession, []ParsedMessage) {
+	t.Helper()
+	path := createTestFile(t, "pilike-session.jsonl", content)
+	provider, ok := NewProvider(agent, ProviderConfig{
+		Roots:   []string{filepath.Dir(filepath.Dir(path))},
+		Machine: "local",
+	})
+	require.True(t, ok)
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: SourceRef{
+			Provider:       agent,
+			Key:            path,
+			DisplayPath:    path,
+			FingerprintKey: path,
+			ProjectHint:    "my_project",
+			Opaque: JSONLSource{
+				Root: filepath.Dir(filepath.Dir(path)),
+				Path: path,
+			},
+		},
+		Machine: "local",
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	result := outcome.Results[0].Result
+	return &result.Session, result.Messages
+}
+
+// TestPiProviderParsesOMPParentSession verifies OMP (Oh My Pi) branch
+// lineage (kata 9nz9): OMP v3 headers record the parent as parentSession,
+// a session ID, rather than pi's branchedFrom, a file path. parentSession
+// is mapped to ParentSessionID with the agent's ID prefix, but only as a
+// fallback -- branchedFrom keeps winning when present, and upstream pi
+// sessions ignore parentSession entirely.
+func TestPiProviderParsesOMPParentSession(t *testing.T) {
+	const ts = `"timestamp":"2026-07-03T06:30:58.508Z"`
+	tests := []struct {
+		name    string
+		agent   AgentType
+		header  string
+		wantPSI string
+	}{
+		{
+			name:    "OMP parentSession only is mapped and prefixed",
+			agent:   AgentOMP,
+			header:  `{"type":"session","version":3,"id":"child",` + ts + `,"cwd":"/repos/x","parentSession":"parent-abc"}`,
+			wantPSI: "omp:parent-abc",
+		},
+		{
+			name:    "OMP branchedFrom wins over parentSession",
+			agent:   AgentOMP,
+			header:  `{"type":"session","version":3,"id":"child",` + ts + `,"cwd":"/repos/x","branchedFrom":"/data/2026-07-03T06-00-00-000Z_parent-file.jsonl","parentSession":"parent-abc"}`,
+			wantPSI: "omp:2026-07-03T06-00-00-000Z_parent-file",
+		},
+		{
+			name:    "OMP with neither field yields empty parent",
+			agent:   AgentOMP,
+			header:  `{"type":"session","version":3,"id":"child",` + ts + `,"cwd":"/repos/x"}`,
+			wantPSI: "",
+		},
+		{
+			name:    "pi ignores parentSession (branchedFrom-only lineage)",
+			agent:   AgentPi,
+			header:  `{"type":"session","version":3,"id":"child",` + ts + `,"cwd":"/repos/x","parentSession":"parent-abc"}`,
+			wantPSI: "",
+		},
+		{
+			name:    "pi branchedFrom still maps unchanged",
+			agent:   AgentPi,
+			header:  `{"type":"session","version":3,"id":"child",` + ts + `,"cwd":"/repos/x","branchedFrom":"/data/2026-07-03T06-00-00-000Z_parent-file.jsonl"}`,
+			wantPSI: "pi:2026-07-03T06-00-00-000Z_parent-file",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content := strings.Join([]string{
+				tt.header,
+				`{"type":"message","id":"msg-1","parentId":null,"timestamp":"2026-07-03T06:31:00.000Z","message":{"role":"user","content":"hello"}}`,
+				"",
+			}, "\n")
+			sess, _ := parsePiLikeTestSession(t, tt.agent, content)
+			assert.Equal(t, tt.wantPSI, sess.ParentSessionID)
+		})
+	}
+}
+
+// TestPiProviderOMPParentSessionMatchesParentID proves the mapped
+// ParentSessionID resolves: a child OMP session's parentSession header
+// (the parent's raw session ID) maps to exactly the stored ID of the
+// parent session, so lineage links up rather than dangling.
+func TestPiProviderOMPParentSessionMatchesParentID(t *testing.T) {
+	parentContent := strings.Join([]string{
+		`{"type":"session","version":3,"id":"parent-abc","timestamp":"2026-07-03T06:00:00.000Z","cwd":"/repos/x"}`,
+		`{"type":"message","id":"p1","parentId":null,"timestamp":"2026-07-03T06:00:01.000Z","message":{"role":"user","content":"root"}}`,
+		"",
+	}, "\n")
+	childContent := strings.Join([]string{
+		`{"type":"session","version":3,"id":"child-def","timestamp":"2026-07-03T06:30:00.000Z","cwd":"/repos/x","parentSession":"parent-abc"}`,
+		`{"type":"message","id":"c1","parentId":null,"timestamp":"2026-07-03T06:30:01.000Z","message":{"role":"user","content":"branch"}}`,
+		"",
+	}, "\n")
+
+	parent, _ := parsePiLikeTestSession(t, AgentOMP, parentContent)
+	child, _ := parsePiLikeTestSession(t, AgentOMP, childContent)
+
+	assert.Equal(t, "omp:parent-abc", parent.ID)
+	assert.Equal(t, "omp:child-def", child.ID)
+	assert.Equal(t, parent.ID, child.ParentSessionID,
+		"child parentSession must map to the parent's stored session ID")
+}
+
 func TestParsePiSession_MessageLineageContinuity(t *testing.T) {
 	content := strings.Join([]string{
 		`{"type":"session","version":3,"id":"tree-sess","timestamp":"2025-01-01T10:00:00Z","cwd":"/Users/alice/code/my-project"}`,

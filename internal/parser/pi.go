@@ -84,12 +84,22 @@ func parsePiLikeSession(
 		project = ExtractProjectFromCwd(cwd)
 	}
 
-	// branchedFrom handling: store basename without extension.
+	// Branch lineage. Upstream pi records the parent as branchedFrom, a
+	// file path whose basename without extension is the parent's session
+	// ID. OMP (Oh My Pi) v3 headers instead record parentSession, the
+	// parent's session ID directly. branchedFrom wins when present so
+	// upstream pi is unchanged; parentSession is the OMP-only fallback.
+	// Both paths reuse this session's own idPrefix, so the mapped value
+	// matches the parent's stored ID (idPrefix + its session id) and
+	// lineage resolves.
 	var parentSessionID string
-	branchedFrom := gjson.Get(headerLine, "branchedFrom").Str
-	if branchedFrom != "" {
+	if branchedFrom := gjson.Get(headerLine, "branchedFrom").Str; branchedFrom != "" {
 		base := filepath.Base(branchedFrom)
 		parentSessionID = idPrefix + strings.TrimSuffix(base, filepath.Ext(base))
+	} else if agent == AgentOMP {
+		if parentSession := gjson.Get(headerLine, "parentSession").Str; parentSession != "" {
+			parentSessionID = idPrefix + parentSession
+		}
 	}
 
 	// V1 detection: if header has no id, we may need to derive from filename.
