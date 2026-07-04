@@ -22,6 +22,7 @@ func TestReadPushSessionMessageComparisonsNoSessions(t *testing.T) {
 	assert.Empty(t, comparisons.MessageTokenFingerprint)
 	assert.Empty(t, comparisons.ToolCallAggregates)
 	assert.Empty(t, comparisons.ToolCallFingerprint)
+	assert.Empty(t, comparisons.ToolResultFingerprint)
 	assert.Empty(t, comparisons.UsageEventFingerprint)
 }
 
@@ -37,6 +38,7 @@ func TestShouldSkipSessionMessagesGuardsCountAndNilMaps(t *testing.T) {
 		MessageTokenFingerprint: map[string]string{"sess": ""},
 		ToolCallAggregates:      map[string]pushToolCallAggregate{"sess": {}},
 		ToolCallFingerprint:     map[string]string{"sess": ""},
+		ToolResultFingerprint:   map[string]string{"sess": ""},
 		UsageEventFingerprint:   map[string]string{"sess": ""},
 	}
 	localFP := pushLocalMessageFingerprint{Sum: 1, Max: 1, Min: 1}

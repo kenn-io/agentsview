@@ -235,6 +235,7 @@ func NewFromConfig(
 		excludeProjects: opts.ExcludeProjects,
 		connectionKind:  connectionKind,
 		quack:           quack,
+		maintenance:     duckDBCheckpointMaintenance{},
 	}, nil
 }
 

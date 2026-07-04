@@ -1906,6 +1906,14 @@ func (s *Sync) pushMessages(
 				"computing local tool_call fingerprint: %w", err,
 			)
 		}
+		localFP.ToolResultFP, err = localToolResultEventPGFingerprint(
+			s.local, sessionID,
+		)
+		if err != nil {
+			return 0, fmt.Errorf(
+				"computing local tool_result_event fingerprint: %w", err,
+			)
+		}
 		localFP.TokenFP, err = s.local.MessageTokenFingerprint(sessionID)
 		if err != nil {
 			return 0, fmt.Errorf(
@@ -1970,6 +1978,13 @@ func (s *Sync) pushMessages(
 					err,
 				)
 			}
+			pgResultFP, err := pgToolResultEventFingerprint(ctx, tx, sessionID)
+			if err != nil {
+				return 0, fmt.Errorf(
+					"computing pg tool_result_event fingerprint: %w",
+					err,
+				)
+			}
 			pgUsageFP, err := pgUsageEventFingerprint(ctx, tx, sessionID)
 			if err != nil {
 				return 0, fmt.Errorf(
@@ -1988,6 +2003,7 @@ func (s *Sync) pushMessages(
 				localFP.ToolCallCount == pgToolAgg.Count &&
 				localFP.ToolCallSum == pgToolAgg.Sum &&
 				localFP.ToolCallFP == pgTCFP &&
+				localFP.ToolResultFP == pgResultFP &&
 				localFP.TokenFP == pgTokenFP &&
 				localFP.UsageEventFP == pgUsageFP {
 				return 0, nil

@@ -1653,6 +1653,68 @@ func (db *DB) ToolCallFingerprint(sessionID string) (string, error) {
 	return b.String(), rows.Err()
 }
 
+// ToolResultEventFingerprintWithTimestampNormalizer returns an exact ordered
+// fingerprint of persisted tool-result event fields. The optional timestamp
+// normalizer lets push backends compare SQLite text timestamps with target
+// stores that round or reformat timestamp values on insert.
+func (db *DB) ToolResultEventFingerprintWithTimestampNormalizer(
+	sessionID string,
+	normalizeTimestamp func(string) string,
+) (string, error) {
+	rows, err := db.getReader().Query(
+		`SELECT tool_call_message_ordinal, call_index, event_index,
+			COALESCE(tool_use_id, ''), COALESCE(agent_id, ''),
+			COALESCE(subagent_session_id, ''), source, status,
+			content, content_length, COALESCE(timestamp, '')
+		 FROM tool_result_events
+		 WHERE session_id = ?
+		 ORDER BY tool_call_message_ordinal ASC, call_index ASC, event_index ASC`,
+		sessionID,
+	)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+
+	var b strings.Builder
+	for rows.Next() {
+		var messageOrdinal, callIndex, eventIndex, contentLength int
+		var toolUseID, agentID, subagentSessionID string
+		var source, status, content, timestamp string
+		if err := rows.Scan(
+			&messageOrdinal, &callIndex, &eventIndex,
+			&toolUseID, &agentID, &subagentSessionID,
+			&source, &status, &content, &contentLength, &timestamp,
+		); err != nil {
+			return "", err
+		}
+		if normalizeTimestamp != nil {
+			timestamp = normalizeTimestamp(timestamp)
+		}
+		toolUseID = SanitizeUTF8(toolUseID)
+		agentID = SanitizeUTF8(agentID)
+		subagentSessionID = SanitizeUTF8(subagentSessionID)
+		source = SanitizeUTF8(source)
+		status = SanitizeUTF8(status)
+		content = SanitizeUTF8(content)
+		contentSum := sha256.Sum256([]byte(content))
+		fmt.Fprintf(
+			&b,
+			"%d|%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%x|%d:%s;",
+			messageOrdinal, callIndex, eventIndex,
+			len(toolUseID), toolUseID,
+			len(agentID), agentID,
+			len(subagentSessionID), subagentSessionID,
+			len(source), source,
+			len(status), status,
+			contentLength,
+			contentSum,
+			len(timestamp), timestamp,
+		)
+	}
+	return b.String(), rows.Err()
+}
+
 // GetMessageByOrdinal returns a single message by session ID and ordinal.
 func (db *DB) GetMessageByOrdinal(
 	sessionID string, ordinal int,

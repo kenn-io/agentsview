@@ -1526,6 +1526,9 @@ func TestShouldSkipSessionMessagesInBatchedPush(t *testing.T) {
 		ToolCallFingerprint: map[string]string{
 			sessionID: "toolcalls",
 		},
+		ToolResultFingerprint: map[string]string{
+			sessionID: "results",
+		},
 		UsageEventFingerprint: map[string]string{
 			sessionID: "usage",
 		},
@@ -1541,6 +1544,7 @@ func TestShouldSkipSessionMessagesInBatchedPush(t *testing.T) {
 		ToolCallCount: 1,
 		ToolCallSum:   99,
 		ToolCallFP:    "toolcalls",
+		ToolResultFP:  "results",
 		TokenFP:       "tokens",
 		UsageEventFP:  "usage",
 	}
@@ -1554,6 +1558,12 @@ func TestShouldSkipSessionMessagesInBatchedPush(t *testing.T) {
 	assert.False(t, shouldSkipSessionMessages(
 		sessionID, 2, changedFP, false, baseComparisons,
 	), "tool-call sum mismatch should force push")
+
+	changedFP = unchangedFP
+	changedFP.ToolResultFP = "changed-results"
+	assert.False(t, shouldSkipSessionMessages(
+		sessionID, 2, changedFP, false, baseComparisons,
+	), "tool-result event mismatch should force push")
 
 	assert.False(t, shouldSkipSessionMessages(
 		sessionID, 2, unchangedFP, true, baseComparisons,
