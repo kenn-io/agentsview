@@ -31,6 +31,89 @@
     inGroup?: boolean;
   }
 
+  type Params = Record<string, unknown>;
+
+  const INTERNAL_COPY_PARAMS = new Set(["agent__intent", "_i"]);
+
+  function stringifyCopyValue(value: unknown): string {
+    return typeof value === "string" ? value : JSON.stringify(value);
+  }
+
+  function copyParamLines(
+    params: Params,
+    excluded = new Set<string>(),
+  ): string[] {
+    const lines: string[] = [];
+    for (const [key, value] of Object.entries(params)) {
+      if (INTERNAL_COPY_PARAMS.has(key) || excluded.has(key)) continue;
+      if (value == null || value === "") continue;
+      lines.push(`${key}: ${stringifyCopyValue(value)}`);
+    }
+    return lines;
+  }
+
+  function generateInputCopyContent(
+    toolName: string,
+    params: Params,
+  ): string | null {
+    if (toolName === "Task" || toolName === "Agent") return null;
+    if (toolName === "Bash" || toolName === "run_command") {
+      const cmd = params.command ?? params.cmd;
+      if (cmd != null) {
+        const lines: string[] = [];
+        if (params.description)
+          lines.push(`description: ${String(params.description)}`);
+        lines.push(`command: ${String(cmd)}`);
+        lines.push(
+          ...copyParamLines(
+            params,
+            new Set(["description", "command", "cmd"]),
+          ),
+        );
+        return lines.join("\n");
+      }
+    }
+
+    const isEdit =
+      toolName === "Edit" ||
+      params.command === "strReplace";
+    if (isEdit) {
+      const oldStr =
+        params.old_string ?? params.old_str ?? params.oldString ?? params.oldStr;
+      const newStr =
+        params.new_string ?? params.new_str ?? params.newString ?? params.newStr;
+      const diffText = params.diff;
+      if (typeof diffText === "string" && diffText) return diffText;
+      const patchText = params.patch ?? params.patch_text ?? params.patchText;
+      if (typeof patchText === "string" && patchText) return patchText;
+      if (oldStr != null || newStr != null) {
+        const oldText = String(oldStr ?? "");
+        const newText = String(newStr ?? "");
+        const oldLines = oldText.split("\n");
+        const newLines = newText.split("\n");
+        const lines = [`@@ -1,${oldLines.length} +1,${newLines.length} @@`];
+        for (const line of oldLines) lines.push(`-${line}`);
+        for (const line of newLines) lines.push(`+${line}`);
+        return lines.join("\n");
+      }
+    }
+
+    if (
+      toolName === "Write" ||
+      (toolName === "write" && params.command === "create")
+    ) {
+      if (params.content != null) {
+        const text = String(params.content);
+        if (!text) return "(empty file)";
+        const lines = text.split("\n");
+        return `@@ -0,0 +1,${lines.length} @@\n${lines.map(line => `+${line}`).join("\n")}`;
+      }
+    }
+
+    const lines = copyParamLines(params);
+    return lines.length ? lines.join("\n") : null;
+  }
+
   let {
     content,
     label,
@@ -228,7 +311,13 @@
   let taskPrompt = $derived(
     isTask ? inputParams?.prompt ?? null : null,
   );
-  let inputCopySource = $derived(taskPrompt ?? fallbackContent ?? content ?? "");
+  let inputCopyFallback = $derived.by(() => {
+    if (content || !inputParams || !toolCall) return null;
+    const cat = toolCall.category || null;
+    const result = cat ? generateInputCopyContent(cat, inputParams) : null;
+    return result ?? generateInputCopyContent(toolCall.tool_name, inputParams);
+  });
+  let inputCopySource = $derived(taskPrompt ?? inputCopyFallback ?? content ?? "");
 
   let subagentSessionId = $derived(
     isTask ? toolCall?.subagent_session_id ?? null : null,

@@ -361,7 +361,7 @@ describe("ToolBlock copy affordances", () => {
 
   it("copies full raw Bash fallback before show-all expansion", async () => {
     const longCommand = Array.from(
-      { length: 30 },
+      { length: 230 },
       (_, i) => `echo hidden-line-${i}`,
     ).join("\n");
     const expectedCopy = `command: ${longCommand}`;
@@ -380,7 +380,7 @@ describe("ToolBlock copy affordances", () => {
     await tick();
 
     expect(document.querySelector(".tool-content")?.textContent).not.toContain(
-      "hidden-line-29",
+      "hidden-line-229",
     );
 
     const copyButton = document.querySelector<HTMLButtonElement>(
@@ -394,7 +394,7 @@ describe("ToolBlock copy affordances", () => {
 
     expect(copyToClipboardMock).toHaveBeenCalledWith(expectedCopy);
     expect(document.querySelector(".tool-content")?.textContent).not.toContain(
-      "hidden-line-29",
+      "hidden-line-229",
     );
   });
 });
