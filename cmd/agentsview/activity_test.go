@@ -322,9 +322,11 @@ func TestActivityReportGolden(t *testing.T) {
 	cmd.SetArgs([]string{
 		"activity", "report",
 		"--json",
-		"--preset", "day",
-		"--date", "2026-07-03",
+		"--preset", "custom",
+		"--from", "2026-07-03T10:00:00Z",
+		"--to", "2026-07-03T13:00:00Z",
 		"--timezone", "UTC",
+		"--bucket", "1h",
 		"--offline",
 		"--no-sync",
 	})
