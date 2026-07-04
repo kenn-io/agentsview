@@ -31,6 +31,7 @@ type duckMessageFingerprint struct {
 	Min           int64
 	MinOrdinal    int
 	MaxOrdinal    int
+	MessageIDFP   string
 	ContentHashFP string
 	RoleTimeFP    string
 	FlagsFP       string
@@ -124,6 +125,7 @@ func duckMessageFingerprintsMatch(
 		localFP.Min != targetFP.Min ||
 		localFP.MinOrdinal != targetFP.MinOrdinal ||
 		localFP.MaxOrdinal != targetFP.MaxOrdinal ||
+		localFP.MessageIDFP != targetFP.MessageIDFP ||
 		localFP.ContentHashFP != targetFP.ContentHashFP ||
 		localFP.RoleTimeFP != targetFP.RoleTimeFP ||
 		localFP.FlagsFP != targetFP.FlagsFP ||
@@ -177,7 +179,7 @@ func duckMessageFingerprintForSession(
 func duckStoredMessageFingerprint(
 	ctx context.Context, q duckQueryer, sessionID string, maxOrdinal *int,
 ) (duckMessageFingerprint, error) {
-	query := `SELECT ordinal, role, content, thinking_text, timestamp,
+	query := `SELECT id, ordinal, role, content, thinking_text, timestamp,
 			has_thinking, has_tool_use, content_length, is_system,
 			model, token_usage, context_tokens, output_tokens,
 			has_context_tokens, has_output_tokens, claude_message_id,
@@ -199,6 +201,7 @@ func duckStoredMessageFingerprint(
 	defer rows.Close()
 
 	fp := duckMessageFingerprint{MinOrdinal: -1, MaxOrdinal: -1}
+	var messageIDs strings.Builder
 	var systemOrdinals strings.Builder
 	var contentHash strings.Builder
 	var roleTime strings.Builder
@@ -206,6 +209,7 @@ func duckStoredMessageFingerprint(
 	var token strings.Builder
 	for rows.Next() {
 		var ordinal, contentLength, contextTokens, outputTokens int
+		var id int64
 		var role, content, thinkingText, model, tokenUsage string
 		var claudeMsgID, claudeReqID string
 		var srcType, srcSubtype, srcUUID, srcParentUUID string
@@ -214,7 +218,7 @@ func duckStoredMessageFingerprint(
 		var hasContextTokens, hasOutputTokens bool
 		var isSidechain, isCompactBoundary bool
 		if err := rows.Scan(
-			&ordinal, &role, &content, &thinkingText, &timestamp,
+			&id, &ordinal, &role, &content, &thinkingText, &timestamp,
 			&hasThinking, &hasToolUse, &contentLength, &isSystem,
 			&model, &tokenUsage, &contextTokens, &outputTokens,
 			&hasContextTokens, &hasOutputTokens, &claudeMsgID,
@@ -236,6 +240,7 @@ func duckStoredMessageFingerprint(
 		}
 		fp.Count++
 		fp.Sum += int64(contentLength)
+		fmt.Fprintf(&messageIDs, "%d|%d;", ordinal, id)
 		if isSystem {
 			if systemOrdinals.Len() > 0 {
 				systemOrdinals.WriteByte(',')
@@ -292,6 +297,7 @@ func duckStoredMessageFingerprint(
 	if err := rows.Err(); err != nil {
 		return duckMessageFingerprint{}, err
 	}
+	fp.MessageIDFP = messageIDs.String()
 	fp.SystemFP = systemOrdinals.String()
 	fp.ContentHashFP = contentHash.String()
 	fp.RoleTimeFP = roleTime.String()

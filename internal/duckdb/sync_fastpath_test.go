@@ -145,6 +145,47 @@ func TestSyncIncrementalHistoricalMessageChangeFallsBackToRewrite(t *testing.T) 
 	)
 }
 
+func TestSyncIncrementalMessageIDChangeFallsBackToRewrite(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	fixture := seedDuckDBSyncFixture(t, local)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+
+	first, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, first.SessionsPushed)
+	rowIDBefore := duckMessageRowID(t, syncer.DB(), fixture.alphaID, 0)
+	localBefore, err := local.GetAllMessages(ctx, fixture.alphaID)
+	require.NoError(t, err)
+	require.Len(t, localBefore, 2)
+	require.Equal(t,
+		localBefore[0].ID,
+		duckMessageID(t, syncer.DB(), fixture.alphaID, 0),
+	)
+
+	time.Sleep(time.Millisecond)
+	localAfter := rewriteLocalMessagesPreservingContent(t, local, fixture.alphaID)
+	require.Len(t, localAfter, 2)
+	require.NotEqual(t, localBefore[0].ID, localAfter[0].ID)
+	second, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, second.SessionsPushed)
+	assert.Equal(t, len(localAfter), second.MessagesPushed)
+	assert.NotEqual(t,
+		rowIDBefore,
+		duckMessageRowID(t, syncer.DB(), fixture.alphaID, 0),
+		"local message id changes must refresh DuckDB message rows",
+	)
+	assert.Equal(t,
+		localAfter[0].ID,
+		duckMessageID(t, syncer.DB(), fixture.alphaID, 0),
+	)
+	assert.Equal(t, 1, duckPinnedMessageMirrorJoinCount(
+		t, syncer.DB(), fixture.alphaID,
+	), "curation refresh must point pins at mirrored messages")
+}
+
 func TestSyncIncrementalToolResultEventChangeUpdatesMirror(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
@@ -329,6 +370,31 @@ func appendLocalMessage(
 	require.NoError(t, err)
 }
 
+func rewriteLocalMessagesPreservingContent(
+	t *testing.T, local *db.DB, sessionID string,
+) []db.Message {
+	t.Helper()
+	ctx := context.Background()
+	sess, err := local.GetSession(ctx, sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	msgs, err := local.GetAllMessages(ctx, sessionID)
+	require.NoError(t, err)
+	modifiedAt := syncNow()
+	sess.LocalModifiedAt = &modifiedAt
+	sess.MessageCount = len(msgs)
+	_, err = local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session:         *sess,
+		Messages:        msgs,
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	rewritten, err := local.GetAllMessages(ctx, sessionID)
+	require.NoError(t, err)
+	return rewritten
+}
+
 func writeToolResultStatusSession(
 	t *testing.T, local *db.DB, sessionID, status string,
 ) {
@@ -453,6 +519,35 @@ func duckMessageRowID(
 		sessionID, ordinal,
 	).Scan(&rowID))
 	return rowID
+}
+
+func duckMessageID(
+	t *testing.T, conn *sql.DB, sessionID string, ordinal int,
+) int64 {
+	t.Helper()
+	var id int64
+	require.NoError(t, conn.QueryRow(
+		`SELECT id FROM messages WHERE session_id = ? AND ordinal = ?`,
+		sessionID, ordinal,
+	).Scan(&id))
+	return id
+}
+
+func duckPinnedMessageMirrorJoinCount(
+	t *testing.T, conn *sql.DB, sessionID string,
+) int {
+	t.Helper()
+	var count int
+	require.NoError(t, conn.QueryRow(`
+		SELECT COUNT(*)
+		FROM pinned_messages p
+		JOIN messages m
+			ON m.session_id = p.session_id
+			AND m.id = p.message_id
+		WHERE p.session_id = ?`,
+		sessionID,
+	).Scan(&count))
+	return count
 }
 
 type checkpointSpy struct {
