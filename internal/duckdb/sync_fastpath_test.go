@@ -424,13 +424,11 @@ func rewriteLocalMessagesPreservingContent(
 	require.NotNil(t, sess)
 	msgs, err := local.GetAllMessages(ctx, sessionID)
 	require.NoError(t, err)
-	modifiedAt := time.Now().UTC().Format(localSyncTimestampLayout)
-	sess.LocalModifiedAt = &modifiedAt
 	sess.MessageCount = len(msgs)
 	_, err = local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
 		Session:         *sess,
 		Messages:        msgs,
-		DataVersion:     1,
+		DataVersion:     1, // stamps local_modified_at for Push(false) selection
 		ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
@@ -499,12 +497,10 @@ func writeFastPathLifecycleSession(
 		sessionID, "alpha", "lifecycle first",
 		"2026-01-21T00:00:00.000Z", len(messages),
 	)
-	modifiedAt := time.Now().UTC().Format(localSyncTimestampLayout)
-	sess.LocalModifiedAt = &modifiedAt
 	write := db.SessionBatchWrite{
 		Session:         sess,
 		Messages:        messages,
-		DataVersion:     1,
+		DataVersion:     1, // stamps local_modified_at for Push(false) selection
 		ReplaceMessages: true,
 	}
 	if usageInputTokens > 0 {
