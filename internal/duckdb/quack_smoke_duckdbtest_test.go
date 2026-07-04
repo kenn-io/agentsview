@@ -518,6 +518,9 @@ func TestQuackClientSyncPushWritesThroughAttachment(t *testing.T) {
 	require.NoError(t, err, "push through Quack")
 	assert.Equal(t, 2, result.SessionsPushed)
 	assert.Equal(t, 3, result.MessagesPushed)
+	watermark, err := local.GetSyncState(syncer.syncStateKey(lastPushStateKey))
+	require.NoError(t, err, "read Quack push watermark")
+	assert.NotEmpty(t, watermark, "successful Quack push must advance watermark")
 
 	status, err := syncer.Status(ctx)
 	require.NoError(t, err, "read Quack-backed sync status")
