@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/export"
 )
 
 func TestOpenCreatesLocalDuckDBFile(t *testing.T) {
@@ -73,6 +75,12 @@ func TestEnsureSchemaCreatesRequiredMirrorTables(t *testing.T) {
 		usageDedupIndexMetadataKey,
 	).Scan(&dedupIndex))
 	assert.Equal(t, "1", dedupIndex)
+	var remoteScrubbed string
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT value FROM sync_metadata WHERE key = ?`,
+		projectIdentityRemoteScrubMetadataKey,
+	).Scan(&remoteScrubbed))
+	assert.Equal(t, "1", remoteScrubbed)
 }
 
 func TestUsageEventsDedupIndexAllowsRepeatedKeys(t *testing.T) {
@@ -221,6 +229,20 @@ func TestCheckSchemaCompatRejectsPendingNonIndexRepairs(t *testing.T) {
 		assert.Contains(t, err.Error(), usageDedupIndexMetadataKey)
 	})
 
+	t.Run("missing project identity remote scrub metadata", func(t *testing.T) {
+		db := openTestDuckDB(t)
+		require.NoError(t, EnsureSchema(ctx, db), "EnsureSchema")
+		_, err := db.ExecContext(ctx,
+			`DELETE FROM sync_metadata WHERE key = ?`,
+			projectIdentityRemoteScrubMetadataKey,
+		)
+		require.NoError(t, err)
+
+		err = CheckSchemaCompat(ctx, db)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), projectIdentityRemoteScrubMetadataKey)
+	})
+
 	t.Run("quack incompatible timestamp default", func(t *testing.T) {
 		db := openTestDuckDB(t)
 		require.NoError(t, EnsureSchema(ctx, db), "EnsureSchema")
@@ -233,6 +255,59 @@ func TestCheckSchemaCompatRejectsPendingNonIndexRepairs(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "starred_sessions.created_at")
 	})
+}
+
+func TestEnsureSchemaScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDuckDB(t)
+	require.NoError(t, EnsureSchema(ctx, db), "initial EnsureSchema")
+	_, err := db.ExecContext(ctx,
+		`DELETE FROM sync_metadata WHERE key = ?`,
+		projectIdentityRemoteScrubMetadataKey,
+	)
+	require.NoError(t, err)
+	rawRemote := "https://user:token@github.com/acme/app.git"
+	storedRemote := "https://github.com/acme/app.git"
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO project_identity_observations (
+			project, machine, root_path, git_remote, git_remote_name,
+			worktree_name, worktree_root_path, observed_at,
+			normalized_remote, key_source, key
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"app", "laptop", "/tmp/app", rawRemote, "origin",
+		"", "", "2026-07-03T12:00:00Z", "", "", "",
+	)
+	require.NoError(t, err)
+
+	require.NoError(t, EnsureSchema(ctx, db), "repair EnsureSchema")
+
+	rows, err := db.QueryContext(ctx, `
+		SELECT git_remote, normalized_remote, key_source, key
+		FROM project_identity_observations
+		WHERE project = ? AND machine = ? AND root_path = ?
+		ORDER BY git_remote`,
+		"app", "laptop", "/tmp/app",
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, rows.Close()) })
+
+	var got []export.ProjectIdentityObservation
+	for rows.Next() {
+		var obs export.ProjectIdentityObservation
+		require.NoError(t, rows.Scan(
+			&obs.GitRemote,
+			&obs.NormalizedRemote,
+			&obs.KeySource,
+			&obs.Key,
+		))
+		got = append(got, obs)
+	}
+	require.NoError(t, rows.Err())
+	require.Len(t, got, 1)
+	assert.Equal(t, storedRemote, got[0].GitRemote)
+	assert.Equal(t, "github.com/acme/app", got[0].NormalizedRemote)
+	assert.Equal(t, export.ProjectIdentityKeySourceGitRemote, got[0].KeySource)
+	assert.NotEmpty(t, got[0].Key)
 }
 
 func TestEnsureSchemaDropsQuackIncompatibleTimestampDefaults(t *testing.T) {

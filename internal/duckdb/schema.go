@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"go.kenn.io/agentsview/internal/export"
 )
 
 // SchemaVersion is the version of the DuckDB mirror schema created by
@@ -17,6 +19,7 @@ const SchemaVersion = 1
 const schemaVersionMetadataKey = "agentsview_schema_version"
 const defaultRepairMetadataKey = "agentsview_default_repair_v1"
 const usageDedupIndexMetadataKey = "agentsview_usage_dedup_index_v1"
+const projectIdentityRemoteScrubMetadataKey = "agentsview_project_identity_remote_scrub_v1"
 
 // DuckDB schema notes:
 //
@@ -632,6 +635,18 @@ func ensureSchema(ctx context.Context, db *sql.DB, opts schemaOptions) error {
 		return err
 	}
 
+	projectIdentityRemoteScrubDone, err := metadataKeyExists(
+		ctx, db, projectIdentityRemoteScrubMetadataKey,
+	)
+	if err != nil {
+		return err
+	}
+	if !projectIdentityRemoteScrubDone {
+		if err := scrubProjectIdentityGitRemoteCredentials(ctx, db); err != nil {
+			return err
+		}
+	}
+
 	recordUsageDedupIndexMigration, err := migrateUsageEventsDedupIndex(ctx, db)
 	if err != nil {
 		return err
@@ -655,6 +670,13 @@ func ensureSchema(ctx context.Context, db *sql.DB, opts schemaOptions) error {
 			return err
 		}
 	}
+	if !projectIdentityRemoteScrubDone {
+		if err := recordMetadataKey(
+			ctx, db, projectIdentityRemoteScrubMetadataKey, "1",
+		); err != nil {
+			return err
+		}
+	}
 	if err := recordMetadataKey(
 		ctx, db, schemaVersionMetadataKey, strconv.Itoa(SchemaVersion),
 	); err != nil {
@@ -675,6 +697,126 @@ func migrateUsageEventsDedupIndex(ctx context.Context, db *sql.DB) (bool, error)
 		return false, fmt.Errorf("dropping duckdb usage_events dedup index: %w", err)
 	}
 	return true, nil
+}
+
+func scrubProjectIdentityGitRemoteCredentials(
+	ctx context.Context, db *sql.DB,
+) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf(
+			"beginning duckdb project identity remote scrub: %w", err,
+		)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	rows, err := tx.QueryContext(ctx, `
+		SELECT project, machine, root_path, git_remote, git_remote_name,
+			worktree_name, worktree_root_path, observed_at,
+			normalized_remote, key_source, key
+		FROM project_identity_observations
+		WHERE git_remote != ''`)
+	if err != nil {
+		return fmt.Errorf(
+			"listing duckdb project identity remotes for scrub: %w", err,
+		)
+	}
+	rowsClosed := false
+	defer func() {
+		if !rowsClosed {
+			_ = rows.Close()
+		}
+	}()
+
+	type pendingScrub struct {
+		obs       export.ProjectIdentityObservation
+		rawRemote string
+	}
+	var pending []pendingScrub
+	for rows.Next() {
+		var obs export.ProjectIdentityObservation
+		if err := rows.Scan(
+			&obs.Project,
+			&obs.Machine,
+			&obs.RootPath,
+			&obs.GitRemote,
+			&obs.GitRemoteName,
+			&obs.WorktreeName,
+			&obs.WorktreeRootPath,
+			&obs.ObservedAt,
+			&obs.NormalizedRemote,
+			&obs.KeySource,
+			&obs.Key,
+		); err != nil {
+			return fmt.Errorf(
+				"scanning duckdb project identity remote for scrub: %w", err,
+			)
+		}
+		sanitized := export.SanitizeGitRemoteForStorage(obs.GitRemote)
+		if sanitized == obs.GitRemote {
+			continue
+		}
+		pending = append(pending, pendingScrub{
+			obs:       obs,
+			rawRemote: obs.GitRemote,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf(
+			"iterating duckdb project identity remotes for scrub: %w", err,
+		)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf(
+			"closing duckdb project identity remotes scrub rows: %w", err,
+		)
+	}
+	rowsClosed = true
+
+	for _, scrub := range pending {
+		obs := export.SanitizeStoredProjectIdentityObservation(scrub.obs)
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO project_identity_observations (
+				project, machine, root_path, git_remote, git_remote_name,
+				worktree_name, worktree_root_path, observed_at,
+				normalized_remote, key_source, key
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(project, machine, root_path, git_remote) DO UPDATE SET
+				git_remote_name = excluded.git_remote_name,
+				worktree_name = excluded.worktree_name,
+				worktree_root_path = excluded.worktree_root_path,
+				observed_at = excluded.observed_at,
+				normalized_remote = excluded.normalized_remote,
+				key_source = excluded.key_source,
+				key = excluded.key`,
+			obs.Project, obs.Machine, obs.RootPath, obs.GitRemote,
+			obs.GitRemoteName, obs.WorktreeName, obs.WorktreeRootPath,
+			obs.ObservedAt, obs.NormalizedRemote, obs.KeySource, obs.Key,
+		); err != nil {
+			return fmt.Errorf(
+				"upserting scrubbed duckdb project identity remote: %w", err,
+			)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM project_identity_observations
+			WHERE project = ? AND machine = ? AND root_path = ?
+			  AND git_remote = ?`,
+			scrub.obs.Project, scrub.obs.Machine, scrub.obs.RootPath,
+			scrub.rawRemote,
+		); err != nil {
+			return fmt.Errorf(
+				"removing raw duckdb project identity remote: %w", err,
+			)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf(
+			"committing duckdb project identity remote scrub: %w", err,
+		)
+	}
+	return nil
 }
 
 func migrateMessagesIDPrimaryKey(ctx context.Context, db *sql.DB) error {
@@ -1012,6 +1154,7 @@ func pendingSchemaRepairsQuery() string {
 	metadataValues := []string{
 		"(" + duckLiteral(defaultRepairMetadataKey) + ")",
 		"(" + duckLiteral(usageDedupIndexMetadataKey) + ")",
+		"(" + duckLiteral(projectIdentityRemoteScrubMetadataKey) + ")",
 	}
 	defaultValues := make([]string, len(quackIncompatibleTimestampDefaults))
 	for i, spec := range quackIncompatibleTimestampDefaults {

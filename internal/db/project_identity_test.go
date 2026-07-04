@@ -22,7 +22,7 @@ func TestProjectObservationDatabaseIDIsCreatedAndStable(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 
-	first, err := d.GetOrCreateDatabaseID(ctx)
+	first, err := d.GetDatabaseID(ctx)
 	require.NoError(t, err)
 	assert.Regexp(t, regexp.MustCompile(
 		`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`,
@@ -36,6 +36,23 @@ func TestProjectObservationDatabaseIDIsCreatedAndStable(t *testing.T) {
 	overridden, err := d.GetOrCreateDatabaseID(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, "test-database-id", overridden)
+}
+
+func TestProjectObservationDatabaseIDInitializedForReadOnlyOpen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	writable := testDBAtPath(t, path, "read-only database id seed")
+	seeded, err := writable.GetDatabaseID(context.Background())
+	require.NoError(t, err)
+	require.NotEmpty(t, seeded)
+	require.NoError(t, writable.Close())
+
+	readonly, err := OpenReadOnly(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, readonly.Close()) })
+
+	got, err := readonly.GetDatabaseID(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, seeded, got)
 }
 
 func TestProjectObservationDatabaseIDReadOnlyExisting(t *testing.T) {
@@ -56,8 +73,13 @@ func TestProjectObservationDatabaseIDReadOnlyExisting(t *testing.T) {
 
 func TestProjectObservationDatabaseIDMissingDoesNotCreate(t *testing.T) {
 	d := testDB(t)
+	_, err := d.rawWriter().Exec(`
+		DELETE FROM archive_metadata WHERE key = ?`,
+		archiveMetadataDatabaseIDKey,
+	)
+	require.NoError(t, err)
 
-	_, err := d.GetDatabaseID(context.Background())
+	_, err = d.GetDatabaseID(context.Background())
 	require.ErrorIs(t, err, ErrDatabaseIDMissing)
 
 	var count int

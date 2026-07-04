@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"os"
@@ -353,6 +354,7 @@ func TestExportSessionsRequiresExistingDatabaseID(t *testing.T) {
 		UserMessageCount: 2,
 	})
 	require.NoError(t, database.Close())
+	removeArchiveDatabaseIDForTest(t, dbPath)
 
 	stdout, stderr, err := executeExportSessionsCommand(
 		newRootCommand(), "export", "sessions",
@@ -367,6 +369,15 @@ func TestExportSessionsRequiresExistingDatabaseID(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, readonly.Close()) })
 	_, idErr := readonly.GetDatabaseID(context.Background())
 	require.ErrorIs(t, idErr, db.ErrDatabaseIDMissing)
+}
+
+func removeArchiveDatabaseIDForTest(t *testing.T, dbPath string) {
+	t.Helper()
+	raw, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, raw.Close()) }()
+	_, err = raw.Exec(`DELETE FROM archive_metadata WHERE key = 'database_id'`)
+	require.NoError(t, err)
 }
 
 func TestExportSessionsCursorConflictingFilterIsUsageError(t *testing.T) {

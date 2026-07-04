@@ -684,6 +684,10 @@ func Open(path string) (*DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("migrating columns: %w", err)
 	}
+	if _, err := d.GetOrCreateDatabaseID(context.Background()); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("initializing database id: %w", err)
+	}
 
 	if dataStale && !schemaStale {
 		d.dataStale.Store(true)

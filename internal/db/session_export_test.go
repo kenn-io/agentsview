@@ -280,8 +280,13 @@ func TestSessionSummaryExportRequiresExistingDatabaseID(t *testing.T) {
 		MessageCount:     1,
 		UserMessageCount: 1,
 	})
+	_, err := d.rawWriter().Exec(`
+		DELETE FROM archive_metadata WHERE key = ?`,
+		archiveMetadataDatabaseIDKey,
+	)
+	require.NoError(t, err)
 
-	_, err := d.ExportSessionSummaries(context.Background(), SessionExportOptions{
+	_, err = d.ExportSessionSummaries(context.Background(), SessionExportOptions{
 		Limit: 10,
 	})
 	require.ErrorIs(t, err, ErrDatabaseIDMissing)

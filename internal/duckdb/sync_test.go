@@ -17,6 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/export"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1305,6 +1306,65 @@ func TestSyncModelPricingPreservesExistingMirrorRows(t *testing.T) {
 	).Scan(&input, &output))
 	assert.Equal(t, 1.0, input)
 	assert.Equal(t, 2.0, output)
+}
+
+func TestSyncScrubsLegacyProjectIdentityGitRemoteCredentials(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	observedAt := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
+	rawRemote := "https://user:token@github.com/acme/app.git"
+	require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			Project:       "alpha",
+			Machine:       "laptop",
+			RootPath:      "/tmp/app",
+			GitRemote:     rawRemote,
+			GitRemoteName: "origin",
+			ObservedAt:    observedAt,
+		},
+	))
+	target := filepath.Join(t.TempDir(), "legacy-project-identity.duckdb")
+	legacy := newTestSync(t, target, local, SyncOptions{})
+	require.NoError(t, legacy.EnsureSchema(ctx))
+	_, err := legacy.DB().ExecContext(ctx,
+		`DELETE FROM sync_metadata WHERE key = ?`,
+		projectIdentityRemoteScrubMetadataKey,
+	)
+	require.NoError(t, err)
+	_, err = legacy.DB().ExecContext(ctx, `
+		INSERT INTO project_identity_observations (
+			project, machine, root_path, git_remote, git_remote_name,
+			worktree_name, worktree_root_path, observed_at,
+			normalized_remote, key_source, key
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"alpha", "laptop", "/tmp/app", rawRemote, "origin",
+		"", "", observedAt, "", "", "",
+	)
+	require.NoError(t, err)
+	require.NoError(t, legacy.Close())
+
+	syncer := newTestSync(t, target, local, SyncOptions{})
+
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+
+	var remotes []string
+	rows, err := syncer.DB().QueryContext(ctx, `
+		SELECT git_remote
+		FROM project_identity_observations
+		WHERE project = ? AND machine = ? AND root_path = ?
+		ORDER BY git_remote`,
+		"alpha", "laptop", "/tmp/app",
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, rows.Close()) }()
+	for rows.Next() {
+		var remote string
+		require.NoError(t, rows.Scan(&remote))
+		remotes = append(remotes, remote)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []string{"https://github.com/acme/app.git"}, remotes)
 }
 
 func TestSyncModelPricingSkipsUnchangedMirrorRows(t *testing.T) {
