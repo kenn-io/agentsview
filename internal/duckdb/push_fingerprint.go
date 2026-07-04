@@ -209,7 +209,7 @@ func duckStoredMessageFingerprint(
 	var token strings.Builder
 	for rows.Next() {
 		var ordinal, contentLength, contextTokens, outputTokens int
-		var id int64
+		var id sql.NullInt64
 		var role, content, thinkingText, model, tokenUsage string
 		var claudeMsgID, claudeReqID string
 		var srcType, srcSubtype, srcUUID, srcParentUUID string
@@ -240,7 +240,7 @@ func duckStoredMessageFingerprint(
 		}
 		fp.Count++
 		fp.Sum += int64(contentLength)
-		fmt.Fprintf(&messageIDs, "%d|%d;", ordinal, id)
+		fmt.Fprintf(&messageIDs, "%d|%t|%d;", ordinal, id.Valid, id.Int64)
 		if isSystem {
 			if systemOrdinals.Len() > 0 {
 				systemOrdinals.WriteByte(',')

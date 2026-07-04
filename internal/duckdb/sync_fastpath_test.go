@@ -186,6 +186,38 @@ func TestSyncIncrementalMessageIDChangeFallsBackToRewrite(t *testing.T) {
 	), "curation refresh must point pins at mirrored messages")
 }
 
+func TestSyncIncrementalNullMirrorMessageIDFallsBackToRewrite(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	fixture := seedDuckDBSyncFixture(t, local)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+
+	first, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, first.SessionsPushed)
+	localMessages, err := local.GetAllMessages(ctx, fixture.betaID)
+	require.NoError(t, err)
+	require.Len(t, localMessages, 1)
+	_, err = syncer.DB().ExecContext(ctx,
+		`UPDATE messages SET id = NULL WHERE session_id = ? AND ordinal = ?`,
+		fixture.betaID, 0,
+	)
+	require.NoError(t, err)
+
+	time.Sleep(time.Millisecond)
+	renameSessionOnly(t, local, fixture.betaID, "beta null id repair")
+	second, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, second.SessionsPushed)
+	assert.Equal(t, 1, second.MessagesPushed)
+	assert.Equal(t,
+		localMessages[0].ID,
+		duckMessageID(t, syncer.DB(), fixture.betaID, 0),
+		"NULL mirrored message ids must force a repair rewrite",
+	)
+}
+
 func TestSyncIncrementalToolResultEventChangeUpdatesMirror(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
