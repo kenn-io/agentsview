@@ -16,23 +16,23 @@ agentsview serve [flags]
 As of 0.23.0, starting the server requires the explicit `serve` subcommand.
 Running plain `agentsview` shows help instead of starting the web UI.
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--host` | `127.0.0.1` | Host to bind to |
-| `--port` | `8080` | Port to listen on |
-| `--no-browser` | `false` | Don't open browser on startup |
-| `--no-update-check` | `false` | Disable automatic update checks |
-| `--background` | `false` | Start `agentsview serve` as a managed background process |
-| `--replace` | `false` | Replace a running local daemon before starting |
-| `--public-url` | | Public URL for hostname or proxy access |
-| `--public-origin` | | Trusted browser origin (repeatable/comma-separated) |
-| `--proxy` | | Managed proxy mode (`caddy`) |
-| `--caddy-bin` | `caddy` | Caddy binary path |
-| `--proxy-bind-host` | `127.0.0.1` | Interface for managed proxy |
-| `--public-port` | `8443` | External port for managed proxy |
-| `--tls-cert` | | TLS certificate path |
-| `--tls-key` | | TLS key path |
-| `--allowed-subnet` | | Client CIDR allowlist (repeatable/comma-separated) |
+| Flag                | Default     | Description                                              |
+| ------------------- | ----------- | -------------------------------------------------------- |
+| `--host`            | `127.0.0.1` | Host to bind to                                          |
+| `--port`            | `8080`      | Port to listen on                                        |
+| `--no-browser`      | `false`     | Don't open browser on startup                            |
+| `--no-update-check` | `false`     | Disable automatic update checks                          |
+| `--background`      | `false`     | Start `agentsview serve` as a managed background process |
+| `--replace`         | `false`     | Replace a running local daemon before starting           |
+| `--public-url`      |             | Public URL for hostname or proxy access                  |
+| `--public-origin`   |             | Trusted browser origin (repeatable/comma-separated)      |
+| `--proxy`           |             | Managed proxy mode (`caddy`)                             |
+| `--caddy-bin`       | `caddy`     | Caddy binary path                                        |
+| `--proxy-bind-host` | `127.0.0.1` | Interface for managed proxy                              |
+| `--public-port`     | `8443`      | External port for managed proxy                          |
+| `--tls-cert`        |             | TLS certificate path                                     |
+| `--tls-key`         |             | TLS key path                                             |
+| `--allowed-subnet`  |             | Client CIDR allowlist (repeatable/comma-separated)       |
 
 The server auto-discovers an available port if `8080` is busy. See
 [Remote Access](/remote-access/) for details on the remote access and proxy
@@ -78,24 +78,22 @@ reports the managed process, URL, version, uptime, and read-only mode when
 available. `serve stop` gracefully terminates the managed process and cleans up
 its runtime record.
 
-When a writable daemon is already running, a newer release binary
-automatically replaces an older compatible daemon before starting.
-Development builds, downgrades, and forward API/data-version
-conflicts do not auto-replace; use `--replace` when you deliberately
-want this invocation to stop the running daemon first. If the SQLite
-archive itself has a newer data version than the current binary can
-open, `serve` refuses before stopping the old daemon. `serve status`
-reports incompatible live daemons with their daemon and binary
+When a writable daemon is already running, a newer release binary automatically
+replaces an older compatible daemon before starting. Development builds,
+downgrades, and forward API/data-version conflicts do not auto-replace; use
+`--replace` when you deliberately want this invocation to stop the running
+daemon first. If the SQLite archive itself has a newer data version than the
+current binary can open, `serve` refuses before stopping the old daemon.
+`serve status` reports incompatible live daemons with their daemon and binary
 versions plus the `--replace` or `serve stop` actions.
 
-Background servers also act as the shared local daemon for the
-desktop app and CLI. The daemon owns local SQLite writes for its
-data directory, so common write and freshness-sensitive commands
-proxy to it instead of opening the archive as a second writer. A
-background daemon self-exits after the idle timeout when no
-external request or daemon-owned job is active. Periodic sync and
-file-watcher work prevent exit while they run, but do not keep the
-daemon alive forever by themselves.
+Background servers also act as the shared local daemon for the desktop app and
+CLI. The daemon owns local SQLite writes for its data directory, so common write
+and freshness-sensitive commands proxy to it instead of opening the archive as a
+second writer. A background daemon self-exits after the idle timeout when no
+external request or daemon-owned job is active. Periodic sync and file-watcher
+work prevent exit while they run, but do not keep the daemon alive forever by
+themselves.
 
 #### CLI daemon behavior
 
@@ -555,9 +553,9 @@ With `[duckdb].url` or `AGENTSVIEW_DUCKDB_URL`, `duckdb push`, `duckdb status`,
 and `duckdb serve` target the remote Quack endpoint; otherwise they use the
 local mirror file. When `[duckdb].path` or `AGENTSVIEW_DUCKDB_PATH` is set,
 `duckdb quack serve` exposes that same mirror by default unless `--path`
-overrides it. `duckdb serve` accepts the same serve flags as `pg serve`.
-The DuckDB backend is unavailable on Windows ARM64 (the upstream bindings ship
-no prebuilt library for that platform); all other commands work normally there.
+overrides it. `duckdb serve` accepts the same serve flags as `pg serve`. The
+DuckDB backend is unavailable on Windows ARM64 (the upstream bindings ship no
+prebuilt library for that platform); all other commands work normally there.
 
 ______________________________________________________________________
 
@@ -747,6 +745,69 @@ a directory containing the extracted export.
 agentsview import --type claude-ai ~/Downloads/claude.zip
 agentsview import --type chatgpt ~/Downloads/chatgpt.zip
 agentsview import --type claude-ai ./conversations.json
+```
+
+______________________________________________________________________
+
+### `agentsview export sessions`
+
+Export content-free session summaries from the local archive. See
+[Session Export](/session-export/) for the full JSON/NDJSON contract, cursor
+semantics, pricing provenance, and project identity rules.
+
+```bash
+agentsview export sessions [flags]
+```
+
+| Flag                  | Default | Description                                               |
+| --------------------- | ------- | --------------------------------------------------------- |
+| `--format`            | `json`  | Output format: `json` or `ndjson`                         |
+| `--limit`             | `500`   | Maximum sessions to return; max `db.MaxSessionLimit`      |
+| `--cursor`            |         | Opaque cursor from a previous response                    |
+| `--all`               | `false` | Export every eligible page as one output stream           |
+| `--project`           |         | Filter by exact project name                              |
+| `--exclude-project`   |         | Exclude sessions from the given project                   |
+| `--machine`           |         | Filter by machine name                                    |
+| `--git-branch`        |         | Filter by project/branch token                            |
+| `--agent`             |         | Filter by agent name                                      |
+| `--date`              |         | Include sessions started on `YYYY-MM-DD`                  |
+| `--date-from`         |         | Include sessions started on or after `YYYY-MM-DD`         |
+| `--date-to`           |         | Include sessions started on or before `YYYY-MM-DD`        |
+| `--active-since`      |         | Include sessions active since an RFC3339 timestamp        |
+| `--min-messages`      | `0`     | Minimum total message count                               |
+| `--max-messages`      | `0`     | Maximum total message count                               |
+| `--min-user-messages` | `0`     | Minimum user message count                                |
+| `--include-one-shot`  | `false` | Include one-shot sessions, which are excluded by default  |
+| `--include-automated` | `false` | Include automated sessions, which are excluded by default |
+| `--include-children`  | `false` | Include subagent/child sessions                           |
+| `--outcome`           |         | Comma-separated outcome filter                            |
+| `--health-grade`      |         | Comma-separated health grade filter                       |
+| `--min-tool-failures` |         | Minimum tool-failure signal count                         |
+| `--has-secret`        | `false` | Only sessions with detected secret leaks                  |
+
+By default, one-shot and automated sessions are excluded, so token and cost
+totals can be lower than the full archive unless the corresponding include
+flags are used.
+
+**Examples:**
+
+```bash
+agentsview export sessions --format json
+agentsview export sessions --format ndjson --limit 100
+agentsview export sessions --all --format ndjson --project agentsview
+```
+
+The JSON top level has `schema_version`, `database_id`, `cursor`, `pricing`,
+`projects`, and `sessions`. NDJSON writes the same metadata as the first line,
+then one session row per following line. The default and maximum page size is
+`db.MaxSessionLimit`, currently 500.
+
+When `--cursor` is present, only `--format` and `--limit` may be combined with
+it. Cursor reset errors write structured JSON to stderr, leave stdout empty, and
+exit with code 4:
+
+```json
+{"error":"cursor_reset","message":"session export cursor does not belong to this archive","database_id":"..."}
 ```
 
 ______________________________________________________________________

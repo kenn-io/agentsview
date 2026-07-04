@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/export"
 )
 
 // TestLoadPricingMapAppliesCustomWhenTableMissing covers the fresh-PG
@@ -32,10 +33,12 @@ func TestLoadPricingMapAppliesCustomWhenTableMissing(t *testing.T) {
 	out, err := store.loadPricingMap(ctx)
 	require.NoError(t, err, "loadPricingMap")
 
-	got, ok := out["acme-ultra-2.1"]
+	byPattern := pricingRowsByPattern(out)
+	got, ok := byPattern["acme-ultra-2.1"]
 	require.True(t, ok, "custom model missing from pricing map")
-	assert.InDelta(t, 9.0, got.input, 0.001)
-	assert.InDelta(t, 18.0, got.output, 0.001)
+	assert.InDelta(t, 9.0, got.InputPerMTok, 0.001)
+	assert.InDelta(t, 18.0, got.OutputPerMTok, 0.001)
+	assert.Equal(t, export.PricingRowSourceCustom, got.Source)
 
 	// Fallback pricing must still populate the map so real models
 	// continue to resolve when custom_model_pricing only covers a

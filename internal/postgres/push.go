@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 )
 
 const (
@@ -211,6 +212,9 @@ func (s *Sync) Push(
 		return result, err
 	}
 	if err := s.syncCursorUsageEvents(ctx); err != nil {
+		return result, err
+	}
+	if err := s.syncProjectIdentityObservations(ctx); err != nil {
 		return result, err
 	}
 
@@ -453,6 +457,90 @@ func (s *Sync) Push(
 	}
 	result.Duration = time.Since(start)
 	return result, nil
+}
+
+func (s *Sync) syncProjectIdentityObservations(ctx context.Context) error {
+	observations, err := s.local.ListProjectIdentityObservations(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("loading project identity observations: %w", err)
+	}
+	observations = filterProjectIdentityObservations(
+		observations, s.projects, s.excludeProjects,
+	)
+	if len(observations) == 0 {
+		return nil
+	}
+	tx, err := s.pg.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning project identity observation sync: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, obs := range observations {
+		if obs.GitRemote != "" {
+			if _, err := tx.ExecContext(ctx, `
+				DELETE FROM project_identity_observations
+				WHERE project = $1 AND machine = $2 AND root_path = $3
+				  AND git_remote = ''`,
+				obs.Project, obs.Machine, obs.RootPath,
+			); err != nil {
+				return fmt.Errorf(
+					"removing stale pg project identity root fallback %s/%s/%s: %w",
+					obs.Project, obs.Machine, obs.RootPath, err,
+				)
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO project_identity_observations (
+				project, machine, root_path, git_remote, git_remote_name,
+				worktree_name, worktree_root_path, observed_at,
+				normalized_remote, key_source, key
+			) VALUES (
+				$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+			)
+			ON CONFLICT (project, machine, root_path, git_remote)
+			DO UPDATE SET
+				git_remote_name = EXCLUDED.git_remote_name,
+				worktree_name = EXCLUDED.worktree_name,
+				worktree_root_path = EXCLUDED.worktree_root_path,
+				observed_at = EXCLUDED.observed_at,
+				normalized_remote = EXCLUDED.normalized_remote,
+				key_source = EXCLUDED.key_source,
+				key = EXCLUDED.key`,
+			obs.Project, obs.Machine, obs.RootPath, obs.GitRemote,
+			obs.GitRemoteName, obs.WorktreeName, obs.WorktreeRootPath,
+			obs.ObservedAt, obs.NormalizedRemote, obs.KeySource, obs.Key,
+		); err != nil {
+			return fmt.Errorf(
+				"syncing project identity observation %s/%s/%s: %w",
+				obs.Project, obs.Machine, obs.RootPath, err,
+			)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing project identity observation sync: %w", err)
+	}
+	return nil
+}
+
+func filterProjectIdentityObservations(
+	observations []export.ProjectIdentityObservation,
+	projects []string,
+	excludeProjects []string,
+) []export.ProjectIdentityObservation {
+	if len(projects) == 0 && len(excludeProjects) == 0 {
+		return observations
+	}
+	out := observations[:0]
+	for _, obs := range observations {
+		if len(projects) > 0 && !slices.Contains(projects, obs.Project) {
+			continue
+		}
+		if slices.Contains(excludeProjects, obs.Project) {
+			continue
+		}
+		out = append(out, obs)
+	}
+	return out
 }
 
 // pgPushMarkerMachineState reports whether this host's push marker is present

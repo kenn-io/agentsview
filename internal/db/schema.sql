@@ -379,6 +379,31 @@ CREATE INDEX IF NOT EXISTS idx_worktree_project_mappings_match
 CREATE INDEX IF NOT EXISTS idx_worktree_project_mappings_project
     ON worktree_project_mappings(machine, project);
 
+CREATE TABLE IF NOT EXISTS archive_metadata (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE TABLE IF NOT EXISTS project_identity_observations (
+    project            TEXT NOT NULL,
+    machine            TEXT NOT NULL,
+    root_path          TEXT NOT NULL DEFAULT '',
+    git_remote         TEXT NOT NULL DEFAULT '',
+    git_remote_name    TEXT NOT NULL DEFAULT '',
+    worktree_name      TEXT NOT NULL DEFAULT '',
+    worktree_root_path TEXT NOT NULL DEFAULT '',
+    observed_at        TEXT NOT NULL,
+    normalized_remote  TEXT NOT NULL DEFAULT '',
+    key_source         TEXT NOT NULL DEFAULT '',
+    key                TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (project, machine, root_path, git_remote)
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_identity_observations_project
+    ON project_identity_observations(project);
+
 -- PG sync state: stores watermarks for push sync
 CREATE TABLE IF NOT EXISTS pg_sync_state (
     key   TEXT PRIMARY KEY,

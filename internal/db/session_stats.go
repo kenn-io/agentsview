@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db/git"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/timeutil"
 )
 
@@ -974,12 +975,13 @@ func (db *DB) computeCacheEconomics(
 	if err != nil {
 		return fmt.Errorf("loading pricing: %w", err)
 	}
+	rateResolver := export.NewPricingResolver(pricing)
 
 	perSession := make(map[string]*sessionCacheTotals, len(claudeIDs))
 	if err := queryChunked(claudeIDs,
 		func(chunk []string) error {
 			return db.accumulateCacheTotals(
-				ctx, chunk, pricing, perSession,
+				ctx, chunk, rateResolver, perSession,
 			)
 		}); err != nil {
 		return err
@@ -1059,7 +1061,7 @@ func collectClaudeSessionIDs(rows []sessionStatsRow) []string {
 // dollar numbers consistent with GetDailyUsage.
 func (db *DB) accumulateCacheTotals(
 	ctx context.Context, sessionIDs []string,
-	pricing map[string]modelRates,
+	pricing *export.PricingResolver,
 	perSession map[string]*sessionCacheTotals,
 ) error {
 	ph, args := inPlaceholders(sessionIDs)
@@ -1101,7 +1103,7 @@ func (db *DB) accumulateCacheTotals(
 func addMessageToCacheTotals(
 	perSession map[string]*sessionCacheTotals,
 	sessionID, model, tokenJSON string,
-	pricing map[string]modelRates,
+	pricing *export.PricingResolver,
 ) {
 	inputTok, outputTok, cacheCrTok, cacheRdTok :=
 		clampedUsageTokenCounters(tokenJSON)
@@ -1115,21 +1117,19 @@ func addMessageToCacheTotals(
 	totals.cacheCreateT += int64(cacheCrTok)
 	totals.cacheReadT += int64(cacheRdTok)
 
-	rates, _ := lookupModelRates(pricing, model)
-	totals.dollarsSpent += (float64(inputTok)*rates.input +
-		float64(outputTok)*rates.output +
-		float64(cacheCrTok)*rates.cacheCreation +
-		float64(cacheRdTok)*rates.cacheRead) / 1_000_000
+	rates := pricing.Lookup(model).Rates
+	totals.dollarsSpent += rates.CostForTokens(
+		inputTok, outputTok, 0, cacheCrTok, cacheRdTok)
 	// Uncached counterfactual: cache_creation tokens would still
 	// have been sent as ordinary input (so they are billed at the
 	// input rate, not dropped), and cache_read tokens are re-billed
 	// at the input rate too. This matches the rest of the codebase
 	// (see internal/db/usage.go and the savings calculation in
 	// frontend/src/lib/utils/usageSavings.ts).
-	totals.dollarsNoCac += (float64(inputTok)*rates.input +
-		float64(outputTok)*rates.output +
-		float64(cacheCrTok)*rates.input +
-		float64(cacheRdTok)*rates.input) / 1_000_000
+	totals.dollarsNoCac += (float64(inputTok)*rates.InputPerMTok +
+		float64(outputTok)*rates.OutputPerMTok +
+		float64(cacheCrTok)*rates.InputPerMTok +
+		float64(cacheRdTok)*rates.InputPerMTok) / 1_000_000
 }
 
 // computeTemporal fills stats.Temporal.HourlyUTC and ReporterTimezone.

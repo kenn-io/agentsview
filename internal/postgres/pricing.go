@@ -4,64 +4,20 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"maps"
 	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/pricing"
 )
-
-type modelRates struct {
-	input         float64
-	output        float64
-	cacheCreation float64
-	cacheRead     float64
-}
 
 type pricingLoad struct {
 	done    chan struct{}
 	cancel  context.CancelFunc
 	waiters int
-	prices  map[string]modelRates
+	prices  []export.EffectivePricingRow
 	err     error
-}
-
-func lookupModelRates(
-	prices map[string]modelRates, model string,
-) (modelRates, bool) {
-	return pricing.Resolve(prices, model)
-}
-
-type modelRateResolution struct {
-	rates modelRates
-	ok    bool
-}
-
-type modelRateResolver struct {
-	prices map[string]modelRates
-	cache  map[string]modelRateResolution
-}
-
-func newModelRateResolver(
-	prices map[string]modelRates,
-) *modelRateResolver {
-	return &modelRateResolver{
-		prices: prices,
-		cache:  make(map[string]modelRateResolution),
-	}
-}
-
-func (r *modelRateResolver) lookup(model string) (modelRates, bool) {
-	if r == nil {
-		return modelRates{}, false
-	}
-	if cached, ok := r.cache[model]; ok {
-		return cached.rates, cached.ok
-	}
-	rates, ok := lookupModelRates(r.prices, model)
-	r.cache[model] = modelRateResolution{rates: rates, ok: ok}
-	return rates, ok
 }
 
 func fallbackPricingRows() []db.ModelPricing {
@@ -79,35 +35,93 @@ func fallbackPricingRows() []db.ModelPricing {
 	return out
 }
 
-func pricingRowsToMap(prices []db.ModelPricing) map[string]modelRates {
-	out := make(map[string]modelRates, len(prices))
+func pricingRowsToMap(prices []db.ModelPricing) map[string]export.ModelRates {
+	fallback := pgFallbackRateMap()
+	out := make(map[string]export.ModelRates, len(prices))
 	for _, p := range prices {
 		if strings.HasPrefix(p.ModelPattern, "_") {
 			continue
 		}
-		out[p.ModelPattern] = modelRates{
-			input:         p.InputPerMTok,
-			output:        p.OutputPerMTok,
-			cacheCreation: p.CacheCreationPerMTok,
-			cacheRead:     p.CacheReadPerMTok,
+		rates := pgModelPricingRates(p)
+		rates.Source = pgModelPricingSource(p, fallback)
+		out[p.ModelPattern] = rates
+	}
+	return out
+}
+
+func pgFallbackRateMap() map[string]export.ModelRates {
+	src := pricing.FallbackPricing()
+	out := make(map[string]export.ModelRates, len(src))
+	for _, p := range src {
+		out[p.ModelPattern] = export.ModelRates{
+			InputPerMTok:      p.InputPerMTok,
+			OutputPerMTok:     p.OutputPerMTok,
+			CacheWritePerMTok: p.CacheCreationPerMTok,
+			CacheReadPerMTok:  p.CacheReadPerMTok,
+			Source:            export.PricingRowSourceEmbedded,
 		}
 	}
 	return out
 }
 
-func fallbackPricingMap() map[string]modelRates {
+func pgModelPricingRates(p db.ModelPricing) export.ModelRates {
+	var updatedAt *time.Time
+	if p.UpdatedAt != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, p.UpdatedAt); err == nil {
+			t := parsed.UTC()
+			updatedAt = &t
+		}
+	}
+	return export.ModelRates{
+		InputPerMTok:      p.InputPerMTok,
+		OutputPerMTok:     p.OutputPerMTok,
+		CacheWritePerMTok: p.CacheCreationPerMTok,
+		CacheReadPerMTok:  p.CacheReadPerMTok,
+		UpdatedAt:         updatedAt,
+	}
+}
+
+func pgModelPricingSource(
+	p db.ModelPricing, fallback map[string]export.ModelRates,
+) export.PricingRowSource {
+	if rates, ok := fallback[p.ModelPattern]; ok &&
+		rates.InputPerMTok == p.InputPerMTok &&
+		rates.OutputPerMTok == p.OutputPerMTok &&
+		rates.CacheWritePerMTok == p.CacheCreationPerMTok &&
+		rates.CacheReadPerMTok == p.CacheReadPerMTok {
+		return export.PricingRowSourceEmbedded
+	}
+	return export.PricingRowSourceFetched
+}
+
+func fallbackPricingMap() map[string]export.ModelRates {
 	return pricingRowsToMap(fallbackPricingRows())
 }
 
-func clonePricingMap(in map[string]modelRates) map[string]modelRates {
-	out := make(map[string]modelRates, len(in))
-	maps.Copy(out, in)
+func pricingMapRows(
+	in map[string]export.ModelRates,
+) []export.EffectivePricingRow {
+	out := make([]export.EffectivePricingRow, 0, len(in))
+	for pattern, rates := range in {
+		out = append(out, export.EffectivePricingRow{
+			ModelPattern: pattern,
+			Rates:        rates,
+		})
+	}
+	return out
+}
+
+func clonePricingRows(
+	in []export.EffectivePricingRow,
+) []export.EffectivePricingRow {
+	out := make([]export.EffectivePricingRow, len(in))
+	copy(out, in)
 	return out
 }
 
 func (s *Store) loadPricingMap(
 	ctx context.Context,
-) (map[string]modelRates, error) {
+) ([]export.EffectivePricingRow, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -119,7 +133,7 @@ func (s *Store) loadPricingMap(
 		if load.err != nil {
 			return nil, load.err
 		}
-		return clonePricingMap(load.prices), nil
+		return clonePricingRows(load.prices), nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -149,12 +163,12 @@ func (s *Store) runPricingLoad(ctx context.Context, load *pricingLoad) {
 	err := s.mergeDBPricing(ctx, out)
 	load.cancel()
 
-	var prices map[string]modelRates
+	var prices []export.EffectivePricingRow
 	if err == nil {
 		s.pricingMu.Lock()
 		s.applyCustomPricing(out)
 		s.pricingMu.Unlock()
-		prices = clonePricingMap(out)
+		prices = pricingMapRows(out)
 	}
 
 	s.pricingLoadMu.Lock()
@@ -192,7 +206,7 @@ func (s *Store) forgetPricingLoad() {
 // custom_model_pricing still applies on fresh PG installs where
 // `agentsview pg push` has not run yet.
 func (s *Store) mergeDBPricing(
-	ctx context.Context, out map[string]modelRates,
+	ctx context.Context, out map[string]export.ModelRates,
 ) error {
 	rows, err := s.pg.QueryContext(
 		ctx,
@@ -224,12 +238,9 @@ func (s *Store) mergeDBPricing(
 		if strings.HasPrefix(p.ModelPattern, "_") {
 			continue
 		}
-		out[p.ModelPattern] = modelRates{
-			input:         p.InputPerMTok,
-			output:        p.OutputPerMTok,
-			cacheCreation: p.CacheCreationPerMTok,
-			cacheRead:     p.CacheReadPerMTok,
-		}
+		rates := pgModelPricingRates(p)
+		rates.Source = pgModelPricingSource(p, pgFallbackRateMap())
+		out[p.ModelPattern] = rates
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterating pg pricing: %w", err)
@@ -241,15 +252,21 @@ func (s *Store) mergeDBPricing(
 // custom entries win over both DB and fallback pricing for the same
 // model. Kept separate from loadPricingMap so unit tests can exercise
 // the override step without a live PostgreSQL connection.
-func (s *Store) applyCustomPricing(out map[string]modelRates) {
+func (s *Store) applyCustomPricing(out map[string]export.ModelRates) {
 	for model, cp := range s.customPricing {
-		out[model] = modelRates{
-			input:         cp.Input,
-			output:        cp.Output,
-			cacheCreation: cp.CacheCreation,
-			cacheRead:     cp.CacheRead,
+		rates := export.ModelRates{
+			InputPerMTok:      cp.Input,
+			OutputPerMTok:     cp.Output,
+			CacheWritePerMTok: cp.CacheCreation,
+			CacheReadPerMTok:  cp.CacheRead,
 		}
+		rates.Source = pgCustomPricingSource()
+		out[model] = rates
 	}
+}
+
+func pgCustomPricingSource() export.PricingRowSource {
+	return export.PricingRowSourceCustom
 }
 
 const pricingUpsertBatch = 100

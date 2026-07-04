@@ -18,6 +18,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 
 	"github.com/stretchr/testify/assert"
@@ -773,11 +774,37 @@ func TestLoadPricingSeedsFallbackAndOverlaysOverrides(t *testing.T) {
 	assert.Equal(t, fallback.OutputPerMTok, got["gpt-5.5"].output)
 	assert.Equal(t, duckRates{
 		input: 30, output: 150, cacheCreation: 37.5, cacheRead: 3.0,
+		source: export.PricingRowSourceFetched,
 	}, got["claude-sonnet-4-6"])
 	assert.NotContains(t, got, "_fallback_version")
 	assert.Equal(t, duckRates{
 		input: 9, output: 10, cacheCreation: 11, cacheRead: 12,
+		source: export.PricingRowSourceCustom,
 	}, got["custom-model"])
+}
+
+func TestLoadPricingRetainsCustomOverrideSource(t *testing.T) {
+	ctx := context.Background()
+	conn := openTestDuckDB(t)
+	require.NoError(t, EnsureSchema(ctx, conn))
+	store := NewStoreFromDB(conn)
+	fallback := pricingByPattern(t, pricingpkg.FallbackPricing(), "gpt-5.5")
+	store.SetCustomPricing(map[string]config.CustomModelRate{
+		"gpt-5.5": {
+			Input:         fallback.InputPerMTok,
+			Output:        fallback.OutputPerMTok,
+			CacheCreation: fallback.CacheCreationPerMTok,
+			CacheRead:     fallback.CacheReadPerMTok,
+		},
+	})
+
+	got, err := store.loadPricing(ctx)
+	require.NoError(t, err)
+	block, err := export.NewPricingResolver(duckPricingRows(got)).BuildBlock()
+	require.NoError(t, err)
+
+	assert.Equal(t, "custom+embedded", block.Source)
+	assert.Equal(t, 1, block.CustomOverrideCount)
 }
 
 func pricingByPattern(t *testing.T, prices []pricingpkg.ModelPricing, pattern string) pricingpkg.ModelPricing {
@@ -2198,6 +2225,119 @@ func TestUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 	assert.True(t, sessionUsage.HasCost)
 	assert.InDelta(t, wantCost, sessionUsage.CostUSD, 0.000001)
 	assert.Equal(t, []string{"summary-model"}, sessionUsage.Models)
+}
+
+func TestDailyUsageCostsReasoningOnlyRows(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:  "reasoning-only",
+		OutputPerMTok: 2,
+	}}))
+
+	sessionID := "duck-reasoning-only"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: syncSession(
+			sessionID, "alpha", "reasoning only",
+			"2026-01-19T00:00:00.000Z", 0),
+		UsageEvents: []db.UsageEvent{{
+			Source:          "provider",
+			Model:           "reasoning-only",
+			ReasoningTokens: 300,
+			OccurredAt:      "2026-01-19T00:01:00.000Z",
+			DedupKey:        "reasoning-only",
+		}},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-31", Timezone: "UTC"}
+	wantCost := float64(300) * 2 / 1_000_000
+
+	daily, err := store.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Zero(t, daily.Totals.OutputTokens,
+		"reasoning-only rows do not change reported output-token totals")
+	assert.InDelta(t, wantCost, daily.Totals.TotalCost, 0.000001)
+
+	top, err := store.GetTopSessionsByCost(ctx, filter, 10)
+	require.NoError(t, err)
+	require.Len(t, top, 1)
+	assert.InDelta(t, wantCost, top[0].Cost, 0.000001)
+
+	sessionUsage, err := store.GetSessionUsage(ctx, sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, sessionUsage)
+	assert.True(t, sessionUsage.HasCost)
+	assert.InDelta(t, wantCost, sessionUsage.CostUSD, 0.000001)
+}
+
+func TestDailyUsageCostsMixedOutputAndReasoningOnlyRows(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:  "reasoning-mix",
+		OutputPerMTok: 2,
+	}}))
+
+	sessionID := "duck-reasoning-mixed"
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: syncSession(
+			sessionID, "alpha", "reasoning mixed",
+			"2026-01-19T00:00:00.000Z", 0),
+		UsageEvents: []db.UsageEvent{
+			{
+				Source:          "provider",
+				Model:           "reasoning-mix",
+				OutputTokens:    100,
+				ReasoningTokens: 20,
+				OccurredAt:      "2026-01-19T00:01:00.000Z",
+				DedupKey:        "normal-output",
+			},
+			{
+				Source:          "provider",
+				Model:           "reasoning-mix",
+				ReasoningTokens: 300,
+				OccurredAt:      "2026-01-19T00:02:00.000Z",
+				DedupKey:        "reasoning-only",
+			},
+		},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-31", Timezone: "UTC"}
+	wantCost := float64(100+300) * 2 / 1_000_000
+
+	daily, err := store.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, 100, daily.Totals.OutputTokens,
+		"reasoning-only rows do not change reported output-token totals")
+	assert.InDelta(t, wantCost, daily.Totals.TotalCost, 0.000001)
+	require.NotNil(t, daily.Pricing)
+	assert.Equal(t, export.CostSourceComputed,
+		daily.Pricing.Models["reasoning-mix"].CostSource)
+
+	top, err := store.GetTopSessionsByCost(ctx, filter, 10)
+	require.NoError(t, err)
+	require.Len(t, top, 1)
+	assert.InDelta(t, wantCost, top[0].Cost, 0.000001)
+
+	sessionUsage, err := store.GetSessionUsage(ctx, sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, sessionUsage)
+	assert.True(t, sessionUsage.HasCost)
+	assert.InDelta(t, wantCost, sessionUsage.CostUSD, 0.000001)
 }
 
 func TestUsageDedupPrefersInRangeDuplicate(t *testing.T) {

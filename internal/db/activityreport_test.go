@@ -80,6 +80,18 @@ func TestGetActivityReport_BasicConcurrency(t *testing.T) {
 	assert.GreaterOrEqual(t, len(r.ByModel), 2)
 }
 
+func TestActivityReportEmptyProjectsMapExcludesUnrelatedObservations(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedProjectIdentityObservation(t, d, "unrelated-project")
+
+	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
+		dayQuery(t, "2026-06-16", "UTC"))
+	require.NoError(t, err)
+	assert.Empty(t, r.BySession)
+	assert.Empty(t, r.Projects)
+}
+
 func TestGetActivityReport_UsageCostAndTokens(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
@@ -111,6 +123,56 @@ func TestGetActivityReport_UsageCostAndTokens(t *testing.T) {
 	assert.Equal(t, 500, r.Totals.OutputTokens)
 	// Cost = (1000*3 + 500*15) / 1e6 = 0.0105
 	assert.InDelta(t, 0.0105, r.Totals.Cost, 1e-9)
+}
+
+func TestGetActivityReport_PricingModelsOnlyIncludeDedupSurvivors(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{
+		{
+			ModelPattern:  "kept-model",
+			InputPerMTok:  3.0,
+			OutputPerMTok: 15.0,
+		},
+		{
+			ModelPattern:  "discarded-model",
+			InputPerMTok:  3.0,
+			OutputPerMTok: 15.0,
+		},
+	}), "UpsertModelPricing")
+
+	insertSession(t, d, "earlier", "proj1", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = Ptr("2026-06-16T10:30:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:30:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "earlier", Ordinal: 0, Role: "assistant", Content: "x",
+		Timestamp:       "2026-06-16T10:30:00Z",
+		Model:           "kept-model",
+		ClaudeMessageID: "m-dup", ClaudeRequestID: "r-dup",
+		TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
+	})
+	insertSession(t, d, "later", "proj1", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = Ptr("2026-06-16T10:31:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:31:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "later", Ordinal: 0, Role: "assistant", Content: "x",
+		Timestamp:       "2026-06-16T10:31:00Z",
+		Model:           "discarded-model",
+		ClaudeMessageID: "m-dup", ClaudeRequestID: "r-dup",
+		TokenUsage: json.RawMessage(`{"input_tokens":2000,"output_tokens":900}`),
+	})
+
+	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
+		dayQuery(t, "2026-06-16", "UTC"))
+	require.NoError(t, err)
+	assert.Equal(t, 500, r.Totals.OutputTokens)
+	require.NotNil(t, r.Pricing)
+	assert.Contains(t, r.Pricing.Models, "kept-model")
+	assert.NotContains(t, r.Pricing.Models, "discarded-model")
 }
 
 // TestGetActivityReport_ExcludesOtherDays confirms the candidate-session

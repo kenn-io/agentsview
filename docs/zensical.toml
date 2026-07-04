@@ -22,6 +22,7 @@ nav = [
   {"Chat Import" = "chat-import.md"},
   {"Session Insights" = "insights.md"},
   {"CLI Reference" = "commands.md"},
+  {"Session Export" = "session-export.md"},
   {"Stats" = "stats.md"},
   {"Session API" = "session-api.md"},
   {"Configuration" = "configuration.md"},

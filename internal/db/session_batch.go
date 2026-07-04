@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"go.kenn.io/agentsview/internal/export"
 )
 
 // SessionBatchWrite is one full session rewrite for a bulk
@@ -11,13 +13,14 @@ import (
 // complete message set to store, the computed signal values,
 // and the data version to stamp after messages are written.
 type SessionBatchWrite struct {
-	Session         Session
-	Messages        []Message
-	UsageEvents     []UsageEvent
-	Signals         SessionSignalUpdate
-	Findings        []SecretFinding
-	DataVersion     int
-	ReplaceMessages bool
+	Session             Session
+	Messages            []Message
+	UsageEvents         []UsageEvent
+	IdentityObservation export.ProjectIdentityObservation
+	Signals             SessionSignalUpdate
+	Findings            []SecretFinding
+	DataVersion         int
+	ReplaceMessages     bool
 }
 
 // SessionBatchResult summarizes a WriteSessionBatch call.
@@ -303,6 +306,13 @@ func writeOneSessionBatchTx(
 			"upserting session %s: %w",
 			write.Session.ID, err,
 		)
+	}
+	if write.IdentityObservation.Project != "" {
+		if err := upsertProjectIdentityObservationTx(
+			tx, write.IdentityObservation,
+		); err != nil {
+			return 0, err
+		}
 	}
 	if err := replaceSessionUsageEventsTx(
 		tx, write.Session.ID, write.UsageEvents,

@@ -7,8 +7,7 @@ normal clones do not pull screenshots and PNGs into the main history.
 ## Layout
 
 - `*.md` and related public subdirectories: public docs source.
-- `internal/` and `superpowers/`: maintainer/agent references excluded from the
-  published site.
+- `internal/`: maintainer references excluded from the published site.
 - `zensical.toml`: Zensical site configuration and navigation.
 - `pyproject.toml` and `uv.lock`: pinned docs toolchain.
 - `vercel.json` and `vercel-build.sh`: Vercel project configuration.

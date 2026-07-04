@@ -373,6 +373,39 @@ var mirrorTables = []tableSpec{
 		},
 	},
 	{
+		name: "project_identity_observations",
+		create: `CREATE TABLE IF NOT EXISTS project_identity_observations (
+			project TEXT NOT NULL,
+			machine TEXT NOT NULL,
+			root_path TEXT NOT NULL DEFAULT '',
+			git_remote TEXT NOT NULL DEFAULT '',
+			git_remote_name TEXT NOT NULL DEFAULT '',
+			worktree_name TEXT NOT NULL DEFAULT '',
+			worktree_root_path TEXT NOT NULL DEFAULT '',
+			observed_at TIMESTAMP NOT NULL,
+			normalized_remote TEXT NOT NULL DEFAULT '',
+			key_source TEXT NOT NULL DEFAULT '',
+			key TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (project, machine, root_path, git_remote)
+		)`,
+		columns: []columnSpec{
+			{"project", "project TEXT NOT NULL DEFAULT ''"},
+			{"machine", "machine TEXT NOT NULL DEFAULT ''"},
+			{"root_path", "root_path TEXT NOT NULL DEFAULT ''"},
+			{"git_remote", "git_remote TEXT NOT NULL DEFAULT ''"},
+			{"git_remote_name", "git_remote_name TEXT NOT NULL DEFAULT ''"},
+			{"worktree_name", "worktree_name TEXT NOT NULL DEFAULT ''"},
+			{"worktree_root_path", "worktree_root_path TEXT NOT NULL DEFAULT ''"},
+			{"observed_at", "observed_at TIMESTAMP"},
+			{"normalized_remote", "normalized_remote TEXT NOT NULL DEFAULT ''"},
+			{"key_source", "key_source TEXT NOT NULL DEFAULT ''"},
+			{"key", "key TEXT NOT NULL DEFAULT ''"},
+		},
+		indexes: []string{
+			"CREATE INDEX IF NOT EXISTS idx_project_identity_observations_project ON project_identity_observations(project)",
+		},
+	},
+	{
 		name: "tool_calls",
 		create: `CREATE TABLE IF NOT EXISTS tool_calls (
 			id BIGINT,

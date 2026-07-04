@@ -160,6 +160,75 @@ func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
 	return nil
 }
 
+func (s *Sync) syncProjectIdentityObservations(ctx context.Context) error {
+	observations, err := s.local.ListProjectIdentityObservations(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("loading project identity observations: %w", err)
+	}
+	if len(s.projects) > 0 || len(s.excludeProjects) > 0 {
+		out := observations[:0]
+		for _, obs := range observations {
+			if !projectInSyncScope(obs.Project, s.projects, s.excludeProjects) {
+				continue
+			}
+			out = append(out, obs)
+		}
+		observations = out
+	}
+	if len(observations) == 0 {
+		return nil
+	}
+	tx, err := s.duck.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning duckdb project identity sync: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+	for _, obs := range observations {
+		if obs.GitRemote != "" {
+			if err := s.execMutation(ctx, tx, `
+				DELETE FROM project_identity_observations
+				WHERE project = ? AND machine = ? AND root_path = ?
+				  AND git_remote = ''`,
+				obs.Project, obs.Machine, obs.RootPath,
+			); err != nil {
+				return fmt.Errorf(
+					"removing stale duckdb project identity root fallback %s/%s/%s: %w",
+					obs.Project, obs.Machine, obs.RootPath, err,
+				)
+			}
+		}
+		if err := s.execMutation(ctx, tx, `
+			INSERT INTO project_identity_observations (
+				project, machine, root_path, git_remote, git_remote_name,
+				worktree_name, worktree_root_path, observed_at,
+				normalized_remote, key_source, key
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(project, machine, root_path, git_remote) DO UPDATE SET
+				git_remote_name = excluded.git_remote_name,
+				worktree_name = excluded.worktree_name,
+				worktree_root_path = excluded.worktree_root_path,
+				observed_at = excluded.observed_at,
+				normalized_remote = excluded.normalized_remote,
+				key_source = excluded.key_source,
+				key = excluded.key`,
+			obs.Project, obs.Machine, obs.RootPath, obs.GitRemote,
+			obs.GitRemoteName, obs.WorktreeName, obs.WorktreeRootPath,
+			obs.ObservedAt, obs.NormalizedRemote, obs.KeySource, obs.Key,
+		); err != nil {
+			return fmt.Errorf(
+				"syncing duckdb project identity observation %s/%s/%s: %w",
+				obs.Project, obs.Machine, obs.RootPath, err,
+			)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing duckdb project identity sync: %w", err)
+	}
+	return nil
+}
+
 func duckFallbackPricingRows() []db.ModelPricing {
 	src := pricingpkg.FallbackPricing()
 	out := make([]db.ModelPricing, len(src))

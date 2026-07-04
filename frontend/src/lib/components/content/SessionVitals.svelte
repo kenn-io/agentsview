@@ -799,10 +799,8 @@
   }
 
   /* Calls section --------------------------------------------------- */
-  /* Adapted from
-     docs/superpowers/specs/2026-04-26-session-duration-ux-mockup.html
-     (.scale-axis and .calls rules, lines 498–516), with the mockup's raw
-     colors mapped to theme tokens. */
+  /* Adapted from the session-duration UX mockup, with the raw colors mapped to
+     theme tokens. */
   .scale-axis {
     display: flex;
     justify-content: space-between;

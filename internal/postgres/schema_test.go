@@ -467,8 +467,9 @@ func TestEnsureSchemaChecksDataVersionBeforeDDL(t *testing.T) {
 func TestSyncEnsureSchemaSkipsDDLWhenSchemaCompatible(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
 	state.existingTables = map[string]bool{
-		"model_pricing":       true,
-		"cursor_usage_events": true,
+		"model_pricing":                 true,
+		"project_identity_observations": true,
+		"cursor_usage_events":           true,
 	}
 	state.existingIndexes = map[string]bool{
 		"idx_cursor_usage_events_dedup": true,
@@ -543,6 +544,21 @@ func TestCheckSchemaCompatRequiresSessionAliases(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "session_aliases table missing")
+}
+
+func TestCheckSchemaCompatRequiresProjectIdentityObservations(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.queryErrors = []schemaProbeQueryError{{
+		contains: "from project_identity_observations",
+		err: errors.New(
+			`ERROR: relation "project_identity_observations" does not exist (SQLSTATE 42P01)`),
+	}}
+
+	err := CheckSchemaCompat(context.Background(), pg)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(),
+		"project_identity_observations table missing required columns")
 }
 
 func TestSyncEnsureSchemaRunsDDLWhenPushMetadataMissing(t *testing.T) {

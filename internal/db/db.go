@@ -19,6 +19,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -372,7 +373,8 @@ type DB struct {
 	cursorMu     sync.RWMutex
 	cursorSecret []byte
 
-	customPricing map[string]config.CustomModelRate
+	customPricing        map[string]config.CustomModelRate
+	customPricingSources map[string]export.PricingRowSource
 
 	checkpointMu   sync.Mutex
 	checkpointStop chan struct{}
@@ -450,6 +452,14 @@ func (r *readerHandle) QueryRowContext(
 	r.owner.connMu.RLock()
 	defer r.owner.connMu.RUnlock()
 	return r.current().QueryRowContext(ctx, query, args...)
+}
+
+func (r *readerHandle) BeginTx(
+	ctx context.Context, opts *sql.TxOptions,
+) (*sql.Tx, error) {
+	r.owner.connMu.RLock()
+	defer r.owner.connMu.RUnlock()
+	return r.current().BeginTx(ctx, opts)
 }
 
 func (w *writerHandle) current() (*sql.DB, error) {
@@ -602,6 +612,17 @@ func (db *DB) requireWritable() error {
 
 func (db *DB) SetCustomPricing(p map[string]config.CustomModelRate) {
 	db.customPricing = p
+	db.customPricingSources = nil
+}
+
+// SetEffectivePricing installs in-memory pricing rows with explicit provenance
+// sources for read-only fallback paths that cannot seed model_pricing.
+func (db *DB) SetEffectivePricing(
+	p map[string]config.CustomModelRate,
+	sources map[string]export.PricingRowSource,
+) {
+	db.customPricing = p
+	db.customPricingSources = sources
 }
 
 // SetCursorSecret updates the secret key used for cursor signing.
@@ -758,6 +779,8 @@ var readOnlyRequiredTables = []string{
 	"starred_sessions",
 	"excluded_sessions",
 	"worktree_project_mappings",
+	"archive_metadata",
+	"project_identity_observations",
 	"pg_sync_state",
 	"model_pricing",
 	"secret_findings",
@@ -1436,6 +1459,50 @@ func (db *DB) migrateColumns() error {
 	`); err != nil {
 		return fmt.Errorf(
 			"creating worktree_project_mappings: %w", err,
+		)
+	}
+
+	if _, err := w.Exec(`
+		CREATE TABLE IF NOT EXISTS archive_metadata (
+			key        TEXT PRIMARY KEY,
+			value      TEXT NOT NULL,
+			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+		);
+		CREATE TABLE IF NOT EXISTS project_identity_observations (
+			project            TEXT NOT NULL,
+			machine            TEXT NOT NULL,
+			root_path          TEXT NOT NULL DEFAULT '',
+			git_remote         TEXT NOT NULL DEFAULT '',
+			git_remote_name    TEXT NOT NULL DEFAULT '',
+			worktree_name      TEXT NOT NULL DEFAULT '',
+			worktree_root_path TEXT NOT NULL DEFAULT '',
+			observed_at        TEXT NOT NULL,
+			normalized_remote  TEXT NOT NULL DEFAULT '',
+			key_source         TEXT NOT NULL DEFAULT '',
+			key                TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (project, machine, root_path, git_remote)
+		);
+		CREATE INDEX IF NOT EXISTS idx_project_identity_observations_project
+			ON project_identity_observations(project);
+	`); err != nil {
+		return fmt.Errorf(
+			"creating project identity metadata: %w", err,
+		)
+	}
+	if _, err := w.Exec(`
+		DELETE FROM project_identity_observations
+		WHERE git_remote = ''
+		  AND EXISTS (
+			SELECT 1 FROM project_identity_observations remote
+			WHERE remote.project = project_identity_observations.project
+			  AND remote.machine = project_identity_observations.machine
+			  AND remote.root_path = project_identity_observations.root_path
+			  AND remote.git_remote != ''
+		  );
+	`); err != nil {
+		return fmt.Errorf(
+			"removing stale project identity root fallbacks: %w", err,
 		)
 	}
 

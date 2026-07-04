@@ -5,6 +5,12 @@ import (
 	"strings"
 )
 
+type Match[T any] struct {
+	Value   T
+	Pattern string
+	OK      bool
+}
+
 // NormalizeModelName converts a model id's dots to dashes so agents
 // that report dotted ids (e.g. opencode's claude-opus-4.7) match the
 // dashed LiteLLM pricing keys (claude-opus-4-7). Use only as a
@@ -32,59 +38,71 @@ func canonicalize(s string) string {
 // there is no exact match, then case-insensitive matches, and finally
 // canonical matches with curated trailing decorations stripped.
 func Resolve[T any](m map[string]T, model string) (T, bool) {
+	match := ResolveMatch(model, m)
+	return match.Value, match.OK
+}
+
+// ResolveMatch is Resolve plus the pricing pattern/key that supplied the
+// value. Pattern is empty when no value is resolved.
+func ResolveMatch[T any](model string, m map[string]T) Match[T] {
+	var zero T
 	// 1. Exact match
 	if v, ok := m[model]; ok {
-		return v, true
+		return Match[T]{Value: v, Pattern: model, OK: true}
 	}
 	// 2. Exact match on normalized (dotted to dashed)
 	if norm := NormalizeModelName(model); norm != model {
 		if v, ok := m[norm]; ok {
-			return v, true
+			return Match[T]{Value: v, Pattern: norm, OK: true}
 		}
 	}
 	// 3. Case-insensitive exact match
 	lowerModel := strings.ToLower(model)
 	for k, v := range m {
 		if strings.ToLower(k) == lowerModel {
-			return v, true
+			return Match[T]{Value: v, Pattern: k, OK: true}
 		}
 	}
 	lowerNorm := strings.ToLower(NormalizeModelName(model))
 	for k, v := range m {
 		if strings.ToLower(k) == lowerNorm {
-			return v, true
+			return Match[T]{Value: v, Pattern: k, OK: true}
 		}
 	}
 	// 4. Canonical match with curated decoration stripping
-	return resolveCanonical(m, model)
+	v, pattern, ok := resolveCanonicalMatch(m, model)
+	if !ok {
+		return Match[T]{Value: zero}
+	}
+	return Match[T]{Value: v, Pattern: pattern, OK: true}
 }
 
-// resolveCanonical matches the canonicalized model name exactly against
-// canonicalized keys, retrying with a trailing bracketed or
-// parenthesized decoration removed ("claude-fable-5[1m]",
-// "Gemini 3.5 Flash (Medium)") and then a trailing -YYYYMMDD release
-// date removed. Earlier (less-stripped) candidates win. Arbitrary
-// substring matching is deliberately avoided: a shorter pricing key
-// inside a longer model name (gpt-5.5 inside gpt-5.5-codex) would
-// silently misprice a distinct model that should stay unpriced.
+// resolveCanonicalMatch matches the canonicalized model name exactly against
+// canonicalized keys, retrying with a trailing bracketed or parenthesized
+// decoration removed ("claude-fable-5[1m]", "Gemini 3.5 Flash (Medium)") and
+// then a trailing -YYYYMMDD release date removed. Earlier (less-stripped)
+// candidates win. Arbitrary substring matching is deliberately avoided: a
+// shorter pricing key inside a longer model name (gpt-5.5 inside
+// gpt-5.5-codex) would silently misprice a distinct model that should stay
+// unpriced.
 //
 // Keys are ranked so resolution is deterministic when several keys
-// canonicalize alike: a key whose provider prefix matches the model's
-// wins, then an unqualified key, then a provider-qualified key for an
-// unqualified model. Distinct keys tied within one rank are ambiguous
-// and stay unresolved. Keys whose provider conflicts with a qualified
-// model are never considered.
-func resolveCanonical[T any](m map[string]T, model string) (T, bool) {
+// canonicalize alike: a key whose provider prefix matches the model's wins,
+// then an unqualified key, then a provider-qualified key for an unqualified
+// model. Distinct keys tied within one rank are ambiguous and stay unresolved.
+// Keys whose provider conflicts with a qualified model are never considered.
+func resolveCanonicalMatch[T any](m map[string]T, model string) (T, string, bool) {
 	var zero T
 	candidates := canonicalCandidates(model)
 	if len(candidates) == 0 {
-		return zero, false
+		return zero, "", false
 	}
 
 	const ranks = 3
 	modelProvider := canonicalProvider(model)
 	counts := make([][ranks]int, len(candidates))
 	vals := make([][ranks]T, len(candidates))
+	patterns := make([][ranks]string, len(candidates))
 	for k, v := range m {
 		keyProvider := canonicalProvider(k)
 		if keyProvider != "" && modelProvider != "" &&
@@ -100,6 +118,7 @@ func resolveCanonical[T any](m map[string]T, model string) (T, bool) {
 			if kCanon == c {
 				counts[i][rank]++
 				vals[i][rank] = v
+				patterns[i][rank] = k
 				break
 			}
 		}
@@ -107,14 +126,14 @@ func resolveCanonical[T any](m map[string]T, model string) (T, bool) {
 	for i := range candidates {
 		for r := range ranks {
 			if counts[i][r] == 1 {
-				return vals[i][r], true
+				return vals[i][r], patterns[i][r], true
 			}
 			if counts[i][r] > 1 {
-				return zero, false
+				return zero, "", false
 			}
 		}
 	}
-	return zero, false
+	return zero, "", false
 }
 
 // keyRank orders canonical matches: same-provider key (0), unqualified

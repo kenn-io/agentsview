@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"path/filepath"
 	"testing"
@@ -14,8 +15,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/activity"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/agentsview/internal/sync"
 )
 
 func TestNewActivityCommand_RegistersReport(t *testing.T) {
@@ -225,6 +232,66 @@ func TestResolveActivityReport_PricesFreshDBUsage(t *testing.T) {
 		"resolveActivityReportPriced must seed fallback pricing for fresh-DB usage")
 }
 
+func TestActivityReportJSONMatchesHTTPExportMetadata(t *testing.T) {
+	dataDir := testDataDir(t)
+	dbPath := filepath.Join(dataDir, "sessions.db")
+	database := dbtest.OpenTestDBAt(t, dbPath)
+	fallbackModel := fallbackPricedModel(t)
+	require.NoError(t, seedFallbackPricing(database))
+	seedUsageDailyExportMetadataFixture(t, database, fallbackModel)
+
+	cliOut := captureStdout(t, func() {
+		runActivityReport(ActivityReportConfig{
+			JSON: true, Preset: "day", Date: "2026-06-01",
+			Timezone: "UTC", Offline: true, NoSync: true,
+		})
+	})
+	var cliReport activity.Report
+	require.NoError(t, json.Unmarshal([]byte(cliOut), &cliReport))
+
+	srv := server.New(config.Config{
+		Host: "127.0.0.1", Port: 0, DataDir: dataDir, DBPath: dbPath,
+		WriteTimeout: 30 * time.Second,
+	}, database, sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {dataDir},
+		},
+		Machine: "test",
+	}))
+	req := httptest.NewRequest(http.MethodGet,
+		"http://127.0.0.1:0/api/v1/activity/report?"+
+			url.Values{
+				"preset":   {"day"},
+				"date":     {"2026-06-01"},
+				"timezone": {"UTC"},
+			}.Encode(), nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+	var httpReport activity.Report
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&httpReport))
+
+	assert.Equal(t, export.ActivityReportSchemaVersion,
+		cliReport.SchemaVersion)
+	assert.Equal(t, cliReport.SchemaVersion, httpReport.SchemaVersion)
+	require.NotNil(t, cliReport.Pricing)
+	require.NotNil(t, httpReport.Pricing)
+	assert.Contains(t, cliReport.Pricing.Models, "gpt-5.1")
+	assert.Contains(t, cliReport.Pricing.Models, fallbackModel)
+	assert.Equal(t, cliReport.Pricing.Models, httpReport.Pricing.Models)
+	require.Contains(t, cliReport.Projects, "shared-project")
+	require.Contains(t, httpReport.Projects, "shared-project")
+	assert.Equal(t, cliReport.Projects, httpReport.Projects)
+	assert.Equal(t, "UTC", cliReport.Timezone)
+	assert.Equal(t, cliReport.Timezone, httpReport.Timezone)
+	assert.Equal(t, cliReport.Totals.Sessions, httpReport.Totals.Sessions)
+	assert.Equal(t, cliReport.Totals.OutputTokens,
+		httpReport.Totals.OutputTokens)
+	assert.NotEmpty(t, cliReport.Buckets)
+	assert.Equal(t, len(cliReport.BySession), len(httpReport.BySession))
+}
+
 func TestRunActivityReportOfflineUsesReadOnlyDBWhenWriteLockHeld(t *testing.T) {
 	dataDir := setupGoldenStatsDataDir(t)
 
@@ -243,4 +310,29 @@ func TestRunActivityReportOfflineUsesReadOnlyDBWhenWriteLockHeld(t *testing.T) {
 
 	assert.Contains(t, out, "Activity 2026-04-04 to 2026-04-05")
 	assert.Contains(t, out, "Sessions")
+}
+
+func TestActivityReportGolden(t *testing.T) {
+	setupExportGoldenDataDir(t)
+	oldNow := activityReportNow
+	activityReportNow = func() time.Time { return goldenFixtureNow }
+	t.Cleanup(func() { activityReportNow = oldNow })
+
+	cmd := newRootCommand()
+	cmd.SetArgs([]string{
+		"activity", "report",
+		"--json",
+		"--preset", "day",
+		"--date", "2026-07-03",
+		"--timezone", "UTC",
+		"--offline",
+		"--no-sync",
+	})
+	var err error
+	stdout := captureStdout(t, func() {
+		_, err = cmd.ExecuteC()
+	})
+	require.NoError(t, err, "activity report json golden command")
+
+	assertGoldenBytes(t, "activity_report_v1.json", []byte(stdout))
 }

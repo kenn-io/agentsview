@@ -1,0 +1,246 @@
+package export
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"path/filepath"
+	"runtime"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestNormalizeRemote(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+		ok   bool
+	}{
+		{
+			name: "scp github remote strips git suffix",
+			raw:  "git@github.com:Org/Repo.git",
+			want: "github.com/Org/Repo",
+			ok:   true,
+		},
+		{
+			name: "https github remote strips git suffix and trailing slash",
+			raw:  "https://github.com/org/repo.git/",
+			want: "github.com/org/repo",
+			ok:   true,
+		},
+		{
+			name: "ssh URL lowercases host",
+			raw:  "ssh://git@GitHub.com/org/repo",
+			want: "github.com/org/repo",
+			ok:   true,
+		},
+		{
+			name: "duplicate slashes collapsed",
+			raw:  "https://github.com/org//repo.git",
+			want: "github.com/org/repo",
+			ok:   true,
+		},
+		{
+			name: "host lowercased path case preserved",
+			raw:  "https://GitHub.com/Org/Repo.git",
+			want: "github.com/Org/Repo",
+			ok:   true,
+		},
+		{
+			name: "file remote ignored",
+			raw:  "file:///tmp/repo.git",
+			ok:   false,
+		},
+		{
+			name: "local path remote ignored",
+			raw:  "/srv/git/repo.git",
+			ok:   false,
+		},
+		{
+			name: "windows backslash drive path ignored",
+			raw:  `C:\repo.git`,
+			ok:   false,
+		},
+		{
+			name: "windows slash drive path ignored",
+			raw:  "C:/repo.git",
+			ok:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := NormalizeGitRemote(tt.raw)
+			assert.Equal(t, tt.ok, ok)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestProjectIdentitySelectRemotePrefersOriginOtherwiseAlphabetical(t *testing.T) {
+	name, raw, ok := SelectRemote(map[string]string{
+		"upstream": "https://github.com/acme/upstream.git",
+		"origin":   "git@github.com:acme/app.git",
+	})
+	require.True(t, ok)
+	assert.Equal(t, "origin", name)
+	assert.Equal(t, "git@github.com:acme/app.git", raw)
+
+	name, raw, ok = SelectRemote(map[string]string{
+		"zeta": "https://github.com/acme/zeta.git",
+		"beta": "https://github.com/acme/beta.git",
+	})
+	require.True(t, ok)
+	assert.Equal(t, "beta", name)
+	assert.Equal(t, "https://github.com/acme/beta.git", raw)
+}
+
+func TestProjectIdentityRootPathFallbackNormalizesLocalPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink path separators in this contract are POSIX-specific")
+	}
+	base := t.TempDir()
+	realRoot := filepath.Join(base, "real")
+	linkRoot := filepath.Join(base, "link")
+	require.NoError(t, mkdirAll(realRoot))
+	require.NoError(t, symlink(realRoot, linkRoot))
+
+	got, ok, err := NormalizeRootPath(linkRoot + string(filepath.Separator))
+	require.NoError(t, err)
+	require.True(t, ok)
+	expectedRoot, ok, err := NormalizeRootPath(realRoot)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, expectedRoot, got)
+
+	identity := BuildProjectIdentity(ProjectIdentityInput{RootPath: linkRoot + "/"})
+	require.NotEmpty(t, identity.Key)
+	assert.Equal(t, "root_path", identity.KeySource)
+	assert.Equal(t, expectedRoot, identity.RootPath)
+}
+
+func TestProjectIdentityWindowsDriveRootPathsAreLocal(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "backslash drive path",
+			raw:  `C:\repo\`,
+			want: "C:/repo",
+		},
+		{
+			name: "slash drive path",
+			raw:  "C:/repo/",
+			want: "C:/repo",
+		},
+		{
+			name: "parent segments stay within drive root",
+			raw:  "C:/../repo",
+			want: "C:/repo",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok, err := NormalizeRootPath(tt.raw)
+			require.NoError(t, err)
+			require.True(t, ok)
+			assert.Equal(t, tt.want, got)
+
+			stored, ok := NormalizeStoredRootPath(tt.raw)
+			require.True(t, ok)
+			assert.Equal(t, tt.want, stored)
+
+			identity := BuildStoredProjectIdentity(ProjectIdentityInput{RootPath: tt.raw})
+			require.NotEmpty(t, identity.Key)
+			assert.Equal(t, ProjectIdentityKeySourceRootPath, identity.KeySource)
+			assert.Equal(t, tt.want, identity.RootPath)
+			assert.True(t, identity.MachineLocal)
+		})
+	}
+
+	_, ok, err := NormalizeRootPath("host:/srv/repo")
+	require.NoError(t, err)
+	assert.False(t, ok)
+
+	_, ok = NormalizeStoredRootPath("host:/srv/repo")
+	assert.False(t, ok)
+}
+
+func TestProjectIdentityKeysUseTypedSHA256Inputs(t *testing.T) {
+	remoteIdentity := BuildProjectIdentity(ProjectIdentityInput{
+		GitRemote: "git@github.com:Org/Repo.git",
+	})
+	assert.Equal(t,
+		"sha256:"+sha256Hex("git_remote\n"+"github.com/Org/Repo"),
+		remoteIdentity.Key,
+	)
+	assert.Equal(t, "git_remote", remoteIdentity.KeySource)
+
+	root, ok, err := NormalizeRootPath(t.TempDir())
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	rootIdentity := BuildProjectIdentity(ProjectIdentityInput{RootPath: root})
+	assert.Equal(t, "sha256:"+sha256Hex("root_path\n"+root), rootIdentity.Key)
+	assert.Equal(t, "root_path", rootIdentity.KeySource)
+}
+
+func TestProjectIdentityJSONUsesNormalizedRemoteField(t *testing.T) {
+	identity := BuildProjectIdentity(ProjectIdentityInput{
+		GitRemote: "git@github.com:Org/Repo.git",
+	})
+
+	data, err := json.Marshal(identity)
+	require.NoError(t, err)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, "github.com/Org/Repo", got["normalized_remote"])
+	assert.NotContains(t, got, "git_remote")
+}
+
+func TestProjectIdentityBuildProjectsMapResolvesUnknownAndAmbiguous(t *testing.T) {
+	observations := []ProjectIdentityObservation{
+		{
+			Project:   "app",
+			Machine:   "laptop",
+			RootPath:  "/tmp/ignored",
+			GitRemote: "git@github.com:Org/Repo.git",
+			Key:       "stale-derived-value",
+		},
+		{
+			Project:   "ambiguous",
+			Machine:   "laptop",
+			GitRemote: "https://github.com/org/one.git",
+		},
+		{
+			Project:   "ambiguous",
+			Machine:   "desktop",
+			GitRemote: "https://github.com/org/two.git",
+		},
+	}
+
+	got := BuildProjectsMap([]string{"app", "missing", "ambiguous"}, observations)
+
+	require.Equal(t, ProjectResolutionResolved, got["app"].Resolution)
+	require.NotNil(t, got["app"].Identity)
+	assert.Equal(t, "github.com/Org/Repo", got["app"].Identity.NormalizedRemote)
+	assert.Equal(t, "sha256:"+sha256Hex("git_remote\n"+"github.com/Org/Repo"), got["app"].Identity.Key)
+
+	assert.Equal(t, ProjectResolutionUnknown, got["missing"].Resolution)
+	assert.Nil(t, got["missing"].Identity)
+
+	assert.Equal(t, ProjectResolutionAmbiguous, got["ambiguous"].Resolution)
+	assert.Nil(t, got["ambiguous"].Identity)
+}
+
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}

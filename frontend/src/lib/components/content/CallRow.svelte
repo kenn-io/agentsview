@@ -110,9 +110,7 @@
 </div>
 
 <style>
-  /* Adapted from
-     docs/superpowers/specs/2026-04-26-session-duration-ux-mockup.html
-     (.call rules, lines 517–605), with the mockup's raw dark-theme colors
+  /* Adapted from the session-duration UX mockup, with the raw dark-theme colors
      mapped to theme tokens. The .cn color is set via inline style
      from categoryToken() rather than via .cn.read/.bash/etc class
      modifiers — that's the only structural deviation. */

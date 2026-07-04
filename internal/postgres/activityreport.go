@@ -9,6 +9,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 )
 
 // activityReportRangeBoundsUTC returns the exact [start, end) UTC bounds
@@ -51,12 +52,12 @@ func (s *Store) GetActivityReport(
 		return activity.Report{}, err
 	}
 
-	usage, err := s.activityReportUsage(ctx, ids, lowerBound, upperBound)
+	usage, pricing, err := s.activityReportUsage(ctx, ids, lowerBound, upperBound, q)
 	if err != nil {
 		return activity.Report{}, err
 	}
 
-	return activity.Aggregate(activity.Params{
+	report := activity.Aggregate(activity.Params{
 		RangeStart:    q.RangeStart,
 		RangeEnd:      q.RangeEnd,
 		Loc:           q.Loc,
@@ -64,7 +65,24 @@ func (s *Store) GetActivityReport(
 		Partial:       q.Partial,
 		GapCapSeconds: q.GapCapSeconds,
 		Bucket:        q.Bucket,
-	}, sessions, acts, usage), nil
+	}, sessions, acts, usage)
+	report.SchemaVersion = export.ActivityReportSchemaVersion
+	report.Pricing = pricing
+	projects, err := s.BuildProjectIdentityMap(ctx,
+		activityReportProjectLabels(sessions))
+	if err != nil {
+		return activity.Report{}, err
+	}
+	report.Projects = projects
+	return report, nil
+}
+
+func activityReportProjectLabels(sessions []activity.SessionMeta) []string {
+	set := make(map[string]struct{}, len(sessions))
+	for _, session := range sessions {
+		set[session.Project] = struct{}{}
+	}
+	return sortedStringSetKeys(set)
 }
 
 // activityReportSessions returns the candidate sessions whose window
@@ -193,18 +211,22 @@ func (s *Store) activityReportActivity(
 // are ordered by (ts, session_id, message_ordinal) as the aggregator
 // requires for its first-seen-wins dedup.
 func (s *Store) activityReportUsage(
-	ctx context.Context, ids []string, lowerBound, upperBound string,
-) ([]activity.UsageRow, error) {
+	ctx context.Context, ids []string, lowerBound, upperBound string, q activity.Query,
+) ([]activity.UsageRow, *export.PricingBlock, error) {
 	var out []activity.UsageRow
-	if len(ids) == 0 {
-		return out, nil
-	}
 
 	pricing, err := s.loadPricingMap(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("loading pg pricing: %w", err)
+		return nil, nil, fmt.Errorf("loading pg pricing: %w", err)
 	}
-	rateResolver := newModelRateResolver(pricing)
+	rateResolver := export.NewPricingResolver(pricing)
+	if len(ids) == 0 {
+		block, err := rateResolver.BuildBlock()
+		if err != nil {
+			return nil, nil, fmt.Errorf("building pricing block: %w", err)
+		}
+		return out, &block, nil
+	}
 
 	// Accumulate the dedup sort keys (ts, session_id, ordinal) alongside
 	// each mapped row so we can impose one global order across all chunks.
@@ -213,6 +235,7 @@ func (s *Store) activityReportUsage(
 	// per-chunk ordering is not enough for the aggregator's first-seen dedup.
 	type ordered struct {
 		row     activity.UsageRow
+		scan    pgDailyUsageScanRow
 		ts      time.Time
 		ordinal int64
 	}
@@ -246,7 +269,6 @@ func (s *Store) activityReportUsage(
 				return fmt.Errorf(
 					"scanning activity report usage: %w", scanErr)
 			}
-			_, outputTok, _, _, cost, _ := pgDailyUsageAmounts(r, rateResolver)
 			ord := int64(-1)
 			if r.messageOrdinal.Valid {
 				ord = r.messageOrdinal.Int64
@@ -254,12 +276,11 @@ func (s *Store) activityReportUsage(
 			rowsAcc = append(rowsAcc, ordered{
 				ts:      r.ts.Time,
 				ordinal: ord,
+				scan:    r,
 				row: activity.UsageRow{
 					SessionID:       r.sessionID,
 					Model:           r.model,
 					Timestamp:       startedAtString(r.ts),
-					OutputTokens:    outputTok,
-					Cost:            cost,
 					Agent:           r.agent,
 					ClaudeMessageID: r.claudeMessageID,
 					ClaudeRequestID: r.claudeRequestID,
@@ -271,7 +292,7 @@ func (s *Store) activityReportUsage(
 		return rows.Err()
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	sort.SliceStable(rowsAcc, func(i, j int) bool {
@@ -284,9 +305,25 @@ func (s *Store) activityReportUsage(
 		}
 		return a.ordinal < b.ordinal
 	})
-	out = make([]activity.UsageRow, len(rowsAcc))
+	baseRows := make([]activity.UsageRow, len(rowsAcc))
 	for i, o := range rowsAcc {
-		out[i] = o.row
+		baseRows[i] = o.row
 	}
-	return out, nil
+	mask := activity.UsageSurvivorMask(q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows)
+	out = make([]activity.UsageRow, 0, len(rowsAcc))
+	for i, o := range rowsAcc {
+		if !mask[i] {
+			continue
+		}
+		_, outputTok, _, _, cost, _ := pgDailyUsageAmounts(o.scan, rateResolver)
+		row := o.row
+		row.OutputTokens = outputTok
+		row.Cost = cost
+		out = append(out, row)
+	}
+	block, err := rateResolver.BuildBlock()
+	if err != nil {
+		return nil, nil, fmt.Errorf("building pricing block: %w", err)
+	}
+	return out, &block, nil
 }

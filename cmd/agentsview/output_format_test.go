@@ -53,6 +53,7 @@ var machineOutputCommandPaths = [][]string{
 	{"stats"},
 	{"secrets", "list"},
 	{"secrets", "scan"},
+	{"export", "sessions"},
 	{"parse-diff"},
 	{"session", "list"},
 	{"session", "get"},

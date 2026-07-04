@@ -1,13 +1,17 @@
 package server_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/pricing"
 )
 
 // activityDate is a fixed past calendar day so the activity report is
@@ -130,6 +134,112 @@ func TestActivityReportEndpoint_Presets(t *testing.T) {
 			tc.check(t, decode[activity.Report](t, w))
 		})
 	}
+}
+
+func TestActivityReportJSONIncludesExportMetadata(t *testing.T) {
+	te := setup(t)
+	seedActivityReportMetadataFixture(t, te)
+
+	w := te.get(t, buildPathURL("/api/v1/activity/report", map[string]string{
+		"preset": "day", "date": activityDate, "timezone": "UTC",
+	}))
+	assertStatus(t, w, http.StatusOK)
+
+	resp := decode[activity.Report](t, w)
+	assert.Equal(t, export.ActivityReportSchemaVersion,
+		resp.SchemaVersion)
+	require.NotNil(t, resp.Pricing)
+	require.Contains(t, resp.Pricing.Models, "gpt-5.1")
+	fallbackModel := activityReportFallbackModel(t)
+	require.Contains(t, resp.Pricing.Models, fallbackModel)
+	assert.Equal(t, export.CostSourceReported,
+		resp.Pricing.Models["gpt-5.1"].CostSource)
+	assert.Equal(t, export.CostSourceComputed,
+		resp.Pricing.Models[fallbackModel].CostSource)
+	assert.True(t, resp.Pricing.Fallback.Used)
+	assert.Contains(t, resp.Pricing.Fallback.Models, fallbackModel)
+	require.Contains(t, resp.Projects, "shared-project")
+	assert.Equal(t, export.ProjectResolutionUnknown,
+		resp.Projects["shared-project"].Resolution)
+	assert.Equal(t, 2, resp.Totals.Sessions)
+	assert.Equal(t, 150, resp.Totals.OutputTokens)
+	assert.NotEmpty(t, resp.Buckets)
+	assert.Len(t, resp.BySession, 2)
+}
+
+func seedActivityReportMetadataFixture(t *testing.T, te *testEnv) {
+	t.Helper()
+	fallbackModel := activityReportFallbackModel(t)
+	seedFallbackModelPricing(t, te.db, fallbackModel)
+	started := activityDate + "T10:00:00Z"
+	ended := activityDate + "T10:05:00Z"
+	for _, id := range []string{"reported-cost", "fallback-cost"} {
+		sessionID := "activity-meta-" + id
+		te.seedSession(t, sessionID, "shared-project", 2, func(s *db.Session) {
+			s.Agent = "codex"
+			s.StartedAt = &started
+			s.EndedAt = &ended
+			s.UserMessageCount = 1
+		})
+	}
+	te.seedMessages(t, "activity-meta-reported-cost", 2,
+		func(i int, m *db.Message) {
+			m.Timestamp = []string{started, activityDate + "T10:02:00Z"}[i]
+			if i == 1 {
+				m.Role = "assistant"
+				m.Model = "gpt-5.1"
+			}
+		})
+	te.seedMessages(t, "activity-meta-fallback-cost", 2,
+		func(i int, m *db.Message) {
+			m.Timestamp = []string{started, ended}[i]
+			if i == 1 {
+				m.Role = "assistant"
+				m.Model = fallbackModel
+				m.TokenUsage = json.RawMessage(
+					`{"input_tokens":200,"output_tokens":100}`)
+			}
+		})
+	cost := 0.25
+	ordinal := 1
+	require.NoError(t, te.db.ReplaceSessionUsageEvents(
+		"activity-meta-reported-cost", []db.UsageEvent{{
+			SessionID: "activity-meta-reported-cost", MessageOrdinal: &ordinal,
+			Source: "session", Model: "gpt-5.1", InputTokens: 100,
+			OutputTokens: 50, CostUSD: &cost,
+			OccurredAt: activityDate + "T10:02:00Z",
+			DedupKey:   "activity-meta-reported-cost:event",
+		}},
+	))
+}
+
+func activityReportFallbackModel(t *testing.T) string {
+	t.Helper()
+	for _, p := range pricing.FallbackPricing() {
+		if p.OutputPerMTok > 0 {
+			return p.ModelPattern
+		}
+	}
+	require.FailNow(t, "no fallback model with non-zero output pricing")
+	return ""
+}
+
+func seedFallbackModelPricing(t *testing.T, database *db.DB, model string) {
+	t.Helper()
+	for _, p := range pricing.FallbackPricing() {
+		if p.ModelPattern != model {
+			continue
+		}
+		require.NoError(t, database.UpsertModelPricing([]db.ModelPricing{{
+			ModelPattern:         p.ModelPattern,
+			InputPerMTok:         p.InputPerMTok,
+			OutputPerMTok:        p.OutputPerMTok,
+			CacheCreationPerMTok: p.CacheCreationPerMTok,
+			CacheReadPerMTok:     p.CacheReadPerMTok,
+		}}))
+		return
+	}
+	require.FailNow(t, "fallback model not found", model)
 }
 
 // TestActivityReportEndpoint_IncludesOneShotAndAutomated locks in the

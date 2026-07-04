@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/signals"
@@ -5678,6 +5679,18 @@ func (e *Engine) writeBatch(
 			failedSessions++
 			continue
 		}
+		if obs, ok := e.projectIdentityObservation(s); ok {
+			if err := e.db.UpsertProjectIdentityObservation(
+				context.Background(), obs,
+			); err != nil {
+				log.Printf(
+					"write project identity observation for %s: %v",
+					s.ID, err,
+				)
+				failedSessions++
+				continue
+			}
+		}
 
 		replaceMessages := shouldReplaceFullParseMessages(
 			pw, forceReplace, stale,
@@ -6534,9 +6547,12 @@ func (e *Engine) writeBatchBulk(
 		update, findings := computeSignalsAndSecrets(s, msgs)
 		e.phaseStats.ScanNanos.Add(int64(time.Since(tScan)))
 		writes = append(writes, db.SessionBatchWrite{
-			Session:         s,
-			Messages:        msgs,
-			UsageEvents:     e.usageEventsForWrite(s.ID, pw.usageEvents),
+			Session:     s,
+			Messages:    msgs,
+			UsageEvents: e.usageEventsForWrite(s.ID, pw.usageEvents),
+			IdentityObservation: identityObservationOrZero(
+				e.projectIdentityObservation(s),
+			),
 			Signals:         update,
 			Findings:        findings,
 			DataVersion:     dataVersionForWrite(pw),
@@ -6577,6 +6593,182 @@ func (e *Engine) writeBatchBulk(
 	return result.WrittenSessions,
 		result.WrittenMessages,
 		result.FailedSessions
+}
+
+func identityObservationOrZero(
+	obs export.ProjectIdentityObservation,
+	ok bool,
+) export.ProjectIdentityObservation {
+	if !ok {
+		return export.ProjectIdentityObservation{}
+	}
+	return obs
+}
+
+func (e *Engine) projectIdentityObservation(
+	s db.Session,
+) (export.ProjectIdentityObservation, bool) {
+	project := strings.TrimSpace(s.Project)
+	machine := strings.TrimSpace(s.Machine)
+	rootPath := strings.TrimSpace(s.Cwd)
+	if project == "" || machine == "" || rootPath == "" {
+		return export.ProjectIdentityObservation{}, false
+	}
+
+	obs := export.ProjectIdentityObservation{
+		Project:    project,
+		Machine:    machine,
+		RootPath:   rootPath,
+		ObservedAt: time.Now().UTC(),
+	}
+
+	if e.idPrefix == "" && e.pathRewriter == nil {
+		if gitRoot, remotes := discoverLocalGitIdentity(rootPath); gitRoot != "" {
+			obs.RootPath = gitRoot
+			if name, raw, ok := export.SelectRemote(remotes); ok {
+				obs.GitRemoteName = name
+				obs.GitRemote = raw
+			}
+		}
+	}
+	if obs.GitRemote == "" {
+		obs.WorktreeName = filepath.Base(obs.RootPath)
+		obs.WorktreeRootPath = obs.RootPath
+	}
+	return obs, true
+}
+
+func discoverLocalGitIdentity(cwd string) (string, map[string]string) {
+	if !safeLocalAbsolutePath(cwd) {
+		return "", nil
+	}
+	resolved, err := filepath.EvalSymlinks(filepath.Clean(cwd))
+	if err != nil {
+		return "", nil
+	}
+	root := findLocalGitRoot(resolved)
+	if root == "" {
+		return "", nil
+	}
+	config := gitConfigPath(root)
+	if config == "" {
+		return root, nil
+	}
+	return root, readGitRemotes(config)
+}
+
+func safeLocalAbsolutePath(p string) bool {
+	p = strings.TrimSpace(p)
+	if p == "" || strings.Contains(p, "://") {
+		return false
+	}
+	if looksWindowsDrivePath(p) {
+		return runtime.GOOS == "windows" && filepath.IsAbs(p)
+	}
+	if looksRemotePrefixedPath(p) {
+		return false
+	}
+	return filepath.IsAbs(p)
+}
+
+func looksRemotePrefixedPath(p string) bool {
+	colon := strings.Index(p, ":")
+	if colon <= 0 {
+		return false
+	}
+	prefix := p[:colon]
+	return !strings.ContainsAny(prefix, `/\`)
+}
+
+func looksWindowsDrivePath(p string) bool {
+	if len(p) < 3 || p[1] != ':' {
+		return false
+	}
+	drive := p[0]
+	if (drive < 'A' || drive > 'Z') && (drive < 'a' || drive > 'z') {
+		return false
+	}
+	return p[2] == '\\' || p[2] == '/'
+}
+
+func findLocalGitRoot(start string) string {
+	dir := filepath.Clean(start)
+	for {
+		if info, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			if info.IsDir() || info.Mode().IsRegular() {
+				return dir
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+func gitConfigPath(root string) string {
+	gitPath := filepath.Join(root, ".git")
+	if info, err := os.Stat(gitPath); err == nil && info.IsDir() {
+		return filepath.Join(gitPath, "config")
+	}
+	data, err := os.ReadFile(gitPath)
+	if err != nil {
+		return ""
+	}
+	line := strings.TrimSpace(string(data))
+	line = strings.TrimPrefix(line, "gitdir:")
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return ""
+	}
+	if !filepath.IsAbs(line) {
+		line = filepath.Join(root, line)
+	}
+	commonDir := line
+	if data, err := os.ReadFile(filepath.Join(line, "commondir")); err == nil {
+		common := strings.TrimSpace(string(data))
+		if filepath.IsAbs(common) {
+			commonDir = common
+		} else {
+			commonDir = filepath.Clean(filepath.Join(line, common))
+		}
+	}
+	return filepath.Join(commonDir, "config")
+}
+
+func readGitRemotes(configPath string) map[string]string {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil
+	}
+	remotes := map[string]string{}
+	var current string
+	for line := range strings.SplitSeq(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			current = remoteNameFromGitConfigSection(trimmed)
+			continue
+		}
+		if current == "" || !strings.HasPrefix(trimmed, "url") {
+			continue
+		}
+		key, value, ok := strings.Cut(trimmed, "=")
+		if !ok || strings.TrimSpace(key) != "url" {
+			continue
+		}
+		remotes[current] = strings.TrimSpace(value)
+	}
+	return remotes
+}
+
+func remoteNameFromGitConfigSection(section string) string {
+	section = strings.Trim(section, "[]")
+	if !strings.HasPrefix(section, `remote `) {
+		return ""
+	}
+	name := strings.TrimSpace(strings.TrimPrefix(section, `remote `))
+	return strings.Trim(name, `"`)
 }
 
 func shouldReplaceFullParseMessages(
@@ -6693,6 +6885,20 @@ func (e *Engine) writeIncremental(
 		inc.sessionID,
 	); err != nil {
 		return err
+	}
+	if sess, err := e.db.GetSession(context.Background(), inc.sessionID); err != nil {
+		log.Printf("incremental project identity session %s: %v", inc.sessionID, err)
+	} else if sess != nil {
+		if obs, ok := e.projectIdentityObservation(*sess); ok {
+			if err := e.db.UpsertProjectIdentityObservation(
+				context.Background(), obs,
+			); err != nil {
+				log.Printf(
+					"incremental project identity observation %s: %v",
+					inc.sessionID, err,
+				)
+			}
+		}
 	}
 
 	// Signal/secret recompute costs O(session history), so it is

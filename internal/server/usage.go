@@ -2,6 +2,7 @@ package server
 
 import (
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -62,23 +63,29 @@ type UnsupportedUsage struct {
 // GET /api/v1/usage/summary while the handler delegates assembly to
 // the transport-neutral service layer.
 type UsageSummaryResponse struct {
-	From             string                `json:"from"`
-	To               string                `json:"to"`
-	Totals           db.UsageTotals        `json:"totals"`
-	Daily            []db.DailyUsageEntry  `json:"daily"`
-	ProjectTotals    []ProjectTotal        `json:"projectTotals"`
-	ModelTotals      []ModelTotal          `json:"modelTotals"`
-	AgentTotals      []AgentTotal          `json:"agentTotals"`
-	SessionCounts    db.UsageSessionCounts `json:"sessionCounts"`
-	CacheStats       CacheStats            `json:"cacheStats"`
-	UnsupportedUsage *UnsupportedUsage     `json:"unsupportedUsage,omitempty"`
-	Comparison       *Comparison           `json:"comparison,omitempty"`
+	SchemaVersion    int                               `json:"schema_version,omitempty"`
+	Pricing          *export.PricingBlock              `json:"pricing,omitempty"`
+	Projects         map[string]export.ProjectMapEntry `json:"projects,omitempty"`
+	From             string                            `json:"from"`
+	To               string                            `json:"to"`
+	Totals           db.UsageTotals                    `json:"totals"`
+	Daily            []db.DailyUsageEntry              `json:"daily"`
+	ProjectTotals    []ProjectTotal                    `json:"projectTotals"`
+	ModelTotals      []ModelTotal                      `json:"modelTotals"`
+	AgentTotals      []AgentTotal                      `json:"agentTotals"`
+	SessionCounts    db.UsageSessionCounts             `json:"sessionCounts"`
+	CacheStats       CacheStats                        `json:"cacheStats"`
+	UnsupportedUsage *UnsupportedUsage                 `json:"unsupportedUsage,omitempty"`
+	Comparison       *Comparison                       `json:"comparison,omitempty"`
 }
 
 func usageSummaryResponseFromService(
 	res *service.UsageSummaryResult,
 ) UsageSummaryResponse {
 	return UsageSummaryResponse{
+		SchemaVersion:    res.SchemaVersion,
+		Pricing:          res.Pricing,
+		Projects:         res.Projects,
 		From:             res.From,
 		To:               res.To,
 		Totals:           res.Totals,

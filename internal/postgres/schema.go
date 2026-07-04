@@ -230,6 +230,24 @@ CREATE TABLE IF NOT EXISTS model_pricing (
     updated_at TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS project_identity_observations (
+    project            TEXT NOT NULL,
+    machine            TEXT NOT NULL,
+    root_path          TEXT NOT NULL DEFAULT '',
+    git_remote         TEXT NOT NULL DEFAULT '',
+    git_remote_name    TEXT NOT NULL DEFAULT '',
+    worktree_name      TEXT NOT NULL DEFAULT '',
+    worktree_root_path TEXT NOT NULL DEFAULT '',
+    observed_at        TIMESTAMPTZ NOT NULL,
+    normalized_remote  TEXT NOT NULL DEFAULT '',
+    key_source         TEXT NOT NULL DEFAULT '',
+    key                TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (project, machine, root_path, git_remote)
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_identity_observations_project
+    ON project_identity_observations (project);
+
 CREATE TABLE IF NOT EXISTS tool_calls (
     id                    BIGSERIAL PRIMARY KEY,
     session_id            TEXT NOT NULL,
@@ -1828,6 +1846,18 @@ func CheckSchemaCompat(
 		return fmt.Errorf("secret_findings table missing required columns: %w", err)
 	}
 	rows.Close()
+	rows, err = db.QueryContext(ctx,
+		`SELECT project, machine, root_path, git_remote, git_remote_name,
+			worktree_name, worktree_root_path, observed_at,
+			normalized_remote, key_source, key
+		 FROM project_identity_observations LIMIT 0`)
+	if err != nil {
+		return fmt.Errorf(
+			"project_identity_observations table missing required columns: %w",
+			err,
+		)
+	}
+	rows.Close()
 	return nil
 }
 
@@ -1871,6 +1901,7 @@ func pushSchemaCurrent(ctx context.Context, db *sql.DB) bool {
 		return false
 	}
 	if !pgHasTable(ctx, db, "model_pricing") ||
+		!pgHasTable(ctx, db, "project_identity_observations") ||
 		!pgHasTable(ctx, db, "cursor_usage_events") {
 		return false
 	}

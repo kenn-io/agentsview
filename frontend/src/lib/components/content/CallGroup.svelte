@@ -90,9 +90,7 @@
 </div>
 
 <style>
-  /* Adapted from
-     docs/superpowers/specs/2026-04-26-session-duration-ux-mockup.html
-     (.cgroup rules, lines 608–668), with the mockup's raw dark-theme
+  /* Adapted from the session-duration UX mockup, with the raw dark-theme
      colors mapped to theme tokens. */
   .cgroup {
     display: grid;

@@ -406,8 +406,9 @@ func (d *DB) CopyExcludedSessionsFrom(
 
 // CopySessionMetadataFrom merges user-managed data from the
 // source DB into sessions that were re-synced into this DB.
-// This preserves display_name, deleted_at, starred_sessions,
-// pinned_messages, and worktree_project_mappings across full DB rebuilds.
+// This preserves display_name, deleted_at, starred_sessions, pinned_messages,
+// archive metadata, project identity observations, and worktree project
+// mappings across full DB rebuilds.
 func (d *DB) CopySessionMetadataFrom(
 	sourcePath string,
 ) error {
@@ -539,6 +540,51 @@ func (d *DB) CopySessionMetadataFrom(
 			FROM old_db.cursor_usage_events
 			ORDER BY occurred_at, id`); err != nil {
 			return fmt.Errorf("copying cursor usage events: %w", err)
+		}
+	}
+
+	if oldDBHasTable(ctx, tx, "archive_metadata") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO main.archive_metadata (key, value, created_at, updated_at)
+			SELECT key, value, created_at, updated_at
+			FROM old_db.archive_metadata
+			WHERE true
+			ON CONFLICT(key) DO UPDATE SET
+				value = excluded.value,
+				created_at = excluded.created_at,
+				updated_at = excluded.updated_at`); err != nil {
+			return fmt.Errorf("copying archive metadata: %w", err)
+		}
+	}
+
+	if oldDBHasTable(ctx, tx, "project_identity_observations") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO main.project_identity_observations (
+				project, machine, root_path, git_remote, git_remote_name,
+				worktree_name, worktree_root_path, observed_at,
+				normalized_remote, key_source, key
+			)
+			SELECT project, machine, root_path, git_remote, git_remote_name,
+				worktree_name, worktree_root_path, observed_at,
+				normalized_remote, key_source, key
+			FROM old_db.project_identity_observations
+			WHERE true
+			ON CONFLICT(project, machine, root_path, git_remote) DO NOTHING`); err != nil {
+			return fmt.Errorf("copying project identity observations: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM main.project_identity_observations
+			WHERE git_remote = ''
+			  AND EXISTS (
+				SELECT 1
+				FROM main.project_identity_observations remote
+				WHERE remote.project = main.project_identity_observations.project
+				  AND remote.machine = main.project_identity_observations.machine
+				  AND remote.root_path = main.project_identity_observations.root_path
+				  AND remote.git_remote != ''
+			  )`); err != nil {
+			return fmt.Errorf(
+				"removing stale project identity root fallbacks: %w", err)
 		}
 	}
 

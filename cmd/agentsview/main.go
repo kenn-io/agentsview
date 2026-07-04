@@ -53,7 +53,9 @@ func main() {
 
 	if err := executeCLI(); err != nil {
 		code := exitCodeFromError(err)
-		fmt.Fprintf(os.Stderr, "fatal: %v\n", err)
+		if !isSilentExitError(err) {
+			fmt.Fprintf(os.Stderr, "fatal: %v\n", err)
+		}
 		os.Exit(code)
 	}
 }

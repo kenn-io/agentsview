@@ -121,6 +121,58 @@ func TestDuckGetActivityReportUsageCostAndTokens(t *testing.T) {
 	assert.InDelta(t, 0.0105, r.Totals.Cost, 1e-9)
 }
 
+func TestDuckGetActivityReportPricingModelsOnlyIncludeDedupSurvivors(t *testing.T) {
+	ctx := context.Background()
+	earlier := syncSession("earlier", "proj1", "first", "2026-06-14T10:30:00.000Z", 1)
+	earlier.Agent = "claude"
+	earlierMsg := syncMessage("earlier", 0, "assistant", "x", "2026-06-14T10:30:00.000Z")
+	earlierMsg.Model = "kept-model"
+	earlierMsg.TokenUsage = json.RawMessage(
+		`{"input_tokens":1000,"output_tokens":500}`)
+	earlierMsg.OutputTokens = 500
+	earlierMsg.ClaudeMessageID = "m-dup"
+	earlierMsg.ClaudeRequestID = "r-dup"
+
+	later := syncSession("later", "proj1", "first", "2026-06-14T10:31:00.000Z", 1)
+	later.Agent = "claude"
+	laterMsg := syncMessage("later", 0, "assistant", "x", "2026-06-14T10:31:00.000Z")
+	laterMsg.Model = "discarded-model"
+	laterMsg.TokenUsage = json.RawMessage(
+		`{"input_tokens":2000,"output_tokens":900}`)
+	laterMsg.OutputTokens = 900
+	laterMsg.ClaudeMessageID = "m-dup"
+	laterMsg.ClaudeRequestID = "r-dup"
+
+	writes := []db.SessionBatchWrite{
+		{
+			Session:         earlier,
+			Messages:        []db.Message{earlierMsg},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+		{
+			Session:         later,
+			Messages:        []db.Message{laterMsg},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+	}
+	pricing := []db.ModelPricing{
+		{ModelPattern: "kept-model", InputPerMTok: 3.0, OutputPerMTok: 15.0},
+		{ModelPattern: "discarded-model", InputPerMTok: 3.0, OutputPerMTok: 15.0},
+	}
+	store := activityReportStore(t, writes, pricing)
+
+	r, err := store.GetActivityReport(
+		ctx, db.AnalyticsFilter{Timezone: "UTC"},
+		duckDayQuery(t, "2026-06-14", "UTC"))
+	require.NoError(t, err)
+	assert.Equal(t, 500, r.Totals.OutputTokens)
+	require.NotNil(t, r.Pricing)
+	assert.Contains(t, r.Pricing.Models, "kept-model")
+	assert.NotContains(t, r.Pricing.Models, "discarded-model")
+}
+
 func TestDuckGetActivityReportPreservesSessionSummaryUsageEventTokens(t *testing.T) {
 	ctx := context.Background()
 	rawInput := db.MaxPlausibleTokens + 250_000

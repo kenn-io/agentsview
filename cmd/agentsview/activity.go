@@ -33,6 +33,8 @@ type ActivityReportConfig struct {
 	Offline  bool
 }
 
+var activityReportNow = time.Now
+
 // runActivityReport syncs, resolves the range, runs the report, and prints it.
 func runActivityReport(cfg ActivityReportConfig) {
 	ctx := context.Background()
@@ -154,7 +156,7 @@ func resolveActivityReport(
 		Timezone:       tz,
 		BucketOverride: cfg.Bucket,
 	}
-	q, err := activity.ResolveQuery(input, time.Now())
+	q, err := activity.ResolveQuery(input, activityReportNow())
 	if err != nil {
 		return activity.Report{}, err
 	}
@@ -177,7 +179,7 @@ func todayIn(tz string) string {
 	if err != nil {
 		loc = time.Local
 	}
-	return time.Now().In(loc).Format("2006-01-02")
+	return activityReportNow().In(loc).Format("2006-01-02")
 }
 
 // printActivityReport renders the human-readable report: a header, totals,

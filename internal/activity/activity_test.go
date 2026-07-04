@@ -1,6 +1,7 @@
 package activity
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -43,6 +44,13 @@ func paramsFromQuery(q Query) Params {
 		GapCapSeconds: q.GapCapSeconds,
 		Bucket:        q.Bucket,
 	}
+}
+
+func TestReportOmitsUnsetPricingMetadata(t *testing.T) {
+	b, err := json.Marshal(Report{})
+	require.NoError(t, err)
+
+	assert.NotContains(t, string(b), `"pricing"`)
 }
 
 func TestAggregate_DayWindowUTC(t *testing.T) {

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,6 +16,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/service"
@@ -499,6 +499,7 @@ func applyFallbackPricing(
 	database *db.DB, custom map[string]config.CustomModelRate,
 ) {
 	rates := make(map[string]config.CustomModelRate)
+	sources := make(map[string]export.PricingRowSource)
 	for _, p := range pricing.FallbackPricing() {
 		// These keys are the same concrete model-pattern keys that the
 		// model_pricing table stores. SQLite usage lookups run the merged map
@@ -510,9 +511,13 @@ func applyFallbackPricing(
 			CacheCreation: p.CacheCreationPerMTok,
 			CacheRead:     p.CacheReadPerMTok,
 		}
+		sources[p.ModelPattern] = export.PricingRowSourceEmbedded
 	}
-	maps.Copy(rates, custom)
-	database.SetCustomPricing(rates)
+	for model, rate := range custom {
+		rates[model] = rate
+		sources[model] = export.PricingRowSourceCustom
+	}
+	database.SetEffectivePricing(rates, sources)
 }
 
 func ensurePricingWithFetcher(
@@ -589,14 +594,20 @@ func fetchHTTPDailyUsage(
 		)
 	}
 	var out struct {
-		Totals        db.UsageTotals        `json:"totals"`
-		Daily         []db.DailyUsageEntry  `json:"daily"`
-		SessionCounts db.UsageSessionCounts `json:"sessionCounts"`
+		SchemaVersion int                               `json:"schema_version,omitempty"`
+		Pricing       *export.PricingBlock              `json:"pricing,omitempty"`
+		Projects      map[string]export.ProjectMapEntry `json:"projects,omitempty"`
+		Totals        db.UsageTotals                    `json:"totals"`
+		Daily         []db.DailyUsageEntry              `json:"daily"`
+		SessionCounts db.UsageSessionCounts             `json:"sessionCounts"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return db.DailyUsageResult{}, err
 	}
 	return db.DailyUsageResult{
+		SchemaVersion: out.SchemaVersion,
+		Pricing:       out.Pricing,
+		Projects:      out.Projects,
 		Daily:         out.Daily,
 		Totals:        out.Totals,
 		SessionCounts: out.SessionCounts,

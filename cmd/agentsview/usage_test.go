@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -18,10 +21,22 @@ import (
 	"go.kenn.io/agentsview/internal/cursorusage"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/parsertest"
 	"go.kenn.io/agentsview/internal/pricing"
 )
+
+var goldenFixtureNow = time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
+
+const (
+	goldenDatabaseID       = "00000000-0000-4000-8000-000000000001"
+	goldenPricingUpdatedAt = "2026-07-03T12:00:00Z"
+	goldenComputedModel    = "fixture-model-computed"
+	goldenReportedModel    = "fixture-model-reported"
+)
+
+var goldenCursorSecret = []byte("agentsview-export-golden-secret-v1")
 
 func TestFmtCost(t *testing.T) {
 	tests := []struct {
@@ -44,6 +59,280 @@ func TestFmtCost(t *testing.T) {
 			assert.Equal(t, tc.want, fmtCost(tc.in),
 				"fmtCost(%v)", tc.in)
 		})
+	}
+}
+
+func TestUsageDailyGolden(t *testing.T) {
+	setupExportGoldenDataDir(t)
+
+	cmd := newRootCommand()
+	cmd.SetArgs([]string{
+		"usage", "daily",
+		"--json",
+		"--since", "2026-07-01",
+		"--until", "2026-07-03",
+		"--timezone", "UTC",
+		"--offline",
+		"--no-sync",
+	})
+	var err error
+	stdout := captureStdout(t, func() {
+		_, err = cmd.ExecuteC()
+	})
+	require.NoError(t, err, "usage daily json golden command")
+
+	assertGoldenBytes(t, "usage_daily_v1.json", []byte(stdout))
+}
+
+func TestUsageDailyBreakdownGolden(t *testing.T) {
+	setupExportGoldenDataDir(t)
+
+	cmd := newRootCommand()
+	cmd.SetArgs([]string{
+		"usage", "daily",
+		"--json",
+		"--breakdown",
+		"--since", "2026-07-01",
+		"--until", "2026-07-03",
+		"--timezone", "UTC",
+		"--offline",
+		"--no-sync",
+	})
+	var err error
+	stdout := captureStdout(t, func() {
+		_, err = cmd.ExecuteC()
+	})
+	require.NoError(t, err, "usage daily json breakdown golden command")
+
+	assertGoldenBytes(t, "usage_daily_breakdown_v1.json", []byte(stdout))
+}
+
+func setupExportGoldenDataDir(t *testing.T) string {
+	t.Helper()
+	dataDir := testDataDir(t)
+	t.Setenv("TZ", "UTC")
+	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB",
+		filepath.Join(dataDir, "missing-cursor-attribution.db"))
+	writeGoldenCursorSecretConfig(t, dataDir)
+
+	dbPath := sessionsDBPath(dataDir)
+	database := dbtest.OpenTestDBAt(t, dbPath)
+	seedExportGoldenArchive(t, database)
+	require.NoError(t, database.Close(), "close golden database")
+	setGoldenPricingUpdatedAt(t, dbPath)
+	return dataDir
+}
+
+func writeGoldenCursorSecretConfig(t *testing.T, dataDir string) {
+	t.Helper()
+	encoded := base64.StdEncoding.EncodeToString(goldenCursorSecret)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dataDir, "config.toml"),
+		[]byte("cursor_secret = \""+encoded+"\"\n"),
+		0o600,
+	), "write golden config")
+}
+
+func seedExportGoldenArchive(t *testing.T, database *db.DB) {
+	t.Helper()
+	ctx := context.Background()
+	database.SetCursorSecret(goldenCursorSecret)
+	require.NoError(t, database.SetDatabaseIDForTest(ctx, goldenDatabaseID))
+	require.NoError(t, database.UpsertModelPricing([]db.ModelPricing{
+		{
+			ModelPattern:         goldenComputedModel,
+			InputPerMTok:         2,
+			OutputPerMTok:        8,
+			CacheCreationPerMTok: 3,
+			CacheReadPerMTok:     0.5,
+		},
+		{
+			ModelPattern:         goldenReportedModel,
+			InputPerMTok:         1,
+			OutputPerMTok:        4,
+			CacheCreationPerMTok: 2,
+			CacheReadPerMTok:     0.25,
+		},
+	}), "seed golden pricing")
+	seedGoldenProjectIdentities(t, database)
+
+	seedGoldenExportSession(t, database, goldenExportSessionSpec{
+		id: "path-current", project: "path-project", agent: "claude",
+		startedAt: "2026-07-03T11:00:00Z",
+		endedAt:   "2026-07-03T11:10:00Z",
+		model:     goldenReportedModel,
+		costUSD:   dbtest.Ptr(0.0125),
+		cwd:       "/fixtures/path-project/pkg",
+	})
+	seedGoldenExportSession(t, database, goldenExportSessionSpec{
+		id: "remote-current", project: "remote-project", agent: "codex",
+		startedAt: "2026-07-03T10:00:00Z",
+		endedAt:   "2026-07-03T10:30:00Z",
+		model:     goldenComputedModel,
+		tokenJSON: json.RawMessage(`{"input_tokens":1200,"output_tokens":240,` +
+			`"cache_creation_input_tokens":80,"cache_read_input_tokens":400}`),
+		outputTokens: 240,
+		cwd:          "/fixtures/remote-project/worktrees/feature/app",
+		gitBranch:    "feature/golden",
+	})
+	seedGoldenExportSession(t, database, goldenExportSessionSpec{
+		id: "remote-yesterday", project: "remote-project", agent: "codex",
+		startedAt:    "2026-07-02T09:00:00Z",
+		endedAt:      "2026-07-02T09:20:00Z",
+		model:        goldenComputedModel,
+		tokenJSON:    json.RawMessage(`{"input_tokens":800,"output_tokens":160}`),
+		outputTokens: 160,
+		cwd:          "/fixtures/remote-project/worktrees/feature/cli",
+		gitBranch:    "feature/golden",
+	})
+	seedGoldenExportSession(t, database, goldenExportSessionSpec{
+		id: "unknown-older", project: "unknown-project", agent: "cursor",
+		startedAt: "2026-07-01T08:00:00Z",
+		endedAt:   "2026-07-01T08:05:00Z",
+		model:     goldenReportedModel,
+		costUSD:   dbtest.Ptr(0.0042),
+	})
+}
+
+func seedGoldenProjectIdentities(t *testing.T, database *db.DB) {
+	t.Helper()
+	ctx := context.Background()
+	require.NoError(t, database.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			Project:          "remote-project",
+			Machine:          "golden-host",
+			RootPath:         "/fixtures/remote-project/worktrees/feature",
+			GitRemote:        "https://github.com/acme/remote-project.git",
+			GitRemoteName:    "origin",
+			WorktreeName:     "feature",
+			WorktreeRootPath: "/fixtures/remote-project",
+			ObservedAt:       goldenFixtureNow,
+		}), "seed remote project identity")
+	require.NoError(t, database.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			Project:    "path-project",
+			Machine:    "golden-host",
+			RootPath:   "/fixtures/path-project",
+			ObservedAt: goldenFixtureNow,
+		}), "seed path project identity")
+}
+
+type goldenExportSessionSpec struct {
+	id           string
+	project      string
+	agent        string
+	startedAt    string
+	endedAt      string
+	model        string
+	tokenJSON    json.RawMessage
+	outputTokens int
+	costUSD      *float64
+	cwd          string
+	gitBranch    string
+}
+
+func seedGoldenExportSession(
+	t *testing.T, database *db.DB, spec goldenExportSessionSpec,
+) {
+	t.Helper()
+	session := db.Session{
+		ID:               spec.id,
+		Project:          spec.project,
+		Machine:          "golden-host",
+		Agent:            spec.agent,
+		StartedAt:        &spec.startedAt,
+		EndedAt:          &spec.endedAt,
+		CreatedAt:        spec.startedAt,
+		MessageCount:     4,
+		UserMessageCount: 2,
+		RelationshipType: "root",
+		DataVersion:      db.CurrentDataVersion(),
+		Cwd:              spec.cwd,
+		GitBranch:        spec.gitBranch,
+	}
+	if spec.outputTokens > 0 {
+		session.TotalOutputTokens = spec.outputTokens
+		session.HasTotalOutputTokens = true
+	}
+	require.NoError(t, database.UpsertSession(session),
+		"upsert golden session %s", spec.id)
+
+	msgs := []db.Message{
+		{
+			SessionID: spec.id, Ordinal: 0, Role: "user",
+			Content: "golden request", ContentLength: len("golden request"),
+			Timestamp: spec.startedAt,
+		},
+		{
+			SessionID: spec.id, Ordinal: 1, Role: "assistant",
+			Content: "golden response", ContentLength: len("golden response"),
+			Timestamp: addSeconds(spec.startedAt, 30), Model: spec.model,
+		},
+		{
+			SessionID: spec.id, Ordinal: 2, Role: "user",
+			Content: "follow up", ContentLength: len("follow up"),
+			Timestamp: addMinutes(spec.startedAt, 2),
+		},
+		{
+			SessionID: spec.id, Ordinal: 3, Role: "assistant",
+			Content: "done", ContentLength: len("done"),
+			Timestamp: addMinutes(spec.startedAt, 3), Model: spec.model,
+		},
+	}
+	if len(spec.tokenJSON) > 0 {
+		msgs[1].TokenUsage = spec.tokenJSON
+		msgs[1].OutputTokens = spec.outputTokens
+		msgs[1].HasOutputTokens = true
+	}
+	require.NoError(t, database.InsertMessages(msgs),
+		"insert golden messages %s", spec.id)
+
+	if spec.costUSD != nil {
+		ordinal := 1
+		require.NoError(t, database.ReplaceSessionUsageEvents(
+			spec.id, []db.UsageEvent{{
+				SessionID:      spec.id,
+				MessageOrdinal: &ordinal,
+				Source:         "provider",
+				Model:          spec.model,
+				InputTokens:    300,
+				OutputTokens:   60,
+				CostUSD:        spec.costUSD,
+				OccurredAt:     addMinutes(spec.startedAt, 1),
+				DedupKey:       spec.id + ":provider-usage",
+			}},
+		), "seed golden usage event %s", spec.id)
+	}
+}
+
+func setGoldenPricingUpdatedAt(t *testing.T, dbPath string) {
+	t.Helper()
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err, "open golden db for pricing timestamp")
+	defer func() {
+		require.NoError(t, conn.Close(), "close pricing timestamp db")
+	}()
+	_, err = conn.Exec(`UPDATE model_pricing SET updated_at = ?`,
+		goldenPricingUpdatedAt)
+	require.NoError(t, err, "set deterministic pricing updated_at")
+}
+
+func assertGoldenBytes(t *testing.T, name string, got []byte) {
+	t.Helper()
+	path := filepath.Join("..", "..", "testdata", "golden", name)
+	if *updateGolden {
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755),
+			"mkdir golden dir")
+		require.NoError(t, os.WriteFile(path, got, 0o644),
+			"write golden %s", name)
+		t.Logf("rewrote %s (%d bytes)", path, len(got))
+		return
+	}
+	want, err := os.ReadFile(path)
+	require.NoError(t, err, "read golden (run with -update to generate)")
+	if !bytes.Equal(want, got) {
+		assert.Equal(t, string(want), string(got),
+			"golden mismatch for %s", name)
 	}
 }
 
@@ -130,6 +419,12 @@ func TestFetchHTTPDailyUsage(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got.Daily, 1)
 	assert.Equal(t, "Bearer secret-token", gotAuth)
+	assert.Equal(t, export.UsageDailySchemaVersion, got.SchemaVersion)
+	require.NotNil(t, got.Pricing)
+	assert.Contains(t, got.Pricing.Models, "gpt-5.1")
+	require.Contains(t, got.Projects, "proj")
+	assert.Equal(t, export.ProjectResolutionUnknown,
+		got.Projects["proj"].Resolution)
 	assert.Equal(t, 10, got.Totals.InputTokens)
 	assert.Equal(t, 20, got.Daily[0].OutputTokens)
 	assert.Equal(t, 1, got.SessionCounts.Total)
@@ -633,6 +928,86 @@ func TestLocalArchiveQueryDailyUsageAppliesDefaultRange(t *testing.T) {
 	assert.NotEmpty(t, withBreakdowns.Daily[0].AgentBreakdowns)
 }
 
+func TestUsageDailyJSONIncludesExportMetadata(t *testing.T) {
+	dataDir := testDataDir(t)
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	fallbackModel := fallbackPricedModel(t)
+	require.NoError(t, seedFallbackPricing(database))
+	seedUsageDailyExportMetadataFixture(t, database, fallbackModel)
+	require.NoError(t, database.Close())
+
+	out := captureStdout(t, func() {
+		runUsageDaily(UsageDailyConfig{
+			JSON: true, Since: "2026-06-01", Until: "2026-06-01",
+			Timezone: "UTC", Offline: true, NoSync: true,
+		})
+	})
+
+	var got db.DailyUsageResult
+	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	assert.Equal(t, export.UsageDailySchemaVersion, got.SchemaVersion)
+	require.NotNil(t, got.Pricing)
+	require.Contains(t, got.Pricing.Models, "gpt-5.1")
+	require.Contains(t, got.Pricing.Models, fallbackModel)
+	assert.Equal(t, export.CostSourceReported,
+		got.Pricing.Models["gpt-5.1"].CostSource)
+	assert.Equal(t, export.CostSourceComputed,
+		got.Pricing.Models[fallbackModel].CostSource)
+	assert.True(t, got.Pricing.Fallback.Used)
+	assert.Contains(t, got.Pricing.Fallback.Models, fallbackModel)
+	require.Contains(t, got.Projects, "shared-project")
+	assert.Equal(t, export.ProjectResolutionUnknown,
+		got.Projects["shared-project"].Resolution)
+
+	require.Len(t, got.Daily, 1)
+	assert.Equal(t, "2026-06-01", got.Daily[0].Date)
+	assert.ElementsMatch(t, []string{"gpt-5.1", fallbackModel},
+		got.Daily[0].ModelsUsed)
+	assert.Equal(t, 300, got.Totals.InputTokens)
+	assert.Equal(t, 150, got.Totals.OutputTokens)
+	assert.Equal(t, 2, got.SessionCounts.Total)
+	assert.Equal(t, map[string]int{"shared-project": 2},
+		got.SessionCounts.ByProject)
+}
+
+func seedUsageDailyExportMetadataFixture(
+	t *testing.T, database *db.DB, fallbackModel string,
+) {
+	t.Helper()
+	started := "2026-06-01T10:00:00Z"
+	ended := "2026-06-01T10:05:00Z"
+	for _, id := range []string{"reported-cost", "fallback-cost"} {
+		require.NoError(t, database.UpsertSession(db.Session{
+			ID: "usage-meta-" + id, Project: "shared-project",
+			Machine: "test", Agent: "codex", StartedAt: &started,
+			EndedAt: &ended, CreatedAt: started, MessageCount: 2,
+			UserMessageCount: 1, RelationshipType: "root", DataVersion: 1,
+		}))
+	}
+	require.NoError(t, database.InsertMessages([]db.Message{
+		{
+			SessionID: "usage-meta-reported-cost", Ordinal: 0,
+			Role: "assistant", Timestamp: started, Model: "gpt-5.1",
+		},
+		{
+			SessionID: "usage-meta-fallback-cost", Ordinal: 0,
+			Role: "assistant", Timestamp: started, Model: fallbackModel,
+			TokenUsage: json.RawMessage(`{"input_tokens":200,"output_tokens":100}`),
+		},
+	}))
+	cost := 0.25
+	ordinal := 1
+	require.NoError(t, database.ReplaceSessionUsageEvents(
+		"usage-meta-reported-cost", []db.UsageEvent{{
+			SessionID: "usage-meta-reported-cost", MessageOrdinal: &ordinal,
+			Source: "session", Model: "gpt-5.1", InputTokens: 100,
+			OutputTokens: 50, CostUSD: &cost,
+			OccurredAt: "2026-06-01T10:01:00Z",
+			DedupKey:   "usage-meta-reported-cost:event",
+		}},
+	))
+}
+
 func TestFormatDailyUsageJSON(t *testing.T) {
 	result := db.DailyUsageResult{
 		Daily: []db.DailyUsageEntry{
@@ -1086,8 +1461,32 @@ func TestEnsurePricingWithFetcherSkipsFetchWithinCooldown(t *testing.T) {
 // sampleDailyUsageJSON is a full usage summary body with a single day and
 // non-zero totals, shared by the HTTP and daemon usage tests.
 const sampleDailyUsageJSON = `{
+	"schema_version": 1,
 	"from": "2026-06-01",
 	"to": "2026-06-02",
+	"pricing": {
+		"source": "embedded",
+		"table_version": "test",
+		"latest_row_updated_at": null,
+		"custom_override_count": 0,
+		"effective_row_count": 1,
+		"digest": "test-digest",
+		"cost_source": "reported",
+		"fallback": {"used": false, "models": []},
+		"models": {
+			"gpt-5.1": {
+				"matched_pattern": "gpt-5.1",
+				"input_cost_per_mtok": 1,
+				"output_cost_per_mtok": 2,
+				"cache_write_cost_per_mtok": 3,
+				"cache_read_cost_per_mtok": 4,
+				"cost_source": "reported"
+			}
+		}
+	},
+	"projects": {
+		"proj": {"resolution": "unknown", "identity": null}
+	},
 	"totals": {
 		"inputTokens": 10,
 		"outputTokens": 20,

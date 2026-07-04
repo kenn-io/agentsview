@@ -1,0 +1,158 @@
+{
+  "schema_version": 1,
+  "pricing": {
+    "source": "fetched",
+    "table_version": "litellm-398a0b15378c",
+    "latest_row_updated_at": "2026-07-03T12:00:00Z",
+    "custom_override_count": 0,
+    "effective_row_count": 2428,
+    "digest": "sha256:8d815a1737bce68fa1a19ba977bf33c8c8efcc74deb954fcf62ce80e46e75f2c",
+    "cost_source": "mixed",
+    "fallback": {
+      "used": false,
+      "models": []
+    },
+    "models": {
+      "fixture-model-computed": {
+        "matched_pattern": "fixture-model-computed",
+        "input_cost_per_mtok": 2,
+        "output_cost_per_mtok": 8,
+        "cache_write_cost_per_mtok": 3,
+        "cache_read_cost_per_mtok": 0.5,
+        "cost_source": "computed"
+      },
+      "fixture-model-reported": {
+        "matched_pattern": "fixture-model-reported",
+        "input_cost_per_mtok": 1,
+        "output_cost_per_mtok": 4,
+        "cache_write_cost_per_mtok": 2,
+        "cache_read_cost_per_mtok": 0.25,
+        "cost_source": "reported"
+      }
+    }
+  },
+  "projects": {
+    "path-project": {
+      "resolution": "resolved",
+      "identity": {
+        "key": "sha256:ae326f252aaa4ab91664d4f43245d8e7f3e3fd073da5bd36a3f72eb72f44526d",
+        "key_source": "root_path",
+        "root_path": "/fixtures/path-project",
+        "machine_local": true
+      }
+    },
+    "remote-project": {
+      "resolution": "resolved",
+      "identity": {
+        "key": "sha256:97879729c8ab311e9d4b28941e3a04830b28c527f00af53f2270212eccdbbd39",
+        "key_source": "git_remote",
+        "normalized_remote": "github.com/acme/remote-project"
+      }
+    },
+    "unknown-project": {
+      "resolution": "unknown",
+      "identity": null
+    }
+  },
+  "daily": [
+    {
+      "date": "2026-07-01",
+      "inputTokens": 300,
+      "outputTokens": 60,
+      "cacheCreationTokens": 0,
+      "cacheReadTokens": 0,
+      "totalCost": 0.0042,
+      "modelsUsed": [
+        "fixture-model-reported"
+      ],
+      "modelBreakdowns": [
+        {
+          "modelName": "fixture-model-reported",
+          "inputTokens": 300,
+          "outputTokens": 60,
+          "cacheCreationTokens": 0,
+          "cacheReadTokens": 0,
+          "cost": 0.0042
+        }
+      ],
+      "projectBreakdowns": [],
+      "agentBreakdowns": []
+    },
+    {
+      "date": "2026-07-02",
+      "inputTokens": 800,
+      "outputTokens": 160,
+      "cacheCreationTokens": 0,
+      "cacheReadTokens": 0,
+      "totalCost": 0.00288,
+      "modelsUsed": [
+        "fixture-model-computed"
+      ],
+      "modelBreakdowns": [
+        {
+          "modelName": "fixture-model-computed",
+          "inputTokens": 800,
+          "outputTokens": 160,
+          "cacheCreationTokens": 0,
+          "cacheReadTokens": 0,
+          "cost": 0.00288
+        }
+      ],
+      "projectBreakdowns": [],
+      "agentBreakdowns": []
+    },
+    {
+      "date": "2026-07-03",
+      "inputTokens": 1500,
+      "outputTokens": 300,
+      "cacheCreationTokens": 80,
+      "cacheReadTokens": 400,
+      "totalCost": 0.01726,
+      "modelsUsed": [
+        "fixture-model-reported",
+        "fixture-model-computed"
+      ],
+      "modelBreakdowns": [
+        {
+          "modelName": "fixture-model-reported",
+          "inputTokens": 300,
+          "outputTokens": 60,
+          "cacheCreationTokens": 0,
+          "cacheReadTokens": 0,
+          "cost": 0.0125
+        },
+        {
+          "modelName": "fixture-model-computed",
+          "inputTokens": 1200,
+          "outputTokens": 240,
+          "cacheCreationTokens": 80,
+          "cacheReadTokens": 400,
+          "cost": 0.00476
+        }
+      ],
+      "projectBreakdowns": [],
+      "agentBreakdowns": []
+    }
+  ],
+  "totals": {
+    "inputTokens": 2600,
+    "outputTokens": 520,
+    "cacheCreationTokens": 80,
+    "cacheReadTokens": 400,
+    "totalCost": 0.02434,
+    "cacheSavings": 0.00052
+  },
+  "sessionCounts": {
+    "total": 4,
+    "byProject": {
+      "path-project": 1,
+      "remote-project": 2,
+      "unknown-project": 1
+    },
+    "byAgent": {
+      "claude": 1,
+      "codex": 2,
+      "cursor": 1
+    }
+  }
+}

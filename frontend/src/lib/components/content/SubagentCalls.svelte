@@ -106,9 +106,7 @@
 </div>
 
 <style>
-  /* Adapted from
-     docs/superpowers/specs/2026-04-26-session-duration-ux-mockup.html
-     (.sa-expand rules, lines 671–692), with the mockup's raw colors mapped
+  /* Adapted from the session-duration UX mockup, with the raw colors mapped
      to theme tokens (the mockup's rail red is exactly --cat-task). */
   .sa-expand {
     background: color-mix(in srgb, var(--cat-task) 4%, transparent);

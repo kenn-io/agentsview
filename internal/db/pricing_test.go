@@ -1,7 +1,11 @@
 package db
 
 import (
+	"context"
 	"testing"
+
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/export"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -230,4 +234,34 @@ func TestInsertMissingModelPricing_DoesNotOverwrite(t *testing.T) {
 	require.NoError(t, err, "GetModelPricing gpt")
 	require.NotNil(t, gpt)
 	assert.Equal(t, 2.5, gpt.InputPerMTok, "gpt-5.4 InputPerMTok inserted")
+}
+
+func TestLoadPricingMapKeepsCustomSourceWhenRatesMatchFallback(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	fallback := fallbackRateMap()
+	fallbackRates, ok := fallback["gpt-5.5"]
+	require.True(t, ok, "expected gpt-5.5 fallback rates")
+	d.SetCustomPricing(map[string]config.CustomModelRate{
+		"gpt-5.5": {
+			Input:         fallbackRates.InputPerMTok,
+			Output:        fallbackRates.OutputPerMTok,
+			CacheCreation: fallbackRates.CacheWritePerMTok,
+			CacheRead:     fallbackRates.CacheReadPerMTok,
+		},
+	})
+
+	rows, err := d.loadPricingMap(ctx)
+	require.NoError(t, err, "loadPricingMap")
+	resolver := export.NewPricingResolver(rows)
+	lookup := resolver.Lookup("gpt-5.5")
+	require.True(t, lookup.OK, "lookup custom fallback-rate row")
+	assert.Equal(t, export.PricingRowSourceCustom,
+		lookup.Rates.Source)
+
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+	assert.Equal(t, "custom", block.Source)
+	assert.Equal(t, 1, block.CustomOverrideCount)
 }

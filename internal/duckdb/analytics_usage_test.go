@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 )
 
 // TestDuckBuildAnalyticsWhereSubagents verifies that the DuckDB
@@ -207,6 +208,90 @@ func TestDuckUsageAutomatedScopePredicates(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDuckUsageAggregateCostRecordsMixedReportedAndComputed(t *testing.T) {
+	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
+		ModelPattern: "mixed-model",
+		Rates: export.ModelRates{
+			InputPerMTok:      1,
+			OutputPerMTok:     2,
+			CacheWritePerMTok: 3,
+			CacheReadPerMTok:  4,
+			Source:            export.PricingRowSourceFetched,
+		},
+	}})
+
+	cost, _, priced, contributes := duckUsageAggregateCost(
+		"mixed-model",
+		1000, 2000, 3000, 4000,
+		100, 200, 300, 400, 500,
+		0.25,
+		true,
+		resolver,
+	)
+	require.True(t, priced)
+	require.True(t, contributes)
+	assert.InDelta(t, 0.25+(100*1+200*2+400*3+500*4)/1_000_000.0, cost, 1e-12)
+
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+	assert.Equal(t, export.CostSourceMixed, block.CostSource)
+	assert.Equal(t, export.CostSourceMixed, block.Models["mixed-model"].CostSource)
+}
+
+func TestDuckUsageAggregateCostKeepsMixedUnpricedComputedTokensUnpriced(t *testing.T) {
+	resolver := export.NewPricingResolver(nil)
+
+	cost, _, priced, contributes := duckUsageAggregateCost(
+		"unknown-model",
+		1000, 2000, 0, 0,
+		1000, 2000, 0, 0, 0,
+		0.25,
+		true,
+		resolver,
+	)
+
+	require.True(t, contributes)
+	assert.False(t, priced)
+	assert.Equal(t, 0.25, cost)
+
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+	assert.Equal(t, export.CostSourceMixed, block.CostSource)
+	require.Contains(t, block.Models, "unknown-model")
+	assert.Equal(t, export.CostSourceMixed, block.Models["unknown-model"].CostSource)
+	assert.Nil(t, block.Models["unknown-model"].MatchedPattern)
+	assert.Empty(t, block.Fallback.Models)
+}
+
+func TestDuckUsageAggregateCostIncludesReasoningOnlyRows(t *testing.T) {
+	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
+		ModelPattern: "reasoning-model",
+		Rates: export.ModelRates{
+			OutputPerMTok: 2,
+			Source:        export.PricingRowSourceFetched,
+		},
+	}})
+
+	cost, _, priced, contributes := duckUsageAggregateCost(
+		"reasoning-model",
+		0, 0, 0, 0,
+		0, 0, 300, 0, 0,
+		0,
+		false,
+		resolver,
+	)
+
+	require.True(t, contributes)
+	assert.True(t, priced)
+	assert.InDelta(t, 0.0006, cost, 1e-12)
+
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+	require.Contains(t, block.Models, "reasoning-model")
+	assert.Equal(t, export.CostSourceComputed,
+		block.Models["reasoning-model"].CostSource)
 }
 
 func TestDuckUsageAutomatedScopeOneShotExemption(t *testing.T) {

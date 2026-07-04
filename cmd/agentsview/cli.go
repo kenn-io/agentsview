@@ -25,8 +25,9 @@ const (
 const dataVersionTooNewExitCode = 3
 
 type cliExitError struct {
-	code int
-	err  error
+	code   int
+	err    error
+	silent bool
 }
 
 func (e *cliExitError) Error() string {
@@ -44,12 +45,24 @@ func withExitCode(err error, code int) error {
 	return &cliExitError{code: code, err: err}
 }
 
+func withSilentExitCode(err error, code int) error {
+	if err == nil {
+		return nil
+	}
+	return &cliExitError{code: code, err: err, silent: true}
+}
+
 func exitCodeFromError(err error) int {
 	var exitErr *cliExitError
 	if errors.As(err, &exitErr) {
 		return exitErr.code
 	}
 	return 1
+}
+
+func isSilentExitError(err error) bool {
+	var exitErr *cliExitError
+	return errors.As(err, &exitErr) && exitErr.silent
 }
 
 func newRootCommand() *cobra.Command {
@@ -92,6 +105,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newUpdateCommand())
 	root.AddCommand(newTokenUseCommand())
 	root.AddCommand(newImportCommand())
+	root.AddCommand(newExportCommand())
 	root.AddCommand(newProjectsCommand())
 	root.AddCommand(newHealthCommand())
 	root.AddCommand(newUsageCommand())

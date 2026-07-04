@@ -687,6 +687,9 @@ Activity includes one-shot sessions by default. Automated sessions
 are also included by default and can be filtered with the
 `automation` query parameter.
 
+The JSON response shares the same `schema_version`, `pricing`, and `projects`
+metadata contract as `agentsview activity report --json`.
+
 | Query param | Notes |
 |-------------|-------|
 | `preset` | `day`, `week`, `month`, or `custom` |
@@ -705,10 +708,44 @@ Response excerpt:
 
 ```json
 {
+  "schema_version": 1,
+  "pricing": {
+    "source": "fetched",
+    "table_version": "litellm-398a0b15378c",
+    "latest_row_updated_at": "2026-06-20T18:40:00Z",
+    "custom_override_count": 0,
+    "effective_row_count": 2428,
+    "digest": "sha256:8d815a1737bce68fa1a19ba977bf33c8c8efcc74deb954fcf62ce80e46e75f2c",
+    "cost_source": "mixed",
+    "fallback": {
+      "used": false,
+      "models": []
+    },
+    "models": {
+      "gpt-5.4": {
+        "matched_pattern": "gpt-5.4",
+        "input_cost_per_mtok": 2,
+        "output_cost_per_mtok": 8,
+        "cache_write_cost_per_mtok": 3,
+        "cache_read_cost_per_mtok": 0.5,
+        "cost_source": "computed"
+      }
+    }
+  },
+  "projects": {
+    "agentsview": {
+      "resolution": "resolved",
+      "identity": {
+        "key": "sha256:97879729c8ab311e9d4b28941e3a04830b28c527f00af53f2270212eccdbbd39",
+        "key_source": "git_remote",
+        "normalized_remote": "github.com/acme/agentsview"
+      }
+    }
+  },
   "timezone": "America/Chicago",
   "range_start": "2026-06-20T05:00:00Z",
   "range_end": "2026-06-21T05:00:00Z",
-  "bucket_unit": "1h",
+  "bucket_unit": "hour",
   "bucket_seconds": 3600,
   "partial": true,
   "as_of": "2026-06-20T18:40:00Z",

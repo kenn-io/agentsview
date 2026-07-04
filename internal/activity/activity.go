@@ -1,13 +1,15 @@
 // Package activity aggregates a resolved time range of agent activity into a
-// concurrency- and usage-oriented report. It is pure: it depends only on the
-// time and sort packages and operates on in-memory input streams supplied by a
-// storage backend, so the same aggregation runs identically across SQLite,
-// PostgreSQL, and DuckDB.
+// concurrency- and usage-oriented report. It operates on in-memory input
+// streams supplied by a storage backend, so the same aggregation runs
+// identically across SQLite, PostgreSQL, and DuckDB. Export contract types are
+// referenced only for optional report metadata.
 package activity
 
 import (
 	"sort"
 	"time"
+
+	"go.kenn.io/agentsview/internal/export"
 )
 
 // Params controls one range aggregation. RangeStart/RangeEnd are the resolved
@@ -65,24 +67,27 @@ type UsageRow struct {
 
 // Report is the API payload.
 type Report struct {
-	Timezone           string           `json:"timezone"`
-	RangeStart         string           `json:"range_start"`
-	RangeEnd           string           `json:"range_end"`
-	BucketUnit         string           `json:"bucket_unit"`
-	BucketSeconds      int              `json:"bucket_seconds"`
-	BucketCount        int              `json:"bucket_count"`
-	Partial            bool             `json:"partial"`
-	AsOf               *string          `json:"as_of"`
-	EffectiveEnd       string           `json:"effective_end"`
-	ElapsedBucketCount int              `json:"elapsed_bucket_count"`
-	Buckets            []Bucket         `json:"buckets"`
-	Peak               Peak             `json:"peak"`
-	Totals             Totals           `json:"totals"`
-	ByProject          []KeyMinutes     `json:"by_project"`
-	ByModel            []KeyMinutes     `json:"by_model"`
-	ByAgent            []KeyMinutes     `json:"by_agent"`
-	BySession          []SessionRow     `json:"by_session"`
-	Intervals          []ReportInterval `json:"intervals"`
+	SchemaVersion      int                               `json:"schema_version,omitempty"`
+	Pricing            *export.PricingBlock              `json:"pricing,omitempty"`
+	Projects           map[string]export.ProjectMapEntry `json:"projects,omitempty"`
+	Timezone           string                            `json:"timezone"`
+	RangeStart         string                            `json:"range_start"`
+	RangeEnd           string                            `json:"range_end"`
+	BucketUnit         string                            `json:"bucket_unit"`
+	BucketSeconds      int                               `json:"bucket_seconds"`
+	BucketCount        int                               `json:"bucket_count"`
+	Partial            bool                              `json:"partial"`
+	AsOf               *string                           `json:"as_of"`
+	EffectiveEnd       string                            `json:"effective_end"`
+	ElapsedBucketCount int                               `json:"elapsed_bucket_count"`
+	Buckets            []Bucket                          `json:"buckets"`
+	Peak               Peak                              `json:"peak"`
+	Totals             Totals                            `json:"totals"`
+	ByProject          []KeyMinutes                      `json:"by_project"`
+	ByModel            []KeyMinutes                      `json:"by_model"`
+	ByAgent            []KeyMinutes                      `json:"by_agent"`
+	BySession          []SessionRow                      `json:"by_session"`
+	Intervals          []ReportInterval                  `json:"intervals"`
 }
 
 type Bucket struct {
@@ -547,17 +552,16 @@ func usageDedupTokenForRow(u UsageRow) (usageDedupToken, bool) {
 	return usageDedupToken{}, false
 }
 
-// dedupUsage filters usage rows to the range and applies the two-tier,
-// first-seen-wins dedup that mirrors GetDailyUsage. Rows arrive pre-sorted by
-// (ts, session_id, COALESCE(message_ordinal,-1)). The half-open instant filter
-// drops rows before start or at/after end; on a partial range effEnd is the
-// as-of clip, so rows at or after effEnd are dropped before they can claim a
-// dedup key, matching the activity/bucket clipping Aggregate applies. For a
-// full range effEnd == end, so nothing extra is excluded.
-func dedupUsage(start, end, effEnd time.Time, usage []UsageRow) []UsageRow {
+// UsageSurvivorMask returns a same-length mask for rows that survive the
+// report's range, effective-end, and first-seen dedup filters.
+func UsageSurvivorMask(start, end, effEnd time.Time, usage []UsageRow) []bool {
+	return usageSurvivorMask(start, end, effEnd, usage)
+}
+
+func usageSurvivorMask(start, end, effEnd time.Time, usage []UsageRow) []bool {
 	seen := map[usageDedupToken]struct{}{}
-	out := make([]UsageRow, 0, len(usage))
-	for _, u := range usage {
+	out := make([]bool, len(usage))
+	for i, u := range usage {
 		t, ok := parseTS(u.Timestamp)
 		if !ok || t.Before(start) || !t.Before(end) {
 			continue // out-of-range rows never claim a key
@@ -571,7 +575,25 @@ func dedupUsage(start, end, effEnd time.Time, usage []UsageRow) []UsageRow {
 			}
 			seen[k] = struct{}{}
 		}
-		out = append(out, u)
+		out[i] = true
+	}
+	return out
+}
+
+// dedupUsage filters usage rows to the range and applies the two-tier,
+// first-seen-wins dedup that mirrors GetDailyUsage. Rows arrive pre-sorted by
+// (ts, session_id, COALESCE(message_ordinal,-1)). The half-open instant filter
+// drops rows before start or at/after end; on a partial range effEnd is the
+// as-of clip, so rows at or after effEnd are dropped before they can claim a
+// dedup key, matching the activity/bucket clipping Aggregate applies. For a
+// full range effEnd == end, so nothing extra is excluded.
+func dedupUsage(start, end, effEnd time.Time, usage []UsageRow) []UsageRow {
+	out := make([]UsageRow, 0, len(usage))
+	mask := usageSurvivorMask(start, end, effEnd, usage)
+	for i, keep := range mask {
+		if keep {
+			out = append(out, usage[i])
+		}
 	}
 	return out
 }

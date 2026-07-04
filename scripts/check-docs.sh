@@ -55,7 +55,7 @@ if ! command -v rg >/dev/null 2>&1; then
 fi
 
 root_media_refs="$(
-  (rg -n '(<img[^>]+src="/|!\[[^]]*\]\(/)[^)" >]+\.(png|svg|jpg|jpeg|webp|gif)' docs README.md --glob '!docs/superpowers/**' || true) \
+  (rg -n '(<img[^>]+src="/|!\[[^]]*\]\(/)[^)" >]+\.(png|svg|jpg|jpeg|webp|gif)' docs README.md || true) \
     | grep -v '/assets/static/' \
     | grep -v '/assets/generated/' \
     || true
@@ -66,7 +66,7 @@ if [[ -n "$root_media_refs" ]]; then
 fi
 
 source_media_refs="$(
-  (rg -n '(/screenshots/[^)" '"'"'`>]+\.(png|svg|jpg|jpeg|webp|gif)|/agents/[^)" '"'"'`>]+\.(png|svg|jpg|jpeg|webp|gif)|/architecture\.svg|https://agentsview\.io/og-image\.png|/og-image\.png)' docs README.md --glob '!docs/superpowers/**' || true) \
+  (rg -n '(/screenshots/[^)" '"'"'`>]+\.(png|svg|jpg|jpeg|webp|gif)|/agents/[^)" '"'"'`>]+\.(png|svg|jpg|jpeg|webp|gif)|/architecture\.svg|https://agentsview\.io/og-image\.png|/og-image\.png)' docs README.md || true) \
     | grep -v '/assets/static/' \
     | grep -v '/assets/generated/' \
     || true

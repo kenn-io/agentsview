@@ -26,6 +26,26 @@ var (
 	dailyUsageFixturePath string
 )
 
+func TestDailyUsageResultOmitsUnsetPricingMetadata(t *testing.T) {
+	b, err := json.Marshal(DailyUsageResult{})
+	require.NoError(t, err)
+
+	assert.NotContains(t, string(b), `"pricing"`)
+}
+
+func TestUsageDailyEmptyProjectsMapExcludesUnrelatedObservations(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedProjectIdentityObservation(t, d, "unrelated-project")
+
+	result, err := d.GetDailyUsage(ctx, UsageFilter{
+		From: "2026-06-01", To: "2026-06-01", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, result.Daily)
+	assert.Empty(t, result.Projects)
+}
+
 func openDailyUsageFixtureDB(t *testing.T) *DB {
 	t.Helper()
 
@@ -158,7 +178,6 @@ func TestUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {
 	assert.NotContains(t, normalized, "first_message")
 	assert.NotContains(t, normalized, "cost_status")
 	assert.NotContains(t, normalized, "cost_source")
-	assert.NotContains(t, normalized, "reasoning_tokens")
 	assert.NotContains(t, normalized, "user_message_count")
 	assert.NotContains(t, normalized, "session_activity_at")
 	assert.NotContains(t, normalized, " as started_at")
@@ -200,7 +219,6 @@ func TestTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {
 	assert.NotContains(t, normalized, "first_message")
 	assert.NotContains(t, normalized, "cost_status")
 	assert.NotContains(t, normalized, "cost_source")
-	assert.NotContains(t, normalized, "reasoning_tokens")
 	assert.NotContains(t, normalized, "user_message_count")
 	assert.NotContains(t, normalized, "session_activity_at")
 	assert.NotContains(t, normalized, " as started_at")
@@ -1427,6 +1445,20 @@ func TestGetDailyUsageProjectBreakdowns(t *testing.T) {
 	}
 	assert.InDelta(t, day.TotalCost, projCostSum, 1e-9,
 		"sum(ProjectBreakdowns.Cost) want TotalCost")
+}
+
+func TestDailyUsageEntryBreakdownSlicesMarshalAsEmptyArrays(t *testing.T) {
+	data, err := json.Marshal(DailyUsageEntry{
+		Date:       "2026-07-03",
+		ModelsUsed: []string{},
+	})
+	require.NoError(t, err)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, []any{}, got["modelBreakdowns"])
+	assert.Equal(t, []any{}, got["projectBreakdowns"])
+	assert.Equal(t, []any{}, got["agentBreakdowns"])
 }
 
 func TestGetDailyUsageAgentBreakdowns(t *testing.T) {

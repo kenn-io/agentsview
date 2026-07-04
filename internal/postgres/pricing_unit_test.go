@@ -15,6 +15,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 )
 
 type pricingProbeDriver struct{}
@@ -160,38 +161,58 @@ func (s *pricingProbeState) unblockNextQuery() {
 }
 
 func TestCustomPricingOverridesPricingMap(t *testing.T) {
+	fallback := fallbackPricingMap()
 	tests := []struct {
-		name      string
-		dbPrices  []db.ModelPricing
-		custom    map[string]config.CustomModelRate
-		model     string
-		wantInput float64
+		name       string
+		dbPrices   []db.ModelPricing
+		custom     map[string]config.CustomModelRate
+		model      string
+		wantInput  float64
+		wantSource export.PricingRowSource
 	}{
 		{
-			name:      "db pricing only",
-			dbPrices:  []db.ModelPricing{{ModelPattern: "acme-ultra-2.1", InputPerMTok: 1.0}},
-			model:     "acme-ultra-2.1",
-			wantInput: 1.0,
+			name:       "db pricing only",
+			dbPrices:   []db.ModelPricing{{ModelPattern: "acme-ultra-2.1", InputPerMTok: 1.0}},
+			model:      "acme-ultra-2.1",
+			wantInput:  1.0,
+			wantSource: export.PricingRowSourceFetched,
 		},
 		{
-			name:      "custom overrides db",
-			dbPrices:  []db.ModelPricing{{ModelPattern: "acme-ultra-2.1", InputPerMTok: 1.0}},
-			custom:    map[string]config.CustomModelRate{"acme-ultra-2.1": {Input: 9.0}},
-			model:     "acme-ultra-2.1",
-			wantInput: 9.0,
+			name:       "custom overrides db",
+			dbPrices:   []db.ModelPricing{{ModelPattern: "acme-ultra-2.1", InputPerMTok: 1.0}},
+			custom:     map[string]config.CustomModelRate{"acme-ultra-2.1": {Input: 9.0}},
+			model:      "acme-ultra-2.1",
+			wantInput:  9.0,
+			wantSource: export.PricingRowSourceCustom,
 		},
 		{
-			name:      "custom adds new model",
-			custom:    map[string]config.CustomModelRate{"new-model": {Input: 4.0}},
-			model:     "new-model",
-			wantInput: 4.0,
+			name:       "custom adds new model",
+			custom:     map[string]config.CustomModelRate{"new-model": {Input: 4.0}},
+			model:      "new-model",
+			wantInput:  4.0,
+			wantSource: export.PricingRowSourceCustom,
 		},
 		{
-			name:      "custom does not affect other models",
-			dbPrices:  []db.ModelPricing{{ModelPattern: "db-model", InputPerMTok: 2.0}},
-			custom:    map[string]config.CustomModelRate{"other": {Input: 99.0}},
-			model:     "db-model",
-			wantInput: 2.0,
+			name: "custom keeps source when rates match fallback",
+			custom: map[string]config.CustomModelRate{
+				"gpt-5.5": {
+					Input:         fallback["gpt-5.5"].InputPerMTok,
+					Output:        fallback["gpt-5.5"].OutputPerMTok,
+					CacheCreation: fallback["gpt-5.5"].CacheWritePerMTok,
+					CacheRead:     fallback["gpt-5.5"].CacheReadPerMTok,
+				},
+			},
+			model:      "gpt-5.5",
+			wantInput:  fallback["gpt-5.5"].InputPerMTok,
+			wantSource: export.PricingRowSourceCustom,
+		},
+		{
+			name:       "custom does not affect other models",
+			dbPrices:   []db.ModelPricing{{ModelPattern: "db-model", InputPerMTok: 2.0}},
+			custom:     map[string]config.CustomModelRate{"other": {Input: 99.0}},
+			model:      "db-model",
+			wantInput:  2.0,
+			wantSource: export.PricingRowSourceFetched,
 		},
 	}
 
@@ -203,7 +224,8 @@ func TestCustomPricingOverridesPricingMap(t *testing.T) {
 			s.applyCustomPricing(out)
 			got, ok := out[tt.model]
 			require.True(t, ok, "model %q not in map", tt.model)
-			assert.InDelta(t, tt.wantInput, got.input, 0.001)
+			assert.InDelta(t, tt.wantInput, got.InputPerMTok, 0.001)
+			assert.Equal(t, tt.wantSource, got.Source)
 		})
 	}
 }
@@ -220,7 +242,7 @@ func TestLoadPricingMapSharesConcurrentDBRows(t *testing.T) {
 	store := &Store{pg: pg}
 
 	type result struct {
-		prices map[string]modelRates
+		prices []export.EffectivePricingRow
 		err    error
 	}
 	results := make(chan result, 2)
@@ -246,8 +268,9 @@ func TestLoadPricingMapSharesConcurrentDBRows(t *testing.T) {
 	require.NoError(t, first.err, "first loadPricingMap")
 	require.NoError(t, second.err, "second loadPricingMap")
 	require.Equal(t, 1, state.queryCount(), "pricing queries")
-	first.prices["db-model"] = modelRates{input: 99.0}
-	assert.InDelta(t, 1.0, second.prices["db-model"].input, 0.001)
+	first.prices[0].Rates.InputPerMTok = 99.0
+	secondByPattern := pricingRowsByPattern(second.prices)
+	assert.InDelta(t, 1.0, secondByPattern["db-model"].InputPerMTok, 0.001)
 }
 
 func TestLoadPricingMapKeepsSharedDBRowsForActiveCaller(t *testing.T) {
@@ -265,7 +288,7 @@ func TestLoadPricingMapKeepsSharedDBRowsForActiveCaller(t *testing.T) {
 	store := &Store{pg: pg}
 
 	type result struct {
-		prices map[string]modelRates
+		prices []export.EffectivePricingRow
 		err    error
 	}
 	firstCtx, cancelFirst := context.WithCancel(context.Background())
@@ -295,7 +318,8 @@ func TestLoadPricingMapKeepsSharedDBRowsForActiveCaller(t *testing.T) {
 	unblock()
 	second := <-secondResult
 	require.NoError(t, second.err, "second loadPricingMap")
-	assert.InDelta(t, 1.0, second.prices["db-model"].input, 0.001)
+	secondByPattern := pricingRowsByPattern(second.prices)
+	assert.InDelta(t, 1.0, secondByPattern["db-model"].InputPerMTok, 0.001)
 	assert.Equal(t, 1, state.queryCount(), "pricing queries")
 }
 
@@ -388,7 +412,7 @@ func TestSetCustomPricingForgetsInFlightPricingLoad(t *testing.T) {
 	store := &Store{pg: pg}
 
 	type result struct {
-		prices map[string]modelRates
+		prices []export.EffectivePricingRow
 		err    error
 	}
 	results := make(chan result, 2)
@@ -431,8 +455,20 @@ func TestLoadPricingMapReloadsAfterCompletedDBRows(t *testing.T) {
 	require.NoError(t, err, "second loadPricingMap")
 
 	require.Equal(t, 2, state.queryCount(), "pricing queries")
-	assert.InDelta(t, 1.0, first["db-model"].input, 0.001)
-	assert.InDelta(t, 7.0, second["db-model"].input, 0.001)
+	firstByPattern := pricingRowsByPattern(first)
+	secondByPattern := pricingRowsByPattern(second)
+	assert.InDelta(t, 1.0, firstByPattern["db-model"].InputPerMTok, 0.001)
+	assert.InDelta(t, 7.0, secondByPattern["db-model"].InputPerMTok, 0.001)
+}
+
+func pricingRowsByPattern(
+	rows []export.EffectivePricingRow,
+) map[string]export.ModelRates {
+	out := make(map[string]export.ModelRates, len(rows))
+	for _, row := range rows {
+		out[row.ModelPattern] = row.Rates
+	}
+	return out
 }
 
 func TestLoadPricingMapDoesNotCacheMissingTableFallback(t *testing.T) {

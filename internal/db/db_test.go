@@ -23,6 +23,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/export"
 )
 
 func reflectedFieldValue(v any, name string) reflect.Value {
@@ -6516,6 +6517,120 @@ func TestCopySessionMetadataClearedNameYieldsToAgent(t *testing.T) {
 	require.NotNil(t, c.SessionName, "fresh session_name preserved")
 	assert.Equal(t, "Fresh Agent C", *c.SessionName,
 		"cleared old name must yield to fresh session_name")
+}
+
+func TestCopySessionMetadataPreservesArchiveIdentityMetadata(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	oldPath := filepath.Join(dir, "old.db")
+
+	oldDB, err := Open(oldPath)
+	requireNoError(t, err, "open old")
+	requireNoError(t, oldDB.SetDatabaseIDForTest(ctx, "old-db-id"),
+		"set old database id")
+	requireNoError(t, oldDB.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			Project:    "alpha",
+			Machine:    "laptop",
+			RootPath:   filepath.Join(dir, "alpha"),
+			GitRemote:  "https://github.com/acme/alpha.git",
+			ObservedAt: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		}), "upsert old project identity")
+	requireNoError(t, oldDB.Close(), "close old")
+
+	fresh := testDB(t)
+	requireNoError(t, fresh.SetDatabaseIDForTest(ctx, "fresh-db-id"),
+		"set fresh database id")
+	requireNoError(t, fresh.CopySessionMetadataFrom(oldPath), "copy")
+
+	gotID, err := fresh.GetOrCreateDatabaseID(ctx)
+	requireNoError(t, err, "GetOrCreateDatabaseID")
+	assert.Equal(t, "old-db-id", gotID)
+	observations, err := fresh.ListProjectIdentityObservations(
+		ctx, []string{"alpha"})
+	requireNoError(t, err, "ListProjectIdentityObservations")
+	require.Len(t, observations, 1)
+	assert.Equal(t, "alpha", observations[0].Project)
+	assert.Equal(t, "https://github.com/acme/alpha.git",
+		observations[0].GitRemote)
+}
+
+func TestCopySessionMetadataKeepsFreshProjectIdentityObservationOnConflict(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	oldPath := filepath.Join(dir, "old.db")
+	root := filepath.Join(dir, "repo")
+
+	oldDB, err := Open(oldPath)
+	requireNoError(t, err, "open old")
+	requireNoError(t, oldDB.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			Project:          "alpha",
+			Machine:          "laptop",
+			RootPath:         root,
+			WorktreeName:     "pkg",
+			WorktreeRootPath: filepath.Join(root, "pkg"),
+			ObservedAt:       time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		}), "upsert old project identity")
+	requireNoError(t, oldDB.Close(), "close old")
+
+	fresh := testDB(t)
+	requireNoError(t, fresh.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			Project:          "alpha",
+			Machine:          "laptop",
+			RootPath:         root,
+			WorktreeName:     filepath.Base(root),
+			WorktreeRootPath: root,
+			ObservedAt:       time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		}), "upsert fresh project identity")
+
+	requireNoError(t, fresh.CopySessionMetadataFrom(oldPath), "copy")
+
+	observations, err := fresh.ListProjectIdentityObservations(
+		ctx, []string{"alpha"})
+	requireNoError(t, err, "ListProjectIdentityObservations")
+	require.Len(t, observations, 1)
+	assert.Equal(t, root, observations[0].WorktreeRootPath)
+	assert.Equal(t, filepath.Base(root), observations[0].WorktreeName)
+}
+
+func TestCopySessionMetadataSuppressesOldRootFallbackWhenFreshRemoteExists(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	oldPath := filepath.Join(dir, "old.db")
+	root := filepath.Join(dir, "repo")
+
+	oldDB, err := Open(oldPath)
+	requireNoError(t, err, "open old")
+	requireNoError(t, oldDB.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			Project:    "alpha",
+			Machine:    "laptop",
+			RootPath:   root,
+			ObservedAt: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		}), "upsert old fallback project identity")
+	requireNoError(t, oldDB.Close(), "close old")
+
+	fresh := testDB(t)
+	requireNoError(t, fresh.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			Project:       "alpha",
+			Machine:       "laptop",
+			RootPath:      root,
+			GitRemote:     "https://github.com/acme/alpha.git",
+			GitRemoteName: "origin",
+			ObservedAt:    time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		}), "upsert fresh remote project identity")
+
+	requireNoError(t, fresh.CopySessionMetadataFrom(oldPath), "copy")
+
+	observations, err := fresh.ListProjectIdentityObservations(
+		ctx, []string{"alpha"})
+	requireNoError(t, err, "ListProjectIdentityObservations")
+	require.Len(t, observations, 1)
+	assert.Equal(t, "https://github.com/acme/alpha.git", observations[0].GitRemote)
+	assert.Equal(t, "git_remote", observations[0].KeySource)
 }
 
 func TestUpsertSessionPersistsSessionName(t *testing.T) {

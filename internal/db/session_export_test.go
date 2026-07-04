@@ -1,0 +1,1080 @@
+package db
+
+import (
+	"context"
+	"database/sql"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"go.kenn.io/agentsview/internal/export"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestSessionSummaryExportRowsAreContentFreeAndMetadataScoped(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	seedSessionExportPricing(t, d)
+	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			Project:          "alpha",
+			Machine:          "laptop",
+			RootPath:         "/repo/alpha/worktrees/feature",
+			GitRemote:        "https://github.com/acme/alpha.git",
+			GitRemoteName:    "origin",
+			WorktreeName:     "feature",
+			WorktreeRootPath: "/repo/alpha",
+			ObservedAt:       time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		}), "upsert alpha project identity")
+	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			Project:    "unreturned",
+			Machine:    "laptop",
+			RootPath:   "/repo/unreturned",
+			GitRemote:  "https://github.com/acme/unreturned.git",
+			ObservedAt: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		}), "upsert unrelated project identity")
+	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			Project:          "alpha",
+			Machine:          "laptop",
+			RootPath:         "/repo/alpha/main",
+			GitRemote:        "https://github.com/acme/alpha.git",
+			GitRemoteName:    "origin",
+			WorktreeName:     "main",
+			WorktreeRootPath: "/repo/alpha/main",
+			ObservedAt:       time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		}), "upsert alpha main project identity")
+
+	insertExportSession(t, d, Session{
+		ID:                   "alpha-parent",
+		Project:              "alpha",
+		Machine:              "laptop",
+		Agent:                "claude",
+		StartedAt:            Ptr("2026-05-01T10:00:00Z"),
+		EndedAt:              Ptr("2026-05-01T10:10:00Z"),
+		MessageCount:         3,
+		UserMessageCount:     1,
+		TotalOutputTokens:    90,
+		PeakContextTokens:    1200,
+		HasTotalOutputTokens: true,
+		HasPeakContextTokens: true,
+		Cwd:                  "/repo/alpha/worktrees/feature/pkg",
+		GitBranch:            "feature/export-contracts",
+	})
+	insertMessages(t, d,
+		Message{
+			SessionID: "alpha-parent", Ordinal: 0, Role: "user",
+			Timestamp: "2026-05-01T10:00:30Z",
+		},
+		Message{
+			SessionID: "alpha-parent", Ordinal: 1, Role: "assistant",
+			Timestamp: "2026-05-01T10:01:00Z",
+			Model:     "model-computed",
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":1000,"output_tokens":500,` +
+					`"cache_creation_input_tokens":200,` +
+					`"cache_read_input_tokens":300}`),
+			HasContextTokens: true, HasOutputTokens: true,
+		},
+		Message{
+			SessionID: "alpha-parent", Ordinal: 2, Role: "assistant",
+			Timestamp: "2026-05-01T10:02:00Z",
+			Model:     "model-reported",
+			TokenUsage: json.RawMessage(
+				`{"input_tokens":20,"output_tokens":10}`),
+			HasContextTokens: true, HasOutputTokens: true,
+		},
+	)
+
+	insertExportSession(t, d, Session{
+		ID:               "alpha-child",
+		Project:          "alpha",
+		Machine:          "laptop",
+		Agent:            "claude",
+		StartedAt:        Ptr("2026-05-01T10:02:00Z"),
+		EndedAt:          Ptr("2026-05-01T10:05:00Z"),
+		MessageCount:     1,
+		UserMessageCount: 1,
+		ParentSessionID:  Ptr("alpha-parent"),
+		RelationshipType: "subagent",
+		IsAutomated:      true,
+		Cwd:              "/repo/alpha/worktrees/feature/sub",
+	})
+	reported := 0.0123
+	require.NoError(t, d.ReplaceSessionUsageEvents("alpha-child", []UsageEvent{{
+		Source:          "provider",
+		Model:           "model-reported",
+		InputTokens:     200,
+		OutputTokens:    40,
+		ReasoningTokens: 7,
+		CostUSD:         &reported,
+		OccurredAt:      "2026-05-01T10:04:00Z",
+	}}), "replace usage events")
+
+	insertExportSession(t, d, Session{
+		ID:               "beta-root",
+		Project:          "beta",
+		Machine:          "desktop",
+		Agent:            "codex",
+		StartedAt:        Ptr("2026-05-01T09:00:00Z"),
+		EndedAt:          Ptr("2026-05-01T09:30:00Z"),
+		MessageCount:     1,
+		UserMessageCount: 2,
+	})
+	insertMessages(t, d, Message{
+		SessionID: "beta-root", Ordinal: 0, Role: "assistant",
+		Timestamp: "2026-05-01T09:10:00Z",
+		Model:     "model-reported",
+		TokenUsage: json.RawMessage(
+			`{"input_tokens":10,"output_tokens":20}`),
+		HasContextTokens: true, HasOutputTokens: true,
+	})
+
+	result, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{IncludeChildren: true},
+		Limit:  10,
+		Format: "json",
+	})
+	require.NoError(t, err, "ExportSessionSummaries")
+	require.Len(t, result.Rows, 3, "export rows")
+
+	rows := sessionExportRowsByID(result.Rows)
+	parent := rows["alpha-parent"]
+	require.NotNil(t, parent.ModelUsage, "parent model usage")
+	assert.Equal(t, "alpha-parent", parent.ID)
+	assert.Equal(t, "alpha", parent.Project)
+	assert.Equal(t, "laptop", parent.Machine)
+	assert.Equal(t, "/repo/alpha/worktrees/feature/pkg", parent.Cwd)
+	assert.Equal(t, "feature/export-contracts", parent.GitBranch)
+	assert.Equal(t, 3, parent.MessageCount)
+	assert.Equal(t, 1, parent.UserMessageCount)
+	assert.Equal(t, 2, parent.AssistantMessageCount)
+	assert.Equal(t, 1, parent.TurnCount)
+	require.NotNil(t, parent.DurationSeconds, "duration_seconds")
+	assert.Equal(t, int64(600), *parent.DurationSeconds)
+	assert.Equal(t, export.SessionClassificationInteractive, parent.Classification)
+	assert.False(t, parent.IsAutomated)
+	assert.Nil(t, parent.ParentSessionID)
+	assert.Nil(t, parent.RelationshipType)
+	assert.Equal(t, []string{"model-computed", "model-reported"}, parent.ModelUsage.Models)
+	assert.Equal(t, 1020, parent.ModelUsage.InputTokens)
+	assert.Equal(t, 510, parent.ModelUsage.OutputTokens)
+	assert.Equal(t, 200, parent.ModelUsage.CacheCreationInputTokens)
+	assert.Equal(t, 300, parent.ModelUsage.CacheReadInputTokens)
+	assert.True(t, parent.ModelUsage.HasCost)
+	require.Contains(t, parent.ModelUsage.ByModel, "model-computed")
+	assert.Equal(t, 1000, parent.ModelUsage.ByModel["model-computed"].InputTokens)
+	assert.Equal(t, export.CostSourceComputed,
+		parent.ModelUsage.ByModel["model-computed"].CostSource)
+	require.Contains(t, parent.ModelUsage.ByModel, "model-reported")
+	assert.Equal(t, 20, parent.ModelUsage.ByModel["model-reported"].InputTokens)
+	assert.Equal(t, export.CostSourceComputed,
+		parent.ModelUsage.ByModel["model-reported"].CostSource)
+	require.NotNil(t, parent.Worktree, "parent worktree")
+	assert.Equal(t, Ptr("feature"), parent.Worktree.Name)
+	assert.Equal(t, Ptr("/repo/alpha"), parent.Worktree.RootPath)
+
+	child := rows["alpha-child"]
+	require.NotNil(t, child.ModelUsage, "child model usage")
+	assert.Equal(t, export.SessionClassificationAutomated, child.Classification)
+	assert.True(t, child.IsAutomated)
+	require.NotNil(t, child.ParentSessionID, "child parent_session_id")
+	assert.Equal(t, "alpha-parent", *child.ParentSessionID)
+	require.NotNil(t, child.RelationshipType, "child relationship_type")
+	assert.Equal(t, "subagent", *child.RelationshipType)
+	assert.Equal(t, 7, child.ModelUsage.ReasoningTokens)
+	assert.Equal(t, reported, child.ModelUsage.CostUSD)
+	assert.True(t, child.ModelUsage.HasCost)
+	require.NotNil(t, child.Worktree, "child worktree")
+	assert.Equal(t, Ptr("feature"), child.Worktree.Name)
+	assert.Equal(t, Ptr("/repo/alpha"), child.Worktree.RootPath)
+
+	beta := rows["beta-root"]
+	require.NotNil(t, beta.ModelUsage, "beta model usage")
+	assert.Equal(t, "desktop", beta.Machine)
+	assert.Nil(t, beta.Worktree)
+
+	require.NotNil(t, result.Pricing, "pricing block")
+	assert.ElementsMatch(t, []string{"model-computed", "model-reported"},
+		sortedSetKeysFromMap(result.Pricing.Models))
+	assert.Equal(t, export.CostSourceComputed,
+		result.Pricing.Models["model-computed"].CostSource)
+	assert.Equal(t, export.CostSourceMixed,
+		result.Pricing.Models["model-reported"].CostSource)
+	require.Contains(t, result.Projects, "alpha")
+	require.Contains(t, result.Projects, "beta")
+	require.NotContains(t, result.Projects, "unreturned")
+	assertContentFreeJSON(t, result)
+
+	for _, row := range result.Rows {
+		assertJSONHasKey(t, row, "parent_session_id")
+		assertJSONHasKey(t, row, "relationship_type")
+		assertContentFreeJSON(t, row)
+	}
+}
+
+func TestSessionSummaryExportIncludesReasoningOnlyUsageRows(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	seedSessionExportPricing(t, d)
+	insertExportSession(t, d, Session{
+		ID:        "reasoning-only",
+		Project:   "alpha",
+		Machine:   "laptop",
+		Agent:     "codex",
+		StartedAt: Ptr("2026-05-01T10:00:00Z"),
+		EndedAt:   Ptr("2026-05-01T10:01:00Z"),
+	})
+	require.NoError(t, d.ReplaceSessionUsageEvents("reasoning-only", []UsageEvent{{
+		Source:          "provider",
+		Model:           "model-computed",
+		ReasoningTokens: 25,
+		OccurredAt:      "2026-05-01T10:00:30Z",
+	}}), "replace usage events")
+
+	result, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "alpha"},
+		Limit:  10,
+		Format: "json",
+	})
+	require.NoError(t, err, "ExportSessionSummaries")
+	require.Len(t, result.Rows, 1)
+
+	usage := result.Rows[0].ModelUsage
+	require.NotNil(t, usage, "reasoning-only usage must contribute")
+	assert.Equal(t, []string{"model-computed"}, usage.Models)
+	assert.Zero(t, usage.InputTokens)
+	assert.Zero(t, usage.OutputTokens)
+	assert.Equal(t, 25, usage.ReasoningTokens)
+	assert.True(t, usage.HasCost)
+	assert.InDelta(t, 0.0005, usage.CostUSD, 0.0000001)
+	require.Contains(t, usage.ByModel, "model-computed")
+	assert.Equal(t, 25, usage.ByModel["model-computed"].ReasoningTokens)
+	assert.Equal(t, export.CostSourceComputed,
+		usage.ByModel["model-computed"].CostSource)
+
+	require.NotNil(t, result.Pricing)
+	require.Contains(t, result.Pricing.Models, "model-computed")
+	assert.Equal(t, export.CostSourceComputed,
+		result.Pricing.Models["model-computed"].CostSource)
+}
+
+func TestSessionSummaryExportUsesMessageActivityForOpenSessions(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertExportSession(t, d, Session{
+		ID:               "open-active",
+		Project:          "activity",
+		Machine:          "local",
+		Agent:            "claude",
+		StartedAt:        Ptr("2026-05-01T10:00:00Z"),
+		MessageCount:     2,
+		UserMessageCount: 1,
+	})
+	insertMessages(t, d,
+		Message{
+			SessionID: "open-active",
+			Ordinal:   0,
+			Role:      "user",
+			Timestamp: "2026-05-01T10:00:00Z",
+		},
+		Message{
+			SessionID: "open-active",
+			Ordinal:   1,
+			Role:      "assistant",
+			Timestamp: "2026-05-01T10:20:00Z",
+		},
+	)
+	insertExportSession(t, d, Session{
+		ID:               "closed-stale",
+		Project:          "activity",
+		Machine:          "local",
+		Agent:            "claude",
+		StartedAt:        Ptr("2026-05-01T09:00:00Z"),
+		EndedAt:          Ptr("2026-05-01T10:10:00Z"),
+		MessageCount:     1,
+		UserMessageCount: 1,
+	})
+
+	first, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "activity"},
+		Limit:  1,
+	})
+	require.NoError(t, err, "first page")
+	require.Equal(t, []string{"open-active"}, sessionExportRowIDs(first.Rows))
+	row := first.Rows[0]
+	assert.Equal(t, "2026-05-01T10:20:00Z", row.LastActivityAt)
+	require.NotNil(t, row.DurationSeconds, "open session duration_seconds")
+	assert.Equal(t, int64(1200), *row.DurationSeconds)
+
+	payload, err := d.decodeSessionExportCursor(first.NextCursor)
+	require.NoError(t, err, "decode cursor")
+	assert.Equal(t, "2026-05-01T10:20:00Z", payload.Watermark)
+	assert.Equal(t, "2026-05-01T10:20:00Z", payload.LastActivityAt)
+
+	second, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "activity"},
+		Cursor: first.NextCursor,
+		Limit:  1,
+	})
+	require.NoError(t, err, "second page")
+	assert.Equal(t, []string{"closed-stale"}, sessionExportRowIDs(second.Rows))
+}
+
+func TestSessionSummaryExportClosedSessionActivityPrefersEndedAt(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertExportSession(t, d, Session{
+		ID:               "closed-with-late-message",
+		Project:          "activity",
+		Machine:          "local",
+		Agent:            "claude",
+		StartedAt:        Ptr("2026-05-01T09:00:00Z"),
+		EndedAt:          Ptr("2026-05-01T10:10:00Z"),
+		MessageCount:     2,
+		UserMessageCount: 1,
+	})
+	insertMessages(t, d,
+		Message{
+			SessionID: "closed-with-late-message",
+			Ordinal:   0,
+			Role:      "user",
+			Timestamp: "2026-05-01T09:00:00Z",
+		},
+		Message{
+			SessionID: "closed-with-late-message",
+			Ordinal:   1,
+			Role:      "assistant",
+			Timestamp: "2026-05-01T10:30:00Z",
+		},
+	)
+
+	result, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "activity"},
+		Limit:  10,
+	})
+	require.NoError(t, err, "ExportSessionSummaries")
+	require.Len(t, result.Rows, 1)
+	row := result.Rows[0]
+	assert.Equal(t, "2026-05-01T10:10:00Z", row.LastActivityAt)
+	require.NotNil(t, row.DurationSeconds, "duration_seconds")
+	assert.Equal(t, int64(4200), *row.DurationSeconds)
+}
+
+func TestSessionSummaryExportActiveSinceUsesMessageAwareActivity(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertExportSession(t, d, Session{
+		ID:               "open-active-after-cutoff",
+		Project:          "activity-filter",
+		Machine:          "local",
+		Agent:            "claude",
+		StartedAt:        Ptr("2026-05-01T09:00:00Z"),
+		MessageCount:     2,
+		UserMessageCount: 1,
+	})
+	insertMessages(t, d,
+		Message{
+			SessionID: "open-active-after-cutoff",
+			Ordinal:   0,
+			Role:      "user",
+			Timestamp: "2026-05-01T09:00:00Z",
+		},
+		Message{
+			SessionID: "open-active-after-cutoff",
+			Ordinal:   1,
+			Role:      "assistant",
+			Timestamp: "2026-05-01T10:30:00Z",
+		},
+	)
+	insertExportSession(t, d, Session{
+		ID:               "open-inactive-before-cutoff",
+		Project:          "activity-filter",
+		Machine:          "local",
+		Agent:            "claude",
+		StartedAt:        Ptr("2026-05-01T09:00:00Z"),
+		MessageCount:     1,
+		UserMessageCount: 1,
+	})
+
+	result, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{
+			Project:     "activity-filter",
+			ActiveSince: "2026-05-01T10:00:00Z",
+		},
+		Limit: 10,
+	})
+	require.NoError(t, err, "ExportSessionSummaries")
+	require.Equal(t, []string{"open-active-after-cutoff"}, sessionExportRowIDs(result.Rows))
+	assert.Equal(t, "2026-05-01T10:30:00Z", result.Rows[0].LastActivityAt)
+}
+
+func TestSessionSummaryExportActiveSinceIncludeChildrenKeepsOlderChildrenOfActiveRoot(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertExportSession(t, d, Session{
+		ID:               "active-root",
+		Project:          "activity-tree",
+		Machine:          "local",
+		Agent:            "claude",
+		StartedAt:        Ptr("2026-05-01T09:00:00Z"),
+		MessageCount:     2,
+		UserMessageCount: 1,
+	})
+	insertMessages(t, d,
+		Message{
+			SessionID: "active-root",
+			Ordinal:   0,
+			Role:      "user",
+			Timestamp: "2026-05-01T09:00:00Z",
+		},
+		Message{
+			SessionID: "active-root",
+			Ordinal:   1,
+			Role:      "assistant",
+			Timestamp: "2026-05-01T10:30:00Z",
+		},
+	)
+	insertExportSession(t, d, Session{
+		ID:               "older-child",
+		Project:          "activity-tree",
+		Machine:          "local",
+		Agent:            "claude",
+		StartedAt:        Ptr("2026-05-01T09:10:00Z"),
+		EndedAt:          Ptr("2026-05-01T09:20:00Z"),
+		MessageCount:     1,
+		UserMessageCount: 1,
+		ParentSessionID:  Ptr("active-root"),
+		RelationshipType: "subagent",
+	})
+
+	result, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{
+			Project:         "activity-tree",
+			ActiveSince:     "2026-05-01T10:00:00Z",
+			IncludeChildren: true,
+		},
+		Limit: 10,
+	})
+	require.NoError(t, err, "ExportSessionSummaries")
+	assert.Equal(t, []string{"active-root", "older-child"},
+		sessionExportRowIDs(result.Rows))
+}
+
+func TestSessionSummaryExportActiveSinceIncludeChildrenDoesNotPromoteActiveChildOfInactiveRoot(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	insertExportSession(t, d, Session{
+		ID:               "inactive-root",
+		Project:          "activity-tree",
+		Machine:          "local",
+		Agent:            "claude",
+		StartedAt:        Ptr("2026-05-01T09:00:00Z"),
+		MessageCount:     1,
+		UserMessageCount: 1,
+	})
+	insertExportSession(t, d, Session{
+		ID:               "active-child",
+		Project:          "activity-tree",
+		Machine:          "local",
+		Agent:            "claude",
+		StartedAt:        Ptr("2026-05-01T09:10:00Z"),
+		MessageCount:     2,
+		UserMessageCount: 1,
+		ParentSessionID:  Ptr("inactive-root"),
+		RelationshipType: "subagent",
+	})
+	insertMessages(t, d,
+		Message{
+			SessionID: "active-child",
+			Ordinal:   0,
+			Role:      "user",
+			Timestamp: "2026-05-01T09:10:00Z",
+		},
+		Message{
+			SessionID: "active-child",
+			Ordinal:   1,
+			Role:      "assistant",
+			Timestamp: "2026-05-01T10:30:00Z",
+		},
+	)
+
+	result, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{
+			Project:         "activity-tree",
+			ActiveSince:     "2026-05-01T10:00:00Z",
+			IncludeChildren: true,
+		},
+		Limit: 10,
+	})
+	require.NoError(t, err, "ExportSessionSummaries")
+	assert.Empty(t, result.Rows)
+}
+
+func TestSessionSummaryExportDoesNotFallbackWorktreeWithoutPathMatch(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			Project:          "alpha",
+			Machine:          "local",
+			RootPath:         "/repo/alpha/worktrees/feature",
+			GitRemote:        "https://github.com/acme/alpha.git",
+			GitRemoteName:    "origin",
+			WorktreeName:     "feature",
+			WorktreeRootPath: "/repo/alpha/worktrees/feature",
+			ObservedAt:       time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		}), "upsert project identity")
+	insertExportSession(t, d, Session{
+		ID:               "outside-worktree",
+		Project:          "alpha",
+		Machine:          "local",
+		Agent:            "claude",
+		Cwd:              "/tmp/outside-alpha",
+		StartedAt:        Ptr("2026-05-01T10:00:00Z"),
+		EndedAt:          Ptr("2026-05-01T10:01:00Z"),
+		MessageCount:     1,
+		UserMessageCount: 1,
+	})
+
+	result, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "alpha"},
+		Limit:  10,
+	})
+	require.NoError(t, err, "ExportSessionSummaries")
+	require.Len(t, result.Rows, 1)
+	assert.Nil(t, result.Rows[0].Worktree)
+}
+
+func TestSessionSummaryExportDefaultLimitIsMaxSessionLimit(t *testing.T) {
+	d := testDB(t)
+	for i := range MaxSessionLimit + 1 {
+		insertExportSession(t, d, Session{
+			ID:               "default-limit-" + sortableInt(i),
+			Project:          "limit",
+			Machine:          "local",
+			Agent:            "claude",
+			StartedAt:        Ptr("2026-05-01T00:00:00Z"),
+			EndedAt:          Ptr("2026-05-01T00:00:00Z"),
+			MessageCount:     1,
+			UserMessageCount: 1,
+		})
+	}
+
+	result, err := d.ExportSessionSummaries(context.Background(), SessionExportOptions{})
+	require.NoError(t, err, "ExportSessionSummaries")
+	assert.Len(t, result.Rows, MaxSessionLimit)
+	assert.NotEmpty(t, result.NextCursor)
+}
+
+func TestSessionExportCursorEmbedsSnapshotAndPaginatesStably(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	require.NoError(t, d.SetDatabaseIDForTest(ctx, "cursor-db"),
+		"set database id")
+
+	for _, row := range []struct {
+		id, ended string
+	}{
+		{"page-a", "2026-05-01T10:00:00Z"},
+		{"page-b", "2026-05-01T09:00:00Z"},
+		{"page-c", "2026-05-01T08:00:00Z"},
+	} {
+		insertExportSession(t, d, Session{
+			ID:               row.id,
+			Project:          "alpha",
+			Machine:          "local",
+			Agent:            "claude",
+			StartedAt:        Ptr("2026-05-01T00:00:00Z"),
+			EndedAt:          Ptr(row.ended),
+			MessageCount:     1,
+			UserMessageCount: 1,
+		})
+	}
+	insertExportSession(t, d, Session{
+		ID:               "other-project",
+		Project:          "beta",
+		Machine:          "local",
+		Agent:            "claude",
+		StartedAt:        Ptr("2026-05-01T00:00:00Z"),
+		EndedAt:          Ptr("2026-05-01T07:00:00Z"),
+		MessageCount:     1,
+		UserMessageCount: 1,
+	})
+
+	first, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "alpha"},
+		Limit:  2,
+		Format: "json",
+	})
+	require.NoError(t, err, "first page")
+	require.Equal(t, []string{"page-a", "page-b"}, sessionExportRowIDs(first.Rows))
+	require.NotEmpty(t, first.NextCursor)
+
+	payload, err := d.decodeSessionExportCursor(first.NextCursor)
+	require.NoError(t, err, "decode export cursor")
+	assert.Equal(t, "cursor-db", payload.DatabaseID)
+	assert.Equal(t, "alpha", payload.Filters.Project)
+	assert.Equal(t, "last_activity_at DESC, id ASC", payload.Order)
+	assert.NotEmpty(t, payload.Watermark)
+	assert.Equal(t, "2026-05-01T09:00:00Z", payload.LastActivityAt)
+	assert.Equal(t, "page-b", payload.LastID)
+	assert.Equal(t, 2, payload.Limit)
+	assert.Equal(t, 2, payload.PrefixCount)
+	assert.NotEmpty(t, payload.PrefixDigest)
+	insertExportSession(t, d, Session{
+		ID:               "insert-under-watermark-after-cursor",
+		Project:          "alpha",
+		Machine:          "local",
+		Agent:            "claude",
+		StartedAt:        Ptr("2026-05-01T00:00:00Z"),
+		EndedAt:          Ptr("2026-05-01T08:30:00Z"),
+		MessageCount:     1,
+		UserMessageCount: 1,
+	})
+	insertExportSession(t, d, Session{
+		ID:               "insert-above-watermark",
+		Project:          "alpha",
+		Machine:          "local",
+		Agent:            "claude",
+		StartedAt:        Ptr("2099-01-01T00:00:00Z"),
+		EndedAt:          Ptr("2099-01-01T00:00:00Z"),
+		MessageCount:     1,
+		UserMessageCount: 1,
+	})
+
+	second, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "alpha"},
+		Cursor: first.NextCursor,
+		Limit:  10,
+		Format: "json",
+	})
+	require.NoError(t, err, "second page")
+	secondIDs := sessionExportRowIDs(second.Rows)
+	assert.Contains(t, secondIDs, "page-c")
+	assert.Contains(t, secondIDs, "insert-under-watermark-after-cursor")
+	assert.NotContains(t, secondIDs, "insert-above-watermark")
+}
+
+func TestSessionExportCursorPrefixUsesSameSnapshotAsPageQuery(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	for _, row := range []struct {
+		id, ended string
+	}{
+		{"page-a", "2026-05-01T10:00:00Z"},
+		{"page-b", "2026-05-01T09:00:00Z"},
+		{"page-c", "2026-05-01T08:00:00Z"},
+	} {
+		insertExportSession(t, d, Session{
+			ID:               row.id,
+			Project:          "snapshot",
+			Machine:          "local",
+			Agent:            "claude",
+			StartedAt:        Ptr("2026-05-01T00:00:00Z"),
+			EndedAt:          Ptr(row.ended),
+			MessageCount:     1,
+			UserMessageCount: 1,
+		})
+	}
+
+	where, args := buildSessionExportFilter(SessionFilter{Project: "snapshot"})
+	tx, err := d.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	require.NoError(t, err, "begin read snapshot")
+	defer func() { require.NoError(t, tx.Rollback(), "rollback read snapshot") }()
+
+	watermark, err := d.sessionExportWatermark(ctx, tx, where, args)
+	require.NoError(t, err, "snapshot watermark")
+	rows, err := d.querySessionExportRows(
+		ctx, tx, where, args, watermark, sessionExportCursorPayload{}, 2)
+	require.NoError(t, err, "snapshot page")
+	require.Len(t, rows, 3, "page query returns limit plus one")
+	emittedRows := rows[:2]
+	require.Equal(t, []string{"page-a", "page-b"},
+		sessionExportRowIDs(emittedRows))
+
+	last := emittedRows[len(emittedRows)-1]
+	snapshotCount, snapshotDigest, err := d.sessionExportPrefixFingerprint(
+		ctx, tx, where, args, watermark, last.LastActivityAt, last.ID)
+	require.NoError(t, err, "snapshot prefix before mutation")
+	require.Equal(t, 2, snapshotCount)
+
+	insertExportSession(t, d, Session{
+		ID:               "page-c",
+		Project:          "snapshot",
+		Machine:          "local",
+		Agent:            "claude",
+		StartedAt:        Ptr("2026-05-01T00:00:00Z"),
+		EndedAt:          Ptr("2026-05-01T09:30:00Z"),
+		MessageCount:     1,
+		UserMessageCount: 1,
+	})
+
+	liveCount, _, err := d.sessionExportPrefixFingerprint(
+		ctx, d.getReader(), where, args, watermark, last.LastActivityAt, last.ID)
+	require.NoError(t, err, "live prefix after mutation")
+	assert.Equal(t, 3, liveCount,
+		"live reads now include the row that moved before the emitted cursor")
+
+	afterCount, afterDigest, err := d.sessionExportPrefixFingerprint(
+		ctx, tx, where, args, watermark, last.LastActivityAt, last.ID)
+	require.NoError(t, err, "snapshot prefix after mutation")
+	assert.Equal(t, snapshotCount, afterCount)
+	assert.Equal(t, snapshotDigest, afterDigest)
+}
+
+func TestSessionExportCursorResetsWhenRowMovesBeforeCursor(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	require.NoError(t, d.SetDatabaseIDForTest(ctx, "cursor-db"),
+		"set database id")
+
+	for _, row := range []struct {
+		id, ended string
+	}{
+		{"page-a", "2026-05-01T10:00:00Z"},
+		{"page-b", "2026-05-01T09:00:00Z"},
+		{"page-c", "2026-05-01T08:00:00Z"},
+	} {
+		insertExportSession(t, d, Session{
+			ID:               row.id,
+			Project:          "alpha",
+			Machine:          "local",
+			Agent:            "claude",
+			StartedAt:        Ptr("2026-05-01T00:00:00Z"),
+			EndedAt:          Ptr(row.ended),
+			MessageCount:     1,
+			UserMessageCount: 1,
+		})
+	}
+	first, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "alpha"},
+		Limit:  2,
+		Format: "json",
+	})
+	require.NoError(t, err, "first page")
+	require.Equal(t, []string{"page-a", "page-b"}, sessionExportRowIDs(first.Rows))
+	require.NotEmpty(t, first.NextCursor)
+
+	insertExportSession(t, d, Session{
+		ID:               "page-c",
+		Project:          "alpha",
+		Machine:          "local",
+		Agent:            "claude",
+		StartedAt:        Ptr("2026-05-01T00:00:00Z"),
+		EndedAt:          Ptr("2026-05-01T09:30:00Z"),
+		MessageCount:     1,
+		UserMessageCount: 1,
+	})
+	_, err = d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "alpha"},
+		Cursor: first.NextCursor,
+		Limit:  10,
+		Format: "json",
+	})
+	require.Error(t, err, "moved row should reset cursor")
+	assert.True(t, errors.Is(err, ErrSessionExportCursorReset),
+		"expected reset error, got %v", err)
+}
+
+func TestSessionExportCursorRejectsWrongDatabaseAndChangedFilters(t *testing.T) {
+	ctx := context.Background()
+	d1 := testDB(t)
+	d2 := testDB(t)
+	require.NoError(t, d1.SetDatabaseIDForTest(ctx, "db-one"), "set db one")
+	require.NoError(t, d2.SetDatabaseIDForTest(ctx, "db-two"), "set db two")
+	for _, d := range []*DB{d1, d2} {
+		insertExportSession(t, d, Session{
+			ID:               "cursor-reset-row",
+			Project:          "alpha",
+			Machine:          "local",
+			Agent:            "claude",
+			StartedAt:        Ptr("2026-05-01T00:00:00Z"),
+			EndedAt:          Ptr("2026-05-01T10:00:00Z"),
+			MessageCount:     1,
+			UserMessageCount: 1,
+		})
+		insertExportSession(t, d, Session{
+			ID:               "cursor-reset-row-2",
+			Project:          "alpha",
+			Machine:          "local",
+			Agent:            "claude",
+			StartedAt:        Ptr("2026-05-01T00:00:00Z"),
+			EndedAt:          Ptr("2026-05-01T09:00:00Z"),
+			MessageCount:     1,
+			UserMessageCount: 1,
+		})
+	}
+	first, err := d1.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "alpha"},
+		Limit:  1,
+		Format: "json",
+	})
+	require.NoError(t, err, "first page")
+	require.NotEmpty(t, first.NextCursor)
+
+	_, err = d2.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "alpha"},
+		Cursor: first.NextCursor,
+		Limit:  1,
+		Format: "json",
+	})
+	require.Error(t, err, "wrong database cursor")
+	assert.True(t, errors.Is(err, ErrSessionExportCursorReset),
+		"expected reset error, got %v", err)
+
+	_, err = d1.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "beta"},
+		Cursor: first.NextCursor,
+		Limit:  1,
+		Format: "json",
+	})
+	require.Error(t, err, "changed filter cursor")
+	assert.True(t, errors.Is(err, ErrSessionExportCursorConflict),
+		"expected conflict error, got %v", err)
+
+	formatChanged, err := d1.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "alpha"},
+		Cursor: first.NextCursor,
+		Limit:  1,
+		Format: "human",
+	})
+	require.NoError(t, err, "changed format should not affect cursor identity")
+	assert.Equal(t, []string{"cursor-reset-row-2"}, sessionExportRowIDs(formatChanged.Rows))
+}
+
+func TestSessionExportCursorAllowsEquivalentFilters(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	for _, row := range []struct {
+		id, machine, outcome, ended string
+	}{
+		{"filter-a", "local", "success", "2026-05-01T10:00:00Z"},
+		{"filter-b", "laptop", "failed", "2026-05-01T09:00:00Z"},
+	} {
+		insertExportSession(t, d, Session{
+			ID:               row.id,
+			Project:          "filter",
+			Machine:          row.machine,
+			Agent:            "claude",
+			StartedAt:        Ptr("2026-05-01T00:00:00Z"),
+			EndedAt:          Ptr(row.ended),
+			MessageCount:     1,
+			UserMessageCount: 1,
+			Outcome:          row.outcome,
+			HealthGrade:      Ptr("A"),
+		})
+		require.NoError(t, d.UpdateSessionSignals(row.id, SessionSignalUpdate{
+			Outcome:     row.outcome,
+			HealthGrade: Ptr("A"),
+		}), "update filter signals %s", row.id)
+	}
+
+	first, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{
+			Project:          "filter",
+			Machine:          " local, laptop ",
+			Outcome:          []string{"success", "failed"},
+			HealthGrade:      []string{"A", "B"},
+			ExcludeAutomated: true,
+		},
+		Limit: 1,
+	})
+	require.NoError(t, err, "first page")
+	require.NotEmpty(t, first.NextCursor)
+
+	second, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{
+			Project:        "filter",
+			Machine:        "laptop,local",
+			Outcome:        []string{"failed", "success"},
+			HealthGrade:    []string{"B", "A"},
+			AutomatedScope: "human",
+		},
+		Cursor: first.NextCursor,
+		Limit:  1,
+	})
+	require.NoError(t, err, "equivalent filters should not conflict")
+	assert.Equal(t, []string{"filter-b"}, sessionExportRowIDs(second.Rows))
+}
+
+func TestSessionExportCursorTamperingReturnsInvalidCursor(t *testing.T) {
+	ctx := context.Background()
+	d := testDB(t)
+	require.NoError(t, d.SetDatabaseIDForTest(ctx, "tamper-db"), "set database id")
+	for _, row := range []struct {
+		id, ended string
+	}{
+		{"tamper-a", "2026-05-01T10:00:00Z"},
+		{"tamper-b", "2026-05-01T09:00:00Z"},
+	} {
+		insertExportSession(t, d, Session{
+			ID:               row.id,
+			Project:          "tamper",
+			Machine:          "local",
+			Agent:            "claude",
+			StartedAt:        Ptr("2026-05-01T00:00:00Z"),
+			EndedAt:          Ptr(row.ended),
+			MessageCount:     1,
+			UserMessageCount: 1,
+		})
+	}
+	first, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "tamper"},
+		Limit:  1,
+	})
+	require.NoError(t, err, "first page")
+
+	_, err = d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "tamper"},
+		Cursor: tamperSessionExportCursorDatabaseID(t, first.NextCursor, "other-db"),
+		Limit:  1,
+	})
+	require.Error(t, err, "tampered cursor")
+	assert.True(t, errors.Is(err, ErrInvalidCursor),
+		"expected invalid cursor, got %v", err)
+	assert.False(t, errors.Is(err, ErrSessionExportCursorReset),
+		"tampered cursor must not be treated as a valid wrong-database cursor")
+}
+
+func seedSessionExportPricing(t *testing.T, d *DB) {
+	t.Helper()
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{
+		{
+			ModelPattern:         "model-computed",
+			InputPerMTok:         10,
+			OutputPerMTok:        20,
+			CacheCreationPerMTok: 30,
+			CacheReadPerMTok:     1,
+		},
+		{
+			ModelPattern:         "model-reported",
+			InputPerMTok:         1,
+			OutputPerMTok:        2,
+			CacheCreationPerMTok: 3,
+			CacheReadPerMTok:     0.5,
+		},
+		{
+			ModelPattern:         "unreturned-model",
+			InputPerMTok:         100,
+			OutputPerMTok:        200,
+			CacheCreationPerMTok: 300,
+			CacheReadPerMTok:     50,
+		},
+	}), "upsert pricing")
+}
+
+func insertExportSession(t *testing.T, d *DB, s Session) {
+	t.Helper()
+	if s.Machine == "" {
+		s.Machine = defaultMachine
+	}
+	if s.Agent == "" {
+		s.Agent = defaultAgent
+	}
+	if s.MessageCount == 0 {
+		s.MessageCount = 1
+	}
+	require.NoError(t, d.UpsertSession(s), "upsert export session %s", s.ID)
+}
+
+func sessionExportRowsByID(rows []SessionSummaryRow) map[string]SessionSummaryRow {
+	out := make(map[string]SessionSummaryRow, len(rows))
+	for _, row := range rows {
+		out[row.ID] = row
+	}
+	return out
+}
+
+func sessionExportRowIDs(rows []SessionSummaryRow) []string {
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.ID)
+	}
+	return out
+}
+
+func sortedSetKeysFromMap[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func tamperSessionExportCursorDatabaseID(
+	t *testing.T, cursor, databaseID string,
+) string {
+	t.Helper()
+	parts := strings.Split(cursor, ".")
+	require.Len(t, parts, 2, "cursor parts")
+	data, err := base64.RawURLEncoding.DecodeString(parts[0])
+	require.NoError(t, err, "decode cursor payload")
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(data, &payload), "unmarshal cursor payload")
+	payload["database_id"] = databaseID
+	tampered, err := json.Marshal(payload)
+	require.NoError(t, err, "marshal tampered cursor payload")
+	return base64.RawURLEncoding.EncodeToString(tampered) + "." + parts[1]
+}
+
+func assertJSONHasKey(t *testing.T, v any, key string) {
+	t.Helper()
+	data, err := json.Marshal(v)
+	require.NoError(t, err, "marshal value")
+	var obj map[string]any
+	require.NoError(t, json.Unmarshal(data, &obj), "unmarshal object")
+	assert.Contains(t, obj, key)
+}
+
+func assertContentFreeJSON(t *testing.T, v any) {
+	t.Helper()
+	data, err := json.Marshal(v)
+	require.NoError(t, err, "marshal content-free JSON")
+	var decoded any
+	require.NoError(t, json.Unmarshal(data, &decoded), "unmarshal content-free JSON")
+	assertNoBannedJSONKeys(t, decoded)
+}
+
+func assertNoBannedJSONKeys(t *testing.T, v any) {
+	t.Helper()
+	banned := map[string]struct{}{
+		"message": {}, "messages": {}, "prompt": {}, "response": {},
+		"content": {}, "text": {}, "transcript": {},
+	}
+	switch x := v.(type) {
+	case map[string]any:
+		for k, child := range x {
+			if _, ok := banned[k]; ok {
+				assert.Failf(t, "banned JSON key", "found key %q", k)
+			}
+			assertNoBannedJSONKeys(t, child)
+		}
+	case []any:
+		for _, child := range x {
+			assertNoBannedJSONKeys(t, child)
+		}
+	}
+}
+
+func sortableInt(v int) string {
+	return string(rune('a'+(v/100)%10)) +
+		string(rune('a'+(v/10)%10)) +
+		string(rune('a'+v%10))
+}

@@ -203,6 +203,9 @@ func (s *Sync) Push(
 	if err := s.syncCursorUsageEvents(ctx); err != nil {
 		return result, err
 	}
+	if err := s.syncProjectIdentityObservations(ctx); err != nil {
+		return result, err
+	}
 
 	lastPushKey := s.syncStateKey(lastPushStateKey)
 	lastPush, err := s.local.GetSyncState(lastPushKey)
