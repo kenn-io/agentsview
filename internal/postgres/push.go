@@ -477,40 +477,7 @@ func (s *Sync) syncProjectIdentityObservations(ctx context.Context) error {
 	defer func() { _ = tx.Rollback() }()
 	for _, obs := range observations {
 		obs = export.SanitizeStoredProjectIdentityObservation(obs)
-		if obs.GitRemote != "" {
-			if _, err := tx.ExecContext(ctx, `
-				DELETE FROM project_identity_observations
-				WHERE project = $1 AND machine = $2 AND root_path = $3
-				  AND git_remote = ''`,
-				obs.Project, obs.Machine, obs.RootPath,
-			); err != nil {
-				return fmt.Errorf(
-					"removing stale pg project identity root fallback %s/%s/%s: %w",
-					obs.Project, obs.Machine, obs.RootPath, err,
-				)
-			}
-		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO project_identity_observations (
-				project, machine, root_path, git_remote, git_remote_name,
-				worktree_name, worktree_root_path, observed_at,
-				normalized_remote, key_source, key
-			) VALUES (
-				$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
-			)
-			ON CONFLICT (project, machine, root_path, git_remote)
-			DO UPDATE SET
-				git_remote_name = EXCLUDED.git_remote_name,
-				worktree_name = EXCLUDED.worktree_name,
-				worktree_root_path = EXCLUDED.worktree_root_path,
-				observed_at = EXCLUDED.observed_at,
-				normalized_remote = EXCLUDED.normalized_remote,
-				key_source = EXCLUDED.key_source,
-				key = EXCLUDED.key`,
-			obs.Project, obs.Machine, obs.RootPath, obs.GitRemote,
-			obs.GitRemoteName, obs.WorktreeName, obs.WorktreeRootPath,
-			obs.ObservedAt, obs.NormalizedRemote, obs.KeySource, obs.Key,
-		); err != nil {
+		if err := upsertProjectIdentityObservation(ctx, tx, obs, ""); err != nil {
 			return fmt.Errorf(
 				"syncing project identity observation %s/%s/%s: %w",
 				obs.Project, obs.Machine, obs.RootPath, err,

@@ -355,6 +355,50 @@ func TestSessionSummaryExportUsesMessageActivityForOpenSessions(t *testing.T) {
 	assert.Equal(t, []string{"closed-stale"}, sessionExportRowIDs(second.Rows))
 }
 
+func TestSessionSummaryExportOrdersLastActivityByParsedInstant(t *testing.T) {
+	d := testSessionExportDB(t)
+	ctx := context.Background()
+
+	insertExportSession(t, d, Session{
+		ID:               "whole-second",
+		Project:          "activity-sort",
+		Machine:          "local",
+		Agent:            "claude",
+		StartedAt:        Ptr("2026-05-01T10:00:00Z"),
+		EndedAt:          Ptr("2026-05-01T10:00:00Z"),
+		MessageCount:     1,
+		UserMessageCount: 1,
+	})
+	insertExportSession(t, d, Session{
+		ID:               "fractional-later",
+		Project:          "activity-sort",
+		Machine:          "local",
+		Agent:            "claude",
+		StartedAt:        Ptr("2026-05-01T10:00:00.123Z"),
+		EndedAt:          Ptr("2026-05-01T10:00:00.123Z"),
+		MessageCount:     1,
+		UserMessageCount: 1,
+	})
+
+	first, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "activity-sort"},
+		Limit:  1,
+	})
+	require.NoError(t, err, "first page")
+	require.Equal(t, []string{"fractional-later"}, sessionExportRowIDs(first.Rows))
+	require.NotEmpty(t, first.NextCursor)
+	assert.Equal(t, "2026-05-01T10:00:00.123Z", first.Rows[0].LastActivityAt)
+
+	second, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "activity-sort"},
+		Cursor: first.NextCursor,
+		Limit:  1,
+	})
+	require.NoError(t, err, "second page")
+	require.Equal(t, []string{"whole-second"}, sessionExportRowIDs(second.Rows))
+	assert.Equal(t, "2026-05-01T10:00:00Z", second.Rows[0].LastActivityAt)
+}
+
 func TestSessionSummaryExportClosedSessionActivityPrefersEndedAt(t *testing.T) {
 	d := testSessionExportDB(t)
 	ctx := context.Background()
@@ -658,8 +702,20 @@ func TestSessionExportCursorEmbedsSnapshotAndPaginatesStably(t *testing.T) {
 	assert.Equal(t, "2026-05-01T09:00:00Z", payload.LastActivityAt)
 	assert.Equal(t, "page-b", payload.LastID)
 	assert.Equal(t, 2, payload.Limit)
+	assert.Equal(t, 3, payload.SnapshotCount)
+	assert.NotEmpty(t, payload.SnapshotDigest)
 	assert.Equal(t, 2, payload.PrefixCount)
 	assert.NotEmpty(t, payload.PrefixDigest)
+
+	second, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "alpha"},
+		Cursor: first.NextCursor,
+		Limit:  10,
+		Format: "json",
+	})
+	require.NoError(t, err, "second page")
+	require.Equal(t, []string{"page-c"}, sessionExportRowIDs(second.Rows))
+
 	insertExportSession(t, d, Session{
 		ID:               "insert-under-watermark-after-cursor",
 		Project:          "alpha",
@@ -681,17 +737,15 @@ func TestSessionExportCursorEmbedsSnapshotAndPaginatesStably(t *testing.T) {
 		UserMessageCount: 1,
 	})
 
-	second, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+	_, err = d.ExportSessionSummaries(ctx, SessionExportOptions{
 		Filter: SessionFilter{Project: "alpha"},
 		Cursor: first.NextCursor,
 		Limit:  10,
 		Format: "json",
 	})
-	require.NoError(t, err, "second page")
-	secondIDs := sessionExportRowIDs(second.Rows)
-	assert.Contains(t, secondIDs, "page-c")
-	assert.Contains(t, secondIDs, "insert-under-watermark-after-cursor")
-	assert.NotContains(t, secondIDs, "insert-above-watermark")
+	require.Error(t, err, "changed watermarked set should reset cursor")
+	assert.True(t, errors.Is(err, ErrSessionExportCursorReset),
+		"expected reset error, got %v", err)
 }
 
 func TestSessionExportCursorPrefixUsesSameSnapshotAsPageQuery(t *testing.T) {
@@ -722,10 +776,10 @@ func TestSessionExportCursorPrefixUsesSameSnapshotAsPageQuery(t *testing.T) {
 	require.NoError(t, err, "begin read snapshot")
 	defer func() { require.NoError(t, tx.Rollback(), "rollback read snapshot") }()
 
-	watermark, err := d.sessionExportWatermark(ctx, tx, where, args)
+	_, watermarkSort, err := d.sessionExportWatermark(ctx, tx, where, args)
 	require.NoError(t, err, "snapshot watermark")
 	rows, err := d.querySessionExportRows(
-		ctx, tx, where, args, watermark, sessionExportCursorPayload{}, 2)
+		ctx, tx, where, args, watermarkSort, sessionExportCursorPayload{}, 2)
 	require.NoError(t, err, "snapshot page")
 	require.Len(t, rows, 3, "page query returns limit plus one")
 	emittedRows := rows[:2]
@@ -734,7 +788,7 @@ func TestSessionExportCursorPrefixUsesSameSnapshotAsPageQuery(t *testing.T) {
 
 	last := emittedRows[len(emittedRows)-1]
 	snapshotCount, snapshotDigest, err := d.sessionExportPrefixFingerprint(
-		ctx, tx, where, args, watermark, last.LastActivityAt, last.ID)
+		ctx, tx, where, args, watermarkSort, last.lastActivitySort, last.ID)
 	require.NoError(t, err, "snapshot prefix before mutation")
 	require.Equal(t, 2, snapshotCount)
 
@@ -750,13 +804,13 @@ func TestSessionExportCursorPrefixUsesSameSnapshotAsPageQuery(t *testing.T) {
 	})
 
 	liveCount, _, err := d.sessionExportPrefixFingerprint(
-		ctx, d.getReader(), where, args, watermark, last.LastActivityAt, last.ID)
+		ctx, d.getReader(), where, args, watermarkSort, last.lastActivitySort, last.ID)
 	require.NoError(t, err, "live prefix after mutation")
 	assert.Equal(t, 3, liveCount,
 		"live reads now include the row that moved before the emitted cursor")
 
 	afterCount, afterDigest, err := d.sessionExportPrefixFingerprint(
-		ctx, tx, where, args, watermark, last.LastActivityAt, last.ID)
+		ctx, tx, where, args, watermarkSort, last.lastActivitySort, last.ID)
 	require.NoError(t, err, "snapshot prefix after mutation")
 	assert.Equal(t, snapshotCount, afterCount)
 	assert.Equal(t, snapshotDigest, afterDigest)
@@ -812,6 +866,56 @@ func TestSessionExportCursorResetsWhenRowMovesBeforeCursor(t *testing.T) {
 		Format: "json",
 	})
 	require.Error(t, err, "moved row should reset cursor")
+	assert.True(t, errors.Is(err, ErrSessionExportCursorReset),
+		"expected reset error, got %v", err)
+}
+
+func TestSessionExportCursorResetsWhenUnemittedRowMovesAboveWatermark(t *testing.T) {
+	d := testSessionExportDB(t)
+	ctx := context.Background()
+	require.NoError(t, d.SetDatabaseIDForTest(ctx, "cursor-db"),
+		"set database id")
+
+	for _, row := range []struct {
+		id, ended string
+	}{
+		{"page-a", "2026-05-01T10:00:00Z"},
+		{"page-b", "2026-05-01T09:00:00Z"},
+		{"page-c", "2026-05-01T08:00:00Z"},
+	} {
+		insertExportSession(t, d, Session{
+			ID:               row.id,
+			Project:          "watermark-reset",
+			Machine:          "local",
+			Agent:            "claude",
+			StartedAt:        Ptr("2026-05-01T00:00:00Z"),
+			EndedAt:          Ptr(row.ended),
+			MessageCount:     1,
+			UserMessageCount: 1,
+		})
+	}
+	first, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "watermark-reset"},
+		Limit:  1,
+		Format: "json",
+	})
+	require.NoError(t, err, "first page")
+	require.Equal(t, []string{"page-a"}, sessionExportRowIDs(first.Rows))
+	require.NotEmpty(t, first.NextCursor)
+
+	_, err = d.getWriter().ExecContext(ctx,
+		`UPDATE sessions SET ended_at = ? WHERE id = ?`,
+		"2026-05-01T11:00:00Z", "page-c",
+	)
+	require.NoError(t, err)
+
+	_, err = d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "watermark-reset"},
+		Cursor: first.NextCursor,
+		Limit:  1,
+		Format: "json",
+	})
+	require.Error(t, err, "moved suffix row should reset cursor")
 	assert.True(t, errors.Is(err, ErrSessionExportCursorReset),
 		"expected reset error, got %v", err)
 }

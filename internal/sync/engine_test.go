@@ -1023,6 +1023,74 @@ func TestProjectIdentityWriteBatchDiscoversLocalGitRemote(t *testing.T) {
 	assert.Equal(t, "git_remote", observations[0].KeySource)
 }
 
+func TestProjectIdentityObservationWriteDeduplicatesSameEngine(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	e := NewEngine(database, EngineConfig{Machine: "laptop"})
+	ctx := context.Background()
+	session := db.Session{
+		ID:        "identity-dedup",
+		Project:   "dedup",
+		Machine:   "laptop",
+		Agent:     "codex",
+		Cwd:       root,
+		StartedAt: strPtr(time.Now().UTC().Format(time.RFC3339Nano)),
+	}
+
+	require.NoError(t, e.writeProjectIdentityObservation(ctx, session))
+	observations, err := database.ListProjectIdentityObservations(ctx, []string{"dedup"})
+	require.NoError(t, err)
+	require.Len(t, observations, 1)
+	firstObservedAt := observations[0].ObservedAt
+
+	time.Sleep(time.Millisecond)
+	require.NoError(t, e.writeProjectIdentityObservation(ctx, session))
+	observations, err = database.ListProjectIdentityObservations(ctx, []string{"dedup"})
+	require.NoError(t, err)
+	require.Len(t, observations, 1)
+	assert.Equal(t, firstObservedAt, observations[0].ObservedAt)
+}
+
+func TestProjectIdentityObservationCachesLocalGitDiscovery(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o755))
+	configPath := filepath.Join(root, ".git", "config")
+	require.NoError(t, os.WriteFile(
+		configPath,
+		[]byte("[remote \"origin\"]\n\turl = https://github.com/acme/cache.git\n"),
+		0o644,
+	))
+	cwd := filepath.Join(root, "subdir")
+	require.NoError(t, os.Mkdir(cwd, 0o755))
+	e := NewEngine(database, EngineConfig{Machine: "laptop"})
+	ctx := context.Background()
+
+	require.NoError(t, e.writeProjectIdentityObservation(ctx, db.Session{
+		ID:        "identity-cache-a",
+		Project:   "cache-a",
+		Machine:   "laptop",
+		Agent:     "codex",
+		Cwd:       cwd,
+		StartedAt: strPtr(time.Now().UTC().Format(time.RFC3339Nano)),
+	}))
+	require.NoError(t, os.Remove(configPath))
+	require.NoError(t, e.writeProjectIdentityObservation(ctx, db.Session{
+		ID:        "identity-cache-b",
+		Project:   "cache-b",
+		Machine:   "laptop",
+		Agent:     "codex",
+		Cwd:       cwd,
+		StartedAt: strPtr(time.Now().UTC().Format(time.RFC3339Nano)),
+	}))
+
+	observations, err := database.ListProjectIdentityObservations(ctx, []string{"cache-b"})
+	require.NoError(t, err)
+	require.Len(t, observations, 1)
+	assert.Equal(t, "https://github.com/acme/cache.git", observations[0].GitRemote)
+	assert.Equal(t, "github.com/acme/cache", observations[0].NormalizedRemote)
+}
+
 func TestProjectIdentitySafeLocalAbsolutePathHandlesWindowsDriveRootsByOS(t *testing.T) {
 	wantWindowsDriveLocal := runtime.GOOS == "windows"
 	assert.Equal(t, wantWindowsDriveLocal, safeLocalAbsolutePath(`C:\repo`))
@@ -1131,6 +1199,9 @@ func TestProjectIdentityIncrementalAppendPersistsObservation(t *testing.T) {
 
 	err := e.writeIncremental(&incrementalUpdate{
 		sessionID: "inc-identity",
+		project:   "inc",
+		machine:   "laptop",
+		cwd:       root,
 		msgs: []parser.ParsedMessage{{
 			Role:      parser.RoleAssistant,
 			Content:   "delta",
@@ -1173,6 +1244,9 @@ func TestProjectIdentityIncrementalRemoteAppendSkipsLiveDiscovery(t *testing.T) 
 
 	err := e.writeIncremental(&incrementalUpdate{
 		sessionID: "remote-host~inc-remote-identity",
+		project:   "remote-inc",
+		machine:   "remote-host",
+		cwd:       "remote-host:/srv/app",
 		msgs: []parser.ParsedMessage{{
 			Role:    parser.RoleAssistant,
 			Content: "delta",

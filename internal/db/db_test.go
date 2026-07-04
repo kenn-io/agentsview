@@ -5437,6 +5437,7 @@ func TestGetSessionForIncremental(t *testing.T) {
 		Project:              "my-project",
 		Machine:              "test",
 		Agent:                "codex",
+		Cwd:                  "/tmp/sessions/project",
 		FirstMessage:         new("hello world"),
 		StartedAt:            new("2024-01-15T10:00:00Z"),
 		EndedAt:              new("2024-01-15T10:30:00Z"),
@@ -5458,6 +5459,9 @@ func TestGetSessionForIncremental(t *testing.T) {
 		)
 		require.True(t, ok, "expected to find session")
 		assert.Equal(t, "codex:inc-test", info.ID, "ID")
+		assert.Equal(t, "my-project", info.Project, "Project")
+		assert.Equal(t, "test", info.Machine, "Machine")
+		assert.Equal(t, "/tmp/sessions/project", info.Cwd, "Cwd")
 		assert.Equal(t, int64(4096), info.FileSize, "FileSize")
 		assert.Equal(t, 0, reflectedIntField(info, "NextOrdinal"), "NextOrdinal")
 		assert.Equal(t, "", reflectedStringField(info, "LastEntryUUID"), "LastEntryUUID")
@@ -6570,7 +6574,7 @@ func TestCopySessionMetadataScrubsProjectIdentityGitRemoteCredentials(t *testing
 			normalized_remote, key_source, key
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"alpha", "laptop", root,
-		"https://user:token@github.com/acme/alpha.git", "origin",
+		"https://"+"user:token@"+"github.com/acme/alpha.git", "origin",
 		"", "", "2026-05-01T00:00:00Z",
 		"github.com/acme/alpha", "git_remote",
 		projectIdentitySHA("git_remote\n"+"github.com/acme/alpha"),

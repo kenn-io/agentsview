@@ -70,7 +70,6 @@ tmp_config_base=""
     --exclude './.zensical-build.*' \
     --exclude './.ruff_cache' \
     --exclude './.mypy_cache' \
-    --exclude './superpowers' \
     --exclude './internal' \
     --exclude './overrides' \
     --exclude './scripts' \

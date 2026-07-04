@@ -140,6 +140,11 @@ Absent `schema_version` means legacy pre-v1 output. The activity report JSON,
 `agentsview export sessions --format json|ndjson` are separate versioned
 surfaces.
 
+This v1 JSON report format is intended to remain backward compatible, but it is
+still relatively new and may see some instability as downstream usage settles.
+Consumers should pin `schema_version`, ignore unknown additive fields, and treat
+missing `schema_version` as legacy output.
+
 The activity report includes the shared report-level `pricing` and `projects`
 blocks. `pricing.models` contains effective model rates using fields such as
 `input_cost_per_mtok`, `output_cost_per_mtok`, `cache_write_cost_per_mtok`, and

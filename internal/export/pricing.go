@@ -2,6 +2,7 @@ package export
 
 import (
 	"sort"
+	"strings"
 	"time"
 
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
@@ -174,7 +175,7 @@ func (r *PricingResolver) BuildBlock() (PricingBlock, error) {
 
 	return PricingBlock{
 		Source:              pricingSource(r.rows),
-		TableVersion:        pricingpkg.FallbackVersion,
+		TableVersion:        pricingTableVersion(r.rows),
 		LatestRowUpdatedAt:  latestPricingRowUpdate(r.rows),
 		CustomOverrideCount: customPricingRowCount(r.rows),
 		EffectiveRowCount:   len(r.rows),
@@ -186,6 +187,23 @@ func (r *PricingResolver) BuildBlock() (PricingBlock, error) {
 		},
 		Models: models,
 	}, nil
+}
+
+func pricingTableVersion(rows []EffectivePricingRow) string {
+	source := pricingSource(rows)
+	if strings.Contains(source, string(PricingRowSourceFetched)) {
+		if latest := latestPricingRowUpdate(rows); latest != nil {
+			return latest.UTC().Format(jsonTimeLayout)
+		}
+		return string(PricingRowSourceFetched)
+	}
+	if strings.Contains(source, string(PricingRowSourceEmbedded)) {
+		return pricingpkg.FallbackVersion
+	}
+	if source == string(PricingRowSourceCustom) {
+		return string(PricingRowSourceCustom)
+	}
+	return ""
 }
 
 func recordCostSource(rec *pricingRecord) CostSource {

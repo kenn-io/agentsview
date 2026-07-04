@@ -118,6 +118,9 @@ func newExportSessionsCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg.MinToolFailuresSet = cmd.Flags().Changed("min-tool-failures")
 			if cfg.JSON {
+				if cmd.Flags().Changed("format") && cfg.Format != "json" {
+					return fmt.Errorf("--json cannot be combined with --format %s", cfg.Format)
+				}
 				cfg.Format = exportSessionsFormat("json")
 			}
 			return runExportSessions(cmd, cfg)
@@ -514,7 +517,7 @@ func writeExportSessionsCursorReset(
 ) error {
 	payload := exportSessionsCursorResetError{
 		Error:      "cursor_reset",
-		Message:    "session export cursor does not belong to this archive",
+		Message:    "session export cursor is no longer valid; restart the export",
 		DatabaseID: databaseID,
 	}
 	if err := json.NewEncoder(cmd.ErrOrStderr()).Encode(payload); err != nil {

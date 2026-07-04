@@ -266,7 +266,7 @@ func TestEnsureSchemaScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
 		projectIdentityRemoteScrubMetadataKey,
 	)
 	require.NoError(t, err)
-	rawRemote := "https://user:token@github.com/acme/app.git"
+	rawRemote := "https://" + "user:token@" + "github.com/acme/app.git"
 	storedRemote := "https://github.com/acme/app.git"
 	_, err = db.ExecContext(ctx, `
 		INSERT INTO project_identity_observations (
@@ -276,6 +276,16 @@ func TestEnsureSchemaScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"app", "laptop", "/tmp/app", rawRemote, "origin",
 		"", "", "2026-07-03T12:00:00Z", "", "", "",
+	)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO project_identity_observations (
+			project, machine, root_path, git_remote, git_remote_name,
+			worktree_name, worktree_root_path, observed_at,
+			normalized_remote, key_source, key
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"app", "laptop", "/tmp/app", "", "",
+		"app", "/tmp/app", "2026-07-03T11:00:00Z", "", "", "",
 	)
 	require.NoError(t, err)
 

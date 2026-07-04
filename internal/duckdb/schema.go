@@ -777,23 +777,15 @@ func scrubProjectIdentityGitRemoteCredentials(
 
 	for _, scrub := range pending {
 		obs := export.SanitizeStoredProjectIdentityObservation(scrub.obs)
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO project_identity_observations (
-				project, machine, root_path, git_remote, git_remote_name,
-				worktree_name, worktree_root_path, observed_at,
-				normalized_remote, key_source, key
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(project, machine, root_path, git_remote) DO UPDATE SET
-				git_remote_name = excluded.git_remote_name,
-				worktree_name = excluded.worktree_name,
-				worktree_root_path = excluded.worktree_root_path,
-				observed_at = excluded.observed_at,
-				normalized_remote = excluded.normalized_remote,
-				key_source = excluded.key_source,
-				key = excluded.key`,
-			obs.Project, obs.Machine, obs.RootPath, obs.GitRemote,
-			obs.GitRemoteName, obs.WorktreeName, obs.WorktreeRootPath,
-			obs.ObservedAt, obs.NormalizedRemote, obs.KeySource, obs.Key,
+		if err := upsertProjectIdentityObservation(
+			func(stmt string, args ...any) error {
+				_, err := tx.ExecContext(ctx, stmt, args...)
+				return err
+			},
+			func(stmt string, args ...any) *sql.Row {
+				return tx.QueryRowContext(ctx, stmt, args...)
+			},
+			obs, scrub.rawRemote,
 		); err != nil {
 			return fmt.Errorf(
 				"upserting scrubbed duckdb project identity remote: %w", err,

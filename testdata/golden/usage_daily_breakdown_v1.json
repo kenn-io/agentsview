@@ -2,7 +2,7 @@
   "schema_version": 1,
   "pricing": {
     "source": "fetched",
-    "table_version": "litellm-398a0b15378c",
+    "table_version": "2026-07-03T12:00:00Z",
     "latest_row_updated_at": "2026-07-03T12:00:00Z",
     "custom_override_count": 0,
     "effective_row_count": 2428,

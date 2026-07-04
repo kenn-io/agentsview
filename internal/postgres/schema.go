@@ -1269,39 +1269,8 @@ func scrubProjectIdentityGitRemoteCredentialsPG(
 
 	for _, scrub := range pending {
 		obs := export.SanitizeStoredProjectIdentityObservation(scrub.obs)
-		if obs.GitRemote != "" {
-			if _, err := db.ExecContext(ctx, `
-				DELETE FROM project_identity_observations
-				WHERE project = $1 AND machine = $2 AND root_path = $3
-				  AND git_remote = ''`,
-				obs.Project, obs.Machine, obs.RootPath,
-			); err != nil {
-				return false, fmt.Errorf(
-					"removing stale pg project identity fallback during scrub: %w",
-					err,
-				)
-			}
-		}
-		if _, err := db.ExecContext(ctx, `
-			INSERT INTO project_identity_observations (
-				project, machine, root_path, git_remote, git_remote_name,
-				worktree_name, worktree_root_path, observed_at,
-				normalized_remote, key_source, key
-			) VALUES (
-				$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
-			)
-			ON CONFLICT (project, machine, root_path, git_remote)
-			DO UPDATE SET
-				git_remote_name = EXCLUDED.git_remote_name,
-				worktree_name = EXCLUDED.worktree_name,
-				worktree_root_path = EXCLUDED.worktree_root_path,
-				observed_at = EXCLUDED.observed_at,
-				normalized_remote = EXCLUDED.normalized_remote,
-				key_source = EXCLUDED.key_source,
-				key = EXCLUDED.key`,
-			obs.Project, obs.Machine, obs.RootPath, obs.GitRemote,
-			obs.GitRemoteName, obs.WorktreeName, obs.WorktreeRootPath,
-			obs.ObservedAt, obs.NormalizedRemote, obs.KeySource, obs.Key,
+		if err := upsertProjectIdentityObservation(
+			ctx, db, obs, scrub.rawRemote,
 		); err != nil {
 			return false, fmt.Errorf(
 				"upserting scrubbed pg project identity remote: %w", err,

@@ -251,6 +251,64 @@ func TestPricingResolverSourceCanonicalOrder(t *testing.T) {
 	}
 }
 
+func TestPricingResolverTableVersionFollowsBaseSource(t *testing.T) {
+	updatedAt := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name string
+		rows []EffectivePricingRow
+		want string
+	}{
+		{
+			name: "fetched uses latest row timestamp",
+			rows: []EffectivePricingRow{{
+				ModelPattern: "fetched",
+				Rates: ModelRates{
+					InputPerMTok: 1, Source: PricingRowSourceFetched,
+					UpdatedAt: &updatedAt,
+				},
+			}},
+			want: "2026-07-03T12:00:00Z",
+		},
+		{
+			name: "custom fetched uses fetched timestamp",
+			rows: []EffectivePricingRow{
+				{
+					ModelPattern: "custom",
+					Rates: ModelRates{
+						InputPerMTok: 1, Source: PricingRowSourceCustom,
+					},
+				},
+				{
+					ModelPattern: "fetched",
+					Rates: ModelRates{
+						InputPerMTok: 1, Source: PricingRowSourceFetched,
+						UpdatedAt: &updatedAt,
+					},
+				},
+			},
+			want: "2026-07-03T12:00:00Z",
+		},
+		{
+			name: "custom only",
+			rows: []EffectivePricingRow{{
+				ModelPattern: "custom",
+				Rates: ModelRates{
+					InputPerMTok: 1, Source: PricingRowSourceCustom,
+				},
+			}},
+			want: "custom",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			block, err := NewPricingResolver(tt.rows).BuildBlock()
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, block.TableVersion)
+		})
+	}
+}
+
 func TestPricingResolverJSONNesting(t *testing.T) {
 	resolver := NewPricingResolver([]EffectivePricingRow{{
 		ModelPattern: "claude-test",

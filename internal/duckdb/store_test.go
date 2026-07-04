@@ -781,6 +781,31 @@ func TestLoadPricingUsesDBRowsAsEffectiveTableAndOverlaysOverrides(t *testing.T)
 	}, got["custom-model"])
 }
 
+func TestProjectIdentityMapLegacyFallbackUsesFilePath(t *testing.T) {
+	ctx := context.Background()
+	conn := openTestDuckDB(t)
+	require.NoError(t, EnsureSchema(ctx, conn))
+	store := NewStoreFromDB(conn)
+
+	_, err := conn.ExecContext(ctx, `
+		INSERT INTO sessions (id, project, machine, agent, cwd, file_path)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		"file-path-identity", "file-project", "laptop", "codex", "",
+		"/fixtures/duck-file-project/session.jsonl",
+	)
+	require.NoError(t, err)
+
+	got, err := store.BuildProjectIdentityMap(ctx, []string{"file-project"})
+	require.NoError(t, err)
+	require.Equal(t, export.ProjectResolutionResolved,
+		got["file-project"].Resolution)
+	require.NotNil(t, got["file-project"].Identity)
+	assert.Equal(t, export.ProjectIdentityKeySourceRootPath,
+		got["file-project"].Identity.KeySource)
+	assert.Equal(t, "/fixtures/duck-file-project",
+		got["file-project"].Identity.RootPath)
+}
+
 func TestLoadPricingUsesFallbackWhenEffectiveTableEmpty(t *testing.T) {
 	ctx := context.Background()
 	conn := openTestDuckDB(t)

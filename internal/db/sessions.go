@@ -1672,6 +1672,9 @@ func (db *DB) GetSessionVersion(
 // the preview empty and a full parse should be forced.
 type IncrementalInfo struct {
 	ID                   string
+	Project              string
+	Machine              string
+	Cwd                  string
 	FileSize             int64
 	FileMtime            int64
 	NextOrdinal          int
@@ -1726,7 +1729,7 @@ func (db *DB) GetSessionForIncremental(
 	var fs, fm, fi, fd sql.NullInt64
 	var firstMsg, lastEntryUUID sql.NullString
 	err = db.getReader().QueryRow(
-		`SELECT id, file_size, file_mtime,
+		`SELECT id, project, machine, cwd, file_size, file_mtime,
 			next_ordinal, last_entry_uuid,
 			file_inode, file_device,
 			message_count, user_message_count,
@@ -1738,7 +1741,8 @@ func (db *DB) GetSessionForIncremental(
 		   AND deleted_at IS NULL`,
 		path,
 	).Scan(
-		&info.ID, &fs, &fm, &info.NextOrdinal, &lastEntryUUID, &fi, &fd,
+		&info.ID, &info.Project, &info.Machine, &info.Cwd,
+		&fs, &fm, &info.NextOrdinal, &lastEntryUUID, &fi, &fd,
 		&info.MsgCount, &info.UserMsgCount,
 		&firstMsg,
 		&info.TotalOutputTokens, &info.PeakContextTokens,

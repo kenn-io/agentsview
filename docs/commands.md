@@ -802,12 +802,12 @@ The JSON top level has `schema_version`, `database_id`, `cursor`, `pricing`,
 then one session row per following line. The default and maximum page size is
 `db.MaxSessionLimit`, currently 500.
 
-When `--cursor` is present, only `--format` and `--limit` may be combined with
-it. Cursor reset errors write structured JSON to stderr, leave stdout empty, and
-exit with code 4:
+When `--cursor` is present, only `--format`, `--json`, and `--limit` may be
+combined with it. Cursor reset errors write structured JSON to stderr, leave
+stdout empty, and exit with code 4:
 
 ```json
-{"error":"cursor_reset","message":"session export cursor does not belong to this archive","database_id":"..."}
+{"error":"cursor_reset","message":"session export cursor is no longer valid; restart the export","database_id":"..."}
 ```
 
 ______________________________________________________________________

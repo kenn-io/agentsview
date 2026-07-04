@@ -181,14 +181,32 @@ func upsertProjectIdentityObservationExec(
 	queryRow contextQueryRow,
 	obs export.ProjectIdentityObservation,
 ) error {
+	return upsertProjectIdentityObservationExecExcludingRemote(
+		ctx, exec, queryRow, obs, "")
+}
+
+func upsertProjectIdentityObservationExecExcludingRemote(
+	ctx context.Context,
+	exec contextExecer,
+	queryRow contextQueryRow,
+	obs export.ProjectIdentityObservation,
+	excludeRemote string,
+) error {
 	if obs.GitRemote == "" {
 		var exists int
-		err := queryRow(ctx, `
+		query := `
 			SELECT 1 FROM project_identity_observations
 			WHERE project = ? AND machine = ? AND root_path = ?
-			  AND git_remote != ''
-			LIMIT 1`,
-			obs.Project, obs.Machine, obs.RootPath,
+			  AND git_remote != ''`
+		args := []any{obs.Project, obs.Machine, obs.RootPath}
+		if excludeRemote != "" {
+			query += ` AND git_remote != ?`
+			args = append(args, excludeRemote)
+		}
+		query += ` LIMIT 1`
+		err := queryRow(ctx, `
+			`+strings.TrimSpace(query),
+			args...,
 		).Scan(&exists)
 		if err == nil && exists == 1 {
 			return nil
@@ -319,7 +337,17 @@ func scrubProjectIdentityGitRemoteCredentialsTx(
 	for _, scrub := range pending {
 		obs := scrub.obs
 		obs = export.SanitizeStoredProjectIdentityObservation(obs)
-		if err := upsertProjectIdentityObservationTx(tx, obs); err != nil {
+		normalized, err := normalizeProjectIdentityObservation(obs)
+		if err != nil {
+			return fmt.Errorf("normalizing project identity remote scrub: %w", err)
+		}
+		if err := upsertProjectIdentityObservationExecExcludingRemote(
+			ctx, tx,
+			func(ctx context.Context, query string, args ...any) rowScanner {
+				return tx.QueryRowContext(ctx, query, args...)
+			},
+			normalized, scrub.rawRemote,
+		); err != nil {
 			return fmt.Errorf("scrubbing project identity remote: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `

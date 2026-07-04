@@ -15,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 )
 
 // ActivityReportConfig holds the flags for `agentsview activity report`.
@@ -116,6 +117,9 @@ func fetchHTTPActivityReport(
 	var r activity.Report
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
 		return activity.Report{}, err
+	}
+	if r.Projects == nil {
+		r.Projects = map[string]export.ProjectMapEntry{}
 	}
 	return r, nil
 }

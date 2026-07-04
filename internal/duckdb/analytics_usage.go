@@ -3522,6 +3522,7 @@ func duckUsageAggregateCost(
 		explicitCost == 0 &&
 		inputTok == 0 && outputTok == 0 && cacheCr == 0 && cacheRd == 0 &&
 		!hasBillableTokens {
+		pricing.RecordComputed(model, pricing.Lookup(model))
 		return 0, 0, true, false
 	}
 	lookup := pricing.Lookup(model)

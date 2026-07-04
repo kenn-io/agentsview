@@ -614,16 +614,20 @@ output-token rate.
 `pricing.source` uses the canonical ingredient order `embedded`, `fetched`,
 `custom`, `custom+embedded`, or `custom+fetched`. When custom pricing
 participates, `custom` is first, followed by the base table ingredient.
+`pricing.table_version` is the embedded fallback snapshot version for embedded
+base tables, the latest fetched row timestamp for fetched base tables, and
+`custom` for custom-only effective tables.
 `pricing.digest` is independently recomputable as RFC 8785-style canonical JSON
 hashed with SHA-256 and prefixed with `sha256:`. The digest input is exactly a
 `{"rows":[...]}` object. Rows are sorted by `model_pattern` bytewise ascending,
-then row `source`, and each row contains exactly `model_pattern`,
-`input_per_mtok`, `output_per_mtok`, `cache_write_per_mtok`,
-`cache_read_per_mtok`, `source`, and `updated_at`. `updated_at` is `null` or a
-UTC RFC3339 timestamp such as `2026-07-03T12:00:00Z`. Digest canonicalization
-errors fail the export instead of emitting an empty digest. The digest uses the
-resolver's internal canonical pricing-row keys; the public `pricing.models`
-block uses the `*_cost_per_mtok` field names shown above.
+then row `source`, the four rate fields, and `updated_at`; each row contains
+exactly `model_pattern`, `input_per_mtok`, `output_per_mtok`,
+`cache_write_per_mtok`, `cache_read_per_mtok`, `source`, and `updated_at`.
+`updated_at` is `null` or a UTC RFC3339 timestamp such as
+`2026-07-03T12:00:00Z`. Digest canonicalization errors fail the export instead
+of emitting an empty digest. The digest uses the resolver's internal canonical
+pricing-row keys; the public `pricing.models` block uses the
+`*_cost_per_mtok` field names shown above.
 
 ### Project Identity
 

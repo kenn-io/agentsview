@@ -45,7 +45,7 @@ type SessionExportResult struct {
 	Rows          []SessionSummaryRow               `json:"rows"`
 	NextCursor    string                            `json:"next_cursor,omitempty"`
 	Pricing       *export.PricingBlock              `json:"pricing,omitempty"`
-	Projects      map[string]export.ProjectMapEntry `json:"projects,omitempty"`
+	Projects      map[string]export.ProjectMapEntry `json:"projects"`
 }
 
 type SessionSummaryRow struct {
@@ -73,6 +73,7 @@ type SessionSummaryRow struct {
 	PeakContextTokens     int                          `json:"peak_context_tokens"`
 	HasTotalOutputTokens  bool                         `json:"has_total_output_tokens"`
 	HasPeakContextTokens  bool                         `json:"has_peak_context_tokens"`
+	lastActivitySort      float64
 }
 
 type SessionModelUsage struct {
@@ -105,15 +106,19 @@ type SessionExportWorktree struct {
 }
 
 type sessionExportCursorPayload struct {
-	DatabaseID     string                     `json:"database_id"`
-	Filters        sessionExportCursorFilters `json:"filters"`
-	Order          string                     `json:"order"`
-	Watermark      string                     `json:"watermark"`
-	LastActivityAt string                     `json:"last_activity_at"`
-	LastID         string                     `json:"last_id"`
-	Limit          int                        `json:"limit"`
-	PrefixCount    int                        `json:"prefix_count,omitempty"`
-	PrefixDigest   string                     `json:"prefix_digest,omitempty"`
+	DatabaseID       string                     `json:"database_id"`
+	Filters          sessionExportCursorFilters `json:"filters"`
+	Order            string                     `json:"order"`
+	Watermark        string                     `json:"watermark"`
+	WatermarkSort    float64                    `json:"watermark_sort,omitempty"`
+	LastActivityAt   string                     `json:"last_activity_at"`
+	LastActivitySort float64                    `json:"last_activity_sort,omitempty"`
+	LastID           string                     `json:"last_id"`
+	Limit            int                        `json:"limit"`
+	SnapshotCount    int                        `json:"snapshot_count,omitempty"`
+	SnapshotDigest   string                     `json:"snapshot_digest,omitempty"`
+	PrefixCount      int                        `json:"prefix_count,omitempty"`
+	PrefixDigest     string                     `json:"prefix_digest,omitempty"`
 }
 
 type sessionExportCursorFilters struct {
@@ -224,8 +229,9 @@ func (db *DB) ExportSessionSummaries(
 	defer func() { _ = tx.Rollback() }()
 
 	watermark := cursor.Watermark
+	watermarkSort := cursor.WatermarkSort
 	if watermark == "" {
-		watermark, err = db.sessionExportWatermark(ctx, tx, where, args)
+		watermark, watermarkSort, err = db.sessionExportWatermark(ctx, tx, where, args)
 		if err != nil {
 			return SessionExportResult{}, err
 		}
@@ -237,9 +243,23 @@ func (db *DB) ExportSessionSummaries(
 			Projects:      map[string]export.ProjectMapEntry{},
 		}, nil
 	}
+	if cursor.SnapshotDigest != "" || cursor.SnapshotCount != 0 {
+		count, digest, err := db.sessionExportSnapshotFingerprint(
+			ctx, tx, where, args, watermarkSort)
+		if err != nil {
+			return SessionExportResult{}, err
+		}
+		if count != cursor.SnapshotCount || digest != cursor.SnapshotDigest {
+			return SessionExportResult{}, fmt.Errorf(
+				"%w: session export snapshot changed",
+				ErrSessionExportCursorReset,
+			)
+		}
+	}
 	if cursor.PrefixDigest != "" || cursor.PrefixCount != 0 {
 		count, digest, err := db.sessionExportPrefixFingerprint(
-			ctx, tx, where, args, watermark, cursor.LastActivityAt, cursor.LastID)
+			ctx, tx, where, args, watermarkSort,
+			cursor.LastActivitySort, cursor.LastID)
 		if err != nil {
 			return SessionExportResult{}, err
 		}
@@ -252,7 +272,7 @@ func (db *DB) ExportSessionSummaries(
 	}
 
 	rows, err := db.querySessionExportRows(
-		ctx, tx, where, args, watermark, cursor, opts.Limit)
+		ctx, tx, where, args, watermarkSort, cursor, opts.Limit)
 	if err != nil {
 		return SessionExportResult{}, err
 	}
@@ -262,21 +282,30 @@ func (db *DB) ExportSessionSummaries(
 	if len(resultRows) > opts.Limit {
 		resultRows = resultRows[:opts.Limit]
 		last := resultRows[len(resultRows)-1]
+		snapshotCount, snapshotDigest, err := db.sessionExportSnapshotFingerprint(
+			ctx, tx, where, args, watermarkSort)
+		if err != nil {
+			return SessionExportResult{}, err
+		}
 		prefixCount, prefixDigest, err := db.sessionExportPrefixFingerprint(
-			ctx, tx, where, args, watermark, last.LastActivityAt, last.ID)
+			ctx, tx, where, args, watermarkSort, last.lastActivitySort, last.ID)
 		if err != nil {
 			return SessionExportResult{}, err
 		}
 		next = db.encodeSessionExportCursor(sessionExportCursorPayload{
-			DatabaseID:     databaseID,
-			Filters:        filters,
-			Order:          sessionExportOrder,
-			Watermark:      watermark,
-			LastActivityAt: last.LastActivityAt,
-			LastID:         last.ID,
-			Limit:          opts.Limit,
-			PrefixCount:    prefixCount,
-			PrefixDigest:   prefixDigest,
+			DatabaseID:       databaseID,
+			Filters:          filters,
+			Order:            sessionExportOrder,
+			Watermark:        watermark,
+			WatermarkSort:    watermarkSort,
+			LastActivityAt:   last.LastActivityAt,
+			LastActivitySort: last.lastActivitySort,
+			LastID:           last.ID,
+			Limit:            opts.Limit,
+			SnapshotCount:    snapshotCount,
+			SnapshotDigest:   snapshotDigest,
+			PrefixCount:      prefixCount,
+			PrefixDigest:     prefixDigest,
 		})
 	}
 	if err := tx.Commit(); err != nil {
@@ -308,16 +337,27 @@ func (db *DB) ExportSessionSummaries(
 
 func (db *DB) sessionExportWatermark(
 	ctx context.Context, q sessionExportQuerier, where string, args []any,
-) (string, error) {
-	query := `SELECT COALESCE(MAX(` + sessionExportLastActivityExpr() + `), '')
-		FROM sessions WHERE ` + where
+) (string, float64, error) {
+	activityExpr := sessionExportLastActivityExpr()
+	activitySortExpr := sessionExportLastActivitySortExpr()
+	query := `SELECT ` + activityExpr + `, ` + activitySortExpr + `
+		FROM sessions WHERE ` + where + `
+		ORDER BY ` + activitySortExpr + ` DESC, id ASC
+		LIMIT 1`
 	var watermark string
+	var watermarkSort sql.NullFloat64
 	if err := q.QueryRowContext(
 		ctx, query, args...,
-	).Scan(&watermark); err != nil {
-		return "", fmt.Errorf("querying session export watermark: %w", err)
+	).Scan(&watermark, &watermarkSort); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", 0, nil
+		}
+		return "", 0, fmt.Errorf("querying session export watermark: %w", err)
 	}
-	return watermark, nil
+	if !watermarkSort.Valid {
+		return "", 0, nil
+	}
+	return watermark, watermarkSort.Float64, nil
 }
 
 func (db *DB) sessionExportPrefixFingerprint(
@@ -325,30 +365,73 @@ func (db *DB) sessionExportPrefixFingerprint(
 	q sessionExportQuerier,
 	where string,
 	args []any,
-	watermark string,
-	lastActivityAt string,
+	watermarkSort float64,
+	lastActivitySort float64,
 	lastID string,
 ) (int, string, error) {
-	if lastActivityAt == "" || lastID == "" {
+	if lastActivitySort == 0 || lastID == "" {
 		return 0, "", nil
 	}
 	activityExpr := sessionExportLastActivityExpr()
+	activitySortExpr := sessionExportLastActivitySortExpr()
 	queryArgs := append([]any{}, args...)
 	queryArgs = append(queryArgs,
-		watermark, lastActivityAt, lastActivityAt, lastID)
+		watermarkSort, lastActivitySort, lastActivitySort, lastID)
 	query := `
-SELECT id, ` + activityExpr + ` AS last_activity_at
+SELECT id,
+       ` + activityExpr + ` AS last_activity_at,
+       ` + activitySortExpr + ` AS last_activity_sort
 FROM sessions
 WHERE ` + where + `
-  AND ` + activityExpr + ` <= ?
-  AND (` + activityExpr + ` > ?
-       OR (` + activityExpr + ` = ? AND id <= ?))
-ORDER BY last_activity_at DESC, id ASC`
+  AND ` + activitySortExpr + ` <= ?
+  AND (` + activitySortExpr + ` > ?
+       OR (` + activitySortExpr + ` = ? AND id <= ?))
+ORDER BY last_activity_sort DESC, id ASC`
 
-	rows, err := q.QueryContext(ctx, query, queryArgs...)
+	return sessionExportFingerprintRows(
+		ctx, q, "session export cursor prefix", query, queryArgs)
+}
+
+func (db *DB) sessionExportSnapshotFingerprint(
+	ctx context.Context,
+	q sessionExportQuerier,
+	where string,
+	args []any,
+	watermarkSort float64,
+) (int, string, error) {
+	if watermarkSort == 0 {
+		return 0, "", nil
+	}
+	activityExpr := sessionExportLastActivityExpr()
+	activitySortExpr := sessionExportLastActivitySortExpr()
+	queryArgs := append([]any{}, args...)
+	queryArgs = append(queryArgs, watermarkSort)
+	query := `
+SELECT id,
+       ` + activityExpr + ` AS last_activity_at,
+       ` + activitySortExpr + ` AS last_activity_sort
+FROM sessions
+WHERE ` + where + `
+  AND ` + activitySortExpr + ` <= ?
+ORDER BY last_activity_sort DESC, id ASC`
+	count, digest, err := sessionExportFingerprintRows(
+		ctx, q, "session export cursor snapshot", query, queryArgs)
 	if err != nil {
-		return 0, "", fmt.Errorf(
-			"querying session export cursor prefix: %w", err)
+		return 0, "", err
+	}
+	return count, digest, nil
+}
+
+func sessionExportFingerprintRows(
+	ctx context.Context,
+	q sessionExportQuerier,
+	label string,
+	query string,
+	args []any,
+) (int, string, error) {
+	rows, err := q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return 0, "", fmt.Errorf("querying %s: %w", label, err)
 	}
 	defer rows.Close()
 
@@ -356,19 +439,20 @@ ORDER BY last_activity_at DESC, id ASC`
 	var count int
 	for rows.Next() {
 		var id, activity string
-		if err := rows.Scan(&id, &activity); err != nil {
-			return 0, "", fmt.Errorf(
-				"scanning session export cursor prefix: %w", err)
+		var activitySort float64
+		if err := rows.Scan(&id, &activity, &activitySort); err != nil {
+			return 0, "", fmt.Errorf("scanning %s: %w", label, err)
 		}
 		count++
+		hash.Write(fmt.Appendf(nil, "%.17f", activitySort))
+		hash.Write([]byte{0})
 		hash.Write([]byte(activity))
 		hash.Write([]byte{0})
 		hash.Write([]byte(id))
 		hash.Write([]byte{0})
 	}
 	if err := rows.Err(); err != nil {
-		return 0, "", fmt.Errorf(
-			"iterating session export cursor prefix: %w", err)
+		return 0, "", fmt.Errorf("iterating %s: %w", label, err)
 	}
 	return count, hex.EncodeToString(hash.Sum(nil)), nil
 }
@@ -378,19 +462,20 @@ func (db *DB) querySessionExportRows(
 	q sessionExportQuerier,
 	where string,
 	args []any,
-	watermark string,
+	watermarkSort float64,
 	cursor sessionExportCursorPayload,
 	limit int,
 ) ([]SessionSummaryRow, error) {
 	activityExpr := sessionExportLastActivityExpr()
+	activitySortExpr := sessionExportLastActivitySortExpr()
 	queryArgs := append([]any{}, args...)
-	cursorWhere := where + " AND " + activityExpr + " <= ?"
-	queryArgs = append(queryArgs, watermark)
+	cursorWhere := where + " AND " + activitySortExpr + " <= ?"
+	queryArgs = append(queryArgs, watermarkSort)
 	if cursor.LastActivityAt != "" || cursor.LastID != "" {
-		cursorWhere += " AND ((" + activityExpr + " < ?) OR (" +
-			activityExpr + " = ? AND id > ?))"
+		cursorWhere += " AND ((" + activitySortExpr + " < ?) OR (" +
+			activitySortExpr + " = ? AND id > ?))"
 		queryArgs = append(queryArgs,
-			cursor.LastActivityAt, cursor.LastActivityAt, cursor.LastID)
+			cursor.LastActivitySort, cursor.LastActivitySort, cursor.LastID)
 	}
 	queryArgs = append(queryArgs, limit+1)
 
@@ -405,6 +490,7 @@ SELECT
 	started_at,
 	ended_at,
 	` + activityExpr + ` AS last_activity_at,
+	` + activitySortExpr + ` AS last_activity_sort,
 	message_count,
 	user_message_count,
 	(SELECT COUNT(*)
@@ -421,7 +507,7 @@ SELECT
 	has_peak_context_tokens
 FROM sessions
 WHERE ` + cursorWhere + `
-ORDER BY last_activity_at DESC, id ASC
+ORDER BY last_activity_sort DESC, id ASC
 LIMIT ?`
 
 	sqlRows, err := q.QueryContext(ctx, query, queryArgs...)
@@ -446,6 +532,7 @@ LIMIT ?`
 			&startedAt,
 			&endedAt,
 			&row.LastActivityAt,
+			&row.lastActivitySort,
 			&row.MessageCount,
 			&row.UserMessageCount,
 			&row.AssistantMessageCount,
@@ -783,10 +870,11 @@ func sessionExportFiltersEqual(
 func buildSessionExportFilter(f SessionFilter) (string, []any) {
 	dialect := SQLiteQueryDialect()
 	if f.IncludeChildren {
-		dialect.activityExpr = sessionExportLastActivityExprFor("root_session")
+		dialect.activityExpr = sessionExportLastActivitySortExprFor("root_session")
 	} else {
-		dialect.activityExpr = sessionExportLastActivityExpr()
+		dialect.activityExpr = sessionExportLastActivitySortExpr()
 	}
+	dialect.activityParam = func(ph string) string { return "julianday(" + ph + ")" }
 	return BuildSessionFilterSQL(f, dialect)
 }
 
@@ -795,11 +883,25 @@ func sessionExportLastActivityExpr() string {
 }
 
 func sessionExportLastActivityExprFor(sessionAlias string) string {
-	messageActivity := "(SELECT MAX(NULLIF(m.timestamp, '')) " +
-		"FROM messages m WHERE m.session_id = " + sessionAlias + ".id)"
+	messageActivity := "(SELECT NULLIF(m.timestamp, '') " +
+		"FROM messages m WHERE m.session_id = " + sessionAlias + ".id " +
+		"AND m.timestamp != '' " +
+		"ORDER BY julianday(m.timestamp) DESC, m.timestamp DESC LIMIT 1)"
 	return "COALESCE(NULLIF(" + sessionAlias + ".ended_at, ''), " +
 		messageActivity + ", NULLIF(" + sessionAlias + ".started_at, ''), " +
 		sessionAlias + ".created_at)"
+}
+
+func sessionExportLastActivitySortExpr() string {
+	return sessionExportLastActivitySortExprFor("sessions")
+}
+
+func sessionExportLastActivitySortExprFor(sessionAlias string) string {
+	messageActivity := "(SELECT MAX(julianday(NULLIF(m.timestamp, ''))) " +
+		"FROM messages m WHERE m.session_id = " + sessionAlias + ".id)"
+	return "COALESCE(julianday(NULLIF(" + sessionAlias + ".ended_at, '')), " +
+		messageActivity + ", julianday(NULLIF(" + sessionAlias + ".started_at, '')), " +
+		"julianday(" + sessionAlias + ".created_at))"
 }
 
 func sessionExportProjectLabels(rows []SessionSummaryRow) map[string]struct{} {

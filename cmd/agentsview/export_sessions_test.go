@@ -73,6 +73,19 @@ func TestExportSessionsJSONAliasEmitsOneDocument(t *testing.T) {
 		"--json must emit exactly one JSON document")
 }
 
+func TestExportSessionsJSONAliasRejectsConflictingFormat(t *testing.T) {
+	seedExportSessionsArchive(t)
+
+	stdout, stderr, err := executeExportSessionsCommand(
+		newRootCommand(), "export", "sessions", "--json", "--format", "ndjson",
+	)
+
+	require.Error(t, err)
+	assert.Empty(t, stdout)
+	assert.Empty(t, stderr)
+	assert.Contains(t, err.Error(), "--json cannot be combined with --format ndjson")
+}
+
 func TestExportSessionsJSONNoUsageKeepsClosedCostSource(t *testing.T) {
 	seedExportSessionsArchive(t)
 
@@ -204,7 +217,7 @@ func TestExportSessionsInvalidCursorWritesStructuredResetError(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(stderr), &got))
 	assert.Equal(t, "cursor_reset", got.Error)
 	assert.Equal(t,
-		"session export cursor does not belong to this archive",
+		"session export cursor is no longer valid; restart the export",
 		got.Message,
 	)
 	assert.NotEmpty(t, got.DatabaseID)
@@ -232,7 +245,7 @@ func TestExportSessionsWrongDatabaseCursorWritesStructuredResetError(t *testing.
 	require.NoError(t, json.Unmarshal([]byte(stderr), &got))
 	assert.Equal(t, "cursor_reset", got.Error)
 	assert.Equal(t,
-		"session export cursor does not belong to this archive",
+		"session export cursor is no longer valid; restart the export",
 		got.Message,
 	)
 	assert.NotEmpty(t, got.DatabaseID)
@@ -266,7 +279,7 @@ func TestExportSessionsCursorResetMainStderrIsOnlyStructuredJSON(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(stderr), &got))
 	assert.Equal(t, "cursor_reset", got.Error)
 	assert.Equal(t,
-		"session export cursor does not belong to this archive",
+		"session export cursor is no longer valid; restart the export",
 		got.Message,
 	)
 	assert.NotEmpty(t, got.DatabaseID)

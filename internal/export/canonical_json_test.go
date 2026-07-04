@@ -21,6 +21,36 @@ func TestCanonicalPricingJSONOrdersObjectKeys(t *testing.T) {
 	assert.Equal(t, `{"a":"first","b":"second"}`, string(got))
 }
 
+func TestCanonicalPricingJSONDoesNotEscapeHTMLCharacters(t *testing.T) {
+	got, err := canonicalPricingJSON(map[string]any{
+		"text": "<tag>&value",
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, `{"text":"<tag>&value"}`, string(got))
+}
+
+func TestCanonicalPricingJSONFormatsNumbers(t *testing.T) {
+	tests := []struct {
+		name  string
+		value float64
+		want  string
+	}{
+		{name: "negative zero", value: math.Copysign(0, -1), want: `{"n":0}`},
+		{name: "large exponent", value: 1e21, want: `{"n":1e+21}`},
+		{name: "small exponent", value: 1e-7, want: `{"n":1e-7}`},
+		{name: "plain decimal", value: 0.000001, want: `{"n":0.000001}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := canonicalPricingJSON(map[string]any{"n": tt.value})
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, string(got))
+		})
+	}
+}
+
 func TestEffectivePricingDigestIgnoresPricingRowInsertionOrder(t *testing.T) {
 	rows := digestFixtureRows(t)
 	reversed := []EffectivePricingRow{rows[1], rows[0]}

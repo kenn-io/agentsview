@@ -3,6 +3,9 @@ package duckdb
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -122,12 +125,12 @@ func (s *Store) legacyProjectIdentityCandidates(
 		placeholders = append(placeholders, "?")
 		args = append(args, label)
 	}
-	query := `SELECT project, cwd
+	query := `SELECT project, cwd, COALESCE(file_path, '')
 		FROM sessions
 		WHERE deleted_at IS NULL
 		  AND project IN (` + strings.Join(placeholders, ",") + `)
-		  AND cwd != ''
-		ORDER BY project, cwd`
+		  AND (cwd != '' OR COALESCE(file_path, '') != '')
+		ORDER BY project, cwd, file_path`
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("listing duckdb legacy project identity sessions: %w", err)
@@ -135,23 +138,43 @@ func (s *Store) legacyProjectIdentityCandidates(
 	defer rows.Close()
 
 	for rows.Next() {
-		var project, cwd string
-		if err := rows.Scan(&project, &cwd); err != nil {
+		var project, cwd, filePath string
+		if err := rows.Scan(&project, &cwd, &filePath); err != nil {
 			return nil, fmt.Errorf("scanning duckdb legacy project identity session: %w", err)
 		}
-		identity := export.BuildStoredProjectIdentity(
-			export.ProjectIdentityInput{RootPath: cwd},
-		)
-		if identity.Key == "" {
-			continue
+		for _, root := range duckLegacyProjectIdentityRoots(cwd, filePath) {
+			identity := export.BuildStoredProjectIdentity(
+				export.ProjectIdentityInput{RootPath: root},
+			)
+			if identity.Key == "" {
+				continue
+			}
+			if out[project] == nil {
+				out[project] = map[string]export.ProjectIdentity{}
+			}
+			out[project][identity.Key] = identity
 		}
-		if out[project] == nil {
-			out[project] = map[string]export.ProjectIdentity{}
-		}
-		out[project][identity.Key] = identity
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating duckdb legacy project identity sessions: %w", err)
 	}
 	return out, nil
+}
+
+func duckLegacyProjectIdentityRoots(cwd, filePath string) []string {
+	var roots []string
+	for _, candidate := range []string{cwd, filepath.Dir(filePath)} {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" || candidate == "." {
+			continue
+		}
+		if _, ok := export.NormalizeStoredRootPath(candidate); !ok {
+			continue
+		}
+		if !slices.Contains(roots, candidate) {
+			roots = append(roots, candidate)
+		}
+	}
+	sort.Strings(roots)
+	return roots
 }

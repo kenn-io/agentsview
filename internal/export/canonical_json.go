@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"sort"
 	"strconv"
+	"strings"
 	"unicode/utf16"
 )
 
@@ -25,10 +26,7 @@ func canonicalPricingRows(rows []EffectivePricingRow) map[string]any {
 	copied := make([]EffectivePricingRow, len(rows))
 	copy(copied, rows)
 	sort.SliceStable(copied, func(i, j int) bool {
-		if copied[i].ModelPattern != copied[j].ModelPattern {
-			return copied[i].ModelPattern < copied[j].ModelPattern
-		}
-		return copied[i].Rates.Source < copied[j].Rates.Source
+		return canonicalPricingRowLess(copied[i], copied[j])
 	})
 	out := make([]any, 0, len(copied))
 	for _, row := range copied {
@@ -120,7 +118,7 @@ func writeCanonicalJSON(b *bytes.Buffer, v reflect.Value) error {
 		if math.IsNaN(f) || math.IsInf(f, 0) {
 			return fmt.Errorf("canonical JSON cannot encode non-finite number")
 		}
-		b.WriteString(strconv.FormatFloat(f, 'f', -1, v.Type().Bits()))
+		b.WriteString(formatCanonicalJSONFloat(f, v.Type().Bits()))
 	default:
 		return fmt.Errorf("canonical JSON unsupported type %s", v.Type())
 	}
@@ -128,8 +126,70 @@ func writeCanonicalJSON(b *bytes.Buffer, v reflect.Value) error {
 }
 
 func writeJSONString(b *bytes.Buffer, s string) {
-	encoded, _ := json.Marshal(s)
-	b.Write(encoded)
+	var encoded bytes.Buffer
+	enc := json.NewEncoder(&encoded)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(s)
+	b.Write(bytes.TrimSpace(encoded.Bytes()))
+}
+
+func canonicalPricingRowLess(a, b EffectivePricingRow) bool {
+	aValues := canonicalPricingRowSortValues(a)
+	bValues := canonicalPricingRowSortValues(b)
+	for i := range aValues {
+		if aValues[i] != bValues[i] {
+			return aValues[i] < bValues[i]
+		}
+	}
+	return false
+}
+
+func canonicalPricingRowSortValues(row EffectivePricingRow) []string {
+	updatedAt := ""
+	if row.Rates.UpdatedAt != nil {
+		updatedAt = row.Rates.UpdatedAt.UTC().Format(jsonTimeLayout)
+	}
+	return []string{
+		row.ModelPattern,
+		string(row.Rates.Source),
+		formatCanonicalJSONFloat(row.Rates.InputPerMTok, 64),
+		formatCanonicalJSONFloat(row.Rates.OutputPerMTok, 64),
+		formatCanonicalJSONFloat(row.Rates.CacheWritePerMTok, 64),
+		formatCanonicalJSONFloat(row.Rates.CacheReadPerMTok, 64),
+		updatedAt,
+	}
+}
+
+func formatCanonicalJSONFloat(f float64, bits int) string {
+	if f == 0 {
+		return "0"
+	}
+	abs := math.Abs(f)
+	if abs >= 1e21 || abs < 1e-6 {
+		return normalizeCanonicalExponent(strconv.FormatFloat(f, 'e', -1, bits))
+	}
+	return strconv.FormatFloat(f, 'f', -1, bits)
+}
+
+func normalizeCanonicalExponent(s string) string {
+	mantissa, exponent, ok := strings.Cut(s, "e")
+	if !ok {
+		return s
+	}
+	sign := ""
+	switch {
+	case strings.HasPrefix(exponent, "+"):
+		sign = "+"
+		exponent = strings.TrimPrefix(exponent, "+")
+	case strings.HasPrefix(exponent, "-"):
+		sign = "-"
+		exponent = strings.TrimPrefix(exponent, "-")
+	}
+	exponent = strings.TrimLeft(exponent, "0")
+	if exponent == "" {
+		exponent = "0"
+	}
+	return mantissa + "e" + sign + exponent
 }
 
 func utf16Less(a, b string) bool {

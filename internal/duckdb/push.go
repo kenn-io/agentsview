@@ -188,36 +188,14 @@ func (s *Sync) syncProjectIdentityObservations(ctx context.Context) error {
 	}()
 	for _, obs := range observations {
 		obs = export.SanitizeStoredProjectIdentityObservation(obs)
-		if obs.GitRemote != "" {
-			if err := s.execMutation(ctx, tx, `
-				DELETE FROM project_identity_observations
-				WHERE project = ? AND machine = ? AND root_path = ?
-				  AND git_remote = ''`,
-				obs.Project, obs.Machine, obs.RootPath,
-			); err != nil {
-				return fmt.Errorf(
-					"removing stale duckdb project identity root fallback %s/%s/%s: %w",
-					obs.Project, obs.Machine, obs.RootPath, err,
-				)
-			}
-		}
-		if err := s.execMutation(ctx, tx, `
-			INSERT INTO project_identity_observations (
-				project, machine, root_path, git_remote, git_remote_name,
-				worktree_name, worktree_root_path, observed_at,
-				normalized_remote, key_source, key
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(project, machine, root_path, git_remote) DO UPDATE SET
-				git_remote_name = excluded.git_remote_name,
-				worktree_name = excluded.worktree_name,
-				worktree_root_path = excluded.worktree_root_path,
-				observed_at = excluded.observed_at,
-				normalized_remote = excluded.normalized_remote,
-				key_source = excluded.key_source,
-				key = excluded.key`,
-			obs.Project, obs.Machine, obs.RootPath, obs.GitRemote,
-			obs.GitRemoteName, obs.WorktreeName, obs.WorktreeRootPath,
-			obs.ObservedAt, obs.NormalizedRemote, obs.KeySource, obs.Key,
+		if err := upsertProjectIdentityObservation(
+			func(stmt string, args ...any) error {
+				return s.execMutation(ctx, tx, stmt, args...)
+			},
+			func(stmt string, args ...any) *sql.Row {
+				return tx.QueryRowContext(ctx, stmt, args...)
+			},
+			obs, "",
 		); err != nil {
 			return fmt.Errorf(
 				"syncing duckdb project identity observation %s/%s/%s: %w",

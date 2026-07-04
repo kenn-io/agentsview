@@ -604,6 +604,9 @@ func fetchHTTPDailyUsage(
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return db.DailyUsageResult{}, err
 	}
+	if out.Projects == nil {
+		out.Projects = map[string]export.ProjectMapEntry{}
+	}
 	return db.DailyUsageResult{
 		SchemaVersion: out.SchemaVersion,
 		Pricing:       out.Pricing,

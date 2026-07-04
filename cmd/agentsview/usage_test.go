@@ -430,6 +430,31 @@ func TestFetchHTTPDailyUsage(t *testing.T) {
 	assert.Equal(t, 1, got.SessionCounts.Total)
 }
 
+func TestFetchHTTPDailyUsageMissingProjectsDefaultsEmptyMap(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		writeJSONResponse(w, `{
+			"schema_version": 1,
+			"totals": {},
+			"daily": [],
+			"sessionCounts": {}
+		}`)
+	}))
+	defer ts.Close()
+
+	got, err := fetchHTTPDailyUsage(
+		context.Background(),
+		transport{Mode: transportHTTP, URL: ts.URL},
+		"",
+		dailyUsageQuery{NoDefaultRange: true},
+	)
+	require.NoError(t, err)
+	assert.NotNil(t, got.Projects)
+	assert.Empty(t, got.Projects)
+}
+
 func TestFetchHTTPDailyUsagePreservesExcludedSessionFilters(t *testing.T) {
 	var gotQuery url.Values
 	ts := httptest.NewServer(http.HandlerFunc(func(

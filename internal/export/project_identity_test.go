@@ -88,8 +88,8 @@ func TestSanitizeGitRemoteForStorageStripsUserInfo(t *testing.T) {
 	}{
 		{
 			name: "https token userinfo",
-			raw:  "https://user:token@GitHub.com/org/repo.git",
-			want: "https://GitHub.com/org/repo.git",
+			raw:  "https://" + "user:token@" + "Example.com/org/repo.git",
+			want: "https://Example.com/org/repo.git",
 		},
 		{
 			name: "ssh url userinfo",
@@ -100,6 +100,11 @@ func TestSanitizeGitRemoteForStorageStripsUserInfo(t *testing.T) {
 			name: "scp user prefix",
 			raw:  "git@github.com:Org/Repo.git",
 			want: "github.com:Org/Repo.git",
+		},
+		{
+			name: "scp token-shaped userinfo",
+			raw:  "user:token@" + "example.com:Org/Repo.git",
+			want: "example.com:Org/Repo.git",
 		},
 		{
 			name: "no userinfo",
@@ -157,6 +162,25 @@ func TestProjectIdentityRootPathFallbackNormalizesLocalPath(t *testing.T) {
 	assert.Equal(t, expectedRoot, identity.RootPath)
 }
 
+func TestProjectIdentityStoredRootPathMatchesLiveSymlinkNormalization(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink path separators in this contract are POSIX-specific")
+	}
+	base := t.TempDir()
+	realRoot := filepath.Join(base, "real")
+	linkRoot := filepath.Join(base, "link")
+	require.NoError(t, mkdirAll(realRoot))
+	require.NoError(t, symlink(realRoot, linkRoot))
+
+	live := BuildProjectIdentity(ProjectIdentityInput{RootPath: linkRoot})
+	stored := BuildStoredProjectIdentity(ProjectIdentityInput{RootPath: linkRoot})
+
+	require.NotEmpty(t, live.Key)
+	require.NotEmpty(t, stored.Key)
+	assert.Equal(t, live.Key, stored.Key)
+	assert.Equal(t, live.RootPath, stored.RootPath)
+}
+
 func TestProjectIdentityWindowsDriveRootPathsAreLocal(t *testing.T) {
 	tests := []struct {
 		name string
@@ -176,6 +200,11 @@ func TestProjectIdentityWindowsDriveRootPathsAreLocal(t *testing.T) {
 		{
 			name: "parent segments stay within drive root",
 			raw:  "C:/../repo",
+			want: "C:/repo",
+		},
+		{
+			name: "lowercase drive uppercased",
+			raw:  "c:/repo",
 			want: "C:/repo",
 		},
 	}

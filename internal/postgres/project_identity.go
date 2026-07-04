@@ -122,6 +122,9 @@ func (s *Store) legacyProjectIdentityCandidates(
 		placeholders = append(placeholders, fmt.Sprintf("$%d", i+1))
 		args = append(args, label)
 	}
+	// PostgreSQL does not mirror sessions.file_path; fallback candidates are
+	// therefore limited to cwd. DuckDB mirrors file_path and includes that
+	// parent directory for parity with SQLite where the data exists.
 	query := `SELECT project, cwd
 		FROM sessions
 		WHERE deleted_at IS NULL

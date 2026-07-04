@@ -129,7 +129,7 @@ func TestProjectObservationStripsGitRemoteCredentialsBeforeStorage(t *testing.T)
 			Project:       "app",
 			Machine:       "laptop",
 			RootPath:      "/tmp/app",
-			GitRemote:     "https://user:token@github.com/acme/app.git",
+			GitRemote:     "https://" + "user:token@" + "example.com/acme/app.git",
 			GitRemoteName: "origin",
 		},
 	))
@@ -137,8 +137,8 @@ func TestProjectObservationStripsGitRemoteCredentialsBeforeStorage(t *testing.T)
 	got, err := d.ListProjectIdentityObservations(ctx, []string{"app"})
 	require.NoError(t, err)
 	require.Len(t, got, 1)
-	assert.Equal(t, "https://github.com/acme/app.git", got[0].GitRemote)
-	assert.Equal(t, "github.com/acme/app", got[0].NormalizedRemote)
+	assert.Equal(t, "https://example.com/acme/app.git", got[0].GitRemote)
+	assert.Equal(t, "example.com/acme/app", got[0].NormalizedRemote)
 	assert.Equal(t, export.ProjectIdentityKeySourceGitRemote, got[0].KeySource)
 }
 
@@ -152,10 +152,10 @@ func TestProjectObservationMigrationStripsStoredGitRemoteCredentials(t *testing.
 			normalized_remote, key_source, key
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"app", "laptop", "/tmp/app",
-		"https://user:token@github.com/acme/app.git", "origin",
+		"https://"+"user:token@"+"example.com/acme/app.git", "origin",
 		"", "", "2026-07-03T12:00:00Z",
-		"github.com/acme/app", export.ProjectIdentityKeySourceGitRemote,
-		projectIdentitySHA("git_remote\n"+"github.com/acme/app"),
+		"example.com/acme/app", export.ProjectIdentityKeySourceGitRemote,
+		projectIdentitySHA("git_remote\n"+"example.com/acme/app"),
 	)
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
@@ -168,8 +168,8 @@ func TestProjectObservationMigrationStripsStoredGitRemoteCredentials(t *testing.
 		context.Background(), []string{"app"})
 	require.NoError(t, err)
 	require.Len(t, got, 1)
-	assert.Equal(t, "https://github.com/acme/app.git", got[0].GitRemote)
-	assert.Equal(t, "github.com/acme/app", got[0].NormalizedRemote)
+	assert.Equal(t, "https://example.com/acme/app.git", got[0].GitRemote)
+	assert.Equal(t, "example.com/acme/app", got[0].NormalizedRemote)
 }
 
 func TestProjectObservationListFiltersLabelsAndKeepsPersistedRemoteMachineRows(t *testing.T) {
@@ -373,6 +373,34 @@ func TestProjectObservationFallbackDoesNotRecreateSameRootWhenRemoteExists(t *te
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "https://github.com/acme/app.git", got[0].GitRemote)
+}
+
+func TestProjectObservationScrubDowngradesUnusableRemoteToFallback(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "repo")
+	_, err := d.getWriter().ExecContext(ctx, `
+		INSERT INTO project_identity_observations (
+			project, machine, root_path, git_remote, git_remote_name,
+			worktree_name, worktree_root_path, observed_at,
+			normalized_remote, key_source, key
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"app", "laptop", root, "file:///tmp/app.git", "origin",
+		"", "", "2026-07-03T12:00:00Z", "", "", "",
+	)
+	require.NoError(t, err)
+
+	tx, err := d.getWriter().BeginTx(ctx, nil)
+	require.NoError(t, err)
+	require.NoError(t, scrubProjectIdentityGitRemoteCredentialsTx(ctx, tx))
+	require.NoError(t, tx.Commit())
+
+	got, err := d.ListProjectIdentityObservations(ctx, []string{"app"})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Empty(t, got[0].GitRemote)
+	assert.Equal(t, export.ProjectIdentityKeySourceRootPath, got[0].KeySource)
+	assert.NotEmpty(t, got[0].Key)
 }
 
 func TestProjectObservationExportReadsDoNotMutateArchive(t *testing.T) {
@@ -615,7 +643,8 @@ func TestProjectIdentityMapUnknownPersistedObservationUsesLegacyFallback(t *test
 	require.NotNil(t, got["fallback"].Identity)
 	assert.Equal(t, export.ProjectIdentityKeySourceRootPath,
 		got["fallback"].Identity.KeySource)
-	assert.Equal(t, root, got["fallback"].Identity.RootPath)
+	assert.Equal(t, projectIdentityTestRoot(t, root),
+		got["fallback"].Identity.RootPath)
 }
 
 func TestProjectIdentityMapLegacyFallbackUsesNoRemoteGitRoot(t *testing.T) {
@@ -636,15 +665,26 @@ func TestProjectIdentityMapLegacyFallbackUsesNoRemoteGitRoot(t *testing.T) {
 
 	got, err := d.BuildProjectIdentityMap(ctx, []string{"git-root"})
 	require.NoError(t, err)
-	wantRoot, ok, err := export.NormalizeRootPath(repo)
-	require.NoError(t, err)
-	require.True(t, ok)
+	wantRoot := projectIdentityTestRoot(t, repo)
 	require.Equal(t, export.ProjectResolutionResolved,
 		got["git-root"].Resolution)
 	require.NotNil(t, got["git-root"].Identity)
 	assert.Equal(t, export.ProjectIdentityKeySourceRootPath,
 		got["git-root"].Identity.KeySource)
 	assert.Equal(t, wantRoot, got["git-root"].Identity.RootPath)
+}
+
+func projectIdentityTestRoot(t *testing.T, root string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		if resolved, err := filepath.EvalSymlinks(root); err == nil {
+			root = resolved
+		}
+	}
+	normalized, ok, err := export.NormalizeRootPath(root)
+	require.NoError(t, err)
+	require.True(t, ok)
+	return normalized
 }
 
 func TestProjectIdentityMapLegacyFallbackClosesRowsBeforeMappingLookup(t *testing.T) {

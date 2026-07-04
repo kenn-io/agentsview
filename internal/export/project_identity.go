@@ -48,16 +48,10 @@ func NormalizeGitRemote(raw string) (string, bool) {
 			repoPath = p
 		}
 	} else {
-		before, after, ok := strings.Cut(raw, ":")
+		var ok bool
+		host, repoPath, ok = splitSCPGitRemote(raw)
 		if !ok {
 			return "", false
-		}
-		left := before
-		repoPath = after
-		if slash := strings.LastIndex(left, "@"); slash >= 0 {
-			host = left[slash+1:]
-		} else {
-			host = left
 		}
 	}
 
@@ -99,14 +93,11 @@ func SanitizeGitRemoteForStorage(raw string) string {
 		}
 		return sanitized
 	}
-	before, after, ok := strings.Cut(raw, ":")
+	host, repoPath, ok := splitSCPGitRemote(raw)
 	if !ok {
 		return ""
 	}
-	if at := strings.LastIndex(before, "@"); at >= 0 {
-		before = before[at+1:]
-	}
-	sanitized := before + ":" + after
+	sanitized := host + ":" + repoPath
 	if _, ok := NormalizeGitRemote(sanitized); !ok {
 		return ""
 	}
@@ -190,14 +181,22 @@ func NormalizeStoredRootPath(raw string) (normalized string, ok bool) {
 		return "", false
 	}
 	if strings.HasPrefix(raw, "/") {
-		return path.Clean("/" + strings.TrimLeft(
+		cleaned := path.Clean("/" + strings.TrimLeft(
 			strings.ReplaceAll(raw, "\\", "/"), "/",
-		)), true
+		))
+		if resolved, ok := resolveStoredRootPath(cleaned); ok {
+			return resolved, true
+		}
+		return cleaned, true
 	}
 	if !filepath.IsAbs(raw) {
 		return "", false
 	}
-	return filepath.Clean(raw), true
+	cleaned := filepath.Clean(raw)
+	if resolved, ok := resolveStoredRootPath(cleaned); ok {
+		return resolved, true
+	}
+	return filepath.ToSlash(cleaned), true
 }
 
 func BuildProjectIdentity(input ProjectIdentityInput) ProjectIdentity {
@@ -319,12 +318,40 @@ func looksWindowsDrivePath(path string) bool {
 	return path[2] == '\\' || path[2] == '/'
 }
 
+func splitSCPGitRemote(raw string) (host, repoPath string, ok bool) {
+	if at := strings.LastIndex(raw, "@"); at >= 0 {
+		rest := raw[at+1:]
+		colon := strings.Index(rest, ":")
+		if colon <= 0 || colon == len(rest)-1 {
+			return "", "", false
+		}
+		return rest[:colon], rest[colon+1:], true
+	}
+	before, after, ok := strings.Cut(raw, ":")
+	if !ok {
+		return "", "", false
+	}
+	return before, after, true
+}
+
 func normalizeWindowsDriveRootPath(raw string) string {
 	normalized := strings.ReplaceAll(raw, "\\", "/")
-	drive := normalized[:2]
+	drive := strings.ToUpper(normalized[:1]) + normalized[1:2]
 	rest := path.Clean("/" + strings.TrimLeft(normalized[2:], "/"))
 	if rest == "/" {
 		return drive + "/"
 	}
 	return drive + rest
+}
+
+func resolveStoredRootPath(cleaned string) (string, bool) {
+	resolved, err := filepath.EvalSymlinks(filepath.FromSlash(cleaned))
+	if err != nil {
+		return "", false
+	}
+	abs, err := filepath.Abs(resolved)
+	if err != nil {
+		return "", false
+	}
+	return filepath.ToSlash(filepath.Clean(abs)), true
 }

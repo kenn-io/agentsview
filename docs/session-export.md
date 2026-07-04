@@ -158,28 +158,29 @@ watermark equal to the maximum eligible `last_activity_at` at cursor creation.
 Later pages include only sessions whose `last_activity_at` is at or below that
 watermark. The order is `last_activity_at DESC, id ASC`.
 
-Sessions inserted or updated after the first page with activity newer than the
-watermark are excluded until a fresh export starts. The cursor also records a
-digest of the already-emitted keyset prefix. If a later request sees that rows
-have moved into or out of that prefix, the command returns the cursor-reset
-error so the caller can restart from a fresh first page. Rows inserted
-mid-pagination under the watermark and after the saved keyset position may
-appear in the in-flight run.
+Sessions inserted after the first page with activity newer than the watermark
+are excluded until a fresh export starts. The cursor also records a digest of
+the full watermarked set and the already-emitted keyset prefix. If a later
+request sees that rows have moved into or out of either digest, including an
+unemitted row whose activity moved above the watermark, the command returns the
+cursor-reset error so the caller can restart from a fresh first page. Rows
+inserted mid-pagination under the watermark reset the cursor rather than being
+quietly mixed into the in-flight run.
 
 The cursor embeds the archive `database_id`, filter parameters, ordering,
-watermark, last keyset position, prefix digest, and limit. Passing `--cursor`
-with any query-affecting flag is an error. Only `--format` and `--limit` may be
-used with `--cursor`; filters such as `--project`, `--exclude-project`,
-`--machine`, `--git-branch`, `--agent`, date filters, `--active-since`,
-message-count filters, `--include-one-shot`, `--include-automated`,
-`--include-children`, `--outcome`, `--health-grade`, `--min-tool-failures`,
-`--has-secret`, and `--all` may not.
+watermark, last keyset position, snapshot digest, prefix digest, and limit.
+Passing `--cursor` with any query-affecting flag is an error. Only `--format`,
+`--json`, and `--limit` may be used with `--cursor`; filters such as
+`--project`, `--exclude-project`, `--machine`, `--git-branch`, `--agent`, date
+filters, `--active-since`, message-count filters, `--include-one-shot`,
+`--include-automated`, `--include-children`, `--outcome`, `--health-grade`,
+`--min-tool-failures`, `--has-secret`, and `--all` may not.
 
 If a cursor belongs to another archive or otherwise requires reset, stdout is
 empty, stderr contains one JSON object, and the process exits with code 4:
 
 ```json
-{"error":"cursor_reset","message":"session export cursor does not belong to this archive","database_id":"00000000-0000-4000-8000-000000000001"}
+{"error":"cursor_reset","message":"session export cursor is no longer valid; restart the export","database_id":"00000000-0000-4000-8000-000000000001"}
 ```
 
 Other usage and validation errors use the normal CLI error path and exit code 1.

@@ -213,7 +213,7 @@ func (s *Store) activityReportActivity(
 func (s *Store) activityReportUsage(
 	ctx context.Context, ids []string, lowerBound, upperBound string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
-	var out []activity.UsageRow
+	out := []activity.UsageRow{}
 
 	pricing, err := s.loadPricingMap(ctx)
 	if err != nil {

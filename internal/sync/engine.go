@@ -23,8 +23,9 @@ import (
 )
 
 const (
-	batchSize  = 100
-	maxWorkers = 8
+	batchSize               = 100
+	maxWorkers              = 8
+	projectIdentityCacheTTL = time.Minute
 )
 
 type syncWriteMode int
@@ -114,6 +115,9 @@ type Engine struct {
 	emitter                Emitter
 	providerFactories      map[parser.AgentType]parser.ProviderFactory
 	providerMigrationModes map[parser.AgentType]parser.ProviderMigrationMode
+	projectIdentityMu      gosync.Mutex
+	projectIdentityCache   map[string]projectIdentityCacheEntry
+	projectIdentityWritten map[string]struct{}
 
 	// forceParse disables every stored-state skip (skip cache,
 	// size/mtime/data_version checks, incremental JSONL deltas) so
@@ -227,6 +231,8 @@ func NewEngine(
 		emitter:                 cfg.Emitter,
 		providerFactories:       providerFactoryMap(providerFactories),
 		providerMigrationModes:  providerModes,
+		projectIdentityCache:    make(map[string]projectIdentityCacheEntry),
+		projectIdentityWritten:  make(map[string]struct{}),
 	}
 	// Errors are logged inside recomputeSignalsFromDB and are
 	// non-fatal: the next write or flush retries.
@@ -3393,6 +3399,9 @@ func drainResults(results <-chan syncJob, remaining int) {
 // session row without overwriting unrelated columns.
 type incrementalUpdate struct {
 	sessionID            string
+	project              string
+	machine              string
+	cwd                  string
 	msgs                 []parser.ParsedMessage
 	endedAt              time.Time
 	msgCount             int // total (old + new)
@@ -4968,6 +4977,9 @@ func (e *Engine) tryIncrementalJSONL(
 			return processResult{
 				incremental: &incrementalUpdate{
 					sessionID:            inc.ID,
+					project:              inc.Project,
+					machine:              inc.Machine,
+					cwd:                  inc.Cwd,
 					endedAt:              endedAt,
 					msgCount:             inc.MsgCount,
 					userMsgCount:         inc.UserMsgCount,
@@ -5047,6 +5059,9 @@ func (e *Engine) tryIncrementalJSONL(
 	return processResult{
 		incremental: &incrementalUpdate{
 			sessionID:            inc.ID,
+			project:              inc.Project,
+			machine:              inc.Machine,
+			cwd:                  inc.Cwd,
 			msgs:                 newMsgs,
 			endedAt:              endedAt,
 			msgCount:             inc.MsgCount + len(newMsgs),
@@ -5679,17 +5694,13 @@ func (e *Engine) writeBatch(
 			failedSessions++
 			continue
 		}
-		if obs, ok := e.projectIdentityObservation(s); ok {
-			if err := e.db.UpsertProjectIdentityObservation(
-				context.Background(), obs,
-			); err != nil {
-				log.Printf(
-					"write project identity observation for %s: %v",
-					s.ID, err,
-				)
-				failedSessions++
-				continue
-			}
+		if err := e.writeProjectIdentityObservation(
+			context.Background(), s,
+		); err != nil {
+			log.Printf(
+				"write project identity observation for %s: %v",
+				s.ID, err,
+			)
 		}
 
 		replaceMessages := shouldReplaceFullParseMessages(
@@ -6524,6 +6535,15 @@ type batchSourceFile struct {
 	fingerprint string
 }
 
+type projectIdentityCacheEntry struct {
+	rootPath         string
+	gitRemoteName    string
+	gitRemote        string
+	worktreeName     string
+	worktreeRootPath string
+	expiresAt        time.Time
+}
+
 func (e *Engine) writeBatchBulk(
 	batch []pendingWrite, forceReplace bool,
 ) (writtenSessions, writtenMessages, failedSessions int) {
@@ -6615,27 +6635,91 @@ func (e *Engine) projectIdentityObservation(
 		return export.ProjectIdentityObservation{}, false
 	}
 
+	cached := e.cachedProjectIdentity(machine, rootPath)
 	obs := export.ProjectIdentityObservation{
 		Project:    project,
 		Machine:    machine,
-		RootPath:   rootPath,
+		RootPath:   cached.rootPath,
 		ObservedAt: time.Now().UTC(),
 	}
+	obs.GitRemoteName = cached.gitRemoteName
+	obs.GitRemote = cached.gitRemote
+	obs.WorktreeName = cached.worktreeName
+	obs.WorktreeRootPath = cached.worktreeRootPath
+	return obs, true
+}
 
+func (e *Engine) cachedProjectIdentity(machine, rootPath string) projectIdentityCacheEntry {
+	e.projectIdentityMu.Lock()
+	defer e.projectIdentityMu.Unlock()
+	if e.projectIdentityCache == nil {
+		e.projectIdentityCache = make(map[string]projectIdentityCacheEntry)
+	}
+	cacheKey := machine + "\x00" + rootPath
+	now := time.Now()
+	if cached, ok := e.projectIdentityCache[cacheKey]; ok &&
+		now.Before(cached.expiresAt) {
+		return cached
+	}
+	identity := projectIdentityCacheEntry{rootPath: rootPath}
 	if e.idPrefix == "" && e.pathRewriter == nil {
 		if gitRoot, remotes := discoverLocalGitIdentity(rootPath); gitRoot != "" {
-			obs.RootPath = gitRoot
+			identity.rootPath = gitRoot
 			if name, raw, ok := export.SelectRemote(remotes); ok {
-				obs.GitRemoteName = name
-				obs.GitRemote = raw
+				identity.gitRemoteName = name
+				identity.gitRemote = raw
 			}
 		}
 	}
-	if obs.GitRemote == "" {
-		obs.WorktreeName = filepath.Base(obs.RootPath)
-		obs.WorktreeRootPath = obs.RootPath
+	if identity.gitRemote == "" {
+		identity.worktreeName = filepath.Base(identity.rootPath)
+		identity.worktreeRootPath = identity.rootPath
 	}
-	return obs, true
+	identity.expiresAt = now.Add(projectIdentityCacheTTL)
+	e.projectIdentityCache[cacheKey] = identity
+	return identity
+}
+
+func (e *Engine) writeProjectIdentityObservation(
+	ctx context.Context, s db.Session,
+) error {
+	obs, ok := e.projectIdentityObservation(s)
+	if !ok {
+		return nil
+	}
+	fingerprint := projectIdentityObservationFingerprint(obs)
+	e.projectIdentityMu.Lock()
+	if e.projectIdentityWritten == nil {
+		e.projectIdentityWritten = make(map[string]struct{})
+	}
+	if _, ok := e.projectIdentityWritten[fingerprint]; ok {
+		e.projectIdentityMu.Unlock()
+		return nil
+	}
+	e.projectIdentityMu.Unlock()
+
+	if err := e.db.UpsertProjectIdentityObservation(ctx, obs); err != nil {
+		return err
+	}
+
+	e.projectIdentityMu.Lock()
+	e.projectIdentityWritten[fingerprint] = struct{}{}
+	e.projectIdentityMu.Unlock()
+	return nil
+}
+
+func projectIdentityObservationFingerprint(
+	obs export.ProjectIdentityObservation,
+) string {
+	return strings.Join([]string{
+		obs.Project,
+		obs.Machine,
+		obs.RootPath,
+		obs.GitRemote,
+		obs.GitRemoteName,
+		obs.WorktreeName,
+		obs.WorktreeRootPath,
+	}, "\x00")
 }
 
 func discoverLocalGitIdentity(cwd string) (string, map[string]string) {
@@ -6886,19 +6970,19 @@ func (e *Engine) writeIncremental(
 	); err != nil {
 		return err
 	}
-	if sess, err := e.db.GetSession(context.Background(), inc.sessionID); err != nil {
-		log.Printf("incremental project identity session %s: %v", inc.sessionID, err)
-	} else if sess != nil {
-		if obs, ok := e.projectIdentityObservation(*sess); ok {
-			if err := e.db.UpsertProjectIdentityObservation(
-				context.Background(), obs,
-			); err != nil {
-				log.Printf(
-					"incremental project identity observation %s: %v",
-					inc.sessionID, err,
-				)
-			}
-		}
+	if err := e.writeProjectIdentityObservation(
+		context.Background(),
+		db.Session{
+			ID:      inc.sessionID,
+			Project: inc.project,
+			Machine: inc.machine,
+			Cwd:     inc.cwd,
+		},
+	); err != nil {
+		log.Printf(
+			"incremental project identity observation %s: %v",
+			inc.sessionID, err,
+		)
 	}
 
 	// Signal/secret recompute costs O(session history), so it is

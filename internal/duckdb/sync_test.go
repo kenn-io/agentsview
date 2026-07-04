@@ -1312,7 +1312,7 @@ func TestSyncScrubsLegacyProjectIdentityGitRemoteCredentials(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	observedAt := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
-	rawRemote := "https://user:token@github.com/acme/app.git"
+	rawRemote := "https://" + "user:token@" + "github.com/acme/app.git"
 	require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project:       "alpha",
@@ -1339,6 +1339,16 @@ func TestSyncScrubsLegacyProjectIdentityGitRemoteCredentials(t *testing.T) {
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		"alpha", "laptop", "/tmp/app", rawRemote, "origin",
 		"", "", observedAt, "", "", "",
+	)
+	require.NoError(t, err)
+	_, err = legacy.DB().ExecContext(ctx, `
+		INSERT INTO project_identity_observations (
+			project, machine, root_path, git_remote, git_remote_name,
+			worktree_name, worktree_root_path, observed_at,
+			normalized_remote, key_source, key
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"alpha", "laptop", "/tmp/app", "", "",
+		"app", "/tmp/app", observedAt.Add(-time.Hour), "", "", "",
 	)
 	require.NoError(t, err)
 	require.NoError(t, legacy.Close())

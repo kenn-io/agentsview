@@ -294,6 +294,34 @@ func TestDuckUsageAggregateCostIncludesReasoningOnlyRows(t *testing.T) {
 		block.Models["reasoning-model"].CostSource)
 }
 
+func TestDuckUsageAggregateCostRecordsZeroTokenModelProvenance(t *testing.T) {
+	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
+		ModelPattern: "zero-model",
+		Rates: export.ModelRates{
+			InputPerMTok: 1,
+			Source:       export.PricingRowSourceFetched,
+		},
+	}})
+
+	cost, _, priced, contributes := duckUsageAggregateCost(
+		"zero-model",
+		0, 0, 0, 0,
+		0, 0, 0, 0, 0,
+		0,
+		false,
+		resolver,
+	)
+
+	assert.True(t, priced)
+	assert.False(t, contributes)
+	assert.Zero(t, cost)
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+	require.Contains(t, block.Models, "zero-model")
+	assert.Equal(t, export.CostSourceComputed,
+		block.Models["zero-model"].CostSource)
+}
+
 func TestDuckUsageAutomatedScopeOneShotExemption(t *testing.T) {
 	where, _ := appendDuckUsageSessionFilterClauses(
 		"WHERE true",
