@@ -392,6 +392,36 @@ func TestSyncCheckpointFailureAfterHardDeleteDoesNotKeepStaleFingerprint(t *test
 	assert.NotContains(t, fingerprints, fixture.betaID)
 }
 
+func TestSyncMissingMirrorRowWithUnchangedLocalSessionIsRepaired(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	fixture := seedDuckDBSyncFixture(t, local)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	policy := &checkpointSpy{}
+	syncer.maintenance = policy
+
+	first, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, first.SessionsPushed)
+	assert.Equal(t, 1, policy.calls)
+	require.NoError(t, syncer.withDuckTx(ctx, "test delete mirror session", func(tx *sql.Tx) error {
+		return syncer.deleteMirrorSession(ctx, tx, fixture.betaID)
+	}))
+	assertDuckDBCountWhere(t, syncer.DB(), "sessions", "id = ?", fixture.betaID, 0)
+
+	second, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, second.SessionsPushed)
+	assert.Equal(t, 1, second.MessagesPushed)
+	assert.Equal(t, 2, policy.calls)
+	assertDuckDBCountWhere(t, syncer.DB(), "sessions", "id = ?", fixture.betaID, 1)
+	assertDuckDBCountWhere(t, syncer.DB(), "messages", "session_id = ?", fixture.betaID, 1)
+	fingerprints, err := readSyncFingerprintsWithKey(local, lastPushBoundaryStateKey)
+	require.NoError(t, err)
+	assert.Contains(t, fingerprints, fixture.betaID)
+}
+
 func TestSyncCheckpointPolicySkipsRemoteQuackTargets(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)

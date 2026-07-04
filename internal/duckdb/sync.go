@@ -270,13 +270,11 @@ func (s *Sync) Push(
 	if err != nil {
 		return result, fmt.Errorf("listing local sessions: %w", err)
 	}
-	result.Diagnostics.LocalSessions = countPushSessions(allLocalSessions)
-	sessionFingerprints, err := s.sessionFingerprints(ctx, sessions)
-	if err != nil {
-		return result, err
+	allLocalSessionByID := make(map[string]db.Session, len(allLocalSessions))
+	for _, sess := range allLocalSessions {
+		allLocalSessionByID[sess.ID] = sess
 	}
-	candidateSessions := append([]db.Session(nil), sessions...)
-	result.Diagnostics.CandidateSessions = countPushSessions(candidateSessions)
+	result.Diagnostics.LocalSessions = countPushSessions(allLocalSessions)
 	priorFingerprints := map[string]string{}
 	if !full {
 		priorFingerprints, err = readSyncFingerprintsWithKey(
@@ -305,7 +303,20 @@ func (s *Sync) Push(
 	}
 	result.Diagnostics.DeletedStaleSessions = len(staleIDs)
 	if !full {
-		pruneMissingMirrorFingerprints(priorFingerprints, mirrorSessionIDs)
+		missingMirrorIDs := pruneMissingMirrorFingerprints(
+			priorFingerprints, mirrorSessionIDs,
+		)
+		sessions = appendMissingMirrorRepairCandidates(
+			sessions, sessionByID, allLocalSessionByID, missingMirrorIDs,
+		)
+	}
+	sessionFingerprints, err := s.sessionFingerprints(ctx, sessions)
+	if err != nil {
+		return result, err
+	}
+	candidateSessions := append([]db.Session(nil), sessions...)
+	result.Diagnostics.CandidateSessions = countPushSessions(candidateSessions)
+	if !full {
 		sessions = filterUnchangedSessions(sessions, priorFingerprints, sessionFingerprints)
 		result.Diagnostics.SkippedUnchangedSessions = skippedPushSessions(
 			candidateSessions, sessions,
@@ -884,12 +895,36 @@ func filterUnchangedSessions(
 func pruneMissingMirrorFingerprints(
 	priorFingerprints map[string]string,
 	mirrorSessionIDs map[string]bool,
-) {
+) []string {
+	var missing []string
 	for id := range priorFingerprints {
 		if !mirrorSessionIDs[id] {
 			delete(priorFingerprints, id)
+			missing = append(missing, id)
 		}
 	}
+	sort.Strings(missing)
+	return missing
+}
+
+func appendMissingMirrorRepairCandidates(
+	sessions []db.Session,
+	sessionByID map[string]db.Session,
+	allLocalSessionByID map[string]db.Session,
+	missingMirrorIDs []string,
+) []db.Session {
+	for _, id := range missingMirrorIDs {
+		sess, ok := allLocalSessionByID[id]
+		if !ok {
+			continue
+		}
+		if _, ok := sessionByID[id]; ok {
+			continue
+		}
+		sessionByID[id] = sess
+		sessions = append(sessions, sess)
+	}
+	return sessions
 }
 
 func previousLocalSyncTimestamp(value string) (string, error) {
