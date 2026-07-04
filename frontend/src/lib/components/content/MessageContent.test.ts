@@ -596,4 +596,37 @@ describe("MessageContent", () => {
 
     unmount(component);
   });
+
+  it("renders mermaid source as a code block when search is active", async () => {
+    const content = [
+      "Mermaid diagram:",
+      "",
+      "```mermaid",
+      "graph TD",
+      "A-->SearchTarget",
+      "```",
+    ].join("\n");
+
+    const component = mount(MessageContent, {
+      target: document.body,
+      props: {
+        message: makeMessage({
+          content,
+          content_length: content.length,
+        }),
+        highlightQuery: "SearchTarget",
+        isCurrentHighlight: true,
+      },
+    });
+
+    await tick();
+
+    expect(renderMermaidMock).not.toHaveBeenCalled();
+    expect(document.querySelector(".code-content")?.textContent).toContain(
+      "A-->SearchTarget",
+    );
+    expect(document.querySelector(".code-lang")?.textContent).toBe("mermaid");
+
+    unmount(component);
+  });
 });

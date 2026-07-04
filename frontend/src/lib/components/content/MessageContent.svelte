@@ -460,7 +460,16 @@
         {#if hasSearchQuery || ui.isBlockVisible("code")}
           {@const codeLabel = segment.label?.trim().toLowerCase()}
           {#if codeLabel === "mermaid"}
-            <MermaidBlock content={segment.content} />
+            {#if hasSearchQuery}
+              <CodeBlock
+                content={segment.content}
+                language={segment.label}
+                highlightQuery={highlightQuery}
+                isCurrentHighlight={isCurrentHighlight}
+              />
+            {:else}
+              <MermaidBlock content={segment.content} />
+            {/if}
           {:else}
             <CodeBlock
               content={segment.content}
