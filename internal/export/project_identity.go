@@ -76,6 +76,60 @@ func NormalizeGitRemote(raw string) (string, bool) {
 	return host + "/" + cleaned, true
 }
 
+func SanitizeGitRemoteForStorage(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if _, ok := NormalizeGitRemote(raw); !ok {
+		return ""
+	}
+	if strings.Contains(raw, "://") {
+		u, err := url.Parse(raw)
+		if err != nil {
+			return ""
+		}
+		u.User = nil
+		u.RawQuery = ""
+		u.ForceQuery = false
+		u.Fragment = ""
+		sanitized := u.String()
+		if _, ok := NormalizeGitRemote(sanitized); !ok {
+			return ""
+		}
+		return sanitized
+	}
+	before, after, ok := strings.Cut(raw, ":")
+	if !ok {
+		return ""
+	}
+	if at := strings.LastIndex(before, "@"); at >= 0 {
+		before = before[at+1:]
+	}
+	sanitized := before + ":" + after
+	if _, ok := NormalizeGitRemote(sanitized); !ok {
+		return ""
+	}
+	return sanitized
+}
+
+func SanitizeStoredProjectIdentityObservation(
+	obs ProjectIdentityObservation,
+) ProjectIdentityObservation {
+	obs.GitRemote = SanitizeGitRemoteForStorage(obs.GitRemote)
+	identity := BuildStoredProjectIdentity(ProjectIdentityInput{
+		RootPath:         obs.RootPath,
+		GitRemote:        obs.GitRemote,
+		GitRemoteName:    obs.GitRemoteName,
+		WorktreeName:     obs.WorktreeName,
+		WorktreeRootPath: obs.WorktreeRootPath,
+	})
+	obs.NormalizedRemote = identity.NormalizedRemote
+	obs.KeySource = identity.KeySource
+	obs.Key = identity.Key
+	return obs
+}
+
 func SelectRemote(remotes map[string]string) (name string, raw string, ok bool) {
 	if raw, exists := remotes["origin"]; exists {
 		if _, normalized := NormalizeGitRemote(raw); normalized {
@@ -134,6 +188,11 @@ func NormalizeStoredRootPath(raw string) (normalized string, ok bool) {
 	}
 	if looksRemotePrefixed(raw) {
 		return "", false
+	}
+	if strings.HasPrefix(raw, "/") {
+		return path.Clean("/" + strings.TrimLeft(
+			strings.ReplaceAll(raw, "\\", "/"), "/",
+		)), true
 	}
 	if !filepath.IsAbs(raw) {
 		return "", false

@@ -586,6 +586,9 @@ func (d *DB) CopySessionMetadataFrom(
 			return fmt.Errorf(
 				"removing stale project identity root fallbacks: %w", err)
 		}
+		if err := scrubProjectIdentityGitRemoteCredentialsTx(ctx, tx); err != nil {
+			return err
+		}
 	}
 
 	// Copy persistent worktree project mappings. Omit id so

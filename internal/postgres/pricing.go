@@ -159,8 +159,11 @@ func (s *Store) startPricingLoad() *pricingLoad {
 }
 
 func (s *Store) runPricingLoad(ctx context.Context, load *pricingLoad) {
-	out := fallbackPricingMap()
-	err := s.mergeDBPricing(ctx, out)
+	out := map[string]export.ModelRates{}
+	dbRows, err := s.mergeDBPricing(ctx, out)
+	if err == nil && dbRows == 0 {
+		out = fallbackPricingMap()
+	}
 	load.cancel()
 
 	var prices []export.EffectivePricingRow
@@ -207,7 +210,7 @@ func (s *Store) forgetPricingLoad() {
 // `agentsview pg push` has not run yet.
 func (s *Store) mergeDBPricing(
 	ctx context.Context, out map[string]export.ModelRates,
-) error {
+) (int, error) {
 	rows, err := s.pg.QueryContext(
 		ctx,
 		`SELECT model_pattern, input_per_mtok,
@@ -217,12 +220,13 @@ func (s *Store) mergeDBPricing(
 	)
 	if err != nil {
 		if isUndefinedTable(err) {
-			return nil
+			return 0, nil
 		}
-		return fmt.Errorf("querying pg pricing: %w", err)
+		return 0, fmt.Errorf("querying pg pricing: %w", err)
 	}
 	defer rows.Close()
 
+	count := 0
 	for rows.Next() {
 		var p db.ModelPricing
 		if err := rows.Scan(
@@ -233,7 +237,7 @@ func (s *Store) mergeDBPricing(
 			&p.CacheReadPerMTok,
 			&p.UpdatedAt,
 		); err != nil {
-			return fmt.Errorf("scanning pg pricing: %w", err)
+			return 0, fmt.Errorf("scanning pg pricing: %w", err)
 		}
 		if strings.HasPrefix(p.ModelPattern, "_") {
 			continue
@@ -241,11 +245,12 @@ func (s *Store) mergeDBPricing(
 		rates := pgModelPricingRates(p)
 		rates.Source = pgModelPricingSource(p, pgFallbackRateMap())
 		out[p.ModelPattern] = rates
+		count++
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterating pg pricing: %w", err)
+		return 0, fmt.Errorf("iterating pg pricing: %w", err)
 	}
-	return nil
+	return count, nil
 }
 
 // applyCustomPricing overlays user-configured rates onto out, letting

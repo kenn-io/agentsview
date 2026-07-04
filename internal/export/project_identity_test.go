@@ -80,6 +80,41 @@ func TestNormalizeRemote(t *testing.T) {
 	}
 }
 
+func TestSanitizeGitRemoteForStorageStripsUserInfo(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "https token userinfo",
+			raw:  "https://user:token@GitHub.com/org/repo.git",
+			want: "https://GitHub.com/org/repo.git",
+		},
+		{
+			name: "ssh url userinfo",
+			raw:  "ssh://git@github.com/org/repo.git",
+			want: "ssh://github.com/org/repo.git",
+		},
+		{
+			name: "scp user prefix",
+			raw:  "git@github.com:Org/Repo.git",
+			want: "github.com:Org/Repo.git",
+		},
+		{
+			name: "no userinfo",
+			raw:  "https://github.com/org/repo.git",
+			want: "https://github.com/org/repo.git",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, SanitizeGitRemoteForStorage(tt.raw))
+		})
+	}
+}
+
 func TestProjectIdentitySelectRemotePrefersOriginOtherwiseAlphabetical(t *testing.T) {
 	name, raw, ok := SelectRemote(map[string]string{
 		"upstream": "https://github.com/acme/upstream.git",
@@ -170,6 +205,19 @@ func TestProjectIdentityWindowsDriveRootPathsAreLocal(t *testing.T) {
 
 	_, ok = NormalizeStoredRootPath("host:/srv/repo")
 	assert.False(t, ok)
+}
+
+func TestProjectIdentityStoredRootPathAcceptsPOSIXAbsolutePath(t *testing.T) {
+	got, ok := NormalizeStoredRootPath(`/fixtures\repo/../repo/worktree/`)
+	require.True(t, ok)
+	assert.Equal(t, "/fixtures/repo/worktree", got)
+
+	identity := BuildStoredProjectIdentity(ProjectIdentityInput{
+		RootPath: `/fixtures\repo/../repo/worktree/`,
+	})
+	require.NotEmpty(t, identity.Key)
+	assert.Equal(t, ProjectIdentityKeySourceRootPath, identity.KeySource)
+	assert.Equal(t, "/fixtures/repo/worktree", identity.RootPath)
 }
 
 func TestProjectIdentityKeysUseTypedSHA256Inputs(t *testing.T) {

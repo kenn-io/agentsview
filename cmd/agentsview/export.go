@@ -193,18 +193,21 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
-	database, err := openDB(appCfg)
+	database, err := openReadOnlyDB(appCfg)
 	if err != nil {
 		return fmt.Errorf("open local archive: %w", err)
 	}
 	defer database.Close()
-	if err := applyCursorSecret(database, appCfg); err != nil {
-		return err
-	}
 
 	ctx := cmd.Context()
-	databaseID, err := database.GetOrCreateDatabaseID(ctx)
+	databaseID, err := database.GetDatabaseID(ctx)
 	if err != nil {
+		if errors.Is(err, db.ErrDatabaseIDMissing) {
+			return fmt.Errorf(
+				"database id missing; restart agentsview serve to initialize export metadata: %w",
+				err,
+			)
+		}
 		return err
 	}
 	pages, err := collectExportSessionPages(ctx, database, cfg)

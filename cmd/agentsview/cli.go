@@ -62,7 +62,10 @@ func exitCodeFromError(err error) int {
 
 func isSilentExitError(err error) bool {
 	var exitErr *cliExitError
-	return errors.As(err, &exitErr) && exitErr.silent
+	if !errors.As(err, &exitErr) || exitErr == nil {
+		return false
+	}
+	return exitErr.silent
 }
 
 func newRootCommand() *cobra.Command {

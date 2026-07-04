@@ -476,6 +476,7 @@ func (s *Sync) syncProjectIdentityObservations(ctx context.Context) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 	for _, obs := range observations {
+		obs = export.SanitizeStoredProjectIdentityObservation(obs)
 		if obs.GitRemote != "" {
 			if _, err := tx.ExecContext(ctx, `
 				DELETE FROM project_identity_observations

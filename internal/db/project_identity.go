@@ -19,22 +19,56 @@ import (
 
 const archiveMetadataDatabaseIDKey = "database_id"
 
+var ErrDatabaseIDMissing = errors.New("database id is missing")
+
+func (db *DB) GetDatabaseID(ctx context.Context) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var id string
+	err := db.getReader().QueryRowContext(ctx,
+		`SELECT value FROM archive_metadata WHERE key = ?`,
+		archiveMetadataDatabaseIDKey,
+	).Scan(&id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrDatabaseIDMissing
+		}
+		return "", fmt.Errorf("reading database id: %w", err)
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", ErrDatabaseIDMissing
+	}
+	return id, nil
+}
+
 func (db *DB) GetOrCreateDatabaseID(ctx context.Context) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	id, err := db.GetDatabaseID(ctx)
+	if err == nil {
+		return id, nil
+	}
+	if !errors.Is(err, ErrDatabaseIDMissing) {
+		return "", err
+	}
+	if err := db.requireWritable(); err != nil {
+		return "", ErrDatabaseIDMissing
+	}
+
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	var id string
-	err := db.getWriter().QueryRowContext(ctx,
+	err = db.getWriter().QueryRowContext(ctx,
 		`SELECT value FROM archive_metadata WHERE key = ?`,
 		archiveMetadataDatabaseIDKey,
 	).Scan(&id)
 	if err == nil && strings.TrimSpace(id) != "" {
 		return id, nil
 	}
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", fmt.Errorf("reading database id: %w", err)
 	}
 	id, err = newUUIDv4()
@@ -42,8 +76,12 @@ func (db *DB) GetOrCreateDatabaseID(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if _, err := db.getWriter().ExecContext(ctx, `
-		INSERT OR IGNORE INTO archive_metadata (key, value)
-		VALUES (?, ?)`,
+		INSERT INTO archive_metadata (key, value)
+		VALUES (?, ?)
+		ON CONFLICT(key) DO UPDATE SET
+			value = excluded.value,
+			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE trim(archive_metadata.value) = ''`,
 		archiveMetadataDatabaseIDKey, id,
 	); err != nil {
 		return "", fmt.Errorf("creating database id: %w", err)
@@ -198,7 +236,7 @@ func normalizeProjectIdentityObservation(
 	obs.Project = strings.TrimSpace(obs.Project)
 	obs.Machine = strings.TrimSpace(obs.Machine)
 	obs.RootPath = strings.TrimSpace(obs.RootPath)
-	obs.GitRemote = strings.TrimSpace(obs.GitRemote)
+	obs.GitRemote = export.SanitizeGitRemoteForStorage(obs.GitRemote)
 	obs.GitRemoteName = strings.TrimSpace(obs.GitRemoteName)
 	obs.WorktreeName = strings.TrimSpace(obs.WorktreeName)
 	obs.WorktreeRootPath = strings.TrimSpace(obs.WorktreeRootPath)
@@ -224,6 +262,77 @@ func normalizeProjectIdentityObservation(
 	obs.KeySource = identity.KeySource
 	obs.Key = identity.Key
 	return obs, nil
+}
+
+func scrubProjectIdentityGitRemoteCredentialsTx(
+	ctx context.Context, tx *sql.Tx,
+) error {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT project, machine, root_path, git_remote, git_remote_name,
+			worktree_name, worktree_root_path, observed_at,
+			normalized_remote, key_source, key
+		FROM project_identity_observations
+		WHERE git_remote != ''`)
+	if err != nil {
+		return fmt.Errorf("listing project identity remotes for scrub: %w", err)
+	}
+
+	type pendingScrub struct {
+		obs       export.ProjectIdentityObservation
+		rawRemote string
+	}
+	var pending []pendingScrub
+	for rows.Next() {
+		var obs export.ProjectIdentityObservation
+		var observedAt string
+		if err := rows.Scan(
+			&obs.Project,
+			&obs.Machine,
+			&obs.RootPath,
+			&obs.GitRemote,
+			&obs.GitRemoteName,
+			&obs.WorktreeName,
+			&obs.WorktreeRootPath,
+			&observedAt,
+			&obs.NormalizedRemote,
+			&obs.KeySource,
+			&obs.Key,
+		); err != nil {
+			return fmt.Errorf("scanning project identity remote for scrub: %w", err)
+		}
+		if t, err := time.Parse(time.RFC3339Nano, observedAt); err == nil {
+			obs.ObservedAt = t
+		}
+		sanitized := export.SanitizeGitRemoteForStorage(obs.GitRemote)
+		if sanitized == obs.GitRemote {
+			continue
+		}
+		pending = append(pending, pendingScrub{obs: obs, rawRemote: obs.GitRemote})
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating project identity remotes for scrub: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("closing project identity remotes scrub rows: %w", err)
+	}
+
+	for _, scrub := range pending {
+		obs := scrub.obs
+		obs = export.SanitizeStoredProjectIdentityObservation(obs)
+		if err := upsertProjectIdentityObservationTx(tx, obs); err != nil {
+			return fmt.Errorf("scrubbing project identity remote: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM project_identity_observations
+			WHERE project = ? AND machine = ? AND root_path = ?
+			  AND git_remote = ?`,
+			scrub.obs.Project, scrub.obs.Machine, scrub.obs.RootPath,
+			scrub.rawRemote,
+		); err != nil {
+			return fmt.Errorf("removing raw project identity remote: %w", err)
+		}
+	}
+	return nil
 }
 
 func (db *DB) ListProjectIdentityObservations(

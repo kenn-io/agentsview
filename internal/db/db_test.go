@@ -6555,6 +6555,42 @@ func TestCopySessionMetadataPreservesArchiveIdentityMetadata(t *testing.T) {
 		observations[0].GitRemote)
 }
 
+func TestCopySessionMetadataScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	oldPath := filepath.Join(dir, "old.db")
+	root := filepath.Join(dir, "alpha")
+
+	oldDB, err := Open(oldPath)
+	requireNoError(t, err, "open old")
+	_, err = oldDB.rawWriter().Exec(`
+		INSERT INTO project_identity_observations (
+			project, machine, root_path, git_remote, git_remote_name,
+			worktree_name, worktree_root_path, observed_at,
+			normalized_remote, key_source, key
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"alpha", "laptop", root,
+		"https://user:token@github.com/acme/alpha.git", "origin",
+		"", "", "2026-05-01T00:00:00Z",
+		"github.com/acme/alpha", "git_remote",
+		projectIdentitySHA("git_remote\n"+"github.com/acme/alpha"),
+	)
+	requireNoError(t, err, "insert raw old project identity")
+	requireNoError(t, oldDB.Close(), "close old")
+
+	fresh := testDB(t)
+	requireNoError(t, fresh.CopySessionMetadataFrom(oldPath), "copy")
+
+	observations, err := fresh.ListProjectIdentityObservations(
+		ctx, []string{"alpha"})
+	requireNoError(t, err, "ListProjectIdentityObservations")
+	require.Len(t, observations, 1)
+	assert.Equal(t, "https://github.com/acme/alpha.git",
+		observations[0].GitRemote)
+	assert.Equal(t, "github.com/acme/alpha",
+		observations[0].NormalizedRemote)
+}
+
 func TestCopySessionMetadataKeepsFreshProjectIdentityObservationOnConflict(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()

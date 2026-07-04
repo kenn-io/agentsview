@@ -745,7 +745,7 @@ func TestStoreAnalyticsUsageAndTrends(t *testing.T) {
 	assert.Equal(t, []string{"claude-test"}, sessionUsage.Models)
 }
 
-func TestLoadPricingSeedsFallbackAndOverlaysOverrides(t *testing.T) {
+func TestLoadPricingUsesDBRowsAsEffectiveTableAndOverlaysOverrides(t *testing.T) {
 	ctx := context.Background()
 	conn := openTestDuckDB(t)
 	require.NoError(t, EnsureSchema(ctx, conn))
@@ -759,11 +759,33 @@ func TestLoadPricingSeedsFallbackAndOverlaysOverrides(t *testing.T) {
 	_, err := conn.ExecContext(ctx, `
 		INSERT INTO model_pricing (
 			model_pattern, input_per_mtok, output_per_mtok,
-			cache_creation_per_mtok, cache_read_per_mtok
+			cache_creation_per_mtok, cache_read_per_mtok, updated_at
 		) VALUES
-			('claude-sonnet-4-6', 30, 150, 37.5, 3.0),
-			('_fallback_version', 999, 999, 999, 999)`)
+			('claude-sonnet-4-6', 30, 150, 37.5, 3.0, '2026-06-08T12:00:00Z'),
+			('_fallback_version', 999, 999, 999, 999, '')`)
 	require.NoError(t, err)
+
+	got, err := store.loadPricing(ctx)
+	require.NoError(t, err)
+
+	assert.NotContains(t, got, "gpt-5.5")
+	assert.Equal(t, duckRates{
+		input: 30, output: 150, cacheCreation: 37.5, cacheRead: 3.0,
+		updatedAt: ptrTime(t, "2026-06-08T12:00:00Z"),
+		source:    export.PricingRowSourceFetched,
+	}, got["claude-sonnet-4-6"])
+	assert.NotContains(t, got, "_fallback_version")
+	assert.Equal(t, duckRates{
+		input: 9, output: 10, cacheCreation: 11, cacheRead: 12,
+		source: export.PricingRowSourceCustom,
+	}, got["custom-model"])
+}
+
+func TestLoadPricingUsesFallbackWhenEffectiveTableEmpty(t *testing.T) {
+	ctx := context.Background()
+	conn := openTestDuckDB(t)
+	require.NoError(t, EnsureSchema(ctx, conn))
+	store := NewStoreFromDB(conn)
 
 	got, err := store.loadPricing(ctx)
 	require.NoError(t, err)
@@ -772,15 +794,7 @@ func TestLoadPricingSeedsFallbackAndOverlaysOverrides(t *testing.T) {
 	require.Contains(t, got, "gpt-5.5")
 	assert.Equal(t, fallback.InputPerMTok, got["gpt-5.5"].input)
 	assert.Equal(t, fallback.OutputPerMTok, got["gpt-5.5"].output)
-	assert.Equal(t, duckRates{
-		input: 30, output: 150, cacheCreation: 37.5, cacheRead: 3.0,
-		source: export.PricingRowSourceFetched,
-	}, got["claude-sonnet-4-6"])
-	assert.NotContains(t, got, "_fallback_version")
-	assert.Equal(t, duckRates{
-		input: 9, output: 10, cacheCreation: 11, cacheRead: 12,
-		source: export.PricingRowSourceCustom,
-	}, got["custom-model"])
+	assert.Equal(t, export.PricingRowSourceEmbedded, got["gpt-5.5"].source)
 }
 
 func TestLoadPricingRetainsCustomOverrideSource(t *testing.T) {
@@ -816,6 +830,14 @@ func pricingByPattern(t *testing.T, prices []pricingpkg.ModelPricing, pattern st
 	}
 	t.Fatalf("missing fallback pricing for %s", pattern)
 	return pricingpkg.ModelPricing{}
+}
+
+func ptrTime(t *testing.T, value string) *time.Time {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	require.NoError(t, err)
+	utc := parsed.UTC()
+	return &utc
 }
 
 func TestAnalyticsTopSessionsFiltersMetricEligibility(t *testing.T) {

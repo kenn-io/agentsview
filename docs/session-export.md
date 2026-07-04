@@ -194,6 +194,11 @@ removal, pricing digest canonicalization changes, project key derivation
 changes, remote normalization changes, path fallback normalization changes, and
 new closed-enum values require a bump.
 
+This v1 JSON/NDJSON contract is intended to remain backward compatible, but it
+may see some instability while the new export surface settles. Consumers should
+pin `schema_version`, ignore unknown additive fields, and treat missing
+`schema_version` as legacy output.
+
 Closed v1 enums in this surface include project `resolution` (`resolved`,
 `unknown`, `ambiguous`), session `classification` (`interactive`, `automated`),
 and `cost_source` (`computed`, `reported`, `mixed`).

@@ -273,6 +273,24 @@ func TestLoadPricingMapSharesConcurrentDBRows(t *testing.T) {
 	assert.InDelta(t, 1.0, secondByPattern["db-model"].InputPerMTok, 0.001)
 }
 
+func TestLoadPricingMapUsesDBRowsAsEffectiveTable(t *testing.T) {
+	state := &pricingProbeState{
+		rows: [][]driver.Value{{
+			"db-model", 1.0, 2.0, 3.0, 4.0, "2026-06-08",
+		}},
+	}
+	pg := newPricingProbeDB(t, state)
+	store := &Store{pg: pg}
+
+	prices, err := store.loadPricingMap(context.Background())
+	require.NoError(t, err, "loadPricingMap")
+
+	byPattern := pricingRowsByPattern(prices)
+	require.Len(t, byPattern, 1,
+		"explicit DB rows should define the effective pricing table")
+	assert.InDelta(t, 1.0, byPattern["db-model"].InputPerMTok, 0.001)
+}
+
 func TestLoadPricingMapKeepsSharedDBRowsForActiveCaller(t *testing.T) {
 	block := make(chan struct{})
 	var unblockOnce sync.Once

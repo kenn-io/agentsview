@@ -38,6 +38,35 @@ func TestProjectObservationDatabaseIDIsCreatedAndStable(t *testing.T) {
 	assert.Equal(t, "test-database-id", overridden)
 }
 
+func TestProjectObservationDatabaseIDReadOnlyExisting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	writable := testDBAtPath(t, path, "read-only database id seed")
+	require.NoError(t, writable.SetDatabaseIDForTest(
+		context.Background(), "read-only-db-id"))
+	require.NoError(t, writable.Close())
+
+	readonly, err := OpenReadOnly(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, readonly.Close()) })
+
+	got, err := readonly.GetDatabaseID(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "read-only-db-id", got)
+}
+
+func TestProjectObservationDatabaseIDMissingDoesNotCreate(t *testing.T) {
+	d := testDB(t)
+
+	_, err := d.GetDatabaseID(context.Background())
+	require.ErrorIs(t, err, ErrDatabaseIDMissing)
+
+	var count int
+	require.NoError(t, d.rawReader().QueryRow(`
+		SELECT COUNT(*) FROM archive_metadata
+		WHERE key = ?`, archiveMetadataDatabaseIDKey).Scan(&count))
+	assert.Zero(t, count)
+}
+
 func TestProjectObservationRawValuesAreAuthoritativeForExportKeys(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
@@ -57,7 +86,7 @@ func TestProjectObservationRawValuesAreAuthoritativeForExportKeys(t *testing.T) 
 	got, err := d.ListProjectIdentityObservations(ctx, []string{"app"})
 	require.NoError(t, err)
 	require.Len(t, got, 1)
-	assert.Equal(t, "git@github.com:Org/Repo.git", got[0].GitRemote)
+	assert.Equal(t, "github.com:Org/Repo.git", got[0].GitRemote)
 	assert.Equal(t, "/tmp/app", got[0].RootPath)
 
 	projects := export.BuildProjectsMap([]string{"app"}, got)
@@ -68,6 +97,57 @@ func TestProjectObservationRawValuesAreAuthoritativeForExportKeys(t *testing.T) 
 		projectIdentitySHA("git_remote\n"+"github.com/Org/Repo"),
 		projects["app"].Identity.Key,
 	)
+}
+
+func TestProjectObservationStripsGitRemoteCredentialsBeforeStorage(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			Project:       "app",
+			Machine:       "laptop",
+			RootPath:      "/tmp/app",
+			GitRemote:     "https://user:token@github.com/acme/app.git",
+			GitRemoteName: "origin",
+		},
+	))
+
+	got, err := d.ListProjectIdentityObservations(ctx, []string{"app"})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "https://github.com/acme/app.git", got[0].GitRemote)
+	assert.Equal(t, "github.com/acme/app", got[0].NormalizedRemote)
+	assert.Equal(t, export.ProjectIdentityKeySourceGitRemote, got[0].KeySource)
+}
+
+func TestProjectObservationMigrationStripsStoredGitRemoteCredentials(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	d := testDBAtPath(t, path, "credential migration seed")
+	_, err := d.rawWriter().Exec(`
+		INSERT INTO project_identity_observations (
+			project, machine, root_path, git_remote, git_remote_name,
+			worktree_name, worktree_root_path, observed_at,
+			normalized_remote, key_source, key
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"app", "laptop", "/tmp/app",
+		"https://user:token@github.com/acme/app.git", "origin",
+		"", "", "2026-07-03T12:00:00Z",
+		"github.com/acme/app", export.ProjectIdentityKeySourceGitRemote,
+		projectIdentitySHA("git_remote\n"+"github.com/acme/app"),
+	)
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+
+	reopened, err := Open(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+
+	got, err := reopened.ListProjectIdentityObservations(
+		context.Background(), []string{"app"})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "https://github.com/acme/app.git", got[0].GitRemote)
+	assert.Equal(t, "github.com/acme/app", got[0].NormalizedRemote)
 }
 
 func TestProjectObservationListFiltersLabelsAndKeepsPersistedRemoteMachineRows(t *testing.T) {

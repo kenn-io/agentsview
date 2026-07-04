@@ -1505,6 +1505,9 @@ func (db *DB) migrateColumns() error {
 			"removing stale project identity root fallbacks: %w", err,
 		)
 	}
+	if err := db.scrubProjectIdentityGitRemoteCredentialsLocked(w); err != nil {
+		return err
+	}
 
 	if err := db.ensureUsageEventsSchemaLocked(w); err != nil {
 		return err
@@ -1525,6 +1528,25 @@ func (db *DB) migrateColumns() error {
 	}
 	if err := db.markTokenCoverageRepairDoneLocked(w); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (db *DB) scrubProjectIdentityGitRemoteCredentialsLocked(
+	w *writerHandle,
+) error {
+	tx, err := w.BeginTx(context.Background(), nil)
+	if err != nil {
+		return fmt.Errorf("starting project identity remote scrub: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := scrubProjectIdentityGitRemoteCredentialsTx(
+		context.Background(), tx,
+	); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing project identity remote scrub: %w", err)
 	}
 	return nil
 }

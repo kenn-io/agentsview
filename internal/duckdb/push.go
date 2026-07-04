@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
@@ -186,6 +187,7 @@ func (s *Sync) syncProjectIdentityObservations(ctx context.Context) error {
 		_ = tx.Rollback()
 	}()
 	for _, obs := range observations {
+		obs = export.SanitizeStoredProjectIdentityObservation(obs)
 		if obs.GitRemote != "" {
 			if err := s.execMutation(ctx, tx, `
 				DELETE FROM project_identity_observations

@@ -36,6 +36,7 @@ type schemaProbeState struct {
 	mu                  sync.Mutex
 	informationQueries  int
 	execs               []string
+	queries             []string
 	execArgs            [][]driver.NamedValue
 	alterTableExecs     []string
 	currentSchema       string
@@ -139,6 +140,9 @@ func (c *schemaProbeConn) QueryContext(
 	_ context.Context, query string, args []driver.NamedValue,
 ) (driver.Rows, error) {
 	normalized := strings.ToLower(query)
+	c.state.mu.Lock()
+	c.state.queries = append(c.state.queries, query)
+	c.state.mu.Unlock()
 	for _, queryErr := range c.state.queryErrors {
 		if strings.Contains(
 			normalized,
@@ -217,6 +221,15 @@ func (c *schemaProbeConn) QueryContext(
 				"user_message_count", "is_automated",
 			},
 		}, nil
+	case strings.Contains(normalized, "from project_identity_observations") &&
+		strings.Contains(normalized, "select project"):
+		return &schemaProbeRows{
+			columns: []string{
+				"project", "machine", "root_path", "git_remote",
+				"git_remote_name", "worktree_name", "worktree_root_path",
+				"observed_at", "normalized_remote", "key_source", "key",
+			},
+		}, nil
 	case strings.Contains(normalized, "select exists") &&
 		strings.Contains(normalized, "from sync_metadata"):
 		done := true
@@ -278,6 +291,12 @@ func (s *schemaProbeState) executedSQL() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return strings.Join(s.execs, "\n")
+}
+
+func (s *schemaProbeState) queriedSQL() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return strings.Join(s.queries, "\n")
 }
 
 func (s *schemaProbeState) execArgValueSeen(value string) bool {
@@ -489,6 +508,32 @@ func TestSyncEnsureSchemaSkipsDDLWhenSchemaCompatible(t *testing.T) {
 		"compatible PG schema must not run column migrations")
 	assert.Contains(t, executed, "insert into sync_metadata",
 		"compatible PG schema must still run row-level data repairs")
+}
+
+func TestEnsureSchemaScrubsProjectIdentityGitRemoteCredentials(t *testing.T) {
+	pg, state := newSchemaProbeDB(t, nil)
+	state.existingTables = map[string]bool{
+		"model_pricing":                 true,
+		"project_identity_observations": true,
+		"cursor_usage_events":           true,
+	}
+	state.existingIndexes = map[string]bool{
+		"idx_cursor_usage_events_dedup": true,
+	}
+	state.syncMetadataKeys = map[string]bool{
+		sourceCurationBackfillMetadataKey: true,
+		tokenCoverageRepairMetadataKey:    true,
+	}
+	syncer := &Sync{pg: pg, schema: "agentsview"}
+
+	require.NoError(t, syncer.EnsureSchema(context.Background()))
+
+	queried := strings.ToLower(state.queriedSQL())
+	assert.Contains(t, queried, "project_identity_observations",
+		"schema repair must touch project identity observations")
+	assert.True(t,
+		state.execArgValueSeen(projectIdentityRemoteScrubMetadataKey),
+		"schema repair must store the scrub marker only after the scan")
 }
 
 func TestCheckSchemaCompatIgnoresPushOnlySchema(t *testing.T) {

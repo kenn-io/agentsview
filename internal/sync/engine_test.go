@@ -1018,7 +1018,7 @@ func TestProjectIdentityWriteBatchDiscoversLocalGitRemote(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, expectedRoot, observations[0].RootPath)
 	assert.Equal(t, "origin", observations[0].GitRemoteName)
-	assert.Equal(t, "git@github.com:Org/Repo.git", observations[0].GitRemote)
+	assert.Equal(t, "github.com:Org/Repo.git", observations[0].GitRemote)
 	assert.Equal(t, "github.com/Org/Repo", observations[0].NormalizedRemote)
 	assert.Equal(t, "git_remote", observations[0].KeySource)
 }

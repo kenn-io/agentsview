@@ -187,7 +187,7 @@ func (db *DB) ExportSessionSummaries(
 	}
 	opts.Filter = canonicalSessionExportFilter(opts.Filter)
 
-	databaseID, err := db.GetOrCreateDatabaseID(ctx)
+	databaseID, err := db.GetDatabaseID(ctx)
 	if err != nil {
 		return SessionExportResult{}, err
 	}

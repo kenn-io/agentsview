@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -214,7 +215,9 @@ func TestExportSessionsWrongDatabaseCursorWritesStructuredResetError(t *testing.
 	cursor := firstExportSessionsCursor(t)
 
 	otherDir := t.TempDir()
-	seedExportSessionsArchiveAt(t, filepath.Join(otherDir, "sessions.db"))
+	other := seedExportSessionsArchiveAt(t, filepath.Join(otherDir, "sessions.db"))
+	require.NoError(t, other.SetDatabaseIDForTest(
+		context.Background(), "other-export-sessions-test-db"))
 	t.Setenv("AGENTSVIEW_DATA_DIR", otherDir)
 
 	stdout, stderr, err := executeExportSessionsCommand(
@@ -319,6 +322,53 @@ func TestExportSessionsExitCode4ReservedForCursorReset(t *testing.T) {
 	assert.Empty(t, stderr)
 }
 
+func TestExportSessionsRunsWhileWriteOwnerLockHeld(t *testing.T) {
+	dataDir := testDataDir(t)
+	seedExportSessionsArchiveAt(t, filepath.Join(dataDir, "sessions.db"))
+	holdWriteOwnerLockForTest(t, dataDir)
+
+	stdout, stderr, err := executeExportSessionsCommand(
+		newRootCommand(), "export", "sessions", "--format", "json",
+	)
+	require.NoError(t, err, "read-only export should not need writer lock")
+	assert.Empty(t, stderr)
+
+	doc := decodeExportSessionsDocument(t, stdout)
+	assert.Len(t, doc.Sessions, 2)
+	assert.Equal(t, "export-sessions-test-db", doc.DatabaseID)
+}
+
+func TestExportSessionsRequiresExistingDatabaseID(t *testing.T) {
+	dataDir := testDataDir(t)
+	dbPath := filepath.Join(dataDir, "sessions.db")
+	database := dbtest.OpenTestDBAt(t, dbPath)
+	insertExportSessionsTestSession(t, database, db.Session{
+		ID:               "missing-db-id",
+		Project:          "alpha",
+		Machine:          "local",
+		Agent:            "codex",
+		StartedAt:        dbtest.Ptr("2026-06-01T10:00:00Z"),
+		EndedAt:          dbtest.Ptr("2026-06-01T10:10:00Z"),
+		MessageCount:     2,
+		UserMessageCount: 2,
+	})
+	require.NoError(t, database.Close())
+
+	stdout, stderr, err := executeExportSessionsCommand(
+		newRootCommand(), "export", "sessions",
+	)
+	require.Error(t, err, "export sessions should not initialize metadata")
+	assert.Empty(t, stdout)
+	assert.Empty(t, stderr)
+	assert.Contains(t, err.Error(), "database id")
+
+	readonly, openErr := db.OpenReadOnly(dbPath)
+	require.NoError(t, openErr)
+	t.Cleanup(func() { require.NoError(t, readonly.Close()) })
+	_, idErr := readonly.GetDatabaseID(context.Background())
+	require.ErrorIs(t, idErr, db.ErrDatabaseIDMissing)
+}
+
 func TestExportSessionsCursorConflictingFilterIsUsageError(t *testing.T) {
 	seedExportSessionsArchive(t)
 	cursor := firstExportSessionsCursor(t)
@@ -416,6 +466,8 @@ func seedExportSessionsArchive(t *testing.T) *db.DB {
 func seedExportSessionsArchiveAt(t *testing.T, path string) *db.DB {
 	t.Helper()
 	database := dbtest.OpenTestDBAt(t, path)
+	require.NoError(t, database.SetDatabaseIDForTest(
+		context.Background(), "export-sessions-test-db"))
 	insertExportSessionsTestSession(t, database, db.Session{
 		ID:               "alpha-new",
 		Project:          "alpha",

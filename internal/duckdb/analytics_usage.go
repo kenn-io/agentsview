@@ -2897,33 +2897,47 @@ type duckRates struct {
 	output        float64
 	cacheCreation float64
 	cacheRead     float64
+	updatedAt     *time.Time
 	source        export.PricingRowSource
 }
 
 func (s *Store) loadPricing(ctx context.Context) (map[string]duckRates, error) {
 	rows, err := s.queryContext(ctx, `
 		SELECT model_pattern, input_per_mtok, output_per_mtok,
-			cache_creation_per_mtok, cache_read_per_mtok
+			cache_creation_per_mtok, cache_read_per_mtok, updated_at
 		FROM model_pricing`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := duckFallbackPricingMap()
+	out := map[string]duckRates{}
+	count := 0
 	for rows.Next() {
 		var model string
 		var rates duckRates
-		if err := rows.Scan(&model, &rates.input, &rates.output, &rates.cacheCreation, &rates.cacheRead); err != nil {
+		var updatedAt string
+		if err := rows.Scan(
+			&model, &rates.input, &rates.output,
+			&rates.cacheCreation, &rates.cacheRead, &updatedAt,
+		); err != nil {
 			return nil, err
 		}
 		if strings.HasPrefix(model, "_") {
 			continue
 		}
+		if parsed, err := time.Parse(time.RFC3339Nano, updatedAt); err == nil {
+			t := parsed.UTC()
+			rates.updatedAt = &t
+		}
 		rates.source = duckPricingSource(model, rates)
 		out[model] = rates
+		count++
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	if count == 0 {
+		out = duckFallbackPricingMap()
 	}
 	for model, custom := range s.customPricing {
 		rates := duckRates{
@@ -2986,6 +3000,7 @@ func duckPricingRows(
 				OutputPerMTok:     rates.output,
 				CacheWritePerMTok: rates.cacheCreation,
 				CacheReadPerMTok:  rates.cacheRead,
+				UpdatedAt:         rates.updatedAt,
 				Source:            source,
 			},
 		})

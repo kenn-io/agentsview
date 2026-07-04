@@ -573,6 +573,11 @@ whether `--breakdown` was passed; the flag only controls terminal table output.
 report JSON, and session summary export JSON/NDJSON are separate versioned
 surfaces, so a bump in one does not imply a bump in the others.
 
+These v1 JSON report formats are intended to remain backward compatible, but
+they are still relatively new and may see some instability as downstream usage
+settles. Consumers should pin `schema_version`, ignore unknown additive fields,
+and treat missing `schema_version` as legacy output.
+
 | Change                                                                                | Requires `schema_version` bump? |
 | ------------------------------------------------------------------------------------- | ------------------------------- |
 | Additive fields                                                                       | No                              |
