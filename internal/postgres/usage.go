@@ -1239,7 +1239,9 @@ func (s *Store) GetDailyUsage(
 				}
 			}
 		}
-		projectLabels[r.project] = struct{}{}
+		if r.project != "" {
+			projectLabels[r.project] = struct{}{}
+		}
 
 		inputTok, outputTok, cacheCrTok, cacheRdTok, cost, savings :=
 			pgDailyUsageAmounts(r, rateResolver)

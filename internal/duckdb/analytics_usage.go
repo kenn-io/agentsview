@@ -3615,7 +3615,9 @@ func (s *Store) GetDailyUsage(
 	totalSavings := 0.0
 	for _, r := range rows {
 		key := usageAccumKey{date: r.date, project: r.project, agent: r.agent, model: r.model}
-		projectLabels[r.project] = true
+		if r.project != "" {
+			projectLabels[r.project] = true
+		}
 		b := accum[key]
 		if b == nil {
 			b = &duckUsageBucket{}

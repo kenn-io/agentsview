@@ -1176,6 +1176,8 @@ func TestPushSyncsCursorUsageEventsIntoPGDailyUsage(t *testing.T) {
 	assert.Equal(t, 12, result.Daily[0].CacheCreationTokens)
 	assert.Equal(t, 34, result.Daily[0].CacheReadTokens)
 	assert.InDelta(t, 0.1566, result.Daily[0].TotalCost, 1e-9)
+	assert.Empty(t, result.Projects, "cursor-only usage should not emit project identities")
+	assert.NotContains(t, result.Projects, "")
 	assert.Equal(t, 0, result.SessionCounts.Total)
 	assert.Empty(t, result.SessionCounts.ByAgent)
 	assert.Empty(t, result.SessionCounts.ByProject)

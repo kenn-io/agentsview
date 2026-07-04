@@ -1758,7 +1758,9 @@ func (db *DB) GetDailyUsage(
 				}
 			}
 		}
-		projectLabels[r.project] = struct{}{}
+		if r.project != "" {
+			projectLabels[r.project] = struct{}{}
+		}
 
 		inputTok, outputTok, cacheCrTok, cacheRdTok, cost, savings :=
 			dailyUsageAmounts(r, rateResolver)
