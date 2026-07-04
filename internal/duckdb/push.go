@@ -245,6 +245,9 @@ func (s *Sync) pushSession(
 			if err := s.replaceSessionSecretFindings(ctx, exec, sess.ID); err != nil {
 				return 0, err
 			}
+			if err := s.replaceSessionPinnedMessages(ctx, exec, sess.ID); err != nil {
+				return 0, err
+			}
 			return 0, nil
 		case duckMessagePushAppend:
 			suffix := messagesAfterDuckOrdinal(msgs, action.maxOrdinal)
@@ -267,6 +270,9 @@ func (s *Sync) pushSession(
 				return 0, err
 			}
 			if err := s.replaceSessionSecretFindings(ctx, exec, sess.ID); err != nil {
+				return 0, err
+			}
+			if err := s.replaceSessionPinnedMessages(ctx, exec, sess.ID); err != nil {
 				return 0, err
 			}
 			return len(suffix), nil
@@ -1427,6 +1433,18 @@ func (s *Sync) replaceSessionSecretFindings(
 	return s.replaceSecretFindings(ctx, exec, sessionID)
 }
 
+func (s *Sync) replaceSessionPinnedMessages(
+	ctx context.Context, exec duckMutationExecutor, sessionID string,
+) error {
+	if err := s.execMutation(ctx, exec,
+		`DELETE FROM pinned_messages WHERE session_id = ?`,
+		sessionID,
+	); err != nil {
+		return fmt.Errorf("clearing duckdb pinned_messages for %s: %w", sessionID, err)
+	}
+	return s.replacePinnedMessages(ctx, exec, sessionID)
+}
+
 func (s *Sync) replacePinnedMessages(
 	ctx context.Context, exec duckMutationExecutor, sessionID string,
 ) error {
@@ -1471,12 +1489,7 @@ func (s *Sync) replaceScopedPinnedMessages(
 	ctx context.Context, tx *sql.Tx, sessions []db.Session,
 ) error {
 	for _, sess := range sessions {
-		if err := s.execMutation(ctx, tx,
-			`DELETE FROM pinned_messages WHERE session_id = ?`, sess.ID,
-		); err != nil {
-			return fmt.Errorf("clearing duckdb pinned_messages for %s: %w", sess.ID, err)
-		}
-		if err := s.replacePinnedMessages(ctx, tx, sess.ID); err != nil {
+		if err := s.replaceSessionPinnedMessages(ctx, tx, sess.ID); err != nil {
 			return err
 		}
 	}

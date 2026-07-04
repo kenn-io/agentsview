@@ -218,6 +218,67 @@ func TestSyncIncrementalNullMirrorMessageIDFallsBackToRewrite(t *testing.T) {
 	)
 }
 
+func TestPushSessionSkipFastPathRefreshesPinnedMessages(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	fixture := seedDuckDBSyncFixture(t, local)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+
+	first, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, first.SessionsPushed)
+	msgs, err := local.GetAllMessages(ctx, fixture.alphaID)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	note := "skip fast path pin"
+	_, err = local.PinMessage(fixture.alphaID, msgs[0].ID, &note)
+	require.NoError(t, err)
+	sess, err := local.GetSession(ctx, fixture.alphaID)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	pushedMessages, err := syncer.pushSingleSession(ctx, *sess, false)
+	require.NoError(t, err)
+
+	assert.Zero(t, pushedMessages)
+	assert.Equal(t, note, duckPinnedMessageNote(
+		t, syncer.DB(), fixture.alphaID, msgs[0].ID,
+	))
+}
+
+func TestPushSessionAppendFastPathRefreshesPinnedMessages(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	fixture := seedDuckDBSyncFixture(t, local)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+
+	first, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, first.SessionsPushed)
+	msgs, err := local.GetAllMessages(ctx, fixture.alphaID)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	note := "append fast path pin"
+	_, err = local.PinMessage(fixture.alphaID, msgs[0].ID, &note)
+	require.NoError(t, err)
+	appendLocalMessage(t, local, fixture.alphaID, 3, syncMessage(
+		fixture.alphaID, 2, "assistant", "append after pin",
+		time.Now().UTC().Format(localSyncTimestampLayout),
+	))
+	sess, err := local.GetSession(ctx, fixture.alphaID)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	pushedMessages, err := syncer.pushSingleSession(ctx, *sess, false)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, pushedMessages)
+	assert.Equal(t, note, duckPinnedMessageNote(
+		t, syncer.DB(), fixture.alphaID, msgs[0].ID,
+	))
+	assertDuckDBCountWhere(t, syncer.DB(), "messages", "session_id = ?", fixture.alphaID, 3)
+}
+
 func TestSyncIncrementalToolResultEventChangeUpdatesMirror(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
@@ -654,6 +715,18 @@ func duckPinnedMessageMirrorJoinCount(
 		sessionID,
 	).Scan(&count))
 	return count
+}
+
+func duckPinnedMessageNote(
+	t *testing.T, conn *sql.DB, sessionID string, messageID int64,
+) string {
+	t.Helper()
+	var note string
+	require.NoError(t, conn.QueryRow(
+		`SELECT note FROM pinned_messages WHERE session_id = ? AND message_id = ?`,
+		sessionID, messageID,
+	).Scan(&note))
+	return note
 }
 
 type checkpointSpy struct {
