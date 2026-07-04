@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -969,6 +971,12 @@ func TestSessionExportCursorRejectsWrongDatabaseAndChangedFilters(t *testing.T) 
 	d2 := testDB(t)
 	require.NoError(t, d1.SetDatabaseIDForTest(ctx, "db-one"), "set db one")
 	require.NoError(t, d2.SetDatabaseIDForTest(ctx, "db-two"), "set db two")
+	// Two archives on the same install share the config cursor_secret; the
+	// wrong-database reset path applies to that case. Cursors from another
+	// install fail signature verification instead.
+	sharedSecret := []byte("session-export-shared-install-secret")
+	d1.SetCursorSecret(sharedSecret)
+	d2.SetCursorSecret(sharedSecret)
 	for _, d := range []*DB{d1, d2} {
 		insertExportSession(t, d, Session{
 			ID:               "cursor-reset-row",
@@ -1121,6 +1129,62 @@ func TestSessionExportCursorTamperingReturnsInvalidCursor(t *testing.T) {
 		"expected invalid cursor, got %v", err)
 	assert.False(t, errors.Is(err, ErrSessionExportCursorReset),
 		"tampered cursor must not be treated as a valid wrong-database cursor")
+}
+
+func TestSessionExportCursorRejectsForgeryWithKnownKey(t *testing.T) {
+	ctx := context.Background()
+	d := testSessionExportDB(t)
+	require.NoError(t, d.SetDatabaseIDForTest(ctx, "forge-db"), "set database id")
+	for _, row := range []struct {
+		id, ended string
+	}{
+		{"forge-a", "2026-05-01T10:00:00Z"},
+		{"forge-b", "2026-05-01T09:00:00Z"},
+	} {
+		insertExportSession(t, d, Session{
+			ID:               row.id,
+			Project:          "forge",
+			Machine:          "local",
+			Agent:            "claude",
+			StartedAt:        Ptr("2026-05-01T00:00:00Z"),
+			EndedAt:          Ptr(row.ended),
+			MessageCount:     1,
+			UserMessageCount: 1,
+		})
+	}
+	first, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "forge"},
+		Limit:  1,
+	})
+	require.NoError(t, err, "first page")
+	require.NotEmpty(t, first.NextCursor, "next cursor")
+
+	// A consumer holding a cursor must not be able to widen its scope by
+	// rewriting the payload and re-signing with a publicly known key, such
+	// as the constant this cursor was signed with before per-install
+	// secrets.
+	parts := strings.Split(first.NextCursor, ".")
+	require.Len(t, parts, 2, "cursor parts")
+	data, err := base64.RawURLEncoding.DecodeString(parts[0])
+	require.NoError(t, err, "decode cursor payload")
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(data, &payload), "unmarshal payload")
+	payload["filters"] = map[string]any{}
+	forged, err := json.Marshal(payload)
+	require.NoError(t, err, "marshal forged payload")
+	mac := hmac.New(sha256.New, []byte("agentsview-session-summary-export-v1"))
+	mac.Write(forged)
+	forgedCursor := base64.RawURLEncoding.EncodeToString(forged) + "." +
+		base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+
+	_, err = d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Cursor:          forgedCursor,
+		UseCursorFilter: true,
+		Limit:           1,
+	})
+	require.Error(t, err, "forged cursor")
+	assert.True(t, errors.Is(err, ErrInvalidCursor),
+		"expected invalid cursor, got %v", err)
 }
 
 func testSessionExportDB(t *testing.T) *DB {

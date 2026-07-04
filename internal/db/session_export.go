@@ -18,10 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 )
 
-const (
-	sessionExportOrder         = "last_activity_at DESC, id ASC"
-	sessionExportCursorHMACKey = "agentsview-session-summary-export-v1"
-)
+const sessionExportOrder = "last_activity_at DESC, id ASC"
 
 type sessionExportQuerier interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
@@ -744,7 +741,11 @@ func (db *DB) attachSessionExportWorktrees(
 
 func (db *DB) encodeSessionExportCursor(c sessionExportCursorPayload) string {
 	data, _ := json.Marshal(c)
-	mac := hmac.New(sha256.New, []byte(sessionExportCursorHMACKey))
+
+	db.cursorMu.RLock()
+	mac := hmac.New(sha256.New, db.cursorSecret)
+	db.cursorMu.RUnlock()
+
 	mac.Write(data)
 	sig := mac.Sum(nil)
 	return base64.RawURLEncoding.EncodeToString(data) + "." +
@@ -775,7 +776,10 @@ func (db *DB) decodeSessionExportCursor(
 		return sessionExportCursorPayload{},
 			fmt.Errorf("%w: invalid signature encoding: %v", ErrInvalidCursor, err)
 	}
-	mac := hmac.New(sha256.New, []byte(sessionExportCursorHMACKey))
+	db.cursorMu.RLock()
+	mac := hmac.New(sha256.New, db.cursorSecret)
+	db.cursorMu.RUnlock()
+
 	mac.Write(data)
 	if !hmac.Equal(sig, mac.Sum(nil)) {
 		return sessionExportCursorPayload{},
