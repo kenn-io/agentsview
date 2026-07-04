@@ -31,7 +31,10 @@ import (
 //     line into a large session must scale with the appended data,
 //     not the stored history (#954).
 //   - BenchmarkSyncAllColdArchive: first-sync ingest throughput for
-//     a fresh archive (the #411 bulk-write path).
+//     a fresh archive through the default per-session write path.
+//   - BenchmarkResyncBulkIngest: the same archive through the
+//     resync bulk-write pipeline (writeBatchBulk /
+//     DB.WriteSessionBatch, the #411 regression class).
 //
 // Fixture sizes scale via AGENTSVIEW_BENCH_SYNC_SESSIONS and
 // AGENTSVIEW_BENCH_SYNC_MESSAGES for larger local runs.
@@ -261,9 +264,15 @@ func BenchmarkSyncPathsIncrementalAppend(b *testing.B) {
 	}
 }
 
-// BenchmarkSyncAllColdArchive measures first-sync ingest throughput:
-// parse plus bulk write of a whole archive into a fresh database.
-func BenchmarkSyncAllColdArchive(b *testing.B) {
+// benchColdArchive is the shared cold-ingest loop: each iteration
+// syncs the same archive into a fresh database via syncOnce, then
+// verify checks the iteration's outcome with the timer stopped.
+func benchColdArchive(
+	b *testing.B,
+	syncOnce func(*Engine) SyncStats,
+	verify func(*Engine, SyncStats, int),
+) {
+	b.Helper()
 	silenceBenchLogs(b)
 	sessions := benchIntFromEnv(
 		"AGENTSVIEW_BENCH_SYNC_SESSIONS", defaultBenchSyncSessions,
@@ -274,7 +283,6 @@ func BenchmarkSyncAllColdArchive(b *testing.B) {
 	dir := b.TempDir()
 	writeBenchClaudeArchive(b, dir, sessions, perSession)
 	dbDir := b.TempDir()
-	ctx := context.Background()
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -293,15 +301,10 @@ func BenchmarkSyncAllColdArchive(b *testing.B) {
 		})
 		b.StartTimer()
 
-		stats := engine.SyncAll(ctx, nil)
+		stats := syncOnce(engine)
 
 		b.StopTimer()
-		if stats.Synced != sessions {
-			b.Fatalf(
-				"cold sync stored %d of %d sessions (failed=%d)",
-				stats.Synced, sessions, stats.Failed,
-			)
-		}
+		verify(engine, stats, sessions)
 		engine.Close()
 		if err := database.Close(); err != nil {
 			b.Fatalf("close bench db: %v", err)
@@ -320,4 +323,59 @@ func BenchmarkSyncAllColdArchive(b *testing.B) {
 		}
 		b.StartTimer()
 	}
+}
+
+// BenchmarkSyncAllColdArchive measures first-sync ingest throughput
+// through the public SyncAll path: parse plus the default
+// per-session writes a user's first sync performs.
+func BenchmarkSyncAllColdArchive(b *testing.B) {
+	ctx := context.Background()
+	benchColdArchive(b,
+		func(engine *Engine) SyncStats {
+			return engine.SyncAll(ctx, nil)
+		},
+		func(_ *Engine, stats SyncStats, sessions int) {
+			if stats.Synced != sessions {
+				b.Fatalf(
+					"cold sync stored %d of %d sessions (failed=%d)",
+					stats.Synced, sessions, stats.Failed,
+				)
+			}
+		},
+	)
+}
+
+// BenchmarkResyncBulkIngest measures the bulk-write ingest path a
+// full resync uses: syncWriteBulk routes every parsed session
+// through writeBatchBulk and DB.WriteSessionBatch — the #411
+// regression class. This is a different write path from the default
+// per-session writes BenchmarkSyncAllColdArchive covers, and it
+// self-asserts that every session really went through the batch
+// pipeline so the benchmark cannot silently measure the wrong path.
+func BenchmarkResyncBulkIngest(b *testing.B) {
+	ctx := context.Background()
+	benchColdArchive(b,
+		func(engine *Engine) SyncStats {
+			engine.syncMu.Lock()
+			defer engine.syncMu.Unlock()
+			return engine.syncAllLocked(
+				ctx, nil, time.Time{}, nil, syncWriteBulk, true,
+			)
+		},
+		func(engine *Engine, stats SyncStats, sessions int) {
+			if stats.Synced != sessions {
+				b.Fatalf(
+					"bulk ingest stored %d of %d sessions (failed=%d)",
+					stats.Synced, sessions, stats.Failed,
+				)
+			}
+			writes := engine.PhaseStats().BatchedWrites.Load()
+			if writes != int64(sessions) {
+				b.Fatalf(
+					"bulk ingest wrote %d of %d sessions via the batch pipeline",
+					writes, sessions,
+				)
+			}
+		},
+	)
 }

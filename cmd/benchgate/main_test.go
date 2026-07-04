@@ -223,7 +223,7 @@ func TestCompare(t *testing.T) {
 			wantReport: []string{"missing from candidate"},
 		},
 		{
-			name: "gated unit missing from one side is reported, not gated",
+			name: "gated unit missing from the baseline is reported, not gated",
 			old: benchSamples{
 				"BenchmarkFoo-8": {"sec/op": noisy(1e-3, 6)},
 			},
@@ -327,6 +327,29 @@ func TestCompareOutlierRunPolicy(t *testing.T) {
 		assert.Empty(t, issues)
 		assert.Empty(t, violations)
 	})
+}
+
+// TestCompareMissingCandidateUnit pins the asymmetric missing-unit
+// policy: a gated unit the baseline has but the candidate lost
+// (e.g. -benchmem dropped from the candidate run) is a config error
+// so the gate exits 2 instead of silently disabling that metric.
+func TestCompareMissingCandidateUnit(t *testing.T) {
+	old := benchSamples{
+		"BenchmarkFoo-8": {
+			"sec/op":    noisy(1e-3, 6),
+			"allocs/op": {1000},
+		},
+	}
+	next := benchSamples{
+		"BenchmarkFoo-8": {"sec/op": noisy(1e-3, 6)},
+	}
+	report, violations, issues := compare(old, next, testGates())
+	assert.Empty(t, violations)
+	require.Len(t, issues, 1)
+	assert.Contains(t, issues[0].msg,
+		"allocs/op present in baseline but missing from candidate")
+	assert.Contains(t, strings.Join(report, "\n"),
+		"allocs/op missing from candidate")
 }
 
 // TestCompareTimeGateSampleCounts pins the asymmetric sample-count

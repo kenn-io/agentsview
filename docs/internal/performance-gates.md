@@ -55,7 +55,11 @@ head and its merge base on the same runner, then compares the outputs with
   skip work only; also self-asserts nothing is re-synced or bulk-rewritten).
 - `BenchmarkSyncPathsIncrementalAppend` — absorb one appended line into a
   1,000-message session.
-- `BenchmarkSyncAllColdArchive` — first-sync ingest throughput.
+- `BenchmarkSyncAllColdArchive` — first-sync ingest throughput through the
+  default per-session write path.
+- `BenchmarkResyncBulkIngest` — the same archive through the resync bulk-write
+  pipeline (`writeBatchBulk` / `DB.WriteSessionBatch`, the #411 regression
+  class); self-asserts every session took the batch path.
 - `BenchmarkReplaceSessionMessagesStreamingMerge` — the streaming chunk-merge
   diff path (one UPDATE, not a full delete+reinsert).
 - `BenchmarkInsertMessagesBatch` — multi-row batched ingest.
@@ -89,14 +93,19 @@ are collected and reported as ungated, never enforced.
 Two failure modes are treated as loud configuration errors (exit 2) rather than
 silent gaps: a capture whose result lines fail to parse (for example test log
 output interleaved into a `Benchmark...` line — the sync benchmarks silence the
-engine's logger for exactly this reason), and a gated unit missing from one side
-only (for example a baseline captured without `-benchmem`) is reported as not
-gated instead of skipped invisibly.
+engine's logger for exactly this reason), and a gated unit present in the
+baseline but missing from the candidate (for example a candidate captured
+without `-benchmem`), which would otherwise silently disable that gate for good.
+The reverse — a gated unit missing from the baseline, which may legitimately be
+older or partial — is reported as not gated.
 
 The gate always runs with a fixed `-benchtime=Nx` iteration count (not a
 duration): two of the benchmarks grow their fixture as they iterate, so the
 baseline and candidate must run the same number of iterations to measure
-identical workloads.
+identical workloads. CI evaluates `make bench-gate-config` on the PR head and
+passes the count and benchtime into the merge-base run, so a PR that changes
+those defaults still compares identical workloads; do the same locally if you
+override them.
 
 Report identifiers are package-qualified benchmark names
 (`go.kenn.io/agentsview/internal/db.InsertMessagesBatch-18`) when the captured

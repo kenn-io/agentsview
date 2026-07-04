@@ -28,8 +28,10 @@
 // fails the gate; there is no cross-benchmark averaging. Benchmarks
 // present on only one side are reported but never fail the gate, so
 // adding or removing benchmarks in a PR does not wedge it. A gated
-// unit missing from only one side (e.g. a capture taken without
-// -benchmem) is reported as not gated rather than skipped silently.
+// unit missing from the baseline (a legitimately older or partial
+// base run) is reported as not gated; a gated unit missing from the
+// candidate (e.g. -benchmem dropped) is a configuration error, since
+// it would otherwise silently disable that gate for good.
 //
 // Lines that look like benchmark results but fail to parse (for
 // example test log output interleaved into a result line) are a
@@ -304,14 +306,24 @@ func compareUnits(
 			// The benchmark doesn't emit this unit at all.
 			continue
 		case !okOld:
+			// A baseline may legitimately lack a unit (older or
+			// partial base run): report, don't gate.
 			parts = append(parts, fmt.Sprintf(
 				"%s missing from baseline, not gated", g.unit,
 			))
 			continue
 		case !okNew:
+			// The candidate capture is under the workflow's
+			// control; losing a gated unit the baseline has (e.g.
+			// -benchmem dropped) would silently disable this gate,
+			// so it is a configuration error.
 			parts = append(parts, fmt.Sprintf(
-				"%s missing from candidate, not gated", g.unit,
+				"%s missing from candidate", g.unit,
 			))
+			is = append(is, configIssue{msg: fmt.Sprintf(
+				"%s present in baseline but missing from candidate capture (was -benchmem dropped?)",
+				g.unit,
+			)})
 			continue
 		}
 		part, v, issue := evalGate(g, oldVals, newVals)

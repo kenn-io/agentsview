@@ -74,11 +74,22 @@ jobs:
         # a partial or empty baseline and benchgate gates only what
         # exists on both sides. The warning makes the degraded run
         # visible instead of a silently green vacuous pass.
+        #
+        # The sample count and fixed iteration count are evaluated
+        # from the PR head's Makefile and passed into the base run:
+        # two benchmarks grow their fixture per iteration, so a PR
+        # that changes BENCH_GATE_COUNT/TIME must not compare against
+        # a baseline measured with the old values. The package list
+        # intentionally stays per-side, so growing the gate cannot
+        # break the base run.
         run: |
           set -euo pipefail
+          eval "$(make -s bench-gate-config)"
           base=$(git merge-base HEAD "origin/$BASE_REF")
           git worktree add /tmp/bench-base "$base"
-          if ! make -s -C /tmp/bench-base bench-gate > /tmp/bench-old.txt; then
+          if ! make -s -C /tmp/bench-base bench-gate \
+              BENCH_GATE_COUNT="$BENCH_GATE_COUNT" \
+              BENCH_GATE_TIME="$BENCH_GATE_TIME" > /tmp/bench-old.txt; then
             echo "::warning title=Bench Gate::merge-base benchmark run exited non-zero; gating against its partial output"
           fi
 
