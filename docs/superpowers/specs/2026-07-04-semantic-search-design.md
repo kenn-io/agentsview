@@ -200,6 +200,8 @@ MCP `search_content`. The session-level search surface is unchanged.
   `false`/unavailable — explicitly not the `HasFTS()` emulation pattern, since
   there is nothing to emulate with. This is a documented backend parity
   divergence; pgvector is the follow-up path.
+- MCP tools surface `ErrSemanticUnavailable` (and the taxonomy below) as tool
+  errors carrying the same remediation text as the CLI/HTTP messages.
 
 ### Errors
 
@@ -249,15 +251,33 @@ search mode. Costs one windowed query per hit, so it pairs with modest limits;
 - `get_messages` gains `around`/`before`/`after`, implemented server-side via
   the same service call (replacing post-fetch role trimming on this path)
   while keeping its `filtered` accounting and `next_from` semantics.
+  Interaction with existing fields: `around` is mutually exclusive with `from`
+  (tool error if both are set); `before`/`after` require `around` and replace
+  `limit` on that path; the existing `roles` parameter acts as the window's
+  role filter; `next_from` is the window's last ordinal + 1.
 
 ## Dependencies
 
 - `go.kenn.io/kit` bumped from v0.1.7 to **v0.2.0** (first tag shipping the
-  `vector` and `vector/sqlitevec` packages). All kit API references in this
-  spec are gated on that tag; the implementation plan's first task is the pin
-  bump plus an API-reality check. Gaps kit does not cover (mirror refresh,
-  watermark/backstop semantics) live in agentsview's mirror layer and are
-  flagged as candidate kit feedback.
+  `vector` and `vector/sqlitevec` packages). The kit APIs this spec relies on:
+
+    - `vector.Split(content, SplitOptions) []Chunk` — rune windowing + overlap
+    - `vector.EncodeFunc func(ctx, texts) ([][]float32, error)` and
+      `vector.EncodeBatched(ctx, enc, chunks, BatchOptions)`
+    - `vector.Generation{Model, Dimensions, Params}` with `Fingerprint()`
+    - `vector.Store[K, G]` (`PendingForGeneration`, `SaveVectors`/`ErrStale`,
+      `LiveGenerations`, `QueryGeneration`)
+    - `vector.Fill(ctx, store, gen, enc, FillOptions)` and
+      `vector.Search(ctx, store, query, encFor, SearchOptions) []Hit[K]`
+    - `vector.RollupByDocument` and `vector.Merge` with `MergeReciprocalRank`
+    - `vector/sqlitevec` store (vec0 tables, cosine KNN, revision stamps,
+      generation states)
+
+    The implementation plan's first task is the pin bump plus an API-reality check
+    against the shipped tag. Gaps kit does not cover (mirror refresh,
+    watermark/backstop semantics) live in agentsview's mirror layer and are
+    flagged as candidate kit feedback.
+
 - sqlite-vec arrives transitively via kit's sqlitevec backend (cgo bindings;
   agentsview already requires `CGO_ENABLED=1`).
 
