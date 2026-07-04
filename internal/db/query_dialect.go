@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -82,9 +83,9 @@ func SQLiteQueryDialect() QueryDialect {
 				", ''), " + q("created_at") + "))"
 		},
 		dateParam:              func(ph string) string { return ph },
-		activityExpr:           "COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at)",
+		activityExpr:           activityCoalesceSQLite,
 		activityParam:          func(ph string) string { return ph },
-		cursorActivityExpr:     "COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at)",
+		cursorActivityExpr:     activityCoalesceSQLite,
 		cursorParam:            func(ph string) string { return ph },
 		castCursor:             func(ph string, _ valueKind) string { return ph },
 		emptyStringIsNull:      true,
@@ -720,6 +721,23 @@ const (
 // the frontend passes the token back verbatim.
 func EncodeBranchFilterToken(project, branch string) string {
 	return project + branchFilterSep + branch
+}
+
+// ErrBranchWithoutProject flags a branch filter with no project to scope it.
+// Surfaces translate it into their own parameter wording.
+var ErrBranchWithoutProject = errors.New("branch filter requires a project")
+
+// BranchFilterToken encodes a plain (project, branch) pair into a filter
+// token, or "" (no error) if branch is empty. Errors with
+// ErrBranchWithoutProject if branch is set but project is not.
+func BranchFilterToken(project, branch string) (string, error) {
+	if branch == "" {
+		return "", nil
+	}
+	if project == "" {
+		return "", ErrBranchWithoutProject
+	}
+	return EncodeBranchFilterToken(project, branch), nil
 }
 
 // SplitBranchFilterTokens decodes a branchListSep-joined list of

@@ -104,39 +104,66 @@ func TestSplitBranchFilterTokens(t *testing.T) {
 	}
 }
 
+func TestBranchFilterToken(t *testing.T) {
+	tok, err := BranchFilterToken("proj", "")
+	require.NoError(t, err)
+	assert.Empty(t, tok, "empty branch means no filter")
+
+	_, err = BranchFilterToken("", "main")
+	assert.ErrorIs(t, err, ErrBranchWithoutProject)
+
+	tok, err = BranchFilterToken("proj", "main")
+	require.NoError(t, err)
+	assert.Equal(t, EncodeBranchFilterToken("proj", "main"), tok)
+}
+
 func TestGetBranches(t *testing.T) {
 	d := testDB(t)
 
 	insertSession(t, d, "s1", "alpha", func(s *Session) {
 		s.GitBranch = "main"
 		s.UserMessageCount = 5
+		s.EndedAt = new("2026-06-10T10:00:00Z")
+	})
+	// Older session on the same pair: MAX() keeps alpha/main at its most
+	// recent activity, not this one.
+	insertSession(t, d, "s1-old", "alpha", func(s *Session) {
+		s.GitBranch = "main"
+		s.UserMessageCount = 5
+		s.EndedAt = new("2026-06-01T10:00:00Z")
 	})
 	insertSession(t, d, "s2", "alpha", func(s *Session) {
 		s.GitBranch = "feat/x"
 		s.UserMessageCount = 5
+		s.EndedAt = new("2026-06-12T10:00:00Z")
 	})
+	// No ended_at: recency falls back to started_at.
 	insertSession(t, d, "s3", "beta", func(s *Session) {
 		s.GitBranch = "main"
 		s.UserMessageCount = 5
+		s.StartedAt = new("2026-06-11T10:00:00Z")
 	})
 	insertSession(t, d, "s4", "alpha", func(s *Session) {
 		s.GitBranch = ""
 		s.UserMessageCount = 5
+		s.EndedAt = new("2026-06-08T10:00:00Z")
 	})
+	// Same timestamp as s4: the tie breaks alphabetically by pair.
 	insertSession(t, d, "s5", "gamma", func(s *Session) {
 		s.GitBranch = "solo"
 		s.UserMessageCount = 1
+		s.EndedAt = new("2026-06-08T10:00:00Z")
 	})
 
 	all, err := d.GetBranches(context.Background(), false, false)
 	require.NoError(t, err, "GetBranches includeAll")
 	assert.Equal(t, []BranchInfo{
-		branchInfoForTest("alpha", ""),
 		branchInfoForTest("alpha", "feat/x"),
-		branchInfoForTest("alpha", "main"),
 		branchInfoForTest("beta", "main"),
+		branchInfoForTest("alpha", "main"),
+		branchInfoForTest("alpha", ""),
 		branchInfoForTest("gamma", "solo"),
-	}, all, "distinct (project, branch) pairs, ordered, empty branch included")
+	}, all, "pairs ordered by most recent activity, empty branch included")
 
 	filtered, err := d.GetBranches(context.Background(), true, false)
 	require.NoError(t, err, "GetBranches excludeOneShot")

@@ -3601,19 +3601,21 @@ func TestDuckDBBranchDimension(t *testing.T) {
 		ModelPattern: "claude-test", InputPerMTok: 3, OutputPerMTok: 15,
 	}}))
 
+	// Timestamps drive the recency ordering; d-d and d-e tie so the pair
+	// itself breaks the tie alphabetically.
 	seed := []struct {
-		id, project, branch string
-		input, output       int
+		id, project, branch, ts string
+		input, output           int
 	}{
-		{"d-a", "alpha", "main", 100, 10},
-		{"d-b", "alpha", "feature-x", 200, 20},
-		{"d-c", "beta", "main", 300, 30},
-		{"d-d", "alpha", "", 400, 40},
-		{"d-e", "alpha", "unknown", 500, 50},
+		{"d-a", "alpha", "main", "2026-02-03T12:00:00.000Z", 100, 10},
+		{"d-b", "alpha", "feature-x", "2026-02-05T12:00:00.000Z", 200, 20},
+		{"d-c", "beta", "main", "2026-02-04T12:00:00.000Z", 300, 30},
+		{"d-d", "alpha", "", "2026-02-01T12:00:00.000Z", 400, 40},
+		{"d-e", "alpha", "unknown", "2026-02-01T12:00:00.000Z", 500, 50},
 	}
 	var writes []db.SessionBatchWrite
 	for _, s := range seed {
-		sess := syncSession(s.id, s.project, s.id+" first", "2026-02-01T12:00:00.000Z", 1)
+		sess := syncSession(s.id, s.project, s.id+" first", s.ts, 1)
 		sess.GitBranch = s.branch
 		writes = append(writes, db.SessionBatchWrite{
 			Session: sess,
@@ -3650,13 +3652,13 @@ func TestDuckDBBranchDimension(t *testing.T) {
 	assert.Equal(t, []db.BranchInfo{
 		{
 			Project: "alpha",
-			Branch:  "",
-			Token:   db.EncodeBranchFilterToken("alpha", ""),
-		},
-		{
-			Project: "alpha",
 			Branch:  "feature-x",
 			Token:   db.EncodeBranchFilterToken("alpha", "feature-x"),
+		},
+		{
+			Project: "beta",
+			Branch:  "main",
+			Token:   db.EncodeBranchFilterToken("beta", "main"),
 		},
 		{
 			Project: "alpha",
@@ -3665,15 +3667,15 @@ func TestDuckDBBranchDimension(t *testing.T) {
 		},
 		{
 			Project: "alpha",
+			Branch:  "",
+			Token:   db.EncodeBranchFilterToken("alpha", ""),
+		},
+		{
+			Project: "alpha",
 			Branch:  "unknown",
 			Token:   db.EncodeBranchFilterToken("alpha", "unknown"),
 		},
-		{
-			Project: "beta",
-			Branch:  "main",
-			Token:   db.EncodeBranchFilterToken("beta", "main"),
-		},
-	}, branches)
+	}, branches, "pairs ordered by most recent activity, ties alphabetical")
 
 	filtered, err := store.GetDailyUsage(ctx, db.UsageFilter{
 		From: "2026-01-01", To: "2026-12-31",

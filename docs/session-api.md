@@ -229,7 +229,7 @@ therefore appear on both dates.
 | `--project`           | `project`           | string                            |
 | `--exclude-project`   | `exclude_project`   | string                            |
 | `--machine`           | `machine`           | string                            |
-| —                     | `git_branch`        | opaque token from `GET /api/v1/branches` |
+| `--branch`            | `git_branch`        | string; requires `--project`      |
 | `--agent`             | `agent`             | string                            |
 | `--date`              | `date`              | `YYYY-MM-DD`                      |
 | `--date-from`         | `date_from`         | `YYYY-MM-DD`                      |
@@ -573,7 +573,7 @@ default; opt back in with `--include-one-shot`,
 | `--project`           | `project`           | string                                                 |
 | `--exclude-project`   | `exclude_project`   | string                                                 |
 | `--machine`           | `machine`           | string                                                 |
-| —                     | `git_branch`        | opaque token from `GET /api/v1/branches`               |
+| `--branch`            | `git_branch`        | string; requires `--project`                           |
 | `--agent`             | `agent`             | string                                                 |
 | `--date`              | `date`              | `YYYY-MM-DD`                                           |
 | `--date-from`         | `date_from`         | `YYYY-MM-DD`                                           |
@@ -805,7 +805,7 @@ metadata contract as `agentsview activity report --json`.
 | `timezone` | IANA timezone name; default `UTC` |
 | `bucket` | Optional bucket override: `5m`, `15m`, `1h`, `1d`, or `1w` |
 | `project` | Filter by project |
-| `git_branch` | Filter by opaque branch token from `GET /api/v1/branches` |
+| `git_branch` | Opaque (project, branch) token from `GET /api/v1/branches`; the CLI `--branch` flag encodes it |
 | `agent` | Filter by agent |
 | `machine` | Filter by machine |
 | `automation` | `all`, `interactive`, or `automated`; default `all` |

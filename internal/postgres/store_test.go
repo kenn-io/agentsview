@@ -1546,3 +1546,53 @@ func TestStoreWriteSurfaceSplitByCapability(t *testing.T) {
 	})
 	assert.ErrorIs(t, err, db.ErrReadOnly)
 }
+
+func TestStoreGetBranchesRecencyOrder(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	// The ensureStoreSchema seed session (test-project, empty branch) ended
+	// 2026-03-12T10:30Z. br-3 has no ended_at so recency falls back to
+	// started_at; br-4/br-5 tie so the pair breaks the tie alphabetically.
+	_, err = store.DB().Exec(`
+		INSERT INTO sessions
+			(id, machine, project, agent, git_branch,
+			 started_at, ended_at, message_count, user_message_count)
+		VALUES
+			('br-1', 'm', 'alpha', 'claude', 'main',
+			 '2026-03-14T09:00:00Z'::timestamptz,
+			 '2026-03-14T10:00:00Z'::timestamptz, 2, 2),
+			('br-2', 'm', 'alpha', 'claude', 'feat/x',
+			 '2026-03-15T09:00:00Z'::timestamptz,
+			 '2026-03-15T10:00:00Z'::timestamptz, 2, 2),
+			('br-3', 'm', 'beta', 'claude', 'main',
+			 '2026-03-14T12:00:00Z'::timestamptz, NULL, 2, 2),
+			('br-4', 'm', 'gamma', 'claude', 'x',
+			 '2026-03-10T09:00:00Z'::timestamptz,
+			 '2026-03-10T10:00:00Z'::timestamptz, 2, 2),
+			('br-5', 'm', 'delta', 'claude', 'x',
+			 '2026-03-10T09:00:00Z'::timestamptz,
+			 '2026-03-10T10:00:00Z'::timestamptz, 2, 2)
+	`)
+	require.NoError(t, err, "inserting branch sessions")
+
+	branches, err := store.GetBranches(context.Background(), false, false)
+	require.NoError(t, err, "GetBranches")
+	want := []db.BranchInfo{
+		{Project: "alpha", Branch: "feat/x"},
+		{Project: "beta", Branch: "main"},
+		{Project: "alpha", Branch: "main"},
+		{Project: "test-project", Branch: ""},
+		{Project: "delta", Branch: "x"},
+		{Project: "gamma", Branch: "x"},
+	}
+	for i := range want {
+		want[i].Token = db.EncodeBranchFilterToken(want[i].Project, want[i].Branch)
+	}
+	assert.Equal(t, want, branches,
+		"pairs ordered by most recent activity, ties alphabetical")
+}

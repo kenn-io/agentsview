@@ -69,6 +69,8 @@ afterEach(() => {
   sessions.filters.date = "";
   sessions.filters.dateFrom = "";
   sessions.filters.dateTo = "";
+  sessions.filters.branch = "";
+  analytics.branch = "";
   yokedDates.setEnabled(false);
   analyticsPageDates.clear();
 });
@@ -276,6 +278,31 @@ describe("AnalyticsPage refresh behavior", () => {
     await flushEffects();
 
     expect(analytics.windowDays).toBe(7);
+  });
+
+  it("mirrors the sidebar branch filter into the analytics store", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(analytics, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+
+    component = mount(AnalyticsPage, { target: document.body });
+    await flushEffects();
+
+    sessions.filters.branch = "proj-amain";
+    await flushEffects();
+
+    expect(analytics.branch).toBe("proj-amain");
+
+    sessions.filters.branch = "";
+    await flushEffects();
+
+    expect(analytics.branch).toBe("");
   });
 
   it("does not refresh analytical scans from SSE updates", () => {

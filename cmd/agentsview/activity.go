@@ -27,6 +27,7 @@ type ActivityReportConfig struct {
 	Timezone string
 	Bucket   string
 	Project  string
+	Branch   string
 	Agent    string
 	Machine  string
 	JSON     bool
@@ -39,6 +40,10 @@ var activityReportNow = time.Now
 // runActivityReport syncs, resolves the range, runs the report, and prints it.
 func runActivityReport(cfg ActivityReportConfig) {
 	ctx := context.Background()
+	if _, err := branchFilterToken(cfg.Project, cfg.Branch); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
 	backend, cleanup, err := resolveArchiveQueryBackend(ctx, archiveQueryPolicy{
 		Offline:              cfg.Offline,
 		NoSync:               cfg.NoSync,
@@ -92,6 +97,11 @@ func fetchHTTPActivityReport(
 	setIfNotEmpty("project", cfg.Project)
 	setIfNotEmpty("agent", cfg.Agent)
 	setIfNotEmpty("machine", cfg.Machine)
+	gitBranch, err := branchFilterToken(cfg.Project, cfg.Branch)
+	if err != nil {
+		return activity.Report{}, err
+	}
+	setIfNotEmpty("git_branch", gitBranch)
 
 	endpoint := strings.TrimSuffix(tr.URL, "/") +
 		"/api/v1/activity/report?" + q.Encode()
@@ -165,9 +175,14 @@ func resolveActivityReport(
 		return activity.Report{}, err
 	}
 
+	gitBranch, err := branchFilterToken(cfg.Project, cfg.Branch)
+	if err != nil {
+		return activity.Report{}, err
+	}
 	f := db.AnalyticsFilter{
 		Timezone:         tz,
 		Project:          cfg.Project,
+		GitBranch:        gitBranch,
 		Agent:            cfg.Agent,
 		Machine:          cfg.Machine,
 		ExcludeOneShot:   false,

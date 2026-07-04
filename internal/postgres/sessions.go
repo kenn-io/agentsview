@@ -1156,12 +1156,12 @@ func (s *Store) GetMachines(
 }
 
 // GetBranches mirrors db.DB.GetBranches: distinct (project, branch) pairs,
-// including the empty no-branch value, scoped to root sessions with messages.
+// including the empty no-branch value, ordered by most recent session activity.
 func (s *Store) GetBranches(
 	ctx context.Context,
 	excludeOneShot, excludeAutomated bool,
 ) ([]db.BranchInfo, error) {
-	q := `SELECT DISTINCT project, git_branch FROM sessions
+	q := `SELECT project, git_branch FROM sessions
 		WHERE message_count > 0
 		  AND relationship_type NOT IN ('subagent', 'fork')
 		  AND deleted_at IS NULL`
@@ -1175,7 +1175,9 @@ func (s *Store) GetBranches(
 	if excludeAutomated {
 		q += " AND is_automated = FALSE"
 	}
-	q += " ORDER BY project, git_branch"
+	q += ` GROUP BY project, git_branch
+		ORDER BY MAX(` + pgActivityExpr + `) DESC NULLS LAST,
+			project, git_branch`
 	rows, err := s.pg.QueryContext(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("querying branches: %w", err)

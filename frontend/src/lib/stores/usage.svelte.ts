@@ -270,6 +270,7 @@ class UsageStore {
       timezone: this.timezone,
       project: sessionFilters.project || undefined,
       machine: sessionFilters.machine || undefined,
+      gitBranch: sessionFilters.branch || undefined,
       agent: sessionFilters.agent || undefined,
       termination: sessionFilters.termination || undefined,
       minUserMessages:

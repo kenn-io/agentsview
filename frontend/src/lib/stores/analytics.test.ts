@@ -249,6 +249,7 @@ function resetStore() {
   analytics.selectedHour = null;
   analytics.project = "";
   analytics.machine = "";
+  analytics.branch = "";
   analytics.agent = "";
   analytics.includeAutomated = false;
   analytics.automatedScope = "human";
@@ -679,6 +680,55 @@ describe("AnalyticsStore machine filter", () => {
     expect(mock).toHaveBeenCalled();
     const params = mock.mock.lastCall?.[0];
     expect(params?.machine).toBe("host-a,host-b");
+  });
+});
+
+describe("AnalyticsStore branch filter", () => {
+  const branchTokens = "proj-a\u001fmain\u001eproj-b\u001fdev";
+
+  it.each([
+    { name: "summary", fn: () => analyticsService.getApiV1AnalyticsSummary },
+    { name: "activity", fn: () => analyticsService.getApiV1AnalyticsActivity },
+    { name: "heatmap", fn: () => analyticsService.getApiV1AnalyticsHeatmap },
+    { name: "projects", fn: () => analyticsService.getApiV1AnalyticsProjects },
+    { name: "hourOfWeek", fn: () => analyticsService.getApiV1AnalyticsHourOfWeek },
+    { name: "sessionShape", fn: () => analyticsService.getApiV1AnalyticsSessions },
+    { name: "velocity", fn: () => analyticsService.getApiV1AnalyticsVelocity },
+    { name: "tools", fn: () => analyticsService.getApiV1AnalyticsTools },
+    { name: "skills", fn: () => analyticsService.getApiV1AnalyticsSkills },
+    { name: "topSessions", fn: () => analyticsService.getApiV1AnalyticsTopSessions },
+    { name: "signals", fn: () => analyticsService.getApiV1AnalyticsSignals },
+  ])("should include gitBranch in $name params", ({ fn }) => {
+    analytics.branch = branchTokens;
+
+    analytics.fetchAll();
+
+    const mock = vi.mocked(fn());
+    expect(mock).toHaveBeenCalled();
+    const params = mock.mock.lastCall?.[0];
+    expect(params?.gitBranch).toBe(branchTokens);
+  });
+
+  it("should include gitBranch in date drill-down params", () => {
+    analytics.branch = branchTokens;
+    analytics.selectDate("2024-01-15");
+
+    expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        from: "2024-01-15",
+        to: "2024-01-15",
+        gitBranch: branchTokens,
+      }),
+    );
+  });
+
+  it("removeBranch drops one token and keeps the rest", () => {
+    analytics.branch = branchTokens;
+
+    analytics.removeBranch("proj-a\u001fmain");
+
+    expect(analytics.branch).toBe("proj-b\u001fdev");
+    expect(analyticsService.getApiV1AnalyticsSummary).toHaveBeenCalled();
   });
 });
 
