@@ -43,6 +43,7 @@ async function getMermaidApi(): Promise<MermaidModule["default"]> {
       api.initialize({
         startOnLoad: false,
         securityLevel: "strict",
+        htmlLabels: false,
       });
       return api;
     })();

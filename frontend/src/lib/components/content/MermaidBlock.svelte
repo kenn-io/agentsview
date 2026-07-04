@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { renderMermaid, type MermaidRenderError } from "../../utils/mermaid.js";
+  import { m } from "../../i18n/index.js";
 
   interface Props {
     content: string;
@@ -47,7 +48,7 @@
   {:else if renderState === "error"}
     <div class="mermaid-fallback">
       <div class="mermaid-fallback-label">
-        Mermaid diagram failed to render.
+        {m.mermaid_render_failed()}
       </div>
       {#if error?.message}
         <div class="mermaid-fallback-error">{error.message}</div>
@@ -56,7 +57,7 @@
     </div>
   {:else}
     <div class="mermaid-pending" role="status" aria-live="polite">
-      Rendering Mermaid diagram...
+      {m.mermaid_render_pending()}
     </div>
   {/if}
 </div>

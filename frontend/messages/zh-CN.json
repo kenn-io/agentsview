@@ -1648,6 +1648,8 @@
   "activity_filter_agents_placeholder": "筛选代理",
   "activity_filter_machines_placeholder": "筛选机器",
   "activity_filter_automation_placeholder": "筛选自动化",
+  "mermaid_render_failed": "Mermaid 图表渲染失败。",
+  "mermaid_render_pending": "正在渲染 Mermaid 图表...",
   "activity_no_matching_agents": "无匹配代理",
   "activity_no_matching_machines": "无匹配机器",
   "activity_no_automation_filters": "无自动化筛选",

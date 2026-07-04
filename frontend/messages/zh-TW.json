@@ -1648,6 +1648,8 @@
   "activity_filter_agents_placeholder": "篩選代理",
   "activity_filter_machines_placeholder": "篩選機器",
   "activity_filter_automation_placeholder": "篩選自動化",
+  "mermaid_render_failed": "Mermaid 圖表轉譯失敗。",
+  "mermaid_render_pending": "正在轉譯 Mermaid 圖表...",
   "activity_no_matching_agents": "無匹配代理",
   "activity_no_matching_machines": "無匹配機器",
   "activity_no_automation_filters": "無自動化篩選",

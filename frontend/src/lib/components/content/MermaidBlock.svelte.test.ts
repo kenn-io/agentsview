@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import MermaidBlock from "./MermaidBlock.svelte";
+import { m } from "../../i18n/index.js";
 
 const renderMermaidMock = vi.hoisted(() => vi.fn());
 
@@ -37,7 +38,7 @@ describe("MermaidBlock", () => {
 
     const pending = document.querySelector(".mermaid-pending");
     expect(pending?.textContent?.trim()).toBe(
-      "Rendering Mermaid diagram...",
+      m.mermaid_render_pending(),
     );
 
     resolveRender?.({
@@ -75,7 +76,7 @@ describe("MermaidBlock", () => {
 
     expect(document.querySelector(".mermaid-fallback")).not.toBeNull();
     expect(document.body.textContent).toContain(source);
-    expect(document.body.textContent).toContain("Mermaid diagram failed to render.");
+    expect(document.body.textContent).toContain(m.mermaid_render_failed());
 
     unmount(component);
   });
