@@ -1024,6 +1024,40 @@ func TestGetDailyUsageNoPricing(t *testing.T) {
 		"ModelsUsed")
 }
 
+func TestGetDailyUsageCostsMessageReasoningTokens(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
+		ModelPattern:  "gpt-5.4",
+		InputPerMTok:  1,
+		OutputPerMTok: 2,
+	}}))
+	insertSession(t, d, "reasoning-message", "proj", func(s *Session) {
+		s.Agent = "codex"
+		s.StartedAt = Ptr("2026-05-14T10:00:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "reasoning-message",
+		Ordinal:   0,
+		Role:      "assistant",
+		Timestamp: "2026-05-14T10:30:00Z",
+		Model:     "gpt-5.4",
+		TokenUsage: json.RawMessage(
+			`{"input_tokens":1000,"output_tokens":0,"reasoning_tokens":500}`),
+	})
+
+	result, err := d.GetDailyUsage(ctx, UsageFilter{
+		From: "2026-05-14", To: "2026-05-14", Timezone: "UTC",
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Daily, 1)
+	assert.Equal(t, 1000, result.Totals.InputTokens)
+	assert.Zero(t, result.Totals.OutputTokens)
+	assert.InDelta(t, 0.002, result.Totals.TotalCost, 1e-12)
+	assert.InDelta(t, 0.002, result.Daily[0].TotalCost, 1e-12)
+}
+
 // TestGetDailyUsageTruncatedTokenJSON documents what happens when
 // a message lands in the DB with truncated token_usage. The hot
 // aggregation counter is intentionally permissive and still extracts
@@ -1085,12 +1119,25 @@ func TestParseUsageTokenCounters(t *testing.T) {
 	in, out, cacheCreate, cacheRead := parseUsageTokenCounters(
 		`{"input_tokens":100,"output_tokens":50,` +
 			`"cache_creation_input_tokens":20,` +
-			`"cache_read_input_tokens":300}`,
+			`"cache_read_input_tokens":300,` +
+			`"reasoning_tokens":75}`,
 	)
 	assert.Equal(t, 100, in)
 	assert.Equal(t, 50, out)
 	assert.Equal(t, 20, cacheCreate)
 	assert.Equal(t, 300, cacheRead)
+
+	in, out, cacheCreate, cacheRead, reasoning := parseUsageTokenCountersWithReasoning(
+		`{"input_tokens":100,"output_tokens":50,` +
+			`"cache_creation_input_tokens":20,` +
+			`"cache_read_input_tokens":300,` +
+			`"reasoning_tokens":75}`,
+	)
+	assert.Equal(t, 100, in)
+	assert.Equal(t, 50, out)
+	assert.Equal(t, 20, cacheCreate)
+	assert.Equal(t, 300, cacheRead)
+	assert.Equal(t, 75, reasoning)
 
 	in, out, cacheCreate, cacheRead = parseUsageTokenCounters(
 		`{"input_tokens":9999,"output_tokens":4242,"ca`,

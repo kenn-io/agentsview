@@ -268,6 +268,49 @@ func TestSessionSummaryExportIncludesReasoningOnlyUsageRows(t *testing.T) {
 		result.Pricing.Models["model-computed"].CostSource)
 }
 
+func TestSessionSummaryExportIncludesMessageReasoningTokens(t *testing.T) {
+	d := testSessionExportDB(t)
+	ctx := context.Background()
+
+	seedSessionExportPricing(t, d)
+	insertExportSession(t, d, Session{
+		ID:        "message-reasoning",
+		Project:   "alpha",
+		Machine:   "laptop",
+		Agent:     "codex",
+		StartedAt: Ptr("2026-05-01T10:00:00Z"),
+		EndedAt:   Ptr("2026-05-01T10:01:00Z"),
+	})
+	insertMessages(t, d, Message{
+		SessionID: "message-reasoning",
+		Ordinal:   0,
+		Role:      "assistant",
+		Timestamp: "2026-05-01T10:00:30Z",
+		Model:     "model-computed",
+		TokenUsage: json.RawMessage(
+			`{"input_tokens":10,"output_tokens":0,"reasoning_tokens":25}`),
+	})
+
+	result, err := d.ExportSessionSummaries(ctx, SessionExportOptions{
+		Filter: SessionFilter{Project: "alpha"},
+		Limit:  10,
+		Format: "json",
+	})
+	require.NoError(t, err, "ExportSessionSummaries")
+	require.Len(t, result.Rows, 1)
+
+	usage := result.Rows[0].ModelUsage
+	require.NotNil(t, usage, "message reasoning usage must contribute")
+	assert.Equal(t, []string{"model-computed"}, usage.Models)
+	assert.Equal(t, 10, usage.InputTokens)
+	assert.Zero(t, usage.OutputTokens)
+	assert.Equal(t, 25, usage.ReasoningTokens)
+	assert.True(t, usage.HasCost)
+	assert.InDelta(t, 0.0006, usage.CostUSD, 0.0000001)
+	require.Contains(t, usage.ByModel, "model-computed")
+	assert.Equal(t, 25, usage.ByModel["model-computed"].ReasoningTokens)
+}
+
 func TestSessionSummaryExportRequiresExistingDatabaseID(t *testing.T) {
 	d := testDB(t)
 	insertExportSession(t, d, Session{

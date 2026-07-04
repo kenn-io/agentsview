@@ -472,3 +472,35 @@ func TestPGSessionRowCostIncludesReasoningOnlyRows(t *testing.T) {
 	assert.Equal(t, export.CostSourceComputed,
 		block.Models["reasoning-model"].CostSource)
 }
+
+func TestPGUsageAmountsIncludeMessageReasoningTokens(t *testing.T) {
+	resolver := export.NewPricingResolver(
+		[]export.EffectivePricingRow{{
+			ModelPattern: "gpt-5.4",
+			Rates: export.ModelRates{
+				InputPerMTok:  1,
+				OutputPerMTok: 2,
+			},
+		}},
+	)
+	row := pgDailyUsageScanRow{
+		usageSource: "message",
+		model:       "gpt-5.4",
+		tokenJSON: `{"input_tokens":1000,"output_tokens":0,` +
+			`"reasoning_tokens":500}`,
+	}
+
+	inTok, outTok, _, _, cost, _ := pgDailyUsageAmounts(row, resolver)
+	assert.Equal(t, 1000, inTok)
+	assert.Zero(t, outTok)
+	assert.InDelta(t, 0.002, cost, 1e-12)
+
+	sessionCost, priced, contributes := pgSessionRowCost(pgUsageScanRow{
+		usageSource: "message",
+		model:       "gpt-5.4",
+		tokenJSON:   row.tokenJSON,
+	}, resolver)
+	assert.True(t, priced)
+	assert.True(t, contributes)
+	assert.InDelta(t, 0.002, sessionCost, 1e-12)
+}

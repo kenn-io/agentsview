@@ -2324,6 +2324,50 @@ func TestDailyUsageCostsReasoningOnlyRows(t *testing.T) {
 	assert.InDelta(t, wantCost, sessionUsage.CostUSD, 0.000001)
 }
 
+func TestDailyUsageCostsMessageReasoningTokens(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:  "gpt-5.4",
+		InputPerMTok:  1,
+		OutputPerMTok: 2,
+	}}))
+
+	msg := syncMessage(
+		"duck-message-reasoning", 0, "assistant", "message reasoning",
+		"2026-01-19T00:01:00.000Z")
+	msg.Model = "gpt-5.4"
+	msg.TokenUsage = json.RawMessage(
+		`{"input_tokens":1000,"output_tokens":0,"reasoning_tokens":500}`)
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: syncSession(
+			"duck-message-reasoning", "alpha", "message reasoning",
+			"2026-01-19T00:00:00.000Z", 1),
+		Messages:        []db.Message{msg},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+	filter := db.UsageFilter{From: "2026-01-01", To: "2026-01-31", Timezone: "UTC"}
+
+	daily, err := store.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, 1000, daily.Totals.InputTokens)
+	assert.Zero(t, daily.Totals.OutputTokens)
+	assert.InDelta(t, 0.002, daily.Totals.TotalCost, 0.000001)
+
+	sessionUsage, err := store.GetSessionUsage(ctx, "duck-message-reasoning")
+	require.NoError(t, err)
+	require.NotNil(t, sessionUsage)
+	assert.True(t, sessionUsage.HasCost)
+	assert.InDelta(t, 0.002, sessionUsage.CostUSD, 0.000001)
+}
+
 func TestDailyUsageCostsMixedOutputAndReasoningOnlyRows(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)

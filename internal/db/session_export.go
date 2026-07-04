@@ -615,7 +615,7 @@ func (db *DB) attachSessionExportUsage(
 			}
 			a.seen[key] = struct{}{}
 		}
-		inputTok, outputTok, cacheCrTok, cacheRdTok :=
+		inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok :=
 			sessionExportUsageTokens(r)
 		cost, priced, contributes := sessionRowCost(r, resolver)
 		if !contributes {
@@ -627,7 +627,7 @@ func (db *DB) attachSessionExportUsage(
 		a.outputTokens += outputTok
 		a.cacheCreationInputTokens += cacheCrTok
 		a.cacheReadInputTokens += cacheRdTok
-		a.reasoningTokens += r.reasoningTokens
+		a.reasoningTokens += reasoningTok
 		if priced {
 			a.costUSD += cost
 		} else {
@@ -643,7 +643,7 @@ func (db *DB) attachSessionExportUsage(
 		ma.outputTokens += outputTok
 		ma.cacheCreationInputTokens += cacheCrTok
 		ma.cacheReadInputTokens += cacheRdTok
-		ma.reasoningTokens += r.reasoningTokens
+		ma.reasoningTokens += reasoningTok
 		if r.costUSD.Valid {
 			ma.reported = true
 		} else {
@@ -698,17 +698,18 @@ func sessionExportUsageQuery(sessionIDs []string) (string, []any) {
 
 func sessionExportUsageTokens(
 	r usageScanRow,
-) (inputTok, outputTok, cacheCrTok, cacheRdTok int) {
+) (inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok int) {
 	if r.usageSource == "message" {
-		return clampedUsageTokenCounters(r.tokenJSON)
+		return clampedUsageTokenCountersWithReasoning(r.tokenJSON)
 	}
-	return usageEventRowTokens(
+	inputTok, outputTok, cacheCrTok, cacheRdTok = usageEventRowTokens(
 		r.usageSource,
 		r.inputTokens,
 		r.outputTokens,
 		r.cacheCreationInputTokens,
 		r.cacheReadInputTokens,
 	)
+	return inputTok, outputTok, cacheCrTok, cacheRdTok, r.reasoningTokens
 }
 
 func (db *DB) attachSessionExportWorktrees(

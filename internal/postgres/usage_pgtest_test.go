@@ -833,6 +833,55 @@ func TestPostgresUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 	assert.InDelta(t, wantCost, usage.CostUSD, 1e-9, "session cost")
 }
 
+func TestPostgresUsageCostsMessageReasoningTokens(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_usage_message_reasoning_test")
+
+	ctx := context.Background()
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO model_pricing (
+			model_pattern, input_per_mtok, output_per_mtok,
+			cache_creation_per_mtok, cache_read_per_mtok, updated_at
+		) VALUES ('gpt-5.4', 1, 2, 0, 0, 'seed')`)
+	require.NoError(t, err, "insert pricing")
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at,
+			message_count, user_message_count
+		) VALUES (
+			'pg-message-reasoning', 'test-machine', 'proj', 'codex',
+			'2026-05-14T10:00:00Z'::timestamptz, 1, 1
+		)`)
+	require.NoError(t, err, "insert session")
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp,
+			content_length, model, token_usage
+		) VALUES (
+			'pg-message-reasoning', 0, 'assistant', 'done',
+			'2026-05-14T10:30:00Z'::timestamptz, 4,
+			'gpt-5.4',
+			'{"input_tokens":1000,"output_tokens":0,"reasoning_tokens":500}'
+		)`)
+	require.NoError(t, err, "insert message")
+
+	daily, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From:     "2026-05-14",
+		To:       "2026-05-14",
+		Timezone: "UTC",
+	})
+	require.NoError(t, err, "GetDailyUsage")
+	require.Len(t, daily.Daily, 1, "daily entries")
+	assert.Equal(t, 1000, daily.Totals.InputTokens)
+	assert.Zero(t, daily.Totals.OutputTokens)
+	assert.InDelta(t, 0.002, daily.Totals.TotalCost, 1e-12)
+
+	usage, err := store.GetSessionUsage(ctx, "pg-message-reasoning")
+	require.NoError(t, err, "GetSessionUsage")
+	require.NotNil(t, usage)
+	assert.True(t, usage.HasCost)
+	assert.InDelta(t, 0.002, usage.CostUSD, 1e-12)
+}
+
 func TestStoreGetDailyUsageSkipsCursorUsageForTerminationFilter(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_usage_cursor_termination_test")
 

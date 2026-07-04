@@ -222,7 +222,7 @@ SELECT
 	0 AS output_tokens,
 	0 AS cache_creation_input_tokens,
 	0 AS cache_read_input_tokens,
-	0 AS reasoning_tokens,
+	COALESCE(NULLIF(substring(m.token_usage FROM '"reasoning_tokens"[[:space:]]*:[[:space:]]*"?(-?[0-9]+)"?'), '')::INT, 0) AS reasoning_tokens,
 	NULL::double precision AS cost_usd,
 	'' AS cost_status,
 	'' AS cost_source,
@@ -300,7 +300,7 @@ SELECT
 	0 AS output_tokens,
 	0 AS cache_creation_input_tokens,
 	0 AS cache_read_input_tokens,
-	0 AS reasoning_tokens,
+	COALESCE(NULLIF(substring(m.token_usage FROM '"reasoning_tokens"[[:space:]]*:[[:space:]]*"?(-?[0-9]+)"?'), '')::INT, 0) AS reasoning_tokens,
 	NULL::double precision AS cost_usd,
 	m.claude_message_id,
 	m.claude_request_id,
@@ -352,7 +352,7 @@ SELECT
 	0 AS output_tokens,
 	0 AS cache_creation_input_tokens,
 	0 AS cache_read_input_tokens,
-	0 AS reasoning_tokens,
+	COALESCE(NULLIF(substring(m.token_usage FROM '"reasoning_tokens"[[:space:]]*:[[:space:]]*"?(-?[0-9]+)"?'), '')::INT, 0) AS reasoning_tokens,
 	NULL::double precision AS cost_usd,
 	m.claude_message_id,
 	m.claude_request_id,
@@ -895,6 +895,7 @@ func pgFloorNegativeTokens(v int) int {
 func pgDailyUsageAmounts(
 	r pgDailyUsageScanRow, pricing *export.PricingResolver,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok int, cost, savings float64) {
+	reasoningTok := r.reasoningTokens
 	if r.usageSource == "message" {
 		usage := gjson.Parse(r.tokenJSON)
 		inputTok = pgTokenJSONCount(usage, "input_tokens")
@@ -902,6 +903,7 @@ func pgDailyUsageAmounts(
 		cacheCrTok = pgTokenJSONCount(
 			usage, "cache_creation_input_tokens")
 		cacheRdTok = pgTokenJSONCount(usage, "cache_read_input_tokens")
+		reasoningTok = pgTokenJSONCount(usage, "reasoning_tokens")
 	} else {
 		inputTok, outputTok, cacheCrTok, cacheRdTok =
 			pgUsageEventRowTokens(
@@ -917,7 +919,7 @@ func pgDailyUsageAmounts(
 		pricing.RecordReported(r.model, lookup)
 	} else {
 		cost = rates.CostForTokens(
-			inputTok, outputTok, r.reasoningTokens, cacheCrTok, cacheRdTok)
+			inputTok, outputTok, reasoningTok, cacheCrTok, cacheRdTok)
 		pricing.RecordComputed(r.model, lookup)
 	}
 	readDelta := float64(cacheRdTok) *
@@ -961,12 +963,14 @@ func pgSessionRowCost(
 	r pgUsageScanRow, pricing *export.PricingResolver,
 ) (cost float64, priced, contributes bool) {
 	var inTok, outTok, crTok, rdTok int
+	reasoningTok := r.reasoningTokens
 	if r.usageSource == "message" {
 		usage := gjson.Parse(r.tokenJSON)
 		inTok = pgTokenJSONCount(usage, "input_tokens")
 		outTok = pgTokenJSONCount(usage, "output_tokens")
 		crTok = pgTokenJSONCount(usage, "cache_creation_input_tokens")
 		rdTok = pgTokenJSONCount(usage, "cache_read_input_tokens")
+		reasoningTok = pgTokenJSONCount(usage, "reasoning_tokens")
 	} else {
 		inTok, outTok, crTok, rdTok = pgUsageEventRowTokens(
 			r.usageSource,
@@ -978,7 +982,7 @@ func pgSessionRowCost(
 		pricing.RecordReported(r.model, pricing.Lookup(r.model))
 		return r.costUSD.Float64, true, true
 	}
-	if inTok == 0 && outTok == 0 && r.reasoningTokens == 0 &&
+	if inTok == 0 && outTok == 0 && reasoningTok == 0 &&
 		crTok == 0 && rdTok == 0 {
 		return 0, true, false
 	}
@@ -988,7 +992,7 @@ func pgSessionRowCost(
 		return 0, false, true
 	}
 	cost = lookup.Rates.CostForTokens(
-		inTok, outTok, r.reasoningTokens, crTok, rdTok)
+		inTok, outTok, reasoningTok, crTok, rdTok)
 	pricing.RecordComputed(r.model, lookup)
 	return cost, true, true
 }

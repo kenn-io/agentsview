@@ -369,7 +369,8 @@ func duckActivityReportUsageQuery(inClause string) string {
 				m.source_uuid AS source_uuid,
 				'' AS usage_dedup_key,
 				0 AS input_tokens, 0 AS output_tokens,
-					0 AS cache_create, 0 AS cache_read, 0 AS reasoning_tokens,
+					0 AS cache_create, 0 AS cache_read,
+					COALESCE(TRY_CAST(json_extract_string(m.token_usage, '$.reasoning_tokens') AS BIGINT), 0) AS reasoning_tokens,
 					NULL AS cost_usd
 			FROM messages m
 			JOIN sessions s ON s.id = m.session_id
@@ -424,6 +425,7 @@ func duckActivityReportUsageQuery(inClause string) string {
 						ELSE LEAST(GREATEST(cache_read, 0), %[2]d)
 					END AS cache_read_norm,
 					CASE
+						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.reasoning_tokens') AS BIGINT), 0), 0), %[2]d)
 						WHEN source = 'session' THEN GREATEST(reasoning_tokens, 0)
 						ELSE LEAST(GREATEST(reasoning_tokens, 0), %[2]d)
 					END AS reasoning_tokens_norm,

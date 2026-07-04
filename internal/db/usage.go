@@ -346,7 +346,10 @@ SELECT
 	0 AS output_tokens,
 	0 AS cache_creation_input_tokens,
 	0 AS cache_read_input_tokens,
-	0 AS reasoning_tokens,
+	CASE
+		WHEN json_valid(m.token_usage) THEN COALESCE(CAST(json_extract(m.token_usage, '$.reasoning_tokens') AS INTEGER), 0)
+		ELSE 0
+	END AS reasoning_tokens,
 	NULL AS cost_usd,
 	'' AS cost_status,
 	'' AS cost_source,
@@ -426,7 +429,10 @@ SELECT
 	0 AS output_tokens,
 	0 AS cache_creation_input_tokens,
 	0 AS cache_read_input_tokens,
-	0 AS reasoning_tokens,
+	CASE
+		WHEN json_valid(m.token_usage) THEN COALESCE(CAST(json_extract(m.token_usage, '$.reasoning_tokens') AS INTEGER), 0)
+		ELSE 0
+	END AS reasoning_tokens,
 	NULL AS cost_usd,
 	m.claude_message_id,
 	m.claude_request_id,
@@ -478,7 +484,10 @@ SELECT
 	0 AS output_tokens,
 	0 AS cache_creation_input_tokens,
 	0 AS cache_read_input_tokens,
-	0 AS reasoning_tokens,
+	CASE
+		WHEN json_valid(m.token_usage) THEN COALESCE(CAST(json_extract(m.token_usage, '$.reasoning_tokens') AS INTEGER), 0)
+		ELSE 0
+	END AS reasoning_tokens,
 	NULL AS cost_usd,
 	m.claude_message_id,
 	m.claude_request_id,
@@ -1023,6 +1032,14 @@ func scanDailyUsageRow(rows *sql.Rows) (dailyUsageScanRow, error) {
 func parseUsageTokenCounters(
 	tokenJSON string,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok int) {
+	inputTok, outputTok, cacheCrTok, cacheRdTok, _ =
+		parseUsageTokenCountersWithReasoning(tokenJSON)
+	return
+}
+
+func parseUsageTokenCountersWithReasoning(
+	tokenJSON string,
+) (inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok int) {
 	i := skipJSONSpace(tokenJSON, 0)
 	if i >= len(tokenJSON) || tokenJSON[i] != '{' {
 		return
@@ -1067,6 +1084,8 @@ func parseUsageTokenCounters(
 					cacheCrTok = value
 				case "cache_read_input_tokens":
 					cacheRdTok = value
+				case "reasoning_tokens":
+					reasoningTok = value
 				}
 			}
 			if valueNext <= i {
@@ -1088,7 +1107,8 @@ func parseUsageTokenCounters(
 func isUsageTokenCounterKey(key string) bool {
 	switch key {
 	case "input_tokens", "output_tokens",
-		"cache_creation_input_tokens", "cache_read_input_tokens":
+		"cache_creation_input_tokens", "cache_read_input_tokens",
+		"reasoning_tokens":
 		return true
 	default:
 		return false
@@ -1319,20 +1339,33 @@ func floorNegativeTokens(v int) int {
 func clampedUsageTokenCounters(
 	tokenJSON string,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok int) {
-	inputTok, outputTok, cacheCrTok, cacheRdTok =
-		parseUsageTokenCounters(tokenJSON)
+	inputTok, outputTok, cacheCrTok, cacheRdTok, _ =
+		parseUsageTokenCountersWithReasoning(tokenJSON)
 	return ClampPlausibleTokens(int64(inputTok)),
 		ClampPlausibleTokens(int64(outputTok)),
 		ClampPlausibleTokens(int64(cacheCrTok)),
 		ClampPlausibleTokens(int64(cacheRdTok))
 }
 
+func clampedUsageTokenCountersWithReasoning(
+	tokenJSON string,
+) (inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok int) {
+	inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok =
+		parseUsageTokenCountersWithReasoning(tokenJSON)
+	return ClampPlausibleTokens(int64(inputTok)),
+		ClampPlausibleTokens(int64(outputTok)),
+		ClampPlausibleTokens(int64(cacheCrTok)),
+		ClampPlausibleTokens(int64(cacheRdTok)),
+		ClampPlausibleTokens(int64(reasoningTok))
+}
+
 func dailyUsageAmounts(
 	r dailyUsageScanRow, pricing *export.PricingResolver,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok int, cost, savings float64) {
+	reasoningTok := r.reasoningTokens
 	if r.usageSource == "message" {
-		inputTok, outputTok, cacheCrTok, cacheRdTok =
-			clampedUsageTokenCounters(r.tokenJSON)
+		inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok =
+			clampedUsageTokenCountersWithReasoning(r.tokenJSON)
 	} else {
 		inputTok, outputTok, cacheCrTok, cacheRdTok =
 			usageEventRowTokens(
@@ -1348,7 +1381,7 @@ func dailyUsageAmounts(
 		pricing.RecordReported(r.model, lookup)
 	} else {
 		cost = rates.CostForTokens(
-			inputTok, outputTok, r.reasoningTokens, cacheCrTok, cacheRdTok)
+			inputTok, outputTok, reasoningTok, cacheCrTok, cacheRdTok)
 		pricing.RecordComputed(r.model, lookup)
 	}
 
@@ -2306,9 +2339,10 @@ func sessionRowCost(
 	r usageScanRow, pricing *export.PricingResolver,
 ) (cost float64, priced, contributes bool) {
 	var inTok, outTok, crTok, rdTok int
+	reasoningTok := r.reasoningTokens
 	if r.usageSource == "message" {
-		inTok, outTok, crTok, rdTok =
-			clampedUsageTokenCounters(r.tokenJSON)
+		inTok, outTok, crTok, rdTok, reasoningTok =
+			clampedUsageTokenCountersWithReasoning(r.tokenJSON)
 	} else {
 		inTok, outTok, crTok, rdTok = usageEventRowTokens(
 			r.usageSource,
@@ -2320,7 +2354,7 @@ func sessionRowCost(
 		pricing.RecordReported(r.model, pricing.Lookup(r.model))
 		return r.costUSD.Float64, true, true
 	}
-	if inTok == 0 && outTok == 0 && r.reasoningTokens == 0 &&
+	if inTok == 0 && outTok == 0 && reasoningTok == 0 &&
 		crTok == 0 && rdTok == 0 {
 		return 0, true, false
 	}
@@ -2330,7 +2364,7 @@ func sessionRowCost(
 		return 0, false, true
 	}
 	cost = lookup.Rates.CostForTokens(
-		inTok, outTok, r.reasoningTokens, crTok, rdTok)
+		inTok, outTok, reasoningTok, crTok, rdTok)
 	pricing.RecordComputed(r.model, lookup)
 	return cost, true, true
 }
