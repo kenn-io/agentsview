@@ -147,7 +147,13 @@ func NormalizeRootPath(raw string) (normalized string, ok bool, err error) {
 		return "", false, nil
 	}
 	if looksWindowsDrivePath(raw) {
-		return normalizeWindowsDriveRootPath(raw), true, nil
+		normalized := normalizeWindowsDriveRootPath(raw)
+		if runtime.GOOS == "windows" {
+			if resolved, ok := resolveStoredRootPath(normalized); ok {
+				return resolved, true, nil
+			}
+		}
+		return normalized, true, nil
 	}
 	if looksRemotePrefixed(raw) {
 		return "", false, nil

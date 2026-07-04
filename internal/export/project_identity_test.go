@@ -163,14 +163,13 @@ func TestProjectIdentityRootPathFallbackNormalizesLocalPath(t *testing.T) {
 }
 
 func TestProjectIdentityStoredRootPathMatchesLiveSymlinkNormalization(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlink path separators in this contract are POSIX-specific")
-	}
 	base := t.TempDir()
 	realRoot := filepath.Join(base, "real")
 	linkRoot := filepath.Join(base, "link")
 	require.NoError(t, mkdirAll(realRoot))
-	require.NoError(t, symlink(realRoot, linkRoot))
+	if err := symlink(realRoot, linkRoot); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
 
 	live := BuildProjectIdentity(ProjectIdentityInput{RootPath: linkRoot})
 	stored := BuildStoredProjectIdentity(ProjectIdentityInput{RootPath: linkRoot})
