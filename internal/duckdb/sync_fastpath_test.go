@@ -215,7 +215,7 @@ func TestSyncIncrementalFastPathLifecycle(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
 	const sessionID = "duck-sync-fastpath-lifecycle"
-	writeFastPathLifecycleSession(t, local, sessionID, "in_progress", false, 0, syncNow())
+	writeFastPathLifecycleSession(t, local, sessionID, "in_progress", false, 0)
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 
 	first, err := syncer.Push(ctx, true, nil)
@@ -264,7 +264,7 @@ func TestSyncIncrementalFastPathLifecycle(t *testing.T) {
 	assert.Equal(t, 42, inputTokens)
 
 	time.Sleep(time.Millisecond)
-	writeFastPathLifecycleSession(t, local, sessionID, "complete", true, 99, syncNow())
+	writeFastPathLifecycleSession(t, local, sessionID, "complete", true, 99)
 	resultOnly, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, resultOnly.SessionsPushed)
@@ -318,6 +318,18 @@ func TestSyncCheckpointFailureDoesNotAdvanceWatermark(t *testing.T) {
 	watermark, err := local.GetSyncState(lastPushStateKey)
 	require.NoError(t, err)
 	assert.Empty(t, watermark)
+}
+
+func TestSyncCheckpointPolicySkipsRemoteQuackTargets(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	policy := &checkpointSpy{err: errors.New("checkpoint should not run")}
+	syncer.connectionKind = duckDBQuackClientConnection
+	syncer.maintenance = policy
+
+	require.NoError(t, syncer.checkpointAfterMutatingPush(ctx))
+	assert.Zero(t, policy.calls)
 }
 
 func TestDuckCheckpointDecisionRequiresFreeBlockThreshold(t *testing.T) {
@@ -380,8 +392,6 @@ func rewriteLocalMessagesPreservingContent(
 	require.NotNil(t, sess)
 	msgs, err := local.GetAllMessages(ctx, sessionID)
 	require.NoError(t, err)
-	modifiedAt := syncNow()
-	sess.LocalModifiedAt = &modifiedAt
 	sess.MessageCount = len(msgs)
 	_, err = local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
 		Session:         *sess,
@@ -439,7 +449,6 @@ func writeFastPathLifecycleSession(
 	resultStatus string,
 	includeSuffix bool,
 	usageInputTokens int,
-	modifiedAt string,
 ) {
 	t.Helper()
 	messages := []db.Message{
@@ -456,7 +465,6 @@ func writeFastPathLifecycleSession(
 		sessionID, "alpha", "lifecycle first",
 		"2026-01-21T00:00:00.000Z", len(messages),
 	)
-	sess.LocalModifiedAt = &modifiedAt
 	write := db.SessionBatchWrite{
 		Session:         sess,
 		Messages:        messages,
@@ -503,10 +511,6 @@ func lifecycleSuffixMessage(sessionID string) db.Message {
 		sessionID, 2, "assistant", "lifecycle suffix",
 		"2026-01-21T00:02:00.000Z",
 	)
-}
-
-func syncNow() string {
-	return time.Now().UTC().Format(localSyncTimestampLayout)
 }
 
 func duckMessageRowID(

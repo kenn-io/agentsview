@@ -345,10 +345,8 @@ func (s *Sync) Push(
 		)
 	}
 	if len(pushed) > 0 || len(staleIDs) > 0 {
-		if s.maintenance != nil {
-			if err := s.maintenance.checkpointAfterPush(ctx, s.duck); err != nil {
-				return result, err
-			}
+		if err := s.checkpointAfterMutatingPush(ctx); err != nil {
+			return result, err
 		}
 	}
 	if full && s.isFiltered() {
@@ -368,6 +366,15 @@ func (s *Sync) Push(
 	}
 	result.Duration = time.Since(start)
 	return result, nil
+}
+
+func (s *Sync) checkpointAfterMutatingPush(ctx context.Context) error {
+	// CHECKPOINT is local-file maintenance. Quack targets route storage work
+	// through a remote server, so running it on the client handle is wrong.
+	if s.connectionKind == duckDBQuackClientConnection || s.maintenance == nil {
+		return nil
+	}
+	return s.maintenance.checkpointAfterPush(ctx, s.duck)
 }
 
 func (s *Sync) withDuckTx(
