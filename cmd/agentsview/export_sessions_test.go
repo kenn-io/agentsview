@@ -427,6 +427,42 @@ func TestExportSessionsCursorAllowsFormatAndLimit(t *testing.T) {
 	assert.Equal(t, "alpha-old", doc.Sessions[0].ID)
 }
 
+func TestExportSessionsCursorResumesFilteredExport(t *testing.T) {
+	database := seedExportSessionsArchive(t)
+	insertExportSessionsTestSession(t, database, db.Session{
+		ID:               "beta-middle",
+		Project:          "beta",
+		Machine:          "local",
+		Agent:            "codex",
+		StartedAt:        dbtest.Ptr("2026-06-01T09:30:00Z"),
+		EndedAt:          dbtest.Ptr("2026-06-01T09:40:00Z"),
+		MessageCount:     2,
+		UserMessageCount: 2,
+	})
+	stdout, stderr, err := executeExportSessionsCommand(
+		newRootCommand(), "export", "sessions",
+		"--project", "alpha",
+		"--limit", "1",
+	)
+	require.NoError(t, err, "first filtered export page")
+	require.Empty(t, stderr)
+	first := decodeExportSessionsDocument(t, stdout)
+	require.Len(t, first.Sessions, 1)
+	assert.Equal(t, "alpha-new", first.Sessions[0].ID)
+	require.NotEmpty(t, first.Cursor.Next)
+
+	stdout, stderr, err = executeExportSessionsCommand(
+		newRootCommand(), "export", "sessions",
+		"--cursor", first.Cursor.Next,
+	)
+	require.NoError(t, err, "filtered cursor resume")
+	require.Empty(t, stderr)
+	second := decodeExportSessionsDocument(t, stdout)
+	require.Len(t, second.Sessions, 1)
+	assert.Equal(t, "alpha-old", second.Sessions[0].ID)
+	assert.Empty(t, second.Cursor.Next)
+}
+
 func TestExportSessionsJSONGolden(t *testing.T) {
 	setupExportGoldenDataDir(t)
 

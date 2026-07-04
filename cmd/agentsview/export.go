@@ -279,10 +279,11 @@ func collectExportSessionPages(
 	ctx context.Context, database *db.DB, cfg exportSessionsConfig,
 ) ([]db.SessionExportResult, error) {
 	opts := db.SessionExportOptions{
-		Filter: exportSessionsFilter(cfg),
-		Cursor: cfg.Cursor,
-		Limit:  cfg.Limit,
-		Format: string(cfg.Format),
+		Filter:          exportSessionsFilter(cfg),
+		Cursor:          cfg.Cursor,
+		UseCursorFilter: cfg.Cursor != "",
+		Limit:           cfg.Limit,
+		Format:          string(cfg.Format),
 	}
 	result, err := database.ExportSessionSummaries(ctx, opts)
 	if err != nil {

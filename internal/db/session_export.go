@@ -36,8 +36,11 @@ var (
 type SessionExportOptions struct {
 	Filter SessionFilter
 	Cursor string
-	Limit  int
-	Format string
+	// UseCursorFilter resumes with the cursor's embedded filter instead of
+	// requiring Filter to repeat it. CLI callers set this after flag validation.
+	UseCursorFilter bool
+	Limit           int
+	Format          string
 }
 
 type SessionExportResult struct {
@@ -214,7 +217,10 @@ func (db *DB) ExportSessionSummaries(
 			return SessionExportResult{}, fmt.Errorf(
 				"%w: order changed", ErrSessionExportCursorConflict)
 		}
-		if !sessionExportFiltersEqual(cursor.Filters, filters) {
+		if opts.UseCursorFilter {
+			opts.Filter = sessionExportFilterFromCursor(cursor.Filters)
+			filters = cursor.Filters
+		} else if !sessionExportFiltersEqual(cursor.Filters, filters) {
 			return SessionExportResult{}, fmt.Errorf(
 				"%w: filters changed", ErrSessionExportCursorConflict)
 		}
@@ -805,6 +811,34 @@ func sessionExportFilters(f SessionFilter) sessionExportCursorFilters {
 		SecretsRulesVersions: append([]string(nil), f.SecretsRulesVersions...),
 		Termination:          f.Termination,
 	}
+}
+
+func sessionExportFilterFromCursor(f sessionExportCursorFilters) SessionFilter {
+	return canonicalSessionExportFilter(SessionFilter{
+		Project:              f.Project,
+		ExcludeProject:       f.ExcludeProject,
+		Machine:              f.Machine,
+		GitBranch:            f.GitBranch,
+		Agent:                f.Agent,
+		Date:                 f.Date,
+		DateFrom:             f.DateFrom,
+		DateTo:               f.DateTo,
+		ActiveSince:          f.ActiveSince,
+		MinMessages:          f.MinMessages,
+		MaxMessages:          f.MaxMessages,
+		MinUserMessages:      f.MinUserMessages,
+		ExcludeOneShot:       f.ExcludeOneShot,
+		AutomatedScope:       f.AutomatedScope,
+		IncludeChildren:      f.IncludeChildren,
+		IncludeOrphans:       f.IncludeOrphans,
+		Outcome:              append([]string(nil), f.Outcome...),
+		HealthGrade:          append([]string(nil), f.HealthGrade...),
+		MinToolFailures:      cloneIntPtr(f.MinToolFailures),
+		HasSecret:            f.HasSecret,
+		Starred:              f.Starred,
+		SecretsRulesVersions: append([]string(nil), f.SecretsRulesVersions...),
+		Termination:          f.Termination,
+	})
 }
 
 func canonicalSessionExportFilter(f SessionFilter) SessionFilter {
