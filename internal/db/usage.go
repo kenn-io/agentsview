@@ -1523,7 +1523,7 @@ type UsageTotals struct {
 type DailyUsageResult struct {
 	SchemaVersion int                               `json:"schema_version,omitempty"`
 	Pricing       *export.PricingBlock              `json:"pricing,omitempty"`
-	Projects      map[string]export.ProjectMapEntry `json:"projects,omitempty"`
+	Projects      map[string]export.ProjectMapEntry `json:"projects"`
 	Daily         []DailyUsageEntry                 `json:"daily"`
 	Totals        UsageTotals                       `json:"totals"`
 	SessionCounts UsageSessionCounts                `json:"sessionCounts,omitempty"`

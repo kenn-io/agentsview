@@ -1,14 +1,27 @@
 package service
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/parsertest"
 )
+
+func TestUsageSummaryResultEmitsEmptyProjectsMap(t *testing.T) {
+	b, err := json.Marshal(UsageSummaryResult{
+		SchemaVersion: export.UsageDailySchemaVersion,
+		Projects:      map[string]export.ProjectMapEntry{},
+	})
+	require.NoError(t, err)
+
+	assert.Contains(t, string(b), `"projects":{}`)
+}
 
 func TestComputeCacheStats_SavingsPassThrough(t *testing.T) {
 	t.Parallel()

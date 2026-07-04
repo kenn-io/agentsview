@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/export"
 )
 
 func mustLoad(t *testing.T, name string) *time.Location {
@@ -51,6 +53,16 @@ func TestReportOmitsUnsetPricingMetadata(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.NotContains(t, string(b), `"pricing"`)
+}
+
+func TestReportEmitsEmptyProjectsMap(t *testing.T) {
+	b, err := json.Marshal(Report{
+		SchemaVersion: export.ActivityReportSchemaVersion,
+		Projects:      map[string]export.ProjectMapEntry{},
+	})
+	require.NoError(t, err)
+
+	assert.Contains(t, string(b), `"projects":{}`)
 }
 
 func TestAggregate_DayWindowUTC(t *testing.T) {

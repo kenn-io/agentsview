@@ -69,7 +69,7 @@ type UsageRow struct {
 type Report struct {
 	SchemaVersion      int                               `json:"schema_version,omitempty"`
 	Pricing            *export.PricingBlock              `json:"pricing,omitempty"`
-	Projects           map[string]export.ProjectMapEntry `json:"projects,omitempty"`
+	Projects           map[string]export.ProjectMapEntry `json:"projects"`
 	Timezone           string                            `json:"timezone"`
 	RangeStart         string                            `json:"range_start"`
 	RangeEnd           string                            `json:"range_end"`

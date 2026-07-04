@@ -65,7 +65,7 @@ type UnsupportedUsage struct {
 type UsageSummaryResponse struct {
 	SchemaVersion    int                               `json:"schema_version,omitempty"`
 	Pricing          *export.PricingBlock              `json:"pricing,omitempty"`
-	Projects         map[string]export.ProjectMapEntry `json:"projects,omitempty"`
+	Projects         map[string]export.ProjectMapEntry `json:"projects"`
 	From             string                            `json:"from"`
 	To               string                            `json:"to"`
 	Totals           db.UsageTotals                    `json:"totals"`

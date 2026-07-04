@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/parsertest"
 	"go.kenn.io/agentsview/internal/service"
@@ -28,6 +29,16 @@ type usageSummaryCountsSpy struct {
 	matchingSessionCount int
 	filters              []db.UsageFilter
 	result               db.DailyUsageResult
+}
+
+func TestUsageSummaryResponseEmitsEmptyProjectsMap(t *testing.T) {
+	b, err := json.Marshal(UsageSummaryResponse{
+		SchemaVersion: 1,
+		Projects:      map[string]export.ProjectMapEntry{},
+	})
+	require.NoError(t, err)
+
+	assert.Contains(t, string(b), `"projects":{}`)
 }
 
 // assertUsageQueryCalls verifies how many times the usage handler

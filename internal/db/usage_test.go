@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/parsertest"
 )
@@ -31,6 +32,17 @@ func TestDailyUsageResultOmitsUnsetPricingMetadata(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.NotContains(t, string(b), `"pricing"`)
+}
+
+func TestDailyUsageResultEmitsEmptyProjectsMap(t *testing.T) {
+	b, err := json.Marshal(DailyUsageResult{
+		SchemaVersion: export.UsageDailySchemaVersion,
+		Projects:      map[string]export.ProjectMapEntry{},
+		Daily:         []DailyUsageEntry{},
+	})
+	require.NoError(t, err)
+
+	assert.Contains(t, string(b), `"projects":{}`)
 }
 
 func TestUsageDailyEmptyProjectsMapExcludesUnrelatedObservations(t *testing.T) {
