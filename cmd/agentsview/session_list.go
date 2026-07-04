@@ -19,6 +19,7 @@ import (
 func newSessionListCommand() *cobra.Command {
 	var (
 		project, excludeProject, machine, agent string
+		branch                                  string
 		date, dateFrom, dateTo, activeSince     string
 		minMessages, maxMessages                int
 		minUserMessages                         int
@@ -39,6 +40,10 @@ func newSessionListCommand() *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			gitBranch, err := branchFilterToken(project, branch)
+			if err != nil {
+				return err
+			}
 			svc, cleanup, err := resolveService(cmd)
 			if err != nil {
 				return err
@@ -49,6 +54,7 @@ func newSessionListCommand() *cobra.Command {
 				Project:          project,
 				ExcludeProject:   excludeProject,
 				Machine:          machine,
+				GitBranch:        gitBranch,
 				Agent:            agent,
 				Date:             date,
 				DateFrom:         dateFrom,
@@ -123,6 +129,8 @@ func newSessionListCommand() *cobra.Command {
 		"Exclude sessions from the given project")
 	flags.StringVar(&machine, "machine", "",
 		"Filter by machine name")
+	flags.StringVar(&branch, "branch", "",
+		"Filter by git branch name (requires --project)")
 	flags.StringVar(&agent, "agent", "",
 		"Filter by agent (claude, codex, cursor, ...)")
 	flags.StringVar(&date, "date", "",

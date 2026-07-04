@@ -21,7 +21,8 @@
     onToggleGroupByAgent?: () => void;
     onToggleGroupByProject?: () => void;
     onClearGroupMode?: () => void;
-    extraActive?: boolean;
+    /** Page-local filters outside this dropdown: a count, or a boolean for one. */
+    extraActive?: boolean | number;
     onClearExtra?: () => void;
     extraSections?: Snippet;
   }
@@ -46,11 +47,19 @@
     $state(undefined);
   let agentSearch = $state("");
   let machineSearch = $state("");
+  let branchSearch = $state("");
 
+  // Each section floats selected entries to the top so a reopened dropdown
+  // shows the active selection without scrolling; the sort is stable, so
+  // ties keep each section's own ordering (count for agents, alphabetical
+  // for machines, server recency for branches).
   const sortedAgents = $derived.by(() => {
-    const agents = [...sessions.agents].sort(
-      (a, b) => b.session_count - a.session_count,
-    );
+    const agents = [...sessions.agents].sort((a, b) => {
+      const aSel = sessions.isAgentSelected(a.name);
+      const bSel = sessions.isAgentSelected(b.name);
+      if (aSel !== bSel) return aSel ? -1 : 1;
+      return b.session_count - a.session_count;
+    });
     if (!agentSearch) return agents;
     const q = agentSearch.toLowerCase();
     return agents.filter((a) =>
@@ -59,26 +68,55 @@
   });
 
   const sortedMachines = $derived.by(() => {
-    const machines = [...sessions.machines].sort();
+    const machines = [...sessions.machines].sort((a, b) => {
+      const aSel = sessions.isMachineSelected(a);
+      const bSel = sessions.isMachineSelected(b);
+      if (aSel !== bSel) return aSel ? -1 : 1;
+      return a < b ? -1 : a > b ? 1 : 0;
+    });
     if (!machineSearch) return machines;
     const q = machineSearch.toLowerCase();
     return machines.filter((m) => m.toLowerCase().includes(q));
+  });
+
+  const selectedBranchSet = $derived(new Set(sessions.selectedBranches));
+
+  const visibleBranches = $derived.by(() => {
+    const branches = [...sessions.branches].sort((a, b) => {
+      const aSel = selectedBranchSet.has(a.token);
+      const bSel = selectedBranchSet.has(b.token);
+      return aSel === bSel ? 0 : aSel ? -1 : 1;
+    });
+    if (!branchSearch) return branches;
+    const q = branchSearch.toLowerCase();
+    return branches.filter(
+      (b) =>
+        b.branch.toLowerCase().includes(q) ||
+        b.project.toLowerCase().includes(q),
+    );
   });
 
   $effect(() => {
     if (open) {
       sessions.loadAgents();
       sessions.loadMachines();
+      sessions.loadBranches();
       agentSearch = "";
       machineSearch = "";
+      branchSearch = "";
     }
   });
 
-  let hasFilters = $derived(
-    sessions.hasActiveFilters ||
-      (showStarred && starred.filterOnly) ||
-      extraActive,
+  const totalFilterCount = $derived(
+    sessions.activeFilterCount +
+      (showStarred && starred.filterOnly ? 1 : 0) +
+      (typeof extraActive === "number"
+        ? extraActive
+        : extraActive
+          ? 1
+          : 0),
   );
+  let hasFilters = $derived(totalFilterCount > 0);
   let isRecentlyActiveOn = $derived(
     sessions.filters.recentlyActive,
   );
@@ -145,7 +183,9 @@
   aria-expanded={open}
 >
   <FunnelIcon size="14" strokeWidth="2" aria-hidden="true" />
-  {#if hasFilters || (showDisplay && groupMode !== "none")}
+  {#if totalFilterCount > 0}
+    <span class="filter-badge">{totalFilterCount}</span>
+  {:else if showDisplay && groupMode !== "none"}
     <span class="filter-indicator"></span>
   {/if}
 </button>
@@ -377,6 +417,50 @@
         </div>
       </div>
     {/if}
+    {#if sessions.branches.length > 0}
+      <div class="filter-section">
+        <div class="filter-section-label">{m.sidebar_filters_branch()}</div>
+        {#if sessions.branches.length > 5}
+          <input
+            class="agent-search"
+            type="text"
+            placeholder={m.sidebar_filters_search_branches()}
+            bind:value={branchSearch}
+          />
+        {/if}
+        <div class="agent-select-list">
+          {#each visibleBranches as branch (branch.token)}
+            {@const selected = selectedBranchSet.has(branch.token)}
+            <button
+              class="agent-select-row"
+              class:selected
+              style:--agent-color={"var(--accent-blue)"}
+              style:--agent-foreground={"var(--accent-blue-foreground)"}
+              onclick={() => sessions.toggleBranchFilter(branch.token)}
+            >
+              <span
+                class="agent-check"
+                class:on={selected}
+              >
+                {#if selected}
+                  <CheckIcon size="8" strokeWidth="2.4" aria-hidden="true" />
+                {/if}
+              </span>
+              <span class="agent-select-name">
+                {branch.branch || m.shared_no_branch()}
+              </span>
+              <span class="agent-select-count">
+                {branch.project}
+              </span>
+            </button>
+          {:else}
+            <span class="agent-select-empty">
+              {branchSearch ? m.sidebar_filters_no_match() : m.sidebar_filters_no_branches()}
+            </span>
+          {/each}
+        </div>
+      </div>
+    {/if}
     <div class="filter-section">
       <div class="filter-section-label">{m.sidebar_filters_min_prompts()}</div>
       <div class="pill-buttons">
@@ -432,6 +516,24 @@
     height: 6px;
     border-radius: 50%;
     background: var(--accent-green);
+  }
+
+  .filter-badge {
+    position: absolute;
+    top: 0px;
+    right: 0px;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: var(--accent-amber);
+    color: var(--accent-amber-foreground);
+    font-size: 7px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    pointer-events: none;
   }
 
   .filter-dropdown {

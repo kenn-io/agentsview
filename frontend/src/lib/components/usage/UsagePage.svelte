@@ -172,7 +172,7 @@
     "model", "exclude_model",
   ]);
   const SESSION_FILTER_KEYS = new Set([
-    "project", "machine", "agent",
+    "project", "machine", "git_branch", "agent",
     "termination",
     "active_since", "exclude_project",
     "min_messages", "max_messages", "min_user_messages",

@@ -11,6 +11,10 @@
   } from "../../icons.js";
   import { agentColor, agentLabel } from "../../utils/agents.js";
   import { m } from "../../i18n/index.js";
+  import {
+    branchTokenLabel,
+    BRANCH_LIST_SEP,
+  } from "../../branchFilters.js";
 
   const selectedAgents = $derived(
     analytics.agent
@@ -25,6 +29,14 @@
   const selectedMachines = $derived(
     analytics.machine
       ? analytics.machine.split(",")
+      : [],
+  );
+  const selectedBranches = $derived(
+    analytics.branch
+      ? analytics.branch.split(BRANCH_LIST_SEP).map((token) => ({
+          token,
+          label: branchTokenLabel(token, m.shared_no_branch()),
+        }))
       : [],
   );
 
@@ -83,6 +95,7 @@
     (analytics.selectedDate !== null ? 1 : 0) +
     (analytics.project !== "" ? 1 : 0) +
     selectedMachines.length +
+    selectedBranches.length +
     selectedAgents.length +
     selectedModels.length +
     selectedStatuses.length +
@@ -140,6 +153,19 @@
           <MonitorIcon size="10" strokeWidth="1.8" aria-hidden="true" />
         </span>
         {machine}
+        <span class="chip-x">
+          <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
+        </span>
+      </button>
+    {/each}
+
+    {#each selectedBranches as branch (branch.token)}
+      <button
+        class="filter-chip"
+        onclick={() => analytics.removeBranch(branch.token)}
+        title={m.shared_active_filters_remove_branch({ branch: branch.label })}
+      >
+        {branch.label}
         <span class="chip-x">
           <XIcon size="11" strokeWidth="2.4" aria-hidden="true" />
         </span>

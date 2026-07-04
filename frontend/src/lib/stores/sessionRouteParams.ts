@@ -6,6 +6,7 @@ export const SESSION_ANALYTICS_WINDOW_PARAM = "window_days";
 export const SESSION_FILTER_KEYS: ReadonlySet<string> = new Set([
   "project",
   "machine",
+  "git_branch",
   "agent",
   "termination",
   "date",
