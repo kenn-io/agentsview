@@ -88,11 +88,14 @@ type GenerationInfo struct {
 // vectorDSN builds the sqlite3 DSN for vectors.db. The rw path mirrors
 // internal/db.Open's pragmas (WAL, busy timeout, NORMAL synchronous); the
 // ro path opens with mode=ro and no immutable hint, since vectors.db can be
-// concurrently rewritten by another agentsview process.
+// concurrently rewritten by another agentsview process, and carries its own
+// busy timeout so a reader waits out a concurrent writer's lock instead of
+// failing immediately with SQLITE_BUSY.
 func vectorDSN(path string, readOnly bool) string {
 	params := url.Values{}
 	if readOnly {
 		params.Set("mode", "ro")
+		params.Set("_busy_timeout", "5000")
 	} else {
 		params.Set("_journal_mode", "WAL")
 		params.Set("_busy_timeout", "5000")
