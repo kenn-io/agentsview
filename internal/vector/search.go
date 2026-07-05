@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	kitvec "go.kenn.io/kit/vector"
 )
@@ -167,34 +166,37 @@ func (ix *Index) hydrateHits(ctx context.Context, hits []kitvec.Hit[string]) ([]
 }
 
 // lookupMirrorDocs reads (session_id, ordinal, content) for each of docKeys
-// from vector_messages in a single query, keyed by doc_key. A key with no
-// matching row is simply absent from the result.
+// from vector_messages, keyed by doc_key, in maxSQLVars-sized chunks: a deep
+// semantic overfetch (large limit * over-fetch factor) can carry thousands
+// of doc keys, well past what a single IN (...) clause can bind. A key with
+// no matching row is simply absent from the result.
 func (ix *Index) lookupMirrorDocs(ctx context.Context, docKeys []string) (map[string]mirrorDoc, error) {
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(docKeys)), ",")
-	args := make([]any, len(docKeys))
-	for i, k := range docKeys {
-		args[i] = k
-	}
-
-	rows, err := ix.db.QueryContext(ctx, `
-SELECT doc_key, session_id, ordinal, content FROM vector_messages
- WHERE doc_key IN (`+placeholders+`)`, args...)
-	if err != nil {
-		return nil, fmt.Errorf("look up search hit documents: %w", err)
-	}
-	defer rows.Close()
-
 	docs := make(map[string]mirrorDoc, len(docKeys))
-	for rows.Next() {
-		var key string
-		var doc mirrorDoc
-		if err := rows.Scan(&key, &doc.sessionID, &doc.ordinal, &doc.content); err != nil {
-			return nil, fmt.Errorf("scan search hit document: %w", err)
+	err := chunkKeys(docKeys, func(chunk []string) error {
+		placeholders, args := inPlaceholders(chunk)
+		rows, err := ix.db.QueryContext(ctx, `
+SELECT doc_key, session_id, ordinal, content FROM vector_messages
+ WHERE doc_key IN `+placeholders, args...)
+		if err != nil {
+			return fmt.Errorf("look up search hit documents: %w", err)
 		}
-		docs[key] = doc
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("look up search hit documents: %w", err)
+		for rows.Next() {
+			var key string
+			var doc mirrorDoc
+			if err := rows.Scan(&key, &doc.sessionID, &doc.ordinal, &doc.content); err != nil {
+				rows.Close()
+				return fmt.Errorf("scan search hit document: %w", err)
+			}
+			docs[key] = doc
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("look up search hit documents: %w", err)
+		}
+		return rows.Close()
+	})
+	if err != nil {
+		return nil, err
 	}
 	return docs, nil
 }

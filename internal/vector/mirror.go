@@ -17,6 +17,35 @@ import (
 // next incremental (full=false) scan to newer sessions.
 const refreshWatermarkKey = "refresh_watermark"
 
+// maxSQLVars caps bind variables per IN (...) clause to stay within
+// SQLite's default SQLITE_MAX_VARIABLE_NUMBER (999), mirroring
+// internal/db's constant of the same purpose: a pathological refresh (a
+// large eviction batch) or a deep semantic overfetch can otherwise push a
+// single-shot query over SQLite's limit.
+const maxSQLVars = 500
+
+// chunkKeys invokes fn once per maxSQLVars-sized slice of keys, for callers
+// binding one key per IN (...) placeholder.
+func chunkKeys(keys []string, fn func(chunk []string) error) error {
+	for start := 0; start < len(keys); start += maxSQLVars {
+		end := min(start+maxSQLVars, len(keys))
+		if err := fn(keys[start:end]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// inPlaceholders returns a "(?,?,...)" string and []any args for a slice of
+// string keys, for use inside an IN (...) clause.
+func inPlaceholders(keys []string) (string, []any) {
+	args := make([]any, len(keys))
+	for i, k := range keys {
+		args[i] = k
+	}
+	return "(" + strings.TrimSuffix(strings.Repeat("?,", len(keys)), ",") + ")", args
+}
+
 // MessageSource is the slice of the archive the mirror needs (implemented
 // by *db.DB).
 type MessageSource interface {
@@ -339,32 +368,35 @@ func (ix *Index) finalizeEvictions(ctx context.Context, evicted map[string]struc
 
 // currentOrdinals returns the current ordinal of each of keys that is still
 // present in vector_messages; a key absent from the result was somehow
-// already removed from the mirror.
+// already removed from the mirror. keys is queried in maxSQLVars-sized
+// chunks: a large eviction batch in a single Refresh scan can otherwise
+// exceed SQLite's bind-variable limit.
 func (ix *Index) currentOrdinals(ctx context.Context, keys []string) (map[string]int, error) {
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(keys)), ",")
-	args := make([]any, len(keys))
-	for i, k := range keys {
-		args[i] = k
-	}
-
-	rows, err := ix.db.QueryContext(ctx,
-		`SELECT doc_key, ordinal FROM vector_messages WHERE doc_key IN (`+placeholders+`)`, args...)
-	if err != nil {
-		return nil, fmt.Errorf("checking evicted doc_key ordinals: %w", err)
-	}
-	defer rows.Close()
-
 	ordinals := make(map[string]int, len(keys))
-	for rows.Next() {
-		var k string
-		var ordinal int
-		if err := rows.Scan(&k, &ordinal); err != nil {
-			return nil, fmt.Errorf("scanning evicted doc_key ordinal: %w", err)
+	err := chunkKeys(keys, func(chunk []string) error {
+		placeholders, args := inPlaceholders(chunk)
+		rows, err := ix.db.QueryContext(ctx,
+			`SELECT doc_key, ordinal FROM vector_messages WHERE doc_key IN `+placeholders, args...)
+		if err != nil {
+			return fmt.Errorf("checking evicted doc_key ordinals: %w", err)
 		}
-		ordinals[k] = ordinal
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("checking evicted doc_key ordinals: %w", err)
+		for rows.Next() {
+			var k string
+			var ordinal int
+			if err := rows.Scan(&k, &ordinal); err != nil {
+				rows.Close()
+				return fmt.Errorf("scanning evicted doc_key ordinal: %w", err)
+			}
+			ordinals[k] = ordinal
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("checking evicted doc_key ordinals: %w", err)
+		}
+		return rows.Close()
+	})
+	if err != nil {
+		return nil, err
 	}
 	return ordinals, nil
 }

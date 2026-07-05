@@ -84,17 +84,20 @@ rejected.
 ```bash
 agentsview embeddings build            # incremental: refresh + fill whatever's missing
 agentsview embeddings build --yes      # skip confirmation prompts
-agentsview embeddings build --full-rebuild --yes  # new generation, re-embeds every message
-agentsview embeddings build --backstop # force a full mirror reconciliation scan, no re-embed
+agentsview embeddings build --full-rebuild --yes  # re-embeds every message
+agentsview embeddings build --backstop # force a full mirror reconciliation scan
 ```
 
 `embeddings build` mirrors the embeddable universe (every non-system
 user/assistant message) into `vectors.db`, then fills whatever the active
-generation is missing. `--full-rebuild` cuts a new **generation** — useful after
-changing `model`, `dimension`, or `max_input_chars` — and prompts for
-confirmation with a live count of embeddable messages unless `--yes` is passed.
-Progress prints every ~2 seconds while a build runs, and a summary line reports
-documents embedded, chunks, skipped, and stale counts on completion.
+generation is missing. `--full-rebuild` re-embeds every message: if the target
+fingerprint (derived from `model`, `dimension`, and `max_input_chars`) differs
+from the active generation, it cuts a new **generation**; if the fingerprint is
+unchanged, it instead resets and refills the active generation in place rather
+than cutting a new one. It prompts for confirmation with a live count of
+embeddable messages unless `--yes` is passed. Progress prints every ~2 seconds
+while a build runs, and a summary line reports documents embedded, chunks,
+skipped, and stale counts on completion.
 
 When a writable local daemon is running, `build`/`activate`/`retire` proxy to it
 over HTTP so the daemon remains the sole writer of `vectors.db`; without a

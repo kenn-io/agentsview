@@ -145,6 +145,50 @@ func TestScanEmbeddableMessagesSinceIncludesNullEndedAtSessions(t *testing.T) {
 		"a session that genuinely ended before since must still be excluded")
 }
 
+// TestScanEmbeddableMessagesSinceIncludesEmptyStringEndedAtSessions asserts
+// that a session whose ended_at is the legacy empty-string sentinel (not
+// NULL, but never populated by an older parser run) behaves the same as a
+// NULL ended_at in an incremental scan: it must not be excluded once any
+// refresh watermark exists, and it must never become the reported maxEnded
+// watermark, since "" is not a valid timestamp to persist.
+func TestScanEmbeddableMessagesSinceIncludesEmptyStringEndedAtSessions(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "legacy-sess", "proj", func(s *Session) {
+		s.EndedAt = Ptr("")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "legacy-sess", Ordinal: 0, Role: "user",
+		Content: "legacy content", ContentLength: len("legacy content"),
+		Timestamp: tsZero,
+	})
+
+	insertSession(t, d, "old-sess", "proj", func(s *Session) {
+		s.EndedAt = Ptr(tsZero)
+	})
+	insertMessages(t, d, Message{
+		SessionID: "old-sess", Ordinal: 0, Role: "user",
+		Content: "old content", ContentLength: len("old content"),
+		Timestamp: tsZero,
+	})
+
+	var got []string
+	maxEnded, err := d.ScanEmbeddableMessages(context.Background(), tsHour1,
+		func(m EmbeddableMessage) error {
+			got = append(got, m.SessionID)
+			return nil
+		})
+	require.NoError(t, err)
+
+	assert.Contains(t, got, "legacy-sess",
+		"a legacy empty-string ended_at session must still be visible to "+
+			"an incremental scan")
+	assert.NotContains(t, got, "old-sess",
+		"a session that genuinely ended before since must still be excluded")
+	assert.Empty(t, maxEnded,
+		"an empty-string ended_at must never become the refresh watermark")
+}
+
 // TestScanEmbeddableMessagesEmptyReturnsEmptyWatermark asserts that scanning
 // an archive with no embeddable messages returns an empty maxEnded and never
 // invokes fn.

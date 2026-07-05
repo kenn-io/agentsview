@@ -1,5 +1,10 @@
 # Semantic Search Implementation Plan
 
+> **Archival note:** this plan is a historical execution checklist, retained for
+> provenance. The feature it describes has been implemented; where this plan's
+> task-level detail differs from what shipped, the code and
+> `docs/semantic-search.md` are authoritative.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task-by-task. Steps use

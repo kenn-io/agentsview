@@ -949,40 +949,52 @@ func uniqueSessionIDs(hits []VectorHit) []string {
 	return ids
 }
 
-// semanticAllowedSessionIDs runs one query returning the subset of ids that
-// pass the ContentSearchFilter's metadata scope (project, agent, date
-// range, one-shot/automated, ...), reusing buildSessionFilter via the same
-// SessionFilter mapping sessionScopeSubquery uses so the two paths cannot
-// drift apart.
+// semanticAllowedSessionIDs runs one query per maxSQLVars-sized chunk of ids
+// returning the subset that pass the ContentSearchFilter's metadata scope
+// (project, agent, date range, one-shot/automated, ...), reusing
+// buildSessionFilter via the same SessionFilter mapping sessionScopeSubquery
+// uses so the two paths cannot drift apart. Chunking keeps each query's bind
+// count under SQLite's 999-variable limit: a semantic overfetch can surface
+// hits from thousands of distinct sessions, well past a single IN clause's
+// budget.
 func (db *DB) semanticAllowedSessionIDs(
 	ctx context.Context, f ContentSearchFilter, ids []string,
 ) (map[string]bool, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	where, args := buildSessionFilter(contentSessionFilter(f))
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
-	for _, id := range ids {
-		args = append(args, id)
-	}
-	query := "SELECT id FROM sessions WHERE " + where +
-		" AND id IN (" + placeholders + ")"
-
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("semantic search session scope: %w", err)
-	}
-	defer rows.Close()
+	where, filterArgs := buildSessionFilter(contentSessionFilter(f))
+	query := "SELECT id FROM sessions WHERE " + where + " AND id IN "
 
 	allowed := make(map[string]bool, len(ids))
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan semantic session id: %w", err)
+	err := queryChunked(ids, func(chunk []string) error {
+		placeholders, chunkArgs := inPlaceholders(chunk)
+		args := make([]any, 0, len(filterArgs)+len(chunkArgs))
+		args = append(args, filterArgs...)
+		args = append(args, chunkArgs...)
+
+		rows, err := db.getReader().QueryContext(ctx, query+placeholders, args...)
+		if err != nil {
+			return fmt.Errorf("semantic search session scope: %w", err)
 		}
-		allowed[id] = true
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return fmt.Errorf("scan semantic session id: %w", err)
+			}
+			allowed[id] = true
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		return rows.Close()
+	})
+	if err != nil {
+		return nil, err
 	}
-	return allowed, rows.Err()
+	return allowed, nil
 }
 
 // semanticHitKey identifies a (session_id, ordinal) pair for enrichment
@@ -1003,45 +1015,62 @@ type semanticHitInfo struct {
 	project, agent, role, timestamp, content string
 }
 
+// enrichHitsChunk is the max hits enrichSemanticHits binds per VALUES CTE
+// query. Each hit binds 2 params (session_id, ordinal), so this halves the
+// shared maxSQLVars chunk to keep 2*chunk within SQLite's 999-variable limit.
+const enrichHitsChunk = maxSQLVars / 2
+
 // enrichSemanticHits looks up session/message metadata for hits' (session_id,
-// ordinal) pairs in one query via a "WITH hits(session_id, ordinal) AS
-// (VALUES ...)" CTE joined to messages/sessions. SQLite versions without
-// row-value IN support over VALUES rule out "(session_id, ordinal) IN
-// (VALUES ...)"; the CTE join form works everywhere.
+// ordinal) pairs via a "WITH hits(session_id, ordinal) AS (VALUES ...)" CTE
+// joined to messages/sessions, one query per enrichHitsChunk-sized slice of
+// hits (a semantic overfetch can carry thousands of hits, well past what one
+// VALUES clause can bind). SQLite versions without row-value IN support over
+// VALUES rule out "(session_id, ordinal) IN (VALUES ...)"; the CTE join form
+// works everywhere.
 func (db *DB) enrichSemanticHits(
 	ctx context.Context, hits []VectorHit,
 ) (map[semanticHitKey]semanticHitInfo, error) {
-	values := make([]string, len(hits))
-	args := make([]any, 0, len(hits)*2)
-	for i, h := range hits {
-		values[i] = "(?, ?)"
-		args = append(args, h.SessionID, h.Ordinal)
-	}
-	query := "WITH hits(session_id, ordinal) AS (VALUES " +
-		strings.Join(values, ", ") + ") " +
-		"SELECT m.session_id, s.project, s.agent, m.role, m.ordinal, " +
-		"COALESCE(m.timestamp, ''), m.content " +
-		"FROM hits h " +
-		"JOIN messages m ON m.session_id = h.session_id AND m.ordinal = h.ordinal " +
-		"JOIN sessions s ON s.id = m.session_id"
-
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("semantic search enrich: %w", err)
-	}
-	defer rows.Close()
-
 	out := make(map[semanticHitKey]semanticHitInfo, len(hits))
-	for rows.Next() {
-		var key semanticHitKey
-		var info semanticHitInfo
-		if err := rows.Scan(&key.sessionID, &info.project, &info.agent,
-			&info.role, &key.ordinal, &info.timestamp, &info.content); err != nil {
-			return nil, fmt.Errorf("scan semantic hit: %w", err)
+	for start := 0; start < len(hits); start += enrichHitsChunk {
+		chunk := hits[start:min(start+enrichHitsChunk, len(hits))]
+
+		values := make([]string, len(chunk))
+		args := make([]any, 0, len(chunk)*2)
+		for i, h := range chunk {
+			values[i] = "(?, ?)"
+			args = append(args, h.SessionID, h.Ordinal)
 		}
-		out[key] = info
+		query := "WITH hits(session_id, ordinal) AS (VALUES " +
+			strings.Join(values, ", ") + ") " +
+			"SELECT m.session_id, s.project, s.agent, m.role, m.ordinal, " +
+			"COALESCE(m.timestamp, ''), m.content " +
+			"FROM hits h " +
+			"JOIN messages m ON m.session_id = h.session_id AND m.ordinal = h.ordinal " +
+			"JOIN sessions s ON s.id = m.session_id"
+
+		rows, err := db.getReader().QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("semantic search enrich: %w", err)
+		}
+		for rows.Next() {
+			var key semanticHitKey
+			var info semanticHitInfo
+			if err := rows.Scan(&key.sessionID, &info.project, &info.agent,
+				&info.role, &key.ordinal, &info.timestamp, &info.content); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("scan semantic hit: %w", err)
+			}
+			out[key] = info
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // snippetTruncationMarkers are the elision markers left by the two sources of

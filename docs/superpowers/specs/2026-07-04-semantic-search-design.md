@@ -1,6 +1,8 @@
 # Semantic Search over User/Assistant Messages
 
-Date: 2026-07-04 Status: approved design, pending implementation plan
+Date: 2026-07-04 Status: approved design spec. Implementation completed
+2026-07-05; `docs/semantic-search.md` is the authoritative user documentation
+where behavior differs from this spec.
 
 ## Goal
 
@@ -144,20 +146,25 @@ messages keep their vectors and only genuinely changed content re-embeds.
 ### Generations
 
 Model/dimension/chunking changes are a new kit generation (fingerprinted).
-`--full-rebuild` builds the new generation alongside the frozen active one and
-activates atomically on clean completion. States: building/active/retired.
+`--full-rebuild` re-embeds every message: if the target fingerprint differs from
+the active generation, it builds the new generation alongside the frozen active
+one and activates atomically on clean completion; if the fingerprint is
+unchanged, it resets and refills the active generation in place instead of
+cutting a new one. States: building/active/retired.
 
 ## Indexing lifecycle
 
 ### CLI: `agentsview embeddings ...`
 
 - `embeddings build` — incremental by default (mirror refresh + fill of whatever
-  the active generation is missing). `--full-rebuild` cuts a new generation.
-  `--backstop` forces a full reconciliation scan. `--yes` skips confirmation.
-  Progress line (throttled ~2s): scanned/total, rate, ETA; final summary with
-  succeeded/failed/skipped counts.
+  the active generation is missing). `--full-rebuild` re-embeds every message,
+  cutting a new generation only when the target fingerprint changed (otherwise
+  it resets and refills the active one in place). `--backstop` forces a full
+  reconciliation scan. `--yes` skips confirmation. Progress line (throttled
+  ~2s): chunks done/total and percent complete; final summary with documents
+  embedded, chunks, skipped, and stale counts.
 - `embeddings list` — generations table: ID, STATE, MODEL, DIM, coverage counts,
-  FINGERPRINT, timestamps.
+  FINGERPRINT.
 - `embeddings activate <id>` / `embeddings retire <id>` — lifecycle escape
   hatches with `--force` variants (activate with missing coverage; retire the
   active generation).
@@ -239,7 +246,7 @@ Cause-specific messages, msgvault-style taxonomy:
 - index stale — fingerprint mismatch, "run 'agentsview embeddings build
   --full-rebuild'"
 - embedding endpoint unreachable / timed out
-- empty free-text query rejected for semantic/hybrid
+- empty free-text query returns no matches for semantic/hybrid, not an error
 
 ## Context retrieval (cursor follow)
 

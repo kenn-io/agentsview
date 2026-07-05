@@ -442,12 +442,18 @@ func (db *DB) ScanEmbeddableMessages(
 // set it) always matches: excluding it would make its messages invisible to
 // every incremental scan until a full (since="") rebuild happens to catch
 // it, even though re-scanning an unchanged session is just a cheap no-op
-// mirror upsert.
+// mirror upsert. A legacy empty-string ended_at (the pre-NULLIF-migration
+// "unset" sentinel this repo's other read queries guard against, e.g.
+// sessions.go's COALESCE(NULLIF(ended_at, ""), ...) chains) must be treated
+// the same way via NULLIF(s.ended_at, ""): without it, "" is neither NULL
+// nor >= since, so a changed legacy session would never be rescanned again
+// once any watermark exists.
 func optionalSinceClause(since string) string {
 	if since == "" {
 		return ""
 	}
-	return "AND (s.ended_at IS NULL OR datetime(s.ended_at) >= datetime(?))"
+	return "AND (NULLIF(s.ended_at, '') IS NULL OR " +
+		"datetime(NULLIF(s.ended_at, '')) >= datetime(?))"
 }
 
 // endedAfter reports whether candidate is chronologically after current,
