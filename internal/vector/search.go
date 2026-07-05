@@ -72,9 +72,19 @@ func (e *QueryEncodeError) Unwrap() error { return e.Err }
 // elsewhere already rejects an encoder that no longer matches the active
 // generation's fingerprint, so this mismatch cannot arise in practice once
 // that gate is wired up.
+//
+// Search also returns ErrMirrorVersionMismatch, before touching any table,
+// when ix was opened read-only against a vectors.db whose mirror schema
+// version does not match this binary's (see prepareMirrorSchema): a
+// read-only Index cannot reset the mirror itself, so it fails closed rather
+// than risk misreading rows shaped by a different schema.
 func (ix *Index) Search(
 	ctx context.Context, enc kitvec.EncodeFunc, query string, limit int,
 ) ([]Hit, error) {
+	if ix.versionMismatch {
+		return nil, ErrMirrorVersionMismatch
+	}
+
 	active, hasActive, err := ix.ActiveFingerprint(ctx)
 	if err != nil {
 		return nil, err

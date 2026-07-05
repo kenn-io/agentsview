@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -46,13 +47,20 @@ const stampsTable = vectorsPrefix + "_stamps"
 
 // mirrorDDL creates agentsview's mirror of embeddable message content plus
 // a small key/value table for metadata kit's store does not track (the
-// display model name for a generation).
+// display model name for a generation). ordinal is the unit's first
+// (start) ordinal; ordinal_end is its last member's ordinal, equal to
+// ordinal for single-message (user) documents. subordinate and offsets
+// default to the "no run grouping yet" shape so a row inserted without
+// them (see mirror.go) is still valid.
 const mirrorDDL = `
 CREATE TABLE IF NOT EXISTS vector_messages (
     doc_key      TEXT PRIMARY KEY,
     session_id   TEXT NOT NULL,
     source_uuid  TEXT NOT NULL DEFAULT '',
     ordinal      INTEGER NOT NULL,
+    ordinal_end  INTEGER NOT NULL,
+    subordinate  INTEGER NOT NULL DEFAULT 0,
+    offsets      TEXT NOT NULL DEFAULT '[]',
     content      TEXT NOT NULL,
     content_hash TEXT NOT NULL,
     embed_gen    TEXT
@@ -64,6 +72,26 @@ CREATE TABLE IF NOT EXISTS vector_meta (
 );
 `
 
+// mirrorSchemaVersion is the current vectors.db mirror schema generation,
+// stamped into vector_meta under mirrorSchemaVersionKey. Bump it whenever
+// mirrorDDL's column set changes in a way old rows cannot simply be read
+// as-is: Open resets vectors.db on the write path, and flags
+// ErrMirrorVersionMismatch on the read path, whenever the stamped value
+// differs (or is absent while any mirror state already exists).
+const mirrorSchemaVersion = "2"
+
+// mirrorSchemaVersionKey is the vector_meta key holding mirrorSchemaVersion.
+const mirrorSchemaVersionKey = "mirror_schema_version"
+
+// ErrMirrorVersionMismatch reports a vectors.db written by a different
+// mirror schema version than this binary expects. Write-path Open calls
+// reset the mirror instead of returning this error (see prepareMirrorSchema);
+// read-path Open calls (CLI reads, direct-install search) succeed regardless,
+// but every subsequent Search call on that Index fails with this sentinel
+// until a build recreates the mirror.
+var ErrMirrorVersionMismatch = errors.New(
+	"vector index was built by an incompatible version: run `agentsview embeddings build`")
+
 // Index wraps vectors.db: agentsview's mirror of embeddable message content
 // plus kit's sqlitevec store, which owns the generation and vec0 tables
 // derived from vectorsPrefix.
@@ -72,6 +100,13 @@ type Index struct {
 	store    *sqlitevec.Store[string, string]
 	split    kitvec.SplitOptions
 	readOnly bool
+
+	// versionMismatch records a read-path Open's version-gate finding: the
+	// mirror was written by a different mirrorSchemaVersion. Write-path
+	// Opens always resolve the mismatch themselves (reset and restamp), so
+	// this is only ever true on a read-only Index. Search checks it before
+	// touching any table.
+	versionMismatch bool
 }
 
 // GenerationInfo describes one embedding generation and its coverage of the
@@ -132,11 +167,10 @@ func Open(ctx context.Context, path string, readOnly bool, maxInputChars int) (*
 		return nil, fmt.Errorf("opening vectors.db: %w", err)
 	}
 
-	if !readOnly {
-		if _, err := db.ExecContext(ctx, mirrorDDL); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("creating vectors.db schema: %w", err)
-		}
+	versionMismatch, err := prepareMirrorSchema(ctx, db, readOnly)
+	if err != nil {
+		db.Close()
+		return nil, err
 	}
 
 	store, err := sqlitevec.New[string, string](ctx, db, vectorSchema)
@@ -147,11 +181,136 @@ func Open(ctx context.Context, path string, readOnly bool, maxInputChars int) (*
 
 	overlap := maxInputChars / 30
 	return &Index{
-		db:       db,
-		store:    store,
-		split:    kitvec.SplitOptions{MaxRunes: maxInputChars, Overlap: overlap},
-		readOnly: readOnly,
+		db:              db,
+		store:           store,
+		split:           kitvec.SplitOptions{MaxRunes: maxInputChars, Overlap: overlap},
+		readOnly:        readOnly,
+		versionMismatch: versionMismatch,
 	}, nil
+}
+
+// prepareMirrorSchema checks vectors.db's stamped mirror_schema_version
+// against mirrorSchemaVersion and, on the write path, brings the schema
+// current. On a mismatch — including the version key being absent while any
+// mirror-state table already exists — the write path drops every such table
+// and recreates the current schema from scratch: vectors.db is disposable by
+// design (unlike sessions.db, which is never reset this way), so a clean
+// rebuild is simpler and safer than an in-place column migration. On the
+// read path a mismatch is reported back as mismatch=true without touching
+// any table, leaving stale rows exactly as they are; the caller (Search)
+// then fails closed with ErrMirrorVersionMismatch instead of risking a
+// misread of old-shaped rows.
+func prepareMirrorSchema(ctx context.Context, db *sql.DB, readOnly bool) (mismatch bool, err error) {
+	mismatch, tables, err := mirrorVersionMismatch(ctx, db)
+	if err != nil {
+		return false, err
+	}
+	if readOnly {
+		return mismatch, nil
+	}
+
+	if mismatch {
+		if err := dropMirrorTables(ctx, db, tables); err != nil {
+			return false, err
+		}
+	}
+	if _, err := db.ExecContext(ctx, mirrorDDL); err != nil {
+		return false, fmt.Errorf("creating vectors.db schema: %w", err)
+	}
+	if err := stampMirrorSchemaVersion(ctx, db); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
+// mirrorStateTableNames lists the sqlite_master table names considered part
+// of the versioned mirror: the mirror's own tables, plus any kit-owned
+// message_vectors* table (the generations and stamps bookkeeping tables and
+// one vec0 table per embedding generation, including retired or abandoned
+// ones left behind by a prior build).
+func mirrorStateTableNames(ctx context.Context, db *sql.DB) ([]string, error) {
+	rows, err := db.QueryContext(ctx, `
+SELECT name FROM sqlite_master
+ WHERE type = 'table'
+   AND (name IN ('vector_messages', 'vector_meta') OR name LIKE ?)`,
+		vectorsPrefix+"%")
+	if err != nil {
+		return nil, fmt.Errorf("listing mirror tables: %w", err)
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("scanning mirror table name: %w", err)
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("listing mirror tables: %w", err)
+	}
+	return names, nil
+}
+
+// mirrorVersionMismatch reports whether vectors.db's stamped
+// mirror_schema_version differs from mirrorSchemaVersion. An empty/fresh
+// database (no mirror-state table at all) is never a mismatch — there is
+// nothing yet to be incompatible with. Otherwise, a version key that is
+// absent, or holds a different value, while any mirror-state table already
+// exists is a mismatch: that table predates versioning entirely, or was
+// stamped by a different scheme. tables is always returned so a write-path
+// caller can drop exactly the set that was inspected.
+func mirrorVersionMismatch(ctx context.Context, db *sql.DB) (mismatch bool, tables []string, err error) {
+	tables, err = mirrorStateTableNames(ctx, db)
+	if err != nil {
+		return false, nil, err
+	}
+	if len(tables) == 0 {
+		return false, tables, nil
+	}
+	if !slices.Contains(tables, "vector_meta") {
+		return true, tables, nil
+	}
+
+	var stamped string
+	err = db.QueryRowContext(ctx,
+		`SELECT value FROM vector_meta WHERE key = ?`, mirrorSchemaVersionKey,
+	).Scan(&stamped)
+	if err == sql.ErrNoRows {
+		return true, tables, nil
+	}
+	if err != nil {
+		return false, nil, fmt.Errorf("reading mirror schema version: %w", err)
+	}
+	return stamped != mirrorSchemaVersion, tables, nil
+}
+
+// dropMirrorTables drops every named table, resetting vectors.db's mirror
+// state ahead of a fresh mirrorDDL + stampMirrorSchemaVersion. Table names
+// come from sqlite_master (mirrorStateTableNames), not caller input, so
+// building the DROP statement by concatenation is safe; SQL does not allow
+// binding identifiers as query parameters.
+func dropMirrorTables(ctx context.Context, db *sql.DB, tables []string) error {
+	for _, name := range tables {
+		if _, err := db.ExecContext(ctx, `DROP TABLE IF EXISTS "`+name+`"`); err != nil {
+			return fmt.Errorf("dropping stale mirror table %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// stampMirrorSchemaVersion records mirrorSchemaVersion into vector_meta,
+// overwriting any prior value.
+func stampMirrorSchemaVersion(ctx context.Context, db *sql.DB) error {
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO vector_meta (key, value) VALUES (?, ?)
+ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		mirrorSchemaVersionKey, mirrorSchemaVersion,
+	); err != nil {
+		return fmt.Errorf("stamping mirror schema version: %w", err)
+	}
+	return nil
 }
 
 // Close closes the underlying vectors.db connection.

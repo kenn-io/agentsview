@@ -105,9 +105,9 @@ func seedVectorMessages(t *testing.T, ix *Index, n int) []string {
 		key := fmt.Sprintf("d%d", i)
 		keys[i] = key
 		_, err := tx.ExecContext(ctx, `
-INSERT INTO vector_messages (doc_key, session_id, ordinal, content, content_hash)
-VALUES (?, ?, ?, ?, ?)`,
-			key, fmt.Sprintf("s%d", i), i, fmt.Sprintf("content %d", i), fmt.Sprintf("h%d", i))
+INSERT INTO vector_messages (doc_key, session_id, ordinal, ordinal_end, content, content_hash)
+VALUES (?, ?, ?, ?, ?, ?)`,
+			key, fmt.Sprintf("s%d", i), i, i, fmt.Sprintf("content %d", i), fmt.Sprintf("h%d", i))
 		require.NoError(t, err)
 	}
 	require.NoError(t, tx.Commit())

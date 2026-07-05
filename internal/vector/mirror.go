@@ -256,15 +256,20 @@ func (ix *Index) upsertMirrorRow(
 	hash := contentHash(m.Content)
 	unchanged = existingHash.Valid && existingHash.String == hash
 
+	// ordinal_end is set equal to ordinal here (a single embeddable message,
+	// so the unit's start and end coincide) to satisfy the v2 schema's
+	// NOT NULL constraint; Task 3's unit-based upsert replaces this with the
+	// run's real last-member ordinal.
 	if _, err := ix.db.ExecContext(ctx, `
-INSERT INTO vector_messages (doc_key, session_id, source_uuid, ordinal, content, content_hash)
-VALUES (?, ?, ?, ?, ?, ?)
+INSERT INTO vector_messages (doc_key, session_id, source_uuid, ordinal, ordinal_end, content, content_hash)
+VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(doc_key) DO UPDATE SET
     session_id = excluded.session_id,
     ordinal = excluded.ordinal,
+    ordinal_end = excluded.ordinal_end,
     content = excluded.content,
     content_hash = excluded.content_hash`,
-		key, m.SessionID, m.SourceUUID, m.Ordinal, m.Content, hash,
+		key, m.SessionID, m.SourceUUID, m.Ordinal, m.Ordinal, m.Content, hash,
 	); err != nil {
 		return false, evicted, fmt.Errorf("upserting row: %w", err)
 	}
