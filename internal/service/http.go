@@ -173,6 +173,18 @@ func (b *httpBackend) Messages(
 	if f.Direction != "" {
 		q.Set("direction", f.Direction)
 	}
+	if f.Around != nil {
+		q.Set("around", strconv.Itoa(*f.Around))
+	}
+	if f.Before != nil {
+		q.Set("before", strconv.Itoa(*f.Before))
+	}
+	if f.After != nil {
+		q.Set("after", strconv.Itoa(*f.After))
+	}
+	if len(f.Roles) > 0 {
+		q.Set("roles", strings.Join(f.Roles, ","))
+	}
 	path := "/api/v1/sessions/" + url.PathEscape(id) +
 		"/messages?" + q.Encode()
 	var out MessageList

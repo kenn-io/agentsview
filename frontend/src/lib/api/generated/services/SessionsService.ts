@@ -779,6 +779,10 @@ export class SessionsService {
     limit,
     direction,
     from,
+    around,
+    before,
+    after,
+    roles,
   }: {
     /**
      * Session ID
@@ -796,6 +800,22 @@ export class SessionsService {
      * Starting message ordinal
      */
     from?: number,
+    /**
+     * Center a symmetric window on this ordinal (mutually exclusive with from/direction)
+     */
+    around?: number,
+    /**
+     * Messages before the around anchor (default 5)
+     */
+    before?: number,
+    /**
+     * Messages after the around anchor (default 5)
+     */
+    after?: number,
+    /**
+     * Comma-separated roles to include, e.g. user,assistant
+     */
+    roles?: string,
   }): CancelablePromise<ServiceMessageList> {
     return __request(OpenAPI, {
       method: 'GET',
@@ -807,6 +827,10 @@ export class SessionsService {
         'limit': limit,
         'direction': direction,
         'from': from,
+        'around': around,
+        'before': before,
+        'after': after,
+        'roles': roles,
       },
       errors: {
         400: `Bad Request`,

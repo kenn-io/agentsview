@@ -90,6 +90,10 @@ type messageListInput struct {
 	Limit     int              `query:"limit" minimum:"0" doc:"Maximum number of messages"`
 	Direction messageDirection `query:"direction" enum:"asc,desc" doc:"Message ordering direction"`
 	From      optionalIntParam `query:"from" minimum:"0" doc:"Starting message ordinal"`
+	Around    optionalIntParam `query:"around" minimum:"0" doc:"Center a symmetric window on this ordinal (mutually exclusive with from/direction)"`
+	Before    optionalIntParam `query:"before" minimum:"0" doc:"Messages before the around anchor (default 5)"`
+	After     optionalIntParam `query:"after" minimum:"0" doc:"Messages after the around anchor (default 5)"`
+	Roles     string           `query:"roles" doc:"Comma-separated roles to include, e.g. user,assistant"`
 }
 
 type searchSessionInput struct {
@@ -278,8 +282,24 @@ func (s *Server) humaGetMessages(
 	if in.From.IsSet {
 		filter.From = &in.From.Value
 	}
+	if in.Around.IsSet {
+		filter.Around = &in.Around.Value
+	}
+	if in.Before.IsSet {
+		filter.Before = &in.Before.Value
+	}
+	if in.After.IsSet {
+		filter.After = &in.After.Value
+	}
+	if in.Roles != "" {
+		filter.Roles = strings.Split(in.Roles, ",")
+	}
 	list, err := s.sessions.Messages(ctx, in.ID, filter)
 	if err != nil {
+		if errors.Is(err, service.ErrAroundMutuallyExclusive) ||
+			errors.Is(err, service.ErrBeforeAfterRequireAround) {
+			return nil, apiError(http.StatusBadRequest, err.Error())
+		}
 		return nil, serverError(err)
 	}
 	return &jsonOutput[*service.MessageList]{Body: list}, nil

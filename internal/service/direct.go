@@ -229,9 +229,19 @@ func hideStaleSecretCount(s *db.Session, activeVersions []string) {
 	s.SecretLeakCount = 0
 }
 
+// defaultAroundSpan is the number of messages returned on each side of the
+// anchor when Around is set but Before/After are omitted.
+const defaultAroundSpan = 5
+
 func (b *directBackend) Messages(
 	ctx context.Context, id string, f MessageFilter,
 ) (*MessageList, error) {
+	if f.Around != nil && (f.From != nil || f.Direction != "") {
+		return nil, ErrAroundMutuallyExclusive
+	}
+	if (f.Before != nil || f.After != nil) && f.Around == nil {
+		return nil, ErrBeforeAfterRequireAround
+	}
 	switch f.Direction {
 	case "", "asc", "desc":
 	default:
@@ -248,21 +258,44 @@ func (b *directBackend) Messages(
 	if limit > db.MaxMessageLimit {
 		limit = db.MaxMessageLimit
 	}
-	// An omitted From means "newest" in descending mode and 0 in
-	// ascending mode. An explicit 0 is a real ordinal and must be
-	// honored in both directions.
-	var from int
-	switch {
-	case f.From != nil:
-		from = *f.From
-	case !asc:
-		from = math.MaxInt32
+
+	w := db.MessageWindow{Limit: limit, Asc: asc, Roles: f.Roles}
+	if f.Around != nil {
+		w.Around = f.Around
+		w.Before = defaultAroundSpan
+		if f.Before != nil {
+			w.Before = *f.Before
+		}
+		w.After = defaultAroundSpan
+		if f.After != nil {
+			w.After = *f.After
+		}
+	} else {
+		// An omitted From means "newest" in descending mode and 0 in
+		// ascending mode. An explicit 0 is a real ordinal and must be
+		// honored in both directions.
+		var from int
+		switch {
+		case f.From != nil:
+			from = *f.From
+		case !asc:
+			from = math.MaxInt32
+		}
+		w.From = &from
 	}
-	msgs, err := b.db.GetMessages(ctx, id, from, limit, asc)
+
+	msgs, err := b.db.GetMessagesWindow(ctx, id, w)
 	if err != nil {
 		return nil, err
 	}
-	return &MessageList{Messages: msgs, Count: len(msgs)}, nil
+	list := &MessageList{Messages: msgs, Count: len(msgs)}
+	if len(msgs) > 0 {
+		first := msgs[0].Ordinal
+		last := msgs[len(msgs)-1].Ordinal
+		list.FirstOrdinal = &first
+		list.LastOrdinal = &last
+	}
+	return list, nil
 }
 
 func (b *directBackend) ToolCalls(

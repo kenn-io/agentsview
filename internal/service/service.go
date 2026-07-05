@@ -18,6 +18,18 @@ import (
 // regardless of transport (the REST handler maps it back to HTTP 501).
 var ErrSearchUnavailable = errors.New("search not available")
 
+// ErrAroundMutuallyExclusive is returned by Messages when Around is combined
+// with From or a non-default Direction: the two retrieval modes (symmetric
+// window vs. linear pagination) cannot both be requested. The HTTP handler
+// maps it to a 400 response.
+var ErrAroundMutuallyExclusive = errors.New(
+	"around is mutually exclusive with from/direction",
+)
+
+// ErrBeforeAfterRequireAround is returned by Messages when Before or After
+// is set without Around. The HTTP handler maps it to a 400 response.
+var ErrBeforeAfterRequireAround = errors.New("before/after require around")
+
 // ErrSemanticUnavailable is returned by SearchContent for modes
 // "semantic"/"hybrid" when the backing store has no VectorSearcher wired in.
 // It is the same sentinel as db.ErrSemanticUnavailable so direct callers can
@@ -245,16 +257,29 @@ type ListFilter struct {
 // From is a pointer so callers can distinguish "omitted" from "0". An
 // omitted From in descending mode means "start from the newest message";
 // an explicit 0 means "start at ordinal 0".
+//
+// Around/Before/After select a symmetric window centered on an ordinal
+// instead of linear pagination; they are mutually exclusive with
+// From/Direction (see directBackend.Messages). Roles filters the result to
+// the given roles (empty = all roles) in either mode.
 type MessageFilter struct {
-	From      *int   `json:"from,omitempty"`
-	Limit     int    `json:"limit,omitempty"`
-	Direction string `json:"direction,omitempty"` // "asc" (default) or "desc"
+	From      *int     `json:"from,omitempty"`
+	Limit     int      `json:"limit,omitempty"`
+	Direction string   `json:"direction,omitempty"` // "asc" (default) or "desc"
+	Around    *int     `json:"around,omitempty"`
+	Before    *int     `json:"before,omitempty"` // default 5 when Around set
+	After     *int     `json:"after,omitempty"`  // default 5 when Around set
+	Roles     []string `json:"roles,omitempty"`
 }
 
-// MessageList mirrors {messages, count}.
+// MessageList mirrors {messages, count}. FirstOrdinal/LastOrdinal report the
+// returned window's bounds (nil when Messages is empty) so callers can page
+// on with from = last_ordinal + 1.
 type MessageList struct {
-	Messages []db.Message `json:"messages"`
-	Count    int          `json:"count"`
+	Messages     []db.Message `json:"messages"`
+	Count        int          `json:"count"`
+	FirstOrdinal *int         `json:"first_ordinal,omitempty"`
+	LastOrdinal  *int         `json:"last_ordinal,omitempty"`
 }
 
 // ToolCall mirrors a flattened tool call with its enclosing message's

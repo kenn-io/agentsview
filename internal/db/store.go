@@ -37,6 +37,7 @@ type Store interface {
 
 	// Messages.
 	GetMessages(ctx context.Context, sessionID string, from, limit int, asc bool) ([]Message, error)
+	GetMessagesWindow(ctx context.Context, sessionID string, w MessageWindow) ([]Message, error)
 	GetAllMessages(ctx context.Context, sessionID string) ([]Message, error)
 	GetSessionActivity(ctx context.Context, sessionID string) (*SessionActivityResponse, error)
 

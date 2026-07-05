@@ -310,6 +310,71 @@ func TestHTTPBackend_Messages_DescDirection(t *testing.T) {
 		"desc iteration should return highest ordinal first")
 }
 
+func TestHTTPBackend_Messages_AroundRoundtrip(t *testing.T) {
+	t.Parallel()
+	env := newHTTPBackendEnv(t)
+	const sid = "msg-around"
+	dbtest.SeedSessionWithMessages(t, env.DB, sid, "p1",
+		dbtest.UserMessagesf(sid, 12, "m%d"), dbtest.WithMessageCount(12))
+
+	svc := env.Backend("", false)
+	around := 6
+	list, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+		Around: &around,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	require.Equal(t, 11, list.Count,
+		"default before=5/after=5 around ordinal 6 spans ordinals 1..11")
+	assert.Equal(t, 1, list.Messages[0].Ordinal)
+	assert.Equal(t, 11, list.Messages[len(list.Messages)-1].Ordinal)
+	require.NotNil(t, list.FirstOrdinal)
+	require.NotNil(t, list.LastOrdinal)
+	assert.Equal(t, 1, *list.FirstOrdinal)
+	assert.Equal(t, 11, *list.LastOrdinal)
+}
+
+func TestHTTPBackend_Messages_RolesRoundtrip(t *testing.T) {
+	t.Parallel()
+	env := newHTTPBackendEnv(t)
+	const sid = "msg-roles"
+	dbtest.SeedSessionWithMessages(t, env.DB, sid, "p1", []db.Message{
+		dbtest.UserMsg(sid, 0, "u0"),
+		dbtest.AsstMsg(sid, 1, "a1"),
+		dbtest.UserMsg(sid, 2, "u2"),
+	}, dbtest.WithMessageCount(3))
+
+	svc := env.Backend("", false)
+	zero := 0
+	list, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+		From:  &zero,
+		Limit: 100,
+		Roles: []string{"user"},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	require.Equal(t, 2, list.Count)
+	for _, m := range list.Messages {
+		assert.Equal(t, "user", m.Role)
+	}
+}
+
+func TestHTTPBackend_Messages_AroundValidationErrorSurfaces(t *testing.T) {
+	t.Parallel()
+	env := newHTTPBackendEnv(t)
+	const sid = "msg-validation"
+	dbtest.SeedSessionWithMessages(t, env.DB, sid, "p1",
+		dbtest.UserMessagesf(sid, 3, "m%d"), dbtest.WithMessageCount(3))
+
+	svc := env.Backend("", false)
+	around, from := 1, 0
+	_, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+		Around: &around,
+		From:   &from,
+	})
+	require.Error(t, err)
+}
+
 func TestHTTPBackend_ToolCalls_Empty(t *testing.T) {
 	t.Parallel()
 	env := newHTTPBackendEnv(t)

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -177,6 +178,165 @@ func (db *DB) GetMessages(
 		return nil, err
 	}
 	return msgs, nil
+}
+
+// MessageWindow parameterises GetMessagesWindow. Exactly one retrieval
+// mode: Around non-nil = symmetric window; otherwise linear from/limit.
+type MessageWindow struct {
+	From   *int
+	Limit  int
+	Asc    bool
+	Around *int
+	Before int // used only with Around; default handled by caller
+	After  int
+	Roles  []string // empty = all roles
+}
+
+// GetMessagesWindow returns messages for a session using either linear
+// pagination (mirroring GetMessages, optionally role-filtered) or a
+// symmetric window centered on an ordinal (Around/Before/After). Around
+// mode always includes the anchor row even when its own role is excluded
+// by Roles; the before/after counts are taken after applying the role
+// filter, so they count role-matching messages rather than raw ordinal
+// distance from the anchor.
+func (db *DB) GetMessagesWindow(
+	ctx context.Context, sessionID string, w MessageWindow,
+) ([]Message, error) {
+	if w.Around != nil {
+		return db.getMessagesAroundAnchor(ctx, sessionID, w)
+	}
+	from := 0
+	if w.From != nil {
+		from = *w.From
+	}
+	if len(w.Roles) == 0 {
+		return db.GetMessages(ctx, sessionID, from, w.Limit, w.Asc)
+	}
+	return db.getMessagesLinearRoleFiltered(
+		ctx, sessionID, from, w.Limit, w.Asc, w.Roles,
+	)
+}
+
+// getMessagesLinearRoleFiltered is GetMessages plus an "AND role IN (...)"
+// predicate, used when MessageWindow.Roles is non-empty.
+func (db *DB) getMessagesLinearRoleFiltered(
+	ctx context.Context,
+	sessionID string, from, limit int, asc bool, roles []string,
+) ([]Message, error) {
+	if limit <= 0 || limit > MaxMessageLimit {
+		limit = DefaultMessageLimit
+	}
+	dir := "ASC"
+	op := ">="
+	if !asc {
+		dir = "DESC"
+		op = "<="
+	}
+	roleClause, roleArgs := roleFilterClause(roles)
+	query := fmt.Sprintf(`
+		SELECT %s
+		FROM messages
+		WHERE session_id = ? AND ordinal %s ?%s
+		ORDER BY ordinal %s
+		LIMIT ?`, selectMessageCols, op, roleClause, dir)
+	args := append([]any{sessionID, from}, roleArgs...)
+	args = append(args, limit)
+
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying role-filtered messages: %w", err)
+	}
+	defer rows.Close()
+	msgs, err := scanMessages(rows)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.attachToolCalls(ctx, msgs); err != nil {
+		return nil, err
+	}
+	return msgs, nil
+}
+
+// getMessagesAroundAnchor implements MessageWindow's Around mode: three
+// queries (before/anchor/after) merged into one ascending slice. The
+// anchor query has no role predicate so the anchor row is always present;
+// before/after apply the role filter (when set) before taking Before/After
+// rows, so the counts reflect role-matching messages, not raw ordinals.
+func (db *DB) getMessagesAroundAnchor(
+	ctx context.Context, sessionID string, w MessageWindow,
+) ([]Message, error) {
+	anchor := *w.Around
+	beforeLimit := max(w.Before, 0)
+	afterLimit := max(w.After, 0)
+	roleClause, roleArgs := roleFilterClause(w.Roles)
+
+	beforeQuery := fmt.Sprintf(`
+		SELECT %s FROM messages
+		WHERE session_id = ? AND ordinal < ?%s
+		ORDER BY ordinal DESC LIMIT ?`, selectMessageCols, roleClause)
+	beforeArgs := append([]any{sessionID, anchor}, roleArgs...)
+	beforeArgs = append(beforeArgs, beforeLimit)
+	before, err := db.queryMessageRows(ctx, beforeQuery, beforeArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("querying before-window messages: %w", err)
+	}
+	slices.Reverse(before)
+
+	anchorQuery := fmt.Sprintf(`
+		SELECT %s FROM messages WHERE session_id = ? AND ordinal = ?`,
+		selectMessageCols)
+	anchorMsgs, err := db.queryMessageRows(ctx, anchorQuery, sessionID, anchor)
+	if err != nil {
+		return nil, fmt.Errorf("querying anchor message: %w", err)
+	}
+
+	afterQuery := fmt.Sprintf(`
+		SELECT %s FROM messages
+		WHERE session_id = ? AND ordinal > ?%s
+		ORDER BY ordinal ASC LIMIT ?`, selectMessageCols, roleClause)
+	afterArgs := append([]any{sessionID, anchor}, roleArgs...)
+	afterArgs = append(afterArgs, afterLimit)
+	after, err := db.queryMessageRows(ctx, afterQuery, afterArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("querying after-window messages: %w", err)
+	}
+
+	msgs := make([]Message, 0, len(before)+len(anchorMsgs)+len(after))
+	msgs = append(msgs, before...)
+	msgs = append(msgs, anchorMsgs...)
+	msgs = append(msgs, after...)
+	if err := db.attachToolCalls(ctx, msgs); err != nil {
+		return nil, err
+	}
+	return msgs, nil
+}
+
+// queryMessageRows runs query and scans the resulting message rows,
+// without attaching tool calls (callers batch that across the merged set).
+func (db *DB) queryMessageRows(
+	ctx context.Context, query string, args ...any,
+) ([]Message, error) {
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMessages(rows)
+}
+
+// roleFilterClause returns an "AND role IN (...)" clause and its bind
+// args for the given roles, or ("", nil) when roles is empty.
+func roleFilterClause(roles []string) (string, []any) {
+	if len(roles) == 0 {
+		return "", nil
+	}
+	placeholders := make([]string, len(roles))
+	args := make([]any, len(roles))
+	for i, r := range roles {
+		placeholders[i] = "?"
+		args[i] = r
+	}
+	return " AND role IN (" + strings.Join(placeholders, ",") + ")", args
 }
 
 // GetAllMessages returns all messages for a session ordered by ordinal.

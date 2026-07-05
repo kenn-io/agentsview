@@ -1138,6 +1138,160 @@ func TestDirectBackend_Messages_DescExplicitZeroFrom(t *testing.T) {
 	assert.Equal(t, 0, list.Messages[0].Ordinal)
 }
 
+// TestDirectBackend_Messages_AroundMutuallyExclusiveWithFrom verifies that
+// combining Around with an explicit From is rejected: the two retrieval
+// modes (symmetric window vs. linear pagination) cannot both be requested.
+func TestDirectBackend_Messages_AroundMutuallyExclusiveWithFrom(t *testing.T) {
+	t.Parallel()
+	svc, env := newDirectTestSvc(t)
+	sid := env.InsertSession(t)
+	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, 5, "m%d")...)
+
+	around, from := 2, 1
+	_, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+		Around: &around,
+		From:   &from,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "around is mutually exclusive with from/direction")
+}
+
+// TestDirectBackend_Messages_AroundMutuallyExclusiveWithDirection is the
+// Direction half of the same guard: an explicit non-default Direction
+// alongside Around must also be rejected.
+func TestDirectBackend_Messages_AroundMutuallyExclusiveWithDirection(t *testing.T) {
+	t.Parallel()
+	svc, env := newDirectTestSvc(t)
+	sid := env.InsertSession(t)
+	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, 5, "m%d")...)
+
+	around := 2
+	_, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+		Around:    &around,
+		Direction: "desc",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "around is mutually exclusive with from/direction")
+}
+
+// TestDirectBackend_Messages_BeforeAfterRequireAround verifies that Before
+// or After without Around is rejected rather than silently ignored.
+func TestDirectBackend_Messages_BeforeAfterRequireAround(t *testing.T) {
+	t.Parallel()
+	svc, env := newDirectTestSvc(t)
+	sid := env.InsertSession(t)
+	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, 5, "m%d")...)
+
+	before := 2
+	_, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+		Before: &before,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "before/after require around")
+}
+
+// TestDirectBackend_Messages_AroundDefaultsBeforeAfter verifies that Around
+// with Before/After both omitted defaults to 5 messages on each side.
+func TestDirectBackend_Messages_AroundDefaultsBeforeAfter(t *testing.T) {
+	t.Parallel()
+	svc, env := newDirectTestSvc(t)
+	sid := env.InsertSession(t)
+	// 12 messages, ordinals 0..11.
+	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, 12, "m%d")...)
+
+	around := 6
+	list, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+		Around: &around,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	require.Equal(t, 11, list.Count, "default before=5/after=5 around ordinal 6 "+
+		"spans ordinals 1..11 (only 5 exist after 6)")
+	assert.Equal(t, 1, list.Messages[0].Ordinal)
+	assert.Equal(t, 11, list.Messages[len(list.Messages)-1].Ordinal)
+}
+
+// TestDirectBackend_Messages_AroundWithRoles verifies that Roles reaches
+// GetMessagesWindow: only messages matching a role in Roles are returned,
+// with the anchor always included.
+func TestDirectBackend_Messages_AroundWithRoles(t *testing.T) {
+	t.Parallel()
+	svc, env := newDirectTestSvc(t)
+	sid := env.InsertSession(t)
+	dbtest.SeedMessages(t, env.db,
+		dbtest.UserMsg(sid, 0, "u0"),
+		dbtest.AsstMsg(sid, 1, "a1"),
+		dbtest.UserMsg(sid, 2, "u2"),
+		dbtest.AsstMsg(sid, 3, "a3"),
+		dbtest.UserMsg(sid, 4, "u4"),
+	)
+
+	around := 2
+	before, after := 1, 1
+	list, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+		Around: &around,
+		Before: &before,
+		After:  &after,
+		Roles:  []string{"user"},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	require.Equal(t, 3, list.Count)
+	for _, m := range list.Messages {
+		assert.Equal(t, "user", m.Role)
+	}
+	assert.Equal(t, []int{0, 2, 4}, []int{
+		list.Messages[0].Ordinal, list.Messages[1].Ordinal, list.Messages[2].Ordinal,
+	})
+}
+
+// TestDirectBackend_Messages_ResponseWindowBounds verifies that MessageList
+// reports FirstOrdinal/LastOrdinal from the returned window (non-empty
+// case) and leaves them nil when the result is empty.
+func TestDirectBackend_Messages_ResponseWindowBounds(t *testing.T) {
+	t.Parallel()
+	svc, env := newDirectTestSvc(t)
+	sid := env.InsertSession(t)
+	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, 5, "m%d")...)
+
+	list, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+		Limit: 10,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	require.NotNil(t, list.FirstOrdinal)
+	require.NotNil(t, list.LastOrdinal)
+	assert.Equal(t, 0, *list.FirstOrdinal)
+	assert.Equal(t, 4, *list.LastOrdinal)
+
+	emptyList, err := svc.Messages(context.Background(), "no-such-session",
+		service.MessageFilter{Limit: 10})
+	require.NoError(t, err)
+	require.NotNil(t, emptyList)
+	assert.Equal(t, 0, emptyList.Count)
+	assert.Nil(t, emptyList.FirstOrdinal)
+	assert.Nil(t, emptyList.LastOrdinal)
+}
+
+// TestDirectBackend_Messages_AroundOmittedBeforeAfterNoOtherFlags mirrors
+// the CLI's zero-flag `--around N` invocation: only Around is set (no
+// Before/After/From/Direction), which must succeed using the default
+// before/after window rather than tripping the mutual-exclusion guard.
+func TestDirectBackend_Messages_AroundOmittedBeforeAfterNoOtherFlags(t *testing.T) {
+	t.Parallel()
+	svc, env := newDirectTestSvc(t)
+	sid := env.InsertSession(t)
+	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, 12, "m%d")...)
+
+	around := 5
+	list, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+		Around: &around,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	assert.Equal(t, 11, list.Count)
+}
+
 // vsCopilotChatTraceLine builds one Visual Studio Copilot trace JSONL line
 // carrying a single user-prompt chat span for the given conversation.
 func vsCopilotChatTraceLine(conversationID, spanID, prompt string) string {
