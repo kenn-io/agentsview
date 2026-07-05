@@ -41,8 +41,8 @@ func (e *BuildingError) Error() string {
 
 // Search embeds query and returns up to limit message-level hits, best
 // first. It returns ErrNoActiveGeneration when no live generation exists,
-// and ErrIndexBuilding (with Progress percent) when only a building
-// generation exists.
+// and a *BuildingError (carrying the completion Percent) when only a
+// building generation exists.
 func (ix *Index) Search(
 	ctx context.Context, enc kitvec.EncodeFunc, query string, limit int,
 ) ([]Hit, error) {
