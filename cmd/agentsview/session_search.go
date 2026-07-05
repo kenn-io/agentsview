@@ -20,7 +20,7 @@ func newSessionSearchCommand() *cobra.Command {
 		excludeSystem, reveal                    bool
 		project, excludeProject, agent           string
 		machine, date, dateFrom, dateTo          string
-		activeSince                              string
+		activeSince, since                       string
 		includeChildren, includeAutomated        bool
 		includeOneShot                           bool
 		limit, cursor, contextN                  int
@@ -39,6 +39,10 @@ func newSessionSearchCommand() *cobra.Command {
 			}
 			mode, err := resolveContentSearchMode(
 				useRegex, useFTS, useSemantic, useHybrid, sources)
+			if err != nil {
+				return err
+			}
+			activeSince, err = resolveSinceFlag(since, activeSince)
 			if err != nil {
 				return err
 			}
@@ -103,6 +107,8 @@ func newSessionSearchCommand() *cobra.Command {
 	flags.StringVar(&dateFrom, "date-from", "", "Sessions on or after YYYY-MM-DD")
 	flags.StringVar(&dateTo, "date-to", "", "Sessions on or before YYYY-MM-DD")
 	flags.StringVar(&activeSince, "active-since", "", "Active since RFC3339 timestamp")
+	flags.StringVar(&since, "since", "",
+		"Only sessions active since a relative duration (3m, 14d, 12h, 1y) or YYYY-MM-DD")
 	flags.BoolVar(&includeChildren, "include-children", false, "Include subagent sessions")
 	flags.BoolVar(&includeAutomated, "include-automated", false, "Include automated sessions")
 	flags.BoolVar(&includeOneShot, "include-one-shot", false, "Include one-shot sessions")

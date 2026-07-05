@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,6 +20,68 @@ func TestSessionSearchFlagValidation(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mutually exclusive")
+}
+
+// TestSessionSearchSinceMutuallyExclusiveWithActiveSince verifies the error
+// is returned before any service/DB access is attempted (no data dir is set
+// up here), matching --regex/--fts's fail-fast validation style.
+func TestSessionSearchSinceMutuallyExclusiveWithActiveSince(t *testing.T) {
+	cmd := newSessionSearchCommand()
+	cmd.SetArgs([]string{
+		"needle", "--since", "14d", "--active-since", "2024-01-01T00:00:00Z",
+	})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(),
+		"--since and --active-since are mutually exclusive")
+}
+
+func TestSessionSearchSinceRejectsInvalidFormat(t *testing.T) {
+	cmd := newSessionSearchCommand()
+	cmd.SetArgs([]string{"needle", "--since", "3x"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid --since")
+}
+
+// seedSearchMessage inserts a single message for sessionID carrying content,
+// so `session search <pattern>` has something to match.
+func seedSearchMessage(t *testing.T, dataDir, sessionID, content string) {
+	t.Helper()
+	d, err := db.Open(filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = d.Close() })
+	require.NoError(t, d.InsertMessages([]db.Message{{
+		SessionID:     sessionID,
+		Ordinal:       1,
+		Role:          "user",
+		Content:       content,
+		ContentLength: len(content),
+		Timestamp:     "2026-04-01T00:00:00Z",
+	}}))
+}
+
+// TestSessionSearchSinceFiltersByActivity is the end-to-end regression test
+// for the CRITICAL requirement that --since actually narrows results by
+// resolving to the same active_since window --active-since already
+// threads through to the search filter: a session active within the
+// window survives, one outside it does not.
+func TestSessionSearchSinceFiltersByActivity(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	seedSessionsWithOpts(t, dataDir,
+		activitySeed("fresh", 2*time.Hour),
+		activitySeed("stale", 20*24*time.Hour),
+	)
+	seedSearchMessage(t, dataDir, "fresh", "needle in fresh session")
+	seedSearchMessage(t, dataDir, "stale", "needle in stale session")
+
+	out, err := executeCommand(newRootCommand(),
+		"session", "search", "needle", "--since", "7d", "--format", "json")
+	require.NoError(t, err)
+
+	got := decodeCLIJSON[service.ContentSearchResult](t, out)
+	require.Len(t, got.Matches, 1)
+	assert.Equal(t, "fresh", got.Matches[0].SessionID)
 }
 
 func TestSessionSearchFTSWithToolSource(t *testing.T) {

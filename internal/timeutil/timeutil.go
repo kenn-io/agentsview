@@ -1,7 +1,9 @@
 package timeutil
 
 import (
+	"fmt"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -38,6 +40,46 @@ func IsValidTimestamp(s string) bool {
 	}
 	_, err := time.Parse(time.RFC3339Nano, s)
 	return err == nil
+}
+
+// ParseSince resolves a --since value against now: relative forms
+// "Nh", "Nd", "Nw", "Nm" (months), "Ny", or an absolute YYYY-MM-DD
+// (that date's midnight in now's location). N is a positive integer.
+// Months/years use now.AddDate(-y, -m, 0) for calendar-aware arithmetic;
+// hours/days/weeks use now.Add(-d).
+func ParseSince(now time.Time, s string) (time.Time, error) {
+	if IsValidDate(s) {
+		return time.ParseInLocation("2006-01-02", s, now.Location())
+	}
+	if len(s) < 2 {
+		return time.Time{}, sinceFormatError(s)
+	}
+	unit := s[len(s)-1]
+	n, err := strconv.Atoi(s[:len(s)-1])
+	if err != nil || n <= 0 {
+		return time.Time{}, sinceFormatError(s)
+	}
+	switch unit {
+	case 'h':
+		return now.Add(-time.Duration(n) * time.Hour), nil
+	case 'd':
+		return now.Add(-time.Duration(n) * 24 * time.Hour), nil
+	case 'w':
+		return now.Add(-time.Duration(n) * 7 * 24 * time.Hour), nil
+	case 'm':
+		return now.AddDate(0, -n, 0), nil
+	case 'y':
+		return now.AddDate(-n, 0, 0), nil
+	default:
+		return time.Time{}, sinceFormatError(s)
+	}
+}
+
+// sinceFormatError names the accepted --since forms in the error message so
+// callers can react without consulting docs.
+func sinceFormatError(s string) error {
+	return fmt.Errorf(
+		"invalid --since %q: use Nh, Nd, Nw, Nm, Ny, or YYYY-MM-DD", s)
 }
 
 func BestEffortLocalTimezone() string {
