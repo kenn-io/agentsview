@@ -202,6 +202,76 @@ func (db *DB) GetAllMessages(
 	return msgs, nil
 }
 
+// EmbeddableMessage is one user/assistant message eligible for vector
+// indexing (role user|assistant, is_system = 0, not system-prefixed).
+type EmbeddableMessage struct {
+	SessionID  string
+	SourceUUID string
+	Ordinal    int
+	Content    string
+}
+
+// ScanEmbeddableMessages streams the embeddable universe (user/assistant
+// messages that are not is_system and not system-prefixed, per
+// SystemPrefixSQL) ordered by (session_id, ordinal), invoking fn once per
+// row. since != "" restricts the scan to sessions with ended_at >= since
+// (RFC3339) for incremental refresh; "" scans every session. maxEnded
+// returns the maximum sessions.ended_at seen across the scanned rows, or ""
+// when the scan produced no rows.
+func (db *DB) ScanEmbeddableMessages(
+	ctx context.Context, since string, fn func(EmbeddableMessage) error,
+) (maxEnded string, err error) {
+	query := `
+		SELECT m.session_id, m.source_uuid, m.ordinal, m.content, s.ended_at
+		FROM messages m
+		JOIN sessions s ON s.id = m.session_id
+		WHERE m.role IN ('user', 'assistant')
+		  AND m.is_system = 0
+		  AND ` + SystemPrefixSQL("m.content", "m.role") + `
+		` + optionalSinceClause(since) + `
+		ORDER BY m.session_id, m.ordinal`
+
+	args := []any{}
+	if since != "" {
+		args = append(args, since)
+	}
+
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return "", fmt.Errorf("scanning embeddable messages: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var m EmbeddableMessage
+		var ended sql.NullString
+		if err := rows.Scan(
+			&m.SessionID, &m.SourceUUID, &m.Ordinal, &m.Content, &ended,
+		); err != nil {
+			return "", fmt.Errorf("scanning embeddable message: %w", err)
+		}
+		if ended.Valid && ended.String > maxEnded {
+			maxEnded = ended.String
+		}
+		if err := fn(m); err != nil {
+			return "", err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("iterating embeddable messages: %w", err)
+	}
+	return maxEnded, nil
+}
+
+// optionalSinceClause returns the AND clause restricting the embeddable scan
+// to sessions with ended_at >= since, or "" when since is unset.
+func optionalSinceClause(since string) string {
+	if since == "" {
+		return ""
+	}
+	return "AND s.ended_at >= ?"
+}
+
 // insertMessagesTx batch-inserts messages within an existing
 // transaction. Returns a slice of message IDs parallel to the
 // input msgs slice. The caller must hold db.mu.
