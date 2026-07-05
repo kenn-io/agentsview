@@ -133,7 +133,7 @@ agentsview session search "flaky test" --hybrid --project myapp
   matches both surface.
 - Both modes are restricted to the `messages` source — the same restriction
   `--fts` already has — since only user/assistant message content is embedded
-  (never thinking text, tool input/output, or system messages). Passing `--in`
+  (never raw tool_input/tool_result rows or system messages). Passing `--in`
   with any other source is rejected.
 - All the usual filters apply: `--project`, `--agent`, `--machine`, `--date*`,
   `--include-children`, etc. Metadata filters are applied *after* the vector
@@ -163,9 +163,10 @@ agentsview session search "database connection pooling" --semantic --context 2
 Every match gets `N` messages of context before and after it in the same
 response — `context_before`/`context_after` arrays in JSON, indented
 `role: content` lines around the match in human output. This works with every
-search mode, costs one extra windowed query per hit, and caps at `--context 10`.
-Context messages are secret-redacted by default, same as `--reveal` governs for
-the match snippet itself.
+search mode and costs one extra windowed query per hit. Values above 10 are
+rejected with `context: maximum is 10` rather than silently clamped. Context
+messages are secret-redacted by default, same as `--reveal` governs for the
+match snippet itself.
 
 ## Cursor-follow: from a hit to its surrounding conversation
 
@@ -238,6 +239,9 @@ MCP tool error, carrying the same remediation text.
 - **No frontend integration.** The web UI's command palette and in-session
   search remain FTS-only; semantic and hybrid search are CLI/HTTP/MCP-only in
   this release.
-- **Nothing outside user/assistant message text is embedded.** Thinking blocks,
-  tool inputs/outputs, and system messages are never part of the vector index,
-  matching the same scope `--fts` already uses.
+- **The index embeds message `content` verbatim.** Raw tool_input/tool_result
+  rows and system messages are excluded, matching the same scope `--fts`
+  already uses. But anything a parser rendered *into* a user/assistant
+  message's content is embedded with it: thinking text flattened inline as
+  `[Thinking]...[/Thinking]` markers, and tool-call summaries some parsers
+  render into assistant content, are all ordinary message text to the index.

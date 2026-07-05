@@ -274,12 +274,29 @@ Return a window of messages. Response shape matches
 
 ```bash
 agentsview session messages <id> [--from N] [--limit N] [--direction asc|desc]
+agentsview session messages <id> --around N [--before N] [--after N] [--role user,assistant]
 ```
 
 `--from` is pointer-valued at the service layer: omitting it means
 "start at the beginning" for ascending and "start at the newest
 page" for descending; an explicit `--from 0` means "start at ordinal
 0" in both directions. `--direction` is validated to `asc` or `desc`.
+
+Window and role flags (see
+[Semantic Search](/semantic-search/#cursor-follow-from-a-hit-to-its-surrounding-conversation)
+for the cursor-follow workflow they support):
+
+| Flag       | HTTP param | Notes                                                        |
+|------------|------------|--------------------------------------------------------------|
+| `--around` | `around`   | Center a window on this ordinal; mutually exclusive with `--from`/`--direction` |
+| `--before` | `before`   | Messages before the anchor (default 5); requires `--around`  |
+| `--after`  | `after`    | Messages after the anchor (default 5); requires `--around`   |
+| `--role`   | `roles`    | Comma-separated roles to include, e.g. `user,assistant`      |
+
+With a `--role` filter, `--before`/`--after` count filtered messages;
+the anchor message is always included. Responses report the window's
+`first_ordinal`/`last_ordinal` so callers can continue paging with
+`--from <last_ordinal + 1>`.
 
 ```json
 {
@@ -535,6 +552,9 @@ default; opt back in with `--include-one-shot`,
 |-----------------------|---------------------|--------------------------------------------------------|
 | `--regex`             | `mode=regex`        | Treat pattern as an RE2 regex                          |
 | `--fts`               | `mode=fts`          | Tokenized FTS5 search; messages-only                   |
+| `--semantic`          | `mode=semantic`     | Vector search over user/assistant messages; messages-only — see [Semantic Search](/semantic-search/) |
+| `--hybrid`            | `mode=hybrid`       | Semantic + FTS reciprocal rank fusion; messages-only — see [Semantic Search](/semantic-search/) |
+| `--context`           | `context`           | int — N messages of context before/after each match (max 10) |
 | `--in`                | `in`                | Comma-separated: `messages,tool_input,tool_result` (default all) |
 | `--exclude-system`    | `exclude_system`    | Drop system messages from the scan                     |
 | `--reveal`            | `reveal`            | Show full secret values (localhost-only; warning to stderr) |
@@ -553,11 +573,14 @@ default; opt back in with `--include-one-shot`,
 | `--limit`             | `limit`             | int; default 50, max 500                               |
 | `--cursor`            | `cursor`            | int — pagination cursor from a previous response       |
 
-`--regex` and `--fts` are mutually exclusive. `--fts` is the
-fastest mode on large archives but only searches message bodies;
-substring (the default) and regex modes also walk
-`tool_calls.input_json`, `tool_calls.result_content`, and the
-`tool_result_events` rows.
+`--regex`, `--fts`, `--semantic`, and `--hybrid` are mutually
+exclusive. `--fts` is the fastest mode on large archives but only
+searches message bodies; substring (the default) and regex modes
+also walk `tool_calls.input_json`, `tool_calls.result_content`,
+and the `tool_result_events` rows. `--semantic` and `--hybrid`
+require an embedding index and return a single ranked page
+(`--cursor` is rejected) — see [Semantic Search](/semantic-search/)
+for setup, scoring, and limitations.
 
 Snippets carry ~60 characters of context on each side of the
 match, snapped to rune boundaries. Any substring that matches

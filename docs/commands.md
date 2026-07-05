@@ -857,6 +857,21 @@ alias to show sessions active in the last 15 minutes; combine either flag with
 
 ______________________________________________________________________
 
+### `agentsview embeddings`
+
+Manage the local semantic search embedding index. Requires `[vector]` to be
+enabled in config. See [Semantic Search](/semantic-search/) for full
+documentation, including configuration and the search surface.
+
+```bash
+agentsview embeddings build           # build or refresh the index
+agentsview embeddings list            # list embedding generations
+agentsview embeddings activate <id>   # activate a generation
+agentsview embeddings retire <id>     # retire a generation
+```
+
+______________________________________________________________________
+
 ### `agentsview mcp`
 
 Run a read-only Model Context Protocol server for assistant clients that can
