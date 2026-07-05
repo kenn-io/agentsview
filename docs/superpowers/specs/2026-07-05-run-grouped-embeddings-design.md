@@ -132,13 +132,14 @@ Two independent mechanisms, both required:
 ## Chunking
 
 Runs are chunked by the existing `kitvec.Split`. Overlap changes from the
-implicit `maxInputChars / 30` to an explicit `maxInputChars * 15 / 100` (375
-chars at the default 2500), recorded in the fingerprint as
-`chunk_overlap_chars`. No kit changes required.
+implicit `maxInputChars / 30` to an explicit `maxInputChars * 15 / 100` (1228
+chars at the default `max_input_chars = 8192`; 375 at a 2500 cap), recorded in
+the fingerprint as `chunk_overlap_chars`. No kit changes required.
 
 **Anchor policy:** a hit's anchor is the message whose rune span contains the
-matched chunk's center rune (`chunk_start + max_runes/2`, clamped to the chunk's
-actual span); if the center falls on a boundary, the earlier message wins. kit's
+matched chunk's center rune, `chunk_start + len(chunk_runes)/2` — the chunk's
+actual rune length, not `max_runes`, so short final chunks anchor at their true
+center; if the center falls on a boundary, the earlier message wins. kit's
 `Hit.ChunkIndex` plus `SplitOptions` reproduce the chunk window
 deterministically from the mirrored content.
 
