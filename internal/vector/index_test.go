@@ -83,6 +83,24 @@ func TestEnsureGenerationLifecycle(t *testing.T) {
 	require.Equal(t, "active", info.State)
 }
 
+// TestGenerationByIDUnknownIDReturnsSentinel guards the HTTP layer's 404
+// mapping: an id with no matching row must return an error matching
+// ErrGenerationNotFound via errors.Is, not just any error, so callers can
+// distinguish "not found" from other failures.
+func TestGenerationByIDUnknownIDReturnsSentinel(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "vectors.db")
+
+	ix, err := Open(ctx, path, false, 4000)
+	require.NoError(t, err)
+	defer ix.Close()
+
+	_, err = ix.GenerationByID(ctx, 999)
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrGenerationNotFound)
+	require.Contains(t, err.Error(), "999")
+}
+
 func TestGenerationCoverageCounts(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "vectors.db")

@@ -3,6 +3,7 @@ package vector
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -205,7 +206,7 @@ func (ix *Index) SetStateByID(ctx context.Context, id int64, state sqlitevec.Sta
 	if n, err := res.RowsAffected(); err != nil {
 		return fmt.Errorf("set generation state rows: %w", err)
 	} else if n == 0 {
-		return fmt.Errorf("generation %d not found", id)
+		return fmt.Errorf("generation %d: %w", id, ErrGenerationNotFound)
 	}
 	return nil
 }
@@ -277,13 +278,19 @@ func (ix *Index) Generations(ctx context.Context) ([]GenerationInfo, error) {
 	return infos, nil
 }
 
+// ErrGenerationNotFound is returned by GenerationByID (and propagated by
+// Manager.Activate/Retire) when id does not match any row in the
+// generations table. Match it with errors.Is; the wrapping error's message
+// still carries the specific id for logs and direct display.
+var ErrGenerationNotFound = errors.New("generation not found")
+
 // GenerationByID returns the single generation identified by its
 // generations-table ordinal.
 func (ix *Index) GenerationByID(ctx context.Context, id int64) (GenerationInfo, error) {
 	row := ix.db.QueryRowContext(ctx, generationCoverageQuery+` WHERE g.ordinal = ?`, id)
 	info, err := ix.scanGenerationInfo(ctx, row)
 	if err == sql.ErrNoRows {
-		return GenerationInfo{}, fmt.Errorf("generation %d not found", id)
+		return GenerationInfo{}, fmt.Errorf("generation %d: %w", id, ErrGenerationNotFound)
 	}
 	if err != nil {
 		return GenerationInfo{}, err

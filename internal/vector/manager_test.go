@@ -286,6 +286,25 @@ func TestManagerStartBuildRecoversPanickedEncoder(t *testing.T) {
 	waitFor(t, func() bool { return !m.Status().Running }, "second build never finished")
 }
 
+// TestManagerActivateAndRetireUnknownIDPropagateNotFound guards the HTTP
+// route mapping (embeddingsActionError in internal/server): Activate and
+// Retire must propagate GenerationByID's ErrGenerationNotFound unwrapped
+// enough for errors.Is to still match it, rather than losing the sentinel
+// on the way up.
+func TestManagerActivateAndRetireUnknownIDPropagateNotFound(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	src := twoDocSource()
+	gen := fakeGeneration("fake-model")
+	m := NewManager(ix, src, fakeBuildEncoder(), gen, 10)
+
+	err := m.Activate(ctx, 999, false)
+	assert.ErrorIs(t, err, ErrGenerationNotFound)
+
+	err = m.Retire(ctx, 999, false)
+	assert.ErrorIs(t, err, ErrGenerationNotFound)
+}
+
 func TestManagerActivateAndRetireRefuseWhileBuildRunning(t *testing.T) {
 	ix := openTestIndex(t)
 	ctx := context.Background()

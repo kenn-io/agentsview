@@ -306,6 +306,73 @@ func TestRefreshFullDeletesVanishedIdentitiesAndVectors(t *testing.T) {
 	assert.Zero(t, chunkCount, "chunks for vanished identity should be gone")
 }
 
+// TestRefreshFullEvictionOfVanishedOccupantCountsDeletedOnce covers the
+// double-counting regression where a slot-evicted doc_key never reappears
+// anywhere in a full-mode scan: it is absent from seen (nothing in the scan
+// produced that key) while also being in evictSlotOccupant's evicted set.
+// Before the fix, both finalizeEvictions and full-mode reconcileDeletions
+// would independently delete the row and count it, double-counting
+// RefreshStats.Deleted even though store.DeleteVectors is idempotent and the
+// row is physically removed exactly once.
+func TestRefreshFullEvictionOfVanishedOccupantCountsDeletedOnce(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+
+	// First refresh: a legacy o:-keyed row occupies (s1, 3); u1 sits at (s1, 0).
+	src := &fakeMessageSource{rows: []fakeRow{
+		{
+			msg:     db.EmbeddableMessage{SessionID: "s1", Ordinal: 3, Content: "legacy"},
+			endedAt: "2024-01-01T00:00:00Z",
+		},
+		{
+			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "u1", Ordinal: 0, Content: "hello"},
+			endedAt: "2024-01-01T00:00:00Z",
+		},
+	}}
+	_, err := ix.Refresh(ctx, src, true)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"o:s1:3", "u:s1:u1"}, mirrorDocKeys(t, ix))
+
+	// Stamp the legacy row's vectors so eviction has something to clean up.
+	gen := kitvec.Generation{Model: "fake-model", Dimensions: 3}
+	fingerprint, err := ix.EnsureGeneration(ctx, gen, sqlitevec.StateActive)
+	require.NoError(t, err)
+	legacyRow, ok := readMirrorRow(t, ix, "o:s1:3")
+	require.True(t, ok)
+	require.NoError(t, ix.store.SaveVectors(ctx, fingerprint, "o:s1:3", legacyRow.contentHash,
+		[]kitvec.ChunkVector{{ChunkIndex: 0, Vector: kitvec.Vector{0, 1, 0}}}))
+
+	// The legacy message vanishes from the archive entirely (unlike a mere
+	// slot shift, it is dropped from src.rows), and u1 shifts onto its old
+	// slot. The legacy doc_key is now both slot-evicted (evictSlotOccupant
+	// finds it occupying (s1, 3) via the DB) and never seen in this scan at
+	// all (it produced no row), so it is a candidate for both cleanup paths.
+	src.rows = []fakeRow{
+		{
+			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "u1", Ordinal: 3, Content: "hello"},
+			endedAt: "2024-01-01T00:00:00Z",
+		},
+	}
+	stats, err := ix.Refresh(ctx, src, true)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Deleted,
+		"vanished, slot-evicted occupant must be counted exactly once")
+
+	assert.ElementsMatch(t, []string{"u:s1:u1"}, mirrorDocKeys(t, ix))
+
+	var stampCount int
+	require.NoError(t, ix.db.QueryRow(
+		`SELECT COUNT(*) FROM message_vectors_stamps WHERE doc_key = ?`, "o:s1:3",
+	).Scan(&stampCount))
+	assert.Zero(t, stampCount, "evicted doc_key's stamps should be gone")
+
+	var chunkCount int
+	require.NoError(t, ix.db.QueryRow(
+		`SELECT COUNT(*) FROM message_vectors_chunks WHERE doc_key = ?`, "o:s1:3",
+	).Scan(&chunkCount))
+	assert.Zero(t, chunkCount, "evicted doc_key's chunks should be gone")
+}
+
 func TestRefreshIncrementalUsesWatermark(t *testing.T) {
 	ix := openTestIndex(t)
 	ctx := context.Background()

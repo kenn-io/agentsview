@@ -834,6 +834,41 @@ func TestSearchContentSemanticModeUnavailable(t *testing.T) {
 	}
 }
 
+// TestOpenAPIEndpointDocumentsBatchDeleteSessionIDsAsNonNullableArray guards
+// the schema huma emits for the batch-delete request body: session_ids must
+// serialize as a plain, non-nullable string array (schema type "array"), not
+// the OpenAPI 3.1 nullable union ["array", "null"] huma's DefaultArrayNullable
+// otherwise applies to every slice field. Losing that keeps the generated
+// TypeScript client's session_ids typed as Array<string> rather than
+// loosening to any[] | null.
+func TestOpenAPIEndpointDocumentsBatchDeleteSessionIDsAsNonNullableArray(t *testing.T) {
+	te := setup(t)
+
+	w := te.get(t, "/api/openapi.json")
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	var spec struct {
+		Components struct {
+			Schemas map[string]struct {
+				Required   []string `json:"required"`
+				Properties map[string]struct {
+					Type json.RawMessage `json:"type"`
+				} `json:"properties"`
+			} `json:"schemas"`
+		} `json:"components"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+
+	schema, ok := spec.Components.Schemas["BatchDeleteInputBody"]
+	require.True(t, ok, "spec missing BatchDeleteInputBody schema")
+	assert.Contains(t, schema.Required, "session_ids")
+
+	prop, ok := schema.Properties["session_ids"]
+	require.True(t, ok, "session_ids property missing from BatchDeleteInputBody schema")
+	assert.JSONEq(t, `"array"`, string(prop.Type),
+		`session_ids must be a non-nullable array, not the nullable ["array","null"] union`)
+}
+
 func TestOpenAPIEndpointDocumentsQualitySignalResponses(t *testing.T) {
 	te := setup(t)
 

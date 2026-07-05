@@ -651,7 +651,7 @@ func (s *Server) humaDeleteSession(
 
 type batchDeleteInput struct {
 	Body struct {
-		SessionIDs []string `json:"session_ids" required:"true" doc:"Session IDs to soft-delete"`
+		SessionIDs []string `json:"session_ids" required:"true" nullable:"false" doc:"Session IDs to soft-delete"`
 	}
 }
 

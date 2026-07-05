@@ -156,6 +156,22 @@ func (ix *Index) Refresh(
 		return RefreshStats{}, fmt.Errorf("scanning embeddable messages: %w", err)
 	}
 
+	// finalizeEvictions must run before full-mode reconcileDeletions: an
+	// evicted key that never reappears anywhere in the scan is absent from
+	// seen too, so reconcileDeletions would otherwise also treat its (still
+	// present, sentinel-parked) row as a vanished identity and delete it a
+	// second time. Resolving evictions first means the row is gone by the
+	// time reconcileDeletions scans vector_messages, so it is never counted
+	// there. finalizeEvictions also guards against re-deleting an
+	// already-absent key on its own (see its doc comment), so this ordering
+	// and that guard together make Refresh's accounting robust regardless
+	// of which pass would otherwise see the row first.
+	finalized, err := ix.finalizeEvictions(ctx, evicted)
+	if err != nil {
+		return RefreshStats{}, err
+	}
+	stats.Deleted += finalized
+
 	if full {
 		deleted, err := ix.reconcileDeletions(ctx, seen)
 		if err != nil {
@@ -163,12 +179,6 @@ func (ix *Index) Refresh(
 		}
 		stats.Deleted += deleted
 	}
-
-	finalized, err := ix.finalizeEvictions(ctx, evicted)
-	if err != nil {
-		return RefreshStats{}, err
-	}
-	stats.Deleted += finalized
 
 	if maxEnded != "" {
 		if err := ix.setRefreshWatermark(ctx, maxEnded); err != nil {
@@ -277,16 +287,21 @@ func (ix *Index) evictSlotOccupant(
 // during one Refresh scan: a key whose ordinal is still negative (the
 // sentinel evictSlotOccupant parked it at) once the scan is done was never
 // reinserted, so it is genuinely gone — its vectors and stamps are deleted
-// via store.DeleteVectors, and its mirror row is finally removed. This
-// cleanup mirrors what full-mode reconcileDeletions does for identities
-// missing from the scan entirely, needed here because reconcileDeletions
-// can never see an evicted key parked at a sentinel ordinal (it looks
-// vanished until the deletion actually happens), and kit's store keeps
-// orphaned vectors occupying KNN LIMIT slots even though QueryGeneration
-// filters them from hits. A key whose ordinal was overwritten back to a
-// real (non-negative) value was reinserted under its own doc_key later in
-// the same scan — it merely shifted position and keeps its row and
+// via store.DeleteVectors, and its mirror row is finally removed. kit's
+// store keeps orphaned vectors occupying KNN LIMIT slots even though
+// QueryGeneration filters them from hits, so this cleanup matters even
+// though the row itself is inert. A key whose ordinal was overwritten back
+// to a real (non-negative) value was reinserted under its own doc_key later
+// in the same scan — it merely shifted position and keeps its row and
 // embeddings untouched.
+//
+// A key already absent from vector_messages entirely (ok is false below) is
+// skipped rather than deleted again: Refresh runs finalizeEvictions before
+// full-mode reconcileDeletions specifically so this case shouldn't arise
+// within one call, but the guard makes the accounting correct regardless of
+// call order — an evicted key that never reappears in the scan is also
+// absent from seen, so without this guard reconcileDeletions would delete
+// the row once and finalizeEvictions would count deleting it again.
 func (ix *Index) finalizeEvictions(ctx context.Context, evicted map[string]struct{}) (int, error) {
 	if len(evicted) == 0 {
 		return 0, nil
@@ -302,8 +317,12 @@ func (ix *Index) finalizeEvictions(ctx context.Context, evicted map[string]struc
 
 	var deleted int
 	for _, key := range keys {
-		if ordinal, ok := ordinals[key]; ok && ordinal >= 0 {
-			continue
+		ordinal, ok := ordinals[key]
+		if !ok {
+			continue // already removed from the mirror; nothing left to do
+		}
+		if ordinal >= 0 {
+			continue // reinserted under its own doc_key later in the same scan
 		}
 		if err := ix.store.DeleteVectors(ctx, key); err != nil {
 			return deleted, fmt.Errorf("deleting evicted vectors for %s: %w", key, err)

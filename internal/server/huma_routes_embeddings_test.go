@@ -209,6 +209,18 @@ func TestEmbeddingsActivateBuildRunningReturnsConflict(t *testing.T) {
 	assertRecorderStatus(t, w, http.StatusConflict)
 }
 
+func TestEmbeddingsActivateUnknownGenerationReturnsNotFound(t *testing.T) {
+	fake := &fakeEmbeddingsManager{
+		activateErr: fmt.Errorf("generation %d: %w", 999, vector.ErrGenerationNotFound),
+	}
+	s := newEmbeddingsTestServer(t, fake)
+
+	w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/generations/999/activate",
+		map[string]bool{"force": false})
+	assertRecorderStatus(t, w, http.StatusNotFound)
+	assert.Contains(t, w.Body.String(), "999")
+}
+
 func TestEmbeddingsActivateOtherErrorReturnsInternalError(t *testing.T) {
 	fake := &fakeEmbeddingsManager{activateErr: errors.New("boom")}
 	s := newEmbeddingsTestServer(t, fake)
@@ -241,4 +253,16 @@ func TestEmbeddingsRetireRefusalReturnsConflict(t *testing.T) {
 		map[string]bool{"force": false})
 	assertRecorderStatus(t, w, http.StatusConflict)
 	assert.True(t, strings.Contains(w.Body.String(), "is active"))
+}
+
+func TestEmbeddingsRetireUnknownGenerationReturnsNotFound(t *testing.T) {
+	fake := &fakeEmbeddingsManager{
+		retireErr: fmt.Errorf("generation %d: %w", 999, vector.ErrGenerationNotFound),
+	}
+	s := newEmbeddingsTestServer(t, fake)
+
+	w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/generations/999/retire",
+		map[string]bool{"force": false})
+	assertRecorderStatus(t, w, http.StatusNotFound)
+	assert.Contains(t, w.Body.String(), "999")
 }

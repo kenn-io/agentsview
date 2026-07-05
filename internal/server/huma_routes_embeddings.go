@@ -126,12 +126,16 @@ func (s *Server) humaEmbeddingsRetire(
 	return &noContentOutput{Status: http.StatusNoContent}, nil
 }
 
-// embeddingsActionError maps Activate/Retire's refusal sentinels
-// (ErrBuildRunning, ErrGenerationRefused) to 409 Conflict with the
-// underlying message, and anything else to a generic internal error.
+// embeddingsActionError maps Activate/Retire's sentinels — ErrBuildRunning
+// and ErrGenerationRefused to 409 Conflict, ErrGenerationNotFound to 404 Not
+// Found — with the underlying message, and anything else to a generic
+// internal error.
 func embeddingsActionError(err error) error {
 	if errors.Is(err, vector.ErrBuildRunning) || errors.Is(err, vector.ErrGenerationRefused) {
 		return apiError(http.StatusConflict, err.Error())
+	}
+	if errors.Is(err, vector.ErrGenerationNotFound) {
+		return apiError(http.StatusNotFound, err.Error())
 	}
 	return internalError("embeddings generation action", err)
 }
