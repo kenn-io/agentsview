@@ -101,6 +101,97 @@ type DuckDBConfig struct {
 	ExcludeProjects []string `toml:"exclude_projects" json:"exclude_projects,omitempty"`
 }
 
+// VectorConfig holds settings for the optional local semantic-search
+// vector index (embeddings + vectors.db).
+type VectorConfig struct {
+	Enabled    bool                   `toml:"enabled" json:"enabled"`
+	DBPath     string                 `toml:"db_path" json:"db_path,omitempty"`
+	Embeddings VectorEmbeddingsConfig `toml:"embeddings" json:"embeddings"`
+	Embed      VectorEmbedConfig      `toml:"embed" json:"embed"`
+}
+
+// VectorEmbeddingsConfig configures the OpenAI-compatible embeddings
+// endpoint used to generate vectors for indexed content.
+type VectorEmbeddingsConfig struct {
+	Endpoint  string `toml:"endpoint" json:"endpoint"`
+	Model     string `toml:"model" json:"model"`
+	Dimension int    `toml:"dimension" json:"dimension"`
+	// APIKeyEnv names the environment variable holding the API key.
+	// Empty means anonymous access.
+	APIKeyEnv string `toml:"api_key_env" json:"api_key_env,omitempty"`
+	// BatchSize is the number of inputs sent per HTTP call. Default 32.
+	BatchSize int `toml:"batch_size" json:"batch_size"`
+	// Timeout is a parseable duration string applied to each HTTP
+	// call. Default "30s".
+	Timeout string `toml:"timeout" json:"timeout"`
+	// MaxRetries is the number of retries for 429/5xx/network errors;
+	// 4xx failures are not retried. Default 3.
+	MaxRetries int `toml:"max_retries" json:"max_retries"`
+	// MaxInputChars caps the rune length of each chunk sent for
+	// embedding. Default 8192.
+	MaxInputChars int `toml:"max_input_chars" json:"max_input_chars"`
+}
+
+// VectorEmbedConfig configures when the daemon runs embedding work.
+type VectorEmbedConfig struct {
+	// RunAfterSync enables debounced embedding of sync deltas.
+	// Defaults to true when unset; read it via RunAfterSyncEnabled.
+	RunAfterSync *bool `toml:"run_after_sync" json:"run_after_sync,omitempty"`
+	// BackstopInterval is a parseable duration string for a periodic
+	// full rescan. Default "24h"; a negative duration disables it.
+	BackstopInterval string `toml:"backstop_interval" json:"backstop_interval"`
+}
+
+// Validate checks the vector config for internal consistency. It is a
+// no-op when the section is disabled.
+func (c VectorConfig) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	if c.Embeddings.Endpoint == "" {
+		return fmt.Errorf("[vector.embeddings] endpoint is required when [vector] is enabled")
+	}
+	if c.Embeddings.Model == "" {
+		return fmt.Errorf("[vector.embeddings] model is required when [vector] is enabled")
+	}
+	if c.Embeddings.Dimension <= 0 {
+		return fmt.Errorf("[vector.embeddings] dimension must be greater than 0 when [vector] is enabled")
+	}
+	if _, err := time.ParseDuration(c.Embeddings.Timeout); err != nil {
+		return fmt.Errorf("[vector.embeddings] invalid timeout %q: %w", c.Embeddings.Timeout, err)
+	}
+	if _, err := time.ParseDuration(c.Embed.BackstopInterval); err != nil {
+		return fmt.Errorf("[vector.embed] invalid backstop_interval %q: %w", c.Embed.BackstopInterval, err)
+	}
+	return nil
+}
+
+// ResolvedDBPath returns DBPath if set, else <dataDir>/vectors.db.
+func (c VectorConfig) ResolvedDBPath(dataDir string) string {
+	if c.DBPath != "" {
+		return c.DBPath
+	}
+	return filepath.Join(dataDir, "vectors.db")
+}
+
+// APIKey reads the API key from the environment variable named by
+// APIKeyEnv. Returns "" when APIKeyEnv is unset.
+func (c VectorEmbeddingsConfig) APIKey() string {
+	if c.APIKeyEnv == "" {
+		return ""
+	}
+	return os.Getenv(c.APIKeyEnv)
+}
+
+// RunAfterSyncEnabled reports whether embedding should run after sync,
+// defaulting to true when RunAfterSync is unset.
+func (c VectorEmbedConfig) RunAfterSyncEnabled() bool {
+	if c.RunAfterSync == nil {
+		return true
+	}
+	return *c.RunAfterSync
+}
+
 // AutomatedConfig holds user-supplied additions to the
 // automated-session classifier. Parse-only; all semantic
 // normalization (trim, dedupe, length cap, built-in overlap
@@ -172,6 +263,7 @@ type Config struct {
 	DefaultPG            string                 `json:"default_pg,omitempty" toml:"default_pg"`
 	PGTargets            map[string]PGConfig    `json:"-" toml:"-"`
 	DuckDB               DuckDBConfig           `json:"duckdb,omitempty" toml:"duckdb"`
+	Vector               VectorConfig           `json:"vector,omitempty" toml:"vector"`
 	Automated            AutomatedConfig        `json:"automated,omitempty" toml:"automated"`
 	Agent                map[string]AgentConfig `json:"agent,omitempty" toml:"agent"`
 	WriteTimeout         time.Duration          `json:"-" toml:"-"`
@@ -406,6 +498,17 @@ func Default() (Config, error) {
 		EventsCoalesceInterval:         10 * time.Second,
 		DaemonIdleTimeout:              20 * time.Minute,
 		Agent:                          map[string]AgentConfig{},
+		Vector: VectorConfig{
+			Embeddings: VectorEmbeddingsConfig{
+				BatchSize:     32,
+				Timeout:       "30s",
+				MaxRetries:    3,
+				MaxInputChars: 8192,
+			},
+			Embed: VectorEmbedConfig{
+				BackstopInterval: "24h",
+			},
+		},
 	}, nil
 }
 
@@ -680,6 +783,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		DefaultPG                      string                     `toml:"default_pg"`
 		PG                             PGConfig                   `toml:"pg"`
 		DuckDB                         DuckDBConfig               `toml:"duckdb"`
+		Vector                         VectorConfig               `toml:"vector"`
 		Automated                      AutomatedConfig            `toml:"automated"`
 		Agent                          map[string]AgentConfig     `toml:"agent"`
 		EventsCoalesceInterval         time.Duration              `toml:"events_coalesce_interval"`
@@ -792,6 +896,44 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if file.DuckDB.ExcludeProjects != nil && c.DuckDB.ExcludeProjects == nil {
 		c.DuckDB.ExcludeProjects = file.DuckDB.ExcludeProjects
+	}
+	if file.Vector.Enabled {
+		c.Vector.Enabled = true
+	}
+	if file.Vector.DBPath != "" {
+		c.Vector.DBPath = file.Vector.DBPath
+	}
+	if file.Vector.Embeddings.Endpoint != "" {
+		c.Vector.Embeddings.Endpoint = file.Vector.Embeddings.Endpoint
+	}
+	if file.Vector.Embeddings.Model != "" {
+		c.Vector.Embeddings.Model = file.Vector.Embeddings.Model
+	}
+	if file.Vector.Embeddings.Dimension != 0 {
+		c.Vector.Embeddings.Dimension = file.Vector.Embeddings.Dimension
+	}
+	if file.Vector.Embeddings.APIKeyEnv != "" {
+		c.Vector.Embeddings.APIKeyEnv = file.Vector.Embeddings.APIKeyEnv
+	}
+	// IsDefined distinguishes "unset" (keep the default) from an
+	// explicit zero value, e.g. max_retries = 0 to disable retries.
+	if meta.IsDefined("vector", "embeddings", "batch_size") {
+		c.Vector.Embeddings.BatchSize = file.Vector.Embeddings.BatchSize
+	}
+	if file.Vector.Embeddings.Timeout != "" {
+		c.Vector.Embeddings.Timeout = file.Vector.Embeddings.Timeout
+	}
+	if meta.IsDefined("vector", "embeddings", "max_retries") {
+		c.Vector.Embeddings.MaxRetries = file.Vector.Embeddings.MaxRetries
+	}
+	if meta.IsDefined("vector", "embeddings", "max_input_chars") {
+		c.Vector.Embeddings.MaxInputChars = file.Vector.Embeddings.MaxInputChars
+	}
+	if file.Vector.Embed.RunAfterSync != nil {
+		c.Vector.Embed.RunAfterSync = file.Vector.Embed.RunAfterSync
+	}
+	if file.Vector.Embed.BackstopInterval != "" {
+		c.Vector.Embed.BackstopInterval = file.Vector.Embed.BackstopInterval
 	}
 	// IsDefined distinguishes "unset" (leave default 10s) from an
 	// explicit "0s" (disable coalescing). Checking != 0 would silently
@@ -1285,6 +1427,9 @@ func finalize(cfg *Config) error {
 	}
 	if cfg.DaemonIdleTimeout < 0 {
 		return fmt.Errorf("invalid daemon_idle_timeout: %s", cfg.DaemonIdleTimeout)
+	}
+	if err := cfg.Vector.Validate(); err != nil {
+		return err
 	}
 	return nil
 }
