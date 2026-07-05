@@ -226,6 +226,7 @@ One-shot and automated sessions are excluded by default. Use the
 | `--date-from`         | `date_from`         | `YYYY-MM-DD`                      |
 | `--date-to`           | `date_to`           | `YYYY-MM-DD`                      |
 | `--active-since`      | `active_since`      | RFC3339 timestamp                 |
+| `--since`             | `active_since`      | Relative (`3m`, `14d`, `12h`, `1y`) or `YYYY-MM-DD`; resolved against now and mutually exclusive with `--active-since` |
 | `--resume`            | `active_since`      | CLI shortcut for sessions active in the last 15 minutes |
 | `--active`            | `active_since`      | Alias for `--resume`              |
 | `--min-messages`      | `min_messages`      | int                               |
@@ -567,6 +568,7 @@ default; opt back in with `--include-one-shot`,
 | `--date-from`         | `date_from`         | `YYYY-MM-DD`                                           |
 | `--date-to`           | `date_to`           | `YYYY-MM-DD`                                           |
 | `--active-since`      | `active_since`      | RFC3339 timestamp                                      |
+| `--since`             | `active_since`      | Relative (`3m`, `14d`, `12h`, `1y`) or `YYYY-MM-DD`; resolved against now and mutually exclusive with `--active-since` |
 | `--include-children`  | `include_children`  | bool                                                   |
 | `--include-automated` | `include_automated` | bool                                                   |
 | `--include-one-shot`  | `include_one_shot`  | bool                                                   |

@@ -952,6 +952,31 @@ warning to stderr.
 
 ______________________________________________________________________
 
+### `agentsview skills`
+
+Install or list the bundled skill files that teach coding-agent harnesses
+(Claude Code, Codex, and other `.agents/skills` readers) to search AgentsView
+history. See
+[Semantic Search](/semantic-search/#skills-for-coding-agents) for what the
+skill does and when to re-run it.
+
+```bash
+agentsview skills install [--harness claude|agents] [--project] [--force]
+agentsview skills list [--project] [--format json]
+```
+
+`install` renders the embedded `agentsview-finding-history` skill for each
+`--harness` (default both) and writes `SKILL.md` under
+`~/.claude/skills/agentsview-finding-history/` and/or
+`~/.agents/skills/agentsview-finding-history/`, or under `.claude/skills/` /
+`.agents/skills/` at the current git root with `--project`. It overwrites an
+unmodified generated file, refuses a hand-edited or foreign file unless
+`--force` is passed, and exits non-zero on any refusal. `list` reports
+HARNESS, LEVEL, STATE (`missing`, `current`, `stale`, `modified`, `foreign`),
+and PATH for every harness.
+
+______________________________________________________________________
+
 ### `agentsview help`
 
 Print usage information.

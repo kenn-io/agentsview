@@ -169,3 +169,23 @@ The distinction matters for callers: 501 means the feature will not work until
 something is configured or built; 503 means it should work and is worth
 retrying. CLI and MCP surface the same cause-specific remediation text described
 in the [user-facing error taxonomy](/semantic-search/#error-taxonomy).
+
+## Skill generation
+
+`internal/skills` renders the `agentsview-finding-history` skill (see
+[Skills for coding agents](/semantic-search/#skills-for-coding-agents)) from a
+single embedded template, `internal/skills/templates/finding-history.md.tmpl`
+via `go:embed` — the same pattern `internal/web` uses for the frontend — with no
+per-harness copies checked in. `Render` fills in a harness-specific delegation
+phrase (whether the harness can dispatch a search subagent or must run the
+bounded probes itself) and prepends a `generated-by` header carrying the CLI
+version and a sha256 hash of the rendered body. Staleness and tamper detection
+are hash-authoritative, not version-authoritative: `Classify` compares a file's
+recorded hash against its own body hash to detect modification, and against a
+fresh render's hash to detect staleness, and never consults the version string,
+because dev builds all report version `"dev"` and would otherwise be
+indistinguishable from one another. There is deliberately no Claude Code
+plugin/marketplace packaging: that would tie distribution to one harness's
+install mechanism, whereas the goal is a single `SKILL.md` artifact that any
+`.agents/skills`-reading harness can consume the same way, installed directly by
+the `agentsview` binary rather than a separate package manager.
