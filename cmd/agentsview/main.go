@@ -182,13 +182,34 @@ func runServe(cfg config.Config, opts serveOptions) {
 
 	broadcaster := server.NewBroadcaster(cfg.EventsCoalesceInterval)
 
+	vectorServe, err := setupVectorServing(ctx, cfg, database)
+	if err != nil {
+		fatal("setting up vector index: %v", err)
+	}
+	if vectorServe.Close != nil {
+		defer func() {
+			if cerr := vectorServe.Close(); cerr != nil {
+				log.Printf("close vectors.db: %v", cerr)
+			}
+		}()
+	}
+
+	var emitter sync.Emitter = broadcaster
+	if vectorServe.Scheduler != nil {
+		emitter = teeEmitter{
+			primary:      broadcaster,
+			scheduler:    vectorServe.Scheduler,
+			runAfterSync: cfg.Vector.Embed.RunAfterSyncEnabled(),
+		}
+	}
+
 	var engine *sync.Engine
 	if !cfg.NoSync {
 		engine = sync.NewEngine(database, sync.EngineConfig{
 			AgentDirs:               cfg.AgentDirs,
 			Machine:                 "local",
 			BlockedResultCategories: cfg.ResultContentBlockedCategories,
-			Emitter:                 broadcaster,
+			Emitter:                 emitter,
 		})
 
 		if database.NeedsResync() {
@@ -251,7 +272,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 	}
 	cfg = preparedCfg
 
-	srv := server.New(cfg, database, engine,
+	srvOpts := []server.Option{
 		server.WithVersion(server.VersionInfo{
 			Version:   version,
 			Commit:    commit,
@@ -262,7 +283,9 @@ func runServe(cfg config.Config, opts serveOptions) {
 		server.WithBroadcaster(broadcaster),
 		server.WithIdleTracker(idleTracker),
 		server.WithPprof(opts.Pprof),
-	)
+	}
+	srvOpts = append(srvOpts, vectorServe.ServerOpts...)
+	srv := server.New(cfg, database, engine, srvOpts...)
 
 	startupProgress.SetPhase("starting HTTP server")
 	rt, err := startServerWithOptionalCaddy(ctx, cfg, srv, rtOpts)
@@ -314,6 +337,14 @@ func runServe(cfg config.Config, opts serveOptions) {
 	fmt.Printf("Database: %s\n", cfg.DBPath)
 
 	startTelemetryPings(ctx, telemetryReporter)
+
+	if vectorServe.Scheduler != nil {
+		go vectorServe.Scheduler.Run(ctx)
+		// Registered after the vectors.db Close defer above, so LIFO
+		// unwind order runs Stop (which waits for any in-flight
+		// TryBuild to return) before vectors.db is closed.
+		defer vectorServe.Scheduler.Stop()
+	}
 
 	if engine != nil {
 		// Registered before stopWatcher so LIFO defer order stops
