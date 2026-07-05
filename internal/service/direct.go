@@ -688,9 +688,9 @@ func (b *directBackend) SearchContent(
 		}
 		req.Sources = []string{"messages"}
 	}
-	// Context < 0 (not user-reachable via the clamped CLI/HTTP flag, but
-	// possible from a direct SessionService caller) is treated as "off"
-	// rather than rejected; only exceeding the max is a hard error.
+	// Context < 0 (reachable via `--context -5` or a direct SessionService
+	// caller) is treated as "off" rather than rejected; only exceeding the
+	// max is a hard error.
 	if req.Context < 0 {
 		req.Context = 0
 	}
