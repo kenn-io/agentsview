@@ -29,10 +29,11 @@ special-casing during the swap instead of a plain re-scan afterward.
 ### The `vector_messages` mirror table
 
 One row per embeddable message (`role IN ('user','assistant')`, non-system,
-non-system-prefixed — the same universe FTS uses before `--exclude-system`).
-Columns: `doc_key` (primary key), `session_id`, `source_uuid`, `ordinal`,
-`content` (copied text), `content_hash` (sha256 of content, kit's revision
-column), `embed_gen`.
+non-system-prefixed — the corpus semantic and hybrid search operate on; the
+hybrid FTS leg applies the same predicate, while plain FTS content search is
+broader unless filters narrow it). Columns: `doc_key` (primary key),
+`session_id`, `source_uuid`, `ordinal`, `content` (copied text), `content_hash`
+(sha256 of content, kit's revision column), `embed_gen`.
 
 ### `doc_key` scheme
 
@@ -97,14 +98,18 @@ re-embedding.
 
 Fill embeds every pending document (content changed, or never embedded, for the
 active generation). A document whose encode call fails with a permanent error —
-any 4xx except 429, e.g. token-window overflow or a content-policy rejection —
-is not retried in that fill or the next one: it's stamped for the generation
-with no vectors at its current `content_hash`, which marks it non-pending. It's
-logged (doc key plus the underlying error) and counted in the build summary's
-skipped count, but there is no separate poison list or periodic retry — the only
-way it embeds again is if the message's content itself changes later (a new
-`content_hash`, so a new pending row). All other failures (5xx, network errors,
-timeouts, 429) abort the fill and are retried on the next scheduled build.
+a 400, 413, or 422 whose error body describes the input itself, e.g. a
+token/context-length overflow or a content-policy rejection — is not retried in
+that fill or the next one: it's stamped for the generation with no vectors at
+its current `content_hash`, which marks it non-pending. It's logged (doc key
+plus the underlying error) and counted in the build summary's skipped count, but
+there is no separate poison list or periodic retry — the only way it embeds
+again is if the message's content itself changes later (a new `content_hash`, so
+a new pending row). Every other failure — 5xx, network errors, timeouts, 429,
+and any 4xx that looks like an auth, route, model, or media-type problem rather
+than a rejection of this document — aborts the fill and is retried on the next
+scheduled build, so a config mistake can't silently stamp the whole corpus as
+embedded-with-no-vectors.
 
 ### Scope (`include_automated`)
 
@@ -178,14 +183,16 @@ single embedded template, `internal/skills/templates/finding-history.md.tmpl`
 via `go:embed` — the same pattern `internal/web` uses for the frontend — with no
 per-harness copies checked in. `Render` fills in a harness-specific delegation
 phrase (whether the harness can dispatch a search subagent or must run the
-bounded probes itself) and prepends a `generated-by` header carrying the CLI
-version and a sha256 hash of the rendered body. Staleness and tamper detection
-are hash-authoritative, not version-authoritative: `Classify` compares a file's
-recorded hash against its own body hash to detect modification, and against a
-fresh render's hash to detect staleness, and never consults the version string,
-because dev builds all report version `"dev"` and would otherwise be
-indistinguishable from one another. There is deliberately no Claude Code
-plugin/marketplace packaging: that would tie distribution to one harness's
+bounded probes itself) and inserts a `generated-by` header — carrying the CLI
+version and a sha256 hash of the pure template render — as a YAML comment on
+line two, just inside the frontmatter fence, so the file still begins with `---`
+and frontmatter-based skill discovery keeps working. Staleness and tamper
+detection are hash-authoritative, not version-authoritative: `Classify` compares
+a file's recorded hash against its own body hash to detect modification, and
+against a fresh render's hash to detect staleness, and never consults the
+version string, because dev builds all report version `"dev"` and would
+otherwise be indistinguishable from one another. There is deliberately no Claude
+Code plugin/marketplace packaging: that would tie distribution to one harness's
 install mechanism, whereas the goal is a single `SKILL.md` artifact that any
 `.agents/skills`-reading harness can consume the same way, installed directly by
 the `agentsview` binary rather than a separate package manager.

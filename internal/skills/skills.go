@@ -53,9 +53,11 @@ var skillsSubdir = map[Harness]string{
 	HarnessAgents: filepath.Join(".agents", "skills"),
 }
 
-// headerFormat is the first line written to every rendered file: a YAML
-// comment so frontmatter parsers still work. version is recorded for
-// humans; hash is authoritative for staleness and tamper detection.
+// headerFormat is the second line of every rendered file: a YAML comment
+// inserted just inside the frontmatter fence, so the file still begins with
+// "---" and frontmatter parsers (which require the fence as the first bytes)
+// keep discovering the skill. version is recorded for humans; hash is
+// authoritative for staleness and tamper detection.
 const headerFormat = "# generated-by: agentsview %s hash:%s — do not edit; " +
 	"re-run `agentsview skills install`"
 
@@ -65,6 +67,10 @@ var headerPattern = regexp.MustCompile(
 	"^# generated-by: agentsview \\S+ hash:([0-9a-f]{64}) — do not edit; " +
 		"re-run `agentsview skills install`$",
 )
+
+// frontmatterFence opens every skill file; the template body starts with it
+// and Render re-emits it above the generated-by header.
+const frontmatterFence = "---\n"
 
 var tmpl = template.Must(template.ParseFS(templatesFS, "templates/finding-history.md.tmpl"))
 
@@ -76,12 +82,14 @@ type templateData struct {
 // Rendered is one skill file ready to install.
 type Rendered struct {
 	Name    string // "agentsview-finding-history"
-	Content string // full file: generated-by header + frontmatter + body
+	Content string // full file: frontmatter fence, generated-by header, rest
 	Hash    string // sha256 hex of Content minus the header line
 }
 
 // Render produces the skill for a harness. version is the CLI version
-// string, recorded in the header for humans (hash is authoritative).
+// string, recorded in the header for humans (hash is authoritative). The
+// generated-by header is inserted as line two, inside the frontmatter
+// fence, so the rendered file still begins with "---".
 func Render(h Harness, version string) (Rendered, error) {
 	delegate, ok := delegatePhrases[h]
 	if !ok {
@@ -93,10 +101,15 @@ func Render(h Harness, version string) (Rendered, error) {
 	if err := tmpl.ExecuteTemplate(&body, "finding-history.md.tmpl", data); err != nil {
 		return Rendered{}, fmt.Errorf("skills: render %s template: %w", h, err)
 	}
+	if !strings.HasPrefix(body.String(), frontmatterFence) {
+		return Rendered{}, fmt.Errorf(
+			"skills: %s template must start with a %q frontmatter fence", h, "---")
+	}
 
 	hash := bodyHash(body.String())
 	header := fmt.Sprintf(headerFormat, version, hash)
-	content := header + "\n" + body.String()
+	content := frontmatterFence + header + "\n" +
+		strings.TrimPrefix(body.String(), frontmatterFence)
 
 	return Rendered{
 		Name:    skillName,
@@ -131,18 +144,23 @@ func Classify(existing []byte, fresh Rendered) InstalledState {
 		return StateMissing
 	}
 
-	firstLine, body, hasBody := strings.Cut(string(existing), "\n")
-	if !hasBody {
-		body = ""
+	content := string(existing)
+	if !strings.HasPrefix(content, frontmatterFence) {
+		return StateForeign
+	}
+	headerLine, rest, hasRest := strings.Cut(
+		strings.TrimPrefix(content, frontmatterFence), "\n")
+	if !hasRest {
+		rest = ""
 	}
 
-	match := headerPattern.FindStringSubmatch(firstLine)
+	match := headerPattern.FindStringSubmatch(headerLine)
 	if match == nil {
 		return StateForeign
 	}
 	recordedHash := match[1]
 
-	if recordedHash != bodyHash(body) {
+	if recordedHash != bodyHash(frontmatterFence+rest) {
 		return StateModified
 	}
 	if recordedHash == fresh.Hash {

@@ -313,11 +313,11 @@ func TestEncoder429ReturnsNonPermanentHTTPStatusError(t *testing.T) {
 
 // TestHTTPStatusErrorPermanentClassification pins the skip-vs-abort
 // classification: only input-specific rejections (400/413/422 whose body
-// names the input, tokens, content, or policy) may skip-stamp a poison
-// document. Everything else — auth, routing, model, rate-limit, server
-// errors, or an allowlisted status with a nonspecific body — must abort
-// the build, or a config mistake would silently skip-stamp an entire
-// corpus as embedded-with-no-vectors.
+// describes an input-size overflow or a content-policy refusal) may
+// skip-stamp a poison document. Everything else — auth, routing, model,
+// media-type, rate-limit, server errors, or an allowlisted status with a
+// nonspecific body — must abort the build, or a config mistake would
+// silently skip-stamp an entire corpus as embedded-with-no-vectors.
 func TestHTTPStatusErrorPermanentClassification(t *testing.T) {
 	cases := []struct {
 		status    int
@@ -325,10 +325,14 @@ func TestHTTPStatusErrorPermanentClassification(t *testing.T) {
 		permanent bool
 	}{
 		{http.StatusBadRequest, "token window overflow", true},
+		{http.StatusBadRequest, "maximum context length is 8192 tokens", true},
 		{http.StatusRequestEntityTooLarge, "input too large", true},
 		{http.StatusUnprocessableEntity, "content policy violation", true},
 		{http.StatusBadRequest, "", false},
 		{http.StatusBadRequest, "no route", false},
+		{http.StatusBadRequest, "invalid token", false},
+		{http.StatusBadRequest, "invalid model", false},
+		{http.StatusUnprocessableEntity, "unsupported content type", false},
 		{http.StatusNotFound, "model not found", false},
 		{http.StatusUnauthorized, "invalid token", false},
 		{http.StatusForbidden, "forbidden", false},

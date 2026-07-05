@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"mime"
 	"net"
 	"net/http"
@@ -448,6 +449,15 @@ func TestTranslateSearchErrorMapsVectorErrorsToSemanticUnavailable(t *testing.T)
 		assert.False(t, errors.Is(got, db.ErrSemanticUnavailable),
 			"a query-time endpoint failure must not read as semantic search being disabled")
 		assert.Contains(t, got.Error(), "connection refused")
+	})
+	t.Run("query encode failure preserves the underlying cause chain", func(t *testing.T) {
+		queryErr := &vector.QueryEncodeError{
+			Err: fmt.Errorf("encoding query: %w", context.Canceled),
+		}
+		got := translateSearchError(queryErr)
+		assert.ErrorIs(t, got, db.ErrSemanticTransient)
+		assert.ErrorIs(t, got, context.Canceled,
+			"context errors must stay matchable so cancellation handling still fires")
 	})
 }
 

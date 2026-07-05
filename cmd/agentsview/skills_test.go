@@ -56,22 +56,29 @@ func writeSkillFile(t *testing.T, path, content string) {
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 }
 
+// setTestHome points the process home at dir for both Unix (HOME) and
+// Windows (USERPROFILE), since os.UserHomeDir reads a different variable
+// per platform.
+func setTestHome(t *testing.T, dir string) {
+	t.Helper()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+}
+
 // staleClaudeContent returns a well-formed generated-by file whose recorded
 // hash matches an older body, so Classify reports StateStale.
 func staleClaudeContent() string {
-	oldBody := "an earlier revision of the skill body, no longer current\n"
+	oldBody := "---\nname: agentsview-finding-history\n---\n" +
+		"an earlier revision of the skill body, no longer current\n"
 	header := fmt.Sprintf(skillHeaderFormat, "0.0.1", sha256Hex(oldBody))
-	return header + "\n" + oldBody
+	return "---\n" + header + "\n" + strings.TrimPrefix(oldBody, "---\n")
 }
 
 // modifiedClaudeContent returns a fresh render whose body was hand-edited
 // after the header hash was recorded, so Classify reports StateModified.
 func modifiedClaudeContent(t *testing.T) string {
 	t.Helper()
-	fresh := freshClaudeSkill(t)
-	headerLine, body, ok := strings.Cut(fresh.Content, "\n")
-	require.True(t, ok)
-	return headerLine + "\n" + body + "\nan uninvited local edit\n"
+	return freshClaudeSkill(t).Content + "\nan uninvited local edit\n"
 }
 
 const foreignClaudeContent = "# Just a hand-written file\n\nNo generated-by header here.\n"
@@ -126,7 +133,7 @@ func TestSkillsInstall_StatesAndForce(t *testing.T) {
 		for _, force := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/force=%v", tt.name, force), func(t *testing.T) {
 				home := t.TempDir()
-				t.Setenv("HOME", home)
+				setTestHome(t, home)
 				path := claudeSkillPath(home)
 
 				var seedContent string
@@ -175,7 +182,7 @@ func readFileString(t *testing.T, path string) string {
 
 func TestSkillsInstall_DefaultHarnessesInstallBoth(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 
 	out, err := executeCommand(newRootCommand(), "skills", "install")
 	require.NoError(t, err, "output: %s", out)
@@ -188,7 +195,7 @@ func TestSkillsInstall_DefaultHarnessesInstallBoth(t *testing.T) {
 
 func TestSkillsInstall_UnknownHarnessErrors(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 
 	_, err := executeCommand(newRootCommand(), "skills", "install", "--harness", "bogus")
 	require.Error(t, err)
@@ -197,7 +204,7 @@ func TestSkillsInstall_UnknownHarnessErrors(t *testing.T) {
 
 func TestSkillsInstall_RefusalStillInstallsOtherTargets(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	writeSkillFile(t, claudeSkillPath(home), foreignClaudeContent)
 
 	out, err := executeCommand(newRootCommand(), "skills", "install")
@@ -212,7 +219,7 @@ func TestSkillsInstall_RefusalStillInstallsOtherTargets(t *testing.T) {
 
 func TestSkillsInstall_FilePermissions(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 
 	_, err := executeCommand(newRootCommand(), "skills", "install", "--harness", "claude")
 	require.NoError(t, err)
@@ -268,7 +275,7 @@ func TestSkillsList_ReportsEachState(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			home := t.TempDir()
-			t.Setenv("HOME", home)
+			setTestHome(t, home)
 			path := claudeSkillPath(home)
 			if tt.seed != nil {
 				tt.seed(t, path)
@@ -296,7 +303,7 @@ func TestSkillsList_ReportsEachState(t *testing.T) {
 
 func TestSkillsList_HumanTableHasHeaderAndColumns(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 
 	out, err := executeCommand(newRootCommand(), "skills", "list")
 	require.NoError(t, err, "output: %s", out)
@@ -327,7 +334,7 @@ func initTestGitRepo(t *testing.T) string {
 
 func TestSkillsInstall_ProjectFlagUsesGitRoot(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 
 	repo := initTestGitRepo(t)
 	nested := filepath.Join(repo, "a", "b")
@@ -346,7 +353,7 @@ func TestSkillsInstall_ProjectFlagUsesGitRoot(t *testing.T) {
 
 func TestSkillsList_ProjectFlagReportsProjectLevel(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 
 	repo := initTestGitRepo(t)
 	t.Chdir(repo)
@@ -365,7 +372,7 @@ func TestSkillsList_ProjectFlagReportsProjectLevel(t *testing.T) {
 
 func TestSkillsInstall_ProjectFlagOutsideRepoFallsBackToCWD(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 
 	outsideRepo := t.TempDir()
 	resolvedOutside, err := filepath.EvalSymlinks(outsideRepo)

@@ -108,7 +108,7 @@ func newSessionSearchCommand() *cobra.Command {
 	flags.StringVar(&dateTo, "date-to", "", "Sessions on or before YYYY-MM-DD")
 	flags.StringVar(&activeSince, "active-since", "", "Active since RFC3339 timestamp")
 	flags.StringVar(&since, "since", "",
-		"Only sessions active since a relative duration (3m, 14d, 12h, 1y) or YYYY-MM-DD")
+		"Only sessions active since a relative duration (12h, 14d, 2w, 3m = 3 months, 1y) or YYYY-MM-DD")
 	flags.BoolVar(&includeChildren, "include-children", false, "Include subagent sessions")
 	flags.BoolVar(&includeAutomated, "include-automated", false, "Include automated sessions")
 	flags.BoolVar(&includeOneShot, "include-one-shot", false, "Include one-shot sessions")

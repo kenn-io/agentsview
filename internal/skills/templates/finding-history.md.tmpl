@@ -25,8 +25,9 @@ the archive crawl, then synthesizes and verifies.
    agentsview session search "<exact string>" --fts --json --limit 8
    ```
 
-3. Narrow by recency when the ask implies it: `--since 3m`, `--since 14d`.
-   Widen or drop `--since` if results are thin.
+3. Narrow by recency when the ask implies it: `--since 14d`, `--since 3m`
+   (h/d/w/m/y units; `m` is months, not minutes). Widen or drop `--since`
+   if results are thin.
 4. Triage from the inline `context_before`/`context_after` in the results.
    Deep-dive only the strongest candidates:
 

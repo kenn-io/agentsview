@@ -50,24 +50,30 @@ func TestRenderProducesParseableFrontmatterAndDelegatePhrase(t *testing.T) {
 
 			assert.Equal(t, "agentsview-finding-history", rendered.Name)
 
-			headerLine, body, ok := strings.Cut(rendered.Content, "\n")
-			require.True(t, ok, "content must have a header line followed by a body")
+			// Frontmatter parsers require the fence as the first bytes, so
+			// the generated-by header must sit on line two, inside the fence.
+			lines := strings.SplitN(rendered.Content, "\n", 3)
+			require.Len(t, lines, 3, "content must have a fence line, header line, and body")
+			require.Equal(t, "---", lines[0], "content must start with the frontmatter fence")
+			headerLine := lines[1]
 
-			// The header hash must equal the recomputed body hash.
+			// The header hash must equal the hash of the content minus the
+			// header line (the pure template render).
 			match := headerPattern.FindStringSubmatch(headerLine)
-			require.NotNil(t, match, "header line must match the generated-by format: %q", headerLine)
+			require.NotNil(t, match, "second line must match the generated-by format: %q", headerLine)
 			assert.Equal(t, rendered.Hash, match[1])
-			sum := sha256.Sum256([]byte(body))
+			sum := sha256.Sum256([]byte("---\n" + lines[2]))
 			assert.Equal(t, hex.EncodeToString(sum[:]), rendered.Hash)
 			assert.Contains(t, headerLine, "1.2.3")
 
-			// The frontmatter must be well-formed YAML naming the skill.
-			parts := strings.SplitN(body, "---", 3)
-			require.Len(t, parts, 3, "body must have exactly two frontmatter fences")
+			// The frontmatter must be well-formed YAML naming the skill; the
+			// header is a YAML comment frontmatterField skips over.
+			parts := strings.SplitN(rendered.Content, "---", 3)
+			require.Len(t, parts, 3, "content must have exactly two frontmatter fences")
 			assert.Equal(t, "agentsview-finding-history", frontmatterField(t, parts[1], "name"))
 			assert.NotEmpty(t, frontmatterField(t, parts[1], "description"))
 
-			assert.Contains(t, body, tt.delegate)
+			assert.Contains(t, rendered.Content, tt.delegate)
 		})
 	}
 }
@@ -101,10 +107,15 @@ func TestClassify(t *testing.T) {
 
 	oldBody := "---\nname: agentsview-finding-history\n---\n\nAn earlier revision of the skill body.\n"
 	oldHash := bodyHash(oldBody)
-	oldContent := fmt.Sprintf(headerFormat, "1.0.0", oldHash) + "\n" + oldBody
+	oldContent := "---\n" + fmt.Sprintf(headerFormat, "1.0.0", oldHash) + "\n" +
+		strings.TrimPrefix(oldBody, "---\n")
 
-	_, freshBody, _ := strings.Cut(fresh.Content, "\n")
-	tamperedContent := fmt.Sprintf(headerFormat, "1.2.3", fresh.Hash) + "\n" + freshBody + "\nan uninvited edit\n"
+	tamperedContent := fresh.Content + "\nan uninvited edit\n"
+
+	// The pre-release rendered shape put the header above the fence; those
+	// files no longer classify as generated.
+	header, rest, _ := strings.Cut(strings.TrimPrefix(fresh.Content, "---\n"), "\n")
+	headerFirstContent := header + "\n---\n" + rest
 
 	tests := []struct {
 		name     string
@@ -116,6 +127,8 @@ func TestClassify(t *testing.T) {
 		{"stale but unmodified install", []byte(oldContent), StateStale},
 		{"modified install", []byte(tamperedContent), StateModified},
 		{"foreign file with no header", []byte("# Just a regular file\n\nsome text\n"), StateForeign},
+		{"fenced file without a generated-by header", []byte("---\nname: x\n---\nbody\n"), StateForeign},
+		{"header above the fence", []byte(headerFirstContent), StateForeign},
 		{"empty file", []byte(""), StateForeign},
 	}
 

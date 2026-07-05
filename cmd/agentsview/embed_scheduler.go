@@ -301,7 +301,10 @@ func translateSearchError(err error) error {
 	case errors.Is(err, vector.ErrNoActiveGeneration):
 		return db.ErrSemanticUnavailable
 	case errors.As(err, &queryEncErr):
-		return fmt.Errorf("%w: %v", db.ErrSemanticTransient, queryEncErr.Err)
+		// Double-wrap so callers can still match the underlying cause —
+		// notably context.Canceled/DeadlineExceeded from a dead client —
+		// alongside the transient sentinel.
+		return fmt.Errorf("%w: %w", db.ErrSemanticTransient, queryEncErr.Err)
 	default:
 		return err
 	}

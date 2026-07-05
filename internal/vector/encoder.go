@@ -82,17 +82,33 @@ func (e *HTTPStatusError) Permanent() bool {
 	return false
 }
 
+// hasDocumentSpecificEmbeddingError reports whether an embeddings error body
+// describes a rejection of the input document itself: an input/token/context
+// length overflow, or a content-policy refusal. Bare keywords are not enough
+// — "invalid token" is an auth failure and "unsupported content type" is a
+// media-type failure, and skip-stamping those would silently mark the whole
+// corpus embedded-with-no-vectors — so a size word must pair with an input
+// word, and "content" must pair with "policy".
 func hasDocumentSpecificEmbeddingError(body string) bool {
 	body = strings.ToLower(body)
+	if strings.Contains(body, "content") && strings.Contains(body, "policy") {
+		return true
+	}
+	overLimit := strings.Contains(body, "too long") ||
+		strings.Contains(body, "too large") ||
+		strings.Contains(body, "too many") ||
+		strings.Contains(body, "length") ||
+		strings.Contains(body, "limit") ||
+		strings.Contains(body, "maximum") ||
+		strings.Contains(body, "exceed") ||
+		strings.Contains(body, "overflow")
+	if !overLimit {
+		return false
+	}
 	return strings.Contains(body, "token") ||
 		strings.Contains(body, "context") ||
-		strings.Contains(body, "content") ||
-		strings.Contains(body, "policy") ||
-		(strings.Contains(body, "input") &&
-			(strings.Contains(body, "too long") ||
-				strings.Contains(body, "too large") ||
-				strings.Contains(body, "length") ||
-				strings.Contains(body, "exceed")))
+		strings.Contains(body, "input") ||
+		strings.Contains(body, "text")
 }
 
 // embeddingsRequestBody is the OpenAI-compatible embeddings request.

@@ -74,6 +74,7 @@ export class SearchService {
   public static getApiV1SearchContent({
     pattern,
     mode,
+    xAgentsViewSearchIntent,
     _in,
     excludeSystem,
     reveal,
@@ -101,6 +102,10 @@ export class SearchService {
      * Search mode
      */
     mode?: 'substring' | 'regex' | 'fts' | 'semantic' | 'hybrid',
+    /**
+     * Required for semantic/hybrid GET searches
+     */
+    xAgentsViewSearchIntent?: string,
     /**
      * Comma-separated content sources
      */
@@ -177,6 +182,9 @@ export class SearchService {
     return __request(OpenAPI, {
       method: 'GET',
       url: '/api/v1/search/content',
+      headers: {
+        'X-AgentsView-Search-Intent': xAgentsViewSearchIntent,
+      },
       query: {
         'pattern': pattern,
         'mode': mode,
