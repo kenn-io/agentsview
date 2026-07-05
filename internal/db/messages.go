@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -437,6 +438,260 @@ func (db *DB) ScanEmbeddableMessages(
 		return "", fmt.Errorf("iterating embeddable messages: %w", err)
 	}
 	return maxEnded, nil
+}
+
+// EmbeddableUnit is one embedding document: a single embeddable user
+// message, or a run of contiguous embeddable assistant messages.
+type EmbeddableUnit struct {
+	SessionID   string
+	Kind        string // "user" | "run"
+	SourceUUID  string // first member's source_uuid ("" legacy)
+	Ordinal     int    // first member's ordinal (ordinal_start)
+	OrdinalEnd  int    // last member's ordinal (== Ordinal for user docs)
+	Subordinate bool
+	Content     string       // members joined with "\n\n"
+	Offsets     []UnitOffset // one per member; nil for user docs
+}
+
+// UnitOffset locates one member message inside a run's joined content.
+type UnitOffset struct {
+	Ordinal   int `json:"o"`
+	RuneStart int `json:"r"`
+	ByteStart int `json:"b"`
+}
+
+// ScanEmbeddableUnits streams the same embeddable universe as
+// ScanEmbeddableMessages (see its doc comment for the since/maxEnded/
+// includeAutomated semantics, which are identical here), but reduces
+// contiguous runs of embeddable assistant messages between embeddable user
+// messages into single EmbeddableUnit "run" documents; each embeddable user
+// message is emitted as its own "user" unit. Units are emitted in
+// (session_id, ordinal) order of their first member, closing any open run
+// whenever an embeddable user row, a session boundary, or an is_sidechain
+// transition is reached, and finally at the end of the scan.
+//
+// Because the SQL predicates already exclude non-embeddable user rows
+// (is_system, system-prefixed) from the stream entirely, "does this row
+// split the run" has no separate detector to get wrong: an embeddable user
+// row always closes any open run and emits its own unit, and an excluded
+// user row is simply invisible to the reducer, which is exactly the desired
+// "does not split" behavior.
+//
+// A unit is Subordinate when its session is a subagent or fork session, or
+// has a parent session and is not an explicit continuation of it, or (for a
+// run) its members are is_sidechain -- a sidechain transition always closes
+// the run first, so every member of one run shares a single is_sidechain
+// value.
+func (db *DB) ScanEmbeddableUnits(
+	ctx context.Context, since string, includeAutomated bool,
+	fn func(EmbeddableUnit) error,
+) (maxEnded string, err error) {
+	preds := []string{
+		"m.role IN ('user', 'assistant')",
+		"m.is_system = 0",
+		"s.deleted_at IS NULL",
+		SystemPrefixSQL("m.content", "m.role"),
+	}
+	if !includeAutomated {
+		preds = append(preds, automatedScopePredicate("human", "s.is_automated"))
+	}
+
+	query := `
+		SELECT m.session_id, m.role, m.source_uuid, m.ordinal, m.content,
+		       m.is_sidechain, s.relationship_type, s.parent_session_id,
+		       s.ended_at
+		FROM messages m
+		JOIN sessions s ON s.id = m.session_id
+		WHERE ` + strings.Join(preds, "\n\t\t  AND ") + `
+		` + optionalSinceClause(since) + `
+		ORDER BY m.session_id, m.ordinal`
+
+	args := []any{}
+	if since != "" {
+		args = append(args, since)
+	}
+
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return "", fmt.Errorf("scanning embeddable units: %w", err)
+	}
+	defer rows.Close()
+
+	red := &unitReducer{fn: fn}
+	maxEnded, err = reduceUnitRows(rows, red)
+	if err != nil {
+		return "", err
+	}
+	if err := red.finish(); err != nil {
+		return "", err
+	}
+	return maxEnded, nil
+}
+
+// reduceUnitRows scans every row of an open ScanEmbeddableUnits query into
+// red, tracking the chronologically latest sessions.ended_at seen across
+// them. It does not flush red's final open run -- callers must call
+// red.finish() once scanning completes.
+func reduceUnitRows(rows *sql.Rows, red *unitReducer) (maxEnded string, err error) {
+	for rows.Next() {
+		var row unitRow
+		var relationshipType string
+		var parentSessionID, ended sql.NullString
+		if err := rows.Scan(
+			&row.sessionID, &row.role, &row.sourceUUID, &row.ordinal,
+			&row.content, &row.sidechain, &relationshipType,
+			&parentSessionID, &ended,
+		); err != nil {
+			return "", fmt.Errorf("scanning embeddable unit row: %w", err)
+		}
+		if ended.Valid && endedAfter(ended.String, maxEnded) {
+			maxEnded = ended.String
+		}
+		row.subordinateSession = isSubordinateSession(relationshipType, parentSessionID)
+		if err := red.push(row); err != nil {
+			return "", err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("iterating embeddable units: %w", err)
+	}
+	return maxEnded, nil
+}
+
+// isSubordinateSession reports whether every unit produced from a session is
+// subordinate: a subagent or fork session, or any session with a parent that
+// is not an explicit continuation of it. A session with no parent (and not
+// itself a subagent/fork) is top-level.
+func isSubordinateSession(
+	relationshipType string, parentSessionID sql.NullString,
+) bool {
+	if relationshipType == "subagent" || relationshipType == "fork" {
+		return true
+	}
+	hasParent := parentSessionID.Valid && parentSessionID.String != ""
+	return hasParent && relationshipType != "continuation"
+}
+
+// unitRow is one scanned ScanEmbeddableUnits row, carrying the
+// session-level subordinate classification alongside the per-message fields
+// needed to build either a user doc or a run member.
+type unitRow struct {
+	sessionID          string
+	role               string
+	sourceUUID         string
+	ordinal            int
+	content            string
+	sidechain          bool
+	subordinateSession bool
+}
+
+// unitReducer accumulates ScanEmbeddableUnits rows (already ordered by
+// session_id, ordinal) into EmbeddableUnit documents, emitting each through
+// fn as soon as it closes. Rows must be pushed in stream order; finish must
+// be called once after the last row to flush any run still open at the end
+// of the scan.
+type unitReducer struct {
+	fn func(EmbeddableUnit) error
+
+	haveSession bool
+	sessionID   string
+	run         []unitRow
+}
+
+// push feeds one row into the reducer, emitting a user unit immediately or
+// accumulating an assistant row into the open run. It closes any open run
+// first whenever the row starts a new session, is a user row, or (for an
+// assistant row) has an is_sidechain value different from the open run's.
+func (r *unitReducer) push(row unitRow) error {
+	newSession := r.haveSession && row.sessionID != r.sessionID
+	if err := r.closeRunIf(newSession); err != nil {
+		return err
+	}
+	r.haveSession = true
+	r.sessionID = row.sessionID
+
+	if row.role == "user" {
+		if err := r.closeRun(); err != nil {
+			return err
+		}
+		return r.fn(userUnit(row))
+	}
+
+	sidechainFlip := len(r.run) > 0 && row.sidechain != r.run[0].sidechain
+	if err := r.closeRunIf(sidechainFlip); err != nil {
+		return err
+	}
+	r.run = append(r.run, row)
+	return nil
+}
+
+// closeRunIf closes the open run when cond is true; it is a no-op otherwise.
+func (r *unitReducer) closeRunIf(cond bool) error {
+	if !cond {
+		return nil
+	}
+	return r.closeRun()
+}
+
+// finish flushes any run left open at the end of the scan.
+func (r *unitReducer) finish() error {
+	return r.closeRun()
+}
+
+func (r *unitReducer) closeRun() error {
+	if len(r.run) == 0 {
+		return nil
+	}
+	unit := runUnit(r.run)
+	r.run = nil
+	return r.fn(unit)
+}
+
+// userUnit builds the single-member "user" unit for an embeddable user row.
+func userUnit(row unitRow) EmbeddableUnit {
+	return EmbeddableUnit{
+		SessionID:   row.sessionID,
+		Kind:        "user",
+		SourceUUID:  row.sourceUUID,
+		Ordinal:     row.ordinal,
+		OrdinalEnd:  row.ordinal,
+		Subordinate: row.subordinateSession || row.sidechain,
+		Content:     row.content,
+	}
+}
+
+// runUnit joins a closed run's members with "\n\n" into one "run" unit,
+// recording each member's rune/byte offset into the joined content. The
+// separator is ASCII, so its rune and byte lengths are equal.
+func runUnit(members []unitRow) EmbeddableUnit {
+	const sep = "\n\n"
+	first := members[0]
+	var b strings.Builder
+	offsets := make([]UnitOffset, len(members))
+	runeStart, byteStart := 0, 0
+	for i, m := range members {
+		if i > 0 {
+			b.WriteString(sep)
+			runeStart += len(sep)
+			byteStart += len(sep)
+		}
+		offsets[i] = UnitOffset{
+			Ordinal: m.ordinal, RuneStart: runeStart, ByteStart: byteStart,
+		}
+		b.WriteString(m.content)
+		runeStart += utf8.RuneCountInString(m.content)
+		byteStart += len(m.content)
+	}
+	return EmbeddableUnit{
+		SessionID:   first.sessionID,
+		Kind:        "run",
+		SourceUUID:  first.sourceUUID,
+		Ordinal:     first.ordinal,
+		OrdinalEnd:  members[len(members)-1].ordinal,
+		Subordinate: first.subordinateSession || first.sidechain,
+		Content:     b.String(),
+		Offsets:     offsets,
+	}
 }
 
 // optionalSinceClause returns the AND clause restricting the embeddable scan
