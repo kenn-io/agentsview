@@ -322,8 +322,8 @@ type vectorServing struct {
 // setupVectorServing acquires vectors.write.lock, opens vectors.db
 // read-write, builds the embeddings encoder and Manager, wires database's
 // semantic searcher, and constructs the after-sync scheduler. database is
-// passed directly as the Manager's MessageSource since *db.DB already
-// implements vector.MessageSource.
+// passed directly as the Manager's UnitSource since *db.DB already
+// implements vector.UnitSource.
 //
 // The write lock is held for the daemon's lifetime (released by the
 // returned Close) so a concurrent direct `embeddings build` cannot race the

@@ -845,7 +845,7 @@ func (db *DB) hybridVectorLeg(
 
 // hybridFTSLeg runs a rank-ordered FTS query over the embedded universe
 // (role user/assistant, is_system = 0, system-prefix excluded -- the same
-// predicate ScanEmbeddableMessages uses), scoped to qualifying sessions in
+// predicate ScanEmbeddableUnits uses), scoped to qualifying sessions in
 // SQL, and returns up to k hits as rank-ordered kitvec hits plus their raw
 // (unredacted) snippet() output keyed by matchKey.
 func (db *DB) hybridFTSLeg(

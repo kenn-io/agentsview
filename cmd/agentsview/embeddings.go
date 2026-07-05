@@ -261,24 +261,25 @@ func runEmbeddingsBuild(
 	return runEmbeddingsBuildDirect(ctx, out, cfg, req)
 }
 
-// confirmFullRebuild prints and reads the "This re-embeds all N messages."
-// confirmation prompt, where N is the current count of embeddable messages
-// in the archive under includeAutomated's scope.
+// confirmFullRebuild prints and reads the "This re-embeds all N documents."
+// confirmation prompt, where N is the current count of embeddable unit
+// documents (user messages and assistant runs) in the archive under
+// includeAutomated's scope — the exact set a full rebuild re-embeds.
 func confirmFullRebuild(
 	ctx context.Context, in io.Reader, out io.Writer, cfg config.Config, includeAutomated bool,
 ) (bool, error) {
-	n, err := countEmbeddableMessages(ctx, cfg, includeAutomated)
+	n, err := countEmbeddableUnits(ctx, cfg, includeAutomated)
 	if err != nil {
-		return false, fmt.Errorf("counting messages: %w", err)
+		return false, fmt.Errorf("counting documents: %w", err)
 	}
-	msg := fmt.Sprintf("This re-embeds all %d messages. Continue?", n)
+	msg := fmt.Sprintf("This re-embeds all %d documents. Continue?", n)
 	return confirm(in, out, msg), nil
 }
 
-// countEmbeddableMessages opens the archive database read-only and counts
-// every message eligible for embedding under includeAutomated's scope, for
-// the full-rebuild confirmation prompt.
-func countEmbeddableMessages(ctx context.Context, cfg config.Config, includeAutomated bool) (int, error) {
+// countEmbeddableUnits opens the archive database read-only and counts
+// every unit document eligible for embedding under includeAutomated's
+// scope, for the full-rebuild confirmation prompt.
+func countEmbeddableUnits(ctx context.Context, cfg config.Config, includeAutomated bool) (int, error) {
 	archiveDB, err := openReadOnlyDB(cfg)
 	if err != nil {
 		return 0, err
@@ -286,8 +287,8 @@ func countEmbeddableMessages(ctx context.Context, cfg config.Config, includeAuto
 	defer archiveDB.Close()
 
 	var n int
-	if _, err := archiveDB.ScanEmbeddableMessages(
-		ctx, "", includeAutomated, func(db.EmbeddableMessage) error {
+	if _, err := archiveDB.ScanEmbeddableUnits(
+		ctx, "", includeAutomated, func(db.EmbeddableUnit) error {
 			n++
 			return nil
 		},

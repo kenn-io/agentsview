@@ -7,7 +7,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/db"
 	kitvec "go.kenn.io/kit/vector"
 	"go.kenn.io/kit/vector/sqlitevec"
 )
@@ -34,18 +33,18 @@ func fakeSearchEncoder() func(_ context.Context, texts []string) ([][]float32, e
 
 // threeDocSearchSource returns three single-topic documents in one session,
 // one each for "alpha", "beta", and a third ("gamma") topic.
-func threeDocSearchSource() *fakeMessageSource {
-	return &fakeMessageSource{rows: []fakeRow{
+func threeDocSearchSource() *fakeUnitSource {
+	return &fakeUnitSource{rows: []fakeUnit{
 		{
-			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "u1", Ordinal: 0, Content: "this message mentions alpha topic"},
+			unit:    userDoc("s1", "u1", 0, "this message mentions alpha topic"),
 			endedAt: "2024-01-01T00:00:00Z",
 		},
 		{
-			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "u2", Ordinal: 1, Content: "this message mentions beta topic"},
+			unit:    userDoc("s1", "u2", 1, "this message mentions beta topic"),
 			endedAt: "2024-01-01T00:00:01Z",
 		},
 		{
-			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "u3", Ordinal: 2, Content: "this message mentions gamma topic"},
+			unit:    userDoc("s1", "u3", 2, "this message mentions gamma topic"),
 			endedAt: "2024-01-01T00:00:02Z",
 		},
 	}}

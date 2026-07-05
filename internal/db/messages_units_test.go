@@ -89,8 +89,8 @@ func TestScanEmbeddableUnitsUserAssistantAlternation(t *testing.T) {
 
 // TestScanEmbeddableUnitsSystemPrefixedUserRowDoesNotSplitRun asserts that a
 // system-prefixed user row (excluded from the embeddable universe by
-// SystemPrefixSQL, same as ScanEmbeddableMessages) is invisible to the
-// reducer and therefore does not split the assistant run around it.
+// SystemPrefixSQL) is invisible to the reducer and therefore does not split
+// the assistant run around it.
 func TestScanEmbeddableUnitsSystemPrefixedUserRowDoesNotSplitRun(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "sess-1", "proj", func(s *Session) {
@@ -329,11 +329,14 @@ func TestScanEmbeddableUnitsSingleMessageRunDegenerates(t *testing.T) {
 		got[0].Offsets[0])
 }
 
-// TestScanEmbeddableUnitsSinceAndMaxEndedMatchScanEmbeddableMessages asserts
-// that ScanEmbeddableUnits reuses ScanEmbeddableMessages' exact since/maxEnded
-// semantics: chronological (not lexicographic) comparison of mixed
-// fractional-second ended_at precision.
-func TestScanEmbeddableUnitsSinceAndMaxEndedMatchScanEmbeddableMessages(t *testing.T) {
+// TestScanEmbeddableUnitsMixedFractionalPrecisionSinceAndMaxEnded asserts
+// the since filter and the returned maxEnded watermark compare mixed
+// fractional-second ended_at precision chronologically, not
+// lexicographically: a raw string comparison ranks "...01Z" above
+// "...01.500Z" because '.' sorts below 'Z', so a buggy implementation would
+// both wrongly exclude a since-eligible fractional row and wrongly report an
+// earlier whole-second row as the max.
+func TestScanEmbeddableUnitsMixedFractionalPrecisionSinceAndMaxEnded(t *testing.T) {
 	d := testDB(t)
 
 	seed := func(id, endedAt string) {
@@ -368,8 +371,9 @@ func TestScanEmbeddableUnitsSinceAndMaxEndedMatchScanEmbeddableMessages(t *testi
 }
 
 // TestScanEmbeddableUnitsExcludesAutomatedByDefault asserts an automated
-// session's units are excluded when includeAutomated is false and included
-// when true, mirroring ScanEmbeddableMessages' default scope.
+// session's units are excluded when includeAutomated is false (the embedding
+// index's default scope, mirroring session search's default exclusion of
+// automated sessions) and included when true.
 func TestScanEmbeddableUnitsExcludesAutomatedByDefault(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "human-sess", "proj", func(s *Session) {
@@ -409,6 +413,257 @@ func TestScanEmbeddableUnitsExcludesAutomatedByDefault(t *testing.T) {
 			assert.ElementsMatch(t, tt.want, ids)
 		})
 	}
+}
+
+// TestScanEmbeddableUnitsFiltersRolesAndPrefixes seeds one session with a
+// mix of user/assistant/tool/system-role messages plus a system-prefixed and
+// an is_system user message, and asserts only the clean user/assistant rows
+// contribute units, with maxEnded reporting the session's ended_at.
+func TestScanEmbeddableUnitsFiltersRolesAndPrefixes(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "sess-1", "proj", func(s *Session) {
+		s.EndedAt = Ptr(tsHour1)
+	})
+	insertMessages(t, d,
+		Message{
+			SessionID: "sess-1", Ordinal: 0, Role: "user",
+			Content: "hello there", ContentLength: len("hello there"),
+			Timestamp: tsZero,
+		},
+		Message{
+			SessionID: "sess-1", Ordinal: 1, Role: "assistant",
+			Content: "hi back", ContentLength: len("hi back"),
+			Timestamp: tsZeroS1,
+		},
+		Message{
+			SessionID: "sess-1", Ordinal: 2, Role: "tool",
+			Content: "tool output", ContentLength: len("tool output"),
+			Timestamp: tsZeroS2,
+		},
+		Message{
+			SessionID: "sess-1", Ordinal: 3, Role: "system",
+			Content: "system note", ContentLength: len("system note"),
+			Timestamp: tsHour1,
+		},
+		Message{
+			SessionID: "sess-1", Ordinal: 4, Role: "user",
+			Content:       "This session is being continued from a previous one",
+			ContentLength: 10, Timestamp: tsHour1,
+		},
+		Message{
+			SessionID: "sess-1", Ordinal: 5, Role: "user",
+			Content: "is_system flag set", ContentLength: 19,
+			Timestamp: tsHour1, IsSystem: true,
+		},
+	)
+
+	got, maxEnded := scanUnits(t, d, "", true)
+
+	require.Len(t, got, 2)
+	assert.Equal(t, EmbeddableUnit{
+		SessionID: "sess-1", Kind: "user", Ordinal: 0, OrdinalEnd: 0,
+		Content: "hello there",
+	}, got[0])
+	assert.Equal(t, "run", got[1].Kind)
+	assert.Equal(t, 1, got[1].Ordinal)
+	assert.Equal(t, 1, got[1].OrdinalEnd)
+	assert.Equal(t, "hi back", got[1].Content)
+	assert.Equal(t, tsHour1, maxEnded)
+}
+
+// TestScanEmbeddableUnitsSinceFiltersOlderSessions asserts that since
+// restricts the scan to sessions whose ended_at is >= since, excluding an
+// older session entirely.
+func TestScanEmbeddableUnitsSinceFiltersOlderSessions(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "old-sess", "proj", func(s *Session) {
+		s.EndedAt = Ptr(tsZero)
+	})
+	insertMessages(t, d, Message{
+		SessionID: "old-sess", Ordinal: 0, Role: "user",
+		Content: "old content", ContentLength: len("old content"),
+		Timestamp: tsZero,
+	})
+
+	insertSession(t, d, "new-sess", "proj", func(s *Session) {
+		s.EndedAt = Ptr(tsMidYear)
+	})
+	insertMessages(t, d, Message{
+		SessionID: "new-sess", Ordinal: 0, Role: "user",
+		Content: "new content", ContentLength: len("new content"),
+		Timestamp: tsMidYear,
+	})
+
+	got, maxEnded := scanUnits(t, d, tsHour1, true)
+
+	require.Len(t, got, 1)
+	assert.Equal(t, "new-sess", got[0].SessionID)
+	assert.Equal(t, tsMidYear, maxEnded)
+}
+
+// TestScanEmbeddableUnitsSinceIncludesNullEndedAtSessions asserts that a
+// session whose ended_at is NULL (still in progress, or never set by its
+// parser) is not silently excluded from an incremental (since-watermark)
+// scan — only a full rescan (since="") previously caught it, leaving its
+// messages invisible to the embedding index until then. A session that
+// genuinely ended before since must still be excluded.
+func TestScanEmbeddableUnitsSinceIncludesNullEndedAtSessions(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "open-sess", "proj") // EndedAt left NULL
+	insertMessages(t, d, Message{
+		SessionID: "open-sess", Ordinal: 0, Role: "user",
+		Content: "still running", ContentLength: len("still running"),
+		Timestamp: tsZero,
+	})
+
+	insertSession(t, d, "old-sess", "proj", func(s *Session) {
+		s.EndedAt = Ptr(tsZero)
+	})
+	insertMessages(t, d, Message{
+		SessionID: "old-sess", Ordinal: 0, Role: "user",
+		Content: "old content", ContentLength: len("old content"),
+		Timestamp: tsZero,
+	})
+
+	got, _ := scanUnits(t, d, tsHour1, true)
+
+	var ids []string
+	for _, u := range got {
+		ids = append(ids, u.SessionID)
+	}
+	assert.Contains(t, ids, "open-sess",
+		"a NULL ended_at session must still be visible to an incremental scan")
+	assert.NotContains(t, ids, "old-sess",
+		"a session that genuinely ended before since must still be excluded")
+}
+
+// TestScanEmbeddableUnitsSinceIncludesEmptyStringEndedAtSessions asserts
+// that a session whose ended_at is the legacy empty-string sentinel (not
+// NULL, but never populated by an older parser run) behaves the same as a
+// NULL ended_at in an incremental scan: it must not be excluded once any
+// refresh watermark exists, and it must never become the reported maxEnded
+// watermark, since "" is not a valid timestamp to persist.
+func TestScanEmbeddableUnitsSinceIncludesEmptyStringEndedAtSessions(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "legacy-sess", "proj", func(s *Session) {
+		s.EndedAt = Ptr("")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "legacy-sess", Ordinal: 0, Role: "user",
+		Content: "legacy content", ContentLength: len("legacy content"),
+		Timestamp: tsZero,
+	})
+
+	insertSession(t, d, "old-sess", "proj", func(s *Session) {
+		s.EndedAt = Ptr(tsZero)
+	})
+	insertMessages(t, d, Message{
+		SessionID: "old-sess", Ordinal: 0, Role: "user",
+		Content: "old content", ContentLength: len("old content"),
+		Timestamp: tsZero,
+	})
+
+	got, maxEnded := scanUnits(t, d, tsHour1, true)
+
+	var ids []string
+	for _, u := range got {
+		ids = append(ids, u.SessionID)
+	}
+	assert.Contains(t, ids, "legacy-sess",
+		"a legacy empty-string ended_at session must still be visible to "+
+			"an incremental scan")
+	assert.NotContains(t, ids, "old-sess",
+		"a session that genuinely ended before since must still be excluded")
+	assert.Empty(t, maxEnded,
+		"an empty-string ended_at must never become the refresh watermark")
+}
+
+// TestScanEmbeddableUnitsEmptyReturnsEmptyWatermark asserts that scanning an
+// archive with no embeddable messages returns an empty maxEnded and never
+// emits a unit.
+func TestScanEmbeddableUnitsEmptyReturnsEmptyWatermark(t *testing.T) {
+	d := testDB(t)
+
+	got, maxEnded := scanUnits(t, d, "", true)
+	assert.Empty(t, got)
+	assert.Empty(t, maxEnded)
+}
+
+// TestScanEmbeddableUnitsOrdersBySessionThenOrdinal asserts units stream in
+// (session_id, ordinal) order of their first member across multiple
+// sessions, regardless of insertion order.
+func TestScanEmbeddableUnitsOrdersBySessionThenOrdinal(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "sess-b", "proj", func(s *Session) {
+		s.EndedAt = Ptr(tsHour1)
+	})
+	insertSession(t, d, "sess-a", "proj", func(s *Session) {
+		s.EndedAt = Ptr(tsHour1)
+	})
+	insertMessages(t, d,
+		Message{
+			SessionID: "sess-b", Ordinal: 0, Role: "user",
+			Content: "b0", ContentLength: 2, Timestamp: tsZero,
+		},
+		Message{
+			SessionID: "sess-a", Ordinal: 1, Role: "assistant",
+			Content: "a1", ContentLength: 2, Timestamp: tsZeroS1,
+			SourceUUID: "uuid-a1",
+		},
+		Message{
+			SessionID: "sess-a", Ordinal: 0, Role: "user",
+			Content: "a0", ContentLength: 2, Timestamp: tsZero,
+			SourceUUID: "uuid-a0",
+		},
+	)
+
+	got, _ := scanUnits(t, d, "", true)
+
+	require.Len(t, got, 3)
+	assert.Equal(t, "sess-a", got[0].SessionID)
+	assert.Equal(t, 0, got[0].Ordinal)
+	assert.Equal(t, "uuid-a0", got[0].SourceUUID)
+	assert.Equal(t, "sess-a", got[1].SessionID)
+	assert.Equal(t, 1, got[1].Ordinal)
+	assert.Equal(t, "uuid-a1", got[1].SourceUUID)
+	assert.Equal(t, "sess-b", got[2].SessionID)
+	assert.Equal(t, 0, got[2].Ordinal)
+}
+
+// TestScanEmbeddableUnitsExcludesTrashedSessions asserts that units
+// belonging to a soft-deleted (trashed) session never stream, since a
+// trashed session's content should not be indexed for semantic search.
+func TestScanEmbeddableUnitsExcludesTrashedSessions(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "trashed-sess", "proj", func(s *Session) {
+		s.EndedAt = Ptr(tsHour1)
+	})
+	insertMessages(t, d, Message{
+		SessionID: "trashed-sess", Ordinal: 0, Role: "user",
+		Content: "trashed content", ContentLength: len("trashed content"),
+		Timestamp: tsZero,
+	})
+	require.NoError(t, d.SoftDeleteSession("trashed-sess"))
+
+	insertSession(t, d, "live-sess", "proj", func(s *Session) {
+		s.EndedAt = Ptr(tsHour1)
+	})
+	insertMessages(t, d, Message{
+		SessionID: "live-sess", Ordinal: 0, Role: "user",
+		Content: "live content", ContentLength: len("live content"),
+		Timestamp: tsZero,
+	})
+
+	got, _ := scanUnits(t, d, "", true)
+
+	require.Len(t, got, 1)
+	assert.Equal(t, "live-sess", got[0].SessionID)
 }
 
 // TestScanEmbeddableUnitsSessionChangeClosesOpenRun asserts that a run left

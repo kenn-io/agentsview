@@ -44,7 +44,7 @@ func (e *refusalError) Is(target error) bool { return target == ErrGenerationRef
 // active-generation check) hold under concurrent calls.
 type Manager struct {
 	ix        *Index
-	src       MessageSource
+	src       UnitSource
 	enc       kitvec.EncodeFunc
 	gen       kitvec.Generation
 	batchSize int
@@ -89,7 +89,7 @@ type BuildStatus struct {
 // wrapped so a panic inside it surfaces as an encode error rather than
 // crashing the process (see recoveringEncoder).
 func NewManager(
-	ix *Index, src MessageSource, enc kitvec.EncodeFunc,
+	ix *Index, src UnitSource, enc kitvec.EncodeFunc,
 	gen kitvec.Generation, batchSize int,
 ) *Manager {
 	return &Manager{

@@ -10,7 +10,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/db"
 	kitvec "go.kenn.io/kit/vector"
 	"go.kenn.io/kit/vector/sqlitevec"
 )
@@ -28,16 +27,16 @@ func fakeBuildEncoder() kitvec.EncodeFunc {
 	}
 }
 
-// twoDocSource returns a fakeMessageSource with two distinct messages in
-// one session, the small corpus most build tests share.
-func twoDocSource() *fakeMessageSource {
-	return &fakeMessageSource{rows: []fakeRow{
+// twoDocSource returns a fakeUnitSource with two distinct user documents
+// in one session, the small corpus most build tests share.
+func twoDocSource() *fakeUnitSource {
+	return &fakeUnitSource{rows: []fakeUnit{
 		{
-			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "u1", Ordinal: 0, Content: "hello"},
+			unit:    userDoc("s1", "u1", 0, "hello"),
 			endedAt: "2024-01-01T00:00:00Z",
 		},
 		{
-			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "u2", Ordinal: 1, Content: "world"},
+			unit:    userDoc("s1", "u2", 1, "world"),
 			endedAt: "2024-01-01T00:00:01Z",
 		},
 	}}
@@ -93,7 +92,7 @@ func TestBuildContentChangeReembedsExactlyOne(t *testing.T) {
 	// newer timestamp than the watermark the first build advanced to, or
 	// the fake source's incremental scan (mimicking the real one) would
 	// never resurface it.
-	src.rows[0].msg.Content = "changed"
+	src.rows[0].unit.Content = "changed"
 	src.rows[0].endedAt = "2024-01-02T00:00:00Z"
 
 	result, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
@@ -203,13 +202,13 @@ func TestBuildScopeChangeToIncludeAutomatedForcesFullRefreshAndEmbedsOlderDoc(t 
 	ctx := context.Background()
 	gen := fakeGeneration("fake-model")
 
-	src := &fakeMessageSource{rows: []fakeRow{
+	src := &fakeUnitSource{rows: []fakeUnit{
 		{
-			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "human", Ordinal: 0, Content: "hello"},
+			unit:    userDoc("s1", "human", 0, "hello"),
 			endedAt: "2024-01-02T00:00:00Z",
 		},
 		{
-			msg:       db.EmbeddableMessage{SessionID: "s2", SourceUUID: "auto", Ordinal: 0, Content: "roborev output"},
+			unit:      userDoc("s2", "auto", 0, "roborev output"),
 			endedAt:   "2024-01-01T00:00:00Z", // older than the human doc
 			automated: true,
 		},
@@ -237,13 +236,13 @@ func TestBuildScopeChangeToExcludeAutomatedRemovesOutOfScopeMirrorRow(t *testing
 	ctx := context.Background()
 	gen := fakeGeneration("fake-model")
 
-	src := &fakeMessageSource{rows: []fakeRow{
+	src := &fakeUnitSource{rows: []fakeUnit{
 		{
-			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "human", Ordinal: 0, Content: "hello"},
+			unit:    userDoc("s1", "human", 0, "hello"),
 			endedAt: "2024-01-01T00:00:00Z",
 		},
 		{
-			msg:       db.EmbeddableMessage{SessionID: "s2", SourceUUID: "auto", Ordinal: 0, Content: "roborev output"},
+			unit:      userDoc("s2", "auto", 0, "roborev output"),
 			endedAt:   "2024-01-02T00:00:00Z",
 			automated: true,
 		},
@@ -286,9 +285,9 @@ func TestBuildLegacyMirrorMissingScopeKeyForcesFullRefresh(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, hasScope, "test setup must not pre-seed a scope key")
 
-	src := &fakeMessageSource{rows: []fakeRow{
+	src := &fakeUnitSource{rows: []fakeUnit{
 		{
-			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "human", Ordinal: 0, Content: "hello"},
+			unit:    userDoc("s1", "human", 0, "hello"),
 			endedAt: "2024-01-01T00:00:00Z", // older than the stored watermark
 		},
 	}}
@@ -348,13 +347,13 @@ func TestCountPendingSumsChunksAcrossMultiChunkDocuments(t *testing.T) {
 	ix := openTestIndex(t)
 	ctx := context.Background()
 	longContent := strings.Repeat("word ", 2000) // far past the 4000-rune split threshold
-	src := &fakeMessageSource{rows: []fakeRow{
+	src := &fakeUnitSource{rows: []fakeUnit{
 		{
-			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "u1", Ordinal: 0, Content: "short"},
+			unit:    userDoc("s1", "u1", 0, "short"),
 			endedAt: "2024-01-01T00:00:00Z",
 		},
 		{
-			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "u2", Ordinal: 1, Content: longContent},
+			unit:    userDoc("s1", "u2", 1, longContent),
 			endedAt: "2024-01-01T00:00:01Z",
 		},
 	}}
@@ -416,13 +415,13 @@ func TestBuildProgressNeverExceedsTotalWithMultiChunkMessage(t *testing.T) {
 	ix := openTestIndex(t)
 	ctx := context.Background()
 	longContent := strings.Repeat("word ", 2000)
-	src := &fakeMessageSource{rows: []fakeRow{
+	src := &fakeUnitSource{rows: []fakeUnit{
 		{
-			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "u1", Ordinal: 0, Content: "short"},
+			unit:    userDoc("s1", "u1", 0, "short"),
 			endedAt: "2024-01-01T00:00:00Z",
 		},
 		{
-			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "u2", Ordinal: 1, Content: longContent},
+			unit:    userDoc("s1", "u2", 1, longContent),
 			endedAt: "2024-01-01T00:00:01Z",
 		},
 	}}
@@ -447,17 +446,17 @@ func TestBuildProgressNeverExceedsTotalWithMultiChunkMessage(t *testing.T) {
 func TestBuildEncoderErrorAbortsAndRetryResumesWithoutReembedding(t *testing.T) {
 	ix := openTestIndex(t)
 	ctx := context.Background()
-	src := &fakeMessageSource{rows: []fakeRow{
+	src := &fakeUnitSource{rows: []fakeUnit{
 		{
-			msg:     db.EmbeddableMessage{SessionID: "s1", Ordinal: 0, Content: "one"},
+			unit:    userDoc("s1", "", 0, "one"),
 			endedAt: "2024-01-01T00:00:00Z",
 		},
 		{
-			msg:     db.EmbeddableMessage{SessionID: "s1", Ordinal: 1, Content: "bad"},
+			unit:    userDoc("s1", "", 1, "bad"),
 			endedAt: "2024-01-01T00:00:01Z",
 		},
 		{
-			msg:     db.EmbeddableMessage{SessionID: "s1", Ordinal: 2, Content: "three"},
+			unit:    userDoc("s1", "", 2, "three"),
 			endedAt: "2024-01-01T00:00:02Z",
 		},
 	}}
@@ -498,17 +497,17 @@ func TestBuildEncoderErrorAbortsAndRetryResumesWithoutReembedding(t *testing.T) 
 func TestBuildSkipsPermanentlyRejectedDocumentAndContinues(t *testing.T) {
 	ix := openTestIndex(t)
 	ctx := context.Background()
-	src := &fakeMessageSource{rows: []fakeRow{
+	src := &fakeUnitSource{rows: []fakeUnit{
 		{
-			msg:     db.EmbeddableMessage{SessionID: "s1", Ordinal: 0, Content: "one"},
+			unit:    userDoc("s1", "", 0, "one"),
 			endedAt: "2024-01-01T00:00:00Z",
 		},
 		{
-			msg:     db.EmbeddableMessage{SessionID: "s1", Ordinal: 1, Content: "poison"},
+			unit:    userDoc("s1", "", 1, "poison"),
 			endedAt: "2024-01-01T00:00:01Z",
 		},
 		{
-			msg:     db.EmbeddableMessage{SessionID: "s1", Ordinal: 2, Content: "three"},
+			unit:    userDoc("s1", "", 2, "three"),
 			endedAt: "2024-01-01T00:00:02Z",
 		},
 	}}
@@ -616,13 +615,13 @@ func TestBuildSchema400EncodeErrorAbortsAndLeavesDocumentsPending(t *testing.T) 
 func TestBuild5xxEncodeErrorStillAbortsFill(t *testing.T) {
 	ix := openTestIndex(t)
 	ctx := context.Background()
-	src := &fakeMessageSource{rows: []fakeRow{
+	src := &fakeUnitSource{rows: []fakeUnit{
 		{
-			msg:     db.EmbeddableMessage{SessionID: "s1", Ordinal: 0, Content: "one"},
+			unit:    userDoc("s1", "", 0, "one"),
 			endedAt: "2024-01-01T00:00:00Z",
 		},
 		{
-			msg:     db.EmbeddableMessage{SessionID: "s1", Ordinal: 1, Content: "bad"},
+			unit:    userDoc("s1", "", 1, "bad"),
 			endedAt: "2024-01-01T00:00:01Z",
 		},
 	}}

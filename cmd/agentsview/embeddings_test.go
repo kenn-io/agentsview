@@ -308,7 +308,8 @@ func TestEmbeddingsBuildDirectConcurrentFlockFails(t *testing.T) {
 
 // TestEmbeddingsBuildFullRebuildPromptsAndAborts asserts --full-rebuild
 // without --yes prints the exact confirmation prompt with the true
-// embeddable-message count, and a "no" answer aborts without building.
+// embeddable-unit count (the seeded user message and the assistant run are
+// one document each), and a "no" answer aborts without building.
 func TestEmbeddingsBuildFullRebuildPromptsAndAborts(t *testing.T) {
 	dataDir := testDataDir(t)
 	stub := newEmbeddingsStubServer(t, 3)
@@ -323,7 +324,7 @@ func TestEmbeddingsBuildFullRebuildPromptsAndAborts(t *testing.T) {
 	cmd.SetArgs([]string{"--full-rebuild"})
 	require.NoError(t, cmd.Execute())
 
-	assert.Contains(t, out.String(), "This re-embeds all 2 messages. Continue?")
+	assert.Contains(t, out.String(), "This re-embeds all 2 documents. Continue?")
 	assert.Contains(t, out.String(), "Aborted.")
 	assert.NotContains(t, out.String(), "Embedded")
 }

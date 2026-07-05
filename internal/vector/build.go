@@ -32,8 +32,8 @@ type BuildOptions struct {
 	// Backstop forces a full mirror reconciliation scan (ignoring the
 	// refresh watermark) without forcing a re-embed.
 	Backstop bool
-	// IncludeAutomated controls whether automated sessions' messages are
-	// scanned into the mirror at all (see MessageSource.ScanEmbeddableMessages).
+	// IncludeAutomated controls whether automated sessions' units are
+	// scanned into the mirror at all (see UnitSource.ScanEmbeddableUnits).
 	// It is part of the mirror's identity: Build compares it against the
 	// scope the mirror was last refreshed under (vector_meta) and forces a
 	// full reconciliation scan on any change, so now-out-of-scope rows (and
@@ -76,7 +76,7 @@ type BuildResult struct {
 // refill the active one for FullRebuild), fills pending documents, and
 // auto-activates a building generation once it fully covers the mirror.
 func (ix *Index) Build(
-	ctx context.Context, src MessageSource, enc kitvec.EncodeFunc,
+	ctx context.Context, src UnitSource, enc kitvec.EncodeFunc,
 	gen kitvec.Generation, o BuildOptions,
 ) (BuildResult, error) {
 	if err := ix.requireWritable(); err != nil {

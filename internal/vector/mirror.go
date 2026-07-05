@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -55,11 +56,12 @@ func inPlaceholders(keys []string) (string, []any) {
 	return "(" + strings.TrimSuffix(strings.Repeat("?,", len(keys)), ",") + ")", args
 }
 
-// MessageSource is the slice of the archive the mirror needs (implemented
-// by *db.DB).
-type MessageSource interface {
-	ScanEmbeddableMessages(ctx context.Context, since string, includeAutomated bool,
-		fn func(db.EmbeddableMessage) error) (string, error)
+// UnitSource is the slice of the archive the mirror needs (implemented by
+// *db.DB): the stream of embedding-unit documents — individual user
+// messages and runs of contiguous assistant messages.
+type UnitSource interface {
+	ScanEmbeddableUnits(ctx context.Context, since string, includeAutomated bool,
+		fn func(db.EmbeddableUnit) error) (string, error)
 }
 
 // RefreshStats summarizes one Refresh call: Upserted counts mirror rows
@@ -76,16 +78,20 @@ type RefreshStats struct {
 	Unchanged int
 }
 
-// DocKey computes the mirror's document identity for a message: a
-// source_uuid keeps the key stable across ordinal-shifting rewrites
-// (compaction, resync); its absence falls back to a session+ordinal key.
+// DocKey computes the mirror's document identity for a unit: a source_uuid
+// (the unit's first member's, for a run) keeps the key stable across
+// ordinal-shifting rewrites (compaction, resync) and across later run
+// members appending, splitting off, or changing; its absence falls back to
+// a session+ordinal key. kind selects the prefix scheme: "run" units use
+// "r:" (uuid) / "ro:" (ordinal fallback), "user" units use "u:" / "o:".
 //
 // The messages schema permits more than one message in a session to share a
 // non-empty source_uuid, so occurrence disambiguates them: it is the 1-based
 // count of how many times (sessionID, sourceUUID) has been seen so far in
-// scan order. The first occurrence keeps the plain "u:<session>:<uuid>"
-// key; later occurrences append "#<occurrence>". Since the scan is ordered
-// by (session_id, ordinal), occurrence assignment is deterministic and
+// scan order, shared across unit kinds. The first occurrence keeps the
+// plain "<prefix><session>:<uuid>" key; later occurrences append
+// "#<occurrence>". Since the scan is ordered by (session_id, ordinal) of
+// each unit's first member, occurrence assignment is deterministic and
 // stable across resyncs. occurrence is ignored when sourceUUID is empty.
 //
 // sessionID and sourceUUID are percent-escaped (escapeDocKeyComponent)
@@ -93,16 +99,20 @@ type RefreshStats struct {
 // either component cannot be confused with the key's own structure — e.g.
 // source_uuid "dup#2" at its first occurrence would otherwise collide with
 // source_uuid "dup" at its second occurrence.
-func DocKey(sessionID, sourceUUID string, ordinal, occurrence int) string {
+func DocKey(kind, sessionID, sourceUUID string, ordinal, occurrence int) string {
+	uuidPrefix, ordinalPrefix := "u:", "o:"
+	if kind == "run" {
+		uuidPrefix, ordinalPrefix = "r:", "ro:"
+	}
 	session := escapeDocKeyComponent(sessionID)
 	if sourceUUID != "" {
 		uuid := escapeDocKeyComponent(sourceUUID)
 		if occurrence > 1 {
-			return "u:" + session + ":" + uuid + "#" + strconv.Itoa(occurrence)
+			return uuidPrefix + session + ":" + uuid + "#" + strconv.Itoa(occurrence)
 		}
-		return "u:" + session + ":" + uuid
+		return uuidPrefix + session + ":" + uuid
 	}
-	return "o:" + session + ":" + strconv.Itoa(ordinal)
+	return ordinalPrefix + session + ":" + strconv.Itoa(ordinal)
 }
 
 // escapeDocKeyComponent percent-encodes the characters DocKey uses as
@@ -140,7 +150,7 @@ func contentHash(content string) string {
 // in the scan; full=false scans only sessions newer than the stored
 // watermark (vector_meta key "refresh_watermark") and only upserts,
 // leaving that reconciliation to a subsequent full refresh. includeAutomated
-// is passed through to src.ScanEmbeddableMessages: false excludes automated
+// is passed through to src.ScanEmbeddableUnits: false excludes automated
 // sessions from the scan entirely, so their mirror rows are absent (and, in
 // full mode, reconciled away) rather than merely unembedded. Either mode
 // also resolves same-scan slot evictions (see evictSlotOccupant) once the
@@ -150,7 +160,7 @@ func contentHash(content string) string {
 // shifted (or was displaced in a shift cascade) keeps its embeddings. The
 // watermark is advanced to the scan's max ended_at afterwards.
 func (ix *Index) Refresh(
-	ctx context.Context, src MessageSource, full, includeAutomated bool,
+	ctx context.Context, src UnitSource, full, includeAutomated bool,
 ) (RefreshStats, error) {
 	if err := ix.requireWritable(); err != nil {
 		return RefreshStats{}, err
@@ -170,15 +180,15 @@ func (ix *Index) Refresh(
 	occurrences := make(map[string]int)
 	evicted := make(map[string]struct{})
 	sentinel := 0
-	maxEnded, err := src.ScanEmbeddableMessages(ctx, since, includeAutomated, func(m db.EmbeddableMessage) error {
+	maxEnded, err := src.ScanEmbeddableUnits(ctx, since, includeAutomated, func(u db.EmbeddableUnit) error {
 		occurrence := 1
-		if m.SourceUUID != "" {
-			occKey := m.SessionID + "\x00" + m.SourceUUID
+		if u.SourceUUID != "" {
+			occKey := u.SessionID + "\x00" + u.SourceUUID
 			occurrences[occKey]++
 			occurrence = occurrences[occKey]
 		}
-		key := DocKey(m.SessionID, m.SourceUUID, m.Ordinal, occurrence)
-		unchanged, evictedKeys, err := ix.upsertMirrorRow(ctx, key, m, &sentinel)
+		key := DocKey(u.Kind, u.SessionID, u.SourceUUID, u.Ordinal, occurrence)
+		unchanged, evictedKeys, err := ix.upsertMirrorRow(ctx, key, u, &sentinel)
 		if err != nil {
 			return fmt.Errorf("upserting mirror row %s: %w", key, err)
 		}
@@ -194,7 +204,7 @@ func (ix *Index) Refresh(
 		return nil
 	})
 	if err != nil {
-		return RefreshStats{}, fmt.Errorf("scanning embeddable messages: %w", err)
+		return RefreshStats{}, fmt.Errorf("scanning embeddable units: %w", err)
 	}
 
 	// finalizeEvictions must run before full-mode reconcileDeletions: an
@@ -231,16 +241,16 @@ func (ix *Index) Refresh(
 }
 
 // upsertMirrorRow evicts any row occupying the same (session_id, ordinal)
-// slot under a different doc_key, then upserts key's row. It returns
+// slot under a different doc_key, then upserts key's row from u. It returns
 // whether the row's content_hash was unchanged (a no-op update, e.g. an
 // ordinal-only shift) and the doc_key(s) the slot eviction displaced (0 or
 // 1), for the caller to reconcile once the whole scan completes. sentinel
 // is a per-Refresh-call counter evictSlotOccupant uses to park a displaced
 // row at a unique negative ordinal; see evictSlotOccupant.
 func (ix *Index) upsertMirrorRow(
-	ctx context.Context, key string, m db.EmbeddableMessage, sentinel *int,
+	ctx context.Context, key string, u db.EmbeddableUnit, sentinel *int,
 ) (unchanged bool, evicted []string, err error) {
-	evicted, err = ix.evictSlotOccupant(ctx, key, m.SessionID, m.Ordinal, sentinel)
+	evicted, err = ix.evictSlotOccupant(ctx, key, u.SessionID, u.Ordinal, sentinel)
 	if err != nil {
 		return false, nil, err
 	}
@@ -253,27 +263,48 @@ func (ix *Index) upsertMirrorRow(
 		return false, evicted, fmt.Errorf("reading existing content hash: %w", err)
 	}
 
-	hash := contentHash(m.Content)
+	hash := contentHash(u.Content)
 	unchanged = existingHash.Valid && existingHash.String == hash
 
-	// ordinal_end is set equal to ordinal here (a single embeddable message,
-	// so the unit's start and end coincide) to satisfy the v2 schema's
-	// NOT NULL constraint; Task 3's unit-based upsert replaces this with the
-	// run's real last-member ordinal.
+	offsets, err := marshalOffsets(u.Offsets)
+	if err != nil {
+		return false, evicted, err
+	}
+
 	if _, err := ix.db.ExecContext(ctx, `
-INSERT INTO vector_messages (doc_key, session_id, source_uuid, ordinal, ordinal_end, content, content_hash)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO vector_messages (doc_key, session_id, source_uuid, ordinal, ordinal_end,
+    subordinate, offsets, content, content_hash)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(doc_key) DO UPDATE SET
     session_id = excluded.session_id,
     ordinal = excluded.ordinal,
     ordinal_end = excluded.ordinal_end,
+    subordinate = excluded.subordinate,
+    offsets = excluded.offsets,
     content = excluded.content,
     content_hash = excluded.content_hash`,
-		key, m.SessionID, m.SourceUUID, m.Ordinal, m.Ordinal, m.Content, hash,
+		key, u.SessionID, u.SourceUUID, u.Ordinal, u.OrdinalEnd,
+		u.Subordinate, offsets, u.Content, hash,
 	); err != nil {
 		return false, evicted, fmt.Errorf("upserting row: %w", err)
 	}
 	return unchanged, evicted, nil
+}
+
+// marshalOffsets encodes a unit's member offsets for the mirror's offsets
+// column. A nil slice (every user doc; see db.EmbeddableUnit.Offsets) is
+// stored as the schema's canonical empty array "[]" rather than
+// encoding/json's "null" for a nil slice, matching the column's DEFAULT and
+// sparing readers a null case.
+func marshalOffsets(offsets []db.UnitOffset) (string, error) {
+	if offsets == nil {
+		return "[]", nil
+	}
+	encoded, err := json.Marshal(offsets)
+	if err != nil {
+		return "", fmt.Errorf("marshaling unit offsets: %w", err)
+	}
+	return string(encoded), nil
 }
 
 // evictSlotOccupant parks the mirror row of any doc_key occupying

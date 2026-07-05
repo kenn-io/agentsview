@@ -363,83 +363,6 @@ func (db *DB) GetAllMessages(
 	return msgs, nil
 }
 
-// EmbeddableMessage is one user/assistant message eligible for vector
-// indexing (role user|assistant, is_system = 0, not system-prefixed).
-type EmbeddableMessage struct {
-	SessionID  string
-	SourceUUID string
-	Ordinal    int
-	Content    string
-}
-
-// ScanEmbeddableMessages streams the embeddable universe (user/assistant
-// messages that are not is_system and not system-prefixed, per
-// SystemPrefixSQL) from non-trashed sessions, ordered by (session_id,
-// ordinal), invoking fn once per row. since != "" restricts the scan to
-// sessions with ended_at >= since (RFC3339 or RFC3339Nano) for incremental
-// refresh, comparing parsed timestamps rather than raw strings via SQLite's
-// datetime() so mixed fractional-second precision doesn't produce a wrong
-// ordering; "" scans every session. includeAutomated=false additionally
-// excludes automated sessions (sessions.is_automated = 1) using the exact
-// predicate sessionFilterPredicates' ExcludeAutomated scope applies
-// (automatedScopePredicate("human", ...)), so the embedding index's default
-// scope matches session search's default exclusion of automated sessions.
-// maxEnded returns the maximum sessions.ended_at seen across the scanned
-// rows (as its original raw string), or "" when the scan produced no rows.
-func (db *DB) ScanEmbeddableMessages(
-	ctx context.Context, since string, includeAutomated bool,
-	fn func(EmbeddableMessage) error,
-) (maxEnded string, err error) {
-	preds := []string{
-		"m.role IN ('user', 'assistant')",
-		"m.is_system = 0",
-		"s.deleted_at IS NULL",
-		SystemPrefixSQL("m.content", "m.role"),
-	}
-	if !includeAutomated {
-		preds = append(preds, automatedScopePredicate("human", "s.is_automated"))
-	}
-
-	query := `
-		SELECT m.session_id, m.source_uuid, m.ordinal, m.content, s.ended_at
-		FROM messages m
-		JOIN sessions s ON s.id = m.session_id
-		WHERE ` + strings.Join(preds, "\n\t\t  AND ") + `
-		` + optionalSinceClause(since) + `
-		ORDER BY m.session_id, m.ordinal`
-
-	args := []any{}
-	if since != "" {
-		args = append(args, since)
-	}
-
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
-	if err != nil {
-		return "", fmt.Errorf("scanning embeddable messages: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var m EmbeddableMessage
-		var ended sql.NullString
-		if err := rows.Scan(
-			&m.SessionID, &m.SourceUUID, &m.Ordinal, &m.Content, &ended,
-		); err != nil {
-			return "", fmt.Errorf("scanning embeddable message: %w", err)
-		}
-		if ended.Valid && endedAfter(ended.String, maxEnded) {
-			maxEnded = ended.String
-		}
-		if err := fn(m); err != nil {
-			return "", err
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return "", fmt.Errorf("iterating embeddable messages: %w", err)
-	}
-	return maxEnded, nil
-}
-
 // EmbeddableUnit is one embedding document: a single embeddable user
 // message, or a run of contiguous embeddable assistant messages.
 type EmbeddableUnit struct {
@@ -460,15 +383,27 @@ type UnitOffset struct {
 	ByteStart int `json:"b"`
 }
 
-// ScanEmbeddableUnits streams the same embeddable universe as
-// ScanEmbeddableMessages (see its doc comment for the since/maxEnded/
-// includeAutomated semantics, which are identical here), but reduces
-// contiguous runs of embeddable assistant messages between embeddable user
-// messages into single EmbeddableUnit "run" documents; each embeddable user
-// message is emitted as its own "user" unit. Units are emitted in
-// (session_id, ordinal) order of their first member, closing any open run
-// whenever an embeddable user row, a session boundary, or an is_sidechain
-// transition is reached, and finally at the end of the scan.
+// ScanEmbeddableUnits streams the embeddable universe — user/assistant
+// messages that are not is_system and not system-prefixed (per
+// SystemPrefixSQL), from non-trashed sessions — reducing contiguous runs of
+// embeddable assistant messages between embeddable user messages into single
+// EmbeddableUnit "run" documents; each embeddable user message is emitted as
+// its own "user" unit. Units are emitted in (session_id, ordinal) order of
+// their first member, closing any open run whenever an embeddable user row,
+// a session boundary, or an is_sidechain transition is reached, and finally
+// at the end of the scan.
+//
+// since != "" restricts the scan to sessions with ended_at >= since (RFC3339
+// or RFC3339Nano) for incremental refresh, comparing parsed timestamps
+// rather than raw strings via SQLite's datetime() so mixed fractional-second
+// precision doesn't produce a wrong ordering (see optionalSinceClause); ""
+// scans every session. includeAutomated=false additionally excludes
+// automated sessions (sessions.is_automated = 1) using the exact predicate
+// sessionFilterPredicates' ExcludeAutomated scope applies
+// (automatedScopePredicate("human", ...)), so the embedding index's default
+// scope matches session search's default exclusion of automated sessions.
+// maxEnded returns the maximum sessions.ended_at seen across the scanned
+// rows (as its original raw string), or "" when the scan produced no rows.
 //
 // Because the SQL predicates already exclude non-embeddable user rows
 // (is_system, system-prefixed) from the stream entirely, "does this row
