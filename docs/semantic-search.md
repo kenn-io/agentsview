@@ -9,6 +9,10 @@ substring/regex/FTS5 content search. This is an opt-in feature backed by an
 OpenAI-compatible embeddings endpoint — a local [Ollama](https://ollama.com)
 model or a hosted API.
 
+For the architecture behind this page — storage layout, generations,
+concurrency, and the search path — see
+[Semantic Search Internals](/semantic-search-internals/).
+
 !!! note "SQLite only"
 
     Semantic and hybrid search require the local SQLite archive.
