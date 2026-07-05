@@ -3,6 +3,7 @@ package vector
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -367,4 +368,187 @@ func TestBuildEncoderErrorAbortsAndRetryResumesWithoutReembedding(t *testing.T) 
 	require.NoError(t, err)
 	assert.Equal(t, 2, result.Fill.Documents, "retry embeds only the two remaining documents")
 	assert.True(t, result.Activated)
+}
+
+// TestBuildSkipsPermanentlyRejectedDocumentAndContinues is the fix-1
+// regression test: a single document the endpoint permanently rejects
+// (400) must not wedge the whole build. kit stamps it without vectors so
+// the scan moves past it, later documents still embed, and the generation
+// still auto-activates once every document — including the skipped one —
+// is stamped.
+func TestBuildSkipsPermanentlyRejectedDocumentAndContinues(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	src := &fakeMessageSource{rows: []fakeRow{
+		{
+			msg:     db.EmbeddableMessage{SessionID: "s1", Ordinal: 0, Content: "one"},
+			endedAt: "2024-01-01T00:00:00Z",
+		},
+		{
+			msg:     db.EmbeddableMessage{SessionID: "s1", Ordinal: 1, Content: "poison"},
+			endedAt: "2024-01-01T00:00:01Z",
+		},
+		{
+			msg:     db.EmbeddableMessage{SessionID: "s1", Ordinal: 2, Content: "three"},
+			endedAt: "2024-01-01T00:00:02Z",
+		},
+	}}
+	gen := fakeGeneration("fake-model")
+
+	var calls int
+	rejectPoison := func(_ context.Context, texts []string) ([][]float32, error) {
+		calls++
+		if slices.Contains(texts, "poison") {
+			return nil, &HTTPStatusError{Status: http.StatusBadRequest, Body: "token window overflow"}
+		}
+		out := make([][]float32, len(texts))
+		for i := range texts {
+			out[i] = []float32{1, 0, 0}
+		}
+		return out, nil
+	}
+
+	result, err := ix.Build(ctx, src, rejectPoison, gen, BuildOptions{})
+	require.NoError(t, err, "a permanently-rejected document must not abort the whole build")
+	assert.Equal(t, 2, result.Fill.Documents, "the two good documents still embed")
+	assert.Equal(t, 1, result.Fill.Skipped, "the poison document is counted as skipped")
+	assert.True(t, result.Activated,
+		"coverage is complete (every document stamped) once the poison doc is stamped-skipped")
+
+	var stampCount int
+	require.NoError(t, ix.db.QueryRow(
+		`SELECT COUNT(*) FROM message_vectors_stamps`,
+	).Scan(&stampCount))
+	assert.Equal(t, 3, stampCount, "the skipped document is still stamped, just without vectors")
+
+	// kit only re-embeds a skipped document once its content_hash changes;
+	// a later build over unchanged content must not retry the encoder for
+	// it at all.
+	callsBefore := calls
+	result2, err := ix.Build(ctx, src, rejectPoison, gen, BuildOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 0, result2.Fill.Documents)
+	assert.Equal(t, 0, result2.Fill.Skipped)
+	assert.Equal(t, callsBefore, calls,
+		"unchanged content must not re-invoke the encoder for the already-skipped document")
+}
+
+// TestBuild5xxEncodeErrorStillAbortsFill guards the other side of the OnEncodeError
+// wiring: a transient (5xx) failure must still abort the whole fill rather
+// than being skipped, since it is likely to succeed on a later retry and
+// permanently giving up on the document would lose it from the index.
+func TestBuild5xxEncodeErrorStillAbortsFill(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	src := &fakeMessageSource{rows: []fakeRow{
+		{
+			msg:     db.EmbeddableMessage{SessionID: "s1", Ordinal: 0, Content: "one"},
+			endedAt: "2024-01-01T00:00:00Z",
+		},
+		{
+			msg:     db.EmbeddableMessage{SessionID: "s1", Ordinal: 1, Content: "bad"},
+			endedAt: "2024-01-01T00:00:01Z",
+		},
+	}}
+	gen := fakeGeneration("fake-model")
+
+	fail500 := func(_ context.Context, texts []string) ([][]float32, error) {
+		if slices.Contains(texts, "bad") {
+			return nil, &HTTPStatusError{Status: http.StatusInternalServerError, Body: "boom"}
+		}
+		out := make([][]float32, len(texts))
+		for i := range texts {
+			out[i] = []float32{1, 0, 0}
+		}
+		return out, nil
+	}
+
+	_, err := ix.Build(ctx, src, fail500, gen, BuildOptions{})
+	require.Error(t, err, "a transient (5xx) encode error must still abort the fill")
+	var statusErr *HTTPStatusError
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusInternalServerError, statusErr.Status)
+}
+
+// TestResolveBuildTargetRetiresOtherBuildingGeneration is the fix-3
+// regression test: a generation left in state building by an abandoned
+// (config changed mid-build) first build must be retired once a new
+// building generation is established, so fingerprintByState's ORDER BY
+// ordinal LIMIT 1 lookup (used for both BuildingFingerprint and the
+// building-percent shown to a caller with no active generation) resolves
+// to the generation actually being built, not the abandoned one.
+func TestResolveBuildTargetRetiresOtherBuildingGeneration(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+
+	genA := fakeGeneration("model-a")
+	fpA, err := ix.EnsureGeneration(ctx, genA, sqlitevec.StateBuilding)
+	require.NoError(t, err)
+
+	genB := fakeGeneration("model-b")
+	target, wasBuilding, err := ix.resolveBuildTarget(ctx, genB, genB.Fingerprint(), false)
+	require.NoError(t, err)
+	assert.True(t, wasBuilding)
+	assert.Equal(t, genB.Fingerprint(), target)
+
+	gens, err := ix.Generations(ctx)
+	require.NoError(t, err)
+	require.Len(t, gens, 2)
+	for _, g := range gens {
+		switch g.Fingerprint {
+		case fpA:
+			assert.Equal(t, string(sqlitevec.StateRetired), g.State,
+				"the abandoned generation must be retired, not left building forever")
+		case target:
+			assert.Equal(t, string(sqlitevec.StateBuilding), g.State)
+		}
+	}
+
+	building, ok, err := ix.BuildingFingerprint(ctx)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, target, building,
+		"the building-generation lookup must resolve to B, not the abandoned A")
+}
+
+// TestBuildRetiresAbandonedBuildingGenerationEndToEnd drives the same
+// scenario through the public Build entry point: an interrupted first
+// build (genA registered as building but never filled, standing in for a
+// crashed process) followed by a full Build under a different config
+// (genB) must retire genA rather than leave two generations in state
+// building.
+func TestBuildRetiresAbandonedBuildingGenerationEndToEnd(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	src := twoDocSource()
+
+	genA := fakeGeneration("model-a")
+	_, err := ix.Refresh(ctx, src, true)
+	require.NoError(t, err)
+	fpA, err := ix.EnsureGeneration(ctx, genA, sqlitevec.StateBuilding)
+	require.NoError(t, err)
+
+	genB := fakeGeneration("model-b")
+	result, err := ix.Build(ctx, src, fakeBuildEncoder(), genB, BuildOptions{})
+	require.NoError(t, err)
+	assert.True(t, result.Activated)
+
+	gens, err := ix.Generations(ctx)
+	require.NoError(t, err)
+	require.Len(t, gens, 2)
+	var stateA, stateB string
+	for _, g := range gens {
+		switch g.Fingerprint {
+		case fpA:
+			stateA = g.State
+		case genB.Fingerprint():
+			stateB = g.State
+		}
+	}
+	assert.Equal(t, string(sqlitevec.StateRetired), stateA, "abandoned generation A must be retired")
+	assert.Equal(t, string(sqlitevec.StateActive), stateB)
+
+	_, ok, err := ix.BuildingFingerprint(ctx)
+	require.NoError(t, err)
+	assert.False(t, ok, "no generation should remain in state building")
 }

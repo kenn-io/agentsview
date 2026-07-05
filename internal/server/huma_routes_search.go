@@ -130,6 +130,13 @@ func (s *Server) humaSearchContent(
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
 		}
+		if errors.Is(err, db.ErrSemanticTransient) {
+			// The embeddings endpoint itself is unreachable at query
+			// time; semantic search is configured and otherwise ready,
+			// so this must read as "temporarily unavailable, retry" (503)
+			// rather than 501's "not implemented / disabled".
+			return nil, apiError(http.StatusServiceUnavailable, err.Error())
+		}
 		if errors.Is(err, db.ErrSemanticUnavailable) {
 			return nil, apiError(http.StatusNotImplemented, err.Error())
 		}

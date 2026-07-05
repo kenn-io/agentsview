@@ -834,6 +834,31 @@ func TestSearchContentSemanticModeUnavailable(t *testing.T) {
 	}
 }
 
+// fakeTransientVectorSearcher implements db.VectorSearcher, always failing
+// with an error wrapping db.ErrSemanticTransient — standing in for what
+// cmd/agentsview's searcherAdapter returns when the embeddings endpoint
+// itself is unreachable at query time (translateSearchError wraps a
+// vector.QueryEncodeError this way).
+type fakeTransientVectorSearcher struct{}
+
+func (fakeTransientVectorSearcher) SemanticSearch(
+	_ context.Context, _ string, _ int,
+) ([]db.VectorHit, error) {
+	return nil, fmt.Errorf("%w: dial tcp: connection refused", db.ErrSemanticTransient)
+}
+
+// TestSearchContentSemanticQueryEncodeFailureReturns503 covers the
+// query-time embeddings-endpoint-down case: it must map to 503 (the
+// feature is configured and the request can be retried), not 501 (which
+// would read as "semantic search is disabled") or a bare 500.
+func TestSearchContentSemanticQueryEncodeFailureReturns503(t *testing.T) {
+	te := setup(t)
+	te.db.SetVectorSearcher(fakeTransientVectorSearcher{})
+
+	w := te.get(t, "/api/v1/search/content?pattern=fox&mode=semantic")
+	assertStatus(t, w, http.StatusServiceUnavailable)
+}
+
 // TestOpenAPIEndpointDocumentsBatchDeleteSessionIDsAsNonNullableArray guards
 // the schema huma emits for the batch-delete request body: session_ids must
 // serialize as a plain, non-nullable string array (schema type "array"), not

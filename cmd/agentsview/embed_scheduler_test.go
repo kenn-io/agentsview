@@ -145,6 +145,56 @@ func TestEmbedSchedulerBackstopTickIssuesBackstopBuild(t *testing.T) {
 	assert.True(t, calls[0].Backstop, "backstop tick must set BuildRequest.Backstop")
 }
 
+// TestEmbedSchedulerDroppedBackstopRetriesOnNextDebouncedBuild is the fix-4
+// regression test: a backstop tick that collides with a build already
+// running elsewhere must not be silently dropped for a full backstop
+// interval (24h in production). The scheduler must remember it and fold
+// Backstop: true into the next debounced build request instead.
+func TestEmbedSchedulerDroppedBackstopRetriesOnNextDebouncedBuild(t *testing.T) {
+	fake := &fakeEmbedManager{
+		results: []fakeTryBuildResult{
+			{started: false, err: nil}, // the backstop tick collides with a build elsewhere
+			{started: true, err: nil},  // the following debounced build recovers it
+		},
+	}
+	// A long backstop interval relative to the debounce interval and the
+	// test's own buffers keeps a second, unrelated backstop tick from
+	// firing mid-test and making the call count non-deterministic.
+	s := newEmbedScheduler(fake, 10*time.Millisecond, 500*time.Millisecond)
+
+	ctx := t.Context()
+	go s.Run(ctx)
+	defer s.Stop()
+
+	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 1 },
+		"expected the backstop tick to fire and be dropped")
+
+	s.Notify()
+
+	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 2 },
+		"expected the debounced build to recover the dropped backstop")
+	time.Sleep(50 * time.Millisecond)
+
+	calls := fake.callsSnapshot()
+	require.Len(t, calls, 2, "the dropped backstop must be retried exactly once, not repeatedly")
+	assert.True(t, calls[0].Backstop, "the original (dropped) backstop tick request")
+	assert.True(t, calls[1].Backstop,
+		"the debounced build must carry the pending backstop forward instead of dropping it")
+
+	// Once the recovered build actually started, the pending flag must
+	// clear: a further, unrelated debounced build must not keep carrying
+	// Backstop: true forever.
+	s.Notify()
+	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 3 },
+		"expected a further debounced build after the recovered one")
+	time.Sleep(50 * time.Millisecond)
+
+	calls = fake.callsSnapshot()
+	require.Len(t, calls, 3)
+	assert.False(t, calls[2].Backstop,
+		"the recovered backstop must not leak into a later unrelated debounced build")
+}
+
 func TestEmbedSchedulerStopTerminatesRun(t *testing.T) {
 	fake := &fakeEmbedManager{}
 	s := newEmbedScheduler(fake, time.Hour, 0)
@@ -276,6 +326,14 @@ func TestTranslateSearchErrorMapsVectorErrorsToSemanticUnavailable(t *testing.T)
 	t.Run("other error passes through", func(t *testing.T) {
 		boom := errors.New("boom")
 		assert.Same(t, boom, translateSearchError(boom))
+	})
+	t.Run("query encode failure maps to semantic transient, not unavailable", func(t *testing.T) {
+		queryErr := &vector.QueryEncodeError{Err: errors.New("dial tcp: connection refused")}
+		got := translateSearchError(queryErr)
+		assert.ErrorIs(t, got, db.ErrSemanticTransient)
+		assert.False(t, errors.Is(got, db.ErrSemanticUnavailable),
+			"a query-time endpoint failure must not read as semantic search being disabled")
+		assert.Contains(t, got.Error(), "connection refused")
 	})
 }
 

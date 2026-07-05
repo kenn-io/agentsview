@@ -3,7 +3,9 @@ package vector
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -94,8 +96,9 @@ func (ix *Index) Build(
 
 	wrapped, finish := ix.wrapProgress(enc, total, o.Progress)
 	fillStats, fillErr := kitvec.Fill[string, string](ctx, ix.store, target, wrapped, kitvec.FillOptions[string]{
-		Split: ix.split,
-		Batch: kitvec.BatchOptions{BatchSize: o.BatchSize, Concurrency: 1},
+		Split:         ix.split,
+		Batch:         kitvec.BatchOptions{BatchSize: o.BatchSize, Concurrency: 1},
+		OnEncodeError: skipPermanentEncodeError,
 	})
 	finish()
 	result := BuildResult{Fingerprint: target, Refresh: refreshStats, Fill: fillStats}
@@ -109,6 +112,29 @@ func (ix *Index) Build(
 	}
 	result.Activated = activated
 	return result, nil
+}
+
+// skipPermanentEncodeError implements kitvec.FillOptions.OnEncodeError: a
+// document the embeddings endpoint permanently rejects (any 4xx status
+// except 429, e.g. a token-window overflow, whitespace-only content some
+// servers refuse, or a content-policy rejection) is skipped — kit stamps
+// it for the generation with no vectors so it stops being pending —
+// instead of aborting the whole fill. Without this, one poison document
+// would wedge every future build at the same doc_key-ordered scan
+// position: later documents would never embed, a first build would never
+// reach Missing==0, and auto-activation would never fire.
+//
+// Every other failure (5xx, network, timeout, or 429 rate-limiting) still
+// aborts the fill, since it is likely transient and the next scheduled
+// build should retry the document rather than silently giving up on it.
+func skipPermanentEncodeError(doc string, err error) bool {
+	var statusErr *HTTPStatusError
+	if !errors.As(err, &statusErr) || !statusErr.Permanent() {
+		return false
+	}
+	log.Printf("vector build: skipping document %s: permanently rejected by embeddings endpoint: %v",
+		doc, err)
+	return true
 }
 
 // noWatermarkYet reports whether Refresh has never advanced the stored
@@ -159,12 +185,39 @@ func (ix *Index) resolveBuildTarget(
 	if err != nil {
 		return "", false, err
 	}
+	if err := ix.retireAbandonedBuildingGenerations(ctx, target); err != nil {
+		return "", false, err
+	}
 	if fullRebuild && existed {
 		if err := ix.resetGeneration(ctx, target); err != nil {
 			return "", false, err
 		}
 	}
 	return target, true, nil
+}
+
+// retireAbandonedBuildingGenerations transitions every generation still in
+// state building other than keep to retired. A generation is abandoned
+// when the embedding config (model, dimensions, or params) changes mid
+// first-build: resolveBuildTarget starts a fresh building generation under
+// the new fingerprint, but the old one never got the chance to activate or
+// retire itself and would otherwise stay in state building forever —
+// fingerprintByState's ORDER BY ordinal LIMIT 1 could then report the
+// abandoned generation's stale coverage as BuildingError's percent instead
+// of the generation actually being built.
+//
+// This only changes state; kit's store has no API to drop a generation's
+// vec0 table, chunk map, or stamps, so an abandoned generation's rows stay
+// on disk (bloating vectors.db) until an operator rebuilds vectors.db from
+// scratch or a future kit API adds reclamation.
+func (ix *Index) retireAbandonedBuildingGenerations(ctx context.Context, keep string) error {
+	if _, err := ix.db.ExecContext(ctx,
+		`UPDATE `+generationsTable+` SET state = ? WHERE state = ? AND gen_key != ?`,
+		string(sqlitevec.StateRetired), string(sqlitevec.StateBuilding), keep,
+	); err != nil {
+		return fmt.Errorf("retire abandoned building generations: %w", err)
+	}
+	return nil
 }
 
 // generationExists reports whether a generation with fingerprint fp has

@@ -3,6 +3,7 @@ package vector
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -259,4 +260,179 @@ func TestEncoderContextCancellationAbortsBackoffPromptly(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Less(t, elapsed, 2*time.Second, "backoff should abort promptly on context cancellation")
+}
+
+// TestEncoder400ReturnsPermanentHTTPStatusError covers fix 1a: a non-200
+// response must come back as a *HTTPStatusError carrying the status code,
+// so callers (kit's FillOptions.OnEncodeError) can distinguish a permanent
+// rejection from a transient one instead of string-matching the message.
+func TestEncoder400ReturnsPermanentHTTPStatusError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte("token window overflow"))
+	}))
+	defer srv.Close()
+
+	enc := NewEncoder(EncoderConfig{
+		Endpoint: srv.URL + "/v1", Model: "test-model", Dimension: 3,
+		Timeout: 5 * time.Second, MaxRetries: 1,
+	})
+
+	_, err := enc(context.Background(), []string{"hello"})
+	require.Error(t, err)
+	var statusErr *HTTPStatusError
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusBadRequest, statusErr.Status)
+	assert.True(t, statusErr.Permanent(), "a 400 is a permanent rejection")
+}
+
+// TestEncoder429ReturnsNonPermanentHTTPStatusError guards the except-429
+// carve-out: rate-limiting is a 4xx status but must not be treated as a
+// permanent content rejection, or a poison-document skip would wrongly
+// swallow a document that would have succeeded once the rate limit
+// cleared.
+func TestEncoder429ReturnsNonPermanentHTTPStatusError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte("rate limited"))
+	}))
+	defer srv.Close()
+
+	enc := NewEncoder(EncoderConfig{
+		Endpoint: srv.URL + "/v1", Model: "test-model", Dimension: 3,
+		Timeout: 5 * time.Second, MaxRetries: 1,
+	})
+
+	_, err := enc(context.Background(), []string{"hello"})
+	require.Error(t, err)
+	var statusErr *HTTPStatusError
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusTooManyRequests, statusErr.Status)
+	assert.False(t, statusErr.Permanent(), "429 is transient rate-limiting, not a content rejection")
+}
+
+// TestEncoderDecodeErrorIsRetried covers fix 2: a decoding failure almost
+// always means the connection died mid-stream, not that the endpoint sent
+// a deliberately malformed response, so it must be retried rather than
+// failing the whole encode on the first garbled response.
+func TestEncoderDecodeErrorIsRetried(t *testing.T) {
+	var attempts atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := attempts.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if n == 1 {
+			_, _ = w.Write([]byte("{not valid json"))
+			return
+		}
+		require.NoError(t, json.NewEncoder(w).Encode(embeddingsResponse{
+			Data: []embeddingDatum{{Index: 0, Embedding: []float32{1, 2, 3}}},
+		}))
+	}))
+	defer srv.Close()
+
+	enc := NewEncoder(EncoderConfig{
+		Endpoint: srv.URL + "/v1", Model: "test-model", Dimension: 3,
+		Timeout: 5 * time.Second, MaxRetries: 3,
+	})
+
+	out, err := enc(context.Background(), []string{"hello"})
+	require.NoError(t, err, "a truncated/garbled body must be retried, not fail outright")
+	require.Len(t, out, 1)
+	assert.Equal(t, int32(2), attempts.Load())
+}
+
+// --- fix 5: Retry-After ---
+
+func TestParseRetryAfterDeltaSeconds(t *testing.T) {
+	d, ok := parseRetryAfter("30", time.Now())
+	require.True(t, ok)
+	assert.Equal(t, 30*time.Second, d)
+}
+
+func TestParseRetryAfterHTTPDate(t *testing.T) {
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	future := now.Add(45 * time.Second)
+	d, ok := parseRetryAfter(future.Format(http.TimeFormat), now)
+	require.True(t, ok)
+	assert.InDelta(t, float64(45*time.Second), float64(d), float64(time.Second))
+}
+
+func TestParseRetryAfterZeroMeansImmediate(t *testing.T) {
+	d, ok := parseRetryAfter("0", time.Now())
+	require.True(t, ok)
+	assert.Zero(t, d)
+}
+
+func TestParseRetryAfterAbsentOrUnparseableReturnsNotOK(t *testing.T) {
+	_, ok := parseRetryAfter("", time.Now())
+	assert.False(t, ok, "empty header")
+
+	_, ok = parseRetryAfter("not-a-value", time.Now())
+	assert.False(t, ok, "unparseable header")
+}
+
+func TestParseRetryAfterCappedAtSixtySeconds(t *testing.T) {
+	d, ok := parseRetryAfter("3600", time.Now())
+	require.True(t, ok)
+	assert.Equal(t, 60*time.Second, d, "a huge Retry-After must be capped rather than honored verbatim")
+}
+
+func TestParseRetryAfterPastHTTPDateClampsToZero(t *testing.T) {
+	now := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	past := now.Add(-time.Hour)
+	d, ok := parseRetryAfter(past.Format(http.TimeFormat), now)
+	require.True(t, ok)
+	assert.Zero(t, d, "an already-past Retry-After date means retry immediately")
+}
+
+func TestBackoffDelayHonorsRetryAfterOn429(t *testing.T) {
+	d := 3 * time.Second
+	err := &HTTPStatusError{Status: http.StatusTooManyRequests, RetryAfter: &d}
+	assert.Equal(t, 3*time.Second, backoffDelay(1, err))
+}
+
+func TestBackoffDelayFallsBackToExponentialWithoutRetryAfter(t *testing.T) {
+	err := &HTTPStatusError{Status: http.StatusTooManyRequests}
+	assert.Equal(t, backoffBase, backoffDelay(1, err))
+	assert.Equal(t, 2*backoffBase, backoffDelay(2, err))
+}
+
+func TestBackoffDelayFallsBackForNonStatusErrors(t *testing.T) {
+	assert.Equal(t, backoffBase, backoffDelay(1, errors.New("network error")))
+}
+
+// TestEncoderHonorsRetryAfterHeaderOn429 drives the full retry path end to
+// end: a 429 response carrying Retry-After must make the encoder wait at
+// least that long (not the default 250ms backoff) before its next attempt.
+func TestEncoderHonorsRetryAfterHeaderOn429(t *testing.T) {
+	var attempts atomic.Int32
+	var firstAt, secondAt time.Time
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := attempts.Add(1)
+		if n == 1 {
+			firstAt = time.Now()
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		secondAt = time.Now()
+		writeJSON(t, w, http.StatusOK, embeddingsResponse{
+			Data: []embeddingDatum{{Index: 0, Embedding: []float32{1, 2, 3}}},
+		})
+	}))
+	defer srv.Close()
+
+	enc := NewEncoder(EncoderConfig{
+		Endpoint: srv.URL + "/v1", Model: "test-model", Dimension: 3,
+		Timeout: 5 * time.Second, MaxRetries: 2,
+	})
+
+	out, err := enc(context.Background(), []string{"hello"})
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	assert.GreaterOrEqual(t, secondAt.Sub(firstAt), 900*time.Millisecond,
+		"the encoder must wait out the server's Retry-After: 1 rather than the default ~250ms backoff")
 }

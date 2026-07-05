@@ -134,6 +134,15 @@ func (s *embedScheduler) Run(ctx context.Context) {
 		backstopC = ticker.C
 	}
 
+	// pendingBackstop remembers a backstop tick that collided with a build
+	// already running elsewhere (a long manual `embeddings build`, or the
+	// HTTP API) and so was dropped: without it, that reconciliation pass
+	// would be silently deferred until the next backstop tick (24h by
+	// default) instead of running as soon as any build slot frees up. It
+	// is read and written only from this single goroutine, so it needs no
+	// synchronization of its own.
+	var pendingBackstop bool
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -143,20 +152,25 @@ func (s *embedScheduler) Run(ctx context.Context) {
 		case <-s.dirty:
 			resetTimer(debounceTimer, s.debounce)
 		case <-debounceTimer.C:
-			started, err := s.mgr.TryBuild(ctx, vector.BuildRequest{})
+			req := vector.BuildRequest{Backstop: pendingBackstop}
+			started, err := s.mgr.TryBuild(ctx, req)
 			if err != nil {
 				log.Printf("embed scheduler: build failed: %v", err)
 			}
 			if !started {
-				// A build was already running elsewhere (manual
-				// `embeddings build`, or the HTTP API); re-arm rather
-				// than drop the pass entirely.
+				// A build was already running elsewhere; re-arm rather
+				// than drop the pass entirely. pendingBackstop, if set,
+				// stays set so the retry still carries it.
 				resetTimer(debounceTimer, s.debounce)
+				continue
 			}
+			pendingBackstop = false
 		case <-backstopC:
-			if _, err := s.mgr.TryBuild(ctx, vector.BuildRequest{Backstop: true}); err != nil {
+			started, err := s.mgr.TryBuild(ctx, vector.BuildRequest{Backstop: true})
+			if err != nil {
 				log.Printf("embed scheduler: backstop build failed: %v", err)
 			}
+			pendingBackstop = !started
 		}
 	}
 }
@@ -248,17 +262,26 @@ func (a searcherAdapter) SemanticSearch(
 }
 
 // translateSearchError maps vector.Index.Search's error taxonomy to
-// db.ErrSemanticUnavailable-wrapped errors carrying the spec's cause text.
-// ErrNoActiveGeneration needs no extra cause text: db.ErrSemanticUnavailable's
-// own message already is the "run the build" remediation.
+// server-facing sentinels. ErrNoActiveGeneration and BuildingError both
+// mean nothing is queryable yet, so they map to db.ErrSemanticUnavailable
+// (ErrNoActiveGeneration needs no extra cause text: db.ErrSemanticUnavailable's
+// own message already is the "run the build" remediation). A
+// QueryEncodeError means the index itself is ready but this particular
+// query-time embed call failed (the embeddings endpoint is down, slow, or
+// erroring); that maps to the distinct db.ErrSemanticTransient so a caller
+// can tell "not configured" apart from "configured, but this request
+// failed and can be retried".
 func translateSearchError(err error) error {
 	var buildingErr *vector.BuildingError
+	var queryEncErr *vector.QueryEncodeError
 	switch {
 	case errors.As(err, &buildingErr):
 		return fmt.Errorf("%w: index is building: %d%% complete",
 			db.ErrSemanticUnavailable, buildingErr.Percent)
 	case errors.Is(err, vector.ErrNoActiveGeneration):
 		return db.ErrSemanticUnavailable
+	case errors.As(err, &queryEncErr):
+		return fmt.Errorf("%w: %v", db.ErrSemanticTransient, queryEncErr.Err)
 	default:
 		return err
 	}

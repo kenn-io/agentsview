@@ -38,6 +38,23 @@ func (e *BuildingError) Error() string {
 	return fmt.Sprintf("embedding index is building (%d%% complete)", e.Percent)
 }
 
+// QueryEncodeError reports that Search failed because embedding the query
+// text itself failed — the embeddings endpoint being down, slow, timing
+// out, or erroring at search time — as distinct from ErrNoActiveGeneration
+// and BuildingError, which both mean semantic search has nothing queryable
+// yet. A QueryEncodeError means the index is otherwise ready; only this
+// particular request failed, and it is generally worth retrying rather
+// than reporting semantic search as unconfigured.
+type QueryEncodeError struct {
+	Err error
+}
+
+func (e *QueryEncodeError) Error() string {
+	return fmt.Sprintf("embed query: %v", e.Err)
+}
+
+func (e *QueryEncodeError) Unwrap() error { return e.Err }
+
 // Search embeds query and returns up to limit message-level hits, best
 // first. It returns ErrNoActiveGeneration when no live generation exists,
 // and a *BuildingError (carrying the completion Percent) when only a
@@ -69,7 +86,7 @@ func (ix *Index) Search(
 	vectors, err := kitvec.EncodeBatched(ctx, enc,
 		[]kitvec.Chunk{{Index: 0, Text: query}}, kitvec.BatchOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("embed query: %w", err)
+		return nil, &QueryEncodeError{Err: err}
 	}
 
 	hits, err := ix.store.QueryGeneration(ctx, active, vectors[0], limit)

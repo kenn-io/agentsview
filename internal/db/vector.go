@@ -12,6 +12,19 @@ import (
 var ErrSemanticUnavailable = errors.New(
 	"semantic search not available: enable [vector] in config.toml and run 'agentsview embeddings build'")
 
+// ErrSemanticTransient is returned by SearchContent's semantic/hybrid modes
+// when the wired VectorSearcher's query-time embed call itself failed (the
+// embeddings endpoint is down, slow, or erroring), as distinct from
+// ErrSemanticUnavailable's "not configured, or a build has never
+// completed" cases: semantic search IS configured and otherwise usable,
+// this particular request just failed and can be retried. It is
+// deliberately not wrapped by ErrSemanticUnavailable, so
+// errors.Is(err, ErrSemanticUnavailable) stays false for it and callers
+// don't mistake a transient endpoint outage for "semantic search is
+// disabled".
+var ErrSemanticTransient = errors.New(
+	"semantic search embeddings endpoint is unavailable; the request can be retried")
+
 // VectorHit is one message-level semantic search hit, ranked best first.
 type VectorHit struct {
 	SessionID string

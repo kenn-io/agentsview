@@ -6,9 +6,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,7 +38,43 @@ type EncoderConfig struct {
 const (
 	backoffBase = 250 * time.Millisecond
 	backoffMax  = 5 * time.Second
+	// retryAfterCap bounds how long a Retry-After header can push a single
+	// wait, so a misbehaving or hostile endpoint cannot stall a build for
+	// arbitrarily long.
+	retryAfterCap = 60 * time.Second
 )
+
+// HTTPStatusError reports a non-200 response from the embeddings endpoint.
+// It carries the status code so callers can distinguish a permanent
+// rejection (a 4xx status other than 429 — the model rejected this
+// specific input, e.g. a token-window overflow or a content-policy
+// refusal) from a transient one (429, 5xx) worth retrying, or, via kit's
+// FillOptions.OnEncodeError, skipping and stamping a poison document
+// rather than aborting an entire build. When the response is a 429 and
+// carried a parseable Retry-After header, RetryAfter holds the delay the
+// server asked for (clamped to retryAfterCap) so retry backoff can honor
+// it instead of guessing.
+type HTTPStatusError struct {
+	// Status is the HTTP status code the embeddings endpoint returned.
+	Status int
+	// Body is a trimmed snippet (up to 512 bytes) of the response body.
+	Body string
+	// RetryAfter is the parsed Retry-After delay from a 429 response, or
+	// nil when the response carried none or it could not be parsed.
+	RetryAfter *time.Duration
+}
+
+func (e *HTTPStatusError) Error() string {
+	return fmt.Sprintf("[vector.embeddings] status %d: %s", e.Status, e.Body)
+}
+
+// Permanent reports whether the embeddings endpoint's response indicates a
+// rejection of this specific input that will never succeed on retry: any
+// 4xx status except 429, which is rate-limiting rather than a content
+// rejection and is itself retryable.
+func (e *HTTPStatusError) Permanent() bool {
+	return e.Status >= 400 && e.Status < 500 && e.Status != http.StatusTooManyRequests
+}
 
 // embeddingsRequestBody is the OpenAI-compatible embeddings request.
 type embeddingsRequestBody struct {
@@ -89,7 +127,7 @@ func encode(
 		if !retryable || attempt == attempts {
 			return nil, lastErr
 		}
-		if err := sleepBackoff(ctx, attempt); err != nil {
+		if err := sleepBackoff(ctx, attempt, err); err != nil {
 			return nil, err
 		}
 	}
@@ -120,14 +158,23 @@ func attemptEncode(
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		statusErr := &HTTPStatusError{Status: resp.StatusCode, Body: strings.TrimSpace(string(body))}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			if d, ok := parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()); ok {
+				statusErr.RetryAfter = &d
+			}
+		}
 		retryable := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
-		return nil, retryable, fmt.Errorf(
-			"[vector.embeddings] status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, retryable, statusErr
 	}
 
 	var decoded embeddingsResponseBody
 	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
-		return nil, false, fmt.Errorf("[vector.embeddings] decode response: %w", err)
+		// A decode failure almost always means the connection died
+		// mid-stream (truncated body), not that the endpoint sent a
+		// deliberately malformed response; treat it as transient so the
+		// caller retries rather than giving up immediately.
+		return nil, true, fmt.Errorf("[vector.embeddings] decode response: %w", err)
 	}
 
 	vectors, err := reorderAndValidate(decoded, texts, cfg.Dimension)
@@ -171,14 +218,12 @@ func reorderAndValidate(
 	return out, nil
 }
 
-// sleepBackoff waits with capped exponential backoff before the next
-// attempt, returning ctx.Err() promptly if ctx is cancelled during the
-// wait.
-func sleepBackoff(ctx context.Context, attempt int) error {
-	delay := backoffBase << (attempt - 1)
-	if delay > backoffMax || delay <= 0 {
-		delay = backoffMax
-	}
+// sleepBackoff waits before the next attempt — honoring a 429 response's
+// Retry-After delay when lastErr carries one, falling back to capped
+// exponential backoff otherwise — returning ctx.Err() promptly if ctx is
+// cancelled during the wait.
+func sleepBackoff(ctx context.Context, attempt int, lastErr error) error {
+	delay := backoffDelay(attempt, lastErr)
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
@@ -187,4 +232,49 @@ func sleepBackoff(ctx context.Context, attempt int) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// backoffDelay picks the wait before the next retry: a 429's parsed
+// Retry-After delay when present, otherwise capped exponential backoff
+// from attempt.
+func backoffDelay(attempt int, lastErr error) time.Duration {
+	var statusErr *HTTPStatusError
+	if errors.As(lastErr, &statusErr) && statusErr.RetryAfter != nil {
+		return *statusErr.RetryAfter
+	}
+	delay := backoffBase << (attempt - 1)
+	if delay > backoffMax || delay <= 0 {
+		delay = backoffMax
+	}
+	return delay
+}
+
+// parseRetryAfter parses an HTTP Retry-After header value in either the
+// delta-seconds or HTTP-date form (RFC 9110 §10.2.3), relative to now,
+// clamped to [0, retryAfterCap]. It reports ok=false for an empty or
+// unparseable header. A delta-seconds value of 0 (or an HTTP-date already
+// in the past) means "retry immediately", reported as a zero duration.
+func parseRetryAfter(header string, now time.Time) (time.Duration, bool) {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return 0, false
+	}
+	if seconds, err := strconv.Atoi(header); err == nil {
+		return clampRetryAfter(time.Duration(seconds) * time.Second), true
+	}
+	if when, err := http.ParseTime(header); err == nil {
+		return clampRetryAfter(when.Sub(now)), true
+	}
+	return 0, false
+}
+
+// clampRetryAfter bounds d to [0, retryAfterCap].
+func clampRetryAfter(d time.Duration) time.Duration {
+	if d < 0 {
+		return 0
+	}
+	if d > retryAfterCap {
+		return retryAfterCap
+	}
+	return d
 }
