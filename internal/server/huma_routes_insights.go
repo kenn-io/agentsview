@@ -218,14 +218,10 @@ func (s *Server) humaGenerateInsight(
 			return nil, apiError(http.StatusNotFound, "session not found")
 		}
 		date := insightSessionDate(session)
-		if date == "" {
-			return nil, apiError(http.StatusBadRequest,
-				"session has no usable timestamp")
-		}
-		if req.DateFrom == "" {
+		if req.DateFrom == "" && date != "" {
 			req.DateFrom = date
 		}
-		if req.DateTo == "" {
+		if req.DateTo == "" && date != "" {
 			req.DateTo = date
 		}
 		req.Project = session.Project

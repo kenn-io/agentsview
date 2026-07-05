@@ -411,6 +411,15 @@ func TestGenerateInsight_SingleSessionUsesSessionPrompt(t *testing.T) {
 	assert.Equal(t, "my-app", *saved.Project)
 }
 
+func TestGenerateInsight_SingleSessionMissingSession(t *testing.T) {
+	te := setup(t)
+
+	w := te.post(t, "/api/v1/insights/generate",
+		`{"type":"agent_analysis","session_id":"missing","date_from":"","date_to":""}`)
+	assertStatus(t, w, http.StatusNotFound)
+	assertBodyContains(t, w, "session not found")
+}
+
 func TestGenerateInsight_PersistsWithReadOnlyStore(t *testing.T) {
 	dir := tempDirWithRetryCleanup(t)
 	dbPath := filepath.Join(dir, "test.db")
