@@ -115,10 +115,13 @@ Contents:
 
 Before each fill, scan the main DB's embeddable universe and reconcile the
 mirror: insert new identities, update `ordinal`/`content_hash` on existing ones,
-delete identities no longer present (dropping their vectors). Content change
-bumps the revision, so kit re-embeds it; an ordinal shift on a uuid-keyed row is
-a cheap mirror update with no re-embed. Legacy rows without `source_uuid`
-re-embed when their ordinal shifts — accepted cost, documented.
+delete identities no longer present — via
+`sqlitevec.Store.DeleteVectors(ctx, doc)` per removed identity, then the mirror
+row; deleting only the row would leave orphaned vectors occupying KNN slots (kit
+filters them from hits but does not reclaim the slots). Content change bumps the
+revision, so kit re-embeds it; an ordinal shift on a uuid-keyed row is a cheap
+mirror update with no re-embed. Legacy rows without `source_uuid` re-embed when
+their ordinal shifts — accepted cost, documented.
 
 ### Resync survival
 
