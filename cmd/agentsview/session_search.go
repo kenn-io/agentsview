@@ -14,15 +14,15 @@ import (
 
 func newSessionSearchCommand() *cobra.Command {
 	var (
-		useRegex, useFTS                  bool
-		in                                string
-		excludeSystem, reveal             bool
-		project, excludeProject, agent    string
-		machine, date, dateFrom, dateTo   string
-		activeSince                       string
-		includeChildren, includeAutomated bool
-		includeOneShot                    bool
-		limit, cursor                     int
+		useRegex, useFTS, useSemantic, useHybrid bool
+		in                                       string
+		excludeSystem, reveal                    bool
+		project, excludeProject, agent           string
+		machine, date, dateFrom, dateTo          string
+		activeSince                              string
+		includeChildren, includeAutomated        bool
+		includeOneShot                           bool
+		limit, cursor                            int
 	)
 	cmd := &cobra.Command{
 		Use:          "search <pattern>",
@@ -30,29 +30,16 @@ func newSessionSearchCommand() *cobra.Command {
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if useRegex && useFTS {
-				return fmt.Errorf("--regex and --fts are mutually exclusive")
-			}
 			var sources []string
 			for s := range strings.SplitSeq(in, ",") {
 				if s = strings.TrimSpace(s); s != "" {
 					sources = append(sources, s)
 				}
 			}
-			if useFTS {
-				for _, s := range sources {
-					if s != "messages" {
-						return fmt.Errorf(
-							"--fts searches messages only; drop --in or --fts")
-					}
-				}
-			}
-			mode := "substring"
-			switch {
-			case useRegex:
-				mode = "regex"
-			case useFTS:
-				mode = "fts"
+			mode, err := resolveContentSearchMode(
+				useRegex, useFTS, useSemantic, useHybrid, sources)
+			if err != nil {
+				return err
 			}
 			svc, cleanup, err := resolveService(cmd)
 			if err != nil {
@@ -97,6 +84,10 @@ func newSessionSearchCommand() *cobra.Command {
 	flags := cmd.Flags()
 	flags.BoolVar(&useRegex, "regex", false, "Treat pattern as an RE2 regex")
 	flags.BoolVar(&useFTS, "fts", false, "Fast tokenized FTS over messages only")
+	flags.BoolVar(&useSemantic, "semantic", false,
+		"Semantic (vector) search over user/assistant messages")
+	flags.BoolVar(&useHybrid, "hybrid", false,
+		"Hybrid semantic + full-text search (reciprocal rank fusion)")
 	flags.StringVar(&in, "in", "",
 		"Comma-separated sources: messages,tool_input,tool_result (default all)")
 	flags.BoolVar(&excludeSystem, "exclude-system", false,
@@ -118,7 +109,56 @@ func newSessionSearchCommand() *cobra.Command {
 	return cmd
 }
 
+// resolveContentSearchMode picks the search mode from the mutually exclusive
+// --regex/--fts/--semantic/--hybrid flags and, for the modes that only search
+// message content ("fts", "semantic", "hybrid"), rejects an explicit --in
+// naming other sources.
+func resolveContentSearchMode(
+	useRegex, useFTS, useSemantic, useHybrid bool, sources []string,
+) (string, error) {
+	modes := 0
+	for _, b := range []bool{useRegex, useFTS, useSemantic, useHybrid} {
+		if b {
+			modes++
+		}
+	}
+	if modes > 1 {
+		return "", fmt.Errorf(
+			"--regex, --fts, --semantic and --hybrid are mutually exclusive")
+	}
+	mode := "substring"
+	switch {
+	case useRegex:
+		mode = "regex"
+	case useFTS:
+		mode = "fts"
+	case useSemantic:
+		mode = "semantic"
+	case useHybrid:
+		mode = "hybrid"
+	}
+	if useFTS {
+		for _, s := range sources {
+			if s != "messages" {
+				return "", fmt.Errorf(
+					"--fts searches messages only; drop --in or --fts")
+			}
+		}
+	}
+	if useSemantic || useHybrid {
+		for _, s := range sources {
+			if s != "messages" {
+				return "", fmt.Errorf(
+					"--%s searches messages only; drop --in", mode)
+			}
+		}
+	}
+	return mode, nil
+}
+
 // printContentMatchesHuman writes one line per match, terminal-sanitized.
+// Scored matches (semantic/hybrid modes) show "score=0.83" after the
+// ordinal; unscored matches (substring/regex/fts) omit it.
 func printContentMatchesHuman(w io.Writer, res *service.ContentSearchResult) error {
 	if len(res.Matches) == 0 {
 		fmt.Fprintln(w, "(no matches)")
@@ -129,8 +169,11 @@ func printContentMatchesHuman(w io.Writer, res *service.ContentSearchResult) err
 		if m.ToolName != "" {
 			loc = m.Location + ":" + m.ToolName
 		}
-		fmt.Fprintf(w, "%s  #%d  %s  %s\n",
-			sanitizeTerminal(m.SessionID), m.Ordinal,
+		fmt.Fprintf(w, "%s  #%d", sanitizeTerminal(m.SessionID), m.Ordinal)
+		if m.Score != nil {
+			fmt.Fprintf(w, " score=%.2f", *m.Score)
+		}
+		fmt.Fprintf(w, "  %s  %s\n",
 			sanitizeTerminal(m.Project), sanitizeTerminal(loc))
 		fmt.Fprintf(w, "    %s\n",
 			sanitizeTerminal(strings.ReplaceAll(m.Snippet, "\n", " ")))
