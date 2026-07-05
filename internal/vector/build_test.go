@@ -153,6 +153,71 @@ func TestBuildFullRebuildSameFingerprintReembedsEverything(t *testing.T) {
 	assert.Equal(t, gen.Fingerprint(), active)
 }
 
+// TestBuildFullRebuildRetiredGenerationReembeds covers the resolveBuildTarget
+// gap where a FullRebuild request targets a fingerprint that already exists
+// as a retired generation (from an earlier model switch): without resetting
+// it, EnsureGeneration would reuse its old stamps and Fill would find
+// nothing pending, silently reactivating stale embeddings instead of
+// performing the requested rebuild.
+func TestBuildFullRebuildRetiredGenerationReembeds(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	src := twoDocSource()
+	genA := fakeGeneration("model-a")
+	genB := fakeGeneration("model-b")
+
+	_, err := ix.Build(ctx, src, fakeBuildEncoder(), genA, BuildOptions{})
+	require.NoError(t, err)
+	_, err = ix.Build(ctx, src, fakeBuildEncoder(), genB, BuildOptions{})
+	require.NoError(t, err, "genA is now retired, genB active")
+
+	var encodeCalls int
+	countingEncoder := func(_ context.Context, texts []string) ([][]float32, error) {
+		encodeCalls++
+		out := make([][]float32, len(texts))
+		for i := range texts {
+			out[i] = []float32{1, 0, 0}
+		}
+		return out, nil
+	}
+
+	result, err := ix.Build(ctx, src, countingEncoder, genA, BuildOptions{FullRebuild: true})
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.Fill.Documents,
+		"full rebuild on a retired generation must re-embed every document")
+	assert.Positive(t, encodeCalls, "encoder must actually be invoked, not skipped")
+}
+
+// TestCountPendingIncludesRevisionChangedDocs covers countPending's
+// BuildProgress.Total denominator: a document whose mirror content_hash
+// changed since it was last stamped must still count as pending, matching
+// the s.revision = d.content_hash predicate generationCoverageQuery's
+// Missing column uses, or Total under-reports outstanding work.
+func TestCountPendingIncludesRevisionChangedDocs(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	src := twoDocSource()
+	gen := fakeGeneration("fake-model")
+
+	_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
+	require.NoError(t, err)
+
+	fp := gen.Fingerprint()
+	total, err := ix.countPending(ctx, fp)
+	require.NoError(t, err)
+	assert.Zero(t, total, "fully embedded generation has nothing pending")
+
+	// Simulate content changing without a mirror refresh reconciling the
+	// stamp: the stamp's revision no longer matches content_hash.
+	_, err = ix.db.ExecContext(ctx,
+		`UPDATE vector_messages SET content_hash = 'changed-hash' WHERE doc_key = 'u:s1:u1'`)
+	require.NoError(t, err)
+
+	total, err = ix.countPending(ctx, fp)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, total, "content-changed doc must count as pending, not complete")
+}
+
 func TestBuildProgressReceivesFinalDoneEqualToTotalChunks(t *testing.T) {
 	previous := progressInterval
 	progressInterval = 0

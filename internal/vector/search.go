@@ -43,10 +43,23 @@ func (e *BuildingError) Error() string {
 // first. It returns ErrNoActiveGeneration when no live generation exists,
 // and a *BuildingError (carrying the completion Percent) when only a
 // building generation exists.
+//
+// Search deliberately queries only the active generation rather than
+// kitvec.Search's default of every live (building + active) generation: a
+// model or dimension change leaves a building generation coexisting with
+// the active one, and kitvec.Search would encode the query once with enc
+// and reuse that single vector for both, which errors (or, for a same-
+// dimension model change, silently ranks against the wrong model's space)
+// once their dimensions or embedding spaces differ. Encoding only for the
+// caller-chosen generation and querying it directly with
+// store.QueryGeneration sidesteps that; a system-level staleness gate
+// elsewhere already rejects an encoder that no longer matches the active
+// generation's fingerprint, so this mismatch cannot arise in practice once
+// that gate is wired up.
 func (ix *Index) Search(
 	ctx context.Context, enc kitvec.EncodeFunc, query string, limit int,
 ) ([]Hit, error) {
-	_, hasActive, err := ix.ActiveFingerprint(ctx)
+	active, hasActive, err := ix.ActiveFingerprint(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -54,14 +67,19 @@ func (ix *Index) Search(
 		return nil, ix.noActiveGenerationError(ctx)
 	}
 
-	hits, err := kitvec.Search[string, string](ctx, ix.store, query,
-		func(string) kitvec.EncodeFunc { return enc },
-		kitvec.SearchOptions{
-			PerGeneration: limit,
-			Merge:         kitvec.MergeOptions{Limit: limit},
-		})
+	vectors, err := kitvec.EncodeBatched(ctx, enc,
+		[]kitvec.Chunk{{Index: 0, Text: query}}, kitvec.BatchOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("embed query: %w", err)
+	}
+
+	hits, err := ix.store.QueryGeneration(ctx, active, vectors[0], limit)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
+	}
+	hits = kitvec.RollupByDocument(hits)
+	if len(hits) > limit {
+		hits = hits[:limit]
 	}
 
 	return ix.hydrateHits(ctx, hits)

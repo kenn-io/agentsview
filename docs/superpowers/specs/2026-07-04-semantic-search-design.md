@@ -94,14 +94,20 @@ Contents:
   identity is a synthetic single-column key. One row per embeddable message:
     - `doc_key TEXT PRIMARY KEY` — `u:<session_id>:<source_uuid>` when
       `source_uuid` is non-empty, else `o:<session_id>:<ordinal>` (same
-      precedence as pin re-attachment in `internal/db/messages.go`). The schema
-      permits several messages in one session to share a `source_uuid`, so
-      uuid-backed keys carry an occurrence disambiguator: the first occurrence
-      (in ordinal order) keeps the bare form, later ones append `#<occurrence>`
-      (`u:<session_id>:<source_uuid>#2`, ...). Occurrence assignment follows
-      scan order (session_id, ordinal), so it is deterministic and stable across
-      resyncs; if an earlier duplicate disappears, later ones shift and re-embed —
-      accepted, rare. Maps to kit `Schema.IDColumn`.
+      precedence as pin re-attachment in `internal/db/messages.go`).
+      `session_id` and `source_uuid` are percent-escaped before joining, so a
+      literal colon, hash, or percent sign inside either component cannot be
+      mistaken for the key's own delimiters — without escaping, a `source_uuid`
+      ending in a literal occurrence-shaped suffix could collide with an unrelated
+      duplicate's real occurrence suffix, or a colon inside a `session_id` or
+      `source_uuid` could shift where the key's fields appear to split. The
+      schema permits several messages in one session to share a `source_uuid`,
+      so uuid-backed keys carry an occurrence disambiguator: the first
+      occurrence (in ordinal order) keeps the bare form, later ones append an
+      occurrence suffix. Occurrence assignment follows scan order (session_id,
+      ordinal), so it is deterministic and stable across resyncs; if an earlier
+      duplicate disappears, later ones shift and re-embed — accepted, rare. Maps
+      to kit `Schema.IDColumn`.
     - `session_id`, `source_uuid`, `ordinal` — payload/index columns; `ordinal` is
       the message's current ordinal, refreshed on every scan so hits always map
       to live cursors

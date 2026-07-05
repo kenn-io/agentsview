@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	kitvec "go.kenn.io/kit/vector"
 	"go.kenn.io/kit/vector/sqlitevec"
 )
 
@@ -109,6 +110,36 @@ func TestSearchBuildingOnlyReturnsBuildingError(t *testing.T) {
 	var buildingErr *BuildingError
 	require.ErrorAs(t, err, &buildingErr)
 	assert.Equal(t, 0, buildingErr.Percent, "nothing has been embedded yet")
+}
+
+// TestSearchIgnoresBuildingGenerationOfDifferentDimension covers Search's
+// active-generation-only query path: while a model/dimension change is in
+// progress, a building generation of a different dimension coexists with
+// the active one. kitvec.Search's default (query every live generation with
+// one caller-supplied encoder) would try to run the active encoder's
+// 3-dimensional query vector against the building generation's 5-dimensional
+// vec0 table and fail. Search must encode once for, and query only, the
+// active generation, so the building generation's differing dimension never
+// matters and only active-generation hits come back.
+func TestSearchIgnoresBuildingGenerationOfDifferentDimension(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	src := threeDocSearchSource()
+	activeGen := fakeGeneration("active-model")
+
+	_, err := ix.Build(ctx, src, fakeSearchEncoder(), activeGen, BuildOptions{})
+	require.NoError(t, err)
+
+	buildingGen := kitvec.Generation{Model: "building-model", Dimensions: 5}
+	_, err = ix.EnsureGeneration(ctx, buildingGen, sqlitevec.StateBuilding)
+	require.NoError(t, err)
+
+	hits, err := ix.Search(ctx, fakeSearchEncoder(), "alpha", 10)
+	require.NoError(t, err, "a building generation of a different dimension must not break search")
+	require.NotEmpty(t, hits)
+	assert.Equal(t, "s1", hits[0].SessionID)
+	assert.Equal(t, 0, hits[0].Ordinal)
+	assert.InDelta(t, 1.0, hits[0].Score, 0.01)
 }
 
 func TestStaleActiveTrueWhenFingerprintsDiffer(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -24,11 +25,13 @@ type MessageSource interface {
 }
 
 // RefreshStats summarizes one Refresh call: Upserted counts mirror rows
-// inserted or changed (new identity or content_hash changed), Unchanged
-// counts rows rescanned with an identical content_hash (e.g. an
-// ordinal-only shift), and Deleted counts mirror rows removed, whether by
-// slot eviction (see DocKey) or, in full mode, by reconciliation against
-// identities no longer present in the scan.
+// inserted or changed (new identity or content_hash changed; this includes
+// a doc_key reinserted after a same-scan slot eviction, see Refresh),
+// Unchanged counts rows rescanned with an identical content_hash (e.g. an
+// ordinal-only shift with no eviction involved), and Deleted counts mirror
+// rows genuinely removed — a slot-evicted doc_key not reinserted anywhere
+// else in the same scan, or, in full mode, an identity not seen in the scan
+// at all.
 type RefreshStats struct {
 	Upserted  int
 	Deleted   int
@@ -46,14 +49,43 @@ type RefreshStats struct {
 // key; later occurrences append "#<occurrence>". Since the scan is ordered
 // by (session_id, ordinal), occurrence assignment is deterministic and
 // stable across resyncs. occurrence is ignored when sourceUUID is empty.
+//
+// sessionID and sourceUUID are percent-escaped (escapeDocKeyComponent)
+// before joining so the ":" and "#" delimiters, and any literal "%", inside
+// either component cannot be confused with the key's own structure — e.g.
+// source_uuid "dup#2" at its first occurrence would otherwise collide with
+// source_uuid "dup" at its second occurrence.
 func DocKey(sessionID, sourceUUID string, ordinal, occurrence int) string {
+	session := escapeDocKeyComponent(sessionID)
 	if sourceUUID != "" {
+		uuid := escapeDocKeyComponent(sourceUUID)
 		if occurrence > 1 {
-			return "u:" + sessionID + ":" + sourceUUID + "#" + strconv.Itoa(occurrence)
+			return "u:" + session + ":" + uuid + "#" + strconv.Itoa(occurrence)
 		}
-		return "u:" + sessionID + ":" + sourceUUID
+		return "u:" + session + ":" + uuid
 	}
-	return "o:" + sessionID + ":" + strconv.Itoa(ordinal)
+	return "o:" + session + ":" + strconv.Itoa(ordinal)
+}
+
+// escapeDocKeyComponent percent-encodes the characters DocKey uses as
+// delimiters — ':', '#', and '%' itself — so a session_id or source_uuid
+// containing them cannot be mistaken for key structure, keeping DocKey
+// injective.
+func escapeDocKeyComponent(s string) string {
+	if !strings.ContainsAny(s, "%:#") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case '%', ':', '#':
+			fmt.Fprintf(&b, "%%%02X", r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // contentHash returns the mirror's content_hash for content: kit's
@@ -69,7 +101,12 @@ func contentHash(content string) string {
 // (and their vectors, via store.DeleteVectors) whose identity was not seen
 // in the scan; full=false scans only sessions newer than the stored
 // watermark (vector_meta key "refresh_watermark") and only upserts,
-// leaving deletion reconciliation to a subsequent full refresh. The
+// leaving that reconciliation to a subsequent full refresh. Either mode
+// also resolves same-scan slot evictions (see evictSlotOccupant) once the
+// scan completes: a UUID-keyed doc_key evicted from a (session_id, ordinal)
+// slot it no longer occupies is deleted via store.DeleteVectors only if it
+// was not reinserted elsewhere in the same scan, so a row that merely
+// shifted (or was displaced in a shift cascade) keeps its embeddings. The
 // watermark is advanced to the scan's max ended_at afterwards.
 func (ix *Index) Refresh(
 	ctx context.Context, src MessageSource, full bool,
@@ -90,6 +127,8 @@ func (ix *Index) Refresh(
 	var stats RefreshStats
 	seen := make(map[string]struct{})
 	occurrences := make(map[string]int)
+	evicted := make(map[string]struct{})
+	sentinel := 0
 	maxEnded, err := src.ScanEmbeddableMessages(ctx, since, func(m db.EmbeddableMessage) error {
 		occurrence := 1
 		if m.SourceUUID != "" {
@@ -98,11 +137,13 @@ func (ix *Index) Refresh(
 			occurrence = occurrences[occKey]
 		}
 		key := DocKey(m.SessionID, m.SourceUUID, m.Ordinal, occurrence)
-		unchanged, deletedEvictions, err := ix.upsertMirrorRow(ctx, key, m)
+		unchanged, evictedKeys, err := ix.upsertMirrorRow(ctx, key, m, &sentinel)
 		if err != nil {
 			return fmt.Errorf("upserting mirror row %s: %w", key, err)
 		}
-		stats.Deleted += deletedEvictions
+		for _, k := range evictedKeys {
+			evicted[k] = struct{}{}
+		}
 		if unchanged {
 			stats.Unchanged++
 		} else {
@@ -123,6 +164,12 @@ func (ix *Index) Refresh(
 		stats.Deleted += deleted
 	}
 
+	finalized, err := ix.finalizeEvictions(ctx, evicted)
+	if err != nil {
+		return RefreshStats{}, err
+	}
+	stats.Deleted += finalized
+
 	if maxEnded != "" {
 		if err := ix.setRefreshWatermark(ctx, maxEnded); err != nil {
 			return RefreshStats{}, err
@@ -135,13 +182,16 @@ func (ix *Index) Refresh(
 // upsertMirrorRow evicts any row occupying the same (session_id, ordinal)
 // slot under a different doc_key, then upserts key's row. It returns
 // whether the row's content_hash was unchanged (a no-op update, e.g. an
-// ordinal-only shift) and how many rows the slot eviction deleted (0 or 1).
+// ordinal-only shift) and the doc_key(s) the slot eviction displaced (0 or
+// 1), for the caller to reconcile once the whole scan completes. sentinel
+// is a per-Refresh-call counter evictSlotOccupant uses to park a displaced
+// row at a unique negative ordinal; see evictSlotOccupant.
 func (ix *Index) upsertMirrorRow(
-	ctx context.Context, key string, m db.EmbeddableMessage,
-) (unchanged bool, evicted int, err error) {
-	evicted, err = ix.evictSlotOccupant(ctx, key, m.SessionID, m.Ordinal)
+	ctx context.Context, key string, m db.EmbeddableMessage, sentinel *int,
+) (unchanged bool, evicted []string, err error) {
+	evicted, err = ix.evictSlotOccupant(ctx, key, m.SessionID, m.Ordinal, sentinel)
 	if err != nil {
-		return false, 0, err
+		return false, nil, err
 	}
 
 	var existingHash sql.NullString
@@ -170,50 +220,134 @@ ON CONFLICT(doc_key) DO UPDATE SET
 	return unchanged, evicted, nil
 }
 
-// evictSlotOccupant deletes any row occupying (sessionID, ordinal) under a
-// doc_key other than key, guarding the mirror's unique index before an
-// upsert lands on that slot. Each evicted doc_key's vectors are deleted
-// first via store.DeleteVectors — the same order full-mode reconciliation
-// uses — because reconcileDeletions can never sweep an evicted key: its
-// mirror row is already gone before reconciliation runs, and kit's store
-// keeps orphaned vectors occupying KNN LIMIT slots even though
-// QueryGeneration filters them from hits.
+// evictSlotOccupant parks the mirror row of any doc_key occupying
+// (sessionID, ordinal) under a key other than key at a unique negative
+// ordinal, guarding the mirror's unique index before an upsert lands on
+// that slot without deleting the row outright. Message ordinals are always
+// >= 0, so a negative ordinal can never collide with a real one or with
+// another parked row: sentinel is a counter shared across one Refresh
+// scan, decremented per eviction to keep every parked ordinal distinct.
+//
+// The row is left in place, not deleted, so that if the same doc_key is
+// reinserted later in the same scan (a stable UUID-keyed identity that
+// merely shifted position in a cascade), upsertMirrorRow's ON CONFLICT(doc_key)
+// path updates it in place and never touches the embed_gen column kit's
+// SaveVectors stamped it with — a fresh INSERT would reset embed_gen to
+// NULL and silently uncover the document. Whether an evicted key is
+// genuinely gone or was reinserted is not decidable until the whole scan
+// finishes, so store.DeleteVectors and the row's actual removal are
+// deferred to Refresh's post-scan finalizeEvictions pass.
 func (ix *Index) evictSlotOccupant(
-	ctx context.Context, key, sessionID string, ordinal int,
-) (int, error) {
+	ctx context.Context, key, sessionID string, ordinal int, sentinel *int,
+) ([]string, error) {
 	rows, err := ix.db.QueryContext(ctx,
 		`SELECT doc_key FROM vector_messages
 		 WHERE session_id = ? AND ordinal = ? AND doc_key != ?`,
 		sessionID, ordinal, key)
 	if err != nil {
-		return 0, fmt.Errorf("finding slot occupant: %w", err)
+		return nil, fmt.Errorf("finding slot occupant: %w", err)
 	}
 	var evictKeys []string
 	for rows.Next() {
 		var k string
 		if err := rows.Scan(&k); err != nil {
 			rows.Close()
-			return 0, fmt.Errorf("scanning slot occupant: %w", err)
+			return nil, fmt.Errorf("scanning slot occupant: %w", err)
 		}
 		evictKeys = append(evictKeys, k)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return 0, fmt.Errorf("iterating slot occupants: %w", err)
+		return nil, fmt.Errorf("iterating slot occupants: %w", err)
 	}
 	rows.Close()
 
 	for _, k := range evictKeys {
-		if err := ix.store.DeleteVectors(ctx, k); err != nil {
-			return 0, fmt.Errorf("deleting evicted vectors for %s: %w", k, err)
-		}
+		*sentinel--
 		if _, err := ix.db.ExecContext(ctx,
-			`DELETE FROM vector_messages WHERE doc_key = ?`, k,
+			`UPDATE vector_messages SET ordinal = ? WHERE doc_key = ?`, *sentinel, k,
 		); err != nil {
-			return 0, fmt.Errorf("evicting slot occupant %s: %w", k, err)
+			return nil, fmt.Errorf("evicting slot occupant %s: %w", k, err)
 		}
 	}
-	return len(evictKeys), nil
+	return evictKeys, nil
+}
+
+// finalizeEvictions resolves every doc_key evictSlotOccupant displaced
+// during one Refresh scan: a key whose ordinal is still negative (the
+// sentinel evictSlotOccupant parked it at) once the scan is done was never
+// reinserted, so it is genuinely gone — its vectors and stamps are deleted
+// via store.DeleteVectors, and its mirror row is finally removed. This
+// cleanup mirrors what full-mode reconcileDeletions does for identities
+// missing from the scan entirely, needed here because reconcileDeletions
+// can never see an evicted key parked at a sentinel ordinal (it looks
+// vanished until the deletion actually happens), and kit's store keeps
+// orphaned vectors occupying KNN LIMIT slots even though QueryGeneration
+// filters them from hits. A key whose ordinal was overwritten back to a
+// real (non-negative) value was reinserted under its own doc_key later in
+// the same scan — it merely shifted position and keeps its row and
+// embeddings untouched.
+func (ix *Index) finalizeEvictions(ctx context.Context, evicted map[string]struct{}) (int, error) {
+	if len(evicted) == 0 {
+		return 0, nil
+	}
+	keys := make([]string, 0, len(evicted))
+	for k := range evicted {
+		keys = append(keys, k)
+	}
+	ordinals, err := ix.currentOrdinals(ctx, keys)
+	if err != nil {
+		return 0, err
+	}
+
+	var deleted int
+	for _, key := range keys {
+		if ordinal, ok := ordinals[key]; ok && ordinal >= 0 {
+			continue
+		}
+		if err := ix.store.DeleteVectors(ctx, key); err != nil {
+			return deleted, fmt.Errorf("deleting evicted vectors for %s: %w", key, err)
+		}
+		if _, err := ix.db.ExecContext(ctx,
+			`DELETE FROM vector_messages WHERE doc_key = ?`, key,
+		); err != nil {
+			return deleted, fmt.Errorf("deleting evicted mirror row %s: %w", key, err)
+		}
+		deleted++
+	}
+	return deleted, nil
+}
+
+// currentOrdinals returns the current ordinal of each of keys that is still
+// present in vector_messages; a key absent from the result was somehow
+// already removed from the mirror.
+func (ix *Index) currentOrdinals(ctx context.Context, keys []string) (map[string]int, error) {
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(keys)), ",")
+	args := make([]any, len(keys))
+	for i, k := range keys {
+		args[i] = k
+	}
+
+	rows, err := ix.db.QueryContext(ctx,
+		`SELECT doc_key, ordinal FROM vector_messages WHERE doc_key IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("checking evicted doc_key ordinals: %w", err)
+	}
+	defer rows.Close()
+
+	ordinals := make(map[string]int, len(keys))
+	for rows.Next() {
+		var k string
+		var ordinal int
+		if err := rows.Scan(&k, &ordinal); err != nil {
+			return nil, fmt.Errorf("scanning evicted doc_key ordinal: %w", err)
+		}
+		ordinals[k] = ordinal
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("checking evicted doc_key ordinals: %w", err)
+	}
+	return ordinals, nil
 }
 
 // reconcileDeletions deletes every mirror row (and its vectors) whose

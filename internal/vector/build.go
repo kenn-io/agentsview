@@ -2,6 +2,7 @@ package vector
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -118,6 +119,14 @@ func (ix *Index) noWatermarkYet(ctx context.Context) (bool, error) {
 // and whether it is a newly (or still) building generation that should be
 // auto-activated once it fully covers the mirror. See the package's build
 // brief for the exact decision table.
+//
+// FullRebuild resets the target generation whenever it already exists —
+// active, building, or retired — not only when it happens to be the active
+// one: a fingerprint that already exists as a retired (or still building)
+// generation carries stamps and vectors from its earlier life, and without
+// a reset EnsureGeneration would reuse them, letting Fill skip every
+// document and silently reactivate stale embeddings instead of performing
+// the requested full rebuild.
 func (ix *Index) resolveBuildTarget(
 	ctx context.Context, gen kitvec.Generation, fp string, fullRebuild bool,
 ) (target string, wasBuilding bool, err error) {
@@ -135,15 +144,46 @@ func (ix *Index) resolveBuildTarget(
 		return fp, false, nil
 	}
 
+	existed, err := ix.generationExists(ctx, fp)
+	if err != nil {
+		return "", false, err
+	}
+
 	target, err = ix.EnsureGeneration(ctx, gen, sqlitevec.StateBuilding)
 	if err != nil {
 		return "", false, err
 	}
+	if fullRebuild && existed {
+		if err := ix.resetGeneration(ctx, target); err != nil {
+			return "", false, err
+		}
+	}
 	return target, true, nil
 }
 
+// generationExists reports whether a generation with fingerprint fp has
+// already been registered, in any state.
+func (ix *Index) generationExists(ctx context.Context, fp string) (bool, error) {
+	var ordinal int64
+	err := ix.db.QueryRowContext(ctx,
+		`SELECT ordinal FROM `+generationsTable+` WHERE gen_key = ?`, fp,
+	).Scan(&ordinal)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check generation exists for fingerprint %s: %w", fp, err)
+	}
+	return true, nil
+}
+
 // countPending returns the number of vector_messages rows not yet stamped
-// for fp's generation, an approximate denominator for BuildProgress.Total.
+// at their current content_hash for fp's generation, an approximate
+// denominator for BuildProgress.Total. It applies the same
+// s.revision = d.content_hash predicate generationCoverageQuery's Missing
+// column uses, so a document whose content changed since it was last
+// stamped (a stale revision) counts as pending rather than complete — kit's
+// Fill treats it as pending re-embed for the same reason.
 func (ix *Index) countPending(ctx context.Context, fp string) (int64, error) {
 	ordinal, err := ix.ordinalForFingerprint(ctx, fp)
 	if err != nil {
@@ -152,7 +192,8 @@ func (ix *Index) countPending(ctx context.Context, fp string) (int64, error) {
 	var total int64
 	if err := ix.db.QueryRowContext(ctx, `
 SELECT COUNT(*) FROM vector_messages d WHERE NOT EXISTS (
-    SELECT 1 FROM `+stampsTable+` s WHERE s.ordinal = ? AND s.doc_key = d.doc_key)`,
+    SELECT 1 FROM `+stampsTable+` s WHERE s.ordinal = ? AND s.doc_key = d.doc_key
+      AND s.revision = d.content_hash)`,
 		ordinal,
 	).Scan(&total); err != nil {
 		return 0, fmt.Errorf("count pending documents: %w", err)

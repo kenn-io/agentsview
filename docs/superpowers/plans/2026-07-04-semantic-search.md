@@ -472,23 +472,34 @@ func DocKey(sessionID, sourceUUID string, ordinal, occurrence int) string
 ```
 
 `DocKey` implements the spec's identity: `"u:" + sessionID + ":" + sourceUUID`
-when sourceUUID non-empty (with `"#" + strconv.Itoa(occurrence)` appended for
-occurrence > 1 — the schema permits duplicate source_uuids within a session;
+when sourceUUID non-empty (with an occurrence suffix appended for occurrence
+greater than 1 — the schema permits duplicate source_uuids within a session;
 Refresh assigns occurrences in scan order, which is deterministic), else
-`"o:" + sessionID + ":" + strconv.Itoa(ordinal)`. Upsert semantics per row:
-compute `content_hash` = `hex(sha256(content))`;
-`INSERT INTO vector_messages ... ON CONFLICT(doc_key) DO UPDATE SET session_id=excluded.session_id, ordinal=excluded.ordinal, content=excluded.content, content_hash=excluded.content_hash`
-— the hash change is what invalidates kit's revision stamp; an ordinal-only
-change updates the cursor without re-embedding. Guard the
-`(session_id, ordinal)` unique index: evict any existing row occupying the same
-`(session_id, ordinal)` under a different `doc_key` before upserting (an ordinal
-shift can land a uuid-keyed row on a slot previously held by a legacy `o:` row)
-— eviction calls `ix.store.DeleteVectors(ctx, evictedKey)` before deleting the
-mirror row, same order as full-mode reconciliation, so evicted identities never
-leak vectors. Deletion in full mode: collect seen doc_keys in an in-memory set;
-then for each mirror doc_key not seen, call `ix.store.DeleteVectors(ctx, key)`
-then `DELETE FROM vector_messages WHERE doc_key = ?` (spec: deleting only the
-row leaves orphaned vectors occupying KNN slots).
+`"o:" + sessionID + ":" + strconv.Itoa(ordinal)`. sessionID and sourceUUID are
+percent-escaped before joining (the delimiter characters and the percent sign
+itself), so a value containing one of them can never be mistaken for key
+structure and the encoding stays injective. Upsert semantics per row: compute
+`content_hash` as the hex-encoded sha256 of the content, then upsert on conflict
+by doc_key, updating session_id, ordinal, content, and content_hash — the hash
+change is what invalidates kit's revision stamp; an ordinal-only change updates
+the cursor without re-embedding. Guard the `(session_id, ordinal)` unique index:
+before upserting, park any existing row occupying the same slot under a
+different doc_key at a unique negative ordinal rather than deleting it outright
+(an ordinal shift can land a uuid-keyed row on a slot previously held by another
+row, and that other row's own doc_key is often reinserted moments later in the
+same scan at its new ordinal). Once the whole scan completes, resolve every
+parked doc_key: one still at its negative ordinal was never reinserted, so it is
+genuinely gone — call `ix.store.DeleteVectors` and then delete the mirror row;
+one whose ordinal was overwritten back to a real value was reinserted under its
+own doc_key elsewhere in the scan and keeps its row and vectors untouched.
+Parking instead of deleting outright matters because a fresh `INSERT` on
+reinsertion would reset the embed_gen column kit's SaveVectors stamped it with,
+silently uncovering the document; the in-place `ON CONFLICT` update reinsertion
+goes through never touches it. Deletion in full mode: collect seen doc_keys in
+an in-memory set; then for each mirror doc_key not seen, call
+`ix.store.DeleteVectors(ctx, key)` then
+`DELETE FROM vector_messages WHERE doc_key = ?` (spec: deleting only the row
+leaves orphaned vectors occupying KNN slots).
 
 - [ ] **Step 1: Write failing db-scan tests** in
   `internal/db/messages_embeddable_test.go` using the existing `testDB(t)`

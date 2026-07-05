@@ -394,6 +394,144 @@ func TestRefreshDuplicateSourceUUIDGetsStableOccurrenceKeys(t *testing.T) {
 	}
 }
 
+// TestRefreshCascadingOrdinalShiftReinsertsEvictedKeysWithoutLosingCoverage
+// covers the two-phase eviction regression: three UUID-keyed rows all shift
+// ordinal upward by one in a single refresh (e.g. a message inserted ahead
+// of them during resync). Each row's move onto the next row's old slot
+// evicts that row mid-scan, but the evicted row's own doc_key is stable and
+// reappears moments later in the same scan at its new ordinal. The evicted
+// rows' stamps and vectors must survive: only a slot eviction that is never
+// reinserted anywhere in the scan should reach store.DeleteVectors.
+func TestRefreshCascadingOrdinalShiftReinsertsEvictedKeysWithoutLosingCoverage(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+
+	src := &fakeMessageSource{rows: []fakeRow{
+		{
+			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "u0", Ordinal: 0, Content: "zero"},
+			endedAt: "2024-01-01T00:00:00Z",
+		},
+		{
+			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "u1", Ordinal: 1, Content: "one"},
+			endedAt: "2024-01-01T00:00:01Z",
+		},
+		{
+			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "u2", Ordinal: 2, Content: "two"},
+			endedAt: "2024-01-01T00:00:02Z",
+		},
+	}}
+	_, err := ix.Refresh(ctx, src, true)
+	require.NoError(t, err)
+
+	gen := kitvec.Generation{Model: "fake-model", Dimensions: 3}
+	fingerprint, err := ix.EnsureGeneration(ctx, gen, sqlitevec.StateActive)
+	require.NoError(t, err)
+	keys := []string{"u:s1:u0", "u:s1:u1", "u:s1:u2"}
+	for _, key := range keys {
+		row, ok := readMirrorRow(t, ix, key)
+		require.True(t, ok)
+		require.NoError(t, ix.store.SaveVectors(ctx, fingerprint, key, row.contentHash,
+			[]kitvec.ChunkVector{{ChunkIndex: 0, Vector: kitvec.Vector{1, 0, 0}}}))
+	}
+
+	// Every existing row shifts up by one ordinal, cascading eviction
+	// across the whole session in scan order: u0's move onto slot 1
+	// evicts u1's row, u1's move onto slot 2 evicts u2's row, then u1 and
+	// u2 are each reinserted under their own stable doc_key at their own
+	// turn later in this same scan.
+	src.rows[0].msg.Ordinal = 1
+	src.rows[1].msg.Ordinal = 2
+	src.rows[2].msg.Ordinal = 3
+
+	stats, err := ix.Refresh(ctx, src, true)
+	require.NoError(t, err)
+	assert.Zero(t, stats.Deleted, "cascaded rows are reinserted in-scan, not genuinely removed")
+
+	for _, key := range keys {
+		row, ok := readMirrorRow(t, ix, key)
+		require.True(t, ok, "%s must still be in the mirror", key)
+
+		var stampCount int
+		require.NoError(t, ix.db.QueryRow(
+			`SELECT COUNT(*) FROM message_vectors_stamps WHERE doc_key = ? AND revision = ?`,
+			key, row.contentHash,
+		).Scan(&stampCount))
+		assert.Equal(t, 1, stampCount, "%s's stamp must survive the cascading shift", key)
+	}
+
+	pending, err := ix.store.PendingForGeneration(ctx, fingerprint, 100)
+	require.NoError(t, err)
+	assert.Empty(t, pending, "no document should need re-embedding after the cascading shift")
+}
+
+// TestDocKeyInjectiveWithDelimiterCharacters covers pairs of inputs that
+// would collide under DocKey's raw (unescaped) delimiters — a source_uuid
+// containing a literal "#<n>" suffix colliding with an occurrence suffix,
+// and a ":" inside a session_id or source_uuid colliding across the
+// session/uuid boundary — asserting escapeDocKeyComponent keeps the
+// encoding injective.
+func TestDocKeyInjectiveWithDelimiterCharacters(t *testing.T) {
+	tests := []struct {
+		name                  string
+		aSession, aUUID       string
+		aOrdinal, aOccurrence int
+		bSession, bUUID       string
+		bOrdinal, bOccurrence int
+	}{
+		{
+			name:        "occurrence suffix vs literal hash-number in uuid",
+			aSession:    "s1",
+			aUUID:       "dup#2",
+			aOrdinal:    0,
+			aOccurrence: 1,
+			bSession:    "s1",
+			bUUID:       "dup",
+			bOrdinal:    1,
+			bOccurrence: 2,
+		},
+		{
+			name:        "colon in session vs session/uuid boundary",
+			aSession:    "a:b",
+			aUUID:       "c",
+			aOrdinal:    0,
+			aOccurrence: 1,
+			bSession:    "a",
+			bUUID:       "b:c",
+			bOrdinal:    0,
+			bOccurrence: 1,
+		},
+		{
+			name:        "colon in uuid vs session/uuid boundary",
+			aSession:    "sess",
+			aUUID:       "x:y",
+			aOrdinal:    0,
+			aOccurrence: 1,
+			bSession:    "sess:x",
+			bUUID:       "y",
+			bOrdinal:    0,
+			bOccurrence: 1,
+		},
+		{
+			name:        "literal percent-escape sequence vs raw delimiter",
+			aSession:    "s1",
+			aUUID:       "%3A",
+			aOrdinal:    0,
+			aOccurrence: 1,
+			bSession:    "s1",
+			bUUID:       ":",
+			bOrdinal:    0,
+			bOccurrence: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := DocKey(tt.aSession, tt.aUUID, tt.aOrdinal, tt.aOccurrence)
+			b := DocKey(tt.bSession, tt.bUUID, tt.bOrdinal, tt.bOccurrence)
+			assert.NotEqual(t, a, b, "distinct identities must not collide")
+		})
+	}
+}
+
 func TestRefreshReadOnlyIndexRejected(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "vectors.db")
