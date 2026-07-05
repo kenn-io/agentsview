@@ -37,11 +37,17 @@ type BuildOptions struct {
 	Progress func(BuildProgress)
 }
 
-// BuildProgress reports incremental embedding progress during Build.
+// BuildProgress reports incremental embedding progress during Build. Done
+// and Total are both counted in chunks (not documents): kit's Fill hands the
+// wrapped encoder each document's chunks, sometimes split across several
+// sub-batches when BatchSize is smaller than a document's chunk count, so
+// there is no seam to count completed documents from the encoder wrapper
+// alone. Counting chunks on both sides keeps the percentage bounded at 100%
+// regardless of how many chunks a message splits into.
 type BuildProgress struct {
 	Phase string // "scanning" | "embedding"
 	Done  int64  // chunks encoded so far
-	Total int64  // pending docs at start (approximate denominator)
+	Total int64  // pending chunks at start (approximate denominator)
 }
 
 // BuildResult summarizes one Build call.
@@ -177,26 +183,43 @@ func (ix *Index) generationExists(ctx context.Context, fp string) (bool, error) 
 	return true, nil
 }
 
-// countPending returns the number of vector_messages rows not yet stamped
-// at their current content_hash for fp's generation, an approximate
-// denominator for BuildProgress.Total. It applies the same
-// s.revision = d.content_hash predicate generationCoverageQuery's Missing
-// column uses, so a document whose content changed since it was last
-// stamped (a stale revision) counts as pending rather than complete — kit's
-// Fill treats it as pending re-embed for the same reason.
+// countPending returns the total number of chunks the documents not yet
+// stamped at their current content_hash (for fp's generation) would produce
+// under the index's split configuration — the denominator BuildProgress.Total
+// reports. It counts chunks rather than documents so the denominator stays
+// in the same unit as BuildProgress.Done (chunks encoded so far); see
+// BuildProgress's doc comment for why a per-document count isn't reachable
+// from the encoder wrapper. It applies the same s.revision = d.content_hash
+// predicate generationCoverageQuery's Missing column uses, so a document
+// whose content changed since it was last stamped (a stale revision) counts
+// as pending rather than complete — kit's Fill treats it as pending re-embed
+// for the same reason.
 func (ix *Index) countPending(ctx context.Context, fp string) (int64, error) {
 	ordinal, err := ix.ordinalForFingerprint(ctx, fp)
 	if err != nil {
 		return 0, err
 	}
-	var total int64
-	if err := ix.db.QueryRowContext(ctx, `
-SELECT COUNT(*) FROM vector_messages d WHERE NOT EXISTS (
+	rows, err := ix.db.QueryContext(ctx, `
+SELECT content FROM vector_messages d WHERE NOT EXISTS (
     SELECT 1 FROM `+stampsTable+` s WHERE s.ordinal = ? AND s.doc_key = d.doc_key
       AND s.revision = d.content_hash)`,
 		ordinal,
-	).Scan(&total); err != nil {
+	)
+	if err != nil {
 		return 0, fmt.Errorf("count pending documents: %w", err)
+	}
+	defer rows.Close()
+
+	var total int64
+	for rows.Next() {
+		var content string
+		if err := rows.Scan(&content); err != nil {
+			return 0, fmt.Errorf("scanning pending document content: %w", err)
+		}
+		total += int64(len(kitvec.Split(content, ix.split)))
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterating pending documents: %w", err)
 	}
 	return total, nil
 }

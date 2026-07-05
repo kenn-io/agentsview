@@ -1856,6 +1856,24 @@ func TestGetMessages_DescWithFrom(t *testing.T) {
 	}
 }
 
+// TestGetMessages_RolesTrimsSpacesAndDropsTrailingEmpty covers a regression
+// where "roles=user, assistant," (a space after the comma, plus a trailing
+// comma) silently narrowed the filter: an untrimmed " assistant" role never
+// matches any stored row's plain "assistant" value, so assistant messages
+// were dropped even though the caller asked for both roles.
+func TestGetMessages_RolesTrimsSpacesAndDropsTrailingEmpty(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "s1", "my-app", 4)
+	te.seedMessages(t, "s1", 4)
+
+	w := te.get(t, "/api/v1/sessions/s1/messages?roles=user,%20assistant,")
+	assertStatus(t, w, http.StatusOK)
+
+	resp := decode[messageListResponse](t, w)
+	require.Len(t, resp.Messages, 4,
+		"a space after the comma or a trailing empty element must not narrow the role filter")
+}
+
 func TestGetMessages_Pagination(t *testing.T) {
 	te := setup(t)
 	te.seedSession(t, "s1", "my-app", 20)

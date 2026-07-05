@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -218,6 +219,48 @@ func TestCountPendingIncludesRevisionChangedDocs(t *testing.T) {
 	assert.EqualValues(t, 1, total, "content-changed doc must count as pending, not complete")
 }
 
+// TestCountPendingSumsChunksAcrossMultiChunkDocuments covers the units bug
+// where BuildProgress.Total counted pending documents while Done counted
+// encoded chunks: a message that splits into several chunks would drive the
+// reported percentage past 100%. countPending must sum chunks, matching
+// Done's unit, not count the document once.
+func TestCountPendingSumsChunksAcrossMultiChunkDocuments(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	longContent := strings.Repeat("word ", 2000) // far past the 4000-rune split threshold
+	src := &fakeMessageSource{rows: []fakeRow{
+		{
+			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "u1", Ordinal: 0, Content: "short"},
+			endedAt: "2024-01-01T00:00:00Z",
+		},
+		{
+			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "u2", Ordinal: 1, Content: longContent},
+			endedAt: "2024-01-01T00:00:01Z",
+		},
+	}}
+	gen := fakeGeneration("fake-model")
+
+	_, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
+	require.NoError(t, err)
+	fp := gen.Fingerprint()
+
+	longChunks := len(kitvec.Split(longContent, ix.split))
+	require.Greater(t, longChunks, 1,
+		"content must actually split into multiple chunks for this test to be meaningful")
+
+	// Simulate the long document changing without a mirror refresh
+	// reconciling the stamp, so it counts as pending again (same technique
+	// as TestCountPendingIncludesRevisionChangedDocs).
+	_, err = ix.db.ExecContext(ctx,
+		`UPDATE vector_messages SET content_hash = 'changed-hash' WHERE doc_key = 'u:s1:u2'`)
+	require.NoError(t, err)
+
+	total, err := ix.countPending(ctx, fp)
+	require.NoError(t, err)
+	assert.EqualValues(t, longChunks, total,
+		"Total must sum the pending document's chunks, not count it as one document")
+}
+
 func TestBuildProgressReceivesFinalDoneEqualToTotalChunks(t *testing.T) {
 	previous := progressInterval
 	progressInterval = 0
@@ -236,7 +279,49 @@ func TestBuildProgressReceivesFinalDoneEqualToTotalChunks(t *testing.T) {
 	require.NotEmpty(t, calls)
 	last := calls[len(calls)-1]
 	assert.EqualValues(t, result.Fill.Chunks, last.Done)
+	assert.EqualValues(t, result.Fill.Chunks, last.Total,
+		"Total must also be in chunks so Done/Total settles at exactly 100%")
 	assert.Equal(t, "embedding", last.Phase)
+}
+
+// TestBuildProgressNeverExceedsTotalWithMultiChunkMessage covers the
+// regression this units fix addresses directly: a message long enough to
+// split into several chunks must never push a progress call's Done past its
+// Total (which would render as a percentage over 100%).
+func TestBuildProgressNeverExceedsTotalWithMultiChunkMessage(t *testing.T) {
+	previous := progressInterval
+	progressInterval = 0
+	t.Cleanup(func() { progressInterval = previous })
+
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	longContent := strings.Repeat("word ", 2000)
+	src := &fakeMessageSource{rows: []fakeRow{
+		{
+			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "u1", Ordinal: 0, Content: "short"},
+			endedAt: "2024-01-01T00:00:00Z",
+		},
+		{
+			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "u2", Ordinal: 1, Content: longContent},
+			endedAt: "2024-01-01T00:00:01Z",
+		},
+	}}
+	gen := fakeGeneration("fake-model")
+	require.Greater(t, len(kitvec.Split(longContent, ix.split)), 1,
+		"content must actually split into multiple chunks for this test to be meaningful")
+
+	var calls []BuildProgress
+	result, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{
+		Progress: func(p BuildProgress) { calls = append(calls, p) },
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, calls)
+	for _, p := range calls {
+		assert.LessOrEqualf(t, p.Done, p.Total, "progress must never exceed 100%%: %+v", p)
+	}
+	last := calls[len(calls)-1]
+	assert.EqualValues(t, result.Fill.Chunks, last.Done)
+	assert.EqualValues(t, result.Fill.Chunks, last.Total)
 }
 
 func TestBuildEncoderErrorAbortsAndRetryResumesWithoutReembedding(t *testing.T) {

@@ -515,6 +515,51 @@ func TestHTTPSearchContent_RealServer(t *testing.T) {
 	assert.Equal(t, "message", res.Matches[0].Location)
 }
 
+// TestHTTPSearchContent_501PreservesCauseDetail asserts that a 501 response
+// carrying cause-specific remediation text (the shape searcherAdapter's
+// translateSearchError produces for a still-building index) survives the
+// daemon round-trip instead of being collapsed to the bare
+// ErrSemanticUnavailable sentinel message.
+func TestHTTPSearchContent_501PreservesCauseDetail(t *testing.T) {
+	t.Parallel()
+	body := service.ErrSemanticUnavailable.Error() + ": index is building: 40% complete"
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotImplemented)
+			_, _ = w.Write([]byte(`{"error":"` + body + `"}`))
+		}))
+	defer srv.Close()
+
+	be := service.NewHTTPBackend(srv.URL, "", true)
+	_, err := be.SearchContent(context.Background(), service.ContentSearchRequest{Pattern: "needle"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, service.ErrSemanticUnavailable)
+	assert.Contains(t, err.Error(), "index is building: 40% complete")
+}
+
+// TestHTTPSearchContent_501IdenticalToSentinelDoesNotDuplicate asserts that
+// when the 501 body's message is exactly the sentinel's own text (no extra
+// cause — e.g. ErrNoActiveGeneration's case), the client returns the bare
+// sentinel rather than a message with the sentinel text repeated twice.
+func TestHTTPSearchContent_501IdenticalToSentinelDoesNotDuplicate(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotImplemented)
+			_, _ = w.Write([]byte(`{"error":"` + service.ErrSemanticUnavailable.Error() + `"}`))
+		}))
+	defer srv.Close()
+
+	be := service.NewHTTPBackend(srv.URL, "", true)
+	_, err := be.SearchContent(context.Background(), service.ContentSearchRequest{Pattern: "needle"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, service.ErrSemanticUnavailable)
+	assert.Equal(t, service.ErrSemanticUnavailable.Error(), err.Error(),
+		"the sentinel text must not be duplicated when the body carries no extra cause")
+}
+
 func TestNewHTTPBackend_TrimsTrailingSlash(t *testing.T) {
 	t.Parallel()
 	env := newHTTPBackendEnv(t)

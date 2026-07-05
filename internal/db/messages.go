@@ -428,19 +428,26 @@ func (db *DB) ScanEmbeddableMessages(
 }
 
 // optionalSinceClause returns the AND clause restricting the embeddable scan
-// to sessions with ended_at >= since, or "" when since is unset. It compares
-// via SQLite's datetime() rather than raw string ordering: RFC3339Nano's
-// variable fractional-second precision (e.g. ended_at values are sometimes
-// stored with milliseconds, sometimes without) makes lexicographic
-// comparison wrong, since "...00.123Z" sorts before "...00Z". datetime()
-// truncates to second granularity, so a session whose true ended_at is a
-// few hundred milliseconds before since may be re-scanned; that overlap is
-// harmless because Refresh's upserts are idempotent.
+// to sessions with ended_at >= since (or ended_at IS NULL), or "" when since
+// is unset. It compares via SQLite's datetime() rather than raw string
+// ordering: RFC3339Nano's variable fractional-second precision (e.g.
+// ended_at values are sometimes stored with milliseconds, sometimes
+// without) makes lexicographic comparison wrong, since "...00.123Z" sorts
+// before "...00Z". datetime() truncates to second granularity, so a session
+// whose true ended_at is a few hundred milliseconds before since may be
+// re-scanned; that overlap is harmless because Refresh's upserts are
+// idempotent.
+//
+// A NULL ended_at (a session still in progress, or one whose parser never
+// set it) always matches: excluding it would make its messages invisible to
+// every incremental scan until a full (since="") rebuild happens to catch
+// it, even though re-scanning an unchanged session is just a cheap no-op
+// mirror upsert.
 func optionalSinceClause(since string) string {
 	if since == "" {
 		return ""
 	}
-	return "AND datetime(s.ended_at) >= datetime(?)"
+	return "AND (s.ended_at IS NULL OR datetime(s.ended_at) >= datetime(?))"
 }
 
 // endedAfter reports whether candidate is chronologically after current,

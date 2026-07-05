@@ -19,6 +19,46 @@ import (
 	"go.kenn.io/agentsview/internal/vector"
 )
 
+// vectorsWriteLockRetryInterval and vectorsWriteLockRetryTimeout bound how
+// long setupVectorServing waits for vectors.write.lock before giving up and
+// disabling vector serving for this daemon run. Package vars so tests can
+// shrink them.
+var (
+	vectorsWriteLockRetryInterval = 200 * time.Millisecond
+	vectorsWriteLockRetryTimeout  = 5 * time.Second
+)
+
+// acquireVectorsWriteLockWithRetry tries to acquire vectors.write.lock,
+// retrying briefly if another process (typically a long-running direct
+// `embeddings build`) currently holds it. It returns ok=false, err=nil — not
+// an error — once the retry window elapses with the lock still held, so
+// setupVectorServing can degrade (disable vector serving for this run)
+// rather than fail daemon startup: a long direct build must never block the
+// daemon from booting.
+func acquireVectorsWriteLockWithRetry(
+	ctx context.Context, dataDir string,
+) (*writeOwnerLock, bool, error) {
+	deadline := time.Now().Add(vectorsWriteLockRetryTimeout)
+	for {
+		lock, err := tryAcquireNamedLock(dataDir, vectorsWriteLockFile)
+		if err == nil {
+			return lock, true, nil
+		}
+		var held writeOwnerLockHeldError
+		if !errors.As(err, &held) {
+			return nil, false, err
+		}
+		if !time.Now().Before(deadline) {
+			return nil, false, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, false, nil
+		case <-time.After(vectorsWriteLockRetryInterval):
+		}
+	}
+}
+
 // embedDebounceInterval is the fixed quiet period the after-sync scheduler
 // waits, after the last sync-completion signal, before running a build.
 const embedDebounceInterval = 30 * time.Second
@@ -233,10 +273,20 @@ type vectorServing struct {
 	Close      func() error
 }
 
-// setupVectorServing opens vectors.db read-write, builds the embeddings
-// encoder and Manager, wires database's semantic searcher, and constructs
-// the after-sync scheduler. database is passed directly as the Manager's
-// MessageSource since *db.DB already implements vector.MessageSource.
+// setupVectorServing acquires vectors.write.lock, opens vectors.db
+// read-write, builds the embeddings encoder and Manager, wires database's
+// semantic searcher, and constructs the after-sync scheduler. database is
+// passed directly as the Manager's MessageSource since *db.DB already
+// implements vector.MessageSource.
+//
+// The write lock is held for the daemon's lifetime (released by the
+// returned Close) so a concurrent direct `embeddings build` cannot race the
+// daemon's own builds over vectors.db — both writers park evicted rows at
+// sentinel ordinals, and a race between them can trip unique-index
+// conflicts or silently discard embeddings. If the lock is already held
+// (typically by a long-running direct build), setupVectorServing retries
+// briefly and, failing that, disables vector serving for this run — logging
+// a warning — rather than blocking or failing daemon startup.
 func setupVectorServing(
 	ctx context.Context, cfg config.Config, database *db.DB,
 ) (vectorServing, error) {
@@ -244,22 +294,38 @@ func setupVectorServing(
 		return vectorServing{}, nil
 	}
 
+	lock, ok, err := acquireVectorsWriteLockWithRetry(ctx, cfg.DataDir)
+	if err != nil {
+		return vectorServing{}, fmt.Errorf("acquiring vectors write lock: %w", err)
+	}
+	if !ok {
+		log.Printf(
+			"serve: vectors.write.lock held by another process after %s; "+
+				"disabling vector serving for this run",
+			vectorsWriteLockRetryTimeout,
+		)
+		return vectorServing{}, nil
+	}
+
 	ix, err := vector.Open(
 		ctx, cfg.Vector.ResolvedDBPath(cfg.DataDir), false, cfg.Vector.Embeddings.MaxInputChars,
 	)
 	if err != nil {
+		_ = lock.Close()
 		return vectorServing{}, fmt.Errorf("opening vectors.db: %w", err)
 	}
 
 	enc, err := newVectorEncoder(cfg.Vector.Embeddings)
 	if err != nil {
 		ix.Close()
+		_ = lock.Close()
 		return vectorServing{}, err
 	}
 
 	backstop, err := time.ParseDuration(cfg.Vector.Embed.BackstopInterval)
 	if err != nil {
 		ix.Close()
+		_ = lock.Close()
 		return vectorServing{}, fmt.Errorf(
 			"parsing [vector.embed] backstop_interval %q: %w",
 			cfg.Vector.Embed.BackstopInterval, err)
@@ -273,7 +339,14 @@ func setupVectorServing(
 	return vectorServing{
 		ServerOpts: []server.Option{server.WithEmbeddingsManager(mgr)},
 		Scheduler:  scheduler,
-		Close:      ix.Close,
+		Close: func() error {
+			ixErr := ix.Close()
+			lockErr := lock.Close()
+			if ixErr != nil {
+				return ixErr
+			}
+			return lockErr
+		},
 	}, nil
 }
 

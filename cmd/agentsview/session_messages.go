@@ -143,10 +143,26 @@ func messagesFilterFromFlags(cmd *cobra.Command) (service.MessageFilter, error) 
 	if role, err := flags.GetString("role"); err != nil {
 		return service.MessageFilter{}, err
 	} else if role != "" {
-		filter.Roles = strings.Split(role, ",")
+		filter.Roles = splitTrimmedNonEmpty(role)
 	}
 
 	return filter, nil
+}
+
+// splitTrimmedNonEmpty splits s on commas, trims surrounding whitespace from
+// each part, and drops empty parts. This matches `session search --in`'s
+// convention (see resolveContentSearchMode's caller in session_search.go) so
+// a trailing or doubled comma (e.g. "user,") narrows the filter by one
+// intended value instead of silently adding a spurious "" role that matches
+// nothing.
+func splitTrimmedNonEmpty(s string) []string {
+	var out []string
+	for part := range strings.SplitSeq(s, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 // printMessagesHuman prints each message as a header block followed

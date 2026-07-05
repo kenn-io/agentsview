@@ -37,6 +37,17 @@ var directBuildProgressInterval = 2 * time.Second
 // fingerprint `embeddings list` prints.
 const fingerprintDisplayLen = 12
 
+// embeddingsDaemonHTTPClient bounds each individual request the embeddings
+// daemon client makes (build/status/list/activate/retire) so a wedged
+// daemon cannot hang the CLI forever, matching the timeout other daemon
+// HTTP clients in this codebase use (internal/service/http.go's
+// httpBackend.client). This is a per-request timeout, not a deadline on the
+// overall command: buildViaDaemon's poll loop issues one status call every
+// embeddingsPollInterval, so a build that legitimately runs for longer than
+// this timeout keeps polling fine — only an individual unresponsive call is
+// cut off.
+var embeddingsDaemonHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
 func newEmbeddingsCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "embeddings",
@@ -648,11 +659,15 @@ func (c embeddingsDaemonClient) do(
 	if reqBody != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	// The daemon's CSRF guard rejects mutating requests whose Origin is not
+	// in the allowlist. Setting Origin to the daemon's own baseURL satisfies
+	// that check for the CLI, which has no real browser origin.
+	req.Header.Set("Origin", c.baseURL)
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := embeddingsDaemonHTTPClient.Do(req)
 	if err != nil {
 		return err
 	}

@@ -292,7 +292,7 @@ func (s *Server) humaGetMessages(
 		filter.After = &in.After.Value
 	}
 	if in.Roles != "" {
-		filter.Roles = strings.Split(in.Roles, ",")
+		filter.Roles = splitTrimmedNonEmpty(in.Roles)
 	}
 	list, err := s.sessions.Messages(ctx, in.ID, filter)
 	if err != nil {
@@ -303,6 +303,21 @@ func (s *Server) humaGetMessages(
 		return nil, serverError(err)
 	}
 	return &jsonOutput[*service.MessageList]{Body: list}, nil
+}
+
+// splitTrimmedNonEmpty splits s on commas, trims surrounding whitespace from
+// each part, and drops empty parts. This matches the CLI's `session search
+// --in` convention (cmd/agentsview/session_search.go) so a trailing or
+// doubled comma (e.g. "user,") narrows the filter by one intended value
+// instead of silently adding a spurious "" element that matches nothing.
+func splitTrimmedNonEmpty(s string) []string {
+	var out []string
+	for part := range strings.SplitSeq(s, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func (s *Server) humaToolCalls(

@@ -26,10 +26,37 @@ import (
 // explicitly below.
 var errHTTPNotFound = errors.New("http: not found")
 
-// errHTTPNotImplemented is returned by getJSON for 501 responses so
-// callers can map a capability-absent daemon (e.g. search with no FTS
-// index) to a typed sentinel instead of string-matching the status.
+// errHTTPNotImplemented is returned (wrapped in *errNotImplementedBody) by
+// getJSON for 501 responses so callers can map a capability-absent daemon
+// (e.g. search with no FTS index) to a typed sentinel instead of
+// string-matching the status.
 var errHTTPNotImplemented = errors.New("http: not implemented")
+
+// errNotImplementedBody wraps errHTTPNotImplemented with the 501 response's
+// error message, so callers that need cause-specific detail — e.g.
+// SearchContent's "index is building: N% complete" or "index is stale ...
+// --full-rebuild" remediation — can recover it instead of seeing only the
+// bare sentinel. errors.Is(err, errHTTPNotImplemented) still holds for every
+// caller that only cares about the status.
+type errNotImplementedBody struct {
+	message string
+}
+
+func (e *errNotImplementedBody) Error() string { return errHTTPNotImplemented.Error() }
+func (e *errNotImplementedBody) Unwrap() error { return errHTTPNotImplemented }
+
+// notImplementedMessage extracts the {"error": "..."} message huma's error
+// responses carry, falling back to the raw (trimmed) body when it isn't in
+// that shape.
+func notImplementedMessage(body []byte) string {
+	var apiErr struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &apiErr) == nil && apiErr.Error != "" {
+		return apiErr.Error
+	}
+	return strings.TrimSpace(string(body))
+}
 
 type httpBackend struct {
 	baseURL           string
@@ -432,12 +459,34 @@ func (b *httpBackend) SearchContent(
 	}
 	var out ContentSearchResult
 	if err := b.getJSON(ctx, "/api/v1/search/content?"+q.Encode(), &out); err != nil {
-		if errors.Is(err, errHTTPNotImplemented) {
-			return nil, ErrSemanticUnavailable
+		var notImpl *errNotImplementedBody
+		if errors.As(err, &notImpl) {
+			return nil, wrapSemanticUnavailable(notImpl.message)
 		}
 		return nil, err
 	}
 	return &out, nil
+}
+
+// wrapSemanticUnavailable turns a search/content 501 response's error
+// message into an error wrapping ErrSemanticUnavailable, preserving
+// whatever cause-specific remediation text the server attached (e.g. "index
+// is building: N% complete" or "... run 'agentsview embeddings build
+// --full-rebuild'") instead of discarding it for the bare sentinel.
+// errors.Is(result, ErrSemanticUnavailable) always holds. When message is
+// empty or is exactly the sentinel's own text (no extra cause), the bare
+// sentinel is returned rather than duplicating it.
+func wrapSemanticUnavailable(message string) error {
+	sentinel := ErrSemanticUnavailable.Error()
+	if message == "" || message == sentinel {
+		return ErrSemanticUnavailable
+	}
+	if cause, ok := strings.CutPrefix(message, sentinel); ok {
+		return fmt.Errorf("%w%s", ErrSemanticUnavailable, cause)
+	}
+	// An unexpected body shape (e.g. a differently worded 501); still wrap
+	// the sentinel so errors.Is holds, and keep the server's text.
+	return fmt.Errorf("%w: %s", ErrSemanticUnavailable, message)
 }
 
 func (b *httpBackend) UsageSummary(
@@ -736,7 +785,8 @@ func (b *httpBackend) getJSON(
 		return errHTTPNotFound
 	}
 	if resp.StatusCode == http.StatusNotImplemented {
-		return errHTTPNotImplemented
+		body, _ := io.ReadAll(resp.Body)
+		return &errNotImplementedBody{message: notImplementedMessage(body)}
 	}
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(resp.Body)

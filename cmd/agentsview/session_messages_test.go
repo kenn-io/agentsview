@@ -92,6 +92,15 @@ func TestSessionMessagesFlags_RoleSplitsOnComma(t *testing.T) {
 	assert.Equal(t, []string{"user", "assistant"}, filter.Roles)
 }
 
+// TestSessionMessagesFlags_RoleTrimsSpacesAndDropsEmpty covers a trailing
+// comma or stray whitespace (e.g. "user, " or "user,") which must not
+// narrow the filter with a spurious "" role that matches nothing.
+func TestSessionMessagesFlags_RoleTrimsSpacesAndDropsEmpty(t *testing.T) {
+	filter, err := parseMessagesFlags(t, []string{"--role", "user, assistant, "})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"user", "assistant"}, filter.Roles)
+}
+
 // TestSessionMessagesAroundNoOtherFlagsSucceeds is the brief-mandated
 // end-to-end check: `session messages <id> --around 5` with no other flags
 // must actually succeed when run as a full CLI command (through

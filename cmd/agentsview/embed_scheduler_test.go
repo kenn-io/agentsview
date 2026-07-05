@@ -324,6 +324,93 @@ func TestServeConstructionRegistersEmbeddingsRoutesWhenVectorEnabled(t *testing.
 	assert.Equal(t, "application/json", mediaType(t, resp.Header.Get("Content-Type")))
 }
 
+// TestEmbeddingsDaemonClientBuildSucceedsThroughRealMiddleware drives a POST
+// build request from embeddingsDaemonClient (the same client `embeddings
+// build` uses to talk to a running daemon) through the server's real
+// middleware chain (srv.Handler(), not a bare mux), proving the CSRF guard
+// in internal/server/server.go's corsMiddleware does not reject it. Every
+// other embeddings-daemon-dispatch test in embeddings_test.go serves off an
+// httptest.NewServeMux() directly, bypassing that middleware entirely, which
+// is exactly how the missing Origin header regression went unnoticed.
+func TestEmbeddingsDaemonClientBuildSucceedsThroughRealMiddleware(t *testing.T) {
+	dataDir := t.TempDir()
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+
+	ln, port := listenLoopback(t)
+	cfg := vectorTestConfig(dataDir)
+	cfg.Host, cfg.Port = "127.0.0.1", port
+	vs, err := setupVectorServing(context.Background(), cfg, database)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, vs.Close()) }()
+
+	srv := server.New(cfg, database, nil, vs.ServerOpts...)
+	ts := startTestServer(t, ln, srv.Handler())
+
+	client := embeddingsDaemonClient{baseURL: ts.URL}
+	err = client.startBuild(context.Background(), vector.BuildRequest{})
+	require.NoError(t, err,
+		"a POST build must succeed once the client sets Origin to satisfy the CSRF guard")
+}
+
+// TestSetupVectorServingDisablesWhenWriteLockHeld asserts a held
+// vectors.write.lock (simulating a concurrent direct `embeddings build`)
+// makes setupVectorServing degrade to a fully-disabled vectorServing after a
+// short retry window, rather than blocking or failing daemon startup, and
+// that it logs a clear warning explaining why.
+func TestSetupVectorServingDisablesWhenWriteLockHeld(t *testing.T) {
+	origInterval, origTimeout := vectorsWriteLockRetryInterval, vectorsWriteLockRetryTimeout
+	vectorsWriteLockRetryInterval = time.Millisecond
+	vectorsWriteLockRetryTimeout = 10 * time.Millisecond
+	t.Cleanup(func() {
+		vectorsWriteLockRetryInterval = origInterval
+		vectorsWriteLockRetryTimeout = origTimeout
+	})
+
+	dataDir := t.TempDir()
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	cfg := vectorTestConfig(dataDir)
+
+	held, err := tryAcquireNamedLock(dataDir, vectorsWriteLockFile)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, held.Close()) }()
+
+	logBuf := captureLogOutput(t)
+
+	vs, err := setupVectorServing(context.Background(), cfg, database)
+	require.NoError(t, err, "a held lock must degrade, not fail, daemon startup")
+	assert.Nil(t, vs.Scheduler)
+	assert.Nil(t, vs.Close)
+	assert.Empty(t, vs.ServerOpts)
+	assert.Contains(t, logBuf.String(), "vectors.write.lock")
+	assert.Contains(t, logBuf.String(), "disabling vector serving")
+}
+
+// TestSetupVectorServingAcquiresAndReleasesWriteLock asserts a free
+// vectors.write.lock is acquired for the daemon's lifetime and released by
+// Close, so a second setupVectorServing call after Close succeeds rather
+// than finding the lock still held.
+func TestSetupVectorServingAcquiresAndReleasesWriteLock(t *testing.T) {
+	dataDir := t.TempDir()
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	cfg := vectorTestConfig(dataDir)
+
+	vs, err := setupVectorServing(context.Background(), cfg, database)
+	require.NoError(t, err)
+	require.NotNil(t, vs.Close)
+
+	// While vs holds the lock, a competing direct acquire must fail.
+	_, lockErr := tryAcquireNamedLock(dataDir, vectorsWriteLockFile)
+	require.Error(t, lockErr, "setupVectorServing must hold vectors.write.lock while running")
+
+	require.NoError(t, vs.Close())
+
+	// Once released, a fresh acquire — standing in for a second
+	// setupVectorServing call — must succeed.
+	held, err := tryAcquireNamedLock(dataDir, vectorsWriteLockFile)
+	require.NoError(t, err, "Close must release vectors.write.lock")
+	require.NoError(t, held.Close())
+}
+
 func TestServeConstructionOmitsEmbeddingsRoutesWhenVectorDisabled(t *testing.T) {
 	dataDir := t.TempDir()
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))

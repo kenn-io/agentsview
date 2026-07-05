@@ -106,6 +106,45 @@ func TestScanEmbeddableMessagesSinceFiltersOlderSessions(t *testing.T) {
 	assert.Equal(t, tsMidYear, maxEnded)
 }
 
+// TestScanEmbeddableMessagesSinceIncludesNullEndedAtSessions asserts that a
+// session whose ended_at is NULL (still in progress, or never set by its
+// parser) is not silently excluded from an incremental (since-watermark)
+// scan — only a full rescan (since="") previously caught it, leaving its
+// messages invisible to the embedding index until then. A session that
+// genuinely ended before since must still be excluded.
+func TestScanEmbeddableMessagesSinceIncludesNullEndedAtSessions(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "open-sess", "proj") // EndedAt left NULL
+	insertMessages(t, d, Message{
+		SessionID: "open-sess", Ordinal: 0, Role: "user",
+		Content: "still running", ContentLength: len("still running"),
+		Timestamp: tsZero,
+	})
+
+	insertSession(t, d, "old-sess", "proj", func(s *Session) {
+		s.EndedAt = Ptr(tsZero)
+	})
+	insertMessages(t, d, Message{
+		SessionID: "old-sess", Ordinal: 0, Role: "user",
+		Content: "old content", ContentLength: len("old content"),
+		Timestamp: tsZero,
+	})
+
+	var got []string
+	_, err := d.ScanEmbeddableMessages(context.Background(), tsHour1,
+		func(m EmbeddableMessage) error {
+			got = append(got, m.SessionID)
+			return nil
+		})
+	require.NoError(t, err)
+
+	assert.Contains(t, got, "open-sess",
+		"a NULL ended_at session must still be visible to an incremental scan")
+	assert.NotContains(t, got, "old-sess",
+		"a session that genuinely ended before since must still be excluded")
+}
+
 // TestScanEmbeddableMessagesEmptyReturnsEmptyWatermark asserts that scanning
 // an archive with no embeddable messages returns an empty maxEnded and never
 // invokes fn.

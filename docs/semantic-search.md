@@ -46,6 +46,13 @@ backstop_interval = "24h"         # periodic full reconciliation scan; negative 
 duration field doesn't parse. Restart the daemon (or run a CLI command) after
 editing the file.
 
+The first scheduled build that `run_after_sync` triggers after enabling
+`[vector]` embeds the entire existing archive, not just deltas since the mirror
+starts out empty and every message counts as pending. For a hosted embeddings
+API that is a real cost event, so run `agentsview embeddings build` directly at
+a time of your choosing if you want to control when that initial cost lands,
+rather than letting the debounced after-sync scheduler trigger it on its own.
+
 ### Ollama quickstart
 
 ```bash
