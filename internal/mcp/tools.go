@@ -311,10 +311,15 @@ func (t *toolset) sessionOverview(
 // --- get_messages ---
 
 type getMessagesIn struct {
-	SessionID          string   `json:"session_id" jsonschema:"The session to read."`
-	From               *int     `json:"from,omitempty" jsonschema:"Ordinal to start from (e.g. match_ordinal from search_sessions). Ordinal 0 is a valid anchor (the first message)."`
-	Direction          string   `json:"direction,omitempty" jsonschema:"asc (default, oldest first) or desc (newest first)."`
-	Limit              int      `json:"limit,omitempty" jsonschema:"Max messages scanned, default 20, max 100. System/tool messages are filtered after this limit, so a page can return fewer; use next_from to continue."`
+	SessionID string `json:"session_id" jsonschema:"The session to read."`
+	From      *int   `json:"from,omitempty" jsonschema:"Ordinal to start from (e.g. match_ordinal from search_sessions). Ordinal 0 is a valid anchor (the first message). Mutually exclusive with around."`
+	Direction string `json:"direction,omitempty" jsonschema:"asc (default, oldest first) or desc (newest first). Mutually exclusive with around."`
+	Limit     int    `json:"limit,omitempty" jsonschema:"Max messages scanned, default 20, max 100. System/tool messages are filtered after this limit, so a page can return fewer; use next_from to continue. Not used with around; before/after control the window size on that path."`
+	// Around switches to a symmetric window centered on an ordinal instead
+	// of linear pagination; it is mutually exclusive with From/Direction.
+	Around             *int     `json:"around,omitempty" jsonschema:"Center a symmetric window on this ordinal (e.g. match_ordinal from search_content or search_sessions), instead of linear pagination. Mutually exclusive with from and direction."`
+	Before             *int     `json:"before,omitempty" jsonschema:"Messages of context before the around anchor, default 5. Requires around; replaces limit on that path."`
+	After              *int     `json:"after,omitempty" jsonschema:"Messages of context after the around anchor, default 5. Requires around; replaces limit on that path."`
 	Roles              []string `json:"roles,omitempty" jsonschema:"Roles to include, e.g. tool. Default: user and assistant only. System messages are always excluded."`
 	MaxCharsPerMessage int      `json:"max_chars_per_message,omitempty" jsonschema:"Truncate each message to this many characters, default 2000, max 20000."`
 }
@@ -339,18 +344,51 @@ type getMessagesOut struct {
 	NextFrom *int `json:"next_from,omitempty" jsonschema:"Anchor for the next page's from parameter when more messages may remain; absent means the end. Filtering can make a page return fewer than limit messages, so keep paging until next_from is absent, not until a page comes back short."`
 }
 
+// filterAndMapMessage applies the get_messages role/system contract to one
+// message -- always drop system content (IsSystem or a legacy system
+// content prefix), then require its role to be in roles (nil/empty roles
+// falls back to user+assistant via roleAllowed) -- and shapes the survivor
+// into a messageOut truncated to maxChars. ok is false when the message was
+// filtered, so the caller can count it.
+func filterAndMapMessage(m db.Message, roles []string, maxChars int) (messageOut, bool) {
+	if isSystemMessage(m) || !roleAllowed(m.Role, roles) {
+		return messageOut{}, false
+	}
+	content, cut := truncate(m.Content, maxChars)
+	mo := messageOut{
+		Ordinal:    m.Ordinal,
+		Role:       m.Role,
+		Content:    content,
+		Timestamp:  m.Timestamp,
+		Model:      m.Model,
+		HasToolUse: m.HasToolUse,
+		Truncated:  cut,
+	}
+	if cut {
+		mo.FullLength = m.ContentLength
+	}
+	return mo, true
+}
+
 func (t *toolset) getMessages(
 	ctx context.Context, _ *mcp.CallToolRequest, in getMessagesIn,
 ) (*mcp.CallToolResult, getMessagesOut, error) {
+	if in.Around != nil {
+		return t.getMessagesAround(ctx, in)
+	}
 	// From is a *int so an explicit ordinal 0 (a valid match_ordinal)
 	// anchors at the first message rather than being mistaken for
 	// "omitted". A nil From lets the service default: desc to
-	// newest-first, asc to oldest-first.
+	// newest-first, asc to oldest-first. Before/After are forwarded
+	// unused so the service can reject them with "before/after require
+	// around" when set without Around.
 	limit := clampLimit(in.Limit, defaultMessageLimit, maxMessageLimit)
 	res, err := t.svc.Messages(ctx, in.SessionID, service.MessageFilter{
 		From:      in.From,
 		Direction: in.Direction,
 		Limit:     limit,
+		Before:    in.Before,
+		After:     in.After,
 	})
 	if err != nil {
 		return nil, getMessagesOut{}, err
@@ -359,22 +397,10 @@ func (t *toolset) getMessages(
 		in.MaxCharsPerMessage, defaultMaxCharsPerMessage, maxMaxCharsPerMessage)
 	out := getMessagesOut{Messages: make([]messageOut, 0, len(res.Messages))}
 	for _, m := range res.Messages {
-		if isSystemMessage(m) || !roleAllowed(m.Role, in.Roles) {
+		mo, ok := filterAndMapMessage(m, in.Roles, maxChars)
+		if !ok {
 			out.Filtered++
 			continue
-		}
-		content, cut := truncate(m.Content, maxChars)
-		mo := messageOut{
-			Ordinal:    m.Ordinal,
-			Role:       m.Role,
-			Content:    content,
-			Timestamp:  m.Timestamp,
-			Model:      m.Model,
-			HasToolUse: m.HasToolUse,
-			Truncated:  cut,
-		}
-		if cut {
-			mo.FullLength = m.ContentLength
 		}
 		out.Messages = append(out.Messages, mo)
 	}
@@ -395,11 +421,60 @@ func (t *toolset) getMessages(
 	return nil, out, nil
 }
 
+// getMessagesAround handles the symmetric-window retrieval path (Around
+// set). Unlike the linear path, an empty Roles must be translated to the
+// MCP default (user, assistant) before it reaches the service: an empty
+// service.MessageFilter.Roles means "all roles" there, not "the MCP
+// default", and would leak tool/system-role dumps into the window. From and
+// Direction are forwarded unused so the service can reject them as mutually
+// exclusive with Around. The service's around window always includes the
+// anchor row regardless of role, so it is subject to the same
+// filterAndMapMessage post-filter as every other message; a suppressed
+// anchor is counted in Filtered like any other dropped message. next_from
+// is anchored on the last returned ordinal (there is no scan direction in a
+// symmetric window), and Limit/Before/After select the window, not the
+// linear path's Limit.
+func (t *toolset) getMessagesAround(
+	ctx context.Context, in getMessagesIn,
+) (*mcp.CallToolResult, getMessagesOut, error) {
+	roles := in.Roles
+	if len(roles) == 0 {
+		roles = []string{"user", "assistant"}
+	}
+	res, err := t.svc.Messages(ctx, in.SessionID, service.MessageFilter{
+		From:      in.From,
+		Direction: in.Direction,
+		Around:    in.Around,
+		Before:    in.Before,
+		After:     in.After,
+		Roles:     roles,
+	})
+	if err != nil {
+		return nil, getMessagesOut{}, err
+	}
+	maxChars := clampLimit(
+		in.MaxCharsPerMessage, defaultMaxCharsPerMessage, maxMaxCharsPerMessage)
+	out := getMessagesOut{Messages: make([]messageOut, 0, len(res.Messages))}
+	for _, m := range res.Messages {
+		mo, ok := filterAndMapMessage(m, roles, maxChars)
+		if !ok {
+			out.Filtered++
+			continue
+		}
+		out.Messages = append(out.Messages, mo)
+	}
+	if len(out.Messages) > 0 {
+		next := out.Messages[len(out.Messages)-1].Ordinal + 1
+		out.NextFrom = &next
+	}
+	return nil, out, nil
+}
+
 // --- search_content ---
 
 type searchContentIn struct {
 	Pattern       string `json:"pattern" jsonschema:"Exact substring or regex to find across message text and tool inputs/results."`
-	Mode          string `json:"mode,omitempty" jsonschema:"substring (default) or regex."`
+	Mode          string `json:"mode,omitempty" jsonschema:"substring (default), regex, semantic, or hybrid."`
 	Project       string `json:"project,omitempty" jsonschema:"Restrict to one project."`
 	Agent         string `json:"agent,omitempty" jsonschema:"Restrict to one agent."`
 	DateFrom      string `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
@@ -407,17 +482,46 @@ type searchContentIn struct {
 	Limit         int    `json:"limit,omitempty" jsonschema:"Max matches, default 10, max 30."`
 	Cursor        int    `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
 	IncludeActive bool   `json:"include_active,omitempty" jsonschema:"Include matches from sessions active in the last 10 minutes. Default false: the conversation you are in right now is also recorded, so without this exclusion you would find yourself."`
+	Context       int    `json:"context,omitempty" jsonschema:"Messages of context before/after each match (max 10)."`
+}
+
+// contextMessage is a truncated view of a service-level db.Message, used
+// for search_content's inline context_before/context_after.
+type contextMessage struct {
+	Ordinal int    `json:"ordinal"`
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+func toContextMessages(msgs []db.Message) []contextMessage {
+	if len(msgs) == 0 {
+		return nil
+	}
+	out := make([]contextMessage, 0, len(msgs))
+	for _, m := range msgs {
+		content, _ := truncate(m.Content, contextMessageMaxChars)
+		out = append(out, contextMessage{
+			Ordinal: m.Ordinal, Role: m.Role, Content: content,
+		})
+	}
+	return out
 }
 
 type contentMatch struct {
-	SessionID string `json:"session_id"`
-	Project   string `json:"project,omitempty"`
-	Agent     string `json:"agent"`
-	Location  string `json:"location" jsonschema:"Where the match occurred: one of message, tool_input, or tool_result."`
-	Role      string `json:"role,omitempty"`
-	Ordinal   int    `json:"ordinal"`
-	Timestamp string `json:"timestamp"`
-	Snippet   string `json:"snippet"`
+	SessionID string   `json:"session_id"`
+	Project   string   `json:"project,omitempty"`
+	Agent     string   `json:"agent"`
+	Location  string   `json:"location" jsonschema:"Where the match occurred: one of message, tool_input, or tool_result."`
+	Role      string   `json:"role,omitempty"`
+	Ordinal   int      `json:"ordinal"`
+	Timestamp string   `json:"timestamp"`
+	Snippet   string   `json:"snippet"`
+	Score     *float64 `json:"score,omitempty" jsonschema:"Relevance score for semantic/hybrid modes; omitted for substring/regex/fts."`
+	// ContextBefore/ContextAfter are populated when Context > 0: the N
+	// messages immediately before/after this match, content truncated to
+	// 500 characters.
+	ContextBefore []contextMessage `json:"context_before,omitempty"`
+	ContextAfter  []contextMessage `json:"context_after,omitempty"`
 }
 
 type searchContentOut struct {
@@ -438,6 +542,7 @@ func (t *toolset) searchContent(
 		DateTo:   in.DateTo,
 		Limit:    clampLimit(in.Limit, defaultSearchLimit, maxSearchLimit),
 		Cursor:   in.Cursor,
+		Context:  in.Context,
 	})
 	if err != nil {
 		return nil, searchContentOut{}, err
@@ -467,7 +572,9 @@ func (t *toolset) searchContent(
 		out.Matches = append(out.Matches, contentMatch{
 			SessionID: m.SessionID, Project: m.Project, Agent: m.Agent,
 			Location: m.Location, Role: m.Role, Ordinal: m.Ordinal,
-			Timestamp: m.Timestamp, Snippet: m.Snippet,
+			Timestamp: m.Timestamp, Snippet: m.Snippet, Score: m.Score,
+			ContextBefore: toContextMessages(m.ContextBefore),
+			ContextAfter:  toContextMessages(m.ContextAfter),
 		})
 	}
 	if res.NextCursor > 0 && len(res.Matches) > 0 {

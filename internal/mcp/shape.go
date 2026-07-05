@@ -36,6 +36,9 @@ const (
 	overviewMaxChars = 500
 	// nameMaxChars caps session display names in list/search results.
 	nameMaxChars = 200
+	// contextMessageMaxChars caps each search_content context_before/
+	// context_after message.
+	contextMessageMaxChars = 500
 )
 
 // truncate cuts s to at most max runes on a rune boundary, returning
