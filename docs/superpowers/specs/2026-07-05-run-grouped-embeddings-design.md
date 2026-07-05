@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS vector_messages (
     ordinal       INTEGER NOT NULL,          -- ordinal_start (index compat)
     ordinal_end   INTEGER NOT NULL,          -- == ordinal for user docs
     subordinate   INTEGER NOT NULL DEFAULT 0,
-    offsets       TEXT NOT NULL DEFAULT '',  -- JSON, see below
+    offsets       TEXT NOT NULL DEFAULT '[]', -- JSON, see below
     content       TEXT NOT NULL,
     content_hash  TEXT NOT NULL,
     embed_gen     TEXT
@@ -90,7 +90,8 @@ CREATE TABLE IF NOT EXISTS vector_messages (
 `offsets` is a JSON array, one entry per member message, in ordinal order:
 `[{"o": ordinal, "r": rune_start, "b": byte_start}, ...]` (ends implied by the
 next entry / content length). Rune offsets map kit chunk windows to messages;
-byte offsets slice snippets without re-decoding. Empty for user docs.
+byte offsets slice snippets without re-decoding. `[]` for user docs, so
+consumers parse one shape unconditionally.
 
 ### Subordinate classification
 
@@ -116,12 +117,20 @@ Two independent mechanisms, both required:
 1. **Mirror schema version.** New `vector_meta` key `mirror_schema_version`
    (this scheme writes `2`). The write-path `Open` compares it against the
    binary's version: on mismatch — including the key being absent while any
-   mirror state exists — it drops and recreates all mirror-owned tables and
-   clears the refresh watermark and scope keys, so the next build takes the
-   existing first-ever full path. `vectors.db` is disposable by design;
-   `sessions.db` is never touched. The read path treats a version mismatch as
-   `ErrStale`-equivalent (semantic search reports the index must be rebuilt)
-   rather than misreading v1 rows.
+   mirror state exists — it drops every table in `vectors.db` —
+   `vector_messages`, `vector_meta`, and all kit-owned `message_vectors*`
+   tables (store root, generations, stamps, and per-generation vector tables,
+   including any left behind by retired or abandoned generations) — recreates
+   the v2 schema, and clears the refresh watermark and scope keys, so the next
+   build takes the existing first-ever full path. `vectors.db` is disposable
+   by design; `sessions.db` is never touched. On the read path a version
+   mismatch is a typed sentinel (`vector.ErrMirrorVersionMismatch`) surfaced
+   like the existing stale-fingerprint gate: semantic search stays wired and
+   returns rebuild-required ("run embeddings build"). It must not degrade into
+   the direct-install path's current behavior of swallowing `vector.Open`
+   errors and silently unwiring semantic search
+   (`cmd/agentsview/embed_scheduler.go` warns and returns nil today — that
+   path gets an explicit case for this sentinel).
 1. **Generation fingerprint.** `vectorGeneration` Params gain
    `doc_unit_scheme = "run_v1"` and `chunk_overlap_chars = <n>` alongside
    `max_input_chars`. The scheme change therefore cuts a new generation
@@ -163,7 +172,17 @@ deterministically from the mirrored content.
   commands, filenames). Before RRF, each FTS message hit maps to its
   containing unit (its user doc, or the run whose ordinal range contains it);
   fusion happens at unit granularity. When the FTS side contributes, the exact
-  matched message becomes the hit's anchor regardless of chunk center.
+  matched message becomes the hit's anchor regardless of chunk center. Two
+  seams this requires, called out so planning doesn't discover them midstream:
+    - FTS hits come from `sessions.db` while unit ranges live in `vectors.db`, and
+      `db.VectorSearcher` only exposes `SemanticSearch`. It gains a resolver
+      method — `ResolveMessageUnits(ctx, refs []MessageRef) ([]UnitRef, error)`,
+      mapping (session, ordinal) pairs to unit doc keys and ranges — implemented
+      by `internal/vector.Index` against the mirror.
+    - `kitvec.Merge` has no per-hit rank-offset hook (only strategy, rank
+      constant, limit), so the hybrid path replaces it with a small local RRF
+      merge in `internal/db` that applies the subordinate penalty; a rank-offset
+      hook can be upstreamed to kit later if it proves generally useful.
 - **FTS-only search is untouched** at message granularity.
 
 ## Surface changes
@@ -179,10 +198,12 @@ deterministically from the mirrored content.
 
 ## Cost estimate
 
-~47k user docs + ~42k run docs ≈ 90k documents, ~250k chunks (15% overlap
-included) vs ~1.14M single-message docs today: roughly 5x fewer encode units for
-the initial build, with long work stretches contributing a handful of narrative
-chunks instead of hundreds of near-duplicate procedural vectors.
+~47k user docs + ~42k run docs ≈ 90k documents vs ~1.14M single-message docs
+today. Chunk count depends on `max_input_chars`: roughly 120-150k chunks at the
+8192 default, ~250k at a 2500 cap (both with 15% overlap) — several times fewer
+encode units for the initial build either way, with long work stretches
+contributing a handful of narrative chunks instead of hundreds of near-duplicate
+procedural vectors.
 
 ## Testing
 
