@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/kit/daemon"
 	kitvec "go.kenn.io/kit/vector"
 	"go.kenn.io/kit/vector/sqlitevec"
 
@@ -225,6 +226,45 @@ func TestEmbeddingsBuildDirectEndToEnd(t *testing.T) {
 	assert.Contains(t, out.String(), "Generation activated.")
 }
 
+// TestEmbeddingsBuildDirectPrintsProgress shrinks the direct path's
+// progress ticker and slows the embeddings stub down so the build is still
+// running when the ticker fires, asserting at least one progress line in
+// the documented format is printed before the final summary.
+func TestEmbeddingsBuildDirectPrintsProgress(t *testing.T) {
+	orig := directBuildProgressInterval
+	directBuildProgressInterval = 5 * time.Millisecond
+	t.Cleanup(func() { directBuildProgressInterval = orig })
+
+	dataDir := testDataDir(t)
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Input []string `json:"input"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		time.Sleep(150 * time.Millisecond)
+
+		data := make([]map[string]any, len(req.Input))
+		for i := range req.Input {
+			data[i] = map[string]any{"index": i, "embedding": []float32{1, 2, 3}}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"data": data}))
+	}))
+	defer stub.Close()
+	writeEmbeddingsTestConfig(t, dataDir, stub.URL+"/v1")
+	seedEmbeddableArchive(t, dataDir)
+
+	cmd := newEmbeddingsBuildCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs(nil)
+	require.NoError(t, cmd.Execute())
+
+	assert.Regexp(t, `progress: \d+/\d+ chunks \(\d+\.\d%\)`, out.String(),
+		"a running build must print at least one progress line")
+	assert.Contains(t, out.String(), "Embedded 2 documents (2 chunks), skipped 0, stale 0")
+}
+
 // TestEmbeddingsBuildDirectConcurrentFlockFails asserts a second direct
 // build invocation, run while another process (simulated by acquiring the
 // lock in the test) holds vectors.write.lock, fails immediately with the
@@ -327,6 +367,53 @@ func TestEmbeddingsRetireDirectRoundTrip(t *testing.T) {
 	assert.Equal(t, "Generation 1 retired.\n", forceOut.String())
 }
 
+// TestEmbeddingsActivateDirectRefusalThenForce builds generation 1
+// end-to-end (active, 2 docs embedded), registers a second never-filled
+// building generation with Missing = 2, and asserts the direct path
+// surfaces Manager.Activate's refusal wording verbatim without --force,
+// then succeeds with --force.
+func TestEmbeddingsActivateDirectRefusalThenForce(t *testing.T) {
+	dataDir := testDataDir(t)
+	stub := newEmbeddingsStubServer(t, 3)
+	defer stub.Close()
+	writeEmbeddingsTestConfig(t, dataDir, stub.URL+"/v1")
+	seedEmbeddableArchive(t, dataDir)
+
+	buildCmd := newEmbeddingsBuildCommand()
+	var buildOut bytes.Buffer
+	buildCmd.SetOut(&buildOut)
+	buildCmd.SetArgs(nil)
+	require.NoError(t, buildCmd.Execute())
+
+	cfg, err := config.LoadMinimal()
+	require.NoError(t, err)
+	ctx := context.Background()
+	ix, err := vector.Open(ctx, cfg.Vector.ResolvedDBPath(cfg.DataDir), false,
+		cfg.Vector.Embeddings.MaxInputChars)
+	require.NoError(t, err)
+	otherGen := kitvec.Generation{Model: "other-model", Dimensions: 3}
+	_, err = ix.EnsureGeneration(ctx, otherGen, sqlitevec.StateBuilding)
+	require.NoError(t, err)
+	require.NoError(t, ix.Close())
+
+	activateCmd := newEmbeddingsActivateCommand()
+	var out bytes.Buffer
+	activateCmd.SetOut(&out)
+	activateCmd.SetArgs([]string{"2"})
+	err = activateCmd.Execute()
+	require.Error(t, err)
+	assert.Equal(t,
+		"generation 2 still has 2 messages needing embedding; use --force",
+		err.Error(), "the manager's refusal message must surface verbatim")
+
+	forceCmd := newEmbeddingsActivateCommand()
+	var forceOut bytes.Buffer
+	forceCmd.SetOut(&forceOut)
+	forceCmd.SetArgs([]string{"2", "--force"})
+	require.NoError(t, forceCmd.Execute())
+	assert.Equal(t, "Generation 2 activated.\n", forceOut.String())
+}
+
 // TestEmbeddingsActivateInvalidIDReturnsError asserts a non-numeric
 // argument is rejected before any config or I/O work happens.
 func TestEmbeddingsActivateInvalidIDReturnsError(t *testing.T) {
@@ -336,6 +423,140 @@ func TestEmbeddingsActivateInvalidIDReturnsError(t *testing.T) {
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid generation id")
+}
+
+// startEmbeddingsTestDaemon starts an httptest server that answers the kit
+// daemon ping (so FindDaemonRuntime's probe succeeds) plus the given
+// embeddings endpoint handlers, writes a live writable runtime record for
+// it into dataDir (so IsLocalDaemonActive reports true), and registers
+// cleanup. Handlers are keyed by "METHOD /path".
+func startEmbeddingsTestDaemon(
+	t *testing.T, dataDir string, handlers map[string]http.HandlerFunc,
+) {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.Handle("GET /api/ping", daemon.NewPingHandler(daemon.PingHandlerOptions{
+		Service: daemonService,
+		Version: "test",
+	}))
+	for pattern, h := range handlers {
+		mux.HandleFunc(pattern, h)
+	}
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	endpoint := serverEndpoint(t, srv)
+	writeDaemonRuntimeForTest(t, dataDir, endpoint.Host, endpoint.Port, "test", false)
+}
+
+// TestEmbeddingsListDispatchesToDaemon drives the real `embeddings list`
+// command with a live writable daemon runtime record present, asserting
+// the command routes through the daemon's /generations endpoint (never
+// touching vectors.db, which does not exist) and renders its response.
+func TestEmbeddingsListDispatchesToDaemon(t *testing.T) {
+	dataDir := testDataDir(t)
+	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1")
+
+	var listCalled atomic.Bool
+	startEmbeddingsTestDaemon(t, dataDir, map[string]http.HandlerFunc{
+		"GET /api/v1/embeddings/generations": func(w http.ResponseWriter, r *http.Request) {
+			listCalled.Store(true)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"generations": []vector.GenerationInfo{{
+					ID: 1, State: "active", Model: "daemon-model", Dimension: 3,
+					Fingerprint: "abcdef0123456789", Embedded: 7,
+				}},
+			})
+		},
+	})
+
+	cmd := newEmbeddingsListCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs(nil)
+	require.NoError(t, cmd.Execute())
+
+	assert.True(t, listCalled.Load(), "list must route through the daemon endpoint")
+	assert.Contains(t, out.String(), "daemon-model")
+	assert.Contains(t, out.String(), "abcdef012345")
+	assert.NoFileExists(t, filepath.Join(dataDir, "vectors.db"),
+		"daemon-dispatched list must not open vectors.db directly")
+}
+
+// TestEmbeddingsBuildDispatchesToDaemon drives the real `embeddings build`
+// command with a live writable daemon runtime record present: the daemon
+// accepts the build (202) and immediately reports a completed run, so the
+// poll terminates after one status call and prints the final summary.
+func TestEmbeddingsBuildDispatchesToDaemon(t *testing.T) {
+	dataDir := testDataDir(t)
+	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1")
+
+	var buildCalled, statusCalled atomic.Bool
+	startEmbeddingsTestDaemon(t, dataDir, map[string]http.HandlerFunc{
+		"POST /api/v1/embeddings/build": func(w http.ResponseWriter, r *http.Request) {
+			buildCalled.Store(true)
+			var req vector.BuildRequest
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+			assert.True(t, req.Backstop, "--backstop must pass through to the daemon")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(map[string]bool{"started": true})
+		},
+		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, r *http.Request) {
+			statusCalled.Store(true)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(vector.BuildStatus{
+				Running: false,
+				LastResult: &vector.BuildResult{
+					Activated: true,
+					Fill:      kitvec.FillStats{Documents: 5, Chunks: 6},
+				},
+			})
+		},
+	})
+
+	cmd := newEmbeddingsBuildCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--backstop"})
+	require.NoError(t, cmd.Execute())
+
+	assert.True(t, buildCalled.Load(), "build must route through the daemon endpoint")
+	assert.True(t, statusCalled.Load(), "build must poll the daemon status endpoint")
+	assert.Contains(t, out.String(), "Embedded 5 documents (6 chunks), skipped 0, stale 0")
+	assert.Contains(t, out.String(), "Generation activated.")
+	assert.NoFileExists(t, filepath.Join(dataDir, "vectors.db"),
+		"daemon-dispatched build must not open vectors.db directly")
+}
+
+// TestEmbeddingsActivateDispatchesToDaemon drives the real `embeddings
+// activate` command with a live writable daemon runtime record present,
+// asserting the id and --force flag pass through to the daemon endpoint.
+func TestEmbeddingsActivateDispatchesToDaemon(t *testing.T) {
+	dataDir := testDataDir(t)
+	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1")
+
+	var gotForce atomic.Bool
+	startEmbeddingsTestDaemon(t, dataDir, map[string]http.HandlerFunc{
+		"POST /api/v1/embeddings/generations/3/activate": func(w http.ResponseWriter, r *http.Request) {
+			var body struct {
+				Force bool `json:"force"`
+			}
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+			gotForce.Store(body.Force)
+			w.WriteHeader(http.StatusNoContent)
+		},
+	})
+
+	cmd := newEmbeddingsActivateCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"3", "--force"})
+	require.NoError(t, cmd.Execute())
+
+	assert.True(t, gotForce.Load(), "--force must pass through to the daemon")
+	assert.Equal(t, "Generation 3 activated.\n", out.String())
 }
 
 // TestBuildViaDaemonConflictThenPolls drives buildViaDaemon (the daemon
