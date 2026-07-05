@@ -121,17 +121,10 @@ func (ix *Index) Refresh(
 func (ix *Index) upsertMirrorRow(
 	ctx context.Context, key string, m db.EmbeddableMessage,
 ) (unchanged bool, evicted int, err error) {
-	res, err := ix.db.ExecContext(ctx,
-		`DELETE FROM vector_messages WHERE session_id = ? AND ordinal = ? AND doc_key != ?`,
-		m.SessionID, m.Ordinal, key)
+	evicted, err = ix.evictSlotOccupant(ctx, key, m.SessionID, m.Ordinal)
 	if err != nil {
-		return false, 0, fmt.Errorf("evicting slot occupant: %w", err)
+		return false, 0, err
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, 0, fmt.Errorf("reading evicted row count: %w", err)
-	}
-	evicted = int(n)
 
 	var existingHash sql.NullString
 	err = ix.db.QueryRowContext(ctx,
@@ -157,6 +150,52 @@ ON CONFLICT(doc_key) DO UPDATE SET
 		return false, evicted, fmt.Errorf("upserting row: %w", err)
 	}
 	return unchanged, evicted, nil
+}
+
+// evictSlotOccupant deletes any row occupying (sessionID, ordinal) under a
+// doc_key other than key, guarding the mirror's unique index before an
+// upsert lands on that slot. Each evicted doc_key's vectors are deleted
+// first via store.DeleteVectors — the same order full-mode reconciliation
+// uses — because reconcileDeletions can never sweep an evicted key: its
+// mirror row is already gone before reconciliation runs, and kit's store
+// keeps orphaned vectors occupying KNN LIMIT slots even though
+// QueryGeneration filters them from hits.
+func (ix *Index) evictSlotOccupant(
+	ctx context.Context, key, sessionID string, ordinal int,
+) (int, error) {
+	rows, err := ix.db.QueryContext(ctx,
+		`SELECT doc_key FROM vector_messages
+		 WHERE session_id = ? AND ordinal = ? AND doc_key != ?`,
+		sessionID, ordinal, key)
+	if err != nil {
+		return 0, fmt.Errorf("finding slot occupant: %w", err)
+	}
+	var evictKeys []string
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scanning slot occupant: %w", err)
+		}
+		evictKeys = append(evictKeys, k)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, fmt.Errorf("iterating slot occupants: %w", err)
+	}
+	rows.Close()
+
+	for _, k := range evictKeys {
+		if err := ix.store.DeleteVectors(ctx, k); err != nil {
+			return 0, fmt.Errorf("deleting evicted vectors for %s: %w", k, err)
+		}
+		if _, err := ix.db.ExecContext(ctx,
+			`DELETE FROM vector_messages WHERE doc_key = ?`, k,
+		); err != nil {
+			return 0, fmt.Errorf("evicting slot occupant %s: %w", k, err)
+		}
+	}
+	return len(evictKeys), nil
 }
 
 // reconcileDeletions deletes every mirror row (and its vectors) whose

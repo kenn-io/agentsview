@@ -213,6 +213,15 @@ func TestRefreshOrdinalShiftOntoStaleLegacySlotEvictsIt(t *testing.T) {
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"o:s1:3", "u:s1:u1"}, mirrorDocKeys(t, ix))
 
+	// Stamp the legacy row's vectors so eviction has something to clean up.
+	gen := kitvec.Generation{Model: "fake-model", Dimensions: 3}
+	fingerprint, err := ix.EnsureGeneration(ctx, gen, sqlitevec.StateActive)
+	require.NoError(t, err)
+	legacyRow, ok := readMirrorRow(t, ix, "o:s1:3")
+	require.True(t, ok)
+	require.NoError(t, ix.store.SaveVectors(ctx, fingerprint, "o:s1:3", legacyRow.contentHash,
+		[]kitvec.ChunkVector{{ChunkIndex: 0, Vector: kitvec.Vector{0, 1, 0}}}))
+
 	// The u1 message's ordinal now shifts onto the legacy row's slot.
 	src.rows[1].msg.Ordinal = 3
 	stats, err := ix.Refresh(ctx, src, true)
@@ -223,6 +232,22 @@ func TestRefreshOrdinalShiftOntoStaleLegacySlotEvictsIt(t *testing.T) {
 	row, ok := readMirrorRow(t, ix, "u:s1:u1")
 	require.True(t, ok)
 	assert.Equal(t, 3, row.ordinal)
+
+	// The evicted doc_key's vectors must be deleted too, or they would
+	// permanently occupy KNN LIMIT slots: reconcileDeletions can never see
+	// the key, because its mirror row is already gone before full-mode
+	// reconciliation runs.
+	var stampCount int
+	require.NoError(t, ix.db.QueryRow(
+		`SELECT COUNT(*) FROM message_vectors_stamps WHERE doc_key = ?`, "o:s1:3",
+	).Scan(&stampCount))
+	assert.Zero(t, stampCount, "evicted doc_key's stamps should be gone")
+
+	var chunkCount int
+	require.NoError(t, ix.db.QueryRow(
+		`SELECT COUNT(*) FROM message_vectors_chunks WHERE doc_key = ?`, "o:s1:3",
+	).Scan(&chunkCount))
+	assert.Zero(t, chunkCount, "evicted doc_key's chunks should be gone")
 }
 
 func TestRefreshFullDeletesVanishedIdentitiesAndVectors(t *testing.T) {
