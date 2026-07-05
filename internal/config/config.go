@@ -104,10 +104,19 @@ type DuckDBConfig struct {
 // VectorConfig holds settings for the optional local semantic-search
 // vector index (embeddings + vectors.db).
 type VectorConfig struct {
-	Enabled    bool                   `toml:"enabled" json:"enabled"`
-	DBPath     string                 `toml:"db_path" json:"db_path,omitempty"`
-	Embeddings VectorEmbeddingsConfig `toml:"embeddings" json:"embeddings"`
-	Embed      VectorEmbedConfig      `toml:"embed" json:"embed"`
+	Enabled bool   `toml:"enabled" json:"enabled"`
+	DBPath  string `toml:"db_path" json:"db_path,omitempty"`
+	// IncludeAutomated controls whether automated (e.g. roborev) sessions'
+	// messages are embedded into the vector index, mirroring the
+	// IncludeAutomated convention search already uses to exclude those
+	// sessions from results by default. Default false: automated sessions
+	// are excluded from embedding, since they otherwise dominate a large
+	// archive's index with content that search already hides by default.
+	// `embeddings build --include-automated` can override this for a
+	// one-off build; see that flag's help for the scheduled-build caveat.
+	IncludeAutomated bool                   `toml:"include_automated" json:"include_automated"`
+	Embeddings       VectorEmbeddingsConfig `toml:"embeddings" json:"embeddings"`
+	Embed            VectorEmbedConfig      `toml:"embed" json:"embed"`
 }
 
 // VectorEmbeddingsConfig configures the OpenAI-compatible embeddings
@@ -928,6 +937,12 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if file.Vector.DBPath != "" {
 		c.Vector.DBPath = file.Vector.DBPath
+	}
+	// IsDefined distinguishes "unset" (keep the default false) from an
+	// explicit include_automated = false, matching the other vector
+	// section fields' treatment even though both currently agree.
+	if meta.IsDefined("vector", "include_automated") {
+		c.Vector.IncludeAutomated = file.Vector.IncludeAutomated
 	}
 	if file.Vector.Embeddings.Endpoint != "" {
 		c.Vector.Embeddings.Endpoint = file.Vector.Embeddings.Endpoint

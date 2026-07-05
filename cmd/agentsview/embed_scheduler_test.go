@@ -86,7 +86,7 @@ func waitForSchedulerCondition(t *testing.T, cond func() bool, msg string) {
 
 func TestEmbedSchedulerBurstOfNotifyProducesExactlyOneBuild(t *testing.T) {
 	fake := &fakeEmbedManager{}
-	s := newEmbedScheduler(fake, 20*time.Millisecond, 0)
+	s := newEmbedScheduler(fake, 20*time.Millisecond, 0, false)
 
 	ctx := t.Context()
 	go s.Run(ctx)
@@ -106,6 +106,32 @@ func TestEmbedSchedulerBurstOfNotifyProducesExactlyOneBuild(t *testing.T) {
 	assert.Equal(t, []vector.BuildRequest{{}}, fake.callsSnapshot())
 }
 
+// TestEmbedSchedulerIncludeAutomatedThreadsIntoBuildRequests asserts the
+// scheduler's configured include-automated scope rides along on every
+// BuildRequest it issues -- both the debounced after-sync path and the
+// backstop ticker -- so scheduled builds stay config-authoritative rather
+// than silently reverting to includeAutomated=false.
+func TestEmbedSchedulerIncludeAutomatedThreadsIntoBuildRequests(t *testing.T) {
+	fake := &fakeEmbedManager{}
+	s := newEmbedScheduler(fake, 5*time.Millisecond, 20*time.Millisecond, true)
+
+	ctx := t.Context()
+	go s.Run(ctx)
+	defer s.Stop()
+
+	s.Notify()
+	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 1 },
+		"expected a debounced build")
+
+	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 2 },
+		"expected a backstop build")
+
+	for _, req := range fake.callsSnapshot() {
+		assert.True(t, req.IncludeAutomated,
+			"every scheduler-issued BuildRequest must carry the configured scope")
+	}
+}
+
 func TestEmbedSchedulerNotifyDuringRunningBuildRearmsForFollowUpPass(t *testing.T) {
 	fake := &fakeEmbedManager{
 		results: []fakeTryBuildResult{
@@ -113,7 +139,7 @@ func TestEmbedSchedulerNotifyDuringRunningBuildRearmsForFollowUpPass(t *testing.
 			{started: true, err: nil},  // the follow-up pass actually runs
 		},
 	}
-	s := newEmbedScheduler(fake, 15*time.Millisecond, 0)
+	s := newEmbedScheduler(fake, 15*time.Millisecond, 0, false)
 
 	ctx := t.Context()
 	go s.Run(ctx)
@@ -132,7 +158,7 @@ func TestEmbedSchedulerNotifyDuringRunningBuildRearmsForFollowUpPass(t *testing.
 func TestEmbedSchedulerBackstopTickIssuesBackstopBuild(t *testing.T) {
 	fake := &fakeEmbedManager{}
 	// A very long debounce so only the backstop ticker can fire a build.
-	s := newEmbedScheduler(fake, time.Hour, 20*time.Millisecond)
+	s := newEmbedScheduler(fake, time.Hour, 20*time.Millisecond, false)
 
 	ctx := t.Context()
 	go s.Run(ctx)
@@ -160,7 +186,7 @@ func TestEmbedSchedulerDroppedBackstopRetriesOnNextDebouncedBuild(t *testing.T) 
 	// A long backstop interval relative to the debounce interval and the
 	// test's own buffers keeps a second, unrelated backstop tick from
 	// firing mid-test and making the call count non-deterministic.
-	s := newEmbedScheduler(fake, 10*time.Millisecond, 500*time.Millisecond)
+	s := newEmbedScheduler(fake, 10*time.Millisecond, 500*time.Millisecond, false)
 
 	ctx := t.Context()
 	go s.Run(ctx)
@@ -197,7 +223,7 @@ func TestEmbedSchedulerDroppedBackstopRetriesOnNextDebouncedBuild(t *testing.T) 
 
 func TestEmbedSchedulerStopTerminatesRun(t *testing.T) {
 	fake := &fakeEmbedManager{}
-	s := newEmbedScheduler(fake, time.Hour, 0)
+	s := newEmbedScheduler(fake, time.Hour, 0, false)
 
 	go s.Run(context.Background())
 
@@ -218,7 +244,7 @@ func TestEmbedSchedulerStopTerminatesRun(t *testing.T) {
 
 func TestEmbedSchedulerNotifyNeverBlocksWithoutAReader(t *testing.T) {
 	fake := &fakeEmbedManager{}
-	s := newEmbedScheduler(fake, time.Hour, 0)
+	s := newEmbedScheduler(fake, time.Hour, 0, false)
 
 	done := make(chan struct{})
 	go func() {
@@ -257,7 +283,7 @@ func (e *recordingEmitter) count() int {
 func TestTeeEmitterAlwaysCallsPrimaryAndGatesSchedulerOnRunAfterSync(t *testing.T) {
 	primary := &recordingEmitter{}
 	fake := &fakeEmbedManager{}
-	s := newEmbedScheduler(fake, 10*time.Millisecond, 0)
+	s := newEmbedScheduler(fake, 10*time.Millisecond, 0, false)
 	ctx := t.Context()
 	go s.Run(ctx)
 	defer s.Stop()
@@ -287,7 +313,7 @@ func TestTeeEmitterAlwaysCallsPrimaryAndGatesSchedulerOnRunAfterSync(t *testing.
 func TestRunRemoteHostSyncLoop_EmitsThroughTeeNotifiesScheduler(t *testing.T) {
 	primary := &recordingEmitter{}
 	fake := &fakeEmbedManager{}
-	s := newEmbedScheduler(fake, 5*time.Millisecond, 0)
+	s := newEmbedScheduler(fake, 5*time.Millisecond, 0, false)
 	schedCtx := t.Context()
 	go s.Run(schedCtx)
 	defer s.Stop()

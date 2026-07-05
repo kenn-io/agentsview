@@ -13,27 +13,37 @@ import (
 )
 
 // fakeMessageSource is a slice-backed MessageSource for mirror tests. It
-// records the since value it was called with and filters rows whose
-// EndedAt is below since, mimicking db.ScanEmbeddableMessages's semantics.
+// records the since/includeAutomated values it was called with and filters
+// rows whose EndedAt is below since or whose automated flag is out of scope,
+// mimicking db.ScanEmbeddableMessages's semantics.
 type fakeMessageSource struct {
-	rows     []fakeRow
-	gotSince string
+	rows                []fakeRow
+	gotSince            string
+	gotIncludeAutomated bool
 }
 
 // fakeRow pairs an EmbeddableMessage with the ended_at of its session, so
 // the fake can compute a maxEnded watermark the way the real scan does.
+// automated mimics sessions.is_automated: a false zero value means the row
+// is never excluded regardless of includeAutomated.
 type fakeRow struct {
-	msg     db.EmbeddableMessage
-	endedAt string
+	msg       db.EmbeddableMessage
+	endedAt   string
+	automated bool
 }
 
 func (f *fakeMessageSource) ScanEmbeddableMessages(
-	_ context.Context, since string, fn func(db.EmbeddableMessage) error,
+	_ context.Context, since string, includeAutomated bool,
+	fn func(db.EmbeddableMessage) error,
 ) (string, error) {
 	f.gotSince = since
+	f.gotIncludeAutomated = includeAutomated
 	var maxEnded string
 	for _, r := range f.rows {
 		if since != "" && r.endedAt < since {
+			continue
+		}
+		if r.automated && !includeAutomated {
 			continue
 		}
 		if err := fn(r.msg); err != nil {
@@ -116,7 +126,7 @@ func TestRefreshInitialFullInsertsRowsWithCorrectDocKeys(t *testing.T) {
 		},
 	}}
 
-	stats, err := ix.Refresh(ctx, src, true)
+	stats, err := ix.Refresh(ctx, src, true, true)
 	require.NoError(t, err)
 	assert.Equal(t, RefreshStats{Upserted: 2, Deleted: 0, Unchanged: 0}, stats)
 
@@ -141,13 +151,13 @@ func TestRefreshContentChangeUpdatesHash(t *testing.T) {
 			endedAt: "2024-01-01T00:00:00Z",
 		},
 	}}
-	_, err := ix.Refresh(ctx, src, true)
+	_, err := ix.Refresh(ctx, src, true, true)
 	require.NoError(t, err)
 	before, ok := readMirrorRow(t, ix, "u:s1:u1")
 	require.True(t, ok)
 
 	src.rows[0].msg.Content = "goodbye"
-	stats, err := ix.Refresh(ctx, src, true)
+	stats, err := ix.Refresh(ctx, src, true, true)
 	require.NoError(t, err)
 	assert.Equal(t, RefreshStats{Upserted: 1, Deleted: 0, Unchanged: 0}, stats)
 
@@ -167,7 +177,7 @@ func TestRefreshOrdinalShiftOnUUIDRowKeepsHashStampSurvives(t *testing.T) {
 			endedAt: "2024-01-01T00:00:00Z",
 		},
 	}}
-	_, err := ix.Refresh(ctx, src, true)
+	_, err := ix.Refresh(ctx, src, true, true)
 	require.NoError(t, err)
 
 	gen := kitvec.Generation{Model: "fake-model", Dimensions: 3}
@@ -182,7 +192,7 @@ func TestRefreshOrdinalShiftOnUUIDRowKeepsHashStampSurvives(t *testing.T) {
 	// Shift the ordinal without changing content: the hash must survive so
 	// the stamp (keyed by doc_key + revision) is not invalidated.
 	src.rows[0].msg.Ordinal = 3
-	stats, err := ix.Refresh(ctx, src, true)
+	stats, err := ix.Refresh(ctx, src, true, true)
 	require.NoError(t, err)
 	assert.Equal(t, RefreshStats{Upserted: 0, Deleted: 0, Unchanged: 1}, stats)
 
@@ -213,7 +223,7 @@ func TestRefreshOrdinalShiftOntoStaleLegacySlotEvictsIt(t *testing.T) {
 			endedAt: "2024-01-01T00:00:00Z",
 		},
 	}}
-	_, err := ix.Refresh(ctx, src, true)
+	_, err := ix.Refresh(ctx, src, true, true)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"o:s1:3", "u:s1:u1"}, mirrorDocKeys(t, ix))
 
@@ -228,7 +238,7 @@ func TestRefreshOrdinalShiftOntoStaleLegacySlotEvictsIt(t *testing.T) {
 
 	// The u1 message's ordinal now shifts onto the legacy row's slot.
 	src.rows[1].msg.Ordinal = 3
-	stats, err := ix.Refresh(ctx, src, true)
+	stats, err := ix.Refresh(ctx, src, true, true)
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.Deleted, "legacy slot occupant evicted")
 
@@ -268,7 +278,7 @@ func TestRefreshFullDeletesVanishedIdentitiesAndVectors(t *testing.T) {
 			endedAt: "2024-01-01T00:00:01Z",
 		},
 	}}
-	_, err := ix.Refresh(ctx, src, true)
+	_, err := ix.Refresh(ctx, src, true, true)
 	require.NoError(t, err)
 
 	gen := kitvec.Generation{Model: "fake-model", Dimensions: 3}
@@ -287,7 +297,7 @@ func TestRefreshFullDeletesVanishedIdentitiesAndVectors(t *testing.T) {
 
 	// u2's message vanishes from the archive.
 	src.rows = src.rows[:1]
-	stats, err := ix.Refresh(ctx, src, true)
+	stats, err := ix.Refresh(ctx, src, true, true)
 	require.NoError(t, err)
 	assert.Equal(t, RefreshStats{Upserted: 0, Deleted: 1, Unchanged: 1}, stats)
 
@@ -329,7 +339,7 @@ func TestRefreshFullEvictionOfVanishedOccupantCountsDeletedOnce(t *testing.T) {
 			endedAt: "2024-01-01T00:00:00Z",
 		},
 	}}
-	_, err := ix.Refresh(ctx, src, true)
+	_, err := ix.Refresh(ctx, src, true, true)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"o:s1:3", "u:s1:u1"}, mirrorDocKeys(t, ix))
 
@@ -353,7 +363,7 @@ func TestRefreshFullEvictionOfVanishedOccupantCountsDeletedOnce(t *testing.T) {
 			endedAt: "2024-01-01T00:00:00Z",
 		},
 	}
-	stats, err := ix.Refresh(ctx, src, true)
+	stats, err := ix.Refresh(ctx, src, true, true)
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.Deleted,
 		"vanished, slot-evicted occupant must be counted exactly once")
@@ -383,7 +393,7 @@ func TestRefreshIncrementalUsesWatermark(t *testing.T) {
 			endedAt: "2024-01-01T00:00:00Z",
 		},
 	}}
-	_, err := ix.Refresh(ctx, src, true)
+	_, err := ix.Refresh(ctx, src, true, true)
 	require.NoError(t, err)
 	assert.Equal(t, "", src.gotSince, "full refresh should scan from the beginning")
 
@@ -391,7 +401,7 @@ func TestRefreshIncrementalUsesWatermark(t *testing.T) {
 		msg:     db.EmbeddableMessage{SessionID: "s2", SourceUUID: "u2", Ordinal: 0, Content: "later"},
 		endedAt: "2024-01-02T00:00:00Z",
 	})
-	stats, err := ix.Refresh(ctx, src, false)
+	stats, err := ix.Refresh(ctx, src, false, true)
 	require.NoError(t, err)
 	assert.Equal(t, "2024-01-01T00:00:00Z", src.gotSince,
 		"incremental refresh should scan from the stored watermark")
@@ -425,7 +435,7 @@ func TestRefreshDuplicateSourceUUIDGetsStableOccurrenceKeys(t *testing.T) {
 		},
 	}}
 
-	stats, err := ix.Refresh(ctx, src, true)
+	stats, err := ix.Refresh(ctx, src, true, true)
 	require.NoError(t, err)
 	assert.Equal(t, RefreshStats{Upserted: 2, Deleted: 0, Unchanged: 0}, stats)
 
@@ -449,7 +459,7 @@ func TestRefreshDuplicateSourceUUIDGetsStableOccurrenceKeys(t *testing.T) {
 	// A second refresh must reproduce the same occurrence keys in the same
 	// scan order, or the stamped doc would appear to vanish and be
 	// re-embedded on every resync.
-	stats, err = ix.Refresh(ctx, src, true)
+	stats, err = ix.Refresh(ctx, src, true, true)
 	require.NoError(t, err)
 	assert.Equal(t, RefreshStats{Upserted: 0, Deleted: 0, Unchanged: 2}, stats,
 		"stable keys across refreshes mean no churn")
@@ -487,7 +497,7 @@ func TestRefreshCascadingOrdinalShiftReinsertsEvictedKeysWithoutLosingCoverage(t
 			endedAt: "2024-01-01T00:00:02Z",
 		},
 	}}
-	_, err := ix.Refresh(ctx, src, true)
+	_, err := ix.Refresh(ctx, src, true, true)
 	require.NoError(t, err)
 
 	gen := kitvec.Generation{Model: "fake-model", Dimensions: 3}
@@ -510,7 +520,7 @@ func TestRefreshCascadingOrdinalShiftReinsertsEvictedKeysWithoutLosingCoverage(t
 	src.rows[1].msg.Ordinal = 2
 	src.rows[2].msg.Ordinal = 3
 
-	stats, err := ix.Refresh(ctx, src, true)
+	stats, err := ix.Refresh(ctx, src, true, true)
 	require.NoError(t, err)
 	assert.Zero(t, stats.Deleted, "cascaded rows are reinserted in-scan, not genuinely removed")
 
@@ -610,6 +620,6 @@ func TestRefreshReadOnlyIndexRejected(t *testing.T) {
 	require.NoError(t, err)
 	defer ro.Close()
 
-	_, err = ro.Refresh(ctx, &fakeMessageSource{}, true)
+	_, err = ro.Refresh(ctx, &fakeMessageSource{}, true, true)
 	require.Error(t, err)
 }

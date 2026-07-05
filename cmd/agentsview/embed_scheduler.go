@@ -79,6 +79,11 @@ type embedScheduler struct {
 	mgr      embedManager
 	debounce time.Duration
 	backstop time.Duration
+	// includeAutomated is the configured [vector].include_automated scope,
+	// carried into every scheduler-driven BuildRequest so scheduled builds
+	// stay config-authoritative rather than drifting from a CLI-only
+	// override (see EmbeddingsBuildOptions.IncludeAutomatedSet).
+	includeAutomated bool
 
 	dirty chan struct{}
 	stop  chan struct{}
@@ -87,15 +92,17 @@ type embedScheduler struct {
 
 // newEmbedScheduler builds a scheduler over mgr. backstop <= 0 disables the
 // periodic backstop ticker entirely, leaving only the after-sync debounce
-// path.
-func newEmbedScheduler(mgr embedManager, debounce, backstop time.Duration) *embedScheduler {
+// path. includeAutomated is the configured [vector].include_automated scope
+// applied to every build this scheduler triggers.
+func newEmbedScheduler(mgr embedManager, debounce, backstop time.Duration, includeAutomated bool) *embedScheduler {
 	return &embedScheduler{
-		mgr:      mgr,
-		debounce: debounce,
-		backstop: backstop,
-		dirty:    make(chan struct{}, 1),
-		stop:     make(chan struct{}),
-		done:     make(chan struct{}),
+		mgr:              mgr,
+		debounce:         debounce,
+		backstop:         backstop,
+		includeAutomated: includeAutomated,
+		dirty:            make(chan struct{}, 1),
+		stop:             make(chan struct{}),
+		done:             make(chan struct{}),
 	}
 }
 
@@ -152,7 +159,7 @@ func (s *embedScheduler) Run(ctx context.Context) {
 		case <-s.dirty:
 			resetTimer(debounceTimer, s.debounce)
 		case <-debounceTimer.C:
-			req := vector.BuildRequest{Backstop: pendingBackstop}
+			req := vector.BuildRequest{Backstop: pendingBackstop, IncludeAutomated: s.includeAutomated}
 			started, err := s.mgr.TryBuild(ctx, req)
 			if err != nil {
 				log.Printf("embed scheduler: build failed: %v", err)
@@ -166,7 +173,8 @@ func (s *embedScheduler) Run(ctx context.Context) {
 			}
 			pendingBackstop = false
 		case <-backstopC:
-			started, err := s.mgr.TryBuild(ctx, vector.BuildRequest{Backstop: true})
+			started, err := s.mgr.TryBuild(ctx,
+				vector.BuildRequest{Backstop: true, IncludeAutomated: s.includeAutomated})
 			if err != nil {
 				log.Printf("embed scheduler: backstop build failed: %v", err)
 			}
@@ -357,7 +365,7 @@ func setupVectorServing(
 	gen := vectorGeneration(cfg.Vector.Embeddings)
 	mgr := vector.NewManager(ix, database, enc, gen, cfg.Vector.Embeddings.BatchSize)
 	database.SetVectorSearcher(newSearcherAdapter(ix, enc, gen))
-	scheduler := newEmbedScheduler(mgr, embedDebounceInterval, backstop)
+	scheduler := newEmbedScheduler(mgr, embedDebounceInterval, backstop, cfg.Vector.IncludeAutomated)
 
 	return vectorServing{
 		ServerOpts: []server.Option{server.WithEmbeddingsManager(mgr)},

@@ -32,6 +32,15 @@ type BuildOptions struct {
 	// Backstop forces a full mirror reconciliation scan (ignoring the
 	// refresh watermark) without forcing a re-embed.
 	Backstop bool
+	// IncludeAutomated controls whether automated sessions' messages are
+	// scanned into the mirror at all (see MessageSource.ScanEmbeddableMessages).
+	// It is part of the mirror's identity: Build compares it against the
+	// scope the mirror was last refreshed under (vector_meta) and forces a
+	// full reconciliation scan on any change, so now-out-of-scope rows (and
+	// their vectors) are removed and newly-in-scope sessions older than the
+	// refresh watermark are picked up. It does not force a re-embed of
+	// documents that stay in scope.
+	IncludeAutomated bool
 	// BatchSize is the encode batch size (config batch_size).
 	BatchSize int
 	// Progress, if non-nil, is called at most ~every 2s with incremental
@@ -78,8 +87,17 @@ func (ix *Index) Build(
 	if err != nil {
 		return BuildResult{}, err
 	}
-	refreshStats, err := ix.Refresh(ctx, src, o.FullRebuild || o.Backstop || firstEver)
+	storedScope, hasScope, err := ix.storedIncludeAutomatedScope(ctx)
 	if err != nil {
+		return BuildResult{}, err
+	}
+	scopeChanged := hasScope && storedScope != o.IncludeAutomated
+	full := o.FullRebuild || o.Backstop || firstEver || scopeChanged
+	refreshStats, err := ix.Refresh(ctx, src, full, o.IncludeAutomated)
+	if err != nil {
+		return BuildResult{}, err
+	}
+	if err := ix.setIncludeAutomatedScope(ctx, o.IncludeAutomated); err != nil {
 		return BuildResult{}, err
 	}
 

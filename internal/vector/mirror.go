@@ -17,6 +17,15 @@ import (
 // next incremental (full=false) scan to newer sessions.
 const refreshWatermarkKey = "refresh_watermark"
 
+// scopeIncludeAutomatedKey is the vector_meta key holding the
+// include-automated scope ("true"/"false") the mirror was last refreshed
+// under. Build compares it against the requested scope on every call: the
+// scope is part of the mirror's identity, not the embedding fingerprint, so
+// a change forces a full reconciliation scan rather than silently leaving
+// now-out-of-scope rows (and their vectors) behind or missing newly-in-scope
+// sessions an incremental scan's watermark would skip.
+const scopeIncludeAutomatedKey = "scope_include_automated"
+
 // maxSQLVars caps bind variables per IN (...) clause to stay within
 // SQLite's default SQLITE_MAX_VARIABLE_NUMBER (999), mirroring
 // internal/db's constant of the same purpose: a pathological refresh (a
@@ -49,7 +58,7 @@ func inPlaceholders(keys []string) (string, []any) {
 // MessageSource is the slice of the archive the mirror needs (implemented
 // by *db.DB).
 type MessageSource interface {
-	ScanEmbeddableMessages(ctx context.Context, since string,
+	ScanEmbeddableMessages(ctx context.Context, since string, includeAutomated bool,
 		fn func(db.EmbeddableMessage) error) (string, error)
 }
 
@@ -130,7 +139,10 @@ func contentHash(content string) string {
 // (and their vectors, via store.DeleteVectors) whose identity was not seen
 // in the scan; full=false scans only sessions newer than the stored
 // watermark (vector_meta key "refresh_watermark") and only upserts,
-// leaving that reconciliation to a subsequent full refresh. Either mode
+// leaving that reconciliation to a subsequent full refresh. includeAutomated
+// is passed through to src.ScanEmbeddableMessages: false excludes automated
+// sessions from the scan entirely, so their mirror rows are absent (and, in
+// full mode, reconciled away) rather than merely unembedded. Either mode
 // also resolves same-scan slot evictions (see evictSlotOccupant) once the
 // scan completes: a UUID-keyed doc_key evicted from a (session_id, ordinal)
 // slot it no longer occupies is deleted via store.DeleteVectors only if it
@@ -138,7 +150,7 @@ func contentHash(content string) string {
 // shifted (or was displaced in a shift cascade) keeps its embeddings. The
 // watermark is advanced to the scan's max ended_at afterwards.
 func (ix *Index) Refresh(
-	ctx context.Context, src MessageSource, full bool,
+	ctx context.Context, src MessageSource, full, includeAutomated bool,
 ) (RefreshStats, error) {
 	if err := ix.requireWritable(); err != nil {
 		return RefreshStats{}, err
@@ -158,7 +170,7 @@ func (ix *Index) Refresh(
 	occurrences := make(map[string]int)
 	evicted := make(map[string]struct{})
 	sentinel := 0
-	maxEnded, err := src.ScanEmbeddableMessages(ctx, since, func(m db.EmbeddableMessage) error {
+	maxEnded, err := src.ScanEmbeddableMessages(ctx, since, includeAutomated, func(m db.EmbeddableMessage) error {
 		occurrence := 1
 		if m.SourceUUID != "" {
 			occKey := m.SessionID + "\x00" + m.SourceUUID
@@ -464,6 +476,40 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 		refreshWatermarkKey, value,
 	); err != nil {
 		return fmt.Errorf("advancing refresh watermark: %w", err)
+	}
+	return nil
+}
+
+// storedIncludeAutomatedScope reads the include-automated scope the mirror
+// was last refreshed under. ok is false when no scope has ever been stored
+// (the mirror's first build), in which case value is meaningless.
+func (ix *Index) storedIncludeAutomatedScope(ctx context.Context) (value, ok bool, err error) {
+	var raw string
+	err = ix.db.QueryRowContext(ctx,
+		`SELECT value FROM vector_meta WHERE key = ?`, scopeIncludeAutomatedKey,
+	).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, fmt.Errorf("reading stored include-automated scope: %w", err)
+	}
+	parsed, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, false, fmt.Errorf("parsing stored include-automated scope %q: %w", raw, err)
+	}
+	return parsed, true, nil
+}
+
+// setIncludeAutomatedScope records value as the include-automated scope the
+// mirror was most recently refreshed under.
+func (ix *Index) setIncludeAutomatedScope(ctx context.Context, value bool) error {
+	if _, err := ix.db.ExecContext(ctx, `
+INSERT INTO vector_meta (key, value) VALUES (?, ?)
+ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		scopeIncludeAutomatedKey, strconv.FormatBool(value),
+	); err != nil {
+		return fmt.Errorf("storing include-automated scope: %w", err)
 	}
 	return nil
 }

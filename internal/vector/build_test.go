@@ -190,6 +190,82 @@ func TestBuildFullRebuildRetiredGenerationReembeds(t *testing.T) {
 	assert.Positive(t, encodeCalls, "encoder must actually be invoked, not skipped")
 }
 
+// TestBuildScopeChangeToIncludeAutomatedForcesFullRefreshAndEmbedsOlderDoc
+// covers the interplay between a widening include-automated scope change and
+// the refresh watermark: the automated doc is older than the first build's
+// watermark (set from the human doc's later ended_at, since the automated
+// doc never entered the scan at all under the default scope). Without
+// scope-change detection forcing a full (since="") rescan, the second
+// build's incremental scan would stay restricted to the stored watermark and
+// permanently miss the now-in-scope but chronologically older document.
+func TestBuildScopeChangeToIncludeAutomatedForcesFullRefreshAndEmbedsOlderDoc(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	gen := fakeGeneration("fake-model")
+
+	src := &fakeMessageSource{rows: []fakeRow{
+		{
+			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "human", Ordinal: 0, Content: "hello"},
+			endedAt: "2024-01-02T00:00:00Z",
+		},
+		{
+			msg:       db.EmbeddableMessage{SessionID: "s2", SourceUUID: "auto", Ordinal: 0, Content: "roborev output"},
+			endedAt:   "2024-01-01T00:00:00Z", // older than the human doc
+			automated: true,
+		},
+	}}
+
+	result, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Fill.Documents, "the automated doc is excluded by the default scope")
+	assert.ElementsMatch(t, []string{"u:s1:human"}, mirrorDocKeys(t, ix))
+
+	result, err = ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{IncludeAutomated: true})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Fill.Documents, "only the newly in-scope automated doc is embedded")
+	assert.ElementsMatch(t, []string{"u:s1:human", "u:s2:auto"}, mirrorDocKeys(t, ix),
+		"the older automated doc must be picked up despite predating the stored refresh watermark")
+}
+
+// TestBuildScopeChangeToExcludeAutomatedRemovesOutOfScopeMirrorRow covers the
+// narrowing direction: reverting to the default scope after building with
+// IncludeAutomated: true must reconcile the automated document's mirror row
+// (and its vectors) away, without touching the still-in-scope human
+// document's existing embedding.
+func TestBuildScopeChangeToExcludeAutomatedRemovesOutOfScopeMirrorRow(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	gen := fakeGeneration("fake-model")
+
+	src := &fakeMessageSource{rows: []fakeRow{
+		{
+			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "human", Ordinal: 0, Content: "hello"},
+			endedAt: "2024-01-01T00:00:00Z",
+		},
+		{
+			msg:       db.EmbeddableMessage{SessionID: "s2", SourceUUID: "auto", Ordinal: 0, Content: "roborev output"},
+			endedAt:   "2024-01-02T00:00:00Z",
+			automated: true,
+		},
+	}}
+
+	result, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{IncludeAutomated: true})
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.Fill.Documents)
+	assert.ElementsMatch(t, []string{"u:s1:human", "u:s2:auto"}, mirrorDocKeys(t, ix))
+
+	result, err = ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{IncludeAutomated: false})
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.Fill.Documents,
+		"no embedding work: the human doc was already embedded and stays so")
+	assert.Equal(t, 1, result.Refresh.Deleted,
+		"the now-out-of-scope automated row must be reconciled away")
+	assert.ElementsMatch(t, []string{"u:s1:human"}, mirrorDocKeys(t, ix))
+
+	_, ok := readMirrorRow(t, ix, "u:s2:auto")
+	assert.False(t, ok, "the out-of-scope mirror row must be removed")
+}
+
 // TestCountPendingIncludesRevisionChangedDocs covers countPending's
 // BuildProgress.Total denominator: a document whose mirror content_hash
 // changed since it was last stamped must still count as pending, matching
@@ -523,7 +599,7 @@ func TestBuildRetiresAbandonedBuildingGenerationEndToEnd(t *testing.T) {
 	src := twoDocSource()
 
 	genA := fakeGeneration("model-a")
-	_, err := ix.Refresh(ctx, src, true)
+	_, err := ix.Refresh(ctx, src, true, true)
 	require.NoError(t, err)
 	fpA, err := ix.EnsureGeneration(ctx, genA, sqlitevec.StateBuilding)
 	require.NoError(t, err)

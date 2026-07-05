@@ -25,6 +25,7 @@ Semantic search is disabled by default. Add a `[vector]` section to
 [vector]
 enabled = true                    # default false; everything below is opt-in
 # db_path defaults to <data_dir>/vectors.db
+include_automated = false         # default false; embed automated (e.g. roborev) sessions too
 
 [vector.embeddings]
 endpoint = "http://localhost:11434/v1"  # OpenAI-compatible base URL; "/embeddings" is appended
@@ -52,6 +53,20 @@ starts out empty and every message counts as pending. For a hosted embeddings
 API that is a real cost event, so run `agentsview embeddings build` directly at
 a time of your choosing if you want to control when that initial cost lands,
 rather than letting the debounced after-sync scheduler trigger it on its own.
+
+By default, `include_automated = false` keeps automated sessions (e.g. roborev)
+out of the embedding index entirely, mirroring session search's default
+exclusion of those sessions from results. This matters most for a large archive
+dominated by automated sessions: embedding content that search already hides by
+default just adds embedding API cost and dilutes semantic ranking with results
+nobody is searching for. Because a session that was never embedded has no vector
+to match, `session search --semantic --include-automated` still returns no
+semantic hits for automated sessions unless the index was built with
+`include_automated = true` (or a one-off `embeddings build --include-automated`,
+see below). Changing `include_automated` between builds — in config or via the
+flag — triggers a full mirror reconciliation on the next build: it removes
+now-out-of-scope rows (and their vectors) or picks up newly-in-scope sessions,
+without re-embedding documents that were already in scope and unchanged.
 
 ### Ollama quickstart
 
@@ -86,7 +101,16 @@ agentsview embeddings build            # incremental: refresh + fill whatever's 
 agentsview embeddings build --yes      # skip confirmation prompts
 agentsview embeddings build --full-rebuild --yes  # re-embeds every message
 agentsview embeddings build --backstop # force a full mirror reconciliation scan
+agentsview embeddings build --include-automated  # embed automated sessions for this build only
 ```
+
+`--include-automated` overrides `[vector].include_automated` to `true` for this
+one build; it does not change the config file. It is meant for a one-off build,
+not scheduled ones: the after-sync scheduler and periodic backstop always build
+from the config value, so mixing the flag with a config default of `false` flips
+the index's scope back and forth on every other build, forcing a full mirror
+reconciliation each time. Set `include_automated = true` in `config.toml`
+instead if you want automated sessions embedded on every build.
 
 `embeddings build` mirrors the embeddable universe (every non-system
 user/assistant message) into `vectors.db`, then fills whatever the active

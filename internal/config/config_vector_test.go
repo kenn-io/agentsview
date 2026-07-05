@@ -199,6 +199,22 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 		assert.Equal(t, 0, cfg.Vector.Embeddings.MaxRetries, "explicit max_retries=0 overrides default")
 		assert.Equal(t, 8192, cfg.Vector.Embeddings.MaxInputChars, "unset max_input_chars keeps default")
 		assert.Equal(t, "24h", cfg.Vector.Embed.BackstopInterval, "unset backstop_interval keeps default")
+		assert.False(t, cfg.Vector.IncludeAutomated, "unset include_automated keeps the false default")
+	})
+
+	t.Run("include_automated true is loaded", func(t *testing.T) {
+		cfg := loadMinimalWithConfig(t, map[string]any{
+			"vector": map[string]any{
+				"enabled":           true,
+				"include_automated": true,
+				"embeddings": map[string]any{
+					"endpoint":  "http://localhost:11434/v1",
+					"model":     "nomic-embed-text",
+					"dimension": 768,
+				},
+			},
+		})
+		assert.True(t, cfg.Vector.IncludeAutomated)
 	})
 
 	t.Run("enabled without required fields fails to load", func(t *testing.T) {

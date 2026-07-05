@@ -71,6 +71,13 @@ type EmbeddingsBuildOptions struct {
 	FullRebuild bool
 	Backstop    bool
 	Yes         bool
+	// IncludeAutomated is the --include-automated flag's parsed value; only
+	// meaningful when IncludeAutomatedSet is true (see that field).
+	IncludeAutomated bool
+	// IncludeAutomatedSet reports whether --include-automated was
+	// explicitly passed (cmd.Flags().Changed), overriding
+	// [vector].include_automated to true for this one build.
+	IncludeAutomatedSet bool
 }
 
 func newEmbeddingsBuildCommand() *cobra.Command {
@@ -81,6 +88,7 @@ func newEmbeddingsBuildCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			opts.IncludeAutomatedSet = cmd.Flags().Changed("include-automated")
 			return runEmbeddingsBuild(
 				cmd.Context(), cmd.OutOrStdout(), cmd.InOrStdin(), opts,
 			)
@@ -92,6 +100,12 @@ func newEmbeddingsBuildCommand() *cobra.Command {
 		"Force a full mirror reconciliation scan without forcing a re-embed")
 	cmd.Flags().BoolVar(&opts.Yes, "yes", false,
 		"Skip the full-rebuild confirmation prompt")
+	cmd.Flags().BoolVar(&opts.IncludeAutomated, "include-automated", false,
+		"Embed automated (non-interactive) sessions too, overriding "+
+			"[vector].include_automated for this build only. Prefer setting "+
+			"the config key for scheduled builds: mixing this flag with a "+
+			"config default of false flips the index's scope on every other "+
+			"build, forcing a full mirror reconciliation each time.")
 	return cmd
 }
 
@@ -217,8 +231,13 @@ func runEmbeddingsBuild(
 		return err
 	}
 
+	includeAutomated := cfg.Vector.IncludeAutomated
+	if opts.IncludeAutomatedSet {
+		includeAutomated = true
+	}
+
 	if opts.FullRebuild && !opts.Yes {
-		proceed, err := confirmFullRebuild(ctx, in, out, cfg)
+		proceed, err := confirmFullRebuild(ctx, in, out, cfg, includeAutomated)
 		if err != nil {
 			return err
 		}
@@ -228,7 +247,11 @@ func runEmbeddingsBuild(
 		}
 	}
 
-	req := vector.BuildRequest{FullRebuild: opts.FullRebuild, Backstop: opts.Backstop}
+	req := vector.BuildRequest{
+		FullRebuild:      opts.FullRebuild,
+		Backstop:         opts.Backstop,
+		IncludeAutomated: includeAutomated,
+	}
 	if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
 		return runEmbeddingsBuildDaemon(ctx, out, cfg, req)
 	}
@@ -237,11 +260,11 @@ func runEmbeddingsBuild(
 
 // confirmFullRebuild prints and reads the "This re-embeds all N messages."
 // confirmation prompt, where N is the current count of embeddable messages
-// in the archive.
+// in the archive under includeAutomated's scope.
 func confirmFullRebuild(
-	ctx context.Context, in io.Reader, out io.Writer, cfg config.Config,
+	ctx context.Context, in io.Reader, out io.Writer, cfg config.Config, includeAutomated bool,
 ) (bool, error) {
-	n, err := countEmbeddableMessages(ctx, cfg)
+	n, err := countEmbeddableMessages(ctx, cfg, includeAutomated)
 	if err != nil {
 		return false, fmt.Errorf("counting messages: %w", err)
 	}
@@ -250,9 +273,9 @@ func confirmFullRebuild(
 }
 
 // countEmbeddableMessages opens the archive database read-only and counts
-// every message eligible for embedding, for the full-rebuild confirmation
-// prompt.
-func countEmbeddableMessages(ctx context.Context, cfg config.Config) (int, error) {
+// every message eligible for embedding under includeAutomated's scope, for
+// the full-rebuild confirmation prompt.
+func countEmbeddableMessages(ctx context.Context, cfg config.Config, includeAutomated bool) (int, error) {
 	archiveDB, err := openReadOnlyDB(cfg)
 	if err != nil {
 		return 0, err
@@ -260,10 +283,12 @@ func countEmbeddableMessages(ctx context.Context, cfg config.Config) (int, error
 	defer archiveDB.Close()
 
 	var n int
-	if _, err := archiveDB.ScanEmbeddableMessages(ctx, "", func(db.EmbeddableMessage) error {
-		n++
-		return nil
-	}); err != nil {
+	if _, err := archiveDB.ScanEmbeddableMessages(
+		ctx, "", includeAutomated, func(db.EmbeddableMessage) error {
+			n++
+			return nil
+		},
+	); err != nil {
 		return 0, err
 	}
 	return n, nil

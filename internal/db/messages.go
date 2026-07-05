@@ -378,20 +378,32 @@ type EmbeddableMessage struct {
 // sessions with ended_at >= since (RFC3339 or RFC3339Nano) for incremental
 // refresh, comparing parsed timestamps rather than raw strings via SQLite's
 // datetime() so mixed fractional-second precision doesn't produce a wrong
-// ordering; "" scans every session. maxEnded returns the maximum
-// sessions.ended_at seen across the scanned rows (as its original raw
-// string), or "" when the scan produced no rows.
+// ordering; "" scans every session. includeAutomated=false additionally
+// excludes automated sessions (sessions.is_automated = 1) using the exact
+// predicate sessionFilterPredicates' ExcludeAutomated scope applies
+// (automatedScopePredicate("human", ...)), so the embedding index's default
+// scope matches session search's default exclusion of automated sessions.
+// maxEnded returns the maximum sessions.ended_at seen across the scanned
+// rows (as its original raw string), or "" when the scan produced no rows.
 func (db *DB) ScanEmbeddableMessages(
-	ctx context.Context, since string, fn func(EmbeddableMessage) error,
+	ctx context.Context, since string, includeAutomated bool,
+	fn func(EmbeddableMessage) error,
 ) (maxEnded string, err error) {
+	preds := []string{
+		"m.role IN ('user', 'assistant')",
+		"m.is_system = 0",
+		"s.deleted_at IS NULL",
+		SystemPrefixSQL("m.content", "m.role"),
+	}
+	if !includeAutomated {
+		preds = append(preds, automatedScopePredicate("human", "s.is_automated"))
+	}
+
 	query := `
 		SELECT m.session_id, m.source_uuid, m.ordinal, m.content, s.ended_at
 		FROM messages m
 		JOIN sessions s ON s.id = m.session_id
-		WHERE m.role IN ('user', 'assistant')
-		  AND m.is_system = 0
-		  AND s.deleted_at IS NULL
-		  AND ` + SystemPrefixSQL("m.content", "m.role") + `
+		WHERE ` + strings.Join(preds, "\n\t\t  AND ") + `
 		` + optionalSinceClause(since) + `
 		ORDER BY m.session_id, m.ordinal`
 

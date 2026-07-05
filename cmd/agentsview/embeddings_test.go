@@ -84,6 +84,21 @@ func seedEmbeddableArchive(t *testing.T, dataDir string) {
 	})
 }
 
+// seedEmbeddableArchiveWithAutomated seeds the same normal session
+// seedEmbeddableArchive does, plus one automated session with one
+// embeddable message, for the include-automated scope tests.
+func seedEmbeddableArchiveWithAutomated(t *testing.T, dataDir string) {
+	t.Helper()
+	d := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	dbtest.SeedSessionWithMessages(t, d, "sess-1", "proj", []db.Message{
+		dbtest.UserMsg("sess-1", 0, "hello there"),
+		dbtest.AsstMsg("sess-1", 1, "hi back"),
+	})
+	dbtest.SeedSessionWithMessages(t, d, "sess-auto", "proj", []db.Message{
+		dbtest.UserMsg("sess-auto", 0, "roborev output"),
+	}, func(s *db.Session) { s.IsAutomated = true })
+}
+
 // TestEmbeddingsDisabledReturnsError asserts every subcommand refuses with
 // the exact "vector search is not enabled" message when [vector] is off
 // (the default), before attempting any daemon detection or I/O.
@@ -330,6 +345,158 @@ func TestEmbeddingsBuildFullRebuildYesSkipsPrompt(t *testing.T) {
 
 	assert.NotContains(t, out.String(), "Continue?")
 	assert.Contains(t, out.String(), "Embedded 2 documents (2 chunks), skipped 0, stale 0")
+}
+
+// TestEmbeddingsBuildDirectExcludesAutomatedByDefault asserts the direct
+// build path's default scope (no config include_automated, no
+// --include-automated flag) never embeds an automated session's messages.
+func TestEmbeddingsBuildDirectExcludesAutomatedByDefault(t *testing.T) {
+	dataDir := testDataDir(t)
+	stub := newEmbeddingsStubServer(t, 3)
+	defer stub.Close()
+	writeEmbeddingsTestConfig(t, dataDir, stub.URL+"/v1")
+	seedEmbeddableArchiveWithAutomated(t, dataDir)
+
+	cmd := newEmbeddingsBuildCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs(nil)
+	require.NoError(t, cmd.Execute())
+
+	assert.Contains(t, out.String(), "Embedded 2 documents (2 chunks), skipped 0, stale 0",
+		"the automated session's message must not be embedded by default")
+}
+
+// TestEmbeddingsBuildDirectIncludeAutomatedFlagOverridesConfig asserts
+// --include-automated forces the automated session's message into the build
+// even though [vector].include_automated defaults to false.
+func TestEmbeddingsBuildDirectIncludeAutomatedFlagOverridesConfig(t *testing.T) {
+	dataDir := testDataDir(t)
+	stub := newEmbeddingsStubServer(t, 3)
+	defer stub.Close()
+	writeEmbeddingsTestConfig(t, dataDir, stub.URL+"/v1")
+	seedEmbeddableArchiveWithAutomated(t, dataDir)
+
+	cmd := newEmbeddingsBuildCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--include-automated"})
+	require.NoError(t, cmd.Execute())
+
+	assert.Contains(t, out.String(), "Embedded 3 documents (3 chunks), skipped 0, stale 0",
+		"--include-automated must embed the automated session's message too")
+}
+
+// TestEmbeddingsBuildDirectIncludeAutomatedConfigDefault asserts
+// [vector].include_automated = true embeds automated sessions without
+// needing the --include-automated flag on every build.
+func TestEmbeddingsBuildDirectIncludeAutomatedConfigDefault(t *testing.T) {
+	dataDir := testDataDir(t)
+	stub := newEmbeddingsStubServer(t, 3)
+	defer stub.Close()
+	writeTestConfig(t, dataDir, fmt.Sprintf(`
+[vector]
+enabled = true
+include_automated = true
+
+[vector.embeddings]
+endpoint = %q
+model = "test-model"
+dimension = 3
+batch_size = 10
+timeout = "5s"
+max_retries = 1
+max_input_chars = 1000
+`, stub.URL+"/v1"))
+	seedEmbeddableArchiveWithAutomated(t, dataDir)
+
+	cmd := newEmbeddingsBuildCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs(nil)
+	require.NoError(t, cmd.Execute())
+
+	assert.Contains(t, out.String(), "Embedded 3 documents (3 chunks), skipped 0, stale 0")
+}
+
+// TestEmbeddingsBuildIncludeAutomatedFlagThreadsToDaemonRequest drives the
+// daemon build path and asserts --include-automated forces
+// BuildRequest.IncludeAutomated to true in the request body, overriding the
+// (default false) config value for this one build.
+func TestEmbeddingsBuildIncludeAutomatedFlagThreadsToDaemonRequest(t *testing.T) {
+	dataDir := testDataDir(t)
+	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1")
+
+	var gotIncludeAutomated atomic.Bool
+	startEmbeddingsTestDaemon(t, dataDir, map[string]http.HandlerFunc{
+		"POST /api/v1/embeddings/build": func(w http.ResponseWriter, r *http.Request) {
+			var req vector.BuildRequest
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+			gotIncludeAutomated.Store(req.IncludeAutomated)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(map[string]bool{"started": true})
+		},
+		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(vector.BuildStatus{Running: false})
+		},
+	})
+
+	cmd := newEmbeddingsBuildCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--include-automated"})
+	require.NoError(t, cmd.Execute())
+
+	assert.True(t, gotIncludeAutomated.Load(), "--include-automated must pass through to the daemon")
+}
+
+// TestEmbeddingsBuildDaemonRequestDefaultsToConfigScope asserts that without
+// --include-automated, the daemon request body still carries the resolved
+// config value explicitly (true here), rather than silently falling back to
+// the zero value the daemon's own (possibly different) config would use.
+func TestEmbeddingsBuildDaemonRequestDefaultsToConfigScope(t *testing.T) {
+	dataDir := testDataDir(t)
+	writeTestConfig(t, dataDir, `
+[vector]
+enabled = true
+include_automated = true
+
+[vector.embeddings]
+endpoint = "http://127.0.0.1:1"
+model = "test-model"
+dimension = 3
+batch_size = 10
+timeout = "5s"
+max_retries = 1
+max_input_chars = 1000
+`)
+
+	var gotIncludeAutomated atomic.Bool
+	startEmbeddingsTestDaemon(t, dataDir, map[string]http.HandlerFunc{
+		"POST /api/v1/embeddings/build": func(w http.ResponseWriter, r *http.Request) {
+			var req vector.BuildRequest
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+			gotIncludeAutomated.Store(req.IncludeAutomated)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(map[string]bool{"started": true})
+		},
+		"GET /api/v1/embeddings/status": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(vector.BuildStatus{Running: false})
+		},
+	})
+
+	cmd := newEmbeddingsBuildCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs(nil)
+	require.NoError(t, cmd.Execute())
+
+	assert.True(t, gotIncludeAutomated.Load(),
+		"the CLI must resolve its local config's include_automated=true and send it explicitly")
 }
 
 // TestEmbeddingsRetireDirectRoundTrip builds an active generation directly,

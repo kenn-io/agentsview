@@ -52,7 +52,7 @@ func TestScanEmbeddableMessagesFiltersRolesAndPrefixes(t *testing.T) {
 	)
 
 	var got []EmbeddableMessage
-	maxEnded, err := d.ScanEmbeddableMessages(context.Background(), "",
+	maxEnded, err := d.ScanEmbeddableMessages(context.Background(), "", true,
 		func(m EmbeddableMessage) error {
 			got = append(got, m)
 			return nil
@@ -94,7 +94,7 @@ func TestScanEmbeddableMessagesSinceFiltersOlderSessions(t *testing.T) {
 	})
 
 	var got []EmbeddableMessage
-	maxEnded, err := d.ScanEmbeddableMessages(context.Background(), tsHour1,
+	maxEnded, err := d.ScanEmbeddableMessages(context.Background(), tsHour1, true,
 		func(m EmbeddableMessage) error {
 			got = append(got, m)
 			return nil
@@ -132,7 +132,7 @@ func TestScanEmbeddableMessagesSinceIncludesNullEndedAtSessions(t *testing.T) {
 	})
 
 	var got []string
-	_, err := d.ScanEmbeddableMessages(context.Background(), tsHour1,
+	_, err := d.ScanEmbeddableMessages(context.Background(), tsHour1, true,
 		func(m EmbeddableMessage) error {
 			got = append(got, m.SessionID)
 			return nil
@@ -173,7 +173,7 @@ func TestScanEmbeddableMessagesSinceIncludesEmptyStringEndedAtSessions(t *testin
 	})
 
 	var got []string
-	maxEnded, err := d.ScanEmbeddableMessages(context.Background(), tsHour1,
+	maxEnded, err := d.ScanEmbeddableMessages(context.Background(), tsHour1, true,
 		func(m EmbeddableMessage) error {
 			got = append(got, m.SessionID)
 			return nil
@@ -196,7 +196,7 @@ func TestScanEmbeddableMessagesEmptyReturnsEmptyWatermark(t *testing.T) {
 	d := testDB(t)
 
 	calls := 0
-	maxEnded, err := d.ScanEmbeddableMessages(context.Background(), "",
+	maxEnded, err := d.ScanEmbeddableMessages(context.Background(), "", true,
 		func(m EmbeddableMessage) error {
 			calls++
 			return nil
@@ -235,7 +235,7 @@ func TestScanEmbeddableMessagesOrdersBySessionThenOrdinal(t *testing.T) {
 	)
 
 	var got []EmbeddableMessage
-	_, err := d.ScanEmbeddableMessages(context.Background(), "",
+	_, err := d.ScanEmbeddableMessages(context.Background(), "", true,
 		func(m EmbeddableMessage) error {
 			got = append(got, m)
 			return nil
@@ -279,7 +279,7 @@ func TestScanEmbeddableMessagesExcludesTrashedSessions(t *testing.T) {
 	})
 
 	var got []EmbeddableMessage
-	_, err := d.ScanEmbeddableMessages(context.Background(), "",
+	_, err := d.ScanEmbeddableMessages(context.Background(), "", true,
 		func(m EmbeddableMessage) error {
 			got = append(got, m)
 			return nil
@@ -319,7 +319,7 @@ func TestScanEmbeddableMessagesMixedFractionalPrecisionSinceAndMaxEnded(t *testi
 
 	var got []string
 	maxEnded, err := d.ScanEmbeddableMessages(
-		context.Background(), "2024-01-01T00:00:01Z",
+		context.Background(), "2024-01-01T00:00:01Z", true,
 		func(m EmbeddableMessage) error {
 			got = append(got, m.SessionID)
 			return nil
@@ -337,4 +337,53 @@ func TestScanEmbeddableMessagesMixedFractionalPrecisionSinceAndMaxEnded(t *testi
 	assert.Equal(t, "2024-01-01T00:00:05.900Z", maxEnded,
 		"maxEnded must be the chronologically latest ended_at, "+
 			"not the lexicographically greatest raw string")
+}
+
+// TestScanEmbeddableMessagesExcludesAutomatedByDefault asserts an automated
+// session's messages are excluded from the scan when includeAutomated is
+// false -- the embedding index's default scope, mirroring session search's
+// default exclusion of automated sessions -- and included when true.
+func TestScanEmbeddableMessagesExcludesAutomatedByDefault(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "human-sess", "proj", func(s *Session) {
+		s.EndedAt = Ptr(tsHour1)
+	})
+	insertMessages(t, d, Message{
+		SessionID: "human-sess", Ordinal: 0, Role: "user",
+		Content: "human content", ContentLength: len("human content"),
+		Timestamp: tsZero,
+	})
+
+	insertSession(t, d, "auto-sess", "proj", func(s *Session) {
+		s.EndedAt = Ptr(tsHour1)
+		s.IsAutomated = true
+	})
+	insertMessages(t, d, Message{
+		SessionID: "auto-sess", Ordinal: 0, Role: "user",
+		Content: "automated content", ContentLength: len("automated content"),
+		Timestamp: tsZero,
+	})
+
+	tests := []struct {
+		name             string
+		includeAutomated bool
+		want             []string
+	}{
+		{"ExcludesAutomatedByDefault", false, []string{"human-sess"}},
+		{"IncludesAutomatedWhenOptedIn", true, []string{"auto-sess", "human-sess"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []string
+			_, err := d.ScanEmbeddableMessages(
+				context.Background(), "", tt.includeAutomated,
+				func(m EmbeddableMessage) error {
+					got = append(got, m.SessionID)
+					return nil
+				})
+			require.NoError(t, err)
+			assert.ElementsMatch(t, tt.want, got)
+		})
+	}
 }

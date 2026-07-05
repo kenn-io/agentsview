@@ -67,6 +67,10 @@ type Manager struct {
 type BuildRequest struct {
 	FullRebuild bool `json:"full_rebuild,omitempty"`
 	Backstop    bool `json:"backstop,omitempty"`
+	// IncludeAutomated is the resolved include-automated scope for this
+	// build (caller-resolved from config and, for the CLI's one-off
+	// --include-automated flag, its override). See BuildOptions.IncludeAutomated.
+	IncludeAutomated bool `json:"include_automated,omitempty"`
 }
 
 // BuildStatus reports the manager's current build state, for polling
@@ -236,10 +240,11 @@ func (m *Manager) runBuild(ctx context.Context, req BuildRequest) (result BuildR
 		}
 	}()
 	return m.ix.Build(ctx, m.src, m.enc, m.gen, BuildOptions{
-		FullRebuild: req.FullRebuild,
-		Backstop:    req.Backstop,
-		BatchSize:   m.batchSize,
-		Progress:    m.reportProgress,
+		FullRebuild:      req.FullRebuild,
+		Backstop:         req.Backstop,
+		IncludeAutomated: req.IncludeAutomated,
+		BatchSize:        m.batchSize,
+		Progress:         m.reportProgress,
 	})
 }
 
