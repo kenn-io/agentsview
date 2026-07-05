@@ -659,11 +659,17 @@ func validateSemanticSources(f ContentSearchFilter) error {
 	return nil
 }
 
-// validateSemanticFilter applies the input validation shared by modes
+// ValidateSemanticFilter applies the input validation shared by modes
 // "semantic" and "hybrid": sources must be empty or exactly {"messages"},
 // and cursor pagination is rejected because both modes return a single
-// ranked page rather than an offset-paged result set.
-func validateSemanticFilter(f ContentSearchFilter) error {
+// ranked page rather than an offset-paged result set. It is exported so the
+// PostgreSQL and DuckDB backends, which lack a VectorSearcher seam and
+// always report ErrSemanticUnavailable for these modes, can run the same
+// validation before that capability gate: an invalid request (bad cursor,
+// wrong source) must return the same 400 SearchInputError on every backend
+// rather than a 501 on backends that check capability first (backend parity,
+// see AGENTS.md).
+func ValidateSemanticFilter(f ContentSearchFilter) error {
 	if err := validateSemanticSources(f); err != nil {
 		return err
 	}
@@ -683,7 +689,7 @@ func validateSemanticFilter(f ContentSearchFilter) error {
 func (db *DB) searchContentSemantic(
 	ctx context.Context, f ContentSearchFilter,
 ) (ContentSearchPage, error) {
-	if err := validateSemanticFilter(f); err != nil {
+	if err := ValidateSemanticFilter(f); err != nil {
 		return ContentSearchPage{}, err
 	}
 	searcher := db.getVectorSearcher()
@@ -734,7 +740,7 @@ func (db *DB) searchContentSemantic(
 			Role:      info.role,
 			Ordinal:   h.Ordinal,
 			Timestamp: info.timestamp,
-			Snippet:   f.buildSnippet(h.Snippet, 0, len(h.Snippet)),
+			Snippet:   f.semanticSnippet(info.content, h.Snippet),
 			Score:     &score,
 		})
 		if len(out) >= f.Limit {
@@ -762,7 +768,7 @@ type matchKey struct {
 func (db *DB) searchContentHybrid(
 	ctx context.Context, f ContentSearchFilter,
 ) (ContentSearchPage, error) {
-	if err := validateSemanticFilter(f); err != nil {
+	if err := ValidateSemanticFilter(f); err != nil {
 		return ContentSearchPage{}, err
 	}
 	searcher := db.getVectorSearcher()
@@ -877,9 +883,11 @@ func (db *DB) hybridFTSLeg(
 
 // enrichHybridMatches looks up session/message metadata for the fused hits
 // (reusing enrichSemanticHits' CTE join) and assembles the final page in
-// fused-score order. Each match's snippet prefers the vector leg's snippet
-// (redacted the same way as "semantic") and falls back to the FTS leg's
-// snippet() output when the key only came from the FTS leg.
+// fused-score order. Each match's approximate centering text prefers the
+// vector leg's chunk snippet and falls back to the FTS leg's snippet()
+// output when the key only came from the FTS leg; either way the returned
+// snippet itself is built (and redacted) from the message's full content via
+// semanticSnippet, the same guarantee mode "semantic" gives.
 func (db *DB) enrichHybridMatches(
 	ctx context.Context, f ContentSearchFilter, merged []kitvec.Hit[matchKey],
 	vecSnippets, ftsSnippets map[matchKey]string,
@@ -899,9 +907,9 @@ func (db *DB) enrichHybridMatches(
 		if !ok {
 			continue
 		}
-		snip, ok := vecSnippets[h.Doc]
+		approx, ok := vecSnippets[h.Doc]
 		if !ok {
-			snip = ftsSnippets[h.Doc]
+			approx = ftsSnippets[h.Doc]
 		}
 		score := float64(h.Score)
 		out = append(out, ContentMatch{
@@ -912,7 +920,7 @@ func (db *DB) enrichHybridMatches(
 			Role:      info.role,
 			Ordinal:   h.Doc.Ordinal,
 			Timestamp: info.timestamp,
-			Snippet:   f.buildSnippet(snip, 0, len(snip)),
+			Snippet:   f.semanticSnippet(info.content, approx),
 			Score:     &score,
 		})
 	}
@@ -977,9 +985,14 @@ type semanticHitKey struct {
 }
 
 // semanticHitInfo is the session/message metadata enrichSemanticHits attaches
-// to a surviving hit.
+// to a surviving hit. content is the message's full, un-truncated content:
+// semantic/hybrid snippets are built from it (see semanticSnippet) rather
+// than from the searcher's pre-truncated chunk/snippet text, so secret
+// redaction sees the same whole-body context the substring/regex/fts paths
+// give it instead of a fragment that can split a secret at the truncation
+// boundary.
 type semanticHitInfo struct {
-	project, agent, role, timestamp string
+	project, agent, role, timestamp, content string
 }
 
 // enrichSemanticHits looks up session/message metadata for hits' (session_id,
@@ -999,7 +1012,7 @@ func (db *DB) enrichSemanticHits(
 	query := "WITH hits(session_id, ordinal) AS (VALUES " +
 		strings.Join(values, ", ") + ") " +
 		"SELECT m.session_id, s.project, s.agent, m.role, m.ordinal, " +
-		"COALESCE(m.timestamp, '') " +
+		"COALESCE(m.timestamp, ''), m.content " +
 		"FROM hits h " +
 		"JOIN messages m ON m.session_id = h.session_id AND m.ordinal = h.ordinal " +
 		"JOIN sessions s ON s.id = m.session_id"
@@ -1015,10 +1028,59 @@ func (db *DB) enrichSemanticHits(
 		var key semanticHitKey
 		var info semanticHitInfo
 		if err := rows.Scan(&key.sessionID, &info.project, &info.agent,
-			&info.role, &key.ordinal, &info.timestamp); err != nil {
+			&info.role, &key.ordinal, &info.timestamp, &info.content); err != nil {
 			return nil, fmt.Errorf("scan semantic hit: %w", err)
 		}
 		out[key] = info
 	}
 	return out, rows.Err()
+}
+
+// snippetTruncationMarkers are the elision markers left by the two sources of
+// approximate snippet text semantic/hybrid modes locate within a message's
+// full content: the vector index's trailing unicode ellipsis
+// (internal/vector's truncateRunes) and FTS5 snippet()'s literal "..." marker
+// (used at both ends), configured as hybridFTSLeg's 5th snippet() argument.
+var snippetTruncationMarkers = []string{"...", "…"}
+
+// approxSnippetSpan locates approx (a searcher-provided chunk/snippet or
+// FTS snippet() fragment, possibly elided at one or both ends) within the
+// message's full content, returning the byte span to center a redacted
+// window on. approx is trimmed of elision markers first since those markers
+// are not literal substrings of content. Returns ok=false when approx cannot
+// be located verbatim (e.g. content changed since the snippet was derived),
+// leaving the caller to fall back to some other span -- content itself is
+// always what gets redacted, so a miss here only affects centering, not the
+// redaction guarantee.
+func approxSnippetSpan(content, approx string) (start, end int, ok bool) {
+	trimmed := strings.TrimSpace(approx)
+	for _, marker := range snippetTruncationMarkers {
+		trimmed = strings.TrimSpace(strings.TrimSuffix(trimmed, marker))
+		trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, marker))
+	}
+	if trimmed == "" {
+		return 0, 0, false
+	}
+	off := strings.Index(content, trimmed)
+	if off < 0 {
+		return 0, 0, false
+	}
+	return off, off + len(trimmed), true
+}
+
+// semanticSnippet builds the returned snippet for "semantic" and "hybrid"
+// matches from the message's full content, not from the searcher's
+// pre-truncated approx (chunk or FTS snippet() text): redaction
+// (buildSnippet -> secrets.RedactWindow) must see the whole message so a
+// secret straddling approx's truncation boundary cannot leak a fragment that
+// full-content redaction would otherwise catch. approx is used only to
+// center the window; when it cannot be located in content, FTSSnippetRange
+// centers on the query pattern instead, and failing that on the start of
+// content -- content is still what gets redacted either way.
+func (f ContentSearchFilter) semanticSnippet(content, approx string) string {
+	if start, end, ok := approxSnippetSpan(content, approx); ok {
+		return f.buildSnippet(content, start, end)
+	}
+	start, end := FTSSnippetRange(f.Pattern, content)
+	return f.buildSnippet(content, start, end)
 }

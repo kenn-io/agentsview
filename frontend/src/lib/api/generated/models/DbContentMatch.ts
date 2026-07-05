@@ -8,6 +8,7 @@ export type DbContentMatch = {
   ordinal: number;
   project: string;
   role: string;
+  score?: number;
   session_id: string;
   snippet: string;
   timestamp: string;

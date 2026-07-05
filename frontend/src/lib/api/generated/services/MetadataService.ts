@@ -4,6 +4,7 @@
 /* eslint-disable */
 import type { AgentsResponse } from '../models/AgentsResponse';
 import type { BranchesResponse } from '../models/BranchesResponse';
+import type { DbSessionStats } from '../models/DbSessionStats';
 import type { DbStats } from '../models/DbStats';
 import type { MachinesResponse } from '../models/MachinesResponse';
 import type { ProjectsResponse } from '../models/ProjectsResponse';
@@ -157,6 +158,82 @@ export class MetadataService {
       query: {
         'include_one_shot': includeOneShot,
         'include_automated': includeAutomated,
+      },
+      errors: {
+        400: `Bad Request`,
+        401: `Unauthorized`,
+        403: `Forbidden`,
+        404: `Not Found`,
+        409: `Conflict`,
+        422: `Unprocessable Entity`,
+        500: `Internal Server Error`,
+        501: `Not Implemented`,
+        502: `Bad Gateway`,
+        503: `Service Unavailable`,
+        504: `Gateway Timeout`,
+      },
+    });
+  }
+  /**
+   * Get session stats
+   * @returns DbSessionStats OK
+   * @throws ApiError
+   */
+  public static getApiV1SessionStats({
+    since,
+    until,
+    agent,
+    includeProject,
+    excludeProject,
+    timezone,
+    includeGitOutcomes,
+    includeGithubOutcomes,
+  }: {
+    /**
+     * Start of window
+     */
+    since?: string,
+    /**
+     * End of window
+     */
+    until?: string,
+    /**
+     * Filter by agent
+     */
+    agent?: string,
+    /**
+     * Restrict to these projects
+     */
+    includeProject?: any[] | null,
+    /**
+     * Exclude these projects
+     */
+    excludeProject?: any[] | null,
+    /**
+     * IANA timezone name
+     */
+    timezone?: string,
+    /**
+     * Include git-derived outcome stats
+     */
+    includeGitOutcomes?: boolean,
+    /**
+     * Include GitHub PR outcome stats
+     */
+    includeGithubOutcomes?: boolean,
+  }): CancelablePromise<DbSessionStats> {
+    return __request(OpenAPI, {
+      method: 'GET',
+      url: '/api/v1/session-stats',
+      query: {
+        'since': since,
+        'until': until,
+        'agent': agent,
+        'include_project': includeProject,
+        'exclude_project': excludeProject,
+        'timezone': timezone,
+        'include_git_outcomes': includeGitOutcomes,
+        'include_github_outcomes': includeGithubOutcomes,
       },
       errors: {
         400: `Bad Request`,

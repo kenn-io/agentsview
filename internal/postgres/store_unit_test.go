@@ -39,6 +39,40 @@ func TestStoreSearchContentSemanticModesUnavailable(t *testing.T) {
 	}
 }
 
+// TestStoreSearchContentSemanticInvalidInputReturns400Before501 pins backend
+// parity (AGENTS.md): an invalid semantic/hybrid request -- cursor pagination
+// or a non-messages source -- must return the same *db.SearchInputError
+// SQLite's ValidateSemanticFilter returns, not db.ErrSemanticUnavailable, even
+// though PostgreSQL has no VectorSearcher seam and would otherwise report the
+// capability gate for any request in these modes.
+func TestStoreSearchContentSemanticInvalidInputReturns400Before501(t *testing.T) {
+	s := &Store{}
+	cases := []struct {
+		name string
+		f    db.ContentSearchFilter
+	}{
+		{"cursor rejected", db.ContentSearchFilter{Pattern: "x", Cursor: 1}},
+		{"non-messages source rejected", db.ContentSearchFilter{
+			Pattern: "x", Sources: []string{"tool_input"},
+		}},
+	}
+	for _, mode := range []string{"semantic", "hybrid"} {
+		for _, tc := range cases {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				f := tc.f
+				f.Mode = mode
+				_, err := s.SearchContent(context.Background(), f)
+				require.Error(t, err)
+				var inputErr *db.SearchInputError
+				assert.True(t, errors.As(err, &inputErr),
+					"expected *db.SearchInputError, got %T: %v", err, err)
+				assert.False(t, errors.Is(err, db.ErrSemanticUnavailable),
+					"invalid input must not be masked as ErrSemanticUnavailable")
+			})
+		}
+	}
+}
+
 // TestStripFTSQuotes pins the de-quoting behavior the PostgreSQL Search path
 // relies on. The canonical implementation lives in the db package and is
 // shared with the SQLite and HTTP paths so the backends stay in parity.

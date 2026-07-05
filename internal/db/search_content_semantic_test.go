@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -167,4 +168,45 @@ func TestSearchContentSemanticMessagesSourceAllowed(t *testing.T) {
 	})
 	require.NoError(t, err, "SearchContent with explicit messages source")
 	require.Len(t, page.Matches, 1)
+}
+
+// TestSearchContentSemanticRedactsSecretPastChunkTruncation pins that
+// semantic mode redacts against the message's full content, not the
+// searcher's pre-truncated chunk snippet. The fake searcher's Snippet is cut
+// off mid-PEM-body (before the "-----END" marker), mimicking a real chunk
+// boundary or the 200-rune vector snippet truncation landing inside a
+// secret. The PEM rule only fires on a BEGIN/END pair, so redacting the
+// truncated snippet in isolation finds no match and ships the key material
+// raw; redacting the full message content (which has both markers) must
+// still catch and mask it.
+func TestSearchContentSemanticRedactsSecretPastChunkTruncation(t *testing.T) {
+	d := testDB(t)
+	pem := "-----BEGIN RSA PRIVATE KEY-----\n" +
+		strings.Repeat("MIIBSECRETKEYMATERIAL0123456789ABCDEF\n", 5) +
+		"-----END RSA PRIVATE KEY-----"
+	content := "deploy with this attached key " + pem + " ok"
+	seedSearchSession(t, d, "s1", "proj", [][2]string{
+		{"user", content},
+	})
+
+	// Cut the chunk snippet well before the END marker so the raw fragment
+	// itself never contains a BEGIN/END pair.
+	cut := strings.Index(content, "MIIBSECRETKEYMATERIAL") + len("MIIBSECRETKEYMATERIAL") + 3
+	require.Less(t, cut, strings.Index(content, "-----END"),
+		"test setup: cut must land before the END marker")
+	truncatedSnippet := content[:cut] + "…"
+
+	d.SetVectorSearcher(&fakeVectorSearcher{hits: []VectorHit{
+		{SessionID: "s1", Ordinal: 0, Score: 0.9, Snippet: truncatedSnippet},
+	}})
+
+	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "attached key", Mode: "semantic", Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent")
+	require.Len(t, page.Matches, 1, "matches")
+	assert.NotContains(t, page.Matches[0].Snippet, "SECRETKEYMATERIAL",
+		"semantic snippet leaked key material truncated out of the chunk")
+	assert.Contains(t, page.Matches[0].Snippet, "attached key",
+		"snippet lost the matched context")
 }

@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -188,4 +189,43 @@ func TestSearchContentHybridProjectFilterConstrainsBothLegs(t *testing.T) {
 	require.NoError(t, err, "SearchContent hybrid")
 	require.Len(t, page.Matches, 1, "matches after project filter")
 	assert.Equal(t, "in-scope", page.Matches[0].SessionID, "surviving session")
+}
+
+// TestSearchContentHybridRedactsSecretPastChunkTruncation mirrors the
+// semantic-mode regression (TestSearchContentSemanticRedactsSecretPastChunkTruncation)
+// for hybrid: the vector leg's chunk snippet is truncated mid-PEM-body, before
+// the "-----END" marker the PEM rule requires to fire. Redacting that
+// fragment in isolation would miss the secret entirely; hybrid must redact
+// against the message's full content the same way semantic mode does.
+func TestSearchContentHybridRedactsSecretPastChunkTruncation(t *testing.T) {
+	d := testDB(t)
+	if !d.HasFTS() {
+		t.Skip("fts5 not available")
+	}
+	pem := "-----BEGIN RSA PRIVATE KEY-----\n" +
+		strings.Repeat("MIIBSECRETKEYMATERIAL0123456789ABCDEF\n", 5) +
+		"-----END RSA PRIVATE KEY-----"
+	content := "needle deploy with this attached key " + pem + " ok"
+	seedSearchSession(t, d, "s1", "proj", [][2]string{
+		{"user", content},
+	})
+
+	cut := strings.Index(content, "MIIBSECRETKEYMATERIAL") + len("MIIBSECRETKEYMATERIAL") + 3
+	require.Less(t, cut, strings.Index(content, "-----END"),
+		"test setup: cut must land before the END marker")
+	truncatedSnippet := content[:cut] + "…"
+
+	d.SetVectorSearcher(&fakeVectorSearcher{hits: []VectorHit{
+		{SessionID: "s1", Ordinal: 0, Score: 0.9, Snippet: truncatedSnippet},
+	}})
+
+	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "needle", Mode: "hybrid", Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent hybrid")
+	require.Len(t, page.Matches, 1, "matches")
+	assert.NotContains(t, page.Matches[0].Snippet, "SECRETKEYMATERIAL",
+		"hybrid snippet leaked key material truncated out of the vector chunk")
+	assert.Contains(t, page.Matches[0].Snippet, "needle",
+		"snippet lost the matched context")
 }

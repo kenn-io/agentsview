@@ -3,9 +3,9 @@
 /* tslint:disable */
 /* eslint-disable */
 export type DbTopSession = {
+  active_duration_min: number;
   display_name?: string;
   duration_min: number;
-  active_duration_min: number;
   ended_at?: string;
   first_message: string | null;
   id: string;

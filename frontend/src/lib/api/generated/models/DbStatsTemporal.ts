@@ -2,7 +2,8 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-export type UnsupportedUsage = {
-  kind: string;
+export type DbStatsTemporal = {
+  hourly_utc: any[] | null;
+  reporter_timezone: string;
 };
 

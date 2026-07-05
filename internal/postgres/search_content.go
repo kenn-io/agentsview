@@ -29,6 +29,26 @@ func (s *Store) SearchContent(
 	if f.Pattern == "" {
 		return db.ContentSearchPage{}, nil
 	}
+
+	// Semantic and hybrid validate Sources themselves (messages only) ahead
+	// of the substring/regex/fts source-set default just below, which fills
+	// in tool_input/tool_result that neither mode supports -- mirroring
+	// internal/db's SearchContent so an empty Sources field is not defaulted
+	// out from under ValidateSemanticFilter's empty-or-messages-only check.
+	if f.Mode == "semantic" || f.Mode == "hybrid" {
+		// Validate input the same way SQLite's semantic/hybrid paths do
+		// before reporting the capability gate: an invalid request (bad
+		// cursor, non-messages source) must return the same 400
+		// SearchInputError on every backend rather than a 501 here and a
+		// 400 on SQLite (backend parity, see AGENTS.md).
+		if err := db.ValidateSemanticFilter(f); err != nil {
+			return db.ContentSearchPage{}, err
+		}
+		// No VectorSearcher seam on the PostgreSQL store yet (HasSemantic
+		// always false): gate after input validation.
+		return db.ContentSearchPage{}, db.ErrSemanticUnavailable
+	}
+
 	if len(f.Sources) == 0 {
 		f.Sources = []string{"messages", "tool_input", "tool_result"}
 	}
@@ -46,10 +66,6 @@ func (s *Store) SearchContent(
 		return s.searchContentSubstringPG(ctx, f)
 	case "regex":
 		return s.searchContentRegexPG(ctx, f)
-	case "semantic", "hybrid":
-		// No VectorSearcher seam on the PostgreSQL store yet (HasSemantic
-		// always false): gate before running any query.
-		return db.ContentSearchPage{}, db.ErrSemanticUnavailable
 	default:
 		return db.ContentSearchPage{},
 			&db.SearchInputError{Msg: fmt.Sprintf("search: invalid mode %q", f.Mode)}

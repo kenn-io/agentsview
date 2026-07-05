@@ -99,7 +99,7 @@ export class SearchService {
     /**
      * Search mode
      */
-    mode?: 'substring' | 'regex' | 'fts',
+    mode?: 'substring' | 'regex' | 'fts' | 'semantic' | 'hybrid',
     /**
      * Comma-separated content sources
      */
