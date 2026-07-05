@@ -90,14 +90,25 @@ main DB remains the persistent archive and is never modified by this feature.
 Contents:
 
 - `vector_messages` mirror table — the "documents" table kit's sqlitevec store
-  co-locates with. One row per embeddable message:
-    - identity: `(session_id, source_uuid)` when `source_uuid` is non-empty, else
-      `(session_id, ordinal)` (same precedence as pin re-attachment in
-      `internal/db/messages.go`)
-    - `ordinal` — the message's current ordinal, refreshed on every scan so hits
-      always map to live cursors
-    - `content_hash` — revision for staleness (kit's optimistic stamps)
-- kit-managed tables (`_generations`, `_chunks`, `_stamps`, per-generation
+  co-locates with. kit's `sqlitevec.Schema` names a single `IDColumn`, so the
+  identity is a synthetic single-column key. One row per embeddable message:
+    - `doc_key TEXT PRIMARY KEY` — `u:<session_id>:<source_uuid>` when
+      `source_uuid` is non-empty, else `o:<session_id>:<ordinal>` (same
+      precedence as pin re-attachment in `internal/db/messages.go`). Maps to kit
+      `Schema.IDColumn`.
+    - `session_id`, `source_uuid`, `ordinal` — payload/index columns; `ordinal` is
+      the message's current ordinal, refreshed on every scan so hits always map
+      to live cursors
+    - `content` — the embeddable text, copied in at refresh time (kit
+      `Schema.ContentColumn`; `PendingForGeneration` reads it from the documents
+      table). Duplicates user/assistant text into regenerable state, keeping
+      vectors.db self-contained with no ATTACH to the archive.
+    - `content_hash` — revision for staleness (kit `Schema.RevisionColumn`,
+      optimistic stamps)
+    - `embed_gen` — nullable generation stamp (kit `Schema.EmbedGenColumn`)
+- kit-managed tables, named from `Schema.VectorsPrefix` (e.g. prefix
+  `message_vectors` gives `message_vectors_generations`,
+  `message_vectors_chunks`, `message_vectors_stamps`, and per-generation
   `vec0` tables).
 
 ### Mirror refresh (scan)
@@ -230,7 +241,11 @@ exposed on `GET /api/v1/sessions/{id}/messages`.
   (validation error). `--before`/`--after` require `--around`.
 - `--role user,assistant` composes with all retrieval modes; the full
   user/assistant history of a session is
-  `session messages <id> --role user,assistant`.
+  `session messages <id> --role user,assistant`. Wire spelling: CLI flag
+  `--role` takes comma-separated values (matching `--in` on `session search`);
+  the HTTP query param is `roles`, also comma-separated
+  (`roles=user,assistant`, matching the `in` param convention); MCP
+  `get_messages` keeps its existing plural `roles` array parameter.
 - With a role filter, before/after count **filtered** messages: two indexed
   queries on `(session_id, ordinal)` with `role IN (...)`, DESC/ASC LIMIT N.
   The anchor message is always included.
@@ -261,17 +276,23 @@ search mode. Costs one windowed query per hit, so it pairs with modest limits;
 - `go.kenn.io/kit` bumped from v0.1.7 to **v0.2.0** (first tag shipping the
   `vector` and `vector/sqlitevec` packages). The kit APIs this spec relies on:
 
-    - `vector.Split(content, SplitOptions) []Chunk` — rune windowing + overlap
-    - `vector.EncodeFunc func(ctx, texts) ([][]float32, error)` and
-      `vector.EncodeBatched(ctx, enc, chunks, BatchOptions)`
-    - `vector.Generation{Model, Dimensions, Params}` with `Fingerprint()`
+    - `vector.Split(content string, o SplitOptions) []Chunk` — rune windowing with
+      overlap
+    - `type EncodeFunc func(ctx context.Context, texts []string) ([][]float32, error)`
+      and
+      `vector.EncodeBatched(ctx context.Context, enc EncodeFunc, chunks []Chunk, o BatchOptions) ([]Vector, error)`
+    - `vector.Generation{Model, Dimensions, Params}` with `Fingerprint() string`
     - `vector.Store[K, G]` (`PendingForGeneration`, `SaveVectors`/`ErrStale`,
       `LiveGenerations`, `QueryGeneration`)
-    - `vector.Fill(ctx, store, gen, enc, FillOptions)` and
-      `vector.Search(ctx, store, query, encFor, SearchOptions) []Hit[K]`
-    - `vector.RollupByDocument` and `vector.Merge` with `MergeReciprocalRank`
-    - `vector/sqlitevec` store (vec0 tables, cosine KNN, revision stamps,
-      generation states)
+    - `vector.Fill[K, G](ctx context.Context, store Store[K, G], gen G, enc EncodeFunc, o FillOptions[K]) (FillStats, error)`
+    - `vector.Search[K, G](ctx context.Context, store Store[K, G], queryText string, encFor func(gen G) EncodeFunc, o SearchOptions) ([]Hit[K], error)`
+    - `vector.RollupByDocument[K](hits []Hit[K]) []Hit[K]` and
+      `vector.Merge[K](perGeneration [][]Hit[K], o MergeOptions) []Hit[K]` with
+      `MergeReciprocalRank`
+    - `vector/sqlitevec.Store[K, G]` configured via `sqlitevec.Schema`
+      (`DocsTable`, `IDColumn`, `ContentColumn`, `EmbedGenColumn`,
+      `RevisionColumn`, `VectorsPrefix`) — vec0 tables, cosine KNN, revision
+      stamps, generation states
 
     The implementation plan's first task is the pin bump plus an API-reality check
     against the shipped tag. Gaps kit does not cover (mirror refresh,
