@@ -458,7 +458,13 @@ func (b *httpBackend) SearchContent(
 		q.Set("context", strconv.Itoa(req.Context))
 	}
 	var out ContentSearchResult
-	if err := b.getJSON(ctx, "/api/v1/search/content?"+q.Encode(), &out); err != nil {
+	var opts []func(*http.Request)
+	if req.Mode == "semantic" || req.Mode == "hybrid" {
+		opts = append(opts, func(r *http.Request) {
+			r.Header.Set(SemanticSearchIntentHeader, SemanticSearchIntentValue)
+		})
+	}
+	if err := b.getJSON(ctx, "/api/v1/search/content?"+q.Encode(), &out, opts...); err != nil {
 		var notImpl *errNotImplementedBody
 		if errors.As(err, &notImpl) {
 			return nil, wrapSemanticUnavailable(notImpl.message)
@@ -767,7 +773,7 @@ func (b *httpBackend) addAuth(req *http.Request) {
 }
 
 func (b *httpBackend) getJSON(
-	ctx context.Context, path string, out any,
+	ctx context.Context, path string, out any, opts ...func(*http.Request),
 ) error {
 	req, err := http.NewRequestWithContext(
 		ctx, http.MethodGet, b.baseURL+path, nil,
@@ -776,6 +782,9 @@ func (b *httpBackend) getJSON(
 		return err
 	}
 	b.addAuth(req)
+	for _, opt := range opts {
+		opt(req)
+	}
 	resp, err := b.client.Do(req)
 	if err != nil {
 		return err

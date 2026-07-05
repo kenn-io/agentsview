@@ -141,18 +141,19 @@ func (ix *Index) Build(
 }
 
 // skipPermanentEncodeError implements kitvec.FillOptions.OnEncodeError: a
-// document the embeddings endpoint permanently rejects (any 4xx status
-// except 429, e.g. a token-window overflow, whitespace-only content some
-// servers refuse, or a content-policy rejection) is skipped — kit stamps
-// it for the generation with no vectors so it stops being pending —
-// instead of aborting the whole fill. Without this, one poison document
-// would wedge every future build at the same doc_key-ordered scan
-// position: later documents would never embed, a first build would never
-// reach Missing==0, and auto-activation would never fire.
+// document the embeddings endpoint permanently rejects for input-specific
+// reasons (e.g. a token-window overflow, whitespace-only content some servers
+// refuse, or a content-policy rejection) is skipped — kit stamps it for the
+// generation with no vectors so it stops being pending — instead of aborting
+// the whole fill. Without this, one poison document would wedge every future
+// build at the same doc_key-ordered scan position: later documents would never
+// embed, a first build would never reach Missing==0, and auto-activation would
+// never fire.
 //
-// Every other failure (5xx, network, timeout, or 429 rate-limiting) still
-// aborts the fill, since it is likely transient and the next scheduled
-// build should retry the document rather than silently giving up on it.
+// Every other failure (5xx, network, timeout, 429 rate-limiting, auth, route,
+// model, media-type, or other config/API failures) still aborts the fill, since
+// the next scheduled build should retry the document rather than silently
+// giving up on it.
 func skipPermanentEncodeError(doc string, err error) bool {
 	var statusErr *HTTPStatusError
 	if !errors.As(err, &statusErr) || !statusErr.Permanent() {

@@ -552,6 +552,63 @@ func TestBuildSkipsPermanentlyRejectedDocumentAndContinues(t *testing.T) {
 		"unchanged content must not re-invoke the encoder for the already-skipped document")
 }
 
+// TestBuildConfig404EncodeErrorAbortsAndLeavesDocumentsPending covers a
+// config/API failure that applies to every input, such as a wrong embeddings
+// route. It must abort rather than stamp-skipping the whole corpus and
+// auto-activating an empty generation.
+func TestBuildConfig404EncodeErrorAbortsAndLeavesDocumentsPending(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	src := twoDocSource()
+	gen := fakeGeneration("fake-model")
+
+	notFound := func(_ context.Context, _ []string) ([][]float32, error) {
+		return nil, &HTTPStatusError{Status: http.StatusNotFound, Body: "not found"}
+	}
+
+	result, err := ix.Build(ctx, src, notFound, gen, BuildOptions{})
+	require.Error(t, err)
+	assert.Equal(t, 0, result.Fill.Documents)
+	assert.Equal(t, 0, result.Fill.Skipped,
+		"route/config failures must not stamp-skip every document")
+
+	active, ok, err := ix.ActiveFingerprint(ctx)
+	require.NoError(t, err)
+	assert.False(t, ok, "an empty failed generation must not activate")
+	assert.Empty(t, active)
+
+	var stampCount int
+	require.NoError(t, ix.db.QueryRow(
+		`SELECT COUNT(*) FROM message_vectors_stamps`,
+	).Scan(&stampCount))
+	assert.Equal(t, 0, stampCount, "failed route/config errors leave documents retryable")
+
+	pending, err := ix.countPending(ctx, gen.Fingerprint())
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, pending,
+		"later builds must still see the same documents as pending")
+}
+
+func TestBuildSchema400EncodeErrorAbortsAndLeavesDocumentsPending(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	src := twoDocSource()
+	gen := fakeGeneration("fake-model")
+
+	badSchema := func(_ context.Context, _ []string) ([][]float32, error) {
+		return nil, &HTTPStatusError{Status: http.StatusBadRequest, Body: "invalid input type"}
+	}
+
+	result, err := ix.Build(ctx, src, badSchema, gen, BuildOptions{})
+	require.Error(t, err)
+	assert.Equal(t, 0, result.Fill.Documents)
+	assert.Equal(t, 0, result.Fill.Skipped)
+
+	pending, err := ix.countPending(ctx, gen.Fingerprint())
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, pending)
+}
+
 // TestBuild5xxEncodeErrorStillAbortsFill guards the other side of the OnEncodeError
 // wiring: a transient (5xx) failure must still abort the whole fill rather
 // than being skipped, since it is likely to succeed on a later retry and

@@ -620,7 +620,7 @@ func TestSetupVectorServingAcquiresAndReleasesWriteLock(t *testing.T) {
 	require.NoError(t, held.Close())
 }
 
-func TestServeConstructionOmitsEmbeddingsRoutesWhenVectorDisabled(t *testing.T) {
+func TestServeConstructionKeepsEmbeddingsRoutesUnavailableWhenVectorDisabled(t *testing.T) {
 	dataDir := t.TempDir()
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 
@@ -639,8 +639,9 @@ func TestServeConstructionOmitsEmbeddingsRoutesWhenVectorDisabled(t *testing.T) 
 	resp, err := http.Get(ts.URL + "/api/v1/embeddings/status")
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	assert.NotEqual(t, "application/json", mediaType(t, resp.Header.Get("Content-Type")),
-		"the embeddings API must not be registered when vector is disabled")
+	assert.Equal(t, http.StatusNotImplemented, resp.StatusCode,
+		"the embeddings API should be documented and registered, but unavailable when vector is disabled")
+	assert.Equal(t, "application/json", mediaType(t, resp.Header.Get("Content-Type")))
 }
 
 // mediaType extracts the bare MIME type from a Content-Type header value,

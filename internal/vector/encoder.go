@@ -45,15 +45,14 @@ const (
 )
 
 // HTTPStatusError reports a non-200 response from the embeddings endpoint.
-// It carries the status code so callers can distinguish a permanent
-// rejection (a 4xx status other than 429 — the model rejected this
-// specific input, e.g. a token-window overflow or a content-policy
-// refusal) from a transient one (429, 5xx) worth retrying, or, via kit's
-// FillOptions.OnEncodeError, skipping and stamping a poison document
-// rather than aborting an entire build. When the response is a 429 and
-// carried a parseable Retry-After header, RetryAfter holds the delay the
-// server asked for (clamped to retryAfterCap) so retry backoff can honor
-// it instead of guessing.
+// It carries the status code so callers can distinguish retryable failures
+// (429, 5xx) from non-retryable ones, and, for known input-specific 4xx
+// rejections, skip-stamp one poison document without aborting a whole build.
+// Route/model/schema/config failures are not input-specific and must abort so
+// later builds can retry the corpus after the configuration is fixed. When the
+// response is a 429 and carried a parseable Retry-After header, RetryAfter
+// holds the delay the server asked for (clamped to retryAfterCap) so retry
+// backoff can honor it instead of guessing.
 type HTTPStatusError struct {
 	// Status is the HTTP status code the embeddings endpoint returned.
 	Status int
@@ -69,21 +68,31 @@ func (e *HTTPStatusError) Error() string {
 }
 
 // Permanent reports whether the embeddings endpoint's response indicates a
-// rejection of this specific input that will never succeed on retry: any
-// 4xx status except 429 (rate-limiting, retryable) and except the auth
-// statuses 401/403/407, which describe the caller's credentials rather
-// than the input — skip-stamping documents on an expired token would
-// silently mark an entire corpus embedded-with-no-vectors, so auth
-// failures must abort the build instead.
+// rejection of this specific input that will never succeed on retry. It is
+// intentionally conservative: generic 4xx statuses often mean a bad route,
+// model, media type, or credentials, and skip-stamping those would silently
+// mark an entire corpus embedded-with-no-vectors.
 func (e *HTTPStatusError) Permanent() bool {
 	switch e.Status {
-	case http.StatusTooManyRequests,
-		http.StatusUnauthorized,
-		http.StatusForbidden,
-		http.StatusProxyAuthRequired:
-		return false
+	case http.StatusBadRequest,
+		http.StatusRequestEntityTooLarge,
+		http.StatusUnprocessableEntity:
+		return hasDocumentSpecificEmbeddingError(e.Body)
 	}
-	return e.Status >= 400 && e.Status < 500
+	return false
+}
+
+func hasDocumentSpecificEmbeddingError(body string) bool {
+	body = strings.ToLower(body)
+	return strings.Contains(body, "token") ||
+		strings.Contains(body, "context") ||
+		strings.Contains(body, "content") ||
+		strings.Contains(body, "policy") ||
+		(strings.Contains(body, "input") &&
+			(strings.Contains(body, "too long") ||
+				strings.Contains(body, "too large") ||
+				strings.Contains(body, "length") ||
+				strings.Contains(body, "exceed")))
 }
 
 // embeddingsRequestBody is the OpenAI-compatible embeddings request.

@@ -312,28 +312,34 @@ func TestEncoder429ReturnsNonPermanentHTTPStatusError(t *testing.T) {
 }
 
 // TestHTTPStatusErrorPermanentClassification pins the skip-vs-abort
-// classification: auth statuses describe the caller's credentials, not the
-// input, so treating them as permanent would skip-stamp an entire corpus
-// on an expired token instead of aborting the build.
+// classification: only input-specific rejections (400/413/422 whose body
+// names the input, tokens, content, or policy) may skip-stamp a poison
+// document. Everything else — auth, routing, model, rate-limit, server
+// errors, or an allowlisted status with a nonspecific body — must abort
+// the build, or a config mistake would silently skip-stamp an entire
+// corpus as embedded-with-no-vectors.
 func TestHTTPStatusErrorPermanentClassification(t *testing.T) {
 	cases := []struct {
 		status    int
+		body      string
 		permanent bool
 	}{
-		{http.StatusBadRequest, true},
-		{http.StatusNotFound, true},
-		{http.StatusUnprocessableEntity, true},
-		{http.StatusUnauthorized, false},
-		{http.StatusForbidden, false},
-		{http.StatusProxyAuthRequired, false},
-		{http.StatusTooManyRequests, false},
-		{http.StatusInternalServerError, false},
-		{http.StatusBadGateway, false},
+		{http.StatusBadRequest, "token window overflow", true},
+		{http.StatusRequestEntityTooLarge, "input too large", true},
+		{http.StatusUnprocessableEntity, "content policy violation", true},
+		{http.StatusBadRequest, "", false},
+		{http.StatusBadRequest, "no route", false},
+		{http.StatusNotFound, "model not found", false},
+		{http.StatusUnauthorized, "invalid token", false},
+		{http.StatusForbidden, "forbidden", false},
+		{http.StatusTooManyRequests, "input rate limited", false},
+		{http.StatusInternalServerError, "token error", false},
+		{http.StatusBadGateway, "", false},
 	}
 	for _, tc := range cases {
-		err := &HTTPStatusError{Status: tc.status}
+		err := &HTTPStatusError{Status: tc.status, Body: tc.body}
 		assert.Equalf(t, tc.permanent, err.Permanent(),
-			"status %d: Permanent() classification", tc.status)
+			"status %d body %q: Permanent() classification", tc.status, tc.body)
 	}
 }
 

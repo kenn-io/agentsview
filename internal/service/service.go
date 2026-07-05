@@ -37,6 +37,15 @@ var ErrBeforeAfterRequireAround = errors.New("before/after require around")
 // 501 response back to it for daemon-backed callers.
 var ErrSemanticUnavailable = db.ErrSemanticUnavailable
 
+const (
+	// SemanticSearchIntentHeader is required on HTTP GET semantic/hybrid
+	// content searches. It forces browser callers to use an explicit fetch with
+	// a non-simple header, preventing blind no-CORS cross-origin GETs from
+	// spending embeddings quota through the local daemon.
+	SemanticSearchIntentHeader = "X-AgentsView-Search-Intent"
+	SemanticSearchIntentValue  = "semantic"
+)
+
 // SessionService is the canonical per-session operation interface.
 // Two implementations: directBackend (wraps *db.DB) and httpBackend
 // (proxies to a running daemon).

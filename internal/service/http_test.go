@@ -495,6 +495,26 @@ func TestHTTPSearchContent(t *testing.T) {
 	assert.Equal(t, "s1", res.Matches[0].SessionID)
 }
 
+func TestHTTPSearchContentSemanticSetsIntentHeader(t *testing.T) {
+	t.Parallel()
+	var gotIntent string
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			gotIntent = r.Header.Get("X-AgentsView-Search-Intent")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"matches":[],"next_cursor":0}`))
+		}))
+	defer srv.Close()
+	be := service.NewHTTPBackend(srv.URL, "", true)
+
+	_, err := be.SearchContent(context.Background(), service.ContentSearchRequest{
+		Pattern: "needle", Mode: "semantic", Limit: 50,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "semantic", gotIntent)
+}
+
 func TestHTTPSearchContent_RealServer(t *testing.T) {
 	t.Parallel()
 	env := newHTTPBackendEnv(t)

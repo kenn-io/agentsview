@@ -821,6 +821,28 @@ func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
 	assert.Equal(t, []string{"auto", "custom", "clipboard"}, mode.Enum)
 }
 
+func TestSearchContentSemanticGETRequiresIntentHeader(t *testing.T) {
+	te := setup(t)
+	te.db.SetVectorSearcher(fakeTransientVectorSearcher{})
+
+	w := te.wrappedRequest(http.MethodGet, "/api/v1/search/content?pattern=fox&mode=semantic",
+		withOrigin("http://evil-site.com"))
+	assertStatus(t, w, http.StatusForbidden)
+	assert.Contains(t, w.Body.String(), "X-AgentsView-Search-Intent")
+}
+
+func TestSearchContentSemanticGETWithIntentHeaderReachesSearcher(t *testing.T) {
+	te := setup(t)
+	te.db.SetVectorSearcher(fakeTransientVectorSearcher{})
+
+	w := te.get(t, "/api/v1/search/content?pattern=fox&mode=semantic")
+	assertStatus(t, w, http.StatusForbidden)
+
+	w = te.wrappedRequest(http.MethodGet, "/api/v1/search/content?pattern=fox&mode=semantic",
+		withHeader("X-AgentsView-Search-Intent", "semantic"))
+	assertStatus(t, w, http.StatusServiceUnavailable)
+}
+
 // TestSearchContentSemanticModeUnavailable pins the end-to-end capability
 // gate: a test server has no VectorSearcher wired in (db.HasSemantic is
 // false), so a semantic or hybrid content search must respond 501 rather
@@ -829,7 +851,8 @@ func TestSearchContentSemanticModeUnavailable(t *testing.T) {
 	te := setup(t)
 
 	for _, mode := range []string{"semantic", "hybrid"} {
-		w := te.get(t, "/api/v1/search/content?pattern=fox&mode="+mode)
+		w := te.wrappedRequest(http.MethodGet, "/api/v1/search/content?pattern=fox&mode="+mode,
+			withHeader("X-AgentsView-Search-Intent", "semantic"))
 		assertStatus(t, w, http.StatusNotImplemented)
 	}
 }
@@ -855,7 +878,8 @@ func TestSearchContentSemanticQueryEncodeFailureReturns503(t *testing.T) {
 	te := setup(t)
 	te.db.SetVectorSearcher(fakeTransientVectorSearcher{})
 
-	w := te.get(t, "/api/v1/search/content?pattern=fox&mode=semantic")
+	w := te.wrappedRequest(http.MethodGet, "/api/v1/search/content?pattern=fox&mode=semantic",
+		withHeader("X-AgentsView-Search-Intent", "semantic"))
 	assertStatus(t, w, http.StatusServiceUnavailable)
 }
 

@@ -32,6 +32,7 @@ type searchInput struct {
 type contentSearchInput struct {
 	Pattern          string            `query:"pattern" required:"true" doc:"Pattern to search for"`
 	Mode             contentSearchMode `query:"mode" enum:"substring,regex,fts,semantic,hybrid" doc:"Search mode"`
+	SearchIntent     string            `header:"X-AgentsView-Search-Intent" doc:"Required for semantic/hybrid GET searches"`
 	In               string            `query:"in" doc:"Comma-separated content sources"`
 	ExcludeSystem    bool              `query:"exclude_system" doc:"Exclude system messages"`
 	Reveal           bool              `query:"reveal" doc:"Return unredacted secret matches for localhost callers"`
@@ -94,6 +95,11 @@ func (s *Server) humaSearchContent(
 	if in.Reveal && !isLocalhostContext(ctx) {
 		return nil, apiError(http.StatusForbidden, "reveal is only permitted from localhost")
 	}
+	if requiresSemanticSearchIntent(in.Mode) &&
+		in.SearchIntent != service.SemanticSearchIntentValue {
+		return nil, apiError(http.StatusForbidden,
+			"semantic and hybrid search require "+service.SemanticSearchIntentHeader)
+	}
 	var sources []string
 	if in.In != "" {
 		sources = strings.Split(in.In, ",")
@@ -150,4 +156,8 @@ func (s *Server) humaSearchContent(
 		res.Matches = []db.ContentMatch{}
 	}
 	return &jsonOutput[*service.ContentSearchResult]{Body: res}, nil
+}
+
+func requiresSemanticSearchIntent(mode contentSearchMode) bool {
+	return mode == "semantic" || mode == "hybrid"
 }

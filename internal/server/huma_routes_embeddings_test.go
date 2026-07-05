@@ -82,7 +82,7 @@ func (f *fakeEmbeddingsManager) Retire(_ context.Context, id int64, force bool) 
 
 // newEmbeddingsTestServer builds a full Server (via testServer, so the SPA
 // fallback and route registration match production) with m wired in as the
-// embeddings manager. A nil m leaves the routes unregistered.
+// embeddings manager. A nil m leaves the routes registered but unavailable.
 func newEmbeddingsTestServer(t *testing.T, m EmbeddingsManager) *Server {
 	t.Helper()
 	var opts []Option
@@ -92,21 +92,36 @@ func newEmbeddingsTestServer(t *testing.T, m EmbeddingsManager) *Server {
 	return testServer(t, 0, opts...)
 }
 
-// TestEmbeddingsRoutesNotRegisteredWhenManagerNil confirms a nil manager
-// leaves /api/v1/embeddings/... entirely unregistered on the mux (it falls
-// through to the SPA catch-all pattern "/", same as any other unknown path)
-// rather than serving with a "no manager" error. A live server (fake
-// manager set) registers the exact pattern instead.
-func TestEmbeddingsRoutesNotRegisteredWhenManagerNil(t *testing.T) {
+func TestEmbeddingsRoutesRegisteredWhenManagerNil(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/embeddings/status", nil)
 
 	withoutManager := newEmbeddingsTestServer(t, nil)
 	_, patternWithout := withoutManager.mux.Handler(req)
-	assert.Equal(t, "/", patternWithout)
+	assert.NotEqual(t, "/", patternWithout)
+
+	w := serveGet(t, withoutManager, "/api/v1/embeddings/status")
+	assertRecorderStatus(t, w, http.StatusNotImplemented)
 
 	withManager := newEmbeddingsTestServer(t, &fakeEmbeddingsManager{})
 	_, patternWith := withManager.mux.Handler(req)
 	assert.NotEqual(t, "/", patternWith)
+}
+
+func TestOpenAPIDocumentsEmbeddingsRoutesWithoutManager(t *testing.T) {
+	spec := readOpenAPISpec(t, testServer(t, 0).Handler())
+
+	for _, tt := range []struct {
+		method string
+		path   string
+	}{
+		{method: "post", path: "/api/v1/embeddings/build"},
+		{method: "get", path: "/api/v1/embeddings/status"},
+		{method: "get", path: "/api/v1/embeddings/generations"},
+		{method: "post", path: "/api/v1/embeddings/generations/{id}/activate"},
+		{method: "post", path: "/api/v1/embeddings/generations/{id}/retire"},
+	} {
+		requireOpenAPIOperation(t, spec, tt.method, tt.path)
+	}
 }
 
 func TestEmbeddingsBuildReturnsAcceptedAndStartsBuild(t *testing.T) {

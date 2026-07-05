@@ -970,7 +970,7 @@ func corsMiddleware(
 				)
 				w.Header().Set(
 					"Access-Control-Allow-Headers",
-					"Content-Type, Authorization",
+					"Content-Type, Authorization, "+service.SemanticSearchIntentHeader,
 				)
 				if r.Method == http.MethodOptions {
 					w.WriteHeader(http.StatusNoContent)
@@ -1007,7 +1007,7 @@ func corsMiddleware(
 			)
 			w.Header().Set(
 				"Access-Control-Allow-Headers",
-				"Content-Type, Authorization",
+				"Content-Type, Authorization, "+service.SemanticSearchIntentHeader,
 			)
 			if r.Method == http.MethodOptions {
 				if !safeForReads {

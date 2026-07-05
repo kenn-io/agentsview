@@ -21,20 +21,15 @@ type EmbeddingsManager interface {
 	Retire(ctx context.Context, id int64, force bool) error
 }
 
-// WithEmbeddingsManager wires the embeddings build lifecycle routes
-// (/api/v1/embeddings/...) into the server. Nil (the default) skips
-// registration entirely, so the paths fall through to the SPA catch-all
-// like any other unknown route. Note this differs from most route groups,
-// which register unconditionally and nil-check their dependencies inside
-// the handlers.
+// WithEmbeddingsManager wires the implementation behind the embeddings build
+// lifecycle routes (/api/v1/embeddings/...). The routes are registered even
+// when no manager is present so OpenAPI and generated clients expose the full
+// API surface; handlers return 501 until vector serving is configured.
 func WithEmbeddingsManager(m EmbeddingsManager) Option {
 	return func(s *Server) { s.embeddingsManager = m }
 }
 
 func (s *Server) registerEmbeddingsRoutes() {
-	if s.embeddingsManager == nil {
-		return
-	}
 	group := newRouteGroup(s.api, "/api/v1/embeddings", "Embeddings")
 
 	post(s, group, "/build", "Start an embeddings build", s.humaEmbeddingsBuild)
@@ -75,6 +70,9 @@ type embeddingsGenerationActionInput struct {
 func (s *Server) humaEmbeddingsBuild(
 	_ context.Context, in *embeddingsBuildInput,
 ) (*embeddingsBuildOutput, error) {
+	if s.embeddingsManager == nil {
+		return nil, apiError(http.StatusNotImplemented, "embeddings manager not available")
+	}
 	if err := s.embeddingsManager.StartBuild(in.Body); err != nil {
 		if errors.Is(err, vector.ErrBuildRunning) {
 			return nil, apiError(http.StatusConflict, err.Error())
@@ -90,12 +88,18 @@ func (s *Server) humaEmbeddingsBuild(
 func (s *Server) humaEmbeddingsStatus(
 	_ context.Context, _ *emptyInput,
 ) (*jsonOutput[vector.BuildStatus], error) {
+	if s.embeddingsManager == nil {
+		return nil, apiError(http.StatusNotImplemented, "embeddings manager not available")
+	}
 	return &jsonOutput[vector.BuildStatus]{Body: s.embeddingsManager.Status()}, nil
 }
 
 func (s *Server) humaEmbeddingsGenerations(
 	ctx context.Context, _ *emptyInput,
 ) (*jsonOutput[embeddingsGenerationsResponse], error) {
+	if s.embeddingsManager == nil {
+		return nil, apiError(http.StatusNotImplemented, "embeddings manager not available")
+	}
 	gens, err := s.embeddingsManager.Generations(ctx)
 	if err != nil {
 		return nil, internalError("list embedding generations", err)
@@ -111,6 +115,9 @@ func (s *Server) humaEmbeddingsGenerations(
 func (s *Server) humaEmbeddingsActivate(
 	ctx context.Context, in *embeddingsGenerationActionInput,
 ) (*noContentOutput, error) {
+	if s.embeddingsManager == nil {
+		return nil, apiError(http.StatusNotImplemented, "embeddings manager not available")
+	}
 	if err := s.embeddingsManager.Activate(ctx, in.ID, in.Body.Force); err != nil {
 		return nil, embeddingsActionError(err)
 	}
@@ -120,6 +127,9 @@ func (s *Server) humaEmbeddingsActivate(
 func (s *Server) humaEmbeddingsRetire(
 	ctx context.Context, in *embeddingsGenerationActionInput,
 ) (*noContentOutput, error) {
+	if s.embeddingsManager == nil {
+		return nil, apiError(http.StatusNotImplemented, "embeddings manager not available")
+	}
 	if err := s.embeddingsManager.Retire(ctx, in.ID, in.Body.Force); err != nil {
 		return nil, embeddingsActionError(err)
 	}
