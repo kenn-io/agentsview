@@ -13,6 +13,7 @@ import (
 
 	"github.com/mattn/go-sqlite3"
 	"go.kenn.io/agentsview/internal/secrets"
+	kitvec "go.kenn.io/kit/vector"
 )
 
 // DefaultContentSearchLimit and MaxContentSearchLimit bound result pages.
@@ -539,6 +540,11 @@ func literalPrefix(pattern string) string {
 	return prefix
 }
 
+// errFTSUnavailable is returned by the "fts" and "hybrid" content-search
+// modes when messages_fts is missing or unusable (e.g. the fts5 module
+// failed to load), so both modes report the same capability gate.
+var errFTSUnavailable = errors.New("search: full-text search is unavailable")
+
 // searchContentFTS uses messages_fts for fast tokenized matching over
 // message content only. The caller (service/CLI) guarantees Sources is
 // messages-only for fts mode.
@@ -550,7 +556,7 @@ func (db *DB) searchContentFTS(
 	// as invalid user input (400). With FTS present, the only SQLITE_ERROR the
 	// MATCH query can raise comes from a malformed pattern.
 	if !db.HasFTS() {
-		return ContentSearchPage{}, errors.New("search: full-text search is unavailable")
+		return ContentSearchPage{}, errFTSUnavailable
 	}
 	scope, scopeArgs := sessionScopeSubquery(f)
 	sysPred := "1=1"
@@ -738,18 +744,179 @@ func (db *DB) searchContentSemantic(
 	return ContentSearchPage{Matches: out}, nil
 }
 
-// searchContentHybrid runs mode "hybrid" (RRF merge of lexical and semantic
-// ranking). Not implemented yet -- a later task wires the merge; today it
-// applies the semantic/hybrid shared validation and reports
-// ErrSemanticUnavailable so callers see the same capability gating as
-// "semantic" until then.
+// matchKey identifies one message across the hybrid search's vector and FTS
+// legs so kitvec.Merge can fuse them by document identity.
+type matchKey struct {
+	SessionID string
+	Ordinal   int
+}
+
+// searchContentHybrid runs mode "hybrid": lexical (FTS) and semantic (vector)
+// rankings are each over-fetched to k, the vector leg is filtered down to
+// sessions passing the filter's metadata scope (the FTS leg filters in SQL),
+// and the two rank-ordered leg lists are fused with reciprocal-rank fusion
+// (kitvec.Merge, RankConstant 60). The vector leg is passed first so its
+// snippet wins when a document appears in both legs. Returned matches are
+// enriched with session/message metadata via the same lookup semantic search
+// uses, ordered by fused score descending, truncated to f.Limit.
 func (db *DB) searchContentHybrid(
-	_ context.Context, f ContentSearchFilter,
+	ctx context.Context, f ContentSearchFilter,
 ) (ContentSearchPage, error) {
 	if err := validateSemanticFilter(f); err != nil {
 		return ContentSearchPage{}, err
 	}
-	return ContentSearchPage{}, ErrSemanticUnavailable
+	searcher := db.getVectorSearcher()
+	if searcher == nil {
+		return ContentSearchPage{}, ErrSemanticUnavailable
+	}
+	if !db.HasFTS() {
+		return ContentSearchPage{}, errFTSUnavailable
+	}
+
+	k := max(f.Limit*4, semanticOverfetchMin)
+	vecLeg, vecSnippets, err := db.hybridVectorLeg(ctx, f, searcher, k)
+	if err != nil {
+		return ContentSearchPage{}, err
+	}
+	ftsLeg, ftsSnippets, err := db.hybridFTSLeg(ctx, f, k)
+	if err != nil {
+		return ContentSearchPage{}, err
+	}
+	if len(vecLeg) == 0 && len(ftsLeg) == 0 {
+		return ContentSearchPage{}, nil
+	}
+
+	merged := kitvec.Merge([][]kitvec.Hit[matchKey]{vecLeg, ftsLeg}, kitvec.MergeOptions{
+		Strategy:     kitvec.MergeReciprocalRank,
+		RankConstant: 60,
+		Limit:        f.Limit,
+	})
+	if len(merged) == 0 {
+		return ContentSearchPage{}, nil
+	}
+	return db.enrichHybridMatches(ctx, f, merged, vecSnippets, ftsSnippets)
+}
+
+// hybridVectorLeg over-fetches k semantic hits, drops any whose session
+// fails the filter's metadata scope (the same lookup searchContentSemantic
+// uses), and returns the survivors as rank-ordered kitvec hits plus their raw
+// (unredacted) snippets keyed by matchKey. Session-set filtering runs before
+// the merge so reciprocal-rank fusion only ranks eligible documents.
+func (db *DB) hybridVectorLeg(
+	ctx context.Context, f ContentSearchFilter, searcher VectorSearcher, k int,
+) ([]kitvec.Hit[matchKey], map[matchKey]string, error) {
+	hits, err := searcher.SemanticSearch(ctx, f.Pattern, k)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(hits) == 0 {
+		return nil, nil, nil
+	}
+	allowed, err := db.semanticAllowedSessionIDs(ctx, f, uniqueSessionIDs(hits))
+	if err != nil {
+		return nil, nil, err
+	}
+	leg := make([]kitvec.Hit[matchKey], 0, len(hits))
+	snippets := make(map[matchKey]string, len(hits))
+	for _, h := range hits {
+		if !allowed[h.SessionID] {
+			continue
+		}
+		key := matchKey{SessionID: h.SessionID, Ordinal: h.Ordinal}
+		leg = append(leg, kitvec.Hit[matchKey]{Doc: key, Score: h.Score})
+		snippets[key] = h.Snippet
+	}
+	return leg, snippets, nil
+}
+
+// hybridFTSLeg runs a rank-ordered FTS query over the embedded universe
+// (role user/assistant, is_system = 0, system-prefix excluded -- the same
+// predicate ScanEmbeddableMessages uses), scoped to qualifying sessions in
+// SQL, and returns up to k hits as rank-ordered kitvec hits plus their raw
+// (unredacted) snippet() output keyed by matchKey.
+func (db *DB) hybridFTSLeg(
+	ctx context.Context, f ContentSearchFilter, k int,
+) ([]kitvec.Hit[matchKey], map[matchKey]string, error) {
+	scope, scopeArgs := sessionScopeSubquery(f)
+	query := fmt.Sprintf(`
+		SELECT m.session_id, m.ordinal,
+		       snippet(messages_fts, 0, '', '', '...', 32) AS snip
+		FROM messages_fts f JOIN messages m ON m.id = f.rowid
+		WHERE messages_fts MATCH ? AND m.role IN ('user','assistant')
+		  AND m.is_system = 0 AND %s
+		  AND m.%s
+		ORDER BY f.rank LIMIT ?`,
+		SystemPrefixSQL("m.content", "m.role"), scope)
+
+	args := []any{PrepareFTSQuery(f.Pattern)}
+	args = append(args, scopeArgs...)
+	args = append(args, k)
+
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, nil, classifyFTSError(fmt.Errorf("hybrid search fts leg: %w", err))
+	}
+	defer rows.Close()
+
+	var leg []kitvec.Hit[matchKey]
+	snippets := make(map[matchKey]string)
+	for rows.Next() {
+		var key matchKey
+		var snip string
+		if err := rows.Scan(&key.SessionID, &key.Ordinal, &snip); err != nil {
+			return nil, nil, fmt.Errorf("scan hybrid fts hit: %w", err)
+		}
+		leg = append(leg, kitvec.Hit[matchKey]{Doc: key})
+		snippets[key] = snip
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	return leg, snippets, nil
+}
+
+// enrichHybridMatches looks up session/message metadata for the fused hits
+// (reusing enrichSemanticHits' CTE join) and assembles the final page in
+// fused-score order. Each match's snippet prefers the vector leg's snippet
+// (redacted the same way as "semantic") and falls back to the FTS leg's
+// snippet() output when the key only came from the FTS leg.
+func (db *DB) enrichHybridMatches(
+	ctx context.Context, f ContentSearchFilter, merged []kitvec.Hit[matchKey],
+	vecSnippets, ftsSnippets map[matchKey]string,
+) (ContentSearchPage, error) {
+	asHits := make([]VectorHit, len(merged))
+	for i, h := range merged {
+		asHits[i] = VectorHit{SessionID: h.Doc.SessionID, Ordinal: h.Doc.Ordinal}
+	}
+	meta, err := db.enrichSemanticHits(ctx, asHits)
+	if err != nil {
+		return ContentSearchPage{}, err
+	}
+
+	out := make([]ContentMatch, 0, len(merged))
+	for _, h := range merged {
+		info, ok := meta[semanticHitKey{h.Doc.SessionID, h.Doc.Ordinal}]
+		if !ok {
+			continue
+		}
+		snip, ok := vecSnippets[h.Doc]
+		if !ok {
+			snip = ftsSnippets[h.Doc]
+		}
+		score := float64(h.Score)
+		out = append(out, ContentMatch{
+			SessionID: h.Doc.SessionID,
+			Project:   info.project,
+			Agent:     info.agent,
+			Location:  "message",
+			Role:      info.role,
+			Ordinal:   h.Doc.Ordinal,
+			Timestamp: info.timestamp,
+			Snippet:   f.buildSnippet(snip, 0, len(snip)),
+			Score:     &score,
+		})
+	}
+	return ContentSearchPage{Matches: out}, nil
 }
 
 // uniqueSessionIDs returns the distinct session IDs referenced by hits.

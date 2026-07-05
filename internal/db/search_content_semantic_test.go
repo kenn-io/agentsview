@@ -168,27 +168,3 @@ func TestSearchContentSemanticMessagesSourceAllowed(t *testing.T) {
 	require.NoError(t, err, "SearchContent with explicit messages source")
 	require.Len(t, page.Matches, 1)
 }
-
-func TestSearchContentHybridStubUnavailable(t *testing.T) {
-	d := testDB(t)
-	d.SetVectorSearcher(&fakeVectorSearcher{hits: []VectorHit{
-		{SessionID: "s1", Ordinal: 0, Score: 0.9, Snippet: "hello"},
-	}})
-
-	_, err := d.SearchContent(context.Background(), ContentSearchFilter{
-		Pattern: "hello", Mode: "hybrid",
-	})
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrSemanticUnavailable),
-		"hybrid stub should still report ErrSemanticUnavailable, got %v", err)
-
-	// Shared validation applies to hybrid too: cursor pagination is rejected
-	// before the capability check.
-	_, err = d.SearchContent(context.Background(), ContentSearchFilter{
-		Pattern: "hello", Mode: "hybrid", Cursor: 1,
-	})
-	require.Error(t, err)
-	var inputErr *SearchInputError
-	assert.True(t, errors.As(err, &inputErr),
-		"expected *SearchInputError, got %T: %v", err, err)
-}
