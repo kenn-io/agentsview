@@ -441,11 +441,7 @@ func newService(
 				"opening db: %w", err,
 			)
 		}
-		closeVectorSearcher, err := installDirectVectorSearcher(cfg, d)
-		if err != nil {
-			d.Close()
-			return nil, nil, err
-		}
+		closeVectorSearcher := installDirectVectorSearcher(cfg, d)
 		cleanup := func() {
 			if closeVectorSearcher != nil {
 				if cerr := closeVectorSearcher(); cerr != nil {

@@ -323,7 +323,12 @@ func clampAroundSpan(before, after int) (int, int) {
 		after = 0
 	}
 	const budget = db.MaxMessageLimit - 1 // reserve the anchor row
-	if before+after <= budget {
+	// Compare each side against budget individually rather than summing
+	// before+after: before and after are untrusted ints (reachable via a
+	// direct SessionService caller or the API), and before+after can
+	// overflow and wrap negative when either side is near math.MaxInt,
+	// which would slip an unbounded window past this cap.
+	if before <= budget && after <= budget-before {
 		return before, after
 	}
 	fairShare := budget / 2

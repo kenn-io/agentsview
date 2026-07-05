@@ -47,7 +47,7 @@ duration field doesn't parse. Restart the daemon (or run a CLI command) after
 editing the file.
 
 The first scheduled build that `run_after_sync` triggers after enabling
-`[vector]` embeds the entire existing archive, not just deltas since the mirror
+`[vector]` embeds the entire existing archive, not just deltas, since the mirror
 starts out empty and every message counts as pending. For a hosted embeddings
 API that is a real cost event, so run `agentsview embeddings build` directly at
 a time of your choosing if you want to control when that initial cost lands,
@@ -246,9 +246,13 @@ MCP tool error, carrying the same remediation text.
 - **No frontend integration.** The web UI's command palette and in-session
   search remain FTS-only; semantic and hybrid search are CLI/HTTP/MCP-only in
   this release.
-- **The index embeds message `content` verbatim.** Raw tool_input/tool_result
-  rows and system messages are excluded, matching the same scope `--fts`
-  already uses. But anything a parser rendered *into* a user/assistant
-  message's content is embedded with it: thinking text flattened inline as
-  `[Thinking]...[/Thinking]` markers, and tool-call summaries some parsers
-  render into assistant content, are all ordinary message text to the index.
+- **The index embeds message `content` verbatim.** Like `--fts`, it only draws
+  from the `messages` source, so raw tool_input/tool_result rows are never
+  candidates. System messages are handled more strictly, though: `--fts` still
+  includes them unless the caller passes `--exclude-system`, while
+  `--semantic`/`--hybrid` always exclude system messages from the index with
+  no flag to opt back in. But anything a parser rendered *into* a
+  user/assistant message's content is embedded with it: thinking text
+  flattened inline as `[Thinking]...[/Thinking]` markers, and tool-call
+  summaries some parsers render into assistant content, are all ordinary message
+  text to the index.

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1372,6 +1373,59 @@ func TestDirectBackend_Messages_AroundClampsCombinedOversizedWindow(t *testing.T
 	assert.LessOrEqual(t, total, db.MaxMessageLimit)
 	// Equal requests should split the shared budget evenly.
 	assert.InDelta(t, store.captured.Before, store.captured.After, 1)
+}
+
+// TestDirectBackend_Messages_AroundClampsMaxIntOverflow guards against a
+// regression where before+after overflows and wraps negative once either
+// side approaches math.MaxInt, which would slip the sum past the budget
+// check and forward an effectively unbounded window. Both sides, and the
+// combination, must still be clamped to the shared budget.
+func TestDirectBackend_Messages_AroundClampsMaxIntOverflow(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		before int
+		after  int
+	}{
+		{"before overflow", math.MaxInt, 1},
+		{"after overflow", 1, math.MaxInt},
+		{"both overflow", math.MaxInt, math.MaxInt},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := &capturingWindowStore{}
+			svc := service.NewReadOnlyBackend(store)
+
+			around := 100
+			_, err := svc.Messages(context.Background(), "sid", service.MessageFilter{
+				Around: &around,
+				Before: &tc.before,
+				After:  &tc.after,
+			})
+			require.NoError(t, err)
+
+			// Check each side against the bound individually, and with
+			// require (not assert), before ever adding them together:
+			// summing two still-untrusted huge values here would hit the
+			// exact same overflow-wraps-negative trap this test exists to
+			// catch, silently passing a LessOrEqual check against a
+			// wrapped-negative "total" regardless of whether the fix
+			// under test is applied.
+			require.LessOrEqual(t, store.captured.Before, db.MaxMessageLimit,
+				"clamped before must never exceed MaxMessageLimit on its own")
+			require.LessOrEqual(t, store.captured.After, db.MaxMessageLimit,
+				"clamped after must never exceed MaxMessageLimit on its own")
+			assert.GreaterOrEqual(t, store.captured.Before, 0,
+				"clamped before must never be negative")
+			assert.GreaterOrEqual(t, store.captured.After, 0,
+				"clamped after must never be negative")
+			total := store.captured.Before + store.captured.After + 1
+			assert.LessOrEqual(t, total, db.MaxMessageLimit,
+				"an overflow-inducing before/after must still be capped to MaxMessageLimit")
+		})
+	}
 }
 
 // TestDirectBackend_Messages_AroundClampsOversizedWindowEndToEnd is an

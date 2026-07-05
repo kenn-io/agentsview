@@ -249,7 +249,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 			log.Printf("warning: remote_hosts config invalid, skipping periodic remote sync: %v", err)
 			validRemotes = false
 		}
-		go startPeriodicSync(ctx, cfg, engine, database, idleTracker, validRemotes, broadcaster)
+		go startPeriodicSync(ctx, cfg, engine, database, idleTracker, validRemotes, emitter)
 	}
 
 	// Seed model_pricing so a fresh database (first run, or a

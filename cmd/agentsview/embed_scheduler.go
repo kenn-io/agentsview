@@ -354,27 +354,47 @@ func setupVectorServing(
 // semantic searcher for direct (non-daemon) CLI reads, e.g. `session
 // search --semantic` with no daemon running. It is a no-op — leaving d
 // without a VectorSearcher, so callers see db.ErrSemanticUnavailable
-// naturally — when [vector] is disabled or vectors.db does not exist yet.
-// The returned close func is nil in that no-op case; otherwise the caller
-// must call it when done with d to release the read-only index handle.
-func installDirectVectorSearcher(cfg config.Config, d *db.DB) (func() error, error) {
+// naturally — when [vector] is disabled, vectors.db does not exist yet, or
+// vectors.db cannot be opened (e.g. corrupt, truncated, or built by an
+// incompatible version).
+//
+// Vector wiring failures never fail direct service construction: every
+// direct read command (e.g. `session list`) opens vectors.db eagerly
+// through this path, so a bad vectors.db must not break unrelated reads
+// against an otherwise-healthy sessions.db archive. Failures are logged as
+// a warning and degrade to semantic search returning
+// db.ErrSemanticUnavailable, matching the disabled/missing-file cases.
+//
+// The returned close func is nil whenever no searcher was wired (the
+// no-op cases above, and the degraded-on-error case); otherwise the
+// caller must call it when done with d to release the read-only index
+// handle.
+func installDirectVectorSearcher(cfg config.Config, d *db.DB) func() error {
 	if !cfg.Vector.Enabled {
-		return nil, nil
+		return nil
 	}
 	path := cfg.Vector.ResolvedDBPath(cfg.DataDir)
 	if _, err := os.Stat(path); err != nil {
-		return nil, nil
+		return nil
 	}
 
 	ix, err := vector.Open(context.Background(), path, true, cfg.Vector.Embeddings.MaxInputChars)
 	if err != nil {
-		return nil, fmt.Errorf("opening vectors.db: %w", err)
+		log.Printf(
+			"warning: opening vectors.db for semantic search: %v; "+
+				"continuing without semantic search", err,
+		)
+		return nil
 	}
 	enc, err := newVectorEncoder(cfg.Vector.Embeddings)
 	if err != nil {
 		ix.Close()
-		return nil, err
+		log.Printf(
+			"warning: building embeddings encoder for semantic search: %v; "+
+				"continuing without semantic search", err,
+		)
+		return nil
 	}
 	d.SetVectorSearcher(newSearcherAdapter(ix, enc, vectorGeneration(cfg.Vector.Embeddings)))
-	return ix.Close, nil
+	return ix.Close
 }
