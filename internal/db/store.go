@@ -45,6 +45,7 @@ type Store interface {
 
 	// Search.
 	HasFTS() bool
+	HasSemantic() bool
 	Search(ctx context.Context, f SearchFilter) (SearchPage, error)
 	SearchSession(ctx context.Context, sessionID, query string) ([]int, error)
 	SearchContent(ctx context.Context, f ContentSearchFilter) (ContentSearchPage, error)

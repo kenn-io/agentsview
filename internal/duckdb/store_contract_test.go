@@ -32,6 +32,27 @@ func TestDuckDBStoreContract(t *testing.T) {
 	}
 }
 
+// TestDuckDBStoreHasSemanticFalse pins that the DuckDB store reports no
+// semantic search capability until it gets its own VectorSearcher seam.
+func TestDuckDBStoreHasSemanticFalse(t *testing.T) {
+	s := &Store{}
+	assert.False(t, s.HasSemantic(), "DuckDB HasSemantic")
+}
+
+// TestDuckDBSearchContentSemanticModesUnavailable pins that "semantic" and
+// "hybrid" are rejected with db.ErrSemanticUnavailable before any query runs
+// -- a zero-value Store (no live *sql.DB) is enough to prove that.
+func TestDuckDBSearchContentSemanticModesUnavailable(t *testing.T) {
+	s := &Store{}
+	for _, mode := range []string{"semantic", "hybrid"} {
+		_, err := s.SearchContent(context.Background(),
+			db.ContentSearchFilter{Pattern: "x", Mode: mode})
+		require.Error(t, err, "mode %q", mode)
+		assert.True(t, errors.Is(err, db.ErrSemanticUnavailable),
+			"mode %q: want ErrSemanticUnavailable, got %v", mode, err)
+	}
+}
+
 func TestDuckDBFindSessionIDsByPartialLiteralCaseSensitive(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)

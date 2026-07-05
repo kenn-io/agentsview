@@ -379,6 +379,9 @@ type DB struct {
 	checkpointMu   sync.Mutex
 	checkpointStop chan struct{}
 	checkpointDone chan struct{}
+
+	vectorMu       sync.RWMutex
+	vectorSearcher VectorSearcher
 }
 
 // Reader exposes guarded read-only query operations. It intentionally does

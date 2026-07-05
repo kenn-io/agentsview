@@ -669,6 +669,11 @@ func rootSessionWhere(excludeOneShot, excludeAutomated bool) string {
 
 func (s *Store) HasFTS() bool { return true }
 
+// HasSemantic returns false: the DuckDB store has no VectorSearcher seam
+// yet, so SearchContent rejects "semantic"/"hybrid" modes up front with
+// db.ErrSemanticUnavailable.
+func (s *Store) HasSemantic() bool { return false }
+
 func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {
 	if f.Limit <= 0 || f.Limit > db.MaxSearchLimit {
 		f.Limit = db.DefaultSearchLimit
@@ -870,6 +875,10 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 	case "", "substring", "regex":
 	case "fts":
 		f.Sources = []string{"messages"}
+	case "semantic", "hybrid":
+		// No VectorSearcher seam on the DuckDB store yet (HasSemantic always
+		// false): gate before running any query.
+		return db.ContentSearchPage{}, db.ErrSemanticUnavailable
 	default:
 		return db.ContentSearchPage{},
 			&db.SearchInputError{Msg: fmt.Sprintf("search: invalid mode %q", f.Mode)}

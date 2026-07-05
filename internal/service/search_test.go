@@ -155,3 +155,39 @@ func TestHTTPBackend_Search_Unavailable(t *testing.T) {
 	assert.True(t, errors.Is(err, service.ErrSearchUnavailable),
 		"501 should map to ErrSearchUnavailable, got %v", err)
 }
+
+// The direct backend has no VectorSearcher wired into the test DB, so
+// semantic content search must surface db.ErrSemanticUnavailable unwrapped
+// (errors.Is must still see through it -- no extra wrapping in between).
+func TestDirectBackend_SearchContent_SemanticUnavailable(t *testing.T) {
+	t.Parallel()
+	d := dbtest.OpenTestDB(t)
+	be := service.NewDirectBackend(d, nil)
+
+	_, err := be.SearchContent(context.Background(), service.ContentSearchRequest{
+		Pattern: "fox", Mode: "semantic",
+	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, service.ErrSemanticUnavailable),
+		"expected ErrSemanticUnavailable, got %v", err)
+}
+
+// A daemon without a VectorSearcher responds 501 to a semantic content
+// search; the HTTP backend maps that to the shared ErrSemanticUnavailable
+// sentinel, mirroring the ErrSearchUnavailable mapping above.
+func TestHTTPBackend_SearchContent_SemanticUnavailable(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotImplemented)
+		}))
+	t.Cleanup(srv.Close)
+	svc := service.NewHTTPBackend(srv.URL, "", true)
+
+	_, err := svc.SearchContent(context.Background(), service.ContentSearchRequest{
+		Pattern: "fox", Mode: "semantic",
+	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, service.ErrSemanticUnavailable),
+		"501 should map to ErrSemanticUnavailable, got %v", err)
+}

@@ -733,7 +733,7 @@ func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
 			path:   "/api/v1/search/content",
 			method: "get",
 			name:   "mode",
-			want:   []string{"substring", "regex", "fts"},
+			want:   []string{"substring", "regex", "fts", "semantic", "hybrid"},
 		},
 		{
 			path:   "/api/v1/sessions/{id}/md",
@@ -819,6 +819,19 @@ func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
 	require.True(t, ok, "post /api/v1/config/terminal missing mode property")
 	mode = resolveSchema(mode)
 	assert.Equal(t, []string{"auto", "custom", "clipboard"}, mode.Enum)
+}
+
+// TestSearchContentSemanticModeUnavailable pins the end-to-end capability
+// gate: a test server has no VectorSearcher wired in (db.HasSemantic is
+// false), so a semantic or hybrid content search must respond 501 rather
+// than 500 or a silently-empty page.
+func TestSearchContentSemanticModeUnavailable(t *testing.T) {
+	te := setup(t)
+
+	for _, mode := range []string{"semantic", "hybrid"} {
+		w := te.get(t, "/api/v1/search/content?pattern=fox&mode="+mode)
+		assertStatus(t, w, http.StatusNotImplemented)
+	}
 }
 
 func TestOpenAPIEndpointDocumentsQualitySignalResponses(t *testing.T) {

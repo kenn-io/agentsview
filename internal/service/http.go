@@ -417,6 +417,9 @@ func (b *httpBackend) SearchContent(
 	}
 	var out ContentSearchResult
 	if err := b.getJSON(ctx, "/api/v1/search/content?"+q.Encode(), &out); err != nil {
+		if errors.Is(err, errHTTPNotImplemented) {
+			return nil, ErrSemanticUnavailable
+		}
 		return nil, err
 	}
 	return &out, nil

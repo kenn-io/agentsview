@@ -18,6 +18,27 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
+// TestStoreHasSemanticFalse pins that the PostgreSQL store reports no
+// semantic search capability until it gets its own VectorSearcher seam.
+func TestStoreHasSemanticFalse(t *testing.T) {
+	s := &Store{}
+	assert.False(t, s.HasSemantic(), "PostgreSQL HasSemantic")
+}
+
+// TestStoreSearchContentSemanticModesUnavailable pins that "semantic" and
+// "hybrid" are rejected with db.ErrSemanticUnavailable before any query runs
+// -- a zero-value Store (no live *sql.DB) is enough to prove that.
+func TestStoreSearchContentSemanticModesUnavailable(t *testing.T) {
+	s := &Store{}
+	for _, mode := range []string{"semantic", "hybrid"} {
+		_, err := s.SearchContent(context.Background(),
+			db.ContentSearchFilter{Pattern: "x", Mode: mode})
+		require.Error(t, err, "mode %q", mode)
+		assert.True(t, errors.Is(err, db.ErrSemanticUnavailable),
+			"mode %q: want ErrSemanticUnavailable, got %v", mode, err)
+	}
+}
+
 // TestStripFTSQuotes pins the de-quoting behavior the PostgreSQL Search path
 // relies on. The canonical implementation lives in the db package and is
 // shared with the SQLite and HTTP paths so the backends stay in parity.

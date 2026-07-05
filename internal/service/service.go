@@ -18,6 +18,13 @@ import (
 // regardless of transport (the REST handler maps it back to HTTP 501).
 var ErrSearchUnavailable = errors.New("search not available")
 
+// ErrSemanticUnavailable is returned by SearchContent for modes
+// "semantic"/"hybrid" when the backing store has no VectorSearcher wired in.
+// It is the same sentinel as db.ErrSemanticUnavailable so direct callers can
+// errors.Is it without transport-specific handling; the HTTP backend maps a
+// 501 response back to it for daemon-backed callers.
+var ErrSemanticUnavailable = db.ErrSemanticUnavailable
+
 // SessionService is the canonical per-session operation interface.
 // Two implementations: directBackend (wraps *db.DB) and httpBackend
 // (proxies to a running daemon).
@@ -110,7 +117,7 @@ type SessionSearchResult struct {
 // ContentSearchRequest is the transport-neutral content-search input.
 type ContentSearchRequest struct {
 	Pattern       string   `json:"pattern"`
-	Mode          string   `json:"mode,omitempty"` // substring|regex|fts
+	Mode          string   `json:"mode,omitempty"` // substring|regex|fts|semantic|hybrid
 	Sources       []string `json:"sources,omitempty"`
 	ExcludeSystem bool     `json:"exclude_system,omitempty"`
 	Reveal        bool     `json:"reveal,omitempty"`

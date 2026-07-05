@@ -143,6 +143,11 @@ func (s *Store) SearchSession(
 // HasFTS returns true because ILIKE search is available.
 func (s *Store) HasFTS() bool { return true }
 
+// HasSemantic returns false: the PostgreSQL store has no VectorSearcher seam
+// yet, so SearchContent rejects "semantic"/"hybrid" modes up front with
+// db.ErrSemanticUnavailable.
+func (s *Store) HasSemantic() bool { return false }
+
 // escapeLike escapes SQL LIKE metacharacters so the bind
 // parameter is treated as a literal substring.
 func escapeLike(v string) string {

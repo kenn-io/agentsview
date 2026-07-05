@@ -46,6 +46,10 @@ func (s *Store) SearchContent(
 		return s.searchContentSubstringPG(ctx, f)
 	case "regex":
 		return s.searchContentRegexPG(ctx, f)
+	case "semantic", "hybrid":
+		// No VectorSearcher seam on the PostgreSQL store yet (HasSemantic
+		// always false): gate before running any query.
+		return db.ContentSearchPage{}, db.ErrSemanticUnavailable
 	default:
 		return db.ContentSearchPage{},
 			&db.SearchInputError{Msg: fmt.Sprintf("search: invalid mode %q", f.Mode)}

@@ -27,7 +27,7 @@ const (
 // include-children / one-shot / orphan logic is shared, not reimplemented.
 type ContentSearchFilter struct {
 	Pattern       string
-	Mode          string   // "substring" (default) | "regex" | "fts"
+	Mode          string   // "substring" (default) | "regex" | "fts" | "semantic" | "hybrid"
 	Sources       []string // subset of {"messages","tool_input","tool_result"}
 	ExcludeSystem bool
 
@@ -60,6 +60,9 @@ type ContentMatch struct {
 	Ordinal   int    `json:"ordinal"`
 	Timestamp string `json:"timestamp"`
 	Snippet   string `json:"snippet"`
+	// Score is the searcher's relevance score for "semantic"/"hybrid" modes,
+	// nil for the other modes which have no comparable ranking signal.
+	Score *float64 `json:"score,omitempty"`
 }
 
 // ContentSearchPage is a page of matches with an optional next cursor.
@@ -79,16 +82,15 @@ func searchInputErrorf(format string, a ...any) error {
 	return &SearchInputError{Msg: fmt.Sprintf(format, a...)}
 }
 
-// sessionScopeSubquery returns "session_id IN (SELECT id FROM sessions
-// WHERE <buildSessionFilter where>)" plus its args, reusing the session
-// filter machinery. The Limit/Cursor on the inner filter are irrelevant
-// (no LIMIT in a SELECT id subquery), so they are left unset.
-func sessionScopeSubquery(f ContentSearchFilter) (string, []any) {
-	// Mirror session list: one-shot and automated sessions are excluded by
-	// default, and IncludeOneShot/IncludeAutomated opt them back in.
-	// Comprehensive secret coverage comes from the secrets subsystem
-	// (scanned over every session at sync), not from search defaults.
-	sf := SessionFilter{
+// contentSessionFilter maps a ContentSearchFilter's session-scoping fields to
+// a SessionFilter. Mirroring session list: one-shot and automated sessions
+// are excluded by default, and IncludeOneShot/IncludeAutomated opt them back
+// in. Comprehensive secret coverage comes from the secrets subsystem
+// (scanned over every session at sync), not from search defaults. Shared by
+// sessionScopeSubquery (substring/regex/fts) and the semantic-mode
+// allowed-session-id lookup so the mapping cannot drift between them.
+func contentSessionFilter(f ContentSearchFilter) SessionFilter {
+	return SessionFilter{
 		Project: f.Project, ExcludeProject: f.ExcludeProject,
 		Machine: f.Machine, GitBranch: f.GitBranch, Agent: f.Agent,
 		Date: f.Date, DateFrom: f.DateFrom, DateTo: f.DateTo,
@@ -97,7 +99,14 @@ func sessionScopeSubquery(f ContentSearchFilter) (string, []any) {
 		ExcludeAutomated: !f.IncludeAutomated,
 		IncludeChildren:  f.IncludeChildren,
 	}
-	where, args := buildSessionFilter(sf)
+}
+
+// sessionScopeSubquery returns "session_id IN (SELECT id FROM sessions
+// WHERE <buildSessionFilter where>)" plus its args, reusing the session
+// filter machinery. The Limit/Cursor on the inner filter are irrelevant
+// (no LIMIT in a SELECT id subquery), so they are left unset.
+func sessionScopeSubquery(f ContentSearchFilter) (string, []any) {
+	where, args := buildSessionFilter(contentSessionFilter(f))
 	return "session_id IN (SELECT id FROM sessions WHERE " + where + ")", args
 }
 
@@ -111,6 +120,17 @@ func (db *DB) SearchContent(
 	if f.Pattern == "" {
 		return ContentSearchPage{}, nil
 	}
+
+	// Semantic and hybrid validate and default Sources themselves (messages
+	// only) ahead of the substring/regex/fts source-set default just below,
+	// which fills in tool_input/tool_result that neither mode supports.
+	switch f.Mode {
+	case "semantic":
+		return db.searchContentSemantic(ctx, f)
+	case "hybrid":
+		return db.searchContentHybrid(ctx, f)
+	}
+
 	if len(f.Sources) == 0 {
 		f.Sources = []string{"messages", "tool_input", "tool_result"}
 	}
@@ -611,4 +631,227 @@ func classifyFTSError(err error) error {
 		}
 	}
 	return err
+}
+
+// semanticOverfetchMin floors the candidate count requested from the
+// VectorSearcher (k = max(f.Limit*4, semanticOverfetchMin)): session-scope
+// filtering may drop some of the searcher's top hits, so more are fetched
+// than will ultimately be returned.
+const semanticOverfetchMin = 200
+
+// validateSemanticSources returns a SearchInputError unless f.Sources is
+// empty or exactly {"messages"}: semantic (and hybrid) search only indexes
+// message content, mirroring the --fts messages-only restriction enforced
+// upstream for fts mode.
+func validateSemanticSources(f ContentSearchFilter) error {
+	for _, s := range f.Sources {
+		if s != "messages" {
+			return searchInputErrorf(
+				"search: semantic search only supports the messages source (got %q)", s)
+		}
+	}
+	return nil
+}
+
+// validateSemanticFilter applies the input validation shared by modes
+// "semantic" and "hybrid": sources must be empty or exactly {"messages"},
+// and cursor pagination is rejected because both modes return a single
+// ranked page rather than an offset-paged result set.
+func validateSemanticFilter(f ContentSearchFilter) error {
+	if err := validateSemanticSources(f); err != nil {
+		return err
+	}
+	if f.Cursor != 0 {
+		return searchInputErrorf(
+			"semantic search returns a single ranked page; cursor pagination is not supported")
+	}
+	return nil
+}
+
+// searchContentSemantic runs mode "semantic": it over-fetches ranked hits
+// from the wired VectorSearcher, keeps hits whose session passes the
+// filter's metadata scope (loaded with one query over the hit session IDs),
+// enriches surviving (session_id, ordinal) pairs with session/message
+// metadata in one query, and returns them in the searcher's rank order,
+// truncated to f.Limit.
+func (db *DB) searchContentSemantic(
+	ctx context.Context, f ContentSearchFilter,
+) (ContentSearchPage, error) {
+	if err := validateSemanticFilter(f); err != nil {
+		return ContentSearchPage{}, err
+	}
+	searcher := db.getVectorSearcher()
+	if searcher == nil {
+		return ContentSearchPage{}, ErrSemanticUnavailable
+	}
+
+	k := max(f.Limit*4, semanticOverfetchMin)
+	hits, err := searcher.SemanticSearch(ctx, f.Pattern, k)
+	if err != nil {
+		return ContentSearchPage{}, err
+	}
+	if len(hits) == 0 {
+		return ContentSearchPage{}, nil
+	}
+
+	allowed, err := db.semanticAllowedSessionIDs(ctx, f, uniqueSessionIDs(hits))
+	if err != nil {
+		return ContentSearchPage{}, err
+	}
+	surviving := make([]VectorHit, 0, len(hits))
+	for _, h := range hits {
+		if allowed[h.SessionID] {
+			surviving = append(surviving, h)
+		}
+	}
+	if len(surviving) == 0 {
+		return ContentSearchPage{}, nil
+	}
+
+	meta, err := db.enrichSemanticHits(ctx, surviving)
+	if err != nil {
+		return ContentSearchPage{}, err
+	}
+
+	out := make([]ContentMatch, 0, min(len(surviving), f.Limit))
+	for _, h := range surviving {
+		info, ok := meta[semanticHitKey{h.SessionID, h.Ordinal}]
+		if !ok {
+			continue
+		}
+		score := float64(h.Score)
+		out = append(out, ContentMatch{
+			SessionID: h.SessionID,
+			Project:   info.project,
+			Agent:     info.agent,
+			Location:  "message",
+			Role:      info.role,
+			Ordinal:   h.Ordinal,
+			Timestamp: info.timestamp,
+			Snippet:   f.buildSnippet(h.Snippet, 0, len(h.Snippet)),
+			Score:     &score,
+		})
+		if len(out) >= f.Limit {
+			break
+		}
+	}
+	return ContentSearchPage{Matches: out}, nil
+}
+
+// searchContentHybrid runs mode "hybrid" (RRF merge of lexical and semantic
+// ranking). Not implemented yet -- a later task wires the merge; today it
+// applies the semantic/hybrid shared validation and reports
+// ErrSemanticUnavailable so callers see the same capability gating as
+// "semantic" until then.
+func (db *DB) searchContentHybrid(
+	_ context.Context, f ContentSearchFilter,
+) (ContentSearchPage, error) {
+	if err := validateSemanticFilter(f); err != nil {
+		return ContentSearchPage{}, err
+	}
+	return ContentSearchPage{}, ErrSemanticUnavailable
+}
+
+// uniqueSessionIDs returns the distinct session IDs referenced by hits.
+// Order is irrelevant: the result only feeds an IN (...) clause.
+func uniqueSessionIDs(hits []VectorHit) []string {
+	seen := make(map[string]bool, len(hits))
+	ids := make([]string, 0, len(hits))
+	for _, h := range hits {
+		if !seen[h.SessionID] {
+			seen[h.SessionID] = true
+			ids = append(ids, h.SessionID)
+		}
+	}
+	return ids
+}
+
+// semanticAllowedSessionIDs runs one query returning the subset of ids that
+// pass the ContentSearchFilter's metadata scope (project, agent, date
+// range, one-shot/automated, ...), reusing buildSessionFilter via the same
+// SessionFilter mapping sessionScopeSubquery uses so the two paths cannot
+// drift apart.
+func (db *DB) semanticAllowedSessionIDs(
+	ctx context.Context, f ContentSearchFilter, ids []string,
+) (map[string]bool, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	where, args := buildSessionFilter(contentSessionFilter(f))
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	query := "SELECT id FROM sessions WHERE " + where +
+		" AND id IN (" + placeholders + ")"
+
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("semantic search session scope: %w", err)
+	}
+	defer rows.Close()
+
+	allowed := make(map[string]bool, len(ids))
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan semantic session id: %w", err)
+		}
+		allowed[id] = true
+	}
+	return allowed, rows.Err()
+}
+
+// semanticHitKey identifies a (session_id, ordinal) pair for enrichment
+// lookup.
+type semanticHitKey struct {
+	sessionID string
+	ordinal   int
+}
+
+// semanticHitInfo is the session/message metadata enrichSemanticHits attaches
+// to a surviving hit.
+type semanticHitInfo struct {
+	project, agent, role, timestamp string
+}
+
+// enrichSemanticHits looks up session/message metadata for hits' (session_id,
+// ordinal) pairs in one query via a "WITH hits(session_id, ordinal) AS
+// (VALUES ...)" CTE joined to messages/sessions. SQLite versions without
+// row-value IN support over VALUES rule out "(session_id, ordinal) IN
+// (VALUES ...)"; the CTE join form works everywhere.
+func (db *DB) enrichSemanticHits(
+	ctx context.Context, hits []VectorHit,
+) (map[semanticHitKey]semanticHitInfo, error) {
+	values := make([]string, len(hits))
+	args := make([]any, 0, len(hits)*2)
+	for i, h := range hits {
+		values[i] = "(?, ?)"
+		args = append(args, h.SessionID, h.Ordinal)
+	}
+	query := "WITH hits(session_id, ordinal) AS (VALUES " +
+		strings.Join(values, ", ") + ") " +
+		"SELECT m.session_id, s.project, s.agent, m.role, m.ordinal, " +
+		"COALESCE(m.timestamp, '') " +
+		"FROM hits h " +
+		"JOIN messages m ON m.session_id = h.session_id AND m.ordinal = h.ordinal " +
+		"JOIN sessions s ON s.id = m.session_id"
+
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("semantic search enrich: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[semanticHitKey]semanticHitInfo, len(hits))
+	for rows.Next() {
+		var key semanticHitKey
+		var info semanticHitInfo
+		if err := rows.Scan(&key.sessionID, &info.project, &info.agent,
+			&info.role, &key.ordinal, &info.timestamp); err != nil {
+			return nil, fmt.Errorf("scan semantic hit: %w", err)
+		}
+		out[key] = info
+	}
+	return out, rows.Err()
 }
