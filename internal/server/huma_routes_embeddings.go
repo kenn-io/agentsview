@@ -22,9 +22,11 @@ type EmbeddingsManager interface {
 }
 
 // WithEmbeddingsManager wires the embeddings build lifecycle routes
-// (/api/v1/embeddings/...) into the server. Nil (the default) leaves those
-// routes unregistered, matching how other optional route groups behave
-// when their backing dependency is unavailable.
+// (/api/v1/embeddings/...) into the server. Nil (the default) skips
+// registration entirely, so the paths fall through to the SPA catch-all
+// like any other unknown route. Note this differs from most route groups,
+// which register unconditionally and nil-check their dependencies inside
+// the handlers.
 func WithEmbeddingsManager(m EmbeddingsManager) Option {
 	return func(s *Server) { s.embeddingsManager = m }
 }

@@ -3,6 +3,7 @@ package vector
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -200,6 +201,89 @@ func TestManagerRetireRefusesActiveGenerationWithoutForce(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, gens, 1)
 	assert.Equal(t, string(sqlitevec.StateRetired), gens[0].State)
+}
+
+// countActiveGenerations returns how many generations are currently in the
+// active state, the invariant concurrent Activate calls must preserve (== 1
+// once any generation has been activated).
+func countActiveGenerations(t *testing.T, ix *Index) int {
+	t.Helper()
+	gens, err := ix.Generations(context.Background())
+	require.NoError(t, err)
+	active := 0
+	for _, g := range gens {
+		if g.State == string(sqlitevec.StateActive) {
+			active++
+		}
+	}
+	return active
+}
+
+// TestManagerConcurrentActivateNeverLeavesTwoActive guards the
+// retire-then-activate invariant: Activate must use the single-transaction
+// activateGeneration primitive and serialize against other Activate calls,
+// or two racing Activates on different generations can interleave their
+// retire and activate steps and leave both generations active.
+func TestManagerConcurrentActivateNeverLeavesTwoActive(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	src := twoDocSource()
+	genA := fakeGeneration("model-a")
+	genB := fakeGeneration("model-b")
+	m := NewManager(ix, src, fakeBuildEncoder(), genA, 10)
+
+	_, err := ix.Build(ctx, src, fakeBuildEncoder(), genA, BuildOptions{})
+	require.NoError(t, err)
+	_, err = ix.Build(ctx, src, fakeBuildEncoder(), genB, BuildOptions{})
+	require.NoError(t, err, "both generations fully embedded; genB active, genA retired")
+
+	idA := generationIDByFingerprint(t, ix, genA.Fingerprint())
+	idB := generationIDByFingerprint(t, ix, genB.Fingerprint())
+
+	for i := range 25 {
+		var wg sync.WaitGroup
+		var errA, errB error
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			errA = m.Activate(ctx, idA, false)
+		}()
+		go func() {
+			defer wg.Done()
+			errB = m.Activate(ctx, idB, false)
+		}()
+		wg.Wait()
+		require.NoError(t, errA, "iteration %d", i)
+		require.NoError(t, errB, "iteration %d", i)
+		require.Equal(t, 1, countActiveGenerations(t, ix),
+			"iteration %d: exactly one generation must be active after racing Activates", i)
+	}
+}
+
+// TestManagerStartBuildRecoversPanickedEncoder guards the daemon against a
+// panic in the caller-supplied encoder (a network client): StartBuild's
+// detached goroutine must recover, record the panic in LastError, and clear
+// the running state instead of crashing the process.
+func TestManagerStartBuildRecoversPanickedEncoder(t *testing.T) {
+	ix := openTestIndex(t)
+	src := twoDocSource()
+	gen := fakeGeneration("fake-model")
+	panickingEncoder := func(_ context.Context, _ []string) ([][]float32, error) {
+		panic("encoder exploded")
+	}
+	m := NewManager(ix, src, panickingEncoder, gen, 10)
+
+	require.NoError(t, m.StartBuild(BuildRequest{}))
+	waitFor(t, func() bool { return !m.Status().Running }, "build never finished after panic")
+
+	status := m.Status()
+	assert.Contains(t, status.LastError, "panicked")
+	assert.Contains(t, status.LastError, "encoder exploded")
+	assert.Nil(t, status.LastResult)
+
+	require.NoError(t, m.StartBuild(BuildRequest{}),
+		"manager must accept a new build after a panicked one")
+	waitFor(t, func() bool { return !m.Status().Running }, "second build never finished")
 }
 
 func TestManagerActivateAndRetireRefuseWhileBuildRunning(t *testing.T) {

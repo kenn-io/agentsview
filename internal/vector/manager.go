@@ -38,7 +38,10 @@ func (e *refusalError) Is(target error) bool { return target == ErrGenerationRef
 
 // Manager serializes embedding builds over one Index: only one Build call
 // may run at a time, whether triggered via StartBuild (async, for the HTTP
-// API) or TryBuild (sync, for a periodic scheduler).
+// API) or TryBuild (sync, for a periodic scheduler). Activate and Retire
+// are likewise serialized against each other and against build starts, so
+// their check-then-act refusal invariants (Missing coverage, the
+// active-generation check) hold under concurrent calls.
 type Manager struct {
 	ix        *Index
 	src       MessageSource
@@ -46,6 +49,14 @@ type Manager struct {
 	gen       kitvec.Generation
 	batchSize int
 
+	// opMu serializes lifecycle operations: build starts (begin) and the
+	// whole of Activate/Retire. It is never held across a running build —
+	// begin releases it once running is set — so StartBuild stays
+	// non-blocking while a build is in flight.
+	opMu sync.Mutex
+
+	// mu guards running and status; held only for short field updates so
+	// Status() stays responsive during a build.
 	mu      sync.Mutex
 	running bool
 	status  BuildStatus
@@ -70,12 +81,34 @@ type BuildStatus struct {
 }
 
 // NewManager creates a Manager that builds gen's embedding space over ix,
-// scanning src and encoding with enc in batches of batchSize.
+// scanning src and encoding with enc in batches of batchSize. enc is
+// wrapped so a panic inside it surfaces as an encode error rather than
+// crashing the process (see recoveringEncoder).
 func NewManager(
 	ix *Index, src MessageSource, enc kitvec.EncodeFunc,
 	gen kitvec.Generation, batchSize int,
 ) *Manager {
-	return &Manager{ix: ix, src: src, enc: enc, gen: gen, batchSize: batchSize}
+	return &Manager{
+		ix: ix, src: src, enc: recoveringEncoder(enc),
+		gen: gen, batchSize: batchSize,
+	}
+}
+
+// recoveringEncoder converts a panic in enc (a caller-supplied network
+// client) into an ordinary encode error. This must wrap the encoder itself
+// rather than rely on runBuild's recover: kit's EncodeBatched invokes
+// encoders on its own worker goroutines, where a recover on the manager's
+// build goroutine cannot reach.
+func recoveringEncoder(enc kitvec.EncodeFunc) kitvec.EncodeFunc {
+	return func(ctx context.Context, texts []string) (vectors [][]float32, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				vectors = nil
+				err = fmt.Errorf("encoder panicked: %v", r)
+			}
+		}()
+		return enc(ctx, texts)
+	}
 }
 
 // StartBuild launches a Build in a background goroutine, returning
@@ -124,10 +157,15 @@ func (m *Manager) Generations(ctx context.Context) ([]GenerationInfo, error) {
 }
 
 // Activate transitions the generation identified by id to active, retiring
-// whichever generation was previously active. Without force, it refuses
-// when id's generation has documents still needing embedding (Missing > 0)
-// or while a build is running.
+// whichever generation was previously active (in one transaction, via the
+// same activateGeneration primitive Build's auto-activation uses, so two
+// generations can never end up active simultaneously). Without force, it
+// refuses when id's generation has documents still needing embedding
+// (Missing > 0) or while a build is running. Serialized against Retire,
+// other Activate calls, and build starts via opMu.
 func (m *Manager) Activate(ctx context.Context, id int64, force bool) error {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
 	if m.isRunning() {
 		return ErrBuildRunning
 	}
@@ -140,25 +178,16 @@ func (m *Manager) Activate(ctx context.Context, id int64, force bool) error {
 		return refusedf("generation %d still has %d messages needing embedding; use --force",
 			id, target.Missing)
 	}
-
-	gens, err := m.ix.Generations(ctx)
-	if err != nil {
-		return err
-	}
-	for _, g := range gens {
-		if g.ID != id && g.State == string(sqlitevec.StateActive) {
-			if err := m.ix.SetStateByID(ctx, g.ID, sqlitevec.StateRetired); err != nil {
-				return err
-			}
-		}
-	}
-	return m.ix.SetStateByID(ctx, id, sqlitevec.StateActive)
+	return m.ix.activateGeneration(ctx, target.Fingerprint)
 }
 
 // Retire transitions the generation identified by id to retired. Without
 // force, it refuses when id is the active generation or while a build is
-// running.
+// running. Serialized against Activate, other Retire calls, and build
+// starts via opMu.
 func (m *Manager) Retire(ctx context.Context, id int64, force bool) error {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
 	if m.isRunning() {
 		return ErrBuildRunning
 	}
@@ -175,8 +204,11 @@ func (m *Manager) Retire(ctx context.Context, id int64, force bool) error {
 
 // begin transitions the manager into the running state, resetting the
 // progress fields of status for the new run. It returns ErrBuildRunning
-// without changing anything if a build is already in flight.
+// without changing anything if a build is already in flight. Taking opMu
+// first serializes build starts behind any in-flight Activate/Retire.
 func (m *Manager) begin() error {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.running {
@@ -192,8 +224,17 @@ func (m *Manager) begin() error {
 
 // runBuild performs the actual Index.Build call, wiring the manager's
 // reportProgress method in as the BuildOptions.Progress callback so Status
-// reflects incremental progress while the build is in flight.
-func (m *Manager) runBuild(ctx context.Context, req BuildRequest) (BuildResult, error) {
+// reflects incremental progress while the build is in flight. It converts
+// a panic (e.g. from the caller-supplied encoder, a network client) into an
+// error so StartBuild's detached goroutine can never crash the process and
+// TryBuild's caller sees a failure rather than a propagating panic; either
+// way finish records it in LastError and clears the running state.
+func (m *Manager) runBuild(ctx context.Context, req BuildRequest) (result BuildResult, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("build panicked: %v", r)
+		}
+	}()
 	return m.ix.Build(ctx, m.src, m.enc, m.gen, BuildOptions{
 		FullRebuild: req.FullRebuild,
 		Backstop:    req.Backstop,
