@@ -468,23 +468,27 @@ type RefreshStats struct{ Upserted, Deleted, Unchanged int }
 // and only upserts. The watermark (vector_meta key "refresh_watermark") is
 // advanced to the scan's max ended_at afterwards.
 func (ix *Index) Refresh(ctx context.Context, src MessageSource, full bool) (RefreshStats, error)
-func DocKey(sessionID, sourceUUID string, ordinal int) string
+func DocKey(sessionID, sourceUUID string, ordinal, occurrence int) string
 ```
 
 `DocKey` implements the spec's identity: `"u:" + sessionID + ":" + sourceUUID`
-when sourceUUID non-empty, else
+when sourceUUID non-empty (with `"#" + strconv.Itoa(occurrence)` appended for
+occurrence > 1 — the schema permits duplicate source_uuids within a session;
+Refresh assigns occurrences in scan order, which is deterministic), else
 `"o:" + sessionID + ":" + strconv.Itoa(ordinal)`. Upsert semantics per row:
 compute `content_hash` = `hex(sha256(content))`;
 `INSERT INTO vector_messages ... ON CONFLICT(doc_key) DO UPDATE SET session_id=excluded.session_id, ordinal=excluded.ordinal, content=excluded.content, content_hash=excluded.content_hash`
 — the hash change is what invalidates kit's revision stamp; an ordinal-only
 change updates the cursor without re-embedding. Guard the
-`(session_id, ordinal)` unique index: delete any existing row occupying the same
+`(session_id, ordinal)` unique index: evict any existing row occupying the same
 `(session_id, ordinal)` under a different `doc_key` before upserting (an ordinal
-shift can land a uuid-keyed row on a slot previously held by a legacy `o:` row).
-Deletion in full mode: collect seen doc_keys in an in-memory set; then for each
-mirror doc_key not seen, call `ix.store.DeleteVectors(ctx, key)` then
-`DELETE FROM vector_messages WHERE doc_key = ?` (spec: deleting only the row
-leaves orphaned vectors occupying KNN slots).
+shift can land a uuid-keyed row on a slot previously held by a legacy `o:` row)
+— eviction calls `ix.store.DeleteVectors(ctx, evictedKey)` before deleting the
+mirror row, same order as full-mode reconciliation, so evicted identities never
+leak vectors. Deletion in full mode: collect seen doc_keys in an in-memory set;
+then for each mirror doc_key not seen, call `ix.store.DeleteVectors(ctx, key)`
+then `DELETE FROM vector_messages WHERE doc_key = ?` (spec: deleting only the
+row leaves orphaned vectors occupying KNN slots).
 
 - [ ] **Step 1: Write failing db-scan tests** in
   `internal/db/messages_embeddable_test.go` using the existing `testDB(t)`
@@ -1007,6 +1011,14 @@ flags.StringVar(&role, "role", "", "Comma-separated roles to include, e.g. user,
 `--before/--after` changed without `--around` → CLI error. `--role` parses
 comma-separated into `Roles`. Human output unchanged (`printMessagesHuman`).
 
+CRITICAL flag-default gotcha: the existing command always sends
+`Direction: direction` where the flag defaults to `"asc"`, which would trip the
+around-vs-direction validation on every default `--around` call. When `--around`
+is set, the CLI must populate `Direction` (and `From`) ONLY when
+`cmd.Flags().Changed("direction")` / `Changed("from")` — the flag default is
+never sent on the around path. Add a test: `session messages <id> --around 5`
+with no other flags succeeds.
+
 Response window bounds: `MessageList` gains two fields set by
 `directBackend.Messages` from the returned slice (both nil when empty) so
 callers page on with `from = last_ordinal + 1` (spec: "responses report the
@@ -1114,15 +1126,22 @@ ______________________________________________________________________
         `{Ordinal int; Role, Content string}` with content truncated to 500 chars.
 
     - `getMessagesIn` gains `Around *int`, `Before *int`, `After *int` with
-      jsonschema docs matching the spec: `around` mutually exclusive with `from`
-      (tool error `"around is mutually exclusive with from"`), `before`/`after`
-      require `around` and replace `limit` on that path, existing `Roles` acts
-      as the window's role filter, `next_from` = last returned ordinal + 1 on
-      the around path. On the around path, pass `Roles` into
-      `service.MessageFilter.Roles` (server-side filtering) instead of the
-      post-fetch trim, and set `Filtered` to 0 (the window counts filtered
-      messages by construction; document this in the field doc). The linear path
-      keeps its existing post-fetch behavior unchanged.
+      jsonschema docs matching the spec: `around` mutually exclusive with BOTH
+      `from` and `direction` (tool error
+      `"around is mutually exclusive with from/direction"`), `before`/`after`
+      require `around` and replace `limit` on that path, `next_from` = last
+      returned ordinal + 1 on the around path.
+
+    - MCP filtering contract is preserved on the around path: an empty `Roles`
+      means the MCP DEFAULT (user and assistant only) — translate it to
+      `[]string{"user", "assistant"}` before passing
+      `service.MessageFilter.Roles` (an empty service-level Roles means "all
+      roles", which would leak tool messages). System and system-prefixed
+      messages remain always excluded: post-filter the window's messages through
+      the existing `isSystemMessage` check, suppressing any message (including
+      the always-included anchor) that violates the role/system contract, and
+      count suppressed messages in `Filtered` (do NOT hardcode Filtered to 0).
+      The linear path keeps its existing post-fetch behavior unchanged.
 
     - `search_content` tool errors:
       `errors.Is(err, service.ErrSemanticUnavailable)` → tool error with the
@@ -1132,8 +1151,9 @@ ______________________________________________________________________
 - [ ] **Step 1: Write failing MCP tests** in the package's existing test style
   (fake service): semantic mode passes Mode through and maps the unavailable
   error to a tool error containing "embeddings build"; context threading;
-  get_messages around window (validation matrix + next_from = last+1 + roles
-  server-side).
+  get_messages around window (validation matrix incl. around+direction
+  rejection; next_from = last+1; empty roles translated to user/assistant; a
+  tool-role or system anchor is suppressed and counted in Filtered).
 
 - [ ] **Step 2: Run** `CGO_ENABLED=1 go test -tags fts5 ./internal/mcp/ -v` —
   FAIL, then implement, then PASS.

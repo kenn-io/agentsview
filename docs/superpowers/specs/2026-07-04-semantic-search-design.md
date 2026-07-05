@@ -94,8 +94,14 @@ Contents:
   identity is a synthetic single-column key. One row per embeddable message:
     - `doc_key TEXT PRIMARY KEY` — `u:<session_id>:<source_uuid>` when
       `source_uuid` is non-empty, else `o:<session_id>:<ordinal>` (same
-      precedence as pin re-attachment in `internal/db/messages.go`). Maps to kit
-      `Schema.IDColumn`.
+      precedence as pin re-attachment in `internal/db/messages.go`). The schema
+      permits several messages in one session to share a `source_uuid`, so
+      uuid-backed keys carry an occurrence disambiguator: the first occurrence
+      (in ordinal order) keeps the bare form, later ones append `#<occurrence>`
+      (`u:<session_id>:<source_uuid>#2`, ...). Occurrence assignment follows
+      scan order (session_id, ordinal), so it is deterministic and stable across
+      resyncs; if an earlier duplicate disappears, later ones shift and re-embed —
+      accepted, rare. Maps to kit `Schema.IDColumn`.
     - `session_id`, `source_uuid`, `ordinal` — payload/index columns; `ordinal` is
       the message's current ordinal, refreshed on every scan so hits always map
       to live cursors
@@ -241,14 +247,18 @@ returns.
 exposed on `GET /api/v1/sessions/{id}/messages`.
 
 - `--around <ordinal>` is mutually exclusive with `--from`/`--direction`
-  (validation error). `--before`/`--after` require `--around`.
+  (validation error). The CLI sends `direction` only when the flag was
+  explicitly set, so the flag default (`asc`) never trips the validation.
+  `--before`/`--after` require `--around`.
 - `--role user,assistant` composes with all retrieval modes; the full
-  user/assistant history of a session is
-  `session messages <id> --role user,assistant`. Wire spelling: CLI flag
-  `--role` takes comma-separated values (matching `--in` on `session search`);
-  the HTTP query param is `roles`, also comma-separated
-  (`roles=user,assistant`, matching the `in` param convention); MCP
-  `get_messages` keeps its existing plural `roles` array parameter.
+  user/assistant history of a session is retrieved by paging
+  `session messages <id> --role user,assistant` with `from = last_ordinal + 1`
+  until a short page — retrieval stays paginated; there is no unpaginated
+  full-history mode. Wire spelling: CLI flag `--role` takes comma-separated
+  values (matching `--in` on `session search`); the HTTP query param is
+  `roles`, also comma-separated (`roles=user,assistant`, matching the `in`
+  param convention); MCP `get_messages` keeps its existing plural `roles`
+  array parameter.
 - With a role filter, before/after count **filtered** messages: two indexed
   queries on `(session_id, ordinal)` with `role IN (...)`, DESC/ASC LIMIT N.
   The anchor message is always included.
@@ -269,10 +279,15 @@ search mode. Costs one windowed query per hit, so it pairs with modest limits;
 - `get_messages` gains `around`/`before`/`after`, implemented server-side via
   the same service call (replacing post-fetch role trimming on this path)
   while keeping its `filtered` accounting and `next_from` semantics.
-  Interaction with existing fields: `around` is mutually exclusive with `from`
-  (tool error if both are set); `before`/`after` require `around` and replace
-  `limit` on that path; the existing `roles` parameter acts as the window's
-  role filter; `next_from` is the window's last ordinal + 1.
+  Interaction with existing fields: `around` is mutually exclusive with both
+  `from` and `direction` (tool error if either is combined with `around`);
+  `before`/`after` require `around` and replace `limit` on that path;
+  `next_from` is the window's last ordinal + 1.
+- MCP preserves its existing filtering contract on the around path: an empty
+  `roles` parameter means the MCP default (user and assistant only), never
+  "all roles", and system/system-prefixed messages are always excluded — the
+  anchor included by the window is suppressed from the output (still counted
+  in `filtered`) when it violates the role/system contract.
 
 ## Dependencies
 
