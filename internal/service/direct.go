@@ -665,9 +665,17 @@ func (b *directBackend) UsagePairwiseComparison(
 	return &out, nil
 }
 
+// maxContentSearchContext is the largest --context value SearchContent
+// accepts. Larger requests are rejected rather than silently clamped, so a
+// caller who asks for more context than the store will give is told, rather
+// than getting a page that quietly carries less than requested.
+const maxContentSearchContext = 10
+
 // SearchContent maps the transport-neutral request to a
 // db.ContentSearchFilter, calls the store, and redacts secret-shaped
-// spans from each snippet unless Reveal is set.
+// spans from each snippet unless Reveal is set. When Context > 0, each
+// match is additionally enriched with ContextBefore/ContextAfter (see
+// enrichContentContext).
 func (b *directBackend) SearchContent(
 	ctx context.Context, req ContentSearchRequest,
 ) (*ContentSearchResult, error) {
@@ -679,6 +687,15 @@ func (b *directBackend) SearchContent(
 			}
 		}
 		req.Sources = []string{"messages"}
+	}
+	// Context < 0 (not user-reachable via the clamped CLI/HTTP flag, but
+	// possible from a direct SessionService caller) is treated as "off"
+	// rather than rejected; only exceeding the max is a hard error.
+	if req.Context < 0 {
+		req.Context = 0
+	}
+	if req.Context > maxContentSearchContext {
+		return nil, &db.SearchInputError{Msg: "context: maximum is 10"}
 	}
 	page, err := b.db.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern:          req.Pattern,
@@ -707,10 +724,51 @@ func (b *directBackend) SearchContent(
 	if err != nil {
 		return nil, err
 	}
+	if req.Context > 0 {
+		if err := b.enrichContentContext(ctx, page.Matches, req.Context); err != nil {
+			return nil, err
+		}
+	}
 	return &ContentSearchResult{
 		Matches:    page.Matches,
 		NextCursor: page.NextCursor,
 	}, nil
+}
+
+// enrichContentContext populates ContextBefore/ContextAfter on each match
+// with a non-negative Ordinal, fetching n messages of context on each side
+// of the match's ordinal and splitting the returned (ascending, anchor
+// included) window on the anchor -- the anchor row is dropped from both
+// slices since it duplicates the match already in the page. Matches with a
+// negative ordinal are left unenriched: no current search path produces
+// one, but a defensive skip here means a future one (e.g. a name-only
+// match with no message row) degrades gracefully instead of panicking on
+// the *w.Around dereference or fetching the wrong window.
+func (b *directBackend) enrichContentContext(
+	ctx context.Context, matches []db.ContentMatch, n int,
+) error {
+	for i := range matches {
+		m := &matches[i]
+		if m.Ordinal < 0 {
+			continue
+		}
+		anchor := m.Ordinal
+		msgs, err := b.db.GetMessagesWindow(ctx, m.SessionID, db.MessageWindow{
+			Around: &anchor, Before: n, After: n,
+		})
+		if err != nil {
+			return fmt.Errorf("content search context: %w", err)
+		}
+		for _, msg := range msgs {
+			switch {
+			case msg.Ordinal < anchor:
+				m.ContextBefore = append(m.ContextBefore, msg)
+			case msg.Ordinal > anchor:
+				m.ContextAfter = append(m.ContextAfter, msg)
+			}
+		}
+	}
+	return nil
 }
 
 const secretSourceChanged = "source changed; cannot reveal"

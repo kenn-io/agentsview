@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -22,7 +23,7 @@ func newSessionSearchCommand() *cobra.Command {
 		activeSince                              string
 		includeChildren, includeAutomated        bool
 		includeOneShot                           bool
-		limit, cursor                            int
+		limit, cursor, contextN                  int
 	)
 	cmd := &cobra.Command{
 		Use:          "search <pattern>",
@@ -66,6 +67,7 @@ func newSessionSearchCommand() *cobra.Command {
 				IncludeOneShot:   includeOneShot,
 				Limit:            limit,
 				Cursor:           cursor,
+				Context:          contextN,
 			})
 			if err != nil {
 				return err
@@ -106,6 +108,8 @@ func newSessionSearchCommand() *cobra.Command {
 	flags.BoolVar(&includeOneShot, "include-one-shot", false, "Include one-shot sessions")
 	flags.IntVar(&limit, "limit", 0, "Max results (default 50, max 500)")
 	flags.IntVar(&cursor, "cursor", 0, "Pagination cursor from a previous response")
+	flags.IntVar(&contextN, "context", 0,
+		"Include N messages of context before and after each match (max 10)")
 	return cmd
 }
 
@@ -158,7 +162,9 @@ func resolveContentSearchMode(
 
 // printContentMatchesHuman writes one line per match, terminal-sanitized.
 // Scored matches (semantic/hybrid modes) show "score=0.83" after the
-// ordinal; unscored matches (substring/regex/fts) omit it.
+// ordinal; unscored matches (substring/regex/fts) omit it. When --context
+// requested inline context, ContextBefore/ContextAfter print as indented
+// "role: content" lines around the match line.
 func printContentMatchesHuman(w io.Writer, res *service.ContentSearchResult) error {
 	if len(res.Matches) == 0 {
 		fmt.Fprintln(w, "(no matches)")
@@ -169,6 +175,9 @@ func printContentMatchesHuman(w io.Writer, res *service.ContentSearchResult) err
 		if m.ToolName != "" {
 			loc = m.Location + ":" + m.ToolName
 		}
+		for _, cm := range m.ContextBefore {
+			printContentContextLine(w, cm)
+		}
 		fmt.Fprintf(w, "%s  #%d", sanitizeTerminal(m.SessionID), m.Ordinal)
 		if m.Score != nil {
 			fmt.Fprintf(w, " score=%.2f", *m.Score)
@@ -177,9 +186,30 @@ func printContentMatchesHuman(w io.Writer, res *service.ContentSearchResult) err
 			sanitizeTerminal(m.Project), sanitizeTerminal(loc))
 		fmt.Fprintf(w, "    %s\n",
 			sanitizeTerminal(strings.ReplaceAll(m.Snippet, "\n", " ")))
+		for _, cm := range m.ContextAfter {
+			printContentContextLine(w, cm)
+		}
 	}
 	if res.NextCursor != 0 {
 		fmt.Fprintf(w, "\nMore results: --cursor %d\n", res.NextCursor)
 	}
 	return nil
+}
+
+// contentContextLineMaxChars caps a printed context line's length so a long
+// stored message cannot blow out the human-format search output.
+const contentContextLineMaxChars = 200
+
+// printContentContextLine writes one --context line: two-space indent,
+// "role: " prefix, terminal-sanitized and truncated to
+// contentContextLineMaxChars runes (with an ellipsis marker when cut).
+func printContentContextLine(w io.Writer, m db.Message) {
+	content := strings.ReplaceAll(m.Content, "\n", " ")
+	if truncated, cut := truncateRunes(content, contentContextLineMaxChars); cut {
+		content = truncated + "…"
+	} else {
+		content = truncated
+	}
+	fmt.Fprintf(w, "  %s: %s\n",
+		sanitizeTerminal(m.Role), sanitizeTerminal(content))
 }

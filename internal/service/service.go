@@ -133,6 +133,9 @@ type ContentSearchRequest struct {
 	Sources       []string `json:"sources,omitempty"`
 	ExcludeSystem bool     `json:"exclude_system,omitempty"`
 	Reveal        bool     `json:"reveal,omitempty"`
+	// Context requests N messages of inline context before and after each
+	// match (0 = off, max 10). See directBackend.SearchContent.
+	Context int `json:"context,omitempty"`
 
 	Project, ExcludeProject, Machine, Agent           string
 	Date, DateFrom, DateTo, ActiveSince               string

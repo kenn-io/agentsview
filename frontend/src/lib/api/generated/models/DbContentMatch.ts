@@ -4,6 +4,8 @@
 /* eslint-disable */
 export type DbContentMatch = {
   agent: string;
+  context_after?: any[] | null;
+  context_before?: any[] | null;
   location: string;
   ordinal: number;
   project: string;

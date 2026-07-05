@@ -91,6 +91,7 @@ export class SearchService {
     includeOneShot,
     limit,
     cursor,
+    context,
   }: {
     /**
      * Pattern to search for
@@ -168,6 +169,10 @@ export class SearchService {
      * Pagination cursor
      */
     cursor?: number,
+    /**
+     * Include N messages of context before and after each match (max 10)
+     */
+    context?: number,
   }): CancelablePromise<ServiceContentSearchResult> {
     return __request(OpenAPI, {
       method: 'GET',
@@ -192,6 +197,7 @@ export class SearchService {
         'include_one_shot': includeOneShot,
         'limit': limit,
         'cursor': cursor,
+        'context': context,
       },
       errors: {
         400: `Bad Request`,

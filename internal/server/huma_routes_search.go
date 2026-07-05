@@ -49,6 +49,7 @@ type contentSearchInput struct {
 	IncludeOneShot   bool              `query:"include_one_shot" doc:"Include one-shot sessions"`
 	Limit            int               `query:"limit" minimum:"0" doc:"Maximum number of results"`
 	Cursor           int               `query:"cursor" minimum:"0" doc:"Pagination cursor"`
+	Context          int               `query:"context" doc:"Include N messages of context before and after each match (max 10)"`
 }
 
 func (s *Server) humaSearch(
@@ -120,6 +121,7 @@ func (s *Server) humaSearchContent(
 		IncludeOneShot:   in.IncludeOneShot,
 		Limit:            in.Limit,
 		Cursor:           in.Cursor,
+		Context:          in.Context,
 	})
 	if err != nil {
 		if handled := handleHumaContextError(err); handled != nil {

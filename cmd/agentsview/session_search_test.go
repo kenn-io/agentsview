@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -114,6 +115,75 @@ func TestPrintContentMatchesHumanShowsScoreForScoredMatches(t *testing.T) {
 	require.NotEmpty(t, lines)
 	assert.NotContains(t, string(lines[2]), "score=",
 		"unscored match should not print a score")
+}
+
+func TestPrintContentMatchesHumanShowsContext(t *testing.T) {
+	res := &service.ContentSearchResult{
+		Matches: []db.ContentMatch{
+			{
+				SessionID: "sess1", Project: "proj", Location: "message",
+				Ordinal: 5, Snippet: "the match line",
+				ContextBefore: []db.Message{
+					{Role: "user", Content: "earlier question"},
+				},
+				ContextAfter: []db.Message{
+					{Role: "assistant", Content: "later reply"},
+				},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	require.NoError(t, printContentMatchesHuman(&buf, res))
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	require.Len(t, lines, 4)
+	assert.Equal(t, "  user: earlier question", lines[0])
+	assert.Contains(t, lines[1], "sess1")
+	assert.Contains(t, lines[2], "the match line")
+	assert.Equal(t, "  assistant: later reply", lines[3])
+}
+
+func TestPrintContentMatchesHumanTruncatesContextLine(t *testing.T) {
+	longContent := strings.Repeat("a", 250)
+	res := &service.ContentSearchResult{
+		Matches: []db.ContentMatch{
+			{
+				SessionID: "sess1", Ordinal: 1, Snippet: "match",
+				ContextBefore: []db.Message{{Role: "user", Content: longContent}},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	require.NoError(t, printContentMatchesHuman(&buf, res))
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	require.NotEmpty(t, lines)
+	require.True(t, strings.HasPrefix(lines[0], "  user: "))
+	body := strings.TrimPrefix(lines[0], "  user: ")
+	assert.LessOrEqual(t, len([]rune(body)), 201)
+	assert.True(t, strings.HasSuffix(body, "…"))
+}
+
+func TestContentMatchJSONRoundTripsContext(t *testing.T) {
+	res := service.ContentSearchResult{
+		Matches: []db.ContentMatch{
+			{
+				SessionID: "sess1", Ordinal: 5,
+				ContextBefore: []db.Message{{Role: "user", Ordinal: 3, Content: "before"}},
+				ContextAfter:  []db.Message{{Role: "assistant", Ordinal: 7, Content: "after"}},
+			},
+			{SessionID: "sess2", Ordinal: 1},
+		},
+	}
+	data, err := json.Marshal(res)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"context_before"`)
+	assert.Contains(t, string(data), `"context_after"`)
+
+	var decoded service.ContentSearchResult
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	require.Len(t, decoded.Matches, 2)
+	require.Len(t, decoded.Matches[0].ContextBefore, 1)
+	assert.Equal(t, "before", decoded.Matches[0].ContextBefore[0].Content)
+	assert.Empty(t, decoded.Matches[1].ContextBefore)
 }
 
 func TestContentMatchJSONRoundTripsScore(t *testing.T) {

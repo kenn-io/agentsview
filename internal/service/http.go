@@ -427,6 +427,9 @@ func (b *httpBackend) SearchContent(
 	if req.Cursor > 0 {
 		q.Set("cursor", strconv.Itoa(req.Cursor))
 	}
+	if req.Context > 0 {
+		q.Set("context", strconv.Itoa(req.Context))
+	}
 	var out ContentSearchResult
 	if err := b.getJSON(ctx, "/api/v1/search/content?"+q.Encode(), &out); err != nil {
 		if errors.Is(err, errHTTPNotImplemented) {

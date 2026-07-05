@@ -64,6 +64,14 @@ type ContentMatch struct {
 	// Score is the searcher's relevance score for "semantic"/"hybrid" modes,
 	// nil for the other modes which have no comparable ranking signal.
 	Score *float64 `json:"score,omitempty"`
+	// ContextBefore and ContextAfter hold the N messages immediately before
+	// and after this match's ordinal when the caller requested inline
+	// context (ContentSearchRequest.Context > 0). Populated by
+	// directBackend.SearchContent, not by the store itself; nil when
+	// context was not requested. The anchor message (this match's own
+	// ordinal) is excluded from both slices.
+	ContextBefore []Message `json:"context_before,omitempty"`
+	ContextAfter  []Message `json:"context_after,omitempty"`
 }
 
 // ContentSearchPage is a page of matches with an optional next cursor.
