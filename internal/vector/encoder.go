@@ -70,10 +70,20 @@ func (e *HTTPStatusError) Error() string {
 
 // Permanent reports whether the embeddings endpoint's response indicates a
 // rejection of this specific input that will never succeed on retry: any
-// 4xx status except 429, which is rate-limiting rather than a content
-// rejection and is itself retryable.
+// 4xx status except 429 (rate-limiting, retryable) and except the auth
+// statuses 401/403/407, which describe the caller's credentials rather
+// than the input — skip-stamping documents on an expired token would
+// silently mark an entire corpus embedded-with-no-vectors, so auth
+// failures must abort the build instead.
 func (e *HTTPStatusError) Permanent() bool {
-	return e.Status >= 400 && e.Status < 500 && e.Status != http.StatusTooManyRequests
+	switch e.Status {
+	case http.StatusTooManyRequests,
+		http.StatusUnauthorized,
+		http.StatusForbidden,
+		http.StatusProxyAuthRequired:
+		return false
+	}
+	return e.Status >= 400 && e.Status < 500
 }
 
 // embeddingsRequestBody is the OpenAI-compatible embeddings request.

@@ -311,6 +311,32 @@ func TestEncoder429ReturnsNonPermanentHTTPStatusError(t *testing.T) {
 	assert.False(t, statusErr.Permanent(), "429 is transient rate-limiting, not a content rejection")
 }
 
+// TestHTTPStatusErrorPermanentClassification pins the skip-vs-abort
+// classification: auth statuses describe the caller's credentials, not the
+// input, so treating them as permanent would skip-stamp an entire corpus
+// on an expired token instead of aborting the build.
+func TestHTTPStatusErrorPermanentClassification(t *testing.T) {
+	cases := []struct {
+		status    int
+		permanent bool
+	}{
+		{http.StatusBadRequest, true},
+		{http.StatusNotFound, true},
+		{http.StatusUnprocessableEntity, true},
+		{http.StatusUnauthorized, false},
+		{http.StatusForbidden, false},
+		{http.StatusProxyAuthRequired, false},
+		{http.StatusTooManyRequests, false},
+		{http.StatusInternalServerError, false},
+		{http.StatusBadGateway, false},
+	}
+	for _, tc := range cases {
+		err := &HTTPStatusError{Status: tc.status}
+		assert.Equalf(t, tc.permanent, err.Permanent(),
+			"status %d: Permanent() classification", tc.status)
+	}
+}
+
 // TestEncoderDecodeErrorIsRetried covers fix 2: a decoding failure almost
 // always means the connection died mid-stream, not that the endpoint sent
 // a deliberately malformed response, so it must be retried rather than
