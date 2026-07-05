@@ -122,6 +122,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newParseDiffCommand())
 	root.AddCommand(newClassifierCommand())
 	root.AddCommand(newSecretsCommand())
+	root.AddCommand(newSkillsCommand())
 	root.AddCommand(newDoctorCommand())
 	root.AddCommand(newVersionCommand())
 	root.AddCommand(newOpenAPICommand())
