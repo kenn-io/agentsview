@@ -9,6 +9,7 @@
     EllipsisVerticalIcon,
     FileTextIcon,
     FolderIcon,
+    LightbulbIcon,
     LinkIcon,
     SearchIcon,
     SquareTerminalIcon,
@@ -34,6 +35,7 @@
   import SignalPanel from "../content/SignalPanel.svelte";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
+  import { insights } from "../../stores/insights.svelte.js";
   import {
     supportsResume,
     buildResumeCommand,
@@ -241,6 +243,12 @@
     copiedLinkTimer = setTimeout(() => {
       if (copiedLinkId === id) copiedLinkId = "";
     }, 1500);
+  }
+
+  function handleAgentAnalysis() {
+    if (!session) return;
+    insights.generateForSession(session);
+    router.navigate("insights");
   }
 
   function toggleMenu() {
@@ -761,6 +769,14 @@
           <ChartColumnIcon size="13" strokeWidth="2" aria-hidden="true" />
         </button>
         <button
+          class="insight-btn"
+          title={m.insights_page_agent_analysis()}
+          aria-label={m.insights_page_agent_analysis()}
+          onclick={handleAgentAnalysis}
+        >
+          <LightbulbIcon size="13" strokeWidth="2" aria-hidden="true" />
+        </button>
+        <button
           class="find-btn"
           class:find-btn--active={inSessionSearch.isOpen}
           title={m.session_breadcrumb_find_in_session_shortcut()}
@@ -1177,6 +1193,26 @@
   }
 
   .find-btn:hover {
+    background: var(--bg-surface-hover);
+    color: var(--accent-blue);
+  }
+
+  .insight-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border: none;
+    border-radius: var(--radius-sm, 4px);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    flex-shrink: 0;
+  }
+
+  .insight-btn:hover {
     background: var(--bg-surface-hover);
     color: var(--accent-blue);
   }

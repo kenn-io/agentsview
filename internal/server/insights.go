@@ -28,6 +28,7 @@ type generateInsightRequest struct {
 	DateTo         string                        `json:"date_to"`
 	Project        string                        `json:"project,omitempty"`
 	Prompt         string                        `json:"prompt,omitempty"`
+	SessionID      string                        `json:"session_id,omitempty"`
 	Agent          string                        `json:"agent,omitempty"`
 	Kind           string                        `json:"kind,omitempty"`
 	LLMOptIn       bool                          `json:"llm_opt_in,omitempty"`

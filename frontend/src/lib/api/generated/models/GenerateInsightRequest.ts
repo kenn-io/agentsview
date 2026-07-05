@@ -14,7 +14,7 @@ export type GenerateInsightRequest = {
   llm_opt_in?: boolean;
   project?: string;
   prompt?: string;
+  session_id?: string;
   timezone?: string;
   type: string;
 };
-

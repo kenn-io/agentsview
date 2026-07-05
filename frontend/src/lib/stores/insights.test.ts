@@ -6,7 +6,7 @@ import {
   beforeEach,
 } from "vite-plus/test";
 import { insights } from "./insights.svelte.js";
-import type { Insight } from "../api/types.js";
+import type { Insight, Session } from "../api/types.js";
 
 const api = vi.hoisted(() => {
   class MockApiError extends Error {
@@ -59,6 +59,25 @@ function makeInsight(
     prompt: null,
     content: "# Summary\nThings happened.",
     created_at: "2025-01-15T12:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function makeSession(overrides: Partial<Session> = {}): Session {
+  return {
+    id: "run:session-1",
+    project: "proj-a",
+    machine: "local",
+    agent: "claude",
+    first_message: "hello",
+    started_at: "2026-07-05T14:30:00Z",
+    ended_at: "2026-07-05T14:45:00Z",
+    message_count: 2,
+    user_message_count: 1,
+    total_output_tokens: 0,
+    peak_context_tokens: 0,
+    is_automated: false,
+    created_at: "2026-07-05T14:30:00Z",
     ...overrides,
   };
 }
@@ -338,6 +357,28 @@ describe("generate (multi-task)", () => {
       expect.any(Function),
       expect.any(Function),
     );
+  });
+
+  it("generates agent analysis for a single session", () => {
+    vi.mocked(api.generateInsight).mockReturnValueOnce({
+      abort: vi.fn(),
+      done: Promise.resolve(makeInsight({ id: 32 })),
+    });
+
+    insights.generateForSession(makeSession());
+
+    expect(api.generateInsight).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "agent_analysis",
+        date_from: "2026-07-05",
+        date_to: "2026-07-05",
+        project: "proj-a",
+        session_id: "run:session-1",
+      }),
+      expect.any(Function),
+      expect.any(Function),
+    );
+    expect(insights.selectedTaskId).toBe(insights.tasks[0]?.clientId);
   });
 
   it("sends dashboard session filters for canned recommendations", async () => {

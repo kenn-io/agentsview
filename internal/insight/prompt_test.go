@@ -100,6 +100,45 @@ func TestBuildPrompt(t *testing.T) {
 			wantContains: []string{"analyzing AI agent"},
 		},
 		{
+			name: "single session analysis",
+			req: GenerateRequest{
+				Type:      "agent_analysis",
+				DateFrom:  "2025-01-15",
+				DateTo:    "2025-01-15",
+				SessionID: "s1",
+			},
+			seed: func(t *testing.T, d *db.DB) {
+				dbtest.SeedSession(t, d, "s1", "my-app", func(s *db.Session) {
+					s.Agent = "claude"
+					s.MessageCount = 2
+					s.StartedAt = new("2025-01-15T10:00:00Z")
+					s.EndedAt = new("2025-01-15T10:10:00Z")
+				})
+				dbtest.SeedMessages(t, d,
+					db.Message{
+						SessionID: "s1",
+						Ordinal:   1,
+						Role:      "user",
+						Content:   "Review the flaky test setup",
+						Timestamp: "2025-01-15T10:00:01Z",
+					},
+					db.Message{
+						SessionID: "s1",
+						Ordinal:   2,
+						Role:      "assistant",
+						Content:   "I found two retry loops in the test harness",
+						Timestamp: "2025-01-15T10:00:10Z",
+					},
+				)
+			},
+			wantContains: []string{
+				"## Session: s1",
+				"Review the flaky test setup",
+				"retry loops",
+			},
+			wantNot: []string{"## Sessions"},
+		},
+		{
 			name: "truncation",
 			req: GenerateRequest{
 				Type:     "daily_activity",

@@ -18,6 +18,17 @@ import {
 } from "../../api/generated/index";
 import { messages } from "../../stores/messages.svelte.js";
 import { setLocale } from "../../i18n/index.js";
+import { router } from "../../stores/router.svelte.js";
+
+const { generateForSession } = vi.hoisted(() => ({
+  generateForSession: vi.fn(),
+}));
+
+vi.mock("../../stores/insights.svelte.js", () => ({
+  insights: {
+    generateForSession,
+  },
+}));
 
 vi.mock("../../api/client.js", () => ({
   listOpeners: vi.fn().mockResolvedValue({ openers: [] }),
@@ -155,6 +166,7 @@ async function flushPromises() {
 }
 
 beforeEach(() => {
+  generateForSession.mockReset();
   openersService.getApiV1Openers
     .mockReset()
     .mockResolvedValue({ openers: [] });
@@ -415,6 +427,30 @@ describe("SessionBreadcrumb", () => {
       "2.4k ctx / 180 out",
     );
 
+    unmount(component);
+  });
+
+  it("starts single-session agent analysis from the top bar", async () => {
+    const navigateSpy = vi.spyOn(router, "navigate");
+    const session = makeSession("claude");
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session,
+        onBack: () => {},
+      },
+    });
+
+    await tick();
+    const button = document.querySelector<HTMLButtonElement>(".insight-btn");
+    expect(button).toBeTruthy();
+
+    button!.click();
+
+    expect(generateForSession).toHaveBeenCalledWith(session);
+    expect(navigateSpy).toHaveBeenCalledWith("insights");
+
+    navigateSpy.mockRestore();
     unmount(component);
   });
 

@@ -6,6 +6,7 @@ import type {
   CannedInsightKind,
   AutomatedScope,
   InsightGenerationFilters,
+  Session,
 } from "../api/types.js";
 import {
   ApiError as GeneratedApiError,
@@ -29,6 +30,7 @@ export interface InsightTask {
   kind?: CannedInsightKind;
   promptText: string;
   automatedScope: AutomatedScope;
+  sessionId?: string;
   sessionFilters?: InsightGenerationFilters;
   status: "generating" | "done" | "error";
   phase: string;
@@ -48,6 +50,7 @@ interface GenerationSnapshot {
   kind?: CannedInsightKind;
   promptText: string;
   automatedScope: AutomatedScope;
+  sessionId?: string;
   sessionFilters?: InsightGenerationFilters;
 }
 
@@ -174,10 +177,34 @@ class InsightsStore {
         : undefined,
       promptText: this.promptText,
       automatedScope: this.automatedScope,
+      sessionId: undefined,
       sessionFilters: this.sessionFilters
         ? { ...this.sessionFilters }
         : undefined,
     });
+  }
+
+  generateForSession(session: Session) {
+    const date = sessionInsightDate(session);
+    this.type = "agent_analysis";
+    this.dateFrom = date;
+    this.dateTo = date;
+    this.project = session.project || "";
+    this.automatedScope = "human";
+    this.#startGeneration(
+      {
+        type: "agent_analysis",
+        dateFrom: date,
+        dateTo: date,
+        project: session.project || "",
+        agent: this.agent,
+        promptText: this.promptText,
+        automatedScope: "human",
+        sessionId: session.id,
+      },
+      undefined,
+      true,
+    );
   }
 
   retryTask(clientId: string) {
@@ -193,6 +220,7 @@ class InsightsStore {
         kind: task.kind,
         promptText: task.promptText,
         automatedScope: task.automatedScope,
+        sessionId: task.sessionId,
         sessionFilters: task.sessionFilters
           ? { ...task.sessionFilters }
           : undefined,
@@ -217,6 +245,7 @@ class InsightsStore {
       kind: snap.kind,
       promptText: snap.promptText,
       automatedScope: snap.automatedScope,
+      sessionId: snap.sessionId,
       sessionFilters: snap.sessionFilters
         ? { ...snap.sessionFilters }
         : undefined,
@@ -245,6 +274,7 @@ class InsightsStore {
         date_to: snap.dateTo,
         project: snap.project || undefined,
         prompt: snap.promptText || undefined,
+        session_id: snap.sessionId,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         agent: snap.agent,
         kind: snap.kind,
@@ -359,3 +389,11 @@ class InsightsStore {
 }
 
 export const insights = new InsightsStore();
+
+function sessionInsightDate(session: Session): string {
+  const ts =
+    session.started_at ||
+    session.ended_at ||
+    session.created_at;
+  return ts.slice(0, 10);
+}

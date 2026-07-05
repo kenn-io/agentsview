@@ -62,6 +62,7 @@ export interface GenerateInsightRequest {
   date_from: string;
   date_to: string;
   project?: string;
+  session_id?: string;
   prompt?: string;
   agent?: AgentName;
   // IANA timezone the date range is expressed in, so the server's activity
