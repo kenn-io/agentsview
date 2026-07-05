@@ -1,6 +1,7 @@
 package config
 
 import (
+	"maps"
 	"path/filepath"
 	"testing"
 
@@ -15,10 +16,13 @@ func validVectorConfig() VectorConfig {
 	return VectorConfig{
 		Enabled: true,
 		Embeddings: VectorEmbeddingsConfig{
-			Endpoint:  "http://localhost:11434/v1",
-			Model:     "nomic-embed-text",
-			Dimension: 768,
-			Timeout:   "30s",
+			Endpoint:      "http://localhost:11434/v1",
+			Model:         "nomic-embed-text",
+			Dimension:     768,
+			Timeout:       "30s",
+			BatchSize:     32,
+			MaxRetries:    3,
+			MaxInputChars: 8192,
 		},
 		Embed: VectorEmbedConfig{
 			BackstopInterval: "24h",
@@ -57,14 +61,58 @@ func TestVectorConfigValidate(t *testing.T) {
 			wantErr: "dimension",
 		},
 		{
+			name:    "enabled zero batch_size",
+			mutate:  func(c *VectorConfig) { c.Embeddings.BatchSize = 0 },
+			wantErr: "batch_size",
+		},
+		{
+			name:    "enabled negative batch_size",
+			mutate:  func(c *VectorConfig) { c.Embeddings.BatchSize = -1 },
+			wantErr: "batch_size",
+		},
+		{
+			name:    "enabled zero max_input_chars",
+			mutate:  func(c *VectorConfig) { c.Embeddings.MaxInputChars = 0 },
+			wantErr: "max_input_chars",
+		},
+		{
+			name:    "enabled negative max_input_chars",
+			mutate:  func(c *VectorConfig) { c.Embeddings.MaxInputChars = -1 },
+			wantErr: "max_input_chars",
+		},
+		{
+			name:    "enabled negative max_retries",
+			mutate:  func(c *VectorConfig) { c.Embeddings.MaxRetries = -1 },
+			wantErr: "max_retries",
+		},
+		{
+			name:   "enabled zero max_retries disables retries and is valid",
+			mutate: func(c *VectorConfig) { c.Embeddings.MaxRetries = 0 },
+		},
+		{
 			name:    "enabled bad timeout",
 			mutate:  func(c *VectorConfig) { c.Embeddings.Timeout = "not-a-duration" },
+			wantErr: "timeout",
+		},
+		{
+			name:    "enabled zero timeout",
+			mutate:  func(c *VectorConfig) { c.Embeddings.Timeout = "0s" },
+			wantErr: "timeout",
+		},
+		{
+			name:    "enabled negative timeout",
+			mutate:  func(c *VectorConfig) { c.Embeddings.Timeout = "-1s" },
 			wantErr: "timeout",
 		},
 		{
 			name:    "enabled bad backstop interval",
 			mutate:  func(c *VectorConfig) { c.Embed.BackstopInterval = "not-a-duration" },
 			wantErr: "backstop_interval",
+		},
+		{
+			name:    "enabled explicit zero backstop interval is invalid",
+			mutate:  func(c *VectorConfig) { c.Embed.BackstopInterval = "0s" },
+			wantErr: "use a negative value to disable",
 		},
 		{
 			name:   "enabled negative backstop interval disables and is valid",
@@ -166,5 +214,67 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 			"vector": map[string]any{},
 		})
 		assert.False(t, cfg.Vector.Enabled)
+	})
+
+	t.Run("explicit zero/negative operational overrides fail to load", func(t *testing.T) {
+		baseEmbeddings := map[string]any{
+			"endpoint":  "http://localhost:11434/v1",
+			"model":     "nomic-embed-text",
+			"dimension": 768,
+		}
+		tests := []struct {
+			name       string
+			embeddings map[string]any
+			embed      map[string]any
+			wantErr    string
+		}{
+			{
+				name:       "explicit zero batch_size",
+				embeddings: map[string]any{"batch_size": 0},
+				wantErr:    "batch_size",
+			},
+			{
+				name:       "explicit negative batch_size",
+				embeddings: map[string]any{"batch_size": -1},
+				wantErr:    "batch_size",
+			},
+			{
+				name:       "explicit zero max_input_chars",
+				embeddings: map[string]any{"max_input_chars": 0},
+				wantErr:    "max_input_chars",
+			},
+			{
+				name:       "explicit negative max_retries",
+				embeddings: map[string]any{"max_retries": -1},
+				wantErr:    "max_retries",
+			},
+			{
+				name:       "explicit zero timeout",
+				embeddings: map[string]any{"timeout": "0s"},
+				wantErr:    "timeout",
+			},
+			{
+				name:    "explicit zero backstop_interval",
+				embed:   map[string]any{"backstop_interval": "0s"},
+				wantErr: "use a negative value to disable",
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				embeddings := map[string]any{}
+				maps.Copy(embeddings, baseEmbeddings)
+				maps.Copy(embeddings, tt.embeddings)
+				vector := map[string]any{
+					"enabled":    true,
+					"embeddings": embeddings,
+				}
+				if tt.embed != nil {
+					vector["embed"] = tt.embed
+				}
+				err := loadMinimalErrWithConfig(t, map[string]any{"vector": vector})
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+			})
+		}
 	})
 }

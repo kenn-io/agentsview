@@ -124,8 +124,8 @@ type VectorEmbeddingsConfig struct {
 	// Timeout is a parseable duration string applied to each HTTP
 	// call. Default "30s".
 	Timeout string `toml:"timeout" json:"timeout"`
-	// MaxRetries is the number of retries for 429/5xx/network errors;
-	// 4xx failures are not retried. Default 3.
+	// MaxRetries is the maximum total attempts on 429/5xx/network errors
+	// (4xx fails fast); values <= 0 mean one attempt. Default 3.
 	MaxRetries int `toml:"max_retries" json:"max_retries"`
 	// MaxInputChars caps the rune length of each chunk sent for
 	// embedding. Default 8192.
@@ -157,11 +157,37 @@ func (c VectorConfig) Validate() error {
 	if c.Embeddings.Dimension <= 0 {
 		return fmt.Errorf("[vector.embeddings] dimension must be greater than 0 when [vector] is enabled")
 	}
-	if _, err := time.ParseDuration(c.Embeddings.Timeout); err != nil {
+	if c.Embeddings.BatchSize <= 0 {
+		return fmt.Errorf(
+			"[vector.embeddings] batch_size must be greater than 0, got %d",
+			c.Embeddings.BatchSize)
+	}
+	if c.Embeddings.MaxInputChars <= 0 {
+		return fmt.Errorf(
+			"[vector.embeddings] max_input_chars must be greater than 0, got %d",
+			c.Embeddings.MaxInputChars)
+	}
+	if c.Embeddings.MaxRetries < 0 {
+		return fmt.Errorf(
+			"[vector.embeddings] max_retries must be >= 0, got %d",
+			c.Embeddings.MaxRetries)
+	}
+	timeout, err := time.ParseDuration(c.Embeddings.Timeout)
+	if err != nil {
 		return fmt.Errorf("[vector.embeddings] invalid timeout %q: %w", c.Embeddings.Timeout, err)
 	}
-	if _, err := time.ParseDuration(c.Embed.BackstopInterval); err != nil {
+	if timeout <= 0 {
+		return fmt.Errorf(
+			"[vector.embeddings] timeout must be greater than 0, got %q", c.Embeddings.Timeout)
+	}
+	backstop, err := time.ParseDuration(c.Embed.BackstopInterval)
+	if err != nil {
 		return fmt.Errorf("[vector.embed] invalid backstop_interval %q: %w", c.Embed.BackstopInterval, err)
+	}
+	if backstop == 0 {
+		return fmt.Errorf(
+			"[vector.embed] backstop_interval must not be zero; " +
+				"use a negative value to disable or omit for the 24h default")
 	}
 	return nil
 }

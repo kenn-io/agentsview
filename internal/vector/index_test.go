@@ -117,3 +117,47 @@ func TestGenerationCoverageCounts(t *testing.T) {
 	require.EqualValues(t, 1, infos[0].Embedded)
 	require.EqualValues(t, 1, infos[0].Missing)
 }
+
+// TestGenerationCoverageStaleRevisionCountsAsMissing asserts that a stamp
+// whose revision no longer matches the mirror row's current content_hash
+// (the content changed since it was embedded) counts as Missing, not
+// Embedded, since kit's store treats such a document as pending re-embed.
+func TestGenerationCoverageStaleRevisionCountsAsMissing(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "vectors.db")
+
+	ix, err := Open(ctx, path, false, 4000)
+	require.NoError(t, err)
+	defer ix.Close()
+
+	gen := kitvec.Generation{Model: "fake-model", Dimensions: 3}
+	fingerprint, err := ix.EnsureGeneration(ctx, gen, sqlitevec.StateBuilding)
+	require.NoError(t, err)
+
+	_, err = ix.db.ExecContext(ctx,
+		`INSERT INTO vector_messages (doc_key, session_id, ordinal, content, content_hash)
+		 VALUES (?, ?, ?, ?, ?)`,
+		"d1", "s1", 0, "hello world", "h1")
+	require.NoError(t, err)
+
+	err = ix.store.SaveVectors(ctx, fingerprint, "d1", "h1", []kitvec.ChunkVector{
+		{ChunkIndex: 0, Vector: kitvec.Vector{1, 0, 0}},
+	})
+	require.NoError(t, err)
+
+	infos, err := ix.Generations(ctx)
+	require.NoError(t, err)
+	require.Len(t, infos, 1)
+	require.EqualValues(t, 1, infos[0].Embedded)
+	require.EqualValues(t, 0, infos[0].Missing)
+
+	_, err = ix.db.ExecContext(ctx,
+		`UPDATE vector_messages SET content_hash = 'changed' WHERE doc_key = ?`, "d1")
+	require.NoError(t, err)
+
+	infos, err = ix.Generations(ctx)
+	require.NoError(t, err)
+	require.Len(t, infos, 1)
+	require.EqualValues(t, 0, infos[0].Embedded, "stale stamp revision no longer counts as embedded")
+	require.EqualValues(t, 1, infos[0].Missing, "stale stamp revision counts as missing")
+}

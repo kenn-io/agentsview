@@ -28,9 +28,8 @@ type EncoderConfig struct {
 	Dimension int
 	// Timeout bounds each individual HTTP request.
 	Timeout time.Duration
-	// MaxRetries is the total number of attempts made for a call before
-	// giving up on 429/5xx/transport errors. 4xx errors other than 429
-	// fail immediately without retrying.
+	// MaxRetries is the maximum total attempts on 429/5xx/network errors
+	// (4xx fails fast); values <= 0 mean one attempt.
 	MaxRetries int
 }
 

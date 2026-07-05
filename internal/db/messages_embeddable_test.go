@@ -169,3 +169,89 @@ func TestScanEmbeddableMessagesOrdersBySessionThenOrdinal(t *testing.T) {
 	assert.Equal(t, "sess-b", got[2].SessionID)
 	assert.Equal(t, 0, got[2].Ordinal)
 }
+
+// TestScanEmbeddableMessagesExcludesTrashedSessions asserts that messages
+// belonging to a soft-deleted (trashed) session never stream, since a
+// trashed session's content should not be indexed for semantic search.
+func TestScanEmbeddableMessagesExcludesTrashedSessions(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "trashed-sess", "proj", func(s *Session) {
+		s.EndedAt = Ptr(tsHour1)
+	})
+	insertMessages(t, d, Message{
+		SessionID: "trashed-sess", Ordinal: 0, Role: "user",
+		Content: "trashed content", ContentLength: len("trashed content"),
+		Timestamp: tsZero,
+	})
+	require.NoError(t, d.SoftDeleteSession("trashed-sess"))
+
+	insertSession(t, d, "live-sess", "proj", func(s *Session) {
+		s.EndedAt = Ptr(tsHour1)
+	})
+	insertMessages(t, d, Message{
+		SessionID: "live-sess", Ordinal: 0, Role: "user",
+		Content: "live content", ContentLength: len("live content"),
+		Timestamp: tsZero,
+	})
+
+	var got []EmbeddableMessage
+	_, err := d.ScanEmbeddableMessages(context.Background(), "",
+		func(m EmbeddableMessage) error {
+			got = append(got, m)
+			return nil
+		})
+	require.NoError(t, err)
+
+	require.Len(t, got, 1)
+	assert.Equal(t, "live-sess", got[0].SessionID)
+}
+
+// TestScanEmbeddableMessagesMixedFractionalPrecisionSinceAndMaxEnded seeds
+// sessions whose ended_at values mix RFC3339Nano fractional precision, and
+// asserts both the since filter and the returned maxEnded watermark are
+// chronologically correct rather than lexicographically correct. A raw
+// string comparison ranks "...01Z" (a whole second, no fraction) as greater
+// than "...01.500Z" (half a second later) because '.' sorts below 'Z', so a
+// buggy implementation would both wrongly exclude a since-eligible
+// fractional row and wrongly report an earlier whole-second row as the max.
+func TestScanEmbeddableMessagesMixedFractionalPrecisionSinceAndMaxEnded(t *testing.T) {
+	d := testDB(t)
+
+	seed := func(id, endedAt string) {
+		insertSession(t, d, id, "proj", func(s *Session) {
+			s.EndedAt = Ptr(endedAt)
+		})
+		insertMessages(t, d, Message{
+			SessionID: id, Ordinal: 0, Role: "user",
+			Content: id + " content", ContentLength: len(id) + len(" content"),
+			Timestamp: tsZero,
+		})
+	}
+
+	seed("too-old", "2024-01-01T00:00:00Z")
+	seed("frac-after-since", "2024-01-01T00:00:01.500Z")
+	seed("whole-second-max-trap", "2024-01-01T00:00:05Z")
+	seed("true-max-fractional", "2024-01-01T00:00:05.900Z")
+
+	var got []string
+	maxEnded, err := d.ScanEmbeddableMessages(
+		context.Background(), "2024-01-01T00:00:01Z",
+		func(m EmbeddableMessage) error {
+			got = append(got, m.SessionID)
+			return nil
+		})
+	require.NoError(t, err)
+
+	assert.NotContains(t, got, "too-old",
+		"a session ended before since must be excluded")
+	assert.Contains(t, got, "frac-after-since",
+		"a session ended a fraction of a second after a whole-second since "+
+			"must not be excluded by lexicographic comparison")
+	assert.Contains(t, got, "whole-second-max-trap")
+	assert.Contains(t, got, "true-max-fractional")
+
+	assert.Equal(t, "2024-01-01T00:00:05.900Z", maxEnded,
+		"maxEnded must be the chronologically latest ended_at, "+
+			"not the lexicographically greatest raw string")
+}

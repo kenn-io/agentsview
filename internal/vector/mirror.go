@@ -38,8 +38,19 @@ type RefreshStats struct {
 // DocKey computes the mirror's document identity for a message: a
 // source_uuid keeps the key stable across ordinal-shifting rewrites
 // (compaction, resync); its absence falls back to a session+ordinal key.
-func DocKey(sessionID, sourceUUID string, ordinal int) string {
+//
+// The messages schema permits more than one message in a session to share a
+// non-empty source_uuid, so occurrence disambiguates them: it is the 1-based
+// count of how many times (sessionID, sourceUUID) has been seen so far in
+// scan order. The first occurrence keeps the plain "u:<session>:<uuid>"
+// key; later occurrences append "#<occurrence>". Since the scan is ordered
+// by (session_id, ordinal), occurrence assignment is deterministic and
+// stable across resyncs. occurrence is ignored when sourceUUID is empty.
+func DocKey(sessionID, sourceUUID string, ordinal, occurrence int) string {
 	if sourceUUID != "" {
+		if occurrence > 1 {
+			return "u:" + sessionID + ":" + sourceUUID + "#" + strconv.Itoa(occurrence)
+		}
 		return "u:" + sessionID + ":" + sourceUUID
 	}
 	return "o:" + sessionID + ":" + strconv.Itoa(ordinal)
@@ -78,8 +89,15 @@ func (ix *Index) Refresh(
 
 	var stats RefreshStats
 	seen := make(map[string]struct{})
+	occurrences := make(map[string]int)
 	maxEnded, err := src.ScanEmbeddableMessages(ctx, since, func(m db.EmbeddableMessage) error {
-		key := DocKey(m.SessionID, m.SourceUUID, m.Ordinal)
+		occurrence := 1
+		if m.SourceUUID != "" {
+			occKey := m.SessionID + "\x00" + m.SourceUUID
+			occurrences[occKey]++
+			occurrence = occurrences[occKey]
+		}
+		key := DocKey(m.SessionID, m.SourceUUID, m.Ordinal, occurrence)
 		unchanged, deletedEvictions, err := ix.upsertMirrorRow(ctx, key, m)
 		if err != nil {
 			return fmt.Errorf("upserting mirror row %s: %w", key, err)

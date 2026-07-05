@@ -213,11 +213,14 @@ type EmbeddableMessage struct {
 
 // ScanEmbeddableMessages streams the embeddable universe (user/assistant
 // messages that are not is_system and not system-prefixed, per
-// SystemPrefixSQL) ordered by (session_id, ordinal), invoking fn once per
-// row. since != "" restricts the scan to sessions with ended_at >= since
-// (RFC3339) for incremental refresh; "" scans every session. maxEnded
-// returns the maximum sessions.ended_at seen across the scanned rows, or ""
-// when the scan produced no rows.
+// SystemPrefixSQL) from non-trashed sessions, ordered by (session_id,
+// ordinal), invoking fn once per row. since != "" restricts the scan to
+// sessions with ended_at >= since (RFC3339 or RFC3339Nano) for incremental
+// refresh, comparing parsed timestamps rather than raw strings via SQLite's
+// datetime() so mixed fractional-second precision doesn't produce a wrong
+// ordering; "" scans every session. maxEnded returns the maximum
+// sessions.ended_at seen across the scanned rows (as its original raw
+// string), or "" when the scan produced no rows.
 func (db *DB) ScanEmbeddableMessages(
 	ctx context.Context, since string, fn func(EmbeddableMessage) error,
 ) (maxEnded string, err error) {
@@ -227,6 +230,7 @@ func (db *DB) ScanEmbeddableMessages(
 		JOIN sessions s ON s.id = m.session_id
 		WHERE m.role IN ('user', 'assistant')
 		  AND m.is_system = 0
+		  AND s.deleted_at IS NULL
 		  AND ` + SystemPrefixSQL("m.content", "m.role") + `
 		` + optionalSinceClause(since) + `
 		ORDER BY m.session_id, m.ordinal`
@@ -250,7 +254,7 @@ func (db *DB) ScanEmbeddableMessages(
 		); err != nil {
 			return "", fmt.Errorf("scanning embeddable message: %w", err)
 		}
-		if ended.Valid && ended.String > maxEnded {
+		if ended.Valid && endedAfter(ended.String, maxEnded) {
 			maxEnded = ended.String
 		}
 		if err := fn(m); err != nil {
@@ -264,12 +268,45 @@ func (db *DB) ScanEmbeddableMessages(
 }
 
 // optionalSinceClause returns the AND clause restricting the embeddable scan
-// to sessions with ended_at >= since, or "" when since is unset.
+// to sessions with ended_at >= since, or "" when since is unset. It compares
+// via SQLite's datetime() rather than raw string ordering: RFC3339Nano's
+// variable fractional-second precision (e.g. ended_at values are sometimes
+// stored with milliseconds, sometimes without) makes lexicographic
+// comparison wrong, since "...00.123Z" sorts before "...00Z". datetime()
+// truncates to second granularity, so a session whose true ended_at is a
+// few hundred milliseconds before since may be re-scanned; that overlap is
+// harmless because Refresh's upserts are idempotent.
 func optionalSinceClause(since string) string {
 	if since == "" {
 		return ""
 	}
-	return "AND s.ended_at >= ?"
+	return "AND datetime(s.ended_at) >= datetime(?)"
+}
+
+// endedAfter reports whether candidate is chronologically after current,
+// comparing parsed RFC3339/RFC3339Nano timestamps rather than raw strings
+// so variable fractional-second precision can't produce a wrong ordering.
+// An empty current is always considered older. Falls back to a
+// lexicographic comparison if either value fails to parse.
+func endedAfter(candidate, current string) bool {
+	if current == "" {
+		return true
+	}
+	c, errC := parseEndedAt(candidate)
+	cur, errCur := parseEndedAt(current)
+	if errC != nil || errCur != nil {
+		return candidate > current
+	}
+	return c.After(cur)
+}
+
+// parseEndedAt parses an ended_at value, trying RFC3339Nano (which also
+// accepts plain RFC3339) first and falling back to strict RFC3339.
+func parseEndedAt(s string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t, nil
+	}
+	return time.Parse(time.RFC3339, s)
 }
 
 // insertMessagesTx batch-inserts messages within an existing

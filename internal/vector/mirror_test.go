@@ -93,8 +93,12 @@ func mirrorDocKeys(t *testing.T, ix *Index) []string {
 }
 
 func TestDocKey(t *testing.T) {
-	assert.Equal(t, "u:sess-1:uuid-1", DocKey("sess-1", "uuid-1", 5))
-	assert.Equal(t, "o:sess-1:5", DocKey("sess-1", "", 5))
+	assert.Equal(t, "u:sess-1:uuid-1", DocKey("sess-1", "uuid-1", 5, 1))
+	assert.Equal(t, "u:sess-1:uuid-1#2", DocKey("sess-1", "uuid-1", 5, 2))
+	assert.Equal(t, "u:sess-1:uuid-1#3", DocKey("sess-1", "uuid-1", 5, 3))
+	assert.Equal(t, "o:sess-1:5", DocKey("sess-1", "", 5, 1))
+	assert.Equal(t, "o:sess-1:5", DocKey("sess-1", "", 5, 2),
+		"occurrence is ignored when source_uuid is empty")
 }
 
 func TestRefreshInitialFullInsertsRowsWithCorrectDocKeys(t *testing.T) {
@@ -332,6 +336,62 @@ func TestRefreshIncrementalUsesWatermark(t *testing.T) {
 
 	_, ok := readMirrorRow(t, ix, "u:s2:u2")
 	assert.True(t, ok)
+}
+
+// TestRefreshDuplicateSourceUUIDGetsStableOccurrenceKeys asserts that two
+// messages in one session sharing a non-empty source_uuid (permitted by the
+// messages schema) collapse into two distinct mirror rows rather than one,
+// and that a second refresh reproduces the same occurrence-based keys so a
+// stamped document is not spuriously evicted and re-embedded.
+func TestRefreshDuplicateSourceUUIDGetsStableOccurrenceKeys(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+
+	src := &fakeMessageSource{rows: []fakeRow{
+		{
+			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "dup", Ordinal: 0, Content: "first"},
+			endedAt: "2024-01-01T00:00:00Z",
+		},
+		{
+			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "dup", Ordinal: 1, Content: "second"},
+			endedAt: "2024-01-01T00:00:01Z",
+		},
+	}}
+
+	stats, err := ix.Refresh(ctx, src, true)
+	require.NoError(t, err)
+	assert.Equal(t, RefreshStats{Upserted: 2, Deleted: 0, Unchanged: 0}, stats)
+
+	keys := mirrorDocKeys(t, ix)
+	assert.Equal(t, []string{"u:s1:dup", "u:s1:dup#2"}, keys,
+		"duplicate source_uuid rows must collapse into distinct keys, not one")
+
+	first, ok := readMirrorRow(t, ix, "u:s1:dup")
+	require.True(t, ok)
+	assert.Equal(t, "first", first.content)
+	second, ok := readMirrorRow(t, ix, "u:s1:dup#2")
+	require.True(t, ok)
+	assert.Equal(t, "second", second.content)
+
+	gen := kitvec.Generation{Model: "fake-model", Dimensions: 3}
+	fingerprint, err := ix.EnsureGeneration(ctx, gen, sqlitevec.StateActive)
+	require.NoError(t, err)
+	require.NoError(t, ix.store.SaveVectors(ctx, fingerprint, "u:s1:dup", first.contentHash,
+		[]kitvec.ChunkVector{{ChunkIndex: 0, Vector: kitvec.Vector{1, 0, 0}}}))
+
+	// A second refresh must reproduce the same occurrence keys in the same
+	// scan order, or the stamped doc would appear to vanish and be
+	// re-embedded on every resync.
+	stats, err = ix.Refresh(ctx, src, true)
+	require.NoError(t, err)
+	assert.Equal(t, RefreshStats{Upserted: 0, Deleted: 0, Unchanged: 2}, stats,
+		"stable keys across refreshes mean no churn")
+
+	pending, err := ix.store.PendingForGeneration(ctx, fingerprint, 100)
+	require.NoError(t, err)
+	for _, p := range pending {
+		assert.NotEqual(t, "u:s1:dup", p.Doc, "stamped doc should not be pending re-embed")
+	}
 }
 
 func TestRefreshReadOnlyIndexRejected(t *testing.T) {

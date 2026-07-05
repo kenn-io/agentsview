@@ -235,14 +235,20 @@ func (ix *Index) fingerprintByState(ctx context.Context, state string) (string, 
 
 // generationCoverageQuery is the exact join agentsview uses to report each
 // generation's coverage of the current vector_messages mirror: Embedded
-// counts documents stamped for that generation ordinal, Missing counts
-// mirror documents that are not.
+// counts stamps for that generation ordinal whose revision still matches
+// the mirror row's current content_hash, Missing counts mirror documents
+// with no such matching-revision stamp. A stamp whose revision no longer
+// matches (the mirror row's content changed since it was embedded) counts
+// as Missing rather than Embedded, since kit's store treats it as pending
+// re-embed.
 const generationCoverageQuery = `
 SELECT g.ordinal, g.gen_key, g.fingerprint, g.dimension, g.state,
-       (SELECT COUNT(*) FROM ` + stampsTable + ` s WHERE s.ordinal = g.ordinal),
+       (SELECT COUNT(*) FROM ` + stampsTable + ` s WHERE s.ordinal = g.ordinal
+          AND EXISTS (SELECT 1 FROM vector_messages d
+                      WHERE s.doc_key = d.doc_key AND s.revision = d.content_hash)),
        (SELECT COUNT(*) FROM vector_messages d WHERE NOT EXISTS
           (SELECT 1 FROM ` + stampsTable + ` s
-           WHERE s.ordinal = g.ordinal AND s.doc_key = d.doc_key))
+           WHERE s.ordinal = g.ordinal AND s.doc_key = d.doc_key AND s.revision = d.content_hash))
 FROM ` + generationsTable + ` g`
 
 // Generations returns every generation with its coverage counts against the
