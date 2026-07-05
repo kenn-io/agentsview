@@ -270,6 +270,7 @@ func (b *directBackend) Messages(
 		if f.After != nil {
 			w.After = *f.After
 		}
+		w.Before, w.After = clampAroundSpan(w.Before, w.After)
 	} else {
 		// An omitted From means "newest" in descending mode and 0 in
 		// ascending mode. An explicit 0 is a real ordinal and must be
@@ -296,6 +297,46 @@ func (b *directBackend) Messages(
 		list.LastOrdinal = &last
 	}
 	return list, nil
+}
+
+// clampAroundSpan bounds a requested Before/After pair for an around window
+// so the resulting response (before + after + 1 anchor row) can never exceed
+// db.MaxMessageLimit, the same cap the linear path silently clamps Limit to
+// (see the limit clamp a few lines up in Messages). Negative values
+// (reachable via a direct SessionService caller or a negative CLI/API flag)
+// are floored to 0 first, matching the floor the db layer already applies
+// via max(w.Before, 0).
+//
+// Before and After share one budget rather than each independently capping
+// to the max (which would still let the combined window reach ~2x the max),
+// so an oversized request on one side (e.g. before=10^9) must not be able to
+// starve a modest request on the other side down toward zero. This is a
+// two-sided water-fill: a side asking for at most its fair (even) share of
+// the budget gets exactly what it asked for, and the other side absorbs
+// whatever budget remains; only when both sides exceed their fair share
+// does the budget get split evenly between them.
+func clampAroundSpan(before, after int) (int, int) {
+	if before < 0 {
+		before = 0
+	}
+	if after < 0 {
+		after = 0
+	}
+	const budget = db.MaxMessageLimit - 1 // reserve the anchor row
+	if before+after <= budget {
+		return before, after
+	}
+	fairShare := budget / 2
+	switch {
+	case before <= fairShare:
+		after = budget - before
+	case after <= fairShare:
+		before = budget - after
+	default:
+		before = fairShare
+		after = budget - fairShare
+	}
+	return before, after
 }
 
 func (b *directBackend) ToolCalls(
@@ -725,7 +766,9 @@ func (b *directBackend) SearchContent(
 		return nil, err
 	}
 	if req.Context > 0 {
-		if err := b.enrichContentContext(ctx, page.Matches, req.Context); err != nil {
+		if err := b.enrichContentContext(
+			ctx, page.Matches, req.Context, req.Reveal,
+		); err != nil {
 			return nil, err
 		}
 	}
@@ -744,8 +787,19 @@ func (b *directBackend) SearchContent(
 // one, but a defensive skip here means a future one (e.g. a name-only
 // match with no message row) degrades gracefully instead of panicking on
 // the *w.Around dereference or fetching the wrong window.
+//
+// Unlike the match's own Snippet, context messages are full db.Message
+// values pulled straight from GetMessagesWindow with no redaction applied
+// by the store -- they were never part of the search hit, so
+// ContentSearchFilter.RevealSecrets (which only governs snippet redaction)
+// never touches them. When reveal is false, every context message is
+// redacted here via redactMessageSecrets before being attached to the
+// match, so context_before/context_after never leak a secret from an
+// adjacent message regardless of transport (HTTP, CLI, MCP all share this
+// path). When reveal is true the raw messages are attached unchanged, same
+// as the snippet path.
 func (b *directBackend) enrichContentContext(
-	ctx context.Context, matches []db.ContentMatch, n int,
+	ctx context.Context, matches []db.ContentMatch, n int, reveal bool,
 ) error {
 	for i := range matches {
 		m := &matches[i]
@@ -760,6 +814,9 @@ func (b *directBackend) enrichContentContext(
 			return fmt.Errorf("content search context: %w", err)
 		}
 		for _, msg := range msgs {
+			if !reveal {
+				msg = redactMessageSecrets(msg)
+			}
 			switch {
 			case msg.Ordinal < anchor:
 				m.ContextBefore = append(m.ContextBefore, msg)
@@ -769,6 +826,39 @@ func (b *directBackend) enrichContentContext(
 		}
 	}
 	return nil
+}
+
+// redactMessageSecrets returns a copy of m with every secret-shaped span
+// masked in its user-visible text fields: message content, thinking text,
+// and each tool call's input/output payloads (InputJSON, ResultContent, and
+// every ResultEvent's Content). It mirrors the masking the search-snippet
+// path already applies via secrets.RedactWindow, but a context message has
+// no known match offset to window around, so the whole-string secrets.Redact
+// scan is used instead. m.ToolResults is not touched: it is a transient
+// parse-time field (json:"-") that GetMessagesWindow never populates, so it
+// never reaches a transport response.
+func redactMessageSecrets(m db.Message) db.Message {
+	m.Content = secrets.Redact(m.Content)
+	m.ThinkingText = secrets.Redact(m.ThinkingText)
+	if len(m.ToolCalls) == 0 {
+		return m
+	}
+	toolCalls := make([]db.ToolCall, len(m.ToolCalls))
+	for i, tc := range m.ToolCalls {
+		tc.InputJSON = secrets.Redact(tc.InputJSON)
+		tc.ResultContent = secrets.Redact(tc.ResultContent)
+		if len(tc.ResultEvents) > 0 {
+			events := make([]db.ToolResultEvent, len(tc.ResultEvents))
+			for j, ev := range tc.ResultEvents {
+				ev.Content = secrets.Redact(ev.Content)
+				events[j] = ev
+			}
+			tc.ResultEvents = events
+		}
+		toolCalls[i] = tc
+	}
+	m.ToolCalls = toolCalls
+	return m
 }
 
 const secretSourceChanged = "source changed; cannot reveal"

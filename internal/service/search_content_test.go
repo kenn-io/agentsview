@@ -170,6 +170,109 @@ func TestDirectSearchContentContextRejectsOverMax(t *testing.T) {
 	assert.Equal(t, "context: maximum is 10", err.Error())
 }
 
+// contextWindowFixtureWithSecret is contextWindowFixture but with an AWS
+// access key planted in the message immediately before the anchor, so tests
+// can assert that context enrichment redacts (or reveals) it independently
+// of the match's own Snippet redaction.
+func contextWindowFixtureWithSecret(sessionID string, anchor int) []db.Message {
+	msgs := contextWindowFixture(sessionID, anchor)
+	msgs[1].Content = "my key is AKIA7QHWN2DKR4FYPLJM ok"
+	return msgs
+}
+
+// TestDirectSearchContentContextRedactsSecretsByDefault verifies that a
+// secret-shaped span in a context message (not the match itself) is
+// redacted in ContextBefore/ContextAfter when the request does not reveal,
+// and left intact when it does. This must hold regardless of transport
+// (HTTP, CLI, MCP) since the redaction happens once in
+// directBackend.enrichContentContext.
+func TestDirectSearchContentContextRedactsSecretsByDefault(t *testing.T) {
+	t.Parallel()
+	const sess = "s1"
+	newStore := func() *fakeContentStore {
+		return &fakeContentStore{
+			page: db.ContentSearchPage{
+				Matches: []db.ContentMatch{{SessionID: sess, Ordinal: 5, Snippet: "match one"}},
+			},
+			windows: map[string][]db.Message{
+				contextWindowKey(sess, 5): contextWindowFixtureWithSecret(sess, 5),
+			},
+		}
+	}
+
+	redacted := service.NewReadOnlyBackend(newStore())
+	res, err := redacted.SearchContent(context.Background(), service.ContentSearchRequest{
+		Pattern: "match", Context: 2,
+	})
+	require.NoError(t, err)
+	require.Len(t, res.Matches, 1)
+	require.Len(t, res.Matches[0].ContextBefore, 2)
+	assert.False(t,
+		strings.Contains(res.Matches[0].ContextBefore[1].Content, "AKIA7QHWN2DKR4FYPLJM"),
+		"default (Reveal=false) must redact a secret in a context message: %q",
+		res.Matches[0].ContextBefore[1].Content)
+
+	revealed := service.NewReadOnlyBackend(newStore())
+	rev, err := revealed.SearchContent(context.Background(), service.ContentSearchRequest{
+		Pattern: "match", Context: 2, Reveal: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, rev.Matches, 1)
+	require.Len(t, rev.Matches[0].ContextBefore, 2)
+	assert.True(t,
+		strings.Contains(rev.Matches[0].ContextBefore[1].Content, "AKIA7QHWN2DKR4FYPLJM"),
+		"Reveal=true must leave a context message's secret intact: %q",
+		rev.Matches[0].ContextBefore[1].Content)
+}
+
+// TestDirectSearchContentContextRedactsToolPayloads verifies that a secret
+// carried in a context message's tool call payloads (input_json,
+// result_content, and a result event's content) is also redacted by
+// default, not just the message's own Content field.
+func TestDirectSearchContentContextRedactsToolPayloads(t *testing.T) {
+	t.Parallel()
+	const sess = "s1"
+	secret := "AKIA7QHWN2DKR4FYPLJM"
+	store := &fakeContentStore{
+		page: db.ContentSearchPage{
+			Matches: []db.ContentMatch{{SessionID: sess, Ordinal: 5, Snippet: "match one"}},
+		},
+		windows: map[string][]db.Message{
+			contextWindowKey(sess, 5): {
+				{
+					SessionID: sess, Ordinal: 4, Role: "assistant",
+					Content: "calling a tool",
+					ToolCalls: []db.ToolCall{{
+						ToolName:      "bash",
+						InputJSON:     fmt.Sprintf(`{"cmd":"export KEY=%s"}`, secret),
+						ResultContent: "key is " + secret,
+						ResultEvents: []db.ToolResultEvent{
+							{Source: "stdout", Content: "leaked: " + secret},
+						},
+					}},
+				},
+				{SessionID: sess, Ordinal: 5, Role: "user", Content: "anchor"},
+				{SessionID: sess, Ordinal: 6, Role: "assistant", Content: "after"},
+			},
+		},
+	}
+	be := service.NewReadOnlyBackend(store)
+
+	res, err := be.SearchContent(context.Background(), service.ContentSearchRequest{
+		Pattern: "match", Context: 2,
+	})
+	require.NoError(t, err)
+	require.Len(t, res.Matches, 1)
+	require.Len(t, res.Matches[0].ContextBefore, 1)
+	tc := res.Matches[0].ContextBefore[0].ToolCalls
+	require.Len(t, tc, 1)
+	assert.NotContains(t, tc[0].InputJSON, secret, "tool input_json must be redacted")
+	assert.NotContains(t, tc[0].ResultContent, secret, "tool result_content must be redacted")
+	require.Len(t, tc[0].ResultEvents, 1)
+	assert.NotContains(t, tc[0].ResultEvents[0].Content, secret,
+		"tool result event content must be redacted")
+}
+
 func TestDirectSearchContentContextSkipsNegativeOrdinal(t *testing.T) {
 	t.Parallel()
 	store := &fakeContentStore{

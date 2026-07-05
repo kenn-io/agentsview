@@ -282,6 +282,37 @@ func TestSearchContent_SubstringMatch(t *testing.T) {
 	assert.Equal(t, "s1", out.Matches[0].SessionID)
 }
 
+// TestSearchContent_ContextRedactsSecretByDefault verifies that a secret in
+// a message adjacent to a search match comes back redacted in
+// context_before through the real service (not a fake), proving the MCP
+// transport inherits directBackend's context redaction: MCP has no reveal
+// opt-in, so this path must always come out redacted.
+func TestSearchContent_ContextRedactsSecretByDefault(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
+		s.MessageCount = 3
+		s.UserMessageCount = 2
+		ended := "2024-06-15T10:00:00Z"
+		s.EndedAt = &ended
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{
+		dbtest.UserMsg("s1", 0, "my key is AKIA7QHWN2DKR4FYPLJM ok"),
+		dbtest.AsstMsg("s1", 1, "noted"),
+		dbtest.UserMsg("s1", 2, "DEADBEEF marks the match"),
+	}))
+
+	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+		Pattern: "DEADBEEF", Mode: "substring", Context: 2,
+	})
+	require.NoError(t, err)
+	require.Len(t, out.Matches, 1)
+	require.Len(t, out.Matches[0].ContextBefore, 2)
+	for _, cm := range out.Matches[0].ContextBefore {
+		assert.NotContains(t, cm.Content, "AKIA7QHWN2DKR4FYPLJM",
+			"MCP has no reveal opt-in, so context must always come back redacted: %q", cm.Content)
+	}
+}
+
 // search_content's self-reference guard must exclude matches from sessions
 // that are active now, even when the matching message itself is old. A
 // long-running current session can match on a stale line; excluding by the
@@ -1027,4 +1058,32 @@ func TestGetMessages_AroundSuppressesToolRoleAnchor(t *testing.T) {
 		assert.NotEqual(t, 1, m.Ordinal, "the tool-role anchor must be suppressed")
 	}
 	assert.Equal(t, 1, out.Filtered, "the suppressed anchor is counted in Filtered")
+}
+
+// TestGetMessages_AroundClampsOversizedWindow verifies that an oversized
+// before/after request (e.g. before=10^9) cannot bypass db.MaxMessageLimit
+// through the MCP get_messages tool: directBackend.Messages clamps the
+// window before it ever reaches the store, so at most db.MaxMessageLimit
+// messages come back even though more than that many exist on both sides
+// of the anchor.
+func TestGetMessages_AroundClampsOversizedWindow(t *testing.T) {
+	ts, d := newTestToolset(t)
+	const total = db.MaxMessageLimit + 50
+	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
+		s.MessageCount = total
+		s.UserMessageCount = total
+	})
+	require.NoError(t, d.InsertMessages(dbtest.UserMessagesf("s1", total, "m%d")))
+
+	anchor, huge := total/2, 1_000_000_000
+	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+		SessionID: "s1", Around: &anchor, Before: &huge, After: &huge,
+		Roles: []string{"user"},
+	})
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(out.Messages), db.MaxMessageLimit,
+		"an oversized around window must be capped at db.MaxMessageLimit")
+	assert.Less(t, len(out.Messages), total,
+		"the oversized request must actually be capped below what an "+
+			"unclamped window would have returned")
 }

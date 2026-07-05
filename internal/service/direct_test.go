@@ -1292,6 +1292,116 @@ func TestDirectBackend_Messages_AroundOmittedBeforeAfterNoOtherFlags(t *testing.
 	assert.Equal(t, 11, list.Count)
 }
 
+// capturingWindowStore is a minimal db.Store fake that records the
+// db.MessageWindow passed to GetMessagesWindow so tests can assert on what
+// directBackend.Messages forwards to the store without needing a real
+// dataset. Every other db.Store method comes from the embedded nil
+// interface and would panic if a test path reached it.
+type capturingWindowStore struct {
+	db.Store
+	captured db.MessageWindow
+}
+
+func (f *capturingWindowStore) GetMessagesWindow(
+	_ context.Context, _ string, w db.MessageWindow,
+) ([]db.Message, error) {
+	f.captured = w
+	return nil, nil
+}
+
+// TestDirectBackend_Messages_AroundClampsOversizedBefore verifies that an
+// arbitrarily large --before value (e.g. before=10^9) cannot bypass
+// db.MaxMessageLimit: the window forwarded to the store is capped so
+// before+after+1 never exceeds the max, matching the silent-clamp
+// convention the linear path already applies to Limit.
+func TestDirectBackend_Messages_AroundClampsOversizedBefore(t *testing.T) {
+	t.Parallel()
+	store := &capturingWindowStore{}
+	svc := service.NewReadOnlyBackend(store)
+
+	around, huge := 100, 1_000_000_000
+	_, err := svc.Messages(context.Background(), "sid", service.MessageFilter{
+		Around: &around,
+		Before: &huge,
+	})
+	require.NoError(t, err)
+	total := store.captured.Before + store.captured.After + 1
+	assert.LessOrEqual(t, total, db.MaxMessageLimit,
+		"oversized before must be clamped so the window never exceeds MaxMessageLimit")
+	assert.Positive(t, store.captured.After,
+		"the other side of the window must not be starved to zero")
+}
+
+// TestDirectBackend_Messages_AroundClampsOversizedAfter is the After half of
+// the same guard.
+func TestDirectBackend_Messages_AroundClampsOversizedAfter(t *testing.T) {
+	t.Parallel()
+	store := &capturingWindowStore{}
+	svc := service.NewReadOnlyBackend(store)
+
+	around, huge := 100, 1_000_000_000
+	_, err := svc.Messages(context.Background(), "sid", service.MessageFilter{
+		Around: &around,
+		After:  &huge,
+	})
+	require.NoError(t, err)
+	total := store.captured.Before + store.captured.After + 1
+	assert.LessOrEqual(t, total, db.MaxMessageLimit,
+		"oversized after must be clamped so the window never exceeds MaxMessageLimit")
+	assert.Positive(t, store.captured.Before,
+		"the other side of the window must not be starved to zero")
+}
+
+// TestDirectBackend_Messages_AroundClampsCombinedOversizedWindow verifies
+// that Before and After sharing one budget are scaled down proportionally
+// (not independently capped to MaxMessageLimit each, which would still let
+// the combined window reach ~2x the max) when both are oversized.
+func TestDirectBackend_Messages_AroundClampsCombinedOversizedWindow(t *testing.T) {
+	t.Parallel()
+	store := &capturingWindowStore{}
+	svc := service.NewReadOnlyBackend(store)
+
+	around, hugeBefore, hugeAfter := 100, 1_000_000_000, 1_000_000_000
+	_, err := svc.Messages(context.Background(), "sid", service.MessageFilter{
+		Around: &around,
+		Before: &hugeBefore,
+		After:  &hugeAfter,
+	})
+	require.NoError(t, err)
+	total := store.captured.Before + store.captured.After + 1
+	assert.LessOrEqual(t, total, db.MaxMessageLimit)
+	// Equal requests should split the shared budget evenly.
+	assert.InDelta(t, store.captured.Before, store.captured.After, 1)
+}
+
+// TestDirectBackend_Messages_AroundClampsOversizedWindowEndToEnd is an
+// end-to-end regression check with a real SQLite-backed session: an
+// oversized --before/--after request must return at most
+// db.MaxMessageLimit messages even though more than that many exist on
+// both sides of the anchor.
+func TestDirectBackend_Messages_AroundClampsOversizedWindowEndToEnd(t *testing.T) {
+	t.Parallel()
+	svc, env := newDirectTestSvc(t)
+	sid := env.InsertSession(t)
+	const total = db.MaxMessageLimit + 50
+	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, total, "m%d")...)
+
+	around, huge := total/2, 1_000_000_000
+	list, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+		Around: &around,
+		Before: &huge,
+		After:  &huge,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	assert.LessOrEqual(t, list.Count, db.MaxMessageLimit,
+		"the returned window must not exceed MaxMessageLimit even though "+
+			"more than that many messages exist on both sides of the anchor")
+	assert.Less(t, list.Count, total,
+		"the oversized request must actually be capped below what an "+
+			"unclamped window would have returned")
+}
+
 // vsCopilotChatTraceLine builds one Visual Studio Copilot trace JSONL line
 // carrying a single user-prompt chat span for the given conversation.
 func vsCopilotChatTraceLine(conversationID, spanID, prompt string) string {
