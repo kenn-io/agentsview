@@ -87,6 +87,12 @@ CREATE TABLE IF NOT EXISTS vector_messages (
 );
 ```
 
+Indexes: the existing unique `(session_id, ordinal)` index is retained — the
+slot invariant, one unit per starting ordinal — and extended to a covering
+`(session_id, ordinal, ordinal_end)` shape so the FTS-to-unit resolver's
+containment lookups (`ordinal <= x AND ordinal_end >= x` within a session) never
+touch the row.
+
 `offsets` is a JSON array, one entry per member message, in ordinal order:
 `[{"o": ordinal, "r": rune_start, "b": byte_start}, ...]` (ends implied by the
 next entry / content length). Rune offsets map kit chunk windows to messages;
@@ -156,7 +162,10 @@ deterministically from the mirrored content.
 
 - **Hit shape.** A semantic hit resolves to session + `ordinal_start`..
   `ordinal_end` + anchor ordinal + a snippet sliced from the matched chunk
-  (byte offsets). Hits carry lineage: `subordinate`, `relationship_type`,
+  (byte offsets). The existing required `ordinal` field is kept and redefined
+  as the anchor ordinal (backward compatible: for user docs and one-message
+  runs it is exactly today's value); `ordinal_start`/`ordinal_end` are new
+  additive fields. Hits carry lineage: `subordinate`, `relationship_type`,
   `parent_session_id`, and whether the unit is a sidechain run. User-doc hits
   keep today's single-ordinal shape (range collapses to one ordinal).
 - **`--around` and the context cursor flow anchor on the anchor ordinal** — no
@@ -164,6 +173,18 @@ deterministically from the mirrored content.
 - **Scope filter.** `--scope top|all|subordinate` on semantic/hybrid search
   (API: `scope` param). Default `all`: subordinate content stays discoverable
   but penalized.
+- **Precedence over `include_children`.** Today's content-search filter excludes
+  `subagent`/`fork` sessions by default (`include_children=false` drives the
+  sidebar-child predicate), which would silently drop the very units
+  `scope=all` promises. In semantic and hybrid modes, unit visibility is
+  governed by `scope` alone: the child-session exclusion is not applied to
+  unit resolution, ranking, or the hybrid FTS leg (both legs must see the same
+  universe for fusion to be sound). An explicit `include_children` on a
+  semantic/hybrid request is accepted but superseded by `scope` — documented,
+  since `scope=top` is the sharper equivalent (it also excludes sidechain runs
+  and parent-linked unknowns). All other session filters (automated, one-shot,
+  project, agent, dates) continue to apply in every mode. FTS-only, substring,
+  and regex modes keep today's `include_children` semantics unchanged.
 - **Subordinate penalty.** Applied at the merge step as a rank-based adjustment
   (subordinate hits' RRF contributions use `rank + P`, with `P` a small
   constant, initial value 5), not a hard tier and not a score multiplier — RRF
@@ -187,8 +208,9 @@ deterministically from the mirrored content.
 
 ## Surface changes
 
-- Search API/CLI hit fields: `ordinal_range`, `anchor`, `subordinate`,
-  `relationship` (client regenerated).
+- Search API/CLI hit fields: `ordinal` keeps its place as the anchor;
+  `ordinal_start`, `ordinal_end`, `subordinate`, and `relationship` are
+  additive (client regenerated).
 - `embeddings status`/build summaries count units, not messages; docs updated
   (semantic-search.md, semantic-search-internals.md — corpus, doc_key scheme,
   migration, anchor policy sections).
