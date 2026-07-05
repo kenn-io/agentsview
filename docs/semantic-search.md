@@ -25,7 +25,7 @@ Semantic search is disabled by default. Add a `[vector]` section to
 [vector]
 enabled = true                    # default false; everything below is opt-in
 # db_path defaults to <data_dir>/vectors.db
-include_automated = false         # default false; embed automated (e.g. roborev) sessions too
+include_automated = false         # default; automated sessions (e.g. roborev) are not embedded -- set true to include
 
 [vector.embeddings]
 endpoint = "http://localhost:11434/v1"  # OpenAI-compatible base URL; "/embeddings" is appended
@@ -104,13 +104,15 @@ agentsview embeddings build --backstop # force a full mirror reconciliation scan
 agentsview embeddings build --include-automated  # embed automated sessions for this build only
 ```
 
-`--include-automated` overrides `[vector].include_automated` to `true` for this
-one build; it does not change the config file. It is meant for a one-off build,
-not scheduled ones: the after-sync scheduler and periodic backstop always build
-from the config value, so mixing the flag with a config default of `false` flips
-the index's scope back and forth on every other build, forcing a full mirror
-reconciliation each time. Set `include_automated = true` in `config.toml`
-instead if you want automated sessions embedded on every build.
+`--include-automated` overrides `[vector].include_automated` for this one build;
+it does not change the config file. Bare `--include-automated` embeds automated
+sessions, and `--include-automated=false` force-excludes them even if the config
+default is `true`. It is meant for a one-off build, not scheduled ones: the
+after-sync scheduler and periodic backstop always build from the config value,
+so mixing the flag with a different config default flips the index's scope back
+and forth on every other build, forcing a full mirror reconciliation each time.
+Set `include_automated = true` in `config.toml` instead if you want automated
+sessions embedded on every build.
 
 `embeddings build` mirrors the embeddable universe (every non-system
 user/assistant message) into `vectors.db`, then fills whatever the active

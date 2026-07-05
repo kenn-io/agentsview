@@ -419,6 +419,41 @@ max_input_chars = 1000
 	assert.Contains(t, out.String(), "Embedded 3 documents (3 chunks), skipped 0, stale 0")
 }
 
+// TestEmbeddingsBuildDirectIncludeAutomatedFlagFalseOverridesConfigTrue
+// asserts --include-automated=false narrows the scope back down for this one
+// build even when [vector].include_automated defaults to true: the parsed
+// flag value must win, not just "the flag was passed forces true".
+func TestEmbeddingsBuildDirectIncludeAutomatedFlagFalseOverridesConfigTrue(t *testing.T) {
+	dataDir := testDataDir(t)
+	stub := newEmbeddingsStubServer(t, 3)
+	defer stub.Close()
+	writeTestConfig(t, dataDir, fmt.Sprintf(`
+[vector]
+enabled = true
+include_automated = true
+
+[vector.embeddings]
+endpoint = %q
+model = "test-model"
+dimension = 3
+batch_size = 10
+timeout = "5s"
+max_retries = 1
+max_input_chars = 1000
+`, stub.URL+"/v1"))
+	seedEmbeddableArchiveWithAutomated(t, dataDir)
+
+	cmd := newEmbeddingsBuildCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--include-automated=false"})
+	require.NoError(t, cmd.Execute())
+
+	assert.Contains(t, out.String(), "Embedded 2 documents (2 chunks), skipped 0, stale 0",
+		"--include-automated=false must exclude the automated session's message "+
+			"even though the config default is true")
+}
+
 // TestEmbeddingsBuildIncludeAutomatedFlagThreadsToDaemonRequest drives the
 // daemon build path and asserts --include-automated forces
 // BuildRequest.IncludeAutomated to true in the request body, overriding the

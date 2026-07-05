@@ -76,7 +76,8 @@ type EmbeddingsBuildOptions struct {
 	IncludeAutomated bool
 	// IncludeAutomatedSet reports whether --include-automated was
 	// explicitly passed (cmd.Flags().Changed), overriding
-	// [vector].include_automated to true for this one build.
+	// [vector].include_automated to IncludeAutomated's parsed value (true or
+	// false) for this one build.
 	IncludeAutomatedSet bool
 }
 
@@ -101,11 +102,13 @@ func newEmbeddingsBuildCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.Yes, "yes", false,
 		"Skip the full-rebuild confirmation prompt")
 	cmd.Flags().BoolVar(&opts.IncludeAutomated, "include-automated", false,
-		"Embed automated (non-interactive) sessions too, overriding "+
-			"[vector].include_automated for this build only. Prefer setting "+
-			"the config key for scheduled builds: mixing this flag with a "+
-			"config default of false flips the index's scope on every other "+
-			"build, forcing a full mirror reconciliation each time.")
+		"Override [vector].include_automated for this build only: bare "+
+			"--include-automated embeds automated (non-interactive) sessions "+
+			"too, and --include-automated=false force-excludes them even if "+
+			"the config default is true. Prefer setting the config key for "+
+			"scheduled builds: mixing this flag with a different config "+
+			"default flips the index's scope on every other build, forcing "+
+			"a full mirror reconciliation each time.")
 	return cmd
 }
 
@@ -233,7 +236,7 @@ func runEmbeddingsBuild(
 
 	includeAutomated := cfg.Vector.IncludeAutomated
 	if opts.IncludeAutomatedSet {
-		includeAutomated = true
+		includeAutomated = opts.IncludeAutomated
 	}
 
 	if opts.FullRebuild && !opts.Yes {

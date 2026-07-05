@@ -91,7 +91,15 @@ func (ix *Index) Build(
 	if err != nil {
 		return BuildResult{}, err
 	}
-	scopeChanged := hasScope && storedScope != o.IncludeAutomated
+	// A mirror refreshed before the scope key existed (a refresh watermark
+	// is stamped, but scope_include_automated is not) predates this scope
+	// feature entirely. Treat that the same as a genuine scope change: force
+	// one full reconciliation now so any automated rows that were never
+	// meant to be in scope (or, if the config default is true, newly
+	// in-scope automated sessions older than the watermark) get resolved,
+	// then setIncludeAutomatedScope below stamps the key so every later
+	// build compares against a real stored scope again.
+	scopeChanged := !hasScope || storedScope != o.IncludeAutomated
 	full := o.FullRebuild || o.Backstop || firstEver || scopeChanged
 	refreshStats, err := ix.Refresh(ctx, src, full, o.IncludeAutomated)
 	if err != nil {
@@ -190,6 +198,16 @@ func (ix *Index) resolveBuildTarget(
 			if err := ix.resetGeneration(ctx, fp); err != nil {
 				return "", false, err
 			}
+		}
+		// fp is already the active generation, so anything else still in
+		// state building was abandoned by an earlier failed first build
+		// (the config since reverted back to this active fingerprint) and
+		// would otherwise stay building forever: this is the only path
+		// through resolveBuildTarget that reaches an active fp without
+		// going through EnsureGeneration, which is where the abandoned-gen
+		// retirement normally happens.
+		if err := ix.retireAbandonedBuildingGenerations(ctx, fp); err != nil {
+			return "", false, err
 		}
 		return fp, false, nil
 	}

@@ -171,14 +171,26 @@ func (s *embedScheduler) Run(ctx context.Context) {
 				resetTimer(debounceTimer, s.debounce)
 				continue
 			}
-			pendingBackstop = false
+			// Only clear a carried backstop once the build both started and
+			// succeeded: a started-but-failed build (started=true, err!=nil)
+			// never actually ran the full reconciliation it carried, so
+			// clearing pendingBackstop here would silently defer that
+			// reconciliation to the next backstop tick (24h by default)
+			// instead of retrying on the very next debounced build.
+			if err == nil {
+				pendingBackstop = false
+			}
 		case <-backstopC:
 			started, err := s.mgr.TryBuild(ctx,
 				vector.BuildRequest{Backstop: true, IncludeAutomated: s.includeAutomated})
 			if err != nil {
 				log.Printf("embed scheduler: backstop build failed: %v", err)
 			}
-			pendingBackstop = !started
+			// Same started-but-failed rule as the debounced path above:
+			// a build that started but errored never completed its
+			// reconciliation, so the pass must still be retried rather
+			// than deferred to the next backstop tick.
+			pendingBackstop = !started || err != nil
 		}
 	}
 }

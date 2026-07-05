@@ -5,9 +5,48 @@ import (
 	"fmt"
 	"testing"
 
+	sqlite3 "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// forceIndexVarLimit pins ix's underlying vectors.db connection pool to a
+// single connection and lowers its SQLITE_LIMIT_VARIABLE_NUMBER, mirroring
+// internal/db's forceReaderVarLimit: some SQLite builds compile against the
+// older documented 999-variable limit rather than the modern default
+// (32766), and a test seeding a key count above maxSQLVars only genuinely
+// regression-guards chunkKeys's chunking when the connection's real limit is
+// low enough for that chunking to matter — otherwise a single unchunked IN
+// (...) query would still succeed under the modern default and the test
+// would pass even with chunking deleted.
+func forceIndexVarLimit(t *testing.T, ix *Index, limit int) {
+	t.Helper()
+	ix.db.SetMaxOpenConns(1)
+	ix.db.SetMaxIdleConns(1)
+	conn, err := ix.db.Conn(context.Background())
+	require.NoError(t, err)
+	defer func() { require.NoError(t, conn.Close()) }()
+	require.NoError(t, conn.Raw(func(dc any) error {
+		sc, ok := dc.(*sqlite3.SQLiteConn)
+		if !ok {
+			return fmt.Errorf("index conn is %T, want *sqlite3.SQLiteConn", dc)
+		}
+		sc.SetLimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, limit)
+		return nil
+	}))
+}
+
+// requireIndexVarLimitConstrained probes ix's connection with an
+// over-the-limit IN (...) query, failing the test if it does not error --
+// proof the lowered limit from forceIndexVarLimit is actually live, so a
+// setup bug cannot silently mask the regression the caller checks next.
+func requireIndexVarLimitConstrained(t *testing.T, ix *Index) {
+	t.Helper()
+	ctx := context.Background()
+	overLimitPh, overLimitArgs := inPlaceholders(make([]string, 1001))
+	_, probeErr := ix.db.QueryContext(ctx, "SELECT 1 WHERE '' IN "+overLimitPh, overLimitArgs...)
+	require.Error(t, probeErr, "index variable limit was not constrained")
+}
 
 // TestChunkKeysSplitsAtMaxSQLVars asserts chunkKeys never hands fn more than
 // maxSQLVars keys at a time, that every key is visited exactly once, and
@@ -83,6 +122,9 @@ VALUES (?, ?, ?, ?, ?)`,
 func TestLookupMirrorDocsOverMaxSQLVars(t *testing.T) {
 	ix := openTestIndex(t)
 	ctx := context.Background()
+	forceIndexVarLimit(t, ix, 999)
+	requireIndexVarLimitConstrained(t, ix)
+
 	n := maxSQLVars*3 + 42
 	keys := seedVectorMessages(t, ix, n)
 
@@ -123,6 +165,9 @@ func TestLookupMirrorDocsMissingKeyOmittedNotZeroValued(t *testing.T) {
 func TestCurrentOrdinalsOverMaxSQLVars(t *testing.T) {
 	ix := openTestIndex(t)
 	ctx := context.Background()
+	forceIndexVarLimit(t, ix, 999)
+	requireIndexVarLimitConstrained(t, ix)
+
 	n := maxSQLVars*3 + 42
 	keys := seedVectorMessages(t, ix, n)
 

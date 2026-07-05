@@ -266,6 +266,49 @@ func TestBuildScopeChangeToExcludeAutomatedRemovesOutOfScopeMirrorRow(t *testing
 	assert.False(t, ok, "the out-of-scope mirror row must be removed")
 }
 
+// TestBuildLegacyMirrorMissingScopeKeyForcesFullRefresh covers a mirror built
+// before the include-automated scope feature existed: a refresh watermark is
+// already stamped (this is not a first-ever build), but
+// scope_include_automated was never written since setIncludeAutomatedScope
+// did not exist yet. Without treating that missing key as a scope change,
+// Build would run an incremental (since=watermark) scan forever and never
+// pick up a document older than the stored watermark, nor would it ever
+// reconcile away now-out-of-scope automated rows a legacy mirror might carry.
+func TestBuildLegacyMirrorMissingScopeKeyForcesFullRefresh(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	gen := fakeGeneration("fake-model")
+
+	// Simulate the pre-scope-feature mirror state directly: a stamped
+	// watermark with no scope_include_automated row in vector_meta.
+	require.NoError(t, ix.setRefreshWatermark(ctx, "2024-06-01T00:00:00Z"))
+	_, hasScope, err := ix.storedIncludeAutomatedScope(ctx)
+	require.NoError(t, err)
+	require.False(t, hasScope, "test setup must not pre-seed a scope key")
+
+	src := &fakeMessageSource{rows: []fakeRow{
+		{
+			msg:     db.EmbeddableMessage{SessionID: "s1", SourceUUID: "human", Ordinal: 0, Content: "hello"},
+			endedAt: "2024-01-01T00:00:00Z", // older than the stored watermark
+		},
+	}}
+
+	result, err := ix.Build(ctx, src, fakeBuildEncoder(), gen, BuildOptions{})
+	require.NoError(t, err)
+
+	assert.Empty(t, src.gotSince,
+		"a legacy mirror with no stored scope key must force a full (since=\"\") rescan")
+	assert.Equal(t, 1, result.Fill.Documents,
+		"the pre-watermark document must be picked up despite predating the stored refresh watermark")
+	assert.ElementsMatch(t, []string{"u:s1:human"}, mirrorDocKeys(t, ix))
+
+	storedScope, hasScope, err := ix.storedIncludeAutomatedScope(ctx)
+	require.NoError(t, err)
+	assert.True(t, hasScope,
+		"Build must stamp the scope key so later builds compare against a real stored value")
+	assert.False(t, storedScope)
+}
+
 // TestCountPendingIncludesRevisionChangedDocs covers countPending's
 // BuildProgress.Total denominator: a document whose mirror content_hash
 // changed since it was last stamped must still count as pending, matching
@@ -623,6 +666,56 @@ func TestBuildRetiresAbandonedBuildingGenerationEndToEnd(t *testing.T) {
 	}
 	assert.Equal(t, string(sqlitevec.StateRetired), stateA, "abandoned generation A must be retired")
 	assert.Equal(t, string(sqlitevec.StateActive), stateB)
+
+	_, ok, err := ix.BuildingFingerprint(ctx)
+	require.NoError(t, err)
+	assert.False(t, ok, "no generation should remain in state building")
+}
+
+// TestBuildActiveFingerprintEarlyReturnRetiresAbandonedBuildingGeneration
+// covers a gap in resolveBuildTarget's active-fingerprint early return: when
+// the requested generation is already active, the target-resolution path
+// never reaches EnsureGeneration, which is the only other place that retires
+// abandoned building generations. Without also retiring on this path, a
+// first build of some other fingerprint that registered as building and
+// then failed (a crashed process, or config that got reverted back to the
+// still-active fingerprint before the failed build could be retried) stays
+// in state building forever once every subsequent build targets the active
+// generation again.
+func TestBuildActiveFingerprintEarlyReturnRetiresAbandonedBuildingGeneration(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	src := twoDocSource()
+	genA := fakeGeneration("model-a")
+
+	_, err := ix.Build(ctx, src, fakeBuildEncoder(), genA, BuildOptions{})
+	require.NoError(t, err, "genA is now active")
+
+	// Simulate an abandoned first build of a different config: registered as
+	// building, but never filled or retired (standing in for a crashed
+	// process, or a config change that was reverted before the failed build
+	// could be cleaned up).
+	genB := fakeGeneration("model-b")
+	fpB, err := ix.EnsureGeneration(ctx, genB, sqlitevec.StateBuilding)
+	require.NoError(t, err)
+
+	// Build again with genA, the still-active fingerprint: this must take
+	// the active-fingerprint early-return path in resolveBuildTarget, not
+	// the EnsureGeneration path.
+	result, err := ix.Build(ctx, src, fakeBuildEncoder(), genA, BuildOptions{})
+	require.NoError(t, err)
+	assert.False(t, result.Activated, "already-active generation stays active without reactivation")
+
+	gens, err := ix.Generations(ctx)
+	require.NoError(t, err)
+	require.Len(t, gens, 2)
+	for _, g := range gens {
+		if g.Fingerprint == fpB {
+			assert.Equal(t, string(sqlitevec.StateRetired), g.State,
+				"the abandoned building generation must be retired once a build "+
+					"resolves back to the active fingerprint")
+		}
+	}
 
 	_, ok, err := ix.BuildingFingerprint(ctx)
 	require.NoError(t, err)
