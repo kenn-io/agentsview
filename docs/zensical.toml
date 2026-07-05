@@ -25,6 +25,7 @@ nav = [
   {"Session Export" = "session-export.md"},
   {"Stats" = "stats.md"},
   {"Session API" = "session-api.md"},
+  {"Semantic Search" = "semantic-search.md"},
   {"Configuration" = "configuration.md"},
   {"Remote Access" = "remote-access.md"},
   {"PostgreSQL Sync" = "pg-sync.md"},

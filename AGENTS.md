@@ -120,6 +120,8 @@ CLI (agentsview) -> Config -> DB (SQLite/FTS5)
 - `internal/parser/` - Per-agent session file parsers and content extraction.
 - `internal/server/` - HTTP handlers, SSE, middleware, search, and export.
 - `internal/sync/` - Sync engine, file watcher, discovery, and hashing.
+- `internal/vector/` - Semantic search: embeddings encoder, `vectors.db`
+  mirror/index, build orchestration, and semantic/hybrid search.
 - `internal/timeutil/` - Time parsing utilities.
 - `internal/web/` - Embedded frontend copied from `frontend/dist/` at build
   time.
@@ -128,30 +130,33 @@ CLI (agentsview) -> Config -> DB (SQLite/FTS5)
 
 ## Key Files
 
-| Path                             | Purpose                                       |
-| -------------------------------- | --------------------------------------------- |
-| `cmd/agentsview/main.go`         | CLI entry point, server startup, file watcher |
-| `cmd/agentsview/pg.go`           | `pg` command group: push, status, serve       |
-| `internal/server/server.go`      | HTTP router and handler setup                 |
-| `internal/server/sessions.go`    | Session list/detail API handlers              |
-| `internal/server/search.go`      | Full-text search API                          |
-| `internal/server/events.go`      | SSE event streaming                           |
-| `internal/db/db.go`              | Database open, migrations, schema             |
-| `internal/db/sessions.go`        | Session CRUD queries                          |
-| `internal/db/search.go`          | FTS5 search queries                           |
-| `internal/sync/engine.go`        | Sync orchestration                            |
-| `internal/parser/types.go`       | Agent registry with one `AgentDef` per agent  |
-| `internal/parser/*.go`           | Per-agent session parsers                     |
-| `internal/postgres/connect.go`   | Connection setup, SSL checks, DSN helpers     |
-| `internal/postgres/schema.go`    | PG DDL and schema management                  |
-| `internal/postgres/push.go`      | Push logic and fingerprinting                 |
-| `internal/postgres/sync.go`      | Push sync lifecycle                           |
-| `internal/postgres/store.go`     | PostgreSQL read-only store                    |
-| `internal/postgres/sessions.go`  | PG session queries on the read side           |
-| `internal/postgres/messages.go`  | PG message queries and ILIKE search           |
-| `internal/postgres/analytics.go` | PG analytics queries                          |
-| `internal/postgres/time.go`      | Timestamp conversion helpers                  |
-| `internal/config/config.go`      | Config loading and flag registration          |
+| Path                             | Purpose                                                   |
+| -------------------------------- | --------------------------------------------------------- |
+| `cmd/agentsview/main.go`         | CLI entry point, server startup, file watcher             |
+| `cmd/agentsview/pg.go`           | `pg` command group: push, status, serve                   |
+| `cmd/agentsview/embeddings.go`   | `embeddings` command group: build, list, activate, retire |
+| `internal/server/server.go`      | HTTP router and handler setup                             |
+| `internal/server/sessions.go`    | Session list/detail API handlers                          |
+| `internal/server/search.go`      | Full-text search API                                      |
+| `internal/server/events.go`      | SSE event streaming                                       |
+| `internal/db/db.go`              | Database open, migrations, schema                         |
+| `internal/db/sessions.go`        | Session CRUD queries                                      |
+| `internal/db/search.go`          | FTS5 search queries                                       |
+| `internal/vector/index.go`       | `vectors.db` schema, generations, staleness gate          |
+| `internal/vector/search.go`      | Semantic + hybrid search, RRF merge                       |
+| `internal/sync/engine.go`        | Sync orchestration                                        |
+| `internal/parser/types.go`       | Agent registry with one `AgentDef` per agent              |
+| `internal/parser/*.go`           | Per-agent session parsers                                 |
+| `internal/postgres/connect.go`   | Connection setup, SSL checks, DSN helpers                 |
+| `internal/postgres/schema.go`    | PG DDL and schema management                              |
+| `internal/postgres/push.go`      | Push logic and fingerprinting                             |
+| `internal/postgres/sync.go`      | Push sync lifecycle                                       |
+| `internal/postgres/store.go`     | PostgreSQL read-only store                                |
+| `internal/postgres/sessions.go`  | PG session queries on the read side                       |
+| `internal/postgres/messages.go`  | PG message queries and ILIKE search                       |
+| `internal/postgres/analytics.go` | PG analytics queries                                      |
+| `internal/postgres/time.go`      | Timestamp conversion helpers                              |
+| `internal/config/config.go`      | Config loading and flag registration                      |
 
 ## Development
 
