@@ -371,10 +371,14 @@ func TestGenerateInsight_DefaultAgent(t *testing.T) {
 func TestGenerateInsight_SessionValidation(t *testing.T) {
 	te := setup(t)
 
-	w := te.post(t, "/api/v1/insights/generate",
-		`{"type":"daily_activity","session_id":"missing","date_from":"2025-01-15","date_to":"2025-01-15"}`)
-	assertStatus(t, w, http.StatusBadRequest)
-	assertBodyContains(t, w, "session_id is only supported for agent_analysis")
+	for _, body := range []string{
+		`{"type":"daily_activity","session_id":"missing","date_from":"2025-01-15","date_to":"2025-01-15"}`,
+		`{"type":"llm_canned","kind":"prompt_maturity_review","llm_opt_in":true,"session_id":"missing","date_from":"2025-01-15","date_to":"2025-01-15"}`,
+	} {
+		w := te.post(t, "/api/v1/insights/generate", body)
+		assertStatus(t, w, http.StatusBadRequest)
+		assertBodyContains(t, w, "session_id is only supported for agent_analysis")
+	}
 }
 
 func TestGenerateInsight_SingleSessionUsesSessionPrompt(t *testing.T) {

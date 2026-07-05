@@ -198,6 +198,10 @@ func (s *Server) humaGenerateInsight(
 			"insight generation is not available in read-only mode")
 	}
 	req := in.Body
+	if req.SessionID != "" && req.Type != "agent_analysis" {
+		return nil, apiError(http.StatusBadRequest,
+			"session_id is only supported for agent_analysis")
+	}
 	if !validInsightTypes[req.Type] {
 		return nil, apiError(http.StatusBadRequest,
 			"invalid type: must be daily_activity, agent_analysis, or llm_canned")
@@ -206,10 +210,6 @@ func (s *Server) humaGenerateInsight(
 		return s.humaGenerateCannedInsight(req)
 	}
 	if req.SessionID != "" {
-		if req.Type != "agent_analysis" {
-			return nil, apiError(http.StatusBadRequest,
-				"session_id is only supported for agent_analysis")
-		}
 		session, err := s.db.GetSession(ctx, req.SessionID)
 		if err != nil {
 			return nil, serverError(err)
