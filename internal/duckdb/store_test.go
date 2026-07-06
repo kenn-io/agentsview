@@ -434,6 +434,55 @@ func TestSearchContentFTSMatchesNonContiguousTerms(t *testing.T) {
 	assert.Contains(t, got.Matches[0].Snippet, "fox")
 }
 
+// TestSearchContentOrdinalRangeSelfRange pins the ordinal_range contract on
+// DuckDB content search: the field is always present as the self-range
+// [ordinal, ordinal] (DuckDB derives no conversation units yet), never a
+// zero-valued [0, 0] at a nonzero anchor ordinal. Substring and regex modes
+// cover the two scan paths (scanDuckContentRows and the regex candidate
+// loop).
+func TestSearchContentOrdinalRangeSelfRange(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		Session: syncSession(
+			"duck-range", "alpha", "first",
+			"2026-03-22T10:00:00.000Z", 2,
+		),
+		Messages: []db.Message{
+			syncMessage("duck-range", 0, "user",
+				"an unrelated opener", "2026-03-22T10:00:00.000Z"),
+			syncMessage("duck-range", 1, "assistant",
+				"the rangeneedle reply", "2026-03-22T10:00:01.000Z"),
+		},
+		DataVersion:     1,
+		ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	for _, mode := range []string{"substring", "regex"} {
+		t.Run(mode, func(t *testing.T) {
+			got, err := store.SearchContent(ctx, db.ContentSearchFilter{
+				Pattern:        "rangeneedle",
+				Mode:           mode,
+				Sources:        []string{"messages"},
+				IncludeOneShot: true,
+				Limit:          10,
+			})
+			require.NoError(t, err)
+			require.Len(t, got.Matches, 1)
+			m := got.Matches[0]
+			require.Equal(t, 1, m.Ordinal, "anchor ordinal")
+			assert.Equal(t, [2]int{1, 1}, m.OrdinalRange,
+				"ordinal_range must be the self-range, not [0, 0]")
+		})
+	}
+}
+
 func TestSearchContentInvalidModeReturnsInputError(t *testing.T) {
 	ctx := context.Background()
 	store, _ := newSyncedStore(t)

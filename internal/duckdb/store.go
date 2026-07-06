@@ -1313,6 +1313,10 @@ func scanDuckContentRows(rows *sql.Rows, makeSnippet func(string) string) ([]db.
 			&m.Timestamp, &body); err != nil {
 			return nil, err
 		}
+		// Self-range placeholder: OrdinalRange is contractually always
+		// present, and DuckDB has no unit derivation yet, so every match is
+		// its own unit rather than a bogus [0, 0].
+		m.OrdinalRange = [2]int{m.Ordinal, m.Ordinal}
 		m.Snippet = makeSnippet(body)
 		out = append(out, m)
 	}
@@ -1337,6 +1341,9 @@ func scanDuckContentCandidateRows(rows *sql.Rows) ([]duckContentCandidate, error
 		}
 		candidate.sortTS = formatDBTime(sortTS)
 		candidate.sortTime, candidate.hasSort = parseAnalyticsTime(candidate.sortTS)
+		// Self-range placeholder, matching scanDuckContentRows: OrdinalRange
+		// is contractually always present and DuckDB derives no units yet.
+		candidate.match.OrdinalRange = [2]int{candidate.match.Ordinal, candidate.match.Ordinal}
 		candidate.match.Snippet = candidate.body
 		out = append(out, candidate)
 	}
