@@ -97,7 +97,8 @@ func parseForgeSession(dbPath, conversationID, machine string) (*ParsedSession, 
 }
 
 func openForgeDB(dbPath string) (*sql.DB, error) {
-	dsn := dbPath + "?mode=ro&_journal_mode=WAL&_busy_timeout=3000"
+	dsn := "file:" + sqliteURIPath(dbPath) +
+		"?mode=ro&_busy_timeout=3000"
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("opening forge db %s: %w", dbPath, err)

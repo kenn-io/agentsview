@@ -165,7 +165,7 @@ func openCursorAttributionDB(path string) (*sql.DB, error) {
 	// would be opened read-write.
 	conn, err := sql.Open(
 		"sqlite3",
-		"file:"+path+"?mode=ro&_busy_timeout=3000",
+		"file:"+sqliteURIPath(path)+"?mode=ro&_busy_timeout=3000",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("opening cursor attribution db: %w", err)

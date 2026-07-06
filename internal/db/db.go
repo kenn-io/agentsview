@@ -636,6 +636,16 @@ func (db *DB) SetCursorSecret(secret []byte) {
 }
 
 // makeDSN builds a SQLite connection string with shared pragmas.
+//
+// Both branches emit a file: URI. mattn/go-sqlite3 forwards the `_`-prefixed
+// pragma params either way, but it only honors mode=ro when the DSN carries
+// the file: scheme — a bare path silently opens read-write, so the ro
+// contract depends on the prefix.
+//
+// The path component is percent-encoded (slashes kept intact): SQLite
+// percent-decodes URI paths and splits params at `?`, so a raw path
+// containing `%`, `?`, or `#` would be misparsed — e.g. a literal "%41" in a
+// directory name would silently open a different file.
 func makeDSN(path string, readOnly bool) string {
 	params := url.Values{}
 	params.Set("_journal_mode", "WAL")
@@ -648,7 +658,8 @@ func makeDSN(path string, readOnly bool) string {
 	} else {
 		params.Set("_synchronous", "NORMAL")
 	}
-	return path + "?" + params.Encode()
+	escaped := (&url.URL{Path: path}).EscapedPath()
+	return "file:" + escaped + "?" + params.Encode()
 }
 
 // Open creates or opens a SQLite database at the given path.
@@ -2528,15 +2539,18 @@ func (db *DB) Close() error {
 	db.connMu.Unlock()
 	db.mu.Unlock()
 
+	// Close the writer last: SQLite checkpoints and removes the WAL when
+	// the final connection closes, and the reader pool is mode=ro so its
+	// close cannot perform that checkpoint.
 	var errs []error
-	if w != nil && w != r {
-		errs = append(errs, w.Close())
+	for _, p := range retired {
+		errs = append(errs, p.Close())
 	}
 	if r != nil {
 		errs = append(errs, r.Close())
 	}
-	for _, p := range retired {
-		errs = append(errs, p.Close())
+	if w != nil && w != r {
+		errs = append(errs, w.Close())
 	}
 	return errors.Join(errs...)
 }
@@ -2555,13 +2569,19 @@ func (db *DB) CloseConnections() error {
 	db.connMu.Lock()
 	defer db.connMu.Unlock()
 
-	errs := []error{
-		db.rawWriter().Close(),
-		db.rawReader().Close(),
-	}
+	// Close the writer last: SQLite checkpoints and removes the WAL when
+	// the final connection closes, and the reader pool is mode=ro so its
+	// close cannot perform that checkpoint. Callers rename or delete the
+	// WAL file after this returns, so a skipped checkpoint would lose
+	// every write still sitting in the log.
+	var errs []error
 	for _, p := range db.retired {
 		errs = append(errs, p.Close())
 	}
+	errs = append(errs,
+		db.rawReader().Close(),
+		db.rawWriter().Close(),
+	)
 	db.retired = nil
 	return errors.Join(errs...)
 }

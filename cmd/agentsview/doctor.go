@@ -202,12 +202,17 @@ func inspectDoctorDB(path string) doctorDBInspection {
 	return insp
 }
 
+// doctorReadOnlyDSN builds a read-only sqlite3 DSN. The file: scheme is
+// required for mattn/go-sqlite3 to honor mode=ro (a bare path silently opens
+// read-write), and the path is percent-encoded so `%`, `?`, or `#` in a real
+// path cannot be misparsed as URI syntax.
 func doctorReadOnlyDSN(path string) string {
 	params := url.Values{}
 	params.Set("mode", "ro")
 	params.Set("_busy_timeout", "5000")
 	params.Set("_foreign_keys", "ON")
-	return path + "?" + params.Encode()
+	escaped := (&url.URL{Path: path}).EscapedPath()
+	return "file:" + escaped + "?" + params.Encode()
 }
 
 func listDoctorResyncTempFiles(dbPath string) []string {
