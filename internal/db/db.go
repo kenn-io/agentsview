@@ -646,9 +646,13 @@ func (db *DB) SetCursorSecret(secret []byte) {
 // percent-decodes URI paths and splits params at `?`, so a raw path
 // containing `%`, `?`, or `#` would be misparsed — e.g. a literal "%41" in a
 // directory name would silently open a different file.
+//
+// _journal_mode=WAL is set only on writable DSNs (mirroring vectorDSN):
+// PRAGMA journal_mode=WAL is a write, so with mode=ro honored it would fail
+// outright on a database left in a non-WAL journal mode. Read-only
+// connections just adopt whatever journal mode the file already has.
 func makeDSN(path string, readOnly bool) string {
 	params := url.Values{}
-	params.Set("_journal_mode", "WAL")
 	params.Set("_busy_timeout", "5000")
 	params.Set("_foreign_keys", "ON")
 	params.Set("_mmap_size", "268435456")
@@ -656,6 +660,7 @@ func makeDSN(path string, readOnly bool) string {
 	if readOnly {
 		params.Set("mode", "ro")
 	} else {
+		params.Set("_journal_mode", "WAL")
 		params.Set("_synchronous", "NORMAL")
 	}
 	escaped := (&url.URL{Path: path}).EscapedPath()

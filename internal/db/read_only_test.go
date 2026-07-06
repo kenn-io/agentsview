@@ -175,6 +175,36 @@ func TestOpenPathWithSpecialCharacters(t *testing.T) {
 		"the refusal must be SQLite's readonly-database error, got: %v", err)
 }
 
+// TestOpenReadOnlyNonWALJournalMode pins that a current-schema database left
+// in a non-WAL journal mode still opens read-only: the ro DSN must not carry
+// _journal_mode=WAL, because PRAGMA journal_mode=WAL is a write and fails on
+// a mode=ro connection. The reader adopts the file's DELETE journal mode and
+// still refuses writes.
+func TestOpenReadOnlyNonWALJournalMode(t *testing.T) {
+	path := createClosedTestDB(t, tempDBPath(t, "sessions.db"), func(d *DB) {
+		require.NoError(t, d.SetSyncState("journal_probe", "delete-mode"))
+	})
+	execRawSQLite(t, path, "PRAGMA journal_mode=DELETE")
+	_, err := os.Stat(path + "-wal")
+	require.ErrorIs(t, err, os.ErrNotExist,
+		"test setup: DELETE journal mode must have removed the WAL file")
+
+	readonly := openReadOnlyTestDB(t, path)
+	assert.True(t, readonly.ReadOnly())
+
+	got, err := readonly.GetSyncState("journal_probe")
+	require.NoError(t, err)
+	assert.Equal(t, "delete-mode", got)
+
+	require.ErrorIs(t, readonly.SetSyncState("journal_probe", "x"), ErrReadOnly)
+	_, err = readonly.rawReader().Exec(
+		`INSERT INTO stats (key, value) VALUES ('ro_probe', 1)`)
+	require.Error(t, err,
+		"a read-only reader connection must refuse writes")
+	assert.Contains(t, err.Error(), "readonly",
+		"the refusal must be SQLite's readonly-database error, got: %v", err)
+}
+
 func TestOpenReadOnlyWriteMethodsReturnErrReadOnly(t *testing.T) {
 	pricing := testModelPricing("model-a")
 	path := createClosedTestDB(t, tempDBPath(t, "sessions.db"), func(d *DB) {
