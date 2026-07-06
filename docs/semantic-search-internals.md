@@ -334,8 +334,10 @@ Generation activation always happens under the single writer. Search opens
   no extra index is needed. Hits on the same unit fuse under one key; when the
   FTS leg contributes, the exact matched message becomes the hit's anchor
   regardless of chunk center. An FTS hit with no containing unit keeps a
-  message-granularity fusion key, is never subordinate-penalized, and survives
-  fusion on its own.
+  message-granularity fusion key and survives fusion on its own, carrying the
+  structurally derived subordinate flag through scope filtering and the fusion
+  penalty — the same classification lexical mode gives the anchor (see
+  [Conversation-unit citations](#conversation-unit-citations)).
 - **Metadata filters post-filter the vector leg, with over-fetch.** Vector KNN
   doesn't know about `--project`/`--agent`/`--date*`, so the vector leg
   over-fetches `max(limit × 4, 200)` candidates, then filters and truncates to
@@ -463,7 +465,9 @@ across backends.
   probe.
 - **Cost.** Measured overhead on the gated content-search benchmarks is
   sub-millisecond-scale on a 50-hit page; the benchmarks live in `internal/db`
-  and are CI-gated.
+  and are CI-gated. If real-corpus profiling ever shows meaningful cost, the
+  remedy is an explicit opt-out — citations must never silently self-disable
+  based on index or corpus state.
 
 ## Error taxonomy
 
