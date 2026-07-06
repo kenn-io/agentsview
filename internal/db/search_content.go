@@ -1010,9 +1010,13 @@ type semanticHitKey struct {
 // than from the searcher's pre-truncated chunk/snippet text, so secret
 // redaction sees the same whole-body context the substring/regex/fts paths
 // give it instead of a fragment that can split a secret at the truncation
-// boundary.
+// boundary. relationshipType, parentSessionID, and isSidechain carry the
+// hit's lineage — joined here from sessions.db (the vector mirror does not
+// store lineage per hit); isSidechain is the ANCHOR ordinal's message flag.
 type semanticHitInfo struct {
 	project, agent, role, timestamp, content string
+	relationshipType, parentSessionID        string
+	isSidechain                              bool
 }
 
 // enrichHitsChunk is the max hits enrichSemanticHits binds per VALUES CTE
@@ -1043,7 +1047,9 @@ func (db *DB) enrichSemanticHits(
 		query := "WITH hits(session_id, ordinal) AS (VALUES " +
 			strings.Join(values, ", ") + ") " +
 			"SELECT m.session_id, s.project, s.agent, m.role, m.ordinal, " +
-			"COALESCE(m.timestamp, ''), m.content " +
+			"COALESCE(m.timestamp, ''), m.content, " +
+			"COALESCE(s.relationship_type, ''), " +
+			"COALESCE(s.parent_session_id, ''), m.is_sidechain " +
 			"FROM hits h " +
 			"JOIN messages m ON m.session_id = h.session_id AND m.ordinal = h.ordinal " +
 			"JOIN sessions s ON s.id = m.session_id"
@@ -1056,7 +1062,9 @@ func (db *DB) enrichSemanticHits(
 			var key semanticHitKey
 			var info semanticHitInfo
 			if err := rows.Scan(&key.sessionID, &info.project, &info.agent,
-				&info.role, &key.ordinal, &info.timestamp, &info.content); err != nil {
+				&info.role, &key.ordinal, &info.timestamp, &info.content,
+				&info.relationshipType, &info.parentSessionID,
+				&info.isSidechain); err != nil {
 				rows.Close()
 				return nil, fmt.Errorf("scan semantic hit: %w", err)
 			}

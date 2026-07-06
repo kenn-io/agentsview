@@ -2,9 +2,12 @@ package vector
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"unicode/utf8"
 
+	"go.kenn.io/agentsview/internal/db"
 	kitvec "go.kenn.io/kit/vector"
 )
 
@@ -12,12 +15,19 @@ import (
 // truncated with a trailing ellipsis.
 const snippetMaxRunes = 200
 
-// Hit is one message-level semantic search result.
+// Hit is one unit-level semantic search result, anchored to a specific
+// message. For a run document Ordinal is the anchor: the member message
+// whose rune span contains the matched chunk's center rune (see
+// anchorOrdinal), while OrdinalStart/OrdinalEnd span the whole run. For a
+// user document all three ordinals are the message's own ordinal.
 type Hit struct {
-	SessionID string
-	Ordinal   int
-	Score     float32
-	Snippet   string
+	SessionID    string
+	Ordinal      int // anchor ordinal
+	OrdinalStart int
+	OrdinalEnd   int
+	Subordinate  bool
+	Score        float32
+	Snippet      string
 }
 
 // ErrNoActiveGeneration is returned by Search when the index has no active
@@ -149,19 +159,22 @@ func (ix *Index) buildingPercent(ctx context.Context, fingerprint string) (int, 
 }
 
 // mirrorDoc is the subset of a vector_messages row Search needs to hydrate a
-// kit hit into an agentsview Hit.
+// kit hit into an agentsview Hit. offsets is empty for user documents.
 type mirrorDoc struct {
-	sessionID string
-	ordinal   int
-	content   string
+	sessionID   string
+	ordinal     int
+	ordinalEnd  int
+	subordinate bool
+	offsets     []db.UnitOffset
+	content     string
 }
 
 // hydrateHits maps kit's doc-key-level hits to agentsview Hits: it looks up
-// each doc_key's (session_id, ordinal, content) in the mirror in one query
-// and computes a snippet by re-splitting content. Hits whose doc_key
-// vanished from the mirror mid-flight (a concurrent Refresh reconciled it
-// away) are dropped rather than erroring, since the search itself still
-// succeeded.
+// each doc_key's mirror row in one query, anchors run hits to a member
+// ordinal, and computes a snippet by re-splitting content. Hits whose
+// doc_key vanished from the mirror mid-flight (a concurrent Refresh
+// reconciled it away) are dropped rather than erroring, since the search
+// itself still succeeded.
 func (ix *Index) hydrateHits(ctx context.Context, hits []kitvec.Hit[string]) ([]Hit, error) {
 	if len(hits) == 0 {
 		return nil, nil
@@ -182,37 +195,97 @@ func (ix *Index) hydrateHits(ctx context.Context, hits []kitvec.Hit[string]) ([]
 		if !ok {
 			continue
 		}
-		out = append(out, Hit{
-			SessionID: doc.sessionID,
-			Ordinal:   doc.ordinal,
-			Score:     h.Score,
-			Snippet:   ix.snippet(doc.content, h.ChunkIndex),
-		})
+		out = append(out, ix.resolveHit(h, doc))
 	}
 	return out, nil
 }
 
-// lookupMirrorDocs reads (session_id, ordinal, content) for each of docKeys
-// from vector_messages, keyed by doc_key, in maxSQLVars-sized chunks: a deep
-// semantic overfetch (large limit * over-fetch factor) can carry thousands
-// of doc keys, well past what a single IN (...) clause can bind. A key with
-// no matching row is simply absent from the result.
+// resolveHit builds the Hit for one matched document. A user document
+// (empty offsets) anchors to its own mirror ordinal; a run document anchors
+// to the member whose rune span contains the matched chunk's center rune.
+func (ix *Index) resolveHit(h kitvec.Hit[string], doc mirrorDoc) Hit {
+	hit := Hit{
+		SessionID:    doc.sessionID,
+		Ordinal:      doc.ordinal,
+		OrdinalStart: doc.ordinal,
+		OrdinalEnd:   doc.ordinalEnd,
+		Subordinate:  doc.subordinate,
+		Score:        h.Score,
+		Snippet:      ix.snippet(doc.content, h.ChunkIndex),
+	}
+	if len(doc.offsets) > 0 {
+		hit.Ordinal = anchorOrdinal(doc.offsets,
+			utf8.RuneCountInString(doc.content), h.ChunkIndex, ix.split)
+	}
+	return hit
+}
+
+// chunkWindow returns the [start, end) rune window of content's
+// chunkIndex'th chunk, mirroring kitvec.Split's semantics exactly: content
+// that fits MaxRunes (or unbounded splitting) is one whole-content chunk;
+// otherwise chunks start at multiples of the stride (MaxRunes minus the
+// clamped overlap) and the final chunk is capped at the content's end, so
+// end-start is the chunk's ACTUAL rune length, not always MaxRunes.
+// TestChunkWindowMatchesKitSplit cross-checks this against kitvec.Split.
+func chunkWindow(contentRunes, chunkIndex int, o kitvec.SplitOptions) (start, end int) {
+	if o.MaxRunes <= 0 || contentRunes <= o.MaxRunes {
+		return 0, contentRunes
+	}
+	overlap := min(max(o.Overlap, 0), o.MaxRunes-1)
+	stride := o.MaxRunes - overlap
+	start = chunkIndex * stride
+	end = min(start+o.MaxRunes, contentRunes)
+	return start, end
+}
+
+// anchorOrdinal maps a matched chunk back to the run member whose rune span
+// contains the chunk's center rune (chunk_start + actual_chunk_runes/2).
+// Separator runes between members belong to no member's span, so a center
+// falling there resolves to the preceding member: the earlier member wins a
+// boundary tie. offsets must be non-empty (run documents only); user
+// documents pass their ordinal through without calling this.
+func anchorOrdinal(offsets []db.UnitOffset, contentRunes, chunkIndex int, o kitvec.SplitOptions) int {
+	start, end := chunkWindow(contentRunes, chunkIndex, o)
+	center := start + (end-start)/2
+	anchor := offsets[0].Ordinal
+	for _, off := range offsets {
+		if off.RuneStart <= center {
+			anchor = off.Ordinal
+		} else {
+			break
+		}
+	}
+	return anchor
+}
+
+// lookupMirrorDocs reads each of docKeys' mirror rows (session_id, ordinal
+// range, subordinate flag, member offsets, content) from vector_messages,
+// keyed by doc_key, in maxSQLVars-sized chunks: a deep semantic overfetch
+// (large limit * over-fetch factor) can carry thousands of doc keys, well
+// past what a single IN (...) clause can bind. A key with no matching row is
+// simply absent from the result.
 func (ix *Index) lookupMirrorDocs(ctx context.Context, docKeys []string) (map[string]mirrorDoc, error) {
 	docs := make(map[string]mirrorDoc, len(docKeys))
 	err := chunkKeys(docKeys, func(chunk []string) error {
 		placeholders, args := inPlaceholders(chunk)
 		rows, err := ix.db.QueryContext(ctx, `
-SELECT doc_key, session_id, ordinal, content FROM vector_messages
+SELECT doc_key, session_id, ordinal, ordinal_end, subordinate, offsets, content
+  FROM vector_messages
  WHERE doc_key IN `+placeholders, args...)
 		if err != nil {
 			return fmt.Errorf("look up search hit documents: %w", err)
 		}
 		for rows.Next() {
-			var key string
+			var key, offsets string
 			var doc mirrorDoc
-			if err := rows.Scan(&key, &doc.sessionID, &doc.ordinal, &doc.content); err != nil {
+			if err := rows.Scan(&key, &doc.sessionID, &doc.ordinal,
+				&doc.ordinalEnd, &doc.subordinate, &offsets, &doc.content); err != nil {
 				rows.Close()
 				return fmt.Errorf("scan search hit document: %w", err)
+			}
+			if err := json.Unmarshal([]byte(offsets), &doc.offsets); err != nil {
+				rows.Close()
+				return fmt.Errorf("parse offsets for search hit %s: %w", key, err)
 			}
 			docs[key] = doc
 		}

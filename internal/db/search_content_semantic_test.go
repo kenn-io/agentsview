@@ -170,6 +170,82 @@ func TestSearchContentSemanticMessagesSourceAllowed(t *testing.T) {
 	require.Len(t, page.Matches, 1)
 }
 
+// TestEnrichSemanticHitsCarriesLineage pins the enrichment join for
+// run-anchored hits: relationship_type and parent_session_id come from the
+// hit's session row and is_sidechain from the anchor ordinal's message row,
+// while a top-level session yields empty lineage.
+func TestEnrichSemanticHitsCarriesLineage(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "parent", "proj", func(s *Session) {
+		s.UserMessageCount = 2
+	})
+	insertSession(t, d, "child", "proj", func(s *Session) {
+		s.UserMessageCount = 2
+		s.ParentSessionID = Ptr("parent")
+		s.RelationshipType = "subagent"
+	})
+	require.NoError(t, d.ReplaceSessionMessages("parent", []Message{
+		{SessionID: "parent", Ordinal: 0, Role: "user",
+			Content: "top-level question", Timestamp: "2026-05-20T12:00:00Z"},
+	}))
+	require.NoError(t, d.ReplaceSessionMessages("child", []Message{
+		{SessionID: "child", Ordinal: 0, Role: "user",
+			Content: "subagent prompt", Timestamp: "2026-05-20T12:00:01Z"},
+		{SessionID: "child", Ordinal: 1, Role: "assistant", IsSidechain: true,
+			Content: "sidechain step one", Timestamp: "2026-05-20T12:00:02Z"},
+		{SessionID: "child", Ordinal: 2, Role: "assistant", IsSidechain: true,
+			Content: "sidechain step two", Timestamp: "2026-05-20T12:00:03Z"},
+	}))
+
+	meta, err := d.enrichSemanticHits(context.Background(), []VectorHit{
+		{SessionID: "child", Ordinal: 1, OrdinalStart: 1, OrdinalEnd: 2,
+			Subordinate: true, Score: 0.9},
+		{SessionID: "parent", Ordinal: 0, OrdinalStart: 0, OrdinalEnd: 0,
+			Score: 0.5},
+	})
+	require.NoError(t, err)
+
+	child, ok := meta[semanticHitKey{"child", 1}]
+	require.True(t, ok, "child hit enriched")
+	assert.Equal(t, "subagent", child.relationshipType)
+	assert.Equal(t, "parent", child.parentSessionID)
+	assert.True(t, child.isSidechain, "anchor message is_sidechain")
+	assert.Equal(t, "assistant", child.role)
+
+	top, ok := meta[semanticHitKey{"parent", 0}]
+	require.True(t, ok, "parent hit enriched")
+	assert.Empty(t, top.relationshipType)
+	assert.Empty(t, top.parentSessionID)
+	assert.False(t, top.isSidechain)
+}
+
+// TestSearchContentSemanticAnchorOrdinalHit pins that a run-anchored hit
+// (anchor ordinal pointing at an assistant message inside the run, with the
+// range and subordinate flag populated) enriches by the anchor ordinal: the
+// match carries the anchor message's role and timestamp.
+func TestSearchContentSemanticAnchorOrdinalHit(t *testing.T) {
+	d := testDB(t)
+	seedSearchSession(t, d, "s1", "alpha", [][2]string{
+		{"user", "the question"},
+		{"assistant", "first step of the answer"},
+		{"assistant", "second step of the answer"},
+	})
+	d.SetVectorSearcher(&fakeVectorSearcher{hits: []VectorHit{
+		{SessionID: "s1", Ordinal: 2, OrdinalStart: 1, OrdinalEnd: 2,
+			Score: 0.9, Snippet: "second step of the answer"},
+	}})
+
+	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "answer", Mode: "semantic", Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent")
+	require.Len(t, page.Matches, 1, "matches")
+	m := page.Matches[0]
+	assert.Equal(t, 2, m.Ordinal, "anchor ordinal")
+	assert.Equal(t, "assistant", m.Role, "anchor message role")
+	assert.Contains(t, m.Snippet, "second step")
+}
+
 // TestSearchContentSemanticRedactsSecretPastChunkTruncation pins that
 // semantic mode redacts against the message's full content, not the
 // searcher's pre-truncated chunk snippet. The fake searcher's Snippet is cut

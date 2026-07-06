@@ -25,12 +25,20 @@ var ErrSemanticUnavailable = errors.New(
 var ErrSemanticTransient = errors.New(
 	"semantic search embeddings endpoint is unavailable; the request can be retried")
 
-// VectorHit is one message-level semantic search hit, ranked best first.
+// VectorHit is one unit-level semantic search hit, ranked best first.
+// Ordinal is the anchor ordinal: for a run document, the member message
+// whose rune span contains the matched chunk's center; for a user document
+// it is the message's own ordinal. OrdinalStart/OrdinalEnd span the whole
+// unit (both equal Ordinal for user documents), and Subordinate carries the
+// unit's sidechain/subagent classification from the vector mirror.
 type VectorHit struct {
-	SessionID string
-	Ordinal   int
-	Score     float32
-	Snippet   string
+	SessionID    string
+	Ordinal      int // anchor ordinal
+	OrdinalStart int
+	OrdinalEnd   int
+	Subordinate  bool
+	Score        float32
+	Snippet      string
 }
 
 // VectorSearcher is the seam through which internal/db reaches the vector

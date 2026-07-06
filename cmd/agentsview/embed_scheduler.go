@@ -272,10 +272,13 @@ func (a searcherAdapter) SemanticSearch(
 	out := make([]db.VectorHit, len(hits))
 	for i, h := range hits {
 		out[i] = db.VectorHit{
-			SessionID: h.SessionID,
-			Ordinal:   h.Ordinal,
-			Score:     h.Score,
-			Snippet:   h.Snippet,
+			SessionID:    h.SessionID,
+			Ordinal:      h.Ordinal,
+			OrdinalStart: h.OrdinalStart,
+			OrdinalEnd:   h.OrdinalEnd,
+			Subordinate:  h.Subordinate,
+			Score:        h.Score,
+			Snippet:      h.Snippet,
 		}
 	}
 	return out, nil
