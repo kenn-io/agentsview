@@ -667,6 +667,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		CursorAdminEmail               string                     `toml:"cursor_admin_email"`
 		CursorAdminUserID              string                     `toml:"cursor_admin_user_id"`
 		Host                           string                     `toml:"host"`
+		Port                           int                        `toml:"port"`
 		PublicURL                      string                     `toml:"public_url"`
 		PublicOrigins                  []string                   `toml:"public_origins"`
 		Proxy                          ProxyConfig                `toml:"proxy"`
@@ -712,6 +713,9 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if file.Host != "" {
 		c.Host = file.Host
+	}
+	if file.Port != 0 {
+		c.Port = file.Port
 	}
 	if file.PublicURL != "" {
 		c.PublicURL = file.PublicURL
