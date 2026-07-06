@@ -1,3 +1,4 @@
+// kit-ui-check-ignore: Mermaid returns raw SVG, not markdown HTML; this path keeps a strict SVG-only DOMPurify profile before {@html} injection.
 import DOMPurify from "dompurify";
 
 type MermaidModule = typeof import("mermaid");
