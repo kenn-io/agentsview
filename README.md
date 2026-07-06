@@ -277,6 +277,11 @@ agentsview stats --include-git-outcomes
 | ![Search](https://agentsview.io/assets/generated/screenshots/search-results.png) | ![Heatmap](https://agentsview.io/assets/generated/screenshots/heatmap.png) |
 
 - **Full-text search** across all message content (FTS5)
+- **Semantic search** (opt-in) -- index session content with any
+  OpenAI-compatible embeddings endpoint and search by meaning with
+  `agentsview session search --semantic` or `--hybrid`; every content-search
+  match cites the conversation unit it came from
+  ([docs](https://agentsview.io/semantic-search/))
 - **Token usage and cost dashboard** -- per-session and per-model cost
   breakdowns, daily spend charts, all in the web UI
 - **Analytics dashboard** -- activity heatmaps, tool usage, velocity metrics,

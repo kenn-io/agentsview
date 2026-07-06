@@ -278,3 +278,8 @@ Once running, the web UI provides:
 - **Activity reporting** with concurrency, agent-minutes, cost, and session rows
 - **Session export** to standalone HTML, markdown export links for agent
     handoff, or GitHub Gist
+
+Beyond full-text search, opt-in semantic search lets
+`agentsview session search --semantic` (or `--hybrid`) match session content by
+meaning, backed by a local or hosted embeddings endpoint. See
+[Semantic Search](/semantic-search/) for setup.
