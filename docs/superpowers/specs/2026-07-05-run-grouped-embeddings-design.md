@@ -155,8 +155,10 @@ the fingerprint as `chunk_overlap_chars`. No kit changes required.
 **Anchor policy:** a hit's anchor is the message whose rune span contains the
 matched chunk's center rune, `chunk_start + len(chunk_runes)/2` — the chunk's
 actual rune length, not `max_runes`, so short final chunks anchor at their true
-center; if the center falls on a boundary, the earlier message wins. kit's
-`Hit.ChunkIndex` plus `SplitOptions` reproduce the chunk window
+center. Each member owns its own text span; the `\n\n` separator before the next
+member belongs to the gap, so a center inside a separator anchors the earlier
+member, while a center exactly at a member's first rune anchors that member.
+kit's `Hit.ChunkIndex` plus `SplitOptions` reproduce the chunk window
 deterministically from the mirrored content.
 
 ## Search, ranking, citation
@@ -186,10 +188,13 @@ deterministically from the mirrored content.
   and parent-linked unknowns). All other session filters (automated, one-shot,
   project, agent, dates) continue to apply in every mode. FTS-only, substring,
   and regex modes keep today's `include_children` semantics unchanged.
-- **Subordinate penalty.** Applied at the merge step as a rank-based adjustment
-  (subordinate hits' RRF contributions use `rank + P`, with `P` a small
-  constant, initial value 5), not a hard tier and not a score multiplier — RRF
-  ranks are the only scale that is comparable across legs.
+- **Subordinate penalty.** A rank-based adjustment: subordinate hits' RRF
+  contributions use `rank + P`, with `P` a small constant, initial value 5 —
+  not a hard tier and not a score multiplier, since RRF ranks are the only
+  scale comparable across legs. Semantic-only search applies the same
+  adjustment by routing its single result list through the local RRF merge as
+  a one-leg fusion, so `--semantic --scope all` downranks subordinate hits
+  identically to hybrid; there is exactly one penalty implementation.
 - **Hybrid fusion.** The FTS leg stays message-granularity (exact strings,
   commands, filenames). Before RRF, each FTS message hit maps to its
   containing unit (its user doc, or the run whose ordinal range contains it);

@@ -56,7 +56,9 @@ kit changes), testify, Svelte frontend client regen.
   agent/date filters still apply in every mode; FTS-only/substring/regex modes
   keep today's `include_children` semantics.
 - Subordinate penalty: local RRF merge, subordinate contributions use
-  `rank + 5`, rank constant stays 60.
+  `rank + 5`, rank constant stays 60. Semantic-only search routes its single
+  result list through the same merge as a one-leg fusion so the penalty
+  applies identically — one implementation, no hybrid-only special case.
 - The unique `(session_id, ordinal)` mirror index is retained unchanged; the
   resolver does point lookups (greatest `ordinal <= x`, verify
   `x <= ordinal_end`); no new index.
@@ -473,7 +475,9 @@ func rrfMerge(legs [][]unitRanked, limit int) []mergedUnit {
       (follow existing chunk-bind tests).
     - Merge: identical unit in both legs outranks single-leg; subordinate unit
       ranked at i is beaten by top-level unit at i (penalty works); determinism
-      on ties; limit honored.
+      on ties; limit honored; semantic-only (one-leg) path applies the same
+      penalty — a subordinate semantic hit ranked above a top-level one drops
+      below it after the one-leg merge.
     - Hybrid end-to-end: FTS-matched message inside a run fuses with the run's
       semantic hit into ONE result whose anchor is the FTS message; FTS hit with
       no unit stays message-granularity.
