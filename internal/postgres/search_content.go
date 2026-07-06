@@ -268,7 +268,9 @@ func pgToolResultEventsBranch(
 
 // scanPGContentMatches runs query and assembles a ContentSearchPage. The
 // query's final column is the full source field; makeSnippet derives the
-// windowed, redacted snippet so redaction sees whole secrets.
+// windowed, redacted snippet so redaction sees whole secrets. The returned
+// page then gets its derived unit ranges and lineage assigned by the shared
+// deriveLexicalUnitsPG pass (post-truncation, O(page)).
 func (s *Store) scanPGContentMatches(
 	ctx context.Context, query string, args []any, limit, cursor int,
 	makeSnippet func(body string) string,
@@ -300,6 +302,9 @@ func (s *Store) scanPGContentMatches(
 	if len(out) > limit {
 		page.Matches = out[:limit]
 		page.NextCursor = cursor + limit
+	}
+	if err := s.deriveLexicalUnitsPG(ctx, page.Matches); err != nil {
+		return db.ContentSearchPage{}, err
 	}
 	return page, nil
 }
@@ -355,6 +360,9 @@ func (s *Store) searchContentRegexPG(
 	if len(out) > f.Limit {
 		page.Matches = out[:f.Limit]
 		page.NextCursor = f.Cursor + f.Limit
+	}
+	if err := s.deriveLexicalUnitsPG(ctx, page.Matches); err != nil {
+		return db.ContentSearchPage{}, err
 	}
 	return page, nil
 }
