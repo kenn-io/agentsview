@@ -113,33 +113,46 @@ type AnalyticsFilter struct {
 	// on the sum/count surfaces GetAnalyticsSummary and
 	// GetAnalyticsProjects. Distribution surfaces (session-shape,
 	// velocity, timing) leave it false so short subagent sessions do not
-	// skew them. Fork rows stay excluded regardless because their tokens
-	// overlap a root.
+	// skew them.
 	IncludeSubagents bool
+	// IncludeForks counts fork sessions (rewound conversation branches
+	// split out by the claude and piebald parsers). Fork sessions hold
+	// only their own branch's messages, never replayed copies, so their
+	// usage is real spend; GetDailyUsage counts it via per-row dedup.
+	// Set only by GetActivityReport so its cost totals match daily
+	// usage. Aggregate analytics surfaces leave forks excluded so a
+	// rewound branch does not count as an extra session.
+	IncludeForks bool
 }
 
 // RelationshipExclusionSQL returns the relationship_type predicate for
 // analytics aggregation. The default excludes subagent and fork rows
-// (matching the session list). When IncludeSubagents is set, subagent
-// rows are counted while fork rows stay excluded to avoid
-// double-counting tokens that overlap their root session. Exported so
-// the PostgreSQL and DuckDB analytics builders apply the same rule.
+// (matching the session list); IncludeSubagents and IncludeForks each
+// lift one exclusion. Exported so the PostgreSQL and DuckDB analytics
+// builders apply the same rule.
 func (f AnalyticsFilter) RelationshipExclusionSQL() string {
-	return RelationshipExclusionSQL(f.IncludeSubagents, "")
+	return RelationshipExclusionSQL(f.IncludeSubagents, f.IncludeForks, "")
 }
 
 // RelationshipExclusionSQL is the single source of truth for the
 // relationship_type analytics predicate, shared by the analytics
 // builders (AnalyticsFilter) and the stats pipeline (StatsFilter).
 // colPrefix qualifies the column for callers that alias the sessions
-// table (e.g. "s."); pass "" for an unqualified column. fork rows are
-// always excluded; subagents are excluded unless includeSubagents.
-func RelationshipExclusionSQL(includeSubagents bool, colPrefix string) string {
+// table (e.g. "s."); pass "" for an unqualified column. Subagent and
+// fork rows are excluded unless the corresponding include flag is set;
+// with both set the predicate is a no-op so the clause stays composable.
+func RelationshipExclusionSQL(includeSubagents, includeForks bool, colPrefix string) string {
 	col := colPrefix + "relationship_type"
-	if includeSubagents {
+	switch {
+	case includeSubagents && includeForks:
+		return "1=1"
+	case includeSubagents:
 		return col + " NOT IN ('fork')"
+	case includeForks:
+		return col + " NOT IN ('subagent')"
+	default:
+		return col + " NOT IN ('subagent', 'fork')"
 	}
-	return col + " NOT IN ('subagent', 'fork')"
 }
 
 // OneShotExclusionSQL wraps the one-shot exclusion predicate so it does

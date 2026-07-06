@@ -175,12 +175,13 @@ func TestGetActivityReport_PricingModelsOnlyIncludeDedupSurvivors(t *testing.T) 
 	assert.NotContains(t, r.Pricing.Models, "discarded-model")
 }
 
-// TestGetActivityReport_IncludesSubagentUsage confirms subagent sessions
-// are candidates so their usage lands in the totals, keeping the activity
-// cost consistent with GetDailyUsage (which never filters by
-// relationship_type). Fork sessions stay excluded: their rows replay a
-// root's messages, and the report's session table and timeline must not
-// duplicate the root's activity.
+// TestGetActivityReport_IncludesSubagentUsage confirms subagent and fork
+// sessions are candidates so their usage lands in the totals, keeping the
+// activity cost consistent with GetDailyUsage (which never filters by
+// relationship_type). A fork whose only usage row replays the root's
+// Claude ids contributes a session row but no extra cost: the aggregator's
+// first-seen dedup collapses the duplicate, the same guarantee
+// GetDailyUsage relies on.
 func TestGetActivityReport_IncludesSubagentUsage(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
@@ -213,9 +214,8 @@ func TestGetActivityReport_IncludesSubagentUsage(t *testing.T) {
 		ClaudeMessageID: "m-sub", ClaudeRequestID: "r-sub",
 		TokenUsage: json.RawMessage(`{"input_tokens":2000,"output_tokens":700}`),
 	})
-	// Fork replaying the root's message: same Claude ids, so even if it
-	// leaked into the candidate set the dedup would drop it, but it must
-	// not appear as a session row at all.
+	// Fork replaying the root's message: same Claude ids, so the dedup
+	// must drop its usage row while the session itself still appears.
 	insertSession(t, d, "fork", "proj1", func(s *Session) {
 		s.Agent = "claude"
 		s.ParentSessionID = Ptr("root")
@@ -237,10 +237,11 @@ func TestGetActivityReport_IncludesSubagentUsage(t *testing.T) {
 	assert.Contains(t, ids, "root")
 	assert.Contains(t, ids, "agent-sub",
 		"subagent session must be a candidate")
-	assert.NotContains(t, ids, "fork", "fork sessions stay excluded")
+	assert.Contains(t, ids, "fork", "fork session must be a candidate")
 	assert.Equal(t, 1200, r.Totals.OutputTokens,
-		"totals include subagent usage, matching GetDailyUsage")
-	// Cost = root (1000*3+500*15)/1e6 + subagent (2000*3+700*15)/1e6.
+		"totals include subagent usage; the fork's replayed row dedups away")
+	// Cost = root (1000*3+500*15)/1e6 + subagent (2000*3+700*15)/1e6; the
+	// fork's duplicate row contributes nothing.
 	assert.InDelta(t, 0.0105+0.0165, r.Totals.Cost, 1e-9)
 }
 

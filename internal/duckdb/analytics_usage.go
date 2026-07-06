@@ -176,10 +176,11 @@ func duckBuildAnalyticsWhere(
 	q := func(col string) string { return tablePrefix + col }
 	preds := []string{
 		q("message_count") + " > 0",
-		// Mirror the SQLite analytics filter: count subagents only on
-		// opt-in sum/count surfaces; fork rows stay excluded always. The
-		// shared helper qualifies the column with tablePrefix directly.
-		db.RelationshipExclusionSQL(f.IncludeSubagents, tablePrefix),
+		// Mirror the SQLite analytics filter: subagent and fork rows are
+		// excluded unless the filter opts in (sum/count surfaces for
+		// subagents, the activity report for both). The shared helper
+		// qualifies the column with tablePrefix directly.
+		db.RelationshipExclusionSQL(f.IncludeSubagents, f.IncludeForks, tablePrefix),
 		q("deleted_at") + " IS NULL",
 	}
 	var args []any

@@ -223,24 +223,34 @@ func TestGetAnalyticsSummary(t *testing.T) {
 func TestRelationshipExclusionSQL(t *testing.T) {
 	cases := []struct {
 		includeSubagents bool
+		includeForks     bool
 		colPrefix        string
 		want             string
 	}{
-		{false, "", "relationship_type NOT IN ('subagent', 'fork')"},
-		{true, "", "relationship_type NOT IN ('fork')"},
-		{false, "s.", "s.relationship_type NOT IN ('subagent', 'fork')"},
-		{true, "s.", "s.relationship_type NOT IN ('fork')"},
+		{false, false, "", "relationship_type NOT IN ('subagent', 'fork')"},
+		{true, false, "", "relationship_type NOT IN ('fork')"},
+		{false, true, "", "relationship_type NOT IN ('subagent')"},
+		{true, true, "", "1=1"},
+		{false, false, "s.", "s.relationship_type NOT IN ('subagent', 'fork')"},
+		{true, false, "s.", "s.relationship_type NOT IN ('fork')"},
+		{false, true, "s.", "s.relationship_type NOT IN ('subagent')"},
+		{true, true, "s.", "1=1"},
 	}
 	for _, c := range cases {
-		got := RelationshipExclusionSQL(c.includeSubagents, c.colPrefix)
+		got := RelationshipExclusionSQL(c.includeSubagents, c.includeForks, c.colPrefix)
 		assert.Equal(t, c.want, got,
-			"includeSubagents=%v colPrefix=%q", c.includeSubagents, c.colPrefix)
+			"includeSubagents=%v includeForks=%v colPrefix=%q",
+			c.includeSubagents, c.includeForks, c.colPrefix)
 	}
 	// The method form delegates to the unqualified helper.
 	assert.Equal(t,
-		RelationshipExclusionSQL(true, ""),
+		RelationshipExclusionSQL(true, false, ""),
 		AnalyticsFilter{IncludeSubagents: true}.RelationshipExclusionSQL(),
 		"method must match the free function")
+	assert.Equal(t,
+		RelationshipExclusionSQL(true, true, ""),
+		AnalyticsFilter{IncludeSubagents: true, IncludeForks: true}.RelationshipExclusionSQL(),
+		"method must match the free function with forks included")
 }
 
 // TestAnalyticsSubagentScope verifies the two-bucket rule for subagent

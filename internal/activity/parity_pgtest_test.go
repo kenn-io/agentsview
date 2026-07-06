@@ -59,9 +59,9 @@ type parityFixtureSession struct {
 	events       []parityEvent
 	outputTokens int
 	// relationship overrides the session's relationship_type ("" means
-	// "root"); parent sets parent_session_id when non-empty. Subagent
-	// sessions must count in every backend's report while fork sessions
-	// must be excluded identically.
+	// "root"); parent sets parent_session_id when non-empty. Subagent and
+	// fork sessions must count in every backend's report so the cost
+	// totals match daily usage.
 	relationship string
 	parent       string
 }
@@ -175,13 +175,25 @@ func parityFixture() []parityFixtureSession {
 			},
 		},
 		{
-			// Fork of parity-a: every backend must exclude it from the
-			// report entirely (fork rows replay a root's activity), so its
-			// tokens contribute nothing and it never appears in BySession.
+			// Fork of parity-a with a unique-keyed usage row: a rewound
+			// branch's messages are real spend that daily usage counts, so
+			// every backend must count its tokens and list its session row.
 			id: "parity-fork", project: "alpha", model: "model-x",
 			outputTokens: 9000, relationship: "fork", parent: "parity-a",
 			events: []parityEvent{
 				{role: "assistant", ts: parityDate + "T10:09:00Z"},
+			},
+		},
+		{
+			// Fork replaying parity-a's dedup key (same Claude pair as the
+			// parity-d/parity-e pair but scoped to this fork): its usage row
+			// must collapse in every backend's dedup, contributing a session
+			// row but no tokens or cost.
+			id: "parity-fork-replay", project: "gamma", model: "model-x",
+			outputTokens: 7777, relationship: "fork", parent: "parity-d",
+			events: []parityEvent{
+				{role: "assistant", ts: parityDate + "T11:00:02Z",
+					claudeMessageID: "dup-m", claudeRequestID: "dup-r"},
 			},
 		},
 	}
@@ -471,25 +483,25 @@ func assertParityForCase(
 }
 
 // assertDayMinuteFixtureSanity checks the day-minute report actually exercises
-// the fixture: a full day with peak concurrency 2, seven sessions, non-zero
-// cost, and exactly 5050 output tokens. The token total proves the
+// the fixture: a full day with peak concurrency 2, nine sessions, non-zero
+// cost, and exactly 14050 output tokens. The token total proves the
 // synthetic-model usage row (9999 tokens) is excluded, the dedup pair
-// collapses to its earlier 500-token row, the subagent's tokens count, and the
-// fork's do not -- not merely that the backends agree on a wrong number -- so
-// the deep-compare above extends those guarantees, plus the zero-cost
-// primary-model fallback, to PG and DuckDB.
+// collapses to its earlier 500-token row, the subagent's and unique fork's
+// tokens count, and the replaying fork's do not -- not merely that the
+// backends agree on a wrong number -- so the deep-compare above extends those
+// guarantees, plus the zero-cost primary-model fallback, to PG and DuckDB.
 func assertDayMinuteFixtureSanity(t *testing.T, r activity.Report) {
 	t.Helper()
 	require.False(t, r.Partial, "fixture day must be a full day")
 	require.Equal(t, 2, r.Peak.Agents, "fixture must reach peak concurrency 2")
-	require.Equal(t, 7, r.Totals.Sessions, "fixture session count")
+	require.Equal(t, 9, r.Totals.Sessions, "fixture session count")
 	require.Greater(t, r.Totals.Cost, 0.0, "fixture must exercise cost")
 	// 2400 (parity-a) + 1600 (parity-b) + 300 (parity-c; synthetic 9999 row
 	// excluded) + 500 (parity-d wins the dedup) + 0 (parity-e deduped away;
-	// parity-f zero-cost) + 250 (parity-sub counts; parity-fork excluded)
-	// = 5050.
-	require.Equal(t, 5050, r.Totals.OutputTokens,
-		"synthetic row excluded, dedup collapses, subagent counts, fork does not")
+	// parity-f zero-cost) + 250 (parity-sub) + 9000 (parity-fork, unique)
+	// + 0 (parity-fork-replay deduped away) = 14050.
+	require.Equal(t, 14050, r.Totals.OutputTokens,
+		"synthetic row excluded, dedup collapses, subagent and unique fork count")
 
 	bySession := map[string]activity.SessionRow{}
 	for _, s := range r.BySession {
@@ -497,8 +509,14 @@ func assertDayMinuteFixtureSanity(t *testing.T, r activity.Report) {
 	}
 	require.Contains(t, bySession, "parity-sub",
 		"subagent session must appear in the report")
-	require.NotContains(t, bySession, "parity-fork",
-		"fork sessions stay excluded")
+	require.Contains(t, bySession, "parity-fork",
+		"fork session must appear in the report")
+	require.Equal(t, 9000, bySession["parity-fork"].OutputTokens,
+		"unique fork usage counts toward the report")
+	require.Contains(t, bySession, "parity-fork-replay",
+		"replaying fork still appears as a session row")
+	require.Equal(t, 0, bySession["parity-fork-replay"].OutputTokens,
+		"replayed fork usage dedups away")
 	require.Contains(t, bySession, "parity-d")
 	require.Contains(t, bySession, "parity-e")
 	require.Contains(t, bySession, "parity-f")

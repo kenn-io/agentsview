@@ -88,10 +88,10 @@ func TestDuckGetActivityReportBasicConcurrency(t *testing.T) {
 }
 
 // TestDuckGetActivityReportIncludesSubagentUsage mirrors the SQLite
-// TestGetActivityReport_IncludesSubagentUsage: subagent sessions are
-// candidates so their usage lands in the totals (matching daily usage,
-// which never filters by relationship_type), while fork sessions stay
-// excluded because they replay a root's activity.
+// TestGetActivityReport_IncludesSubagentUsage: subagent and fork sessions
+// are candidates so their usage lands in the totals (matching daily
+// usage, which never filters by relationship_type). The fork's replayed
+// usage row dedups away, so it adds a session row but no cost.
 func TestDuckGetActivityReportIncludesSubagentUsage(t *testing.T) {
 	ctx := context.Background()
 	root := syncSession("root", "proj1", "root first", "2026-06-14T10:00:00.000Z", 1)
@@ -116,9 +116,8 @@ func TestDuckGetActivityReportIncludesSubagentUsage(t *testing.T) {
 	fork := syncSession("fork", "proj1", "fork first", "2026-06-14T10:05:00.000Z", 1)
 	fork.RelationshipType = "fork"
 	fork.ParentSessionID = &parent
-	// The fork replays the root's message: same Claude ids, so even if it
-	// leaked into the candidate set the dedup would drop it, but it must
-	// not appear as a session row at all.
+	// The fork replays the root's message: same Claude ids, so the dedup
+	// must drop its usage row while the session itself still appears.
 	forkMsg := syncMessage("fork", 0, "assistant", "x", "2026-06-14T10:05:00.000Z")
 	forkMsg.Model = "root-model"
 	forkMsg.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
@@ -151,10 +150,11 @@ func TestDuckGetActivityReportIncludesSubagentUsage(t *testing.T) {
 	assert.Contains(t, ids, "root")
 	assert.Contains(t, ids, "agent-sub",
 		"subagent session must be a candidate")
-	assert.NotContains(t, ids, "fork", "fork sessions stay excluded")
+	assert.Contains(t, ids, "fork", "fork session must be a candidate")
 	assert.Equal(t, 1200, r.Totals.OutputTokens,
-		"totals include subagent usage, matching daily usage")
-	// Cost = root (1000*3+500*15)/1e6 + subagent (2000*3+700*15)/1e6.
+		"totals include subagent usage; the fork's replayed row dedups away")
+	// Cost = root (1000*3+500*15)/1e6 + subagent (2000*3+700*15)/1e6; the
+	// fork's duplicate row contributes nothing.
 	assert.InDelta(t, 0.0105+0.0165, r.Totals.Cost, 1e-9)
 }
 

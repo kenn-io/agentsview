@@ -167,10 +167,10 @@ func TestPGGetActivityReportUsageCostAndTokens(t *testing.T) {
 }
 
 // TestPGGetActivityReportIncludesSubagentUsage mirrors the SQLite
-// TestGetActivityReport_IncludesSubagentUsage: subagent sessions are
-// candidates so their usage lands in the totals (matching GetDailyUsage,
-// which never filters by relationship_type), while fork sessions stay
-// excluded because they replay a root's activity.
+// TestGetActivityReport_IncludesSubagentUsage: subagent and fork sessions
+// are candidates so their usage lands in the totals (matching
+// GetDailyUsage, which never filters by relationship_type). The fork's
+// replayed usage row dedups away, so it adds a session row but no cost.
 func TestPGGetActivityReportIncludesSubagentUsage(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_daily_report_subagent_test")
 	ctx := context.Background()
@@ -227,10 +227,11 @@ func TestPGGetActivityReportIncludesSubagentUsage(t *testing.T) {
 	assert.Contains(t, ids, "root")
 	assert.Contains(t, ids, "agent-sub",
 		"subagent session must be a candidate")
-	assert.NotContains(t, ids, "fork", "fork sessions stay excluded")
+	assert.Contains(t, ids, "fork", "fork session must be a candidate")
 	assert.Equal(t, 1200, r.Totals.OutputTokens,
-		"totals include subagent usage, matching GetDailyUsage")
-	// Cost = root (1000*3+500*15)/1e6 + subagent (2000*3+700*15)/1e6.
+		"totals include subagent usage; the fork's replayed row dedups away")
+	// Cost = root (1000*3+500*15)/1e6 + subagent (2000*3+700*15)/1e6; the
+	// fork's duplicate row contributes nothing.
 	assert.InDelta(t, 0.0105+0.0165, r.Totals.Cost, 1e-9)
 }
 
