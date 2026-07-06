@@ -17,9 +17,10 @@ share a conversational unit and no handle to recover the surrounding run.
 
 Row cardinality stays mode-specific; citation metadata becomes uniform:
 
-- **Lexical (substring/regex/fts): one row per occurrence.** Grep semantics are
-  the contract; no default collapse. A future opt-in `group=unit` is out of
-  scope.
+- **Lexical (substring/regex/fts): one row per matching source row** (message or
+  tool payload; multiple matches within one body still yield one row, with the
+  snippet centered on the first match). Grep-like semantics are the contract;
+  no default collapse. A future opt-in `group=unit` is out of scope.
 - **Semantic: one row per embedded unit.** `ordinal` is the chunk-center anchor,
   as today.
 - **Hybrid: one row per unit** (FTS-anchor override unchanged); rows whose
@@ -190,9 +191,12 @@ must not meaningfully slow it.
 - **Semantic**: `OrdinalRange` is populated from the mirror unit span (a rename
   of today's two fields).
 - **Hybrid**: mirror-unit rows as today; unit-less FTS rows (resolver returns no
-  `DocKey`) get a derived range instead of the current `[o, o]` self-range.
-  Fusion keys, the subordinate penalty, and the FTS-anchor override are
-  untouched.
+  `DocKey`) get a derived range and a derived subordinate flag, assigned
+  BEFORE scope filtering and the RRF merge — so a unit-less sidechain hit is
+  excluded/included by `scope` and rank-penalized exactly like lexical mode
+  classifies the same anchor, instead of always passing as top-level. Fusion
+  keys (message-granularity for unit-less rows) and the FTS-anchor override
+  are untouched.
 - **CLI** (`session_search.go`): `formatMatchOrdinal` reads the range —
   `#start-end @anchor` when end > start, `#ordinal` otherwise; the `sub`
   marker can now appear on lexical rows too.
@@ -217,7 +221,7 @@ must not meaningfully slow it.
 - **Cross-backend parity tests** co-located with the feature (SQLite / PG /
   DuckDB produce identical matches for the same corpus).
 - **Hybrid unit-less injection**: an FTS hit outside the mirror gets the derived
-  range, not a self-range.
+  range and subordinate flag (pre-merge), not a self-range.
 - **Benchmark**: the gated content-search benchmark above.
 
 ## Out of scope

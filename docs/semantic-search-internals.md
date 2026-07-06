@@ -307,10 +307,10 @@ Generation activation always happens under the single writer. Search opens
   (`user_message_count <= 1`) exclusion in these modes, because a delegated
   session structurally has exactly one "user" message (the task prompt) and
   the default gate would silently exclude ~98% of subagent sessions, hollowing
-  out `scope=all`; top-level sessions keep the one-shot exclusion. All other
-  session filters (project, agent, machine, dates, automated) apply in every
-  mode, and FTS-only, substring, and regex modes keep today's
-  `include_children` and one-shot semantics unchanged.
+  out `scope=all`; root sessions with no parent link keep the one-shot
+  exclusion. All other session filters (project, agent, machine, dates,
+  automated) apply in every mode, and FTS-only, substring, and regex modes
+  keep today's `include_children` and one-shot semantics unchanged.
 - **The subordinate penalty has exactly one implementation.** `rrfMerge` in
   `internal/db` fuses rank-ordered legs with reciprocal rank fusion (rank
   constant 60) and shifts subordinate units' effective rank by +5 — a

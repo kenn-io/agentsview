@@ -66,8 +66,8 @@ Copied from the spec; every task's requirements include these.
 - `scope=top|all|subordinate` stays semantic/hybrid-only. No lexical collapse.
   Lexical snippets unchanged. `score` stays semantic/hybrid.
 - Repo rules: testify (`require`/`assert`), table-driven where natural,
-  ≤100-line functions, `make vet` + `make lint` clean, new commit per task
-  (never amend), CGO_ENABLED=1 with `-tags fts5`.
+  ≤100-line functions, `go fmt ./...` + `make vet` + `make lint` clean, new
+  commit per task (never amend), CGO_ENABLED=1 with `-tags fts5`.
 
 ______________________________________________________________________
 
@@ -233,8 +233,11 @@ limits.
       `ScanEmbeddableUnits(ctx, "", true, ...)`; for EVERY unit and EVERY member
       ordinal (walk `Offsets`), assert `DeriveUnitRanges` returns exactly
       `[unit.Ordinal, unit.OrdinalEnd]`; for every user unit assert `[o, o]`.
-    - Rule-3 anchors (system row inside a run, tool-role row, prefixed assistant
-      row) → `[o, o]`.
+    - Rule-3 anchors (system row inside a run, tool-role row, system-prefixed user
+      row) → `[o, o]`. A system-prefixed ASSISTANT row is NOT a rule-3 case: the
+      prefix predicate constrains only user rows, so a prefixed assistant row
+      stays embeddable and derives its run span (this is how it was implemented
+      and tested).
     - Missing anchors → `[o, o]`.
     - Memoization: a `UnitBoundsQuerier` wrapper that counts calls; 20 anchors
       inside one run must trigger exactly one `NearestUserBoundaries` + one
@@ -341,10 +344,12 @@ Implementation shape (all three lexical modes share it):
   `Subordinate` (`isSubordinateSession(rel, parent) || sidechain`) + lineage
   fields.
 
-- Hybrid: unit-less FTS rows (`DocKey == ""` in `appendHybridFTSHits`) currently
-  self-range; route their refs through the same anchor-lookup +
-  `DeriveUnitRanges` pass in `enrichHybridMatches` (mirror-unit rows are
-  untouched).
+- Hybrid: unit-less FTS rows (`DocKey == ""` in `appendHybridFTSHits`) get the
+  same anchor-lookup + `DeriveUnitRanges` classification (range AND
+  subordinate flag) inside `appendHybridFTSHits`, BEFORE scope filtering and
+  fusion — landed early as
+  `fix(search): classify hybrid unit-less hits before scope and fusion`; do
+  not re-add an enrich-time pass (mirror-unit rows are untouched).
 
 - [ ] **Step 1:** Failing tests first:
 
@@ -439,6 +444,11 @@ ______________________________________________________________________
 
 - Produces: `duckdb.Store` implements `db.UnitBoundsQuerier` (`?` placeholders).
 
+- NOTE (landed early): both DuckDB scan paths already emit the self-range
+  placeholder `[ordinal, ordinal]` with a store test
+  (`fix(duckdb): self-range ordinal_range placeholder on content search`);
+  this task replaces the placeholder with derived ranges, not `[0, 0]`.
+
 - [ ] **Step 1:** Failing tests first (same core cases as Task 5, seeded via
   `newSyncedStore`; events-orphan cardinality pin included).
 
@@ -473,6 +483,11 @@ ______________________________________________________________________
   `ParentSessionID string json:"parent_session_id,omitempty"`,
   `Sidechain bool json:"is_sidechain,omitempty"` — copied verbatim in the
   assembly loop.
+
+- NOTE (landed early): the frontend client regen (Step 4) already ran —
+  `chore(frontend): regenerate API client for ordinal_range` — so only the MCP
+  fields and OpenAPI check remain; re-run generate:api only if the schema
+  changes again.
 
 - [ ] **Step 1:** Failing MCP test: a search_content call over a seeded run
   asserts `ordinal_range` spans the run on every row and `subordinate`/lineage
