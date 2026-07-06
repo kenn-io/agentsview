@@ -134,6 +134,11 @@ type GenerationInfo struct {
 // concurrently rewritten by another agentsview process, and carries its own
 // busy timeout so a reader waits out a concurrent writer's lock instead of
 // failing immediately with SQLITE_BUSY.
+//
+// Both branches emit a file: URI. mattn/go-sqlite3 forwards the `_`-prefixed
+// pragma params either way, but it only honors mode=ro when the DSN carries
+// the file: scheme — a bare path silently opens read-write, so the ro
+// contract depends on the prefix.
 func vectorDSN(path string, readOnly bool) string {
 	params := url.Values{}
 	if readOnly {
@@ -144,7 +149,7 @@ func vectorDSN(path string, readOnly bool) string {
 		params.Set("_busy_timeout", "5000")
 		params.Set("_synchronous", "NORMAL")
 	}
-	return path + "?" + params.Encode()
+	return "file:" + path + "?" + params.Encode()
 }
 
 // ChunkOverlap derives the SplitOptions.Overlap rune count from

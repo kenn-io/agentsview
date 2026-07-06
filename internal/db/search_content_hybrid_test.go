@@ -458,6 +458,79 @@ func TestSearchContentHybridMatchCarriesUnitRangeAndLineage(t *testing.T) {
 	assert.True(t, m.Sidechain, "anchor message is_sidechain")
 }
 
+// TestSearchContentHybridFTSLegCollapseRefillsFromDeeperRanks pins the
+// batched FTS leg against unit collapse: when more than k (the
+// semanticOverfetchMin=200 fusion depth) rank-ordered FTS rows all fall
+// inside ONE run-unit, they collapse to a single leg entry, and a match in a
+// different unit ranked below all of them must still be fetched and returned
+// rather than being cut off by the first batch's window.
+func TestSearchContentHybridFTSLegCollapseRefillsFromDeeperRanks(t *testing.T) {
+	d := testDB(t)
+	if !d.HasFTS() {
+		t.Skip("fts5 not available")
+	}
+	// One run-unit spanning 205 assistant messages, each repeating the term
+	// so bm25 ranks every one of them above the single-occurrence session.
+	const runLen = 205
+	runMsgs := make([][2]string, runLen)
+	for i := range runMsgs {
+		runMsgs[i] = [2]string{"assistant", "zebra zebra zebra zebra"}
+	}
+	seedSearchSession(t, d, "bigrun", "proj", runMsgs)
+	seedSearchSession(t, d, "other", "proj", [][2]string{
+		{"user", "zebra appears once in a much longer unrelated sentence"},
+	})
+	// The vector leg is empty; the resolver knows the whole run as one unit.
+	d.SetVectorSearcher(&fakeVectorSearcher{units: []UnitRef{
+		{DocKey: "r:bigrun:0", SessionID: "bigrun",
+			OrdinalStart: 0, OrdinalEnd: runLen - 1},
+	}})
+
+	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "zebra", Mode: "hybrid", Limit: 10,
+	})
+	require.NoError(t, err, "SearchContent hybrid")
+	require.Len(t, page.Matches, 2,
+		"the lower-ranked unit past the collapsed run must be fetched")
+	ids := []string{page.Matches[0].SessionID, page.Matches[1].SessionID}
+	assert.ElementsMatch(t, []string{"bigrun", "other"}, ids)
+}
+
+// TestSearchContentHybridFTSLegScopeExcludedRowsRefill pins the batched FTS
+// leg against scope discard: with scope=subordinate, when the first k FTS
+// rows are all top-level (and so all dropped), a subordinate match ranked
+// below them must still be fetched and returned.
+func TestSearchContentHybridFTSLegScopeExcludedRowsRefill(t *testing.T) {
+	d := testDB(t)
+	if !d.HasFTS() {
+		t.Skip("fts5 not available")
+	}
+	// 205 top-level sessions would be slow; one top-level session with 205
+	// matching messages fills the first batch the same way, since each
+	// message is its own unit-less (never-subordinate) row.
+	const topLen = 205
+	topMsgs := make([][2]string, topLen)
+	for i := range topMsgs {
+		topMsgs[i] = [2]string{"user", "zebra zebra zebra zebra"}
+	}
+	seedSearchSession(t, d, "toplots", "proj", topMsgs)
+	seedSubagentSession(t, d, "sub", "toplots", "proj", [][2]string{
+		{"user", "zebra appears once in a much longer subagent sentence"},
+	})
+	d.SetVectorSearcher(&fakeVectorSearcher{units: []UnitRef{
+		{DocKey: "u:sub:0", SessionID: "sub",
+			OrdinalStart: 0, OrdinalEnd: 0, Subordinate: true},
+	}})
+
+	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "zebra", Mode: "hybrid", Scope: "subordinate", Limit: 10,
+	})
+	require.NoError(t, err, "SearchContent hybrid")
+	require.Len(t, page.Matches, 1,
+		"the subordinate match past the excluded top-level rows must be fetched")
+	assert.Equal(t, "sub", page.Matches[0].SessionID)
+}
+
 // TestSearchContentHybridVectorOnlyMatchCarriesUnitRange pins the
 // vector-leg display path: a unit only the semantic leg found keeps its
 // chunk anchor and still exposes the unit range and subordinate flag.

@@ -848,6 +848,48 @@ func TestSearchContent_SemanticUnavailableMapsToRemediationError(t *testing.T) {
 	assert.Equal(t, "semantic", fake.lastReq.Mode)
 }
 
+// search_content must reject scope outside semantic/hybrid with the same
+// message the HTTP transport uses (the db layer silently ignores Scope for
+// lexical modes, so the guard lives in the transport), and must not reach
+// the service at all on rejection.
+func TestSearchContent_ScopeRejectedOnLexicalModes(t *testing.T) {
+	fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
+	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+
+	for _, mode := range []string{"", "substring", "regex", "fts"} {
+		t.Run("mode="+mode, func(t *testing.T) {
+			_, _, err := ts.searchContent(context.Background(), nil, searchContentIn{
+				Pattern: "needle", Mode: mode, Scope: "top", IncludeActive: true,
+			})
+			require.Error(t, err)
+			assert.EqualError(t, err,
+				"scope is only supported for semantic and hybrid search modes")
+		})
+	}
+	assert.Empty(t, fake.lastReq.Pattern,
+		"a rejected request must not reach the service")
+}
+
+// search_content must pass Scope through to the service untouched for
+// semantic and hybrid modes; the db layer owns scope-value validation from
+// there.
+func TestSearchContent_ScopeForwardedForSemanticModes(t *testing.T) {
+	for _, mode := range []string{"semantic", "hybrid"} {
+		t.Run(mode, func(t *testing.T) {
+			fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
+			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+
+			_, _, err := ts.searchContent(context.Background(), nil, searchContentIn{
+				Pattern: "retries", Mode: mode, Scope: "subordinate", IncludeActive: true,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, mode, fake.lastReq.Mode)
+			assert.Equal(t, "subordinate", fake.lastReq.Scope,
+				"scope must reach the service untouched")
+		})
+	}
+}
+
 // search_content's Context parameter must reach the service, and each
 // match's ContextBefore/ContextAfter (full service-level db.Message) must
 // map to the MCP layer's truncated contextMessage shape, along with Score.

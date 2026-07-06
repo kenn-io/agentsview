@@ -1033,6 +1033,14 @@ func (db *DB) hybridVectorLeg(
 	return leg, nil
 }
 
+// maxHybridFTSBatches caps how many k-row FTS batches hybridFTSLeg fetches.
+// It bounds the worst-case work when discard dominates — many rows collapsing
+// into one unit, or a narrow f.Scope dropping most rows — while letting the
+// leg keep paging past discarded rows instead of under-filling after the
+// first batch. The residual is documented: a leg needing survivors deeper
+// than maxHybridFTSBatches x k rows can still under-fill.
+const maxHybridFTSBatches = 4
+
 // hybridFTSLeg runs a rank-ordered FTS query over the embedded universe
 // (role user/assistant, is_system = 0, system-prefix excluded -- the same
 // predicate ScanEmbeddableUnits uses), scoped in SQL to sessions passing
@@ -1045,9 +1053,38 @@ func (db *DB) hybridVectorLeg(
 // hits in one unit collapse to the best-ranked one. A hit with no containing
 // unit keeps a message-granularity key, is never subordinate-penalized, and
 // so survives fusion on its own.
+//
+// Rows are fetched in rank-ordered batches of k with OFFSET continuation:
+// collapse and scope filtering can discard most of a batch, so the leg keeps
+// fetching until it holds k entries, the stream is exhausted, or
+// maxHybridFTSBatches is hit. The display seen-check dedups across batches;
+// earlier batches rank better, so the best-ranked hit per unit always wins.
 func (db *DB) hybridFTSLeg(
 	ctx context.Context, f ContentSearchFilter, searcher VectorSearcher, k int,
 ) (hybridLeg, error) {
+	leg := hybridLeg{display: make(map[string]hybridDisplay, k)}
+	for batch := range maxHybridFTSBatches {
+		hits, err := db.fetchHybridFTSBatch(ctx, f, k, batch*k)
+		if err != nil {
+			return hybridLeg{}, err
+		}
+		if err := appendHybridFTSHits(ctx, searcher, f.Scope, hits, &leg); err != nil {
+			return hybridLeg{}, err
+		}
+		if len(hits) < k || len(leg.ranked) >= k {
+			break
+		}
+	}
+	return leg, nil
+}
+
+// fetchHybridFTSBatch fetches one rank-ordered batch of at most k FTS message
+// rows for hybridFTSLeg, starting at offset. The ORDER BY carries m.id as a
+// deterministic tiebreak so OFFSET continuation is stable across batches when
+// ranks tie.
+func (db *DB) fetchHybridFTSBatch(
+	ctx context.Context, f ContentSearchFilter, k, offset int,
+) ([]hybridDisplay, error) {
 	scope, scopeArgs := semanticSessionScopeSubquery(f)
 	query := fmt.Sprintf(`
 		SELECT m.session_id, m.ordinal,
@@ -1056,16 +1093,16 @@ func (db *DB) hybridFTSLeg(
 		WHERE messages_fts MATCH ? AND m.role IN ('user','assistant')
 		  AND m.is_system = 0 AND %s
 		  AND m.%s
-		ORDER BY f.rank LIMIT ?`,
+		ORDER BY f.rank, m.id LIMIT ? OFFSET ?`,
 		SystemPrefixSQL("m.content", "m.role"), scope)
 
 	args := []any{PrepareFTSQuery(f.Pattern)}
 	args = append(args, scopeArgs...)
-	args = append(args, k)
+	args = append(args, k, offset)
 
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
-		return hybridLeg{}, classifyFTSError(fmt.Errorf("hybrid search fts leg: %w", err))
+		return nil, classifyFTSError(fmt.Errorf("hybrid search fts leg: %w", err))
 	}
 	defer rows.Close()
 
@@ -1073,28 +1110,40 @@ func (db *DB) hybridFTSLeg(
 	for rows.Next() {
 		var hit hybridDisplay
 		if err := rows.Scan(&hit.sessionID, &hit.ordinal, &hit.snippet); err != nil {
-			return hybridLeg{}, fmt.Errorf("scan hybrid fts hit: %w", err)
+			return nil, fmt.Errorf("scan hybrid fts hit: %w", err)
 		}
 		hits = append(hits, hit)
 	}
 	if err := rows.Err(); err != nil {
-		return hybridLeg{}, err
+		return nil, err
 	}
+	return hits, nil
+}
 
+// appendHybridFTSHits resolves one batch of FTS message hits to their
+// containing units and accumulates the survivors into leg: hits outside
+// scope are dropped, and a unit already seen (within or across batches)
+// keeps its earlier, better-ranked entry.
+func appendHybridFTSHits(
+	ctx context.Context, searcher VectorSearcher, scope string,
+	hits []hybridDisplay, leg *hybridLeg,
+) error {
+	if len(hits) == 0 {
+		return nil
+	}
 	refs := make([]MessageRef, len(hits))
 	for i, hit := range hits {
 		refs[i] = MessageRef{SessionID: hit.sessionID, Ordinal: hit.ordinal}
 	}
 	units, err := searcher.ResolveMessageUnits(ctx, refs)
 	if err != nil {
-		return hybridLeg{}, fmt.Errorf("resolving fts hits to units: %w", err)
+		return fmt.Errorf("resolving fts hits to units: %w", err)
 	}
 	if len(units) != len(refs) {
-		return hybridLeg{}, fmt.Errorf(
+		return fmt.Errorf(
 			"resolving fts hits to units: got %d units for %d refs", len(units), len(refs))
 	}
 
-	leg := hybridLeg{display: make(map[string]hybridDisplay, len(hits))}
 	for i, hit := range hits {
 		key := messageFusionKey(hit.sessionID, hit.ordinal)
 		hit.ordinalStart, hit.ordinalEnd = hit.ordinal, hit.ordinal
@@ -1104,7 +1153,7 @@ func (db *DB) hybridFTSLeg(
 			hit.ordinalEnd = units[i].OrdinalEnd
 			hit.subordinate = units[i].Subordinate
 		}
-		if scopeExcludes(f.Scope, hit.subordinate) {
+		if scopeExcludes(scope, hit.subordinate) {
 			continue
 		}
 		if _, seen := leg.display[key]; seen {
@@ -1113,7 +1162,7 @@ func (db *DB) hybridFTSLeg(
 		leg.ranked = append(leg.ranked, unitRanked{Key: key, Subordinate: hit.subordinate})
 		leg.display[key] = hit
 	}
-	return leg, nil
+	return nil
 }
 
 // enrichHybridMatches looks up session/message metadata for the fused units
@@ -1325,7 +1374,8 @@ func (db *DB) enrichSemanticHits(
 // approximate snippet text semantic/hybrid modes locate within a message's
 // full content: the vector index's trailing unicode ellipsis
 // (internal/vector's truncateRunes) and FTS5 snippet()'s literal "..." marker
-// (used at both ends), configured as hybridFTSLeg's 5th snippet() argument.
+// (used at both ends), configured as fetchHybridFTSBatch's 5th snippet()
+// argument.
 var snippetTruncationMarkers = []string{"...", "…"}
 
 // approxSnippetSpan locates approx (a searcher-provided chunk/snippet or

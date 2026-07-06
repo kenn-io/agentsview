@@ -38,6 +38,29 @@ func TestOpenReadOnlyOnMissingFileFails(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestOpenReadOnlyRefusesWrites pins the read-only contract: a mattn DSN
+// only honors mode=ro with a file: URI prefix, so a bare-path DSN silently
+// handed out writable handles. A read-only Open on a valid vectors.db must
+// refuse writes at the SQLite level.
+func TestOpenReadOnlyRefusesWrites(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "vectors.db")
+
+	rw, err := Open(ctx, path, false, 4000)
+	require.NoError(t, err)
+	require.NoError(t, rw.Close())
+
+	ro, err := Open(ctx, path, true, 4000)
+	require.NoError(t, err)
+	defer ro.Close()
+
+	_, err = ro.db.ExecContext(ctx,
+		`INSERT INTO vector_meta (key, value) VALUES ('probe', 'x')`)
+	require.Error(t, err, "a read-only vectors.db handle must refuse writes")
+	assert.Contains(t, err.Error(), "readonly",
+		"the refusal must be SQLite's readonly-database error, got: %v", err)
+}
+
 func TestOpenSplitOptionsUse15PercentOverlap(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "vectors.db")
@@ -223,12 +246,13 @@ CREATE TABLE vector_meta (
 `
 
 // seedV1Mirror writes path as a vectors.db with the pre-versioning v1 mirror
-// schema plus the state a real build would have left behind: a mirror row, a
-// fake kit generations table (sharing generationsTable's name but not its
-// real column set, standing in for whatever kit's store last wrote), a
-// stray abandoned per-generation table, and meta keys with no
-// mirror_schema_version — exactly what a writable Open must detect as a
-// mismatch (absent key, mirror state present) and reset.
+// schema plus the state a real build would have left behind: a mirror row,
+// fake kit generations/chunks/stamps tables (sharing kit's table names but
+// not its real column sets, standing in for whatever kit's store last
+// wrote — every real build created all three, and a read-only Open must not
+// need to CREATE any of them), a stray abandoned per-generation table, and
+// meta keys with no mirror_schema_version — exactly what a writable Open
+// must detect as a mismatch (absent key, mirror state present) and reset.
 func seedV1Mirror(t *testing.T, path string) {
 	t.Helper()
 	ctx := context.Background()
@@ -250,32 +274,46 @@ INSERT INTO vector_meta (key, value) VALUES (?, ?), (?, ?)`,
 	require.NoError(t, err)
 	_, err = raw.ExecContext(ctx, `CREATE TABLE `+generationsTable+` (ordinal INTEGER)`)
 	require.NoError(t, err)
+	// Kit's other bookkeeping tables and indexes, by their real names so a
+	// read-only Open's CREATE ... IF NOT EXISTS statements all no-op.
+	_, err = raw.ExecContext(ctx, `
+CREATE TABLE `+chunksTable+` (ordinal INTEGER, doc_key, vec_rowid INTEGER);
+CREATE INDEX `+vectorsPrefix+`_chunks_by_vector ON `+chunksTable+` (ordinal, vec_rowid);
+CREATE INDEX `+vectorsPrefix+`_chunks_by_doc ON `+chunksTable+` (doc_key, ordinal, vec_rowid);
+CREATE TABLE `+stampsTable+` (ordinal INTEGER, doc_key, revision);
+CREATE INDEX `+vectorsPrefix+`_stamps_by_doc_revision ON `+stampsTable+` (doc_key, revision);`)
+	require.NoError(t, err)
 	_, err = raw.ExecContext(ctx, `CREATE TABLE message_vectors_gen7 (id INTEGER)`)
 	require.NoError(t, err)
 }
 
-// seedV2Mirror writes path as a vectors.db with the current mirror DDL but
-// stamped mirror_schema_version "2": the window between the v2 columns
-// landing and the run-grouped document-identity change, when rows were still
-// one-per-message. The DDL shape matches the current schema exactly, so only
-// the version stamp can tell the two apart — the case the "3" bump exists
-// for.
+// seedV2Mirror writes path as a vectors.db stamped mirror_schema_version
+// "2": the window between the v2 columns landing and the run-grouped
+// document-identity change, when rows were still one-per-message. It lays
+// down a full current-DDL file (mirror tables, kit generation/chunk tables,
+// version stamp) via a writable Open, then rewrites the stamp to "2" and
+// inserts a per-message row — the DDL shape matches the current schema
+// exactly, so only the version stamp can tell the two apart, the case the
+// "3" bump exists for. Seeding the kit tables too matters for read-only
+// Opens: sqlitevec.New must not need any CREATE TABLE on a mode=ro handle.
 func seedV2Mirror(t *testing.T, path string) {
 	t.Helper()
 	ctx := context.Background()
+	ix, err := Open(ctx, path, false, 4000)
+	require.NoError(t, err)
+	require.NoError(t, ix.Close())
+
 	raw, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	defer raw.Close()
 
-	_, err = raw.ExecContext(ctx, mirrorDDL)
-	require.NoError(t, err)
 	_, err = raw.ExecContext(ctx, `
 INSERT INTO vector_messages (doc_key, session_id, ordinal, ordinal_end, content, content_hash)
 VALUES (?, ?, ?, ?, ?, ?)`,
 		"s1:0", "s1", 0, 0, "a per-message row", "h1")
 	require.NoError(t, err)
 	_, err = raw.ExecContext(ctx, `
-INSERT INTO vector_meta (key, value) VALUES (?, ?)`, mirrorSchemaVersionKey, "2")
+UPDATE vector_meta SET value = '2' WHERE key = ?`, mirrorSchemaVersionKey)
 	require.NoError(t, err)
 }
 

@@ -475,6 +475,7 @@ func (t *toolset) getMessagesAround(
 type searchContentIn struct {
 	Pattern       string `json:"pattern" jsonschema:"Exact substring or regex to find across message text and tool inputs/results."`
 	Mode          string `json:"mode,omitempty" jsonschema:"substring (default), regex, semantic, or hybrid."`
+	Scope         string `json:"scope,omitempty" jsonschema:"Semantic/hybrid result scope: top, all, or subordinate (default all). Only valid with mode semantic or hybrid."`
 	Project       string `json:"project,omitempty" jsonschema:"Restrict to one project."`
 	Agent         string `json:"agent,omitempty" jsonschema:"Restrict to one agent."`
 	DateFrom      string `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
@@ -533,9 +534,17 @@ type searchContentOut struct {
 func (t *toolset) searchContent(
 	ctx context.Context, _ *mcp.CallToolRequest, in searchContentIn,
 ) (*mcp.CallToolResult, searchContentOut, error) {
+	// The db layer silently ignores Scope outside semantic/hybrid, so reject
+	// it here with the same message the HTTP transport uses
+	// (internal/server/huma_routes_search.go).
+	if in.Scope != "" && in.Mode != "semantic" && in.Mode != "hybrid" {
+		return nil, searchContentOut{}, fmt.Errorf(
+			"scope is only supported for semantic and hybrid search modes")
+	}
 	res, err := t.svc.SearchContent(ctx, service.ContentSearchRequest{
 		Pattern:  in.Pattern,
 		Mode:     in.Mode,
+		Scope:    in.Scope,
 		Project:  in.Project,
 		Agent:    in.Agent,
 		DateFrom: in.DateFrom,

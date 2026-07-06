@@ -342,8 +342,10 @@ MCP tool error, carrying the same remediation text.
   fixed minimum if that's larger), then drop hits whose session fails
   `--project`/`--agent`/`--date*`/etc., then truncate to the requested limit.
   At small corpus sizes or with a narrow filter, this can return fewer than
-  `--limit` results even though more exist. This is a known v1 tradeoff, not a
-  bug.
+  `--limit` results even though more exist. A narrow `--scope` (and, in
+  hybrid, matches concentrated in one long run) can likewise return fewer than
+  `--limit` even when more matches exist deeper in the ranking. This is a
+  known v1 tradeoff, not a bug.
 - **Legacy no-`source_uuid` rows re-embed on ordinal shifts.** Each embedded
   document is keyed by its first message's stable per-message UUID when the
   parser recorded one, or by `(session_id, ordinal)` when it didn't.

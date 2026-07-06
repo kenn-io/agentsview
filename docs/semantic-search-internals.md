@@ -289,8 +289,12 @@ Generation activation always happens under the single writer. Search opens
   are unchanged on every backend.
 - **`scope` governs unit visibility and supersedes `include_children`.**
   `scope=top|all|subordinate` (default `all`) filters each leg's hits before
-  the RRF merge and before the limit, so a scoped search still fills up to the
-  limit from the over-fetched candidates. In semantic/hybrid modes the
+  the RRF merge and before the limit. The hybrid FTS leg fetches additional
+  rank-ordered batches until it holds the fusion depth `k` of surviving
+  entries (capped at `maxHybridFTSBatches`), so scope discards and same-unit
+  collapse do not starve it; the semantic (KNN) leg cannot page, so scoped or
+  collapse-heavy searches can still under-fill past those caps even when more
+  matches exist deeper in the ranking. In semantic/hybrid modes the
   sidebar-child session exclusion is lifted (`semanticSessionScopeSubquery`) —
   both hybrid legs must see the same universe for fusion to be sound — and an
   explicit `include_children` is accepted but superseded. Subagent/fork-typed
