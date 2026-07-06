@@ -298,6 +298,13 @@ func (s *Store) scanPGContentMatches(
 	if err := rows.Err(); err != nil {
 		return db.ContentSearchPage{}, err
 	}
+	// Close the cursor before deriving units (exhausting Next already
+	// auto-closed it; this keeps the release explicit): deriveLexicalUnitsPG
+	// issues new queries, which must never wait on a connection this cursor
+	// would otherwise still pin.
+	if err := rows.Close(); err != nil {
+		return db.ContentSearchPage{}, fmt.Errorf("closing pg content matches: %w", err)
+	}
 	page := db.ContentSearchPage{Matches: out}
 	if len(out) > limit {
 		page.Matches = out[:limit]
@@ -355,6 +362,13 @@ func (s *Store) searchContentRegexPG(
 	}
 	if err := rows.Err(); err != nil {
 		return db.ContentSearchPage{}, err
+	}
+	// Close the candidate cursor before deriving units: the loop breaks out
+	// with rows still open once Limit+1 matches are collected, and
+	// deriveLexicalUnitsPG issues new queries that could otherwise block on a
+	// constrained connection pool while this cursor pins a connection.
+	if err := rows.Close(); err != nil {
+		return db.ContentSearchPage{}, fmt.Errorf("closing pg regex candidates: %w", err)
 	}
 	page := db.ContentSearchPage{Matches: out}
 	if len(out) > f.Limit {

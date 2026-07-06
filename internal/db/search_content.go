@@ -345,6 +345,13 @@ func (db *DB) scanContentMatches(
 	if err := rows.Err(); err != nil {
 		return ContentSearchPage{}, err
 	}
+	// Close the cursor before deriving units (exhausting Next already
+	// auto-closed it; this keeps the release explicit): deriveLexicalUnits
+	// issues new queries, which must never wait on a connection this cursor
+	// would otherwise still pin.
+	if err := rows.Close(); err != nil {
+		return ContentSearchPage{}, fmt.Errorf("closing content matches: %w", err)
+	}
 	page := ContentSearchPage{Matches: out}
 	if len(out) > limit {
 		page.Matches = out[:limit]
@@ -404,6 +411,13 @@ func (db *DB) searchContentRegex(
 	}
 	if err := rows.Err(); err != nil {
 		return ContentSearchPage{}, err
+	}
+	// Close the candidate cursor before deriving units: the loop breaks out
+	// with rows still open once Limit+1 matches are collected, and
+	// deriveLexicalUnits issues new queries that could otherwise block on a
+	// constrained connection pool while this cursor pins a connection.
+	if err := rows.Close(); err != nil {
+		return ContentSearchPage{}, fmt.Errorf("closing regex candidates: %w", err)
 	}
 	page := ContentSearchPage{Matches: out}
 	if len(out) > f.Limit {
