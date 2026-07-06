@@ -38,6 +38,26 @@ func TestOpenReadOnlyOnMissingFileFails(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestOpenSplitOptionsUse15PercentOverlap(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "vectors.db")
+
+	ix, err := Open(ctx, path, false, 4000)
+	require.NoError(t, err)
+	defer ix.Close()
+
+	assert.Equal(t, 4000, ix.split.MaxRunes)
+	assert.Equal(t, 600, ix.split.Overlap, "15%% of 4000 is 600")
+	assert.Equal(t, ChunkOverlap(4000), ix.split.Overlap,
+		"Open must derive Overlap from the shared ChunkOverlap helper")
+}
+
+func TestChunkOverlapIs15Percent(t *testing.T) {
+	assert.Equal(t, 600, ChunkOverlap(4000))
+	assert.Equal(t, 150, ChunkOverlap(1000))
+	assert.Equal(t, 0, ChunkOverlap(0))
+}
+
 func TestEnsureGenerationLifecycle(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "vectors.db")

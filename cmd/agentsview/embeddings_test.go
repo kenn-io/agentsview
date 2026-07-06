@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -97,6 +98,28 @@ func seedEmbeddableArchiveWithAutomated(t *testing.T, dataDir string) {
 	dbtest.SeedSessionWithMessages(t, d, "sess-auto", "proj", []db.Message{
 		dbtest.UserMsg("sess-auto", 0, "roborev output"),
 	}, func(s *db.Session) { s.IsAutomated = true })
+}
+
+// TestVectorGenerationParams asserts vectorGeneration's Params map carries
+// exactly the three run_v1 fingerprint keys the plan requires, with
+// chunk_overlap_chars derived from vector.ChunkOverlap so a future change to
+// that formula cannot silently drift from the fingerprint.
+func TestVectorGenerationParams(t *testing.T) {
+	c := config.VectorEmbeddingsConfig{
+		Model:         "test-model",
+		Dimension:     3,
+		MaxInputChars: 4000,
+	}
+
+	gen := vectorGeneration(c)
+
+	assert.Equal(t, "test-model", gen.Model)
+	assert.Equal(t, 3, gen.Dimensions)
+	assert.Equal(t, map[string]string{
+		"max_input_chars":     "4000",
+		"doc_unit_scheme":     "run_v1",
+		"chunk_overlap_chars": strconv.Itoa(vector.ChunkOverlap(4000)),
+	}, gen.Params)
 }
 
 // TestEmbeddingsDisabledReturnsError asserts every subcommand refuses with

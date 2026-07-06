@@ -194,11 +194,19 @@ func requireVectorEnabled(cfg config.Config) error {
 // vectorGeneration maps the configured embeddings model to the kit
 // Generation identity Build/Fill fingerprint against. Defined once here so
 // the daemon serve wiring (Task 16) can reuse the exact same mapping.
+// doc_unit_scheme and chunk_overlap_chars are part of the fingerprint so
+// that changing the run-grouped document scheme or the chunk overlap
+// formula (vector.ChunkOverlap) cuts a new generation rather than silently
+// reusing embeddings built under the old scheme.
 func vectorGeneration(c config.VectorEmbeddingsConfig) kitvec.Generation {
 	return kitvec.Generation{
 		Model:      c.Model,
 		Dimensions: c.Dimension,
-		Params:     map[string]string{"max_input_chars": strconv.Itoa(c.MaxInputChars)},
+		Params: map[string]string{
+			"max_input_chars":     strconv.Itoa(c.MaxInputChars),
+			"doc_unit_scheme":     "run_v1",
+			"chunk_overlap_chars": strconv.Itoa(vector.ChunkOverlap(c.MaxInputChars)),
+		},
 	}
 }
 

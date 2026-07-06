@@ -140,9 +140,18 @@ func vectorDSN(path string, readOnly bool) string {
 	return path + "?" + params.Encode()
 }
 
+// ChunkOverlap derives the SplitOptions.Overlap rune count from
+// maxInputChars: 15% of the chunk size, so consecutive chunks share enough
+// context for the anchor/window logic to bridge a run split mid-message.
+// Open and vectorGeneration (cmd/agentsview/embeddings.go) both call this so
+// the split behavior and its fingerprint can never drift apart.
+func ChunkOverlap(maxInputChars int) int {
+	return maxInputChars * 15 / 100
+}
+
 // Open opens (creating when rw) vectors.db and the kit sqlitevec store atop
 // it. maxInputChars bounds the rune length of a single embedding request via
-// SplitOptions{MaxRunes: maxInputChars, Overlap: maxInputChars / 30}.
+// SplitOptions{MaxRunes: maxInputChars, Overlap: ChunkOverlap(maxInputChars)}.
 //
 // When readOnly is true the file must already exist; Open never creates or
 // migrates schema in that mode, matching internal/db.OpenReadOnly's
@@ -179,7 +188,7 @@ func Open(ctx context.Context, path string, readOnly bool, maxInputChars int) (*
 		return nil, fmt.Errorf("opening vector store: %w", err)
 	}
 
-	overlap := maxInputChars / 30
+	overlap := ChunkOverlap(maxInputChars)
 	return &Index{
 		db:              db,
 		store:           store,
