@@ -90,6 +90,13 @@ For an anchor message row `m` at ordinal `o` (for `tool_input` / `tool_result`
 locations the anchor is the tool call's message row, whose ordinal the match
 already carries):
 
+Row cardinality must be preserved when locating the anchor row. The
+`tool_result_events` branches join only `sessions` today (on all three
+backends); reaching the owning message row must use a `LEFT JOIN` or a post-scan
+secondary lookup — never an inner join, which would drop existing matches whose
+anchor message is missing. A match with no locatable anchor row falls back to
+`[o, o]` with `is_sidechain` false (session lineage still applies).
+
 1. `m` is an embeddable user row → `[o, o]` (user messages are their own units).
 1. `m` is an embeddable assistant row → the maximal stretch of embeddable
    assistant rows containing `o`, bounded exclusively by: the nearest
@@ -126,14 +133,18 @@ must not meaningfully slow it.
   from columns already read). Derivation runs as a second pass over the
   returned page only.
 - **O(page), never O(corpus).** Pages are small: db default 50, max 500; MCP
-  caps at 30. Per anchor the derivation needs at most four boundary lookups
-  (nearest embeddable user row before/after; nearest sidechain-flip assistant
-  row within those bounds), each an index-served `(session_id, ordinal)` walk
-  (`ORDER BY ordinal DESC/ASC LIMIT 1` with the boundary predicate) — the same
-  pattern `getMessagesAroundAnchor` already uses on both backends. Lookups for
-  a page are batched into one statement per backend where the dialect allows
-  (the `enrichSemanticHits` VALUES-CTE precedent), else prepared point
-  queries.
+  caps at 30. Per anchor the derivation needs at most six index-served
+  `(session_id, ordinal)` lookups (`ORDER BY ordinal DESC/ASC LIMIT 1` with a
+  predicate — the same pattern `getMessagesAroundAnchor` uses): four boundary
+  lookups (nearest embeddable user row before/after; nearest sidechain-flip
+  assistant row within those bounds) find the exclusive interval, then two
+  endpoint lookups (`MIN`/`MAX` ordinal of embeddable assistant rows with the
+  anchor's sidechain inside that interval) find the actual first/last member.
+  The endpoint step is required for reducer equivalence: `runUnit` spans
+  member ordinals, and non-embeddable rows adjacent to a boundary would
+  otherwise widen the range. Lookups for a page are batched into one statement
+  per backend where the dialect allows (the `enrichSemanticHits` VALUES-CTE
+  precedent), else prepared point queries.
 - **Page-level memoization makes the monologue case the cheapest case.** Hits
   are grouped by session; once a range is derived, any other anchor in the
   same session that falls inside it (and is an embeddable assistant row)
@@ -143,11 +154,18 @@ must not meaningfully slow it.
   multi-thousand-message run costs a scan of that run — the same order as
   fetching the run for display. No walk cap initially; add one only if the
   benchmark demands it.
-- **Benchmark gate.** Add a content-search benchmark (seeded corpus including
-  long runs and many-hits-per-run pages) to `internal/db`, which is already in
-  `BENCH_GATE_PACKAGES`, so CI's bench.yml gates the PR against its merge
-  base. Acceptance: no significant regression beyond ~10% on a 50-hit
-  substring/FTS page; measure before tuning further.
+- **Benchmark acceptance (manual for this PR, gated afterward).** Add a
+  content-search benchmark (seeded corpus including long runs and
+  many-hits-per-run pages) to `internal/db`, which is already in
+  `BENCH_GATE_PACKAGES`. CI's bench.yml cannot enforce the budget on the
+  introducing PR: benchmarks that exist on only one side are reported without
+  gating, and the ns/op gate's default threshold is a loose 2x (allocs/B are
+  tighter). So the implementing task must run the before/after comparison by
+  hand — the new benchmark on the pre-change and post-change code with
+  `bench-gate`'s sample settings — and record the numbers; acceptance is no
+  significant regression beyond ~10% on a 50-hit substring/FTS page. Once
+  merged, the benchmark joins the CI gate automatically (at the gate's default
+  thresholds, which catch algorithmic blowups).
 - **Contingency (documented, not built):** if profiling on real corpora shows
   meaningful cost, add an explicit `citations=off` opt-out. Never auto-disable
   based on index or corpus state.
@@ -174,10 +192,12 @@ must not meaningfully slow it.
 - **CLI** (`session_search.go`): `formatMatchOrdinal` reads the range —
   `#start-end @anchor` when end > start, `#ordinal` otherwise; the `sub`
   marker can now appear on lexical rows too.
-- **Shared implementation**: one Go derivation helper in `internal/db` drives
-  all three backends through their boundary-lookup queries;
-  `internal/postgres` and `internal/duckdb` already depend on `internal/db`
-  for dialect predicates.
+- **Shared implementation**: the derivation lives in `internal/db` as a pure Go
+  pass over a backend-neutral seam — an interface (or query callback) each
+  store implements with its own boundary/endpoint SQL. The dependency only
+  points one way: `internal/postgres` and `internal/duckdb` import
+  `internal/db` (as they already do for dialect predicates); `internal/db`
+  never references their concrete stores.
 
 ## Testing
 
