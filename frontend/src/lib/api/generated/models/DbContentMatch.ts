@@ -9,8 +9,7 @@ export type DbContentMatch = {
   is_sidechain?: boolean;
   location: string;
   ordinal: number;
-  ordinal_end?: number;
-  ordinal_start?: number;
+  ordinal_range: any[] | null;
   parent_session_id?: string;
   project: string;
   relationship?: string;
