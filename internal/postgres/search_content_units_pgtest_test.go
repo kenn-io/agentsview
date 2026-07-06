@@ -327,6 +327,73 @@ func TestPGSearchContentFTSDerivedRange(t *testing.T) {
 	}
 }
 
+// TestPGSearchContentDenseFlowDerivedRanges exercises the DENSE derivation
+// flow against PG's dense-fetch SQL (scanPGUserBoundaryOrdinals): one session
+// whose runs supply at least db.UnitBoundsFlowFactor distinct run anchors on
+// a single page, so the shared flow selection fetches real user bounds with
+// PG's batched boundary statement before resolving extents. Run lengths are
+// derived from the exported gate so the page stays dense if the factor
+// changes. The structure packs a main run, a sidechain run, and a
+// flip-bounded main run, and every match must carry its run's exact range.
+func TestPGSearchContentDenseFlowDerivedRanges(t *testing.T) {
+	store := setupContentSearch(t)
+	insertCSSession(t, store, "cs-unit-dense", "proj", "claude",
+		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+
+	// Three runs of runLen anchors each: 3*runLen > UnitBoundsFlowFactor.
+	runLen := db.UnitBoundsFlowFactor/2 + 1
+	runA := [2]int{1, runLen}                  // main run after user 0
+	side := [2]int{runLen + 2, 2*runLen + 1}   // sidechain run after user runLen+1
+	runC := [2]int{2*runLen + 2, 3*runLen + 1} // main run bounded left by the flip
+	lastUser := 3*runLen + 2
+
+	insertCSUnitMessage(t, store, "cs-unit-dense", 0, "user",
+		"first question", false, false)
+	for o := runA[0]; o <= runA[1]; o++ {
+		insertCSUnitMessage(t, store, "cs-unit-dense", o, "assistant",
+			fmt.Sprintf("DFHIT main-a %d", o), false, false)
+	}
+	insertCSUnitMessage(t, store, "cs-unit-dense", runLen+1, "user",
+		"second question", false, false)
+	for o := side[0]; o <= side[1]; o++ {
+		insertCSUnitMessage(t, store, "cs-unit-dense", o, "assistant",
+			fmt.Sprintf("DFHIT side %d", o), false, true)
+	}
+	for o := runC[0]; o <= runC[1]; o++ {
+		insertCSUnitMessage(t, store, "cs-unit-dense", o, "assistant",
+			fmt.Sprintf("DFHIT main-c %d", o), false, false)
+	}
+	insertCSUnitMessage(t, store, "cs-unit-dense", lastUser, "user",
+		"done", false, false)
+
+	anchorCount := 3 * runLen
+	require.GreaterOrEqual(t, anchorCount, db.UnitBoundsFlowFactor,
+		"single-session page must clear the dense-flow gate")
+
+	ctx := context.Background()
+	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
+		Pattern: "DFHIT", Mode: "substring",
+		Sources: []string{"messages"}, Limit: anchorCount + 10,
+	})
+	require.NoError(t, err, "SearchContent")
+	require.Len(t, got.Matches, anchorCount, "matches")
+	byOrd := csMatchesByOrdinal(t, got)
+	for o := runA[0]; o <= runA[1]; o++ {
+		assert.Equal(t, runA, byOrd[o].OrdinalRange, "run A member %d", o)
+		assert.False(t, byOrd[o].Sidechain, "run A member %d flag", o)
+	}
+	for o := side[0]; o <= side[1]; o++ {
+		assert.Equal(t, side, byOrd[o].OrdinalRange, "sidechain member %d", o)
+		assert.True(t, byOrd[o].Sidechain, "sidechain member %d flag", o)
+		assert.True(t, byOrd[o].Subordinate, "sidechain member %d subordinate", o)
+	}
+	for o := runC[0]; o <= runC[1]; o++ {
+		assert.Equal(t, runC, byOrd[o].OrdinalRange,
+			"flip-bounded run C member %d", o)
+		assert.False(t, byOrd[o].Sidechain, "run C member %d flag", o)
+	}
+}
+
 // TestPGSearchContentMultiRunReducerParity is the hand-computed parity check
 // against the SQLite-side embedding reducer: one session with two top-level
 // runs, a sidechain run between them, and an interior system row that must
