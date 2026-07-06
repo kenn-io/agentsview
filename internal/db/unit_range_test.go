@@ -247,7 +247,19 @@ func seedUnitRangeCorpus(t *testing.T, d *DB) int {
 	insertMessages(t, d, unitMsg("s-parent-linked", 1, "assistant", "a1"))
 	// Units: run[1,1].
 
-	return 5 + 3 + 6 + 4 + 2 + 1 + 1 + 2 + 1
+	insertSession(t, d, "s-sys-flip", "proj", func(s *Session) { s.EndedAt = Ptr(tsHour1) })
+	insertMessages(t, d,
+		unitMsg("s-sys-flip", 0, "user", "u0"),
+		unitMsg("s-sys-flip", 1, "assistant", "a1"),
+		asSystem(asSidechain(unitMsg("s-sys-flip", 2, "assistant", "sys+sidechain, not a flip"))),
+		unitMsg("s-sys-flip", 3, "assistant", "a3"),
+		unitMsg("s-sys-flip", 4, "user", "u4"),
+	)
+	// Units: user[0], run members {1,3} -> [1,3] (the is_system=1,
+	// is_sidechain=1 assistant row at 2 is invisible: it must not act as a
+	// flip boundary despite its opposite sidechain flag), user[4].
+
+	return 5 + 3 + 6 + 4 + 2 + 1 + 1 + 2 + 1 + 3
 }
 
 // TestDeriveUnitRangesReducerEquivalence is the invariant test: for every
