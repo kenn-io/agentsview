@@ -206,8 +206,10 @@ must not meaningfully slow it.
   the invariant above for every unit and member, plus `[o, o]` for every
   embeddable user row and non-embeddable anchor.
 - **Wire pins**: `ordinal_range` present on every match in every mode, including
-  `[0, N]`; the two existing tests asserting lexical omission of the old keys
-  are updated to assert the new always-present contract.
+  `[0, N]`; the two existing omission pins — the lexical-omission test
+  (internal/db/search_content_semantic_test.go) and the semantic zero-value
+  omission test (internal/server/search_scope_test.go) — are updated to assert
+  the new always-present contract.
 - **Cross-backend parity tests** co-located with the feature (SQLite / PG /
   DuckDB produce identical matches for the same corpus).
 - **Hybrid unit-less injection**: an FTS hit outside the mirror gets the derived
