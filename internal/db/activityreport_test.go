@@ -175,6 +175,75 @@ func TestGetActivityReport_PricingModelsOnlyIncludeDedupSurvivors(t *testing.T) 
 	assert.NotContains(t, r.Pricing.Models, "discarded-model")
 }
 
+// TestGetActivityReport_IncludesSubagentUsage confirms subagent sessions
+// are candidates so their usage lands in the totals, keeping the activity
+// cost consistent with GetDailyUsage (which never filters by
+// relationship_type). Fork sessions stay excluded: their rows replay a
+// root's messages, and the report's session table and timeline must not
+// duplicate the root's activity.
+func TestGetActivityReport_IncludesSubagentUsage(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{
+		{ModelPattern: "root-model", InputPerMTok: 3.0, OutputPerMTok: 15.0},
+		{ModelPattern: "sub-model", InputPerMTok: 3.0, OutputPerMTok: 15.0},
+	}), "UpsertModelPricing")
+
+	insertSession(t, d, "root", "proj1", func(s *Session) {
+		s.Agent = "claude"
+		s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:10:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "root", Ordinal: 0, Role: "assistant", Content: "x",
+		Timestamp: "2026-06-16T10:00:00Z", Model: "root-model",
+		ClaudeMessageID: "m-root", ClaudeRequestID: "r-root",
+		TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
+	})
+	insertSession(t, d, "agent-sub", "proj1", func(s *Session) {
+		s.Agent = "claude"
+		s.ParentSessionID = Ptr("root")
+		s.RelationshipType = "subagent"
+		s.StartedAt = Ptr("2026-06-16T10:02:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:04:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "agent-sub", Ordinal: 0, Role: "assistant", Content: "y",
+		Timestamp: "2026-06-16T10:03:00Z", Model: "sub-model",
+		ClaudeMessageID: "m-sub", ClaudeRequestID: "r-sub",
+		TokenUsage: json.RawMessage(`{"input_tokens":2000,"output_tokens":700}`),
+	})
+	// Fork replaying the root's message: same Claude ids, so even if it
+	// leaked into the candidate set the dedup would drop it, but it must
+	// not appear as a session row at all.
+	insertSession(t, d, "fork", "proj1", func(s *Session) {
+		s.Agent = "claude"
+		s.ParentSessionID = Ptr("root")
+		s.RelationshipType = "fork"
+		s.StartedAt = Ptr("2026-06-16T10:05:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:06:00Z")
+	})
+	insertMessages(t, d, Message{
+		SessionID: "fork", Ordinal: 0, Role: "assistant", Content: "x",
+		Timestamp: "2026-06-16T10:05:00Z", Model: "root-model",
+		ClaudeMessageID: "m-root", ClaudeRequestID: "r-root",
+		TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
+	})
+
+	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
+		dayQuery(t, "2026-06-16", "UTC"))
+	require.NoError(t, err)
+	ids := reportSessionIDs(r.BySession)
+	assert.Contains(t, ids, "root")
+	assert.Contains(t, ids, "agent-sub",
+		"subagent session must be a candidate")
+	assert.NotContains(t, ids, "fork", "fork sessions stay excluded")
+	assert.Equal(t, 1200, r.Totals.OutputTokens,
+		"totals include subagent usage, matching GetDailyUsage")
+	// Cost = root (1000*3+500*15)/1e6 + subagent (2000*3+700*15)/1e6.
+	assert.InDelta(t, 0.0105+0.0165, r.Totals.Cost, 1e-9)
+}
+
 // TestGetActivityReport_ExcludesOtherDays confirms the candidate-session
 // window and the usage ts-bounds keep a session whose only activity
 // falls outside the target day from contributing to that day.

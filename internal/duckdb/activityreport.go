@@ -33,10 +33,14 @@ func activityReportRangeBoundsUTC(q activity.Query) (string, string) {
 //
 // The filter `f` is honored as-is: callers that want one-shot or
 // automated sessions included must pass them through with the
-// corresponding exclusions disabled.
+// corresponding exclusions disabled. Subagent sessions are always
+// counted (like GetAnalyticsSummary) so the cost totals match
+// GetDailyUsage, which never filters by relationship_type; fork rows
+// stay excluded because they replay a root session's activity.
 func (s *Store) GetActivityReport(
 	ctx context.Context, f db.AnalyticsFilter, q activity.Query,
 ) (activity.Report, error) {
+	f.IncludeSubagents = true
 	rangeStartUTC, rangeEndUTC := activityReportRangeBoundsUTC(q)
 	lowerBound := duckUsagePaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
 	upperBound := duckUsagePaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
