@@ -3,6 +3,7 @@ package vector
 import (
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -56,6 +57,44 @@ func TestOpenReadOnlyRefusesWrites(t *testing.T) {
 
 	_, err = ro.db.ExecContext(ctx,
 		`INSERT INTO vector_meta (key, value) VALUES ('probe', 'x')`)
+	require.Error(t, err, "a read-only vectors.db handle must refuse writes")
+	assert.Contains(t, err.Error(), "readonly",
+		"the refusal must be SQLite's readonly-database error, got: %v", err)
+}
+
+// TestOpenPathWithSpecialCharacters pins vectorDSN's path escaping: SQLite
+// percent-decodes file: URI paths and splits params at `?`, so a directory
+// name containing a space and a literal %-hex sequence ("%41") would, raw,
+// be decoded to a different path ("weArd dir") and fail to open. Both the
+// writable and read-only branches must escape the path, and read-only must
+// still refuse writes.
+func TestOpenPathWithSpecialCharacters(t *testing.T) {
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "we%41rd dir")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	path := filepath.Join(dir, "vectors.db")
+
+	rw, err := Open(ctx, path, false, 4000)
+	require.NoError(t, err, "writable Open must succeed on a path with %% and space")
+	_, err = rw.db.ExecContext(ctx,
+		`INSERT INTO vector_meta (key, value) VALUES ('probe', 'x')`)
+	require.NoError(t, err)
+	require.NoError(t, rw.Close())
+
+	_, err = os.Stat(path)
+	require.NoError(t, err, "the database file must exist at the literal path, not a decoded one")
+
+	ro, err := Open(ctx, path, true, 4000)
+	require.NoError(t, err, "read-only Open must succeed on a path with %% and space")
+	defer ro.Close()
+
+	var value string
+	require.NoError(t, ro.db.QueryRowContext(ctx,
+		`SELECT value FROM vector_meta WHERE key = 'probe'`).Scan(&value))
+	assert.Equal(t, "x", value)
+
+	_, err = ro.db.ExecContext(ctx,
+		`INSERT INTO vector_meta (key, value) VALUES ('probe2', 'y')`)
 	require.Error(t, err, "a read-only vectors.db handle must refuse writes")
 	assert.Contains(t, err.Error(), "readonly",
 		"the refusal must be SQLite's readonly-database error, got: %v", err)

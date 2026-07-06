@@ -872,7 +872,12 @@ type mergedUnit struct {
 // (rank+5 against a rank constant of 60). Semantic-only search routes its
 // single ranked list through this same merge as a one-leg fusion, so the
 // penalty applies identically in both modes. Ties break deterministically by
-// ascending key; limit > 0 truncates the fused list.
+// ascending key; limit > 0 truncates the fused list. Each leg's entries must
+// already be deduplicated by Key — both callers dedup via their display-map
+// seen-checks — since a repeated key within one leg would accumulate score
+// twice. This is a local merge rather than kitvec.Merge because kit's Merge
+// has no per-hit rank-offset hook for the subordinate penalty; upstreaming
+// such a hook would let this collapse onto kit's implementation later.
 func rrfMerge(legs [][]unitRanked, limit int) []mergedUnit {
 	const rankConstant = 60
 	const subordinatePenalty = 5

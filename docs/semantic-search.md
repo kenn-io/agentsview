@@ -57,6 +57,10 @@ starts out empty and every document counts as pending. For a hosted embeddings
 API that is a real cost event, so run `agentsview embeddings build` directly at
 a time of your choosing if you want to control when that initial cost lands,
 rather than letting the debounced after-sync scheduler trigger it on its own.
+The same cost event can recur on upgrade: when a new agentsview version changes
+the index's internal mirror schema or document-identity scheme, the next
+writable open resets the mirror, and with `run_after_sync = true` the next sync
+automatically re-embeds the entire archive against the configured endpoint.
 
 By default, `include_automated = false` keeps automated sessions (e.g. roborev)
 out of the embedding index entirely, mirroring session search's default

@@ -139,6 +139,11 @@ type GenerationInfo struct {
 // pragma params either way, but it only honors mode=ro when the DSN carries
 // the file: scheme — a bare path silently opens read-write, so the ro
 // contract depends on the prefix.
+//
+// The path component is percent-encoded (slashes kept intact): SQLite
+// percent-decodes URI paths and splits params at `?`, so a raw path
+// containing `%`, `?`, or `#` would be misparsed — e.g. a literal "%41" in a
+// directory name would silently open a different file.
 func vectorDSN(path string, readOnly bool) string {
 	params := url.Values{}
 	if readOnly {
@@ -149,7 +154,8 @@ func vectorDSN(path string, readOnly bool) string {
 		params.Set("_busy_timeout", "5000")
 		params.Set("_synchronous", "NORMAL")
 	}
-	return "file:" + path + "?" + params.Encode()
+	escaped := (&url.URL{Path: path}).EscapedPath()
+	return "file:" + escaped + "?" + params.Encode()
 }
 
 // ChunkOverlap derives the SplitOptions.Overlap rune count from

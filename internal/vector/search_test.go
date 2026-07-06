@@ -171,6 +171,16 @@ func TestStaleActiveFalseWhenNoActiveGeneration(t *testing.T) {
 	assert.False(t, stale, "no active generation means nothing to compare")
 }
 
+// anchorOrdinal is a test-only convenience over the production anchor
+// pipeline: it maps a matched chunk back to the run member ordinal whose
+// rune span contains the chunk's center rune, composing chunkWindow and
+// anchorMemberIndex exactly the way resolveRunHit does. offsets must be
+// non-empty (run documents only).
+func anchorOrdinal(offsets []db.UnitOffset, contentRunes, chunkIndex int, o kitvec.SplitOptions) int {
+	start, end := chunkWindow(contentRunes, chunkIndex, o)
+	return offsets[anchorMemberIndex(offsets, start, end)].Ordinal
+}
+
 // TestAnchorOrdinal pins the anchor policy: the anchor is the member message
 // whose rune span contains the matched chunk's center rune, computed from
 // the chunk's ACTUAL rune length (the final chunk is capped at the content's
@@ -577,6 +587,58 @@ func TestResolveMessageUnitsPointLookup(t *testing.T) {
 			assert.Equal(t, tc.want, got[0])
 		})
 	}
+}
+
+// TestResolveMessageUnitsIgnoresParkedRows pins the mid-refresh read
+// contract: Refresh parks a displaced row at a negative sentinel ordinal
+// non-transactionally (evictSlotOccupant), so a concurrent resolver call can
+// see it. The point lookup's ordinal-DESC seek would otherwise land on the
+// parked row (its old ordinal_end still covers the ref) and emit a negative
+// OrdinalStart; parked rows must be invisible to readers.
+func TestResolveMessageUnitsIgnoresParkedRows(t *testing.T) {
+	ix := openTestIndex(t)
+	// Parked mid-refresh: ordinal moved to the sentinel, ordinal_end still
+	// holds its old value, so containment (2 <= 3) would pass.
+	seedUnitRow(t, ix, "r:s:parked", "s", -2, 3, false)
+	seedUnitRow(t, ix, "r:s:valid", "s", 5, 6, false)
+
+	got, err := ix.ResolveMessageUnits(context.Background(), []db.MessageRef{
+		{SessionID: "s", Ordinal: 2},
+		{SessionID: "s", Ordinal: 5},
+	})
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, db.UnitRef{}, got[0],
+		"a ref covered only by a parked row must stay unresolved, not surface a negative ordinal")
+	assert.Equal(t, db.UnitRef{
+		DocKey: "r:s:valid", SessionID: "s", OrdinalStart: 5, OrdinalEnd: 6,
+	}, got[1], "valid rows must keep resolving alongside a parked one")
+}
+
+// TestHydrateHitsIgnoresParkedRows pins the same mid-refresh contract on the
+// hit-hydration path: a KNN hit whose doc_key points at a sentinel-parked
+// mirror row must be dropped (like a vanished doc), never hydrated into a
+// hit with a negative ordinal.
+func TestHydrateHitsIgnoresParkedRows(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	seedMirrorRow(t, ix, "u-parked", db.EmbeddableUnit{
+		SessionID: "s1", Kind: "user", Ordinal: -1, OrdinalEnd: 4,
+		Content: "parked mid-refresh",
+	})
+	seedMirrorRow(t, ix, "u-valid", db.EmbeddableUnit{
+		SessionID: "s1", Kind: "user", Ordinal: 6, OrdinalEnd: 6,
+		Content: "still visible",
+	})
+
+	hits, err := ix.hydrateHits(ctx, []kitvec.Hit[string]{
+		{Doc: "u-parked", ChunkIndex: 0, Score: 0.9},
+		{Doc: "u-valid", ChunkIndex: 0, Score: 0.8},
+	})
+	require.NoError(t, err)
+	require.Len(t, hits, 1, "the parked row's hit must be dropped")
+	assert.Equal(t, 6, hits[0].Ordinal)
+	assert.Equal(t, "still visible", hits[0].Snippet)
 }
 
 // TestResolveMessageUnitsResultParallelToRefs pins that one call over a

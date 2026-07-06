@@ -116,9 +116,10 @@ func TestSearchContentScopeFiltersSemanticResults(t *testing.T) {
 
 // TestSearchContentSemanticResponseCarriesUnitRangeAndLineage pins the HTTP
 // wire shape for run-grouped semantic hits: ordinal stays the anchor while
-// ordinal_start/ordinal_end, subordinate, and the lineage keys ride along;
-// a top-level single-message hit omits them all (omitempty), keeping its
-// JSON identical to before.
+// ordinal_start/ordinal_end, subordinate, and the lineage keys ride along.
+// The fixture's top-level single-message hit sits at ordinal 0, so all of
+// its zero-valued unit/lineage fields are omitted via omitempty; a nonzero
+// single-message hit would still emit ordinal_start/ordinal_end.
 func TestSearchContentSemanticResponseCarriesUnitRangeAndLineage(t *testing.T) {
 	te := setup(t)
 	te.seedSession(t, "top-sess", "proj", 2)

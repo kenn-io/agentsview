@@ -139,7 +139,12 @@ exists:
   `message_vectors*` table, including vec0 tables left behind by retired or
   abandoned generations — recreates the current schema, and restamps the
   version, so the next build takes the existing first-ever full-build path.
-  `vectors.db` is disposable by design; `sessions.db` is never reset this way.
+  `embeddings activate` and `retire` also open read-write on their direct
+  (no-daemon) path (`directGenerationAction` in
+  `cmd/agentsview/embeddings.go`), so against a mismatched `vectors.db` they
+  trigger the same reset and then fail with "generation not found", the reset
+  having removed every generation. `vectors.db` is disposable by design;
+  `sessions.db` is never reset this way.
 - **Read path** (read-only `Open`: CLI reads, direct-install search): `Open`
   succeeds without touching any table, but every subsequent `Search`,
   `StaleActive`, `Generations`, or `ResolveMessageUnits` call fails closed
@@ -310,10 +315,13 @@ Generation activation always happens under the single writer. Search opens
   `internal/db` fuses rank-ordered legs with reciprocal rank fusion (rank
   constant 60) and shifts subordinate units' effective rank by +5 — a
   rank-based adjustment, not a hard tier or score multiplier, since RRF ranks
-  are the only scale comparable across legs. Semantic-only search routes its
-  single ranked list through the same merge as a one-leg fusion, so
-  `--semantic` downranks subordinate hits identically to `--hybrid` (matches
-  still carry the searcher's own cosine scores; only the order changes).
+  are the only scale comparable across legs. The merge is a local
+  implementation rather than kit's `Merge` because kit has no per-hit
+  rank-offset hook for the subordinate penalty (upstreamable later).
+  Semantic-only search routes its single ranked list through the same merge as
+  a one-leg fusion, so `--semantic` downranks subordinate hits identically to
+  `--hybrid` (matches still carry the searcher's own cosine scores; only the
+  order changes).
 - **Hybrid fuses at unit granularity, with an FTS anchor override.** The FTS leg
   stays message-granularity (exact strings, commands, filenames) over the same
   embeddable-universe predicate `ScanEmbeddableUnits` uses. Each FTS message

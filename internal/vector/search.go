@@ -18,7 +18,7 @@ const snippetMaxRunes = 200
 // Hit is one unit-level semantic search result, anchored to a specific
 // message. For a run document Ordinal is the anchor: the member message
 // whose rune span contains the matched chunk's center rune (see
-// anchorOrdinal), while OrdinalStart/OrdinalEnd span the whole run. For a
+// anchorMemberIndex), while OrdinalStart/OrdinalEnd span the whole run. For a
 // user document all three ordinals are the message's own ordinal.
 type Hit struct {
 	SessionID    string
@@ -231,7 +231,7 @@ const runMemberSeparatorRunes = 2
 
 // resolveRunHit computes a run hit's anchor ordinal and anchor-local
 // snippet: the anchor is the member whose rune span contains the matched
-// chunk's center rune (see anchorOrdinal), and the snippet is the
+// chunk's center rune (see anchorMemberIndex), and the snippet is the
 // intersection of the chunk's rune window with that member's span — always
 // a substring of the anchor message's own text, so the db layer's snippet
 // centering (semanticSnippet) can locate it inside the anchor message's
@@ -277,17 +277,6 @@ func chunkWindow(contentRunes, chunkIndex int, o kitvec.SplitOptions) (start, en
 	return start, end
 }
 
-// anchorOrdinal maps a matched chunk back to the run member whose rune span
-// contains the chunk's center rune (chunk_start + actual_chunk_runes/2).
-// Separator runes between members belong to no member's span, so a center
-// falling there resolves to the preceding member: the earlier member wins a
-// boundary tie. offsets must be non-empty (run documents only); user
-// documents pass their ordinal through without calling this.
-func anchorOrdinal(offsets []db.UnitOffset, contentRunes, chunkIndex int, o kitvec.SplitOptions) int {
-	start, end := chunkWindow(contentRunes, chunkIndex, o)
-	return offsets[anchorMemberIndex(offsets, start, end)].Ordinal
-}
-
 // anchorMemberIndex returns the offsets index of the run member whose rune
 // span contains the [start, end) chunk window's center rune, with the
 // earlier member winning when the center falls in the separator between two
@@ -310,7 +299,9 @@ func anchorMemberIndex(offsets []db.UnitOffset, start, end int) int {
 // keyed by doc_key, in maxSQLVars-sized chunks: a deep semantic overfetch
 // (large limit * over-fetch factor) can carry thousands of doc keys, well
 // past what a single IN (...) clause can bind. A key with no matching row is
-// simply absent from the result.
+// simply absent from the result. Rows parked at a negative sentinel ordinal
+// by a concurrent Refresh (see evictSlotOccupant) are excluded the same way:
+// mid-refresh state must never hydrate into a hit with a negative ordinal.
 func (ix *Index) lookupMirrorDocs(ctx context.Context, docKeys []string) (map[string]mirrorDoc, error) {
 	docs := make(map[string]mirrorDoc, len(docKeys))
 	err := chunkKeys(docKeys, func(chunk []string) error {
@@ -318,7 +309,7 @@ func (ix *Index) lookupMirrorDocs(ctx context.Context, docKeys []string) (map[st
 		rows, err := ix.db.QueryContext(ctx, `
 SELECT doc_key, session_id, ordinal, ordinal_end, subordinate, offsets, content
   FROM vector_messages
- WHERE doc_key IN `+placeholders, args...)
+ WHERE ordinal >= 0 AND doc_key IN `+placeholders, args...)
 		if err != nil {
 			return fmt.Errorf("look up search hit documents: %w", err)
 		}
@@ -378,7 +369,10 @@ func truncateRunes(s string, maxRunes int) string {
 // yields a zero UnitRef. Each ref is a point lookup on the retained unique
 // (session_id, ordinal) index — greatest unit ordinal <= ref ordinal, then a
 // containment check against ordinal_end — via one prepared statement, so a
-// batch of any size never approaches SQLite's bind-variable limit.
+// batch of any size never approaches SQLite's bind-variable limit. Rows
+// parked at a negative sentinel ordinal by a concurrent Refresh (see
+// evictSlotOccupant) are skipped so a ref can never resolve into
+// mid-refresh state and surface a negative ordinal range.
 //
 // Like Search and StaleActive, it fails closed with ErrMirrorVersionMismatch
 // — before touching any table — when ix was opened read-only against a
@@ -397,7 +391,7 @@ func (ix *Index) ResolveMessageUnits(
 	stmt, err := ix.db.PrepareContext(ctx, `
 SELECT doc_key, ordinal, ordinal_end, subordinate
   FROM vector_messages
- WHERE session_id = ? AND ordinal <= ?
+ WHERE session_id = ? AND ordinal >= 0 AND ordinal <= ?
  ORDER BY ordinal DESC LIMIT 1`)
 	if err != nil {
 		return nil, fmt.Errorf("resolve message units: %w", err)
