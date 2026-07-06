@@ -41,9 +41,11 @@ type ExtentProbe struct {
 // backends (PG INTEGER).
 const unitOrdinalMax = 1<<31 - 1
 
-// UnitBoundsQuerier is the backend seam. Both methods are BATCHED: one or
-// two SQL statements per call, probe lists chunked to the dialect's
-// variable limit. Results align 1:1 with probes.
+// UnitBoundsQuerier is the backend seam. Both methods are BATCHED: probes
+// are grouped into per-session (NearestUserBoundaries) or per-interval
+// (RunExtents) spans, and each unitSpanChunk-sized chunk of spans costs one
+// SQL statement — never one statement, or query, per probe. Results align
+// 1:1 with probes.
 type UnitBoundsQuerier interface {
 	NearestUserBoundaries(ctx context.Context, probes []UnitProbe) ([]UnitBounds, error)
 	RunExtents(ctx context.Context, probes []ExtentProbe) ([][2]int, error)

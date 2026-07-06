@@ -134,29 +134,30 @@ must not meaningfully slow it.
   candidate row before the LIMIT and carried through the sort. Derivation runs
   as a second pass over the returned page only.
 - **O(page), never O(corpus).** Pages are small: db default 50, max 500; MCP
-  caps at 30. Per anchor the derivation needs at most six index-served
-  `(session_id, ordinal)` lookups (`ORDER BY ordinal DESC/ASC LIMIT 1` with a
-  predicate — the same pattern `getMessagesAroundAnchor` uses): four boundary
-  lookups (nearest embeddable user row before/after; nearest sidechain-flip
-  assistant row within those bounds) find the exclusive interval, then two
-  endpoint lookups (`MIN`/`MAX` ordinal of embeddable assistant rows with the
-  anchor's sidechain inside that interval) find the actual first/last member.
-  The endpoint step is required for reducer equivalence: `runUnit` spans
-  member ordinals, and non-embeddable rows adjacent to a boundary would
-  otherwise widen the range. Lookups for a page are batched into one statement
-  per backend where the dialect allows (the `enrichSemanticHits` VALUES-CTE
-  precedent), else prepared point queries.
+  caps at 30. Anchors classify locally first: rule-1 (embeddable user), rule-3
+  (system rows, other roles, non-embeddable rows), and missing anchors resolve
+  to `[o, o]` with no query, leaving only rule-2 (embeddable assistant)
+  anchors needing backend lookups. Those are deduplicated by
+  `(session_id, ordinal, sidechain)` and resolved with exactly one batched
+  `NearestUserBoundaries` statement and one batched `RunExtents` statement for
+  the whole page — chunked only at the dialect's bind-variable limit, never
+  one statement per anchor. The endpoint step (`RunExtents`) is required for
+  reducer equivalence: `runUnit` spans member ordinals, and non-embeddable
+  rows adjacent to a boundary would otherwise widen the range.
 - **Page-level batching makes the monologue case the cheapest case.** Every
   rule-2 anchor on the page is probed up front — one batched statement per
   seam method per page, with duplicate probes deduplicated — and the SQLite
   seam groups probes into one scan span per session (boundaries) or per
   exclusive interval (run extents), so twenty hits in one run cost one scan of
   that run's stretch rather than twenty rescans.
-- **Worst case is bounded by run length.** A boundary walk reads rows until the
-  predicate matches; the pathological anchor deep inside a
-  multi-thousand-message run costs a scan of that run — the same order as
-  fetching the run for display. No walk cap initially; add one only if the
-  benchmark demands it.
+- **Worst case is bounded by per-session anchor spread, not run length.**
+  `NearestUserBoundaries` builds one span per session covering `[min, max]` of
+  that session's probe ordinals and scans it once for embeddable user rows;
+  `RunExtents` does the same per exclusive interval. The pathological case is
+  many rule-2 anchors on one page landing in a single session far apart from
+  each other — the span's width is exactly that spread, independent of how
+  long the runs between them are. No cap on span width initially; add one only
+  if the benchmark demands it.
 - **Benchmark acceptance (manual for this PR, gated afterward).** Add a
   content-search benchmark (seeded corpus including long runs and
   many-hits-per-run pages) to `internal/db`, which is already in

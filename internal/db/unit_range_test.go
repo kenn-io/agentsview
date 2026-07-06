@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -75,7 +76,7 @@ func unitAnchorForMember(
 }
 
 // countingUnitQuerier counts seam calls and probes while delegating to a
-// real backend, so tests can assert batching and memoization behavior.
+// real backend, so tests can assert batching behavior.
 type countingUnitQuerier struct {
 	inner        UnitBoundsQuerier
 	boundsCalls  int
@@ -266,8 +267,9 @@ func seedUnitRangeCorpus(t *testing.T, d *DB) int {
 // unit ScanEmbeddableUnits produces over the corpus (includeAutomated=true)
 // and every member ordinal of that unit, DeriveUnitRanges must return exactly
 // [unit.Ordinal, unit.OrdinalEnd]; user units must map to [o, o]. The units
-// are checked both in one batched call over all anchors (exercising
-// memoization and multi-run sessions) and per-anchor with a fresh memo.
+// are checked both in one batched call over all anchors (exercising probe
+// dedup across multi-run sessions) and one call per anchor (no dedup to
+// exercise, each call trivially batches a single probe).
 func TestDeriveUnitRangesReducerEquivalence(t *testing.T) {
 	d := testDB(t)
 	wantUnits := seedUnitRangeCorpus(t, d)
@@ -359,18 +361,18 @@ func TestDeriveUnitRangesEmptyAnchors(t *testing.T) {
 // duplicate (session, ordinal) anchors sharing one probe.
 func TestDeriveUnitRangesBatchesRunAnchors(t *testing.T) {
 	d := testDB(t)
-	insertSession(t, d, "s-memo", "proj", func(s *Session) { s.EndedAt = Ptr(tsHour1) })
-	msgs := []Message{unitMsg("s-memo", 0, "user", "u0")}
+	insertSession(t, d, "s-batch", "proj", func(s *Session) { s.EndedAt = Ptr(tsHour1) })
+	msgs := []Message{unitMsg("s-batch", 0, "user", "u0")}
 	for i := 1; i <= 25; i++ {
-		msgs = append(msgs, unitMsg("s-memo", i, "assistant", "a"))
+		msgs = append(msgs, unitMsg("s-batch", i, "assistant", "a"))
 	}
-	msgs = append(msgs, unitMsg("s-memo", 26, "user", "u26"))
+	msgs = append(msgs, unitMsg("s-batch", 26, "user", "u26"))
 	insertMessages(t, d, msgs...)
 
 	anchors := make([]UnitAnchor, 0, 21)
 	for o := 2; o <= 21; o++ {
 		anchors = append(anchors, UnitAnchor{
-			SessionID: "s-memo", Ordinal: o, Role: "assistant",
+			SessionID: "s-batch", Ordinal: o, Role: "assistant",
 			Embeddable: true,
 		})
 	}
@@ -461,66 +463,74 @@ func TestNearestUserBoundariesSentinels(t *testing.T) {
 		"no user row after the last assistant")
 }
 
-// TestUnitBoundsQuerierChunkingAlignment feeds both seam methods more probes
-// than one chunk binds, alternating probes with different expected answers so
-// any chunk misalignment surfaces as a wrong value.
+// TestUnitBoundsQuerierChunkingAlignment seeds more sessions than
+// unitSpanChunk spans bind in one statement, so both seam methods must run
+// their per-span-chunk loop across multiple statements. Each session k gets
+// its own ordinal base (b = 10*k), so its boundary/extent answer is unique to
+// that session: {Prev: b, Next: b+3} and extent [b+1, b+2]. A chunk-boundary
+// slicing bug (e.g. an off-by-one in the span-chunk start/end arithmetic)
+// either drops a span (surfacing as a "missing sentinel rows"/"span index out
+// of range" error) or shifts results between neighboring sessions — and
+// because every session's expected value differs from its neighbors', a
+// shift produces a wrong value rather than a coincidentally correct one.
+// Every probe's expected value is asserted individually against its own
+// session's base, so a single misattributed span fails the assertion for
+// that specific session.
 func TestUnitBoundsQuerierChunkingAlignment(t *testing.T) {
 	d := testDB(t)
-	insertSession(t, d, "s-chunk", "proj", func(s *Session) { s.EndedAt = Ptr(tsHour1) })
-	insertMessages(t, d,
-		unitMsg("s-chunk", 0, "user", "u0"),
-		unitMsg("s-chunk", 1, "assistant", "a1"),
-		unitMsg("s-chunk", 2, "assistant", "a2"),
-		unitMsg("s-chunk", 3, "assistant", "a3"),
-		unitMsg("s-chunk", 4, "user", "u4"),
-		unitMsg("s-chunk", 5, "assistant", "a5"),
-		unitMsg("s-chunk", 6, "assistant", "a6"),
-		unitMsg("s-chunk", 7, "assistant", "a7"),
-		unitMsg("s-chunk", 8, "user", "u8"),
-	)
-	const n = 400
 	ctx := context.Background()
+	const n = unitSpanChunk + 20 // >1 chunk boundary crossed
+
+	sessionID := func(k int) string { return fmt.Sprintf("s-chunk-%d", k) }
+	base := func(k int) int { return k * 10 }
+
+	for k := range n {
+		b := base(k)
+		insertSession(t, d, sessionID(k), "proj", func(s *Session) { s.EndedAt = Ptr(tsHour1) })
+		insertMessages(t, d,
+			unitMsg(sessionID(k), b, "user", "u-before"),
+			unitMsg(sessionID(k), b+1, "assistant", "member1"),
+			unitMsg(sessionID(k), b+2, "assistant", "member2"),
+			unitMsg(sessionID(k), b+3, "user", "u-after"),
+		)
+	}
 
 	boundProbes := make([]UnitProbe, n)
-	for i := range boundProbes {
-		ordinal := 2
-		if i%2 == 1 {
-			ordinal = 6
+	for k := range boundProbes {
+		b := base(k)
+		ordinal := b + 1
+		if k%2 == 1 {
+			ordinal = b + 2
 		}
-		boundProbes[i] = UnitProbe{SessionID: "s-chunk", Ordinal: ordinal}
+		boundProbes[k] = UnitProbe{SessionID: sessionID(k), Ordinal: ordinal}
 	}
 	bounds, err := d.NearestUserBoundaries(ctx, boundProbes)
 	require.NoError(t, err)
 	require.Len(t, bounds, n)
-	for i, b := range bounds {
-		want := UnitBounds{Prev: 0, Next: 4}
-		if i%2 == 1 {
-			want = UnitBounds{Prev: 4, Next: 8}
-		}
-		assert.Equal(t, want, b, "bound probe %d", i)
+	for k, got := range bounds {
+		b := base(k)
+		assert.Equal(t, UnitBounds{Prev: b, Next: b + 3}, got,
+			"bound probe for session %s", sessionID(k))
 	}
 
 	extentProbes := make([]ExtentProbe, n)
-	for i := range extentProbes {
-		if i%2 == 0 {
-			extentProbes[i] = ExtentProbe{
-				SessionID: "s-chunk", Ordinal: 2, Lo: 0, Hi: 4,
-			}
-		} else {
-			extentProbes[i] = ExtentProbe{
-				SessionID: "s-chunk", Ordinal: 6, Lo: 4, Hi: 8,
-			}
+	for k := range extentProbes {
+		b := base(k)
+		ordinal := b + 1
+		if k%2 == 1 {
+			ordinal = b + 2
+		}
+		extentProbes[k] = ExtentProbe{
+			SessionID: sessionID(k), Ordinal: ordinal, Lo: b, Hi: b + 3,
 		}
 	}
 	extents, err := d.RunExtents(ctx, extentProbes)
 	require.NoError(t, err)
 	require.Len(t, extents, n)
-	for i, e := range extents {
-		want := [2]int{1, 3}
-		if i%2 == 1 {
-			want = [2]int{5, 7}
-		}
-		assert.Equal(t, want, e, "extent probe %d", i)
+	for k, got := range extents {
+		b := base(k)
+		assert.Equal(t, [2]int{b + 1, b + 2}, got,
+			"extent probe for session %s", sessionID(k))
 	}
 }
 
