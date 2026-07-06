@@ -229,11 +229,10 @@ assistant messages — anchored to one specific message inside it:
   For user messages and single-message runs it's the message's own ordinal,
   same as every other search mode.
 - `ordinal_start` / `ordinal_end` span the whole matched unit. These are
-  additive fields: they equal `ordinal` (and are omitted from JSON) for
-  single-message matches, and lexical modes (substring/regex/FTS) never emit
-  them, so their JSON output is unchanged. Because the fields are `omitempty`,
-  a unit starting at ordinal 0 omits `ordinal_start`; treat a missing key as
-  zero.
+  additive fields: they equal `ordinal` for single-message matches, and
+  lexical modes (substring/regex/FTS) never emit them, so their JSON output is
+  unchanged. Because the fields are `omitempty`, a unit starting at ordinal 0
+  omits `ordinal_start`; treat a missing key as zero.
 - `subordinate`, `relationship`, `parent_session_id`, and `is_sidechain` carry
   the hit's lineage: whether it came from a sidechain or a delegated
   (subagent/fork) session, and which parent session to corroborate against.
@@ -262,11 +261,12 @@ and hybrid results:
 
 `--scope` is only valid with `--semantic`/`--hybrid` (other modes reject it) and
 supersedes `--include-children` there: child sessions are always visible to
-these modes so that `scope` alone governs what you see. Delegated sessions are
-also exempt from the default one-shot exclusion in these modes — a subagent
-session structurally has exactly one "user" message (its task prompt), so the
-one-shot gate would otherwise hide nearly all of them. Substring, regex, and FTS
-modes keep the existing `--include-children` and one-shot behavior unchanged.
+these modes so that `scope` alone governs what you see. Subagent/fork-typed and
+parent-linked sessions are also exempt from the default one-shot exclusion in
+these modes — a subagent session structurally has exactly one "user" message
+(its task prompt), so the one-shot gate would otherwise hide nearly all of them.
+Substring, regex, and FTS modes keep the existing `--include-children` and
+one-shot behavior unchanged.
 
 ### Inline context: `--context N`
 

@@ -595,8 +595,8 @@ stays the anchor message in every mode), `subordinate`,
 treat a missing key as 0. Lexical (substring/regex/FTS) responses
 are byte-identical to previous releases. `--scope` is rejected
 outside `--semantic`/`--hybrid`; in those modes it supersedes
-`--include-children`, and child (subagent/fork) sessions are
-exempt from the default one-shot exclusion.
+`--include-children`, and subagent/fork-typed or parent-linked
+sessions are exempt from the default one-shot exclusion.
 
 Snippets carry ~60 characters of context on each side of the
 match, snapped to rune boundaries. Any substring that matches
