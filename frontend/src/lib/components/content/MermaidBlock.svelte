@@ -72,10 +72,13 @@
 
   .mermaid-diagram {
     padding: 12px 16px;
+    background: #f8fafc; /* kit-ui-check-ignore: fixed light canvas keeps Mermaid's default dark-on-transparent SVG readable in both app themes */
+    color: #0f172a; /* kit-ui-check-ignore: matching dark foreground for Mermaid labels on the fixed light canvas above */
     overflow: auto;
   }
 
   .mermaid-diagram :global(svg) {
+    display: block;
     max-width: 100%;
     height: auto;
   }
