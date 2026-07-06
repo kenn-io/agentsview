@@ -341,8 +341,11 @@ func TestSearchContentHybridFTSHitInsideRunFusesWithFTSAnchor(t *testing.T) {
 
 // TestSearchContentHybridNoUnitFTSHitKeepsMessageGranularity pins the
 // no-unit escape hatch: an FTS hit on a message with no containing unit
-// (outside the embeddable universe) survives fusion under its own
-// message-granularity key with its own ordinal.
+// (outside the mirror) survives fusion under its own message-granularity key
+// with its own ordinal, and carries the structurally derived unit range
+// rather than a self-range: the "uncovered" hit sits in a two-message
+// assistant run, so its range must span the run even though the mirror knows
+// nothing about the session.
 func TestSearchContentHybridNoUnitFTSHitKeepsMessageGranularity(t *testing.T) {
 	d := testDB(t)
 	if !d.HasFTS() {
@@ -350,7 +353,8 @@ func TestSearchContentHybridNoUnitFTSHitKeepsMessageGranularity(t *testing.T) {
 	}
 	seedSearchSession(t, d, "uncovered", "proj", [][2]string{
 		{"user", "irrelevant lead-in"},
-		{"user", "tool output mentions zebra"},
+		{"assistant", "tool output mentions zebra"},
+		{"assistant", "further elaboration on the output"},
 	})
 	seedSearchSession(t, d, "covered", "proj", [][2]string{
 		{"user", "unrelated content"},
@@ -374,6 +378,8 @@ func TestSearchContentHybridNoUnitFTSHitKeepsMessageGranularity(t *testing.T) {
 	uncovered, ok := byID["uncovered"]
 	require.True(t, ok, "no-unit FTS hit survives")
 	assert.Equal(t, 1, uncovered.Ordinal, "message-granularity ordinal kept")
+	assert.Equal(t, [2]int{1, 2}, uncovered.OrdinalRange,
+		"unit-less hit gets the derived run range, not a self-range")
 	assert.Contains(t, uncovered.Snippet, "zebra")
 }
 
