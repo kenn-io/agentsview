@@ -255,7 +255,12 @@ func (a searcherAdapter) SemanticSearch(
 ) ([]db.VectorHit, error) {
 	stale, err := a.ix.StaleActive(ctx, a.fingerprint)
 	if err != nil {
-		return nil, fmt.Errorf("checking embedding index staleness: %w", err)
+		// StaleActive shares Search's error taxonomy (notably
+		// vector.ErrMirrorVersionMismatch from a version-mismatched
+		// read-only vectors.db), so it is translated the same way;
+		// errors outside the taxonomy pass through with this context.
+		return nil, translateSearchError(
+			fmt.Errorf("checking embedding index staleness: %w", err))
 	}
 	if stale {
 		return nil, fmt.Errorf(
@@ -288,12 +293,15 @@ func (a searcherAdapter) SemanticSearch(
 // server-facing sentinels. ErrNoActiveGeneration and BuildingError both
 // mean nothing is queryable yet, so they map to db.ErrSemanticUnavailable
 // (ErrNoActiveGeneration needs no extra cause text: db.ErrSemanticUnavailable's
-// own message already is the "run the build" remediation). A
-// QueryEncodeError means the index itself is ready but this particular
-// query-time embed call failed (the embeddings endpoint is down, slow, or
-// erroring); that maps to the distinct db.ErrSemanticTransient so a caller
-// can tell "not configured" apart from "configured, but this request
-// failed and can be retried".
+// own message already is the "run the build" remediation).
+// ErrMirrorVersionMismatch (a read-only vectors.db written by an
+// incompatible mirror schema version) also maps to
+// db.ErrSemanticUnavailable, carrying the sentinel's rebuild-required
+// message as the cause. A QueryEncodeError means the index itself is ready
+// but this particular query-time embed call failed (the embeddings endpoint
+// is down, slow, or erroring); that maps to the distinct
+// db.ErrSemanticTransient so a caller can tell "not configured" apart from
+// "configured, but this request failed and can be retried".
 func translateSearchError(err error) error {
 	var buildingErr *vector.BuildingError
 	var queryEncErr *vector.QueryEncodeError
@@ -301,6 +309,8 @@ func translateSearchError(err error) error {
 	case errors.As(err, &buildingErr):
 		return fmt.Errorf("%w: index is building: %d%% complete",
 			db.ErrSemanticUnavailable, buildingErr.Percent)
+	case errors.Is(err, vector.ErrMirrorVersionMismatch):
+		return fmt.Errorf("%w: %v", db.ErrSemanticUnavailable, err)
 	case errors.Is(err, vector.ErrNoActiveGeneration):
 		return db.ErrSemanticUnavailable
 	case errors.As(err, &queryEncErr):

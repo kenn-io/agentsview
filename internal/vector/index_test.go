@@ -254,6 +254,31 @@ INSERT INTO vector_meta (key, value) VALUES (?, ?), (?, ?)`,
 	require.NoError(t, err)
 }
 
+// seedV2Mirror writes path as a vectors.db with the current mirror DDL but
+// stamped mirror_schema_version "2": the window between the v2 columns
+// landing and the run-grouped document-identity change, when rows were still
+// one-per-message. The DDL shape matches the current schema exactly, so only
+// the version stamp can tell the two apart — the case the "3" bump exists
+// for.
+func seedV2Mirror(t *testing.T, path string) {
+	t.Helper()
+	ctx := context.Background()
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	defer raw.Close()
+
+	_, err = raw.ExecContext(ctx, mirrorDDL)
+	require.NoError(t, err)
+	_, err = raw.ExecContext(ctx, `
+INSERT INTO vector_messages (doc_key, session_id, ordinal, ordinal_end, content, content_hash)
+VALUES (?, ?, ?, ?, ?, ?)`,
+		"s1:0", "s1", 0, 0, "a per-message row", "h1")
+	require.NoError(t, err)
+	_, err = raw.ExecContext(ctx, `
+INSERT INTO vector_meta (key, value) VALUES (?, ?)`, mirrorSchemaVersionKey, "2")
+	require.NoError(t, err)
+}
+
 func TestMirrorSchemaVersionFreshDBStampsVersionNothingDropped(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "vectors.db")
@@ -355,6 +380,56 @@ VALUES (?, ?, ?, ?, ?, ?)`,
 	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM `+generationsTable).Scan(&genCount))
 	assert.Zero(t, genCount, "kit must have recreated its generations table fresh, not kept the fake row")
+}
+
+// TestMirrorSchemaVersionV2StampResetsWritePath covers the document-identity
+// half of the version gate: a vectors.db whose DDL already matches the
+// current shape but whose rows predate run grouping (stamped "2", one row
+// per message) must still be reset on writable open — the stamp, not the
+// column set, is what marks the rows incompatible.
+func TestMirrorSchemaVersionV2StampResetsWritePath(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "vectors.db")
+	seedV2Mirror(t, path)
+
+	ix, err := Open(ctx, path, false, 4000)
+	require.NoError(t, err)
+	defer ix.Close()
+
+	var rowCount int
+	require.NoError(t, ix.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM vector_messages`).Scan(&rowCount))
+	assert.Zero(t, rowCount, "per-message v2 rows must not survive a version reset")
+
+	var version string
+	require.NoError(t, ix.db.QueryRowContext(ctx,
+		`SELECT value FROM vector_meta WHERE key = ?`, mirrorSchemaVersionKey,
+	).Scan(&version))
+	assert.Equal(t, mirrorSchemaVersion, version)
+}
+
+// TestMirrorSchemaVersionV2StampReadOnlyReturnsSentinel covers the read path
+// for the same document-identity mismatch: a read-only Open against a
+// "2"-stamped vectors.db must succeed, but both Search and StaleActive must
+// fail closed with ErrMirrorVersionMismatch — StaleActive runs before Search
+// in the real serving path, so without its gate a caller would query the
+// generation tables of a mirror shaped by a different identity scheme and
+// never reach the sentinel.
+func TestMirrorSchemaVersionV2StampReadOnlyReturnsSentinel(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "vectors.db")
+	seedV2Mirror(t, path)
+
+	ro, err := Open(ctx, path, true, 4000)
+	require.NoError(t, err, "read-only Open must succeed even against a v2-stamped mirror")
+	defer ro.Close()
+
+	_, err = ro.Search(ctx, fakeSearchEncoder(), "alpha", 10)
+	assert.ErrorIs(t, err, ErrMirrorVersionMismatch)
+
+	_, err = ro.StaleActive(ctx, "any-fingerprint")
+	assert.ErrorIs(t, err, ErrMirrorVersionMismatch,
+		"StaleActive must apply the same version gate Search does")
 }
 
 // TestMirrorSchemaVersionReadOnlyMismatchSearchReturnsSentinel covers the

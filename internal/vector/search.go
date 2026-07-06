@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/db"
 	kitvec "go.kenn.io/kit/vector"
@@ -201,8 +200,12 @@ func (ix *Index) hydrateHits(ctx context.Context, hits []kitvec.Hit[string]) ([]
 }
 
 // resolveHit builds the Hit for one matched document. A user document
-// (empty offsets) anchors to its own mirror ordinal; a run document anchors
-// to the member whose rune span contains the matched chunk's center rune.
+// (empty offsets) anchors to its own mirror ordinal and snippets the whole
+// matched chunk (already message-local); a run document anchors to the
+// member whose rune span contains the matched chunk's center rune, and its
+// snippet is sliced down to that anchor member's own text (see
+// resolveRunHit) so downstream snippet centering can locate it inside the
+// anchor message's content.
 func (ix *Index) resolveHit(h kitvec.Hit[string], doc mirrorDoc) Hit {
 	hit := Hit{
 		SessionID:    doc.sessionID,
@@ -214,10 +217,45 @@ func (ix *Index) resolveHit(h kitvec.Hit[string], doc mirrorDoc) Hit {
 		Snippet:      ix.snippet(doc.content, h.ChunkIndex),
 	}
 	if len(doc.offsets) > 0 {
-		hit.Ordinal = anchorOrdinal(doc.offsets,
-			utf8.RuneCountInString(doc.content), h.ChunkIndex, ix.split)
+		hit.Ordinal, hit.Snippet = ix.resolveRunHit(doc.content, doc.offsets, h.ChunkIndex)
 	}
 	return hit
+}
+
+// runMemberSeparatorRunes is the rune length of the "\n\n" separator
+// db's runUnit joins run members with (see internal/db's runUnit). The
+// separator belongs to no member's span, so a member's text within the
+// joined content ends this many runes before the next member's RuneStart.
+const runMemberSeparatorRunes = 2
+
+// resolveRunHit computes a run hit's anchor ordinal and anchor-local
+// snippet: the anchor is the member whose rune span contains the matched
+// chunk's center rune (see anchorOrdinal), and the snippet is the
+// intersection of the chunk's rune window with that member's span — always
+// a substring of the anchor message's own text, so the db layer's snippet
+// centering (semanticSnippet) can locate it inside the anchor message's
+// content. A degenerate/stale ChunkIndex whose re-split window misses the
+// member entirely falls back to the anchor member's whole span text; the
+// result is never text from a different member, and never a panic.
+func (ix *Index) resolveRunHit(
+	content string, offsets []db.UnitOffset, chunkIndex int,
+) (ordinal int, snippet string) {
+	runes := []rune(content)
+	start, end := chunkWindow(len(runes), chunkIndex, ix.split)
+	member := anchorMemberIndex(offsets, start, end)
+
+	memberStart := min(offsets[member].RuneStart, len(runes))
+	memberEnd := len(runes)
+	if member+1 < len(offsets) {
+		memberEnd = offsets[member+1].RuneStart - runMemberSeparatorRunes
+	}
+	memberEnd = min(max(memberEnd, memberStart), len(runes))
+
+	lo, hi := max(start, memberStart), min(end, memberEnd)
+	if lo >= hi {
+		lo, hi = memberStart, memberEnd
+	}
+	return offsets[member].Ordinal, truncateRunes(string(runes[lo:hi]), snippetMaxRunes)
 }
 
 // chunkWindow returns the [start, end) rune window of content's
@@ -246,11 +284,19 @@ func chunkWindow(contentRunes, chunkIndex int, o kitvec.SplitOptions) (start, en
 // documents pass their ordinal through without calling this.
 func anchorOrdinal(offsets []db.UnitOffset, contentRunes, chunkIndex int, o kitvec.SplitOptions) int {
 	start, end := chunkWindow(contentRunes, chunkIndex, o)
+	return offsets[anchorMemberIndex(offsets, start, end)].Ordinal
+}
+
+// anchorMemberIndex returns the offsets index of the run member whose rune
+// span contains the [start, end) chunk window's center rune, with the
+// earlier member winning when the center falls in the separator between two
+// members. offsets must be non-empty.
+func anchorMemberIndex(offsets []db.UnitOffset, start, end int) int {
 	center := start + (end-start)/2
-	anchor := offsets[0].Ordinal
-	for _, off := range offsets {
+	anchor := 0
+	for i, off := range offsets {
 		if off.RuneStart <= center {
-			anchor = off.Ordinal
+			anchor = i
 		} else {
 			break
 		}
@@ -330,7 +376,17 @@ func truncateRunes(s string, maxRunes int) string {
 // signal surfaced by the db layer. It returns false when there is no active
 // generation at all: Search already distinguishes that case with
 // ErrNoActiveGeneration / BuildingError.
+//
+// Like Search, StaleActive fails closed with ErrMirrorVersionMismatch —
+// before touching any table — when ix was opened read-only against a
+// vectors.db written by a different mirror schema version: callers check
+// staleness before searching, so without this gate a version-mismatched
+// index would surface a raw SQL error (or a wrong staleness verdict) here
+// and the sentinel in Search would never be reached.
 func (ix *Index) StaleActive(ctx context.Context, want string) (bool, error) {
+	if ix.versionMismatch {
+		return false, ErrMirrorVersionMismatch
+	}
 	active, hasActive, err := ix.ActiveFingerprint(ctx)
 	if err != nil {
 		return false, err

@@ -261,6 +261,8 @@ func TestChunkWindowMatchesKitSplit(t *testing.T) {
 			kitvec.SplitOptions{MaxRunes: 10, Overlap: 2}},
 		{"short final chunk", strings.Repeat("x", 23),
 			kitvec.SplitOptions{MaxRunes: 10, Overlap: 1}},
+		{"overlap exceeding max runes is clamped", strings.Repeat("y", 25),
+			kitvec.SplitOptions{MaxRunes: 10, Overlap: 50}},
 		{"production overlap shape", strings.Repeat("word ", 100),
 			kitvec.SplitOptions{MaxRunes: 40, Overlap: ChunkOverlap(40)}},
 	}
@@ -312,7 +314,10 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 // TestHydrateHitsAnchorsRunChunks pins the full hydrate path for a run
 // document: each matched chunk anchors to the member containing its center
 // rune, the hit carries the run's ordinal range and subordinate flag, and
-// the snippet is the matched chunk's own text.
+// the snippet is the intersection of the matched chunk's window with the
+// ANCHOR member's own span — a substring of the anchor message's text, not
+// run-level text spanning members — so the db layer's snippet centering can
+// locate it inside the anchor message's content.
 func TestHydrateHitsAnchorsRunChunks(t *testing.T) {
 	ix := openSmallChunkIndex(t, 10) // stride 10-1=9
 	ctx := context.Background()
@@ -333,24 +338,82 @@ func TestHydrateHitsAnchorsRunChunks(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, hits, 1)
-	// Chunk 0's window [0,10) centers on rune 5, in the separator after
-	// member 5: the earlier member anchors.
+	// Chunk 0's window [0,10) spans members 5 and 6 and centers on rune 5,
+	// in the separator after member 5: the earlier member anchors, and the
+	// snippet is clipped to member 5's own text rather than the whole
+	// cross-member chunk "aaaaa\n\nbbb".
 	assert.Equal(t, 5, hits[0].Ordinal, "anchor ordinal")
 	assert.Equal(t, 5, hits[0].OrdinalStart)
 	assert.Equal(t, 7, hits[0].OrdinalEnd)
 	assert.True(t, hits[0].Subordinate)
-	assert.Equal(t, "aaaaa\n\nbbb", hits[0].Snippet)
+	assert.Equal(t, "aaaaa", hits[0].Snippet,
+		"run snippet must be a substring of the anchor member's own text")
 
 	hits, err = ix.hydrateHits(ctx, []kitvec.Hit[string]{
 		{Doc: "r1", ChunkIndex: 1, Score: 0.8},
 	})
 	require.NoError(t, err)
 	require.Len(t, hits, 1)
-	// Chunk 1's window [9,19) centers on rune 14, member 7's first rune.
+	// Chunk 1's window [9,19) centers on rune 14, member 7's first rune:
+	// the snippet is member 7's slice of the window, not "bbb\n\nccccc".
 	assert.Equal(t, 7, hits[0].Ordinal, "anchor ordinal")
 	assert.Equal(t, 5, hits[0].OrdinalStart)
 	assert.Equal(t, 7, hits[0].OrdinalEnd)
-	assert.Equal(t, "bbb\n\nccccc", hits[0].Snippet)
+	assert.Equal(t, "ccccc", hits[0].Snippet,
+		"run snippet must be a substring of the anchor member's own text")
+}
+
+// TestHydrateHitsDegenerateChunkIndexFallsBackToAnchorSpan pins the
+// fallback for a stale/degenerate ChunkIndex whose re-split window misses
+// the content entirely (content changed since embedding): the snippet falls
+// back to the anchor member's own span text — never a panic, never text
+// from a different member.
+func TestHydrateHitsDegenerateChunkIndexFallsBackToAnchorSpan(t *testing.T) {
+	ix := openSmallChunkIndex(t, 10)
+	ctx := context.Background()
+
+	content := "aaaaa\n\nbbbbb\n\nccccc"
+	seedMirrorRow(t, ix, "r1", db.EmbeddableUnit{
+		SessionID: "s1", Kind: "run", Ordinal: 5, OrdinalEnd: 7,
+		Content: content,
+		Offsets: []db.UnitOffset{
+			{Ordinal: 5, RuneStart: 0, ByteStart: 0},
+			{Ordinal: 6, RuneStart: 7, ByteStart: 7},
+			{Ordinal: 7, RuneStart: 14, ByteStart: 14},
+		},
+	})
+
+	hits, err := ix.hydrateHits(ctx, []kitvec.Hit[string]{
+		{Doc: "r1", ChunkIndex: 99, Score: 0.9},
+	})
+	require.NoError(t, err)
+	require.Len(t, hits, 1)
+	assert.Equal(t, 7, hits[0].Ordinal)
+	assert.Equal(t, "ccccc", hits[0].Snippet,
+		"an out-of-range chunk window must fall back to the anchor member's span text")
+}
+
+// TestHydrateHitsCorruptOffsetsFailsWithDocKey seeds a mirror row whose
+// offsets column holds invalid JSON and pins that hydration fails fast with
+// the doc_key in the error rather than panicking or silently dropping the
+// hit.
+func TestHydrateHitsCorruptOffsetsFailsWithDocKey(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+
+	_, err := ix.db.Exec(`
+INSERT INTO vector_messages (doc_key, session_id, ordinal, ordinal_end,
+    subordinate, offsets, content, content_hash)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"r-corrupt", "s1", 0, 1, false, `{"not": "an array"`, "some content", "h1")
+	require.NoError(t, err)
+
+	_, err = ix.hydrateHits(ctx, []kitvec.Hit[string]{
+		{Doc: "r-corrupt", ChunkIndex: 0, Score: 0.9},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "r-corrupt",
+		"the error must name the doc_key whose offsets are corrupt")
 }
 
 // TestHydrateHitsUserDocPassthrough pins that a user document (offsets "[]")
@@ -401,7 +464,8 @@ func TestHydrateHitsMultiByteSnippet(t *testing.T) {
 	require.Len(t, hits, 1)
 	// Chunk 1's window is [9,12): the last three ü runes, center rune 10
 	// inside member 2's span.
-	assert.Equal(t, "üüü", hits[0].Snippet)
+	assert.Equal(t, "üüü", hits[0].Snippet,
+		"run snippet must be a rune-sliced substring of the anchor member's own text")
 	assert.True(t, utf8.ValidString(hits[0].Snippet))
 	assert.Equal(t, 2, hits[0].Ordinal)
 }
@@ -444,7 +508,8 @@ func TestSearchRunDocReturnsAnchoredHit(t *testing.T) {
 	assert.Equal(t, 1, best.OrdinalStart)
 	assert.Equal(t, 2, best.OrdinalEnd)
 	assert.True(t, best.Subordinate)
-	assert.Contains(t, best.Snippet, "alpha")
+	assert.Equal(t, "mentions alpha topic", best.Snippet,
+		"snippet must be the anchor member's own slice of the chunk, not run-level text")
 
 	hits, err = ix.Search(ctx, fakeSearchEncoder(), "beta", 10)
 	require.NoError(t, err)

@@ -70,7 +70,9 @@ type BuildResult struct {
 }
 
 // Build runs one embedding pass against gen (the desired vector space, from
-// config: Model, Dimensions, Params{"max_input_chars": itoa(n)}). It
+// config: Model, Dimensions, and the fingerprinted Params — max_input_chars,
+// doc_unit_scheme, and chunk_overlap_chars; see vectorGeneration in
+// cmd/agentsview/embeddings.go). It
 // refreshes the vector_messages mirror, resolves which generation to fill
 // (top-up the active one, start a new building generation, or reset and
 // refill the active one for FullRebuild), fills pending documents, and

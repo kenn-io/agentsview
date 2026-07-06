@@ -73,12 +73,19 @@ CREATE TABLE IF NOT EXISTS vector_meta (
 `
 
 // mirrorSchemaVersion is the current vectors.db mirror schema generation,
-// stamped into vector_meta under mirrorSchemaVersionKey. Bump it whenever
-// mirrorDDL's column set changes in a way old rows cannot simply be read
-// as-is: Open resets vectors.db on the write path, and flags
-// ErrMirrorVersionMismatch on the read path, whenever the stamped value
-// differs (or is absent while any mirror state already exists).
-const mirrorSchemaVersion = "2"
+// stamped into vector_meta under mirrorSchemaVersionKey. It covers both the
+// mirror's DDL shape (mirrorDDL's column set) AND its document-identity
+// scheme (what one vector_messages row means); bump it whenever either
+// changes in a way old rows cannot simply be read as-is. Open resets
+// vectors.db on the write path, and flags ErrMirrorVersionMismatch on the
+// read path, whenever the stamped value differs (or is absent while any
+// mirror state already exists).
+//
+// History: "2" added the ordinal_end/subordinate/offsets columns but still
+// held one row per message; "3" switched document identity to run-grouped
+// units (one row per user message or per run of contiguous assistant
+// messages) with no DDL change.
+const mirrorSchemaVersion = "3"
 
 // mirrorSchemaVersionKey is the vector_meta key holding mirrorSchemaVersion.
 const mirrorSchemaVersionKey = "mirror_schema_version"

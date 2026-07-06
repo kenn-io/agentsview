@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"mime"
@@ -459,6 +460,52 @@ func TestTranslateSearchErrorMapsVectorErrorsToSemanticUnavailable(t *testing.T)
 		assert.ErrorIs(t, got, context.Canceled,
 			"context errors must stay matchable so cancellation handling still fires")
 	})
+	t.Run("mirror version mismatch maps to semantic unavailable with rebuild message", func(t *testing.T) {
+		got := translateSearchError(
+			fmt.Errorf("checking embedding index staleness: %w", vector.ErrMirrorVersionMismatch))
+		assert.ErrorIs(t, got, db.ErrSemanticUnavailable)
+		assert.Contains(t, got.Error(), "embeddings build",
+			"the rebuild remediation must survive translation")
+	})
+}
+
+// TestSearcherAdapterVersionMismatchedIndexReturnsSemanticUnavailable is the
+// adapter-level regression test for the mirror version gate: a
+// searcherAdapter over a read-only vectors.db written by a different mirror
+// schema version must return an error matching db.ErrSemanticUnavailable and
+// mentioning the rebuild remediation — not a raw SQL error or a wrong
+// staleness verdict from StaleActive querying an incompatible mirror.
+func TestSearcherAdapterVersionMismatchedIndexReturnsSemanticUnavailable(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := vectorTestConfig(dataDir)
+	path := cfg.Vector.ResolvedDBPath(dataDir)
+
+	// Create a current vectors.db, then restamp it as written by the
+	// previous mirror schema version, simulating a file left behind by an
+	// older agentsview build.
+	seed, err := vector.Open(context.Background(), path, false, cfg.Vector.Embeddings.MaxInputChars)
+	require.NoError(t, err)
+	require.NoError(t, seed.Close())
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = raw.Exec(`UPDATE vector_meta SET value = '2' WHERE key = 'mirror_schema_version'`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+
+	ix, err := vector.Open(context.Background(), path, true, cfg.Vector.Embeddings.MaxInputChars)
+	require.NoError(t, err, "read-only Open must succeed against a mismatched vectors.db")
+	defer ix.Close()
+
+	enc, err := newVectorEncoder(cfg.Vector.Embeddings)
+	require.NoError(t, err)
+	adapter := newSearcherAdapter(ix, enc, vectorGeneration(cfg.Vector.Embeddings))
+
+	_, err = adapter.SemanticSearch(context.Background(), "any query", 5)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, db.ErrSemanticUnavailable,
+		"a version-mismatched index must surface the semantic-unavailable taxonomy")
+	assert.Contains(t, err.Error(), "embeddings build",
+		"the error must tell the user to rebuild the index")
 }
 
 // --- integration: real serve/server construction path ---
