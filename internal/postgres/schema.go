@@ -886,6 +886,10 @@ func createPartialIndexesPG(ctx context.Context, db *sql.DB) error {
 		// SQLite partial index so legacy schemas migrate cleanly.
 		`CREATE INDEX IF NOT EXISTS idx_tool_calls_file_path
 		 ON tool_calls(file_path) WHERE file_path IS NOT NULL`,
+		// idx_messages_session_role backs the dense-flow unit-range boundary
+		// fetch (user ordinals by session), mirroring the SQLite index.
+		`CREATE INDEX IF NOT EXISTS idx_messages_session_role
+		 ON messages(session_id, role)`,
 	}
 	for _, ddl := range indexes {
 		if _, err := db.ExecContext(ctx, ddl); err != nil {
