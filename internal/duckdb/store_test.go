@@ -435,11 +435,12 @@ func TestSearchContentFTSMatchesNonContiguousTerms(t *testing.T) {
 }
 
 // TestSearchContentOrdinalRangeSelfRange pins the ordinal_range contract on
-// DuckDB content search: the field is always present as the self-range
-// [ordinal, ordinal] (DuckDB derives no conversation units yet), never a
-// zero-valued [0, 0] at a nonzero anchor ordinal. Substring and regex modes
-// cover the two scan paths (scanDuckContentRows and the regex candidate
-// loop).
+// DuckDB content search: the field is always present and derived from the
+// conversation-unit rules, never a zero-valued [0, 0] at a nonzero anchor
+// ordinal. This fixture's assistant anchor is a single-member run bounded by
+// the user opener, so the derived range equals the self-range. Substring and
+// regex modes cover the two scan paths (scanDuckContentRows and the regex
+// candidate loop).
 func TestSearchContentOrdinalRangeSelfRange(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
@@ -478,7 +479,7 @@ func TestSearchContentOrdinalRangeSelfRange(t *testing.T) {
 			m := got.Matches[0]
 			require.Equal(t, 1, m.Ordinal, "anchor ordinal")
 			assert.Equal(t, [2]int{1, 1}, m.OrdinalRange,
-				"ordinal_range must be the self-range, not [0, 0]")
+				"ordinal_range must be the derived single-member run, not [0, 0]")
 		})
 	}
 }
