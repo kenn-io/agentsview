@@ -127,14 +127,25 @@ func sessionScopeSubquery(f ContentSearchFilter) (string, []any) {
 	return "session_id IN (SELECT id FROM sessions WHERE " + where + ")", args
 }
 
+// semanticContentSessionFilter maps a ContentSearchFilter for the
+// semantic/hybrid session scope: the shared contentSessionFilter mapping
+// plus the child one-shot exemption (SessionFilter.ChildExemptOneShot) —
+// child sessions must not be dropped by the one-shot gate in these modes,
+// while top-level one-shots keep today's exclusion.
+func semanticContentSessionFilter(f ContentSearchFilter) SessionFilter {
+	sf := contentSessionFilter(f)
+	sf.ChildExemptOneShot = true
+	return sf
+}
+
 // semanticSessionScopeSubquery is sessionScopeSubquery minus the
 // sidebar-child exclusion: semantic/hybrid unit visibility is governed by
 // Scope (which supersedes IncludeChildren), so the hybrid FTS leg must see
-// the same universe the vector leg does — every other predicate
-// (project, agent, dates, automated, one-shot) still applies to each
-// session's own row.
+// the same universe the vector leg does — every other predicate (project,
+// agent, dates, automated, one-shot for top-level sessions) still applies
+// to each session's own row.
 func semanticSessionScopeSubquery(f ContentSearchFilter) (string, []any) {
-	where, args := buildSessionBaseFilter(contentSessionFilter(f))
+	where, args := buildSessionBaseFilter(semanticContentSessionFilter(f))
 	return "session_id IN (SELECT id FROM sessions WHERE " + where + ")", args
 }
 
@@ -1144,18 +1155,19 @@ func uniqueSessionIDs(hits []VectorHit) []string {
 // (project, agent, date range, one-shot/automated, ...), reusing the same
 // SessionFilter mapping sessionScopeSubquery uses so the two paths cannot
 // drift apart. Like semanticSessionScopeSubquery it deliberately omits the
-// sidebar-child exclusion: in semantic/hybrid modes Scope supersedes
-// IncludeChildren, so subordinate units stay visible to the vector leg.
-// Chunking keeps each query's bind count under SQLite's 999-variable limit:
-// a semantic overfetch can surface hits from thousands of distinct
-// sessions, well past a single IN clause's budget.
+// sidebar-child exclusion and exempts child sessions from the one-shot
+// gate (semanticContentSessionFilter): in semantic/hybrid modes Scope
+// supersedes IncludeChildren, so subordinate units stay visible to the
+// vector leg. Chunking keeps each query's bind count under SQLite's
+// 999-variable limit: a semantic overfetch can surface hits from thousands
+// of distinct sessions, well past a single IN clause's budget.
 func (db *DB) semanticAllowedSessionIDs(
 	ctx context.Context, f ContentSearchFilter, ids []string,
 ) (map[string]bool, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	where, filterArgs := buildSessionBaseFilter(contentSessionFilter(f))
+	where, filterArgs := buildSessionBaseFilter(semanticContentSessionFilter(f))
 	query := "SELECT id FROM sessions WHERE " + where + " AND id IN "
 
 	allowed := make(map[string]bool, len(ids))

@@ -460,25 +460,34 @@ type SessionFilter struct {
 	ExcludeProject string // exclude sessions with this project name
 	Machine        string
 	// GitBranch is a branchListSep-joined list of opaque (project, branch) tokens (EncodeBranchFilterToken).
-	GitBranch        string
-	Agent            string
-	Date             string   // exact date YYYY-MM-DD
-	DateFrom         string   // range start (inclusive)
-	DateTo           string   // range end (inclusive)
-	ActiveSince      string   // ISO-8601 timestamp; filters on most recent activity
-	MinMessages      int      // message_count >= N (0 = no filter)
-	MaxMessages      int      // message_count <= N (0 = no filter)
-	MinUserMessages  int      // user_message_count >= N (0 = no filter)
-	ExcludeOneShot   bool     // exclude sessions with user_message_count <= 1
-	ExcludeAutomated bool     // exclude sessions where is_automated = 1
-	AutomatedScope   string   // "", "human", "all", or "automated"
-	IncludeChildren  bool     // include subagent sessions (for sidebar grouping)
-	IncludeOrphans   bool     // promote orphan child rows to sidebar roots
-	Outcome          []string // filter by outcome values
-	HealthGrade      []string // filter by health grade values
-	MinToolFailures  *int     // minimum tool_failure_signal_count
-	HasSecret        bool     // only sessions with current secret_leak_count > 0
-	Starred          bool     // only sessions starred by the user
+	GitBranch       string
+	Agent           string
+	Date            string // exact date YYYY-MM-DD
+	DateFrom        string // range start (inclusive)
+	DateTo          string // range end (inclusive)
+	ActiveSince     string // ISO-8601 timestamp; filters on most recent activity
+	MinMessages     int    // message_count >= N (0 = no filter)
+	MaxMessages     int    // message_count <= N (0 = no filter)
+	MinUserMessages int    // user_message_count >= N (0 = no filter)
+	ExcludeOneShot  bool   // exclude sessions with user_message_count <= 1
+	// ChildExemptOneShot carves child sessions (a sidebar-child
+	// relationship_type or a non-empty parent_session_id) out of the
+	// ExcludeOneShot gate. Set only by the semantic/hybrid content-search
+	// session scope: nearly all non-automated subagent transcripts carry a
+	// single user message, so the one-shot gate would otherwise drop the
+	// subordinate units the Scope filter exists to govern. Top-level
+	// sessions keep the one-shot exclusion unchanged; every other caller
+	// (session list, substring/regex/fts search) leaves this false.
+	ChildExemptOneShot bool
+	ExcludeAutomated   bool     // exclude sessions where is_automated = 1
+	AutomatedScope     string   // "", "human", "all", or "automated"
+	IncludeChildren    bool     // include subagent sessions (for sidebar grouping)
+	IncludeOrphans     bool     // promote orphan child rows to sidebar roots
+	Outcome            []string // filter by outcome values
+	HealthGrade        []string // filter by health grade values
+	MinToolFailures    *int     // minimum tool_failure_signal_count
+	HasSecret          bool     // only sessions with current secret_leak_count > 0
+	Starred            bool     // only sessions starred by the user
 	// SecretsRulesVersions limits HasSecret to sessions scanned by one of these
 	// current scanner versions. Empty preserves raw DB semantics for tests and
 	// direct store callers that explicitly want unversioned counts.

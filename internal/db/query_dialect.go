@@ -527,12 +527,7 @@ func sessionFilterPredicates(
 	scope := normalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
 	oneShotPred := ""
 	if f.ExcludeOneShot {
-		pred := q("user_message_count") + " > 1"
-		if scope != "human" {
-			pred = "(" + q("user_message_count") + " > 1 OR " +
-				q("is_automated") + " = " +
-				b.dialect.trueLiteral + ")"
-		}
+		pred := oneShotPredicate(f, b, q, scope)
 		if f.IncludeChildren {
 			oneShotPred = pred
 		} else {
@@ -575,6 +570,34 @@ func sessionFilterPredicates(
 				q("id")+")")
 	}
 	return preds, oneShotPred
+}
+
+// oneShotPredicate builds the ExcludeOneShot predicate: sessions with a
+// single user message are dropped unless automated (outside "human" scope)
+// or, when ChildExemptOneShot is set (semantic/hybrid content-search scope
+// only), the session is a child — nearly all non-automated subagent
+// transcripts carry exactly one user message, so without the carve-out the
+// one-shot gate would hide the subordinate units the Scope filter governs.
+// With ChildExemptOneShot false the emitted SQL is byte-identical to the
+// historical predicate.
+func oneShotPredicate(
+	f SessionFilter, b *QueryBuilder, q func(string) string, scope string,
+) string {
+	conds := []string{q("user_message_count") + " > 1"}
+	if scope != "human" {
+		conds = append(conds,
+			q("is_automated")+" = "+b.dialect.trueLiteral)
+	}
+	if f.ChildExemptOneShot {
+		conds = append(conds,
+			q("relationship_type")+" IN ("+
+				b.dialect.SidebarChildRelationshipsSQL()+")",
+			q("parent_session_id")+" <> ''")
+	}
+	if len(conds) == 1 {
+		return conds[0]
+	}
+	return "(" + strings.Join(conds, " OR ") + ")"
 }
 
 // buildSessionBaseFilter returns a WHERE clause and args containing the base
