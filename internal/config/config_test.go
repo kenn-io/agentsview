@@ -1712,3 +1712,26 @@ func TestValidateRemoteHosts(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadFile_SyncIncludeCwdPrefixes(t *testing.T) {
+	f := newConfigFixture(t)
+	f.WriteConfigText(t, `sync_include_cwd_prefixes = ["/home/me/work", "/home/me/oss"]
+`)
+
+	cfg := f.LoadMinimal(t)
+
+	assert.Equal(t,
+		[]string{"/home/me/work", "/home/me/oss"},
+		cfg.SyncIncludeCwdPrefixes,
+	)
+}
+
+func TestLoadFile_SyncIncludeCwdPrefixesDefaultsEmpty(t *testing.T) {
+	f := newConfigFixture(t)
+	f.WriteConfigText(t, `host = "127.0.0.1"
+`)
+
+	cfg := f.LoadMinimal(t)
+
+	assert.Empty(t, cfg.SyncIncludeCwdPrefixes)
+}

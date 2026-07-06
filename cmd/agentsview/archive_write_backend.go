@@ -549,6 +549,7 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 
 	engine := syncpkg.NewEngine(b.database, syncpkg.EngineConfig{
 		AgentDirs:               b.appCfg.AgentDirs,
+		IncludeCwdPrefixes:      b.appCfg.SyncIncludeCwdPrefixes,
 		Machine:                 "local",
 		BlockedResultCategories: b.appCfg.ResultContentBlockedCategories,
 	})

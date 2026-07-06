@@ -187,6 +187,14 @@ type Config struct {
 
 	ResultContentBlockedCategories []string `json:"result_content_blocked_categories,omitempty" toml:"result_content_blocked_categories"`
 
+	// SyncIncludeCwdPrefixes, when non-empty, restricts local session
+	// ingestion to sessions whose working directory equals one of the
+	// prefixes or lives underneath one. Sessions without a recorded
+	// cwd are skipped while the filter is active. Config-file only;
+	// remote sync is unaffected because the prefixes describe local
+	// paths.
+	SyncIncludeCwdPrefixes []string `json:"-" toml:"sync_include_cwd_prefixes"`
+
 	// EventsCoalesceInterval is the minimum wall-clock time between
 	// SSE data_changed broadcasts to connected clients. Emits that
 	// arrive within this window after a prior broadcast are coalesced
@@ -671,6 +679,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		PublicOrigins                  []string                   `toml:"public_origins"`
 		Proxy                          ProxyConfig                `toml:"proxy"`
 		WatchExcludePatterns           []string                   `toml:"watch_exclude_patterns"`
+		SyncIncludeCwdPrefixes         []string                   `toml:"sync_include_cwd_prefixes"`
 		ResultContentBlockedCategories []string                   `toml:"result_content_blocked_categories"`
 		Terminal                       TerminalConfig             `toml:"terminal"`
 		AuthToken                      string                     `toml:"auth_token"`
@@ -727,6 +736,9 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if file.WatchExcludePatterns != nil {
 		c.WatchExcludePatterns = file.WatchExcludePatterns
+	}
+	if file.SyncIncludeCwdPrefixes != nil {
+		c.SyncIncludeCwdPrefixes = file.SyncIncludeCwdPrefixes
 	}
 	if file.ResultContentBlockedCategories != nil {
 		c.ResultContentBlockedCategories = file.ResultContentBlockedCategories

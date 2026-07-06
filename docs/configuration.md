@@ -679,6 +679,37 @@ state while they hold the start lock, so `agentsview serve status` can show the
 starting PID, elapsed time, current phase, progress detail, and log path before
 the HTTP server is ready.
 
+### Restricting Ingestion by Working Directory
+
+By default every discovered session is ingested. To limit the archive to
+sessions from specific workspaces — for example on a machine shared across
+multiple clients where transcripts from one workspace should never appear
+alongside another — set `sync_include_cwd_prefixes` in
+`~/.agentsview/config.toml`:
+
+```toml
+sync_include_cwd_prefixes = [
+  "/home/me/work/client-a",
+  "/home/me/oss",
+]
+```
+
+When the list is non-empty, a session is ingested only if its recorded
+working directory equals one of the prefixes or lives underneath one.
+Matching is path-boundary aware (`/home/me/oss` matches `/home/me/oss/repo`
+but not `/home/me/oss-other`) and case-sensitive. Use absolute paths;
+`~` is not expanded.
+
+Notes:
+
+- Sessions without a recorded working directory (a few agents do not store
+  one) are skipped while the filter is set.
+- The filter gates ingestion only. Sessions already in the archive are
+  preserved (the SQLite database is a persistent archive); remove unwanted
+  existing sessions explicitly with `agentsview prune`.
+- Remote-host sync is unaffected: the prefixes describe local paths, so they
+  are not applied to sessions pulled from `[[remote_hosts]]` entries.
+
 ### Large Watch Trees
 
 The recursive watcher has a hard budget of 8192 directories per process. If a

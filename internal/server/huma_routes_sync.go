@@ -156,6 +156,7 @@ func (s *Server) syncEngineForLocal(local *db.DB) *syncpkg.Engine {
 	}
 	s.onDemandEngine = syncpkg.NewEngine(local, syncpkg.EngineConfig{
 		AgentDirs:               s.cfg.AgentDirs,
+		IncludeCwdPrefixes:      s.cfg.SyncIncludeCwdPrefixes,
 		Machine:                 "local",
 		BlockedResultCategories: s.cfg.ResultContentBlockedCategories,
 		Emitter:                 emitter,

@@ -60,6 +60,14 @@ type EngineConfig struct {
 	AgentDirs               map[parser.AgentType][]string
 	Machine                 string
 	BlockedResultCategories []string
+	// IncludeCwdPrefixes, when non-empty, restricts ingestion to
+	// sessions whose working directory equals one of the prefixes
+	// or lives underneath one. Sessions without a recorded cwd are
+	// skipped while the filter is active. Populated from the
+	// sync_include_cwd_prefixes config option for local sync;
+	// remote sync leaves it empty because the prefixes describe
+	// local paths.
+	IncludeCwdPrefixes []string
 	// IDPrefix is prepended to all session IDs. Used by
 	// remote sync to namespace IDs by host (e.g. "host~").
 	IDPrefix string
@@ -90,6 +98,7 @@ type Engine struct {
 	agentDirs               map[parser.AgentType][]string
 	machine                 string
 	blockedResultCategories map[string]bool
+	cwdFilter               cwdPrefixFilter
 	syncMu                  gosync.Mutex // serializes all sync operations
 	mu                      gosync.RWMutex
 	lastSync                time.Time
@@ -222,6 +231,7 @@ func NewEngine(
 		agentDirs:               dirs,
 		machine:                 cfg.Machine,
 		blockedResultCategories: blockedCategorySet(cfg.BlockedResultCategories),
+		cwdFilter:               newCwdPrefixFilter(cfg.IncludeCwdPrefixes),
 		skipCache:               skipCache,
 		skipFingerprints:        make(map[string]string),
 		s3CodexIndexCache:       make(map[string]s3CodexIndexSnapshot),
@@ -5780,6 +5790,13 @@ func (e *Engine) prepareSessionWrite(
 		); ok {
 			s.Project = mapped
 		}
+	}
+
+	// Veto sessions outside the configured cwd allow-list before any
+	// preserve/merge handling so a filtered session is not written by
+	// any downstream path.
+	if !e.cwdFilter.allows(s.Cwd) {
+		return db.Session{}, nil, false
 	}
 
 	if e.shouldPreserveOpenCodeFormatArchive(
