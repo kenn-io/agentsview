@@ -36,7 +36,10 @@ const (
 // stretches, system rows inside runs, and a term that matches broadly.
 // 40 sessions x 300 messages; in each session ordinals 10..260 form one
 // assistant run (with a system row every 50 ordinals inside it), the rest
-// alternate user/assistant. Every assistant message contains "needle".
+// alternate user/assistant. Every assistant message contains "needle";
+// IN-RUN assistant messages additionally contain "runneedle", so the
+// rank-ordered FTS benchmark can pin its page to the long-run region
+// instead of filling with outside-run hits.
 func seedContentSearchBench(b *testing.B, d *DB) {
 	b.Helper()
 	for i := range benchContentSessions {
@@ -114,7 +117,8 @@ func benchContentRunMessage(sessionID string, ordinal int, ts string) Message {
 		}
 	}
 	content := fmt.Sprintf(
-		"assistant monologue turn %d contains needle for the search benchmark", ordinal,
+		"assistant monologue turn %d contains needle and runneedle for the search benchmark",
+		ordinal,
 	)
 	return Message{
 		SessionID: sessionID, Ordinal: ordinal, Role: "assistant",
@@ -143,14 +147,17 @@ func BenchmarkSearchContentSubstringPage(b *testing.B) {
 }
 
 // BenchmarkSearchContentFTSPage is BenchmarkSearchContentSubstringPage's
-// FTS-mode counterpart, over the identical corpus.
+// FTS-mode counterpart, over the identical corpus. It searches the run-only
+// term "runneedle": FTS orders by rank, so a broad term would fill the
+// 50-hit page with outside-run hits and never exercise the long-run
+// derivation shape this benchmark exists to measure.
 func BenchmarkSearchContentFTSPage(b *testing.B) {
 	d := testDB(b)
 	if !d.HasFTS() {
 		b.Skip("fts5 not available")
 	}
 	seedContentSearchBench(b, d)
-	f := ContentSearchFilter{Pattern: "needle", Mode: "fts", Limit: 50}
+	f := ContentSearchFilter{Pattern: "runneedle", Mode: "fts", Limit: 50}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
