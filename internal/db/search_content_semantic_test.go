@@ -435,11 +435,10 @@ func TestSearchContentSemanticMatchCarriesUnitRangeAndLineage(t *testing.T) {
 }
 
 // TestContentMatchJSONUnitFieldsOmittedForLexicalMatches guards the lexical
-// modes' wire format: a substring match always carries an ordinal_range (the
-// placeholder self-range [ordinal, ordinal] until Task 4 derives real unit
-// ranges for lexical rows too), but must not gain any of the semantic-only
-// lineage keys (they are all omitempty and left zero), keeping FTS/substring/
-// regex responses otherwise byte-identical to before.
+// modes' wire format: a substring match always carries an ordinal_range (here
+// the derived [0,0] — a user row is its own conversation unit), while the
+// omitempty lineage keys stay absent when zero-valued (top-level session, no
+// sidechain), keeping FTS/substring/regex responses free of noise keys.
 func TestContentMatchJSONUnitFieldsOmittedForLexicalMatches(t *testing.T) {
 	d := testDB(t)
 	seedSearchSession(t, d, "s1", "proj", [][2]string{
@@ -455,7 +454,7 @@ func TestContentMatchJSONUnitFieldsOmittedForLexicalMatches(t *testing.T) {
 	data, err := json.Marshal(page.Matches[0])
 	require.NoError(t, err)
 	assert.Contains(t, string(data), `"ordinal_range":[0,0]`,
-		"lexical match always carries the placeholder self-range")
+		"lexical match carries the derived unit range (user row at ordinal 0)")
 	for _, key := range []string{
 		"score", "ordinal_start", "ordinal_end", "subordinate",
 		"relationship", "parent_session_id", "is_sidechain",

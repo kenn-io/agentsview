@@ -140,8 +140,8 @@ func BenchmarkSearchContentSubstringPage(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		page, err := d.SearchContent(context.Background(), f)
-		if err != nil || len(page.Matches) == 0 {
-			b.Fatalf("search: %v (%d matches)", err, len(page.Matches))
+		if err != nil || len(page.Matches) != 50 {
+			b.Fatalf("search: %v (%d matches, want a full 50-hit page)", err, len(page.Matches))
 		}
 	}
 }
@@ -162,8 +162,8 @@ func BenchmarkSearchContentFTSPage(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		page, err := d.SearchContent(context.Background(), f)
-		if err != nil || len(page.Matches) == 0 {
-			b.Fatalf("search: %v (%d matches)", err, len(page.Matches))
+		if err != nil || len(page.Matches) != 50 {
+			b.Fatalf("search: %v (%d matches, want a full 50-hit page)", err, len(page.Matches))
 		}
 	}
 }
