@@ -90,13 +90,6 @@ For an anchor message row `m` at ordinal `o` (for `tool_input` / `tool_result`
 locations the anchor is the tool call's message row, whose ordinal the match
 already carries):
 
-Row cardinality must be preserved when locating the anchor row. The
-`tool_result_events` branches join only `sessions` today (on all three
-backends); reaching the owning message row must use a `LEFT JOIN` or a post-scan
-secondary lookup — never an inner join, which would drop existing matches whose
-anchor message is missing. A match with no locatable anchor row falls back to
-`[o, o]` with `is_sidechain` false (session lineage still applies).
-
 1. `m` is an embeddable user row → `[o, o]` (user messages are their own units).
 1. `m` is an embeddable assistant row → the maximal stretch of embeddable
    assistant rows containing `o`, bounded exclusively by: the nearest
@@ -108,6 +101,13 @@ anchor message is missing. A match with no locatable anchor row falls back to
 1. Anything else (system rows, system-prefixed rows, other roles) → `[o, o]`.
    The row belongs to no conversation unit; the citation is the message
    itself.
+
+Row cardinality must be preserved when locating the anchor row. The
+`tool_result_events` branches join only `sessions` today (on all three
+backends); reaching the owning message row must use a `LEFT JOIN` or a post-scan
+secondary lookup — never an inner join, which would drop existing matches whose
+anchor message is missing. A match with no locatable anchor row falls back to
+`[o, o]` with `is_sidechain` false (session lineage still applies).
 
 Automation gating is deliberately ignored: derivation is structural, so matches
 inside automated sessions still get real ranges. The invariant is: **derivation
