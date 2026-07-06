@@ -380,12 +380,111 @@ func TestSearchContentHybridNoUnitFTSHitKeepsMessageGranularity(t *testing.T) {
 	assert.Equal(t, 1, uncovered.Ordinal, "message-granularity ordinal kept")
 	assert.Equal(t, [2]int{1, 2}, uncovered.OrdinalRange,
 		"unit-less hit gets the derived run range, not a self-range")
+	assert.False(t, uncovered.Subordinate,
+		"unit-less top-level non-sidechain hit stays non-subordinate")
 	assert.Contains(t, uncovered.Snippet, "zebra")
+}
+
+// seedUnitlessSidechainFixture seeds one top-level session ("side") whose
+// matching assistant message is a sidechain row (ordinals 1-2 form one
+// sidechain run) and one plain top-level session ("plain") matching once.
+// "side" repeats the term so bm25 ranks it above "plain" in the FTS leg. The
+// returned searcher's mirror knows neither session, so both FTS hits are
+// unit-less and their classification must be structurally derived.
+func seedUnitlessSidechainFixture(t *testing.T, d *DB) *fakeVectorSearcher {
+	t.Helper()
+	insertSession(t, d, "side", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.UserMessageCount = 2
+	})
+	require.NoError(t, d.ReplaceSessionMessages("side", []Message{
+		{SessionID: "side", Ordinal: 0, Role: "user",
+			Content: "the question", Timestamp: "2026-05-20T12:00:00Z"},
+		{SessionID: "side", Ordinal: 1, Role: "assistant", IsSidechain: true,
+			Content: "zebra zebra zebra zebra", Timestamp: "2026-05-20T12:00:01Z"},
+		{SessionID: "side", Ordinal: 2, Role: "assistant", IsSidechain: true,
+			Content: "sidechain elaboration", Timestamp: "2026-05-20T12:00:02Z"},
+	}))
+	seedSearchSession(t, d, "plain", "proj", [][2]string{
+		{"user", "zebra appears once here"},
+	})
+	return &fakeVectorSearcher{}
+}
+
+// TestSearchContentHybridUnitlessSidechainClassifiedSubordinate pins the
+// pre-merge classification of unit-less FTS hits: a hit anchored in a
+// sidechain run (no mirror unit) must carry subordinate=true and the derived
+// sidechain-run range on the wire — matching what lexical mode emits for the
+// same anchor — and must be rank-penalized below an equal top-level hit at
+// the default (all) scope even though the FTS leg ranks it first.
+func TestSearchContentHybridUnitlessSidechainClassifiedSubordinate(t *testing.T) {
+	d := testDB(t)
+	if !d.HasFTS() {
+		t.Skip("fts5 not available")
+	}
+	d.SetVectorSearcher(seedUnitlessSidechainFixture(t, d))
+
+	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "zebra", Mode: "hybrid", Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent hybrid")
+	require.Len(t, page.Matches, 2)
+	assert.Equal(t, "plain", page.Matches[0].SessionID,
+		"subordinate penalty must drop the higher-FTS-ranked sidechain hit below top-level")
+	side := page.Matches[1]
+	require.Equal(t, "side", side.SessionID)
+	assert.True(t, side.Subordinate, "unit-less sidechain hit classified subordinate")
+	assert.True(t, side.Sidechain, "anchor message is_sidechain")
+	assert.Equal(t, 1, side.Ordinal, "message-granularity anchor kept")
+	assert.Equal(t, [2]int{1, 2}, side.OrdinalRange,
+		"derived sidechain-run range, not a self-range")
+
+	// Lexical parity: mode "fts" must classify the same anchor identically.
+	lexical, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "zebra", Mode: "fts", Sources: []string{"messages"}, Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent fts")
+	var found bool
+	for _, m := range lexical.Matches {
+		if m.SessionID == "side" && m.Ordinal == 1 {
+			found = true
+			assert.Equal(t, side.Subordinate, m.Subordinate, "Subordinate parity")
+			assert.Equal(t, side.Sidechain, m.Sidechain, "Sidechain parity")
+			assert.Equal(t, side.OrdinalRange, m.OrdinalRange, "OrdinalRange parity")
+		}
+	}
+	require.True(t, found, "lexical fts must also match the sidechain anchor")
+}
+
+// TestSearchContentHybridUnitlessSidechainScopeFiltering pins that scope
+// filtering sees the derived classification of unit-less hits: scope=top
+// excludes the sidechain hit, scope=subordinate keeps only it.
+func TestSearchContentHybridUnitlessSidechainScopeFiltering(t *testing.T) {
+	d := testDB(t)
+	if !d.HasFTS() {
+		t.Skip("fts5 not available")
+	}
+	d.SetVectorSearcher(seedUnitlessSidechainFixture(t, d))
+
+	top, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "zebra", Mode: "hybrid", Scope: "top", Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent hybrid scope=top")
+	require.Len(t, top.Matches, 1, "scope=top excludes the unit-less sidechain hit")
+	assert.Equal(t, "plain", top.Matches[0].SessionID)
+
+	sub, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "zebra", Mode: "hybrid", Scope: "subordinate", Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent hybrid scope=subordinate")
+	require.Len(t, sub.Matches, 1, "scope=subordinate keeps only the sidechain hit")
+	assert.Equal(t, "side", sub.Matches[0].SessionID)
+	assert.True(t, sub.Matches[0].Subordinate)
 }
 
 // TestSearchContentHybridFTSLegSubordinateUnitPenalized pins the FTS-side
 // subordinate flag: an FTS hit resolving to a subordinate unit is penalized
-// in the merge, while a unit-less FTS hit is never penalized — so the
+// in the merge, while a unit-less top-level FTS hit is not — so the
 // lower-FTS-ranked top-level message overtakes the subordinate unit.
 func TestSearchContentHybridFTSLegSubordinateUnitPenalized(t *testing.T) {
 	d := testDB(t)
@@ -512,7 +611,8 @@ func TestSearchContentHybridFTSLegScopeExcludedRowsRefill(t *testing.T) {
 	}
 	// 205 top-level sessions would be slow; one top-level session with 205
 	// matching messages fills the first batch the same way, since each
-	// message is its own unit-less (never-subordinate) row.
+	// message is its own unit-less row classified top-level (non-sidechain,
+	// no subordinate lineage).
 	const topLen = 205
 	topMsgs := make([][2]string, topLen)
 	for i := range topMsgs {

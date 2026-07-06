@@ -77,33 +77,24 @@ func buildContentUnitAnchors(
 }
 
 // fillAnchorMeta fetches anchor classification and session lineage for every
-// page row: one batched VALUES-CTE lookup per enrichHitsChunk distinct
-// (session_id, ordinal) refs, never a per-row query. Refs whose message row
-// does not exist (tool_result_events orphans) are marked missing so
-// derivation falls back to [o, o]; their session lineage is still populated
-// via the sessions join. The result aligns 1:1 with matches.
+// page row via lookupAnchorMeta. Refs whose message row does not exist
+// (tool_result_events orphans) are marked missing so derivation falls back
+// to [o, o]; their session lineage is still populated via the sessions join.
+// The result aligns 1:1 with matches.
 func (db *DB) fillAnchorMeta(
 	ctx context.Context, matches []ContentMatch,
 ) ([]contentAnchorMeta, error) {
-	seen := make(map[semanticHitKey]bool, len(matches))
-	refs := make([]semanticHitKey, 0, len(matches))
+	refs := make([]semanticHitKey, len(matches))
 	for i := range matches {
-		key := semanticHitKey{matches[i].SessionID, matches[i].Ordinal}
-		if !seen[key] {
-			seen[key] = true
-			refs = append(refs, key)
-		}
+		refs[i] = semanticHitKey{matches[i].SessionID, matches[i].Ordinal}
 	}
-	found := make(map[semanticHitKey]contentAnchorMeta, len(refs))
-	for start := 0; start < len(refs); start += enrichHitsChunk {
-		chunk := refs[start:min(start+enrichHitsChunk, len(refs))]
-		if err := db.lookupAnchorMetaChunk(ctx, chunk, found); err != nil {
-			return nil, err
-		}
+	found, err := db.lookupAnchorMeta(ctx, refs)
+	if err != nil {
+		return nil, err
 	}
 	metas := make([]contentAnchorMeta, len(matches))
-	for i := range matches {
-		got, ok := found[semanticHitKey{matches[i].SessionID, matches[i].Ordinal}]
+	for i, ref := range refs {
+		got, ok := found[ref]
 		if !ok {
 			metas[i].missing = true
 			continue
@@ -112,6 +103,31 @@ func (db *DB) fillAnchorMeta(
 		metas[i] = got
 	}
 	return metas, nil
+}
+
+// lookupAnchorMeta resolves anchor classification and session lineage for
+// refs: one batched VALUES-CTE lookup per enrichHitsChunk distinct
+// (session_id, ordinal) refs, never a per-row query. Refs whose session row
+// is absent are omitted from the result map.
+func (db *DB) lookupAnchorMeta(
+	ctx context.Context, refs []semanticHitKey,
+) (map[semanticHitKey]contentAnchorMeta, error) {
+	seen := make(map[semanticHitKey]bool, len(refs))
+	distinct := make([]semanticHitKey, 0, len(refs))
+	for _, ref := range refs {
+		if !seen[ref] {
+			seen[ref] = true
+			distinct = append(distinct, ref)
+		}
+	}
+	found := make(map[semanticHitKey]contentAnchorMeta, len(distinct))
+	for start := 0; start < len(distinct); start += enrichHitsChunk {
+		chunk := distinct[start:min(start+enrichHitsChunk, len(distinct))]
+		if err := db.lookupAnchorMetaChunk(ctx, chunk, found); err != nil {
+			return nil, err
+		}
+	}
+	return found, nil
 }
 
 // lookupAnchorMetaChunk resolves one chunk of (session_id, ordinal) refs to
@@ -163,40 +179,50 @@ func (db *DB) lookupAnchorMetaChunk(
 	return nil
 }
 
-// deriveUnitlessHybridRanges replaces the self-range on unit-less hybrid FTS
-// rows (the resolver returned no mirror unit) with the structurally derived
-// conversation-unit range, so lexical hits outside the mirror still cite
-// their run. It reuses the classification enrichSemanticHits already fetched
-// (role, sidechain, embeddable) — no extra per-row queries; mirror-unit rows
-// keep their embedded span untouched, as do the fusion keys and the
-// subordinate penalty applied at merge time.
-func (db *DB) deriveUnitlessHybridRanges(
-	ctx context.Context, displays []hybridDisplay,
-	meta map[semanticHitKey]semanticHitInfo,
+// classifyUnitlessHybridHits assigns each unit-less hybrid FTS hit (the
+// resolver returned no mirror unit; hits[i] for i in idxs) its structurally
+// derived conversation-unit range and subordinate flag BEFORE scope filtering
+// and fusion, so a unit-less sidechain (or subagent/fork-session) hit is
+// excluded, included, and penalized exactly like lexical mode classifies the
+// same anchor. One batched anchor lookup plus one DeriveUnitRanges pass
+// covers all idxs — unit-less refs are rare (system rows or mirror lag), so
+// the pre-merge leg stays cheap; mirror-unit rows keep their embedded span
+// and resolver-provided subordinate flag untouched.
+func (db *DB) classifyUnitlessHybridHits(
+	ctx context.Context, hits []hybridDisplay, idxs []int,
 ) error {
-	var idxs []int
-	var anchors []UnitAnchor
-	for i, d := range displays {
-		if !d.unitless {
-			continue
-		}
-		a := UnitAnchor{SessionID: d.sessionID, Ordinal: d.ordinal, Missing: true}
-		if info, ok := meta[semanticHitKey{d.sessionID, d.ordinal}]; ok {
-			a.Role, a.Sidechain, a.Embeddable = info.role, info.isSidechain, info.embeddable
-			a.Missing = false
-		}
-		idxs = append(idxs, i)
-		anchors = append(anchors, a)
-	}
-	if len(anchors) == 0 {
+	if len(idxs) == 0 {
 		return nil
+	}
+	refs := make([]semanticHitKey, len(idxs))
+	for k, i := range idxs {
+		refs[k] = semanticHitKey{hits[i].sessionID, hits[i].ordinal}
+	}
+	metas, err := db.lookupAnchorMeta(ctx, refs)
+	if err != nil {
+		return err
+	}
+	anchors := make([]UnitAnchor, len(idxs))
+	for k, ref := range refs {
+		meta := metas[ref]
+		anchors[k] = UnitAnchor{
+			SessionID:  ref.sessionID,
+			Ordinal:    ref.ordinal,
+			Role:       meta.role.String,
+			Sidechain:  meta.sidechain.Valid && meta.sidechain.Bool,
+			Embeddable: meta.embeddable.Valid && meta.embeddable.Bool,
+			Missing:    !meta.role.Valid,
+		}
 	}
 	ranges, err := DeriveUnitRanges(ctx, db, anchors)
 	if err != nil {
 		return fmt.Errorf("deriving hybrid unit-less ranges: %w", err)
 	}
 	for k, i := range idxs {
-		displays[i].ordinalStart, displays[i].ordinalEnd = ranges[k][0], ranges[k][1]
+		hits[i].ordinalStart, hits[i].ordinalEnd = ranges[k][0], ranges[k][1]
+		meta := metas[refs[k]]
+		hits[i].subordinate = anchors[k].Sidechain ||
+			SubordinateSession(meta.relationship, meta.parentSessionID)
 	}
 	return nil
 }

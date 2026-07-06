@@ -959,18 +959,16 @@ func applySubordinatePenalty(hits []VectorHit) []VectorHit {
 
 // hybridDisplay carries what one fused unit needs for presentation: the
 // anchor (session, ordinal) the match reports and enriches by, the unit's
-// ordinal span and subordinate flag (false for a unit-less
-// message-granularity FTS hit), plus the leg's raw (unredacted) approximate
-// snippet text used only to center the redacted window. unitless marks an
-// FTS hit the resolver found no mirror unit for; its initial self-range is
-// replaced with a structurally derived range in enrichHybridMatches.
+// ordinal span and subordinate flag (structurally derived for a unit-less
+// message-granularity FTS hit, see classifyUnitlessHybridHits), plus the
+// leg's raw (unredacted) approximate snippet text used only to center the
+// redacted window.
 type hybridDisplay struct {
 	sessionID    string
 	ordinal      int
 	ordinalStart int
 	ordinalEnd   int
 	subordinate  bool
-	unitless     bool
 	snippet      string
 }
 
@@ -1077,8 +1075,10 @@ const maxHybridFTSBatches = 4
 // key and subordinate flag while keeping its own message ordinal as the
 // anchor and its FTS snippet for display (the FTS-anchor override); several
 // hits in one unit collapse to the best-ranked one. A hit with no containing
-// unit keeps a message-granularity key, is never subordinate-penalized, and
-// so survives fusion on its own.
+// unit keeps a message-granularity key and survives fusion on its own, with
+// its range and subordinate flag structurally derived before the scope
+// filter and the merge (classifyUnitlessHybridHits), so it is excluded and
+// penalized exactly like lexical mode classifies the same anchor.
 //
 // Rows are fetched in rank-ordered batches of k with OFFSET continuation:
 // collapse and scope filtering can discard most of a batch, so the leg keeps
@@ -1094,7 +1094,7 @@ func (db *DB) hybridFTSLeg(
 		if err != nil {
 			return hybridLeg{}, err
 		}
-		if err := appendHybridFTSHits(ctx, searcher, f.Scope, hits, &leg); err != nil {
+		if err := db.appendHybridFTSHits(ctx, searcher, f.Scope, hits, &leg); err != nil {
 			return hybridLeg{}, err
 		}
 		if len(hits) < k || len(leg.ranked) >= k {
@@ -1147,10 +1147,12 @@ func (db *DB) fetchHybridFTSBatch(
 }
 
 // appendHybridFTSHits resolves one batch of FTS message hits to their
-// containing units and accumulates the survivors into leg: hits outside
-// scope are dropped, and a unit already seen (within or across batches)
-// keeps its earlier, better-ranked entry.
-func appendHybridFTSHits(
+// containing units, classifies unit-less hits structurally (range and
+// subordinate flag, so the scope filter and the fusion penalty treat them
+// exactly like lexical mode), and accumulates the survivors into leg: hits
+// outside scope are dropped, and a unit already seen (within or across
+// batches) keeps its earlier, better-ranked entry.
+func (db *DB) appendHybridFTSHits(
 	ctx context.Context, searcher VectorSearcher, scope string,
 	hits []hybridDisplay, leg *hybridLeg,
 ) error {
@@ -1170,25 +1172,34 @@ func appendHybridFTSHits(
 			"resolving fts hits to units: got %d units for %d refs", len(units), len(refs))
 	}
 
-	for i, hit := range hits {
-		key := messageFusionKey(hit.sessionID, hit.ordinal)
+	keys := make([]string, len(hits))
+	var unitless []int
+	for i := range hits {
+		hit := &hits[i]
+		keys[i] = messageFusionKey(hit.sessionID, hit.ordinal)
 		hit.ordinalStart, hit.ordinalEnd = hit.ordinal, hit.ordinal
-		hit.unitless = true
-		if units[i].DocKey != "" {
-			key = unitFusionKey(units[i].SessionID, units[i].OrdinalStart)
-			hit.ordinalStart = units[i].OrdinalStart
-			hit.ordinalEnd = units[i].OrdinalEnd
-			hit.subordinate = units[i].Subordinate
-			hit.unitless = false
+		if units[i].DocKey == "" {
+			unitless = append(unitless, i)
+			continue
 		}
+		keys[i] = unitFusionKey(units[i].SessionID, units[i].OrdinalStart)
+		hit.ordinalStart = units[i].OrdinalStart
+		hit.ordinalEnd = units[i].OrdinalEnd
+		hit.subordinate = units[i].Subordinate
+	}
+	if err := db.classifyUnitlessHybridHits(ctx, hits, unitless); err != nil {
+		return err
+	}
+
+	for i, hit := range hits {
 		if scopeExcludes(scope, hit.subordinate) {
 			continue
 		}
-		if _, seen := leg.display[key]; seen {
+		if _, seen := leg.display[keys[i]]; seen {
 			continue
 		}
-		leg.ranked = append(leg.ranked, unitRanked{Key: key, Subordinate: hit.subordinate})
-		leg.display[key] = hit
+		leg.ranked = append(leg.ranked, unitRanked{Key: keys[i], Subordinate: hit.subordinate})
+		leg.display[keys[i]] = hit
 	}
 	return nil
 }
@@ -1200,8 +1211,9 @@ func appendHybridFTSHits(
 // on the FTS snippet (the vector leg's chunk anchor may be a different run
 // member). Either way the returned snippet itself is built (and redacted)
 // from the anchor message's full content via semanticSnippet, the same
-// guarantee mode "semantic" gives. Unit-less FTS rows get their self-range
-// replaced with a derived conversation-unit range before assembly.
+// guarantee mode "semantic" gives. Unit-less FTS rows arrive with their
+// derived range and subordinate flag already assigned pre-merge
+// (classifyUnitlessHybridHits), so no derivation runs here.
 func (db *DB) enrichHybridMatches(
 	ctx context.Context, f ContentSearchFilter, merged []mergedUnit,
 	vecDisplay, ftsDisplay map[string]hybridDisplay,
@@ -1218,9 +1230,6 @@ func (db *DB) enrichHybridMatches(
 	}
 	meta, err := db.enrichSemanticHits(ctx, asHits)
 	if err != nil {
-		return ContentSearchPage{}, err
-	}
-	if err := db.deriveUnitlessHybridRanges(ctx, displays, meta); err != nil {
 		return ContentSearchPage{}, err
 	}
 
@@ -1333,14 +1342,10 @@ type semanticHitKey struct {
 // boundary. relationshipType, parentSessionID, and isSidechain carry the
 // hit's lineage — joined here from sessions.db (the vector mirror does not
 // store lineage per hit); isSidechain is the ANCHOR ordinal's message flag.
-// embeddable is the anchor row's reducer classification (is_system = 0 AND
-// content not system-prefixed), consumed by deriveUnitlessHybridRanges so
-// hybrid unit-less rows can derive a unit range without a second lookup.
 type semanticHitInfo struct {
 	project, agent, role, timestamp, content string
 	relationshipType, parentSessionID        string
 	isSidechain                              bool
-	embeddable                               bool
 }
 
 // enrichHitsChunk is the max hits enrichSemanticHits binds per VALUES CTE
@@ -1373,9 +1378,7 @@ func (db *DB) enrichSemanticHits(
 			"SELECT m.session_id, s.project, s.agent, m.role, m.ordinal, " +
 			"COALESCE(m.timestamp, ''), m.content, " +
 			"COALESCE(s.relationship_type, ''), " +
-			"COALESCE(s.parent_session_id, ''), m.is_sidechain, " +
-			"CASE WHEN m.is_system = 0 AND " +
-			SystemPrefixSQL("m.content", "m.role") + " THEN 1 ELSE 0 END " +
+			"COALESCE(s.parent_session_id, ''), m.is_sidechain " +
 			"FROM hits h " +
 			"JOIN messages m ON m.session_id = h.session_id AND m.ordinal = h.ordinal " +
 			"JOIN sessions s ON s.id = m.session_id"
@@ -1390,7 +1393,7 @@ func (db *DB) enrichSemanticHits(
 			if err := rows.Scan(&key.sessionID, &info.project, &info.agent,
 				&info.role, &key.ordinal, &info.timestamp, &info.content,
 				&info.relationshipType, &info.parentSessionID,
-				&info.isSidechain, &info.embeddable); err != nil {
+				&info.isSidechain); err != nil {
 				rows.Close()
 				return nil, fmt.Errorf("scan semantic hit: %w", err)
 			}
