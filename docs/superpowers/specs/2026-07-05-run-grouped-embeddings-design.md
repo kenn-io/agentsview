@@ -185,9 +185,15 @@ deterministically from the mirrored content.
   universe for fusion to be sound). An explicit `include_children` on a
   semantic/hybrid request is accepted but superseded by `scope` — documented,
   since `scope=top` is the sharper equivalent (it also excludes sidechain runs
-  and parent-linked unknowns). All other session filters (automated, one-shot,
-  project, agent, dates) continue to apply in every mode. FTS-only, substring,
-  and regex modes keep today's `include_children` semantics unchanged.
+  and parent-linked unknowns). All other session filters (automated, project,
+  agent, dates) continue to apply in every mode. The one-shot exclusion gets
+  one carve-out in semantic/hybrid modes: it does not drop child sessions
+  (subagent/fork-typed or parent-linked), because a delegated session
+  structurally has exactly one "user" message — the task prompt — so the default
+  one-shot gate would silently exclude 98% of subagent sessions and hollow out
+  `scope=all`; top-level sessions keep the one-shot exclusion in every mode.
+  FTS-only, substring, and regex modes keep today's `include_children` and
+  one-shot semantics unchanged.
 - **Subordinate penalty.** A rank-based adjustment: subordinate hits' RRF
   contributions use `rank + P`, with `P` a small constant, initial value 5 —
   not a hard tier and not a score multiplier, since RRF ranks are the only
