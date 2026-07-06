@@ -29,7 +29,9 @@ the archive crawl, then synthesizes and verifies.
    (h/d/w/m/y units; `m` is months, not minutes). Widen or drop `--since`
    if results are thin.
 4. Triage from the inline `context_before`/`context_after` in the results.
-   Deep-dive only the strongest candidates:
+   A hybrid/semantic hit may span a run of assistant messages
+   (`ordinal_start`-`ordinal_end`, with `ordinal` as the anchor message);
+   center the window on the anchor. Deep-dive only the strongest candidates:
 
    ```bash
    agentsview session messages <session-id> --around <ordinal> --before 8 --after 8 --role user,assistant --json
@@ -37,7 +39,12 @@ the archive crawl, then synthesizes and verifies.
 
 5. Give the search a mechanical budget: 4-6 probes, top 2-4 sessions, one
    window per session, then stop and report.
-6. Answer from evidence, citing session IDs and ordinals.
+6. Answer from evidence, citing session IDs and ordinals. For a run hit,
+   cite the session plus the `ordinal_start`-`ordinal_end` range, not just
+   the single anchor ordinal.
+7. A hit marked `subordinate` (sidechain or subagent/fork content) is
+   supporting evidence only: corroborate it from its parent session
+   (`parent_session_id`) before treating it as a decision or instruction.
 
 ## Mode Fallbacks
 
@@ -56,7 +63,9 @@ the archive crawl, then synthesizes and verifies.
 ## Reconstructing a Decision
 
 1. Find the earliest substantive mention: hybrid query for the decision's
-   subject, starting `--since 3m` and widening (6m, 1y, none) until the
+   subject with `--scope top` (delegated subagent sessions echo their
+   parent's instructions and bury the conversation where the decision was
+   made), starting `--since 3m` and widening (6m, 1y, none) until the
    origin appears.
 2. Walk forward from the origin with message windows. User messages carry
    intent and constraints; assistant messages carry rationale, options
@@ -76,6 +85,7 @@ the archive crawl, then synthesizes and verifies.
 | "A longer query is more semantic." | Hybrid works best with a focused phrase; FTS works best with 2-3 word probes. |
 | "Tool output matches are just as good." | Start in messages for concepts; add tool sources only for artifacts, commands, or errors. |
 | "This current session mentions it, so it counts." | Down-rank active-session echoes; historical evidence needs older sessions. |
+| "A subordinate hit settles it." | Sidechain/subagent hits restate delegated work; confirm against the parent session before citing. |
 | "Keep searching until certain." | Return a bounded, evidence-backed pass and list follow-ups. |
 
 ## Output Shape

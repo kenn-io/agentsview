@@ -555,6 +555,7 @@ default; opt back in with `--include-one-shot`,
 | `--fts`               | `mode=fts`          | Tokenized FTS5 search; messages-only                   |
 | `--semantic`          | `mode=semantic`     | Vector search over user/assistant messages; messages-only — see [Semantic Search](/semantic-search/) |
 | `--hybrid`            | `mode=hybrid`       | Semantic + FTS reciprocal rank fusion; messages-only — see [Semantic Search](/semantic-search/) |
+| `--scope`             | `scope`             | `top`, `all` (default), or `subordinate` — semantic/hybrid only; supersedes `include_children` in those modes |
 | `--context`           | `context`           | int — N messages of context before/after each match (max 10) |
 | `--in`                | `in`                | Comma-separated: `messages,tool_input,tool_result` (default all) |
 | `--exclude-system`    | `exclude_system`    | Drop system messages from the scan                     |
@@ -583,6 +584,19 @@ and the `tool_result_events` rows. `--semantic` and `--hybrid`
 require an embedding index and return a single ranked page
 (`--cursor` is rejected) — see [Semantic Search](/semantic-search/)
 for setup, scoring, and limitations.
+
+Semantic and hybrid matches carry additive fields the other modes
+never emit: `score`, plus the unit shape described in
+[Hit shape](/semantic-search/#hit-shape-ranges-and-anchors) —
+`ordinal_start`/`ordinal_end` (the matched unit's span; `ordinal`
+stays the anchor message in every mode), `subordinate`,
+`relationship`, `parent_session_id`, and `is_sidechain`. All are
+`omitempty`: a zero `ordinal_start` is omitted from the JSON, so
+treat a missing key as 0. Lexical (substring/regex/FTS) responses
+are byte-identical to previous releases. `--scope` is rejected
+outside `--semantic`/`--hybrid`; in those modes it supersedes
+`--include-children`, and child (subagent/fork) sessions are
+exempt from the default one-shot exclusion.
 
 Snippets carry ~60 characters of context on each side of the
 match, snapped to rune boundaries. Any substring that matches

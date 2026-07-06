@@ -831,6 +831,12 @@ agentsview session search <pattern>      # content search across sessions
 agentsview session usage <id>            # token usage and cost estimate
 ```
 
+`session search` supports substring (default), `--regex`, `--fts`,
+`--semantic`, and `--hybrid` modes. Semantic and hybrid results can be scoped
+with `--scope top|all|subordinate` (default `all`) to include or exclude
+sidechain and subagent content — see
+[Semantic Search](/semantic-search/#scoping-results-scope).
+
 Structured response commands accept `--format json`; `--json` is a short alias
 for that scripting mode. `session export` and `session watch` are the
 exceptions: they stream raw bytes and NDJSON respectively, so they reject
