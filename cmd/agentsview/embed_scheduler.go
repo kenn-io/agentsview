@@ -289,6 +289,22 @@ func (a searcherAdapter) SemanticSearch(
 	return out, nil
 }
 
+// ResolveMessageUnits implements db.VectorSearcher by delegating to the
+// index's resolver, translating its error taxonomy (notably
+// vector.ErrMirrorVersionMismatch from a version-mismatched read-only
+// vectors.db) the same way SemanticSearch does. It needs no staleness gate
+// of its own: the hybrid path always calls SemanticSearch — which enforces
+// the gate — before resolving FTS hits.
+func (a searcherAdapter) ResolveMessageUnits(
+	ctx context.Context, refs []db.MessageRef,
+) ([]db.UnitRef, error) {
+	units, err := a.ix.ResolveMessageUnits(ctx, refs)
+	if err != nil {
+		return nil, translateSearchError(err)
+	}
+	return units, nil
+}
+
 // translateSearchError maps vector.Index.Search's error taxonomy to
 // server-facing sentinels. ErrNoActiveGeneration and BuildingError both
 // mean nothing is queryable yet, so they map to db.ErrSemanticUnavailable

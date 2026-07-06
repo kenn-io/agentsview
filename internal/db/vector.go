@@ -41,15 +41,38 @@ type VectorHit struct {
 	Snippet      string
 }
 
+// MessageRef identifies one message by its session and ordinal, the shape
+// the hybrid FTS leg hands to ResolveMessageUnits.
+type MessageRef struct {
+	SessionID string
+	Ordinal   int
+}
+
+// UnitRef locates the embedding unit (user document or assistant run)
+// containing a message. The zero value (DocKey == "") means "no containing
+// unit": the message lies outside the embeddable universe, and the hybrid
+// path keeps such an FTS hit at message granularity rather than dropping it.
+type UnitRef struct {
+	DocKey       string
+	SessionID    string
+	OrdinalStart int
+	OrdinalEnd   int
+	Subordinate  bool
+}
+
 // VectorSearcher is the seam through which internal/db reaches the vector
 // embedding index without importing internal/vector directly, which would
 // create an import cycle (internal/vector depends on internal/db's schema
 // helpers). The concrete implementation is internal/vector's Index, wired in
 // at startup via SetVectorSearcher.
 type VectorSearcher interface {
-	// SemanticSearch embeds query and returns up to limit message-level
-	// hits, best first.
+	// SemanticSearch embeds query and returns up to limit unit-level hits,
+	// best first.
 	SemanticSearch(ctx context.Context, query string, limit int) ([]VectorHit, error)
+	// ResolveMessageUnits maps each ref to the unit containing it. The
+	// result is parallel to refs; a ref with no containing unit yields a
+	// zero UnitRef (DocKey == "").
+	ResolveMessageUnits(ctx context.Context, refs []MessageRef) ([]UnitRef, error)
 }
 
 // SetVectorSearcher wires (or, with nil, clears) the semantic search

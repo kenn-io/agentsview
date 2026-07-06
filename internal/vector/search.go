@@ -2,6 +2,7 @@ package vector
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -369,6 +370,58 @@ func truncateRunes(s string, maxRunes int) string {
 		return s
 	}
 	return string(runes[:maxRunes]) + "…"
+}
+
+// ResolveMessageUnits maps each ref to the vector_messages unit containing
+// it, returning a slice parallel to refs; a ref with no containing unit (its
+// message lies outside the embeddable universe, or in a gap between units)
+// yields a zero UnitRef. Each ref is a point lookup on the retained unique
+// (session_id, ordinal) index — greatest unit ordinal <= ref ordinal, then a
+// containment check against ordinal_end — via one prepared statement, so a
+// batch of any size never approaches SQLite's bind-variable limit.
+//
+// Like Search and StaleActive, it fails closed with ErrMirrorVersionMismatch
+// — before touching any table — when ix was opened read-only against a
+// vectors.db written by a different mirror schema version.
+func (ix *Index) ResolveMessageUnits(
+	ctx context.Context, refs []db.MessageRef,
+) ([]db.UnitRef, error) {
+	if ix.versionMismatch {
+		return nil, ErrMirrorVersionMismatch
+	}
+	out := make([]db.UnitRef, len(refs))
+	if len(refs) == 0 {
+		return out, nil
+	}
+
+	stmt, err := ix.db.PrepareContext(ctx, `
+SELECT doc_key, ordinal, ordinal_end, subordinate
+  FROM vector_messages
+ WHERE session_id = ? AND ordinal <= ?
+ ORDER BY ordinal DESC LIMIT 1`)
+	if err != nil {
+		return nil, fmt.Errorf("resolve message units: %w", err)
+	}
+	defer stmt.Close()
+
+	for i, ref := range refs {
+		var unit db.UnitRef
+		err := stmt.QueryRowContext(ctx, ref.SessionID, ref.Ordinal).Scan(
+			&unit.DocKey, &unit.OrdinalStart, &unit.OrdinalEnd, &unit.Subordinate)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf(
+				"resolve message unit (%s, %d): %w", ref.SessionID, ref.Ordinal, err)
+		}
+		if ref.Ordinal > unit.OrdinalEnd {
+			continue
+		}
+		unit.SessionID = ref.SessionID
+		out[i] = unit
+	}
+	return out, nil
 }
 
 // StaleActive reports whether the active generation's fingerprint differs

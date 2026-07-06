@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/mattn/go-sqlite3"
 	"go.kenn.io/agentsview/internal/secrets"
-	kitvec "go.kenn.io/kit/vector"
 )
 
 // DefaultContentSearchLimit and MaxContentSearchLimit bound result pages.
@@ -691,9 +691,11 @@ func ValidateSemanticFilter(f ContentSearchFilter) error {
 // searchContentSemantic runs mode "semantic": it over-fetches ranked hits
 // from the wired VectorSearcher, keeps hits whose session passes the
 // filter's metadata scope (loaded with one query over the hit session IDs),
-// enriches surviving (session_id, ordinal) pairs with session/message
-// metadata in one query, and returns them in the searcher's rank order,
-// truncated to f.Limit.
+// routes the surviving ranking through the same RRF merge hybrid uses as a
+// one-leg fusion (so subordinate units are penalized identically; matches
+// still carry the searcher's own scores), enriches surviving (session_id,
+// ordinal) pairs with session/message metadata in one query, and returns
+// them in the fused order, truncated to f.Limit.
 func (db *DB) searchContentSemantic(
 	ctx context.Context, f ContentSearchFilter,
 ) (ContentSearchPage, error) {
@@ -727,6 +729,7 @@ func (db *DB) searchContentSemantic(
 	if len(surviving) == 0 {
 		return ContentSearchPage{}, nil
 	}
+	surviving = applySubordinatePenalty(surviving)
 
 	meta, err := db.enrichSemanticHits(ctx, surviving)
 	if err != nil {
@@ -758,21 +761,127 @@ func (db *DB) searchContentSemantic(
 	return ContentSearchPage{Matches: out}, nil
 }
 
-// matchKey identifies one message across the hybrid search's vector and FTS
-// legs so kitvec.Merge can fuse them by document identity.
-type matchKey struct {
-	SessionID string
-	Ordinal   int
+// unitFusionKey identifies one embedding unit across the hybrid search's
+// legs: the mirror's unique (session_id, ordinal_start) pair. The vector leg
+// derives it from a VectorHit, the FTS leg from a resolved UnitRef, so hits
+// on the same unit fuse.
+func unitFusionKey(sessionID string, ordinalStart int) string {
+	return "u\x00" + sessionID + "\x00" + strconv.Itoa(ordinalStart)
+}
+
+// messageFusionKey identifies an FTS hit with no containing unit at message
+// granularity, so an exact-string hit outside the embeddable universe never
+// vanishes from the fused result. The "m" prefix keeps it disjoint from
+// unitFusionKey's space.
+func messageFusionKey(sessionID string, ordinal int) string {
+	return "m\x00" + sessionID + "\x00" + strconv.Itoa(ordinal)
+}
+
+// unitRanked is one leg entry for rrfMerge: a fusion key plus the unit's
+// subordinate flag.
+type unitRanked struct {
+	Key         string
+	Subordinate bool
+}
+
+// mergedUnit is one fused rrfMerge result.
+type mergedUnit struct {
+	unit  unitRanked
+	score float64
+}
+
+// rrfMerge fuses per-leg unit rankings (best first) with reciprocal-rank
+// fusion, penalizing subordinate units by shifting their effective rank
+// (rank+5 against a rank constant of 60). Semantic-only search routes its
+// single ranked list through this same merge as a one-leg fusion, so the
+// penalty applies identically in both modes. Ties break deterministically by
+// ascending key; limit > 0 truncates the fused list.
+func rrfMerge(legs [][]unitRanked, limit int) []mergedUnit {
+	const rankConstant = 60
+	const subordinatePenalty = 5
+	scores := make(map[string]float64)
+	var units []unitRanked
+	for _, leg := range legs {
+		for i, u := range leg {
+			rank := i + 1
+			if u.Subordinate {
+				rank += subordinatePenalty
+			}
+			if _, seen := scores[u.Key]; !seen {
+				units = append(units, u)
+			}
+			scores[u.Key] += 1.0 / float64(rankConstant+rank)
+		}
+	}
+	merged := make([]mergedUnit, len(units))
+	for i, u := range units {
+		merged[i] = mergedUnit{unit: u, score: scores[u.Key]}
+	}
+	slices.SortFunc(merged, func(a, b mergedUnit) int {
+		if a.score != b.score {
+			if a.score > b.score {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.unit.Key, b.unit.Key)
+	})
+	if limit > 0 && len(merged) > limit {
+		merged = merged[:limit]
+	}
+	return merged
+}
+
+// applySubordinatePenalty reorders rank-ordered semantic hits through
+// rrfMerge as a one-leg fusion, so mode "semantic" penalizes subordinate
+// units exactly like mode "hybrid" (one implementation, no hybrid-only
+// special case). Hits keep their own scores; only the order changes. A
+// duplicate fusion key (two hits on the same unit) keeps its best-ranked
+// hit.
+func applySubordinatePenalty(hits []VectorHit) []VectorHit {
+	leg := make([]unitRanked, 0, len(hits))
+	byKey := make(map[string]VectorHit, len(hits))
+	for _, h := range hits {
+		key := unitFusionKey(h.SessionID, h.OrdinalStart)
+		if _, dup := byKey[key]; dup {
+			continue
+		}
+		leg = append(leg, unitRanked{Key: key, Subordinate: h.Subordinate})
+		byKey[key] = h
+	}
+	merged := rrfMerge([][]unitRanked{leg}, 0)
+	out := make([]VectorHit, 0, len(merged))
+	for _, m := range merged {
+		out = append(out, byKey[m.unit.Key])
+	}
+	return out
+}
+
+// hybridDisplay carries what one fused unit needs for presentation: the
+// anchor (session, ordinal) the match reports and enriches by, plus the
+// leg's raw (unredacted) approximate snippet text used only to center the
+// redacted window.
+type hybridDisplay struct {
+	sessionID string
+	ordinal   int
+	snippet   string
+}
+
+// hybridLeg is one rank-ordered fusion leg: entries for rrfMerge plus each
+// key's display info.
+type hybridLeg struct {
+	ranked  []unitRanked
+	display map[string]hybridDisplay
 }
 
 // searchContentHybrid runs mode "hybrid": lexical (FTS) and semantic (vector)
 // rankings are each over-fetched to k, the vector leg is filtered down to
 // sessions passing the filter's metadata scope (the FTS leg filters in SQL),
-// and the two rank-ordered leg lists are fused with reciprocal-rank fusion
-// (kitvec.Merge, RankConstant 60). The vector leg is passed first so its
-// snippet wins when a document appears in both legs. Returned matches are
-// enriched with session/message metadata via the same lookup semantic search
-// uses, ordered by fused score descending, truncated to f.Limit.
+// FTS message hits are resolved to their containing units, and the two
+// rank-ordered leg lists are fused at unit granularity with rrfMerge.
+// Returned matches are enriched with session/message metadata via the same
+// lookup semantic search uses, ordered by fused score descending, truncated
+// to f.Limit.
 func (db *DB) searchContentHybrid(
 	ctx context.Context, f ContentSearchFilter,
 ) (ContentSearchPage, error) {
@@ -788,69 +897,71 @@ func (db *DB) searchContentHybrid(
 	}
 
 	k := max(f.Limit*4, semanticOverfetchMin)
-	vecLeg, vecSnippets, err := db.hybridVectorLeg(ctx, f, searcher, k)
+	vecLeg, err := db.hybridVectorLeg(ctx, f, searcher, k)
 	if err != nil {
 		return ContentSearchPage{}, err
 	}
-	ftsLeg, ftsSnippets, err := db.hybridFTSLeg(ctx, f, k)
+	ftsLeg, err := db.hybridFTSLeg(ctx, f, searcher, k)
 	if err != nil {
 		return ContentSearchPage{}, err
 	}
-	if len(vecLeg) == 0 && len(ftsLeg) == 0 {
+	if len(vecLeg.ranked) == 0 && len(ftsLeg.ranked) == 0 {
 		return ContentSearchPage{}, nil
 	}
 
-	merged := kitvec.Merge([][]kitvec.Hit[matchKey]{vecLeg, ftsLeg}, kitvec.MergeOptions{
-		Strategy:     kitvec.MergeReciprocalRank,
-		RankConstant: 60,
-		Limit:        f.Limit,
-	})
-	if len(merged) == 0 {
-		return ContentSearchPage{}, nil
-	}
-	return db.enrichHybridMatches(ctx, f, merged, vecSnippets, ftsSnippets)
+	merged := rrfMerge([][]unitRanked{vecLeg.ranked, ftsLeg.ranked}, f.Limit)
+	return db.enrichHybridMatches(ctx, f, merged, vecLeg.display, ftsLeg.display)
 }
 
-// hybridVectorLeg over-fetches k semantic hits, drops any whose session
+// hybridVectorLeg over-fetches k semantic unit hits, drops any whose session
 // fails the filter's metadata scope (the same lookup searchContentSemantic
-// uses), and returns the survivors as rank-ordered kitvec hits plus their raw
-// (unredacted) snippets keyed by matchKey. Session-set filtering runs before
-// the merge so reciprocal-rank fusion only ranks eligible documents.
+// uses), and returns the survivors as a rank-ordered fusion leg keyed by
+// unit. Session-set filtering runs before the merge so reciprocal-rank
+// fusion only ranks eligible units.
 func (db *DB) hybridVectorLeg(
 	ctx context.Context, f ContentSearchFilter, searcher VectorSearcher, k int,
-) ([]kitvec.Hit[matchKey], map[matchKey]string, error) {
+) (hybridLeg, error) {
+	leg := hybridLeg{display: make(map[string]hybridDisplay)}
 	hits, err := searcher.SemanticSearch(ctx, f.Pattern, k)
 	if err != nil {
-		return nil, nil, err
+		return hybridLeg{}, err
 	}
 	if len(hits) == 0 {
-		return nil, nil, nil
+		return leg, nil
 	}
 	allowed, err := db.semanticAllowedSessionIDs(ctx, f, uniqueSessionIDs(hits))
 	if err != nil {
-		return nil, nil, err
+		return hybridLeg{}, err
 	}
-	leg := make([]kitvec.Hit[matchKey], 0, len(hits))
-	snippets := make(map[matchKey]string, len(hits))
 	for _, h := range hits {
 		if !allowed[h.SessionID] {
 			continue
 		}
-		key := matchKey{SessionID: h.SessionID, Ordinal: h.Ordinal}
-		leg = append(leg, kitvec.Hit[matchKey]{Doc: key, Score: h.Score})
-		snippets[key] = h.Snippet
+		key := unitFusionKey(h.SessionID, h.OrdinalStart)
+		if _, seen := leg.display[key]; seen {
+			continue
+		}
+		leg.ranked = append(leg.ranked, unitRanked{Key: key, Subordinate: h.Subordinate})
+		leg.display[key] = hybridDisplay{
+			sessionID: h.SessionID, ordinal: h.Ordinal, snippet: h.Snippet,
+		}
 	}
-	return leg, snippets, nil
+	return leg, nil
 }
 
 // hybridFTSLeg runs a rank-ordered FTS query over the embedded universe
 // (role user/assistant, is_system = 0, system-prefix excluded -- the same
-// predicate ScanEmbeddableUnits uses), scoped to qualifying sessions in
-// SQL, and returns up to k hits as rank-ordered kitvec hits plus their raw
-// (unredacted) snippet() output keyed by matchKey.
+// predicate ScanEmbeddableUnits uses), scoped to qualifying sessions in SQL,
+// resolves each message hit to its containing unit, and returns up to k hits
+// as a rank-ordered fusion leg. A hit inside a unit adopts the unit's fusion
+// key and subordinate flag while keeping its own message ordinal as the
+// anchor and its FTS snippet for display (the FTS-anchor override); several
+// hits in one unit collapse to the best-ranked one. A hit with no containing
+// unit keeps a message-granularity key, is never subordinate-penalized, and
+// so survives fusion on its own.
 func (db *DB) hybridFTSLeg(
-	ctx context.Context, f ContentSearchFilter, k int,
-) ([]kitvec.Hit[matchKey], map[matchKey]string, error) {
+	ctx context.Context, f ContentSearchFilter, searcher VectorSearcher, k int,
+) (hybridLeg, error) {
 	scope, scopeArgs := sessionScopeSubquery(f)
 	query := fmt.Sprintf(`
 		SELECT m.session_id, m.ordinal,
@@ -868,41 +979,73 @@ func (db *DB) hybridFTSLeg(
 
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, nil, classifyFTSError(fmt.Errorf("hybrid search fts leg: %w", err))
+		return hybridLeg{}, classifyFTSError(fmt.Errorf("hybrid search fts leg: %w", err))
 	}
 	defer rows.Close()
 
-	var leg []kitvec.Hit[matchKey]
-	snippets := make(map[matchKey]string)
+	var hits []hybridDisplay
 	for rows.Next() {
-		var key matchKey
-		var snip string
-		if err := rows.Scan(&key.SessionID, &key.Ordinal, &snip); err != nil {
-			return nil, nil, fmt.Errorf("scan hybrid fts hit: %w", err)
+		var hit hybridDisplay
+		if err := rows.Scan(&hit.sessionID, &hit.ordinal, &hit.snippet); err != nil {
+			return hybridLeg{}, fmt.Errorf("scan hybrid fts hit: %w", err)
 		}
-		leg = append(leg, kitvec.Hit[matchKey]{Doc: key})
-		snippets[key] = snip
+		hits = append(hits, hit)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, err
+		return hybridLeg{}, err
 	}
-	return leg, snippets, nil
+
+	refs := make([]MessageRef, len(hits))
+	for i, hit := range hits {
+		refs[i] = MessageRef{SessionID: hit.sessionID, Ordinal: hit.ordinal}
+	}
+	units, err := searcher.ResolveMessageUnits(ctx, refs)
+	if err != nil {
+		return hybridLeg{}, fmt.Errorf("resolving fts hits to units: %w", err)
+	}
+	if len(units) != len(refs) {
+		return hybridLeg{}, fmt.Errorf(
+			"resolving fts hits to units: got %d units for %d refs", len(units), len(refs))
+	}
+
+	leg := hybridLeg{display: make(map[string]hybridDisplay, len(hits))}
+	for i, hit := range hits {
+		key := messageFusionKey(hit.sessionID, hit.ordinal)
+		subordinate := false
+		if units[i].DocKey != "" {
+			key = unitFusionKey(units[i].SessionID, units[i].OrdinalStart)
+			subordinate = units[i].Subordinate
+		}
+		if _, seen := leg.display[key]; seen {
+			continue
+		}
+		leg.ranked = append(leg.ranked, unitRanked{Key: key, Subordinate: subordinate})
+		leg.display[key] = hit
+	}
+	return leg, nil
 }
 
-// enrichHybridMatches looks up session/message metadata for the fused hits
+// enrichHybridMatches looks up session/message metadata for the fused units
 // (reusing enrichSemanticHits' CTE join) and assembles the final page in
-// fused-score order. Each match's approximate centering text prefers the
-// vector leg's chunk snippet and falls back to the FTS leg's snippet()
-// output when the key only came from the FTS leg; either way the returned
-// snippet itself is built (and redacted) from the message's full content via
-// semanticSnippet, the same guarantee mode "semantic" gives.
+// fused-score order. When the FTS leg contributed to a unit, its display
+// wins: the match anchors on the FTS-matched message's ordinal and centers
+// on the FTS snippet (the vector leg's chunk anchor may be a different run
+// member). Either way the returned snippet itself is built (and redacted)
+// from the anchor message's full content via semanticSnippet, the same
+// guarantee mode "semantic" gives.
 func (db *DB) enrichHybridMatches(
-	ctx context.Context, f ContentSearchFilter, merged []kitvec.Hit[matchKey],
-	vecSnippets, ftsSnippets map[matchKey]string,
+	ctx context.Context, f ContentSearchFilter, merged []mergedUnit,
+	vecDisplay, ftsDisplay map[string]hybridDisplay,
 ) (ContentSearchPage, error) {
+	displays := make([]hybridDisplay, len(merged))
 	asHits := make([]VectorHit, len(merged))
-	for i, h := range merged {
-		asHits[i] = VectorHit{SessionID: h.Doc.SessionID, Ordinal: h.Doc.Ordinal}
+	for i, m := range merged {
+		d, ok := ftsDisplay[m.unit.Key]
+		if !ok {
+			d = vecDisplay[m.unit.Key]
+		}
+		displays[i] = d
+		asHits[i] = VectorHit{SessionID: d.sessionID, Ordinal: d.ordinal}
 	}
 	meta, err := db.enrichSemanticHits(ctx, asHits)
 	if err != nil {
@@ -910,25 +1053,22 @@ func (db *DB) enrichHybridMatches(
 	}
 
 	out := make([]ContentMatch, 0, len(merged))
-	for _, h := range merged {
-		info, ok := meta[semanticHitKey{h.Doc.SessionID, h.Doc.Ordinal}]
+	for i, m := range merged {
+		d := displays[i]
+		info, ok := meta[semanticHitKey{d.sessionID, d.ordinal}]
 		if !ok {
 			continue
 		}
-		approx, ok := vecSnippets[h.Doc]
-		if !ok {
-			approx = ftsSnippets[h.Doc]
-		}
-		score := float64(h.Score)
+		score := m.score
 		out = append(out, ContentMatch{
-			SessionID: h.Doc.SessionID,
+			SessionID: d.sessionID,
 			Project:   info.project,
 			Agent:     info.agent,
 			Location:  "message",
 			Role:      info.role,
-			Ordinal:   h.Doc.Ordinal,
+			Ordinal:   d.ordinal,
 			Timestamp: info.timestamp,
-			Snippet:   f.semanticSnippet(info.content, approx),
+			Snippet:   f.semanticSnippet(info.content, d.snippet),
 			Score:     &score,
 		})
 	}

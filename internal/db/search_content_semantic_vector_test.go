@@ -46,6 +46,12 @@ func (s vectorIndexSearcher) SemanticSearch(
 	return out, nil
 }
 
+func (s vectorIndexSearcher) ResolveMessageUnits(
+	ctx context.Context, refs []db.MessageRef,
+) ([]db.UnitRef, error) {
+	return s.ix.ResolveMessageUnits(ctx, refs)
+}
+
 // TestSearchContentSemanticCrossMemberChunkCentersOnAnchorMessage is the
 // end-to-end regression test for run-chunk snippet mislocation: a run whose
 // matched chunk spans two assistant messages must produce a ContentMatch

@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -13,11 +14,16 @@ import (
 // fakeVectorSearcher is a canned VectorSearcher for db-layer semantic search
 // tests: it returns a fixed, rank-ordered slice of hits (optionally trimmed
 // to limit) or a fixed error, so tests can pin the db layer's handling of
-// searcher output without a real embedding index.
+// searcher output without a real embedding index. ResolveMessageUnits
+// resolves against the explicit units list first, then against the units
+// implied by hits (the real resolver reads the same mirror the hits come
+// from), so hybrid tests fuse without wiring a real index.
 type fakeVectorSearcher struct {
-	hits  []VectorHit
-	err   error
-	calls int
+	hits       []VectorHit
+	units      []UnitRef
+	err        error
+	resolveErr error
+	calls      int
 }
 
 func (f *fakeVectorSearcher) SemanticSearch(
@@ -32,6 +38,41 @@ func (f *fakeVectorSearcher) SemanticSearch(
 		hits = hits[:limit]
 	}
 	return hits, nil
+}
+
+func (f *fakeVectorSearcher) ResolveMessageUnits(
+	_ context.Context, refs []MessageRef,
+) ([]UnitRef, error) {
+	if f.resolveErr != nil {
+		return nil, f.resolveErr
+	}
+	out := make([]UnitRef, len(refs))
+	for i, ref := range refs {
+		out[i] = f.resolveRef(ref)
+	}
+	return out, nil
+}
+
+func (f *fakeVectorSearcher) resolveRef(ref MessageRef) UnitRef {
+	for _, u := range f.units {
+		if u.SessionID == ref.SessionID &&
+			ref.Ordinal >= u.OrdinalStart && ref.Ordinal <= u.OrdinalEnd {
+			return u
+		}
+	}
+	for _, h := range f.hits {
+		if h.SessionID == ref.SessionID &&
+			ref.Ordinal >= h.OrdinalStart && ref.Ordinal <= h.OrdinalEnd {
+			return UnitRef{
+				DocKey:       fmt.Sprintf("fake:%s:%d", h.SessionID, h.OrdinalStart),
+				SessionID:    h.SessionID,
+				OrdinalStart: h.OrdinalStart,
+				OrdinalEnd:   h.OrdinalEnd,
+				Subordinate:  h.Subordinate,
+			}
+		}
+	}
+	return UnitRef{}
 }
 
 func TestSearchContentSemanticNoSearcherUnavailable(t *testing.T) {
@@ -285,4 +326,37 @@ func TestSearchContentSemanticRedactsSecretPastChunkTruncation(t *testing.T) {
 		"semantic snippet leaked key material truncated out of the chunk")
 	assert.Contains(t, page.Matches[0].Snippet, "attached key",
 		"snippet lost the matched context")
+}
+
+// TestSearchContentSemanticSubordinatePenaltyReorders pins the spec's
+// one-leg fusion requirement: semantic-only results route through the same
+// RRF merge hybrid uses, so a subordinate unit ranked (by cosine score)
+// above a top-level unit drops below it, while each match keeps the
+// searcher's own score.
+func TestSearchContentSemanticSubordinatePenaltyReorders(t *testing.T) {
+	d := testDB(t)
+	seedSearchSession(t, d, "subchain", "alpha", [][2]string{
+		{"assistant", "sidechain answer text"},
+	})
+	seedSearchSession(t, d, "toplevel", "alpha", [][2]string{
+		{"user", "top-level question text"},
+	})
+	d.SetVectorSearcher(&fakeVectorSearcher{hits: []VectorHit{
+		{SessionID: "subchain", Ordinal: 0, Subordinate: true,
+			Score: 0.9, Snippet: "sidechain answer text"},
+		{SessionID: "toplevel", Ordinal: 0,
+			Score: 0.5, Snippet: "top-level question text"},
+	}})
+
+	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "answer", Mode: "semantic", Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent")
+	require.Len(t, page.Matches, 2, "matches")
+	assert.Equal(t, "toplevel", page.Matches[0].SessionID,
+		"top-level unit must overtake the subordinate unit after the one-leg merge")
+	assert.Equal(t, "subchain", page.Matches[1].SessionID)
+	require.NotNil(t, page.Matches[0].Score)
+	assert.InDelta(t, 0.5, *page.Matches[0].Score, 0.0001,
+		"semantic mode keeps the searcher's score, not the fusion score")
 }

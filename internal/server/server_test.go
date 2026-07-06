@@ -870,6 +870,12 @@ func (fakeTransientVectorSearcher) SemanticSearch(
 	return nil, fmt.Errorf("%w: dial tcp: connection refused", db.ErrSemanticTransient)
 }
 
+func (fakeTransientVectorSearcher) ResolveMessageUnits(
+	_ context.Context, refs []db.MessageRef,
+) ([]db.UnitRef, error) {
+	return make([]db.UnitRef, len(refs)), nil
+}
+
 // TestSearchContentSemanticQueryEncodeFailureReturns503 covers the
 // query-time embeddings-endpoint-down case: it must map to 503 (the
 // feature is configured and the request can be retried), not 501 (which

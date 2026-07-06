@@ -229,3 +229,183 @@ func TestSearchContentHybridRedactsSecretPastChunkTruncation(t *testing.T) {
 	assert.Contains(t, page.Matches[0].Snippet, "needle",
 		"snippet lost the matched context")
 }
+
+// mergedKeys projects a merged result to its keys in rank order.
+func mergedKeys(merged []mergedUnit) []string {
+	keys := make([]string, len(merged))
+	for i, m := range merged {
+		keys[i] = m.unit.Key
+	}
+	return keys
+}
+
+// TestRRFMergeBothLegsOutrankSingleLeg pins RRF's core guarantee at the
+// merge level: a unit ranked by both legs scores the sum of its per-leg
+// reciprocal ranks and outranks a unit seen by only one leg.
+func TestRRFMergeBothLegsOutrankSingleLeg(t *testing.T) {
+	merged := rrfMerge([][]unitRanked{
+		{{Key: "a"}, {Key: "b"}},
+		{{Key: "a"}},
+	}, 0)
+	require.Equal(t, []string{"a", "b"}, mergedKeys(merged))
+	assert.InDelta(t, 2.0/61.0, merged[0].score, 1e-12, "double-leg score")
+	assert.InDelta(t, 1.0/62.0, merged[1].score, 1e-12, "single-leg score")
+}
+
+// TestRRFMergeSubordinatePenaltyAcrossLegs pins the rank+5 penalty: a
+// subordinate unit at leg rank 1 must fall below a top-level unit at the
+// same rank in the other leg.
+func TestRRFMergeSubordinatePenaltyAcrossLegs(t *testing.T) {
+	merged := rrfMerge([][]unitRanked{
+		{{Key: "sub", Subordinate: true}},
+		{{Key: "top"}},
+	}, 0)
+	require.Equal(t, []string{"top", "sub"}, mergedKeys(merged))
+	assert.InDelta(t, 1.0/61.0, merged[0].score, 1e-12)
+	assert.InDelta(t, 1.0/66.0, merged[1].score, 1e-12, "subordinate uses rank+5")
+}
+
+// TestRRFMergeOneLegSubordinatePenaltyReorders pins the one-leg (semantic-
+// only) fusion contract: a subordinate unit ranked immediately above a
+// top-level unit drops below it after the merge.
+func TestRRFMergeOneLegSubordinatePenaltyReorders(t *testing.T) {
+	merged := rrfMerge([][]unitRanked{{
+		{Key: "sub", Subordinate: true},
+		{Key: "top"},
+	}}, 0)
+	assert.Equal(t, []string{"top", "sub"}, mergedKeys(merged))
+}
+
+// TestRRFMergeDeterministicTieBreak pins tie handling: a subordinate unit at
+// rank 1 (effective rank 6) scores exactly like a top-level unit at rank 6,
+// and the tie breaks by ascending key, not map iteration order.
+func TestRRFMergeDeterministicTieBreak(t *testing.T) {
+	leg := []unitRanked{
+		{Key: "zzz", Subordinate: true},
+		{Key: "m2"}, {Key: "m3"}, {Key: "m4"}, {Key: "m5"},
+		{Key: "aaa"},
+	}
+	for range 20 {
+		merged := rrfMerge([][]unitRanked{leg}, 0)
+		require.Equal(t,
+			[]string{"m2", "m3", "m4", "m5", "aaa", "zzz"}, mergedKeys(merged))
+	}
+}
+
+// TestRRFMergeLimitHonored pins truncation: limit > 0 caps the merged list
+// at the top-scored units.
+func TestRRFMergeLimitHonored(t *testing.T) {
+	merged := rrfMerge([][]unitRanked{
+		{{Key: "a"}, {Key: "b"}, {Key: "c"}},
+	}, 2)
+	assert.Equal(t, []string{"a", "b"}, mergedKeys(merged))
+}
+
+// TestSearchContentHybridFTSHitInsideRunFusesWithFTSAnchor is the
+// end-to-end unit-fusion test: an FTS-matched message inside a run must fuse
+// with the run's semantic hit into ONE result whose anchor ordinal is the
+// FTS-matched message (overriding the vector leg's chunk anchor) and whose
+// snippet centers on the FTS-matched text.
+func TestSearchContentHybridFTSHitInsideRunFusesWithFTSAnchor(t *testing.T) {
+	d := testDB(t)
+	if !d.HasFTS() {
+		t.Skip("fts5 not available")
+	}
+	seedSearchSession(t, d, "s1", "proj", [][2]string{
+		{"user", "the question"},
+		{"assistant", "first step of the answer"},
+		{"assistant", "second step mentions zebra"},
+	})
+	// The run [1,2] anchors its semantic hit at ordinal 1; FTS matches
+	// ordinal 2.
+	d.SetVectorSearcher(&fakeVectorSearcher{hits: []VectorHit{
+		{SessionID: "s1", Ordinal: 1, OrdinalStart: 1, OrdinalEnd: 2,
+			Score: 0.9, Snippet: "first step of the answer"},
+	}})
+
+	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "zebra", Mode: "hybrid", Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent hybrid")
+	require.Len(t, page.Matches, 1,
+		"the run's semantic hit and its FTS-matched member must fuse into one result")
+	m := page.Matches[0]
+	assert.Equal(t, "s1", m.SessionID)
+	assert.Equal(t, 2, m.Ordinal, "anchor overridden to the FTS-matched message")
+	assert.Equal(t, "assistant", m.Role, "role of the FTS-matched message")
+	assert.Contains(t, m.Snippet, "zebra", "FTS snippet wins for display")
+	require.NotNil(t, m.Score)
+	assert.InDelta(t, 2.0/61.0, *m.Score, 1e-9,
+		"fused score: rank 1 in both legs")
+}
+
+// TestSearchContentHybridNoUnitFTSHitKeepsMessageGranularity pins the
+// no-unit escape hatch: an FTS hit on a message with no containing unit
+// (outside the embeddable universe) survives fusion under its own
+// message-granularity key with its own ordinal.
+func TestSearchContentHybridNoUnitFTSHitKeepsMessageGranularity(t *testing.T) {
+	d := testDB(t)
+	if !d.HasFTS() {
+		t.Skip("fts5 not available")
+	}
+	seedSearchSession(t, d, "uncovered", "proj", [][2]string{
+		{"user", "irrelevant lead-in"},
+		{"user", "tool output mentions zebra"},
+	})
+	seedSearchSession(t, d, "covered", "proj", [][2]string{
+		{"user", "unrelated content"},
+	})
+	// The searcher's mirror knows only the "covered" session, so the
+	// resolver returns a zero UnitRef for the "uncovered" FTS hit.
+	d.SetVectorSearcher(&fakeVectorSearcher{hits: []VectorHit{
+		{SessionID: "covered", Ordinal: 0, Score: 0.9, Snippet: "unrelated content"},
+	}})
+
+	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "zebra", Mode: "hybrid", Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent hybrid")
+	require.Len(t, page.Matches, 2, "the unit-less FTS hit must not vanish")
+
+	byID := map[string]ContentMatch{}
+	for _, m := range page.Matches {
+		byID[m.SessionID] = m
+	}
+	uncovered, ok := byID["uncovered"]
+	require.True(t, ok, "no-unit FTS hit survives")
+	assert.Equal(t, 1, uncovered.Ordinal, "message-granularity ordinal kept")
+	assert.Contains(t, uncovered.Snippet, "zebra")
+}
+
+// TestSearchContentHybridFTSLegSubordinateUnitPenalized pins the FTS-side
+// subordinate flag: an FTS hit resolving to a subordinate unit is penalized
+// in the merge, while a unit-less FTS hit is never penalized — so the
+// lower-FTS-ranked top-level message overtakes the subordinate unit.
+func TestSearchContentHybridFTSLegSubordinateUnitPenalized(t *testing.T) {
+	d := testDB(t)
+	if !d.HasFTS() {
+		t.Skip("fts5 not available")
+	}
+	// "subd" repeats the term so bm25 ranks it above "plain" in the FTS leg.
+	seedSearchSession(t, d, "subd", "proj", [][2]string{
+		{"assistant", "zebra zebra zebra zebra"},
+	})
+	seedSearchSession(t, d, "plain", "proj", [][2]string{
+		{"user", "zebra appears once here"},
+	})
+	// The vector leg is empty; the subordinate unit is known only to the
+	// resolver.
+	d.SetVectorSearcher(&fakeVectorSearcher{units: []UnitRef{
+		{DocKey: "r:subd:0", SessionID: "subd",
+			OrdinalStart: 0, OrdinalEnd: 0, Subordinate: true},
+	}})
+
+	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "zebra", Mode: "hybrid", Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent hybrid")
+	require.Len(t, page.Matches, 2)
+	assert.Equal(t, "plain", page.Matches[0].SessionID,
+		"unpenalized message-granularity hit must overtake the subordinate unit")
+	assert.Equal(t, "subd", page.Matches[1].SessionID)
+}

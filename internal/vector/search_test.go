@@ -520,3 +520,130 @@ func TestSearchRunDocReturnsAnchoredHit(t *testing.T) {
 	assert.Equal(t, 0, best.OrdinalEnd)
 	assert.False(t, best.Subordinate)
 }
+
+// seedUnitRow inserts one vector_messages unit row directly, bypassing
+// Build, so resolver tests can shape exact unit boundaries and gaps.
+func seedUnitRow(
+	t *testing.T, ix *Index, docKey, sessionID string, start, end int, subordinate bool,
+) {
+	t.Helper()
+	_, err := ix.db.Exec(`
+INSERT INTO vector_messages
+    (doc_key, session_id, ordinal, ordinal_end, subordinate, content, content_hash)
+VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		docKey, sessionID, start, end, subordinate, "content "+docKey, "h-"+docKey)
+	require.NoError(t, err)
+}
+
+// TestResolveMessageUnitsPointLookup pins the resolver's containment
+// semantics over a mirror with a user unit, a multi-message run, a gap of
+// non-embeddable ordinals, and a subordinate run.
+func TestResolveMessageUnitsPointLookup(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	seedUnitRow(t, ix, "u:s:0", "s", 0, 0, false)
+	seedUnitRow(t, ix, "r:s:a", "s", 1, 3, false)
+	// Ordinals 4-5 are a gap: no unit covers them.
+	seedUnitRow(t, ix, "r:s:b", "s", 6, 7, true)
+	// Session t's first unit starts above ordinal 0.
+	seedUnitRow(t, ix, "r:t:a", "t", 5, 6, false)
+
+	runA := db.UnitRef{DocKey: "r:s:a", SessionID: "s", OrdinalStart: 1, OrdinalEnd: 3}
+	runB := db.UnitRef{
+		DocKey: "r:s:b", SessionID: "s", OrdinalStart: 6, OrdinalEnd: 7, Subordinate: true,
+	}
+	tests := []struct {
+		name string
+		ref  db.MessageRef
+		want db.UnitRef
+	}{
+		{"user unit own ordinal", db.MessageRef{SessionID: "s", Ordinal: 0},
+			db.UnitRef{DocKey: "u:s:0", SessionID: "s"}},
+		{"run first ordinal", db.MessageRef{SessionID: "s", Ordinal: 1}, runA},
+		{"run interior ordinal", db.MessageRef{SessionID: "s", Ordinal: 2}, runA},
+		{"run last ordinal", db.MessageRef{SessionID: "s", Ordinal: 3}, runA},
+		{"gap after run", db.MessageRef{SessionID: "s", Ordinal: 4}, db.UnitRef{}},
+		{"gap before next run", db.MessageRef{SessionID: "s", Ordinal: 5}, db.UnitRef{}},
+		{"subordinate run", db.MessageRef{SessionID: "s", Ordinal: 7}, runB},
+		{"past last unit", db.MessageRef{SessionID: "s", Ordinal: 99}, db.UnitRef{}},
+		{"before first unit", db.MessageRef{SessionID: "t", Ordinal: 2}, db.UnitRef{}},
+		{"unknown session", db.MessageRef{SessionID: "nope", Ordinal: 1}, db.UnitRef{}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ix.ResolveMessageUnits(ctx, []db.MessageRef{tc.ref})
+			require.NoError(t, err)
+			require.Len(t, got, 1)
+			assert.Equal(t, tc.want, got[0])
+		})
+	}
+}
+
+// TestResolveMessageUnitsResultParallelToRefs pins that one call over a
+// mixed batch keeps the result slice parallel to refs, with zero UnitRefs
+// holding the positions of unresolvable refs.
+func TestResolveMessageUnitsResultParallelToRefs(t *testing.T) {
+	ix := openTestIndex(t)
+	seedUnitRow(t, ix, "r:s:a", "s", 1, 3, true)
+
+	got, err := ix.ResolveMessageUnits(context.Background(), []db.MessageRef{
+		{SessionID: "s", Ordinal: 4},
+		{SessionID: "s", Ordinal: 2},
+		{SessionID: "missing", Ordinal: 2},
+	})
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	assert.Equal(t, db.UnitRef{}, got[0], "gap ref stays zero")
+	assert.Equal(t, db.UnitRef{
+		DocKey: "r:s:a", SessionID: "s", OrdinalStart: 1, OrdinalEnd: 3, Subordinate: true,
+	}, got[1])
+	assert.Equal(t, db.UnitRef{}, got[2], "unknown session stays zero")
+}
+
+// TestResolveMessageUnitsEmptyRefs pins the empty-input shape: an empty,
+// non-nil result and no query error.
+func TestResolveMessageUnitsEmptyRefs(t *testing.T) {
+	ix := openTestIndex(t)
+	got, err := ix.ResolveMessageUnits(context.Background(), nil)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+// TestResolveMessageUnitsManyRefs feeds well over SQLite's historical
+// 999-bind-variable budget through the resolver in one call: the per-ref
+// point-lookup implementation must handle any batch size without an
+// unbounded IN list.
+func TestResolveMessageUnitsManyRefs(t *testing.T) {
+	ix := openTestIndex(t)
+	const n = 1200
+	seedUnitRow(t, ix, "r:s:wide", "s", 0, n-1, false)
+
+	refs := make([]db.MessageRef, n)
+	for i := range refs {
+		refs[i] = db.MessageRef{SessionID: "s", Ordinal: i}
+	}
+	got, err := ix.ResolveMessageUnits(context.Background(), refs)
+	require.NoError(t, err)
+	require.Len(t, got, n)
+	for i, u := range got {
+		require.Equal(t, "r:s:wide", u.DocKey, "ref %d must resolve", i)
+	}
+}
+
+// TestResolveMessageUnitsVersionMismatchGate pins the read gate: a read-only
+// Index over a vectors.db stamped by a different mirror schema version must
+// fail closed with ErrMirrorVersionMismatch before touching any table, the
+// same contract Search and StaleActive already honor.
+func TestResolveMessageUnitsVersionMismatchGate(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "vectors.db")
+	seedV2Mirror(t, path)
+
+	ro, err := Open(ctx, path, true, 4000)
+	require.NoError(t, err, "read-only Open must succeed against a mismatched mirror")
+	defer ro.Close()
+
+	_, err = ro.ResolveMessageUnits(ctx, []db.MessageRef{{SessionID: "s1", Ordinal: 0}})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrMirrorVersionMismatch)
+}
