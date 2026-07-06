@@ -41,11 +41,14 @@ type ExtentProbe struct {
 // backends (PG INTEGER).
 const unitOrdinalMax = 1<<31 - 1
 
-// UnitBoundsQuerier is the backend seam. Both methods are BATCHED: probes
-// are grouped into per-session (NearestUserBoundaries) or per-interval
-// (RunExtents) spans, and each unitSpanChunk-sized chunk of spans costs one
-// SQL statement — never one statement, or query, per probe. Results align
-// 1:1 with probes.
+// UnitBoundsQuerier is the backend seam. Both methods are BATCHED:
+// NearestUserBoundaries groups probes per session and RunExtents dedups
+// probes, and each chunk of sessions or probes costs one SQL statement —
+// never one statement, or query, per probe. Results align 1:1 with probes.
+// RunExtents' stop set includes the unit boundaries NearestUserBoundaries
+// reports, so DeriveUnitRanges consults NearestUserBoundaries only on
+// session-dense pages where pre-fetched bounds pay for themselves (see
+// unitBoundsFlowFactor).
 type UnitBoundsQuerier interface {
 	NearestUserBoundaries(ctx context.Context, probes []UnitProbe) ([]UnitBounds, error)
 	RunExtents(ctx context.Context, probes []ExtentProbe) ([][2]int, error)
@@ -66,11 +69,11 @@ func SubordinateSession(relationshipType, parentSessionID string) bool {
 //
 // Rule-1 (embeddable user), rule-3 (system rows, other roles, non-embeddable
 // rows), and missing anchors resolve to [o, o] with no queries. Embeddable
-// assistant anchors resolve with ONE batched NearestUserBoundaries call and
-// ONE batched RunExtents call covering every pending anchor up front —
-// duplicate (session, ordinal, sidechain) anchors share a single probe — so
-// a page costs one call per seam method no matter how its anchors spread
-// across sessions and runs.
+// assistant anchors resolve with at most TWO batched RunExtents calls
+// covering every pending anchor — duplicate (session, ordinal, sidechain)
+// anchors share a single probe, and anchors in the same run share one
+// representative probe (see deriveProbeExtents) — so a page's query count
+// stays constant no matter how its anchors spread across sessions and runs.
 func DeriveUnitRanges(
 	ctx context.Context, q UnitBoundsQuerier, anchors []UnitAnchor,
 ) ([][2]int, error) {
@@ -144,42 +147,66 @@ func dedupUnitProbeKeys(
 	return keys, keyIdx
 }
 
-// deriveProbeExtents runs one batched NearestUserBoundaries call and one
-// batched RunExtents call for the distinct probe keys, returning run extents
+// unitBoundsFlowFactor gates the optional NearestUserBoundaries round in
+// deriveProbeExtents: real user bounds are fetched only when the page packs
+// at least this many probes per distinct session on average. The boundary
+// fetch costs one statement over every user row of each probed session, so
+// it amortizes only on dense pages — where it pays twice, by pruning the
+// stop scans and by splitting probe groups at unit boundaries so run sharing
+// resolves the page in one round.
+const unitBoundsFlowFactor = 8
+
+// deriveProbeExtents runs at most two batched RunExtents calls (plus one
+// optional NearestUserBoundaries call on session-dense pages, see
+// unitBoundsFlowFactor) for the distinct probe keys, returning run extents
 // aligned 1:1 with keys. Every extent must cover its own anchor ordinal (the
-// anchor row qualifies for its run by construction).
+// anchor row qualifies for its run by construction). Without the boundary
+// round, probes carry the -1 / unitOrdinalMax sentinel bounds: RunExtents'
+// stop set already includes embeddable user rows, so real bounds are an
+// optimization, never a correctness requirement.
+//
+// The two RunExtents rounds share runs between anchors: probes with the same
+// (session, bounds, sidechain) group key that land in the same run have
+// identical extents, so round one queries one representative per group and
+// hands its extent to every group sibling the extent covers — sound because
+// a rule-2 anchor is itself a run member, and a same-sidechain member inside
+// [first, last] belongs to that exact run (a stop row strictly inside the
+// extent would have closed the run before it reached first or last). The
+// representative is the group's ordinal MEDIAN: page anchors cluster in hot
+// runs, so a central anchor's run covers the most siblings (a group edge
+// anchor may sit in a small neighboring run and cover nobody). Siblings in
+// other runs (a page whose anchors straddle a user boundary or a sidechain
+// flip) resolve in one second batch, so a page never costs more than two
+// RunExtents statements.
 func deriveProbeExtents(
 	ctx context.Context, q UnitBoundsQuerier, keys []unitProbeKey,
 ) ([][2]int, error) {
-	probes := make([]UnitProbe, len(keys))
-	for i, k := range keys {
-		probes[i] = UnitProbe{SessionID: k.sessionID, Ordinal: k.ordinal}
-	}
-	bounds, err := q.NearestUserBoundaries(ctx, probes)
+	extentProbes, err := buildExtentProbes(ctx, q, keys)
 	if err != nil {
 		return nil, err
 	}
-	if len(bounds) != len(keys) {
-		return nil, fmt.Errorf(
-			"deriving unit ranges: NearestUserBoundaries returned %d results for %d probes",
-			len(bounds), len(keys))
+	extents := make([][2]int, len(keys))
+	resolved := make([]bool, len(keys))
+	groups := groupExtentProbes(extentProbes)
+	reps := make([]int, 0, len(groups))
+	for _, g := range groups {
+		reps = append(reps, g[len(g)/2])
 	}
-	extentProbes := make([]ExtentProbe, len(keys))
-	for i, k := range keys {
-		extentProbes[i] = ExtentProbe{
-			SessionID: k.sessionID, Ordinal: k.ordinal,
-			Lo: bounds[i].Prev, Hi: bounds[i].Next,
-			Sidechain: k.sidechain,
+	sort.Ints(reps)
+	if err := resolveExtentRound(ctx, q, extentProbes, reps, extents, resolved); err != nil {
+		return nil, err
+	}
+	shareGroupExtents(groups, extentProbes, extents, resolved)
+	var rest []int
+	for i := range keys {
+		if !resolved[i] {
+			rest = append(rest, i)
 		}
 	}
-	extents, err := q.RunExtents(ctx, extentProbes)
-	if err != nil {
-		return nil, err
-	}
-	if len(extents) != len(keys) {
-		return nil, fmt.Errorf(
-			"deriving unit ranges: RunExtents returned %d results for %d probes",
-			len(extents), len(keys))
+	if len(rest) > 0 {
+		if err := resolveExtentRound(ctx, q, extentProbes, rest, extents, resolved); err != nil {
+			return nil, err
+		}
 	}
 	for i, k := range keys {
 		if extents[i][0] > k.ordinal || extents[i][1] < k.ordinal {
@@ -191,35 +218,145 @@ func deriveProbeExtents(
 	return extents, nil
 }
 
+// buildExtentProbes maps probe keys to RunExtents probes. Dense pages (at
+// least unitBoundsFlowFactor probes per distinct session) fetch the real
+// exclusive user bounds with one batched NearestUserBoundaries call; sparse
+// pages skip that round trip and probe with the -1 / unitOrdinalMax
+// sentinels, leaning on RunExtents' user-row stops instead.
+func buildExtentProbes(
+	ctx context.Context, q UnitBoundsQuerier, keys []unitProbeKey,
+) ([]ExtentProbe, error) {
+	sessions := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		sessions[k.sessionID] = struct{}{}
+	}
+	probes := make([]ExtentProbe, len(keys))
+	for i, k := range keys {
+		probes[i] = ExtentProbe{
+			SessionID: k.sessionID, Ordinal: k.ordinal,
+			Lo: -1, Hi: unitOrdinalMax,
+			Sidechain: k.sidechain,
+		}
+	}
+	if len(keys) < unitBoundsFlowFactor*len(sessions) {
+		return probes, nil
+	}
+	boundProbes := make([]UnitProbe, len(keys))
+	for i, k := range keys {
+		boundProbes[i] = UnitProbe{SessionID: k.sessionID, Ordinal: k.ordinal}
+	}
+	bounds, err := q.NearestUserBoundaries(ctx, boundProbes)
+	if err != nil {
+		return nil, err
+	}
+	if len(bounds) != len(keys) {
+		return nil, fmt.Errorf(
+			"deriving unit ranges: NearestUserBoundaries returned %d results for %d probes",
+			len(bounds), len(keys))
+	}
+	for i := range probes {
+		probes[i].Lo, probes[i].Hi = bounds[i].Prev, bounds[i].Next
+	}
+	return probes, nil
+}
+
+// extentGroupKey identifies the probes that can share a run: same session,
+// same exclusive bounds, same sidechain.
+type extentGroupKey struct {
+	sessionID string
+	lo, hi    int
+	sidechain bool
+}
+
+// groupExtentProbes buckets probe indexes by extentGroupKey, each bucket
+// sorted by anchor ordinal (so a bucket's median element is its central
+// anchor).
+func groupExtentProbes(probes []ExtentProbe) [][]int {
+	idx := make(map[extentGroupKey]int)
+	groups := make([][]int, 0, len(probes))
+	for i, p := range probes {
+		k := extentGroupKey{
+			sessionID: p.SessionID, lo: p.Lo, hi: p.Hi, sidechain: p.Sidechain,
+		}
+		gi, ok := idx[k]
+		if !ok {
+			idx[k] = len(groups)
+			groups = append(groups, []int{i})
+			continue
+		}
+		groups[gi] = append(groups[gi], i)
+	}
+	for _, g := range groups {
+		sort.Slice(g, func(a, b int) bool {
+			return probes[g[a]].Ordinal < probes[g[b]].Ordinal
+		})
+	}
+	return groups
+}
+
+// resolveExtentRound issues one batched RunExtents call for the probes at
+// idxs and records their extents.
+func resolveExtentRound(
+	ctx context.Context, q UnitBoundsQuerier, probes []ExtentProbe,
+	idxs []int, extents [][2]int, resolved []bool,
+) error {
+	batch := make([]ExtentProbe, len(idxs))
+	for k, i := range idxs {
+		batch[k] = probes[i]
+	}
+	res, err := q.RunExtents(ctx, batch)
+	if err != nil {
+		return err
+	}
+	if len(res) != len(batch) {
+		return fmt.Errorf(
+			"deriving unit ranges: RunExtents returned %d results for %d probes",
+			len(res), len(batch))
+	}
+	for k, i := range idxs {
+		extents[i], resolved[i] = res[k], true
+	}
+	return nil
+}
+
+// shareGroupExtents hands each resolved group member's extent to the group
+// siblings it covers (see deriveProbeExtents for why coverage implies the
+// same run).
+func shareGroupExtents(
+	groups [][]int, probes []ExtentProbe,
+	extents [][2]int, resolved []bool,
+) {
+	for _, g := range groups {
+		for _, r := range g {
+			if !resolved[r] {
+				continue
+			}
+			ext := extents[r]
+			for _, i := range g {
+				if !resolved[i] && probes[i].Ordinal >= ext[0] && probes[i].Ordinal <= ext[1] {
+					extents[i], resolved[i] = ext, true
+				}
+			}
+		}
+	}
+}
+
 // SQLite seam implementation.
 var _ UnitBoundsQuerier = (*DB)(nil)
 
-// unitSpanChunk caps spans per statement so the VALUES CTE stays inside
-// SQLite's bind-variable limit (see maxSQLVars): a span binds 4 variables
-// (idx, session_id, lo, hi).
-const unitSpanChunk = maxSQLVars / 4
+// unitSessionChunk caps sessions per NearestUserBoundaries statement so the
+// VALUES CTE stays inside SQLite's bind-variable limit (see maxSQLVars): a
+// session binds 2 variables (idx, session_id).
+const unitSessionChunk = maxSQLVars / 2
 
 // embeddableUserSQL is the SQL predicate matching an embeddable user row
 // under the messages alias: user role, is_system = 0, and the SQLite dialect
 // SystemPrefixSQL check, exactly as ScanEmbeddableUnits' scan predicate.
-// (The assistant-side member predicate in scanRunMemberSpans skips the
+// (The assistant-side member predicate in runExtentSelectSQL skips the
 // prefix check: SystemPrefixSQL constrains user rows only.)
 func embeddableUserSQL(alias string) string {
 	return fmt.Sprintf("%[1]s.role = 'user' AND %[1]s.is_system = 0 AND %[2]s",
 		alias, SystemPrefixSQL(alias+".content", alias+".role"))
-}
-
-// userBoundarySpan accumulates one session's boundary data: the embeddable
-// user ordinals inside [lo, hi] (the session's probe-ordinal span), plus the
-// nearest embeddable user ordinal below lo and above hi (COALESCEd to the
-// -1 / unitOrdinalMax sentinels in SQL).
-type userBoundarySpan struct {
-	sessionID    string
-	lo, hi       int
-	inner        []int
-	below, above int
-	belowSeen    bool
-	aboveSeen    bool
 }
 
 // NearestUserBoundaries returns, per probe, the nearest embeddable user
@@ -228,12 +365,12 @@ type userBoundarySpan struct {
 // of its is_sidechain). Sentinels -1 / unitOrdinalMax stand in for missing
 // boundaries.
 //
-// Probes are grouped into one span per session covering [min, max] probe
-// ordinal: one statement per unitSpanChunk spans scans each span's stretch
-// ONCE for embeddable user rows (plus one below-lo and one above-hi point
-// lookup per span), and every probe's boundaries resolve from the collected
-// ordinals in Go. Probes deep in the same user-free stretch therefore share
-// a single scan instead of each rescanning it.
+// Probes are grouped per session: one statement per unitSessionChunk distinct
+// sessions fetches each session's embeddable user ordinals ONCE, and every
+// probe's boundaries resolve from the sorted ordinals in Go. Constraining the
+// fetch to session + role only keeps it on idx_messages_session_role, so the
+// statement touches each session's (typically sparse) user rows instead of
+// stepping every message in an ordinal range.
 func (db *DB) NearestUserBoundaries(
 	ctx context.Context, probes []UnitProbe,
 ) ([]UnitBounds, error) {
@@ -241,87 +378,67 @@ func (db *DB) NearestUserBoundaries(
 	if len(probes) == 0 {
 		return out, nil
 	}
-	spanIdx := make(map[string]int)
-	spans := make([]userBoundarySpan, 0, len(probes))
+	sessionIdx := make(map[string]int)
+	sessions := make([]string, 0, len(probes))
 	for _, p := range probes {
-		i, ok := spanIdx[p.SessionID]
-		if !ok {
-			spanIdx[p.SessionID] = len(spans)
-			spans = append(spans, userBoundarySpan{
-				sessionID: p.SessionID, lo: p.Ordinal, hi: p.Ordinal,
-			})
+		if _, ok := sessionIdx[p.SessionID]; ok {
 			continue
 		}
-		spans[i].lo = min(spans[i].lo, p.Ordinal)
-		spans[i].hi = max(spans[i].hi, p.Ordinal)
+		sessionIdx[p.SessionID] = len(sessions)
+		sessions = append(sessions, p.SessionID)
 	}
-	for start := 0; start < len(spans); start += unitSpanChunk {
-		chunk := spans[start:min(start+unitSpanChunk, len(spans))]
-		if err := db.scanUserBoundarySpans(ctx, chunk); err != nil {
+	ordinals := make([][]int, len(sessions))
+	for start := 0; start < len(sessions); start += unitSessionChunk {
+		chunk := sessions[start:min(start+unitSessionChunk, len(sessions))]
+		if err := db.scanUserBoundaryOrdinals(ctx, chunk, ordinals[start:start+len(chunk)]); err != nil {
 			return nil, err
 		}
 	}
-	for i := range spans {
-		if !spans[i].belowSeen || !spans[i].aboveSeen {
-			return nil, fmt.Errorf(
-				"nearest user boundaries: missing sentinel rows for session %s",
-				spans[i].sessionID)
-		}
-		sort.Ints(spans[i].inner)
+	for _, o := range ordinals {
+		sort.Ints(o)
 	}
 	for i, p := range probes {
-		out[i] = spans[spanIdx[p.SessionID]].boundsAround(p.Ordinal)
+		out[i] = boundsAround(ordinals[sessionIdx[p.SessionID]], p.Ordinal)
 	}
 	return out, nil
 }
 
-// boundsAround resolves one probe's exclusive boundaries from the span's
-// sorted inner ordinals and its below/above lookups, mirroring the strict
-// MAX(< ordinal) / MIN(> ordinal) semantics of the SQL form.
-func (sp *userBoundarySpan) boundsAround(ordinal int) UnitBounds {
-	b := UnitBounds{Prev: sp.below, Next: sp.above}
-	i := sort.SearchInts(sp.inner, ordinal)
+// boundsAround resolves one probe's exclusive boundaries from a session's
+// sorted embeddable user ordinals: the strict MAX(< ordinal) / MIN(> ordinal)
+// neighbors, with the -1 / unitOrdinalMax sentinels when absent.
+func boundsAround(userOrdinals []int, ordinal int) UnitBounds {
+	b := UnitBounds{Prev: -1, Next: unitOrdinalMax}
+	i := sort.SearchInts(userOrdinals, ordinal)
 	if i > 0 {
-		b.Prev = sp.inner[i-1]
+		b.Prev = userOrdinals[i-1]
 	}
-	for ; i < len(sp.inner); i++ {
-		if sp.inner[i] > ordinal {
-			b.Next = sp.inner[i]
+	for ; i < len(userOrdinals); i++ {
+		if userOrdinals[i] > ordinal {
+			b.Next = userOrdinals[i]
 			break
 		}
 	}
 	return b
 }
 
-// scanUserBoundarySpans runs the one batched statement for a chunk of spans:
-// a VALUES CTE joined against messages for the in-span embeddable user rows
-// (second column NULL), plus one sentinel row per span carrying the
-// correlated point lookups below lo and above hi (COALESCEd to the -1 /
-// unitOrdinalMax sentinels when absent).
-func (db *DB) scanUserBoundarySpans(
-	ctx context.Context, spans []userBoundarySpan,
+// scanUserBoundaryOrdinals runs the one batched statement for a chunk of
+// distinct sessions: a VALUES CTE joined against messages for every
+// embeddable user ordinal of each session. out aligns 1:1 with sessions.
+func (db *DB) scanUserBoundaryOrdinals(
+	ctx context.Context, sessions []string, out [][]int,
 ) error {
-	values := make([]string, len(spans))
-	args := make([]any, 0, len(spans)*4)
-	for i := range spans {
-		values[i] = "(?, ?, ?, ?)"
-		args = append(args, i, spans[i].sessionID, spans[i].lo, spans[i].hi)
+	values := make([]string, len(sessions))
+	args := make([]any, 0, len(sessions)*2)
+	for i, sessionID := range sessions {
+		values[i] = "(?, ?)"
+		args = append(args, i, sessionID)
 	}
-	user := embeddableUserSQL("m")
 	query := fmt.Sprintf(`
-		WITH spans(idx, session_id, lo, hi) AS (VALUES %s)
-		SELECT sp.idx, m.ordinal, NULL
+		WITH spans(idx, session_id) AS (VALUES %s)
+		SELECT sp.idx, m.ordinal
 		FROM spans sp JOIN messages m ON m.session_id = sp.session_id
-		  AND m.ordinal >= sp.lo AND m.ordinal <= sp.hi
-		WHERE %s
-		UNION ALL
-		SELECT sp.idx,
-		  COALESCE((SELECT MAX(m.ordinal) FROM messages m
-		    WHERE m.session_id = sp.session_id AND m.ordinal < sp.lo AND %s), -1),
-		  COALESCE((SELECT MIN(m.ordinal) FROM messages m
-		    WHERE m.session_id = sp.session_id AND m.ordinal > sp.hi AND %s), %d)
-		FROM spans sp`,
-		strings.Join(values, ", "), user, user, user, unitOrdinalMax)
+		WHERE %s`,
+		strings.Join(values, ", "), embeddableUserSQL("m"))
 
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
@@ -330,21 +447,15 @@ func (db *DB) scanUserBoundarySpans(
 	defer rows.Close()
 	for rows.Next() {
 		var idx, ordinal int
-		var above sql.NullInt64
-		if err := rows.Scan(&idx, &ordinal, &above); err != nil {
+		if err := rows.Scan(&idx, &ordinal); err != nil {
 			return fmt.Errorf("scanning nearest user boundaries: %w", err)
 		}
-		if idx < 0 || idx >= len(spans) {
+		if idx < 0 || idx >= len(out) {
 			return fmt.Errorf(
-				"nearest user boundaries: span index %d out of range [0, %d)",
-				idx, len(spans))
+				"nearest user boundaries: session index %d out of range [0, %d)",
+				idx, len(out))
 		}
-		if !above.Valid {
-			spans[idx].inner = append(spans[idx].inner, ordinal)
-			continue
-		}
-		spans[idx].below, spans[idx].belowSeen = ordinal, true
-		spans[idx].above, spans[idx].aboveSeen = int(above.Int64), true
+		out[idx] = append(out[idx], ordinal)
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterating nearest user boundaries: %w", err)
@@ -352,34 +463,29 @@ func (db *DB) scanUserBoundarySpans(
 	return nil
 }
 
-// extentSpanKey groups extent probes that share one exclusive interval, so
-// the interval's member rows are fetched once no matter how many anchors
-// fall inside it.
-type extentSpanKey struct {
-	sessionID string
-	lo, hi    int
-}
-
-// runMemberRow is one embeddable assistant row inside an extent interval.
-type runMemberRow struct {
-	ordinal   int
-	sidechain bool
-}
+// unitExtentChunk caps extent probes per statement: a probe binds 6
+// variables (idx, session_id, o, lo, hi, sc).
+const unitExtentChunk = maxSQLVars / 6
 
 // RunExtents returns, per probe, the first and last member ordinals of the
 // anchor's same-sidechain run: the nearest embeddable assistant rows of the
 // anchor's sidechain around the anchor, bounded exclusively by (Lo, Hi) and
-// by the nearest embeddable assistant row of the opposite sidechain inside
-// that interval (the reducer's flip rule; flips only matter among embeddable
-// assistant rows). The anchor row itself always qualifies, so a probe whose
-// interval holds no run around its anchor was built for a row that is not an
-// embeddable assistant row — an internal invariant violation reported as an
-// error.
+// by the nearest STOP row inside that interval — an embeddable user row (the
+// reducer closes every run at unit boundaries) or an embeddable assistant
+// row of the opposite sidechain (the flip rule; both stops only matter among
+// embeddable rows). Probing with the -1 / unitOrdinalMax sentinels therefore
+// derives the full rule-2 extent on its own. The anchor row itself always
+// qualifies, so a probe whose interval holds no run around its anchor was
+// built for a row that is not an embeddable assistant row — an internal
+// invariant violation reported as an error.
 //
-// Probes sharing an interval are grouped: one statement per unitSpanChunk
-// intervals fetches each interval's embeddable assistant rows ONCE (ordinal
-// plus sidechain flag), and every probe's extent — flip bounds and first/last
-// member — resolves from the fetched rows in Go.
+// Duplicate probes share one slot, and one statement per unitExtentChunk
+// distinct probes resolves every probe with correlated point lookups on
+// idx_messages_session_ordinal (nearest stop row on each side, then the
+// farthest same-sidechain member inside the stop-narrowed interval) instead
+// of transferring each interval's member rows to Go: an interval-span scan
+// moves O(interval) rows per page across the driver boundary, the point
+// lookups move exactly one result row per probe.
 func (db *DB) RunExtents(
 	ctx context.Context, probes []ExtentProbe,
 ) ([][2]int, error) {
@@ -387,115 +493,120 @@ func (db *DB) RunExtents(
 	if len(probes) == 0 {
 		return out, nil
 	}
-	spanIdx := make(map[extentSpanKey]int)
-	spans := make([]extentSpanKey, 0, len(probes))
+	keyIdx := make(map[ExtentProbe]int, len(probes))
+	keys := make([]ExtentProbe, 0, len(probes))
 	for _, p := range probes {
-		k := extentSpanKey{sessionID: p.SessionID, lo: p.Lo, hi: p.Hi}
-		if _, ok := spanIdx[k]; ok {
+		if _, ok := keyIdx[p]; ok {
 			continue
 		}
-		spanIdx[k] = len(spans)
-		spans = append(spans, k)
+		keyIdx[p] = len(keys)
+		keys = append(keys, p)
 	}
-	members := make([][]runMemberRow, len(spans))
-	for start := 0; start < len(spans); start += unitSpanChunk {
-		chunk := spans[start:min(start+unitSpanChunk, len(spans))]
-		if err := db.scanRunMemberSpans(ctx, chunk, members[start:start+len(chunk)]); err != nil {
+	extents := make([][2]int, len(keys))
+	for start := 0; start < len(keys); start += unitExtentChunk {
+		chunk := keys[start:min(start+unitExtentChunk, len(keys))]
+		if err := db.lookupRunExtentChunk(ctx, chunk, extents[start:start+len(chunk)]); err != nil {
 			return nil, err
 		}
-	}
-	for _, m := range members {
-		sort.Slice(m, func(a, b int) bool { return m[a].ordinal < m[b].ordinal })
 	}
 	for i, p := range probes {
-		ext, err := runExtentWithin(members[spanIdx[extentSpanKey{
-			sessionID: p.SessionID, lo: p.Lo, hi: p.Hi,
-		}]], p)
-		if err != nil {
-			return nil, err
-		}
-		out[i] = ext
+		out[i] = extents[keyIdx[p]]
 	}
 	return out, nil
 }
 
-// runExtentWithin walks the interval's sorted member rows around the probe
-// anchor: descending below the anchor and ascending above it, collecting the
-// farthest same-sidechain member on each side and stopping at the first
-// opposite-sidechain member (the flip that closes the run). No member at the
-// anchor's side means the probe was not built for a rule-2 anchor.
-func runExtentWithin(members []runMemberRow, p ExtentProbe) ([2]int, error) {
-	first, firstOK := 0, false
-	up := sort.Search(len(members), func(k int) bool {
-		return members[k].ordinal > p.Ordinal
-	})
-	for k := up - 1; k >= 0; k-- {
-		if members[k].sidechain != p.Sidechain {
-			break
-		}
-		first, firstOK = members[k].ordinal, true
-	}
-	last, lastOK := 0, false
-	lo := sort.Search(len(members), func(k int) bool {
-		return members[k].ordinal >= p.Ordinal
-	})
-	for k := lo; k < len(members); k++ {
-		if members[k].sidechain != p.Sidechain {
-			break
-		}
-		last, lastOK = members[k].ordinal, true
-	}
-	if !firstOK || !lastOK {
-		return [2]int{}, fmt.Errorf(
-			"run extents: anchor %s#%d is not an embeddable assistant row "+
-				"(probe must only be built for rule-2 anchors)",
-			p.SessionID, p.Ordinal)
-	}
-	return [2]int{first, last}, nil
+// runExtentSelectSQL is the correlated point-lookup SELECT under a probes CTE
+// with columns (idx, session_id, o, lo, hi, sc). Per probe and per side: the
+// inner subquery seeks the nearest STOP row between the anchor and the
+// interval bound — an embeddable user row (the reducer closes every run
+// there) or an opposite-sidechain embeddable assistant row (the flip rule);
+// ORDER BY ordinal DESC/ASC LIMIT 1 walks idx_messages_session_ordinal from
+// the anchor outward and stops at the first hit. The outer subquery then
+// seeks the farthest same-sidechain member inside the stop-narrowed
+// interval. Folding the user boundary into the stop set is what lets
+// DeriveUnitRanges probe with sentinel (Lo, Hi) bounds instead of paying a
+// NearestUserBoundaries round trip first. The member predicate is role +
+// is_system only: SystemPrefixSQL constrains user rows exclusively, so it is
+// identically TRUE for assistant rows and deliberately omitted there.
+var runExtentSelectSQL = fmt.Sprintf(`
+	SELECT p.idx,
+	  (SELECT m.ordinal FROM messages m
+	   WHERE m.session_id = p.session_id AND m.ordinal <= p.o
+	     AND m.ordinal > COALESCE((SELECT f.ordinal FROM messages f
+	       WHERE f.session_id = p.session_id
+	         AND f.ordinal > p.lo AND f.ordinal < p.o
+	         AND %[1]s
+	       ORDER BY f.ordinal DESC LIMIT 1), p.lo)
+	     AND m.role = 'assistant' AND m.is_system = 0
+	     AND m.is_sidechain = p.sc
+	   ORDER BY m.ordinal ASC LIMIT 1),
+	  (SELECT m.ordinal FROM messages m
+	   WHERE m.session_id = p.session_id AND m.ordinal >= p.o
+	     AND m.ordinal < COALESCE((SELECT f.ordinal FROM messages f
+	       WHERE f.session_id = p.session_id
+	         AND f.ordinal > p.o AND f.ordinal < p.hi
+	         AND %[1]s
+	       ORDER BY f.ordinal ASC LIMIT 1), p.hi)
+	     AND m.role = 'assistant' AND m.is_system = 0
+	     AND m.is_sidechain = p.sc
+	   ORDER BY m.ordinal DESC LIMIT 1)
+	FROM probes p`, runStopSQL())
+
+// runStopSQL is the stop-row predicate under alias f, correlated on p.sc: an
+// opposite-sidechain embeddable assistant row (flip) or an embeddable user
+// row (unit boundary).
+func runStopSQL() string {
+	return "((f.role = 'assistant' AND f.is_system = 0 AND f.is_sidechain <> p.sc)" +
+		" OR (" + embeddableUserSQL("f") + "))"
 }
 
-// scanRunMemberSpans runs the one batched statement for a chunk of extent
-// intervals: a VALUES CTE joined against messages for each interval's
-// embeddable assistant rows, exclusive of the (lo, hi) bounds. The member
-// predicate is role + is_system only: SystemPrefixSQL constrains user rows
-// exclusively, so it is identically TRUE for assistant rows and deliberately
-// omitted here.
-func (db *DB) scanRunMemberSpans(
-	ctx context.Context, spans []extentSpanKey, out [][]runMemberRow,
+// lookupRunExtentChunk runs the one batched statement for a chunk of distinct
+// extent probes: a VALUES CTE with the correlated point lookups of
+// runExtentSelectSQL. A NULL extent side means no same-sidechain member
+// exists at the anchor — the probe was not built for a rule-2 anchor.
+func (db *DB) lookupRunExtentChunk(
+	ctx context.Context, probes []ExtentProbe, out [][2]int,
 ) error {
-	values := make([]string, len(spans))
-	args := make([]any, 0, len(spans)*4)
-	for i, sp := range spans {
-		values[i] = "(?, ?, ?, ?)"
-		args = append(args, i, sp.sessionID, sp.lo, sp.hi)
+	values := make([]string, len(probes))
+	args := make([]any, 0, len(probes)*6)
+	for i, p := range probes {
+		values[i] = "(?, ?, ?, ?, ?, ?)"
+		args = append(args, i, p.SessionID, p.Ordinal, p.Lo, p.Hi, p.Sidechain)
 	}
-	query := fmt.Sprintf(`
-		WITH spans(idx, session_id, lo, hi) AS (VALUES %s)
-		SELECT sp.idx, m.ordinal, m.is_sidechain
-		FROM spans sp JOIN messages m ON m.session_id = sp.session_id
-		  AND m.ordinal > sp.lo AND m.ordinal < sp.hi
-		WHERE m.role = 'assistant' AND m.is_system = 0`,
-		strings.Join(values, ", "))
+	query := "WITH probes(idx, session_id, o, lo, hi, sc) AS (VALUES " +
+		strings.Join(values, ", ") + ")" + runExtentSelectSQL
 
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("querying run extents: %w", err)
 	}
 	defer rows.Close()
+	seen := 0
 	for rows.Next() {
 		var idx int
-		var m runMemberRow
-		if err := rows.Scan(&idx, &m.ordinal, &m.sidechain); err != nil {
+		var first, last sql.NullInt64
+		if err := rows.Scan(&idx, &first, &last); err != nil {
 			return fmt.Errorf("scanning run extents: %w", err)
 		}
 		if idx < 0 || idx >= len(out) {
-			return fmt.Errorf("run extents: span index %d out of range [0, %d)",
+			return fmt.Errorf("run extents: probe index %d out of range [0, %d)",
 				idx, len(out))
 		}
-		out[idx] = append(out[idx], m)
+		if !first.Valid || !last.Valid {
+			return fmt.Errorf(
+				"run extents: anchor %s#%d is not an embeddable assistant row "+
+					"(probe must only be built for rule-2 anchors)",
+				probes[idx].SessionID, probes[idx].Ordinal)
+		}
+		out[idx] = [2]int{int(first.Int64), int(last.Int64)}
+		seen++
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("iterating run extents: %w", err)
+	}
+	if seen != len(probes) {
+		return fmt.Errorf("run extents: statement returned %d rows for %d probes",
+			seen, len(probes))
 	}
 	return nil
 }

@@ -355,10 +355,14 @@ func TestDeriveUnitRangesEmptyAnchors(t *testing.T) {
 	assert.Empty(t, got)
 }
 
-// TestDeriveUnitRangesBatchesRunAnchors asserts a page of anchors inside one
-// run costs exactly one NearestUserBoundaries CALL and one RunExtents CALL:
-// every pending anchor is probed in a single batch per seam method, with
-// duplicate (session, ordinal) anchors sharing one probe.
+// TestDeriveUnitRangesBatchesRunAnchors asserts a session-dense page of
+// anchors inside one run costs exactly one NearestUserBoundaries CALL (20
+// probes in one session clears unitBoundsFlowFactor, every pending anchor in
+// a single batch with duplicate (session, ordinal) anchors sharing one
+// probe) and one RunExtents CALL carrying just ONE probe: the anchors share
+// a (session, bounds, sidechain) group, so a single representative resolves
+// the run and its extent is handed to every anchor it covers with no second
+// round.
 func TestDeriveUnitRangesBatchesRunAnchors(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s-batch", "proj", func(s *Session) { s.EndedAt = Ptr(tsHour1) })
@@ -387,10 +391,52 @@ func TestDeriveUnitRangesBatchesRunAnchors(t *testing.T) {
 		assert.Equal(t, [2]int{1, 25}, got[i], "anchor %d", anchors[i].Ordinal)
 	}
 
-	assert.Equal(t, 1, q.boundsCalls, "NearestUserBoundaries calls")
+	assert.Equal(t, 1, q.boundsCalls, "NearestUserBoundaries calls (dense page)")
 	assert.Equal(t, 20, q.boundsProbes, "NearestUserBoundaries probes")
 	assert.Equal(t, 1, q.extentCalls, "RunExtents calls")
-	assert.Equal(t, 20, q.extentProbes, "RunExtents probes")
+	assert.Equal(t, 1, q.extentProbes, "RunExtents probes (one group representative)")
+}
+
+// TestDeriveUnitRangesSecondRoundAcrossFlip seeds one user interval holding
+// two runs separated by a sidechain flip and anchors both runs' main-chain
+// members. The main-chain anchors share one (session, interval, sidechain)
+// group but sit in different runs, so the round-one representative's extent
+// cannot cover the anchors past the flip: they must resolve in exactly one
+// second RunExtents round, with correct per-run extents.
+func TestDeriveUnitRangesSecondRoundAcrossFlip(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s-flip2", "proj", func(s *Session) { s.EndedAt = Ptr(tsHour1) })
+	insertMessages(t, d,
+		unitMsg("s-flip2", 0, "user", "u0"),
+		unitMsg("s-flip2", 1, "assistant", "run1-a"),
+		unitMsg("s-flip2", 2, "assistant", "run1-b"),
+		asSidechain(unitMsg("s-flip2", 3, "assistant", "sidechain flip")),
+		unitMsg("s-flip2", 4, "assistant", "run2-a"),
+		unitMsg("s-flip2", 5, "assistant", "run2-b"),
+		unitMsg("s-flip2", 6, "user", "u6"),
+	)
+
+	anchors := []UnitAnchor{
+		{SessionID: "s-flip2", Ordinal: 1, Role: "assistant", Embeddable: true},
+		{SessionID: "s-flip2", Ordinal: 2, Role: "assistant", Embeddable: true},
+		{SessionID: "s-flip2", Ordinal: 4, Role: "assistant", Embeddable: true},
+		{SessionID: "s-flip2", Ordinal: 5, Role: "assistant", Embeddable: true},
+	}
+	q := &countingUnitQuerier{inner: d}
+	got, err := DeriveUnitRanges(context.Background(), q, anchors)
+	require.NoError(t, err)
+	require.Len(t, got, len(anchors))
+	assert.Equal(t, [2]int{1, 2}, got[0], "run 1 anchor 1")
+	assert.Equal(t, [2]int{1, 2}, got[1], "run 1 anchor 2")
+	assert.Equal(t, [2]int{4, 5}, got[2], "run 2 anchor 4")
+	assert.Equal(t, [2]int{4, 5}, got[3], "run 2 anchor 5")
+
+	assert.Equal(t, 0, q.boundsCalls,
+		"NearestUserBoundaries calls (sparse page probes with sentinel bounds)")
+	assert.Equal(t, 2, q.extentCalls,
+		"RunExtents calls (representative round + across-flip remainder)")
+	assert.Equal(t, 3, q.extentProbes,
+		"RunExtents probes (1 representative + 2 across the flip)")
 }
 
 // TestDeriveUnitRangesNonMemberSpan asserts a run whose members are {5, 7}
@@ -463,23 +509,26 @@ func TestNearestUserBoundariesSentinels(t *testing.T) {
 		"no user row after the last assistant")
 }
 
-// TestUnitBoundsQuerierChunkingAlignment seeds more sessions than
-// unitSpanChunk spans bind in one statement, so both seam methods must run
-// their per-span-chunk loop across multiple statements. Each session k gets
-// its own ordinal base (b = 10*k), so its boundary/extent answer is unique to
-// that session: {Prev: b, Next: b+3} and extent [b+1, b+2]. A chunk-boundary
-// slicing bug (e.g. an off-by-one in the span-chunk start/end arithmetic)
-// either drops a span (surfacing as a "missing sentinel rows"/"span index out
-// of range" error) or shifts results between neighboring sessions — and
+// TestUnitBoundsQuerierChunkingAlignment seeds more sessions than either
+// seam method batches into one statement (unitSessionChunk sessions for
+// NearestUserBoundaries, unitExtentChunk probes for RunExtents), so both
+// must run their per-chunk loop across multiple statements. Each session k
+// gets its own ordinal base (b = 10*k), so its boundary/extent answer is
+// unique to that session: {Prev: b, Next: b+3} and extent [b+1, b+2]. A
+// chunk-boundary slicing bug (e.g. an off-by-one in the chunk start/end
+// arithmetic) either drops a slot (surfacing as an "index out of range" or
+// row-count error) or shifts results between neighboring sessions — and
 // because every session's expected value differs from its neighbors', a
 // shift produces a wrong value rather than a coincidentally correct one.
 // Every probe's expected value is asserted individually against its own
-// session's base, so a single misattributed span fails the assertion for
+// session's base, so a single misattributed slot fails the assertion for
 // that specific session.
 func TestUnitBoundsQuerierChunkingAlignment(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
-	const n = unitSpanChunk + 20 // >1 chunk boundary crossed
+	// >1 chunk boundary crossed for both methods (unitExtentChunk is the
+	// smaller of the two).
+	const n = max(unitSessionChunk, unitExtentChunk) + 20
 
 	sessionID := func(k int) string { return fmt.Sprintf("s-chunk-%d", k) }
 	base := func(k int) int { return k * 10 }
