@@ -200,6 +200,22 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 		assert.Equal(t, 8192, cfg.Vector.Embeddings.MaxInputChars, "unset max_input_chars keeps default")
 		assert.Equal(t, "24h", cfg.Vector.Embed.BackstopInterval, "unset backstop_interval keeps default")
 		assert.False(t, cfg.Vector.IncludeAutomated, "unset include_automated keeps the false default")
+		assert.Empty(t, cfg.Vector.Embeddings.InputSuffix, "unset input_suffix defaults to empty")
+	})
+
+	t.Run("input_suffix is loaded", func(t *testing.T) {
+		cfg := loadMinimalWithConfig(t, map[string]any{
+			"vector": map[string]any{
+				"enabled": true,
+				"embeddings": map[string]any{
+					"endpoint":     "http://localhost:11434/v1",
+					"model":        "qwen3-embedding-8b",
+					"dimension":    4096,
+					"input_suffix": "<|endoftext|>",
+				},
+			},
+		})
+		assert.Equal(t, "<|endoftext|>", cfg.Vector.Embeddings.InputSuffix)
 	})
 
 	t.Run("include_automated true is loaded", func(t *testing.T) {

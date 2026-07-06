@@ -83,6 +83,43 @@ func TestEncoderHappyPath(t *testing.T) {
 	assert.Equal(t, []float32{4, 5, 6}, out[1])
 }
 
+// TestEncoderInputSuffixAppended asserts a configured InputSuffix is appended
+// to every input in the request body, while the returned vectors still map
+// back to the original (unsuffixed) texts by index.
+func TestEncoderInputSuffixAppended(t *testing.T) {
+	var gotReq embeddingsRequest
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotReq))
+		writeJSON(t, w, http.StatusOK, embeddingsResponse{
+			Data: []embeddingDatum{
+				{Index: 0, Embedding: []float32{1, 2, 3}},
+				{Index: 1, Embedding: []float32{4, 5, 6}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	enc := NewEncoder(EncoderConfig{
+		Endpoint:    srv.URL + "/v1",
+		Model:       "test-model",
+		Dimension:   3,
+		Timeout:     5 * time.Second,
+		MaxRetries:  1,
+		InputSuffix: "<|endoftext|>",
+	})
+
+	out, err := enc(context.Background(), []string{"hello", "world"})
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"hello<|endoftext|>", "world<|endoftext|>"}, gotReq.Input)
+	require.Len(t, out, 2)
+	assert.Equal(t, []float32{1, 2, 3}, out[0])
+	assert.Equal(t, []float32{4, 5, 6}, out[1])
+}
+
 func TestEncoderAnonymousNoAuthHeader(t *testing.T) {
 	var gotAuth string
 	var authSet bool

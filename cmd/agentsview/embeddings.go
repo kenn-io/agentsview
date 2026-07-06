@@ -199,14 +199,21 @@ func requireVectorEnabled(cfg config.Config) error {
 // formula (vector.ChunkOverlap) cuts a new generation rather than silently
 // reusing embeddings built under the old scheme.
 func vectorGeneration(c config.VectorEmbeddingsConfig) kitvec.Generation {
+	params := map[string]string{
+		"max_input_chars":     strconv.Itoa(c.MaxInputChars),
+		"doc_unit_scheme":     "run_v1",
+		"chunk_overlap_chars": strconv.Itoa(vector.ChunkOverlap(c.MaxInputChars)),
+	}
+	// input_suffix joins the fingerprint only when set: an empty suffix must
+	// hash identically to configs written before the key existed, so adding
+	// the field does not orphan every existing generation.
+	if c.InputSuffix != "" {
+		params["input_suffix"] = c.InputSuffix
+	}
 	return kitvec.Generation{
 		Model:      c.Model,
 		Dimensions: c.Dimension,
-		Params: map[string]string{
-			"max_input_chars":     strconv.Itoa(c.MaxInputChars),
-			"doc_unit_scheme":     "run_v1",
-			"chunk_overlap_chars": strconv.Itoa(vector.ChunkOverlap(c.MaxInputChars)),
-		},
+		Params:     params,
 	}
 }
 
@@ -218,12 +225,13 @@ func newVectorEncoder(c config.VectorEmbeddingsConfig) (kitvec.EncodeFunc, error
 		return nil, fmt.Errorf("parsing [vector.embeddings] timeout %q: %w", c.Timeout, err)
 	}
 	return vector.NewEncoder(vector.EncoderConfig{
-		Endpoint:   c.Endpoint,
-		APIKey:     c.APIKey(),
-		Model:      c.Model,
-		Dimension:  c.Dimension,
-		Timeout:    timeout,
-		MaxRetries: c.MaxRetries,
+		Endpoint:    c.Endpoint,
+		APIKey:      c.APIKey(),
+		Model:       c.Model,
+		Dimension:   c.Dimension,
+		Timeout:     timeout,
+		MaxRetries:  c.MaxRetries,
+		InputSuffix: c.InputSuffix,
 	}), nil
 }
 

@@ -110,7 +110,10 @@ func seedEmbeddableArchiveWithAutomated(t *testing.T, dataDir string) {
 // TestVectorGenerationParams asserts vectorGeneration's Params map carries
 // exactly the three run_v1 fingerprint keys the plan requires, with
 // chunk_overlap_chars derived from vector.ChunkOverlap so a future change to
-// that formula cannot silently drift from the fingerprint.
+// that formula cannot silently drift from the fingerprint. An empty
+// input_suffix must be absent from the map (not present as ""), so configs
+// written before the key existed keep their fingerprints; a non-empty suffix
+// joins the fingerprint and cuts a new generation.
 func TestVectorGenerationParams(t *testing.T) {
 	c := config.VectorEmbeddingsConfig{
 		Model:         "test-model",
@@ -126,6 +129,15 @@ func TestVectorGenerationParams(t *testing.T) {
 		"max_input_chars":     "4000",
 		"doc_unit_scheme":     "run_v1",
 		"chunk_overlap_chars": strconv.Itoa(vector.ChunkOverlap(4000)),
+	}, gen.Params)
+
+	c.InputSuffix = "<|endoftext|>"
+	gen = vectorGeneration(c)
+	assert.Equal(t, map[string]string{
+		"max_input_chars":     "4000",
+		"doc_unit_scheme":     "run_v1",
+		"chunk_overlap_chars": strconv.Itoa(vector.ChunkOverlap(4000)),
+		"input_suffix":        "<|endoftext|>",
 	}, gen.Params)
 }
 

@@ -33,6 +33,11 @@ type EncoderConfig struct {
 	// MaxRetries is the maximum total attempts on 429/5xx/network errors
 	// (4xx fails fast); values <= 0 mean one attempt.
 	MaxRetries int
+	// InputSuffix is appended verbatim to every input text before it is
+	// sent, for models that expect a terminator the serving layer does not
+	// add (e.g. "<|endoftext|>" for Qwen3-Embedding under llama.cpp).
+	// Empty means inputs are sent unmodified.
+	InputSuffix string
 }
 
 const (
@@ -142,7 +147,14 @@ func NewEncoder(cfg EncoderConfig) kitvec.EncodeFunc {
 func encode(
 	ctx context.Context, client *http.Client, url string, cfg EncoderConfig, texts []string,
 ) ([][]float32, error) {
-	reqBody, err := json.Marshal(embeddingsRequestBody{Model: cfg.Model, Input: texts})
+	inputs := texts
+	if cfg.InputSuffix != "" {
+		inputs = make([]string, len(texts))
+		for i, t := range texts {
+			inputs[i] = t + cfg.InputSuffix
+		}
+	}
+	reqBody, err := json.Marshal(embeddingsRequestBody{Model: cfg.Model, Input: inputs})
 	if err != nil {
 		return nil, fmt.Errorf("[vector.embeddings] marshal request: %w", err)
 	}

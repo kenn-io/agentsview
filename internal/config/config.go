@@ -139,6 +139,12 @@ type VectorEmbeddingsConfig struct {
 	// MaxInputChars caps the rune length of each chunk sent for
 	// embedding. Default 8192.
 	MaxInputChars int `toml:"max_input_chars" json:"max_input_chars"`
+	// InputSuffix is appended verbatim to every text sent for embedding
+	// (documents and queries alike). Some models expect a terminator the
+	// serving layer does not add — e.g. Qwen3-Embedding under llama.cpp
+	// wants "<|endoftext|>" appended client-side. Changing it cuts a new
+	// vector generation. Default empty.
+	InputSuffix string `toml:"input_suffix" json:"input_suffix,omitempty"`
 }
 
 // VectorEmbedConfig configures when the daemon runs embedding work.
@@ -969,6 +975,9 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if meta.IsDefined("vector", "embeddings", "max_input_chars") {
 		c.Vector.Embeddings.MaxInputChars = file.Vector.Embeddings.MaxInputChars
+	}
+	if file.Vector.Embeddings.InputSuffix != "" {
+		c.Vector.Embeddings.InputSuffix = file.Vector.Embeddings.InputSuffix
 	}
 	if file.Vector.Embed.RunAfterSync != nil {
 		c.Vector.Embed.RunAfterSync = file.Vector.Embed.RunAfterSync

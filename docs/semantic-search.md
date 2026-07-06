@@ -40,6 +40,7 @@ batch_size = 32                   # inputs per HTTP call (default 32)
 timeout = "30s"                   # per-HTTP-call timeout (default "30s")
 max_retries = 3                   # attempts on 429/5xx/network errors; 4xx fails fast (default 3)
 max_input_chars = 8192            # per-chunk rune cap (default 8192)
+# input_suffix = "<|endoftext|>"  # appended to every embedded text; default empty (see below)
 
 [vector.embed]
 run_after_sync = true             # daemon embeds deltas after each sync, debounced ~30s (default true)
@@ -50,6 +51,14 @@ backstop_interval = "24h"         # periodic full reconciliation scan; negative 
 `agentsview` fails fast with an actionable message if any is missing or a
 duration field doesn't parse. Restart the daemon (or run a CLI command) after
 editing the file.
+
+`input_suffix` is appended verbatim to every text sent to the endpoint —
+documents at build time and queries at search time — for models that expect a
+terminator the serving layer does not add. The main example is Qwen3-Embedding
+served by llama.cpp, which is benchmarked with `<|endoftext|>` appended to each
+input. The suffix is part of the generation fingerprint, so changing it
+(including setting it for the first time) re-embeds the whole archive on the
+next build.
 
 The first scheduled build that `run_after_sync` triggers after enabling
 `[vector]` embeds the entire existing archive, not just deltas, since the mirror
@@ -150,13 +159,14 @@ sessions embedded on every build.
 runs, see [What gets embedded](#what-gets-embedded-units-not-messages)) into
 `vectors.db`, then fills whatever the active generation is missing.
 `--full-rebuild` re-embeds every document: if the target fingerprint (derived
-from `model`, `dimension`, `max_input_chars`, the document-unit scheme, and the
-derived chunk overlap) differs from the active generation, it cuts a new
-**generation**; if the fingerprint is unchanged, it instead resets and refills
-the active generation in place rather than cutting a new one. It prompts for
-confirmation with a live count of embeddable unit documents unless `--yes` is
-passed. Progress prints every ~2 seconds while a build runs, and a summary line
-reports documents embedded, chunks, skipped, and stale counts on completion.
+from `model`, `dimension`, `max_input_chars`, `input_suffix` when set, the
+document-unit scheme, and the derived chunk overlap) differs from the active
+generation, it cuts a new **generation**; if the fingerprint is unchanged, it
+instead resets and refills the active generation in place rather than cutting a
+new one. It prompts for confirmation with a live count of embeddable unit
+documents unless `--yes` is passed. Progress prints every ~2 seconds while a
+build runs, and a summary line reports documents embedded, chunks, skipped, and
+stale counts on completion.
 
 When a writable local daemon is running, `build`/`activate`/`retire` proxy to it
 over HTTP so the daemon remains the sole writer of `vectors.db`; without a
