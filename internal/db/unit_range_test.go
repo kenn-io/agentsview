@@ -353,11 +353,11 @@ func TestDeriveUnitRangesEmptyAnchors(t *testing.T) {
 	assert.Empty(t, got)
 }
 
-// TestDeriveUnitRangesMemoizesRunAnchors asserts 20 anchors inside one run
-// cost exactly one NearestUserBoundaries batch and one RunExtents batch, each
-// carrying a single probe: the first anchor derives the range, every other
-// anchor reuses it from the per-session memo.
-func TestDeriveUnitRangesMemoizesRunAnchors(t *testing.T) {
+// TestDeriveUnitRangesBatchesRunAnchors asserts a page of anchors inside one
+// run costs exactly one NearestUserBoundaries CALL and one RunExtents CALL:
+// every pending anchor is probed in a single batch per seam method, with
+// duplicate (session, ordinal) anchors sharing one probe.
+func TestDeriveUnitRangesBatchesRunAnchors(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s-memo", "proj", func(s *Session) { s.EndedAt = Ptr(tsHour1) })
 	msgs := []Message{unitMsg("s-memo", 0, "user", "u0")}
@@ -367,13 +367,15 @@ func TestDeriveUnitRangesMemoizesRunAnchors(t *testing.T) {
 	msgs = append(msgs, unitMsg("s-memo", 26, "user", "u26"))
 	insertMessages(t, d, msgs...)
 
-	anchors := make([]UnitAnchor, 0, 20)
+	anchors := make([]UnitAnchor, 0, 21)
 	for o := 2; o <= 21; o++ {
 		anchors = append(anchors, UnitAnchor{
 			SessionID: "s-memo", Ordinal: o, Role: "assistant",
 			Embeddable: true,
 		})
 	}
+	// Duplicate of the first anchor: must reuse its probe, not add one.
+	anchors = append(anchors, anchors[0])
 
 	q := &countingUnitQuerier{inner: d}
 	got, err := DeriveUnitRanges(context.Background(), q, anchors)
@@ -384,9 +386,9 @@ func TestDeriveUnitRangesMemoizesRunAnchors(t *testing.T) {
 	}
 
 	assert.Equal(t, 1, q.boundsCalls, "NearestUserBoundaries calls")
-	assert.Equal(t, 1, q.boundsProbes, "NearestUserBoundaries probes")
+	assert.Equal(t, 20, q.boundsProbes, "NearestUserBoundaries probes")
 	assert.Equal(t, 1, q.extentCalls, "RunExtents calls")
-	assert.Equal(t, 1, q.extentProbes, "RunExtents probes")
+	assert.Equal(t, 20, q.extentProbes, "RunExtents probes")
 }
 
 // TestDeriveUnitRangesNonMemberSpan asserts a run whose members are {5, 7}
@@ -422,7 +424,9 @@ func TestDeriveUnitRangesNonMemberSpan(t *testing.T) {
 // TestNearestUserBoundariesSentinels asserts the seam returns Prev=-1 and
 // Next=unitOrdinalMax when no embeddable user row exists on that side, and
 // real exclusive boundaries otherwise (ignoring system-prefixed user rows
-// and the anchor's own ordinal).
+// and the anchor's own ordinal). The empty-content user row at 5 pins the
+// SQLite first-code-point guard's COALESCE path: unicode(”) is NULL, and an
+// empty user row is still an embeddable boundary.
 func TestNearestUserBoundariesSentinels(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s-b", "proj", func(s *Session) { s.EndedAt = Ptr(tsHour1) })
@@ -432,6 +436,8 @@ func TestNearestUserBoundariesSentinels(t *testing.T) {
 		unitMsg("s-b", 2, "assistant", "a2"),
 		unitMsg("s-b", 3, "user", "<command-message> prefixed, not a boundary"),
 		unitMsg("s-b", 4, "assistant", "a4"),
+		unitMsg("s-b", 5, "user", ""),
+		unitMsg("s-b", 6, "assistant", "a6"),
 	)
 
 	got, err := d.NearestUserBoundaries(context.Background(), []UnitProbe{
@@ -439,17 +445,20 @@ func TestNearestUserBoundariesSentinels(t *testing.T) {
 		{SessionID: "s-b", Ordinal: 2},
 		{SessionID: "s-b", Ordinal: 4},
 		{SessionID: "s-b", Ordinal: 1},
+		{SessionID: "s-b", Ordinal: 6},
 	})
 	require.NoError(t, err)
-	require.Len(t, got, 4)
+	require.Len(t, got, 5)
 	assert.Equal(t, UnitBounds{Prev: -1, Next: 1}, got[0],
 		"no user row before session start")
-	assert.Equal(t, UnitBounds{Prev: 1, Next: unitOrdinalMax}, got[1],
-		"prefixed user row at 3 must not be a boundary")
-	assert.Equal(t, UnitBounds{Prev: 1, Next: unitOrdinalMax}, got[2],
-		"no user row after the last assistant")
-	assert.Equal(t, UnitBounds{Prev: -1, Next: unitOrdinalMax}, got[3],
+	assert.Equal(t, UnitBounds{Prev: 1, Next: 5}, got[1],
+		"prefixed user row at 3 must not be a boundary; empty user row at 5 is")
+	assert.Equal(t, UnitBounds{Prev: 1, Next: 5}, got[2],
+		"empty-content user row is an embeddable boundary")
+	assert.Equal(t, UnitBounds{Prev: -1, Next: 5}, got[3],
 		"boundaries are exclusive of the probe ordinal itself")
+	assert.Equal(t, UnitBounds{Prev: 5, Next: unitOrdinalMax}, got[4],
+		"no user row after the last assistant")
 }
 
 // TestUnitBoundsQuerierChunkingAlignment feeds both seam methods more probes

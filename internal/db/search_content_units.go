@@ -7,11 +7,12 @@ import (
 	"strings"
 )
 
-// contentAnchorMeta is the per-row sidecar the lexical scan reads alongside a
-// ContentMatch: session lineage plus the anchor message row's classification
-// columns. The three anchor columns are NULL for tool_result_events rows
-// (those branches have no messages join); fillEventAnchorMeta backfills them
-// post-scan, marking rows whose message row does not exist as missing.
+// contentAnchorMeta is one match's anchor metadata: session lineage plus the
+// anchor message row's classification columns (role, sidechain, embeddable).
+// fillAnchorMeta resolves all of it post-truncation with one batched lookup —
+// deliberately NOT in the search SQL, where extra columns would be evaluated
+// for every candidate row before the LIMIT and carried through the sort.
+// Rows whose message row does not exist are marked missing.
 type contentAnchorMeta struct {
 	relationship    string
 	parentSessionID string
@@ -21,45 +22,21 @@ type contentAnchorMeta struct {
 	missing         bool
 }
 
-// lexicalAnchorColumns returns the five extra columns every lexical UNION
-// branch selects for post-scan unit derivation: session lineage from the
-// already-joined sessions alias s, plus the anchor message row's role,
-// sidechain flag, and embeddable classification (is_system = 0 AND content
-// not system-prefixed — SystemPrefixSQL constrains only user rows, exactly
-// like the embedding reducer's predicate). msgAlias "" emits typed NULLs for
-// the three anchor columns (tool_result_events branches, whose row
-// cardinality must not change by joining messages).
-func lexicalAnchorColumns(msgAlias string) string {
-	lineage := "COALESCE(s.relationship_type,'') AS relationship, " +
-		"COALESCE(s.parent_session_id,'') AS parent_session_id, "
-	if msgAlias == "" {
-		return lineage + "CAST(NULL AS TEXT) AS anchor_role, " +
-			"CAST(NULL AS INTEGER) AS anchor_sidechain, " +
-			"CAST(NULL AS INTEGER) AS anchor_embeddable"
-	}
-	return lineage + fmt.Sprintf(
-		"%[1]s.role AS anchor_role, %[1]s.is_sidechain AS anchor_sidechain, "+
-			"CASE WHEN %[1]s.is_system = 0 AND %[2]s THEN 1 ELSE 0 END AS anchor_embeddable",
-		msgAlias, SystemPrefixSQL(msgAlias+".content", msgAlias+".role"))
-}
-
 // deriveLexicalUnits is the shared post-scan pass for the substring, regex,
-// and fts modes: it backfills event-row anchors with one batched lookup,
-// derives each match's conversation-unit range (DeriveUnitRanges memoizes per
-// session, so a page of hits in one run costs a single probe round), and
-// assigns OrdinalRange plus the lineage fields. metas aligns 1:1 with
-// matches; both are the already-truncated page, so the pass is O(page).
+// and fts modes: it fetches each row's anchor classification and session
+// lineage with one batched lookup, derives each match's conversation-unit
+// range (DeriveUnitRanges issues one batched statement per seam method for
+// the whole page, deduplicating duplicate probes), and assigns OrdinalRange
+// plus the lineage fields. matches is the already-truncated page, so the
+// pass is O(page).
 func (db *DB) deriveLexicalUnits(
-	ctx context.Context, matches []ContentMatch, metas []contentAnchorMeta,
+	ctx context.Context, matches []ContentMatch,
 ) error {
-	if len(matches) != len(metas) {
-		return fmt.Errorf("deriving lexical units: %d matches, %d metas",
-			len(matches), len(metas))
-	}
 	if len(matches) == 0 {
 		return nil
 	}
-	if err := db.fillEventAnchorMeta(ctx, matches, metas); err != nil {
+	metas, err := db.fillAnchorMeta(ctx, matches)
+	if err != nil {
 		return err
 	}
 	anchors := buildContentUnitAnchors(matches, metas)
@@ -99,54 +76,51 @@ func buildContentUnitAnchors(
 	return anchors
 }
 
-// fillEventAnchorMeta backfills anchor classification for rows scanned with
-// NULL anchor columns (the tool_result_events branches): one batched
-// VALUES-CTE lookup per enrichHitsChunk distinct (session_id, ordinal) refs,
-// never a per-row query. Refs whose message row does not exist are marked
-// missing so derivation falls back to [o, o].
-func (db *DB) fillEventAnchorMeta(
-	ctx context.Context, matches []ContentMatch, metas []contentAnchorMeta,
-) error {
-	var need []int
-	seen := make(map[semanticHitKey]bool)
-	var refs []semanticHitKey
-	for i := range metas {
-		if metas[i].role.Valid {
-			continue
-		}
-		need = append(need, i)
+// fillAnchorMeta fetches anchor classification and session lineage for every
+// page row: one batched VALUES-CTE lookup per enrichHitsChunk distinct
+// (session_id, ordinal) refs, never a per-row query. Refs whose message row
+// does not exist (tool_result_events orphans) are marked missing so
+// derivation falls back to [o, o]; their session lineage is still populated
+// via the sessions join. The result aligns 1:1 with matches.
+func (db *DB) fillAnchorMeta(
+	ctx context.Context, matches []ContentMatch,
+) ([]contentAnchorMeta, error) {
+	seen := make(map[semanticHitKey]bool, len(matches))
+	refs := make([]semanticHitKey, 0, len(matches))
+	for i := range matches {
 		key := semanticHitKey{matches[i].SessionID, matches[i].Ordinal}
 		if !seen[key] {
 			seen[key] = true
 			refs = append(refs, key)
 		}
 	}
-	if len(need) == 0 {
-		return nil
-	}
 	found := make(map[semanticHitKey]contentAnchorMeta, len(refs))
 	for start := 0; start < len(refs); start += enrichHitsChunk {
 		chunk := refs[start:min(start+enrichHitsChunk, len(refs))]
 		if err := db.lookupAnchorMetaChunk(ctx, chunk, found); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	for _, i := range need {
+	metas := make([]contentAnchorMeta, len(matches))
+	for i := range matches {
 		got, ok := found[semanticHitKey{matches[i].SessionID, matches[i].Ordinal}]
 		if !ok {
 			metas[i].missing = true
 			continue
 		}
-		metas[i].role = got.role
-		metas[i].sidechain = got.sidechain
-		metas[i].embeddable = got.embeddable
+		got.missing = !got.role.Valid
+		metas[i] = got
 	}
-	return nil
+	return metas, nil
 }
 
 // lookupAnchorMetaChunk resolves one chunk of (session_id, ordinal) refs to
-// their message rows' anchor-classification columns, using the same
-// embeddable predicate lexicalAnchorColumns computes in the search SQL.
+// session lineage plus the anchor message row's classification columns:
+// role, sidechain, and the embeddable flag (is_system = 0 AND content not
+// system-prefixed — SystemPrefixSQL constrains only user rows, exactly like
+// the embedding reducer's predicate). messages is LEFT JOINed so a ref whose
+// message row is absent (tool_result_events orphan) still resolves lineage;
+// its classification columns come back NULL.
 func (db *DB) lookupAnchorMetaChunk(
 	ctx context.Context, refs []semanticHitKey,
 	out map[semanticHitKey]contentAnchorMeta,
@@ -159,28 +133,32 @@ func (db *DB) lookupAnchorMetaChunk(
 	}
 	query := "WITH refs(session_id, ordinal) AS (VALUES " +
 		strings.Join(values, ", ") + ") " +
-		"SELECT m.session_id, m.ordinal, m.role, m.is_sidechain, " +
+		"SELECT r.session_id, r.ordinal, " +
+		"COALESCE(s.relationship_type,''), COALESCE(s.parent_session_id,''), " +
+		"m.role, m.is_sidechain, " +
 		"CASE WHEN m.is_system = 0 AND " +
 		SystemPrefixSQL("m.content", "m.role") + " THEN 1 ELSE 0 END " +
 		"FROM refs r " +
-		"JOIN messages m ON m.session_id = r.session_id AND m.ordinal = r.ordinal"
+		"JOIN sessions s ON s.id = r.session_id " +
+		"LEFT JOIN messages m ON m.session_id = r.session_id AND m.ordinal = r.ordinal"
 
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
-		return fmt.Errorf("looking up event anchors: %w", err)
+		return fmt.Errorf("looking up match anchors: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var key semanticHitKey
 		var meta contentAnchorMeta
 		if err := rows.Scan(&key.sessionID, &key.ordinal,
+			&meta.relationship, &meta.parentSessionID,
 			&meta.role, &meta.sidechain, &meta.embeddable); err != nil {
-			return fmt.Errorf("scanning event anchor: %w", err)
+			return fmt.Errorf("scanning match anchor: %w", err)
 		}
 		out[key] = meta
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterating event anchors: %w", err)
+		return fmt.Errorf("iterating match anchors: %w", err)
 	}
 	return nil
 }

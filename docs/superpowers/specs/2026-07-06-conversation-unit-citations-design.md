@@ -126,12 +126,13 @@ equals the run's.
 Performance is a hard constraint: content search is a hot path and the citation
 must not meaningfully slow it.
 
-- **Post-scan enrichment, not query rewrites.** The lexical search SQL keeps its
-  shape; the only in-query change is selecting a few extra columns that are
-  already one join away (`s.relationship_type`, `s.parent_session_id`,
-  `m.is_sidechain`, plus an `embeddable`/role classification boolean computed
-  from columns already read). Derivation runs as a second pass over the
-  returned page only.
+- **Post-scan enrichment, not query rewrites.** The lexical search SQL is
+  untouched: anchor classification (`role`, `is_sidechain`, the `embeddable`
+  boolean) and session lineage (`relationship_type`, `parent_session_id`) are
+  fetched after truncation with one batched VALUES-CTE lookup over the page's
+  distinct anchors — extra in-query columns would be evaluated for every
+  candidate row before the LIMIT and carried through the sort. Derivation runs
+  as a second pass over the returned page only.
 - **O(page), never O(corpus).** Pages are small: db default 50, max 500; MCP
   caps at 30. Per anchor the derivation needs at most six index-served
   `(session_id, ordinal)` lookups (`ORDER BY ordinal DESC/ASC LIMIT 1` with a
@@ -145,10 +146,12 @@ must not meaningfully slow it.
   otherwise widen the range. Lookups for a page are batched into one statement
   per backend where the dialect allows (the `enrichSemanticHits` VALUES-CTE
   precedent), else prepared point queries.
-- **Page-level memoization makes the monologue case the cheapest case.** Hits
-  are grouped by session; once a range is derived, any other anchor in the
-  same session that falls inside it (and is an embeddable assistant row)
-  reuses it. Twenty hits in one run cost one derivation.
+- **Page-level batching makes the monologue case the cheapest case.** Every
+  rule-2 anchor on the page is probed up front — one batched statement per
+  seam method per page, with duplicate probes deduplicated — and the SQLite
+  seam groups probes into one scan span per session (boundaries) or per
+  exclusive interval (run extents), so twenty hits in one run cost one scan of
+  that run's stretch rather than twenty rescans.
 - **Worst case is bounded by run length.** A boundary walk reads rows until the
   predicate matches; the pathological anchor deep inside a
   multi-thousand-message run costs a scan of that run — the same order as
