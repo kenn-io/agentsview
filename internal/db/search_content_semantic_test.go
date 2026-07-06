@@ -409,8 +409,7 @@ func TestSearchContentSemanticMatchCarriesUnitRangeAndLineage(t *testing.T) {
 	sub, ok := byID["child"]
 	require.True(t, ok, "subordinate run hit present")
 	assert.Equal(t, 1, sub.Ordinal, "Ordinal stays the anchor ordinal")
-	assert.Equal(t, 1, sub.OrdinalStart, "OrdinalStart spans the unit")
-	assert.Equal(t, 2, sub.OrdinalEnd, "OrdinalEnd spans the unit")
+	assert.Equal(t, [2]int{1, 2}, sub.OrdinalRange, "OrdinalRange spans the unit")
 	assert.True(t, sub.Subordinate, "Subordinate carries the unit flag")
 	assert.Equal(t, "subagent", sub.Relationship)
 	assert.Equal(t, "parent", sub.ParentSessionID)
@@ -419,7 +418,7 @@ func TestSearchContentSemanticMatchCarriesUnitRangeAndLineage(t *testing.T) {
 	data, err := json.Marshal(sub)
 	require.NoError(t, err)
 	for _, want := range []string{
-		`"ordinal":1`, `"ordinal_start":1`, `"ordinal_end":2`,
+		`"ordinal":1`, `"ordinal_range":[1,2]`,
 		`"subordinate":true`, `"relationship":"subagent"`,
 		`"parent_session_id":"parent"`, `"is_sidechain":true`,
 	} {
@@ -428,18 +427,19 @@ func TestSearchContentSemanticMatchCarriesUnitRangeAndLineage(t *testing.T) {
 
 	top, ok := byID["parent"]
 	require.True(t, ok, "top-level hit present")
-	assert.Zero(t, top.OrdinalStart)
-	assert.Zero(t, top.OrdinalEnd)
+	assert.Equal(t, [2]int{0, 0}, top.OrdinalRange)
 	assert.False(t, top.Subordinate)
 	assert.Empty(t, top.Relationship)
 	assert.Empty(t, top.ParentSessionID)
 	assert.False(t, top.Sidechain)
 }
 
-// TestContentMatchJSONUnitFieldsOmittedForLexicalMatches guards the
-// pre-existing modes' wire format: a substring match must not gain any of
-// the semantic-only unit/lineage keys (they are all omitempty and left
-// zero), keeping FTS/substring/regex responses byte-identical to before.
+// TestContentMatchJSONUnitFieldsOmittedForLexicalMatches guards the lexical
+// modes' wire format: a substring match always carries an ordinal_range (the
+// placeholder self-range [ordinal, ordinal] until Task 4 derives real unit
+// ranges for lexical rows too), but must not gain any of the semantic-only
+// lineage keys (they are all omitempty and left zero), keeping FTS/substring/
+// regex responses otherwise byte-identical to before.
 func TestContentMatchJSONUnitFieldsOmittedForLexicalMatches(t *testing.T) {
 	d := testDB(t)
 	seedSearchSession(t, d, "s1", "proj", [][2]string{
@@ -454,8 +454,10 @@ func TestContentMatchJSONUnitFieldsOmittedForLexicalMatches(t *testing.T) {
 
 	data, err := json.Marshal(page.Matches[0])
 	require.NoError(t, err)
+	assert.Contains(t, string(data), `"ordinal_range":[0,0]`,
+		"lexical match always carries the placeholder self-range")
 	for _, key := range []string{
-		"ordinal_start", "ordinal_end", "subordinate",
+		"score", "ordinal_start", "ordinal_end", "subordinate",
 		"relationship", "parent_session_id", "is_sidechain",
 	} {
 		assert.NotContains(t, string(data), `"`+key+`"`,

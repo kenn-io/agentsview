@@ -72,13 +72,10 @@ type ContentMatch struct {
 	// Score is the searcher's relevance score for "semantic"/"hybrid" modes,
 	// nil for the other modes which have no comparable ranking signal.
 	Score *float64 `json:"score,omitempty"`
-	// OrdinalStart and OrdinalEnd span the matched embedding unit for
-	// "semantic"/"hybrid" matches (both equal Ordinal for single-message
-	// units, so omitempty keeps a unit starting at ordinal 0 unmarked);
-	// Ordinal stays the anchor ordinal in every mode. Zero and omitted for
-	// the other modes, whose matches are single messages.
-	OrdinalStart int `json:"ordinal_start,omitempty"`
-	OrdinalEnd   int `json:"ordinal_end,omitempty"`
+	// OrdinalRange is always present: [start, end] of the conversation unit
+	// containing the anchor; [ordinal, ordinal] when the anchor is its own
+	// unit. Ordinal stays the anchor in every mode.
+	OrdinalRange [2]int `json:"ordinal_range"`
 	// Subordinate marks a "semantic"/"hybrid" unit classified as
 	// subordinate (sidechain run, or subagent/fork session).
 	Subordinate bool `json:"subordinate,omitempty"`
@@ -340,6 +337,7 @@ func (db *DB) scanContentMatches(
 			&m.Timestamp, &body); err != nil {
 			return ContentSearchPage{}, fmt.Errorf("scan match: %w", err)
 		}
+		m.OrdinalRange = [2]int{m.Ordinal, m.Ordinal}
 		m.Snippet = makeSnippet(body)
 		out = append(out, m)
 	}
@@ -394,6 +392,7 @@ func (db *DB) searchContentRegex(
 			seen++
 			continue
 		}
+		m.OrdinalRange = [2]int{m.Ordinal, m.Ordinal}
 		m.Snippet = f.buildSnippet(body, loc[0], loc[1])
 		out = append(out, m)
 		if len(out) > f.Limit {
@@ -821,8 +820,7 @@ func (db *DB) searchContentSemantic(
 			Location:        "message",
 			Role:            info.role,
 			Ordinal:         h.Ordinal,
-			OrdinalStart:    h.OrdinalStart,
-			OrdinalEnd:      h.OrdinalEnd,
+			OrdinalRange:    [2]int{h.OrdinalStart, h.OrdinalEnd},
 			Subordinate:     h.Subordinate,
 			Relationship:    info.relationshipType,
 			ParentSessionID: info.parentSessionID,
@@ -1212,8 +1210,7 @@ func (db *DB) enrichHybridMatches(
 			Location:        "message",
 			Role:            info.role,
 			Ordinal:         d.ordinal,
-			OrdinalStart:    d.ordinalStart,
-			OrdinalEnd:      d.ordinalEnd,
+			OrdinalRange:    [2]int{d.ordinalStart, d.ordinalEnd},
 			Subordinate:     d.subordinate,
 			Relationship:    info.relationshipType,
 			ParentSessionID: info.parentSessionID,

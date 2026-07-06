@@ -335,12 +335,12 @@ func TestPrintContentMatchesHumanRendersUnitRangeAndSubMarker(t *testing.T) {
 		Matches: []db.ContentMatch{
 			{
 				SessionID: "sess1", Project: "proj", Location: "message",
-				Ordinal: 19, OrdinalStart: 12, OrdinalEnd: 40,
+				Ordinal: 19, OrdinalRange: [2]int{12, 40},
 				Subordinate: true, Score: &score, Snippet: "ranged hit",
 			},
 			{
 				SessionID: "sess2", Project: "proj", Location: "message",
-				Ordinal: 5, OrdinalStart: 5, OrdinalEnd: 5,
+				Ordinal: 5, OrdinalRange: [2]int{5, 5},
 				Snippet: "single-message unit",
 			},
 		},

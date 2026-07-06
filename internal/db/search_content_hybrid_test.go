@@ -450,8 +450,7 @@ func TestSearchContentHybridMatchCarriesUnitRangeAndLineage(t *testing.T) {
 	require.Len(t, page.Matches, 1, "the two legs must fuse into one result")
 	m := page.Matches[0]
 	assert.Equal(t, 2, m.Ordinal, "Ordinal stays the FTS-overridden anchor")
-	assert.Equal(t, 1, m.OrdinalStart, "OrdinalStart spans the containing unit")
-	assert.Equal(t, 2, m.OrdinalEnd, "OrdinalEnd spans the containing unit")
+	assert.Equal(t, [2]int{1, 2}, m.OrdinalRange, "OrdinalRange spans the containing unit")
 	assert.True(t, m.Subordinate, "Subordinate carries the unit flag")
 	assert.Equal(t, "subagent", m.Relationship)
 	assert.Equal(t, "top", m.ParentSessionID)
@@ -556,7 +555,6 @@ func TestSearchContentHybridVectorOnlyMatchCarriesUnitRange(t *testing.T) {
 	require.Len(t, page.Matches, 1, "vector-only hit survives fusion")
 	m := page.Matches[0]
 	assert.Equal(t, 2, m.Ordinal, "vector leg keeps its chunk anchor")
-	assert.Equal(t, 1, m.OrdinalStart)
-	assert.Equal(t, 2, m.OrdinalEnd)
+	assert.Equal(t, [2]int{1, 2}, m.OrdinalRange)
 	assert.False(t, m.Subordinate)
 }

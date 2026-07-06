@@ -116,10 +116,10 @@ func TestSearchContentScopeFiltersSemanticResults(t *testing.T) {
 
 // TestSearchContentSemanticResponseCarriesUnitRangeAndLineage pins the HTTP
 // wire shape for run-grouped semantic hits: ordinal stays the anchor while
-// ordinal_start/ordinal_end, subordinate, and the lineage keys ride along.
-// The fixture's top-level single-message hit sits at ordinal 0, so all of
-// its zero-valued unit/lineage fields are omitted via omitempty; a nonzero
-// single-message hit would still emit ordinal_start/ordinal_end.
+// ordinal_range, subordinate, and the lineage keys ride along. ordinal_range
+// is always present, so the fixture's top-level single-message hit at
+// ordinal 0 still serializes "ordinal_range":[0,0] even though its other
+// zero-valued unit/lineage fields are omitted via omitempty.
 func TestSearchContentSemanticResponseCarriesUnitRangeAndLineage(t *testing.T) {
 	te := setup(t)
 	te.seedSession(t, "top-sess", "proj", 2)
@@ -162,8 +162,7 @@ func TestSearchContentSemanticResponseCarriesUnitRangeAndLineage(t *testing.T) {
 	sub, ok := byID["sub-sess"]
 	require.True(t, ok, "subordinate run hit present")
 	assert.EqualValues(t, 1, sub["ordinal"], "ordinal stays the anchor")
-	assert.EqualValues(t, 1, sub["ordinal_start"])
-	assert.EqualValues(t, 2, sub["ordinal_end"])
+	assert.Equal(t, []any{float64(1), float64(2)}, sub["ordinal_range"])
 	assert.Equal(t, true, sub["subordinate"])
 	assert.Equal(t, "subagent", sub["relationship"])
 	assert.Equal(t, "top-sess", sub["parent_session_id"])
@@ -171,11 +170,12 @@ func TestSearchContentSemanticResponseCarriesUnitRangeAndLineage(t *testing.T) {
 
 	top, ok := byID["top-sess"]
 	require.True(t, ok, "top-level hit present")
+	assert.Equal(t, []any{float64(0), float64(0)}, top["ordinal_range"],
+		"ordinal_range is always present, even for a zero-valued single-message hit")
 	for _, key := range []string{
-		"ordinal_start", "ordinal_end", "subordinate",
-		"relationship", "parent_session_id", "is_sidechain",
+		"subordinate", "relationship", "parent_session_id", "is_sidechain",
 	} {
 		assert.NotContains(t, top, key,
-			"zero-valued unit/lineage keys must be omitted from the wire")
+			"zero-valued lineage keys must be omitted from the wire")
 	}
 }

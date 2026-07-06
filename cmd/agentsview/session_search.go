@@ -235,8 +235,8 @@ func printContentMatchesHuman(w io.Writer, res *service.ContentSearchResult) err
 // multi-message unit renders the range with the anchor marked, e.g.
 // "#12-40 @19".
 func formatMatchOrdinal(m db.ContentMatch) string {
-	if m.OrdinalEnd > m.OrdinalStart {
-		return fmt.Sprintf("#%d-%d @%d", m.OrdinalStart, m.OrdinalEnd, m.Ordinal)
+	if m.OrdinalRange[1] > m.OrdinalRange[0] {
+		return fmt.Sprintf("#%d-%d @%d", m.OrdinalRange[0], m.OrdinalRange[1], m.Ordinal)
 	}
 	return fmt.Sprintf("#%d", m.Ordinal)
 }
