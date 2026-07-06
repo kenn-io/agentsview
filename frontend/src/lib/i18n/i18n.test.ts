@@ -14,6 +14,7 @@ import * as runtime from "../paraglide/runtime.js";
 import en from "../../../messages/en.json";
 import zhCN from "../../../messages/zh-CN.json";
 import zhTW from "../../../messages/zh-TW.json";
+import ko from "../../../messages/ko.json";
 
 describe("i18n locale selection", () => {
   beforeEach(() => {
@@ -29,6 +30,8 @@ describe("i18n locale selection", () => {
     expect(normalizeLocale("zh-TW-TW")).toBe("zh-TW");
     expect(normalizeLocale("zh-tw")).toBe("zh-TW");
     expect(normalizeLocale("zh-Hant-HK")).toBe("zh-TW");
+    expect(normalizeLocale("ko")).toBe("ko");
+    expect(normalizeLocale("ko-KR")).toBe("ko");
   });
 
   it("falls back to English for unsupported locales", () => {
@@ -74,12 +77,13 @@ describe("i18n locale selection", () => {
   });
 
   it("keeps the supported locale list explicit", () => {
-    expect(SUPPORTED_LOCALES).toEqual(["en", "zh-CN", "zh-TW"]);
+    expect(SUPPORTED_LOCALES).toEqual(["en", "zh-CN", "zh-TW", "ko"]);
   });
 
-  it("keeps Simplified Chinese and Traditional Chinese locale keys aligned with English", () => {
+  it("keeps Simplified Chinese, Traditional Chinese, and Korean locale keys aligned with English", () => {
     expect(Object.keys(zhCN).sort()).toEqual(Object.keys(en).sort());
     expect(Object.keys(zhTW).sort()).toEqual(Object.keys(en).sort());
+    expect(Object.keys(ko).sort()).toEqual(Object.keys(en).sort());
   });
 
   it("points auth recovery at pre-auth token sources", () => {
@@ -114,6 +118,13 @@ describe("i18n locale selection", () => {
       count: 12,
       countLabel: "12",
     })).toBe("12 個會話");
+
+    runtime.setLocale("ko", { reload: false });
+    expect(m.nav_sessions()).toBe("세션");
+    expect(m.status_bar_sessions({
+      count: 12,
+      countLabel: "12",
+    })).toBe("세션 12개");
   });
 
   it("selects cardinal plural variants per locale", () => {
@@ -156,6 +167,12 @@ describe("i18n locale selection", () => {
     expect(m.tool_call_group_call_count({ count: 1 })).toBe("1 次 tool call");
     expect(m.tool_call_group_call_count({ count: 3 })).toBe("3 次 tool call");
     expect(m.subagent_inline_message_count({ count: 1 })).toBe("1 條消息");
+
+    // Korean has no plural distinction, so a single variant serves every count.
+    runtime.setLocale("ko", { reload: false });
+    expect(m.tool_call_group_call_count({ count: 1 })).toBe("도구 호출 1회");
+    expect(m.tool_call_group_call_count({ count: 3 })).toBe("도구 호출 3회");
+    expect(m.subagent_inline_message_count({ count: 1 })).toBe("메시지 1개");
   });
 
   it("formats dates with the active Paraglide locale", () => {
