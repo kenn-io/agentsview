@@ -283,15 +283,17 @@ Generation activation always happens under the single writer. Search opens
   generation — if only a building generation exists, it hard-errors with a
   progress percentage rather than silently querying partial data.
 - **Hits are unit-level, anchored to a message.** A semantic hit resolves to
-  session + `ordinal_start`..`ordinal_end` + an anchor ordinal + a snippet.
-  The existing required `ordinal` field is kept and redefined as the anchor
-  ordinal — backward compatible, since for user documents and one-message runs
-  it is exactly the old per-message value. `ordinal_start`, `ordinal_end`,
+  session + `ordinal_range` (the matched unit's span) + an anchor ordinal + a
+  snippet. The existing required `ordinal` field is kept and redefined as the
+  anchor ordinal — backward compatible, since for user documents and
+  one-message runs it is exactly the old per-message value. `ordinal_range`,
   `subordinate`, and the lineage fields (`relationship`, `parent_session_id`,
-  `is_sidechain`) are additive, populated only by the semantic/hybrid modes;
-  lexical modes emit byte-identical JSON to before. `--around` and the
-  context-cursor flow anchor on the anchor ordinal — the message-window APIs
-  are unchanged on every backend.
+  `is_sidechain`) are carried by every mode: semantic/hybrid unit rows take
+  theirs from the mirror unit, lexical rows and hybrid unit-less rows from the
+  structural derivation described in
+  [Conversation-unit citations](#conversation-unit-citations). `--around` and
+  the context-cursor flow anchor on the anchor ordinal — the message-window
+  APIs are unchanged on every backend.
 - **`scope` governs unit visibility and supersedes `include_children`.**
   `scope=top|all|subordinate` (default `all`) filters each leg's hits before
   the RRF merge and before the limit. The hybrid FTS leg fetches additional
@@ -340,6 +342,128 @@ Generation activation always happens under the single writer. Search opens
   the requested limit. At small corpora or narrow filters this can return
   fewer than `--limit` results even though more exist — a known v1 tradeoff
   (see [Limitations](/semantic-search/#limitations)).
+
+## Conversation-unit citations
+
+Every content-search match — every mode, every backend — carries a
+conversation-unit citation: `OrdinalRange [2]int` with `json:"ordinal_range"`,
+always present, never omitempty (`[ordinal, ordinal]` when the anchor is its own
+unit; the array form deliberately avoids the omitempty-integer trap, so a unit
+starting at ordinal 0 still serializes its start), plus the
+`subordinate`/`relationship`/`parent_session_id`/`is_sidechain` lineage fields
+(which keep `omitempty` — false/empty means top-level/no-lineage,
+unambiguously). Row cardinality stays mode-specific — lexical
+(substring/regex/FTS) returns one row per matching source row with unchanged
+snippets and pagination, semantic one row per embedded unit, hybrid one row per
+unit with the FTS-anchor override untouched — only the citation metadata is
+uniform. The HTTP response serializes `db.ContentMatch` directly; the MCP
+`contentMatch` mirror struct carries the same fields; the CLI renders
+`#start-end @anchor` for multi-message ranges plus a `sub` marker, in any mode.
+
+### Per-mode provenance
+
+`ordinal_range` always means "conversation unit", not always "embedding unit":
+
+- **Semantic and hybrid unit rows** carry the embedded unit's span from the
+  vectors.db mirror — embedding identity, including build scope.
+- **Lexical rows and hybrid unit-less rows** carry a structurally derived unit
+  computed from the messages/sessions tables only. Deterministic, never
+  depends on whether a vector index exists or is fresh — lexical output must
+  not flicker with index state.
+
+Derived and embedded spans coincide except where embedding scope diverges from
+structure: sessions excluded from the build (`include_automated = false`) and
+messages newer than the last mirror refresh. There is deliberately no provenance
+discriminator field on the wire — the mode implies it.
+
+Hybrid unit-less rows (FTS hits whose message resolves to no mirror unit) are
+classified **before** scope filtering and the RRF merge, so `scope` exclusion,
+the subordinate rank penalty, and annotation treat a unit-less sidechain hit
+exactly as lexical mode classifies the same anchor, instead of always passing it
+as top-level.
+
+### Derived-unit rules
+
+The structural rules mirror `ScanEmbeddableUnits`'s reducer, so derived spans
+equal embedding-unit spans on in-scope data. An **embeddable user row** is
+`role = 'user' AND is_system = 0` with content not system-prefixed (the dialect
+`SystemPrefixSQL` predicate); an **embeddable assistant row** is the same with
+`role = 'assistant'` — the prefix predicate constrains only user rows, so a
+system-prefixed assistant row stays embeddable and derives its run span. For an
+anchor message row at ordinal `o` (`tool_input`/`tool_result` matches anchor on
+the tool call's message row):
+
+1. Embeddable user row → `[o, o]` (user messages are their own units).
+1. Embeddable assistant row → the maximal stretch of embeddable assistant rows
+   containing `o`, bounded exclusively by the nearest embeddable user row on
+   either side, the session edges, and the nearest embeddable assistant row
+   whose `is_sidechain` differs (runs never mix sidechain values). The
+   endpoints are the first and last **member** ordinals — the span may cover
+   non-member ordinals in between (system rows inside a run), exactly like the
+   reducer's `runUnit`.
+1. Anything else (system rows, system-prefixed user rows, other roles) →
+   `[o, o]`: the row belongs to no conversation unit, so the citation is the
+   message itself.
+
+`tool_result_events` matches locate their anchor message row with a post-scan
+secondary lookup, never a join — the events branches join only `sessions`, and
+an inner join would drop matches whose anchor row is missing, changing
+cardinality. An orphan event with no locatable anchor row falls back to `[o, o]`
+with `is_sidechain` false; session lineage still applies.
+
+Automation gating is deliberately ignored: derivation is structural, so matches
+inside automated sessions still get real ranges. The invariant, pinned by the
+reducer-equivalence test in `internal/db/unit_range_test.go`: derivation at any
+member ordinal of any unit produced by
+`ScanEmbeddableUnits(include_automated = true)` returns exactly that unit's
+`[Ordinal, OrdinalEnd]`.
+
+`subordinate` for derived rows uses the reducer's formula: session-subordinate
+(`relationship_type IN ('subagent','fork')`, or parent-linked with
+`relationship_type <> 'continuation'`) OR the anchor row's `is_sidechain`.
+
+### Seam architecture and batching
+
+Derivation is a pure Go pass in `internal/db` (`DeriveUnitRanges`) over a
+backend-neutral seam, `UnitBoundsQuerier`, with two batched methods:
+`NearestUserBoundaries` (the nearest exclusive embeddable-user boundaries around
+each probe) and `RunExtents` (the first/last member ordinals of the anchor's
+same-sidechain run within an exclusive interval). `internal/db`,
+`internal/postgres`, and `internal/duckdb` each implement the seam with their
+own dialect SQL; `internal/db` never references the other stores, and co-located
+parity and reducer-parity tests in each package pin identical observable output
+across backends.
+
+- **Shared resolvers, SQL-only backends.** `ResolveUserBoundaries` and
+  `ResolveRunExtents` own the orchestration — probe dedup, chunking at the
+  dialect's bind-variable limit, boundary resolution, alignment and invariant
+  checks — so each backend supplies only batched SQL (one statement per chunk
+  of batched correlated point lookups, never one per probe).
+- **Post-scan, O(page).** The lexical search SQL before the LIMIT is untouched;
+  anchor classification and session lineage are fetched after truncation, and
+  derivation runs over the returned page only. Rule-1, rule-3, and missing
+  anchors resolve locally with no query.
+- **Dense/sparse boundary flows.** Rule-2 (embeddable assistant) anchors are
+  deduplicated by `(session, ordinal, sidechain)`. `NearestUserBoundaries`
+  runs only on session-dense pages — at least `UnitBoundsFlowFactor` probes
+  per distinct session on average — where pre-fetched user bounds pay for
+  themselves by pruning stop scans and splitting probe groups at unit
+  boundaries; sparse pages probe with sentinel bounds and lean on
+  `RunExtents`' built-in user-row stops (real bounds are an optimization,
+  never a correctness requirement).
+- **Median-representative run sharing.** Probes with the same
+  `(session, bounds, sidechain)` group key that land in the same run have
+  identical extents, so the first `RunExtents` round queries one
+  representative per group — the group's ordinal median, since page anchors
+  cluster in hot runs — and hands its extent to every group sibling the extent
+  covers (sound because a same-sidechain member inside the extent provably
+  belongs to that run). Siblings in other runs resolve in one second batch, so
+  a page costs at most one boundary statement and two `RunExtents` rounds
+  regardless of how its anchors spread. Twenty hits in one monologue cost one
+  probe.
+- **Cost.** Measured overhead on the gated content-search benchmarks is
+  sub-millisecond-scale on a 50-hit page; the benchmarks live in `internal/db`
+  and are CI-gated.
 
 ## Error taxonomy
 

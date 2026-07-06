@@ -226,23 +226,42 @@ abc123  #42 score=0.87  myapp  message
 
 ### Hit shape: ranges and anchors
 
-A semantic or hybrid hit is a matched *unit* — a user message, or a run of
-assistant messages — anchored to one specific message inside it:
+Every content-search match, in every mode, cites a *conversation unit* — a user
+message, or a run of assistant messages between user turns — anchored to one
+specific message inside it:
 
-- `ordinal` is the **anchor**: the member message the matched text belongs to.
-  For user messages and single-message runs it's the message's own ordinal,
-  same as every other search mode.
-- `ordinal_start` / `ordinal_end` span the whole matched unit. These are
-  additive fields: they equal `ordinal` for single-message matches, and
-  lexical modes (substring/regex/FTS) never emit them, so their JSON output is
-  unchanged. Because the fields are `omitempty`, a unit starting at ordinal 0
-  omits `ordinal_start`; treat a missing key as zero.
+- `ordinal` is the **anchor**: the exact matched message, same as every other
+  release. For user messages and single-message units it's the message's own
+  ordinal.
+- `ordinal_range` is `[start, end]` — the conversation unit containing the
+  anchor. It is always present, never omitted: a single-message unit
+  serializes `[ordinal, ordinal]`, and a unit starting at ordinal 0 still
+  serializes its start.
 - `subordinate`, `relationship`, `parent_session_id`, and `is_sidechain` carry
-  the hit's lineage: whether it came from a sidechain or a delegated
-  (subagent/fork) session, and which parent session to corroborate against.
+  the hit's lineage in every mode: whether it came from a sidechain or a
+  delegated (subagent/fork) session, and which parent session to corroborate
+  against. These stay `omitempty`; a missing key unambiguously means top-level
+  / no lineage.
+
+What the range *means* depends on the mode:
+
+- **Semantic hits and hybrid unit hits** carry the embedded unit's span from the
+  vector index — the identity of the document that actually matched.
+- **Substring, regex, and FTS matches** (and hybrid hits whose message has no
+  embedded unit) carry a **structurally derived** unit computed from the
+  archive's messages alone, using the same user-message/assistant-run rules
+  the index uses. Lexical citations therefore need no vector index and never
+  change with index state. Derived and embedded spans coincide except where
+  the index's scope diverges from structure: sessions excluded from the build
+  (`include_automated = false`) and messages newer than the last index
+  refresh.
+
+Lexical row cardinality is unchanged: substring/regex/FTS still return one row
+per matching source row, with the same snippets — the range and lineage fields
+are additive metadata on each row.
 
 Human output renders a multi-message unit as `#<start>-<end> @<anchor>` and
-marks subordinate hits with `sub`:
+marks subordinate hits with `sub`; both can appear in any mode:
 
 ```text
 def456  #12-40 @19 sub score=0.71  myapp  message
@@ -315,10 +334,10 @@ agentsview session messages <session-id> --around 42 --role user,assistant
 The typical workflow: run `session search --semantic "<query>"`, take the
 `session_id`/`ordinal` off a hit, then
 `session messages <session-id> --around <ordinal>` to read what led up to it and
-what followed. For a hit spanning a multi-message run, `ordinal` is the anchor —
-the member the matched text belongs to — so centering `--around` on it lands in
-the right part of the run; widen `--before`/`--after` toward
-`ordinal_start`/`ordinal_end` to read the whole stretch.
+what followed. For a hit whose unit spans a multi-message run, `ordinal` is the
+anchor — the member the matched text belongs to — so centering `--around` on it
+lands in the right part of the run; widen `--before`/`--after` toward the ends
+of `ordinal_range` to read the whole stretch.
 
 ## Error taxonomy
 

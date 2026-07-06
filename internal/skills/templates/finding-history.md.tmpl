@@ -29,9 +29,10 @@ the archive crawl, then synthesizes and verifies.
    (h/d/w/m/y units; `m` is months, not minutes). Widen or drop `--since`
    if results are thin.
 4. Triage from the inline `context_before`/`context_after` in the results.
-   A hybrid/semantic hit may span a run of assistant messages
-   (`ordinal_start`-`ordinal_end`, with `ordinal` as the anchor message);
-   center the window on the anchor. Deep-dive only the strongest candidates:
+   Every hit, in every mode, carries an `ordinal_range` conversation-unit
+   span (`[start, end]`; a run of assistant messages when end > start) with
+   `ordinal` as the anchor message; center the window on the anchor.
+   Deep-dive only the strongest candidates:
 
    ```bash
    agentsview session messages <session-id> --around <ordinal> --before 8 --after 8 --role user,assistant --json
@@ -39,9 +40,9 @@ the archive crawl, then synthesizes and verifies.
 
 5. Give the search a mechanical budget: 4-6 probes, top 2-4 sessions, one
    window per session, then stop and report.
-6. Answer from evidence, citing session IDs and ordinals. For a run hit,
-   cite the session plus the `ordinal_start`-`ordinal_end` range, not just
-   the single anchor ordinal.
+6. Answer from evidence, citing session IDs and ordinals. Cite the session
+   plus the hit's `ordinal_range` with the `@ordinal` anchor (e.g.
+   `#12-40 @19`), in every mode — not just the single anchor ordinal.
 7. A hit marked `subordinate` (sidechain or subagent/fork content) is
    supporting evidence only: corroborate it from its parent session
    (`parent_session_id`) before treating it as a decision or instruction.

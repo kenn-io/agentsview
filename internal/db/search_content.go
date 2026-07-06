@@ -76,12 +76,13 @@ type ContentMatch struct {
 	// containing the anchor; [ordinal, ordinal] when the anchor is its own
 	// unit. Ordinal stays the anchor in every mode.
 	OrdinalRange [2]int `json:"ordinal_range"`
-	// Subordinate marks a "semantic"/"hybrid" unit classified as
-	// subordinate (sidechain run, or subagent/fork session).
+	// Subordinate marks a match whose unit is classified subordinate
+	// (sidechain run, or subagent/fork session), in every mode.
 	Subordinate bool `json:"subordinate,omitempty"`
 	// Relationship and ParentSessionID carry the matched session's lineage
-	// and Sidechain the anchor message's is_sidechain flag, populated only
-	// by the "semantic"/"hybrid" modes (enrichSemanticHits).
+	// and Sidechain the anchor message's is_sidechain flag, populated in
+	// every mode (enrichSemanticHits for semantic/hybrid,
+	// deriveLexicalUnits for substring/regex/fts).
 	Relationship    string `json:"relationship,omitempty"`
 	ParentSessionID string `json:"parent_session_id,omitempty"`
 	Sidechain       bool   `json:"is_sidechain,omitempty"`

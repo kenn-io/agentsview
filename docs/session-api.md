@@ -537,6 +537,7 @@ agentsview session search <pattern> [flags]
       "session_id": "abc-123",
       "project": "myapp",
       "ordinal": 17,
+      "ordinal_range": [12, 24],
       "location": "tool_result",
       "tool_name": "Bash",
       "snippet": "...connecting to db with token ***REDACTED***..."
@@ -585,18 +586,22 @@ require an embedding index and return a single ranked page
 (`--cursor` is rejected) — see [Semantic Search](/semantic-search/)
 for setup, scoring, and limitations.
 
-Semantic and hybrid matches carry additive fields the other modes
-never emit: `score`, plus the unit shape described in
-[Hit shape](/semantic-search/#hit-shape-ranges-and-anchors) —
-`ordinal_start`/`ordinal_end` (the matched unit's span; `ordinal`
-stays the anchor message in every mode), `subordinate`,
-`relationship`, `parent_session_id`, and `is_sidechain`. All are
-`omitempty`: a zero `ordinal_start` is omitted from the JSON, so
-treat a missing key as 0. Lexical (substring/regex/FTS) responses
-are byte-identical to previous releases. `--scope` is rejected
-outside `--semantic`/`--hybrid`; in those modes it supersedes
-`--include-children`, and subagent/fork-typed or parent-linked
-sessions are exempt from the default one-shot exclusion.
+Every match, in every mode, carries the conversation-unit
+citation described in
+[Hit shape](/semantic-search/#hit-shape-ranges-and-anchors):
+`ordinal_range` — `[start, end]` of the conversation unit
+containing the match, always present, `[ordinal, ordinal]` when
+the match is its own unit — plus the lineage fields
+`subordinate`, `relationship`, `parent_session_id`, and
+`is_sidechain`. `ordinal` stays the anchor (the exact matched
+message) in every mode. Only the lineage fields are `omitempty`:
+a missing key unambiguously means top-level with no lineage,
+while `ordinal_range` is never omitted, even at `[0, 0]`.
+`score` is the one field only `--semantic`/`--hybrid` emit.
+`--scope` is rejected outside `--semantic`/`--hybrid`; in those
+modes it supersedes `--include-children`, and
+subagent/fork-typed or parent-linked sessions are exempt from
+the default one-shot exclusion.
 
 Snippets carry ~60 characters of context on each side of the
 match, snapped to rune boundaries. Any substring that matches

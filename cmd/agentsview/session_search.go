@@ -229,11 +229,11 @@ func printContentMatchesHuman(w io.Writer, res *service.ContentSearchResult) err
 	return nil
 }
 
-// formatMatchOrdinal renders a match's position. Single-message matches
-// (every lexical mode, and semantic/hybrid hits on single-message units)
-// keep the plain "#<ordinal>" form; a semantic/hybrid hit spanning a
-// multi-message unit renders the range with the anchor marked, e.g.
-// "#12-40 @19".
+// formatMatchOrdinal renders a match's position. A match whose unit is a
+// single message keeps the plain "#<ordinal>" form; a match whose
+// conversation unit spans multiple messages — possible in every mode now
+// that lexical rows carry derived unit ranges — renders the range with the
+// anchor marked, e.g. "#12-40 @19".
 func formatMatchOrdinal(m db.ContentMatch) string {
 	if m.OrdinalRange[1] > m.OrdinalRange[0] {
 		return fmt.Sprintf("#%d-%d @%d", m.OrdinalRange[0], m.OrdinalRange[1], m.Ordinal)
