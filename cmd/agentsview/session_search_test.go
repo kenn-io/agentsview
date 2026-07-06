@@ -150,6 +150,61 @@ func TestSessionSearchHybridWithToolSource(t *testing.T) {
 	assert.Contains(t, err.Error(), "messages only")
 }
 
+// TestSessionSearchScopeRequiresSemanticOrHybrid verifies --scope fails
+// fast (before any service/DB access) when set without --semantic/--hybrid.
+func TestSessionSearchScopeRequiresSemanticOrHybrid(t *testing.T) {
+	for _, args := range [][]string{
+		{"needle", "--scope", "top"},
+		{"needle", "--fts", "--scope", "all"},
+		{"needle", "--regex", "--scope", "subordinate"},
+	} {
+		cmd := newSessionSearchCommand()
+		cmd.SetArgs(args)
+		err := cmd.Execute()
+		require.Error(t, err, "args %v", args)
+		assert.Contains(t, err.Error(), "--semantic or --hybrid", "args %v", args)
+	}
+}
+
+// TestSessionSearchScopeRejectsInvalidValue verifies the value gate fires
+// at the CLI boundary rather than deep in the store.
+func TestSessionSearchScopeRejectsInvalidValue(t *testing.T) {
+	cmd := newSessionSearchCommand()
+	cmd.SetArgs([]string{"needle", "--semantic", "--scope", "bogus"})
+	err := cmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "top, all, or subordinate")
+}
+
+func TestValidateScopeFlag(t *testing.T) {
+	tests := []struct {
+		name                   string
+		scope                  string
+		useSemantic, useHybrid bool
+		wantErr                string
+	}{
+		{name: "empty scope always valid"},
+		{name: "top with semantic", scope: "top", useSemantic: true},
+		{name: "all with hybrid", scope: "all", useHybrid: true},
+		{name: "subordinate with semantic", scope: "subordinate", useSemantic: true},
+		{name: "scope without mode flag", scope: "top",
+			wantErr: "--semantic or --hybrid"},
+		{name: "invalid value", scope: "bogus", useSemantic: true,
+			wantErr: "top, all, or subordinate"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateScopeFlag(tt.scope, tt.useSemantic, tt.useHybrid)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
 func TestPrintContentMatchesHumanShowsScoreForScoredMatches(t *testing.T) {
 	score := 0.834
 	res := &service.ContentSearchResult{

@@ -16,7 +16,7 @@ import (
 func newSessionSearchCommand() *cobra.Command {
 	var (
 		useRegex, useFTS, useSemantic, useHybrid bool
-		in                                       string
+		in, scope                                string
 		excludeSystem, reveal                    bool
 		project, excludeProject, agent           string
 		machine, date, dateFrom, dateTo          string
@@ -40,6 +40,9 @@ func newSessionSearchCommand() *cobra.Command {
 			mode, err := resolveContentSearchMode(
 				useRegex, useFTS, useSemantic, useHybrid, sources)
 			if err != nil {
+				return err
+			}
+			if err := validateScopeFlag(scope, useSemantic, useHybrid); err != nil {
 				return err
 			}
 			activeSince, err = resolveSinceFlag(since, activeSince)
@@ -69,6 +72,7 @@ func newSessionSearchCommand() *cobra.Command {
 				IncludeChildren:  includeChildren,
 				IncludeAutomated: includeAutomated,
 				IncludeOneShot:   includeOneShot,
+				Scope:            scope,
 				Limit:            limit,
 				Cursor:           cursor,
 				Context:          contextN,
@@ -109,6 +113,8 @@ func newSessionSearchCommand() *cobra.Command {
 	flags.StringVar(&activeSince, "active-since", "", "Active since RFC3339 timestamp")
 	flags.StringVar(&since, "since", "",
 		"Only sessions active since a relative duration (12h, 14d, 2w, 3m = 3 months, 1y) or YYYY-MM-DD")
+	flags.StringVar(&scope, "scope", "",
+		"Semantic/hybrid result scope: top, all, or subordinate (default all)")
 	flags.BoolVar(&includeChildren, "include-children", false, "Include subagent sessions")
 	flags.BoolVar(&includeAutomated, "include-automated", false, "Include automated sessions")
 	flags.BoolVar(&includeOneShot, "include-one-shot", false, "Include one-shot sessions")
@@ -117,6 +123,22 @@ func newSessionSearchCommand() *cobra.Command {
 	flags.IntVar(&contextN, "context", 0,
 		"Include N messages of context before and after each match (max 10)")
 	return cmd
+}
+
+// validateScopeFlag gates --scope at the CLI boundary: it is only
+// meaningful for --semantic/--hybrid and must name a known scope.
+func validateScopeFlag(scope string, useSemantic, useHybrid bool) error {
+	if scope == "" {
+		return nil
+	}
+	if !useSemantic && !useHybrid {
+		return fmt.Errorf("--scope requires --semantic or --hybrid")
+	}
+	switch scope {
+	case "top", "all", "subordinate":
+		return nil
+	}
+	return fmt.Errorf("--scope must be top, all, or subordinate (got %q)", scope)
 }
 
 // resolveContentSearchMode picks the search mode from the mutually exclusive

@@ -38,6 +38,14 @@ type ContentSearchFilter struct {
 	// GitBranch is a branchListSep-joined list of opaque (project, branch) tokens (EncodeBranchFilterToken).
 	GitBranch string
 
+	// Scope governs unit visibility for modes "semantic" and "hybrid":
+	// "top" drops subordinate units (sidechain runs, subagent/fork
+	// sessions), "subordinate" keeps only them, and "all" (or "") keeps
+	// both. In those modes it supersedes IncludeChildren, which the other
+	// modes keep honoring; validation happens at the API/CLI boundary and
+	// an unknown value here is a SearchInputError.
+	Scope string
+
 	// RevealSecrets returns raw snippets. It defaults false so snippets are
 	// secret-redacted unless a caller (the localhost-gated reveal path)
 	// explicitly opts out; a forgotten flag fails safe.
@@ -116,6 +124,17 @@ func contentSessionFilter(f ContentSearchFilter) SessionFilter {
 // (no LIMIT in a SELECT id subquery), so they are left unset.
 func sessionScopeSubquery(f ContentSearchFilter) (string, []any) {
 	where, args := buildSessionFilter(contentSessionFilter(f))
+	return "session_id IN (SELECT id FROM sessions WHERE " + where + ")", args
+}
+
+// semanticSessionScopeSubquery is sessionScopeSubquery minus the
+// sidebar-child exclusion: semantic/hybrid unit visibility is governed by
+// Scope (which supersedes IncludeChildren), so the hybrid FTS leg must see
+// the same universe the vector leg does — every other predicate
+// (project, agent, dates, automated, one-shot) still applies to each
+// session's own row.
+func semanticSessionScopeSubquery(f ContentSearchFilter) (string, []any) {
+	where, args := buildSessionBaseFilter(contentSessionFilter(f))
 	return "session_id IN (SELECT id FROM sessions WHERE " + where + ")", args
 }
 
@@ -685,12 +704,37 @@ func ValidateSemanticFilter(f ContentSearchFilter) error {
 		return searchInputErrorf(
 			"semantic search returns a single ranked page; cursor pagination is not supported")
 	}
+	switch f.Scope {
+	case "", "top", "all", "subordinate":
+	default:
+		return searchInputErrorf(
+			"search: invalid scope %q (valid: top, all, subordinate)", f.Scope)
+	}
 	return nil
+}
+
+// scopeExcludes reports whether a unit with the given subordinate flag
+// falls outside the requested scope: "top" excludes subordinate units,
+// "subordinate" excludes top-level ones, and ""/"all" exclude nothing.
+// Scope filtering runs on each leg's hits before the RRF merge (and before
+// the limit), so a scoped search still fills up to Limit from the
+// over-fetched candidates instead of returning a post-truncation remnant.
+func scopeExcludes(scope string, subordinate bool) bool {
+	switch scope {
+	case "top":
+		return subordinate
+	case "subordinate":
+		return !subordinate
+	default:
+		return false
+	}
 }
 
 // searchContentSemantic runs mode "semantic": it over-fetches ranked hits
 // from the wired VectorSearcher, keeps hits whose session passes the
-// filter's metadata scope (loaded with one query over the hit session IDs),
+// filter's metadata scope (loaded with one query over the hit session IDs;
+// the sidebar-child exclusion is lifted — f.Scope governs subordinate-unit
+// visibility instead, dropping hits scopeExcludes rules out),
 // routes the surviving ranking through the same RRF merge hybrid uses as a
 // one-leg fusion (so subordinate units are penalized identically; matches
 // still carry the searcher's own scores), enriches surviving (session_id,
@@ -722,7 +766,7 @@ func (db *DB) searchContentSemantic(
 	}
 	surviving := make([]VectorHit, 0, len(hits))
 	for _, h := range hits {
-		if allowed[h.SessionID] {
+		if allowed[h.SessionID] && !scopeExcludes(f.Scope, h.Subordinate) {
 			surviving = append(surviving, h)
 		}
 	}
@@ -914,10 +958,11 @@ func (db *DB) searchContentHybrid(
 }
 
 // hybridVectorLeg over-fetches k semantic unit hits, drops any whose session
-// fails the filter's metadata scope (the same lookup searchContentSemantic
-// uses), and returns the survivors as a rank-ordered fusion leg keyed by
-// unit. Session-set filtering runs before the merge so reciprocal-rank
-// fusion only ranks eligible units.
+// fails the filter's metadata scope (the same child-exclusion-lifted lookup
+// searchContentSemantic uses) or whose subordinate flag falls outside
+// f.Scope, and returns the survivors as a rank-ordered fusion leg keyed by
+// unit. Both filters run before the merge so reciprocal-rank fusion only
+// ranks eligible units and a scoped search can still fill the limit.
 func (db *DB) hybridVectorLeg(
 	ctx context.Context, f ContentSearchFilter, searcher VectorSearcher, k int,
 ) (hybridLeg, error) {
@@ -934,7 +979,7 @@ func (db *DB) hybridVectorLeg(
 		return hybridLeg{}, err
 	}
 	for _, h := range hits {
-		if !allowed[h.SessionID] {
+		if !allowed[h.SessionID] || scopeExcludes(f.Scope, h.Subordinate) {
 			continue
 		}
 		key := unitFusionKey(h.SessionID, h.OrdinalStart)
@@ -951,8 +996,10 @@ func (db *DB) hybridVectorLeg(
 
 // hybridFTSLeg runs a rank-ordered FTS query over the embedded universe
 // (role user/assistant, is_system = 0, system-prefix excluded -- the same
-// predicate ScanEmbeddableUnits uses), scoped to qualifying sessions in SQL,
-// resolves each message hit to its containing unit, and returns up to k hits
+// predicate ScanEmbeddableUnits uses), scoped in SQL to sessions passing
+// the child-exclusion-lifted filter (semanticSessionScopeSubquery, so both
+// hybrid legs see the same universe), resolves each message hit to its
+// containing unit, drops units outside f.Scope, and returns up to k hits
 // as a rank-ordered fusion leg. A hit inside a unit adopts the unit's fusion
 // key and subordinate flag while keeping its own message ordinal as the
 // anchor and its FTS snippet for display (the FTS-anchor override); several
@@ -962,7 +1009,7 @@ func (db *DB) hybridVectorLeg(
 func (db *DB) hybridFTSLeg(
 	ctx context.Context, f ContentSearchFilter, searcher VectorSearcher, k int,
 ) (hybridLeg, error) {
-	scope, scopeArgs := sessionScopeSubquery(f)
+	scope, scopeArgs := semanticSessionScopeSubquery(f)
 	query := fmt.Sprintf(`
 		SELECT m.session_id, m.ordinal,
 		       snippet(messages_fts, 0, '', '', '...', 32) AS snip
@@ -1015,6 +1062,9 @@ func (db *DB) hybridFTSLeg(
 		if units[i].DocKey != "" {
 			key = unitFusionKey(units[i].SessionID, units[i].OrdinalStart)
 			subordinate = units[i].Subordinate
+		}
+		if scopeExcludes(f.Scope, subordinate) {
+			continue
 		}
 		if _, seen := leg.display[key]; seen {
 			continue
@@ -1091,19 +1141,21 @@ func uniqueSessionIDs(hits []VectorHit) []string {
 
 // semanticAllowedSessionIDs runs one query per maxSQLVars-sized chunk of ids
 // returning the subset that pass the ContentSearchFilter's metadata scope
-// (project, agent, date range, one-shot/automated, ...), reusing
-// buildSessionFilter via the same SessionFilter mapping sessionScopeSubquery
-// uses so the two paths cannot drift apart. Chunking keeps each query's bind
-// count under SQLite's 999-variable limit: a semantic overfetch can surface
-// hits from thousands of distinct sessions, well past a single IN clause's
-// budget.
+// (project, agent, date range, one-shot/automated, ...), reusing the same
+// SessionFilter mapping sessionScopeSubquery uses so the two paths cannot
+// drift apart. Like semanticSessionScopeSubquery it deliberately omits the
+// sidebar-child exclusion: in semantic/hybrid modes Scope supersedes
+// IncludeChildren, so subordinate units stay visible to the vector leg.
+// Chunking keeps each query's bind count under SQLite's 999-variable limit:
+// a semantic overfetch can surface hits from thousands of distinct
+// sessions, well past a single IN clause's budget.
 func (db *DB) semanticAllowedSessionIDs(
 	ctx context.Context, f ContentSearchFilter, ids []string,
 ) (map[string]bool, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	where, filterArgs := buildSessionFilter(contentSessionFilter(f))
+	where, filterArgs := buildSessionBaseFilter(contentSessionFilter(f))
 	query := "SELECT id FROM sessions WHERE " + where + " AND id IN "
 
 	allowed := make(map[string]bool, len(ids))

@@ -736,6 +736,12 @@ func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
 			want:   []string{"substring", "regex", "fts", "semantic", "hybrid"},
 		},
 		{
+			path:   "/api/v1/search/content",
+			method: "get",
+			name:   "scope",
+			want:   []string{"top", "all", "subordinate"},
+		},
+		{
 			path:   "/api/v1/sessions/{id}/md",
 			method: "get",
 			name:   "depth",

@@ -152,6 +152,11 @@ type ContentSearchRequest struct {
 	// GitBranch is a branchListSep-joined list of opaque (project, branch) tokens (EncodeBranchFilterToken).
 	GitBranch string
 
+	// Scope governs semantic/hybrid unit visibility ("top", "all", or
+	// "subordinate"; "" means "all") and supersedes IncludeChildren in
+	// those modes. See db.ContentSearchFilter.Scope.
+	Scope string `json:"scope,omitempty"`
+
 	Limit  int `json:"limit,omitempty"`
 	Cursor int `json:"cursor,omitempty"`
 }

@@ -760,6 +760,7 @@ func (b *directBackend) SearchContent(
 		IncludeChildren:  req.IncludeChildren,
 		IncludeAutomated: req.IncludeAutomated,
 		IncludeOneShot:   req.IncludeOneShot,
+		Scope:            req.Scope,
 		// The store builds snippets from the full source field and redacts
 		// secrets (including ones straddling the snippet window) unless reveal
 		// is set. Redacting the pre-truncated snippet here would miss those.

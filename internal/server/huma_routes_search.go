@@ -21,6 +21,8 @@ type searchSort string
 
 type contentSearchMode string
 
+type contentSearchScope string
+
 type searchInput struct {
 	Query   string     `query:"q" required:"true" doc:"Search query"`
 	Project string     `query:"project" doc:"Filter by project"`
@@ -30,27 +32,28 @@ type searchInput struct {
 }
 
 type contentSearchInput struct {
-	Pattern          string            `query:"pattern" required:"true" doc:"Pattern to search for"`
-	Mode             contentSearchMode `query:"mode" enum:"substring,regex,fts,semantic,hybrid" doc:"Search mode"`
-	SearchIntent     string            `header:"X-AgentsView-Search-Intent" doc:"Required for semantic/hybrid GET searches"`
-	In               string            `query:"in" doc:"Comma-separated content sources"`
-	ExcludeSystem    bool              `query:"exclude_system" doc:"Exclude system messages"`
-	Reveal           bool              `query:"reveal" doc:"Return unredacted secret matches for localhost callers"`
-	Project          string            `query:"project" doc:"Filter by project"`
-	ExcludeProject   string            `query:"exclude_project" doc:"Exclude a project"`
-	Machine          string            `query:"machine" doc:"Filter by machine"`
-	GitBranch        string            `query:"git_branch" doc:"Filter by git branch; opaque (project, branch) tokens from the /branches endpoint"`
-	Agent            string            `query:"agent" doc:"Filter by agent"`
-	Date             string            `query:"date" format:"date" doc:"Filter to a single YYYY-MM-DD date"`
-	DateFrom         string            `query:"date_from" format:"date" doc:"Filter start date"`
-	DateTo           string            `query:"date_to" format:"date" doc:"Filter end date"`
-	ActiveSince      string            `query:"active_since" format:"date-time" doc:"Filter sessions active since this RFC3339 timestamp"`
-	IncludeChildren  bool              `query:"include_children" doc:"Include child sessions"`
-	IncludeAutomated bool              `query:"include_automated" doc:"Include automated sessions"`
-	IncludeOneShot   bool              `query:"include_one_shot" doc:"Include one-shot sessions"`
-	Limit            int               `query:"limit" minimum:"0" doc:"Maximum number of results"`
-	Cursor           int               `query:"cursor" minimum:"0" doc:"Pagination cursor"`
-	Context          int               `query:"context" doc:"Include N messages of context before and after each match (max 10)"`
+	Pattern          string             `query:"pattern" required:"true" doc:"Pattern to search for"`
+	Mode             contentSearchMode  `query:"mode" enum:"substring,regex,fts,semantic,hybrid" doc:"Search mode"`
+	Scope            contentSearchScope `query:"scope" enum:"top,all,subordinate" doc:"Semantic/hybrid result scope: top, all, or subordinate (default all)"`
+	SearchIntent     string             `header:"X-AgentsView-Search-Intent" doc:"Required for semantic/hybrid GET searches"`
+	In               string             `query:"in" doc:"Comma-separated content sources"`
+	ExcludeSystem    bool               `query:"exclude_system" doc:"Exclude system messages"`
+	Reveal           bool               `query:"reveal" doc:"Return unredacted secret matches for localhost callers"`
+	Project          string             `query:"project" doc:"Filter by project"`
+	ExcludeProject   string             `query:"exclude_project" doc:"Exclude a project"`
+	Machine          string             `query:"machine" doc:"Filter by machine"`
+	GitBranch        string             `query:"git_branch" doc:"Filter by git branch; opaque (project, branch) tokens from the /branches endpoint"`
+	Agent            string             `query:"agent" doc:"Filter by agent"`
+	Date             string             `query:"date" format:"date" doc:"Filter to a single YYYY-MM-DD date"`
+	DateFrom         string             `query:"date_from" format:"date" doc:"Filter start date"`
+	DateTo           string             `query:"date_to" format:"date" doc:"Filter end date"`
+	ActiveSince      string             `query:"active_since" format:"date-time" doc:"Filter sessions active since this RFC3339 timestamp"`
+	IncludeChildren  bool               `query:"include_children" doc:"Include child sessions"`
+	IncludeAutomated bool               `query:"include_automated" doc:"Include automated sessions"`
+	IncludeOneShot   bool               `query:"include_one_shot" doc:"Include one-shot sessions"`
+	Limit            int                `query:"limit" minimum:"0" doc:"Maximum number of results"`
+	Cursor           int                `query:"cursor" minimum:"0" doc:"Pagination cursor"`
+	Context          int                `query:"context" doc:"Include N messages of context before and after each match (max 10)"`
 }
 
 func (s *Server) humaSearch(
@@ -100,6 +103,10 @@ func (s *Server) humaSearchContent(
 		return nil, apiError(http.StatusForbidden,
 			"semantic and hybrid search require "+service.SemanticSearchIntentHeader)
 	}
+	if in.Scope != "" && !requiresSemanticSearchIntent(in.Mode) {
+		return nil, apiError(http.StatusBadRequest,
+			"scope is only supported for semantic and hybrid search modes")
+	}
 	var sources []string
 	if in.In != "" {
 		sources = strings.Split(in.In, ",")
@@ -125,6 +132,7 @@ func (s *Server) humaSearchContent(
 		IncludeChildren:  in.IncludeChildren,
 		IncludeAutomated: in.IncludeAutomated,
 		IncludeOneShot:   in.IncludeOneShot,
+		Scope:            string(in.Scope),
 		Limit:            in.Limit,
 		Cursor:           in.Cursor,
 		Context:          in.Context,

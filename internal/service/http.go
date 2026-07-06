@@ -434,6 +434,7 @@ func (b *httpBackend) SearchContent(
 		"date_from":       req.DateFrom,
 		"date_to":         req.DateTo,
 		"active_since":    req.ActiveSince,
+		"scope":           req.Scope,
 	} {
 		if v != "" {
 			q.Set(k, v)
