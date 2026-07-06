@@ -475,6 +475,121 @@ func TestSearchContent_ExcludesOneShotByDefault(t *testing.T) {
 	assert.Equal(t, "multi", out.Matches[0].SessionID)
 }
 
+// search_content must surface the conversation-unit citation fields
+// (ordinal_range plus lineage) copied verbatim from db.ContentMatch: every
+// match in a top-level assistant run carries the run's full ordinal_range
+// and none of the subordinate/lineage fields set, matching the plumbing
+// pinned at the db layer in TestSearchContentSubstringDerivedRunRange.
+func TestSearchContent_OrdinalRangeSpansRun(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "run1", "proj", func(s *db.Session) {
+		s.MessageCount = 4
+		s.UserMessageCount = 2
+		ended := "2024-06-15T10:00:00Z"
+		s.EndedAt = &ended
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{
+		dbtest.UserMsg("run1", 0, "the question"),
+		dbtest.AsstMsg("run1", 1, "RUNHIT step one"),
+		dbtest.AsstMsg("run1", 2, "RUNHIT step two"),
+		dbtest.UserMsg("run1", 3, "next question"),
+	}))
+
+	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+		Pattern: "RUNHIT", Mode: "substring",
+	})
+	require.NoError(t, err)
+	require.Len(t, out.Matches, 2)
+	for _, m := range out.Matches {
+		assert.Equal(t, [2]int{1, 2}, m.OrdinalRange,
+			"match at ordinal %d should carry the run's full range", m.Ordinal)
+		assert.False(t, m.Subordinate, "top-level run member")
+		assert.False(t, m.Sidechain, "non-sidechain run member")
+		assert.Empty(t, m.Relationship, "top-level relationship")
+		assert.Empty(t, m.ParentSessionID, "top-level parent")
+	}
+}
+
+// A sidechain run's matches must round-trip Subordinate and Sidechain as
+// true, with ordinal_range spanning the sidechain run rather than the
+// individual anchor ordinal.
+func TestSearchContent_SidechainSubordinateRoundTrip(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "side1", "proj", func(s *db.Session) {
+		s.MessageCount = 3
+		s.UserMessageCount = 2
+		ended := "2024-06-15T10:00:00Z"
+		s.EndedAt = &ended
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{
+		dbtest.UserMsg("side1", 0, "the question"),
+		{
+			SessionID: "side1", Ordinal: 1, Role: "assistant",
+			Content: "SIDEHIT step a", ContentLength: len("SIDEHIT step a"),
+			IsSidechain: true,
+		},
+		{
+			SessionID: "side1", Ordinal: 2, Role: "assistant",
+			Content: "SIDEHIT step b", ContentLength: len("SIDEHIT step b"),
+			IsSidechain: true,
+		},
+	}))
+
+	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+		Pattern: "SIDEHIT", Mode: "substring",
+	})
+	require.NoError(t, err)
+	require.Len(t, out.Matches, 2)
+	for _, m := range out.Matches {
+		assert.Equal(t, [2]int{1, 2}, m.OrdinalRange, "sidechain run range")
+		assert.True(t, m.Subordinate, "sidechain run is subordinate")
+		assert.True(t, m.Sidechain, "anchor sidechain flag")
+		assert.Empty(t, m.Relationship, "no session lineage on a same-session sidechain")
+	}
+}
+
+// A single top-level message match (its own conversation unit) must report
+// ordinal_range == [o, o], and the omitempty subordinate/lineage fields must
+// be entirely absent from the marshaled JSON rather than present as false/"".
+func TestSearchContent_SingleMessageOrdinalRangeAndOmittedFields(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "solo1", "proj", func(s *db.Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 2
+		ended := "2024-06-15T10:00:00Z"
+		s.EndedAt = &ended
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{
+		dbtest.UserMsg("solo1", 0, "SOLOHIT alone"),
+		dbtest.UserMsg("solo1", 1, "an unrelated follow-up"),
+	}))
+
+	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+		Pattern: "SOLOHIT", Mode: "substring",
+	})
+	require.NoError(t, err)
+	require.Len(t, out.Matches, 1)
+	m := out.Matches[0]
+	assert.Equal(t, 0, m.Ordinal)
+	assert.Equal(t, [2]int{0, 0}, m.OrdinalRange, "single-message unit is its own range")
+	assert.False(t, m.Subordinate)
+	assert.False(t, m.Sidechain)
+	assert.Empty(t, m.Relationship)
+	assert.Empty(t, m.ParentSessionID)
+
+	data, err := json.Marshal(m)
+	require.NoError(t, err)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+	assert.Contains(t, raw, "ordinal_range", "ordinal_range is always present")
+	for _, key := range []string{
+		"subordinate", "relationship", "parent_session_id", "is_sidechain",
+	} {
+		assert.NotContains(t, raw, key,
+			"zero-valued omitempty field %q must be absent from the wire shape", key)
+	}
+}
+
 func TestGetMessages_DescAndFromAnchor(t *testing.T) {
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {

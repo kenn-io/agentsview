@@ -509,15 +509,20 @@ func toContextMessages(msgs []db.Message) []contextMessage {
 }
 
 type contentMatch struct {
-	SessionID string   `json:"session_id"`
-	Project   string   `json:"project,omitempty"`
-	Agent     string   `json:"agent"`
-	Location  string   `json:"location" jsonschema:"Where the match occurred: one of message, tool_input, or tool_result."`
-	Role      string   `json:"role,omitempty"`
-	Ordinal   int      `json:"ordinal"`
-	Timestamp string   `json:"timestamp"`
-	Snippet   string   `json:"snippet"`
-	Score     *float64 `json:"score,omitempty" jsonschema:"Relevance score for semantic/hybrid modes; omitted for substring/regex/fts."`
+	SessionID       string   `json:"session_id"`
+	Project         string   `json:"project,omitempty"`
+	Agent           string   `json:"agent"`
+	Location        string   `json:"location" jsonschema:"Where the match occurred: one of message, tool_input, or tool_result."`
+	Role            string   `json:"role,omitempty"`
+	Ordinal         int      `json:"ordinal"`
+	Timestamp       string   `json:"timestamp"`
+	Snippet         string   `json:"snippet"`
+	Score           *float64 `json:"score,omitempty" jsonschema:"Relevance score for semantic/hybrid modes; omitted for substring/regex/fts."`
+	OrdinalRange    [2]int   `json:"ordinal_range" jsonschema:"[start, end] ordinals of the conversation unit containing this match; equal to the match ordinal for single-message units."`
+	Subordinate     bool     `json:"subordinate,omitempty" jsonschema:"True when this match belongs to a subordinate unit: a sidechain run, or a subagent/fork session."`
+	Relationship    string   `json:"relationship,omitempty" jsonschema:"The matched session's relationship to its parent (for example subagent or fork), when it has one."`
+	ParentSessionID string   `json:"parent_session_id,omitempty" jsonschema:"The parent session ID, when the matched session has one."`
+	Sidechain       bool     `json:"is_sidechain,omitempty" jsonschema:"True when the matched message itself is flagged as a sidechain message."`
 	// ContextBefore/ContextAfter are populated when Context > 0: the N
 	// messages immediately before/after this match, content truncated to
 	// 500 characters.
@@ -582,6 +587,9 @@ func (t *toolset) searchContent(
 			SessionID: m.SessionID, Project: m.Project, Agent: m.Agent,
 			Location: m.Location, Role: m.Role, Ordinal: m.Ordinal,
 			Timestamp: m.Timestamp, Snippet: m.Snippet, Score: m.Score,
+			OrdinalRange: m.OrdinalRange, Subordinate: m.Subordinate,
+			Relationship: m.Relationship, ParentSessionID: m.ParentSessionID,
+			Sidechain:     m.Sidechain,
 			ContextBefore: toContextMessages(m.ContextBefore),
 			ContextAfter:  toContextMessages(m.ContextAfter),
 		})
