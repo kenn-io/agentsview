@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -111,4 +112,69 @@ func TestSearchContentScopeFiltersSemanticResults(t *testing.T) {
 	assert.Equal(t, []string{"top-sess"}, search(t, "top"))
 	assert.Equal(t, []string{"sub-sess"}, search(t, "subordinate"))
 	assert.ElementsMatch(t, []string{"top-sess", "sub-sess"}, search(t, "all"))
+}
+
+// TestSearchContentSemanticResponseCarriesUnitRangeAndLineage pins the HTTP
+// wire shape for run-grouped semantic hits: ordinal stays the anchor while
+// ordinal_start/ordinal_end, subordinate, and the lineage keys ride along;
+// a top-level single-message hit omits them all (omitempty), keeping its
+// JSON identical to before.
+func TestSearchContentSemanticResponseCarriesUnitRangeAndLineage(t *testing.T) {
+	te := setup(t)
+	te.seedSession(t, "top-sess", "proj", 2)
+	te.seedMessages(t, "top-sess", 1, func(_ int, m *db.Message) {
+		m.Content = "zebra at top level"
+	})
+	te.seedSession(t, "sub-sess", "proj", 3, func(s *db.Session) {
+		s.ParentSessionID = new("top-sess")
+		s.RelationshipType = "subagent"
+	})
+	te.seedMessages(t, "sub-sess", 3, func(i int, m *db.Message) {
+		if i > 0 {
+			m.Role = "assistant"
+			m.IsSidechain = true
+			m.Content = "zebra step inside the subagent"
+		}
+	})
+	te.db.SetVectorSearcher(fakeHitsVectorSearcher{hits: []db.VectorHit{
+		{SessionID: "sub-sess", Ordinal: 1, OrdinalStart: 1, OrdinalEnd: 2,
+			Subordinate: true, Score: 0.9, Snippet: "zebra step inside the subagent"},
+		{SessionID: "top-sess", Ordinal: 0, Score: 0.5,
+			Snippet: "zebra at top level"},
+	}})
+
+	w := te.wrappedRequest(http.MethodGet,
+		"/api/v1/search/content?pattern=zebra&mode=semantic",
+		withHeader("X-AgentsView-Search-Intent", "semantic"))
+	assertStatus(t, w, http.StatusOK)
+
+	var res struct {
+		Matches []map[string]any `json:"matches"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &res))
+	require.Len(t, res.Matches, 2)
+	byID := map[string]map[string]any{}
+	for _, m := range res.Matches {
+		byID[m["session_id"].(string)] = m
+	}
+
+	sub, ok := byID["sub-sess"]
+	require.True(t, ok, "subordinate run hit present")
+	assert.EqualValues(t, 1, sub["ordinal"], "ordinal stays the anchor")
+	assert.EqualValues(t, 1, sub["ordinal_start"])
+	assert.EqualValues(t, 2, sub["ordinal_end"])
+	assert.Equal(t, true, sub["subordinate"])
+	assert.Equal(t, "subagent", sub["relationship"])
+	assert.Equal(t, "top-sess", sub["parent_session_id"])
+	assert.Equal(t, true, sub["is_sidechain"])
+
+	top, ok := byID["top-sess"]
+	require.True(t, ok, "top-level hit present")
+	for _, key := range []string{
+		"ordinal_start", "ordinal_end", "subordinate",
+		"relationship", "parent_session_id", "is_sidechain",
+	} {
+		assert.NotContains(t, top, key,
+			"zero-valued unit/lineage keys must be omitted from the wire")
+	}
 }

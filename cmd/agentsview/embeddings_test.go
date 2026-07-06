@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -79,9 +80,14 @@ func newEmbeddingsStubServer(t *testing.T, dimension int) *httptest.Server {
 func seedEmbeddableArchive(t *testing.T, dataDir string) {
 	t.Helper()
 	d := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	// Three messages but only TWO embeddable units: the user message plus
+	// the contiguous assistant run [1,2]. Tests asserting document counts
+	// against this seed are therefore discriminating between unit-grouped
+	// and per-message counting.
 	dbtest.SeedSessionWithMessages(t, d, "sess-1", "proj", []db.Message{
 		dbtest.UserMsg("sess-1", 0, "hello there"),
 		dbtest.AsstMsg("sess-1", 1, "hi back"),
+		dbtest.AsstMsg("sess-1", 2, "and a follow-up thought"),
 	})
 }
 
@@ -94,6 +100,7 @@ func seedEmbeddableArchiveWithAutomated(t *testing.T, dataDir string) {
 	dbtest.SeedSessionWithMessages(t, d, "sess-1", "proj", []db.Message{
 		dbtest.UserMsg("sess-1", 0, "hello there"),
 		dbtest.AsstMsg("sess-1", 1, "hi back"),
+		dbtest.AsstMsg("sess-1", 2, "and a follow-up thought"),
 	})
 	dbtest.SeedSessionWithMessages(t, d, "sess-auto", "proj", []db.Message{
 		dbtest.UserMsg("sess-auto", 0, "roborev output"),
@@ -243,10 +250,11 @@ func TestEmbeddingsListEmptyIndexReturnsNoRows(t *testing.T) {
 	require.Len(t, lines, 1, "expected only the header line, got: %q", out.String())
 }
 
-// TestEmbeddingsBuildDirectEndToEnd seeds a temp archive with one user and
-// one assistant message, points [vector.embeddings] at an httptest
-// OpenAI-compatible stub, and asserts the direct build path embeds both
-// messages and prints the exact final summary and activation line.
+// TestEmbeddingsBuildDirectEndToEnd seeds a temp archive with one user
+// message and a two-message assistant run (two embeddable units), points
+// [vector.embeddings] at an httptest OpenAI-compatible stub, and asserts the
+// direct build path embeds both units and prints the exact final summary and
+// activation line.
 func TestEmbeddingsBuildDirectEndToEnd(t *testing.T) {
 	dataDir := testDataDir(t)
 	stub := newEmbeddingsStubServer(t, 3)
@@ -629,7 +637,7 @@ func TestEmbeddingsActivateDirectRefusalThenForce(t *testing.T) {
 	err = activateCmd.Execute()
 	require.Error(t, err)
 	assert.Equal(t,
-		"generation 2 still has 2 messages needing embedding; use --force",
+		"generation 2 still has 2 documents needing embedding; use --force",
 		err.Error(), "the manager's refusal message must surface verbatim")
 
 	forceCmd := newEmbeddingsActivateCommand()
@@ -854,4 +862,30 @@ func TestBuildViaDaemonLastErrorReturnsNonZero(t *testing.T) {
 	err := buildViaDaemon(context.Background(), &out, client, vector.BuildRequest{})
 	require.Error(t, err)
 	assert.Equal(t, "encoder rejected input", err.Error())
+}
+
+// TestDirectListGenerationsVersionMismatchSurfacesRebuildRequired pins the
+// `embeddings list` direct path's version gate: against a vectors.db written
+// by an older mirror schema version it must surface the rebuild-required
+// error instead of listing stale-shape generation data.
+func TestDirectListGenerationsVersionMismatchSurfacesRebuildRequired(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := vectorTestConfig(dataDir)
+	path := cfg.Vector.ResolvedDBPath(dataDir)
+
+	seed, err := vector.Open(context.Background(), path, false, cfg.Vector.Embeddings.MaxInputChars)
+	require.NoError(t, err)
+	require.NoError(t, seed.Close())
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = raw.Exec(`UPDATE vector_meta SET value = '2' WHERE key = 'mirror_schema_version'`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+
+	_, err = directListGenerations(context.Background(), cfg)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, vector.ErrMirrorVersionMismatch,
+		"a stale-shape vectors.db must not be listed as if it were current")
+	assert.Contains(t, err.Error(), "embeddings build",
+		"the error must carry the rebuild remediation")
 }

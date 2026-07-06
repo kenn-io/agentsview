@@ -190,9 +190,11 @@ func resolveContentSearchMode(
 
 // printContentMatchesHuman writes one line per match, terminal-sanitized.
 // Scored matches (semantic/hybrid modes) show "score=0.83" after the
-// ordinal; unscored matches (substring/regex/fts) omit it. When --context
-// requested inline context, ContextBefore/ContextAfter print as indented
-// "role: content" lines around the match line.
+// ordinal; unscored matches (substring/regex/fts) omit it. A match spanning
+// a multi-message unit renders "#<start>-<end> @<anchor>" instead of the
+// plain "#<ordinal>", and a subordinate unit gains a "sub" marker. When
+// --context requested inline context, ContextBefore/ContextAfter print as
+// indented "role: content" lines around the match line.
 func printContentMatchesHuman(w io.Writer, res *service.ContentSearchResult) error {
 	if len(res.Matches) == 0 {
 		fmt.Fprintln(w, "(no matches)")
@@ -206,7 +208,10 @@ func printContentMatchesHuman(w io.Writer, res *service.ContentSearchResult) err
 		for _, cm := range m.ContextBefore {
 			printContentContextLine(w, cm)
 		}
-		fmt.Fprintf(w, "%s  #%d", sanitizeTerminal(m.SessionID), m.Ordinal)
+		fmt.Fprintf(w, "%s  %s", sanitizeTerminal(m.SessionID), formatMatchOrdinal(m))
+		if m.Subordinate {
+			fmt.Fprint(w, " sub")
+		}
 		if m.Score != nil {
 			fmt.Fprintf(w, " score=%.2f", *m.Score)
 		}
@@ -222,6 +227,18 @@ func printContentMatchesHuman(w io.Writer, res *service.ContentSearchResult) err
 		fmt.Fprintf(w, "\nMore results: --cursor %d\n", res.NextCursor)
 	}
 	return nil
+}
+
+// formatMatchOrdinal renders a match's position. Single-message matches
+// (every lexical mode, and semantic/hybrid hits on single-message units)
+// keep the plain "#<ordinal>" form; a semantic/hybrid hit spanning a
+// multi-message unit renders the range with the anchor marked, e.g.
+// "#12-40 @19".
+func formatMatchOrdinal(m db.ContentMatch) string {
+	if m.OrdinalEnd > m.OrdinalStart {
+		return fmt.Sprintf("#%d-%d @%d", m.OrdinalStart, m.OrdinalEnd, m.Ordinal)
+	}
+	return fmt.Sprintf("#%d", m.Ordinal)
 }
 
 // contentContextLineMaxChars caps a printed context line's length so a long

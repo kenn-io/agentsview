@@ -431,8 +431,14 @@ SELECT g.ordinal, g.gen_key, g.fingerprint, g.dimension, g.state,
 FROM ` + generationsTable + ` g`
 
 // Generations returns every generation with its coverage counts against the
-// current vector_messages mirror, ordered by ordinal.
+// current vector_messages mirror, ordered by ordinal. Like Search and
+// StaleActive it fails closed with ErrMirrorVersionMismatch on a read-only
+// Index over a mismatched mirror, rather than reporting coverage counts
+// computed over stale-shape rows.
 func (ix *Index) Generations(ctx context.Context) ([]GenerationInfo, error) {
+	if ix.versionMismatch {
+		return nil, ErrMirrorVersionMismatch
+	}
 	rows, err := ix.db.QueryContext(ctx, generationCoverageQuery+` ORDER BY g.ordinal`)
 	if err != nil {
 		return nil, fmt.Errorf("list generations: %w", err)

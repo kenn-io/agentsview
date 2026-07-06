@@ -474,3 +474,22 @@ func TestMirrorSchemaVersionReadOnlyCurrentVersionSearchUnaffected(t *testing.T)
 	assert.ErrorIs(t, err, ErrNoActiveGeneration,
 		"a current-version empty mirror must fall through to the normal empty-index error")
 }
+
+// TestGenerationsReadOnlyMismatchReturnsSentinel closes the version-gate gap
+// on the generation-listing read path: a read-only Index over a mismatched
+// mirror must refuse Generations with ErrMirrorVersionMismatch (the same
+// rebuild-required sentinel Search and StaleActive return) instead of
+// reporting coverage counts computed over stale-shape rows.
+func TestGenerationsReadOnlyMismatchReturnsSentinel(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "vectors.db")
+	seedV2Mirror(t, path)
+
+	ro, err := Open(ctx, path, true, 4000)
+	require.NoError(t, err, "read-only Open must succeed even against a v2-stamped mirror")
+	defer ro.Close()
+
+	_, err = ro.Generations(ctx)
+	assert.ErrorIs(t, err, ErrMirrorVersionMismatch,
+		"Generations must apply the same version gate Search does")
+}

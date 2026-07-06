@@ -409,3 +409,81 @@ func TestSearchContentHybridFTSLegSubordinateUnitPenalized(t *testing.T) {
 		"unpenalized message-granularity hit must overtake the subordinate unit")
 	assert.Equal(t, "subd", page.Matches[1].SessionID)
 }
+
+// TestSearchContentHybridMatchCarriesUnitRangeAndLineage pins the hybrid
+// surface for run-grouped units: a fused FTS-in-run hit exposes the
+// containing unit's ordinal range and subordinate flag (from the resolved
+// UnitRef) plus the anchor's lineage, while Ordinal stays the FTS-overridden
+// anchor ordinal.
+func TestSearchContentHybridMatchCarriesUnitRangeAndLineage(t *testing.T) {
+	d := testDB(t)
+	if !d.HasFTS() {
+		t.Skip("fts5 not available")
+	}
+	insertSession(t, d, "top", "proj", func(s *Session) {
+		s.UserMessageCount = 2
+	})
+	insertSession(t, d, "child", "proj", func(s *Session) {
+		s.UserMessageCount = 2
+		s.ParentSessionID = Ptr("top")
+		s.RelationshipType = "subagent"
+	})
+	require.NoError(t, d.ReplaceSessionMessages("child", []Message{
+		{SessionID: "child", Ordinal: 0, Role: "user",
+			Content: "the question", Timestamp: "2026-05-20T12:00:00Z"},
+		{SessionID: "child", Ordinal: 1, Role: "assistant", IsSidechain: true,
+			Content: "first step of the answer", Timestamp: "2026-05-20T12:00:01Z"},
+		{SessionID: "child", Ordinal: 2, Role: "assistant", IsSidechain: true,
+			Content: "second step mentions zebra", Timestamp: "2026-05-20T12:00:02Z"},
+	}))
+	// The run [1,2] anchors its semantic hit at ordinal 1; FTS matches
+	// ordinal 2 and overrides the anchor.
+	d.SetVectorSearcher(&fakeVectorSearcher{hits: []VectorHit{
+		{SessionID: "child", Ordinal: 1, OrdinalStart: 1, OrdinalEnd: 2,
+			Subordinate: true, Score: 0.9, Snippet: "first step of the answer"},
+	}})
+
+	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "zebra", Mode: "hybrid", Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent hybrid")
+	require.Len(t, page.Matches, 1, "the two legs must fuse into one result")
+	m := page.Matches[0]
+	assert.Equal(t, 2, m.Ordinal, "Ordinal stays the FTS-overridden anchor")
+	assert.Equal(t, 1, m.OrdinalStart, "OrdinalStart spans the containing unit")
+	assert.Equal(t, 2, m.OrdinalEnd, "OrdinalEnd spans the containing unit")
+	assert.True(t, m.Subordinate, "Subordinate carries the unit flag")
+	assert.Equal(t, "subagent", m.Relationship)
+	assert.Equal(t, "top", m.ParentSessionID)
+	assert.True(t, m.Sidechain, "anchor message is_sidechain")
+}
+
+// TestSearchContentHybridVectorOnlyMatchCarriesUnitRange pins the
+// vector-leg display path: a unit only the semantic leg found keeps its
+// chunk anchor and still exposes the unit range and subordinate flag.
+func TestSearchContentHybridVectorOnlyMatchCarriesUnitRange(t *testing.T) {
+	d := testDB(t)
+	if !d.HasFTS() {
+		t.Skip("fts5 not available")
+	}
+	seedSearchSession(t, d, "s1", "proj", [][2]string{
+		{"user", "the question"},
+		{"assistant", "first step of the answer"},
+		{"assistant", "second step of the answer"},
+	})
+	d.SetVectorSearcher(&fakeVectorSearcher{hits: []VectorHit{
+		{SessionID: "s1", Ordinal: 2, OrdinalStart: 1, OrdinalEnd: 2,
+			Score: 0.9, Snippet: "second step of the answer"},
+	}})
+
+	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "nomatchinfts", Mode: "hybrid", Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent hybrid")
+	require.Len(t, page.Matches, 1, "vector-only hit survives fusion")
+	m := page.Matches[0]
+	assert.Equal(t, 2, m.Ordinal, "vector leg keeps its chunk anchor")
+	assert.Equal(t, 1, m.OrdinalStart)
+	assert.Equal(t, 2, m.OrdinalEnd)
+	assert.False(t, m.Subordinate)
+}

@@ -179,7 +179,7 @@ func (m *Manager) Activate(ctx context.Context, id int64, force bool) error {
 		return err
 	}
 	if !force && target.Missing > 0 {
-		return refusedf("generation %d still has %d messages needing embedding; use --force",
+		return refusedf("generation %d still has %d documents needing embedding; use --force",
 			id, target.Missing)
 	}
 	return m.ix.activateGeneration(ctx, target.Fingerprint)

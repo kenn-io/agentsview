@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"net"
 	"net/http"
@@ -782,4 +783,57 @@ func TestInstallDirectVectorSearcherDegradesOnCorruptVectorsDB(t *testing.T) {
 	})
 	assert.ErrorIs(t, err, db.ErrSemanticUnavailable,
 		"semantic search must return the standard unavailable error once degraded")
+}
+
+// TestInstallDirectVectorSearcherVersionMismatchServesRebuildRequired pins
+// the direct-install path's handling of a version-mismatched vectors.db:
+// the read-only open succeeds, so the searcher must be WIRED (not silently
+// dropped by the corrupt-file degradation branch) and semantic search over
+// HTTP must answer with the 501 rebuild-required taxonomy whose body names
+// the incompatible-version remediation — not the generic "not enabled"
+// message and not an empty page.
+func TestInstallDirectVectorSearcherVersionMismatchServesRebuildRequired(t *testing.T) {
+	dataDir := t.TempDir()
+	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
+	cfg := vectorTestConfig(dataDir)
+	path := cfg.Vector.ResolvedDBPath(dataDir)
+
+	// Create a current vectors.db, then restamp it as written by the
+	// previous mirror schema version.
+	seed, err := vector.Open(context.Background(), path, false, cfg.Vector.Embeddings.MaxInputChars)
+	require.NoError(t, err)
+	require.NoError(t, seed.Close())
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = raw.Exec(`UPDATE vector_meta SET value = '2' WHERE key = 'mirror_schema_version'`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+
+	closeFn := installDirectVectorSearcher(cfg, database)
+	require.NotNil(t, closeFn,
+		"a version-mismatched vectors.db must wire a searcher, not silently unwire semantic search")
+	defer func() { assert.NoError(t, closeFn()) }()
+	require.True(t, database.HasSemantic())
+
+	ln, port := listenLoopback(t)
+	cfg.Host, cfg.Port = "127.0.0.1", port
+	srv := server.New(cfg, database, nil)
+	ts := startTestServer(t, ln, srv.Handler())
+
+	req, err := http.NewRequest(http.MethodGet,
+		ts.URL+"/api/v1/search/content?pattern=anything&mode=semantic", nil)
+	require.NoError(t, err)
+	req.Header.Set("X-AgentsView-Search-Intent", "semantic")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusNotImplemented, resp.StatusCode,
+		"body: %s", body)
+	assert.Contains(t, string(body), "incompatible version",
+		"the error body must carry the rebuild-required remediation")
+	assert.Contains(t, string(body), "embeddings build",
+		"the error body must tell the user how to rebuild")
 }

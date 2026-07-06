@@ -324,3 +324,37 @@ func TestContentMatchJSONRoundTripsScore(t *testing.T) {
 	assert.InDelta(t, score, *decoded.Matches[0].Score, 0.0001)
 	assert.Nil(t, decoded.Matches[1].Score)
 }
+
+// TestPrintContentMatchesHumanRendersUnitRangeAndSubMarker pins the human
+// rendering for run-grouped semantic/hybrid hits: a multi-message unit
+// renders "#<start>-<end> @<anchor>", a subordinate hit gains a "sub"
+// marker, and a single-ordinal hit keeps today's plain "#<ordinal>" form.
+func TestPrintContentMatchesHumanRendersUnitRangeAndSubMarker(t *testing.T) {
+	score := 0.91
+	res := &service.ContentSearchResult{
+		Matches: []db.ContentMatch{
+			{
+				SessionID: "sess1", Project: "proj", Location: "message",
+				Ordinal: 19, OrdinalStart: 12, OrdinalEnd: 40,
+				Subordinate: true, Score: &score, Snippet: "ranged hit",
+			},
+			{
+				SessionID: "sess2", Project: "proj", Location: "message",
+				Ordinal: 5, OrdinalStart: 5, OrdinalEnd: 5,
+				Snippet: "single-message unit",
+			},
+		},
+	}
+	var buf bytes.Buffer
+	require.NoError(t, printContentMatchesHuman(&buf, res))
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	require.Len(t, lines, 4)
+
+	assert.Contains(t, lines[0], "#12-40 @19", "range with anchor marker")
+	assert.Contains(t, lines[0], " sub", "subordinate marker")
+	assert.Contains(t, lines[0], "score=0.91")
+
+	assert.Contains(t, lines[2], "#5", "single-ordinal hit keeps the plain form")
+	assert.NotContains(t, lines[2], "@", "no anchor marker for single-ordinal hits")
+	assert.NotContains(t, lines[2], " sub", "no subordinate marker for top-level hits")
+}

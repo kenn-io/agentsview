@@ -430,8 +430,15 @@ func setupVectorServing(
 // search --semantic` with no daemon running. It is a no-op — leaving d
 // without a VectorSearcher, so callers see db.ErrSemanticUnavailable
 // naturally — when [vector] is disabled, vectors.db does not exist yet, or
-// vectors.db cannot be opened (e.g. corrupt, truncated, or built by an
-// incompatible version).
+// vectors.db cannot be opened at all (e.g. corrupt or truncated).
+//
+// A vectors.db written by an incompatible mirror schema version is NOT one
+// of those no-op cases: the read-only open succeeds with the mismatch
+// recorded on the Index, so the searcher is wired and every semantic query
+// surfaces the rebuild-required error (vector.ErrMirrorVersionMismatch,
+// mapped by translateSearchError onto db.ErrSemanticUnavailable with the
+// remediation attached) instead of semantic search silently reading as
+// "not enabled".
 //
 // Vector wiring failures never fail direct service construction: every
 // direct read command (e.g. `session list`) opens vectors.db eagerly

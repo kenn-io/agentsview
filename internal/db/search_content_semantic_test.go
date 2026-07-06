@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -359,4 +360,105 @@ func TestSearchContentSemanticSubordinatePenaltyReorders(t *testing.T) {
 	require.NotNil(t, page.Matches[0].Score)
 	assert.InDelta(t, 0.5, *page.Matches[0].Score, 0.0001,
 		"semantic mode keeps the searcher's score, not the fusion score")
+}
+
+// TestSearchContentSemanticMatchCarriesUnitRangeAndLineage pins the API
+// surface added for run-grouped units: a semantic match exposes the unit's
+// ordinal range, subordinate flag, and lineage (relationship, parent session,
+// anchor sidechain flag) while Ordinal stays the anchor ordinal; a top-level
+// single-message unit leaves them all zero so its JSON is unchanged.
+func TestSearchContentSemanticMatchCarriesUnitRangeAndLineage(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "parent", "proj", func(s *Session) {
+		s.UserMessageCount = 2
+	})
+	insertSession(t, d, "child", "proj", func(s *Session) {
+		s.UserMessageCount = 2
+		s.ParentSessionID = Ptr("parent")
+		s.RelationshipType = "subagent"
+	})
+	require.NoError(t, d.ReplaceSessionMessages("parent", []Message{
+		{SessionID: "parent", Ordinal: 0, Role: "user",
+			Content: "top-level step question", Timestamp: "2026-05-20T12:00:00Z"},
+	}))
+	require.NoError(t, d.ReplaceSessionMessages("child", []Message{
+		{SessionID: "child", Ordinal: 0, Role: "user",
+			Content: "subagent prompt", Timestamp: "2026-05-20T12:00:01Z"},
+		{SessionID: "child", Ordinal: 1, Role: "assistant", IsSidechain: true,
+			Content: "sidechain step one", Timestamp: "2026-05-20T12:00:02Z"},
+		{SessionID: "child", Ordinal: 2, Role: "assistant", IsSidechain: true,
+			Content: "sidechain step two", Timestamp: "2026-05-20T12:00:03Z"},
+	}))
+	d.SetVectorSearcher(&fakeVectorSearcher{hits: []VectorHit{
+		{SessionID: "child", Ordinal: 1, OrdinalStart: 1, OrdinalEnd: 2,
+			Subordinate: true, Score: 0.9, Snippet: "sidechain step one"},
+		{SessionID: "parent", Ordinal: 0, OrdinalStart: 0, OrdinalEnd: 0,
+			Score: 0.5, Snippet: "top-level step question"},
+	}})
+
+	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "step", Mode: "semantic", Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent")
+	require.Len(t, page.Matches, 2, "matches")
+	byID := map[string]ContentMatch{}
+	for _, m := range page.Matches {
+		byID[m.SessionID] = m
+	}
+
+	sub, ok := byID["child"]
+	require.True(t, ok, "subordinate run hit present")
+	assert.Equal(t, 1, sub.Ordinal, "Ordinal stays the anchor ordinal")
+	assert.Equal(t, 1, sub.OrdinalStart, "OrdinalStart spans the unit")
+	assert.Equal(t, 2, sub.OrdinalEnd, "OrdinalEnd spans the unit")
+	assert.True(t, sub.Subordinate, "Subordinate carries the unit flag")
+	assert.Equal(t, "subagent", sub.Relationship)
+	assert.Equal(t, "parent", sub.ParentSessionID)
+	assert.True(t, sub.Sidechain, "anchor message is_sidechain")
+
+	data, err := json.Marshal(sub)
+	require.NoError(t, err)
+	for _, want := range []string{
+		`"ordinal":1`, `"ordinal_start":1`, `"ordinal_end":2`,
+		`"subordinate":true`, `"relationship":"subagent"`,
+		`"parent_session_id":"parent"`, `"is_sidechain":true`,
+	} {
+		assert.Contains(t, string(data), want)
+	}
+
+	top, ok := byID["parent"]
+	require.True(t, ok, "top-level hit present")
+	assert.Zero(t, top.OrdinalStart)
+	assert.Zero(t, top.OrdinalEnd)
+	assert.False(t, top.Subordinate)
+	assert.Empty(t, top.Relationship)
+	assert.Empty(t, top.ParentSessionID)
+	assert.False(t, top.Sidechain)
+}
+
+// TestContentMatchJSONUnitFieldsOmittedForLexicalMatches guards the
+// pre-existing modes' wire format: a substring match must not gain any of
+// the semantic-only unit/lineage keys (they are all omitempty and left
+// zero), keeping FTS/substring/regex responses byte-identical to before.
+func TestContentMatchJSONUnitFieldsOmittedForLexicalMatches(t *testing.T) {
+	d := testDB(t)
+	seedSearchSession(t, d, "s1", "proj", [][2]string{
+		{"user", "find the zebra here"},
+	})
+
+	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "zebra", Mode: "substring", Sources: []string{"messages"}, Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent")
+	require.Len(t, page.Matches, 1)
+
+	data, err := json.Marshal(page.Matches[0])
+	require.NoError(t, err)
+	for _, key := range []string{
+		"ordinal_start", "ordinal_end", "subordinate",
+		"relationship", "parent_session_id", "is_sidechain",
+	} {
+		assert.NotContains(t, string(data), `"`+key+`"`,
+			"lexical match JSON must not grow semantic-only keys")
+	}
 }

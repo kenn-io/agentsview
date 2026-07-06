@@ -72,6 +72,22 @@ type ContentMatch struct {
 	// Score is the searcher's relevance score for "semantic"/"hybrid" modes,
 	// nil for the other modes which have no comparable ranking signal.
 	Score *float64 `json:"score,omitempty"`
+	// OrdinalStart and OrdinalEnd span the matched embedding unit for
+	// "semantic"/"hybrid" matches (both equal Ordinal for single-message
+	// units, so omitempty keeps a unit starting at ordinal 0 unmarked);
+	// Ordinal stays the anchor ordinal in every mode. Zero and omitted for
+	// the other modes, whose matches are single messages.
+	OrdinalStart int `json:"ordinal_start,omitempty"`
+	OrdinalEnd   int `json:"ordinal_end,omitempty"`
+	// Subordinate marks a "semantic"/"hybrid" unit classified as
+	// subordinate (sidechain run, or subagent/fork session).
+	Subordinate bool `json:"subordinate,omitempty"`
+	// Relationship and ParentSessionID carry the matched session's lineage
+	// and Sidechain the anchor message's is_sidechain flag, populated only
+	// by the "semantic"/"hybrid" modes (enrichSemanticHits).
+	Relationship    string `json:"relationship,omitempty"`
+	ParentSessionID string `json:"parent_session_id,omitempty"`
+	Sidechain       bool   `json:"is_sidechain,omitempty"`
 	// ContextBefore and ContextAfter hold the N messages immediately before
 	// and after this match's ordinal when the caller requested inline
 	// context (ContentSearchRequest.Context > 0). Populated by
@@ -799,15 +815,21 @@ func (db *DB) searchContentSemantic(
 		}
 		score := float64(h.Score)
 		out = append(out, ContentMatch{
-			SessionID: h.SessionID,
-			Project:   info.project,
-			Agent:     info.agent,
-			Location:  "message",
-			Role:      info.role,
-			Ordinal:   h.Ordinal,
-			Timestamp: info.timestamp,
-			Snippet:   f.semanticSnippet(info.content, h.Snippet),
-			Score:     &score,
+			SessionID:       h.SessionID,
+			Project:         info.project,
+			Agent:           info.agent,
+			Location:        "message",
+			Role:            info.role,
+			Ordinal:         h.Ordinal,
+			OrdinalStart:    h.OrdinalStart,
+			OrdinalEnd:      h.OrdinalEnd,
+			Subordinate:     h.Subordinate,
+			Relationship:    info.relationshipType,
+			ParentSessionID: info.parentSessionID,
+			Sidechain:       info.isSidechain,
+			Timestamp:       info.timestamp,
+			Snippet:         f.semanticSnippet(info.content, h.Snippet),
+			Score:           &score,
 		})
 		if len(out) >= f.Limit {
 			break
@@ -913,13 +935,17 @@ func applySubordinatePenalty(hits []VectorHit) []VectorHit {
 }
 
 // hybridDisplay carries what one fused unit needs for presentation: the
-// anchor (session, ordinal) the match reports and enriches by, plus the
-// leg's raw (unredacted) approximate snippet text used only to center the
-// redacted window.
+// anchor (session, ordinal) the match reports and enriches by, the unit's
+// ordinal span and subordinate flag (equal to the anchor and false for a
+// unit-less message-granularity FTS hit), plus the leg's raw (unredacted)
+// approximate snippet text used only to center the redacted window.
 type hybridDisplay struct {
-	sessionID string
-	ordinal   int
-	snippet   string
+	sessionID    string
+	ordinal      int
+	ordinalStart int
+	ordinalEnd   int
+	subordinate  bool
+	snippet      string
 }
 
 // hybridLeg is one rank-ordered fusion leg: entries for rrfMerge plus each
@@ -1000,6 +1026,8 @@ func (db *DB) hybridVectorLeg(
 		leg.ranked = append(leg.ranked, unitRanked{Key: key, Subordinate: h.Subordinate})
 		leg.display[key] = hybridDisplay{
 			sessionID: h.SessionID, ordinal: h.Ordinal, snippet: h.Snippet,
+			ordinalStart: h.OrdinalStart, ordinalEnd: h.OrdinalEnd,
+			subordinate: h.Subordinate,
 		}
 	}
 	return leg, nil
@@ -1069,18 +1097,20 @@ func (db *DB) hybridFTSLeg(
 	leg := hybridLeg{display: make(map[string]hybridDisplay, len(hits))}
 	for i, hit := range hits {
 		key := messageFusionKey(hit.sessionID, hit.ordinal)
-		subordinate := false
+		hit.ordinalStart, hit.ordinalEnd = hit.ordinal, hit.ordinal
 		if units[i].DocKey != "" {
 			key = unitFusionKey(units[i].SessionID, units[i].OrdinalStart)
-			subordinate = units[i].Subordinate
+			hit.ordinalStart = units[i].OrdinalStart
+			hit.ordinalEnd = units[i].OrdinalEnd
+			hit.subordinate = units[i].Subordinate
 		}
-		if scopeExcludes(f.Scope, subordinate) {
+		if scopeExcludes(f.Scope, hit.subordinate) {
 			continue
 		}
 		if _, seen := leg.display[key]; seen {
 			continue
 		}
-		leg.ranked = append(leg.ranked, unitRanked{Key: key, Subordinate: subordinate})
+		leg.ranked = append(leg.ranked, unitRanked{Key: key, Subordinate: hit.subordinate})
 		leg.display[key] = hit
 	}
 	return leg, nil
@@ -1122,15 +1152,21 @@ func (db *DB) enrichHybridMatches(
 		}
 		score := m.score
 		out = append(out, ContentMatch{
-			SessionID: d.sessionID,
-			Project:   info.project,
-			Agent:     info.agent,
-			Location:  "message",
-			Role:      info.role,
-			Ordinal:   d.ordinal,
-			Timestamp: info.timestamp,
-			Snippet:   f.semanticSnippet(info.content, d.snippet),
-			Score:     &score,
+			SessionID:       d.sessionID,
+			Project:         info.project,
+			Agent:           info.agent,
+			Location:        "message",
+			Role:            info.role,
+			Ordinal:         d.ordinal,
+			OrdinalStart:    d.ordinalStart,
+			OrdinalEnd:      d.ordinalEnd,
+			Subordinate:     d.subordinate,
+			Relationship:    info.relationshipType,
+			ParentSessionID: info.parentSessionID,
+			Sidechain:       info.isSidechain,
+			Timestamp:       info.timestamp,
+			Snippet:         f.semanticSnippet(info.content, d.snippet),
+			Score:           &score,
 		})
 	}
 	return ContentSearchPage{Matches: out}, nil

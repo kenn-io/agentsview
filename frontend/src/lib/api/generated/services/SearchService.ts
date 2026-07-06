@@ -74,6 +74,7 @@ export class SearchService {
   public static getApiV1SearchContent({
     pattern,
     mode,
+    scope,
     xAgentsViewSearchIntent,
     _in,
     excludeSystem,
@@ -102,6 +103,10 @@ export class SearchService {
      * Search mode
      */
     mode?: 'substring' | 'regex' | 'fts' | 'semantic' | 'hybrid',
+    /**
+     * Semantic/hybrid result scope: top, all, or subordinate (default all)
+     */
+    scope?: 'top' | 'all' | 'subordinate',
     /**
      * Required for semantic/hybrid GET searches
      */
@@ -188,6 +193,7 @@ export class SearchService {
       query: {
         'pattern': pattern,
         'mode': mode,
+        'scope': scope,
         'in': _in,
         'exclude_system': excludeSystem,
         'reveal': reveal,
