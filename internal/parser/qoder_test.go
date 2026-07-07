@@ -89,18 +89,34 @@ func TestParseQoderSessionSidecarMetadata(t *testing.T) {
 	assert.Equal(t, RelFork, sess.RelationshipType)
 }
 
-func TestQoderSidecarForkFromOverridesInferredParent(t *testing.T) {
-	sess := ParsedSession{
-		ParentSessionID:  "qoder:22222222-2222-4222-8222-222222222222",
-		RelationshipType: RelContinuation,
-	}
+func TestQoderSidecarForkFromPreservesParserForkParent(t *testing.T) {
+	t.Run("promotes continuation parent", func(t *testing.T) {
+		sess := ParsedSession{
+			ParentSessionID:  "qoder:22222222-2222-4222-8222-222222222222",
+			RelationshipType: RelContinuation,
+		}
 
-	applyQoderMeta(&sess, qoderSessionMeta{
-		ForkFrom: "11111111-1111-4111-8111-111111111111",
+		applyQoderMeta(&sess, qoderSessionMeta{
+			ForkFrom: "11111111-1111-4111-8111-111111111111",
+		})
+
+		assert.Equal(t, "qoder:11111111-1111-4111-8111-111111111111", sess.ParentSessionID)
+		assert.Equal(t, RelFork, sess.RelationshipType)
 	})
 
-	assert.Equal(t, "qoder:11111111-1111-4111-8111-111111111111", sess.ParentSessionID)
-	assert.Equal(t, RelFork, sess.RelationshipType)
+	t.Run("keeps parser fork parent", func(t *testing.T) {
+		sess := ParsedSession{
+			ParentSessionID:  "qoder:22222222-2222-4222-8222-222222222222",
+			RelationshipType: RelFork,
+		}
+
+		applyQoderMeta(&sess, qoderSessionMeta{
+			ForkFrom: "11111111-1111-4111-8111-111111111111",
+		})
+
+		assert.Equal(t, "qoder:22222222-2222-4222-8222-222222222222", sess.ParentSessionID)
+		assert.Equal(t, RelFork, sess.RelationshipType)
+	})
 }
 
 func TestQoderProviderParseStampsCompositeFingerprint(t *testing.T) {
@@ -227,10 +243,16 @@ func TestParseQoderForkedSessionRetagsToolCallSubagentIDsToFileStem(t *testing.T
 {"type":"user","uuid":"fork-r1","parentUuid":"fork-a1","timestamp":"2026-06-04T09:48:02.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_fork","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"123"},"sessionId":"11111111-1111-4111-8111-111111111111"}
 `
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	require.NoError(t, os.WriteFile(
+		strings.TrimSuffix(path, ".jsonl")+"-session.json",
+		[]byte(`{"fork_from":"22222222-2222-4222-8222-222222222222"}`),
+		0o644,
+	))
 
 	results, err := ParseQoderSession(path, "proj", "local")
 	require.NoError(t, err)
 	require.Len(t, results, 2)
+	assert.Equal(t, "qoder:22222222-2222-4222-8222-222222222222", results[0].Session.ParentSessionID)
 	var fork *ParseResult
 	for i := range results {
 		if results[i].Session.RelationshipType == RelFork {
@@ -239,6 +261,7 @@ func TestParseQoderForkedSessionRetagsToolCallSubagentIDsToFileStem(t *testing.T
 	}
 	require.NotNil(t, fork)
 	assert.NotEqual(t, qoderPrefixID(fileStem), fork.Session.ID)
+	assert.Equal(t, qoderPrefixID(fileStem), fork.Session.ParentSessionID)
 	var calls []ParsedToolCall
 	for _, msg := range fork.Messages {
 		calls = append(calls, msg.ToolCalls...)

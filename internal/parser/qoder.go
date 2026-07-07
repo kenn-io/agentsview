@@ -224,12 +224,16 @@ func applyQoderMeta(sess *ParsedSession, meta qoderSessionMeta) {
 	if sess.Cwd == "" && meta.WorkingDir != "" {
 		sess.Cwd = meta.WorkingDir
 	}
-	if meta.ForkFrom != "" {
+	if meta.ForkFrom != "" && !hasParserDiscoveredForkParent(sess) {
 		sess.ParentSessionID = qoderPrefixID(meta.ForkFrom)
 		sess.RelationshipType = RelFork
 	} else if sess.ParentSessionID == "" && meta.ParentSessionID != "" {
 		sess.ParentSessionID = qoderPrefixID(meta.ParentSessionID)
 	}
+}
+
+func hasParserDiscoveredForkParent(sess *ParsedSession) bool {
+	return sess.RelationshipType == RelFork && sess.ParentSessionID != ""
 }
 
 func readQoderSessionMeta(path string) qoderSessionMeta {
