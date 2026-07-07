@@ -55,6 +55,11 @@ func antigravityIDECompanionPaths(path string) []string {
 		path + "-wal",
 		path + "-shm",
 		filepath.Join(root, "annotations", id+".pbtxt"),
+		// The agy-reader trajectory sidecar is a transcript source for
+		// IDE sessions too (see parseSession), so a sidecar write must
+		// change the fingerprint even when the database files themselves
+		// are untouched.
+		strings.TrimSuffix(path, ".db") + ".trajectory.json",
 	}
 	return append(companions, antigravityBrainCompanions(
 		filepath.Join(root, "brain", id),
@@ -95,10 +100,51 @@ func (p *antigravityProvider) parseSession(
 	// schema cannot be read.
 	sourceVersion := antigravitySourceVersion(db)
 
-	messages, usageEvents, hasGenMetadata, err := loadAntigravitySteps(db)
+	dbResult, err := loadAntigravityStepsWithRawCount(db)
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	messages := dbResult.messages
+	// gen_metadata token usage describes the session's actual
+	// consumption no matter which transcript source wins below. The
+	// trajectory sidecar also extracts generatorMetadata usage, but the
+	// .db gen_metadata events win and sidecar events only fill the gap
+	// (missing gen_metadata table) so the same generation is never
+	// counted twice -- mirroring the CLI path's merge behavior.
+	usageEvents := dbResult.usageEvents
+	hasGenMetadata := dbResult.hasGenMetadata
+	// TranscriptFidelity is left empty (treated as full) for the heuristic
+	// decode, matching prior IDE behavior; a covering sidecar sets it to
+	// TranscriptFidelityFull explicitly below.
+	transcriptFidelity := ""
+
+	// Prefer the agy-reader trajectory sidecar: it is the daemon's own
+	// decode, with structured tool calls/results and thinking, where the
+	// heuristic DB decode only recovers loose strings. Selection is
+	// content-based, not mtime-based: the sidecar wins only when it covers
+	// at least as many steps as the raw DB decode, so a sidecar lagging
+	// behind a live session loses until agy-reader catches up. When the
+	// sidecar is absent, malformed, or fails the coverage gate the parser
+	// falls back to the heuristic decode exactly as before.
+	sidecarPath := strings.TrimSuffix(path, ".db") + ".trajectory.json"
+	tRes, tErr := parseAntigravityCLITrajectory(sidecarPath)
+	sidecarOK := tErr == nil &&
+		hasDisplayableAntigravityCLITrajectoryMessage(tRes.messages)
+	sidecarCovers := dbResult.rawStepCount == 0 ||
+		tRes.rawSteps >= dbResult.rawStepCount
+	if sidecarOK && sidecarCovers {
+		messages = tRes.messages
+		transcriptFidelity = TranscriptFidelityFull
+	}
+	// Coverage gates usage just like the transcript: a lagging sidecar
+	// carries only the generations it has seen, so persisting those would
+	// underreport totals on a row that looks current. sidecarCovers stays
+	// true when the DB offers no coverage signal (zero rows), so gap-fill
+	// still applies there.
+	if len(usageEvents) == 0 && tErr == nil && sidecarCovers {
+		usageEvents = tRes.usageEvents
+	}
+
 	messages = append(messages,
 		collectAntigravityBrainMessages(
 			filepath.Join(root, "brain", id),
@@ -157,16 +203,17 @@ func (p *antigravityProvider) parseSession(
 	}
 
 	sess := &ParsedSession{
-		ID:               antigravityIDPrefix + id,
-		Project:          project,
-		Machine:          machine,
-		Agent:            AgentAntigravity,
-		FirstMessage:     firstMessage,
-		StartedAt:        startedAt,
-		EndedAt:          endedAt,
-		MessageCount:     len(messages),
-		UserMessageCount: userCount,
-		SourceVersion:    sourceVersion,
+		ID:                 antigravityIDPrefix + id,
+		Project:            project,
+		Machine:            machine,
+		Agent:              AgentAntigravity,
+		FirstMessage:       firstMessage,
+		StartedAt:          startedAt,
+		EndedAt:            endedAt,
+		MessageCount:       len(messages),
+		UserMessageCount:   userCount,
+		SourceVersion:      sourceVersion,
+		TranscriptFidelity: transcriptFidelity,
 		File: FileInfo{
 			Path:  path,
 			Size:  size,
@@ -188,16 +235,6 @@ func (p *antigravityProvider) parseSession(
 		return sess, nil, usageEvents, nil
 	}
 	return sess, messages, usageEvents, nil
-}
-
-func loadAntigravitySteps(
-	db *sql.DB,
-) ([]ParsedMessage, []ParsedUsageEvent, bool, error) {
-	result, err := loadAntigravityStepsWithRawCount(db)
-	if err != nil {
-		return nil, nil, false, err
-	}
-	return result.messages, result.usageEvents, result.hasGenMetadata, nil
 }
 
 type antigravityStepLoadResult struct {

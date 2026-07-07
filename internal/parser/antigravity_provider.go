@@ -223,7 +223,7 @@ func (s antigravitySourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 			WatchRoot{
 				Path:         filepath.Join(root, "conversations"),
 				Recursive:    false,
-				IncludeGlobs: []string{"*.db", "*.db-*"},
+				IncludeGlobs: []string{"*.db", "*.db-*", "*.trajectory.json"},
 				DebounceKey:  string(AgentAntigravity) + ":conversations:" + root,
 			},
 		)
@@ -354,6 +354,12 @@ func (s antigravitySourceSet) sourceForChangedPath(root, path string) (SourceRef
 	if dbPath, id, ok := antigravityConversationDBForPath(root, path); ok {
 		return s.newSourceRef(root, dbPath, id), true
 	}
+	if id, ok := antigravityIDETrajectoryID(root, path); ok {
+		dbPath := filepath.Join(root, "conversations", id+".db")
+		if IsRegularFile(dbPath) {
+			return s.newSourceRef(root, dbPath, id), true
+		}
+	}
 	if id, ok := antigravityAnnotationID(root, path); ok {
 		dbPath := filepath.Join(root, "conversations", id+".db")
 		if IsRegularFile(dbPath) {
@@ -420,6 +426,24 @@ func antigravityConversationDBForPath(root, path string) (string, string, bool) 
 	return filepath.Join(root, "conversations", id+".db"), id, true
 }
 
+// antigravityIDETrajectoryID reports whether path is a
+// conversations/<id>.trajectory.json agy-reader sidecar under root and,
+// if so, returns the session id so a sidecar write routes back to its
+// .db source for re-sync.
+func antigravityIDETrajectoryID(root, path string) (string, bool) {
+	rel, ok := relUnder(filepath.Clean(root), filepath.Clean(path))
+	if !ok {
+		return "", false
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	if len(parts) != 2 || parts[0] != "conversations" ||
+		!strings.HasSuffix(parts[1], ".trajectory.json") {
+		return "", false
+	}
+	id := strings.TrimSuffix(parts[1], ".trajectory.json")
+	return id, IsValidSessionID(id)
+}
+
 func antigravityAnnotationID(root, path string) (string, bool) {
 	rel, ok := relUnder(filepath.Clean(root), filepath.Clean(path))
 	if !ok {
@@ -463,9 +487,12 @@ func antigravityProviderCapabilities() Capabilities {
 		Source: source,
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
+			Thinking:             CapabilitySupported,
 			ToolCalls:            CapabilitySupported,
+			ToolResults:          CapabilitySupported,
 			PerMessageTokenUsage: CapabilitySupported,
 			AggregateUsageEvents: CapabilitySupported,
+			Model:                CapabilitySupported,
 		},
 	}
 }
