@@ -174,7 +174,11 @@ configured — an empty suffix is omitted from the map rather than included as
 `SplitOptions`, so the split behavior and its fingerprint can never drift apart.
 Changing any input — the model, the dimension, the chunking cap, the input
 suffix, the overlap formula, or the document-unit scheme — produces a different
-fingerprint and cuts a new generation.
+fingerprint and cuts a new generation. Which
+`[vector.embeddings.servers.<name>]` entry encoded a document is deliberately
+*not* a fingerprint input: every server serves the same globally-configured
+model, so their vectors are interchangeable and a build may switch servers
+(`embeddings build --using <name>`) without invalidating the generation.
 
 - `embeddings build` (incremental): mirror refresh, then fill whatever the
   active generation is missing.
@@ -234,14 +238,14 @@ re-embedding.
 ### Fill and skip-and-stamp
 
 Fill embeds every pending document (content changed, or never embedded, for the
-active generation). Within each scan page, up to `concurrency` (config, default
-4\) documents are split and encoded in parallel; saves into `vectors.db` stay
-serialized on one goroutine, preserving the single-writer model. Requests ask
-for `encoding_format: "base64"` (raw little-endian float32 bytes, ~4x smaller
-than JSON float arrays); the encoder accepts either response shape, and a server
-that rejects the field downgrades the encoder to plain float requests for its
-lifetime. A document whose encode call fails with a permanent error — a 400,
-413, or 422 whose error body describes the input itself, e.g. a
+active generation). Within each scan page, up to `concurrency` (the building
+server's config, default 4) documents are split and encoded in parallel; saves
+into `vectors.db` stay serialized on one goroutine, preserving the single-writer
+model. Requests ask for `encoding_format: "base64"` (raw little-endian float32
+bytes, ~4x smaller than JSON float arrays); the encoder accepts either response
+shape, and a server that rejects the field downgrades the encoder to plain float
+requests for its lifetime. A document whose encode call fails with a permanent
+error — a 400, 413, or 422 whose error body describes the input itself, e.g. a
 token/context-length overflow or a content-policy rejection — is not retried in
 that fill or the next one: it's stamped for the generation with no vectors at
 its current `content_hash`, which marks it non-pending. It's logged (doc key

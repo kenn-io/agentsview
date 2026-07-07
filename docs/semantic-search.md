@@ -32,26 +32,69 @@ enabled = true                    # default false; everything below is opt-in
 include_automated = false         # default; automated sessions (e.g. roborev) are not embedded -- set true to include
 
 [vector.embeddings]
-endpoint = "http://localhost:11434/v1"  # OpenAI-compatible base URL; "/embeddings" is appended
 model = "nomic-embed-text"
 dimension = 768                   # every returned vector must have this length
+max_input_chars = 8192            # per-chunk rune cap (default 8192)
+# input_suffix = "<|endoftext|>"  # appended to every embedded text; default empty (see below)
+default_server = "local"          # server used for query encoding and unnamed builds
+
+[vector.embeddings.servers.local]
+endpoint = "http://localhost:11434/v1"  # OpenAI-compatible base URL; "/embeddings" is appended
 api_key_env = "OPENAI_API_KEY"    # name of an env var holding the key; omit for anonymous access
 batch_size = 32                   # inputs per HTTP call (default 32)
 concurrency = 4                   # documents embedded in parallel during a build (default 4)
 timeout = "30s"                   # per-HTTP-call timeout (default "30s")
 max_retries = 3                   # attempts on 429/5xx/network errors; 4xx fails fast (default 3)
-max_input_chars = 8192            # per-chunk rune cap (default 8192)
-# input_suffix = "<|endoftext|>"  # appended to every embedded text; default empty (see below)
 
 [vector.embed]
 run_after_sync = true             # daemon embeds deltas after each sync, debounced ~30s (default true)
 backstop_interval = "24h"         # periodic full reconciliation scan; negative disables (default "24h")
 ```
 
-`endpoint`, `model`, and `dimension` are required once `enabled = true`;
-`agentsview` fails fast with an actionable message if any is missing or a
-duration field doesn't parse. Restart the daemon (or run a CLI command) after
-editing the file.
+`model`, `dimension`, and at least one `[vector.embeddings.servers.<name>]`
+entry with an `endpoint` are required once `enabled = true`; `agentsview` fails
+fast with an actionable message if any is missing or a duration field doesn't
+parse. Restart the daemon (or run a CLI command) after editing the file.
+
+### Named embeddings servers
+
+Model identity — `model`, `dimension`, `max_input_chars`, `input_suffix` — is
+global: every server in the `servers` table must serve that same model, so
+vectors produced by any of them are interchangeable and land in the same
+generation. What varies per server is transport and capacity: `endpoint`,
+`api_key_env`, `timeout`, `max_retries`, `batch_size`, and `concurrency`.
+
+This split exists so you can encode search queries against a fast local server
+while offloading bulk index builds to a bigger remote machine:
+
+```toml
+[vector.embeddings]
+model = "qwen3-embedding-4b"
+dimension = 2560
+input_suffix = "<|endoftext|>"
+default_server = "local"
+
+[vector.embeddings.servers.local]      # laptop llama.cpp: low latency for queries
+endpoint = "http://127.0.0.1:30000/v1"
+
+[vector.embeddings.servers.build-box]  # remote GPU box: high throughput for builds
+endpoint = "http://build-box:30000/v1"
+timeout = "300s"
+concurrency = 6
+```
+
+`default_server` names the server used for search-time query encoding and for
+any build that doesn't select one; with a single server defined it is implicit,
+with more than one it is required.
+`agentsview embeddings build --using build-box` runs one build against a
+different server without touching the default. Because the model identity is
+global, the server choice is not part of the generation fingerprint — a build
+started on one server can be topped up incrementally from another.
+
+One caveat: the same model served at different quantizations (say F16 on one
+box, Q8 on another) produces slightly different vectors for the same text. They
+live in the same embedding space and search still works, but for bit-identical
+vectors serve the same weights everywhere.
 
 `concurrency` bounds how many documents a build embeds in parallel. Builds are
 usually round-trip-bound rather than compute-bound — especially against a remote
@@ -109,9 +152,11 @@ ollama pull nomic-embed-text
 enabled = true
 
 [vector.embeddings]
-endpoint = "http://localhost:11434/v1"
 model = "nomic-embed-text"
 dimension = 768
+
+[vector.embeddings.servers.local]
+endpoint = "http://localhost:11434/v1"
 ```
 
 The encoder POSTs to `<endpoint>/embeddings` with an OpenAI-style
@@ -153,7 +198,12 @@ agentsview embeddings build --yes      # skip confirmation prompts
 agentsview embeddings build --full-rebuild --yes  # re-embeds every document
 agentsview embeddings build --backstop # force a full mirror reconciliation scan
 agentsview embeddings build --include-automated  # embed automated sessions for this build only
+agentsview embeddings build --using build-box    # encode against a named server instead of the default
 ```
+
+`--using <name>` selects which `[vector.embeddings.servers.<name>]` entry the
+build encodes against; without it the build uses `default_server`. A mistyped
+name fails immediately, before anything starts.
 
 `--include-automated` overrides `[vector].include_automated` for this one build;
 it does not change the config file. Bare `--include-automated` embeds automated
