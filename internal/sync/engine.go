@@ -8197,6 +8197,18 @@ func (e *Engine) SyncSingleSessionContext(
 				file.Project = workspace
 			}
 		}
+	case parser.AgentQoder:
+		for _, qoderDir := range e.agentDirs[parser.AgentQoder] {
+			rel, ok := isUnder(qoderDir, path)
+			if !ok {
+				continue
+			}
+			parts := strings.Split(rel, string(filepath.Separator))
+			if len(parts) == 2 || len(parts) == 4 && parts[2] == "subagents" {
+				file.Project = parser.DecodeQoderProjectDir(parts[0])
+				break
+			}
+		}
 	case parser.AgentReasonix:
 		if classified, ok := e.classifyReasonixPath(path); ok {
 			file.Project = classified.Project
