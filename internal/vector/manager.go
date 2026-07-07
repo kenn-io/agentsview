@@ -43,11 +43,10 @@ func (e *refusalError) Is(target error) bool { return target == ErrGenerationRef
 // their check-then-act refusal invariants (Missing coverage, the
 // active-generation check) hold under concurrent calls.
 type Manager struct {
-	ix     *Index
-	src    UnitSource
-	enc    kitvec.EncodeFunc
-	gen    kitvec.Generation
-	encode EncodeSettings
+	ix       *Index
+	src      UnitSource
+	encoders EncoderSet
+	gen      kitvec.Generation
 
 	// opMu serializes lifecycle operations: build starts (begin) and the
 	// whole of Activate/Retire. It is never held across a running build —
@@ -63,7 +62,7 @@ type Manager struct {
 }
 
 // BuildRequest is the caller-controlled subset of BuildOptions the manager
-// exposes; BatchSize and Progress are the manager's own concerns.
+// exposes; encode settings and Progress are the manager's own concerns.
 type BuildRequest struct {
 	FullRebuild bool `json:"full_rebuild,omitempty"`
 	Backstop    bool `json:"backstop,omitempty"`
@@ -71,6 +70,11 @@ type BuildRequest struct {
 	// build (caller-resolved from config and, for the CLI's one-off
 	// --include-automated flag, its override). See BuildOptions.IncludeAutomated.
 	IncludeAutomated bool `json:"include_automated,omitempty"`
+	// Using names the embeddings server (an EncoderSet entry) this build
+	// encodes against; empty selects the set's default. Server choice is
+	// transport only — every server encodes the same model, so it never
+	// affects the generation fingerprint.
+	Using string `json:"using,omitempty"`
 }
 
 // BuildStatus reports the manager's current build state, for polling
@@ -84,8 +88,8 @@ type BuildStatus struct {
 	LastResult *BuildResult `json:"last_result,omitempty"`
 }
 
-// EncodeSettings groups the encode-shape knobs a Manager applies to every
-// build it runs, resolved from config ([vector.embeddings] batch_size and
+// EncodeSettings groups the encode-shape knobs of one embeddings server,
+// resolved from config ([vector.embeddings.servers.<name>] batch_size and
 // concurrency).
 type EncodeSettings struct {
 	// BatchSize is the number of inputs sent per HTTP call.
@@ -94,18 +98,51 @@ type EncodeSettings struct {
 	Concurrency int
 }
 
+// ManagedEncoder pairs one embeddings server's encoder with the encode
+// settings tuned for that server.
+type ManagedEncoder struct {
+	Encode   kitvec.EncodeFunc
+	Settings EncodeSettings
+}
+
+// EncoderSet is the named embeddings servers a Manager can build with. All
+// entries encode the same model — the embedding-space identity is global
+// config — so a build may use any of them interchangeably; Default names
+// the entry used when a BuildRequest doesn't select one.
+type EncoderSet struct {
+	Default string
+	ByName  map[string]ManagedEncoder
+}
+
 // NewManager creates a Manager that builds gen's embedding space over ix,
-// scanning src and encoding with enc under encode's batch size and
-// concurrency. enc is wrapped so a panic inside it surfaces as an encode
-// error rather than crashing the process (see recoveringEncoder).
+// scanning src and encoding with one of encoders' entries per build (the
+// default, or BuildRequest.Using). Each encoder is wrapped so a panic
+// inside it surfaces as an encode error rather than crashing the process
+// (see recoveringEncoder).
 func NewManager(
-	ix *Index, src UnitSource, enc kitvec.EncodeFunc,
-	gen kitvec.Generation, encode EncodeSettings,
+	ix *Index, src UnitSource, encoders EncoderSet, gen kitvec.Generation,
 ) *Manager {
-	return &Manager{
-		ix: ix, src: src, enc: recoveringEncoder(enc),
-		gen: gen, encode: encode,
+	wrapped := EncoderSet{Default: encoders.Default, ByName: make(map[string]ManagedEncoder, len(encoders.ByName))}
+	for name, me := range encoders.ByName {
+		me.Encode = recoveringEncoder(me.Encode)
+		wrapped.ByName[name] = me
 	}
+	return &Manager{ix: ix, src: src, encoders: wrapped, gen: gen}
+}
+
+// resolveEncoder picks the encoder a build request encodes with: the named
+// entry when Using is set, the set's default otherwise. It fails when the
+// name is unknown so a mistyped --using errors before a build starts.
+func (m *Manager) resolveEncoder(req BuildRequest) (ManagedEncoder, error) {
+	name := req.Using
+	if name == "" {
+		name = m.encoders.Default
+	}
+	me, ok := m.encoders.ByName[name]
+	if !ok {
+		return ManagedEncoder{}, fmt.Errorf("no embeddings server named %q", name)
+	}
+	return me, nil
 }
 
 // recoveringEncoder converts a panic in enc (a caller-supplied network
@@ -130,11 +167,15 @@ func recoveringEncoder(enc kitvec.EncodeFunc) kitvec.EncodeFunc {
 // The goroutine runs against context.Background() so it outlives the HTTP
 // request that triggered it.
 func (m *Manager) StartBuild(req BuildRequest) error {
+	me, err := m.resolveEncoder(req)
+	if err != nil {
+		return err
+	}
 	if err := m.begin(); err != nil {
 		return err
 	}
 	go func() {
-		result, err := m.runBuild(context.Background(), req)
+		result, err := m.runBuild(context.Background(), req, me)
 		m.finish(result, err)
 	}()
 	return nil
@@ -144,10 +185,14 @@ func (m *Manager) StartBuild(req BuildRequest) error {
 // should drop a scheduled run rather than queue it: it returns (false, nil)
 // without starting anything if a build is already running.
 func (m *Manager) TryBuild(ctx context.Context, req BuildRequest) (bool, error) {
+	me, err := m.resolveEncoder(req)
+	if err != nil {
+		return false, err
+	}
 	if err := m.begin(); err != nil {
 		return false, nil
 	}
-	result, err := m.runBuild(ctx, req)
+	result, err := m.runBuild(ctx, req, me)
 	m.finish(result, err)
 	return true, err
 }
@@ -243,18 +288,20 @@ func (m *Manager) begin() error {
 // error so StartBuild's detached goroutine can never crash the process and
 // TryBuild's caller sees a failure rather than a propagating panic; either
 // way finish records it in LastError and clears the running state.
-func (m *Manager) runBuild(ctx context.Context, req BuildRequest) (result BuildResult, err error) {
+func (m *Manager) runBuild(
+	ctx context.Context, req BuildRequest, me ManagedEncoder,
+) (result BuildResult, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("build panicked: %v", r)
 		}
 	}()
-	return m.ix.Build(ctx, m.src, m.enc, m.gen, BuildOptions{
+	return m.ix.Build(ctx, m.src, me.Encode, m.gen, BuildOptions{
 		FullRebuild:      req.FullRebuild,
 		Backstop:         req.Backstop,
 		IncludeAutomated: req.IncludeAutomated,
-		BatchSize:        m.encode.BatchSize,
-		Concurrency:      m.encode.Concurrency,
+		BatchSize:        me.Settings.BatchSize,
+		Concurrency:      me.Settings.Concurrency,
 		Progress:         m.reportProgress,
 	})
 }

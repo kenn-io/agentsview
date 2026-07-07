@@ -390,12 +390,15 @@ func setupVectorServing(
 		return vectorServing{}, fmt.Errorf("opening vectors.db: %w", err)
 	}
 
-	enc, err := newVectorEncoder(cfg.Vector.Embeddings)
+	encoders, err := vectorEncoderSet(cfg.Vector.Embeddings)
 	if err != nil {
 		ix.Close()
 		_ = lock.Close()
 		return vectorServing{}, err
 	}
+	// Search-time query encoding always uses the default server; builds may
+	// pick any named entry via BuildRequest.Using.
+	queryEnc := encoders.ByName[encoders.Default].Encode
 
 	backstop, err := time.ParseDuration(cfg.Vector.Embed.BackstopInterval)
 	if err != nil {
@@ -407,8 +410,8 @@ func setupVectorServing(
 	}
 
 	gen := vectorGeneration(cfg.Vector.Embeddings)
-	mgr := vector.NewManager(ix, database, enc, gen, encodeSettings(cfg.Vector.Embeddings))
-	database.SetVectorSearcher(newSearcherAdapter(ix, enc, gen))
+	mgr := vector.NewManager(ix, database, encoders, gen)
+	database.SetVectorSearcher(newSearcherAdapter(ix, queryEnc, gen))
 	scheduler := newEmbedScheduler(mgr, embedDebounceInterval, backstop, cfg.Vector.IncludeAutomated)
 
 	return vectorServing{
@@ -468,7 +471,8 @@ func installDirectVectorSearcher(cfg config.Config, d *db.DB) func() error {
 		)
 		return nil
 	}
-	enc, err := newVectorEncoder(cfg.Vector.Embeddings)
+	// Query encoding uses the default server.
+	enc, err := newVectorEncoder(cfg.Vector.Embeddings, "")
 	if err != nil {
 		ix.Close()
 		log.Printf(

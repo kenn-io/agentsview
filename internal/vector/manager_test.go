@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,6 +13,14 @@ import (
 	kitvec "go.kenn.io/kit/vector"
 	"go.kenn.io/kit/vector/sqlitevec"
 )
+
+// soloEncoders wraps enc as a single-server EncoderSet, the shape most
+// Manager tests need.
+func soloEncoders(enc kitvec.EncodeFunc) EncoderSet {
+	return EncoderSet{Default: "test", ByName: map[string]ManagedEncoder{
+		"test": {Encode: enc, Settings: EncodeSettings{BatchSize: 10}},
+	}}
+}
 
 // blockingEncoder returns an encoder that blocks until release is closed,
 // letting tests observe a Manager while its build is still in flight.
@@ -56,12 +65,64 @@ func generationIDByFingerprint(t *testing.T, ix *Index, fp string) int64 {
 	return 0
 }
 
+// countingEncoder returns a working encoder that counts its calls, so
+// tests can tell which EncoderSet entry a build actually used.
+func countingEncoder(calls *atomic.Int64) kitvec.EncodeFunc {
+	return func(_ context.Context, texts []string) ([][]float32, error) {
+		calls.Add(1)
+		out := make([][]float32, len(texts))
+		for i := range texts {
+			out[i] = []float32{1, 0, 0}
+		}
+		return out, nil
+	}
+}
+
+func TestManagerBuildUsingSelectsNamedEncoder(t *testing.T) {
+	ix := openTestIndex(t)
+	src := twoDocSource()
+	gen := fakeGeneration("fake-model")
+
+	var localCalls, remoteCalls atomic.Int64
+	encoders := EncoderSet{Default: "local", ByName: map[string]ManagedEncoder{
+		"local":  {Encode: countingEncoder(&localCalls), Settings: EncodeSettings{BatchSize: 10}},
+		"remote": {Encode: countingEncoder(&remoteCalls), Settings: EncodeSettings{BatchSize: 10}},
+	}}
+	m := NewManager(ix, src, encoders, gen)
+
+	started, err := m.TryBuild(context.Background(), BuildRequest{Using: "remote"})
+	require.NoError(t, err)
+	require.True(t, started)
+	assert.Positive(t, remoteCalls.Load(), "build with Using must encode on the named server")
+	assert.Zero(t, localCalls.Load(), "the default server must stay idle")
+
+	started, err = m.TryBuild(context.Background(), BuildRequest{FullRebuild: true})
+	require.NoError(t, err)
+	require.True(t, started)
+	assert.Positive(t, localCalls.Load(), "a build without Using must encode on the default server")
+}
+
+func TestManagerBuildUnknownUsingFailsBeforeStarting(t *testing.T) {
+	ix := openTestIndex(t)
+	src := twoDocSource()
+	gen := fakeGeneration("fake-model")
+	m := NewManager(ix, src, soloEncoders(fakeBuildEncoder()), gen)
+
+	err := m.StartBuild(BuildRequest{Using: "nope"})
+	require.ErrorContains(t, err, `no embeddings server named "nope"`)
+	assert.False(t, m.Status().Running, "a failed resolve must not leave the manager running")
+
+	started, err := m.TryBuild(context.Background(), BuildRequest{Using: "nope"})
+	require.ErrorContains(t, err, `no embeddings server named "nope"`)
+	assert.False(t, started)
+}
+
 func TestManagerStartBuildSetsRunningAndConcurrentStartReturnsErrBuildRunning(t *testing.T) {
 	ix := openTestIndex(t)
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
 	release := make(chan struct{})
-	m := NewManager(ix, src, blockingEncoder(release), gen, EncodeSettings{BatchSize: 10})
+	m := NewManager(ix, src, soloEncoders(blockingEncoder(release)), gen)
 
 	require.NoError(t, m.StartBuild(BuildRequest{}))
 	waitFor(t, func() bool { return m.Status().Running }, "build never reported running")
@@ -79,7 +140,7 @@ func TestManagerTryBuildReturnsFalseWhileRunning(t *testing.T) {
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
 	release := make(chan struct{})
-	m := NewManager(ix, src, blockingEncoder(release), gen, EncodeSettings{BatchSize: 10})
+	m := NewManager(ix, src, soloEncoders(blockingEncoder(release)), gen)
 
 	require.NoError(t, m.StartBuild(BuildRequest{}))
 	waitFor(t, func() bool { return m.Status().Running }, "build never reported running")
@@ -96,7 +157,7 @@ func TestManagerStatusTransitionsToLastResultOnCompletion(t *testing.T) {
 	ix := openTestIndex(t)
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
-	m := NewManager(ix, src, fakeBuildEncoder(), gen, EncodeSettings{BatchSize: 10})
+	m := NewManager(ix, src, soloEncoders(fakeBuildEncoder()), gen)
 
 	require.NoError(t, m.StartBuild(BuildRequest{}))
 	waitFor(t, func() bool { return !m.Status().Running }, "build never finished")
@@ -115,7 +176,7 @@ func TestManagerStatusSetsLastErrorOnEncoderFailure(t *testing.T) {
 	failingEncoder := func(_ context.Context, _ []string) ([][]float32, error) {
 		return nil, fmt.Errorf("encoder rejected input")
 	}
-	m := NewManager(ix, src, failingEncoder, gen, EncodeSettings{BatchSize: 10})
+	m := NewManager(ix, src, soloEncoders(failingEncoder), gen)
 
 	require.NoError(t, m.StartBuild(BuildRequest{}))
 	waitFor(t, func() bool { return !m.Status().Running }, "build never finished")
@@ -130,7 +191,7 @@ func TestManagerGenerationsDelegatesToIndex(t *testing.T) {
 	ctx := context.Background()
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
-	m := NewManager(ix, src, fakeBuildEncoder(), gen, EncodeSettings{BatchSize: 10})
+	m := NewManager(ix, src, soloEncoders(fakeBuildEncoder()), gen)
 
 	_, err := m.TryBuild(ctx, BuildRequest{})
 	require.NoError(t, err)
@@ -147,7 +208,7 @@ func TestManagerActivateForceRefusalMatrix(t *testing.T) {
 	ctx := context.Background()
 	src := twoDocSource()
 	genA := fakeGeneration("model-a")
-	m := NewManager(ix, src, fakeBuildEncoder(), genA, EncodeSettings{BatchSize: 10})
+	m := NewManager(ix, src, soloEncoders(fakeBuildEncoder()), genA)
 
 	_, err := m.TryBuild(ctx, BuildRequest{})
 	require.NoError(t, err, "genA becomes active")
@@ -186,7 +247,7 @@ func TestManagerRetireRefusesActiveGenerationWithoutForce(t *testing.T) {
 	ctx := context.Background()
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
-	m := NewManager(ix, src, fakeBuildEncoder(), gen, EncodeSettings{BatchSize: 10})
+	m := NewManager(ix, src, soloEncoders(fakeBuildEncoder()), gen)
 
 	_, err := m.TryBuild(ctx, BuildRequest{})
 	require.NoError(t, err)
@@ -230,7 +291,7 @@ func TestManagerConcurrentActivateNeverLeavesTwoActive(t *testing.T) {
 	src := twoDocSource()
 	genA := fakeGeneration("model-a")
 	genB := fakeGeneration("model-b")
-	m := NewManager(ix, src, fakeBuildEncoder(), genA, EncodeSettings{BatchSize: 10})
+	m := NewManager(ix, src, soloEncoders(fakeBuildEncoder()), genA)
 
 	_, err := ix.Build(ctx, src, fakeBuildEncoder(), genA, BuildOptions{})
 	require.NoError(t, err)
@@ -271,7 +332,7 @@ func TestManagerStartBuildRecoversPanickedEncoder(t *testing.T) {
 	panickingEncoder := func(_ context.Context, _ []string) ([][]float32, error) {
 		panic("encoder exploded")
 	}
-	m := NewManager(ix, src, panickingEncoder, gen, EncodeSettings{BatchSize: 10})
+	m := NewManager(ix, src, soloEncoders(panickingEncoder), gen)
 
 	require.NoError(t, m.StartBuild(BuildRequest{}))
 	waitFor(t, func() bool { return !m.Status().Running }, "build never finished after panic")
@@ -296,7 +357,7 @@ func TestManagerActivateAndRetireUnknownIDPropagateNotFound(t *testing.T) {
 	ctx := context.Background()
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
-	m := NewManager(ix, src, fakeBuildEncoder(), gen, EncodeSettings{BatchSize: 10})
+	m := NewManager(ix, src, soloEncoders(fakeBuildEncoder()), gen)
 
 	err := m.Activate(ctx, 999, false)
 	assert.ErrorIs(t, err, ErrGenerationNotFound)
@@ -311,7 +372,7 @@ func TestManagerActivateAndRetireRefuseWhileBuildRunning(t *testing.T) {
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
 	release := make(chan struct{})
-	m := NewManager(ix, src, blockingEncoder(release), gen, EncodeSettings{BatchSize: 10})
+	m := NewManager(ix, src, soloEncoders(blockingEncoder(release)), gen)
 
 	require.NoError(t, m.StartBuild(BuildRequest{}))
 	waitFor(t, func() bool { return m.Status().Running }, "build never reported running")

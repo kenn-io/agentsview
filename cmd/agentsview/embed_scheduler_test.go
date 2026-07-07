@@ -497,7 +497,7 @@ func TestSearcherAdapterVersionMismatchedIndexReturnsSemanticUnavailable(t *test
 	require.NoError(t, err, "read-only Open must succeed against a mismatched vectors.db")
 	defer ix.Close()
 
-	enc, err := newVectorEncoder(cfg.Vector.Embeddings)
+	enc, err := newVectorEncoder(cfg.Vector.Embeddings, "")
 	require.NoError(t, err)
 	adapter := newSearcherAdapter(ix, enc, vectorGeneration(cfg.Vector.Embeddings))
 
@@ -522,13 +522,18 @@ func vectorTestConfig(dataDir string) config.Config {
 		Vector: config.VectorConfig{
 			Enabled: true,
 			Embeddings: config.VectorEmbeddingsConfig{
-				Endpoint:      "http://127.0.0.1:1/v1",
 				Model:         "test-model",
 				Dimension:     3,
-				BatchSize:     10,
-				Timeout:       "5s",
-				MaxRetries:    1,
 				MaxInputChars: 1000,
+				Servers: map[string]config.VectorEmbeddingsServerConfig{
+					"local": {
+						Endpoint:    "http://127.0.0.1:1/v1",
+						BatchSize:   10,
+						Concurrency: 1,
+						Timeout:     "5s",
+						MaxRetries:  1,
+					},
+				},
 			},
 			Embed: config.VectorEmbedConfig{
 				BackstopInterval: "24h",

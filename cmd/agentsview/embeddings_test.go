@@ -38,13 +38,15 @@ func writeEmbeddingsTestConfig(t *testing.T, dataDir, endpoint string) {
 enabled = true
 
 [vector.embeddings]
-endpoint = %q
 model = "test-model"
 dimension = 3
+max_input_chars = 1000
+
+[vector.embeddings.servers.local]
+endpoint = %q
 batch_size = 10
 timeout = "5s"
 max_retries = 1
-max_input_chars = 1000
 `, endpoint))
 }
 
@@ -444,13 +446,15 @@ enabled = true
 include_automated = true
 
 [vector.embeddings]
-endpoint = %q
 model = "test-model"
 dimension = 3
+max_input_chars = 1000
+
+[vector.embeddings.servers.local]
+endpoint = %q
 batch_size = 10
 timeout = "5s"
 max_retries = 1
-max_input_chars = 1000
 `, stub.URL+"/v1"))
 	seedEmbeddableArchiveWithAutomated(t, dataDir)
 
@@ -477,13 +481,15 @@ enabled = true
 include_automated = true
 
 [vector.embeddings]
-endpoint = %q
 model = "test-model"
 dimension = 3
+max_input_chars = 1000
+
+[vector.embeddings.servers.local]
+endpoint = %q
 batch_size = 10
 timeout = "5s"
 max_retries = 1
-max_input_chars = 1000
 `, stub.URL+"/v1"))
 	seedEmbeddableArchiveWithAutomated(t, dataDir)
 
@@ -543,13 +549,15 @@ enabled = true
 include_automated = true
 
 [vector.embeddings]
-endpoint = "http://127.0.0.1:1"
 model = "test-model"
 dimension = 3
+max_input_chars = 1000
+
+[vector.embeddings.servers.local]
+endpoint = "http://127.0.0.1:1"
 batch_size = 10
 timeout = "5s"
 max_retries = 1
-max_input_chars = 1000
 `)
 
 	var gotIncludeAutomated atomic.Bool

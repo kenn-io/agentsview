@@ -79,6 +79,9 @@ type EmbeddingsBuildOptions struct {
 	// [vector].include_automated to IncludeAutomated's parsed value (true or
 	// false) for this one build.
 	IncludeAutomatedSet bool
+	// Using names the [vector.embeddings.servers.<name>] entry this build
+	// encodes against; empty uses default_server.
+	Using string
 }
 
 func newEmbeddingsBuildCommand() *cobra.Command {
@@ -101,6 +104,9 @@ func newEmbeddingsBuildCommand() *cobra.Command {
 		"Force a full mirror reconciliation scan without forcing a re-embed")
 	cmd.Flags().BoolVar(&opts.Yes, "yes", false,
 		"Skip the full-rebuild confirmation prompt")
+	cmd.Flags().StringVar(&opts.Using, "using", "",
+		"Named embeddings server from [vector.embeddings.servers] to run this "+
+			"build against (default: the config's default_server)")
 	cmd.Flags().BoolVar(&opts.IncludeAutomated, "include-automated", false,
 		"Override [vector].include_automated for this build only: bare "+
 			"--include-automated embeds automated (non-interactive) sessions "+
@@ -217,31 +223,51 @@ func vectorGeneration(c config.VectorEmbeddingsConfig) kitvec.Generation {
 	}
 }
 
-// encodeSettings maps the [vector.embeddings] batch_size and concurrency
-// keys onto the manager's encode-shape settings.
-func encodeSettings(c config.VectorEmbeddingsConfig) vector.EncodeSettings {
-	return vector.EncodeSettings{
-		BatchSize:   c.BatchSize,
-		Concurrency: c.Concurrency,
-	}
-}
-
-// newVectorEncoder builds the OpenAI-compatible embeddings encoder from
-// config, parsing the configured timeout duration.
-func newVectorEncoder(c config.VectorEmbeddingsConfig) (kitvec.EncodeFunc, error) {
-	timeout, err := time.ParseDuration(c.Timeout)
+// newVectorEncoder builds the OpenAI-compatible embeddings encoder for one
+// named server ("" means the default), combining the global model identity
+// with that server's transport settings.
+func newVectorEncoder(c config.VectorEmbeddingsConfig, serverName string) (kitvec.EncodeFunc, error) {
+	name, server, err := c.Server(serverName)
 	if err != nil {
-		return nil, fmt.Errorf("parsing [vector.embeddings] timeout %q: %w", c.Timeout, err)
+		return nil, err
+	}
+	timeout, err := time.ParseDuration(server.Timeout)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"parsing [vector.embeddings.servers.%s] timeout %q: %w", name, server.Timeout, err)
 	}
 	return vector.NewEncoder(vector.EncoderConfig{
-		Endpoint:    c.Endpoint,
-		APIKey:      c.APIKey(),
+		Endpoint:    server.Endpoint,
+		APIKey:      server.APIKey(),
 		Model:       c.Model,
 		Dimension:   c.Dimension,
 		Timeout:     timeout,
-		MaxRetries:  c.MaxRetries,
+		MaxRetries:  server.MaxRetries,
 		InputSuffix: c.InputSuffix,
 	}), nil
+}
+
+// vectorEncoderSet builds one encoder per configured embeddings server, so
+// a Manager can run any build against the server the request names.
+func vectorEncoderSet(c config.VectorEmbeddingsConfig) (vector.EncoderSet, error) {
+	set := vector.EncoderSet{
+		Default: c.ResolvedDefaultServer(),
+		ByName:  make(map[string]vector.ManagedEncoder, len(c.Servers)),
+	}
+	for name, server := range c.Servers {
+		enc, err := newVectorEncoder(c, name)
+		if err != nil {
+			return vector.EncoderSet{}, err
+		}
+		set.ByName[name] = vector.ManagedEncoder{
+			Encode: enc,
+			Settings: vector.EncodeSettings{
+				BatchSize:   server.BatchSize,
+				Concurrency: server.Concurrency,
+			},
+		}
+	}
+	return set, nil
 }
 
 // runEmbeddingsBuild loads config, gates on [vector] enabled, confirms a
@@ -275,10 +301,17 @@ func runEmbeddingsBuild(
 		}
 	}
 
+	// Resolve --using against this config up front so a mistyped name fails
+	// with the full server list instead of a daemon-side error.
+	if _, _, err := cfg.Vector.Embeddings.Server(opts.Using); err != nil {
+		return err
+	}
+
 	req := vector.BuildRequest{
 		FullRebuild:      opts.FullRebuild,
 		Backstop:         opts.Backstop,
 		IncludeAutomated: includeAutomated,
+		Using:            opts.Using,
 	}
 	if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
 		return runEmbeddingsBuildDaemon(ctx, out, cfg, req)
@@ -349,14 +382,12 @@ func runEmbeddingsBuildDirect(
 	}
 	defer ix.Close()
 
-	enc, err := newVectorEncoder(cfg.Vector.Embeddings)
+	encoders, err := vectorEncoderSet(cfg.Vector.Embeddings)
 	if err != nil {
 		return err
 	}
 
-	m := vector.NewManager(
-		ix, archiveDB, enc, vectorGeneration(cfg.Vector.Embeddings), encodeSettings(cfg.Vector.Embeddings),
-	)
+	m := vector.NewManager(ix, archiveDB, encoders, vectorGeneration(cfg.Vector.Embeddings))
 	return runDirectBuild(ctx, out, m, req)
 }
 
@@ -624,9 +655,8 @@ func directGenerationAction(
 	}
 	defer ix.Close()
 
-	m := vector.NewManager(
-		ix, nil, nil, vectorGeneration(cfg.Vector.Embeddings), encodeSettings(cfg.Vector.Embeddings),
-	)
+	// Activate/retire never encode, so the manager needs no encoder set.
+	m := vector.NewManager(ix, nil, vector.EncoderSet{}, vectorGeneration(cfg.Vector.Embeddings))
 	if retire {
 		return m.Retire(ctx, id, force)
 	}

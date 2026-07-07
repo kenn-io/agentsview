@@ -378,6 +378,7 @@ func TestLoadPFlags_AppliesExplicitFlags(t *testing.T) {
 }
 
 func TestLoad_NilFlagSet(t *testing.T) {
+	setupTestEnv(t)
 	cfg, err := Load(nil)
 	require.NoError(t, err)
 
