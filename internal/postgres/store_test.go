@@ -1580,7 +1580,8 @@ func TestStoreGetBranchesRecencyOrder(t *testing.T) {
 	`)
 	require.NoError(t, err, "inserting branch sessions")
 
-	branches, err := store.GetBranches(context.Background(), false, false)
+	branches, err := store.GetBranches(
+		context.Background(), db.BranchScopeRoots, false, false)
 	require.NoError(t, err, "GetBranches")
 	want := []db.BranchInfo{
 		{Project: "alpha", Branch: "feat/x"},

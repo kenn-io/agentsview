@@ -274,8 +274,14 @@ class ActivityStore {
         ok = false;
       }
       try {
+        // Scope "all" counts subagent and fork sessions like the activity
+        // report does, so every branch its by_branch rollup can surface is
+        // selectable in the typeahead.
         const res = (await callGenerated(
-          () => MetadataService.getApiV1Branches(opts),
+          () => MetadataService.getApiV1Branches({
+            ...opts,
+            scope: "all",
+          }),
           signal,
         )) as unknown as { branches: BranchInfo[] };
         if (

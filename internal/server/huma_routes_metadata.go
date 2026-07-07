@@ -126,11 +126,23 @@ func (s *Server) humaListMachines(
 	return &jsonOutput[machinesResponse]{Body: machinesResponse{Machines: machines}}, nil
 }
 
+type branchScopeParam string
+
+type branchesInput struct {
+	BoolIncludeInput
+	Scope branchScopeParam `query:"scope" enum:"roots,all" doc:"Session scope: roots (default) counts only root sessions; all also counts subagent and fork sessions, matching the activity and usage rollups"`
+}
+
 func (s *Server) humaListBranches(
 	ctx context.Context,
-	in *statsInput,
+	in *branchesInput,
 ) (*jsonOutput[branchesResponse], error) {
-	branches, err := s.db.GetBranches(ctx, !in.IncludeOneShot, !in.IncludeAutomated)
+	scope := db.BranchScopeRoots
+	if in.Scope == "all" {
+		scope = db.BranchScopeAll
+	}
+	branches, err := s.db.GetBranches(
+		ctx, scope, !in.IncludeOneShot, !in.IncludeAutomated)
 	if err != nil {
 		return nil, serverError(err)
 	}

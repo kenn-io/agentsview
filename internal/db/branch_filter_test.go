@@ -245,7 +245,16 @@ func TestGetBranches(t *testing.T) {
 		s.EndedAt = new("2026-06-08T10:00:00Z")
 	})
 
-	all, err := d.GetBranches(context.Background(), false, false)
+	// Subagent/fork-only pair: visible only under BranchScopeAll, so the
+	// activity/usage filter controls can offer branches their rollups count.
+	insertSession(t, d, "s6", "delta", func(s *Session) {
+		s.GitBranch = "fork-only"
+		s.UserMessageCount = 5
+		s.RelationshipType = "fork"
+		s.EndedAt = new("2026-06-13T10:00:00Z")
+	})
+
+	all, err := d.GetBranches(context.Background(), BranchScopeRoots, false, false)
 	require.NoError(t, err, "GetBranches includeAll")
 	assert.Equal(t, []BranchInfo{
 		branchInfoForTest("alpha", "feat/x"),
@@ -254,8 +263,16 @@ func TestGetBranches(t *testing.T) {
 		branchInfoForTest("alpha", ""),
 		branchInfoForTest("gamma", "solo"),
 	}, all, "pairs ordered by most recent activity, empty branch included")
+	assert.NotContains(t, all, branchInfoForTest("delta", "fork-only"),
+		"fork-only branch hidden from the root scope")
 
-	filtered, err := d.GetBranches(context.Background(), true, false)
+	withForks, err := d.GetBranches(
+		context.Background(), BranchScopeAll, false, false)
+	require.NoError(t, err, "GetBranches scope all")
+	assert.Contains(t, withForks, branchInfoForTest("delta", "fork-only"),
+		"fork-only branch included when scope is all")
+
+	filtered, err := d.GetBranches(context.Background(), BranchScopeRoots, true, false)
 	require.NoError(t, err, "GetBranches excludeOneShot")
 	assert.NotContains(t, filtered, branchInfoForTest("gamma", "solo"),
 		"one-shot branch excluded when excludeOneShot is set")

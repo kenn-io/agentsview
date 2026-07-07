@@ -121,7 +121,10 @@ GET /api/v1/agents
 ```
 
 `GET /api/v1/branches` returns distinct `(project, branch)` pairs
-plus an opaque `token` field:
+plus an opaque `token` field. By default only root sessions count;
+`?scope=all` also counts subagent and fork sessions, matching the
+activity and usage rollups (the Activity and Usage pages request this
+scope so every branch their breakdowns can surface is offered):
 
 ```json
 {

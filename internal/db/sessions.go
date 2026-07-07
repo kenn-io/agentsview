@@ -2693,21 +2693,38 @@ type BranchInfo struct {
 	Token   string `json:"token"`
 }
 
+// BranchScope selects which session relationships contribute (project,
+// branch) pairs to GetBranches.
+type BranchScope int
+
+const (
+	// BranchScopeRoots counts only root sessions, matching
+	// GetProjects/GetAgents, so sidebar dropdowns reflect real work
+	// rather than subagents.
+	BranchScopeRoots BranchScope = iota
+	// BranchScopeAll also counts subagent and fork sessions, matching the
+	// activity report and usage aggregation scope, so every branch that
+	// can appear in those rollups is offered (and un-hidable) in their
+	// filter controls.
+	BranchScopeAll
+)
+
 // GetBranches returns distinct (project, git_branch) pairs, including the empty
-// branch used for sessions with no recorded branch. Scoping matches
-// GetProjects/GetAgents (root sessions with messages) so the dropdown reflects
-// real work rather than subagents. Pairs are ordered by most recent session
-// activity so active branches surface first in long lists, with the pair
-// itself as a deterministic tiebreaker.
+// branch used for sessions with no recorded branch. Pairs are ordered by most
+// recent session activity so active branches surface first in long lists, with
+// the pair itself as a deterministic tiebreaker.
 func (db *DB) GetBranches(
 	ctx context.Context,
+	scope BranchScope,
 	excludeOneShot, excludeAutomated bool,
 ) ([]BranchInfo, error) {
 	q := `SELECT project, git_branch
 		FROM sessions
 		WHERE message_count > 0
-		  AND relationship_type NOT IN ('subagent', 'fork')
 		  AND deleted_at IS NULL`
+	if scope == BranchScopeRoots {
+		q += " AND relationship_type NOT IN ('subagent', 'fork')"
+	}
 	if excludeOneShot {
 		if !excludeAutomated {
 			q += " AND (user_message_count > 1 OR is_automated = 1)"

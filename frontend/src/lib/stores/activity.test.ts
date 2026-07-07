@@ -347,7 +347,9 @@ describe("loadFilterOptions", () => {
     expect(api.getProjects).toHaveBeenCalledWith(full);
     expect(api.getAgents).toHaveBeenCalledWith(full);
     expect(api.getMachines).toHaveBeenCalledWith(full);
-    expect(api.getBranches).toHaveBeenCalledWith(full);
+    // Branches use scope "all" so the typeahead offers every branch the
+    // report's subagent/fork-inclusive rollups can surface.
+    expect(api.getBranches).toHaveBeenCalledWith({ ...full, scope: "all" });
 
     expect(activity.projects).toEqual([{ name: "proj-a", count: 1 }]);
     expect(activity.agents).toEqual([{ name: "claude", count: 2 }]);

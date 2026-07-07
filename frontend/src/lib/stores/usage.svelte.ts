@@ -497,9 +497,13 @@ class UsageStore {
     this.branchesPromise = (async () => {
       try {
         configureGeneratedClient();
+        // Scope "all" counts subagent and fork sessions like the usage
+        // aggregation does, so a fork-only branch hidden from the charts
+        // still has an unhide row in the exclude dropdown.
         const res = await MetadataService.getApiV1Branches({
           includeOneShot: true,
           includeAutomated: true,
+          scope: "all",
         }) as unknown as { branches: BranchInfo[] };
         // A sync completing mid-fetch invalidated this response; let the
         // next loadBranches() refetch instead of caching stale options.

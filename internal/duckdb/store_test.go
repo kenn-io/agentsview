@@ -3612,11 +3612,16 @@ func TestDuckDBBranchDimension(t *testing.T) {
 		{"d-c", "beta", "main", "2026-02-04T12:00:00.000Z", 300, 30},
 		{"d-d", "alpha", "", "2026-02-01T12:00:00.000Z", 400, 40},
 		{"d-e", "alpha", "unknown", "2026-02-01T12:00:00.000Z", 500, 50},
+		{"d-f", "delta", "fork-only", "2026-01-30T12:00:00.000Z", 0, 0},
 	}
 	var writes []db.SessionBatchWrite
 	for _, s := range seed {
 		sess := syncSession(s.id, s.project, s.id+" first", s.ts, 1)
 		sess.GitBranch = s.branch
+		// A fork-only pair exercises the GetBranches relationship scopes.
+		if s.id == "d-f" {
+			sess.RelationshipType = "fork"
+		}
 		writes = append(writes, db.SessionBatchWrite{
 			Session: sess,
 			// A token-free user message so only the usage event below feeds the
@@ -3647,7 +3652,7 @@ func TestDuckDBBranchDimension(t *testing.T) {
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
-	branches, err := store.GetBranches(ctx, false, false)
+	branches, err := store.GetBranches(ctx, db.BranchScopeRoots, false, false)
 	require.NoError(t, err)
 	assert.Equal(t, []db.BranchInfo{
 		{
@@ -3677,6 +3682,18 @@ func TestDuckDBBranchDimension(t *testing.T) {
 		},
 	}, branches, "pairs ordered by most recent activity, ties alphabetical")
 
+	forkOnly := db.BranchInfo{
+		Project: "delta",
+		Branch:  "fork-only",
+		Token:   db.EncodeBranchFilterToken("delta", "fork-only"),
+	}
+	assert.NotContains(t, branches, forkOnly,
+		"fork-only branch hidden from the root scope")
+	withForks, err := store.GetBranches(ctx, db.BranchScopeAll, false, false)
+	require.NoError(t, err)
+	assert.Contains(t, withForks, forkOnly,
+		"fork-only branch included when scope is all")
+
 	wide := db.UsageFilter{From: "2026-01-01", To: "2026-12-31", Breakdowns: true}
 	daily, err := store.GetDailyUsage(ctx, wide)
 	require.NoError(t, err)
@@ -3686,7 +3703,9 @@ func TestDuckDBBranchDimension(t *testing.T) {
 			byKey[db.BranchInfo{Project: b.Project, Branch: b.Branch}] += b.InputTokens
 		}
 	}
-	require.Len(t, byKey, 5, "one bucket per distinct (project, branch)")
+	require.Len(t, byKey, 6, "one bucket per distinct (project, branch)")
+	assert.Equal(t, 0, byKey[db.BranchInfo{Project: "delta", Branch: "fork-only"}],
+		"fork sessions count in usage breakdowns even though the root branch scope hides them")
 	assert.Equal(t, 100, byKey[db.BranchInfo{Project: "alpha", Branch: "main"}])
 	assert.Equal(t, 200, byKey[db.BranchInfo{Project: "alpha", Branch: "feature-x"}])
 	assert.Equal(t, 300, byKey[db.BranchInfo{Project: "beta", Branch: "main"}],

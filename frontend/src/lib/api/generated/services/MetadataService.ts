@@ -62,6 +62,7 @@ export class MetadataService {
   public static getApiV1Branches({
     includeOneShot,
     includeAutomated,
+    scope,
   }: {
     /**
      * Include one-shot sessions
@@ -71,6 +72,10 @@ export class MetadataService {
      * Include automated sessions
      */
     includeAutomated?: boolean,
+    /**
+     * Session scope: roots (default) counts only root sessions; all also counts subagent and fork sessions, matching the activity and usage rollups
+     */
+    scope?: 'roots' | 'all',
   }): CancelablePromise<BranchesResponse> {
     return __request(OpenAPI, {
       method: 'GET',
@@ -78,6 +83,7 @@ export class MetadataService {
       query: {
         'include_one_shot': includeOneShot,
         'include_automated': includeAutomated,
+        'scope': scope,
       },
       errors: {
         400: `Bad Request`,

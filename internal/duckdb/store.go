@@ -773,10 +773,10 @@ func (s *Store) GetMachines(ctx context.Context, excludeOneShot, excludeAutomate
 	return out, rows.Err()
 }
 
-func (s *Store) GetBranches(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]db.BranchInfo, error) {
+func (s *Store) GetBranches(ctx context.Context, scope db.BranchScope, excludeOneShot, excludeAutomated bool) ([]db.BranchInfo, error) {
 	rows, err := s.queryContext(ctx,
 		`SELECT project, git_branch FROM sessions WHERE `+
-			rootSessionWhere(excludeOneShot, excludeAutomated)+
+			sessionScopeWhere(scope, excludeOneShot, excludeAutomated)+
 			` GROUP BY project, git_branch
 			ORDER BY MAX(`+duckActivityExpr+`) DESC NULLS LAST,
 				project, git_branch`,
@@ -798,9 +798,18 @@ func (s *Store) GetBranches(ctx context.Context, excludeOneShot, excludeAutomate
 }
 
 func rootSessionWhere(excludeOneShot, excludeAutomated bool) string {
+	return sessionScopeWhere(db.BranchScopeRoots, excludeOneShot, excludeAutomated)
+}
+
+// sessionScopeWhere is rootSessionWhere with a selectable relationship
+// scope: BranchScopeAll drops the root-only clause so subagent and fork
+// sessions count, matching the activity and usage aggregation scope.
+func sessionScopeWhere(scope db.BranchScope, excludeOneShot, excludeAutomated bool) string {
 	filter := `message_count > 0
-		AND relationship_type NOT IN ('subagent', 'fork')
 		AND deleted_at IS NULL`
+	if scope == db.BranchScopeRoots {
+		filter += ` AND relationship_type NOT IN ('subagent', 'fork')`
+	}
 	if excludeOneShot {
 		if !excludeAutomated {
 			filter += " AND (user_message_count > 1 OR is_automated = TRUE)"

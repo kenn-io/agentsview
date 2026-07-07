@@ -470,6 +470,9 @@ describe("UsageStore branch metadata", () => {
 
     expect(metadataServiceMocks.getApiV1Branches)
       .toHaveBeenCalledTimes(1);
+    expect(metadataServiceMocks.getApiV1Branches).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: "all" }),
+    );
     expect(usage.branches).toEqual([
       { project: "alpha", branch: "main", session_count: 3 },
     ]);

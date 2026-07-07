@@ -1159,12 +1159,15 @@ func (s *Store) GetMachines(
 // including the empty no-branch value, ordered by most recent session activity.
 func (s *Store) GetBranches(
 	ctx context.Context,
+	scope db.BranchScope,
 	excludeOneShot, excludeAutomated bool,
 ) ([]db.BranchInfo, error) {
 	q := `SELECT project, git_branch FROM sessions
 		WHERE message_count > 0
-		  AND relationship_type NOT IN ('subagent', 'fork')
 		  AND deleted_at IS NULL`
+	if scope == db.BranchScopeRoots {
+		q += " AND relationship_type NOT IN ('subagent', 'fork')"
+	}
 	if excludeOneShot {
 		if !excludeAutomated {
 			q += " AND (user_message_count > 1 OR is_automated = TRUE)"
