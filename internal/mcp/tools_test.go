@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -281,6 +282,37 @@ func TestSearchContent_SubstringMatch(t *testing.T) {
 	assert.Equal(t, "s1", out.Matches[0].SessionID)
 }
 
+// TestSearchContent_ContextRedactsSecretByDefault verifies that a secret in
+// a message adjacent to a search match comes back redacted in
+// context_before through the real service (not a fake), proving the MCP
+// transport inherits directBackend's context redaction: MCP has no reveal
+// opt-in, so this path must always come out redacted.
+func TestSearchContent_ContextRedactsSecretByDefault(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
+		s.MessageCount = 3
+		s.UserMessageCount = 2
+		ended := "2024-06-15T10:00:00Z"
+		s.EndedAt = &ended
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{
+		dbtest.UserMsg("s1", 0, "my key is AKIA7QHWN2DKR4FYPLJM ok"),
+		dbtest.AsstMsg("s1", 1, "noted"),
+		dbtest.UserMsg("s1", 2, "DEADBEEF marks the match"),
+	}))
+
+	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+		Pattern: "DEADBEEF", Mode: "substring", Context: 2,
+	})
+	require.NoError(t, err)
+	require.Len(t, out.Matches, 1)
+	require.Len(t, out.Matches[0].ContextBefore, 2)
+	for _, cm := range out.Matches[0].ContextBefore {
+		assert.NotContains(t, cm.Content, "AKIA7QHWN2DKR4FYPLJM",
+			"MCP has no reveal opt-in, so context must always come back redacted: %q", cm.Content)
+	}
+}
+
 // search_content's self-reference guard must exclude matches from sessions
 // that are active now, even when the matching message itself is old. A
 // long-running current session can match on a stale line; excluding by the
@@ -441,6 +473,121 @@ func TestSearchContent_ExcludesOneShotByDefault(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, out.Matches, 1, "one-shot session should be excluded")
 	assert.Equal(t, "multi", out.Matches[0].SessionID)
+}
+
+// search_content must surface the conversation-unit citation fields
+// (ordinal_range plus lineage) copied verbatim from db.ContentMatch: every
+// match in a top-level assistant run carries the run's full ordinal_range
+// and none of the subordinate/lineage fields set, matching the plumbing
+// pinned at the db layer in TestSearchContentSubstringDerivedRunRange.
+func TestSearchContent_OrdinalRangeSpansRun(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "run1", "proj", func(s *db.Session) {
+		s.MessageCount = 4
+		s.UserMessageCount = 2
+		ended := "2024-06-15T10:00:00Z"
+		s.EndedAt = &ended
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{
+		dbtest.UserMsg("run1", 0, "the question"),
+		dbtest.AsstMsg("run1", 1, "RUNHIT step one"),
+		dbtest.AsstMsg("run1", 2, "RUNHIT step two"),
+		dbtest.UserMsg("run1", 3, "next question"),
+	}))
+
+	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+		Pattern: "RUNHIT", Mode: "substring",
+	})
+	require.NoError(t, err)
+	require.Len(t, out.Matches, 2)
+	for _, m := range out.Matches {
+		assert.Equal(t, [2]int{1, 2}, m.OrdinalRange,
+			"match at ordinal %d should carry the run's full range", m.Ordinal)
+		assert.False(t, m.Subordinate, "top-level run member")
+		assert.False(t, m.Sidechain, "non-sidechain run member")
+		assert.Empty(t, m.Relationship, "top-level relationship")
+		assert.Empty(t, m.ParentSessionID, "top-level parent")
+	}
+}
+
+// A sidechain run's matches must round-trip Subordinate and Sidechain as
+// true, with ordinal_range spanning the sidechain run rather than the
+// individual anchor ordinal.
+func TestSearchContent_SidechainSubordinateRoundTrip(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "side1", "proj", func(s *db.Session) {
+		s.MessageCount = 3
+		s.UserMessageCount = 2
+		ended := "2024-06-15T10:00:00Z"
+		s.EndedAt = &ended
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{
+		dbtest.UserMsg("side1", 0, "the question"),
+		{
+			SessionID: "side1", Ordinal: 1, Role: "assistant",
+			Content: "SIDEHIT step a", ContentLength: len("SIDEHIT step a"),
+			IsSidechain: true,
+		},
+		{
+			SessionID: "side1", Ordinal: 2, Role: "assistant",
+			Content: "SIDEHIT step b", ContentLength: len("SIDEHIT step b"),
+			IsSidechain: true,
+		},
+	}))
+
+	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+		Pattern: "SIDEHIT", Mode: "substring",
+	})
+	require.NoError(t, err)
+	require.Len(t, out.Matches, 2)
+	for _, m := range out.Matches {
+		assert.Equal(t, [2]int{1, 2}, m.OrdinalRange, "sidechain run range")
+		assert.True(t, m.Subordinate, "sidechain run is subordinate")
+		assert.True(t, m.Sidechain, "anchor sidechain flag")
+		assert.Empty(t, m.Relationship, "no session lineage on a same-session sidechain")
+	}
+}
+
+// A single top-level message match (its own conversation unit) must report
+// ordinal_range == [o, o], and the omitempty subordinate/lineage fields must
+// be entirely absent from the marshaled JSON rather than present as false/"".
+func TestSearchContent_SingleMessageOrdinalRangeAndOmittedFields(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "solo1", "proj", func(s *db.Session) {
+		s.MessageCount = 2
+		s.UserMessageCount = 2
+		ended := "2024-06-15T10:00:00Z"
+		s.EndedAt = &ended
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{
+		dbtest.UserMsg("solo1", 0, "SOLOHIT alone"),
+		dbtest.UserMsg("solo1", 1, "an unrelated follow-up"),
+	}))
+
+	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+		Pattern: "SOLOHIT", Mode: "substring",
+	})
+	require.NoError(t, err)
+	require.Len(t, out.Matches, 1)
+	m := out.Matches[0]
+	assert.Equal(t, 0, m.Ordinal)
+	assert.Equal(t, [2]int{0, 0}, m.OrdinalRange, "single-message unit is its own range")
+	assert.False(t, m.Subordinate)
+	assert.False(t, m.Sidechain)
+	assert.Empty(t, m.Relationship)
+	assert.Empty(t, m.ParentSessionID)
+
+	data, err := json.Marshal(m)
+	require.NoError(t, err)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(data, &raw))
+	assert.Contains(t, raw, "ordinal_range", "ordinal_range is always present")
+	for _, key := range []string{
+		"subordinate", "relationship", "parent_session_id", "is_sidechain",
+	} {
+		assert.NotContains(t, raw, key,
+			"zero-valued omitempty field %q must be absent from the wire shape", key)
+	}
 }
 
 func TestGetMessages_DescAndFromAnchor(t *testing.T) {
@@ -775,4 +922,325 @@ func TestServer_EndToEnd(t *testing.T) {
 
 	require.NoError(t, ct.Close())
 	require.NoError(t, st.Wait())
+}
+
+// fakeContentSearchService captures the ContentSearchRequest a tool builds
+// and returns a canned result or error, so semantic-mode passthrough and
+// context-mapping can be asserted without a full backend. Unused methods
+// fall through to the embedded nil interface (never called by searchContent
+// when IncludeActive is set, which skips the session-activity lookup).
+type fakeContentSearchService struct {
+	service.SessionService
+	lastReq service.ContentSearchRequest
+	result  *service.ContentSearchResult
+	err     error
+}
+
+func (f *fakeContentSearchService) SearchContent(
+	_ context.Context, req service.ContentSearchRequest,
+) (*service.ContentSearchResult, error) {
+	f.lastReq = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.result, nil
+}
+
+// search_content must pass Mode through to the service untouched, and map
+// service.ErrSemanticUnavailable to a tool error carrying the remediation
+// sentence from db.ErrSemanticUnavailable ("...run 'agentsview embeddings
+// build'"), not a generic failure.
+func TestSearchContent_SemanticUnavailableMapsToRemediationError(t *testing.T) {
+	fake := &fakeContentSearchService{err: service.ErrSemanticUnavailable}
+	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+
+	_, _, err := ts.searchContent(context.Background(), nil, searchContentIn{
+		Pattern: "how do I configure retries", Mode: "semantic", IncludeActive: true,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, service.ErrSemanticUnavailable)
+	assert.Contains(t, err.Error(), "embeddings build")
+	assert.Equal(t, "semantic", fake.lastReq.Mode)
+}
+
+// search_content must reject scope outside semantic/hybrid with the same
+// message the HTTP transport uses (the db layer silently ignores Scope for
+// lexical modes, so the guard lives in the transport), and must not reach
+// the service at all on rejection.
+func TestSearchContent_ScopeRejectedOnLexicalModes(t *testing.T) {
+	fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
+	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+
+	for _, mode := range []string{"", "substring", "regex", "fts"} {
+		t.Run("mode="+mode, func(t *testing.T) {
+			_, _, err := ts.searchContent(context.Background(), nil, searchContentIn{
+				Pattern: "needle", Mode: mode, Scope: "top", IncludeActive: true,
+			})
+			require.Error(t, err)
+			assert.EqualError(t, err,
+				"scope is only supported for semantic and hybrid search modes")
+		})
+	}
+	assert.Empty(t, fake.lastReq.Pattern,
+		"a rejected request must not reach the service")
+}
+
+// search_content must pass Scope through to the service untouched for
+// semantic and hybrid modes; the db layer owns scope-value validation from
+// there.
+func TestSearchContent_ScopeForwardedForSemanticModes(t *testing.T) {
+	for _, mode := range []string{"semantic", "hybrid"} {
+		t.Run(mode, func(t *testing.T) {
+			fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
+			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+
+			_, _, err := ts.searchContent(context.Background(), nil, searchContentIn{
+				Pattern: "retries", Mode: mode, Scope: "subordinate", IncludeActive: true,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, mode, fake.lastReq.Mode)
+			assert.Equal(t, "subordinate", fake.lastReq.Scope,
+				"scope must reach the service untouched")
+		})
+	}
+}
+
+// search_content's Context parameter must reach the service, and each
+// match's ContextBefore/ContextAfter (full service-level db.Message) must
+// map to the MCP layer's truncated contextMessage shape, along with Score.
+func TestSearchContent_ContextThreading(t *testing.T) {
+	score := 0.83
+	long := strings.Repeat("y", 600)
+	fake := &fakeContentSearchService{
+		result: &service.ContentSearchResult{
+			Matches: []db.ContentMatch{{
+				SessionID: "s1", Agent: "claude", Location: "message",
+				Role: "user", Ordinal: 10, Timestamp: "2024-06-15T09:00:00Z",
+				Snippet: "hit", Score: &score,
+				ContextBefore: []db.Message{
+					{Ordinal: 8, Role: "user", Content: "before msg"},
+					{Ordinal: 9, Role: "assistant", Content: long},
+				},
+				ContextAfter: []db.Message{
+					{Ordinal: 11, Role: "assistant", Content: "after msg"},
+				},
+			}},
+		},
+	}
+	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
+
+	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+		Pattern: "hit", Context: 5, IncludeActive: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 5, fake.lastReq.Context, "context param must reach the service")
+	require.Len(t, out.Matches, 1)
+	m := out.Matches[0]
+	require.NotNil(t, m.Score)
+	assert.InDelta(t, score, *m.Score, 0.0001)
+	require.Len(t, m.ContextBefore, 2)
+	assert.Equal(t, 8, m.ContextBefore[0].Ordinal)
+	assert.Equal(t, "user", m.ContextBefore[0].Role)
+	assert.Equal(t, "before msg", m.ContextBefore[0].Content)
+	assert.Len(t, m.ContextBefore[1].Content, 500, "context content is truncated to 500 chars")
+	require.Len(t, m.ContextAfter, 1)
+	assert.Equal(t, 11, m.ContextAfter[0].Ordinal)
+	assert.Equal(t, "after msg", m.ContextAfter[0].Content)
+}
+
+// get_messages's around/before/after form a symmetric window that is
+// mutually exclusive with the linear from/direction form, and before/after
+// require around. Errors come straight from the service (directBackend
+// validates), so the tool error text must match its sentinels verbatim.
+func TestGetMessages_AroundValidation(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
+		s.MessageCount = 3
+		s.UserMessageCount = 2
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{
+		dbtest.UserMsg("s1", 0, "m0"),
+		dbtest.AsstMsg("s1", 1, "m1"),
+		dbtest.UserMsg("s1", 2, "m2"),
+	}))
+
+	anchor, from, before := 1, 0, 2
+	tests := []struct {
+		name    string
+		in      getMessagesIn
+		wantErr string
+	}{
+		{
+			name:    "around with direction rejected",
+			in:      getMessagesIn{SessionID: "s1", Around: &anchor, Direction: "desc"},
+			wantErr: "around is mutually exclusive with from/direction",
+		},
+		{
+			name:    "around with from rejected",
+			in:      getMessagesIn{SessionID: "s1", Around: &anchor, From: &from},
+			wantErr: "around is mutually exclusive with from/direction",
+		},
+		{
+			name:    "before without around rejected",
+			in:      getMessagesIn{SessionID: "s1", Before: &before},
+			wantErr: "before/after require around",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, _, err := ts.getMessages(context.Background(), nil, tt.in)
+			require.Error(t, err)
+			assert.Equal(t, tt.wantErr, err.Error())
+		})
+	}
+}
+
+// The around path anchors next_from on the last returned ordinal, not a
+// scan-direction offset like the linear path (there is no scan direction in
+// a symmetric window).
+func TestGetMessages_AroundNextFromIsLastPlusOne(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
+		s.MessageCount = 5
+		s.UserMessageCount = 3
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{
+		dbtest.UserMsg("s1", 0, "m0"),
+		dbtest.AsstMsg("s1", 1, "m1"),
+		dbtest.UserMsg("s1", 2, "m2"),
+		dbtest.AsstMsg("s1", 3, "m3"),
+		dbtest.UserMsg("s1", 4, "m4"),
+	}))
+
+	anchor, before, after := 2, 1, 1
+	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+		SessionID: "s1", Around: &anchor, Before: &before, After: &after,
+	})
+	require.NoError(t, err)
+	require.Len(t, out.Messages, 3)
+	last := out.Messages[len(out.Messages)-1].Ordinal
+	require.NotNil(t, out.NextFrom)
+	assert.Equal(t, last+1, *out.NextFrom)
+	assert.Equal(t, 4, *out.NextFrom)
+}
+
+// An empty Roles on the around path must be translated to the MCP default
+// (user, assistant) before reaching the service: an empty
+// service.MessageFilter.Roles means "all roles" there, which would leak
+// tool-role dumps that the linear path's own default excludes. The
+// translated roles reach the DB-level before/after query directly (unlike
+// the linear path's post-fetch filter), so the non-anchor tool rows here
+// are dropped before the MCP layer ever sees them -- Filtered stays 0; the
+// anchor-bypass case is covered separately below.
+func TestGetMessages_AroundDefaultRolesExcludesTool(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
+		s.MessageCount = 5
+		s.UserMessageCount = 2
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{
+		dbtest.UserMsg("s1", 0, "m0"),
+		{SessionID: "s1", Ordinal: 1, Role: "tool", Content: "tool dump", ContentLength: 9},
+		dbtest.AsstMsg("s1", 2, "m2"),
+		{SessionID: "s1", Ordinal: 3, Role: "tool", Content: "tool dump 2", ContentLength: 11},
+		dbtest.UserMsg("s1", 4, "m4"),
+	}))
+
+	anchor := 2
+	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+		SessionID: "s1", Around: &anchor,
+	})
+	require.NoError(t, err)
+	require.Len(t, out.Messages, 3, "ordinals 0, 2, 4 survive; the two tool rows never reach this page")
+	for _, m := range out.Messages {
+		assert.NotEqual(t, "tool", m.Role)
+	}
+	assert.Equal(t, 0, out.Filtered)
+}
+
+// The around path always includes the anchor row server-side regardless of
+// its role or system status. The MCP layer must post-filter it like any
+// other message, suppressing a system anchor and counting it in Filtered
+// rather than hardcoding Filtered to 0.
+func TestGetMessages_AroundSuppressesSystemAnchor(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
+		s.MessageCount = 3
+		s.UserMessageCount = 2
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{
+		dbtest.UserMsg("s1", 0, "m0"),
+		{
+			SessionID: "s1", Ordinal: 1, Role: "system",
+			Content: "sys", IsSystem: true, ContentLength: 3,
+		},
+		dbtest.AsstMsg("s1", 2, "m2"),
+	}))
+
+	anchor, before, after := 1, 1, 1
+	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+		SessionID: "s1", Around: &anchor, Before: &before, After: &after,
+	})
+	require.NoError(t, err)
+	require.Len(t, out.Messages, 2)
+	for _, m := range out.Messages {
+		assert.NotEqual(t, 1, m.Ordinal, "the system anchor must be suppressed")
+	}
+	assert.Equal(t, 1, out.Filtered, "the suppressed anchor is counted in Filtered")
+}
+
+// The anchor query has no role predicate, so a tool-role anchor is returned
+// by the service even under the MCP default roles (user, assistant). The
+// MCP layer's post-filter must suppress it too and count it in Filtered,
+// exactly like the system-anchor case above.
+func TestGetMessages_AroundSuppressesToolRoleAnchor(t *testing.T) {
+	ts, d := newTestToolset(t)
+	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
+		s.MessageCount = 3
+		s.UserMessageCount = 2
+	})
+	require.NoError(t, d.InsertMessages([]db.Message{
+		dbtest.UserMsg("s1", 0, "m0"),
+		{SessionID: "s1", Ordinal: 1, Role: "tool", Content: "tool dump", ContentLength: 9},
+		dbtest.AsstMsg("s1", 2, "m2"),
+	}))
+
+	anchor, before, after := 1, 1, 1
+	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+		SessionID: "s1", Around: &anchor, Before: &before, After: &after,
+	})
+	require.NoError(t, err)
+	require.Len(t, out.Messages, 2)
+	for _, m := range out.Messages {
+		assert.NotEqual(t, 1, m.Ordinal, "the tool-role anchor must be suppressed")
+	}
+	assert.Equal(t, 1, out.Filtered, "the suppressed anchor is counted in Filtered")
+}
+
+// TestGetMessages_AroundClampsOversizedWindow verifies that an oversized
+// before/after request (e.g. before=10^9) cannot bypass db.MaxMessageLimit
+// through the MCP get_messages tool: directBackend.Messages clamps the
+// window before it ever reaches the store, so at most db.MaxMessageLimit
+// messages come back even though more than that many exist on both sides
+// of the anchor.
+func TestGetMessages_AroundClampsOversizedWindow(t *testing.T) {
+	ts, d := newTestToolset(t)
+	const total = db.MaxMessageLimit + 50
+	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
+		s.MessageCount = total
+		s.UserMessageCount = total
+	})
+	require.NoError(t, d.InsertMessages(dbtest.UserMessagesf("s1", total, "m%d")))
+
+	anchor, huge := total/2, 1_000_000_000
+	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+		SessionID: "s1", Around: &anchor, Before: &huge, After: &huge,
+		Roles: []string{"user"},
+	})
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(out.Messages), db.MaxMessageLimit,
+		"an oversized around window must be capped at db.MaxMessageLimit")
+	assert.Less(t, len(out.Messages), total,
+		"the oversized request must actually be capped below what an "+
+			"unclamped window would have returned")
 }

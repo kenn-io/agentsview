@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -563,13 +564,17 @@ func (db *DB) legacyProjectIdentityForSession(
 	}
 	for _, root := range legacyProjectIdentityRoots(cwd, filePath) {
 		for _, mapping := range mappings {
-			if mapping.Project != project || !worktreePathMatches(mapping.PathPrefix, root) {
+			if !worktreePathMatches(mapping.PathPrefix, root) {
+				continue
+			}
+			identityRoot, ok := worktreeMappingIdentityRoot(mapping, root, project)
+			if !ok {
 				continue
 			}
 			identity := export.BuildStoredProjectIdentity(
 				export.ProjectIdentityInput{
-					RootPath:         mapping.PathPrefix,
-					WorktreeRootPath: mapping.PathPrefix,
+					RootPath:         identityRoot,
+					WorktreeRootPath: identityRoot,
 				},
 			)
 			if identity.Key != "" {
@@ -623,6 +628,12 @@ func legacyProjectIdentityRoots(cwd, filePath string) []string {
 
 func discoverLegacyLocalGitIdentity(root string) (string, map[string]string) {
 	if !filepath.IsAbs(root) {
+		return "", nil
+	}
+	// Skip macOS automounter namespaces: probing them wakes
+	// automountd/opendirectoryd for paths that virtually never exist
+	// locally (see export.IsAutomountNamespacePath).
+	if export.IsAutomountNamespacePath(runtime.GOOS, filepath.Clean(root)) {
 		return "", nil
 	}
 	resolved, err := filepath.EvalSymlinks(filepath.Clean(root))

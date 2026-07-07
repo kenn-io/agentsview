@@ -2122,6 +2122,7 @@ func (s *Store) GetAnalyticsTools(
 	resp := db.ToolsAnalyticsResponse{
 		ByCategory: []db.ToolCategoryCount{},
 		ByAgent:    []db.ToolAgentBreakdown{},
+		ByTool:     []db.ToolUsageAnalysis{},
 		Trend:      []db.ToolTrendEntry{},
 	}
 
@@ -2129,13 +2130,7 @@ func (s *Store) GetAnalyticsTools(
 		return resp, nil
 	}
 
-	type toolRow struct {
-		sessionID string
-		category  string
-		count     int
-		date      string
-	}
-	var toolRows []toolRow
+	var toolRows []db.ToolAnalyticsRow
 
 	err = pgQueryChunked(sessionIDs,
 		func(chunk []string) error {
@@ -2147,7 +2142,8 @@ func (s *Store) GetAnalyticsTools(
 			)
 			msgTSExpr := `COALESCE(TO_CHAR(m.timestamp AT TIME ZONE 'UTC', ` +
 				`'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '')`
-			q := `SELECT tc.session_id, tc.category, COUNT(*),
+			q := `SELECT tc.session_id, tc.category,
+				TRIM(COALESCE(tc.tool_name, '')), COUNT(*),
 				` + msgTSExpr + `
 				FROM tool_calls tc
 				LEFT JOIN messages m
@@ -2155,7 +2151,8 @@ func (s *Store) GetAnalyticsTools(
 					AND m.ordinal = tc.message_ordinal`
 			q += `
 				WHERE ` + strings.Join(preds, " AND ") + `
-				GROUP BY tc.session_id, tc.category, ` + msgTSExpr
+				GROUP BY tc.session_id, tc.category,
+					TRIM(COALESCE(tc.tool_name, '')), ` + msgTSExpr
 			rows, qErr := s.pg.QueryContext(
 				ctx, q, chunkPB.args...,
 			)
@@ -2166,10 +2163,10 @@ func (s *Store) GetAnalyticsTools(
 			}
 			defer rows.Close()
 			for rows.Next() {
-				var sid, cat, ts string
+				var sid, cat, toolName, ts string
 				var count int
 				if err := rows.Scan(
-					&sid, &cat, &count, &ts,
+					&sid, &cat, &toolName, &count, &ts,
 				); err != nil {
 					return fmt.Errorf(
 						"scanning tool_call: %w", err,
@@ -2185,11 +2182,13 @@ func (s *Store) GetAnalyticsTools(
 				if !keep {
 					continue
 				}
-				toolRows = append(toolRows, toolRow{
-					sessionID: sid,
-					category:  cat,
-					count:     count,
-					date:      date,
+				toolRows = append(toolRows, db.ToolAnalyticsRow{
+					SessionID: sid,
+					Category:  cat,
+					ToolName:  toolName,
+					Agent:     info.agent,
+					Count:     count,
+					Date:      date,
 				})
 			}
 			return rows.Err()
@@ -2201,107 +2200,7 @@ func (s *Store) GetAnalyticsTools(
 	if len(toolRows) == 0 {
 		return resp, nil
 	}
-
-	catCounts := make(map[string]int)
-	agentCats := make(map[string]map[string]int)
-	trendBuckets := make(map[string]map[string]int)
-
-	for _, tr := range toolRows {
-		info := sessionMap[tr.sessionID]
-		catCounts[tr.category] += tr.count
-
-		if agentCats[info.agent] == nil {
-			agentCats[info.agent] = make(map[string]int)
-		}
-		agentCats[info.agent][tr.category] += tr.count
-
-		week := bucketDate(tr.date, "week")
-		if trendBuckets[week] == nil {
-			trendBuckets[week] = make(map[string]int)
-		}
-		trendBuckets[week][tr.category] += tr.count
-	}
-
-	for _, count := range catCounts {
-		resp.TotalCalls += count
-	}
-
-	resp.ByCategory = make(
-		[]db.ToolCategoryCount, 0, len(catCounts),
-	)
-	for cat, count := range catCounts {
-		pct := math.Round(
-			float64(count)/
-				float64(resp.TotalCalls)*1000,
-		) / 10
-		resp.ByCategory = append(resp.ByCategory,
-			db.ToolCategoryCount{
-				Category: cat, Count: count, Pct: pct,
-			})
-	}
-	sort.Slice(resp.ByCategory, func(i, j int) bool {
-		if resp.ByCategory[i].Count !=
-			resp.ByCategory[j].Count {
-			return resp.ByCategory[i].Count >
-				resp.ByCategory[j].Count
-		}
-		return resp.ByCategory[i].Category <
-			resp.ByCategory[j].Category
-	})
-
-	agentKeys := make([]string, 0, len(agentCats))
-	for k := range agentCats {
-		agentKeys = append(agentKeys, k)
-	}
-	sort.Strings(agentKeys)
-	resp.ByAgent = make(
-		[]db.ToolAgentBreakdown, 0, len(agentKeys),
-	)
-	for _, agent := range agentKeys {
-		cats := agentCats[agent]
-		total := 0
-		for _, c := range cats {
-			total += c
-		}
-		catList := make(
-			[]db.ToolCategoryCount, 0, len(cats),
-		)
-		for cat, count := range cats {
-			pct := math.Round(
-				float64(count)/float64(total)*1000,
-			) / 10
-			catList = append(catList, db.ToolCategoryCount{
-				Category: cat, Count: count, Pct: pct,
-			})
-		}
-		sort.Slice(catList, func(i, j int) bool {
-			if catList[i].Count != catList[j].Count {
-				return catList[i].Count > catList[j].Count
-			}
-			return catList[i].Category <
-				catList[j].Category
-		})
-		resp.ByAgent = append(resp.ByAgent,
-			db.ToolAgentBreakdown{
-				Agent:      agent,
-				Total:      total,
-				Categories: catList,
-			})
-	}
-
-	resp.Trend = make(
-		[]db.ToolTrendEntry, 0, len(trendBuckets),
-	)
-	for week, cats := range trendBuckets {
-		resp.Trend = append(resp.Trend, db.ToolTrendEntry{
-			Date: week, ByCat: cats,
-		})
-	}
-	sort.Slice(resp.Trend, func(i, j int) bool {
-		return resp.Trend[i].Date < resp.Trend[j].Date
-	})
-
-	return resp, nil
+	return db.BuildToolsAnalytics(toolRows), nil
 }
 
 // GetAnalyticsSkills returns skill usage analytics.

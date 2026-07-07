@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -52,6 +53,103 @@ type pushLocalMessageFingerprint struct {
 	ToolResultFP  string
 	TokenFP       string
 	UsageEventFP  string
+}
+
+func localSessionDependencyPushFingerprint(
+	ctx context.Context,
+	local *db.DB,
+	sessionID string,
+	usageEventFingerprint string,
+	usageKnown bool,
+) (string, error) {
+	msgFP, err := localPushMessageFingerprint(
+		local, sessionID, usageEventFingerprint, usageKnown,
+	)
+	if err != nil {
+		return "", err
+	}
+	findings, err := local.SessionSecretFindings(ctx, sessionID)
+	if err != nil {
+		return "", fmt.Errorf("reading local secret findings: %w", err)
+	}
+	pins, err := local.ListPinnedMessages(ctx, sessionID, "")
+	if err != nil {
+		return "", fmt.Errorf("reading local pinned messages: %w", err)
+	}
+	payload := struct {
+		Messages       pushLocalMessageFingerprint
+		SecretFindings []db.SecretFinding
+		Pins           []db.PinnedMessage
+	}{
+		Messages:       msgFP,
+		SecretFindings: findings,
+		Pins:           pins,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("encoding local dependency fingerprint: %w", err)
+	}
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%x", sum), nil
+}
+
+func localPushMessageFingerprint(
+	local *db.DB,
+	sessionID string,
+	usageEventFingerprint string,
+	usageKnown bool,
+) (pushLocalMessageFingerprint, error) {
+	fp := pushLocalMessageFingerprint{}
+	var err error
+	fp.Sum, fp.Max, fp.Min, err = local.MessageContentFingerprint(sessionID)
+	if err != nil {
+		return fp, fmt.Errorf("computing local content fingerprint: %w", err)
+	}
+	fp.ContentHashFP, err = local.MessageContentHashFingerprint(sessionID)
+	if err != nil {
+		return fp, fmt.Errorf("computing local content hash fingerprint: %w", err)
+	}
+	fp.RoleTimeFP, err = localMessageRoleTimePGFingerprint(local, sessionID)
+	if err != nil {
+		return fp, fmt.Errorf("computing local role/time fingerprint: %w", err)
+	}
+	fp.FlagsFP, err = local.MessageFlagsFingerprint(sessionID)
+	if err != nil {
+		return fp, fmt.Errorf("computing local message flags fingerprint: %w", err)
+	}
+	fp.SystemFP, err = local.SystemMessageFingerprint(sessionID)
+	if err != nil {
+		return fp, fmt.Errorf("computing local system message fingerprint: %w", err)
+	}
+	fp.ToolCallCount, err = local.ToolCallCount(sessionID)
+	if err != nil {
+		return fp, fmt.Errorf("counting local tool_calls: %w", err)
+	}
+	fp.ToolCallSum, err = local.ToolCallContentFingerprint(sessionID)
+	if err != nil {
+		return fp, fmt.Errorf("computing local tool_call content fingerprint: %w", err)
+	}
+	fp.ToolCallFP, err = local.ToolCallFingerprint(sessionID)
+	if err != nil {
+		return fp, fmt.Errorf("computing local tool_call fingerprint: %w", err)
+	}
+	fp.ToolResultFP, err = localToolResultEventPGFingerprint(local, sessionID)
+	if err != nil {
+		return fp, fmt.Errorf("computing local tool_result_event fingerprint: %w", err)
+	}
+	fp.TokenFP, err = local.MessageTokenFingerprint(sessionID)
+	if err != nil {
+		return fp, fmt.Errorf("computing local token fingerprint: %w", err)
+	}
+	if usageKnown {
+		fp.UsageEventFP = usageEventFingerprint
+		return fp, nil
+	}
+	fp.UsageEventFP, err = local.UsageEventFingerprint(sessionID)
+	if err != nil {
+		return fp, fmt.Errorf("computing local usage event fingerprint: %w", err)
+	}
+	return fp, nil
 }
 
 func comparisonAggregates(

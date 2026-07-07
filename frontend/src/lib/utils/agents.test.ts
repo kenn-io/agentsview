@@ -38,6 +38,7 @@ describe("KNOWN_AGENTS", () => {
       "kiro-ide",
       "cortex",
       "workbuddy",
+      "qoder",
       "piebald",
       "antigravity",
       "antigravity-cli",
@@ -170,6 +171,7 @@ describe("agentLabel", () => {
     expect(agentLabel("qwen")).toBe("Qwen Code");
     expect(agentLabel("qwenpaw")).toBe("QwenPaw");
     expect(agentLabel("deepseek-tui")).toBe("DeepSeek TUI");
+    expect(agentLabel("qoder")).toBe("Qoder");
   });
 
   it("capitalizes simple agent names", () => {

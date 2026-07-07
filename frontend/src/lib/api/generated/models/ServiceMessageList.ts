@@ -4,6 +4,8 @@
 /* eslint-disable */
 export type ServiceMessageList = {
   count: number;
+  first_ordinal?: number;
+  last_ordinal?: number;
   messages: any[] | null;
 };
 

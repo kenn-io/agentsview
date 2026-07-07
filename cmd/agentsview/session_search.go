@@ -9,20 +9,21 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
 )
 
 func newSessionSearchCommand() *cobra.Command {
 	var (
-		useRegex, useFTS                  bool
-		in                                string
-		excludeSystem, reveal             bool
-		project, excludeProject, agent    string
-		machine, date, dateFrom, dateTo   string
-		activeSince                       string
-		includeChildren, includeAutomated bool
-		includeOneShot                    bool
-		limit, cursor                     int
+		useRegex, useFTS, useSemantic, useHybrid bool
+		in, scope                                string
+		excludeSystem, reveal                    bool
+		project, excludeProject, agent           string
+		machine, date, dateFrom, dateTo          string
+		activeSince, since                       string
+		includeChildren, includeAutomated        bool
+		includeOneShot                           bool
+		limit, cursor, contextN                  int
 	)
 	cmd := &cobra.Command{
 		Use:          "search <pattern>",
@@ -30,29 +31,23 @@ func newSessionSearchCommand() *cobra.Command {
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if useRegex && useFTS {
-				return fmt.Errorf("--regex and --fts are mutually exclusive")
-			}
 			var sources []string
 			for s := range strings.SplitSeq(in, ",") {
 				if s = strings.TrimSpace(s); s != "" {
 					sources = append(sources, s)
 				}
 			}
-			if useFTS {
-				for _, s := range sources {
-					if s != "messages" {
-						return fmt.Errorf(
-							"--fts searches messages only; drop --in or --fts")
-					}
-				}
+			mode, err := resolveContentSearchMode(
+				useRegex, useFTS, useSemantic, useHybrid, sources)
+			if err != nil {
+				return err
 			}
-			mode := "substring"
-			switch {
-			case useRegex:
-				mode = "regex"
-			case useFTS:
-				mode = "fts"
+			if err := validateScopeFlag(scope, useSemantic, useHybrid); err != nil {
+				return err
+			}
+			activeSince, err = resolveSinceFlag(since, activeSince)
+			if err != nil {
+				return err
 			}
 			svc, cleanup, err := resolveService(cmd)
 			if err != nil {
@@ -77,8 +72,10 @@ func newSessionSearchCommand() *cobra.Command {
 				IncludeChildren:  includeChildren,
 				IncludeAutomated: includeAutomated,
 				IncludeOneShot:   includeOneShot,
+				Scope:            scope,
 				Limit:            limit,
 				Cursor:           cursor,
+				Context:          contextN,
 			})
 			if err != nil {
 				return err
@@ -97,6 +94,10 @@ func newSessionSearchCommand() *cobra.Command {
 	flags := cmd.Flags()
 	flags.BoolVar(&useRegex, "regex", false, "Treat pattern as an RE2 regex")
 	flags.BoolVar(&useFTS, "fts", false, "Fast tokenized FTS over messages only")
+	flags.BoolVar(&useSemantic, "semantic", false,
+		"Semantic (vector) search over user/assistant messages")
+	flags.BoolVar(&useHybrid, "hybrid", false,
+		"Hybrid semantic + full-text search (reciprocal rank fusion)")
 	flags.StringVar(&in, "in", "",
 		"Comma-separated sources: messages,tool_input,tool_result (default all)")
 	flags.BoolVar(&excludeSystem, "exclude-system", false,
@@ -110,15 +111,90 @@ func newSessionSearchCommand() *cobra.Command {
 	flags.StringVar(&dateFrom, "date-from", "", "Sessions on or after YYYY-MM-DD")
 	flags.StringVar(&dateTo, "date-to", "", "Sessions on or before YYYY-MM-DD")
 	flags.StringVar(&activeSince, "active-since", "", "Active since RFC3339 timestamp")
+	flags.StringVar(&since, "since", "",
+		"Only sessions active since a relative duration (12h, 14d, 2w, 3m = 3 months, 1y) or YYYY-MM-DD")
+	flags.StringVar(&scope, "scope", "",
+		"Semantic/hybrid result scope: top, all, or subordinate (default all)")
 	flags.BoolVar(&includeChildren, "include-children", false, "Include subagent sessions")
 	flags.BoolVar(&includeAutomated, "include-automated", false, "Include automated sessions")
 	flags.BoolVar(&includeOneShot, "include-one-shot", false, "Include one-shot sessions")
 	flags.IntVar(&limit, "limit", 0, "Max results (default 50, max 500)")
 	flags.IntVar(&cursor, "cursor", 0, "Pagination cursor from a previous response")
+	flags.IntVar(&contextN, "context", 0,
+		"Include N messages of context before and after each match (max 10)")
 	return cmd
 }
 
+// validateScopeFlag gates --scope at the CLI boundary: it is only
+// meaningful for --semantic/--hybrid and must name a known scope.
+func validateScopeFlag(scope string, useSemantic, useHybrid bool) error {
+	if scope == "" {
+		return nil
+	}
+	if !useSemantic && !useHybrid {
+		return fmt.Errorf("--scope requires --semantic or --hybrid")
+	}
+	switch scope {
+	case "top", "all", "subordinate":
+		return nil
+	}
+	return fmt.Errorf("--scope must be top, all, or subordinate (got %q)", scope)
+}
+
+// resolveContentSearchMode picks the search mode from the mutually exclusive
+// --regex/--fts/--semantic/--hybrid flags and, for the modes that only search
+// message content ("fts", "semantic", "hybrid"), rejects an explicit --in
+// naming other sources.
+func resolveContentSearchMode(
+	useRegex, useFTS, useSemantic, useHybrid bool, sources []string,
+) (string, error) {
+	modes := 0
+	for _, b := range []bool{useRegex, useFTS, useSemantic, useHybrid} {
+		if b {
+			modes++
+		}
+	}
+	if modes > 1 {
+		return "", fmt.Errorf(
+			"--regex, --fts, --semantic and --hybrid are mutually exclusive")
+	}
+	mode := "substring"
+	switch {
+	case useRegex:
+		mode = "regex"
+	case useFTS:
+		mode = "fts"
+	case useSemantic:
+		mode = "semantic"
+	case useHybrid:
+		mode = "hybrid"
+	}
+	if useFTS {
+		for _, s := range sources {
+			if s != "messages" {
+				return "", fmt.Errorf(
+					"--fts searches messages only; drop --in or --fts")
+			}
+		}
+	}
+	if useSemantic || useHybrid {
+		for _, s := range sources {
+			if s != "messages" {
+				return "", fmt.Errorf(
+					"--%s searches messages only; drop --in", mode)
+			}
+		}
+	}
+	return mode, nil
+}
+
 // printContentMatchesHuman writes one line per match, terminal-sanitized.
+// Scored matches (semantic/hybrid modes) show "score=0.83" after the
+// ordinal; unscored matches (substring/regex/fts) omit it. A match spanning
+// a multi-message unit renders "#<start>-<end> @<anchor>" instead of the
+// plain "#<ordinal>", and a subordinate unit gains a "sub" marker. When
+// --context requested inline context, ContextBefore/ContextAfter print as
+// indented "role: content" lines around the match line.
 func printContentMatchesHuman(w io.Writer, res *service.ContentSearchResult) error {
 	if len(res.Matches) == 0 {
 		fmt.Fprintln(w, "(no matches)")
@@ -129,14 +205,56 @@ func printContentMatchesHuman(w io.Writer, res *service.ContentSearchResult) err
 		if m.ToolName != "" {
 			loc = m.Location + ":" + m.ToolName
 		}
-		fmt.Fprintf(w, "%s  #%d  %s  %s\n",
-			sanitizeTerminal(m.SessionID), m.Ordinal,
+		for _, cm := range m.ContextBefore {
+			printContentContextLine(w, cm)
+		}
+		fmt.Fprintf(w, "%s  %s", sanitizeTerminal(m.SessionID), formatMatchOrdinal(m))
+		if m.Subordinate {
+			fmt.Fprint(w, " sub")
+		}
+		if m.Score != nil {
+			fmt.Fprintf(w, " score=%.2f", *m.Score)
+		}
+		fmt.Fprintf(w, "  %s  %s\n",
 			sanitizeTerminal(m.Project), sanitizeTerminal(loc))
 		fmt.Fprintf(w, "    %s\n",
 			sanitizeTerminal(strings.ReplaceAll(m.Snippet, "\n", " ")))
+		for _, cm := range m.ContextAfter {
+			printContentContextLine(w, cm)
+		}
 	}
 	if res.NextCursor != 0 {
 		fmt.Fprintf(w, "\nMore results: --cursor %d\n", res.NextCursor)
 	}
 	return nil
+}
+
+// formatMatchOrdinal renders a match's position. A match whose unit is a
+// single message keeps the plain "#<ordinal>" form; a match whose
+// conversation unit spans multiple messages — possible in every mode now
+// that lexical rows carry derived unit ranges — renders the range with the
+// anchor marked, e.g. "#12-40 @19".
+func formatMatchOrdinal(m db.ContentMatch) string {
+	if m.OrdinalRange[1] > m.OrdinalRange[0] {
+		return fmt.Sprintf("#%d-%d @%d", m.OrdinalRange[0], m.OrdinalRange[1], m.Ordinal)
+	}
+	return fmt.Sprintf("#%d", m.Ordinal)
+}
+
+// contentContextLineMaxChars caps a printed context line's length so a long
+// stored message cannot blow out the human-format search output.
+const contentContextLineMaxChars = 200
+
+// printContentContextLine writes one --context line: two-space indent,
+// "role: " prefix, terminal-sanitized and truncated to
+// contentContextLineMaxChars runes (with an ellipsis marker when cut).
+func printContentContextLine(w io.Writer, m db.Message) {
+	content := strings.ReplaceAll(m.Content, "\n", " ")
+	if truncated, cut := truncateRunes(content, contentContextLineMaxChars); cut {
+		content = truncated + "…"
+	} else {
+		content = truncated
+	}
+	fmt.Fprintf(w, "  %s: %s\n",
+		sanitizeTerminal(m.Role), sanitizeTerminal(content))
 }

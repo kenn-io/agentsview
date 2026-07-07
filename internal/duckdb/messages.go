@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -46,6 +48,165 @@ func (s *Store) GetMessages(
 		return nil, err
 	}
 	return msgs, nil
+}
+
+// GetMessagesWindow mirrors internal/db's GetMessagesWindow: linear mode
+// (optionally role-filtered) delegates to GetMessages when Roles is empty;
+// Around mode merges three queries (before/anchor/after) into one ascending
+// slice. The anchor query has no role predicate so the anchor row is always
+// present regardless of Roles; before/after apply the role filter first, so
+// Before/After count role-matching messages, not raw ordinal distance.
+func (s *Store) GetMessagesWindow(
+	ctx context.Context, sessionID string, w db.MessageWindow,
+) ([]db.Message, error) {
+	if w.Around != nil {
+		return s.getMessagesAroundAnchor(ctx, sessionID, w)
+	}
+	from := 0
+	if w.From != nil {
+		from = *w.From
+	}
+	if len(w.Roles) == 0 {
+		return s.GetMessages(ctx, sessionID, from, w.Limit, w.Asc)
+	}
+	return s.getMessagesLinearRoleFiltered(ctx, sessionID, from, w.Limit, w.Asc, w.Roles)
+}
+
+func (s *Store) getMessagesLinearRoleFiltered(
+	ctx context.Context,
+	sessionID string, from, limit int, asc bool, roles []string,
+) ([]db.Message, error) {
+	if limit <= 0 || limit > db.MaxMessageLimit {
+		limit = db.DefaultMessageLimit
+	}
+	dir := "ASC"
+	op := ">="
+	if !asc {
+		dir = "DESC"
+		op = "<="
+	}
+	roleClause, roleArgs := duckRoleFilterClause(roles)
+	query := `
+		SELECT id, session_id, ordinal, role, content, thinking_text,
+			timestamp, has_thinking, has_tool_use, content_length,
+			is_system, model, token_usage, context_tokens, output_tokens,
+			has_context_tokens, has_output_tokens, claude_message_id,
+			claude_request_id, source_type, source_subtype, source_uuid,
+			source_parent_uuid, is_sidechain, is_compact_boundary
+		FROM messages
+		WHERE session_id = ? AND ordinal ` + op + ` ?` + roleClause + `
+		ORDER BY ordinal ` + dir + `
+		LIMIT ?`
+	args := append([]any{sessionID, from}, roleArgs...)
+	args = append(args, limit)
+
+	rows, err := s.queryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying duckdb role-filtered messages: %w", err)
+	}
+	defer rows.Close()
+	msgs, err := scanMessages(rows)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.attachToolCalls(ctx, msgs); err != nil {
+		return nil, err
+	}
+	return msgs, nil
+}
+
+func (s *Store) getMessagesAroundAnchor(
+	ctx context.Context, sessionID string, w db.MessageWindow,
+) ([]db.Message, error) {
+	anchor := *w.Around
+	beforeLimit := max(w.Before, 0)
+	afterLimit := max(w.After, 0)
+	roleClause, roleArgs := duckRoleFilterClause(w.Roles)
+
+	beforeQuery := `
+		SELECT id, session_id, ordinal, role, content, thinking_text,
+			timestamp, has_thinking, has_tool_use, content_length,
+			is_system, model, token_usage, context_tokens, output_tokens,
+			has_context_tokens, has_output_tokens, claude_message_id,
+			claude_request_id, source_type, source_subtype, source_uuid,
+			source_parent_uuid, is_sidechain, is_compact_boundary
+		FROM messages
+		WHERE session_id = ? AND ordinal < ?` + roleClause + `
+		ORDER BY ordinal DESC LIMIT ?`
+	beforeArgs := append([]any{sessionID, anchor}, roleArgs...)
+	beforeArgs = append(beforeArgs, beforeLimit)
+	before, err := s.queryMessageRows(ctx, beforeQuery, beforeArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("querying duckdb before-window messages: %w", err)
+	}
+	slices.Reverse(before)
+
+	anchorQuery := `
+		SELECT id, session_id, ordinal, role, content, thinking_text,
+			timestamp, has_thinking, has_tool_use, content_length,
+			is_system, model, token_usage, context_tokens, output_tokens,
+			has_context_tokens, has_output_tokens, claude_message_id,
+			claude_request_id, source_type, source_subtype, source_uuid,
+			source_parent_uuid, is_sidechain, is_compact_boundary
+		FROM messages WHERE session_id = ? AND ordinal = ?`
+	anchorMsgs, err := s.queryMessageRows(ctx, anchorQuery, sessionID, anchor)
+	if err != nil {
+		return nil, fmt.Errorf("querying duckdb anchor message: %w", err)
+	}
+
+	afterQuery := `
+		SELECT id, session_id, ordinal, role, content, thinking_text,
+			timestamp, has_thinking, has_tool_use, content_length,
+			is_system, model, token_usage, context_tokens, output_tokens,
+			has_context_tokens, has_output_tokens, claude_message_id,
+			claude_request_id, source_type, source_subtype, source_uuid,
+			source_parent_uuid, is_sidechain, is_compact_boundary
+		FROM messages
+		WHERE session_id = ? AND ordinal > ?` + roleClause + `
+		ORDER BY ordinal ASC LIMIT ?`
+	afterArgs := append([]any{sessionID, anchor}, roleArgs...)
+	afterArgs = append(afterArgs, afterLimit)
+	after, err := s.queryMessageRows(ctx, afterQuery, afterArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("querying duckdb after-window messages: %w", err)
+	}
+
+	msgs := make([]db.Message, 0, len(before)+len(anchorMsgs)+len(after))
+	msgs = append(msgs, before...)
+	msgs = append(msgs, anchorMsgs...)
+	msgs = append(msgs, after...)
+	if err := s.attachToolCalls(ctx, msgs); err != nil {
+		return nil, err
+	}
+	return msgs, nil
+}
+
+// queryMessageRows runs query and scans the resulting message rows without
+// attaching tool calls; callers batch that across the merged window set.
+func (s *Store) queryMessageRows(
+	ctx context.Context, query string, args ...any,
+) ([]db.Message, error) {
+	rows, err := s.queryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMessages(rows)
+}
+
+// duckRoleFilterClause returns an "AND role IN (...)" clause and its bind
+// args for the given roles, or ("", nil) when roles is empty.
+func duckRoleFilterClause(roles []string) (string, []any) {
+	if len(roles) == 0 {
+		return "", nil
+	}
+	placeholders := make([]string, len(roles))
+	args := make([]any, len(roles))
+	for i, r := range roles {
+		placeholders[i] = "?"
+		args[i] = r
+	}
+	return " AND role IN (" + strings.Join(placeholders, ",") + ")", args
 }
 
 func (s *Store) GetAllMessages(ctx context.Context, sessionID string) ([]db.Message, error) {

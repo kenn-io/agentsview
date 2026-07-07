@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1136,6 +1137,323 @@ func TestDirectBackend_Messages_DescExplicitZeroFrom(t *testing.T) {
 		"explicit From=0 in desc should start at ordinal 0 and "+
 			"return only that message")
 	assert.Equal(t, 0, list.Messages[0].Ordinal)
+}
+
+// TestDirectBackend_Messages_AroundMutuallyExclusiveWithFrom verifies that
+// combining Around with an explicit From is rejected: the two retrieval
+// modes (symmetric window vs. linear pagination) cannot both be requested.
+func TestDirectBackend_Messages_AroundMutuallyExclusiveWithFrom(t *testing.T) {
+	t.Parallel()
+	svc, env := newDirectTestSvc(t)
+	sid := env.InsertSession(t)
+	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, 5, "m%d")...)
+
+	around, from := 2, 1
+	_, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+		Around: &around,
+		From:   &from,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "around is mutually exclusive with from/direction")
+}
+
+// TestDirectBackend_Messages_AroundMutuallyExclusiveWithDirection is the
+// Direction half of the same guard: an explicit non-default Direction
+// alongside Around must also be rejected.
+func TestDirectBackend_Messages_AroundMutuallyExclusiveWithDirection(t *testing.T) {
+	t.Parallel()
+	svc, env := newDirectTestSvc(t)
+	sid := env.InsertSession(t)
+	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, 5, "m%d")...)
+
+	around := 2
+	_, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+		Around:    &around,
+		Direction: "desc",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "around is mutually exclusive with from/direction")
+}
+
+// TestDirectBackend_Messages_BeforeAfterRequireAround verifies that Before
+// or After without Around is rejected rather than silently ignored.
+func TestDirectBackend_Messages_BeforeAfterRequireAround(t *testing.T) {
+	t.Parallel()
+	svc, env := newDirectTestSvc(t)
+	sid := env.InsertSession(t)
+	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, 5, "m%d")...)
+
+	before := 2
+	_, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+		Before: &before,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "before/after require around")
+}
+
+// TestDirectBackend_Messages_AroundDefaultsBeforeAfter verifies that Around
+// with Before/After both omitted defaults to 5 messages on each side.
+func TestDirectBackend_Messages_AroundDefaultsBeforeAfter(t *testing.T) {
+	t.Parallel()
+	svc, env := newDirectTestSvc(t)
+	sid := env.InsertSession(t)
+	// 12 messages, ordinals 0..11.
+	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, 12, "m%d")...)
+
+	around := 6
+	list, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+		Around: &around,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	require.Equal(t, 11, list.Count, "default before=5/after=5 around ordinal 6 "+
+		"spans ordinals 1..11 (only 5 exist after 6)")
+	assert.Equal(t, 1, list.Messages[0].Ordinal)
+	assert.Equal(t, 11, list.Messages[len(list.Messages)-1].Ordinal)
+}
+
+// TestDirectBackend_Messages_AroundWithRoles verifies that Roles reaches
+// GetMessagesWindow: only messages matching a role in Roles are returned,
+// with the anchor always included.
+func TestDirectBackend_Messages_AroundWithRoles(t *testing.T) {
+	t.Parallel()
+	svc, env := newDirectTestSvc(t)
+	sid := env.InsertSession(t)
+	dbtest.SeedMessages(t, env.db,
+		dbtest.UserMsg(sid, 0, "u0"),
+		dbtest.AsstMsg(sid, 1, "a1"),
+		dbtest.UserMsg(sid, 2, "u2"),
+		dbtest.AsstMsg(sid, 3, "a3"),
+		dbtest.UserMsg(sid, 4, "u4"),
+	)
+
+	around := 2
+	before, after := 1, 1
+	list, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+		Around: &around,
+		Before: &before,
+		After:  &after,
+		Roles:  []string{"user"},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	require.Equal(t, 3, list.Count)
+	for _, m := range list.Messages {
+		assert.Equal(t, "user", m.Role)
+	}
+	assert.Equal(t, []int{0, 2, 4}, []int{
+		list.Messages[0].Ordinal, list.Messages[1].Ordinal, list.Messages[2].Ordinal,
+	})
+}
+
+// TestDirectBackend_Messages_ResponseWindowBounds verifies that MessageList
+// reports FirstOrdinal/LastOrdinal from the returned window (non-empty
+// case) and leaves them nil when the result is empty.
+func TestDirectBackend_Messages_ResponseWindowBounds(t *testing.T) {
+	t.Parallel()
+	svc, env := newDirectTestSvc(t)
+	sid := env.InsertSession(t)
+	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, 5, "m%d")...)
+
+	list, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+		Limit: 10,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	require.NotNil(t, list.FirstOrdinal)
+	require.NotNil(t, list.LastOrdinal)
+	assert.Equal(t, 0, *list.FirstOrdinal)
+	assert.Equal(t, 4, *list.LastOrdinal)
+
+	emptyList, err := svc.Messages(context.Background(), "no-such-session",
+		service.MessageFilter{Limit: 10})
+	require.NoError(t, err)
+	require.NotNil(t, emptyList)
+	assert.Equal(t, 0, emptyList.Count)
+	assert.Nil(t, emptyList.FirstOrdinal)
+	assert.Nil(t, emptyList.LastOrdinal)
+}
+
+// TestDirectBackend_Messages_AroundOmittedBeforeAfterNoOtherFlags mirrors
+// the CLI's zero-flag `--around N` invocation: only Around is set (no
+// Before/After/From/Direction), which must succeed using the default
+// before/after window rather than tripping the mutual-exclusion guard.
+func TestDirectBackend_Messages_AroundOmittedBeforeAfterNoOtherFlags(t *testing.T) {
+	t.Parallel()
+	svc, env := newDirectTestSvc(t)
+	sid := env.InsertSession(t)
+	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, 12, "m%d")...)
+
+	around := 5
+	list, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+		Around: &around,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	assert.Equal(t, 11, list.Count)
+}
+
+// capturingWindowStore is a minimal db.Store fake that records the
+// db.MessageWindow passed to GetMessagesWindow so tests can assert on what
+// directBackend.Messages forwards to the store without needing a real
+// dataset. Every other db.Store method comes from the embedded nil
+// interface and would panic if a test path reached it.
+type capturingWindowStore struct {
+	db.Store
+	captured db.MessageWindow
+}
+
+func (f *capturingWindowStore) GetMessagesWindow(
+	_ context.Context, _ string, w db.MessageWindow,
+) ([]db.Message, error) {
+	f.captured = w
+	return nil, nil
+}
+
+// TestDirectBackend_Messages_AroundClampsOversizedBefore verifies that an
+// arbitrarily large --before value (e.g. before=10^9) cannot bypass
+// db.MaxMessageLimit: the window forwarded to the store is capped so
+// before+after+1 never exceeds the max, matching the silent-clamp
+// convention the linear path already applies to Limit.
+func TestDirectBackend_Messages_AroundClampsOversizedBefore(t *testing.T) {
+	t.Parallel()
+	store := &capturingWindowStore{}
+	svc := service.NewReadOnlyBackend(store)
+
+	around, huge := 100, 1_000_000_000
+	_, err := svc.Messages(context.Background(), "sid", service.MessageFilter{
+		Around: &around,
+		Before: &huge,
+	})
+	require.NoError(t, err)
+	total := store.captured.Before + store.captured.After + 1
+	assert.LessOrEqual(t, total, db.MaxMessageLimit,
+		"oversized before must be clamped so the window never exceeds MaxMessageLimit")
+	assert.Positive(t, store.captured.After,
+		"the other side of the window must not be starved to zero")
+}
+
+// TestDirectBackend_Messages_AroundClampsOversizedAfter is the After half of
+// the same guard.
+func TestDirectBackend_Messages_AroundClampsOversizedAfter(t *testing.T) {
+	t.Parallel()
+	store := &capturingWindowStore{}
+	svc := service.NewReadOnlyBackend(store)
+
+	around, huge := 100, 1_000_000_000
+	_, err := svc.Messages(context.Background(), "sid", service.MessageFilter{
+		Around: &around,
+		After:  &huge,
+	})
+	require.NoError(t, err)
+	total := store.captured.Before + store.captured.After + 1
+	assert.LessOrEqual(t, total, db.MaxMessageLimit,
+		"oversized after must be clamped so the window never exceeds MaxMessageLimit")
+	assert.Positive(t, store.captured.Before,
+		"the other side of the window must not be starved to zero")
+}
+
+// TestDirectBackend_Messages_AroundClampsCombinedOversizedWindow verifies
+// that Before and After sharing one budget are scaled down proportionally
+// (not independently capped to MaxMessageLimit each, which would still let
+// the combined window reach ~2x the max) when both are oversized.
+func TestDirectBackend_Messages_AroundClampsCombinedOversizedWindow(t *testing.T) {
+	t.Parallel()
+	store := &capturingWindowStore{}
+	svc := service.NewReadOnlyBackend(store)
+
+	around, hugeBefore, hugeAfter := 100, 1_000_000_000, 1_000_000_000
+	_, err := svc.Messages(context.Background(), "sid", service.MessageFilter{
+		Around: &around,
+		Before: &hugeBefore,
+		After:  &hugeAfter,
+	})
+	require.NoError(t, err)
+	total := store.captured.Before + store.captured.After + 1
+	assert.LessOrEqual(t, total, db.MaxMessageLimit)
+	// Equal requests should split the shared budget evenly.
+	assert.InDelta(t, store.captured.Before, store.captured.After, 1)
+}
+
+// TestDirectBackend_Messages_AroundClampsMaxIntOverflow guards against a
+// regression where before+after overflows and wraps negative once either
+// side approaches math.MaxInt, which would slip the sum past the budget
+// check and forward an effectively unbounded window. Both sides, and the
+// combination, must still be clamped to the shared budget.
+func TestDirectBackend_Messages_AroundClampsMaxIntOverflow(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		before int
+		after  int
+	}{
+		{"before overflow", math.MaxInt, 1},
+		{"after overflow", 1, math.MaxInt},
+		{"both overflow", math.MaxInt, math.MaxInt},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := &capturingWindowStore{}
+			svc := service.NewReadOnlyBackend(store)
+
+			around := 100
+			_, err := svc.Messages(context.Background(), "sid", service.MessageFilter{
+				Around: &around,
+				Before: &tc.before,
+				After:  &tc.after,
+			})
+			require.NoError(t, err)
+
+			// Check each side against the bound individually, and with
+			// require (not assert), before ever adding them together:
+			// summing two still-untrusted huge values here would hit the
+			// exact same overflow-wraps-negative trap this test exists to
+			// catch, silently passing a LessOrEqual check against a
+			// wrapped-negative "total" regardless of whether the fix
+			// under test is applied.
+			require.LessOrEqual(t, store.captured.Before, db.MaxMessageLimit,
+				"clamped before must never exceed MaxMessageLimit on its own")
+			require.LessOrEqual(t, store.captured.After, db.MaxMessageLimit,
+				"clamped after must never exceed MaxMessageLimit on its own")
+			assert.GreaterOrEqual(t, store.captured.Before, 0,
+				"clamped before must never be negative")
+			assert.GreaterOrEqual(t, store.captured.After, 0,
+				"clamped after must never be negative")
+			total := store.captured.Before + store.captured.After + 1
+			assert.LessOrEqual(t, total, db.MaxMessageLimit,
+				"an overflow-inducing before/after must still be capped to MaxMessageLimit")
+		})
+	}
+}
+
+// TestDirectBackend_Messages_AroundClampsOversizedWindowEndToEnd is an
+// end-to-end regression check with a real SQLite-backed session: an
+// oversized --before/--after request must return at most
+// db.MaxMessageLimit messages even though more than that many exist on
+// both sides of the anchor.
+func TestDirectBackend_Messages_AroundClampsOversizedWindowEndToEnd(t *testing.T) {
+	t.Parallel()
+	svc, env := newDirectTestSvc(t)
+	sid := env.InsertSession(t)
+	const total = db.MaxMessageLimit + 50
+	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, total, "m%d")...)
+
+	around, huge := total/2, 1_000_000_000
+	list, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+		Around: &around,
+		Before: &huge,
+		After:  &huge,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	assert.LessOrEqual(t, list.Count, db.MaxMessageLimit,
+		"the returned window must not exceed MaxMessageLimit even though "+
+			"more than that many messages exist on both sides of the anchor")
+	assert.Less(t, list.Count, total,
+		"the oversized request must actually be capped below what an "+
+			"unclamped window would have returned")
 }
 
 // vsCopilotChatTraceLine builds one Visual Studio Copilot trace JSONL line

@@ -73,6 +73,24 @@ func buildAiderResolveSnippet(envVar string) string {
 // the remote are skipped.
 func buildResolveScript() string {
 	var b strings.Builder
+	b.WriteString(
+		"av_emit_dir() { " +
+			"dir=\"$1\"; " +
+			"[ -n \"$dir\" ] || dir=\"$2\"; " +
+			"[ -d \"$dir\" ] && printf '%s\\000' \"$3:$dir\"; " +
+			"}\n" +
+			"av_emit_rooted_dir() { " +
+			"dir=\"$1\"; " +
+			"root=\"$2\"; " +
+			"[ -z \"$dir\" ] && [ -n \"$root\" ] && dir=\"$root$3\"; " +
+			"[ -n \"$dir\" ] || dir=\"$4\"; " +
+			"[ -d \"$dir\" ] && printf '%s\\000' \"$5:$dir\"; " +
+			"}\n" +
+			"av_emit_codex_index() { " +
+			"idx=\"${dir%/*}/" + parser.CodexSessionIndexFilename + "\"; " +
+			"[ -f \"$idx\" ] && printf '%s\\000' \"" + resolveFilePrefix + ":$idx\"; " +
+			"}\n",
+	)
 	for _, def := range parser.Registry {
 		if !resolveAgentHasOnDiskSource(def) {
 			continue
@@ -98,37 +116,21 @@ func buildResolveScript() string {
 			defaultDir := "$HOME/" + rel
 			if def.DefaultRootEnvVar != "" {
 				rootTail := remoteDefaultRootTail(rel)
-				fmt.Fprintf(&b, "dir=\"")
-				if def.EnvVar != "" {
-					fmt.Fprintf(&b, "${%s:-}", def.EnvVar)
-				}
-				fmt.Fprintf(&b, "\"; ")
-				fmt.Fprintf(&b, "root=\"${%s:-}\"; ", def.DefaultRootEnvVar)
+				rootSuffix := ""
 				if rootTail != "" {
-					fmt.Fprintf(&b,
-						"[ -z \"$dir\" ] && [ -n \"$root\" ] && dir=\"$root/%s\"; ",
-						rootTail,
-					)
-				} else {
-					fmt.Fprintf(&b,
-						"[ -z \"$dir\" ] && [ -n \"$root\" ] && dir=\"$root\"; ",
-					)
+					rootSuffix = "/" + rootTail
 				}
 				fmt.Fprintf(&b,
-					"[ -n \"$dir\" ] || dir=\"%s\"; [ -d \"$dir\" ] && "+
-						"printf '%%s\\000' \"%s:$dir\"\n",
-					defaultDir, string(def.Type),
+					"av_emit_rooted_dir \"%s\" \"%s\" \"%s\" \"%s\" %s\n",
+					remoteEnvExpansion(def.EnvVar),
+					remoteEnvExpansion(def.DefaultRootEnvVar),
+					rootSuffix, defaultDir, string(def.Type),
 				)
 			} else {
-				dirExpr := defaultDir
-				if def.EnvVar != "" {
-					// env var overrides default
-					dirExpr = fmt.Sprintf("${%s:-%s}", def.EnvVar, defaultDir)
-				}
 				fmt.Fprintf(&b,
-					"dir=\"%s\"; [ -d \"$dir\" ] && "+
-						"printf '%%s\\000' \"%s:$dir\"\n",
-					dirExpr, string(def.Type),
+					"av_emit_dir \"%s\" \"%s\" %s\n",
+					remoteEnvExpansion(def.EnvVar), defaultDir,
+					string(def.Type),
 				)
 			}
 			// Codex stores renameable session titles in
@@ -136,13 +138,7 @@ func buildResolveScript() string {
 			// sessions/ and archived_sessions/. Emit it so renames
 			// import on remote hosts too. ${dir%/*} is the parent.
 			if def.Type == parser.AgentCodex {
-				fmt.Fprintf(&b,
-					"idx=\"${dir%%/*}/%s\"; "+
-						"[ -f \"$idx\" ] && "+
-						"printf '%%s\\000' \"%s:$idx\"\n",
-					parser.CodexSessionIndexFilename,
-					resolveFilePrefix,
-				)
+				b.WriteString("av_emit_codex_index\n")
 			}
 		}
 	}
@@ -150,6 +146,13 @@ func buildResolveScript() string {
 	// path doesn't exist, which would make sh exit non-zero.
 	b.WriteString("true\n")
 	return b.String()
+}
+
+func remoteEnvExpansion(envVar string) string {
+	if envVar == "" {
+		return ""
+	}
+	return "${" + envVar + ":-}"
 }
 
 // BuildResolveScriptForTest exposes the SSH resolver script to

@@ -18,3 +18,4 @@ export type GenerateInsightRequest = {
   timezone?: string;
   type: string;
 };
+

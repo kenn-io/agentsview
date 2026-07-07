@@ -17,6 +17,7 @@ AgentsView stores all persistent data under a single directory, defaulting to
 ```
 ~/.agentsview/
 ├── sessions.db      # SQLite database (WAL mode)
+├── vectors.db       # Semantic-search vector index (when [vector] is enabled)
 ├── config.toml      # Configuration file
 ├── config.toml.lock # Serializes concurrent config writers
 ├── db.write.lock    # Per-data-dir SQLite write-owner lock
@@ -74,6 +75,7 @@ daemon_idle_timeout = "20m"
 | `disable_update_check`              | Disable the automatic update check (see [Privacy](#privacy-and-telemetry))                                   |
 | `[pg]`                              | PostgreSQL sync configuration — see [PostgreSQL Sync](/pg-sync/)                                             |
 | `[duckdb]`                          | DuckDB mirror configuration — see [DuckDB Mirror](/duckdb/)                                                  |
+| `[vector]`                          | Opt-in semantic-search index; model settings live in `[vector.embeddings]`, named endpoints in `[vector.embeddings.servers.<name>]`, embedding schedule in `[vector.embed]` — see [Semantic Search](/semantic-search/#enabling-vector) for every key |
 | `[[remote_hosts]]`                  | Remote machines synced by a bare `agentsview sync` — see [CLI Reference](/commands/#agentsview-sync)         |
 | `[automated]`                       | Custom automated-session patterns — see [Automated Session Detection](#automated-session-detection)          |
 | `[custom_model_pricing]`            | Per-model price overrides for usage reports — see [Custom Model Pricing](/token-usage/#custom-model-pricing) |

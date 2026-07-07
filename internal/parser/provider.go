@@ -474,6 +474,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newQwenProviderFactory(def)
 	case AgentQwenPaw:
 		return newQwenPawProviderFactory(def)
+	case AgentQoder:
+		return newQoderProviderFactory(def)
 	case AgentReasonix:
 		return newReasonixProviderFactory(def)
 	case AgentShelley:
@@ -484,6 +486,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newVSCodeCopilotProviderFactory(def)
 	case AgentVibe:
 		return newVibeProviderFactory(def)
+	case AgentZCode:
+		return newZcodeProviderFactory(def)
 	case AgentWarp:
 		return newWarpProviderFactory(def)
 	case AgentWorkBuddy:

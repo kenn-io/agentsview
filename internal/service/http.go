@@ -26,10 +26,37 @@ import (
 // explicitly below.
 var errHTTPNotFound = errors.New("http: not found")
 
-// errHTTPNotImplemented is returned by getJSON for 501 responses so
-// callers can map a capability-absent daemon (e.g. search with no FTS
-// index) to a typed sentinel instead of string-matching the status.
+// errHTTPNotImplemented is returned (wrapped in *errNotImplementedBody) by
+// getJSON for 501 responses so callers can map a capability-absent daemon
+// (e.g. search with no FTS index) to a typed sentinel instead of
+// string-matching the status.
 var errHTTPNotImplemented = errors.New("http: not implemented")
+
+// errNotImplementedBody wraps errHTTPNotImplemented with the 501 response's
+// error message, so callers that need cause-specific detail — e.g.
+// SearchContent's "index is building: N% complete" or "index is stale ...
+// --full-rebuild" remediation — can recover it instead of seeing only the
+// bare sentinel. errors.Is(err, errHTTPNotImplemented) still holds for every
+// caller that only cares about the status.
+type errNotImplementedBody struct {
+	message string
+}
+
+func (e *errNotImplementedBody) Error() string { return errHTTPNotImplemented.Error() }
+func (e *errNotImplementedBody) Unwrap() error { return errHTTPNotImplemented }
+
+// notImplementedMessage extracts the {"error": "..."} message huma's error
+// responses carry, falling back to the raw (trimmed) body when it isn't in
+// that shape.
+func notImplementedMessage(body []byte) string {
+	var apiErr struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &apiErr) == nil && apiErr.Error != "" {
+		return apiErr.Error
+	}
+	return strings.TrimSpace(string(body))
+}
 
 type httpBackend struct {
 	baseURL           string
@@ -172,6 +199,18 @@ func (b *httpBackend) Messages(
 	}
 	if f.Direction != "" {
 		q.Set("direction", f.Direction)
+	}
+	if f.Around != nil {
+		q.Set("around", strconv.Itoa(*f.Around))
+	}
+	if f.Before != nil {
+		q.Set("before", strconv.Itoa(*f.Before))
+	}
+	if f.After != nil {
+		q.Set("after", strconv.Itoa(*f.After))
+	}
+	if len(f.Roles) > 0 {
+		q.Set("roles", strings.Join(f.Roles, ","))
 	}
 	path := "/api/v1/sessions/" + url.PathEscape(id) +
 		"/messages?" + q.Encode()
@@ -395,6 +434,7 @@ func (b *httpBackend) SearchContent(
 		"date_from":       req.DateFrom,
 		"date_to":         req.DateTo,
 		"active_since":    req.ActiveSince,
+		"scope":           req.Scope,
 	} {
 		if v != "" {
 			q.Set(k, v)
@@ -415,11 +455,45 @@ func (b *httpBackend) SearchContent(
 	if req.Cursor > 0 {
 		q.Set("cursor", strconv.Itoa(req.Cursor))
 	}
+	if req.Context > 0 {
+		q.Set("context", strconv.Itoa(req.Context))
+	}
 	var out ContentSearchResult
-	if err := b.getJSON(ctx, "/api/v1/search/content?"+q.Encode(), &out); err != nil {
+	var opts []func(*http.Request)
+	if req.Mode == "semantic" || req.Mode == "hybrid" {
+		opts = append(opts, func(r *http.Request) {
+			r.Header.Set(SemanticSearchIntentHeader, SemanticSearchIntentValue)
+		})
+	}
+	if err := b.getJSON(ctx, "/api/v1/search/content?"+q.Encode(), &out, opts...); err != nil {
+		var notImpl *errNotImplementedBody
+		if errors.As(err, &notImpl) {
+			return nil, wrapSemanticUnavailable(notImpl.message)
+		}
 		return nil, err
 	}
 	return &out, nil
+}
+
+// wrapSemanticUnavailable turns a search/content 501 response's error
+// message into an error wrapping ErrSemanticUnavailable, preserving
+// whatever cause-specific remediation text the server attached (e.g. "index
+// is building: N% complete" or "... run 'agentsview embeddings build
+// --full-rebuild'") instead of discarding it for the bare sentinel.
+// errors.Is(result, ErrSemanticUnavailable) always holds. When message is
+// empty or is exactly the sentinel's own text (no extra cause), the bare
+// sentinel is returned rather than duplicating it.
+func wrapSemanticUnavailable(message string) error {
+	sentinel := ErrSemanticUnavailable.Error()
+	if message == "" || message == sentinel {
+		return ErrSemanticUnavailable
+	}
+	if cause, ok := strings.CutPrefix(message, sentinel); ok {
+		return fmt.Errorf("%w%s", ErrSemanticUnavailable, cause)
+	}
+	// An unexpected body shape (e.g. a differently worded 501); still wrap
+	// the sentinel so errors.Is holds, and keep the server's text.
+	return fmt.Errorf("%w: %s", ErrSemanticUnavailable, message)
 }
 
 func (b *httpBackend) UsageSummary(
@@ -700,7 +774,7 @@ func (b *httpBackend) addAuth(req *http.Request) {
 }
 
 func (b *httpBackend) getJSON(
-	ctx context.Context, path string, out any,
+	ctx context.Context, path string, out any, opts ...func(*http.Request),
 ) error {
 	req, err := http.NewRequestWithContext(
 		ctx, http.MethodGet, b.baseURL+path, nil,
@@ -709,6 +783,9 @@ func (b *httpBackend) getJSON(
 		return err
 	}
 	b.addAuth(req)
+	for _, opt := range opts {
+		opt(req)
+	}
 	resp, err := b.client.Do(req)
 	if err != nil {
 		return err
@@ -718,7 +795,8 @@ func (b *httpBackend) getJSON(
 		return errHTTPNotFound
 	}
 	if resp.StatusCode == http.StatusNotImplemented {
-		return errHTTPNotImplemented
+		body, _ := io.ReadAll(resp.Body)
+		return &errNotImplementedBody{message: notImplementedMessage(body)}
 	}
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(resp.Body)

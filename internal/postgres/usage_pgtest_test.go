@@ -217,7 +217,7 @@ func TestStoreGetSessionUsagePricedModel(t *testing.T) {
 		)`)
 	require.NoError(t, err, "insert message")
 
-	got, err := store.GetSessionUsage(ctx, "codex:usage-priced")
+	got, err := store.GetSessionUsage(ctx, "codex:usage-priced", true)
 	require.NoError(t, err, "GetSessionUsage")
 	require.NotNil(t, got, "GetSessionUsage result")
 	assert.Equal(t, "codex:usage-priced", got.SessionID)
@@ -230,6 +230,21 @@ func TestStoreGetSessionUsagePricedModel(t *testing.T) {
 	assert.InDelta(t, 0.01134, got.CostUSD, 1e-9)
 	assert.Equal(t, []string{"gpt-5.1"}, got.Models)
 	assert.Empty(t, got.UnpricedModels)
+	require.Len(t, got.Breakdown, 1, "Breakdown")
+	entry := got.Breakdown[0]
+	assert.Equal(t, 1, entry.Ordinal)
+	require.NotNil(t, entry.MessageOrdinal)
+	assert.Equal(t, 1, *entry.MessageOrdinal)
+	assert.Equal(t, "message", entry.Source)
+	assert.Equal(t, "Prompt 2", entry.Label)
+	assert.Equal(t, "2026-03-12T10:01:00Z", entry.Timestamp)
+	assert.Equal(t, "gpt-5.1", entry.Model)
+	assert.Equal(t, 1000, entry.InputTokens)
+	assert.Equal(t, 500, entry.OutputTokens)
+	assert.Equal(t, 200, entry.CacheCreationInputTokens)
+	assert.Equal(t, 300, entry.CacheReadInputTokens)
+	assert.True(t, entry.HasCost)
+	assert.InDelta(t, 0.01134, entry.CostUSD, 1e-9)
 }
 
 func TestStoreGetSessionUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testing.T) {
@@ -266,12 +281,15 @@ func TestStoreGetSessionUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testin
 			 'msg-1', '', 'source-1')`)
 	require.NoError(t, err, "insert messages")
 
-	got, err := store.GetSessionUsage(ctx, "claude:usage-source")
+	got, err := store.GetSessionUsage(ctx, "claude:usage-source", true)
 	require.NoError(t, err, "GetSessionUsage")
 	require.NotNil(t, got, "GetSessionUsage result")
 	assert.True(t, got.HasCost)
 	assert.InDelta(t, 0.0175, got.CostUSD, 1e-9)
 	assert.Equal(t, []string{"claude-opus-4-6"}, got.Models)
+	require.Len(t, got.Breakdown, 1, "Breakdown")
+	require.NotNil(t, got.Breakdown[0].MessageOrdinal)
+	assert.Equal(t, 0, *got.Breakdown[0].MessageOrdinal)
 }
 
 func TestStoreGetSessionUsageNoTokenRowsKeepsMetadata(t *testing.T) {
@@ -288,7 +306,7 @@ func TestStoreGetSessionUsageNoTokenRowsKeepsMetadata(t *testing.T) {
 		)`)
 	require.NoError(t, err, "insert session")
 
-	got, err := store.GetSessionUsage(ctx, "codex:usage-empty")
+	got, err := store.GetSessionUsage(ctx, "codex:usage-empty", true)
 	require.NoError(t, err, "GetSessionUsage")
 	require.NotNil(t, got, "GetSessionUsage result")
 	assert.Equal(t, "codex:usage-empty", got.SessionID)
@@ -299,12 +317,13 @@ func TestStoreGetSessionUsageNoTokenRowsKeepsMetadata(t *testing.T) {
 	assert.Zero(t, got.CostUSD)
 	assert.Empty(t, got.Models)
 	assert.Empty(t, got.UnpricedModels)
+	assert.Empty(t, got.Breakdown)
 }
 
 func TestStoreGetSessionUsageNotFound(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_session_usage_missing_test")
 
-	got, err := store.GetSessionUsage(context.Background(), "missing")
+	got, err := store.GetSessionUsage(context.Background(), "missing", true)
 	require.NoError(t, err, "GetSessionUsage")
 	assert.Nil(t, got, "GetSessionUsage")
 }
@@ -805,10 +824,10 @@ func TestPostgresUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 	require.NoError(t, err, "insert session")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO usage_events (
-			session_id, source, model, input_tokens, output_tokens,
-			occurred_at, dedup_key
+			session_id, message_ordinal, source, model, input_tokens,
+			output_tokens, occurred_at, dedup_key
 		) VALUES (
-			'hermes-summary', 'session', 'gpt-5.4', $1, $2,
+			'hermes-summary', 0, 'session', 'gpt-5.4', $1, $2,
 			'2026-05-14T10:05:00Z'::timestamptz, 'session:hermes-summary'
 		)`, rawInput, rawOutput)
 	require.NoError(t, err, "insert usage event")
@@ -823,7 +842,7 @@ func TestPostgresUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 	assert.Equal(t, rawInput, daily.Totals.InputTokens, "daily input")
 	assert.Equal(t, rawOutput, daily.Totals.OutputTokens, "daily output")
 
-	usage, err := store.GetSessionUsage(ctx, "hermes-summary")
+	usage, err := store.GetSessionUsage(ctx, "hermes-summary", true)
 	require.NoError(t, err, "GetSessionUsage")
 	require.NotNil(t, usage, "session usage")
 	assert.Equal(t, rawOutput, usage.TotalOutputTokens)
@@ -831,6 +850,16 @@ func TestPostgresUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 	require.True(t, usage.HasCost, "HasCost")
 	wantCost := (float64(rawInput)*1.0 + float64(rawOutput)*2.0) / 1_000_000
 	assert.InDelta(t, wantCost, usage.CostUSD, 1e-9, "session cost")
+	require.Len(t, usage.Breakdown, 1, "Breakdown")
+	entry := usage.Breakdown[0]
+	assert.Equal(t, "session", entry.Source)
+	assert.Equal(t, "Step 1", entry.Label)
+	require.NotNil(t, entry.MessageOrdinal)
+	assert.Equal(t, 0, *entry.MessageOrdinal)
+	assert.Equal(t, rawInput, entry.InputTokens)
+	assert.Equal(t, rawOutput, entry.OutputTokens)
+	assert.True(t, entry.HasCost)
+	assert.InDelta(t, wantCost, entry.CostUSD, 1e-9, "breakdown cost")
 }
 
 func TestPostgresUsageCostsMessageReasoningTokens(t *testing.T) {
@@ -875,7 +904,7 @@ func TestPostgresUsageCostsMessageReasoningTokens(t *testing.T) {
 	assert.Zero(t, daily.Totals.OutputTokens)
 	assert.InDelta(t, 4.001, daily.Totals.TotalCost, 1e-12)
 
-	usage, err := store.GetSessionUsage(ctx, "pg-message-reasoning")
+	usage, err := store.GetSessionUsage(ctx, "pg-message-reasoning", true)
 	require.NoError(t, err, "GetSessionUsage")
 	require.NotNil(t, usage)
 	assert.True(t, usage.HasCost)
@@ -1039,7 +1068,7 @@ func TestStoreGetSessionUsage_CopilotAICreditsComputed(t *testing.T) {
 		)`)
 	require.NoError(t, err, "insert usage event")
 
-	u, err := store.GetSessionUsage(ctx, "copilot:s1")
+	u, err := store.GetSessionUsage(ctx, "copilot:s1", true)
 	require.NoError(t, err, "GetSessionUsage")
 	require.NotNil(t, u, "usage is nil")
 	assert.True(t, u.HasCost, "HasCost")
@@ -1069,7 +1098,7 @@ func TestStoreGetSessionUsage_CopilotNoAICreditsUnpriced(t *testing.T) {
 		)`)
 	require.NoError(t, err, "insert usage event")
 
-	u, err := store.GetSessionUsage(ctx, "copilot:s2")
+	u, err := store.GetSessionUsage(ctx, "copilot:s2", true)
 	require.NoError(t, err, "GetSessionUsage")
 	require.NotNil(t, u, "usage is nil")
 	assert.False(t, u.HasCost, "HasCost should be false")

@@ -166,6 +166,75 @@ func TestPGGetActivityReportUsageCostAndTokens(t *testing.T) {
 	assert.InDelta(t, 0.0105, r.Totals.Cost, 1e-9)
 }
 
+// TestPGGetActivityReportIncludesSubagentUsage mirrors the SQLite
+// TestGetActivityReport_IncludesSubagentUsage: subagent and fork sessions
+// are candidates so their usage lands in the totals (matching
+// GetDailyUsage, which never filters by relationship_type). The fork's
+// replayed usage row dedups away, so it adds a session row but no cost.
+func TestPGGetActivityReportIncludesSubagentUsage(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_daily_report_subagent_test")
+	ctx := context.Background()
+
+	_, err := store.DB().ExecContext(ctx, `
+		INSERT INTO model_pricing (
+			model_pattern, input_per_mtok, output_per_mtok,
+			cache_creation_per_mtok, cache_read_per_mtok, updated_at
+		) VALUES
+			('root-model', 3, 15, 0, 0, 'seed'),
+			('sub-model', 3, 15, 0, 0, 'seed')`)
+	require.NoError(t, err, "insert pricing")
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO sessions (
+			id, machine, project, agent, started_at, ended_at,
+			message_count, user_message_count,
+			parent_session_id, relationship_type
+		) VALUES
+			('root', 'test-machine', 'proj1', 'claude',
+			 '2026-06-16T10:00:00Z'::timestamptz,
+			 '2026-06-16T10:10:00Z'::timestamptz, 1, 1, NULL, ''),
+			('agent-sub', 'test-machine', 'proj1', 'claude',
+			 '2026-06-16T10:02:00Z'::timestamptz,
+			 '2026-06-16T10:04:00Z'::timestamptz, 1, 1, 'root', 'subagent'),
+			('fork', 'test-machine', 'proj1', 'claude',
+			 '2026-06-16T10:05:00Z'::timestamptz,
+			 '2026-06-16T10:06:00Z'::timestamptz, 1, 1, 'root', 'fork')`)
+	require.NoError(t, err, "insert sessions")
+	_, err = store.DB().ExecContext(ctx, `
+		INSERT INTO messages (
+			session_id, ordinal, role, content, timestamp,
+			content_length, model, token_usage,
+			claude_message_id, claude_request_id
+		) VALUES
+			('root', 0, 'assistant', 'x',
+			 '2026-06-16T10:00:00Z'::timestamptz, 1, 'root-model',
+			 '{"input_tokens":1000,"output_tokens":500}', 'm-root', 'r-root'),
+			('agent-sub', 0, 'assistant', 'y',
+			 '2026-06-16T10:03:00Z'::timestamptz, 1, 'sub-model',
+			 '{"input_tokens":2000,"output_tokens":700}', 'm-sub', 'r-sub'),
+			('fork', 0, 'assistant', 'x',
+			 '2026-06-16T10:05:00Z'::timestamptz, 1, 'root-model',
+			 '{"input_tokens":1000,"output_tokens":500}', 'm-root', 'r-root')`)
+	require.NoError(t, err, "insert messages")
+
+	r, err := store.GetActivityReport(
+		ctx, db.AnalyticsFilter{Timezone: "UTC"},
+		pgDayQuery(t, "2026-06-16", "UTC"))
+	require.NoError(t, err)
+	ids := make(map[string]struct{}, len(r.BySession))
+	for _, s := range r.BySession {
+		ids[s.SessionID] = struct{}{}
+	}
+	assert.Contains(t, ids, "root")
+	assert.Contains(t, ids, "agent-sub",
+		"subagent session must be a candidate")
+	assert.Contains(t, ids, "fork", "fork session must be a candidate")
+	assert.Equal(t, 1200, r.Totals.OutputTokens,
+		"totals include subagent usage; the fork's replayed row dedups away")
+	// Cost = root (1000*3+500*15)/1e6 + subagent (2000*3+700*15)/1e6; the
+	// fork's duplicate row contributes nothing.
+	assert.InDelta(t, 0.0105+0.0165, r.Totals.Cost, 1e-9)
+}
+
 func TestPGGetActivityReportPricingModelsOnlyIncludeDedupSurvivors(t *testing.T) {
 	_, store := prepareUsageSchema(t, "agentsview_daily_report_pricing_survivor_test")
 	ctx := context.Background()

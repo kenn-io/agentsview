@@ -216,9 +216,9 @@ func createMockBinary(
 	bin = filepath.Join(dir, name)
 	var script string
 	if writeArgs {
-		script = fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$@\" > %s\ncat %s\nexit %d\n", shellQuote(argsFile), shellQuote(dataFile), exitCode)
+		script = fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$@\" > %s\nprintf '%%s' %s\nexit %d\n", shellQuote(argsFile), shellQuote(stdout), exitCode)
 	} else {
-		script = fmt.Sprintf("#!/bin/sh\ncat %s\nexit %d\n", shellQuote(dataFile), exitCode)
+		script = fmt.Sprintf("#!/bin/sh\nprintf '%%s' %s\nexit %d\n", shellQuote(stdout), exitCode)
 	}
 	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
 	return bin, argsFile

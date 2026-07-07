@@ -94,6 +94,11 @@ type Server struct {
 	// /debug/pprof/ so a running daemon can be profiled. Off by
 	// default; enabled by the hidden serve --pprof flag.
 	pprofEnabled bool
+
+	// embeddingsManager, when set, backs the /api/v1/embeddings/...
+	// build lifecycle routes. Nil (the default) leaves those routes
+	// unregistered, e.g. when semantic search is not configured.
+	embeddingsManager EmbeddingsManager
 }
 
 // New creates a new Server.
@@ -965,7 +970,7 @@ func corsMiddleware(
 				)
 				w.Header().Set(
 					"Access-Control-Allow-Headers",
-					"Content-Type, Authorization",
+					"Content-Type, Authorization, "+service.SemanticSearchIntentHeader,
 				)
 				if r.Method == http.MethodOptions {
 					w.WriteHeader(http.StatusNoContent)
@@ -1002,7 +1007,7 @@ func corsMiddleware(
 			)
 			w.Header().Set(
 				"Access-Control-Allow-Headers",
-				"Content-Type, Authorization",
+				"Content-Type, Authorization, "+service.SemanticSearchIntentHeader,
 			)
 			if r.Method == http.MethodOptions {
 				if !safeForReads {

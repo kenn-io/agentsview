@@ -41,6 +41,7 @@ function makeReport(totals: Partial<Report["totals"]> = {}): Report {
     by_agent: [],
     by_session: [],
     intervals: [],
+    projects: {},
   } as Report;
 }
 

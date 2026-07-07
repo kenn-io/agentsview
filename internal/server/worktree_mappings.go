@@ -9,6 +9,7 @@ type worktreeMappingsResponse struct {
 
 type worktreeMappingRequest struct {
 	PathPrefix *string `json:"path_prefix,omitempty"`
+	Layout     *string `json:"layout,omitempty"`
 	Project    *string `json:"project,omitempty"`
 	Enabled    *bool   `json:"enabled,omitempty"`
 	Machine    *string `json:"machine,omitempty"`

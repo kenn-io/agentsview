@@ -366,6 +366,7 @@ CREATE TABLE IF NOT EXISTS worktree_project_mappings (
     id          INTEGER PRIMARY KEY,
     machine     TEXT NOT NULL,
     path_prefix TEXT NOT NULL,
+    layout      TEXT NOT NULL DEFAULT 'explicit',
     project     TEXT NOT NULL,
     enabled     INTEGER NOT NULL DEFAULT 1,
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),

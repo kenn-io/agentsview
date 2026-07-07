@@ -26,6 +26,7 @@ func TestWorktreeMappingsAPIUsesCurrentMachine(t *testing.T) {
 		"machine":     "other-machine",
 	})
 	require.Equal(t, "test", created.Machine)
+	require.Equal(t, db.WorktreeMappingLayoutExplicit, created.Layout)
 	require.Equal(t, "canonical_app", created.Project)
 	require.True(t, created.Enabled, "created mapping should default enabled")
 
@@ -45,6 +46,7 @@ func TestWorktreeMappingsAPIUsesCurrentMachine(t *testing.T) {
 		"enabled":     false,
 	})
 	assert.False(t, updated.Enabled, "updated mapping should be disabled")
+	assert.Equal(t, db.WorktreeMappingLayoutExplicit, updated.Layout)
 	assert.Equal(t, "disabled_app", updated.Project)
 
 	req := httptest.NewRequest(
@@ -62,6 +64,54 @@ func TestWorktreeMappingsAPIUsesCurrentMachine(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	decodeInto(t, w, &list)
 	assert.Empty(t, list.Mappings, "mappings after delete should be empty")
+}
+
+func TestWorktreeMappingsAPIHandlesLayouts(t *testing.T) {
+	te := setup(t)
+	root := t.TempDir()
+	layoutPrefix := filepath.Join(root, "service")
+	layoutRoot := filepath.Join(layoutPrefix, "service.worktrees")
+
+	created := postWorktreeMapping(t, te, map[string]any{
+		"path_prefix": layoutPrefix,
+		"layout":      db.WorktreeMappingLayoutRepoDotWorktrees,
+	})
+	require.Equal(t, db.WorktreeMappingLayoutRepoDotWorktrees, created.Layout)
+	require.Empty(t, created.Project)
+	require.True(t, created.Enabled, "created mapping should default enabled")
+
+	var list struct {
+		Machine  string                      `json:"machine"`
+		Mappings []db.WorktreeProjectMapping `json:"mappings"`
+	}
+	w := te.get(t, "/api/v1/settings/worktree-mappings")
+	assertStatus(t, w, http.StatusOK)
+	decodeInto(t, w, &list)
+	require.Equal(t, "test", list.Machine)
+	require.Len(t, list.Mappings, 1)
+	assert.Equal(t, db.WorktreeMappingLayoutRepoDotWorktrees, list.Mappings[0].Layout)
+	assert.Empty(t, list.Mappings[0].Project)
+
+	updated := putWorktreeMapping(t, te, created.ID, map[string]any{
+		"path_prefix": layoutPrefix,
+		"layout":      db.WorktreeMappingLayoutRepoDotWorktrees,
+		"enabled":     false,
+	})
+	assert.False(t, updated.Enabled, "updated mapping should be disabled")
+	assert.Equal(t, db.WorktreeMappingLayoutRepoDotWorktrees, updated.Layout)
+	assert.Empty(t, updated.Project)
+
+	w = postRawWorktreeMapping(t, te, map[string]any{
+		"path_prefix": layoutRoot,
+		"layout":      "bogus",
+	})
+	assertStatus(t, w, http.StatusBadRequest)
+
+	w = postRawWorktreeMapping(t, te, map[string]any{
+		"path_prefix": layoutRoot,
+		"layout":      db.WorktreeMappingLayoutExplicit,
+	})
+	assertStatus(t, w, http.StatusBadRequest)
 }
 
 func TestWorktreeMappingsAPIApply(t *testing.T) {
@@ -162,6 +212,17 @@ func putWorktreeMapping(
 	te.handler.ServeHTTP(w, req)
 	assertStatus(t, w, http.StatusOK)
 	return decode[db.WorktreeProjectMapping](t, w)
+}
+
+func postRawWorktreeMapping(
+	t *testing.T,
+	te *testEnv,
+	body map[string]any,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	data, err := json.Marshal(body)
+	require.NoError(t, err)
+	return te.post(t, "/api/v1/settings/worktree-mappings", string(data))
 }
 
 func decodeInto(

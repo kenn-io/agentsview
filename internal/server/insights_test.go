@@ -1526,8 +1526,15 @@ func TestGenerateInsight_LogDropSummaryAndCompletion(t *testing.T) {
 			Agent:   "claude",
 		}, nil
 	}
+	// The 1ms-per-write client drains the buffered log backlog far
+	// slower on Windows, where time.Sleep rounds up to ~15ms timer
+	// granularity. This test protects drop reporting plus completion,
+	// not drain-deadline behavior (covered by the LogDrainTimeout
+	// tests), so give the drain a generous ceiling to keep the done
+	// event deterministic across platforms.
 	te := setupWithServerOpts(t, []server.Option{
 		server.WithGenerateStreamFunc(stubGen),
+		server.WithInsightLogDrainTimeouts(30*time.Second, time.Second),
 	})
 
 	req := httptest.NewRequest(
@@ -1550,7 +1557,7 @@ func TestGenerateInsight_LogDropSummaryAndCompletion(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(8 * time.Second):
+	case <-time.After(40 * time.Second):
 		require.Fail(t, "timed out waiting for generate handler")
 	}
 

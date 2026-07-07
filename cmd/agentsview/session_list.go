@@ -20,6 +20,7 @@ func newSessionListCommand() *cobra.Command {
 	var (
 		project, excludeProject, machine, agent string
 		date, dateFrom, dateTo, activeSince     string
+		since                                   string
 		minMessages, maxMessages                int
 		minUserMessages                         int
 		includeOneShot                          bool
@@ -39,6 +40,12 @@ func newSessionListCommand() *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			resolvedActiveSince, err := resolveSinceFlag(since, activeSince)
+			if err != nil {
+				return err
+			}
+			activeSince = resolvedActiveSince
+
 			svc, cleanup, err := resolveService(cmd)
 			if err != nil {
 				return err
@@ -73,10 +80,12 @@ func newSessionListCommand() *cobra.Command {
 			// quick relaunch: push a now-15m active_since window to the
 			// service so the limit is applied after the filter, and let the
 			// default recent sort keep newest-first ordering. An explicit
-			// --active-since takes precedence so callers can widen or narrow
-			// the window.
+			// --active-since or --since takes precedence so callers can
+			// widen or narrow the window.
 			now := time.Now()
-			if (resume || active) && !cmd.Flags().Changed("active-since") {
+			if (resume || active) &&
+				!cmd.Flags().Changed("active-since") &&
+				!cmd.Flags().Changed("since") {
 				f.ActiveSince = now.Add(-resumeActiveWindow).
 					UTC().Format(time.RFC3339)
 			}
@@ -133,6 +142,8 @@ func newSessionListCommand() *cobra.Command {
 		"Filter sessions started on or before YYYY-MM-DD")
 	flags.StringVar(&activeSince, "active-since", "",
 		"Filter sessions active since RFC3339 timestamp")
+	flags.StringVar(&since, "since", "",
+		"Only sessions active since a relative duration (12h, 14d, 2w, 3m = 3 months, 1y) or YYYY-MM-DD")
 	flags.IntVar(&minMessages, "min-messages", 0,
 		"Minimum total message count")
 	flags.IntVar(&maxMessages, "max-messages", 0,

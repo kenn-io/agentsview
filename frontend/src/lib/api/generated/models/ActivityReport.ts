@@ -4,6 +4,8 @@
 /* eslint-disable */
 import type { ActivityPeak } from './ActivityPeak';
 import type { ActivityTotals } from './ActivityTotals';
+import type { ExportPricingBlock } from './ExportPricingBlock';
+import type { ExportProjectMapEntry } from './ExportProjectMapEntry';
 export type ActivityReport = {
   as_of: string | null;
   bucket_count: number;
@@ -19,8 +21,11 @@ export type ActivityReport = {
   intervals: any[] | null;
   partial: boolean;
   peak: ActivityPeak;
+  pricing?: ExportPricingBlock;
+  projects: Record<string, ExportProjectMapEntry>;
   range_end: string;
   range_start: string;
+  schema_version?: number;
   timezone: string;
   totals: ActivityTotals;
 };

@@ -831,6 +831,12 @@ agentsview session search <pattern>      # content search across sessions
 agentsview session usage <id>            # token usage and cost estimate
 ```
 
+`session search` supports substring (default), `--regex`, `--fts`,
+`--semantic`, and `--hybrid` modes. Semantic and hybrid results can be scoped
+with `--scope top|all|subordinate` (default `all`) to include or exclude
+sidechain and subagent content — see
+[Semantic Search](/semantic-search/#scoping-results-scope).
+
 Structured response commands accept `--format json`; `--json` is a short alias
 for that scripting mode. `session export` and `session watch` are the
 exceptions: they stream raw bytes and NDJSON respectively, so they reject
@@ -854,6 +860,21 @@ including a recently-active marker, session ID, age, agent, project, branch,
 message count, title, and working directory. Pass `--resume` or its `--active`
 alias to show sessions active in the last 15 minutes; combine either flag with
 `--active-since <RFC3339>` to choose a wider or narrower window.
+
+______________________________________________________________________
+
+### `agentsview embeddings`
+
+Manage the local semantic search embedding index. Requires `[vector]` to be
+enabled in config. See [Semantic Search](/semantic-search/) for full
+documentation, including configuration and the search surface.
+
+```bash
+agentsview embeddings build           # build or refresh the index
+agentsview embeddings list            # list embedding generations
+agentsview embeddings activate <id>   # activate a generation
+agentsview embeddings retire <id>     # retire a generation
+```
 
 ______________________________________________________________________
 
@@ -934,6 +955,31 @@ warning to stderr.
 | `--reveal`     | list    | Show unredacted values (localhost-only)                           |
 | `--limit`      | list    | Max findings (default 50, max 500)                                |
 | `--cursor`     | list    | Pagination cursor from a previous response                        |
+
+______________________________________________________________________
+
+### `agentsview skills`
+
+Install or list the bundled skill files that teach coding-agent harnesses
+(Claude Code, Codex, and other `.agents/skills` readers) to search AgentsView
+history. See
+[Semantic Search](/semantic-search/#skills-for-coding-agents) for what the
+skill does and when to re-run it.
+
+```bash
+agentsview skills install [--harness claude|agents] [--project] [--force]
+agentsview skills list [--project] [--format json]
+```
+
+`install` renders the embedded `agentsview-finding-history` skill for each
+`--harness` (default both) and writes `SKILL.md` under
+`~/.claude/skills/agentsview-finding-history/` and/or
+`~/.agents/skills/agentsview-finding-history/`, or under `.claude/skills/` /
+`.agents/skills/` at the current git root with `--project`. It overwrites an
+unmodified generated file, refuses a hand-edited or foreign file unless
+`--force` is passed, and exits non-zero on any refusal. `list` reports
+HARNESS, LEVEL, STATE (`missing`, `current`, `stale`, `modified`, `foreign`),
+and PATH for every harness.
 
 ______________________________________________________________________
 

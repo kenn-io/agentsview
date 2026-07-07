@@ -16,6 +16,7 @@
     onClearProjects?: () => void;
     onRemoveModel?: (model: string) => void;
     onClearModels?: () => void;
+    onClearAgents?: () => void;
   }
 
   let {
@@ -25,6 +26,7 @@
     onClearProjects,
     onRemoveModel,
     onClearModels,
+    onClearAgents,
   }: Props = $props();
 
   const selectedAgents = $derived(
@@ -87,6 +89,7 @@
     });
     onClearProjects?.();
     onClearModels?.();
+    onClearAgents?.();
   }
 </script>
 

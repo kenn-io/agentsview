@@ -18,6 +18,9 @@
     readOnly?: boolean;
   }
 
+  const explicitLayout = "explicit";
+  const repoDotWorktreesLayout = "repo_dot_worktrees";
+
   let { readOnly = false }: Props = $props();
 
   let machine = $state("");
@@ -29,6 +32,7 @@
   let applyMessage = $state("");
   let editingId: number | null = $state(null);
   let pathPrefix = $state("");
+  let layout = $state(explicitLayout);
   let project = $state("");
   let enabled = $state(true);
 
@@ -60,6 +64,7 @@
   function resetForm() {
     editingId = null;
     pathPrefix = "";
+    layout = explicitLayout;
     project = "";
     enabled = true;
   }
@@ -67,6 +72,7 @@
   function editMapping(mapping: DbWorktreeProjectMapping) {
     editingId = mapping.id;
     pathPrefix = mapping.path_prefix;
+    layout = mapping.layout || explicitLayout;
     project = mapping.project;
     enabled = mapping.enabled;
     applyMessage = "";
@@ -76,10 +82,12 @@
   async function saveMapping() {
     const input = {
       path_prefix: pathPrefix.trim(),
+      layout,
       project: project.trim(),
       enabled,
     } satisfies WorktreeMappingRequest;
-    if (!input.path_prefix || !input.project) return;
+    if (!input.path_prefix) return;
+    if (layout !== repoDotWorktreesLayout && !input.project) return;
 
     saving = true;
     error = "";
@@ -101,7 +109,7 @@
       }
       resetForm();
       await loadMappings();
-    } catch (err) {
+      } catch (err) {
       error = err instanceof Error ? err.message : m.worktree_failed_save();
     } finally {
       saving = false;
@@ -144,7 +152,11 @@
     }
   }
 
-  let canSave = $derived(pathPrefix.trim() !== "" && project.trim() !== "");
+  let isRepoDotWorktrees = $derived(layout === repoDotWorktreesLayout);
+  let canSave = $derived(
+    pathPrefix.trim() !== "" &&
+      (layout === repoDotWorktreesLayout || project.trim() !== ""),
+  );
 </script>
 
 <SettingsSection
@@ -164,17 +176,19 @@
     </div>
 
     <div class="mapping-list">
-      {#if mappings.length === 0}
-        <div class="empty">{m.worktree_no_mappings()}</div>
-      {:else}
-        {#each mappings as mapping (mapping.id)}
-          <div class="mapping-row" class:disabled={!mapping.enabled}>
-            <div class="mapping-main">
-              <div class="mapping-project">{mapping.project}</div>
-              <div class="mapping-path">{mapping.path_prefix}</div>
-            </div>
-            <div class="mapping-actions">
-              <span class="status">{mapping.enabled ? m.worktree_on() : m.worktree_off()}</span>
+        {#if mappings.length === 0}
+          <div class="empty">{m.worktree_no_mappings()}</div>
+        {:else}
+          {#each mappings as mapping (mapping.id)}
+            <div class="mapping-row" class:disabled={!mapping.enabled}>
+              <div class="mapping-main">
+                <div class="mapping-project">
+                  {mapping.project || (mapping.layout === repoDotWorktreesLayout ? m.worktree_layout_repo_dot_worktrees({ repo: "repo", branch: "branch" }) : m.worktree_layout_explicit({}))}
+                </div>
+                <div class="mapping-path">{mapping.path_prefix}</div>
+              </div>
+              <div class="mapping-actions">
+                <span class="status">{mapping.enabled ? m.worktree_on() : m.worktree_off()}</span>
               <button class="small-btn" onclick={() => editMapping(mapping)}>
                 {m.worktree_edit()}
               </button>
@@ -189,16 +203,49 @@
 
     <div class="form-grid">
       <label class="field">
-        <span>{m.worktree_path_prefix()}</span>
+        <span>{m.worktree_layout()}</span>
+        <div class="layout-options" role="group" aria-label={m.worktree_layout()}>
+          <button
+            type="button"
+            class:active={layout === explicitLayout}
+            onclick={() => (layout = explicitLayout)}
+          >
+            {m.worktree_layout_explicit({})}
+          </button>
+          <button
+            type="button"
+            class:active={layout === repoDotWorktreesLayout}
+            onclick={() => (layout = repoDotWorktreesLayout)}
+          >
+            {m.worktree_layout_repo_dot_worktrees({
+              repo: "repo",
+              branch: "branch",
+            })}
+          </button>
+        </div>
+      </label>
+      <label class="field">
+        <span>{isRepoDotWorktrees ? m.worktree_parent_directory() : m.worktree_path_prefix()}</span>
         <input
           type="text"
           bind:value={pathPrefix}
-          placeholder="/Users/me/project.worktrees"
+          placeholder={isRepoDotWorktrees ? "/Users/me" : "/Users/me/project.worktrees"}
         />
+        {#if isRepoDotWorktrees}
+          <div class="hint">{m.worktree_parent_directory_hint()}</div>
+        {/if}
       </label>
       <label class="field">
         <span>{m.worktree_project()}</span>
-        <input type="text" bind:value={project} placeholder="project-name" />
+        <input
+          type="text"
+          bind:value={project}
+          placeholder="project-name"
+          disabled={isRepoDotWorktrees}
+        />
+        <div class="hint">
+          {isRepoDotWorktrees ? m.worktree_project_derived() : m.worktree_project_required()}
+        </div>
       </label>
       <label class="enabled-toggle">
         <input type="checkbox" bind:checked={enabled} />
@@ -310,7 +357,7 @@
 
   .form-grid {
     display: grid;
-    grid-template-columns: 1fr 160px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: var(--space-5);
   }
 
@@ -332,9 +379,37 @@
     font-size: 12px;
   }
 
+  .layout-options {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
+  }
+
+  .layout-options button {
+    min-height: 30px;
+    padding: 4px 8px;
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-sm);
+    background: var(--bg-inset);
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .layout-options button.active {
+    border-color: var(--accent-blue);
+    color: var(--text-primary);
+  }
+
   .field input:focus {
     outline: none;
     border-color: var(--accent-blue);
+  }
+
+  .hint {
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 1.3;
   }
 
   .enabled-toggle {

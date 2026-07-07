@@ -23,3 +23,4 @@ export type DbInsight = {
   template_version?: string;
   type: string;
 };
+

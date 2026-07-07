@@ -39,14 +39,24 @@ For local desktop-style MCP clients, use stdio:
 Restart or reload your MCP client after adding the server. Once connected, the
 client will see these tools:
 
-| Tool                   | Purpose                                            |
-| ---------------------- | -------------------------------------------------- |
-| `search_sessions`      | Full-text search across recorded sessions          |
-| `list_sessions`        | List recent or filtered sessions                   |
-| `get_session_overview` | Fetch metadata and a compact message preview       |
-| `get_messages`         | Read paginated message bodies from one session     |
-| `search_content`       | Exact string or regex search over raw session text |
-| `get_usage_summary`    | Aggregate token and cost usage                     |
+| Tool                   | Purpose                                                            |
+| ---------------------- | ------------------------------------------------------------------ |
+| `search_sessions`      | Full-text search across recorded sessions                          |
+| `list_sessions`        | List recent or filtered sessions                                   |
+| `get_session_overview` | Fetch metadata and a compact message preview                       |
+| `get_messages`         | Read paginated message bodies from one session                     |
+| `search_content`       | Substring, regex, semantic, or hybrid search over raw session text |
+| `get_usage_summary`    | Aggregate token and cost usage                                     |
+
+`search_content` accepts a `mode` of `substring` (default), `regex`, `semantic`,
+or `hybrid`, plus a `scope` of `top`, `all` (default), or `subordinate` that is
+only valid with the semantic and hybrid modes. The `semantic` and `hybrid` modes
+need the opt-in [semantic search](/semantic-search/) index on the local SQLite
+archive; without it they return a "not available" error. In every mode, each
+match carries a conversation-unit citation: an `ordinal_range` of `[start, end]`
+ordinals around the match, plus `subordinate`, `relationship`,
+`parent_session_id`, and `is_sidechain` fields that flag hits from sidechain
+runs and subagent or fork sessions.
 
 ## Daemon-Backed Reads
 

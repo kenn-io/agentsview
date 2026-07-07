@@ -26,6 +26,7 @@ func (s *Server) registerTypedAPIRoutes() {
 	s.registerPinRoutes()
 	s.registerImportRoutes()
 	s.registerAssetRoutes()
+	s.registerEmbeddingsRoutes()
 }
 
 type routeGroup struct {

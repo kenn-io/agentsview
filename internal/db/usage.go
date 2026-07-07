@@ -2317,17 +2317,34 @@ func (db *DB) GetTopSessionsByCost(
 // (usage_events.cost_usd). CostUSD is non-zero only when HasCost is
 // true; a partial total (some models unpriced) is never emitted.
 type SessionUsage struct {
-	SessionID         string   `json:"session_id"`
-	Agent             string   `json:"agent"`
-	Project           string   `json:"project"`
-	TotalOutputTokens int      `json:"total_output_tokens"`
-	PeakContextTokens int      `json:"peak_context_tokens"`
-	HasTokenData      bool     `json:"has_token_data"`
-	CostUSD           float64  `json:"cost_usd"`
-	HasCost           bool     `json:"has_cost"`
-	AICredits         float64  `json:"ai_credits,omitempty"`
-	Models            []string `json:"models"`
-	UnpricedModels    []string `json:"unpriced_models,omitempty"`
+	SessionID         string                       `json:"session_id"`
+	Agent             string                       `json:"agent"`
+	Project           string                       `json:"project"`
+	TotalOutputTokens int                          `json:"total_output_tokens"`
+	PeakContextTokens int                          `json:"peak_context_tokens"`
+	HasTokenData      bool                         `json:"has_token_data"`
+	CostUSD           float64                      `json:"cost_usd"`
+	HasCost           bool                         `json:"has_cost"`
+	AICredits         float64                      `json:"ai_credits,omitempty"`
+	Models            []string                     `json:"models"`
+	UnpricedModels    []string                     `json:"unpriced_models,omitempty"`
+	BreakdownCount    int                          `json:"breakdown_count"`
+	Breakdown         []SessionUsageBreakdownEntry `json:"breakdown"`
+}
+
+type SessionUsageBreakdownEntry struct {
+	Ordinal                  int     `json:"ordinal"`
+	MessageOrdinal           *int    `json:"message_ordinal,omitempty"`
+	Source                   string  `json:"source"`
+	Label                    string  `json:"label"`
+	Timestamp                string  `json:"timestamp"`
+	Model                    string  `json:"model"`
+	InputTokens              int     `json:"input_tokens"`
+	OutputTokens             int     `json:"output_tokens"`
+	CacheCreationInputTokens int     `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int     `json:"cache_read_input_tokens"`
+	CostUSD                  float64 `json:"cost_usd"`
+	HasCost                  bool    `json:"has_cost"`
 }
 
 // sessionRowCost computes one usage row's cost and reports whether
@@ -2369,6 +2386,55 @@ func sessionRowCost(
 	return cost, true, true
 }
 
+func sessionUsageBreakdownEntry(
+	r usageScanRow,
+	ordinal int,
+	cost float64,
+	priced bool,
+) SessionUsageBreakdownEntry {
+	var inTok, outTok, crTok, rdTok int
+	if r.usageSource == "message" {
+		inTok, outTok, crTok, rdTok =
+			clampedUsageTokenCounters(r.tokenJSON)
+	} else {
+		inTok, outTok, crTok, rdTok = usageEventRowTokens(
+			r.usageSource,
+			r.inputTokens, r.outputTokens,
+			r.cacheCreationInputTokens, r.cacheReadInputTokens)
+	}
+	entry := SessionUsageBreakdownEntry{
+		Ordinal:                  ordinal,
+		Source:                   r.usageSource,
+		Label:                    sessionUsageBreakdownLabel(r),
+		Timestamp:                r.ts,
+		Model:                    r.model,
+		InputTokens:              inTok,
+		OutputTokens:             outTok,
+		CacheCreationInputTokens: crTok,
+		CacheReadInputTokens:     rdTok,
+		CostUSD:                  cost,
+		HasCost:                  priced,
+	}
+	if r.messageOrdinal.Valid {
+		messageOrdinal := int(r.messageOrdinal.Int64)
+		entry.MessageOrdinal = &messageOrdinal
+	}
+	return entry
+}
+
+func sessionUsageBreakdownLabel(r usageScanRow) string {
+	if r.messageOrdinal.Valid {
+		if r.usageSource == "message" {
+			return fmt.Sprintf("Prompt %d", r.messageOrdinal.Int64+1)
+		}
+		return fmt.Sprintf("Step %d", r.messageOrdinal.Int64+1)
+	}
+	if r.usageSource != "" {
+		return r.usageSource
+	}
+	return "usage"
+}
+
 // GetSessionUsage returns one session's token totals and cost
 // estimate. It starts from GetSession (so metadata and session-level
 // token aggregates are reported even when there are no per-message
@@ -2376,9 +2442,11 @@ func sessionRowCost(
 // rows. Dedup is intra-session only; this reports the session's own
 // usage, which can diverge from the dashboard's cross-session
 // credited total for fork/subagent sessions. Returns (nil, nil) when
-// the session does not exist.
+// the session does not exist. BreakdownCount is always populated;
+// per-row Breakdown entries are built only when includeBreakdown is
+// true so callers that need just the totals avoid the row payload.
 func (db *DB) GetSessionUsage(
-	ctx context.Context, sessionID string,
+	ctx context.Context, sessionID string, includeBreakdown bool,
 ) (*SessionUsage, error) {
 	sess, err := db.GetSession(ctx, sessionID)
 	if err != nil {
@@ -2396,7 +2464,9 @@ func (db *DB) GetSessionUsage(
 
 	query := usageRowSelect() + ` AND u.session_id = ?
 		ORDER BY u.ts ASC, u.session_id ASC,
-		COALESCE(u.message_ordinal, -1) ASC`
+		COALESCE(u.message_ordinal, -1) ASC,
+		u.usage_source ASC,
+		COALESCE(u.usage_dedup_key, '') ASC`
 	rows, err := db.getReader().QueryContext(ctx, query, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("querying session usage: %w", err)
@@ -2408,6 +2478,8 @@ func (db *DB) GetSessionUsage(
 	allPriced := true
 	modelsSet := make(map[string]struct{})
 	unpricedSet := make(map[string]struct{})
+	breakdown := make([]SessionUsageBreakdownEntry, 0)
+	breakdownCount := 0
 
 	seen := make(map[usageDedupToken]struct{})
 
@@ -2438,6 +2510,11 @@ func (db *DB) GetSessionUsage(
 			allPriced = false
 			unpricedSet[r.model] = struct{}{}
 		}
+		breakdownCount++
+		if includeBreakdown {
+			breakdown = append(breakdown, sessionUsageBreakdownEntry(
+				r, breakdownCount, c, priced))
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating session usage rows: %w", err)
@@ -2452,6 +2529,8 @@ func (db *DB) GetSessionUsage(
 		HasTokenData:      sess.HasTotalOutputTokens || sess.HasPeakContextTokens,
 		Models:            sortedSetKeys(modelsSet),
 		HasCost:           contributing && allPriced,
+		BreakdownCount:    breakdownCount,
+		Breakdown:         breakdown,
 	}
 	if out.HasCost {
 		out.CostUSD = cost

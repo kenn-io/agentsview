@@ -14,11 +14,18 @@ import (
 )
 
 var ErrWorktreeMappingDuplicate = errors.New("worktree mapping already exists")
+var ErrWorktreeMappingInvalid = errors.New("invalid worktree mapping")
+
+const (
+	WorktreeMappingLayoutExplicit         = "explicit"
+	WorktreeMappingLayoutRepoDotWorktrees = "repo_dot_worktrees"
+)
 
 type WorktreeProjectMapping struct {
 	ID         int64  `json:"id"`
 	Machine    string `json:"machine"`
 	PathPrefix string `json:"path_prefix"`
+	Layout     string `json:"layout"`
 	Project    string `json:"project"`
 	Enabled    bool   `json:"enabled"`
 	CreatedAt  string `json:"created_at"`
@@ -33,33 +40,58 @@ type ApplyWorktreeProjectMappingsResult struct {
 func normalizeWorktreeMapping(
 	machine string,
 	pathPrefix string,
+	layout string,
 	project string,
 ) (WorktreeProjectMapping, error) {
 	machine = strings.TrimSpace(machine)
 	if machine == "" {
-		return WorktreeProjectMapping{}, fmt.Errorf("machine is required")
+		return WorktreeProjectMapping{}, fmt.Errorf("%w: machine is required", ErrWorktreeMappingInvalid)
 	}
 
 	pathPrefix = strings.TrimSpace(pathPrefix)
 	if pathPrefix == "" {
-		return WorktreeProjectMapping{}, fmt.Errorf("path_prefix is required")
+		return WorktreeProjectMapping{}, fmt.Errorf("%w: path_prefix is required", ErrWorktreeMappingInvalid)
 	}
 	cleanPrefix := filepath.Clean(pathPrefix)
 	if cleanPrefix == "." {
-		return WorktreeProjectMapping{}, fmt.Errorf("path_prefix is required")
+		return WorktreeProjectMapping{}, fmt.Errorf("%w: path_prefix is required", ErrWorktreeMappingInvalid)
 	}
 	if !isFilesystemRoot(cleanPrefix) {
 		cleanPrefix = strings.TrimRight(cleanPrefix, string(filepath.Separator))
 	}
 
+	layout = strings.TrimSpace(layout)
+	if layout == "" {
+		layout = WorktreeMappingLayoutExplicit
+	}
+	switch layout {
+	case WorktreeMappingLayoutExplicit, WorktreeMappingLayoutRepoDotWorktrees:
+	default:
+		return WorktreeProjectMapping{}, fmt.Errorf(
+			"%w: layout must be %s or %s",
+			ErrWorktreeMappingInvalid,
+			WorktreeMappingLayoutExplicit,
+			WorktreeMappingLayoutRepoDotWorktrees,
+		)
+	}
+
 	project = strings.TrimSpace(project)
-	if project == "" {
-		return WorktreeProjectMapping{}, fmt.Errorf("project is required")
+	if layout == WorktreeMappingLayoutExplicit {
+		if project == "" {
+			return WorktreeProjectMapping{}, fmt.Errorf(
+				"%w: project is required",
+				ErrWorktreeMappingInvalid,
+			)
+		}
+		project = parser.NormalizeName(project)
+	} else {
+		project = ""
 	}
 
 	return WorktreeProjectMapping{
 		Machine:    machine,
 		PathPrefix: cleanPrefix,
+		Layout:     layout,
 		Project:    parser.NormalizeName(project),
 	}, nil
 }
@@ -93,12 +125,16 @@ func scanWorktreeMapping(rows *sql.Rows) (WorktreeProjectMapping, error) {
 		&m.ID,
 		&m.Machine,
 		&m.PathPrefix,
+		&m.Layout,
 		&m.Project,
 		&enabled,
 		&m.CreatedAt,
 		&m.UpdatedAt,
 	); err != nil {
 		return m, err
+	}
+	if m.Layout == "" {
+		m.Layout = WorktreeMappingLayoutExplicit
 	}
 	m.Enabled = enabled != 0
 	return m, nil
@@ -111,12 +147,16 @@ func scanWorktreeMappingRow(row rowScanner) (WorktreeProjectMapping, error) {
 		&m.ID,
 		&m.Machine,
 		&m.PathPrefix,
+		&m.Layout,
 		&m.Project,
 		&enabled,
 		&m.CreatedAt,
 		&m.UpdatedAt,
 	); err != nil {
 		return m, err
+	}
+	if m.Layout == "" {
+		m.Layout = WorktreeMappingLayoutExplicit
 	}
 	m.Enabled = enabled != 0
 	return m, nil
@@ -127,7 +167,7 @@ func (db *DB) ListWorktreeProjectMappings(
 	machine string,
 ) ([]WorktreeProjectMapping, error) {
 	rows, err := db.getReader().QueryContext(ctx, `
-		SELECT id, machine, path_prefix, project, enabled, created_at, updated_at
+		SELECT id, machine, path_prefix, layout, project, enabled, created_at, updated_at
 		FROM worktree_project_mappings
 		WHERE machine = ?
 		ORDER BY path_prefix`, strings.TrimSpace(machine))
@@ -154,7 +194,9 @@ func (db *DB) CreateWorktreeProjectMapping(
 	ctx context.Context,
 	m WorktreeProjectMapping,
 ) (WorktreeProjectMapping, error) {
-	normalized, err := normalizeWorktreeMapping(m.Machine, m.PathPrefix, m.Project)
+	normalized, err := normalizeWorktreeMapping(
+		m.Machine, m.PathPrefix, m.Layout, m.Project,
+	)
 	if err != nil {
 		return WorktreeProjectMapping{}, err
 	}
@@ -168,10 +210,11 @@ func (db *DB) CreateWorktreeProjectMapping(
 	defer db.mu.Unlock()
 
 	res, err := db.getWriter().ExecContext(ctx, `
-		INSERT INTO worktree_project_mappings (machine, path_prefix, project, enabled)
-		VALUES (?, ?, ?, ?)`,
+		INSERT INTO worktree_project_mappings (machine, path_prefix, layout, project, enabled)
+		VALUES (?, ?, ?, ?, ?)`,
 		normalized.Machine,
 		normalized.PathPrefix,
+		normalized.Layout,
 		normalized.Project,
 		enabled,
 	)
@@ -191,7 +234,7 @@ func (db *DB) UpdateWorktreeProjectMapping(
 	id int64,
 	patch WorktreeProjectMapping,
 ) (WorktreeProjectMapping, error) {
-	normalized, err := normalizeWorktreeMapping(machine, patch.PathPrefix, patch.Project)
+	normalized, err := normalizeWorktreeMapping(machine, patch.PathPrefix, patch.Layout, patch.Project)
 	if err != nil {
 		return WorktreeProjectMapping{}, err
 	}
@@ -207,11 +250,13 @@ func (db *DB) UpdateWorktreeProjectMapping(
 	res, err := db.getWriter().ExecContext(ctx, `
 		UPDATE worktree_project_mappings
 		SET path_prefix = ?,
+			layout = ?,
 			project = ?,
 			enabled = ?,
 			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE id = ? AND machine = ?`,
 		normalized.PathPrefix,
+		normalized.Layout,
 		normalized.Project,
 		enabled,
 		id,
@@ -259,7 +304,7 @@ func (db *DB) getWorktreeProjectMappingLocked(
 	id int64,
 ) (WorktreeProjectMapping, error) {
 	row := db.getWriter().QueryRowContext(ctx, `
-		SELECT id, machine, path_prefix, project, enabled, created_at, updated_at
+		SELECT id, machine, path_prefix, layout, project, enabled, created_at, updated_at
 		FROM worktree_project_mappings
 		WHERE id = ? AND machine = ?`,
 		id,
@@ -329,10 +374,14 @@ func (db *DB) CopyWorktreeProjectMappingsFrom(sourcePath string) error {
 	defer func() { _ = tx.Rollback() }()
 
 	if oldDBHasTable(ctx, tx, "worktree_project_mappings") {
+		layoutSelect := "'" + WorktreeMappingLayoutExplicit + "'"
+		if oldDBHasColumn(ctx, tx, "worktree_project_mappings", "layout") {
+			layoutSelect = "layout"
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT OR IGNORE INTO main.worktree_project_mappings
-				(machine, path_prefix, project, enabled, created_at, updated_at)
-			SELECT machine, path_prefix, project, enabled, created_at, updated_at
+				(machine, path_prefix, layout, project, enabled, created_at, updated_at)
+			SELECT machine, path_prefix, `+layoutSelect+`, project, enabled, created_at, updated_at
 			FROM old_db.worktree_project_mappings`); err != nil {
 			return fmt.Errorf("copying worktree project mappings: %w", err)
 		}
@@ -365,8 +414,15 @@ func ResolveWorktreeProjectFromSortedMappings(
 	cwd string,
 	currentProject string,
 ) (string, bool) {
-	if mapping, ok := bestWorktreeProjectMapping(mappings, cwd); ok {
-		return mapping.Project, true
+	for _, mapping := range mappings {
+		if !worktreePathMatches(mapping.PathPrefix, cwd) {
+			continue
+		}
+		if project, ok := resolveWorktreeProjectFromMapping(
+			mapping, cwd, currentProject,
+		); ok {
+			return project, true
+		}
 	}
 	return currentProject, false
 }
@@ -395,7 +451,7 @@ func (db *DB) activeWorktreeProjectMappings(
 	machine string,
 ) ([]WorktreeProjectMapping, error) {
 	rows, err := db.getReader().QueryContext(ctx, `
-		SELECT id, machine, path_prefix, project, enabled, created_at, updated_at
+		SELECT id, machine, path_prefix, layout, project, enabled, created_at, updated_at
 		FROM worktree_project_mappings
 		WHERE machine = ? AND enabled = 1
 		ORDER BY length(path_prefix) DESC, path_prefix`,
@@ -420,16 +476,84 @@ func (db *DB) activeWorktreeProjectMappings(
 	return mappings, nil
 }
 
-func bestWorktreeProjectMapping(
-	mappings []WorktreeProjectMapping,
+func resolveWorktreeProjectFromMapping(
+	mapping WorktreeProjectMapping,
 	cwd string,
-) (WorktreeProjectMapping, bool) {
-	for _, mapping := range mappings {
-		if worktreePathMatches(mapping.PathPrefix, cwd) {
-			return mapping, true
+	currentProject string,
+) (string, bool) {
+	switch mapping.Layout {
+	case "", WorktreeMappingLayoutExplicit:
+		if mapping.Project == "" {
+			return currentProject, false
 		}
+		return mapping.Project, true
+	case WorktreeMappingLayoutRepoDotWorktrees:
+		project, _, ok := resolveRepoDotWorktrees(mapping.PathPrefix, cwd)
+		if !ok {
+			return currentProject, false
+		}
+		return project, true
+	default:
+		return currentProject, false
 	}
-	return WorktreeProjectMapping{}, false
+}
+
+// worktreeMappingIdentityRoot returns the directory that anchors the
+// project identity for a cwd matched by a mapping, when the mapping
+// resolves that cwd to the given project.
+func worktreeMappingIdentityRoot(
+	mapping WorktreeProjectMapping,
+	cwd string,
+	project string,
+) (string, bool) {
+	switch mapping.Layout {
+	case "", WorktreeMappingLayoutExplicit:
+		if mapping.Project == "" || mapping.Project != project {
+			return "", false
+		}
+		return mapping.PathPrefix, true
+	case WorktreeMappingLayoutRepoDotWorktrees:
+		resolved, root, ok := resolveRepoDotWorktrees(mapping.PathPrefix, cwd)
+		if !ok || resolved != project {
+			return "", false
+		}
+		return root, true
+	default:
+		return "", false
+	}
+}
+
+// resolveRepoDotWorktrees resolves a cwd under a repo_dot_worktrees
+// mapping to its project name and the repo.worktrees directory shared
+// by all of that repo's worktree branches.
+func resolveRepoDotWorktrees(
+	pathPrefix string,
+	cwd string,
+) (string, string, bool) {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return "", "", false
+	}
+	rel, err := filepath.Rel(pathPrefix, filepath.Clean(cwd))
+	if err != nil || rel == "." || rel == "" {
+		return "", "", false
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", "", false
+	}
+	idx := strings.IndexRune(rel, filepath.Separator)
+	if idx < 0 {
+		return "", "", false
+	}
+	first := rel[:idx]
+	if !strings.HasSuffix(first, ".worktrees") {
+		return "", "", false
+	}
+	repo := strings.TrimSpace(strings.TrimSuffix(first, ".worktrees"))
+	if repo == "" {
+		return "", "", false
+	}
+	return parser.NormalizeName(repo), filepath.Join(pathPrefix, first), true
 }
 
 type worktreeMappingSessionRow struct {
@@ -455,7 +579,7 @@ func loadActiveWorktreeMappingsTx(
 	machine string,
 ) ([]WorktreeProjectMapping, error) {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, machine, path_prefix, project, enabled, created_at, updated_at
+		SELECT id, machine, path_prefix, layout, project, enabled, created_at, updated_at
 		FROM worktree_project_mappings
 		WHERE machine = ? AND enabled = 1
 		ORDER BY length(path_prefix) DESC, path_prefix`,
@@ -473,7 +597,7 @@ func loadActiveWorktreeMappingsByMachineTx(
 	machines map[string]bool,
 ) (map[string][]WorktreeProjectMapping, error) {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, machine, path_prefix, project, enabled, created_at, updated_at
+		SELECT id, machine, path_prefix, layout, project, enabled, created_at, updated_at
 		FROM worktree_project_mappings
 		WHERE enabled = 1
 		ORDER BY machine, length(path_prefix) DESC, path_prefix`,
@@ -523,11 +647,11 @@ func applyMappingToSessionRow(
 	if matchCwd == "" {
 		matchCwd = row.cwd
 	}
-	mapping, ok := bestWorktreeProjectMapping(mappings, matchCwd)
+	project, ok := ResolveWorktreeProjectFromSortedMappings(mappings, matchCwd, row.project)
 	if !ok {
 		return worktreeMappingSessionUpdate{}, false, false
 	}
-	if mapping.Project == row.project {
+	if project == row.project {
 		return worktreeMappingSessionUpdate{}, true, false
 	}
 	return worktreeMappingSessionUpdate{
@@ -535,7 +659,7 @@ func applyMappingToSessionRow(
 		machine:        row.machine,
 		cwd:            row.cwd,
 		currentProject: row.project,
-		nextProject:    mapping.Project,
+		nextProject:    project,
 	}, true, true
 }
 
@@ -716,11 +840,7 @@ func (db *DB) applyWorktreeProjectMappings(
 	applyWorktreeMappingMatchCwdFromSiblings(rowsForMachine, func(row worktreeMappingSessionRow) string {
 		return strings.TrimSpace(row.filePath)
 	}, func(row worktreeMappingSessionRow, cwd string) (string, bool) {
-		mapping, ok := bestWorktreeProjectMapping(mappings, cwd)
-		if !ok {
-			return "", false
-		}
-		return mapping.Project, true
+		return ResolveWorktreeProjectFromSortedMappings(mappings, cwd, row.project)
 	})
 
 	for _, row := range rowsForMachine {
@@ -948,11 +1068,9 @@ func (db *DB) applyWorktreeProjectMappingsToSessionsByPath(
 	applyWorktreeMappingMatchCwdFromSiblings(sessions, func(row worktreeMappingSessionRow) string {
 		return row.machine + "|" + strings.TrimSpace(row.filePath)
 	}, func(row worktreeMappingSessionRow, cwd string) (string, bool) {
-		mapping, ok := bestWorktreeProjectMapping(mappingsByMachine[row.machine], cwd)
-		if !ok {
-			return "", false
-		}
-		return mapping.Project, true
+		return ResolveWorktreeProjectFromSortedMappings(
+			mappingsByMachine[row.machine], cwd, row.project,
+		)
 	})
 
 	var result ApplyWorktreeProjectMappingsResult

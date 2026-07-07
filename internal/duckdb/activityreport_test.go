@@ -87,6 +87,77 @@ func TestDuckGetActivityReportBasicConcurrency(t *testing.T) {
 	assert.GreaterOrEqual(t, len(r.ByAgent), 2)
 }
 
+// TestDuckGetActivityReportIncludesSubagentUsage mirrors the SQLite
+// TestGetActivityReport_IncludesSubagentUsage: subagent and fork sessions
+// are candidates so their usage lands in the totals (matching daily
+// usage, which never filters by relationship_type). The fork's replayed
+// usage row dedups away, so it adds a session row but no cost.
+func TestDuckGetActivityReportIncludesSubagentUsage(t *testing.T) {
+	ctx := context.Background()
+	root := syncSession("root", "proj1", "root first", "2026-06-14T10:00:00.000Z", 1)
+	rootMsg := syncMessage("root", 0, "assistant", "x", "2026-06-14T10:00:00.000Z")
+	rootMsg.Model = "root-model"
+	rootMsg.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+	rootMsg.OutputTokens = 500
+	rootMsg.ClaudeMessageID = "m-root"
+	rootMsg.ClaudeRequestID = "r-root"
+
+	parent := "root"
+	sub := syncSession("agent-sub", "proj1", "sub first", "2026-06-14T10:02:00.000Z", 1)
+	sub.RelationshipType = "subagent"
+	sub.ParentSessionID = &parent
+	subMsg := syncMessage("agent-sub", 0, "assistant", "y", "2026-06-14T10:03:00.000Z")
+	subMsg.Model = "sub-model"
+	subMsg.TokenUsage = json.RawMessage(`{"input_tokens":2000,"output_tokens":700}`)
+	subMsg.OutputTokens = 700
+	subMsg.ClaudeMessageID = "m-sub"
+	subMsg.ClaudeRequestID = "r-sub"
+
+	fork := syncSession("fork", "proj1", "fork first", "2026-06-14T10:05:00.000Z", 1)
+	fork.RelationshipType = "fork"
+	fork.ParentSessionID = &parent
+	// The fork replays the root's message: same Claude ids, so the dedup
+	// must drop its usage row while the session itself still appears.
+	forkMsg := syncMessage("fork", 0, "assistant", "x", "2026-06-14T10:05:00.000Z")
+	forkMsg.Model = "root-model"
+	forkMsg.TokenUsage = json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`)
+	forkMsg.OutputTokens = 500
+	forkMsg.ClaudeMessageID = "m-root"
+	forkMsg.ClaudeRequestID = "r-root"
+
+	writes := []db.SessionBatchWrite{
+		{Session: root, Messages: []db.Message{rootMsg},
+			DataVersion: 1, ReplaceMessages: true},
+		{Session: sub, Messages: []db.Message{subMsg},
+			DataVersion: 1, ReplaceMessages: true},
+		{Session: fork, Messages: []db.Message{forkMsg},
+			DataVersion: 1, ReplaceMessages: true},
+	}
+	pricing := []db.ModelPricing{
+		{ModelPattern: "root-model", InputPerMTok: 3.0, OutputPerMTok: 15.0},
+		{ModelPattern: "sub-model", InputPerMTok: 3.0, OutputPerMTok: 15.0},
+	}
+	store := activityReportStore(t, writes, pricing)
+
+	r, err := store.GetActivityReport(
+		ctx, db.AnalyticsFilter{Timezone: "UTC"},
+		duckDayQuery(t, "2026-06-14", "UTC"))
+	require.NoError(t, err)
+	ids := make(map[string]struct{}, len(r.BySession))
+	for _, s := range r.BySession {
+		ids[s.SessionID] = struct{}{}
+	}
+	assert.Contains(t, ids, "root")
+	assert.Contains(t, ids, "agent-sub",
+		"subagent session must be a candidate")
+	assert.Contains(t, ids, "fork", "fork session must be a candidate")
+	assert.Equal(t, 1200, r.Totals.OutputTokens,
+		"totals include subagent usage; the fork's replayed row dedups away")
+	// Cost = root (1000*3+500*15)/1e6 + subagent (2000*3+700*15)/1e6; the
+	// fork's duplicate row contributes nothing.
+	assert.InDelta(t, 0.0105+0.0165, r.Totals.Cost, 1e-9)
+}
+
 func TestDuckGetActivityReportUsageCostAndTokens(t *testing.T) {
 	ctx := context.Background()
 	sess := syncSession("s1", "proj1", "first", "2026-06-14T10:30:00.000Z", 1)

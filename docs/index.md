@@ -202,6 +202,9 @@ to a shared database for team or multi-machine setups.
     Full-text search across all message content. Find that
     one conversation where you discussed a specific function,
     error message, or design decision — even months later.
+    Opt-in [semantic search](/semantic-search/) matches by
+    meaning when you don't remember the exact words, and every
+    match cites the conversation unit it came from.
 
 -   **Recent Edits**
 

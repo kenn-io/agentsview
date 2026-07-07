@@ -310,6 +310,71 @@ func TestHTTPBackend_Messages_DescDirection(t *testing.T) {
 		"desc iteration should return highest ordinal first")
 }
 
+func TestHTTPBackend_Messages_AroundRoundtrip(t *testing.T) {
+	t.Parallel()
+	env := newHTTPBackendEnv(t)
+	const sid = "msg-around"
+	dbtest.SeedSessionWithMessages(t, env.DB, sid, "p1",
+		dbtest.UserMessagesf(sid, 12, "m%d"), dbtest.WithMessageCount(12))
+
+	svc := env.Backend("", false)
+	around := 6
+	list, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+		Around: &around,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	require.Equal(t, 11, list.Count,
+		"default before=5/after=5 around ordinal 6 spans ordinals 1..11")
+	assert.Equal(t, 1, list.Messages[0].Ordinal)
+	assert.Equal(t, 11, list.Messages[len(list.Messages)-1].Ordinal)
+	require.NotNil(t, list.FirstOrdinal)
+	require.NotNil(t, list.LastOrdinal)
+	assert.Equal(t, 1, *list.FirstOrdinal)
+	assert.Equal(t, 11, *list.LastOrdinal)
+}
+
+func TestHTTPBackend_Messages_RolesRoundtrip(t *testing.T) {
+	t.Parallel()
+	env := newHTTPBackendEnv(t)
+	const sid = "msg-roles"
+	dbtest.SeedSessionWithMessages(t, env.DB, sid, "p1", []db.Message{
+		dbtest.UserMsg(sid, 0, "u0"),
+		dbtest.AsstMsg(sid, 1, "a1"),
+		dbtest.UserMsg(sid, 2, "u2"),
+	}, dbtest.WithMessageCount(3))
+
+	svc := env.Backend("", false)
+	zero := 0
+	list, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+		From:  &zero,
+		Limit: 100,
+		Roles: []string{"user"},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	require.Equal(t, 2, list.Count)
+	for _, m := range list.Messages {
+		assert.Equal(t, "user", m.Role)
+	}
+}
+
+func TestHTTPBackend_Messages_AroundValidationErrorSurfaces(t *testing.T) {
+	t.Parallel()
+	env := newHTTPBackendEnv(t)
+	const sid = "msg-validation"
+	dbtest.SeedSessionWithMessages(t, env.DB, sid, "p1",
+		dbtest.UserMessagesf(sid, 3, "m%d"), dbtest.WithMessageCount(3))
+
+	svc := env.Backend("", false)
+	around, from := 1, 0
+	_, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+		Around: &around,
+		From:   &from,
+	})
+	require.Error(t, err)
+}
+
 func TestHTTPBackend_ToolCalls_Empty(t *testing.T) {
 	t.Parallel()
 	env := newHTTPBackendEnv(t)
@@ -430,6 +495,26 @@ func TestHTTPSearchContent(t *testing.T) {
 	assert.Equal(t, "s1", res.Matches[0].SessionID)
 }
 
+func TestHTTPSearchContentSemanticSetsIntentHeader(t *testing.T) {
+	t.Parallel()
+	var gotIntent string
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			gotIntent = r.Header.Get("X-AgentsView-Search-Intent")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"matches":[],"next_cursor":0}`))
+		}))
+	defer srv.Close()
+	be := service.NewHTTPBackend(srv.URL, "", true)
+
+	_, err := be.SearchContent(context.Background(), service.ContentSearchRequest{
+		Pattern: "needle", Mode: "semantic", Limit: 50,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "semantic", gotIntent)
+}
+
 func TestHTTPSearchContent_RealServer(t *testing.T) {
 	t.Parallel()
 	env := newHTTPBackendEnv(t)
@@ -448,6 +533,51 @@ func TestHTTPSearchContent_RealServer(t *testing.T) {
 	require.Len(t, res.Matches, 1)
 	assert.Equal(t, "cs-1", res.Matches[0].SessionID)
 	assert.Equal(t, "message", res.Matches[0].Location)
+}
+
+// TestHTTPSearchContent_501PreservesCauseDetail asserts that a 501 response
+// carrying cause-specific remediation text (the shape searcherAdapter's
+// translateSearchError produces for a still-building index) survives the
+// daemon round-trip instead of being collapsed to the bare
+// ErrSemanticUnavailable sentinel message.
+func TestHTTPSearchContent_501PreservesCauseDetail(t *testing.T) {
+	t.Parallel()
+	body := service.ErrSemanticUnavailable.Error() + ": index is building: 40% complete"
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotImplemented)
+			_, _ = w.Write([]byte(`{"error":"` + body + `"}`))
+		}))
+	defer srv.Close()
+
+	be := service.NewHTTPBackend(srv.URL, "", true)
+	_, err := be.SearchContent(context.Background(), service.ContentSearchRequest{Pattern: "needle"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, service.ErrSemanticUnavailable)
+	assert.Contains(t, err.Error(), "index is building: 40% complete")
+}
+
+// TestHTTPSearchContent_501IdenticalToSentinelDoesNotDuplicate asserts that
+// when the 501 body's message is exactly the sentinel's own text (no extra
+// cause — e.g. ErrNoActiveGeneration's case), the client returns the bare
+// sentinel rather than a message with the sentinel text repeated twice.
+func TestHTTPSearchContent_501IdenticalToSentinelDoesNotDuplicate(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotImplemented)
+			_, _ = w.Write([]byte(`{"error":"` + service.ErrSemanticUnavailable.Error() + `"}`))
+		}))
+	defer srv.Close()
+
+	be := service.NewHTTPBackend(srv.URL, "", true)
+	_, err := be.SearchContent(context.Background(), service.ContentSearchRequest{Pattern: "needle"})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, service.ErrSemanticUnavailable)
+	assert.Equal(t, service.ErrSemanticUnavailable.Error(), err.Error(),
+		"the sentinel text must not be duplicated when the body carries no extra cause")
 }
 
 func TestNewHTTPBackend_TrimsTrailingSlash(t *testing.T) {

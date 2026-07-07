@@ -22,18 +22,23 @@ func TestBuildResolveScript(t *testing.T) {
 
 	// Only file-backed provider-authoritative agents belong in the resolver.
 	for _, def := range parser.Registry {
-		marker := "\"" + string(def.Type) + ":"
 		want := def.FileBased &&
 			parser.ProviderMigrationModes()[def.Type] ==
 				parser.ProviderMigrationProviderAuthoritative
 		if want {
-			assert.Contains(t, script, marker,
+			assert.True(t, resolveScriptMentionsAgent(script, def.Type),
 				"file-backed provider-authoritative agent %s missing from script", def.Type)
 			continue
 		}
-		assert.NotContains(t, script, marker,
+		assert.False(t, resolveScriptMentionsAgent(script, def.Type),
 			"unsupported agent %s must stay out of the SSH resolver", def.Type)
 	}
+}
+
+func resolveScriptMentionsAgent(script string, agent parser.AgentType) bool {
+	name := string(agent)
+	return strings.Contains(script, "\""+name+":") ||
+		strings.Contains(script, " "+name+"\n")
 }
 
 func TestResolveScriptExcludesDevinProviderRoot(t *testing.T) {
@@ -53,7 +58,7 @@ func TestResolveScriptExcludesDevinProviderRoot(t *testing.T) {
 
 func TestResolveScriptHonorsClaudeConfigDirRoot(t *testing.T) {
 	home := t.TempDir()
-	root := filepath.Join(home, ".claude-personal")
+	root := filepath.Join(home, "claude personal")
 	projectsDir := filepath.Join(root, "projects")
 	require.NoError(t, os.MkdirAll(projectsDir, 0o755), "mkdir projects")
 
@@ -69,6 +74,25 @@ func TestResolveScriptHonorsClaudeConfigDirRoot(t *testing.T) {
 	dirs, _ := parseResolvedDirs(string(out))
 	assert.Contains(t, dirs[parser.AgentClaude], root+"/projects")
 	assert.NotContains(t, dirs[parser.AgentClaude], home+"/.claude/projects")
+}
+
+func TestResolveScriptTreatsEnvValuesAsData(t *testing.T) {
+	home := t.TempDir()
+	projectsDir := filepath.Join(home, "config root", "projects")
+	require.NoError(t, os.MkdirAll(projectsDir, 0o755), "mkdir projects")
+
+	script := buildResolveScript()
+	require.NotContains(t, script, "eval")
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Env = []string{
+		"HOME=" + home,
+		"CLAUDE_PROJECTS_DIR=" + projectsDir,
+	}
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "resolve script failed: output: %s", out)
+
+	dirs, _ := parseResolvedDirs(string(out))
+	assert.Contains(t, dirs[parser.AgentClaude], projectsDir)
 }
 
 func TestResolveScriptExitsZero(t *testing.T) {

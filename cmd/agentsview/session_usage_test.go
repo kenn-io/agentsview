@@ -146,6 +146,8 @@ func TestSessionUsageJSONSchemaIncludesCostContract(t *testing.T) {
 		"session_id":          "codex:abc",
 		"agent":               "codex",
 		"project":             "my-project",
+		"breakdown_count":     float64(0),
+		"breakdown":           nil,
 		"total_output_tokens": float64(123),
 		"peak_context_tokens": float64(456),
 		"has_token_data":      true,

@@ -42,6 +42,7 @@ function makeReport(): Report {
     by_agent: [],
     by_session: [],
     intervals: [],
+    projects: {},
   } as Report;
 }
 

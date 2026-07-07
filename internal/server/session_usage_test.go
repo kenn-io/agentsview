@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -37,6 +38,7 @@ func TestHandleSessionUsage_PricedSession(t *testing.T) {
 			)
 		})
 
+	// Without ?breakdown=true the response carries only the count.
 	w := te.get(t, "/api/v1/sessions/codex:usage-priced/usage")
 	assertStatus(t, w, http.StatusOK)
 
@@ -53,8 +55,34 @@ func TestHandleSessionUsage_PricedSession(t *testing.T) {
 		"has_cost":            true,
 		"models":              []any{"gpt-5.1"},
 		"unpriced_models":     []any{},
+		"breakdown_count":     float64(1),
+		"breakdown":           []any{},
 		"server_running":      true,
 	}, got)
+
+	w = te.get(t,
+		"/api/v1/sessions/codex:usage-priced/usage?breakdown=true")
+	assertStatus(t, w, http.StatusOK)
+
+	got = map[string]any{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, float64(1), got["breakdown_count"], "breakdown_count")
+	assert.Equal(t, []any{
+		map[string]any{
+			"ordinal":                     float64(1),
+			"message_ordinal":             float64(1),
+			"source":                      "message",
+			"label":                       "Prompt 2",
+			"timestamp":                   tsSeed,
+			"model":                       "gpt-5.1",
+			"input_tokens":                float64(1000),
+			"output_tokens":               float64(500),
+			"cache_creation_input_tokens": float64(200),
+			"cache_read_input_tokens":     float64(300),
+			"cost_usd":                    0.01134,
+			"has_cost":                    true,
+		},
+	}, got["breakdown"], "breakdown rows with ?breakdown=true")
 }
 
 func TestHandleSessionUsage_NoTokenOrCostData(t *testing.T) {
@@ -80,8 +108,75 @@ func TestHandleSessionUsage_NoTokenOrCostData(t *testing.T) {
 		"has_cost":            false,
 		"models":              []any{},
 		"unpriced_models":     []any{},
+		"breakdown_count":     float64(0),
+		"breakdown":           []any{},
 		"server_running":      true,
 	}, got)
+}
+
+func TestHandleSessionUsage_BreakdownOrderingAndDedup(t *testing.T) {
+	te := setup(t)
+	seedSessionUsagePricing(t, te.db)
+	te.seedSession(t, "codex:usage-breakdown", "my-project", 3,
+		func(s *db.Session) {
+			s.Agent = "codex"
+			s.TotalOutputTokens = 1500
+			s.PeakContextTokens = 4000
+			s.HasTotalOutputTokens = true
+			s.HasPeakContextTokens = true
+		})
+	te.seedMessages(t, "codex:usage-breakdown", 3,
+		func(i int, m *db.Message) {
+			switch i {
+			case 0, 1:
+				m.Role = "assistant"
+				m.Model = "gpt-5.1"
+				m.ClaudeMessageID = "msg-dup"
+				m.ClaudeRequestID = "req-dup"
+				m.TokenUsage = json.RawMessage(
+					`{"input_tokens":1000,"output_tokens":500,` +
+						`"cache_creation_input_tokens":200,` +
+						`"cache_read_input_tokens":300}`,
+				)
+			}
+		})
+	ordinal := 1
+	require.NoError(t, te.db.ReplaceSessionUsageEvents(
+		"codex:usage-breakdown",
+		[]db.UsageEvent{{
+			SessionID:                "codex:usage-breakdown",
+			MessageOrdinal:           &ordinal,
+			Source:                   "step",
+			Model:                    "gpt-5.1",
+			InputTokens:              250,
+			OutputTokens:             125,
+			CacheCreationInputTokens: 50,
+			CacheReadInputTokens:     25,
+			OccurredAt:               "2026-05-20T10:40:00Z",
+			DedupKey:                 "step:1",
+		}},
+	), "ReplaceSessionUsageEvents")
+
+	usage, err := te.db.GetSessionUsage(context.Background(),
+		"codex:usage-breakdown", true)
+	require.NoError(t, err, "GetSessionUsage")
+	require.NotNil(t, usage, "usage is nil")
+	require.Len(t, usage.Breakdown, 2)
+	assert.Equal(t, 1, usage.Breakdown[0].Ordinal)
+	assert.Equal(t, "Prompt 1", usage.Breakdown[0].Label)
+	assert.Equal(t, "message", usage.Breakdown[0].Source)
+	assert.Equal(t, 1000, usage.Breakdown[0].InputTokens)
+	assert.Equal(t, 500, usage.Breakdown[0].OutputTokens)
+	assert.Equal(t, 200, usage.Breakdown[0].CacheCreationInputTokens)
+	assert.Equal(t, 300, usage.Breakdown[0].CacheReadInputTokens)
+	assert.Equal(t, 2, usage.Breakdown[1].Ordinal)
+	assert.Equal(t, "Step 2", usage.Breakdown[1].Label)
+	assert.Equal(t, "step", usage.Breakdown[1].Source)
+	assert.Equal(t, 250, usage.Breakdown[1].InputTokens)
+	assert.Equal(t, 125, usage.Breakdown[1].OutputTokens)
+	assert.Equal(t, 50, usage.Breakdown[1].CacheCreationInputTokens)
+	assert.Equal(t, 25, usage.Breakdown[1].CacheReadInputTokens)
+	assert.InDelta(t, 0.01416, usage.CostUSD, 1e-9)
 }
 
 func TestHandleSessionUsage_NotFound(t *testing.T) {

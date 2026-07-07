@@ -379,6 +379,9 @@ type DB struct {
 	checkpointMu   sync.Mutex
 	checkpointStop chan struct{}
 	checkpointDone chan struct{}
+
+	vectorMu       sync.RWMutex
+	vectorSearcher VectorSearcher
 }
 
 // Reader exposes guarded read-only query operations. It intentionally does
@@ -633,9 +636,23 @@ func (db *DB) SetCursorSecret(secret []byte) {
 }
 
 // makeDSN builds a SQLite connection string with shared pragmas.
+//
+// Both branches emit a file: URI. mattn/go-sqlite3 forwards the `_`-prefixed
+// pragma params either way, but it only honors mode=ro when the DSN carries
+// the file: scheme — a bare path silently opens read-write, so the ro
+// contract depends on the prefix.
+//
+// The path component is percent-encoded (slashes kept intact): SQLite
+// percent-decodes URI paths and splits params at `?`, so a raw path
+// containing `%`, `?`, or `#` would be misparsed — e.g. a literal "%41" in a
+// directory name would silently open a different file.
+//
+// _journal_mode=WAL is set only on writable DSNs (mirroring vectorDSN):
+// PRAGMA journal_mode=WAL is a write, so with mode=ro honored it would fail
+// outright on a database left in a non-WAL journal mode. Read-only
+// connections just adopt whatever journal mode the file already has.
 func makeDSN(path string, readOnly bool) string {
 	params := url.Values{}
-	params.Set("_journal_mode", "WAL")
 	params.Set("_busy_timeout", "5000")
 	params.Set("_foreign_keys", "ON")
 	params.Set("_mmap_size", "268435456")
@@ -643,9 +660,11 @@ func makeDSN(path string, readOnly bool) string {
 	if readOnly {
 		params.Set("mode", "ro")
 	} else {
+		params.Set("_journal_mode", "WAL")
 		params.Set("_synchronous", "NORMAL")
 	}
-	return path + "?" + params.Encode()
+	escaped := (&url.URL{Path: path}).EscapedPath()
+	return "file:" + escaped + "?" + params.Encode()
 }
 
 // Open creates or opens a SQLite database at the given path.
@@ -1366,6 +1385,10 @@ func (db *DB) migrateColumns() error {
 			"tool_calls", "call_index",
 			"ALTER TABLE tool_calls ADD COLUMN call_index INTEGER",
 		},
+		{
+			"worktree_project_mappings", "layout",
+			"ALTER TABLE worktree_project_mappings ADD COLUMN layout TEXT NOT NULL DEFAULT 'explicit'",
+		},
 	}
 
 	for _, m := range migrations {
@@ -1450,6 +1473,7 @@ func (db *DB) migrateColumns() error {
 			id          INTEGER PRIMARY KEY,
 			machine     TEXT NOT NULL,
 			path_prefix TEXT NOT NULL,
+			layout      TEXT NOT NULL DEFAULT 'explicit',
 			project     TEXT NOT NULL,
 			enabled     INTEGER NOT NULL DEFAULT 1,
 			created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
@@ -2525,15 +2549,18 @@ func (db *DB) Close() error {
 	db.connMu.Unlock()
 	db.mu.Unlock()
 
+	// Close the writer last: SQLite checkpoints and removes the WAL when
+	// the final connection closes, and the reader pool is mode=ro so its
+	// close cannot perform that checkpoint.
 	var errs []error
-	if w != nil && w != r {
-		errs = append(errs, w.Close())
+	for _, p := range retired {
+		errs = append(errs, p.Close())
 	}
 	if r != nil {
 		errs = append(errs, r.Close())
 	}
-	for _, p := range retired {
-		errs = append(errs, p.Close())
+	if w != nil && w != r {
+		errs = append(errs, w.Close())
 	}
 	return errors.Join(errs...)
 }
@@ -2552,13 +2579,19 @@ func (db *DB) CloseConnections() error {
 	db.connMu.Lock()
 	defer db.connMu.Unlock()
 
-	errs := []error{
-		db.rawWriter().Close(),
-		db.rawReader().Close(),
-	}
+	// Close the writer last: SQLite checkpoints and removes the WAL when
+	// the final connection closes, and the reader pool is mode=ro so its
+	// close cannot perform that checkpoint. Callers rename or delete the
+	// WAL file after this returns, so a skipped checkpoint would lose
+	// every write still sitting in the log.
+	var errs []error
 	for _, p := range db.retired {
 		errs = append(errs, p.Close())
 	}
+	errs = append(errs,
+		db.rawReader().Close(),
+		db.rawWriter().Close(),
+	)
 	db.retired = nil
 	return errors.Join(errs...)
 }

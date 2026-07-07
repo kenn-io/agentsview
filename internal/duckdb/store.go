@@ -669,6 +669,11 @@ func rootSessionWhere(excludeOneShot, excludeAutomated bool) string {
 
 func (s *Store) HasFTS() bool { return true }
 
+// HasSemantic returns false: the DuckDB store has no VectorSearcher seam
+// yet, so SearchContent rejects "semantic"/"hybrid" modes up front with
+// db.ErrSemanticUnavailable.
+func (s *Store) HasSemantic() bool { return false }
+
 func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {
 	if f.Limit <= 0 || f.Limit > db.MaxSearchLimit {
 		f.Limit = db.DefaultSearchLimit
@@ -857,6 +862,26 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 	if f.Pattern == "" {
 		return db.ContentSearchPage{}, nil
 	}
+
+	// Semantic and hybrid validate Sources themselves (messages only) ahead
+	// of the substring/regex/fts source-set default just below, which fills
+	// in tool_input/tool_result that neither mode supports -- mirroring
+	// internal/db's SearchContent so an empty Sources field is not defaulted
+	// out from under ValidateSemanticFilter's empty-or-messages-only check.
+	if f.Mode == "semantic" || f.Mode == "hybrid" {
+		// Validate input the same way SQLite's semantic/hybrid paths do
+		// before reporting the capability gate: an invalid request (bad
+		// cursor, non-messages source) must return the same 400
+		// SearchInputError on every backend rather than a 501 here and a
+		// 400 on SQLite (backend parity, see AGENTS.md).
+		if err := db.ValidateSemanticFilter(f); err != nil {
+			return db.ContentSearchPage{}, err
+		}
+		// No VectorSearcher seam on the DuckDB store yet (HasSemantic always
+		// false): gate after input validation.
+		return db.ContentSearchPage{}, db.ErrSemanticUnavailable
+	}
+
 	if len(f.Sources) == 0 {
 		f.Sources = []string{"messages", "tool_input", "tool_result"}
 	}
@@ -882,6 +907,12 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 	if len(matches) > f.Limit {
 		page.Matches = matches[:f.Limit]
 		page.NextCursor = f.Cursor + f.Limit
+	}
+	// Post-truncation derivation, O(page): every lexical match gets its
+	// conversation-unit OrdinalRange and lineage fields via the shared
+	// batched pass, matching the SQLite and PG backends.
+	if err := s.deriveLexicalUnitsDuck(ctx, page.Matches); err != nil {
+		return db.ContentSearchPage{}, err
 	}
 	return page, nil
 }

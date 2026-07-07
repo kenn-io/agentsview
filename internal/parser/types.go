@@ -46,12 +46,14 @@ const (
 	AgentPiebald        AgentType = "piebald"
 	AgentWarp           AgentType = "warp"
 	AgentPositron       AgentType = "positron"
+	AgentZCode          AgentType = "zcode"
 	AgentAntigravity    AgentType = "antigravity"
 	AgentAntigravityCLI AgentType = "antigravity-cli"
 	AgentVibe           AgentType = "vibe"
 	AgentZed            AgentType = "zed"
 	AgentQwenPaw        AgentType = "qwenpaw"
 	AgentGptme          AgentType = "gptme"
+	AgentQoder          AgentType = "qoder"
 	AgentShelley        AgentType = "shelley"
 	AgentAider          AgentType = "aider"
 	AgentReasonix       AgentType = "reasonix"
@@ -511,6 +513,21 @@ var Registry = []AgentDef{
 		FileBased:    true,
 	},
 	{
+		Type:        AgentZCode,
+		DisplayName: "ZCode",
+		EnvVar:      "ZCODE_DIR",
+		ConfigKey:   "zcode_dirs",
+		DefaultDirs: []string{
+			".zcode/cli/db",
+			".zcode/cli",
+		},
+		IDPrefix:  "zcode:",
+		FileBased: false,
+		Usage: UsageCapabilities{
+			NoPerMessageTokenData: true,
+		},
+	},
+	{
 		Type:         AgentZed,
 		DisplayName:  "Zed",
 		EnvVar:       "ZED_DIR",
@@ -565,6 +582,18 @@ var Registry = []AgentDef{
 		DefaultDirs: []string{".local/share/gptme/logs"},
 		IDPrefix:    "gptme:",
 		FileBased:   true,
+	},
+	{
+		Type:        AgentQoder,
+		DisplayName: "Qoder",
+		EnvVar:      "QODER_PROJECTS_DIR",
+		ConfigKey:   "qoder_project_dirs",
+		DefaultDirs: []string{
+			".qoder/projects",
+			".qoderwork/projects",
+		},
+		IDPrefix:  "qoder:",
+		FileBased: true,
 	},
 	{
 		// Shelley (exe.dev) stores all conversations in a single

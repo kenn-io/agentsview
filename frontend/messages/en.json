@@ -156,6 +156,22 @@
   "session_breadcrumb_copy_session_id_value": "Copy session ID: {id}",
   "session_breadcrumb_copied": "Copied!",
   "session_breadcrumb_estimated_session_cost": "Estimated session cost",
+  "session_breadcrumb_usage_breakdown_title": "Session usage breakdown",
+  "session_breadcrumb_usage_breakdown_loading": "Loading usage...",
+  "session_breadcrumb_usage_breakdown_steps": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} step",
+        "countPlural=other": "{countLabel} steps"
+      }
+    }
+  ],
   "session_breadcrumb_copy_link_to_session": "Copy link to session",
   "session_breadcrumb_show_session_analysis": "Show session analysis",
   "session_breadcrumb_hide_session_analysis": "Hide session analysis",
@@ -558,6 +574,22 @@
   ],
   "analytics_tool_usage_trend_tooltip": "{date} | {total} total | {parts}",
   "analytics_tool_usage_empty": "No tool usage data",
+  "analytics_tool_usage_loading": "Loading tool usage...",
+  "analytics_tool_usage_top_tools": "Top tools",
+  "analytics_tool_usage_sessions": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} session",
+        "countPlural=other": "{countLabel} sessions"
+      }
+    }
+  ],
   "analytics_by_category": "By Category",
   "analytics_by_agent": "By Agent",
   "analytics_by_project": "By Project",
@@ -789,6 +821,7 @@
   "settings_language_english": "English",
   "settings_language_simplified_chinese": "Simplified Chinese",
   "settings_language_traditional_chinese": "Traditional Chinese",
+  "settings_language_korean": "Korean",
   "settings_language_no_results": "No languages found",
   "nav_recent_edits": "Recent Edits",
   "recent_edits_title": "Recent Edits",
@@ -1539,6 +1572,13 @@
   "worktree_failed_apply": "Failed to apply mappings",
   "worktree_title": "Worktree mappings",
   "worktree_description": "Map worktree path prefixes to canonical projects on this machine.",
+  "worktree_layout": "Layout",
+  "worktree_layout_explicit": "Explicit",
+  "worktree_layout_repo_dot_worktrees": "{repo}.worktrees/{branch}",
+  "worktree_parent_directory": "Parent directory",
+  "worktree_parent_directory_hint": "Enter the directory that contains the repo.worktrees folders.",
+  "worktree_project_required": "Required for explicit mappings.",
+  "worktree_project_derived": "Derived from the repo.worktrees folder.",
   "worktree_local_only": "Worktree mappings are available in local mode only.",
   "worktree_loading": "Loading mappings...",
   "worktree_machine": "Machine",

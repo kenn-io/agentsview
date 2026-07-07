@@ -277,12 +277,44 @@ func TestProcessFileProviderWarpVirtualSource(t *testing.T) {
 	assert.NotEmpty(t, res.results[0].Messages)
 }
 
+func TestProcessFileProviderZCodeVirtualSource(t *testing.T) {
+	root := t.TempDir()
+	dbPath := writeProcessProviderZCodeDB(t, filepath.Join(root, ".zcode", "cli"))
+	engine := NewEngine(openTestDB(t), EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentZCode: {filepath.Join(root, ".zcode", "cli")},
+		},
+		Machine: "devbox",
+	})
+
+	files := engine.classifyProviderChangedPath(dbPath)
+	require.Len(t, files, 1)
+	assert.Equal(t, dbPath+"#session-001", files[0].Path)
+	assert.Equal(t, parser.AgentZCode, files[0].Agent)
+	assert.False(t, files[0].ForceParse)
+
+	res := engine.processFile(context.Background(), files[0])
+
+	require.NoError(t, res.err)
+	require.Len(t, res.results, 1)
+	assert.True(t, res.forceReplace)
+	assert.NotZero(t, res.mtime)
+	assert.Equal(t, "zcode:session-001", res.results[0].Session.ID)
+	assert.Equal(t, parser.AgentZCode, res.results[0].Session.Agent)
+	assert.Equal(t, "devbox", res.results[0].Session.Machine)
+	assert.Empty(t, res.results[0].Messages)
+	require.Len(t, res.results[0].UsageEvents, 1)
+	assert.Equal(t, 1, res.results[0].UsageEvents[0].InputTokens)
+	assert.Equal(t, 2, res.results[0].UsageEvents[0].OutputTokens)
+}
+
 func TestProcessFileUsesProviderDBBackedFamily(t *testing.T) {
 
 	for _, agent := range []parser.AgentType{
 		parser.AgentForge,
 		parser.AgentPiebald,
 		parser.AgentWarp,
+		parser.AgentZCode,
 	} {
 		assert.True(t, processFileUsesProvider(agent), agent)
 	}
@@ -1366,6 +1398,65 @@ func seedProcessProviderWarpConversation(t *testing.T, database *sql.DB) {
 		`"Completed"`,
 		"auto-genius",
 	)
+}
+
+func writeProcessProviderZCodeDB(t *testing.T, cliRoot string) string {
+	t.Helper()
+	dbDir := filepath.Join(cliRoot, "db")
+	require.NoError(t, os.MkdirAll(dbDir, 0o755))
+	dbPath := filepath.Join(dbDir, "db.sqlite")
+	database, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = database.Close() })
+	mustExecProcessProviderSQL(t, database, `
+		CREATE TABLE session (
+			id TEXT PRIMARY KEY NOT NULL,
+			project_id TEXT,
+			workspace_id TEXT,
+			directory TEXT,
+			title TEXT,
+			time_created TEXT,
+			time_updated TEXT
+		);
+		CREATE TABLE model_usage (
+			session_id TEXT NOT NULL,
+			turn_id TEXT,
+			provider_id TEXT,
+			model_id TEXT,
+			status TEXT,
+			input_tokens INTEGER,
+			output_tokens INTEGER,
+			reasoning_tokens INTEGER,
+			cache_creation_input_tokens INTEGER,
+			cache_read_input_tokens INTEGER,
+			computed_total_tokens INTEGER,
+			started_at TEXT,
+			completed_at TEXT,
+			duration_ms INTEGER,
+			tool_call_count INTEGER
+		);
+	`)
+	mustExecProcessProviderSQL(t, database,
+		`INSERT INTO session (
+			id, project_id, workspace_id, directory, title,
+			time_created, time_updated
+		) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"session-001", "project-7", "workspace-19", "/Users/alice/code/acme-app",
+		"Acme session", "2026-07-06T13:00:01Z", "2026-07-06T13:05:00Z",
+	)
+	mustExecProcessProviderSQL(t, database,
+		`INSERT INTO model_usage (
+			session_id, turn_id, provider_id, model_id, status,
+			input_tokens, output_tokens, reasoning_tokens,
+			cache_creation_input_tokens, cache_read_input_tokens,
+			computed_total_tokens, started_at, completed_at,
+			duration_ms, tool_call_count
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"session-001", "1", "builtin:bigmodel-coding-plan", "claude-sonnet-4-6", "done",
+		int64(1), int64(2), int64(0), int64(0), int64(0), int64(3),
+		"2026-07-06T13:00:02Z", "2026-07-06T13:00:03Z", int64(1000), int64(1),
+	)
+	return dbPath
 }
 
 func mustExecProcessProviderSQL(

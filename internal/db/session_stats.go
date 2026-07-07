@@ -435,7 +435,7 @@ func (db *DB) loadSessionsInWindow(
 	// the two paths can't drift.
 	preds := []string{
 		"message_count > 0",
-		RelationshipExclusionSQL(includeSubagents, ""),
+		RelationshipExclusionSQL(includeSubagents, false, ""),
 		"deleted_at IS NULL",
 		"COALESCE(NULLIF(started_at, ''), created_at) >= ?",
 		"COALESCE(NULLIF(started_at, ''), created_at) < ?",

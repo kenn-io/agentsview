@@ -48,6 +48,13 @@
     })),
   );
 
+  const agentItems = $derived(
+    sessions.agents.map((a) => ({
+      name: a.name,
+      count: a.session_count,
+    })),
+  );
+
   const earliestSession = $derived(sync.stats?.earliest_session ?? null);
 
   const rangeSelection = $derived(
@@ -169,7 +176,7 @@
   // apply params that are actually present in the URL.
   const USAGE_FILTER_KEYS = new Set([
     "from", "to", "window_days",
-    "model", "exclude_model",
+    "model", "exclude_model", "exclude_agent",
   ]);
   const SESSION_FILTER_KEYS = new Set([
     "project", "machine", "agent",
@@ -297,6 +304,11 @@
         usage.excludedProjects = newExProject;
         changed = true;
       }
+      const newExAgent = params["exclude_agent"] ?? "";
+      if (newExAgent !== usage.excludedAgents) {
+        usage.excludedAgents = newExAgent;
+        changed = true;
+      }
       if (usage.excludedModels) {
         usage.excludedModels = "";
         changed = true;
@@ -354,6 +366,9 @@
 
   onMount(() => {
     mounted = true;
+    // The Agent dropdown reads sessions.agents, which is otherwise loaded
+    // lazily by the sidebar filter control; a direct /usage visit needs it too.
+    sessions.loadAgents();
     // SSE events only flag new data; RefreshControl owns the periodic refresh
     // and the manual button. The initial and filter-change fetches run from the
     // effects above once URL/filter state is hydrated.
@@ -402,6 +417,16 @@
       />
 
       <FilterDropdown
+        label={m.analytics_col_agent()}
+        items={agentItems}
+        excludedCsv={usage.excludedAgents}
+        onToggle={(name) => usage.toggleAgent(name)}
+        onSelectAll={() => usage.selectAllAgents()}
+        onDeselectAll={() =>
+          usage.deselectAllAgents(agentItems.map((a) => a.name))}
+      />
+
+      <FilterDropdown
         label={m.usage_model()}
         items={modelItems}
         excludedCsv={usage.selectedModels}
@@ -426,6 +451,7 @@
   <SessionActiveFilters
     modelFilters={selectedModels}
     onClearProjects={() => usage.selectAllProjects()}
+    onClearAgents={() => usage.selectAllAgents()}
     onRemoveModel={(model) => usage.toggleModel(model)}
     onClearModels={() => usage.selectAllModels()}
   />

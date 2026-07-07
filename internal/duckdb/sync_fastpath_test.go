@@ -40,6 +40,54 @@ func TestSyncIncrementalMetadataChangeSkipsMessageRewrite(t *testing.T) {
 	)
 }
 
+func TestSyncIncrementalVolatileStatChangeSkipsMirrorRewrite(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	fixture := seedDuckDBSyncFixture(t, local)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+
+	first, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, first.SessionsPushed)
+	firstWatermark, err := local.GetSyncState(lastPushStateKey)
+	require.NoError(t, err)
+	before := duckSessionMirrorStats(t, syncer.DB(), fixture.betaID)
+
+	time.Sleep(time.Millisecond)
+	volatileAt := time.Now().UTC()
+	volatileMtime := volatileAt.UnixNano()
+	mutateSessionVolatileStats(t, local, fixture.betaID, volatileMtime)
+	second, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+
+	assert.Zero(t, second.SessionsPushed)
+	assert.Zero(t, second.MessagesPushed)
+	afterStatOnly := duckSessionMirrorStats(t, syncer.DB(), fixture.betaID)
+	assert.Equal(t, before, afterStatOnly,
+		"stat-only churn should not rewrite mirrored session columns")
+	watermarkAfterStatOnly, err := local.GetSyncState(lastPushStateKey)
+	require.NoError(t, err)
+	assert.Equal(t, second.Diagnostics.Cutoff, watermarkAfterStatOnly)
+	assert.Greater(t, watermarkAfterStatOnly, firstWatermark)
+
+	time.Sleep(time.Millisecond)
+	appendLocalMessage(t, local, fixture.betaID, 2, syncMessage(
+		fixture.betaID, 1, "assistant", "beta content changed",
+		time.Now().UTC().Format(localSyncTimestampLayout),
+	))
+	mutateSessionVolatileStats(t, local, fixture.betaID, volatileMtime)
+	third, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, third.SessionsPushed)
+	assert.Equal(t, 1, third.MessagesPushed)
+	assertDuckDBCountWhere(t, syncer.DB(), "messages", "session_id = ?", fixture.betaID, 2)
+	afterContent := duckSessionMirrorStats(t, syncer.DB(), fixture.betaID)
+	require.True(t, afterContent.fileMtime.Valid)
+	assert.Equal(t, volatileMtime, afterContent.fileMtime.Int64,
+		"real content pushes should still write mirrored stat columns")
+}
+
 func TestSyncIncrementalAppendsOnlyNewSuffixMessages(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)
@@ -512,17 +560,23 @@ func TestDuckCheckpointDecisionRequiresFreeBlockThreshold(t *testing.T) {
 
 func renameSessionOnly(t *testing.T, local *db.DB, sessionID, displayName string) {
 	t.Helper()
+	require.NoError(t, local.RenameSession(sessionID, &displayName))
+}
+
+func mutateSessionVolatileStats(
+	t *testing.T, local *db.DB, sessionID string, fileMtime int64,
+) {
+	t.Helper()
 	ctx := context.Background()
-	sess, err := local.GetSession(ctx, sessionID)
+	sess, err := local.GetSessionFull(ctx, sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
-	sess.DisplayName = &displayName
-	modifiedAt := time.Now().UTC().Format(localSyncTimestampLayout)
-	sess.LocalModifiedAt = &modifiedAt
+	sess.FileMtime = &fileMtime
 	_, err = local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
 		Session: *sess,
 	}})
 	require.NoError(t, err)
+	require.NoError(t, local.BumpLocalModifiedAt(sessionID))
 }
 
 func appendLocalMessage(
@@ -727,6 +781,22 @@ func duckPinnedMessageNote(
 		sessionID, messageID,
 	).Scan(&note))
 	return note
+}
+
+type duckMirrorStats struct {
+	fileMtime     sql.NullInt64
+	localModified string
+}
+
+func duckSessionMirrorStats(t *testing.T, conn *sql.DB, sessionID string) duckMirrorStats {
+	t.Helper()
+	var stats duckMirrorStats
+	require.NoError(t, conn.QueryRow(
+		`SELECT file_mtime, COALESCE(CAST(local_modified_at AS VARCHAR), '')
+		 FROM sessions WHERE id = ?`,
+		sessionID,
+	).Scan(&stats.fileMtime, &stats.localModified))
+	return stats
 }
 
 type checkpointSpy struct {

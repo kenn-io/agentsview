@@ -18,6 +18,34 @@ import (
 // regardless of transport (the REST handler maps it back to HTTP 501).
 var ErrSearchUnavailable = errors.New("search not available")
 
+// ErrAroundMutuallyExclusive is returned by Messages when Around is combined
+// with From or a non-default Direction: the two retrieval modes (symmetric
+// window vs. linear pagination) cannot both be requested. The HTTP handler
+// maps it to a 400 response.
+var ErrAroundMutuallyExclusive = errors.New(
+	"around is mutually exclusive with from/direction",
+)
+
+// ErrBeforeAfterRequireAround is returned by Messages when Before or After
+// is set without Around. The HTTP handler maps it to a 400 response.
+var ErrBeforeAfterRequireAround = errors.New("before/after require around")
+
+// ErrSemanticUnavailable is returned by SearchContent for modes
+// "semantic"/"hybrid" when the backing store has no VectorSearcher wired in.
+// It is the same sentinel as db.ErrSemanticUnavailable so direct callers can
+// errors.Is it without transport-specific handling; the HTTP backend maps a
+// 501 response back to it for daemon-backed callers.
+var ErrSemanticUnavailable = db.ErrSemanticUnavailable
+
+const (
+	// SemanticSearchIntentHeader is required on HTTP GET semantic/hybrid
+	// content searches. It forces browser callers to use an explicit fetch with
+	// a non-simple header, preventing blind no-CORS cross-origin GETs from
+	// spending embeddings quota through the local daemon.
+	SemanticSearchIntentHeader = "X-AgentsView-Search-Intent"
+	SemanticSearchIntentValue  = "semantic"
+)
+
 // SessionService is the canonical per-session operation interface.
 // Two implementations: directBackend (wraps *db.DB) and httpBackend
 // (proxies to a running daemon).
@@ -110,16 +138,24 @@ type SessionSearchResult struct {
 // ContentSearchRequest is the transport-neutral content-search input.
 type ContentSearchRequest struct {
 	Pattern       string   `json:"pattern"`
-	Mode          string   `json:"mode,omitempty"` // substring|regex|fts
+	Mode          string   `json:"mode,omitempty"` // substring|regex|fts|semantic|hybrid
 	Sources       []string `json:"sources,omitempty"`
 	ExcludeSystem bool     `json:"exclude_system,omitempty"`
 	Reveal        bool     `json:"reveal,omitempty"`
+	// Context requests N messages of inline context before and after each
+	// match (0 = off, max 10). See directBackend.SearchContent.
+	Context int `json:"context,omitempty"`
 
 	Project, ExcludeProject, Machine, Agent           string
 	Date, DateFrom, DateTo, ActiveSince               string
 	IncludeChildren, IncludeAutomated, IncludeOneShot bool
 	// GitBranch is a branchListSep-joined list of opaque (project, branch) tokens (EncodeBranchFilterToken).
 	GitBranch string
+
+	// Scope governs semantic/hybrid unit visibility ("top", "all", or
+	// "subordinate"; "" means "all") and supersedes IncludeChildren in
+	// those modes. See db.ContentSearchFilter.Scope.
+	Scope string `json:"scope,omitempty"`
 
 	Limit  int `json:"limit,omitempty"`
 	Cursor int `json:"cursor,omitempty"`
@@ -238,16 +274,29 @@ type ListFilter struct {
 // From is a pointer so callers can distinguish "omitted" from "0". An
 // omitted From in descending mode means "start from the newest message";
 // an explicit 0 means "start at ordinal 0".
+//
+// Around/Before/After select a symmetric window centered on an ordinal
+// instead of linear pagination; they are mutually exclusive with
+// From/Direction (see directBackend.Messages). Roles filters the result to
+// the given roles (empty = all roles) in either mode.
 type MessageFilter struct {
-	From      *int   `json:"from,omitempty"`
-	Limit     int    `json:"limit,omitempty"`
-	Direction string `json:"direction,omitempty"` // "asc" (default) or "desc"
+	From      *int     `json:"from,omitempty"`
+	Limit     int      `json:"limit,omitempty"`
+	Direction string   `json:"direction,omitempty"` // "asc" (default) or "desc"
+	Around    *int     `json:"around,omitempty"`
+	Before    *int     `json:"before,omitempty"` // default 5 when Around set
+	After     *int     `json:"after,omitempty"`  // default 5 when Around set
+	Roles     []string `json:"roles,omitempty"`
 }
 
-// MessageList mirrors {messages, count}.
+// MessageList mirrors {messages, count}. FirstOrdinal/LastOrdinal report the
+// returned window's bounds (nil when Messages is empty) so callers can page
+// on with from = last_ordinal + 1.
 type MessageList struct {
-	Messages []db.Message `json:"messages"`
-	Count    int          `json:"count"`
+	Messages     []db.Message `json:"messages"`
+	Count        int          `json:"count"`
+	FirstOrdinal *int         `json:"first_ordinal,omitempty"`
+	LastOrdinal  *int         `json:"last_ordinal,omitempty"`
 }
 
 // ToolCall mirrors a flattened tool call with its enclosing message's

@@ -206,8 +206,17 @@ func parseOpenCodeStorageFile(
 	if err != nil || sess == nil {
 		return sess, parsed, err
 	}
-	sess.File.Hash = buildOpenCodeStorageFingerprint(
-		msgs, parts,
+	sess.File.Hash = buildOpenCodeSessionFingerprint(
+		openCodeSessionRow{
+			id:          sf.ID,
+			parentID:    sf.ParentID,
+			title:       sf.Title,
+			timeCreated: sf.Time.Created,
+			timeUpdated: sf.Time.Updated,
+		},
+		sf.Directory,
+		msgs,
+		parts,
 	)
 	return sess, parsed, nil
 }
@@ -316,7 +325,18 @@ type openCodePartRow struct {
 }
 
 type openCodeStorageFingerprint struct {
+	Session  *openCodeStorageFingerprintSession  `json:"session,omitempty"`
 	Messages []openCodeStorageFingerprintMessage `json:"messages"`
+}
+
+type openCodeStorageFingerprintSession struct {
+	ID          string `json:"id,omitempty"`
+	ProjectID   string `json:"project_id,omitempty"`
+	ParentID    string `json:"parent_id,omitempty"`
+	Title       string `json:"title,omitempty"`
+	Worktree    string `json:"worktree,omitempty"`
+	TimeCreated int64  `json:"time_created,omitempty"`
+	TimeUpdated int64  `json:"time_updated,omitempty"`
 }
 
 type openCodeStorageFingerprintMessage struct {
@@ -410,7 +430,7 @@ func buildOpenCodeSession(
 		)
 	}
 
-	return buildOpenCodeParsedSession(
+	sess, parsed, err := buildOpenCodeParsedSession(
 		s,
 		worktree,
 		dbPath+"#"+s.id,
@@ -419,6 +439,13 @@ func buildOpenCodeSession(
 		msgs,
 		parts,
 	)
+	if err != nil || sess == nil {
+		return sess, parsed, err
+	}
+	sess.File.Hash = buildOpenCodeSessionFingerprint(
+		s, worktree, msgs, parts,
+	)
+	return sess, parsed, nil
 }
 
 func buildOpenCodeParsedSession(
@@ -977,6 +1004,12 @@ func OpenCodeStorageFingerprintMissing(
 	if !ok {
 		return false
 	}
+	if stored.Session != nil {
+		if current.Session == nil ||
+			*current.Session != *stored.Session {
+			return true
+		}
+	}
 
 	currentMsgs := make(map[string]openCodeStorageFingerprintMessage, len(current.Messages))
 	for _, msg := range current.Messages {
@@ -1011,7 +1044,37 @@ func buildOpenCodeStorageFingerprint(
 	msgs []openCodeMessageRow,
 	parts map[string][]openCodePartRow,
 ) string {
+	return buildOpenCodeStorageFingerprintWithSession(nil, msgs, parts)
+}
+
+func buildOpenCodeSessionFingerprint(
+	s openCodeSessionRow,
+	worktree string,
+	msgs []openCodeMessageRow,
+	parts map[string][]openCodePartRow,
+) string {
+	return buildOpenCodeStorageFingerprintWithSession(
+		&openCodeStorageFingerprintSession{
+			ID:          s.id,
+			ProjectID:   s.projectID,
+			ParentID:    s.parentID,
+			Title:       s.title,
+			Worktree:    worktree,
+			TimeCreated: s.timeCreated,
+			TimeUpdated: s.timeUpdated,
+		},
+		msgs,
+		parts,
+	)
+}
+
+func buildOpenCodeStorageFingerprintWithSession(
+	session *openCodeStorageFingerprintSession,
+	msgs []openCodeMessageRow,
+	parts map[string][]openCodePartRow,
+) string {
 	fp := openCodeStorageFingerprint{
+		Session: session,
 		Messages: make(
 			[]openCodeStorageFingerprintMessage,
 			0, len(msgs),

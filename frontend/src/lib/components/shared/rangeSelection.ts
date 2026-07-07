@@ -63,6 +63,15 @@ function parseLocal(date: string): Date {
   return new Date(date + "T00:00:00");
 }
 
+function isValidLocalDate(date: string): boolean {
+  // RangeSelection uses app-internal canonical date-only strings, not
+  // localized display/input formats. Keep this strict so lexicographic range
+  // comparisons and local calendar math stay unambiguous.
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  const d = parseLocal(date);
+  return !Number.isNaN(d.getTime()) && localDateStr(d) === date;
+}
+
 /**
  * The inclusive from/to bounds of a calendar period containing `anchor`.
  * Day is a single date; week is the Monday-Sunday ISO week; month is the
@@ -87,6 +96,30 @@ export function periodBounds(unit: CalendarUnit, anchor: string): DateRange {
   return { from: localDateStr(first), to: localDateStr(last) };
 }
 
+function selectionFromCalendarRange(
+  from: string,
+  to: string,
+): CalendarSelection | null {
+  if (from > to || !isValidLocalDate(from) || !isValidLocalDate(to)) {
+    return null;
+  }
+  if (from === to) {
+    return { mode: "calendar", unit: "day", anchor: from };
+  }
+
+  const week = periodBounds("week", from);
+  if (week.from === from && week.to === to) {
+    return { mode: "calendar", unit: "week", anchor: from };
+  }
+
+  const month = periodBounds("month", from);
+  if (month.from === from && month.to === to) {
+    return { mode: "calendar", unit: "month", anchor: from };
+  }
+
+  return null;
+}
+
 /** Turn any selection into the concrete {from, to} the stores consume. */
 export function resolveRange(
   sel: RangeSelection,
@@ -106,7 +139,8 @@ export function resolveRange(
  * Reconstruct the picker selection for stores that track a rolling-vs-pinned
  * window (analytics, usage). A non-pinned window is the rolling preset; a
  * pinned range that exactly matches the all-time bounds shows as the "All"
- * preset; anything else is a custom range.
+ * preset; exact calendar periods show as calendar selections; anything else
+ * is a custom range.
  */
 export function selectionFromWindow(opts: {
   isPinned: boolean;
@@ -122,14 +156,16 @@ export function selectionFromWindow(opts: {
   if (opts.from === all.from && opts.to === all.to) {
     return { mode: "relative", days: 0 };
   }
+  const calendar = selectionFromCalendarRange(opts.from, opts.to);
+  if (calendar) return calendar;
   return { mode: "custom", from: opts.from, to: opts.to };
 }
 
 /**
  * Reconstruct a selection for stores that only persist a from/to span (trends,
  * insights). If the span exactly matches a relative preset's current bounds it
- * shows as that preset (so a default 1y range reads "Last year"); otherwise it
- * is a custom range.
+ * shows as that preset (so a default 1y range reads "Last year"). Exact
+ * calendar periods show as calendar selections; otherwise it is a custom range.
  */
 export function selectionFromRange(
   from: string,
@@ -142,6 +178,8 @@ export function selectionFromRange(
       return { mode: "relative", days: preset.days };
     }
   }
+  const calendar = selectionFromCalendarRange(from, to);
+  if (calendar) return calendar;
   return { mode: "custom", from, to };
 }
 

@@ -74,6 +74,8 @@ export class SearchService {
   public static getApiV1SearchContent({
     pattern,
     mode,
+    scope,
+    xAgentsViewSearchIntent,
     _in,
     excludeSystem,
     reveal,
@@ -91,6 +93,7 @@ export class SearchService {
     includeOneShot,
     limit,
     cursor,
+    context,
   }: {
     /**
      * Pattern to search for
@@ -99,7 +102,15 @@ export class SearchService {
     /**
      * Search mode
      */
-    mode?: 'substring' | 'regex' | 'fts',
+    mode?: 'substring' | 'regex' | 'fts' | 'semantic' | 'hybrid',
+    /**
+     * Semantic/hybrid result scope: top, all, or subordinate (default all)
+     */
+    scope?: 'top' | 'all' | 'subordinate',
+    /**
+     * Required for semantic/hybrid GET searches
+     */
+    xAgentsViewSearchIntent?: string,
     /**
      * Comma-separated content sources
      */
@@ -168,13 +179,21 @@ export class SearchService {
      * Pagination cursor
      */
     cursor?: number,
+    /**
+     * Include N messages of context before and after each match (max 10)
+     */
+    context?: number,
   }): CancelablePromise<ServiceContentSearchResult> {
     return __request(OpenAPI, {
       method: 'GET',
       url: '/api/v1/search/content',
+      headers: {
+        'X-AgentsView-Search-Intent': xAgentsViewSearchIntent,
+      },
       query: {
         'pattern': pattern,
         'mode': mode,
+        'scope': scope,
         'in': _in,
         'exclude_system': excludeSystem,
         'reveal': reveal,
@@ -192,6 +211,7 @@ export class SearchService {
         'include_one_shot': includeOneShot,
         'limit': limit,
         'cursor': cursor,
+        'context': context,
       },
       errors: {
         400: `Bad Request`,

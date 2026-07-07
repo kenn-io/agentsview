@@ -33,10 +33,18 @@ func activityReportRangeBoundsUTC(q activity.Query) (string, string) {
 //
 // The filter `f` is honored as-is: callers that want one-shot or
 // automated sessions included must pass them through with the
-// corresponding exclusions disabled.
+// corresponding exclusions disabled. Subagent and fork sessions are
+// always counted so the cost totals match GetDailyUsage, which never
+// filters by relationship_type. Fork sessions hold only their own
+// rewound-branch messages (the parsers partition entries across
+// branches), so counting them adds no duplicate activity; any usage
+// rows that do recur across sessions collapse in the aggregator's
+// dedup, the same guarantee GetDailyUsage relies on.
 func (s *Store) GetActivityReport(
 	ctx context.Context, f db.AnalyticsFilter, q activity.Query,
 ) (activity.Report, error) {
+	f.IncludeSubagents = true
+	f.IncludeForks = true
 	rangeStartUTC, rangeEndUTC := activityReportRangeBoundsUTC(q)
 	lowerBound := paddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
 	upperBound := paddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)

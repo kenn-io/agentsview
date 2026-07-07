@@ -101,6 +101,269 @@ type DuckDBConfig struct {
 	ExcludeProjects []string `toml:"exclude_projects" json:"exclude_projects,omitempty"`
 }
 
+// VectorConfig holds settings for the optional local semantic-search
+// vector index (embeddings + vectors.db).
+type VectorConfig struct {
+	Enabled bool   `toml:"enabled" json:"enabled"`
+	DBPath  string `toml:"db_path" json:"db_path,omitempty"`
+	// IncludeAutomated controls whether automated (e.g. roborev) sessions'
+	// messages are embedded into the vector index, mirroring the
+	// IncludeAutomated convention search already uses to exclude those
+	// sessions from results by default. Default false: automated sessions
+	// are excluded from embedding, since they otherwise dominate a large
+	// archive's index with content that search already hides by default.
+	// `embeddings build --include-automated` can override this for a
+	// one-off build; see that flag's help for the scheduled-build caveat.
+	IncludeAutomated bool                   `toml:"include_automated" json:"include_automated"`
+	Embeddings       VectorEmbeddingsConfig `toml:"embeddings" json:"embeddings"`
+	Embed            VectorEmbedConfig      `toml:"embed" json:"embed"`
+}
+
+// VectorEmbeddingsConfig describes the embedding space — the model identity
+// every server must share — and the named servers that can encode it.
+//
+// Model identity (model, dimension, max_input_chars, input_suffix) is
+// deliberately global rather than per-server: it joins the generation
+// fingerprint, and query vectors are only comparable to stored document
+// vectors from the same space. Servers differ only in transport and
+// capacity, so a build run on any server produces vectors every other
+// server's queries can search.
+type VectorEmbeddingsConfig struct {
+	Model     string `toml:"model" json:"model"`
+	Dimension int    `toml:"dimension" json:"dimension"`
+	// MaxInputChars caps the rune length of each chunk sent for
+	// embedding. Default 8192.
+	MaxInputChars int `toml:"max_input_chars" json:"max_input_chars"`
+	// InputSuffix is appended verbatim to every text sent for embedding
+	// (documents and queries alike). Some models expect a terminator the
+	// serving layer does not add — e.g. Qwen3-Embedding under llama.cpp
+	// wants "<|endoftext|>" appended client-side. Changing it cuts a new
+	// vector generation. Default empty.
+	InputSuffix string `toml:"input_suffix" json:"input_suffix,omitempty"`
+	// DefaultServer names the server used for search-time query encoding
+	// and for builds that don't select one (scheduled builds, and
+	// `embeddings build` without --using). Optional when exactly one
+	// server is defined.
+	DefaultServer string `toml:"default_server" json:"default_server,omitempty"`
+	// Servers is the set of named OpenAI-compatible endpoints that serve
+	// Model, keyed by the name `embeddings build --using <name>` selects.
+	Servers map[string]VectorEmbeddingsServerConfig `toml:"servers" json:"servers"`
+}
+
+// VectorEmbeddingsServerConfig is one named embeddings server: transport
+// and capacity settings only; the model identity lives on
+// VectorEmbeddingsConfig.
+type VectorEmbeddingsServerConfig struct {
+	Endpoint string `toml:"endpoint" json:"endpoint"`
+	// APIKeyEnv names the environment variable holding the API key.
+	// Empty means anonymous access.
+	APIKeyEnv string `toml:"api_key_env" json:"api_key_env,omitempty"`
+	// BatchSize is the number of inputs sent per HTTP call. Default 32.
+	BatchSize int `toml:"batch_size" json:"batch_size"`
+	// Concurrency is the number of documents embedded in parallel during a
+	// build against this server. Sequential requests leave a build
+	// round-trip-bound against remote endpoints, so the default is 4;
+	// servers that process one request at a time simply queue the extras.
+	Concurrency int `toml:"concurrency" json:"concurrency"`
+	// Timeout is a parseable duration string applied to each HTTP
+	// call. Default "30s".
+	Timeout string `toml:"timeout" json:"timeout"`
+	// MaxRetries is the maximum total attempts on 429/5xx/network errors
+	// (4xx fails fast); 0 means one attempt. Default 3.
+	MaxRetries int `toml:"max_retries" json:"max_retries"`
+}
+
+// ResolvedDefaultServer returns the server name used when no explicit
+// choice is made: default_server when set, otherwise the only defined
+// server, otherwise "".
+func (c VectorEmbeddingsConfig) ResolvedDefaultServer() string {
+	if c.DefaultServer != "" {
+		return c.DefaultServer
+	}
+	if len(c.Servers) == 1 {
+		for name := range c.Servers {
+			return name
+		}
+	}
+	return ""
+}
+
+// Server resolves name to a defined embeddings server; "" means the
+// default. The resolved name is returned alongside the server so callers
+// can report which server a build actually used.
+func (c VectorEmbeddingsConfig) Server(name string) (string, VectorEmbeddingsServerConfig, error) {
+	if name == "" {
+		name = c.ResolvedDefaultServer()
+	}
+	s, ok := c.Servers[name]
+	if !ok {
+		return "", VectorEmbeddingsServerConfig{}, fmt.Errorf(
+			"[vector.embeddings] no server named %q; define it under [vector.embeddings.servers.%s] (have: %s)",
+			name, name, strings.Join(sortedServerNames(c.Servers), ", "))
+	}
+	return name, s, nil
+}
+
+// normalizedEmbeddingsServers fills each named server's unset transport
+// fields with their defaults (batch_size 32, concurrency 4, timeout "30s",
+// max_retries 3). meta.IsDefined distinguishes "unset" (apply the default)
+// from an explicit zero — an explicit max_retries = 0 disables retries, and
+// an explicit zero batch_size/concurrency stays zero so validation rejects
+// it instead of silently substituting the default.
+func normalizedEmbeddingsServers(
+	servers map[string]VectorEmbeddingsServerConfig, meta toml.MetaData,
+) map[string]VectorEmbeddingsServerConfig {
+	out := make(map[string]VectorEmbeddingsServerConfig, len(servers))
+	for name, s := range servers {
+		if !meta.IsDefined("vector", "embeddings", "servers", name, "batch_size") {
+			s.BatchSize = 32
+		}
+		if !meta.IsDefined("vector", "embeddings", "servers", name, "concurrency") {
+			s.Concurrency = 4
+		}
+		if s.Timeout == "" {
+			s.Timeout = "30s"
+		}
+		if !meta.IsDefined("vector", "embeddings", "servers", name, "max_retries") {
+			s.MaxRetries = 3
+		}
+		out[name] = s
+	}
+	return out
+}
+
+// sortedServerNames returns the configured server names in sorted order,
+// for deterministic error messages and validation.
+func sortedServerNames(servers map[string]VectorEmbeddingsServerConfig) []string {
+	names := make([]string, 0, len(servers))
+	for name := range servers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// VectorEmbedConfig configures when the daemon runs embedding work.
+type VectorEmbedConfig struct {
+	// RunAfterSync enables debounced embedding of sync deltas.
+	// Defaults to true when unset; read it via RunAfterSyncEnabled.
+	RunAfterSync *bool `toml:"run_after_sync" json:"run_after_sync,omitempty"`
+	// BackstopInterval is a parseable duration string for a periodic
+	// full rescan. Default "24h"; a negative duration disables it.
+	BackstopInterval string `toml:"backstop_interval" json:"backstop_interval"`
+}
+
+// Validate checks the vector config for internal consistency. It is a
+// no-op when the section is disabled.
+func (c VectorConfig) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	if c.Embeddings.Model == "" {
+		return fmt.Errorf("[vector.embeddings] model is required when [vector] is enabled")
+	}
+	if c.Embeddings.Dimension <= 0 {
+		return fmt.Errorf("[vector.embeddings] dimension must be greater than 0 when [vector] is enabled")
+	}
+	if c.Embeddings.MaxInputChars <= 0 {
+		return fmt.Errorf(
+			"[vector.embeddings] max_input_chars must be greater than 0, got %d",
+			c.Embeddings.MaxInputChars)
+	}
+	if err := c.Embeddings.validateServers(); err != nil {
+		return err
+	}
+	backstop, err := time.ParseDuration(c.Embed.BackstopInterval)
+	if err != nil {
+		return fmt.Errorf("[vector.embed] invalid backstop_interval %q: %w", c.Embed.BackstopInterval, err)
+	}
+	if backstop == 0 {
+		return fmt.Errorf(
+			"[vector.embed] backstop_interval must not be zero; " +
+				"use a negative value to disable or omit for the 24h default")
+	}
+	return nil
+}
+
+// ResolvedDBPath returns DBPath if set, else <dataDir>/vectors.db.
+func (c VectorConfig) ResolvedDBPath(dataDir string) string {
+	if c.DBPath != "" {
+		return c.DBPath
+	}
+	return filepath.Join(dataDir, "vectors.db")
+}
+
+// APIKey reads the API key from the environment variable named by
+// APIKeyEnv. Returns "" when APIKeyEnv is unset.
+func (c VectorEmbeddingsServerConfig) APIKey() string {
+	if c.APIKeyEnv == "" {
+		return ""
+	}
+	return os.Getenv(c.APIKeyEnv)
+}
+
+// validateServers checks the named-servers section: at least one server, an
+// unambiguous default, and per-server transport settings that parse.
+func (c VectorEmbeddingsConfig) validateServers() error {
+	if len(c.Servers) == 0 {
+		return fmt.Errorf(
+			"[vector.embeddings] at least one server is required when [vector] is enabled; " +
+				"define one under [vector.embeddings.servers.<name>]")
+	}
+	if c.DefaultServer == "" && len(c.Servers) > 1 {
+		return fmt.Errorf(
+			"[vector.embeddings] default_server is required when more than one server is defined (have: %s)",
+			strings.Join(sortedServerNames(c.Servers), ", "))
+	}
+	if c.DefaultServer != "" {
+		if _, ok := c.Servers[c.DefaultServer]; !ok {
+			return fmt.Errorf(
+				"[vector.embeddings] default_server %q is not a defined server (have: %s)",
+				c.DefaultServer, strings.Join(sortedServerNames(c.Servers), ", "))
+		}
+	}
+	for _, name := range sortedServerNames(c.Servers) {
+		if err := c.Servers[name].validate(name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validate checks one named server's transport settings.
+func (c VectorEmbeddingsServerConfig) validate(name string) error {
+	section := fmt.Sprintf("[vector.embeddings.servers.%s]", name)
+	if c.Endpoint == "" {
+		return fmt.Errorf("%s endpoint is required", section)
+	}
+	if c.BatchSize <= 0 {
+		return fmt.Errorf("%s batch_size must be greater than 0, got %d", section, c.BatchSize)
+	}
+	if c.Concurrency <= 0 {
+		return fmt.Errorf("%s concurrency must be greater than 0, got %d", section, c.Concurrency)
+	}
+	if c.MaxRetries < 0 {
+		return fmt.Errorf("%s max_retries must be >= 0, got %d", section, c.MaxRetries)
+	}
+	timeout, err := time.ParseDuration(c.Timeout)
+	if err != nil {
+		return fmt.Errorf("%s invalid timeout %q: %w", section, c.Timeout, err)
+	}
+	if timeout <= 0 {
+		return fmt.Errorf("%s timeout must be greater than 0, got %q", section, c.Timeout)
+	}
+	return nil
+}
+
+// RunAfterSyncEnabled reports whether embedding should run after sync,
+// defaulting to true when RunAfterSync is unset.
+func (c VectorEmbedConfig) RunAfterSyncEnabled() bool {
+	if c.RunAfterSync == nil {
+		return true
+	}
+	return *c.RunAfterSync
+}
+
 // AutomatedConfig holds user-supplied additions to the
 // automated-session classifier. Parse-only; all semantic
 // normalization (trim, dedupe, length cap, built-in overlap
@@ -172,6 +435,7 @@ type Config struct {
 	DefaultPG            string                 `json:"default_pg,omitempty" toml:"default_pg"`
 	PGTargets            map[string]PGConfig    `json:"-" toml:"-"`
 	DuckDB               DuckDBConfig           `json:"duckdb,omitempty" toml:"duckdb"`
+	Vector               VectorConfig           `json:"vector,omitempty" toml:"vector"`
 	Automated            AutomatedConfig        `json:"automated,omitempty" toml:"automated"`
 	Agent                map[string]AgentConfig `json:"agent,omitempty" toml:"agent"`
 	WriteTimeout         time.Duration          `json:"-" toml:"-"`
@@ -414,6 +678,14 @@ func Default() (Config, error) {
 		EventsCoalesceInterval:         10 * time.Second,
 		DaemonIdleTimeout:              20 * time.Minute,
 		Agent:                          map[string]AgentConfig{},
+		Vector: VectorConfig{
+			Embeddings: VectorEmbeddingsConfig{
+				MaxInputChars: 8192,
+			},
+			Embed: VectorEmbedConfig{
+				BackstopInterval: "24h",
+			},
+		},
 	}, nil
 }
 
@@ -675,6 +947,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		CursorAdminEmail               string                     `toml:"cursor_admin_email"`
 		CursorAdminUserID              string                     `toml:"cursor_admin_user_id"`
 		Host                           string                     `toml:"host"`
+		Port                           int                        `toml:"port"`
 		PublicURL                      string                     `toml:"public_url"`
 		PublicOrigins                  []string                   `toml:"public_origins"`
 		Proxy                          ProxyConfig                `toml:"proxy"`
@@ -689,6 +962,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		DefaultPG                      string                     `toml:"default_pg"`
 		PG                             PGConfig                   `toml:"pg"`
 		DuckDB                         DuckDBConfig               `toml:"duckdb"`
+		Vector                         VectorConfig               `toml:"vector"`
 		Automated                      AutomatedConfig            `toml:"automated"`
 		Agent                          map[string]AgentConfig     `toml:"agent"`
 		EventsCoalesceInterval         time.Duration              `toml:"events_coalesce_interval"`
@@ -721,6 +995,9 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if file.Host != "" {
 		c.Host = file.Host
+	}
+	if file.Port != 0 {
+		c.Port = file.Port
 	}
 	if file.PublicURL != "" {
 		c.PublicURL = file.PublicURL
@@ -804,6 +1081,42 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if file.DuckDB.ExcludeProjects != nil && c.DuckDB.ExcludeProjects == nil {
 		c.DuckDB.ExcludeProjects = file.DuckDB.ExcludeProjects
+	}
+	if file.Vector.Enabled {
+		c.Vector.Enabled = true
+	}
+	if file.Vector.DBPath != "" {
+		c.Vector.DBPath = file.Vector.DBPath
+	}
+	// IsDefined distinguishes "unset" (keep the default false) from an
+	// explicit include_automated = false, matching the other vector
+	// section fields' treatment even though both currently agree.
+	if meta.IsDefined("vector", "include_automated") {
+		c.Vector.IncludeAutomated = file.Vector.IncludeAutomated
+	}
+	if file.Vector.Embeddings.Model != "" {
+		c.Vector.Embeddings.Model = file.Vector.Embeddings.Model
+	}
+	if file.Vector.Embeddings.Dimension != 0 {
+		c.Vector.Embeddings.Dimension = file.Vector.Embeddings.Dimension
+	}
+	if meta.IsDefined("vector", "embeddings", "max_input_chars") {
+		c.Vector.Embeddings.MaxInputChars = file.Vector.Embeddings.MaxInputChars
+	}
+	if file.Vector.Embeddings.InputSuffix != "" {
+		c.Vector.Embeddings.InputSuffix = file.Vector.Embeddings.InputSuffix
+	}
+	if file.Vector.Embeddings.DefaultServer != "" {
+		c.Vector.Embeddings.DefaultServer = file.Vector.Embeddings.DefaultServer
+	}
+	if len(file.Vector.Embeddings.Servers) > 0 {
+		c.Vector.Embeddings.Servers = normalizedEmbeddingsServers(file.Vector.Embeddings.Servers, meta)
+	}
+	if file.Vector.Embed.RunAfterSync != nil {
+		c.Vector.Embed.RunAfterSync = file.Vector.Embed.RunAfterSync
+	}
+	if file.Vector.Embed.BackstopInterval != "" {
+		c.Vector.Embed.BackstopInterval = file.Vector.Embed.BackstopInterval
 	}
 	// IsDefined distinguishes "unset" (leave default 10s) from an
 	// explicit "0s" (disable coalescing). Checking != 0 would silently
@@ -1297,6 +1610,9 @@ func finalize(cfg *Config) error {
 	}
 	if cfg.DaemonIdleTimeout < 0 {
 		return fmt.Errorf("invalid daemon_idle_timeout: %s", cfg.DaemonIdleTimeout)
+	}
+	if err := cfg.Vector.Validate(); err != nil {
+		return err
 	}
 	return nil
 }

@@ -37,6 +37,7 @@ type Store interface {
 
 	// Messages.
 	GetMessages(ctx context.Context, sessionID string, from, limit int, asc bool) ([]Message, error)
+	GetMessagesWindow(ctx context.Context, sessionID string, w MessageWindow) ([]Message, error)
 	GetAllMessages(ctx context.Context, sessionID string) ([]Message, error)
 	GetSessionActivity(ctx context.Context, sessionID string) (*SessionActivityResponse, error)
 
@@ -45,6 +46,7 @@ type Store interface {
 
 	// Search.
 	HasFTS() bool
+	HasSemantic() bool
 	Search(ctx context.Context, f SearchFilter) (SearchPage, error)
 	SearchSession(ctx context.Context, sessionID, query string) ([]int, error)
 	SearchContent(ctx context.Context, f ContentSearchFilter) (ContentSearchPage, error)
@@ -85,7 +87,7 @@ type Store interface {
 	GetTopSessionsByCost(ctx context.Context, f UsageFilter, limit int) ([]TopSessionEntry, error)
 	GetUsageSessionCounts(ctx context.Context, f UsageFilter) (UsageSessionCounts, error)
 	GetUsageMatchingSessionCount(ctx context.Context, f UsageFilter) (int, error)
-	GetSessionUsage(ctx context.Context, sessionID string) (*SessionUsage, error)
+	GetSessionUsage(ctx context.Context, sessionID string, includeBreakdown bool) (*SessionUsage, error)
 
 	// Stars.
 	StarSession(sessionID string) (bool, error)

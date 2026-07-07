@@ -4,8 +4,8 @@
 /* eslint-disable */
 export type WorktreeMappingRequest = {
   enabled?: boolean;
+  layout?: string;
   machine?: string;
   path_prefix?: string;
   project?: string;
 };
-

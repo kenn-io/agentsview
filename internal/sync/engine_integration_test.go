@@ -284,6 +284,400 @@ func assignFocusedAgentDir(
 	}
 }
 
+type openCodeFamilySQLiteCase struct {
+	name   string
+	agent  parser.AgentType
+	dbName string
+	prefix string
+}
+
+func openCodeFamilySQLiteCases() []openCodeFamilySQLiteCase {
+	return []openCodeFamilySQLiteCase{
+		{
+			name: "opencode", agent: parser.AgentOpenCode,
+			dbName: "opencode.db", prefix: "opencode:",
+		},
+		{
+			name: "kilo", agent: parser.AgentKilo,
+			dbName: "kilo.db", prefix: "kilo:",
+		},
+		{
+			name: "mimocode", agent: parser.AgentMiMoCode,
+			dbName: "mimocode.db", prefix: "mimocode:",
+		},
+		{
+			name: "icodemate", agent: parser.AgentIcodemate,
+			dbName: "icodemate.db", prefix: "icodemate:",
+		},
+	}
+}
+
+func newOpenCodeFamilySQLiteTestEngine(
+	t *testing.T,
+	agent parser.AgentType,
+	root string,
+	database *db.DB,
+) *sync.Engine {
+	t.Helper()
+	return sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			agent: {root},
+		},
+		Machine: "local",
+	})
+}
+
+func seedOpenCodeSQLiteTextSession(
+	t *testing.T,
+	oc *openCodeTestDB,
+	projectID, sessionID string,
+	timeCreated, timeUpdated int64,
+	userContent, assistantContent string,
+) {
+	t.Helper()
+	oc.addSession(t, sessionID, projectID, timeCreated, timeUpdated)
+	userMessageID := sessionID + "-msg-user"
+	assistantMessageID := sessionID + "-msg-assistant"
+	oc.addMessage(t, userMessageID, sessionID, "user", timeCreated)
+	oc.addMessage(
+		t, assistantMessageID, sessionID, "assistant", timeCreated+1,
+	)
+	oc.addTextPart(
+		t, userMessageID+"-part", sessionID, userMessageID,
+		userContent, timeCreated,
+	)
+	oc.addTextPart(
+		t, assistantMessageID+"-part", sessionID,
+		assistantMessageID, assistantContent, timeCreated+1,
+	)
+}
+
+func openCodeLocalModifiedSnapshot(
+	t *testing.T,
+	database *db.DB,
+	sessionIDs ...string,
+) map[string]string {
+	t.Helper()
+	out := make(map[string]string, len(sessionIDs))
+	for _, sessionID := range sessionIDs {
+		sess, err := database.GetSessionFull(context.Background(), sessionID)
+		require.NoError(t, err, "GetSessionFull(%q)", sessionID)
+		require.NotNil(t, sess, "session %q not found", sessionID)
+		require.NotNil(t, sess.LocalModifiedAt,
+			"local_modified_at for %q", sessionID)
+		out[sessionID] = *sess.LocalModifiedAt
+	}
+	return out
+}
+
+func openCodeStoredSession(
+	t *testing.T,
+	database *db.DB,
+	sessionID string,
+) *db.Session {
+	t.Helper()
+	sess, err := database.GetSessionFull(context.Background(), sessionID)
+	require.NoError(t, err, "GetSessionFull(%q)", sessionID)
+	require.NotNil(t, sess, "session %q not found", sessionID)
+	return sess
+}
+
+func setFileMtime(t *testing.T, path string, mtimeNS int64) {
+	t.Helper()
+	ts := time.Unix(0, mtimeNS)
+	require.NoError(t, os.Chtimes(path, ts, ts), "chtimes %s", path)
+}
+
+func TestSyncEngineOpenCodeFamilySQLiteDropsUnchangedContainerSessions(
+	t *testing.T,
+) {
+	for _, tt := range openCodeFamilySQLiteCases() {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			database := dbtest.OpenTestDB(t)
+			engine := newOpenCodeFamilySQLiteTestEngine(
+				t, tt.agent, root, database,
+			)
+			oc := createOpenCodeLikeDB(
+				t, filepath.Join(root, tt.dbName), tt.name,
+			)
+			oc.addProject(t, "proj", "/home/user/code/opencode-app")
+			seedOpenCodeSQLiteTextSession(
+				t, oc, "proj", "stable-one",
+				1779012000000, 1779012030000,
+				"first prompt", "first answer",
+			)
+			seedOpenCodeSQLiteTextSession(
+				t, oc, "proj", "stable-two",
+				1779012100000, 1779012130000,
+				"second prompt", "second answer",
+			)
+
+			stats := engine.SyncAll(context.Background(), nil)
+			require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
+			assert.Equal(t, 2, stats.Synced, "first sync writes both sessions")
+
+			sessionIDs := []string{
+				tt.prefix + "stable-one",
+				tt.prefix + "stable-two",
+			}
+			before := openCodeLocalModifiedSnapshot(
+				t, database, sessionIDs...,
+			)
+
+			time.Sleep(20 * time.Millisecond)
+			stats = engine.SyncAll(context.Background(), nil)
+			require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
+			assert.Equal(t, 0, stats.Synced,
+				"unchanged %s SQLite container sessions must be dropped", tt.name)
+
+			after := openCodeLocalModifiedSnapshot(
+				t, database, sessionIDs...,
+			)
+			assert.Equal(t, before, after,
+				"unchanged %s rows must not be rewritten", tt.name)
+		})
+	}
+}
+
+func TestSyncEngineOpenCodeSQLiteDropsOnlyUnchangedContainerRows(
+	t *testing.T,
+) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj", "/home/user/code/opencode-app")
+	seedOpenCodeSQLiteTextSession(
+		t, oc, "proj", "changed-session",
+		1779012000000, 1779012030000,
+		"original prompt", "original answer",
+	)
+	seedOpenCodeSQLiteTextSession(
+		t, oc, "proj", "stable-session",
+		1779012100000, 1779012130000,
+		"stable prompt", "stable answer",
+	)
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
+	assert.Equal(t, 2, stats.Synced, "first sync writes both sessions")
+
+	changedID := "opencode:changed-session"
+	stableID := "opencode:stable-session"
+	before := openCodeLocalModifiedSnapshot(
+		t, env.db, changedID, stableID,
+	)
+
+	time.Sleep(20 * time.Millisecond)
+	oc.updateSessionTime(t, "changed-session", 1779015630000)
+	oc.replaceTextContent(
+		t, "changed-session",
+		"changed prompt", "changed answer",
+		1779015600000,
+	)
+
+	stats = env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
+	assert.Equal(t, 1, stats.Synced,
+		"only the changed OpenCode SQLite row should be rewritten")
+	assertMessageContent(
+		t, env.db, changedID, "changed prompt", "changed answer",
+	)
+
+	after := openCodeLocalModifiedSnapshot(
+		t, env.db, changedID, stableID,
+	)
+	assert.NotEqual(t, before[changedID], after[changedID],
+		"changed row must be rewritten")
+	assert.Equal(t, before[stableID], after[stableID],
+		"unchanged sibling row must not be rewritten")
+	assertMessageContent(
+		t, env.db, stableID, "stable prompt", "stable answer",
+	)
+}
+
+func TestSyncEngineOpenCodeSQLiteSameMtimeContentChangeUsesFingerprint(
+	t *testing.T,
+) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj", "/home/user/code/opencode-app")
+	seedOpenCodeSQLiteTextSession(
+		t, oc, "proj", "same-mtime-sqlite",
+		1779012000000, 1779012030000,
+		"original prompt", "original answer",
+	)
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
+	assert.Equal(t, 1, stats.Synced, "first sync writes the SQLite session")
+	sessionID := "opencode:same-mtime-sqlite"
+	assertMessageContent(
+		t, env.db, sessionID, "original prompt", "original answer",
+	)
+	before := openCodeStoredSession(t, env.db, sessionID)
+	require.NotNil(t, before.FileMtime, "file_mtime before rewrite")
+	require.NotNil(t, before.FileHash, "file_hash before rewrite")
+	require.NotNil(t, before.LocalModifiedAt,
+		"local_modified_at before rewrite")
+
+	time.Sleep(20 * time.Millisecond)
+	oc.replaceTextContent(
+		t, "same-mtime-sqlite",
+		"changed prompt with same session mtime",
+		"changed answer with same session mtime",
+		1779012000000,
+	)
+
+	stats = env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
+	assert.Equal(t, 1, stats.Synced,
+		"same-mtime SQLite fingerprint changes must be rewritten")
+	assertMessageContent(
+		t, env.db, sessionID,
+		"changed prompt with same session mtime",
+		"changed answer with same session mtime",
+	)
+	after := openCodeStoredSession(t, env.db, sessionID)
+	require.NotNil(t, after.FileMtime, "file_mtime after rewrite")
+	require.NotNil(t, after.FileHash, "file_hash after rewrite")
+	require.NotNil(t, after.LocalModifiedAt,
+		"local_modified_at after rewrite")
+	assert.Equal(t, *before.FileMtime, *after.FileMtime,
+		"same-mtime rewrite keeps the OpenCode SQLite session mtime")
+	assert.NotEqual(t, *before.FileHash, *after.FileHash,
+		"changed SQLite child content must change the storage fingerprint")
+	assert.Greater(t, *after.LocalModifiedAt, *before.LocalModifiedAt,
+		"successful rewrite must bump local_modified_at for push windows")
+}
+
+func TestSyncEngineOpenCodeSQLiteSameMtimeMetadataChangeUsesFingerprint(
+	t *testing.T,
+) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	oc := createOpenCodeDB(t, env.opencodeDir)
+	oc.addProject(t, "proj", "/home/user/code/original-app")
+	seedOpenCodeSQLiteTextSession(
+		t, oc, "proj", "same-mtime-metadata",
+		1779012000000, 1779012030000,
+		"stable prompt", "stable answer",
+	)
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
+	assert.Equal(t, 1, stats.Synced, "first sync writes the SQLite session")
+	sessionID := "opencode:same-mtime-metadata"
+	before := openCodeStoredSession(t, env.db, sessionID)
+	require.NotNil(t, before.FileMtime, "file_mtime before rewrite")
+	require.NotNil(t, before.FileHash, "file_hash before rewrite")
+	require.NotNil(t, before.LocalModifiedAt,
+		"local_modified_at before rewrite")
+	assert.Equal(t, "/home/user/code/original-app", before.Cwd)
+	assert.Equal(t, "original_app", before.Project)
+
+	time.Sleep(20 * time.Millisecond)
+	oc.mustExec(t, "update project worktree",
+		"UPDATE project SET worktree = ? WHERE id = ?",
+		"/home/user/code/renamed-app", "proj",
+	)
+
+	stats = env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
+	assert.Equal(t, 1, stats.Synced,
+		"same-mtime SQLite metadata changes must be rewritten")
+	assertMessageContent(
+		t, env.db, sessionID, "stable prompt", "stable answer",
+	)
+	after := openCodeStoredSession(t, env.db, sessionID)
+	require.NotNil(t, after.FileMtime, "file_mtime after rewrite")
+	require.NotNil(t, after.FileHash, "file_hash after rewrite")
+	require.NotNil(t, after.LocalModifiedAt,
+		"local_modified_at after rewrite")
+	assert.Equal(t, *before.FileMtime, *after.FileMtime,
+		"metadata-only rewrite keeps the OpenCode SQLite session mtime")
+	assert.NotEqual(t, *before.FileHash, *after.FileHash,
+		"changed SQLite metadata must change the storage fingerprint")
+	assert.Greater(t, *after.LocalModifiedAt, *before.LocalModifiedAt,
+		"successful rewrite must bump local_modified_at for push windows")
+	assert.Equal(t, "/home/user/code/renamed-app", after.Cwd)
+	assert.Equal(t, "renamed_app", after.Project)
+}
+
+func TestSyncEngineOpenCodeStorageSameMtimeContentChangeUsesFingerprint(
+	t *testing.T,
+) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	sessionPath := storage.addSession(
+		t, "proj", "same-mtime-hash",
+		"/home/user/code/opencode-app", "Hash Guard",
+		1779012000000, 1779012030000,
+	)
+	storage.addMessage(
+		t, "same-mtime-hash", "msg-user", "user",
+		1779012000000, nil,
+	)
+	userPartPath := storage.addTextPart(
+		t, "same-mtime-hash", "msg-user", "part-user",
+		"original prompt", 1779012000000,
+	)
+	storage.addMessage(
+		t, "same-mtime-hash", "msg-assistant", "assistant",
+		1779012000001, nil,
+	)
+	storage.addTextPart(
+		t, "same-mtime-hash", "msg-assistant", "part-assistant",
+		"original answer", 1779012000001,
+	)
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
+	assert.Equal(t, 1, stats.Synced, "first sync writes the storage session")
+	sessionID := "opencode:same-mtime-hash"
+	assertMessageContent(
+		t, env.db, sessionID, "original prompt", "original answer",
+	)
+	before := openCodeStoredSession(t, env.db, sessionID)
+	require.NotNil(t, before.FileMtime, "file_mtime before rewrite")
+	require.NotNil(t, before.FileHash, "file_hash before rewrite")
+	require.NotNil(t, before.LocalModifiedAt,
+		"local_modified_at before rewrite")
+
+	time.Sleep(20 * time.Millisecond)
+	storage.addSession(
+		t, "proj", "same-mtime-hash",
+		"/home/user/code/opencode-app",
+		"Hash Guard with same-mtime metadata padding",
+		1779012000000, 1779012030000,
+	)
+	storage.addTextPart(
+		t, "same-mtime-hash", "msg-user", "part-user",
+		"changed prompt with different fingerprint",
+		1779012000000,
+	)
+	setFileMtime(t, sessionPath, *before.FileMtime)
+	setFileMtime(t, userPartPath, *before.FileMtime)
+
+	stats = env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
+	assert.Equal(t, 1, stats.Synced,
+		"same-mtime storage fingerprint changes must be rewritten")
+	assertMessageContent(
+		t, env.db, sessionID,
+		"changed prompt with different fingerprint", "original answer",
+	)
+	after := openCodeStoredSession(t, env.db, sessionID)
+	require.NotNil(t, after.FileMtime, "file_mtime after rewrite")
+	require.NotNil(t, after.FileHash, "file_hash after rewrite")
+	require.NotNil(t, after.LocalModifiedAt,
+		"local_modified_at after rewrite")
+	assert.Equal(t, *before.FileMtime, *after.FileMtime,
+		"same-mtime rewrite keeps the OpenCode storage source mtime")
+	assert.NotEqual(t, *before.FileHash, *after.FileHash,
+		"changed child content must change the storage fingerprint")
+	assert.Greater(t, *after.LocalModifiedAt, *before.LocalModifiedAt,
+		"successful rewrite must bump local_modified_at for push windows")
+}
+
 func TestSyncEngineKiroSQLiteUpdatePaths(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
 	ks := createKiroSQLiteDB(t, env.kiroDir)

@@ -90,6 +90,10 @@ type messageListInput struct {
 	Limit     int              `query:"limit" minimum:"0" doc:"Maximum number of messages"`
 	Direction messageDirection `query:"direction" enum:"asc,desc" doc:"Message ordering direction"`
 	From      optionalIntParam `query:"from" minimum:"0" doc:"Starting message ordinal"`
+	Around    optionalIntParam `query:"around" minimum:"0" doc:"Center a symmetric window on this ordinal (mutually exclusive with from/direction)"`
+	Before    optionalIntParam `query:"before" minimum:"0" doc:"Messages before the around anchor (default 5)"`
+	After     optionalIntParam `query:"after" minimum:"0" doc:"Messages after the around anchor (default 5)"`
+	Roles     string           `query:"roles" doc:"Comma-separated roles to include, e.g. user,assistant"`
 }
 
 type searchSessionInput struct {
@@ -278,11 +282,42 @@ func (s *Server) humaGetMessages(
 	if in.From.IsSet {
 		filter.From = &in.From.Value
 	}
+	if in.Around.IsSet {
+		filter.Around = &in.Around.Value
+	}
+	if in.Before.IsSet {
+		filter.Before = &in.Before.Value
+	}
+	if in.After.IsSet {
+		filter.After = &in.After.Value
+	}
+	if in.Roles != "" {
+		filter.Roles = splitTrimmedNonEmpty(in.Roles)
+	}
 	list, err := s.sessions.Messages(ctx, in.ID, filter)
 	if err != nil {
+		if errors.Is(err, service.ErrAroundMutuallyExclusive) ||
+			errors.Is(err, service.ErrBeforeAfterRequireAround) {
+			return nil, apiError(http.StatusBadRequest, err.Error())
+		}
 		return nil, serverError(err)
 	}
 	return &jsonOutput[*service.MessageList]{Body: list}, nil
+}
+
+// splitTrimmedNonEmpty splits s on commas, trims surrounding whitespace from
+// each part, and drops empty parts. This matches the CLI's `session search
+// --in` convention (cmd/agentsview/session_search.go) so a trailing or
+// doubled comma (e.g. "user,") narrows the filter by one intended value
+// instead of silently adding a spurious "" element that matches nothing.
+func splitTrimmedNonEmpty(s string) []string {
+	var out []string
+	for part := range strings.SplitSeq(s, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func (s *Server) humaToolCalls(
@@ -322,18 +357,40 @@ func (s *Server) humaSessionTiming(
 }
 
 type sessionUsageResponse struct {
-	SessionID         string   `json:"session_id"`
-	Agent             string   `json:"agent"`
-	Project           string   `json:"project"`
-	TotalOutputTokens int      `json:"total_output_tokens"`
-	PeakContextTokens int      `json:"peak_context_tokens"`
-	HasTokenData      bool     `json:"has_token_data"`
-	CostUSD           float64  `json:"cost_usd"`
-	HasCost           bool     `json:"has_cost"`
-	AICredits         float64  `json:"ai_credits,omitempty"`
-	Models            []string `json:"models"`
-	UnpricedModels    []string `json:"unpriced_models"`
-	ServerRunning     bool     `json:"server_running"`
+	SessionID         string                          `json:"session_id"`
+	Agent             string                          `json:"agent"`
+	Project           string                          `json:"project"`
+	TotalOutputTokens int                             `json:"total_output_tokens"`
+	PeakContextTokens int                             `json:"peak_context_tokens"`
+	HasTokenData      bool                            `json:"has_token_data"`
+	CostUSD           float64                         `json:"cost_usd"`
+	HasCost           bool                            `json:"has_cost"`
+	AICredits         float64                         `json:"ai_credits,omitempty"`
+	Models            []string                        `json:"models"`
+	UnpricedModels    []string                        `json:"unpriced_models"`
+	BreakdownCount    int                             `json:"breakdown_count"`
+	Breakdown         []sessionUsageBreakdownResponse `json:"breakdown"`
+	ServerRunning     bool                            `json:"server_running"`
+}
+
+type sessionUsageInput struct {
+	ID        string `path:"id" required:"true" doc:"Session ID"`
+	Breakdown bool   `query:"breakdown" doc:"Include per-step breakdown rows"`
+}
+
+type sessionUsageBreakdownResponse struct {
+	Ordinal                  int     `json:"ordinal"`
+	MessageOrdinal           *int    `json:"message_ordinal,omitempty"`
+	Source                   string  `json:"source"`
+	Label                    string  `json:"label"`
+	Timestamp                string  `json:"timestamp"`
+	Model                    string  `json:"model"`
+	InputTokens              int     `json:"input_tokens"`
+	OutputTokens             int     `json:"output_tokens"`
+	CacheCreationInputTokens int     `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int     `json:"cache_read_input_tokens"`
+	CostUSD                  float64 `json:"cost_usd"`
+	HasCost                  bool    `json:"has_cost"`
 }
 
 type sessionUsageErrorBody struct {
@@ -359,6 +416,23 @@ func newSessionUsageHumaResponse(usage *db.SessionUsage) sessionUsageResponse {
 	if unpricedModels == nil {
 		unpricedModels = []string{}
 	}
+	breakdown := make([]sessionUsageBreakdownResponse, 0, len(usage.Breakdown))
+	for _, entry := range usage.Breakdown {
+		breakdown = append(breakdown, sessionUsageBreakdownResponse{
+			Ordinal:                  entry.Ordinal,
+			MessageOrdinal:           entry.MessageOrdinal,
+			Source:                   entry.Source,
+			Label:                    entry.Label,
+			Timestamp:                entry.Timestamp,
+			Model:                    entry.Model,
+			InputTokens:              entry.InputTokens,
+			OutputTokens:             entry.OutputTokens,
+			CacheCreationInputTokens: entry.CacheCreationInputTokens,
+			CacheReadInputTokens:     entry.CacheReadInputTokens,
+			CostUSD:                  entry.CostUSD,
+			HasCost:                  entry.HasCost,
+		})
+	}
 	return sessionUsageResponse{
 		SessionID:         usage.SessionID,
 		Agent:             usage.Agent,
@@ -371,15 +445,17 @@ func newSessionUsageHumaResponse(usage *db.SessionUsage) sessionUsageResponse {
 		AICredits:         usage.AICredits,
 		Models:            usage.Models,
 		UnpricedModels:    unpricedModels,
+		BreakdownCount:    usage.BreakdownCount,
+		Breakdown:         breakdown,
 		ServerRunning:     true,
 	}
 }
 
 func (s *Server) humaSessionUsage(
 	ctx context.Context,
-	in *idPathInput,
+	in *sessionUsageInput,
 ) (*jsonOutput[sessionUsageResponse], error) {
-	usage, err := s.db.GetSessionUsage(ctx, in.ID)
+	usage, err := s.db.GetSessionUsage(ctx, in.ID, in.Breakdown)
 	if err != nil {
 		if handled := handleHumaContextError(err); handled != nil {
 			return nil, handled
@@ -631,7 +707,7 @@ func (s *Server) humaDeleteSession(
 
 type batchDeleteInput struct {
 	Body struct {
-		SessionIDs []string `json:"session_ids" required:"true" doc:"Session IDs to soft-delete"`
+		SessionIDs []string `json:"session_ids" required:"true" nullable:"false" doc:"Session IDs to soft-delete"`
 	}
 }
 

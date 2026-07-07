@@ -47,6 +47,12 @@ The summary cards show:
 - **Projects** and **Models** — distinct counts in the range
 - **Total Cost** — estimated cost attributed to activity in the range
 
+The report counts subagent sessions (for example Claude Code Task-tool agents)
+and fork sessions (rewound conversation branches) alongside their parent
+sessions, so **Total Cost** lines up with `agentsview usage daily` for the same
+day and timezone. Usage rows that recur across related sessions are
+deduplicated before totaling, the same rule the Usage page applies.
+
 If the selected range reaches into the future, the page marks it as partial and
 shows the report's current **as of** time.
 

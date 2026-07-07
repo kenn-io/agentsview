@@ -8,3 +8,4 @@ export type BatchDeleteInputBody = {
    */
   session_ids: Array<string>;
 };
+

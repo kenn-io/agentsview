@@ -28,6 +28,10 @@
       name: "zh-TW",
       label: m.settings_language_traditional_chinese(),
     },
+    {
+      name: "ko",
+      label: m.settings_language_korean(),
+    },
   ]);
 
   function handleLocaleSelect(value: string) {

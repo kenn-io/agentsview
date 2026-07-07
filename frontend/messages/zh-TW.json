@@ -153,6 +153,21 @@
   "session_breadcrumb_copy_session_id_value": "複製會話 ID：{id}",
   "session_breadcrumb_copied": "已複製！",
   "session_breadcrumb_estimated_session_cost": "預估會話成本",
+  "session_breadcrumb_usage_breakdown_title": "會話用量明細",
+  "session_breadcrumb_usage_breakdown_loading": "正在載入用量數據...",
+  "session_breadcrumb_usage_breakdown_steps": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{countLabel} 個步驟"
+      }
+    }
+  ],
   "session_breadcrumb_copy_link_to_session": "複製會話連結",
   "session_breadcrumb_show_session_analysis": "顯示會話分析",
   "session_breadcrumb_hide_session_analysis": "隱藏會話分析",
@@ -544,6 +559,21 @@
   ],
   "analytics_tool_usage_trend_tooltip": "{date} | 總計 {total} | {parts}",
   "analytics_tool_usage_empty": "無 tool 使用數據",
+  "analytics_tool_usage_loading": "正在加載 tool 使用數據...",
+  "analytics_tool_usage_top_tools": "熱門 Tool",
+  "analytics_tool_usage_sessions": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{countLabel} 個會話"
+      }
+    }
+  ],
   "analytics_by_category": "按類別",
   "analytics_by_agent": "按 Agent",
   "analytics_by_project": "按項目",
@@ -764,6 +794,7 @@
   "settings_language_english": "English",
   "settings_language_simplified_chinese": "簡體中文",
   "settings_language_traditional_chinese": "繁體中文",
+  "settings_language_korean": "韓文",
   "settings_language_no_results": "未找到語言",
   "nav_recent_edits": "最近編輯",
   "recent_edits_title": "最近編輯",
@@ -1504,6 +1535,13 @@
   "worktree_failed_apply": "應用映射失敗",
   "worktree_title": "工作樹映射",
   "worktree_description": "將工作樹路徑前綴映射到本機上的規範項目。",
+  "worktree_layout": "版面",
+  "worktree_layout_explicit": "顯式",
+  "worktree_layout_repo_dot_worktrees": "{repo}.worktrees/{branch}",
+  "worktree_parent_directory": "父目錄",
+  "worktree_parent_directory_hint": "輸入包含 repo.worktrees 資料夾的目錄。",
+  "worktree_project_required": "顯式映射需要專案名稱。",
+  "worktree_project_derived": "由 repo.worktrees 資料夾推導。",
   "worktree_local_only": "工作樹映射僅在本地模式下可用。",
   "worktree_loading": "正在加載映射...",
   "worktree_machine": "機器",

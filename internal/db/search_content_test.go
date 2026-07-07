@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -587,4 +588,333 @@ func TestFTSSnippetCentersOnPhrase(t *testing.T) {
 		assert.Contains(t, f.ftsSnippet(body), "error in the early",
 			"fallback snippet not centered on first token")
 	})
+}
+
+// seedUnitSession inserts a session (lineage-configurable via opts) plus full
+// Message rows, for derived-unit citation tests that need
+// is_system/is_sidechain/tool fields beyond seedSearchSession's role/content
+// pairs. SessionID and a per-ordinal timestamp are filled in when unset.
+func seedUnitSession(
+	t *testing.T, d *DB, id string, opts func(*Session), msgs []Message,
+) {
+	t.Helper()
+	insertSession(t, d, id, "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.UserMessageCount = 2
+		if opts != nil {
+			opts(s)
+		}
+	})
+	for i := range msgs {
+		msgs[i].SessionID = id
+		if msgs[i].Timestamp == "" {
+			msgs[i].Timestamp = fmt.Sprintf("2026-05-20T12:00:%02dZ", i)
+		}
+	}
+	require.NoError(t, d.ReplaceSessionMessages(id, msgs),
+		"ReplaceSessionMessages %s", id)
+}
+
+// matchesByOrdinal indexes a page's matches by anchor ordinal, requiring the
+// ordinals to be unique.
+func matchesByOrdinal(t *testing.T, page ContentSearchPage) map[int]ContentMatch {
+	t.Helper()
+	out := make(map[int]ContentMatch, len(page.Matches))
+	for _, m := range page.Matches {
+		_, dup := out[m.Ordinal]
+		require.False(t, dup, "duplicate match ordinal %d", m.Ordinal)
+		out[m.Ordinal] = m
+	}
+	return out
+}
+
+// TestSearchContentSubstringDerivedRunRange pins the derived
+// conversation-unit citation on substring rows: every match in one assistant
+// run carries the run's full range (spanning a non-member system row), an
+// embeddable user row and a system row are their own units, and ExcludeSystem
+// changes nothing but which rows match.
+func TestSearchContentSubstringDerivedRunRange(t *testing.T) {
+	d := testDB(t)
+	seedUnitSession(t, d, "run1", nil, []Message{
+		{Ordinal: 0, Role: "user", Content: "the RUNHIT question"},
+		{Ordinal: 1, Role: "assistant", Content: "RUNHIT step one"},
+		{Ordinal: 2, Role: "user", Content: "sys RUNHIT note", IsSystem: true},
+		{Ordinal: 3, Role: "assistant", Content: "RUNHIT step two"},
+		{Ordinal: 4, Role: "assistant", Content: "RUNHIT step three"},
+		{Ordinal: 5, Role: "user", Content: "next question"},
+	})
+	got, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "RUNHIT", Mode: "substring",
+		Sources: []string{"messages"}, Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent")
+	require.Len(t, got.Matches, 5, "matches")
+	byOrd := matchesByOrdinal(t, got)
+	assert.Equal(t, [2]int{0, 0}, byOrd[0].OrdinalRange, "user row is its own unit")
+	assert.Equal(t, [2]int{2, 2}, byOrd[2].OrdinalRange, "system row is its own unit")
+	for _, o := range []int{1, 3, 4} {
+		m := byOrd[o]
+		assert.Equal(t, [2]int{1, 4}, m.OrdinalRange, "run member %d", o)
+		assert.Equal(t, o, m.Ordinal, "anchor ordinal %d", o)
+		assert.False(t, m.Subordinate, "top-level run member %d", o)
+		assert.False(t, m.Sidechain, "non-sidechain run member %d", o)
+		assert.Empty(t, m.Relationship, "top-level relationship %d", o)
+		assert.Empty(t, m.ParentSessionID, "top-level parent %d", o)
+	}
+
+	// ExcludeSystem drops the system row but leaves the derived ranges of the
+	// surviving rows unchanged.
+	ex, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "RUNHIT", Mode: "substring",
+		Sources: []string{"messages"}, ExcludeSystem: true, Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent ExcludeSystem")
+	require.Len(t, ex.Matches, 4, "ExcludeSystem matches")
+	exByOrd := matchesByOrdinal(t, ex)
+	assert.NotContains(t, exByOrd, 2, "system row excluded")
+	assert.Equal(t, [2]int{0, 0}, exByOrd[0].OrdinalRange)
+	for _, o := range []int{1, 3, 4} {
+		assert.Equal(t, [2]int{1, 4}, exByOrd[o].OrdinalRange,
+			"ExcludeSystem run member %d", o)
+	}
+}
+
+// TestSearchContentSubstringSidechainRunSubordinate pins the sidechain rules:
+// a sidechain run's members are Subordinate + Sidechain, and the sidechain
+// flip bounds both the sidechain run and the following top-level run.
+func TestSearchContentSubstringSidechainRunSubordinate(t *testing.T) {
+	d := testDB(t)
+	seedUnitSession(t, d, "side1", nil, []Message{
+		{Ordinal: 0, Role: "user", Content: "the question"},
+		{Ordinal: 1, Role: "assistant", Content: "SIDEHIT step a", IsSidechain: true},
+		{Ordinal: 2, Role: "assistant", Content: "SIDEHIT step b", IsSidechain: true},
+		{Ordinal: 3, Role: "assistant", Content: "main MAINHIT answer"},
+	})
+	side, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "SIDEHIT", Mode: "substring",
+		Sources: []string{"messages"}, Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent sidechain")
+	require.Len(t, side.Matches, 2, "sidechain matches")
+	for _, m := range side.Matches {
+		assert.Equal(t, [2]int{1, 2}, m.OrdinalRange, "sidechain run range")
+		assert.True(t, m.Subordinate, "sidechain run is subordinate")
+		assert.True(t, m.Sidechain, "anchor sidechain flag")
+		assert.Empty(t, m.Relationship, "no session lineage")
+	}
+	main, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "MAINHIT", Mode: "substring",
+		Sources: []string{"messages"}, Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent main")
+	require.Len(t, main.Matches, 1, "main matches")
+	m := main.Matches[0]
+	assert.Equal(t, [2]int{3, 3}, m.OrdinalRange,
+		"sidechain flip bounds the top-level run")
+	assert.False(t, m.Subordinate, "top-level run")
+	assert.False(t, m.Sidechain, "top-level anchor")
+}
+
+// TestSearchContentSubstringSubagentLineage pins session-level lineage on
+// lexical rows: a match inside a subagent session is Subordinate with
+// Relationship and ParentSessionID populated from the sessions join.
+func TestSearchContentSubstringSubagentLineage(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "parent", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.UserMessageCount = 2
+	})
+	seedUnitSession(t, d, "child", func(s *Session) {
+		s.ParentSessionID = Ptr("parent")
+		s.RelationshipType = "subagent"
+	}, []Message{
+		{Ordinal: 0, Role: "user", Content: "subagent prompt"},
+		{Ordinal: 1, Role: "assistant", Content: "SUBHIT answer"},
+	})
+	got, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "SUBHIT", Mode: "substring",
+		Sources: []string{"messages"}, IncludeChildren: true, Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent")
+	require.Len(t, got.Matches, 1, "matches")
+	m := got.Matches[0]
+	assert.Equal(t, [2]int{1, 1}, m.OrdinalRange, "single-member run")
+	assert.True(t, m.Subordinate, "subagent session is subordinate")
+	assert.Equal(t, "subagent", m.Relationship, "Relationship")
+	assert.Equal(t, "parent", m.ParentSessionID, "ParentSessionID")
+	assert.False(t, m.Sidechain, "anchor not sidechain")
+}
+
+// TestSearchContentToolDerivedRunRange pins derivation for tool_input and
+// canonical tool_result rows: the anchor is the tool call's message row, so
+// both locations carry the enclosing run's range while the wire Role stays
+// the hard-coded "assistant".
+func TestSearchContentToolDerivedRunRange(t *testing.T) {
+	d := testDB(t)
+	seedUnitSession(t, d, "tool1", nil, []Message{
+		{Ordinal: 0, Role: "user", Content: "the question"},
+		{Ordinal: 1, Role: "assistant", Content: "running the tool",
+			ToolCalls: []ToolCall{{
+				ToolName: "Bash", Category: "Bash", ToolUseID: "tu1",
+				InputJSON:     `{"command":"TOOLHIT"}`,
+				ResultContent: "output RESHIT data",
+			}}},
+		{Ordinal: 2, Role: "assistant", Content: "continuing the answer"},
+		{Ordinal: 3, Role: "user", Content: "thanks"},
+	})
+	in, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "TOOLHIT", Mode: "substring",
+		Sources: []string{"tool_input"}, Limit: 50,
+	})
+	require.NoError(t, err, "tool_input search")
+	require.Len(t, in.Matches, 1, "tool_input matches")
+	assert.Equal(t, "assistant", in.Matches[0].Role, "wire role stays assistant")
+	assert.Equal(t, 1, in.Matches[0].Ordinal, "anchor ordinal")
+	assert.Equal(t, [2]int{1, 2}, in.Matches[0].OrdinalRange,
+		"tool_input anchor classified from the real message row")
+
+	res, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "RESHIT", Mode: "substring",
+		Sources: []string{"tool_result"}, Limit: 50,
+	})
+	require.NoError(t, err, "tool_result search")
+	require.Len(t, res.Matches, 1, "tool_result matches")
+	assert.Equal(t, [2]int{1, 2}, res.Matches[0].OrdinalRange,
+		"canonical tool_result anchor classified from the real message row")
+}
+
+// TestSearchContentToolAnchorUsesRealRowRole pins the role-sensitive anchor
+// classification: a tool call hanging off a user-role message keeps the
+// hard-coded "assistant" wire role, but derivation must classify the anchor
+// by the REAL row's role — an embeddable user row is its own unit, never an
+// assistant run member.
+func TestSearchContentToolAnchorUsesRealRowRole(t *testing.T) {
+	d := testDB(t)
+	seedUnitSession(t, d, "toolu", nil, []Message{
+		{Ordinal: 0, Role: "user", Content: "prompt"},
+		{Ordinal: 1, Role: "user", Content: "user-attached call",
+			ToolCalls: []ToolCall{{
+				ToolName: "Bash", Category: "Bash", ToolUseID: "tuu",
+				InputJSON: `{"command":"UHIT"}`,
+			}}},
+		{Ordinal: 2, Role: "assistant", Content: "assistant reply"},
+	})
+	got, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "UHIT", Mode: "substring",
+		Sources: []string{"tool_input"}, Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent")
+	require.Len(t, got.Matches, 1, "matches")
+	m := got.Matches[0]
+	assert.Equal(t, "assistant", m.Role, "wire role stays assistant")
+	assert.Equal(t, [2]int{1, 1}, m.OrdinalRange,
+		"user-role anchor row is its own unit")
+}
+
+// TestSearchContentToolResultEventsDerived pins the events branches: an
+// orphaned event (no message row at its ordinal) still returns its match
+// (row cardinality must not change) with the [o, o] fallback and session
+// lineage, while an event whose message row sits inside a run gets the run's
+// range via the post-scan anchor lookup.
+func TestSearchContentToolResultEventsDerived(t *testing.T) {
+	d := testDB(t)
+
+	insertSession(t, d, "boss", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.UserMessageCount = 2
+	})
+	insertSession(t, d, "evorph", "proj", func(s *Session) {
+		s.Agent = "claude"
+		s.UserMessageCount = 2
+		s.ParentSessionID = Ptr("boss")
+		s.RelationshipType = "subagent"
+	})
+	_, err := d.getWriter().Exec(`INSERT INTO tool_result_events
+		(session_id, tool_call_message_ordinal, tool_use_id, source, status,
+		 content, content_length, timestamp, event_index)
+		VALUES ('evorph', 7, 'tux', 'stdout', 'success',
+		 'ORPHHIT event content', 21, '2026-05-20T12:00:00Z', 0)`)
+	require.NoError(t, err, "insert orphan event")
+
+	seedUnitSession(t, d, "evrun", nil, []Message{
+		{Ordinal: 0, Role: "user", Content: "the question"},
+		{Ordinal: 1, Role: "assistant", Content: "running",
+			ToolCalls: []ToolCall{{
+				ToolName: "Bash", Category: "Bash", ToolUseID: "tu1",
+				InputJSON: `{"command":"x"}`,
+				ResultEvents: []ToolResultEvent{{
+					ToolUseID: "tu1", Source: "stdout", Status: "success",
+					Content: "EVHIT streamed output", EventIndex: 0,
+				}},
+			}}},
+		{Ordinal: 2, Role: "assistant", Content: "wrapping up"},
+	})
+
+	orph, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "ORPHHIT", Mode: "substring",
+		Sources: []string{"tool_result"}, IncludeChildren: true, Limit: 50,
+	})
+	require.NoError(t, err, "orphan search")
+	require.Len(t, orph.Matches, 1, "orphaned event row must not be dropped")
+	m := orph.Matches[0]
+	assert.Equal(t, 7, m.Ordinal, "event ordinal")
+	assert.Equal(t, [2]int{7, 7}, m.OrdinalRange, "missing anchor falls back to [o, o]")
+	assert.False(t, m.Sidechain, "missing anchor has no sidechain flag")
+	assert.True(t, m.Subordinate, "session lineage still applies")
+	assert.Equal(t, "subagent", m.Relationship, "Relationship from sessions join")
+	assert.Equal(t, "boss", m.ParentSessionID, "ParentSessionID from sessions join")
+
+	ev, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "EVHIT", Mode: "substring",
+		Sources: []string{"tool_result"}, Limit: 50,
+	})
+	require.NoError(t, err, "event search")
+	require.Len(t, ev.Matches, 1, "event matches")
+	assert.Equal(t, 1, ev.Matches[0].Ordinal, "anchor ordinal")
+	assert.Equal(t, [2]int{1, 2}, ev.Matches[0].OrdinalRange,
+		"event with a message row inside a run gets the run's range")
+}
+
+// TestSearchContentRegexDerivedRange spot-checks that regex mode routes
+// through the shared derivation pass.
+func TestSearchContentRegexDerivedRange(t *testing.T) {
+	d := testDB(t)
+	seedUnitSession(t, d, "rx1", nil, []Message{
+		{Ordinal: 0, Role: "user", Content: "the question"},
+		{Ordinal: 1, Role: "assistant", Content: "RXHIT alpha"},
+		{Ordinal: 2, Role: "assistant", Content: "RXHIT beta"},
+	})
+	got, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: `RXHIT [a-z]+`, Mode: "regex",
+		Sources: []string{"messages"}, Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent regex")
+	require.Len(t, got.Matches, 2, "regex matches")
+	for _, m := range got.Matches {
+		assert.Equal(t, [2]int{1, 2}, m.OrdinalRange, "derived run range")
+	}
+}
+
+// TestSearchContentFTSDerivedRange spot-checks that fts mode routes through
+// the shared derivation pass.
+func TestSearchContentFTSDerivedRange(t *testing.T) {
+	d := testDB(t)
+	if !d.HasFTS() {
+		t.Skip("fts5 not available")
+	}
+	seedUnitSession(t, d, "fx1", nil, []Message{
+		{Ordinal: 0, Role: "user", Content: "the question"},
+		{Ordinal: 1, Role: "assistant", Content: "ftshit alpha step"},
+		{Ordinal: 2, Role: "assistant", Content: "ftshit beta step"},
+	})
+	got, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		Pattern: "ftshit", Mode: "fts",
+		Sources: []string{"messages"}, Limit: 50,
+	})
+	require.NoError(t, err, "SearchContent fts")
+	require.Len(t, got.Matches, 2, "fts matches")
+	for _, m := range got.Matches {
+		assert.Equal(t, [2]int{1, 2}, m.OrdinalRange, "derived run range")
+		assert.False(t, m.Subordinate, "top-level run")
+	}
 }

@@ -851,6 +851,8 @@ func providerDeletedPhysicalSQLiteSource(
 	switch agent {
 	case parser.AgentZed:
 		return filepath.Base(path) == "threads.db"
+	case parser.AgentZCode:
+		return filepath.Base(path) == parser.ZCodeDBName
 	case parser.AgentShelley:
 		return filepath.Base(path) == shelleyDBFile
 	default:
@@ -1998,7 +2000,7 @@ func (e *Engine) syncAllLocked(
 	// through the provider facade in the file-sync phase above, so no
 	// dedicated DB-backed sync pass is needed here.
 
-	// Sync Warp, Forge, and Piebald sessions. These are provider-authoritative
+	// Sync Warp, Forge, Piebald, and ZCode sessions. These are provider-authoritative
 	// DB-backed providers: a shared SQLite DB hosts every session, so the
 	// provider facade enumerates sources and parses only the changed ones.
 	if scope.includesAny(e.agentDirs[parser.AgentWarp]) {
@@ -2028,9 +2030,18 @@ func (e *Engine) syncAllLocked(
 			return stats
 		}
 	}
+	if scope.includesAny(e.agentDirs[parser.AgentZCode]) {
+		if e.syncProviderDBBackedAgent(
+			ctx, parser.AgentZCode, "zcode",
+			writeMode, verbose, scope, &stats, advanceDBProgress,
+		) {
+			stats.Aborted = true
+			return stats
+		}
+	}
 
 	// Link subagent child sessions to their parents after all DB-backed
-	// agent writes (including provider-authoritative Forge and Piebald).
+	// agent writes (including provider-authoritative Forge, Piebald, and ZCode).
 	// LinkSubagentSessions is idempotent — its WHERE filter and partial index
 	// make it a cheap no-op when nothing new was written — so no guard is
 	// needed.
@@ -2154,7 +2165,7 @@ func (e *Engine) discoverProviderSources(
 			_, ok := forceParseSources[filepath.Clean(sourcePath)]
 			return ok
 		}
-		// Forge, Piebald, and Warp are DB-backed providers: a shared SQLite
+		// Forge, Piebald, Warp, and ZCode are DB-backed providers: a shared SQLite
 		// DB hosts every session. Full-sync change detection and counting
 		// run through their dedicated provider-driven DB sync phase
 		// (syncProviderDBBacked), not the per-source discovery list, so a
@@ -3010,6 +3021,7 @@ func (e *Engine) countDBBackedSessions(
 		parser.AgentWarp,
 		parser.AgentForge,
 		parser.AgentPiebald,
+		parser.AgentZCode,
 	} {
 		total += e.countDBBackedProgressTotal(agent, scope)
 	}
@@ -3662,7 +3674,7 @@ func (e *Engine) processProviderFile(
 		return processResult{err: err}, true
 	}
 	if !found {
-		// A forced parse on a deleted shared SQLite database (Zed, Shelley)
+		// A forced parse on a deleted shared SQLite database (Zed, ZCode, Shelley)
 		// resolves to no source because the physical file is gone. Mirror the
 		// legacy deleted-source handling: complete the source as an empty
 		// force-replace so the engine retires every session that lived in the
@@ -3930,6 +3942,12 @@ func (e *Engine) dropUnchangedSharedSQLiteResults(
 	case parser.AgentAider:
 		// Every aider run in a history file shares the file's content hash, so
 		// a same-mtime append/truncate is caught by the hash compare.
+		compareHash = true
+	case parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode, parser.AgentIcodemate:
+		// OpenCode-family providers fan one shared container out to per-session
+		// results. The per-session mtime is the session's own updated time, and
+		// the hash compare uses the opencode storage fingerprint to catch
+		// same-mtime content changes.
 		compareHash = true
 	case parser.AgentZed, parser.AgentKiro:
 		// Zed and Kiro fan one container DB out to a session per row and have no
@@ -4200,7 +4218,12 @@ func providerProcessCacheKeyWithHash(
 }
 
 func providerFingerprintHashRequiredForFreshness(agent parser.AgentType) bool {
-	return agent == parser.AgentDevin
+	switch agent {
+	case parser.AgentDevin, parser.AgentQoder:
+		return true
+	default:
+		return false
+	}
 }
 
 func (e *Engine) providerSkipCacheEntryFreshInDB(
@@ -4224,7 +4247,7 @@ func (e *Engine) providerSkipCacheEntryFreshInDB(
 
 func processFileUsesProvider(agent parser.AgentType) bool {
 	switch agent {
-	case parser.AgentForge, parser.AgentPiebald, parser.AgentWarp:
+	case parser.AgentForge, parser.AgentPiebald, parser.AgentWarp, parser.AgentZCode:
 		return true
 	default:
 		return false
@@ -4268,7 +4291,7 @@ func (e *Engine) shouldSkipProviderSource(
 
 func providerSourceSupportsPersistedFreshness(agent parser.AgentType) bool {
 	switch agent {
-	case parser.AgentForge, parser.AgentWarp:
+	case parser.AgentForge, parser.AgentWarp, parser.AgentZCode:
 		return true
 	default:
 		return false
@@ -4310,6 +4333,14 @@ func (e *Engine) shouldCacheSkip(
 			return false
 		}
 		if _, _, ok := parser.ParseVirtualSourcePathForBase(file.Path, "threads.db"); ok {
+			return false
+		}
+	}
+	if file.Agent == parser.AgentZCode {
+		if filepath.Base(file.Path) == parser.ZCodeDBName {
+			return false
+		}
+		if _, _, ok := parser.ParseVirtualSourcePathForBase(file.Path, parser.ZCodeDBName); ok {
 			return false
 		}
 	}
@@ -6720,7 +6751,13 @@ func (e *Engine) cachedProjectIdentity(machine, rootPath string) projectIdentity
 		return cached
 	}
 	identity := projectIdentityCacheEntry{rootPath: rootPath}
-	if e.idPrefix == "" && e.pathRewriter == nil {
+	// Only probe the local filesystem for sessions recorded on this
+	// machine: another machine's cwd (e.g. /home/... from a synced Linux
+	// host) is meaningless here, and on macOS merely stat'ing such paths
+	// wakes the /home automounter — with tens of thousands of remote
+	// sessions and a one-minute cache TTL that becomes a sustained
+	// automountd/opendirectoryd CPU storm.
+	if e.idPrefix == "" && e.pathRewriter == nil && machine == e.machine {
 		if gitRoot, remotes := discoverLocalGitIdentity(rootPath); gitRoot != "" {
 			identity.rootPath = gitRoot
 			if name, raw, ok := export.SelectRemote(remotes); ok {
@@ -6782,6 +6819,12 @@ func projectIdentityObservationFingerprint(
 
 func discoverLocalGitIdentity(cwd string) (string, map[string]string) {
 	if !safeLocalAbsolutePath(cwd) {
+		return "", nil
+	}
+	// Skip macOS automounter namespaces: probing them wakes
+	// automountd/opendirectoryd for paths that virtually never exist
+	// locally (see export.IsAutomountNamespacePath).
+	if export.IsAutomountNamespacePath(runtime.GOOS, filepath.Clean(cwd)) {
 		return "", nil
 	}
 	resolved, err := filepath.EvalSymlinks(filepath.Clean(cwd))
@@ -7202,9 +7245,18 @@ func (e *Engine) shouldPreserveOpenCodeFormatArchive(
 	storedHash := derefString(stored.FileHash)
 	storedPath := derefString(stored.FilePath)
 	storedMtime := derefInt64(stored.FileMtime)
-	storedIsStorageArchive := hasOpenCodeFormatStorageFingerprint(
+	storedHasStorageFingerprint := hasOpenCodeFormatStorageFingerprint(
 		agent, storedHash,
-	) || isOpenCodeFormatStoragePath(agent, storedPath)
+	)
+	storedIsSQLiteVirtual := isOpenCodeFormatSQLiteVirtualPath(
+		agent, storedPath,
+	)
+	storedIsStorageArchive := isOpenCodeFormatStoragePath(
+		agent, storedPath,
+	) || (storedPath == "" && storedHasStorageFingerprint)
+	if storedIsSQLiteVirtual {
+		storedIsStorageArchive = false
+	}
 	if isOpenCodeFormatSQLiteVirtualPath(agent, path) &&
 		!storedIsStorageArchive {
 		return false
@@ -7220,7 +7272,7 @@ func (e *Engine) shouldPreserveOpenCodeFormatArchive(
 	// live child files in place, so we only preserve when the
 	// newly parsed transcript also looks incomplete relative
 	// to what is already archived.
-	if hasOpenCodeFormatStorageFingerprint(agent, storedHash) &&
+	if storedHasStorageFingerprint &&
 		hasOpenCodeFormatStorageFingerprint(agent, currentHash) &&
 		!parser.OpenCodeStorageFingerprintMissing(
 			storedHash, currentHash,
@@ -7669,7 +7721,7 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 	}
 	rawSessionID := strings.TrimPrefix(rawID, def.IDPrefix)
 	if !def.FileBased {
-		// Forge, Piebald, and Warp are DB-backed providers that own
+		// Forge, Piebald, Warp, and ZCode are DB-backed providers that own
 		// discovery and source lookup through the provider facade. Their
 		// virtual <db>#<sessionID> path is resolved by findProviderSourceFile
 		// below. Non-provider, non-file-based agents (e.g. remote imports)
@@ -7863,6 +7915,10 @@ func providerSourcePathNeedsFingerprint(path string) bool {
 	return path != "" && parser.ResolveSourceFilePath(path) != path
 }
 
+func providerSourceMtimeNeedsFingerprint(agent parser.AgentType) bool {
+	return agent == parser.AgentQoder
+}
+
 // providerSessionIsFork reports whether the session ID addresses a fork child
 // whose base differs from the resolved source session. Only Piebald uses the
 // "<chat>-<row>" fork-ID shape among the DB-backed providers.
@@ -7932,7 +7988,7 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 	}
 	rawSessionID := strings.TrimPrefix(rawID, def.IDPrefix)
 	if !def.FileBased {
-		// Forge, Piebald, and Warp are DB-backed providers: their
+		// Forge, Piebald, Warp, and ZCode are DB-backed providers: their
 		// per-session source mtime comes from the provider fingerprint
 		// (which mirrors the legacy List*SessionMeta last-modified value).
 		// Non-provider, non-file-based agents have no local source.
@@ -7949,7 +8005,8 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 		return 0
 	}
 	if e.isProviderAuthoritative(def.Type) &&
-		providerSourcePathNeedsFingerprint(path) {
+		(providerSourcePathNeedsFingerprint(path) ||
+			providerSourceMtimeNeedsFingerprint(def.Type)) {
 		if mtime := e.providerSessionSourceMtime(
 			context.Background(), def, sessionID, rawSessionID, path,
 		); mtime != 0 {
@@ -8130,7 +8187,7 @@ func (e *Engine) SyncSingleSessionContext(
 		return fmt.Errorf("unknown agent for session %s", sessionID)
 	}
 	if !def.FileBased {
-		// Forge, Piebald, and Warp are DB-backed providers: re-sync routes
+		// Forge, Piebald, Warp, and ZCode are DB-backed providers: re-sync routes
 		// through FindSourceFile (resolving the virtual <db>#<sessionID>
 		// path) plus the provider-aware processFile path below, mirroring
 		// the file-based agents. Other non-file-based agents use the
@@ -8255,6 +8312,18 @@ func (e *Engine) SyncSingleSessionContext(
 			if workspace, _, ok := strings.Cut(bareID, ":"); ok &&
 				workspace != "" {
 				file.Project = workspace
+			}
+		}
+	case parser.AgentQoder:
+		for _, qoderDir := range e.agentDirs[parser.AgentQoder] {
+			rel, ok := isUnder(qoderDir, path)
+			if !ok {
+				continue
+			}
+			parts := strings.Split(rel, string(filepath.Separator))
+			if len(parts) == 2 || len(parts) == 4 && parts[2] == "subagents" {
+				file.Project = parser.DecodeQoderProjectDir(parts[0])
+				break
 			}
 		}
 	case parser.AgentReasonix:

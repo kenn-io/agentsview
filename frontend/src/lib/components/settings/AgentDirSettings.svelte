@@ -23,6 +23,7 @@
     zed: "Zed",
     kimi: "Kimi",
     workbuddy: "WorkBuddy",
+    qoder: "Qoder",
     piebald: "Piebald",
     antigravity: "Antigravity",
     "antigravity-cli": "Antigravity CLI",

@@ -294,9 +294,19 @@ func (s *Sync) Push(
 		)
 	}
 	for id, sess := range sessionByID {
+		usageFP, usageKnown := usageFingerprints[id]
+		dependencyFP, err := localSessionDependencyPushFingerprint(
+			ctx, s.local, id, usageFP, usageKnown,
+		)
+		if err != nil {
+			return result, fmt.Errorf(
+				"computing local dependency fingerprint %s: %w",
+				id, err,
+			)
+		}
 		sessionFingerprints[id] = sessionPushFingerprint(
 			sess, pushedSessionMachine(sess, s.machine),
-			usageFingerprints[id], markerID,
+			usageFP, markerID, dependencyFP,
 		)
 	}
 
@@ -329,9 +339,10 @@ func (s *Sync) Push(
 				return result, err
 			}
 		} else {
-			if err := finalizePushState(
-				state, cutoff, sessions, nil,
-				sessionFingerprints,
+			if err := finalizeUnfilteredPushState(
+				state, lastPush, cutoff, sessions,
+				priorFingerprints, sessionFingerprints,
+				result.Errors,
 			); err != nil {
 				return result, err
 			}
@@ -416,21 +427,10 @@ func (s *Sync) Push(
 			return result, err
 		}
 	} else {
-		// When all sessions succeeded, advance the watermark
-		// to cutoff. When some failed, keep the watermark at
-		// lastPush so the failed sessions (plus any
-		// already-pushed ones) are re-evaluated next time.
-		// Already-pushed sessions are fingerprint-matched and
-		// skipped cheaply.
-		finalizeCutoff := cutoff
-		var mergedFingerprints map[string]string
-		if result.Errors > 0 {
-			finalizeCutoff = lastPush
-			mergedFingerprints = priorFingerprints
-		}
-		if err := finalizePushState(
-			state, finalizeCutoff, pushed,
-			mergedFingerprints, sessionFingerprints,
+		if err := finalizeUnfilteredPushState(
+			state, lastPush, cutoff, pushed,
+			priorFingerprints, sessionFingerprints,
+			result.Errors,
 		); err != nil {
 			return result, err
 		}
@@ -926,6 +926,29 @@ func finalizePushState(
 	)
 }
 
+func finalizeUnfilteredPushState(
+	local syncStateStore,
+	lastPush, cutoff string,
+	sessions []db.Session,
+	priorFingerprints map[string]string,
+	sessionFingerprints map[string]string,
+	errors int,
+) error {
+	// When all sessions succeeded, advance the watermark to cutoff.
+	// When some failed, keep the watermark at lastPush so the failed
+	// sessions (plus any already-pushed ones) are re-evaluated next
+	// time. Already-pushed sessions are fingerprint-matched and skipped
+	// cheaply.
+	finalizeCutoff := cutoff
+	if errors > 0 {
+		finalizeCutoff = lastPush
+	}
+	return finalizePushState(
+		local, finalizeCutoff, sessions,
+		priorFingerprints, sessionFingerprints,
+	)
+}
+
 func finalizeFilteredPushState(
 	local syncStateStore,
 	lastPush, cutoff string,
@@ -935,14 +958,12 @@ func finalizeFilteredPushState(
 	errors int,
 ) error {
 	finalizeCutoff := cutoff
-	var mergedFingerprints map[string]string
 	if errors > 0 {
 		finalizeCutoff = lastPush
-		mergedFingerprints = priorFingerprints
 	}
 	return finalizePushState(
 		local, finalizeCutoff, sessions,
-		mergedFingerprints, sessionFingerprints,
+		priorFingerprints, sessionFingerprints,
 	)
 }
 
@@ -1325,13 +1346,14 @@ func deletePGSessionIfExcluded(
 // fallback to force a re-push when s.machine changes.
 func sessionPushFingerprint(
 	sess db.Session, pushedMachine,
-	usageEventFingerprint, ownerMarker string,
+	usageEventFingerprint, ownerMarker, dependencyFingerprint string,
 ) string {
 	fields := []string{
 		sess.ID,
 		sess.Project,
 		pushedMachine,
 		ownerMarker,
+		dependencyFingerprint,
 		sess.Agent,
 		stringValue(sess.FirstMessage),
 		stringValue(sess.DisplayName),
@@ -1348,9 +1370,8 @@ func sessionPushFingerprint(
 		fmt.Sprintf("%t", sess.HasPeakContextTokens),
 		stringValue(sess.ParentSessionID),
 		sess.RelationshipType,
+		stringValue(sess.FilePath),
 		stringValue(sess.FileHash),
-		int64Value(sess.FileMtime),
-		stringValue(sess.LocalModifiedAt),
 		sess.CreatedAt,
 		fmt.Sprintf("%d", sess.ToolFailureSignalCount),
 		fmt.Sprintf("%d", sess.ToolRetryCount),
@@ -1430,13 +1451,6 @@ func stringValue(value *string) string {
 		return ""
 	}
 	return *value
-}
-
-func int64Value(value *int64) string {
-	if value == nil {
-		return ""
-	}
-	return fmt.Sprintf("%d", *value)
 }
 
 func float64Value(value *float64) string {

@@ -892,6 +892,10 @@ func TestAnalyticsTools(t *testing.T) {
 		resp := decode[db.ToolsAnalyticsResponse](t, w)
 		assert.Equal(t, stats.TotalToolCalls, resp.TotalCalls)
 		assert.NotEmpty(t, resp.ByCategory)
+		require.NotEmpty(t, resp.ByTool)
+		assert.NotEmpty(t, resp.ByTool[0].ToolName)
+		assert.NotZero(t, resp.ByTool[0].CallCount)
+		assert.NotZero(t, resp.ByTool[0].SessionCount)
 		assert.Len(t, resp.ByAgent, stats.Agents)
 	})
 

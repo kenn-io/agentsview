@@ -1,0 +1,391 @@
+package vector
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	kitvec "go.kenn.io/kit/vector"
+	"go.kenn.io/kit/vector/sqlitevec"
+)
+
+// soloEncoders wraps enc as a single-server EncoderSet, the shape most
+// Manager tests need.
+func soloEncoders(enc kitvec.EncodeFunc) EncoderSet {
+	return EncoderSet{Default: "test", ByName: map[string]ManagedEncoder{
+		"test": {Encode: enc, Settings: EncodeSettings{BatchSize: 10}},
+	}}
+}
+
+// blockingEncoder returns an encoder that blocks until release is closed,
+// letting tests observe a Manager while its build is still in flight.
+func blockingEncoder(release <-chan struct{}) kitvec.EncodeFunc {
+	return func(_ context.Context, texts []string) ([][]float32, error) {
+		<-release
+		out := make([][]float32, len(texts))
+		for i := range texts {
+			out[i] = []float32{1, 0, 0}
+		}
+		return out, nil
+	}
+}
+
+// waitFor polls cond until it returns true or the deadline passes, failing
+// the test otherwise. Used instead of a fixed sleep to avoid flakiness.
+func waitFor(t *testing.T, cond func() bool, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	require.Fail(t, "timed out waiting for condition", msg)
+}
+
+// generationIDByFingerprint looks up a generation's CLI-facing ordinal ID
+// from its fingerprint, for tests that need to Activate/Retire a specific
+// generation by ID.
+func generationIDByFingerprint(t *testing.T, ix *Index, fp string) int64 {
+	t.Helper()
+	gens, err := ix.Generations(context.Background())
+	require.NoError(t, err)
+	for _, g := range gens {
+		if g.Fingerprint == fp {
+			return g.ID
+		}
+	}
+	require.Fail(t, "generation not found for fingerprint", fp)
+	return 0
+}
+
+// countingEncoder returns a working encoder that counts its calls, so
+// tests can tell which EncoderSet entry a build actually used.
+func countingEncoder(calls *atomic.Int64) kitvec.EncodeFunc {
+	return func(_ context.Context, texts []string) ([][]float32, error) {
+		calls.Add(1)
+		out := make([][]float32, len(texts))
+		for i := range texts {
+			out[i] = []float32{1, 0, 0}
+		}
+		return out, nil
+	}
+}
+
+func TestManagerBuildUsingSelectsNamedEncoder(t *testing.T) {
+	ix := openTestIndex(t)
+	src := twoDocSource()
+	gen := fakeGeneration("fake-model")
+
+	var localCalls, remoteCalls atomic.Int64
+	encoders := EncoderSet{Default: "local", ByName: map[string]ManagedEncoder{
+		"local":  {Encode: countingEncoder(&localCalls), Settings: EncodeSettings{BatchSize: 10}},
+		"remote": {Encode: countingEncoder(&remoteCalls), Settings: EncodeSettings{BatchSize: 10}},
+	}}
+	m := NewManager(ix, src, encoders, gen)
+
+	started, err := m.TryBuild(context.Background(), BuildRequest{Using: "remote"})
+	require.NoError(t, err)
+	require.True(t, started)
+	assert.Positive(t, remoteCalls.Load(), "build with Using must encode on the named server")
+	assert.Zero(t, localCalls.Load(), "the default server must stay idle")
+
+	started, err = m.TryBuild(context.Background(), BuildRequest{FullRebuild: true})
+	require.NoError(t, err)
+	require.True(t, started)
+	assert.Positive(t, localCalls.Load(), "a build without Using must encode on the default server")
+}
+
+func TestManagerBuildUnknownUsingFailsBeforeStarting(t *testing.T) {
+	ix := openTestIndex(t)
+	src := twoDocSource()
+	gen := fakeGeneration("fake-model")
+	m := NewManager(ix, src, soloEncoders(fakeBuildEncoder()), gen)
+
+	err := m.StartBuild(BuildRequest{Using: "nope"})
+	require.ErrorContains(t, err, `no embeddings server named "nope"`)
+	assert.ErrorIs(t, err, ErrUnknownServer,
+		"callers map unknown-server errors to a client error via the sentinel")
+	assert.False(t, m.Status().Running, "a failed resolve must not leave the manager running")
+
+	started, err := m.TryBuild(context.Background(), BuildRequest{Using: "nope"})
+	require.ErrorContains(t, err, `no embeddings server named "nope"`)
+	assert.ErrorIs(t, err, ErrUnknownServer)
+	assert.False(t, started)
+}
+
+func TestManagerStartBuildSetsRunningAndConcurrentStartReturnsErrBuildRunning(t *testing.T) {
+	ix := openTestIndex(t)
+	src := twoDocSource()
+	gen := fakeGeneration("fake-model")
+	release := make(chan struct{})
+	m := NewManager(ix, src, soloEncoders(blockingEncoder(release)), gen)
+
+	require.NoError(t, m.StartBuild(BuildRequest{}))
+	waitFor(t, func() bool { return m.Status().Running }, "build never reported running")
+
+	err := m.StartBuild(BuildRequest{})
+	assert.ErrorIs(t, err, ErrBuildRunning)
+
+	close(release)
+	waitFor(t, func() bool { return !m.Status().Running }, "build never finished")
+	assert.Empty(t, m.Status().LastError)
+}
+
+func TestManagerTryBuildReturnsFalseWhileRunning(t *testing.T) {
+	ix := openTestIndex(t)
+	src := twoDocSource()
+	gen := fakeGeneration("fake-model")
+	release := make(chan struct{})
+	m := NewManager(ix, src, soloEncoders(blockingEncoder(release)), gen)
+
+	require.NoError(t, m.StartBuild(BuildRequest{}))
+	waitFor(t, func() bool { return m.Status().Running }, "build never reported running")
+
+	started, err := m.TryBuild(context.Background(), BuildRequest{})
+	assert.False(t, started, "TryBuild must drop rather than queue while running")
+	assert.NoError(t, err)
+
+	close(release)
+	waitFor(t, func() bool { return !m.Status().Running }, "build never finished")
+}
+
+func TestManagerStatusTransitionsToLastResultOnCompletion(t *testing.T) {
+	ix := openTestIndex(t)
+	src := twoDocSource()
+	gen := fakeGeneration("fake-model")
+	m := NewManager(ix, src, soloEncoders(fakeBuildEncoder()), gen)
+
+	require.NoError(t, m.StartBuild(BuildRequest{}))
+	waitFor(t, func() bool { return !m.Status().Running }, "build never finished")
+
+	status := m.Status()
+	require.NotNil(t, status.LastResult)
+	assert.Equal(t, gen.Fingerprint(), status.LastResult.Fingerprint)
+	assert.True(t, status.LastResult.Activated)
+	assert.Empty(t, status.LastError)
+}
+
+func TestManagerStatusSetsLastErrorOnEncoderFailure(t *testing.T) {
+	ix := openTestIndex(t)
+	src := twoDocSource()
+	gen := fakeGeneration("fake-model")
+	failingEncoder := func(_ context.Context, _ []string) ([][]float32, error) {
+		return nil, fmt.Errorf("encoder rejected input")
+	}
+	m := NewManager(ix, src, soloEncoders(failingEncoder), gen)
+
+	require.NoError(t, m.StartBuild(BuildRequest{}))
+	waitFor(t, func() bool { return !m.Status().Running }, "build never finished")
+
+	status := m.Status()
+	assert.Contains(t, status.LastError, "encoder rejected input")
+	assert.Nil(t, status.LastResult)
+}
+
+func TestManagerGenerationsDelegatesToIndex(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	src := twoDocSource()
+	gen := fakeGeneration("fake-model")
+	m := NewManager(ix, src, soloEncoders(fakeBuildEncoder()), gen)
+
+	_, err := m.TryBuild(ctx, BuildRequest{})
+	require.NoError(t, err)
+
+	want, err := ix.Generations(ctx)
+	require.NoError(t, err)
+	got, err := m.Generations(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+}
+
+func TestManagerActivateForceRefusalMatrix(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	src := twoDocSource()
+	genA := fakeGeneration("model-a")
+	m := NewManager(ix, src, soloEncoders(fakeBuildEncoder()), genA)
+
+	_, err := m.TryBuild(ctx, BuildRequest{})
+	require.NoError(t, err, "genA becomes active")
+
+	genB := fakeGeneration("model-b")
+	fpB, err := ix.EnsureGeneration(ctx, genB, sqlitevec.StateBuilding)
+	require.NoError(t, err, "genB registered but never filled, so it has Missing > 0")
+	idB := generationIDByFingerprint(t, ix, fpB)
+
+	err = m.Activate(ctx, idB, false)
+	require.Error(t, err, "refuses activation of an incompletely embedded generation")
+	assert.Contains(t, err.Error(), fmt.Sprintf("generation %d still has", idB))
+	assert.Contains(t, err.Error(), "use --force")
+
+	require.NoError(t, m.Activate(ctx, idB, true), "force overrides the refusal")
+
+	active, ok, err := ix.ActiveFingerprint(ctx)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, fpB, active, "genB is now active")
+
+	idA := generationIDByFingerprint(t, ix, genA.Fingerprint())
+	gens, err := ix.Generations(ctx)
+	require.NoError(t, err)
+	var stateA string
+	for _, g := range gens {
+		if g.ID == idA {
+			stateA = g.State
+		}
+	}
+	assert.Equal(t, string(sqlitevec.StateRetired), stateA, "activating genB retires the old active genA")
+}
+
+func TestManagerRetireRefusesActiveGenerationWithoutForce(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	src := twoDocSource()
+	gen := fakeGeneration("fake-model")
+	m := NewManager(ix, src, soloEncoders(fakeBuildEncoder()), gen)
+
+	_, err := m.TryBuild(ctx, BuildRequest{})
+	require.NoError(t, err)
+	id := generationIDByFingerprint(t, ix, gen.Fingerprint())
+
+	err = m.Retire(ctx, id, false)
+	require.Error(t, err, "refuses retiring the active generation without force")
+
+	require.NoError(t, m.Retire(ctx, id, true), "force overrides the refusal")
+
+	gens, err := ix.Generations(ctx)
+	require.NoError(t, err)
+	require.Len(t, gens, 1)
+	assert.Equal(t, string(sqlitevec.StateRetired), gens[0].State)
+}
+
+// countActiveGenerations returns how many generations are currently in the
+// active state, the invariant concurrent Activate calls must preserve (== 1
+// once any generation has been activated).
+func countActiveGenerations(t *testing.T, ix *Index) int {
+	t.Helper()
+	gens, err := ix.Generations(context.Background())
+	require.NoError(t, err)
+	active := 0
+	for _, g := range gens {
+		if g.State == string(sqlitevec.StateActive) {
+			active++
+		}
+	}
+	return active
+}
+
+// TestManagerConcurrentActivateNeverLeavesTwoActive guards the
+// retire-then-activate invariant: Activate must use the single-transaction
+// activateGeneration primitive and serialize against other Activate calls,
+// or two racing Activates on different generations can interleave their
+// retire and activate steps and leave both generations active.
+func TestManagerConcurrentActivateNeverLeavesTwoActive(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	src := twoDocSource()
+	genA := fakeGeneration("model-a")
+	genB := fakeGeneration("model-b")
+	m := NewManager(ix, src, soloEncoders(fakeBuildEncoder()), genA)
+
+	_, err := ix.Build(ctx, src, fakeBuildEncoder(), genA, BuildOptions{})
+	require.NoError(t, err)
+	_, err = ix.Build(ctx, src, fakeBuildEncoder(), genB, BuildOptions{})
+	require.NoError(t, err, "both generations fully embedded; genB active, genA retired")
+
+	idA := generationIDByFingerprint(t, ix, genA.Fingerprint())
+	idB := generationIDByFingerprint(t, ix, genB.Fingerprint())
+
+	for i := range 25 {
+		var wg sync.WaitGroup
+		var errA, errB error
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			errA = m.Activate(ctx, idA, false)
+		}()
+		go func() {
+			defer wg.Done()
+			errB = m.Activate(ctx, idB, false)
+		}()
+		wg.Wait()
+		require.NoError(t, errA, "iteration %d", i)
+		require.NoError(t, errB, "iteration %d", i)
+		require.Equal(t, 1, countActiveGenerations(t, ix),
+			"iteration %d: exactly one generation must be active after racing Activates", i)
+	}
+}
+
+// TestManagerStartBuildRecoversPanickedEncoder guards the daemon against a
+// panic in the caller-supplied encoder (a network client): StartBuild's
+// detached goroutine must recover, record the panic in LastError, and clear
+// the running state instead of crashing the process.
+func TestManagerStartBuildRecoversPanickedEncoder(t *testing.T) {
+	ix := openTestIndex(t)
+	src := twoDocSource()
+	gen := fakeGeneration("fake-model")
+	panickingEncoder := func(_ context.Context, _ []string) ([][]float32, error) {
+		panic("encoder exploded")
+	}
+	m := NewManager(ix, src, soloEncoders(panickingEncoder), gen)
+
+	require.NoError(t, m.StartBuild(BuildRequest{}))
+	waitFor(t, func() bool { return !m.Status().Running }, "build never finished after panic")
+
+	status := m.Status()
+	assert.Contains(t, status.LastError, "panicked")
+	assert.Contains(t, status.LastError, "encoder exploded")
+	assert.Nil(t, status.LastResult)
+
+	require.NoError(t, m.StartBuild(BuildRequest{}),
+		"manager must accept a new build after a panicked one")
+	waitFor(t, func() bool { return !m.Status().Running }, "second build never finished")
+}
+
+// TestManagerActivateAndRetireUnknownIDPropagateNotFound guards the HTTP
+// route mapping (embeddingsActionError in internal/server): Activate and
+// Retire must propagate GenerationByID's ErrGenerationNotFound unwrapped
+// enough for errors.Is to still match it, rather than losing the sentinel
+// on the way up.
+func TestManagerActivateAndRetireUnknownIDPropagateNotFound(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	src := twoDocSource()
+	gen := fakeGeneration("fake-model")
+	m := NewManager(ix, src, soloEncoders(fakeBuildEncoder()), gen)
+
+	err := m.Activate(ctx, 999, false)
+	assert.ErrorIs(t, err, ErrGenerationNotFound)
+
+	err = m.Retire(ctx, 999, false)
+	assert.ErrorIs(t, err, ErrGenerationNotFound)
+}
+
+func TestManagerActivateAndRetireRefuseWhileBuildRunning(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	src := twoDocSource()
+	gen := fakeGeneration("fake-model")
+	release := make(chan struct{})
+	m := NewManager(ix, src, soloEncoders(blockingEncoder(release)), gen)
+
+	require.NoError(t, m.StartBuild(BuildRequest{}))
+	waitFor(t, func() bool { return m.Status().Running }, "build never reported running")
+
+	err := m.Activate(ctx, 1, true)
+	assert.ErrorIs(t, err, ErrBuildRunning)
+
+	err = m.Retire(ctx, 1, true)
+	assert.ErrorIs(t, err, ErrBuildRunning)
+
+	close(release)
+	waitFor(t, func() bool { return !m.Status().Running }, "build never finished")
+}

@@ -94,17 +94,29 @@ describe("selectionFromWindow", () => {
     ).toEqual({ mode: "relative", days: 0 });
   });
 
+  it("reconstructs a pinned calendar week from its fixed bounds", () => {
+    expect(
+      selectionFromWindow({
+        isPinned: true,
+        windowDays: 0,
+        from: "2026-06-15",
+        to: "2026-06-21",
+        earliestSession: "2024-02-03T00:00:00Z",
+      }),
+    ).toEqual({ mode: "calendar", unit: "week", anchor: "2026-06-15" });
+  });
+
   it("shows any other pinned range as custom", () => {
     vi.setSystemTime(new Date("2026-04-25T12:00:00Z"));
     expect(
       selectionFromWindow({
         isPinned: true,
         windowDays: 0,
-        from: "2026-01-01",
+        from: "2026-01-02",
         to: "2026-01-31",
         earliestSession: "2024-02-03T00:00:00Z",
       }),
-    ).toEqual({ mode: "custom", from: "2026-01-01", to: "2026-01-31" });
+    ).toEqual({ mode: "custom", from: "2026-01-02", to: "2026-01-31" });
   });
 });
 
@@ -114,6 +126,14 @@ describe("selectionFromRange", () => {
     expect(selectionFromRange("2025-04-26", "2026-04-25")).toEqual({
       mode: "relative",
       days: 365,
+    });
+  });
+
+  it("reconstructs a calendar month from exact month bounds", () => {
+    expect(selectionFromRange("2026-02-01", "2026-02-28")).toEqual({
+      mode: "calendar",
+      unit: "month",
+      anchor: "2026-02-01",
     });
   });
 

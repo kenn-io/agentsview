@@ -966,6 +966,14 @@ func assertDuckAnalyticsToolsModelFilterCountsOnlyMatchingToolCalls(
 	assert.Equal(t, 1, byCategory["Read"], "Read")
 	assert.Equal(t, 1, byCategory["Skill"], "Skill")
 	assert.Zero(t, byCategory["Grep"], "Grep")
+
+	byTool := map[string]int{}
+	for _, row := range resp.ByTool {
+		byTool[row.ToolName] = row.CallCount
+	}
+	assert.Equal(t, 1, byTool["Read"], "Read tool")
+	assert.Equal(t, 1, byTool["Skill"], "Skill tool")
+	assert.Zero(t, byTool["Grep"], "Grep tool")
 }
 
 func TestDuckAnalyticsToolsModelAndHourFilterCountsOnlyMatchingHourToolCalls(
@@ -1006,6 +1014,10 @@ func TestDuckAnalyticsToolsModelAndHourFilterCountsOnlyMatchingHourToolCalls(
 	require.Len(t, resp.ByCategory, 1, "len(ByCategory)")
 	assert.Equal(t, "Grep", resp.ByCategory[0].Category, "Category")
 	assert.Equal(t, 1, resp.ByCategory[0].Count, "Count")
+	require.Len(t, resp.ByTool, 1, "len(ByTool)")
+	assert.Equal(t, "Grep", resp.ByTool[0].ToolName, "ToolName")
+	assert.Equal(t, 1, resp.ByTool[0].CallCount, "CallCount")
+	assert.Equal(t, 1, resp.ByTool[0].SessionCount, "SessionCount")
 }
 
 func assertDuckAnalyticsSkillsModelFilterCountsOnlyMatchingSkillCalls(

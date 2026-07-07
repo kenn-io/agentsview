@@ -378,6 +378,7 @@ func TestLoadPFlags_AppliesExplicitFlags(t *testing.T) {
 }
 
 func TestLoad_NilFlagSet(t *testing.T) {
+	setupTestEnv(t)
 	cfg, err := Load(nil)
 	require.NoError(t, err)
 
@@ -422,6 +423,26 @@ func TestLoad_HostFlagOverridesConfigFile(t *testing.T) {
 
 	assert.Equal(t, "192.168.1.5", cfg.Host)
 	assert.True(t, cfg.HostExplicit)
+}
+
+func TestLoad_PortFromConfigFile(t *testing.T) {
+	cfg := loadMinimalWithConfig(t, map[string]any{
+		"port": 7357,
+	})
+
+	assert.Equal(t, 7357, cfg.Port)
+}
+
+func TestLoad_PortFlagOverridesConfigFile(t *testing.T) {
+	tmp := setupTestEnv(t)
+	writeConfig(t, tmp, map[string]any{
+		"port": 7357,
+	})
+
+	cfg, err := loadConfigFromFlags(t, "-port", "9090")
+	require.NoError(t, err)
+
+	assert.Equal(t, 9090, cfg.Port)
 }
 
 func TestLoad_PublicOriginsFromConfigFile(t *testing.T) {

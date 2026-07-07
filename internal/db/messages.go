@@ -8,9 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -179,6 +181,165 @@ func (db *DB) GetMessages(
 	return msgs, nil
 }
 
+// MessageWindow parameterises GetMessagesWindow. Exactly one retrieval
+// mode: Around non-nil = symmetric window; otherwise linear from/limit.
+type MessageWindow struct {
+	From   *int
+	Limit  int
+	Asc    bool
+	Around *int
+	Before int // used only with Around; default handled by caller
+	After  int
+	Roles  []string // empty = all roles
+}
+
+// GetMessagesWindow returns messages for a session using either linear
+// pagination (mirroring GetMessages, optionally role-filtered) or a
+// symmetric window centered on an ordinal (Around/Before/After). Around
+// mode always includes the anchor row even when its own role is excluded
+// by Roles; the before/after counts are taken after applying the role
+// filter, so they count role-matching messages rather than raw ordinal
+// distance from the anchor.
+func (db *DB) GetMessagesWindow(
+	ctx context.Context, sessionID string, w MessageWindow,
+) ([]Message, error) {
+	if w.Around != nil {
+		return db.getMessagesAroundAnchor(ctx, sessionID, w)
+	}
+	from := 0
+	if w.From != nil {
+		from = *w.From
+	}
+	if len(w.Roles) == 0 {
+		return db.GetMessages(ctx, sessionID, from, w.Limit, w.Asc)
+	}
+	return db.getMessagesLinearRoleFiltered(
+		ctx, sessionID, from, w.Limit, w.Asc, w.Roles,
+	)
+}
+
+// getMessagesLinearRoleFiltered is GetMessages plus an "AND role IN (...)"
+// predicate, used when MessageWindow.Roles is non-empty.
+func (db *DB) getMessagesLinearRoleFiltered(
+	ctx context.Context,
+	sessionID string, from, limit int, asc bool, roles []string,
+) ([]Message, error) {
+	if limit <= 0 || limit > MaxMessageLimit {
+		limit = DefaultMessageLimit
+	}
+	dir := "ASC"
+	op := ">="
+	if !asc {
+		dir = "DESC"
+		op = "<="
+	}
+	roleClause, roleArgs := roleFilterClause(roles)
+	query := fmt.Sprintf(`
+		SELECT %s
+		FROM messages
+		WHERE session_id = ? AND ordinal %s ?%s
+		ORDER BY ordinal %s
+		LIMIT ?`, selectMessageCols, op, roleClause, dir)
+	args := append([]any{sessionID, from}, roleArgs...)
+	args = append(args, limit)
+
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying role-filtered messages: %w", err)
+	}
+	defer rows.Close()
+	msgs, err := scanMessages(rows)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.attachToolCalls(ctx, msgs); err != nil {
+		return nil, err
+	}
+	return msgs, nil
+}
+
+// getMessagesAroundAnchor implements MessageWindow's Around mode: three
+// queries (before/anchor/after) merged into one ascending slice. The
+// anchor query has no role predicate so the anchor row is always present;
+// before/after apply the role filter (when set) before taking Before/After
+// rows, so the counts reflect role-matching messages, not raw ordinals.
+func (db *DB) getMessagesAroundAnchor(
+	ctx context.Context, sessionID string, w MessageWindow,
+) ([]Message, error) {
+	anchor := *w.Around
+	beforeLimit := max(w.Before, 0)
+	afterLimit := max(w.After, 0)
+	roleClause, roleArgs := roleFilterClause(w.Roles)
+
+	beforeQuery := fmt.Sprintf(`
+		SELECT %s FROM messages
+		WHERE session_id = ? AND ordinal < ?%s
+		ORDER BY ordinal DESC LIMIT ?`, selectMessageCols, roleClause)
+	beforeArgs := append([]any{sessionID, anchor}, roleArgs...)
+	beforeArgs = append(beforeArgs, beforeLimit)
+	before, err := db.queryMessageRows(ctx, beforeQuery, beforeArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("querying before-window messages: %w", err)
+	}
+	slices.Reverse(before)
+
+	anchorQuery := fmt.Sprintf(`
+		SELECT %s FROM messages WHERE session_id = ? AND ordinal = ?`,
+		selectMessageCols)
+	anchorMsgs, err := db.queryMessageRows(ctx, anchorQuery, sessionID, anchor)
+	if err != nil {
+		return nil, fmt.Errorf("querying anchor message: %w", err)
+	}
+
+	afterQuery := fmt.Sprintf(`
+		SELECT %s FROM messages
+		WHERE session_id = ? AND ordinal > ?%s
+		ORDER BY ordinal ASC LIMIT ?`, selectMessageCols, roleClause)
+	afterArgs := append([]any{sessionID, anchor}, roleArgs...)
+	afterArgs = append(afterArgs, afterLimit)
+	after, err := db.queryMessageRows(ctx, afterQuery, afterArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("querying after-window messages: %w", err)
+	}
+
+	msgs := make([]Message, 0, len(before)+len(anchorMsgs)+len(after))
+	msgs = append(msgs, before...)
+	msgs = append(msgs, anchorMsgs...)
+	msgs = append(msgs, after...)
+	if err := db.attachToolCalls(ctx, msgs); err != nil {
+		return nil, err
+	}
+	return msgs, nil
+}
+
+// queryMessageRows runs query and scans the resulting message rows,
+// without attaching tool calls (callers batch that across the merged set).
+func (db *DB) queryMessageRows(
+	ctx context.Context, query string, args ...any,
+) ([]Message, error) {
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMessages(rows)
+}
+
+// roleFilterClause returns an "AND role IN (...)" clause and its bind
+// args for the given roles, or ("", nil) when roles is empty.
+func roleFilterClause(roles []string) (string, []any) {
+	if len(roles) == 0 {
+		return "", nil
+	}
+	placeholders := make([]string, len(roles))
+	args := make([]any, len(roles))
+	for i, r := range roles {
+		placeholders[i] = "?"
+		args[i] = r
+	}
+	return " AND role IN (" + strings.Join(placeholders, ",") + ")", args
+}
+
 // GetAllMessages returns all messages for a session ordered by ordinal.
 func (db *DB) GetAllMessages(
 	ctx context.Context, sessionID string,
@@ -200,6 +361,327 @@ func (db *DB) GetAllMessages(
 		return nil, err
 	}
 	return msgs, nil
+}
+
+// EmbeddableUnit is one embedding document: a single embeddable user
+// message, or a run of contiguous embeddable assistant messages.
+type EmbeddableUnit struct {
+	SessionID   string
+	Kind        string // "user" | "run"
+	SourceUUID  string // first member's source_uuid ("" legacy)
+	Ordinal     int    // first member's ordinal (ordinal_start)
+	OrdinalEnd  int    // last member's ordinal (== Ordinal for user docs)
+	Subordinate bool
+	Content     string       // members joined with "\n\n"
+	Offsets     []UnitOffset // one per member; nil for user docs
+}
+
+// UnitOffset locates one member message inside a run's joined content.
+type UnitOffset struct {
+	Ordinal   int `json:"o"`
+	RuneStart int `json:"r"`
+	ByteStart int `json:"b"`
+}
+
+// ScanEmbeddableUnits streams the embeddable universe — user/assistant
+// messages that are not is_system and not system-prefixed (per
+// SystemPrefixSQL), from non-trashed sessions — reducing contiguous runs of
+// embeddable assistant messages between embeddable user messages into single
+// EmbeddableUnit "run" documents; each embeddable user message is emitted as
+// its own "user" unit. Units are emitted in (session_id, ordinal) order of
+// their first member, closing any open run whenever an embeddable user row,
+// a session boundary, or an is_sidechain transition is reached, and finally
+// at the end of the scan.
+//
+// since != "" restricts the scan to sessions with ended_at >= since (RFC3339
+// or RFC3339Nano) for incremental refresh, comparing parsed timestamps
+// rather than raw strings via SQLite's datetime() so mixed fractional-second
+// precision doesn't produce a wrong ordering (see optionalSinceClause); ""
+// scans every session. includeAutomated=false additionally excludes
+// automated sessions (sessions.is_automated = 1) using the exact predicate
+// sessionFilterPredicates' ExcludeAutomated scope applies
+// (automatedScopePredicate("human", ...)), so the embedding index's default
+// scope matches session search's default exclusion of automated sessions.
+// maxEnded returns the maximum sessions.ended_at seen across the scanned
+// rows (as its original raw string), or "" when the scan produced no rows.
+//
+// Because the SQL predicates already exclude non-embeddable user rows
+// (is_system, system-prefixed) from the stream entirely, "does this row
+// split the run" has no separate detector to get wrong: an embeddable user
+// row always closes any open run and emits its own unit, and an excluded
+// user row is simply invisible to the reducer, which is exactly the desired
+// "does not split" behavior.
+//
+// A unit is Subordinate when its session is a subagent or fork session, or
+// has a parent session and is not an explicit continuation of it, or (for a
+// run) its members are is_sidechain -- a sidechain transition always closes
+// the run first, so every member of one run shares a single is_sidechain
+// value.
+func (db *DB) ScanEmbeddableUnits(
+	ctx context.Context, since string, includeAutomated bool,
+	fn func(EmbeddableUnit) error,
+) (maxEnded string, err error) {
+	preds := []string{
+		"m.role IN ('user', 'assistant')",
+		"m.is_system = 0",
+		"s.deleted_at IS NULL",
+		SystemPrefixSQL("m.content", "m.role"),
+	}
+	if !includeAutomated {
+		preds = append(preds, automatedScopePredicate("human", "s.is_automated"))
+	}
+
+	query := `
+		SELECT m.session_id, m.role, m.source_uuid, m.ordinal, m.content,
+		       m.is_sidechain, s.relationship_type, s.parent_session_id,
+		       s.ended_at
+		FROM messages m
+		JOIN sessions s ON s.id = m.session_id
+		WHERE ` + strings.Join(preds, "\n\t\t  AND ") + `
+		` + optionalSinceClause(since) + `
+		ORDER BY m.session_id, m.ordinal`
+
+	args := []any{}
+	if since != "" {
+		args = append(args, since)
+	}
+
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return "", fmt.Errorf("scanning embeddable units: %w", err)
+	}
+	defer rows.Close()
+
+	red := &unitReducer{fn: fn}
+	maxEnded, err = reduceUnitRows(rows, red)
+	if err != nil {
+		return "", err
+	}
+	if err := red.finish(); err != nil {
+		return "", err
+	}
+	return maxEnded, nil
+}
+
+// reduceUnitRows scans every row of an open ScanEmbeddableUnits query into
+// red, tracking the chronologically latest sessions.ended_at seen across
+// them. It does not flush red's final open run -- callers must call
+// red.finish() once scanning completes.
+func reduceUnitRows(rows *sql.Rows, red *unitReducer) (maxEnded string, err error) {
+	for rows.Next() {
+		var row unitRow
+		var relationshipType string
+		var parentSessionID, ended sql.NullString
+		if err := rows.Scan(
+			&row.sessionID, &row.role, &row.sourceUUID, &row.ordinal,
+			&row.content, &row.sidechain, &relationshipType,
+			&parentSessionID, &ended,
+		); err != nil {
+			return "", fmt.Errorf("scanning embeddable unit row: %w", err)
+		}
+		if ended.Valid && endedAfter(ended.String, maxEnded) {
+			maxEnded = ended.String
+		}
+		row.subordinateSession = isSubordinateSession(relationshipType, parentSessionID)
+		if err := red.push(row); err != nil {
+			return "", err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("iterating embeddable units: %w", err)
+	}
+	return maxEnded, nil
+}
+
+// isSubordinateSession reports whether every unit produced from a session is
+// subordinate: a subagent or fork session, or any session with a parent that
+// is not an explicit continuation of it. A session with no parent (and not
+// itself a subagent/fork) is top-level.
+func isSubordinateSession(
+	relationshipType string, parentSessionID sql.NullString,
+) bool {
+	if relationshipType == "subagent" || relationshipType == "fork" {
+		return true
+	}
+	hasParent := parentSessionID.Valid && parentSessionID.String != ""
+	return hasParent && relationshipType != "continuation"
+}
+
+// unitRow is one scanned ScanEmbeddableUnits row, carrying the
+// session-level subordinate classification alongside the per-message fields
+// needed to build either a user doc or a run member.
+type unitRow struct {
+	sessionID          string
+	role               string
+	sourceUUID         string
+	ordinal            int
+	content            string
+	sidechain          bool
+	subordinateSession bool
+}
+
+// unitReducer accumulates ScanEmbeddableUnits rows (already ordered by
+// session_id, ordinal) into EmbeddableUnit documents, emitting each through
+// fn as soon as it closes. Rows must be pushed in stream order; finish must
+// be called once after the last row to flush any run still open at the end
+// of the scan.
+type unitReducer struct {
+	fn func(EmbeddableUnit) error
+
+	haveSession bool
+	sessionID   string
+	run         []unitRow
+}
+
+// push feeds one row into the reducer, emitting a user unit immediately or
+// accumulating an assistant row into the open run. It closes any open run
+// first whenever the row starts a new session, is a user row, or (for an
+// assistant row) has an is_sidechain value different from the open run's.
+func (r *unitReducer) push(row unitRow) error {
+	newSession := r.haveSession && row.sessionID != r.sessionID
+	if err := r.closeRunIf(newSession); err != nil {
+		return err
+	}
+	r.haveSession = true
+	r.sessionID = row.sessionID
+
+	if row.role == "user" {
+		if err := r.closeRun(); err != nil {
+			return err
+		}
+		return r.fn(userUnit(row))
+	}
+
+	sidechainFlip := len(r.run) > 0 && row.sidechain != r.run[0].sidechain
+	if err := r.closeRunIf(sidechainFlip); err != nil {
+		return err
+	}
+	r.run = append(r.run, row)
+	return nil
+}
+
+// closeRunIf closes the open run when cond is true; it is a no-op otherwise.
+func (r *unitReducer) closeRunIf(cond bool) error {
+	if !cond {
+		return nil
+	}
+	return r.closeRun()
+}
+
+// finish flushes any run left open at the end of the scan.
+func (r *unitReducer) finish() error {
+	return r.closeRun()
+}
+
+func (r *unitReducer) closeRun() error {
+	if len(r.run) == 0 {
+		return nil
+	}
+	unit := runUnit(r.run)
+	r.run = nil
+	return r.fn(unit)
+}
+
+// userUnit builds the single-member "user" unit for an embeddable user row.
+func userUnit(row unitRow) EmbeddableUnit {
+	return EmbeddableUnit{
+		SessionID:   row.sessionID,
+		Kind:        "user",
+		SourceUUID:  row.sourceUUID,
+		Ordinal:     row.ordinal,
+		OrdinalEnd:  row.ordinal,
+		Subordinate: row.subordinateSession || row.sidechain,
+		Content:     row.content,
+	}
+}
+
+// runUnit joins a closed run's members with "\n\n" into one "run" unit,
+// recording each member's rune/byte offset into the joined content. The
+// separator is ASCII, so its rune and byte lengths are equal.
+func runUnit(members []unitRow) EmbeddableUnit {
+	const sep = "\n\n"
+	first := members[0]
+	var b strings.Builder
+	offsets := make([]UnitOffset, len(members))
+	runeStart, byteStart := 0, 0
+	for i, m := range members {
+		if i > 0 {
+			b.WriteString(sep)
+			runeStart += len(sep)
+			byteStart += len(sep)
+		}
+		offsets[i] = UnitOffset{
+			Ordinal: m.ordinal, RuneStart: runeStart, ByteStart: byteStart,
+		}
+		b.WriteString(m.content)
+		runeStart += utf8.RuneCountInString(m.content)
+		byteStart += len(m.content)
+	}
+	return EmbeddableUnit{
+		SessionID:   first.sessionID,
+		Kind:        "run",
+		SourceUUID:  first.sourceUUID,
+		Ordinal:     first.ordinal,
+		OrdinalEnd:  members[len(members)-1].ordinal,
+		Subordinate: first.subordinateSession || first.sidechain,
+		Content:     b.String(),
+		Offsets:     offsets,
+	}
+}
+
+// optionalSinceClause returns the AND clause restricting the embeddable scan
+// to sessions with ended_at >= since (or ended_at IS NULL), or "" when since
+// is unset. It compares via SQLite's datetime() rather than raw string
+// ordering: RFC3339Nano's variable fractional-second precision (e.g.
+// ended_at values are sometimes stored with milliseconds, sometimes
+// without) makes lexicographic comparison wrong, since "...00.123Z" sorts
+// before "...00Z". datetime() truncates to second granularity, so a session
+// whose true ended_at is a few hundred milliseconds before since may be
+// re-scanned; that overlap is harmless because Refresh's upserts are
+// idempotent.
+//
+// A NULL ended_at (a session still in progress, or one whose parser never
+// set it) always matches: excluding it would make its messages invisible to
+// every incremental scan until a full (since="") rebuild happens to catch
+// it, even though re-scanning an unchanged session is just a cheap no-op
+// mirror upsert. A legacy empty-string ended_at (the pre-NULLIF-migration
+// "unset" sentinel this repo's other read queries guard against, e.g.
+// sessions.go's COALESCE(NULLIF(ended_at, ""), ...) chains) must be treated
+// the same way via NULLIF(s.ended_at, ""): without it, "" is neither NULL
+// nor >= since, so a changed legacy session would never be rescanned again
+// once any watermark exists.
+func optionalSinceClause(since string) string {
+	if since == "" {
+		return ""
+	}
+	return "AND (NULLIF(s.ended_at, '') IS NULL OR " +
+		"datetime(NULLIF(s.ended_at, '')) >= datetime(?))"
+}
+
+// endedAfter reports whether candidate is chronologically after current,
+// comparing parsed RFC3339/RFC3339Nano timestamps rather than raw strings
+// so variable fractional-second precision can't produce a wrong ordering.
+// An empty current is always considered older. Falls back to a
+// lexicographic comparison if either value fails to parse.
+func endedAfter(candidate, current string) bool {
+	if current == "" {
+		return true
+	}
+	c, errC := parseEndedAt(candidate)
+	cur, errCur := parseEndedAt(current)
+	if errC != nil || errCur != nil {
+		return candidate > current
+	}
+	return c.After(cur)
+}
+
+// parseEndedAt parses an ended_at value, trying RFC3339Nano (which also
+// accepts plain RFC3339) first and falling back to strict RFC3339.
+func parseEndedAt(s string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t, nil
+	}
+	return time.Parse(time.RFC3339, s)
 }
 
 // insertMessagesTx batch-inserts messages within an existing

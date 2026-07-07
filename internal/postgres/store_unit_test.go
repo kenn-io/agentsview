@@ -18,6 +18,61 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
+// TestStoreHasSemanticFalse pins that the PostgreSQL store reports no
+// semantic search capability until it gets its own VectorSearcher seam.
+func TestStoreHasSemanticFalse(t *testing.T) {
+	s := &Store{}
+	assert.False(t, s.HasSemantic(), "PostgreSQL HasSemantic")
+}
+
+// TestStoreSearchContentSemanticModesUnavailable pins that "semantic" and
+// "hybrid" are rejected with db.ErrSemanticUnavailable before any query runs
+// -- a zero-value Store (no live *sql.DB) is enough to prove that.
+func TestStoreSearchContentSemanticModesUnavailable(t *testing.T) {
+	s := &Store{}
+	for _, mode := range []string{"semantic", "hybrid"} {
+		_, err := s.SearchContent(context.Background(),
+			db.ContentSearchFilter{Pattern: "x", Mode: mode})
+		require.Error(t, err, "mode %q", mode)
+		assert.True(t, errors.Is(err, db.ErrSemanticUnavailable),
+			"mode %q: want ErrSemanticUnavailable, got %v", mode, err)
+	}
+}
+
+// TestStoreSearchContentSemanticInvalidInputReturns400Before501 pins backend
+// parity (AGENTS.md): an invalid semantic/hybrid request -- cursor pagination
+// or a non-messages source -- must return the same *db.SearchInputError
+// SQLite's ValidateSemanticFilter returns, not db.ErrSemanticUnavailable, even
+// though PostgreSQL has no VectorSearcher seam and would otherwise report the
+// capability gate for any request in these modes.
+func TestStoreSearchContentSemanticInvalidInputReturns400Before501(t *testing.T) {
+	s := &Store{}
+	cases := []struct {
+		name string
+		f    db.ContentSearchFilter
+	}{
+		{"cursor rejected", db.ContentSearchFilter{Pattern: "x", Cursor: 1}},
+		{"non-messages source rejected", db.ContentSearchFilter{
+			Pattern: "x", Sources: []string{"tool_input"},
+		}},
+	}
+	for _, mode := range []string{"semantic", "hybrid"} {
+		for _, tc := range cases {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				f := tc.f
+				f.Mode = mode
+				_, err := s.SearchContent(context.Background(), f)
+				require.Error(t, err)
+				var inputErr *db.SearchInputError
+				assert.True(t, errors.As(err, &inputErr),
+					"expected *db.SearchInputError, got %T: %v", err, err)
+				assert.False(t, errors.Is(err, db.ErrSemanticUnavailable),
+					"invalid input must not be masked as ErrSemanticUnavailable")
+			})
+		}
+	}
+}
+
 // TestStripFTSQuotes pins the de-quoting behavior the PostgreSQL Search path
 // relies on. The canonical implementation lives in the db package and is
 // shared with the SQLite and HTTP paths so the backends stay in parity.

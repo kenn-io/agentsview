@@ -997,6 +997,58 @@ func pgSessionRowCost(
 	return cost, true, true
 }
 
+func pgSessionUsageBreakdownEntry(
+	r pgUsageScanRow,
+	ordinal int,
+	cost float64,
+	priced bool,
+) db.SessionUsageBreakdownEntry {
+	var inTok, outTok, crTok, rdTok int
+	if r.usageSource == "message" {
+		usage := gjson.Parse(r.tokenJSON)
+		inTok = pgTokenJSONCount(usage, "input_tokens")
+		outTok = pgTokenJSONCount(usage, "output_tokens")
+		crTok = pgTokenJSONCount(usage, "cache_creation_input_tokens")
+		rdTok = pgTokenJSONCount(usage, "cache_read_input_tokens")
+	} else {
+		inTok, outTok, crTok, rdTok = pgUsageEventRowTokens(
+			r.usageSource,
+			r.inputTokens, r.outputTokens,
+			r.cacheCreationInputTokens, r.cacheReadInputTokens)
+	}
+	entry := db.SessionUsageBreakdownEntry{
+		Ordinal:                  ordinal,
+		Source:                   r.usageSource,
+		Label:                    pgSessionUsageBreakdownLabel(r),
+		Timestamp:                startedAtString(r.ts),
+		Model:                    r.model,
+		InputTokens:              inTok,
+		OutputTokens:             outTok,
+		CacheCreationInputTokens: crTok,
+		CacheReadInputTokens:     rdTok,
+		CostUSD:                  cost,
+		HasCost:                  priced,
+	}
+	if r.messageOrdinal.Valid {
+		messageOrdinal := int(r.messageOrdinal.Int64)
+		entry.MessageOrdinal = &messageOrdinal
+	}
+	return entry
+}
+
+func pgSessionUsageBreakdownLabel(r pgUsageScanRow) string {
+	if r.messageOrdinal.Valid {
+		if r.usageSource == "message" {
+			return fmt.Sprintf("Prompt %d", r.messageOrdinal.Int64+1)
+		}
+		return fmt.Sprintf("Step %d", r.messageOrdinal.Int64+1)
+	}
+	if r.usageSource != "" {
+		return r.usageSource
+	}
+	return "usage"
+}
+
 func usageDate(ts sql.NullTime, loc *time.Location) string {
 	if !ts.Valid {
 		return ""
@@ -1064,9 +1116,11 @@ WHERE id IN (` + strings.Join(placeholders, ",") + `)`
 }
 
 // GetSessionUsage returns one session's token totals and cost
-// estimate from the PostgreSQL session store.
+// estimate from the PostgreSQL session store. BreakdownCount is
+// always populated; per-row Breakdown entries are built only when
+// includeBreakdown is true.
 func (s *Store) GetSessionUsage(
-	ctx context.Context, sessionID string,
+	ctx context.Context, sessionID string, includeBreakdown bool,
 ) (*db.SessionUsage, error) {
 	sess, err := s.GetSession(ctx, sessionID)
 	if err != nil {
@@ -1085,7 +1139,9 @@ func (s *Store) GetSessionUsage(
 	pb := &paramBuilder{}
 	query := pgUsageRowSelect() + " AND u.session_id = " +
 		pb.add(sessionID) + ` ORDER BY u.ts ASC, u.session_id ASC,
-		COALESCE(u.message_ordinal, -1) ASC`
+		COALESCE(u.message_ordinal, -1) ASC,
+		u.usage_source ASC,
+		COALESCE(u.usage_dedup_key, '') ASC`
 	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying pg session usage: %w", err)
@@ -1097,6 +1153,8 @@ func (s *Store) GetSessionUsage(
 	allPriced := true
 	modelsSet := make(map[string]struct{})
 	unpricedSet := make(map[string]struct{})
+	breakdown := make([]db.SessionUsageBreakdownEntry, 0)
+	breakdownCount := 0
 
 	seen := make(map[pgUsageDedupToken]struct{})
 
@@ -1128,6 +1186,11 @@ func (s *Store) GetSessionUsage(
 			allPriced = false
 			unpricedSet[r.model] = struct{}{}
 		}
+		breakdownCount++
+		if includeBreakdown {
+			breakdown = append(breakdown, pgSessionUsageBreakdownEntry(
+				r, breakdownCount, c, priced))
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating pg session usage rows: %w", err)
@@ -1141,8 +1204,10 @@ func (s *Store) GetSessionUsage(
 		PeakContextTokens: sess.PeakContextTokens,
 		HasTokenData: sess.HasTotalOutputTokens ||
 			sess.HasPeakContextTokens,
-		Models:  sortedStringSetKeys(modelsSet),
-		HasCost: contributing && allPriced,
+		Models:         sortedStringSetKeys(modelsSet),
+		HasCost:        contributing && allPriced,
+		BreakdownCount: breakdownCount,
+		Breakdown:      breakdown,
 	}
 	if out.HasCost {
 		out.CostUSD = cost

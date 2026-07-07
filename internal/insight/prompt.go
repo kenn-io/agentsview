@@ -158,7 +158,7 @@ func buildSessionPrompt(
 	if err != nil {
 		return "", fmt.Errorf("getting timing: %w", err)
 	}
-	usage, err := database.GetSessionUsage(ctx, req.SessionID)
+	usage, err := database.GetSessionUsage(ctx, req.SessionID, false)
 	if err != nil {
 		return "", fmt.Errorf("getting usage: %w", err)
 	}
