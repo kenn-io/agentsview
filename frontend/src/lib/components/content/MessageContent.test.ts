@@ -9,7 +9,9 @@ import MessageContent from "./MessageContent.svelte";
 const copyToClipboardMock = vi.hoisted(() =>
   vi.fn().mockResolvedValue(true),
 );
-const renderMermaidMock = vi.hoisted(() => vi.fn());
+const initMermaidRenderingMock = vi.hoisted(() =>
+  vi.fn(() => ({ renderNow: vi.fn(), disconnect: vi.fn() })),
+);
 
 const forkSessionMock = vi.hoisted(() => vi.fn());
 const sessionsState = vi.hoisted(() => ({
@@ -81,8 +83,18 @@ vi.mock("../../utils/clipboard.js", () => ({
   copyToClipboard: copyToClipboardMock,
 }));
 
-vi.mock("../../utils/mermaid.js", () => ({
-  renderMermaid: renderMermaidMock,
+// Stub MermaidBlock's kit-ui boundary: routing (fence -> pre.mermaid block
+// vs CodeBlock) is MessageContent's contract; the real rendering pipeline
+// is covered in MermaidBlock.svelte.test.ts.
+vi.mock("@kenn-io/kit-ui/utils/markdown-mermaid", () => ({
+  mermaidCodeFence: (code: string, lang: string) => {
+    if (lang !== "mermaid") return undefined;
+    const pre = document.createElement("pre");
+    pre.className = "mermaid";
+    pre.textContent = code;
+    return pre.outerHTML;
+  },
+  initMarkdownMermaidRendering: initMermaidRenderingMock,
 }));
 
 type MessageWithTokenFlags = Message & {
@@ -563,11 +575,6 @@ describe("MessageContent", () => {
   });
 
   it("routes mermaid fences through MermaidBlock", async () => {
-    renderMermaidMock.mockResolvedValueOnce({
-      ok: true,
-      svg: '<svg data-testid="mermaid-diagram"></svg>',
-    });
-
     const content = [
       "Mermaid diagram:",
       "",
@@ -591,8 +598,9 @@ describe("MessageContent", () => {
     await tick();
 
     expect(document.body.textContent).toContain("Mermaid diagram:");
-    expect(document.querySelector('[data-testid="mermaid-diagram"]')).not.toBeNull();
-    expect(renderMermaidMock).toHaveBeenCalledWith("graph TD\nA-->B\n");
+    const pre = document.querySelector(".mermaid-block pre.mermaid");
+    expect(pre?.textContent).toBe("graph TD\nA-->B\n");
+    expect(initMermaidRenderingMock).toHaveBeenCalledTimes(1);
 
     unmount(component);
   });
@@ -621,7 +629,7 @@ describe("MessageContent", () => {
 
     await tick();
 
-    expect(renderMermaidMock).not.toHaveBeenCalled();
+    expect(initMermaidRenderingMock).not.toHaveBeenCalled();
     expect(document.querySelector(".code-content")?.textContent).toContain(
       "A-->SearchTarget",
     );

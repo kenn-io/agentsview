@@ -97,8 +97,8 @@ describe("TrendsPage", () => {
     component = mount(TrendsPage, { target: document.body });
     await flushPromises();
 
-    // Open the unified range picker on the fixed query range so the From/To
-    // inputs are available.
+    // Open the unified range picker on the fixed query range; the Custom
+    // tab picks the span with two clicks on the embedded calendar.
     const trigger = document.querySelector<HTMLButtonElement>(
       "button.kit-date-range-picker__trigger",
     );
@@ -106,19 +106,22 @@ describe("TrendsPage", () => {
     trigger!.click();
     await tick();
 
-    const fromInput = document.querySelector<HTMLInputElement>(
-      'input[type="date"]',
-    );
-    expect(fromInput).not.toBeNull();
-
-    fromInput!.value = "2024-01-10";
-    // input updates the bound value; change commits the custom range.
-    fromInput!.dispatchEvent(new Event("input", { bubbles: true }));
-    fromInput!.dispatchEvent(new Event("change", { bubbles: true }));
+    const dayButton = (label: string) =>
+      document.querySelector<HTMLButtonElement>(
+        `.kit-calendar button[aria-label="${label}"]`,
+      );
+    const fromDay = dayButton("Jan 10, 2024");
+    expect(fromDay).not.toBeNull();
+    fromDay!.click();
+    await tick();
+    const toDay = dayButton("Jan 25, 2024");
+    expect(toDay).not.toBeNull();
+    // The second click completes and commits the custom range.
+    toDay!.click();
     await flushPromises();
 
     expect(mocks.getApiV1TrendsTerms).toHaveBeenLastCalledWith(
-      expect.objectContaining({ from: "2024-01-10" }),
+      expect.objectContaining({ from: "2024-01-10", to: "2024-01-25" }),
     );
     expect(window.location.search).toContain("from=2024-01-10");
   });

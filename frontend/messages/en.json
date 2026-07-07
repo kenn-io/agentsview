@@ -1682,8 +1682,6 @@
   "activity_filter_agents_placeholder": "Filter agents",
   "activity_filter_machines_placeholder": "Filter machines",
   "activity_filter_automation_placeholder": "Filter automation",
-  "mermaid_render_failed": "Mermaid diagram failed to render.",
-  "mermaid_render_pending": "Rendering Mermaid diagram...",
   "activity_no_matching_agents": "No matching agents",
   "activity_no_matching_machines": "No matching machines",
   "activity_no_automation_filters": "No automation filters",

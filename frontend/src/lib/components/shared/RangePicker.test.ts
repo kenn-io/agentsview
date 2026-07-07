@@ -103,36 +103,41 @@ describe("RangePicker", () => {
     });
   });
 
-  it("emits a custom selection when both dates are edited", async () => {
+  it("commits a custom range on the second calendar click", async () => {
     vi.setSystemTime(new Date("2026-06-17T12:00:00Z"));
     const { onSelect } = setup();
     await openPanel();
     await fireEvent.click(screen.getByRole("radio", { name: "Custom" }));
-    const inputs = screen.getAllByDisplayValue(/2026-/);
-    const from = inputs[0] as HTMLInputElement;
-    await fireEvent.input(from, { target: { value: "2026-01-01" } });
-    await fireEvent.change(from, { target: { value: "2026-01-01" } });
-    expect(onSelect).toHaveBeenCalledWith(
-      expect.objectContaining({ mode: "custom", from: "2026-01-01" }),
-    );
+    // The Custom tab is a two-click calendar: the first click starts the
+    // range without committing, the second completes and commits it.
+    await fireEvent.click(screen.getByRole("button", { name: "Jun 10, 2026" }));
+    expect(onSelect).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByRole("button", { name: "Jun 20, 2026" }));
+    expect(onSelect).toHaveBeenCalledWith({
+      mode: "custom",
+      from: "2026-06-10",
+      to: "2026-06-20",
+    });
   });
 
   it("syncs the Custom tab to a preset chosen while open", async () => {
     vi.setSystemTime(new Date("2026-06-17T12:00:00Z"));
-    setup({ mode: "custom", from: "2020-01-01", to: "2020-01-31" });
+    setup({ mode: "custom", from: "2026-06-01", to: "2026-06-05" });
     await openPanel();
     await fireEvent.click(screen.getByRole("radio", { name: "Relative" }));
     await fireEvent.click(screen.getByRole("button", { name: "7d" }));
     await fireEvent.click(screen.getByRole("radio", { name: "Custom" }));
     // kit-ui seeds "last 7 days" inclusively of today (from = today - 6), so
-    // the field shows 2026-06-11 where the old component prefilled -06-10.
-    // This only affects the prefill; committed ranges still resolve through
-    // the app's own resolveRange().
-    const from = screen.getAllByDisplayValue(/2026-/)[0] as HTMLInputElement;
-    expect(from.value).toBe("2026-06-11");
+    // the From endpoint readout shows Jun 11. This only affects the seed;
+    // committed ranges still resolve through the app's own resolveRange().
+    const endpoints = document.querySelectorAll(
+      ".kit-date-range-picker__endpoint-value",
+    );
+    expect(endpoints[0]?.textContent).toContain("Jun 11");
+    expect(endpoints[1]?.textContent).toContain("Jun 17");
   });
 
-  it("normalizes a reversed custom range before emitting", async () => {
+  it("orders a range picked back-to-front before emitting", async () => {
     vi.setSystemTime(new Date("2026-06-17T12:00:00Z"));
     const { onSelect } = setup({
       mode: "custom",
@@ -140,12 +145,13 @@ describe("RangePicker", () => {
       to: "2026-06-20",
     });
     await openPanel();
-    const from = screen.getAllByDisplayValue(/2026-/)[0] as HTMLInputElement;
-    await fireEvent.input(from, { target: { value: "2026-06-25" } });
-    await fireEvent.change(from, { target: { value: "2026-06-25" } });
+    // An earlier second click swaps the ends instead of emitting a
+    // reversed range.
+    await fireEvent.click(screen.getByRole("button", { name: "Jun 25, 2026" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Jun 21, 2026" }));
     expect(onSelect).toHaveBeenLastCalledWith({
       mode: "custom",
-      from: "2026-06-20",
+      from: "2026-06-21",
       to: "2026-06-25",
     });
   });
