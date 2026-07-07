@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"testing"
 
-	sqlite3 "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,7 +17,9 @@ import (
 // regression-guards chunkKeys's chunking when the connection's real limit is
 // low enough for that chunking to matter — otherwise a single unchunked IN
 // (...) query would still succeed under the modern default and the test
-// would pass even with chunking deleted.
+// would pass even with chunking deleted. The driver-specific limit call
+// lives in setConnVarLimit (varlimit_cgo_test.go / varlimit_modernc_test.go),
+// matching the per-platform driver split in driver_cgo.go / driver_modernc.go.
 func forceIndexVarLimit(t *testing.T, ix *Index, limit int) {
 	t.Helper()
 	ix.db.SetMaxOpenConns(1)
@@ -26,14 +27,7 @@ func forceIndexVarLimit(t *testing.T, ix *Index, limit int) {
 	conn, err := ix.db.Conn(context.Background())
 	require.NoError(t, err)
 	defer func() { require.NoError(t, conn.Close()) }()
-	require.NoError(t, conn.Raw(func(dc any) error {
-		sc, ok := dc.(*sqlite3.SQLiteConn)
-		if !ok {
-			return fmt.Errorf("index conn is %T, want *sqlite3.SQLiteConn", dc)
-		}
-		sc.SetLimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, limit)
-		return nil
-	}))
+	setConnVarLimit(t, conn, limit)
 }
 
 // requireIndexVarLimitConstrained probes ix's connection with an
