@@ -116,8 +116,9 @@ func qoderPathParts(root, path string) ([]string, bool) {
 }
 
 func qoderCompanionFiles(path string) []string {
-	if strings.HasSuffix(path, ".jsonl") {
-		return []string{strings.TrimSuffix(path, ".jsonl") + "-session.json"}
+	stem, ok := strings.CutSuffix(path, ".jsonl")
+	if ok {
+		return []string{stem + "-session.json"}
 	}
 	return nil
 }
