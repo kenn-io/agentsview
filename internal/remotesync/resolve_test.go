@@ -27,13 +27,20 @@ func TestResolveTargetsFiltersAndIncludesSpecialFiles(t *testing.T) {
 	aiderHistory := filepath.Join(aiderRoot, "repo", parser.AiderHistoryFileName())
 	windsurfUserRoot := filepath.Join(root, "Windsurf", "User")
 	windsurfWorkspaceRoot := filepath.Join(windsurfUserRoot, "workspaceStorage")
+	windsurfWorkspaceDir := filepath.Join(windsurfWorkspaceRoot, "workspace-a")
+	windsurfStateDB := filepath.Join(windsurfWorkspaceDir, parser.WindsurfStateDBName)
+	windsurfWorkspaceJSON := filepath.Join(windsurfWorkspaceDir, "workspace.json")
+	windsurfSecret := filepath.Join(windsurfWorkspaceDir, "extension-secret.json")
 	require.NoError(t, os.MkdirAll(claudeDir, 0o755))
 	require.NoError(t, os.MkdirAll(codexDir, 0o755))
 	require.NoError(t, os.MkdirAll(devinDir, 0o755))
 	require.NoError(t, os.MkdirAll(warpDir, 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Dir(aiderHistory), 0o755))
-	require.NoError(t, os.MkdirAll(windsurfWorkspaceRoot, 0o755))
+	require.NoError(t, os.MkdirAll(windsurfWorkspaceDir, 0o755))
 	require.NoError(t, os.WriteFile(aiderHistory, []byte("# aider\n"), 0o644))
+	require.NoError(t, os.WriteFile(windsurfStateDB, []byte("state"), 0o644))
+	require.NoError(t, os.WriteFile(windsurfWorkspaceJSON, []byte("{}\n"), 0o644))
+	require.NoError(t, os.WriteFile(windsurfSecret, []byte("secret"), 0o644))
 	codexIndex := filepath.Join(root, ".codex", parser.CodexSessionIndexFilename)
 	require.NoError(t, os.WriteFile(codexIndex, []byte("{}\n"), 0o644))
 
@@ -57,8 +64,13 @@ func TestResolveTargetsFiltersAndIncludesSpecialFiles(t *testing.T) {
 	assert.NotContains(t, targets.Dirs, parser.AgentWarp)
 	assert.Equal(t, []string{aiderHistory}, targets.Dirs[parser.AgentAider])
 	assert.NotContains(t, targets.Dirs, parser.AgentZed)
-	assert.Equal(t, []string{windsurfWorkspaceRoot}, targets.Dirs[parser.AgentWindsurf])
-	assert.NotContains(t, targets.Dirs[parser.AgentWindsurf], windsurfUserRoot)
+	assert.Equal(t, []string{windsurfUserRoot}, targets.Dirs[parser.AgentWindsurf])
+	assert.NotContains(t, targets.Dirs[parser.AgentWindsurf], windsurfWorkspaceRoot)
+	assert.ElementsMatch(t, []string{
+		windsurfStateDB,
+		windsurfWorkspaceJSON,
+	}, targets.Files[parser.AgentWindsurf])
+	assert.NotContains(t, targets.Files[parser.AgentWindsurf], windsurfSecret)
 	assert.Contains(t, targets.ExtraFiles, codexIndex)
 }
 
@@ -84,13 +96,26 @@ func TestResolveTargetsSkipsAiderHomeRoot(t *testing.T) {
 func TestSelectAllowedTargetsReturnsResolvedValues(t *testing.T) {
 	allowed := remotesync.TargetSet{
 		Dirs: map[parser.AgentType][]string{
-			parser.AgentClaude: {"/srv/claude", "/srv/claude-extra"},
+			parser.AgentClaude:   {"/srv/claude", "/srv/claude-extra"},
+			parser.AgentWindsurf: {"/srv/Windsurf/User"},
+		},
+		Files: map[parser.AgentType][]string{
+			parser.AgentWindsurf: {
+				"/srv/Windsurf/User/workspaceStorage/a/state.vscdb",
+				"/srv/Windsurf/User/workspaceStorage/a/workspace.json",
+			},
 		},
 		ExtraFiles: []string{"/srv/.codex/session_index.jsonl"},
 	}
 	requested := remotesync.TargetSet{
 		Dirs: map[parser.AgentType][]string{
-			parser.AgentClaude: {"/srv/claude-extra"},
+			parser.AgentClaude:   {"/srv/claude-extra"},
+			parser.AgentWindsurf: {"/srv/Windsurf/User"},
+		},
+		Files: map[parser.AgentType][]string{
+			parser.AgentWindsurf: {
+				"/srv/Windsurf/User/workspaceStorage/a/state.vscdb",
+			},
 		},
 		ExtraFiles: []string{"/srv/.codex/session_index.jsonl"},
 	}
@@ -99,7 +124,34 @@ func TestSelectAllowedTargetsReturnsResolvedValues(t *testing.T) {
 
 	require.True(t, ok)
 	assert.Equal(t, []string{"/srv/claude-extra"}, selected.Dirs[parser.AgentClaude])
+	assert.Equal(t, []string{"/srv/Windsurf/User"}, selected.Dirs[parser.AgentWindsurf])
+	assert.Equal(t, []string{
+		"/srv/Windsurf/User/workspaceStorage/a/state.vscdb",
+	}, selected.Files[parser.AgentWindsurf])
 	assert.Equal(t, []string{"/srv/.codex/session_index.jsonl"}, selected.ExtraFiles)
+}
+
+func TestSelectAllowedTargetsRejectsFileScopedDirOnlyRequest(t *testing.T) {
+	allowed := remotesync.TargetSet{
+		Dirs: map[parser.AgentType][]string{
+			parser.AgentWindsurf: {"/srv/Windsurf/User"},
+		},
+		Files: map[parser.AgentType][]string{
+			parser.AgentWindsurf: {
+				"/srv/Windsurf/User/workspaceStorage/a/state.vscdb",
+			},
+		},
+	}
+	requested := remotesync.TargetSet{
+		Dirs: map[parser.AgentType][]string{
+			parser.AgentWindsurf: {"/srv/Windsurf/User"},
+		},
+	}
+
+	_, ok := remotesync.SelectAllowedTargets(allowed, requested)
+
+	assert.False(t, ok)
+	assert.False(t, remotesync.TargetSetAllowed(allowed, requested))
 }
 
 func TestSelectAllowedTargetsRejectsUnresolvedValues(t *testing.T) {
@@ -132,12 +184,17 @@ func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
 	aiderHistory := filepath.Join(aiderRoot, "repo", parser.AiderHistoryFileName())
 	windsurfUserRoot := filepath.Join(home, "AppData", "Roaming", "Windsurf", "User")
 	windsurfWorkspaceRoot := filepath.Join(windsurfUserRoot, "workspaceStorage")
+	windsurfWorkspaceDir := filepath.Join(windsurfWorkspaceRoot, "workspace-a")
+	windsurfStateDB := filepath.Join(windsurfWorkspaceDir, parser.WindsurfStateDBName)
+	windsurfWorkspaceJSON := filepath.Join(windsurfWorkspaceDir, "workspace.json")
 	require.NoError(t, os.MkdirAll(claudeDir, 0o755))
 	require.NoError(t, os.MkdirAll(codexDir, 0o755))
 	require.NoError(t, os.MkdirAll(devinDir, 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Dir(aiderHistory), 0o755))
-	require.NoError(t, os.MkdirAll(windsurfWorkspaceRoot, 0o755))
+	require.NoError(t, os.MkdirAll(windsurfWorkspaceDir, 0o755))
 	require.NoError(t, os.WriteFile(aiderHistory, []byte("# aider\n"), 0o644))
+	require.NoError(t, os.WriteFile(windsurfStateDB, []byte("state"), 0o644))
+	require.NoError(t, os.WriteFile(windsurfWorkspaceJSON, []byte("{}\n"), 0o644))
 	codexIndex := filepath.Join(home, ".codex", parser.CodexSessionIndexFilename)
 	require.NoError(t, os.WriteFile(codexIndex, []byte("{}\n"), 0o644))
 
@@ -164,6 +221,11 @@ func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
 	assert.NotContains(t, sshDirs, parser.AgentDevin)
 	assert.NotContains(t, goTargets.Dirs, parser.AgentDevin)
 	assert.ElementsMatch(t, sshDirs[parser.AgentAider], goTargets.Dirs[parser.AgentAider])
-	assert.ElementsMatch(t, sshDirs[parser.AgentWindsurf], goTargets.Dirs[parser.AgentWindsurf])
+	assert.ElementsMatch(t, []string{windsurfWorkspaceRoot}, sshDirs[parser.AgentWindsurf])
+	assert.ElementsMatch(t, []string{windsurfUserRoot}, goTargets.Dirs[parser.AgentWindsurf])
+	assert.ElementsMatch(t, []string{
+		windsurfStateDB,
+		windsurfWorkspaceJSON,
+	}, goTargets.Files[parser.AgentWindsurf])
 	assert.ElementsMatch(t, sshExtra, goTargets.ExtraFiles)
 }

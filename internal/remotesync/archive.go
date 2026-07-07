@@ -11,9 +11,19 @@ import (
 
 func WriteArchive(w io.Writer, targets TargetSet) error {
 	tw := tar.NewWriter(w)
-	for _, dirs := range targets.Dirs {
+	for agent, dirs := range targets.Dirs {
+		if _, fileScoped := targets.Files[agent]; fileScoped {
+			continue
+		}
 		for _, root := range dirs {
 			if err := writeArchivePath(tw, root); err != nil {
+				return err
+			}
+		}
+	}
+	for _, files := range targets.Files {
+		for _, path := range files {
+			if err := writeArchivePath(tw, path); err != nil {
 				return err
 			}
 		}

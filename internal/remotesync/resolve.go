@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
@@ -12,6 +13,7 @@ import (
 
 func ResolveTargets(cfg config.Config) TargetSet {
 	dirs := make(map[parser.AgentType][]string)
+	files := make(map[parser.AgentType][]string)
 	var extra []string
 	for _, def := range parser.Registry {
 		if !resolveAgentHasOnDiskSource(def) {
@@ -26,9 +28,10 @@ func ResolveTargets(cfg config.Config) TargetSet {
 				continue
 			}
 			if def.Type == parser.AgentWindsurf {
-				target := resolveWindsurfTarget(dir)
-				if target != "" {
-					dirs[def.Type] = append(dirs[def.Type], target)
+				root, targetFiles := resolveWindsurfTarget(dir)
+				if root != "" && len(targetFiles) > 0 {
+					dirs[def.Type] = append(dirs[def.Type], root)
+					files[def.Type] = append(files[def.Type], targetFiles...)
 				}
 				continue
 			}
@@ -46,7 +49,7 @@ func ResolveTargets(cfg config.Config) TargetSet {
 			}
 		}
 	}
-	return TargetSet{Dirs: dirs, ExtraFiles: extra}
+	return TargetSet{Dirs: dirs, Files: files, ExtraFiles: extra}
 }
 
 func resolveAgentHasOnDiskSource(def parser.AgentDef) bool {
@@ -86,15 +89,60 @@ func resolveAiderTargets(root string) []string {
 	return out
 }
 
-func resolveWindsurfTarget(root string) string {
-	target := filepath.Clean(root)
-	if filepath.Base(target) != "workspaceStorage" {
-		target = filepath.Join(target, "workspaceStorage")
+func resolveWindsurfTarget(root string) (string, []string) {
+	targetRoot := filepath.Clean(root)
+	workspaceRoot := windsurfRemoteWorkspaceRoot(targetRoot)
+	if info, err := os.Stat(workspaceRoot); err != nil || !info.IsDir() {
+		return "", nil
 	}
-	if info, err := os.Stat(target); err == nil && info.IsDir() {
-		return target
+	files := resolveWindsurfFiles(workspaceRoot)
+	if len(files) == 0 {
+		return "", nil
 	}
-	return ""
+	return targetRoot, files
+}
+
+func windsurfRemoteWorkspaceRoot(root string) string {
+	clean := filepath.Clean(root)
+	if filepath.Base(clean) == "workspaceStorage" {
+		return clean
+	}
+	return filepath.Join(clean, "workspaceStorage")
+}
+
+func resolveWindsurfFiles(workspaceRoot string) []string {
+	entries, err := os.ReadDir(workspaceRoot)
+	if err != nil {
+		return nil
+	}
+	var files []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		workspaceDir := filepath.Join(workspaceRoot, entry.Name())
+		dbPath := filepath.Join(workspaceDir, parser.WindsurfStateDBName)
+		if !regularRemoteSyncFile(dbPath) {
+			continue
+		}
+		files = append(files, dbPath)
+		for _, path := range []string{
+			dbPath + "-wal",
+			dbPath + "-shm",
+			filepath.Join(workspaceDir, "workspace.json"),
+		} {
+			if regularRemoteSyncFile(path) {
+				files = append(files, path)
+			}
+		}
+	}
+	sort.Strings(files)
+	return files
+}
+
+func regularRemoteSyncFile(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode().IsRegular()
 }
 
 func providerDiscoveredPath(source parser.SourceRef) string {
@@ -121,12 +169,34 @@ func SelectAllowedTargets(allowed TargetSet, requested TargetSet) (TargetSet, bo
 	}
 	for agent, dirs := range requested.Dirs {
 		allowedDirs := allowed.Dirs[agent]
+		if _, fileScoped := allowed.Files[agent]; fileScoped {
+			requestedFiles, ok := requested.Files[agent]
+			if !ok || len(requestedFiles) == 0 {
+				return TargetSet{}, false
+			}
+		}
 		for _, dir := range dirs {
 			selectedDir, ok := selectAllowedString(allowedDirs, dir)
 			if !ok {
 				return TargetSet{}, false
 			}
 			selected.Dirs[agent] = append(selected.Dirs[agent], selectedDir)
+		}
+	}
+	for agent, files := range requested.Files {
+		allowedFiles, ok := allowed.Files[agent]
+		if !ok {
+			return TargetSet{}, false
+		}
+		for _, file := range files {
+			selectedFile, ok := selectAllowedString(allowedFiles, file)
+			if !ok {
+				return TargetSet{}, false
+			}
+			if selected.Files == nil {
+				selected.Files = make(map[parser.AgentType][]string)
+			}
+			selected.Files[agent] = append(selected.Files[agent], selectedFile)
 		}
 	}
 	for _, file := range requested.ExtraFiles {

@@ -112,6 +112,13 @@ func validateTargetSetPaths(targets TargetSet) error {
 			}
 		}
 	}
+	for agent, files := range targets.Files {
+		for _, file := range files {
+			if _, err := safeRemotePathArchiveName(file); err != nil {
+				return fmt.Errorf("target file %s %q: %w", agent, file, err)
+			}
+		}
+	}
 	for _, file := range targets.ExtraFiles {
 		if _, err := safeRemotePathArchiveName(file); err != nil {
 			return fmt.Errorf("target file %q: %w", file, err)

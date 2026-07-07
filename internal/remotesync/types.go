@@ -15,6 +15,7 @@ type SyncStats struct {
 
 type TargetSet struct {
 	Dirs       map[parser.AgentType][]string `json:"dirs"`
+	Files      map[parser.AgentType][]string `json:"files,omitempty"`
 	ExtraFiles []string                      `json:"extra_files,omitempty"`
 }
 

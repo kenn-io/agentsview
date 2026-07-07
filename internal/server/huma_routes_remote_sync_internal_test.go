@@ -19,6 +19,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/remotesync"
 )
 
 func newRemoteSyncServer(t *testing.T) (*Server, http.Handler, string) {
@@ -103,12 +104,85 @@ func TestRemoteSyncArchiveStreamsTar(t *testing.T) {
 	}
 }
 
+func TestRemoteSyncArchiveWindsurfStreamsOnlySessionFiles(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	database := dbtest.OpenTestDBAt(t, dbPath)
+	windsurfRoot := filepath.Join(dir, "Windsurf", "User")
+	workspaceDir := filepath.Join(windsurfRoot, "workspaceStorage", "workspace-a")
+	stateDB := filepath.Join(workspaceDir, parser.WindsurfStateDBName)
+	workspaceJSON := filepath.Join(workspaceDir, "workspace.json")
+	secretPath := filepath.Join(workspaceDir, "extension-secret.json")
+	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
+	require.NoError(t, os.WriteFile(stateDB, []byte("state"), 0o644))
+	require.NoError(t, os.WriteFile(workspaceJSON, []byte(`{"folder":"file:///work/demo"}`), 0o644))
+	require.NoError(t, os.WriteFile(secretPath, []byte("do not archive"), 0o644))
+	srv := New(config.Config{
+		Host:         "127.0.0.1",
+		Port:         8080,
+		DataDir:      dir,
+		DBPath:       dbPath,
+		AuthToken:    "remote-token",
+		RequireAuth:  false,
+		WriteTimeout: 30 * time.Second,
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentWindsurf: {windsurfRoot},
+		},
+	}, database, nil)
+	handler := srv.Handler()
+
+	targetReq := httptest.NewRequest(http.MethodGet, "/api/v1/remote-sync/targets", nil)
+	targetReq.Header.Set("Authorization", "Bearer remote-token")
+	targetW := httptest.NewRecorder()
+	handler.ServeHTTP(targetW, targetReq)
+	require.Equal(t, http.StatusOK, targetW.Code, "body: %s", targetW.Body.String())
+	var targets remotesync.TargetSet
+	require.NoError(t, json.Unmarshal(targetW.Body.Bytes(), &targets))
+	payload, err := json.Marshal(targets)
+	require.NoError(t, err)
+	archiveReq := httptest.NewRequest(http.MethodPost, "/api/v1/remote-sync/archive", bytes.NewReader(payload))
+	archiveReq.Header.Set("Authorization", "Bearer remote-token")
+	archiveReq.Header.Set("Content-Type", "application/json")
+	archiveW := httptest.NewRecorder()
+
+	handler.ServeHTTP(archiveW, archiveReq)
+
+	require.Equal(t, http.StatusOK, archiveW.Code, "body: %s", archiveW.Body.String())
+	entries := tarEntryNames(t, archiveW.Body.Bytes())
+	assert.True(t, hasTarEntrySuffix(entries, "workspace-a/"+parser.WindsurfStateDBName), "entries: %v", entries)
+	assert.True(t, hasTarEntrySuffix(entries, "workspace-a/workspace.json"), "entries: %v", entries)
+	assert.False(t, hasTarEntrySuffix(entries, "workspace-a/extension-secret.json"), "entries: %v", entries)
+}
+
 func pathBaseSlash(p string) string {
 	i := strings.LastIndex(p, "/")
 	if i < 0 {
 		return p
 	}
 	return p[i+1:]
+}
+
+func tarEntryNames(t *testing.T, archive []byte) []string {
+	t.Helper()
+	tr := tar.NewReader(bytes.NewReader(archive))
+	var names []string
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return names
+		}
+		require.NoError(t, err)
+		names = append(names, hdr.Name)
+	}
+}
+
+func hasTarEntrySuffix(names []string, suffix string) bool {
+	for _, name := range names {
+		if strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRemoteSyncArchiveDoesNotAppendErrorAfterStreamingStarts(t *testing.T) {
