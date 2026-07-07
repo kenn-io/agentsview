@@ -92,6 +92,27 @@ describe("UsagePage refresh behavior", () => {
     );
   });
 
+  it("loads agent metadata on mount for the Agent dropdown", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    const loadAgents = vi.spyOn(sessions, "loadAgents")
+      .mockResolvedValue();
+
+    router.route = "usage";
+    router.params = {};
+
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+
+    expect(loadAgents).toHaveBeenCalled();
+  });
+
   it("keeps the note hidden without an unsupported usage signal", async () => {
     vi.stubGlobal(
       "ResizeObserver",
