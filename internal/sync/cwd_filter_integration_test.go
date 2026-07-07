@@ -2,6 +2,7 @@ package sync_test
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -71,4 +72,57 @@ func TestSyncEngineCwdPrefixFilter(t *testing.T) {
 		assert.Nil(t, sess,
 			"session %q outside the cwd allow-list must not be ingested", id)
 	}
+}
+
+// A session archived before the cwd allow-list was configured must not
+// keep receiving appended messages through the incremental JSONL path,
+// which bypasses the prepareSessionWrite veto.
+func TestSyncEngineCwdPrefixFilterBlocksIncrementalAppend(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	// Archive the outside-prefix session with no filter configured,
+	// as if it was ingested before sync_include_cwd_prefixes was set.
+	env := &testEnv{db: dbtest.OpenTestDB(t), claudeDir: t.TempDir()}
+	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {env.claudeDir},
+		},
+		Machine: "local",
+	})
+
+	initial := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "Outside", "/Users/alice/personal/blog").
+		AddClaudeAssistant(tsEarlyS5, "ok").
+		String()
+	path := env.writeClaudeSessionForProject(
+		t, "/Users/alice/personal/blog",
+		"outside-append.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+	assertSessionMessageCount(t, env.db, "outside-append", 2)
+
+	// Turn the filter on and append to the archived session's file.
+	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {env.claudeDir},
+		},
+		Machine:            "local",
+		IncludeCwdPrefixes: []string{"/Users/alice/work"},
+	})
+
+	appended := testjsonl.ClaudeUserJSON("appended", tsEarlyS1) + "\n"
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, err = f.WriteString(appended)
+	f.Close()
+	require.NoError(t, err, "append")
+
+	env.engine.SyncPaths([]string{path})
+
+	// Neither the incremental path nor the full-parse fallback may
+	// store the appended message; the archived rows stay untouched.
+	assertSessionMessageCount(t, env.db, "outside-append", 2)
+	assertMessageRoles(t, env.db, "outside-append", "user", "assistant")
 }

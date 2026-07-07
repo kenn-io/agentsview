@@ -4854,6 +4854,15 @@ func (e *Engine) tryIncrementalJSONL(
 		return processResult{}, false
 	}
 
+	// A session archived before the cwd allow-list was configured
+	// must not keep growing through the append path, which bypasses
+	// the prepareSessionWrite veto. Fall back to the full parse path
+	// so the same veto applies; it also re-derives the cwd from the
+	// whole file, which covers a stored cwd that predates cwd capture.
+	if !e.cwdFilter.allows(inc.Cwd) {
+		return processResult{}, false
+	}
+
 	// Existing rows from an older parser lack new metadata
 	// columns. Force a full parse so the rewrite picks them
 	// up rather than appending new rows on top of stale ones.
@@ -6903,6 +6912,20 @@ func shouldReplaceFullParseMessages(
 func (e *Engine) writeIncremental(
 	inc *incrementalUpdate,
 ) error {
+	// The full path vetoes filtered sessions in prepareSessionWrite;
+	// this is the equivalent veto at the incremental write seam, so
+	// no producer can append to a session outside the cwd allow-list.
+	// tryIncrementalJSONL already refuses such sessions — this guard
+	// keeps the seam safe for any future producer.
+	if !e.cwdFilter.allows(inc.cwd) {
+		log.Printf(
+			"incremental %s: cwd %q outside the configured "+
+				"allow-list, skipping append",
+			inc.sessionID, inc.cwd,
+		)
+		return nil
+	}
+
 	dbMsgs := toDBMessages(
 		pendingWrite{
 			sess: parser.ParsedSession{ID: inc.sessionID},
