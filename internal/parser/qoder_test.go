@@ -31,6 +31,7 @@ func TestQoderRegistry(t *testing.T) {
 	assert.Equal(t, CapabilitySupported, caps.Source.FindSource)
 	assert.Equal(t, CapabilitySupported, caps.Source.MultiSessionSource)
 	assert.Equal(t, CapabilitySupported, caps.Source.ExcludedSessions)
+	assert.Equal(t, CapabilitySupported, caps.Source.ForceReplaceOnParse)
 	assert.Equal(t, CapabilitySupported, caps.Content.Subagents)
 	provider, ok := NewProvider(AgentQoder, ProviderConfig{Roots: []string{t.TempDir()}})
 	require.True(t, ok)

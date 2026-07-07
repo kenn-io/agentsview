@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -78,4 +79,44 @@ func TestEngineClassifyQoderProjectNamedSubagentsAsMainSession(t *testing.T) {
 	assert.Equal(t, path, got.Path)
 	assert.Equal(t, "subagents", got.Project)
 	assert.Equal(t, parser.AgentQoder, got.Agent)
+}
+
+func TestEngineSyncQoderSameMessageIDAppendForceReplaces(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentQoder: {root},
+		},
+		Machine: "local",
+	})
+
+	rawID := "11111111-1111-4111-8111-111111111111"
+	sessionID := "qoder:" + rawID
+	path := filepath.Join(root, "-Users-alice-project", rawID+".jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	initial := `{"type":"user","uuid":"u1","timestamp":"2026-06-04T09:47:20.000Z","message":{"role":"user","content":"hello"},"sessionId":"11111111-1111-4111-8111-111111111111"}
+{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-06-04T09:47:21.000Z","message":{"id":"msg_split","role":"assistant","model":"auto","stop_reason":"tool_use","content":[{"type":"text","text":"Hello"}]},"sessionId":"11111111-1111-4111-8111-111111111111"}
+`
+	require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
+
+	engine.SyncAll(context.Background(), nil)
+	msgs, err := database.GetAllMessages(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "Hello", msgs[1].Content)
+
+	appended := `{"type":"assistant","uuid":"a2","parentUuid":"a1","timestamp":"2026-06-04T09:47:22.000Z","message":{"id":"msg_split","role":"assistant","model":"auto","stop_reason":"end_turn","content":[{"type":"text","text":"Hello world"}]},"sessionId":"11111111-1111-4111-8111-111111111111"}
+`
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, writeErr := f.WriteString(appended)
+	require.NoError(t, writeErr)
+	require.NoError(t, f.Close())
+
+	engine.SyncPaths([]string{path})
+	msgs, err = database.GetAllMessages(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "Hello world", msgs[1].Content)
 }

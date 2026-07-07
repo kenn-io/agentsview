@@ -24,6 +24,7 @@ func newQoderSourceSet(roots []string) JSONLSourceSet {
 		WithSessionIDFromPath(qoderSessionIDFromPath),
 		WithLookupIDValid(isQoderLookupID),
 		WithParseFile(qoderParseFile),
+		WithForceReplace(),
 		WithCompanionFiles(qoderCompanionFiles),
 	)
 }
@@ -127,6 +128,7 @@ func qoderProviderCapabilities() Capabilities {
 	source := jsonlFileProviderSourceCapabilities()
 	source.MultiSessionSource = CapabilitySupported
 	source.ExcludedSessions = CapabilitySupported
+	source.ForceReplaceOnParse = CapabilitySupported
 	return Capabilities{
 		Source: source,
 		Content: ContentCapabilities{
