@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -89,9 +90,12 @@ func TestTargetDir(t *testing.T) {
 		base    string
 		want    string
 	}{
-		{HarnessClaude, "/home/user", "/home/user/.claude/skills/agentsview-finding-history"},
-		{HarnessAgents, "/home/user", "/home/user/.agents/skills/agentsview-finding-history"},
-		{HarnessClaude, "/repo", "/repo/.claude/skills/agentsview-finding-history"},
+		{HarnessClaude, filepath.Join("home", "user"),
+			filepath.Join("home", "user", ".claude", "skills", "agentsview-finding-history")},
+		{HarnessAgents, filepath.Join("home", "user"),
+			filepath.Join("home", "user", ".agents", "skills", "agentsview-finding-history")},
+		{HarnessClaude, "repo",
+			filepath.Join("repo", ".claude", "skills", "agentsview-finding-history")},
 	}
 
 	for _, tt := range tests {

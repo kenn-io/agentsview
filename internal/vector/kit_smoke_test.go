@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/require"
 	kitvec "go.kenn.io/kit/vector"
 	"go.kenn.io/kit/vector/sqlitevec"
@@ -14,7 +13,7 @@ import (
 
 func TestKitSqlitevecRoundTrip(t *testing.T) {
 	sqlitevec.Register()
-	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "v.db"))
+	db, err := sql.Open(vectorDriverName, vectorDSN(filepath.Join(t.TempDir(), "v.db"), false))
 	require.NoError(t, err)
 	defer db.Close()
 	ctx := context.Background()
