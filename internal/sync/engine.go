@@ -6662,7 +6662,13 @@ func (e *Engine) cachedProjectIdentity(machine, rootPath string) projectIdentity
 		return cached
 	}
 	identity := projectIdentityCacheEntry{rootPath: rootPath}
-	if e.idPrefix == "" && e.pathRewriter == nil {
+	// Only probe the local filesystem for sessions recorded on this
+	// machine: another machine's cwd (e.g. /home/... from a synced Linux
+	// host) is meaningless here, and on macOS merely stat'ing such paths
+	// wakes the /home automounter — with tens of thousands of remote
+	// sessions and a one-minute cache TTL that becomes a sustained
+	// automountd/opendirectoryd CPU storm.
+	if e.idPrefix == "" && e.pathRewriter == nil && machine == e.machine {
 		if gitRoot, remotes := discoverLocalGitIdentity(rootPath); gitRoot != "" {
 			identity.rootPath = gitRoot
 			if name, raw, ok := export.SelectRemote(remotes); ok {
