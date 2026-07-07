@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "3",
+  "root": {
+    "id": "33333333-3333-4333-8333-333333333333",
+    "summary": null,
+    "title": null,
+    "timestamp": 1735776000000,
+    "metadata": {
+      "kind": "main",
+      "modeState": {}
+    }
+  },
+  "messages": [
+    {
+      "id": "ccccccc1-0000-4000-8000-000000000001",
+      "parentId": "33333333-3333-4333-8333-333333333333",
+      "isActive": true,
+      "lmMessageIds": [0],
+      "timestamp": 1735776000000
+    },
+    {
+      "id": "ccccccc1-0000-4000-8000-000000000002",
+      "parentId": "ccccccc1-0000-4000-8000-000000000001",
+      "isActive": true,
+      "lmMessageIds": [1],
+      "timestamp": 1735776001000
+    }
+  ],
+  "files": []
+}

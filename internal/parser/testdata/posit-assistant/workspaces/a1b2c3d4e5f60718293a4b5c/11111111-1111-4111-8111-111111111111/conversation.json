@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "3",
+  "root": {
+    "id": "11111111-1111-4111-8111-111111111111",
+    "summary": "Loading sales data in R",
+    "title": "Sales data loading",
+    "timestamp": 1735689600000,
+    "metadata": {
+      "kind": "main",
+      "modeState": {},
+      "model": {
+        "id": "claude-sonnet-4-6",
+        "providerId": "positai",
+        "name": "Claude Sonnet 4.6",
+        "providerName": "Posit AI"
+      }
+    }
+  },
+  "messages": [
+    {
+      "id": "aaaaaaa1-0000-4000-8000-000000000001",
+      "parentId": "11111111-1111-4111-8111-111111111111",
+      "isActive": true,
+      "lmMessageIds": [0],
+      "timestamp": 1735689600000
+    },
+    {
+      "id": "aaaaaaa1-0000-4000-8000-000000000002",
+      "parentId": "aaaaaaa1-0000-4000-8000-000000000001",
+      "isActive": true,
+      "lmMessageIds": [1, 2, 3],
+      "timestamp": 1735689610000
+    },
+    {
+      "id": "aaaaaaa1-0000-4000-8000-000000000003",
+      "parentId": "aaaaaaa1-0000-4000-8000-000000000002",
+      "isActive": true,
+      "lmMessageIds": [4],
+      "timestamp": 1735689630000
+    },
+    {
+      "id": "aaaaaaa1-0000-4000-8000-000000000004",
+      "parentId": "aaaaaaa1-0000-4000-8000-000000000003",
+      "isActive": true,
+      "lmMessageIds": [5],
+      "timestamp": 1735689640000
+    },
+    {
+      "id": "aaaaaaa1-0000-4000-8000-000000000005",
+      "parentId": "aaaaaaa1-0000-4000-8000-000000000003",
+      "isActive": false,
+      "lmMessageIds": [6],
+      "timestamp": 1735689650000
+    }
+  ],
+  "files": []
+}

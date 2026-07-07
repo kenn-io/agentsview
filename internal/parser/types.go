@@ -46,6 +46,7 @@ const (
 	AgentPiebald        AgentType = "piebald"
 	AgentWarp           AgentType = "warp"
 	AgentPositron       AgentType = "positron"
+	AgentPositAssistant AgentType = "posit-assistant"
 	AgentZCode          AgentType = "zcode"
 	AgentAntigravity    AgentType = "antigravity"
 	AgentAntigravityCLI AgentType = "antigravity-cli"
@@ -511,6 +512,20 @@ var Registry = []AgentDef{
 		IDPrefix:     "positron:",
 		WatchSubdirs: []string{"workspaceStorage"},
 		FileBased:    true,
+	},
+	{
+		// Posit Assistant (posit-dev/assistant) stores one directory per
+		// conversation under workspaces/<workspaceId>/<conversationId>/,
+		// holding a conversation.json message tree plus an append-only
+		// lm-messages.jsonl transcript. Distinct from the Positron IDE's
+		// built-in Assistant above, which uses VS Code chatSessions files.
+		Type:        AgentPositAssistant,
+		DisplayName: "Posit Assistant",
+		EnvVar:      "POSIT_ASSISTANT_DIR",
+		ConfigKey:   "posit_assistant_dirs",
+		DefaultDirs: []string{".posit/assistant/workspaces"},
+		IDPrefix:    "posit-assistant:",
+		FileBased:   true,
 	},
 	{
 		Type:        AgentZCode,

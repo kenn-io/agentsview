@@ -334,6 +334,7 @@ thread JSON files.
 | OhMyPi                | `~/.omp/agent/sessions/`                                                                                                                                                |
 | Pi                    | `~/.pi/agent/sessions/`                                                                                                                                                 |
 | Piebald               | `~/.local/share/piebald/`                                                                                                                                               |
+| Posit Assistant       | `~/.posit/assistant/workspaces/`                                                                                                                                        |
 | Positron Assistant    | `~/Library/Application Support/Positron/User/` (macOS)                                                                                                                  |
 | QClaw                 | `~/.qclaw/agents/`                                                                                                                                                      |
 | Qwen Code             | `~/.qwen/projects/`                                                                                                                                                     |

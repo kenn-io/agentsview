@@ -206,6 +206,18 @@ func NormalizeToolCategory(rawName string) string {
 		"browser_accessibility", "browser_profile":
 		return "Tool"
 
+	// Posit Assistant tools (excluding names already handled above:
+	// read→Read, edit→Edit, write→Write, bash→Bash, grep→Grep,
+	// skill→Tool, web_search→Tool)
+	case "ls", "getConsoleContent":
+		return "Read"
+	case "runCode", "executeCode":
+		return "Bash"
+	case "todoWrite", "webfetch", "EnterMode", "ExitMode":
+		return "Tool"
+	case "explore":
+		return "Task"
+
 	// Warp tools
 	case "read_files":
 		return "Read"

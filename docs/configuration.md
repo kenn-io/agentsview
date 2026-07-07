@@ -227,6 +227,7 @@ can still be parsed.
 | OpenHands CLI         | `~/.openhands/conversations/`                                                    | Per-conversation `base_state.json` + `events/*.json`                                                                            |
 | Pi                    | `~/.pi/agent/sessions/`                                                          | JSONL per session                                                                                                               |
 | Piebald               | `~/.local/share/piebald/`                                                        | SQLite database (`app.db`)                                                                                                      |
+| Posit Assistant       | `~/.posit/assistant/workspaces/`                                                 | Per-conversation `conversation.json` tree plus `lm-messages.jsonl` transcript                                                   |
 | Positron Assistant    | (platform-specific, see below)                                                   | JSON / JSONL per session                                                                                                        |
 | QClaw                 | `~/.qclaw/assets/static/agents/`                                                 | JSONL per session                                                                                                               |
 | Qwen Code             | `~/.qwen/projects/`                                                              | JSONL per session                                                                                                               |
@@ -268,6 +269,16 @@ v0.20.0, Positron Assistant has a built-in default path only on macOS — on Lin
 and Windows, set `POSITRON_DIR` or `positron_dirs` to point at your Positron
 user directory (for example, `~/.config/Positron/User` on Linux or
 `%APPDATA%\Positron\User` on Windows).
+
+**Posit Assistant** (posit-dev/assistant, also known as Databot) is a separate
+product from the Positron IDE's built-in Assistant above. It stores one
+directory per conversation under
+`~/.posit/assistant/workspaces/<workspaceId>/<conversationId>/`, containing a
+`conversation.json` message tree and an append-only `lm-messages.jsonl`
+transcript; subagent runs nest under a `subagents/` subdirectory of their
+parent conversation. All Posit Assistant hosts (Positron/VS Code extension,
+standalone, desktop, TUI) share this location. Set `POSIT_ASSISTANT_DIR` or
+`posit_assistant_dirs` if your installation stores its workspaces elsewhere.
 
 **Claude Cowork default directories** follow Claude Desktop's Electron user-data
 location:
@@ -438,6 +449,7 @@ export OPENCODE_DIR=~/custom/opencode
 export OPENHANDS_CONVERSATIONS_DIR=~/custom/openhands
 export PI_DIR=~/custom/pi
 export PIEBALD_DIR=~/custom/piebald
+export POSIT_ASSISTANT_DIR=~/custom/posit-assistant/workspaces
 export POSITRON_DIR=~/custom/positron
 export QCLAW_DIR=~/custom/qclaw
 export QWEN_PROJECTS_DIR=~/custom/qwen
@@ -476,7 +488,8 @@ The corresponding fields are `aider_dirs`, `amp_dirs`, `antigravity_dirs`,
 `forge_dirs`, `gemini_dirs`, `gptme_dirs`, `hermes_sessions_dirs`, `iflow_dirs`,
 `kilo_dirs`, `kimi_dirs`, `kiro_dirs`, `kiro_ide_dirs`, `mimocode_dirs`,
 `vibe_session_dirs`, `omp_dirs`, `openclaw_dirs`, `opencode_dirs`,
-`openhands_dirs`, `pi_dirs`, `piebald_dirs`, `positron_dirs`, `qclaw_dirs`,
+`openhands_dirs`, `pi_dirs`, `piebald_dirs`, `posit_assistant_dirs`,
+`positron_dirs`, `qclaw_dirs`,
 `qwen_project_dirs`, `qwenpaw_dirs`, `reasonix_dirs`, `shelley_dirs`,
 `visualstudio_copilot_dirs`, `vscode_copilot_dirs`, `warp_dirs`,
 `workbuddy_project_dirs`, `zed_dirs`, and `zencoder_dirs`. Each accepts an array

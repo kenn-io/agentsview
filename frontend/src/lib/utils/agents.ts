@@ -66,6 +66,11 @@ export const KNOWN_AGENTS: readonly AgentMeta[] = [
     label: "Antigravity CLI",
   },
   { name: "vibe", color: "var(--accent-orange)", label: "Mistral Vibe" },
+  {
+    name: "posit-assistant",
+    color: "var(--accent-indigo)",
+    label: "Posit Assistant",
+  },
 ];
 
 const agentColorMap = new Map(

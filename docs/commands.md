@@ -1027,6 +1027,7 @@ agentsview help
 | `OPENHANDS_CONVERSATIONS_DIR`     | `~/.openhands/conversations`                         | OpenHands CLI conversations directory                                                               |
 | `PI_DIR`                          | `~/.pi/agent/sessions`                               | Pi sessions directory                                                                               |
 | `PIEBALD_DIR`                     | `~/.local/share/piebald`                             | Piebald directory (contains `app.db`)                                                               |
+| `POSIT_ASSISTANT_DIR`             | `~/.posit/assistant/workspaces`                      | Posit Assistant workspaces directory                                                                |
 | `POSITRON_DIR`                    | (platform-specific)                                  | Positron Assistant user directory                                                                   |
 | `QCLAW_DIR`                       | `~/.qclaw/agents`                                    | QClaw agents directory                                                                              |
 | `QWEN_PROJECTS_DIR`               | `~/.qwen/projects`                                   | Qwen Code projects directory                                                                        |

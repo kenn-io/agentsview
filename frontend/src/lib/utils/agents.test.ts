@@ -43,6 +43,7 @@ describe("KNOWN_AGENTS", () => {
       "antigravity",
       "antigravity-cli",
       "vibe",
+      "posit-assistant",
     ]);
   });
 
