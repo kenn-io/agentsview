@@ -203,6 +203,36 @@ func TestProcessFileQoderSameSizeSameMtimeSidecarRewriteReparses(t *testing.T) {
 	}
 }
 
+func TestSourceMtimeQoderIncludesSidecarMtime(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentQoder: {root},
+		},
+		Machine: "local",
+	})
+
+	rawID := "11111111-1111-4111-8111-111111111111"
+	path := filepath.Join(root, "-Users-alice-project", rawID+".jsonl")
+	sidecarPath := strings.TrimSuffix(path, ".jsonl") + "-session.json"
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(`{"type":"user","uuid":"u1","timestamp":"2026-06-04T09:47:27.966Z","message":{"role":"user","content":"hello"},"sessionId":"11111111-1111-4111-8111-111111111111"}
+`), 0o644))
+	require.NoError(t, os.WriteFile(
+		sidecarPath,
+		[]byte(`{"title":"Sidecar title","working_dir":"/tmp/qoder"}`),
+		0o644,
+	))
+
+	transcriptTime := time.Date(2026, time.June, 4, 10, 0, 0, 0, time.UTC)
+	sidecarTime := transcriptTime.Add(5 * time.Minute)
+	require.NoError(t, os.Chtimes(path, transcriptTime, transcriptTime))
+	require.NoError(t, os.Chtimes(sidecarPath, sidecarTime, sidecarTime))
+
+	assert.Equal(t, sidecarTime.UnixNano(), engine.SourceMtime("qoder:"+rawID))
+}
+
 func writeProcessQoderResult(
 	t *testing.T,
 	engine *Engine,

@@ -7808,6 +7808,10 @@ func providerSourcePathNeedsFingerprint(path string) bool {
 	return path != "" && parser.ResolveSourceFilePath(path) != path
 }
 
+func providerSourceMtimeNeedsFingerprint(agent parser.AgentType) bool {
+	return agent == parser.AgentQoder
+}
+
 // providerSessionIsFork reports whether the session ID addresses a fork child
 // whose base differs from the resolved source session. Only Piebald uses the
 // "<chat>-<row>" fork-ID shape among the DB-backed providers.
@@ -7894,7 +7898,8 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 		return 0
 	}
 	if e.isProviderAuthoritative(def.Type) &&
-		providerSourcePathNeedsFingerprint(path) {
+		(providerSourcePathNeedsFingerprint(path) ||
+			providerSourceMtimeNeedsFingerprint(def.Type)) {
 		if mtime := e.providerSessionSourceMtime(
 			context.Background(), def, sessionID, rawSessionID, path,
 		); mtime != 0 {
