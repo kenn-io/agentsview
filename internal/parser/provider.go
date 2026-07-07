@@ -484,6 +484,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newVSCodeCopilotProviderFactory(def)
 	case AgentVibe:
 		return newVibeProviderFactory(def)
+	case AgentZCode:
+		return newZcodeProviderFactory(def)
 	case AgentWarp:
 		return newWarpProviderFactory(def)
 	case AgentWorkBuddy:

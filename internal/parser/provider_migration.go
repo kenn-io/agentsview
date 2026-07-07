@@ -51,6 +51,7 @@ var providerMigrationModes = map[AgentType]ProviderMigrationMode{
 	AgentPiebald:        ProviderMigrationProviderAuthoritative,
 	AgentWarp:           ProviderMigrationProviderAuthoritative,
 	AgentPositron:       ProviderMigrationProviderAuthoritative,
+	AgentZCode:          ProviderMigrationProviderAuthoritative,
 	AgentAntigravity:    ProviderMigrationProviderAuthoritative,
 	AgentAntigravityCLI: ProviderMigrationProviderAuthoritative,
 	AgentVibe:           ProviderMigrationProviderAuthoritative,

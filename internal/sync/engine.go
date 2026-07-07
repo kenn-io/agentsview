@@ -841,6 +841,8 @@ func providerDeletedPhysicalSQLiteSource(
 	switch agent {
 	case parser.AgentZed:
 		return filepath.Base(path) == "threads.db"
+	case parser.AgentZCode:
+		return filepath.Base(path) == parser.ZCodeDBName
 	case parser.AgentShelley:
 		return filepath.Base(path) == shelleyDBFile
 	default:
@@ -1979,7 +1981,7 @@ func (e *Engine) syncAllLocked(
 	// through the provider facade in the file-sync phase above, so no
 	// dedicated DB-backed sync pass is needed here.
 
-	// Sync Warp, Forge, and Piebald sessions. These are provider-authoritative
+	// Sync Warp, Forge, Piebald, and ZCode sessions. These are provider-authoritative
 	// DB-backed providers: a shared SQLite DB hosts every session, so the
 	// provider facade enumerates sources and parses only the changed ones.
 	if scope.includesAny(e.agentDirs[parser.AgentWarp]) {
@@ -2009,9 +2011,18 @@ func (e *Engine) syncAllLocked(
 			return stats
 		}
 	}
+	if scope.includesAny(e.agentDirs[parser.AgentZCode]) {
+		if e.syncProviderDBBackedAgent(
+			ctx, parser.AgentZCode, "zcode",
+			writeMode, verbose, scope, &stats, advanceDBProgress,
+		) {
+			stats.Aborted = true
+			return stats
+		}
+	}
 
 	// Link subagent child sessions to their parents after all DB-backed
-	// agent writes (including provider-authoritative Forge and Piebald).
+	// agent writes (including provider-authoritative Forge, Piebald, and ZCode).
 	// LinkSubagentSessions is idempotent — its WHERE filter and partial index
 	// make it a cheap no-op when nothing new was written — so no guard is
 	// needed.
@@ -2135,7 +2146,7 @@ func (e *Engine) discoverProviderSources(
 			_, ok := forceParseSources[filepath.Clean(sourcePath)]
 			return ok
 		}
-		// Forge, Piebald, and Warp are DB-backed providers: a shared SQLite
+		// Forge, Piebald, Warp, and ZCode are DB-backed providers: a shared SQLite
 		// DB hosts every session. Full-sync change detection and counting
 		// run through their dedicated provider-driven DB sync phase
 		// (syncProviderDBBacked), not the per-source discovery list, so a
@@ -2991,6 +3002,7 @@ func (e *Engine) countDBBackedSessions(
 		parser.AgentWarp,
 		parser.AgentForge,
 		parser.AgentPiebald,
+		parser.AgentZCode,
 	} {
 		total += e.countDBBackedProgressTotal(agent, scope)
 	}
@@ -3640,7 +3652,7 @@ func (e *Engine) processProviderFile(
 		return processResult{err: err}, true
 	}
 	if !found {
-		// A forced parse on a deleted shared SQLite database (Zed, Shelley)
+		// A forced parse on a deleted shared SQLite database (Zed, ZCode, Shelley)
 		// resolves to no source because the physical file is gone. Mirror the
 		// legacy deleted-source handling: complete the source as an empty
 		// force-replace so the engine retires every session that lived in the
@@ -4202,7 +4214,7 @@ func (e *Engine) providerSkipCacheEntryFreshInDB(
 
 func processFileUsesProvider(agent parser.AgentType) bool {
 	switch agent {
-	case parser.AgentForge, parser.AgentPiebald, parser.AgentWarp:
+	case parser.AgentForge, parser.AgentPiebald, parser.AgentWarp, parser.AgentZCode:
 		return true
 	default:
 		return false
@@ -4246,7 +4258,7 @@ func (e *Engine) shouldSkipProviderSource(
 
 func providerSourceSupportsPersistedFreshness(agent parser.AgentType) bool {
 	switch agent {
-	case parser.AgentForge, parser.AgentWarp:
+	case parser.AgentForge, parser.AgentWarp, parser.AgentZCode:
 		return true
 	default:
 		return false
@@ -4288,6 +4300,14 @@ func (e *Engine) shouldCacheSkip(
 			return false
 		}
 		if _, _, ok := parser.ParseVirtualSourcePathForBase(file.Path, "threads.db"); ok {
+			return false
+		}
+	}
+	if file.Agent == parser.AgentZCode {
+		if filepath.Base(file.Path) == parser.ZCodeDBName {
+			return false
+		}
+		if _, _, ok := parser.ParseVirtualSourcePathForBase(file.Path, parser.ZCodeDBName); ok {
 			return false
 		}
 	}
@@ -7609,7 +7629,7 @@ func (e *Engine) FindSourceFile(sessionID string) string {
 	}
 	rawSessionID := strings.TrimPrefix(rawID, def.IDPrefix)
 	if !def.FileBased {
-		// Forge, Piebald, and Warp are DB-backed providers that own
+		// Forge, Piebald, Warp, and ZCode are DB-backed providers that own
 		// discovery and source lookup through the provider facade. Their
 		// virtual <db>#<sessionID> path is resolved by findProviderSourceFile
 		// below. Non-provider, non-file-based agents (e.g. remote imports)
@@ -7872,7 +7892,7 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 	}
 	rawSessionID := strings.TrimPrefix(rawID, def.IDPrefix)
 	if !def.FileBased {
-		// Forge, Piebald, and Warp are DB-backed providers: their
+		// Forge, Piebald, Warp, and ZCode are DB-backed providers: their
 		// per-session source mtime comes from the provider fingerprint
 		// (which mirrors the legacy List*SessionMeta last-modified value).
 		// Non-provider, non-file-based agents have no local source.
@@ -8070,7 +8090,7 @@ func (e *Engine) SyncSingleSessionContext(
 		return fmt.Errorf("unknown agent for session %s", sessionID)
 	}
 	if !def.FileBased {
-		// Forge, Piebald, and Warp are DB-backed providers: re-sync routes
+		// Forge, Piebald, Warp, and ZCode are DB-backed providers: re-sync routes
 		// through FindSourceFile (resolving the virtual <db>#<sessionID>
 		// path) plus the provider-aware processFile path below, mirroring
 		// the file-based agents. Other non-file-based agents use the

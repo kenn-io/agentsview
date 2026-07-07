@@ -437,6 +437,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentPiebald,
 		AgentWarp,
 		AgentPositron,
+		AgentZCode,
 		AgentZed,
 		AgentAntigravity,
 		AgentAntigravityCLI,
@@ -584,6 +585,17 @@ func TestZedRegistryEntry(t *testing.T) {
 	assert.Equal(t, "ZED_DIR", def.EnvVar)
 	assert.Equal(t, "zed_dirs", def.ConfigKey)
 	assert.Equal(t, "zed:", def.IDPrefix)
+}
+
+func TestZCodeRegistryEntry(t *testing.T) {
+	def, ok := AgentByType(AgentZCode)
+	require.True(t, ok, "AgentZCode missing from Registry")
+	require.False(t, def.FileBased, "ZCode FileBased")
+	assert.Equal(t, "ZCODE_DIR", def.EnvVar)
+	assert.Equal(t, "zcode_dirs", def.ConfigKey)
+	assert.Equal(t, []string{".zcode/cli/db", ".zcode/cli"}, def.DefaultDirs)
+	assert.Equal(t, "zcode:", def.IDPrefix)
+	assert.True(t, def.Usage.NoPerMessageTokenData)
 }
 
 func TestShelleyRegistryEntry(t *testing.T) {

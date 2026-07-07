@@ -46,6 +46,7 @@ const (
 	AgentPiebald        AgentType = "piebald"
 	AgentWarp           AgentType = "warp"
 	AgentPositron       AgentType = "positron"
+	AgentZCode          AgentType = "zcode"
 	AgentAntigravity    AgentType = "antigravity"
 	AgentAntigravityCLI AgentType = "antigravity-cli"
 	AgentVibe           AgentType = "vibe"
@@ -509,6 +510,21 @@ var Registry = []AgentDef{
 		IDPrefix:     "positron:",
 		WatchSubdirs: []string{"workspaceStorage"},
 		FileBased:    true,
+	},
+	{
+		Type:        AgentZCode,
+		DisplayName: "ZCode",
+		EnvVar:      "ZCODE_DIR",
+		ConfigKey:   "zcode_dirs",
+		DefaultDirs: []string{
+			".zcode/cli/db",
+			".zcode/cli",
+		},
+		IDPrefix:  "zcode:",
+		FileBased: false,
+		Usage: UsageCapabilities{
+			NoPerMessageTokenData: true,
+		},
 	},
 	{
 		Type:         AgentZed,
