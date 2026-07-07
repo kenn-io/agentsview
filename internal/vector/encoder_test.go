@@ -2,9 +2,12 @@ package vector
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -18,8 +21,9 @@ import (
 // embeddingsRequest mirrors the OpenAI-compatible request body the encoder
 // sends, for use in test assertions.
 type embeddingsRequest struct {
-	Model string   `json:"model"`
-	Input []string `json:"input"`
+	Model          string   `json:"model"`
+	Input          []string `json:"input"`
+	EncodingFormat string   `json:"encoding_format"`
 }
 
 // embeddingDatum mirrors one element of the OpenAI-compatible response.
@@ -77,10 +81,120 @@ func TestEncoderHappyPath(t *testing.T) {
 	assert.Equal(t, "Bearer secret-key", gotAuth)
 	assert.Equal(t, "test-model", gotReq.Model)
 	assert.Equal(t, []string{"hello", "world"}, gotReq.Input)
+	assert.Equal(t, "base64", gotReq.EncodingFormat,
+		"requests ask for the compact base64 wire format")
 
 	require.Len(t, out, 2)
 	assert.Equal(t, []float32{1, 2, 3}, out[0])
 	assert.Equal(t, []float32{4, 5, 6}, out[1])
+}
+
+// base64Embedding encodes floats the way encoding_format "base64" responses
+// carry them: raw little-endian float32 bytes, base64-encoded.
+func base64Embedding(floats []float32) string {
+	raw := make([]byte, 4*len(floats))
+	for i, f := range floats {
+		binary.LittleEndian.PutUint32(raw[4*i:], math.Float32bits(f))
+	}
+	return base64.StdEncoding.EncodeToString(raw)
+}
+
+// TestEncoderDecodesBase64Embeddings asserts a server honoring
+// encoding_format "base64" round-trips to the same float vectors, including
+// reordering by index.
+func TestEncoderDecodesBase64Embeddings(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, http.StatusOK, map[string]any{
+			"data": []map[string]any{
+				{"index": 1, "embedding": base64Embedding([]float32{4, 5, 6})},
+				{"index": 0, "embedding": base64Embedding([]float32{1, 2, 3})},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	enc := NewEncoder(EncoderConfig{
+		Endpoint:  srv.URL + "/v1",
+		Model:     "test-model",
+		Dimension: 3,
+		Timeout:   5 * time.Second,
+	})
+
+	out, err := enc(context.Background(), []string{"hello", "world"})
+	require.NoError(t, err)
+	require.Len(t, out, 2)
+	assert.Equal(t, []float32{1, 2, 3}, out[0])
+	assert.Equal(t, []float32{4, 5, 6}, out[1])
+}
+
+// TestEncoderBase64WrongByteCountFailsDimensionCheck asserts a base64
+// payload whose float count disagrees with the configured dimension is
+// rejected rather than silently stored.
+func TestEncoderBase64WrongByteCountFailsDimensionCheck(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, http.StatusOK, map[string]any{
+			"data": []map[string]any{
+				{"index": 0, "embedding": base64Embedding([]float32{1, 2})},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	enc := NewEncoder(EncoderConfig{
+		Endpoint:  srv.URL + "/v1",
+		Model:     "test-model",
+		Dimension: 3,
+		Timeout:   5 * time.Second,
+	})
+
+	_, err := enc(context.Background(), []string{"hello"})
+	require.ErrorContains(t, err, "dimension mismatch")
+}
+
+// TestEncoderFallsBackToFloatsWhenBase64Rejected asserts that a server which
+// 400s the encoding_format field triggers a permanent downgrade: the request
+// is redone without the field immediately, and later calls never ask for
+// base64 again.
+func TestEncoderFallsBackToFloatsWhenBase64Rejected(t *testing.T) {
+	var base64Requests, floatRequests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		var req embeddingsRequest
+		require.NoError(t, json.Unmarshal(body, &req))
+
+		if req.EncodingFormat != "" {
+			base64Requests.Add(1)
+			writeJSON(t, w, http.StatusBadRequest, map[string]any{
+				"error": "unknown field: encoding_format",
+			})
+			return
+		}
+		floatRequests.Add(1)
+		writeJSON(t, w, http.StatusOK, embeddingsResponse{
+			Data: []embeddingDatum{{Index: 0, Embedding: []float32{1, 2, 3}}},
+		})
+	}))
+	defer srv.Close()
+
+	enc := NewEncoder(EncoderConfig{
+		Endpoint:  srv.URL + "/v1",
+		Model:     "test-model",
+		Dimension: 3,
+		Timeout:   5 * time.Second,
+	})
+
+	out, err := enc(context.Background(), []string{"hello"})
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	assert.Equal(t, []float32{1, 2, 3}, out[0])
+
+	_, err = enc(context.Background(), []string{"again"})
+	require.NoError(t, err)
+
+	assert.Equal(t, int32(1), base64Requests.Load(),
+		"the rejection downgrades the encoder for its lifetime")
+	assert.Equal(t, int32(2), floatRequests.Load())
 }
 
 // TestEncoderInputSuffixAppended asserts a configured InputSuffix is appended

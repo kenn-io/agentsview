@@ -5,13 +5,17 @@ package vector
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	kitvec "go.kenn.io/kit/vector"
@@ -120,55 +124,133 @@ func hasDocumentSpecificEmbeddingError(body string) bool {
 type embeddingsRequestBody struct {
 	Model string   `json:"model"`
 	Input []string `json:"input"`
+	// EncodingFormat asks for "base64" responses (raw little-endian float32
+	// bytes), roughly 4x smaller than the default JSON float arrays — the
+	// difference dominates round-trip time on slow links. Empty omits the
+	// field for servers that reject it.
+	EncodingFormat string `json:"encoding_format,omitempty"`
 }
 
 // embeddingsResponseBody is the OpenAI-compatible embeddings response.
 type embeddingsResponseBody struct {
 	Data []struct {
-		Index     int       `json:"index"`
-		Embedding []float32 `json:"embedding"`
+		Index     int             `json:"index"`
+		Embedding embeddingVector `json:"embedding"`
 	} `json:"data"`
+}
+
+// embeddingVector decodes an OpenAI-compatible embedding that arrives either
+// as a JSON float array (the default) or as a base64 string of little-endian
+// float32 bytes (encoding_format "base64"). Accepting both means the encoder
+// keeps working against servers that silently ignore encoding_format.
+type embeddingVector []float32
+
+func (v *embeddingVector) UnmarshalJSON(b []byte) error {
+	if len(b) > 0 && b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		raw, err := base64.StdEncoding.DecodeString(s)
+		if err != nil {
+			return fmt.Errorf("decode base64 embedding: %w", err)
+		}
+		if len(raw)%4 != 0 {
+			return fmt.Errorf("base64 embedding is %d bytes, not a multiple of 4", len(raw))
+		}
+		out := make([]float32, len(raw)/4)
+		for i := range out {
+			out[i] = math.Float32frombits(binary.LittleEndian.Uint32(raw[4*i:]))
+		}
+		*v = out
+		return nil
+	}
+	var floats []float32
+	if err := json.Unmarshal(b, &floats); err != nil {
+		return err
+	}
+	*v = floats
+	return nil
+}
+
+// encoderClient carries the HTTP client, resolved URL, and the runtime
+// float-fallback state shared by every call the EncodeFunc makes.
+type encoderClient struct {
+	client *http.Client
+	url    string
+	cfg    EncoderConfig
+	// floatMode flips to true (for the encoder's lifetime) when the server
+	// rejects the encoding_format field, so every later request goes back
+	// to plain JSON float arrays instead of failing the same way again.
+	floatMode atomic.Bool
 }
 
 // NewEncoder returns a kitvec.EncodeFunc that POSTs to an OpenAI-compatible
 // embeddings endpoint. Each invocation of the returned func makes exactly
 // one HTTP call; batching and concurrency are the caller's responsibility
 // via kitvec.EncodeBatched.
+//
+// Requests ask for base64-encoded embeddings (encoding_format "base64",
+// ~4x smaller than JSON float arrays); responses in either format are
+// accepted, and a server that rejects the field outright downgrades this
+// encoder to plain float requests for its lifetime.
 func NewEncoder(cfg EncoderConfig) kitvec.EncodeFunc {
-	url := strings.TrimRight(cfg.Endpoint, "/") + "/embeddings"
-	client := &http.Client{Timeout: cfg.Timeout}
-
-	return func(ctx context.Context, texts []string) ([][]float32, error) {
-		return encode(ctx, client, url, cfg, texts)
+	ec := &encoderClient{
+		client: &http.Client{Timeout: cfg.Timeout},
+		url:    strings.TrimRight(cfg.Endpoint, "/") + "/embeddings",
+		cfg:    cfg,
 	}
+	return ec.encode
 }
 
-// encode performs the retrying HTTP call and validates the response shape.
-func encode(
-	ctx context.Context, client *http.Client, url string, cfg EncoderConfig, texts []string,
-) ([][]float32, error) {
+// marshalRequest builds the request body, applying the configured input
+// suffix and, unless the encoder has downgraded to float mode, asking for
+// base64 embeddings.
+func (ec *encoderClient) marshalRequest(texts []string) ([]byte, error) {
 	inputs := texts
-	if cfg.InputSuffix != "" {
+	if ec.cfg.InputSuffix != "" {
 		inputs = make([]string, len(texts))
 		for i, t := range texts {
-			inputs[i] = t + cfg.InputSuffix
+			inputs[i] = t + ec.cfg.InputSuffix
 		}
 	}
-	reqBody, err := json.Marshal(embeddingsRequestBody{Model: cfg.Model, Input: inputs})
+	body := embeddingsRequestBody{Model: ec.cfg.Model, Input: inputs}
+	if !ec.floatMode.Load() {
+		body.EncodingFormat = "base64"
+	}
+	reqBody, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("[vector.embeddings] marshal request: %w", err)
 	}
+	return reqBody, nil
+}
 
-	attempts := cfg.MaxRetries
+// encode performs the retrying HTTP call and validates the response shape.
+func (ec *encoderClient) encode(ctx context.Context, texts []string) ([][]float32, error) {
+	usedBase64 := !ec.floatMode.Load()
+	reqBody, err := ec.marshalRequest(texts)
+	if err != nil {
+		return nil, err
+	}
+
+	attempts := ec.cfg.MaxRetries
 	if attempts <= 0 {
 		attempts = 1
 	}
 
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
-		vectors, retryable, err := attemptEncode(ctx, client, url, cfg, reqBody, texts)
+		vectors, retryable, err := ec.attemptEncode(ctx, reqBody, texts)
 		if err == nil {
 			return vectors, nil
+		}
+		if usedBase64 && isEncodingFormatRejection(err) {
+			// The server rejected the encoding_format field itself (not this
+			// input). Downgrade to float mode permanently and redo the call;
+			// without this, every request would fail identically and the
+			// build would abort on a transport nicety.
+			ec.floatMode.Store(true)
+			return ec.encode(ctx, texts)
 		}
 		lastErr = err
 		if !retryable || attempt == attempts {
@@ -181,13 +263,29 @@ func encode(
 	return nil, lastErr
 }
 
+// isEncodingFormatRejection reports whether err is a client-error response
+// that names the encoding_format field, i.e. a server refusing the base64
+// request format rather than the input. The match is deliberately narrow:
+// generic 4xx bodies must keep flowing through the normal retry/permanence
+// classification.
+func isEncodingFormatRejection(err error) bool {
+	var statusErr *HTTPStatusError
+	if !errors.As(err, &statusErr) {
+		return false
+	}
+	if statusErr.Status < 400 || statusErr.Status >= 500 {
+		return false
+	}
+	return strings.Contains(strings.ToLower(statusErr.Body), "encoding_format")
+}
+
 // attemptEncode makes a single HTTP request and decodes the response. The
 // retryable return value indicates whether the error is worth retrying
 // (429, 5xx, or a transport-level failure).
-func attemptEncode(
-	ctx context.Context, client *http.Client, url string, cfg EncoderConfig,
-	reqBody []byte, texts []string,
+func (ec *encoderClient) attemptEncode(
+	ctx context.Context, reqBody []byte, texts []string,
 ) ([][]float32, bool, error) {
+	client, url, cfg := ec.client, ec.url, ec.cfg
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, false, fmt.Errorf("[vector.embeddings] build request: %w", err)
@@ -254,7 +352,7 @@ func reorderAndValidate(
 				"[vector.embeddings] dimension mismatch at index %d: got %d, want %d",
 				d.Index, len(d.Embedding), dimension)
 		}
-		out[d.Index] = d.Embedding
+		out[d.Index] = []float32(d.Embedding)
 		seen[d.Index] = true
 	}
 	for i, ok := range seen {
