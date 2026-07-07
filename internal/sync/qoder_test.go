@@ -239,7 +239,7 @@ func writeProcessQoderResult(
 	result processResult,
 ) {
 	t.Helper()
-	written, _, failed := engine.writeBatch(
+	written, _, failed, _ := engine.writeBatch(
 		[]pendingWrite{{
 			sess:         result.results[0].Session,
 			msgs:         result.results[0].Messages,
