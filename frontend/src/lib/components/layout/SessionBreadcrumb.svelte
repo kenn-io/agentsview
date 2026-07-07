@@ -790,9 +790,12 @@
         <details class="usage-breakdown" bind:open={usageBreakdownOpen}>
           <summary
             class="usage-breakdown-trigger"
-            title="Session usage breakdown"
+            title={m.session_breadcrumb_usage_breakdown_title()}
           >
-            {sessionUsageBreakdown.length} steps
+            {m.session_breadcrumb_usage_breakdown_steps({
+              count: sessionUsageBreakdown.length,
+              countLabel: sessionUsageBreakdown.length.toLocaleString(),
+            })}
           </summary>
           {#if usageBreakdownOpen}
             <div class="usage-breakdown-menu">

@@ -156,6 +156,21 @@
   "session_breadcrumb_copy_session_id_value": "Copy session ID: {id}",
   "session_breadcrumb_copied": "Copied!",
   "session_breadcrumb_estimated_session_cost": "Estimated session cost",
+  "session_breadcrumb_usage_breakdown_title": "Session usage breakdown",
+  "session_breadcrumb_usage_breakdown_steps": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} step",
+        "countPlural=other": "{countLabel} steps"
+      }
+    }
+  ],
   "session_breadcrumb_copy_link_to_session": "Copy link to session",
   "session_breadcrumb_show_session_analysis": "Show session analysis",
   "session_breadcrumb_hide_session_analysis": "Hide session analysis",

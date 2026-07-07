@@ -153,6 +153,20 @@
   "session_breadcrumb_copy_session_id_value": "세션 ID 복사: {id}",
   "session_breadcrumb_copied": "복사됨!",
   "session_breadcrumb_estimated_session_cost": "예상 세션 비용",
+  "session_breadcrumb_usage_breakdown_title": "세션 사용량 상세",
+  "session_breadcrumb_usage_breakdown_steps": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{countLabel}개 단계"
+      }
+    }
+  ],
   "session_breadcrumb_copy_link_to_session": "세션 링크 복사",
   "session_breadcrumb_show_session_analysis": "세션 분석 표시",
   "session_breadcrumb_hide_session_analysis": "세션 분석 숨기기",
