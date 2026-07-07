@@ -1385,6 +1385,10 @@ func (db *DB) migrateColumns() error {
 			"tool_calls", "call_index",
 			"ALTER TABLE tool_calls ADD COLUMN call_index INTEGER",
 		},
+		{
+			"worktree_project_mappings", "layout",
+			"ALTER TABLE worktree_project_mappings ADD COLUMN layout TEXT NOT NULL DEFAULT 'explicit'",
+		},
 	}
 
 	for _, m := range migrations {
@@ -1469,6 +1473,7 @@ func (db *DB) migrateColumns() error {
 			id          INTEGER PRIMARY KEY,
 			machine     TEXT NOT NULL,
 			path_prefix TEXT NOT NULL,
+			layout      TEXT NOT NULL DEFAULT 'explicit',
 			project     TEXT NOT NULL,
 			enabled     INTEGER NOT NULL DEFAULT 1,
 			created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),

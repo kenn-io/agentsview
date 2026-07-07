@@ -597,6 +597,10 @@ func (d *DB) CopySessionMetadataFrom(
 	// the temp DB before parsing, so the final metadata copy
 	// reconciles the table to the quiesced source state.
 	if oldDBHasTable(ctx, tx, "worktree_project_mappings") {
+		layoutSelect := "'" + WorktreeMappingLayoutExplicit + "'"
+		if oldDBHasColumn(ctx, tx, "worktree_project_mappings", "layout") {
+			layoutSelect = "layout"
+		}
 		if _, err := tx.ExecContext(ctx, `
 			DELETE FROM main.worktree_project_mappings
 			WHERE NOT EXISTS (
@@ -609,11 +613,12 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO main.worktree_project_mappings
-				(machine, path_prefix, project, enabled, created_at, updated_at)
-			SELECT machine, path_prefix, project, enabled, created_at, updated_at
+				(machine, path_prefix, layout, project, enabled, created_at, updated_at)
+			SELECT machine, path_prefix, `+layoutSelect+`, project, enabled, created_at, updated_at
 			FROM old_db.worktree_project_mappings
 			WHERE true
 			ON CONFLICT(machine, path_prefix) DO UPDATE SET
+				layout = excluded.layout,
 				project = excluded.project,
 				enabled = excluded.enabled,
 				created_at = excluded.created_at,

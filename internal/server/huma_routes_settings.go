@@ -152,8 +152,8 @@ func (s *Server) humaCreateWorktreeMapping(
 	if err != nil {
 		return nil, err
 	}
-	if in.Body.PathPrefix == nil || in.Body.Project == nil {
-		return nil, apiError(http.StatusBadRequest, "path_prefix and project are required")
+	if in.Body.PathPrefix == nil {
+		return nil, apiError(http.StatusBadRequest, "path_prefix is required")
 	}
 	enabled := true
 	if in.Body.Enabled != nil {
@@ -162,7 +162,8 @@ func (s *Server) humaCreateWorktreeMapping(
 	mapping, err := localDB.CreateWorktreeProjectMapping(ctx, db.WorktreeProjectMapping{
 		Machine:    machine,
 		PathPrefix: *in.Body.PathPrefix,
-		Project:    *in.Body.Project,
+		Layout:     valueOrDefault(in.Body.Layout, db.WorktreeMappingLayoutExplicit),
+		Project:    stringValueOrEmpty(in.Body.Project),
 		Enabled:    enabled,
 	})
 	if err != nil {
@@ -183,13 +184,14 @@ func (s *Server) humaUpdateWorktreeMapping(
 	if err != nil {
 		return nil, err
 	}
-	if in.Body.PathPrefix == nil || in.Body.Project == nil || in.Body.Enabled == nil {
+	if in.Body.PathPrefix == nil || in.Body.Enabled == nil {
 		return nil, apiError(http.StatusBadRequest,
-			"path_prefix, project, and enabled are required")
+			"path_prefix and enabled are required")
 	}
 	mapping, err := localDB.UpdateWorktreeProjectMapping(ctx, machine, id, db.WorktreeProjectMapping{
 		PathPrefix: *in.Body.PathPrefix,
-		Project:    *in.Body.Project,
+		Layout:     valueOrDefault(in.Body.Layout, db.WorktreeMappingLayoutExplicit),
+		Project:    stringValueOrEmpty(in.Body.Project),
 		Enabled:    *in.Body.Enabled,
 	})
 	if err != nil {
@@ -250,6 +252,8 @@ func (s *Server) humaApplyWorktreeMappings(
 
 func humaWorktreeMappingError(err error) error {
 	switch {
+	case errors.Is(err, db.ErrWorktreeMappingInvalid):
+		return apiError(http.StatusBadRequest, err.Error())
 	case strings.Contains(err.Error(), "required"):
 		return apiError(http.StatusBadRequest, err.Error())
 	case errors.Is(err, db.ErrWorktreeMappingDuplicate):
@@ -259,4 +263,18 @@ func humaWorktreeMappingError(err error) error {
 	default:
 		return internalError("worktree mapping write", err)
 	}
+}
+
+func valueOrDefault(value *string, fallback string) string {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
+func stringValueOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
