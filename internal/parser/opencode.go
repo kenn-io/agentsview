@@ -410,7 +410,7 @@ func buildOpenCodeSession(
 		)
 	}
 
-	return buildOpenCodeParsedSession(
+	sess, parsed, err := buildOpenCodeParsedSession(
 		s,
 		worktree,
 		dbPath+"#"+s.id,
@@ -419,6 +419,11 @@ func buildOpenCodeSession(
 		msgs,
 		parts,
 	)
+	if err != nil || sess == nil {
+		return sess, parsed, err
+	}
+	sess.File.Hash = buildOpenCodeStorageFingerprint(msgs, parts)
+	return sess, parsed, nil
 }
 
 func buildOpenCodeParsedSession(

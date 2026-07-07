@@ -3909,6 +3909,12 @@ func (e *Engine) dropUnchangedSharedSQLiteResults(
 		// Every aider run in a history file shares the file's content hash, so
 		// a same-mtime append/truncate is caught by the hash compare.
 		compareHash = true
+	case parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode, parser.AgentIcodemate:
+		// OpenCode-family providers fan one shared container out to per-session
+		// results. The per-session mtime is the session's own updated time, and
+		// the hash compare uses the opencode storage fingerprint to catch
+		// same-mtime content changes.
+		compareHash = true
 	case parser.AgentZed, parser.AgentKiro:
 		// Zed and Kiro fan one container DB out to a session per row and have no
 		// per-row content hash, so unchanged rows are detected by mtime plus
@@ -7142,9 +7148,18 @@ func (e *Engine) shouldPreserveOpenCodeFormatArchive(
 	storedHash := derefString(stored.FileHash)
 	storedPath := derefString(stored.FilePath)
 	storedMtime := derefInt64(stored.FileMtime)
-	storedIsStorageArchive := hasOpenCodeFormatStorageFingerprint(
+	storedHasStorageFingerprint := hasOpenCodeFormatStorageFingerprint(
 		agent, storedHash,
-	) || isOpenCodeFormatStoragePath(agent, storedPath)
+	)
+	storedIsSQLiteVirtual := isOpenCodeFormatSQLiteVirtualPath(
+		agent, storedPath,
+	)
+	storedIsStorageArchive := isOpenCodeFormatStoragePath(
+		agent, storedPath,
+	) || (storedPath == "" && storedHasStorageFingerprint)
+	if storedIsSQLiteVirtual {
+		storedIsStorageArchive = false
+	}
 	if isOpenCodeFormatSQLiteVirtualPath(agent, path) &&
 		!storedIsStorageArchive {
 		return false
@@ -7160,7 +7175,7 @@ func (e *Engine) shouldPreserveOpenCodeFormatArchive(
 	// live child files in place, so we only preserve when the
 	// newly parsed transcript also looks incomplete relative
 	// to what is already archived.
-	if hasOpenCodeFormatStorageFingerprint(agent, storedHash) &&
+	if storedHasStorageFingerprint &&
 		hasOpenCodeFormatStorageFingerprint(agent, currentHash) &&
 		!parser.OpenCodeStorageFingerprintMissing(
 			storedHash, currentHash,
