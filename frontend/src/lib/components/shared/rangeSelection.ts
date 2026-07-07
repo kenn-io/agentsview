@@ -136,7 +136,8 @@ export function resolveRange(
  * Reconstruct the picker selection for stores that track a rolling-vs-pinned
  * window (analytics, usage). A non-pinned window is the rolling preset; a
  * pinned range that exactly matches the all-time bounds shows as the "All"
- * preset; anything else is a custom range.
+ * preset; exact calendar periods show as calendar selections; anything else
+ * is a custom range.
  */
 export function selectionFromWindow(opts: {
   isPinned: boolean;
@@ -160,8 +161,8 @@ export function selectionFromWindow(opts: {
 /**
  * Reconstruct a selection for stores that only persist a from/to span (trends,
  * insights). If the span exactly matches a relative preset's current bounds it
- * shows as that preset (so a default 1y range reads "Last year"); otherwise it
- * is a custom range.
+ * shows as that preset (so a default 1y range reads "Last year"). Exact
+ * calendar periods show as calendar selections; otherwise it is a custom range.
  */
 export function selectionFromRange(
   from: string,

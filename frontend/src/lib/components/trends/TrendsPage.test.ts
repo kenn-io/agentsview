@@ -92,7 +92,7 @@ describe("TrendsPage", () => {
     window.history.replaceState(
       null,
       "",
-      "/trends?from=2024-01-01&to=2024-01-31",
+      "/trends?from=2024-01-02&to=2024-01-31",
     );
     component = mount(TrendsPage, { target: document.body });
     await flushPromises();
