@@ -22,18 +22,23 @@ func TestBuildResolveScript(t *testing.T) {
 
 	// Only file-backed provider-authoritative agents belong in the resolver.
 	for _, def := range parser.Registry {
-		marker := "\"" + string(def.Type) + ":"
 		want := def.FileBased &&
 			parser.ProviderMigrationModes()[def.Type] ==
 				parser.ProviderMigrationProviderAuthoritative
 		if want {
-			assert.Contains(t, script, marker,
+			assert.True(t, resolveScriptMentionsAgent(script, def.Type),
 				"file-backed provider-authoritative agent %s missing from script", def.Type)
 			continue
 		}
-		assert.NotContains(t, script, marker,
+		assert.False(t, resolveScriptMentionsAgent(script, def.Type),
 			"unsupported agent %s must stay out of the SSH resolver", def.Type)
 	}
+}
+
+func resolveScriptMentionsAgent(script string, agent parser.AgentType) bool {
+	name := string(agent)
+	return strings.Contains(script, "\""+name+":") ||
+		strings.Contains(script, " "+name+"\n")
 }
 
 func TestResolveScriptExcludesDevinProviderRoot(t *testing.T) {
