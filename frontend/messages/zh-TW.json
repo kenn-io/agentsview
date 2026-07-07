@@ -154,6 +154,7 @@
   "session_breadcrumb_copied": "已複製！",
   "session_breadcrumb_estimated_session_cost": "預估會話成本",
   "session_breadcrumb_usage_breakdown_title": "會話用量明細",
+  "session_breadcrumb_usage_breakdown_loading": "正在載入用量數據...",
   "session_breadcrumb_usage_breakdown_steps": [
     {
       "declarations": [

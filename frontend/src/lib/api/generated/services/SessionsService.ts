@@ -1188,17 +1188,25 @@ export class SessionsService {
    */
   public static getApiV1SessionsIdUsage({
     id,
+    breakdown,
   }: {
     /**
      * Session ID
      */
     id: string,
+    /**
+     * Include per-step breakdown rows
+     */
+    breakdown?: boolean,
   }): CancelablePromise<SessionUsageResponse> {
     return __request(OpenAPI, {
       method: 'GET',
       url: '/api/v1/sessions/{id}/usage',
       path: {
         'id': id,
+      },
+      query: {
+        'breakdown': breakdown,
       },
       errors: {
         400: `Bad Request`,

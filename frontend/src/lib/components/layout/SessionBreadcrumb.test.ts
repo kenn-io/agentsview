@@ -108,6 +108,7 @@ interface SessionUsage {
   has_cost: boolean;
   models: string[];
   unpriced_models: string[];
+  breakdown_count: number;
   breakdown: SessionUsageBreakdownEntry[];
   server_running: boolean;
 }
@@ -141,6 +142,7 @@ function makeUsage(
     has_cost: false,
     models: [],
     unpriced_models: [],
+    breakdown_count: 0,
     breakdown: [],
     server_running: true,
     ...overrides,
@@ -154,6 +156,9 @@ async function openUsageBreakdown(): Promise<void> {
   expect(details).not.toBeNull();
   details!.open = true;
   details!.dispatchEvent(new Event("toggle"));
+  await tick();
+  // Opening triggers the lazy breakdown fetch; let it settle.
+  await Promise.resolve();
   await tick();
 }
 
@@ -874,41 +879,46 @@ describe("SessionBreadcrumb", () => {
       unmount(component);
     });
 
-    it("renders the session usage breakdown from the usage response", async () => {
-      sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(
-        makeUsage({
+    it("renders the session usage breakdown lazily when the menu opens", async () => {
+      const rows: SessionUsageBreakdownEntry[] = [
+        {
+          ordinal: 1,
+          message_ordinal: 0,
+          source: "message",
+          label: "Prompt 1",
+          timestamp: "2026-02-20T12:30:00Z",
+          model: "claude-opus-4-6",
+          input_tokens: 1000,
+          output_tokens: 500,
+          cache_creation_input_tokens: 200,
+          cache_read_input_tokens: 300,
+          cost_usd: 0.017,
           has_cost: true,
-          cost_usd: 0.022,
-          breakdown: [
-            {
-              ordinal: 1,
-              message_ordinal: 0,
-              source: "message",
-              label: "Prompt 1",
-              timestamp: "2026-02-20T12:30:00Z",
-              model: "claude-opus-4-6",
-              input_tokens: 1000,
-              output_tokens: 500,
-              cache_creation_input_tokens: 200,
-              cache_read_input_tokens: 300,
-              cost_usd: 0.017,
+        },
+        {
+          ordinal: 2,
+          source: "session",
+          label: "session",
+          timestamp: "2026-02-20T12:31:00Z",
+          model: "gpt-5.4",
+          input_tokens: 150,
+          output_tokens: 20,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+          cost_usd: 0.005,
+          has_cost: true,
+        },
+      ];
+      sessionsService.getApiV1SessionsIdUsage.mockImplementation(
+        ({ breakdown }: { id: string; breakdown?: boolean }) =>
+          Promise.resolve(
+            makeUsage({
               has_cost: true,
-            },
-            {
-              ordinal: 2,
-              source: "session",
-              label: "session",
-              timestamp: "2026-02-20T12:31:00Z",
-              model: "gpt-5.4",
-              input_tokens: 150,
-              output_tokens: 20,
-              cache_creation_input_tokens: 0,
-              cache_read_input_tokens: 0,
-              cost_usd: 0.005,
-              has_cost: true,
-            },
-          ],
-        }),
+              cost_usd: 0.022,
+              breakdown_count: 2,
+              breakdown: breakdown ? rows : [],
+            }),
+          ),
       );
 
       const component = mount(SessionBreadcrumb, {
@@ -934,13 +944,26 @@ describe("SessionBreadcrumb", () => {
       expect(
         document.querySelectorAll(".usage-breakdown-row"),
       ).toHaveLength(0);
+      expect(
+        sessionsService.getApiV1SessionsIdUsage,
+      ).toHaveBeenCalledTimes(1);
+      expect(
+        sessionsService.getApiV1SessionsIdUsage,
+      ).toHaveBeenCalledWith({ id: "run:123456789abcdef" });
+
       await openUsageBreakdown();
-      const rows = Array.from(
+      expect(
+        sessionsService.getApiV1SessionsIdUsage,
+      ).toHaveBeenCalledWith({
+        id: "run:123456789abcdef",
+        breakdown: true,
+      });
+      const renderedRows = Array.from(
         document.querySelectorAll(".usage-breakdown-row"),
       );
-      expect(rows).toHaveLength(2);
-      const first = rows[0]!;
-      const second = rows[1]!;
+      expect(renderedRows).toHaveLength(2);
+      const first = renderedRows[0]!;
+      const second = renderedRows[1]!;
       expect(first.textContent).toContain("Prompt 1");
       expect(first.textContent).toContain("claude-opus-4-6");
       expect(first.textContent).toContain("1,500 ctx");
@@ -951,9 +974,9 @@ describe("SessionBreadcrumb", () => {
       unmount(component);
     });
 
-    it("renders no usage breakdown when the usage response has no rows", async () => {
+    it("renders no usage breakdown when the usage response counts no rows", async () => {
       sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(
-        makeUsage({ breakdown: [] }),
+        makeUsage({ breakdown_count: 0 }),
       );
 
       const component = mount(SessionBreadcrumb, {
@@ -976,22 +999,28 @@ describe("SessionBreadcrumb", () => {
     });
 
     it("renders every breakdown row in the scrollable menu", async () => {
-      sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(
-        makeUsage({
-          breakdown: Array.from({ length: 8 }, (_, i) => ({
-            ordinal: i + 1,
-            source: "message",
-            label: `Prompt ${i + 1}`,
-            timestamp: "2026-02-20T12:30:00Z",
-            model: "claude-opus-4-6",
-            input_tokens: 100 + i,
-            output_tokens: 10 + i,
-            cache_creation_input_tokens: 0,
-            cache_read_input_tokens: 0,
-            cost_usd: 0,
-            has_cost: false,
-          })),
-        }),
+      sessionsService.getApiV1SessionsIdUsage.mockImplementation(
+        ({ breakdown }: { id: string; breakdown?: boolean }) =>
+          Promise.resolve(
+            makeUsage({
+              breakdown_count: 8,
+              breakdown: breakdown
+                ? Array.from({ length: 8 }, (_, i) => ({
+                    ordinal: i + 1,
+                    source: "message",
+                    label: `Prompt ${i + 1}`,
+                    timestamp: "2026-02-20T12:30:00Z",
+                    model: "claude-opus-4-6",
+                    input_tokens: 100 + i,
+                    output_tokens: 10 + i,
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 0,
+                    cost_usd: 0,
+                    has_cost: false,
+                  }))
+                : [],
+            }),
+          ),
       );
 
       const component = mount(SessionBreadcrumb, {
@@ -1017,32 +1046,137 @@ describe("SessionBreadcrumb", () => {
       unmount(component);
     });
 
+    it("shows a loading placeholder until breakdown rows arrive", async () => {
+      const rowsFetch = deferred<SessionUsage>();
+      sessionsService.getApiV1SessionsIdUsage.mockImplementation(
+        ({ breakdown }: { id: string; breakdown?: boolean }) =>
+          breakdown
+            ? rowsFetch.promise
+            : Promise.resolve(makeUsage({ breakdown_count: 1 })),
+      );
+
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: {
+          session: makeSession("claude"),
+          onBack: () => {},
+        },
+      });
+
+      await vi.waitFor(() => {
+        expect(
+          document.querySelector(".usage-breakdown-trigger")
+            ?.textContent
+            ?.trim(),
+        ).toBe("1 step");
+      });
+      await openUsageBreakdown();
+      expect(
+        document.querySelector(".usage-breakdown-status")
+          ?.textContent
+          ?.trim(),
+      ).toBe("Loading usage...");
+      expect(
+        document.querySelectorAll(".usage-breakdown-row"),
+      ).toHaveLength(0);
+
+      rowsFetch.resolve(
+        makeUsage({
+          breakdown_count: 1,
+          breakdown: [
+            {
+              ordinal: 1,
+              source: "message",
+              label: "Prompt 1",
+              timestamp: "2026-02-20T12:30:00Z",
+              model: "claude-opus-4-6",
+              input_tokens: 100,
+              output_tokens: 10,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+              cost_usd: 0,
+              has_cost: false,
+            },
+          ],
+        }),
+      );
+      await flushPromises();
+      expect(document.querySelector(".usage-breakdown-status")).toBeNull();
+      expect(
+        document.querySelectorAll(".usage-breakdown-row"),
+      ).toHaveLength(1);
+
+      unmount(component);
+    });
+
+    it("shows a failure placeholder when the breakdown fetch fails", async () => {
+      sessionsService.getApiV1SessionsIdUsage.mockImplementation(
+        ({ breakdown }: { id: string; breakdown?: boolean }) =>
+          breakdown
+            ? Promise.reject(new Error("boom"))
+            : Promise.resolve(makeUsage({ breakdown_count: 3 })),
+      );
+
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: {
+          session: makeSession("claude"),
+          onBack: () => {},
+        },
+      });
+
+      await vi.waitFor(() => {
+        expect(
+          document.querySelector(".usage-breakdown-trigger")
+            ?.textContent
+            ?.trim(),
+        ).toBe("3 steps");
+      });
+      await openUsageBreakdown();
+      expect(
+        document.querySelector(".usage-breakdown-status")
+          ?.textContent
+          ?.trim(),
+      ).toBe("Failed");
+      expect(
+        document.querySelectorAll(".usage-breakdown-row"),
+      ).toHaveLength(0);
+
+      unmount(component);
+    });
+
     it("ignores a stale usage response after switching sessions", async () => {
       const first = deferred<SessionUsage>();
-      sessionsService.getApiV1SessionsIdUsage
-        .mockReturnValueOnce(first.promise)
-        .mockResolvedValueOnce(
-          makeUsage({
-            session_id: "run:bbb",
-            has_cost: true,
-            cost_usd: 2,
-            breakdown: [
-              {
-                ordinal: 1,
-                source: "message",
-                label: "Prompt 1",
-                timestamp: "2026-02-20T12:31:00Z",
-                model: "gpt-5.4",
-                input_tokens: 10,
-                output_tokens: 2,
-                cache_creation_input_tokens: 0,
-                cache_read_input_tokens: 0,
-                cost_usd: 2,
-                has_cost: true,
-              },
-            ],
-          }),
-        );
+      sessionsService.getApiV1SessionsIdUsage.mockImplementation(
+        ({ id, breakdown }: { id: string; breakdown?: boolean }) => {
+          if (id === "run:aaa") return first.promise;
+          return Promise.resolve(
+            makeUsage({
+              session_id: "run:bbb",
+              has_cost: true,
+              cost_usd: 2,
+              breakdown_count: 1,
+              breakdown: breakdown
+                ? [
+                    {
+                      ordinal: 1,
+                      source: "message",
+                      label: "Prompt 1",
+                      timestamp: "2026-02-20T12:31:00Z",
+                      model: "gpt-5.4",
+                      input_tokens: 10,
+                      output_tokens: 2,
+                      cache_creation_input_tokens: 0,
+                      cache_read_input_tokens: 0,
+                      cost_usd: 2,
+                      has_cost: true,
+                    },
+                  ]
+                : [],
+            }),
+          );
+        },
+      );
 
       const component = createClassComponent({
         component: SessionBreadcrumb,
@@ -1067,27 +1201,13 @@ describe("SessionBreadcrumb", () => {
       ).toContain("gpt-5.4");
 
       // The first session's response arrives late and must not
-      // overwrite the newer session's cost.
+      // overwrite the newer session's cost or step count.
       first.resolve(
         makeUsage({
           session_id: "run:aaa",
           has_cost: true,
           cost_usd: 9.99,
-          breakdown: [
-            {
-              ordinal: 1,
-              source: "message",
-              label: "Prompt 1",
-              timestamp: "2026-02-20T12:30:00Z",
-              model: "stale-model",
-              input_tokens: 999,
-              output_tokens: 99,
-              cache_creation_input_tokens: 0,
-              cache_read_input_tokens: 0,
-              cost_usd: 9.99,
-              has_cost: true,
-            },
-          ],
+          breakdown_count: 42,
         }),
       );
       await flushPromises();
@@ -1095,8 +1215,13 @@ describe("SessionBreadcrumb", () => {
         document.querySelector(".cost-badge")?.textContent?.trim(),
       ).toBe("$2.00");
       expect(
+        document.querySelector(".usage-breakdown-trigger")
+          ?.textContent
+          ?.trim(),
+      ).toBe("1 step");
+      expect(
         document.querySelector(".usage-breakdown-row")?.textContent,
-      ).not.toContain("stale-model");
+      ).toContain("gpt-5.4");
 
       component.$destroy();
     });

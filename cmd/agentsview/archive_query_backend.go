@@ -263,7 +263,7 @@ func (b localArchiveQueryBackend) SessionUsage(
 		engine.Close()
 	}
 
-	u, err := b.database.GetSessionUsage(ctx, resolvedID)
+	u, err := b.database.GetSessionUsage(ctx, resolvedID, true)
 	if err != nil {
 		return nil, tokenUseExitErr,
 			fmt.Errorf("querying session usage: %w", err)
@@ -282,7 +282,7 @@ func (b localArchiveQueryBackend) SessionUsage(
 				"warning: pricing refresh failed: %v\n", refErr)
 		} else if refreshed {
 			if u2, e := b.database.GetSessionUsage(
-				ctx, resolvedID,
+				ctx, resolvedID, true,
 			); e == nil && u2 != nil {
 				u = u2
 			}

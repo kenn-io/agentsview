@@ -130,6 +130,7 @@
   });
 
   let sessionCost = $state<number | null>(null);
+  let sessionUsageBreakdownCount = $state(0);
   let sessionUsageBreakdown = $state<SessionUsageBreakdownEntry[]>([]);
   // Key of the last successful usage fetch. Cost depends on more
   // than output tokens (input/cache tokens and explicit usage-event
@@ -141,34 +142,48 @@
   let costFetchKey: string | null = null;
   let costSessionId: string | null = null;
   let costRequestSeq = 0;
+  let breakdownFetchKey: string | null = null;
+  let breakdownRequestSeq = 0;
+
+  function usageFetchKey(s: Session): string {
+    return [
+      s.id,
+      s.total_output_tokens ?? 0,
+      s.peak_context_tokens ?? 0,
+      s.has_total_output_tokens ?? "",
+      s.has_peak_context_tokens ?? "",
+      s.message_count ?? 0,
+      s.ended_at ?? "",
+    ].join("\n");
+  }
+
+  function resetUsageBreakdown() {
+    sessionUsageBreakdownCount = 0;
+    sessionUsageBreakdown = [];
+    usageBreakdownOpen = false;
+    usageBreakdownLoading = false;
+    breakdownFetchKey = null;
+    breakdownRequestSeq++;
+  }
+
   $effect(() => {
     if (!session) {
       sessionCost = null;
-      sessionUsageBreakdown = [];
-      usageBreakdownOpen = false;
+      resetUsageBreakdown();
       costFetchKey = null;
       costSessionId = null;
       costRequestSeq++;
       return;
     }
     const id = session.id;
-    const key = [
-      id,
-      session.total_output_tokens ?? 0,
-      session.peak_context_tokens ?? 0,
-      session.has_total_output_tokens ?? "",
-      session.has_peak_context_tokens ?? "",
-      session.message_count ?? 0,
-      session.ended_at ?? "",
-    ].join("\n");
+    const key = usageFetchKey(session);
     if (id !== costSessionId) {
       // Entering a different session invalidates both the displayed
       // cost and the fetch cache; the cached key must never satisfy
       // the early return below while another session's request is
       // still in flight.
       sessionCost = null;
-      sessionUsageBreakdown = [];
-      usageBreakdownOpen = false;
+      resetUsageBreakdown();
       costFetchKey = null;
     }
     if (key === costFetchKey) return;
@@ -180,25 +195,51 @@
         if (seq !== costRequestSeq) return;
         costFetchKey = key;
         sessionCost = res.has_cost ? res.cost_usd : null;
+        sessionUsageBreakdownCount = res.breakdown_count ?? 0;
+      })
+      .catch(() => {
+        if (seq !== costRequestSeq) return;
+        sessionUsageBreakdownCount = 0;
+        // Leave the fetch key unset so the next
+        // session refresh retries the lookup.
+      });
+  });
+
+  // Breakdown rows are fetched only when the menu opens; large
+  // sessions can have thousands of entries and the count-only
+  // /usage fetch above happens automatically on every session.
+  $effect(() => {
+    if (!usageBreakdownOpen || !session) return;
+    const id = session.id;
+    const key = usageFetchKey(session);
+    if (key === breakdownFetchKey) return;
+    const seq = ++breakdownRequestSeq;
+    usageBreakdownLoading = true;
+    configureGeneratedClient();
+    SessionsService.getApiV1SessionsIdUsage({ id, breakdown: true })
+      .then((res) => {
+        if (seq !== breakdownRequestSeq) return;
+        breakdownFetchKey = key;
+        usageBreakdownLoading = false;
         sessionUsageBreakdown = Array.isArray(res.breakdown)
           ? (res.breakdown as SessionUsageBreakdownEntry[])
           : [];
       })
       .catch(() => {
-        if (seq !== costRequestSeq) return;
+        if (seq !== breakdownRequestSeq) return;
+        usageBreakdownLoading = false;
         sessionUsageBreakdown = [];
-        // Leave the fetch key unset so the next
-        // session refresh retries the lookup.
+        // Leave the fetch key unset so reopening retries.
       });
   });
 
   let sessionCostLabel = $derived(
     sessionCost !== null ? formatCost(sessionCost) : null,
   );
-  // Menu rows render only while open; large sessions can have
-  // thousands of breakdown entries and the /usage fetch happens
-  // automatically, so the collapsed dropdown must stay DOM-free.
+  // Menu rows render only while open, so the collapsed dropdown
+  // stays DOM-free.
   let usageBreakdownOpen = $state(false);
+  let usageBreakdownLoading = $state(false);
 
   let sessionContextTokens = $derived(session?.peak_context_tokens ?? 0);
   let sessionOutputTokens = $derived(session?.total_output_tokens ?? 0);
@@ -786,19 +827,28 @@
           {sessionTokenSummary}
         </span>
       {/if}
-      {#if sessionUsageBreakdown.length > 0}
+      {#if sessionUsageBreakdownCount > 0}
         <details class="usage-breakdown" bind:open={usageBreakdownOpen}>
           <summary
             class="usage-breakdown-trigger"
             title={m.session_breadcrumb_usage_breakdown_title()}
           >
             {m.session_breadcrumb_usage_breakdown_steps({
-              count: sessionUsageBreakdown.length,
-              countLabel: sessionUsageBreakdown.length.toLocaleString(),
+              count: sessionUsageBreakdownCount,
+              countLabel: sessionUsageBreakdownCount.toLocaleString(),
             })}
           </summary>
           {#if usageBreakdownOpen}
             <div class="usage-breakdown-menu">
+              {#if usageBreakdownLoading}
+                <div class="usage-breakdown-status">
+                  {m.session_breadcrumb_usage_breakdown_loading()}
+                </div>
+              {:else if sessionUsageBreakdown.length === 0}
+                <div class="usage-breakdown-status">
+                  {m.session_breadcrumb_failed()}
+                </div>
+              {:else}
               {#each sessionUsageBreakdown as row (row.ordinal)}
                 <div class="usage-breakdown-row" title={formatBreakdownTitle(row)}>
                   <span class="usage-breakdown-label">
@@ -819,6 +869,7 @@
                   {/if}
                 </div>
               {/each}
+              {/if}
             </div>
           {/if}
         </details>
@@ -1238,6 +1289,12 @@
     background: var(--bg-primary);
     box-shadow: var(--shadow-lg);
     z-index: var(--z-popover);
+  }
+
+  .usage-breakdown-status {
+    padding: 5px 6px;
+    font-size: 11px;
+    color: var(--text-muted);
   }
 
   .usage-breakdown-row {

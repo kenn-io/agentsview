@@ -368,8 +368,14 @@ type sessionUsageResponse struct {
 	AICredits         float64                         `json:"ai_credits,omitempty"`
 	Models            []string                        `json:"models"`
 	UnpricedModels    []string                        `json:"unpriced_models"`
+	BreakdownCount    int                             `json:"breakdown_count"`
 	Breakdown         []sessionUsageBreakdownResponse `json:"breakdown"`
 	ServerRunning     bool                            `json:"server_running"`
+}
+
+type sessionUsageInput struct {
+	ID        string `path:"id" required:"true" doc:"Session ID"`
+	Breakdown bool   `query:"breakdown" doc:"Include per-step breakdown rows"`
 }
 
 type sessionUsageBreakdownResponse struct {
@@ -439,6 +445,7 @@ func newSessionUsageHumaResponse(usage *db.SessionUsage) sessionUsageResponse {
 		AICredits:         usage.AICredits,
 		Models:            usage.Models,
 		UnpricedModels:    unpricedModels,
+		BreakdownCount:    usage.BreakdownCount,
 		Breakdown:         breakdown,
 		ServerRunning:     true,
 	}
@@ -446,9 +453,9 @@ func newSessionUsageHumaResponse(usage *db.SessionUsage) sessionUsageResponse {
 
 func (s *Server) humaSessionUsage(
 	ctx context.Context,
-	in *idPathInput,
+	in *sessionUsageInput,
 ) (*jsonOutput[sessionUsageResponse], error) {
-	usage, err := s.db.GetSessionUsage(ctx, in.ID)
+	usage, err := s.db.GetSessionUsage(ctx, in.ID, in.Breakdown)
 	if err != nil {
 		if handled := handleHumaContextError(err); handled != nil {
 			return nil, handled

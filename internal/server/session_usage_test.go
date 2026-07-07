@@ -38,6 +38,7 @@ func TestHandleSessionUsage_PricedSession(t *testing.T) {
 			)
 		})
 
+	// Without ?breakdown=true the response carries only the count.
 	w := te.get(t, "/api/v1/sessions/codex:usage-priced/usage")
 	assertStatus(t, w, http.StatusOK)
 
@@ -54,24 +55,34 @@ func TestHandleSessionUsage_PricedSession(t *testing.T) {
 		"has_cost":            true,
 		"models":              []any{"gpt-5.1"},
 		"unpriced_models":     []any{},
-		"breakdown": []any{
-			map[string]any{
-				"ordinal":                     float64(1),
-				"message_ordinal":             float64(1),
-				"source":                      "message",
-				"label":                       "Prompt 2",
-				"timestamp":                   tsSeed,
-				"model":                       "gpt-5.1",
-				"input_tokens":                float64(1000),
-				"output_tokens":               float64(500),
-				"cache_creation_input_tokens": float64(200),
-				"cache_read_input_tokens":     float64(300),
-				"cost_usd":                    0.01134,
-				"has_cost":                    true,
-			},
-		},
-		"server_running": true,
+		"breakdown_count":     float64(1),
+		"breakdown":           []any{},
+		"server_running":      true,
 	}, got)
+
+	w = te.get(t,
+		"/api/v1/sessions/codex:usage-priced/usage?breakdown=true")
+	assertStatus(t, w, http.StatusOK)
+
+	got = map[string]any{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, float64(1), got["breakdown_count"], "breakdown_count")
+	assert.Equal(t, []any{
+		map[string]any{
+			"ordinal":                     float64(1),
+			"message_ordinal":             float64(1),
+			"source":                      "message",
+			"label":                       "Prompt 2",
+			"timestamp":                   tsSeed,
+			"model":                       "gpt-5.1",
+			"input_tokens":                float64(1000),
+			"output_tokens":               float64(500),
+			"cache_creation_input_tokens": float64(200),
+			"cache_read_input_tokens":     float64(300),
+			"cost_usd":                    0.01134,
+			"has_cost":                    true,
+		},
+	}, got["breakdown"], "breakdown rows with ?breakdown=true")
 }
 
 func TestHandleSessionUsage_NoTokenOrCostData(t *testing.T) {
@@ -97,6 +108,7 @@ func TestHandleSessionUsage_NoTokenOrCostData(t *testing.T) {
 		"has_cost":            false,
 		"models":              []any{},
 		"unpriced_models":     []any{},
+		"breakdown_count":     float64(0),
 		"breakdown":           []any{},
 		"server_running":      true,
 	}, got)
@@ -146,7 +158,7 @@ func TestHandleSessionUsage_BreakdownOrderingAndDedup(t *testing.T) {
 	), "ReplaceSessionUsageEvents")
 
 	usage, err := te.db.GetSessionUsage(context.Background(),
-		"codex:usage-breakdown")
+		"codex:usage-breakdown", true)
 	require.NoError(t, err, "GetSessionUsage")
 	require.NotNil(t, usage, "usage is nil")
 	require.Len(t, usage.Breakdown, 2)

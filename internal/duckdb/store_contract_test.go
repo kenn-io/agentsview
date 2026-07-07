@@ -329,7 +329,7 @@ func duckContractAnalyticsTrendsAndUsage(
 	require.NoError(t, err)
 	require.Equal(t, 2, counts.Total)
 
-	sessionUsage, err := store.GetSessionUsage(ctx, fixture.alphaID)
+	sessionUsage, err := store.GetSessionUsage(ctx, fixture.alphaID, true)
 	require.NoError(t, err)
 	require.NotNil(t, sessionUsage)
 	require.True(t, sessionUsage.HasCost)

@@ -217,7 +217,7 @@ func storeSessionUsageData(
 		return nil, tokenUseExitNotFound, nil
 	}
 
-	u, err := store.GetSessionUsage(ctx, resolvedID)
+	u, err := store.GetSessionUsage(ctx, resolvedID, true)
 	if err != nil {
 		return nil, tokenUseExitErr,
 			fmt.Errorf("querying %s session usage: %w", storeName, err)

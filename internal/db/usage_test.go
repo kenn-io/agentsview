@@ -409,7 +409,7 @@ func TestUsageRowsHandleBlankMessageTimestampWithoutSessionStart(t *testing.T) {
 	assert.Equal(t, 100, daily.Totals.InputTokens)
 	assert.Equal(t, 50, daily.Totals.OutputTokens)
 
-	usage, err := d.GetSessionUsage(ctx, "blank-ts")
+	usage, err := d.GetSessionUsage(ctx, "blank-ts", true)
 	requireNoError(t, err, "GetSessionUsage")
 	require.NotNil(t, usage)
 	assert.Equal(t, []string{"claude-sonnet-4-20250514"}, usage.Models)
@@ -458,7 +458,7 @@ func TestUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 	assert.Equal(t, rawInput, daily.Totals.InputTokens, "daily input")
 	assert.Equal(t, rawOutput, daily.Totals.OutputTokens, "daily output")
 
-	usage, err := d.GetSessionUsage(ctx, "hermes:summary")
+	usage, err := d.GetSessionUsage(ctx, "hermes:summary", true)
 	requireNoError(t, err, "GetSessionUsage")
 	require.NotNil(t, usage, "session usage")
 	assert.Equal(t, rawOutput, usage.TotalOutputTokens, "session output total")
@@ -1227,7 +1227,7 @@ func TestUsageAggregationClampsMessageTokenJSON(t *testing.T) {
 	assert.InDelta(t, 20.0, result.Totals.TotalCost, 1e-9,
 		"TotalCost")
 
-	usage, err := d.GetSessionUsage(ctx, "sess1")
+	usage, err := d.GetSessionUsage(ctx, "sess1", true)
 	requireNoError(t, err, "GetSessionUsage")
 	require.NotNil(t, usage, "session usage")
 	require.True(t, usage.HasCost, "HasCost")
@@ -3230,7 +3230,7 @@ func TestGetSessionUsage_PricedModel(t *testing.T) {
 			`{"input_tokens":1000,"output_tokens":500}`),
 	})
 
-	u, err := d.GetSessionUsage(ctx, "claude:s1")
+	u, err := d.GetSessionUsage(ctx, "claude:s1", true)
 	requireNoError(t, err, "GetSessionUsage")
 	require.NotNil(t, u, "usage is nil")
 	require.True(t, u.HasCost, "HasCost = false, want true")
@@ -3272,7 +3272,7 @@ func TestGetSessionUsage_UnpricedModel(t *testing.T) {
 			`{"input_tokens":1000,"output_tokens":500}`),
 	})
 
-	u, err := d.GetSessionUsage(ctx, "claude:s2")
+	u, err := d.GetSessionUsage(ctx, "claude:s2", true)
 	requireNoError(t, err, "GetSessionUsage")
 	assert.False(t, u.HasCost, "HasCost = true, want false (unpriced)")
 	assert.Equal(t, 0.0, u.CostUSD, "CostUSD")
@@ -3303,7 +3303,7 @@ func TestGetSessionUsage_MixedPricedUnpriced(t *testing.T) {
 		},
 	)
 
-	u, err := d.GetSessionUsage(ctx, "claude:s3")
+	u, err := d.GetSessionUsage(ctx, "claude:s3", true)
 	requireNoError(t, err, "GetSessionUsage")
 	assert.False(t, u.HasCost, "HasCost = true, want false (mixed)")
 	assert.Equal(t, 0.0, u.CostUSD, "CostUSD")
@@ -3326,7 +3326,7 @@ func TestGetSessionUsage_ExplicitCostOnly(t *testing.T) {
 		OccurredAt: "2026-05-20T10:05:00Z", DedupKey: "session:hermes:s4",
 	}}), "ReplaceSessionUsageEvents")
 
-	u, err := d.GetSessionUsage(ctx, "hermes:s4")
+	u, err := d.GetSessionUsage(ctx, "hermes:s4", true)
 	requireNoError(t, err, "GetSessionUsage")
 	assert.True(t, u.HasCost, "HasCost = false, want true (explicit cost)")
 	assert.InDelta(t, 0.02, u.CostUSD, 1e-9, "CostUSD")
@@ -3373,7 +3373,7 @@ func TestGetSessionUsage_BreakdownOrderingAndBuckets(t *testing.T) {
 		},
 	)
 
-	u, err := d.GetSessionUsage(ctx, "claude:s-breakdown")
+	u, err := d.GetSessionUsage(ctx, "claude:s-breakdown", true)
 	requireNoError(t, err, "GetSessionUsage")
 	require.Len(t, u.Breakdown, 2, "Breakdown")
 	assert.Equal(t, 650, u.TotalOutputTokens, "TotalOutputTokens")
@@ -3426,7 +3426,7 @@ func TestGetSessionUsage_DedupesDuplicateClaudeRows(t *testing.T) {
 			TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
 		},
 	)
-	u, err := d.GetSessionUsage(ctx, "claude:s6")
+	u, err := d.GetSessionUsage(ctx, "claude:s6", true)
 	requireNoError(t, err, "GetSessionUsage")
 	// One row priced at 1000*5/1e6 + 500*25/1e6 = 0.0175; deduped, not 0.035.
 	assert.InDelta(t, 0.0175, u.CostUSD, 1e-9, "CostUSD want 0.0175 (deduped)")
@@ -3458,7 +3458,7 @@ func TestGetSessionUsage_DedupesBySourceUUIDWhenClaudePairIncomplete(t *testing.
 			TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
 		},
 	)
-	u, err := d.GetSessionUsage(ctx, "claude:s7")
+	u, err := d.GetSessionUsage(ctx, "claude:s7", true)
 	requireNoError(t, err, "GetSessionUsage")
 	assert.InDelta(t, 0.0175, u.CostUSD, 1e-9, "CostUSD want 0.0175 (deduped)")
 	assert.True(t, u.HasCost, "HasCost = false, want true")
@@ -3476,7 +3476,7 @@ func TestGetSessionUsage_NoTokenRowsKeepsMetadata(t *testing.T) {
 		s.HasPeakContextTokens = true
 	})
 
-	u, err := d.GetSessionUsage(ctx, "claude:s5")
+	u, err := d.GetSessionUsage(ctx, "claude:s5", true)
 	requireNoError(t, err, "GetSessionUsage")
 	require.NotNil(t, u, "usage is nil")
 	assert.Equal(t, 700, u.TotalOutputTokens,
@@ -3491,7 +3491,7 @@ func TestGetSessionUsage_NoTokenRowsKeepsMetadata(t *testing.T) {
 
 func TestGetSessionUsage_NotFound(t *testing.T) {
 	d := testDB(t)
-	u, err := d.GetSessionUsage(context.Background(), "nope:x")
+	u, err := d.GetSessionUsage(context.Background(), "nope:x", true)
 	requireNoError(t, err, "GetSessionUsage")
 	assert.Nil(t, u, "usage")
 }
@@ -3523,7 +3523,7 @@ func TestGetSessionUsage_AICreditsCapability(t *testing.T) {
 			`{"input_tokens":1000,"output_tokens":500}`),
 	})
 
-	u, err := d.GetSessionUsage(ctx, "ai-credit-agent:s1")
+	u, err := d.GetSessionUsage(ctx, "ai-credit-agent:s1", true)
 	requireNoError(t, err, "GetSessionUsage")
 	require.NotNil(t, u, "usage is nil")
 	assert.True(t, u.HasCost, "HasCost = false, want true")

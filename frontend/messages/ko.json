@@ -154,6 +154,7 @@
   "session_breadcrumb_copied": "복사됨!",
   "session_breadcrumb_estimated_session_cost": "예상 세션 비용",
   "session_breadcrumb_usage_breakdown_title": "세션 사용량 상세",
+  "session_breadcrumb_usage_breakdown_loading": "사용량 불러오는 중...",
   "session_breadcrumb_usage_breakdown_steps": [
     {
       "declarations": [

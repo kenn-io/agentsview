@@ -6,6 +6,7 @@ export type SessionUsageResponse = {
   agent: string;
   ai_credits?: number;
   breakdown: any[] | null;
+  breakdown_count: number;
   cost_usd: number;
   has_cost: boolean;
   has_token_data: boolean;

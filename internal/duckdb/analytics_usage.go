@@ -3880,6 +3880,32 @@ func (s *Store) sessionUsageAggregateRows(
 	return out, rows.Err()
 }
 
+// sessionUsageRowCount counts the deduped usage rows that would
+// contribute breakdown entries, mirroring duckSessionUsageRowCost's
+// contributes rule (an explicit cost or any nonzero token counter)
+// without shipping the rows.
+func (s *Store) sessionUsageRowCount(
+	ctx context.Context, sessionID string,
+) (int, error) {
+	cte, args := duckUsageCTE(db.UsageFilter{}, sessionID)
+	query := cte + `
+		SELECT COUNT(*)
+		FROM usage_localized
+		WHERE cost_usd IS NOT NULL
+			OR input_tokens_norm != 0
+			OR output_tokens_norm != 0
+			OR cache_create_norm != 0
+			OR cache_read_norm != 0
+			OR reasoning_tokens_norm != 0`
+	var count int
+	if err := s.queryRowContext(ctx, query, args...).
+		Scan(&count); err != nil {
+		return 0, fmt.Errorf(
+			"counting duckdb session usage rows: %w", err)
+	}
+	return count, nil
+}
+
 func (s *Store) sessionUsageRows(
 	ctx context.Context, sessionID string,
 ) ([]duckSessionUsageRow, error) {
@@ -4098,7 +4124,7 @@ func (s *Store) GetUsageMatchingSessionCount(
 }
 
 func (s *Store) GetSessionUsage(
-	ctx context.Context, sessionID string,
+	ctx context.Context, sessionID string, includeBreakdown bool,
 ) (*db.SessionUsage, error) {
 	sess, err := s.GetSession(ctx, sessionID)
 	if err != nil || sess == nil {
@@ -4113,7 +4139,13 @@ func (s *Store) GetSessionUsage(
 	if err != nil {
 		return nil, err
 	}
-	breakdownRows, err := s.sessionUsageRows(ctx, sessionID)
+	var breakdownRows []duckSessionUsageRow
+	breakdownCount := 0
+	if includeBreakdown {
+		breakdownRows, err = s.sessionUsageRows(ctx, sessionID)
+	} else {
+		breakdownCount, err = s.sessionUsageRowCount(ctx, sessionID)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -4150,6 +4182,9 @@ func (s *Store) GetSessionUsage(
 		breakdown = append(breakdown, duckSessionUsageBreakdownEntry(
 			r, len(breakdown)+1, cost, priced))
 	}
+	if includeBreakdown {
+		breakdownCount = len(breakdown)
+	}
 	out := &db.SessionUsage{
 		SessionID: sessionID, Agent: sess.Agent, Project: sess.Project,
 		TotalOutputTokens: sess.TotalOutputTokens,
@@ -4157,6 +4192,7 @@ func (s *Store) GetSessionUsage(
 		HasTokenData:      hasRows || sess.HasTotalOutputTokens || sess.HasPeakContextTokens,
 		Models:            sortedBoolKeys(models),
 		UnpricedModels:    sortedBoolKeys(unpriced),
+		BreakdownCount:    breakdownCount,
 		Breakdown:         breakdown,
 	}
 	if len(unpriced) == 0 && hasRows {

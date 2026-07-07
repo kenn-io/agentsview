@@ -2328,6 +2328,7 @@ type SessionUsage struct {
 	AICredits         float64                      `json:"ai_credits,omitempty"`
 	Models            []string                     `json:"models"`
 	UnpricedModels    []string                     `json:"unpriced_models,omitempty"`
+	BreakdownCount    int                          `json:"breakdown_count"`
 	Breakdown         []SessionUsageBreakdownEntry `json:"breakdown"`
 }
 
@@ -2441,9 +2442,11 @@ func sessionUsageBreakdownLabel(r usageScanRow) string {
 // rows. Dedup is intra-session only; this reports the session's own
 // usage, which can diverge from the dashboard's cross-session
 // credited total for fork/subagent sessions. Returns (nil, nil) when
-// the session does not exist.
+// the session does not exist. BreakdownCount is always populated;
+// per-row Breakdown entries are built only when includeBreakdown is
+// true so callers that need just the totals avoid the row payload.
 func (db *DB) GetSessionUsage(
-	ctx context.Context, sessionID string,
+	ctx context.Context, sessionID string, includeBreakdown bool,
 ) (*SessionUsage, error) {
 	sess, err := db.GetSession(ctx, sessionID)
 	if err != nil {
@@ -2476,6 +2479,7 @@ func (db *DB) GetSessionUsage(
 	modelsSet := make(map[string]struct{})
 	unpricedSet := make(map[string]struct{})
 	breakdown := make([]SessionUsageBreakdownEntry, 0)
+	breakdownCount := 0
 
 	seen := make(map[usageDedupToken]struct{})
 
@@ -2506,8 +2510,11 @@ func (db *DB) GetSessionUsage(
 			allPriced = false
 			unpricedSet[r.model] = struct{}{}
 		}
-		breakdown = append(breakdown, sessionUsageBreakdownEntry(
-			r, len(breakdown)+1, c, priced))
+		breakdownCount++
+		if includeBreakdown {
+			breakdown = append(breakdown, sessionUsageBreakdownEntry(
+				r, breakdownCount, c, priced))
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating session usage rows: %w", err)
@@ -2522,6 +2529,7 @@ func (db *DB) GetSessionUsage(
 		HasTokenData:      sess.HasTotalOutputTokens || sess.HasPeakContextTokens,
 		Models:            sortedSetKeys(modelsSet),
 		HasCost:           contributing && allPriced,
+		BreakdownCount:    breakdownCount,
 		Breakdown:         breakdown,
 	}
 	if out.HasCost {

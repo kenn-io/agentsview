@@ -1116,9 +1116,11 @@ WHERE id IN (` + strings.Join(placeholders, ",") + `)`
 }
 
 // GetSessionUsage returns one session's token totals and cost
-// estimate from the PostgreSQL session store.
+// estimate from the PostgreSQL session store. BreakdownCount is
+// always populated; per-row Breakdown entries are built only when
+// includeBreakdown is true.
 func (s *Store) GetSessionUsage(
-	ctx context.Context, sessionID string,
+	ctx context.Context, sessionID string, includeBreakdown bool,
 ) (*db.SessionUsage, error) {
 	sess, err := s.GetSession(ctx, sessionID)
 	if err != nil {
@@ -1152,6 +1154,7 @@ func (s *Store) GetSessionUsage(
 	modelsSet := make(map[string]struct{})
 	unpricedSet := make(map[string]struct{})
 	breakdown := make([]db.SessionUsageBreakdownEntry, 0)
+	breakdownCount := 0
 
 	seen := make(map[pgUsageDedupToken]struct{})
 
@@ -1183,8 +1186,11 @@ func (s *Store) GetSessionUsage(
 			allPriced = false
 			unpricedSet[r.model] = struct{}{}
 		}
-		breakdown = append(breakdown, pgSessionUsageBreakdownEntry(
-			r, len(breakdown)+1, c, priced))
+		breakdownCount++
+		if includeBreakdown {
+			breakdown = append(breakdown, pgSessionUsageBreakdownEntry(
+				r, breakdownCount, c, priced))
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating pg session usage rows: %w", err)
@@ -1198,9 +1204,10 @@ func (s *Store) GetSessionUsage(
 		PeakContextTokens: sess.PeakContextTokens,
 		HasTokenData: sess.HasTotalOutputTokens ||
 			sess.HasPeakContextTokens,
-		Models:    sortedStringSetKeys(modelsSet),
-		HasCost:   contributing && allPriced,
-		Breakdown: breakdown,
+		Models:         sortedStringSetKeys(modelsSet),
+		HasCost:        contributing && allPriced,
+		BreakdownCount: breakdownCount,
+		Breakdown:      breakdown,
 	}
 	if out.HasCost {
 		out.CostUSD = cost

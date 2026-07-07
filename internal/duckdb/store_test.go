@@ -788,7 +788,7 @@ func TestStoreAnalyticsUsageAndTrends(t *testing.T) {
 	assert.Equal(t, 2, counts.Total)
 	assert.Equal(t, 1, counts.ByProject["alpha"])
 
-	sessionUsage, err := store.GetSessionUsage(ctx, fixture.alphaID)
+	sessionUsage, err := store.GetSessionUsage(ctx, fixture.alphaID, true)
 	require.NoError(t, err)
 	require.NotNil(t, sessionUsage)
 	assert.True(t, sessionUsage.HasCost)
@@ -2191,7 +2191,7 @@ func TestUsageDedupesClaudeMessageIDs(t *testing.T) {
 	assert.Equal(t, 1, counts.ByProject["alpha"])
 	assert.NotContains(t, counts.ByProject, "beta")
 
-	sessionUsage, err := store.GetSessionUsage(ctx, "duck-usage-b")
+	sessionUsage, err := store.GetSessionUsage(ctx, "duck-usage-b", true)
 	require.NoError(t, err)
 	require.NotNil(t, sessionUsage)
 	assert.True(t, sessionUsage.HasCost)
@@ -2266,7 +2266,7 @@ func TestUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testing.T) {
 	assert.Equal(t, 1, counts.ByProject["alpha"])
 	assert.NotContains(t, counts.ByProject, "beta")
 
-	sessionUsage, err := store.GetSessionUsage(ctx, "duck-usage-source-b")
+	sessionUsage, err := store.GetSessionUsage(ctx, "duck-usage-source-b", true)
 	require.NoError(t, err)
 	require.NotNil(t, sessionUsage)
 	assert.True(t, sessionUsage.HasCost)
@@ -2330,7 +2330,7 @@ func TestUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 	wantCost := (float64(rawInput)*1 + float64(rawOutput)*2) / 1_000_000
 	assert.InDelta(t, wantCost, top[0].Cost, 0.000001)
 
-	sessionUsage, err := store.GetSessionUsage(ctx, sessionID)
+	sessionUsage, err := store.GetSessionUsage(ctx, sessionID, true)
 	require.NoError(t, err)
 	require.NotNil(t, sessionUsage)
 	assert.Equal(t, rawOutput, sessionUsage.TotalOutputTokens)
@@ -2392,7 +2392,7 @@ func TestDailyUsageCostsReasoningOnlyRows(t *testing.T) {
 	require.Len(t, top, 1)
 	assert.InDelta(t, wantCost, top[0].Cost, 0.000001)
 
-	sessionUsage, err := store.GetSessionUsage(ctx, sessionID)
+	sessionUsage, err := store.GetSessionUsage(ctx, sessionID, true)
 	require.NoError(t, err)
 	require.NotNil(t, sessionUsage)
 	assert.True(t, sessionUsage.HasCost)
@@ -2445,7 +2445,7 @@ func TestDailyUsageCostsMessageReasoningTokens(t *testing.T) {
 	assert.Zero(t, daily.Totals.OutputTokens)
 	assert.InDelta(t, 0.002, daily.Totals.TotalCost, 0.000001)
 
-	sessionUsage, err := store.GetSessionUsage(ctx, "duck-message-reasoning")
+	sessionUsage, err := store.GetSessionUsage(ctx, "duck-message-reasoning", true)
 	require.NoError(t, err)
 	require.NotNil(t, sessionUsage)
 	assert.True(t, sessionUsage.HasCost)
@@ -2517,7 +2517,7 @@ func TestDailyUsageCostsMixedOutputAndReasoningOnlyRows(t *testing.T) {
 	require.Len(t, top, 1)
 	assert.InDelta(t, wantCost, top[0].Cost, 0.000001)
 
-	sessionUsage, err := store.GetSessionUsage(ctx, sessionID)
+	sessionUsage, err := store.GetSessionUsage(ctx, sessionID, true)
 	require.NoError(t, err)
 	require.NotNil(t, sessionUsage)
 	assert.True(t, sessionUsage.HasCost)

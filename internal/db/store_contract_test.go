@@ -561,7 +561,7 @@ func contractAnalyticsTrendsAndUsage(
 	require.Equal(t, 3, counts.Total)
 	require.Equal(t, 2, counts.ByProject["alpha"])
 
-	usage, err := store.GetSessionUsage(ctx, fixture.alphaID)
+	usage, err := store.GetSessionUsage(ctx, fixture.alphaID, true)
 	require.NoError(t, err)
 	require.NotNil(t, usage)
 	require.True(t, usage.HasTokenData)
