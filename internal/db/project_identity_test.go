@@ -675,6 +675,47 @@ func TestProjectIdentityMapLegacyFallbackUsesNoRemoteGitRoot(t *testing.T) {
 	assert.Equal(t, wantRoot, got["git-root"].Identity.RootPath)
 }
 
+func TestProjectIdentityMapLegacyFallbackUsesRepoDotWorktreesMapping(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	parent := t.TempDir()
+	worktreesDir := filepath.Join(parent, "acme-app.worktrees")
+
+	_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
+		Machine:    "laptop",
+		PathPrefix: parent,
+		Layout:     WorktreeMappingLayoutRepoDotWorktrees,
+		Enabled:    true,
+	})
+	require.NoError(t, err)
+	require.NoError(t, d.UpsertSession(Session{
+		ID:      "branch-a-session",
+		Project: "acme_app",
+		Machine: "laptop",
+		Agent:   "codex",
+		Cwd:     filepath.Join(worktreesDir, "branch-a"),
+	}))
+	require.NoError(t, d.UpsertSession(Session{
+		ID:      "branch-b-session",
+		Project: "acme_app",
+		Machine: "laptop",
+		Agent:   "codex",
+		Cwd:     filepath.Join(worktreesDir, "branch-b"),
+	}))
+
+	got, err := d.BuildProjectIdentityMap(ctx, []string{"acme_app"})
+	require.NoError(t, err)
+	require.Equal(t, export.ProjectResolutionResolved, got["acme_app"].Resolution)
+	require.NotNil(t, got["acme_app"].Identity)
+	want := export.BuildStoredProjectIdentity(export.ProjectIdentityInput{
+		RootPath:         worktreesDir,
+		WorktreeRootPath: worktreesDir,
+	})
+	assert.Equal(t, want.Key, got["acme_app"].Identity.Key)
+	assert.Equal(t, export.ProjectIdentityKeySourceRootPath,
+		got["acme_app"].Identity.KeySource)
+}
+
 func projectIdentityTestRoot(t *testing.T, root string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {

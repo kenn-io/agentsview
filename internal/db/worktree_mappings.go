@@ -488,7 +488,7 @@ func resolveWorktreeProjectFromMapping(
 		}
 		return mapping.Project, true
 	case WorktreeMappingLayoutRepoDotWorktrees:
-		project, ok := resolveRepoDotWorktreesProject(mapping.PathPrefix, cwd)
+		project, _, ok := resolveRepoDotWorktrees(mapping.PathPrefix, cwd)
 		if !ok {
 			return currentProject, false
 		}
@@ -498,35 +498,62 @@ func resolveWorktreeProjectFromMapping(
 	}
 }
 
-func resolveRepoDotWorktreesProject(
+// worktreeMappingIdentityRoot returns the directory that anchors the
+// project identity for a cwd matched by a mapping, when the mapping
+// resolves that cwd to the given project.
+func worktreeMappingIdentityRoot(
+	mapping WorktreeProjectMapping,
+	cwd string,
+	project string,
+) (string, bool) {
+	switch mapping.Layout {
+	case "", WorktreeMappingLayoutExplicit:
+		if mapping.Project == "" || mapping.Project != project {
+			return "", false
+		}
+		return mapping.PathPrefix, true
+	case WorktreeMappingLayoutRepoDotWorktrees:
+		resolved, root, ok := resolveRepoDotWorktrees(mapping.PathPrefix, cwd)
+		if !ok || resolved != project {
+			return "", false
+		}
+		return root, true
+	default:
+		return "", false
+	}
+}
+
+// resolveRepoDotWorktrees resolves a cwd under a repo_dot_worktrees
+// mapping to its project name and the repo.worktrees directory shared
+// by all of that repo's worktree branches.
+func resolveRepoDotWorktrees(
 	pathPrefix string,
 	cwd string,
-) (string, bool) {
+) (string, string, bool) {
 	cwd = strings.TrimSpace(cwd)
 	if cwd == "" {
-		return "", false
+		return "", "", false
 	}
 	rel, err := filepath.Rel(pathPrefix, filepath.Clean(cwd))
 	if err != nil || rel == "." || rel == "" {
-		return "", false
+		return "", "", false
 	}
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", false
+		return "", "", false
 	}
-	if idx := strings.IndexRune(rel, filepath.Separator); idx >= 0 {
-		first := rel[:idx]
-		if !strings.HasSuffix(first, ".worktrees") {
-			return "", false
-		}
-		repo := strings.TrimSuffix(first, ".worktrees")
-		repo = strings.TrimSpace(repo)
-		if repo == "" {
-			return "", false
-		}
-		return parser.NormalizeName(repo), true
-	} else {
-		return "", false
+	idx := strings.IndexRune(rel, filepath.Separator)
+	if idx < 0 {
+		return "", "", false
 	}
+	first := rel[:idx]
+	if !strings.HasSuffix(first, ".worktrees") {
+		return "", "", false
+	}
+	repo := strings.TrimSpace(strings.TrimSuffix(first, ".worktrees"))
+	if repo == "" {
+		return "", "", false
+	}
+	return parser.NormalizeName(repo), filepath.Join(pathPrefix, first), true
 }
 
 type worktreeMappingSessionRow struct {

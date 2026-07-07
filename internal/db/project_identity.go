@@ -564,13 +564,17 @@ func (db *DB) legacyProjectIdentityForSession(
 	}
 	for _, root := range legacyProjectIdentityRoots(cwd, filePath) {
 		for _, mapping := range mappings {
-			if mapping.Project != project || !worktreePathMatches(mapping.PathPrefix, root) {
+			if !worktreePathMatches(mapping.PathPrefix, root) {
+				continue
+			}
+			identityRoot, ok := worktreeMappingIdentityRoot(mapping, root, project)
+			if !ok {
 				continue
 			}
 			identity := export.BuildStoredProjectIdentity(
 				export.ProjectIdentityInput{
-					RootPath:         mapping.PathPrefix,
-					WorktreeRootPath: mapping.PathPrefix,
+					RootPath:         identityRoot,
+					WorktreeRootPath: identityRoot,
 				},
 			)
 			if identity.Key != "" {
