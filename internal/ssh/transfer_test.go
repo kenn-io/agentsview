@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -54,6 +55,10 @@ func TestBuildTarCommandSkipsFileScopedWindsurfDirs(t *testing.T) {
 }
 
 func TestBuildTarCommandStreamsPathListToTar(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("remote tar script uses POSIX paths; local Windows paths are not representative")
+	}
+
 	root := t.TempDir()
 	claudeDir := filepath.Join(root, "home", "wes", ".claude", "projects")
 	claudeFile := filepath.Join(claudeDir, "session.jsonl")
