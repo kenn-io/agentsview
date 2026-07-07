@@ -80,9 +80,12 @@ export class SessionsPage {
     await input.click();
     await input.fill(project);
     const escaped = project.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // kit-ui renders the option label as match-highlight segments inside
+    // a label span, so the option's text carries template whitespace
+    // around the name — anchor with \s* instead of exact spacing.
     await this.projectTypeahead
       .locator(".kit-typeahead__option", {
-        hasText: new RegExp(`^${escaped} \\(`),
+        hasText: new RegExp(`^\\s*${escaped}\\s*\\(`),
       })
       .click();
   }
