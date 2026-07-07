@@ -63,6 +63,12 @@ function parseLocal(date: string): Date {
   return new Date(date + "T00:00:00");
 }
 
+function isValidLocalDate(date: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  const d = parseLocal(date);
+  return !Number.isNaN(d.getTime()) && localDateStr(d) === date;
+}
+
 /**
  * The inclusive from/to bounds of a calendar period containing `anchor`.
  * Day is a single date; week is the Monday-Sunday ISO week; month is the
@@ -85,6 +91,30 @@ export function periodBounds(unit: CalendarUnit, anchor: string): DateRange {
   const first = new Date(d.getFullYear(), d.getMonth(), 1);
   const last = new Date(d.getFullYear(), d.getMonth() + 1, 0);
   return { from: localDateStr(first), to: localDateStr(last) };
+}
+
+function selectionFromCalendarRange(
+  from: string,
+  to: string,
+): CalendarSelection | null {
+  if (from > to || !isValidLocalDate(from) || !isValidLocalDate(to)) {
+    return null;
+  }
+  if (from === to) {
+    return { mode: "calendar", unit: "day", anchor: from };
+  }
+
+  const week = periodBounds("week", from);
+  if (week.from === from && week.to === to) {
+    return { mode: "calendar", unit: "week", anchor: from };
+  }
+
+  const month = periodBounds("month", from);
+  if (month.from === from && month.to === to) {
+    return { mode: "calendar", unit: "month", anchor: from };
+  }
+
+  return null;
 }
 
 /** Turn any selection into the concrete {from, to} the stores consume. */
@@ -122,6 +152,8 @@ export function selectionFromWindow(opts: {
   if (opts.from === all.from && opts.to === all.to) {
     return { mode: "relative", days: 0 };
   }
+  const calendar = selectionFromCalendarRange(opts.from, opts.to);
+  if (calendar) return calendar;
   return { mode: "custom", from: opts.from, to: opts.to };
 }
 
@@ -142,6 +174,8 @@ export function selectionFromRange(
       return { mode: "relative", days: preset.days };
     }
   }
+  const calendar = selectionFromCalendarRange(from, to);
+  if (calendar) return calendar;
   return { mode: "custom", from, to };
 }
 
