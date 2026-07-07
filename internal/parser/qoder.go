@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -165,9 +166,9 @@ func DecodeQoderProjectDir(encoded string) string {
 			}
 		}
 	}
-	for i := len(parts) - 1; i >= 0; i-- {
-		if parts[i] != "" {
-			return NormalizeName(parts[i])
+	for _, v := range slices.Backward(parts) {
+		if v != "" {
+			return NormalizeName(v)
 		}
 	}
 	return NormalizeName(encoded)
