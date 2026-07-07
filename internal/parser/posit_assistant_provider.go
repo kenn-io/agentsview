@@ -396,29 +396,74 @@ func (s positAssistantSourceSet) Fingerprint(
 			fingerprint.MTimeNS = mtime
 		}
 	}
-	fingerprint.Hash, err = positAssistantSourceHash(src.Path, lmPath)
+	wsPath := s.workspaceManifestForSource(src)
+	if wsPath != "" {
+		if wsInfo, err := os.Stat(wsPath); err == nil {
+			fingerprint.Size += wsInfo.Size()
+			if mtime := wsInfo.ModTime().UnixNano(); mtime > fingerprint.MTimeNS {
+				fingerprint.MTimeNS = mtime
+			}
+		}
+	}
+	fingerprint.Hash, err = positAssistantSourceHash(src.Path, lmPath, wsPath)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
 	return fingerprint, nil
 }
 
-// positAssistantSourceHash combines the conversation tree and transcript
-// hashes so a change to either file invalidates the skip cache.
-func positAssistantSourceHash(convPath, lmPath string) (string, error) {
+// workspaceManifestForSource returns the workspace.json path governing a
+// conversation source, or "" when the workspace has no manifest.
+func (s positAssistantSourceSet) workspaceManifestForSource(
+	src positAssistantSource,
+) string {
+	rel, ok := relUnder(filepath.Clean(src.Root), filepath.Clean(src.Path))
+	if !ok {
+		return ""
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) < 3 {
+		return ""
+	}
+	manifest := filepath.Join(src.Root, parts[0], positAssistantWorkspaceFile)
+	if !IsRegularFile(manifest) {
+		return ""
+	}
+	return manifest
+}
+
+// positAssistantSourceHash combines the conversation tree, transcript, and
+// workspace manifest hashes. The manifest is included because it supplies the
+// session's project and cwd, so editing or creating it must invalidate the
+// skip cache and freshness checks, not just re-emit sources.
+func positAssistantSourceHash(convPath, lmPath, wsPath string) (string, error) {
 	hash, err := hashJSONLSourceFile(convPath)
 	if err != nil {
 		return "", err
 	}
-	if !IsRegularFile(lmPath) {
+	combined := "conversation\x00" + hash
+	composite := false
+	if IsRegularFile(lmPath) {
+		lmHash, err := hashJSONLSourceFile(lmPath)
+		if err != nil {
+			return "", err
+		}
+		combined += "\x00lm\x00" + lmHash
+		composite = true
+	}
+	if wsPath != "" && IsRegularFile(wsPath) {
+		wsHash, err := hashJSONLSourceFile(wsPath)
+		if err != nil {
+			return "", err
+		}
+		combined += "\x00workspace\x00" + wsHash
+		composite = true
+	}
+	if !composite {
 		return hash, nil
 	}
-	lmHash, err := hashJSONLSourceFile(lmPath)
-	if err != nil {
-		return "", err
-	}
 	h := sha256.New()
-	_, _ = h.Write([]byte("conversation\x00" + hash + "\x00lm\x00" + lmHash))
+	_, _ = h.Write([]byte(combined))
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
@@ -471,8 +516,12 @@ func (s positAssistantSourceSet) sourceRefForChangedPath(
 	convPath := filepath.Join(
 		filepath.Dir(filepath.Clean(path)), positAssistantConversationFile,
 	)
-	// Deleted conversations must still classify so the engine can emit a
-	// tombstone, so fall back to the structural match when the file is gone.
+	// Classify structurally, without requiring conversation.json to exist:
+	// a removed lm-messages.jsonl or ui-messages.jsonl must still map to its
+	// surviving conversation source so the session reparses. When the
+	// conversation.json itself is deleted, the engine drops the source and
+	// the stored session stays archived, matching the persistent-archive
+	// policy shared by all file-based providers.
 	return s.validatedSourceRef(root, convPath)
 }
 

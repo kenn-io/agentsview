@@ -204,8 +204,13 @@ func TestPositAssistantProviderParseMainConversation(t *testing.T) {
 		filepath.Join(filepath.Dir(source.DisplayPath), "lm-messages.jsonl"),
 	)
 	require.NoError(t, err)
+	wsInfo, err := os.Stat(
+		filepath.Join(root, "a1b2c3d4e5f60718293a4b5c", "workspace.json"),
+	)
+	require.NoError(t, err)
 	assert.Equal(t, source.DisplayPath, fingerprint.Key)
-	assert.Equal(t, convInfo.Size()+lmInfo.Size(), fingerprint.Size)
+	assert.Equal(t,
+		convInfo.Size()+lmInfo.Size()+wsInfo.Size(), fingerprint.Size)
 	assert.NotEmpty(t, fingerprint.Hash)
 
 	outcome, err := provider.Parse(context.Background(), ParseRequest{
@@ -441,19 +446,35 @@ func TestPositAssistantProviderParseEdgeCases(t *testing.T) {
 	}
 }
 
-func TestPositAssistantProviderTombstoneForDeletedConversation(t *testing.T) {
+func TestPositAssistantProviderClassifiesDeletedPaths(t *testing.T) {
 	root := t.TempDir()
 	convDir := filepath.Join(root, "ws1", "55555555-5555-4555-8555-555555555555")
 	convPath := filepath.Join(convDir, "conversation.json")
+	lmPath := filepath.Join(convDir, "lm-messages.jsonl")
 	writeSourceFile(t, convPath, `{"schemaVersion":"3","root":{},"messages":[]}`)
+	writeSourceFile(t, lmPath,
+		`{"id":0,"message":{"role":"user","content":"hi"}}`+"\n")
 
 	provider, ok := NewProvider(AgentPositAssistant, ProviderConfig{
 		Roots: []string{root},
 	})
 	require.True(t, ok)
 
-	require.NoError(t, os.RemoveAll(convDir))
+	// A removed transcript must map back to the surviving conversation
+	// source so the session reparses without the deleted messages.
+	require.NoError(t, os.Remove(lmPath))
 	sources, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{Path: lmPath, EventKind: "remove"},
+	)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, convPath, sources[0].DisplayPath)
+
+	// A fully deleted conversation still classifies structurally; the engine
+	// owns the decision to keep the stored session archived.
+	require.NoError(t, os.RemoveAll(convDir))
+	sources, err = provider.SourcesForChangedPath(
 		context.Background(),
 		ChangedPathRequest{Path: convPath, EventKind: "remove"},
 	)
@@ -495,4 +516,38 @@ func TestPositAssistantProviderFingerprintTracksTranscriptAppends(t *testing.T) 
 	assert.NotEqual(t, before.Hash, after.Hash,
 		"appending to lm-messages.jsonl must change the composite fingerprint")
 	assert.Greater(t, after.Size, before.Size)
+}
+
+func TestPositAssistantProviderFingerprintTracksWorkspaceManifest(t *testing.T) {
+	root := t.TempDir()
+	wsPath := filepath.Join(root, "ws1", "workspace.json")
+	convDir := filepath.Join(root, "ws1", "77777777-7777-4777-8777-777777777777")
+	writeSourceFile(t, filepath.Join(convDir, "conversation.json"),
+		`{"schemaVersion":"3","root":{},"messages":[]}`)
+	writeSourceFile(t, filepath.Join(convDir, "lm-messages.jsonl"),
+		`{"id":0,"message":{"role":"user","content":"hi"}}`+"\n")
+
+	provider, ok := NewProvider(AgentPositAssistant, ProviderConfig{
+		Roots: []string{root},
+	})
+	require.True(t, ok)
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+
+	// Creating the manifest after the fact must invalidate freshness so the
+	// session picks up its project and cwd instead of staying "unknown".
+	before, err := provider.Fingerprint(context.Background(), discovered[0])
+	require.NoError(t, err)
+	writeSourceFile(t, wsPath, `{"path":"/home/dev/projects/created-later"}`)
+	created, err := provider.Fingerprint(context.Background(), discovered[0])
+	require.NoError(t, err)
+	assert.NotEqual(t, before.Hash, created.Hash,
+		"creating workspace.json must change the composite fingerprint")
+
+	writeSourceFile(t, wsPath, `{"path":"/home/dev/projects/renamed-app"}`)
+	edited, err := provider.Fingerprint(context.Background(), discovered[0])
+	require.NoError(t, err)
+	assert.NotEqual(t, created.Hash, edited.Hash,
+		"editing workspace.json must change the composite fingerprint")
 }
