@@ -108,7 +108,23 @@ interface SessionUsage {
   has_cost: boolean;
   models: string[];
   unpriced_models: string[];
+  breakdown: SessionUsageBreakdownEntry[];
   server_running: boolean;
+}
+
+interface SessionUsageBreakdownEntry {
+  ordinal: number;
+  message_ordinal?: number;
+  source: string;
+  label: string;
+  timestamp: string;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  cost_usd: number;
+  has_cost: boolean;
 }
 
 function makeUsage(
@@ -125,6 +141,7 @@ function makeUsage(
     has_cost: false,
     models: [],
     unpriced_models: [],
+    breakdown: [],
     server_running: true,
     ...overrides,
   };
@@ -847,6 +864,144 @@ describe("SessionBreadcrumb", () => {
       unmount(component);
     });
 
+    it("renders the session usage breakdown from the usage response", async () => {
+      sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(
+        makeUsage({
+          has_cost: true,
+          cost_usd: 0.022,
+          breakdown: [
+            {
+              ordinal: 1,
+              message_ordinal: 0,
+              source: "message",
+              label: "Prompt 1",
+              timestamp: "2026-02-20T12:30:00Z",
+              model: "claude-opus-4-6",
+              input_tokens: 1000,
+              output_tokens: 500,
+              cache_creation_input_tokens: 200,
+              cache_read_input_tokens: 300,
+              cost_usd: 0.017,
+              has_cost: true,
+            },
+            {
+              ordinal: 2,
+              source: "session",
+              label: "session",
+              timestamp: "2026-02-20T12:31:00Z",
+              model: "gpt-5.4",
+              input_tokens: 150,
+              output_tokens: 20,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+              cost_usd: 0.005,
+              has_cost: true,
+            },
+          ],
+        }),
+      );
+
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: {
+          session: makeSession("claude", {
+            peak_context_tokens: 1500,
+            total_output_tokens: 520,
+            has_peak_context_tokens: true,
+            has_total_output_tokens: true,
+          }),
+          onBack: () => {},
+        },
+      });
+
+      await vi.waitFor(() => {
+        expect(
+          document.querySelector(".usage-breakdown-trigger")
+            ?.textContent
+            ?.trim(),
+        ).toBe("2 steps");
+      });
+      const rows = Array.from(
+        document.querySelectorAll(".usage-breakdown-row"),
+      );
+      expect(rows).toHaveLength(2);
+      const first = rows[0]!;
+      const second = rows[1]!;
+      expect(first.textContent).toContain("Prompt 1");
+      expect(first.textContent).toContain("claude-opus-4-6");
+      expect(first.textContent).toContain("1,500 ctx");
+      expect(first.textContent).toContain("500 out");
+      expect(second.textContent).toContain("session");
+      expect(second.textContent).toContain("gpt-5.4");
+
+      unmount(component);
+    });
+
+    it("renders no usage breakdown when the usage response has no rows", async () => {
+      sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(
+        makeUsage({ breakdown: [] }),
+      );
+
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: {
+          session: makeSession("claude"),
+          onBack: () => {},
+        },
+      });
+
+      await flushPromises();
+      await vi.waitFor(() => {
+        expect(
+          sessionsService.getApiV1SessionsIdUsage,
+        ).toHaveBeenCalled();
+      });
+      expect(document.querySelector(".usage-breakdown")).toBeNull();
+
+      unmount(component);
+    });
+
+    it("renders every breakdown row in the scrollable menu", async () => {
+      sessionsService.getApiV1SessionsIdUsage.mockResolvedValue(
+        makeUsage({
+          breakdown: Array.from({ length: 8 }, (_, i) => ({
+            ordinal: i + 1,
+            source: "message",
+            label: `Prompt ${i + 1}`,
+            timestamp: "2026-02-20T12:30:00Z",
+            model: "claude-opus-4-6",
+            input_tokens: 100 + i,
+            output_tokens: 10 + i,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+            cost_usd: 0,
+            has_cost: false,
+          })),
+        }),
+      );
+
+      const component = mount(SessionBreadcrumb, {
+        target: document.body,
+        props: {
+          session: makeSession("claude"),
+          onBack: () => {},
+        },
+      });
+
+      await vi.waitFor(() => {
+        expect(
+          document.querySelector(".usage-breakdown-trigger")
+            ?.textContent
+            ?.trim(),
+        ).toBe("8 steps");
+      });
+      expect(
+        document.querySelectorAll(".usage-breakdown-row"),
+      ).toHaveLength(8);
+
+      unmount(component);
+    });
+
     it("ignores a stale usage response after switching sessions", async () => {
       const first = deferred<SessionUsage>();
       sessionsService.getApiV1SessionsIdUsage
@@ -856,6 +1011,21 @@ describe("SessionBreadcrumb", () => {
             session_id: "run:bbb",
             has_cost: true,
             cost_usd: 2,
+            breakdown: [
+              {
+                ordinal: 1,
+                source: "message",
+                label: "Prompt 1",
+                timestamp: "2026-02-20T12:31:00Z",
+                model: "gpt-5.4",
+                input_tokens: 10,
+                output_tokens: 2,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0,
+                cost_usd: 2,
+                has_cost: true,
+              },
+            ],
           }),
         );
 
@@ -876,6 +1046,9 @@ describe("SessionBreadcrumb", () => {
         const badge = document.querySelector(".cost-badge");
         expect(badge?.textContent?.trim()).toBe("$2.00");
       });
+      expect(
+        document.querySelector(".usage-breakdown-row")?.textContent,
+      ).toContain("gpt-5.4");
 
       // The first session's response arrives late and must not
       // overwrite the newer session's cost.
@@ -884,12 +1057,30 @@ describe("SessionBreadcrumb", () => {
           session_id: "run:aaa",
           has_cost: true,
           cost_usd: 9.99,
+          breakdown: [
+            {
+              ordinal: 1,
+              source: "message",
+              label: "Prompt 1",
+              timestamp: "2026-02-20T12:30:00Z",
+              model: "stale-model",
+              input_tokens: 999,
+              output_tokens: 99,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+              cost_usd: 9.99,
+              has_cost: true,
+            },
+          ],
         }),
       );
       await flushPromises();
       expect(
         document.querySelector(".cost-badge")?.textContent?.trim(),
       ).toBe("$2.00");
+      expect(
+        document.querySelector(".usage-breakdown-row")?.textContent,
+      ).not.toContain("stale-model");
 
       component.$destroy();
     });

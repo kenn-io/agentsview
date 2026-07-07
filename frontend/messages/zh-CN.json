@@ -544,6 +544,21 @@
   ],
   "analytics_tool_usage_trend_tooltip": "{date} | 总计 {total} | {parts}",
   "analytics_tool_usage_empty": "无 tool 使用数据",
+  "analytics_tool_usage_loading": "正在加载 tool 使用数据...",
+  "analytics_tool_usage_top_tools": "热门 Tool",
+  "analytics_tool_usage_sessions": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{countLabel} 个会话"
+      }
+    }
+  ],
   "analytics_by_category": "按类别",
   "analytics_by_agent": "按 Agent",
   "analytics_by_project": "按项目",

@@ -2493,6 +2493,7 @@ func TestGetAnalyticsTools(t *testing.T) {
 		require.NoError(t, err, "GetAnalyticsTools")
 		assert.Equal(t, 0, resp.TotalCalls, "TotalCalls")
 		assert.Len(t, resp.ByCategory, 0, "len(ByCategory)")
+		assert.Len(t, resp.ByTool, 0, "len(ByTool)")
 	})
 
 	// Seed sessions with tool_calls.
@@ -2565,6 +2566,23 @@ func TestGetAnalyticsTools(t *testing.T) {
 		assert.Equal(t, 50.0, resp.ByCategory[0].Pct, "Read pct")
 	})
 
+	t.Run("ByToolAnalysis", func(t *testing.T) {
+		resp, err := d.GetAnalyticsTools(ctx, baseFilter())
+		require.NoError(t, err, "GetAnalyticsTools")
+		require.Len(t, resp.ByTool, 4, "len(ByTool)")
+
+		read := resp.ByTool[0]
+		assert.Equal(t, "Read", read.ToolName, "tool name")
+		assert.Equal(t, "Read", read.Category, "category")
+		assert.Equal(t, 3, read.CallCount, "call count")
+		assert.Equal(t, 2, read.SessionCount, "session count")
+		assert.Equal(t, 50.0, read.Pct, "pct")
+
+		assert.Equal(t, "Bash", resp.ByTool[1].ToolName, "tie sort")
+		assert.Equal(t, 1, resp.ByTool[1].SessionCount, "Bash sessions")
+		assert.Equal(t, 16.7, resp.ByTool[1].Pct, "Bash pct")
+	})
+
 	t.Run("ByAgent", func(t *testing.T) {
 		resp, err := d.GetAnalyticsTools(ctx, baseFilter())
 		require.NoError(t, err, "GetAnalyticsTools")
@@ -2597,6 +2615,10 @@ func TestGetAnalyticsTools(t *testing.T) {
 		resp, err := d.GetAnalyticsTools(ctx, f)
 		require.NoError(t, err, "GetAnalyticsTools")
 		assert.Equal(t, 4, resp.TotalCalls, "TotalCalls")
+		require.Len(t, resp.ByTool, 3, "len(ByTool)")
+		assert.Equal(t, "Read", resp.ByTool[0].ToolName, "first tool")
+		assert.Equal(t, 2, resp.ByTool[0].CallCount, "Read calls")
+		assert.Equal(t, 1, resp.ByTool[0].SessionCount, "Read sessions")
 	})
 
 	t.Run("EmptyDateRange", func(t *testing.T) {
@@ -2613,9 +2635,9 @@ func TestAnalyticsToolsToolCallsQueryAggregatesInSQL(t *testing.T) {
 	normalized := strings.Join(strings.Fields(strings.ToLower(q)), " ")
 
 	assert.Contains(t, normalized,
-		"select tc.session_id, tc.category, count(*)")
+		"select tc.session_id, tc.category, trim(coalesce(tc.tool_name, '')), count(*)")
 	assert.Contains(t, normalized,
-		"group by tc.session_id, tc.category")
+		"group by tc.session_id, tc.category, trim(coalesce(tc.tool_name, ''))")
 }
 
 func TestGetAnalyticsToolsModelFilterCountsOnlyMatchingToolCalls(
@@ -2662,6 +2684,14 @@ func TestGetAnalyticsToolsModelFilterCountsOnlyMatchingToolCalls(
 	assert.Equal(t, 1, catMap["Read"], "Read")
 	assert.Equal(t, 1, catMap["Bash"], "Bash")
 	assert.Zero(t, catMap["Grep"], "Grep")
+
+	toolMap := make(map[string]int)
+	for _, tool := range resp.ByTool {
+		toolMap[tool.ToolName] = tool.CallCount
+	}
+	assert.Equal(t, 1, toolMap["Read"], "Read tool")
+	assert.Equal(t, 1, toolMap["Bash"], "Bash tool")
+	assert.Zero(t, toolMap["Grep"], "Grep tool")
 }
 
 func TestGetAnalyticsToolsModelAndHourFilterCountsOnlyMatchingHourToolCalls(

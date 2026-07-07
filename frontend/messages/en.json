@@ -558,6 +558,22 @@
   ],
   "analytics_tool_usage_trend_tooltip": "{date} | {total} total | {parts}",
   "analytics_tool_usage_empty": "No tool usage data",
+  "analytics_tool_usage_loading": "Loading tool usage...",
+  "analytics_tool_usage_top_tools": "Top tools",
+  "analytics_tool_usage_sessions": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{countLabel} session",
+        "countPlural=other": "{countLabel} sessions"
+      }
+    }
+  ],
   "analytics_by_category": "By Category",
   "analytics_by_agent": "By Agent",
   "analytics_by_project": "By Project",

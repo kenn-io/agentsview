@@ -115,6 +115,7 @@ export type { DbToolCategoryCount } from './models/DbToolCategoryCount';
 export type { DbToolResultEvent } from './models/DbToolResultEvent';
 export type { DbToolsAnalyticsResponse } from './models/DbToolsAnalyticsResponse';
 export type { DbToolTrendEntry } from './models/DbToolTrendEntry';
+export type { DbToolUsageAnalysis } from './models/DbToolUsageAnalysis';
 export type { DbTopSession } from './models/DbTopSession';
 export type { DbTopSessionEntry } from './models/DbTopSessionEntry';
 export type { DbTopSessionsResponse } from './models/DbTopSessionsResponse';
@@ -181,6 +182,7 @@ export type { ServiceUsagePairwiseComparisonDelta } from './models/ServiceUsageP
 export type { ServiceUsagePairwiseComparisonResponse } from './models/ServiceUsagePairwiseComparisonResponse';
 export type { ServiceUsagePairwiseComparisonSide } from './models/ServiceUsagePairwiseComparisonSide';
 export type { SessionDirectoryResponse } from './models/SessionDirectoryResponse';
+export type { SessionUsageBreakdownResponse } from './models/SessionUsageBreakdownResponse';
 export type { SessionUsageResponse } from './models/SessionUsageResponse';
 export type { SetGithubConfigInputBody } from './models/SetGithubConfigInputBody';
 export type { SetGithubConfigResponse } from './models/SetGithubConfigResponse';

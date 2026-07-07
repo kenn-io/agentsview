@@ -128,6 +128,7 @@ function makeTools(): ToolsAnalyticsResponse {
     total_calls: 0,
     by_category: [],
     by_agent: [],
+    by_tool: [],
     trend: [],
   };
 }

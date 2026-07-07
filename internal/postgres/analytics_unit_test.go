@@ -178,6 +178,11 @@ func (c *analyticsProbeConn) QueryContext(
 				},
 			}, nil
 		}
+		if !strings.Contains(normalized,
+			"trim(coalesce(tc.tool_name") {
+			return nil, errors.New(
+				"tool call query must project trimmed tool_name")
+		}
 		if !strings.Contains(normalized, "group by session_id, category") {
 			if !strings.Contains(normalized,
 				"group by tc.session_id, tc.category") {
@@ -185,33 +190,38 @@ func (c *analyticsProbeConn) QueryContext(
 					"tool call query must group by session_id, category")
 			}
 		}
+		if !strings.Contains(normalized,
+			"trim(coalesce(tc.tool_name") {
+			return nil, errors.New(
+				"tool call query must group by tool_name")
+		}
 		if strings.Contains(normalized, "to_char(m.timestamp") {
 			return &analyticsProbeRows{
 				columns: []string{
-					"session_id", "category", "count", "timestamp",
+					"session_id", "category", "tool_name", "count", "timestamp",
 				},
 				values: [][]driver.Value{
 					{
-						"s1", "Read", int64(2),
+						"s1", "Read", "Read", int64(2),
 						"2024-06-03T09:00:00Z",
 					},
 					{
-						"s1", "Bash", int64(1),
+						"s1", "Bash", "Bash", int64(1),
 						"2024-06-03T09:00:00Z",
 					},
 					{
-						"s2", "Read", int64(1),
+						"s2", "Read", "Read", int64(1),
 						"2024-06-04T09:00:00Z",
 					},
 				},
 			}, nil
 		}
 		return &analyticsProbeRows{
-			columns: []string{"session_id", "category", "count"},
+			columns: []string{"session_id", "category", "tool_name", "count"},
 			values: [][]driver.Value{
-				{"s1", "Read", int64(2)},
-				{"s1", "Bash", int64(1)},
-				{"s2", "Read", int64(1)},
+				{"s1", "Read", "Read", int64(2)},
+				{"s1", "Bash", "Bash", int64(1)},
+				{"s2", "Read", "Read", int64(1)},
 			},
 		}, nil
 	case strings.Contains(normalized, "from messages"):
@@ -272,6 +282,10 @@ func TestGetAnalyticsToolsAggregatesToolCallsInSQL(t *testing.T) {
 	require.NotEmpty(t, resp.ByCategory)
 	assert.Equal(t, "Read", resp.ByCategory[0].Category)
 	assert.Equal(t, 3, resp.ByCategory[0].Count)
+	require.NotEmpty(t, resp.ByTool)
+	assert.Equal(t, "Read", resp.ByTool[0].ToolName)
+	assert.Equal(t, 3, resp.ByTool[0].CallCount)
+	assert.Equal(t, 2, resp.ByTool[0].SessionCount)
 }
 
 func TestGetAnalyticsSkillsAggregatesToolCallsInSQL(t *testing.T) {

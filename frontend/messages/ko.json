@@ -544,6 +544,21 @@
   ],
   "analytics_tool_usage_trend_tooltip": "{date} | 총 {total} | {parts}",
   "analytics_tool_usage_empty": "도구 사용 데이터 없음",
+  "analytics_tool_usage_loading": "도구 사용 데이터 불러오는 중...",
+  "analytics_tool_usage_top_tools": "상위 도구",
+  "analytics_tool_usage_sessions": [
+    {
+      "declarations": [
+        "input count",
+        "input countLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "세션 {countLabel}개"
+      }
+    }
+  ],
   "analytics_by_category": "카테고리별",
   "analytics_by_agent": "에이전트별",
   "analytics_by_project": "프로젝트별",

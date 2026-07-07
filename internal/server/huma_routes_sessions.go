@@ -357,18 +357,34 @@ func (s *Server) humaSessionTiming(
 }
 
 type sessionUsageResponse struct {
-	SessionID         string   `json:"session_id"`
-	Agent             string   `json:"agent"`
-	Project           string   `json:"project"`
-	TotalOutputTokens int      `json:"total_output_tokens"`
-	PeakContextTokens int      `json:"peak_context_tokens"`
-	HasTokenData      bool     `json:"has_token_data"`
-	CostUSD           float64  `json:"cost_usd"`
-	HasCost           bool     `json:"has_cost"`
-	AICredits         float64  `json:"ai_credits,omitempty"`
-	Models            []string `json:"models"`
-	UnpricedModels    []string `json:"unpriced_models"`
-	ServerRunning     bool     `json:"server_running"`
+	SessionID         string                          `json:"session_id"`
+	Agent             string                          `json:"agent"`
+	Project           string                          `json:"project"`
+	TotalOutputTokens int                             `json:"total_output_tokens"`
+	PeakContextTokens int                             `json:"peak_context_tokens"`
+	HasTokenData      bool                            `json:"has_token_data"`
+	CostUSD           float64                         `json:"cost_usd"`
+	HasCost           bool                            `json:"has_cost"`
+	AICredits         float64                         `json:"ai_credits,omitempty"`
+	Models            []string                        `json:"models"`
+	UnpricedModels    []string                        `json:"unpriced_models"`
+	Breakdown         []sessionUsageBreakdownResponse `json:"breakdown"`
+	ServerRunning     bool                            `json:"server_running"`
+}
+
+type sessionUsageBreakdownResponse struct {
+	Ordinal                  int     `json:"ordinal"`
+	MessageOrdinal           *int    `json:"message_ordinal,omitempty"`
+	Source                   string  `json:"source"`
+	Label                    string  `json:"label"`
+	Timestamp                string  `json:"timestamp"`
+	Model                    string  `json:"model"`
+	InputTokens              int     `json:"input_tokens"`
+	OutputTokens             int     `json:"output_tokens"`
+	CacheCreationInputTokens int     `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int     `json:"cache_read_input_tokens"`
+	CostUSD                  float64 `json:"cost_usd"`
+	HasCost                  bool    `json:"has_cost"`
 }
 
 type sessionUsageErrorBody struct {
@@ -394,6 +410,23 @@ func newSessionUsageHumaResponse(usage *db.SessionUsage) sessionUsageResponse {
 	if unpricedModels == nil {
 		unpricedModels = []string{}
 	}
+	breakdown := make([]sessionUsageBreakdownResponse, 0, len(usage.Breakdown))
+	for _, entry := range usage.Breakdown {
+		breakdown = append(breakdown, sessionUsageBreakdownResponse{
+			Ordinal:                  entry.Ordinal,
+			MessageOrdinal:           entry.MessageOrdinal,
+			Source:                   entry.Source,
+			Label:                    entry.Label,
+			Timestamp:                entry.Timestamp,
+			Model:                    entry.Model,
+			InputTokens:              entry.InputTokens,
+			OutputTokens:             entry.OutputTokens,
+			CacheCreationInputTokens: entry.CacheCreationInputTokens,
+			CacheReadInputTokens:     entry.CacheReadInputTokens,
+			CostUSD:                  entry.CostUSD,
+			HasCost:                  entry.HasCost,
+		})
+	}
 	return sessionUsageResponse{
 		SessionID:         usage.SessionID,
 		Agent:             usage.Agent,
@@ -406,6 +439,7 @@ func newSessionUsageHumaResponse(usage *db.SessionUsage) sessionUsageResponse {
 		AICredits:         usage.AICredits,
 		Models:            usage.Models,
 		UnpricedModels:    unpricedModels,
+		Breakdown:         breakdown,
 		ServerRunning:     true,
 	}
 }

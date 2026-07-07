@@ -81,6 +81,21 @@
     path: string;
   }
 
+  interface SessionUsageBreakdownEntry {
+    ordinal: number;
+    message_ordinal?: number;
+    source: string;
+    label: string;
+    timestamp: string;
+    model: string;
+    input_tokens: number;
+    output_tokens: number;
+    cache_creation_input_tokens: number;
+    cache_read_input_tokens: number;
+    cost_usd: number;
+    has_cost: boolean;
+  }
+
   onMount(() => {
     configureGeneratedClient();
     OpenersService.getApiV1Openers()
@@ -115,6 +130,7 @@
   });
 
   let sessionCost = $state<number | null>(null);
+  let sessionUsageBreakdown = $state<SessionUsageBreakdownEntry[]>([]);
   // Key of the last successful usage fetch. Cost depends on more
   // than output tokens (input/cache tokens and explicit usage-event
   // costs), so the key includes every cost-affecting field present
@@ -128,6 +144,7 @@
   $effect(() => {
     if (!session) {
       sessionCost = null;
+      sessionUsageBreakdown = [];
       costFetchKey = null;
       costSessionId = null;
       costRequestSeq++;
@@ -149,6 +166,7 @@
       // the early return below while another session's request is
       // still in flight.
       sessionCost = null;
+      sessionUsageBreakdown = [];
       costFetchKey = null;
     }
     if (key === costFetchKey) return;
@@ -160,8 +178,13 @@
         if (seq !== costRequestSeq) return;
         costFetchKey = key;
         sessionCost = res.has_cost ? res.cost_usd : null;
+        sessionUsageBreakdown = Array.isArray(res.breakdown)
+          ? (res.breakdown as SessionUsageBreakdownEntry[])
+          : [];
       })
       .catch(() => {
+        if (seq !== costRequestSeq) return;
+        sessionUsageBreakdown = [];
         // Leave the fetch key unset so the next
         // session refresh retries the lookup.
       });
@@ -170,6 +193,7 @@
   let sessionCostLabel = $derived(
     sessionCost !== null ? formatCost(sessionCost) : null,
   );
+  let sessionUsageBreakdownRows = $derived(sessionUsageBreakdown);
 
   let sessionContextTokens = $derived(session?.peak_context_tokens ?? 0);
   let sessionOutputTokens = $derived(session?.total_output_tokens ?? 0);
@@ -213,6 +237,30 @@
   function sessionDisplayId(id: string): string {
     const idx = id.indexOf(":");
     return idx >= 0 ? id.slice(idx + 1) : id;
+  }
+
+  function formatTokenCount(value: number): string {
+    return Math.max(0, value).toLocaleString();
+  }
+
+  function formatBreakdownContext(entry: SessionUsageBreakdownEntry): string {
+    const context =
+      entry.input_tokens +
+      entry.cache_creation_input_tokens +
+      entry.cache_read_input_tokens;
+    return formatTokenCount(context);
+  }
+
+  function formatBreakdownTitle(entry: SessionUsageBreakdownEntry): string {
+    const parts = [
+      entry.model || entry.source,
+      `${formatBreakdownContext(entry)} ctx`,
+      `${formatTokenCount(entry.output_tokens)} out`,
+    ];
+    if (entry.has_cost) {
+      parts.push(formatCost(entry.cost_usd));
+    }
+    return parts.filter(Boolean).join(" · ");
   }
 
   async function copySessionId(
@@ -733,6 +781,38 @@
           {sessionTokenSummary}
         </span>
       {/if}
+      {#if sessionUsageBreakdownRows.length > 0}
+        <details class="usage-breakdown">
+          <summary
+            class="usage-breakdown-trigger"
+            title="Session usage breakdown"
+          >
+            {sessionUsageBreakdown.length} steps
+          </summary>
+          <div class="usage-breakdown-menu">
+            {#each sessionUsageBreakdownRows as row (row.ordinal)}
+              <div class="usage-breakdown-row" title={formatBreakdownTitle(row)}>
+                <span class="usage-breakdown-label">
+                  {row.label}
+                </span>
+                <span class="usage-breakdown-model">
+                  {row.model || row.source}
+                </span>
+                <span class="usage-breakdown-tokens">
+                  {formatBreakdownContext(row)} ctx
+                  <span aria-hidden="true">/</span>
+                  {formatTokenCount(row.output_tokens)} out
+                </span>
+                {#if row.has_cost}
+                  <span class="usage-breakdown-cost">
+                    {formatCost(row.cost_usd)}
+                  </span>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        </details>
+      {/if}
       {#if sessionCostLabel}
         <span class="cost-badge" title={m.session_breadcrumb_estimated_session_cost()}>
           {sessionCostLabel}
@@ -1107,6 +1187,92 @@
     flex-shrink: 0;
   }
 
+  .usage-breakdown {
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  .usage-breakdown-trigger {
+    list-style: none;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--bg-tertiary);
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  .usage-breakdown-trigger::-webkit-details-marker {
+    display: none;
+  }
+
+  .usage-breakdown[open] .usage-breakdown-trigger,
+  .usage-breakdown-trigger:hover {
+    color: var(--text-secondary);
+    background: var(--bg-surface-hover);
+  }
+
+  .usage-breakdown-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 4px;
+    width: min(460px, calc(100vw - 24px));
+    max-height: 260px;
+    overflow: auto;
+    padding: 6px;
+    border: 1px solid var(--border-default);
+    border-radius: 6px;
+    background: var(--bg-primary);
+    box-shadow: var(--shadow-lg);
+    z-index: var(--z-popover);
+  }
+
+  .usage-breakdown-row {
+    display: grid;
+    grid-template-columns: minmax(62px, 0.85fr) minmax(90px, 1fr) max-content max-content;
+    gap: 8px;
+    align-items: center;
+    padding: 5px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+    line-height: 1.25;
+    color: var(--text-secondary);
+  }
+
+  .usage-breakdown-row:hover {
+    background: var(--bg-surface-hover);
+  }
+
+  .usage-breakdown-label,
+  .usage-breakdown-model {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .usage-breakdown-label {
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+
+  .usage-breakdown-model {
+    color: var(--text-muted);
+  }
+
+  .usage-breakdown-tokens,
+  .usage-breakdown-cost {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  .usage-breakdown-cost {
+    color: var(--text-muted);
+  }
+
   .model-badge {
     font-size: 10px;
     color: var(--text-muted);
@@ -1305,6 +1471,26 @@
       max-width: 110px;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+
+    .usage-breakdown-trigger {
+      font-size: 9px;
+      padding: 1px 4px;
+    }
+
+    .usage-breakdown-menu {
+      right: -54px;
+      width: min(360px, calc(100vw - 16px));
+    }
+
+    .usage-breakdown-row {
+      grid-template-columns: minmax(56px, 0.8fr) minmax(68px, 1fr) max-content;
+      gap: 6px;
+      font-size: 10px;
+    }
+
+    .usage-breakdown-cost {
+      display: none;
     }
 
     .session-id {

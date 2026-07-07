@@ -230,6 +230,21 @@ func TestStoreGetSessionUsagePricedModel(t *testing.T) {
 	assert.InDelta(t, 0.01134, got.CostUSD, 1e-9)
 	assert.Equal(t, []string{"gpt-5.1"}, got.Models)
 	assert.Empty(t, got.UnpricedModels)
+	require.Len(t, got.Breakdown, 1, "Breakdown")
+	entry := got.Breakdown[0]
+	assert.Equal(t, 1, entry.Ordinal)
+	require.NotNil(t, entry.MessageOrdinal)
+	assert.Equal(t, 1, *entry.MessageOrdinal)
+	assert.Equal(t, "message", entry.Source)
+	assert.Equal(t, "Prompt 2", entry.Label)
+	assert.Equal(t, "2026-03-12T10:01:00Z", entry.Timestamp)
+	assert.Equal(t, "gpt-5.1", entry.Model)
+	assert.Equal(t, 1000, entry.InputTokens)
+	assert.Equal(t, 500, entry.OutputTokens)
+	assert.Equal(t, 200, entry.CacheCreationInputTokens)
+	assert.Equal(t, 300, entry.CacheReadInputTokens)
+	assert.True(t, entry.HasCost)
+	assert.InDelta(t, 0.01134, entry.CostUSD, 1e-9)
 }
 
 func TestStoreGetSessionUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testing.T) {
@@ -272,6 +287,9 @@ func TestStoreGetSessionUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testin
 	assert.True(t, got.HasCost)
 	assert.InDelta(t, 0.0175, got.CostUSD, 1e-9)
 	assert.Equal(t, []string{"claude-opus-4-6"}, got.Models)
+	require.Len(t, got.Breakdown, 1, "Breakdown")
+	require.NotNil(t, got.Breakdown[0].MessageOrdinal)
+	assert.Equal(t, 0, *got.Breakdown[0].MessageOrdinal)
 }
 
 func TestStoreGetSessionUsageNoTokenRowsKeepsMetadata(t *testing.T) {
@@ -299,6 +317,7 @@ func TestStoreGetSessionUsageNoTokenRowsKeepsMetadata(t *testing.T) {
 	assert.Zero(t, got.CostUSD)
 	assert.Empty(t, got.Models)
 	assert.Empty(t, got.UnpricedModels)
+	assert.Empty(t, got.Breakdown)
 }
 
 func TestStoreGetSessionUsageNotFound(t *testing.T) {
@@ -805,10 +824,10 @@ func TestPostgresUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 	require.NoError(t, err, "insert session")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO usage_events (
-			session_id, source, model, input_tokens, output_tokens,
-			occurred_at, dedup_key
+			session_id, message_ordinal, source, model, input_tokens,
+			output_tokens, occurred_at, dedup_key
 		) VALUES (
-			'hermes-summary', 'session', 'gpt-5.4', $1, $2,
+			'hermes-summary', 0, 'session', 'gpt-5.4', $1, $2,
 			'2026-05-14T10:05:00Z'::timestamptz, 'session:hermes-summary'
 		)`, rawInput, rawOutput)
 	require.NoError(t, err, "insert usage event")
@@ -831,6 +850,16 @@ func TestPostgresUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 	require.True(t, usage.HasCost, "HasCost")
 	wantCost := (float64(rawInput)*1.0 + float64(rawOutput)*2.0) / 1_000_000
 	assert.InDelta(t, wantCost, usage.CostUSD, 1e-9, "session cost")
+	require.Len(t, usage.Breakdown, 1, "Breakdown")
+	entry := usage.Breakdown[0]
+	assert.Equal(t, "session", entry.Source)
+	assert.Equal(t, "Step 1", entry.Label)
+	require.NotNil(t, entry.MessageOrdinal)
+	assert.Equal(t, 0, *entry.MessageOrdinal)
+	assert.Equal(t, rawInput, entry.InputTokens)
+	assert.Equal(t, rawOutput, entry.OutputTokens)
+	assert.True(t, entry.HasCost)
+	assert.InDelta(t, wantCost, entry.CostUSD, 1e-9, "breakdown cost")
 }
 
 func TestPostgresUsageCostsMessageReasoningTokens(t *testing.T) {
