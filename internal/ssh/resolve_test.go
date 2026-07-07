@@ -257,20 +257,33 @@ func TestResolveScriptAiderRejectsHomeOverride(t *testing.T) {
 	}
 }
 
-func TestResolveScriptWindsurfTargetsWorkspaceStorage(t *testing.T) {
+func TestResolveScriptWindsurfTargetsOnlySessionFiles(t *testing.T) {
 	home := t.TempDir()
 	userRoot := filepath.Join(home, "AppData", "Roaming", "Windsurf", "User")
 	workspaceRoot := filepath.Join(userRoot, "workspaceStorage")
-	require.NoError(t, os.MkdirAll(workspaceRoot, 0o755))
+	workspaceDir := filepath.Join(workspaceRoot, "workspace-a")
+	stateDB := filepath.Join(workspaceDir, parser.WindsurfStateDBName)
+	stateWAL := stateDB + "-wal"
+	stateSHM := stateDB + "-shm"
+	workspaceJSON := filepath.Join(workspaceDir, "workspace.json")
+	secretPath := filepath.Join(workspaceDir, "extension-secret.json")
+	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
+	require.NoError(t, os.WriteFile(stateDB, []byte("state"), 0o644))
+	require.NoError(t, os.WriteFile(stateWAL, []byte("wal"), 0o644))
+	require.NoError(t, os.WriteFile(stateSHM, []byte("shm"), 0o644))
+	require.NoError(t, os.WriteFile(workspaceJSON, []byte("{}\n"), 0o644))
+	require.NoError(t, os.WriteFile(secretPath, []byte("secret"), 0o644))
 
 	out := runResolveScriptForTest(t, "HOME="+home)
 
-	dirs, _ := parseResolvedDirs(string(out))
-	targets := slashPaths(dirs[parser.AgentWindsurf])
-	require.Len(t, targets, 1)
-	assert.Truef(t, strings.HasSuffix(targets[0], "AppData/Roaming/Windsurf/User/workspaceStorage"),
-		"windsurf target should resolve to workspaceStorage, got %v", targets)
-	assert.NotContains(t, targets, filepath.ToSlash(userRoot))
+	records := resolveOutputRecords(string(out))
+	assert.Contains(t, records, string(parser.AgentWindsurf)+":"+filepath.ToSlash(userRoot))
+	assert.Contains(t, records, resolveAgentFilePrefix+":"+string(parser.AgentWindsurf)+":"+filepath.ToSlash(stateDB))
+	assert.Contains(t, records, resolveAgentFilePrefix+":"+string(parser.AgentWindsurf)+":"+filepath.ToSlash(stateWAL))
+	assert.Contains(t, records, resolveAgentFilePrefix+":"+string(parser.AgentWindsurf)+":"+filepath.ToSlash(stateSHM))
+	assert.Contains(t, records, resolveAgentFilePrefix+":"+string(parser.AgentWindsurf)+":"+filepath.ToSlash(workspaceJSON))
+	assert.NotContains(t, records, string(parser.AgentWindsurf)+":"+filepath.ToSlash(workspaceRoot))
+	assert.NotContains(t, records, resolveAgentFilePrefix+":"+string(parser.AgentWindsurf)+":"+filepath.ToSlash(secretPath))
 }
 
 func runResolveScriptForTest(t *testing.T, env ...string) []byte {
@@ -319,6 +332,24 @@ func TestParseResolvedDirsNULRecords(t *testing.T) {
 	assert.Equal(t,
 		[]string{"/home/wes/code/repo/.aider.chat.history.md"},
 		dirs[parser.AgentAider])
+	assert.Equal(t,
+		[]string{"/home/wes/.codex/session_index.jsonl"}, extraFiles)
+}
+
+func TestParseResolvedTargetsIncludesAgentFiles(t *testing.T) {
+	input := "windsurf:/home/wes/Windsurf/User\x00" +
+		"@agentfile:windsurf:/home/wes/Windsurf/User/workspaceStorage/a/state.vscdb\x00" +
+		"@agentfile:windsurf:/home/wes/Windsurf/User/workspaceStorage/a/state.vscdb\x00" +
+		"@agentfile:windsurf:/home/wes/Windsurf/User/workspaceStorage/a/workspace.json\x00" +
+		"@file:/home/wes/.codex/session_index.jsonl\x00"
+
+	dirs, files, extraFiles := parseResolvedTargets(input)
+
+	assert.Equal(t, []string{"/home/wes/Windsurf/User"}, dirs[parser.AgentWindsurf])
+	assert.Equal(t, []string{
+		"/home/wes/Windsurf/User/workspaceStorage/a/state.vscdb",
+		"/home/wes/Windsurf/User/workspaceStorage/a/workspace.json",
+	}, files[parser.AgentWindsurf])
 	assert.Equal(t,
 		[]string{"/home/wes/.codex/session_index.jsonl"}, extraFiles)
 }

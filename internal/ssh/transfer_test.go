@@ -14,7 +14,7 @@ func TestBuildTarCommand(t *testing.T) {
 		parser.AgentClaude: {"/home/wes/.claude/projects"},
 		parser.AgentCodex:  {"/home/wes/.codex/sessions"},
 	}
-	cmd := buildTarCommand(dirs, []string{"/home/wes/.codex/session_index.jsonl"})
+	cmd := buildTarCommand(dirs, nil, []string{"/home/wes/.codex/session_index.jsonl"})
 
 	assert.True(t, strings.HasPrefix(cmd, "tar cf - -C / -- "), "bad prefix: %s", cmd)
 	// Paths are shell-quoted.
@@ -24,6 +24,25 @@ func TestBuildTarCommand(t *testing.T) {
 	assert.Contains(t, cmd, "'home/wes/.codex/session_index.jsonl'")
 	// No leading slash in path args.
 	assert.NotContains(t, cmd, "'/home/", "path has leading slash: %s", cmd)
+}
+
+func TestBuildTarCommandSkipsFileScopedWindsurfDirs(t *testing.T) {
+	dirs := map[parser.AgentType][]string{
+		parser.AgentWindsurf: {"/home/wes/Windsurf/User"},
+	}
+	files := map[parser.AgentType][]string{
+		parser.AgentWindsurf: {
+			"/home/wes/Windsurf/User/workspaceStorage/a/state.vscdb",
+			"/home/wes/Windsurf/User/workspaceStorage/a/workspace.json",
+		},
+	}
+
+	cmd := buildTarCommand(dirs, files, nil)
+
+	assert.Contains(t, cmd, "'home/wes/Windsurf/User/workspaceStorage/a/state.vscdb'")
+	assert.Contains(t, cmd, "'home/wes/Windsurf/User/workspaceStorage/a/workspace.json'")
+	assert.NotContains(t, cmd, "'home/wes/Windsurf/User'",
+		"file-scoped Windsurf root must not be archived recursively: %s", cmd)
 }
 
 func TestRemapPath(t *testing.T) {

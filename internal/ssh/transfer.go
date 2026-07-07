@@ -15,18 +15,27 @@ import (
 )
 
 // buildTarCommand generates the remote tar command for the given
-// agent directories and extra files. Uses -C / so paths are relative
-// to root. Strips leading / from each path and shell-quotes it. The
-// extra files are resolved to exist on the remote (see
-// buildResolveScript), so tar does not fail on a missing path.
+// agent directories, agent-scoped files, and extra files. Uses -C /
+// so paths are relative to root. Strips leading / from each path and
+// shell-quotes it. The file paths are resolved to exist on the remote
+// (see buildResolveScript), so tar does not fail on a missing path.
 func buildTarCommand(
 	dirs map[parser.AgentType][]string,
+	files map[parser.AgentType][]string,
 	extraFiles []string,
 ) string {
 	var paths []string
-	for _, agentDirs := range dirs {
+	for agent, agentDirs := range dirs {
+		if _, fileScoped := files[agent]; fileScoped {
+			continue
+		}
 		for _, d := range agentDirs {
 			paths = append(paths, shellQuote(strings.TrimPrefix(d, "/")))
+		}
+	}
+	for _, agentFiles := range files {
+		for _, f := range agentFiles {
+			paths = append(paths, shellQuote(strings.TrimPrefix(f, "/")))
 		}
 	}
 	for _, f := range extraFiles {
@@ -47,9 +56,10 @@ func downloadAndExtract(
 	ctx context.Context,
 	host, user string, port int, sshOpts []string,
 	dirs map[parser.AgentType][]string,
+	files map[parser.AgentType][]string,
 	extraFiles []string,
 ) (string, error) {
-	tarCmd := buildTarCommand(dirs, extraFiles)
+	tarCmd := buildTarCommand(dirs, files, extraFiles)
 	stdout, cleanup, err := runSSHStream(
 		ctx, host, user, port, sshOpts, tarCmd,
 	)

@@ -203,7 +203,7 @@ func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
 	cmd.Env = []string{"HOME=" + home, "AIDER_DIR=" + aiderRoot, "DEVIN_DIR=" + devinDir}
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "ssh resolver output: %s", out)
-	sshDirs, sshExtra := ssh.ParseResolvedTargetsForTest(string(out))
+	sshDirs, sshFiles, sshExtra := ssh.ParseResolvedTargetsWithFilesForTest(string(out))
 
 	goTargets := remotesync.ResolveTargets(config.Config{
 		AgentDirs: map[parser.AgentType][]string{
@@ -221,11 +221,17 @@ func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
 	assert.NotContains(t, sshDirs, parser.AgentDevin)
 	assert.NotContains(t, goTargets.Dirs, parser.AgentDevin)
 	assert.ElementsMatch(t, sshDirs[parser.AgentAider], goTargets.Dirs[parser.AgentAider])
-	assert.ElementsMatch(t, []string{windsurfWorkspaceRoot}, sshDirs[parser.AgentWindsurf])
-	assert.ElementsMatch(t, []string{windsurfUserRoot}, goTargets.Dirs[parser.AgentWindsurf])
+	assert.ElementsMatch(t, []string{windsurfUserRoot}, sshDirs[parser.AgentWindsurf])
+	assert.ElementsMatch(t, sshDirs[parser.AgentWindsurf], goTargets.Dirs[parser.AgentWindsurf])
+	assert.ElementsMatch(t, []string{
+		windsurfStateDB,
+		windsurfWorkspaceJSON,
+	}, sshFiles[parser.AgentWindsurf])
 	assert.ElementsMatch(t, []string{
 		windsurfStateDB,
 		windsurfWorkspaceJSON,
 	}, goTargets.Files[parser.AgentWindsurf])
+	assert.ElementsMatch(t, sshFiles[parser.AgentWindsurf], goTargets.Files[parser.AgentWindsurf])
+	assert.NotContains(t, sshDirs[parser.AgentWindsurf], windsurfWorkspaceRoot)
 	assert.ElementsMatch(t, sshExtra, goTargets.ExtraFiles)
 }

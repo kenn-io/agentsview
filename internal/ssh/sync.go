@@ -39,7 +39,7 @@ func (rs *RemoteSync) Run(
 	fmt.Printf(
 		"Resolving agent directories on %s...\n", rs.Host,
 	)
-	dirs, extraFiles, err := resolveDirs(
+	dirs, files, extraFiles, err := resolveDirs(
 		ctx, rs.Host, rs.User, rs.Port, rs.SSHOpts,
 	)
 	if err != nil {
@@ -62,7 +62,7 @@ func (rs *RemoteSync) Run(
 		rs.Host, len(dirs),
 	)
 	tmpDir, err := downloadAndExtract(
-		ctx, rs.Host, rs.User, rs.Port, rs.SSHOpts, dirs, extraFiles,
+		ctx, rs.Host, rs.User, rs.Port, rs.SSHOpts, dirs, files, extraFiles,
 	)
 	if err != nil {
 		return stats, fmt.Errorf(
@@ -104,6 +104,7 @@ func (rs *RemoteSync) Run(
 		Progress:                progress,
 	}.ImportExtracted(ctx, remotesync.TargetSet{
 		Dirs:       dirs,
+		Files:      files,
 		ExtraFiles: extraFiles,
 	}, tmpDir)
 	if lastProgress.SessionsTotal > 0 {

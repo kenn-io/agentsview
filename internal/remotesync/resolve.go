@@ -142,7 +142,10 @@ func resolveWindsurfFiles(workspaceRoot string) []string {
 
 func regularRemoteSyncFile(path string) bool {
 	info, err := os.Lstat(path)
-	return err == nil && info.Mode().IsRegular()
+	if err != nil {
+		return false
+	}
+	return info.Mode().IsRegular()
 }
 
 func providerDiscoveredPath(source parser.SourceRef) string {
