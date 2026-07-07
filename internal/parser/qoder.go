@@ -181,7 +181,11 @@ func retagQoderResult(
 		result.Session.ParentSessionID = qoderPrefixMaybe(result.Session.ParentSessionID)
 	}
 	result.Session.Agent = AgentQoder
-	retagQoderToolCalls(result.Messages, result.Session.ID)
+	toolCallParentID := result.Session.ID
+	if !isSubagent {
+		toolCallParentID = qoderPrefixID(fileStem)
+	}
+	retagQoderToolCalls(result.Messages, toolCallParentID)
 }
 
 func retagQoderToolCalls(messages []ParsedMessage, sessionID string) {

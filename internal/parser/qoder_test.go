@@ -158,6 +158,45 @@ func TestParseQoderSessionRetagsToolCallSubagentIDs(t *testing.T) {
 	assert.Equal(t, "qoder:11111111-1111-4111-8111-111111111111:subagent:agent-123", calls[0].SubagentSessionID)
 }
 
+func TestParseQoderForkedSessionRetagsToolCallSubagentIDsToFileStem(t *testing.T) {
+	fileStem := "11111111-1111-4111-8111-111111111111"
+	path := filepath.Join(t.TempDir(), "proj", fileStem+".jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	content := `{"type":"user","uuid":"root","timestamp":"2026-06-04T09:47:20.000Z","message":{"role":"user","content":"start"},"sessionId":"11111111-1111-4111-8111-111111111111"}
+{"type":"assistant","uuid":"split","parentUuid":"root","timestamp":"2026-06-04T09:47:21.000Z","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]},"sessionId":"11111111-1111-4111-8111-111111111111"}
+{"type":"user","uuid":"main-u1","parentUuid":"split","timestamp":"2026-06-04T09:47:22.000Z","message":{"role":"user","content":"main 1"},"sessionId":"11111111-1111-4111-8111-111111111111"}
+{"type":"assistant","uuid":"main-a1","parentUuid":"main-u1","timestamp":"2026-06-04T09:47:23.000Z","message":{"role":"assistant","content":[{"type":"text","text":"main answer 1"}]},"sessionId":"11111111-1111-4111-8111-111111111111"}
+{"type":"user","uuid":"main-u2","parentUuid":"main-a1","timestamp":"2026-06-04T09:47:24.000Z","message":{"role":"user","content":"main 2"},"sessionId":"11111111-1111-4111-8111-111111111111"}
+{"type":"assistant","uuid":"main-a2","parentUuid":"main-u2","timestamp":"2026-06-04T09:47:25.000Z","message":{"role":"assistant","content":[{"type":"text","text":"main answer 2"}]},"sessionId":"11111111-1111-4111-8111-111111111111"}
+{"type":"user","uuid":"main-u3","parentUuid":"main-a2","timestamp":"2026-06-04T09:47:26.000Z","message":{"role":"user","content":"main 3"},"sessionId":"11111111-1111-4111-8111-111111111111"}
+{"type":"assistant","uuid":"main-a3","parentUuid":"main-u3","timestamp":"2026-06-04T09:47:27.000Z","message":{"role":"assistant","content":[{"type":"text","text":"main answer 3"}]},"sessionId":"11111111-1111-4111-8111-111111111111"}
+{"type":"user","uuid":"main-u4","parentUuid":"main-a3","timestamp":"2026-06-04T09:47:28.000Z","message":{"role":"user","content":"main 4"},"sessionId":"11111111-1111-4111-8111-111111111111"}
+{"type":"assistant","uuid":"main-a4","parentUuid":"main-u4","timestamp":"2026-06-04T09:47:29.000Z","message":{"role":"assistant","content":[{"type":"text","text":"main answer 4"}]},"sessionId":"11111111-1111-4111-8111-111111111111"}
+{"type":"user","uuid":"fork-u1","parentUuid":"split","timestamp":"2026-06-04T09:48:00.000Z","message":{"role":"user","content":"fork delegate"},"sessionId":"11111111-1111-4111-8111-111111111111"}
+{"type":"assistant","uuid":"fork-a1","parentUuid":"fork-u1","timestamp":"2026-06-04T09:48:01.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_fork","name":"Agent","input":{"description":"do fork work","prompt":"x"}}]},"sessionId":"11111111-1111-4111-8111-111111111111"}
+{"type":"user","uuid":"fork-r1","parentUuid":"fork-a1","timestamp":"2026-06-04T09:48:02.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_fork","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"123"},"sessionId":"11111111-1111-4111-8111-111111111111"}
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	results, err := ParseQoderSession(path, "proj", "local")
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	var fork *ParseResult
+	for i := range results {
+		if results[i].Session.RelationshipType == RelFork {
+			fork = &results[i]
+		}
+	}
+	require.NotNil(t, fork)
+	assert.NotEqual(t, qoderPrefixID(fileStem), fork.Session.ID)
+	var calls []ParsedToolCall
+	for _, msg := range fork.Messages {
+		calls = append(calls, msg.ToolCalls...)
+	}
+	require.Len(t, calls, 1)
+	assert.Equal(t, "qoder:"+fileStem+":subagent:agent-123", calls[0].SubagentSessionID)
+}
+
 func TestDiscoverQoderSessions(t *testing.T) {
 	root := t.TempDir()
 	mainPath := filepath.Join(root, "-Users-alice-project", "11111111-1111-4111-8111-111111111111.jsonl")
