@@ -144,8 +144,11 @@ func httpSessionUsageData(
 		}
 		return nil, tokenUseExitErr, err
 	}
+	// Request the full breakdown so the remote path matches the
+	// shape returned by the direct store paths.
 	endpoint := strings.TrimSuffix(baseURL, "/") +
-		"/api/v1/sessions/" + url.PathEscape(resolvedID) + "/usage"
+		"/api/v1/sessions/" + url.PathEscape(resolvedID) +
+		"/usage?breakdown=true"
 	req, err := http.NewRequestWithContext(
 		ctx, http.MethodGet, endpoint, nil,
 	)

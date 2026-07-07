@@ -155,7 +155,8 @@ type remoteUsageSpec struct {
 
 // remoteUsageRequests records what the fake usage server observed.
 type remoteUsageRequests struct {
-	UsagePath string
+	UsagePath  string
+	UsageQuery string
 }
 
 // newRemoteUsageServer stands in for a remote agentsview server answering
@@ -195,6 +196,7 @@ func newRemoteUsageServer(
 			writeJSONResponse(w, detailJSON)
 		case usagePath:
 			reqs.UsagePath = r.URL.Path
+			reqs.UsageQuery = r.URL.RawQuery
 			if spec.usageDelay > 0 {
 				time.Sleep(spec.usageDelay)
 			}
@@ -1080,6 +1082,8 @@ func TestSessionUsage_ServerFlagUsesHTTP(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, out)
 	assert.Equal(t, "/api/v1/sessions/remote-session/usage", reqs.UsagePath)
+	assert.Equal(t, "breakdown=true", reqs.UsageQuery,
+		"remote CLI must request full breakdown rows")
 	assert.Equal(t, tokenUseExitOK, code)
 	assert.Equal(t, "remote-session", out.SessionID)
 	assert.Equal(t, "remote-project", out.Project)
