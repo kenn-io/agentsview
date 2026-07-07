@@ -157,12 +157,29 @@ func DecodeQoderProjectDir(encoded string) string {
 		return NormalizeName(encoded)
 	}
 	parts := strings.Split(encoded, "-")
+	for i := len(parts) - 2; i >= 0; i-- {
+		if isQoderProjectParentDir(parts[i]) {
+			project := strings.Join(parts[i+1:], "-")
+			if project != "" {
+				return NormalizeName(project)
+			}
+		}
+	}
 	for i := len(parts) - 1; i >= 0; i-- {
 		if parts[i] != "" {
 			return NormalizeName(parts[i])
 		}
 	}
 	return NormalizeName(encoded)
+}
+
+func isQoderProjectParentDir(part string) bool {
+	switch strings.ToLower(part) {
+	case "code", "coding", "dev", "development", "projects", "repos", "src", "work", "workspace":
+		return true
+	default:
+		return false
+	}
 }
 
 func retagQoderResult(
