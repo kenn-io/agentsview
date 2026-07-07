@@ -38,8 +38,14 @@ func qoderParseFile(
 	if err != nil {
 		return nil, nil, err
 	}
-	if req.Fingerprint.Hash != "" {
-		for i := range results {
+	for i := range results {
+		if req.Fingerprint.Size > 0 {
+			results[i].Session.File.Size = req.Fingerprint.Size
+		}
+		if req.Fingerprint.MTimeNS > 0 {
+			results[i].Session.File.Mtime = req.Fingerprint.MTimeNS
+		}
+		if req.Fingerprint.Hash != "" {
 			results[i].Session.File.Hash = req.Fingerprint.Hash
 		}
 	}

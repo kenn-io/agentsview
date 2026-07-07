@@ -207,14 +207,11 @@ func applyQoderMeta(sess *ParsedSession, meta qoderSessionMeta) {
 	if sess.Cwd == "" && meta.WorkingDir != "" {
 		sess.Cwd = meta.WorkingDir
 	}
-	if sess.ParentSessionID == "" {
-		switch {
-		case meta.ForkFrom != "":
-			sess.ParentSessionID = qoderPrefixID(meta.ForkFrom)
-			sess.RelationshipType = RelFork
-		case meta.ParentSessionID != "":
-			sess.ParentSessionID = qoderPrefixID(meta.ParentSessionID)
-		}
+	if meta.ForkFrom != "" {
+		sess.ParentSessionID = qoderPrefixID(meta.ForkFrom)
+		sess.RelationshipType = RelFork
+	} else if sess.ParentSessionID == "" && meta.ParentSessionID != "" {
+		sess.ParentSessionID = qoderPrefixID(meta.ParentSessionID)
 	}
 }
 

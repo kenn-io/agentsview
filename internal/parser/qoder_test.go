@@ -89,6 +89,55 @@ func TestParseQoderSessionSidecarMetadata(t *testing.T) {
 	assert.Equal(t, RelFork, sess.RelationshipType)
 }
 
+func TestQoderSidecarForkFromOverridesInferredParent(t *testing.T) {
+	sess := ParsedSession{
+		ParentSessionID:  "qoder:22222222-2222-4222-8222-222222222222",
+		RelationshipType: RelContinuation,
+	}
+
+	applyQoderMeta(&sess, qoderSessionMeta{
+		ForkFrom: "11111111-1111-4111-8111-111111111111",
+	})
+
+	assert.Equal(t, "qoder:11111111-1111-4111-8111-111111111111", sess.ParentSessionID)
+	assert.Equal(t, RelFork, sess.RelationshipType)
+}
+
+func TestQoderProviderParseStampsCompositeFingerprint(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "-Users-alice-project", "11111111-1111-4111-8111-111111111111.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(`{"type":"user","uuid":"u1","timestamp":"2026-06-04T09:47:27.966Z","message":{"role":"user","content":"hello"},"sessionId":"11111111-1111-4111-8111-111111111111"}
+`), 0o644))
+	require.NoError(t, os.WriteFile(
+		strings.TrimSuffix(path, ".jsonl")+"-session.json",
+		[]byte(`{"title":"Composite fingerprint"}`),
+		0o644,
+	))
+
+	provider, ok := NewProvider(AgentQoder, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "local",
+	})
+	require.True(t, ok)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	fingerprint, err := provider.Fingerprint(context.Background(), sources[0])
+	require.NoError(t, err)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source:      sources[0],
+		Fingerprint: fingerprint,
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	file := outcome.Results[0].Result.Session.File
+	assert.Equal(t, fingerprint.Size, file.Size)
+	assert.Equal(t, fingerprint.MTimeNS, file.Mtime)
+	assert.Equal(t, fingerprint.Hash, file.Hash)
+}
+
 func TestParseQoderSubagentSession(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "proj", "11111111-1111-4111-8111-111111111111", "subagents", "agent-123.jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
