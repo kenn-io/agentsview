@@ -14,11 +14,12 @@ import (
 	"go.kenn.io/agentsview/internal/remotesync"
 )
 
-// buildTarCommand generates the remote tar command for the given
+// buildTarCommand generates the remote shell script for the given
 // agent directories, agent-scoped files, and extra files. Uses -C /
-// so paths are relative to root. Strips leading / from each path and
-// shell-quotes it. The file paths are resolved to exist on the remote
-// (see buildResolveScript), so tar does not fail on a missing path.
+// so paths are relative to root, and feeds paths to tar over stdin
+// instead of expanding them as tar argv. The script itself is sent to
+// the remote shell over stdin, so a large file-scoped Windsurf export
+// does not consume ssh/exec argument space.
 func buildTarCommand(
 	dirs map[parser.AgentType][]string,
 	files map[parser.AgentType][]string,
@@ -41,7 +42,16 @@ func buildTarCommand(
 	for _, f := range extraFiles {
 		paths = append(paths, shellQuote(strings.TrimPrefix(f, "/")))
 	}
-	return "tar cf - -C / -- " + strings.Join(paths, " ")
+	var b strings.Builder
+	b.WriteString("set -e\n{\n")
+	b.WriteString(":\n")
+	for _, path := range paths {
+		b.WriteString("printf '%s\\n' ")
+		b.WriteString(path)
+		b.WriteByte('\n')
+	}
+	b.WriteString("} | tar cf - -C / -T -\n")
+	return b.String()
 }
 
 // shellQuote wraps s in single quotes, escaping any embedded
@@ -60,7 +70,7 @@ func downloadAndExtract(
 	extraFiles []string,
 ) (string, error) {
 	tarCmd := buildTarCommand(dirs, files, extraFiles)
-	stdout, cleanup, err := runSSHStream(
+	stdout, cleanup, err := runSSHScriptStream(
 		ctx, host, user, port, sshOpts, tarCmd,
 	)
 	if err != nil {

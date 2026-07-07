@@ -102,20 +102,17 @@ func runSSHScript(
 	return out, nil
 }
 
-// runSSHStream executes a command on the remote host and returns a
-// reader for stdout. Caller must call the returned cleanup func when
-// done to wait for the process and release resources. Used for tar
-// streams where buffering full output is impractical.
-func runSSHStream(
+func runSSHScriptStream(
 	ctx context.Context,
 	host, user string, port int, sshOpts []string,
-	cmd string,
+	script string,
 ) (io.ReadCloser, func() error, error) {
-	args, err := buildSSHArgs(host, user, port, sshOpts, cmd)
+	args, err := buildSSHScriptArgs(host, user, port, sshOpts)
 	if err != nil {
 		return nil, nil, err
 	}
 	c := exec.CommandContext(ctx, args[0], args[1:]...)
+	c.Stdin = strings.NewReader(script)
 	var stderr bytes.Buffer
 	c.Stderr = &stderr
 

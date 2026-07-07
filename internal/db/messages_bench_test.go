@@ -3,6 +3,8 @@ package db
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"testing"
 )
 
@@ -85,6 +87,7 @@ func seedBenchSession(
 // single in-place UPDATE; cost must not scale with the number of
 // unchanged stored rows being rewritten.
 func BenchmarkReplaceSessionMessagesStreamingMerge(b *testing.B) {
+	silenceBenchmarkLogs(b)
 	const stored = 1000
 	d := testDB(b)
 	msgs := seedBenchSession(b, d, "bench-replace", stored)
@@ -115,6 +118,7 @@ func BenchmarkReplaceSessionMessagesStreamingMerge(b *testing.B) {
 // -benchtime=Nx (see bench.yml and the Makefile) so baseline and
 // candidate insert into identically sized databases.
 func BenchmarkInsertMessagesBatch(b *testing.B) {
+	silenceBenchmarkLogs(b)
 	const batch = 200
 	d := testDB(b)
 
@@ -143,4 +147,13 @@ func BenchmarkInsertMessagesBatch(b *testing.B) {
 			b.Fatalf("insert messages: %v", err)
 		}
 	}
+}
+
+func silenceBenchmarkLogs(b *testing.B) {
+	b.Helper()
+	origLog := log.Writer()
+	log.SetOutput(io.Discard)
+	b.Cleanup(func() {
+		log.SetOutput(origLog)
+	})
 }
