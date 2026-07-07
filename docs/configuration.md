@@ -698,9 +698,14 @@ sync_include_cwd_prefixes = [
 
 When the list is non-empty, a session is ingested only if its recorded
 working directory equals one of the prefixes or lives underneath one.
-Matching is path-boundary aware (`/home/me/oss` matches `/home/me/oss/repo`
-but not `/home/me/oss-other`) and case-sensitive. Use absolute paths;
-`~` is not expanded.
+Prefixes and session directories are lexically cleaned before matching:
+trailing separators are ignored and `..` components are resolved, so
+`/home/me/oss/../other` does not match a `/home/me/oss` prefix. Matching
+is path-boundary aware (`/home/me/oss` matches `/home/me/oss/repo` but
+not `/home/me/oss-other`), case-sensitive, and uses the local operating
+system's path separator — on Linux and macOS a backslash is an ordinary
+filename character, not a directory boundary. Use absolute paths; `~` is
+not expanded.
 
 Notes:
 

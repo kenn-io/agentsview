@@ -1,18 +1,21 @@
 package sync
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
+type cwdFilterCase struct {
+	name     string
+	prefixes []string
+	cwd      string
+	want     bool
+}
+
 func TestCwdPrefixFilterAllows(t *testing.T) {
-	tests := []struct {
-		name     string
-		prefixes []string
-		cwd      string
-		want     bool
-	}{
+	tests := []cwdFilterCase{
 		{"empty filter allows anything", nil, "/anywhere", true},
 		{"empty filter allows empty cwd", nil, "", true},
 		{"exact match", []string{"/a/b"}, "/a/b", true},
@@ -24,9 +27,24 @@ func TestCwdPrefixFilterAllows(t *testing.T) {
 		{"trailing separator normalized", []string{"/a/b/"}, "/a/b/c", true},
 		{"prefix longer than cwd", []string{"/a/b/c"}, "/a/b", false},
 		{"case sensitive", []string{"/a/B"}, "/a/b/c", false},
-		{"windows separator boundary", []string{`C:\work`}, `C:\work\repo`, true},
-		{"windows sibling", []string{`C:\work`}, `C:\workspace`, false},
 		{"blank entries ignored", []string{"  ", ""}, "/anywhere", true},
+		{"root prefix allows any cwd", []string{"/"}, "/anywhere", true},
+		{"dot-dot escaping the prefix rejected", []string{"/a/b"}, "/a/b/../c", false},
+		{"dot-dot staying inside allowed", []string{"/a/b"}, "/a/b/c/../d", true},
+		{"dot-dot in prefix cleaned", []string{"/a/b/../c"}, "/a/c/d", true},
+	}
+	if runtime.GOOS == "windows" {
+		tests = append(tests,
+			cwdFilterCase{"backslash boundary", []string{`C:\work`}, `C:\work\repo`, true},
+			cwdFilterCase{"drive sibling", []string{`C:\work`}, `C:\workspace`, false},
+			cwdFilterCase{"mixed separators normalized", []string{`C:/work`}, `C:\work\repo`, true},
+		)
+	} else {
+		// On POSIX a backslash is an ordinary filename character:
+		// "b\evil" is a sibling of "b" under /a, not a child of /a/b.
+		tests = append(tests, cwdFilterCase{
+			"backslash is not a separator", []string{"/a/b"}, `/a/b\evil`, false,
+		})
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
