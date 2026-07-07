@@ -111,6 +111,13 @@ func (p *antigravityProvider) parseSession(
 	// merge behavior.
 	usageEvents := dbResult.usageEvents
 	hasGenMetadata := dbResult.hasGenMetadata
+	if dbErr != nil {
+		// The steps query failed before gen_metadata was read, so the
+		// result above carries no usage. Load gen_metadata independently:
+		// it is still the DB's ground-truth consumption and must win over
+		// sidecar gap-fill even when the sidecar rescues the transcript.
+		usageEvents, hasGenMetadata = loadAntigravityGenMetadataUsage(db)
+	}
 	// TranscriptFidelity is left empty (treated as full) for the heuristic
 	// decode, matching prior IDE behavior; a covering sidecar sets it to
 	// TranscriptFidelityFull explicitly below.
@@ -314,6 +321,40 @@ func roleForAntigravityStepKind(kind antigravityStepKind) RoleType {
 	default:
 		return RoleAssistant
 	}
+}
+
+// loadAntigravityGenMetadataUsage loads usage events directly from the
+// gen_metadata table for the IDE sidecar-rescue path: when the steps
+// query fails, loadAntigravityStepsWithRawCount returns before it ever
+// reads gen_metadata, yet gen_metadata is the session's ground-truth
+// consumption and must stay primary ahead of sidecar gap-fill no matter
+// which transcript source wins. Events decoded here carry no message
+// attribution, model-from-message, or timestamp (there is no decoded
+// step to anchor them), so they bucket at session start in daily usage.
+// The second return reports whether the table carried rows at all, so
+// GenMetadataWithoutUsage keeps its meaning in the rescue path.
+func loadAntigravityGenMetadataUsage(
+	db *sql.DB,
+) ([]ParsedUsageEvent, bool) {
+	rows, err := db.Query("SELECT idx, data FROM gen_metadata ORDER BY idx")
+	if err != nil {
+		return nil, false
+	}
+	defer rows.Close()
+	var r antigravityStepLoadResult
+	hasGenMetadata := false
+	for rows.Next() {
+		var idx int
+		var data []byte
+		if err := rows.Scan(&idx, &data); err != nil {
+			continue
+		}
+		hasGenMetadata = true
+		// decoded=false: no step message exists to attach counts to; the
+		// event alone carries the usage, same as an undecodable step row.
+		r.appendGenMetadataUsage(data, ParsedMessage{}, false)
+	}
+	return r.usageEvents, hasGenMetadata
 }
 
 func loadAntigravityStepsWithRawCount(

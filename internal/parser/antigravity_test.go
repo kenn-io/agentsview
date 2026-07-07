@@ -3907,3 +3907,91 @@ func TestAntigravityIDEUnreadableStepsWithoutSidecarStillFails(t *testing.T) {
 		"unreadable steps without a rescuing sidecar must fail the parse")
 	assert.Contains(t, err.Error(), "steps")
 }
+
+// TestAntigravityIDESidecarRescueKeepsGenMetadataUsage verifies that
+// when the steps query fails but gen_metadata is still readable, the
+// sidecar rescue keeps the DB's gen_metadata usage as primary: the
+// covering sidecar wins the transcript, but usage events come from
+// gen_metadata (ground-truth consumption), not sidecar gap-fill, and
+// GenMetadataWithoutUsage semantics stay intact.
+func TestAntigravityIDESidecarRescueKeepsGenMetadataUsage(t *testing.T) {
+	makeDB := func(t *testing.T, root, id string, genData []byte) string {
+		t.Helper()
+		mustMkdir(t, filepath.Join(root, "conversations"))
+		dbPath := filepath.Join(root, "conversations", id+".db")
+		db, err := sql.Open("sqlite3", dbPath)
+		require.NoError(t, err)
+		// Readable schema and gen_metadata, but NO steps table: the
+		// steps query fails before the shared loader reads gen_metadata.
+		mustExec(t, db, `CREATE TABLE trajectory_meta (
+			trajectory_id text, PRIMARY KEY (trajectory_id))`)
+		mustExec(t, db, `CREATE TABLE gen_metadata (
+			idx integer, data blob, size integer, PRIMARY KEY (idx))`)
+		mustExec(t, db,
+			`INSERT INTO gen_metadata (idx, data, size) VALUES (1, ?, ?)`,
+			genData, len(genData))
+		require.NoError(t, db.Close())
+		return dbPath
+	}
+
+	t.Run("gen_metadata usage wins over sidecar gap-fill", func(t *testing.T) {
+		root := t.TempDir()
+		id := "abababab-cdcd-efef-abab-cdcdcdcdcdcd"
+		genData := createAntigravityMockGenMetadata(t, 2400, 180, 0, "Test Gemini 3.5")
+		dbPath := makeDB(t, root, id, genData)
+
+		// Covering sidecar whose generatorMetadata carries DIFFERENT
+		// numbers; the DB gen_metadata event must still win.
+		genJSON := `[{
+			"stepIndices": [1],
+			"chatModel": {
+				"model": "MODEL_PLACEHOLDER_M20",
+				"usage": {"inputTokens": "9999", "outputTokens": "888"}
+			}
+		}]`
+		writeAntigravityTestSidecarWithGenMetadata(t, root, id, 2, genJSON)
+
+		sess, msgs, usageEvents, err := parseAntigravityTestSession(
+			t, dbPath, "", "test-machine",
+		)
+		require.NoError(t, err,
+			"covering sidecar must rescue a .db with unreadable steps")
+
+		require.Len(t, msgs, 2)
+		assert.Equal(t, "sidecar prompt", msgs[0].Content)
+		assert.Equal(t, TranscriptFidelityFull, sess.TranscriptFidelity)
+
+		require.Len(t, usageEvents, 1)
+		assert.Equal(t, "generation", usageEvents[0].Source,
+			"usage must come from the DB gen_metadata, not the sidecar")
+		assert.Equal(t, "Test Gemini 3.5", usageEvents[0].Model)
+		assert.Equal(t, 2400, usageEvents[0].InputTokens)
+		assert.Equal(t, 180, usageEvents[0].OutputTokens)
+		assert.Equal(t, sess.ID, usageEvents[0].SessionID)
+		assert.False(t, sess.GenMetadataWithoutUsage,
+			"decoded gen_metadata usage must clear the flag")
+
+		assert.Equal(t, 180, sess.TotalOutputTokens)
+		assert.Equal(t, 2400, sess.PeakContextTokens)
+	})
+
+	t.Run("undecodable gen_metadata keeps flag semantics", func(t *testing.T) {
+		root := t.TempDir()
+		id := "babababa-dcdc-fefe-baba-dcdcdcdcdcdc"
+		// Garbage gen_metadata: rows exist but decode into zero usage.
+		dbPath := makeDB(t, root, id, []byte{0xff, 0xff, 0xff})
+
+		// Covering sidecar without generatorMetadata: nothing gap-fills.
+		writeAntigravityTestSidecar(t, root, id, 2)
+
+		sess, msgs, usageEvents, err := parseAntigravityTestSession(
+			t, dbPath, "", "test-machine",
+		)
+		require.NoError(t, err)
+		require.NotEmpty(t, msgs)
+		assert.Equal(t, TranscriptFidelityFull, sess.TranscriptFidelity)
+		assert.Empty(t, usageEvents)
+		assert.True(t, sess.GenMetadataWithoutUsage,
+			"gen_metadata rows that decode to no usage must flag the session")
+	})
+}
