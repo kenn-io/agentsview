@@ -124,8 +124,11 @@ func qoderCompanionFiles(path string) []string {
 }
 
 func qoderProviderCapabilities() Capabilities {
+	source := jsonlFileProviderSourceCapabilities()
+	source.MultiSessionSource = CapabilitySupported
+	source.ExcludedSessions = CapabilitySupported
 	return Capabilities{
-		Source: jsonlFileProviderSourceCapabilities(),
+		Source: source,
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
 			Cwd:                  CapabilitySupported,

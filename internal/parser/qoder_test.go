@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,6 +29,8 @@ func TestQoderRegistry(t *testing.T) {
 	assert.Equal(t, CapabilitySupported, caps.Source.DiscoverSources)
 	assert.Equal(t, CapabilitySupported, caps.Source.ClassifyChangedPath)
 	assert.Equal(t, CapabilitySupported, caps.Source.FindSource)
+	assert.Equal(t, CapabilitySupported, caps.Source.MultiSessionSource)
+	assert.Equal(t, CapabilitySupported, caps.Source.ExcludedSessions)
 	assert.Equal(t, CapabilitySupported, caps.Content.Subagents)
 	provider, ok := NewProvider(AgentQoder, ProviderConfig{Roots: []string{t.TempDir()}})
 	require.True(t, ok)
@@ -100,6 +103,39 @@ func TestParseQoderSubagentSession(t *testing.T) {
 	assert.Equal(t, "qoder:11111111-1111-4111-8111-111111111111", sess.ParentSessionID)
 	assert.Equal(t, RelSubagent, sess.RelationshipType)
 	assert.Equal(t, AgentQoder, sess.Agent)
+}
+
+func TestParseQoderSubagentExclusionIDs(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "proj", "11111111-1111-4111-8111-111111111111", "subagents", "agent-123.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	content := `{"type":"user","uuid":"u1","timestamp":"2026-06-04T09:47:27.966Z","message":{"role":"user","content":"/usage"},"sessionId":"agent-123"}
+`
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	results, excluded, err := ParseQoderSessionWithExclusions(path, "proj", "local")
+	require.NoError(t, err)
+	assert.Empty(t, results)
+	assert.Equal(t, []string{
+		"qoder:11111111-1111-4111-8111-111111111111:subagent:agent-123",
+	}, excluded)
+
+	provider, ok := NewProvider(AgentQoder, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source, found, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "11111111-1111-4111-8111-111111111111:subagent:agent-123",
+	})
+	require.NoError(t, err)
+	require.True(t, found)
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source:  source,
+		Machine: "local",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, outcome.Results)
+	assert.Equal(t, []string{
+		"qoder:11111111-1111-4111-8111-111111111111:subagent:agent-123",
+	}, outcome.ExcludedSessionIDs)
 }
 
 func TestParseQoderSessionRetagsToolCallSubagentIDs(t *testing.T) {

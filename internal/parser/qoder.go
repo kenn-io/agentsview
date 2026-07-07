@@ -144,7 +144,9 @@ func ParseQoderSessionWithExclusions(
 		}
 	}
 	for i := range excluded {
-		excluded[i] = qoderPrefixID(excluded[i])
+		excluded[i] = qoderExcludedID(
+			excluded[i], fileStem, parentID, subagentID, isSubagent,
+		)
 	}
 	InferRelationshipTypes(results)
 	return results, excluded, nil
@@ -254,4 +256,16 @@ func qoderPrefixMaybe(id string) string {
 
 func qoderSubagentID(parentID, subagentID string) string {
 	return qoderPrefixID(parentID) + ":subagent:" + subagentID
+}
+
+func qoderExcludedID(
+	id, fileStem, parentID, subagentID string,
+	isSubagent bool,
+) string {
+	rawID := strings.TrimPrefix(id, qoderIDPrefix)
+	if isSubagent {
+		suffix := strings.TrimPrefix(rawID, fileStem)
+		return qoderSubagentID(parentID, subagentID+suffix)
+	}
+	return qoderPrefixID(rawID)
 }
