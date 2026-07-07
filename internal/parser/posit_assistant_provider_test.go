@@ -228,6 +228,7 @@ func TestPositAssistantProviderParseMainConversation(t *testing.T) {
 	assert.Equal(t, AgentPositAssistant, sess.Agent)
 	assert.Equal(t, "sales-dashboard", sess.Project)
 	assert.Equal(t, "/home/dev/projects/sales-dashboard", sess.Cwd)
+	assert.Equal(t, "feature/quarterly-report", sess.GitBranch)
 	assert.Equal(t, "devbox", sess.Machine)
 	assert.Equal(t, "Sales data loading", sess.SessionName)
 	assert.Equal(t, "How do I load the sales data?", sess.FirstMessage)
@@ -361,6 +362,8 @@ func TestPositAssistantProviderParseDefaultWorkspace(t *testing.T) {
 	assert.Equal(t, "unknown", sess.Project)
 	assert.Empty(t, sess.Cwd)
 	assert.Empty(t, sess.SessionName)
+	assert.Empty(t, sess.GitBranch,
+		"conversations without recorded gitBranch metadata must parse cleanly")
 	assert.Equal(t, "hello", sess.FirstMessage)
 }
 

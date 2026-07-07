@@ -648,6 +648,9 @@ type positAssistantConversation struct {
 			Kind         string `json:"kind"`
 			ParentTreeID string `json:"parentTreeId"`
 			Task         string `json:"task"`
+			// GitBranch is recorded by Posit Assistant releases that persist
+			// the workspace's checked-out branch; absent in older files.
+			GitBranch string `json:"gitBranch"`
 		} `json:"metadata"`
 	} `json:"root"`
 	Messages []positAssistantTreeNode `json:"messages"`
@@ -752,6 +755,7 @@ func parsePositAssistantConversation(
 		Machine:          machine,
 		Agent:            AgentPositAssistant,
 		Cwd:              src.Cwd,
+		GitBranch:        conv.Root.Metadata.GitBranch,
 		SessionName:      conv.Root.Title,
 		FirstMessage:     firstMessage,
 		StartedAt:        startedAt,
@@ -1010,6 +1014,7 @@ func positAssistantProviderCapabilities() Capabilities {
 			FirstMessage:         CapabilitySupported,
 			SessionName:          CapabilitySupported,
 			Cwd:                  CapabilitySupported,
+			GitBranch:            CapabilitySupported,
 			Relationships:        CapabilitySupported,
 			Subagents:            CapabilitySupported,
 			Thinking:             CapabilitySupported,

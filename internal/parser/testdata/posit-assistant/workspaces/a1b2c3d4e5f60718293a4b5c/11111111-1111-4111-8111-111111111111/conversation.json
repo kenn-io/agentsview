@@ -8,6 +8,7 @@
     "metadata": {
       "kind": "main",
       "modeState": {},
+      "gitBranch": "feature/quarterly-report",
       "model": {
         "id": "claude-sonnet-4-6",
         "providerId": "positai",
