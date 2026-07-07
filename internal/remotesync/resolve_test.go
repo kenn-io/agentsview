@@ -29,6 +29,8 @@ func TestResolveTargetsFiltersAndIncludesSpecialFiles(t *testing.T) {
 	windsurfWorkspaceRoot := filepath.Join(windsurfUserRoot, "workspaceStorage")
 	windsurfWorkspaceDir := filepath.Join(windsurfWorkspaceRoot, "workspace-a")
 	windsurfStateDB := filepath.Join(windsurfWorkspaceDir, parser.WindsurfStateDBName)
+	windsurfStateWAL := windsurfStateDB + "-wal"
+	windsurfStateSHM := windsurfStateDB + "-shm"
 	windsurfWorkspaceJSON := filepath.Join(windsurfWorkspaceDir, "workspace.json")
 	windsurfSecret := filepath.Join(windsurfWorkspaceDir, "extension-secret.json")
 	require.NoError(t, os.MkdirAll(claudeDir, 0o755))
@@ -39,6 +41,8 @@ func TestResolveTargetsFiltersAndIncludesSpecialFiles(t *testing.T) {
 	require.NoError(t, os.MkdirAll(windsurfWorkspaceDir, 0o755))
 	require.NoError(t, os.WriteFile(aiderHistory, []byte("# aider\n"), 0o644))
 	require.NoError(t, os.WriteFile(windsurfStateDB, []byte("state"), 0o644))
+	require.NoError(t, os.WriteFile(windsurfStateWAL, []byte("wal"), 0o644))
+	require.NoError(t, os.WriteFile(windsurfStateSHM, []byte("shm"), 0o644))
 	require.NoError(t, os.WriteFile(windsurfWorkspaceJSON, []byte("{}\n"), 0o644))
 	require.NoError(t, os.WriteFile(windsurfSecret, []byte("secret"), 0o644))
 	codexIndex := filepath.Join(root, ".codex", parser.CodexSessionIndexFilename)
@@ -68,8 +72,10 @@ func TestResolveTargetsFiltersAndIncludesSpecialFiles(t *testing.T) {
 	assert.NotContains(t, targets.Dirs[parser.AgentWindsurf], windsurfWorkspaceRoot)
 	assert.ElementsMatch(t, []string{
 		windsurfStateDB,
+		windsurfStateWAL,
 		windsurfWorkspaceJSON,
 	}, targets.Files[parser.AgentWindsurf])
+	assert.NotContains(t, targets.Files[parser.AgentWindsurf], windsurfStateSHM)
 	assert.NotContains(t, targets.Files[parser.AgentWindsurf], windsurfSecret)
 	assert.Contains(t, targets.ExtraFiles, codexIndex)
 }

@@ -7,6 +7,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
+
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func WriteArchive(w io.Writer, targets TargetSet) error {
@@ -21,7 +24,13 @@ func WriteArchive(w io.Writer, targets TargetSet) error {
 			}
 		}
 	}
-	for _, files := range targets.Files {
+	for agent, files := range targets.Files {
+		if agent == parser.AgentWindsurf {
+			if err := writeWindsurfArchiveFiles(tw, files); err != nil {
+				return err
+			}
+			continue
+		}
 		for _, path := range files {
 			if err := writeArchivePath(tw, path); err != nil {
 				return err
@@ -37,6 +46,97 @@ func WriteArchive(w io.Writer, targets TargetSet) error {
 		return fmt.Errorf("close archive: %w", err)
 	}
 	return nil
+}
+
+func writeWindsurfArchiveFiles(tw *tar.Writer, files []string) error {
+	seen := make(map[string]struct{}, len(files))
+	for _, path := range files {
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		switch filepath.Base(path) {
+		case parser.WindsurfStateDBName:
+			if err := writeSanitizedWindsurfStateDB(tw, path); err != nil {
+				return err
+			}
+		case parser.WindsurfStateDBName + "-wal",
+			parser.WindsurfStateDBName + "-shm":
+			continue
+		case "workspace.json":
+			if err := writeOptionalArchivePath(tw, path); err != nil {
+				return err
+			}
+		default:
+			continue
+		}
+	}
+	return nil
+}
+
+func writeSanitizedWindsurfStateDB(tw *tar.Writer, dbPath string) error {
+	info, err := os.Stat(dbPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat windsurf state db %q: %w", dbPath, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil
+	}
+	tmpDir, err := os.MkdirTemp("", "agentsview-windsurf-export-*")
+	if err != nil {
+		return fmt.Errorf("create windsurf export temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+	tmpPath := filepath.Join(tmpDir, parser.WindsurfStateDBName)
+	if err := parser.WriteSanitizedWindsurfStateDB(tmpPath, dbPath); err != nil {
+		return fmt.Errorf("sanitize windsurf state db %q: %w", dbPath, err)
+	}
+	mtime := windsurfArchiveModTime(info, dbPath)
+	if err := os.Chtimes(tmpPath, mtime, mtime); err != nil {
+		return fmt.Errorf("stamp sanitized windsurf state db: %w", err)
+	}
+	tmpInfo, err := os.Stat(tmpPath)
+	if err != nil {
+		return fmt.Errorf("stat sanitized windsurf state db: %w", err)
+	}
+	return writeArchiveFileAs(tw, dbPath, tmpPath, tmpInfo)
+}
+
+func windsurfArchiveModTime(info os.FileInfo, dbPath string) time.Time {
+	mtime := info.ModTime()
+	for _, companion := range []string{
+		dbPath + "-wal",
+		filepath.Join(filepath.Dir(dbPath), "workspace.json"),
+	} {
+		companionInfo, err := os.Stat(companion)
+		if err != nil {
+			continue
+		}
+		if companionInfo.ModTime().After(mtime) {
+			mtime = companionInfo.ModTime()
+		}
+	}
+	return mtime
+}
+
+func writeOptionalArchivePath(tw *tar.Writer, path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat archive path %q: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil
+	}
+	if !info.IsDir() {
+		return writeArchiveFile(tw, path, info)
+	}
+	return writeArchivePath(tw, path)
 }
 
 func writeArchivePath(tw *tar.Writer, root string) error {
@@ -98,6 +198,40 @@ func writeArchiveFile(tw *tar.Writer, path string, info os.FileInfo) error {
 	}
 	body := io.LimitReader(file, info.Size())
 	if err := writeArchiveHeader(tw, path, info, body); err != nil {
+		return err
+	}
+	return nil
+}
+
+func writeArchiveFileAs(
+	tw *tar.Writer,
+	archivePath string,
+	bodyPath string,
+	info os.FileInfo,
+) error {
+	if !info.Mode().IsRegular() {
+		return nil
+	}
+	file, err := os.Open(bodyPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	defer file.Close()
+	info, err = file.Stat()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return nil
+	}
+	body := io.LimitReader(file, info.Size())
+	if err := writeArchiveHeader(tw, archivePath, info, body); err != nil {
 		return err
 	}
 	return nil

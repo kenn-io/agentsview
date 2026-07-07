@@ -91,6 +91,36 @@ func TestBuildTarCommandStreamsPathListToTar(t *testing.T) {
 	assert.Contains(t, names, archivePathForTest(workspaceJSON))
 }
 
+func TestBuildTarCommandSkipsMissingFileScopedPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("remote tar script uses POSIX paths; local Windows paths are not representative")
+	}
+
+	root := t.TempDir()
+	windsurfDir := filepath.Join(root, "home", "wes", "Windsurf", "User", "workspaceStorage", "a")
+	stateDB := filepath.Join(windsurfDir, parser.WindsurfStateDBName)
+	missingWAL := stateDB + "-wal"
+	require.NoError(t, os.MkdirAll(windsurfDir, 0o755))
+	require.NoError(t, os.WriteFile(stateDB, []byte("state"), 0o644))
+
+	script := buildTarCommand(
+		map[parser.AgentType][]string{
+			parser.AgentWindsurf: {filepath.Dir(filepath.Dir(windsurfDir))},
+		},
+		map[parser.AgentType][]string{
+			parser.AgentWindsurf: {stateDB, missingWAL},
+		},
+		nil,
+	)
+	cmd := exec.Command("sh")
+	cmd.Stdin = strings.NewReader(script)
+	archive, err := cmd.Output()
+	require.NoError(t, err)
+	names := tarNames(t, archive)
+	assert.Contains(t, names, archivePathForTest(stateDB))
+	assert.NotContains(t, names, archivePathForTest(missingWAL))
+}
+
 func tarCommandLine(t *testing.T, script string) string {
 	t.Helper()
 	for line := range strings.SplitSeq(script, "\n") {

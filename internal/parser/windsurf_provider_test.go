@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
@@ -82,6 +83,34 @@ func TestWindsurfProviderFingerprintHashIsContentBased(t *testing.T) {
 
 	require.NotEmpty(t, fpA.Hash)
 	assert.Equal(t, fpA.Hash, fpB.Hash)
+}
+
+func TestWindsurfProviderFingerprintIgnoresSHM(t *testing.T) {
+	root, dbPath := windsurfProviderFixture(t, windsurfVSCodeSessionJSON(
+		"windsurf-session-shm",
+		"Ignore SHM",
+		"Use chat data only.",
+	))
+	provider := newTestWindsurfProvider(root)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	require.NoError(t, os.WriteFile(dbPath+"-shm", []byte("first"), 0o644))
+	firstTime := mustParseTestTime(t, "2026-06-28T12:00:00Z")
+	require.NoError(t, os.Chtimes(dbPath+"-shm", firstTime, firstTime))
+
+	before, err := provider.Fingerprint(context.Background(), sources[0])
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(dbPath+"-shm", []byte("second"), 0o644))
+	secondTime := mustParseTestTime(t, "2026-06-28T13:00:00Z")
+	require.NoError(t, os.Chtimes(dbPath+"-shm", secondTime, secondTime))
+	after, err := provider.Fingerprint(context.Background(), sources[0])
+	require.NoError(t, err)
+
+	assert.Equal(t, before.Hash, after.Hash)
+	assert.Equal(t, before.Size, after.Size)
+	assert.Equal(t, before.MTimeNS, after.MTimeNS)
 }
 
 func TestWindsurfProviderParsesTabContainerChatData(t *testing.T) {
@@ -314,7 +343,9 @@ func TestWindsurfProviderWatchPlan(t *testing.T) {
 	assert.True(t, root.Recursive)
 	assert.True(t, strings.HasSuffix(filepath.ToSlash(root.Path), "/workspaceStorage"))
 	assert.Contains(t, root.IncludeGlobs, "state.vscdb")
-	assert.Contains(t, root.IncludeGlobs, "state.vscdb-*")
+	assert.Contains(t, root.IncludeGlobs, "state.vscdb-wal")
+	assert.NotContains(t, root.IncludeGlobs, "state.vscdb-*")
+	assert.NotContains(t, root.IncludeGlobs, "state.vscdb-shm")
 	assert.Contains(t, root.IncludeGlobs, "workspace.json")
 }
 
@@ -354,6 +385,35 @@ func TestWriteWindsurfSessionJSONScopesVirtualSource(t *testing.T) {
 	assert.NotContains(t, buf.String(), "B hidden")
 }
 
+func TestWriteSanitizedWindsurfStateDBCopiesOnlyChatKeys(t *testing.T) {
+	_, dbPath := windsurfProviderFixture(t, windsurfVSCodeSessionJSON(
+		"sanitized-export",
+		"Export chat",
+		"Do not export secrets.",
+	))
+	insertWindsurfStateRow(t, dbPath, "extension.secret", "TOP-SECRET")
+	outPath := filepath.Join(t.TempDir(), "state.vscdb")
+
+	require.NoError(t, WriteSanitizedWindsurfStateDB(outPath, dbPath))
+
+	conn, err := sql.Open("sqlite3", outPath)
+	require.NoError(t, err)
+	defer conn.Close()
+	rows, err := conn.Query(`SELECT key, value FROM ItemTable ORDER BY key`)
+	require.NoError(t, err)
+	defer rows.Close()
+	got := make(map[string]string)
+	for rows.Next() {
+		var key, value string
+		require.NoError(t, rows.Scan(&key, &value))
+		got[key] = value
+	}
+	require.NoError(t, rows.Err())
+	assert.Contains(t, got, "workbench.panel.aichat.view.aichat.chatdata")
+	assert.Contains(t, got["workbench.panel.aichat.view.aichat.chatdata"], "Export chat")
+	assert.NotContains(t, got, "extension.secret")
+}
+
 func newTestWindsurfProvider(root string) Provider {
 	provider, ok := NewProvider(AgentWindsurf, ProviderConfig{
 		Roots: []string{root},
@@ -387,6 +447,26 @@ func writeWindsurfStateDB(t *testing.T, dbPath, payload string) {
 		payload,
 	)
 	require.NoError(t, err)
+}
+
+func insertWindsurfStateRow(t *testing.T, dbPath, key, value string) {
+	t.Helper()
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	defer conn.Close()
+	_, err = conn.Exec(
+		`INSERT INTO ItemTable (key, value) VALUES (?, ?)`,
+		key,
+		value,
+	)
+	require.NoError(t, err)
+}
+
+func mustParseTestTime(t *testing.T, value string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339, value)
+	require.NoError(t, err)
+	return parsed
 }
 
 func windsurfVSCodeSessionJSON(sessionID, user, assistant string) string {

@@ -286,7 +286,7 @@ func TestResolveScriptWindsurfTargetsOnlySessionFiles(t *testing.T) {
 		filepath.ToSlash(filepath.Join(workspaceSuffix, parser.WindsurfStateDBName))))
 	assert.True(t, hasRecordWithPathSuffix(records, agentFilePrefix,
 		filepath.ToSlash(filepath.Join(workspaceSuffix, parser.WindsurfStateDBName+"-wal"))))
-	assert.True(t, hasRecordWithPathSuffix(records, agentFilePrefix,
+	assert.False(t, hasRecordWithPathSuffix(records, agentFilePrefix,
 		filepath.ToSlash(filepath.Join(workspaceSuffix, parser.WindsurfStateDBName+"-shm"))))
 	assert.True(t, hasRecordWithPathSuffix(records, agentFilePrefix,
 		filepath.ToSlash(filepath.Join(workspaceSuffix, "workspace.json"))))

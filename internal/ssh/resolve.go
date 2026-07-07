@@ -99,7 +99,7 @@ func buildResolveScript() string {
 			"printf '%s\\000' \"" + string(parser.AgentWindsurf) + ":$target\"; " +
 			"av_windsurf_root_emitted=1; " +
 			"fi; " +
-			"for av_windsurf_file in \"$av_windsurf_db\" \"$av_windsurf_db-wal\" \"$av_windsurf_db-shm\" \"$av_windsurf_ws/workspace.json\"; do " +
+			"for av_windsurf_file in \"$av_windsurf_db\" \"$av_windsurf_db-wal\" \"$av_windsurf_ws/workspace.json\"; do " +
 			"av_emit_agent_file \"" + string(parser.AgentWindsurf) + "\" \"$av_windsurf_file\"; " +
 			"done; " +
 			"done; " +

@@ -128,7 +128,6 @@ func resolveWindsurfFiles(workspaceRoot string) []string {
 		files = append(files, dbPath)
 		for _, path := range []string{
 			dbPath + "-wal",
-			dbPath + "-shm",
 			filepath.Join(workspaceDir, "workspace.json"),
 		} {
 			if regularRemoteSyncFile(path) {

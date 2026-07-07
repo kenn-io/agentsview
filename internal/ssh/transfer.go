@@ -43,10 +43,12 @@ func buildTarCommand(
 		paths = append(paths, shellQuote(strings.TrimPrefix(f, "/")))
 	}
 	var b strings.Builder
-	b.WriteString("set -e\n{\n")
+	b.WriteString("set -e\n")
+	b.WriteString("av_emit_tar_path() { [ -e \"/$1\" ] || return 0; printf '%s\\n' \"$1\"; }\n")
+	b.WriteString("{\n")
 	b.WriteString(":\n")
 	for _, path := range paths {
-		b.WriteString("printf '%s\\n' ")
+		b.WriteString("av_emit_tar_path ")
 		b.WriteString(path)
 		b.WriteByte('\n')
 	}

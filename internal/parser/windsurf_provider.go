@@ -199,7 +199,7 @@ func (s windsurfSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 		roots = append(roots, WatchRoot{
 			Path:         workspace,
 			Recursive:    true,
-			IncludeGlobs: []string{windsurfStateDBName, windsurfStateDBName + "-*", "workspace.json"},
+			IncludeGlobs: []string{windsurfStateDBName, windsurfStateDBName + "-wal", "workspace.json"},
 			DebounceKey:  string(AgentWindsurf) + ":workspace:" + workspace,
 		})
 	}
@@ -320,7 +320,6 @@ func (s windsurfSourceSet) Fingerprint(
 	combined := antigravityCLICombinedFileInfo(
 		info,
 		src.DBPath+"-wal",
-		src.DBPath+"-shm",
 		workspacePath,
 	)
 	hash, err := windsurfSourceHash(src.DBPath, workspacePath)
@@ -429,7 +428,7 @@ func (s windsurfSourceSet) dbPathForEvent(
 		return "", false
 	}
 	switch parts[1] {
-	case windsurfStateDBName, windsurfStateDBName + "-wal", windsurfStateDBName + "-shm", "workspace.json":
+	case windsurfStateDBName, windsurfStateDBName + "-wal", "workspace.json":
 		return filepath.Join(workspaceRoot, parts[0], windsurfStateDBName), true
 	default:
 		return "", false
@@ -493,32 +492,21 @@ type windsurfSessionRecord struct {
 	Data      []byte
 }
 
+type windsurfChatValue struct {
+	Key   string
+	Value string
+}
+
 func listWindsurfSessionRecords(dbPath string) ([]windsurfSessionRecord, error) {
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		return nil, nil
-	}
-	db, err := openWindsurfDB(dbPath)
+	values, err := readWindsurfChatValues(dbPath)
 	if err != nil {
 		return nil, err
 	}
-	defer db.Close()
-
 	seen := make(map[string]struct{})
 	var records []windsurfSessionRecord
-	for _, key := range windsurfChatDataKeys {
-		var value string
-		err := db.QueryRow(
-			`SELECT value FROM ItemTable WHERE key = ?`,
-			key,
-		).Scan(&value)
-		if err == sql.ErrNoRows {
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("read windsurf chat data: %w", err)
-		}
+	for _, value := range values {
 		next, err := windsurfRecordsFromValue(
-			[]byte(value),
+			[]byte(value.Value),
 			windsurfFallbackSessionID(dbPath),
 		)
 		if err != nil {
@@ -536,6 +524,37 @@ func listWindsurfSessionRecords(dbPath string) ([]windsurfSessionRecord, error) 
 		return records[i].SessionID < records[j].SessionID
 	})
 	return records, nil
+}
+
+func readWindsurfChatValues(dbPath string) ([]windsurfChatValue, error) {
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		return nil, nil
+	}
+	db, err := openWindsurfDB(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	values := make([]windsurfChatValue, 0, len(windsurfChatDataKeys))
+	for _, key := range windsurfChatDataKeys {
+		var value string
+		err := db.QueryRow(
+			`SELECT value FROM ItemTable WHERE key = ?`,
+			key,
+		).Scan(&value)
+		if err == sql.ErrNoRows {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read windsurf chat data: %w", err)
+		}
+		values = append(values, windsurfChatValue{
+			Key:   key,
+			Value: value,
+		})
+	}
+	return values, nil
 }
 
 func windsurfDBHasSession(dbPath, sessionID string) (bool, error) {
@@ -577,7 +596,6 @@ func parseWindsurfSession(
 	combined := antigravityCLICombinedFileInfo(
 		info,
 		dbPath+"-wal",
-		dbPath+"-shm",
 		windsurfWorkspaceManifestPath(dbPath),
 	)
 	sess.Agent = AgentWindsurf
@@ -800,6 +818,69 @@ func WriteWindsurfSessionJSON(w io.Writer, dbPath, sessionID string) error {
 	return err
 }
 
+func WriteSanitizedWindsurfStateDB(dstPath, dbPath string) error {
+	values, err := readWindsurfChatValues(dbPath)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
+		return fmt.Errorf("create windsurf export dir: %w", err)
+	}
+	if err := os.Remove(dstPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("replace windsurf export db %s: %w", dstPath, err)
+	}
+
+	dst, err := sql.Open(
+		"sqlite3",
+		"file:"+sqliteURIPath(dstPath)+"?mode=rwc&_busy_timeout=3000",
+	)
+	if err != nil {
+		return fmt.Errorf("open sanitized windsurf db %s: %w", dstPath, err)
+	}
+	complete := false
+	defer func() {
+		_ = dst.Close()
+		if !complete {
+			_ = os.Remove(dstPath)
+		}
+	}()
+
+	if _, err := dst.Exec(`PRAGMA journal_mode=DELETE`); err != nil {
+		return fmt.Errorf("configure sanitized windsurf db: %w", err)
+	}
+	if _, err := dst.Exec(`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`); err != nil {
+		return fmt.Errorf("create sanitized windsurf ItemTable: %w", err)
+	}
+	tx, err := dst.Begin()
+	if err != nil {
+		return fmt.Errorf("begin sanitized windsurf export: %w", err)
+	}
+	stmt, err := tx.Prepare(`INSERT INTO ItemTable (key, value) VALUES (?, ?)`)
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("prepare sanitized windsurf export: %w", err)
+	}
+	for _, value := range values {
+		if _, err := stmt.Exec(value.Key, value.Value); err != nil {
+			_ = stmt.Close()
+			_ = tx.Rollback()
+			return fmt.Errorf("write sanitized windsurf chat key: %w", err)
+		}
+	}
+	if err := stmt.Close(); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("close sanitized windsurf export: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit sanitized windsurf export: %w", err)
+	}
+	if err := dst.Close(); err != nil {
+		return fmt.Errorf("close sanitized windsurf db: %w", err)
+	}
+	complete = true
+	return nil
+}
+
 func windsurfWorkspaceManifestPath(dbPath string) string {
 	return filepath.Join(filepath.Dir(dbPath), "workspace.json")
 }
@@ -814,23 +895,26 @@ func windsurfWorkspaceProject(dbPath string) string {
 
 func windsurfSourceHash(dbPath, workspacePath string) (string, error) {
 	h := sha256.New()
-	for _, component := range []struct {
-		label string
-		path  string
-	}{
-		{label: "db", path: dbPath},
-		{label: "wal", path: dbPath + "-wal"},
-		{label: "shm", path: dbPath + "-shm"},
-		{label: "workspace", path: workspacePath},
-	} {
-		if component.path == "" || !IsRegularFile(component.path) {
-			continue
-		}
-		hash, err := hashJSONLSourceFile(component.path)
+	if IsRegularFile(dbPath) {
+		values, err := readWindsurfChatValues(dbPath)
 		if err != nil {
 			return "", err
 		}
-		_, _ = h.Write([]byte(component.label))
+		for _, value := range values {
+			_, _ = h.Write([]byte("chat"))
+			_, _ = h.Write([]byte{0})
+			_, _ = h.Write([]byte(value.Key))
+			_, _ = h.Write([]byte{0})
+			_, _ = h.Write([]byte(value.Value))
+			_, _ = h.Write([]byte{0})
+		}
+	}
+	if workspacePath != "" && IsRegularFile(workspacePath) {
+		hash, err := hashJSONLSourceFile(workspacePath)
+		if err != nil {
+			return "", err
+		}
+		_, _ = h.Write([]byte("workspace"))
 		_, _ = h.Write([]byte{0})
 		_, _ = h.Write([]byte(hash))
 		_, _ = h.Write([]byte{0})
