@@ -929,3 +929,47 @@ func TestRefreshReadOnlyIndexRejected(t *testing.T) {
 	_, err = ro.Refresh(ctx, &fakeUnitSource{}, true, true)
 	require.Error(t, err)
 }
+
+// TestRefreshParkedLeftoverFromInterruptedRunDoesNotCollide simulates a
+// Refresh interrupted between evictSlotOccupant and finalizeEvictions: a
+// row left parked at ordinal -1 (parking writes are autocommit, so a crash
+// or cancellation mid-scan leaves them behind). The next run's parking
+// sentinel must start below that leftover — restarting at 0 would park a
+// freshly evicted row in the same session at the taken -1 and fail the
+// unique (session_id, ordinal) index, deterministically on every retry,
+// wedging refreshes until a full rebuild.
+func TestRefreshParkedLeftoverFromInterruptedRunDoesNotCollide(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+
+	// A legacy occupant at (s1, 9), plus u1 and u2 elsewhere.
+	src := &fakeUnitSource{rows: []fakeUnit{
+		{unit: userDoc("s1", "", 9, "legacy"), endedAt: "2024-01-01T00:00:00Z"},
+		{unit: userDoc("s1", "u1", 0, "hello"), endedAt: "2024-01-01T00:00:00Z"},
+		{unit: userDoc("s1", "u2", 5, "world"), endedAt: "2024-01-01T00:00:00Z"},
+	}}
+	_, err := ix.Refresh(ctx, src, true, true)
+	require.NoError(t, err)
+
+	// Simulate the interrupted run's leftover: u2 parked at -1.
+	_, err = ix.db.Exec(`UPDATE vector_messages SET ordinal = -1 WHERE doc_key = 'u:s1:u2'`)
+	require.NoError(t, err)
+
+	// Next run: u1 shifts onto the legacy occupant's slot, forcing a fresh
+	// eviction parking in the same session; u2 is rescanned and self-heals.
+	src.rows[1].unit.Ordinal = 9
+	src.rows[1].unit.OrdinalEnd = 9
+	stats, err := ix.Refresh(ctx, src, true, true)
+	require.NoError(t, err, "a parked leftover must not collide with new parking")
+	assert.Equal(t, 1, stats.Deleted, "the evicted legacy occupant is finalized")
+
+	assert.ElementsMatch(t, []string{"u:s1:u1", "u:s1:u2"}, mirrorDocKeys(t, ix))
+	row, ok := readMirrorRow(t, ix, "u:s1:u2")
+	require.True(t, ok)
+	assert.Equal(t, 5, row.ordinal, "the leftover parked row self-heals on rescan")
+
+	var parked int
+	require.NoError(t, ix.db.QueryRow(
+		`SELECT COUNT(*) FROM vector_messages WHERE ordinal < 0`).Scan(&parked))
+	assert.Zero(t, parked, "no parked rows survive a completed full refresh")
+}

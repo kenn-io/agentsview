@@ -179,7 +179,10 @@ func (ix *Index) Refresh(
 	seen := make(map[string]struct{})
 	occurrences := make(map[string]int)
 	evicted := make(map[string]struct{})
-	sentinel := 0
+	sentinel, err := ix.parkingFloor(ctx)
+	if err != nil {
+		return RefreshStats{}, err
+	}
 	maxEnded, err := src.ScanEmbeddableUnits(ctx, since, includeAutomated, func(u db.EmbeddableUnit) error {
 		occurrence := 1
 		if u.SourceUUID != "" {
@@ -324,6 +327,30 @@ func marshalOffsets(offsets []db.UnitOffset) (string, error) {
 // genuinely gone or was reinserted is not decidable until the whole scan
 // finishes, so store.DeleteVectors and the row's actual removal are
 // deferred to Refresh's post-scan finalizeEvictions pass.
+// parkingFloor returns the starting value for Refresh's parking sentinel:
+// 0 when the mirror holds no parked rows, otherwise the most negative
+// parked ordinal already present. Parking writes are individual autocommit
+// updates, so a Refresh interrupted between evictSlotOccupant and
+// finalizeEvictions leaves rows parked at negative ordinals; a later run
+// restarting its sentinel at 0 could then park a row in the same session at
+// an already-taken negative ordinal and fail the unique (session_id,
+// ordinal) index — deterministically on every retry, wedging refreshes.
+// Seeding below the leftover floor keeps every parked ordinal unique across
+// runs; the leftovers themselves self-heal (reinserted rows overwrite their
+// ordinal, full-mode reconciliation deletes vanished ones).
+func (ix *Index) parkingFloor(ctx context.Context) (int, error) {
+	var floor sql.NullInt64
+	if err := ix.db.QueryRowContext(ctx,
+		`SELECT MIN(ordinal) FROM vector_messages WHERE ordinal < 0`,
+	).Scan(&floor); err != nil {
+		return 0, fmt.Errorf("reading parked-ordinal floor: %w", err)
+	}
+	if !floor.Valid {
+		return 0, nil
+	}
+	return int(floor.Int64), nil
+}
+
 func (ix *Index) evictSlotOccupant(
 	ctx context.Context, key, sessionID string, ordinal int, sentinel *int,
 ) ([]string, error) {
