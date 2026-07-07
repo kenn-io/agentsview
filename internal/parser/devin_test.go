@@ -2,6 +2,7 @@ package parser
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -331,16 +332,18 @@ func TestParseDevinSessionFinalMetricsTotalKeys(t *testing.T) {
 
 func TestParseDevinSessionTranscriptFallbacks(t *testing.T) {
 	const sessionID = "session-fallbacks"
+	worktree := filepath.Join(t.TempDir(), "fallback-app")
+	require.NoError(t, os.MkdirAll(filepath.Join(worktree, ".git"), 0o755))
 	dbPath, _ := newDevinSessionFixture(t, devinSessionRow{
 		ID:                 sessionID,
 		Model:              "db-model",
 		CreatedAtMillis:    new(int64(0)),
-		WorkspaceJSON:      `[{"root_path":"/tmp/worktrees/fallback-app"}]`,
+		WorkspaceJSON:      fmt.Sprintf(`[{"root_path":%q}]`, worktree),
 		MetadataJSON:       `{"mode":"fallback"}`,
 		LastActivityMillis: nil,
-	}, `{
+	}, fmt.Sprintf(`{
 		"agent":{"model_name":""},
-		"workspace_dirs":[{"root_path":"/tmp/worktrees/fallback-app"}],
+		"workspace_dirs":[{"root_path":%q}],
 		"final_metrics":{
 			"output_tokens":0,
 			"context_tokens":0,
@@ -350,14 +353,14 @@ func TestParseDevinSessionTranscriptFallbacks(t *testing.T) {
 			{"step_id":"a","source":"user","createdAt":"2024-01-01T10:00:01Z","message":"hi from fallback"},
 			{"step_id":"b","source":"agent","updatedAt":"2024-01-01T10:00:05Z","message":[{"type":"text","text":"hello"}]}
 		]
-	}`)
+	}`, worktree))
 
 	sess, msgs, err := parseDevinSession(dbPath, sessionID, "local")
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
 	assert.Equal(t, "hi from fallback", sess.SessionName)
 	assert.Equal(t, "hi from fallback", sess.FirstMessage)
-	assert.Equal(t, "/tmp/worktrees/fallback-app", sess.Cwd)
+	assert.Equal(t, worktree, sess.Cwd)
 	assert.Equal(t, "fallback_app", sess.Project)
 	assert.Equal(t, "db-model", msgs[0].Model)
 	assert.Equal(t, "db-model", msgs[1].Model)
@@ -397,10 +400,12 @@ func TestParseDevinSessionAllowsMissingMetadataTimestamps(t *testing.T) {
 
 func TestParseDevinSessionEmptyTranscriptUsesDBMetadata(t *testing.T) {
 	const sessionID = "session-empty"
+	worktree := filepath.Join(t.TempDir(), "db-only-project")
+	require.NoError(t, os.MkdirAll(filepath.Join(worktree, ".git"), 0o755))
 	dbPath, _ := newDevinSessionFixture(t, devinSessionRow{
 		ID:                 sessionID,
 		Title:              "DB only session",
-		WorkingDirectory:   "/tmp/db-only-project",
+		WorkingDirectory:   worktree,
 		Model:              "db-only-model",
 		CreatedAtMillis:    new(int64(1704103200000)),
 		LastActivityMillis: new(int64(1704103209000)),
@@ -414,7 +419,7 @@ func TestParseDevinSessionEmptyTranscriptUsesDBMetadata(t *testing.T) {
 	require.NotNil(t, sess)
 	assert.Empty(t, msgs)
 	assert.Equal(t, "DB only session", sess.SessionName)
-	assert.Equal(t, "/tmp/db-only-project", sess.Cwd)
+	assert.Equal(t, worktree, sess.Cwd)
 	assert.Equal(t, "db_only_project", sess.Project)
 	assert.Equal(t, 0, sess.MessageCount)
 	assert.Equal(t, 0, sess.UserMessageCount)

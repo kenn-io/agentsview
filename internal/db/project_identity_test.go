@@ -619,7 +619,8 @@ func TestProjectIdentityMapLegacyFallbackAcceptsWindowsDriveRoots(t *testing.T) 
 func TestProjectIdentityMapUnknownPersistedObservationUsesLegacyFallback(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
-	root := t.TempDir()
+	root := filepath.Join(t.TempDir(), "fallback")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".git"), 0o755))
 
 	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
