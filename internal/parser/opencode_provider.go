@@ -768,9 +768,25 @@ func (s openCodeFormatSourceSet) isStorageSessionPath(
 }
 
 func openCodeProviderStorageFingerprint(sessionPath string) (string, error) {
+	raw, err := os.ReadFile(sessionPath)
+	if err != nil {
+		return "", err
+	}
+	var sf openCodeStorageSessionFile
+	if err := json.Unmarshal(raw, &sf); err != nil {
+		return "", fmt.Errorf(
+			"decoding opencode session file %s: %w",
+			sessionPath, err,
+		)
+	}
+	if sf.ID == "" {
+		return "", fmt.Errorf(
+			"opencode session file %s missing id",
+			sessionPath,
+		)
+	}
 	root := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(sessionPath))))
-	sessionID := strings.TrimSuffix(filepath.Base(sessionPath), filepath.Ext(sessionPath))
-	msgs, err := loadOpenCodeStorageMessages(root, sessionID)
+	msgs, err := loadOpenCodeStorageMessages(root, sf.ID)
 	if err != nil {
 		return "", err
 	}
@@ -778,7 +794,18 @@ func openCodeProviderStorageFingerprint(sessionPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return buildOpenCodeStorageFingerprint(msgs, parts), nil
+	return buildOpenCodeSessionFingerprint(
+		openCodeSessionRow{
+			id:          sf.ID,
+			parentID:    sf.ParentID,
+			title:       sf.Title,
+			timeCreated: sf.Time.Created,
+			timeUpdated: sf.Time.Updated,
+		},
+		sf.Directory,
+		msgs,
+		parts,
+	), nil
 }
 
 func readOpenCodeProviderStorageSessionID(path string) string {
