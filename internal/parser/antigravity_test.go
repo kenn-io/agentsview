@@ -3628,3 +3628,225 @@ func TestAntigravityCLITranscriptFidelity(t *testing.T) {
 		assert.Equal(t, TranscriptFidelitySummary, sess.TranscriptFidelity)
 	})
 }
+
+// ---- IDE trajectory sidecar (agy-reader) ----------------------
+//
+// The IDE parser mirrors the CLI sidecar-wins path: when a
+// conversations/<uuid>.trajectory.json sidecar covers the raw .db step
+// count it replaces the heuristic decode and marks the transcript full;
+// otherwise the heuristic decode stands exactly as before. These tests
+// reuse the CLI sidecar fixtures (writeAntigravityTestSidecar) since the
+// sidecar format and on-disk location are identical.
+
+func TestAntigravityIDEPrefersSidecarWithCoverage(t *testing.T) {
+	root := t.TempDir()
+	id := "1a1a1a1a-2b2b-3c3c-4d4d-5e5e5e5e5e5e"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityTestDB(t, dbPath) // 2 raw steps
+	writeAntigravityTestSidecar(t, root, id, 2)
+
+	sess, msgs, _, err := parseAntigravityTestSession(t, dbPath, "", "test-machine")
+	require.NoError(t, err)
+
+	// Structured sidecar transcript wins over the heuristic decode.
+	require.Len(t, msgs, 2)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, "sidecar prompt", msgs[0].Content)
+	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	assert.Equal(t, "sidecar assistant reply", msgs[1].Content)
+	assert.True(t, msgs[1].HasThinking)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "tc-1", msgs[1].ToolCalls[0].ToolUseID)
+	assert.Equal(t, "sidecar prompt", sess.FirstMessage)
+	assert.Equal(t, TranscriptFidelityFull, sess.TranscriptFidelity)
+}
+
+func TestAntigravityIDEHeuristicFallbackWhenSidecarMissing(t *testing.T) {
+	root := t.TempDir()
+	id := "2a2a2a2a-3b3b-4c4c-5d5d-6e6e6e6e6e6e"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityTestDB(t, dbPath) // 2 raw steps, no sidecar
+
+	sess, msgs, _, err := parseAntigravityTestSession(t, dbPath, "", "test-machine")
+	require.NoError(t, err)
+
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "user prompt text goes here", msgs[0].Content)
+	assert.Contains(t, msgs[1].Content, "assistant reply content body")
+	// Fidelity unchanged from prior IDE behavior: empty (treated as full).
+	assert.Equal(t, "", sess.TranscriptFidelity)
+}
+
+func TestAntigravityIDEKeepsDBDecodeWhenSidecarLags(t *testing.T) {
+	root := t.TempDir()
+	id := "3a3a3a3a-4b4b-5c5c-6d6d-7e7e7e7e7e7e"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityTestDB(t, dbPath) // 2 raw steps
+	// Sidecar covers only 1 of 2 steps: a live session agy-reader has
+	// not caught up with yet. The fuller heuristic decode must win.
+	writeAntigravityTestSidecar(t, root, id, 1)
+
+	sess, msgs, _, err := parseAntigravityTestSession(t, dbPath, "", "test-machine")
+	require.NoError(t, err)
+
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "user prompt text goes here", msgs[0].Content)
+	assert.Contains(t, msgs[1].Content, "assistant reply content body")
+	assert.Equal(t, "", sess.TranscriptFidelity)
+}
+
+func TestAntigravityIDEMalformedSidecarFallsBack(t *testing.T) {
+	root := t.TempDir()
+	id := "4a4a4a4a-5b5b-6c6c-7d7d-8e8e8e8e8e8e"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityTestDB(t, dbPath) // 2 raw steps
+	mustWrite(t,
+		filepath.Join(root, "conversations", id+".trajectory.json"),
+		[]byte(`{not valid json`))
+
+	sess, msgs, _, err := parseAntigravityTestSession(t, dbPath, "", "test-machine")
+	require.NoError(t, err)
+
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "user prompt text goes here", msgs[0].Content)
+	assert.Contains(t, msgs[1].Content, "assistant reply content body")
+	assert.Equal(t, "", sess.TranscriptFidelity)
+}
+
+// TestAntigravityIDESidecarWinsKeepsGenMetadataUsage verifies the
+// gen_metadata-wins merge: a covering sidecar replaces the transcript,
+// but usage still comes from the .db gen_metadata (source "generation")
+// rather than being double counted from the sidecar.
+func TestAntigravityIDESidecarWinsKeepsGenMetadataUsage(t *testing.T) {
+	root := t.TempDir()
+	id := "5a5a5a5a-6b6b-7c7c-8d8d-9e9e9e9e9e9e"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	createAntigravityStepTables(t, db)
+	mustExec(t, db, `CREATE TABLE gen_metadata (idx integer, data blob, size integer, PRIMARY KEY (idx))`)
+	tsEarly := encodePB([]pbField{{num: 1, wire: pbWireVarint, varint: 1779000000}})
+	userPayload := encodePB([]pbField{
+		{num: 5, wire: pbWireBytes, bytes: tsEarly},
+		{num: 17, wire: pbWireBytes, bytes: []byte("db user prompt that is long enough")},
+	})
+	tsLate := encodePB([]pbField{{num: 1, wire: pbWireVarint, varint: 1779000100}})
+	asstPayload := encodePB([]pbField{
+		{num: 5, wire: pbWireBytes, bytes: tsLate},
+		{num: 17, wire: pbWireBytes, bytes: []byte("db assistant reply that is long enough")},
+	})
+	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (0, 14, ?)`, userPayload)
+	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (1, 17, ?)`, asstPayload)
+	genData := createAntigravityMockGenMetadata(t, 2400, 180, 0, "Test Gemini 3.5")
+	mustExec(t, db, `INSERT INTO gen_metadata (idx, data, size) VALUES (1, ?, ?)`, genData, len(genData))
+	require.NoError(t, db.Close())
+
+	// Covering sidecar with DIFFERENT generatorMetadata usage; the .db
+	// gen_metadata event must still win so the generation is counted once.
+	genJSON := `[{
+		"stepIndices": [1],
+		"chatModel": {
+			"model": "MODEL_PLACEHOLDER_M20",
+			"usage": {"inputTokens": "9999", "outputTokens": "888"}
+		}
+	}]`
+	writeAntigravityTestSidecarWithGenMetadata(t, root, id, 2, genJSON)
+
+	sess, msgs, usageEvents, err := parseAntigravityTestSession(t, dbPath, "", "test-machine")
+	require.NoError(t, err)
+
+	// Sidecar transcript wins.
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "sidecar prompt", msgs[0].Content)
+	assert.Equal(t, TranscriptFidelityFull, sess.TranscriptFidelity)
+
+	// Exactly one usage event, from the .db gen_metadata (not the sidecar).
+	require.Len(t, usageEvents, 1)
+	assert.Equal(t, "generation", usageEvents[0].Source)
+	assert.Equal(t, 2400, usageEvents[0].InputTokens)
+	assert.Equal(t, 180, usageEvents[0].OutputTokens)
+	assert.Equal(t, sess.ID, usageEvents[0].SessionID)
+}
+
+// TestAntigravityIDEWithoutGenMetadataGetsSidecarUsage verifies the
+// gap-fill: when the .db has no gen_metadata, a covering sidecar's
+// generatorMetadata supplies usage events (source "sidecar").
+func TestAntigravityIDEWithoutGenMetadataGetsSidecarUsage(t *testing.T) {
+	root := t.TempDir()
+	id := "6a6a6a6a-7b7b-8c8c-9d9d-aeaeaeaeaeae"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityTestDB(t, dbPath) // 2 raw steps, no gen_metadata table
+
+	genJSON := `[{
+		"stepIndices": [1],
+		"chatModel": {
+			"model": "MODEL_PLACEHOLDER_M20",
+			"usage": {
+				"inputTokens": "1500",
+				"outputTokens": "77",
+				"thinkingOutputTokens": "20",
+				"cacheReadTokens": "300"
+			}
+		}
+	}]`
+	writeAntigravityTestSidecarWithGenMetadata(t, root, id, 2, genJSON)
+
+	sess, msgs, usageEvents, err := parseAntigravityTestSession(t, dbPath, "", "test-machine")
+	require.NoError(t, err)
+	require.NotEmpty(t, msgs)
+	assert.Equal(t, "sidecar prompt", msgs[0].Content)
+	assert.Equal(t, TranscriptFidelityFull, sess.TranscriptFidelity)
+
+	require.Len(t, usageEvents, 1)
+	assert.Equal(t, "sidecar", usageEvents[0].Source)
+	assert.Equal(t, "MODEL_PLACEHOLDER_M20", usageEvents[0].Model)
+	assert.Equal(t, 1500, usageEvents[0].InputTokens)
+	assert.Equal(t, 77, usageEvents[0].OutputTokens)
+	assert.Equal(t, 20, usageEvents[0].ReasoningTokens)
+	assert.Equal(t, 300, usageEvents[0].CacheReadInputTokens)
+	assert.Equal(t, sess.ID, usageEvents[0].SessionID)
+}
+
+// TestAntigravityIDENonCoveringSidecarUsageRejected verifies that a
+// lagging sidecar loses both the transcript and its usage: the usage
+// gap-fill is gated on the same coverage check as the transcript.
+func TestAntigravityIDENonCoveringSidecarUsageRejected(t *testing.T) {
+	root := t.TempDir()
+	id := "7a7a7a7a-8b8b-9c9c-adad-bebebebebebe"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityTestDB(t, dbPath) // 2 raw steps, no gen_metadata table
+
+	genJSON := `[{
+		"stepIndices": [1],
+		"chatModel": {
+			"model": "MODEL_PLACEHOLDER_M20",
+			"usage": {"inputTokens": "1500", "outputTokens": "77"}
+		}
+	}]`
+	// Sidecar covers only 1 of 2 raw steps.
+	writeAntigravityTestSidecarWithGenMetadata(t, root, id, 1, genJSON)
+
+	sess, msgs, usageEvents, err := parseAntigravityTestSession(t, dbPath, "", "test-machine")
+	require.NoError(t, err)
+
+	// Heuristic decode wins; sidecar usage rejected like its transcript.
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "user prompt text goes here", msgs[0].Content)
+	assert.Equal(t, "", sess.TranscriptFidelity)
+	assert.Empty(t, usageEvents,
+		"non-covering sidecar usage must be rejected like its transcript")
+}

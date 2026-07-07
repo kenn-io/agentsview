@@ -795,3 +795,97 @@ func TestAntigravityCLIDiscoverBuildsProjectMapOncePerRoot(t *testing.T) {
 	assert.Equal(t, 1, calls,
 		"history.jsonl project map should be built once per root, not per source")
 }
+
+// TestAntigravityProviderRoutesTrajectorySidecar verifies the IDE
+// provider watches for and routes a conversations/<id>.trajectory.json
+// sidecar write back to its .db source, and that a sidecar change moves
+// the composite fingerprint so the session re-syncs.
+func TestAntigravityProviderRoutesTrajectorySidecar(t *testing.T) {
+	root := t.TempDir()
+	id := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	writeAntigravityIDEProviderFixture(t, root, id)
+
+	provider, ok := NewProvider(AgentAntigravity, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	plan, err := provider.WatchPlan(context.Background())
+	require.NoError(t, err)
+	require.Len(t, plan.Roots, 3)
+	assert.Equal(t, filepath.Join(root, "conversations"), plan.Roots[2].Path)
+	assert.Contains(t, plan.Roots[2].IncludeGlobs, "*.trajectory.json",
+		"conversations watch must include the trajectory sidecar")
+
+	sidecarPath := filepath.Join(root, "conversations", id+".trajectory.json")
+	changed, err := provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{Path: sidecarPath, EventKind: "write"},
+	)
+	require.NoError(t, err)
+	require.Len(t, changed, 1)
+	assert.Equal(t, dbPath, changed[0].DisplayPath,
+		"a sidecar write must route to its .db source")
+
+	// A sidecar with no matching .db must not route to a phantom source.
+	orphan := filepath.Join(root, "conversations",
+		"ffffffff-ffff-ffff-ffff-ffffffffffff.trajectory.json")
+	mustWrite(t, orphan, []byte("{}"))
+	changed, err = provider.SourcesForChangedPath(
+		context.Background(),
+		ChangedPathRequest{Path: orphan, EventKind: "write"},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, changed)
+}
+
+// TestAntigravityProviderFingerprintTracksTrajectorySidecar verifies the
+// composite fingerprint changes when the agy-reader sidecar appears or
+// is updated, so a sidecar-only change triggers a re-sync.
+func TestAntigravityProviderFingerprintTracksTrajectorySidecar(t *testing.T) {
+	root := t.TempDir()
+	id := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	writeAntigravityIDEProviderFixture(t, root, id)
+
+	provider, ok := NewProvider(AgentAntigravity, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: id,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	before, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+
+	sidecarPath := filepath.Join(root, "conversations", id+".trajectory.json")
+	mustWrite(t, sidecarPath, []byte(`{"steps":[]}`))
+	afterCreate, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	assert.NotEqual(t, before.Hash, afterCreate.Hash,
+		"sidecar creation must change the fingerprint")
+
+	mustWrite(t, sidecarPath, []byte(`{"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT"}]}`))
+	afterUpdate, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	assert.NotEqual(t, afterCreate.Hash, afterUpdate.Hash,
+		"sidecar update must change the fingerprint")
+}
+
+// TestAntigravityProviderCapabilitiesAdvertiseSidecarContent guards that
+// the IDE provider advertises the richer content the trajectory sidecar
+// makes available, matching the CLI provider.
+func TestAntigravityProviderCapabilitiesAdvertiseSidecarContent(t *testing.T) {
+	factory, ok := ProviderFactoryByType(AgentAntigravity)
+	require.True(t, ok)
+	caps := factory.Capabilities()
+	assert.Equal(t, CapabilitySupported, caps.Content.Thinking)
+	assert.Equal(t, CapabilitySupported, caps.Content.ToolResults)
+	assert.Equal(t, CapabilitySupported, caps.Content.Model)
+	assert.Equal(t, CapabilitySupported, caps.Content.ToolCalls)
+}
