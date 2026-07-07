@@ -157,7 +157,7 @@ func DecodeQoderProjectDir(encoded string) string {
 		return NormalizeName(encoded)
 	}
 	parts := strings.Split(encoded, "-")
-	for i := len(parts) - 2; i >= 0; i-- {
+	for i := 0; i < len(parts)-1; i++ {
 		if isQoderProjectParentDir(parts[i]) {
 			project := strings.Join(parts[i+1:], "-")
 			if project != "" {

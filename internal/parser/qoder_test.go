@@ -314,6 +314,8 @@ func TestDecodeQoderProjectDir(t *testing.T) {
 		{"-Users-foo-myproject", "myproject"},
 		{"-home-user-work-coding", "coding"},
 		{"-Users-alice-code-sample-project", "sample_project"},
+		{"-Users-alice-code-dev-tools", "dev_tools"},
+		{"-home-alice-projects-work-app", "work_app"},
 		{"-home-alice-projects-agent-ui", "agent_ui"},
 		{"plain-name", "plain_name"},
 		{"", ""},
