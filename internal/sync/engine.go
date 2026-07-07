@@ -6732,6 +6732,12 @@ func discoverLocalGitIdentity(cwd string) (string, map[string]string) {
 	if !safeLocalAbsolutePath(cwd) {
 		return "", nil
 	}
+	// Skip macOS automounter namespaces: probing them wakes
+	// automountd/opendirectoryd for paths that virtually never exist
+	// locally (see export.IsAutomountNamespacePath).
+	if export.IsAutomountNamespacePath(runtime.GOOS, filepath.Clean(cwd)) {
+		return "", nil
+	}
 	resolved, err := filepath.EvalSymlinks(filepath.Clean(cwd))
 	if err != nil {
 		return "", nil

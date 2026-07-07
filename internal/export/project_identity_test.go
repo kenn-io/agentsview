@@ -320,3 +320,46 @@ func sha256Hex(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
 }
+
+func TestIsAutomountNamespacePath(t *testing.T) {
+	tests := []struct {
+		name string
+		goos string
+		path string
+		want bool
+	}{
+		{"darwin home root", "darwin", "/home", true},
+		{"darwin home child", "darwin", "/home/user/repo", true},
+		{"darwin net child", "darwin", "/net/host/share", true},
+		{"darwin network servers", "darwin", "/Network/Servers/x", true},
+		{"darwin prefix collision homework", "darwin", "/homework/repo", false},
+		{"darwin prefix collision netdata", "darwin", "/netdata", false},
+		{"darwin regular path", "darwin", "/Users/user/repo", false},
+		{"linux home is real", "linux", "/home/user/repo", false},
+		{"windows never matches", "windows", "/home/user", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsAutomountNamespacePath(tt.goos, tt.path))
+		})
+	}
+}
+
+// TestNormalizeStoredRootPathSkipsAutomountNamespace pins that on macOS a
+// stored /home/... root path normalizes to its cleaned form without touching
+// the filesystem: resolving it through the automounter is both futile (the
+// path names a directory on another machine) and expensive (each probe wakes
+// automountd/opendirectoryd, and negative results are not cached).
+func TestNormalizeStoredRootPathSkipsAutomountNamespace(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("automount namespaces are a darwin-only concern")
+	}
+	got, ok := NormalizeStoredRootPath("/home/user/work/repo")
+	require.True(t, ok)
+	assert.Equal(t, "/home/user/work/repo", got)
+
+	normalized, ok, err := NormalizeRootPath("/home/user/work/repo")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "/home/user/work/repo", normalized)
+}
