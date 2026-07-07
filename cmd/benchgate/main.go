@@ -35,9 +35,11 @@
 //
 // Lines that look like benchmark results but fail to parse (for
 // example test log output interleaved into a result line) are a
-// corrupted capture: they are reported and the gate exits 2, because
-// the corrupted benchmark would otherwise silently vanish from both
-// sides and never gate again.
+// corrupted capture. Candidate corruption exits 2, because it is
+// under this workflow's control and would otherwise silently disable
+// a gate. Baseline corruption is reported but treated as a partial
+// baseline, because the merge base may legitimately predate fixes to
+// the benchmark capture itself.
 package main
 
 import (
@@ -369,10 +371,11 @@ type results struct {
 	oldSyntax, newSyntax []string
 }
 
-// render formats the human-readable outcome and picks the exit
-// code: 2 for unusable input or configuration errors, 1 for
-// regressions, 0 otherwise. Violations always print, even when a
-// config issue or corrupted capture also occurred, so a detected
+// render formats the human-readable outcome and picks the exit code:
+// 2 for unusable candidate input or configuration errors, 1 for
+// regressions, 0 otherwise. Baseline syntax errors are reported as a
+// partial baseline. Violations always print, even when a config issue
+// or corrupted candidate capture also occurred, so a detected
 // regression is never hidden behind an exit-2.
 func render(r results) (string, int) {
 	var b strings.Builder
@@ -395,7 +398,7 @@ func render(r results) (string, int) {
 		}
 	}
 	switch {
-	case len(r.oldSyntax)+len(r.newSyntax) > 0 || len(r.issues) > 0:
+	case len(r.newSyntax) > 0 || len(r.issues) > 0:
 		return b.String(), 2
 	case r.newCount == 0:
 		fmt.Fprintln(&b, "benchgate: candidate output contains no benchmarks")
