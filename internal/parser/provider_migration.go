@@ -31,6 +31,7 @@ var providerMigrationModes = map[AgentType]ProviderMigrationMode{
 	AgentAmp:            ProviderMigrationProviderAuthoritative,
 	AgentZencoder:       ProviderMigrationProviderAuthoritative,
 	AgentVSCodeCopilot:  ProviderMigrationProviderAuthoritative,
+	AgentWindsurf:       ProviderMigrationProviderAuthoritative,
 	AgentVSCopilot:      ProviderMigrationProviderAuthoritative,
 	AgentPi:             ProviderMigrationProviderAuthoritative,
 	AgentQwen:           ProviderMigrationProviderAuthoritative,

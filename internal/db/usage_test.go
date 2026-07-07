@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -3005,6 +3007,9 @@ func TestExcludeModelFilter(t *testing.T) {
 func BenchmarkGetDailyUsage(b *testing.B) {
 	d := testDB(b)
 	ctx := context.Background()
+	origLog := log.Writer()
+	log.SetOutput(io.Discard)
+	defer log.SetOutput(origLog)
 
 	if err := d.UpsertModelPricing([]ModelPricing{
 		{ModelPattern: "claude-sonnet-4-20250514",
@@ -3083,6 +3088,7 @@ func BenchmarkGetDailyUsage(b *testing.B) {
 		}
 	}
 
+	log.SetOutput(origLog)
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {

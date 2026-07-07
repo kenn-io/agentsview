@@ -125,6 +125,17 @@ func newSessionExportCommand() *cobra.Command {
 				}
 				return err
 			}
+			if dbPath, sessionID, ok := parser.SplitWindsurfVirtualPath(storedPath); ok {
+				err := parser.WriteWindsurfSessionJSON(
+					cmd.OutOrStdout(), dbPath, sessionID,
+				)
+				if errors.Is(err, os.ErrNotExist) {
+					return fmt.Errorf(
+						"source file not found: %s", dbPath,
+					)
+				}
+				return err
+			}
 			path := parser.ResolveSourceFilePath(storedPath)
 			f, err := os.Open(path)
 			if err != nil {

@@ -74,17 +74,26 @@ func buildAiderResolveSnippet(envVar string) string {
 func buildResolveScript() string {
 	var b strings.Builder
 	b.WriteString(
-		"av_emit_dir() { " +
+		"av_emit_target() { " +
+			"agent=\"$1\"; " +
+			"target=\"$2\"; " +
+			"if [ \"$agent\" = \"" + string(parser.AgentWindsurf) + "\" ]; then " +
+			"case \"$target\" in */workspaceStorage) ;; " +
+			"*) target=\"$target/workspaceStorage\";; esac; " +
+			"fi; " +
+			"[ -d \"$target\" ] && printf '%s\\000' \"$agent:$target\"; " +
+			"}\n" +
+			"av_emit_dir() { " +
 			"dir=\"$1\"; " +
 			"[ -n \"$dir\" ] || dir=\"$2\"; " +
-			"[ -d \"$dir\" ] && printf '%s\\000' \"$3:$dir\"; " +
+			"av_emit_target \"$3\" \"$dir\"; " +
 			"}\n" +
 			"av_emit_rooted_dir() { " +
 			"dir=\"$1\"; " +
 			"root=\"$2\"; " +
 			"[ -z \"$dir\" ] && [ -n \"$root\" ] && dir=\"$root$3\"; " +
 			"[ -n \"$dir\" ] || dir=\"$4\"; " +
-			"[ -d \"$dir\" ] && printf '%s\\000' \"$5:$dir\"; " +
+			"av_emit_target \"$5\" \"$dir\"; " +
 			"}\n" +
 			"av_emit_codex_index() { " +
 			"idx=\"${dir%/*}/" + parser.CodexSessionIndexFilename + "\"; " +
@@ -250,7 +259,7 @@ func resolveDirs(
 	host, user string, port int, sshOpts []string,
 ) (map[parser.AgentType][]string, []string, error) {
 	script := buildResolveScript()
-	out, err := runSSH(ctx, host, user, port, sshOpts, script)
+	out, err := runSSHScript(ctx, host, user, port, sshOpts, script)
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve dirs: %w", err)
 	}

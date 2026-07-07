@@ -117,6 +117,16 @@ func TestBuildSSHArgs_NonInteractiveDefaults(t *testing.T) {
 		"ssh invocation must include non-interactive defaults")
 }
 
+func TestBuildSSHScriptArgs(t *testing.T) {
+	got, err := buildSSHScriptArgs("devbox1", "wes", 2222, []string{"-i", "/tmp/key"})
+	assert.NoError(t, err)
+	assert.Equal(t, wantSSHArgs(
+		[]string{"-p", "2222", "-i", "/tmp/key"},
+		"wes@devbox1",
+		"sh -s",
+	), got)
+}
+
 func TestBuildSSHArgsRejectsOptionShapedTargetParts(t *testing.T) {
 	tests := []struct {
 		name string

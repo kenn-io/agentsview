@@ -493,6 +493,14 @@ func TestResolveSourceFilePath(t *testing.T) {
 			VisualStudioCopilotVirtualPath(sessionPath, conversationID),
 		),
 		"VS 2026 session virtual path should resolve to its physical session file")
+	assert.Equal(t, "/profile/User/workspaceStorage/hash/state.vscdb",
+		ResolveSourceFilePath(
+			"/profile/User/workspaceStorage/hash/state.vscdb#windsurf-session",
+		),
+		"Windsurf virtual path should resolve to its physical workspace DB")
+	assert.Equal(t, "/logs/session#draft.jsonl",
+		ResolveSourceFilePath("/logs/session#draft.jsonl"),
+		"non-Windsurf paths containing # should be returned unchanged")
 	assert.Equal(t, "/logs/session.jsonl",
 		ResolveSourceFilePath("/logs/session.jsonl"),
 		"a plain source path should be returned unchanged")

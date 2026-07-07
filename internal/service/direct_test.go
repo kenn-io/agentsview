@@ -797,6 +797,58 @@ func TestDirectBackend_Sync_VSCopilotPhysicalPathAmbiguous(t *testing.T) {
 	assert.Contains(t, msg, "session sync <id>")
 }
 
+func TestDirectBackend_Sync_WindsurfPhysicalDBPathResolvesSession(t *testing.T) {
+	t.Parallel()
+	d := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(d, sync.EngineConfig{Ephemeral: true})
+	svc := service.NewDirectBackend(d, engine)
+
+	dbPath := filepath.Join("/profile", "Windsurf", "User", "workspaceStorage", "hash", "state.vscdb")
+	virtual := parser.VirtualSourcePath(dbPath, "windsurf-session")
+	sessionID := "windsurf:windsurf-session"
+	require.NoError(t, d.UpsertSession(db.Session{
+		ID:       sessionID,
+		Project:  "windsurf",
+		Machine:  "local",
+		Agent:    "windsurf",
+		FilePath: &virtual,
+	}))
+
+	detail, err := svc.Sync(context.Background(), service.SyncInput{
+		Path: dbPath,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, detail)
+	assert.Equal(t, sessionID, detail.ID)
+}
+
+func TestDirectBackend_Sync_WindsurfPhysicalDBPathAmbiguous(t *testing.T) {
+	t.Parallel()
+	d := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(d, sync.EngineConfig{Ephemeral: true})
+	svc := service.NewDirectBackend(d, engine)
+
+	dbPath := filepath.Join("/profile", "Windsurf", "User", "workspaceStorage", "hash", "state.vscdb")
+	for _, sessionID := range []string{"windsurf:a", "windsurf:b"} {
+		virtual := parser.VirtualSourcePath(dbPath, strings.TrimPrefix(sessionID, "windsurf:"))
+		require.NoError(t, d.UpsertSession(db.Session{
+			ID:       sessionID,
+			Project:  "windsurf",
+			Machine:  "local",
+			Agent:    "windsurf",
+			FilePath: &virtual,
+		}))
+	}
+
+	_, err := svc.Sync(context.Background(), service.SyncInput{
+		Path: dbPath,
+	})
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, "2 sessions found")
+	assert.Contains(t, msg, "session sync <id>")
+}
+
 func TestDirectBackend_Sync_VSCopilotIDRefreshesOnlyRequestedConversation(t *testing.T) {
 	t.Parallel()
 	tracesDir := t.TempDir()

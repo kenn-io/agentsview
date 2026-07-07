@@ -25,6 +25,7 @@ const (
 	AgentAmp            AgentType = "amp"
 	AgentZencoder       AgentType = "zencoder"
 	AgentVSCodeCopilot  AgentType = "vscode-copilot"
+	AgentWindsurf       AgentType = "windsurf"
 	AgentVSCopilot      AgentType = "visualstudio-copilot"
 	AgentPi             AgentType = "pi"
 	AgentOMP            AgentType = "omp"
@@ -279,6 +280,32 @@ var Registry = []AgentDef{
 		WatchSubdirs: []string{
 			"workspaceStorage",
 			"globalStorage",
+		},
+		FileBased: true,
+		Usage: UsageCapabilities{
+			NoPerMessageTokenData: true,
+			AICreditsDenominated:  true,
+		},
+	},
+	{
+		Type:        AgentWindsurf,
+		DisplayName: "Windsurf",
+		EnvVar:      "WINDSURF_DIR",
+		ConfigKey:   "windsurf_dirs",
+		DefaultDirs: []string{
+			// Windows
+			"AppData/Roaming/Windsurf/User",
+			"AppData/Roaming/Windsurf - Next/User",
+			// macOS
+			"Library/Application Support/Windsurf/User",
+			"Library/Application Support/Windsurf - Next/User",
+			// Linux
+			".config/Windsurf/User",
+			".config/Windsurf - Next/User",
+		},
+		IDPrefix: "windsurf:",
+		WatchSubdirs: []string{
+			"workspaceStorage",
 		},
 		FileBased: true,
 		Usage: UsageCapabilities{

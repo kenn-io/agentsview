@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -24,11 +25,14 @@ func TestResolveTargetsFiltersAndIncludesSpecialFiles(t *testing.T) {
 	warpDir := filepath.Join(root, "warp")
 	aiderRoot := filepath.Join(root, "code")
 	aiderHistory := filepath.Join(aiderRoot, "repo", parser.AiderHistoryFileName())
+	windsurfUserRoot := filepath.Join(root, "Windsurf", "User")
+	windsurfWorkspaceRoot := filepath.Join(windsurfUserRoot, "workspaceStorage")
 	require.NoError(t, os.MkdirAll(claudeDir, 0o755))
 	require.NoError(t, os.MkdirAll(codexDir, 0o755))
 	require.NoError(t, os.MkdirAll(devinDir, 0o755))
 	require.NoError(t, os.MkdirAll(warpDir, 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Dir(aiderHistory), 0o755))
+	require.NoError(t, os.MkdirAll(windsurfWorkspaceRoot, 0o755))
 	require.NoError(t, os.WriteFile(aiderHistory, []byte("# aider\n"), 0o644))
 	codexIndex := filepath.Join(root, ".codex", parser.CodexSessionIndexFilename)
 	require.NoError(t, os.WriteFile(codexIndex, []byte("{}\n"), 0o644))
@@ -41,6 +45,9 @@ func TestResolveTargetsFiltersAndIncludesSpecialFiles(t *testing.T) {
 			parser.AgentWarp:   {warpDir},
 			parser.AgentAider:  {aiderRoot},
 			parser.AgentZed:    {filepath.Join(root, "zed")},
+			parser.AgentWindsurf: {
+				windsurfUserRoot,
+			},
 		},
 	})
 
@@ -50,6 +57,8 @@ func TestResolveTargetsFiltersAndIncludesSpecialFiles(t *testing.T) {
 	assert.NotContains(t, targets.Dirs, parser.AgentWarp)
 	assert.Equal(t, []string{aiderHistory}, targets.Dirs[parser.AgentAider])
 	assert.NotContains(t, targets.Dirs, parser.AgentZed)
+	assert.Equal(t, []string{windsurfWorkspaceRoot}, targets.Dirs[parser.AgentWindsurf])
+	assert.NotContains(t, targets.Dirs[parser.AgentWindsurf], windsurfUserRoot)
 	assert.Contains(t, targets.ExtraFiles, codexIndex)
 }
 
@@ -121,15 +130,19 @@ func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
 	devinDir := filepath.Join(home, ".local", "share", "devin")
 	aiderRoot := filepath.Join(home, "code")
 	aiderHistory := filepath.Join(aiderRoot, "repo", parser.AiderHistoryFileName())
+	windsurfUserRoot := filepath.Join(home, "AppData", "Roaming", "Windsurf", "User")
+	windsurfWorkspaceRoot := filepath.Join(windsurfUserRoot, "workspaceStorage")
 	require.NoError(t, os.MkdirAll(claudeDir, 0o755))
 	require.NoError(t, os.MkdirAll(codexDir, 0o755))
 	require.NoError(t, os.MkdirAll(devinDir, 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Dir(aiderHistory), 0o755))
+	require.NoError(t, os.MkdirAll(windsurfWorkspaceRoot, 0o755))
 	require.NoError(t, os.WriteFile(aiderHistory, []byte("# aider\n"), 0o644))
 	codexIndex := filepath.Join(home, ".codex", parser.CodexSessionIndexFilename)
 	require.NoError(t, os.WriteFile(codexIndex, []byte("{}\n"), 0o644))
 
-	cmd := exec.Command("sh", "-c", ssh.BuildResolveScriptForTest())
+	cmd := exec.Command("sh")
+	cmd.Stdin = strings.NewReader(ssh.BuildResolveScriptForTest())
 	cmd.Env = []string{"HOME=" + home, "AIDER_DIR=" + aiderRoot, "DEVIN_DIR=" + devinDir}
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "ssh resolver output: %s", out)
@@ -141,6 +154,9 @@ func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
 			parser.AgentCodex:  {codexDir},
 			parser.AgentDevin:  {devinDir},
 			parser.AgentAider:  {aiderRoot},
+			parser.AgentWindsurf: {
+				windsurfUserRoot,
+			},
 		},
 	})
 	assert.ElementsMatch(t, sshDirs[parser.AgentClaude], goTargets.Dirs[parser.AgentClaude])
@@ -148,5 +164,6 @@ func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
 	assert.NotContains(t, sshDirs, parser.AgentDevin)
 	assert.NotContains(t, goTargets.Dirs, parser.AgentDevin)
 	assert.ElementsMatch(t, sshDirs[parser.AgentAider], goTargets.Dirs[parser.AgentAider])
+	assert.ElementsMatch(t, sshDirs[parser.AgentWindsurf], goTargets.Dirs[parser.AgentWindsurf])
 	assert.ElementsMatch(t, sshExtra, goTargets.ExtraFiles)
 }

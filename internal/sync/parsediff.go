@@ -409,6 +409,7 @@ func parseDiffSourceKey(path string) string {
 var perSessionDBVirtualSourceBases = []string{
 	"opencode.db", "kilo.db", "mimocode.db", "sessions.db",
 	parser.WarpDBFilename, parser.ForgeDBFilename, parser.PiebaldDBFilename,
+	parser.WindsurfStateDBName,
 }
 
 func isPerSessionDBVirtualSource(path string) bool {

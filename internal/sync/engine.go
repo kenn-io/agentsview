@@ -7840,7 +7840,13 @@ func (e *Engine) providerSessionSourceMtime(
 }
 
 func providerSourcePathNeedsFingerprint(path string) bool {
-	return path != "" && parser.ResolveSourceFilePath(path) != path
+	if path == "" {
+		return false
+	}
+	if _, _, ok := parser.SplitWindsurfVirtualPath(path); ok {
+		return true
+	}
+	return parser.ResolveSourceFilePath(path) != path
 }
 
 func providerSourceMtimeNeedsFingerprint(agent parser.AgentType) bool {

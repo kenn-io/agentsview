@@ -423,6 +423,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentCursor,
 		AgentAmp,
 		AgentVSCodeCopilot,
+		AgentWindsurf,
 		AgentVSCopilot,
 		AgentPi,
 		AgentOMP,
@@ -1152,6 +1153,35 @@ func TestVSCodeCopilotDefaultDirs(t *testing.T) {
 		assert.Truef(t, slices.Contains(def.DefaultDirs, path),
 			"missing default dir: %s", path)
 	}
+}
+
+func TestWindsurfRegistryEntry(t *testing.T) {
+	def, ok := AgentByType(AgentWindsurf)
+	require.True(t, ok, "AgentWindsurf not in Registry")
+
+	assert.Equal(t, "Windsurf", def.DisplayName)
+	assert.Equal(t, "WINDSURF_DIR", def.EnvVar)
+	assert.Equal(t, "windsurf_dirs", def.ConfigKey)
+	assert.Equal(t, "windsurf:", def.IDPrefix)
+	assert.True(t, def.FileBased)
+	assert.Contains(t, def.WatchSubdirs, "workspaceStorage")
+
+	required := []string{
+		"AppData/Roaming/Windsurf/User",
+		"AppData/Roaming/Windsurf - Next/User",
+		"Library/Application Support/Windsurf/User",
+		"Library/Application Support/Windsurf - Next/User",
+		".config/Windsurf/User",
+		".config/Windsurf - Next/User",
+	}
+	for _, path := range required {
+		assert.Truef(t, slices.Contains(def.DefaultDirs, path),
+			"missing default dir: %s", path)
+	}
+
+	byPrefix, ok := AgentByPrefix("windsurf:session-a")
+	require.True(t, ok)
+	assert.Equal(t, AgentWindsurf, byPrefix.Type)
 }
 
 func TestApplyUsageEventTokenTotals(t *testing.T) {

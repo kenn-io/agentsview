@@ -11,6 +11,7 @@ package sync_test
 import (
 	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -88,6 +89,32 @@ func (w *warpTestDB) addConversation(
 		)
 		require.NoError(t, err, "insert warp exchange")
 	}
+}
+
+func createWindsurfWorkspaceDB(t *testing.T, root, payload string) string {
+	t.Helper()
+	workspaceDir := filepath.Join(root, "workspaceStorage", "workspace-hash")
+	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
+	require.NoError(t,
+		os.WriteFile(
+			filepath.Join(workspaceDir, "workspace.json"),
+			[]byte(`{"folder":"file:///work/demo"}`),
+			0o644,
+		),
+	)
+	dbPath := filepath.Join(workspaceDir, "state.vscdb")
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	_, err = conn.Exec(`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
+	require.NoError(t, err)
+	_, err = conn.Exec(
+		`INSERT INTO ItemTable (key, value) VALUES (?, ?)`,
+		"workbench.panel.aichat.view.aichat.chatdata",
+		payload,
+	)
+	require.NoError(t, err)
+	return dbPath
 }
 
 // TestParseDiffCoversForge proves Forge's shared .forge.db, discovered as one
@@ -296,4 +323,53 @@ func TestParseDiffDBBackedLimitOrdersByPerSessionMtime(t *testing.T) {
 		"the older conversation must be the one cut by --limit")
 	assert.Contains(t, skipped[0].Reason, "limit",
 		"cut session reads as not-sampled")
+}
+
+func TestParseDiffWindsurfLimitScopesPerSession(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentWindsurf)
+	createWindsurfWorkspaceDB(t, env.windsurfDir, `{
+		"tabs": [
+			{
+				"tabId": "windsurf-a",
+				"chatTitle": "Conversation A",
+				"bubbles": [
+					{"type": "user", "text": "Prompt A."},
+					{"type": "assistant", "text": "Answer A."}
+				]
+			},
+			{
+				"tabId": "windsurf-b",
+				"chatTitle": "Conversation B",
+				"bubbles": [
+					{"type": "user", "text": "Prompt B."},
+					{"type": "assistant", "text": "Answer B."}
+				]
+			}
+		]
+	}`)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 2, Synced: 2})
+
+	report := runParseDiff(t, env, sync.ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentWindsurf},
+		Limit:  1,
+	})
+
+	assert.True(t, report.FilesLimited, "files limited")
+	assert.Equal(t, sync.ParseDiffTotals{
+		Examined: 1, Identical: 1, Skipped: 1,
+	}, report.Totals, "one Windsurf tab sampled, one cut")
+	assert.Zero(t, report.Totals.Changed,
+		"cut Windsurf sibling must not become a presence change")
+	assert.Empty(t, report.FieldCounts,
+		"no field drift from an unsampled Windsurf sibling")
+
+	var skipped []sync.SessionDiff
+	for _, s := range report.Sessions {
+		if s.Class == sync.DiffSkipped {
+			skipped = append(skipped, s)
+		}
+	}
+	require.Len(t, skipped, 1, "exactly one skipped Windsurf session listed")
+	assert.Contains(t, skipped[0].Reason, "limit",
+		"cut Windsurf session reads as not-sampled")
 }

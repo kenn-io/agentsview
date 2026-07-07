@@ -25,6 +25,13 @@ func ResolveTargets(cfg config.Config) TargetSet {
 				}
 				continue
 			}
+			if def.Type == parser.AgentWindsurf {
+				target := resolveWindsurfTarget(dir)
+				if target != "" {
+					dirs[def.Type] = append(dirs[def.Type], target)
+				}
+				continue
+			}
 			if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 				continue
 			}
@@ -77,6 +84,17 @@ func resolveAiderTargets(root string) []string {
 		}
 	}
 	return out
+}
+
+func resolveWindsurfTarget(root string) string {
+	target := filepath.Clean(root)
+	if filepath.Base(target) != "workspaceStorage" {
+		target = filepath.Join(target, "workspaceStorage")
+	}
+	if info, err := os.Stat(target); err == nil && info.IsDir() {
+		return target
+	}
+	return ""
 }
 
 func providerDiscoveredPath(source parser.SourceRef) string {

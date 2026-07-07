@@ -412,6 +412,14 @@ func (b *directBackend) Sync(
 			}
 			return b.Get(ctx, in.ID)
 		}
+		if _, _, ok := parser.SplitWindsurfVirtualPath(storedPath); ok {
+			if err := b.engine.SyncSingleSessionContext(
+				ctx, in.ID,
+			); err != nil {
+				return nil, err
+			}
+			return b.Get(ctx, in.ID)
+		}
 		path = parser.ResolveSourceFilePath(storedPath)
 	}
 
@@ -491,12 +499,12 @@ func (b *directBackend) resolveSessionIDByPath(
 		WHERE file_path = ?
 		ORDER BY created_at DESC`
 	queryArgs := []any{path}
-	// Visual Studio Copilot stores file_path as a virtual sync key
-	// <traceFile>#<conversationID>, so an exact match on the physical
-	// container path never resolves. Also match every conversation
-	// synced from that container; multiple matches fall through to the
-	// ambiguity error below, exactly like a multi-session JSONL file.
-	if isVisualStudioCopilotVirtualContainerPath(path) {
+	// Some providers store file_path as a virtual sync key
+	// <container>#<sessionID>, so an exact match on the physical container path
+	// never resolves. Also match every session synced from that container;
+	// multiple matches fall through to the ambiguity error below, exactly like a
+	// multi-session JSONL file.
+	if isVirtualSessionContainerPath(path) {
 		q = `SELECT id FROM sessions
 			WHERE file_path = ? OR file_path LIKE ? ESCAPE '\'
 			ORDER BY created_at DESC`
@@ -541,12 +549,24 @@ func (b *directBackend) resolveSessionIDByPath(
 	}
 }
 
+func isVirtualSessionContainerPath(path string) bool {
+	return isVisualStudioCopilotVirtualContainerPath(path) ||
+		isWindsurfVirtualContainerPath(path)
+}
+
 func isVisualStudioCopilotVirtualContainerPath(path string) bool {
 	if parser.IsVisualStudioCopilotTraceFile(path) {
 		return true
 	}
 	_, _, ok := parser.SplitVisualStudioCopilotVirtualPath(
 		parser.VisualStudioCopilotVirtualPath(path, filepath.Base(path)),
+	)
+	return ok
+}
+
+func isWindsurfVirtualContainerPath(path string) bool {
+	_, _, ok := parser.SplitWindsurfVirtualPath(
+		parser.VirtualSourcePath(path, filepath.Base(path)),
 	)
 	return ok
 }

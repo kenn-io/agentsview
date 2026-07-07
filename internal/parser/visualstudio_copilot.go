@@ -116,14 +116,19 @@ func isVisualStudioCopilotVS2026Hex(c rune) bool {
 // be opened on disk. Visual Studio Copilot stores a
 // <traceFile>#<conversationID> virtual path whose conversations share one
 // physical trace file, and aider stores a <historyFile>#<runIdx> virtual
-// path whose runs share one physical history file; both resolve to the
-// physical file. Every other agent stores a real path, returned unchanged.
+// path whose runs share one physical history file, and Windsurf stores a
+// <state.vscdb>#<sessionID> virtual path whose chats share one SQLite DB.
+// These resolve to the physical source file. Every other agent stores a real
+// path, returned unchanged.
 func ResolveSourceFilePath(storedPath string) string {
 	if tracePath, _, ok := splitVisualStudioCopilotVirtualPath(storedPath); ok {
 		return tracePath
 	}
 	if historyPath, _, ok := ParseAiderVirtualPath(storedPath); ok {
 		return historyPath
+	}
+	if dbPath, _, ok := SplitWindsurfVirtualPath(storedPath); ok {
+		return dbPath
 	}
 	return storedPath
 }
