@@ -58,6 +58,32 @@ func TestWindsurfProviderDiscoversAndParsesWorkspaceSQLiteChat(t *testing.T) {
 	assert.Equal(t, "Use the existing parser.", result.Messages[1].Content)
 }
 
+func TestWindsurfProviderFingerprintHashIsContentBased(t *testing.T) {
+	payload := windsurfVSCodeSessionJSON(
+		"windsurf-session-hash",
+		"Hash this",
+		"Same content.",
+	)
+	rootA, _ := windsurfProviderFixture(t, payload)
+	rootB, _ := windsurfProviderFixture(t, payload)
+	providerA := newTestWindsurfProvider(rootA)
+	providerB := newTestWindsurfProvider(rootB)
+
+	sourcesA, err := providerA.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sourcesA, 1)
+	sourcesB, err := providerB.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sourcesB, 1)
+	fpA, err := providerA.Fingerprint(context.Background(), sourcesA[0])
+	require.NoError(t, err)
+	fpB, err := providerB.Fingerprint(context.Background(), sourcesB[0])
+	require.NoError(t, err)
+
+	require.NotEmpty(t, fpA.Hash)
+	assert.Equal(t, fpA.Hash, fpB.Hash)
+}
+
 func TestWindsurfProviderParsesTabContainerChatData(t *testing.T) {
 	root, _ := windsurfProviderFixture(t, `{
 		"tabs": [{

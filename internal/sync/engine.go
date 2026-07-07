@@ -4197,7 +4197,7 @@ func providerProcessCacheKeyWithHash(
 
 func providerFingerprintHashRequiredForFreshness(agent parser.AgentType) bool {
 	switch agent {
-	case parser.AgentDevin, parser.AgentQoder:
+	case parser.AgentDevin, parser.AgentQoder, parser.AgentWindsurf:
 		return true
 	default:
 		return false

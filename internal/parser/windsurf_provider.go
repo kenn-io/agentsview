@@ -814,15 +814,23 @@ func windsurfWorkspaceProject(dbPath string) string {
 
 func windsurfSourceHash(dbPath, workspacePath string) (string, error) {
 	h := sha256.New()
-	for _, path := range []string{dbPath, dbPath + "-wal", dbPath + "-shm", workspacePath} {
-		if path == "" || !IsRegularFile(path) {
+	for _, component := range []struct {
+		label string
+		path  string
+	}{
+		{label: "db", path: dbPath},
+		{label: "wal", path: dbPath + "-wal"},
+		{label: "shm", path: dbPath + "-shm"},
+		{label: "workspace", path: workspacePath},
+	} {
+		if component.path == "" || !IsRegularFile(component.path) {
 			continue
 		}
-		hash, err := hashJSONLSourceFile(path)
+		hash, err := hashJSONLSourceFile(component.path)
 		if err != nil {
 			return "", err
 		}
-		_, _ = h.Write([]byte(path))
+		_, _ = h.Write([]byte(component.label))
 		_, _ = h.Write([]byte{0})
 		_, _ = h.Write([]byte(hash))
 		_, _ = h.Write([]byte{0})
