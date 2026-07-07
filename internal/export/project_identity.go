@@ -162,12 +162,15 @@ func NormalizeRootPath(raw string) (normalized string, ok bool, err error) {
 		return "", false, nil
 	}
 	cleaned := filepath.Clean(raw)
-	resolved, err := filepath.EvalSymlinks(cleaned)
-	if err != nil && !os.IsNotExist(err) {
-		return "", false, err
-	}
-	if err != nil {
-		resolved = cleaned
+	resolved := cleaned
+	if !IsAutomountNamespacePath(runtime.GOOS, cleaned) {
+		resolved, err = filepath.EvalSymlinks(cleaned)
+		if err != nil && !os.IsNotExist(err) {
+			return "", false, err
+		}
+		if err != nil {
+			resolved = cleaned
+		}
 	}
 	abs, err := filepath.Abs(resolved)
 	if err != nil {
@@ -357,7 +360,31 @@ func normalizeWindowsDriveRootPath(raw string) string {
 	return drive + rest
 }
 
+// IsAutomountNamespacePath reports whether p lies inside a macOS
+// automounter namespace (/home, /net, /Network/Servers). On darwin, merely
+// stat'ing such a path wakes automountd, which resolves the map through
+// opendirectoryd, and negative results are not cached — an archive holding
+// many /home/... roots from sessions synced off Linux machines turns every
+// resolution sweep into a sustained syscall storm. Callers skip filesystem
+// resolution for these paths and use the cleaned path directly, which is
+// exactly what the (virtually always failing) EvalSymlinks fallback would
+// have produced. goos is a parameter so the predicate is testable off-darwin.
+func IsAutomountNamespacePath(goos, p string) bool {
+	if goos != "darwin" {
+		return false
+	}
+	for _, ns := range [...]string{"/home", "/net", "/Network/Servers"} {
+		if p == ns || strings.HasPrefix(p, ns+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 func resolveStoredRootPath(cleaned string) (string, bool) {
+	if IsAutomountNamespacePath(runtime.GOOS, cleaned) {
+		return "", false
+	}
 	resolved, err := filepath.EvalSymlinks(filepath.FromSlash(cleaned))
 	if err != nil {
 		return "", false

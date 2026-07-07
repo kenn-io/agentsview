@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -623,6 +624,12 @@ func legacyProjectIdentityRoots(cwd, filePath string) []string {
 
 func discoverLegacyLocalGitIdentity(root string) (string, map[string]string) {
 	if !filepath.IsAbs(root) {
+		return "", nil
+	}
+	// Skip macOS automounter namespaces: probing them wakes
+	// automountd/opendirectoryd for paths that virtually never exist
+	// locally (see export.IsAutomountNamespacePath).
+	if export.IsAutomountNamespacePath(runtime.GOOS, filepath.Clean(root)) {
 		return "", nil
 	}
 	resolved, err := filepath.EvalSymlinks(filepath.Clean(root))
