@@ -4178,7 +4178,12 @@ func providerProcessCacheKeyWithHash(
 }
 
 func providerFingerprintHashRequiredForFreshness(agent parser.AgentType) bool {
-	return agent == parser.AgentDevin
+	switch agent {
+	case parser.AgentDevin, parser.AgentQoder:
+		return true
+	default:
+		return false
+	}
 }
 
 func (e *Engine) providerSkipCacheEntryFreshInDB(

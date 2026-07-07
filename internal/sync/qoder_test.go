@@ -4,7 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -119,4 +121,104 @@ func TestEngineSyncQoderSameMessageIDAppendForceReplaces(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
 	assert.Equal(t, "Hello world", msgs[1].Content)
+}
+
+func TestProcessFileQoderSameSizeSameMtimeSidecarRewriteReparses(t *testing.T) {
+	tests := []struct {
+		name      string
+		seedCache bool
+		freshSync bool
+	}{
+		{name: "skip cache", seedCache: true},
+		{name: "db freshness", freshSync: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database := openTestDB(t)
+			root := t.TempDir()
+			engine := NewEngine(database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{
+					parser.AgentQoder: {root},
+				},
+				Machine: "local",
+			})
+
+			rawID := "11111111-1111-4111-8111-111111111111"
+			path := filepath.Join(root, "-Users-alice-project", rawID+".jsonl")
+			sidecarPath := strings.TrimSuffix(path, ".jsonl") + "-session.json"
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+			require.NoError(t, os.WriteFile(path, []byte(`{"type":"user","uuid":"u1","timestamp":"2026-06-04T09:47:27.966Z","message":{"role":"user","content":"hello"},"sessionId":"11111111-1111-4111-8111-111111111111"}
+`), 0o644))
+			initialSidecar := []byte(`{"title":"Initial title","working_dir":"/tmp/qoder-a"}`)
+			changedSidecar := []byte(`{"title":"Changed title","working_dir":"/tmp/qoder-a"}`)
+			require.Len(t, changedSidecar, len(initialSidecar),
+				"test must keep size stable so hash is the only freshness signal")
+			require.NoError(t, os.WriteFile(sidecarPath, initialSidecar, 0o644))
+			initialTime := time.Date(2026, time.June, 4, 10, 0, 0, 0, time.UTC)
+			require.NoError(t, os.Chtimes(path, initialTime, initialTime))
+			require.NoError(t, os.Chtimes(sidecarPath, initialTime, initialTime))
+
+			file := parser.DiscoveredFile{
+				Path:            path,
+				Agent:           parser.AgentQoder,
+				ProviderProcess: true,
+			}
+			first := engine.processFile(context.Background(), file)
+			require.NoError(t, first.err)
+			require.Len(t, first.results, 1)
+			initialMtime := first.results[0].Session.File.Mtime
+			initialHash := first.results[0].Session.File.Hash
+			require.Equal(t, initialTime.UnixNano(), initialMtime)
+			require.NotEmpty(t, initialHash)
+			require.Contains(t, first.cacheKey, "?source_hash="+initialHash)
+			writeProcessQoderResult(t, engine, first)
+
+			require.NoError(t, os.WriteFile(sidecarPath, changedSidecar, 0o644))
+			require.NoError(t, os.Chtimes(sidecarPath, initialTime, initialTime))
+
+			if tt.seedCache {
+				engine.cacheSkip(first.cacheKey, initialMtime)
+			}
+			if tt.freshSync {
+				engine = NewEngine(database, EngineConfig{
+					AgentDirs: map[parser.AgentType][]string{
+						parser.AgentQoder: {root},
+					},
+					Machine: "local",
+				})
+			}
+
+			second := engine.processFile(context.Background(), file)
+			require.NoError(t, second.err)
+			assert.False(t, second.skip)
+			require.Len(t, second.results, 1)
+			assert.Equal(t, "Changed title", second.results[0].Session.SessionName)
+			assert.Equal(t, "/tmp/qoder-a", second.results[0].Session.Cwd)
+			changedHash := second.results[0].Session.File.Hash
+			require.NotEmpty(t, changedHash)
+			require.NotEqual(t, initialHash, changedHash)
+			require.Contains(t, second.cacheKey, "?source_hash="+changedHash)
+		})
+	}
+}
+
+func writeProcessQoderResult(
+	t *testing.T,
+	engine *Engine,
+	result processResult,
+) {
+	t.Helper()
+	written, _, failed := engine.writeBatch(
+		[]pendingWrite{{
+			sess:         result.results[0].Session,
+			msgs:         result.results[0].Messages,
+			usageEvents:  result.results[0].UsageEvents,
+			forceReplace: result.forceReplace,
+		}},
+		syncWriteDefault,
+		false,
+	)
+	require.Equal(t, 0, failed)
+	require.Equal(t, 1, written)
 }
