@@ -3850,3 +3850,60 @@ func TestAntigravityIDENonCoveringSidecarUsageRejected(t *testing.T) {
 	assert.Empty(t, usageEvents,
 		"non-covering sidecar usage must be rejected like its transcript")
 }
+
+// TestAntigravityIDECoveringSidecarRescuesUnreadableSteps verifies that a
+// step-load failure is a fallback condition, not a parse failure: a .db
+// with a readable schema but no steps table is rescued by a covering
+// sidecar, mirroring the CLI flow.
+func TestAntigravityIDECoveringSidecarRescuesUnreadableSteps(t *testing.T) {
+	root := t.TempDir()
+	id := "8a8a8a8a-9b9b-acac-bdbd-cececececece"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	// Readable schema, but loadAntigravityStepsWithRawCount's
+	// `SELECT ... FROM steps` fails: no steps table.
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	mustExec(t, db, `CREATE TABLE trajectory_meta (
+		trajectory_id text, PRIMARY KEY (trajectory_id))`)
+	require.NoError(t, db.Close())
+
+	writeAntigravityTestSidecar(t, root, id, 2)
+
+	sess, msgs, _, err := parseAntigravityTestSession(t, dbPath, "", "test-machine")
+	require.NoError(t, err,
+		"covering sidecar must rescue a .db with unreadable steps")
+
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "sidecar prompt", msgs[0].Content)
+	assert.Equal(t, "sidecar assistant reply", msgs[1].Content)
+	assert.Equal(t, TranscriptFidelityFull, sess.TranscriptFidelity)
+	// The schema fingerprint is computed before step loading, so the
+	// rescued session still carries the agy-schema marker.
+	assert.True(t,
+		strings.HasPrefix(sess.SourceVersion, antigravitySchemaUnknownPrefix),
+		"readable schema must still yield an agy-schema marker, got %q",
+		sess.SourceVersion)
+}
+
+// TestAntigravityIDEUnreadableStepsWithoutSidecarStillFails verifies the
+// step-load error is still surfaced when no sidecar can rescue the
+// session, preserving prior behavior.
+func TestAntigravityIDEUnreadableStepsWithoutSidecarStillFails(t *testing.T) {
+	root := t.TempDir()
+	id := "9a9a9a9a-abab-bcbc-cdcd-dededededede"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	mustExec(t, db, `CREATE TABLE trajectory_meta (
+		trajectory_id text, PRIMARY KEY (trajectory_id))`)
+	require.NoError(t, db.Close())
+
+	_, _, _, err = parseAntigravityTestSession(t, dbPath, "", "test-machine")
+	require.Error(t, err,
+		"unreadable steps without a rescuing sidecar must fail the parse")
+	assert.Contains(t, err.Error(), "steps")
+}

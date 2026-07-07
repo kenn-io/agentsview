@@ -100,17 +100,15 @@ func (p *antigravityProvider) parseSession(
 	// schema cannot be read.
 	sourceVersion := antigravitySourceVersion(db)
 
-	dbResult, err := loadAntigravityStepsWithRawCount(db)
-	if err != nil {
-		return nil, nil, nil, err
-	}
+	dbResult, dbErr := loadAntigravityStepsWithRawCount(db)
 	messages := dbResult.messages
 	// gen_metadata token usage describes the session's actual
 	// consumption no matter which transcript source wins below. The
 	// trajectory sidecar also extracts generatorMetadata usage, but the
 	// .db gen_metadata events win and sidecar events only fill the gap
-	// (missing gen_metadata table) so the same generation is never
-	// counted twice -- mirroring the CLI path's merge behavior.
+	// (unreadable steps or missing gen_metadata table) so the same
+	// generation is never counted twice -- mirroring the CLI path's
+	// merge behavior.
 	usageEvents := dbResult.usageEvents
 	hasGenMetadata := dbResult.hasGenMetadata
 	// TranscriptFidelity is left empty (treated as full) for the heuristic
@@ -125,22 +123,29 @@ func (p *antigravityProvider) parseSession(
 	// at least as many steps as the raw DB decode, so a sidecar lagging
 	// behind a live session loses until agy-reader catches up. When the
 	// sidecar is absent, malformed, or fails the coverage gate the parser
-	// falls back to the heuristic decode exactly as before.
+	// falls back to the heuristic decode exactly as before. A step-load
+	// failure is a fallback condition, not a parse failure (mirroring the
+	// CLI flow): the DB then offers no coverage signal and a readable
+	// sidecar can still rescue the session; without one the original
+	// step-load error is returned below.
 	sidecarPath := strings.TrimSuffix(path, ".db") + ".trajectory.json"
 	tRes, tErr := parseAntigravityCLITrajectory(sidecarPath)
 	sidecarOK := tErr == nil &&
 		hasDisplayableAntigravityCLITrajectoryMessage(tRes.messages)
-	sidecarCovers := dbResult.rawStepCount == 0 ||
+	sidecarCovers := dbErr != nil || dbResult.rawStepCount == 0 ||
 		tRes.rawSteps >= dbResult.rawStepCount
-	if sidecarOK && sidecarCovers {
+	switch {
+	case sidecarOK && sidecarCovers:
 		messages = tRes.messages
 		transcriptFidelity = TranscriptFidelityFull
+	case dbErr != nil:
+		return nil, nil, nil, dbErr
 	}
 	// Coverage gates usage just like the transcript: a lagging sidecar
 	// carries only the generations it has seen, so persisting those would
 	// underreport totals on a row that looks current. sidecarCovers stays
-	// true when the DB offers no coverage signal (zero rows), so gap-fill
-	// still applies there.
+	// true when the DB offers no coverage signal (unreadable steps or zero
+	// rows), so gap-fill still applies there.
 	if len(usageEvents) == 0 && tErr == nil && sidecarCovers {
 		usageEvents = tRes.usageEvents
 	}
