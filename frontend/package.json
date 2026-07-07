@@ -20,11 +20,11 @@
   },
   "dependencies": {
     "@kenn-io/kit-ui": "git+https://github.com/kenn-io/kit-ui.git#0479c75df2c420a3032e10e40f1a288dab4289f0",
-    "@lucide/svelte": "1.21.0",
-    "@tanstack/virtual-core": "3.17.2",
+    "@lucide/svelte": "1.22.0",
+    "@tanstack/virtual-core": "3.17.3",
     "dompurify": "3.4.11",
     "marked": "18.0.5",
-    "mermaid": "11.15.0",
+    "mermaid": "11.16.0",
     "shiki": "4.3.0"
   },
   "devDependencies": {
@@ -47,5 +47,5 @@
   "overrides": {
     "vite": "npm:@voidzero-dev/vite-plus-core@0.2.1"
   },
-  "packageManager": "npm@11.17.0"
+  "packageManager": "npm@11.18.0"
 }
