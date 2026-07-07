@@ -1041,6 +1041,61 @@ const resyncTempSuffix = "-resync"
 // atomically swaps the files and reopens the original DB
 // handle. This avoids the per-row trigger overhead of bulk
 // deleting hundreds of thousands of messages in place.
+// shouldAbortResyncSwap decides whether a finished resync pass built a
+// database that would be worse than the original, so the swap must be
+// abandoned:
+//   - sync was cancelled (partial rebuild)
+//   - nothing synced at all (empty discovery, or all skipped)
+//     when old DB had data
+//   - more files failed than succeeded (permission errors,
+//     disk issues)
+//
+// OpenCode-only rebuilds are allowed to finish with 0 freshly synced
+// sessions when every storage parse was intentionally preserved
+// against the archive; orphan copy restores those rows immediately
+// after the sync pass. A few permanent parse failures are tolerated
+// since those files were broken in the old DB too.
+// OpenCode-format storage is a self-preserving container store that
+// flows through file discovery, so it is excluded from the discovery
+// check just as it is subtracted from oldFileSessions by the caller.
+// Otherwise its discovery would mask the disappearance of plain
+// file-backed sessions whose directories went empty.
+func shouldAbortResyncSwap(
+	stats SyncStats, oldFileSessions, trashedCopied int,
+) bool {
+	emptyDiscovery := stats.nonContainerDiscovered == 0 &&
+		oldFileSessions > 0
+	preservedOnly := stats.Synced == 0 &&
+		stats.TotalSessions > 0 &&
+		stats.Failed == 0 &&
+		(oldFileSessions == 0 || trashedCopied > 0)
+	excludedOnly := stats.Synced == 0 &&
+		stats.TotalSessions > 0 &&
+		stats.Failed == 0 &&
+		stats.parserExcludedFiles > 0 &&
+		stats.filesOK == stats.parserExcludedFiles
+	// A zero-write run is intentional when the sync_include_cwd_prefixes
+	// allow-list vetoed sessions AND every OK file is accounted for as
+	// either fully filtered or parser-excluded: the swap proceeds and
+	// the orphan copy restores the archived rows, because the filter
+	// gates ingestion only. Requiring the full accounting keeps the
+	// guard armed for mixed runs where other files produced nothing for
+	// an unexplained reason.
+	cwdFilteredOnly := stats.Synced == 0 &&
+		stats.TotalSessions > 0 &&
+		stats.Failed == 0 &&
+		stats.cwdFilteredSessions > 0 &&
+		stats.filesOK == stats.cwdFilteredFiles+stats.parserExcludedFiles
+	return stats.Aborted ||
+		emptyDiscovery ||
+		(stats.Synced == 0 &&
+			stats.TotalSessions > 0 &&
+			!preservedOnly &&
+			!excludedOnly &&
+			!cwdFilteredOnly) ||
+		(stats.Failed > 0 && stats.Failed > stats.filesOK)
+}
+
 func (e *Engine) ResyncAll(
 	ctx context.Context, onProgress ProgressFunc,
 ) (stats SyncStats) {
@@ -1231,51 +1286,7 @@ func (e *Engine) resyncAllLocked(
 	e.openCodeArchiveStore = nil
 	e.phaseStats.Log("resync")
 
-	// Abort swap when the fresh DB would be worse than the
-	// original:
-	// - sync was cancelled (partial rebuild)
-	// - nothing synced at all (empty discovery, or all skipped)
-	//   when old DB had data
-	// - more files failed than succeeded (permission errors,
-	//   disk issues)
-	// OpenCode-only rebuilds are allowed to finish with 0
-	// freshly synced sessions when every storage parse was
-	// intentionally preserved against the archive; orphan copy
-	// restores those rows immediately after the sync pass.
-	// A few permanent parse failures are tolerated since those
-	// files were broken in the old DB too.
-	// OpenCode-format storage is a self-preserving container store that
-	// now flows through file discovery, so it is excluded here just as it
-	// is subtracted from oldFileSessions above. Otherwise its discovery
-	// would mask the disappearance of plain file-backed sessions whose
-	// directories went empty.
-	emptyDiscovery := stats.nonContainerDiscovered == 0 &&
-		oldFileSessions > 0
-	preservedOnly := stats.Synced == 0 &&
-		stats.TotalSessions > 0 &&
-		stats.Failed == 0 &&
-		(oldFileSessions == 0 || trashedCopied > 0)
-	excludedOnly := stats.Synced == 0 &&
-		stats.TotalSessions > 0 &&
-		stats.Failed == 0 &&
-		stats.parserExcludedFiles > 0 &&
-		stats.filesOK == stats.parserExcludedFiles
-	// A run where the sync_include_cwd_prefixes allow-list vetoed every
-	// discovered session is an intentional result, not a broken rebuild:
-	// the swap proceeds and the orphan copy below restores the archived
-	// rows, because the filter gates ingestion only.
-	cwdFilteredOnly := stats.Synced == 0 &&
-		stats.TotalSessions > 0 &&
-		stats.Failed == 0 &&
-		stats.cwdFilteredSessions > 0
-	abortSwap := stats.Aborted ||
-		emptyDiscovery ||
-		(stats.Synced == 0 &&
-			stats.TotalSessions > 0 &&
-			!preservedOnly &&
-			!excludedOnly &&
-			!cwdFilteredOnly) ||
-		(stats.Failed > 0 && stats.Failed > stats.filesOK)
+	abortSwap := shouldAbortResyncSwap(stats, oldFileSessions, trashedCopied)
 	if abortSwap {
 		log.Printf(
 			"resync: aborting swap, %d synced / %d failed / %d total",
@@ -3313,6 +3324,16 @@ func (e *Engine) collectAndBatch(
 		excludedSessionIDs := e.applyIDPrefixToSessionIDs(
 			r.excludedSessionIDs,
 		)
+		// A source with no session inside the cwd allow-list must not
+		// delete archived rows: its exclusions and stale-row cleanup
+		// would erase sessions whose replacement writes the filter
+		// vetoes, breaking the ingestion-only contract. Dropping the
+		// IDs here also keeps them out of parserExcludedIDs, so
+		// resync's orphan copy still restores the archived rows.
+		if len(excludedSessionIDs) > 0 &&
+			!e.sourceAllowsParserExclusions(r.processResult) {
+			excludedSessionIDs = nil
+		}
 		if len(excludedSessionIDs) > 0 {
 			if _, err := e.db.DeleteParserExcludedSessions(
 				excludedSessionIDs,
@@ -3343,6 +3364,21 @@ func (e *Engine) collectAndBatch(
 		}
 		stats.filesOK++
 
+		// Drop sessions outside the cwd allow-list before batching so
+		// the sync stats can tell an intentionally filtered file apart
+		// from one whose sessions vanished for an unexplained reason.
+		// The prepareSessionWrite veto stays as the write-seam backstop.
+		// Filtered files are deliberately not skip-cached: a later
+		// allow-list change must be able to pick them up again.
+		allowed, vetoed := e.splitResultsByCwdFilter(r.results)
+		stats.cwdFilteredSessions += vetoed
+		if vetoed > 0 && len(allowed) == 0 {
+			stats.cwdFilteredFiles++
+			progress.SessionsDone++
+			e.reportProgress(onProgress, progress)
+			continue
+		}
+
 		if r.incremental != nil {
 			if err := e.writeIncremental(r.incremental); err != nil {
 				log.Printf("%v", err)
@@ -3355,7 +3391,7 @@ func (e *Engine) collectAndBatch(
 			)
 			stats.messagesIndexed = progress.MessagesIndexed
 		} else {
-			for _, pr := range r.results {
+			for _, pr := range allowed {
 				pending = append(pending, pendingWrite{
 					sess:         pr.Session,
 					msgs:         pr.Messages,
@@ -8357,10 +8393,12 @@ func (e *Engine) SyncSingleSessionContext(
 	// from its directory-name fallback ID to the canonical
 	// meta.json ID and returns the stale fallback ID here; without
 	// this delete a single-session resync would leave both rows in
-	// the DB and double-count messages and usage.
+	// the DB and double-count messages and usage. Like
+	// collectAndBatch, exclusions from a source with no session
+	// inside the cwd allow-list are frozen so archived rows survive.
 	if excluded := e.applyIDPrefixToSessionIDs(
 		res.excludedSessionIDs,
-	); len(excluded) > 0 {
+	); len(excluded) > 0 && e.sourceAllowsParserExclusions(res) {
 		if _, err := e.db.DeleteParserExcludedSessions(
 			excluded,
 		); err != nil {

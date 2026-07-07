@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // cwdPrefixFilter gates session ingestion on the session working
@@ -67,4 +69,46 @@ func (f cwdPrefixFilter) allows(cwd string) bool {
 		}
 	}
 	return false
+}
+
+// sourceAllowsParserExclusions reports whether a source's parser
+// exclusions (including engine stale-row cleanup) may delete archived
+// rows. When the cwd allow-list is active, a source proves it is
+// inside the list by producing at least one allowed session or
+// incremental update; a source with no allowed output is frozen — its
+// exclusions would erase archived sessions whose replacement writes
+// the filter vetoes, which the ingestion-only contract forbids.
+// Zero-result exclusion carriers (e.g. a file that parses to no live
+// session) have no cwd to judge, so they are frozen too.
+func (e *Engine) sourceAllowsParserExclusions(res processResult) bool {
+	if e.cwdFilter.empty() {
+		return true
+	}
+	if res.incremental != nil && e.cwdFilter.allows(res.incremental.cwd) {
+		return true
+	}
+	for _, pr := range res.results {
+		if e.cwdFilter.allows(pr.Session.Cwd) {
+			return true
+		}
+	}
+	return false
+}
+
+// splitResultsByCwdFilter returns the parsed sessions the cwd
+// allow-list admits and the number it vetoes. With no filter
+// configured it returns the input untouched.
+func (e *Engine) splitResultsByCwdFilter(
+	results []parser.ParseResult,
+) ([]parser.ParseResult, int) {
+	if e.cwdFilter.empty() || len(results) == 0 {
+		return results, 0
+	}
+	allowed := make([]parser.ParseResult, 0, len(results))
+	for _, pr := range results {
+		if e.cwdFilter.allows(pr.Session.Cwd) {
+			allowed = append(allowed, pr)
+		}
+	}
+	return allowed, len(results) - len(allowed)
 }
