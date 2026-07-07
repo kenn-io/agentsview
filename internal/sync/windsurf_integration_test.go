@@ -82,19 +82,9 @@ func TestProcessFileWindsurfSameMtimeHashChangeReparses(t *testing.T) {
 			})
 			defer engine.Close()
 
-			first := engine.processFile(context.Background(), parser.DiscoveredFile{
-				Path:  virtualPath,
-				Agent: parser.AgentWindsurf,
-			})
-			require.NoError(t, first.err)
-			require.Len(t, first.results, 1)
-			require.Len(t, first.results[0].Messages, 2)
-			assert.Equal(t, "Alpha reply", first.results[0].Messages[1].Content)
-			initialMtime := first.results[0].Session.File.Mtime
-			initialHash := first.results[0].Session.File.Hash
-			require.NotZero(t, initialMtime)
-			require.NotEmpty(t, initialHash)
-			writeSyncWindsurfResult(t, engine, first)
+			initialMtime, initialHash := syncInitialWindsurfSession(
+				t, engine, "hash-session",
+			)
 
 			infoBefore, err := os.Stat(dbPath)
 			require.NoError(t, err)
@@ -107,7 +97,14 @@ func TestProcessFileWindsurfSameMtimeHashChangeReparses(t *testing.T) {
 				"test must keep size stable so hash is the only freshness signal")
 
 			if tt.seedCache {
-				engine.cacheSkip(first.cacheKey, initialMtime)
+				engine.cacheSkip(
+					providerProcessCacheKeyWithHash(
+						virtualPath,
+						parser.AgentWindsurf,
+						parser.SourceFingerprint{Hash: initialHash},
+					),
+					initialMtime,
+				)
 			}
 			if tt.freshSync {
 				engine.Close()
@@ -162,21 +159,24 @@ func updateSyncWindsurfStateDB(t *testing.T, dbPath, payload string) {
 	require.NoError(t, err)
 }
 
-func writeSyncWindsurfResult(t *testing.T, engine *Engine, result processResult) {
+func syncInitialWindsurfSession(
+	t *testing.T,
+	engine *Engine,
+	sessionID string,
+) (int64, string) {
 	t.Helper()
-	require.Len(t, result.results, 1)
-	written, _, failed := engine.writeBatch(
-		[]pendingWrite{{
-			sess:         result.results[0].Session,
-			msgs:         result.results[0].Messages,
-			usageEvents:  result.results[0].UsageEvents,
-			forceReplace: result.forceReplace,
-		}},
-		syncWriteDefault,
-		false,
+	stats := engine.SyncAll(context.Background(), nil)
+	require.Equal(t, 1, stats.Synced)
+	sess, err := engine.db.GetSessionFull(
+		context.Background(), "windsurf:"+sessionID,
 	)
-	require.Equal(t, 0, failed)
-	require.Equal(t, 1, written)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.NotNil(t, sess.FileMtime)
+	require.NotNil(t, sess.FileHash)
+	require.NotZero(t, *sess.FileMtime)
+	require.NotEmpty(t, *sess.FileHash)
+	return *sess.FileMtime, *sess.FileHash
 }
 
 func windsurfSyncPayload(sessionID, assistant string) string {
