@@ -72,7 +72,7 @@ func TestProcessFileS3ProviderDiscoveredRoutesToS3Path(t *testing.T) {
 	require.NoError(t, res.err)
 	require.Len(t, res.results, 1)
 
-	written, _, failed := e.writeBatch([]pendingWrite{{
+	written, _, failed, _ := e.writeBatch([]pendingWrite{{
 		sess: res.results[0].Session,
 		msgs: res.results[0].Messages,
 	}}, syncWriteDefault, false)

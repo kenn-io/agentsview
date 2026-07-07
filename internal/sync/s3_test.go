@@ -43,7 +43,7 @@ func TestProcessS3SessionNamespacesIDsBySourceMachine(t *testing.T) {
 	require.NoError(t, res.err)
 	require.Len(t, res.results, 1)
 
-	written, _, failed := e.writeBatch([]pendingWrite{{
+	written, _, failed, _ := e.writeBatch([]pendingWrite{{
 		sess: res.results[0].Session,
 		msgs: res.results[0].Messages,
 	}}, syncWriteDefault, false)
@@ -89,7 +89,7 @@ func TestProcessS3CodexNamespacesIDsBySourceMachine(t *testing.T) {
 	require.NoError(t, res.err)
 	require.Len(t, res.results, 1)
 
-	written, _, failed := e.writeBatch([]pendingWrite{{
+	written, _, failed, _ := e.writeBatch([]pendingWrite{{
 		sess: res.results[0].Session,
 		msgs: res.results[0].Messages,
 	}}, syncWriteDefault, false)
@@ -490,7 +490,7 @@ func TestProcessS3ClaudeSubagentPreservesParentLayout(t *testing.T) {
 	require.NoError(t, res.err)
 	require.Len(t, res.results, 1)
 
-	written, _, failed := e.writeBatch([]pendingWrite{{
+	written, _, failed, _ := e.writeBatch([]pendingWrite{{
 		sess: res.results[0].Session,
 		msgs: res.results[0].Messages,
 	}}, syncWriteDefault, false)

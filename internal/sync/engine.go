@@ -1258,12 +1258,21 @@ func (e *Engine) resyncAllLocked(
 		stats.Failed == 0 &&
 		stats.parserExcludedFiles > 0 &&
 		stats.filesOK == stats.parserExcludedFiles
+	// A run where the sync_include_cwd_prefixes allow-list vetoed every
+	// discovered session is an intentional result, not a broken rebuild:
+	// the swap proceeds and the orphan copy below restores the archived
+	// rows, because the filter gates ingestion only.
+	cwdFilteredOnly := stats.Synced == 0 &&
+		stats.TotalSessions > 0 &&
+		stats.Failed == 0 &&
+		stats.cwdFilteredSessions > 0
 	abortSwap := stats.Aborted ||
 		emptyDiscovery ||
 		(stats.Synced == 0 &&
 			stats.TotalSessions > 0 &&
 			!preservedOnly &&
-			!excludedOnly) ||
+			!excludedOnly &&
+			!cwdFilteredOnly) ||
 		(stats.Failed > 0 && stats.Failed > stats.filesOK)
 	if abortSwap {
 		log.Printf(
@@ -3132,13 +3141,14 @@ func (e *Engine) syncProviderDBBackedAgent(
 		tWrite := time.Now()
 		var written int
 		if writeMode == syncWriteBulk {
-			var failedWrites int
-			written, _, failedWrites = e.writeBatch(
+			var failedWrites, cwdFiltered int
+			written, _, failedWrites, cwdFiltered = e.writeBatch(
 				pending, writeMode, true,
 			)
 			for range failedWrites {
 				stats.RecordFailed()
 			}
+			stats.cwdFilteredSessions += cwdFiltered
 		} else {
 			resolveWorktreeProject := e.loadWorktreeProjectResolver()
 			for _, pw := range pending {
@@ -3357,12 +3367,13 @@ func (e *Engine) collectAndBatch(
 		}
 
 		if len(pending) >= batchSize {
-			writtenSessions, writtenMessages, failedWrites :=
+			writtenSessions, writtenMessages, failedWrites, cwdFiltered :=
 				e.writeBatch(pending, writeMode, false)
 			stats.RecordSynced(writtenSessions)
 			for range failedWrites {
 				stats.RecordFailed()
 			}
+			stats.cwdFilteredSessions += cwdFiltered
 			progress.MessagesIndexed += writtenMessages
 			stats.messagesIndexed = progress.MessagesIndexed
 			pending = pending[:0]
@@ -3374,12 +3385,13 @@ func (e *Engine) collectAndBatch(
 
 flush:
 	if len(pending) > 0 {
-		writtenSessions, writtenMessages, failedWrites :=
+		writtenSessions, writtenMessages, failedWrites, cwdFiltered :=
 			e.writeBatch(pending, writeMode, false)
 		stats.RecordSynced(writtenSessions)
 		for range failedWrites {
 			stats.RecordFailed()
 		}
+		stats.cwdFilteredSessions += cwdFiltered
 		progress.MessagesIndexed += writtenMessages
 		stats.messagesIndexed = progress.MessagesIndexed
 	}
@@ -5665,17 +5677,20 @@ func (e *Engine) writeBatch(
 	batch []pendingWrite,
 	writeMode syncWriteMode,
 	forceReplace bool,
-) (writtenSessions, writtenMessages, failedSessions int) {
+) (writtenSessions, writtenMessages, failedSessions, cwdFiltered int) {
 	if writeMode == syncWriteBulk {
 		return e.writeBatchBulk(batch, forceReplace)
 	}
 
 	resolveWorktreeProject := e.loadWorktreeProjectResolver()
 	for _, pw := range batch {
-		s, msgs, ok := e.prepareSessionWrite(
+		s, msgs, verdict := e.prepareSessionWrite(
 			pw, resolveWorktreeProject,
 		)
-		if !ok {
+		if verdict != sessionWriteOK {
+			if verdict == sessionWriteCwdFiltered {
+				cwdFiltered++
+			}
 			continue
 		}
 
@@ -5782,13 +5797,26 @@ func (e *Engine) writeBatch(
 		writtenSessions++
 		writtenMessages += len(msgs)
 	}
-	return writtenSessions, writtenMessages, failedSessions
+	return writtenSessions, writtenMessages, failedSessions, cwdFiltered
 }
+
+// sessionWriteVerdict says whether prepareSessionWrite produced a
+// writable session and, when it did not, why. The cwd-filter veto is
+// distinguished from archive-preserve vetoes so sync stats can count
+// filtered sessions: a resync where every discovered session is
+// filtered must read as intentional, not as an empty rebuild.
+type sessionWriteVerdict int
+
+const (
+	sessionWriteOK sessionWriteVerdict = iota
+	sessionWritePreserved
+	sessionWriteCwdFiltered
+)
 
 func (e *Engine) prepareSessionWrite(
 	pw pendingWrite,
 	resolveWorktreeProject worktreeProjectResolver,
-) (db.Session, []db.Message, bool) {
+) (db.Session, []db.Message, sessionWriteVerdict) {
 	msgs := toDBMessages(pw, e.blockedResultCategories)
 	s := toDBSession(pw)
 	applySessionMessageDerivedFields(&s, msgs)
@@ -5805,19 +5833,19 @@ func (e *Engine) prepareSessionWrite(
 	// preserve/merge handling so a filtered session is not written by
 	// any downstream path.
 	if !e.cwdFilter.allows(s.Cwd) {
-		return db.Session{}, nil, false
+		return db.Session{}, nil, sessionWriteCwdFiltered
 	}
 
 	if e.shouldPreserveOpenCodeFormatArchive(
 		pw.sess.Agent, pw.sess.File.Path, s.ID,
 		pw.sess.File.Mtime, derefString(s.FileHash), msgs,
 	) {
-		return db.Session{}, nil, false
+		return db.Session{}, nil, sessionWritePreserved
 	}
 	if mergedMsgs, preserve, archived := e.reconcileVisualStudioCopilotArchive(
 		pw.sess.Agent, s.ID, pw.sess.File.Size, msgs,
 	); preserve {
-		return db.Session{}, nil, false
+		return db.Session{}, nil, sessionWritePreserved
 	} else if mergedMsgs != nil {
 		parsedMsgs := msgs
 		msgs = mergedMsgs
@@ -5896,7 +5924,7 @@ func (e *Engine) prepareSessionWrite(
 		_, _, p, h := usageEventTokenTotals(pw.usageEvents, true)
 		s.PeakContextTokens, s.HasPeakContextTokens = p, h
 	}
-	return s, msgs, true
+	return s, msgs, sessionWriteOK
 }
 
 func applySessionMessageDerivedFields(s *db.Session, msgs []db.Message) {
@@ -6572,18 +6600,21 @@ type projectIdentityCacheEntry struct {
 
 func (e *Engine) writeBatchBulk(
 	batch []pendingWrite, forceReplace bool,
-) (writtenSessions, writtenMessages, failedSessions int) {
+) (writtenSessions, writtenMessages, failedSessions, cwdFiltered int) {
 	writes := make([]db.SessionBatchWrite, 0, len(batch))
 	sources := make(map[string]batchSourceFile, len(batch))
 	resolveWorktreeProject := e.loadWorktreeProjectResolver()
 
 	for _, pw := range batch {
 		tPrep := time.Now()
-		s, msgs, ok := e.prepareSessionWrite(
+		s, msgs, verdict := e.prepareSessionWrite(
 			pw, resolveWorktreeProject,
 		)
 		e.phaseStats.PrepNanos.Add(int64(time.Since(tPrep)))
-		if !ok {
+		if verdict != sessionWriteOK {
+			if verdict == sessionWriteCwdFiltered {
+				cwdFiltered++
+			}
 			continue
 		}
 		replaceMessages := shouldReplaceFullParseMessages(
@@ -6613,7 +6644,7 @@ func (e *Engine) writeBatchBulk(
 		}
 	}
 	if len(writes) == 0 {
-		return 0, 0, 0
+		return 0, 0, 0, cwdFiltered
 	}
 
 	tWrite := time.Now()
@@ -6624,7 +6655,7 @@ func (e *Engine) writeBatchBulk(
 	e.phaseStats.BatchedWrites.Add(int64(result.WrittenSessions))
 	if err != nil {
 		log.Printf("write session batch: %v", err)
-		return 0, 0, len(writes)
+		return 0, 0, len(writes), cwdFiltered
 	}
 	for _, id := range result.ExcludedIDs {
 		if source, ok := sources[id]; ok && source.path != "" {
@@ -6638,7 +6669,8 @@ func (e *Engine) writeBatchBulk(
 	}
 	return result.WrittenSessions,
 		result.WrittenMessages,
-		result.FailedSessions
+		result.FailedSessions,
+		cwdFiltered
 }
 
 func identityObservationOrZero(
@@ -7097,10 +7129,10 @@ func (e *Engine) writeSessionFullWithResolver(
 	pw pendingWrite,
 	resolveWorktreeProject worktreeProjectResolver,
 ) error {
-	s, msgs, ok := e.prepareSessionWrite(
+	s, msgs, verdict := e.prepareSessionWrite(
 		pw, resolveWorktreeProject,
 	)
-	if !ok {
+	if verdict != sessionWriteOK {
 		return errSessionPreserved
 	}
 	if err := e.db.UpsertSession(s); err != nil {

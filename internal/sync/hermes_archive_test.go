@@ -203,7 +203,7 @@ func TestProcessFileHermesArchivePersistsAggregateFingerprint(t *testing.T) {
 			usageEvents: result.UsageEvents,
 		})
 	}
-	written, _, failed := engine.writeBatch(pending, syncWriteDefault, true)
+	written, _, failed, _ := engine.writeBatch(pending, syncWriteDefault, true)
 	require.Equal(t, 0, failed)
 	require.NotZero(t, written)
 

@@ -660,9 +660,9 @@ func (e *Engine) parseDiffCollectFile(
 			usageEvents: pr.UsageEvents,
 			needsRetry:  job.needsRetryForSession(pr.Session.ID),
 		}
-		prepared, msgs, ok := e.prepareSessionWrite(pw, resolver)
+		prepared, msgs, verdict := e.prepareSessionWrite(pw, resolver)
 		id := prepared.ID
-		if !ok {
+		if verdict != sessionWriteOK {
 			// prepareSessionWrite returns a zero session on veto;
 			// reconstruct the final ID the way applyRemoteRewrites
 			// would have.
@@ -674,7 +674,7 @@ func (e *Engine) parseDiffCollectFile(
 		}
 
 		var fields []FieldDiff
-		compare := ok && !pw.needsRetry &&
+		compare := verdict == sessionWriteOK && !pw.needsRetry &&
 			stored != nil && stored.DeletedAt == nil
 		if compare {
 			events, _ := toDBUsageEvents(id, pw.usageEvents)
@@ -770,7 +770,7 @@ func (e *Engine) parseDiffCollectFile(
 
 		class, reason := classifyParseDiffSession(
 			pw.needsRetry,
-			ok,
+			verdict == sessionWriteOK,
 			stored != nil,
 			stored != nil && stored.DeletedAt != nil,
 			stored != nil && stored.DataVersion < db.CurrentDataVersion(),

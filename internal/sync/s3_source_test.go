@@ -154,7 +154,7 @@ func TestProcessFileS3ChangedFingerprintReplacesStoredMessages(t *testing.T) {
 	})
 	require.NoError(t, res.err)
 	require.Len(t, res.results, 1)
-	written, _, failed := e.writeBatch([]pendingWrite{{
+	written, _, failed, _ := e.writeBatch([]pendingWrite{{
 		sess:         res.results[0].Session,
 		msgs:         res.results[0].Messages,
 		forceReplace: res.forceReplace,
@@ -175,7 +175,7 @@ func TestProcessFileS3ChangedFingerprintReplacesStoredMessages(t *testing.T) {
 	require.NoError(t, res.err)
 	require.False(t, res.skip)
 	require.Len(t, res.results, 1)
-	written, _, failed = e.writeBatch([]pendingWrite{{
+	written, _, failed, _ = e.writeBatch([]pendingWrite{{
 		sess:         res.results[0].Session,
 		msgs:         res.results[0].Messages,
 		forceReplace: res.forceReplace,
@@ -847,7 +847,7 @@ func TestProcessFileS3SameMetadataDifferentURIRewritesSourcePath(t *testing.T) {
 	require.True(t, fetched)
 	require.Len(t, res.results, 1)
 
-	written, _, failed := e.writeBatch([]pendingWrite{{
+	written, _, failed, _ := e.writeBatch([]pendingWrite{{
 		sess: res.results[0].Session,
 		msgs: res.results[0].Messages,
 	}}, syncWriteDefault, false)
@@ -1002,7 +1002,7 @@ func TestSyncSingleSessionS3PreservesStoredMachine(t *testing.T) {
 	})
 	require.NoError(t, res.err)
 	require.Len(t, res.results, 1)
-	written, _, failed := e.writeBatch([]pendingWrite{{
+	written, _, failed, _ := e.writeBatch([]pendingWrite{{
 		sess: res.results[0].Session,
 		msgs: res.results[0].Messages,
 	}}, syncWriteDefault, false)
@@ -1083,7 +1083,7 @@ func TestSyncSingleSessionS3WithoutMachineNamespaceUpdatesRawID(
 	})
 	require.NoError(t, res.err)
 	require.Len(t, res.results, 1)
-	written, _, failed := e.writeBatch([]pendingWrite{{
+	written, _, failed, _ := e.writeBatch([]pendingWrite{{
 		sess: res.results[0].Session,
 		msgs: res.results[0].Messages,
 	}}, syncWriteDefault, false)

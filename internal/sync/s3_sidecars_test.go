@@ -227,7 +227,7 @@ func TestProcessS3ClaudeHydratedSidecarReplacesStoredPreview(t *testing.T) {
 		SourceMtime: time.Date(2026, 6, 24, 12, 14, 0, 0, time.UTC).UnixNano(),
 	})
 	require.NoError(t, first.err)
-	written, _, failed := e.writeBatch([]pendingWrite{{
+	written, _, failed, _ := e.writeBatch([]pendingWrite{{
 		sess: first.results[0].Session,
 		msgs: first.results[0].Messages,
 	}}, syncWriteDefault, false)
@@ -245,7 +245,7 @@ func TestProcessS3ClaudeHydratedSidecarReplacesStoredPreview(t *testing.T) {
 	})
 	require.NoError(t, second.err)
 	require.True(t, second.forceReplace)
-	written, _, failed = e.writeBatch([]pendingWrite{{
+	written, _, failed, _ = e.writeBatch([]pendingWrite{{
 		sess:         second.results[0].Session,
 		msgs:         second.results[0].Messages,
 		forceReplace: second.forceReplace,
@@ -346,7 +346,7 @@ func TestSyncSingleSessionS3ClaudeSidecarOnlyChangeReplacesPreview(
 		SourceMtime: transcriptMtime.UnixNano(),
 	})
 	require.NoError(t, first.err)
-	written, _, failed := e.writeBatch([]pendingWrite{{
+	written, _, failed, _ := e.writeBatch([]pendingWrite{{
 		sess: first.results[0].Session,
 		msgs: first.results[0].Messages,
 	}}, syncWriteDefault, false)
@@ -412,7 +412,7 @@ func TestProcessS3ClaudeMissingSidecarReplacesStoredHydratedOutput(
 		SourceMtime: time.Date(2026, 6, 24, 12, 17, 0, 0, time.UTC).UnixNano(),
 	})
 	require.NoError(t, first.err)
-	written, _, failed := e.writeBatch([]pendingWrite{{
+	written, _, failed, _ := e.writeBatch([]pendingWrite{{
 		sess:         first.results[0].Session,
 		msgs:         first.results[0].Messages,
 		forceReplace: first.forceReplace,
@@ -431,7 +431,7 @@ func TestProcessS3ClaudeMissingSidecarReplacesStoredHydratedOutput(
 	})
 	require.NoError(t, second.err)
 	require.True(t, second.forceReplace)
-	written, _, failed = e.writeBatch([]pendingWrite{{
+	written, _, failed, _ = e.writeBatch([]pendingWrite{{
 		sess:         second.results[0].Session,
 		msgs:         second.results[0].Messages,
 		forceReplace: second.forceReplace,

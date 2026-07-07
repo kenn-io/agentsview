@@ -1061,14 +1061,14 @@ func TestFingerprintTwinMatchesDB(t *testing.T) {
 		},
 	}
 
-	written, _, failed := e.writeBatch(
+	written, _, failed, _ := e.writeBatch(
 		[]pendingWrite{pw}, syncWriteBulk, false,
 	)
 	require.Equal(t, 1, written, "session must be written")
 	require.Zero(t, failed)
 
-	prepared, msgs, ok := e.prepareSessionWrite(pw, nil)
-	require.True(t, ok)
+	prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
+	require.Equal(t, sessionWriteOK, verdict)
 	require.NotEmpty(t, msgs)
 
 	storedFP, err := d.MessageTokenFingerprint(prepared.ID)
@@ -1163,14 +1163,14 @@ func TestCompareStoredSessionRoundTrip(t *testing.T) {
 		},
 	}
 
-	written, _, failed := e.writeBatch(
+	written, _, failed, _ := e.writeBatch(
 		[]pendingWrite{pw}, syncWriteBulk, false,
 	)
 	require.Equal(t, 1, written)
 	require.Zero(t, failed)
 
-	prepared, msgs, ok := e.prepareSessionWrite(pw, nil)
-	require.True(t, ok)
+	prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
+	require.Equal(t, sessionWriteOK, verdict)
 	events, _ := toDBUsageEvents(prepared.ID, pw.usageEvents)
 
 	stored := pdFetchStored(t, d, prepared.ID)
@@ -1215,7 +1215,7 @@ func TestCompareStoredSessionDetectsDrift(t *testing.T) {
 			},
 		},
 	}
-	written, _, failed := e.writeBatch(
+	written, _, failed, _ := e.writeBatch(
 		[]pendingWrite{pw}, syncWriteBulk, false,
 	)
 	require.Equal(t, 1, written)
@@ -1223,8 +1223,8 @@ func TestCompareStoredSessionDetectsDrift(t *testing.T) {
 
 	// Simulate parser drift: the new parse reports a different model.
 	pw.msgs[0].Model = "claude-haiku"
-	prepared, msgs, ok := e.prepareSessionWrite(pw, nil)
-	require.True(t, ok)
+	prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
+	require.Equal(t, sessionWriteOK, verdict)
 
 	stored := pdFetchStored(t, d, prepared.ID)
 	diffs, err := e.compareStoredSession(
@@ -1258,7 +1258,7 @@ func pdWriteSingleMessageSession(
 		},
 		msgs: []parser.ParsedMessage{msg},
 	}
-	written, _, failed := e.writeBatch(
+	written, _, failed, _ := e.writeBatch(
 		[]pendingWrite{pw}, syncWriteBulk, false,
 	)
 	require.Equal(t, 1, written)
@@ -1280,8 +1280,8 @@ func TestCompareStoredSessionDetectsContentDrift(t *testing.T) {
 	// New parse: same model and tokens, longer body.
 	pw.msgs[0].Content = "a much longer reply body"
 	pw.msgs[0].ContentLength = len(pw.msgs[0].Content)
-	prepared, msgs, ok := e.prepareSessionWrite(pw, nil)
-	require.True(t, ok)
+	prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
+	require.Equal(t, sessionWriteOK, verdict)
 
 	stored := pdFetchStored(t, d, prepared.ID)
 	diffs, err := e.compareStoredSession(
@@ -1306,8 +1306,8 @@ func TestCompareStoredSessionDetectsMetadataDrift(t *testing.T) {
 
 	// New parse flips only is_sidechain: same model, tokens, content.
 	pw.msgs[0].IsSidechain = true
-	prepared, msgs, ok := e.prepareSessionWrite(pw, nil)
-	require.True(t, ok)
+	prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
+	require.Equal(t, sessionWriteOK, verdict)
 
 	stored := pdFetchStored(t, d, prepared.ID)
 	diffs, err := e.compareStoredSession(
@@ -1380,7 +1380,7 @@ func pdWriteToolSession(
 	d := openTestDB(t)
 	e := NewEngine(d, EngineConfig{Machine: "test-machine"})
 	pw := pdToolSession(id)
-	written, _, failed := e.writeBatch(
+	written, _, failed, _ := e.writeBatch(
 		[]pendingWrite{pw}, syncWriteBulk, false,
 	)
 	require.Equal(t, 1, written)
@@ -1393,8 +1393,8 @@ func pdWriteToolSession(
 // way TestFingerprintTwinMatchesDB does for the message fingerprints.
 func TestToolCallAndFlagsFingerprintTwinsMatchDB(t *testing.T) {
 	e, d, pw := pdWriteToolSession(t, "pd-tool-twin")
-	prepared, msgs, ok := e.prepareSessionWrite(pw, nil)
-	require.True(t, ok)
+	prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
+	require.Equal(t, sessionWriteOK, verdict)
 
 	storedFlagsFP, err := d.MessageFlagsFingerprint(prepared.ID)
 	require.NoError(t, err)
@@ -1427,8 +1427,8 @@ func TestToolCallDiffDetectsFilePath(t *testing.T) {
 // system message must compare identical against itself.
 func TestCompareStoredSessionRoundTripToolCalls(t *testing.T) {
 	e, d, pw := pdWriteToolSession(t, "pd-tool-rt")
-	prepared, msgs, ok := e.prepareSessionWrite(pw, nil)
-	require.True(t, ok)
+	prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
+	require.Equal(t, sessionWriteOK, verdict)
 
 	stored := pdFetchStored(t, d, prepared.ID)
 	diffs, err := e.compareStoredSession(
@@ -1446,8 +1446,8 @@ func TestCompareStoredSessionRoundTripToolCalls(t *testing.T) {
 func TestCompareStoredSessionDetectsToolCallDrift(t *testing.T) {
 	e, d, pw := pdWriteToolSession(t, "pd-tool-drift")
 	pw.msgs[1].ToolCalls[0].ToolName = "Grep"
-	prepared, msgs, ok := e.prepareSessionWrite(pw, nil)
-	require.True(t, ok)
+	prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
+	require.Equal(t, sessionWriteOK, verdict)
 
 	stored := pdFetchStored(t, d, prepared.ID)
 	diffs, err := e.compareStoredSession(
@@ -1465,8 +1465,8 @@ func TestCompareStoredSessionDetectsToolCallDrift(t *testing.T) {
 func TestCompareStoredSessionDetectsFlagDrift(t *testing.T) {
 	e, d, pw := pdWriteToolSession(t, "pd-flag-drift")
 	pw.msgs[1].HasThinking = false
-	prepared, msgs, ok := e.prepareSessionWrite(pw, nil)
-	require.True(t, ok)
+	prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
+	require.Equal(t, sessionWriteOK, verdict)
 
 	stored := pdFetchStored(t, d, prepared.ID)
 	diffs, err := e.compareStoredSession(

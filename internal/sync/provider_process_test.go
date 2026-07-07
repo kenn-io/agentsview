@@ -141,7 +141,7 @@ func TestProcessFileProviderSkipsStoredFreshSource(t *testing.T) {
 	})
 	require.NoError(t, first.err)
 	require.Len(t, first.results, 1)
-	written, _, failed := engine.writeBatch(
+	written, _, failed, _ := engine.writeBatch(
 		[]pendingWrite{{
 			sess:         first.results[0].Session,
 			msgs:         first.results[0].Messages,
@@ -224,7 +224,7 @@ func TestProcessFileProviderPiebaldSkipsStoredFreshSource(t *testing.T) {
 	})
 	require.NoError(t, first.err)
 	require.Len(t, first.results, 1)
-	written, _, failed := engine.writeBatch(
+	written, _, failed, _ := engine.writeBatch(
 		[]pendingWrite{{
 			sess:         first.results[0].Session,
 			msgs:         first.results[0].Messages,
@@ -585,7 +585,7 @@ func TestProcessFileProviderDevinSkipsStoredFreshSource(t *testing.T) {
 	require.NotZero(t, storedMtime)
 	assert.GreaterOrEqual(t, storedMtime, transcriptProcessProviderMtime(t, transcriptPath))
 
-	written, _, failed := engine.writeBatch(
+	written, _, failed, _ := engine.writeBatch(
 		[]pendingWrite{{
 			sess:         first.results[0].Session,
 			msgs:         first.results[0].Messages,
@@ -640,7 +640,7 @@ func TestProcessFileProviderDevinReparsesTranscriptOnlyChange(t *testing.T) {
 	})
 	require.NoError(t, first.err)
 	require.Len(t, first.results, 1)
-	written, _, failed := engine.writeBatch(
+	written, _, failed, _ := engine.writeBatch(
 		[]pendingWrite{{
 			sess:         first.results[0].Session,
 			msgs:         first.results[0].Messages,
@@ -715,7 +715,7 @@ func TestProcessFileProviderDevinSameSizeSameMtimeTranscriptRewriteReparses(t *t
 			require.NotZero(t, initialMtime)
 			require.NotEmpty(t, initialHash)
 
-			written, _, failed := engine.writeBatch(
+			written, _, failed, _ := engine.writeBatch(
 				[]pendingWrite{{
 					sess:         first.results[0].Session,
 					msgs:         first.results[0].Messages,
@@ -915,7 +915,7 @@ func writeProcessProviderDevinResult(
 ) {
 	t.Helper()
 	require.Len(t, result.results, 1)
-	written, _, failed := engine.writeBatch(
+	written, _, failed, _ := engine.writeBatch(
 		[]pendingWrite{{
 			sess:         result.results[0].Session,
 			msgs:         result.results[0].Messages,
