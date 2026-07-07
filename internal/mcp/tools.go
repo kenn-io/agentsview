@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -636,6 +637,13 @@ type usageSummaryIn struct {
 func (t *toolset) usageSummary(
 	ctx context.Context, _ *mcp.CallToolRequest, in usageSummaryIn,
 ) (*mcp.CallToolResult, *service.UsageSummaryResult, error) {
+	// The usage filter accepts a comma-separated project list, but a branch
+	// token binds to exactly one project; encoding a CSV project into the
+	// token would AND contradictory predicates and silently return zeros.
+	if in.GitBranch != "" && strings.Contains(in.Project, ",") {
+		return nil, nil, errors.New(
+			"git_branch requires a single project, not a comma-separated list")
+	}
 	gitBranch, err := mcpBranchToken(in.Project, in.GitBranch)
 	if err != nil {
 		return nil, nil, err

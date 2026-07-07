@@ -21,8 +21,8 @@
     onToggleGroupByAgent?: () => void;
     onToggleGroupByProject?: () => void;
     onClearGroupMode?: () => void;
-    /** Page-local filters outside this dropdown: a count, or a boolean for one. */
-    extraActive?: boolean | number;
+    /** Whether any page-local filter outside this dropdown is active. */
+    extraActive?: boolean;
     onClearExtra?: () => void;
     extraSections?: Snippet;
   }
@@ -52,44 +52,59 @@
   // Each section floats selected entries to the top so a reopened dropdown
   // shows the active selection without scrolling; the sort is stable, so
   // ties keep each section's own ordering (count for agents, alphabetical
-  // for machines, server recency for branches).
-  const sortedAgents = $derived.by(() => {
-    const agents = [...sessions.agents].sort((a, b) => {
-      const aSel = sessions.isAgentSelected(a.name);
-      const bSel = sessions.isAgentSelected(b.name);
+  // for machines, server recency for branches). Selection membership is
+  // hoisted into Sets, and the search filter lives in a separate derived
+  // from the sort, so a keystroke re-filters the already-ranked list
+  // instead of re-copying and re-sorting it (the branch list is uncapped
+  // and can run to thousands of entries).
+  const selectedAgentSet = $derived(new Set(sessions.selectedAgents));
+  const selectedMachineSet = $derived(new Set(sessions.selectedMachines));
+  const selectedBranchSet = $derived(new Set(sessions.selectedBranches));
+
+  const rankedAgents = $derived.by(() =>
+    [...sessions.agents].sort((a, b) => {
+      const aSel = selectedAgentSet.has(a.name);
+      const bSel = selectedAgentSet.has(b.name);
       if (aSel !== bSel) return aSel ? -1 : 1;
       return b.session_count - a.session_count;
-    });
-    if (!agentSearch) return agents;
+    }),
+  );
+
+  const sortedAgents = $derived.by(() => {
+    if (!agentSearch) return rankedAgents;
     const q = agentSearch.toLowerCase();
-    return agents.filter((a) =>
+    return rankedAgents.filter((a) =>
       agentLabel(a.name).toLowerCase().includes(q),
     );
   });
 
-  const sortedMachines = $derived.by(() => {
-    const machines = [...sessions.machines].sort((a, b) => {
-      const aSel = sessions.isMachineSelected(a);
-      const bSel = sessions.isMachineSelected(b);
+  const rankedMachines = $derived.by(() =>
+    [...sessions.machines].sort((a, b) => {
+      const aSel = selectedMachineSet.has(a);
+      const bSel = selectedMachineSet.has(b);
       if (aSel !== bSel) return aSel ? -1 : 1;
       return a < b ? -1 : a > b ? 1 : 0;
-    });
-    if (!machineSearch) return machines;
+    }),
+  );
+
+  const sortedMachines = $derived.by(() => {
+    if (!machineSearch) return rankedMachines;
     const q = machineSearch.toLowerCase();
-    return machines.filter((m) => m.toLowerCase().includes(q));
+    return rankedMachines.filter((m) => m.toLowerCase().includes(q));
   });
 
-  const selectedBranchSet = $derived(new Set(sessions.selectedBranches));
-
-  const visibleBranches = $derived.by(() => {
-    const branches = [...sessions.branches].sort((a, b) => {
+  const rankedBranches = $derived.by(() =>
+    [...sessions.branches].sort((a, b) => {
       const aSel = selectedBranchSet.has(a.token);
       const bSel = selectedBranchSet.has(b.token);
       return aSel === bSel ? 0 : aSel ? -1 : 1;
-    });
-    if (!branchSearch) return branches;
+    }),
+  );
+
+  const visibleBranches = $derived.by(() => {
+    if (!branchSearch) return rankedBranches;
     const q = branchSearch.toLowerCase();
-    return branches.filter(
+    return rankedBranches.filter(
       (b) =>
         b.branch.toLowerCase().includes(q) ||
         b.project.toLowerCase().includes(q),
@@ -110,11 +125,7 @@
   const totalFilterCount = $derived(
     sessions.activeFilterCount +
       (showStarred && starred.filterOnly ? 1 : 0) +
-      (typeof extraActive === "number"
-        ? extraActive
-        : extraActive
-          ? 1
-          : 0),
+      (extraActive ? 1 : 0),
   );
   let hasFilters = $derived(totalFilterCount > 0);
   let isRecentlyActiveOn = $derived(
@@ -338,8 +349,7 @@
           <span class="agent-select-name">{m.sidebar_filters_all_agents()}</span>
         </button>
         {#each sortedAgents as agent (agent.name)}
-          {@const selected =
-            sessions.isAgentSelected(agent.name)}
+          {@const selected = selectedAgentSet.has(agent.name)}
           <button
             class="agent-select-row"
             class:selected
@@ -387,8 +397,7 @@
         {/if}
         <div class="agent-select-list">
           {#each sortedMachines as machine (machine)}
-            {@const selected =
-              sessions.isMachineSelected(machine)}
+            {@const selected = selectedMachineSet.has(machine)}
             <button
               class="agent-select-row"
               class:selected

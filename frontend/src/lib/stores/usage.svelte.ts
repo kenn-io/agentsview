@@ -13,9 +13,11 @@ import {
   isAbortError,
 } from "../api/runtime.js";
 import { sessions } from "./sessions.svelte.js";
+import { sync } from "./sync.svelte.js";
 import { perf, type PerfEntryStatus } from "./perf.svelte.js";
 import { rollingRange, today } from "../utils/dates.js";
 import { BRANCH_LIST_SEP } from "../branchFilters.js";
+import { toggleListValue } from "../utils/lists.js";
 import type { BranchInfo } from "../api/types/core.js";
 
 type UsageParams = Parameters<typeof UsageService.getApiV1UsageSummary>[0];
@@ -234,6 +236,7 @@ class UsageStore {
   branches: BranchInfo[] = $state([]);
   private branchesLoaded = false;
   private branchesPromise: Promise<void> | null = null;
+  private branchesVersion = 0;
   pairwiseComparison =
     $state<UsagePairwiseComparisonResponse | null>(null);
   pairwiseSelection = $state<UsagePairwiseSelection>(
@@ -459,8 +462,8 @@ class UsageStore {
   // Toggle an item's exclusion. Clicking an included item
   // excludes it; clicking an excluded item re-includes it.
   toggleProject(name: string): void {
-    this.excludedProjects = this.toggleCsv(
-      this.excludedProjects, name,
+    this.excludedProjects = toggleListValue(
+      this.excludedProjects, name, ",",
     );
     this.fetchAll();
   }
@@ -473,15 +476,15 @@ class UsageStore {
   }
 
   toggleAgent(name: string): void {
-    this.excludedAgents = this.toggleCsv(
-      this.excludedAgents, name,
+    this.excludedAgents = toggleListValue(
+      this.excludedAgents, name, ",",
     );
     this.fetchAll();
   }
 
   toggleModel(name: string): void {
-    this.selectedModels = this.toggleCsv(
-      this.selectedModels, name,
+    this.selectedModels = toggleListValue(
+      this.selectedModels, name, ",",
     );
     this.excludedModels = "";
     this.fetchAll();
@@ -490,6 +493,7 @@ class UsageStore {
   async loadBranches(): Promise<void> {
     if (this.branchesLoaded) return;
     if (this.branchesPromise) return this.branchesPromise;
+    const version = this.branchesVersion;
     this.branchesPromise = (async () => {
       try {
         configureGeneratedClient();
@@ -497,6 +501,9 @@ class UsageStore {
           includeOneShot: true,
           includeAutomated: true,
         }) as unknown as { branches: BranchInfo[] };
+        // A sync completing mid-fetch invalidated this response; let the
+        // next loadBranches() refetch instead of caching stale options.
+        if (version !== this.branchesVersion) return;
         this.branches = res.branches;
         this.branchesLoaded = true;
       } catch {
@@ -508,22 +515,23 @@ class UsageStore {
     return this.branchesPromise;
   }
 
+  /**
+   * Drop the cached branch options so the next loadBranches() refetches.
+   * Invoked when a sync/import completes, mirroring the sessions and
+   * activity stores: newly imported sessions can introduce branches the
+   * exclude dropdown must offer.
+   */
+  invalidateBranches(): void {
+    this.branchesVersion++;
+    this.branchesLoaded = false;
+    this.branchesPromise = null;
+  }
+
   toggleBranch(token: string): void {
-    this.excludedGitBranch = this.toggleCsv(
+    this.excludedGitBranch = toggleListValue(
       this.excludedGitBranch, token, BRANCH_LIST_SEP,
     );
     this.fetchAll();
-  }
-
-  private toggleCsv(csv: string, name: string, sep = ","): string {
-    const current = csv ? csv.split(sep) : [];
-    const idx = current.indexOf(name);
-    if (idx >= 0) {
-      current.splice(idx, 1);
-    } else {
-      current.push(name);
-    }
-    return current.join(sep);
   }
 
   // An item is "excluded" if it appears in the excluded CSV.
@@ -658,6 +666,9 @@ class UsageStore {
 
   async fetchAll() {
     const fetchVersion = ++this.fetchAllVersion;
+    // No-op while the branch cache is warm; refetches options after a sync
+    // invalidated them, so a data refresh also refreshes the dropdown.
+    void this.loadBranches();
     this.invalidatePanel("pairwise");
     this.invalidatePanel("topSessions");
     this.rollDates();
@@ -1030,6 +1041,13 @@ class UsageStore {
 }
 
 export const usage = new UsageStore();
+
+// Refresh the branch options after any sync/import, mirroring the sessions
+// and activity stores. The invalidated cache is picked up lazily by the next
+// loadBranches() call (UsagePage mount), so no eager refetch is needed here.
+sync.onSyncComplete(() => {
+  usage.invalidateBranches();
+});
 
 export interface UsageUrlState {
   from: string;

@@ -1,4 +1,5 @@
 import type { AgentInfo, BranchInfo, ProjectInfo } from "../api/types.js";
+import { splitBranchFilterToken } from "../branchFilters.js";
 import type { Report } from "../api/types/activity.js";
 import { ActivityService, MetadataService } from "../api/generated/index";
 import {
@@ -481,6 +482,15 @@ class ActivityStore {
 
   setProject(project: string) {
     this.project = project;
+    // Branch tokens are project-scoped; keeping a branch from another
+    // project would AND contradictory predicates and silently zero the
+    // report, so any change of project clears the branch selection.
+    if (
+      this.branch &&
+      splitBranchFilterToken(this.branch).project !== project
+    ) {
+      this.branch = "";
+    }
     this.writeUrl();
   }
 

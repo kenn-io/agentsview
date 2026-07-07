@@ -541,6 +541,8 @@ func foldBranchTotals(daily []db.DailyUsageEntry) []BranchTotal {
 	for _, v := range m {
 		out = append(out, *v)
 	}
+	// BranchTotal is not db.BranchBreakdown, so this comparator is a copy;
+	// keep its ordering in sync with db.SortBranchBreakdowns.
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Cost != out[j].Cost {
 			return out[i].Cost > out[j].Cost

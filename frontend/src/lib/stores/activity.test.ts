@@ -191,6 +191,19 @@ describe("load", () => {
     expect(arg.gitBranch).toBe("p1\x1fmain");
   });
 
+  it("clears a branch scoped to another project on project change", async () => {
+    activity.setProject("p1");
+    activity.setBranch("p1\x1fmain");
+    activity.setProject("p2");
+    expect(activity.branch).toBe("");
+  });
+
+  it("keeps the branch when the project change matches its scope", async () => {
+    activity.setBranch("p1\x1fmain");
+    activity.setProject("p1");
+    expect(activity.branch).toBe("p1\x1fmain");
+  });
+
   it("defaults the automation class to all", async () => {
     api.getActivityReport.mockResolvedValue(makeReport());
     await activity.load();

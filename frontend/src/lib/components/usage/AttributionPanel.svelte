@@ -17,11 +17,6 @@
     return `$${v.toFixed(2)}`;
   }
 
-  function fmtPct(v: number, total: number): string {
-    if (total <= 0) return "";
-    return `${((v / total) * 100).toFixed(1)}%`;
-  }
-
   const groupBy = $derived(usage.toggles.attribution.groupBy);
   const view = $derived(usage.toggles.attribution.view);
   const noBranchLabel = $derived(m.shared_no_branch());
@@ -91,15 +86,19 @@
     }));
   });
 
+  // One SVG group is drawn per tile, and branch grouping can produce
+  // thousands of (project, branch) rows whose tiles would be sub-pixel;
+  // cap the treemap to the top slice by cost. The side rail and list view
+  // scroll, so every row stays visible and clickable there.
+  const TREEMAP_MAX_TILES = 40;
+
   const treemapItems = $derived(
-    rows.map((r) => ({
+    rows.slice(0, TREEMAP_MAX_TILES).map((r) => ({
       id: r.id,
       label: r.label,
       value: r.cost,
       color: r.color,
-      meta: fmtPct(r.cost, rows.reduce(
-        (s, d) => s + d.cost, 0,
-      )),
+      meta: r.pct > 0 ? `${(r.pct * 100).toFixed(1)}%` : "",
     })),
   );
 

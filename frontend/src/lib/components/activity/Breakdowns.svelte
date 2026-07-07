@@ -37,14 +37,16 @@
   const byProject = $derived(rankedRows(report.by_project));
   const byModel = $derived(rankedRows(report.by_model));
   const byAgent = $derived(rankedRows(report.by_agent));
-  const byBranch = $derived(
-    rankedRows(
-      (report.by_branch ?? []).map((b) => ({
-        ...b,
-        key: branchFilterToken(b.project, b.branch),
-      })),
-    ),
+  // Tokenizing branch rows depends only on the report, not the metric, so
+  // keep it out of the rankedRows derived: flipping minutes/cost re-ranks
+  // without re-allocating every row of an uncapped (project, branch) list.
+  const branchRows = $derived(
+    (report.by_branch ?? []).map((b) => ({
+      ...b,
+      key: branchFilterToken(b.project, b.branch),
+    })),
   );
+  const byBranch = $derived(rankedRows(branchRows));
 
   interface Panel {
     title: string;

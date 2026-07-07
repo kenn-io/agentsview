@@ -13,14 +13,13 @@
   interface Props {
     items: TreemapItem[];
     height?: number;
-    onSelect?: (id: string) => void;
+    onSelect: (id: string) => void;
   }
 
   const { items, height = 260, onSelect }: Props = $props();
 
   let containerEl: HTMLDivElement | undefined = $state();
   let width = $state(600);
-  const interactive = $derived(typeof onSelect === "function");
 
   $effect(() => {
     if (!containerEl) return;
@@ -80,7 +79,7 @@
   function handleKey(e: KeyboardEvent, id: string) {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      onSelect?.(id);
+      onSelect(id);
     }
   }
 </script>
@@ -109,15 +108,14 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <g
       class="tile"
-      class:interactive
-      tabindex={interactive ? 0 : undefined}
-      role={interactive ? "button" : undefined}
-      aria-label={interactive ? m.usage_hide_from_chart({ label: tile.label }) : undefined}
-      onclick={interactive ? () => onSelect?.(tile.id) : undefined}
-      onkeydown={interactive ? (e) => handleKey(e, tile.id) : undefined}
+      tabindex={0}
+      role="button"
+      aria-label={m.usage_hide_from_chart({ label: tile.label })}
+      onclick={() => onSelect(tile.id)}
+      onkeydown={(e) => handleKey(e, tile.id)}
       clip-path="url(#{clipId})"
     >
-      <title>{interactive ? m.usage_click_to_hide({ label: tile.label }) : tile.label}</title>
+      <title>{m.usage_click_to_hide({ label: tile.label })}</title>
       <rect
         x={tile.x}
         y={tile.y}
@@ -174,11 +172,11 @@
     display: block;
   }
 
-  .tile.interactive {
+  .tile {
     cursor: pointer;
   }
 
-  .tile.interactive:hover rect {
+  .tile:hover rect {
     opacity: 0.92;
   }
 

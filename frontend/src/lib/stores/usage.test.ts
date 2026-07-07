@@ -474,6 +474,38 @@ describe("UsageStore branch metadata", () => {
       { project: "alpha", branch: "main", session_count: 3 },
     ]);
   });
+
+  it("refetches branches after a sync invalidates the cache", async () => {
+    const { usage } = await loadStore();
+    await usage.loadBranches();
+    expect(metadataServiceMocks.getApiV1Branches)
+      .toHaveBeenCalledTimes(1);
+
+    usage.invalidateBranches();
+    await usage.loadBranches();
+
+    expect(metadataServiceMocks.getApiV1Branches)
+      .toHaveBeenCalledTimes(2);
+  });
+
+  it("drops a branch response superseded by an invalidation", async () => {
+    const { usage } = await loadStore();
+    let resolveFetch!: (v: unknown) => void;
+    metadataServiceMocks.getApiV1Branches.mockImplementationOnce(
+      () => new Promise((r) => { resolveFetch = r; }),
+    );
+    const p = usage.loadBranches();
+    usage.invalidateBranches();
+    resolveFetch({
+      branches: [{ project: "alpha", branch: "stale", session_count: 1 }],
+    });
+    await p;
+
+    expect(usage.branches).toEqual([]);
+    await usage.loadBranches();
+    expect(metadataServiceMocks.getApiV1Branches)
+      .toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("UsageStore group-by linking", () => {

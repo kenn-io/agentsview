@@ -114,16 +114,21 @@
       displayLabel: machine,
     })),
   ]);
+  // Branch tokens are project-scoped, so an active project filter narrows
+  // the offered branches to that project; a cross-project pick would AND
+  // contradictory predicates and silently zero the report.
   const branchOptions = $derived.by((): TypeaheadOption[] => [
     {
       name: "",
       label: m.activity_all_branches(),
       displayLabel: m.activity_all_branches(),
     },
-    ...activity.branches.map((b) => {
-      const label = branchLabel(b.project, b.branch, m.shared_no_branch());
-      return { name: b.token, label, displayLabel: label };
-    }),
+    ...activity.branches
+      .filter((b) => !activity.project || b.project === activity.project)
+      .map((b) => {
+        const label = branchLabel(b.project, b.branch, m.shared_no_branch());
+        return { name: b.token, label, displayLabel: label };
+      }),
   ]);
   const automationOptions: TypeaheadOption[] = $derived([
     {

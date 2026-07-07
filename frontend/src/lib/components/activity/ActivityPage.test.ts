@@ -54,11 +54,17 @@ describe("ActivityPage refresh control layout", () => {
 
 describe("ActivityPage branch filter", () => {
   it("wires the branch typeahead through the activity store", () => {
-    expect(source).toContain("activity.branches.map");
+    expect(source).toContain("activity.branches");
     expect(source).toContain("options={branchOptions}");
     expect(source).toContain("value={activity.branch}");
     expect(source).toContain("onselect={onBranchChange}");
     expect(source).toContain("activity.setBranch(value)");
+  });
+
+  it("scopes offered branches to the active project filter", () => {
+    expect(source).toContain(
+      "!activity.project || b.project === activity.project",
+    );
   });
 });
 

@@ -17,6 +17,7 @@ import type {
   SidebarSessionIndexRow,
 } from "../api/types.js";
 import { BRANCH_LIST_SEP } from "../branchFilters.js";
+import { toggleListValue } from "../utils/lists.js";
 import { sync } from "./sync.svelte.js";
 import { events } from "./events.svelte.js";
 import { starred } from "./starred.svelte.js";
@@ -229,17 +230,6 @@ export function filtersToParams(
 
 function hasDateFilters(f: Filters): boolean {
   return !!(f.date || f.dateFrom || f.dateTo);
-}
-
-function toggleListValue(list: string, value: string, sep: string): string {
-  const current = list ? list.split(sep) : [];
-  const idx = current.indexOf(value);
-  if (idx >= 0) {
-    current.splice(idx, 1);
-  } else {
-    current.push(value);
-  }
-  return current.join(sep);
 }
 
 export function splitExcludeProjectParam(
