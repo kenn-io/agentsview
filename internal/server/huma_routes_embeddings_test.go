@@ -151,6 +151,18 @@ func TestEmbeddingsBuildReturnsConflictWhenAlreadyRunning(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "already running")
 }
 
+func TestEmbeddingsBuildUnknownServerReturnsBadRequest(t *testing.T) {
+	fake := &fakeEmbeddingsManager{startBuildErr: fmt.Errorf(
+		"resolve encoder: %w", vector.ErrUnknownServer)}
+	s := newEmbeddingsTestServer(t, fake)
+
+	w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/build",
+		vector.BuildRequest{Using: "nope"})
+	assertRecorderStatus(t, w, http.StatusBadRequest)
+	assert.Contains(t, w.Body.String(), "unknown embeddings server",
+		"the response must carry the manager's actionable message, not a generic 500")
+}
+
 func TestEmbeddingsStatusReturnsCurrentStatus(t *testing.T) {
 	fake := &fakeEmbeddingsManager{status: vector.BuildStatus{
 		Running: true, Phase: "embedding", Done: 3, Total: 10,

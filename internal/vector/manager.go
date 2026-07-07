@@ -36,6 +36,22 @@ func (e *refusalError) Error() string { return e.msg }
 
 func (e *refusalError) Is(target error) bool { return target == ErrGenerationRefused }
 
+// ErrUnknownServer indicates a build request named an embeddings server that
+// is not defined in the manager's encoder set — caller input, not a manager
+// fault. Match it with errors.Is; the error's own message carries the
+// offending name.
+var ErrUnknownServer = errors.New("unknown embeddings server")
+
+type unknownServerError struct {
+	name string
+}
+
+func (e *unknownServerError) Error() string {
+	return fmt.Sprintf("no embeddings server named %q", e.name)
+}
+
+func (e *unknownServerError) Is(target error) bool { return target == ErrUnknownServer }
+
 // Manager serializes embedding builds over one Index: only one Build call
 // may run at a time, whether triggered via StartBuild (async, for the HTTP
 // API) or TryBuild (sync, for a periodic scheduler). Activate and Retire
@@ -140,7 +156,7 @@ func (m *Manager) resolveEncoder(req BuildRequest) (ManagedEncoder, error) {
 	}
 	me, ok := m.encoders.ByName[name]
 	if !ok {
-		return ManagedEncoder{}, fmt.Errorf("no embeddings server named %q", name)
+		return ManagedEncoder{}, &unknownServerError{name: name}
 	}
 	return me, nil
 }

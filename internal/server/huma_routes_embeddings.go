@@ -77,6 +77,9 @@ func (s *Server) humaEmbeddingsBuild(
 		if errors.Is(err, vector.ErrBuildRunning) {
 			return nil, apiError(http.StatusConflict, err.Error())
 		}
+		if errors.Is(err, vector.ErrUnknownServer) {
+			return nil, apiError(http.StatusBadRequest, err.Error())
+		}
 		return nil, internalError("start embeddings build", err)
 	}
 	return &embeddingsBuildOutput{

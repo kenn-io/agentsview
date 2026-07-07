@@ -110,10 +110,13 @@ func TestManagerBuildUnknownUsingFailsBeforeStarting(t *testing.T) {
 
 	err := m.StartBuild(BuildRequest{Using: "nope"})
 	require.ErrorContains(t, err, `no embeddings server named "nope"`)
+	assert.ErrorIs(t, err, ErrUnknownServer,
+		"callers map unknown-server errors to a client error via the sentinel")
 	assert.False(t, m.Status().Running, "a failed resolve must not leave the manager running")
 
 	started, err := m.TryBuild(context.Background(), BuildRequest{Using: "nope"})
 	require.ErrorContains(t, err, `no embeddings server named "nope"`)
+	assert.ErrorIs(t, err, ErrUnknownServer)
 	assert.False(t, started)
 }
 
