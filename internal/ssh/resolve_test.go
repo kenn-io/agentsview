@@ -277,13 +277,31 @@ func TestResolveScriptWindsurfTargetsOnlySessionFiles(t *testing.T) {
 	out := runResolveScriptForTest(t, "HOME="+home)
 
 	records := resolveOutputRecords(string(out))
-	assert.Contains(t, records, string(parser.AgentWindsurf)+":"+filepath.ToSlash(userRoot))
-	assert.Contains(t, records, resolveAgentFilePrefix+":"+string(parser.AgentWindsurf)+":"+filepath.ToSlash(stateDB))
-	assert.Contains(t, records, resolveAgentFilePrefix+":"+string(parser.AgentWindsurf)+":"+filepath.ToSlash(stateWAL))
-	assert.Contains(t, records, resolveAgentFilePrefix+":"+string(parser.AgentWindsurf)+":"+filepath.ToSlash(stateSHM))
-	assert.Contains(t, records, resolveAgentFilePrefix+":"+string(parser.AgentWindsurf)+":"+filepath.ToSlash(workspaceJSON))
-	assert.NotContains(t, records, string(parser.AgentWindsurf)+":"+filepath.ToSlash(workspaceRoot))
-	assert.NotContains(t, records, resolveAgentFilePrefix+":"+string(parser.AgentWindsurf)+":"+filepath.ToSlash(secretPath))
+	userRootSuffix := filepath.ToSlash(filepath.Join("AppData", "Roaming", "Windsurf", "User"))
+	workspaceRootSuffix := filepath.ToSlash(filepath.Join(userRootSuffix, "workspaceStorage"))
+	workspaceSuffix := filepath.ToSlash(filepath.Join(workspaceRootSuffix, "workspace-a"))
+	agentFilePrefix := resolveAgentFilePrefix + ":" + string(parser.AgentWindsurf)
+	assert.True(t, hasRecordWithPathSuffix(records, string(parser.AgentWindsurf), userRootSuffix))
+	assert.True(t, hasRecordWithPathSuffix(records, agentFilePrefix,
+		filepath.ToSlash(filepath.Join(workspaceSuffix, parser.WindsurfStateDBName))))
+	assert.True(t, hasRecordWithPathSuffix(records, agentFilePrefix,
+		filepath.ToSlash(filepath.Join(workspaceSuffix, parser.WindsurfStateDBName+"-wal"))))
+	assert.True(t, hasRecordWithPathSuffix(records, agentFilePrefix,
+		filepath.ToSlash(filepath.Join(workspaceSuffix, parser.WindsurfStateDBName+"-shm"))))
+	assert.True(t, hasRecordWithPathSuffix(records, agentFilePrefix,
+		filepath.ToSlash(filepath.Join(workspaceSuffix, "workspace.json"))))
+	assert.False(t, hasRecordWithPathSuffix(records, string(parser.AgentWindsurf), workspaceRootSuffix))
+	assert.False(t, hasRecordWithPathSuffix(records, agentFilePrefix,
+		filepath.ToSlash(filepath.Join(workspaceSuffix, filepath.Base(secretPath)))))
+}
+
+func hasRecordWithPathSuffix(records []string, prefix, suffix string) bool {
+	for _, record := range records {
+		if strings.HasPrefix(record, prefix+":") && strings.HasSuffix(record, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func runResolveScriptForTest(t *testing.T, env ...string) []byte {
