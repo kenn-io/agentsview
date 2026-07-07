@@ -43,6 +43,9 @@ type BuildOptions struct {
 	IncludeAutomated bool
 	// BatchSize is the encode batch size (config batch_size).
 	BatchSize int
+	// Concurrency is the number of documents encoded in parallel (config
+	// concurrency). Values <= 0 encode sequentially.
+	Concurrency int
 	// Progress, if non-nil, is called at most ~every 2s with incremental
 	// embedding progress, plus once more after the run completes.
 	Progress func(BuildProgress)
@@ -126,6 +129,7 @@ func (ix *Index) Build(
 	fillStats, fillErr := kitvec.Fill[string, string](ctx, ix.store, target, wrapped, kitvec.FillOptions[string]{
 		Split:         ix.split,
 		Batch:         kitvec.BatchOptions{BatchSize: o.BatchSize, Concurrency: 1},
+		Concurrency:   o.Concurrency,
 		OnEncodeError: skipPermanentEncodeError,
 	})
 	finish()

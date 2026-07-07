@@ -217,6 +217,15 @@ func vectorGeneration(c config.VectorEmbeddingsConfig) kitvec.Generation {
 	}
 }
 
+// encodeSettings maps the [vector.embeddings] batch_size and concurrency
+// keys onto the manager's encode-shape settings.
+func encodeSettings(c config.VectorEmbeddingsConfig) vector.EncodeSettings {
+	return vector.EncodeSettings{
+		BatchSize:   c.BatchSize,
+		Concurrency: c.Concurrency,
+	}
+}
+
 // newVectorEncoder builds the OpenAI-compatible embeddings encoder from
 // config, parsing the configured timeout duration.
 func newVectorEncoder(c config.VectorEmbeddingsConfig) (kitvec.EncodeFunc, error) {
@@ -346,7 +355,7 @@ func runEmbeddingsBuildDirect(
 	}
 
 	m := vector.NewManager(
-		ix, archiveDB, enc, vectorGeneration(cfg.Vector.Embeddings), cfg.Vector.Embeddings.BatchSize,
+		ix, archiveDB, enc, vectorGeneration(cfg.Vector.Embeddings), encodeSettings(cfg.Vector.Embeddings),
 	)
 	return runDirectBuild(ctx, out, m, req)
 }
@@ -616,7 +625,7 @@ func directGenerationAction(
 	defer ix.Close()
 
 	m := vector.NewManager(
-		ix, nil, nil, vectorGeneration(cfg.Vector.Embeddings), cfg.Vector.Embeddings.BatchSize,
+		ix, nil, nil, vectorGeneration(cfg.Vector.Embeddings), encodeSettings(cfg.Vector.Embeddings),
 	)
 	if retire {
 		return m.Retire(ctx, id, force)

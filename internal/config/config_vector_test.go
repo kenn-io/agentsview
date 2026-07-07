@@ -21,6 +21,7 @@ func validVectorConfig() VectorConfig {
 			Dimension:     768,
 			Timeout:       "30s",
 			BatchSize:     32,
+			Concurrency:   4,
 			MaxRetries:    3,
 			MaxInputChars: 8192,
 		},
@@ -69,6 +70,16 @@ func TestVectorConfigValidate(t *testing.T) {
 			name:    "enabled negative batch_size",
 			mutate:  func(c *VectorConfig) { c.Embeddings.BatchSize = -1 },
 			wantErr: "batch_size",
+		},
+		{
+			name:    "enabled zero concurrency",
+			mutate:  func(c *VectorConfig) { c.Embeddings.Concurrency = 0 },
+			wantErr: "concurrency",
+		},
+		{
+			name:    "enabled negative concurrency",
+			mutate:  func(c *VectorConfig) { c.Embeddings.Concurrency = -1 },
+			wantErr: "concurrency",
 		},
 		{
 			name:    "enabled zero max_input_chars",
@@ -145,6 +156,7 @@ func TestVectorConfigDefaults(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, 32, cfg.Vector.Embeddings.BatchSize)
+	assert.Equal(t, 4, cfg.Vector.Embeddings.Concurrency)
 	assert.Equal(t, "30s", cfg.Vector.Embeddings.Timeout)
 	assert.Equal(t, 3, cfg.Vector.Embeddings.MaxRetries)
 	assert.Equal(t, 8192, cfg.Vector.Embeddings.MaxInputChars)
@@ -195,12 +207,28 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 		require.True(t, cfg.Vector.Enabled)
 		assert.Equal(t, "http://localhost:11434/v1", cfg.Vector.Embeddings.Endpoint)
 		assert.Equal(t, 32, cfg.Vector.Embeddings.BatchSize, "unset batch_size keeps default")
+		assert.Equal(t, 4, cfg.Vector.Embeddings.Concurrency, "unset concurrency keeps default")
 		assert.Equal(t, "30s", cfg.Vector.Embeddings.Timeout, "unset timeout keeps default")
 		assert.Equal(t, 0, cfg.Vector.Embeddings.MaxRetries, "explicit max_retries=0 overrides default")
 		assert.Equal(t, 8192, cfg.Vector.Embeddings.MaxInputChars, "unset max_input_chars keeps default")
 		assert.Equal(t, "24h", cfg.Vector.Embed.BackstopInterval, "unset backstop_interval keeps default")
 		assert.False(t, cfg.Vector.IncludeAutomated, "unset include_automated keeps the false default")
 		assert.Empty(t, cfg.Vector.Embeddings.InputSuffix, "unset input_suffix defaults to empty")
+	})
+
+	t.Run("explicit concurrency overrides the default", func(t *testing.T) {
+		cfg := loadMinimalWithConfig(t, map[string]any{
+			"vector": map[string]any{
+				"enabled": true,
+				"embeddings": map[string]any{
+					"endpoint":    "http://localhost:11434/v1",
+					"model":       "nomic-embed-text",
+					"dimension":   768,
+					"concurrency": 8,
+				},
+			},
+		})
+		assert.Equal(t, 8, cfg.Vector.Embeddings.Concurrency)
 	})
 
 	t.Run("input_suffix is loaded", func(t *testing.T) {

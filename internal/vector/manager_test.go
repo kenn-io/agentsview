@@ -61,7 +61,7 @@ func TestManagerStartBuildSetsRunningAndConcurrentStartReturnsErrBuildRunning(t 
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
 	release := make(chan struct{})
-	m := NewManager(ix, src, blockingEncoder(release), gen, 10)
+	m := NewManager(ix, src, blockingEncoder(release), gen, EncodeSettings{BatchSize: 10})
 
 	require.NoError(t, m.StartBuild(BuildRequest{}))
 	waitFor(t, func() bool { return m.Status().Running }, "build never reported running")
@@ -79,7 +79,7 @@ func TestManagerTryBuildReturnsFalseWhileRunning(t *testing.T) {
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
 	release := make(chan struct{})
-	m := NewManager(ix, src, blockingEncoder(release), gen, 10)
+	m := NewManager(ix, src, blockingEncoder(release), gen, EncodeSettings{BatchSize: 10})
 
 	require.NoError(t, m.StartBuild(BuildRequest{}))
 	waitFor(t, func() bool { return m.Status().Running }, "build never reported running")
@@ -96,7 +96,7 @@ func TestManagerStatusTransitionsToLastResultOnCompletion(t *testing.T) {
 	ix := openTestIndex(t)
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
-	m := NewManager(ix, src, fakeBuildEncoder(), gen, 10)
+	m := NewManager(ix, src, fakeBuildEncoder(), gen, EncodeSettings{BatchSize: 10})
 
 	require.NoError(t, m.StartBuild(BuildRequest{}))
 	waitFor(t, func() bool { return !m.Status().Running }, "build never finished")
@@ -115,7 +115,7 @@ func TestManagerStatusSetsLastErrorOnEncoderFailure(t *testing.T) {
 	failingEncoder := func(_ context.Context, _ []string) ([][]float32, error) {
 		return nil, fmt.Errorf("encoder rejected input")
 	}
-	m := NewManager(ix, src, failingEncoder, gen, 10)
+	m := NewManager(ix, src, failingEncoder, gen, EncodeSettings{BatchSize: 10})
 
 	require.NoError(t, m.StartBuild(BuildRequest{}))
 	waitFor(t, func() bool { return !m.Status().Running }, "build never finished")
@@ -130,7 +130,7 @@ func TestManagerGenerationsDelegatesToIndex(t *testing.T) {
 	ctx := context.Background()
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
-	m := NewManager(ix, src, fakeBuildEncoder(), gen, 10)
+	m := NewManager(ix, src, fakeBuildEncoder(), gen, EncodeSettings{BatchSize: 10})
 
 	_, err := m.TryBuild(ctx, BuildRequest{})
 	require.NoError(t, err)
@@ -147,7 +147,7 @@ func TestManagerActivateForceRefusalMatrix(t *testing.T) {
 	ctx := context.Background()
 	src := twoDocSource()
 	genA := fakeGeneration("model-a")
-	m := NewManager(ix, src, fakeBuildEncoder(), genA, 10)
+	m := NewManager(ix, src, fakeBuildEncoder(), genA, EncodeSettings{BatchSize: 10})
 
 	_, err := m.TryBuild(ctx, BuildRequest{})
 	require.NoError(t, err, "genA becomes active")
@@ -186,7 +186,7 @@ func TestManagerRetireRefusesActiveGenerationWithoutForce(t *testing.T) {
 	ctx := context.Background()
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
-	m := NewManager(ix, src, fakeBuildEncoder(), gen, 10)
+	m := NewManager(ix, src, fakeBuildEncoder(), gen, EncodeSettings{BatchSize: 10})
 
 	_, err := m.TryBuild(ctx, BuildRequest{})
 	require.NoError(t, err)
@@ -230,7 +230,7 @@ func TestManagerConcurrentActivateNeverLeavesTwoActive(t *testing.T) {
 	src := twoDocSource()
 	genA := fakeGeneration("model-a")
 	genB := fakeGeneration("model-b")
-	m := NewManager(ix, src, fakeBuildEncoder(), genA, 10)
+	m := NewManager(ix, src, fakeBuildEncoder(), genA, EncodeSettings{BatchSize: 10})
 
 	_, err := ix.Build(ctx, src, fakeBuildEncoder(), genA, BuildOptions{})
 	require.NoError(t, err)
@@ -271,7 +271,7 @@ func TestManagerStartBuildRecoversPanickedEncoder(t *testing.T) {
 	panickingEncoder := func(_ context.Context, _ []string) ([][]float32, error) {
 		panic("encoder exploded")
 	}
-	m := NewManager(ix, src, panickingEncoder, gen, 10)
+	m := NewManager(ix, src, panickingEncoder, gen, EncodeSettings{BatchSize: 10})
 
 	require.NoError(t, m.StartBuild(BuildRequest{}))
 	waitFor(t, func() bool { return !m.Status().Running }, "build never finished after panic")
@@ -296,7 +296,7 @@ func TestManagerActivateAndRetireUnknownIDPropagateNotFound(t *testing.T) {
 	ctx := context.Background()
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
-	m := NewManager(ix, src, fakeBuildEncoder(), gen, 10)
+	m := NewManager(ix, src, fakeBuildEncoder(), gen, EncodeSettings{BatchSize: 10})
 
 	err := m.Activate(ctx, 999, false)
 	assert.ErrorIs(t, err, ErrGenerationNotFound)
@@ -311,7 +311,7 @@ func TestManagerActivateAndRetireRefuseWhileBuildRunning(t *testing.T) {
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
 	release := make(chan struct{})
-	m := NewManager(ix, src, blockingEncoder(release), gen, 10)
+	m := NewManager(ix, src, blockingEncoder(release), gen, EncodeSettings{BatchSize: 10})
 
 	require.NoError(t, m.StartBuild(BuildRequest{}))
 	waitFor(t, func() bool { return m.Status().Running }, "build never reported running")

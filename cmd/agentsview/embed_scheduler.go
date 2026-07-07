@@ -407,7 +407,7 @@ func setupVectorServing(
 	}
 
 	gen := vectorGeneration(cfg.Vector.Embeddings)
-	mgr := vector.NewManager(ix, database, enc, gen, cfg.Vector.Embeddings.BatchSize)
+	mgr := vector.NewManager(ix, database, enc, gen, encodeSettings(cfg.Vector.Embeddings))
 	database.SetVectorSearcher(newSearcherAdapter(ix, enc, gen))
 	scheduler := newEmbedScheduler(mgr, embedDebounceInterval, backstop, cfg.Vector.IncludeAutomated)
 

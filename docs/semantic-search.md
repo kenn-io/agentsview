@@ -37,6 +37,7 @@ model = "nomic-embed-text"
 dimension = 768                   # every returned vector must have this length
 api_key_env = "OPENAI_API_KEY"    # name of an env var holding the key; omit for anonymous access
 batch_size = 32                   # inputs per HTTP call (default 32)
+concurrency = 4                   # documents embedded in parallel during a build (default 4)
 timeout = "30s"                   # per-HTTP-call timeout (default "30s")
 max_retries = 3                   # attempts on 429/5xx/network errors; 4xx fails fast (default 3)
 max_input_chars = 8192            # per-chunk rune cap (default 8192)
@@ -51,6 +52,15 @@ backstop_interval = "24h"         # periodic full reconciliation scan; negative 
 `agentsview` fails fast with an actionable message if any is missing or a
 duration field doesn't parse. Restart the daemon (or run a CLI command) after
 editing the file.
+
+`concurrency` bounds how many documents a build embeds in parallel. Builds are
+usually round-trip-bound rather than compute-bound — especially against a remote
+endpoint — so a few requests in flight at once multiply throughput. Servers that
+process one request at a time simply queue the extras; raise the value if your
+endpoint has spare parallel capacity, or set it to 1 to send one request at a
+time. Responses are requested in the compact base64 encoding automatically (with
+a transparent fallback for servers that reject or ignore `encoding_format`),
+which cuts response transfer roughly 4x on slow links.
 
 `input_suffix` is appended verbatim to every text sent to the endpoint —
 documents at build time and queries at search time — for models that expect a

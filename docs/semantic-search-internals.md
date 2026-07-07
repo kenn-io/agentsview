@@ -234,8 +234,14 @@ re-embedding.
 ### Fill and skip-and-stamp
 
 Fill embeds every pending document (content changed, or never embedded, for the
-active generation). A document whose encode call fails with a permanent error —
-a 400, 413, or 422 whose error body describes the input itself, e.g. a
+active generation). Within each scan page, up to `concurrency` (config, default
+4\) documents are split and encoded in parallel; saves into `vectors.db` stay
+serialized on one goroutine, preserving the single-writer model. Requests ask
+for `encoding_format: "base64"` (raw little-endian float32 bytes, ~4x smaller
+than JSON float arrays); the encoder accepts either response shape, and a server
+that rejects the field downgrades the encoder to plain float requests for its
+lifetime. A document whose encode call fails with a permanent error — a 400,
+413, or 422 whose error body describes the input itself, e.g. a
 token/context-length overflow or a content-policy rejection — is not retried in
 that fill or the next one: it's stamped for the generation with no vectors at
 its current `content_hash`, which marks it non-pending. It's logged (doc key

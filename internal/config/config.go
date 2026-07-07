@@ -130,6 +130,11 @@ type VectorEmbeddingsConfig struct {
 	APIKeyEnv string `toml:"api_key_env" json:"api_key_env,omitempty"`
 	// BatchSize is the number of inputs sent per HTTP call. Default 32.
 	BatchSize int `toml:"batch_size" json:"batch_size"`
+	// Concurrency is the number of documents embedded in parallel during a
+	// build. Sequential requests leave a build round-trip-bound against
+	// remote endpoints, so the default is 4; servers that process one
+	// request at a time simply queue the extras. Default 4.
+	Concurrency int `toml:"concurrency" json:"concurrency"`
 	// Timeout is a parseable duration string applied to each HTTP
 	// call. Default "30s".
 	Timeout string `toml:"timeout" json:"timeout"`
@@ -176,6 +181,11 @@ func (c VectorConfig) Validate() error {
 		return fmt.Errorf(
 			"[vector.embeddings] batch_size must be greater than 0, got %d",
 			c.Embeddings.BatchSize)
+	}
+	if c.Embeddings.Concurrency <= 0 {
+		return fmt.Errorf(
+			"[vector.embeddings] concurrency must be greater than 0, got %d",
+			c.Embeddings.Concurrency)
 	}
 	if c.Embeddings.MaxInputChars <= 0 {
 		return fmt.Errorf(
@@ -542,6 +552,7 @@ func Default() (Config, error) {
 		Vector: VectorConfig{
 			Embeddings: VectorEmbeddingsConfig{
 				BatchSize:     32,
+				Concurrency:   4,
 				Timeout:       "30s",
 				MaxRetries:    3,
 				MaxInputChars: 8192,
@@ -966,6 +977,9 @@ func (c *Config) applyConfigTOML(data string) error {
 	// explicit zero value, e.g. max_retries = 0 to disable retries.
 	if meta.IsDefined("vector", "embeddings", "batch_size") {
 		c.Vector.Embeddings.BatchSize = file.Vector.Embeddings.BatchSize
+	}
+	if meta.IsDefined("vector", "embeddings", "concurrency") {
+		c.Vector.Embeddings.Concurrency = file.Vector.Embeddings.Concurrency
 	}
 	if file.Vector.Embeddings.Timeout != "" {
 		c.Vector.Embeddings.Timeout = file.Vector.Embeddings.Timeout

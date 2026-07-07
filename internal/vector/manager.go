@@ -43,11 +43,11 @@ func (e *refusalError) Is(target error) bool { return target == ErrGenerationRef
 // their check-then-act refusal invariants (Missing coverage, the
 // active-generation check) hold under concurrent calls.
 type Manager struct {
-	ix        *Index
-	src       UnitSource
-	enc       kitvec.EncodeFunc
-	gen       kitvec.Generation
-	batchSize int
+	ix     *Index
+	src    UnitSource
+	enc    kitvec.EncodeFunc
+	gen    kitvec.Generation
+	encode EncodeSettings
 
 	// opMu serializes lifecycle operations: build starts (begin) and the
 	// whole of Activate/Retire. It is never held across a running build —
@@ -84,17 +84,27 @@ type BuildStatus struct {
 	LastResult *BuildResult `json:"last_result,omitempty"`
 }
 
+// EncodeSettings groups the encode-shape knobs a Manager applies to every
+// build it runs, resolved from config ([vector.embeddings] batch_size and
+// concurrency).
+type EncodeSettings struct {
+	// BatchSize is the number of inputs sent per HTTP call.
+	BatchSize int
+	// Concurrency is the number of documents encoded in parallel.
+	Concurrency int
+}
+
 // NewManager creates a Manager that builds gen's embedding space over ix,
-// scanning src and encoding with enc in batches of batchSize. enc is
-// wrapped so a panic inside it surfaces as an encode error rather than
-// crashing the process (see recoveringEncoder).
+// scanning src and encoding with enc under encode's batch size and
+// concurrency. enc is wrapped so a panic inside it surfaces as an encode
+// error rather than crashing the process (see recoveringEncoder).
 func NewManager(
 	ix *Index, src UnitSource, enc kitvec.EncodeFunc,
-	gen kitvec.Generation, batchSize int,
+	gen kitvec.Generation, encode EncodeSettings,
 ) *Manager {
 	return &Manager{
 		ix: ix, src: src, enc: recoveringEncoder(enc),
-		gen: gen, batchSize: batchSize,
+		gen: gen, encode: encode,
 	}
 }
 
@@ -243,7 +253,8 @@ func (m *Manager) runBuild(ctx context.Context, req BuildRequest) (result BuildR
 		FullRebuild:      req.FullRebuild,
 		Backstop:         req.Backstop,
 		IncludeAutomated: req.IncludeAutomated,
-		BatchSize:        m.batchSize,
+		BatchSize:        m.encode.BatchSize,
+		Concurrency:      m.encode.Concurrency,
 		Progress:         m.reportProgress,
 	})
 }
