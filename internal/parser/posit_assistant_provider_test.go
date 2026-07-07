@@ -145,9 +145,9 @@ func TestPositAssistantProviderClassifiesChangedPaths(t *testing.T) {
 			wantPaths: []string{mainConvPath},
 		},
 		{
-			name:      "ui-messages write maps to its conversation",
+			name:      "ui-messages write does not affect stored session data",
 			path:      filepath.Join(mainConvDir, "ui-messages.jsonl"),
-			wantPaths: []string{mainConvPath},
+			wantPaths: nil,
 		},
 		{
 			name: "workspace manifest re-emits all workspace conversations",
@@ -447,6 +447,54 @@ func TestPositAssistantProviderParseEdgeCases(t *testing.T) {
 			assert.Equal(t, tt.wantMalformed, result.Session.MalformedLines)
 		})
 	}
+}
+
+func TestPositAssistantProviderParseSparseTokenUsage(t *testing.T) {
+	root := t.TempDir()
+	convDir := filepath.Join(root, "ws1", "88888888-8888-4888-8888-888888888888")
+	writeSourceFile(t, filepath.Join(convDir, "conversation.json"), `{
+		"schemaVersion": "3",
+		"root": {"id": "88888888-8888-4888-8888-888888888888",
+			"timestamp": 1735689600000, "metadata": {"kind": "main"}},
+		"messages": [
+			{"id": "n1", "parentId": "88888888-8888-4888-8888-888888888888",
+				"isActive": true, "lmMessageIds": [0, 1, 2],
+				"timestamp": 1735689600000}
+		],
+		"files": []
+	}`)
+	writeSourceFile(t, filepath.Join(convDir, "lm-messages.jsonl"),
+		`{"id":0,"message":{"role":"user","content":"hi"}}`+"\n"+
+			`{"id":1,"message":{"role":"assistant","content":[{"type":"text","text":"partial"}],"providerOptions":{"providerMetadata":{"positai":{"timestamp":1735689601000,"modelId":"claude-haiku-4-5","usage":{"outputTokens":17}}}}}}`+"\n"+
+			`{"id":2,"message":{"role":"assistant","content":[{"type":"text","text":"empty"}],"providerOptions":{"providerMetadata":{"positai":{"timestamp":1735689602000,"modelId":"claude-haiku-4-5","usage":{}}}}}}`+"\n")
+
+	provider, ok := NewProvider(AgentPositAssistant, ProviderConfig{
+		Roots: []string{root},
+	})
+	require.True(t, ok)
+	discovered, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: discovered[0],
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	msgs := outcome.Results[0].Result.Messages
+	require.Len(t, msgs, 3)
+
+	partial := msgs[1]
+	assert.Equal(t, 17, partial.OutputTokens)
+	assert.True(t, partial.HasOutputTokens)
+	assert.False(t, partial.HasContextTokens)
+	assert.JSONEq(t, `{"output_tokens":17}`, string(partial.TokenUsage))
+
+	empty := msgs[2]
+	assert.Empty(t, empty.TokenUsage,
+		"usage objects without recognized token fields must not mark coverage")
+	assert.False(t, empty.HasOutputTokens)
+	assert.False(t, empty.HasContextTokens)
 }
 
 func TestPositAssistantProviderClassifiesDeletedPaths(t *testing.T) {

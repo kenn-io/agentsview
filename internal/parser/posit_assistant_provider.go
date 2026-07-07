@@ -508,8 +508,7 @@ func (s positAssistantSourceSet) sourceRefForChangedPath(
 ) (SourceRef, bool) {
 	switch filepath.Base(filepath.Clean(path)) {
 	case positAssistantConversationFile,
-		positAssistantLMMessagesFile,
-		positAssistantUIMessagesFile:
+		positAssistantLMMessagesFile:
 	default:
 		return SourceRef{}, false
 	}
@@ -517,11 +516,11 @@ func (s positAssistantSourceSet) sourceRefForChangedPath(
 		filepath.Dir(filepath.Clean(path)), positAssistantConversationFile,
 	)
 	// Classify structurally, without requiring conversation.json to exist:
-	// a removed lm-messages.jsonl or ui-messages.jsonl must still map to its
-	// surviving conversation source so the session reparses. When the
-	// conversation.json itself is deleted, the engine drops the source and
-	// the stored session stays archived, matching the persistent-archive
-	// policy shared by all file-based providers.
+	// a removed lm-messages.jsonl must still map to its surviving conversation
+	// source so the session reparses. When the conversation.json itself is
+	// deleted, the engine drops the source and the stored session stays
+	// archived, matching the persistent-archive policy shared by all
+	// file-based providers.
 	return s.validatedSourceRef(root, convPath)
 }
 
@@ -965,27 +964,44 @@ func positAssistantFillTokenUsage(msg *ParsedMessage, usage gjson.Result) {
 	if !usage.Exists() {
 		return
 	}
-	input := int(usage.Get("inputTokens").Int())
-	output := int(usage.Get("outputTokens").Int())
-	cacheRead := int(usage.Get("cacheReadTokens").Int())
-	cacheWrite := int(usage.Get("cacheWriteTokens").Int())
+	tokenUsage := make(map[string]int, 4)
+	input, output, cacheRead, cacheWrite := 0, 0, 0, 0
 
-	msg.HasContextTokens = usage.Get("inputTokens").Exists() ||
-		usage.Get("cacheReadTokens").Exists() ||
-		usage.Get("cacheWriteTokens").Exists()
-	msg.HasOutputTokens = usage.Get("outputTokens").Exists()
+	inputField := usage.Get("inputTokens")
+	if inputField.Exists() {
+		input = int(inputField.Int())
+		tokenUsage["input_tokens"] = input
+	}
+	outputField := usage.Get("outputTokens")
+	if outputField.Exists() {
+		output = int(outputField.Int())
+		tokenUsage["output_tokens"] = output
+	}
+	cacheReadField := usage.Get("cacheReadTokens")
+	if cacheReadField.Exists() {
+		cacheRead = int(cacheReadField.Int())
+		tokenUsage["cache_read_input_tokens"] = cacheRead
+	}
+	cacheWriteField := usage.Get("cacheWriteTokens")
+	if cacheWriteField.Exists() {
+		cacheWrite = int(cacheWriteField.Int())
+		tokenUsage["cache_creation_input_tokens"] = cacheWrite
+	}
+	if len(tokenUsage) == 0 {
+		return
+	}
+
+	msg.HasContextTokens = inputField.Exists() ||
+		cacheReadField.Exists() ||
+		cacheWriteField.Exists()
+	msg.HasOutputTokens = outputField.Exists()
 	msg.tokenPresenceKnown = true
 	msg.ContextTokens = input + cacheRead + cacheWrite
 	msg.OutputTokens = output
 
-	tokenUsage, err := json.Marshal(map[string]int{
-		"input_tokens":                input,
-		"output_tokens":               output,
-		"cache_creation_input_tokens": cacheWrite,
-		"cache_read_input_tokens":     cacheRead,
-	})
+	tokenUsageJSON, err := json.Marshal(tokenUsage)
 	if err == nil {
-		msg.TokenUsage = tokenUsage
+		msg.TokenUsage = tokenUsageJSON
 	}
 }
 
