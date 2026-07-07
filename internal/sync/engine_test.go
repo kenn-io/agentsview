@@ -1114,7 +1114,7 @@ func TestProjectIdentityObservationSkipsDiscoveryForRemoteMachine(t *testing.T) 
 	require.NoError(t, e.writeProjectIdentityObservation(ctx, db.Session{
 		ID:        "identity-remote-machine",
 		Project:   "remote-proj",
-		Machine:   "home-nuc",
+		Machine:   "remote-linux",
 		Agent:     "codex",
 		Cwd:       cwd,
 		StartedAt: strPtr(time.Now().UTC().Format(time.RFC3339Nano)),
