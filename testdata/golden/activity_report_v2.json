@@ -178,6 +178,28 @@
       "interactive_cost": 0.00476
     }
   ],
+  "by_branch": [
+    {
+      "project": "path-project",
+      "branch": "",
+      "agent_minutes": 3,
+      "cost": 0.0125,
+      "automated_agent_minutes": 0,
+      "interactive_agent_minutes": 3,
+      "automated_cost": 0,
+      "interactive_cost": 0.0125
+    },
+    {
+      "project": "remote-project",
+      "branch": "feature/golden",
+      "agent_minutes": 3,
+      "cost": 0.00476,
+      "automated_agent_minutes": 0,
+      "interactive_agent_minutes": 3,
+      "automated_cost": 0,
+      "interactive_cost": 0.00476
+    }
+  ],
   "by_session": [
     {
       "session_id": "path-current",

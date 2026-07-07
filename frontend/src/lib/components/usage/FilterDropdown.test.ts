@@ -5,7 +5,7 @@ import {
   it,
   vi,
 } from "vite-plus/test";
-import { flushSync, mount, unmount } from "svelte";
+import { flushSync, mount, tick, unmount } from "svelte";
 import FilterDropdown from "./FilterDropdown.svelte";
 import { BRANCH_LIST_SEP } from "../../branchFilters.js";
 
@@ -18,24 +18,27 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function openDropdown() {
-  const trigger =
-    document.querySelector<HTMLButtonElement>(".filter-trigger");
+async function openDropdown() {
+  const trigger = document.querySelector<HTMLButtonElement>(
+    ".kit-filter-dropdown__btn",
+  );
   trigger?.click();
   flushSync();
+  await tick();
 }
 
-function rowStates(): Array<{ name: string; selected: boolean }> {
+function rowStates(): Array<{ name: string; included: boolean }> {
   return Array.from(
-    document.querySelectorAll<HTMLButtonElement>(".dropdown-row"),
+    document.querySelectorAll<HTMLButtonElement>(".kit-filter-dropdown__item"),
   ).map((row) => ({
-    name: row.querySelector(".item-name")?.textContent ?? "",
-    selected: row.classList.contains("selected"),
+    name:
+      row.querySelector(".kit-filter-dropdown__label")?.textContent ?? "",
+    included: row.classList.contains("active"),
   }));
 }
 
 describe("FilterDropdown separators", () => {
-  it("keeps comma-containing names intact with a custom separator", () => {
+  it("keeps comma-containing names intact with a custom separator", async () => {
     const tokenA = "proj\u001ffeat,one";
     const tokenB = "proj\u001fmain";
     component = mount(FilterDropdown, {
@@ -51,15 +54,15 @@ describe("FilterDropdown separators", () => {
         onToggle: () => {},
       },
     });
-    openDropdown();
+    await openDropdown();
 
     expect(rowStates()).toEqual([
-      { name: "proj/feat,one", selected: false },
-      { name: "proj/main", selected: true },
+      { name: "proj/feat,one", included: false },
+      { name: "proj/main", included: true },
     ]);
   });
 
-  it("splits on commas by default", () => {
+  it("splits on commas by default", async () => {
     component = mount(FilterDropdown, {
       target: document.body,
       props: {
@@ -69,11 +72,11 @@ describe("FilterDropdown separators", () => {
         onToggle: () => {},
       },
     });
-    openDropdown();
+    await openDropdown();
 
     expect(rowStates()).toEqual([
-      { name: "alpha", selected: false },
-      { name: "beta", selected: false },
+      { name: "alpha", included: false },
+      { name: "beta", included: false },
     ]);
   });
 });
