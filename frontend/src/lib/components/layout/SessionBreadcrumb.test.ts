@@ -147,6 +147,16 @@ function makeUsage(
   };
 }
 
+async function openUsageBreakdown(): Promise<void> {
+  const details = document.querySelector<HTMLDetailsElement>(
+    ".usage-breakdown",
+  );
+  expect(details).not.toBeNull();
+  details!.open = true;
+  details!.dispatchEvent(new Event("toggle"));
+  await tick();
+}
+
 function makeAssistantMessage(model: string): Message {
   return {
     id: 1,
@@ -921,6 +931,10 @@ describe("SessionBreadcrumb", () => {
             ?.trim(),
         ).toBe("2 steps");
       });
+      expect(
+        document.querySelectorAll(".usage-breakdown-row"),
+      ).toHaveLength(0);
+      await openUsageBreakdown();
       const rows = Array.from(
         document.querySelectorAll(".usage-breakdown-row"),
       );
@@ -995,6 +1009,7 @@ describe("SessionBreadcrumb", () => {
             ?.trim(),
         ).toBe("8 steps");
       });
+      await openUsageBreakdown();
       expect(
         document.querySelectorAll(".usage-breakdown-row"),
       ).toHaveLength(8);
@@ -1046,6 +1061,7 @@ describe("SessionBreadcrumb", () => {
         const badge = document.querySelector(".cost-badge");
         expect(badge?.textContent?.trim()).toBe("$2.00");
       });
+      await openUsageBreakdown();
       expect(
         document.querySelector(".usage-breakdown-row")?.textContent,
       ).toContain("gpt-5.4");

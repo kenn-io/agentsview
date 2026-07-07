@@ -145,6 +145,7 @@
     if (!session) {
       sessionCost = null;
       sessionUsageBreakdown = [];
+      usageBreakdownOpen = false;
       costFetchKey = null;
       costSessionId = null;
       costRequestSeq++;
@@ -167,6 +168,7 @@
       // still in flight.
       sessionCost = null;
       sessionUsageBreakdown = [];
+      usageBreakdownOpen = false;
       costFetchKey = null;
     }
     if (key === costFetchKey) return;
@@ -193,7 +195,10 @@
   let sessionCostLabel = $derived(
     sessionCost !== null ? formatCost(sessionCost) : null,
   );
-  let sessionUsageBreakdownRows = $derived(sessionUsageBreakdown);
+  // Menu rows render only while open; large sessions can have
+  // thousands of breakdown entries and the /usage fetch happens
+  // automatically, so the collapsed dropdown must stay DOM-free.
+  let usageBreakdownOpen = $state(false);
 
   let sessionContextTokens = $derived(session?.peak_context_tokens ?? 0);
   let sessionOutputTokens = $derived(session?.total_output_tokens ?? 0);
@@ -781,36 +786,38 @@
           {sessionTokenSummary}
         </span>
       {/if}
-      {#if sessionUsageBreakdownRows.length > 0}
-        <details class="usage-breakdown">
+      {#if sessionUsageBreakdown.length > 0}
+        <details class="usage-breakdown" bind:open={usageBreakdownOpen}>
           <summary
             class="usage-breakdown-trigger"
             title="Session usage breakdown"
           >
             {sessionUsageBreakdown.length} steps
           </summary>
-          <div class="usage-breakdown-menu">
-            {#each sessionUsageBreakdownRows as row (row.ordinal)}
-              <div class="usage-breakdown-row" title={formatBreakdownTitle(row)}>
-                <span class="usage-breakdown-label">
-                  {row.label}
-                </span>
-                <span class="usage-breakdown-model">
-                  {row.model || row.source}
-                </span>
-                <span class="usage-breakdown-tokens">
-                  {formatBreakdownContext(row)} ctx
-                  <span aria-hidden="true">/</span>
-                  {formatTokenCount(row.output_tokens)} out
-                </span>
-                {#if row.has_cost}
-                  <span class="usage-breakdown-cost">
-                    {formatCost(row.cost_usd)}
+          {#if usageBreakdownOpen}
+            <div class="usage-breakdown-menu">
+              {#each sessionUsageBreakdown as row (row.ordinal)}
+                <div class="usage-breakdown-row" title={formatBreakdownTitle(row)}>
+                  <span class="usage-breakdown-label">
+                    {row.label}
                   </span>
-                {/if}
-              </div>
-            {/each}
-          </div>
+                  <span class="usage-breakdown-model">
+                    {row.model || row.source}
+                  </span>
+                  <span class="usage-breakdown-tokens">
+                    {formatBreakdownContext(row)} ctx
+                    <span aria-hidden="true">/</span>
+                    {formatTokenCount(row.output_tokens)} out
+                  </span>
+                  {#if row.has_cost}
+                    <span class="usage-breakdown-cost">
+                      {formatCost(row.cost_usd)}
+                    </span>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {/if}
         </details>
       {/if}
       {#if sessionCostLabel}
