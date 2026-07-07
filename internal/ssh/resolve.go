@@ -75,13 +75,13 @@ func buildResolveScript() string {
 	var b strings.Builder
 	b.WriteString(
 		"av_emit_dir() { " +
-			"if [ -n \"$1\" ]; then eval \"dir=\\${$1:-}\"; else dir=\"\"; fi; " +
+			"dir=\"$1\"; " +
 			"[ -n \"$dir\" ] || dir=\"$2\"; " +
 			"[ -d \"$dir\" ] && printf '%s\\000' \"$3:$dir\"; " +
 			"}\n" +
 			"av_emit_rooted_dir() { " +
-			"if [ -n \"$1\" ]; then eval \"dir=\\${$1:-}\"; else dir=\"\"; fi; " +
-			"if [ -n \"$2\" ]; then eval \"root=\\${$2:-}\"; else root=\"\"; fi; " +
+			"dir=\"$1\"; " +
+			"root=\"$2\"; " +
 			"[ -z \"$dir\" ] && [ -n \"$root\" ] && dir=\"$root$3\"; " +
 			"[ -n \"$dir\" ] || dir=\"$4\"; " +
 			"[ -d \"$dir\" ] && printf '%s\\000' \"$5:$dir\"; " +
@@ -122,13 +122,15 @@ func buildResolveScript() string {
 				}
 				fmt.Fprintf(&b,
 					"av_emit_rooted_dir \"%s\" \"%s\" \"%s\" \"%s\" %s\n",
-					def.EnvVar, def.DefaultRootEnvVar, rootSuffix,
-					defaultDir, string(def.Type),
+					remoteEnvExpansion(def.EnvVar),
+					remoteEnvExpansion(def.DefaultRootEnvVar),
+					rootSuffix, defaultDir, string(def.Type),
 				)
 			} else {
 				fmt.Fprintf(&b,
 					"av_emit_dir \"%s\" \"%s\" %s\n",
-					def.EnvVar, defaultDir, string(def.Type),
+					remoteEnvExpansion(def.EnvVar), defaultDir,
+					string(def.Type),
 				)
 			}
 			// Codex stores renameable session titles in
@@ -144,6 +146,13 @@ func buildResolveScript() string {
 	// path doesn't exist, which would make sh exit non-zero.
 	b.WriteString("true\n")
 	return b.String()
+}
+
+func remoteEnvExpansion(envVar string) string {
+	if envVar == "" {
+		return ""
+	}
+	return "${" + envVar + ":-}"
 }
 
 // BuildResolveScriptForTest exposes the SSH resolver script to
