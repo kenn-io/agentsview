@@ -1091,6 +1091,46 @@ func TestProjectIdentityObservationCachesLocalGitDiscovery(t *testing.T) {
 	assert.Equal(t, "github.com/acme/cache", observations[0].NormalizedRemote)
 }
 
+// TestProjectIdentityObservationSkipsDiscoveryForRemoteMachine pins that
+// local git discovery never probes the filesystem for a session recorded on
+// another machine: the cwd names a path on that machine, so resolving it
+// locally is wrong (and on macOS, stat'ing a remote /home/... cwd wakes the
+// automounter — see cachedProjectIdentity). The cwd here is a real local git
+// repo, so if discovery ran anyway the observation would carry its remote.
+func TestProjectIdentityObservationSkipsDiscoveryForRemoteMachine(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, ".git", "config"),
+		[]byte("[remote \"origin\"]\n\turl = https://github.com/acme/remote.git\n"),
+		0o644,
+	))
+	cwd := filepath.Join(root, "subdir")
+	require.NoError(t, os.Mkdir(cwd, 0o755))
+	e := NewEngine(database, EngineConfig{Machine: "laptop"})
+	ctx := context.Background()
+
+	require.NoError(t, e.writeProjectIdentityObservation(ctx, db.Session{
+		ID:        "identity-remote-machine",
+		Project:   "remote-proj",
+		Machine:   "remote-linux",
+		Agent:     "codex",
+		Cwd:       cwd,
+		StartedAt: strPtr(time.Now().UTC().Format(time.RFC3339Nano)),
+	}))
+
+	observations, err := database.ListProjectIdentityObservations(
+		ctx, []string{"remote-proj"},
+	)
+	require.NoError(t, err)
+	require.Len(t, observations, 1)
+	assert.Empty(t, observations[0].GitRemote,
+		"foreign-machine cwd must not be probed for a local git identity")
+	assert.Equal(t, cwd, observations[0].RootPath,
+		"root path must stay the raw cwd, not a locally resolved git root")
+}
+
 func TestProjectIdentitySafeLocalAbsolutePathHandlesWindowsDriveRootsByOS(t *testing.T) {
 	wantWindowsDriveLocal := runtime.GOOS == "windows"
 	assert.Equal(t, wantWindowsDriveLocal, safeLocalAbsolutePath(`C:\repo`))
