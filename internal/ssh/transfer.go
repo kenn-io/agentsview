@@ -31,16 +31,22 @@ func buildTarCommand(
 			continue
 		}
 		for _, d := range agentDirs {
-			paths = append(paths, shellQuote(strings.TrimPrefix(d, "/")))
+			if path := tarListPath(d); path != "" {
+				paths = append(paths, shellQuote(path))
+			}
 		}
 	}
 	for _, agentFiles := range files {
 		for _, f := range agentFiles {
-			paths = append(paths, shellQuote(strings.TrimPrefix(f, "/")))
+			if path := tarListPath(f); path != "" {
+				paths = append(paths, shellQuote(path))
+			}
 		}
 	}
 	for _, f := range extraFiles {
-		paths = append(paths, shellQuote(strings.TrimPrefix(f, "/")))
+		if path := tarListPath(f); path != "" {
+			paths = append(paths, shellQuote(path))
+		}
 	}
 	var b strings.Builder
 	b.WriteString("set -e\n")
@@ -54,6 +60,17 @@ func buildTarCommand(
 	}
 	b.WriteString("} | tar cf - -C / -T -\n")
 	return b.String()
+}
+
+func tarListPath(path string) string {
+	rel := strings.TrimPrefix(path, "/")
+	if rel == "" || rel == "." {
+		return ""
+	}
+	if strings.HasPrefix(rel, "./") {
+		return rel
+	}
+	return "./" + rel
 }
 
 // shellQuote wraps s in single quotes, escaping any embedded

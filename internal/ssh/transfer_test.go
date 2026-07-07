@@ -26,11 +26,12 @@ func TestBuildTarCommand(t *testing.T) {
 	assert.Contains(t, cmd, "| tar cf - -C / -T -", "bad tar pipe: %s", cmd)
 	assert.NotContains(t, tarCommandLine(t, cmd), "home/wes/.claude/projects",
 		"tar invocation must read paths from stdin, not argv")
-	// Paths are shell-quoted in the streamed path list.
-	assert.Contains(t, cmd, "'home/wes/.claude/projects'")
-	assert.Contains(t, cmd, "'home/wes/.codex/sessions'")
+	// Paths are shell-quoted in the streamed path list and prefixed with
+	// ./ so tar cannot treat option-shaped file-list entries as options.
+	assert.Contains(t, cmd, "'./home/wes/.claude/projects'")
+	assert.Contains(t, cmd, "'./home/wes/.codex/sessions'")
 	// Extra files are included in the path list, with no leading slash.
-	assert.Contains(t, cmd, "'home/wes/.codex/session_index.jsonl'")
+	assert.Contains(t, cmd, "'./home/wes/.codex/session_index.jsonl'")
 	// No leading slash in path args.
 	assert.NotContains(t, cmd, "'/home/", "path has leading slash: %s", cmd)
 }
@@ -48,10 +49,17 @@ func TestBuildTarCommandSkipsFileScopedWindsurfDirs(t *testing.T) {
 
 	cmd := buildTarCommand(dirs, files, nil)
 
-	assert.Contains(t, cmd, "'home/wes/Windsurf/User/workspaceStorage/a/state.vscdb'")
-	assert.Contains(t, cmd, "'home/wes/Windsurf/User/workspaceStorage/a/workspace.json'")
-	assert.NotContains(t, cmd, "'home/wes/Windsurf/User'",
+	assert.Contains(t, cmd, "'./home/wes/Windsurf/User/workspaceStorage/a/state.vscdb'")
+	assert.Contains(t, cmd, "'./home/wes/Windsurf/User/workspaceStorage/a/workspace.json'")
+	assert.NotContains(t, cmd, "'./home/wes/Windsurf/User'",
 		"file-scoped Windsurf root must not be archived recursively: %s", cmd)
+}
+
+func TestTarListPathProtectsOptionShapedPath(t *testing.T) {
+	assert.Equal(t, "./-dash/session.jsonl", tarListPath("/-dash/session.jsonl"))
+	assert.Equal(t, "./home/wes/file.jsonl", tarListPath("/home/wes/file.jsonl"))
+	assert.Equal(t, "./already/relative.jsonl", tarListPath("./already/relative.jsonl"))
+	assert.Empty(t, tarListPath("/"))
 }
 
 func TestBuildTarCommandStreamsPathListToTar(t *testing.T) {
@@ -147,7 +155,7 @@ func tarNames(t *testing.T, archive []byte) []string {
 }
 
 func archivePathForTest(path string) string {
-	return strings.TrimPrefix(filepath.ToSlash(path), "/")
+	return "./" + strings.TrimPrefix(filepath.ToSlash(path), "/")
 }
 
 func TestRemapPath(t *testing.T) {
