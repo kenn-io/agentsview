@@ -64,6 +64,9 @@ function parseLocal(date: string): Date {
 }
 
 function isValidLocalDate(date: string): boolean {
+  // RangeSelection uses app-internal canonical date-only strings, not
+  // localized display/input formats. Keep this strict so lexicographic range
+  // comparisons and local calendar math stay unambiguous.
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
   const d = parseLocal(date);
   return !Number.isNaN(d.getTime()) && localDateStr(d) === date;
