@@ -26,6 +26,18 @@ Tables inside the archive DB were rejected: that would tie vector writes to the
 archive's write path and lock, and complicate the resync-swap story with
 special-casing during the swap instead of a plain re-scan afterward.
 
+### Embedding stores and `IndexSpec`
+
+`vectors.db` can host more than one embedding store. Each store is bound by
+an `IndexSpec` (internal/vector): its documents table, its own key/value
+metadata table, and a table prefix for the kit-managed generation
+bookkeeping. Schema-version resets, metadata (watermarks, scope, generation
+model names), and generation lifecycles are all scoped per store, so
+resetting or rebuilding one store never touches another. The conversation
+message store described in this document is the spec returned by
+`MessageIndexSpec()`; `embeddings list/activate/retire` accept `--store`
+(default `messages`) because generation IDs are only unique within a store.
+
 ## Unit model: user documents and runs
 
 The index does not embed every message individually. The embeddable universe —
