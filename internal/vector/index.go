@@ -150,6 +150,10 @@ type GenerationInfo struct {
 	Fingerprint string `json:"fingerprint"`
 	Embedded    int64  `json:"embedded"` // stamped docs
 	Missing     int64  `json:"missing"`  // mirror docs not stamped
+	// Store names the embedding store this generation belongs to (e.g.
+	// "messages"). Populated by the CLI after fetching, not by the daemon
+	// API, since generation IDs are only unique within a store.
+	Store string `json:"store,omitempty"`
 }
 
 // ChunkOverlap derives the SplitOptions.Overlap rune count from

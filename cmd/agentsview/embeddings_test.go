@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -202,6 +203,7 @@ func TestEmbeddingsListRendersTable(t *testing.T) {
 
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 	require.Len(t, lines, 2, "expected a header line and one generation row, got: %q", out.String())
+	assert.Contains(t, lines[0], "STORE")
 	assert.Contains(t, lines[0], "ID")
 	assert.Contains(t, lines[0], "STATE")
 	assert.Contains(t, lines[0], "MODEL")
@@ -210,10 +212,46 @@ func TestEmbeddingsListRendersTable(t *testing.T) {
 	assert.Contains(t, lines[0], "MISSING")
 	assert.Contains(t, lines[0], "FINGERPRINT")
 
+	assert.Contains(t, lines[1], "messages")
 	assert.Contains(t, lines[1], "active")
 	assert.Contains(t, lines[1], "test-model")
 	assert.Contains(t, lines[1], truncateFingerprint(fp))
 	assert.NotContains(t, lines[1], fp, "fingerprint column must be truncated to 12 chars")
+}
+
+// TestEmbeddingsUnknownStoreFails asserts an unrecognized --store value
+// fails fast with the known-stores list, before any config-driven daemon
+// detection or vectors.db access.
+func TestEmbeddingsUnknownStoreFails(t *testing.T) {
+	dataDir := testDataDir(t)
+	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1")
+
+	err := runEmbeddingsList(context.Background(), io.Discard, false, "bogus")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `unknown embedding store "bogus"`)
+	assert.Contains(t, err.Error(), "messages")
+}
+
+// TestEmbeddingsListShowsStoreColumn asserts `embeddings list --store
+// messages` renders the STORE column stamped with the resolved store name.
+func TestEmbeddingsListShowsStoreColumn(t *testing.T) {
+	dataDir := testDataDir(t)
+	writeEmbeddingsTestConfig(t, dataDir, "http://127.0.0.1:1")
+
+	cfg, err := config.LoadMinimal()
+	require.NoError(t, err)
+	ctx := context.Background()
+	ix, err := vector.Open(ctx, cfg.Vector.ResolvedDBPath(cfg.DataDir), false,
+		cfg.Vector.Embeddings.MaxInputChars)
+	require.NoError(t, err)
+	_, err = ix.EnsureGeneration(ctx, vectorGeneration(cfg.Vector.Embeddings), sqlitevec.StateActive)
+	require.NoError(t, err)
+	require.NoError(t, ix.Close())
+
+	var buf bytes.Buffer
+	require.NoError(t, runEmbeddingsList(context.Background(), &buf, false, "messages"))
+	assert.Contains(t, buf.String(), "STORE")
+	assert.Contains(t, buf.String(), "messages")
 }
 
 // TestEmbeddingsListJSONFormat asserts `embeddings list --format json`
@@ -245,6 +283,7 @@ func TestEmbeddingsListJSONFormat(t *testing.T) {
 	require.NoError(t, json.Unmarshal(out.Bytes(), &body))
 	require.Len(t, body.Generations, 1)
 	assert.Equal(t, "active", body.Generations[0].State)
+	assert.Equal(t, "messages", body.Generations[0].Store)
 }
 
 // TestEmbeddingsListEmptyIndexReturnsNoRows asserts `embeddings list`
@@ -902,7 +941,7 @@ func TestDirectListGenerationsVersionMismatchSurfacesRebuildRequired(t *testing.
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 
-	_, err = directListGenerations(context.Background(), cfg)
+	_, err = directListGenerations(context.Background(), cfg, vector.MessageIndexSpec())
 	require.Error(t, err)
 	assert.ErrorIs(t, err, vector.ErrMirrorVersionMismatch,
 		"a stale-shape vectors.db must not be listed as if it were current")

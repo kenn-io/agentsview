@@ -9,8 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -119,6 +121,7 @@ func newEmbeddingsBuildCommand() *cobra.Command {
 }
 
 func newEmbeddingsListCommand() *cobra.Command {
+	var store string
 	cmd := &cobra.Command{
 		Use:          "list",
 		Short:        "List embedding generations",
@@ -126,16 +129,19 @@ func newEmbeddingsListCommand() *cobra.Command {
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runEmbeddingsList(
-				cmd.Context(), cmd.OutOrStdout(), outputFormat(cmd) == "json",
+				cmd.Context(), cmd.OutOrStdout(), outputFormat(cmd) == "json", store,
 			)
 		},
 	}
 	registerFormatFlags(cmd.Flags())
+	cmd.Flags().StringVar(&store, "store", "",
+		"Embedding store to operate on (default: messages)")
 	return cmd
 }
 
 func newEmbeddingsActivateCommand() *cobra.Command {
 	var force bool
+	var store string
 	cmd := &cobra.Command{
 		Use:          "activate <id>",
 		Short:        "Activate an embedding generation",
@@ -147,17 +153,20 @@ func newEmbeddingsActivateCommand() *cobra.Command {
 				return err
 			}
 			return runEmbeddingsGenerationAction(
-				cmd.Context(), cmd.OutOrStdout(), id, force, false,
+				cmd.Context(), cmd.OutOrStdout(), id, force, false, store,
 			)
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false,
 		"Activate even if the generation has incomplete coverage")
+	cmd.Flags().StringVar(&store, "store", "",
+		"Embedding store to operate on (default: messages)")
 	return cmd
 }
 
 func newEmbeddingsRetireCommand() *cobra.Command {
 	var force bool
+	var store string
 	cmd := &cobra.Command{
 		Use:          "retire <id>",
 		Short:        "Retire an embedding generation",
@@ -169,13 +178,35 @@ func newEmbeddingsRetireCommand() *cobra.Command {
 				return err
 			}
 			return runEmbeddingsGenerationAction(
-				cmd.Context(), cmd.OutOrStdout(), id, force, true,
+				cmd.Context(), cmd.OutOrStdout(), id, force, true, store,
 			)
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false,
 		"Retire even if the generation is currently active")
+	cmd.Flags().StringVar(&store, "store", "",
+		"Embedding store to operate on (default: messages)")
 	return cmd
+}
+
+// vectorStoreSpec resolves an `--store` name against the registered
+// embedding stores. There is one registry entry per store; a PR adding a
+// new store registers its spec here and extends the daemon embeddings API
+// (which currently serves only the message store) alongside it.
+func vectorStoreSpec(name string) (vector.IndexSpec, error) {
+	specs := map[string]vector.IndexSpec{
+		vector.MessageIndexSpec().Name: vector.MessageIndexSpec(),
+	}
+	if name == "" {
+		name = vector.MessageIndexSpec().Name
+	}
+	spec, ok := specs[name]
+	if !ok {
+		names := slices.Sorted(maps.Keys(specs))
+		return vector.IndexSpec{}, fmt.Errorf(
+			"unknown embedding store %q (known stores: %s)", name, strings.Join(names, ", "))
+	}
+	return spec, nil
 }
 
 func parseGenerationID(raw string) (int64, error) {
@@ -516,14 +547,22 @@ func printBuildSummary(w io.Writer, result vector.BuildResult) {
 	}
 }
 
-// runEmbeddingsList loads config, gates on [vector] enabled, lists every
-// generation via the daemon or directly, and renders it as a table or JSON.
-func runEmbeddingsList(ctx context.Context, out io.Writer, jsonOutput bool) error {
+// runEmbeddingsList loads config, gates on [vector] enabled, resolves the
+// requested store, lists every generation via the daemon or directly, and
+// renders it as a table or JSON. Generation IDs are only unique within a
+// store, so every entry is stamped with the resolved store's name before
+// display, including entries fetched from the daemon (which does not send
+// one, since it currently only serves the message store).
+func runEmbeddingsList(ctx context.Context, out io.Writer, jsonOutput bool, store string) error {
 	cfg, err := config.LoadMinimal()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
 	if err := requireVectorEnabled(cfg); err != nil {
+		return err
+	}
+	spec, err := vectorStoreSpec(store)
+	if err != nil {
 		return err
 	}
 
@@ -538,10 +577,13 @@ func runEmbeddingsList(ctx context.Context, out io.Writer, jsonOutput bool) erro
 			return err
 		}
 	} else {
-		gens, err = directListGenerations(ctx, cfg)
+		gens, err = directListGenerations(ctx, cfg, spec)
 		if err != nil {
 			return err
 		}
+	}
+	for i := range gens {
+		gens[i].Store = spec.Name
 	}
 
 	if jsonOutput {
@@ -556,10 +598,12 @@ func runEmbeddingsList(ctx context.Context, out io.Writer, jsonOutput bool) erro
 	return nil
 }
 
-// directListGenerations opens vectors.db read-only and lists its
+// directListGenerations opens vectors.db read-only and lists spec's
 // generations, or returns an empty list without error when the index has
 // never been built.
-func directListGenerations(ctx context.Context, cfg config.Config) ([]vector.GenerationInfo, error) {
+func directListGenerations(
+	ctx context.Context, cfg config.Config, spec vector.IndexSpec,
+) ([]vector.GenerationInfo, error) {
 	path := cfg.Vector.ResolvedDBPath(cfg.DataDir)
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
@@ -567,7 +611,7 @@ func directListGenerations(ctx context.Context, cfg config.Config) ([]vector.Gen
 		}
 		return nil, err
 	}
-	ix, err := vector.Open(ctx, path, true, cfg.Vector.Embeddings.MaxInputChars)
+	ix, err := vector.OpenSpec(ctx, path, spec, true, cfg.Vector.Embeddings.MaxInputChars)
 	if err != nil {
 		return nil, fmt.Errorf("opening vectors.db: %w", err)
 	}
@@ -579,10 +623,10 @@ func directListGenerations(ctx context.Context, cfg config.Config) ([]vector.Gen
 // table, truncating each fingerprint to fingerprintDisplayLen characters.
 func printGenerationsTable(out io.Writer, gens []vector.GenerationInfo) {
 	tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tSTATE\tMODEL\tDIM\tEMBEDDED\tMISSING\tFINGERPRINT")
+	fmt.Fprintln(tw, "STORE\tID\tSTATE\tMODEL\tDIM\tEMBEDDED\tMISSING\tFINGERPRINT")
 	for _, g := range gens {
-		fmt.Fprintf(tw, "%d\t%s\t%s\t%d\t%d\t%d\t%s\n",
-			g.ID, g.State, g.Model, g.Dimension, g.Embedded, g.Missing,
+		fmt.Fprintf(tw, "%s\t%d\t%s\t%s\t%d\t%d\t%d\t%s\n",
+			g.Store, g.ID, g.State, g.Model, g.Dimension, g.Embedded, g.Missing,
 			truncateFingerprint(g.Fingerprint))
 	}
 	_ = tw.Flush()
@@ -596,18 +640,24 @@ func truncateFingerprint(fp string) string {
 }
 
 // runEmbeddingsGenerationAction implements both `activate <id>` and
-// `retire <id>`: it loads config, gates on [vector] enabled, and dispatches
-// the requested action to the daemon or directly. A 409/refusal error's
-// message is returned verbatim (no extra wrapping) so it displays exactly
-// as the manager phrased it.
+// `retire <id>`: it loads config, gates on [vector] enabled, resolves the
+// requested store, and dispatches the requested action to the daemon or
+// directly. A 409/refusal error's message is returned verbatim (no extra
+// wrapping) so it displays exactly as the manager phrased it. The daemon
+// only serves the message store, so the daemon path needs no request
+// change beyond resolving (and thereby validating) the --store name.
 func runEmbeddingsGenerationAction(
-	ctx context.Context, out io.Writer, id int64, force, retire bool,
+	ctx context.Context, out io.Writer, id int64, force, retire bool, store string,
 ) error {
 	cfg, err := config.LoadMinimal()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
 	if err := requireVectorEnabled(cfg); err != nil {
+		return err
+	}
+	spec, err := vectorStoreSpec(store)
+	if err != nil {
 		return err
 	}
 
@@ -624,7 +674,7 @@ func runEmbeddingsGenerationAction(
 		if err != nil {
 			return err
 		}
-	} else if err := directGenerationAction(ctx, cfg, id, force, retire); err != nil {
+	} else if err := directGenerationAction(ctx, cfg, spec, id, force, retire); err != nil {
 		return err
 	}
 
@@ -637,9 +687,10 @@ func runEmbeddingsGenerationAction(
 }
 
 // directGenerationAction acquires the vectors write lock and applies the
-// activate/retire state change directly against vectors.db.
+// activate/retire state change directly against vectors.db, scoped to spec's
+// store.
 func directGenerationAction(
-	ctx context.Context, cfg config.Config, id int64, force, retire bool,
+	ctx context.Context, cfg config.Config, spec vector.IndexSpec, id int64, force, retire bool,
 ) error {
 	lock, err := tryAcquireNamedLock(cfg.DataDir, vectorsWriteLockFile)
 	if err != nil {
@@ -647,8 +698,8 @@ func directGenerationAction(
 	}
 	defer lock.Close()
 
-	ix, err := vector.Open(
-		ctx, cfg.Vector.ResolvedDBPath(cfg.DataDir), false, cfg.Vector.Embeddings.MaxInputChars,
+	ix, err := vector.OpenSpec(
+		ctx, cfg.Vector.ResolvedDBPath(cfg.DataDir), spec, false, cfg.Vector.Embeddings.MaxInputChars,
 	)
 	if err != nil {
 		return fmt.Errorf("opening vectors.db: %w", err)
