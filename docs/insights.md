@@ -37,6 +37,8 @@ builds the prompt from that session's messages, timing, token usage, and cost
 instead of a date-window session list. `session_id` is only accepted for
 `agent_analysis`; daily activity and canned insight modes reject it.
 
+![Single-session insight action](/assets/generated/screenshots/session-insight-action.png)
+
 ## Generating an Insight
 
 The sidebar panel contains all the controls for generating

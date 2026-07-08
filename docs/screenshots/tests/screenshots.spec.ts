@@ -280,23 +280,21 @@ test.describe('Dashboard', () => {
     // include the first listed model so the screenshot shows the open
     // panel, the resulting "Model: <name>" trigger label, and the
     // active-filter chip the ActiveFilters row renders beneath it.
-    const trigger = page.locator(
-      '.analytics-toolbar .filter-dropdown .filter-trigger',
+    const modelDropdown = page.locator(
+      '.analytics-toolbar .kit-filter-dropdown',
       { hasText: 'Model' }
     );
+    const trigger = modelDropdown.locator('.kit-filter-dropdown__btn');
     await expect(trigger).toBeVisible({ timeout: 5_000 });
     await trigger.click();
-    await page.waitForSelector(
-      '.analytics-toolbar .filter-dropdown .dropdown-panel',
-      { timeout: 5_000 }
+    await modelDropdown.locator('.kit-filter-dropdown__panel').waitFor(
+      { state: 'visible', timeout: 5_000 }
     );
 
-    // In include mode the first .dropdown-row is the "All models"
+    // In include mode the first dropdown item is the "All models"
     // reset row; the actual models follow. Include the first real
     // model if one exists so a filter chip appears.
-    const rows = page.locator(
-      '.analytics-toolbar .filter-dropdown .dropdown-row'
-    );
+    const rows = modelDropdown.locator('.kit-filter-dropdown__item');
     if (await rows.count() > 1) {
       await rows.nth(1).click();
       await page.waitForTimeout(1500);
@@ -400,10 +398,17 @@ test.describe('Session browser', () => {
   test('project filter', async ({ page }) => {
     // The project filter is a typeahead in the header. Open it and pick the
     // first real project (index 0 is the "All Projects" option).
-    const trigger = page.locator('.typeahead-trigger').first();
+    const trigger = page.locator(
+      '.project-picker .kit-typeahead__trigger'
+    ).first();
     await trigger.click();
-    await page.waitForSelector('.typeahead-option', { timeout: 5_000 });
-    const options = page.locator('.typeahead-option');
+    await page.waitForSelector(
+      '.project-picker .kit-typeahead__option',
+      { timeout: 5_000 }
+    );
+    const options = page.locator(
+      '.project-picker .kit-typeahead__option'
+    );
     if (await options.count() > 1) {
       await options.nth(1).click();
       await page.waitForTimeout(1000);
@@ -503,6 +508,26 @@ test.describe('Message viewer', () => {
     await waitForApp(page);
   });
 
+  async function findVisibleToolBlock(page: Page): Promise<Locator> {
+    let tool = page.locator('.tool-block').first();
+    if (await tool.count() > 0 && await tool.isVisible()) {
+      return tool;
+    }
+
+    const rows = page.locator('.message, .virtual-row');
+    const count = await rows.count();
+    for (let i = 0; i < Math.min(count, 60); i++) {
+      await rows.nth(i).scrollIntoViewIfNeeded();
+      await page.waitForTimeout(150);
+      tool = page.locator('.tool-block').first();
+      if (await tool.count() > 0 && await tool.isVisible()) {
+        return tool;
+      }
+    }
+
+    throw new Error('no visible .tool-block found in selected session');
+  }
+
   test('full message view', async ({ page }) => {
     await selectRichSession(page);
     await snap(page, 'message-viewer');
@@ -578,6 +603,25 @@ test.describe('Message viewer', () => {
         }
       }
     }
+  });
+
+  test('copy buttons on tool block', async ({ page }) => {
+    await selectRichSession(page);
+
+    const tool = await findVisibleToolBlock(page);
+    const header = tool.locator('.tool-header');
+    const isExpanded = (await tool.locator('.tool-chevron.open').count()) > 0;
+    if (!isExpanded && (await header.count()) > 0) {
+      await header.click();
+      await page.waitForTimeout(300);
+    }
+
+    if ((await tool.locator('.tool-copy').count()) === 0) {
+      throw new Error('visible .tool-block has no copy buttons');
+    }
+    await tool.hover();
+    await page.waitForTimeout(600);
+    await snapEl(tool, 'tool-block-copy-btn');
   });
 
   test('tool call groups', async ({ page }) => {
@@ -662,15 +706,13 @@ test.describe('Message viewer', () => {
 
     // Hover over a message to reveal the copy button
     const message = page.locator('.message').first();
-    if (await message.count() > 0) {
-      await message.hover();
-      await page.waitForTimeout(300);
+    await expect(message).toBeVisible({ timeout: 5_000 });
+    await message.hover();
+    await page.waitForTimeout(300);
 
-      const copyBtn = message.locator('.copy-btn');
-      if (await copyBtn.count() > 0) {
-        await snapEl(message, 'message-copy-btn');
-      }
-    }
+    const copyBtn = message.locator('.message-header .kit-copy-btn').first();
+    await expect(copyBtn).toBeVisible({ timeout: 5_000 });
+    await snapEl(message, 'message-copy-btn');
   });
 
   test('copy button on code block', async ({ page }) => {
@@ -768,38 +810,49 @@ test.describe('Modals', () => {
   });
 
   test('shortcuts modal', async ({ page }) => {
-    await page.keyboard.press('?');
-    await page.waitForSelector('.shortcuts-overlay', {
-      timeout: 5_000,
+    await page.locator(
+      'button[aria-label="Keyboard shortcuts"]'
+    ).click();
+    const dialog = page.getByRole('dialog', {
+      name: 'Keyboard Shortcuts',
     });
+    await expect(dialog).toBeVisible({ timeout: 5_000 });
     await page.waitForTimeout(300);
-    await snap(page, 'shortcuts-modal');
+    await snapEl(dialog, 'shortcuts-modal');
   });
 
   test('resync modal', async ({ page }) => {
     // Resync now lives in Settings: open it, then trigger the modal.
-    await page.locator('button[title="Settings"]').click();
+    await page.goto('/settings');
+    await page.waitForSelector('.settings-page', { timeout: 5_000 });
     await page.waitForSelector('.resync-btn', { timeout: 5_000 });
     await page.locator('.resync-btn').click();
-    await page.waitForSelector('.resync-panel', { timeout: 5_000 });
+    const dialog = page.getByRole('dialog', { name: 'Full Resync' });
+    await expect(dialog).toBeVisible({ timeout: 5_000 });
     await page.waitForTimeout(300);
-    await snap(page, 'resync-modal');
+    await snapEl(dialog, 'resync-modal');
     await page.keyboard.press('Escape');
   });
 
   test('publish modal', async ({ page }) => {
     await selectFirstSession(page);
-    // 'p' publishes the active session. With no GitHub token configured the
-    // modal settles on its setup view, so no real gist URL is created.
-    await page.keyboard.press('p');
-    await page.waitForSelector('.publish-panel', { timeout: 5_000 });
+    await page.locator(
+      'button[aria-label="Publish to Gist"]'
+    ).click();
+    await page.locator('.export-dropdown .overflow-item', {
+      hasText: 'Publish public Gist',
+    }).click();
+    const dialog = page.getByRole('dialog', {
+      name: 'Publish to public GitHub Gist',
+    });
+    await expect(dialog).toBeVisible({ timeout: 5_000 });
     // With no token, the modal settles on the setup view (token input); wait
     // for it so the snap is the stable setup state, not the initial spinner.
     await page
       .locator('.token-input')
       .waitFor({ state: 'visible', timeout: 6_000 })
       .catch(() => {});
-    await snap(page, 'publish-modal');
+    await snapEl(dialog, 'publish-modal');
     await page.keyboard.press('Escape');
   });
 });
@@ -813,15 +866,7 @@ test.describe('Insights', () => {
   });
 
   async function navigateToInsights(page: Page) {
-    // Insights lives under the More dropdown as of 0.21.0
-    const moreBtn = page.locator('.nav-btn', { hasText: 'More' });
-    await expect(moreBtn).toBeVisible({ timeout: 5_000 });
-    await moreBtn.click();
-    const insightsItem = page.locator(
-      '.more-item', { hasText: 'Insights' }
-    );
-    await expect(insightsItem).toBeVisible({ timeout: 5_000 });
-    await insightsItem.click();
+    await page.goto('/insights');
     await page.waitForSelector('.insights-page', {
       timeout: 10_000,
     });
@@ -853,6 +898,21 @@ test.describe('Insights', () => {
     });
     await page.waitForTimeout(400);
     await snapEl(page.locator('.generated-detail'), 'insight-content');
+  });
+
+  test('session insight action in header', async ({ page }) => {
+    await selectFirstSession(page);
+
+    const breadcrumb = page.locator('.session-breadcrumb').first();
+    await expect(breadcrumb).toBeVisible({ timeout: 5_000 });
+    const insightButton = breadcrumb.locator(
+      'button.insight-btn[aria-label="Agent Analysis"]'
+    );
+    await expect(insightButton).toBeVisible({ timeout: 5_000 });
+    await insightButton.hover();
+    await page.waitForTimeout(300);
+
+    await snapEl(breadcrumb, 'session-insight-action');
   });
 });
 
@@ -990,7 +1050,7 @@ test.describe('About', () => {
     });
     await versionEl.first().click();
 
-    const dialog = page.locator('.about-modal');
+    const dialog = page.getByRole('dialog', { name: 'AgentsView' });
     await expect(dialog).toBeVisible({ timeout: 5_000 });
     await snapEl(dialog, 'about-dialog');
     await page.keyboard.press('Escape');
@@ -1007,20 +1067,12 @@ test.describe('In-session search', () => {
   });
 
   test('search bar with matches', async ({ page }) => {
-    // Open in-session search with Cmd+F
-    await page.keyboard.press('Meta+f');
-    await page.waitForSelector(
-      '.session-search, .in-session-search, .find-bar',
-      { timeout: 5_000 }
-    );
+    await page.locator('.find-btn').click();
+    await page.waitForSelector('.kit-find-bar', { timeout: 5_000 });
     await page.waitForTimeout(300);
 
     // Type a common word to get matches
-    const input = page.locator(
-      '.session-search input, ' +
-      '.in-session-search input, ' +
-      '.find-bar input'
-    );
+    const input = page.locator('.kit-find-bar__input');
     await input.fill('the');
     await page.waitForTimeout(1000);
 
@@ -1526,9 +1578,7 @@ test.describe('Dashboard session health', () => {
 
 test.describe('Usage dashboard', () => {
   async function navigateToUsage(page: Page) {
-    const navBtn = page.locator('.nav-btn', { hasText: 'Usage' });
-    await expect(navBtn).toBeVisible({ timeout: 5_000 });
-    await navBtn.click();
+    await page.goto('/usage');
     await page.waitForSelector('.usage-page', { timeout: 10_000 });
     // Wait for summary + charts to finish loading
     await expect(
@@ -1597,15 +1647,15 @@ test.describe('Usage dashboard', () => {
 
   test('model filter dropdown open', async ({ page }) => {
     // Click the Model filter trigger in the toolbar
-    const trigger = page.locator(
-      '.usage-toolbar .filter-dropdown .filter-trigger',
+    const modelDropdown = page.locator(
+      '.usage-toolbar .kit-filter-dropdown',
       { hasText: 'Model' }
     );
+    const trigger = modelDropdown.locator('.kit-filter-dropdown__btn');
     await expect(trigger).toBeVisible({ timeout: 5_000 });
     await trigger.click();
-    await page.waitForSelector(
-      '.filter-dropdown .dropdown-panel',
-      { timeout: 5_000 }
+    await modelDropdown.locator('.kit-filter-dropdown__panel').waitFor(
+      { state: 'visible', timeout: 5_000 }
     );
     await page.waitForTimeout(300);
     await snap(page, 'usage-filter-dropdown');

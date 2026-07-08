@@ -3,7 +3,7 @@ title: Changelog
 description: Release history for AgentsView
 ---
 
-## 0.37.0
+## 0.37.1
 <small>2026-07-08</small>
 
 **New features**

@@ -9,7 +9,7 @@ ARG AV_COMMIT=unknown
 # stdin) and the resulting layer gets cached as a "success",
 # leaving apt-get to install Debian's stock nodejs without npm.
 RUN apt-get update && \
-    apt-get install -y curl ca-certificates && \
+    apt-get install -y curl ca-certificates libsqlite3-dev && \
     curl -fsSL https://deb.nodesource.com/setup_22.x \
       -o /tmp/nodesource_setup.sh && \
     bash /tmp/nodesource_setup.sh && \

@@ -648,6 +648,11 @@ heredocs that would otherwise be truncated. Tool result content
 is stored alongside the tool call when available, giving a
 complete view of input and output.
 
+Hover or focus a tool block to reveal copy buttons for the
+structured input and, when present, the tool output.
+
+![Copy buttons on a tool block](/assets/generated/screenshots/tool-block-copy-btn.png)
+
 Codex tool calls receive special formatting: bash commands,
 write_stdin operations, and apply_patch calls display with
 structured argument previews and categorized detail labels.
@@ -695,6 +700,13 @@ fall back to plain text. To keep large sessions fast,
 highlighting is skipped for blocks over 50 KB or 800 lines,
 and the highlighter loads lazily so it costs nothing until the
 first code fence renders.
+
+Fenced code blocks labeled `mermaid` render as Mermaid diagrams
+in an interactive viewer with source-copy and expanded-view
+controls. If the Mermaid runtime cannot load, AgentsView keeps
+the escaped diagram source readable in the message. When
+in-session search is active, Mermaid fences render as source code
+so matches can be highlighted.
 
 ![Copy button on a code block](/assets/generated/screenshots/code-block-copy-btn.png)
 
