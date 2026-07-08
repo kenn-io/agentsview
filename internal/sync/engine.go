@@ -531,6 +531,15 @@ func (r processResult) skipCacheKey(path string) string {
 // Paths that don't match known session file patterns are
 // silently ignored.
 func (e *Engine) SyncPaths(paths []string) {
+	e.SyncPathsContext(context.Background(), paths)
+}
+
+// SyncPathsContext is SyncPaths with caller-controlled cancellation. The
+// file watcher threads the serve shutdown context through here: its stop
+// path waits for the in-flight onChange callback, so a watcher-driven sync
+// that ignored SIGTERM would hold shutdown until a service manager's kill
+// timeout instead of aborting between files like every other sync path.
+func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) {
 	if e.refuseWriteInForceParse("SyncPaths") {
 		return
 	}
@@ -555,9 +564,9 @@ func (e *Engine) SyncPaths(paths []string) {
 	e.resetS3CodexIndexCache()
 
 	e.anomalies.reset()
-	results := e.startWorkers(context.Background(), files)
+	results := e.startWorkers(ctx, files)
 	stats = e.collectAndBatch(
-		context.Background(), results, len(files), len(files), nil,
+		ctx, results, len(files), len(files), nil,
 		syncWriteDefault,
 	)
 	e.anomalies.applyTo(&stats)

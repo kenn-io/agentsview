@@ -158,6 +158,18 @@ func (w *Watcher) loop() {
 	defer ticker.Stop()
 
 	for {
+		// The select below picks randomly among ready cases, so a
+		// continuous event or ticker stream can keep winning over a
+		// closed stop channel — each round running another flush and
+		// its onChange sync — and starve Stop past a service
+		// manager's kill timeout. Check stop first so Stop() returns
+		// after at most the callback already in flight; pending
+		// changes are picked up by the next startup sync.
+		select {
+		case <-w.stop:
+			return
+		default:
+		}
 		select {
 		case <-w.stop:
 			return

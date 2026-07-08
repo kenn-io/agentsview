@@ -391,6 +391,48 @@ func setFileMtime(t *testing.T, path string, mtimeNS int64) {
 	require.NoError(t, os.Chtimes(path, ts, ts), "chtimes %s", path)
 }
 
+// TestSyncPathsContextCancelledAbortsWithoutWriting pins shutdown
+// responsiveness for watcher-driven syncs: SyncPathsContext must honor its
+// context and abort before writing, instead of running the sync to
+// completion while Watcher.Stop (and therefore SIGTERM shutdown) waits on
+// it. The same paths sync fine once the context is live again.
+func TestSyncPathsContextCancelledAbortsWithoutWriting(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	const sessionID = "oc-cancelled-sync"
+	sessionPath := storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/oc-app", "Cancelled Sync",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-a1", "assistant",
+		1704067201000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-a1", "part-a1",
+		"cancelled sync reply", 1704067201000,
+	)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	env.engine.SyncPathsContext(cancelled, []string{sessionPath})
+
+	sess, err := env.db.GetSessionFull(
+		context.Background(), "opencode:"+sessionID,
+	)
+	require.NoError(t, err, "GetSessionFull after cancelled sync")
+	assert.Nil(t, sess,
+		"a cancelled watcher sync must not write the session")
+
+	env.engine.SyncPathsContext(
+		context.Background(), []string{sessionPath},
+	)
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID, "cancelled sync reply",
+	)
+}
+
 func TestSyncEngineOpenCodeFamilySQLiteDropsUnchangedContainerSessions(
 	t *testing.T,
 ) {

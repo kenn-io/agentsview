@@ -241,8 +241,8 @@ func TestPollUnwatchedRootsOnceUsesScopedFullSync(t *testing.T) {
 	fake := &fakeUnwatchedPollSyncer{}
 	roots := []string{"/tmp/claude", "/tmp/codex"}
 
-	pollUnwatchedRootsOnce(fake, roots)
-	pollUnwatchedRootsOnce(fake, roots)
+	pollUnwatchedRootsOnce(t.Context(), fake, roots)
+	pollUnwatchedRootsOnce(t.Context(), fake, roots)
 
 	require.Equal(t, 2, fake.calls)
 	assert.Equal(t, roots, fake.callRoots[0])

@@ -227,6 +227,20 @@ func runServe(cfg config.Config, opts serveOptions) {
 			return
 		}
 
+		// The initial sync can leave hundreds of MB in the WAL, and
+		// SQLite checkpoints the whole log — not cancellable — when the
+		// final connection closes. A SIGTERM landing shortly after
+		// startup would spend the service manager's stop timeout inside
+		// that close and get escalated to SIGKILL, so truncate the WAL
+		// now at a controlled moment. Persistent readers just leave it
+		// for the periodic checkpoint loop.
+		if err := database.CheckpointWALTruncateWithRetry(
+			ctx,
+		); err != nil && !errors.Is(err, db.ErrWALCheckpointBusy) &&
+			ctx.Err() == nil {
+			log.Printf("post-sync wal checkpoint: %v", err)
+		}
+
 		// Backfill runs in the background. On a large DB (e.g.
 		// after copying tens of thousands of orphaned sessions
 		// during a resync), walking every row to recompute
@@ -353,13 +367,18 @@ func runServe(cfg config.Config, opts serveOptions) {
 		stopWatcher, unwatchedDirs := startFileWatcher(
 			cfg, engine, func(paths []string) {
 				idleTracker.Do(func() {
-					engine.SyncPaths(paths)
+					// The serve ctx must reach watcher-driven syncs:
+					// stopWatcher waits for the in-flight callback, so
+					// a sync that ignored SIGTERM would hold shutdown
+					// open until the service manager escalates to
+					// SIGKILL.
+					engine.SyncPathsContext(ctx, paths)
 				})
 			},
 		)
 		defer stopWatcher()
 		if len(unwatchedDirs) > 0 {
-			go startUnwatchedPoll(engine, unwatchedDirs, idleTracker)
+			go startUnwatchedPoll(ctx, engine, unwatchedDirs, idleTracker)
 		}
 	}
 
@@ -1411,20 +1430,28 @@ type unwatchedPollSyncer interface {
 }
 
 func startUnwatchedPoll(
+	ctx context.Context,
 	engine unwatchedPollSyncer,
 	roots []string,
 	idleTracker *server.IdleTracker,
 ) {
 	ticker := time.NewTicker(unwatchedPollInterval)
 	defer ticker.Stop()
-	for range ticker.C {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 		log.Println("Polling unwatched directories...")
 		idleTracker.Do(func() {
-			pollUnwatchedRootsOnce(engine, roots)
+			pollUnwatchedRootsOnce(ctx, engine, roots)
 		})
 	}
 }
 
-func pollUnwatchedRootsOnce(engine unwatchedPollSyncer, roots []string) {
-	engine.SyncRootsSince(context.Background(), roots, time.Time{}, nil)
+func pollUnwatchedRootsOnce(
+	ctx context.Context, engine unwatchedPollSyncer, roots []string,
+) {
+	engine.SyncRootsSince(ctx, roots, time.Time{}, nil)
 }

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -51,6 +52,71 @@ func pollUntil(t *testing.T, condition func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("pollUntil: condition not met within deadline")
+}
+
+// TestWatcherStopPreemptsPendingFlushes pins the loop's stop priority: once
+// Stop is signalled, the loop must exit after at most the in-flight
+// onChange callback, even with more pending changes and ticker fires ready.
+// Without the priority check the loop's select picks randomly among ready
+// cases, so a continuous event stream could keep winning over the closed
+// stop channel — each round running another long onChange sync — and starve
+// Stop past a service manager's kill timeout.
+func TestWatcherStopPreemptsPendingFlushes(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var calls atomic.Int32
+	w, dir := startTestWatcherNoCleanup(t, func([]string) {
+		calls.Add(1)
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+	}, 10*time.Millisecond)
+
+	require.NoError(t,
+		os.WriteFile(filepath.Join(dir, "a.jsonl"), []byte("a"), 0o644))
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for onChange to start")
+	}
+
+	// Plant a pending change that is already older than the debounce
+	// while the first flush is blocked inside onChange. The ticker keeps
+	// firing during the block, so the moment the loop resumes it has a
+	// ready ticker case whose flush would deliver this entry.
+	w.mu.Lock()
+	w.pending[filepath.Join(dir, "b.jsonl")] =
+		time.Now().Add(-time.Second)
+	w.mu.Unlock()
+
+	stopped := make(chan struct{})
+	go func() {
+		w.Stop()
+		close(stopped)
+	}()
+	// Wait for Stop to close the stop channel before releasing the
+	// in-flight callback, so the loop's next iteration must observe it.
+	select {
+	case <-w.stop:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for Stop to signal the loop")
+	}
+	// Keep the callback blocked past a debounce interval so the ticker
+	// fires and buffers a tick while the loop is busy. At resume both
+	// the closed stop channel and the tick are ready — exactly the race
+	// the stop-priority check must win every time.
+	time.Sleep(5 * w.debounce)
+	close(release)
+
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("watcher Stop did not return after the in-flight flush")
+	}
+	assert.Equal(t, int32(1), calls.Load(),
+		"pending changes must not flush once stop is signalled")
 }
 
 func TestWatcherCallsOnChange(t *testing.T) {
