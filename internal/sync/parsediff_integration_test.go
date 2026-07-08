@@ -2255,6 +2255,14 @@ func TestParseDiffEngineRefusesWrites(t *testing.T) {
 			" WHERE id = ?", sessionID)
 	mutateDB(t, env,
 		"DELETE FROM secret_findings WHERE session_id = ?", sessionID)
+	require.Error(t, diffEngine.BackfillSignalComputer()(ctx, sessionID),
+		"BackfillSignalComputer on a report-only engine must error")
+	mutateDB(t, env,
+		"UPDATE sessions SET secret_leak_count = 0, "+
+			"secrets_rules_version = '', quality_signal_version = 0"+
+			" WHERE id = ?", sessionID)
+	mutateDB(t, env,
+		"DELETE FROM secret_findings WHERE session_id = ?", sessionID)
 	_, err = diffEngine.ScanSecrets(
 		ctx, sync.SecretScanInput{Backfill: true}, nil,
 	)

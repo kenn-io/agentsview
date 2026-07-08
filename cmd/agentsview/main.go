@@ -237,9 +237,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 		go idleTracker.Do(func() {
 			if err := database.BackfillSignals(
 				ctx,
-				func(bCtx context.Context, id string) error {
-					return engine.RecomputeSignals(bCtx, id)
-				},
+				engine.BackfillSignalComputer(),
 			); err != nil && ctx.Err() == nil {
 				log.Printf("signals backfill: %v", err)
 			}

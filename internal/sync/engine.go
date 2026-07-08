@@ -247,7 +247,7 @@ func NewEngine(
 	// Errors are logged inside recomputeSignalsFromDB and are
 	// non-fatal: the next write or flush retries.
 	recompute := func(sessionID string) {
-		_ = e.recomputeSignalsFromDB(
+		_, _ = e.recomputeSignalsFromDB(
 			context.Background(), sessionID,
 		)
 	}
@@ -5625,7 +5625,28 @@ func (e *Engine) RecomputeSignals(
 			"RecomputeSignals refused on report-only parse-diff engine",
 		)
 	}
-	return e.recomputeSignalsFromDB(ctx, sessionID)
+	_, err := e.recomputeSignalsFromDB(ctx, sessionID)
+	return err
+}
+
+// BackfillSignalComputer returns a signal recompute closure for archive
+// backfills that releases transient heap after enough loaded content has
+// crossed the threshold.
+func (e *Engine) BackfillSignalComputer() func(context.Context, string) error {
+	var release recomputeHeapReleaser
+	return func(ctx context.Context, sessionID string) error {
+		if e.refuseWriteInForceParse("BackfillSignalComputer") {
+			return errors.New(
+				"BackfillSignalComputer refused on report-only parse-diff engine",
+			)
+		}
+		heapBytes, err := e.recomputeSignalsFromDB(ctx, sessionID)
+		if err != nil {
+			return err
+		}
+		release.Account(heapBytes)
+		return nil
+	}
 }
 
 // recomputeSignalsFromDB loads a session's full message history
@@ -5635,15 +5656,15 @@ func (e *Engine) RecomputeSignals(
 // incremental writes).
 func (e *Engine) recomputeSignalsFromDB(
 	ctx context.Context, sessionID string,
-) error {
+) (int, error) {
 	sess, err := e.db.GetSessionFull(ctx, sessionID)
 	if err != nil {
-		return fmt.Errorf(
+		return 0, fmt.Errorf(
 			"loading session %s: %w", sessionID, err,
 		)
 	}
 	if sess == nil {
-		return nil
+		return 0, nil
 	}
 	msgs, err := e.db.GetAllMessages(ctx, sessionID)
 	if err != nil {
@@ -5651,11 +5672,12 @@ func (e *Engine) recomputeSignalsFromDB(
 			"signals: load messages %s: %v",
 			sessionID, err,
 		)
-		return fmt.Errorf(
+		return 0, fmt.Errorf(
 			"loading messages %s: %w", sessionID, err,
 		)
 	}
 	update, findings := computeSignalsAndSecrets(*sess, msgs)
+	heapBytes := recomputeHeapBytes(msgs, findings)
 	// Findings persist before the signals update: UpdateSessionSignals
 	// advances quality_signal_version, which BackfillSignals treats as
 	// proof the whole compute persisted. Writing it last keeps a
@@ -5665,7 +5687,7 @@ func (e *Engine) recomputeSignalsFromDB(
 		sessionID, findings, update.SecretLeakCount, update.SecretsRulesVersion,
 	); err != nil {
 		log.Printf("secrets: persist %s: %v", sessionID, err)
-		return fmt.Errorf("persisting findings %s: %w", sessionID, err)
+		return 0, fmt.Errorf("persisting findings %s: %w", sessionID, err)
 	}
 	if err := e.db.UpdateSessionSignals(
 		sessionID, update,
@@ -5673,11 +5695,11 @@ func (e *Engine) recomputeSignalsFromDB(
 		log.Printf(
 			"signals: update %s: %v", sessionID, err,
 		)
-		return fmt.Errorf(
+		return 0, fmt.Errorf(
 			"updating signals %s: %w", sessionID, err,
 		)
 	}
-	return nil
+	return heapBytes, nil
 }
 
 type pendingWrite struct {
