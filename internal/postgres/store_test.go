@@ -497,6 +497,56 @@ func TestStoreGetSidebarSessionIndexIncludesChildrenForMatchingRoot(
 	)
 }
 
+func TestStoreGetSidebarSessionIndexPagedExcludesAutomatedDescendants(
+	t *testing.T,
+) {
+	pgURL := testPGURL(t)
+	store := ensureSidebarIndexStoreSchema(t, pgURL)
+	defer store.Close()
+
+	rootID := "root"
+	insertSidebarIndexSession(t, store, rootID, func(
+		s *sidebarIndexSessionSeed,
+	) {
+		s.endedAt = "2024-01-03T00:00:00Z"
+		s.userMessageCount = 5
+	})
+	insertSidebarIndexSession(t, store, "human-child", func(
+		s *sidebarIndexSessionSeed,
+	) {
+		s.endedAt = "2024-01-02T00:00:00Z"
+		s.parentSessionID = &rootID
+		s.relationshipType = "subagent"
+		s.userMessageCount = 1
+	})
+	insertSidebarIndexSession(t, store, "automated-child", func(
+		s *sidebarIndexSessionSeed,
+	) {
+		s.firstMessage = "You are a code reviewer. Review the code."
+		s.endedAt = "2024-01-01T00:00:00Z"
+		s.parentSessionID = &rootID
+		s.relationshipType = "subagent"
+		s.userMessageCount = 1
+		s.isAutomated = true
+	})
+
+	index, err := store.GetSidebarSessionIndex(
+		context.Background(),
+		db.SessionFilter{ExcludeAutomated: true, Limit: 1},
+	)
+	require.NoError(t, err, "GetSidebarSessionIndex exclude automated")
+	requireSidebarIndexIDs(t, index.Sessions, []string{"root", "human-child"})
+
+	index, err = store.GetSidebarSessionIndex(
+		context.Background(),
+		db.SessionFilter{ExcludeAutomated: false, Limit: 1},
+	)
+	require.NoError(t, err, "GetSidebarSessionIndex include automated")
+	requireSidebarIndexIDs(
+		t, index.Sessions, []string{"root", "human-child", "automated-child"},
+	)
+}
+
 func TestStoreGetSidebarSessionIndexPaginatesContinuationsAsDescendants(
 	t *testing.T,
 ) {

@@ -453,6 +453,11 @@ func buildSessionFilterWithBuilder(
 	rootMatchParts = append(rootMatchParts,
 		BuildCanonicalRootWhere(b.dialect, "root_session", f.IncludeOrphans))
 	rootMatch := strings.Join(rootMatchParts, " AND ")
+	childAutomationPred := automationScopePredicate(f, b.dialect, "s")
+	childAutomationWhere := ""
+	if childAutomationPred != "" {
+		childAutomationWhere = " AND " + childAutomationPred
+	}
 
 	cte := "WITH RECURSIVE tree(id) AS (" +
 		"SELECT root_session.id FROM sessions root_session" +
@@ -463,9 +468,27 @@ func buildSessionFilterWithBuilder(
 		"SELECT s.id FROM sessions s" +
 		" JOIN tree t ON s.parent_session_id = t.id" +
 		" WHERE s.message_count > 0 AND s.deleted_at IS NULL" +
+		childAutomationWhere +
 		") SELECT id FROM tree"
 
 	return baseWhere + " AND " + q("id") + " IN (" + cte + ")"
+}
+
+func automationScopePredicate(
+	f SessionFilter, dialect QueryDialect, sessionAlias string,
+) string {
+	col := "is_automated"
+	if sessionAlias != "" {
+		col = sessionAlias + "." + col
+	}
+	switch normalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated) {
+	case "human":
+		return col + " = " + dialect.falseLiteral
+	case "automated":
+		return col + " = " + dialect.trueLiteral
+	default:
+		return ""
+	}
 }
 
 func sessionFilterPredicates(

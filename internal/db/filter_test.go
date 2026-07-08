@@ -1214,6 +1214,47 @@ func TestSidebarSessionIndexIncludesChildrenForMatchingRoot(t *testing.T) {
 	requireSidebarIndexIDs(t, index.Sessions, []string{"root", "sub", "fork"})
 }
 
+func TestSidebarSessionIndexPagedExcludesAutomatedDescendants(t *testing.T) {
+	d := testDB(t)
+
+	rootID := "root"
+	insertSession(t, d, rootID, "proj", func(s *Session) {
+		s.EndedAt = new("2024-01-03T00:00:00Z")
+		s.MessageCount = 10
+		s.UserMessageCount = 5
+	})
+	insertSession(t, d, "human-child", "proj", func(s *Session) {
+		s.EndedAt = new("2024-01-02T00:00:00Z")
+		s.MessageCount = 2
+		s.UserMessageCount = 1
+		s.ParentSessionID = &rootID
+		s.RelationshipType = "subagent"
+	})
+	insertSession(t, d, "automated-child", "proj", func(s *Session) {
+		fm := "You are a code reviewer. Review the code."
+		s.FirstMessage = &fm
+		s.EndedAt = new("2024-01-01T00:00:00Z")
+		s.MessageCount = 3
+		s.UserMessageCount = 1
+		s.ParentSessionID = &rootID
+		s.RelationshipType = "subagent"
+	})
+
+	index, err := d.GetSidebarSessionIndex(context.Background(), SessionFilter{
+		ExcludeAutomated: true,
+		Limit:            1,
+	})
+	requireNoError(t, err, "GetSidebarSessionIndex")
+	requireSidebarIndexIDs(t, index.Sessions, []string{"root", "human-child"})
+
+	index, err = d.GetSidebarSessionIndex(context.Background(), SessionFilter{
+		ExcludeAutomated: false,
+		Limit:            1,
+	})
+	requireNoError(t, err, "GetSidebarSessionIndex")
+	requireSidebarIndexIDs(t, index.Sessions, []string{"root", "human-child", "automated-child"})
+}
+
 func TestSidebarSessionIndexStarredIncludesStarredDescendantRoot(t *testing.T) {
 	d := testDB(t)
 

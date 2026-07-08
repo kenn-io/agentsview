@@ -553,6 +553,14 @@ func (s *Store) getSidebarSessionIndexPage(
 	rootFilter.Starred = false
 	rootWhere, rootArgs := buildPGSessionBaseFilter(rootFilter)
 	canonicalRootWhere := db.BuildCanonicalRootWhere(db.PostgresQueryDialect(), "sessions", f.IncludeOrphans)
+	childAutomationPred := pgAutomatedScopePredicate(
+		normalizePGAutomatedScope(f.AutomatedScope, f.ExcludeAutomated),
+		"s.is_automated",
+	)
+	childAutomationWhere := ""
+	if childAutomationPred != "" {
+		childAutomationWhere = " AND " + childAutomationPred
+	}
 
 	var total int
 	var cur db.SessionCursor
@@ -581,6 +589,7 @@ func (s *Store) getSidebarSessionIndexPage(
 					JOIN tree t ON s.parent_session_id = t.id
 					WHERE s.message_count > 0
 					  AND s.deleted_at IS NULL
+					  ` + childAutomationWhere + `
 				),
 				eligible_roots(id) AS (
 					SELECT DISTINCT t.root_id
@@ -630,6 +639,7 @@ func (s *Store) getSidebarSessionIndexPage(
 			JOIN tree t ON s.parent_session_id = t.id
 			WHERE s.message_count > 0
 			  AND s.deleted_at IS NULL
+			  ` + childAutomationWhere + `
 		)
 		` + pgSidebarStarredRootCTE(f.Starred) + `,
 		root_activity(id, activity) AS (
@@ -718,6 +728,7 @@ func (s *Store) getSidebarSessionIndexPage(
 			JOIN tree t ON s.parent_session_id = t.id
 			WHERE s.message_count > 0
 			  AND s.deleted_at IS NULL
+			  ` + childAutomationWhere + `
 		),
 		ranked_tree(id, ord) AS (
 			SELECT id, MIN(ord) AS ord

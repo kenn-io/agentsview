@@ -789,6 +789,11 @@ func (db *DB) getSidebarSessionIndexPage(
 	rootFilter.IncludeChildren = false
 	rootWhere, rootArgs := buildSessionBaseFilter(rootFilter)
 	canonicalRootWhere := buildCanonicalRootWhere(f.IncludeOrphans)
+	childAutomationPred := automationScopePredicate(f, SQLiteQueryDialect(), "s")
+	childAutomationWhere := ""
+	if childAutomationPred != "" {
+		childAutomationWhere = " AND " + childAutomationPred
+	}
 
 	var total int
 	var cur SessionCursor
@@ -817,6 +822,7 @@ func (db *DB) getSidebarSessionIndexPage(
 					JOIN tree t ON s.parent_session_id = t.id
 					WHERE s.message_count > 0
 					  AND s.deleted_at IS NULL
+					  ` + childAutomationWhere + `
 				),
 				eligible_roots(id) AS (
 					SELECT DISTINCT t.root_id
@@ -864,6 +870,7 @@ func (db *DB) getSidebarSessionIndexPage(
 			JOIN tree t ON s.parent_session_id = t.id
 			WHERE s.message_count > 0
 			  AND s.deleted_at IS NULL
+			  ` + childAutomationWhere + `
 		)
 		` + sidebarStarredRootCTE(f.Starred) + `,
 		root_activity(id, activity) AS (
@@ -945,6 +952,7 @@ func (db *DB) getSidebarSessionIndexPage(
 			JOIN tree t ON s.parent_session_id = t.id
 			WHERE s.message_count > 0
 			  AND s.deleted_at IS NULL
+			  ` + childAutomationWhere + `
 		),
 		ranked_tree(id, ord) AS (
 			SELECT id, MIN(ord) AS ord
