@@ -1,10 +1,15 @@
 #!/bin/bash
 # AgentsView 开发模式启动脚本
 # 双击此文件同时启动 Go 后端 + Vite 前端开发服务器
+# 访问地址: http://localhost:5173
 
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BINARY="$PROJECT_DIR/agentsview"
 FRONTEND_DIR="$PROJECT_DIR/frontend"
+GO_PID_FILE="$PROJECT_DIR/.agentsview-go.pid"
+VITE_PID_FILE="$PROJECT_DIR/.agentsview-vite.pid"
+GO_LOG="/tmp/agentsview-go.log"
+VITE_LOG="/tmp/agentsview-vite.log"
 
 # 检查二进制文件是否存在
 if [ ! -f "$BINARY" ]; then
@@ -18,18 +23,70 @@ if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
     exit 1
 fi
 
-# 清理之前的 PID 文件
-rm -f "$PROJECT_DIR/.agentsview-go.pid" "$PROJECT_DIR/.agentsview-vite.pid"
+# 如果已经有实例在运行，先停止
+for pid_file in "$GO_PID_FILE" "$VITE_PID_FILE"; do
+    if [ -f "$pid_file" ]; then
+        OLD_PID=$(cat "$pid_file" 2>/dev/null) || true
+        if kill -0 "$OLD_PID" 2>/dev/null; then
+            kill "$OLD_PID" 2>/dev/null || true
+            sleep 1
+        fi
+        rm -f "$pid_file"
+    fi
+done
 
-# 用 AppleScript 打开一个新的 Terminal 窗口运行服务
-osascript <<APPLESCRIPT
- tell application "Terminal"
-    do script "cd '$PROJECT_DIR' && echo '启动 Go 后端...' && nohup '$BINARY' serve > /tmp/agentsview-go.log 2>&1 & echo \$! > '$PROJECT_DIR/.agentsview-go.pid' && sleep 2 && echo 'Go 后端已启动: http://localhost:8080' && cd '$FRONTEND_DIR' && echo '启动 Vite 前端...' && nohup npm run dev > /tmp/agentsview-vite.log 2>&1 & echo \$! > '$PROJECT_DIR/.agentsview-vite.pid' && sleep 3 && echo '' && echo '========================================' && echo 'AgentsView 开发模式已启动' && echo '  Go 后端:   http://localhost:8080' && echo '  Vite 前端: http://localhost:5173' && echo '' && echo '按回车键关闭两个服务...' && echo '========================================' && read -r && kill \$(cat '$PROJECT_DIR/.agentsview-go.pid' 2>/dev/null) 2>/dev/null; kill \$(cat '$PROJECT_DIR/.agentsview-vite.pid' 2>/dev/null) 2>/dev/null; rm -f '$PROJECT_DIR/.agentsview-go.pid' '$PROJECT_DIR/.agentsview-vite.pid'; echo 'AgentsView 已关闭'; exit"
-    activate
- end tell
-APPLESCRIPT
+# 启动 Go 后端（后台运行）
+cd "$PROJECT_DIR"
+nohup "$BINARY" serve > "$GO_LOG" 2>&1 &
+GO_PID=$!
+echo "$GO_PID" > "$GO_PID_FILE"
 
-sleep 4
+# 等待 Go 后端启动
+echo "正在启动 Go 后端..."
+for i in {1..10}; do
+    if curl -s "http://localhost:8080/api/health" > /dev/null 2>&1; then
+        echo "Go 后端已启动: http://localhost:8080"
+        break
+    fi
+    sleep 1
+done
+
+# 启动 Vite 前端开发服务器（后台运行）
+cd "$FRONTEND_DIR"
+nohup npm run dev > "$VITE_LOG" 2>&1 &
+VITE_PID=$!
+echo "$VITE_PID" > "$VITE_PID_FILE"
+
+# 等待 Vite 启动
+echo "正在启动 Vite 前端..."
+for i in {1..10}; do
+    if curl -s "http://localhost:5173/" > /dev/null 2>&1; then
+        echo "Vite 前端已启动: http://localhost:5173"
+        break
+    fi
+    sleep 1
+done
 
 # 在浏览器中打开 Vite 开发服务器
 open "http://localhost:5173"
+
+# 显示通知
+osascript -e 'display notification "开发模式已启动: http://localhost:5173" with title "AgentsView"' > /dev/null 2>&1 || true
+
+echo ""
+echo "========================================"
+echo "AgentsView 开发模式已启动"
+echo "  Go 后端:   http://localhost:8080"
+echo "  Vite 前端: http://localhost:5173"
+echo ""
+echo "按回车键关闭两个服务..."
+echo "========================================"
+read -r
+
+# 关闭服务
+echo "正在关闭服务..."
+kill "$GO_PID" 2>/dev/null || true
+kill "$VITE_PID" 2>/dev/null || true
+rm -f "$GO_PID_FILE" "$VITE_PID_FILE"
+
+echo "AgentsView 已关闭"
