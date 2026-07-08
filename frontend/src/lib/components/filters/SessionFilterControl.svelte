@@ -93,8 +93,17 @@
     return rankedMachines.filter((m) => m.toLowerCase().includes(q));
   });
 
+  // When a project filter is pinned (project routes keep it through
+  // clearSessionFilters), offering other projects' branches would let a
+  // click AND two contradictory predicates into an empty session list.
+  const projectBranches = $derived.by(() => {
+    const project = sessions.filters.project;
+    if (!project) return sessions.branches;
+    return sessions.branches.filter((b) => b.project === project);
+  });
+
   const rankedBranches = $derived.by(() =>
-    [...sessions.branches].sort((a, b) => {
+    [...projectBranches].sort((a, b) => {
       const aSel = selectedBranchSet.has(a.token);
       const bSel = selectedBranchSet.has(b.token);
       return aSel === bSel ? 0 : aSel ? -1 : 1;
@@ -426,10 +435,10 @@
         </div>
       </div>
     {/if}
-    {#if sessions.branches.length > 0}
+    {#if projectBranches.length > 0}
       <div class="filter-section">
         <div class="filter-section-label">{m.sidebar_filters_branch()}</div>
-        {#if sessions.branches.length > 5}
+        {#if projectBranches.length > 5}
           <input
             class="agent-search"
             type="text"

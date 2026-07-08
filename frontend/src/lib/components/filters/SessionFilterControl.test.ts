@@ -116,6 +116,40 @@ describe("SessionFilterControl selected-to-top sort", () => {
     expect(names[1]).toBe("alpha-host");
   });
 
+  it("scopes branch options to the active project filter", async () => {
+    const mk = (project: string, branch: string) => ({
+      project,
+      branch,
+      token: branchFilterToken(project, branch),
+    });
+    sessions.branches = [
+      mk("proj-a", "main"),
+      mk("proj-b", "feature"),
+      mk("proj-a", "dev"),
+    ];
+    sessions.filters.project = "proj-a";
+    await openDropdown();
+
+    expect(sectionRowNames("Branch")).toEqual(["main", "dev"]);
+  });
+
+  it("hides the branch section when the active project has no branches", async () => {
+    sessions.branches = [
+      {
+        project: "proj-b",
+        branch: "feature",
+        token: branchFilterToken("proj-b", "feature"),
+      },
+    ];
+    sessions.filters.project = "proj-a";
+    await openDropdown();
+
+    const labels = Array.from(
+      document.querySelectorAll(".filter-section-label"),
+    ).map((el) => el.textContent?.trim());
+    expect(labels).not.toContain("Branch");
+  });
+
   it("floats selected branches, keeping server order among the rest", async () => {
     const mk = (project: string, branch: string) => ({
       project,
