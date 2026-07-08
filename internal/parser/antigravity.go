@@ -397,30 +397,56 @@ func loadAntigravityGenMetadataUsage(
 	return r.usageEvents, hasGenMetadata
 }
 
+// antigravityUsageEventIsZeroToken mirrors the sidecar parser's
+// empty-usage skip (parseAntigravityCLITrajectory drops generations
+// where input, output, AND cacheRead are all zero -- the marker of a
+// failed/retried generation). The rescue merge below applies the same
+// predicate to the DB side so the two event sequences align by
+// construction.
+func antigravityUsageEventIsZeroToken(ev ParsedUsageEvent) bool {
+	return ev.InputTokens == 0 && ev.OutputTokens == 0 &&
+		ev.CacheReadInputTokens == 0
+}
+
 // mergeAntigravityRescueUsageTiming copies per-generation timing (and
 // missing model attribution) from sidecar usage events onto DB
 // gen_metadata events, matched by ordinal position: gen_metadata is
 // loaded ORDER BY idx and the sidecar's generatorMetadata events are in
 // trajectory order, so both describe the same generation sequence. The
-// DB token counts stay authoritative. DB events beyond the sidecar's
-// count keep an empty OccurredAt -- timestamps are never invented --
-// and sidecar events beyond the DB's count are ignored (the DB is
-// ground truth for which generations happened). Rescue-path only:
+// DB token counts stay authoritative.
+//
+// Zero-token DB events are skipped WITHOUT consuming a sidecar event:
+// the sidecar parser never emits an event for an empty/retried
+// generation (see antigravityUsageEventIsZeroToken), so a zero-token DB
+// event has no sidecar counterpart and pairing it would shift every
+// later match onto the wrong timestamp. Those events stay in the output
+// untouched, in their original order -- they are still ground-truth
+// generation records -- just timestamp-less. With that filter the
+// sequences align by construction and any divergence is suffix-only (a
+// lagging sidecar), which prefix matching handles: DB events beyond the
+// sidecar's count keep an empty OccurredAt (timestamps are never
+// invented) and sidecar events beyond the DB's count are ignored (the
+// DB is ground truth for which generations happened). Rescue-path only:
 // normal parses over a readable DB anchor events to decoded steps and
 // must not pass through here.
 func mergeAntigravityRescueUsageTiming(
 	dbEvents, sidecarEvents []ParsedUsageEvent,
 ) {
+	j := 0
 	for i := range dbEvents {
-		if i >= len(sidecarEvents) {
+		if antigravityUsageEventIsZeroToken(dbEvents[i]) {
+			continue
+		}
+		if j >= len(sidecarEvents) {
 			return
 		}
 		if dbEvents[i].OccurredAt == "" {
-			dbEvents[i].OccurredAt = sidecarEvents[i].OccurredAt
+			dbEvents[i].OccurredAt = sidecarEvents[j].OccurredAt
 		}
 		if dbEvents[i].Model == "" {
-			dbEvents[i].Model = sidecarEvents[i].Model
+			dbEvents[i].Model = sidecarEvents[j].Model
 		}
+		j++
 	}
 }
 

@@ -4041,6 +4041,50 @@ func TestAntigravityIDESidecarRescueKeepsGenMetadataUsage(t *testing.T) {
 			"surplus DB event must stay bare; timestamps are never invented")
 	})
 
+	t.Run("zero-token generation does not shift timestamp pairing", func(t *testing.T) {
+		root := t.TempDir()
+		id := "dcdcdcdc-fefe-abab-dcdc-fefefefefefe"
+		// An empty/retried generation BEFORE the successful one: the DB
+		// loader still emits a zero-token event for it, but the sidecar
+		// drops empty-usage generations, so naive positional pairing
+		// would hand the successful generation's timestamp to the
+		// zero-token event.
+		genDataEmpty := createAntigravityMockGenMetadata(t, 0, 0, 0, "Test Gemini 3.5")
+		dbPath := makeDB(t, root, id, genDataEmpty)
+		genDataReal := createAntigravityMockGenMetadata(t, 2400, 180, 0, "Test Gemini 3.5")
+		db, err := sql.Open("sqlite3", dbPath)
+		require.NoError(t, err)
+		mustExec(t, db,
+			`INSERT INTO gen_metadata (idx, data, size) VALUES (2, ?, ?)`,
+			genDataReal, len(genDataReal))
+		require.NoError(t, db.Close())
+
+		// Sidecar carries ONLY the successful generation.
+		genJSON := `[{
+			"stepIndices": [1],
+			"chatModel": {
+				"model": "MODEL_PLACEHOLDER_M20",
+				"usage": {"inputTokens": "9999", "outputTokens": "888"}
+			}
+		}]`
+		writeAntigravityTestSidecarWithGenMetadata(t, root, id, 2, genJSON)
+
+		_, _, usageEvents, err := parseAntigravityTestSession(
+			t, dbPath, "", "test-machine",
+		)
+		require.NoError(t, err)
+		require.Len(t, usageEvents, 2,
+			"zero-token DB events remain in the output")
+		assert.Equal(t, 0, usageEvents[0].InputTokens)
+		assert.Equal(t, 0, usageEvents[0].OutputTokens)
+		assert.Empty(t, usageEvents[0].OccurredAt,
+			"zero-token event must not inherit the successful generation's timestamp")
+		assert.Equal(t, 2400, usageEvents[1].InputTokens)
+		assert.Equal(t, 180, usageEvents[1].OutputTokens)
+		assert.Equal(t, "2026-06-10T20:41:00Z", usageEvents[1].OccurredAt,
+			"successful generation pairs with the sidecar event despite the earlier zero-token row")
+	})
+
 	t.Run("undecodable gen_metadata keeps flag semantics", func(t *testing.T) {
 		root := t.TempDir()
 		id := "babababa-dcdc-fefe-baba-dcdcdcdcdcdc"
