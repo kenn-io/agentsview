@@ -133,20 +133,19 @@ func (p *antigravityProvider) parseSession(
 	// falls back to the heuristic decode exactly as before. A step-load
 	// failure is a fallback condition, not a parse failure (mirroring the
 	// CLI flow): the DB then offers no coverage signal and a readable
-	// sidecar can still rescue the session; without one the original
-	// step-load error is returned below.
+	// sidecar can still rescue the session; without one the parser
+	// degrades to whatever is recoverable (brain artifacts, gen_metadata
+	// or sidecar usage) and returns the original step-load error only
+	// when nothing at all is recoverable.
 	sidecarPath := strings.TrimSuffix(path, ".db") + ".trajectory.json"
 	tRes, tErr := parseAntigravityCLITrajectory(sidecarPath)
 	sidecarOK := tErr == nil &&
 		hasDisplayableAntigravityCLITrajectoryMessage(tRes.messages)
 	sidecarCovers := dbErr != nil || dbResult.rawStepCount == 0 ||
 		tRes.rawSteps >= dbResult.rawStepCount
-	switch {
-	case sidecarOK && sidecarCovers:
+	if sidecarOK && sidecarCovers {
 		messages = tRes.messages
 		transcriptFidelity = TranscriptFidelityFull
-	case dbErr != nil:
-		return nil, nil, nil, dbErr
 	}
 	// Coverage gates usage just like the transcript: a lagging sidecar
 	// carries only the generations it has seen, so persisting those would
@@ -162,6 +161,17 @@ func (p *antigravityProvider) parseSession(
 			filepath.Join(root, "brain", id),
 		)...,
 	)
+
+	// The step-load error surfaces only when nothing was recoverable: no
+	// rescuing sidecar transcript, no brain artifacts, and no usage from
+	// gen_metadata or the sidecar. Anything else is persisted as a
+	// degraded session (fidelity stays empty, no fabricated transcript);
+	// the sidecar, brain artifacts, and DB files are all fingerprinted
+	// companions, so a later change to any of them re-parses the session.
+	if dbErr != nil && !(sidecarOK && sidecarCovers) &&
+		len(messages) == 0 && len(usageEvents) == 0 {
+		return nil, nil, nil, dbErr
+	}
 
 	sort.SliceStable(messages, func(i, j int) bool {
 		return messages[i].Timestamp.Before(messages[j].Timestamp)

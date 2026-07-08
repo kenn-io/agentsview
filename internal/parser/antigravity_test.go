@@ -3995,3 +3995,104 @@ func TestAntigravityIDESidecarRescueKeepsGenMetadataUsage(t *testing.T) {
 			"gen_metadata rows that decode to no usage must flag the session")
 	})
 }
+
+// TestAntigravityIDEUnreadableStepsDegradesToRecoverableData verifies
+// that a step-load failure without a rescuing sidecar transcript does
+// not drop data that is still recoverable: usage-only sidecars, DB
+// gen_metadata, and brain artifacts all persist a degraded session, and
+// the step-load error surfaces only when nothing is recoverable.
+func TestAntigravityIDEUnreadableStepsDegradesToRecoverableData(t *testing.T) {
+	makeNoStepsDB := func(t *testing.T, root, id string, genData []byte) string {
+		t.Helper()
+		mustMkdir(t, filepath.Join(root, "conversations"))
+		dbPath := filepath.Join(root, "conversations", id+".db")
+		db, err := sql.Open("sqlite3", dbPath)
+		require.NoError(t, err)
+		mustExec(t, db, `CREATE TABLE trajectory_meta (
+			trajectory_id text, PRIMARY KEY (trajectory_id))`)
+		if genData != nil {
+			mustExec(t, db, `CREATE TABLE gen_metadata (
+				idx integer, data blob, size integer, PRIMARY KEY (idx))`)
+			mustExec(t, db,
+				`INSERT INTO gen_metadata (idx, data, size) VALUES (1, ?, ?)`,
+				genData, len(genData))
+		}
+		require.NoError(t, db.Close())
+		return dbPath
+	}
+
+	genJSON := `[{
+		"stepIndices": [1],
+		"chatModel": {
+			"model": "MODEL_PLACEHOLDER_M20",
+			"usage": {"inputTokens": "1500", "outputTokens": "77"}
+		}
+	}]`
+
+	t.Run("usage-only sidecar persists with sidecar usage", func(t *testing.T) {
+		root := t.TempDir()
+		id := "1b1b1b1b-2c2c-3d3d-4e4e-5f5f5f5f5f5f"
+		dbPath := makeNoStepsDB(t, root, id, nil)
+		// Sidecar with zero steps: no displayable transcript, only
+		// generatorMetadata usage.
+		writeAntigravityTestSidecarWithGenMetadata(t, root, id, 0, genJSON)
+
+		sess, msgs, usageEvents, err := parseAntigravityTestSession(
+			t, dbPath, "", "test-machine",
+		)
+		require.NoError(t, err,
+			"recoverable sidecar usage must persist a degraded session")
+		assert.Empty(t, msgs, "no transcript is fabricated")
+		assert.Equal(t, "", sess.TranscriptFidelity)
+		assert.Equal(t, 0, sess.MessageCount)
+		assert.Equal(t, 0, sess.UserMessageCount)
+		assert.Empty(t, sess.FirstMessage)
+		require.Len(t, usageEvents, 1)
+		assert.Equal(t, "sidecar", usageEvents[0].Source)
+		assert.Equal(t, 1500, usageEvents[0].InputTokens)
+		assert.Equal(t, 77, usageEvents[0].OutputTokens)
+		assert.Equal(t, sess.ID, usageEvents[0].SessionID)
+	})
+
+	t.Run("gen_metadata usage stays primary over usage-only sidecar", func(t *testing.T) {
+		root := t.TempDir()
+		id := "2b2b2b2b-3c3c-4d4d-5e5e-6f6f6f6f6f6f"
+		genData := createAntigravityMockGenMetadata(t, 2400, 180, 0, "Test Gemini 3.5")
+		dbPath := makeNoStepsDB(t, root, id, genData)
+		writeAntigravityTestSidecarWithGenMetadata(t, root, id, 0, genJSON)
+
+		sess, msgs, usageEvents, err := parseAntigravityTestSession(
+			t, dbPath, "", "test-machine",
+		)
+		require.NoError(t, err)
+		assert.Empty(t, msgs)
+		require.Len(t, usageEvents, 1)
+		assert.Equal(t, "generation", usageEvents[0].Source,
+			"DB gen_metadata must win over sidecar usage")
+		assert.Equal(t, 2400, usageEvents[0].InputTokens)
+		assert.Equal(t, 180, usageEvents[0].OutputTokens)
+		assert.False(t, sess.GenMetadataWithoutUsage)
+	})
+
+	t.Run("brain artifacts persist without any sidecar", func(t *testing.T) {
+		root := t.TempDir()
+		id := "3b3b3b3b-4c4c-5d5d-6e6e-7f7f7f7f7f7f"
+		dbPath := makeNoStepsDB(t, root, id, nil)
+		mustMkdir(t, filepath.Join(root, "brain", id))
+		mustWrite(t, filepath.Join(root, "brain", id, "plan.md"),
+			[]byte("# Recovered plan"))
+
+		sess, msgs, usageEvents, err := parseAntigravityTestSession(
+			t, dbPath, "", "test-machine",
+		)
+		require.NoError(t, err,
+			"brain artifacts must persist a degraded session")
+		require.Len(t, msgs, 1)
+		assert.Equal(t, RoleAssistant, msgs[0].Role)
+		assert.Contains(t, msgs[0].Content, "Recovered plan")
+		assert.Equal(t, "", sess.TranscriptFidelity)
+		assert.Equal(t, 1, sess.MessageCount)
+		assert.Equal(t, 0, sess.UserMessageCount)
+		assert.Empty(t, usageEvents)
+	})
+}
