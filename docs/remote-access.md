@@ -137,8 +137,10 @@ falls back to the full-archive download, so mixed versions keep working.
 
 Incremental transfer applies to the HTTP transport only; SSH remote sync
 still copies the full session tree on every run. `agentsview sync --full`
-re-parses every remote session but no longer re-downloads them — the mirror
-already holds the bytes, so only changed files are transferred.
+no longer forces a full re-download over HTTP: the mirror already holds the
+bytes, so only files that changed on the remote are transferred. `--full`
+bypasses the remote skip cache, but sessions already stored and current in
+the local database are still skipped by the normal freshness checks.
 
 ## SSE Endpoints
 
