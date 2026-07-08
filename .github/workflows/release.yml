@@ -67,6 +67,16 @@ jobs:
           COMMIT=${GITHUB_SHA::8}
           BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
+          # sqlite-vec's cgo bindings #include "sqlite3.h". The manylinux
+          # image has no SQLite headers, and AlmaLinux 8's sqlite-devel
+          # (3.26) is old enough that sqlite-vec would silently compile out
+          # its vtab_in support. Use the header of the exact amalgamation
+          # bundled and statically linked by mattn/go-sqlite3.
+          go mod download github.com/mattn/go-sqlite3
+          mkdir -p .sqlite-include
+          cp "$(go list -m -f '{{.Dir}}' github.com/mattn/go-sqlite3)/sqlite3-binding.h" .sqlite-include/sqlite3.h
+          export CGO_CFLAGS="-I${PWD}/.sqlite-include"
+
           mkdir -p dist
           LDFLAGS="-s -w -X main.version=v${VERSION} -X main.commit=${COMMIT} -X main.buildDate=${BUILD_DATE}"
           go build -tags fts5 -buildvcs=false -ldflags="$LDFLAGS" -trimpath \
