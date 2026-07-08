@@ -268,10 +268,10 @@ func (b *codexSessionBuilder) handleResponseItem(
 	payload gjson.Result, ts time.Time,
 ) {
 	switch payload.Get("type").Str {
-	case "function_call":
+	case "function_call", "custom_tool_call":
 		b.handleFunctionCall(payload, ts)
 		return
-	case "function_call_output":
+	case "function_call_output", "custom_tool_call_output":
 		b.handleFunctionCallOutput(payload, ts)
 		return
 	}
@@ -533,9 +533,19 @@ func (b *codexSessionBuilder) handleFunctionCallOutput(
 		})
 	default:
 		if text := strings.TrimSpace(raw); text != "" {
+			source := "function_call_output"
+			status := ""
+			if payload.Get("type").Str == "custom_tool_call_output" {
+				source = "custom_tool_call_output"
+				status = payload.Get("status").Str
+				if status == "" {
+					status = "completed"
+				}
+			}
 			b.appendCallResultEvent(callID, ParsedToolResultEvent{
 				ToolUseID: callID,
-				Source:    "function_call_output",
+				Source:    source,
+				Status:    status,
 				Content:   text,
 				Timestamp: ts,
 			})
@@ -1806,9 +1816,9 @@ func codexIncrementalNeedsFullParse(line string) bool {
 
 	payload := gjson.Get(line, "payload")
 	switch payload.Get("type").Str {
-	case "function_call":
+	case "function_call", "custom_tool_call":
 		return isCodexWaitAgentCall(payload.Get("name").Str)
-	case "function_call_output":
+	case "function_call_output", "custom_tool_call_output":
 		output, raw := parseCodexFunctionOutput(payload)
 		return isCodexSubagentFunctionOutput(output) ||
 			strings.TrimSpace(raw) != ""

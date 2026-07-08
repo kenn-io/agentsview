@@ -344,6 +344,58 @@ func TestParseCodexSession_FunctionCalls(t *testing.T) {
 		assert.Contains(t, msgs[1].ToolCalls[0].InputJSON, "Begin Patch")
 	})
 
+	t.Run("custom_tool_call apply_patch input and output", func(t *testing.T) {
+		call := `{"timestamp":"2026-07-08T03:20:43.339Z","type":"response_item","payload":{"type":"custom_tool_call","status":"completed","call_id":"call_abc","name":"apply_patch","input":"*** Begin Patch\n*** Add File: infra/scripts/with-resolved-images.sh\n+#!/bin/sh\n*** End Patch"}}`
+		patchEnd := `{"timestamp":"2026-07-08T03:20:43.356Z","type":"event_msg","payload":{"type":"patch_apply_end","call_id":"call_abc","stdout":"Success. Updated the following files:\nA infra/scripts/with-resolved-images.sh\n","stderr":"","success":true}}`
+		output := `{"timestamp":"2026-07-08T03:20:43.376Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_abc","output":"Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess. Updated the following files:\nA infra/scripts/with-resolved-images.sh\n"}}`
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("fc-custom-tool", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "apply the patch", tsEarlyS1),
+			call,
+			patchEnd,
+			output,
+		)
+
+		_, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.Len(t, msgs, 2)
+		assert.Equal(t, RoleAssistant, msgs[1].Role)
+		assert.True(t, msgs[1].HasToolUse)
+		assertToolCalls(t, msgs[1].ToolCalls, []ParsedToolCall{{
+			ToolUseID: "call_abc",
+			ToolName:  "apply_patch",
+			Category:  "Edit",
+		}})
+		tc := msgs[1].ToolCalls[0]
+		assert.Contains(t, tc.InputJSON, "Begin Patch")
+		assertToolResultEvents(t, tc.ResultEvents, []ParsedToolResultEvent{{
+			ToolUseID: "call_abc",
+			Source:    "custom_tool_call_output",
+			Status:    "completed",
+			Content:   "Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess. Updated the following files:\nA infra/scripts/with-resolved-images.sh",
+		}})
+	})
+
+	t.Run("unsupported response_item subtype is ignored", func(t *testing.T) {
+		unsupported := `{"timestamp":"2026-07-08T03:20:43.339Z","type":"response_item","payload":{"type":"custom_tool_callish","call_id":"call_abc","name":"apply_patch","input":"*** Begin Patch\n*** End Patch"}}`
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("fc-unsupported-response-item", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON("user", "apply the patch", tsEarlyS1),
+			unsupported,
+		)
+
+		_, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.Len(t, msgs, 1)
+		assert.False(t, msgs[0].HasToolUse)
+	})
+
+	t.Run("custom_tool_call_output requests full parse", func(t *testing.T) {
+		line := `{"timestamp":"2026-07-08T03:20:43.376Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call_abc","output":"Exit code: 0\nWall time: 0 seconds\nOutput:\nSuccess."}}`
+
+		assert.True(t, codexIncrementalNeedsFullParse(line))
+	})
+
 	t.Run("write_stdin formats with session and chars", func(t *testing.T) {
 		content := loadFixture(t, "codex/fc_stdin.jsonl")
 		_, msgs := runCodexParserTest(t, "test.jsonl", content, false)
