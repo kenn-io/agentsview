@@ -343,11 +343,19 @@ func TestResolveDeltaFilePath(t *testing.T) {
 			"", false},
 		{"no roots", nil, "/srv/claude/p/s.jsonl", "", false},
 	}
+	fromSlashAll := func(paths []string) []string {
+		out := make([]string, len(paths))
+		for i, p := range paths {
+			out[i] = filepath.FromSlash(p)
+		}
+		return out
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := resolveDeltaFilePath(tt.roots, tt.path)
+			got, ok := resolveDeltaFilePath(
+				fromSlashAll(tt.roots), filepath.FromSlash(tt.path))
 			require.Equal(t, tt.ok, ok)
-			assert.Equal(t, tt.want, got)
+			assert.Equal(t, filepath.FromSlash(tt.want), got)
 		})
 	}
 }
