@@ -63,6 +63,9 @@ func buildTarCommand(
 }
 
 func tarListPath(path string) string {
+	if strings.ContainsAny(path, "\x00\n\r") {
+		return ""
+	}
 	rel := strings.TrimPrefix(path, "/")
 	if rel == "" || rel == "." {
 		return ""

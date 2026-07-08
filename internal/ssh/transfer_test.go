@@ -60,6 +60,9 @@ func TestTarListPathProtectsOptionShapedPath(t *testing.T) {
 	assert.Equal(t, "./home/wes/file.jsonl", tarListPath("/home/wes/file.jsonl"))
 	assert.Equal(t, "./already/relative.jsonl", tarListPath("./already/relative.jsonl"))
 	assert.Empty(t, tarListPath("/"))
+	assert.Empty(t, tarListPath("/home/wes/bad\npath.jsonl"))
+	assert.Empty(t, tarListPath("/home/wes/bad\rpath.jsonl"))
+	assert.Empty(t, tarListPath("/home/wes/bad\x00path.jsonl"))
 }
 
 func TestBuildTarCommandStreamsPathListToTar(t *testing.T) {
@@ -127,6 +130,29 @@ func TestBuildTarCommandSkipsMissingFileScopedPath(t *testing.T) {
 	names := tarNames(t, archive)
 	assert.Contains(t, names, archivePathForTest(stateDB))
 	assert.NotContains(t, names, archivePathForTest(missingWAL))
+}
+
+func TestBuildTarCommandSkipsLineDelimitedUnsafePath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("remote tar script uses POSIX paths; local Windows paths are not representative")
+	}
+
+	root := t.TempDir()
+	dir := filepath.Join(root, "sessions")
+	safeFile := filepath.Join(dir, "safe.jsonl")
+	unsafeFile := filepath.Join(dir, "bad\nname.jsonl")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(safeFile, []byte("{}\n"), 0o644))
+	require.NoError(t, os.WriteFile(unsafeFile, []byte("{}\n"), 0o644))
+
+	script := buildTarCommand(nil, nil, []string{safeFile, unsafeFile})
+	cmd := exec.Command("sh")
+	cmd.Stdin = strings.NewReader(script)
+	archive, err := cmd.Output()
+	require.NoError(t, err)
+	names := tarNames(t, archive)
+	assert.Contains(t, names, archivePathForTest(safeFile))
+	assert.NotContains(t, names, archivePathForTest(unsafeFile))
 }
 
 func tarCommandLine(t *testing.T, script string) string {
