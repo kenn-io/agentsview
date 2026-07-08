@@ -105,6 +105,31 @@ func TestSpecResetLeavesOtherStoreIntact(t *testing.T) {
 	assert.Equal(t, "model-aux", auxGens[0].Model)
 }
 
+// The reset's prefix match must be literal, not LIKE: "_" in a prefix such
+// as "message_vectors" is a single-character LIKE wildcard, so a wildcard
+// match would drop a table like "messageXvectors_generations" (X at the
+// wildcard position) that belongs to no store owned by the spec.
+func TestSpecResetPrefixMatchIsLiteral(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vectors.db")
+	ctx := context.Background()
+
+	msg := openSpecT(t, path, MessageIndexSpec(), false)
+	_, err := msg.db.ExecContext(ctx,
+		`CREATE TABLE "messageXvectors_generations" (id INTEGER PRIMARY KEY)`)
+	require.NoError(t, err)
+	require.NoError(t, msg.Close())
+
+	stale := MessageIndexSpec()
+	stale.MirrorSchemaVersion = "999"
+	msg = openSpecT(t, path, stale, false)
+
+	var n int
+	require.NoError(t, msg.db.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM sqlite_master
+ WHERE type = 'table' AND name = 'messageXvectors_generations'`).Scan(&n))
+	assert.Equal(t, 1, n, "wildcard-position decoy table must survive a message-store reset")
+}
+
 // The read path fails closed per store: a version mismatch on one store
 // must not affect reads on the other.
 func TestSpecReadPathMismatchIsPerStore(t *testing.T) {

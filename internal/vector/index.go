@@ -261,13 +261,17 @@ func prepareMirrorSchema(ctx context.Context, db *sql.DB, spec IndexSpec, readOn
 // of the versioned mirror: the mirror's own tables, plus any kit-owned
 // spec.VectorsPrefix* table (the generations and stamps bookkeeping tables
 // and one vec0 table per embedding generation, including retired or
-// abandoned ones left behind by a prior build).
+// abandoned ones left behind by a prior build). The prefix is matched
+// literally via substr, not LIKE: LIKE would treat "_" in a prefix such as
+// "message_vectors" as a single-character wildcard, letting one store's
+// schema-version reset match — and drop — another store's tables whose
+// names differ only at wildcard positions.
 func mirrorStateTableNames(ctx context.Context, db *sql.DB, spec IndexSpec) ([]string, error) {
 	rows, err := db.QueryContext(ctx, `
 SELECT name FROM sqlite_master
  WHERE type = 'table'
-   AND (name IN (?, ?) OR name LIKE ?)`,
-		spec.DocsTable, spec.MetaTable, spec.VectorsPrefix+"%")
+   AND (name IN (?, ?) OR substr(name, 1, ?) = ?)`,
+		spec.DocsTable, spec.MetaTable, len(spec.VectorsPrefix), spec.VectorsPrefix)
 	if err != nil {
 		return nil, fmt.Errorf("listing mirror tables: %w", err)
 	}
