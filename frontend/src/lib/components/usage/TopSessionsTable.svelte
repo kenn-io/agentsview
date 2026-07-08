@@ -12,10 +12,19 @@
   function handleRowClick(sessionId: string) {
     router.navigateToSession(sessionId);
   }
+
+  const isTokenMode = $derived(usage.mode === "token");
+
+  const sortedSessions = $derived.by(() => {
+    const sessions = usage.topSessions ?? [];
+    if (!isTokenMode) return sessions;
+    // In token mode, re-sort by totalTokens descending
+    return [...sessions].sort((a, b) => b.totalTokens - a.totalTokens);
+  });
 </script>
 
 <div class="top-sessions-container">
-  <h3 class="chart-title">{m.usage_top_sessions_by_cost()}</h3>
+  <h3 class="chart-title">{isTokenMode ? m.usage_top_sessions_by_tokens() : m.usage_top_sessions_by_cost()}</h3>
 
   {#if usage.errors.topSessions}
     <div class="error">
@@ -27,9 +36,9 @@
         {m.shared_retry()}
       </button>
     </div>
-  {:else if usage.topSessions && usage.topSessions.length > 0}
+  {:else if sortedSessions && sortedSessions.length > 0}
     <div class="session-list">
-      {#each usage.topSessions as row, i (row.sessionId)}
+      {#each sortedSessions as row, i (row.sessionId)}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div
@@ -51,9 +60,11 @@
           <span class="session-tokens">
             {formatTokenCount(row.totalTokens)}
           </span>
-          <span class="session-cost">
-            {fmtCost(row.cost)}
-          </span>
+          {#if !isTokenMode}
+            <span class="session-cost">
+              {fmtCost(row.cost)}
+            </span>
+          {/if}
         </div>
       {/each}
     </div>

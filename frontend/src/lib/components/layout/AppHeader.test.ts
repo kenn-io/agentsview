@@ -188,7 +188,8 @@ describe("AppHeader export actions", () => {
     ).map((b) => b.textContent?.trim());
     for (const expected of [
       "Sessions",
-      "Usage",
+      "Cost",
+      "Token Usage",
       "Activity",
       "Trends",
       "Pinned",
