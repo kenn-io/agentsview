@@ -96,7 +96,7 @@ func (p *antigravityProvider) Parse(
 		return ParseOutcome{}, fmt.Errorf("stat %s: %w", src.Path, err)
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
-	sess, msgs, usageEvents, err := p.parseSession(
+	sess, msgs, usageEvents, status, err := p.parseSession(
 		src.Path,
 		req.Source.ProjectHint,
 		machine,
@@ -114,15 +114,20 @@ func (p *antigravityProvider) Parse(
 	if req.Fingerprint.Hash != "" {
 		sess.File.Hash = req.Fingerprint.Hash
 	}
+	result := ParseResultOutcome{
+		Result: ParseResult{
+			Session:     *sess,
+			Messages:    msgs,
+			UsageEvents: usageEvents,
+		},
+		DataVersion: DataVersionCurrent,
+	}
+	if status.NeedsRetry {
+		result.DataVersion = DataVersionNeedsRetry
+		result.RetryReason = "antigravity ide sidecar rescue pending readable steps"
+	}
 	return ParseOutcome{
-		Results: []ParseResultOutcome{{
-			Result: ParseResult{
-				Session:     *sess,
-				Messages:    msgs,
-				UsageEvents: usageEvents,
-			},
-			DataVersion: DataVersionCurrent,
-		}},
+		Results:           []ParseResultOutcome{result},
 		ResultSetComplete: true,
 		ForceReplace:      true,
 	}, nil

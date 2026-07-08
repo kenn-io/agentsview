@@ -61,13 +61,25 @@ func findAntigravityTestSourceFile(t *testing.T, root, id string) string {
 	return newAntigravityTestProvider(t, root).sources.findSourceFile(root, id)
 }
 
-// parseAntigravityTestSession parses an IDE session DB through the provider-owned
-// parse method, replacing the removed package-level ParseAntigravitySession.
+// parseAntigravityTestSessionWithStatus parses an IDE session DB through the
+// provider-owned parse method, surfacing the sync-relevant parse status.
+func parseAntigravityTestSessionWithStatus(
+	t *testing.T, path, project, machine string,
+) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, antigravityParseStatus, error) {
+	t.Helper()
+	return newAntigravityTestProvider(t).parseSession(path, project, machine)
+}
+
+// parseAntigravityTestSession is the no-status convenience wrapper,
+// replacing the removed package-level ParseAntigravitySession.
 func parseAntigravityTestSession(
 	t *testing.T, path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
 	t.Helper()
-	return newAntigravityTestProvider(t).parseSession(path, project, machine)
+	sess, msgs, events, _, err := parseAntigravityTestSessionWithStatus(
+		t, path, project, machine,
+	)
+	return sess, msgs, events, err
 }
 
 // discoverAntigravityCLITestSessions discovers CLI sessions under root through
@@ -3647,8 +3659,12 @@ func TestAntigravityIDEPrefersSidecarWithCoverage(t *testing.T) {
 	createAntigravityTestDB(t, dbPath) // 2 raw steps
 	writeAntigravityTestSidecar(t, root, id, 2)
 
-	sess, msgs, _, err := parseAntigravityTestSession(t, dbPath, "", "test-machine")
+	sess, msgs, _, status, err := parseAntigravityTestSessionWithStatus(
+		t, dbPath, "", "test-machine",
+	)
 	require.NoError(t, err)
+	assert.False(t, status.NeedsRetry,
+		"a readable DB proves coverage; no retry needed")
 
 	// Structured sidecar transcript wins over the heuristic decode.
 	require.Len(t, msgs, 2)
@@ -3871,9 +3887,13 @@ func TestAntigravityIDECoveringSidecarRescuesUnreadableSteps(t *testing.T) {
 
 	writeAntigravityTestSidecar(t, root, id, 2)
 
-	sess, msgs, _, err := parseAntigravityTestSession(t, dbPath, "", "test-machine")
+	sess, msgs, _, status, err := parseAntigravityTestSessionWithStatus(
+		t, dbPath, "", "test-machine",
+	)
 	require.NoError(t, err,
 		"covering sidecar must rescue a .db with unreadable steps")
+	assert.True(t, status.NeedsRetry,
+		"rescue without a readable DB cannot prove coverage; row must stay stale")
 
 	require.Len(t, msgs, 2)
 	assert.Equal(t, "sidecar prompt", msgs[0].Content)

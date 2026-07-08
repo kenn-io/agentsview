@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -888,4 +889,66 @@ func TestAntigravityProviderCapabilitiesAdvertiseSidecarContent(t *testing.T) {
 	assert.Equal(t, CapabilitySupported, caps.Content.ToolResults)
 	assert.Equal(t, CapabilitySupported, caps.Content.Model)
 	assert.Equal(t, CapabilitySupported, caps.Content.ToolCalls)
+}
+
+// TestAntigravityProviderParseRetryOnSidecarRescue verifies the IDE
+// provider stamps DataVersionNeedsRetry when the sidecar rescues a .db
+// whose steps query fails (coverage unprovable), and DataVersionCurrent
+// for a normal covering-sidecar win over a readable DB.
+func TestAntigravityProviderParseRetryOnSidecarRescue(t *testing.T) {
+	parseOne := func(t *testing.T, root, id string) ParseResultOutcome {
+		t.Helper()
+		provider, ok := NewProvider(AgentAntigravity, ProviderConfig{
+			Roots:   []string{root},
+			Machine: "devbox",
+		})
+		require.True(t, ok)
+		source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+			RawSessionID: id,
+		})
+		require.NoError(t, err)
+		require.True(t, ok)
+		outcome, err := provider.Parse(context.Background(), ParseRequest{
+			Source: source,
+		})
+		require.NoError(t, err)
+		require.True(t, outcome.ResultSetComplete)
+		require.True(t, outcome.ForceReplace)
+		require.Len(t, outcome.Results, 1)
+		return outcome.Results[0]
+	}
+
+	t.Run("rescue with unreadable steps needs retry", func(t *testing.T) {
+		root := t.TempDir()
+		id := "4b4b4b4b-5c5c-6d6d-7e7e-8f8f8f8f8f8f"
+		mustMkdir(t, filepath.Join(root, "conversations"))
+		dbPath := filepath.Join(root, "conversations", id+".db")
+		db, err := sql.Open("sqlite3", dbPath)
+		require.NoError(t, err)
+		mustExec(t, db, `CREATE TABLE trajectory_meta (
+			trajectory_id text, PRIMARY KEY (trajectory_id))`)
+		require.NoError(t, db.Close())
+		writeAntigravityTestSidecar(t, root, id, 2)
+
+		result := parseOne(t, root, id)
+		assert.Equal(t, DataVersionNeedsRetry, result.DataVersion)
+		assert.NotEmpty(t, result.RetryReason)
+		assert.Equal(t, "antigravity:"+id, result.Result.Session.ID)
+		assert.NotEmpty(t, result.Result.Messages)
+	})
+
+	t.Run("covering sidecar over readable db is current", func(t *testing.T) {
+		root := t.TempDir()
+		id := "5b5b5b5b-6c6c-7d7d-8e8e-9f9f9f9f9f9f"
+		mustMkdir(t, filepath.Join(root, "conversations"))
+		dbPath := filepath.Join(root, "conversations", id+".db")
+		createAntigravityTestDB(t, dbPath) // 2 raw steps
+		writeAntigravityTestSidecar(t, root, id, 2)
+
+		result := parseOne(t, root, id)
+		assert.Equal(t, DataVersionCurrent, result.DataVersion)
+		assert.Empty(t, result.RetryReason)
+		assert.Equal(t, TranscriptFidelityFull,
+			result.Result.Session.TranscriptFidelity)
+	})
 }

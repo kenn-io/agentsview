@@ -66,19 +66,32 @@ func antigravityIDECompanionPaths(path string) []string {
 	)...)
 }
 
+// antigravityParseStatus carries sync-relevant IDE parser metadata that
+// is not part of the canonical session/message shape, mirroring the CLI
+// path's AntigravityCLIParseStatus.
+type antigravityParseStatus struct {
+	// NeedsRetry is true when the sidecar rescued the transcript while
+	// the steps query was failing: coverage is unprovable without a
+	// readable DB, so the row must stay stale (data_version-1) and every
+	// subsequent sync re-parses until the DB reads cleanly and the real
+	// coverage gate re-decides.
+	NeedsRetry bool
+}
+
 // parseSession parses one IDE session DB. It is owned by the
 // antigravityProvider; the package-level ParseAntigravitySession
 // entrypoint was folded onto the provider.
 func (p *antigravityProvider) parseSession(
 	path, project, machine string,
-) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
+) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, antigravityParseStatus, error) {
+	var status antigravityParseStatus
 	info, err := os.Stat(path)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("stat %s: %w", path, err)
+		return nil, nil, nil, status, fmt.Errorf("stat %s: %w", path, err)
 	}
 	id := strings.TrimSuffix(filepath.Base(path), ".db")
 	if !IsValidSessionID(id) {
-		return nil, nil, nil, fmt.Errorf(
+		return nil, nil, nil, status, fmt.Errorf(
 			"invalid Antigravity IDE session filename: %s", path,
 		)
 	}
@@ -89,7 +102,7 @@ func (p *antigravityProvider) parseSession(
 	dsn := "file:" + sqliteURIPath(path) + "?mode=ro&immutable=0"
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf(
+		return nil, nil, nil, status, fmt.Errorf(
 			"open antigravity db %s: %w", path, err,
 		)
 	}
@@ -145,6 +158,15 @@ func (p *antigravityProvider) parseSession(
 	case sidecarOK && sidecarCovers:
 		messages = tRes.messages
 		transcriptFidelity = TranscriptFidelityFull
+		if dbErr != nil {
+			// The rescue persists the best-available sidecar content,
+			// but with the steps query failing there is no DB step
+			// count to prove the sidecar actually covers the session
+			// (it may lag a live session). Leave the row stale so
+			// every subsequent sync re-parses until the DB reads
+			// cleanly and the real coverage gate re-decides.
+			status.NeedsRetry = true
+		}
 	case dbErr != nil:
 		// Fail closed, deliberately. The sync engine unconditionally
 		// full-replaces stored Antigravity messages on any successful
@@ -156,7 +178,7 @@ func (p *antigravityProvider) parseSession(
 		// error preserves the stored session instead. Degraded-persist
 		// requires engine-level clobber protection first; that
 		// enhancement is tracked separately.
-		return nil, nil, nil, dbErr
+		return nil, nil, nil, status, dbErr
 	}
 	// Coverage gates usage just like the transcript: a lagging sidecar
 	// carries only the generations it has seen, so persisting those would
@@ -254,9 +276,9 @@ func (p *antigravityProvider) parseSession(
 		// Usage events still flow for message-less parses (e.g. an
 		// undecodable DB with gen_metadata) so daily usage analytics
 		// match the event-derived session totals stamped above.
-		return sess, nil, usageEvents, nil
+		return sess, nil, usageEvents, status, nil
 	}
-	return sess, messages, usageEvents, nil
+	return sess, messages, usageEvents, status, nil
 }
 
 type antigravityStepLoadResult struct {
