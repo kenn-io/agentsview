@@ -2,8 +2,6 @@
 # AgentsView 开发模式启动脚本
 # 双击此文件同时启动 Go 后端 + Vite 前端开发服务器
 
-set -e
-
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BINARY="$PROJECT_DIR/agentsview"
 FRONTEND_DIR="$PROJECT_DIR/frontend"
@@ -20,42 +18,18 @@ if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
     exit 1
 fi
 
-# 启动 Go 后端（后台运行）
-nohup "$BINARY" serve > /dev/null 2>&1 &
-GO_PID=$!
+# 清理之前的 PID 文件
+rm -f "$PROJECT_DIR/.agentsview-go.pid" "$PROJECT_DIR/.agentsview-vite.pid"
 
-# 启动 Vite 前端开发服务器（后台运行）
-cd "$FRONTEND_DIR"
-nohup npm run dev > /dev/null 2>&1 &
-VITE_PID=$!
+# 用 AppleScript 打开一个新的 Terminal 窗口运行服务
+osascript <<APPLESCRIPT
+ tell application "Terminal"
+    do script "cd '$PROJECT_DIR' && echo '启动 Go 后端...' && nohup '$BINARY' serve > /tmp/agentsview-go.log 2>&1 & echo \$! > '$PROJECT_DIR/.agentsview-go.pid' && sleep 2 && echo 'Go 后端已启动: http://localhost:8080' && cd '$FRONTEND_DIR' && echo '启动 Vite 前端...' && nohup npm run dev > /tmp/agentsview-vite.log 2>&1 & echo \$! > '$PROJECT_DIR/.agentsview-vite.pid' && sleep 3 && echo '' && echo '========================================' && echo 'AgentsView 开发模式已启动' && echo '  Go 后端:   http://localhost:8080' && echo '  Vite 前端: http://localhost:5173' && echo '' && echo '按回车键关闭两个服务...' && echo '========================================' && read -r && kill \$(cat '$PROJECT_DIR/.agentsview-go.pid' 2>/dev/null) 2>/dev/null; kill \$(cat '$PROJECT_DIR/.agentsview-vite.pid' 2>/dev/null) 2>/dev/null; rm -f '$PROJECT_DIR/.agentsview-go.pid' '$PROJECT_DIR/.agentsview-vite.pid'; echo 'AgentsView 已关闭'; exit"
+    activate
+ end tell
+APPLESCRIPT
 
-# 保存 PID 到文件，方便后续关闭
-echo "$GO_PID" > "$PROJECT_DIR/.agentsview-go.pid"
-echo "$VITE_PID" > "$PROJECT_DIR/.agentsview-vite.pid"
-
-# 等待 Vite 启动
-sleep 3
+sleep 4
 
 # 在浏览器中打开 Vite 开发服务器
 open "http://localhost:5173"
-
-# 显示提示
-osascript -e 'display notification "Go 后端: http://localhost:8080 | Vite 前端: http://localhost:5173" with title "AgentsView 已启动"' > /dev/null 2>&1 || true
-
-# 保持脚本运行，等待用户按回车关闭
-echo ""
-echo "========================================"
-echo "AgentsView 开发模式已启动"
-echo "  Go 后端:   http://localhost:8080"
-echo "  Vite 前端: http://localhost:5173"
-echo ""
-echo "按回车键关闭两个服务..."
-echo "========================================"
-read -r
-
-# 关闭服务
-kill "$GO_PID" 2>/dev/null || true
-kill "$VITE_PID" 2>/dev/null || true
-rm -f "$PROJECT_DIR/.agentsview-go.pid" "$PROJECT_DIR/.agentsview-vite.pid"
-
-echo "AgentsView 已关闭"
