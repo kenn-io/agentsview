@@ -775,10 +775,20 @@ func BranchPairPredicate(
 		parts[i] = "(" + projectCol + " = " + placeholder(p.Project) +
 			" AND " + branchCol + " = " + placeholder(p.Branch) + ")"
 	}
+	return orTree(parts)
+}
+
+// orTree ORs predicates together, nesting them as a balanced tree so
+// the parse depth stays logarithmic. A flat OR chain parses left-deep,
+// and SQLite caps expression nesting at 1000 — which a branch filter
+// can exceed (deselect-all in the usage branch dropdown excludes every
+// known (project, branch) pair).
+func orTree(parts []string) string {
 	if len(parts) == 1 {
 		return parts[0]
 	}
-	return "(" + strings.Join(parts, " OR ") + ")"
+	mid := len(parts) / 2
+	return "(" + orTree(parts[:mid]) + " OR " + orTree(parts[mid:]) + ")"
 }
 
 // BranchPairClauseArgs is the raw-args ("?" placeholder) form of

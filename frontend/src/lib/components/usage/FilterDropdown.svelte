@@ -112,16 +112,34 @@
   });
 </script>
 
-<FilterDropdown
-  label={buttonLabel}
-  active={filteredCount > 0}
-  showBadge={false}
-  sections={[{ items: dropdownItems }]}
-  searchable={items.length > 8}
-  searchPlaceholder={m.usage_filter_search()}
-  emptyLabel={m.sidebar_filters_no_match()}
-  onSelectAll={mode === "exclude" ? onSelectAll : undefined}
-  onDeselectAll={mode === "exclude" ? onDeselectAll : undefined}
-  selectAllLabel={m.usage_filter_select_all()}
-  deselectAllLabel={m.usage_filter_deselect_all()}
-/>
+<div class="filter-dropdown-clamp">
+  <FilterDropdown
+    label={buttonLabel}
+    active={filteredCount > 0}
+    showBadge={false}
+    sections={[{ items: dropdownItems }]}
+    searchable={items.length > 8}
+    searchPlaceholder={m.usage_filter_search()}
+    emptyLabel={m.sidebar_filters_no_match()}
+    onSelectAll={mode === "exclude" ? onSelectAll : undefined}
+    onDeselectAll={mode === "exclude" ? onDeselectAll : undefined}
+    selectAllLabel={m.usage_filter_select_all()}
+    deselectAllLabel={m.usage_filter_deselect_all()}
+  />
+</div>
+
+<style>
+  .filter-dropdown-clamp {
+    display: contents;
+  }
+
+  /* kit-ui's panel has no height cap, so an uncapped item list (the
+     branch dropdown can run to thousands of entries) grows past the
+     viewport bottom with no way to scroll. Clamp and scroll here until
+     the cap lands upstream in kit-ui. */
+  .filter-dropdown-clamp :global(.kit-filter-dropdown__panel) {
+    max-height: min(480px, calc(100vh - 96px));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+</style>

@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -317,4 +318,41 @@ func TestSessionFilterGitBranchComposite(t *testing.T) {
 	requireSessions(t, d, SessionFilter{
 		GitBranch: EncodeBranchFilterToken("alpha", "unknown"),
 	}, []string{"alpha-unknown"})
+}
+
+// A usage-page deselect-all excludes every known (project, branch)
+// pair; over ~1000 pairs a flat OR chain exceeds SQLite's expression
+// depth limit ("Expression tree is too large"), so the predicate must
+// nest as a balanced tree. Exercised end-to-end through GetDailyUsage
+// on both the include and exclude sides.
+func TestGetDailyUsageManyBranchPairs(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedBranchUsageFixture(t, d)
+
+	tokens := make([]BranchInfo, 0, 1500)
+	for i := range 1500 {
+		tokens = append(tokens, BranchInfo{
+			Project: "proj-a",
+			Branch:  "branch-" + strconv.Itoa(i),
+		})
+	}
+	tokens = append(tokens, branchInfoForTest("proj-a", "main"))
+	list := encodeBranchFilterTokensForTest(tokens...)
+
+	included, err := d.GetDailyUsage(ctx, UsageFilter{
+		From: "2026-05-14", To: "2026-05-14",
+		GitBranch: list,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 110, included.Totals.InputTokens+included.Totals.OutputTokens,
+		"include list should match only (proj-a, main)")
+
+	excluded, err := d.GetDailyUsage(ctx, UsageFilter{
+		From: "2026-05-14", To: "2026-05-14",
+		ExcludeGitBranch: list,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1540, excluded.Totals.InputTokens+excluded.Totals.OutputTokens,
+		"exclude list should drop only (proj-a, main)")
 }
