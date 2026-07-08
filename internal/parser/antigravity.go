@@ -131,21 +131,32 @@ func (p *antigravityProvider) parseSession(
 	// behind a live session loses until agy-reader catches up. When the
 	// sidecar is absent, malformed, or fails the coverage gate the parser
 	// falls back to the heuristic decode exactly as before. A step-load
-	// failure is a fallback condition, not a parse failure (mirroring the
-	// CLI flow): the DB then offers no coverage signal and a readable
-	// sidecar can still rescue the session; without one the parser
-	// degrades to whatever is recoverable (brain artifacts, gen_metadata
-	// or sidecar usage) and returns the original step-load error only
-	// when nothing at all is recoverable.
+	// failure is a fallback condition only when a covering displayable
+	// sidecar can rescue the session with a full transcript (the DB then
+	// offers no coverage signal); without one the original step-load
+	// error is returned.
 	sidecarPath := strings.TrimSuffix(path, ".db") + ".trajectory.json"
 	tRes, tErr := parseAntigravityCLITrajectory(sidecarPath)
 	sidecarOK := tErr == nil &&
 		hasDisplayableAntigravityCLITrajectoryMessage(tRes.messages)
 	sidecarCovers := dbErr != nil || dbResult.rawStepCount == 0 ||
 		tRes.rawSteps >= dbResult.rawStepCount
-	if sidecarOK && sidecarCovers {
+	switch {
+	case sidecarOK && sidecarCovers:
 		messages = tRes.messages
 		transcriptFidelity = TranscriptFidelityFull
+	case dbErr != nil:
+		// Fail closed, deliberately. The sync engine unconditionally
+		// full-replaces stored Antigravity messages on any successful
+		// parse (shouldReplaceFullParseMessages plus this provider's
+		// unconditional ForceReplace), so persisting a degraded
+		// usage-only or brain-only row here would clobber a previously
+		// stored full transcript whenever the steps query fails
+		// transiently (e.g. during live IDE writes). Surfacing the
+		// error preserves the stored session instead. Degraded-persist
+		// requires engine-level clobber protection first; that
+		// enhancement is tracked separately.
+		return nil, nil, nil, dbErr
 	}
 	// Coverage gates usage just like the transcript: a lagging sidecar
 	// carries only the generations it has seen, so persisting those would
@@ -161,17 +172,6 @@ func (p *antigravityProvider) parseSession(
 			filepath.Join(root, "brain", id),
 		)...,
 	)
-
-	// The step-load error surfaces only when nothing was recoverable: no
-	// rescuing sidecar transcript, no brain artifacts, and no usage from
-	// gen_metadata or the sidecar. Anything else is persisted as a
-	// degraded session (fidelity stays empty, no fabricated transcript);
-	// the sidecar, brain artifacts, and DB files are all fingerprinted
-	// companions, so a later change to any of them re-parses the session.
-	if dbErr != nil && (!sidecarOK || !sidecarCovers) &&
-		len(messages) == 0 && len(usageEvents) == 0 {
-		return nil, nil, nil, dbErr
-	}
 
 	sort.SliceStable(messages, func(i, j int) bool {
 		return messages[i].Timestamp.Before(messages[j].Timestamp)
