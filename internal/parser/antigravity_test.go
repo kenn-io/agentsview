@@ -61,25 +61,13 @@ func findAntigravityTestSourceFile(t *testing.T, root, id string) string {
 	return newAntigravityTestProvider(t, root).sources.findSourceFile(root, id)
 }
 
-// parseAntigravityTestSessionWithStatus parses an IDE session DB through the
-// provider-owned parse method, surfacing the sync-relevant parse status.
-func parseAntigravityTestSessionWithStatus(
-	t *testing.T, path, project, machine string,
-) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, antigravityParseStatus, error) {
-	t.Helper()
-	return newAntigravityTestProvider(t).parseSession(path, project, machine)
-}
-
-// parseAntigravityTestSession is the no-status convenience wrapper,
-// replacing the removed package-level ParseAntigravitySession.
+// parseAntigravityTestSession parses an IDE session DB through the provider-owned
+// parse method, replacing the removed package-level ParseAntigravitySession.
 func parseAntigravityTestSession(
 	t *testing.T, path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
 	t.Helper()
-	sess, msgs, events, _, err := parseAntigravityTestSessionWithStatus(
-		t, path, project, machine,
-	)
-	return sess, msgs, events, err
+	return newAntigravityTestProvider(t).parseSession(path, project, machine)
 }
 
 // discoverAntigravityCLITestSessions discovers CLI sessions under root through
@@ -3659,12 +3647,8 @@ func TestAntigravityIDEPrefersSidecarWithCoverage(t *testing.T) {
 	createAntigravityTestDB(t, dbPath) // 2 raw steps
 	writeAntigravityTestSidecar(t, root, id, 2)
 
-	sess, msgs, _, status, err := parseAntigravityTestSessionWithStatus(
-		t, dbPath, "", "test-machine",
-	)
+	sess, msgs, _, err := parseAntigravityTestSession(t, dbPath, "", "test-machine")
 	require.NoError(t, err)
-	assert.False(t, status.NeedsRetry,
-		"a readable DB proves coverage; no retry needed")
 
 	// Structured sidecar transcript wins over the heuristic decode.
 	require.Len(t, msgs, 2)
@@ -3867,46 +3851,6 @@ func TestAntigravityIDENonCoveringSidecarUsageRejected(t *testing.T) {
 		"non-covering sidecar usage must be rejected like its transcript")
 }
 
-// TestAntigravityIDECoveringSidecarRescuesUnreadableSteps verifies that a
-// step-load failure is a fallback condition, not a parse failure: a .db
-// with a readable schema but no steps table is rescued by a covering
-// sidecar, mirroring the CLI flow.
-func TestAntigravityIDECoveringSidecarRescuesUnreadableSteps(t *testing.T) {
-	root := t.TempDir()
-	id := "8a8a8a8a-9b9b-acac-bdbd-cececececece"
-	mustMkdir(t, filepath.Join(root, "conversations"))
-
-	// Readable schema, but loadAntigravityStepsWithRawCount's
-	// `SELECT ... FROM steps` fails: no steps table.
-	dbPath := filepath.Join(root, "conversations", id+".db")
-	db, err := sql.Open("sqlite3", dbPath)
-	require.NoError(t, err)
-	mustExec(t, db, `CREATE TABLE trajectory_meta (
-		trajectory_id text, PRIMARY KEY (trajectory_id))`)
-	require.NoError(t, db.Close())
-
-	writeAntigravityTestSidecar(t, root, id, 2)
-
-	sess, msgs, _, status, err := parseAntigravityTestSessionWithStatus(
-		t, dbPath, "", "test-machine",
-	)
-	require.NoError(t, err,
-		"covering sidecar must rescue a .db with unreadable steps")
-	assert.True(t, status.NeedsRetry,
-		"rescue without a readable DB cannot prove coverage; row must stay stale")
-
-	require.Len(t, msgs, 2)
-	assert.Equal(t, "sidecar prompt", msgs[0].Content)
-	assert.Equal(t, "sidecar assistant reply", msgs[1].Content)
-	assert.Equal(t, TranscriptFidelityFull, sess.TranscriptFidelity)
-	// The schema fingerprint is computed before step loading, so the
-	// rescued session still carries the agy-schema marker.
-	assert.True(t,
-		strings.HasPrefix(sess.SourceVersion, antigravitySchemaUnknownPrefix),
-		"readable schema must still yield an agy-schema marker, got %q",
-		sess.SourceVersion)
-}
-
 // TestAntigravityIDEUnreadableStepsWithoutSidecarStillFails verifies the
 // step-load error is still surfaced when no sidecar can rescue the
 // session, preserving prior behavior.
@@ -3928,191 +3872,14 @@ func TestAntigravityIDEUnreadableStepsWithoutSidecarStillFails(t *testing.T) {
 	assert.Contains(t, err.Error(), "steps")
 }
 
-// TestAntigravityIDESidecarRescueKeepsGenMetadataUsage verifies that
-// when the steps query fails but gen_metadata is still readable, the
-// sidecar rescue keeps the DB's gen_metadata usage as primary: the
-// covering sidecar wins the transcript, but usage events come from
-// gen_metadata (ground-truth consumption), not sidecar gap-fill, and
-// GenMetadataWithoutUsage semantics stay intact.
-func TestAntigravityIDESidecarRescueKeepsGenMetadataUsage(t *testing.T) {
-	makeDB := func(t *testing.T, root, id string, genData []byte) string {
-		t.Helper()
-		mustMkdir(t, filepath.Join(root, "conversations"))
-		dbPath := filepath.Join(root, "conversations", id+".db")
-		db, err := sql.Open("sqlite3", dbPath)
-		require.NoError(t, err)
-		// Readable schema and gen_metadata, but NO steps table: the
-		// steps query fails before the shared loader reads gen_metadata.
-		mustExec(t, db, `CREATE TABLE trajectory_meta (
-			trajectory_id text, PRIMARY KEY (trajectory_id))`)
-		mustExec(t, db, `CREATE TABLE gen_metadata (
-			idx integer, data blob, size integer, PRIMARY KEY (idx))`)
-		mustExec(t, db,
-			`INSERT INTO gen_metadata (idx, data, size) VALUES (1, ?, ?)`,
-			genData, len(genData))
-		require.NoError(t, db.Close())
-		return dbPath
-	}
-
-	t.Run("gen_metadata usage wins over sidecar gap-fill", func(t *testing.T) {
-		root := t.TempDir()
-		id := "abababab-cdcd-efef-abab-cdcdcdcdcdcd"
-		genData := createAntigravityMockGenMetadata(t, 2400, 180, 0, "Test Gemini 3.5")
-		dbPath := makeDB(t, root, id, genData)
-
-		// Covering sidecar whose generatorMetadata carries DIFFERENT
-		// numbers; the DB gen_metadata event must still win.
-		genJSON := `[{
-			"stepIndices": [1],
-			"chatModel": {
-				"model": "MODEL_PLACEHOLDER_M20",
-				"usage": {"inputTokens": "9999", "outputTokens": "888"}
-			}
-		}]`
-		writeAntigravityTestSidecarWithGenMetadata(t, root, id, 2, genJSON)
-
-		sess, msgs, usageEvents, err := parseAntigravityTestSession(
-			t, dbPath, "", "test-machine",
-		)
-		require.NoError(t, err,
-			"covering sidecar must rescue a .db with unreadable steps")
-
-		require.Len(t, msgs, 2)
-		assert.Equal(t, "sidecar prompt", msgs[0].Content)
-		assert.Equal(t, TranscriptFidelityFull, sess.TranscriptFidelity)
-
-		require.Len(t, usageEvents, 1)
-		assert.Equal(t, "generation", usageEvents[0].Source,
-			"usage must come from the DB gen_metadata, not the sidecar")
-		assert.Equal(t, "Test Gemini 3.5", usageEvents[0].Model)
-		assert.Equal(t, 2400, usageEvents[0].InputTokens)
-		assert.Equal(t, 180, usageEvents[0].OutputTokens)
-		assert.Equal(t, sess.ID, usageEvents[0].SessionID)
-		// The rescue merge borrows the sidecar's per-generation timing
-		// (the planner step's createdAt) while the DB counts stay
-		// authoritative, so daily analytics do not collapse the
-		// generation onto sessions.started_at.
-		assert.Equal(t, "2026-06-10T20:41:00Z", usageEvents[0].OccurredAt)
-		assert.False(t, sess.GenMetadataWithoutUsage,
-			"decoded gen_metadata usage must clear the flag")
-
-		assert.Equal(t, 180, sess.TotalOutputTokens)
-		assert.Equal(t, 2400, sess.PeakContextTokens)
-	})
-
-	t.Run("db events beyond sidecar count stay timestamp-less", func(t *testing.T) {
-		root := t.TempDir()
-		id := "cbcbcbcb-eded-afaf-cbcb-edededededed"
-		genData := createAntigravityMockGenMetadata(t, 2400, 180, 0, "Test Gemini 3.5")
-		dbPath := makeDB(t, root, id, genData)
-		// Second gen_metadata row: the DB carries more generations than
-		// the sidecar reports. Timestamps must never be invented for
-		// the surplus event.
-		genData2 := createAntigravityMockGenMetadata(t, 500, 40, 0, "Test Gemini 3.5")
-		db, err := sql.Open("sqlite3", dbPath)
-		require.NoError(t, err)
-		mustExec(t, db,
-			`INSERT INTO gen_metadata (idx, data, size) VALUES (2, ?, ?)`,
-			genData2, len(genData2))
-		require.NoError(t, db.Close())
-
-		genJSON := `[{
-			"stepIndices": [1],
-			"chatModel": {
-				"model": "MODEL_PLACEHOLDER_M20",
-				"usage": {"inputTokens": "9999", "outputTokens": "888"}
-			}
-		}]`
-		writeAntigravityTestSidecarWithGenMetadata(t, root, id, 2, genJSON)
-
-		_, _, usageEvents, err := parseAntigravityTestSession(
-			t, dbPath, "", "test-machine",
-		)
-		require.NoError(t, err)
-		require.Len(t, usageEvents, 2,
-			"both DB gen_metadata events must survive the merge")
-		assert.Equal(t, "generation", usageEvents[0].Source)
-		assert.Equal(t, 2400, usageEvents[0].InputTokens)
-		assert.Equal(t, "2026-06-10T20:41:00Z", usageEvents[0].OccurredAt,
-			"first event pairs with the sidecar generation by position")
-		assert.Equal(t, "generation", usageEvents[1].Source)
-		assert.Equal(t, 500, usageEvents[1].InputTokens)
-		assert.Empty(t, usageEvents[1].OccurredAt,
-			"surplus DB event must stay bare; timestamps are never invented")
-	})
-
-	t.Run("zero-token generation does not shift timestamp pairing", func(t *testing.T) {
-		root := t.TempDir()
-		id := "dcdcdcdc-fefe-abab-dcdc-fefefefefefe"
-		// An empty/retried generation BEFORE the successful one: the DB
-		// loader still emits a zero-token event for it, but the sidecar
-		// drops empty-usage generations, so naive positional pairing
-		// would hand the successful generation's timestamp to the
-		// zero-token event.
-		genDataEmpty := createAntigravityMockGenMetadata(t, 0, 0, 0, "Test Gemini 3.5")
-		dbPath := makeDB(t, root, id, genDataEmpty)
-		genDataReal := createAntigravityMockGenMetadata(t, 2400, 180, 0, "Test Gemini 3.5")
-		db, err := sql.Open("sqlite3", dbPath)
-		require.NoError(t, err)
-		mustExec(t, db,
-			`INSERT INTO gen_metadata (idx, data, size) VALUES (2, ?, ?)`,
-			genDataReal, len(genDataReal))
-		require.NoError(t, db.Close())
-
-		// Sidecar carries ONLY the successful generation.
-		genJSON := `[{
-			"stepIndices": [1],
-			"chatModel": {
-				"model": "MODEL_PLACEHOLDER_M20",
-				"usage": {"inputTokens": "9999", "outputTokens": "888"}
-			}
-		}]`
-		writeAntigravityTestSidecarWithGenMetadata(t, root, id, 2, genJSON)
-
-		_, _, usageEvents, err := parseAntigravityTestSession(
-			t, dbPath, "", "test-machine",
-		)
-		require.NoError(t, err)
-		require.Len(t, usageEvents, 2,
-			"zero-token DB events remain in the output")
-		assert.Equal(t, 0, usageEvents[0].InputTokens)
-		assert.Equal(t, 0, usageEvents[0].OutputTokens)
-		assert.Empty(t, usageEvents[0].OccurredAt,
-			"zero-token event must not inherit the successful generation's timestamp")
-		assert.Equal(t, 2400, usageEvents[1].InputTokens)
-		assert.Equal(t, 180, usageEvents[1].OutputTokens)
-		assert.Equal(t, "2026-06-10T20:41:00Z", usageEvents[1].OccurredAt,
-			"successful generation pairs with the sidecar event despite the earlier zero-token row")
-	})
-
-	t.Run("undecodable gen_metadata keeps flag semantics", func(t *testing.T) {
-		root := t.TempDir()
-		id := "babababa-dcdc-fefe-baba-dcdcdcdcdcdc"
-		// Garbage gen_metadata: rows exist but decode into zero usage.
-		dbPath := makeDB(t, root, id, []byte{0xff, 0xff, 0xff})
-
-		// Covering sidecar without generatorMetadata: nothing gap-fills.
-		writeAntigravityTestSidecar(t, root, id, 2)
-
-		sess, msgs, usageEvents, err := parseAntigravityTestSession(
-			t, dbPath, "", "test-machine",
-		)
-		require.NoError(t, err)
-		require.NotEmpty(t, msgs)
-		assert.Equal(t, TranscriptFidelityFull, sess.TranscriptFidelity)
-		assert.Empty(t, usageEvents)
-		assert.True(t, sess.GenMetadataWithoutUsage,
-			"gen_metadata rows that decode to no usage must flag the session")
-	})
-}
-
 // TestAntigravityIDEUnreadableStepsFailsClosed verifies that a
-// step-load failure without a rescuing (covering, displayable) sidecar
-// transcript surfaces the error even when partial data exists: the sync
-// engine unconditionally full-replaces stored Antigravity messages on
-// any successful parse, so persisting a degraded usage-only or
-// brain-only row would clobber a previously stored full transcript
-// whenever the steps query fails transiently.
+// step-load failure always surfaces the error, no matter what other
+// data exists -- including a covering displayable sidecar: coverage is
+// unprovable without the DB's step count, and the sync engine
+// unconditionally full-replaces stored Antigravity messages on any
+// successful parse, so persisting sidecar, usage-only, or brain-only
+// content would clobber a previously stored full transcript whenever
+// the steps query fails transiently.
 func TestAntigravityIDEUnreadableStepsFailsClosed(t *testing.T) {
 	makeNoStepsDB := func(t *testing.T, root, id string) string {
 		t.Helper()
@@ -4125,6 +3892,28 @@ func TestAntigravityIDEUnreadableStepsFailsClosed(t *testing.T) {
 		require.NoError(t, db.Close())
 		return dbPath
 	}
+
+	t.Run("covering displayable sidecar does not rescue", func(t *testing.T) {
+		root := t.TempDir()
+		id := "8a8a8a8a-9b9b-acac-bdbd-cececececece"
+		dbPath := makeNoStepsDB(t, root, id)
+		// A displayable sidecar that would win over a readable DB. With
+		// the steps query failing, coverage is unprovable (the sidecar
+		// may lag a live session) and this provider force-replaces on
+		// success, so a rescue could overwrite a previously complete
+		// stored transcript. The parse must fail instead.
+		writeAntigravityTestSidecar(t, root, id, 2)
+
+		sess, msgs, usageEvents, err := parseAntigravityTestSession(
+			t, dbPath, "", "test-machine",
+		)
+		require.Error(t, err,
+			"a covering displayable sidecar must not rescue an unreadable DB")
+		assert.Contains(t, err.Error(), "steps")
+		assert.Nil(t, sess)
+		assert.Empty(t, msgs)
+		assert.Empty(t, usageEvents)
+	})
 
 	t.Run("usage-only sidecar does not persist a degraded row", func(t *testing.T) {
 		root := t.TempDir()

@@ -66,32 +66,19 @@ func antigravityIDECompanionPaths(path string) []string {
 	)...)
 }
 
-// antigravityParseStatus carries sync-relevant IDE parser metadata that
-// is not part of the canonical session/message shape, mirroring the CLI
-// path's AntigravityCLIParseStatus.
-type antigravityParseStatus struct {
-	// NeedsRetry is true when the sidecar rescued the transcript while
-	// the steps query was failing: coverage is unprovable without a
-	// readable DB, so the row must stay stale (data_version-1) and every
-	// subsequent sync re-parses until the DB reads cleanly and the real
-	// coverage gate re-decides.
-	NeedsRetry bool
-}
-
 // parseSession parses one IDE session DB. It is owned by the
 // antigravityProvider; the package-level ParseAntigravitySession
 // entrypoint was folded onto the provider.
 func (p *antigravityProvider) parseSession(
 	path, project, machine string,
-) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, antigravityParseStatus, error) {
-	var status antigravityParseStatus
+) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return nil, nil, nil, status, fmt.Errorf("stat %s: %w", path, err)
+		return nil, nil, nil, fmt.Errorf("stat %s: %w", path, err)
 	}
 	id := strings.TrimSuffix(filepath.Base(path), ".db")
 	if !IsValidSessionID(id) {
-		return nil, nil, nil, status, fmt.Errorf(
+		return nil, nil, nil, fmt.Errorf(
 			"invalid Antigravity IDE session filename: %s", path,
 		)
 	}
@@ -102,7 +89,7 @@ func (p *antigravityProvider) parseSession(
 	dsn := "file:" + sqliteURIPath(path) + "?mode=ro&immutable=0"
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
-		return nil, nil, nil, status, fmt.Errorf(
+		return nil, nil, nil, fmt.Errorf(
 			"open antigravity db %s: %w", path, err,
 		)
 	}
@@ -113,24 +100,31 @@ func (p *antigravityProvider) parseSession(
 	// schema cannot be read.
 	sourceVersion := antigravitySourceVersion(db)
 
-	dbResult, dbErr := loadAntigravityStepsWithRawCount(db)
+	dbResult, err := loadAntigravityStepsWithRawCount(db)
+	if err != nil {
+		// Fail closed on an unreadable steps table, deliberately: a
+		// covering sidecar cannot rescue an unreadable DB because
+		// coverage is unprovable without the DB's raw step count (a
+		// displayable sidecar may lag a live session), and this
+		// provider force-replaces on success (the engine's
+		// shouldReplaceFullParseMessages plus the unconditional
+		// ForceReplace outcome), so any rescue would risk overwriting a
+		// previously complete stored transcript with a stale sidecar
+		// (roborev jobs 1982 and 2112, both high). Safe rescue needs
+		// engine-level no-clobber support, tracked separately. The
+		// parse error preserves stored data and the engine retries
+		// failed files.
+		return nil, nil, nil, err
+	}
 	messages := dbResult.messages
 	// gen_metadata token usage describes the session's actual
 	// consumption no matter which transcript source wins below. The
 	// trajectory sidecar also extracts generatorMetadata usage, but the
 	// .db gen_metadata events win and sidecar events only fill the gap
-	// (unreadable steps or missing gen_metadata table) so the same
-	// generation is never counted twice -- mirroring the CLI path's
-	// merge behavior.
+	// (missing gen_metadata table) so the same generation is never
+	// counted twice -- mirroring the CLI path's merge behavior.
 	usageEvents := dbResult.usageEvents
 	hasGenMetadata := dbResult.hasGenMetadata
-	if dbErr != nil {
-		// The steps query failed before gen_metadata was read, so the
-		// result above carries no usage. Load gen_metadata independently:
-		// it is still the DB's ground-truth consumption and must win over
-		// sidecar gap-fill even when the sidecar rescues the transcript.
-		usageEvents, hasGenMetadata = loadAntigravityGenMetadataUsage(db)
-	}
 	// TranscriptFidelity is left empty (treated as full) for the heuristic
 	// decode, matching prior IDE behavior; a covering sidecar sets it to
 	// TranscriptFidelityFull explicitly below.
@@ -143,56 +137,22 @@ func (p *antigravityProvider) parseSession(
 	// at least as many steps as the raw DB decode, so a sidecar lagging
 	// behind a live session loses until agy-reader catches up. When the
 	// sidecar is absent, malformed, or fails the coverage gate the parser
-	// falls back to the heuristic decode exactly as before. A step-load
-	// failure is a fallback condition only when a covering displayable
-	// sidecar can rescue the session with a full transcript (the DB then
-	// offers no coverage signal); without one the original step-load
-	// error is returned.
+	// falls back to the heuristic decode exactly as before.
 	sidecarPath := strings.TrimSuffix(path, ".db") + ".trajectory.json"
 	tRes, tErr := parseAntigravityCLITrajectory(sidecarPath)
 	sidecarOK := tErr == nil &&
 		hasDisplayableAntigravityCLITrajectoryMessage(tRes.messages)
-	sidecarCovers := dbErr != nil || dbResult.rawStepCount == 0 ||
+	sidecarCovers := dbResult.rawStepCount == 0 ||
 		tRes.rawSteps >= dbResult.rawStepCount
-	switch {
-	case sidecarOK && sidecarCovers:
+	if sidecarOK && sidecarCovers {
 		messages = tRes.messages
 		transcriptFidelity = TranscriptFidelityFull
-		if dbErr != nil {
-			// The rescue persists the best-available sidecar content,
-			// but with the steps query failing there is no DB step
-			// count to prove the sidecar actually covers the session
-			// (it may lag a live session). Leave the row stale so
-			// every subsequent sync re-parses until the DB reads
-			// cleanly and the real coverage gate re-decides.
-			status.NeedsRetry = true
-			// Rescue-only usage merge: the independent gen_metadata
-			// load has no decoded step to anchor timestamps to, so its
-			// events would collapse onto sessions.started_at in daily
-			// analytics. Borrow per-generation timing from the sidecar
-			// while the DB token counts stay authoritative. The row is
-			// already NeedsRetry, so a later clean parse re-derives
-			// everything; the merge just keeps analytics sane meanwhile.
-			mergeAntigravityRescueUsageTiming(usageEvents, tRes.usageEvents)
-		}
-	case dbErr != nil:
-		// Fail closed, deliberately. The sync engine unconditionally
-		// full-replaces stored Antigravity messages on any successful
-		// parse (shouldReplaceFullParseMessages plus this provider's
-		// unconditional ForceReplace), so persisting a degraded
-		// usage-only or brain-only row here would clobber a previously
-		// stored full transcript whenever the steps query fails
-		// transiently (e.g. during live IDE writes). Surfacing the
-		// error preserves the stored session instead. Degraded-persist
-		// requires engine-level clobber protection first; that
-		// enhancement is tracked separately.
-		return nil, nil, nil, status, dbErr
 	}
 	// Coverage gates usage just like the transcript: a lagging sidecar
 	// carries only the generations it has seen, so persisting those would
 	// underreport totals on a row that looks current. sidecarCovers stays
-	// true when the DB offers no coverage signal (unreadable steps or zero
-	// rows), so gap-fill still applies there.
+	// true when the DB offers no coverage signal (zero rows), so gap-fill
+	// still applies there.
 	if len(usageEvents) == 0 && tErr == nil && sidecarCovers {
 		usageEvents = tRes.usageEvents
 	}
@@ -284,9 +244,9 @@ func (p *antigravityProvider) parseSession(
 		// Usage events still flow for message-less parses (e.g. an
 		// undecodable DB with gen_metadata) so daily usage analytics
 		// match the event-derived session totals stamped above.
-		return sess, nil, usageEvents, status, nil
+		return sess, nil, usageEvents, nil
 	}
-	return sess, messages, usageEvents, status, nil
+	return sess, messages, usageEvents, nil
 }
 
 type antigravityStepLoadResult struct {
@@ -360,93 +320,6 @@ func roleForAntigravityStepKind(kind antigravityStepKind) RoleType {
 		return RoleAssistant
 	default:
 		return RoleAssistant
-	}
-}
-
-// loadAntigravityGenMetadataUsage loads usage events directly from the
-// gen_metadata table for the IDE sidecar-rescue path: when the steps
-// query fails, loadAntigravityStepsWithRawCount returns before it ever
-// reads gen_metadata, yet gen_metadata is the session's ground-truth
-// consumption and must stay primary ahead of sidecar gap-fill no matter
-// which transcript source wins. Events decoded here carry no message
-// attribution, model-from-message, or timestamp (there is no decoded
-// step to anchor them), so they bucket at session start in daily usage.
-// The second return reports whether the table carried rows at all, so
-// GenMetadataWithoutUsage keeps its meaning in the rescue path.
-func loadAntigravityGenMetadataUsage(
-	db *sql.DB,
-) ([]ParsedUsageEvent, bool) {
-	rows, err := db.Query("SELECT idx, data FROM gen_metadata ORDER BY idx")
-	if err != nil {
-		return nil, false
-	}
-	defer rows.Close()
-	var r antigravityStepLoadResult
-	hasGenMetadata := false
-	for rows.Next() {
-		var idx int
-		var data []byte
-		if err := rows.Scan(&idx, &data); err != nil {
-			continue
-		}
-		hasGenMetadata = true
-		// decoded=false: no step message exists to attach counts to; the
-		// event alone carries the usage, same as an undecodable step row.
-		r.appendGenMetadataUsage(data, ParsedMessage{}, false)
-	}
-	return r.usageEvents, hasGenMetadata
-}
-
-// antigravityUsageEventIsZeroToken mirrors the sidecar parser's
-// empty-usage skip (parseAntigravityCLITrajectory drops generations
-// where input, output, AND cacheRead are all zero -- the marker of a
-// failed/retried generation). The rescue merge below applies the same
-// predicate to the DB side so the two event sequences align by
-// construction.
-func antigravityUsageEventIsZeroToken(ev ParsedUsageEvent) bool {
-	return ev.InputTokens == 0 && ev.OutputTokens == 0 &&
-		ev.CacheReadInputTokens == 0
-}
-
-// mergeAntigravityRescueUsageTiming copies per-generation timing (and
-// missing model attribution) from sidecar usage events onto DB
-// gen_metadata events, matched by ordinal position: gen_metadata is
-// loaded ORDER BY idx and the sidecar's generatorMetadata events are in
-// trajectory order, so both describe the same generation sequence. The
-// DB token counts stay authoritative.
-//
-// Zero-token DB events are skipped WITHOUT consuming a sidecar event:
-// the sidecar parser never emits an event for an empty/retried
-// generation (see antigravityUsageEventIsZeroToken), so a zero-token DB
-// event has no sidecar counterpart and pairing it would shift every
-// later match onto the wrong timestamp. Those events stay in the output
-// untouched, in their original order -- they are still ground-truth
-// generation records -- just timestamp-less. With that filter the
-// sequences align by construction and any divergence is suffix-only (a
-// lagging sidecar), which prefix matching handles: DB events beyond the
-// sidecar's count keep an empty OccurredAt (timestamps are never
-// invented) and sidecar events beyond the DB's count are ignored (the
-// DB is ground truth for which generations happened). Rescue-path only:
-// normal parses over a readable DB anchor events to decoded steps and
-// must not pass through here.
-func mergeAntigravityRescueUsageTiming(
-	dbEvents, sidecarEvents []ParsedUsageEvent,
-) {
-	j := 0
-	for i := range dbEvents {
-		if antigravityUsageEventIsZeroToken(dbEvents[i]) {
-			continue
-		}
-		if j >= len(sidecarEvents) {
-			return
-		}
-		if dbEvents[i].OccurredAt == "" {
-			dbEvents[i].OccurredAt = sidecarEvents[j].OccurredAt
-		}
-		if dbEvents[i].Model == "" {
-			dbEvents[i].Model = sidecarEvents[j].Model
-		}
-		j++
 	}
 }
 
