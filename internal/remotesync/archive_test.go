@@ -284,7 +284,7 @@ func TestWriteArchiveFilesSkipsVanishedAndSymlinks(t *testing.T) {
 	gone := filepath.Join(dir, "gone.jsonl")
 
 	var buf bytes.Buffer
-	require.NoError(t, WriteArchiveFiles(&buf, []string{gone, link, keep}))
+	require.NoError(t, WriteArchiveFiles(&buf, []string{dir}, []string{gone, link, keep}))
 
 	names := []string{}
 	tr := tar.NewReader(&buf)
@@ -298,4 +298,28 @@ func TestWriteArchiveFilesSkipsVanishedAndSymlinks(t *testing.T) {
 	}
 	require.Len(t, names, 1)
 	assert.Contains(t, names[0], "keep.jsonl")
+}
+
+func TestWriteArchiveFilesSkipsFilesOutsideAllowedRoots(t *testing.T) {
+	allowed := t.TempDir()
+	inside := filepath.Join(allowed, "s.jsonl")
+	require.NoError(t, os.WriteFile(inside, []byte("in"), 0o644))
+	outside := filepath.Join(t.TempDir(), "secret.jsonl")
+	require.NoError(t, os.WriteFile(outside, []byte("secret"), 0o644))
+
+	var buf bytes.Buffer
+	require.NoError(t, WriteArchiveFiles(&buf, []string{allowed}, []string{inside, outside}))
+
+	names := []string{}
+	tr := tar.NewReader(&buf)
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+		names = append(names, hdr.Name)
+	}
+	require.Len(t, names, 1, "only the file inside the allowed root is streamed")
+	assert.Contains(t, names[0], "s.jsonl")
 }

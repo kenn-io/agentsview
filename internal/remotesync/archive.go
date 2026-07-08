@@ -274,14 +274,24 @@ func writeArchiveHeader(
 	return nil
 }
 
-// WriteArchiveFiles streams a tar containing exactly the given files.
-// Entries that vanished since the client's manifest diff, symlinks,
-// and non-regular files are skipped silently: deletions race live
-// agents and are reconciled by the next manifest. writeArchivePath is
-// unsuitable here because it fails on a missing root.
-func WriteArchiveFiles(w io.Writer, files []string) error {
+// WriteArchiveFiles streams a tar containing exactly the given files,
+// each confined to one of allowedRoots. Entries that vanished since
+// the client's manifest diff, symlinks, and non-regular files are
+// skipped silently: deletions race live agents and are reconciled by
+// the next manifest. writeArchivePath is unsuitable here because it
+// fails on a missing root.
+//
+// The allowedRoots containment re-check is defense in depth: callers
+// validate the file list before reaching here, but re-verifying each
+// path against the trusted roots at the filesystem read keeps a
+// client-supplied path from ever escaping the resolved targets, even
+// if a future caller forgets to validate.
+func WriteArchiveFiles(w io.Writer, allowedRoots, files []string) error {
 	tw := tar.NewWriter(w)
 	for _, path := range files {
+		if !pathWithinAnyRoot(allowedRoots, path) {
+			continue
+		}
 		info, err := os.Lstat(path)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -300,4 +310,17 @@ func WriteArchiveFiles(w io.Writer, files []string) error {
 		return fmt.Errorf("close archive: %w", err)
 	}
 	return nil
+}
+
+// pathWithinAnyRoot reports whether path is one of, or lies inside,
+// the trusted allowedRoots after cleaning. Extra-file roots match by
+// equality; directory roots match by containment.
+func pathWithinAnyRoot(allowedRoots []string, path string) bool {
+	clean := filepath.Clean(path)
+	for _, root := range allowedRoots {
+		if within(filepath.Clean(root), clean) {
+			return true
+		}
+	}
+	return false
 }

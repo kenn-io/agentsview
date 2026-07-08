@@ -32,6 +32,23 @@ func (t TargetSet) HasFileScopedAgents() bool {
 	return len(t.Files) > 0
 }
 
+// DeltaAllowedRoots returns the trusted base paths a delta-archive file
+// may resolve under: every non-file-scoped agent directory plus the
+// extra files. File-scoped agents (Windsurf) are excluded because
+// their raw tree is never delta-streamed. WriteArchiveFiles re-checks
+// each requested file against these roots before reading it.
+func (t TargetSet) DeltaAllowedRoots() []string {
+	roots := make([]string, 0, len(t.Dirs)+len(t.ExtraFiles))
+	for agent, dirs := range t.Dirs {
+		if _, fileScoped := t.Files[agent]; fileScoped {
+			continue
+		}
+		roots = append(roots, dirs...)
+	}
+	roots = append(roots, t.ExtraFiles...)
+	return roots
+}
+
 // ArchiveRequest is the archive endpoint's request body. DeltaFiles,
 // when present, selects delta mode: only the named files are streamed
 // (validated by SelectAllowedFiles). Old servers ignore the unknown

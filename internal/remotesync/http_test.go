@@ -215,7 +215,8 @@ func newMirrorTestRemote(t *testing.T) *mirrorTestRemote {
 			}
 			w.Header().Set("Content-Type", "application/x-tar")
 			if req.DeltaFiles != nil {
-				require.NoError(t, WriteArchiveFiles(w, req.DeltaFiles))
+				require.NoError(t, WriteArchiveFiles(
+					w, targets.DeltaAllowedRoots(), req.DeltaFiles))
 			} else {
 				require.NoError(t, WriteArchive(w, targets))
 			}
