@@ -129,7 +129,8 @@ HTTP remote sync calls the remote daemon's archive endpoints and always uses a
 bearer token, even when the rest of that daemon has `require_auth = false`. The
 per-host `token` is required and must match the remote daemon's `auth_token`.
 Do not reuse the collector daemon's own `auth_token` for untrusted remote
-endpoints.
+endpoints. HTTP transfers are incremental after the first sync; see
+[Remote Access — Incremental Sync](/remote-access/#incremental-sync).
 
 Each `remote_hosts.host` value must be unique. A configured HTTP host can be
 selected later with `agentsview sync --host <name>`, but ad hoc HTTP remotes are

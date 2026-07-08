@@ -183,9 +183,11 @@ token = "remote-token"
 
 With hosts configured, `agentsview sync` (no `--host`) runs the local sync
 first, then syncs each configured host in the order declared using its
-configured transport. `--full` applies to every host. A failing host is reported
-on stderr and skipped so the remaining hosts still run; the command exits
-non-zero if any host failed.
+configured transport. `--full` applies to every host; for HTTP hosts it forces
+a re-parse of every remote session but still transfers only changed files (see
+[Incremental Sync](/remote-access/#incremental-sync)). A failing host is
+reported on stderr and skipped so the remaining hosts still run; the command
+exits non-zero if any host failed.
 
 `agentsview sync --host X` syncs one host, not the whole configured list. When
 the local daemon knows a configured host with that identity, it uses the stored
