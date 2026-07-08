@@ -323,3 +323,31 @@ func TestWriteArchiveFilesSkipsFilesOutsideAllowedRoots(t *testing.T) {
 	require.Len(t, names, 1, "only the file inside the allowed root is streamed")
 	assert.Contains(t, names[0], "s.jsonl")
 }
+
+func TestResolveDeltaFilePath(t *testing.T) {
+	tests := []struct {
+		name  string
+		roots []string
+		path  string
+		want  string
+		ok    bool
+	}{
+		{"exact root", []string{"/srv/extra.jsonl"}, "/srv/extra.jsonl",
+			"/srv/extra.jsonl", true},
+		{"nested under root", []string{"/srv/claude"}, "/srv/claude/p/s.jsonl",
+			"/srv/claude/p/s.jsonl", true},
+		{"outside all roots", []string{"/srv/claude"}, "/etc/passwd", "", false},
+		{"traversal escapes root", []string{"/srv/claude"},
+			"/srv/claude/../secret", "", false},
+		{"prefix sibling", []string{"/srv/claude"}, "/srv/claude-evil/x",
+			"", false},
+		{"no roots", nil, "/srv/claude/p/s.jsonl", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := resolveDeltaFilePath(tt.roots, tt.path)
+			require.Equal(t, tt.ok, ok)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
