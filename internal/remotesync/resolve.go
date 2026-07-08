@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
@@ -229,4 +230,141 @@ func isAiderUnsafeRoot(dir string) bool {
 		return false
 	}
 	return filepath.Clean(dir) == filepath.Clean(home)
+}
+
+// SelectAllowedFiles validates a delta-archive file list: every entry
+// must be under an allowed dir, exactly an allowed root (some agents,
+// like Aider, resolve individual history files into Dirs), or exactly
+// an allowed extra file. Only absolute request paths can match an
+// allowed root; the absolute check is remote-OS neutral because
+// request paths echo the server's own manifest, not local-OS paths.
+// Any disallowed entry rejects the whole request (fail closed, like
+// SelectAllowedTargets). Path traversal is rejected by
+// safeRemotePathArchiveName before any prefix comparison; prefix
+// comparisons additionally require matching path dialects and reject
+// symlinked ancestors that would escape the allowed root.
+func SelectAllowedFiles(allowed TargetSet, files []string) ([]string, bool) {
+	selected := make([]string, 0, len(files))
+	for _, file := range files {
+		canonical, ok := selectAllowedFile(allowed, file)
+		if !ok {
+			return nil, false
+		}
+		selected = append(selected, canonical)
+	}
+	return selected, true
+}
+
+func selectAllowedFile(allowed TargetSet, file string) (string, bool) {
+	if canonical, ok := selectAllowedString(allowed.ExtraFiles, file); ok {
+		return canonical, true
+	}
+	if !isAbsRemotePath(file) {
+		return "", false
+	}
+	if _, err := safeRemotePathArchiveName(file); err != nil {
+		return "", false
+	}
+	for _, dirs := range allowed.Dirs {
+		for _, dir := range dirs {
+			if remotePathDialect(file) != remotePathDialect(dir) {
+				// Archive-name remapping flattens dialects into one
+				// namespace (`C:\x` and `/__drive_C/x` both remap to
+				// `__drive_C/x`), so a cross-dialect prefix match would
+				// validate a request the archive writer then reads at a
+				// literal path outside the allowed root.
+				continue
+			}
+			if _, ok := remoteArchiveRel(dir, file); ok {
+				if symlinkEscapesRoot(dir, file) {
+					return "", false
+				}
+				// Exact root matches are allowed: file roots (Aider
+				// history files) must stream, and a directory root
+				// yields nothing because WriteArchiveFiles skips
+				// non-regular entries.
+				return file, true
+			}
+		}
+	}
+	return "", false
+}
+
+type pathDialect int
+
+const (
+	dialectPOSIX pathDialect = iota
+	dialectDrive
+	dialectUNC
+)
+
+// remotePathDialect classifies an absolute remote path as POSIX,
+// Windows drive-letter, or UNC. Delta validation requires the
+// requested file and the allowed root to share a dialect before any
+// archive-name prefix comparison.
+func remotePathDialect(p string) pathDialect {
+	if strings.HasPrefix(p, `\\`) || strings.HasPrefix(p, "//") {
+		return dialectUNC
+	}
+	if len(p) >= 2 && p[1] == ':' {
+		return dialectDrive
+	}
+	return dialectPOSIX
+}
+
+// symlinkEscapesRoot reports whether the allowed root or any path
+// component between it and the requested file's parent is a symlink.
+// BuildManifest and the full-archive walk never traverse symlinks, so
+// delta validation must not either: a symlinked component would let a
+// delta request stream entries no manifest ever lists, and with a
+// symlinked root that includes files outside the lexical allowed
+// directory. Missing components are not escapes: a vanished file is
+// skipped by WriteArchiveFiles, and a missing root has nothing under
+// it to stream.
+func symlinkEscapesRoot(root, file string) bool {
+	rootInfo, err := os.Lstat(root)
+	if err != nil {
+		return false
+	}
+	if rootInfo.Mode()&os.ModeSymlink != 0 {
+		return true
+	}
+	rel, err := filepath.Rel(root, filepath.Dir(file))
+	if err != nil || rel == "." || rel == ".." ||
+		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		// Exact root matches (Aider file roots, where Dir(file) is the
+		// root's parent) and files directly under the root have no
+		// intermediate components to check; the root's own ancestors
+		// are operator-configured territory. A component merely named
+		// with a ".." prefix (e.g. "..alias") is NOT a parent escape
+		// and falls through to the symlink walk below.
+		return false
+	}
+	dir := root
+	for part := range strings.SplitSeq(filepath.ToSlash(rel), "/") {
+		if part == "" || part == "." {
+			continue
+		}
+		dir = filepath.Join(dir, part)
+		info, err := os.Lstat(dir)
+		if err != nil {
+			return false
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// isAbsRemotePath reports whether a requested path is absolute in any
+// remote-OS form: POSIX rooted, UNC, or Windows drive-letter. Host
+// filepath.IsAbs semantics would wrongly reject POSIX paths on
+// Windows and drive paths on Unix, and requests are validated against
+// the server's own resolved targets regardless of the local OS.
+func isAbsRemotePath(p string) bool {
+	if strings.HasPrefix(p, "/") || strings.HasPrefix(p, `\\`) {
+		return true
+	}
+	return len(p) >= 3 && p[1] == ':' && (p[2] == '/' || p[2] == '\\')
 }

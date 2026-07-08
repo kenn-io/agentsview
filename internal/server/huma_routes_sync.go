@@ -88,6 +88,7 @@ var runHTTPRemoteSync = func(
 		URL:                     rh.URL,
 		Token:                   token,
 		Full:                    full,
+		DataDir:                 cfg.DataDir,
 		DB:                      local,
 		BlockedResultCategories: cfg.ResultContentBlockedCategories,
 		Progress:                progress,

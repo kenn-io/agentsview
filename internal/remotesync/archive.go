@@ -252,6 +252,10 @@ func writeArchiveHeader(
 		return err
 	}
 	hdr.Name = name
+	// PAX carries sub-second mtimes; the default (unknown) format
+	// makes tar.Writer round ModTime to whole seconds, which would
+	// desync the manifest's mtime_ns diff from extracted files.
+	hdr.Format = tar.FormatPAX
 	if err := tw.WriteHeader(hdr); err != nil {
 		return err
 	}
@@ -266,6 +270,34 @@ func writeArchiveHeader(
 				path, info.Size(), copied,
 			)
 		}
+	}
+	return nil
+}
+
+// WriteArchiveFiles streams a tar containing exactly the given files.
+// Entries that vanished since the client's manifest diff, symlinks,
+// and non-regular files are skipped silently: deletions race live
+// agents and are reconciled by the next manifest. writeArchivePath is
+// unsuitable here because it fails on a missing root.
+func WriteArchiveFiles(w io.Writer, files []string) error {
+	tw := tar.NewWriter(w)
+	for _, path := range files {
+		info, err := os.Lstat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("stat archive file %q: %w", path, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			continue
+		}
+		if err := writeArchiveFile(tw, path, info); err != nil {
+			return err
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return fmt.Errorf("close archive: %w", err)
 	}
 	return nil
 }

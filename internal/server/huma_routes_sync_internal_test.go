@@ -793,3 +793,39 @@ func TestSyncRemotesRejectsAdHocHTTP(t *testing.T) {
 
 	assert.Equal(t, http.StatusForbidden, w.Code)
 }
+
+func TestRunHTTPRemoteSyncReachesMirrorPath(t *testing.T) {
+	manifestRequests := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/remote-sync/targets":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{}`))
+		case "/api/v1/remote-sync/manifest":
+			manifestRequests++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"files":[]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(ts.Close)
+	database := dbtest.OpenTestDB(t)
+
+	_, err := runHTTPRemoteSync(
+		context.Background(),
+		config.Config{DataDir: t.TempDir()},
+		database,
+		config.RemoteHost{
+			Host:      "devbox",
+			Transport: config.RemoteTransportHTTP,
+			URL:       ts.URL,
+			Token:     "remote-token",
+		},
+		false,
+		nil,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, manifestRequests,
+		"configured DataDir must route HTTP sync through the manifest/mirror path")
+}

@@ -241,3 +241,113 @@ func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
 	assert.NotContains(t, sshDirs[parser.AgentWindsurf], windsurfWorkspaceRoot)
 	assert.ElementsMatch(t, sshExtra, goTargets.ExtraFiles)
 }
+
+func TestSelectAllowedFiles(t *testing.T) {
+	allowed := remotesync.TargetSet{
+		Dirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {"/home/u/.claude/projects"},
+			parser.AgentAider:  {"/home/u/proj/.aider.chat.history.md"},
+			parser.AgentCodex: {
+				`C:\Users\u\.codex\sessions`,
+				`\\server\share\.codex\sessions`,
+			},
+		},
+		ExtraFiles: []string{"/home/u/.codex/session_index.jsonl"},
+	}
+	tests := []struct {
+		name  string
+		files []string
+		ok    bool
+	}{
+		{"under allowed dir", []string{"/home/u/.claude/projects/p/s.jsonl"}, true},
+		{"nested under allowed dir", []string{"/home/u/.claude/projects/a/b/c.jsonl"}, true},
+		{"exact extra file", []string{"/home/u/.codex/session_index.jsonl"}, true},
+		{"exact allowed dir root", []string{"/home/u/.claude/projects"}, true},
+		{"exact aider file root", []string{"/home/u/proj/.aider.chat.history.md"}, true},
+		{"windows drive path under allowed dir", []string{
+			`C:\Users\u\.codex\sessions\2026\s.jsonl`,
+		}, true},
+		{"unc path under allowed unc root", []string{
+			`\\server\share\.codex\sessions\2026\s.jsonl`,
+		}, true},
+		{"posix path colliding with drive root archive name", []string{
+			"/__drive_C/Users/u/.codex/sessions/secret.jsonl",
+		}, false},
+		{"posix path colliding with unc root archive name", []string{
+			"/__unc/server/share/.codex/sessions/secret.jsonl",
+		}, false},
+		{"outside allowed dirs", []string{"/etc/passwd"}, false},
+		{"prefix sibling escape", []string{"/home/u/.claude/projects-evil/x"}, false},
+		{"dot dot traversal", []string{"/home/u/.claude/projects/../../etc/passwd"}, false},
+		{"relative path rejected", []string{"home/u/.claude/projects/p/s.jsonl"}, false},
+		{"one bad entry rejects all", []string{
+			"/home/u/.claude/projects/p/s.jsonl", "/etc/passwd",
+		}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			selected, ok := remotesync.SelectAllowedFiles(allowed, tt.files)
+			assert.Equal(t, tt.ok, ok)
+			if tt.ok {
+				assert.Equal(t, tt.files, selected)
+			} else {
+				assert.Nil(t, selected)
+			}
+		})
+	}
+}
+
+func TestSelectAllowedFilesRejectsSymlinkAncestorEscape(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires privileges on windows")
+	}
+	outside := t.TempDir()
+	victim := filepath.Join(outside, "victim.jsonl")
+	require.NoError(t, os.WriteFile(victim, []byte("secret"), 0o644))
+
+	root := t.TempDir()
+	require.NoError(t, os.Symlink(outside, filepath.Join(root, "link")))
+	nested := filepath.Join(root, "project")
+	require.NoError(t, os.MkdirAll(nested, 0o755))
+	legit := filepath.Join(nested, "s.jsonl")
+	require.NoError(t, os.WriteFile(legit, []byte("session"), 0o644))
+
+	allowed := remotesync.TargetSet{
+		Dirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
+	}
+
+	_, ok := remotesync.SelectAllowedFiles(allowed, []string{
+		filepath.Join(root, "link", "victim.jsonl"),
+	})
+	assert.False(t, ok, "symlinked ancestor must not validate")
+
+	// An in-root symlink pointing back inside the root is rejected
+	// too: manifests never list paths behind symlinks, so delta
+	// validation must not accept them either.
+	require.NoError(t, os.Symlink(nested, filepath.Join(root, "alias")))
+	_, ok = remotesync.SelectAllowedFiles(allowed, []string{
+		filepath.Join(root, "alias", "s.jsonl"),
+	})
+	assert.False(t, ok, "in-root symlink component must not validate")
+
+	// A symlinked component merely NAMED with a ".." prefix must not
+	// be mistaken for a parent escape and skip the symlink walk.
+	require.NoError(t, os.Symlink(outside, filepath.Join(root, "..alias")))
+	_, ok = remotesync.SelectAllowedFiles(allowed, []string{
+		filepath.Join(root, "..alias", "victim.jsonl"),
+	})
+	assert.False(t, ok, "dot-dot-prefixed symlink component must not validate")
+
+	// A root that is itself a symlink streams nothing in manifests or
+	// full archives, so delta requests under it are rejected.
+	rootLink := filepath.Join(t.TempDir(), "root-link")
+	require.NoError(t, os.Symlink(root, rootLink))
+	_, ok = remotesync.SelectAllowedFiles(remotesync.TargetSet{
+		Dirs: map[parser.AgentType][]string{parser.AgentClaude: {rootLink}},
+	}, []string{filepath.Join(rootLink, "project", "s.jsonl")})
+	assert.False(t, ok, "symlinked root must not validate")
+
+	selected, ok := remotesync.SelectAllowedFiles(allowed, []string{legit})
+	require.True(t, ok)
+	assert.Equal(t, []string{legit}, selected)
+}

@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -245,4 +246,56 @@ func appendFile(path string, value string) error {
 	defer file.Close()
 	_, err = file.WriteString(value)
 	return err
+}
+
+func TestWriteArchivePreservesNanosecondMtime(t *testing.T) {
+	srcDir := t.TempDir()
+	path := filepath.Join(srcDir, "session.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o644))
+	mtime := time.Date(2026, 7, 8, 10, 30, 0, 123456789, time.UTC)
+	require.NoError(t, os.Chtimes(path, mtime, mtime))
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	if info.ModTime().Nanosecond() == 0 {
+		t.Skip("filesystem does not store nanosecond mtimes")
+	}
+
+	var buf bytes.Buffer
+	require.NoError(t, WriteArchive(&buf, TargetSet{
+		Dirs: map[parser.AgentType][]string{parser.AgentClaude: {srcDir}},
+	}))
+
+	dstDir := t.TempDir()
+	_, err = ExtractTarStream(context.Background(), &buf, dstDir)
+	require.NoError(t, err)
+	extracted, err := safeRemappedRemotePath(dstDir, path)
+	require.NoError(t, err)
+	extractedInfo, err := os.Stat(extracted)
+	require.NoError(t, err)
+	assert.Equal(t, info.ModTime().UnixNano(), extractedInfo.ModTime().UnixNano())
+}
+
+func TestWriteArchiveFilesSkipsVanishedAndSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	keep := filepath.Join(dir, "keep.jsonl")
+	require.NoError(t, os.WriteFile(keep, []byte("k"), 0o644))
+	link := filepath.Join(dir, "link.jsonl")
+	require.NoError(t, os.Symlink(keep, link))
+	gone := filepath.Join(dir, "gone.jsonl")
+
+	var buf bytes.Buffer
+	require.NoError(t, WriteArchiveFiles(&buf, []string{gone, link, keep}))
+
+	names := []string{}
+	tr := tar.NewReader(&buf)
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+		names = append(names, hdr.Name)
+	}
+	require.Len(t, names, 1)
+	assert.Contains(t, names[0], "keep.jsonl")
 }

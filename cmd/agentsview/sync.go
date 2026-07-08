@@ -379,6 +379,7 @@ var runHTTPRemoteSync = func(
 		URL:                     rh.URL,
 		Token:                   token,
 		Full:                    full,
+		DataDir:                 appCfg.DataDir,
 		DB:                      database,
 		BlockedResultCategories: appCfg.ResultContentBlockedCategories,
 	}.Run(ctx)

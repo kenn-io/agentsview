@@ -119,6 +119,22 @@ That setting controls detached background daemons only. Supervised daemons run
 under systemd, launchd, Docker, or a foreground shell never create the idle
 tracker and already stay alive until their supervisor stops them.
 
+## Incremental Sync
+
+HTTP remote sync is incremental. The first sync downloads the full session
+archive and stores a byte-for-byte mirror under
+`<data_dir>/remote-mirrors/<host>-<hash>/`; subsequent syncs fetch a file
+manifest, diff it against the mirror, and download only files that changed
+on the remote. Archives are gzip-compressed in transit.
+
+The mirror is a disposable transfer cache: deleting it is always safe and
+just makes the next sync download everything again. Sessions already
+imported into the database are never removed, even when their source files
+disappear from the remote.
+
+When the remote daemon predates the manifest endpoint, sync automatically
+falls back to the full-archive download, so mixed versions keep working.
+
 ## SSE Endpoints
 
 The SSE endpoints also accept `?token=<token>` because browser `EventSource`

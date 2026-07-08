@@ -3,6 +3,7 @@ package server
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -300,4 +301,131 @@ func (w *errorOnFirstWriteRecorder) Write(p []byte) (int, error) {
 		return n, errors.New("forced tar write error")
 	}
 	return n, err
+}
+
+func TestRemoteSyncManifestListsFiles(t *testing.T) {
+	_, handler, sessionPath := newRemoteSyncServer(t)
+	payload, err := json.Marshal(map[string]any{
+		"dirs": map[string][]string{"claude": {filepath.Dir(sessionPath)}},
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/remote-sync/manifest",
+		bytes.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer remote-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, "gzip", w.Header().Get("Content-Encoding"))
+	gz, err := gzip.NewReader(bytes.NewReader(w.Body.Bytes()))
+	require.NoError(t, err)
+	var manifest remotesync.Manifest
+	require.NoError(t, json.NewDecoder(gz).Decode(&manifest))
+	require.Len(t, manifest.Files, 1)
+	assert.Equal(t, sessionPath, manifest.Files[0].Path)
+	assert.Equal(t, int64(3), manifest.Files[0].Size)
+	info, err := os.Stat(sessionPath)
+	require.NoError(t, err)
+	assert.Equal(t, info.ModTime().UnixNano(), manifest.Files[0].MtimeNS)
+}
+
+func TestRemoteSyncManifestRejectsUnresolvedPath(t *testing.T) {
+	_, handler, _ := newRemoteSyncServer(t)
+	body := bytes.NewBufferString(`{"dirs":{"claude":["/etc"]}}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/remote-sync/manifest", body)
+	req.Header.Set("Authorization", "Bearer remote-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestRemoteSyncArchiveDeltaStreamsOnlyRequestedFiles(t *testing.T) {
+	_, handler, sessionPath := newRemoteSyncServer(t)
+	other := filepath.Join(filepath.Dir(sessionPath), "other.jsonl")
+	require.NoError(t, os.WriteFile(other, []byte("{}\n"), 0o644))
+	payload, err := json.Marshal(map[string]any{
+		"dirs":  map[string][]string{"claude": {filepath.Dir(sessionPath)}},
+		"files": []string{other},
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/remote-sync/archive",
+		bytes.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer remote-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	names := []string{}
+	tr := tar.NewReader(bytes.NewReader(w.Body.Bytes()))
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		names = append(names, pathBaseSlash(hdr.Name))
+	}
+	assert.Equal(t, []string{"other.jsonl"}, names)
+}
+
+func TestRemoteSyncArchiveDeltaRejectsFileOutsideAllowedDirs(t *testing.T) {
+	_, handler, sessionPath := newRemoteSyncServer(t)
+	payload, err := json.Marshal(map[string]any{
+		"dirs":  map[string][]string{"claude": {filepath.Dir(sessionPath)}},
+		"files": []string{"/etc/passwd"},
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/remote-sync/archive",
+		bytes.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer remote-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+func TestRemoteSyncArchiveGzipsWhenAdvertised(t *testing.T) {
+	_, handler, sessionPath := newRemoteSyncServer(t)
+	payload, err := json.Marshal(map[string]any{
+		"dirs": map[string][]string{"claude": {filepath.Dir(sessionPath)}},
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/remote-sync/archive",
+		bytes.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer remote-token")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept-Encoding", "gzip")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, "gzip", w.Header().Get("Content-Encoding"))
+	gz, err := gzip.NewReader(bytes.NewReader(w.Body.Bytes()))
+	require.NoError(t, err)
+	tr := tar.NewReader(gz)
+	hdr, err := tr.Next()
+	require.NoError(t, err)
+	assert.NotEmpty(t, hdr.Name)
+}
+
+func TestRemoteSyncArchiveExplicitEmptyDeltaReturnsEmptyTar(t *testing.T) {
+	_, handler, sessionPath := newRemoteSyncServer(t)
+	payload, err := json.Marshal(map[string]any{
+		"dirs":  map[string][]string{"claude": {filepath.Dir(sessionPath)}},
+		"files": []string{},
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/remote-sync/archive", bytes.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer remote-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	tr := tar.NewReader(bytes.NewReader(w.Body.Bytes()))
+	_, err = tr.Next()
+	assert.Equal(t, io.EOF, err, "explicit empty delta must stream an empty tar")
 }
