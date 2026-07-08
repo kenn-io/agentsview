@@ -40,7 +40,7 @@ var ErrNoActiveGeneration = errors.New("no active embedding generation")
 // generation is queryable yet.
 type BuildingError struct {
 	// Percent is the building generation's coverage of the current
-	// vector_messages mirror, 0-100.
+	// mirror, 0-100.
 	Percent int
 }
 
@@ -139,9 +139,8 @@ func (ix *Index) noActiveGenerationError(ctx context.Context) error {
 	return &BuildingError{Percent: percent}
 }
 
-// buildingPercent reports fingerprint's coverage of the current
-// vector_messages mirror as a 0-100 percentage, guarding the
-// divide-by-zero case of an empty mirror.
+// buildingPercent reports fingerprint's coverage of the current mirror as a
+// 0-100 percentage, guarding the divide-by-zero case of an empty mirror.
 func (ix *Index) buildingPercent(ctx context.Context, fingerprint string) (int, error) {
 	ordinal, err := ix.ordinalForFingerprint(ctx, fingerprint)
 	if err != nil {
@@ -158,8 +157,8 @@ func (ix *Index) buildingPercent(ctx context.Context, fingerprint string) (int, 
 	return int(info.Embedded * 100 / total), nil
 }
 
-// mirrorDoc is the subset of a vector_messages row Search needs to hydrate a
-// kit hit into an agentsview Hit. offsets is empty for user documents.
+// mirrorDoc is the subset of a mirror row Search needs to hydrate a kit hit
+// into an agentsview Hit. offsets is empty for user documents.
 type mirrorDoc struct {
 	sessionID   string
 	ordinal     int
@@ -295,7 +294,7 @@ func anchorMemberIndex(offsets []db.UnitOffset, start, end int) int {
 }
 
 // lookupMirrorDocs reads each of docKeys' mirror rows (session_id, ordinal
-// range, subordinate flag, member offsets, content) from vector_messages,
+// range, subordinate flag, member offsets, content) from the mirror table,
 // keyed by doc_key, in maxSQLVars-sized chunks: a deep semantic overfetch
 // (large limit * over-fetch factor) can carry thousands of doc keys, well
 // past what a single IN (...) clause can bind. A key with no matching row is
@@ -308,7 +307,7 @@ func (ix *Index) lookupMirrorDocs(ctx context.Context, docKeys []string) (map[st
 		placeholders, args := inPlaceholders(chunk)
 		rows, err := ix.db.QueryContext(ctx, `
 SELECT doc_key, session_id, ordinal, ordinal_end, subordinate, offsets, content
-  FROM vector_messages
+  FROM `+ix.spec.DocsTable+`
  WHERE ordinal >= 0 AND doc_key IN `+placeholders, args...)
 		if err != nil {
 			return fmt.Errorf("look up search hit documents: %w", err)
@@ -363,8 +362,8 @@ func truncateRunes(s string, maxRunes int) string {
 	return string(runes[:maxRunes]) + "…"
 }
 
-// ResolveMessageUnits maps each ref to the vector_messages unit containing
-// it, returning a slice parallel to refs; a ref with no containing unit (its
+// ResolveMessageUnits maps each ref to the mirror unit containing it,
+// returning a slice parallel to refs; a ref with no containing unit (its
 // message lies outside the embeddable universe, or in a gap between units)
 // yields a zero UnitRef. Each ref is a point lookup on the retained unique
 // (session_id, ordinal) index — greatest unit ordinal <= ref ordinal, then a
@@ -390,7 +389,7 @@ func (ix *Index) ResolveMessageUnits(
 
 	stmt, err := ix.db.PrepareContext(ctx, `
 SELECT doc_key, ordinal, ordinal_end, subordinate
-  FROM vector_messages
+  FROM `+ix.spec.DocsTable+`
  WHERE session_id = ? AND ordinal >= 0 AND ordinal <= ?
  ORDER BY ordinal DESC LIMIT 1`)
 	if err != nil {

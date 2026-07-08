@@ -311,16 +311,17 @@ INSERT INTO vector_meta (key, value) VALUES (?, ?), (?, ?)`,
 		refreshWatermarkKey, "2024-01-01T00:00:00Z",
 		scopeIncludeAutomatedKey, "true")
 	require.NoError(t, err)
-	_, err = raw.ExecContext(ctx, `CREATE TABLE `+generationsTable+` (ordinal INTEGER)`)
+	spec := MessageIndexSpec()
+	_, err = raw.ExecContext(ctx, `CREATE TABLE `+spec.generationsTable()+` (ordinal INTEGER)`)
 	require.NoError(t, err)
 	// Kit's other bookkeeping tables and indexes, by their real names so a
 	// read-only Open's CREATE ... IF NOT EXISTS statements all no-op.
 	_, err = raw.ExecContext(ctx, `
-CREATE TABLE `+chunksTable+` (ordinal INTEGER, doc_key, vec_rowid INTEGER);
-CREATE INDEX `+vectorsPrefix+`_chunks_by_vector ON `+chunksTable+` (ordinal, vec_rowid);
-CREATE INDEX `+vectorsPrefix+`_chunks_by_doc ON `+chunksTable+` (doc_key, ordinal, vec_rowid);
-CREATE TABLE `+stampsTable+` (ordinal INTEGER, doc_key, revision);
-CREATE INDEX `+vectorsPrefix+`_stamps_by_doc_revision ON `+stampsTable+` (doc_key, revision);`)
+CREATE TABLE `+spec.chunksTable()+` (ordinal INTEGER, doc_key, vec_rowid INTEGER);
+CREATE INDEX `+spec.VectorsPrefix+`_chunks_by_vector ON `+spec.chunksTable()+` (ordinal, vec_rowid);
+CREATE INDEX `+spec.VectorsPrefix+`_chunks_by_doc ON `+spec.chunksTable()+` (doc_key, ordinal, vec_rowid);
+CREATE TABLE `+spec.stampsTable()+` (ordinal INTEGER, doc_key, revision);
+CREATE INDEX `+spec.VectorsPrefix+`_stamps_by_doc_revision ON `+spec.stampsTable()+` (doc_key, revision);`)
 	require.NoError(t, err)
 	_, err = raw.ExecContext(ctx, `CREATE TABLE message_vectors_gen7 (id INTEGER)`)
 	require.NoError(t, err)
@@ -368,7 +369,7 @@ func TestMirrorSchemaVersionFreshDBStampsVersionNothingDropped(t *testing.T) {
 	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT value FROM vector_meta WHERE key = ?`, mirrorSchemaVersionKey,
 	).Scan(&version))
-	assert.Equal(t, mirrorSchemaVersion, version)
+	assert.Equal(t, MessageIndexSpec().MirrorSchemaVersion, version)
 
 	var metaCount int
 	require.NoError(t, ix.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM vector_meta`).Scan(&metaCount))
@@ -447,7 +448,7 @@ VALUES (?, ?, ?, ?, ?, ?)`,
 	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT value FROM vector_meta WHERE key = ?`, mirrorSchemaVersionKey,
 	).Scan(&version))
-	assert.Equal(t, mirrorSchemaVersion, version)
+	assert.Equal(t, MessageIndexSpec().MirrorSchemaVersion, version)
 
 	err = ix.db.QueryRowContext(ctx,
 		`SELECT name FROM sqlite_master WHERE name = 'message_vectors_gen7'`).Scan(new(string))
@@ -455,7 +456,7 @@ VALUES (?, ?, ?, ?, ?, ?)`,
 
 	var genCount int
 	require.NoError(t, ix.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM `+generationsTable).Scan(&genCount))
+		`SELECT COUNT(*) FROM `+MessageIndexSpec().generationsTable()).Scan(&genCount))
 	assert.Zero(t, genCount, "kit must have recreated its generations table fresh, not kept the fake row")
 }
 
@@ -482,7 +483,7 @@ func TestMirrorSchemaVersionV2StampResetsWritePath(t *testing.T) {
 	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT value FROM vector_meta WHERE key = ?`, mirrorSchemaVersionKey,
 	).Scan(&version))
-	assert.Equal(t, mirrorSchemaVersion, version)
+	assert.Equal(t, MessageIndexSpec().MirrorSchemaVersion, version)
 }
 
 // TestMirrorSchemaVersionV2StampReadOnlyReturnsSentinel covers the read path

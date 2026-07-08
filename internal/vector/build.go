@@ -20,10 +20,6 @@ import (
 // the completed (or aborted) run. Tests lower it to 0 for determinism.
 var progressInterval = 2 * time.Second
 
-// chunksTable is the kit-managed table mapping each embedded chunk to its
-// vec0 row, scoped by generation ordinal and doc_key.
-const chunksTable = vectorsPrefix + "_chunks"
-
 // BuildOptions configures one Build pass.
 type BuildOptions struct {
 	// FullRebuild forces every document to be re-embedded under the target
@@ -35,11 +31,11 @@ type BuildOptions struct {
 	// IncludeAutomated controls whether automated sessions' units are
 	// scanned into the mirror at all (see UnitSource.ScanEmbeddableUnits).
 	// It is part of the mirror's identity: Build compares it against the
-	// scope the mirror was last refreshed under (vector_meta) and forces a
-	// full reconciliation scan on any change, so now-out-of-scope rows (and
-	// their vectors) are removed and newly-in-scope sessions older than the
-	// refresh watermark are picked up. It does not force a re-embed of
-	// documents that stay in scope.
+	// scope the mirror was last refreshed under (the metadata table) and
+	// forces a full reconciliation scan on any change, so now-out-of-scope
+	// rows (and their vectors) are removed and newly-in-scope sessions older
+	// than the refresh watermark are picked up. It does not force a re-embed
+	// of documents that stay in scope.
 	IncludeAutomated bool
 	// BatchSize is the encode batch size (config batch_size).
 	BatchSize int
@@ -76,7 +72,7 @@ type BuildResult struct {
 // config: Model, Dimensions, and the fingerprinted Params — max_input_chars,
 // doc_unit_scheme, and chunk_overlap_chars; see vectorGeneration in
 // cmd/agentsview/embeddings.go). It
-// refreshes the vector_messages mirror, resolves which generation to fill
+// refreshes the mirror, resolves which generation to fill
 // (top-up the active one, start a new building generation, or reset and
 // refill the active one for FullRebuild), fills pending documents, and
 // auto-activates a building generation once it fully covers the mirror.
@@ -255,7 +251,7 @@ func (ix *Index) resolveBuildTarget(
 // scratch or a future kit API adds reclamation.
 func (ix *Index) retireAbandonedBuildingGenerations(ctx context.Context, keep string) error {
 	if _, err := ix.db.ExecContext(ctx,
-		`UPDATE `+generationsTable+` SET state = ? WHERE state = ? AND gen_key != ?`,
+		`UPDATE `+ix.spec.generationsTable()+` SET state = ? WHERE state = ? AND gen_key != ?`,
 		string(sqlitevec.StateRetired), string(sqlitevec.StateBuilding), keep,
 	); err != nil {
 		return fmt.Errorf("retire abandoned building generations: %w", err)
@@ -268,7 +264,7 @@ func (ix *Index) retireAbandonedBuildingGenerations(ctx context.Context, keep st
 func (ix *Index) generationExists(ctx context.Context, fp string) (bool, error) {
 	var ordinal int64
 	err := ix.db.QueryRowContext(ctx,
-		`SELECT ordinal FROM `+generationsTable+` WHERE gen_key = ?`, fp,
+		`SELECT ordinal FROM `+ix.spec.generationsTable()+` WHERE gen_key = ?`, fp,
 	).Scan(&ordinal)
 	if err == sql.ErrNoRows {
 		return false, nil
@@ -296,8 +292,8 @@ func (ix *Index) countPending(ctx context.Context, fp string) (int64, error) {
 		return 0, err
 	}
 	rows, err := ix.db.QueryContext(ctx, `
-SELECT content FROM vector_messages d WHERE NOT EXISTS (
-    SELECT 1 FROM `+stampsTable+` s WHERE s.ordinal = ? AND s.doc_key = d.doc_key
+SELECT content FROM `+ix.spec.DocsTable+` d WHERE NOT EXISTS (
+    SELECT 1 FROM `+ix.spec.stampsTable()+` s WHERE s.ordinal = ? AND s.doc_key = d.doc_key
       AND s.revision = d.content_hash)`,
 		ordinal,
 	)
@@ -325,7 +321,7 @@ SELECT content FROM vector_messages d WHERE NOT EXISTS (
 func (ix *Index) ordinalForFingerprint(ctx context.Context, fp string) (int64, error) {
 	var ordinal int64
 	if err := ix.db.QueryRowContext(ctx,
-		`SELECT ordinal FROM `+generationsTable+` WHERE gen_key = ?`, fp,
+		`SELECT ordinal FROM `+ix.spec.generationsTable()+` WHERE gen_key = ?`, fp,
 	).Scan(&ordinal); err != nil {
 		return 0, fmt.Errorf("lookup generation ordinal for fingerprint %s: %w", fp, err)
 	}
@@ -345,19 +341,19 @@ func (ix *Index) resetGeneration(ctx context.Context, fp string) error {
 
 	var ordinal int64
 	if err := tx.QueryRowContext(ctx,
-		`SELECT ordinal FROM `+generationsTable+` WHERE gen_key = ?`, fp,
+		`SELECT ordinal FROM `+ix.spec.generationsTable()+` WHERE gen_key = ?`, fp,
 	).Scan(&ordinal); err != nil {
 		return fmt.Errorf("lookup generation ordinal for fingerprint %s: %w", fp, err)
 	}
 
-	vecTable := fmt.Sprintf("%s_v%d", vectorsPrefix, ordinal)
+	vecTable := fmt.Sprintf("%s_v%d", ix.spec.VectorsPrefix, ordinal)
 	if _, err := tx.ExecContext(ctx, `DELETE FROM `+vecTable); err != nil {
 		return fmt.Errorf("clearing vec0 table: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM `+chunksTable+` WHERE ordinal = ?`, ordinal); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM `+ix.spec.chunksTable()+` WHERE ordinal = ?`, ordinal); err != nil {
 		return fmt.Errorf("clearing chunk map: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM `+stampsTable+` WHERE ordinal = ?`, ordinal); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM `+ix.spec.stampsTable()+` WHERE ordinal = ?`, ordinal); err != nil {
 		return fmt.Errorf("clearing stamps: %w", err)
 	}
 
@@ -404,13 +400,13 @@ func (ix *Index) activateGeneration(ctx context.Context, target string) error {
 	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE `+generationsTable+` SET state = ? WHERE state = ? AND gen_key != ?`,
+		`UPDATE `+ix.spec.generationsTable()+` SET state = ? WHERE state = ? AND gen_key != ?`,
 		string(sqlitevec.StateRetired), string(sqlitevec.StateActive), target,
 	); err != nil {
 		return fmt.Errorf("retire old active generation: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE `+generationsTable+` SET state = ? WHERE gen_key = ?`,
+		`UPDATE `+ix.spec.generationsTable()+` SET state = ? WHERE gen_key = ?`,
 		string(sqlitevec.StateActive), target,
 	); err != nil {
 		return fmt.Errorf("activate generation: %w", err)

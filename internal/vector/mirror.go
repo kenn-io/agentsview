@@ -13,12 +13,12 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-// refreshWatermarkKey is the vector_meta key holding the RFC3339 ended_at
-// high-water mark of the most recent Refresh scan, used to restrict the
-// next incremental (full=false) scan to newer sessions.
+// refreshWatermarkKey is the metadata-table key holding the RFC3339
+// ended_at high-water mark of the most recent Refresh scan, used to
+// restrict the next incremental (full=false) scan to newer sessions.
 const refreshWatermarkKey = "refresh_watermark"
 
-// scopeIncludeAutomatedKey is the vector_meta key holding the
+// scopeIncludeAutomatedKey is the metadata-table key holding the
 // include-automated scope ("true"/"false") the mirror was last refreshed
 // under. Build compares it against the requested scope on every call: the
 // scope is part of the mirror's identity, not the embedding fingerprint, so
@@ -144,12 +144,12 @@ func contentHash(content string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Refresh reconciles the vector_messages mirror against src. full=true
-// scans the entire archive (since="") and additionally deletes mirror rows
-// (and their vectors, via store.DeleteVectors) whose identity was not seen
-// in the scan; full=false scans only sessions newer than the stored
-// watermark (vector_meta key "refresh_watermark") and only upserts,
-// leaving that reconciliation to a subsequent full refresh. includeAutomated
+// Refresh reconciles the mirror against src. full=true scans the entire
+// archive (since="") and additionally deletes mirror rows (and their
+// vectors, via store.DeleteVectors) whose identity was not seen in the
+// scan; full=false scans only sessions newer than the stored watermark
+// (metadata-table key "refresh_watermark") and only upserts, leaving that
+// reconciliation to a subsequent full refresh. includeAutomated
 // is passed through to src.ScanEmbeddableUnits: false excludes automated
 // sessions from the scan entirely, so their mirror rows are absent (and, in
 // full mode, reconciled away) rather than merely unembedded. Either mode
@@ -215,7 +215,7 @@ func (ix *Index) Refresh(
 	// seen too, so reconcileDeletions would otherwise also treat its (still
 	// present, sentinel-parked) row as a vanished identity and delete it a
 	// second time. Resolving evictions first means the row is gone by the
-	// time reconcileDeletions scans vector_messages, so it is never counted
+	// time reconcileDeletions scans the mirror, so it is never counted
 	// there. finalizeEvictions also guards against re-deleting an
 	// already-absent key on its own (see its doc comment), so this ordering
 	// and that guard together make Refresh's accounting robust regardless
@@ -260,7 +260,7 @@ func (ix *Index) upsertMirrorRow(
 
 	var existingHash sql.NullString
 	err = ix.db.QueryRowContext(ctx,
-		`SELECT content_hash FROM vector_messages WHERE doc_key = ?`, key,
+		`SELECT content_hash FROM `+ix.spec.DocsTable+` WHERE doc_key = ?`, key,
 	).Scan(&existingHash)
 	if err != nil && err != sql.ErrNoRows {
 		return false, evicted, fmt.Errorf("reading existing content hash: %w", err)
@@ -275,7 +275,7 @@ func (ix *Index) upsertMirrorRow(
 	}
 
 	if _, err := ix.db.ExecContext(ctx, `
-INSERT INTO vector_messages (doc_key, session_id, source_uuid, ordinal, ordinal_end,
+INSERT INTO `+ix.spec.DocsTable+` (doc_key, session_id, source_uuid, ordinal, ordinal_end,
     subordinate, offsets, content, content_hash)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(doc_key) DO UPDATE SET
@@ -341,7 +341,7 @@ func marshalOffsets(offsets []db.UnitOffset) (string, error) {
 func (ix *Index) parkingFloor(ctx context.Context) (int, error) {
 	var floor sql.NullInt64
 	if err := ix.db.QueryRowContext(ctx,
-		`SELECT MIN(ordinal) FROM vector_messages WHERE ordinal < 0`,
+		`SELECT MIN(ordinal) FROM `+ix.spec.DocsTable+` WHERE ordinal < 0`,
 	).Scan(&floor); err != nil {
 		return 0, fmt.Errorf("reading parked-ordinal floor: %w", err)
 	}
@@ -355,7 +355,7 @@ func (ix *Index) evictSlotOccupant(
 	ctx context.Context, key, sessionID string, ordinal int, sentinel *int,
 ) ([]string, error) {
 	rows, err := ix.db.QueryContext(ctx,
-		`SELECT doc_key FROM vector_messages
+		`SELECT doc_key FROM `+ix.spec.DocsTable+`
 		 WHERE session_id = ? AND ordinal = ? AND doc_key != ?`,
 		sessionID, ordinal, key)
 	if err != nil {
@@ -379,7 +379,7 @@ func (ix *Index) evictSlotOccupant(
 	for _, k := range evictKeys {
 		*sentinel--
 		if _, err := ix.db.ExecContext(ctx,
-			`UPDATE vector_messages SET ordinal = ? WHERE doc_key = ?`, *sentinel, k,
+			`UPDATE `+ix.spec.DocsTable+` SET ordinal = ? WHERE doc_key = ?`, *sentinel, k,
 		); err != nil {
 			return nil, fmt.Errorf("evicting slot occupant %s: %w", k, err)
 		}
@@ -399,7 +399,7 @@ func (ix *Index) evictSlotOccupant(
 // in the same scan — it merely shifted position and keeps its row and
 // embeddings untouched.
 //
-// A key already absent from vector_messages entirely (ok is false below) is
+// A key already absent from the mirror entirely (ok is false below) is
 // skipped rather than deleted again: Refresh runs finalizeEvictions before
 // full-mode reconcileDeletions specifically so this case shouldn't arise
 // within one call, but the guard makes the accounting correct regardless of
@@ -432,7 +432,7 @@ func (ix *Index) finalizeEvictions(ctx context.Context, evicted map[string]struc
 			return deleted, fmt.Errorf("deleting evicted vectors for %s: %w", key, err)
 		}
 		if _, err := ix.db.ExecContext(ctx,
-			`DELETE FROM vector_messages WHERE doc_key = ?`, key,
+			`DELETE FROM `+ix.spec.DocsTable+` WHERE doc_key = ?`, key,
 		); err != nil {
 			return deleted, fmt.Errorf("deleting evicted mirror row %s: %w", key, err)
 		}
@@ -442,7 +442,7 @@ func (ix *Index) finalizeEvictions(ctx context.Context, evicted map[string]struc
 }
 
 // currentOrdinals returns the current ordinal of each of keys that is still
-// present in vector_messages; a key absent from the result was somehow
+// present in the mirror; a key absent from the result was somehow
 // already removed from the mirror. keys is queried in maxSQLVars-sized
 // chunks: a large eviction batch in a single Refresh scan can otherwise
 // exceed SQLite's bind-variable limit.
@@ -451,7 +451,7 @@ func (ix *Index) currentOrdinals(ctx context.Context, keys []string) (map[string
 	err := chunkKeys(keys, func(chunk []string) error {
 		placeholders, args := inPlaceholders(chunk)
 		rows, err := ix.db.QueryContext(ctx,
-			`SELECT doc_key, ordinal FROM vector_messages WHERE doc_key IN `+placeholders, args...)
+			`SELECT doc_key, ordinal FROM `+ix.spec.DocsTable+` WHERE doc_key IN `+placeholders, args...)
 		if err != nil {
 			return fmt.Errorf("checking evicted doc_key ordinals: %w", err)
 		}
@@ -481,7 +481,7 @@ func (ix *Index) currentOrdinals(ctx context.Context, keys []string) (map[string
 func (ix *Index) reconcileDeletions(
 	ctx context.Context, seen map[string]struct{},
 ) (int, error) {
-	rows, err := ix.db.QueryContext(ctx, `SELECT doc_key FROM vector_messages`)
+	rows, err := ix.db.QueryContext(ctx, `SELECT doc_key FROM `+ix.spec.DocsTable)
 	if err != nil {
 		return 0, fmt.Errorf("listing mirror doc_keys: %w", err)
 	}
@@ -507,7 +507,7 @@ func (ix *Index) reconcileDeletions(
 			return 0, fmt.Errorf("deleting vectors for %s: %w", key, err)
 		}
 		if _, err := ix.db.ExecContext(ctx,
-			`DELETE FROM vector_messages WHERE doc_key = ?`, key,
+			`DELETE FROM `+ix.spec.DocsTable+` WHERE doc_key = ?`, key,
 		); err != nil {
 			return 0, fmt.Errorf("deleting mirror row %s: %w", key, err)
 		}
@@ -518,44 +518,25 @@ func (ix *Index) reconcileDeletions(
 // refreshWatermark reads the stored refresh watermark, returning "" when
 // none has been recorded yet.
 func (ix *Index) refreshWatermark(ctx context.Context) (string, error) {
-	var value string
-	err := ix.db.QueryRowContext(ctx,
-		`SELECT value FROM vector_meta WHERE key = ?`, refreshWatermarkKey,
-	).Scan(&value)
-	if err == sql.ErrNoRows {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("reading refresh watermark: %w", err)
-	}
-	return value, nil
+	value, _, err := ix.metaGet(ctx, refreshWatermarkKey)
+	return value, err
 }
 
 // setRefreshWatermark advances the stored refresh watermark to value.
 func (ix *Index) setRefreshWatermark(ctx context.Context, value string) error {
-	if _, err := ix.db.ExecContext(ctx, `
-INSERT INTO vector_meta (key, value) VALUES (?, ?)
-ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-		refreshWatermarkKey, value,
-	); err != nil {
-		return fmt.Errorf("advancing refresh watermark: %w", err)
-	}
-	return nil
+	return ix.metaSet(ctx, refreshWatermarkKey, value)
 }
 
 // storedIncludeAutomatedScope reads the include-automated scope the mirror
 // was last refreshed under. ok is false when no scope has ever been stored
 // (the mirror's first build), in which case value is meaningless.
 func (ix *Index) storedIncludeAutomatedScope(ctx context.Context) (value, ok bool, err error) {
-	var raw string
-	err = ix.db.QueryRowContext(ctx,
-		`SELECT value FROM vector_meta WHERE key = ?`, scopeIncludeAutomatedKey,
-	).Scan(&raw)
-	if err == sql.ErrNoRows {
-		return false, false, nil
-	}
+	raw, ok, err := ix.metaGet(ctx, scopeIncludeAutomatedKey)
 	if err != nil {
 		return false, false, fmt.Errorf("reading stored include-automated scope: %w", err)
+	}
+	if !ok {
+		return false, false, nil
 	}
 	parsed, err := strconv.ParseBool(raw)
 	if err != nil {
@@ -567,12 +548,5 @@ func (ix *Index) storedIncludeAutomatedScope(ctx context.Context) (value, ok boo
 // setIncludeAutomatedScope records value as the include-automated scope the
 // mirror was most recently refreshed under.
 func (ix *Index) setIncludeAutomatedScope(ctx context.Context, value bool) error {
-	if _, err := ix.db.ExecContext(ctx, `
-INSERT INTO vector_meta (key, value) VALUES (?, ?)
-ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-		scopeIncludeAutomatedKey, strconv.FormatBool(value),
-	); err != nil {
-		return fmt.Errorf("storing include-automated scope: %w", err)
-	}
-	return nil
+	return ix.metaSet(ctx, scopeIncludeAutomatedKey, strconv.FormatBool(value))
 }
