@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mattn/go-runewidth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
@@ -357,4 +358,306 @@ func TestPrintContentMatchesHumanRendersUnitRangeAndSubMarker(t *testing.T) {
 	assert.Contains(t, lines[2], "#5", "single-ordinal hit keeps the plain form")
 	assert.NotContains(t, lines[2], "@", "no anchor marker for single-ordinal hits")
 	assert.NotContains(t, lines[2], " sub", "no subordinate marker for top-level hits")
+}
+
+// TestPrintContentMatchesTableBasic pins the flat (no --context) human
+// rendering: a header row, one aligned row per match, the full session ID,
+// the fused location:tool column, and an untruncated snippet when no
+// terminal width is known (termWidth 0 — pipes, files, tests).
+func TestPrintContentMatchesTableBasic(t *testing.T) {
+	longSnippet := strings.Repeat("s", 300)
+	res := &service.ContentSearchResult{
+		Matches: []db.ContentMatch{
+			{
+				SessionID: "fc9367d6-38f7-4d18-863d-118dec238bd0",
+				Project:   "yas", Location: "tool_result", ToolName: "Bash",
+				Ordinal: 12, Snippet: longSnippet,
+			},
+			{
+				SessionID: "sess2", Project: "proj2", Location: "message",
+				Ordinal: 3, Snippet: "line one\nline two",
+			},
+		},
+	}
+	var buf bytes.Buffer
+	require.NoError(t, printContentMatchesTable(&buf, res, 0))
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	require.Len(t, lines, 3)
+
+	header, row1, row2 := lines[0], lines[1], lines[2]
+	for _, col := range []string{"ID", "MATCH", "PROJECT", "LOCATION", "SNIPPET"} {
+		assert.Contains(t, header, col)
+	}
+	assert.NotContains(t, header, "SCORE",
+		"SCORE column omitted when no match is scored")
+
+	assert.Contains(t, row1, "fc9367d6-38f7-4d18-863d-118dec238bd0")
+	assert.Contains(t, row1, "#12")
+	assert.Contains(t, row1, "tool_result:Bash")
+	assert.Contains(t, row1, longSnippet, "snippet untruncated at width 0")
+	assert.Contains(t, row2, "line one line two",
+		"newlines collapsed to keep one row per match")
+
+	// Columns align: each header label starts at the same rune offset as
+	// the corresponding cell in every row.
+	idIdx := strings.Index(header, "ID")
+	matchIdx := strings.Index(header, "MATCH")
+	assert.Equal(t, idIdx, strings.Index(row1, "fc9367d6"))
+	assert.Equal(t, matchIdx, strings.Index(row1, "#12"))
+	assert.Equal(t, matchIdx, strings.Index(row2, "#3"))
+}
+
+// TestPrintContentMatchesTableScoreColumn pins the conditional SCORE
+// column: present when any match carries a score, with an em dash for
+// unscored rows.
+func TestPrintContentMatchesTableScoreColumn(t *testing.T) {
+	score := 0.834
+	res := &service.ContentSearchResult{
+		Matches: []db.ContentMatch{
+			{SessionID: "s1", Project: "p", Location: "message",
+				Ordinal: 3, Snippet: "hit", Score: &score},
+			{SessionID: "s2", Project: "p", Location: "message",
+				Ordinal: 1, Snippet: "hit"},
+		},
+	}
+	var buf bytes.Buffer
+	require.NoError(t, printContentMatchesTable(&buf, res, 0))
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	require.Len(t, lines, 3)
+	assert.Contains(t, lines[0], "SCORE")
+	assert.Contains(t, lines[1], "0.83")
+	assert.Contains(t, lines[2], emDash, "unscored row shows an em dash")
+}
+
+// TestPrintContentMatchesTableRangeAndSub pins the MATCH column for
+// run-grouped hits: "#<start>-<end> @<anchor>" plus a "sub" marker for
+// subordinate units.
+func TestPrintContentMatchesTableRangeAndSub(t *testing.T) {
+	res := &service.ContentSearchResult{
+		Matches: []db.ContentMatch{
+			{
+				SessionID: "s1", Project: "p", Location: "message",
+				Ordinal: 19, OrdinalRange: [2]int{12, 40},
+				Subordinate: true, Snippet: "ranged",
+			},
+		},
+	}
+	var buf bytes.Buffer
+	require.NoError(t, printContentMatchesTable(&buf, res, 0))
+	assert.Contains(t, buf.String(), "#12-40 @19 sub")
+}
+
+// TestPrintContentMatchesTableSnippetFillsWidth pins TTY behavior: the
+// snippet expands to the remaining terminal width and is ellipsized there,
+// so no row exceeds the terminal width.
+func TestPrintContentMatchesTableSnippetFillsWidth(t *testing.T) {
+	res := &service.ContentSearchResult{
+		Matches: []db.ContentMatch{
+			{SessionID: "s1", Project: "p", Location: "message",
+				Ordinal: 1, Snippet: strings.Repeat("x", 500)},
+		},
+	}
+	const width = 100
+	var buf bytes.Buffer
+	require.NoError(t, printContentMatchesTable(&buf, res, width))
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	require.Len(t, lines, 2)
+	row := lines[1]
+	assert.LessOrEqual(t, len([]rune(row)), width)
+	assert.True(t, strings.HasSuffix(row, "…"), "truncated snippet gains an ellipsis")
+}
+
+// TestPrintContentMatchesTableLocationCap pins the LOCATION cap: on a
+// TTY a huge tool name cannot starve the snippet column, while non-TTY
+// output (termWidth 0) keeps the full value, matching the untruncated
+// snippet policy for pipes.
+func TestPrintContentMatchesTableLocationCap(t *testing.T) {
+	res := &service.ContentSearchResult{
+		Matches: []db.ContentMatch{
+			{SessionID: "s1", Project: "p", Location: "tool_result",
+				ToolName: strings.Repeat("t", 200), Ordinal: 1, Snippet: "hit"},
+		},
+	}
+	loc := "tool_result:" + strings.Repeat("t", 200)
+
+	var buf bytes.Buffer
+	require.NoError(t, printContentMatchesTable(&buf, res, 200))
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	require.Len(t, lines, 2)
+	assert.NotContains(t, lines[1], loc, "location is capped on a TTY")
+	assert.Contains(t, lines[1], "…")
+	assert.Contains(t, lines[1], "hit", "snippet survives a huge tool name")
+
+	buf.Reset()
+	require.NoError(t, printContentMatchesTable(&buf, res, 0))
+	lines = strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	require.Len(t, lines, 2)
+	assert.Contains(t, lines[1], loc, "piped output keeps the full location")
+}
+
+// TestPrintContentMatchesTableEmptyAndCursor pins the unchanged empty
+// message and pagination footer around the table.
+func TestPrintContentMatchesTableEmptyAndCursor(t *testing.T) {
+	var buf bytes.Buffer
+	require.NoError(t, printContentMatchesTable(
+		&buf, &service.ContentSearchResult{}, 0))
+	assert.Equal(t, "(no matches)\n", buf.String())
+
+	buf.Reset()
+	res := &service.ContentSearchResult{
+		Matches: []db.ContentMatch{
+			{SessionID: "s1", Project: "p", Location: "message",
+				Ordinal: 1, Snippet: "hit"},
+		},
+		NextCursor: 7,
+	}
+	require.NoError(t, printContentMatchesTable(&buf, res, 0))
+	assert.Contains(t, buf.String(), "More results: --cursor 7")
+}
+
+// TestContentSnippetBudget pins the snippet width computation: 0 means
+// unknown terminal (untruncated), otherwise the remaining width after the
+// fixed columns with a readability floor on narrow terminals.
+func TestContentSnippetBudget(t *testing.T) {
+	tests := []struct {
+		name        string
+		termWidth   int
+		otherWidths []int
+		want        int
+	}{
+		{"unknown terminal", 0, []int{10, 5}, 0},
+		{"wide terminal", 200, []int{36, 5, 4, 10}, 200 - (36 + 2) - (5 + 2) - (4 + 2) - (10 + 2)},
+		{"narrow terminal floors", 60, []int{36, 5, 4, 10}, contentSnippetMinWidth},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, contentSnippetBudget(tt.termWidth, tt.otherWidths))
+		})
+	}
+}
+
+// TestPrintContentSearchResultPicksRenderer pins the dispatch: --context
+// requests keep the record-style output (context lines cannot live in
+// table rows), while flat results render as a table.
+func TestPrintContentSearchResultPicksRenderer(t *testing.T) {
+	res := &service.ContentSearchResult{
+		Matches: []db.ContentMatch{
+			{
+				SessionID: "s1", Project: "p", Location: "message",
+				Ordinal: 5, Snippet: "the match",
+				ContextBefore: []db.Message{{Role: "user", Content: "before"}},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	require.NoError(t, printContentSearchResult(&buf, res, 1))
+	assert.Contains(t, buf.String(), "  user: before",
+		"context mode keeps record-style output")
+	assert.NotContains(t, buf.String(), "SNIPPET")
+
+	buf.Reset()
+	require.NoError(t, printContentSearchResult(&buf, res, 0))
+	assert.Contains(t, buf.String(), "SNIPPET", "flat mode renders the table")
+}
+
+// TestPrintContentMatchesTableSnippetExactFit pins the truncation boundary:
+// a snippet that exactly fits the remaining width prints unmodified, with
+// no rune dropped and no ellipsis.
+func TestPrintContentMatchesTableSnippetExactFit(t *testing.T) {
+	const width = 100
+	// Fixed columns for this row: ID "s1" (header "ID" wins, 2) + MATCH
+	// "#1"/"MATCH" (5) + PROJECT "p"/"PROJECT" (7) + LOCATION
+	// "message"/"LOCATION" (8), each followed by a 2-space gap = 30 used,
+	// leaving a 70-rune snippet budget.
+	snippet := strings.Repeat("x", 70)
+	res := &service.ContentSearchResult{
+		Matches: []db.ContentMatch{
+			{SessionID: "s1", Project: "p", Location: "message",
+				Ordinal: 1, Snippet: snippet},
+		},
+	}
+	var buf bytes.Buffer
+	require.NoError(t, printContentMatchesTable(&buf, res, width))
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	require.Len(t, lines, 2)
+	assert.True(t, strings.HasSuffix(lines[1], snippet),
+		"exact-fit snippet prints unmodified")
+	assert.Equal(t, width, len([]rune(lines[1])))
+}
+
+// TestPrintContentMatchesTableProjectCap pins the PROJECT cap: on a TTY
+// an oversized or multi-line project name is collapsed and truncated so
+// it cannot starve the snippet column, while non-TTY output keeps the
+// full (whitespace-collapsed) value.
+func TestPrintContentMatchesTableProjectCap(t *testing.T) {
+	res := &service.ContentSearchResult{
+		Matches: []db.ContentMatch{
+			{SessionID: "s1", Project: strings.Repeat("p", 200) + "\nq",
+				Location: "message", Ordinal: 1, Snippet: "hit"},
+		},
+	}
+	var buf bytes.Buffer
+	require.NoError(t, printContentMatchesTable(&buf, res, 200))
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	require.Len(t, lines, 2)
+	assert.NotContains(t, lines[1], strings.Repeat("p", 200), "project is capped")
+	assert.NotContains(t, lines[1], "\nq", "project whitespace collapsed")
+	assert.Contains(t, lines[1], "…")
+	assert.Contains(t, lines[1], "hit", "snippet survives a huge project name")
+	assert.LessOrEqual(t,
+		strings.Index(lines[1], "hit"), 100,
+		"fixed columns stay bounded ahead of the snippet")
+
+	buf.Reset()
+	require.NoError(t, printContentMatchesTable(&buf, res, 0))
+	lines = strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	require.Len(t, lines, 2)
+	assert.Contains(t, lines[1], strings.Repeat("p", 200)+" q",
+		"piped output keeps the full collapsed project")
+}
+
+// TestPrintContentMatchesTableWideRunesAlign pins display-width alignment:
+// a project of full-width CJK runes occupies more terminal cells than its
+// rune count, and the following column must still start at the same
+// display column in every row.
+func TestPrintContentMatchesTableWideRunesAlign(t *testing.T) {
+	res := &service.ContentSearchResult{
+		Matches: []db.ContentMatch{
+			{SessionID: "s1", Project: "日本語", Location: "message",
+				Ordinal: 1, Snippet: "hit"},
+			{SessionID: "s2", Project: "ascii", Location: "message",
+				Ordinal: 2, Snippet: "hit"},
+		},
+	}
+	var buf bytes.Buffer
+	require.NoError(t, printContentMatchesTable(&buf, res, 0))
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	require.Len(t, lines, 3)
+	col := func(line string) int {
+		i := strings.Index(line, "message")
+		require.GreaterOrEqual(t, i, 0)
+		return runewidth.StringWidth(line[:i])
+	}
+	assert.Equal(t, col(lines[1]), col(lines[2]),
+		"LOCATION starts at the same display column despite wide runes")
+}
+
+// TestPrintContentMatchesTableWideSnippetBudget pins display-width
+// truncation: a snippet of full-width runes must be cut so the whole row
+// fits the terminal in display cells, not rune count.
+func TestPrintContentMatchesTableWideSnippetBudget(t *testing.T) {
+	res := &service.ContentSearchResult{
+		Matches: []db.ContentMatch{
+			{SessionID: "s1", Project: "p", Location: "message",
+				Ordinal: 1, Snippet: strings.Repeat("界", 200)},
+		},
+	}
+	const width = 100
+	var buf bytes.Buffer
+	require.NoError(t, printContentMatchesTable(&buf, res, width))
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	require.Len(t, lines, 2)
+	assert.LessOrEqual(t, runewidth.StringWidth(lines[1]), width,
+		"row fits the terminal in display cells")
+	assert.True(t, strings.HasSuffix(lines[1], "…"))
 }

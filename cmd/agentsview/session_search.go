@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
+	"github.com/mattn/go-runewidth"
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
+	"golang.org/x/term"
 )
 
 func newSessionSearchCommand() *cobra.Command {
@@ -88,7 +91,7 @@ func newSessionSearchCommand() *cobra.Command {
 			if outputFormat(cmd) == "json" {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(res)
 			}
-			return printContentMatchesHuman(cmd.OutOrStdout(), res)
+			return printContentSearchResult(cmd.OutOrStdout(), res, contextN)
 		},
 	}
 	flags := cmd.Flags()
@@ -186,6 +189,186 @@ func resolveContentSearchMode(
 		}
 	}
 	return mode, nil
+}
+
+// printContentSearchResult renders a content search result for humans.
+// Flat results (no --context) render as an aligned table sized to the
+// terminal; --context requests keep the record-style output because
+// per-match context lines cannot live inside table rows.
+func printContentSearchResult(
+	w io.Writer, res *service.ContentSearchResult, contextN int,
+) error {
+	if contextN > 0 {
+		return printContentMatchesHuman(w, res)
+	}
+	return printContentMatchesTable(w, res, contentTerminalWidth(w))
+}
+
+// contentTerminalWidth reports the terminal width of w, or 0 when w is not
+// an interactive terminal (pipes, files, tests). Follows the flagHelpWidth
+// pattern: 0 tells the table renderer to print snippets untruncated.
+func contentTerminalWidth(w io.Writer) int {
+	f, ok := w.(*os.File)
+	if !ok {
+		return 0
+	}
+	fd := int(f.Fd())
+	if !term.IsTerminal(fd) {
+		return 0
+	}
+	width, _, err := term.GetSize(fd)
+	if err != nil || width <= 0 {
+		return 0
+	}
+	return width
+}
+
+// contentLocationMaxWidth caps the LOCATION column so a huge tool name
+// cannot starve the snippet column.
+const contentLocationMaxWidth = 48
+
+// contentProjectMaxWidth caps the PROJECT column so an oversized project
+// name cannot starve the snippet column.
+const contentProjectMaxWidth = 32
+
+// truncCell collapses whitespace and truncates s to at most max terminal
+// display cells, ellipsizing when it cut anything. A max of 0 disables
+// truncation (non-TTY output keeps full values). The display-cell
+// counterpart of truncName for the search table, where full-width runes
+// must not break column alignment.
+func truncCell(s string, max int) string {
+	s = collapseWhitespace(s)
+	if max <= 0 || runewidth.StringWidth(s) <= max {
+		return s
+	}
+	return runewidth.Truncate(s, max, "…")
+}
+
+// contentSnippetMinWidth keeps the snippet readable on narrow terminals;
+// below this the row is allowed to wrap instead of the snippet vanishing.
+const contentSnippetMinWidth = 40
+
+// contentColumnGap is the number of spaces between table columns.
+const contentColumnGap = 2
+
+// contentSnippetBudget returns the rune budget for the trailing SNIPPET
+// column: the terminal width minus the earlier columns and their gaps,
+// floored at contentSnippetMinWidth. A termWidth of 0 (unknown terminal)
+// returns 0, meaning untruncated.
+func contentSnippetBudget(termWidth int, otherWidths []int) int {
+	if termWidth <= 0 {
+		return 0
+	}
+	remaining := termWidth
+	for _, w := range otherWidths {
+		remaining -= w + contentColumnGap
+	}
+	if remaining < contentSnippetMinWidth {
+		return contentSnippetMinWidth
+	}
+	return remaining
+}
+
+// printContentMatchesTable writes one aligned row per match under a header
+// line: ID, MATCH (ordinal/range plus "sub" marker), SCORE (only when any
+// match is scored), PROJECT (capped), LOCATION (capped), and SNIPPET. The snippet
+// expands to fill the remaining terminal width when termWidth is known and
+// prints untruncated when it is 0. Every cell is terminal-sanitized.
+func printContentMatchesTable(
+	w io.Writer, res *service.ContentSearchResult, termWidth int,
+) error {
+	if len(res.Matches) == 0 {
+		fmt.Fprintln(w, "(no matches)")
+		return nil
+	}
+	hasScore := false
+	for _, m := range res.Matches {
+		if m.Score != nil {
+			hasScore = true
+			break
+		}
+	}
+	headers := []string{"ID", "MATCH"}
+	if hasScore {
+		headers = append(headers, "SCORE")
+	}
+	headers = append(headers, "PROJECT", "LOCATION", "SNIPPET")
+
+	// Column caps only apply when a real terminal width constrains the
+	// row; piped output keeps full values, like the untruncated snippet.
+	projectCap, locationCap := 0, 0
+	if termWidth > 0 {
+		projectCap = contentProjectMaxWidth
+		locationCap = contentLocationMaxWidth
+	}
+
+	rows := make([][]string, 0, len(res.Matches))
+	for _, m := range res.Matches {
+		loc := m.Location
+		if m.ToolName != "" {
+			loc += ":" + m.ToolName
+		}
+		match := formatMatchOrdinal(m)
+		if m.Subordinate {
+			match += " sub"
+		}
+		cells := []string{sanitizeTerminal(m.SessionID), match}
+		if hasScore {
+			score := emDash
+			if m.Score != nil {
+				score = fmt.Sprintf("%.2f", *m.Score)
+			}
+			cells = append(cells, score)
+		}
+		cells = append(cells,
+			truncCell(sanitizeTerminal(orEmDash(m.Project)), projectCap),
+			truncCell(sanitizeTerminal(loc), locationCap),
+			sanitizeTerminal(collapseWhitespace(m.Snippet)),
+		)
+		rows = append(rows, cells)
+	}
+
+	// Size every column but the trailing snippet from the data, then give
+	// the snippet whatever terminal width remains. All sizing, padding,
+	// and truncation use terminal display cells (runewidth), not rune
+	// counts, so full-width CJK runes and emoji stay aligned.
+	widths := make([]int, len(headers)-1)
+	for i := range widths {
+		widths[i] = runewidth.StringWidth(headers[i])
+		for _, cells := range rows {
+			if n := runewidth.StringWidth(cells[i]); n > widths[i] {
+				widths[i] = n
+			}
+		}
+	}
+	budget := contentSnippetBudget(termWidth, widths)
+	gap := strings.Repeat(" ", contentColumnGap)
+
+	printRow := func(cells []string) {
+		var b strings.Builder
+		for i, w := range widths {
+			b.WriteString(cells[i])
+			b.WriteString(strings.Repeat(" ",
+				w-runewidth.StringWidth(cells[i])))
+			b.WriteString(gap)
+		}
+		snippet := cells[len(cells)-1]
+		// Truncate only when the snippet actually overflows the budget;
+		// an exact fit prints unmodified.
+		if budget > 0 && runewidth.StringWidth(snippet) > budget {
+			snippet = runewidth.Truncate(snippet, budget, "…")
+		}
+		b.WriteString(snippet)
+		fmt.Fprintln(w, b.String())
+	}
+	printRow(headers)
+	for _, cells := range rows {
+		printRow(cells)
+	}
+	if res.NextCursor != 0 {
+		fmt.Fprintf(w, "\nMore results: --cursor %d\n", res.NextCursor)
+	}
+	return nil
 }
 
 // printContentMatchesHuman writes one line per match, terminal-sanitized.
