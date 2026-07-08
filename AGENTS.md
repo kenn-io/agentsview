@@ -15,6 +15,9 @@ Instructions for autonomous coding agents working in this repository.
    files, state that no commit was made.
 1. Do not amend commits.
 1. Do not change branches without explicit user permission.
+1. Do not merge pull requests. Open them and report status; merging is
+   always the user's decision, even when checks are green and the change
+   is urgent.
 
 ## Commit Expectations
 
