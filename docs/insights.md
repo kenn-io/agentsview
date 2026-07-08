@@ -25,11 +25,17 @@ the top of the sidebar:
 |------|-------------------|
 | **Daily Activity** | A concise summary of what was accomplished on a single day |
 | **Date Range Activity** | A summary covering a span of days, with presets for 7 and 30 days |
-| **Agent Analysis** | A deeper analysis of patterns, effectiveness, and suggestions for improving your agent workflows |
+| **Agent Analysis** | A deeper analysis of patterns, effectiveness, and suggestions for improving your agent workflows. From a session page, this mode can also analyze one selected session. |
 
 Daily Activity and Date Range Activity both produce `daily_activity`
 type insights. Agent Analysis produces `agent_analysis` type
 insights with more detailed recommendations.
+
+Single-session analysis is also an `agent_analysis` insight. It is started from
+the active session header and sends `session_id` to the generation API, which
+builds the prompt from that session's messages, timing, token usage, and cost
+instead of a date-window session list. `session_id` is only accepted for
+`agent_analysis`; daily activity and canned insight modes reject it.
 
 ## Generating an Insight
 

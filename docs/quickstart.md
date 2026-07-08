@@ -241,14 +241,17 @@ export PI_DIR=~/custom/pi/sessions
 export PIEBALD_DIR=~/custom/piebald
 export POSITRON_DIR=~/custom/positron
 export QCLAW_DIR=~/custom/qclaw/agents
+export QODER_PROJECTS_DIR=~/custom/qoder/projects
 export QWEN_PROJECTS_DIR=~/custom/qwen/projects
 export QWENPAW_DIR=~/custom/qwenpaw
 export REASONIX_DIR=~/custom/reasonix
 export SHELLEY_DIR=~/custom/shelley
 export VISUALSTUDIO_COPILOT_DIR=~/custom/visualstudio-copilot/traces
 export VSCODE_COPILOT_DIR=~/custom/vscode
+export WINDSURF_DIR=~/custom/windsurf/User
 export WARP_DIR=~/custom/warp
 export WORKBUDDY_PROJECTS_DIR=~/custom/workbuddy/projects
+export ZCODE_DIR=~/custom/zcode/cli
 export ZED_DIR=~/custom/zed
 export ZENCODER_DIR=~/custom/zencoder/sessions
 agentsview serve

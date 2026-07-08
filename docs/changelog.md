@@ -3,6 +3,97 @@ title: Changelog
 description: Release history for AgentsView
 ---
 
+## 0.37.0
+<small>2026-07-08</small>
+
+**New features**
+
+- Add **semantic and hybrid search** backed by an opt-in local embeddings
+  index. AgentsView now embeds user-message units and grouped assistant runs,
+  supports `agentsview embeddings build|list|activate|retire`, adds
+  `session search --semantic` and `--hybrid`, and returns conversation-unit
+  citation ranges with lineage metadata for sidechain and subagent hits.
+- Add **content-free session summary export** with a v1 JSON/NDJSON contract.
+  `agentsview export sessions` emits session metadata, usage totals, pricing
+  provenance, project identity, stable cursors, and reset errors without
+  transcript text.
+- Add **single-session insight analysis** from the session header. Session
+  analysis uses the existing insight-generation pipeline with
+  `agent_analysis` plus `session_id`, builds a prompt from that session's
+  messages, timing, and usage, and stores the result with the other insights.
+- Add **Posit Assistant, Windsurf workspace chat, Qoder, and ZCode session
+  support**. These providers cover Posit Assistant workspace conversations,
+  Windsurf `workspaceStorage` chat state, Qoder project transcripts and
+  sidecars, and ZCode's local SQLite session database.
+- Add **Korean (`ko`) localization** and register it alongside English,
+  Simplified Chinese, and Traditional Chinese.
+- Render **Mermaid fenced code blocks** in markdown messages while keeping the
+  source readable if the Mermaid runtime cannot load.
+- Show **session context and detailed token breakdowns** in usage views,
+  including session-level output-token and peak-context details.
+- Add **copy buttons for tool blocks**, with separate affordances for tool
+  input and output content.
+- Add **worktree layout mappings** in Settings. Worktree mappings now support
+  both explicit path-prefix mappings and the `repo_dot_worktrees` layout for
+  paths like `<prefix>/<repo>.worktrees/<branch>/...`.
+- Add **`sync_include_cwd_prefixes`** to `config.toml` so local sync can ingest
+  only sessions whose working directory falls under an allowed path prefix.
+
+**Improvements**
+
+- Render **CLI session search results as an aligned table** for the default
+  no-context human output, with terminal-width-aware truncation.
+- Reduce **push sync churn** by ignoring volatile stat fields when deciding
+  PostgreSQL push candidates and by lowering DuckDB write amplification.
+- Keep **unchanged OpenCode-family container sessions** out of sync updates, so
+  container rows that did not change no longer churn during sync.
+
+**Bug fixes**
+
+- Parse **Codex custom tool calls** correctly so custom tool invocations are
+  preserved as tool blocks instead of falling through malformed paths.
+- Apply **`config.toml` port settings** to the active server config before
+  startup, so configured ports affect the runtime server just like CLI flags.
+- Preserve **calendar range picker selections** after range changes in the
+  frontend.
+- Apply **agent exclusions consistently in usage filters**, including Usage API
+  and frontend paths that previously missed the exclusion set.
+- Include **subagent sessions in activity report cost totals**, matching the
+  session rows that contribute to the report.
+- Map **OhMyPi `parentSession` headers** to `parent_session_id`, preserving
+  parent-child lineage for OMP transcripts.
+- Skip **local git discovery for sessions from other machines**, avoiding
+  host-local repository probes for synced foreign-machine sessions.
+
+**Acknowledgements**
+
+- Thanks to [Wes McKinney](https://github.com/wesm) for semantic search,
+  session summary export, activity cost fixes, foreign-machine git-discovery
+  safeguards, and release documentation.
+- Thanks to [Rod Boev](https://github.com/rodboev) for Windsurf workspace chat,
+  Qoder and ZCode support, Mermaid rendering, usage context and token
+  breakdowns, worktree layout mappings, tool-block copy buttons,
+  single-session insight analysis, and the Codex custom tool-call fix.
+- Thanks to [Matthew Jacobs](https://github.com/mjacobs) for aligned CLI
+  session search output and OMP parent-session lineage mapping.
+- Thanks to [Elliot Murphy](https://github.com/statik) for Posit Assistant
+  session support.
+- Thanks to [Rob Schilder](https://github.com/RobSchilderr) for
+  `sync_include_cwd_prefixes` ingestion filtering.
+- Thanks to [Phillip Cloud](https://github.com/cpcloud) for PostgreSQL and
+  DuckDB push-churn reductions, OpenCode-family sync churn fixes, and calendar
+  range picker preservation.
+- Thanks to [Mr Koala](https://github.com/Mr-Koala) for applying configured
+  port settings to the active runtime config.
+- Thanks to [Prateek Rungta](https://github.com/prateek) for consistent usage
+  agent-exclusion filtering.
+- Thanks to [Leuconoe](https://github.com/Leuconoe) for the Korean (`ko`)
+  localization.
+- Thanks to [Marius van Niekerk](https://github.com/mariusvniekerk) for
+  recurring sync and database performance benchmark gates.
+
+---
+
 ## 0.36.1
 <small>2026-07-03</small>
 

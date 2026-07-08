@@ -1030,14 +1030,17 @@ agentsview help
 | `POSIT_ASSISTANT_DIR`             | `~/.posit/assistant/workspaces`                      | Posit Assistant workspaces directory                                                                |
 | `POSITRON_DIR`                    | (platform-specific)                                  | Positron Assistant user directory                                                                   |
 | `QCLAW_DIR`                       | `~/.qclaw/agents`                                    | QClaw agents directory                                                                              |
+| `QODER_PROJECTS_DIR`              | `~/.qoder/projects` and `~/.qoderwork/projects`      | Qoder projects directory                                                                            |
 | `QWEN_PROJECTS_DIR`               | `~/.qwen/projects`                                   | Qwen Code projects directory                                                                        |
 | `QWENPAW_DIR`                     | `~/.copaw/workspaces`                                | QwenPaw workspaces directory                                                                        |
 | `REASONIX_DIR`                    | `~/.reasonix` and `~/AppData/Roaming/reasonix`       | Reasonix data directory                                                                             |
 | `SHELLEY_DIR`                     | `~/.config/shelley`                                  | Shelley data directory                                                                              |
 | `VISUALSTUDIO_COPILOT_DIR`        | (platform-specific)                                  | Visual Studio Copilot traces directory                                                              |
 | `VSCODE_COPILOT_DIR`              | (platform-specific)                                  | VS Code Copilot sessions directory                                                                  |
+| `WINDSURF_DIR`                    | (platform-specific)                                  | Windsurf user-data directory                                                                        |
 | `WARP_DIR`                        | (platform-specific)                                  | Warp database directory                                                                             |
 | `WORKBUDDY_PROJECTS_DIR`          | `~/.workbuddy/projects`                              | WorkBuddy projects directory                                                                        |
+| `ZCODE_DIR`                       | `~/.zcode/cli/db` and `~/.zcode/cli`                 | ZCode data directory (contains `db.sqlite`)                                                         |
 | `ZED_DIR`                         | (platform-specific)                                  | Zed data directory (contains `threads/threads.db`)                                                  |
 | `ZENCODER_DIR`                    | `~/.zencoder/sessions`                               | Zencoder sessions directory                                                                         |
 | `AGENTSVIEW_DATA_DIR`             | `~/.agentsview`                                      | Data directory (database, config)                                                                   |

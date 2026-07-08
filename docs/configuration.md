@@ -230,14 +230,17 @@ can still be parsed.
 | Posit Assistant       | `~/.posit/assistant/workspaces/`                                                 | Per-conversation `conversation.json` tree plus `lm-messages.jsonl` transcript                                                   |
 | Positron Assistant    | (platform-specific, see below)                                                   | JSON / JSONL per session                                                                                                        |
 | QClaw                 | `~/.qclaw/assets/static/agents/`                                                 | JSONL per session                                                                                                               |
+| Qoder                 | `~/.qoder/projects/` and `~/.qoderwork/projects/`                                | JSONL project transcripts plus sidecar metadata                                                                                  |
 | Qwen Code             | `~/.qwen/projects/`                                                              | JSONL per session                                                                                                               |
 | QwenPaw               | `~/.copaw/workspaces/`                                                           | JSON session files                                                                                                              |
 | Reasonix              | `~/.reasonix/` and `~/AppData/Roaming/reasonix/`                                 | JSONL sessions plus `.jsonl.meta` sidecars                                                                                      |
 | Shelley               | `~/.config/shelley/`                                                             | SQLite database (`shelley.db`)                                                                                                  |
 | Visual Studio Copilot | (platform-specific, see below)                                                   | Trace JSONL files                                                                                                               |
 | VS Code Copilot       | (platform-specific, see below)                                                   | JSON / JSONL per session                                                                                                        |
+| Windsurf              | (platform-specific, see below)                                                   | SQLite `workspaceStorage/<hash>/state.vscdb` workspace chat data                                                                |
 | Warp                  | (platform-specific, see below)                                                   | SQLite database                                                                                                                 |
 | WorkBuddy             | `~/.workbuddy/projects/`                                                         | JSONL per session                                                                                                               |
+| ZCode                 | `~/.zcode/cli/db/` or `~/.zcode/cli/`                                            | SQLite database (`db.sqlite`) with usage rows                                                                                   |
 | Zed                   | (platform-specific, see below)                                                   | SQLite database (`threads/threads.db`)                                                                                          |
 | Zencoder              | `~/.zencoder/sessions/`                                                          | JSONL per session                                                                                                               |
 
@@ -258,6 +261,20 @@ Code Insiders and VSCodium variants are also discovered automatically.
 This is separate from VS Code Copilot. Visual Studio Copilot stores trace files
 named like `*_VSGitHubCopilot_traces.jsonl`; set `VISUALSTUDIO_COPILOT_DIR` or
 `visualstudio_copilot_dirs` if your installation writes them elsewhere.
+
+**Windsurf default directories** vary by platform:
+
+- **macOS:** `~/Library/Application Support/Windsurf/User/` and
+  `~/Library/Application Support/Windsurf - Next/User/`
+- **Linux:** `~/.config/Windsurf/User/` and
+  `~/.config/Windsurf - Next/User/`
+- **Windows:** `%APPDATA%/Windsurf/User/` and
+  `%APPDATA%/Windsurf - Next/User/`
+
+Windsurf stores workspace chats in `workspaceStorage/<hash>/state.vscdb`.
+AgentsView watches the `workspaceStorage` subtree and reads chat records from
+that SQLite database. Set `WINDSURF_DIR` or `windsurf_dirs` if your user-data
+directory is somewhere else.
 
 **Positron Assistant default directory** (macOS only):
 
@@ -452,14 +469,17 @@ export PIEBALD_DIR=~/custom/piebald
 export POSIT_ASSISTANT_DIR=~/custom/posit-assistant/workspaces
 export POSITRON_DIR=~/custom/positron
 export QCLAW_DIR=~/custom/qclaw
+export QODER_PROJECTS_DIR=~/custom/qoder/projects
 export QWEN_PROJECTS_DIR=~/custom/qwen
 export QWENPAW_DIR=~/custom/qwenpaw
 export REASONIX_DIR=~/custom/reasonix
 export SHELLEY_DIR=~/custom/shelley
 export VISUALSTUDIO_COPILOT_DIR=~/custom/visualstudio-copilot/traces
 export VSCODE_COPILOT_DIR=~/custom/vscode
+export WINDSURF_DIR=~/custom/windsurf/User
 export WARP_DIR=~/custom/warp
 export WORKBUDDY_PROJECTS_DIR=~/custom/workbuddy
+export ZCODE_DIR=~/custom/zcode/cli
 export ZED_DIR=~/custom/zed
 export ZENCODER_DIR=~/custom/zencoder
 ```
@@ -489,12 +509,12 @@ The corresponding fields are `aider_dirs`, `amp_dirs`, `antigravity_dirs`,
 `kilo_dirs`, `kimi_dirs`, `kiro_dirs`, `kiro_ide_dirs`, `mimocode_dirs`,
 `vibe_session_dirs`, `omp_dirs`, `openclaw_dirs`, `opencode_dirs`,
 `openhands_dirs`, `pi_dirs`, `piebald_dirs`, `posit_assistant_dirs`,
-`positron_dirs`, `qclaw_dirs`,
-`qwen_project_dirs`, `qwenpaw_dirs`, `reasonix_dirs`, `shelley_dirs`,
-`visualstudio_copilot_dirs`, `vscode_copilot_dirs`, `warp_dirs`,
-`workbuddy_project_dirs`, `zed_dirs`, and `zencoder_dirs`. Each accepts an array
-of paths. When set, these take precedence over the single-directory environment
-variable and the default path.
+`positron_dirs`, `qclaw_dirs`, `qoder_project_dirs`, `qwen_project_dirs`,
+`qwenpaw_dirs`, `reasonix_dirs`, `shelley_dirs`, `visualstudio_copilot_dirs`,
+`vscode_copilot_dirs`, `windsurf_dirs`, `warp_dirs`,
+`workbuddy_project_dirs`, `zcode_dirs`, `zed_dirs`, and `zencoder_dirs`. Each
+accepts an array of paths. When set, these take precedence over the
+single-directory environment variable and the default path.
 
 All listed directories are discovered, watched, and synced independently.
 
@@ -576,6 +596,12 @@ in Settings:
 - Each rule applies whenever a session's `cwd` falls under the configured
   prefix, on both new sessions as they sync and (via the **Apply** button)
   already-imported sessions.
+- The default `explicit` layout maps every matching path to the project name
+  stored on the rule. The `repo_dot_worktrees` layout derives the project from
+  the first path segment under the prefix when it is named
+  `<repo>.worktrees`, so a path like
+  `/code/agentsview.worktrees/feature/frontend` resolves to project
+  `agentsview`.
 - Rules are stored in a `worktree_project_mappings` SQLite table scoped to the
   host machine, so a mapping created on one machine does not leak into another
   machine's view of synced sessions.

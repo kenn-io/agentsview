@@ -337,13 +337,16 @@ thread JSON files.
 | Posit Assistant       | `~/.posit/assistant/workspaces/`                                                                                                                                        |
 | Positron Assistant    | `~/Library/Application Support/Positron/User/` (macOS)                                                                                                                  |
 | QClaw                 | `~/.qclaw/agents/`                                                                                                                                                      |
+| Qoder                 | `~/.qoder/projects/`, `~/.qoderwork/projects/`                                                                                                                          |
 | Qwen Code             | `~/.qwen/projects/`                                                                                                                                                     |
 | QwenPaw               | `~/.copaw/workspaces/`, `~/.qwenpaw/workspaces/`                                                                                                                        |
 | Reasonix              | `~/.reasonix/`, `%APPDATA%\\reasonix\\` (Windows)                                                                                                                       |
 | VSCode Copilot        | `~/Library/Application Support/Code/User/` (macOS)                                                                                                                      |
 | Visual Studio Copilot | `%LOCALAPPDATA%\\Temp\\VSGitHubCopilotLogs\\traces\\` (Windows), `~/Library/Caches/VSGitHubCopilotLogs/traces/` (macOS), `~/.cache/VSGitHubCopilotLogs/traces/` (Linux) |
+| Windsurf              | `~/Library/Application Support/Windsurf/User/` (macOS), `~/.config/Windsurf/User/` (Linux), `%APPDATA%\\Windsurf\\User\\` (Windows)                                     |
 | Warp                  | `~/.warp/` (platform-dependent)                                                                                                                                         |
 | WorkBuddy             | `~/.workbuddy/projects/`                                                                                                                                                |
+| ZCode                 | `~/.zcode/cli/db/`, `~/.zcode/cli/`                                                                                                                                     |
 | Zed                   | `~/Library/Application Support/Zed/` (macOS)                                                                                                                            |
 | Zencoder              | `~/.zencoder/sessions/`                                                                                                                                                 |
 
