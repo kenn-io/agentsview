@@ -64,12 +64,15 @@ description: Release history for AgentsView
   parent-child lineage for OMP transcripts.
 - Skip **local git discovery for sessions from other machines**, avoiding
   host-local repository probes for synced foreign-machine sessions.
+- Fix **Linux release builds** by compiling the sqlite-vec cgo bindings
+  against the SQLite header bundled with `mattn/go-sqlite3`. This is why the
+  release ships as 0.37.1: the 0.37.0 tag never produced binaries.
 
 **Acknowledgements**
 
 - Thanks to [Wes McKinney](https://github.com/wesm) for semantic search,
   session summary export, activity cost fixes, foreign-machine git-discovery
-  safeguards, and release documentation.
+  safeguards, the Linux release-build fix, and release documentation.
 - Thanks to [Rod Boev](https://github.com/rodboev) for Windsurf workspace chat,
   Qoder and ZCode support, Mermaid rendering, usage context and token
   breakdowns, worktree layout mappings, tool-block copy buttons,

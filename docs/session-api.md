@@ -633,6 +633,23 @@ agentsview session usage <id> [--format json]
   "has_cost": true,
   "models": ["claude-opus-4-7"],
   "unpriced_models": [],
+  "breakdown_count": 42,
+  "breakdown": [
+    {
+      "ordinal": 0,
+      "message_ordinal": 0,
+      "source": "message",
+      "label": "Prompt 1",
+      "timestamp": "2026-07-08T14:03:21Z",
+      "model": "claude-opus-4-7",
+      "input_tokens": 1200,
+      "output_tokens": 640,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 43000,
+      "cost_usd": 0.58,
+      "has_cost": true
+    }
+  ],
   "server_running": false
 }
 ```
@@ -646,7 +663,19 @@ agentsview session usage <id> [--format json]
 | `has_cost`            | `false` if any contributing row is unpriced — never reports a partial total as complete |
 | `models`              | Models that contributed to the cost estimate, sorted by model name      |
 | `unpriced_models`     | Omitted from JSON when empty; lists models seen but missing from pricing |
+| `breakdown_count`     | Number of per-step usage rows in the session; always populated       |
+| `breakdown`           | Per-step usage rows, in session order; CLI JSON always includes them (added in 0.37.1) |
 | `server_running`      | `true` when the report came from an already-running daemon           |
+
+Each `breakdown` row carries the fields shown in the example:
+
+| Row field         | Notes                                                            |
+|-------------------|------------------------------------------------------------------|
+| `ordinal`         | Position of the row in the session's deduplicated usage stream   |
+| `message_ordinal` | Ordinal of the originating message; omitted when the row is not tied to one |
+| `source`          | `message` for per-message token usage; otherwise the usage-event source |
+| `label`           | Display label — `Prompt N` for message rows, `Step N` for other rows tied to a message, else the source name |
+| `cost_usd`        | Per-row estimate; `0` with `has_cost: false` when the model is unpriced |
 
 Human output is a five-line summary:
 
@@ -673,7 +702,14 @@ GET /api/v1/sessions/{id}/usage
 The response uses the same JSON fields shown above and is
 available from both local SQLite-backed `agentsview serve` and
 read-only [`agentsview pg serve`](/pg-sync/#agentsview-pg-serve).
-HTTP responses set `server_running: true`. Existing sessions
+HTTP responses set `server_running: true`. As of 0.37.1, pass
+`?breakdown=true` to include the per-step `breakdown` rows;
+without it `breakdown` is `[]` while `breakdown_count` still
+reports the row count. The CLI requests the breakdown on every
+path (local, `--server`, and `--pg`), so its `--format json`
+output always includes the rows. The session detail header uses
+this endpoint to render its
+[per-step usage breakdown](/usage/#token-usage). Existing sessions
 return `200 OK` even when token or cost data is absent; inspect
 `has_token_data`, `has_cost`, and `unpriced_models` to decide
 how to present that state. Missing sessions return `404` with:

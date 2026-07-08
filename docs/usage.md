@@ -769,6 +769,15 @@ two decimals, and larger costs as whole dollars. The badge is
 hidden when the session has no token data or its models have
 no pricing.
 
+As of 0.37.1, sessions with per-step usage rows also show a
+**step count** next to the token summary. Click it to expand a
+per-step breakdown: each row lists the prompt or usage event,
+the model that served it, its context size (input tokens plus
+cache reads and writes), its output tokens, and a per-step cost
+estimate when the model is priced. The rows come from the same
+session usage API with `?breakdown=true` — see
+[`agentsview session usage`](/session-api/#agentsview-session-usage).
+
 For aggregate token usage and estimated cost reports across
 all sessions, see the
 [Token Usage & Costs](/token-usage/) page and the
