@@ -4080,4 +4080,31 @@ func TestAntigravityIDEUnreadableStepsFailsClosed(t *testing.T) {
 		assert.Empty(t, msgs)
 		assert.Empty(t, usageEvents)
 	})
+
+	t.Run("gen_metadata usage does not persist a degraded row", func(t *testing.T) {
+		root := t.TempDir()
+		id := "4b4b4b4b-5c5c-6d6d-7e7e-8f8f8f8f8f8f"
+		dbPath := makeNoStepsDB(t, root, id)
+		// Readable gen_metadata with decodable usage, no sidecar: the
+		// usage alone must not persist a degraded row either.
+		db, err := sql.Open("sqlite3", dbPath)
+		require.NoError(t, err)
+		mustExec(t, db, `CREATE TABLE gen_metadata (
+			idx integer, data blob, size integer, PRIMARY KEY (idx))`)
+		genData := createAntigravityMockGenMetadata(t, 2400, 180, 0, "Test Gemini 3.5")
+		mustExec(t, db,
+			`INSERT INTO gen_metadata (idx, data, size) VALUES (1, ?, ?)`,
+			genData, len(genData))
+		require.NoError(t, db.Close())
+
+		sess, msgs, usageEvents, err := parseAntigravityTestSession(
+			t, dbPath, "", "test-machine",
+		)
+		require.Error(t, err,
+			"gen_metadata usage alone must not persist a degraded row")
+		assert.Contains(t, err.Error(), "steps")
+		assert.Nil(t, sess)
+		assert.Empty(t, msgs)
+		assert.Empty(t, usageEvents)
+	})
 }
