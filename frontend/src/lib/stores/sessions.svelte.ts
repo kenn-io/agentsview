@@ -842,8 +842,11 @@ class SessionsStore {
     this.branchesPromise = (async () => {
       try {
         configureGeneratedClient();
+        // scope "all": the sidebar index matches subagent/fork sessions
+        // against the branch filter, so branches that exist only on
+        // sub-sessions (e.g. worktree subagents) must be selectable here.
         const res = await MetadataService.getApiV1Branches(
-          this.metadataParams,
+          { ...this.metadataParams, scope: "all" },
         ) as unknown as { branches: BranchInfo[] };
         if (ver === this.branchesVersion) {
           this.branches = res.branches;
