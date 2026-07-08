@@ -166,6 +166,14 @@ func (p *antigravityProvider) parseSession(
 			// every subsequent sync re-parses until the DB reads
 			// cleanly and the real coverage gate re-decides.
 			status.NeedsRetry = true
+			// Rescue-only usage merge: the independent gen_metadata
+			// load has no decoded step to anchor timestamps to, so its
+			// events would collapse onto sessions.started_at in daily
+			// analytics. Borrow per-generation timing from the sidecar
+			// while the DB token counts stay authoritative. The row is
+			// already NeedsRetry, so a later clean parse re-derives
+			// everything; the merge just keeps analytics sane meanwhile.
+			mergeAntigravityRescueUsageTiming(usageEvents, tRes.usageEvents)
 		}
 	case dbErr != nil:
 		// Fail closed, deliberately. The sync engine unconditionally
@@ -387,6 +395,33 @@ func loadAntigravityGenMetadataUsage(
 		r.appendGenMetadataUsage(data, ParsedMessage{}, false)
 	}
 	return r.usageEvents, hasGenMetadata
+}
+
+// mergeAntigravityRescueUsageTiming copies per-generation timing (and
+// missing model attribution) from sidecar usage events onto DB
+// gen_metadata events, matched by ordinal position: gen_metadata is
+// loaded ORDER BY idx and the sidecar's generatorMetadata events are in
+// trajectory order, so both describe the same generation sequence. The
+// DB token counts stay authoritative. DB events beyond the sidecar's
+// count keep an empty OccurredAt -- timestamps are never invented --
+// and sidecar events beyond the DB's count are ignored (the DB is
+// ground truth for which generations happened). Rescue-path only:
+// normal parses over a readable DB anchor events to decoded steps and
+// must not pass through here.
+func mergeAntigravityRescueUsageTiming(
+	dbEvents, sidecarEvents []ParsedUsageEvent,
+) {
+	for i := range dbEvents {
+		if i >= len(sidecarEvents) {
+			return
+		}
+		if dbEvents[i].OccurredAt == "" {
+			dbEvents[i].OccurredAt = sidecarEvents[i].OccurredAt
+		}
+		if dbEvents[i].Model == "" {
+			dbEvents[i].Model = sidecarEvents[i].Model
+		}
+	}
 }
 
 func loadAntigravityStepsWithRawCount(

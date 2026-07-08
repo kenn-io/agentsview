@@ -3988,11 +3988,57 @@ func TestAntigravityIDESidecarRescueKeepsGenMetadataUsage(t *testing.T) {
 		assert.Equal(t, 2400, usageEvents[0].InputTokens)
 		assert.Equal(t, 180, usageEvents[0].OutputTokens)
 		assert.Equal(t, sess.ID, usageEvents[0].SessionID)
+		// The rescue merge borrows the sidecar's per-generation timing
+		// (the planner step's createdAt) while the DB counts stay
+		// authoritative, so daily analytics do not collapse the
+		// generation onto sessions.started_at.
+		assert.Equal(t, "2026-06-10T20:41:00Z", usageEvents[0].OccurredAt)
 		assert.False(t, sess.GenMetadataWithoutUsage,
 			"decoded gen_metadata usage must clear the flag")
 
 		assert.Equal(t, 180, sess.TotalOutputTokens)
 		assert.Equal(t, 2400, sess.PeakContextTokens)
+	})
+
+	t.Run("db events beyond sidecar count stay timestamp-less", func(t *testing.T) {
+		root := t.TempDir()
+		id := "cbcbcbcb-eded-afaf-cbcb-edededededed"
+		genData := createAntigravityMockGenMetadata(t, 2400, 180, 0, "Test Gemini 3.5")
+		dbPath := makeDB(t, root, id, genData)
+		// Second gen_metadata row: the DB carries more generations than
+		// the sidecar reports. Timestamps must never be invented for
+		// the surplus event.
+		genData2 := createAntigravityMockGenMetadata(t, 500, 40, 0, "Test Gemini 3.5")
+		db, err := sql.Open("sqlite3", dbPath)
+		require.NoError(t, err)
+		mustExec(t, db,
+			`INSERT INTO gen_metadata (idx, data, size) VALUES (2, ?, ?)`,
+			genData2, len(genData2))
+		require.NoError(t, db.Close())
+
+		genJSON := `[{
+			"stepIndices": [1],
+			"chatModel": {
+				"model": "MODEL_PLACEHOLDER_M20",
+				"usage": {"inputTokens": "9999", "outputTokens": "888"}
+			}
+		}]`
+		writeAntigravityTestSidecarWithGenMetadata(t, root, id, 2, genJSON)
+
+		_, _, usageEvents, err := parseAntigravityTestSession(
+			t, dbPath, "", "test-machine",
+		)
+		require.NoError(t, err)
+		require.Len(t, usageEvents, 2,
+			"both DB gen_metadata events must survive the merge")
+		assert.Equal(t, "generation", usageEvents[0].Source)
+		assert.Equal(t, 2400, usageEvents[0].InputTokens)
+		assert.Equal(t, "2026-06-10T20:41:00Z", usageEvents[0].OccurredAt,
+			"first event pairs with the sidecar generation by position")
+		assert.Equal(t, "generation", usageEvents[1].Source)
+		assert.Equal(t, 500, usageEvents[1].InputTokens)
+		assert.Empty(t, usageEvents[1].OccurredAt,
+			"surplus DB event must stay bare; timestamps are never invented")
 	})
 
 	t.Run("undecodable gen_metadata keeps flag semantics", func(t *testing.T) {
