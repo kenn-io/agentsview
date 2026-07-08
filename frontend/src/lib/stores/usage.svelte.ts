@@ -126,7 +126,7 @@ export interface UsageFilterState {
   excludedProjects: string;
   excludedProjectKeys?: string;
   excludedAgents: string;
-  excludedGitBranch: string;
+  selectedGitBranch: string;
   excludedModels: string;
   selectedModels: string;
 }
@@ -135,12 +135,16 @@ function loadUsageFilters(): UsageFilterState {
   try {
     const raw = localStorage.getItem(USAGE_FILTERS_KEY);
     if (raw) {
+      // Saved excludedGitBranch exclusion lists from the retired
+      // exclude-mode branch filter are dropped: an exclusion set cannot
+      // be mapped onto an include selection, so those views reset to
+      // "all branches".
       const saved = JSON.parse(raw) as Partial<UsageFilterState>;
       return {
         excludedProjects: saved.excludedProjects ?? "",
         excludedProjectKeys: "",
         excludedAgents: saved.excludedAgents ?? "",
-        excludedGitBranch: saved.excludedGitBranch ?? "",
+        selectedGitBranch: saved.selectedGitBranch ?? "",
         excludedModels: "",
         selectedModels: saved.selectedModels ?? "",
       };
@@ -152,7 +156,7 @@ function loadUsageFilters(): UsageFilterState {
     excludedProjects: "",
     excludedProjectKeys: "",
     excludedAgents: "",
-    excludedGitBranch: "",
+    selectedGitBranch: "",
     excludedModels: "",
     selectedModels: "",
   };
@@ -163,7 +167,7 @@ function saveUsageFilters(f: UsageFilterState): void {
     const data: UsageFilterState = {
       excludedProjects: f.excludedProjects,
       excludedAgents: f.excludedAgents,
-      excludedGitBranch: f.excludedGitBranch,
+      selectedGitBranch: f.selectedGitBranch,
       excludedModels: f.excludedModels,
       selectedModels: f.selectedModels,
     };
@@ -212,13 +216,16 @@ class UsageStore {
   isPinned: boolean = $state(false);
   windowDays: number = $state(DEFAULT_WINDOW_DAYS);
 
-  // Excluded project items and included model items
-  // (comma-separated strings). Empty models = all models.
+  // Excluded project/agent items and included model/branch items
+  // (separator-joined strings). Empty models/branches = all.
+  // Branch selection is include-based: an exclusion complement would
+  // grow with the branch catalog (deselect-all over thousands of
+  // (project, branch) pairs) instead of with the user's selection.
   // Initialized from localStorage to survive tab switches.
   excludedProjects: string = $state("");
   excludedProjectKeys: string = $state("");
   excludedAgents: string = $state("");
-  excludedGitBranch: string = $state("");
+  selectedGitBranch: string = $state("");
   excludedModels: string = $state("");
   selectedModels: string = $state("");
 
@@ -227,7 +234,7 @@ class UsageStore {
     this.excludedProjects = saved.excludedProjects;
     this.excludedProjectKeys = saved.excludedProjectKeys ?? "";
     this.excludedAgents = saved.excludedAgents;
-    this.excludedGitBranch = saved.excludedGitBranch;
+    this.selectedGitBranch = saved.selectedGitBranch;
     this.excludedModels = saved.excludedModels;
     this.selectedModels = saved.selectedModels;
   }
@@ -290,7 +297,7 @@ class UsageStore {
       timezone: this.timezone,
       project: sessionFilters.project || undefined,
       machine: sessionFilters.machine || undefined,
-      gitBranch: sessionFilters.branch || undefined,
+      gitBranch: this.effectiveGitBranch(sessionFilters.branch),
       agent: sessionFilters.agent || undefined,
       termination: sessionFilters.termination || undefined,
       minUserMessages:
@@ -323,13 +330,30 @@ class UsageStore {
     if (this.excludedAgents) {
       p.excludeAgent = this.excludedAgents;
     }
-    if (this.excludedGitBranch) {
-      p.excludeGitBranch = this.excludedGitBranch;
-    }
     if (this.selectedModels) {
       p.model = this.selectedModels;
     }
     return p;
+  }
+
+  // The sidebar branch filter and the usage page's own selection are
+  // both include lists but share one git_branch API param, so AND them
+  // by intersecting. A persisted local selection that no longer
+  // overlaps the sidebar's defers to the sidebar rather than silently
+  // emptying every chart.
+  private effectiveGitBranch(
+    sidebarBranch: string,
+  ): string | undefined {
+    const local = this.selectedGitBranch;
+    if (!sidebarBranch) return local || undefined;
+    if (!local) return sidebarBranch;
+    const sidebar = new Set(sidebarBranch.split(BRANCH_LIST_SEP));
+    const both = local
+      .split(BRANCH_LIST_SEP)
+      .filter((token) => sidebar.has(token));
+    return both.length > 0
+      ? both.join(BRANCH_LIST_SEP)
+      : sidebarBranch;
   }
 
   get pairwiseModelOptions(): string[] {
@@ -498,8 +522,8 @@ class UsageStore {
       try {
         configureGeneratedClient();
         // Scope "all" counts subagent and fork sessions like the usage
-        // aggregation does, so a fork-only branch hidden from the charts
-        // still has an unhide row in the exclude dropdown.
+        // aggregation does, so branches whose usage comes only from
+        // fork or subagent sessions stay selectable.
         const res = await MetadataService.getApiV1Branches({
           includeOneShot: true,
           includeAutomated: true,
@@ -511,7 +535,7 @@ class UsageStore {
         this.branches = res.branches;
         this.branchesLoaded = true;
       } catch {
-        // Non-fatal; the hidden-branches dropdown stays empty.
+        // Non-fatal; the branch dropdown stays empty.
       } finally {
         this.branchesPromise = null;
       }
@@ -523,7 +547,7 @@ class UsageStore {
    * Drop the cached branch options so the next loadBranches() refetches.
    * Invoked when a sync/import completes, mirroring the sessions and
    * activity stores: newly imported sessions can introduce branches the
-   * exclude dropdown must offer.
+   * branch dropdown must offer.
    */
   invalidateBranches(): void {
     this.branchesVersion++;
@@ -532,8 +556,8 @@ class UsageStore {
   }
 
   toggleBranch(token: string): void {
-    this.excludedGitBranch = toggleListValue(
-      this.excludedGitBranch, token, BRANCH_LIST_SEP,
+    this.selectedGitBranch = toggleListValue(
+      this.selectedGitBranch, token, BRANCH_LIST_SEP,
     );
     this.fetchAll();
   }
@@ -565,9 +589,9 @@ class UsageStore {
     return this.selectedModels.split(",").includes(name);
   }
 
-  isBranchExcluded(token: string): boolean {
-    if (!this.excludedGitBranch) return false;
-    return this.excludedGitBranch
+  isBranchSelected(token: string): boolean {
+    if (!this.selectedGitBranch) return false;
+    return this.selectedGitBranch
       .split(BRANCH_LIST_SEP)
       .includes(token);
   }
@@ -594,12 +618,7 @@ class UsageStore {
   }
 
   selectAllBranches(): void {
-    this.excludedGitBranch = "";
-    this.fetchAll();
-  }
-
-  deselectAllBranches(all: string[]): void {
-    this.excludedGitBranch = all.join(BRANCH_LIST_SEP);
+    this.selectedGitBranch = "";
     this.fetchAll();
   }
 
@@ -619,7 +638,7 @@ class UsageStore {
     this.excludedProjects = "";
     this.excludedProjectKeys = "";
     this.excludedAgents = "";
-    this.excludedGitBranch = "";
+    this.selectedGitBranch = "";
     this.excludedModels = "";
     this.selectedModels = "";
     this.fetchAll();
@@ -630,7 +649,7 @@ class UsageStore {
       this.excludedProjects !== "" ||
       this.excludedProjectKeys !== "" ||
       this.excludedAgents !== "" ||
-      this.excludedGitBranch !== "" ||
+      this.selectedGitBranch !== "" ||
       this.selectedModels !== ""
     );
   }
@@ -1061,7 +1080,7 @@ export interface UsageUrlState {
   excludedProjects: string;
   excludedProjectKeys: string;
   excludedAgents: string;
-  excludedGitBranch: string;
+  selectedGitBranch: string;
   excludedModels: string;
   selectedModels: string;
 }
@@ -1106,8 +1125,10 @@ export function buildUsageUrlParams(
   if (state.excludedAgents) {
     params["exclude_agent"] = state.excludedAgents;
   }
-  if (state.excludedGitBranch) {
-    params["exclude_git_branch"] = state.excludedGitBranch;
+  // "branch" (not "git_branch") because session filters already own the
+  // git_branch key when usage and session params merge into one URL.
+  if (state.selectedGitBranch) {
+    params["branch"] = state.selectedGitBranch;
   }
   return params;
 }

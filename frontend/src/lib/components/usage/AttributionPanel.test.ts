@@ -283,7 +283,7 @@ describe("AttributionPanel branch mode", () => {
   afterEach(() => {
     usage.summary = null;
     usage.toggles.attribution.groupBy = "project";
-    usage.excludedGitBranch = "";
+    usage.selectedGitBranch = "";
     document.body.innerHTML = "";
     vi.restoreAllMocks();
   });

@@ -186,7 +186,7 @@
   // apply params that are actually present in the URL.
   const USAGE_FILTER_KEYS = new Set([
     "from", "to", "window_days",
-    "model", "exclude_model", "exclude_agent", "exclude_git_branch",
+    "model", "exclude_model", "exclude_agent", "branch",
   ]);
   const SESSION_FILTER_KEYS = new Set([
     "project", "machine", "git_branch", "agent",
@@ -318,9 +318,9 @@
         usage.excludedAgents = newExAgent;
         changed = true;
       }
-      const newExBranch = params["exclude_git_branch"] ?? "";
-      if (newExBranch !== usage.excludedGitBranch) {
-        usage.excludedGitBranch = newExBranch;
+      const newBranch = params["branch"] ?? "";
+      if (newBranch !== usage.selectedGitBranch) {
+        usage.selectedGitBranch = newBranch;
         changed = true;
       }
       if (usage.excludedModels) {
@@ -351,7 +351,7 @@
       excludedProjects: usage.excludedProjects,
       excludedProjectKeys: usage.excludedProjectKeys,
       excludedAgents: usage.excludedAgents,
-      excludedGitBranch: usage.excludedGitBranch,
+      selectedGitBranch: usage.selectedGitBranch,
       excludedModels: usage.excludedModels,
       selectedModels: usage.selectedModels,
     };
@@ -458,12 +458,11 @@
       <FilterDropdown
         label={m.usage_branch()}
         items={branchItems}
-        excludedCsv={usage.excludedGitBranch}
+        excludedCsv={usage.selectedGitBranch}
         separator={BRANCH_LIST_SEP}
+        mode="include"
         onToggle={(token) => usage.toggleBranch(token)}
         onSelectAll={() => usage.selectAllBranches()}
-        onDeselectAll={() =>
-          usage.deselectAllBranches(branchItems.map((b) => b.name))}
       />
 
       <RefreshControl

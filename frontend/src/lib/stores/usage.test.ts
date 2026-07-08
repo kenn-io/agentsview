@@ -403,7 +403,7 @@ describe("UsageStore filter persistence", () => {
     usage.excludedProjects = "proj-a";
     usage.excludedProjectKeys = "pl1:sha256:proj-a";
     usage.excludedAgents = "claude";
-    usage.excludedGitBranch = "proj-a\u001fmain";
+    usage.selectedGitBranch = "proj-a\u001fmain";
     await usage.fetchAll();
 
     const saved = JSON.parse(
@@ -412,7 +412,7 @@ describe("UsageStore filter persistence", () => {
     expect(saved.excludedProjects).toBe("proj-a");
     expect(saved.excludedProjectKeys).toBeUndefined();
     expect(saved.excludedAgents).toBe("claude");
-    expect(saved.excludedGitBranch).toBe("proj-a\u001fmain");
+    expect(saved.selectedGitBranch).toBe("proj-a\u001fmain");
   });
 
   it("restores usage filters from localStorage on load", async () => {
@@ -674,46 +674,65 @@ describe("UsageStore session filter params", () => {
     expect(usage.summary).not.toBeNull();
   });
 
-  it("passes branch exclusions to usage endpoints", async () => {
+  it("passes the branch selection to usage endpoints", async () => {
     const { usage } = await loadStore();
 
-    usage.excludedGitBranch = "proj-a\u001fmain\u001eproj-b\u001fdev";
+    usage.selectedGitBranch = "proj-a\u001fmain\u001eproj-b\u001fdev";
 
     await usage.fetchAll();
 
     expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        excludeGitBranch: "proj-a\u001fmain\u001eproj-b\u001fdev",
+        gitBranch: "proj-a\u001fmain\u001eproj-b\u001fdev",
       }),
     );
     expect(usageServiceMocks.getApiV1UsageTopSessions).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        excludeGitBranch: "proj-a\u001fmain\u001eproj-b\u001fdev",
+        gitBranch: "proj-a\u001fmain\u001eproj-b\u001fdev",
       }),
     );
   });
 
-  it("toggles branch exclusions with the list separator", async () => {
+  it("intersects the sidebar branch filter with the local selection", async () => {
+    const { usage } = await loadStore();
+    const { sessions } = await import("./sessions.svelte.js");
+    const tokenA = "proj-a\u001fmain";
+    const tokenB = "proj-b\u001fdev";
+
+    sessions.filters.branch = `${tokenA}\u001e${tokenB}`;
+    usage.selectedGitBranch = `${tokenB}\u001eproj-c\u001ffeat`;
+    await usage.fetchAll();
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
+      expect.objectContaining({ gitBranch: tokenB }),
+    );
+
+    // A stale local selection with no overlap defers to the sidebar
+    // filter instead of silently emptying every chart.
+    usage.selectedGitBranch = "proj-c\u001ffeat";
+    await usage.fetchAll();
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
+      expect.objectContaining({ gitBranch: `${tokenA}\u001e${tokenB}` }),
+    );
+  });
+
+  it("toggles the branch selection with the list separator", async () => {
     const { usage } = await loadStore();
     const tokenA = "proj-a\u001fmain";
     const tokenB = "proj-b\u001fdev";
 
     usage.toggleBranch(tokenA);
     usage.toggleBranch(tokenB);
-    expect(usage.excludedGitBranch).toBe(`${tokenA}\u001e${tokenB}`);
-    expect(usage.isBranchExcluded(tokenA)).toBe(true);
-    expect(usage.isBranchExcluded(tokenB)).toBe(true);
+    expect(usage.selectedGitBranch).toBe(`${tokenA}\u001e${tokenB}`);
+    expect(usage.isBranchSelected(tokenA)).toBe(true);
+    expect(usage.isBranchSelected(tokenB)).toBe(true);
     expect(usage.hasActiveFilters).toBe(true);
 
     usage.toggleBranch(tokenA);
-    expect(usage.excludedGitBranch).toBe(tokenB);
-    expect(usage.isBranchExcluded(tokenA)).toBe(false);
+    expect(usage.selectedGitBranch).toBe(tokenB);
+    expect(usage.isBranchSelected(tokenA)).toBe(false);
 
     usage.selectAllBranches();
-    expect(usage.excludedGitBranch).toBe("");
-
-    usage.deselectAllBranches([tokenA, tokenB]);
-    expect(usage.excludedGitBranch).toBe(`${tokenA}\u001e${tokenB}`);
+    expect(usage.selectedGitBranch).toBe("");
   });
 
   it("stores pairwise comparison data from the generated API", async () => {
@@ -1498,7 +1517,7 @@ describe("buildUsageUrlParams", () => {
       excludedProjects: "p1",
       excludedProjectKeys: "pk1",
       excludedAgents: "a1",
-      excludedGitBranch: "",
+      selectedGitBranch: "",
       excludedModels: "m1",
       selectedModels: "m2",
     });
@@ -1519,7 +1538,7 @@ describe("buildUsageUrlParams", () => {
       excludedProjects: "",
       excludedProjectKeys: "",
       excludedAgents: "",
-      excludedGitBranch: "",
+      selectedGitBranch: "",
       excludedModels: "",
       selectedModels: "",
     });
@@ -1529,7 +1548,7 @@ describe("buildUsageUrlParams", () => {
     });
   });
 
-  it("emits exclude_git_branch for excluded branch tokens", async () => {
+  it("emits branch for selected branch tokens", async () => {
     const { buildUsageUrlParams } = await loadStore();
     const tokens = "proj-a\u001fmain\u001eproj-b\u001fdev";
     const params = buildUsageUrlParams({
@@ -1539,11 +1558,11 @@ describe("buildUsageUrlParams", () => {
       windowDays: 30,
       excludedProjects: "",
       excludedAgents: "",
-      excludedGitBranch: tokens,
+      selectedGitBranch: tokens,
       excludedModels: "",
       selectedModels: "",
     });
-    expect(params).toEqual({ exclude_git_branch: tokens });
+    expect(params).toEqual({ branch: tokens });
   });
 
   it("returns empty object when nothing is set", async () => {
@@ -1556,7 +1575,7 @@ describe("buildUsageUrlParams", () => {
       excludedProjects: "",
       excludedProjectKeys: "",
       excludedAgents: "",
-      excludedGitBranch: "",
+      selectedGitBranch: "",
       excludedModels: "",
       selectedModels: "",
     });
@@ -1573,7 +1592,7 @@ describe("buildUsageUrlParams", () => {
       excludedProjects: "",
       excludedProjectKeys: "",
       excludedAgents: "",
-      excludedGitBranch: "",
+      selectedGitBranch: "",
       excludedModels: "",
       selectedModels: "",
     });
@@ -1590,7 +1609,7 @@ describe("buildUsageUrlParams", () => {
       excludedProjects: "",
       excludedProjectKeys: "",
       excludedAgents: "",
-      excludedGitBranch: "",
+      selectedGitBranch: "",
       excludedModels: "",
       selectedModels: "",
     });
@@ -1607,7 +1626,7 @@ describe("buildUsageUrlParams", () => {
       excludedProjects: "",
       excludedProjectKeys: "",
       excludedAgents: "",
-      excludedGitBranch: "",
+      selectedGitBranch: "",
       excludedModels: "",
       selectedModels: "",
     });

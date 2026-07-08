@@ -51,10 +51,24 @@
     items.length - filteredCount,
   );
 
+  function singleItemLabel(item: FilterItem): string {
+    const display = item.label ?? item.name;
+    const maxLen = 20;
+    if (display.length > maxLen) {
+      return `${label}: ${display.slice(0, maxLen)}...`;
+    }
+    return `${label}: ${display}`;
+  }
+
   const buttonLabel = $derived.by(() => {
     if (filteredCount === 0) return m.usage_filter_all({ label });
     if (mode === "include") {
-      if (filteredCount === 1) return `${label}: ${excludedCsv}`;
+      if (filteredCount === 1) {
+        // Resolve the display label: the name can be an opaque token
+        // (branch tokens embed a control-character separator).
+        const selected = items.find((i) => filterSet.has(i.name));
+        if (selected) return singleItemLabel(selected);
+      }
       return m.usage_filter_selected({
         label,
         countLabel: filteredCount.toLocaleString(),
@@ -64,14 +78,7 @@
       const visible = items.find(
         (i) => !filterSet.has(i.name),
       );
-      if (visible) {
-        const display = visible.label ?? visible.name;
-        const maxLen = 20;
-        if (display.length > maxLen) {
-          return `${label}: ${display.slice(0, maxLen)}...`;
-        }
-        return `${label}: ${display}`;
-      }
+      if (visible) return singleItemLabel(visible);
     }
     if (visibleCount === 0) return m.usage_filter_none({ label });
     return m.usage_filter_hidden({
