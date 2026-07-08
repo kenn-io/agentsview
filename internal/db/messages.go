@@ -10,6 +10,7 @@ import (
 	"log"
 	"slices"
 	"strings"
+	"testing"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -897,6 +898,18 @@ func insertToolResultEventsTx(
 
 const slowOpThreshold = 100 * time.Millisecond
 
+// logSlowOp reports a write that exceeded slowOpThreshold. Suppressed
+// under `go test`: the testing framework prints each benchmark result
+// line in two halves around the timed run, so a slow-op line emitted
+// in between splices into the result line and corrupts the capture
+// that cmd/benchgate parses.
+func logSlowOp(format string, args ...any) {
+	if testing.Testing() {
+		return
+	}
+	log.Printf(format, args...)
+}
+
 // InsertMessages batch-inserts messages for a session.
 func (db *DB) InsertMessages(msgs []Message) error {
 	if err := db.requireWritable(); err != nil {
@@ -908,7 +921,7 @@ func (db *DB) InsertMessages(msgs []Message) error {
 	t := time.Now()
 	defer func() {
 		if d := time.Since(t); d > slowOpThreshold {
-			log.Printf(
+			logSlowOp(
 				"db: InsertMessages (%d msgs): %s",
 				len(msgs), d.Round(time.Millisecond),
 			)
@@ -998,7 +1011,7 @@ func (db *DB) WriteSessionIncremental(
 	t := time.Now()
 	defer func() {
 		if d := time.Since(t); d > slowOpThreshold {
-			log.Printf(
+			logSlowOp(
 				"db: WriteSessionIncremental (%d msgs): %s",
 				len(msgs), d.Round(time.Millisecond),
 			)
@@ -1127,7 +1140,7 @@ func (db *DB) ReplaceSessionMessages(
 	t := time.Now()
 	defer func() {
 		if d := time.Since(t); d > slowOpThreshold {
-			log.Printf(
+			logSlowOp(
 				"db: ReplaceSessionMessages %s (%d msgs): %s",
 				sessionID, len(msgs),
 				d.Round(time.Millisecond),
