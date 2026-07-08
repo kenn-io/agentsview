@@ -168,7 +168,7 @@ func (p *antigravityProvider) parseSession(
 	// degraded session (fidelity stays empty, no fabricated transcript);
 	// the sidecar, brain artifacts, and DB files are all fingerprinted
 	// companions, so a later change to any of them re-parses the session.
-	if dbErr != nil && !(sidecarOK && sidecarCovers) &&
+	if dbErr != nil && (!sidecarOK || !sidecarCovers) &&
 		len(messages) == 0 && len(usageEvents) == 0 {
 		return nil, nil, nil, dbErr
 	}
