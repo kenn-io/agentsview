@@ -52,6 +52,17 @@ func (s *Server) remoteSyncManifestHTTP(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "remote sync target is not allowed", http.StatusForbidden)
 		return
 	}
+	if manifestTargets.HasFileScopedAgents() {
+		// File-scoped agents (Windsurf) stream a sanitized subset of
+		// their directory through WriteArchive; the manifest cannot
+		// model that per-file transformation, and advertising the raw
+		// tree would let a delta request fetch unsanitized files. Refuse
+		// the manifest so the client falls back to the full-archive flow
+		// (501 is in the client's manifest-unsupported set).
+		http.Error(w, "manifest unavailable for file-scoped agents",
+			http.StatusNotImplemented)
+		return
+	}
 	manifest, err := remotesync.BuildManifest(manifestTargets)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

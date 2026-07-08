@@ -351,3 +351,35 @@ func TestSelectAllowedFilesRejectsSymlinkAncestorEscape(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, []string{legit}, selected)
 }
+
+func TestSelectAllowedFilesRejectsFileScopedAgentDirs(t *testing.T) {
+	allowed := remotesync.TargetSet{
+		Dirs: map[parser.AgentType][]string{
+			parser.AgentClaude:   {"/home/u/.claude/projects"},
+			parser.AgentWindsurf: {"/home/u/Windsurf/User"},
+		},
+		Files: map[parser.AgentType][]string{
+			parser.AgentWindsurf: {
+				"/home/u/Windsurf/User/workspaceStorage/a/state.vscdb",
+			},
+		},
+	}
+
+	// A raw file under the Windsurf root must not validate as a delta:
+	// the full archive streams only a sanitized subset for Windsurf.
+	_, ok := remotesync.SelectAllowedFiles(allowed, []string{
+		"/home/u/Windsurf/User/workspaceStorage/a/state.vscdb",
+	})
+	assert.False(t, ok, "raw file under file-scoped agent dir must be rejected")
+	_, ok = remotesync.SelectAllowedFiles(allowed, []string{
+		"/home/u/Windsurf/User/workspaceStorage/a/extension-secret.json",
+	})
+	assert.False(t, ok, "secret under file-scoped agent dir must be rejected")
+
+	// Non-file-scoped agents still accept files under their dirs.
+	selected, ok := remotesync.SelectAllowedFiles(allowed, []string{
+		"/home/u/.claude/projects/p/s.jsonl",
+	})
+	require.True(t, ok)
+	assert.Equal(t, []string{"/home/u/.claude/projects/p/s.jsonl"}, selected)
+}

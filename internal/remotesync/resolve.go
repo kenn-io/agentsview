@@ -265,7 +265,17 @@ func selectAllowedFile(allowed TargetSet, file string) (string, bool) {
 	if _, err := safeRemotePathArchiveName(file); err != nil {
 		return "", false
 	}
-	for _, dirs := range allowed.Dirs {
+	for agent, dirs := range allowed.Dirs {
+		if _, fileScoped := allowed.Files[agent]; fileScoped {
+			// File-scoped agents (Windsurf) export a curated, sanitized
+			// file list, not a raw directory walk. Accepting a delta
+			// request by directory prefix would stream the raw file
+			// (e.g. an unsanitized state.vscdb or a secret) that the
+			// full-archive writer never exposes. Such agents fall back
+			// to the full-archive flow, so a legitimate client never
+			// requests these as deltas.
+			continue
+		}
 		for _, dir := range dirs {
 			if remotePathDialect(file) != remotePathDialect(dir) {
 				// Archive-name remapping flattens dialects into one

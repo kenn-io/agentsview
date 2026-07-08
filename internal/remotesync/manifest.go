@@ -27,7 +27,16 @@ type Manifest struct {
 // manifest of regular files, sorted by path. Symlinks and special
 // files are excluded, matching WriteArchive. Missing roots and extra
 // files are tolerated: sync races against live agents deleting files.
+//
+// File-scoped agents (Windsurf) are rejected: their raw directory tree
+// differs from the sanitized subset WriteArchive streams, so a manifest
+// of the raw walk would advertise files the full archive never exports.
+// Callers must route such targets through the full-archive flow.
 func BuildManifest(targets TargetSet) (Manifest, error) {
+	if targets.HasFileScopedAgents() {
+		return Manifest{}, fmt.Errorf(
+			"manifest not supported for file-scoped agents")
+	}
 	m := Manifest{Files: []ManifestEntry{}}
 	add := func(path string, info os.FileInfo) {
 		m.Files = append(m.Files, ManifestEntry{

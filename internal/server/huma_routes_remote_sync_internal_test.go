@@ -107,7 +107,12 @@ func TestRemoteSyncArchiveStreamsTar(t *testing.T) {
 	}
 }
 
-func TestRemoteSyncArchiveWindsurfStreamsSanitizedStateDB(t *testing.T) {
+// newWindsurfRemoteSyncServer builds a remote-sync server whose only
+// agent is Windsurf (a file-scoped, sanitized agent). It returns the
+// handler, the resolved targets the client would see, and the raw
+// state.vscdb path under the Windsurf root.
+func newWindsurfRemoteSyncServer(t *testing.T) (http.Handler, remotesync.TargetSet, string) {
+	t.Helper()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 	database := dbtest.OpenTestDBAt(t, dbPath)
@@ -118,7 +123,7 @@ func TestRemoteSyncArchiveWindsurfStreamsSanitizedStateDB(t *testing.T) {
 	secretPath := filepath.Join(workspaceDir, "extension-secret.json")
 	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
 	closeStateDB := writeWindsurfArchiveStateDB(t, stateDB)
-	defer closeStateDB()
+	t.Cleanup(closeStateDB)
 	require.NoError(t, os.WriteFile(workspaceJSON, []byte(`{"folder":"file:///work/demo"}`), 0o644))
 	require.NoError(t, os.WriteFile(secretPath, []byte("do not archive"), 0o644))
 	srv := New(config.Config{
@@ -142,6 +147,48 @@ func TestRemoteSyncArchiveWindsurfStreamsSanitizedStateDB(t *testing.T) {
 	require.Equal(t, http.StatusOK, targetW.Code, "body: %s", targetW.Body.String())
 	var targets remotesync.TargetSet
 	require.NoError(t, json.Unmarshal(targetW.Body.Bytes(), &targets))
+	return handler, targets, stateDB
+}
+
+func TestRemoteSyncManifestRefusesFileScopedAgents(t *testing.T) {
+	handler, targets, _ := newWindsurfRemoteSyncServer(t)
+	payload, err := json.Marshal(targets)
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/remote-sync/manifest", bytes.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer remote-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	// 501 is in the client's manifest-unsupported set, so the client
+	// falls back to the full-archive flow (which sanitizes Windsurf).
+	assert.Equal(t, http.StatusNotImplemented, w.Code, "body: %s", w.Body.String())
+}
+
+func TestRemoteSyncArchiveRejectsDeltaForFileScopedAgent(t *testing.T) {
+	handler, targets, stateDB := newWindsurfRemoteSyncServer(t)
+	// A malicious client that skips the manifest and requests the raw,
+	// unsanitized state.vscdb as a delta must be refused.
+	req := remotesync.ArchiveRequest{
+		TargetSet:  targets,
+		DeltaFiles: []string{stateDB},
+	}
+	payload, err := json.Marshal(req)
+	require.NoError(t, err)
+	archiveReq := httptest.NewRequest(http.MethodPost, "/api/v1/remote-sync/archive", bytes.NewReader(payload))
+	archiveReq.Header.Set("Authorization", "Bearer remote-token")
+	archiveReq.Header.Set("Content-Type", "application/json")
+	archiveW := httptest.NewRecorder()
+
+	handler.ServeHTTP(archiveW, archiveReq)
+
+	assert.Equal(t, http.StatusForbidden, archiveW.Code, "body: %s", archiveW.Body.String())
+	assert.NotContains(t, archiveW.Body.String(), "extension secret value")
+}
+
+func TestRemoteSyncArchiveWindsurfStreamsSanitizedStateDB(t *testing.T) {
+	handler, targets, _ := newWindsurfRemoteSyncServer(t)
 	payload, err := json.Marshal(targets)
 	require.NoError(t, err)
 	archiveReq := httptest.NewRequest(http.MethodPost, "/api/v1/remote-sync/archive", bytes.NewReader(payload))

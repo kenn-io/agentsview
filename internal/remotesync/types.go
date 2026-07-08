@@ -23,6 +23,15 @@ type TargetSet struct {
 	ExtraFiles []string                      `json:"extra_files,omitempty"`
 }
 
+// HasFileScopedAgents reports whether any agent exports a curated,
+// possibly sanitized file list (Windsurf) rather than a raw directory
+// walk. The manifest/delta incremental path has no way to model the
+// full-archive writer's per-agent sanitization, so callers fall back
+// to the full-archive flow for these targets.
+func (t TargetSet) HasFileScopedAgents() bool {
+	return len(t.Files) > 0
+}
+
 // ArchiveRequest is the archive endpoint's request body. DeltaFiles,
 // when present, selects delta mode: only the named files are streamed
 // (validated by SelectAllowedFiles). Old servers ignore the unknown

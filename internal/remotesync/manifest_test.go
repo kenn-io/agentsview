@@ -50,3 +50,14 @@ func TestBuildManifestToleratesMissingRootsAndExtraFiles(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, m.Files)
 }
+
+func TestBuildManifestRejectsFileScopedAgents(t *testing.T) {
+	_, err := BuildManifest(TargetSet{
+		Dirs: map[parser.AgentType][]string{parser.AgentWindsurf: {"/srv/Windsurf/User"}},
+		Files: map[parser.AgentType][]string{
+			parser.AgentWindsurf: {"/srv/Windsurf/User/workspaceStorage/a/state.vscdb"},
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "file-scoped")
+}
