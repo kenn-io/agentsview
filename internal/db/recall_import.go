@@ -218,6 +218,15 @@ func (db *DB) validateRecallImportDryRun(
 		return false, fmt.Errorf("begin recall import dry-run: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	duplicate, err := recallImportEntryExistsWithQueryer(
+		ctx, tx, recall.ID,
+	)
+	if err != nil {
+		return false, err
+	}
+	if duplicate {
+		return true, nil
+	}
 	if opts.RequireExistingSessions {
 		if err := requireRecallImportSessionWithQueryer(ctx, tx, item); err != nil {
 			return false, err
@@ -233,45 +242,51 @@ func (db *DB) validateRecallImportDryRun(
 	} else {
 		recall.ProvenanceOK = false
 	}
-	duplicate, err := validateRecallImportIdentityWithQueryer(ctx, tx, *recall)
-	if err != nil {
+	if err := validateRecallImportSupersessionWithQueryer(
+		ctx, tx, *recall,
+	); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit recall import dry-run: %w", err)
 	}
-	return duplicate, nil
+	return false, nil
 }
 
-func validateRecallImportIdentityWithQueryer(
+func recallImportEntryExistsWithQueryer(
 	ctx context.Context,
 	queryer recallImportQueryer,
-	recall RecallEntry,
+	id string,
 ) (bool, error) {
 	var duplicate bool
 	if err := queryer.QueryRowContext(ctx, `
 		SELECT EXISTS (SELECT 1 FROM recall_entries WHERE id = ?)
-	`, recall.ID).Scan(&duplicate); err != nil {
+	`, id).Scan(&duplicate); err != nil {
 		return false, fmt.Errorf("checking duplicate: %w", err)
 	}
-	if duplicate {
-		return true, nil
-	}
+	return duplicate, nil
+}
+
+func validateRecallImportSupersessionWithQueryer(
+	ctx context.Context,
+	queryer recallImportQueryer,
+	recall RecallEntry,
+) error {
 	if recall.SupersedesEntryID == "" {
-		return false, nil
+		return nil
 	}
 	var supersededExists bool
 	if err := queryer.QueryRowContext(ctx, `
 		SELECT EXISTS (SELECT 1 FROM recall_entries WHERE id = ?)
 	`, recall.SupersedesEntryID).Scan(&supersededExists); err != nil {
-		return false, fmt.Errorf("checking superseded entry: %w", err)
+		return fmt.Errorf("checking superseded entry: %w", err)
 	}
 	if !supersededExists {
-		return false, fmt.Errorf(
+		return fmt.Errorf(
 			"superseded entry %s not found", recall.SupersedesEntryID,
 		)
 	}
-	return false, nil
+	return nil
 }
 
 // importAcceptedRecallEntry verifies and binds evidence in the same serialized
@@ -299,6 +314,14 @@ func (db *DB) importAcceptedRecallEntry(
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	duplicate, err := recallImportEntryExistsWithQueryer(ctx, tx, recall.ID)
+	if err != nil {
+		return false, err
+	}
+	if duplicate {
+		return false, nil
+	}
+
 	if opts.RequireExistingSessions {
 		if err := requireRecallImportSessionWithQueryer(ctx, tx, item); err != nil {
 			return false, err
@@ -313,12 +336,10 @@ func (db *DB) importAcceptedRecallEntry(
 		}
 	}
 
-	duplicate, err := validateRecallImportIdentityWithQueryer(ctx, tx, recall)
-	if err != nil {
+	if err := validateRecallImportSupersessionWithQueryer(
+		ctx, tx, recall,
+	); err != nil {
 		return false, err
-	}
-	if duplicate {
-		return false, nil
 	}
 
 	if !opts.RequireExistingSessions {
