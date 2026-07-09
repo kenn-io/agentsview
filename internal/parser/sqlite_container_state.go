@@ -23,8 +23,15 @@ import (
 //     (bumped per transaction in rollback-journal mode, and on every
 //     checkpoint in WAL mode), and
 //   - the WAL header's checkpoint sequence number and random salts, plus
-//     the WAL size: between WAL resets commits only append frames (the WAL
-//     grows), and every WAL reset re-randomizes the salts.
+//     the WAL size: between WAL resets commits only append frames ("a WAL
+//     always grows from beginning toward the end", so the size advances),
+//     and frames are only ever overwritten after a reset, whose first
+//     write transaction rewrites the header with an incremented salt-1
+//     and re-randomized salt-2 — the salts are SQLite's own mechanism for
+//     invalidating stale frames. Every committed frame therefore either
+//     grows the WAL or lands behind changed salts; a state that compares
+//     equal cannot hide new frames short of a fresh WAL's two random
+//     salts colliding with the captured ones.
 //
 // A spurious mismatch merely costs one redundant re-read, while a wrong
 // match is what the write markers rule out.
