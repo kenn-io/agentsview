@@ -128,6 +128,7 @@ func TestIngestEvalTrajectory(t *testing.T) {
 	assert.Equal(t, corerecall.TypeFact, m0.Type)
 	assert.Equal(t, corerecall.ScopeRepository, m0.Scope)
 	assert.Equal(t, corerecall.StatusAccepted, m0.Status)
+	assert.Equal(t, corerecall.ReviewStateEvalRaw, m0.ReviewState)
 	assert.Equal(t, in.ExtractorMethod, m0.ExtractorMethod)
 	assert.Equal(t, "run1", m0.SourceRunID)
 	assert.Equal(t, "traj1:chunk:0", m0.SourceEpisodeID)

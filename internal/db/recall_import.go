@@ -92,6 +92,19 @@ func (db *DB) ImportAcceptedRecallEntriesJSONLWithOptions(
 		if line == "" {
 			continue
 		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(line), &fields); err != nil {
+			return result, fmt.Errorf(
+				"importing recall line %d: invalid JSON: %w",
+				lineNo, err,
+			)
+		}
+		if _, ok := fields["review_state"]; ok {
+			return result, fmt.Errorf(
+				"importing recall line %d: review_state is host-controlled",
+				lineNo,
+			)
+		}
 		var item probeAcceptedRecallEntry
 		if err := json.Unmarshal([]byte(line), &item); err != nil {
 			return result, fmt.Errorf(
@@ -166,6 +179,8 @@ func (db *DB) ImportAcceptedRecallEntriesJSONLWithOptions(
 					"importing recall line %d: %w", lineNo, err,
 				)
 			}
+		} else {
+			recall.ProvenanceOK = false
 		}
 		seen[recall.ID] = struct{}{}
 		if opts.DryRun {
@@ -446,6 +461,7 @@ func probeRecallEntryToDB(m probeAcceptedRecallEntry) (RecallEntry, error) {
 		Type:              m.Type,
 		Scope:             m.Scope,
 		Status:            "accepted",
+		ReviewState:       corerecall.ReviewStateHumanReviewed,
 		Title:             m.Title,
 		Body:              m.Body,
 		Trigger:           m.Trigger,

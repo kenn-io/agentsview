@@ -26,6 +26,7 @@ type RecallEntry struct {
 	Type                string           `json:"type"`
 	Scope               string           `json:"scope"`
 	Status              string           `json:"status"`
+	ReviewState         string           `json:"review_state"`
 	Title               string           `json:"title"`
 	Body                string           `json:"body"`
 	Trigger             string           `json:"trigger,omitempty"`
@@ -108,14 +109,15 @@ type RecallPage struct {
 	RecallEntries []RecallResult `json:"entries"`
 }
 
-const recallBaseCols = `id, type, scope, status, title, body, trigger,
+const recallBaseCols = `id, type, scope, status, review_state, title, body, trigger,
 	confidence, uncertainty, project, cwd, git_branch, agent,
 	source_session_id, source_episode_id, source_run_id, extractor_method,
 	model, transferable, provenance_ok, supersedes_entry_id,
 	superseded_by_entry_id, created_at, updated_at`
 
 const recallBaseColsQualified = `recall_entries.id, recall_entries.type,
-	recall_entries.scope, recall_entries.status, recall_entries.title, recall_entries.body,
+	recall_entries.scope, recall_entries.status, recall_entries.review_state,
+	recall_entries.title, recall_entries.body,
 	recall_entries.trigger, recall_entries.confidence, recall_entries.uncertainty,
 	recall_entries.project, recall_entries.cwd, recall_entries.git_branch, recall_entries.agent,
 	recall_entries.source_session_id, recall_entries.source_episode_id,
@@ -133,7 +135,7 @@ func scanRecallEntryRow(rs rowScanner) (RecallEntry, error) {
 	var m RecallEntry
 	var confidence sql.NullFloat64
 	err := rs.Scan(
-		&m.ID, &m.Type, &m.Scope, &m.Status, &m.Title, &m.Body,
+		&m.ID, &m.Type, &m.Scope, &m.Status, &m.ReviewState, &m.Title, &m.Body,
 		&m.Trigger, &confidence, &m.Uncertainty, &m.Project,
 		&m.CWD, &m.GitBranch, &m.Agent, &m.SourceSessionID,
 		&m.SourceEpisodeID, &m.SourceRunID, &m.ExtractorMethod,
@@ -157,6 +159,9 @@ func scanRecallEvidenceRow(rs rowScanner) (RecallEvidence, error) {
 }
 
 func (db *DB) InsertRecallEntry(m RecallEntry) (string, error) {
+	if err := normalizeRecallEntryReviewState(&m); err != nil {
+		return "", err
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -224,7 +229,7 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 
 	res, err := tx.ExecContext(ctx, `
 		INSERT OR IGNORE INTO recall_entries (
-			id, type, scope, status, title, body, trigger,
+			id, type, scope, status, review_state, title, body, trigger,
 			confidence, uncertainty, project, cwd, git_branch, agent,
 			source_session_id, source_episode_id, source_run_id,
 			extractor_method, model, transferable, provenance_ok,
@@ -232,7 +237,7 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 			created_at, updated_at
 		)
 		SELECT
-			id, type, scope, status, title, body, trigger,
+			id, type, scope, status, review_state, title, body, trigger,
 			confidence, uncertainty, project, cwd, git_branch, agent,
 			source_session_id, source_episode_id, source_run_id,
 			extractor_method, model, transferable, provenance_ok,
@@ -298,6 +303,9 @@ func (db *DB) SupersedeRecallEntry(
 	if replacement.ID == oldID {
 		return "", fmt.Errorf("replacement entry id must differ from superseded entry id")
 	}
+	if err := normalizeRecallEntryReviewState(&replacement); err != nil {
+		return "", err
+	}
 	if replacement.Status == "" {
 		replacement.Status = corerecall.StatusAccepted
 	}
@@ -356,15 +364,18 @@ func (db *DB) SupersedeRecallEntry(
 }
 
 func insertRecallEntryTx(tx *sql.Tx, m RecallEntry) error {
+	if err := normalizeRecallEntryReviewState(&m); err != nil {
+		return err
+	}
 	_, err := tx.Exec(`
 		INSERT INTO recall_entries (
-			id, type, scope, status, title, body, trigger,
+			id, type, scope, status, review_state, title, body, trigger,
 			confidence, uncertainty, project, cwd, git_branch, agent,
 			source_session_id, source_episode_id, source_run_id,
-				extractor_method, model, transferable, provenance_ok,
-				supersedes_entry_id, superseded_by_entry_id
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		m.ID, m.Type, m.Scope, m.Status, m.Title, m.Body, m.Trigger,
+			extractor_method, model, transferable, provenance_ok,
+			supersedes_entry_id, superseded_by_entry_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		m.ID, m.Type, m.Scope, m.Status, m.ReviewState, m.Title, m.Body, m.Trigger,
 		sqlFloat(m.Confidence), m.Uncertainty, m.Project, m.CWD, m.GitBranch,
 		m.Agent, m.SourceSessionID, m.SourceEpisodeID, m.SourceRunID,
 		m.ExtractorMethod, m.Model, m.Transferable, m.ProvenanceOK,
@@ -390,6 +401,15 @@ func insertRecallEntryTx(tx *sql.Tx, m RecallEntry) error {
 			return fmt.Errorf("inserting recall evidence: %w", err)
 		}
 	}
+	return nil
+}
+
+func normalizeRecallEntryReviewState(m *RecallEntry) error {
+	state, ok := corerecall.NormalizeReviewState(m.ReviewState)
+	if !ok {
+		return fmt.Errorf("invalid recall review state %q", m.ReviewState)
+	}
+	m.ReviewState = state
 	return nil
 }
 
@@ -1033,6 +1053,8 @@ func buildRecallEntryWhere(q RecallQuery, includeText bool) (string, []any) {
 		args = append(args, q.SupersededByEntryID)
 	}
 	if q.TrustedOnly {
+		preds = append(preds, "review_state = ?")
+		args = append(args, corerecall.ReviewStateHumanReviewed)
 		preds = append(preds, "transferable = 1")
 		preds = append(preds, "provenance_ok = 1")
 	}

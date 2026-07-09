@@ -1,5 +1,7 @@
 package recall
 
+import "strings"
+
 const (
 	TypeFact            = "fact"
 	TypeDecision        = "decision"
@@ -25,11 +27,38 @@ const (
 	StatusArchived = "archived"
 )
 
+const (
+	ReviewStateHumanReviewed  = "human_reviewed"
+	ReviewStateUnreviewedAuto = "unreviewed_auto"
+	ReviewStateCalibratedAuto = "calibrated_auto"
+	ReviewStateEvalRaw        = "eval_raw"
+)
+
+// NormalizeReviewState returns the canonical review state accepted at trusted
+// write boundaries. Empty preserves compatibility with pre-review-state
+// trusted callers and is classified as human-reviewed; unknown values fail.
+func NormalizeReviewState(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ReviewStateHumanReviewed, true
+	}
+	switch value {
+	case ReviewStateHumanReviewed,
+		ReviewStateUnreviewedAuto,
+		ReviewStateCalibratedAuto,
+		ReviewStateEvalRaw:
+		return value, true
+	default:
+		return "", false
+	}
+}
+
 type Entry struct {
 	ID                  string
 	Type                string
 	Scope               string
 	Status              string
+	ReviewState         string
 	Title               string
 	Body                string
 	Trigger             string

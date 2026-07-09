@@ -899,6 +899,8 @@ var readOnlyRequiredTables = []string{
 	"pg_sync_state",
 	"model_pricing",
 	"secret_findings",
+	"recall_entries",
+	"recall_evidence",
 }
 
 var (
@@ -1161,6 +1163,7 @@ func (db *DB) migrateColumns() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	w := db.getWriter()
+	recallReviewStateAdded := false
 
 	migrations := []struct {
 		table  string
@@ -1481,6 +1484,10 @@ func (db *DB) migrateColumns() error {
 			"worktree_project_mappings", "layout",
 			"ALTER TABLE worktree_project_mappings ADD COLUMN layout TEXT NOT NULL DEFAULT 'explicit'",
 		},
+		{
+			"recall_entries", "review_state",
+			"ALTER TABLE recall_entries ADD COLUMN review_state TEXT NOT NULL DEFAULT 'human_reviewed' CHECK (review_state IN ('human_reviewed', 'unreviewed_auto', 'calibrated_auto', 'eval_raw'))",
+		},
 	}
 
 	for _, m := range migrations {
@@ -1503,10 +1510,18 @@ func (db *DB) migrateColumns() error {
 					m.table, m.column, err,
 				)
 			}
+			if m.table == "recall_entries" && m.column == "review_state" {
+				recallReviewStateAdded = true
+			}
 			log.Printf(
 				"migration: added column %s.%s",
 				m.table, m.column,
 			)
+		}
+	}
+	if recallReviewStateAdded {
+		if err := db.backfillRecallReviewStateLocked(w); err != nil {
+			return err
 		}
 	}
 	if err := db.createPartialIndexesLocked(w); err != nil {
@@ -1648,6 +1663,40 @@ func (db *DB) migrateColumns() error {
 	}
 	if err := db.markTokenCoverageRepairDoneLocked(w); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (db *DB) backfillRecallReviewStateLocked(w *writerHandle) error {
+	tx, err := w.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning recall review-state backfill: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`
+		UPDATE recall_entries
+		SET review_state = CASE
+			WHEN EXISTS (
+				SELECT 1 FROM sessions
+				WHERE sessions.id = recall_entries.source_session_id
+				  AND sessions.machine = 'recall-eval-ingest'
+			) THEN 'eval_raw'
+			ELSE 'human_reviewed'
+		END`); err != nil {
+		return fmt.Errorf("classifying recall review state: %w", err)
+	}
+	if _, err := tx.Exec(`
+		UPDATE recall_entries
+		SET provenance_ok = 0
+		WHERE EXISTS (
+			SELECT 1 FROM sessions
+			WHERE sessions.id = recall_entries.source_session_id
+			  AND sessions.machine = 'recall-import'
+		)`); err != nil {
+		return fmt.Errorf("revoking placeholder recall provenance: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing recall review-state backfill: %w", err)
 	}
 	return nil
 }

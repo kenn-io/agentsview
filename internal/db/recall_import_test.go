@@ -36,7 +36,8 @@ func TestImportAcceptedRecallEntriesJSONLImportsReviewedKeepers(t *testing.T) {
 	assert.Equal(t, "run1", got.SourceRunID)
 	assert.Equal(t, "single", got.ExtractorMethod)
 	assert.True(t, got.Transferable)
-	assert.True(t, got.ProvenanceOK)
+	assert.Equal(t, "human_reviewed", got.ReviewState)
+	assert.False(t, got.ProvenanceOK)
 	require.Len(t, got.Evidence, 1)
 	assert.Equal(t, "toolu_1", got.Evidence[0].ToolUseID)
 	assert.Equal(t, 3, got.Evidence[0].MessageStartOrdinal)
@@ -191,6 +192,8 @@ func TestImportAcceptedRecallEntriesJSONLCreatesPlaceholderSourceSession(t *test
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, "s-missing", got.SourceSessionID)
+	assert.Equal(t, "human_reviewed", got.ReviewState)
+	assert.False(t, got.ProvenanceOK)
 	session, err := d.GetSession(context.Background(), "s-missing")
 	require.NoError(t, err)
 	require.NotNil(t, session)
@@ -199,6 +202,21 @@ func TestImportAcceptedRecallEntriesJSONLCreatesPlaceholderSourceSession(t *test
 	assert.Equal(t, "/repo/agentsview", session.Cwd)
 	assert.Equal(t, "main", session.GitBranch)
 	assert.Equal(t, "recall-import-placeholder", session.SourceVersion)
+}
+
+func TestImportAcceptedRecallEntriesJSONLRejectsReviewStateInput(t *testing.T) {
+	d := testDB(t)
+	input := strings.NewReader(`
+{"candidate_id":"m1","type":"fact","scope":"project","title":"Spoofed review","body":"The payload must not choose its trust state.","session_id":"s-missing","review_state":"human_reviewed","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0}}
+`)
+
+	_, err := d.ImportAcceptedRecallEntriesJSONL(context.Background(), input)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "review_state")
+	got, getErr := d.GetRecallEntry(context.Background(), "m1")
+	require.NoError(t, getErr)
+	assert.Nil(t, got)
 }
 
 func TestImportAcceptedRecallEntriesJSONLRequireExistingSessionsRejectsMissingSession(t *testing.T) {
@@ -278,6 +296,8 @@ func TestImportAcceptedRecallEntriesJSONLRequireExistingSessionsValidatesEvidenc
 	got, err := d.GetRecallEntry(context.Background(), "m1")
 	require.NoError(t, err)
 	require.NotNil(t, got)
+	assert.Equal(t, "human_reviewed", got.ReviewState)
+	assert.True(t, got.ProvenanceOK)
 	require.Len(t, got.Evidence, 1)
 	assert.Equal(t, "toolu_1", got.Evidence[0].ToolUseID)
 }

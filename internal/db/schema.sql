@@ -319,6 +319,10 @@ CREATE TABLE IF NOT EXISTS recall_entries (
     type              TEXT NOT NULL,
     scope             TEXT NOT NULL,
     status            TEXT NOT NULL DEFAULT 'accepted',
+    review_state      TEXT NOT NULL DEFAULT 'human_reviewed'
+        CHECK (review_state IN (
+            'human_reviewed', 'unreviewed_auto', 'calibrated_auto', 'eval_raw'
+        )),
     title             TEXT NOT NULL,
     body              TEXT NOT NULL,
     trigger           TEXT NOT NULL DEFAULT '',

@@ -284,6 +284,8 @@ func TestReadOnlySchemaCompatibilityRejectsMissingReadColumn(t *testing.T) {
 		{"pg sync state", "pg_sync_state", "value"},
 		{"model pricing", "model_pricing", "updated_at"},
 		{"secret finding", "secret_findings", "rules_version"},
+		{"recall entry", "recall_entries", "review_state"},
+		{"recall evidence", "recall_evidence", "snippet"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

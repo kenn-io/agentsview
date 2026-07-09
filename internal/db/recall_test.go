@@ -306,6 +306,48 @@ func TestQueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
 			ProvenanceOK:    true,
 		},
 		{
+			ID:              "unreviewed-auto",
+			Type:            "procedure",
+			Scope:           "project",
+			Status:          "accepted",
+			ReviewState:     "unreviewed_auto",
+			Title:           "Automatic cwd recall",
+			Body:            "Recover from wrong cwd before reading files.",
+			Project:         "agentsview",
+			Agent:           "codex",
+			SourceSessionID: "s1",
+			Transferable:    true,
+			ProvenanceOK:    true,
+		},
+		{
+			ID:              "calibrated-auto",
+			Type:            "procedure",
+			Scope:           "project",
+			Status:          "accepted",
+			ReviewState:     "calibrated_auto",
+			Title:           "Calibrated cwd recall",
+			Body:            "Recover from wrong cwd before reading files.",
+			Project:         "agentsview",
+			Agent:           "codex",
+			SourceSessionID: "s1",
+			Transferable:    true,
+			ProvenanceOK:    true,
+		},
+		{
+			ID:              "eval-raw",
+			Type:            "procedure",
+			Scope:           "project",
+			Status:          "accepted",
+			ReviewState:     "eval_raw",
+			Title:           "Eval cwd recall",
+			Body:            "Recover from wrong cwd before reading files.",
+			Project:         "agentsview",
+			Agent:           "codex",
+			SourceSessionID: "s1",
+			Transferable:    true,
+			ProvenanceOK:    true,
+		},
+		{
 			ID:              "not-transferable",
 			Type:            "procedure",
 			Scope:           "project",
@@ -347,6 +389,152 @@ func TestQueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
 	require.NoError(t, err, "QueryRecallEntries")
 	require.Len(t, page.RecallEntries, 1)
 	assert.Equal(t, "trusted", page.RecallEntries[0].ID)
+}
+
+func TestInsertRecallEntryRejectsUnknownReviewState(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "agentsview")
+
+	_, err := d.InsertRecallEntry(RecallEntry{
+		ID:              "unknown-review",
+		Type:            "fact",
+		Scope:           "project",
+		Status:          "accepted",
+		ReviewState:     "self_approved",
+		Title:           "Unknown review",
+		Body:            "This row must not be stored.",
+		SourceSessionID: "s1",
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "review state")
+	got, getErr := d.GetRecallEntry(context.Background(), "unknown-review")
+	require.NoError(t, getErr)
+	assert.Nil(t, got)
+}
+
+func TestSupersedeRecallEntryRejectsUnknownReviewState(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "agentsview")
+	_, err := d.InsertRecallEntry(RecallEntry{
+		ID:              "original",
+		Type:            "fact",
+		Scope:           "project",
+		Status:          "accepted",
+		Title:           "Original recall",
+		Body:            "This row remains active after a rejected supersede.",
+		SourceSessionID: "s1",
+	})
+	require.NoError(t, err)
+
+	_, err = d.SupersedeRecallEntry(context.Background(), "original", RecallEntry{
+		ID:              "replacement",
+		Type:            "fact",
+		Scope:           "project",
+		Status:          "accepted",
+		ReviewState:     "self_approved",
+		Title:           "Replacement recall",
+		Body:            "This row must not be stored.",
+		SourceSessionID: "s1",
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "review state")
+	original, getErr := d.GetRecallEntry(context.Background(), "original")
+	require.NoError(t, getErr)
+	require.NotNil(t, original)
+	assert.Equal(t, "accepted", original.Status)
+	replacement, getErr := d.GetRecallEntry(context.Background(), "replacement")
+	require.NoError(t, getErr)
+	assert.Nil(t, replacement)
+}
+
+func TestMigrationRecallReviewStateClassifiesLegacyRowsWithoutDataLoss(
+	t *testing.T,
+) {
+	path := filepath.Join(t.TempDir(), "recall-review-state.db")
+	d, err := Open(path)
+	require.NoError(t, err, "initial open")
+	insertSession(t, d, "human-session", "agentsview")
+	insertSession(t, d, "eval-session", "agentsview", func(s *Session) {
+		s.Machine = "recall-eval-ingest"
+	})
+	insertSession(t, d, "placeholder-session", "agentsview", func(s *Session) {
+		s.Machine = "recall-import"
+	})
+
+	for _, entry := range []RecallEntry{
+		{
+			ID:              "human",
+			Type:            "fact",
+			Scope:           "project",
+			Status:          "accepted",
+			Title:           "Reviewed recall",
+			Body:            "Human-reviewed legacy data remains trusted.",
+			SourceSessionID: "human-session",
+			ProvenanceOK:    true,
+			Evidence: []RecallEvidence{{
+				SessionID:           "human-session",
+				MessageStartOrdinal: 2,
+				MessageEndOrdinal:   4,
+				Snippet:             "legacy evidence survives",
+			}},
+		},
+		{
+			ID:              "eval",
+			Type:            "fact",
+			Scope:           "project",
+			Status:          "accepted",
+			Title:           "Raw evaluation recall",
+			Body:            "Evaluation rows remain separated from trusted recall.",
+			SourceSessionID: "eval-session",
+			ProvenanceOK:    true,
+		},
+		{
+			ID:              "placeholder",
+			Type:            "fact",
+			Scope:           "project",
+			Status:          "accepted",
+			Title:           "Unverified imported recall",
+			Body:            "Placeholder-backed provenance must be revoked.",
+			SourceSessionID: "placeholder-session",
+			ProvenanceOK:    true,
+		},
+	} {
+		_, err := d.InsertRecallEntry(entry)
+		require.NoError(t, err, "insert %s", entry.ID)
+	}
+	require.NoError(t, d.Close(), "close current-schema database")
+
+	conn, err := sql.Open("sqlite3", path)
+	require.NoError(t, err, "raw open")
+	_, err = conn.Exec(`ALTER TABLE recall_entries DROP COLUMN review_state`)
+	require.NoError(t, err, "drop review_state column")
+	require.NoError(t, conn.Close(), "close legacy database")
+
+	reopened, err := Open(path)
+	require.NoError(t, err, "reopen and migrate")
+	defer reopened.Close()
+
+	for _, want := range []struct {
+		id           string
+		reviewState  string
+		provenanceOK bool
+	}{
+		{id: "human", reviewState: "human_reviewed", provenanceOK: true},
+		{id: "eval", reviewState: "eval_raw", provenanceOK: true},
+		{id: "placeholder", reviewState: "human_reviewed", provenanceOK: false},
+	} {
+		got, err := reopened.GetRecallEntry(context.Background(), want.id)
+		require.NoError(t, err, "get %s", want.id)
+		require.NotNil(t, got, "missing %s", want.id)
+		assert.Equal(t, want.reviewState, got.ReviewState, want.id)
+		assert.Equal(t, want.provenanceOK, got.ProvenanceOK, want.id)
+	}
+	human, err := reopened.GetRecallEntry(context.Background(), "human")
+	require.NoError(t, err)
+	require.Len(t, human.Evidence, 1)
+	assert.Equal(t, "legacy evidence survives", human.Evidence[0].Snippet)
 }
 
 func TestQueryRecallEntriesFiltersByExtractorMethod(t *testing.T) {

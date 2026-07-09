@@ -271,6 +271,7 @@ func newEvalChunkRecallEntry(
 		Type:            corerecall.TypeFact,
 		Scope:           corerecall.ScopeRepository,
 		Status:          corerecall.StatusAccepted,
+		ReviewState:     corerecall.ReviewStateEvalRaw,
 		Title:           fmt.Sprintf("%s [chunk %d/%d]", in.TrajectoryID, idx+1, total),
 		Body:            body,
 		Project:         in.Project,
