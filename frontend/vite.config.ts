@@ -121,6 +121,18 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    // The SPA is served from the local embedded Go binary, so chunk size
+    // carries no network cost. Heavy libraries (mermaid, shiki, katex,
+    // cytoscape) are already lazy chunks; the main entry sits just above
+    // the default 500 kB threshold.
+    chunkSizeWarningLimit: 1200,
+    rolldownOptions: {
+      checks: {
+        // Plugin time is dominated by vite-plus's internal vitest-resolver
+        // plugin, which we cannot act on from this config.
+        pluginTimings: false,
+      },
+    },
   },
   test: {
     environment: "jsdom",

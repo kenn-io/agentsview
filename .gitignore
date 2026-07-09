@@ -20,6 +20,7 @@ internal/web/dist/*
 
 # Test/build artifacts
 /dist/
+/.sqlite-include/
 *.out
 coverage.out
 *.test
