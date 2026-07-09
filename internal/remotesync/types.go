@@ -26,10 +26,41 @@ type TargetSet struct {
 // HasFileScopedAgents reports whether any agent exports a curated,
 // possibly sanitized file list (Windsurf) rather than a raw directory
 // walk. The manifest/delta incremental path has no way to model the
-// full-archive writer's per-agent sanitization, so callers fall back
-// to the full-archive flow for these targets.
+// full-archive writer's per-agent sanitization, so these targets only
+// ever travel through the full-archive flow.
 func (t TargetSet) HasFileScopedAgents() bool {
 	return len(t.Files) > 0
+}
+
+// IsEmpty reports whether the set names no sync targets at all.
+func (t TargetSet) IsEmpty() bool {
+	return len(t.Dirs) == 0 && len(t.Files) == 0 && len(t.ExtraFiles) == 0
+}
+
+// SplitFileScoped partitions the set into the targets the
+// manifest/delta path can model (raw directory walks plus extra files)
+// and the file-scoped agents whose exports are curated and possibly
+// sanitized (Windsurf). The dir-scoped half syncs incrementally via
+// the mirror delta; the file-scoped half is fetched as a separate
+// small full archive every sync, so a host with Windsurf sessions no
+// longer drags its whole corpus onto the full-archive path.
+func (t TargetSet) SplitFileScoped() (dirScoped, fileScoped TargetSet) {
+	for agent, dirs := range t.Dirs {
+		if _, ok := t.Files[agent]; ok {
+			if fileScoped.Dirs == nil {
+				fileScoped.Dirs = make(map[parser.AgentType][]string)
+			}
+			fileScoped.Dirs[agent] = dirs
+			continue
+		}
+		if dirScoped.Dirs == nil {
+			dirScoped.Dirs = make(map[parser.AgentType][]string)
+		}
+		dirScoped.Dirs[agent] = dirs
+	}
+	fileScoped.Files = t.Files
+	dirScoped.ExtraFiles = t.ExtraFiles
+	return dirScoped, fileScoped
 }
 
 // DeltaAllowedRoots returns the trusted base paths a delta-archive file

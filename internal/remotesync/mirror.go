@@ -60,7 +60,12 @@ type MirrorDelta struct {
 // microsecond-truncated mtime; mirror files absent from the manifest
 // are queued for deletion. Stat-based diffing is self-healing: a
 // crashed extraction leaves mismatched size/mtime and is re-fetched.
-func MirrorDiff(mirrorRoot string, m Manifest) (MirrorDelta, error) {
+//
+// Deletions are confined to the mirror subtrees of covered: the
+// manifest only describes the dir-scoped targets, so mirror content
+// belonging to file-scoped agents (Windsurf, refreshed by a separate
+// full archive) is never in the manifest and must survive the pass.
+func MirrorDiff(mirrorRoot string, m Manifest, covered TargetSet) (MirrorDelta, error) {
 	delta := MirrorDelta{Total: len(m.Files)}
 	expected := make(map[string]ManifestEntry, len(m.Files))
 	for _, entry := range m.Files {
@@ -69,6 +74,10 @@ func MirrorDiff(mirrorRoot string, m Manifest) (MirrorDelta, error) {
 			return MirrorDelta{}, fmt.Errorf("manifest path %q: %w", entry.Path, err)
 		}
 		expected[local] = entry
+	}
+	coveredRoots, err := coveredMirrorRoots(mirrorRoot, covered)
+	if err != nil {
+		return MirrorDelta{}, err
 	}
 	local, err := mirrorFiles(mirrorRoot)
 	if err != nil {
@@ -82,13 +91,55 @@ func MirrorDiff(mirrorRoot string, m Manifest) (MirrorDelta, error) {
 		}
 	}
 	for localPath := range local {
-		if _, ok := expected[localPath]; !ok {
-			delta.Deletions = append(delta.Deletions, localPath)
+		if _, ok := expected[localPath]; ok {
+			continue
 		}
+		if !underAnyRoot(coveredRoots, localPath) {
+			continue
+		}
+		delta.Deletions = append(delta.Deletions, localPath)
 	}
 	sort.Strings(delta.Fetch)
 	sort.Strings(delta.Deletions)
 	return delta, nil
+}
+
+// coveredMirrorRoots maps the covered targets' remote roots (agent
+// dirs, which may themselves be files, plus extra files) onto their
+// mirror paths.
+func coveredMirrorRoots(mirrorRoot string, covered TargetSet) ([]string, error) {
+	var roots []string
+	appendRoot := func(remotePath string) error {
+		local, err := safeRemappedRemotePath(mirrorRoot, remotePath)
+		if err != nil {
+			return fmt.Errorf("covered target %q: %w", remotePath, err)
+		}
+		roots = append(roots, local)
+		return nil
+	}
+	for _, dirs := range covered.Dirs {
+		for _, dir := range dirs {
+			if err := appendRoot(dir); err != nil {
+				return nil, err
+			}
+		}
+	}
+	for _, file := range covered.ExtraFiles {
+		if err := appendRoot(file); err != nil {
+			return nil, err
+		}
+	}
+	return roots, nil
+}
+
+// underAnyRoot reports whether path equals or lies inside any root.
+func underAnyRoot(roots []string, path string) bool {
+	for _, root := range roots {
+		if within(root, path) {
+			return true
+		}
+	}
+	return false
 }
 
 // mtimeMicros truncates a Unix-nanosecond mtime to microseconds. Some

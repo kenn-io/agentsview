@@ -45,13 +45,30 @@ func (hs HTTPSync) Run(ctx context.Context) (SyncStats, error) {
 		return SyncStats{}, err
 	}
 	if hs.DataDir != "" {
-		manifest, supported, err := hs.fetchManifest(ctx, client, targets)
+		// The manifest covers only dir-scoped agents; file-scoped agents
+		// (Windsurf) stream curated, sanitized exports the manifest cannot
+		// model, so they are fetched as a separate small full archive on
+		// every mirror sync instead of dragging the whole host onto the
+		// full-archive path.
+		dirScoped, fileScoped := targets.SplitFileScoped()
+		manifest, supported, err := hs.fetchManifest(ctx, client, dirScoped)
 		if err != nil {
 			return SyncStats{}, err
 		}
 		if supported {
-			return hs.runMirror(ctx, client, targets, manifest)
+			split := splitTargets{
+				all:        targets,
+				dirScoped:  dirScoped,
+				fileScoped: fileScoped,
+			}
+			return hs.runMirror(ctx, client, split, manifest)
 		}
+		hs.report(syncpkg.Progress{
+			Detail: fmt.Sprintf(
+				"Remote %s does not support incremental sync; downloading full archive",
+				hs.Host,
+			),
+		})
 	}
 	return hs.runLegacy(ctx, client, targets)
 }
@@ -92,6 +109,15 @@ func (hs HTTPSync) importRoot(
 	return stats, nil
 }
 
+// splitTargets carries a target set alongside its SplitFileScoped
+// partition so the mirror flow addresses each half without
+// re-deriving it.
+type splitTargets struct {
+	all        TargetSet
+	dirScoped  TargetSet
+	fileScoped TargetSet
+}
+
 // runMirror syncs incrementally: diff the manifest against the
 // persistent mirror, download only changed files, and import over the
 // complete mirror tree so parser sibling reads keep working. The
@@ -100,7 +126,7 @@ func (hs HTTPSync) importRoot(
 func (hs HTTPSync) runMirror(
 	ctx context.Context,
 	client *http.Client,
-	targets TargetSet,
+	targets splitTargets,
 	manifest Manifest,
 ) (SyncStats, error) {
 	mirrorRoot := MirrorDir(hs.DataDir, hs.Host)
@@ -109,7 +135,7 @@ func (hs HTTPSync) runMirror(
 		return SyncStats{}, err
 	}
 	defer func() { _ = lock.Close() }()
-	delta, err := MirrorDiff(mirrorRoot, manifest)
+	delta, err := MirrorDiff(mirrorRoot, manifest, targets.dirScoped)
 	if err != nil {
 		return SyncStats{}, err
 	}
@@ -134,18 +160,30 @@ func (hs HTTPSync) runMirror(
 		// or corrupt mirror, which the size/mtime comparison cannot
 		// detect (a same-size same-mtime rewrite, or local bit rot).
 		full := hs.Full || len(delta.Fetch)*2 >= delta.Total
-		err := hs.downloadIntoMirror(ctx, client, targets, delta.Fetch, full, mirrorRoot)
+		err := hs.downloadIntoMirror(ctx, client, targets.dirScoped, delta.Fetch, full, mirrorRoot)
 		var statusErr *StatusError
 		if err != nil && !full && errors.As(err, &statusErr) {
 			// Mid-rollout oddity: manifest worked but the delta
 			// request was refused. Retry once as a full archive.
-			err = hs.downloadIntoMirror(ctx, client, targets, delta.Fetch, true, mirrorRoot)
+			err = hs.downloadIntoMirror(ctx, client, targets.dirScoped, delta.Fetch, true, mirrorRoot)
 		}
 		if err != nil {
 			return SyncStats{}, err
 		}
 	}
-	return hs.importRoot(ctx, targets, mirrorRoot)
+	if !targets.fileScoped.IsEmpty() {
+		// File-scoped exports (sanitized Windsurf state DBs) are
+		// regenerated per archive and carry no stat identity the
+		// manifest could diff, so they are re-fetched as a small full
+		// archive on every sync. Extraction preserves the stamped
+		// mtime, so downstream freshness checks still skip unchanged
+		// sessions.
+		err := hs.downloadIntoMirror(ctx, client, targets.fileScoped, nil, true, mirrorRoot)
+		if err != nil {
+			return SyncStats{}, err
+		}
+	}
+	return hs.importRoot(ctx, targets.all, mirrorRoot)
 }
 
 func (hs HTTPSync) fetchManifest(

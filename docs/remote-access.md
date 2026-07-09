@@ -132,8 +132,14 @@ just makes the next sync download everything again. Sessions already
 imported into the database are never removed, even when their source files
 disappear from the remote.
 
+Agents whose exports are sanitized per transfer (Windsurf state databases)
+cannot be described by the manifest, so their files are downloaded as a
+separate small full archive on every sync. The rest of the host's corpus
+stays incremental.
+
 When the remote daemon predates the manifest endpoint, sync automatically
-falls back to the full-archive download, so mixed versions keep working.
+falls back to the full-archive download and reports that incremental sync
+is unavailable, so mixed versions keep working.
 
 Incremental transfer applies to the HTTP transport only; SSH remote sync
 still copies the full session tree on every run. `agentsview sync --full`

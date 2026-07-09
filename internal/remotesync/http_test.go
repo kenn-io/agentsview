@@ -166,6 +166,7 @@ func buildHTTPTestTar(t *testing.T, files map[string]string) []byte {
 // functions the real server uses.
 type mirrorTestRemote struct {
 	dir             string // remote-side agent dir (absolute)
+	targets         TargetSet
 	archiveRequests []ArchiveRequest
 	manifestStatus  int  // 0 = serve manifest; else respond with this status
 	manifestHTML    bool // true = mimic an old daemon's SPA catch-all
@@ -179,14 +180,14 @@ func newMirrorTestRemote(t *testing.T) *mirrorTestRemote {
 		dir: filepath.Join(t.TempDir(), "claude-projects"),
 	}
 	require.NoError(t, os.MkdirAll(remote.dir, 0o755))
-	targets := TargetSet{
+	remote.targets = TargetSet{
 		Dirs: map[parser.AgentType][]string{parser.AgentClaude: {remote.dir}},
 	}
 	remote.ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/remote-sync/targets":
 			w.Header().Set("Content-Type", "application/json")
-			require.NoError(t, json.NewEncoder(w).Encode(targets))
+			require.NoError(t, json.NewEncoder(w).Encode(remote.targets))
 		case "/api/v1/remote-sync/manifest":
 			if remote.manifestStatus != 0 {
 				http.Error(w, "no manifest here", remote.manifestStatus)
@@ -198,7 +199,16 @@ func newMirrorTestRemote(t *testing.T) *mirrorTestRemote {
 					"<!doctype html><html><body>spa</body></html>"))
 				return
 			}
-			manifest, err := BuildManifest(targets)
+			// Mirror the real handler: build the manifest from the
+			// requested targets and refuse file-scoped agents.
+			var req TargetSet
+			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+			if req.HasFileScopedAgents() {
+				http.Error(w, "manifest unavailable for file-scoped agents",
+					http.StatusNotImplemented)
+				return
+			}
+			manifest, err := BuildManifest(req)
 			require.NoError(t, err)
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Content-Encoding", "gzip")
@@ -213,12 +223,14 @@ func newMirrorTestRemote(t *testing.T) *mirrorTestRemote {
 				http.Error(w, "delta not allowed", http.StatusForbidden)
 				return
 			}
+			// Serve the requested target subset, as the real handler
+			// does after SelectAllowedTargets.
 			w.Header().Set("Content-Type", "application/x-tar")
 			if req.DeltaFiles != nil {
 				require.NoError(t, WriteArchiveFiles(
-					w, targets.DeltaAllowedRoots(), req.DeltaFiles))
+					w, remote.targets.DeltaAllowedRoots(), req.DeltaFiles))
 			} else {
-				require.NoError(t, WriteArchive(w, targets))
+				require.NoError(t, WriteArchive(w, req.TargetSet))
 			}
 		default:
 			http.NotFound(w, r)
@@ -226,6 +238,24 @@ func newMirrorTestRemote(t *testing.T) *mirrorTestRemote {
 	}))
 	t.Cleanup(remote.ts.Close)
 	return remote
+}
+
+// addFileScopedAgent registers a second agent whose targets are file
+// scoped, mimicking Windsurf's curated export, and returns the remote
+// file path. The file's content never parses as a session; partition
+// tests assert transfer behavior, and Windsurf import correctness is
+// covered by the server and sync tests.
+func (r *mirrorTestRemote) addFileScopedAgent(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(filepath.Dir(r.dir), "scoped-agent")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	path := filepath.Join(dir, "export.txt")
+	require.NoError(t, os.WriteFile(path, []byte("file-scoped export\n"), 0o644))
+	r.targets.Dirs[parser.AgentGemini] = []string{dir}
+	r.targets.Files = map[parser.AgentType][]string{
+		parser.AgentGemini: {path},
+	}
+	return path
 }
 
 // writeSession writes a session file with one user message per text.
@@ -451,6 +481,53 @@ func sessionSummaries(t *testing.T, database *db.DB) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// A host with a file-scoped agent (Windsurf) must not lose incremental
+// sync for its dir-scoped corpus: the manifest request carries only the
+// dir-scoped targets, and the file-scoped exports arrive as a separate
+// small full archive on every sync.
+func TestHTTPSyncMirrorPartitionsFileScopedAgents(t *testing.T) {
+	remote := newMirrorTestRemote(t)
+	base := time.Date(2026, 7, 8, 10, 0, 0, 123456789, time.UTC)
+	remote.writeSession(t, "a.jsonl", base, "session a")
+	remote.writeSession(t, "b.jsonl", base, "session b")
+	remote.writeSession(t, "c.jsonl", base, "session c")
+	remote.writeSession(t, "d.jsonl", base, "session d")
+	remote.writeSession(t, "e.jsonl", base, "session e")
+	scoped := remote.addFileScopedAgent(t)
+	dataDir := t.TempDir()
+	_, hs := newMirrorSync(t, remote, dataDir)
+
+	stats, err := hs.Run(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 5, stats.SessionsSynced)
+	// Bootstrap: one full archive for the dir-scoped corpus, one for
+	// the file-scoped agent — never a combined whole-host archive.
+	require.Len(t, remote.archiveRequests, 2)
+	assert.Nil(t, remote.archiveRequests[0].DeltaFiles)
+	assert.Contains(t, remote.archiveRequests[0].Dirs, parser.AgentClaude)
+	assert.NotContains(t, remote.archiveRequests[0].Dirs, parser.AgentGemini)
+	assert.Contains(t, remote.archiveRequests[1].Files, parser.AgentGemini)
+	assert.NotContains(t, remote.archiveRequests[1].Dirs, parser.AgentClaude)
+
+	mirrorRoot := MirrorDir(dataDir, "devbox")
+	scopedLocal, err := safeRemappedRemotePath(mirrorRoot, scoped)
+	require.NoError(t, err)
+	assert.FileExists(t, scopedLocal)
+
+	// Second sync: the changed session travels as a delta, the
+	// file-scoped export is re-fetched in full, and — despite being
+	// absent from the manifest — survives the mirror deletion pass.
+	changed := remote.writeSession(t, "a.jsonl", base.Add(5*time.Second),
+		"session a", "session a continued")
+	stats, err = hs.Run(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.SessionsSynced)
+	require.Len(t, remote.archiveRequests, 4)
+	assert.Equal(t, []string{changed}, remote.archiveRequests[2].DeltaFiles)
+	assert.Contains(t, remote.archiveRequests[3].Files, parser.AgentGemini)
+	assert.FileExists(t, scopedLocal)
 }
 
 func TestHTTPSyncFullRefreshesMirrorBytes(t *testing.T) {
