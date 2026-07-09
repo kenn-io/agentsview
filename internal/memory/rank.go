@@ -22,9 +22,6 @@ var errorPhrasePattern = regexp.MustCompile(
 var quotedPhrasePattern = regexp.MustCompile(
 	"`([^`]+)`|(?:^|\\s)'([^']+)'|\"([^\"]+)\"",
 )
-var actionSpaceBlockPattern = regexp.MustCompile(`(?is)\bAction Space:\s.*?(?:\n\s*\n|$)`)
-var pleaseAnswerSentencePattern = regexp.MustCompile(`(?is)\bPlease answer\b[^.!?\n]*(?:[.!?]|$)`)
-var finalAnswerInstructionTailPattern = regexp.MustCompile(`(?is)\b(?:Mark your final answer|Your final answer)\b.*$`)
 
 type promptInjectionBaitPattern struct {
 	Reason  string
@@ -191,13 +188,10 @@ func Rank(memories []Memory, q Query) []Result {
 	return results
 }
 
-// LexicalQueryText removes query sections that should not influence lexical
-// retrieval, such as benchmark action-space tool schemas.
+// LexicalQueryText removes query content that should not influence lexical
+// retrieval, such as prompt-injection bait.
 func LexicalQueryText(text string) string {
-	text = actionSpaceBlockPattern.ReplaceAllString(text, " ")
-	text = pleaseAnswerSentencePattern.ReplaceAllString(text, " ")
-	text = stripPromptInjectionBait(text)
-	return finalAnswerInstructionTailPattern.ReplaceAllString(text, " ")
+	return stripPromptInjectionBait(text)
 }
 
 // ContainsPromptInjectionBait reports common prompt-injection bait that should
@@ -290,13 +284,11 @@ func scoringQueryTokens(raw map[string]struct{}) map[string]struct{} {
 
 var lexicalRankStopwords = map[string]bool{
 	"a":         true,
-	"action":    true,
 	"am":        true,
 	"and":       true,
 	"answer":    true,
 	"based":     true,
 	"be":        true,
-	"boxed":     true,
 	"can":       true,
 	"custom":    true,
 	"directly":  true,
@@ -311,19 +303,13 @@ var lexicalRankStopwords = map[string]bool{
 	"on":        true,
 	"or":        true,
 	"our":       true,
-	"perform":   true,
 	"should":    true,
-	"space":     true,
-	"textbox":   true,
 	"the":       true,
 	"there":     true,
 	"to":        true,
 	"true":      true,
 	"using":     true,
-	"enter":     true,
-	"website":   true,
 	"where":     true,
-	"wrapped":   true,
 }
 
 func matchesContext(m Memory, q Query) bool {

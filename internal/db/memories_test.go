@@ -1258,71 +1258,38 @@ func TestMemoryEvidenceFTSKindDetectsFTS4(t *testing.T) {
 
 func TestMemoryQueryTermsRetainsShortCriticalUITerms(t *testing.T) {
 	got := memoryQueryTerms(
-		`I am working with our ServiceNow portal. On the Incidents list page, ` +
-			`when I open the "Filters" dropdown, excluding "Edit personal filters" ` +
-			`and "-- None --", which filter option labels contain the substring ` +
-			`"Incident"? Mark your final answer (should be one or more short ` +
-			`phrases) in \boxed{}.`,
+		`I am working with our internal ops portal. On the Incidents list page, ` +
+			`when I open the "Filters" dropdown, which filter option labels ` +
+			`contain the substring "Incident"? The answer should be one or ` +
+			`more short phrases.`,
 	)
 
 	assert.Contains(t, got, "incident")
 	assert.Contains(t, got, "filters")
 	assert.Contains(t, got, "portal")
-	assert.NotContains(t, got, "final")
+	assert.NotContains(t, got, "should")
 	assert.NotContains(t, got, "short")
 	assert.NotContains(t, got, "more")
 	assert.LessOrEqual(t, len(got), MaxMemorySearchTerms)
 }
 
-func TestMemoryQueryTermsDropsAnswerFormatBoilerplate(t *testing.T) {
+func TestMemoryQueryTermsDropsQuestionBoilerplate(t *testing.T) {
 	got := memoryQueryTerms(
-		`I am working with our ServiceNow portal. My boss asked me to rebalance ` +
-			`workload between several agents by reassigning problems with a specific ` +
-			`tag. What are the two modules that our company's workflow typically use ` +
-			`in order to accomplish this task? Tell me the first module's name and ` +
-			`the second module's name in order, separated by a semicolon. Mark your ` +
-			`final answer (should be two short phrases separated by a semicolon) in ` +
-			`\boxed{}.`,
+		`My teammate asked me to rebalance workload between several services by ` +
+			`reassigning jobs with a specific tag. Which two modules does our ` +
+			`workflow typically use to accomplish this task?`,
 	)
 
 	assert.Contains(t, got, "reassigning")
 	assert.Contains(t, got, "workload")
-	assert.Contains(t, got, "problems")
+	assert.Contains(t, got, "jobs")
 	assert.Contains(t, got, "modules")
 	assert.Contains(t, got, "workflow")
-	assert.Contains(t, got, "portal")
 	assert.NotContains(t, got, "accomplish")
 	assert.NotContains(t, got, "typically")
-	assert.NotContains(t, got, "semicolon")
-	assert.NotContains(t, got, "separated")
-	assert.NotContains(t, got, "company")
 	assert.NotContains(t, got, "specific")
-	assert.LessOrEqual(t, len(got), MaxMemorySearchTerms)
-}
-
-func TestMemoryQueryTermsDropsActionSpaceBeforeSearchTermLimit(t *testing.T) {
-	got := memoryQueryTerms(
-		`I am using our magento-based custom shopping admin website. I am on ` +
-			`the home page now and would like to filter orders by their ` +
-			"`Fraud Suspect Resolution` status. Given the following constrained " +
-			"action space, how many actions do I need to perform?\n\n" +
-			"Action Space:\n" +
-			"scroll(delta_x: float, delta_y: float), keyboard_press(key: str), " +
-			"click(bid: str, button='left', modifiers=[]), " +
-			"fill(bid: str, value: str, enable_autocomplete_menu: bool = False), " +
-			"hover(bid: str), tab_focus(index: int), new_tab(), go_back(), " +
-			"go_forward(), tab_close(), select_option(bid: str, " +
-			"options: str | list[str])\n\n" +
-			`Your final answer should be an English number wrapped in \boxed{}.`,
-	)
-
-	assert.Contains(t, got, "resolution")
-	assert.Contains(t, got, "suspect")
-	assert.Contains(t, got, "fraud")
-	assert.Contains(t, got, "magento")
-	assert.NotContains(t, got, "enable_autocomplete_menu")
-	assert.NotContains(t, got, "keyboard_press")
-	assert.NotContains(t, got, "select_option")
+	assert.NotContains(t, got, "asked")
+	assert.NotContains(t, got, "several")
 	assert.LessOrEqual(t, len(got), MaxMemorySearchTerms)
 }
 
@@ -1347,11 +1314,9 @@ func TestListMemoryTextCandidatesRetainsShortCriticalUITermMatch(t *testing.T) {
 	require.NoError(t, err)
 
 	candidates, err := d.ListMemoryTextCandidates(ctx, MemoryQuery{
-		Text: `I am working with our ServiceNow portal. On the Incidents list page, ` +
-			`when I open the "Filters" dropdown, excluding "Edit personal filters" ` +
-			`and "-- None --", which filter option labels contain the substring ` +
-			`"Incident"? Mark your final answer (should be one or more short ` +
-			`phrases) in \boxed{}.`,
+		Text: `I am working with our internal ops portal. On the Incidents list page, ` +
+			`when I open the "Filters" dropdown, which filter option labels ` +
+			`contain the substring "Incident"?`,
 		Project: "test-agent",
 		Agent:   "test-agent",
 		Limit:   10,

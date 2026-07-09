@@ -14,9 +14,9 @@ import (
 )
 
 // defaultEvalChunkChars is the rune-window size for splitting a flattened
-// trajectory into raw-chunk memories (~500 tokens). Finer than extraction chunk's
-// 12000-char default, chosen for keyword Recall@k granularity. It is an M0
-// tuning knob, deliberately a constant rather than a request field.
+// trajectory into raw-chunk memories (~500 tokens). Finer than extraction
+// chunk's 12000-char default so keyword recall can pinpoint passages. It is a
+// server-side tuning knob, deliberately a constant rather than a request field.
 const defaultEvalChunkChars = 2000
 
 // maxEvalFieldRunes caps the length of the required identifier-like eval
@@ -56,8 +56,8 @@ type EvalTrajectoryIngestResult struct {
 }
 
 // IngestEvalTrajectory chunks a raw eval trajectory into FTS-indexed memory
-// rows scoped by run_id + extractor_method, so the keyword retriever can recall
-// them for the M0 baseline. It is lab-only (the HTTP layer guards the
+// rows scoped by run_id + extractor_method, so the keyword retriever can
+// recall them. It is lab-only (the HTTP layer guards the
 // production data dir) and idempotent: deterministic ids mean re-ingesting a
 // trajectory inserts only the chunks it is missing. It mirrors the /import
 // write path — a placeholder session satisfies the source_session_id FK, then

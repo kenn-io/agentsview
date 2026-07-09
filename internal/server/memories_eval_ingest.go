@@ -41,7 +41,7 @@ func (s *Server) registerEvalIngestRoutes() {
 }
 
 // handleIngestEvalTrajectory ingests one raw eval trajectory as chunked,
-// FTS-indexed memory rows for the lab-only M0 keyword baseline. It mirrors
+// FTS-indexed memory rows for lab-only keyword recall. It mirrors
 // handleImportMemories: the production-data-dir guard reads its override from a
 // query parameter before the body is decoded, so the refusal fires before a
 // potentially large trajectory is parsed. The harness runs against a throwaway

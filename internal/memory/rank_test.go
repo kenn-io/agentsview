@@ -234,89 +234,30 @@ func TestRankBoostsExactMultiTokenQueryPhrases(t *testing.T) {
 	assert.Equal(t, got[0].Score, got[0].Breakdown.Total)
 }
 
-func TestRankIgnoresQuestionBoilerplateForForumHomePageQuery(t *testing.T) {
+func TestRankDropsGenericStopwordsFromQuery(t *testing.T) {
 	memories := []memory.Memory{
 		{
-			ID:     "generic-textbox",
-			Title:  "Dashboard description textbox",
-			Body:   "I am using our dashboard website. True or false: there is a textbox where I can directly enter a description and submit it.",
+			ID:     "stopword-only",
+			Title:  "Answer notes",
+			Body:   "should be true and given directly using the following answer",
 			Status: memory.StatusAccepted,
 		},
 		{
-			ID:     "forum-home",
-			Title:  "Forum home page submission flow",
-			Body:   "On the /f/funny forum listing page, the visible Submit link starts a new post; there is no inline post textbox on the home page.",
+			ID:     "content-match",
+			Title:  "Retry backoff policy",
+			Body:   "The sync engine retries failed uploads with exponential backoff.",
 			Status: memory.StatusAccepted,
 		},
 	}
 
 	got := memory.Rank(memories, memory.Query{
-		Text:  "I am using our reddit-based custom forum website. I am on the home page of a forum. True or false: there is a textbox where I can directly enter a new post to submit.",
-		Limit: 2,
-	})
-
-	require.Len(t, got, 2)
-	assert.Equal(t, "forum-home", got[0].Memory.ID)
-	assert.Greater(t, got[0].Breakdown.KeywordOverlap, got[1].Breakdown.KeywordOverlap)
-}
-
-func TestRankIgnoresActionSpaceBoilerplate(t *testing.T) {
-	memories := []memory.Memory{
-		{
-			ID:     "generic-actions",
-			Title:  "Generic browser action vocabulary",
-			Body:   "scroll click fill hover keyboard_press select_option bid str float left modifiers autocomplete menu action space interface",
-			Status: memory.StatusAccepted,
-		},
-		{
-			ID:     "fraud-status",
-			Title:  "Order status filter options",
-			Body:   "The orders interface has no Fraud Suspect Resolution order-status filter.",
-			Status: memory.StatusAccepted,
-		},
-	}
-
-	got := memory.Rank(memories, memory.Query{
-		Text: `I am using our magento-based custom shopping admin website. I am on the home page now and would like to filter orders by their ` +
-			"`Fraud Suspect Resolution` status. Given the following constrained action space, how many actions do I need to perform?\n\n" +
-			"Action Space:\nscroll(delta_x: float, delta_y: float), keyboard_press(key: str), click(bid: str, button='left', modifiers=[]), fill(bid: str, value: str, enable_autocomplete_menu: bool = False), hover(bid: str), select_option(bid: str, options: str | list[str])\n\n" +
-			"Your final answer should be wrapped in \\boxed{}.",
+		Text: "Should the sync engine retry failed uploads using exponential " +
+			"backoff? The answer should be true or false.",
 		Limit: 2,
 	})
 
 	require.NotEmpty(t, got)
-	assert.Equal(t, "fraud-status", got[0].Memory.ID)
-	assert.Greater(t, got[0].Breakdown.PhraseBoost, 0.0)
-}
-
-func TestRankIgnoresAnswerFormatInstructionSentences(t *testing.T) {
-	memories := []memory.Memory{
-		{
-			ID:     "instruction-only",
-			Title:  "Benchmark answer instructions",
-			Body:   "Please provide the response.",
-			Status: memory.StatusAccepted,
-		},
-		{
-			ID:     "report-grid",
-			Title:  "Search Terms Report grid",
-			Body:   "The grid displays Store followed immediately by Results.",
-			Status: memory.StatusAccepted,
-		},
-	}
-
-	got := memory.Rank(memories, memory.Query{
-		Text: "In the Search Terms Report grid, what is between Store and Results? " +
-			"Please answer with the exact column name. Your final answer should be wrapped in \\boxed{}.",
-		Limit: 10,
-	})
-
-	require.NotEmpty(t, got)
-	assert.Equal(t, "report-grid", got[0].Memory.ID)
-	for _, result := range got {
-		assert.NotEqual(t, "instruction-only", result.Memory.ID)
-	}
-	assert.NotContains(t, got[0].MatchedTerms, "please")
+	assert.Equal(t, "content-match", got[0].Memory.ID)
 }
 
 func TestRankIgnoresPromptInjectionBaitInQuery(t *testing.T) {
