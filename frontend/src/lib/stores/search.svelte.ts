@@ -19,6 +19,10 @@ export interface PaletteSearchResult {
   snippetFormat: SnippetFormat;
 }
 
+export interface SearchFailure {
+  detail: string | null;
+}
+
 interface ContentSearchMatch {
   session_id: string;
   project: string;
@@ -97,11 +101,11 @@ function normalizeContent(matches: ContentSearchMatch[]): PaletteSearchResult[] 
   return results;
 }
 
-function errorDetail(error: unknown): string {
+function errorDetail(error: unknown): string | null {
   if (error instanceof ApiError || error instanceof Error) {
-    return error.message;
+    return error.message || null;
   }
-  return "Search failed. Please try again.";
+  return null;
 }
 
 export class SearchStore {
@@ -111,7 +115,7 @@ export class SearchStore {
   mode: SearchMode = $state("fulltext");
   results: PaletteSearchResult[] = $state([]);
   isSearching: boolean = $state(false);
-  error: string | null = $state(null);
+  error: SearchFailure | null = $state(null);
 
   private storage: SearchModeStorage | null;
   private abortController: AbortController | null = null;
@@ -168,6 +172,13 @@ export class SearchStore {
       this.cancelInFlight();
       void this.executeSearch(this.query, this.project);
     }
+  }
+
+  retry() {
+    if (!this.query.trim() || !this.error) return;
+    this.debouncedSearch.cancel();
+    this.cancelInFlight();
+    void this.executeSearch(this.query, this.project);
   }
 
   clear() {
@@ -238,7 +249,7 @@ export class SearchStore {
         return;
       }
       this.results = [];
-      this.error = errorDetail(error);
+      this.error = { detail: errorDetail(error) };
     } finally {
       if (requestVersion === this.requestVersion && !signal.aborted) {
         this.isSearching = false;

@@ -136,6 +136,7 @@
   "command_palette_mode_semantic": "語意",
   "command_palette_mode_hybrid": "混合",
   "command_palette_search_error": "搜尋無法使用",
+  "command_palette_search_failed": "搜尋失敗。請再試一次。",
   "command_palette_relevance": "相關性",
   "command_palette_recency": "最近",
   "command_palette_searching": "正在搜索...",

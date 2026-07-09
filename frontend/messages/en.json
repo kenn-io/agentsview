@@ -139,6 +139,7 @@
   "command_palette_mode_semantic": "Semantic",
   "command_palette_mode_hybrid": "Hybrid",
   "command_palette_search_error": "Search unavailable",
+  "command_palette_search_failed": "Search failed. Please try again.",
   "command_palette_relevance": "Relevance",
   "command_palette_recency": "Recency",
   "command_palette_searching": "Searching...",

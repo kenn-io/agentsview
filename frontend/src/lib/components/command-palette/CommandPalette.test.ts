@@ -38,12 +38,13 @@ const { mockUi, mockSessions, mockSearchStore, mockRouter, mockCopyToClipboard }
     mockSearchStore: {
       results: [] as Array<unknown>,
       isSearching: false,
-      error: null as string | null,
+      error: null as { detail: string | null } | null,
       mode: "fulltext" as "fulltext" | "semantic" | "hybrid",
       sort: "relevance" as "relevance" | "recency",
       search: vi.fn(),
       clear: vi.fn(),
       resetSort: vi.fn(),
+      retry: vi.fn(),
       setMode: vi.fn(),
       setSort: vi.fn(),
     },
@@ -143,6 +144,7 @@ async function enterSearchQuery(value = "match") {
 describe("CommandPalette", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    document.body.replaceChildren();
     // jsdom does not implement scrollIntoView
     Element.prototype.scrollIntoView = vi.fn();
     mockSearchStore.results = [];
@@ -351,11 +353,13 @@ describe("CommandPalette", () => {
       "Hybrid",
     ]);
     expect(radios[0]?.getAttribute("aria-checked")).toBe("true");
+    expect(controls.querySelector(".palette-sort")).toBeNull();
 
     unmount(component);
   });
 
   it("mode controls handle activation and arrows without activating results", async () => {
+    mockSearchStore.error = { detail: "temporarily unavailable" };
     mockSearchStore.results = [makeSearchResult()];
     const component = mount(CommandPalette, { target: document.body });
     await enterSearchQuery();
@@ -377,6 +381,7 @@ describe("CommandPalette", () => {
 
     expect(mockSearchStore.setMode).toHaveBeenNthCalledWith(1, "semantic");
     expect(mockSearchStore.setMode).toHaveBeenNthCalledWith(2, "semantic");
+    expect(mockSearchStore.retry).not.toHaveBeenCalled();
     expect(mockSessions.navigateToSession).not.toHaveBeenCalled();
     expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
 
@@ -389,6 +394,47 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
+  it.each([
+    ["semantic", "click"],
+    ["semantic", "Enter"],
+    ["semantic", " "],
+    ["hybrid", "click"],
+    ["hybrid", "Enter"],
+    ["hybrid", " "],
+  ] as const)(
+    "retries an errored active %s mode once on %s without navigating",
+    async (mode, activation) => {
+      mockSearchStore.mode = mode;
+      mockSearchStore.error = { detail: "temporarily unavailable" };
+      mockSearchStore.results = [makeSearchResult()];
+      const component = mount(CommandPalette, { target: document.body });
+      await enterSearchQuery();
+
+      const activeMode = document.querySelector<HTMLButtonElement>(
+        '.palette-controls [role="radio"][aria-checked="true"]',
+      )!;
+      if (activation === "click") {
+        activeMode.click();
+      } else {
+        activeMode.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: activation,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      }
+      await tick();
+
+      expect(mockSearchStore.retry).toHaveBeenCalledOnce();
+      expect(mockSearchStore.setMode).not.toHaveBeenCalled();
+      expect(mockSessions.navigateToSession).not.toHaveBeenCalled();
+      expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
+
+      unmount(component);
+    },
+  );
+
   it("shows sort only for full-text query results and activates it through the rendered button", async () => {
     mockSearchStore.results = [makeSearchResult()];
     const fullText = mount(CommandPalette, { target: document.body });
@@ -398,6 +444,7 @@ describe("CommandPalette", () => {
       document.querySelectorAll<HTMLButtonElement>(".palette-sort button"),
     ).find((button) => button.textContent?.trim() === "Recency");
     expect(recency).toBeDefined();
+    expect(recency?.closest(".palette-controls")).not.toBeNull();
     recency?.click();
     expect(mockSearchStore.setSort).toHaveBeenCalledWith("recency");
     unmount(fullText);
@@ -411,7 +458,7 @@ describe("CommandPalette", () => {
 
   it("renders loading before error, empty state, and results", async () => {
     mockSearchStore.isSearching = true;
-    mockSearchStore.error = "backend detail";
+    mockSearchStore.error = { detail: "backend detail" };
     mockSearchStore.results = [makeSearchResult()];
     const component = mount(CommandPalette, { target: document.body });
     await enterSearchQuery();
@@ -424,7 +471,9 @@ describe("CommandPalette", () => {
   });
 
   it("renders the localized error heading and exact backend detail before results", async () => {
-    mockSearchStore.error = "Run agentsview embeddings build --full-rebuild";
+    mockSearchStore.error = {
+      detail: "Run agentsview embeddings build --full-rebuild",
+    };
     mockSearchStore.results = [makeSearchResult()];
     const component = mount(CommandPalette, { target: document.body });
     await enterSearchQuery();
@@ -435,6 +484,20 @@ describe("CommandPalette", () => {
       "Run agentsview embeddings build --full-rebuild",
     );
     expect(document.querySelector(".palette-item")).toBeNull();
+
+    unmount(component);
+  });
+
+  it("renders localized fallback copy for an error without string detail", async () => {
+    mockSearchStore.error = { detail: null };
+    const component = mount(CommandPalette, { target: document.body });
+    await enterSearchQuery();
+
+    const error = document.querySelector(".palette-error");
+    expect(error?.querySelector("strong")?.textContent).toBe("Search unavailable");
+    expect(error?.querySelector("span")?.textContent).toBe(
+      "Search failed. Please try again.",
+    );
 
     unmount(component);
   });

@@ -100,8 +100,36 @@
     }
   }
 
+  function retryActiveMode(target: EventTarget | null): boolean {
+    const radio = target instanceof Element
+      ? target.closest<HTMLElement>('[role="radio"]')
+      : null;
+    if (
+      radio?.getAttribute("aria-checked") !== "true" ||
+      searchStore.mode === "fulltext" ||
+      searchStore.error === null ||
+      !inputValue.trim()
+    ) {
+      return false;
+    }
+    searchStore.retry();
+    selectedIndex = 0;
+    return true;
+  }
+
+  function handleControlClick(e: MouseEvent) {
+    retryActiveMode(e.target);
+  }
+
   function handleControlKeydown(e: KeyboardEvent) {
-    if (e.key !== "Escape") e.stopPropagation();
+    if (e.key === "Escape") return;
+    e.stopPropagation();
+    if (
+      (e.key === "Enter" || e.key === " ") &&
+      retryActiveMode(e.target)
+    ) {
+      e.preventDefault();
+    }
   }
 
   function selectCurrent() {
@@ -188,7 +216,12 @@
       <KbdBadge keys={["⎋"]} ariaLabel="Escape" />
     </div>
 
-    <div class="palette-controls" onkeydown={handleControlKeydown}>
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="palette-controls"
+      onclick={handleControlClick}
+      onkeydown={handleControlKeydown}
+    >
       <SegmentedControl
         options={searchModeOptions}
         value={searchStore.mode}
@@ -198,32 +231,32 @@
         }}
         ariaLabel={m.command_palette_search_mode_label()}
       />
+      {#if showSearchResults && searchStore.mode === "fulltext"}
+        <div class="palette-sort">
+          <button
+            class="sort-btn"
+            class:active={searchStore.sort === "relevance"}
+            onmousedown={(e: MouseEvent) => e.preventDefault()}
+            onclick={() => { searchStore.setSort("relevance"); selectedIndex = 0; }}
+          >{m.command_palette_relevance()}</button>
+          <button
+            class="sort-btn"
+            class:active={searchStore.sort === "recency"}
+            onmousedown={(e: MouseEvent) => e.preventDefault()}
+            onclick={() => { searchStore.setSort("recency"); selectedIndex = 0; }}
+          >{m.command_palette_recency()}</button>
+        </div>
+      {/if}
     </div>
 
     <div class="palette-results">
       {#if showSearchResults}
-        {#if searchStore.mode === "fulltext"}
-          <div class="palette-sort" onkeydown={handleControlKeydown}>
-            <button
-              class="sort-btn"
-              class:active={searchStore.sort === "relevance"}
-              onmousedown={(e: MouseEvent) => e.preventDefault()}
-              onclick={() => { searchStore.setSort("relevance"); selectedIndex = 0; }}
-            >{m.command_palette_relevance()}</button>
-            <button
-              class="sort-btn"
-              class:active={searchStore.sort === "recency"}
-              onmousedown={(e: MouseEvent) => e.preventDefault()}
-              onclick={() => { searchStore.setSort("recency"); selectedIndex = 0; }}
-            >{m.command_palette_recency()}</button>
-          </div>
-        {/if}
         {#if searchStore.isSearching}
           <div class="palette-empty">{m.command_palette_searching()}</div>
         {:else if searchStore.error}
           <div class="palette-error" role="alert">
             <strong>{m.command_palette_search_error()}</strong>
-            <span>{searchStore.error}</span>
+            <span>{searchStore.error.detail ?? m.command_palette_search_failed()}</span>
           </div>
         {:else if searchStore.results.length === 0}
           <div class="palette-empty">{m.command_palette_no_results()}</div>
@@ -353,6 +386,9 @@
 
   .palette-controls {
     display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
     padding: 6px 14px;
     border-bottom: 1px solid var(--border-default);
   }
@@ -445,7 +481,7 @@
   .palette-sort {
     display: flex;
     gap: 4px;
-    padding: 6px 14px 2px;
+    margin-left: auto;
   }
 
   .sort-btn {

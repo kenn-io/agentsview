@@ -99,7 +99,7 @@ async function flushMicrotasks(ticks = 5) {
 describe("SearchStore", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   afterEach(() => {
@@ -256,7 +256,7 @@ describe("SearchStore", () => {
     store.search("failure");
     await runDebounce();
 
-    expect(store.error).toBe(detail);
+    expect(store.error).toEqual({ detail });
     expect(store.results).toEqual([]);
     expect(store.isSearching).toBe(false);
   });
@@ -266,7 +266,7 @@ describe("SearchStore", () => {
     searchService.getApiV1Search.mockRejectedValueOnce(new Error("network offline"));
     store.search("first");
     await runDebounce();
-    expect(store.error).toBe("network offline");
+    expect(store.error).toEqual({ detail: "network offline" });
 
     const pending = deferred<SearchResponse>();
     searchService.getApiV1Search.mockReturnValueOnce(pending.promise as never);
@@ -299,6 +299,45 @@ describe("SearchStore", () => {
       limit: 120,
       xAgentsViewSearchIntent: "semantic",
     });
+  });
+
+  it("retry immediately reruns the active semantic query exactly once", async () => {
+    const store = createSearchStore(
+      memoryStorage({ [SEARCH_MODE_STORAGE_KEY]: "semantic" }),
+    );
+    searchService.getApiV1SearchContent.mockRejectedValueOnce(
+      generatedApiError(503, "Embedding provider is temporarily unavailable"),
+    );
+    store.search("  try again  ", "alpha");
+    await runDebounce();
+    expect(store.error).not.toBeNull();
+
+    vi.clearAllMocks();
+    searchService.getApiV1SearchContent.mockResolvedValueOnce({ matches: [] });
+    store.retry();
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS + 10);
+
+    expect(searchService.getApiV1SearchContent).toHaveBeenCalledOnce();
+    expect(searchService.getApiV1SearchContent).toHaveBeenCalledWith({
+      pattern: "try again",
+      mode: "semantic",
+      project: "alpha",
+      limit: 120,
+      xAgentsViewSearchIntent: "semantic",
+    });
+    expect(searchService.getApiV1Search).not.toHaveBeenCalled();
+  });
+
+  it("keeps unknown failures detail-less for localized presentation", async () => {
+    const store = createSearchStore(memoryStorage());
+    searchService.getApiV1Search.mockRejectedValueOnce({ reason: "offline" });
+
+    store.search("unknown failure");
+    await runDebounce();
+
+    expect(store.error).toEqual({ detail: null });
+    expect(store.isSearching).toBe(false);
   });
 
   it("stale requests cannot overwrite newer results, loading, or error", async () => {

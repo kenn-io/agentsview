@@ -136,6 +136,7 @@
   "command_palette_mode_semantic": "시맨틱",
   "command_palette_mode_hybrid": "하이브리드",
   "command_palette_search_error": "검색을 사용할 수 없음",
+  "command_palette_search_failed": "검색에 실패했습니다. 다시 시도해 주세요.",
   "command_palette_relevance": "관련성",
   "command_palette_recency": "최신순",
   "command_palette_searching": "검색 중...",
