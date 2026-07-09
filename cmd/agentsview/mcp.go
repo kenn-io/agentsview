@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/signal"
@@ -17,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	mcpserver "go.kenn.io/agentsview/internal/mcp"
 	"go.kenn.io/agentsview/internal/service"
 )
@@ -314,6 +316,46 @@ func (s *mcpDaemonService) UsagePairwiseComparison(
 		return nil, err
 	}
 	return svc.UsagePairwiseComparison(ctx, req)
+}
+
+func (s *mcpDaemonService) ListMemories(
+	ctx context.Context, f service.MemoryFilter,
+) (*service.MemoryList, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return svc.ListMemories(ctx, f)
+}
+
+func (s *mcpDaemonService) GetMemory(
+	ctx context.Context, id string,
+) (*db.Memory, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return svc.GetMemory(ctx, id)
+}
+
+func (s *mcpDaemonService) QueryMemories(
+	ctx context.Context, req service.MemoryQuery,
+) (*service.MemoryQueryResult, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return svc.QueryMemories(ctx, req)
+}
+
+func (s *mcpDaemonService) ImportMemories(
+	ctx context.Context, r io.Reader, opts db.MemoryImportOptions,
+) (*db.MemoryImportResult, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return svc.ImportMemories(ctx, r, opts)
 }
 
 func (s *mcpDaemonService) ListSecrets(

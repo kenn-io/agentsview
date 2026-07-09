@@ -1968,6 +1968,54 @@ func ResolveDataDir() (string, error) {
 	return cfg.DataDir, nil
 }
 
+// IsDefaultAgentsviewDataDir reports whether path is (or symlink-resolves to) a
+// default ~/.agentsview data directory. It is the single guard shared by the
+// CLI and HTTP memory-import paths.
+func IsDefaultAgentsviewDataDir(path string) bool {
+	clean := filepath.Clean(strings.TrimSpace(path))
+	if clean == "" || clean == "." {
+		return false
+	}
+	if filepath.Base(clean) == ".agentsview" {
+		return true
+	}
+	resolved, err := filepath.EvalSymlinks(clean)
+	if err != nil {
+		return false
+	}
+	return filepath.Base(filepath.Clean(resolved)) == ".agentsview"
+}
+
+// IsDefaultAgentsviewDBPath reports whether dbPath lives inside a default
+// ~/.agentsview directory after resolving symlinks. It also resolves a direct
+// symlink whose target does not exist yet, so a lab sessions.db pointing at a
+// not-yet-created ~/.agentsview/sessions.db is still guarded: opening SQLite
+// through that dangling link would otherwise create the production archive.
+func IsDefaultAgentsviewDBPath(dbPath string) bool {
+	dbPath = strings.TrimSpace(dbPath)
+	if dbPath == "" {
+		return false
+	}
+	if resolved, err := filepath.EvalSymlinks(dbPath); err == nil {
+		if defaultAgentsviewDBDir(resolved) {
+			return true
+		}
+	}
+	if target, err := os.Readlink(dbPath); err == nil {
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(dbPath), target)
+		}
+		if defaultAgentsviewDBDir(target) {
+			return true
+		}
+	}
+	return false
+}
+
+func defaultAgentsviewDBDir(dbPath string) bool {
+	return filepath.Base(filepath.Dir(filepath.Clean(dbPath))) == ".agentsview"
+}
+
 // DefaultPGTargetName returns the effective named PG target for this config.
 func (c *Config) DefaultPGTargetName() (string, error) {
 	if len(c.PGTargets) == 0 {

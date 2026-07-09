@@ -1756,3 +1756,67 @@ func TestLoadFile_SyncIncludeCwdPrefixesDefaultsEmpty(t *testing.T) {
 
 	assert.Empty(t, cfg.SyncIncludeCwdPrefixes)
 }
+
+func TestIsDefaultAgentsviewDBPath(t *testing.T) {
+	t.Parallel()
+
+	// A plain file inside a real ~/.agentsview directory.
+	defaultDir := filepath.Join(t.TempDir(), ".agentsview")
+	require.NoError(t, os.MkdirAll(defaultDir, 0o700))
+	defaultDB := filepath.Join(defaultDir, "sessions.db")
+	require.NoError(t, os.WriteFile(defaultDB, []byte("db"), 0o600))
+
+	// A plain file outside ~/.agentsview.
+	labDir := filepath.Join(t.TempDir(), "memory-lab-data")
+	require.NoError(t, os.MkdirAll(labDir, 0o700))
+	labDB := filepath.Join(labDir, "sessions.db")
+	require.NoError(t, os.WriteFile(labDB, []byte("db"), 0o600))
+
+	// A symlink whose target already exists inside ~/.agentsview.
+	liveLink := filepath.Join(labDir, "live-link.db")
+	require.NoError(t, os.Symlink(defaultDB, liveLink))
+
+	// An absolute symlink whose target does not exist yet. Opening SQLite
+	// through it would create the production archive, so it must be guarded
+	// even though EvalSymlinks cannot resolve the dangling target.
+	danglingLink := filepath.Join(labDir, "dangling.db")
+	require.NoError(t, os.Symlink(
+		filepath.Join(defaultDir, "not-created-yet.db"), danglingLink,
+	))
+
+	// A relative dangling symlink resolves against the link's own directory.
+	siblingRoot := t.TempDir()
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(siblingRoot, ".agentsview"), 0o700,
+	))
+	relLinkDir := filepath.Join(siblingRoot, "lab")
+	require.NoError(t, os.MkdirAll(relLinkDir, 0o700))
+	relLink := filepath.Join(relLinkDir, "sessions.db")
+	require.NoError(t, os.Symlink(
+		filepath.Join("..", ".agentsview", "missing.db"), relLink,
+	))
+
+	// A symlink pointing at a harmless location is not the default archive.
+	safeLink := filepath.Join(labDir, "safe-link.db")
+	require.NoError(t, os.Symlink(labDB, safeLink))
+
+	tests := []struct {
+		name   string
+		dbPath string
+		want   bool
+	}{
+		{"empty", "", false},
+		{"whitespace", "   ", false},
+		{"plain file in default dir", defaultDB, true},
+		{"plain file outside default dir", labDB, false},
+		{"symlink to existing default db", liveLink, true},
+		{"absolute dangling symlink into default dir", danglingLink, true},
+		{"relative dangling symlink into default dir", relLink, true},
+		{"symlink to non-default db", safeLink, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, IsDefaultAgentsviewDBPath(tc.dbPath))
+		})
+	}
+}

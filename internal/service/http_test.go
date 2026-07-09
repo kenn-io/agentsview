@@ -2,9 +2,12 @@ package service_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -253,6 +256,276 @@ func TestHTTPBackend_List_StarredFilterRoundtrip(t *testing.T) {
 	assert.Equal(t, "starred-1", list.Sessions[0].ID)
 }
 
+func TestHTTPBackend_ListMemoriesRejectsNegativeLimitLocally(t *testing.T) {
+	t.Parallel()
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"memories":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	svc := service.NewHTTPBackend(srv.URL, "", false)
+	_, err := svc.ListMemories(context.Background(), service.MemoryFilter{
+		Limit: -1,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "limit must be non-negative")
+	assert.Equal(t, 0, calls)
+}
+
+func TestHTTPBackend_ListMemoriesIncludesSourceEpisodeIDParam(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/memories", r.URL.Path)
+		assert.Equal(t, "memory-session:chunk:0001", r.URL.Query().Get("source_episode_id"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"memories":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	svc := service.NewHTTPBackend(srv.URL, "", false)
+	_, err := svc.ListMemories(context.Background(), service.MemoryFilter{
+		SourceEpisodeID: "memory-session:chunk:0001",
+	})
+
+	require.NoError(t, err)
+}
+
+func TestHTTPBackend_ListMemoriesIncludesTrustedOnlyParam(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/memories", r.URL.Path)
+		assert.Equal(t, "true", r.URL.Query().Get("trusted_only"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"memories":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	svc := service.NewHTTPBackend(srv.URL, "", false)
+	list, err := svc.ListMemories(context.Background(), service.MemoryFilter{
+		TrustedOnly: true,
+	})
+
+	require.NoError(t, err)
+	encoded, err := json.Marshal(list)
+	require.NoError(t, err)
+	var raw map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(encoded, &raw))
+	require.Contains(t, raw, "trusted_only")
+	var trustedOnly bool
+	require.NoError(t, json.Unmarshal(raw["trusted_only"], &trustedOnly))
+	assert.True(t, trustedOnly)
+}
+
+func TestHTTPBackend_QueryMemoriesRejectsNegativeLimitLocally(t *testing.T) {
+	t.Parallel()
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"memories":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	svc := service.NewHTTPBackend(srv.URL, "", false)
+	_, err := svc.QueryMemories(context.Background(), service.MemoryQuery{
+		Query: "cwd",
+		Limit: -1,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "limit must be non-negative")
+	assert.Equal(t, 0, calls)
+}
+
+func TestHTTPBackend_QueryMemoriesIncludesSourceEpisodeID(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/memories/query", r.URL.Path)
+		var got service.MemoryQuery
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
+		assert.Equal(t, "memory-session:chunk:0001", got.SourceEpisodeID)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"memories":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	svc := service.NewHTTPBackend(srv.URL, "", false)
+	_, err := svc.QueryMemories(context.Background(), service.MemoryQuery{
+		Query:           "cwd",
+		SourceEpisodeID: "memory-session:chunk:0001",
+	})
+
+	require.NoError(t, err)
+}
+
+func TestHTTPBackend_QueryMemoriesRejectsNegativeContextMaxBytesLocally(t *testing.T) {
+	t.Parallel()
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"memories":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	svc := service.NewHTTPBackend(srv.URL, "", false)
+	_, err := svc.QueryMemories(context.Background(), service.MemoryQuery{
+		Query:           "cwd",
+		IncludeContext:  true,
+		ContextMaxBytes: -1,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "context_max_bytes must be non-negative")
+	assert.Equal(t, 0, calls)
+}
+
+func TestHTTPBackend_QueryMemoriesBuildsMissingSummaries(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/memories/query", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(service.MemoryQueryResult{
+			Memories: []db.MemoryResult{{
+				Memory: db.Memory{
+					ID:              "m-http-summary",
+					Type:            "procedure",
+					Scope:           "project",
+					Status:          "accepted",
+					Project:         "agentsview",
+					Agent:           "codex",
+					SourceSessionID: "memory-session",
+					SourceEpisodeID: "memory-session:chunk:0001",
+					SourceRunID:     "smoke-run",
+				},
+				MatchReasons: []string{"keyword", "evidence"},
+			}},
+			Context: "Relevant prior agentsview memories",
+			ContextMeta: &service.MemoryContextMeta{
+				MemoryCount: 1,
+				IncludedIDs: []string{"m-http-summary"},
+			},
+		}))
+	}))
+	t.Cleanup(srv.Close)
+
+	svc := service.NewHTTPBackend(srv.URL, "", false)
+	got, err := svc.QueryMemories(context.Background(), service.MemoryQuery{
+		Query:          "cwd failed reads",
+		IncludeContext: true,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, got.Summary)
+	assert.Equal(t, 1, got.Summary.Count)
+	assert.Equal(t, 1, got.Summary.ByType["procedure"])
+	assert.Equal(t, 1, got.Summary.ByMatchReason["keyword"])
+	assert.Equal(t, 1, got.Summary.ByMatchReason["evidence"])
+	assert.Equal(t, 1, got.Summary.BySourceRun["smoke-run"])
+	assert.Equal(t, 1, got.Summary.BySourceEpisode["memory-session:chunk:0001"])
+	require.Len(t, got.ContextMemories, 1)
+	assert.Equal(t, "m-http-summary", got.ContextMemories[0].ID)
+	require.NotNil(t, got.ContextSummary)
+	assert.Equal(t, 1, got.ContextSummary.Count)
+	assert.Equal(t, 1, got.ContextSummary.BySourceSession["memory-session"])
+	assert.Equal(t, 1, got.ContextSummary.BySourceEpisode["memory-session:chunk:0001"])
+}
+
+func TestHTTPBackend_QueryMemoriesRejectsInconsistentContextMemories(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/memories/query", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(service.MemoryQueryResult{
+			Memories: []db.MemoryResult{
+				{Memory: db.Memory{ID: "m-packed"}},
+				{Memory: db.Memory{ID: "m-other"}},
+			},
+			Context: "Relevant prior agentsview memories",
+			ContextMeta: &service.MemoryContextMeta{
+				MemoryCount: 1,
+				IncludedIDs: []string{"m-packed"},
+			},
+			ContextMemories: []db.MemoryResult{
+				{Memory: db.Memory{ID: "m-other"}},
+			},
+		}))
+	}))
+	t.Cleanup(srv.Close)
+
+	svc := service.NewHTTPBackend(srv.URL, "", false)
+	_, err := svc.QueryMemories(context.Background(), service.MemoryQuery{
+		Query:          "cwd failed reads",
+		IncludeContext: true,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(),
+		"context_memories ids must match context_meta.included_ids")
+}
+
+func TestHTTPBackend_QueryMemoriesRejectsMissingContextMemoryRows(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/memories/query", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(service.MemoryQueryResult{
+			Memories: []db.MemoryResult{},
+			Context:  "Relevant prior agentsview memories",
+			ContextMeta: &service.MemoryContextMeta{
+				MemoryCount: 1,
+				IncludedIDs: []string{"m-packed"},
+			},
+		}))
+	}))
+	t.Cleanup(srv.Close)
+
+	svc := service.NewHTTPBackend(srv.URL, "", false)
+	_, err := svc.QueryMemories(context.Background(), service.MemoryQuery{
+		Query:          "cwd failed reads",
+		IncludeContext: true,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(),
+		"context_memories ids must match context_meta.included_ids")
+}
+
+func TestHTTPBackend_QueryMemoriesReportsTrustedOnlyFallback(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/memories/query", r.URL.Path)
+		var req service.MemoryQuery
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		assert.True(t, req.TrustedOnly)
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(service.MemoryQueryResult{
+			Memories: []db.MemoryResult{},
+		}))
+	}))
+	t.Cleanup(srv.Close)
+
+	svc := service.NewHTTPBackend(srv.URL, "", false)
+	got, err := svc.QueryMemories(context.Background(), service.MemoryQuery{
+		Query:       "cwd failed reads",
+		TrustedOnly: true,
+	})
+
+	require.NoError(t, err)
+	encoded, err := json.Marshal(got)
+	require.NoError(t, err)
+	var raw map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(encoded, &raw))
+	require.Contains(t, raw, "trusted_only")
+	var trustedOnly bool
+	require.NoError(t, json.Unmarshal(raw["trusted_only"], &trustedOnly))
+	assert.True(t, trustedOnly)
+}
+
 func TestHTTPBackend_List_InvalidDate(t *testing.T) {
 	t.Parallel()
 	env := newHTTPBackendEnv(t)
@@ -422,6 +695,47 @@ func TestHTTPBackend_Sync_RemoteReadOnly(t *testing.T) {
 	require.ErrorIs(t, err, db.ErrReadOnly)
 }
 
+func TestHTTPBackend_ImportMemories_ReadOnly(t *testing.T) {
+	t.Parallel()
+	env := newHTTPBackendEnv(t)
+
+	svc := env.Backend("", true)
+	_, err := svc.ImportMemories(
+		context.Background(),
+		strings.NewReader(""),
+		db.MemoryImportOptions{DryRun: true},
+	)
+	require.Error(t, err)
+	// Mirrors Sync/ScanSecrets: a read-only backend short-circuits to the
+	// shared sentinel instead of posting to the import endpoint.
+	assert.True(t, errors.Is(err, db.ErrReadOnly),
+		"want db.ErrReadOnly, got %v", err)
+	assert.Contains(t, err.Error(), env.BaseURL)
+}
+
+func TestHTTPBackend_ImportMemories_RemoteReadOnly(t *testing.T) {
+	t.Parallel()
+	// A read-only (pg serve) daemon answers write endpoints with 501. The
+	// backend is not marked read-only locally, so the round-trip must surface
+	// the remote's state as db.ErrReadOnly rather than a bare HTTP error.
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotImplemented)
+		}))
+	defer srv.Close()
+
+	be := service.NewHTTPBackend(srv.URL, "", false)
+	_, err := be.ImportMemories(
+		context.Background(),
+		strings.NewReader(""),
+		db.MemoryImportOptions{},
+	)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, db.ErrReadOnly),
+		"want db.ErrReadOnly, got %v", err)
+	assert.Contains(t, err.Error(), srv.URL)
+}
+
 func TestHTTPBackend_Watch_ReceivesSessionUpdated(t *testing.T) {
 	const watchPoll = 25 * time.Millisecond
 	t.Cleanup(sessionwatch.SetTimingsForTest(
@@ -513,6 +827,28 @@ func TestHTTPSearchContentSemanticSetsIntentHeader(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "semantic", gotIntent)
+}
+
+func TestHTTPImportMemoriesPassesAllowProductionImport(t *testing.T) {
+	t.Parallel()
+	var gotAllow string
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			gotAllow = r.URL.Query().Get("allow_production_import")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"imported":0,"skipped":0}`))
+		}))
+	defer srv.Close()
+	be := service.NewHTTPBackend(srv.URL, "", false)
+
+	_, err := be.ImportMemories(
+		context.Background(),
+		strings.NewReader(""),
+		db.MemoryImportOptions{AllowProductionImport: true},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, "true", gotAllow)
 }
 
 func TestHTTPSearchContent_RealServer(t *testing.T) {

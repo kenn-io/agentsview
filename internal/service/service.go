@@ -67,6 +67,12 @@ type SessionService interface {
 	UsagePairwiseComparison(
 		ctx context.Context, req UsagePairwiseComparisonRequest,
 	) (*UsagePairwiseComparisonResponse, error)
+	ListMemories(ctx context.Context, f MemoryFilter) (*MemoryList, error)
+	GetMemory(ctx context.Context, id string) (*db.Memory, error)
+	QueryMemories(ctx context.Context, req MemoryQuery) (*MemoryQueryResult, error)
+	ImportMemories(
+		ctx context.Context, r io.Reader, opts db.MemoryImportOptions,
+	) (*db.MemoryImportResult, error)
 	ListSecrets(ctx context.Context, f SecretListFilter) (*SecretFindingList, error)
 	ScanSecrets(ctx context.Context, in SecretScanInput,
 		progress func(SecretScanProgress)) (*SecretScanSummary, error)
@@ -165,6 +171,106 @@ type ContentSearchRequest struct {
 type ContentSearchResult struct {
 	Matches    []db.ContentMatch `json:"matches"`
 	NextCursor int               `json:"next_cursor,omitempty"`
+}
+
+// MemoryFilter mirrors GET /api/v1/memories query parameters.
+type MemoryFilter struct {
+	Query                string `json:"q,omitempty"`
+	Project              string `json:"project,omitempty"`
+	CWD                  string `json:"cwd,omitempty"`
+	GitBranch            string `json:"git_branch,omitempty"`
+	Agent                string `json:"agent,omitempty"`
+	Type                 string `json:"type,omitempty"`
+	Scope                string `json:"scope,omitempty"`
+	Status               string `json:"status,omitempty"`
+	ExtractorMethod      string `json:"extractor_method,omitempty"`
+	SourceSessionID      string `json:"source_session_id,omitempty"`
+	SourceEpisodeID      string `json:"source_episode_id,omitempty"`
+	SourceRunID          string `json:"source_run_id,omitempty"`
+	SupersedesMemoryID   string `json:"supersedes_memory_id,omitempty"`
+	SupersededByMemoryID string `json:"superseded_by_memory_id,omitempty"`
+	TrustedOnly          bool   `json:"trusted_only,omitempty"`
+	Limit                int    `json:"limit,omitempty"`
+}
+
+// MemoryList mirrors GET /api/v1/memories.
+type MemoryList struct {
+	Memories    []db.MemoryResult `json:"memories"`
+	TrustedOnly bool              `json:"trusted_only"`
+}
+
+// MemoryQuery mirrors POST /api/v1/memories/query.
+type MemoryQuery struct {
+	Query                string `json:"query"`
+	Project              string `json:"project,omitempty"`
+	CWD                  string `json:"cwd,omitempty"`
+	GitBranch            string `json:"git_branch,omitempty"`
+	Agent                string `json:"agent,omitempty"`
+	Type                 string `json:"type,omitempty"`
+	Scope                string `json:"scope,omitempty"`
+	Status               string `json:"status,omitempty"`
+	ExtractorMethod      string `json:"extractor_method,omitempty"`
+	SourceSessionID      string `json:"source_session_id,omitempty"`
+	SourceEpisodeID      string `json:"source_episode_id,omitempty"`
+	SourceRunID          string `json:"source_run_id,omitempty"`
+	SupersedesMemoryID   string `json:"supersedes_memory_id,omitempty"`
+	SupersededByMemoryID string `json:"superseded_by_memory_id,omitempty"`
+	TrustedOnly          bool   `json:"trusted_only,omitempty"`
+	Limit                int    `json:"limit,omitempty"`
+	IncludeContext       bool   `json:"include_context,omitempty"`
+	ContextMaxBytes      int    `json:"context_max_bytes,omitempty"`
+}
+
+// MemoryQueryResult mirrors POST /api/v1/memories/query response.
+type MemoryQueryResult struct {
+	Memories        []db.MemoryResult   `json:"memories"`
+	TrustedOnly     bool                `json:"trusted_only"`
+	Summary         *MemoryQuerySummary `json:"summary,omitempty"`
+	Context         string              `json:"context,omitempty"`
+	ContextMeta     *MemoryContextMeta  `json:"context_meta,omitempty"`
+	ContextMemories []db.MemoryResult   `json:"context_memories,omitempty"`
+	ContextSummary  *MemoryQuerySummary `json:"context_summary,omitempty"`
+}
+
+// MemoryQuerySummary is aggregate metadata for auditing one recall result.
+type MemoryQuerySummary struct {
+	Count             int            `json:"count"`
+	ByType            map[string]int `json:"by_type"`
+	ByScope           map[string]int `json:"by_scope"`
+	ByStatus          map[string]int `json:"by_status"`
+	ByProject         map[string]int `json:"by_project"`
+	ByAgent           map[string]int `json:"by_agent"`
+	ByCWD             map[string]int `json:"by_cwd"`
+	ByGitBranch       map[string]int `json:"by_git_branch"`
+	ByMatchReason     map[string]int `json:"by_match_reason"`
+	ByExtractorMethod map[string]int `json:"by_extractor"`
+	ByModel           map[string]int `json:"by_model"`
+	BySourceRun       map[string]int `json:"by_source_run"`
+	BySourceSession   map[string]int `json:"by_source_session"`
+	BySourceEpisode   map[string]int `json:"by_source_episode"`
+	ByTransferability map[string]int `json:"by_transferability"`
+	ByProvenanceAudit map[string]int `json:"by_provenance_audit"`
+	ByEvidence        map[string]int `json:"by_evidence"`
+	ByLifecycle       map[string]int `json:"by_lifecycle"`
+}
+
+// MemoryContextMeta describes the assembled memory context without exposing it
+// as additional model-visible evidence.
+type MemoryContextMeta struct {
+	MemoryCount                       int                 `json:"memory_count"`
+	Truncated                         bool                `json:"truncated"`
+	IncludedIDs                       []string            `json:"included_ids,omitempty"`
+	IncludedTypesByID                 map[string]string   `json:"included_types_by_id,omitempty"`
+	IncludedMatchReasonsByID          map[string][]string `json:"included_match_reasons_by_id,omitempty"`
+	SourceSessionIDs                  []string            `json:"source_session_ids,omitempty"`
+	SourceEpisodeIDs                  []string            `json:"source_episode_ids,omitempty"`
+	SourceRunIDs                      []string            `json:"source_run_ids,omitempty"`
+	TruncatedFrom                     int                 `json:"truncated_from,omitempty"`
+	OmittedCount                      int                 `json:"omitted_count,omitempty"`
+	PromptInjectionContext            bool                `json:"prompt_injection_context,omitempty"`
+	PromptInjectionContextIDs         []string            `json:"prompt_injection_context_ids,omitempty"`
+	PromptInjectionContextReasons     []string            `json:"prompt_injection_context_reasons,omitempty"`
+	PromptInjectionContextReasonsByID map[string][]string `json:"prompt_injection_context_reasons_by_id,omitempty"`
 }
 
 // SessionDetail mirrors the HTTP GetSession response shape: a

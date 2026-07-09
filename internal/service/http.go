@@ -617,6 +617,149 @@ func (b *httpBackend) UsagePairwiseComparison(
 	return &out, nil
 }
 
+func (b *httpBackend) ListMemories(
+	ctx context.Context, f MemoryFilter,
+) (*MemoryList, error) {
+	if err := ValidateMemoryLimit(f.Limit); err != nil {
+		return nil, err
+	}
+	q := memoryFilterToQuery(f)
+	var out MemoryList
+	if err := b.getJSON(ctx, "/api/v1/memories?"+q.Encode(), &out); err != nil {
+		return nil, err
+	}
+	if out.Memories == nil {
+		out.Memories = []db.MemoryResult{}
+	}
+	if f.TrustedOnly {
+		out.TrustedOnly = true
+	}
+	return &out, nil
+}
+
+func (b *httpBackend) GetMemory(
+	ctx context.Context, id string,
+) (*db.Memory, error) {
+	var out db.Memory
+	path := "/api/v1/memories/" + url.PathEscape(id)
+	err := b.getJSON(ctx, path, &out)
+	if errors.Is(err, errHTTPNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (b *httpBackend) QueryMemories(
+	ctx context.Context, req MemoryQuery,
+) (*MemoryQueryResult, error) {
+	if err := ValidateMemoryLimit(req.Limit); err != nil {
+		return nil, err
+	}
+	if req.IncludeContext {
+		if _, err := NormalizeMemoryContextMaxBytes(req.ContextMaxBytes); err != nil {
+			return nil, err
+		}
+	}
+	var out MemoryQueryResult
+	if err := b.postJSON(ctx, "/api/v1/memories/query", req, &out); err != nil {
+		return nil, err
+	}
+	if out.Memories == nil {
+		out.Memories = []db.MemoryResult{}
+	}
+	if req.TrustedOnly {
+		out.TrustedOnly = true
+	}
+	if out.Summary == nil {
+		out.Summary = BuildMemoryQuerySummary(out.Memories)
+	}
+	if out.ContextMemories == nil && out.ContextMeta != nil {
+		out.ContextMemories = MemoryContextResults(
+			out.Memories, out.ContextMeta,
+		)
+	}
+	if err := ValidateMemoryContextMemories(
+		out.ContextMemories, out.ContextMeta,
+	); err != nil {
+		return nil, err
+	}
+	if out.ContextSummary == nil && out.ContextMeta != nil {
+		out.ContextSummary = BuildMemoryContextSummary(
+			out.Memories, out.ContextMeta,
+		)
+	}
+	return &out, nil
+}
+
+func (b *httpBackend) ImportMemories(
+	ctx context.Context, r io.Reader, opts db.MemoryImportOptions,
+) (*db.MemoryImportResult, error) {
+	if b.readOnly {
+		// Surface the shared sentinel so callers can errors.Is it,
+		// matching Sync/ScanSecrets instead of posting to a read-only
+		// daemon and returning a bare endpoint error.
+		return nil, fmt.Errorf(
+			"import: daemon at %s is read-only: %w",
+			b.baseURL, db.ErrReadOnly,
+		)
+	}
+	var out db.MemoryImportResult
+	path := "/api/v1/memories/import"
+	q := url.Values{}
+	if opts.DryRun {
+		q.Set("dry_run", "true")
+	}
+	if opts.RequireExistingSessions {
+		q.Set("require_existing_sessions", "true")
+	} else {
+		q.Set("allow_placeholder_sessions", "true")
+	}
+	if opts.AllowProductionImport {
+		q.Set("allow_production_import", "true")
+	}
+	if encoded := q.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	if err := b.postRaw(ctx, path, r, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func memoryFilterToQuery(f MemoryFilter) url.Values {
+	q := url.Values{}
+	for k, v := range map[string]string{
+		"q":                       f.Query,
+		"project":                 f.Project,
+		"cwd":                     f.CWD,
+		"git_branch":              f.GitBranch,
+		"agent":                   f.Agent,
+		"type":                    f.Type,
+		"scope":                   f.Scope,
+		"status":                  f.Status,
+		"extractor_method":        f.ExtractorMethod,
+		"source_session_id":       f.SourceSessionID,
+		"source_episode_id":       f.SourceEpisodeID,
+		"source_run_id":           f.SourceRunID,
+		"supersedes_memory_id":    f.SupersedesMemoryID,
+		"superseded_by_memory_id": f.SupersededByMemoryID,
+	} {
+		if v != "" {
+			q.Set(k, v)
+		}
+	}
+	if f.Limit > 0 {
+		q.Set("limit", strconv.Itoa(f.Limit))
+	}
+	if f.TrustedOnly {
+		q.Set("trusted_only", "true")
+	}
+	return q
+}
+
 func (b *httpBackend) ListSecrets(
 	ctx context.Context, f SecretListFilter,
 ) (*SecretFindingList, error) {
@@ -802,6 +945,76 @@ func (b *httpBackend) getJSON(
 		msg, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf(
 			"GET %s: HTTP %d: %s", path, resp.StatusCode, msg,
+		)
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func (b *httpBackend) postJSON(
+	ctx context.Context, path string, in any, out any,
+) error {
+	body, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, b.baseURL+path, bytes.NewReader(body),
+	)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", b.baseURL)
+	b.addAuth(req)
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return errHTTPNotFound
+	}
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf(
+			"POST %s: HTTP %d: %s", path, resp.StatusCode, msg,
+		)
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func (b *httpBackend) postRaw(
+	ctx context.Context, path string, in io.Reader, out any,
+) error {
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, b.baseURL+path, in,
+	)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-ndjson")
+	req.Header.Set("Origin", b.baseURL)
+	b.addAuth(req)
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return errHTTPNotFound
+	}
+	if resp.StatusCode == http.StatusNotImplemented {
+		// A read-only (pg serve) daemon returns 501 for write endpoints.
+		// Surface the shared sentinel so callers can errors.Is it, matching
+		// Sync and ScanSecrets.
+		return fmt.Errorf(
+			"daemon at %s is read-only: %w", b.baseURL, db.ErrReadOnly,
+		)
+	}
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf(
+			"POST %s: HTTP %d: %s", path, resp.StatusCode, msg,
 		)
 	}
 	return json.NewDecoder(resp.Body).Decode(out)

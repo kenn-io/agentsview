@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"path/filepath"
 	"slices"
@@ -885,6 +886,138 @@ func redactMessageSecrets(m db.Message) db.Message {
 	}
 	m.ToolCalls = toolCalls
 	return m
+}
+
+func (b *directBackend) ListMemories(
+	ctx context.Context, f MemoryFilter,
+) (*MemoryList, error) {
+	if err := ValidateMemoryLimit(f.Limit); err != nil {
+		return nil, err
+	}
+	query := memoryFilterToDB(f)
+	if strings.TrimSpace(f.Query) == "" {
+		memories, err := b.db.ListMemories(ctx, query)
+		if err != nil {
+			return nil, err
+		}
+		return &MemoryList{
+			Memories:    memoryResultsFromMemories(memories),
+			TrustedOnly: f.TrustedOnly,
+		}, nil
+	}
+	page, err := b.db.QueryMemories(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	if page.Memories == nil {
+		page.Memories = []db.MemoryResult{}
+	}
+	return &MemoryList{
+		Memories:    page.Memories,
+		TrustedOnly: f.TrustedOnly,
+	}, nil
+}
+
+func memoryResultsFromMemories(memories []db.Memory) []db.MemoryResult {
+	out := make([]db.MemoryResult, 0, len(memories))
+	for _, memory := range memories {
+		out = append(out, db.MemoryResult{Memory: memory})
+	}
+	return out
+}
+
+func (b *directBackend) GetMemory(
+	ctx context.Context, id string,
+) (*db.Memory, error) {
+	return b.db.GetMemory(ctx, id)
+}
+
+func (b *directBackend) QueryMemories(
+	ctx context.Context, req MemoryQuery,
+) (*MemoryQueryResult, error) {
+	if err := ValidateMemoryLimit(req.Limit); err != nil {
+		return nil, err
+	}
+	page, err := b.db.QueryMemories(ctx, db.MemoryQuery{
+		Text:                 req.Query,
+		Project:              req.Project,
+		CWD:                  req.CWD,
+		GitBranch:            req.GitBranch,
+		Agent:                req.Agent,
+		Type:                 req.Type,
+		Scope:                req.Scope,
+		Status:               req.Status,
+		ExtractorMethod:      req.ExtractorMethod,
+		SourceSessionID:      req.SourceSessionID,
+		SourceEpisodeID:      req.SourceEpisodeID,
+		SourceRunID:          req.SourceRunID,
+		SupersedesMemoryID:   req.SupersedesMemoryID,
+		SupersededByMemoryID: req.SupersededByMemoryID,
+		TrustedOnly:          req.TrustedOnly,
+		Limit:                req.Limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if page.Memories == nil {
+		page.Memories = []db.MemoryResult{}
+	}
+	resp := MemoryQueryResult{
+		Memories:    page.Memories,
+		TrustedOnly: req.TrustedOnly,
+		Summary:     BuildMemoryQuerySummary(page.Memories),
+	}
+	if req.IncludeContext {
+		contextText, contextMeta, err := BuildMemoryContext(
+			page.Memories, req.ContextMaxBytes, req.Query,
+		)
+		if err != nil {
+			return nil, err
+		}
+		resp.Context = contextText
+		resp.ContextMeta = contextMeta
+		resp.ContextMemories = MemoryContextResults(page.Memories, contextMeta)
+		resp.ContextSummary = BuildMemoryContextSummary(
+			page.Memories, contextMeta,
+		)
+	}
+	return &resp, nil
+}
+
+func (b *directBackend) ImportMemories(
+	ctx context.Context, r io.Reader, opts db.MemoryImportOptions,
+) (*db.MemoryImportResult, error) {
+	if b.local == nil {
+		return nil, db.ErrReadOnly
+	}
+	result, err := b.local.ImportAcceptedMemoriesJSONLWithOptions(
+		ctx, r, opts,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func memoryFilterToDB(f MemoryFilter) db.MemoryQuery {
+	return db.MemoryQuery{
+		Text:                 f.Query,
+		Project:              f.Project,
+		CWD:                  f.CWD,
+		GitBranch:            f.GitBranch,
+		Agent:                f.Agent,
+		Type:                 f.Type,
+		Scope:                f.Scope,
+		Status:               f.Status,
+		ExtractorMethod:      f.ExtractorMethod,
+		SourceSessionID:      f.SourceSessionID,
+		SourceEpisodeID:      f.SourceEpisodeID,
+		SourceRunID:          f.SourceRunID,
+		SupersedesMemoryID:   f.SupersedesMemoryID,
+		SupersededByMemoryID: f.SupersededByMemoryID,
+		TrustedOnly:          f.TrustedOnly,
+		Limit:                f.Limit,
+	}
 }
 
 const secretSourceChanged = "source changed; cannot reveal"
