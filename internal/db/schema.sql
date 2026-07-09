@@ -368,6 +368,9 @@ CREATE TABLE IF NOT EXISTS recall_evidence (
         REFERENCES sessions(id) ON DELETE CASCADE,
     message_start_ordinal INTEGER NOT NULL,
     message_end_ordinal   INTEGER NOT NULL,
+    message_start_source_uuid TEXT NOT NULL DEFAULT '',
+    message_end_source_uuid   TEXT NOT NULL DEFAULT '',
+    content_digest            TEXT NOT NULL DEFAULT '',
     tool_use_id           TEXT NOT NULL DEFAULT '',
     snippet               TEXT NOT NULL DEFAULT ''
 );

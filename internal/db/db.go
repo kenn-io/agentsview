@@ -1488,6 +1488,18 @@ func (db *DB) migrateColumns() error {
 			"recall_entries", "review_state",
 			"ALTER TABLE recall_entries ADD COLUMN review_state TEXT NOT NULL DEFAULT 'human_reviewed' CHECK (review_state IN ('human_reviewed', 'unreviewed_auto', 'calibrated_auto', 'eval_raw'))",
 		},
+		{
+			"recall_evidence", "message_start_source_uuid",
+			"ALTER TABLE recall_evidence ADD COLUMN message_start_source_uuid TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"recall_evidence", "message_end_source_uuid",
+			"ALTER TABLE recall_evidence ADD COLUMN message_end_source_uuid TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"recall_evidence", "content_digest",
+			"ALTER TABLE recall_evidence ADD COLUMN content_digest TEXT NOT NULL DEFAULT ''",
+		},
 	}
 
 	for _, m := range migrations {

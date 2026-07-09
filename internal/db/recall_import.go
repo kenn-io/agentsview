@@ -99,10 +99,17 @@ func (db *DB) ImportAcceptedRecallEntriesJSONLWithOptions(
 				lineNo, err,
 			)
 		}
-		if _, ok := fields["review_state"]; ok {
+		if field, ok, err := hostControlledRecallImportField(fields); err != nil {
 			return result, fmt.Errorf(
-				"importing recall line %d: review_state is host-controlled",
+				"importing recall line %d: %w",
 				lineNo,
+				err,
+			)
+		} else if ok {
+			return result, fmt.Errorf(
+				"importing recall line %d: %s is host-controlled",
+				lineNo,
+				field,
 			)
 		}
 		var item probeAcceptedRecallEntry
@@ -179,6 +186,11 @@ func (db *DB) ImportAcceptedRecallEntriesJSONLWithOptions(
 					"importing recall line %d: %w", lineNo, err,
 				)
 			}
+			if err := db.bindVerifiedRecallImportEvidence(ctx, &recall); err != nil {
+				return result, fmt.Errorf(
+					"importing recall line %d: %w", lineNo, err,
+				)
+			}
 		} else {
 			recall.ProvenanceOK = false
 		}
@@ -220,6 +232,36 @@ func (db *DB) ImportAcceptedRecallEntriesJSONLWithOptions(
 		return result, err
 	}
 	return result, nil
+}
+
+func hostControlledRecallImportField(
+	fields map[string]json.RawMessage,
+) (string, bool, error) {
+	hostControlledFields := []string{
+		"review_state",
+		"message_start_source_uuid",
+		"message_end_source_uuid",
+		"content_digest",
+	}
+	for _, field := range hostControlledFields {
+		if _, ok := fields[field]; ok {
+			return field, true, nil
+		}
+	}
+	rawEvidence, ok := fields["evidence"]
+	if !ok {
+		return "", false, nil
+	}
+	var evidenceFields map[string]json.RawMessage
+	if err := json.Unmarshal(rawEvidence, &evidenceFields); err != nil {
+		return "", false, fmt.Errorf("invalid evidence JSON: %w", err)
+	}
+	for _, field := range hostControlledFields[1:] {
+		if _, ok := evidenceFields[field]; ok {
+			return "evidence." + field, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 func normalizeProbeAcceptedRecallEntry(m probeAcceptedRecallEntry) probeAcceptedRecallEntry {
@@ -306,6 +348,52 @@ func (db *DB) requireRecallImportEvidence(
 			return err
 		}
 		toolUsesChecked[toolKey] = struct{}{}
+	}
+	return nil
+}
+
+func (db *DB) bindVerifiedRecallImportEvidence(
+	ctx context.Context,
+	recall *RecallEntry,
+) error {
+	if len(recall.Evidence) == 0 {
+		return fmt.Errorf("missing recall evidence")
+	}
+	first := recall.Evidence[0]
+	toolUseIDs := make([]string, 0, len(recall.Evidence))
+	for _, evidence := range recall.Evidence {
+		if evidence.SessionID != first.SessionID ||
+			evidence.MessageStartOrdinal != first.MessageStartOrdinal ||
+			evidence.MessageEndOrdinal != first.MessageEndOrdinal {
+			return fmt.Errorf("recall evidence spans multiple windows")
+		}
+		if evidence.ToolUseID != "" {
+			toolUseIDs = append(toolUseIDs, evidence.ToolUseID)
+		}
+	}
+	window, err := db.BuildRecallEvidenceWindow(
+		ctx,
+		first.SessionID,
+		first.MessageStartOrdinal,
+		first.MessageEndOrdinal,
+	)
+	if err != nil {
+		return err
+	}
+	metadata, err := window.BindSelection(RecallEvidenceSelection{
+		MessageStartOrdinal: first.MessageStartOrdinal,
+		MessageEndOrdinal:   first.MessageEndOrdinal,
+		ToolUseIDs:          toolUseIDs,
+	})
+	if err != nil {
+		return err
+	}
+	for i := range recall.Evidence {
+		recall.Evidence[i].MessageStartSourceUUID =
+			metadata.MessageStartSourceUUID
+		recall.Evidence[i].MessageEndSourceUUID =
+			metadata.MessageEndSourceUUID
+		recall.Evidence[i].ContentDigest = metadata.ContentDigest
 	}
 	return nil
 }

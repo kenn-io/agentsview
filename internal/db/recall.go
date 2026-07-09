@@ -69,13 +69,16 @@ func (m RecallEntry) LifecycleBucket() string {
 }
 
 type RecallEvidence struct {
-	ID                  int64  `json:"id"`
-	EntryID             string `json:"entry_id"`
-	SessionID           string `json:"session_id"`
-	MessageStartOrdinal int    `json:"message_start_ordinal"`
-	MessageEndOrdinal   int    `json:"message_end_ordinal"`
-	ToolUseID           string `json:"tool_use_id,omitempty"`
-	Snippet             string `json:"snippet,omitempty"`
+	ID                     int64  `json:"id"`
+	EntryID                string `json:"entry_id"`
+	SessionID              string `json:"session_id"`
+	MessageStartOrdinal    int    `json:"message_start_ordinal"`
+	MessageEndOrdinal      int    `json:"message_end_ordinal"`
+	MessageStartSourceUUID string `json:"message_start_source_uuid,omitempty"`
+	MessageEndSourceUUID   string `json:"message_end_source_uuid,omitempty"`
+	ContentDigest          string `json:"content_digest,omitempty"`
+	ToolUseID              string `json:"tool_use_id,omitempty"`
+	Snippet                string `json:"snippet,omitempty"`
 }
 
 type RecallQuery struct {
@@ -153,7 +156,9 @@ func scanRecallEvidenceRow(rs rowScanner) (RecallEvidence, error) {
 	var e RecallEvidence
 	err := rs.Scan(
 		&e.ID, &e.EntryID, &e.SessionID, &e.MessageStartOrdinal,
-		&e.MessageEndOrdinal, &e.ToolUseID, &e.Snippet,
+		&e.MessageEndOrdinal, &e.MessageStartSourceUUID,
+		&e.MessageEndSourceUUID, &e.ContentDigest,
+		&e.ToolUseID, &e.Snippet,
 	)
 	return e, err
 }
@@ -263,11 +268,13 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO recall_evidence (
 			entry_id, session_id, message_start_ordinal,
-			message_end_ordinal, tool_use_id, snippet
+			message_end_ordinal, message_start_source_uuid,
+			message_end_source_uuid, content_digest, tool_use_id, snippet
 		)
 		SELECT
 			entry_id, session_id, message_start_ordinal,
-			message_end_ordinal, tool_use_id, snippet
+			message_end_ordinal, message_start_source_uuid,
+			message_end_source_uuid, content_digest, tool_use_id, snippet
 		FROM old_db.recall_evidence
 		WHERE entry_id IN (SELECT id FROM main.recall_entries)
 		  AND session_id IN (SELECT id FROM main.sessions)`); err != nil {
@@ -392,10 +399,12 @@ func insertRecallEntryTx(tx *sql.Tx, m RecallEntry) error {
 		_, err = tx.Exec(`
 			INSERT INTO recall_evidence (
 				entry_id, session_id, message_start_ordinal,
-				message_end_ordinal, tool_use_id, snippet
-			) VALUES (?, ?, ?, ?, ?, ?)`,
+				message_end_ordinal, message_start_source_uuid,
+				message_end_source_uuid, content_digest, tool_use_id, snippet
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			e.EntryID, e.SessionID, e.MessageStartOrdinal,
-			e.MessageEndOrdinal, e.ToolUseID, e.Snippet,
+			e.MessageEndOrdinal, e.MessageStartSourceUUID,
+			e.MessageEndSourceUUID, e.ContentDigest, e.ToolUseID, e.Snippet,
 		)
 		if err != nil {
 			return fmt.Errorf("inserting recall evidence: %w", err)
@@ -1314,7 +1323,8 @@ func (db *DB) listRecallEvidence(
 	}
 	rows, err := db.getReader().QueryContext(ctx, `
 		SELECT id, entry_id, session_id, message_start_ordinal,
-			message_end_ordinal, tool_use_id, snippet
+			message_end_ordinal, message_start_source_uuid,
+			message_end_source_uuid, content_digest, tool_use_id, snippet
 		FROM recall_evidence
 		WHERE entry_id IN (`+listPlaceholders(len(ids))+`)
 		ORDER BY entry_id ASC, id ASC`, args...)

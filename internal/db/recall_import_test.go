@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -39,6 +40,9 @@ func TestImportAcceptedRecallEntriesJSONLImportsReviewedKeepers(t *testing.T) {
 	assert.Equal(t, "human_reviewed", got.ReviewState)
 	assert.False(t, got.ProvenanceOK)
 	require.Len(t, got.Evidence, 1)
+	assert.Empty(t, got.Evidence[0].MessageStartSourceUUID)
+	assert.Empty(t, got.Evidence[0].MessageEndSourceUUID)
+	assert.Empty(t, got.Evidence[0].ContentDigest)
 	assert.Equal(t, "toolu_1", got.Evidence[0].ToolUseID)
 	assert.Equal(t, 3, got.Evidence[0].MessageStartOrdinal)
 	assert.Equal(t, 7, got.Evidence[0].MessageEndOrdinal)
@@ -194,6 +198,10 @@ func TestImportAcceptedRecallEntriesJSONLCreatesPlaceholderSourceSession(t *test
 	assert.Equal(t, "s-missing", got.SourceSessionID)
 	assert.Equal(t, "human_reviewed", got.ReviewState)
 	assert.False(t, got.ProvenanceOK)
+	require.Len(t, got.Evidence, 1)
+	assert.Empty(t, got.Evidence[0].MessageStartSourceUUID)
+	assert.Empty(t, got.Evidence[0].MessageEndSourceUUID)
+	assert.Empty(t, got.Evidence[0].ContentDigest)
 	session, err := d.GetSession(context.Background(), "s-missing")
 	require.NoError(t, err)
 	require.NotNil(t, session)
@@ -217,6 +225,37 @@ func TestImportAcceptedRecallEntriesJSONLRejectsReviewStateInput(t *testing.T) {
 	got, getErr := d.GetRecallEntry(context.Background(), "m1")
 	require.NoError(t, getErr)
 	assert.Nil(t, got)
+}
+
+func TestImportAcceptedRecallEntriesJSONLRejectsHostEvidenceMetadataInput(
+	t *testing.T,
+) {
+	tests := []struct {
+		name  string
+		field string
+	}{
+		{name: "start source uuid", field: `"message_start_source_uuid":"spoofed"`},
+		{name: "end source uuid", field: `"message_end_source_uuid":"spoofed"`},
+		{name: "content digest", field: `"content_digest":"spoofed"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			input := strings.NewReader(`
+{"candidate_id":"m1","type":"fact","scope":"project","title":"Spoofed evidence","body":"The payload must not choose host evidence metadata.","session_id":"s-missing","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0,` + tt.field + `}}
+`)
+
+			_, err := d.ImportAcceptedRecallEntriesJSONL(
+				context.Background(), input,
+			)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "host-controlled")
+			got, getErr := d.GetRecallEntry(context.Background(), "m1")
+			require.NoError(t, getErr)
+			assert.Nil(t, got)
+		})
+	}
 }
 
 func TestImportAcceptedRecallEntriesJSONLRequireExistingSessionsRejectsMissingSession(t *testing.T) {
@@ -280,6 +319,9 @@ func TestImportAcceptedRecallEntriesJSONLRequireExistingSessionsValidatesEvidenc
 			ToolUseID: "toolu_1",
 		},
 	}
+	for i := range messages {
+		messages[i].SourceUUID = fmt.Sprintf("source-%d", messages[i].Ordinal)
+	}
 	insertMessages(t, d, messages...)
 	input := strings.NewReader(`
 {"candidate_id":"m1","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","cwd":"/repo/agentsview","git_branch":"main","agent":"codex","session_id":"s1","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7,"tool_use_ids":["toolu_1"]}}
@@ -300,6 +342,9 @@ func TestImportAcceptedRecallEntriesJSONLRequireExistingSessionsValidatesEvidenc
 	assert.True(t, got.ProvenanceOK)
 	require.Len(t, got.Evidence, 1)
 	assert.Equal(t, "toolu_1", got.Evidence[0].ToolUseID)
+	assert.Equal(t, "source-3", got.Evidence[0].MessageStartSourceUUID)
+	assert.Equal(t, "source-7", got.Evidence[0].MessageEndSourceUUID)
+	assert.Len(t, got.Evidence[0].ContentDigest, 64)
 }
 
 func TestImportAcceptedRecallEntriesJSONLRequireExistingSessionsRejectsMissingToolUse(t *testing.T) {
