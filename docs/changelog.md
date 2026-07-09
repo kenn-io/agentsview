@@ -3,6 +3,23 @@ title: Changelog
 description: Release history for AgentsView
 ---
 
+## 0.37.3
+<small>2026-07-09</small>
+
+**Bug fixes**
+
+- Restore **optimized SQLite builds for Linux release binaries and Docker
+  images** by preserving Go's default `-O2 -g` cgo flags when overriding
+  `CGO_CFLAGS`, improving full-text search and query performance in those
+  artifacts.
+
+**Acknowledgements**
+
+- Thanks to [Wes McKinney](https://github.com/wesm) for restoring optimized
+  release and Docker SQLite builds.
+
+---
+
 ## 0.37.2
 <small>2026-07-08</small>
 
