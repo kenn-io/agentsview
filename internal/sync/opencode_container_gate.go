@@ -300,6 +300,38 @@ func (e *Engine) finishSQLiteContainerPass(incomplete, fullDiscovery bool) {
 	}
 }
 
+// dropTrustedSQLiteContainerSessionForStorage removes a processed storage
+// session's ID from its root's trusted container membership. From the
+// moment a file-backed storage session is processed, the archive's
+// canonical copy for that ID is the storage one, so a same-ID SQLite row —
+// even under an unchanged container state — no longer matches what its
+// membership verified. Without this, a storage JSON that arrives and
+// disappears entirely between full passes (both legs via watcher
+// changed-path syncs, which never re-promote containers) would leave the
+// stale membership in place, and the re-exposed row would gate-skip
+// forever while the archive kept the interim storage copy. The next fully
+// verified pass re-adds the ID once the row is actually re-verified.
+func (e *Engine) dropTrustedSQLiteContainerSessionForStorage(
+	agent parser.AgentType, sessionPath string,
+) {
+	// sessionPath is root/storage/<sessionSubdir>/<project>/<id>.json,
+	// mirroring the root derivation in StatOpenCodeStorageSessionState.
+	sessionID := strings.TrimSuffix(filepath.Base(sessionPath), ".json")
+	if sessionID == "" {
+		return
+	}
+	root := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(sessionPath))))
+	src := resolveOpenCodeFormatSource(agent, root)
+	if src.DBPath == "" {
+		return
+	}
+	e.containerMu.Lock()
+	defer e.containerMu.Unlock()
+	if trusted, ok := e.trustedSQLiteContainers[src.DBPath]; ok {
+		delete(trusted.sessions, sessionID)
+	}
+}
+
 // clearTrustedSQLiteContainers drops every trusted container state. Called
 // by resync, which rebuilds the archive from scratch and must re-verify
 // every session against it.

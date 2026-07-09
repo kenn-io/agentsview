@@ -3847,6 +3847,17 @@ func (e *Engine) processProviderFile(
 		return processResult{skip: true}, true
 	}
 
+	// Processing a file-backed storage session makes (or confirms) the
+	// storage copy as the archive's canonical content for its ID, so a
+	// same-ID SQLite row in this root's container is no longer backed by
+	// what its trusted membership verified. Drop it so a storage copy
+	// that appears and disappears entirely between full passes still
+	// forces the re-exposed row to re-verify (see
+	// dropTrustedSQLiteContainerSessionForStorage).
+	if sessionPath := e.openCodeStorageSessionPath(file); sessionPath != "" {
+		e.dropTrustedSQLiteContainerSessionForStorage(file.Agent, sessionPath)
+	}
+
 	// OpenCode-family file-backed storage gate: when the session's
 	// per-file stat signature matches the last verified pass, its parse
 	// inputs are unchanged, so skip before re-reading the whole message

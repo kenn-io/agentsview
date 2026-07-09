@@ -5431,6 +5431,84 @@ func TestOpenCodeHybridFullyShadowedContainerDropsStaleTrust(t *testing.T) {
 	)
 }
 
+// TestOpenCodeHybridWatcherShadowCycleDropsRowTrust pins the watcher-path
+// shadow/unshadow cycle: a storage JSON for a trusted SQLite row arrives
+// via a changed-path sync (which replaces the archived row but never
+// re-promotes containers) and disappears again before any full pass
+// observes the shadowed state. Processing the storage session must drop
+// the row's trusted membership, or the next full pass — container state
+// unchanged, membership still verified — would gate-skip the re-exposed
+// row forever and the archive would keep the interim storage copy.
+func TestOpenCodeHybridWatcherShadowCycleDropsRowTrust(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	const sessionID = "oc-watcher-shadow"
+	sqlite := createOpenCodeDB(t, env.opencodeDir)
+	sqlite.addProject(t, "proj-1", "/home/user/code/app")
+	sqlite.addSession(t, sessionID, "proj-1", 1704067200000, 1704067299000)
+	sqlite.addMessage(t, "msg-q1", sessionID, "user", 1704067200000)
+	sqlite.addTextPart(
+		t, "part-q1", sessionID, "msg-q1",
+		"sqlite canonical question", 1704067200000,
+	)
+
+	// The verified pass trusts the container with the row's membership.
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+	})
+
+	// A storage JSON for the same session arrives and is synced through
+	// the watcher's changed-path pass, replacing the archived row.
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	sessionPath := storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/app", "Watcher Shadow",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-s1", "assistant", 1704067201000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-s1", "part-s1",
+		"storage interim reply", 1704067201000,
+	)
+	storageMtime := time.UnixMilli(1704067205000)
+	require.NoError(t, filepath.WalkDir(
+		filepath.Join(env.opencodeDir, "storage"),
+		func(p string, _ fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			return os.Chtimes(p, storageMtime, storageMtime)
+		},
+	), "backdate storage tree")
+	env.engine.SyncPaths([]string{sessionPath})
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID, "storage interim reply",
+	)
+
+	// The storage copy disappears again without the watcher observing it
+	// and without any full pass having seen the shadowed state; the DB
+	// never changed.
+	require.NoError(t, os.Remove(sessionPath), "remove session json")
+	require.NoError(t, os.RemoveAll(filepath.Join(
+		env.opencodeDir, "storage", "message", sessionID,
+	)), "remove message dir")
+	require.NoError(t, os.RemoveAll(filepath.Join(
+		env.opencodeDir, "storage", "part", "msg-s1",
+	)), "remove part dir")
+
+	// The full pass must re-verify the re-exposed row: it is newer than
+	// the interim storage archive and takes the session back.
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+	})
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID, "sqlite canonical question",
+	)
+}
+
 // TestFindSourceFileSkipsHybridRootMissingSession covers the
 // multi-root shadowing case: an early hybrid root with an
 // opencode.db that lacks the requested session must not shadow a
