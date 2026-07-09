@@ -353,6 +353,8 @@ CREATE INDEX IF NOT EXISTS idx_recall_entries_source_episode
     ON recall_entries(source_episode_id);
 CREATE INDEX IF NOT EXISTS idx_recall_entries_updated
     ON recall_entries(updated_at DESC, id);
+CREATE INDEX IF NOT EXISTS idx_recall_entries_supersession
+    ON recall_entries(supersedes_entry_id, superseded_by_entry_id);
 
 CREATE TABLE IF NOT EXISTS recall_evidence (
     id                    INTEGER PRIMARY KEY,

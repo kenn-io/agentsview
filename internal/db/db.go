@@ -1154,133 +1154,6 @@ func readUserVersion(conn *sql.DB) (int, error) {
 	return version, nil
 }
 
-// migrateMemoriesToRecall renames the pre-release "memories" tables to
-// their "recall_entries" names, preserving every row. Archives written by
-// development builds of this branch carry the old names; schema.sql has
-// already run by the time this is called, so empty recall_entries /
-// recall_evidence tables may exist alongside the populated legacy ones.
-// Those empty tables are dropped before the rename, and the derived FTS
-// indexes are rebuilt under the new names afterwards.
-func (db *DB) migrateMemoriesToRecall(w *writerHandle) error {
-	var legacy int
-	if err := w.QueryRow(
-		"SELECT count(*) FROM sqlite_master" +
-			" WHERE type='table' AND name='memories'",
-	).Scan(&legacy); err != nil {
-		return fmt.Errorf("probing legacy memories table: %w", err)
-	}
-	if legacy == 0 {
-		return nil
-	}
-
-	var newRows int
-	if err := w.QueryRow(
-		"SELECT count(*) FROM recall_entries",
-	).Scan(&newRows); err != nil {
-		return fmt.Errorf("counting recall_entries rows: %w", err)
-	}
-	if newRows > 0 {
-		// Both tables hold data. Refuse to guess which is
-		// authoritative and keep the legacy table untouched so no
-		// rows are lost.
-		log.Printf(
-			"migration: legacy memories table left in place:"+
-				" recall_entries already has %d rows", newRows,
-		)
-		return nil
-	}
-
-	stmts := []string{
-		// The recall tables were created empty by schema.sql moments
-		// ago (guarded above); dropping them and their derived FTS
-		// objects loses nothing.
-		"DROP TABLE IF EXISTS recall_evidence",
-		"DROP TABLE IF EXISTS recall_entries",
-		"DROP TABLE IF EXISTS recall_entries_fts",
-		"DROP TABLE IF EXISTS recall_evidence_fts",
-		// Legacy derived objects; rebuilt under the new names below.
-		"DROP TRIGGER IF EXISTS memories_ai",
-		"DROP TRIGGER IF EXISTS memories_ad",
-		"DROP TRIGGER IF EXISTS memories_au",
-		"DROP TRIGGER IF EXISTS memory_evidence_ai",
-		"DROP TRIGGER IF EXISTS memory_evidence_ad",
-		"DROP TRIGGER IF EXISTS memory_evidence_au",
-		"DROP TABLE IF EXISTS memories_fts",
-		"DROP TABLE IF EXISTS memory_evidence_fts",
-		"DROP INDEX IF EXISTS idx_memories_context",
-		"DROP INDEX IF EXISTS idx_memories_type_scope",
-		"DROP INDEX IF EXISTS idx_memories_source_session",
-		"DROP INDEX IF EXISTS idx_memories_source_episode",
-		"DROP INDEX IF EXISTS idx_memories_updated",
-		"DROP INDEX IF EXISTS idx_memories_supersession",
-		"DROP INDEX IF EXISTS idx_memory_evidence_memory",
-		"DROP INDEX IF EXISTS idx_memory_evidence_session",
-		"ALTER TABLE memories RENAME TO recall_entries",
-		"ALTER TABLE memory_evidence RENAME TO recall_evidence",
-	}
-	for _, stmt := range stmts {
-		if _, err := w.Exec(stmt); err != nil {
-			return fmt.Errorf("running %q: %w", stmt, err)
-		}
-	}
-
-	columnRenames := []struct {
-		table, from, to string
-	}{
-		{"recall_entries", "supersedes_memory_id", "supersedes_entry_id"},
-		{"recall_entries", "superseded_by_memory_id", "superseded_by_entry_id"},
-		{"recall_evidence", "memory_id", "entry_id"},
-	}
-	for _, cr := range columnRenames {
-		var count int
-		if err := w.QueryRow(fmt.Sprintf(
-			"SELECT count(*) FROM pragma_table_info('%s')"+
-				" WHERE name = '%s'", cr.table, cr.from,
-		)).Scan(&count); err != nil {
-			return fmt.Errorf(
-				"probing %s.%s: %w", cr.table, cr.from, err,
-			)
-		}
-		if count == 0 {
-			continue
-		}
-		if _, err := w.Exec(fmt.Sprintf(
-			"ALTER TABLE %s RENAME COLUMN %s TO %s",
-			cr.table, cr.from, cr.to,
-		)); err != nil {
-			return fmt.Errorf(
-				"renaming %s.%s: %w", cr.table, cr.from, err,
-			)
-		}
-	}
-
-	if _, err := w.Exec(`
-		CREATE INDEX IF NOT EXISTS idx_recall_entries_context
-		    ON recall_entries(project, cwd, git_branch, agent);
-		CREATE INDEX IF NOT EXISTS idx_recall_entries_type_scope
-		    ON recall_entries(type, scope, status);
-		CREATE INDEX IF NOT EXISTS idx_recall_entries_source_session
-		    ON recall_entries(source_session_id);
-		CREATE INDEX IF NOT EXISTS idx_recall_entries_source_episode
-		    ON recall_entries(source_episode_id);
-		CREATE INDEX IF NOT EXISTS idx_recall_entries_updated
-		    ON recall_entries(updated_at DESC, id);
-		CREATE INDEX IF NOT EXISTS idx_recall_evidence_entry
-		    ON recall_evidence(entry_id);
-		CREATE INDEX IF NOT EXISTS idx_recall_evidence_session
-		    ON recall_evidence(session_id)`,
-	); err != nil {
-		return fmt.Errorf("recreating recall indexes: %w", err)
-	}
-
-	if err := db.ensureRecallSearchIndexes(w); err != nil {
-		return err
-	}
-
-	log.Printf("migration: renamed memories tables to recall_entries")
-	return nil
-}
-
 // migrateColumns adds columns introduced by this branch to
 // databases created by older releases. Each migration is
 // idempotent — it only runs when the column is missing.
@@ -1288,10 +1161,6 @@ func (db *DB) migrateColumns() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	w := db.getWriter()
-
-	if err := db.migrateMemoriesToRecall(w); err != nil {
-		return fmt.Errorf("migrating memories to recall_entries: %w", err)
-	}
 
 	migrations := []struct {
 		table  string
@@ -1612,14 +1481,6 @@ func (db *DB) migrateColumns() error {
 			"worktree_project_mappings", "layout",
 			"ALTER TABLE worktree_project_mappings ADD COLUMN layout TEXT NOT NULL DEFAULT 'explicit'",
 		},
-		{
-			"recall_entries", "supersedes_entry_id",
-			"ALTER TABLE recall_entries ADD COLUMN supersedes_entry_id TEXT NOT NULL DEFAULT ''",
-		},
-		{
-			"recall_entries", "superseded_by_entry_id",
-			"ALTER TABLE recall_entries ADD COLUMN superseded_by_entry_id TEXT NOT NULL DEFAULT ''",
-		},
 	}
 
 	for _, m := range migrations {
@@ -1687,11 +1548,6 @@ func (db *DB) migrateColumns() error {
 	}
 
 	if _, err := w.Exec(`
-		CREATE INDEX IF NOT EXISTS idx_recall_entries_supersession
-		ON recall_entries(supersedes_entry_id, superseded_by_entry_id);
-		CREATE INDEX IF NOT EXISTS idx_recall_entries_source_episode
-		ON recall_entries(source_episode_id);
-
 		CREATE TABLE IF NOT EXISTS remote_skipped_files (
 			host       TEXT NOT NULL,
 			path       TEXT NOT NULL,
@@ -2776,18 +2632,6 @@ func (db *DB) init() error {
 		}
 	}
 
-	if err := db.ensureRecallSearchIndexes(w); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// ensureRecallSearchIndexes creates the recall FTS tables (FTS5 with an
-// FTS4 fallback) and backfills them from the base tables when they are
-// newly created. Idempotent; also used after the memories->recall_entries
-// rename migration to rebuild the derived search indexes.
-func (db *DB) ensureRecallSearchIndexes(w *writerHandle) error {
 	var recallFTSCount int
 	if err := w.QueryRow(
 		"SELECT count(*) FROM sqlite_master" +
