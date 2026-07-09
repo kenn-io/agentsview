@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -118,7 +119,7 @@ func parseOpenCodeDBSession(
 	}
 	defer db.Close()
 
-	projects, err := loadOpenCodeProjects(db)
+	projects, err := loadOpenCodeProjectsCached(db, dbPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf(
 			"loading opencode projects: %w", err,
@@ -259,6 +260,55 @@ func loadOpenCodeProjects(
 		projects[p.id] = p.worktree
 	}
 	return projects, rows.Err()
+}
+
+type openCodeProjectsCacheEntry struct {
+	state    SQLiteContainerState
+	projects map[string]string
+}
+
+// openCodeProjectsCache memoizes the project table per shared SQLite DB,
+// keyed by the container's change-detection state. The engine parses each
+// session of a container through an independent provider instance, so
+// without this cache every parsed session re-queried the full project
+// table — the dominant per-session cost when re-verifying a changed
+// container. Entries hold only a handful of small maps (one per configured
+// container path) and are replaced in place.
+var (
+	openCodeProjectsCacheMu sync.Mutex
+	openCodeProjectsCache   = map[string]openCodeProjectsCacheEntry{}
+)
+
+// loadOpenCodeProjectsCached returns the project→worktree map for the
+// shared DB at dbPath, reusing the previous load while the container state
+// is unchanged. The state is captured before the query, so a write racing
+// the load can only make cached data newer than its key — the next capture
+// then mismatches and reloads. The returned map is shared and must be
+// treated as read-only.
+func loadOpenCodeProjectsCached(
+	db *sql.DB, dbPath string,
+) (map[string]string, error) {
+	state, ok := StatSQLiteContainerState(dbPath)
+	if !ok {
+		return loadOpenCodeProjects(db)
+	}
+	openCodeProjectsCacheMu.Lock()
+	entry, hit := openCodeProjectsCache[dbPath]
+	openCodeProjectsCacheMu.Unlock()
+	if hit && entry.state == state {
+		return entry.projects, nil
+	}
+	projects, err := loadOpenCodeProjects(db)
+	if err != nil {
+		return nil, err
+	}
+	openCodeProjectsCacheMu.Lock()
+	openCodeProjectsCache[dbPath] = openCodeProjectsCacheEntry{
+		state:    state,
+		projects: projects,
+	}
+	openCodeProjectsCacheMu.Unlock()
+	return projects, nil
 }
 
 // openCodeSessionRow is a row from the opencode session table.
