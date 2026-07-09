@@ -34,6 +34,10 @@ func newRecallCommand() *cobra.Command {
 		"server", "",
 		"Remote daemon URL for recall API requests",
 	)
+	cmd.PersistentFlags().String(
+		"server-token-file", "",
+		"File containing bearer token for explicit --server requests",
+	)
 
 	cmd.AddCommand(newRecallListCommand())
 	cmd.AddCommand(newRecallGetCommand())
@@ -53,11 +57,11 @@ func resolveRecallEntryService(
 	if remote == "" {
 		return resolveService(cmd)
 	}
-	cfg, err := config.LoadPFlags(cmd.Flags())
+	token, err := explicitServerToken(cmd)
 	if err != nil {
-		return nil, nil, fmt.Errorf("loading config: %w", err)
+		return nil, nil, err
 	}
-	return service.NewHTTPBackend(remote, cfg.AuthToken, false), func() {}, nil
+	return service.NewHTTPBackend(remote, token, false), func() {}, nil
 }
 
 // resolveWritableRecallEntryService is the write-capable counterpart of
@@ -72,11 +76,11 @@ func resolveWritableRecallEntryService(
 	if remote == "" {
 		return resolveWritableService(cmd)
 	}
-	cfg, err := config.LoadPFlags(cmd.Flags())
+	token, err := explicitServerToken(cmd)
 	if err != nil {
-		return nil, nil, fmt.Errorf("loading config: %w", err)
+		return nil, nil, err
 	}
-	return service.NewHTTPBackend(remote, cfg.AuthToken, false), func() {}, nil
+	return service.NewHTTPBackend(remote, token, false), func() {}, nil
 }
 
 func newRecallListCommand() *cobra.Command {

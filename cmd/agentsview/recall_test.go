@@ -241,9 +241,10 @@ func TestRecallQueryUsesExplicitServerURL(t *testing.T) {
 	assert.Equal(t, "m-remote", got.RecallEntries[0].ID)
 }
 
-func TestRecallQueryExplicitServerURLUsesConfiguredAuthToken(t *testing.T) {
+func TestRecallQueryExplicitServerURLDoesNotSendConfiguredAuthToken(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	t.Setenv("AGENTSVIEW_SERVER_TOKEN", "")
 	require.NoError(t, os.WriteFile(
 		filepath.Join(dataDir, "config.toml"),
 		[]byte("auth_token = \"secret-token\"\n"),
@@ -264,7 +265,35 @@ func TestRecallQueryExplicitServerURLUsesConfiguredAuthToken(t *testing.T) {
 		"--format", "json")
 
 	require.NoError(t, err)
-	assert.Equal(t, "Bearer secret-token", gotAuth)
+	assert.Empty(t, gotAuth)
+	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
+}
+
+func TestRecallQueryExplicitServerURLUsesServerTokenFile(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	t.Setenv("AGENTSVIEW_SERVER_TOKEN", "")
+	tokenFile := filepath.Join(t.TempDir(), "remote-token")
+	require.NoError(t, os.WriteFile(
+		tokenFile, []byte("remote-secret\n"), 0o600,
+	))
+
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(service.RecallQueryResult{}))
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := executeCommand(newRootCommand(),
+		"recall", "--server", srv.URL,
+		"--server-token-file", tokenFile,
+		"query", "remote daemon recall",
+		"--format", "json")
+
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer remote-secret", gotAuth)
 	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
 }
 
@@ -491,6 +520,12 @@ func TestRecallImportHelpDescribesProductionOverrideForAnyDefaultArchive(t *test
 func TestRecallImportExplicitServerURLWithRemoteConfirmation(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	t.Setenv("AGENTSVIEW_SERVER_TOKEN", "")
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dataDir, "config.toml"),
+		[]byte("auth_token = \"local-secret\"\n"),
+		0o600,
+	))
 	path := filepath.Join(t.TempDir(), "accepted-recall.jsonl")
 	input := `{"candidate_id":"m-remote-import","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"recall-session","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
 `
@@ -498,9 +533,11 @@ func TestRecallImportExplicitServerURLWithRemoteConfirmation(t *testing.T) {
 
 	var gotPath string
 	var gotDryRun string
+	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotDryRun = r.URL.Query().Get("dry_run")
+		gotAuth = r.Header.Get("Authorization")
 		require.Equal(t, http.MethodPost, r.Method)
 		w.Header().Set("Content-Type", "application/json")
 		require.NoError(t, json.NewEncoder(w).Encode(db.RecallImportResult{
@@ -519,11 +556,53 @@ func TestRecallImportExplicitServerURLWithRemoteConfirmation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "/api/v1/recall/import", gotPath)
 	assert.Empty(t, gotDryRun)
+	assert.Empty(t, gotAuth)
 	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
 	var result db.RecallImportResult
 	require.NoError(t, json.Unmarshal([]byte(out), &result),
 		"stdout should be valid JSON: %q", out)
 	assert.Equal(t, 1, result.Imported)
+}
+
+func TestRecallImportExplicitServerURLUsesServerTokenFile(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	t.Setenv("AGENTSVIEW_SERVER_TOKEN", "")
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dataDir, "config.toml"),
+		[]byte("auth_token = \"local-secret\"\n"),
+		0o600,
+	))
+	path := filepath.Join(t.TempDir(), "accepted-recall.jsonl")
+	input := `{"candidate_id":"m-remote-import","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"recall-session","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
+`
+	require.NoError(t, os.WriteFile(path, []byte(input), 0o600))
+	tokenFile := filepath.Join(t.TempDir(), "remote-token")
+	require.NoError(t, os.WriteFile(
+		tokenFile, []byte("remote-secret\n"), 0o600,
+	))
+
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(db.RecallImportResult{
+			Imported: 1,
+		}))
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := executeCommand(newRootCommand(),
+		"recall", "--server", srv.URL,
+		"--server-token-file", tokenFile,
+		"import", path,
+		"--yes",
+		"--allow-remote-import",
+		"--format", "json")
+
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer remote-secret", gotAuth)
+	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
 }
 
 func TestRecallQueryJSONIncludesMatchReasons(t *testing.T) {
