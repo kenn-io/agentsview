@@ -126,11 +126,14 @@ func (hs HTTPSync) runMirror(
 	if err := RemoveMirrorTypeConflicts(mirrorRoot, delta.Fetch); err != nil {
 		return SyncStats{}, err
 	}
-	if len(delta.Fetch) > 0 {
+	if len(delta.Fetch) > 0 || hs.Full {
 		// Bootstrap heuristic: past half the corpus a full archive is
 		// cheaper than uploading a huge file list, and it doubles as
-		// the empty-mirror bootstrap (fetch == total).
-		full := len(delta.Fetch)*2 >= delta.Total
+		// the empty-mirror bootstrap (fetch == total). --full bypasses
+		// the stat diff entirely: it is the user's remedy for a stale
+		// or corrupt mirror, which the size/mtime comparison cannot
+		// detect (a same-size same-mtime rewrite, or local bit rot).
+		full := hs.Full || len(delta.Fetch)*2 >= delta.Total
 		err := hs.downloadIntoMirror(ctx, client, targets, delta.Fetch, full, mirrorRoot)
 		var statusErr *StatusError
 		if err != nil && !full && errors.As(err, &statusErr) {

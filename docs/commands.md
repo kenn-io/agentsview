@@ -184,7 +184,7 @@ token = "remote-token"
 With hosts configured, `agentsview sync` (no `--host`) runs the local sync
 first, then syncs each configured host in the order declared using its
 configured transport. `--full` applies to every host; for HTTP hosts it
-bypasses the remote skip cache but still transfers only changed files, and
+re-downloads the full archive and bypasses the remote skip cache, though
 already-stored, current sessions are still skipped (see
 [Incremental Sync](/remote-access/#incremental-sync)). A failing host is
 reported on stderr and skipped so the remaining hosts still run; the command

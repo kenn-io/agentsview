@@ -452,3 +452,44 @@ func sessionSummaries(t *testing.T, database *db.DB) []string {
 	sort.Strings(out)
 	return out
 }
+
+func TestHTTPSyncFullRefreshesMirrorBytes(t *testing.T) {
+	remote := newMirrorTestRemote(t)
+	base := time.Date(2026, 7, 8, 10, 0, 0, 123456789, time.UTC)
+	path := remote.writeSession(t, "a.jsonl", base, "session a")
+	dataDir := t.TempDir()
+	_, hs := newMirrorSync(t, remote, dataDir)
+	_, err := hs.Run(context.Background())
+	require.NoError(t, err)
+
+	// Corrupt the mirror copy preserving size and mtime: invisible to
+	// the stat diff.
+	local, err := safeRemappedRemotePath(MirrorDir(dataDir, "devbox"), path)
+	require.NoError(t, err)
+	good, err := os.ReadFile(local)
+	require.NoError(t, err)
+	info, err := os.Stat(local)
+	require.NoError(t, err)
+	corrupt := bytes.Repeat([]byte("x"), len(good))
+	require.NoError(t, os.WriteFile(local, corrupt, 0o644))
+	require.NoError(t, os.Chtimes(local, info.ModTime(), info.ModTime()))
+
+	// A normal sync sees no delta and leaves the corrupt bytes.
+	_, err = hs.Run(context.Background())
+	require.NoError(t, err)
+	stale, err := os.ReadFile(local)
+	require.NoError(t, err)
+	require.Equal(t, corrupt, stale)
+	require.Len(t, remote.archiveRequests, 1, "no-delta sync must not download")
+
+	// --full forces a full archive refresh into the mirror.
+	hs.Full = true
+	_, err = hs.Run(context.Background())
+	require.NoError(t, err)
+	healed, err := os.ReadFile(local)
+	require.NoError(t, err)
+	assert.Equal(t, good, healed)
+	require.Len(t, remote.archiveRequests, 2)
+	assert.Nil(t, remote.archiveRequests[1].DeltaFiles,
+		"--full must request the full archive, not a delta")
+}
