@@ -280,6 +280,9 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 		  AND session_id IN (SELECT id FROM main.sessions)`); err != nil {
 		return fmt.Errorf("copying recall evidence: %w", err)
 	}
+	if err := reconcileAllRecallEvidenceTx(ctx, tx, true); err != nil {
+		return fmt.Errorf("reconciling copied recall evidence: %w", err)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit recall copy: %w", err)

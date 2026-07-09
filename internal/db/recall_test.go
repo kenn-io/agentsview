@@ -462,6 +462,17 @@ func TestMigrationRecallReviewStateClassifiesLegacyRowsWithoutDataLoss(
 	insertSession(t, d, "placeholder-session", "agentsview", func(s *Session) {
 		s.Machine = "recall-import"
 	})
+	insertMessages(t, d,
+		recallEvidenceMessage(
+			"human-session", 2, "user", "legacy evidence begins", "human-2",
+		),
+		recallEvidenceMessage(
+			"human-session", 3, "assistant", "legacy evidence continues", "human-3",
+		),
+		recallEvidenceMessage(
+			"human-session", 4, "user", "legacy evidence ends", "human-4",
+		),
+	)
 
 	for _, entry := range []RecallEntry{
 		{
@@ -1626,6 +1637,108 @@ func TestCopyRecallEntriesFrom(t *testing.T) {
 	require.NoError(t, err, "search copied recall")
 	require.Len(t, cands, 1, "fts finds copied recall")
 	assert.Equal(t, "m1", cands[0].ID)
+}
+
+func TestCopyRecallEntriesFromReconcilesShiftedEvidence(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "old-evidence.db")
+	srcDB, err := Open(srcPath)
+	require.NoError(t, err)
+	seedRecallEvidenceWindow(t, srcDB, "s1", 10, "stable", "")
+	original := insertVerifiedRecallSelection(
+		t, srcDB, "m1", "s1", 10, 11, []string{"tool-a"},
+	)
+	shifted := shiftedRecallMessages(t, srcDB, "s1", 1)
+	require.NoError(t, srcDB.Close())
+
+	dstPath := filepath.Join(dir, "new-evidence.db")
+	dstDB, err := Open(dstPath)
+	require.NoError(t, err)
+	defer dstDB.Close()
+	insertSession(t, dstDB, "s1", "agentsview")
+	insertMessages(t, dstDB, shifted...)
+
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
+
+	got := requireRecallEntry(t, dstDB, "m1")
+	assert.True(t, got.ProvenanceOK)
+	require.Len(t, got.Evidence, 1)
+	assert.Equal(t, 11, got.Evidence[0].MessageStartOrdinal)
+	assert.Equal(t, 12, got.Evidence[0].MessageEndOrdinal)
+	assert.Equal(t, original.ContentDigest, got.Evidence[0].ContentDigest)
+}
+
+func TestCopyRecallEntriesFromRevokesChangedEvidence(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "old-changed-evidence.db")
+	srcDB, err := Open(srcPath)
+	require.NoError(t, err)
+	seedRecallEvidenceWindow(t, srcDB, "s1", 10, "stable", "")
+	insertVerifiedRecallSelection(
+		t, srcDB, "m1", "s1", 10, 11, []string{"tool-a"},
+	)
+	shifted := shiftedRecallMessages(t, srcDB, "s1", 1)
+	shifted[1].Content = "The cited content changed during resync."
+	shifted[1].ContentLength = len(shifted[1].Content)
+	require.NoError(t, srcDB.Close())
+
+	dstPath := filepath.Join(dir, "new-changed-evidence.db")
+	dstDB, err := Open(dstPath)
+	require.NoError(t, err)
+	defer dstDB.Close()
+	insertSession(t, dstDB, "s1", "agentsview")
+	insertMessages(t, dstDB, shifted...)
+
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
+
+	got := requireRecallEntry(t, dstDB, "m1")
+	assert.False(t, got.ProvenanceOK)
+	require.Len(t, got.Evidence, 1)
+}
+
+func TestCopyRecallEntriesFromFingerprintsVerifiedLegacyEvidence(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "old-legacy-evidence.db")
+	srcDB, err := Open(srcPath)
+	require.NoError(t, err)
+	seedRecallEvidenceWindow(t, srcDB, "s1", 10, "stable", "")
+	_, err = srcDB.InsertRecallEntry(RecallEntry{
+		ID:              "m1",
+		Type:            "fact",
+		Scope:           "project",
+		Status:          "accepted",
+		Title:           "Legacy verified evidence",
+		Body:            "Full resync fingerprints a still-valid legacy range.",
+		SourceSessionID: "s1",
+		Transferable:    true,
+		ProvenanceOK:    true,
+		Evidence: []RecallEvidence{{
+			SessionID:           "s1",
+			MessageStartOrdinal: 10,
+			MessageEndOrdinal:   11,
+			ToolUseID:           "tool-a",
+		}},
+	})
+	require.NoError(t, err)
+	messages, err := srcDB.GetAllMessages(context.Background(), "s1")
+	require.NoError(t, err)
+	require.NoError(t, srcDB.Close())
+
+	dstPath := filepath.Join(dir, "new-legacy-evidence.db")
+	dstDB, err := Open(dstPath)
+	require.NoError(t, err)
+	defer dstDB.Close()
+	insertSession(t, dstDB, "s1", "agentsview")
+	insertMessages(t, dstDB, messages...)
+
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
+
+	got := requireRecallEntry(t, dstDB, "m1")
+	assert.True(t, got.ProvenanceOK)
+	require.Len(t, got.Evidence, 1)
+	assert.Equal(t, "stable-10", got.Evidence[0].MessageStartSourceUUID)
+	assert.Equal(t, "stable-11", got.Evidence[0].MessageEndSourceUUID)
+	assert.Len(t, got.Evidence[0].ContentDigest, 64)
 }
 
 // TestVacuumPreservesRecallEntriesFTSSearchable guards the assumption that VACUUM

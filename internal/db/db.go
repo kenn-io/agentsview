@@ -1536,6 +1536,13 @@ func (db *DB) migrateColumns() error {
 			return err
 		}
 	}
+	// This repair is intentionally idempotent and runs even when no column was
+	// added during this open. That closes the crash window between additive DDL
+	// and its data backfill, and fingerprints trusted rows written by an older
+	// binary before any transcript rewrite can make their baseline ambiguous.
+	if err := db.backfillRecallEvidenceMetadataLocked(w); err != nil {
+		return err
+	}
 	if err := db.createPartialIndexesLocked(w); err != nil {
 		return err
 	}
@@ -1709,6 +1716,37 @@ func (db *DB) backfillRecallReviewStateLocked(w *writerHandle) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing recall review-state backfill: %w", err)
+	}
+	return nil
+}
+
+func (db *DB) backfillRecallEvidenceMetadataLocked(w *writerHandle) error {
+	tx, err := w.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning recall evidence metadata backfill: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var needsBackfill bool
+	if err := tx.QueryRow(`
+		SELECT EXISTS (
+			SELECT 1
+			FROM recall_evidence e
+			JOIN recall_entries r ON r.id = e.entry_id
+			WHERE r.provenance_ok = 1
+			  AND e.content_digest = ''
+		)`).Scan(&needsBackfill); err != nil {
+		return fmt.Errorf("checking recall evidence metadata backfill: %w", err)
+	}
+	if !needsBackfill {
+		return nil
+	}
+	if err := reconcileAllRecallEvidenceTx(
+		context.Background(), tx, true,
+	); err != nil {
+		return fmt.Errorf("backfilling recall evidence metadata: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing recall evidence metadata backfill: %w", err)
 	}
 	return nil
 }

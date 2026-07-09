@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -349,6 +350,13 @@ func writeOneSessionBatchTx(
 		}
 		events := resolveToolResultEvents(msgs)
 		if err := insertToolResultEventsTx(tx, events); err != nil {
+			return 0, err
+		}
+	}
+	if write.ReplaceMessages && sessionExists {
+		if err := reconcileRecallEvidenceForSessionTx(
+			context.Background(), tx, write.Session.ID, false,
+		); err != nil {
 			return 0, err
 		}
 	}

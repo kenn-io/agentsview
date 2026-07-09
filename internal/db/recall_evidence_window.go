@@ -6,10 +6,30 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 )
+
+type recallEvidenceValidationError struct {
+	message string
+}
+
+func (e *recallEvidenceValidationError) Error() string {
+	return e.message
+}
+
+func invalidRecallEvidencef(format string, args ...any) error {
+	return &recallEvidenceValidationError{
+		message: fmt.Sprintf(format, args...),
+	}
+}
+
+func isRecallEvidenceValidationError(err error) bool {
+	var validationErr *recallEvidenceValidationError
+	return errors.As(err, &validationErr)
+}
 
 const (
 	recallEvidenceWindowDigestVersion  = "recall-evidence-window/v1"
@@ -104,12 +124,12 @@ func buildRecallEvidenceWindow(
 ) (RecallEvidenceWindow, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
-		return RecallEvidenceWindow{}, fmt.Errorf(
+		return RecallEvidenceWindow{}, invalidRecallEvidencef(
 			"evidence window session id is required",
 		)
 	}
 	if messageStartOrdinal < 0 || messageEndOrdinal < messageStartOrdinal {
-		return RecallEvidenceWindow{}, fmt.Errorf(
+		return RecallEvidenceWindow{}, invalidRecallEvidencef(
 			"invalid evidence window range %d-%d",
 			messageStartOrdinal,
 			messageEndOrdinal,
@@ -168,7 +188,7 @@ func buildRecallEvidenceWindow(
 	for offset := 0; offset <= messageEndOrdinal-messageStartOrdinal; offset++ {
 		want := messageStartOrdinal + offset
 		if offset >= len(window.Messages) || window.Messages[offset].Ordinal != want {
-			return RecallEvidenceWindow{}, fmt.Errorf(
+			return RecallEvidenceWindow{}, invalidRecallEvidencef(
 				"recall evidence window %s:%d-%d is missing ordinal %d",
 				sessionID,
 				messageStartOrdinal,
@@ -288,13 +308,13 @@ func (window RecallEvidenceWindow) BindSelection(
 	}
 	if window.AuthorizationDigest == "" ||
 		window.AuthorizationDigest != wantAuthorizationDigest {
-		return RecallEvidenceSelectionMetadata{}, fmt.Errorf(
+		return RecallEvidenceSelectionMetadata{}, invalidRecallEvidencef(
 			"recall evidence window authorization digest is invalid",
 		)
 	}
 	if selection.MessageStartOrdinal < 0 ||
 		selection.MessageEndOrdinal < selection.MessageStartOrdinal {
-		return RecallEvidenceSelectionMetadata{}, fmt.Errorf(
+		return RecallEvidenceSelectionMetadata{}, invalidRecallEvidencef(
 			"invalid evidence selection range %d-%d",
 			selection.MessageStartOrdinal,
 			selection.MessageEndOrdinal,
@@ -302,7 +322,7 @@ func (window RecallEvidenceWindow) BindSelection(
 	}
 	if selection.MessageStartOrdinal < window.MessageStartOrdinal ||
 		selection.MessageEndOrdinal > window.MessageEndOrdinal {
-		return RecallEvidenceSelectionMetadata{}, fmt.Errorf(
+		return RecallEvidenceSelectionMetadata{}, invalidRecallEvidencef(
 			"evidence selection %d-%d is outside authorized window %d-%d",
 			selection.MessageStartOrdinal,
 			selection.MessageEndOrdinal,
@@ -321,7 +341,7 @@ func (window RecallEvidenceWindow) BindSelection(
 	}
 	for _, toolUseID := range toolUseIDs {
 		if _, ok := allowedToolUseIDs[toolUseID]; !ok {
-			return RecallEvidenceSelectionMetadata{}, fmt.Errorf(
+			return RecallEvidenceSelectionMetadata{}, invalidRecallEvidencef(
 				"tool use %s is outside authorized window",
 				toolUseID,
 			)
@@ -363,7 +383,7 @@ func (window RecallEvidenceWindow) BindSelection(
 	wantMessageCount := selection.MessageEndOrdinal -
 		selection.MessageStartOrdinal + 1
 	if len(selectedMessages) != wantMessageCount {
-		return RecallEvidenceSelectionMetadata{}, fmt.Errorf(
+		return RecallEvidenceSelectionMetadata{}, invalidRecallEvidencef(
 			"evidence selection %d-%d contains a missing ordinal",
 			selection.MessageStartOrdinal,
 			selection.MessageEndOrdinal,
@@ -371,7 +391,7 @@ func (window RecallEvidenceWindow) BindSelection(
 	}
 	for _, toolUseID := range toolUseIDs {
 		if _, ok := seenToolUseIDs[toolUseID]; !ok {
-			return RecallEvidenceSelectionMetadata{}, fmt.Errorf(
+			return RecallEvidenceSelectionMetadata{}, invalidRecallEvidencef(
 				"tool use %s is outside selected messages",
 				toolUseID,
 			)
@@ -441,7 +461,9 @@ func normalizeRecallEvidenceToolUseIDs(values []string) ([]string, error) {
 	for _, value := range values {
 		value = strings.TrimSpace(value)
 		if value == "" {
-			return nil, fmt.Errorf("evidence selection contains an empty tool use id")
+			return nil, invalidRecallEvidencef(
+				"evidence selection contains an empty tool use id",
+			)
 		}
 		unique[value] = struct{}{}
 	}
@@ -451,4 +473,293 @@ func normalizeRecallEvidenceToolUseIDs(values []string) ([]string, error) {
 	}
 	sort.Strings(result)
 	return result, nil
+}
+
+type recallEvidenceGroupKey struct {
+	entryID              string
+	messageStartOrdinal  int
+	messageEndOrdinal    int
+	messageStartSourceID string
+	messageEndSourceID   string
+	contentDigest        string
+}
+
+type recallEvidenceGroup struct {
+	key         recallEvidenceGroupKey
+	evidenceIDs []int64
+	toolUseIDs  []string
+}
+
+// reconcileRecallEvidenceForSessionTx verifies every currently trusted
+// evidence selection for sessionID against messages and tool calls visible in
+// tx. Invalid selections revoke the parent entry without deleting historical
+// evidence. Structural database failures are returned so the caller's
+// transcript mutation rolls back atomically.
+func reconcileRecallEvidenceForSessionTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionID string,
+	allowLegacyFingerprint bool,
+) error {
+	groups, err := loadTrustedRecallEvidenceGroupsTx(ctx, tx, sessionID)
+	if err != nil {
+		return err
+	}
+	for _, group := range groups {
+		startOrdinal := group.key.messageStartOrdinal
+		endOrdinal := group.key.messageEndOrdinal
+		if group.key.messageStartSourceID != "" &&
+			group.key.messageEndSourceID != "" {
+			startOrdinal, err = uniqueRecallEvidenceOrdinalTx(
+				ctx,
+				tx,
+				sessionID,
+				group.key.messageStartSourceID,
+			)
+			if err != nil {
+				return err
+			}
+			endOrdinal, err = uniqueRecallEvidenceOrdinalTx(
+				ctx,
+				tx,
+				sessionID,
+				group.key.messageEndSourceID,
+			)
+			if err != nil {
+				return err
+			}
+			if startOrdinal < 0 || endOrdinal < startOrdinal {
+				if err := revokeRecallEvidenceEntryTx(
+					ctx, tx, group.key.entryID,
+				); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+
+		window, err := buildRecallEvidenceWindow(
+			ctx,
+			tx,
+			sessionID,
+			startOrdinal,
+			endOrdinal,
+		)
+		if err != nil {
+			if isRecallEvidenceValidationError(err) {
+				if err := revokeRecallEvidenceEntryTx(
+					ctx, tx, group.key.entryID,
+				); err != nil {
+					return err
+				}
+				continue
+			}
+			return err
+		}
+		metadata, err := window.BindSelection(RecallEvidenceSelection{
+			MessageStartOrdinal: startOrdinal,
+			MessageEndOrdinal:   endOrdinal,
+			ToolUseIDs:          group.toolUseIDs,
+		})
+		if err != nil {
+			if isRecallEvidenceValidationError(err) {
+				if err := revokeRecallEvidenceEntryTx(
+					ctx, tx, group.key.entryID,
+				); err != nil {
+					return err
+				}
+				continue
+			}
+			return err
+		}
+		if group.key.contentDigest == "" && !allowLegacyFingerprint ||
+			group.key.contentDigest != "" &&
+				group.key.contentDigest != metadata.ContentDigest {
+			if err := revokeRecallEvidenceEntryTx(
+				ctx, tx, group.key.entryID,
+			); err != nil {
+				return err
+			}
+			continue
+		}
+		for _, evidenceID := range group.evidenceIDs {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE recall_evidence
+				SET message_start_ordinal = ?,
+				    message_end_ordinal = ?,
+				    message_start_source_uuid = ?,
+				    message_end_source_uuid = ?,
+				    content_digest = ?
+				WHERE id = ?`,
+				startOrdinal,
+				endOrdinal,
+				metadata.MessageStartSourceUUID,
+				metadata.MessageEndSourceUUID,
+				metadata.ContentDigest,
+				evidenceID,
+			); err != nil {
+				return fmt.Errorf(
+					"updating reconciled recall evidence %d: %w",
+					evidenceID,
+					err,
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func loadTrustedRecallEvidenceGroupsTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionID string,
+) ([]recallEvidenceGroup, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT e.id, e.entry_id,
+		       e.message_start_ordinal, e.message_end_ordinal,
+		       e.message_start_source_uuid, e.message_end_source_uuid,
+		       e.content_digest, e.tool_use_id
+		FROM recall_evidence e
+		JOIN recall_entries r ON r.id = e.entry_id
+		WHERE e.session_id = ?
+		  AND r.provenance_ok = 1
+		ORDER BY e.entry_id ASC, e.id ASC`,
+		sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying recall evidence to reconcile: %w", err)
+	}
+	defer rows.Close()
+	groups := make([]recallEvidenceGroup, 0)
+	indexes := make(map[recallEvidenceGroupKey]int)
+	for rows.Next() {
+		var evidenceID int64
+		var key recallEvidenceGroupKey
+		var toolUseID string
+		if err := rows.Scan(
+			&evidenceID,
+			&key.entryID,
+			&key.messageStartOrdinal,
+			&key.messageEndOrdinal,
+			&key.messageStartSourceID,
+			&key.messageEndSourceID,
+			&key.contentDigest,
+			&toolUseID,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"scanning recall evidence to reconcile: %w",
+				err,
+			)
+		}
+		index, ok := indexes[key]
+		if !ok {
+			index = len(groups)
+			indexes[key] = index
+			groups = append(groups, recallEvidenceGroup{key: key})
+		}
+		groups[index].evidenceIDs = append(
+			groups[index].evidenceIDs,
+			evidenceID,
+		)
+		if toolUseID != "" {
+			groups[index].toolUseIDs = append(
+				groups[index].toolUseIDs,
+				toolUseID,
+			)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading recall evidence to reconcile: %w", err)
+	}
+	return groups, nil
+}
+
+func uniqueRecallEvidenceOrdinalTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	sessionID string,
+	sourceUUID string,
+) (int, error) {
+	var count int
+	var ordinal sql.NullInt64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*), MIN(ordinal)
+		FROM messages
+		WHERE session_id = ? AND source_uuid = ?`,
+		sessionID,
+		sourceUUID,
+	).Scan(&count, &ordinal); err != nil {
+		return -1, fmt.Errorf(
+			"resolving recall evidence source UUID %s: %w",
+			sourceUUID,
+			err,
+		)
+	}
+	if count != 1 || !ordinal.Valid {
+		return -1, nil
+	}
+	return int(ordinal.Int64), nil
+}
+
+func revokeRecallEvidenceEntryTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	entryID string,
+) error {
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE recall_entries
+		SET provenance_ok = 0,
+		    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE id = ? AND provenance_ok != 0`,
+		entryID,
+	); err != nil {
+		return fmt.Errorf(
+			"revoking recall evidence provenance for %s: %w",
+			entryID,
+			err,
+		)
+	}
+	return nil
+}
+
+func reconcileAllRecallEvidenceTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	allowLegacyFingerprint bool,
+) error {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT DISTINCT e.session_id
+		FROM recall_evidence e
+		JOIN recall_entries r ON r.id = e.entry_id
+		WHERE r.provenance_ok = 1
+		ORDER BY e.session_id ASC`)
+	if err != nil {
+		return fmt.Errorf("querying recall evidence sessions: %w", err)
+	}
+	var sessionIDs []string
+	for rows.Next() {
+		var sessionID string
+		if err := rows.Scan(&sessionID); err != nil {
+			rows.Close()
+			return fmt.Errorf("scanning recall evidence session: %w", err)
+		}
+		sessionIDs = append(sessionIDs, sessionID)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("closing recall evidence sessions: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("reading recall evidence sessions: %w", err)
+	}
+	for _, sessionID := range sessionIDs {
+		if err := reconcileRecallEvidenceForSessionTx(
+			ctx,
+			tx,
+			sessionID,
+			allowLegacyFingerprint,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }

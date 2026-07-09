@@ -1103,6 +1103,13 @@ func (db *DB) ReplaceSessionMessages(
 	} else if err := replaceSessionMessagesTx(tx, sessionID, msgs); err != nil {
 		return err
 	}
+	if !useDiff || len(plan.updates) > 0 {
+		if err := reconcileRecallEvidenceForSessionTx(
+			context.Background(), tx, sessionID, false,
+		); err != nil {
+			return err
+		}
+	}
 	// A full message replacement re-normalizes every row, so clear the
 	// incremental-append marker parse-diff reads (see resetIncrementalMarkerTx).
 	if err := resetIncrementalMarkerTx(tx, sessionID); err != nil {
@@ -1252,6 +1259,13 @@ func (db *DB) ReplaceSessionContent(
 		}
 	} else if err := replaceSessionMessagesTx(tx, sessionID, msgs); err != nil {
 		return err
+	}
+	if !useDiff || len(plan.updates) > 0 {
+		if err := reconcileRecallEvidenceForSessionTx(
+			context.Background(), tx, sessionID, false,
+		); err != nil {
+			return err
+		}
 	}
 	// Every message row is now the full-parse shape, so this row is no
 	// longer incremental-append skew: clear the marker parse-diff reads.
