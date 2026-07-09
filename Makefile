@@ -20,8 +20,12 @@ PRICING_SNAPSHOT_FILE := internal/pricing/snapshot/litellm_snapshot.json.gz
 # drift from the amalgamation mattn/go-sqlite3 statically links. Compile
 # against the bundled amalgamation's own header instead, mirroring the
 # Linux release workflow in .github/workflows/release.yml.
+# Setting CGO_CFLAGS replaces Go's built-in default of "-O2 -g", so restate
+# it explicitly or the SQLite amalgamation compiles unoptimized (2-3x slower
+# queries, caught by the bench gate). Caller-provided flags stay last so
+# they can still override.
 SQLITE_INCLUDE_DIR := .sqlite-include
-export CGO_CFLAGS += -I$(CURDIR)/$(SQLITE_INCLUDE_DIR)
+export CGO_CFLAGS := -O2 -g -I$(CURDIR)/$(SQLITE_INCLUDE_DIR) $(CGO_CFLAGS)
 
 GOPATH_FIRST := $(shell go env GOPATH | cut -d: -f1)
 AIR_BIN := $(shell if command -v air >/dev/null 2>&1; then command -v air; \
