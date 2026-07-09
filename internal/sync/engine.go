@@ -153,12 +153,13 @@ type Engine struct {
 
 	// containerMu guards the OpenCode-family shared-SQLite freshness
 	// gate (see opencode_container_gate.go). trustedSQLiteContainers
-	// maps a container DB path to its state at the end of the last
-	// pass that verified every one of its sessions; containerPass is
-	// the bookkeeping for the pass currently running (nil outside
-	// passes). Both are in-memory only: a restart re-verifies once.
+	// maps a container DB path to its state and verified session-ID
+	// set at the end of the last pass that verified every one of its
+	// discovered sessions; containerPass is the bookkeeping for the
+	// pass currently running (nil outside passes). Both are in-memory
+	// only: a restart re-verifies once.
 	containerMu             gosync.Mutex
-	trustedSQLiteContainers map[string]parser.SQLiteContainerState
+	trustedSQLiteContainers map[string]trustedSQLiteContainer
 	containerPass           *sqliteContainerPass
 
 	// storageTrustMu guards the per-session freshness gate for

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -5250,6 +5251,100 @@ func TestOpenCodeHybridRootSyncsSQLiteSessions(t *testing.T) {
 		t, env.db, "opencode:"+duplicateID,
 		"canonical storage reply",
 	)
+}
+
+// TestOpenCodeHybridUnshadowedSQLiteSessionParsesAfterStorageRemoval pins
+// the container gate against hybrid shadow removal: a SQLite row hidden by
+// a same-ID storage JSON during the verified pass becomes discoverable when
+// the storage copy is deleted, while the DB — and so its trusted state — is
+// untouched. The newly exposed row must be parsed and take over the
+// session, not gate-skipped as part of an unchanged container.
+func TestOpenCodeHybridUnshadowedSQLiteSessionParsesAfterStorageRemoval(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	const sessionID = "oc-unshadow"
+	sessionPath := storage.addSession(
+		t, "global", sessionID,
+		"/home/user/code/app", "Unshadow",
+		1704067200000, 1704067205000,
+	)
+	storage.addMessage(
+		t, sessionID, "msg-s1", "assistant", 1704067201000, nil,
+	)
+	storage.addTextPart(
+		t, sessionID, "msg-s1", "part-s1",
+		"storage canonical reply", 1704067201000,
+	)
+	// The archived storage session's mtime is a composite over the storage
+	// tree's files and directories; backdate the whole tree so the SQLite
+	// copy's updated time is comparably newer.
+	storageMtime := time.UnixMilli(1704067205000)
+	require.NoError(t, filepath.WalkDir(
+		filepath.Join(env.opencodeDir, "storage"),
+		func(p string, _ fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			return os.Chtimes(p, storageMtime, storageMtime)
+		},
+	), "backdate storage tree")
+
+	// The SQLite copy is newer than the storage copy from the start, so
+	// once exposed it must supersede the preserved storage archive; while
+	// the storage JSON exists, the same-ID shadow keeps the row out of
+	// discovery regardless of recency.
+	sqlite := createOpenCodeDB(t, env.opencodeDir)
+	sqlite.addProject(t, "proj-1", "/home/user/code/app")
+	sqlite.addSession(t, sessionID, "proj-1", 1704067200000, 1704067299000)
+	sqlite.addMessage(t, "msg-q1", sessionID, "user", 1704067200000)
+	sqlite.addTextPart(
+		t, "part-q1", sessionID, "msg-q1",
+		"sqlite only question", 1704067200000,
+	)
+	// A second, unshadowed row makes the verified pass discover the
+	// container at all — a fully shadowed container is never promoted, so
+	// only this row's presence puts the container's trust on the line.
+	const otherID = "oc-unshadow-other"
+	sqlite.addSession(t, otherID, "proj-1", 1704067200000, 1704067205000)
+	sqlite.addMessage(t, "msg-o1", otherID, "user", 1704067200000)
+	sqlite.addTextPart(
+		t, "part-o1", otherID, "msg-o1",
+		"other sqlite question", 1704067200000,
+	)
+
+	// The verified pass sees the storage copy and the unshadowed SQLite
+	// row; the shadowed row stays out of discovery, and the container is
+	// promoted to trusted with only the unshadowed row verified.
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 2,
+		Synced:        2,
+	})
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID, "storage canonical reply",
+	)
+
+	// Removing the storage copy exposes the SQLite row without touching
+	// the DB, so the container still matches its trusted state.
+	require.NoError(t, os.Remove(sessionPath), "remove session json")
+	require.NoError(t, os.RemoveAll(filepath.Join(
+		env.opencodeDir, "storage", "message", sessionID,
+	)), "remove message dir")
+	require.NoError(t, os.RemoveAll(filepath.Join(
+		env.opencodeDir, "storage", "part", "msg-s1",
+	)), "remove part dir")
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 2,
+		Synced:        1,
+		Skipped:       1,
+	})
+	assertMessageContent(
+		t, env.db, "opencode:"+sessionID, "sqlite only question",
+	)
+	virtualPath := parser.OpenCodeSQLiteVirtualPath(sqlite.path, sessionID)
+	assert.Equal(t, virtualPath,
+		env.engine.FindSourceFile("opencode:"+sessionID),
+		"the session must now resolve to the SQLite source")
 }
 
 // TestFindSourceFileSkipsHybridRootMissingSession covers the

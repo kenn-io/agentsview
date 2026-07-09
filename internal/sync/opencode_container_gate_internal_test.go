@@ -66,8 +66,13 @@ func TestSQLiteContainerPassPromotesOnlyPreDiscoveryCaptures(t *testing.T) {
 		e.noteSQLiteContainerResult(dbPath+"#ses-2", true)
 		e.finishSQLiteContainerPass(false)
 		require.Contains(t, e.trustedSQLiteContainers, dbPath)
-		assert.Equal(t, pre, e.trustedSQLiteContainers[dbPath],
+		trusted := e.trustedSQLiteContainers[dbPath]
+		assert.Equal(t, pre, trusted.state,
 			"trusted state must be exactly the pre-discovery capture")
+		assert.Equal(t,
+			map[string]struct{}{"ses-1": {}, "ses-2": {}},
+			trusted.sessions,
+			"trusted set must be exactly the verified session IDs")
 	})
 }
 
@@ -84,8 +89,8 @@ func TestSQLiteContainerPassFailsOnCaptureDiscoveryMismatch(t *testing.T) {
 	require.True(t, ok, "container state must be readable")
 	// The container is trusted at the pre-discovery state, as after a
 	// fully verified idle pass.
-	e.trustedSQLiteContainers = map[string]parser.SQLiteContainerState{
-		dbPath: pre,
+	e.trustedSQLiteContainers = map[string]trustedSQLiteContainer{
+		dbPath: {state: pre, sessions: map[string]struct{}{"ses-1": {}}},
 	}
 
 	// The container changes inside the capture-discovery window.
@@ -105,6 +110,47 @@ func TestSQLiteContainerPassFailsOnCaptureDiscoveryMismatch(t *testing.T) {
 
 	e.noteSQLiteContainerResult(file.Path, true)
 	e.finishSQLiteContainerPass(false)
-	assert.Equal(t, pre, e.trustedSQLiteContainers[dbPath],
+	assert.Equal(t, pre, e.trustedSQLiteContainers[dbPath].state,
 		"a mismatched container must not be promoted past its trusted state")
+}
+
+// TestSQLiteContainerGateParsesNewlyUnshadowedSession pins the hybrid-root
+// invariant: hybrid discovery drops SQLite rows shadowed by a same-ID
+// storage JSON, so the discoverable row set can grow — a storage JSON
+// removed while the DB is untouched exposes its row — without the container
+// state changing. Trust therefore records which session IDs the verified
+// pass discovered, and only those may gate-skip; a newly exposed row was
+// never verified against the archive and must parse.
+func TestSQLiteContainerGateParsesNewlyUnshadowedSession(t *testing.T) {
+	e := &Engine{}
+	dbPath, _ := newContainerTestDB(t)
+	state, ok := parser.StatSQLiteContainerState(dbPath)
+	require.True(t, ok, "container state must be readable")
+
+	// A fully verified pass discovered only ses-1; ses-2's row was
+	// shadowed by its storage JSON at the time.
+	verified := parser.DiscoveredFile{
+		Agent: parser.AgentOpenCode, Path: dbPath + "#ses-1",
+	}
+	e.beginSQLiteContainerPass(
+		[]parser.DiscoveredFile{verified},
+		map[string]parser.SQLiteContainerState{dbPath: state},
+	)
+	e.noteSQLiteContainerResult(verified.Path, true)
+	e.finishSQLiteContainerPass(false)
+	require.Contains(t, e.trustedSQLiteContainers, dbPath)
+
+	// The storage JSON is removed; the DB is untouched. The next pass
+	// discovers ses-2's row for the first time.
+	exposed := parser.DiscoveredFile{
+		Agent: parser.AgentOpenCode, Path: dbPath + "#ses-2",
+	}
+	e.beginSQLiteContainerPass(
+		[]parser.DiscoveredFile{verified, exposed},
+		map[string]parser.SQLiteContainerState{dbPath: state},
+	)
+	assert.True(t, e.sqliteContainerSourceFresh(verified),
+		"the verified session must still gate-skip")
+	assert.False(t, e.sqliteContainerSourceFresh(exposed),
+		"a newly exposed row must parse despite the unchanged container")
 }

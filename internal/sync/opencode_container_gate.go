@@ -31,19 +31,18 @@ var openCodeFamilySQLiteAgents = []parser.AgentType{
 	parser.AgentIcodemate,
 }
 
-// sqliteContainerPathForFile maps a discovered file to its shared SQLite
-// container path, or "" when the file is not an OpenCode-family SQLite
-// virtual source (storage-mode JSON sessions included).
-func sqliteContainerPathForFile(file parser.DiscoveredFile) string {
+// sqliteContainerSourceForFile maps a discovered file to its shared SQLite
+// container path and session ID, or ok=false when the file is not an
+// OpenCode-family SQLite virtual source (storage-mode JSON sessions
+// included).
+func sqliteContainerSourceForFile(
+	file parser.DiscoveredFile,
+) (dbPath, sessionID string, ok bool) {
 	dbName := openCodeFormatDBName(file.Agent)
 	if dbName == "" {
-		return ""
+		return "", "", false
 	}
-	dbPath, _, ok := parser.ParseVirtualSourcePathForBase(file.Path, dbName)
-	if !ok {
-		return ""
-	}
-	return dbPath
+	return parser.ParseVirtualSourcePathForBase(file.Path, dbName)
 }
 
 // sqliteContainerPathForResultPath maps a processed result path back to its
@@ -61,14 +60,28 @@ func sqliteContainerPathForResultPath(path string) string {
 	return ""
 }
 
+// trustedSQLiteContainer is a container's state at the end of the last pass
+// that verified every one of its discovered sessions, together with exactly
+// which session IDs that pass discovered. The set matters in hybrid roots:
+// discovery drops SQLite rows shadowed by a same-ID storage JSON, so the
+// discoverable row set can grow — a storage JSON removed while the DB is
+// untouched exposes its row — without the container state changing. A
+// source may therefore gate-skip only when its session ID was part of the
+// verified set; a newly exposed row misses the set and parses.
+type trustedSQLiteContainer struct {
+	state    parser.SQLiteContainerState
+	sessions map[string]struct{}
+}
+
 // sqliteContainerPass tracks one sync pass's view of every OpenCode-family
-// SQLite container it discovered. captured is written once before workers
-// start and is read-only afterwards; completed and failed are touched only
-// by the single collectAndBatch goroutine, so no locking is needed during
-// the pass.
+// SQLite container it discovered. captured and sessions are written once
+// before workers start and are read-only afterwards; completed and failed
+// are touched only by the single collectAndBatch goroutine, so no locking
+// is needed during the pass.
 type sqliteContainerPass struct {
 	captured   map[string]parser.SQLiteContainerState
 	discovered map[string]int
+	sessions   map[string]map[string]struct{}
 	completed  map[string]int
 	failed     map[string]bool
 	poisoned   bool
@@ -130,19 +143,24 @@ func (e *Engine) beginSQLiteContainerPass(
 	}
 	var pass *sqliteContainerPass
 	for _, file := range files {
-		dbPath := sqliteContainerPathForFile(file)
-		if dbPath == "" {
+		dbPath, sessionID, ok := sqliteContainerSourceForFile(file)
+		if !ok {
 			continue
 		}
 		if pass == nil {
 			pass = &sqliteContainerPass{
 				captured:   make(map[string]parser.SQLiteContainerState),
 				discovered: make(map[string]int),
+				sessions:   make(map[string]map[string]struct{}),
 				completed:  make(map[string]int),
 				failed:     make(map[string]bool),
 			}
 		}
 		pass.discovered[dbPath]++
+		if pass.sessions[dbPath] == nil {
+			pass.sessions[dbPath] = make(map[string]struct{})
+		}
+		pass.sessions[dbPath][sessionID] = struct{}{}
 		if _, seen := pass.captured[dbPath]; seen || pass.failed[dbPath] {
 			continue
 		}
@@ -168,14 +186,18 @@ func (e *Engine) beginSQLiteContainerPass(
 }
 
 // sqliteContainerSourceFresh reports whether a discovered file belongs to a
-// container whose current state matches the last fully verified state, in
-// which case the session is unchanged and skips before fingerprinting.
+// container whose current state matches the last fully verified state AND
+// whose session ID was part of that verified pass, in which case the
+// session is unchanged and skips before fingerprinting. The membership
+// check covers hybrid roots, where the discoverable row set can grow (a
+// removed storage JSON stops shadowing its same-ID row) without the
+// container state changing; such a row was never verified and must parse.
 func (e *Engine) sqliteContainerSourceFresh(file parser.DiscoveredFile) bool {
 	if e.forceParse || file.ForceParse {
 		return false
 	}
-	dbPath := sqliteContainerPathForFile(file)
-	if dbPath == "" {
+	dbPath, sessionID, ok := sqliteContainerSourceForFile(file)
+	if !ok {
 		return false
 	}
 	e.containerMu.Lock()
@@ -188,7 +210,11 @@ func (e *Engine) sqliteContainerSourceFresh(file parser.DiscoveredFile) bool {
 		return false
 	}
 	trusted, ok := e.trustedSQLiteContainers[dbPath]
-	return ok && current == trusted
+	if !ok || current != trusted.state {
+		return false
+	}
+	_, verified := trusted.sessions[sessionID]
+	return verified
 }
 
 // noteSQLiteContainerResult records a processed file's outcome for
@@ -246,9 +272,12 @@ func (e *Engine) finishSQLiteContainerPass(incomplete bool) {
 		}
 		if e.trustedSQLiteContainers == nil {
 			e.trustedSQLiteContainers =
-				make(map[string]parser.SQLiteContainerState)
+				make(map[string]trustedSQLiteContainer)
 		}
-		e.trustedSQLiteContainers[dbPath] = state
+		e.trustedSQLiteContainers[dbPath] = trustedSQLiteContainer{
+			state:    state,
+			sessions: pass.sessions[dbPath],
+		}
 	}
 }
 
