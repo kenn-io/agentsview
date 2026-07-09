@@ -564,7 +564,13 @@ func TestHTTPSyncHoldsMirrorLockDuringManifestFetch(t *testing.T) {
 		// FailNow must not be called.
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 		defer cancel()
-		_, err := AcquireMirrorLock(ctx, mirrorRoot)
+		lock, err := AcquireMirrorLock(ctx, mirrorRoot)
+		if lock != nil {
+			// On regression the acquire succeeds; release immediately so
+			// the sync under test fails on the assertion instead of
+			// deadlocking against a leaked lock.
+			_ = lock.Close()
+		}
 		assert.Error(t, err, "mirror lock must be held during the manifest fetch")
 	}
 
