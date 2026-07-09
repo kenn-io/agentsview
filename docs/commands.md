@@ -886,6 +886,24 @@ agentsview embeddings retire <id>     # retire a generation
 
 ______________________________________________________________________
 
+### `agentsview memory`
+
+Store and recall reviewed, provenance-linked memories over the session
+archive. See [Session Memories](/memory/) for the memory model, the JSONL
+import format, and full command documentation.
+
+```bash
+agentsview memory list                       # list memories with filters
+agentsview memory get <id>                   # one memory with its evidence
+agentsview memory query "<text>"             # ranked keyword recall
+agentsview memory stats                      # counts by type, scope, status
+agentsview memory brief "<task>"             # packed context block for a task
+agentsview memory extract --session <id> --dry-run   # preview extraction chunks
+agentsview memory import <memories.jsonl>    # import reviewed memories
+```
+
+______________________________________________________________________
+
 ### `agentsview mcp`
 
 Run a read-only Model Context Protocol server for assistant clients that can

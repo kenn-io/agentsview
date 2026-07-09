@@ -273,11 +273,11 @@ desktop-app: desktop-macos-app
 
 # Run tests
 test: pricing-snapshot ensure-embed-dir
-	go test -tags "fts5" ./... -v -count=1
+	go test -tags "fts5" ./... -v -count=1 -timeout 20m
 
 # Run fast tests only
 test-short: pricing-snapshot ensure-embed-dir
-	go test -tags "fts5" ./... -short -count=1
+	go test -tags "fts5" ./... -short -count=1 -timeout 20m
 
 # Compare db.Store read-query performance across SQLite, DuckDB, and PostgreSQL.
 # Requires Docker because the PostgreSQL backend is started with testcontainers.

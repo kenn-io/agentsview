@@ -26,6 +26,28 @@ func parseIntParam(
 	return v, true
 }
 
+// parseBoolParam reads a boolean query parameter from r. Returns
+// (false, true) when the parameter is absent, and writes a 400 unless
+// the parameter is exactly "true" or "false".
+func parseBoolParam(
+	w http.ResponseWriter, r *http.Request, name string,
+) (bool, bool) {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return false, true
+	}
+	switch raw {
+	case "true":
+		return true, true
+	case "false":
+		return false, true
+	default:
+		writeError(w, http.StatusBadRequest,
+			fmt.Sprintf("invalid %s parameter", name))
+		return false, false
+	}
+}
+
 // parseNonNegativeIntParam reads an integer query parameter that must
 // be non-negative (e.g. cursor / OFFSET values). Returns (value, true)
 // on success, writes a 400 and returns (0, false) on a non-integer or

@@ -643,6 +643,106 @@ func TestDirectBackend_ImportMemories(t *testing.T) {
 	assert.Equal(t, "Check cwd before file reads", got.Title)
 }
 
+func TestHTTPBackend_MemoriesRoundtrip(t *testing.T) {
+	t.Parallel()
+	env := newHTTPBackendEnv(t)
+	d := env.DB
+	seedServiceMemorySession(t, d)
+	seedServiceMemory(t, d, db.Memory{
+		ID:              "m-http",
+		Title:           "Check cwd before file reads",
+		Body:            "Verify cwd before retrying failed reads.",
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "memory-session",
+	})
+
+	svc := env.Backend("", false)
+	list, err := svc.ListMemories(context.Background(), service.MemoryFilter{
+		Project: "agentsview",
+		Agent:   "codex",
+		Limit:   5,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	require.Len(t, list.Memories, 1)
+	assert.Equal(t, "m-http", list.Memories[0].ID)
+
+	memory, err := svc.GetMemory(context.Background(), "m-http")
+	require.NoError(t, err)
+	require.NotNil(t, memory)
+	assert.Equal(t, "Check cwd before file reads", memory.Title)
+
+	query, err := svc.QueryMemories(context.Background(), service.MemoryQuery{
+		Query:          "cwd failed reads",
+		Project:        "agentsview",
+		Agent:          "codex",
+		IncludeContext: true,
+		Limit:          5,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, query)
+	require.Len(t, query.Memories, 1)
+	assert.Equal(t, "m-http", query.Memories[0].ID)
+	assert.Contains(t, query.Context, "Check cwd before file reads")
+	require.NotNil(t, query.ContextMeta)
+	assert.Equal(t, 1, query.ContextMeta.MemoryCount)
+	assert.Equal(t, []string{"m-http"}, query.ContextMeta.IncludedIDs)
+}
+
+func TestHTTPBackend_ImportMemories(t *testing.T) {
+	t.Parallel()
+	env := newHTTPBackendEnv(t)
+	d := env.DB
+	seedServiceMemorySession(t, d)
+	svc := env.Backend("", false)
+	input := strings.NewReader(`{"candidate_id":"m-http-imported","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"memory-session","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
+`)
+
+	result, err := svc.ImportMemories(
+		context.Background(),
+		input,
+		db.MemoryImportOptions{},
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 1, result.Imported)
+	got, err := svc.GetMemory(context.Background(), "m-http-imported")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "Check cwd before file reads", got.Title)
+}
+
+func TestHTTPBackend_ImportMemoriesRequireExistingSessions(t *testing.T) {
+	t.Parallel()
+	env := newHTTPBackendEnv(t)
+	svc := env.Backend("", false)
+	input := strings.NewReader(`{"candidate_id":"m-http-missing-session","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"s-missing","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
+`)
+
+	_, err := svc.ImportMemories(
+		context.Background(),
+		input,
+		db.MemoryImportOptions{RequireExistingSessions: true},
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "source session s-missing not found")
+	assert.Contains(t, err.Error(), "require_existing_sessions=true")
+}
+
+func TestHTTPBackend_GetMemoryNotFound(t *testing.T) {
+	t.Parallel()
+	env := newHTTPBackendEnv(t)
+
+	svc := env.Backend("", false)
+	memory, err := svc.GetMemory(context.Background(), "missing")
+
+	require.NoError(t, err)
+	assert.Nil(t, memory)
+}
+
 func seedServiceMemorySession(t *testing.T, d *db.DB) {
 	t.Helper()
 	dbtest.SeedSession(t, d, "memory-session", "agentsview", func(s *db.Session) {

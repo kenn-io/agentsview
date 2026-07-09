@@ -114,31 +114,29 @@ func setupWithServerOptsAndDBTemplate(
 ) *testEnv {
 	t.Helper()
 	dir := tempDirWithRetryCleanup(t)
-	dbPath := filepath.Join(dir, "test.db")
+	cfg := config.Config{
+		Host:         "127.0.0.1",
+		Port:         0,
+		DataDir:      dir,
+		DBPath:       filepath.Join(dir, "test.db"),
+		WriteTimeout: 30 * time.Second,
+	}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	if dbFiles != nil {
-		writeDBTemplateFiles(t, dbPath, dbFiles)
+		writeDBTemplateFiles(t, cfg.DBPath, dbFiles)
 	}
 
-	database := dbtest.OpenTestDBAt(t, dbPath)
+	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
 
-	claudeDir := filepath.Join(dir, "claude")
-	codexDir := filepath.Join(dir, "codex")
+	claudeDir := filepath.Join(cfg.DataDir, "claude")
+	codexDir := filepath.Join(cfg.DataDir, "codex")
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
 		t.Fatalf("creating claude dir: %v", err)
 	}
 	if err := os.MkdirAll(codexDir, 0o755); err != nil {
 		t.Fatalf("creating codex dir: %v", err)
-	}
-
-	cfg := config.Config{
-		Host:         "127.0.0.1",
-		Port:         0,
-		DataDir:      dir,
-		DBPath:       dbPath,
-		WriteTimeout: 30 * time.Second,
-	}
-	for _, opt := range opts {
-		opt(&cfg)
 	}
 	// Disable coalescing in tests so emits fan out deterministically.
 	broadcaster := server.NewBroadcaster(0)

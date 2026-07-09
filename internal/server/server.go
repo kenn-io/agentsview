@@ -307,6 +307,11 @@ func (s *Server) routes() {
 		s.mux.HandleFunc("/debug/pprof/trace", httppprof.Trace)
 	}
 
+	s.mux.Handle("GET /api/v1/memories", s.withTimeout(s.handleListMemories))
+	s.mux.Handle("GET /api/v1/memories/{id}", s.withTimeout(s.handleGetMemory))
+	s.mux.Handle("POST /api/v1/memories/query", s.withTimeout(s.handleQueryMemories))
+	s.mux.Handle("POST /api/v1/memories/import", s.withTimeout(s.handleImportMemories))
+
 	// SPA fallback: serve embedded frontend
 	// Do not use timeout handler for static assets to avoid buffering.
 	s.mux.Handle("/", http.HandlerFunc(s.handleSPA))
