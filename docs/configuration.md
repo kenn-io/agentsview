@@ -123,21 +123,30 @@ host = "devbox1"
 transport = "http"
 url = "http://devbox1.tailnet.ts.net:8080"
 token = "remote-token"
+interval = "5m" # optional; zero or omitted means manual sync only
 ```
 
 HTTP remote sync calls the remote daemon's archive endpoints and always uses a
 bearer token, even when the rest of that daemon has `require_auth = false`. The
 per-host `token` is required and must match the remote daemon's `auth_token`.
 Do not reuse the collector daemon's own `auth_token` for untrusted remote
-endpoints. HTTP transfers are incremental after the first sync; see
+endpoints. HTTP transfers use a persistent per-host mirror and request file
+deltas when fewer than half of the manifest files need fetching; see
 [Remote Access — Incremental Sync](/remote-access/#incremental-sync).
 
-Each `remote_hosts.host` value must be unique. A configured HTTP host can be
-selected later with `agentsview sync --host <name>`, but ad hoc HTTP remotes are
-not supported; without a matching configured host, `--host` remains an SSH
-remote sync. HTTP failures are summarized with actionable messages for common
-cases such as token rejection, missing remote archive endpoints, connection
-refusal, DNS failures, and timeouts.
+Each `remote_hosts.host` value must be unique and stable. It namespaces imported
+session IDs, the database skip cache, and the persistent mirror; changing it for
+the same machine can duplicate sessions, while reusing it for another machine
+can reuse stale state. A configured HTTP host can be selected later with
+`agentsview sync --host <name>`, but ad hoc HTTP remotes are not supported;
+without a matching configured host, `--host` remains an SSH remote sync. HTTP
+failures are summarized with actionable messages for common cases such as token
+rejection, missing remote archive endpoints, connection refusal, DNS failures,
+and timeouts.
+
+Set `interval` to a positive duration such as `"5m"` to have a running
+collector daemon sync that host periodically. Zero or omitted disables the
+per-host schedule; manual `agentsview sync` still includes the host.
 
 The remote daemon must also listen on an interface the collector can reach.
 The server binds `127.0.0.1` by default, so set `host` in the remote

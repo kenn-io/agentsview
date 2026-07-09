@@ -78,10 +78,12 @@ tmp_config_base=""
     --exclude './screenshots/README.md' \
     --exclude './screenshots/entrypoint.sh' \
     --exclude './screenshots/extract-db.sh' \
+    --exclude './screenshots/node_modules' \
     --exclude './screenshots/package-lock.json' \
     --exclude './screenshots/package.json' \
     --exclude './screenshots/playwright.config.ts' \
     --exclude './screenshots/run.sh' \
+    --exclude './screenshots/test-results' \
     --exclude './screenshots/tests/*' \
     --exclude './screenshots/update-generated-assets-branch.sh' \
     --exclude './README.md' \

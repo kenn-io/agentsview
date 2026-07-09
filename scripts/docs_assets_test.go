@@ -257,6 +257,75 @@ func TestBuiltSiteCheckRejectsSvgUsePlainHref(t *testing.T) {
 	}
 }
 
+func TestZensicalDocsBuildExcludesScreenshotToolchain(t *testing.T) {
+	tempDir := t.TempDir()
+	repo := filepath.Join(tempDir, "repo")
+	docsDir := filepath.Join(repo, "docs")
+	require.NoError(t, os.MkdirAll(docsDir, 0o755))
+
+	scriptPath := installScript(t, repo,
+		filepath.Join("docs", "zensical-docs.sh"))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(docsDir, "zensical.toml"),
+		[]byte("[project]\ndocs_dir = \"docs\"\nsite_dir = \"site\"\n"),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(docsDir, "index.md"),
+		[]byte("---\ntitle: Home\ndescription: Home page\n---\n"),
+		0o644,
+	))
+
+	toolchainFile := filepath.Join(
+		docsDir, "screenshots", "node_modules", "playwright-core",
+		"trace-viewer.html",
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(toolchainFile), 0o755))
+	require.NoError(t, os.WriteFile(
+		toolchainFile, []byte("private screenshot toolchain\n"), 0o644,
+	))
+	testResultFile := filepath.Join(
+		docsDir, "screenshots", "test-results", "trace.zip",
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(testResultFile), 0o755))
+	require.NoError(t, os.WriteFile(
+		testResultFile, []byte("private test trace\n"), 0o644,
+	))
+	publicScreenshot := filepath.Join(
+		docsDir, "assets", "generated", "screenshots", "dashboard.png",
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(publicScreenshot), 0o755))
+	require.NoError(t, os.WriteFile(
+		publicScreenshot, []byte("public screenshot\n"), 0o644,
+	))
+
+	fakeZensical := filepath.Join(docsDir, ".venv", "bin", "zensical")
+	require.NoError(t, os.MkdirAll(filepath.Dir(fakeZensical), 0o755))
+	require.NoError(t, os.WriteFile(fakeZensical, []byte(`#!/usr/bin/env bash
+set -euo pipefail
+public_docs="$(find . -maxdepth 1 -type d -name 'zensical-public-docs.*' -print -quit)"
+mkdir -p site
+cp -R "$public_docs"/. site/
+`), 0o755))
+
+	cmd := exec.Command("bash", scriptPath, "build")
+	cmd.Dir = docsDir
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+	assert.FileExists(t, filepath.Join(docsDir, "site", "index.md"))
+	assert.FileExists(t, filepath.Join(
+		docsDir, "site", "assets", "generated", "screenshots",
+		"dashboard.png",
+	))
+	assert.NoFileExists(t, filepath.Join(
+		docsDir, "site", "screenshots", "node_modules", "playwright-core",
+		"trace-viewer.html",
+	))
+	assert.NoFileExists(t, filepath.Join(
+		docsDir, "site", "screenshots", "test-results", "trace.zip",
+	))
+}
+
 func installScript(t *testing.T, repo, scriptRel string) string {
 	t.Helper()
 	script, err := os.ReadFile(filepath.Join("..", scriptRel))

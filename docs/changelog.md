@@ -3,6 +3,35 @@ title: Changelog
 description: Release history for AgentsView
 ---
 
+## 0.37.4
+<small>2026-07-09</small>
+
+**New features**
+
+- Add **incremental HTTP remote sync** backed by a persistent per-host mirror.
+  After the initial archive download, the collector compares a remote manifest
+  with its mirror and requests only changed files when fewer than half of the
+  manifest files need fetching. Deleted remote files are removed from the
+  mirror without deleting sessions already stored in the local archive.
+
+**Improvements**
+
+- Include **GPT-5.6 model pricing** for the base alias and the Sol, Terra, and
+  Luna variants in the embedded fallback catalog, so fresh installs and offline
+  usage reports can estimate their costs without a network fetch.
+- Explain **default `session list` exclusions** on stderr when one-shot or
+  automated sessions are hidden, including the number in each category and the
+  flags that include them. Structured stdout remains unchanged for scripts.
+
+**Acknowledgements**
+
+- Thanks to [Wes McKinney](https://github.com/wesm) for incremental HTTP remote
+  sync, GPT-5.6 fallback pricing, and release documentation.
+- Thanks to [Marius van Niekerk](https://github.com/mariusvniekerk) for making
+  the `session list` default exclusions visible.
+
+---
+
 ## 0.37.3
 <small>2026-07-09</small>
 

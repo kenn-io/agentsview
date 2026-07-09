@@ -81,7 +81,14 @@ host = "devbox1"
 transport = "http"
 url = "http://devbox1.tailnet.ts.net:8080"
 token = "remote-token"
+interval = "5m" # optional: sync periodically while the collector daemon runs
 ```
+
+Treat `host` as the remote machine's stable, unique identity. AgentsView uses
+it to namespace imported session IDs, the database skip cache, and the mirror
+directory. Changing it creates a new namespace and can duplicate sessions from
+the same machine; reusing it for a different machine can reuse stale cached
+state. Changing only `url` is fine when the same logical machine moves.
 
 The daemon on the remote machine must bind a non-loopback interface (set
 `host = "0.0.0.0"` with `require_auth = true` in its config.toml) or every
@@ -119,34 +126,131 @@ That setting controls detached background daemons only. Supervised daemons run
 under systemd, launchd, Docker, or a foreground shell never create the idle
 tracker and already stay alive until their supervisor stops them.
 
+Run `agentsview sync` on the collector to sync local sessions and every
+configured host. Set `interval` on a `[[remote_hosts]]` entry when a running
+collector daemon should sync that host periodically; omit it or set it to `0s`
+for manual sync only. See [`agentsview sync`](/commands/#agentsview-sync) for
+single-host selection and failure behavior.
+
 ## Incremental Sync
 
-HTTP remote sync is incremental. The first sync downloads the full session
-archive and stores a byte-for-byte mirror under
-`<data_dir>/remote-mirrors/<host>-<hash>/`; subsequent syncs fetch a file
-manifest, diff it against the mirror, and download only files that changed
-on the remote. Archives are gzip-compressed in transit.
+Starting in 0.37.4, HTTP remote sync keeps a persistent mirror of each remote
+machine's syncable source files under:
 
-The mirror is a disposable transfer cache: deleting it is always safe and
-just makes the next sync download everything again. Sessions already
-imported into the database are never removed, even when their source files
-disappear from the remote.
+```text
+<data_dir>/remote-mirrors/<sanitized-host>-<hash>/
+```
 
-Agents whose exports are sanitized per transfer (Windsurf state databases)
-cannot be described by the manifest, so their files are downloaded as a
-separate small full archive on every sync. The rest of the host's corpus
-stays incremental.
+For the default data directory, that parent is
+`~/.agentsview/remote-mirrors/`. The readable host component is followed by a
+hash so names that sanitize to the same directory name do not collide. A lock
+file next to each mirror serializes concurrent syncs of that host from the same
+data directory.
 
-When the remote daemon predates the manifest endpoint, sync automatically
-falls back to the full-archive download and reports that incremental sync
-is unavailable, so mixed versions keep working.
+The mirror adds an on-disk copy of the remote session sources to the collector,
+in addition to the indexed database. Budget roughly the size of each remote
+host's syncable source corpus for it. Incremental transfer applies only to the
+HTTP transport; SSH remote sync continues to copy a full session tree on each
+run.
 
-Incremental transfer applies to the HTTP transport only; SSH remote sync
-still copies the full session tree on every run. `agentsview sync --full`
-re-downloads the full archive into the mirror — the escape hatch for a
-stale or corrupted mirror, which the size/mtime diff cannot detect — and
-bypasses the remote skip cache. Sessions already stored and current in
-the local database are still skipped by the normal freshness checks.
+### How A Sync Works
+
+1. The collector asks the remote daemon for its resolved agent roots. The
+   remote controls this allowlist; the collector cannot name arbitrary roots.
+2. The collector locks the host mirror and requests a gzip-compressed manifest
+   of regular, non-symlink files. Each entry carries its absolute remote path,
+   size, and modification time.
+3. The collector walks the mirror and compares file size and modification time
+   at microsecond precision. It schedules missing or changed files for fetch
+   and removes mirror files that disappeared from the manifest.
+4. When fewer than half of the manifest's files need fetching, the collector
+   requests only that delta. At half or more, it requests a full archive instead
+   of sending a large file list. The current collector advertises gzip support
+   for both archive modes.
+5. The archive is extracted into the mirror with remote modification times
+   preserved. AgentsView then imports from the complete mirror, so parsers that
+   read sibling files behave the same way they do against a full source tree.
+   The separate database skip cache avoids unnecessary parsing of unchanged
+   sessions during normal syncs.
+
+If no directory-scoped files changed, the collector skips the archive request
+and imports directly from the existing mirror. Files that disappear remotely
+are deleted from the mirror, but remote import is intentionally non-destructive:
+sessions already stored in the AgentsView database remain available.
+
+Windsurf is a special case. Its state database is sanitized into a curated
+export for every transfer, so the raw tree cannot safely participate in the
+manifest. AgentsView fetches that small export as a separate full archive on
+each sync while the rest of the host remains eligible for delta transfer. The
+Windsurf content in the mirror is the sanitized export, not a byte-for-byte copy
+of the remote state database.
+
+### When AgentsView Downloads A Full Archive
+
+A full HTTP transfer occurs in these cases:
+
+- the per-host mirror is new or was removed
+- `agentsview sync --full` is used
+- at least half of the manifest files are missing or changed
+- a collector data-version resync forces its configured remote syncs full
+- a delta request is rejected after a manifest succeeded; the collector retries
+  once with a full archive
+- the remote daemon does not support manifests, in which case the collector
+  uses the legacy full-transfer path on every sync
+
+Windsurf's curated export is also fetched in full on every sync, independently
+of the directory-scoped archive decision.
+
+`--full` refreshes the mirror bytes and bypasses the persistent remote
+path/mtime skip cache during import. It does not delete the local database or
+turn remote sync into a destructive reconciliation.
+
+### Compatibility And Recovery
+
+A 0.37.4 collector works with older remote daemons. A missing manifest route —
+including an old daemon's HTML app shell answering that route — makes the
+collector report that incremental sync is unavailable and use the legacy
+full-archive flow. That flow extracts to a temporary directory and does not
+create or update the persistent mirror. Older collectors also continue to use
+the full-archive endpoint on a 0.37.4 remote.
+
+The normal mirror comparison detects interrupted extraction when the resulting
+file size or modification time differs from the manifest, and the next sync
+fetches that file again. It also repairs file-versus-directory conflicts left by
+an interrupted extraction.
+
+The comparison does not hash file content. A remote rewrite that preserves both
+size and modification time, or local mirror corruption with the same metadata,
+can therefore look unchanged. Run a full sync to refresh the bytes:
+
+```bash
+# Refresh local sessions and every configured remote.
+agentsview sync --full
+
+# Refresh one configured host through the local daemon.
+agentsview sync --host devbox1 --full
+```
+
+The second form requires `devbox1` to match a configured `[[remote_hosts]]`
+entry; otherwise `--host` is an ad hoc SSH sync.
+
+The mirror is a disposable transfer cache. When no sync is running, deleting a
+host's mirror directory is safe and makes the next compatible sync bootstrap it
+again. Leave the adjacent `.lock` file in place. Removing mirror files never
+removes imported sessions from the database.
+
+### Transfer Safety
+
+The remote daemon recomputes its allowed sync targets for each request and
+rejects paths outside them. Manifest walks omit symlinks and special files;
+delta requests must either match an allowed extra file exactly or use an
+absolute path in the same POSIX, drive-letter, or UNC dialect as the allowed
+root. Symlinked roots or intermediate components are refused. Mirror deletions
+and type-conflict cleanup are separately confined to the per-host mirror root.
+
+These checks limit what authenticated sync requests can read, but they do not
+replace network isolation or bearer-token security. Keep the daemon on a
+private network and protect its `auth_token` as described above.
 
 ## SSE Endpoints
 

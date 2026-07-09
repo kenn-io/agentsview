@@ -184,8 +184,8 @@ token = "remote-token"
 With hosts configured, `agentsview sync` (no `--host`) runs the local sync
 first, then syncs each configured host in the order declared using its
 configured transport. `--full` applies to every host; for HTTP hosts it
-re-downloads the full archive and bypasses the remote skip cache, though
-already-stored, current sessions are still skipped (see
+re-downloads the full archive into the persistent mirror and bypasses the
+remote path/mtime skip cache (see
 [Incremental Sync](/remote-access/#incremental-sync)). A failing host is
 reported on stderr and skipped so the remaining hosts still run; the command
 exits non-zero if any host failed.
@@ -846,6 +846,11 @@ exceptions: they stream raw bytes and NDJSON respectively, so they reject
 `--format`/`--json`. Use `--server <url>` to target an explicit running daemon,
 `AGENTSVIEW_SERVER_TOKEN` or `--server-token-file <path>` when that daemon
 requires auth, or `--pg` to read from configured PostgreSQL.
+
+`agentsview session list` excludes one-shot and automated sessions by default.
+When that hides matching sessions on the first page, it reports the counts and
+the corresponding `--include-one-shot` or `--include-automated` flags on stderr.
+Stdout, including `--format json`, keeps its existing shape for pipelines.
 
 `AGENTSVIEW_PG_URL`, a legacy `[pg].url`, or the effective default target from
 `default_pg` plus `[pg.NAME]` are sync configuration only; they do not change

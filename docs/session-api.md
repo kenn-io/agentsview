@@ -212,8 +212,13 @@ agentsview session list [flags]
 }
 ```
 
-One-shot and automated sessions are excluded by default. Use the
-`--include-*` flags to opt back in.
+One-shot and automated sessions are excluded by default. When the first CLI
+page hides any, `session list` writes an advisory to stderr with the hidden
+count for each category and the `--include-one-shot` or `--include-automated`
+flag that reveals it. Human and JSON stdout are unchanged, so redirecting or
+piping structured output remains safe. The JSON `total` continues to describe
+the filtered result, not the excluded sessions. Use the `--include-*` flags to
+opt back in.
 
 | Flag                  | HTTP param          | Notes                             |
 |-----------------------|---------------------|-----------------------------------|
