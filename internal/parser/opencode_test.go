@@ -901,6 +901,41 @@ func TestParseOpenCodeDB_SkillNameFromReadTool(t *testing.T) {
 	assertEq(t, "SkillName", ast.ToolCalls[0].SkillName, "foo")
 }
 
+// TestParseOpenCodeDB_SkillNameFromReadToolRelativePath verifies
+// that a read tool with a relative SKILL.md path resolves against
+// the session worktree and reads frontmatter instead of falling
+// back to the parent directory name.
+func TestParseOpenCodeDB_SkillNameFromReadToolRelativePath(t *testing.T) {
+	// Frontmatter name intentionally differs from the folder name
+	// ("renamed") to prove we read frontmatter, not the directory.
+	path := writeTestSkill(t, "renamed", "actual-skill")
+	worktree := filepath.Dir(filepath.Dir(filepath.Dir(path)))
+
+	dbPath, seeder, db := newTestDB(t)
+	defer db.Close()
+
+	seeder.AddProject("prj_1", worktree)
+	seeder.AddSession("ses_rel", "prj_1", "", "", 1700000000000, 1700000030000)
+
+	seeder.AddMessage("msg_u", "ses_rel", 1700000000000, 1700000000000, `{"role":"user"}`)
+	seeder.AddPart("prt_u", "msg_u", "ses_rel", 1700000000000, 1700000000000, `{"type":"text","text":"read the skill"}`)
+
+	seeder.AddMessage("msg_a", "ses_rel", 1700000010000, 1700000010000, `{"role":"assistant"}`)
+	seeder.AddPart("prt_t", "msg_a", "ses_rel", 1700000010000, 1700000010000,
+		`{"type":"tool","tool":"read","callID":"call_read","state":{"input":{"file_path":"skills/renamed/SKILL.md"}}}`)
+
+	sessions, err := parseOpenCodeAll(dbPath, "m")
+	require.NoError(t, err, "ParseOpenCodeDB")
+	require.Len(t, sessions, 1, "sessions len")
+
+	msgs := sessions[0].Messages
+	require.Len(t, msgs, 2, "messages len")
+
+	ast := msgs[1]
+	require.Len(t, ast.ToolCalls, 1, "tool calls len")
+	assertEq(t, "SkillName", ast.ToolCalls[0].SkillName, "actual-skill")
+}
+
 // TestParseOpenCodeDB_SkillNameFromShellCommandRelativePath
 // verifies that a "bash" tool part running a relative-path
 // SKILL.md read is resolved against the session's project

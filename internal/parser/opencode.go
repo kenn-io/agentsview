@@ -816,15 +816,18 @@ func extractOpenCodeToolCall(data, cwd string) ParsedToolCall {
 	}
 }
 
-// inferOpenCodeSkillName infers a skill name for a non-"skill"
-// OpenCode tool call by trying the Cursor-style read-file
-// heuristic first, then the Codex-style shell read-command
-// heuristic, resolving relative SKILL.md paths against the
-// session's project worktree when the tool call itself carries no
-// working-directory hint.
 func inferOpenCodeSkillName(toolName, inputJSON, cwd string) string {
-	if name := inferCursorSkillName(toolName, inputJSON); name != "" {
-		return name
+	if isCursorSkillReadTool(toolName) {
+		// OpenCode's read-tool input carries no cwd/workdir key, so
+		// inferSkillNameFromJSONPaths can't resolve relative SKILL.md
+		// paths and falls back to the parent directory name. Try the
+		// file_path directly against the session worktree first.
+		if fp := gjson.Get(inputJSON, "file_path").Str; fp != "" && cwd != "" {
+			if name := skillNameFromPath(fp, cwd); name != "" {
+				return name
+			}
+		}
+		return inferSkillNameFromJSONPaths(inputJSON)
 	}
 	return inferCodexSkillNameWithBase(toolName, inputJSON, cwd)
 }
