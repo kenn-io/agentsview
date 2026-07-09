@@ -38,11 +38,11 @@ func TestIngestEvalTrajectoryEndToEnd(t *testing.T) {
 
 	// Retrieve through the query endpoint, scoped by run + extractor method.
 	q := te.post(t, "/api/v1/recall/query", `
-{"query":"zaphod towel","source_run_id":"run-a","extractor_method":"eval-harness-raw-trajectory","trusted_only":true,"limit":10,"include_context":true}
+{"query":"zaphod towel","source_run_id":"run-a","extractor_method":"eval-harness-raw-trajectory","trusted_only":false,"limit":10,"include_context":true}
 `)
 	assertStatus(t, q, http.StatusOK)
 	resp := decode[evalQueryResponse](t, q)
-	assert.True(t, resp.TrustedOnly)
+	assert.False(t, resp.TrustedOnly)
 	require.NotEmpty(t, resp.RecallEntries, "ingested chunk should be retrievable")
 	m := resp.RecallEntries[0]
 	assert.Equal(t, "fact", m.Type)
@@ -52,6 +52,16 @@ func TestIngestEvalTrajectoryEndToEnd(t *testing.T) {
 	assert.True(t, m.Transferable)
 	assert.True(t, m.ProvenanceOK)
 	assert.Contains(t, resp.Context, "towel")
+
+	// Raw eval rows are deliberately quarantined from trusted recall even when
+	// transferability and provenance are otherwise true.
+	trusted := te.post(t, "/api/v1/recall/query", `
+{"query":"zaphod towel","source_run_id":"run-a","extractor_method":"eval-harness-raw-trajectory","trusted_only":true,"limit":10,"include_context":true}
+`)
+	assertStatus(t, trusted, http.StatusOK)
+	trustedResp := decode[evalQueryResponse](t, trusted)
+	assert.True(t, trustedResp.TrustedOnly)
+	assert.Empty(t, trustedResp.RecallEntries)
 
 	// The placeholder session exists, marked as an eval session.
 	sess, err := te.db.GetSession(context.Background(), m.SourceSessionID)
