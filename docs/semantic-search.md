@@ -257,6 +257,27 @@ currently active generation, is refused unless `--force` is passed.
 
 ## Searching: `session search --semantic` / `--hybrid`
 
+### Command Palette
+
+The web command palette offers **Full text**, **Semantic**, and **Hybrid**
+modes. Semantic ranks message content by meaning, while Hybrid combines semantic
+and FTS5 rankings. Both present the highest-ranked match from each session, with
+at most one result per session, and remember the selected mode across palette
+openings and browser sessions.
+
+Semantic and Hybrid depend on the same enabled `[vector]` configuration and
+active embeddings index described above. Configuration and index builds remain
+CLI/config-file operations; the palette surfaces actionable setup or rebuild
+errors and stays in the selected mode. To continue with Full text after an
+error, choose it explicitly—the UI never falls back automatically. The
+in-session find bar remains unchanged and does not support semantic search.
+
+Palette searches run after a 300ms typing pause. Each Semantic or Hybrid query
+must be encoded, so a remote embeddings server can add latency and per-request
+cost compared with a local encoder.
+
+### Command-line search
+
 `--semantic` and `--hybrid` are new content-search modes alongside
 `--regex`/`--fts`, mutually exclusive with each other and with the substring
 default:
@@ -456,9 +477,6 @@ MCP tool error, carrying the same remediation text.
   `--semantic`/`--hybrid` against `--pg` or a DuckDB-backed server return the
   "not available" error (HTTP 501) described above. `pgvector` support is a
   possible follow-up.
-- **No frontend integration.** The web UI's command palette and in-session
-  search remain FTS-only; semantic and hybrid search are CLI/HTTP/MCP-only in
-  this release.
 - **The index embeds message `content` verbatim.** Like `--fts`, it only draws
   from the `messages` source, so raw tool_input/tool_result rows are never
   candidates. System messages are handled more strictly, though: `--fts` still
