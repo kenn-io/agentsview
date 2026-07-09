@@ -25,8 +25,9 @@ build on the merged substrate in later work.
 - Make contradictory trusted-status queries fail explicitly.
 - Reconcile every stable evidence endpoint independently and report why trust
   was revoked.
-- Add the cheap SQLite index and insertion invariant needed by those evidence
-  checks.
+- Reuse the existing source-UUID index and add the insertion invariant needed by
+  those evidence checks.
+- Batch query-exposure inserts without weakening durable query recording.
 - Exercise the lab-only eval-ingest surface in CI.
 - Publish a concise experimental Recall page that accurately describes current
   behavior and the rebuildable nature of the recall corpus.
@@ -43,7 +44,8 @@ build on the merged substrate in later work.
 - Adding PostgreSQL or DuckDB recall support.
 - Optimizing the query ledger or evidence reconciler for a corpus that does not
   yet exist.
-- Refactoring large recall functions solely to satisfy a line-count preference.
+- Broad decomposition of existing large recall functions while their behavior is
+  still changing.
 - Adding recall-table migrations. These tables are new and unreleased, so their
   canonical schema is edited directly.
 
@@ -153,10 +155,13 @@ construct matching identities; enforcing the invariant at the database boundary
 protects future population paths from creating an entry that survives or
 cascades differently from its evidence.
 
-SQLite gains a partial index on `(session_id, source_uuid)` for nonempty source
-UUIDs. Evidence endpoint lookups include `source_uuid != ''` so SQLite can use
-that partial index. This is a performance index over the existing `messages`
-table, not a recall-table migration.
+SQLite already has the partial `idx_messages_source_uuid` index on
+`messages(source_uuid)` for nonempty values. Evidence endpoint lookups add the
+logically redundant `source_uuid != ''` predicate so SQLite can prove the
+partial-index condition. An `EXPLAIN QUERY PLAN` check confirms that this
+changes the lookup from a table scan to the existing index. Do not add a
+composite `(session_id, source_uuid)` index unless later measurements against a
+populated archive show that filtering same-UUID rows by session is material.
 
 ## Eval-ingest coverage
 
@@ -191,6 +196,9 @@ The page covers:
 - Trusted-only semantics and the `eval_raw` quarantine.
 - The planned local-model extraction and independent model-assisted evaluation
   direction.
+- The calibration privacy boundary: judging is local by default, while any
+  remote frontier judge receives transcript-derived material only after an
+  explicit per-run opt-in.
 
 The page avoids presenting the current import-driven workflow as a stable or
 recommended end-user feature.
@@ -205,9 +213,14 @@ The revised Milestone 2 direction is:
 1. Select deterministic real-session windows and demand-triggered windows from
    recorded misses.
 1. Run one frozen, tools-disabled local extractor configuration over them.
-1. Ask one or more independent frontier judge models to label correctness,
-   semantic provenance support, scope, transferability, harmfulness, and
-   candidate-pair duplication.
+1. Ask one or more independent local judge models to label correctness, semantic
+   provenance support, scope, transferability, harmfulness, and candidate-pair
+   duplication by default.
+1. Optionally run a frontier judge only after an explicit per-calibration-run
+   opt-in that identifies the endpoint and model and states that candidate
+   text plus supporting transcript windows will leave the machine. There is no
+   automatic remote fallback. Operators can restrict remote judging to
+   synthetic or otherwise non-sensitive sessions.
 1. Keep generator and judge model families separate when practical and record
    exact model IDs, prompts, schemas, decoding settings, and input digests.
 1. Adjudicate judge disagreements automatically where possible and use small,
@@ -220,6 +233,11 @@ Model labels are evaluation evidence, not trust promotion. They can justify a
 later extractor-policy decision, but generated entries remain `unreviewed_auto`
 or `calibrated_auto` and outside trusted recall.
 
+The population spec's privacy invariant is amended narrowly to reflect this
+choice: extraction and population stay local, local judging is the default, and
+only an explicitly authorized calibration run may disclose its selected
+candidate and evidence material to a named remote judge.
+
 LongMemEval-v2 is a later, complementary benchmark. It evaluates whether the
 populated and retrieved corpus supports long-horizon questions; it does not
 replace candidate-level provenance and harmfulness evaluation. Its existing work
@@ -230,8 +248,19 @@ interface.
 
 The query ledger synchronously acquires the database writer lock because a
 successful response returns the durable query ID used by calibration and later
-proposal lookup. Exposure batching may improve throughput later, but making
-recording asynchronous would weaken that contract.
+proposal lookup. This pass keeps that contract but replaces one statement per
+exposure with bounded multi-row inserts of at most 100 exposure rows per
+statement. The bound stays below SQLite parameter limits and reduces work inside
+the writer critical section without making recording asynchronous.
+
+Milestone 1 keeps its append-only ledger without pruning. Milestone 2 must set
+request-size limits and a retention/export policy before calibration runs at
+volume; broader deployment does not inherit unlimited retention by accident.
+
+`StrictRecording`, `RecallQuerySurfaceCalibration`, `BuildRecallEvidenceWindow`,
+and `GetRecallQueryEvent` remain exported as intentional Milestone 2 harness
+contracts. They are not removed merely because production write-through does not
+call them yet.
 
 Reconciliation currently revisits a session whenever messages are replaced and
 can hash the same window for multiple entries. The indexed empty-session query
@@ -257,13 +286,16 @@ build-tag behavior. Required regression coverage includes:
 - Mixed anchored/legacy evidence endpoints remap or revoke correctly.
 - Each provenance-revocation branch emits its stable reason.
 - Mismatched entry/evidence session IDs are rejected without partial writes.
-- The source-UUID lookup uses the new partial index predicate.
+- `EXPLAIN QUERY PLAN` shows the source-UUID lookup using the existing partial
+  index after adding its predicate.
+- An event with more than one exposure batch persists every exposure in rank
+  order within the same transaction.
 - The `evalingest` tagged suite is exercised by its Make target and CI.
 - Zensical builds and validates the new experimental page and navigation.
 
 Before declaring the branch merge-ready, run the focused recall tests, the
 tagged eval-ingest target, `go fmt ./...`, `go vet ./...`, the repository test
 suite, lint, and the docs build/check workflow in isolated scratch state. Review
-the final branch diff and resolve or explicitly dismiss the remaining stale
-review findings. Updating or merging the pull request remains a separate user
-decision.
+the final branch diff, including the explicit-server credential isolation in
+`ad644c28`, and resolve or explicitly dismiss the remaining stale review
+findings. Updating or merging the pull request remains a separate user decision.

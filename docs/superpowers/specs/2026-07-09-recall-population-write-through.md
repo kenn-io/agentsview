@@ -35,7 +35,8 @@ Build local, evidence-grounded distillation in four earned milestones:
 1. **Population foundation** — trustworthy review-state semantics, append-only
    query/exposure measurement, and host-authorized evidence windows.
 1. **Extractor calibration** — measurement only in an isolated copy of real
-   session rows, with preregistered gates and blind human labels.
+   session rows, with preregistered gates, independent model-assisted labels,
+   and sampled human audits.
 1. **Explicit write-through pilot** — an agent or user deliberately submits the
    query and transcript windows that answered a real miss; output remains
    quarantined until the calibrated policy permits promotion.
@@ -51,8 +52,12 @@ separate milestone rather than an implicit property of this design.
 
 The following rules apply to every milestone:
 
-- Transcript content never leaves the machine. The distiller is a local,
-  tools-disabled model.
+- Extraction and population never send transcript content off-machine. The
+  distiller is a local, tools-disabled model. Calibration judging is local by
+  default; a run may disclose its selected candidates and supporting
+  transcript windows to a named remote frontier judge only after an explicit
+  per-run opt-in that identifies the endpoint, model, and data flow. There is
+  no automatic remote fallback.
 - Model output cannot grant itself trust, review status, or an evidence window.
 - A model-authored candidate is not an accepted recall entry merely because it
   is valid JSON or cites real ordinals.
@@ -154,7 +159,9 @@ against the query ID without rewriting the original event.
 
 Raw query text is stored locally because the later write-through trigger needs
 the exact missed query. Export, PostgreSQL propagation, and retention policy for
-the ledger remain out of scope for Milestone 1.
+the ledger remain out of scope for Milestone 1. Milestone 2 must define bounded
+request sizes and a ledger retention/export policy before calibration runs at
+volume.
 
 ### Host-authorized evidence windows
 
@@ -193,14 +200,18 @@ calibration-run or write-through-proposal record; they are not overloaded onto
 the evidence row.
 
 Every full message replacement, in-place diff that changes an existing message,
-and full-database resync reconciles affected evidence. When both endpoint source
-UUIDs exist and resolve uniquely inside the same session, they remap shifted
-ordinals and the selected-range digest is rechecked. When stable endpoints are
-absent or ambiguous, the old ordinal range is retained only if its selected
-digest still matches. A missing endpoint, changed digest, or missing referenced
-tool call sets the parent entry's `provenance_ok = false`, which removes it from
+and full-database resync reconciles affected evidence. Each nonempty endpoint
+source UUID is authoritative and resolves independently inside its session. A
+resolved endpoint remaps its shifted ordinal; a missing or ambiguous anchored
+endpoint revokes provenance. Stored ordinal fallback is allowed only for an
+endpoint that never had a source UUID. The resolved range and referenced tool
+calls are rebuilt, and the selected-range digest must still match exactly. Any
+failure sets the parent entry's `provenance_ok = false`, which removes it from
 trusted recall without deleting it. Append-only insertion after all cited
-ordinals does not require reconciliation.
+ordinals does not require reconciliation. The detailed sticky-revocation and
+first-failure reason contract in
+[Recall merge hardening and research preview](2026-07-09-recall-merge-hardening-design.md#evidence-reconciliation)
+is authoritative for implementation and tests.
 
 The new canonical evidence schema includes endpoint UUID and selected-range
 digest fields from the start. Placeholder or otherwise unverified imports leave
@@ -242,13 +253,24 @@ Model output is constrained by a versioned machine-readable schema. Each run
 records the exact model identifier, prompt version, grammar/schema version,
 decoding parameters, window digest, latency, and token counts.
 
-Human review is blind to extractor configuration. Reviewers label correctness,
-scope, transferability, semantic provenance support, harmfulness, and duplicate
-pairs. If possible, a second reviewer labels at least 20 percent of candidates
-and agreement is reported.
+Independent judge models label correctness, scope, transferability, semantic
+provenance support, harmfulness, and duplicate pairs without receiving the
+extractor configuration. The default judges are local models. An operator may
+opt a calibration run into a named remote frontier judge after being told that
+candidate text and supporting transcript windows will leave the machine; there
+is no implicit cloud fallback, and synthetic or otherwise non-sensitive sessions
+can be selected for remote runs.
 
-The first decisive run requires at least 50 non-baseline candidates after exact
-deduplication. Automatic write-through remains disabled unless all gates pass:
+Generator and judge model families remain separate when practical. Each run
+records exact judge model identifiers, endpoints, prompt and schema versions,
+decoding parameters, and input digests. Judge disagreements are adjudicated by a
+registered policy, and a small blind human sample estimates judge error instead
+of requiring the user to construct the primary label corpus manually.
+
+The first decisive run requires at least 50 non-baseline, model-labeled
+candidates after exact deduplication. These are research gates rather than trust
+promotion: automatic write-through remains disabled unless all gates pass, and
+passing does not confer `human_reviewed` on any entry:
 
 - keeper precision at least 40 percent
 - harmful (`wrong` or `unsupported`) rate at most 20 percent
@@ -262,10 +284,11 @@ Candidate yield and abstention rate are always reported so an extractor cannot
 obtain perfect precision by emitting nothing.
 
 Near-duplicate detection is calibrated rather than used to define its own
-metric. Reviewers first label duplicate pairs. Candidate-to-entry query
-construction, scope filters, score-policy version, and threshold are then chosen
-against those labels and reported with detector precision and recall. The
-current unbounded lexical score is not treated as a normalized similarity.
+metric. Independent judges first label duplicate pairs, with sampled human audit
+of judge error. Candidate-to-entry query construction, scope filters,
+score-policy version, and threshold are then chosen against those labels and
+reported with detector precision and recall. The current unbounded lexical score
+is not treated as a normalized similarity.
 
 Usefulness is not a Milestone 2 go/no-go metric unless held-out tasks produce
 explicit outcome labels. Query-ledger exposure alone is insufficient.
@@ -325,6 +348,7 @@ shows that they improve retrieval enough to justify another generated artifact.
 ## Non-goals
 
 - A cloud extraction fallback.
+- Automatic or implicit remote judging without per-run disclosure and opt-in.
 - Automatic acceptance of model-authored candidates in Milestone 1 or 2.
 - Treating packed context as proof of usefulness.
 - A new write path that bypasses the shared recall validation funnel.
