@@ -53,6 +53,15 @@ session list, and result-selection behavior remain unchanged. Selecting a search
 result hydrates its session, navigates to the session route, and scrolls to the
 matched ordinal.
 
+For events originating inside the entire controls row, including the mode
+control and adjacent Relevance/Recency buttons, the palette's container-level
+handler must ignore result-navigation and activation keys. The kit-ui control
+renders buttons with `role="radio"` and owns its Left/Right arrow and activation
+behavior; Enter, Space, and directional arrows on any mode or sort control must
+never trigger palette result selection. Escape remains handled by the palette
+container so it closes from every focused control. Query-input and result-list
+keyboard navigation retain their current behavior.
+
 ## Search Store and Data Flow
 
 The existing search store remains the single owner of command-palette search
@@ -74,7 +83,7 @@ Semantic and Hybrid call `GET /api/v1/search/content` with:
 - `mode` set to `semantic` or `hybrid`;
 - `X-AgentsView-Search-Intent: semantic`;
 - the active project filter when present; and
-- a 30-result limit.
+- a 120-candidate limit.
 
 The initial UI does not send an explicit semantic scope, so the backend's
 current `all` default remains in effect.
@@ -95,14 +104,19 @@ timestamp is the matched message time and the snippet is the primary label.
 
 Semantic and Hybrid may return multiple conversation units from one session.
 Normalization walks the ranked response in order and keeps the first match for
-each session ID. This preserves the highest-ranked unit while preventing a long
-session from crowding other sessions out of the palette. No client-side resort
-is applied after deduplication.
+each session ID, then truncates to 30 unique sessions. The four-times over-fetch
+reduces the chance that a long session crowds other sessions out while keeping
+the request bounded. A result set can still contain fewer than 30 sessions when
+the 120 highest-ranked units are concentrated in fewer sessions; this is an
+accepted initial-UI tradeoff. No client-side resort is applied after
+deduplication.
 
 Every new search or mode change aborts the previous generated-client request.
 Only the latest non-aborted request may update results, loading state, or error
 state. Clearing or closing the palette cancels both pending debounce work and
-in-flight requests.
+in-flight requests and clears any visible error. Dropping below the three-
+character query threshold also clears the error. An aborted stale request must
+never clear or replace state produced by a newer request.
 
 ## Result and State Presentation
 
@@ -123,6 +137,11 @@ returned by the backend. The detail is important because semantic-unavailable
 responses distinguish first-time setup, an in-progress build, a stale model
 fingerprint, and an incompatible index. Technical identifiers and commands in
 that backend detail remain verbatim.
+
+Generated-client failures must be routed through the existing `callGenerated()`
+or `generatedErrorMessage()` runtime helper. The generated error's top-level
+message contains only generic HTTP status text; the actionable remediation is
+carried in its structured response body.
 
 The UI does not silently switch modes after an error. Users can retry by editing
 the query or reselecting the mode, or switch to Full text themselves.
@@ -148,6 +167,8 @@ translated sentence fragments.
 - Other request failures show the same localized error frame with the safest
   available generated-client error detail.
 - A successful subsequent search clears the previous error.
+- Clearing or closing the palette, or shortening the query below three
+  characters, clears the previous error.
 - Empty successful responses show the normal translated no-results state.
 
 ## Testing
@@ -160,10 +181,11 @@ boundary mocked:
 - persisting mode changes;
 - dispatching Full text to `/api/v1/search` with its sort;
 - dispatching Semantic and Hybrid to `/api/v1/search/content` with the intent
-  header and project filter;
-- normalizing and deduplicating ranked content matches by session;
+  header, project filter, and bounded over-fetch;
+- normalizing, deduplicating, and truncating ranked content matches by session;
 - canceling stale searches during query and mode changes;
-- preserving actionable errors and clearing them after success; and
+- extracting realistic generated `501`/`503` error bodies, preserving their
+  actionable detail, and clearing errors on success or palette clear; and
 - retaining full-text sort while it is temporarily hidden.
 
 Component tests will mount the real kit-ui `SegmentedControl` through the
@@ -171,6 +193,9 @@ command palette and verify:
 
 - all three localized mode options are available;
 - choosing a mode updates the store and reruns an eligible query;
+- Enter, Space, and Left/Right arrow interaction inside the mode control, and
+  keyboard activation of Relevance/Recency, never selects or navigates a
+  search result, while Escape still closes the palette from those controls;
 - Relevance/Recency is visible only in Full text;
 - loading, empty, and error states render in the results region; and
 - normalized results navigate and scroll to the matched ordinal.
