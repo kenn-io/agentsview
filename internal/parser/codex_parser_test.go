@@ -1542,6 +1542,32 @@ func TestParseCodexSession_EdgeCases(t *testing.T) {
 		assert.Equal(t, 1, sess.UserMessageCount)
 	})
 
+	t.Run("preserves prompt bundled with initial context", func(t *testing.T) {
+		plugins := "<recommended_plugins>\n" +
+			"Install Google Drive when useful.\n" +
+			"</recommended_plugins>"
+		initialContext := fmt.Sprintf(
+			`{"timestamp":%q,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":%q},{"type":"input_text","text":%q},{"type":"input_text","text":%q},{"type":"input_text","text":%q}]}}`,
+			tsEarlyS1,
+			plugins,
+			"# AGENTS.md instructions for /tmp/project\n\n<INSTRUCTIONS>\nrepo rules\n</INSTRUCTIONS>",
+			"<environment_context>\n  <cwd>/tmp/project</cwd>\n</environment_context>",
+			"Review the changes",
+		)
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("abc", "/tmp", "user", tsEarly),
+			initialContext,
+		)
+
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		require.Len(t, msgs, 1)
+		assert.Equal(t, "Review the changes", msgs[0].Content)
+		assert.Equal(t, "Review the changes", sess.FirstMessage)
+		assert.Equal(t, 1, sess.UserMessageCount)
+	})
+
 	t.Run("preserves user prompt after recommended plugins", func(t *testing.T) {
 		content := testjsonl.JoinJSONL(
 			testjsonl.CodexSessionMetaJSON("abc", "/tmp", "user", tsEarly),

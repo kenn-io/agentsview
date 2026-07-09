@@ -283,7 +283,7 @@ func (b *codexSessionBuilder) handleResponseItem(
 
 	content := extractCodexContent(payload)
 	if role == "user" && b.firstUserContent == "" {
-		content = stripCodexRecommendedPluginsPrefix(content)
+		content = extractCodexInitialUserContent(payload)
 	}
 	if strings.TrimSpace(content) == "" {
 		return
@@ -1266,9 +1266,7 @@ func isCodexSubagentFunctionOutput(output gjson.Result) bool {
 	return true
 }
 
-// extractCodexContent joins all text blocks from a Codex
-// response item's content array.
-func extractCodexContent(payload gjson.Result) string {
+func extractCodexTextBlocks(payload gjson.Result) []string {
 	var texts []string
 	payload.Get("content").ForEach(
 		func(_, block gjson.Result) bool {
@@ -1281,7 +1279,34 @@ func extractCodexContent(payload gjson.Result) string {
 			return true
 		},
 	)
-	return strings.Join(texts, "\n")
+	return texts
+}
+
+// extractCodexContent joins all text blocks from a Codex
+// response item's content array.
+func extractCodexContent(payload gjson.Result) string {
+	return strings.Join(extractCodexTextBlocks(payload), "\n")
+}
+
+// extractCodexInitialUserContent filters the synthetic blocks bundled with
+// Codex's recommended-plugins injection while retaining user-authored blocks
+// from the same response item.
+func extractCodexInitialUserContent(payload gjson.Result) string {
+	texts := extractCodexTextBlocks(payload)
+	if len(texts) == 0 ||
+		!strings.HasPrefix(texts[0], "<recommended_plugins>") {
+		return strings.Join(texts, "\n")
+	}
+
+	texts[0] = stripCodexRecommendedPluginsPrefix(texts[0])
+	kept := texts[:0]
+	for _, text := range texts {
+		if strings.TrimSpace(text) == "" || isCodexSystemMessage(text) {
+			continue
+		}
+		kept = append(kept, text)
+	}
+	return strings.Join(kept, "\n")
 }
 
 // IsCodexExecSessionFile reports whether any session_meta
@@ -1655,7 +1680,7 @@ func (s *codexIncrementalSeed) observeUserMessage(
 	}
 	content := extractCodexContent(payload)
 	if s.firstUserContent == "" {
-		content = stripCodexRecommendedPluginsPrefix(content)
+		content = extractCodexInitialUserContent(payload)
 	}
 	if strings.TrimSpace(content) == "" {
 		return
