@@ -2,10 +2,12 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -280,6 +282,33 @@ func TestImportAcceptedRecallEntriesJSONLRequireExistingSessionsRejectsMissingSe
 	assert.Nil(t, session)
 }
 
+func TestImportAcceptedRecallEntriesJSONLRequireExistingSessionsRejectsTrashedSession(
+	t *testing.T,
+) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "agentsview")
+	insertMessages(t, d, userMsg("s1", 0, "Evidence remains in the archive."))
+	_, err := d.getWriter().Exec(`
+		UPDATE sessions
+		SET deleted_at = '2026-07-09T00:00:00Z'
+		WHERE id = 's1'`)
+	require.NoError(t, err)
+	input := strings.NewReader(`
+{"candidate_id":"m1","type":"fact","scope":"project","title":"Hidden-session evidence","body":"Trashed sessions cannot authorize new trusted recall.","session_id":"s1","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0}}
+`)
+
+	_, err = d.ImportAcceptedRecallEntriesJSONLWithOptions(
+		context.Background(), input,
+		RecallImportOptions{RequireExistingSessions: true},
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "source session s1 not found")
+	got, getErr := d.GetRecallEntry(context.Background(), "m1")
+	require.NoError(t, getErr)
+	assert.Nil(t, got)
+}
+
 func TestImportAcceptedRecallEntriesJSONLRequireExistingSessionsRejectsMissingEvidenceRange(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
@@ -347,6 +376,98 @@ func TestImportAcceptedRecallEntriesJSONLRequireExistingSessionsValidatesEvidenc
 	assert.Len(t, got.Evidence[0].ContentDigest, 64)
 }
 
+func TestImportAcceptedRecallEntriesJSONLNeverCommitsStaleEvidenceSnapshot(
+	t *testing.T,
+) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "agentsview")
+	messages := []Message{
+		userMsg("s1", 3, "The original evidence begins."),
+		asstMsg("s1", 4, "The original evidence ends."),
+	}
+	messages[0].SourceUUID = "source-3"
+	messages[1].SourceUUID = "source-4"
+	insertMessages(t, d, messages...)
+
+	external, err := sql.Open("sqlite3", makeDSN(d.Path(), false))
+	require.NoError(t, err)
+	defer external.Close()
+	_, err = external.Exec(`PRAGMA busy_timeout = 5000`)
+	require.NoError(t, err)
+	rewrite, err := external.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	defer rewrite.Rollback()
+	_, err = rewrite.Exec(`
+		UPDATE messages
+		SET content = 'The evidence changed before import commit.'
+		WHERE session_id = 's1' AND ordinal = 4`)
+	require.NoError(t, err)
+
+	type importOutcome struct {
+		result RecallImportResult
+		err    error
+	}
+	outcomes := make(chan importOutcome, 1)
+	go func() {
+		result, importErr := d.ImportAcceptedRecallEntriesJSONLWithOptions(
+			context.Background(),
+			strings.NewReader(`
+{"candidate_id":"m-race","type":"fact","scope":"project","title":"Snapshot-sensitive evidence","body":"Trusted import must bind and insert against one transcript snapshot.","session_id":"s1","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":4}}
+`),
+			RecallImportOptions{RequireExistingSessions: true},
+		)
+		outcomes <- importOutcome{result: result, err: importErr}
+	}()
+
+	var earlyOutcome *importOutcome
+	require.Eventually(t, func() bool {
+		select {
+		case outcome := <-outcomes:
+			earlyOutcome = &outcome
+			return true
+		default:
+			return d.rawWriter().Stats().InUse > 0
+		}
+	}, 5*time.Second, 10*time.Millisecond,
+		"import should reach or safely abort its writer transaction")
+	require.NoError(t, rewrite.Commit())
+
+	var outcome importOutcome
+	if earlyOutcome != nil {
+		outcome = *earlyOutcome
+	} else {
+		select {
+		case outcome = <-outcomes:
+		case <-time.After(10 * time.Second):
+			require.FailNow(t, "import did not finish after concurrent rewrite")
+		}
+	}
+	got, getErr := d.GetRecallEntry(context.Background(), "m-race")
+	require.NoError(t, getErr)
+	if outcome.err != nil {
+		assert.Nil(t, got,
+			"a snapshot-conflicted import must leave no partial entry")
+		return
+	}
+	require.Equal(t, 1, outcome.result.Imported)
+	require.NotNil(t, got)
+	if !got.ProvenanceOK {
+		return
+	}
+	require.Len(t, got.Evidence, 1)
+	window, err := d.BuildRecallEvidenceWindow(
+		context.Background(), "s1", 3, 4,
+	)
+	require.NoError(t, err)
+	metadata, err := window.BindSelection(RecallEvidenceSelection{
+		MessageStartOrdinal: 3,
+		MessageEndOrdinal:   4,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, metadata.ContentDigest, got.Evidence[0].ContentDigest,
+		"a successful trusted import must match the committed transcript")
+}
+
 func TestImportAcceptedRecallEntriesJSONLRequireExistingSessionsRejectsMissingToolUse(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
@@ -394,6 +515,37 @@ func TestImportAcceptedRecallEntriesJSONLSkipsDuplicateIDs(t *testing.T) {
 	require.Len(t, second.SkippedEntries, 1)
 	assert.Equal(t, "m1", second.SkippedEntries[0].CandidateID)
 	assert.Equal(t, "duplicate", second.SkippedEntries[0].Reason)
+}
+
+func TestImportAcceptedRecallEntriesJSONLValidatesEvidenceBeforeDuplicate(
+	t *testing.T,
+) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "agentsview")
+	insertMessages(t, d, userMsg("s1", 0, "Only ordinal zero exists."))
+	_, err := d.InsertRecallEntry(RecallEntry{
+		ID:              "m1",
+		Type:            "fact",
+		Scope:           "project",
+		Status:          "accepted",
+		Title:           "Existing recall",
+		Body:            "An existing ID cannot hide invalid new evidence.",
+		SourceSessionID: "s1",
+	})
+	require.NoError(t, err)
+	input := strings.NewReader(`
+{"candidate_id":"m1","type":"fact","scope":"project","title":"Duplicate with invalid evidence","body":"This candidate cites ordinals that do not exist.","session_id":"s1","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
+`)
+
+	result, err := d.ImportAcceptedRecallEntriesJSONLWithOptions(
+		context.Background(), input,
+		RecallImportOptions{RequireExistingSessions: true},
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "source evidence s1:3-7 not found")
+	assert.Zero(t, result.Skipped,
+		"invalid verified input must not be reported as a duplicate")
 }
 
 func TestImportAcceptedRecallEntriesJSONLSupersedesExistingRecallEntry(t *testing.T) {

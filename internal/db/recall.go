@@ -283,7 +283,24 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 		  AND session_id IN (SELECT id FROM main.sessions)`); err != nil {
 		return fmt.Errorf("copying recall evidence: %w", err)
 	}
-	if err := reconcileAllRecallEvidenceTx(ctx, tx, true); err != nil {
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE recall_entries
+		SET provenance_ok = 0,
+		    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+		WHERE provenance_ok = 1
+		  AND id IN (SELECT id FROM old_db.recall_entries)
+		  AND (
+			SELECT count(*)
+			FROM old_db.recall_evidence old_e
+			WHERE old_e.entry_id = recall_entries.id
+		  ) != (
+			SELECT count(*)
+			FROM main.recall_evidence new_e
+			WHERE new_e.entry_id = recall_entries.id
+		  )`); err != nil {
+		return fmt.Errorf("revoking recall with dropped evidence: %w", err)
+	}
+	if err := reconcileAllRecallEvidenceTx(ctx, tx); err != nil {
 		return fmt.Errorf("reconciling copied recall evidence: %w", err)
 	}
 
@@ -339,19 +356,34 @@ func (db *DB) SupersedeRecallEntry(
 		return "", fmt.Errorf("begin recall supersede: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := supersedeRecallEntryTx(ctx, tx, oldID, replacement); err != nil {
+		return "", err
+	}
 
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("commit recall supersede: %w", err)
+	}
+	return replacement.ID, nil
+}
+
+func supersedeRecallEntryTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	oldID string,
+	replacement RecallEntry,
+) error {
 	var existingOldID string
 	if err := tx.QueryRowContext(
 		ctx, "SELECT id FROM recall_entries WHERE id = ?", oldID,
 	).Scan(&existingOldID); err != nil {
 		if err == sql.ErrNoRows {
-			return "", fmt.Errorf("superseded entry %s not found", oldID)
+			return fmt.Errorf("superseded entry %s not found", oldID)
 		}
-		return "", fmt.Errorf("checking superseded entry %s: %w", oldID, err)
+		return fmt.Errorf("checking superseded entry %s: %w", oldID, err)
 	}
 
 	if err := insertRecallEntryTx(tx, replacement); err != nil {
-		return "", err
+		return err
 	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE recall_entries
@@ -362,18 +394,14 @@ func (db *DB) SupersedeRecallEntry(
 		corerecall.StatusArchived, replacement.ID, oldID,
 	)
 	if err != nil {
-		return "", fmt.Errorf("archiving superseded entry %s: %w", oldID, err)
+		return fmt.Errorf("archiving superseded entry %s: %w", oldID, err)
 	}
 	if rows, err := result.RowsAffected(); err != nil {
-		return "", fmt.Errorf("checking superseded entry update: %w", err)
+		return fmt.Errorf("checking superseded entry update: %w", err)
 	} else if rows != 1 {
-		return "", fmt.Errorf("superseded entry %s not found", oldID)
+		return fmt.Errorf("superseded entry %s not found", oldID)
 	}
-
-	if err := tx.Commit(); err != nil {
-		return "", fmt.Errorf("commit recall supersede: %w", err)
-	}
-	return replacement.ID, nil
+	return nil
 }
 
 func insertRecallEntryTx(tx *sql.Tx, m RecallEntry) error {
@@ -1068,6 +1096,8 @@ func buildRecallEntryWhere(q RecallQuery, includeText bool) (string, []any) {
 		args = append(args, q.SupersededByEntryID)
 	}
 	if q.TrustedOnly {
+		preds = append(preds, "status = ?")
+		args = append(args, corerecall.StatusAccepted)
 		preds = append(preds, "review_state = ?")
 		args = append(args, corerecall.ReviewStateHumanReviewed)
 		preds = append(preds, "transferable = 1")
@@ -1357,6 +1387,7 @@ func toCoreRecallEntries(entries []RecallEntry) []corerecall.Entry {
 			Type:        m.Type,
 			Scope:       m.Scope,
 			Status:      m.Status,
+			ReviewState: m.ReviewState,
 			Title:       m.Title,
 			Body:        m.Body,
 			Trigger:     m.Trigger,

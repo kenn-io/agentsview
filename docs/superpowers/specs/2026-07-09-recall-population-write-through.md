@@ -105,16 +105,16 @@ For Milestone 1, `trusted_only` requires all of:
 defines a versioned allow policy. `extractor_method` remains diagnostic metadata
 and an exact query filter; it is not a trust boundary.
 
-Existing non-eval rows are classified as `human_reviewed`, matching the only
-supported production write surface today. Rows whose source session has machine
-`recall-eval-ingest` are classified as `eval_raw`. The migration is
-non-destructive. Existing or future imports that use a `recall-import`
-placeholder session remain human-reviewed but have `provenance_ok` forced false:
-a zero-message placeholder cannot mechanically support evidence. They remain
-visible in untrusted inspection and cannot enter trusted recall. A later sync of
-the real source session does not silently promote them; an explicit revalidation
-may restore provenance only after the evidence range is verified and
-fingerprinted.
+The recall tables are new in this unreleased PR, so Milestone 1 defines their
+canonical schema directly and adds no recall-table migration or legacy backfill.
+Each write surface assigns its state at creation: reviewed import uses
+`human_reviewed`, eval ingest uses `eval_raw`, and later automatic paths use an
+automatic state. Imports that create a `recall-import` placeholder session are
+human-reviewed but have `provenance_ok` forced false because a zero-message
+placeholder cannot mechanically support evidence. They remain visible in
+untrusted inspection and cannot enter trusted recall. A later sync of the real
+source session does not silently promote them; an explicit revalidation may
+restore provenance only after the evidence range is verified and fingerprinted.
 
 ### Append-only demand and exposure ledger
 
@@ -202,9 +202,9 @@ tool call sets the parent entry's `provenance_ok = false`, which removes it from
 trusted recall without deleting it. Append-only insertion after all cited
 ordinals does not require reconciliation.
 
-Legacy verified evidence receives endpoint UUIDs and a selected-range digest
-during migration when the current archive range still verifies. Placeholder or
-unverifiable evidence is left without a fingerprint and has provenance revoked.
+The new canonical evidence schema includes endpoint UUID and selected-range
+digest fields from the start. Placeholder or otherwise unverified imports leave
+them empty and have provenance revoked.
 
 ### Error and concurrency behavior
 
@@ -217,10 +217,11 @@ unverifiable evidence is left without a fingerprint and has provenance revoked.
 - Later write-time duplicate detection and insertion must share a serialized
   transaction or uniqueness mechanism; a query-then-insert race is not an
   acceptable gate.
-- A read-only SQLite open returns recall normally and omits query recording; an
-  attempted measurement write does not turn that read into an `ErrReadOnly`
-  failure. PostgreSQL and DuckDB retain their current recall-unavailable
-  `ErrReadOnly` behavior until their separate parity milestone.
+- A read-only SQLite open returns ordinary recall normally and omits best-effort
+  query recording. A calibration request with strict recording fails with
+  `ErrReadOnly` rather than pretending a measurement ID exists. PostgreSQL and
+  DuckDB retain their current recall-unavailable `ErrReadOnly` behavior until
+  their separate parity milestone.
 
 ## Milestone 2 — extractor calibration
 
@@ -335,7 +336,7 @@ shows that they improve retrieval enough to justify another generated artifact.
 
 Milestone 1 requires observable tests for:
 
-- migration classification of reviewed and eval rows
+- canonical-schema review-state defaults and write-surface classification
 - provenance revocation for placeholder-session imports
 - trusted-only exclusion of unreviewed/eval entries across DB, service, HTTP,
   and CLI behavior

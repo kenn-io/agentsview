@@ -1105,7 +1105,7 @@ func (db *DB) ReplaceSessionMessages(
 	}
 	if !useDiff || len(plan.updates) > 0 {
 		if err := reconcileRecallEvidenceForSessionTx(
-			context.Background(), tx, sessionID, false,
+			context.Background(), tx, sessionID,
 		); err != nil {
 			return err
 		}
@@ -1262,7 +1262,7 @@ func (db *DB) ReplaceSessionContent(
 	}
 	if !useDiff || len(plan.updates) > 0 {
 		if err := reconcileRecallEvidenceForSessionTx(
-			context.Background(), tx, sessionID, false,
+			context.Background(), tx, sessionID,
 		); err != nil {
 			return err
 		}

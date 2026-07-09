@@ -2,8 +2,6 @@ package db
 
 import (
 	"context"
-	"database/sql"
-	"path/filepath"
 	"strconv"
 	"testing"
 
@@ -193,56 +191,6 @@ func TestRecallEvidenceWindowContentDigestIgnoresCoordinatesAndStorageMetadata(
 	assert.NotEqual(t, digests["first"], digests["changed-tool"])
 }
 
-func TestMigrationRecallEvidenceMetadataPreservesLegacyRows(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "recall-evidence.db")
-	d, err := Open(path)
-	require.NoError(t, err)
-	insertSession(t, d, "s1", "agentsview")
-	_, err = d.InsertRecallEntry(RecallEntry{
-		ID:              "m1",
-		Type:            "fact",
-		Scope:           "project",
-		Status:          "accepted",
-		Title:           "Legacy evidence",
-		Body:            "Evidence survives additive metadata migration.",
-		SourceSessionID: "s1",
-		Evidence: []RecallEvidence{{
-			SessionID:           "s1",
-			MessageStartOrdinal: 3,
-			MessageEndOrdinal:   4,
-			ToolUseID:           "tool-a",
-			Snippet:             "legacy snippet",
-		}},
-	})
-	require.NoError(t, err)
-	require.NoError(t, d.Close())
-
-	conn, err := sql.Open("sqlite3", path)
-	require.NoError(t, err)
-	for _, column := range []string{
-		"message_start_source_uuid",
-		"message_end_source_uuid",
-		"content_digest",
-	} {
-		_, err = conn.Exec("ALTER TABLE recall_evidence DROP COLUMN " + column)
-		require.NoError(t, err, column)
-	}
-	require.NoError(t, conn.Close())
-
-	reopened, err := Open(path)
-	require.NoError(t, err)
-	defer reopened.Close()
-	got, err := reopened.GetRecallEntry(context.Background(), "m1")
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	require.Len(t, got.Evidence, 1)
-	assert.Equal(t, "legacy snippet", got.Evidence[0].Snippet)
-	assert.Equal(t, "tool-a", got.Evidence[0].ToolUseID)
-	assert.Empty(t, got.Evidence[0].MessageStartSourceUUID)
-	assert.Empty(t, got.Evidence[0].MessageEndSourceUUID)
-	assert.Empty(t, got.Evidence[0].ContentDigest)
-}
-
 func TestRecallEvidenceReplaceRemapsStableEndpoints(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -411,6 +359,49 @@ func TestRecallEvidenceDiffRevokesMissingToolCall(t *testing.T) {
 	assert.False(t, got.ProvenanceOK)
 }
 
+func TestRecallEvidenceDiffRevokesEitherMissingToolFromMultiToolSelection(
+	t *testing.T,
+) {
+	for _, tc := range []struct {
+		name      string
+		remaining func([]ToolCall) []ToolCall
+	}{
+		{
+			name: "first tool missing",
+			remaining: func(calls []ToolCall) []ToolCall {
+				return calls[1:]
+			},
+		},
+		{
+			name: "second tool missing",
+			remaining: func(calls []ToolCall) []ToolCall {
+				return calls[:1]
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			seedRecallEvidenceWindow(t, d, "multi-tool", 10, "stable", "")
+			insertVerifiedRecallSelection(
+				t, d, "m1", "multi-tool", 10, 11,
+				[]string{"tool-a", "tool-z"},
+			)
+			messages, err := d.GetAllMessages(
+				context.Background(), "multi-tool",
+			)
+			require.NoError(t, err)
+			require.Len(t, messages[1].ToolCalls, 2)
+			messages[1].ToolCalls = tc.remaining(messages[1].ToolCalls)
+
+			err = d.ReplaceSessionMessages("multi-tool", messages)
+
+			require.NoError(t, err)
+			got := requireRecallEntry(t, d, "m1")
+			assert.False(t, got.ProvenanceOK)
+		})
+	}
+}
+
 func TestRecallEvidenceAppendPreservesMetadata(t *testing.T) {
 	d := testDB(t)
 	seedRecallEvidenceWindow(t, d, "append", 10, "stable", "")
@@ -488,56 +479,6 @@ func TestRecallEvidenceWriteSessionBatchRemapsStableEndpoints(t *testing.T) {
 	require.Len(t, got.Evidence, 1)
 	assert.Equal(t, 11, got.Evidence[0].MessageStartOrdinal)
 	assert.Equal(t, 12, got.Evidence[0].MessageEndOrdinal)
-}
-
-func TestMigrationRecallEvidenceMetadataFingerprintsVerifiedLegacyRows(
-	t *testing.T,
-) {
-	path := filepath.Join(t.TempDir(), "legacy-recall-evidence.db")
-	d, err := Open(path)
-	require.NoError(t, err)
-	seedRecallEvidenceWindow(t, d, "legacy", 10, "stable", "")
-	_, err = d.InsertRecallEntry(RecallEntry{
-		ID:              "m1",
-		Type:            "fact",
-		Scope:           "project",
-		Status:          "accepted",
-		Title:           "Legacy verified recall",
-		Body:            "This row predates evidence fingerprints.",
-		SourceSessionID: "legacy",
-		Transferable:    true,
-		ProvenanceOK:    true,
-		Evidence: []RecallEvidence{{
-			SessionID:           "legacy",
-			MessageStartOrdinal: 10,
-			MessageEndOrdinal:   11,
-			ToolUseID:           "tool-a",
-		}},
-	})
-	require.NoError(t, err)
-	require.NoError(t, d.Close())
-
-	conn, err := sql.Open("sqlite3", path)
-	require.NoError(t, err)
-	for _, column := range []string{
-		"message_start_source_uuid",
-		"message_end_source_uuid",
-		"content_digest",
-	} {
-		_, err = conn.Exec("ALTER TABLE recall_evidence DROP COLUMN " + column)
-		require.NoError(t, err, column)
-	}
-	require.NoError(t, conn.Close())
-
-	reopened, err := Open(path)
-	require.NoError(t, err)
-	defer reopened.Close()
-	got := requireRecallEntry(t, reopened, "m1")
-	assert.True(t, got.ProvenanceOK)
-	require.Len(t, got.Evidence, 1)
-	assert.Equal(t, "stable-10", got.Evidence[0].MessageStartSourceUUID)
-	assert.Equal(t, "stable-11", got.Evidence[0].MessageEndSourceUUID)
-	assert.Len(t, got.Evidence[0].ContentDigest, 64)
 }
 
 func seedRecallEvidenceWindow(

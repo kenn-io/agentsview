@@ -355,7 +355,7 @@ func writeOneSessionBatchTx(
 	}
 	if write.ReplaceMessages && sessionExists {
 		if err := reconcileRecallEvidenceForSessionTx(
-			context.Background(), tx, write.Session.ID, false,
+			context.Background(), tx, write.Session.ID,
 		); err != nil {
 			return 0, err
 		}

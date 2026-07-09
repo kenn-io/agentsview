@@ -30,8 +30,9 @@ ______________________________________________________________________
   intended missing behavior.
 - Use testify in all new Go tests. Assert stored behavior and response shape;
   never assert that a source file contains an implementation string.
-- Preserve SQLite rows with additive migrations only. Do not bump `dataVersion`
-  because no parser-derived data changes.
+- Recall tables are new and unreleased on this branch. Define their complete
+  shape in `schema.sql`; do not add recall-table migrations or legacy
+  backfills.
 - PostgreSQL and DuckDB keep their current recall-unavailable `ErrReadOnly`
   behavior, but must implement any new `db.Store` method so backend contracts
   continue to compile.
@@ -69,17 +70,6 @@ ______________________________________________________________________
     Also assert that an unknown non-empty state is rejected by
     `InsertRecallEntry` and `SupersedeRecallEntry`.
 
-- [ ] Add a failing migration test.
-
-    Create a database with reviewed, `recall-eval-ingest`, and
-    `recall-import`-placeholder rows, remove the new column to simulate the old
-    schema, reopen through `Open`, and assert:
-
-    - ordinary rows become `human_reviewed`;
-    - eval rows become `eval_raw`;
-    - placeholder rows become `human_reviewed` with `provenance_ok = false`;
-    - no session, recall, or evidence row is deleted.
-
 - [ ] Add failing importer and eval-ingest tests.
 
     Assert that JSONL containing a top-level `review_state` member is rejected,
@@ -102,14 +92,13 @@ ______________________________________________________________________
     default to `human_reviewed`; any other unknown value fails before a
     transaction starts. Import and eval paths set their states explicitly.
 
-- [ ] Add the additive schema and migration.
+- [ ] Complete the new-table schema.
 
     Add `recall_entries.review_state TEXT NOT NULL DEFAULT 'human_reviewed'` with
-    a `CHECK` over the four values. Add the column through `migrateColumns`,
-    then run an idempotent data backfill that classifies eval rows and revokes
-    placeholder provenance. Include recall tables in read-only schema
-    compatibility so an unmigrated archive asks for a writable upgrade instead
-    of failing during a query.
+    a `CHECK` over the four values directly to `schema.sql`. Do not add a
+    recall-table `ALTER` or backfill: no released archive contains these tables.
+    Import and eval write paths establish the correct state and placeholder
+    provenance when each row is created.
 
 - [ ] Thread `review_state` through every recall row shape.
 
@@ -179,13 +168,13 @@ ______________________________________________________________________
     allowed tool-use IDs, and authorization digest. `RecallEvidenceSelection`
     carries only narrowed ordinals and tool-use IDs; it cannot replace the host
     session. Use a transaction-compatible query interface so the same canonical
-    builder works during import, migration, message replacement, and resync.
+    builder works during import, message replacement, and resync.
 
-- [ ] Add evidence metadata columns additively.
+- [ ] Complete the new evidence-table schema.
 
     Add `message_start_source_uuid`, `message_end_source_uuid`, and
     `content_digest` to `recall_evidence`, its Go struct/scanners/inserts/copy
-    queries, and `migrateColumns`. Existing evidence remains intact.
+    queries, and canonical `schema.sql`. Do not add recall-table migration code.
 
 - [ ] Bind verified imports to host metadata.
 
@@ -263,10 +252,10 @@ ______________________________________________________________________
 
 - [ ] Extend full-resync recall copying.
 
-    Copy the new evidence metadata, then reconcile against messages in the new
-    database before committing `CopyRecallEntriesFrom`. Legacy verified evidence
-    without a digest is fingerprinted only if its current range/tool references
-    verify; placeholder/unverifiable evidence remains revoked.
+    Copy the evidence metadata, then reconcile against messages in the new
+    database before committing `CopyRecallEntriesFrom`. Any selection that no
+    longer verifies is revoked; placeholder/unverifiable evidence remains
+    revoked.
 
 - [ ] Run focused tests and commit.
 
@@ -387,10 +376,12 @@ ______________________________________________________________________
       `context_empty`;
     - a normal result records every rank and marks only IDs in
       `context_meta.included_ids` packed;
-    - no-context queries record results with an empty miss reason;
+    - no-context queries with results use an empty miss reason, while zero ranked
+      rows always record `no_results`;
     - ordinary recording failure logs/returns recall with empty `query_id`;
     - strict recording failure returns an error;
-    - a read-only SQLite open returns recall with no event and no error.
+    - an ordinary read-only SQLite query returns recall with no event and no
+      error, while strict recording returns `ErrReadOnly`.
 
 - [ ] Add failing server and HTTP-backend round-trip tests.
 

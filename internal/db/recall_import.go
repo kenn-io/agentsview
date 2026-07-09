@@ -3,6 +3,7 @@ package db
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -36,6 +37,11 @@ type RecallImportOptions struct {
 	DryRun                  bool
 	RequireExistingSessions bool
 	AllowProductionImport   bool
+}
+
+type recallImportQueryer interface {
+	recallEvidenceQueryer
+	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
 type probeAcceptedRecallEntry struct {
@@ -134,21 +140,6 @@ func (db *DB) ImportAcceptedRecallEntriesJSONLWithOptions(
 				"importing recall line %d: %w", lineNo, err,
 			)
 		}
-		existing, err := db.GetRecallEntry(ctx, recall.ID)
-		if err != nil {
-			return result, fmt.Errorf(
-				"importing recall line %d: checking duplicate: %w",
-				lineNo, err,
-			)
-		}
-		if existing != nil {
-			result.Skipped++
-			result.SkippedEntries = append(
-				result.SkippedEntries,
-				probeRecallImportItem(item, "duplicate"),
-			)
-			continue
-		}
 		if _, dup := seen[recall.ID]; dup {
 			// A duplicate candidate_id earlier in this stream: a real
 			// import inserts the first and skips the rest, so the dry-run
@@ -160,42 +151,24 @@ func (db *DB) ImportAcceptedRecallEntriesJSONLWithOptions(
 			)
 			continue
 		}
-		if strings.TrimSpace(recall.SupersedesEntryID) != "" {
-			superseded, err := db.GetRecallEntry(ctx, recall.SupersedesEntryID)
-			if err != nil {
-				return result, fmt.Errorf(
-					"importing recall line %d: checking superseded entry: %w",
-					lineNo, err,
-				)
-			}
-			if superseded == nil {
-				return result, fmt.Errorf(
-					"importing recall line %d: superseded entry %s not found",
-					lineNo, recall.SupersedesEntryID,
-				)
-			}
-		}
-		if opts.RequireExistingSessions {
-			if err := db.requireRecallImportSession(ctx, item); err != nil {
-				return result, fmt.Errorf(
-					"importing recall line %d: %w", lineNo, err,
-				)
-			}
-			if err := db.requireRecallImportEvidence(ctx, recall); err != nil {
-				return result, fmt.Errorf(
-					"importing recall line %d: %w", lineNo, err,
-				)
-			}
-			if err := db.bindVerifiedRecallImportEvidence(ctx, &recall); err != nil {
-				return result, fmt.Errorf(
-					"importing recall line %d: %w", lineNo, err,
-				)
-			}
-		} else {
-			recall.ProvenanceOK = false
-		}
 		seen[recall.ID] = struct{}{}
 		if opts.DryRun {
+			duplicate, err := db.validateRecallImportDryRun(
+				ctx, item, &recall, opts,
+			)
+			if err != nil {
+				return result, fmt.Errorf(
+					"importing recall line %d: %w", lineNo, err,
+				)
+			}
+			if duplicate {
+				result.Skipped++
+				result.SkippedEntries = append(
+					result.SkippedEntries,
+					probeRecallImportItem(item, "duplicate"),
+				)
+				continue
+			}
 			result.WouldImport++
 			result.WouldImportEntries = append(
 				result.WouldImportEntries,
@@ -203,21 +176,21 @@ func (db *DB) ImportAcceptedRecallEntriesJSONLWithOptions(
 			)
 			continue
 		}
-		if err := db.ensureRecallImportSession(ctx, item); err != nil {
-			return result, fmt.Errorf(
-				"importing recall line %d: preparing source session: %w",
-				lineNo, err,
-			)
-		}
-		if recall.SupersedesEntryID != "" {
-			_, err = db.SupersedeRecallEntry(ctx, recall.SupersedesEntryID, recall)
-		} else {
-			_, err = db.InsertRecallEntry(recall)
-		}
+		inserted, err := db.importAcceptedRecallEntry(
+			ctx, item, recall, opts,
+		)
 		if err != nil {
 			return result, fmt.Errorf(
 				"importing recall line %d: %w", lineNo, err,
 			)
+		}
+		if !inserted {
+			result.Skipped++
+			result.SkippedEntries = append(
+				result.SkippedEntries,
+				probeRecallImportItem(item, "duplicate"),
+			)
+			continue
 		}
 		result.Imported++
 		result.ImportedEntries = append(
@@ -232,6 +205,149 @@ func (db *DB) ImportAcceptedRecallEntriesJSONLWithOptions(
 		return result, err
 	}
 	return result, nil
+}
+
+func (db *DB) validateRecallImportDryRun(
+	ctx context.Context,
+	item probeAcceptedRecallEntry,
+	recall *RecallEntry,
+	opts RecallImportOptions,
+) (bool, error) {
+	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return false, fmt.Errorf("begin recall import dry-run: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if opts.RequireExistingSessions {
+		if err := requireRecallImportSessionWithQueryer(ctx, tx, item); err != nil {
+			return false, err
+		}
+		if err := requireRecallImportEvidenceWithQueryer(ctx, tx, *recall); err != nil {
+			return false, err
+		}
+		if err := bindVerifiedRecallImportEvidenceWithQueryer(
+			ctx, tx, recall,
+		); err != nil {
+			return false, err
+		}
+	} else {
+		recall.ProvenanceOK = false
+	}
+	duplicate, err := validateRecallImportIdentityWithQueryer(ctx, tx, *recall)
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit recall import dry-run: %w", err)
+	}
+	return duplicate, nil
+}
+
+func validateRecallImportIdentityWithQueryer(
+	ctx context.Context,
+	queryer recallImportQueryer,
+	recall RecallEntry,
+) (bool, error) {
+	var duplicate bool
+	if err := queryer.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM recall_entries WHERE id = ?)
+	`, recall.ID).Scan(&duplicate); err != nil {
+		return false, fmt.Errorf("checking duplicate: %w", err)
+	}
+	if duplicate {
+		return true, nil
+	}
+	if recall.SupersedesEntryID == "" {
+		return false, nil
+	}
+	var supersededExists bool
+	if err := queryer.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM recall_entries WHERE id = ?)
+	`, recall.SupersedesEntryID).Scan(&supersededExists); err != nil {
+		return false, fmt.Errorf("checking superseded entry: %w", err)
+	}
+	if !supersededExists {
+		return false, fmt.Errorf(
+			"superseded entry %s not found", recall.SupersedesEntryID,
+		)
+	}
+	return false, nil
+}
+
+// importAcceptedRecallEntry verifies and binds evidence in the same serialized
+// writer transaction that inserts the entry. A concurrent transcript rewrite
+// can therefore either precede validation or reconcile the committed row; it
+// cannot land in the gap between a reader snapshot and insertion.
+func (db *DB) importAcceptedRecallEntry(
+	ctx context.Context,
+	item probeAcceptedRecallEntry,
+	recall RecallEntry,
+	opts RecallImportOptions,
+) (bool, error) {
+	if err := normalizeRecallEntryReviewState(&recall); err != nil {
+		return false, err
+	}
+	if recall.Status == "" {
+		recall.Status = corerecall.StatusAccepted
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	tx, err := db.getWriter().BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin recall import: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if opts.RequireExistingSessions {
+		if err := requireRecallImportSessionWithQueryer(ctx, tx, item); err != nil {
+			return false, err
+		}
+		if err := requireRecallImportEvidenceWithQueryer(ctx, tx, recall); err != nil {
+			return false, err
+		}
+		if err := bindVerifiedRecallImportEvidenceWithQueryer(
+			ctx, tx, &recall,
+		); err != nil {
+			return false, err
+		}
+	}
+
+	duplicate, err := validateRecallImportIdentityWithQueryer(ctx, tx, recall)
+	if err != nil {
+		return false, err
+	}
+	if duplicate {
+		return false, nil
+	}
+
+	if !opts.RequireExistingSessions {
+		recall.ProvenanceOK = false
+		if err := ensureRecallImportSessionTx(ctx, tx, item); err != nil {
+			return false, fmt.Errorf("preparing source session: %w", err)
+		}
+	}
+
+	if recall.SupersedesEntryID != "" {
+		if recall.SupersedesEntryID == recall.ID {
+			return false, fmt.Errorf(
+				"replacement entry id must differ from superseded entry id",
+			)
+		}
+		recall.SupersededByEntryID = ""
+		if err := supersedeRecallEntryTx(
+			ctx, tx, recall.SupersedesEntryID, recall,
+		); err != nil {
+			return false, err
+		}
+	} else if err := insertRecallEntryTx(tx, recall); err != nil {
+		return false, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit recall import: %w", err)
+	}
+	return true, nil
 }
 
 func hostControlledRecallImportField(
@@ -302,21 +418,30 @@ func normalizeProbeToolUseIDs(ids []string) []string {
 	return out
 }
 
-func (db *DB) requireRecallImportSession(
-	ctx context.Context, m probeAcceptedRecallEntry,
+func requireRecallImportSessionWithQueryer(
+	ctx context.Context,
+	queryer recallImportQueryer,
+	m probeAcceptedRecallEntry,
 ) error {
-	existing, err := db.GetSession(ctx, m.SessionID)
-	if err != nil {
-		return err
+	var exists bool
+	if err := queryer.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM sessions
+			WHERE id = ? AND deleted_at IS NULL
+		)
+	`, m.SessionID).Scan(&exists); err != nil {
+		return fmt.Errorf("checking source session %s: %w", m.SessionID, err)
 	}
-	if existing == nil {
+	if !exists {
 		return fmt.Errorf("source session %s not found", m.SessionID)
 	}
 	return nil
 }
 
-func (db *DB) requireRecallImportEvidence(
-	ctx context.Context, recall RecallEntry,
+func requireRecallImportEvidenceWithQueryer(
+	ctx context.Context,
+	queryer recallImportQueryer,
+	recall RecallEntry,
 ) error {
 	if len(recall.Evidence) == 0 {
 		return fmt.Errorf("missing recall evidence")
@@ -331,7 +456,9 @@ func (db *DB) requireRecallImportEvidence(
 			evidence.MessageEndOrdinal,
 		)
 		if _, ok := rangesChecked[rangeKey]; !ok {
-			if err := db.requireRecallEvidenceRange(ctx, evidence); err != nil {
+			if err := requireRecallEvidenceRangeWithQueryer(
+				ctx, queryer, evidence,
+			); err != nil {
 				return err
 			}
 			rangesChecked[rangeKey] = struct{}{}
@@ -344,7 +471,9 @@ func (db *DB) requireRecallImportEvidence(
 		if _, ok := toolUsesChecked[toolKey]; ok {
 			continue
 		}
-		if err := db.requireRecallEvidenceToolUse(ctx, evidence); err != nil {
+		if err := requireRecallEvidenceToolUseWithQueryer(
+			ctx, queryer, evidence,
+		); err != nil {
 			return err
 		}
 		toolUsesChecked[toolKey] = struct{}{}
@@ -352,8 +481,9 @@ func (db *DB) requireRecallImportEvidence(
 	return nil
 }
 
-func (db *DB) bindVerifiedRecallImportEvidence(
+func bindVerifiedRecallImportEvidenceWithQueryer(
 	ctx context.Context,
+	queryer recallImportQueryer,
 	recall *RecallEntry,
 ) error {
 	if len(recall.Evidence) == 0 {
@@ -371,8 +501,9 @@ func (db *DB) bindVerifiedRecallImportEvidence(
 			toolUseIDs = append(toolUseIDs, evidence.ToolUseID)
 		}
 	}
-	window, err := db.BuildRecallEvidenceWindow(
+	window, err := buildRecallEvidenceWindow(
 		ctx,
+		queryer,
 		first.SessionID,
 		first.MessageStartOrdinal,
 		first.MessageEndOrdinal,
@@ -398,12 +529,14 @@ func (db *DB) bindVerifiedRecallImportEvidence(
 	return nil
 }
 
-func (db *DB) requireRecallEvidenceRange(
-	ctx context.Context, evidence RecallEvidence,
+func requireRecallEvidenceRangeWithQueryer(
+	ctx context.Context,
+	queryer recallImportQueryer,
+	evidence RecallEvidence,
 ) error {
 	want := evidence.MessageEndOrdinal - evidence.MessageStartOrdinal + 1
 	var got int
-	err := db.getReader().QueryRowContext(ctx, `
+	err := queryer.QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM messages
 		WHERE session_id = ?
@@ -426,11 +559,13 @@ func (db *DB) requireRecallEvidenceRange(
 	return nil
 }
 
-func (db *DB) requireRecallEvidenceToolUse(
-	ctx context.Context, evidence RecallEvidence,
+func requireRecallEvidenceToolUseWithQueryer(
+	ctx context.Context,
+	queryer recallImportQueryer,
+	evidence RecallEvidence,
 ) error {
 	var got int
-	err := db.getReader().QueryRowContext(ctx, `
+	err := queryer.QueryRowContext(ctx, `
 		SELECT COUNT(*)
 		FROM tool_calls tc
 		JOIN messages m ON m.id = tc.message_id
@@ -457,16 +592,13 @@ func (db *DB) requireRecallEvidenceToolUse(
 	return nil
 }
 
-func (db *DB) ensureRecallImportSession(
-	ctx context.Context, m probeAcceptedRecallEntry,
-) error {
+func recallImportPlaceholderSession(m probeAcceptedRecallEntry) Session {
 	// Insert the placeholder only when the session is absent. A plain upsert
-	// would clobber a real session synced in the window between a presence
-	// check and the write with placeholder metadata (message_count=0, etc.).
+	// would clobber a real session with placeholder metadata.
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	firstMessage := "Recall import placeholder for " + m.SessionID
 	displayName := firstMessage
-	return db.insertSessionIfAbsent(ctx, Session{
+	return Session{
 		ID:                m.SessionID,
 		Project:           m.Project,
 		Machine:           "recall-import",
@@ -482,7 +614,42 @@ func (db *DB) ensureRecallImportSession(
 		Cwd:               m.CWD,
 		GitBranch:         m.GitBranch,
 		SourceVersion:     "recall-import-placeholder",
-	})
+	}
+}
+
+func ensureRecallImportSessionTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	m probeAcceptedRecallEntry,
+) error {
+	session := recallImportPlaceholderSession(m)
+	var excluded bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM excluded_sessions WHERE id = ?)
+	`, session.ID).Scan(&excluded); err != nil {
+		return fmt.Errorf("checking excluded session %s: %w", session.ID, err)
+	}
+	if excluded {
+		return ErrSessionExcluded
+	}
+	var trashed bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM sessions
+			WHERE id = ? AND deleted_at IS NOT NULL
+		)
+	`, session.ID).Scan(&trashed); err != nil {
+		return fmt.Errorf("checking trashed session %s: %w", session.ID, err)
+	}
+	if trashed {
+		return ErrSessionTrashed
+	}
+	if _, err := tx.ExecContext(
+		ctx, insertSessionIfAbsentSQL, upsertSessionArgs(session)...,
+	); err != nil {
+		return fmt.Errorf("inserting session %s if absent: %w", session.ID, err)
+	}
+	return nil
 }
 
 func probeRecallEntrySkipReason(m probeAcceptedRecallEntry) string {

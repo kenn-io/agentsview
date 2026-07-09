@@ -106,13 +106,29 @@ func (db *DB) BuildRecallEvidenceWindow(
 	messageStartOrdinal int,
 	messageEndOrdinal int,
 ) (RecallEvidenceWindow, error) {
-	return buildRecallEvidenceWindow(
+	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return RecallEvidenceWindow{}, fmt.Errorf(
+			"beginning recall evidence snapshot: %w", err,
+		)
+	}
+	defer func() { _ = tx.Rollback() }()
+	window, err := buildRecallEvidenceWindow(
 		ctx,
-		db.getReader(),
+		tx,
 		sessionID,
 		messageStartOrdinal,
 		messageEndOrdinal,
 	)
+	if err != nil {
+		return RecallEvidenceWindow{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return RecallEvidenceWindow{}, fmt.Errorf(
+			"committing recall evidence snapshot: %w", err,
+		)
+	}
+	return window, nil
 }
 
 func buildRecallEvidenceWindow(
@@ -499,7 +515,6 @@ func reconcileRecallEvidenceForSessionTx(
 	ctx context.Context,
 	tx *sql.Tx,
 	sessionID string,
-	allowLegacyFingerprint bool,
 ) error {
 	groups, err := loadTrustedRecallEvidenceGroupsTx(ctx, tx, sessionID)
 	if err != nil {
@@ -572,9 +587,8 @@ func reconcileRecallEvidenceForSessionTx(
 			}
 			return err
 		}
-		if group.key.contentDigest == "" && !allowLegacyFingerprint ||
-			group.key.contentDigest != "" &&
-				group.key.contentDigest != metadata.ContentDigest {
+		if group.key.contentDigest == "" ||
+			group.key.contentDigest != metadata.ContentDigest {
 			if err := revokeRecallEvidenceEntryTx(
 				ctx, tx, group.key.entryID,
 			); err != nil {
@@ -725,7 +739,6 @@ func revokeRecallEvidenceEntryTx(
 func reconcileAllRecallEvidenceTx(
 	ctx context.Context,
 	tx *sql.Tx,
-	allowLegacyFingerprint bool,
 ) error {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT DISTINCT e.session_id
@@ -756,7 +769,6 @@ func reconcileAllRecallEvidenceTx(
 			ctx,
 			tx,
 			sessionID,
-			allowLegacyFingerprint,
 		); err != nil {
 			return err
 		}

@@ -82,6 +82,9 @@ func QueryRecallStore(
 		TrustedOnly:   req.TrustedOnly,
 		Summary:       BuildRecallQuerySummary(page.RecallEntries),
 	}
+	if len(page.RecallEntries) == 0 {
+		resp.MissReason = RecallMissReasonNoResults
+	}
 	if req.IncludeContext {
 		contextText, contextMeta, err := BuildRecallContext(
 			page.RecallEntries, req.ContextMaxBytes, req.Query,
@@ -95,10 +98,8 @@ func QueryRecallStore(
 		resp.ContextSummary = BuildRecallContextSummary(
 			page.RecallEntries, contextMeta,
 		)
-		switch {
-		case len(page.RecallEntries) == 0:
-			resp.MissReason = RecallMissReasonNoResults
-		case contextMeta == nil || len(contextMeta.IncludedIDs) == 0:
+		if len(page.RecallEntries) > 0 &&
+			(contextMeta == nil || len(contextMeta.IncludedIDs) == 0) {
 			resp.MissReason = RecallMissReasonContextEmpty
 		}
 	}
@@ -137,6 +138,11 @@ func recordRecallQueryOutcome(
 	resp *RecallQueryResult,
 ) error {
 	if store.ReadOnly() {
+		if req.StrictRecording {
+			return fmt.Errorf(
+				"recording recall query outcome: %w", db.ErrReadOnly,
+			)
+		}
 		return nil
 	}
 	filtersJSON, err := json.Marshal(recallQueryEventFilters{
@@ -492,6 +498,7 @@ func toCoreRecallResults(results []db.RecallResult) []corerecall.Result {
 				Type:                result.Type,
 				Scope:               result.Scope,
 				Status:              result.Status,
+				ReviewState:         result.ReviewState,
 				Title:               result.Title,
 				Body:                result.Body,
 				Trigger:             result.Trigger,

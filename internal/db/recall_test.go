@@ -373,6 +373,19 @@ func TestQueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
 			Transferable:    true,
 			ProvenanceOK:    false,
 		},
+		{
+			ID:              "archived-reviewed",
+			Type:            "procedure",
+			Scope:           "project",
+			Status:          "archived",
+			Title:           "Archived cwd recall",
+			Body:            "Recover from wrong cwd before reading files.",
+			Project:         "agentsview",
+			Agent:           "codex",
+			SourceSessionID: "s1",
+			Transferable:    true,
+			ProvenanceOK:    true,
+		},
 	} {
 		_, err := d.InsertRecallEntry(recall)
 		require.NoError(t, err, "InsertRecallEntry %s", recall.ID)
@@ -389,6 +402,17 @@ func TestQueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
 	require.NoError(t, err, "QueryRecallEntries")
 	require.Len(t, page.RecallEntries, 1)
 	assert.Equal(t, "trusted", page.RecallEntries[0].ID)
+
+	page, err = d.QueryRecallEntries(ctx, RecallQuery{
+		Text:        "wrong cwd files",
+		Status:      "archived",
+		TrustedOnly: true,
+		Limit:       10,
+	})
+
+	require.NoError(t, err, "QueryRecallEntries archived trusted-only")
+	assert.Empty(t, page.RecallEntries,
+		"trusted-only must never return a non-accepted entry")
 }
 
 func TestInsertRecallEntryRejectsUnknownReviewState(t *testing.T) {
@@ -447,105 +471,6 @@ func TestSupersedeRecallEntryRejectsUnknownReviewState(t *testing.T) {
 	replacement, getErr := d.GetRecallEntry(context.Background(), "replacement")
 	require.NoError(t, getErr)
 	assert.Nil(t, replacement)
-}
-
-func TestMigrationRecallReviewStateClassifiesLegacyRowsWithoutDataLoss(
-	t *testing.T,
-) {
-	path := filepath.Join(t.TempDir(), "recall-review-state.db")
-	d, err := Open(path)
-	require.NoError(t, err, "initial open")
-	insertSession(t, d, "human-session", "agentsview")
-	insertSession(t, d, "eval-session", "agentsview", func(s *Session) {
-		s.Machine = "recall-eval-ingest"
-	})
-	insertSession(t, d, "placeholder-session", "agentsview", func(s *Session) {
-		s.Machine = "recall-import"
-	})
-	insertMessages(t, d,
-		recallEvidenceMessage(
-			"human-session", 2, "user", "legacy evidence begins", "human-2",
-		),
-		recallEvidenceMessage(
-			"human-session", 3, "assistant", "legacy evidence continues", "human-3",
-		),
-		recallEvidenceMessage(
-			"human-session", 4, "user", "legacy evidence ends", "human-4",
-		),
-	)
-
-	for _, entry := range []RecallEntry{
-		{
-			ID:              "human",
-			Type:            "fact",
-			Scope:           "project",
-			Status:          "accepted",
-			Title:           "Reviewed recall",
-			Body:            "Human-reviewed legacy data remains trusted.",
-			SourceSessionID: "human-session",
-			ProvenanceOK:    true,
-			Evidence: []RecallEvidence{{
-				SessionID:           "human-session",
-				MessageStartOrdinal: 2,
-				MessageEndOrdinal:   4,
-				Snippet:             "legacy evidence survives",
-			}},
-		},
-		{
-			ID:              "eval",
-			Type:            "fact",
-			Scope:           "project",
-			Status:          "accepted",
-			Title:           "Raw evaluation recall",
-			Body:            "Evaluation rows remain separated from trusted recall.",
-			SourceSessionID: "eval-session",
-			ProvenanceOK:    true,
-		},
-		{
-			ID:              "placeholder",
-			Type:            "fact",
-			Scope:           "project",
-			Status:          "accepted",
-			Title:           "Unverified imported recall",
-			Body:            "Placeholder-backed provenance must be revoked.",
-			SourceSessionID: "placeholder-session",
-			ProvenanceOK:    true,
-		},
-	} {
-		_, err := d.InsertRecallEntry(entry)
-		require.NoError(t, err, "insert %s", entry.ID)
-	}
-	require.NoError(t, d.Close(), "close current-schema database")
-
-	conn, err := sql.Open("sqlite3", path)
-	require.NoError(t, err, "raw open")
-	_, err = conn.Exec(`ALTER TABLE recall_entries DROP COLUMN review_state`)
-	require.NoError(t, err, "drop review_state column")
-	require.NoError(t, conn.Close(), "close legacy database")
-
-	reopened, err := Open(path)
-	require.NoError(t, err, "reopen and migrate")
-	defer reopened.Close()
-
-	for _, want := range []struct {
-		id           string
-		reviewState  string
-		provenanceOK bool
-	}{
-		{id: "human", reviewState: "human_reviewed", provenanceOK: true},
-		{id: "eval", reviewState: "eval_raw", provenanceOK: true},
-		{id: "placeholder", reviewState: "human_reviewed", provenanceOK: false},
-	} {
-		got, err := reopened.GetRecallEntry(context.Background(), want.id)
-		require.NoError(t, err, "get %s", want.id)
-		require.NotNil(t, got, "missing %s", want.id)
-		assert.Equal(t, want.reviewState, got.ReviewState, want.id)
-		assert.Equal(t, want.provenanceOK, got.ProvenanceOK, want.id)
-	}
-	human, err := reopened.GetRecallEntry(context.Background(), "human")
-	require.NoError(t, err)
-	require.Len(t, human.Evidence, 1)
-	assert.Equal(t, "legacy evidence survives", human.Evidence[0].Snippet)
 }
 
 func TestQueryRecallEntriesFiltersByExtractorMethod(t *testing.T) {
@@ -1535,18 +1460,20 @@ func TestGetRecallEntryMissingReturnsNil(t *testing.T) {
 	assert.Nil(t, got)
 }
 
-func TestToCoreRecallEntriesPreservesTimestamps(t *testing.T) {
+func TestToCoreRecallEntriesPreservesHostMetadata(t *testing.T) {
 	got := toCoreRecallEntries([]RecallEntry{
 		{
-			ID:        "m1",
-			Status:    "accepted",
-			Title:     "Recent note",
-			CreatedAt: "2024-01-01T00:00:00Z",
-			UpdatedAt: "2024-02-01T00:00:00Z",
+			ID:          "m1",
+			Status:      "accepted",
+			ReviewState: "unreviewed_auto",
+			Title:       "Recent note",
+			CreatedAt:   "2024-01-01T00:00:00Z",
+			UpdatedAt:   "2024-02-01T00:00:00Z",
 		},
 	})
 
 	require.Len(t, got, 1)
+	assert.Equal(t, "unreviewed_auto", got[0].ReviewState)
 	assert.Equal(t, "2024-01-01T00:00:00Z", got[0].CreatedAt)
 	assert.Equal(t, "2024-02-01T00:00:00Z", got[0].UpdatedAt)
 }
@@ -1696,9 +1623,62 @@ func TestCopyRecallEntriesFromRevokesChangedEvidence(t *testing.T) {
 	require.Len(t, got.Evidence, 1)
 }
 
-func TestCopyRecallEntriesFromFingerprintsVerifiedLegacyEvidence(t *testing.T) {
+func TestCopyRecallEntriesFromRevokesDroppedEvidenceSession(t *testing.T) {
 	dir := t.TempDir()
-	srcPath := filepath.Join(dir, "old-legacy-evidence.db")
+	srcPath := filepath.Join(dir, "old-dropped-evidence.db")
+	srcDB, err := Open(srcPath)
+	require.NoError(t, err)
+	insertSession(t, srcDB, "entry-session", "agentsview")
+	seedRecallEvidenceWindow(t, srcDB, "evidence-session", 10, "stable", "")
+	window, err := srcDB.BuildRecallEvidenceWindow(
+		context.Background(), "evidence-session", 10, 11,
+	)
+	require.NoError(t, err)
+	metadata, err := window.BindSelection(RecallEvidenceSelection{
+		MessageStartOrdinal: 10,
+		MessageEndOrdinal:   11,
+		ToolUseIDs:          []string{"tool-a"},
+	})
+	require.NoError(t, err)
+	_, err = srcDB.InsertRecallEntry(RecallEntry{
+		ID:              "m1",
+		Type:            "fact",
+		Scope:           "project",
+		Status:          "accepted",
+		Title:           "Cross-session evidence",
+		Body:            "Every evidence selection must survive full resync.",
+		SourceSessionID: "entry-session",
+		Transferable:    true,
+		ProvenanceOK:    true,
+		Evidence: []RecallEvidence{{
+			SessionID:              "evidence-session",
+			MessageStartOrdinal:    10,
+			MessageEndOrdinal:      11,
+			MessageStartSourceUUID: metadata.MessageStartSourceUUID,
+			MessageEndSourceUUID:   metadata.MessageEndSourceUUID,
+			ContentDigest:          metadata.ContentDigest,
+			ToolUseID:              "tool-a",
+		}},
+	})
+	require.NoError(t, err)
+	require.NoError(t, srcDB.Close())
+
+	dstPath := filepath.Join(dir, "new-dropped-evidence.db")
+	dstDB, err := Open(dstPath)
+	require.NoError(t, err)
+	defer dstDB.Close()
+	insertSession(t, dstDB, "entry-session", "agentsview")
+
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
+
+	got := requireRecallEntry(t, dstDB, "m1")
+	assert.False(t, got.ProvenanceOK)
+	assert.Empty(t, got.Evidence)
+}
+
+func TestCopyRecallEntriesFromRevokesEvidenceWithoutFingerprint(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "old-unfingerprinted-evidence.db")
 	srcDB, err := Open(srcPath)
 	require.NoError(t, err)
 	seedRecallEvidenceWindow(t, srcDB, "s1", 10, "stable", "")
@@ -1707,8 +1687,8 @@ func TestCopyRecallEntriesFromFingerprintsVerifiedLegacyEvidence(t *testing.T) {
 		Type:            "fact",
 		Scope:           "project",
 		Status:          "accepted",
-		Title:           "Legacy verified evidence",
-		Body:            "Full resync fingerprints a still-valid legacy range.",
+		Title:           "Unfingerprinted evidence",
+		Body:            "Full resync must not promote an unauthenticated range.",
 		SourceSessionID: "s1",
 		Transferable:    true,
 		ProvenanceOK:    true,
@@ -1724,7 +1704,7 @@ func TestCopyRecallEntriesFromFingerprintsVerifiedLegacyEvidence(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, srcDB.Close())
 
-	dstPath := filepath.Join(dir, "new-legacy-evidence.db")
+	dstPath := filepath.Join(dir, "new-unfingerprinted-evidence.db")
 	dstDB, err := Open(dstPath)
 	require.NoError(t, err)
 	defer dstDB.Close()
@@ -1734,11 +1714,11 @@ func TestCopyRecallEntriesFromFingerprintsVerifiedLegacyEvidence(t *testing.T) {
 	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
 
 	got := requireRecallEntry(t, dstDB, "m1")
-	assert.True(t, got.ProvenanceOK)
+	assert.False(t, got.ProvenanceOK)
 	require.Len(t, got.Evidence, 1)
-	assert.Equal(t, "stable-10", got.Evidence[0].MessageStartSourceUUID)
-	assert.Equal(t, "stable-11", got.Evidence[0].MessageEndSourceUUID)
-	assert.Len(t, got.Evidence[0].ContentDigest, 64)
+	assert.Empty(t, got.Evidence[0].MessageStartSourceUUID)
+	assert.Empty(t, got.Evidence[0].MessageEndSourceUUID)
+	assert.Empty(t, got.Evidence[0].ContentDigest)
 }
 
 // TestVacuumPreservesRecallEntriesFTSSearchable guards the assumption that VACUUM

@@ -59,6 +59,26 @@ func TestDirectBackend_RecallNoResultsRecordsMiss(t *testing.T) {
 	assert.Empty(t, event.Exposures)
 }
 
+func TestDirectBackend_RecallNoResultsWithoutContextRecordsMiss(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	svc := service.NewReadOnlyBackend(d)
+
+	got, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
+		Query: "term-with-no-recall-result",
+		Limit: 5,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "no_results", got.MissReason)
+	assert.NotEmpty(t, got.QueryID)
+	event, err := d.GetRecallQueryEvent(context.Background(), got.QueryID)
+	require.NoError(t, err)
+	require.NotNil(t, event)
+	assert.Equal(t, "no_results", event.MissReason)
+	assert.Zero(t, event.ResultCount)
+}
+
 func TestDirectBackend_RecallContextEmptyRecordsMiss(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	seedServiceRecallEntrySession(t, d)
@@ -217,6 +237,16 @@ func TestDirectBackend_ReadOnlySQLiteSkipsRecallRecording(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got.RecallEntries, 1)
 	assert.Empty(t, got.QueryID)
+
+	_, err = svc.QueryRecallEntries(context.Background(), service.RecallQuery{
+		Query:           "cwd recall",
+		IncludeContext:  true,
+		Limit:           5,
+		StrictRecording: true,
+	})
+
+	require.ErrorIs(t, err, db.ErrReadOnly,
+		"strict calibration must fail when it cannot persist a query ID")
 }
 
 func TestDirectBackend_QueryRecallEntries(t *testing.T) {
@@ -564,6 +594,7 @@ func TestBuildRecallContextIncludesLifecycleMetadata(t *testing.T) {
 				Type:              "procedure",
 				Scope:             "project",
 				Status:            "accepted",
+				ReviewState:       "unreviewed_auto",
 				Title:             "Current retry policy",
 				Body:              "Retry flaky command three times.",
 				SupersedesEntryID: "old",
@@ -585,6 +616,7 @@ func TestBuildRecallContextIncludesLifecycleMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, meta)
 	assert.Equal(t, 2, meta.EntryCount)
+	assert.Contains(t, text, "review_state=unreviewed_auto")
 	assert.Contains(t, text, "supersedes=old")
 	assert.Contains(t, text, "status=archived")
 	assert.Contains(t, text, "superseded_by=new")

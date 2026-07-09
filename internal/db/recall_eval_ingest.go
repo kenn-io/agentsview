@@ -260,9 +260,10 @@ func (db *DB) ensureEvalTrajectorySession(
 	})
 }
 
-// newEvalChunkRecallEntry builds the raw-chunk recall row for one chunk. Confidence
-// is left nil (raw chunks earn no confidence ranking bonus); transferable +
-// provenance_ok are true so trusted_only queries retrieve them.
+// newEvalChunkRecallEntry builds the raw-chunk recall row for one chunk.
+// Confidence is left nil (raw chunks earn no confidence ranking bonus).
+// Transferability and provenance remain measurable, while eval_raw keeps these
+// rows quarantined from trusted-only recall.
 func newEvalChunkRecallEntry(
 	id, sessionID string, in EvalTrajectoryIngest, idx, total int, body string,
 ) RecallEntry {

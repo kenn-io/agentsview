@@ -1165,7 +1165,6 @@ func (db *DB) migrateColumns() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	w := db.getWriter()
-	recallReviewStateAdded := false
 
 	migrations := []struct {
 		table  string
@@ -1486,22 +1485,6 @@ func (db *DB) migrateColumns() error {
 			"worktree_project_mappings", "layout",
 			"ALTER TABLE worktree_project_mappings ADD COLUMN layout TEXT NOT NULL DEFAULT 'explicit'",
 		},
-		{
-			"recall_entries", "review_state",
-			"ALTER TABLE recall_entries ADD COLUMN review_state TEXT NOT NULL DEFAULT 'human_reviewed' CHECK (review_state IN ('human_reviewed', 'unreviewed_auto', 'calibrated_auto', 'eval_raw'))",
-		},
-		{
-			"recall_evidence", "message_start_source_uuid",
-			"ALTER TABLE recall_evidence ADD COLUMN message_start_source_uuid TEXT NOT NULL DEFAULT ''",
-		},
-		{
-			"recall_evidence", "message_end_source_uuid",
-			"ALTER TABLE recall_evidence ADD COLUMN message_end_source_uuid TEXT NOT NULL DEFAULT ''",
-		},
-		{
-			"recall_evidence", "content_digest",
-			"ALTER TABLE recall_evidence ADD COLUMN content_digest TEXT NOT NULL DEFAULT ''",
-		},
 	}
 
 	for _, m := range migrations {
@@ -1524,26 +1507,11 @@ func (db *DB) migrateColumns() error {
 					m.table, m.column, err,
 				)
 			}
-			if m.table == "recall_entries" && m.column == "review_state" {
-				recallReviewStateAdded = true
-			}
 			log.Printf(
 				"migration: added column %s.%s",
 				m.table, m.column,
 			)
 		}
-	}
-	if recallReviewStateAdded {
-		if err := db.backfillRecallReviewStateLocked(w); err != nil {
-			return err
-		}
-	}
-	// This repair is intentionally idempotent and runs even when no column was
-	// added during this open. That closes the crash window between additive DDL
-	// and its data backfill, and fingerprints trusted rows written by an older
-	// binary before any transcript rewrite can make their baseline ambiguous.
-	if err := db.backfillRecallEvidenceMetadataLocked(w); err != nil {
-		return err
 	}
 	if err := db.createPartialIndexesLocked(w); err != nil {
 		return err
@@ -1684,71 +1652,6 @@ func (db *DB) migrateColumns() error {
 	}
 	if err := db.markTokenCoverageRepairDoneLocked(w); err != nil {
 		return err
-	}
-	return nil
-}
-
-func (db *DB) backfillRecallReviewStateLocked(w *writerHandle) error {
-	tx, err := w.Begin()
-	if err != nil {
-		return fmt.Errorf("beginning recall review-state backfill: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.Exec(`
-		UPDATE recall_entries
-		SET review_state = CASE
-			WHEN EXISTS (
-				SELECT 1 FROM sessions
-				WHERE sessions.id = recall_entries.source_session_id
-				  AND sessions.machine = 'recall-eval-ingest'
-			) THEN 'eval_raw'
-			ELSE 'human_reviewed'
-		END`); err != nil {
-		return fmt.Errorf("classifying recall review state: %w", err)
-	}
-	if _, err := tx.Exec(`
-		UPDATE recall_entries
-		SET provenance_ok = 0
-		WHERE EXISTS (
-			SELECT 1 FROM sessions
-			WHERE sessions.id = recall_entries.source_session_id
-			  AND sessions.machine = 'recall-import'
-		)`); err != nil {
-		return fmt.Errorf("revoking placeholder recall provenance: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing recall review-state backfill: %w", err)
-	}
-	return nil
-}
-
-func (db *DB) backfillRecallEvidenceMetadataLocked(w *writerHandle) error {
-	tx, err := w.Begin()
-	if err != nil {
-		return fmt.Errorf("beginning recall evidence metadata backfill: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	var needsBackfill bool
-	if err := tx.QueryRow(`
-		SELECT EXISTS (
-			SELECT 1
-			FROM recall_evidence e
-			JOIN recall_entries r ON r.id = e.entry_id
-			WHERE r.provenance_ok = 1
-			  AND e.content_digest = ''
-		)`).Scan(&needsBackfill); err != nil {
-		return fmt.Errorf("checking recall evidence metadata backfill: %w", err)
-	}
-	if !needsBackfill {
-		return nil
-	}
-	if err := reconcileAllRecallEvidenceTx(
-		context.Background(), tx, true,
-	); err != nil {
-		return fmt.Errorf("backfilling recall evidence metadata: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("committing recall evidence metadata backfill: %w", err)
 	}
 	return nil
 }

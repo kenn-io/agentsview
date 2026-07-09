@@ -249,6 +249,12 @@ func formatEntryAttributes(m Entry) string {
 	if m.Status != "" && m.Status != StatusAccepted {
 		parts = append(parts, "status="+contextSingleLine(m.Status))
 	}
+	if m.ReviewState != "" && m.ReviewState != ReviewStateHumanReviewed {
+		parts = append(
+			parts,
+			"review_state="+contextSingleLine(m.ReviewState),
+		)
+	}
 	if m.SourceSessionID != "" {
 		parts = append(
 			parts,
