@@ -85,6 +85,8 @@ func TestRecallQuery_JSONWithContext(t *testing.T) {
 
 	require.NoError(t, err)
 	var got struct {
+		QueryID       string                     `json:"query_id"`
+		MissReason    string                     `json:"miss_reason"`
 		RecallEntries []db.RecallResult          `json:"entries"`
 		Context       string                     `json:"context"`
 		ContextMeta   *service.RecallContextMeta `json:"context_meta"`
@@ -92,6 +94,8 @@ func TestRecallQuery_JSONWithContext(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(out), &got),
 		"stdout should be valid JSON: %q", out)
 	require.Len(t, got.RecallEntries, 1)
+	assert.NotEmpty(t, got.QueryID)
+	assert.Empty(t, got.MissReason)
 	assert.Equal(t, "m-cli", got.RecallEntries[0].ID)
 	assert.Contains(t, got.Context, "Check cwd before file reads")
 	require.NotNil(t, got.ContextMeta)
@@ -202,6 +206,7 @@ func TestRecallQueryUsesExplicitServerURL(t *testing.T) {
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotReq))
 		w.Header().Set("Content-Type", "application/json")
 		require.NoError(t, json.NewEncoder(w).Encode(service.RecallQueryResult{
+			QueryID: "remote-query-id",
 			RecallEntries: []db.RecallResult{{
 				RecallEntry: db.RecallEntry{
 					ID:              "m-remote",
@@ -226,11 +231,13 @@ func TestRecallQueryUsesExplicitServerURL(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "/api/v1/recall/query", gotPath)
 	assert.Equal(t, "remote daemon recall", gotReq.Query)
+	assert.Equal(t, "query", gotReq.Surface)
 	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
 	var got service.RecallQueryResult
 	require.NoError(t, json.Unmarshal([]byte(out), &got),
 		"stdout should be valid JSON: %q", out)
 	require.Len(t, got.RecallEntries, 1)
+	assert.Equal(t, "remote-query-id", got.QueryID)
 	assert.Equal(t, "m-remote", got.RecallEntries[0].ID)
 }
 
@@ -345,6 +352,7 @@ func TestRecallBriefUsesExplicitServerURL(t *testing.T) {
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotReq))
 		w.Header().Set("Content-Type", "application/json")
 		require.NoError(t, json.NewEncoder(w).Encode(service.RecallQueryResult{
+			QueryID: "remote-brief-id",
 			RecallEntries: []db.RecallResult{{
 				RecallEntry: db.RecallEntry{
 					ID:     "m-brief-remote",
@@ -373,16 +381,21 @@ func TestRecallBriefUsesExplicitServerURL(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "/api/v1/recall/query", gotPath)
 	assert.Equal(t, "remote daemon task", gotReq.Query)
+	assert.Equal(t, "brief", gotReq.Surface)
 	assert.True(t, gotReq.IncludeContext)
 	assert.True(t, gotReq.TrustedOnly)
 	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
 	var got struct {
+		QueryID     string   `json:"query_id"`
+		MissReason  string   `json:"miss_reason"`
 		TrustedOnly bool     `json:"trusted_only"`
 		EntryIDs    []string `json:"entry_ids"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(out), &got),
 		"stdout should be valid JSON: %q", out)
 	assert.True(t, got.TrustedOnly)
+	assert.Equal(t, "remote-brief-id", got.QueryID)
+	assert.Empty(t, got.MissReason)
 	assert.Equal(t, []string{"m-brief-remote"}, got.EntryIDs)
 }
 
@@ -675,6 +688,8 @@ func TestRecallBriefJSONUsesOnlyPackedContextEntryIDs(t *testing.T) {
 
 	require.NoError(t, err)
 	var got struct {
+		QueryID        string                     `json:"query_id"`
+		MissReason     string                     `json:"miss_reason"`
 		Context        string                     `json:"context"`
 		ContextMeta    *service.RecallContextMeta `json:"context_meta"`
 		EntryIDs       []string                   `json:"entry_ids"`
@@ -684,6 +699,8 @@ func TestRecallBriefJSONUsesOnlyPackedContextEntryIDs(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(out), &got),
 		"stdout should be valid JSON: %q", out)
 	assert.Empty(t, got.Context)
+	assert.NotEmpty(t, got.QueryID)
+	assert.Equal(t, "context_empty", got.MissReason)
 	require.NotNil(t, got.ContextMeta)
 	assert.True(t, got.ContextMeta.Truncated)
 	assert.Equal(t, 1, got.ContextMeta.OmittedCount)
@@ -1528,6 +1545,7 @@ func TestRecallQueryFiltersTrustedOnly(t *testing.T) {
 	setRecallTestEnv(t, dataDir)
 	seedRecallEntryFixture(t, dataDir)
 	seedExtractedRecallEntryFixture(t, dataDir)
+	seedRecallReviewStateEntries(t, dataDir)
 
 	out, err := executeCommand(newRootCommand(),
 		"recall", "query", "cwd failed reads",
@@ -1539,6 +1557,27 @@ func TestRecallQueryFiltersTrustedOnly(t *testing.T) {
 	assert.Contains(t, out, "Trusted-only: true")
 	assert.Contains(t, out, "m-extracted")
 	assert.NotContains(t, out, "m-cli")
+	assert.NotContains(t, out, "m-unreviewed-auto")
+	assert.NotContains(t, out, "m-calibrated-auto")
+	assert.NotContains(t, out, "m-eval-raw")
+}
+
+func TestRecallQueryHumanShowsReviewState(t *testing.T) {
+	dataDir := t.TempDir()
+	setRecallTestEnv(t, dataDir)
+	seedRecallEntryFixture(t, dataDir)
+	seedRecallReviewStateEntries(t, dataDir)
+
+	out, err := executeCommand(newRootCommand(),
+		"recall", "query", "cwd failed reads",
+		"--project", "agentsview",
+		"--agent", "codex")
+
+	require.NoError(t, err)
+	assert.Contains(t, out, "m-unreviewed-auto")
+	assert.Contains(t, out, "review_state=unreviewed_auto")
+	assert.Contains(t, out, "review_state=calibrated_auto")
+	assert.Contains(t, out, "review_state=eval_raw")
 }
 
 func TestRecallListFiltersByExtractorMethod(t *testing.T) {
@@ -2129,6 +2168,43 @@ func seedExtractedRecallEntryFixture(t *testing.T, dataDir string) {
 		ProvenanceOK:    true,
 	})
 	require.NoError(t, err)
+}
+
+func seedRecallReviewStateEntries(t *testing.T, dataDir string) {
+	t.Helper()
+	d, err := db.Open(filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { d.Close() })
+
+	for _, entry := range []db.RecallEntry{
+		{
+			ID:          "m-unreviewed-auto",
+			ReviewState: "unreviewed_auto",
+			Title:       "Unreviewed automatic cwd recall",
+		},
+		{
+			ID:          "m-calibrated-auto",
+			ReviewState: "calibrated_auto",
+			Title:       "Calibrated automatic cwd recall",
+		},
+		{
+			ID:          "m-eval-raw",
+			ReviewState: "eval_raw",
+			Title:       "Raw evaluation cwd recall",
+		},
+	} {
+		entry.Type = "procedure"
+		entry.Scope = "project"
+		entry.Status = "accepted"
+		entry.Body = "Verify cwd before retrying failed reads."
+		entry.Project = "agentsview"
+		entry.Agent = "codex"
+		entry.SourceSessionID = "recall-session"
+		entry.Transferable = true
+		entry.ProvenanceOK = true
+		_, err := d.InsertRecallEntry(entry)
+		require.NoError(t, err, entry.ID)
+	}
 }
 
 func seedRecallEntryEpisodeFixture(t *testing.T, dataDir string) {

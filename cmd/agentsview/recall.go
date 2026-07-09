@@ -357,6 +357,7 @@ func newRecallQueryCommand() *cobra.Command {
 			}
 			defer cleanup()
 			req.Query = args[0]
+			req.Surface = db.RecallQuerySurfaceQuery
 			if err := applyRecallEntryCurrentScope(
 				&req.CWD, &req.GitBranch, currentCWD, currentGitBranch,
 				currentWorktree,
@@ -486,6 +487,8 @@ func recallCountNoun(count int) string {
 }
 
 type recallBriefResult struct {
+	QueryID        string                      `json:"query_id"`
+	MissReason     string                      `json:"miss_reason"`
 	Task           string                      `json:"task"`
 	TrustedOnly    bool                        `json:"trusted_only"`
 	Context        string                      `json:"context"`
@@ -518,6 +521,7 @@ func newRecallBriefCommand() *cobra.Command {
 			}
 			defer cleanup()
 			req.Query = args[0]
+			req.Surface = db.RecallQuerySurfaceBrief
 			req.IncludeContext = true
 			if err := applyRecallEntryCurrentScope(
 				&req.CWD, &req.GitBranch, currentCWD, currentGitBranch,
@@ -534,6 +538,8 @@ func newRecallBriefCommand() *cobra.Command {
 				summary = service.BuildRecallQuerySummary(result.RecallEntries)
 			}
 			brief := recallBriefResult{
+				QueryID:        result.QueryID,
+				MissReason:     result.MissReason,
 				Task:           req.Query,
 				TrustedOnly:    req.TrustedOnly,
 				Context:        result.Context,
@@ -1154,7 +1160,7 @@ func addRecallFilterFlags(cmd *cobra.Command, f *service.RecallFilter) {
 		&f.TrustedOnly,
 		"trusted-only",
 		false,
-		"Only include entries marked transferable with verified provenance",
+		"Only include human-reviewed, transferable entries with verified provenance",
 	)
 	flags.IntVar(&f.Limit, "limit", 0, "Maximum entries to return")
 }
@@ -1336,7 +1342,7 @@ func addRecallQueryFlags(cmd *cobra.Command, req *service.RecallQuery) {
 		&req.TrustedOnly,
 		"trusted-only",
 		req.TrustedOnly,
-		"Only include entries marked transferable with verified provenance",
+		"Only include human-reviewed, transferable entries with verified provenance",
 	)
 	flags.IntVar(&req.Limit, "limit", 0, "Maximum entries to return")
 	flags.BoolVar(&req.IncludeContext, "context", false, "Print assembled context")
@@ -1374,12 +1380,17 @@ func printRecallResultsHuman(
 }
 
 func printRecallEntryReviewLine(w io.Writer, recall db.RecallEntry) {
+	reviewState := strings.TrimSpace(recall.ReviewState)
+	if reviewState == "" {
+		reviewState = "human_reviewed"
+	}
 	fmt.Fprintf(
 		w,
-		"    review transferable=%t provenance_ok=%t evidence=%d\n",
+		"    review transferable=%t provenance_ok=%t evidence=%d review_state=%s\n",
 		recall.Transferable,
 		recall.ProvenanceOK,
 		len(recall.Evidence),
+		sanitizeTerminal(reviewState),
 	)
 }
 
@@ -1556,6 +1567,11 @@ func printRecallEntryHuman(w io.Writer, recall *db.RecallEntry) error {
 	if recall.Status != "" {
 		fmt.Fprintf(w, "Status:   %s\n", sanitizeTerminal(recall.Status))
 	}
+	reviewState := strings.TrimSpace(recall.ReviewState)
+	if reviewState == "" {
+		reviewState = "human_reviewed"
+	}
+	fmt.Fprintf(w, "Review:   %s\n", sanitizeTerminal(reviewState))
 	if recall.SupersedesEntryID != "" {
 		fmt.Fprintf(
 			w,
