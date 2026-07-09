@@ -45,23 +45,9 @@ func (hs HTTPSync) Run(ctx context.Context) (SyncStats, error) {
 		return SyncStats{}, err
 	}
 	if hs.DataDir != "" {
-		// The manifest covers only dir-scoped agents; file-scoped agents
-		// (Windsurf) stream curated, sanitized exports the manifest cannot
-		// model, so they are fetched as a separate small full archive on
-		// every mirror sync instead of dragging the whole host onto the
-		// full-archive path.
-		dirScoped, fileScoped := targets.SplitFileScoped()
-		manifest, supported, err := hs.fetchManifest(ctx, client, dirScoped)
-		if err != nil {
-			return SyncStats{}, err
-		}
-		if supported {
-			split := splitTargets{
-				all:        targets,
-				dirScoped:  dirScoped,
-				fileScoped: fileScoped,
-			}
-			return hs.runMirror(ctx, client, split, manifest)
+		stats, handled, err := hs.tryMirrorSync(ctx, client, targets)
+		if handled || err != nil {
+			return stats, err
 		}
 		hs.report(syncpkg.Progress{
 			Detail: fmt.Sprintf(
@@ -71,6 +57,44 @@ func (hs HTTPSync) Run(ctx context.Context) (SyncStats, error) {
 		})
 	}
 	return hs.runLegacy(ctx, client, targets)
+}
+
+// tryMirrorSync runs the incremental mirror flow, reporting
+// handled=false when the remote lacks manifest support and the caller
+// should fall back to the legacy full-archive path. The mirror lock is
+// acquired BEFORE the manifest fetch: concurrent syncs of the same
+// host would otherwise fetch manifests in one order and apply them in
+// another, and the stale manifest's deletion pass would remove files
+// the newer sync just mirrored.
+func (hs HTTPSync) tryMirrorSync(
+	ctx context.Context, client *http.Client, targets TargetSet,
+) (SyncStats, bool, error) {
+	// The manifest covers only dir-scoped agents; file-scoped agents
+	// (Windsurf) stream curated, sanitized exports the manifest cannot
+	// model, so they are fetched as a separate small full archive on
+	// every mirror sync instead of dragging the whole host onto the
+	// full-archive path.
+	dirScoped, fileScoped := targets.SplitFileScoped()
+	mirrorRoot := MirrorDir(hs.DataDir, hs.Host)
+	lock, err := AcquireMirrorLock(ctx, mirrorRoot)
+	if err != nil {
+		return SyncStats{}, true, err
+	}
+	defer func() { _ = lock.Close() }()
+	manifest, supported, err := hs.fetchManifest(ctx, client, dirScoped)
+	if err != nil {
+		return SyncStats{}, true, err
+	}
+	if !supported {
+		return SyncStats{}, false, nil
+	}
+	split := splitTargets{
+		all:        targets,
+		dirScoped:  dirScoped,
+		fileScoped: fileScoped,
+	}
+	stats, err := hs.runMirror(ctx, client, split, manifest, mirrorRoot)
+	return stats, true, err
 }
 
 // runLegacy is the pre-manifest flow: download the full tree into a
@@ -121,20 +145,16 @@ type splitTargets struct {
 // runMirror syncs incrementally: diff the manifest against the
 // persistent mirror, download only changed files, and import over the
 // complete mirror tree so parser sibling reads keep working. The
-// mirror lock is held through import because extraction truncates
-// files in place and the engine reads the mirror during SyncAll.
+// caller holds the mirror lock from before the manifest fetch through
+// import, because extraction truncates files in place and the engine
+// reads the mirror during SyncAll.
 func (hs HTTPSync) runMirror(
 	ctx context.Context,
 	client *http.Client,
 	targets splitTargets,
 	manifest Manifest,
+	mirrorRoot string,
 ) (SyncStats, error) {
-	mirrorRoot := MirrorDir(hs.DataDir, hs.Host)
-	lock, err := AcquireMirrorLock(ctx, mirrorRoot)
-	if err != nil {
-		return SyncStats{}, err
-	}
-	defer func() { _ = lock.Close() }()
 	delta, err := MirrorDiff(mirrorRoot, manifest, targets.dirScoped)
 	if err != nil {
 		return SyncStats{}, err

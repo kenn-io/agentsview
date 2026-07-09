@@ -168,8 +168,9 @@ type mirrorTestRemote struct {
 	dir             string // remote-side agent dir (absolute)
 	targets         TargetSet
 	archiveRequests []ArchiveRequest
-	manifestStatus  int  // 0 = serve manifest; else respond with this status
-	manifestHTML    bool // true = mimic an old daemon's SPA catch-all
+	manifestStatus  int    // 0 = serve manifest; else respond with this status
+	manifestHTML    bool   // true = mimic an old daemon's SPA catch-all
+	onManifest      func() // called before serving a manifest response
 	rejectDelta     bool
 	ts              *httptest.Server
 }
@@ -189,6 +190,9 @@ func newMirrorTestRemote(t *testing.T) *mirrorTestRemote {
 			w.Header().Set("Content-Type", "application/json")
 			require.NoError(t, json.NewEncoder(w).Encode(remote.targets))
 		case "/api/v1/remote-sync/manifest":
+			if remote.onManifest != nil {
+				remote.onManifest()
+			}
 			if remote.manifestStatus != 0 {
 				http.Error(w, "no manifest here", remote.manifestStatus)
 				return
@@ -528,6 +532,31 @@ func TestHTTPSyncMirrorPartitionsFileScopedAgents(t *testing.T) {
 	assert.Equal(t, []string{changed}, remote.archiveRequests[2].DeltaFiles)
 	assert.Contains(t, remote.archiveRequests[3].Files, parser.AgentGemini)
 	assert.FileExists(t, scopedLocal)
+}
+
+// The mirror lock must already be held when the manifest is fetched:
+// otherwise two concurrent syncs can fetch manifests in one order and
+// apply them in another, and the stale manifest's deletion pass
+// removes files the newer sync just mirrored.
+func TestHTTPSyncHoldsMirrorLockDuringManifestFetch(t *testing.T) {
+	remote := newMirrorTestRemote(t)
+	remote.writeSession(t, "a.jsonl",
+		time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC), "session a")
+	dataDir := t.TempDir()
+	_, hs := newMirrorSync(t, remote, dataDir)
+
+	mirrorRoot := MirrorDir(dataDir, "devbox")
+	remote.onManifest = func() {
+		// assert, not require: this runs on the server goroutine, where
+		// FailNow must not be called.
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		_, err := AcquireMirrorLock(ctx, mirrorRoot)
+		assert.Error(t, err, "mirror lock must be held during the manifest fetch")
+	}
+
+	_, err := hs.Run(context.Background())
+	require.NoError(t, err)
 }
 
 func TestHTTPSyncFullRefreshesMirrorBytes(t *testing.T) {
