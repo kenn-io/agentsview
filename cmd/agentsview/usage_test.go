@@ -1414,6 +1414,150 @@ func TestNewUsageCursorCommandExplicitMemberFilterDoesNotReuseConfigSibling(t *t
 	}
 }
 
+func TestRefreshPricingIfStale_FreshAttemptSkipsFetch(t *testing.T) {
+	d := newTestDB(t)
+	now := pricingTestNow()
+
+	// Last attempt 10 minutes ago, cooldown 1 hour: skip.
+	prev := seedPricingAttempt(t, d, now, 10*time.Minute)
+
+	fetcher := &pricingFetchRecorder{}
+	refreshed, err := refreshPricingIfStale(
+		d, fetcher.fetch, pricingTestCooldown, now,
+	)
+	require.NoError(t, err)
+	assert.False(t, refreshed, "refreshed = true, want false within cooldown")
+	assert.Zero(t, fetcher.calls, "fetch should not run within cooldown")
+
+	// Meta value preserved (we did not overwrite it).
+	assertPricingAttemptMeta(t, d, prev)
+}
+
+func TestRefreshPricingIfStale_StaleTriggersFetch(t *testing.T) {
+	d := newTestDB(t)
+	now := pricingTestNow()
+
+	// Last attempt 2 hours ago, cooldown 1 hour: refresh.
+	seedPricingAttempt(t, d, now, 2*time.Hour)
+
+	fetcher := &pricingFetchRecorder{rows: []pricing.ModelPricing{{
+		ModelPattern:  "gpt-5.5",
+		InputPerMTok:  1.25,
+		OutputPerMTok: 10.0,
+	}}}
+	refreshed, err := refreshPricingIfStale(
+		d, fetcher.fetch, pricingTestCooldown, now,
+	)
+	require.NoError(t, err)
+	require.True(t, refreshed, "refreshed = false, want true after cooldown")
+
+	// Pricing row written.
+	p, err := d.GetModelPricing("gpt-5.5")
+	require.NoError(t, err)
+	require.NotNil(t, p, "gpt-5.5 row missing")
+	assert.Equal(t, 10.0, p.OutputPerMTok)
+
+	// Meta updated to now.
+	assertPricingAttemptMeta(t, d, now.Format(time.RFC3339))
+}
+
+func TestRefreshPricingIfStale_NeverAttemptedTriggersFetch(t *testing.T) {
+	d := newTestDB(t)
+	now := pricingTestNow()
+
+	fetcher := &pricingFetchRecorder{}
+	refreshed, err := refreshPricingIfStale(
+		d, fetcher.fetch, pricingTestCooldown, now,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 1, fetcher.calls, "fetch should run when meta empty")
+	assert.True(t, refreshed, "refreshed = false, want true on first attempt")
+}
+
+func TestRefreshPricingIfStale_FetchFailureRecordsAttempt(t *testing.T) {
+	d := newTestDB(t)
+	now := pricingTestNow()
+
+	wantErr := errors.New("network down")
+	fetcher := &pricingFetchRecorder{err: wantErr}
+	refreshed, err := refreshPricingIfStale(
+		d, fetcher.fetch, pricingTestCooldown, now,
+	)
+	assert.ErrorIs(t, err, wantErr)
+	assert.False(t, refreshed, "refreshed = true, want false on fetch failure")
+
+	// Cooldown still recorded so a persistent failure doesn't
+	// retry on every CLI call.
+	assertPricingAttemptMeta(t, d, now.Format(time.RFC3339))
+
+	// A second call within cooldown skips the fetch entirely.
+	second := &pricingFetchRecorder{}
+	_, err = refreshPricingIfStale(
+		d, second.fetch, pricingTestCooldown, now.Add(time.Minute),
+	)
+	require.NoError(t, err)
+	assert.Zero(t, second.calls, "second call should be suppressed by cooldown")
+}
+
+func TestEnsurePricingWithFetcherSkipsFetchWithinCooldown(t *testing.T) {
+	d := newTestDB(t)
+	now := pricingTestNow()
+
+	seedPricingAttempt(t, d, now, 10*time.Minute)
+
+	fetcher := &pricingFetchRecorder{rows: []pricing.ModelPricing{{
+		ModelPattern:  "network-only-model",
+		InputPerMTok:  1,
+		OutputPerMTok: 1,
+	}}}
+	refreshed, err := ensurePricingWithFetcher(d, false, fetcher.fetch, now)
+	require.NoError(t, err)
+	assert.False(t, refreshed)
+	assert.Zero(t, fetcher.calls, "fetch should not run within cooldown")
+
+	fallback, err := d.GetModelPricing("gpt-5.5")
+	require.NoError(t, err)
+	require.NotNil(t, fallback, "fallback pricing should be seeded")
+
+	networkOnly, err := d.GetModelPricing("network-only-model")
+	require.NoError(t, err)
+	assert.Nil(t, networkOnly, "cooldown should prevent network upsert")
+}
+
+// TestPeriodicPricingRefresh_ZeroIntervalReturnsImmediately guards
+// against a bad config value (interval <= 0) turning into a hot
+// spin loop.
+func TestPeriodicPricingRefresh_ZeroIntervalReturnsImmediately(t *testing.T) {
+	done := make(chan struct{})
+	go func() {
+		periodicPricingRefresh(context.Background(), nil, nil, 0)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("periodicPricingRefresh did not return on interval<=0")
+	}
+}
+
+// TestPeriodicPricingRefresh_StopsOnContextCancel ensures the
+// goroutine unwinds cleanly when the server is shutting down.
+func TestPeriodicPricingRefresh_StopsOnContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		// Long interval so the ticker never fires during the test.
+		periodicPricingRefresh(ctx, nil, nil, time.Hour)
+		close(done)
+	}()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("periodicPricingRefresh did not stop after cancel")
+	}
+}
+
 // sampleDailyUsageJSON is a full usage summary body with a single day and
 // non-zero totals, shared by the HTTP and daemon usage tests.
 const sampleDailyUsageJSON = `{

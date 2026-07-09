@@ -390,6 +390,39 @@ func seedPricing(database *db.DB) {
 	go refreshPricingFromSources(database)
 }
 
+// periodicPricingRefresh re-fetches LiteLLM + OpenRouter every
+// `interval` and upserts merged rows into model_pricing. It runs
+// forever until ctx is cancelled. custom_model_pricing rows
+// applied via SetCustomPricing live in-memory and are not
+// touched here; the config-driven override is reapplied after
+// each refresh so a newly-published upstream rate cannot silently
+// shadow the user's own value.
+//
+// Failures are logged inside refreshPricingFromSources; a bad
+// tick keeps the previous rows in place and the next tick tries
+// again, so a transient outage never wipes the table.
+func periodicPricingRefresh(
+	ctx context.Context, database *db.DB,
+	cfg *config.Config, interval time.Duration,
+) {
+	if interval <= 0 {
+		return
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			refreshPricingFromSources(database)
+			if cfg != nil && len(cfg.CustomModelPricing) > 0 {
+				database.SetCustomPricing(cfg.CustomModelPricing)
+			}
+		}
+	}
+}
+
 func seedFallbackPricing(database *db.DB) error {
 	const metaKey = "_fallback_version"
 	stored, err := database.GetPricingMeta(metaKey)
