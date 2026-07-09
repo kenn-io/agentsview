@@ -70,9 +70,28 @@ func ParseOpenRouterPricing(data []byte) ([]ModelPricing, error) {
 	}
 
 	var prices []ModelPricing
+	// Count how many OpenRouter entries share each "bare" suffix
+	// (the part after the last '/'). OpenRouter ids are provider
+	// qualified (`minimax/minimax-m3`), but agentsview sessions
+	// often record the bare model name (`MiniMax-M3`) with no
+	// provider prefix. Emitting an unqualified alias lets the
+	// canonical resolver rank the OpenRouter row at the same
+	// tier as an inherently unqualified pricing key, so a bare
+	// user-side model name resolves cleanly. We only emit the
+	// alias when the bare suffix is unique inside OpenRouter, so
+	// two providers publishing the same base model do not fabricate
+	// an ambiguous unqualified row.
+	suffixCounts := make(map[string]int)
 	for _, e := range envelope.Data {
-		modality := e.Architecture.Modality
-		if modality != "" && modality != "text->text" {
+		if !producesText(e.Architecture.Modality) {
+			continue
+		}
+		if bare := bareSuffix(e.ID); bare != "" && bare != e.ID {
+			suffixCounts[bare]++
+		}
+	}
+	for _, e := range envelope.Data {
+		if !producesText(e.Architecture.Modality) {
 			continue
 		}
 		prompt, okPrompt := parsePricePerToken(e.Pricing.Prompt)
@@ -96,6 +115,37 @@ func ParseOpenRouterPricing(data []byte) ([]ModelPricing, error) {
 		prices = append(prices, p)
 	}
 	return prices, nil
+}
+
+// bareSuffix returns the substring after the last '/' in an
+// OpenRouter model id, or "" if there is no '/'. Used to derive
+// an unqualified alias for OpenRouter entries so users who record
+// bare model names (no provider prefix) can still resolve pricing.
+func bareSuffix(id string) string {
+	i := strings.LastIndex(id, "/")
+	if i < 0 || i == len(id)-1 {
+		return ""
+	}
+	return id[i+1:]
+}
+
+// producesText reports whether an OpenRouter modality string
+// describes a model whose output is text tokens (the only
+// modality agentsview knows how to bill). Empty modality is
+// treated as text->text since OpenRouter omits the field for
+// pure text models. Multimodal inputs (text+image->text,
+// text+image+video->text) are accepted because the model still
+// bills prompt/completion in tokens and users routinely reach
+// them from agents that log a bare model name.
+func producesText(modality string) bool {
+	if modality == "" {
+		return true
+	}
+	arrow := strings.Index(modality, "->")
+	if arrow < 0 {
+		return false
+	}
+	return modality[arrow+2:] == "text"
 }
 
 // parsePricePerToken turns OpenRouter's quoted string

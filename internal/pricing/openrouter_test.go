@@ -47,6 +47,89 @@ func TestParseOpenRouterPricing_TextGenerationOnly(t *testing.T) {
 	assert.InDelta(t, 25.0, got.OutputPerMTok, 1e-9, "output")
 	assert.InDelta(t, 0.5, got.CacheReadPerMTok, 1e-9, "cache_read")
 	assert.InDelta(t, 6.25, got.CacheCreationPerMTok, 1e-9, "cache_creation")
+
+	// Bare alias so sessions that record just "MiniMax-M3" resolve.
+	alias := prices[1]
+	assert.Equal(t, "MiniMax-M3", alias.ModelPattern)
+	assert.InDelta(t, 5.0, alias.InputPerMTok, 1e-9, "alias input")
+	assert.InDelta(t, 25.0, alias.OutputPerMTok, 1e-9, "alias output")
+}
+
+// TestParseOpenRouterPricing_MultimodalInputProducingText verifies
+// that OpenRouter entries whose input is multimodal but whose
+// output is text (`text+image->text`, `text+image+video->text`)
+// are kept. These models still bill prompt/completion in tokens
+// and are what user-visible names like `MiniMax-M3` / `kimi-k2.5`
+// actually resolve to on OpenRouter.
+func TestParseOpenRouterPricing_MultimodalInputProducingText(t *testing.T) {
+	body := []byte(`{
+		"data": [
+			{
+				"id": "minimax/minimax-m3",
+				"architecture": {"modality": "text+image+video->text"},
+				"pricing": {"prompt": "0.0000003", "completion": "0.0000012"}
+			},
+			{
+				"id": "moonshotai/kimi-k2.5",
+				"architecture": {"modality": "text+image->text"},
+				"pricing": {"prompt": "0.000000375", "completion": "0.000002025"}
+			},
+			{
+				"id": "openai/image-model",
+				"architecture": {"modality": "text->image"},
+				"pricing": {"prompt": "0.01", "completion": "0.01"}
+			}
+		]
+	}`)
+
+	prices, err := ParseOpenRouterPricing(body)
+	require.NoError(t, err)
+	// Two prefixed rows plus their two unique bare aliases.
+	require.Len(t, prices, 4)
+
+	patterns := map[string]bool{}
+	for _, p := range prices {
+		patterns[p.ModelPattern] = true
+	}
+	assert.True(t, patterns["minimax/minimax-m3"],
+		"prefixed minimax-m3 kept")
+	assert.True(t, patterns["minimax-m3"],
+		"bare minimax-m3 alias emitted")
+	assert.True(t, patterns["moonshotai/kimi-k2.5"],
+		"prefixed kimi-k2.5 kept")
+	assert.True(t, patterns["kimi-k2.5"],
+		"bare kimi-k2.5 alias emitted")
+	assert.False(t, patterns["openai/image-model"],
+		"text->image entry dropped")
+}
+
+// that when two OpenRouter entries share the same bare suffix
+// (e.g. two providers publishing "kimi-k2.5"), the unqualified
+// alias is NOT emitted for either, so the canonical resolver does
+// not see fabricated ambiguity from within OpenRouter itself.
+func TestParseOpenRouterPricing_AmbiguousBareSuffixSuppressed(t *testing.T) {
+	body := []byte(`{
+		"data": [
+			{
+				"id": "moonshotai/kimi-k2.5",
+				"architecture": {"modality": "text->text"},
+				"pricing": {"prompt": "0.0000006", "completion": "0.0000025"}
+			},
+			{
+				"id": "baseten/moonshotai/kimi-k2.5",
+				"architecture": {"modality": "text->text"},
+				"pricing": {"prompt": "0.0000006", "completion": "0.0000025"}
+			}
+		]
+	}`)
+
+	prices, err := ParseOpenRouterPricing(body)
+	require.NoError(t, err)
+	require.Len(t, prices, 2, "two prefixed rows, no bare alias")
+	for _, p := range prices {
+		assert.NotEqual(t, "kimi-k2.5", p.ModelPattern,
+			"bare alias must be suppressed when suffix is shared")
+	}
 }
 
 // TestMergePricing_FirstNonZeroWins verifies that when two
