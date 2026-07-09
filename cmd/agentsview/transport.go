@@ -12,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"testing"
 	"time"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -39,8 +40,27 @@ var errLocalDaemonUnreachable = errors.New(
 	"local daemon owns the SQLite archive but is not responding",
 )
 
-var startBackgroundServeForTransport = ensureBackgroundServe
+var startBackgroundServeForTransport = autoStartBackgroundServe
 var waitForDaemonStartupForTransport = WaitForDaemonStartupContext
+
+// autoStartBackgroundServe guards transport auto-start against test
+// binaries: os.Executable inside `go test` is the test executable, so a
+// CLI test reaching this path would detach a real `agentsview.test serve`
+// daemon that outlives the test run and can squat on the real daemon's
+// port. Tests must stub startBackgroundServeForTransport or set
+// AGENTSVIEW_NO_DAEMON=1; tests of the auto-start machinery itself call
+// ensureBackgroundServe directly.
+func autoStartBackgroundServe(
+	ctx context.Context, cfg *config.Config, waitTimeout time.Duration,
+) (*DaemonRuntime, error) {
+	if testing.Testing() {
+		return nil, errors.New(
+			"refusing to auto-start a background daemon from a test binary; " +
+				"stub startBackgroundServeForTransport or set AGENTSVIEW_NO_DAEMON=1",
+		)
+	}
+	return ensureBackgroundServe(ctx, cfg, waitTimeout)
+}
 
 // transport captures how to reach the session-data layer from a
 // CLI subcommand. Either the HTTP daemon (URL set) or the local DB.

@@ -41,7 +41,7 @@ func TestMemoryBriefHelpHidesRedundantContextFlag(t *testing.T) {
 
 func TestMemoryExtractDryRunJSONBuildsSessionChunks(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 
 	out, err := executeCommand(
@@ -72,7 +72,7 @@ func TestMemoryExtractDryRunJSONBuildsSessionChunks(t *testing.T) {
 
 func TestMemoryQuery_JSONWithContext(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 
 	out, err := executeCommand(newRootCommand(),
@@ -101,7 +101,7 @@ func TestMemoryQuery_JSONWithContext(t *testing.T) {
 
 func TestMemoryQueryJSONIncludesContextSourceMetadata(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedExtractedMemoryFixture(t, dataDir)
 
@@ -126,7 +126,7 @@ func TestMemoryQueryJSONIncludesContextSourceMetadata(t *testing.T) {
 
 func TestMemoryQueryJSONIncludesContextSummary(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedMemoryRunFixture(t, dataDir, "m-second", "smoke-run")
 
@@ -160,7 +160,7 @@ func TestMemoryQueryJSONIncludesContextSummary(t *testing.T) {
 
 func TestMemoryQueryJSONIncludesZeroContextSummary(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 
 	out, err := executeCommand(newRootCommand(),
@@ -388,7 +388,7 @@ func TestMemoryBriefUsesExplicitServerURL(t *testing.T) {
 
 func TestMemoryBriefJSONReportsTrustedOnlyOverride(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 
 	var gotReq service.MemoryQuery
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -515,7 +515,7 @@ func TestMemoryImportExplicitServerURLWithRemoteConfirmation(t *testing.T) {
 
 func TestMemoryQueryJSONIncludesMatchReasons(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedExtractedMemoryFixture(t, dataDir)
 
@@ -578,7 +578,7 @@ func TestMemoryQueryJSONIncludesMatchReasons(t *testing.T) {
 
 func TestMemoryBriefHumanShowsTaskContextAndSources(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 
 	out, err := executeCommand(newRootCommand(),
@@ -599,7 +599,7 @@ func TestMemoryBriefHumanShowsTaskContextAndSources(t *testing.T) {
 
 func TestMemoryBriefHumanShowsEmptyPackedContextMeta(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 
 	out, err := executeCommand(newRootCommand(),
@@ -622,7 +622,7 @@ func TestMemoryBriefHumanShowsEmptyPackedContextMeta(t *testing.T) {
 
 func TestMemoryBriefJSONIncludesContextMetadata(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 
 	out, err := executeCommand(newRootCommand(),
@@ -662,7 +662,7 @@ func TestMemoryBriefJSONIncludesContextMetadata(t *testing.T) {
 
 func TestMemoryBriefJSONUsesOnlyPackedContextMemoryIDs(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 
 	out, err := executeCommand(newRootCommand(),
@@ -699,7 +699,7 @@ func TestMemoryBriefJSONUsesOnlyPackedContextMemoryIDs(t *testing.T) {
 
 func TestMemoryBriefHumanShowsSummaryWhenRequested(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedMemoryRunFixture(t, dataDir, "m-second", "smoke-run")
 
@@ -727,7 +727,7 @@ func TestMemoryBriefHumanShowsSummaryWhenRequested(t *testing.T) {
 
 func TestMemoryBriefHumanShowsScores(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedMemoryRunFixture(t, dataDir, "m-second", "smoke-run")
 
@@ -756,7 +756,7 @@ func TestMemoryBriefHumanShowsScores(t *testing.T) {
 
 func TestMemoryBriefHumanShowsEvidenceWhenRequested(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 
 	out, err := executeCommand(newRootCommand(),
@@ -776,7 +776,7 @@ func TestMemoryBriefHumanShowsEvidenceWhenRequested(t *testing.T) {
 
 func TestMemoryBriefCurrentCWDScopesToWorkingDirectory(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	workdir := filepath.Join(t.TempDir(), "repo")
 	require.NoError(t, os.MkdirAll(workdir, 0o700))
 	t.Chdir(workdir)
@@ -800,7 +800,7 @@ func TestMemoryBriefCurrentCWDScopesToWorkingDirectory(t *testing.T) {
 
 func TestMemoryBriefCurrentGitBranchScopesToBranch(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	workdir := initGitRepoOnBranch(t, "feat/memory-api")
 	t.Chdir(workdir)
 	seedMemoryBranchFixture(t, dataDir, "m-current-branch", "feat/memory-api")
@@ -823,7 +823,7 @@ func TestMemoryBriefCurrentGitBranchScopesToBranch(t *testing.T) {
 
 func TestMemoryBriefCurrentWorktreeScopesToGitRootAndBranch(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	repo := initGitRepoOnBranch(t, "feat/memory-api")
 	subdir := filepath.Join(repo, "cmd", "agentsview")
 	require.NoError(t, os.MkdirAll(subdir, 0o700))
@@ -854,7 +854,7 @@ func TestMemoryBriefCurrentWorktreeScopesToGitRootAndBranch(t *testing.T) {
 
 func TestMemoryQueryCurrentCWDRejectsExplicitCWD(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 
 	_, err := executeCommand(newRootCommand(),
@@ -868,7 +868,7 @@ func TestMemoryQueryCurrentCWDRejectsExplicitCWD(t *testing.T) {
 
 func TestMemoryQueryCurrentGitBranchRejectsExplicitBranch(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 
 	_, err := executeCommand(newRootCommand(),
@@ -882,7 +882,7 @@ func TestMemoryQueryCurrentGitBranchRejectsExplicitBranch(t *testing.T) {
 
 func TestMemoryQueryCurrentWorktreeRejectsExplicitScope(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 
 	_, err := executeCommand(newRootCommand(),
@@ -897,7 +897,7 @@ func TestMemoryQueryCurrentWorktreeRejectsExplicitScope(t *testing.T) {
 
 func TestMemoryListCurrentCWDScopesToWorkingDirectory(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	workdir := filepath.Join(t.TempDir(), "repo")
 	require.NoError(t, os.MkdirAll(workdir, 0o700))
 	t.Chdir(workdir)
@@ -915,7 +915,7 @@ func TestMemoryListCurrentCWDScopesToWorkingDirectory(t *testing.T) {
 
 func TestMemoryListCurrentWorktreeScopesToGitRootAndBranch(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	repo := initGitRepoOnBranch(t, "feat/memory-api")
 	subdir := filepath.Join(repo, "internal", "memory")
 	require.NoError(t, os.MkdirAll(subdir, 0o700))
@@ -941,7 +941,7 @@ func TestMemoryListCurrentWorktreeScopesToGitRootAndBranch(t *testing.T) {
 
 func TestMemoryQueryRejectsNegativeContextMaxBytes(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 
 	_, err := executeCommand(newRootCommand(),
@@ -955,7 +955,7 @@ func TestMemoryQueryRejectsNegativeContextMaxBytes(t *testing.T) {
 
 func TestMemoryImportJSONLImportsReviewedKeepers(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	path := filepath.Join(t.TempDir(), "accepted-memories.jsonl")
 	input := `{"candidate_id":"m-imported","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"memory-session","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
@@ -988,7 +988,7 @@ func TestMemoryImportJSONLImportsReviewedKeepers(t *testing.T) {
 
 func TestMemoryImportJSONLRequiresYesForMutation(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	path := filepath.Join(t.TempDir(), "accepted-memories.jsonl")
 	input := `{"candidate_id":"m-imported","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"memory-session","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
@@ -1012,6 +1012,7 @@ func TestMemoryImportJSONLRefusesDefaultDataDirWithoutOverride(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("AGENTSVIEW_DATA_DIR", "")
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 	t.Setenv("AGENT_VIEWER_DATA_DIR", "")
 	path := filepath.Join(t.TempDir(), "accepted-memories.jsonl")
 	input := `{"candidate_id":"m-imported","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"memory-session","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
@@ -1032,6 +1033,7 @@ func TestMemoryImportJSONLDryRunRefusesDefaultDataDirWithoutOverride(t *testing.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("AGENTSVIEW_DATA_DIR", "")
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 	t.Setenv("AGENT_VIEWER_DATA_DIR", "")
 	path := filepath.Join(t.TempDir(), "accepted-memories.jsonl")
 	input := `{"candidate_id":"m-imported","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"memory-session","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
@@ -1056,6 +1058,7 @@ func TestMemoryImportJSONLRefusesSymlinkedDefaultDataDirWithoutOverride(t *testi
 	require.NoError(t, os.Symlink(defaultDataDir, link))
 	t.Setenv("HOME", home)
 	t.Setenv("AGENTSVIEW_DATA_DIR", link)
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 	t.Setenv("AGENT_VIEWER_DATA_DIR", "")
 	path := filepath.Join(t.TempDir(), "accepted-memories.jsonl")
 	input := `{"candidate_id":"m-imported","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"memory-session","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
@@ -1088,6 +1091,7 @@ func TestMemoryImportJSONLRefusesSymlinkedDefaultDBFileWithoutOverride(t *testin
 
 	t.Setenv("HOME", home)
 	t.Setenv("AGENTSVIEW_DATA_DIR", labDir)
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 	t.Setenv("AGENT_VIEWER_DATA_DIR", "")
 	path := filepath.Join(t.TempDir(), "accepted-memories.jsonl")
 	input := `{"candidate_id":"m-imported","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"memory-session","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
@@ -1105,7 +1109,7 @@ func TestMemoryImportJSONLRefusesSymlinkedDefaultDBFileWithoutOverride(t *testin
 
 func TestMemoryImportJSONLRequiresExistingEvidenceByDefault(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	path := filepath.Join(t.TempDir(), "accepted-memories.jsonl")
 	input := `{"candidate_id":"m-missing-session","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"s-not-imported","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
 `
@@ -1127,7 +1131,7 @@ func TestMemoryImportJSONLRequiresExistingEvidenceByDefault(t *testing.T) {
 
 func TestMemoryImportJSONLAllowPlaceholderSessionsImportsMissingSession(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	path := filepath.Join(t.TempDir(), "accepted-memories.jsonl")
 	input := `{"candidate_id":"m-placeholder","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"s-placeholder","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
 `
@@ -1157,7 +1161,7 @@ func TestMemoryImportJSONLAllowPlaceholderSessionsImportsMissingSession(t *testi
 
 func TestMemoryImportJSONLDryRunDoesNotInsert(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	path := filepath.Join(t.TempDir(), "accepted-memories.jsonl")
 	input := `{"candidate_id":"m-dry-run","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"memory-session","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
@@ -1192,7 +1196,7 @@ func TestMemoryImportJSONLDryRunDoesNotInsert(t *testing.T) {
 
 func TestMemoryImportJSONLRequireExistingSessionsRejectsMissingSession(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	path := filepath.Join(t.TempDir(), "accepted-memories.jsonl")
 	input := `{"candidate_id":"m-missing-session","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"s-not-imported","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
@@ -1216,7 +1220,7 @@ func TestMemoryImportJSONLRequireExistingSessionsRejectsMissingSession(t *testin
 
 func TestMemoryImportJSONLDryRunHumanShowsPreviewAndSkippedReasons(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	path := filepath.Join(t.TempDir(), "accepted-memories.jsonl")
 	input := `{"candidate_id":"m-dry-run","supersedes_memory_id":"m-cli","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"memory-session","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
@@ -1239,7 +1243,7 @@ func TestMemoryImportJSONLDryRunHumanShowsPreviewAndSkippedReasons(t *testing.T)
 
 func TestMemoryQueryHumanShowsScores(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 
 	out, err := executeCommand(newRootCommand(),
@@ -1261,7 +1265,7 @@ func TestMemoryQueryHumanShowsScores(t *testing.T) {
 
 func TestMemoryQueryHumanShowsSummary(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedMemoryRunFixture(t, dataDir, "m-second", "smoke-run")
 	seedExtractedMemoryFixture(t, dataDir)
@@ -1320,7 +1324,7 @@ func TestMemoryQueryHumanShowsSummary(t *testing.T) {
 
 func TestMemoryQueryHumanShowsEvidenceWhenRequested(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 
 	out, err := executeCommand(newRootCommand(),
@@ -1337,7 +1341,7 @@ func TestMemoryQueryHumanShowsEvidenceWhenRequested(t *testing.T) {
 
 func TestMemoryQueryHumanShowsSourceEpisode(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryEpisodeFixture(t, dataDir)
 
 	out, err := executeCommand(newRootCommand(),
@@ -1351,7 +1355,7 @@ func TestMemoryQueryHumanShowsSourceEpisode(t *testing.T) {
 
 func TestMemoryQueryHumanShowsContextAndScores(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedMemoryRunFixture(t, dataDir, "m-second", "smoke-run")
 
@@ -1376,7 +1380,7 @@ func TestMemoryQueryHumanShowsContextAndScores(t *testing.T) {
 
 func TestMemoryQueryHumanShowsContextSummary(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedMemoryRunFixture(t, dataDir, "m-second", "smoke-run")
 
@@ -1399,7 +1403,7 @@ func TestMemoryQueryHumanShowsContextSummary(t *testing.T) {
 
 func TestMemoryQueryHumanShowsContextMeta(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedMemoryRunFixture(t, dataDir, "m-second", "smoke-run")
 
@@ -1422,7 +1426,7 @@ func TestMemoryQueryHumanShowsContextMeta(t *testing.T) {
 
 func TestMemoryQueryHumanShowsContextSourceMeta(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedExtractedMemoryFixture(t, dataDir)
 
@@ -1441,7 +1445,7 @@ func TestMemoryQueryHumanShowsContextSourceMeta(t *testing.T) {
 
 func TestMemoryQueryHumanShowsEmptyPackedContextMeta(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 
 	out, err := executeCommand(newRootCommand(),
@@ -1462,7 +1466,7 @@ func TestMemoryQueryHumanShowsEmptyPackedContextMeta(t *testing.T) {
 
 func TestMemoryQueryHumanFlagsPromptInjectionContext(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedPromptInjectionMemoryFixture(t, dataDir)
 
@@ -1485,7 +1489,7 @@ func TestMemoryQueryHumanFlagsPromptInjectionContext(t *testing.T) {
 
 func TestMemoryBriefHumanFlagsPromptInjectionContext(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedPromptInjectionMemoryFixture(t, dataDir)
 
@@ -1506,7 +1510,7 @@ func TestMemoryBriefHumanFlagsPromptInjectionContext(t *testing.T) {
 
 func TestMemoryQueryFiltersByExtractorMethod(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedExtractedMemoryFixture(t, dataDir)
 
@@ -1521,7 +1525,7 @@ func TestMemoryQueryFiltersByExtractorMethod(t *testing.T) {
 
 func TestMemoryQueryFiltersTrustedOnly(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedExtractedMemoryFixture(t, dataDir)
 
@@ -1539,7 +1543,7 @@ func TestMemoryQueryFiltersTrustedOnly(t *testing.T) {
 
 func TestMemoryListFiltersByExtractorMethod(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedExtractedMemoryFixture(t, dataDir)
 
@@ -1554,7 +1558,7 @@ func TestMemoryListFiltersByExtractorMethod(t *testing.T) {
 
 func TestMemoryListFiltersTrustedOnly(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedExtractedMemoryFixture(t, dataDir)
 
@@ -1581,7 +1585,7 @@ func TestMemoryListFiltersTrustedOnly(t *testing.T) {
 
 func TestMemoryListHumanReportsTrustedOnly(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedExtractedMemoryFixture(t, dataDir)
 
@@ -1599,7 +1603,7 @@ func TestMemoryListHumanReportsTrustedOnly(t *testing.T) {
 
 func TestMemoryListShowsSourceMetadata(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedExtractedMemoryFixture(t, dataDir)
 
@@ -1615,7 +1619,7 @@ func TestMemoryListShowsSourceMetadata(t *testing.T) {
 
 func TestMemoryStatsHumanSummarizesAcceptedMemoryCorpus(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedExtractedMemoryFixture(t, dataDir)
 
@@ -1651,7 +1655,7 @@ func TestMemoryStatsHumanSummarizesAcceptedMemoryCorpus(t *testing.T) {
 
 func TestMemoryStatsHumanReportsTrustedOnly(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedExtractedMemoryFixture(t, dataDir)
 
@@ -1670,7 +1674,7 @@ func TestMemoryStatsHumanReportsTrustedOnly(t *testing.T) {
 
 func TestMemoryStatsJSONSummarizesReviewQuality(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedExtractedMemoryFixture(t, dataDir)
 
@@ -1701,7 +1705,7 @@ func TestMemoryStatsJSONSummarizesReviewQuality(t *testing.T) {
 
 func TestMemoryStatsJSONReportsTrustedOnly(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedExtractedMemoryFixture(t, dataDir)
 
@@ -1728,7 +1732,7 @@ func TestMemoryStatsJSONReportsTrustedOnly(t *testing.T) {
 
 func TestMemoryStatsJSONSummarizesSupersessionLifecycle(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedSupersededMemoryFixture(t, dataDir)
 
@@ -1758,7 +1762,7 @@ func TestMemoryStatsJSONSummarizesSupersessionLifecycle(t *testing.T) {
 
 func TestMemoryQueryFiltersBySourceRunID(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedMemoryRunFixture(t, dataDir, "m-run-a", "smoke-a")
 	seedMemoryRunFixture(t, dataDir, "m-run-b", "smoke-b")
@@ -1775,7 +1779,7 @@ func TestMemoryQueryFiltersBySourceRunID(t *testing.T) {
 
 func TestMemoryListFiltersBySourceRunID(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedMemoryRunFixture(t, dataDir, "m-run-a", "smoke-a")
 	seedMemoryRunFixture(t, dataDir, "m-run-b", "smoke-b")
@@ -1792,7 +1796,7 @@ func TestMemoryListFiltersBySourceRunID(t *testing.T) {
 
 func TestMemoryQueryFiltersBySourceSessionID(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedMemorySourceSessionFixture(t, dataDir, "m-session-b", "memory-session-b")
 
@@ -1807,7 +1811,7 @@ func TestMemoryQueryFiltersBySourceSessionID(t *testing.T) {
 
 func TestMemoryListFiltersBySourceSessionID(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedMemorySourceSessionFixture(t, dataDir, "m-session-b", "memory-session-b")
 
@@ -1822,7 +1826,7 @@ func TestMemoryListFiltersBySourceSessionID(t *testing.T) {
 
 func TestMemoryQueryFiltersBySourceEpisodeID(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedMemoryEpisodeFixture(t, dataDir)
 
@@ -1837,7 +1841,7 @@ func TestMemoryQueryFiltersBySourceEpisodeID(t *testing.T) {
 
 func TestMemoryListFiltersBySourceEpisodeID(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedMemoryEpisodeFixture(t, dataDir)
 
@@ -1852,7 +1856,7 @@ func TestMemoryListFiltersBySourceEpisodeID(t *testing.T) {
 
 func TestMemoryListFiltersBySupersessionLinks(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedSupersededMemoryFixture(t, dataDir)
 
@@ -1877,7 +1881,7 @@ func TestMemoryListFiltersBySupersessionLinks(t *testing.T) {
 
 func TestMemoryListAndGetHuman(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 
 	list, err := executeCommand(newRootCommand(),
@@ -1896,7 +1900,7 @@ func TestMemoryListAndGetHuman(t *testing.T) {
 
 func TestMemoryGetShowsSourceMetadata(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedExtractedMemoryFixture(t, dataDir)
 
@@ -1910,7 +1914,7 @@ func TestMemoryGetShowsSourceMetadata(t *testing.T) {
 
 func TestMemoryGetHumanShowsEvidenceDetailsWhenRequested(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 
 	out, err := executeCommand(newRootCommand(),
@@ -1923,7 +1927,7 @@ func TestMemoryGetHumanShowsEvidenceDetailsWhenRequested(t *testing.T) {
 
 func TestMemoryGetShowsEpistemicMetadata(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedExtractedMemoryFixture(t, dataDir)
 
@@ -1936,7 +1940,7 @@ func TestMemoryGetShowsEpistemicMetadata(t *testing.T) {
 
 func TestMemoryGetHumanShowsSupersessionLifecycle(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedSupersededMemoryFixture(t, dataDir)
 
@@ -1957,7 +1961,7 @@ func TestMemoryGetHumanShowsSupersessionLifecycle(t *testing.T) {
 
 func TestMemoryListHumanShowsSupersessionLifecycle(t *testing.T) {
 	dataDir := t.TempDir()
-	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	setMemoryTestEnv(t, dataDir)
 	seedMemoryFixture(t, dataDir)
 	seedSupersededMemoryFixture(t, dataDir)
 
@@ -1968,6 +1972,17 @@ func TestMemoryListHumanShowsSupersessionLifecycle(t *testing.T) {
 	assert.Contains(t, archived, "m-cli")
 	assert.Contains(t, archived, "lifecycle status=archived")
 	assert.Contains(t, archived, "superseded_by=m-cli-replacement")
+}
+
+// setMemoryTestEnv points the CLI at the given data dir and registers an
+// in-process test daemon for it. Memory commands resolve a daemon transport;
+// without a discoverable runtime the read-intent path would auto-start a
+// detached serve process from the test binary (os.Executable is the test
+// executable), leaking daemons that outlive the test run and squat on ports.
+func setMemoryTestEnv(t *testing.T, dataDir string) {
+	t.Helper()
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+	registerSQLiteWritableDaemonRuntime(t, dataDir)
 }
 
 func seedMemoryFixture(t *testing.T, dataDir string) {

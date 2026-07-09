@@ -527,6 +527,10 @@ func TestEnsureTransport_ArchiveWriteStopsOlderDaemonUnderLaunchLock(
 	host, port := testPingServer(t)
 	writeDaemonRuntimeForTest(t, dir, host, port, "1.0.0", false)
 
+	// This test exercises the real auto-start machinery; bypass the
+	// test-binary guard in autoStartBackgroundServe.
+	stubStartBackgroundServeForTransport(t, ensureBackgroundServe)
+
 	setTestVersion(t, "1.1.0")
 	stopErr := errors.New("stop after launch lock")
 	stubStopDaemonRuntimeForUpgrade(t, func(
