@@ -10,8 +10,8 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-func TestBuildMemoryExtractionChunksIncludesOnlyUserAssistantText(t *testing.T) {
-	chunks := BuildMemoryExtractionChunks("session-1", []db.Message{
+func TestBuildRecallExtractionChunksIncludesOnlyUserAssistantText(t *testing.T) {
+	chunks := BuildRecallExtractionChunks("session-1", []db.Message{
 		{
 			Ordinal: 0,
 			Role:    "system",
@@ -20,7 +20,7 @@ func TestBuildMemoryExtractionChunksIncludesOnlyUserAssistantText(t *testing.T) 
 		{
 			Ordinal: 1,
 			Role:    "user",
-			Content: "We need a project memory that tracks decisions.",
+			Content: "We need a project recall that tracks decisions.",
 		},
 		{
 			Ordinal: 2,
@@ -36,14 +36,14 @@ func TestBuildMemoryExtractionChunksIncludesOnlyUserAssistantText(t *testing.T) 
 		{
 			Ordinal: 4,
 			Role:    "tool",
-			Content: "tool output should not feed memory extraction",
+			Content: "tool output should not feed recall extraction",
 		},
 		{
 			Ordinal: 5,
 			Role:    "assistant",
 			Content: "   ",
 		},
-	}, MemoryExtractionChunkOptions{MaxChars: 1000})
+	}, RecallExtractionChunkOptions{MaxChars: 1000})
 
 	require.Len(t, chunks, 1)
 	assert.Equal(t, "session-1", chunks[0].SessionID)
@@ -55,14 +55,14 @@ func TestBuildMemoryExtractionChunksIncludesOnlyUserAssistantText(t *testing.T) 
 	assert.Equal(t, 1, chunks[0].Messages[0].Ordinal)
 	assert.Equal(t, "assistant", chunks[0].Messages[1].Role)
 	assert.Equal(t, 2, chunks[0].Messages[1].Ordinal)
-	assert.Contains(t, chunks[0].Text, "[1 user] We need a project memory")
+	assert.Contains(t, chunks[0].Text, "[1 user] We need a project recall")
 	assert.Contains(t, chunks[0].Text, "[2 assistant] I propose extracting")
 	assert.NotContains(t, chunks[0].Text, "system instruction")
 	assert.NotContains(t, chunks[0].Text, "tool output")
 	assert.NotContains(t, chunks[0].Text, "promoted system marker")
 }
 
-func TestBuildMemoryExtractionChunksBoundsChunksByTextSize(t *testing.T) {
+func TestBuildRecallExtractionChunksBoundsChunksByTextSize(t *testing.T) {
 	msgs := []db.Message{
 		{Ordinal: 1, Role: "user", Content: strings.Repeat("a", 36)},
 		{Ordinal: 2, Role: "assistant", Content: strings.Repeat("b", 36)},
@@ -70,8 +70,8 @@ func TestBuildMemoryExtractionChunksBoundsChunksByTextSize(t *testing.T) {
 		{Ordinal: 4, Role: "assistant", Content: strings.Repeat("d", 36)},
 	}
 
-	chunks := BuildMemoryExtractionChunks(
-		"session-2", msgs, MemoryExtractionChunkOptions{MaxChars: 90},
+	chunks := BuildRecallExtractionChunks(
+		"session-2", msgs, RecallExtractionChunkOptions{MaxChars: 90},
 	)
 
 	require.Len(t, chunks, 4)

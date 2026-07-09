@@ -407,9 +407,9 @@ ______________________________________________________________________
 
     As of 0.30.0, `agentsview token-use` is a deprecated alias for
     [`agentsview session usage`](/session-api/#agentsview-session-usage). Both
-    commands accept the same `<session-id>` argument. `token-use` always emits
-    the same JSON shape that `session usage --format json` emits (now extended
-    with a cost estimate). New scripts should use `agentsview session usage`.
+    commands accept the same `<session-id>` argument. `token-use` always emits the
+    same JSON shape that `session usage --format json` emits (now extended with a
+    cost estimate). New scripts should use `agentsview session usage`.
 
 Print machine-readable token usage data and a cost estimate for a single
 session.
@@ -670,7 +670,7 @@ The report includes:
 - configured/default agent roots and whether each exists
 - recent debug lines mentioning sync, data versions, warnings, or failures
 - Antigravity CLI summary-mode counts and Antigravity sessions decoded from
-  unrecognized `agy-schema:` fingerprints
+    unrecognized `agy-schema:` fingerprints
 - a likely-cause summary when startup sync behavior looks abnormal
 
 ______________________________________________________________________
@@ -712,13 +712,13 @@ covered alongside normal file-backed agents.
 The report distinguishes parser drift from comparison-basis skew:
 
 - `raced` means the source changed while `parse-diff` was running. It is
-  reported for review but does not fail `--fail-on-change`.
+    reported for review but does not fail `--fail-on-change`.
 - `incremental_skew` means the stored row was last written by an
-  incremental-append sync, so a fresh full re-parse can legitimately differ on
-  append-path metadata. It is also reported but excluded from
-  `--fail-on-change`.
+    incremental-append sync, so a fresh full re-parse can legitimately differ on
+    append-path metadata. It is also reported but excluded from
+    `--fail-on-change`.
 - `pending_resync` means the stored data version is behind the running binary;
-  the next data-version resync rewrites those rows.
+    the next data-version resync rewrites those rows.
 
 If the report includes `incremental_skew`, run a full resync before treating the
 archive as a clean parser-drift baseline. A full resync rewrites those rows
@@ -789,8 +789,8 @@ agentsview export sessions [flags]
 | `--has-secret`        | `false` | Only sessions with detected secret leaks                  |
 
 By default, one-shot and automated sessions are excluded, so token and cost
-totals can be lower than the full archive unless the corresponding include
-flags are used.
+totals can be lower than the full archive unless the corresponding include flags
+are used.
 
 **Examples:**
 
@@ -834,10 +834,10 @@ agentsview session search <pattern>      # content search across sessions
 agentsview session usage <id>            # token usage and cost estimate
 ```
 
-`session search` supports substring (default), `--regex`, `--fts`,
-`--semantic`, and `--hybrid` modes. Semantic and hybrid results can be scoped
-with `--scope top|all|subordinate` (default `all`) to include or exclude
-sidechain and subagent content — see
+`session search` supports substring (default), `--regex`, `--fts`, `--semantic`,
+and `--hybrid` modes. Semantic and hybrid results can be scoped with
+`--scope top|all|subordinate` (default `all`) to include or exclude sidechain
+and subagent content — see
 [Semantic Search](/semantic-search/#scoping-results-scope).
 
 Structured response commands accept `--format json`; `--json` is a short alias
@@ -886,20 +886,20 @@ agentsview embeddings retire <id>     # retire a generation
 
 ______________________________________________________________________
 
-### `agentsview memory`
+### `agentsview recall`
 
-Store and recall reviewed, provenance-linked memories over the session
-archive. See [Session Memories](/memory/) for the memory model, the JSONL
-import format, and full command documentation.
+Store and recall reviewed, provenance-linked knowledge over the session archive.
+See [Session Recall](/recall/) for the entry model, the JSONL import format, and
+full command documentation.
 
 ```bash
-agentsview memory list                       # list memories with filters
-agentsview memory get <id>                   # one memory with its evidence
-agentsview memory query "<text>"             # ranked keyword recall
-agentsview memory stats                      # counts by type, scope, status
-agentsview memory brief "<task>"             # packed context block for a task
-agentsview memory extract --session <id> --dry-run   # preview extraction chunks
-agentsview memory import <memories.jsonl>    # import reviewed memories
+agentsview recall list                       # list entries with filters
+agentsview recall get <id>                   # one entry with its evidence
+agentsview recall query "<text>"             # ranked keyword recall
+agentsview recall stats                      # counts by type, scope, status
+agentsview recall brief "<task>"             # packed context block for a task
+agentsview recall extract --session <id> --dry-run   # preview extraction chunks
+agentsview recall import <accepted-recall.jsonl>   # import reviewed entries
 ```
 
 ______________________________________________________________________
@@ -988,9 +988,8 @@ ______________________________________________________________________
 
 Install or list the bundled skill files that teach coding-agent harnesses
 (Claude Code, Codex, and other `.agents/skills` readers) to search AgentsView
-history. See
-[Semantic Search](/semantic-search/#skills-for-coding-agents) for what the
-skill does and when to re-run it.
+history. See [Semantic Search](/semantic-search/#skills-for-coding-agents) for
+what the skill does and when to re-run it.
 
 ```bash
 agentsview skills install [--harness claude|agents] [--project] [--force]
@@ -1003,9 +1002,9 @@ agentsview skills list [--project] [--format json]
 `~/.agents/skills/agentsview-finding-history/`, or under `.claude/skills/` /
 `.agents/skills/` at the current git root with `--project`. It overwrites an
 unmodified generated file, refuses a hand-edited or foreign file unless
-`--force` is passed, and exits non-zero on any refusal. `list` reports
-HARNESS, LEVEL, STATE (`missing`, `current`, `stale`, `modified`, `foreign`),
-and PATH for every harness.
+`--force` is passed, and exits non-zero on any refusal. `list` reports HARNESS,
+LEVEL, STATE (`missing`, `current`, `stale`, `modified`, `foreign`), and PATH
+for every harness.
 
 ______________________________________________________________________
 

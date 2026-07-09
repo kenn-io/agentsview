@@ -1550,16 +1550,16 @@ func (e *Engine) resyncAllLocked(
 		}
 	}
 
-	// Copy memories and their evidence from the quiesced old DB. The
-	// fresh DB is built from source files, which never contain
-	// memories, so without this every accepted memory is lost on
+	// Copy recall entries and their evidence from the quiesced old DB.
+	// The fresh DB is built from source files, which never contain
+	// recall entries, so without this every accepted entry is lost on
 	// resync. Runs after the orphan copy so referenced sessions exist.
-	// Failure aborts the swap to avoid destroying the memory archive.
-	if err := newDB.CopyMemoriesFrom(origPath); err != nil {
-		log.Printf("resync: copy memories: %v", err)
+	// Failure aborts the swap to avoid destroying the recall archive.
+	if err := newDB.CopyRecallEntriesFrom(origPath); err != nil {
+		log.Printf("resync: copy recall entries: %v", err)
 		stats.Aborted = true
 		stats.Warnings = append(stats.Warnings,
-			"memory copy failed, aborting swap: "+err.Error(),
+			"recall copy failed, aborting swap: "+err.Error(),
 		)
 		newDB.Close()
 		removeTempDB(tempPath)

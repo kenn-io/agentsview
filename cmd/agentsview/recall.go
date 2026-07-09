@@ -18,10 +18,10 @@ import (
 	"go.kenn.io/agentsview/internal/service"
 )
 
-func newMemoryCommand() *cobra.Command {
+func newRecallCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "memory",
-		Short:        "Build and inspect project memories",
+		Use:          "recall",
+		Short:        "Build and inspect recalled knowledge from past sessions",
 		GroupID:      groupData,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
@@ -32,20 +32,20 @@ func newMemoryCommand() *cobra.Command {
 	registerFormatFlags(cmd.PersistentFlags())
 	cmd.PersistentFlags().String(
 		"server", "",
-		"Remote daemon URL for memory API requests",
+		"Remote daemon URL for recall API requests",
 	)
 
-	cmd.AddCommand(newMemoryListCommand())
-	cmd.AddCommand(newMemoryGetCommand())
-	cmd.AddCommand(newMemoryQueryCommand())
-	cmd.AddCommand(newMemoryStatsCommand())
-	cmd.AddCommand(newMemoryBriefCommand())
-	cmd.AddCommand(newMemoryExtractCommand())
-	cmd.AddCommand(newMemoryImportCommand())
+	cmd.AddCommand(newRecallListCommand())
+	cmd.AddCommand(newRecallGetCommand())
+	cmd.AddCommand(newRecallQueryCommand())
+	cmd.AddCommand(newRecallStatsCommand())
+	cmd.AddCommand(newRecallBriefCommand())
+	cmd.AddCommand(newRecallExtractCommand())
+	cmd.AddCommand(newRecallImportCommand())
 	return cmd
 }
 
-func resolveMemoryService(
+func resolveRecallEntryService(
 	cmd *cobra.Command,
 ) (service.SessionService, func(), error) {
 	remote, _ := cmd.Flags().GetString("server")
@@ -60,11 +60,11 @@ func resolveMemoryService(
 	return service.NewHTTPBackend(remote, cfg.AuthToken, false), func() {}, nil
 }
 
-// resolveWritableMemoryService is the write-capable counterpart of
-// resolveMemoryService for `memory import`. Local imports go through
+// resolveWritableRecallEntryService is the write-capable counterpart of
+// resolveRecallEntryService for `recall import`. Local imports go through
 // resolveWritableService so a read-only daemon (pg serve) is refused up front
 // with actionable guidance instead of failing at the import endpoint.
-func resolveWritableMemoryService(
+func resolveWritableRecallEntryService(
 	cmd *cobra.Command,
 ) (service.SessionService, func(), error) {
 	remote, _ := cmd.Flags().GetString("server")
@@ -79,29 +79,29 @@ func resolveWritableMemoryService(
 	return service.NewHTTPBackend(remote, cfg.AuthToken, false), func() {}, nil
 }
 
-func newMemoryListCommand() *cobra.Command {
-	var f service.MemoryFilter
+func newRecallListCommand() *cobra.Command {
+	var f service.RecallFilter
 	var currentCWD bool
 	var currentGitBranch bool
 	var currentWorktree bool
 	cmd := &cobra.Command{
 		Use:          "list",
-		Short:        "List accepted memories",
+		Short:        "List accepted entries",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			svc, cleanup, err := resolveMemoryService(cmd)
+			svc, cleanup, err := resolveRecallEntryService(cmd)
 			if err != nil {
 				return err
 			}
 			defer cleanup()
-			if err := applyMemoryCurrentScope(
+			if err := applyRecallEntryCurrentScope(
 				&f.CWD, &f.GitBranch, currentCWD, currentGitBranch,
 				currentWorktree,
 			); err != nil {
 				return err
 			}
-			list, err := svc.ListMemories(cmd.Context(), f)
+			list, err := svc.ListRecallEntries(cmd.Context(), f)
 			if err != nil {
 				return err
 			}
@@ -109,18 +109,18 @@ func newMemoryListCommand() *cobra.Command {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(list)
 			}
 			out := cmd.OutOrStdout()
-			printMemoryTrustedOnlyHuman(out, list.TrustedOnly)
-			return printMemoryResultsHuman(out, list.Memories)
+			printRecallEntryTrustedOnlyHuman(out, list.TrustedOnly)
+			return printRecallResultsHuman(out, list.RecallEntries)
 		},
 	}
-	addMemoryFilterFlags(cmd, &f)
-	addMemoryCurrentCWDFlag(cmd, &currentCWD)
-	addMemoryCurrentGitBranchFlag(cmd, &currentGitBranch)
-	addMemoryCurrentWorktreeFlag(cmd, &currentWorktree)
+	addRecallFilterFlags(cmd, &f)
+	addRecallEntryCurrentCWDFlag(cmd, &currentCWD)
+	addRecallEntryCurrentGitBranchFlag(cmd, &currentGitBranch)
+	addRecallEntryCurrentWorktreeFlag(cmd, &currentWorktree)
 	return cmd
 }
 
-type memoryStatsResult struct {
+type recallStatsResult struct {
 	Count           int            `json:"count"`
 	Limit           int            `json:"limit"`
 	Truncated       bool           `json:"truncated"`
@@ -140,58 +140,58 @@ type memoryStatsResult struct {
 	ByLifecycle     map[string]int `json:"by_lifecycle"`
 }
 
-func newMemoryStatsCommand() *cobra.Command {
-	var f service.MemoryFilter
+func newRecallStatsCommand() *cobra.Command {
+	var f service.RecallFilter
 	var currentCWD bool
 	var currentGitBranch bool
 	var currentWorktree bool
 	cmd := &cobra.Command{
 		Use:          "stats",
-		Short:        "Summarize accepted memories",
+		Short:        "Summarize accepted entries",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			svc, cleanup, err := resolveMemoryService(cmd)
+			svc, cleanup, err := resolveRecallEntryService(cmd)
 			if err != nil {
 				return err
 			}
 			defer cleanup()
-			if err := applyMemoryCurrentScope(
+			if err := applyRecallEntryCurrentScope(
 				&f.CWD, &f.GitBranch, currentCWD, currentGitBranch,
 				currentWorktree,
 			); err != nil {
 				return err
 			}
 			if f.Limit <= 0 {
-				f.Limit = db.MaxMemoryLimit
+				f.Limit = db.MaxRecallEntryLimit
 			}
-			list, err := svc.ListMemories(cmd.Context(), f)
+			list, err := svc.ListRecallEntries(cmd.Context(), f)
 			if err != nil {
 				return err
 			}
-			stats := buildMemoryStats(list.Memories, f.Limit)
+			stats := buildRecallStats(list.RecallEntries, f.Limit)
 			stats.TrustedOnly = list.TrustedOnly
 			if outputFormat(cmd) == "json" {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(stats)
 			}
-			return printMemoryStatsHuman(cmd.OutOrStdout(), stats)
+			return printRecallStatsHuman(cmd.OutOrStdout(), stats)
 		},
 	}
-	addMemoryFilterFlags(cmd, &f)
-	addMemoryCurrentCWDFlag(cmd, &currentCWD)
-	addMemoryCurrentGitBranchFlag(cmd, &currentGitBranch)
-	addMemoryCurrentWorktreeFlag(cmd, &currentWorktree)
+	addRecallFilterFlags(cmd, &f)
+	addRecallEntryCurrentCWDFlag(cmd, &currentCWD)
+	addRecallEntryCurrentGitBranchFlag(cmd, &currentGitBranch)
+	addRecallEntryCurrentWorktreeFlag(cmd, &currentWorktree)
 	return cmd
 }
 
-func buildMemoryStats(
-	memories []db.MemoryResult,
+func buildRecallStats(
+	entries []db.RecallResult,
 	limit int,
-) memoryStatsResult {
-	stats := memoryStatsResult{
-		Count:           len(memories),
+) recallStatsResult {
+	stats := recallStatsResult{
+		Count:           len(entries),
 		Limit:           limit,
-		Truncated:       limit > 0 && len(memories) >= limit,
+		Truncated:       limit > 0 && len(entries) >= limit,
 		TrustedOnly:     false,
 		ByType:          map[string]int{},
 		ByScope:         map[string]int{},
@@ -207,51 +207,51 @@ func buildMemoryStats(
 		ByEvidence:      map[string]int{},
 		ByLifecycle:     map[string]int{},
 	}
-	for _, memory := range memories {
-		countMemoryStat(stats.ByType, memory.Type)
-		countMemoryStat(stats.ByScope, memory.Scope)
-		countMemoryStat(stats.ByStatus, memory.Status)
-		countMemoryStat(stats.ByProject, memory.Project)
-		countMemoryStat(stats.ByAgent, memory.Agent)
-		countMemoryStat(stats.ByExtractor, memory.ExtractorMethod)
-		countMemoryStat(stats.BySourceRun, memory.SourceRunID)
-		countMemoryStat(stats.BySourceSession, memory.SourceSessionID)
-		countMemoryStat(stats.BySourceEpisode, memory.SourceEpisodeID)
-		countMemoryStat(
+	for _, recall := range entries {
+		countRecallEntryStat(stats.ByType, recall.Type)
+		countRecallEntryStat(stats.ByScope, recall.Scope)
+		countRecallEntryStat(stats.ByStatus, recall.Status)
+		countRecallEntryStat(stats.ByProject, recall.Project)
+		countRecallEntryStat(stats.ByAgent, recall.Agent)
+		countRecallEntryStat(stats.ByExtractor, recall.ExtractorMethod)
+		countRecallEntryStat(stats.BySourceRun, recall.SourceRunID)
+		countRecallEntryStat(stats.BySourceSession, recall.SourceSessionID)
+		countRecallEntryStat(stats.BySourceEpisode, recall.SourceEpisodeID)
+		countRecallEntryStat(
 			stats.ByTransferable,
-			memoryStatsBoolLabel(
-				memory.Transferable, "transferable", "not_transferable",
+			recallStatsBoolLabel(
+				recall.Transferable, "transferable", "not_transferable",
 			),
 		)
-		countMemoryStat(
+		countRecallEntryStat(
 			stats.ByProvenance,
-			memoryStatsBoolLabel(
-				memory.ProvenanceOK,
+			recallStatsBoolLabel(
+				recall.ProvenanceOK,
 				"provenance_ok",
 				"provenance_unverified",
 			),
 		)
-		countMemoryStat(
+		countRecallEntryStat(
 			stats.ByEvidence,
-			memoryStatsBoolLabel(
-				len(memory.Evidence) > 0,
+			recallStatsBoolLabel(
+				len(recall.Evidence) > 0,
 				"with_evidence",
 				"without_evidence",
 			),
 		)
-		countMemoryStat(stats.ByLifecycle, memory.LifecycleBucket())
+		countRecallEntryStat(stats.ByLifecycle, recall.LifecycleBucket())
 	}
 	return stats
 }
 
-func memoryStatsBoolLabel(ok bool, trueLabel, falseLabel string) string {
+func recallStatsBoolLabel(ok bool, trueLabel, falseLabel string) string {
 	if ok {
 		return trueLabel
 	}
 	return falseLabel
 }
 
-func countMemoryStat(counts map[string]int, value string) {
+func countRecallEntryStat(counts map[string]int, value string) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		value = "(none)"
@@ -259,28 +259,28 @@ func countMemoryStat(counts map[string]int, value string) {
 	counts[value]++
 }
 
-func printMemoryStatsHuman(w io.Writer, stats memoryStatsResult) error {
+func printRecallStatsHuman(w io.Writer, stats recallStatsResult) error {
 	fmt.Fprintf(w, "Total: %d\n", stats.Count)
 	fmt.Fprintf(w, "Limit: %d\n", stats.Limit)
 	fmt.Fprintf(w, "Truncated: %t\n", stats.Truncated)
 	fmt.Fprintf(w, "Trusted-only: %t\n", stats.TrustedOnly)
-	printMemoryStatsSection(w, "By type:", stats.ByType)
-	printMemoryStatsSection(w, "By scope:", stats.ByScope)
-	printMemoryStatsSection(w, "By status:", stats.ByStatus)
-	printMemoryStatsSection(w, "By project:", stats.ByProject)
-	printMemoryStatsSection(w, "By agent:", stats.ByAgent)
-	printMemoryStatsSection(w, "By extractor:", stats.ByExtractor)
-	printMemoryStatsSection(w, "By source run:", stats.BySourceRun)
-	printMemoryStatsSection(w, "By source session:", stats.BySourceSession)
-	printMemoryStatsSection(w, "By source episode:", stats.BySourceEpisode)
-	printMemoryStatsSection(w, "By transferability:", stats.ByTransferable)
-	printMemoryStatsSection(w, "By provenance audit:", stats.ByProvenance)
-	printMemoryStatsSection(w, "By evidence:", stats.ByEvidence)
-	printMemoryStatsSection(w, "By lifecycle:", stats.ByLifecycle)
+	printRecallStatsSection(w, "By type:", stats.ByType)
+	printRecallStatsSection(w, "By scope:", stats.ByScope)
+	printRecallStatsSection(w, "By status:", stats.ByStatus)
+	printRecallStatsSection(w, "By project:", stats.ByProject)
+	printRecallStatsSection(w, "By agent:", stats.ByAgent)
+	printRecallStatsSection(w, "By extractor:", stats.ByExtractor)
+	printRecallStatsSection(w, "By source run:", stats.BySourceRun)
+	printRecallStatsSection(w, "By source session:", stats.BySourceSession)
+	printRecallStatsSection(w, "By source episode:", stats.BySourceEpisode)
+	printRecallStatsSection(w, "By transferability:", stats.ByTransferable)
+	printRecallStatsSection(w, "By provenance audit:", stats.ByProvenance)
+	printRecallStatsSection(w, "By evidence:", stats.ByEvidence)
+	printRecallStatsSection(w, "By lifecycle:", stats.ByLifecycle)
 	return nil
 }
 
-func printMemoryStatsSection(
+func printRecallStatsSection(
 	w io.Writer,
 	title string,
 	counts map[string]int,
@@ -296,34 +296,34 @@ func printMemoryStatsSection(
 	}
 }
 
-func newMemoryGetCommand() *cobra.Command {
+func newRecallGetCommand() *cobra.Command {
 	var showEvidence bool
 	cmd := &cobra.Command{
 		Use:          "get <id>",
-		Short:        "Get one accepted memory",
+		Short:        "Get one accepted recall entry",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			svc, cleanup, err := resolveMemoryService(cmd)
+			svc, cleanup, err := resolveRecallEntryService(cmd)
 			if err != nil {
 				return err
 			}
 			defer cleanup()
-			memory, err := svc.GetMemory(cmd.Context(), args[0])
+			recall, err := svc.GetRecallEntry(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
-			if memory == nil {
-				return fmt.Errorf("memory %s not found", args[0])
+			if recall == nil {
+				return fmt.Errorf("recall entry %s not found", args[0])
 			}
 			if outputFormat(cmd) == "json" {
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(memory)
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(recall)
 			}
-			if err := printMemoryHuman(cmd.OutOrStdout(), memory); err != nil {
+			if err := printRecallEntryHuman(cmd.OutOrStdout(), recall); err != nil {
 				return err
 			}
 			if showEvidence {
-				printMemoryEvidenceDetailsHuman(cmd.OutOrStdout(), memory.Evidence)
+				printRecallEvidenceDetailsHuman(cmd.OutOrStdout(), recall.Evidence)
 			}
 			return nil
 		},
@@ -337,8 +337,8 @@ func newMemoryGetCommand() *cobra.Command {
 	return cmd
 }
 
-func newMemoryQueryCommand() *cobra.Command {
-	var req service.MemoryQuery
+func newRecallQueryCommand() *cobra.Command {
+	var req service.RecallQuery
 	var showScores bool
 	var showEvidence bool
 	var showSummary bool
@@ -347,23 +347,23 @@ func newMemoryQueryCommand() *cobra.Command {
 	var currentWorktree bool
 	cmd := &cobra.Command{
 		Use:          "query <text>",
-		Short:        "Query accepted memories",
+		Short:        "Query accepted entries",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			svc, cleanup, err := resolveMemoryService(cmd)
+			svc, cleanup, err := resolveRecallEntryService(cmd)
 			if err != nil {
 				return err
 			}
 			defer cleanup()
 			req.Query = args[0]
-			if err := applyMemoryCurrentScope(
+			if err := applyRecallEntryCurrentScope(
 				&req.CWD, &req.GitBranch, currentCWD, currentGitBranch,
 				currentWorktree,
 			); err != nil {
 				return err
 			}
-			result, err := svc.QueryMemories(cmd.Context(), req)
+			result, err := svc.QueryRecallEntries(cmd.Context(), req)
 			if err != nil {
 				return err
 			}
@@ -371,23 +371,23 @@ func newMemoryQueryCommand() *cobra.Command {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
 			}
 			out := cmd.OutOrStdout()
-			printMemoryTrustedOnlyHuman(out, result.TrustedOnly)
+			printRecallEntryTrustedOnlyHuman(out, result.TrustedOnly)
 			if req.IncludeContext && (result.Context != "" || result.ContextMeta != nil) {
 				if result.Context != "" {
 					fmt.Fprintln(out, sanitizeTerminal(result.Context))
 				} else {
-					fmt.Fprintln(out, "(no memory context fit)")
+					fmt.Fprintln(out, "(no recall context fit)")
 				}
-				printMemoryContextMetaHuman(out, result.ContextMeta)
+				printRecallContextMetaHuman(out, result.ContextMeta)
 				if showSummary {
-					printMemoryQuerySummaryHuman(out, result.Memories)
-					printMemoryQuerySummaryStructHuman(
+					printRecallQuerySummaryHuman(out, result.RecallEntries)
+					printRecallQuerySummaryStructHuman(
 						out, "Context summary", result.ContextSummary,
 					)
 				}
 				if showScores || showEvidence {
-					return printMemoryResultsDetailedHumanWithOptions(
-						out, result.Memories, memoryDetailedPrintOptions{
+					return printRecallResultsDetailedHumanWithOptions(
+						out, result.RecallEntries, recallDetailedPrintOptions{
 							ShowScores:   showScores,
 							ShowEvidence: showEvidence,
 							ContextMeta:  result.ContextMeta,
@@ -396,21 +396,21 @@ func newMemoryQueryCommand() *cobra.Command {
 				return nil
 			}
 			if showSummary {
-				printMemoryQuerySummaryHuman(out, result.Memories)
+				printRecallQuerySummaryHuman(out, result.RecallEntries)
 			}
 			if showScores || showEvidence {
-				return printMemoryResultsDetailedHuman(
-					out, result.Memories,
+				return printRecallResultsDetailedHuman(
+					out, result.RecallEntries,
 					showScores, showEvidence,
 				)
 			}
-			return printMemoryResultsHuman(out, result.Memories)
+			return printRecallResultsHuman(out, result.RecallEntries)
 		},
 	}
-	addMemoryQueryFlags(cmd, &req)
-	addMemoryCurrentCWDFlag(cmd, &currentCWD)
-	addMemoryCurrentGitBranchFlag(cmd, &currentGitBranch)
-	addMemoryCurrentWorktreeFlag(cmd, &currentWorktree)
+	addRecallQueryFlags(cmd, &req)
+	addRecallEntryCurrentCWDFlag(cmd, &currentCWD)
+	addRecallEntryCurrentGitBranchFlag(cmd, &currentGitBranch)
+	addRecallEntryCurrentWorktreeFlag(cmd, &currentWorktree)
 	cmd.Flags().BoolVar(
 		&showScores,
 		"scores",
@@ -432,22 +432,22 @@ func newMemoryQueryCommand() *cobra.Command {
 	return cmd
 }
 
-func printMemoryTrustedOnlyHuman(w io.Writer, trustedOnly bool) {
+func printRecallEntryTrustedOnlyHuman(w io.Writer, trustedOnly bool) {
 	fmt.Fprintf(w, "Trusted-only: %t\n", trustedOnly)
 }
 
-func printMemoryQuerySummaryHuman(
+func printRecallQuerySummaryHuman(
 	w io.Writer,
-	memories []db.MemoryResult,
+	entries []db.RecallResult,
 ) {
-	summary := service.BuildMemoryQuerySummary(memories)
-	printMemoryQuerySummaryStructHuman(w, "Summary", summary)
+	summary := service.BuildRecallQuerySummary(entries)
+	printRecallQuerySummaryStructHuman(w, "Summary", summary)
 }
 
-func printMemoryQuerySummaryStructHuman(
+func printRecallQuerySummaryStructHuman(
 	w io.Writer,
 	label string,
-	summary *service.MemoryQuerySummary,
+	summary *service.RecallQuerySummary,
 ) {
 	if summary == nil {
 		return
@@ -457,48 +457,48 @@ func printMemoryQuerySummaryStructHuman(
 		"%s: %d %s\n",
 		label,
 		summary.Count,
-		memoryCountNoun(summary.Count),
+		recallCountNoun(summary.Count),
 	)
-	printMemoryStatsSection(w, "By type:", summary.ByType)
-	printMemoryStatsSection(w, "By scope:", summary.ByScope)
-	printMemoryStatsSection(w, "By status:", summary.ByStatus)
-	printMemoryStatsSection(w, "By project:", summary.ByProject)
-	printMemoryStatsSection(w, "By agent:", summary.ByAgent)
-	printMemoryStatsSection(w, "By cwd:", summary.ByCWD)
-	printMemoryStatsSection(w, "By git branch:", summary.ByGitBranch)
-	printMemoryStatsSection(w, "By match reason:", summary.ByMatchReason)
-	printMemoryStatsSection(w, "By extractor:", summary.ByExtractorMethod)
-	printMemoryStatsSection(w, "By model:", summary.ByModel)
-	printMemoryStatsSection(w, "By source run:", summary.BySourceRun)
-	printMemoryStatsSection(w, "By source session:", summary.BySourceSession)
-	printMemoryStatsSection(w, "By source episode:", summary.BySourceEpisode)
-	printMemoryStatsSection(w, "By transferability:", summary.ByTransferability)
-	printMemoryStatsSection(w, "By provenance audit:", summary.ByProvenanceAudit)
-	printMemoryStatsSection(w, "By evidence:", summary.ByEvidence)
-	printMemoryStatsSection(w, "By lifecycle:", summary.ByLifecycle)
+	printRecallStatsSection(w, "By type:", summary.ByType)
+	printRecallStatsSection(w, "By scope:", summary.ByScope)
+	printRecallStatsSection(w, "By status:", summary.ByStatus)
+	printRecallStatsSection(w, "By project:", summary.ByProject)
+	printRecallStatsSection(w, "By agent:", summary.ByAgent)
+	printRecallStatsSection(w, "By cwd:", summary.ByCWD)
+	printRecallStatsSection(w, "By git branch:", summary.ByGitBranch)
+	printRecallStatsSection(w, "By match reason:", summary.ByMatchReason)
+	printRecallStatsSection(w, "By extractor:", summary.ByExtractorMethod)
+	printRecallStatsSection(w, "By model:", summary.ByModel)
+	printRecallStatsSection(w, "By source run:", summary.BySourceRun)
+	printRecallStatsSection(w, "By source session:", summary.BySourceSession)
+	printRecallStatsSection(w, "By source episode:", summary.BySourceEpisode)
+	printRecallStatsSection(w, "By transferability:", summary.ByTransferability)
+	printRecallStatsSection(w, "By provenance audit:", summary.ByProvenanceAudit)
+	printRecallStatsSection(w, "By evidence:", summary.ByEvidence)
+	printRecallStatsSection(w, "By lifecycle:", summary.ByLifecycle)
 }
 
-func memoryCountNoun(count int) string {
+func recallCountNoun(count int) string {
 	if count == 1 {
-		return "memory"
+		return "entry"
 	}
-	return "memories"
+	return "entries"
 }
 
-type memoryBriefResult struct {
-	Task            string                      `json:"task"`
-	TrustedOnly     bool                        `json:"trusted_only"`
-	Context         string                      `json:"context"`
-	ContextMeta     *service.MemoryContextMeta  `json:"context_meta,omitempty"`
-	Summary         *service.MemoryQuerySummary `json:"summary,omitempty"`
-	ContextSummary  *service.MemoryQuerySummary `json:"context_summary,omitempty"`
-	MemoryIDs       []string                    `json:"memory_ids"`
-	ContextMemories []db.MemoryResult           `json:"context_memories,omitempty"`
-	Memories        []db.MemoryResult           `json:"memories"`
+type recallBriefResult struct {
+	Task           string                      `json:"task"`
+	TrustedOnly    bool                        `json:"trusted_only"`
+	Context        string                      `json:"context"`
+	ContextMeta    *service.RecallContextMeta  `json:"context_meta,omitempty"`
+	Summary        *service.RecallQuerySummary `json:"summary,omitempty"`
+	ContextSummary *service.RecallQuerySummary `json:"context_summary,omitempty"`
+	EntryIDs       []string                    `json:"entry_ids"`
+	ContextEntries []db.RecallResult           `json:"context_entries,omitempty"`
+	RecallEntries  []db.RecallResult           `json:"entries"`
 }
 
-func newMemoryBriefCommand() *cobra.Command {
-	var req service.MemoryQuery
+func newRecallBriefCommand() *cobra.Command {
+	var req service.RecallQuery
 	var currentCWD bool
 	var currentGitBranch bool
 	var currentWorktree bool
@@ -508,59 +508,59 @@ func newMemoryBriefCommand() *cobra.Command {
 	req.TrustedOnly = true
 	cmd := &cobra.Command{
 		Use:          "brief <task>",
-		Short:        "Write a task briefing from accepted memories",
+		Short:        "Write a task briefing from accepted entries",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			svc, cleanup, err := resolveMemoryService(cmd)
+			svc, cleanup, err := resolveRecallEntryService(cmd)
 			if err != nil {
 				return err
 			}
 			defer cleanup()
 			req.Query = args[0]
 			req.IncludeContext = true
-			if err := applyMemoryCurrentScope(
+			if err := applyRecallEntryCurrentScope(
 				&req.CWD, &req.GitBranch, currentCWD, currentGitBranch,
 				currentWorktree,
 			); err != nil {
 				return err
 			}
-			result, err := svc.QueryMemories(cmd.Context(), req)
+			result, err := svc.QueryRecallEntries(cmd.Context(), req)
 			if err != nil {
 				return err
 			}
 			summary := result.Summary
 			if summary == nil {
-				summary = service.BuildMemoryQuerySummary(result.Memories)
+				summary = service.BuildRecallQuerySummary(result.RecallEntries)
 			}
-			brief := memoryBriefResult{
-				Task:            req.Query,
-				TrustedOnly:     req.TrustedOnly,
-				Context:         result.Context,
-				ContextMeta:     result.ContextMeta,
-				Summary:         summary,
-				ContextSummary:  result.ContextSummary,
-				MemoryIDs:       memoryBriefIDs(result),
-				ContextMemories: result.ContextMemories,
-				Memories:        result.Memories,
+			brief := recallBriefResult{
+				Task:           req.Query,
+				TrustedOnly:    req.TrustedOnly,
+				Context:        result.Context,
+				ContextMeta:    result.ContextMeta,
+				Summary:        summary,
+				ContextSummary: result.ContextSummary,
+				EntryIDs:       recallBriefIDs(result),
+				ContextEntries: result.ContextEntries,
+				RecallEntries:  result.RecallEntries,
 			}
 			if outputFormat(cmd) == "json" {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(brief)
 			}
-			if err := printMemoryBriefHuman(cmd.OutOrStdout(), brief); err != nil {
+			if err := printRecallBriefHuman(cmd.OutOrStdout(), brief); err != nil {
 				return err
 			}
 			if showSummary {
-				printMemoryQuerySummaryHuman(cmd.OutOrStdout(), result.Memories)
-				printMemoryQuerySummaryStructHuman(
+				printRecallQuerySummaryHuman(cmd.OutOrStdout(), result.RecallEntries)
+				printRecallQuerySummaryStructHuman(
 					cmd.OutOrStdout(), "Context summary",
 					result.ContextSummary,
 				)
 			}
 			if showScores || showEvidence {
-				return printMemoryResultsDetailedHumanWithOptions(
-					cmd.OutOrStdout(), result.Memories,
-					memoryDetailedPrintOptions{
+				return printRecallResultsDetailedHumanWithOptions(
+					cmd.OutOrStdout(), result.RecallEntries,
+					recallDetailedPrintOptions{
 						ShowScores:   showScores,
 						ShowEvidence: showEvidence,
 						ContextMeta:  result.ContextMeta,
@@ -569,16 +569,16 @@ func newMemoryBriefCommand() *cobra.Command {
 			return nil
 		},
 	}
-	addMemoryQueryFlags(cmd, &req)
+	addRecallQueryFlags(cmd, &req)
 	if err := cmd.Flags().MarkHidden("context"); err != nil {
 		panic(err)
 	}
 	if flag := cmd.Flags().Lookup("context-max-bytes"); flag != nil {
 		flag.Usage = "Maximum bytes of assembled context"
 	}
-	addMemoryCurrentCWDFlag(cmd, &currentCWD)
-	addMemoryCurrentGitBranchFlag(cmd, &currentGitBranch)
-	addMemoryCurrentWorktreeFlag(cmd, &currentWorktree)
+	addRecallEntryCurrentCWDFlag(cmd, &currentCWD)
+	addRecallEntryCurrentGitBranchFlag(cmd, &currentGitBranch)
+	addRecallEntryCurrentWorktreeFlag(cmd, &currentWorktree)
 	cmd.Flags().BoolVar(
 		&showScores,
 		"scores",
@@ -600,50 +600,50 @@ func newMemoryBriefCommand() *cobra.Command {
 	return cmd
 }
 
-type memoryExtractDryRunResult struct {
+type recallExtractDryRunResult struct {
 	SessionID     string                          `json:"session_id"`
 	DryRun        bool                            `json:"dry_run"`
 	MessageCount  int                             `json:"message_count"`
 	ChunkCount    int                             `json:"chunk_count"`
 	ChunkMaxChars int                             `json:"chunk_max_chars"`
-	Chunks        []service.MemoryExtractionChunk `json:"chunks"`
+	Chunks        []service.RecallExtractionChunk `json:"chunks"`
 }
 
-func newMemoryExtractCommand() *cobra.Command {
+func newRecallExtractCommand() *cobra.Command {
 	var sessionID string
 	var dryRun bool
 	var chunkMaxChars int
 	cmd := &cobra.Command{
 		Use:          "extract --session <id> --dry-run",
-		Short:        "Preview session chunks for memory extraction",
+		Short:        "Preview session chunks for recall extraction",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if strings.TrimSpace(sessionID) == "" {
-				return fmt.Errorf("memory extract requires --session")
+				return fmt.Errorf("recall extract requires --session")
 			}
 			if !dryRun {
 				return fmt.Errorf(
-					"memory extract currently supports --dry-run only; " +
+					"recall extract currently supports --dry-run only; " +
 						"model-backed fact extraction is not wired yet",
 				)
 			}
-			svc, cleanup, err := resolveMemoryService(cmd)
+			svc, cleanup, err := resolveRecallEntryService(cmd)
 			if err != nil {
 				return err
 			}
 			defer cleanup()
-			messages, err := loadMemoryExtractionMessages(
+			messages, err := loadRecallExtractionMessages(
 				cmd.Context(), svc, sessionID,
 			)
 			if err != nil {
 				return err
 			}
-			chunks := service.BuildMemoryExtractionChunks(
+			chunks := service.BuildRecallExtractionChunks(
 				sessionID, messages,
-				service.MemoryExtractionChunkOptions{MaxChars: chunkMaxChars},
+				service.RecallExtractionChunkOptions{MaxChars: chunkMaxChars},
 			)
-			result := memoryExtractDryRunResult{
+			result := recallExtractDryRunResult{
 				SessionID:     sessionID,
 				DryRun:        true,
 				MessageCount:  len(messages),
@@ -654,7 +654,7 @@ func newMemoryExtractCommand() *cobra.Command {
 			if outputFormat(cmd) == "json" {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
 			}
-			return printMemoryExtractDryRunHuman(cmd.OutOrStdout(), result)
+			return printRecallExtractDryRunHuman(cmd.OutOrStdout(), result)
 		},
 	}
 	cmd.Flags().StringVar(
@@ -667,7 +667,7 @@ func newMemoryExtractCommand() *cobra.Command {
 		&dryRun,
 		"dry-run",
 		false,
-		"Print memory extraction chunks without storing facts",
+		"Print recall extraction chunks without storing facts",
 	)
 	cmd.Flags().IntVar(
 		&chunkMaxChars,
@@ -678,7 +678,7 @@ func newMemoryExtractCommand() *cobra.Command {
 	return cmd
 }
 
-func loadMemoryExtractionMessages(
+func loadRecallExtractionMessages(
 	ctx context.Context,
 	svc service.SessionService,
 	sessionID string,
@@ -707,9 +707,9 @@ func loadMemoryExtractionMessages(
 	return messages, nil
 }
 
-func printMemoryExtractDryRunHuman(
+func printRecallExtractDryRunHuman(
 	w io.Writer,
-	result memoryExtractDryRunResult,
+	result recallExtractDryRunResult,
 ) error {
 	fmt.Fprintf(w, "Session: %s\n", sanitizeTerminal(result.SessionID))
 	fmt.Fprintf(w, "Dry-run: %t\n", result.DryRun)
@@ -732,9 +732,9 @@ func printMemoryExtractDryRunHuman(
 	return nil
 }
 
-func memoryBriefIDs(result *service.MemoryQueryResult) []string {
-	// Always return a non-nil slice so memory_ids serializes as [] rather than
-	// null when no memory IDs fit the packed context.
+func recallBriefIDs(result *service.RecallQueryResult) []string {
+	// Always return a non-nil slice so entry_ids serializes as [] rather than
+	// null when no recall IDs fit the packed context.
 	if result == nil {
 		return []string{}
 	}
@@ -742,16 +742,16 @@ func memoryBriefIDs(result *service.MemoryQueryResult) []string {
 		ids := make([]string, 0, len(result.ContextMeta.IncludedIDs))
 		return append(ids, result.ContextMeta.IncludedIDs...)
 	}
-	ids := make([]string, 0, len(result.Memories))
-	for _, memory := range result.Memories {
-		if memory.ID != "" {
-			ids = append(ids, memory.ID)
+	ids := make([]string, 0, len(result.RecallEntries))
+	for _, recall := range result.RecallEntries {
+		if recall.ID != "" {
+			ids = append(ids, recall.ID)
 		}
 	}
 	return ids
 }
 
-func printMemoryBriefHuman(w io.Writer, brief memoryBriefResult) error {
+func printRecallBriefHuman(w io.Writer, brief recallBriefResult) error {
 	fmt.Fprintf(
 		w,
 		"Task: %s\nTrusted-only: %t\n\n",
@@ -760,55 +760,55 @@ func printMemoryBriefHuman(w io.Writer, brief memoryBriefResult) error {
 	)
 	if strings.TrimSpace(brief.Context) == "" {
 		if brief.ContextMeta != nil {
-			fmt.Fprintln(w, "(no memory context fit)")
-			printMemoryContextMetaHuman(w, brief.ContextMeta)
+			fmt.Fprintln(w, "(no recall context fit)")
+			printRecallContextMetaHuman(w, brief.ContextMeta)
 			return nil
 		}
-		fmt.Fprintln(w, "(no relevant memories)")
+		fmt.Fprintln(w, "(no relevant entries)")
 		return nil
 	}
 	fmt.Fprintln(w, sanitizeTerminal(brief.Context))
-	if len(brief.MemoryIDs) > 0 {
+	if len(brief.EntryIDs) > 0 {
 		fmt.Fprintf(
 			w,
-			"\nMemory sources: %s\n",
-			sanitizeTerminal(memoryBriefSourceList(brief)),
+			"\nRecall sources: %s\n",
+			sanitizeTerminal(recallBriefSourceList(brief)),
 		)
 	}
-	printMemoryContextMetaHuman(w, brief.ContextMeta)
+	printRecallContextMetaHuman(w, brief.ContextMeta)
 	return nil
 }
 
-func memoryBriefSourceList(brief memoryBriefResult) string {
-	if len(brief.ContextMemories) == 0 {
-		return strings.Join(brief.MemoryIDs, ",")
+func recallBriefSourceList(brief recallBriefResult) string {
+	if len(brief.ContextEntries) == 0 {
+		return strings.Join(brief.EntryIDs, ",")
 	}
-	byID := make(map[string]db.MemoryResult, len(brief.ContextMemories))
-	for _, memory := range brief.ContextMemories {
-		if memory.ID != "" {
-			byID[memory.ID] = memory
+	byID := make(map[string]db.RecallResult, len(brief.ContextEntries))
+	for _, recall := range brief.ContextEntries {
+		if recall.ID != "" {
+			byID[recall.ID] = recall
 		}
 	}
-	parts := make([]string, 0, len(brief.MemoryIDs))
-	for _, id := range brief.MemoryIDs {
-		memory, ok := byID[id]
+	parts := make([]string, 0, len(brief.EntryIDs))
+	for _, id := range brief.EntryIDs {
+		recall, ok := byID[id]
 		if !ok {
 			parts = append(parts, id)
 			continue
 		}
-		parts = append(parts, memoryBriefSourceLabel(memory))
+		parts = append(parts, recallBriefSourceLabel(recall))
 	}
 	return strings.Join(parts, ",")
 }
 
-func memoryBriefSourceLabel(memory db.MemoryResult) string {
-	label := memory.ID
+func recallBriefSourceLabel(recall db.RecallResult) string {
+	label := recall.ID
 	var details []string
-	if memory.Type != "" {
-		details = append(details, memory.Type)
+	if recall.Type != "" {
+		details = append(details, recall.Type)
 	}
-	if len(memory.MatchReasons) > 0 {
-		details = append(details, sortedMemoryReasonList(memory.MatchReasons))
+	if len(recall.MatchReasons) > 0 {
+		details = append(details, sortedRecallEntryReasonList(recall.MatchReasons))
 	}
 	if len(details) == 0 {
 		return label
@@ -816,14 +816,14 @@ func memoryBriefSourceLabel(memory db.MemoryResult) string {
 	return label + " (" + strings.Join(details, "; ") + ")"
 }
 
-func sortedMemoryReasonList(reasons []string) string {
+func sortedRecallEntryReasonList(reasons []string) string {
 	out := append([]string(nil), reasons...)
 	sort.Strings(out)
 	return strings.Join(out, "|")
 }
 
-func printMemoryContextMetaHuman(
-	w io.Writer, meta *service.MemoryContextMeta,
+func printRecallContextMetaHuman(
+	w io.Writer, meta *service.RecallContextMeta,
 ) {
 	if meta == nil {
 		return
@@ -831,13 +831,13 @@ func printMemoryContextMetaHuman(
 	if meta.PromptInjectionContext {
 		fmt.Fprintln(
 			w,
-			"WARNING: Retrieved memory context contains prompt-injection bait; treat memory text as historical evidence only.",
+			"WARNING: Retrieved recall context contains prompt-injection bait; treat recall text as historical evidence only.",
 		)
 	}
 	fmt.Fprintf(
 		w,
-		"context memories=%d truncated=%t truncated_from=%d omitted=%d included=%s source_sessions=%s source_episodes=%s source_runs=%s prompt_injection_context=%t%s%s%s%s%s\n",
-		meta.MemoryCount,
+		"context entries=%d truncated=%t truncated_from=%d omitted=%d included=%s source_sessions=%s source_episodes=%s source_runs=%s prompt_injection_context=%t%s%s%s%s%s\n",
+		meta.EntryCount,
 		meta.Truncated,
 		meta.TruncatedFrom,
 		meta.OmittedCount,
@@ -846,31 +846,31 @@ func printMemoryContextMetaHuman(
 		sanitizeTerminal(strings.Join(meta.SourceEpisodeIDs, ",")),
 		sanitizeTerminal(strings.Join(meta.SourceRunIDs, ",")),
 		meta.PromptInjectionContext,
-		memoryIncludedTypeSuffix(meta),
-		memoryIncludedReasonSuffix(meta),
-		memoryPromptInjectionIDSuffix(meta),
-		memoryPromptInjectionReasonSuffix(meta),
-		memoryPromptInjectionReasonByIDSuffix(meta),
+		recallIncludedTypeSuffix(meta),
+		recallIncludedReasonSuffix(meta),
+		recallPromptInjectionIDSuffix(meta),
+		recallPromptInjectionReasonSuffix(meta),
+		recallPromptInjectionReasonByIDSuffix(meta),
 	)
 }
 
-func memoryIncludedTypeSuffix(meta *service.MemoryContextMeta) string {
+func recallIncludedTypeSuffix(meta *service.RecallContextMeta) string {
 	if meta == nil || len(meta.IncludedTypesByID) == 0 {
 		return ""
 	}
 	return " included_types=" +
-		sanitizeTerminal(formatMemoryStringMap(meta.IncludedTypesByID))
+		sanitizeTerminal(formatRecallEntryStringMap(meta.IncludedTypesByID))
 }
 
-func memoryIncludedReasonSuffix(meta *service.MemoryContextMeta) string {
+func recallIncludedReasonSuffix(meta *service.RecallContextMeta) string {
 	if meta == nil || len(meta.IncludedMatchReasonsByID) == 0 {
 		return ""
 	}
 	return " included_reasons=" +
-		sanitizeTerminal(formatMemoryStringSliceMap(meta.IncludedMatchReasonsByID))
+		sanitizeTerminal(formatRecallEntryStringSliceMap(meta.IncludedMatchReasonsByID))
 }
 
-func memoryPromptInjectionIDSuffix(meta *service.MemoryContextMeta) string {
+func recallPromptInjectionIDSuffix(meta *service.RecallContextMeta) string {
 	if meta == nil || len(meta.PromptInjectionContextIDs) == 0 {
 		return ""
 	}
@@ -878,7 +878,7 @@ func memoryPromptInjectionIDSuffix(meta *service.MemoryContextMeta) string {
 		sanitizeTerminal(strings.Join(meta.PromptInjectionContextIDs, ","))
 }
 
-func memoryPromptInjectionReasonSuffix(meta *service.MemoryContextMeta) string {
+func recallPromptInjectionReasonSuffix(meta *service.RecallContextMeta) string {
 	if meta == nil || len(meta.PromptInjectionContextReasons) == 0 {
 		return ""
 	}
@@ -886,8 +886,8 @@ func memoryPromptInjectionReasonSuffix(meta *service.MemoryContextMeta) string {
 		sanitizeTerminal(strings.Join(meta.PromptInjectionContextReasons, ","))
 }
 
-func memoryPromptInjectionReasonByIDSuffix(
-	meta *service.MemoryContextMeta,
+func recallPromptInjectionReasonByIDSuffix(
+	meta *service.RecallContextMeta,
 ) string {
 	if meta == nil || len(meta.PromptInjectionContextReasonsByID) == 0 {
 		return ""
@@ -910,7 +910,7 @@ func memoryPromptInjectionReasonByIDSuffix(
 		sanitizeTerminal(strings.Join(parts, ","))
 }
 
-func formatMemoryStringMap(values map[string]string) string {
+func formatRecallEntryStringMap(values map[string]string) string {
 	keys := make([]string, 0, len(values))
 	for key := range values {
 		keys = append(keys, key)
@@ -923,7 +923,7 @@ func formatMemoryStringMap(values map[string]string) string {
 	return strings.Join(parts, ",")
 }
 
-func formatMemoryStringSliceMap(values map[string][]string) string {
+func formatRecallEntryStringSliceMap(values map[string][]string) string {
 	keys := make([]string, 0, len(values))
 	for key := range values {
 		keys = append(keys, key)
@@ -938,7 +938,7 @@ func formatMemoryStringSliceMap(values map[string][]string) string {
 	return strings.Join(parts, ",")
 }
 
-func newMemoryImportCommand() *cobra.Command {
+func newRecallImportCommand() *cobra.Command {
 	var dryRun bool
 	var yes bool
 	var allowRemoteImport bool
@@ -946,44 +946,44 @@ func newMemoryImportCommand() *cobra.Command {
 	var requireExistingSessions = true
 	var allowPlaceholderSessions bool
 	cmd := &cobra.Command{
-		Use:          "import <accepted-memories.jsonl>",
-		Short:        "Import reviewed accepted memories",
+		Use:          "import <accepted-recall.jsonl>",
+		Short:        "Import reviewed accepted entries",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !dryRun && !yes {
 				return fmt.Errorf(
-					"memory import writes to the active agentsview database; " +
+					"recall import writes to the active agentsview database; " +
 						"run --dry-run first, then pass --yes to import",
 				)
 			}
 			remote, _ := cmd.Flags().GetString("server")
 			if strings.TrimSpace(remote) != "" && !dryRun && !allowRemoteImport {
 				return fmt.Errorf(
-					"memory import --server writes to a remote daemon; " +
+					"recall import --server writes to a remote daemon; " +
 						"run --dry-run first, then pass --yes " +
 						"--allow-remote-import to import",
 				)
 			}
 			if strings.TrimSpace(remote) == "" && !allowProductionImport {
-				if err := requireSafeLocalMemoryImportTarget(); err != nil {
+				if err := requireSafeLocalRecallImportTarget(); err != nil {
 					return err
 				}
 			}
 			f, err := os.Open(args[0])
 			if err != nil {
-				return fmt.Errorf("opening memory import file: %w", err)
+				return fmt.Errorf("opening recall import file: %w", err)
 			}
 			defer f.Close()
-			svc, cleanup, err := resolveWritableMemoryService(cmd)
+			svc, cleanup, err := resolveWritableRecallEntryService(cmd)
 			if err != nil {
 				return err
 			}
 			defer cleanup()
-			result, err := svc.ImportMemories(
+			result, err := svc.ImportRecallEntries(
 				cmd.Context(),
 				f,
-				db.MemoryImportOptions{
+				db.RecallImportOptions{
 					DryRun:                  dryRun,
 					RequireExistingSessions: requireExistingSessions && !allowPlaceholderSessions,
 					AllowProductionImport:   allowProductionImport,
@@ -1000,7 +1000,7 @@ func newMemoryImportCommand() *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "Would import: %d\n", result.WouldImport)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Skipped:  %d\n", result.Skipped)
-			printMemoryImportItemsHuman(cmd.OutOrStdout(), *result)
+			printRecallImportItemsHuman(cmd.OutOrStdout(), *result)
 			return nil
 		},
 	}
@@ -1008,42 +1008,42 @@ func newMemoryImportCommand() *cobra.Command {
 		&dryRun,
 		"dry-run",
 		false,
-		"Validate and count reviewed memories without inserting",
+		"Validate and count reviewed entries without inserting",
 	)
 	cmd.Flags().BoolVar(
 		&yes,
 		"yes",
 		false,
-		"Confirm importing reviewed memories into the active agentsview database",
+		"Confirm importing reviewed entries into the active agentsview database",
 	)
 	cmd.Flags().BoolVar(
 		&allowRemoteImport,
 		"allow-remote-import",
 		false,
-		"Confirm importing reviewed memories into a remote daemon selected by --server",
+		"Confirm importing reviewed entries into a remote daemon selected by --server",
 	)
 	cmd.Flags().BoolVar(
 		&allowProductionImport,
 		"allow-production-import",
 		false,
-		"Allow validating or importing reviewed memories against a default agentsview data directory",
+		"Allow validating or importing reviewed entries against a default agentsview data directory",
 	)
 	cmd.Flags().BoolVar(
 		&requireExistingSessions,
 		"require-existing-sessions",
 		true,
-		"Reject memories whose source session or evidence is not already present",
+		"Reject entries whose source session or evidence is not already present",
 	)
 	cmd.Flags().BoolVar(
 		&allowPlaceholderSessions,
 		"allow-placeholder-sessions",
 		false,
-		"Allow importing memories with missing source evidence by creating placeholder sessions",
+		"Allow importing entries with missing source evidence by creating placeholder sessions",
 	)
 	return cmd
 }
 
-func requireSafeLocalMemoryImportTarget() error {
+func requireSafeLocalRecallImportTarget() error {
 	dataDir, err := config.ResolveDataDir()
 	if err != nil {
 		return fmt.Errorf("resolving agentsview data directory: %w", err)
@@ -1054,27 +1054,27 @@ func requireSafeLocalMemoryImportTarget() error {
 		return nil
 	}
 	return fmt.Errorf(
-		"memory import refuses to validate or write against the default agentsview data directory %s; "+
+		"recall import refuses to validate or write against the default agentsview data directory %s; "+
 			"set AGENTSVIEW_DATA_DIR to an isolated lab directory or pass "+
 			"--allow-production-import to validate or import against that archive",
 		dataDir,
 	)
 }
 
-func printMemoryImportItemsHuman(w io.Writer, result db.MemoryImportResult) {
-	for _, item := range result.ImportedMemories {
-		printMemoryImportItemHuman(w, "imported", item)
+func printRecallImportItemsHuman(w io.Writer, result db.RecallImportResult) {
+	for _, item := range result.ImportedEntries {
+		printRecallImportItemHuman(w, "imported", item)
 	}
-	for _, item := range result.WouldImportMemories {
-		printMemoryImportItemHuman(w, "would import", item)
+	for _, item := range result.WouldImportEntries {
+		printRecallImportItemHuman(w, "would import", item)
 	}
-	for _, item := range result.SkippedMemories {
-		printMemoryImportItemHuman(w, "skipped", item)
+	for _, item := range result.SkippedEntries {
+		printRecallImportItemHuman(w, "skipped", item)
 	}
 }
 
-func printMemoryImportItemHuman(
-	w io.Writer, action string, item db.MemoryImportItem,
+func printRecallImportItemHuman(
+	w io.Writer, action string, item db.RecallImportItem,
 ) {
 	fmt.Fprintf(
 		w,
@@ -1088,11 +1088,11 @@ func printMemoryImportItemHuman(
 	if item.SourceSessionID != "" {
 		fmt.Fprintf(w, "  session=%s", sanitizeTerminal(item.SourceSessionID))
 	}
-	if item.SupersedesMemoryID != "" {
+	if item.SupersedesEntryID != "" {
 		fmt.Fprintf(
 			w,
 			"  supersedes=%s",
-			sanitizeTerminal(item.SupersedesMemoryID),
+			sanitizeTerminal(item.SupersedesEntryID),
 		)
 	}
 	if item.Label != "" {
@@ -1104,89 +1104,89 @@ func printMemoryImportItemHuman(
 	fmt.Fprintln(w)
 }
 
-func addMemoryFilterFlags(cmd *cobra.Command, f *service.MemoryFilter) {
+func addRecallFilterFlags(cmd *cobra.Command, f *service.RecallFilter) {
 	flags := cmd.Flags()
 	flags.StringVar(&f.Query, "query", "", "Filter by query text")
 	flags.StringVar(&f.Project, "project", "", "Filter by project")
 	flags.StringVar(&f.CWD, "cwd", "", "Filter by cwd")
 	flags.StringVar(&f.GitBranch, "git-branch", "", "Filter by git branch")
 	flags.StringVar(&f.Agent, "agent", "", "Filter by agent")
-	flags.StringVar(&f.Type, "type", "", "Filter by memory type")
-	flags.StringVar(&f.Scope, "scope", "", "Filter by memory scope")
-	flags.StringVar(&f.Status, "status", "", "Filter by memory status")
+	flags.StringVar(&f.Type, "type", "", "Filter by recall type")
+	flags.StringVar(&f.Scope, "scope", "", "Filter by recall scope")
+	flags.StringVar(&f.Status, "status", "", "Filter by recall status")
 	flags.StringVar(
 		&f.ExtractorMethod,
 		"extractor-method",
 		"",
-		"Filter by memory extractor method",
+		"Filter by recall extractor method",
 	)
 	flags.StringVar(
 		&f.SourceSessionID,
 		"source-session-id",
 		"",
-		"Filter by memory source session id",
+		"Filter by recall source session id",
 	)
 	flags.StringVar(
 		&f.SourceEpisodeID,
 		"source-episode-id",
 		"",
-		"Filter by memory source episode id",
+		"Filter by recall source episode id",
 	)
 	flags.StringVar(
 		&f.SourceRunID,
 		"source-run-id",
 		"",
-		"Filter by memory source run id",
+		"Filter by recall source run id",
 	)
 	flags.StringVar(
-		&f.SupersedesMemoryID,
-		"supersedes-memory-id",
+		&f.SupersedesEntryID,
+		"supersedes-entry-id",
 		"",
-		"Filter by memory id this memory supersedes",
+		"Filter by the entry id this entry supersedes",
 	)
 	flags.StringVar(
-		&f.SupersededByMemoryID,
-		"superseded-by-memory-id",
+		&f.SupersededByEntryID,
+		"superseded-by-entry-id",
 		"",
-		"Filter by memory id that superseded this memory",
+		"Filter by the entry id that superseded this entry",
 	)
 	flags.BoolVar(
 		&f.TrustedOnly,
 		"trusted-only",
 		false,
-		"Only include memories marked transferable with verified provenance",
+		"Only include entries marked transferable with verified provenance",
 	)
-	flags.IntVar(&f.Limit, "limit", 0, "Maximum memories to return")
+	flags.IntVar(&f.Limit, "limit", 0, "Maximum entries to return")
 }
 
-func addMemoryCurrentCWDFlag(cmd *cobra.Command, currentCWD *bool) {
+func addRecallEntryCurrentCWDFlag(cmd *cobra.Command, currentCWD *bool) {
 	cmd.Flags().BoolVar(
 		currentCWD,
 		"current-cwd",
 		false,
-		"Filter memories to the current working directory",
+		"Filter entries to the current working directory",
 	)
 }
 
-func addMemoryCurrentGitBranchFlag(cmd *cobra.Command, currentGitBranch *bool) {
+func addRecallEntryCurrentGitBranchFlag(cmd *cobra.Command, currentGitBranch *bool) {
 	cmd.Flags().BoolVar(
 		currentGitBranch,
 		"current-git-branch",
 		false,
-		"Filter memories to the current git branch",
+		"Filter entries to the current git branch",
 	)
 }
 
-func addMemoryCurrentWorktreeFlag(cmd *cobra.Command, currentWorktree *bool) {
+func addRecallEntryCurrentWorktreeFlag(cmd *cobra.Command, currentWorktree *bool) {
 	cmd.Flags().BoolVar(
 		currentWorktree,
 		"current-worktree",
 		false,
-		"Filter memories to the current git worktree root and branch",
+		"Filter entries to the current git worktree root and branch",
 	)
 }
 
-func applyMemoryCurrentScope(
+func applyRecallEntryCurrentScope(
 	cwd *string,
 	gitBranch *string,
 	currentCWD bool,
@@ -1215,13 +1215,13 @@ func applyMemoryCurrentScope(
 		*gitBranch = branch
 		return nil
 	}
-	if err := applyMemoryCurrentCWD(cwd, currentCWD); err != nil {
+	if err := applyRecallEntryCurrentCWD(cwd, currentCWD); err != nil {
 		return err
 	}
-	return applyMemoryCurrentGitBranch(gitBranch, currentGitBranch)
+	return applyRecallEntryCurrentGitBranch(gitBranch, currentGitBranch)
 }
 
-func applyMemoryCurrentCWD(cwd *string, currentCWD bool) error {
+func applyRecallEntryCurrentCWD(cwd *string, currentCWD bool) error {
 	if !currentCWD {
 		return nil
 	}
@@ -1236,7 +1236,7 @@ func applyMemoryCurrentCWD(cwd *string, currentCWD bool) error {
 	return nil
 }
 
-func applyMemoryCurrentGitBranch(gitBranch *string, currentGitBranch bool) error {
+func applyRecallEntryCurrentGitBranch(gitBranch *string, currentGitBranch bool) error {
 	if !currentGitBranch {
 		return nil
 	}
@@ -1287,58 +1287,58 @@ func currentGitRoot() (string, error) {
 	return root, nil
 }
 
-func addMemoryQueryFlags(cmd *cobra.Command, req *service.MemoryQuery) {
+func addRecallQueryFlags(cmd *cobra.Command, req *service.RecallQuery) {
 	flags := cmd.Flags()
 	flags.StringVar(&req.Project, "project", "", "Filter by project")
 	flags.StringVar(&req.CWD, "cwd", "", "Filter by cwd")
 	flags.StringVar(&req.GitBranch, "git-branch", "", "Filter by git branch")
 	flags.StringVar(&req.Agent, "agent", "", "Filter by agent")
-	flags.StringVar(&req.Type, "type", "", "Filter by memory type")
-	flags.StringVar(&req.Scope, "scope", "", "Filter by memory scope")
-	flags.StringVar(&req.Status, "status", "", "Filter by memory status")
+	flags.StringVar(&req.Type, "type", "", "Filter by recall type")
+	flags.StringVar(&req.Scope, "scope", "", "Filter by recall scope")
+	flags.StringVar(&req.Status, "status", "", "Filter by recall status")
 	flags.StringVar(
 		&req.ExtractorMethod,
 		"extractor-method",
 		"",
-		"Filter by memory extractor method",
+		"Filter by recall extractor method",
 	)
 	flags.StringVar(
 		&req.SourceSessionID,
 		"source-session-id",
 		"",
-		"Filter by memory source session id",
+		"Filter by recall source session id",
 	)
 	flags.StringVar(
 		&req.SourceEpisodeID,
 		"source-episode-id",
 		"",
-		"Filter by memory source episode id",
+		"Filter by recall source episode id",
 	)
 	flags.StringVar(
 		&req.SourceRunID,
 		"source-run-id",
 		"",
-		"Filter by memory source run id",
+		"Filter by recall source run id",
 	)
 	flags.StringVar(
-		&req.SupersedesMemoryID,
-		"supersedes-memory-id",
+		&req.SupersedesEntryID,
+		"supersedes-entry-id",
 		"",
-		"Filter by memory id this memory supersedes",
+		"Filter by the entry id this entry supersedes",
 	)
 	flags.StringVar(
-		&req.SupersededByMemoryID,
-		"superseded-by-memory-id",
+		&req.SupersededByEntryID,
+		"superseded-by-entry-id",
 		"",
-		"Filter by memory id that superseded this memory",
+		"Filter by the entry id that superseded this entry",
 	)
 	flags.BoolVar(
 		&req.TrustedOnly,
 		"trusted-only",
 		req.TrustedOnly,
-		"Only include memories marked transferable with verified provenance",
+		"Only include entries marked transferable with verified provenance",
 	)
-	flags.IntVar(&req.Limit, "limit", 0, "Maximum memories to return")
+	flags.IntVar(&req.Limit, "limit", 0, "Maximum entries to return")
 	flags.BoolVar(&req.IncludeContext, "context", false, "Print assembled context")
 	flags.IntVar(
 		&req.ContextMaxBytes,
@@ -1348,92 +1348,92 @@ func addMemoryQueryFlags(cmd *cobra.Command, req *service.MemoryQuery) {
 	)
 }
 
-func printMemoryResultsHuman(
-	w io.Writer, memories []db.MemoryResult,
+func printRecallResultsHuman(
+	w io.Writer, entries []db.RecallResult,
 ) error {
-	if len(memories) == 0 {
-		fmt.Fprintln(w, "(no memories)")
+	if len(entries) == 0 {
+		fmt.Fprintln(w, "(no entries)")
 		return nil
 	}
-	for _, memory := range memories {
+	for _, recall := range entries {
 		fmt.Fprintf(w, "%s  %s  %s\n",
-			sanitizeTerminal(memory.ID),
-			sanitizeTerminal(memory.Type),
-			sanitizeTerminal(memory.Title))
-		if memory.Project != "" || memory.Agent != "" {
+			sanitizeTerminal(recall.ID),
+			sanitizeTerminal(recall.Type),
+			sanitizeTerminal(recall.Title))
+		if recall.Project != "" || recall.Agent != "" {
 			fmt.Fprintf(w, "    %s %s\n",
-				sanitizeTerminal(memory.Project),
-				sanitizeTerminal(memory.Agent))
+				sanitizeTerminal(recall.Project),
+				sanitizeTerminal(recall.Agent))
 		}
-		printMemoryReviewLine(w, memory.Memory)
-		printMemoryLifecycleLine(w, memory.Memory)
-		printMemorySourceLine(w, memory.SourceSessionID, memory.SourceEpisodeID,
-			memory.SourceRunID, memory.ExtractorMethod, memory.Model)
+		printRecallEntryReviewLine(w, recall.RecallEntry)
+		printRecallEntryLifecycleLine(w, recall.RecallEntry)
+		printRecallEntrySourceLine(w, recall.SourceSessionID, recall.SourceEpisodeID,
+			recall.SourceRunID, recall.ExtractorMethod, recall.Model)
 	}
 	return nil
 }
 
-func printMemoryReviewLine(w io.Writer, memory db.Memory) {
+func printRecallEntryReviewLine(w io.Writer, recall db.RecallEntry) {
 	fmt.Fprintf(
 		w,
 		"    review transferable=%t provenance_ok=%t evidence=%d\n",
-		memory.Transferable,
-		memory.ProvenanceOK,
-		len(memory.Evidence),
+		recall.Transferable,
+		recall.ProvenanceOK,
+		len(recall.Evidence),
 	)
 }
 
-func printMemoryResultsDetailedHuman(
+func printRecallResultsDetailedHuman(
 	w io.Writer,
-	memories []db.MemoryResult,
+	entries []db.RecallResult,
 	showScores bool,
 	showEvidence bool,
 ) error {
-	return printMemoryResultsDetailedHumanWithOptions(
-		w, memories, memoryDetailedPrintOptions{
+	return printRecallResultsDetailedHumanWithOptions(
+		w, entries, recallDetailedPrintOptions{
 			ShowScores:   showScores,
 			ShowEvidence: showEvidence,
 		})
 }
 
-type memoryDetailedPrintOptions struct {
+type recallDetailedPrintOptions struct {
 	ShowScores   bool
 	ShowEvidence bool
-	ContextMeta  *service.MemoryContextMeta
+	ContextMeta  *service.RecallContextMeta
 }
 
-func printMemoryResultsDetailedHumanWithOptions(
+func printRecallResultsDetailedHumanWithOptions(
 	w io.Writer,
-	memories []db.MemoryResult,
-	options memoryDetailedPrintOptions,
+	entries []db.RecallResult,
+	options recallDetailedPrintOptions,
 ) error {
-	if len(memories) == 0 {
-		fmt.Fprintln(w, "(no memories)")
+	if len(entries) == 0 {
+		fmt.Fprintln(w, "(no entries)")
 		return nil
 	}
-	included := memoryContextIncludedSet(options.ContextMeta)
-	for _, memory := range memories {
+	included := recallContextIncludedSet(options.ContextMeta)
+	for _, recall := range entries {
 		fmt.Fprintf(w, "%s  %s  %s\n",
-			sanitizeTerminal(memory.ID),
-			sanitizeTerminal(memory.Type),
-			sanitizeTerminal(memory.Title))
-		if memory.Project != "" || memory.Agent != "" {
+			sanitizeTerminal(recall.ID),
+			sanitizeTerminal(recall.Type),
+			sanitizeTerminal(recall.Title))
+		if recall.Project != "" || recall.Agent != "" {
 			fmt.Fprintf(w, "    %s %s\n",
-				sanitizeTerminal(memory.Project),
-				sanitizeTerminal(memory.Agent))
+				sanitizeTerminal(recall.Project),
+				sanitizeTerminal(recall.Agent))
 		}
-		printMemoryReviewLine(w, memory.Memory)
-		printMemoryLifecycleLine(w, memory.Memory)
-		printMemorySourceLineWithContext(w, memory.SourceSessionID,
-			memory.SourceEpisodeID, memory.SourceRunID,
-			memory.ExtractorMethod, memory.Model,
-			memoryContextState(options.ContextMeta, included, memory.ID))
+		printRecallEntryReviewLine(w, recall.RecallEntry)
+		printRecallEntryLifecycleLine(w, recall.RecallEntry)
+		printRecallEntrySourceLineWithContext(w, recall.SourceSessionID,
+			recall.SourceEpisodeID, recall.SourceRunID,
+			recall.ExtractorMethod, recall.Model,
+			recallContextState(options.ContextMeta, included, recall.ID))
 		if options.ShowScores {
-			b := memory.ScoreBreakdown
+			b := recall.ScoreBreakdown
 			fmt.Fprintf(
 				w,
 				"    score=%.2f keyword=%.2f evidence=%.2f identifier=%.2f phrase=%.2f entity=%.2f temporal=%.2f confidence=%.2f matched=%s terms=%s\n",
-				memory.Score,
+				recall.Score,
 				b.KeywordIDFScore,
 				b.EvidenceIDFScore,
 				b.IdentifierBoost,
@@ -1441,19 +1441,19 @@ func printMemoryResultsDetailedHumanWithOptions(
 				b.EntityBoost,
 				b.TemporalBoost,
 				b.ConfidenceBonus,
-				formatMemoryScoreReasons(memory),
-				formatMemoryMatchedTerms(memory.MatchedTerms),
+				formatRecallEntryScoreReasons(recall),
+				formatRecallEntryMatchedTerms(recall.MatchedTerms),
 			)
 		}
 		if options.ShowEvidence {
-			printMemoryEvidenceDetailsHuman(w, memory.Evidence)
+			printRecallEvidenceDetailsHuman(w, recall.Evidence)
 		}
 	}
 	return nil
 }
 
-func memoryContextIncludedSet(
-	meta *service.MemoryContextMeta,
+func recallContextIncludedSet(
+	meta *service.RecallContextMeta,
 ) map[string]bool {
 	if meta == nil || len(meta.IncludedIDs) == 0 {
 		return nil
@@ -1465,23 +1465,23 @@ func memoryContextIncludedSet(
 	return included
 }
 
-func memoryContextState(
-	meta *service.MemoryContextMeta,
+func recallContextState(
+	meta *service.RecallContextMeta,
 	included map[string]bool,
-	memoryID string,
+	recallID string,
 ) string {
-	if meta == nil || memoryID == "" {
+	if meta == nil || recallID == "" {
 		return ""
 	}
-	if included[memoryID] {
+	if included[recallID] {
 		return "included"
 	}
 	return "omitted"
 }
 
-const memoryEvidenceSnippetMaxChars = 220
+const recallEvidenceSnippetMaxChars = 220
 
-func printMemoryEvidenceDetailsHuman(w io.Writer, evidence []db.MemoryEvidence) {
+func printRecallEvidenceDetailsHuman(w io.Writer, evidence []db.RecallEvidence) {
 	for _, item := range evidence {
 		fmt.Fprintf(
 			w,
@@ -1493,34 +1493,34 @@ func printMemoryEvidenceDetailsHuman(w io.Writer, evidence []db.MemoryEvidence) 
 		if item.ToolUseID != "" {
 			fmt.Fprintf(w, " tool=%s", sanitizeTerminal(item.ToolUseID))
 		}
-		if snippet := memoryEvidenceSnippet(item.Snippet); snippet != "" {
+		if snippet := recallEvidenceSnippet(item.Snippet); snippet != "" {
 			fmt.Fprintf(w, "  %s", sanitizeTerminal(snippet))
 		}
 		fmt.Fprintln(w)
 	}
 }
 
-func memoryEvidenceSnippet(snippet string) string {
+func recallEvidenceSnippet(snippet string) string {
 	snippet = strings.Join(strings.Fields(snippet), " ")
-	if len([]rune(snippet)) <= memoryEvidenceSnippetMaxChars {
+	if len([]rune(snippet)) <= recallEvidenceSnippetMaxChars {
 		return snippet
 	}
 	runes := []rune(snippet)
-	return string(runes[:memoryEvidenceSnippetMaxChars]) + "..."
+	return string(runes[:recallEvidenceSnippetMaxChars]) + "..."
 }
 
-func formatMemoryMatchedTerms(terms []string) string {
+func formatRecallEntryMatchedTerms(terms []string) string {
 	if len(terms) == 0 {
 		return "none"
 	}
 	return strings.Join(terms, ",")
 }
 
-func formatMemoryScoreReasons(memory db.MemoryResult) string {
-	if len(memory.MatchReasons) > 0 {
-		return strings.Join(memory.MatchReasons, ",")
+func formatRecallEntryScoreReasons(recall db.RecallResult) string {
+	if len(recall.MatchReasons) > 0 {
+		return strings.Join(recall.MatchReasons, ",")
 	}
-	b := memory.ScoreBreakdown
+	b := recall.ScoreBreakdown
 	reasons := []string{}
 	if b.KeywordIDFScore > 0 || b.KeywordOverlap > 0 {
 		reasons = append(reasons, "keyword")
@@ -1549,102 +1549,102 @@ func formatMemoryScoreReasons(memory db.MemoryResult) string {
 	return strings.Join(reasons, ",")
 }
 
-func printMemoryHuman(w io.Writer, memory *db.Memory) error {
-	fmt.Fprintf(w, "ID:       %s\n", sanitizeTerminal(memory.ID))
-	fmt.Fprintf(w, "Type:     %s\n", sanitizeTerminal(memory.Type))
-	fmt.Fprintf(w, "Scope:    %s\n", sanitizeTerminal(memory.Scope))
-	if memory.Status != "" {
-		fmt.Fprintf(w, "Status:   %s\n", sanitizeTerminal(memory.Status))
+func printRecallEntryHuman(w io.Writer, recall *db.RecallEntry) error {
+	fmt.Fprintf(w, "ID:       %s\n", sanitizeTerminal(recall.ID))
+	fmt.Fprintf(w, "Type:     %s\n", sanitizeTerminal(recall.Type))
+	fmt.Fprintf(w, "Scope:    %s\n", sanitizeTerminal(recall.Scope))
+	if recall.Status != "" {
+		fmt.Fprintf(w, "Status:   %s\n", sanitizeTerminal(recall.Status))
 	}
-	if memory.SupersedesMemoryID != "" {
+	if recall.SupersedesEntryID != "" {
 		fmt.Fprintf(
 			w,
 			"Supersedes: %s\n",
-			sanitizeTerminal(memory.SupersedesMemoryID),
+			sanitizeTerminal(recall.SupersedesEntryID),
 		)
 	}
-	if memory.SupersededByMemoryID != "" {
+	if recall.SupersededByEntryID != "" {
 		fmt.Fprintf(
 			w,
 			"Superseded by: %s\n",
-			sanitizeTerminal(memory.SupersededByMemoryID),
+			sanitizeTerminal(recall.SupersededByEntryID),
 		)
 	}
-	fmt.Fprintf(w, "Title:    %s\n", sanitizeTerminal(memory.Title))
-	fmt.Fprintf(w, "Body:     %s\n", sanitizeTerminal(memory.Body))
-	if memory.Trigger != "" {
-		fmt.Fprintf(w, "Trigger:  %s\n", sanitizeTerminal(memory.Trigger))
+	fmt.Fprintf(w, "Title:    %s\n", sanitizeTerminal(recall.Title))
+	fmt.Fprintf(w, "Body:     %s\n", sanitizeTerminal(recall.Body))
+	if recall.Trigger != "" {
+		fmt.Fprintf(w, "Trigger:  %s\n", sanitizeTerminal(recall.Trigger))
 	}
-	if memory.Confidence != nil {
-		fmt.Fprintf(w, "Confidence: %.2f\n", *memory.Confidence)
+	if recall.Confidence != nil {
+		fmt.Fprintf(w, "Confidence: %.2f\n", *recall.Confidence)
 	}
-	if memory.Uncertainty != "" {
+	if recall.Uncertainty != "" {
 		fmt.Fprintf(
 			w,
 			"Uncertainty: %s\n",
-			sanitizeTerminal(memory.Uncertainty),
+			sanitizeTerminal(recall.Uncertainty),
 		)
 	}
-	if memory.Project != "" || memory.Agent != "" {
+	if recall.Project != "" || recall.Agent != "" {
 		fmt.Fprintf(w, "Context:  %s %s %s %s\n",
-			sanitizeTerminal(memory.Project),
-			sanitizeTerminal(memory.CWD),
-			sanitizeTerminal(memory.GitBranch),
-			sanitizeTerminal(memory.Agent))
+			sanitizeTerminal(recall.Project),
+			sanitizeTerminal(recall.CWD),
+			sanitizeTerminal(recall.GitBranch),
+			sanitizeTerminal(recall.Agent))
 	}
-	if memory.SourceSessionID != "" || memory.SourceEpisodeID != "" ||
-		memory.SourceRunID != "" ||
-		memory.ExtractorMethod != "" || memory.Model != "" {
-		printMemorySourceLine(w, memory.SourceSessionID, memory.SourceEpisodeID,
-			memory.SourceRunID, memory.ExtractorMethod, memory.Model)
+	if recall.SourceSessionID != "" || recall.SourceEpisodeID != "" ||
+		recall.SourceRunID != "" ||
+		recall.ExtractorMethod != "" || recall.Model != "" {
+		printRecallEntrySourceLine(w, recall.SourceSessionID, recall.SourceEpisodeID,
+			recall.SourceRunID, recall.ExtractorMethod, recall.Model)
 	}
-	if evidence := formatMemoryEvidence(memory.Evidence); evidence != "" {
+	if evidence := formatRecallEvidence(recall.Evidence); evidence != "" {
 		fmt.Fprintf(w, "Evidence: %s\n", sanitizeTerminal(evidence))
 	}
 	return nil
 }
 
-func printMemoryLifecycleLine(w io.Writer, memory db.Memory) {
-	if !hasMemoryLifecycleMetadata(memory) {
+func printRecallEntryLifecycleLine(w io.Writer, recall db.RecallEntry) {
+	if !hasRecallEntryLifecycleMetadata(recall) {
 		return
 	}
-	status := strings.TrimSpace(memory.Status)
+	status := strings.TrimSpace(recall.Status)
 	if status == "" {
 		status = "accepted"
 	}
 	fmt.Fprintf(w, "    lifecycle status=%s", sanitizeTerminal(status))
-	if memory.SupersedesMemoryID != "" {
+	if recall.SupersedesEntryID != "" {
 		fmt.Fprintf(
 			w,
 			" supersedes=%s",
-			sanitizeTerminal(memory.SupersedesMemoryID),
+			sanitizeTerminal(recall.SupersedesEntryID),
 		)
 	}
-	if memory.SupersededByMemoryID != "" {
+	if recall.SupersededByEntryID != "" {
 		fmt.Fprintf(
 			w,
 			" superseded_by=%s",
-			sanitizeTerminal(memory.SupersededByMemoryID),
+			sanitizeTerminal(recall.SupersededByEntryID),
 		)
 	}
 	fmt.Fprintln(w)
 }
 
-func hasMemoryLifecycleMetadata(memory db.Memory) bool {
-	status := strings.TrimSpace(memory.Status)
+func hasRecallEntryLifecycleMetadata(recall db.RecallEntry) bool {
+	status := strings.TrimSpace(recall.Status)
 	return status != "" && status != "accepted" ||
-		memory.SupersedesMemoryID != "" ||
-		memory.SupersededByMemoryID != ""
+		recall.SupersedesEntryID != "" ||
+		recall.SupersededByEntryID != ""
 }
 
-func printMemorySourceLine(
+func printRecallEntrySourceLine(
 	w io.Writer, sessionID, episodeID, runID, extractorMethod, model string,
 ) {
-	printMemorySourceLineWithContext(w, sessionID, episodeID, runID,
+	printRecallEntrySourceLineWithContext(w, sessionID, episodeID, runID,
 		extractorMethod, model, "")
 }
 
-func printMemorySourceLineWithContext(
+func printRecallEntrySourceLineWithContext(
 	w io.Writer, sessionID, episodeID, runID, extractorMethod, model string,
 	contextState string,
 ) {
@@ -1666,7 +1666,7 @@ func printMemorySourceLineWithContext(
 	fmt.Fprintln(w)
 }
 
-func formatMemoryEvidence(evidence []db.MemoryEvidence) string {
+func formatRecallEvidence(evidence []db.RecallEvidence) string {
 	parts := make([]string, 0, len(evidence))
 	for _, item := range evidence {
 		part := fmt.Sprintf(

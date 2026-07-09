@@ -307,10 +307,10 @@ func (s *Server) routes() {
 		s.mux.HandleFunc("/debug/pprof/trace", httppprof.Trace)
 	}
 
-	s.mux.Handle("GET /api/v1/memories", s.withTimeout(s.handleListMemories))
-	s.mux.Handle("GET /api/v1/memories/{id}", s.withTimeout(s.handleGetMemory))
-	s.mux.Handle("POST /api/v1/memories/query", s.withTimeout(s.handleQueryMemories))
-	s.mux.Handle("POST /api/v1/memories/import", s.withTimeout(s.handleImportMemories))
+	s.mux.Handle("GET /api/v1/recall/entries", s.withTimeout(s.handleListRecallEntries))
+	s.mux.Handle("GET /api/v1/recall/entries/{id}", s.withTimeout(s.handleGetRecallEntry))
+	s.mux.Handle("POST /api/v1/recall/query", s.withTimeout(s.handleQueryRecallEntries))
+	s.mux.Handle("POST /api/v1/recall/import", s.withTimeout(s.handleImportRecallEntries))
 	s.registerEvalIngestRoutes()
 
 	// SPA fallback: serve embedded frontend

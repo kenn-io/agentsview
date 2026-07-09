@@ -32,17 +32,17 @@ type evalTrajectoryIngestRequest struct {
 // registerEvalIngestRoutes wires the raw-trajectory eval ingest endpoint.
 // It only exists in the evalingest build: the endpoint is a lab-only
 // surface and the default binary does not serve it (see
-// memories_eval_ingest_off.go).
+// recall_eval_ingest_off.go).
 func (s *Server) registerEvalIngestRoutes() {
 	s.mux.Handle(
-		"POST /api/v1/memories/eval/trajectories",
+		"POST /api/v1/recall/eval/trajectories",
 		s.withTimeout(s.handleIngestEvalTrajectory),
 	)
 }
 
 // handleIngestEvalTrajectory ingests one raw eval trajectory as chunked,
-// FTS-indexed memory rows for lab-only keyword recall. It mirrors
-// handleImportMemories: the production-data-dir guard reads its override from a
+// FTS-indexed recall rows for lab-only keyword recall. It mirrors
+// handleImportRecallEntries: the production-data-dir guard reads its override from a
 // query parameter before the body is decoded, so the refusal fires before a
 // potentially large trajectory is parsed. The harness runs against a throwaway
 // DB, so it passes without the override.

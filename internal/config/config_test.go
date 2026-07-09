@@ -1767,7 +1767,7 @@ func TestIsDefaultAgentsviewDBPath(t *testing.T) {
 	require.NoError(t, os.WriteFile(defaultDB, []byte("db"), 0o600))
 
 	// A plain file outside ~/.agentsview.
-	labDir := filepath.Join(t.TempDir(), "memory-lab-data")
+	labDir := filepath.Join(t.TempDir(), "recall-lab-data")
 	require.NoError(t, os.MkdirAll(labDir, 0o700))
 	labDB := filepath.Join(labDir, "sessions.db")
 	require.NoError(t, os.WriteFile(labDB, []byte("db"), 0o600))

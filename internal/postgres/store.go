@@ -337,38 +337,38 @@ func (s *Store) GetCachedInsight(
 	return &insight, nil
 }
 
-func (s *Store) ListMemories(
-	_ context.Context, _ db.MemoryQuery,
-) ([]db.Memory, error) {
+func (s *Store) ListRecallEntries(
+	_ context.Context, _ db.RecallQuery,
+) ([]db.RecallEntry, error) {
 	return nil, db.ErrReadOnly
 }
 
-func (s *Store) GetMemory(
+func (s *Store) GetRecallEntry(
 	_ context.Context, _ string,
-) (*db.Memory, error) {
+) (*db.RecallEntry, error) {
 	return nil, db.ErrReadOnly
 }
 
-func (s *Store) QueryMemories(
-	_ context.Context, _ db.MemoryQuery,
-) (db.MemoryPage, error) {
-	return db.MemoryPage{}, db.ErrReadOnly
+func (s *Store) QueryRecallEntries(
+	_ context.Context, _ db.RecallQuery,
+) (db.RecallPage, error) {
+	return db.RecallPage{}, db.ErrReadOnly
 }
 
-func (s *Store) InsertMemory(_ db.Memory) (string, error) {
+func (s *Store) InsertRecallEntry(_ db.RecallEntry) (string, error) {
 	return "", db.ErrReadOnly
 }
 
-func (s *Store) ImportAcceptedMemoriesJSONL(
+func (s *Store) ImportAcceptedRecallEntriesJSONL(
 	_ context.Context, _ io.Reader,
-) (db.MemoryImportResult, error) {
-	return db.MemoryImportResult{}, db.ErrReadOnly
+) (db.RecallImportResult, error) {
+	return db.RecallImportResult{}, db.ErrReadOnly
 }
 
-func (s *Store) ImportAcceptedMemoriesJSONLWithOptions(
-	_ context.Context, _ io.Reader, _ db.MemoryImportOptions,
-) (db.MemoryImportResult, error) {
-	return db.MemoryImportResult{}, db.ErrReadOnly
+func (s *Store) ImportAcceptedRecallEntriesJSONLWithOptions(
+	_ context.Context, _ io.Reader, _ db.RecallImportOptions,
+) (db.RecallImportResult, error) {
+	return db.RecallImportResult{}, db.ErrReadOnly
 }
 
 func (s *Store) IngestEvalTrajectory(

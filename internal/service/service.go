@@ -67,12 +67,12 @@ type SessionService interface {
 	UsagePairwiseComparison(
 		ctx context.Context, req UsagePairwiseComparisonRequest,
 	) (*UsagePairwiseComparisonResponse, error)
-	ListMemories(ctx context.Context, f MemoryFilter) (*MemoryList, error)
-	GetMemory(ctx context.Context, id string) (*db.Memory, error)
-	QueryMemories(ctx context.Context, req MemoryQuery) (*MemoryQueryResult, error)
-	ImportMemories(
-		ctx context.Context, r io.Reader, opts db.MemoryImportOptions,
-	) (*db.MemoryImportResult, error)
+	ListRecallEntries(ctx context.Context, f RecallFilter) (*RecallList, error)
+	GetRecallEntry(ctx context.Context, id string) (*db.RecallEntry, error)
+	QueryRecallEntries(ctx context.Context, req RecallQuery) (*RecallQueryResult, error)
+	ImportRecallEntries(
+		ctx context.Context, r io.Reader, opts db.RecallImportOptions,
+	) (*db.RecallImportResult, error)
 	ListSecrets(ctx context.Context, f SecretListFilter) (*SecretFindingList, error)
 	ScanSecrets(ctx context.Context, in SecretScanInput,
 		progress func(SecretScanProgress)) (*SecretScanSummary, error)
@@ -173,67 +173,67 @@ type ContentSearchResult struct {
 	NextCursor int               `json:"next_cursor,omitempty"`
 }
 
-// MemoryFilter mirrors GET /api/v1/memories query parameters.
-type MemoryFilter struct {
-	Query                string `json:"q,omitempty"`
-	Project              string `json:"project,omitempty"`
-	CWD                  string `json:"cwd,omitempty"`
-	GitBranch            string `json:"git_branch,omitempty"`
-	Agent                string `json:"agent,omitempty"`
-	Type                 string `json:"type,omitempty"`
-	Scope                string `json:"scope,omitempty"`
-	Status               string `json:"status,omitempty"`
-	ExtractorMethod      string `json:"extractor_method,omitempty"`
-	SourceSessionID      string `json:"source_session_id,omitempty"`
-	SourceEpisodeID      string `json:"source_episode_id,omitempty"`
-	SourceRunID          string `json:"source_run_id,omitempty"`
-	SupersedesMemoryID   string `json:"supersedes_memory_id,omitempty"`
-	SupersededByMemoryID string `json:"superseded_by_memory_id,omitempty"`
-	TrustedOnly          bool   `json:"trusted_only,omitempty"`
-	Limit                int    `json:"limit,omitempty"`
+// RecallFilter mirrors GET /api/v1/recall/entries query parameters.
+type RecallFilter struct {
+	Query               string `json:"q,omitempty"`
+	Project             string `json:"project,omitempty"`
+	CWD                 string `json:"cwd,omitempty"`
+	GitBranch           string `json:"git_branch,omitempty"`
+	Agent               string `json:"agent,omitempty"`
+	Type                string `json:"type,omitempty"`
+	Scope               string `json:"scope,omitempty"`
+	Status              string `json:"status,omitempty"`
+	ExtractorMethod     string `json:"extractor_method,omitempty"`
+	SourceSessionID     string `json:"source_session_id,omitempty"`
+	SourceEpisodeID     string `json:"source_episode_id,omitempty"`
+	SourceRunID         string `json:"source_run_id,omitempty"`
+	SupersedesEntryID   string `json:"supersedes_entry_id,omitempty"`
+	SupersededByEntryID string `json:"superseded_by_entry_id,omitempty"`
+	TrustedOnly         bool   `json:"trusted_only,omitempty"`
+	Limit               int    `json:"limit,omitempty"`
 }
 
-// MemoryList mirrors GET /api/v1/memories.
-type MemoryList struct {
-	Memories    []db.MemoryResult `json:"memories"`
-	TrustedOnly bool              `json:"trusted_only"`
+// RecallList mirrors GET /api/v1/recall/entries.
+type RecallList struct {
+	RecallEntries []db.RecallResult `json:"entries"`
+	TrustedOnly   bool              `json:"trusted_only"`
 }
 
-// MemoryQuery mirrors POST /api/v1/memories/query.
-type MemoryQuery struct {
-	Query                string `json:"query"`
-	Project              string `json:"project,omitempty"`
-	CWD                  string `json:"cwd,omitempty"`
-	GitBranch            string `json:"git_branch,omitempty"`
-	Agent                string `json:"agent,omitempty"`
-	Type                 string `json:"type,omitempty"`
-	Scope                string `json:"scope,omitempty"`
-	Status               string `json:"status,omitempty"`
-	ExtractorMethod      string `json:"extractor_method,omitempty"`
-	SourceSessionID      string `json:"source_session_id,omitempty"`
-	SourceEpisodeID      string `json:"source_episode_id,omitempty"`
-	SourceRunID          string `json:"source_run_id,omitempty"`
-	SupersedesMemoryID   string `json:"supersedes_memory_id,omitempty"`
-	SupersededByMemoryID string `json:"superseded_by_memory_id,omitempty"`
-	TrustedOnly          bool   `json:"trusted_only,omitempty"`
-	Limit                int    `json:"limit,omitempty"`
-	IncludeContext       bool   `json:"include_context,omitempty"`
-	ContextMaxBytes      int    `json:"context_max_bytes,omitempty"`
+// RecallQuery mirrors POST /api/v1/recall/query.
+type RecallQuery struct {
+	Query               string `json:"query"`
+	Project             string `json:"project,omitempty"`
+	CWD                 string `json:"cwd,omitempty"`
+	GitBranch           string `json:"git_branch,omitempty"`
+	Agent               string `json:"agent,omitempty"`
+	Type                string `json:"type,omitempty"`
+	Scope               string `json:"scope,omitempty"`
+	Status              string `json:"status,omitempty"`
+	ExtractorMethod     string `json:"extractor_method,omitempty"`
+	SourceSessionID     string `json:"source_session_id,omitempty"`
+	SourceEpisodeID     string `json:"source_episode_id,omitempty"`
+	SourceRunID         string `json:"source_run_id,omitempty"`
+	SupersedesEntryID   string `json:"supersedes_entry_id,omitempty"`
+	SupersededByEntryID string `json:"superseded_by_entry_id,omitempty"`
+	TrustedOnly         bool   `json:"trusted_only,omitempty"`
+	Limit               int    `json:"limit,omitempty"`
+	IncludeContext      bool   `json:"include_context,omitempty"`
+	ContextMaxBytes     int    `json:"context_max_bytes,omitempty"`
 }
 
-// MemoryQueryResult mirrors POST /api/v1/memories/query response.
-type MemoryQueryResult struct {
-	Memories        []db.MemoryResult   `json:"memories"`
-	TrustedOnly     bool                `json:"trusted_only"`
-	Summary         *MemoryQuerySummary `json:"summary,omitempty"`
-	Context         string              `json:"context,omitempty"`
-	ContextMeta     *MemoryContextMeta  `json:"context_meta,omitempty"`
-	ContextMemories []db.MemoryResult   `json:"context_memories,omitempty"`
-	ContextSummary  *MemoryQuerySummary `json:"context_summary,omitempty"`
+// RecallQueryResult mirrors POST /api/v1/recall/query response.
+type RecallQueryResult struct {
+	RecallEntries  []db.RecallResult   `json:"entries"`
+	TrustedOnly    bool                `json:"trusted_only"`
+	Summary        *RecallQuerySummary `json:"summary,omitempty"`
+	Context        string              `json:"context,omitempty"`
+	ContextMeta    *RecallContextMeta  `json:"context_meta,omitempty"`
+	ContextEntries []db.RecallResult   `json:"context_entries,omitempty"`
+	ContextSummary *RecallQuerySummary `json:"context_summary,omitempty"`
 }
 
-// MemoryQuerySummary is aggregate metadata for auditing one recall result.
-type MemoryQuerySummary struct {
+// RecallQuerySummary is aggregate metadata for auditing one recall query result.
+type RecallQuerySummary struct {
 	Count             int            `json:"count"`
 	ByType            map[string]int `json:"by_type"`
 	ByScope           map[string]int `json:"by_scope"`
@@ -254,10 +254,10 @@ type MemoryQuerySummary struct {
 	ByLifecycle       map[string]int `json:"by_lifecycle"`
 }
 
-// MemoryContextMeta describes the assembled memory context without exposing it
+// RecallContextMeta describes the assembled recall context without exposing it
 // as additional model-visible evidence.
-type MemoryContextMeta struct {
-	MemoryCount                       int                 `json:"memory_count"`
+type RecallContextMeta struct {
+	EntryCount                        int                 `json:"entry_count"`
 	Truncated                         bool                `json:"truncated"`
 	IncludedIDs                       []string            `json:"included_ids,omitempty"`
 	IncludedTypesByID                 map[string]string   `json:"included_types_by_id,omitempty"`

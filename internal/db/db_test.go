@@ -3647,12 +3647,12 @@ func TestInsertSessionIfAbsentDoesNotOverwriteRealSession(t *testing.T) {
 	})
 
 	now := "2026-01-01T00:00:00Z"
-	first := "Memory import placeholder for s1"
+	first := "Recall import placeholder for s1"
 	placeholder := Session{
-		ID: "s1", Project: "agentsview", Machine: "memory-import",
+		ID: "s1", Project: "agentsview", Machine: "recall-import",
 		FirstMessage: &first, DisplayName: &first,
 		StartedAt: &now, EndedAt: &now, MessageCount: 0,
-		SourceVersion: "memory-import-placeholder",
+		SourceVersion: "recall-import-placeholder",
 	}
 
 	// The placeholder must not clobber the real session's metadata.
@@ -3669,7 +3669,7 @@ func TestInsertSessionIfAbsentDoesNotOverwriteRealSession(t *testing.T) {
 	created, err := d.GetSession(ctx, "s2")
 	require.NoError(t, err)
 	require.NotNil(t, created)
-	assert.Equal(t, "memory-import", created.Machine)
+	assert.Equal(t, "recall-import", created.Machine)
 	assert.Equal(t, 0, created.MessageCount)
 }
 
@@ -3684,12 +3684,12 @@ func TestInsertSessionIfAbsentRejectsTrashedSession(t *testing.T) {
 	require.NoError(t, d.SoftDeleteSession("s1"))
 
 	now := "2026-01-01T00:00:00Z"
-	first := "Memory import placeholder for s1"
+	first := "Recall import placeholder for s1"
 	placeholder := Session{
-		ID: "s1", Project: "agentsview", Machine: "memory-import",
+		ID: "s1", Project: "agentsview", Machine: "recall-import",
 		FirstMessage: &first, DisplayName: &first,
 		StartedAt: &now, EndedAt: &now, MessageCount: 0,
-		SourceVersion: "memory-import-placeholder",
+		SourceVersion: "recall-import-placeholder",
 	}
 
 	// A trashed row satisfies ON CONFLICT DO NOTHING, so without the guard the

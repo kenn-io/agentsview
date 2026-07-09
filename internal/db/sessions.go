@@ -1368,7 +1368,7 @@ func (db *DB) UpsertSession(s Session) error {
 
 // insertSessionIfAbsent inserts a session only when no row with its id exists,
 // leaving any existing row untouched (ON CONFLICT DO NOTHING). It is used for
-// placeholder rows (e.g. memory import) that must never overwrite a real
+// placeholder rows (e.g. recall import) that must never overwrite a real
 // session synced concurrently. Permanently-excluded sessions are still
 // rejected so a placeholder cannot resurrect them.
 func (db *DB) insertSessionIfAbsent(ctx context.Context, s Session) error {

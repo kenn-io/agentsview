@@ -256,18 +256,18 @@ func TestHTTPBackend_List_StarredFilterRoundtrip(t *testing.T) {
 	assert.Equal(t, "starred-1", list.Sessions[0].ID)
 }
 
-func TestHTTPBackend_ListMemoriesRejectsNegativeLimitLocally(t *testing.T) {
+func TestHTTPBackend_ListRecallEntriesRejectsNegativeLimitLocally(t *testing.T) {
 	t.Parallel()
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls++
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"memories":[]}`))
+		_, _ = w.Write([]byte(`{"entries":[]}`))
 	}))
 	t.Cleanup(srv.Close)
 
 	svc := service.NewHTTPBackend(srv.URL, "", false)
-	_, err := svc.ListMemories(context.Background(), service.MemoryFilter{
+	_, err := svc.ListRecallEntries(context.Background(), service.RecallFilter{
 		Limit: -1,
 	})
 
@@ -276,36 +276,36 @@ func TestHTTPBackend_ListMemoriesRejectsNegativeLimitLocally(t *testing.T) {
 	assert.Equal(t, 0, calls)
 }
 
-func TestHTTPBackend_ListMemoriesIncludesSourceEpisodeIDParam(t *testing.T) {
+func TestHTTPBackend_ListRecallEntriesIncludesSourceEpisodeIDParam(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/memories", r.URL.Path)
-		assert.Equal(t, "memory-session:chunk:0001", r.URL.Query().Get("source_episode_id"))
+		require.Equal(t, "/api/v1/recall/entries", r.URL.Path)
+		assert.Equal(t, "recall-session:chunk:0001", r.URL.Query().Get("source_episode_id"))
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"memories":[]}`))
+		_, _ = w.Write([]byte(`{"entries":[]}`))
 	}))
 	t.Cleanup(srv.Close)
 
 	svc := service.NewHTTPBackend(srv.URL, "", false)
-	_, err := svc.ListMemories(context.Background(), service.MemoryFilter{
-		SourceEpisodeID: "memory-session:chunk:0001",
+	_, err := svc.ListRecallEntries(context.Background(), service.RecallFilter{
+		SourceEpisodeID: "recall-session:chunk:0001",
 	})
 
 	require.NoError(t, err)
 }
 
-func TestHTTPBackend_ListMemoriesIncludesTrustedOnlyParam(t *testing.T) {
+func TestHTTPBackend_ListRecallEntriesIncludesTrustedOnlyParam(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/memories", r.URL.Path)
+		require.Equal(t, "/api/v1/recall/entries", r.URL.Path)
 		assert.Equal(t, "true", r.URL.Query().Get("trusted_only"))
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"memories":[]}`))
+		_, _ = w.Write([]byte(`{"entries":[]}`))
 	}))
 	t.Cleanup(srv.Close)
 
 	svc := service.NewHTTPBackend(srv.URL, "", false)
-	list, err := svc.ListMemories(context.Background(), service.MemoryFilter{
+	list, err := svc.ListRecallEntries(context.Background(), service.RecallFilter{
 		TrustedOnly: true,
 	})
 
@@ -320,18 +320,18 @@ func TestHTTPBackend_ListMemoriesIncludesTrustedOnlyParam(t *testing.T) {
 	assert.True(t, trustedOnly)
 }
 
-func TestHTTPBackend_QueryMemoriesRejectsNegativeLimitLocally(t *testing.T) {
+func TestHTTPBackend_QueryRecallEntriesRejectsNegativeLimitLocally(t *testing.T) {
 	t.Parallel()
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls++
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"memories":[]}`))
+		_, _ = w.Write([]byte(`{"entries":[]}`))
 	}))
 	t.Cleanup(srv.Close)
 
 	svc := service.NewHTTPBackend(srv.URL, "", false)
-	_, err := svc.QueryMemories(context.Background(), service.MemoryQuery{
+	_, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
 		Query: "cwd",
 		Limit: -1,
 	})
@@ -341,39 +341,39 @@ func TestHTTPBackend_QueryMemoriesRejectsNegativeLimitLocally(t *testing.T) {
 	assert.Equal(t, 0, calls)
 }
 
-func TestHTTPBackend_QueryMemoriesIncludesSourceEpisodeID(t *testing.T) {
+func TestHTTPBackend_QueryRecallEntriesIncludesSourceEpisodeID(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/memories/query", r.URL.Path)
-		var got service.MemoryQuery
+		require.Equal(t, "/api/v1/recall/query", r.URL.Path)
+		var got service.RecallQuery
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
-		assert.Equal(t, "memory-session:chunk:0001", got.SourceEpisodeID)
+		assert.Equal(t, "recall-session:chunk:0001", got.SourceEpisodeID)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"memories":[]}`))
+		_, _ = w.Write([]byte(`{"entries":[]}`))
 	}))
 	t.Cleanup(srv.Close)
 
 	svc := service.NewHTTPBackend(srv.URL, "", false)
-	_, err := svc.QueryMemories(context.Background(), service.MemoryQuery{
+	_, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
 		Query:           "cwd",
-		SourceEpisodeID: "memory-session:chunk:0001",
+		SourceEpisodeID: "recall-session:chunk:0001",
 	})
 
 	require.NoError(t, err)
 }
 
-func TestHTTPBackend_QueryMemoriesRejectsNegativeContextMaxBytesLocally(t *testing.T) {
+func TestHTTPBackend_QueryRecallEntriesRejectsNegativeContextMaxBytesLocally(t *testing.T) {
 	t.Parallel()
 	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls++
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"memories":[]}`))
+		_, _ = w.Write([]byte(`{"entries":[]}`))
 	}))
 	t.Cleanup(srv.Close)
 
 	svc := service.NewHTTPBackend(srv.URL, "", false)
-	_, err := svc.QueryMemories(context.Background(), service.MemoryQuery{
+	_, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
 		Query:           "cwd",
 		IncludeContext:  true,
 		ContextMaxBytes: -1,
@@ -384,29 +384,29 @@ func TestHTTPBackend_QueryMemoriesRejectsNegativeContextMaxBytesLocally(t *testi
 	assert.Equal(t, 0, calls)
 }
 
-func TestHTTPBackend_QueryMemoriesBuildsMissingSummaries(t *testing.T) {
+func TestHTTPBackend_QueryRecallEntriesBuildsMissingSummaries(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/memories/query", r.URL.Path)
+		require.Equal(t, "/api/v1/recall/query", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(service.MemoryQueryResult{
-			Memories: []db.MemoryResult{{
-				Memory: db.Memory{
+		require.NoError(t, json.NewEncoder(w).Encode(service.RecallQueryResult{
+			RecallEntries: []db.RecallResult{{
+				RecallEntry: db.RecallEntry{
 					ID:              "m-http-summary",
 					Type:            "procedure",
 					Scope:           "project",
 					Status:          "accepted",
 					Project:         "agentsview",
 					Agent:           "codex",
-					SourceSessionID: "memory-session",
-					SourceEpisodeID: "memory-session:chunk:0001",
+					SourceSessionID: "recall-session",
+					SourceEpisodeID: "recall-session:chunk:0001",
 					SourceRunID:     "smoke-run",
 				},
 				MatchReasons: []string{"keyword", "evidence"},
 			}},
-			Context: "Relevant prior agentsview memories",
-			ContextMeta: &service.MemoryContextMeta{
-				MemoryCount: 1,
+			Context: "Relevant prior agentsview entries",
+			ContextMeta: &service.RecallContextMeta{
+				EntryCount:  1,
 				IncludedIDs: []string{"m-http-summary"},
 			},
 		}))
@@ -414,7 +414,7 @@ func TestHTTPBackend_QueryMemoriesBuildsMissingSummaries(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	svc := service.NewHTTPBackend(srv.URL, "", false)
-	got, err := svc.QueryMemories(context.Background(), service.MemoryQuery{
+	got, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
 		Query:          "cwd failed reads",
 		IncludeContext: true,
 	})
@@ -426,58 +426,58 @@ func TestHTTPBackend_QueryMemoriesBuildsMissingSummaries(t *testing.T) {
 	assert.Equal(t, 1, got.Summary.ByMatchReason["keyword"])
 	assert.Equal(t, 1, got.Summary.ByMatchReason["evidence"])
 	assert.Equal(t, 1, got.Summary.BySourceRun["smoke-run"])
-	assert.Equal(t, 1, got.Summary.BySourceEpisode["memory-session:chunk:0001"])
-	require.Len(t, got.ContextMemories, 1)
-	assert.Equal(t, "m-http-summary", got.ContextMemories[0].ID)
+	assert.Equal(t, 1, got.Summary.BySourceEpisode["recall-session:chunk:0001"])
+	require.Len(t, got.ContextEntries, 1)
+	assert.Equal(t, "m-http-summary", got.ContextEntries[0].ID)
 	require.NotNil(t, got.ContextSummary)
 	assert.Equal(t, 1, got.ContextSummary.Count)
-	assert.Equal(t, 1, got.ContextSummary.BySourceSession["memory-session"])
-	assert.Equal(t, 1, got.ContextSummary.BySourceEpisode["memory-session:chunk:0001"])
+	assert.Equal(t, 1, got.ContextSummary.BySourceSession["recall-session"])
+	assert.Equal(t, 1, got.ContextSummary.BySourceEpisode["recall-session:chunk:0001"])
 }
 
-func TestHTTPBackend_QueryMemoriesRejectsInconsistentContextMemories(t *testing.T) {
+func TestHTTPBackend_QueryRecallEntriesRejectsInconsistentContextEntries(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/memories/query", r.URL.Path)
+		require.Equal(t, "/api/v1/recall/query", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(service.MemoryQueryResult{
-			Memories: []db.MemoryResult{
-				{Memory: db.Memory{ID: "m-packed"}},
-				{Memory: db.Memory{ID: "m-other"}},
+		require.NoError(t, json.NewEncoder(w).Encode(service.RecallQueryResult{
+			RecallEntries: []db.RecallResult{
+				{RecallEntry: db.RecallEntry{ID: "m-packed"}},
+				{RecallEntry: db.RecallEntry{ID: "m-other"}},
 			},
-			Context: "Relevant prior agentsview memories",
-			ContextMeta: &service.MemoryContextMeta{
-				MemoryCount: 1,
+			Context: "Relevant prior agentsview entries",
+			ContextMeta: &service.RecallContextMeta{
+				EntryCount:  1,
 				IncludedIDs: []string{"m-packed"},
 			},
-			ContextMemories: []db.MemoryResult{
-				{Memory: db.Memory{ID: "m-other"}},
+			ContextEntries: []db.RecallResult{
+				{RecallEntry: db.RecallEntry{ID: "m-other"}},
 			},
 		}))
 	}))
 	t.Cleanup(srv.Close)
 
 	svc := service.NewHTTPBackend(srv.URL, "", false)
-	_, err := svc.QueryMemories(context.Background(), service.MemoryQuery{
+	_, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
 		Query:          "cwd failed reads",
 		IncludeContext: true,
 	})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(),
-		"context_memories ids must match context_meta.included_ids")
+		"context_entries ids must match context_meta.included_ids")
 }
 
-func TestHTTPBackend_QueryMemoriesRejectsMissingContextMemoryRows(t *testing.T) {
+func TestHTTPBackend_QueryRecallEntriesRejectsMissingContextRecallEntryRows(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/memories/query", r.URL.Path)
+		require.Equal(t, "/api/v1/recall/query", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(service.MemoryQueryResult{
-			Memories: []db.MemoryResult{},
-			Context:  "Relevant prior agentsview memories",
-			ContextMeta: &service.MemoryContextMeta{
-				MemoryCount: 1,
+		require.NoError(t, json.NewEncoder(w).Encode(service.RecallQueryResult{
+			RecallEntries: []db.RecallResult{},
+			Context:       "Relevant prior agentsview entries",
+			ContextMeta: &service.RecallContextMeta{
+				EntryCount:  1,
 				IncludedIDs: []string{"m-packed"},
 			},
 		}))
@@ -485,32 +485,32 @@ func TestHTTPBackend_QueryMemoriesRejectsMissingContextMemoryRows(t *testing.T) 
 	t.Cleanup(srv.Close)
 
 	svc := service.NewHTTPBackend(srv.URL, "", false)
-	_, err := svc.QueryMemories(context.Background(), service.MemoryQuery{
+	_, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
 		Query:          "cwd failed reads",
 		IncludeContext: true,
 	})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(),
-		"context_memories ids must match context_meta.included_ids")
+		"context_entries ids must match context_meta.included_ids")
 }
 
-func TestHTTPBackend_QueryMemoriesReportsTrustedOnlyFallback(t *testing.T) {
+func TestHTTPBackend_QueryRecallEntriesReportsTrustedOnlyFallback(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/api/v1/memories/query", r.URL.Path)
-		var req service.MemoryQuery
+		require.Equal(t, "/api/v1/recall/query", r.URL.Path)
+		var req service.RecallQuery
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
 		assert.True(t, req.TrustedOnly)
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(service.MemoryQueryResult{
-			Memories: []db.MemoryResult{},
+		require.NoError(t, json.NewEncoder(w).Encode(service.RecallQueryResult{
+			RecallEntries: []db.RecallResult{},
 		}))
 	}))
 	t.Cleanup(srv.Close)
 
 	svc := service.NewHTTPBackend(srv.URL, "", false)
-	got, err := svc.QueryMemories(context.Background(), service.MemoryQuery{
+	got, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
 		Query:       "cwd failed reads",
 		TrustedOnly: true,
 	})
@@ -695,15 +695,15 @@ func TestHTTPBackend_Sync_RemoteReadOnly(t *testing.T) {
 	require.ErrorIs(t, err, db.ErrReadOnly)
 }
 
-func TestHTTPBackend_ImportMemories_ReadOnly(t *testing.T) {
+func TestHTTPBackend_ImportRecallEntries_ReadOnly(t *testing.T) {
 	t.Parallel()
 	env := newHTTPBackendEnv(t)
 
 	svc := env.Backend("", true)
-	_, err := svc.ImportMemories(
+	_, err := svc.ImportRecallEntries(
 		context.Background(),
 		strings.NewReader(""),
-		db.MemoryImportOptions{DryRun: true},
+		db.RecallImportOptions{DryRun: true},
 	)
 	require.Error(t, err)
 	// Mirrors Sync/ScanSecrets: a read-only backend short-circuits to the
@@ -713,7 +713,7 @@ func TestHTTPBackend_ImportMemories_ReadOnly(t *testing.T) {
 	assert.Contains(t, err.Error(), env.BaseURL)
 }
 
-func TestHTTPBackend_ImportMemories_RemoteReadOnly(t *testing.T) {
+func TestHTTPBackend_ImportRecallEntries_RemoteReadOnly(t *testing.T) {
 	t.Parallel()
 	// A read-only (pg serve) daemon answers write endpoints with 501. The
 	// backend is not marked read-only locally, so the round-trip must surface
@@ -725,10 +725,10 @@ func TestHTTPBackend_ImportMemories_RemoteReadOnly(t *testing.T) {
 	defer srv.Close()
 
 	be := service.NewHTTPBackend(srv.URL, "", false)
-	_, err := be.ImportMemories(
+	_, err := be.ImportRecallEntries(
 		context.Background(),
 		strings.NewReader(""),
-		db.MemoryImportOptions{},
+		db.RecallImportOptions{},
 	)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, db.ErrReadOnly),
@@ -829,7 +829,7 @@ func TestHTTPSearchContentSemanticSetsIntentHeader(t *testing.T) {
 	assert.Equal(t, "semantic", gotIntent)
 }
 
-func TestHTTPImportMemoriesPassesAllowProductionImport(t *testing.T) {
+func TestHTTPImportRecallEntriesPassesAllowProductionImport(t *testing.T) {
 	t.Parallel()
 	var gotAllow string
 	srv := httptest.NewServer(http.HandlerFunc(
@@ -841,10 +841,10 @@ func TestHTTPImportMemoriesPassesAllowProductionImport(t *testing.T) {
 	defer srv.Close()
 	be := service.NewHTTPBackend(srv.URL, "", false)
 
-	_, err := be.ImportMemories(
+	_, err := be.ImportRecallEntries(
 		context.Background(),
 		strings.NewReader(""),
-		db.MemoryImportOptions{AllowProductionImport: true},
+		db.RecallImportOptions{AllowProductionImport: true},
 	)
 
 	require.NoError(t, err)

@@ -888,109 +888,109 @@ func redactMessageSecrets(m db.Message) db.Message {
 	return m
 }
 
-func (b *directBackend) ListMemories(
-	ctx context.Context, f MemoryFilter,
-) (*MemoryList, error) {
-	if err := ValidateMemoryLimit(f.Limit); err != nil {
+func (b *directBackend) ListRecallEntries(
+	ctx context.Context, f RecallFilter,
+) (*RecallList, error) {
+	if err := ValidateRecallEntryLimit(f.Limit); err != nil {
 		return nil, err
 	}
-	query := memoryFilterToDB(f)
+	query := recallFilterToDB(f)
 	if strings.TrimSpace(f.Query) == "" {
-		memories, err := b.db.ListMemories(ctx, query)
+		entries, err := b.db.ListRecallEntries(ctx, query)
 		if err != nil {
 			return nil, err
 		}
-		return &MemoryList{
-			Memories:    memoryResultsFromMemories(memories),
-			TrustedOnly: f.TrustedOnly,
+		return &RecallList{
+			RecallEntries: recallResultsFromRecallEntries(entries),
+			TrustedOnly:   f.TrustedOnly,
 		}, nil
 	}
-	page, err := b.db.QueryMemories(ctx, query)
+	page, err := b.db.QueryRecallEntries(ctx, query)
 	if err != nil {
 		return nil, err
 	}
-	if page.Memories == nil {
-		page.Memories = []db.MemoryResult{}
+	if page.RecallEntries == nil {
+		page.RecallEntries = []db.RecallResult{}
 	}
-	return &MemoryList{
-		Memories:    page.Memories,
-		TrustedOnly: f.TrustedOnly,
+	return &RecallList{
+		RecallEntries: page.RecallEntries,
+		TrustedOnly:   f.TrustedOnly,
 	}, nil
 }
 
-func memoryResultsFromMemories(memories []db.Memory) []db.MemoryResult {
-	out := make([]db.MemoryResult, 0, len(memories))
-	for _, memory := range memories {
-		out = append(out, db.MemoryResult{Memory: memory})
+func recallResultsFromRecallEntries(entries []db.RecallEntry) []db.RecallResult {
+	out := make([]db.RecallResult, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, db.RecallResult{RecallEntry: entry})
 	}
 	return out
 }
 
-func (b *directBackend) GetMemory(
+func (b *directBackend) GetRecallEntry(
 	ctx context.Context, id string,
-) (*db.Memory, error) {
-	return b.db.GetMemory(ctx, id)
+) (*db.RecallEntry, error) {
+	return b.db.GetRecallEntry(ctx, id)
 }
 
-func (b *directBackend) QueryMemories(
-	ctx context.Context, req MemoryQuery,
-) (*MemoryQueryResult, error) {
-	if err := ValidateMemoryLimit(req.Limit); err != nil {
+func (b *directBackend) QueryRecallEntries(
+	ctx context.Context, req RecallQuery,
+) (*RecallQueryResult, error) {
+	if err := ValidateRecallEntryLimit(req.Limit); err != nil {
 		return nil, err
 	}
-	page, err := b.db.QueryMemories(ctx, db.MemoryQuery{
-		Text:                 req.Query,
-		Project:              req.Project,
-		CWD:                  req.CWD,
-		GitBranch:            req.GitBranch,
-		Agent:                req.Agent,
-		Type:                 req.Type,
-		Scope:                req.Scope,
-		Status:               req.Status,
-		ExtractorMethod:      req.ExtractorMethod,
-		SourceSessionID:      req.SourceSessionID,
-		SourceEpisodeID:      req.SourceEpisodeID,
-		SourceRunID:          req.SourceRunID,
-		SupersedesMemoryID:   req.SupersedesMemoryID,
-		SupersededByMemoryID: req.SupersededByMemoryID,
-		TrustedOnly:          req.TrustedOnly,
-		Limit:                req.Limit,
+	page, err := b.db.QueryRecallEntries(ctx, db.RecallQuery{
+		Text:                req.Query,
+		Project:             req.Project,
+		CWD:                 req.CWD,
+		GitBranch:           req.GitBranch,
+		Agent:               req.Agent,
+		Type:                req.Type,
+		Scope:               req.Scope,
+		Status:              req.Status,
+		ExtractorMethod:     req.ExtractorMethod,
+		SourceSessionID:     req.SourceSessionID,
+		SourceEpisodeID:     req.SourceEpisodeID,
+		SourceRunID:         req.SourceRunID,
+		SupersedesEntryID:   req.SupersedesEntryID,
+		SupersededByEntryID: req.SupersededByEntryID,
+		TrustedOnly:         req.TrustedOnly,
+		Limit:               req.Limit,
 	})
 	if err != nil {
 		return nil, err
 	}
-	if page.Memories == nil {
-		page.Memories = []db.MemoryResult{}
+	if page.RecallEntries == nil {
+		page.RecallEntries = []db.RecallResult{}
 	}
-	resp := MemoryQueryResult{
-		Memories:    page.Memories,
-		TrustedOnly: req.TrustedOnly,
-		Summary:     BuildMemoryQuerySummary(page.Memories),
+	resp := RecallQueryResult{
+		RecallEntries: page.RecallEntries,
+		TrustedOnly:   req.TrustedOnly,
+		Summary:       BuildRecallQuerySummary(page.RecallEntries),
 	}
 	if req.IncludeContext {
-		contextText, contextMeta, err := BuildMemoryContext(
-			page.Memories, req.ContextMaxBytes, req.Query,
+		contextText, contextMeta, err := BuildRecallContext(
+			page.RecallEntries, req.ContextMaxBytes, req.Query,
 		)
 		if err != nil {
 			return nil, err
 		}
 		resp.Context = contextText
 		resp.ContextMeta = contextMeta
-		resp.ContextMemories = MemoryContextResults(page.Memories, contextMeta)
-		resp.ContextSummary = BuildMemoryContextSummary(
-			page.Memories, contextMeta,
+		resp.ContextEntries = RecallContextResults(page.RecallEntries, contextMeta)
+		resp.ContextSummary = BuildRecallContextSummary(
+			page.RecallEntries, contextMeta,
 		)
 	}
 	return &resp, nil
 }
 
-func (b *directBackend) ImportMemories(
-	ctx context.Context, r io.Reader, opts db.MemoryImportOptions,
-) (*db.MemoryImportResult, error) {
+func (b *directBackend) ImportRecallEntries(
+	ctx context.Context, r io.Reader, opts db.RecallImportOptions,
+) (*db.RecallImportResult, error) {
 	if b.local == nil {
 		return nil, db.ErrReadOnly
 	}
-	result, err := b.local.ImportAcceptedMemoriesJSONLWithOptions(
+	result, err := b.local.ImportAcceptedRecallEntriesJSONLWithOptions(
 		ctx, r, opts,
 	)
 	if err != nil {
@@ -999,24 +999,24 @@ func (b *directBackend) ImportMemories(
 	return &result, nil
 }
 
-func memoryFilterToDB(f MemoryFilter) db.MemoryQuery {
-	return db.MemoryQuery{
-		Text:                 f.Query,
-		Project:              f.Project,
-		CWD:                  f.CWD,
-		GitBranch:            f.GitBranch,
-		Agent:                f.Agent,
-		Type:                 f.Type,
-		Scope:                f.Scope,
-		Status:               f.Status,
-		ExtractorMethod:      f.ExtractorMethod,
-		SourceSessionID:      f.SourceSessionID,
-		SourceEpisodeID:      f.SourceEpisodeID,
-		SourceRunID:          f.SourceRunID,
-		SupersedesMemoryID:   f.SupersedesMemoryID,
-		SupersededByMemoryID: f.SupersededByMemoryID,
-		TrustedOnly:          f.TrustedOnly,
-		Limit:                f.Limit,
+func recallFilterToDB(f RecallFilter) db.RecallQuery {
+	return db.RecallQuery{
+		Text:                f.Query,
+		Project:             f.Project,
+		CWD:                 f.CWD,
+		GitBranch:           f.GitBranch,
+		Agent:               f.Agent,
+		Type:                f.Type,
+		Scope:               f.Scope,
+		Status:              f.Status,
+		ExtractorMethod:     f.ExtractorMethod,
+		SourceSessionID:     f.SourceSessionID,
+		SourceEpisodeID:     f.SourceEpisodeID,
+		SourceRunID:         f.SourceRunID,
+		SupersedesEntryID:   f.SupersedesEntryID,
+		SupersededByEntryID: f.SupersededByEntryID,
+		TrustedOnly:         f.TrustedOnly,
+		Limit:               f.Limit,
 	}
 }
 

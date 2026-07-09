@@ -12,20 +12,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMemoriesSchemaIndexesSourceEpisode(t *testing.T) {
+func TestRecallEntriesSchemaIndexesSourceEpisode(t *testing.T) {
 	d := testDB(t)
 
 	var count int
 	err := d.getReader().QueryRow(
 		`SELECT count(*) FROM sqlite_master
-		 WHERE type='index' AND name='idx_memories_source_episode'`,
+		 WHERE type='index' AND name='idx_recall_entries_source_episode'`,
 	).Scan(&count)
 
-	require.NoError(t, err, "query memory source episode index")
+	require.NoError(t, err, "query recall source episode index")
 	assert.Equal(t, 1, count)
 }
 
-func TestOpenRepairsMissingMemorySourceEpisodeIndex(t *testing.T) {
+func TestOpenRepairsMissingRecallEntrySourceEpisodeIndex(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.db")
 	d, err := Open(path)
 	require.NoError(t, err, "initial open")
@@ -33,12 +33,12 @@ func TestOpenRepairsMissingMemorySourceEpisodeIndex(t *testing.T) {
 
 	conn, err := sql.Open("sqlite3", path)
 	require.NoError(t, err, "raw open")
-	_, err = conn.Exec(`DROP INDEX IF EXISTS idx_memories_source_episode`)
+	_, err = conn.Exec(`DROP INDEX IF EXISTS idx_recall_entries_source_episode`)
 	require.NoError(t, err, "drop source episode index")
 	var count int
 	err = conn.QueryRow(
 		`SELECT count(*) FROM sqlite_master
-		 WHERE type='index' AND name='idx_memories_source_episode'`,
+		 WHERE type='index' AND name='idx_recall_entries_source_episode'`,
 	).Scan(&count)
 	require.NoError(t, err, "verify source episode index removed")
 	require.Equal(t, 0, count)
@@ -50,13 +50,13 @@ func TestOpenRepairsMissingMemorySourceEpisodeIndex(t *testing.T) {
 
 	err = reopened.getReader().QueryRow(
 		`SELECT count(*) FROM sqlite_master
-		 WHERE type='index' AND name='idx_memories_source_episode'`,
+		 WHERE type='index' AND name='idx_recall_entries_source_episode'`,
 	).Scan(&count)
 	require.NoError(t, err, "verify source episode index restored")
 	assert.Equal(t, 1, count)
 }
 
-func TestOpenCreatesSearchableMemoryFTSWhenRuntimeSupportsFTS4(t *testing.T) {
+func TestOpenCreatesSearchableRecallFTSWhenRuntimeSupportsFTS4(t *testing.T) {
 	d := testDB(t)
 	if !d.HasFTS() && !sqliteRuntimeSupportsFTS4(t, d) {
 		t.Skip("no FTS4 or FTS5 support")
@@ -65,7 +65,7 @@ func TestOpenCreatesSearchableMemoryFTSWhenRuntimeSupportsFTS4(t *testing.T) {
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
 		s.Agent = "codex"
 	})
-	_, err := d.InsertMemory(Memory{
+	_, err := d.InsertRecallEntry(RecallEntry{
 		ID:              "m1",
 		Type:            "fact",
 		Scope:           "project",
@@ -81,7 +81,7 @@ func TestOpenCreatesSearchableMemoryFTSWhenRuntimeSupportsFTS4(t *testing.T) {
 	var count int
 	err = d.getReader().QueryRowContext(
 		ctx,
-		`SELECT count(*) FROM memories_fts WHERE memories_fts MATCH ?`,
+		`SELECT count(*) FROM recall_entries_fts WHERE recall_entries_fts MATCH ?`,
 		"heliotrope",
 	).Scan(&count)
 
@@ -89,7 +89,7 @@ func TestOpenCreatesSearchableMemoryFTSWhenRuntimeSupportsFTS4(t *testing.T) {
 	assert.Equal(t, 1, count)
 }
 
-func TestOpenCreatesSearchableMemoryEvidenceFTSWhenRuntimeSupportsFTS4(
+func TestOpenCreatesSearchableRecallEvidenceFTSWhenRuntimeSupportsFTS4(
 	t *testing.T,
 ) {
 	d := testDB(t)
@@ -100,7 +100,7 @@ func TestOpenCreatesSearchableMemoryEvidenceFTSWhenRuntimeSupportsFTS4(
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
 		s.Agent = "codex"
 	})
-	_, err := d.InsertMemory(Memory{
+	_, err := d.InsertRecallEntry(RecallEntry{
 		ID:              "m1",
 		Type:            "fact",
 		Scope:           "project",
@@ -110,7 +110,7 @@ func TestOpenCreatesSearchableMemoryEvidenceFTSWhenRuntimeSupportsFTS4(
 		Project:         "agentsview",
 		Agent:           "codex",
 		SourceSessionID: "s1",
-		Evidence: []MemoryEvidence{
+		Evidence: []RecallEvidence{
 			{
 				SessionID:           "s1",
 				MessageStartOrdinal: 3,
@@ -124,8 +124,8 @@ func TestOpenCreatesSearchableMemoryEvidenceFTSWhenRuntimeSupportsFTS4(
 	var count int
 	err = d.getReader().QueryRowContext(
 		ctx,
-		`SELECT count(*) FROM memory_evidence_fts
-		 WHERE memory_evidence_fts MATCH ?`,
+		`SELECT count(*) FROM recall_evidence_fts
+		 WHERE recall_evidence_fts MATCH ?`,
 		"heliotrope",
 	).Scan(&count)
 
@@ -136,7 +136,7 @@ func TestOpenCreatesSearchableMemoryEvidenceFTSWhenRuntimeSupportsFTS4(
 func sqliteRuntimeSupportsFTS4(t *testing.T, d *DB) bool {
 	t.Helper()
 	_, err := d.getWriter().Exec(
-		`CREATE VIRTUAL TABLE temp.memory_fts4_probe USING fts4(value)`,
+		`CREATE VIRTUAL TABLE temp.recall_fts4_probe USING fts4(value)`,
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "no such module") {
@@ -144,55 +144,55 @@ func sqliteRuntimeSupportsFTS4(t *testing.T, d *DB) bool {
 		}
 		require.NoError(t, err, "probe fts4 support")
 	}
-	_, err = d.getWriter().Exec(`DROP TABLE temp.memory_fts4_probe`)
+	_, err = d.getWriter().Exec(`DROP TABLE temp.recall_fts4_probe`)
 	require.NoError(t, err, "drop fts4 probe table")
 	return true
 }
 
-func requireMemoryFTS(t *testing.T, d *DB) {
+func requireRecallFTS(t *testing.T, d *DB) {
 	t.Helper()
 	var count int
 	err := d.getReader().QueryRow(
 		`SELECT count(*) FROM sqlite_master
-		 WHERE type = 'table' AND name = 'memories_fts'`,
+		 WHERE type = 'table' AND name = 'recall_entries_fts'`,
 	).Scan(&count)
-	require.NoError(t, err, "query memory fts table")
+	require.NoError(t, err, "query recall fts table")
 	if count == 0 {
-		t.Skip("no memory FTS support")
+		t.Skip("no recall FTS support")
 	}
-	_, err = d.getReader().Exec(`SELECT 1 FROM memories_fts LIMIT 1`)
+	_, err = d.getReader().Exec(`SELECT 1 FROM recall_entries_fts LIMIT 1`)
 	if err != nil {
-		t.Skipf("no memory FTS support: %v", err)
+		t.Skipf("no recall FTS support: %v", err)
 	}
 }
 
-func requireMemoryFTS4(t *testing.T, d *DB) {
+func requireRecallFTS4(t *testing.T, d *DB) {
 	t.Helper()
 	var ddl string
 	err := d.getReader().QueryRow(
 		`SELECT lower(sql) FROM sqlite_master
-		 WHERE type = 'table' AND name = 'memories_fts'`,
+		 WHERE type = 'table' AND name = 'recall_entries_fts'`,
 	).Scan(&ddl)
-	require.NoError(t, err, "query memory fts ddl")
+	require.NoError(t, err, "query recall fts ddl")
 	if !strings.Contains(ddl, "using fts4") {
-		t.Skip("memory FTS table is not FTS4")
+		t.Skip("recall FTS table is not FTS4")
 	}
 }
 
-func requireMemoryFTS5(t *testing.T, d *DB) {
+func requireRecallFTS5(t *testing.T, d *DB) {
 	t.Helper()
 	var ddl string
 	err := d.getReader().QueryRow(
 		`SELECT lower(sql) FROM sqlite_master
-		 WHERE type = 'table' AND name = 'memories_fts'`,
+		 WHERE type = 'table' AND name = 'recall_entries_fts'`,
 	).Scan(&ddl)
-	require.NoError(t, err, "query memory fts ddl")
+	require.NoError(t, err, "query recall fts ddl")
 	if !strings.Contains(ddl, "using fts5") {
-		t.Skip("memory FTS table is not FTS5")
+		t.Skip("recall FTS table is not FTS5")
 	}
 }
 
-func TestMemoriesInsertGetAndQuery(t *testing.T) {
+func TestRecallEntriesInsertGetAndQuery(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
@@ -204,7 +204,7 @@ func TestMemoriesInsertGetAndQuery(t *testing.T) {
 		s.Agent = "codex"
 	})
 
-	_, err := d.InsertMemory(Memory{
+	_, err := d.InsertRecallEntry(RecallEntry{
 		ID:              "m1",
 		Type:            "procedure",
 		Scope:           "project",
@@ -218,7 +218,7 @@ func TestMemoriesInsertGetAndQuery(t *testing.T) {
 		SourceSessionID: "s1",
 		Transferable:    true,
 		ProvenanceOK:    true,
-		Evidence: []MemoryEvidence{
+		Evidence: []RecallEvidence{
 			{
 				SessionID:           "s1",
 				MessageStartOrdinal: 3,
@@ -228,9 +228,9 @@ func TestMemoriesInsertGetAndQuery(t *testing.T) {
 			},
 		},
 	})
-	require.NoError(t, err, "InsertMemory")
+	require.NoError(t, err, "InsertRecallEntry")
 
-	_, err = d.InsertMemory(Memory{
+	_, err = d.InsertRecallEntry(RecallEntry{
 		ID:              "m2",
 		Type:            "fact",
 		Scope:           "project",
@@ -241,11 +241,11 @@ func TestMemoriesInsertGetAndQuery(t *testing.T) {
 		Agent:           "codex",
 		SourceSessionID: "s2",
 	})
-	require.NoError(t, err, "InsertMemory other")
+	require.NoError(t, err, "InsertRecallEntry other")
 
-	got, err := d.GetMemory(ctx, "m1")
-	require.NoError(t, err, "GetMemory")
-	require.NotNil(t, got, "memory")
+	got, err := d.GetRecallEntry(ctx, "m1")
+	require.NoError(t, err, "GetRecallEntry")
+	require.NotNil(t, got, "recall")
 	assert.Equal(t, "Check cwd before file reads", got.Title)
 	assert.True(t, got.Transferable)
 	assert.True(t, got.ProvenanceOK)
@@ -254,50 +254,50 @@ func TestMemoriesInsertGetAndQuery(t *testing.T) {
 	assert.Equal(t, 3, got.Evidence[0].MessageStartOrdinal)
 	assert.Equal(t, "toolu_1", got.Evidence[0].ToolUseID)
 
-	page, err := d.QueryMemories(ctx, MemoryQuery{
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Text:    "cwd reads",
 		Project: "agentsview",
 		Agent:   "codex",
 		Limit:   10,
 	})
-	require.NoError(t, err, "QueryMemories")
-	require.Len(t, page.Memories, 1)
-	assert.Equal(t, "m1", page.Memories[0].ID)
-	assert.Greater(t, page.Memories[0].Score, 0.0)
-	assert.Equal(t, 2, page.Memories[0].ScoreBreakdown.KeywordOverlap)
-	assert.Greater(t, page.Memories[0].ScoreBreakdown.KeywordIDFScore, 0.0)
-	assert.Equal(t, page.Memories[0].Score, page.Memories[0].ScoreBreakdown.Total)
-	assert.Equal(t, []string{"keyword", "evidence"}, page.Memories[0].MatchReasons)
+	require.NoError(t, err, "QueryRecallEntries")
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "m1", page.RecallEntries[0].ID)
+	assert.Greater(t, page.RecallEntries[0].Score, 0.0)
+	assert.Equal(t, 2, page.RecallEntries[0].ScoreBreakdown.KeywordOverlap)
+	assert.Greater(t, page.RecallEntries[0].ScoreBreakdown.KeywordIDFScore, 0.0)
+	assert.Equal(t, page.RecallEntries[0].Score, page.RecallEntries[0].ScoreBreakdown.Total)
+	assert.Equal(t, []string{"keyword", "evidence"}, page.RecallEntries[0].MatchReasons)
 
-	page, err = d.QueryMemories(ctx, MemoryQuery{
+	page, err = d.QueryRecallEntries(ctx, RecallQuery{
 		Text:    "wal_checkpoint",
 		Project: "agentsview",
 		Agent:   "codex",
 		Limit:   10,
 	})
-	require.NoError(t, err, "QueryMemories evidence")
-	require.Len(t, page.Memories, 1)
-	assert.Equal(t, "m1", page.Memories[0].ID)
-	assert.Equal(t, 1, page.Memories[0].ScoreBreakdown.EvidenceKeywordOverlap)
-	assert.Greater(t, page.Memories[0].ScoreBreakdown.EvidenceIDFScore, 0.0)
-	assert.Greater(t, page.Memories[0].ScoreBreakdown.IdentifierBoost, 0.0)
-	assert.Equal(t, []string{"evidence", "identifier"}, page.Memories[0].MatchReasons)
+	require.NoError(t, err, "QueryRecallEntries evidence")
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "m1", page.RecallEntries[0].ID)
+	assert.Equal(t, 1, page.RecallEntries[0].ScoreBreakdown.EvidenceKeywordOverlap)
+	assert.Greater(t, page.RecallEntries[0].ScoreBreakdown.EvidenceIDFScore, 0.0)
+	assert.Greater(t, page.RecallEntries[0].ScoreBreakdown.IdentifierBoost, 0.0)
+	assert.Equal(t, []string{"evidence", "identifier"}, page.RecallEntries[0].MatchReasons)
 }
 
-func TestQueryMemoriesFiltersTrustedOnly(t *testing.T) {
+func TestQueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
 		s.Agent = "codex"
 	})
 
-	for _, memory := range []Memory{
+	for _, recall := range []RecallEntry{
 		{
 			ID:              "trusted",
 			Type:            "procedure",
 			Scope:           "project",
 			Status:          "accepted",
-			Title:           "Trusted cwd memory",
+			Title:           "Trusted cwd recall",
 			Body:            "Recover from wrong cwd before reading files.",
 			Project:         "agentsview",
 			Agent:           "codex",
@@ -310,7 +310,7 @@ func TestQueryMemoriesFiltersTrustedOnly(t *testing.T) {
 			Type:            "procedure",
 			Scope:           "project",
 			Status:          "accepted",
-			Title:           "Local cwd memory",
+			Title:           "Local cwd recall",
 			Body:            "Recover from wrong cwd before reading files.",
 			Project:         "agentsview",
 			Agent:           "codex",
@@ -323,7 +323,7 @@ func TestQueryMemoriesFiltersTrustedOnly(t *testing.T) {
 			Type:            "procedure",
 			Scope:           "project",
 			Status:          "accepted",
-			Title:           "Unverified cwd memory",
+			Title:           "Unverified cwd recall",
 			Body:            "Recover from wrong cwd before reading files.",
 			Project:         "agentsview",
 			Agent:           "codex",
@@ -332,11 +332,11 @@ func TestQueryMemoriesFiltersTrustedOnly(t *testing.T) {
 			ProvenanceOK:    false,
 		},
 	} {
-		_, err := d.InsertMemory(memory)
-		require.NoError(t, err, "InsertMemory %s", memory.ID)
+		_, err := d.InsertRecallEntry(recall)
+		require.NoError(t, err, "InsertRecallEntry %s", recall.ID)
 	}
 
-	page, err := d.QueryMemories(ctx, MemoryQuery{
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Text:        "wrong cwd files",
 		Project:     "agentsview",
 		Agent:       "codex",
@@ -344,12 +344,12 @@ func TestQueryMemoriesFiltersTrustedOnly(t *testing.T) {
 		Limit:       10,
 	})
 
-	require.NoError(t, err, "QueryMemories")
-	require.Len(t, page.Memories, 1)
-	assert.Equal(t, "trusted", page.Memories[0].ID)
+	require.NoError(t, err, "QueryRecallEntries")
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "trusted", page.RecallEntries[0].ID)
 }
 
-func TestQueryMemoriesFiltersByExtractorMethod(t *testing.T) {
+func TestQueryRecallEntriesFiltersByExtractorMethod(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
@@ -359,7 +359,7 @@ func TestQueryMemoriesFiltersByExtractorMethod(t *testing.T) {
 		s.Agent = "test-agent"
 	})
 
-	_, err := d.InsertMemory(Memory{
+	_, err := d.InsertRecallEntry(RecallEntry{
 		ID:              "raw",
 		Type:            "procedure",
 		Scope:           "project",
@@ -371,8 +371,8 @@ func TestQueryMemoriesFiltersByExtractorMethod(t *testing.T) {
 		SourceSessionID: "s1",
 		ExtractorMethod: "session-transcript-import",
 	})
-	require.NoError(t, err, "InsertMemory raw")
-	_, err = d.InsertMemory(Memory{
+	require.NoError(t, err, "InsertRecallEntry raw")
+	_, err = d.InsertRecallEntry(RecallEntry{
 		ID:              "extracted",
 		Type:            "procedure",
 		Scope:           "project",
@@ -382,11 +382,11 @@ func TestQueryMemoriesFiltersByExtractorMethod(t *testing.T) {
 		Project:         "test-agent",
 		Agent:           "test-agent",
 		SourceSessionID: "s2",
-		ExtractorMethod: "memory-probe-single-call",
+		ExtractorMethod: "recall-probe-single-call",
 	})
-	require.NoError(t, err, "InsertMemory extracted")
+	require.NoError(t, err, "InsertRecallEntry extracted")
 
-	page, err := d.QueryMemories(ctx, MemoryQuery{
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Text:            "wrong cwd files",
 		Project:         "test-agent",
 		Agent:           "test-agent",
@@ -394,12 +394,12 @@ func TestQueryMemoriesFiltersByExtractorMethod(t *testing.T) {
 		Limit:           10,
 	})
 
-	require.NoError(t, err, "QueryMemories")
-	require.Len(t, page.Memories, 1)
-	assert.Equal(t, "raw", page.Memories[0].ID)
+	require.NoError(t, err, "QueryRecallEntries")
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "raw", page.RecallEntries[0].ID)
 }
 
-func TestQueryMemoriesTrimsExactMatchFilters(t *testing.T) {
+func TestQueryRecallEntriesTrimsExactMatchFilters(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
@@ -407,7 +407,7 @@ func TestQueryMemoriesTrimsExactMatchFilters(t *testing.T) {
 		s.Cwd = "/repo/agentsview"
 		s.GitBranch = "main"
 	})
-	_, err := d.InsertMemory(Memory{
+	_, err := d.InsertRecallEntry(RecallEntry{
 		ID:              "m1",
 		Type:            "procedure",
 		Scope:           "project",
@@ -424,7 +424,7 @@ func TestQueryMemoriesTrimsExactMatchFilters(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	page, err := d.QueryMemories(ctx, MemoryQuery{
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Text:            "cwd reads",
 		Project:         " agentsview ",
 		CWD:             " /repo/agentsview ",
@@ -440,11 +440,11 @@ func TestQueryMemoriesTrimsExactMatchFilters(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	require.Len(t, page.Memories, 1)
-	assert.Equal(t, "m1", page.Memories[0].ID)
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "m1", page.RecallEntries[0].ID)
 }
 
-func TestQueryMemoriesTieBreaksByStableSourceEpisode(t *testing.T) {
+func TestQueryRecallEntriesTieBreaksByStableSourceEpisode(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
@@ -454,7 +454,7 @@ func TestQueryMemoriesTieBreaksByStableSourceEpisode(t *testing.T) {
 		s.Agent = "test-agent"
 	})
 
-	for _, m := range []Memory{
+	for _, m := range []RecallEntry{
 		{
 			ID:              "z-run-specific-id",
 			Title:           "Raw chunk",
@@ -476,32 +476,32 @@ func TestQueryMemoriesTieBreaksByStableSourceEpisode(t *testing.T) {
 			SourceRunID:     "run-b",
 		},
 	} {
-		_, err := d.InsertMemory(m)
+		_, err := d.InsertRecallEntry(m)
 		require.NoError(t, err)
 	}
 
-	page, err := d.QueryMemories(ctx, MemoryQuery{
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Text:    "tie token",
 		Project: "test-agent",
 		Agent:   "test-agent",
 		Limit:   2,
 	})
 	require.NoError(t, err)
-	require.Len(t, page.Memories, 2)
-	assert.Equal(t, "traj:chunk:0001", page.Memories[0].SourceEpisodeID)
-	assert.Equal(t, "traj:chunk:0002", page.Memories[1].SourceEpisodeID)
+	require.Len(t, page.RecallEntries, 2)
+	assert.Equal(t, "traj:chunk:0001", page.RecallEntries[0].SourceEpisodeID)
+	assert.Equal(t, "traj:chunk:0002", page.RecallEntries[1].SourceEpisodeID)
 }
 
-func TestQueryMemoriesCandidatePreselectionTieBreaksByStableSourceEpisode(t *testing.T) {
+func TestQueryRecallEntriesCandidatePreselectionTieBreaksByStableSourceEpisode(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
 		s.Agent = "test-agent"
 	})
 
-	for i := 0; i <= MaxMemoryLimit; i++ {
-		id := fmt.Sprintf("m-%04d", MaxMemoryLimit-i)
-		_, err := d.InsertMemory(Memory{
+	for i := 0; i <= MaxRecallEntryLimit; i++ {
+		id := fmt.Sprintf("m-%04d", MaxRecallEntryLimit-i)
+		_, err := d.InsertRecallEntry(RecallEntry{
 			ID:              id,
 			Title:           "Raw chunk",
 			Body:            "Shared candidate token.",
@@ -512,36 +512,36 @@ func TestQueryMemoriesCandidatePreselectionTieBreaksByStableSourceEpisode(t *tes
 		})
 		require.NoError(t, err)
 		_, err = d.getWriter().Exec(
-			"UPDATE memories SET updated_at = ? WHERE id = ?",
+			"UPDATE recall_entries SET updated_at = ? WHERE id = ?",
 			fmt.Sprintf("2026-01-01T00:00:%04dZ", i),
 			id,
 		)
 		require.NoError(t, err)
 	}
 
-	page, err := d.QueryMemories(ctx, MemoryQuery{
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Text:    "candidate token",
 		Project: "test-agent",
 		Agent:   "test-agent",
 		Limit:   1,
 	})
 	require.NoError(t, err)
-	require.Len(t, page.Memories, 1)
-	assert.Equal(t, "traj:chunk:0000", page.Memories[0].SourceEpisodeID)
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "traj:chunk:0000", page.RecallEntries[0].SourceEpisodeID)
 }
 
-func TestQueryMemoriesWithoutTextUsesUpdatedListOrder(t *testing.T) {
+func TestQueryRecallEntriesWithoutTextUsesUpdatedListOrder(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
 		s.Agent = "codex"
 	})
 
-	for _, memory := range []Memory{
+	for _, recall := range []RecallEntry{
 		{
 			ID:              "older-source-first",
-			Title:           "Older memory",
-			Body:            "Generic accepted memory.",
+			Title:           "Older recall",
+			Body:            "Generic accepted recall.",
 			Project:         "agentsview",
 			Agent:           "codex",
 			SourceSessionID: "s1",
@@ -549,19 +549,19 @@ func TestQueryMemoriesWithoutTextUsesUpdatedListOrder(t *testing.T) {
 		},
 		{
 			ID:              "newer-source-second",
-			Title:           "Newer memory",
-			Body:            "Generic accepted memory.",
+			Title:           "Newer recall",
+			Body:            "Generic accepted recall.",
 			Project:         "agentsview",
 			Agent:           "codex",
 			SourceSessionID: "s1",
 			SourceEpisodeID: "z-source",
 		},
 	} {
-		_, err := d.InsertMemory(memory)
+		_, err := d.InsertRecallEntry(recall)
 		require.NoError(t, err)
 	}
 	_, err := d.getWriter().Exec(`
-		UPDATE memories SET updated_at = CASE id
+		UPDATE recall_entries SET updated_at = CASE id
 			WHEN 'older-source-first' THEN '2024-01-01T00:00:00Z'
 			WHEN 'newer-source-second' THEN '2024-02-01T00:00:00Z'
 			ELSE updated_at
@@ -569,19 +569,19 @@ func TestQueryMemoriesWithoutTextUsesUpdatedListOrder(t *testing.T) {
 		WHERE id IN ('older-source-first', 'newer-source-second')`)
 	require.NoError(t, err)
 
-	page, err := d.QueryMemories(ctx, MemoryQuery{
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Project: "agentsview",
 		Agent:   "codex",
 		Limit:   2,
 	})
 
 	require.NoError(t, err)
-	require.Len(t, page.Memories, 2)
-	assert.Equal(t, "newer-source-second", page.Memories[0].ID)
-	assert.Equal(t, "older-source-first", page.Memories[1].ID)
+	require.Len(t, page.RecallEntries, 2)
+	assert.Equal(t, "newer-source-second", page.RecallEntries[0].ID)
+	assert.Equal(t, "older-source-first", page.RecallEntries[1].ID)
 }
 
-func TestQueryMemoriesFiltersBySourceRunID(t *testing.T) {
+func TestQueryRecallEntriesFiltersBySourceRunID(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
@@ -591,7 +591,7 @@ func TestQueryMemoriesFiltersBySourceRunID(t *testing.T) {
 		s.Agent = "test-agent"
 	})
 
-	_, err := d.InsertMemory(Memory{
+	_, err := d.InsertRecallEntry(RecallEntry{
 		ID:              "run-a",
 		Type:            "procedure",
 		Scope:           "project",
@@ -603,8 +603,8 @@ func TestQueryMemoriesFiltersBySourceRunID(t *testing.T) {
 		SourceSessionID: "s1",
 		SourceRunID:     "smoke-a",
 	})
-	require.NoError(t, err, "InsertMemory run a")
-	_, err = d.InsertMemory(Memory{
+	require.NoError(t, err, "InsertRecallEntry run a")
+	_, err = d.InsertRecallEntry(RecallEntry{
 		ID:              "run-b",
 		Type:            "procedure",
 		Scope:           "project",
@@ -616,9 +616,9 @@ func TestQueryMemoriesFiltersBySourceRunID(t *testing.T) {
 		SourceSessionID: "s2",
 		SourceRunID:     "smoke-b",
 	})
-	require.NoError(t, err, "InsertMemory run b")
+	require.NoError(t, err, "InsertRecallEntry run b")
 
-	page, err := d.QueryMemories(ctx, MemoryQuery{
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Text:        "wrong cwd files",
 		Project:     "test-agent",
 		Agent:       "test-agent",
@@ -626,12 +626,12 @@ func TestQueryMemoriesFiltersBySourceRunID(t *testing.T) {
 		Limit:       10,
 	})
 
-	require.NoError(t, err, "QueryMemories")
-	require.Len(t, page.Memories, 1)
-	assert.Equal(t, "run-a", page.Memories[0].ID)
+	require.NoError(t, err, "QueryRecallEntries")
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "run-a", page.RecallEntries[0].ID)
 }
 
-func TestQueryMemoriesFiltersBySourceSessionID(t *testing.T) {
+func TestQueryRecallEntriesFiltersBySourceSessionID(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
@@ -641,7 +641,7 @@ func TestQueryMemoriesFiltersBySourceSessionID(t *testing.T) {
 		s.Agent = "codex"
 	})
 
-	_, err := d.InsertMemory(Memory{
+	_, err := d.InsertRecallEntry(RecallEntry{
 		ID:              "session-a",
 		Type:            "procedure",
 		Scope:           "project",
@@ -652,8 +652,8 @@ func TestQueryMemoriesFiltersBySourceSessionID(t *testing.T) {
 		Agent:           "codex",
 		SourceSessionID: "s1",
 	})
-	require.NoError(t, err, "InsertMemory session a")
-	_, err = d.InsertMemory(Memory{
+	require.NoError(t, err, "InsertRecallEntry session a")
+	_, err = d.InsertRecallEntry(RecallEntry{
 		ID:              "session-b",
 		Type:            "procedure",
 		Scope:           "project",
@@ -664,9 +664,9 @@ func TestQueryMemoriesFiltersBySourceSessionID(t *testing.T) {
 		Agent:           "codex",
 		SourceSessionID: "s2",
 	})
-	require.NoError(t, err, "InsertMemory session b")
+	require.NoError(t, err, "InsertRecallEntry session b")
 
-	page, err := d.QueryMemories(ctx, MemoryQuery{
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Text:            "wrong cwd files",
 		Project:         "agentsview",
 		Agent:           "codex",
@@ -674,19 +674,19 @@ func TestQueryMemoriesFiltersBySourceSessionID(t *testing.T) {
 		Limit:           10,
 	})
 
-	require.NoError(t, err, "QueryMemories")
-	require.Len(t, page.Memories, 1)
-	assert.Equal(t, "session-a", page.Memories[0].ID)
+	require.NoError(t, err, "QueryRecallEntries")
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "session-a", page.RecallEntries[0].ID)
 }
 
-func TestQueryMemoriesFiltersBySourceEpisodeID(t *testing.T) {
+func TestQueryRecallEntriesFiltersBySourceEpisodeID(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
 		s.Agent = "codex"
 	})
 
-	_, err := d.InsertMemory(Memory{
+	_, err := d.InsertRecallEntry(RecallEntry{
 		ID:              "episode-a",
 		Type:            "procedure",
 		Scope:           "project",
@@ -698,8 +698,8 @@ func TestQueryMemoriesFiltersBySourceEpisodeID(t *testing.T) {
 		SourceSessionID: "s1",
 		SourceEpisodeID: "s1:chunk:0001",
 	})
-	require.NoError(t, err, "InsertMemory episode a")
-	_, err = d.InsertMemory(Memory{
+	require.NoError(t, err, "InsertRecallEntry episode a")
+	_, err = d.InsertRecallEntry(RecallEntry{
 		ID:              "episode-b",
 		Type:            "procedure",
 		Scope:           "project",
@@ -711,9 +711,9 @@ func TestQueryMemoriesFiltersBySourceEpisodeID(t *testing.T) {
 		SourceSessionID: "s1",
 		SourceEpisodeID: "s1:chunk:0002",
 	})
-	require.NoError(t, err, "InsertMemory episode b")
+	require.NoError(t, err, "InsertRecallEntry episode b")
 
-	page, err := d.QueryMemories(ctx, MemoryQuery{
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Text:            "wrong cwd files",
 		Project:         "agentsview",
 		Agent:           "codex",
@@ -721,12 +721,12 @@ func TestQueryMemoriesFiltersBySourceEpisodeID(t *testing.T) {
 		Limit:           10,
 	})
 
-	require.NoError(t, err, "QueryMemories")
-	require.Len(t, page.Memories, 1)
-	assert.Equal(t, "episode-a", page.Memories[0].ID)
+	require.NoError(t, err, "QueryRecallEntries")
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "episode-a", page.RecallEntries[0].ID)
 }
 
-func TestSupersedeMemoryArchivesOldAndLinksReplacement(t *testing.T) {
+func TestSupersedeRecallEntryArchivesOldAndLinksReplacement(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
@@ -735,7 +735,7 @@ func TestSupersedeMemoryArchivesOldAndLinksReplacement(t *testing.T) {
 	insertSession(t, d, "s2", "agentsview", func(s *Session) {
 		s.Agent = "codex"
 	})
-	_, err := d.InsertMemory(Memory{
+	_, err := d.InsertRecallEntry(RecallEntry{
 		ID:              "old",
 		Type:            "fact",
 		Scope:           "project",
@@ -748,7 +748,7 @@ func TestSupersedeMemoryArchivesOldAndLinksReplacement(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = d.SupersedeMemory(ctx, "old", Memory{
+	_, err = d.SupersedeRecallEntry(ctx, "old", RecallEntry{
 		ID:              "new",
 		Type:            "fact",
 		Scope:           "project",
@@ -761,59 +761,59 @@ func TestSupersedeMemoryArchivesOldAndLinksReplacement(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	oldMemory, err := d.GetMemory(ctx, "old")
+	oldRecallEntry, err := d.GetRecallEntry(ctx, "old")
 	require.NoError(t, err)
-	require.NotNil(t, oldMemory)
-	assert.Equal(t, "archived", oldMemory.Status)
-	assert.Equal(t, "new", oldMemory.SupersededByMemoryID)
-	assert.Empty(t, oldMemory.SupersedesMemoryID)
-	newMemory, err := d.GetMemory(ctx, "new")
+	require.NotNil(t, oldRecallEntry)
+	assert.Equal(t, "archived", oldRecallEntry.Status)
+	assert.Equal(t, "new", oldRecallEntry.SupersededByEntryID)
+	assert.Empty(t, oldRecallEntry.SupersedesEntryID)
+	newRecallEntry, err := d.GetRecallEntry(ctx, "new")
 	require.NoError(t, err)
-	require.NotNil(t, newMemory)
-	assert.Equal(t, "accepted", newMemory.Status)
-	assert.Equal(t, "old", newMemory.SupersedesMemoryID)
-	assert.Empty(t, newMemory.SupersededByMemoryID)
-	replacements, err := d.ListMemories(ctx, MemoryQuery{
-		SupersedesMemoryID: "old",
-		Limit:              10,
+	require.NotNil(t, newRecallEntry)
+	assert.Equal(t, "accepted", newRecallEntry.Status)
+	assert.Equal(t, "old", newRecallEntry.SupersedesEntryID)
+	assert.Empty(t, newRecallEntry.SupersededByEntryID)
+	replacements, err := d.ListRecallEntries(ctx, RecallQuery{
+		SupersedesEntryID: "old",
+		Limit:             10,
 	})
 	require.NoError(t, err)
 	require.Len(t, replacements, 1)
 	assert.Equal(t, "new", replacements[0].ID)
 
-	page, err := d.QueryMemories(ctx, MemoryQuery{
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Text:    "retry flaky command",
 		Project: "agentsview",
 		Agent:   "codex",
 		Limit:   10,
 	})
 	require.NoError(t, err)
-	require.Len(t, page.Memories, 1)
-	assert.Equal(t, "new", page.Memories[0].ID)
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "new", page.RecallEntries[0].ID)
 
-	archived, err := d.ListMemories(ctx, MemoryQuery{
+	archived, err := d.ListRecallEntries(ctx, RecallQuery{
 		Status: "archived",
 		Limit:  10,
 	})
 	require.NoError(t, err)
 	require.Len(t, archived, 1)
 	assert.Equal(t, "old", archived[0].ID)
-	archivedByReplacement, err := d.ListMemories(ctx, MemoryQuery{
-		Status:               "archived",
-		SupersededByMemoryID: "new",
-		Limit:                10,
+	archivedByReplacement, err := d.ListRecallEntries(ctx, RecallQuery{
+		Status:              "archived",
+		SupersededByEntryID: "new",
+		Limit:               10,
 	})
 	require.NoError(t, err)
 	require.Len(t, archivedByReplacement, 1)
 	assert.Equal(t, "old", archivedByReplacement[0].ID)
 }
 
-func TestSupersedeMemoryRejectsNonAcceptedReplacement(t *testing.T) {
+func TestSupersedeRecallEntryRejectsNonAcceptedReplacement(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 	insertSession(t, d, "s1", "agentsview")
 	insertSession(t, d, "s2", "agentsview")
-	_, err := d.InsertMemory(Memory{
+	_, err := d.InsertRecallEntry(RecallEntry{
 		ID:              "old",
 		Type:            "fact",
 		Scope:           "project",
@@ -825,7 +825,7 @@ func TestSupersedeMemoryRejectsNonAcceptedReplacement(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = d.SupersedeMemory(ctx, "old", Memory{
+	_, err = d.SupersedeRecallEntry(ctx, "old", RecallEntry{
 		ID:              "new",
 		Type:            "fact",
 		Scope:           "project",
@@ -837,20 +837,20 @@ func TestSupersedeMemoryRejectsNonAcceptedReplacement(t *testing.T) {
 	})
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "replacement memory status must be")
-	oldMemory, err := d.GetMemory(ctx, "old")
+	assert.Contains(t, err.Error(), "replacement entry status must be")
+	oldRecallEntry, err := d.GetRecallEntry(ctx, "old")
 	require.NoError(t, err)
-	require.NotNil(t, oldMemory)
-	assert.Equal(t, "accepted", oldMemory.Status)
+	require.NotNil(t, oldRecallEntry)
+	assert.Equal(t, "accepted", oldRecallEntry.Status)
 }
 
-func TestQueryMemoriesRanksBeyondRequestedResultLimit(t *testing.T) {
+func TestQueryRecallEntriesRanksBeyondRequestedResultLimit(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
 		s.Agent = "test-agent"
 	})
-	_, err := d.InsertMemory(Memory{
+	_, err := d.InsertRecallEntry(RecallEntry{
 		ID:              "target",
 		Type:            "fact",
 		Scope:           "project",
@@ -863,7 +863,7 @@ func TestQueryMemoriesRanksBeyondRequestedResultLimit(t *testing.T) {
 	})
 	require.NoError(t, err)
 	for i := range 12 {
-		_, err := d.InsertMemory(Memory{
+		_, err := d.InsertRecallEntry(RecallEntry{
 			ID:              "filler-" + string(rune('a'+i)),
 			Type:            "fact",
 			Scope:           "project",
@@ -877,7 +877,7 @@ func TestQueryMemoriesRanksBeyondRequestedResultLimit(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	page, err := d.QueryMemories(ctx, MemoryQuery{
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Text:    "quartz capacitor drift",
 		Project: "test-agent",
 		Agent:   "test-agent",
@@ -885,17 +885,17 @@ func TestQueryMemoriesRanksBeyondRequestedResultLimit(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	require.Len(t, page.Memories, 1)
-	assert.Equal(t, "target", page.Memories[0].ID)
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "target", page.RecallEntries[0].ID)
 }
 
-func TestQueryMemoriesFindsTextMatchBeyondRecentCandidateCap(t *testing.T) {
+func TestQueryRecallEntriesFindsTextMatchBeyondRecentCandidateCap(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
 		s.Agent = "test-agent"
 	})
-	_, err := d.InsertMemory(Memory{
+	_, err := d.InsertRecallEntry(RecallEntry{
 		ID:              "target",
 		Type:            "fact",
 		Scope:           "project",
@@ -907,8 +907,8 @@ func TestQueryMemoriesFindsTextMatchBeyondRecentCandidateCap(t *testing.T) {
 		SourceSessionID: "s1",
 	})
 	require.NoError(t, err)
-	for i := range MaxMemoryLimit + 20 {
-		_, err := d.InsertMemory(Memory{
+	for i := range MaxRecallEntryLimit + 20 {
+		_, err := d.InsertRecallEntry(RecallEntry{
 			ID:              "filler-cap-" + testID(i),
 			Type:            "fact",
 			Scope:           "project",
@@ -922,7 +922,7 @@ func TestQueryMemoriesFindsTextMatchBeyondRecentCandidateCap(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	page, err := d.QueryMemories(ctx, MemoryQuery{
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Text:    "heliotrope parser overflow",
 		Project: "test-agent",
 		Agent:   "test-agent",
@@ -930,11 +930,11 @@ func TestQueryMemoriesFindsTextMatchBeyondRecentCandidateCap(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	require.Len(t, page.Memories, 1)
-	assert.Equal(t, "target", page.Memories[0].ID)
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "target", page.RecallEntries[0].ID)
 }
 
-func TestQueryMemoriesIncludesEvidenceOnlyCandidateWhenOtherTermsMatchDirectText(
+func TestQueryRecallEntriesIncludesEvidenceOnlyCandidateWhenOtherTermsMatchDirectText(
 	t *testing.T,
 ) {
 	d := testDB(t)
@@ -942,7 +942,7 @@ func TestQueryMemoriesIncludesEvidenceOnlyCandidateWhenOtherTermsMatchDirectText
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
 		s.Agent = "test-agent"
 	})
-	_, err := d.InsertMemory(Memory{
+	_, err := d.InsertRecallEntry(RecallEntry{
 		ID:              "target",
 		Type:            "fact",
 		Scope:           "project",
@@ -952,7 +952,7 @@ func TestQueryMemoriesIncludesEvidenceOnlyCandidateWhenOtherTermsMatchDirectText
 		Project:         "test-agent",
 		Agent:           "test-agent",
 		SourceSessionID: "s1",
-		Evidence: []MemoryEvidence{
+		Evidence: []RecallEvidence{
 			{
 				SessionID:           "s1",
 				MessageStartOrdinal: 1,
@@ -962,7 +962,7 @@ func TestQueryMemoriesIncludesEvidenceOnlyCandidateWhenOtherTermsMatchDirectText
 		},
 	})
 	require.NoError(t, err)
-	_, err = d.InsertMemory(Memory{
+	_, err = d.InsertRecallEntry(RecallEntry{
 		ID:              "direct-filler",
 		Type:            "fact",
 		Scope:           "project",
@@ -975,7 +975,7 @@ func TestQueryMemoriesIncludesEvidenceOnlyCandidateWhenOtherTermsMatchDirectText
 	})
 	require.NoError(t, err)
 
-	page, err := d.QueryMemories(ctx, MemoryQuery{
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Text:    "portal heliotrope overflow",
 		Project: "test-agent",
 		Agent:   "test-agent",
@@ -983,13 +983,13 @@ func TestQueryMemoriesIncludesEvidenceOnlyCandidateWhenOtherTermsMatchDirectText
 	})
 
 	require.NoError(t, err)
-	require.Len(t, page.Memories, 1)
-	assert.Equal(t, "target", page.Memories[0].ID)
-	assert.Equal(t, 2, page.Memories[0].ScoreBreakdown.EvidenceKeywordOverlap)
-	assert.Greater(t, page.Memories[0].ScoreBreakdown.EvidenceIDFScore, 0.0)
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "target", page.RecallEntries[0].ID)
+	assert.Equal(t, 2, page.RecallEntries[0].ScoreBreakdown.EvidenceKeywordOverlap)
+	assert.Greater(t, page.RecallEntries[0].ScoreBreakdown.EvidenceIDFScore, 0.0)
 }
 
-func TestQueryMemoriesFindsEvidenceMatchBeyondRecentEvidenceCandidateCap(
+func TestQueryRecallEntriesFindsEvidenceMatchBeyondRecentEvidenceCandidateCap(
 	t *testing.T,
 ) {
 	d := testDB(t)
@@ -997,7 +997,7 @@ func TestQueryMemoriesFindsEvidenceMatchBeyondRecentEvidenceCandidateCap(
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
 		s.Agent = "test-agent"
 	})
-	_, err := d.InsertMemory(Memory{
+	_, err := d.InsertRecallEntry(RecallEntry{
 		ID:              "target",
 		Type:            "fact",
 		Scope:           "project",
@@ -1007,7 +1007,7 @@ func TestQueryMemoriesFindsEvidenceMatchBeyondRecentEvidenceCandidateCap(
 		Project:         "test-agent",
 		Agent:           "test-agent",
 		SourceSessionID: "s1",
-		Evidence: []MemoryEvidence{
+		Evidence: []RecallEvidence{
 			{
 				SessionID:           "s1",
 				MessageStartOrdinal: 1,
@@ -1018,11 +1018,11 @@ func TestQueryMemoriesFindsEvidenceMatchBeyondRecentEvidenceCandidateCap(
 	})
 	require.NoError(t, err)
 	_, err = d.getWriter().ExecContext(ctx,
-		"UPDATE memories SET updated_at = '2024-01-01T00:00:00Z' WHERE id = 'target'")
+		"UPDATE recall_entries SET updated_at = '2024-01-01T00:00:00Z' WHERE id = 'target'")
 	require.NoError(t, err)
-	for i := range MaxMemoryLimit + 20 {
+	for i := range MaxRecallEntryLimit + 20 {
 		id := "evidence-filler-" + testID(i)
-		_, err := d.InsertMemory(Memory{
+		_, err := d.InsertRecallEntry(RecallEntry{
 			ID:              id,
 			Type:            "fact",
 			Scope:           "project",
@@ -1032,7 +1032,7 @@ func TestQueryMemoriesFindsEvidenceMatchBeyondRecentEvidenceCandidateCap(
 			Project:         "test-agent",
 			Agent:           "test-agent",
 			SourceSessionID: "s1",
-			Evidence: []MemoryEvidence{
+			Evidence: []RecallEvidence{
 				{
 					SessionID:           "s1",
 					MessageStartOrdinal: 1,
@@ -1043,12 +1043,12 @@ func TestQueryMemoriesFindsEvidenceMatchBeyondRecentEvidenceCandidateCap(
 		})
 		require.NoError(t, err)
 		_, err = d.getWriter().ExecContext(ctx,
-			"UPDATE memories SET updated_at = '2024-02-01T00:00:00Z' WHERE id = ?",
+			"UPDATE recall_entries SET updated_at = '2024-02-01T00:00:00Z' WHERE id = ?",
 			id)
 		require.NoError(t, err)
 	}
 
-	page, err := d.QueryMemories(ctx, MemoryQuery{
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Text:    "heliotrope parser overflow",
 		Project: "test-agent",
 		Agent:   "test-agent",
@@ -1056,18 +1056,18 @@ func TestQueryMemoriesFindsEvidenceMatchBeyondRecentEvidenceCandidateCap(
 	})
 
 	require.NoError(t, err)
-	require.Len(t, page.Memories, 1)
-	assert.Equal(t, "target", page.Memories[0].ID)
-	assert.Equal(t, 3, page.Memories[0].ScoreBreakdown.EvidenceKeywordOverlap)
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "target", page.RecallEntries[0].ID)
+	assert.Equal(t, 3, page.RecallEntries[0].ScoreBreakdown.EvidenceKeywordOverlap)
 }
 
-func TestQueryMemoriesDiversifiesSourceEpisodesBeforeRepeatingChunks(t *testing.T) {
+func TestQueryRecallEntriesDiversifiesSourceEpisodesBeforeRepeatingChunks(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
 		s.Agent = "test-agent"
 	})
-	for _, m := range []Memory{
+	for _, m := range []RecallEntry{
 		{
 			ID:              "same-a",
 			Type:            "fact",
@@ -1105,11 +1105,11 @@ func TestQueryMemoriesDiversifiesSourceEpisodesBeforeRepeatingChunks(t *testing.
 			SourceEpisodeID: "other-trajectory:chunk:0001",
 		},
 	} {
-		_, err := d.InsertMemory(m)
+		_, err := d.InsertRecallEntry(m)
 		require.NoError(t, err)
 	}
 
-	page, err := d.QueryMemories(ctx, MemoryQuery{
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{
 		Text:    "urgent quartz capacitor drift",
 		Project: "test-agent",
 		Agent:   "test-agent",
@@ -1117,20 +1117,20 @@ func TestQueryMemoriesDiversifiesSourceEpisodesBeforeRepeatingChunks(t *testing.
 	})
 
 	require.NoError(t, err)
-	require.Len(t, page.Memories, 2)
-	assert.Equal(t, "same-a", page.Memories[0].ID)
-	assert.Equal(t, "z-other", page.Memories[1].ID)
+	require.Len(t, page.RecallEntries, 2)
+	assert.Equal(t, "same-a", page.RecallEntries[0].ID)
+	assert.Equal(t, "z-other", page.RecallEntries[1].ID)
 }
 
-func TestListMemoryTextCandidatesOrdersByLexicalRank(t *testing.T) {
+func TestListRecallEntryTextCandidatesOrdersByLexicalRank(t *testing.T) {
 	d := testDB(t)
-	requireMemoryFTS(t, d)
-	requireMemoryFTS5(t, d)
+	requireRecallFTS(t, d)
+	requireRecallFTS5(t, d)
 	ctx := context.Background()
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
 		s.Agent = "test-agent"
 	})
-	_, err := d.InsertMemory(Memory{
+	_, err := d.InsertRecallEntry(RecallEntry{
 		ID:              "rich",
 		Type:            "fact",
 		Scope:           "project",
@@ -1142,7 +1142,7 @@ func TestListMemoryTextCandidatesOrdersByLexicalRank(t *testing.T) {
 		SourceSessionID: "s1",
 	})
 	require.NoError(t, err)
-	_, err = d.InsertMemory(Memory{
+	_, err = d.InsertRecallEntry(RecallEntry{
 		ID:              "partial",
 		Type:            "fact",
 		Scope:           "project",
@@ -1155,7 +1155,7 @@ func TestListMemoryTextCandidatesOrdersByLexicalRank(t *testing.T) {
 	})
 	require.NoError(t, err)
 	_, err = d.getWriter().ExecContext(ctx, `
-		UPDATE memories SET updated_at = CASE id
+		UPDATE recall_entries SET updated_at = CASE id
 			WHEN 'rich' THEN '2024-01-01T00:00:00Z'
 			WHEN 'partial' THEN '2024-02-01T00:00:00Z'
 			ELSE updated_at
@@ -1163,7 +1163,7 @@ func TestListMemoryTextCandidatesOrdersByLexicalRank(t *testing.T) {
 		WHERE id IN ('rich', 'partial')`)
 	require.NoError(t, err)
 
-	candidates, err := d.ListMemoryTextCandidates(ctx, MemoryQuery{
+	candidates, err := d.ListRecallEntryTextCandidates(ctx, RecallQuery{
 		Text:    "heliotrope parser overflow",
 		Project: "test-agent",
 		Agent:   "test-agent",
@@ -1176,16 +1176,16 @@ func TestListMemoryTextCandidatesOrdersByLexicalRank(t *testing.T) {
 	assert.Equal(t, "partial", candidates[1].ID)
 }
 
-func TestListMemoryTextCandidatesFallsBackToLikeForFTS4SubstringMatch(t *testing.T) {
+func TestListRecallEntryTextCandidatesFallsBackToLikeForFTS4SubstringMatch(t *testing.T) {
 	d := testDB(t)
-	requireMemoryFTS(t, d)
-	requireMemoryFTS4(t, d)
+	requireRecallFTS(t, d)
+	requireRecallFTS4(t, d)
 	ctx := context.Background()
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
 		s.Agent = "test-agent"
 	})
-	_, err := d.InsertMemory(Memory{
-		ID:              "substring-memory",
+	_, err := d.InsertRecallEntry(RecallEntry{
+		ID:              "substring-recall",
 		Type:            "fact",
 		Scope:           "project",
 		Status:          "accepted",
@@ -1197,7 +1197,7 @@ func TestListMemoryTextCandidatesFallsBackToLikeForFTS4SubstringMatch(t *testing
 	})
 	require.NoError(t, err)
 
-	candidates, err := d.ListMemoryTextCandidates(ctx, MemoryQuery{
+	candidates, err := d.ListRecallEntryTextCandidates(ctx, RecallQuery{
 		Text:    "cdefg",
 		Project: "test-agent",
 		Agent:   "test-agent",
@@ -1206,19 +1206,19 @@ func TestListMemoryTextCandidatesFallsBackToLikeForFTS4SubstringMatch(t *testing
 
 	require.NoError(t, err)
 	require.NotEmpty(t, candidates)
-	assert.Equal(t, "substring-memory", candidates[0].ID)
+	assert.Equal(t, "substring-recall", candidates[0].ID)
 }
 
-func TestListMemoryTextCandidatesUsesFTS4RowIDMatchForDirectText(t *testing.T) {
+func TestListRecallEntryTextCandidatesUsesFTS4RowIDMatchForDirectText(t *testing.T) {
 	d := testDB(t)
-	requireMemoryFTS(t, d)
-	requireMemoryFTS4(t, d)
+	requireRecallFTS(t, d)
+	requireRecallFTS4(t, d)
 	ctx := context.Background()
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
 		s.Agent = "test-agent"
 	})
-	_, err := d.InsertMemory(Memory{
-		ID:              "fts4-direct-memory",
+	_, err := d.InsertRecallEntry(RecallEntry{
+		ID:              "fts4-direct-recall",
 		Type:            "fact",
 		Scope:           "project",
 		Status:          "accepted",
@@ -1230,14 +1230,14 @@ func TestListMemoryTextCandidatesUsesFTS4RowIDMatchForDirectText(t *testing.T) {
 	})
 	require.NoError(t, err)
 	_, err = d.getWriter().ExecContext(ctx, `
-		UPDATE memories_fts
+		UPDATE recall_entries_fts
 		SET body = 'The decisive clue was heliotrope parser overflow.'
-		WHERE rowid = (SELECT rowid FROM memories WHERE id = ?)`,
-		"fts4-direct-memory",
+		WHERE rowid = (SELECT rowid FROM recall_entries WHERE id = ?)`,
+		"fts4-direct-recall",
 	)
 	require.NoError(t, err)
 
-	candidates, err := d.ListMemoryTextCandidates(ctx, MemoryQuery{
+	candidates, err := d.ListRecallEntryTextCandidates(ctx, RecallQuery{
 		Text:    "heliotrope parser overflow",
 		Project: "test-agent",
 		Agent:   "test-agent",
@@ -1246,18 +1246,18 @@ func TestListMemoryTextCandidatesUsesFTS4RowIDMatchForDirectText(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotEmpty(t, candidates)
-	assert.Equal(t, "fts4-direct-memory", candidates[0].ID)
+	assert.Equal(t, "fts4-direct-recall", candidates[0].ID)
 }
 
-func TestMemoryEvidenceFTSKindDetectsFTS4(t *testing.T) {
+func TestRecallEvidenceFTSKindDetectsFTS4(t *testing.T) {
 	d := testDB(t)
-	requireMemoryFTS4(t, d)
+	requireRecallFTS4(t, d)
 
-	assert.Equal(t, "fts4", d.memoryEvidenceFTSKind(context.Background()))
+	assert.Equal(t, "fts4", d.recallEvidenceFTSKind(context.Background()))
 }
 
-func TestMemoryQueryTermsRetainsShortCriticalUITerms(t *testing.T) {
-	got := memoryQueryTerms(
+func TestRecallQueryTermsRetainsShortCriticalUITerms(t *testing.T) {
+	got := recallQueryTerms(
 		`I am working with our internal ops portal. On the Incidents list page, ` +
 			`when I open the "Filters" dropdown, which filter option labels ` +
 			`contain the substring "Incident"? The answer should be one or ` +
@@ -1270,11 +1270,11 @@ func TestMemoryQueryTermsRetainsShortCriticalUITerms(t *testing.T) {
 	assert.NotContains(t, got, "should")
 	assert.NotContains(t, got, "short")
 	assert.NotContains(t, got, "more")
-	assert.LessOrEqual(t, len(got), MaxMemorySearchTerms)
+	assert.LessOrEqual(t, len(got), MaxRecallSearchTerms)
 }
 
-func TestMemoryQueryTermsDropsQuestionBoilerplate(t *testing.T) {
-	got := memoryQueryTerms(
+func TestRecallQueryTermsDropsQuestionBoilerplate(t *testing.T) {
+	got := recallQueryTerms(
 		`My teammate asked me to rebalance workload between several services by ` +
 			`reassigning jobs with a specific tag. Which two modules does our ` +
 			`workflow typically use to accomplish this task?`,
@@ -1290,17 +1290,17 @@ func TestMemoryQueryTermsDropsQuestionBoilerplate(t *testing.T) {
 	assert.NotContains(t, got, "specific")
 	assert.NotContains(t, got, "asked")
 	assert.NotContains(t, got, "several")
-	assert.LessOrEqual(t, len(got), MaxMemorySearchTerms)
+	assert.LessOrEqual(t, len(got), MaxRecallSearchTerms)
 }
 
-func TestListMemoryTextCandidatesRetainsShortCriticalUITermMatch(t *testing.T) {
+func TestListRecallEntryTextCandidatesRetainsShortCriticalUITermMatch(t *testing.T) {
 	d := testDB(t)
-	requireMemoryFTS(t, d)
+	requireRecallFTS(t, d)
 	ctx := context.Background()
 	insertSession(t, d, "s1", "test-agent", func(s *Session) {
 		s.Agent = "test-agent"
 	})
-	_, err := d.InsertMemory(Memory{
+	_, err := d.InsertRecallEntry(RecallEntry{
 		ID:              "incident-filter-labels",
 		Type:            "fact",
 		Scope:           "project",
@@ -1313,7 +1313,7 @@ func TestListMemoryTextCandidatesRetainsShortCriticalUITermMatch(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	candidates, err := d.ListMemoryTextCandidates(ctx, MemoryQuery{
+	candidates, err := d.ListRecallEntryTextCandidates(ctx, RecallQuery{
 		Text: `I am working with our internal ops portal. On the Incidents list page, ` +
 			`when I open the "Filters" dropdown, which filter option labels ` +
 			`contain the substring "Incident"?`,
@@ -1327,17 +1327,17 @@ func TestListMemoryTextCandidatesRetainsShortCriticalUITermMatch(t *testing.T) {
 	assert.Equal(t, "incident-filter-labels", candidates[0].ID)
 }
 
-func TestGetMemoryMissingReturnsNil(t *testing.T) {
+func TestGetRecallEntryMissingReturnsNil(t *testing.T) {
 	d := testDB(t)
 
-	got, err := d.GetMemory(context.Background(), "missing")
+	got, err := d.GetRecallEntry(context.Background(), "missing")
 
 	require.NoError(t, err)
 	assert.Nil(t, got)
 }
 
-func TestToCoreMemoriesPreservesTimestamps(t *testing.T) {
-	got := toCoreMemories([]Memory{
+func TestToCoreRecallEntriesPreservesTimestamps(t *testing.T) {
+	got := toCoreRecallEntries([]RecallEntry{
 		{
 			ID:        "m1",
 			Status:    "accepted",
@@ -1365,7 +1365,7 @@ func testID(n int) string {
 	return string(out)
 }
 
-func TestCopyMemoriesFrom(t *testing.T) {
+func TestCopyRecallEntriesFrom(t *testing.T) {
 	dir := t.TempDir()
 
 	// Source DB: session s1 (will survive in dest) and s2 (will not).
@@ -1379,17 +1379,17 @@ func TestCopyMemoriesFrom(t *testing.T) {
 		s.Agent = "codex"
 	})
 
-	_, err = srcDB.InsertMemory(Memory{
+	_, err = srcDB.InsertRecallEntry(RecallEntry{
 		ID: "m1", Type: "fact", Scope: "project", Status: "accepted",
 		Title: "kept", Body: "heliotrope parser overflow",
 		Project: "agentsview", Agent: "codex", SourceSessionID: "s1",
-		Evidence: []MemoryEvidence{{
+		Evidence: []RecallEvidence{{
 			SessionID: "s1", MessageStartOrdinal: 1, MessageEndOrdinal: 1,
 			Snippet: "the decisive clue",
 		}},
 	})
 	require.NoError(t, err, "insert m1")
-	_, err = srcDB.InsertMemory(Memory{
+	_, err = srcDB.InsertRecallEntry(RecallEntry{
 		ID: "m2", Type: "fact", Scope: "project", Status: "accepted",
 		Title: "dropped", Body: "session is gone",
 		Project: "agentsview", Agent: "codex", SourceSessionID: "s2",
@@ -1398,7 +1398,7 @@ func TestCopyMemoriesFrom(t *testing.T) {
 
 	// Pin known timestamps to verify they survive the copy.
 	_, err = srcDB.getWriter().Exec(
-		`UPDATE memories SET created_at = ?, updated_at = ? WHERE id = 'm1'`,
+		`UPDATE recall_entries SET created_at = ?, updated_at = ? WHERE id = 'm1'`,
 		"2024-01-02T03:04:05.678Z", "2024-02-03T04:05:06.789Z",
 	)
 	require.NoError(t, err, "stamp m1")
@@ -1413,12 +1413,12 @@ func TestCopyMemoriesFrom(t *testing.T) {
 		s.Agent = "codex"
 	})
 
-	require.NoError(t, dstDB.CopyMemoriesFrom(srcPath), "CopyMemoriesFrom")
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath), "CopyRecallEntriesFrom")
 
 	ctx := context.Background()
 
 	// m1 copied with evidence and original timestamps preserved.
-	m1, err := dstDB.GetMemory(ctx, "m1")
+	m1, err := dstDB.GetRecallEntry(ctx, "m1")
 	require.NoError(t, err, "get m1")
 	require.NotNil(t, m1, "m1 should be copied")
 	assert.Equal(t, "2024-01-02T03:04:05.678Z", m1.CreatedAt, "created_at")
@@ -1427,122 +1427,122 @@ func TestCopyMemoriesFrom(t *testing.T) {
 	assert.Equal(t, "the decisive clue", m1.Evidence[0].Snippet)
 
 	// m2 skipped because its source session did not survive (FK guard).
-	m2, err := dstDB.GetMemory(ctx, "m2")
+	m2, err := dstDB.GetRecallEntry(ctx, "m2")
 	require.NoError(t, err, "get m2")
 	assert.Nil(t, m2, "m2 skipped: source session not preserved")
 
-	// Copied memory is searchable via FTS in the destination.
-	cands, err := dstDB.ListMemoryTextCandidates(
-		ctx, MemoryQuery{Text: "heliotrope"},
+	// Copied recall is searchable via FTS in the destination.
+	cands, err := dstDB.ListRecallEntryTextCandidates(
+		ctx, RecallQuery{Text: "heliotrope"},
 	)
-	require.NoError(t, err, "search copied memory")
-	require.Len(t, cands, 1, "fts finds copied memory")
+	require.NoError(t, err, "search copied recall")
+	require.Len(t, cands, 1, "fts finds copied recall")
 	assert.Equal(t, "m1", cands[0].ID)
 }
 
-// TestVacuumPreservesMemoriesFTSSearchable guards the assumption that VACUUM
-// keeps the external-content memories_fts index attached. memories has a TEXT
+// TestVacuumPreservesRecallEntriesFTSSearchable guards the assumption that VACUUM
+// keeps the external-content recall_entries_fts index attached. entries has a TEXT
 // primary key, so the SQLite docs warn VACUUM "may change" its rowids -- which
 // would break the rowid join. The bundled SQLite preserves rowids, so search
 // keeps working with no FTS rebuild; if a SQLite bump ever renumbers them, the
-// post-vacuum assertion below fails and Vacuum must rebuild memories_fts.
-func TestNormalizeMemoryQueryTrimsExactFilters(t *testing.T) {
-	q := NormalizeMemoryQuery(MemoryQuery{
-		Project:            "  agentsview  ",
-		Status:             "  archived  ",
-		SourceEpisodeID:    "  ep-1  ",
-		SupersedesMemoryID: "  mem-old  ",
+// post-vacuum assertion below fails and Vacuum must rebuild recall_entries_fts.
+func TestNormalizeRecallQueryTrimsExactFilters(t *testing.T) {
+	q := NormalizeRecallQuery(RecallQuery{
+		Project:           "  agentsview  ",
+		Status:            "  archived  ",
+		SourceEpisodeID:   "  ep-1  ",
+		SupersedesEntryID: "  mem-old  ",
 	})
 	assert.Equal(t, "agentsview", q.Project)
 	assert.Equal(t, "archived", q.Status)
 	assert.Equal(t, "ep-1", q.SourceEpisodeID)
-	assert.Equal(t, "mem-old", q.SupersedesMemoryID)
+	assert.Equal(t, "mem-old", q.SupersedesEntryID)
 }
 
-func TestQueryMemoriesHonorsStatusFilter(t *testing.T) {
+func TestQueryRecallEntriesHonorsStatusFilter(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
 		s.Agent = "codex"
 	})
 
-	_, err := d.InsertMemory(Memory{
+	_, err := d.InsertRecallEntry(RecallEntry{
 		ID: "acc", Type: "fact", Scope: "project", Status: "accepted",
 		Title: "kept", Body: "heliotrope alpha",
 		Project: "agentsview", Agent: "codex", SourceSessionID: "s1",
 	})
 	require.NoError(t, err, "insert accepted")
-	_, err = d.InsertMemory(Memory{
+	_, err = d.InsertRecallEntry(RecallEntry{
 		ID: "arc", Type: "fact", Scope: "project", Status: "accepted",
 		Title: "old", Body: "heliotrope beta",
 		Project: "agentsview", Agent: "codex", SourceSessionID: "s1",
 	})
 	require.NoError(t, err, "insert to-be-archived")
 	_, err = d.getWriter().Exec(
-		`UPDATE memories SET status = 'archived' WHERE id = 'arc'`,
+		`UPDATE recall_entries SET status = 'archived' WHERE id = 'arc'`,
 	)
 	require.NoError(t, err, "archive arc")
 
-	// A text query with no status filter returns only accepted memories.
-	page, err := d.QueryMemories(ctx, MemoryQuery{Text: "heliotrope"})
+	// A text query with no status filter returns only accepted entries.
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{Text: "heliotrope"})
 	require.NoError(t, err, "default query")
-	require.Len(t, page.Memories, 1, "default query excludes archived")
-	assert.Equal(t, "acc", page.Memories[0].ID)
+	require.Len(t, page.RecallEntries, 1, "default query excludes archived")
+	assert.Equal(t, "acc", page.RecallEntries[0].ID)
 
-	// The same text query with status=archived returns the archived memory.
-	page, err = d.QueryMemories(
-		ctx, MemoryQuery{Text: "heliotrope", Status: "archived"},
+	// The same text query with status=archived returns the archived recall.
+	page, err = d.QueryRecallEntries(
+		ctx, RecallQuery{Text: "heliotrope", Status: "archived"},
 	)
 	require.NoError(t, err, "archived query")
-	require.Len(t, page.Memories, 1, "archived status returns archived memory")
-	assert.Equal(t, "arc", page.Memories[0].ID)
+	require.Len(t, page.RecallEntries, 1, "archived status returns archived recall")
+	assert.Equal(t, "arc", page.RecallEntries[0].ID)
 }
 
-func TestVacuumPreservesMemoriesFTSSearchable(t *testing.T) {
+func TestVacuumPreservesRecallEntriesFTSSearchable(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
-	if d.memoryFTSKind(ctx) != "fts5" {
+	if d.recallFTSKind(ctx) != "fts5" {
 		t.Skip("requires fts5 runtime support")
 	}
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
 		s.Agent = "codex"
 	})
 
-	// Insert several memories, then delete the earlier ones so their low
+	// Insert several entries, then delete the earlier ones so their low
 	// rowids are freed -- the scenario in which VACUUM would renumber the
 	// survivor's rowid if it renumbered at all.
 	bodies := []string{
 		"alpha aardvark", "beta barnacle", "gamma heliotrope overflow",
 	}
 	for i, body := range bodies {
-		_, err := d.InsertMemory(Memory{
+		_, err := d.InsertRecallEntry(RecallEntry{
 			ID: fmt.Sprintf("m%d", i+1), Type: "fact", Scope: "project",
 			Status: "accepted", Title: "t", Body: body,
 			Project: "agentsview", Agent: "codex", SourceSessionID: "s1",
 		})
-		require.NoError(t, err, "insert memory")
+		require.NoError(t, err, "insert recall")
 	}
 	_, err := d.getWriter().Exec(
-		`DELETE FROM memories WHERE id IN ('m1', 'm2')`,
+		`DELETE FROM recall_entries WHERE id IN ('m1', 'm2')`,
 	)
-	require.NoError(t, err, "delete earlier memories")
+	require.NoError(t, err, "delete earlier entries")
 
-	q := MemoryQuery{Text: "heliotrope"}
-	terms := memoryQueryTerms(q.Text)
+	q := RecallQuery{Text: "heliotrope"}
+	terms := recallQueryTerms(q.Text)
 
-	pre, err := d.listMemoryFTS5Candidates(ctx, q, terms)
+	pre, err := d.listRecallFTS5Candidates(ctx, q, terms)
 	require.NoError(t, err, "fts5 search before vacuum")
 	require.Len(t, pre, 1, "fts join finds survivor before vacuum")
 
 	require.NoError(t, d.Vacuum(), "vacuum")
 
-	post, err := d.listMemoryFTS5Candidates(ctx, q, terms)
+	post, err := d.listRecallFTS5Candidates(ctx, q, terms)
 	require.NoError(t, err, "fts5 search after vacuum")
 	require.Len(t, post, 1, "fts join still finds survivor after vacuum")
 	assert.Equal(t, "m3", post[0].ID)
 }
 
-func TestMemoryLifecycleBucket(t *testing.T) {
+func TestRecallEntryLifecycleBucket(t *testing.T) {
 	tests := []struct {
 		name         string
 		supersedes   string
@@ -1565,12 +1565,168 @@ func TestMemoryLifecycleBucket(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := Memory{
-				SupersedesMemoryID:   tt.supersedes,
-				SupersededByMemoryID: tt.supersededBy,
-				Status:               tt.status,
+			m := RecallEntry{
+				SupersedesEntryID:   tt.supersedes,
+				SupersededByEntryID: tt.supersededBy,
+				Status:              tt.status,
 			}
 			assert.Equal(t, tt.want, m.LifecycleBucket())
 		})
 	}
+}
+
+func createLegacyMemoriesSchema(t *testing.T, conn *sql.DB) {
+	t.Helper()
+	_, err := conn.Exec(`
+		DROP TABLE IF EXISTS recall_evidence;
+		DROP TABLE IF EXISTS recall_entries;
+		DROP TABLE IF EXISTS recall_entries_fts;
+		DROP TABLE IF EXISTS recall_evidence_fts;
+
+		CREATE TABLE memories (
+		    id                TEXT PRIMARY KEY,
+		    type              TEXT NOT NULL,
+		    scope             TEXT NOT NULL,
+		    status            TEXT NOT NULL DEFAULT 'accepted',
+		    title             TEXT NOT NULL,
+		    body              TEXT NOT NULL,
+		    trigger           TEXT NOT NULL DEFAULT '',
+		    confidence        REAL,
+		    uncertainty       TEXT NOT NULL DEFAULT '',
+		    project           TEXT NOT NULL DEFAULT '',
+		    cwd               TEXT NOT NULL DEFAULT '',
+		    git_branch        TEXT NOT NULL DEFAULT '',
+		    agent             TEXT NOT NULL DEFAULT '',
+		    source_session_id TEXT NOT NULL
+		        REFERENCES sessions(id) ON DELETE CASCADE,
+		    source_episode_id TEXT NOT NULL DEFAULT '',
+		    source_run_id     TEXT NOT NULL DEFAULT '',
+		    extractor_method  TEXT NOT NULL DEFAULT '',
+		    model             TEXT NOT NULL DEFAULT '',
+		    transferable      INTEGER NOT NULL DEFAULT 0,
+		    provenance_ok     INTEGER NOT NULL DEFAULT 0,
+		    supersedes_memory_id TEXT NOT NULL DEFAULT '',
+		    superseded_by_memory_id TEXT NOT NULL DEFAULT '',
+		    created_at        TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z',
+		    updated_at        TEXT NOT NULL DEFAULT '2026-01-01T00:00:00Z'
+		);
+		CREATE INDEX idx_memories_context
+		    ON memories(project, cwd, git_branch, agent);
+		CREATE INDEX idx_memories_updated
+		    ON memories(updated_at DESC, id);
+
+		CREATE TABLE memory_evidence (
+		    id                    INTEGER PRIMARY KEY,
+		    memory_id             TEXT NOT NULL
+		        REFERENCES memories(id) ON DELETE CASCADE,
+		    session_id            TEXT NOT NULL
+		        REFERENCES sessions(id) ON DELETE CASCADE,
+		    message_start_ordinal INTEGER NOT NULL,
+		    message_end_ordinal   INTEGER NOT NULL,
+		    tool_use_id           TEXT NOT NULL DEFAULT '',
+		    snippet               TEXT NOT NULL DEFAULT ''
+		);
+		CREATE INDEX idx_memory_evidence_memory
+		    ON memory_evidence(memory_id)`)
+	require.NoError(t, err, "create legacy memories schema")
+}
+
+func TestOpenMigratesLegacyMemoriesTablesToRecall(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	d, err := Open(path)
+	require.NoError(t, err, "initial open")
+	insertSession(t, d, "s1", "agentsview")
+	d.Close()
+
+	conn, err := sql.Open("sqlite3", path)
+	require.NoError(t, err, "raw open")
+	createLegacyMemoriesSchema(t, conn)
+	_, err = conn.Exec(`
+		INSERT INTO memories (
+		    id, type, scope, status, title, body,
+		    project, source_session_id, supersedes_memory_id
+		) VALUES (
+		    'm1', 'fact', 'project', 'accepted',
+		    'Legacy heliotrope finding', 'Parser overflow root cause.',
+		    'agentsview', 's1', 'm0'
+		);
+		INSERT INTO memory_evidence (
+		    memory_id, session_id,
+		    message_start_ordinal, message_end_ordinal, snippet
+		) VALUES ('m1', 's1', 1, 3, 'heliotrope overflow snippet')`)
+	require.NoError(t, err, "insert legacy rows")
+	require.NoError(t, conn.Close(), "close raw connection")
+
+	reopened, err := Open(path)
+	require.NoError(t, err, "reopen with legacy tables")
+	defer reopened.Close()
+
+	ctx := context.Background()
+	entry, err := reopened.GetRecallEntry(ctx, "m1")
+	require.NoError(t, err, "get migrated entry")
+	require.NotNil(t, entry, "migrated entry must exist")
+	assert.Equal(t, "Legacy heliotrope finding", entry.Title)
+	assert.Equal(t, "m0", entry.SupersedesEntryID)
+	require.Len(t, entry.Evidence, 1)
+	assert.Equal(t, "heliotrope overflow snippet", entry.Evidence[0].Snippet)
+
+	var legacyCount int
+	err = reopened.getReader().QueryRow(
+		`SELECT count(*) FROM sqlite_master
+		 WHERE type='table' AND name IN ('memories', 'memory_evidence')`,
+	).Scan(&legacyCount)
+	require.NoError(t, err, "count legacy tables")
+	assert.Equal(t, 0, legacyCount, "legacy tables must be renamed away")
+
+	page, err := reopened.QueryRecallEntries(ctx, RecallQuery{
+		Text: "heliotrope", Project: "agentsview",
+	})
+	require.NoError(t, err, "query migrated entries")
+	require.Len(t, page.RecallEntries, 1, "text query must find migrated row")
+	assert.Equal(t, "m1", page.RecallEntries[0].ID)
+}
+
+func TestOpenLeavesLegacyMemoriesWhenRecallEntriesPopulated(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	d, err := Open(path)
+	require.NoError(t, err, "initial open")
+	insertSession(t, d, "s1", "agentsview")
+	_, err = d.InsertRecallEntry(RecallEntry{
+		ID:              "r1",
+		Type:            "fact",
+		Scope:           "project",
+		Status:          "accepted",
+		Title:           "Existing recall entry",
+		Body:            "Already migrated data.",
+		Project:         "agentsview",
+		SourceSessionID: "s1",
+	})
+	require.NoError(t, err, "insert recall entry")
+	d.Close()
+
+	conn, err := sql.Open("sqlite3", path)
+	require.NoError(t, err, "raw open")
+	_, err = conn.Exec(`
+		CREATE TABLE memories (
+		    id TEXT PRIMARY KEY,
+		    title TEXT NOT NULL
+		);
+		INSERT INTO memories (id, title) VALUES ('old1', 'stray legacy row')`)
+	require.NoError(t, err, "create stray legacy table")
+	require.NoError(t, conn.Close(), "close raw connection")
+
+	reopened, err := Open(path)
+	require.NoError(t, err, "reopen with both tables populated")
+	defer reopened.Close()
+
+	entry, err := reopened.GetRecallEntry(context.Background(), "r1")
+	require.NoError(t, err, "get existing recall entry")
+	require.NotNil(t, entry, "existing recall entry must survive")
+
+	var legacyRows int
+	err = reopened.getReader().QueryRow(
+		`SELECT count(*) FROM memories`,
+	).Scan(&legacyRows)
+	require.NoError(t, err, "count legacy rows")
+	assert.Equal(t, 1, legacyRows, "legacy table must be left untouched")
 }

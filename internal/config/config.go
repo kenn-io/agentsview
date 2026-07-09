@@ -1970,7 +1970,7 @@ func ResolveDataDir() (string, error) {
 
 // IsDefaultAgentsviewDataDir reports whether path is (or symlink-resolves to) a
 // default ~/.agentsview data directory. It is the single guard shared by the
-// CLI and HTTP memory-import paths.
+// CLI and HTTP recall-import paths.
 func IsDefaultAgentsviewDataDir(path string) bool {
 	clean := filepath.Clean(strings.TrimSpace(path))
 	if clean == "" || clean == "." {

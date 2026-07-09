@@ -5,53 +5,53 @@ import (
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
-	corememory "go.kenn.io/agentsview/internal/memory"
+	corerecall "go.kenn.io/agentsview/internal/recall"
 )
 
 const (
-	defaultMemoryContextMaxBytes = 4000
-	minMemoryContextEntryBytes   = 450
+	defaultRecallContextMaxBytes = 4000
+	minRecallContextEntryBytes   = 450
 )
 
-func NormalizeMemoryContextMaxBytes(maxBytes int) (int, error) {
+func NormalizeRecallContextMaxBytes(maxBytes int) (int, error) {
 	if maxBytes < 0 {
 		return 0, fmt.Errorf("context_max_bytes must be non-negative")
 	}
 	if maxBytes == 0 {
-		return defaultMemoryContextMaxBytes, nil
+		return defaultRecallContextMaxBytes, nil
 	}
 	return maxBytes, nil
 }
 
-func ValidateMemoryLimit(limit int) error {
+func ValidateRecallEntryLimit(limit int) error {
 	if limit < 0 {
 		return fmt.Errorf("limit must be non-negative")
 	}
 	return nil
 }
 
-func BuildMemoryContext(
-	results []db.MemoryResult, maxBytes int, focusText string,
-) (string, *MemoryContextMeta, error) {
-	normalizedMaxBytes, err := NormalizeMemoryContextMaxBytes(maxBytes)
+func BuildRecallContext(
+	results []db.RecallResult, maxBytes int, focusText string,
+) (string, *RecallContextMeta, error) {
+	normalizedMaxBytes, err := NormalizeRecallContextMaxBytes(maxBytes)
 	if err != nil {
 		return "", nil, err
 	}
-	block := corememory.BuildContext(
-		toCoreMemoryResults(results),
-		corememory.ContextOptions{
+	block := corerecall.BuildContext(
+		toCoreRecallResults(results),
+		corerecall.ContextOptions{
 			MaxBytes:      normalizedMaxBytes,
-			MaxEntryBytes: memoryContextMaxEntryBytes(normalizedMaxBytes, len(results)),
+			MaxEntryBytes: recallContextMaxEntryBytes(normalizedMaxBytes, len(results)),
 			FocusText:     focusText,
 		},
 	)
-	meta := MemoryContextMetaFromBlock(block)
-	enrichMemoryContextMeta(meta, results)
+	meta := RecallContextMetaFromBlock(block)
+	enrichRecallContextMeta(meta, results)
 	return block.Text, meta, nil
 }
 
-func BuildMemoryQuerySummary(results []db.MemoryResult) *MemoryQuerySummary {
-	summary := &MemoryQuerySummary{
+func BuildRecallQuerySummary(results []db.RecallResult) *RecallQuerySummary {
+	summary := &RecallQuerySummary{
 		Count:             len(results),
 		ByType:            map[string]int{},
 		ByScope:           map[string]int{},
@@ -72,53 +72,53 @@ func BuildMemoryQuerySummary(results []db.MemoryResult) *MemoryQuerySummary {
 		ByLifecycle:       map[string]int{},
 	}
 	for _, result := range results {
-		countMemoryQuerySummaryField(summary.ByType, result.Type)
-		countMemoryQuerySummaryField(summary.ByScope, result.Scope)
-		countMemoryQuerySummaryField(summary.ByStatus, result.Status)
-		countMemoryQuerySummaryField(summary.ByProject, result.Project)
-		countMemoryQuerySummaryField(summary.ByAgent, result.Agent)
-		countMemoryQuerySummaryField(summary.ByCWD, result.CWD)
-		countMemoryQuerySummaryField(summary.ByGitBranch, result.GitBranch)
+		countRecallQuerySummaryField(summary.ByType, result.Type)
+		countRecallQuerySummaryField(summary.ByScope, result.Scope)
+		countRecallQuerySummaryField(summary.ByStatus, result.Status)
+		countRecallQuerySummaryField(summary.ByProject, result.Project)
+		countRecallQuerySummaryField(summary.ByAgent, result.Agent)
+		countRecallQuerySummaryField(summary.ByCWD, result.CWD)
+		countRecallQuerySummaryField(summary.ByGitBranch, result.GitBranch)
 		if len(result.MatchReasons) == 0 {
-			countMemoryQuerySummaryField(summary.ByMatchReason, "")
+			countRecallQuerySummaryField(summary.ByMatchReason, "")
 		}
 		for _, reason := range result.MatchReasons {
-			countMemoryQuerySummaryField(summary.ByMatchReason, reason)
+			countRecallQuerySummaryField(summary.ByMatchReason, reason)
 		}
-		countMemoryQuerySummaryField(
+		countRecallQuerySummaryField(
 			summary.ByExtractorMethod, result.ExtractorMethod,
 		)
-		countMemoryQuerySummaryField(summary.ByModel, result.Model)
-		countMemoryQuerySummaryField(summary.BySourceRun, result.SourceRunID)
-		countMemoryQuerySummaryField(
+		countRecallQuerySummaryField(summary.ByModel, result.Model)
+		countRecallQuerySummaryField(summary.BySourceRun, result.SourceRunID)
+		countRecallQuerySummaryField(
 			summary.BySourceSession, result.SourceSessionID,
 		)
-		countMemoryQuerySummaryField(
+		countRecallQuerySummaryField(
 			summary.BySourceEpisode, result.SourceEpisodeID,
 		)
-		countMemoryQuerySummaryField(
+		countRecallQuerySummaryField(
 			summary.ByTransferability,
-			memorySummaryBoolLabel(
+			recallSummaryBoolLabel(
 				result.Transferable, "transferable", "not_transferable",
 			),
 		)
-		countMemoryQuerySummaryField(
+		countRecallQuerySummaryField(
 			summary.ByProvenanceAudit,
-			memorySummaryBoolLabel(
+			recallSummaryBoolLabel(
 				result.ProvenanceOK,
 				"provenance_ok",
 				"provenance_unverified",
 			),
 		)
-		countMemoryQuerySummaryField(
+		countRecallQuerySummaryField(
 			summary.ByEvidence,
-			memorySummaryBoolLabel(
+			recallSummaryBoolLabel(
 				len(result.Evidence) > 0,
 				"with_evidence",
 				"without_evidence",
 			),
 		)
-		countMemoryQuerySummaryField(
+		countRecallQuerySummaryField(
 			summary.ByLifecycle,
 			result.LifecycleBucket(),
 		)
@@ -126,32 +126,32 @@ func BuildMemoryQuerySummary(results []db.MemoryResult) *MemoryQuerySummary {
 	return summary
 }
 
-// BuildMemoryContextSummary summarizes the ranked results that were actually
-// included in an assembled memory context.
-func BuildMemoryContextSummary(
-	results []db.MemoryResult,
-	meta *MemoryContextMeta,
-) *MemoryQuerySummary {
+// BuildRecallContextSummary summarizes the ranked results that were actually
+// included in an assembled recall context.
+func BuildRecallContextSummary(
+	results []db.RecallResult,
+	meta *RecallContextMeta,
+) *RecallQuerySummary {
 	if meta == nil {
 		return nil
 	}
-	return BuildMemoryQuerySummary(MemoryContextResults(results, meta))
+	return BuildRecallQuerySummary(RecallContextResults(results, meta))
 }
 
-func MemoryContextResults(
-	results []db.MemoryResult,
-	meta *MemoryContextMeta,
-) []db.MemoryResult {
+func RecallContextResults(
+	results []db.RecallResult,
+	meta *RecallContextMeta,
+) []db.RecallResult {
 	if meta == nil || len(meta.IncludedIDs) == 0 {
 		return nil
 	}
-	byID := make(map[string]db.MemoryResult, len(results))
+	byID := make(map[string]db.RecallResult, len(results))
 	for _, result := range results {
 		if result.ID != "" {
 			byID[result.ID] = result
 		}
 	}
-	included := make([]db.MemoryResult, 0, len(meta.IncludedIDs))
+	included := make([]db.RecallResult, 0, len(meta.IncludedIDs))
 	for _, id := range meta.IncludedIDs {
 		if result, ok := byID[id]; ok {
 			included = append(included, result)
@@ -160,37 +160,37 @@ func MemoryContextResults(
 	return included
 }
 
-func ValidateMemoryContextMemories(
-	contextMemories []db.MemoryResult,
-	meta *MemoryContextMeta,
+func ValidateRecallContextEntries(
+	contextEntries []db.RecallResult,
+	meta *RecallContextMeta,
 ) error {
 	if meta == nil {
 		return nil
 	}
-	if contextMemories == nil {
+	if contextEntries == nil {
 		if len(meta.IncludedIDs) == 0 {
 			return nil
 		}
 		return fmt.Errorf(
-			"context_memories ids must match context_meta.included_ids",
+			"context_entries ids must match context_meta.included_ids",
 		)
 	}
-	if len(contextMemories) != len(meta.IncludedIDs) {
+	if len(contextEntries) != len(meta.IncludedIDs) {
 		return fmt.Errorf(
-			"context_memories ids must match context_meta.included_ids",
+			"context_entries ids must match context_meta.included_ids",
 		)
 	}
-	for i, memory := range contextMemories {
-		if memory.ID != meta.IncludedIDs[i] {
+	for i, recall := range contextEntries {
+		if recall.ID != meta.IncludedIDs[i] {
 			return fmt.Errorf(
-				"context_memories ids must match context_meta.included_ids",
+				"context_entries ids must match context_meta.included_ids",
 			)
 		}
 	}
 	return nil
 }
 
-func countMemoryQuerySummaryField(counts map[string]int, value string) {
+func countRecallQuerySummaryField(counts map[string]int, value string) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		value = "(none)"
@@ -198,21 +198,21 @@ func countMemoryQuerySummaryField(counts map[string]int, value string) {
 	counts[value]++
 }
 
-func memorySummaryBoolLabel(ok bool, trueLabel, falseLabel string) string {
+func recallSummaryBoolLabel(ok bool, trueLabel, falseLabel string) string {
 	if ok {
 		return trueLabel
 	}
 	return falseLabel
 }
 
-func memoryContextMaxEntryBytes(maxBytes int, resultCount int) int {
+func recallContextMaxEntryBytes(maxBytes int, resultCount int) int {
 	if maxBytes <= 0 || resultCount <= 1 {
 		return 0
 	}
 	maxEntryBytes := maxBytes / resultCount
-	if maxEntryBytes < minMemoryContextEntryBytes &&
-		maxBytes >= minMemoryContextEntryBytes {
-		maxEntryBytes = minMemoryContextEntryBytes
+	if maxEntryBytes < minRecallContextEntryBytes &&
+		maxBytes >= minRecallContextEntryBytes {
+		maxEntryBytes = minRecallContextEntryBytes
 	}
 	if maxEntryBytes > maxBytes {
 		maxEntryBytes = maxBytes
@@ -220,13 +220,13 @@ func memoryContextMaxEntryBytes(maxBytes int, resultCount int) int {
 	return maxEntryBytes
 }
 
-func MemoryContextMetaFromBlock(block corememory.ContextBlock) *MemoryContextMeta {
-	if block.MemoryCount == 0 && len(block.IncludedIDs) == 0 &&
+func RecallContextMetaFromBlock(block corerecall.ContextBlock) *RecallContextMeta {
+	if block.EntryCount == 0 && len(block.IncludedIDs) == 0 &&
 		!block.Truncated {
 		return nil
 	}
-	return &MemoryContextMeta{
-		MemoryCount:                       block.MemoryCount,
+	return &RecallContextMeta{
+		EntryCount:                        block.EntryCount,
 		Truncated:                         block.Truncated,
 		IncludedIDs:                       block.IncludedIDs,
 		SourceSessionIDs:                  block.SourceSessionIDs,
@@ -241,14 +241,14 @@ func MemoryContextMetaFromBlock(block corememory.ContextBlock) *MemoryContextMet
 	}
 }
 
-func enrichMemoryContextMeta(
-	meta *MemoryContextMeta,
-	results []db.MemoryResult,
+func enrichRecallContextMeta(
+	meta *RecallContextMeta,
+	results []db.RecallResult,
 ) {
 	if meta == nil || len(meta.IncludedIDs) == 0 || len(results) == 0 {
 		return
 	}
-	byID := make(map[string]db.MemoryResult, len(results))
+	byID := make(map[string]db.RecallResult, len(results))
 	for _, result := range results {
 		if result.ID != "" {
 			byID[result.ID] = result
@@ -293,32 +293,32 @@ func uniqueTrimmedStrings(values []string) []string {
 	return out
 }
 
-func toCoreMemoryResults(results []db.MemoryResult) []corememory.Result {
-	out := make([]corememory.Result, 0, len(results))
+func toCoreRecallResults(results []db.RecallResult) []corerecall.Result {
+	out := make([]corerecall.Result, 0, len(results))
 	for _, result := range results {
-		out = append(out, corememory.Result{
-			Memory: corememory.Memory{
-				ID:                   result.ID,
-				Type:                 result.Type,
-				Scope:                result.Scope,
-				Status:               result.Status,
-				Title:                result.Title,
-				Body:                 result.Body,
-				Trigger:              result.Trigger,
-				Confidence:           result.Confidence,
-				Uncertainty:          result.Uncertainty,
-				Project:              result.Project,
-				CWD:                  result.CWD,
-				GitBranch:            result.GitBranch,
-				Agent:                result.Agent,
-				SourceSessionID:      result.SourceSessionID,
-				SourceEpisodeID:      result.SourceEpisodeID,
-				SourceRunID:          result.SourceRunID,
-				SupersedesMemoryID:   result.SupersedesMemoryID,
-				SupersededByMemoryID: result.SupersededByMemoryID,
-				CreatedAt:            result.CreatedAt,
-				UpdatedAt:            result.UpdatedAt,
-				Evidence:             toCoreMemoryEvidence(result.Evidence),
+		out = append(out, corerecall.Result{
+			Entry: corerecall.Entry{
+				ID:                  result.ID,
+				Type:                result.Type,
+				Scope:               result.Scope,
+				Status:              result.Status,
+				Title:               result.Title,
+				Body:                result.Body,
+				Trigger:             result.Trigger,
+				Confidence:          result.Confidence,
+				Uncertainty:         result.Uncertainty,
+				Project:             result.Project,
+				CWD:                 result.CWD,
+				GitBranch:           result.GitBranch,
+				Agent:               result.Agent,
+				SourceSessionID:     result.SourceSessionID,
+				SourceEpisodeID:     result.SourceEpisodeID,
+				SourceRunID:         result.SourceRunID,
+				SupersedesEntryID:   result.SupersedesEntryID,
+				SupersededByEntryID: result.SupersededByEntryID,
+				CreatedAt:           result.CreatedAt,
+				UpdatedAt:           result.UpdatedAt,
+				Evidence:            toCoreRecallEvidence(result.Evidence),
 			},
 			Score:     result.Score,
 			Breakdown: result.ScoreBreakdown,
@@ -327,10 +327,10 @@ func toCoreMemoryResults(results []db.MemoryResult) []corememory.Result {
 	return out
 }
 
-func toCoreMemoryEvidence(evidence []db.MemoryEvidence) []corememory.Evidence {
-	out := make([]corememory.Evidence, 0, len(evidence))
+func toCoreRecallEvidence(evidence []db.RecallEvidence) []corerecall.Evidence {
+	out := make([]corerecall.Evidence, 0, len(evidence))
 	for _, item := range evidence {
-		out = append(out, corememory.Evidence{
+		out = append(out, corerecall.Evidence{
 			SessionID:           item.SessionID,
 			MessageStartOrdinal: item.MessageStartOrdinal,
 			MessageEndOrdinal:   item.MessageEndOrdinal,

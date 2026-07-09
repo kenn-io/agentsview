@@ -617,19 +617,19 @@ func (b *httpBackend) UsagePairwiseComparison(
 	return &out, nil
 }
 
-func (b *httpBackend) ListMemories(
-	ctx context.Context, f MemoryFilter,
-) (*MemoryList, error) {
-	if err := ValidateMemoryLimit(f.Limit); err != nil {
+func (b *httpBackend) ListRecallEntries(
+	ctx context.Context, f RecallFilter,
+) (*RecallList, error) {
+	if err := ValidateRecallEntryLimit(f.Limit); err != nil {
 		return nil, err
 	}
-	q := memoryFilterToQuery(f)
-	var out MemoryList
-	if err := b.getJSON(ctx, "/api/v1/memories?"+q.Encode(), &out); err != nil {
+	q := recallFilterToQuery(f)
+	var out RecallList
+	if err := b.getJSON(ctx, "/api/v1/recall/entries?"+q.Encode(), &out); err != nil {
 		return nil, err
 	}
-	if out.Memories == nil {
-		out.Memories = []db.MemoryResult{}
+	if out.RecallEntries == nil {
+		out.RecallEntries = []db.RecallResult{}
 	}
 	if f.TrustedOnly {
 		out.TrustedOnly = true
@@ -637,11 +637,11 @@ func (b *httpBackend) ListMemories(
 	return &out, nil
 }
 
-func (b *httpBackend) GetMemory(
+func (b *httpBackend) GetRecallEntry(
 	ctx context.Context, id string,
-) (*db.Memory, error) {
-	var out db.Memory
-	path := "/api/v1/memories/" + url.PathEscape(id)
+) (*db.RecallEntry, error) {
+	var out db.RecallEntry
+	path := "/api/v1/recall/entries/" + url.PathEscape(id)
 	err := b.getJSON(ctx, path, &out)
 	if errors.Is(err, errHTTPNotFound) {
 		return nil, nil
@@ -652,51 +652,51 @@ func (b *httpBackend) GetMemory(
 	return &out, nil
 }
 
-func (b *httpBackend) QueryMemories(
-	ctx context.Context, req MemoryQuery,
-) (*MemoryQueryResult, error) {
-	if err := ValidateMemoryLimit(req.Limit); err != nil {
+func (b *httpBackend) QueryRecallEntries(
+	ctx context.Context, req RecallQuery,
+) (*RecallQueryResult, error) {
+	if err := ValidateRecallEntryLimit(req.Limit); err != nil {
 		return nil, err
 	}
 	if req.IncludeContext {
-		if _, err := NormalizeMemoryContextMaxBytes(req.ContextMaxBytes); err != nil {
+		if _, err := NormalizeRecallContextMaxBytes(req.ContextMaxBytes); err != nil {
 			return nil, err
 		}
 	}
-	var out MemoryQueryResult
-	if err := b.postJSON(ctx, "/api/v1/memories/query", req, &out); err != nil {
+	var out RecallQueryResult
+	if err := b.postJSON(ctx, "/api/v1/recall/query", req, &out); err != nil {
 		return nil, err
 	}
-	if out.Memories == nil {
-		out.Memories = []db.MemoryResult{}
+	if out.RecallEntries == nil {
+		out.RecallEntries = []db.RecallResult{}
 	}
 	if req.TrustedOnly {
 		out.TrustedOnly = true
 	}
 	if out.Summary == nil {
-		out.Summary = BuildMemoryQuerySummary(out.Memories)
+		out.Summary = BuildRecallQuerySummary(out.RecallEntries)
 	}
-	if out.ContextMemories == nil && out.ContextMeta != nil {
-		out.ContextMemories = MemoryContextResults(
-			out.Memories, out.ContextMeta,
+	if out.ContextEntries == nil && out.ContextMeta != nil {
+		out.ContextEntries = RecallContextResults(
+			out.RecallEntries, out.ContextMeta,
 		)
 	}
-	if err := ValidateMemoryContextMemories(
-		out.ContextMemories, out.ContextMeta,
+	if err := ValidateRecallContextEntries(
+		out.ContextEntries, out.ContextMeta,
 	); err != nil {
 		return nil, err
 	}
 	if out.ContextSummary == nil && out.ContextMeta != nil {
-		out.ContextSummary = BuildMemoryContextSummary(
-			out.Memories, out.ContextMeta,
+		out.ContextSummary = BuildRecallContextSummary(
+			out.RecallEntries, out.ContextMeta,
 		)
 	}
 	return &out, nil
 }
 
-func (b *httpBackend) ImportMemories(
-	ctx context.Context, r io.Reader, opts db.MemoryImportOptions,
-) (*db.MemoryImportResult, error) {
+func (b *httpBackend) ImportRecallEntries(
+	ctx context.Context, r io.Reader, opts db.RecallImportOptions,
+) (*db.RecallImportResult, error) {
 	if b.readOnly {
 		// Surface the shared sentinel so callers can errors.Is it,
 		// matching Sync/ScanSecrets instead of posting to a read-only
@@ -706,8 +706,8 @@ func (b *httpBackend) ImportMemories(
 			b.baseURL, db.ErrReadOnly,
 		)
 	}
-	var out db.MemoryImportResult
-	path := "/api/v1/memories/import"
+	var out db.RecallImportResult
+	path := "/api/v1/recall/import"
 	q := url.Values{}
 	if opts.DryRun {
 		q.Set("dry_run", "true")
@@ -729,23 +729,23 @@ func (b *httpBackend) ImportMemories(
 	return &out, nil
 }
 
-func memoryFilterToQuery(f MemoryFilter) url.Values {
+func recallFilterToQuery(f RecallFilter) url.Values {
 	q := url.Values{}
 	for k, v := range map[string]string{
-		"q":                       f.Query,
-		"project":                 f.Project,
-		"cwd":                     f.CWD,
-		"git_branch":              f.GitBranch,
-		"agent":                   f.Agent,
-		"type":                    f.Type,
-		"scope":                   f.Scope,
-		"status":                  f.Status,
-		"extractor_method":        f.ExtractorMethod,
-		"source_session_id":       f.SourceSessionID,
-		"source_episode_id":       f.SourceEpisodeID,
-		"source_run_id":           f.SourceRunID,
-		"supersedes_memory_id":    f.SupersedesMemoryID,
-		"superseded_by_memory_id": f.SupersededByMemoryID,
+		"q":                      f.Query,
+		"project":                f.Project,
+		"cwd":                    f.CWD,
+		"git_branch":             f.GitBranch,
+		"agent":                  f.Agent,
+		"type":                   f.Type,
+		"scope":                  f.Scope,
+		"status":                 f.Status,
+		"extractor_method":       f.ExtractorMethod,
+		"source_session_id":      f.SourceSessionID,
+		"source_episode_id":      f.SourceEpisodeID,
+		"source_run_id":          f.SourceRunID,
+		"supersedes_entry_id":    f.SupersedesEntryID,
+		"superseded_by_entry_id": f.SupersededByEntryID,
 	} {
 		if v != "" {
 			q.Set(k, v)

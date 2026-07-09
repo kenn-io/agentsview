@@ -318,44 +318,44 @@ func (s *mcpDaemonService) UsagePairwiseComparison(
 	return svc.UsagePairwiseComparison(ctx, req)
 }
 
-func (s *mcpDaemonService) ListMemories(
-	ctx context.Context, f service.MemoryFilter,
-) (*service.MemoryList, error) {
+func (s *mcpDaemonService) ListRecallEntries(
+	ctx context.Context, f service.RecallFilter,
+) (*service.RecallList, error) {
 	svc, err := s.daemonService(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return svc.ListMemories(ctx, f)
+	return svc.ListRecallEntries(ctx, f)
 }
 
-func (s *mcpDaemonService) GetMemory(
+func (s *mcpDaemonService) GetRecallEntry(
 	ctx context.Context, id string,
-) (*db.Memory, error) {
+) (*db.RecallEntry, error) {
 	svc, err := s.daemonService(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return svc.GetMemory(ctx, id)
+	return svc.GetRecallEntry(ctx, id)
 }
 
-func (s *mcpDaemonService) QueryMemories(
-	ctx context.Context, req service.MemoryQuery,
-) (*service.MemoryQueryResult, error) {
+func (s *mcpDaemonService) QueryRecallEntries(
+	ctx context.Context, req service.RecallQuery,
+) (*service.RecallQueryResult, error) {
 	svc, err := s.daemonService(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return svc.QueryMemories(ctx, req)
+	return svc.QueryRecallEntries(ctx, req)
 }
 
-func (s *mcpDaemonService) ImportMemories(
-	ctx context.Context, r io.Reader, opts db.MemoryImportOptions,
-) (*db.MemoryImportResult, error) {
+func (s *mcpDaemonService) ImportRecallEntries(
+	ctx context.Context, r io.Reader, opts db.RecallImportOptions,
+) (*db.RecallImportResult, error) {
 	svc, err := s.daemonService(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return svc.ImportMemories(ctx, r, opts)
+	return svc.ImportRecallEntries(ctx, r, opts)
 }
 
 func (s *mcpDaemonService) ListSecrets(

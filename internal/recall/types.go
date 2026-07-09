@@ -1,4 +1,4 @@
-package memory
+package recall
 
 const (
 	TypeFact            = "fact"
@@ -25,28 +25,28 @@ const (
 	StatusArchived = "archived"
 )
 
-type Memory struct {
-	ID                   string
-	Type                 string
-	Scope                string
-	Status               string
-	Title                string
-	Body                 string
-	Trigger              string
-	Confidence           *float64
-	Uncertainty          string
-	Project              string
-	CWD                  string
-	GitBranch            string
-	Agent                string
-	SourceSessionID      string
-	SourceEpisodeID      string
-	SourceRunID          string
-	SupersedesMemoryID   string
-	SupersededByMemoryID string
-	CreatedAt            string
-	UpdatedAt            string
-	Evidence             []Evidence
+type Entry struct {
+	ID                  string
+	Type                string
+	Scope               string
+	Status              string
+	Title               string
+	Body                string
+	Trigger             string
+	Confidence          *float64
+	Uncertainty         string
+	Project             string
+	CWD                 string
+	GitBranch           string
+	Agent               string
+	SourceSessionID     string
+	SourceEpisodeID     string
+	SourceRunID         string
+	SupersedesEntryID   string
+	SupersededByEntryID string
+	CreatedAt           string
+	UpdatedAt           string
+	Evidence            []Evidence
 }
 
 type Evidence struct {
@@ -63,14 +63,14 @@ type Query struct {
 	CWD       string
 	GitBranch string
 	Agent     string
-	// Status restricts eligible memories to a single status. Empty means
+	// Status restricts eligible entries to a single status. Empty means
 	// the default accepted-only recall.
 	Status string
 	Limit  int
 }
 
 type Result struct {
-	Memory       Memory
+	Entry        Entry
 	Score        float64
 	Breakdown    ScoreBreakdown
 	MatchedTerms []string
@@ -98,7 +98,7 @@ type ContextOptions struct {
 
 type ContextBlock struct {
 	Text                              string
-	MemoryCount                       int
+	EntryCount                        int
 	Truncated                         bool
 	IncludedIDs                       []string
 	SourceSessionIDs                  []string

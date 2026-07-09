@@ -1,4 +1,4 @@
-package memory
+package recall
 
 import (
 	"math"
@@ -143,16 +143,16 @@ var smallNumberTokens = map[string]int{
 	"10":    10,
 }
 
-func Rank(memories []Memory, q Query) []Result {
+func Rank(entries []Entry, q Query) []Result {
 	limit := q.Limit
 	if limit <= 0 {
-		limit = len(memories)
+		limit = len(entries)
 	}
 
 	lexicalQueryText := LexicalQueryText(q.Text)
 	rawQueryTokens := tokenize(lexicalQueryText)
 	queryTokens := scoringQueryTokens(rawQueryTokens)
-	candidates := eligibleMemories(memories, q)
+	candidates := eligibleEntries(entries, q)
 	idf := queryIDF(candidates, queryTokens)
 	temporalBoosts := temporalBoosts(
 		candidates,
@@ -162,14 +162,14 @@ func Rank(memories []Memory, q Query) []Result {
 
 	var results []Result
 	for _, m := range candidates {
-		breakdown, matchedTerms := scoreMemory(
+		breakdown, matchedTerms := scoreEntry(
 			m, lexicalQueryText, queryTokens, idf, temporalBoosts[m.ID],
 		)
 		if breakdown.Total <= 0 {
 			continue
 		}
 		results = append(results, Result{
-			Memory:       m,
+			Entry:        m,
 			Score:        breakdown.Total,
 			Breakdown:    breakdown,
 			MatchedTerms: matchedTerms,
@@ -180,7 +180,7 @@ func Rank(memories []Memory, q Query) []Result {
 		if results[i].Score != results[j].Score {
 			return results[i].Score > results[j].Score
 		}
-		return results[i].Memory.ID < results[j].Memory.ID
+		return results[i].Entry.ID < results[j].Entry.ID
 	})
 	if len(results) > limit {
 		results = results[:limit]
@@ -225,15 +225,15 @@ func stripPromptInjectionBait(text string) string {
 	return text
 }
 
-func eligibleMemories(memories []Memory, q Query) []Memory {
+func eligibleEntries(entries []Entry, q Query) []Entry {
 	// Default to accepted-only recall, but honor an explicitly requested
 	// status (e.g. archived) so status-filtered queries return matches.
 	wantStatus := q.Status
 	if wantStatus == "" {
 		wantStatus = StatusAccepted
 	}
-	candidates := make([]Memory, 0, len(memories))
-	for _, m := range memories {
+	candidates := make([]Entry, 0, len(entries))
+	for _, m := range entries {
 		status := m.Status
 		if status == "" {
 			status = StatusAccepted
@@ -249,21 +249,21 @@ func eligibleMemories(memories []Memory, q Query) []Memory {
 	return candidates
 }
 
-func queryIDF(memories []Memory, queryTokens map[string]struct{}) map[string]float64 {
-	if len(queryTokens) == 0 || len(memories) == 0 {
+func queryIDF(entries []Entry, queryTokens map[string]struct{}) map[string]float64 {
+	if len(queryTokens) == 0 || len(entries) == 0 {
 		return nil
 	}
 	docFreq := make(map[string]int, len(queryTokens))
-	for _, m := range memories {
-		memoryTokens := allMemoryTokens(m)
+	for _, m := range entries {
+		recallTokens := allEntryTokens(m)
 		for token := range queryTokens {
-			if _, ok := memoryTokens[token]; ok {
+			if _, ok := recallTokens[token]; ok {
 				docFreq[token]++
 			}
 		}
 	}
 	idf := make(map[string]float64, len(queryTokens))
-	totalDocs := float64(len(memories))
+	totalDocs := float64(len(entries))
 	for token := range queryTokens {
 		df := float64(docFreq[token])
 		idf[token] = math.Log(1+(totalDocs-df+0.5)/(df+0.5)) + 1
@@ -312,7 +312,7 @@ var lexicalRankStopwords = map[string]bool{
 	"where":     true,
 }
 
-func matchesContext(m Memory, q Query) bool {
+func matchesContext(m Entry, q Query) bool {
 	if q.Project != "" && m.Project != q.Project {
 		return false
 	}
@@ -328,8 +328,8 @@ func matchesContext(m Memory, q Query) bool {
 	return true
 }
 
-func scoreMemory(
-	m Memory,
+func scoreEntry(
+	m Entry,
 	queryText string,
 	queryTokens map[string]struct{},
 	idf map[string]float64,
@@ -351,8 +351,8 @@ func scoreMemory(
 			Total:           total,
 		}, nil
 	}
-	directTokens := directMemoryTokens(m)
-	evidenceTokens := evidenceMemoryTokens(m)
+	directTokens := directEntryTokens(m)
+	evidenceTokens := evidenceEntryTokens(m)
 	var overlap, evidenceOverlap, scoredEvidenceOverlap int
 	var idfScore, evidenceIDFScore, identifierBoost float64
 	var matchedTerms []string
@@ -405,21 +405,21 @@ func scoreMemory(
 	}, matchedTerms
 }
 
-func allMemoryTokens(m Memory) map[string]struct{} {
-	tokens := directMemoryTokens(m)
-	for token := range evidenceMemoryTokens(m) {
+func allEntryTokens(m Entry) map[string]struct{} {
+	tokens := directEntryTokens(m)
+	for token := range evidenceEntryTokens(m) {
 		tokens[token] = struct{}{}
 	}
 	return tokens
 }
 
-func directMemoryTokens(m Memory) map[string]struct{} {
+func directEntryTokens(m Entry) map[string]struct{} {
 	return tokenize(strings.Join(
 		[]string{m.Title, m.Body, m.Trigger}, " ",
 	))
 }
 
-func evidenceMemoryTokens(m Memory) map[string]struct{} {
+func evidenceEntryTokens(m Entry) map[string]struct{} {
 	parts := make([]string, 0, len(m.Evidence))
 	for _, evidence := range m.Evidence {
 		parts = append(parts, evidence.Snippet)
@@ -446,7 +446,7 @@ func isIdentifierToken(token string) bool {
 	return hasLetter && hasDigit
 }
 
-func confidenceBonus(m Memory) float64 {
+func confidenceBonus(m Entry) float64 {
 	if m.Confidence == nil {
 		return 0
 	}
@@ -459,16 +459,16 @@ func confidenceBonus(m Memory) float64 {
 	return *m.Confidence * 0.1
 }
 
-// rankEntity is a structured value extracted from a memory that can boost its
+// rankEntity is a structured value extracted from an entry that can boost its
 // score when present in the query. Filenames and paths set exact, so they are
-// matched with their punctuation preserved ("memories.go" must appear with its
-// dot) rather than tokenized, which would let "memories go" match memories.go.
+// matched with their punctuation preserved ("recall_entries.go" must appear with its
+// dot) rather than tokenized, which would let "entries go" match recall_entries.go.
 type rankEntity struct {
 	value string
 	exact bool
 }
 
-func structuredEntityBoost(m Memory, queryText string) float64 {
+func structuredEntityBoost(m Entry, queryText string) float64 {
 	normalizedQuery := normalizeEntityText(queryText)
 	if normalizedQuery == "" {
 		return 0
@@ -533,18 +533,18 @@ func isWordByte(b byte) bool {
 		(b >= '0' && b <= '9')
 }
 
-func exactPhraseBoost(m Memory, queryText string) float64 {
+func exactPhraseBoost(m Entry, queryText string) float64 {
 	phrases := queryPhrases(queryText)
 	if len(phrases) == 0 {
 		return 0
 	}
-	memoryText := normalizeEntityText(strings.Join(memoryTextParts(m), " "))
-	if memoryText == "" {
+	recallText := normalizeEntityText(strings.Join(recallTextParts(m), " "))
+	if recallText == "" {
 		return 0
 	}
 	var boost float64
 	for _, phrase := range phrases {
-		if containsNormalizedPhrase(memoryText, phrase.text) {
+		if containsNormalizedPhrase(recallText, phrase.text) {
 			boost += 0.75 * float64(phrase.length)
 		}
 	}
@@ -606,7 +606,7 @@ var rankPhraseStopwords = map[string]bool{
 	"with":     true,
 }
 
-func structuredEntityValues(m Memory) []rankEntity {
+func structuredEntityValues(m Entry) []rankEntity {
 	entities := []rankEntity{
 		{value: m.Project}, {value: m.CWD},
 		{value: m.GitBranch}, {value: m.Agent},
@@ -621,12 +621,12 @@ func structuredEntityValues(m Memory) []rankEntity {
 	return entities
 }
 
-func technicalPhraseEntities(m Memory) []rankEntity {
-	text := strings.Join(memoryTextParts(m), " ")
+func technicalPhraseEntities(m Entry) []rankEntity {
+	text := strings.Join(recallTextParts(m), " ")
 	var entities []rankEntity
 	// Filenames and paths match with punctuation preserved, and their
-	// basename is added so a filename-only query (memories.go) matches a
-	// full-path entity (internal/db/memories.go).
+	// basename is added so a filename-only query (recall_entries.go) matches a
+	// full-path entity (internal/db/recall_entries.go).
 	addPathLike := func(value string) {
 		entities = append(entities, rankEntity{value: value, exact: true})
 		if base := pathBase(value); base != "" && base != value {
@@ -652,7 +652,7 @@ func technicalPhraseEntities(m Memory) []rankEntity {
 	return entities
 }
 
-func memoryTextParts(m Memory) []string {
+func recallTextParts(m Entry) []string {
 	parts := []string{m.Title, m.Body, m.Trigger}
 	for _, evidence := range m.Evidence {
 		parts = append(parts, evidence.Snippet)
@@ -721,25 +721,25 @@ func normalizeEntityText(value string) string {
 }
 
 func temporalBoosts(
-	memories []Memory,
+	entries []Entry,
 	queryTokens map[string]struct{},
 	orderedTokens []string,
 ) map[string]float64 {
 	windows := queryCalendarWindows(orderedTokens)
 	if len(windows) > 0 {
-		return calendarWindowBoosts(memories, windows)
+		return calendarWindowBoosts(entries, windows)
 	}
-	windows = queryRelativeWindows(memories, queryTokens, orderedTokens)
+	windows = queryRelativeWindows(entries, queryTokens, orderedTokens)
 	if len(windows) > 0 {
-		return calendarWindowBoosts(memories, windows)
+		return calendarWindowBoosts(entries, windows)
 	}
 	if !queryWantsRecent(queryTokens) {
 		return nil
 	}
-	timestamps := make(map[string]time.Time, len(memories))
+	timestamps := make(map[string]time.Time, len(entries))
 	var minTime, maxTime time.Time
-	for _, m := range memories {
-		ts, ok := effectiveMemoryTime(m)
+	for _, m := range entries {
+		ts, ok := effectiveRecallTime(m)
 		if !ok {
 			continue
 		}
@@ -809,11 +809,11 @@ func monthYearPair(a, b string) (time.Month, int, bool) {
 }
 
 func queryRelativeWindows(
-	memories []Memory,
+	entries []Entry,
 	queryTokens map[string]struct{},
 	orderedTokens []string,
 ) []timeWindow {
-	reference, ok := newestMemoryTime(memories)
+	reference, ok := newestRecallTime(entries)
 	if !ok {
 		return nil
 	}
@@ -933,10 +933,10 @@ func orderedQueryTokens(text string) []string {
 	return tokenPattern.FindAllString(strings.ToLower(text), -1)
 }
 
-func newestMemoryTime(memories []Memory) (time.Time, bool) {
+func newestRecallTime(entries []Entry) (time.Time, bool) {
 	var newest time.Time
-	for _, m := range memories {
-		ts, ok := effectiveMemoryTime(m)
+	for _, m := range entries {
+		ts, ok := effectiveRecallTime(m)
 		if !ok {
 			continue
 		}
@@ -961,10 +961,10 @@ func parseYearToken(token string) (int, bool) {
 	return year, true
 }
 
-func calendarWindowBoosts(memories []Memory, windows []timeWindow) map[string]float64 {
+func calendarWindowBoosts(entries []Entry, windows []timeWindow) map[string]float64 {
 	boosts := make(map[string]float64)
-	for _, m := range memories {
-		ts, ok := effectiveMemoryTime(m)
+	for _, m := range entries {
+		ts, ok := effectiveRecallTime(m)
 		if !ok {
 			continue
 		}
@@ -1010,14 +1010,14 @@ func hasAnyQueryToken(queryTokens map[string]struct{}, tokens ...string) bool {
 	return false
 }
 
-func effectiveMemoryTime(m Memory) (time.Time, bool) {
-	if ts, ok := parseMemoryTime(m.UpdatedAt); ok {
+func effectiveRecallTime(m Entry) (time.Time, bool) {
+	if ts, ok := parseRecallTime(m.UpdatedAt); ok {
 		return ts, true
 	}
-	return parseMemoryTime(m.CreatedAt)
+	return parseRecallTime(m.CreatedAt)
 }
 
-func parseMemoryTime(value string) (time.Time, bool) {
+func parseRecallTime(value string) (time.Time, bool) {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return time.Time{}, false

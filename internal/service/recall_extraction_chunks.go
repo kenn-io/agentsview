@@ -7,53 +7,53 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-const defaultMemoryExtractionChunkMaxChars = 12000
+const defaultRecallExtractionChunkMaxChars = 12000
 
-type MemoryExtractionChunkOptions struct {
+type RecallExtractionChunkOptions struct {
 	MaxChars int
 }
 
-type MemoryExtractionChunk struct {
+type RecallExtractionChunk struct {
 	SessionID    string                         `json:"session_id"`
 	Index        int                            `json:"index"`
 	StartOrdinal int                            `json:"start_ordinal"`
 	EndOrdinal   int                            `json:"end_ordinal"`
 	CharCount    int                            `json:"char_count"`
-	Messages     []MemoryExtractionChunkMessage `json:"messages"`
+	Messages     []RecallExtractionChunkMessage `json:"messages"`
 	Text         string                         `json:"text"`
 }
 
-type MemoryExtractionChunkMessage struct {
+type RecallExtractionChunkMessage struct {
 	Ordinal int    `json:"ordinal"`
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
 
-func BuildMemoryExtractionChunks(
+func BuildRecallExtractionChunks(
 	sessionID string,
 	messages []db.Message,
-	opts MemoryExtractionChunkOptions,
-) []MemoryExtractionChunk {
+	opts RecallExtractionChunkOptions,
+) []RecallExtractionChunk {
 	maxChars := opts.MaxChars
 	if maxChars <= 0 {
-		maxChars = defaultMemoryExtractionChunkMaxChars
+		maxChars = defaultRecallExtractionChunkMaxChars
 	}
 
-	var chunks []MemoryExtractionChunk
-	var current []MemoryExtractionChunkMessage
+	var chunks []RecallExtractionChunk
+	var current []RecallExtractionChunkMessage
 	currentLen := 0
 	for _, msg := range messages {
-		chunkMsg, ok := memoryExtractionChunkMessage(msg)
+		chunkMsg, ok := recallExtractionChunkMessage(msg)
 		if !ok {
 			continue
 		}
-		rendered := renderMemoryExtractionChunkMessage(chunkMsg)
+		rendered := renderRecallExtractionChunkMessage(chunkMsg)
 		addedLen := len(rendered)
 		if len(current) > 0 {
 			addedLen++
 		}
 		if len(current) > 0 && currentLen+addedLen > maxChars {
-			chunks = append(chunks, newMemoryExtractionChunk(sessionID, len(chunks), current))
+			chunks = append(chunks, newRecallExtractionChunk(sessionID, len(chunks), current))
 			current = nil
 			currentLen = 0
 			addedLen = len(rendered)
@@ -62,35 +62,35 @@ func BuildMemoryExtractionChunks(
 		currentLen += addedLen
 	}
 	if len(current) > 0 {
-		chunks = append(chunks, newMemoryExtractionChunk(sessionID, len(chunks), current))
+		chunks = append(chunks, newRecallExtractionChunk(sessionID, len(chunks), current))
 	}
 	return chunks
 }
 
-func memoryExtractionChunkMessage(msg db.Message) (MemoryExtractionChunkMessage, bool) {
+func recallExtractionChunkMessage(msg db.Message) (RecallExtractionChunkMessage, bool) {
 	role := strings.TrimSpace(msg.Role)
 	if msg.IsSystem || (role != "user" && role != "assistant") {
-		return MemoryExtractionChunkMessage{}, false
+		return RecallExtractionChunkMessage{}, false
 	}
 	content := strings.TrimSpace(msg.Content)
 	if content == "" {
-		return MemoryExtractionChunkMessage{}, false
+		return RecallExtractionChunkMessage{}, false
 	}
-	return MemoryExtractionChunkMessage{
+	return RecallExtractionChunkMessage{
 		Ordinal: msg.Ordinal,
 		Role:    role,
 		Content: content,
 	}, true
 }
 
-func newMemoryExtractionChunk(
+func newRecallExtractionChunk(
 	sessionID string,
 	index int,
-	messages []MemoryExtractionChunkMessage,
-) MemoryExtractionChunk {
-	copied := append([]MemoryExtractionChunkMessage(nil), messages...)
-	text := renderMemoryExtractionChunkMessages(copied)
-	return MemoryExtractionChunk{
+	messages []RecallExtractionChunkMessage,
+) RecallExtractionChunk {
+	copied := append([]RecallExtractionChunkMessage(nil), messages...)
+	text := renderRecallExtractionChunkMessages(copied)
+	return RecallExtractionChunk{
 		SessionID:    sessionID,
 		Index:        index,
 		StartOrdinal: copied[0].Ordinal,
@@ -101,14 +101,14 @@ func newMemoryExtractionChunk(
 	}
 }
 
-func renderMemoryExtractionChunkMessages(messages []MemoryExtractionChunkMessage) string {
+func renderRecallExtractionChunkMessages(messages []RecallExtractionChunkMessage) string {
 	parts := make([]string, 0, len(messages))
 	for _, msg := range messages {
-		parts = append(parts, renderMemoryExtractionChunkMessage(msg))
+		parts = append(parts, renderRecallExtractionChunkMessage(msg))
 	}
 	return strings.Join(parts, "\n")
 }
 
-func renderMemoryExtractionChunkMessage(msg MemoryExtractionChunkMessage) string {
+func renderRecallExtractionChunkMessage(msg RecallExtractionChunkMessage) string {
 	return fmt.Sprintf("[%d %s] %s", msg.Ordinal, msg.Role, msg.Content)
 }

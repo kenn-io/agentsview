@@ -1,0 +1,800 @@
+package server_test
+
+import (
+	"database/sql"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/service"
+)
+
+type listRecallEntriesResponse struct {
+	RecallEntries []db.RecallResult `json:"entries"`
+	TrustedOnly   bool              `json:"trusted_only"`
+}
+
+type queryRecallEntriesResponse struct {
+	RecallEntries  []db.RecallResult           `json:"entries"`
+	TrustedOnly    bool                        `json:"trusted_only"`
+	Summary        *service.RecallQuerySummary `json:"summary,omitempty"`
+	Context        string                      `json:"context,omitempty"`
+	ContextMeta    *service.RecallContextMeta  `json:"context_meta,omitempty"`
+	ContextEntries []db.RecallResult           `json:"context_entries,omitempty"`
+}
+
+func TestListRecallEntriesFiltersByProject(t *testing.T) {
+	te := setup(t)
+	seedRecallEntrySession(t, te)
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "m1",
+		Title:           "Check cwd before file reads",
+		Body:            "Verify cwd before retrying failed reads.",
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "recall-session",
+	})
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "m2",
+		Title:           "Other project note",
+		Body:            "Unrelated note.",
+		Project:         "other",
+		Agent:           "codex",
+		SourceSessionID: "other-session",
+	})
+
+	w := te.get(t, "/api/v1/recall/entries?q=cwd&project=agentsview&agent=codex")
+	assertStatus(t, w, http.StatusOK)
+
+	r := decode[listRecallEntriesResponse](t, w)
+	require.Len(t, r.RecallEntries, 1)
+	assert.Equal(t, "m1", r.RecallEntries[0].ID)
+}
+
+func TestListRecallEntriesFiltersBySourceSessionID(t *testing.T) {
+	te := setup(t)
+	seedRecallEntrySession(t, te)
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "m-session",
+		Title:           "Session scoped cwd recall",
+		Body:            "Verify cwd before retrying failed reads.",
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "recall-session",
+	})
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "m-other-session",
+		Title:           "Other session cwd recall",
+		Body:            "Verify cwd before retrying failed reads.",
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "other-session",
+	})
+
+	w := te.get(t, "/api/v1/recall/entries?q=cwd&source_session_id=recall-session")
+	assertStatus(t, w, http.StatusOK)
+
+	r := decode[listRecallEntriesResponse](t, w)
+	require.Len(t, r.RecallEntries, 1)
+	assert.Equal(t, "m-session", r.RecallEntries[0].ID)
+}
+
+func TestListRecallEntriesFiltersBySourceEpisodeID(t *testing.T) {
+	te := setup(t)
+	seedRecallEntrySession(t, te)
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "m-episode",
+		Title:           "Episode scoped cwd recall",
+		Body:            "Verify cwd before retrying failed reads.",
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "recall-session",
+		SourceEpisodeID: "recall-session:chunk:0001",
+	})
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "m-other-episode",
+		Title:           "Other episode cwd recall",
+		Body:            "Verify cwd before retrying failed reads.",
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "recall-session",
+		SourceEpisodeID: "recall-session:chunk:0002",
+	})
+
+	w := te.get(t, "/api/v1/recall/entries?q=cwd&source_episode_id=recall-session:chunk:0001")
+	assertStatus(t, w, http.StatusOK)
+
+	r := decode[listRecallEntriesResponse](t, w)
+	require.Len(t, r.RecallEntries, 1)
+	assert.Equal(t, "m-episode", r.RecallEntries[0].ID)
+}
+
+func TestListRecallEntriesFiltersTrustedOnly(t *testing.T) {
+	te := setup(t)
+	seedRecallEntrySession(t, te)
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "trusted",
+		Title:           "Trusted cwd recall",
+		Body:            "Recover from wrong cwd before reading files.",
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "recall-session",
+		Transferable:    true,
+		ProvenanceOK:    true,
+	})
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "untrusted",
+		Title:           "Untrusted cwd recall",
+		Body:            "Recover from wrong cwd before reading files.",
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "recall-session",
+		Transferable:    true,
+		ProvenanceOK:    false,
+	})
+
+	w := te.get(t, "/api/v1/recall/entries?q=wrong%20cwd%20files&trusted_only=true")
+	assertStatus(t, w, http.StatusOK)
+
+	r := decode[listRecallEntriesResponse](t, w)
+	require.Len(t, r.RecallEntries, 1)
+	assert.Equal(t, "trusted", r.RecallEntries[0].ID)
+	assert.True(t, r.TrustedOnly)
+}
+
+func TestListRecallEntriesFiltersBySupersessionLinks(t *testing.T) {
+	te := setup(t)
+	seedRecallEntrySession(t, te)
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "old-a",
+		Title:           "Old retry policy A",
+		Body:            "Retry flaky command once.",
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "recall-session",
+	})
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "old-b",
+		Title:           "Old retry policy B",
+		Body:            "Retry flaky command twice.",
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "recall-session",
+	})
+	_, err := te.db.SupersedeRecallEntry(t.Context(), "old-a", db.RecallEntry{
+		ID:              "new-a",
+		Type:            "procedure",
+		Scope:           "project",
+		Title:           "Current retry policy A",
+		Body:            "Retry flaky command three times.",
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "recall-session",
+	})
+	require.NoError(t, err)
+	_, err = te.db.SupersedeRecallEntry(t.Context(), "old-b", db.RecallEntry{
+		ID:              "new-b",
+		Type:            "procedure",
+		Scope:           "project",
+		Title:           "Current retry policy B",
+		Body:            "Retry flaky command four times.",
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "recall-session",
+	})
+	require.NoError(t, err)
+
+	w := te.get(t, "/api/v1/recall/entries?supersedes_entry_id=old-a")
+	assertStatus(t, w, http.StatusOK)
+
+	replacements := decode[listRecallEntriesResponse](t, w)
+	require.Len(t, replacements.RecallEntries, 1)
+	assert.Equal(t, "new-a", replacements.RecallEntries[0].ID)
+
+	w = te.get(t, "/api/v1/recall/entries?status=archived&superseded_by_entry_id=new-a")
+	assertStatus(t, w, http.StatusOK)
+
+	archived := decode[listRecallEntriesResponse](t, w)
+	require.Len(t, archived.RecallEntries, 1)
+	assert.Equal(t, "old-a", archived.RecallEntries[0].ID)
+}
+
+func TestListRecallEntriesWithoutQueryUsesUpdatedOrder(t *testing.T) {
+	te := setup(t)
+	seedRecallEntrySession(t, te)
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "older-source-first",
+		Title:           "Older recall",
+		Body:            "Generic accepted recall.",
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "recall-session",
+		SourceEpisodeID: "a-source",
+	})
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "newer-source-second",
+		Title:           "Newer recall",
+		Body:            "Generic accepted recall.",
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "recall-session",
+		SourceEpisodeID: "z-source",
+	})
+	raw, err := sql.Open("sqlite3", filepath.Join(te.dataDir, "test.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { raw.Close() })
+	_, err = raw.Exec(`
+		UPDATE recall_entries SET updated_at = CASE id
+			WHEN 'older-source-first' THEN '2024-01-01T00:00:00Z'
+			WHEN 'newer-source-second' THEN '2024-02-01T00:00:00Z'
+			ELSE updated_at
+		END
+		WHERE id IN ('older-source-first', 'newer-source-second')`)
+	require.NoError(t, err)
+
+	w := te.get(t, "/api/v1/recall/entries?project=agentsview&agent=codex&limit=2")
+	assertStatus(t, w, http.StatusOK)
+
+	r := decode[listRecallEntriesResponse](t, w)
+	require.Len(t, r.RecallEntries, 2)
+	assert.Equal(t, "newer-source-second", r.RecallEntries[0].ID)
+	assert.Equal(t, "older-source-first", r.RecallEntries[1].ID)
+}
+
+func TestGetRecallEntryFoundAndMissing(t *testing.T) {
+	te := setup(t)
+	seedRecallEntrySession(t, te)
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "m1",
+		Title:           "Check cwd before file reads",
+		Body:            "Verify cwd before retrying failed reads.",
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "recall-session",
+		Evidence: []db.RecallEvidence{
+			{
+				SessionID:           "recall-session",
+				MessageStartOrdinal: 3,
+				MessageEndOrdinal:   7,
+				ToolUseID:           "toolu_1",
+			},
+		},
+	})
+
+	w := te.get(t, "/api/v1/recall/entries/m1")
+	assertStatus(t, w, http.StatusOK)
+
+	got := decode[db.RecallEntry](t, w)
+	assert.Equal(t, "m1", got.ID)
+	require.Len(t, got.Evidence, 1)
+	assert.Equal(t, "toolu_1", got.Evidence[0].ToolUseID)
+
+	w = te.get(t, "/api/v1/recall/entries/missing")
+	assertStatus(t, w, http.StatusNotFound)
+}
+
+func TestQueryRecallEntriesReturnsContext(t *testing.T) {
+	te := setup(t)
+	seedRecallEntrySession(t, te)
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "m1",
+		Title:           "Check cwd before file reads",
+		Body:            "Verify cwd before retrying failed reads.",
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "recall-session",
+		Evidence: []db.RecallEvidence{
+			{
+				SessionID:           "recall-session",
+				MessageStartOrdinal: 3,
+				MessageEndOrdinal:   7,
+				ToolUseID:           "toolu_1",
+			},
+		},
+	})
+
+	w := te.post(t, "/api/v1/recall/query", `{
+		"query": "cwd failed reads",
+		"project": "agentsview",
+		"agent": "codex",
+		"limit": 5,
+		"include_context": true,
+		"context_max_bytes": 300
+	}`)
+	assertStatus(t, w, http.StatusOK)
+
+	r := decode[queryRecallEntriesResponse](t, w)
+	require.Len(t, r.RecallEntries, 1)
+	assert.Equal(t, "m1", r.RecallEntries[0].ID)
+	require.NotNil(t, r.Summary)
+	assert.Equal(t, 1, r.Summary.Count)
+	assert.Equal(t, 1, r.Summary.ByType["procedure"])
+	assert.Equal(t, 1, r.Summary.ByScope["project"])
+	assert.Equal(t, 1, r.Summary.ByMatchReason["keyword"])
+	assert.Equal(t, 1, r.Summary.BySourceSession["recall-session"])
+	assert.Contains(t, r.Context, "Check cwd before file reads")
+	assert.Contains(t, r.Context, "recall-session:3-7")
+	require.NotNil(t, r.ContextMeta)
+	assert.Equal(t, 1, r.ContextMeta.EntryCount)
+	assert.Equal(t, []string{"m1"}, r.ContextMeta.IncludedIDs)
+}
+
+func TestQueryRecallEntriesFiltersBySourceSessionID(t *testing.T) {
+	te := setup(t)
+	seedRecallEntrySession(t, te)
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "m-session",
+		Title:           "Session scoped cwd recall",
+		Body:            "Verify cwd before retrying failed reads.",
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "recall-session",
+	})
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "m-other-session",
+		Title:           "Other session cwd recall",
+		Body:            "Verify cwd before retrying failed reads.",
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "other-session",
+	})
+
+	w := te.post(t, "/api/v1/recall/query", `{
+		"query": "cwd failed reads",
+		"source_session_id": "recall-session",
+		"limit": 5
+	}`)
+	assertStatus(t, w, http.StatusOK)
+
+	r := decode[queryRecallEntriesResponse](t, w)
+	require.Len(t, r.RecallEntries, 1)
+	assert.Equal(t, "m-session", r.RecallEntries[0].ID)
+}
+
+func TestQueryRecallEntriesFiltersBySourceEpisodeID(t *testing.T) {
+	te := setup(t)
+	seedRecallEntrySession(t, te)
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "m-episode",
+		Title:           "Episode scoped cwd recall",
+		Body:            "Verify cwd before retrying failed reads.",
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "recall-session",
+		SourceEpisodeID: "recall-session:chunk:0001",
+	})
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "m-other-episode",
+		Title:           "Other episode cwd recall",
+		Body:            "Verify cwd before retrying failed reads.",
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "recall-session",
+		SourceEpisodeID: "recall-session:chunk:0002",
+	})
+
+	w := te.post(t, "/api/v1/recall/query", `{
+		"query": "cwd failed reads",
+		"source_episode_id": "recall-session:chunk:0001",
+		"limit": 5
+	}`)
+	assertStatus(t, w, http.StatusOK)
+
+	r := decode[queryRecallEntriesResponse](t, w)
+	require.Len(t, r.RecallEntries, 1)
+	assert.Equal(t, "m-episode", r.RecallEntries[0].ID)
+}
+
+func TestQueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
+	te := setup(t)
+	seedRecallEntrySession(t, te)
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "trusted",
+		Title:           "Trusted cwd recall",
+		Body:            "Recover from wrong cwd before reading files.",
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "recall-session",
+		Transferable:    true,
+		ProvenanceOK:    true,
+	})
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "untrusted",
+		Title:           "Untrusted cwd recall",
+		Body:            "Recover from wrong cwd before reading files.",
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "recall-session",
+		Transferable:    false,
+		ProvenanceOK:    true,
+	})
+
+	w := te.post(t, "/api/v1/recall/query", `{
+		"query":"wrong cwd files",
+		"trusted_only":true,
+		"limit":5
+	}`)
+	assertStatus(t, w, http.StatusOK)
+
+	r := decode[queryRecallEntriesResponse](t, w)
+	require.Len(t, r.RecallEntries, 1)
+	assert.Equal(t, "trusted", r.RecallEntries[0].ID)
+	assert.True(t, r.TrustedOnly)
+}
+
+func TestQueryRecallEntriesPacksMultipleFocusedContextEntries(t *testing.T) {
+	te := setup(t)
+	seedRecallEntrySession(t, te)
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:    "m1",
+		Title: "Incident filters labels overview",
+		Body: "Incident filters labels summary. " +
+			strings.Repeat("long unrelated filler ", 80),
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "recall-session",
+	})
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "m2",
+		Title:           "Incident label details",
+		Body:            "Incident Mobile and Incident Portal are the useful labels.",
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "recall-session",
+	})
+
+	w := te.post(t, "/api/v1/recall/query", `{
+		"query": "Incident filters labels",
+		"project": "agentsview",
+		"agent": "codex",
+		"limit": 2,
+		"include_context": true,
+		"context_max_bytes": 900
+	}`)
+	assertStatus(t, w, http.StatusOK)
+
+	r := decode[queryRecallEntriesResponse](t, w)
+	require.NotNil(t, r.ContextMeta)
+	assert.Equal(t, 2, r.ContextMeta.EntryCount)
+	assert.Equal(t, []string{"m1", "m2"}, r.ContextMeta.IncludedIDs)
+	assert.Contains(t, r.Context, "Incident Mobile")
+	assert.LessOrEqual(t, len([]byte(r.Context)), 900)
+}
+
+func TestQueryRecallEntriesReturnsOnlyPackedContextEntries(t *testing.T) {
+	te := setup(t)
+	seedRecallEntrySession(t, te)
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "packed",
+		Title:           "Needle packed cwd recall",
+		Body:            "Short needle cwd note.",
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "recall-session",
+	})
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "omitted",
+		Title:           "Omitted cwd recall",
+		Body:            strings.Repeat("Long cwd detail ", 120),
+		Project:         "agentsview",
+		Agent:           "codex",
+		SourceSessionID: "recall-session",
+	})
+
+	w := te.post(t, "/api/v1/recall/query", `{
+		"query": "needle cwd recall",
+		"project": "agentsview",
+		"agent": "codex",
+		"limit": 2,
+		"include_context": true,
+		"context_max_bytes": 340
+	}`)
+	assertStatus(t, w, http.StatusOK)
+
+	r := decode[queryRecallEntriesResponse](t, w)
+	require.Len(t, r.RecallEntries, 2)
+	require.NotNil(t, r.ContextMeta)
+	assert.Equal(t, []string{"packed"}, r.ContextMeta.IncludedIDs)
+	require.Len(t, r.ContextEntries, 1)
+	assert.Equal(t, "packed", r.ContextEntries[0].ID)
+}
+
+func TestQueryRecallEntriesRejectsNegativeContextMaxBytes(t *testing.T) {
+	te := setup(t)
+
+	w := te.post(t, "/api/v1/recall/query", `{
+		"query": "cwd",
+		"include_context": true,
+		"context_max_bytes": -1
+	}`)
+
+	assertStatus(t, w, http.StatusBadRequest)
+	assertBodyContains(t, w, "context_max_bytes")
+}
+
+func TestQueryRecallEntriesRejectsNegativeLimit(t *testing.T) {
+	te := setup(t)
+
+	w := te.post(t, "/api/v1/recall/query", `{
+		"query": "cwd",
+		"limit": -1
+	}`)
+
+	assertStatus(t, w, http.StatusBadRequest)
+	assertBodyContains(t, w, "limit must be non-negative")
+}
+
+func TestListRecallEntriesInvalidLimit(t *testing.T) {
+	te := setup(t)
+
+	w := te.get(t, "/api/v1/recall/entries?limit=bad")
+
+	assertStatus(t, w, http.StatusBadRequest)
+	assertBodyContains(t, w, "invalid limit")
+}
+
+func TestListRecallEntriesRejectsNegativeLimit(t *testing.T) {
+	te := setup(t)
+
+	w := te.get(t, "/api/v1/recall/entries?limit=-1")
+
+	assertStatus(t, w, http.StatusBadRequest)
+	assertBodyContains(t, w, "limit must be non-negative")
+}
+
+func TestListRecallEntriesRejectsInvalidTrustedOnly(t *testing.T) {
+	te := setup(t)
+
+	w := te.get(t, "/api/v1/recall/entries?trusted_only=yes")
+
+	assertStatus(t, w, http.StatusBadRequest)
+	assertBodyContains(t, w, "invalid trusted_only parameter")
+}
+
+func TestImportRecallEntriesJSONL(t *testing.T) {
+	te := setup(t)
+	seedRecallEntrySession(t, te)
+	seedRecallImportEvidence(t, te)
+
+	w := te.post(t, "/api/v1/recall/import", `
+{"candidate_id":"m1","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"recall-session","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7,"tool_use_ids":["toolu_1"]}}
+`)
+	assertStatus(t, w, http.StatusOK)
+
+	got := decode[db.RecallImportResult](t, w)
+	assert.Equal(t, 1, got.Imported)
+
+	w = te.get(t, "/api/v1/recall/entries/m1")
+	assertStatus(t, w, http.StatusOK)
+	recall := decode[db.RecallEntry](t, w)
+	assert.Equal(t, "Check cwd before file reads", recall.Title)
+}
+
+func TestImportRecallEntriesRefusesDefaultDataDirWithoutOverride(t *testing.T) {
+	home := t.TempDir()
+	defaultDataDir := filepath.Join(home, ".agentsview")
+	te := setup(t, func(c *config.Config) {
+		c.DataDir = defaultDataDir
+		c.DBPath = filepath.Join(defaultDataDir, "test.db")
+	})
+	seedRecallEntrySession(t, te)
+	seedRecallImportEvidence(t, te)
+
+	w := te.post(t, "/api/v1/recall/import", `
+{"candidate_id":"m-default-import","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"recall-session","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7,"tool_use_ids":["toolu_1"]}}
+`)
+
+	assertStatus(t, w, http.StatusForbidden)
+	assertBodyContains(t, w, "default agentsview data directory")
+	assertBodyContains(t, w, "allow_production_import")
+
+	w = te.get(t, "/api/v1/recall/entries/m-default-import")
+	assertStatus(t, w, http.StatusNotFound)
+}
+
+func TestImportRecallEntriesDryRunRefusesDefaultDataDirWithoutOverride(t *testing.T) {
+	home := t.TempDir()
+	defaultDataDir := filepath.Join(home, ".agentsview")
+	te := setup(t, func(c *config.Config) {
+		c.DataDir = defaultDataDir
+		c.DBPath = filepath.Join(defaultDataDir, "test.db")
+	})
+	seedRecallEntrySession(t, te)
+	seedRecallImportEvidence(t, te)
+
+	w := te.post(t, "/api/v1/recall/import?dry_run=true", `
+{"candidate_id":"m-default-import","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"recall-session","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7,"tool_use_ids":["toolu_1"]}}
+`)
+
+	assertStatus(t, w, http.StatusForbidden)
+	assertBodyContains(t, w, "default agentsview data directory")
+	assertBodyContains(t, w, "allow_production_import")
+}
+
+func TestImportRecallEntriesRefusesSymlinkedDefaultDataDirWithoutOverride(t *testing.T) {
+	home := t.TempDir()
+	defaultDataDir := filepath.Join(home, ".agentsview")
+	require.NoError(t, os.MkdirAll(defaultDataDir, 0o700))
+	link := filepath.Join(t.TempDir(), "recall-lab-data")
+	require.NoError(t, os.Symlink(defaultDataDir, link))
+	te := setup(t, func(c *config.Config) {
+		c.DataDir = link
+		c.DBPath = filepath.Join(link, "test.db")
+	})
+	seedRecallEntrySession(t, te)
+	seedRecallImportEvidence(t, te)
+
+	w := te.post(t, "/api/v1/recall/import", `
+{"candidate_id":"m-symlink-import","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"recall-session","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7,"tool_use_ids":["toolu_1"]}}
+`)
+
+	assertStatus(t, w, http.StatusForbidden)
+	assertBodyContains(t, w, "default agentsview data directory")
+	assertBodyContains(t, w, "allow_production_import")
+}
+
+func TestImportRecallEntriesRefusesDefaultDBPathWithoutOverride(t *testing.T) {
+	home := t.TempDir()
+	defaultDB := filepath.Join(home, ".agentsview", "sessions.db")
+	// DataDir is an ordinary lab directory, but DBPath points into the
+	// production ~/.agentsview archive. The server must consult the DB path,
+	// not just DataDir, and still refuse.
+	labDataDir := filepath.Join(t.TempDir(), "recall-lab-data")
+	te := setup(t, func(c *config.Config) {
+		c.DataDir = labDataDir
+		c.DBPath = defaultDB
+	})
+	seedRecallEntrySession(t, te)
+	seedRecallImportEvidence(t, te)
+
+	w := te.post(t, "/api/v1/recall/import", `
+{"candidate_id":"m-default-dbpath-import","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"recall-session","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7,"tool_use_ids":["toolu_1"]}}
+`)
+
+	assertStatus(t, w, http.StatusForbidden)
+	assertBodyContains(t, w, "default agentsview data directory")
+	assertBodyContains(t, w, "allow_production_import")
+}
+
+func TestImportRecallEntriesRejectsInvalidDryRunBeforeMutation(t *testing.T) {
+	te := setup(t)
+	seedRecallEntrySession(t, te)
+	seedRecallImportEvidence(t, te)
+
+	w := te.post(t, "/api/v1/recall/import?dry_run=yes", `
+{"candidate_id":"m-invalid-dry-run","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"recall-session","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7,"tool_use_ids":["toolu_1"]}}
+`)
+
+	assertStatus(t, w, http.StatusBadRequest)
+	assertBodyContains(t, w, "invalid dry_run parameter")
+
+	got := te.get(t, "/api/v1/recall/entries/m-invalid-dry-run")
+	assertStatus(t, got, http.StatusNotFound)
+}
+
+func TestImportRecallEntriesAllowsDefaultDataDirWithOverride(t *testing.T) {
+	home := t.TempDir()
+	defaultDataDir := filepath.Join(home, ".agentsview")
+	te := setup(t, func(c *config.Config) {
+		c.DataDir = defaultDataDir
+		c.DBPath = filepath.Join(defaultDataDir, "test.db")
+	})
+	seedRecallEntrySession(t, te)
+	seedRecallImportEvidence(t, te)
+
+	w := te.post(t, "/api/v1/recall/import?allow_production_import=true", `
+{"candidate_id":"m-default-import","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"recall-session","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7,"tool_use_ids":["toolu_1"]}}
+`)
+
+	assertStatus(t, w, http.StatusOK)
+	got := decode[db.RecallImportResult](t, w)
+	assert.Equal(t, 1, got.Imported)
+}
+
+func TestImportRecallEntriesRejectsNumericProductionOverride(t *testing.T) {
+	home := t.TempDir()
+	defaultDataDir := filepath.Join(home, ".agentsview")
+	te := setup(t, func(c *config.Config) {
+		c.DataDir = defaultDataDir
+		c.DBPath = filepath.Join(defaultDataDir, "test.db")
+	})
+	seedRecallEntrySession(t, te)
+	seedRecallImportEvidence(t, te)
+
+	w := te.post(t, "/api/v1/recall/import?allow_production_import=1", `
+{"candidate_id":"m-numeric-override","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"recall-session","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7,"tool_use_ids":["toolu_1"]}}
+`)
+
+	assertStatus(t, w, http.StatusBadRequest)
+	assertBodyContains(t, w, "invalid allow_production_import parameter")
+
+	got := te.get(t, "/api/v1/recall/entries/m-numeric-override")
+	assertStatus(t, got, http.StatusNotFound)
+}
+
+func TestImportRecallEntriesRequiresExistingEvidenceByDefault(t *testing.T) {
+	te := setup(t)
+
+	w := te.post(t, "/api/v1/recall/import", `
+{"candidate_id":"m-missing-session","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"s-not-imported","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
+`)
+
+	assertStatus(t, w, http.StatusBadRequest)
+	assertBodyContains(t, w, "source session s-not-imported not found")
+
+	w = te.get(t, "/api/v1/recall/entries/m-missing-session")
+	assertStatus(t, w, http.StatusNotFound)
+}
+
+func TestImportRecallEntriesAllowsPlaceholderSessionsWhenExplicit(t *testing.T) {
+	te := setup(t)
+
+	w := te.post(t, "/api/v1/recall/import?allow_placeholder_sessions=true", `
+{"candidate_id":"m-placeholder","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","agent":"codex","session_id":"s-placeholder","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
+`)
+	assertStatus(t, w, http.StatusOK)
+
+	got := decode[db.RecallImportResult](t, w)
+	assert.Equal(t, 1, got.Imported)
+
+	w = te.get(t, "/api/v1/recall/entries/m-placeholder")
+	assertStatus(t, w, http.StatusOK)
+	recall := decode[db.RecallEntry](t, w)
+	assert.Equal(t, "s-placeholder", recall.SourceSessionID)
+}
+
+func seedRecallEntrySession(t *testing.T, te *testEnv) {
+	t.Helper()
+	te.seedSession(t, "recall-session", "agentsview", 3, func(s *db.Session) {
+		s.Agent = "codex"
+		s.Cwd = "/repo/agentsview"
+		s.GitBranch = "main"
+	})
+	te.seedSession(t, "other-session", "other", 3, func(s *db.Session) {
+		s.Agent = "codex"
+	})
+}
+
+func seedRecallImportEvidence(t *testing.T, te *testEnv) {
+	t.Helper()
+	messages := []db.Message{
+		dbtest.UserMsg("recall-session", 3, "File reads failed from the wrong cwd."),
+		dbtest.AsstMsg("recall-session", 4, "I will inspect cwd."),
+		dbtest.UserMsg("recall-session", 5, "Retry failed."),
+		dbtest.AsstMsg("recall-session", 6, "[Read: main.go]"),
+		dbtest.UserMsg("recall-session", 7, "That fixed it."),
+	}
+	messages[3].HasToolUse = true
+	messages[3].ToolCalls = []db.ToolCall{
+		{
+			SessionID: "recall-session",
+			ToolName:  "Read",
+			Category:  "Read",
+			ToolUseID: "toolu_1",
+		},
+	}
+	dbtest.SeedMessages(t, te.db, messages...)
+}
+
+func seedRecallEntry(t *testing.T, te *testEnv, m db.RecallEntry) {
+	t.Helper()
+	if m.Type == "" {
+		m.Type = "procedure"
+	}
+	if m.Scope == "" {
+		m.Scope = "project"
+	}
+	if m.Status == "" {
+		m.Status = "accepted"
+	}
+	_, err := te.db.InsertRecallEntry(m)
+	require.NoError(t, err, "InsertRecallEntry")
+}

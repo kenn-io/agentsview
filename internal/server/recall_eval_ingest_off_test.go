@@ -17,7 +17,7 @@ import (
 // ingest result for any unrecognized path, including this one.
 func TestEvalIngestRouteNotServedWithoutBuildTag(t *testing.T) {
 	te := setup(t)
-	w := te.post(t, "/api/v1/memories/eval/trajectories", `{}`)
+	w := te.post(t, "/api/v1/recall/eval/trajectories", `{}`)
 	assertStatus(t, w, http.StatusOK)
 	assert.Contains(t, w.Header().Get("Content-Type"), "text/html",
 		"unregistered route without the evalingest tag must fall through to the SPA handler, not a JSON ingest result")

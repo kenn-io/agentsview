@@ -1,4 +1,4 @@
-package memory
+package recall
 
 import (
 	"testing"
@@ -9,7 +9,7 @@ import (
 )
 
 func TestPathBaseHandlesBackslashSeparators(t *testing.T) {
-	assert.Equal(t, "memories.go", pathBase("internal/db/memories.go"))
+	assert.Equal(t, "recall_entries.go", pathBase("internal/db/recall_entries.go"))
 	assert.Equal(t, "myproj", pathBase(`C:\work\myproj`))
 	assert.Equal(t, "leaf", pathBase(`C:\work\leaf\`))
 	assert.Equal(t, "single", pathBase("single"))

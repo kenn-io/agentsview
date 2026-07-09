@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestImportAcceptedMemoriesJSONLImportsReviewedKeepers(t *testing.T) {
+func TestImportAcceptedRecallEntriesJSONLImportsReviewedKeepers(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
 		s.Agent = "codex"
@@ -22,12 +22,12 @@ func TestImportAcceptedMemoriesJSONLImportsReviewedKeepers(t *testing.T) {
 {"candidate_id":"m-reject","type":"fact","scope":"project","title":"Rejected","body":"Rejected.","project":"agentsview","agent":"codex","session_id":"s1","label":"wrong","transferable":false,"provenance_ok":false,"evidence":{"ordinal_start":1,"ordinal_end":1}}
 `)
 
-	result, err := d.ImportAcceptedMemoriesJSONL(context.Background(), input)
+	result, err := d.ImportAcceptedRecallEntriesJSONL(context.Background(), input)
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.Imported)
 	assert.Equal(t, 1, result.Skipped)
-	got, err := d.GetMemory(context.Background(), "m1")
+	got, err := d.GetRecallEntry(context.Background(), "m1")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, "Check cwd before file reads", got.Title)
@@ -43,84 +43,84 @@ func TestImportAcceptedMemoriesJSONLImportsReviewedKeepers(t *testing.T) {
 	assert.Equal(t, 7, got.Evidence[0].MessageEndOrdinal)
 }
 
-func TestImportAcceptedMemoriesJSONLRejectsMissingEvidence(t *testing.T) {
+func TestImportAcceptedRecallEntriesJSONLRejectsMissingEvidence(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 	input := strings.NewReader(`
 {"candidate_id":"m1","type":"debugging_method","scope":"repository","title":"No evidence","body":"Missing ordinal evidence.","project":"agentsview","session_id":"s1","label":"correct","transferable":true,"provenance_ok":true,"evidence":{}}
 `)
 
-	_, err := d.ImportAcceptedMemoriesJSONL(context.Background(), input)
+	_, err := d.ImportAcceptedRecallEntriesJSONL(context.Background(), input)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing evidence")
 }
 
-func TestImportAcceptedMemoriesJSONLRejectsNegativeEvidenceOrdinal(t *testing.T) {
+func TestImportAcceptedRecallEntriesJSONLRejectsNegativeEvidenceOrdinal(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 	input := strings.NewReader(`
 {"candidate_id":"m1","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","session_id":"s1","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":-1,"ordinal_end":0}}
 `)
 
-	_, err := d.ImportAcceptedMemoriesJSONL(context.Background(), input)
+	_, err := d.ImportAcceptedRecallEntriesJSONL(context.Background(), input)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid evidence ordinal range")
-	got, getErr := d.GetMemory(context.Background(), "m1")
+	got, getErr := d.GetRecallEntry(context.Background(), "m1")
 	require.NoError(t, getErr)
 	assert.Nil(t, got)
 }
 
-func TestImportAcceptedMemoriesJSONLRejectsInvalidType(t *testing.T) {
+func TestImportAcceptedRecallEntriesJSONLRejectsInvalidType(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 	input := strings.NewReader(`
 {"candidate_id":"m1","type":"local_fix","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","session_id":"s1","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
 `)
 
-	_, err := d.ImportAcceptedMemoriesJSONL(context.Background(), input)
+	_, err := d.ImportAcceptedRecallEntriesJSONL(context.Background(), input)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), `invalid memory type "local_fix"`)
-	got, getErr := d.GetMemory(context.Background(), "m1")
+	assert.Contains(t, err.Error(), `invalid recall type "local_fix"`)
+	got, getErr := d.GetRecallEntry(context.Background(), "m1")
 	require.NoError(t, getErr)
 	assert.Nil(t, got)
 }
 
-func TestImportAcceptedMemoriesJSONLRejectsInvalidScope(t *testing.T) {
+func TestImportAcceptedRecallEntriesJSONLRejectsInvalidScope(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 	input := strings.NewReader(`
 {"candidate_id":"m1","type":"debugging_method","scope":"workspace","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","session_id":"s1","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
 `)
 
-	_, err := d.ImportAcceptedMemoriesJSONL(context.Background(), input)
+	_, err := d.ImportAcceptedRecallEntriesJSONL(context.Background(), input)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), `invalid memory scope "workspace"`)
-	got, getErr := d.GetMemory(context.Background(), "m1")
+	assert.Contains(t, err.Error(), `invalid recall scope "workspace"`)
+	got, getErr := d.GetRecallEntry(context.Background(), "m1")
 	require.NoError(t, getErr)
 	assert.Nil(t, got)
 }
 
-func TestImportAcceptedMemoriesJSONLRejectsInvalidConfidence(t *testing.T) {
+func TestImportAcceptedRecallEntriesJSONLRejectsInvalidConfidence(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 	input := strings.NewReader(`
 {"candidate_id":"m1","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","confidence":1.2,"project":"agentsview","session_id":"s1","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
 `)
 
-	_, err := d.ImportAcceptedMemoriesJSONL(context.Background(), input)
+	_, err := d.ImportAcceptedRecallEntriesJSONL(context.Background(), input)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid confidence 1.2")
-	got, getErr := d.GetMemory(context.Background(), "m1")
+	got, getErr := d.GetRecallEntry(context.Background(), "m1")
 	require.NoError(t, getErr)
 	assert.Nil(t, got)
 }
 
-func TestImportAcceptedMemoriesJSONLRejectsControlCharactersInIdentityFields(
+func TestImportAcceptedRecallEntriesJSONLRejectsControlCharactersInIdentityFields(
 	t *testing.T,
 ) {
 	cases := []struct {
@@ -149,9 +149,9 @@ func TestImportAcceptedMemoriesJSONLRejectsControlCharactersInIdentityFields(
 			want:  "episode_id must not contain control characters",
 		},
 		{
-			name:  "supersedes memory id",
-			input: `{"candidate_id":"m1","supersedes_memory_id":"old\u0001bad","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","session_id":"s1","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}`,
-			want:  "supersedes_memory_id must not contain control characters",
+			name:  "supersedes recall id",
+			input: `{"candidate_id":"m1","supersedes_entry_id":"old\u0001bad","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","session_id":"s1","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}`,
+			want:  "supersedes_entry_id must not contain control characters",
 		},
 		{
 			name:  "tool use id",
@@ -164,30 +164,30 @@ func TestImportAcceptedMemoriesJSONLRejectsControlCharactersInIdentityFields(
 			d := testDB(t)
 			insertSession(t, d, "s1", "agentsview")
 
-			_, err := d.ImportAcceptedMemoriesJSONL(
+			_, err := d.ImportAcceptedRecallEntriesJSONL(
 				context.Background(), strings.NewReader(tc.input+"\n"),
 			)
 
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.want)
-			got, getErr := d.GetMemory(context.Background(), "m1")
+			got, getErr := d.GetRecallEntry(context.Background(), "m1")
 			require.NoError(t, getErr)
 			assert.Nil(t, got)
 		})
 	}
 }
 
-func TestImportAcceptedMemoriesJSONLCreatesPlaceholderSourceSession(t *testing.T) {
+func TestImportAcceptedRecallEntriesJSONLCreatesPlaceholderSourceSession(t *testing.T) {
 	d := testDB(t)
 	input := strings.NewReader(`
 {"candidate_id":"m1","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","cwd":"/repo/agentsview","git_branch":"main","agent":"codex","session_id":"s-missing","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
 `)
 
-	result, err := d.ImportAcceptedMemoriesJSONL(context.Background(), input)
+	result, err := d.ImportAcceptedRecallEntriesJSONL(context.Background(), input)
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.Imported)
-	got, err := d.GetMemory(context.Background(), "m1")
+	got, err := d.GetRecallEntry(context.Background(), "m1")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, "s-missing", got.SourceSessionID)
@@ -198,24 +198,24 @@ func TestImportAcceptedMemoriesJSONLCreatesPlaceholderSourceSession(t *testing.T
 	assert.Equal(t, "codex", session.Agent)
 	assert.Equal(t, "/repo/agentsview", session.Cwd)
 	assert.Equal(t, "main", session.GitBranch)
-	assert.Equal(t, "memory-import-placeholder", session.SourceVersion)
+	assert.Equal(t, "recall-import-placeholder", session.SourceVersion)
 }
 
-func TestImportAcceptedMemoriesJSONLRequireExistingSessionsRejectsMissingSession(t *testing.T) {
+func TestImportAcceptedRecallEntriesJSONLRequireExistingSessionsRejectsMissingSession(t *testing.T) {
 	d := testDB(t)
 	input := strings.NewReader(`
 {"candidate_id":"m1","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","cwd":"/repo/agentsview","git_branch":"main","agent":"codex","session_id":"s-missing","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
 `)
 
-	_, err := d.ImportAcceptedMemoriesJSONLWithOptions(
+	_, err := d.ImportAcceptedRecallEntriesJSONLWithOptions(
 		context.Background(),
 		input,
-		MemoryImportOptions{RequireExistingSessions: true},
+		RecallImportOptions{RequireExistingSessions: true},
 	)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "source session s-missing not found")
-	got, err := d.GetMemory(context.Background(), "m1")
+	got, err := d.GetRecallEntry(context.Background(), "m1")
 	require.NoError(t, err)
 	assert.Nil(t, got)
 	session, err := d.GetSession(context.Background(), "s-missing")
@@ -223,27 +223,27 @@ func TestImportAcceptedMemoriesJSONLRequireExistingSessionsRejectsMissingSession
 	assert.Nil(t, session)
 }
 
-func TestImportAcceptedMemoriesJSONLRequireExistingSessionsRejectsMissingEvidenceRange(t *testing.T) {
+func TestImportAcceptedRecallEntriesJSONLRequireExistingSessionsRejectsMissingEvidenceRange(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 	input := strings.NewReader(`
 {"candidate_id":"m1","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","cwd":"/repo/agentsview","git_branch":"main","agent":"codex","session_id":"s1","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7}}
 `)
 
-	_, err := d.ImportAcceptedMemoriesJSONLWithOptions(
+	_, err := d.ImportAcceptedRecallEntriesJSONLWithOptions(
 		context.Background(),
 		input,
-		MemoryImportOptions{RequireExistingSessions: true},
+		RecallImportOptions{RequireExistingSessions: true},
 	)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "source evidence s1:3-7 not found")
-	got, err := d.GetMemory(context.Background(), "m1")
+	got, err := d.GetRecallEntry(context.Background(), "m1")
 	require.NoError(t, err)
 	assert.Nil(t, got)
 }
 
-func TestImportAcceptedMemoriesJSONLRequireExistingSessionsValidatesEvidenceAndToolUse(t *testing.T) {
+func TestImportAcceptedRecallEntriesJSONLRequireExistingSessionsValidatesEvidenceAndToolUse(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 	messages := []Message{
@@ -267,22 +267,22 @@ func TestImportAcceptedMemoriesJSONLRequireExistingSessionsValidatesEvidenceAndT
 {"candidate_id":"m1","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","cwd":"/repo/agentsview","git_branch":"main","agent":"codex","session_id":"s1","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7,"tool_use_ids":["toolu_1"]}}
 `)
 
-	result, err := d.ImportAcceptedMemoriesJSONLWithOptions(
+	result, err := d.ImportAcceptedRecallEntriesJSONLWithOptions(
 		context.Background(),
 		input,
-		MemoryImportOptions{RequireExistingSessions: true},
+		RecallImportOptions{RequireExistingSessions: true},
 	)
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.Imported)
-	got, err := d.GetMemory(context.Background(), "m1")
+	got, err := d.GetRecallEntry(context.Background(), "m1")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	require.Len(t, got.Evidence, 1)
 	assert.Equal(t, "toolu_1", got.Evidence[0].ToolUseID)
 }
 
-func TestImportAcceptedMemoriesJSONLRequireExistingSessionsRejectsMissingToolUse(t *testing.T) {
+func TestImportAcceptedRecallEntriesJSONLRequireExistingSessionsRejectsMissingToolUse(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 	insertMessages(t, d,
@@ -296,42 +296,42 @@ func TestImportAcceptedMemoriesJSONLRequireExistingSessionsRejectsMissingToolUse
 {"candidate_id":"m1","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","cwd":"/repo/agentsview","git_branch":"main","agent":"codex","session_id":"s1","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7,"tool_use_ids":["toolu_missing"]}}
 `)
 
-	_, err := d.ImportAcceptedMemoriesJSONLWithOptions(
+	_, err := d.ImportAcceptedRecallEntriesJSONLWithOptions(
 		context.Background(),
 		input,
-		MemoryImportOptions{RequireExistingSessions: true},
+		RecallImportOptions{RequireExistingSessions: true},
 	)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "source tool use toolu_missing not found")
-	got, err := d.GetMemory(context.Background(), "m1")
+	got, err := d.GetRecallEntry(context.Background(), "m1")
 	require.NoError(t, err)
 	assert.Nil(t, got)
 }
 
-func TestImportAcceptedMemoriesJSONLSkipsDuplicateIDs(t *testing.T) {
+func TestImportAcceptedRecallEntriesJSONLSkipsDuplicateIDs(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 	line := `{"candidate_id":"m1","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","session_id":"s1","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0}}`
-	first, err := d.ImportAcceptedMemoriesJSONL(
+	first, err := d.ImportAcceptedRecallEntriesJSONL(
 		context.Background(), strings.NewReader(line+"\n"),
 	)
 	require.NoError(t, err)
 	require.Equal(t, 1, first.Imported)
 
-	second, err := d.ImportAcceptedMemoriesJSONL(
+	second, err := d.ImportAcceptedRecallEntriesJSONL(
 		context.Background(), strings.NewReader(line+"\n"),
 	)
 
 	require.NoError(t, err)
 	assert.Equal(t, 0, second.Imported)
 	assert.Equal(t, 1, second.Skipped)
-	require.Len(t, second.SkippedMemories, 1)
-	assert.Equal(t, "m1", second.SkippedMemories[0].CandidateID)
-	assert.Equal(t, "duplicate", second.SkippedMemories[0].Reason)
+	require.Len(t, second.SkippedEntries, 1)
+	assert.Equal(t, "m1", second.SkippedEntries[0].CandidateID)
+	assert.Equal(t, "duplicate", second.SkippedEntries[0].Reason)
 }
 
-func TestImportAcceptedMemoriesJSONLSupersedesExistingMemory(t *testing.T) {
+func TestImportAcceptedRecallEntriesJSONLSupersedesExistingRecallEntry(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
 		s.Agent = "codex"
@@ -339,7 +339,7 @@ func TestImportAcceptedMemoriesJSONLSupersedesExistingMemory(t *testing.T) {
 	insertSession(t, d, "s2", "agentsview", func(s *Session) {
 		s.Agent = "codex"
 	})
-	_, err := d.InsertMemory(Memory{
+	_, err := d.InsertRecallEntry(RecallEntry{
 		ID:              "old",
 		Type:            "fact",
 		Scope:           "project",
@@ -352,36 +352,36 @@ func TestImportAcceptedMemoriesJSONLSupersedesExistingMemory(t *testing.T) {
 	})
 	require.NoError(t, err)
 	input := strings.NewReader(`
-{"candidate_id":"new","supersedes_memory_id":"old","type":"fact","scope":"project","title":"Current retry policy","body":"Retry flaky command three times before escalating.","project":"agentsview","agent":"codex","session_id":"s2","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":4,"ordinal_end":5}}
+{"candidate_id":"new","supersedes_entry_id":"old","type":"fact","scope":"project","title":"Current retry policy","body":"Retry flaky command three times before escalating.","project":"agentsview","agent":"codex","session_id":"s2","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":4,"ordinal_end":5}}
 `)
 
-	result, err := d.ImportAcceptedMemoriesJSONL(context.Background(), input)
+	result, err := d.ImportAcceptedRecallEntriesJSONL(context.Background(), input)
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.Imported)
 	var raw struct {
-		ImportedMemories []struct {
-			SupersedesMemoryID string `json:"supersedes_memory_id"`
-		} `json:"imported_memories"`
+		ImportedEntries []struct {
+			SupersedesEntryID string `json:"supersedes_entry_id"`
+		} `json:"imported_entries"`
 	}
 	data, err := json.Marshal(result)
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(data, &raw))
-	require.Len(t, raw.ImportedMemories, 1)
-	assert.Equal(t, "old", raw.ImportedMemories[0].SupersedesMemoryID)
-	oldMemory, err := d.GetMemory(context.Background(), "old")
+	require.Len(t, raw.ImportedEntries, 1)
+	assert.Equal(t, "old", raw.ImportedEntries[0].SupersedesEntryID)
+	oldRecallEntry, err := d.GetRecallEntry(context.Background(), "old")
 	require.NoError(t, err)
-	require.NotNil(t, oldMemory)
-	assert.Equal(t, "archived", oldMemory.Status)
-	assert.Equal(t, "new", oldMemory.SupersededByMemoryID)
-	newMemory, err := d.GetMemory(context.Background(), "new")
+	require.NotNil(t, oldRecallEntry)
+	assert.Equal(t, "archived", oldRecallEntry.Status)
+	assert.Equal(t, "new", oldRecallEntry.SupersededByEntryID)
+	newRecallEntry, err := d.GetRecallEntry(context.Background(), "new")
 	require.NoError(t, err)
-	require.NotNil(t, newMemory)
-	assert.Equal(t, "accepted", newMemory.Status)
-	assert.Equal(t, "old", newMemory.SupersedesMemoryID)
+	require.NotNil(t, newRecallEntry)
+	assert.Equal(t, "accepted", newRecallEntry.Status)
+	assert.Equal(t, "old", newRecallEntry.SupersedesEntryID)
 }
 
-func TestImportAcceptedMemoriesJSONLTrimsIdentityAndScopeFields(t *testing.T) {
+func TestImportAcceptedRecallEntriesJSONLTrimsIdentityAndScopeFields(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
 		s.Agent = "codex"
@@ -409,15 +409,15 @@ func TestImportAcceptedMemoriesJSONLTrimsIdentityAndScopeFields(t *testing.T) {
 {"candidate_id":" m-trim ","type":" debugging_method ","scope":" repository ","title":" Check cwd before file reads ","body":" Verify cwd before retrying failed reads. ","trigger":" file read failure ","confidence":0.92,"uncertainty":" low ","project":" agentsview ","cwd":" /repo/agentsview ","git_branch":" main ","agent":" codex ","session_id":" s1 ","episode_id":" ep1 ","run_id":" run1 ","extractor_method":" single ","model":" fake-model ","label":" correct ","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7,"tool_use_ids":[" toolu_1 "],"snippets":["Verify cwd before retrying"]}}
 `)
 
-	result, err := d.ImportAcceptedMemoriesJSONLWithOptions(
+	result, err := d.ImportAcceptedRecallEntriesJSONLWithOptions(
 		context.Background(),
 		input,
-		MemoryImportOptions{RequireExistingSessions: true},
+		RecallImportOptions{RequireExistingSessions: true},
 	)
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.Imported)
-	got, err := d.GetMemory(context.Background(), "m-trim")
+	got, err := d.GetRecallEntry(context.Background(), "m-trim")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, "debugging_method", got.Type)
@@ -439,7 +439,7 @@ func TestImportAcceptedMemoriesJSONLTrimsIdentityAndScopeFields(t *testing.T) {
 	assert.Equal(t, "toolu_1", got.Evidence[0].ToolUseID)
 }
 
-func TestImportAcceptedMemoriesJSONLDryRunReportsWouldImportAndSkips(t *testing.T) {
+func TestImportAcceptedRecallEntriesJSONLDryRunReportsWouldImportAndSkips(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 	input := strings.NewReader(`
@@ -448,30 +448,30 @@ func TestImportAcceptedMemoriesJSONLDryRunReportsWouldImportAndSkips(t *testing.
 {"candidate_id":"m-wrong","type":"fact","scope":"project","title":"Wrong detail","body":"Wrong detail.","project":"agentsview","agent":"codex","session_id":"s1","label":"wrong","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":2,"ordinal_end":2}}
 `)
 
-	result, err := d.ImportAcceptedMemoriesJSONLWithOptions(
-		context.Background(), input, MemoryImportOptions{DryRun: true},
+	result, err := d.ImportAcceptedRecallEntriesJSONLWithOptions(
+		context.Background(), input, RecallImportOptions{DryRun: true},
 	)
 
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.Imported)
 	assert.Equal(t, 1, result.WouldImport)
 	assert.Equal(t, 2, result.Skipped)
-	require.Len(t, result.WouldImportMemories, 1)
-	assert.Equal(t, "m-keeper", result.WouldImportMemories[0].CandidateID)
-	assert.Equal(t, "Check cwd before file reads", result.WouldImportMemories[0].Title)
-	assert.Equal(t, "s1", result.WouldImportMemories[0].SourceSessionID)
-	require.Len(t, result.SkippedMemories, 2)
-	assert.Equal(t, "m-not-transferable", result.SkippedMemories[0].CandidateID)
-	assert.Equal(t, "not_transferable", result.SkippedMemories[0].Reason)
-	assert.Equal(t, "m-wrong", result.SkippedMemories[1].CandidateID)
-	assert.Equal(t, "label_not_keeper", result.SkippedMemories[1].Reason)
+	require.Len(t, result.WouldImportEntries, 1)
+	assert.Equal(t, "m-keeper", result.WouldImportEntries[0].CandidateID)
+	assert.Equal(t, "Check cwd before file reads", result.WouldImportEntries[0].Title)
+	assert.Equal(t, "s1", result.WouldImportEntries[0].SourceSessionID)
+	require.Len(t, result.SkippedEntries, 2)
+	assert.Equal(t, "m-not-transferable", result.SkippedEntries[0].CandidateID)
+	assert.Equal(t, "not_transferable", result.SkippedEntries[0].Reason)
+	assert.Equal(t, "m-wrong", result.SkippedEntries[1].CandidateID)
+	assert.Equal(t, "label_not_keeper", result.SkippedEntries[1].Reason)
 
-	got, err := d.GetMemory(context.Background(), "m-keeper")
+	got, err := d.GetRecallEntry(context.Background(), "m-keeper")
 	require.NoError(t, err)
 	assert.Nil(t, got)
 }
 
-func TestImportAcceptedMemoriesJSONLDryRunDedupsCandidateIDsLikeRealImport(t *testing.T) {
+func TestImportAcceptedRecallEntriesJSONLDryRunDedupsCandidateIDsLikeRealImport(t *testing.T) {
 	const input = `
 {"candidate_id":"dup1","type":"fact","scope":"project","title":"First","body":"First body.","project":"agentsview","agent":"codex","session_id":"s1","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":1,"ordinal_end":1}}
 {"candidate_id":"dup1","type":"fact","scope":"project","title":"Second","body":"Second body.","project":"agentsview","agent":"codex","session_id":"s1","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":1,"ordinal_end":1}}
@@ -479,21 +479,21 @@ func TestImportAcceptedMemoriesJSONLDryRunDedupsCandidateIDsLikeRealImport(t *te
 
 	dryDB := testDB(t)
 	insertSession(t, dryDB, "s1", "agentsview")
-	dry, err := dryDB.ImportAcceptedMemoriesJSONLWithOptions(
+	dry, err := dryDB.ImportAcceptedRecallEntriesJSONLWithOptions(
 		context.Background(), strings.NewReader(input),
-		MemoryImportOptions{DryRun: true},
+		RecallImportOptions{DryRun: true},
 	)
 	require.NoError(t, err)
 	assert.Equal(t, 1, dry.WouldImport)
 	assert.Equal(t, 1, dry.Skipped)
-	require.Len(t, dry.SkippedMemories, 1)
-	assert.Equal(t, "duplicate", dry.SkippedMemories[0].Reason)
+	require.Len(t, dry.SkippedEntries, 1)
+	assert.Equal(t, "duplicate", dry.SkippedEntries[0].Reason)
 
 	realDB := testDB(t)
 	insertSession(t, realDB, "s1", "agentsview")
-	real, err := realDB.ImportAcceptedMemoriesJSONLWithOptions(
+	real, err := realDB.ImportAcceptedRecallEntriesJSONLWithOptions(
 		context.Background(), strings.NewReader(input),
-		MemoryImportOptions{},
+		RecallImportOptions{},
 	)
 	require.NoError(t, err)
 	assert.Equal(t, 1, real.Imported)

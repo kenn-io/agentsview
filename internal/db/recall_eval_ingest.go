@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	corememory "go.kenn.io/agentsview/internal/memory"
+	corerecall "go.kenn.io/agentsview/internal/recall"
 )
 
 // defaultEvalChunkChars is the rune-window size for splitting a flattened
-// trajectory into raw-chunk memories (~500 tokens). Finer than extraction
+// trajectory into raw-chunk entries (~500 tokens). Finer than extraction
 // chunk's 12000-char default so keyword recall can pinpoint passages. It is a
 // server-side tuning knob, deliberately a constant rather than a request field.
 const defaultEvalChunkChars = 2000
@@ -25,7 +25,7 @@ const defaultEvalChunkChars = 2000
 const maxEvalFieldRunes = 200
 
 const (
-	evalTrajectoryMachine        = "memory-eval-ingest"
+	evalTrajectoryMachine        = "recall-eval-ingest"
 	defaultEvalTrajectoryProject = "eval-harness"
 	defaultEvalTrajectoryAgent   = "eval-harness"
 )
@@ -47,15 +47,15 @@ type EvalTrajectoryIngest struct {
 	Agent           string
 }
 
-// EvalTrajectoryIngestResult reports how many chunk memories were newly
+// EvalTrajectoryIngestResult reports how many chunk entries were newly
 // inserted for the trajectory. An idempotent re-ingest reports 0.
 type EvalTrajectoryIngestResult struct {
-	RunID           string `json:"run_id"`
-	TrajectoryID    string `json:"trajectory_id"`
-	MemoriesIndexed int    `json:"memories_indexed"`
+	RunID          string `json:"run_id"`
+	TrajectoryID   string `json:"trajectory_id"`
+	EntriesIndexed int    `json:"entries_indexed"`
 }
 
-// IngestEvalTrajectory chunks a raw eval trajectory into FTS-indexed memory
+// IngestEvalTrajectory chunks a raw eval trajectory into FTS-indexed recall
 // rows scoped by run_id + extractor_method, so the keyword retriever can
 // recall them. It is lab-only (the HTTP layer guards the
 // production data dir) and idempotent: deterministic ids mean re-ingesting a
@@ -106,19 +106,19 @@ func (db *DB) IngestEvalTrajectory(
 		if err != nil {
 			return result, err
 		}
-		existing, err := db.GetMemory(ctx, id)
+		existing, err := db.GetRecallEntry(ctx, id)
 		if err != nil {
 			return result, fmt.Errorf("checking duplicate chunk: %w", err)
 		}
 		if existing != nil {
 			continue
 		}
-		if _, err := db.InsertMemory(
-			newEvalChunkMemory(id, sessionID, in, idx, len(chunks), chunk),
+		if _, err := db.InsertRecallEntry(
+			newEvalChunkRecallEntry(id, sessionID, in, idx, len(chunks), chunk),
 		); err != nil {
 			return result, fmt.Errorf("inserting chunk %d: %w", idx, err)
 		}
-		result.MemoriesIndexed++
+		result.EntriesIndexed++
 	}
 	return result, nil
 }
@@ -232,8 +232,8 @@ func evalIngestID(parts ...any) (string, error) {
 }
 
 // ensureEvalTrajectorySession inserts a placeholder session (idempotently) so
-// the chunk memories' source_session_id FK is satisfied, mirroring
-// ensureMemoryImportSession. The source_version marker distinguishes eval
+// the chunk entries' source_session_id FK is satisfied, mirroring
+// ensureRecallImportSession. The source_version marker distinguishes eval
 // sessions from real synced ones.
 func (db *DB) ensureEvalTrajectorySession(
 	ctx context.Context, sessionID string, in EvalTrajectoryIngest,
@@ -260,17 +260,17 @@ func (db *DB) ensureEvalTrajectorySession(
 	})
 }
 
-// newEvalChunkMemory builds the raw-chunk memory row for one chunk. Confidence
+// newEvalChunkRecallEntry builds the raw-chunk recall row for one chunk. Confidence
 // is left nil (raw chunks earn no confidence ranking bonus); transferable +
 // provenance_ok are true so trusted_only queries retrieve them.
-func newEvalChunkMemory(
+func newEvalChunkRecallEntry(
 	id, sessionID string, in EvalTrajectoryIngest, idx, total int, body string,
-) Memory {
-	return Memory{
+) RecallEntry {
+	return RecallEntry{
 		ID:              id,
-		Type:            corememory.TypeFact,
-		Scope:           corememory.ScopeRepository,
-		Status:          corememory.StatusAccepted,
+		Type:            corerecall.TypeFact,
+		Scope:           corerecall.ScopeRepository,
+		Status:          corerecall.StatusAccepted,
 		Title:           fmt.Sprintf("%s [chunk %d/%d]", in.TrajectoryID, idx+1, total),
 		Body:            body,
 		Project:         in.Project,

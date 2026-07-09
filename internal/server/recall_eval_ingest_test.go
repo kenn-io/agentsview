@@ -16,35 +16,35 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-// evalQueryResponse mirrors the fields of the (unexported) memory query
+// evalQueryResponse mirrors the fields of the (unexported) recall query
 // response that these tests assert on.
 type evalQueryResponse struct {
-	Memories    []db.MemoryResult `json:"memories"`
-	TrustedOnly bool              `json:"trusted_only"`
-	Context     string            `json:"context"`
+	RecallEntries []db.RecallResult `json:"entries"`
+	TrustedOnly   bool              `json:"trusted_only"`
+	Context       string            `json:"context"`
 }
 
 func TestIngestEvalTrajectoryEndToEnd(t *testing.T) {
 	te := setup(t)
 
-	w := te.post(t, "/api/v1/memories/eval/trajectories", `
+	w := te.post(t, "/api/v1/recall/eval/trajectories", `
 {"run_id":"run-a","trajectory_id":"traj-a","extractor_method":"eval-harness-raw-trajectory","source_version":"test-harness-v1","trajectory":{"question":"where did zaphod hide the towel","answer":"in the bathroom locker"}}
 `)
 	assertStatus(t, w, http.StatusOK)
 	got := decode[db.EvalTrajectoryIngestResult](t, w)
 	assert.Equal(t, "run-a", got.RunID)
 	assert.Equal(t, "traj-a", got.TrajectoryID)
-	assert.Equal(t, 1, got.MemoriesIndexed)
+	assert.Equal(t, 1, got.EntriesIndexed)
 
 	// Retrieve through the query endpoint, scoped by run + extractor method.
-	q := te.post(t, "/api/v1/memories/query", `
+	q := te.post(t, "/api/v1/recall/query", `
 {"query":"zaphod towel","source_run_id":"run-a","extractor_method":"eval-harness-raw-trajectory","trusted_only":true,"limit":10,"include_context":true}
 `)
 	assertStatus(t, q, http.StatusOK)
 	resp := decode[evalQueryResponse](t, q)
 	assert.True(t, resp.TrustedOnly)
-	require.NotEmpty(t, resp.Memories, "ingested chunk should be retrievable")
-	m := resp.Memories[0]
+	require.NotEmpty(t, resp.RecallEntries, "ingested chunk should be retrievable")
+	m := resp.RecallEntries[0]
 	assert.Equal(t, "fact", m.Type)
 	assert.Equal(t, "eval-harness-raw-trajectory", m.ExtractorMethod)
 	assert.Equal(t, "run-a", m.SourceRunID)
@@ -65,13 +65,13 @@ func TestIngestEvalTrajectoryIdempotent(t *testing.T) {
 	body := `
 {"run_id":"run-b","trajectory_id":"traj-b","extractor_method":"eval-harness-raw-trajectory","source_version":"test-harness-v1","trajectory":{"text":"hello there general"}}
 `
-	w1 := te.post(t, "/api/v1/memories/eval/trajectories", body)
+	w1 := te.post(t, "/api/v1/recall/eval/trajectories", body)
 	assertStatus(t, w1, http.StatusOK)
-	assert.Equal(t, 1, decode[db.EvalTrajectoryIngestResult](t, w1).MemoriesIndexed)
+	assert.Equal(t, 1, decode[db.EvalTrajectoryIngestResult](t, w1).EntriesIndexed)
 
-	w2 := te.post(t, "/api/v1/memories/eval/trajectories", body)
+	w2 := te.post(t, "/api/v1/recall/eval/trajectories", body)
 	assertStatus(t, w2, http.StatusOK)
-	assert.Equal(t, 0, decode[db.EvalTrajectoryIngestResult](t, w2).MemoriesIndexed)
+	assert.Equal(t, 0, decode[db.EvalTrajectoryIngestResult](t, w2).EntriesIndexed)
 }
 
 func TestIngestEvalTrajectoryRefusesDefaultDataDir(t *testing.T) {
@@ -82,7 +82,7 @@ func TestIngestEvalTrajectoryRefusesDefaultDataDir(t *testing.T) {
 		c.DBPath = filepath.Join(defaultDataDir, "test.db")
 	})
 
-	w := te.post(t, "/api/v1/memories/eval/trajectories", `
+	w := te.post(t, "/api/v1/recall/eval/trajectories", `
 {"run_id":"run-c","trajectory_id":"traj-c","extractor_method":"eval-harness-raw-trajectory","source_version":"test-harness-v1","trajectory":{"text":"hi"}}
 `)
 	assertStatus(t, w, http.StatusForbidden)
@@ -98,24 +98,24 @@ func TestIngestEvalTrajectoryAllowsDefaultDataDirWithOverride(t *testing.T) {
 		c.DBPath = filepath.Join(defaultDataDir, "test.db")
 	})
 
-	w := te.post(t, "/api/v1/memories/eval/trajectories?allow_production_import=true", `
+	w := te.post(t, "/api/v1/recall/eval/trajectories?allow_production_import=true", `
 {"run_id":"run-c","trajectory_id":"traj-c","extractor_method":"eval-harness-raw-trajectory","source_version":"test-harness-v1","trajectory":{"text":"hi"}}
 `)
 	assertStatus(t, w, http.StatusOK)
-	assert.Equal(t, 1, decode[db.EvalTrajectoryIngestResult](t, w).MemoriesIndexed)
+	assert.Equal(t, 1, decode[db.EvalTrajectoryIngestResult](t, w).EntriesIndexed)
 }
 
 func TestIngestEvalTrajectoryEmptyObjectIndexesNothing(t *testing.T) {
 	te := setup(t)
-	w := te.post(t, "/api/v1/memories/eval/trajectories",
+	w := te.post(t, "/api/v1/recall/eval/trajectories",
 		`{"run_id":"r","trajectory_id":"t","extractor_method":"eval-harness-raw-trajectory","source_version":"test-harness-v1","trajectory":{"n":1}}`)
 	assertStatus(t, w, http.StatusOK)
-	assert.Equal(t, 0, decode[db.EvalTrajectoryIngestResult](t, w).MemoriesIndexed)
+	assert.Equal(t, 0, decode[db.EvalTrajectoryIngestResult](t, w).EntriesIndexed)
 }
 
 func TestIngestEvalTrajectoryValidation(t *testing.T) {
 	te := setup(t)
-	const path = "/api/v1/memories/eval/trajectories"
+	const path = "/api/v1/recall/eval/trajectories"
 	const validFields = `"extractor_method":"eval-harness-raw-trajectory","source_version":"test-harness-v1"`
 	tooLong := strings.Repeat("x", 201)
 	cases := []struct {

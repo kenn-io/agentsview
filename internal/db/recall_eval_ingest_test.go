@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	corememory "go.kenn.io/agentsview/internal/memory"
+	corerecall "go.kenn.io/agentsview/internal/recall"
 )
 
 func TestFlattenTrajectoryText(t *testing.T) {
@@ -118,16 +118,16 @@ func TestIngestEvalTrajectory(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "run1", res.RunID)
 	assert.Equal(t, "traj1", res.TrajectoryID)
-	assert.Equal(t, 3, res.MemoriesIndexed)
+	assert.Equal(t, 3, res.EntriesIndexed)
 
 	id0, err := evalIngestID("eval-trajectory", "run1", "traj1", 0)
 	require.NoError(t, err)
-	m0, err := d.GetMemory(ctx, id0)
+	m0, err := d.GetRecallEntry(ctx, id0)
 	require.NoError(t, err)
 	require.NotNil(t, m0)
-	assert.Equal(t, corememory.TypeFact, m0.Type)
-	assert.Equal(t, corememory.ScopeRepository, m0.Scope)
-	assert.Equal(t, corememory.StatusAccepted, m0.Status)
+	assert.Equal(t, corerecall.TypeFact, m0.Type)
+	assert.Equal(t, corerecall.ScopeRepository, m0.Scope)
+	assert.Equal(t, corerecall.StatusAccepted, m0.Status)
 	assert.Equal(t, in.ExtractorMethod, m0.ExtractorMethod)
 	assert.Equal(t, "run1", m0.SourceRunID)
 	assert.Equal(t, "traj1:chunk:0", m0.SourceEpisodeID)
@@ -145,7 +145,7 @@ func TestIngestEvalTrajectory(t *testing.T) {
 
 	res2, err := d.IngestEvalTrajectory(ctx, in)
 	require.NoError(t, err)
-	assert.Equal(t, 0, res2.MemoriesIndexed, "re-ingest must insert nothing new")
+	assert.Equal(t, 0, res2.EntriesIndexed, "re-ingest must insert nothing new")
 }
 
 func TestIngestEvalTrajectoryNoStringsIndexesNothing(t *testing.T) {
@@ -158,7 +158,7 @@ func TestIngestEvalTrajectoryNoStringsIndexesNothing(t *testing.T) {
 		SourceVersion:   "test-harness-v1",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, 0, res.MemoriesIndexed)
+	assert.Equal(t, 0, res.EntriesIndexed)
 }
 
 func TestIngestEvalTrajectoryRequiresIDs(t *testing.T) {
