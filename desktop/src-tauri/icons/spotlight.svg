@@ -1,7 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="96" fill="#3b82f6"/>
-  <rect x="208" y="160" width="96" height="256" rx="32" fill="#ffffff"/>
-  <rect x="176" y="80" width="160" height="112" rx="32" fill="#ffffff"/>
-  <circle cx="288" cy="136" r="32" fill="#3b82f6"/>
-  <circle cx="288" cy="136" r="18" fill="#1d4ed8"/>
+  <g transform="matrix(0.8125 0 0 0.8125 48 48)">
+    <rect width="512" height="512" rx="96" fill="#3b82f6"/>
+    <rect x="208" y="160" width="96" height="256" rx="32" fill="#ffffff"/>
+    <rect x="176" y="80" width="160" height="112" rx="32" fill="#ffffff"/>
+    <circle cx="288" cy="136" r="32" fill="#3b82f6"/>
+    <circle cx="288" cy="136" r="18" fill="#1d4ed8"/>
+  </g>
 </svg>
