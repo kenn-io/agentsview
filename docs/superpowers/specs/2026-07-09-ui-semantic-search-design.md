@@ -53,6 +53,12 @@ session list, and result-selection behavior remain unchanged. Selecting a search
 result hydrates its session, navigates to the session route, and scrolls to the
 matched ordinal.
 
+Semantic and Hybrid therefore encode a query after every 300 ms typing pause,
+which can add latency and per-request cost when the configured embeddings
+endpoint is remote. The initial UI accepts that local-encoder-first tradeoff to
+keep mode switching predictable; a longer mode-specific debounce or explicit
+submission can be reconsidered from observed usage.
+
 For events originating inside the entire controls row, including the mode
 control and adjacent Relevance/Recency buttons, the palette's container-level
 handler must ignore result-navigation and activation keys. The kit-ui control
@@ -126,6 +132,9 @@ The existing compact result row remains the visual base.
   snippet below it.
 - Semantic and Hybrid results lead with the matching snippet because the
   content-search response does not contain a session display name.
+- Semantic and Hybrid snippets render as plain text rather than through the
+  full-text `{@html ...}` path, so raw session content never reaches an HTML
+  sink.
 - Metadata shows the project and a relative result timestamp.
 - Scores are not shown because semantic similarity and hybrid reciprocal-rank
   fusion scores do not share a user-meaningful scale.
