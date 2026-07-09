@@ -1,110 +1,104 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
-import { searchStore } from "./search.svelte.js";
-import { SearchService } from "../api/generated/index";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import {
+  ApiError as GeneratedApiError,
+  CancelablePromise,
+  SearchService,
+} from "../api/generated/index.js";
 import type { SearchResponse } from "../api/types.js";
+import {
+  SEARCH_MODE_STORAGE_KEY,
+  createSearchStore,
+  type SearchMode,
+} from "./search.svelte.js";
 
-vi.mock("../api/runtime.js", () => ({
-  configureGeneratedClient: vi.fn(),
-  callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
-  isAbortError: (err: unknown) => {
-    if (err instanceof DOMException && err.name === "AbortError") {
-      return true;
-    }
-    if (err === null || typeof err !== "object") {
-      return false;
-    }
-    const candidate = err as {
-      isCancelled?: unknown;
-      name?: unknown;
-    };
-    return candidate.isCancelled === true ||
-      candidate.name === "CancelError";
-  },
-  withAbort: async <T>(promise: Promise<T> & { cancel?: () => void }, signal?: AbortSignal) => {
-    if (signal) {
-      if (signal.aborted) {
-        promise.cancel?.();
-      } else {
-        signal.addEventListener("abort", () => promise.cancel?.(), {
-          once: true,
-        });
-      }
-    }
-    return promise;
-  },
-}));
+vi.mock("../api/generated/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../api/generated/index.js")>();
+  return {
+    ...actual,
+    SearchService: {
+      getApiV1Search: vi.fn(),
+      getApiV1SearchContent: vi.fn(),
+    },
+  };
+});
 
-vi.mock("../api/generated/index", () => ({
-  SearchService: {
-    getApiV1Search: vi.fn(),
-  },
-}));
+const searchService = vi.mocked(SearchService);
+const DEBOUNCE_MS = 300;
 
-const searchService = SearchService as unknown as {
-  getApiV1Search: ReturnType<typeof vi.fn>;
-};
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((r) => {
-    resolve = r;
-  });
-  return { promise, resolve };
+function memoryStorage(initial: Record<string, string> = {}) {
+  const values = new Map(Object.entries(initial));
+  return {
+    getItem: vi.fn((key: string) => values.get(key) ?? null),
+    setItem: vi.fn((key: string, value: string) => values.set(key, value)),
+  };
 }
 
-function makeSearchResponse(
-  query: string,
-  count: number,
-): SearchResponse {
+function fullTextResponse(query: string, count = 1): SearchResponse {
   return {
     query,
-    results: Array.from({ length: count }, (_, i) => ({
-      session_id: `s${i}`,
-      project: "proj",
-      agent: "claude",
-      name: "session name",
-      ordinal: i,
-      session_ended_at: new Date().toISOString(),
-      snippet: `result ${i}`,
-      rank: i,
-    })),
     count,
     next: 0,
+    results: Array.from({ length: count }, (_, index) => ({
+      session_id: `full-${index}`,
+      project: "alpha",
+      agent: "codex",
+      name: `Result ${index}`,
+      ordinal: index + 2,
+      session_ended_at: `2026-07-0${index + 1}T12:00:00Z`,
+      snippet: `before <mark>result ${index}</mark> after`,
+      rank: index + 0.25,
+    })),
   };
 }
 
-function generatedCancelError(): Error & { isCancelled: true } {
-  const err = new Error("Request aborted") as Error & {
-    isCancelled: true;
+function contentMatch(sessionId: string, ordinal: number, score: number) {
+  return {
+    session_id: sessionId,
+    project: "semantic-project",
+    agent: "claude",
+    ordinal,
+    timestamp: `2026-06-${String(ordinal).padStart(2, "0")}T10:00:00Z`,
+    snippet: `semantic snippet ${ordinal}`,
+    score,
   };
-  err.name = "CancelError";
-  err.isCancelled = true;
-  return err;
 }
 
-function cancelableNever<T>(): Promise<T> & { cancel: () => void } {
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((_resolve, r) => {
-    reject = r;
-  }) as Promise<T> & { cancel: () => void };
-  promise.cancel = () => reject(generatedCancelError());
-  return promise;
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
-/** Flush multiple microtask ticks for async chains + reactivity. */
-async function flushMicrotasks(ticks = 4) {
-  for (let i = 0; i < ticks; i++) {
-    await Promise.resolve();
-  }
+function generatedApiError(status: number, detail: string): GeneratedApiError {
+  return new GeneratedApiError(
+    {} as never,
+    {
+      url: "/api/v1/search/content",
+      ok: false,
+      status,
+      statusText: status === 501 ? "Not Implemented" : "Service Unavailable",
+      body: { error: detail },
+    },
+    `request failed with ${status}`,
+  );
 }
 
-const DEBOUNCE_MS = 300;
+async function runDebounce() {
+  await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
+  await Promise.resolve();
+}
+
+async function flushMicrotasks(ticks = 5) {
+  for (let index = 0; index < ticks; index += 1) await Promise.resolve();
+}
 
 describe("SearchStore", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    searchStore.clear();
-    searchStore.resetSort();
     vi.clearAllMocks();
   });
 
@@ -112,267 +106,243 @@ describe("SearchStore", () => {
     vi.useRealTimers();
   });
 
-  it("should abort stale in-flight search when a new one starts", async () => {
-    // First search: slow, will be aborted
-    searchService.getApiV1Search.mockReturnValueOnce(cancelableNever());
-
-    // Second search: resolves immediately
-    searchService.getApiV1Search.mockResolvedValueOnce(
-      makeSearchResponse("world", 2),
+  it.each([
+    [undefined, "fulltext"],
+    ["not-a-mode", "fulltext"],
+    ["semantic", "semantic"],
+    ["hybrid", "hybrid"],
+  ] as const)("loads persisted mode %s as %s", (stored, expected) => {
+    const storage = memoryStorage(
+      stored === undefined ? {} : { [SEARCH_MODE_STORAGE_KEY]: stored },
     );
 
-    // Trigger first search
-    searchStore.search("hello");
-    vi.advanceTimersByTime(DEBOUNCE_MS);
-
-    // Trigger second search (aborts first)
-    searchStore.search("world");
-    vi.advanceTimersByTime(DEBOUNCE_MS);
-
-    // Wait for all async work
-    await vi.runAllTimersAsync();
-    await Promise.resolve();
-
-    // Results should be from the second search
-    expect(searchStore.results.length).toBe(2);
-    expect(searchStore.isSearching).toBe(false);
+    expect(createSearchStore(storage).mode).toBe(expected);
   });
 
-  it("should abort in-flight search on clear()", async () => {
-    searchService.getApiV1Search.mockReturnValueOnce(cancelableNever());
-
-    // Trigger search
-    searchStore.search("hello");
-    vi.advanceTimersByTime(DEBOUNCE_MS);
-
-    // Clear while search is in-flight
-    searchStore.clear();
-    await Promise.resolve();
-
-    // Results should remain empty after clear
-    expect(searchStore.results.length).toBe(0);
-    expect(searchStore.query).toBe("");
-    expect(searchStore.isSearching).toBe(false);
-  });
-
-  it("should debounce rapid queries and only fire the last one", async () => {
-    searchService.getApiV1Search.mockResolvedValueOnce(
-      makeSearchResponse("final", 3),
-    );
-
-    // Type several queries within debounce window
-    searchStore.search("f");
-    vi.advanceTimersByTime(100);
-    searchStore.search("fi");
-    vi.advanceTimersByTime(100);
-    searchStore.search("final");
-    vi.advanceTimersByTime(DEBOUNCE_MS);
-
-    await vi.runAllTimersAsync();
-    await Promise.resolve();
-
-    // Only one API call should have been made (for "final")
-    expect(searchService.getApiV1Search).toHaveBeenCalledTimes(1);
-    expect(searchService.getApiV1Search).toHaveBeenCalledWith(
-      expect.objectContaining({ q: "final", limit: 30 }),
-    );
-    expect(searchStore.results.length).toBe(3);
-  });
-
-  it("should clear results immediately for empty query", () => {
-    // Manually set some results first
-    searchStore.search("test");
-    // Now clear via empty query
-    searchStore.search("");
-
-    expect(searchStore.results.length).toBe(0);
-    expect(searchStore.isSearching).toBe(false);
-    // No API call should be made for empty query
-    vi.advanceTimersByTime(DEBOUNCE_MS);
-    expect(searchService.getApiV1Search).not.toHaveBeenCalled();
-  });
-
-  it("should keep isSearching true while a newer search is pending", async () => {
-    // First search: aborted when second starts
-    searchService.getApiV1Search.mockReturnValueOnce(cancelableNever());
-
-    // Second search: hangs until resolved
-    const secondReq = createDeferred<SearchResponse>();
-    searchService.getApiV1Search.mockReturnValueOnce(secondReq.promise);
-
-    // Trigger first search
-    searchStore.search("first");
-    vi.advanceTimersByTime(DEBOUNCE_MS);
-
-    // Trigger second search (aborts first)
-    searchStore.search("second");
-    vi.advanceTimersByTime(DEBOUNCE_MS);
-    await Promise.resolve();
-
-    // isSearching should be true (second search is in-flight)
-    expect(searchStore.isSearching).toBe(true);
-
-    // Resolve second search
-    secondReq.resolve(makeSearchResponse("second", 2));
-    await flushMicrotasks();
-
-    expect(searchStore.isSearching).toBe(false);
-    expect(searchStore.results.length).toBe(2);
-  });
-
-  it("should keep previous results when generated cancellation aborts stale search", async () => {
-    searchService.getApiV1Search.mockResolvedValueOnce(
-      makeSearchResponse("stable", 3),
-    );
-
-    searchStore.search("stable");
-    vi.advanceTimersByTime(DEBOUNCE_MS);
-    await vi.runAllTimersAsync();
-    await flushMicrotasks();
-
-    expect(searchStore.results.length).toBe(3);
-
-    searchService.getApiV1Search.mockReturnValueOnce(cancelableNever());
-
-    searchStore.search("slow");
-    vi.advanceTimersByTime(DEBOUNCE_MS);
-    await flushMicrotasks();
-
-    searchStore.search("next");
-    await flushMicrotasks();
-
-    expect(searchStore.results.length).toBe(3);
-  });
-
-  it("should discard results from request that resolves during debounce window", async () => {
-    const firstReq = createDeferred<SearchResponse>();
-
-    // First search: resolves after query changes but before debounce fires
-    const firstPromise = firstReq.promise as Promise<SearchResponse> & {
-      cancel: () => void;
+  it("defensively handles unavailable storage", () => {
+    const throwingStorage = {
+      getItem: vi.fn(() => {
+        throw new DOMException("denied", "SecurityError");
+      }),
+      setItem: vi.fn(() => {
+        throw new DOMException("denied", "SecurityError");
+      }),
     };
-    firstPromise.cancel = () => undefined;
-    searchService.getApiV1Search.mockReturnValueOnce(firstPromise);
+    const store = createSearchStore(throwingStorage);
 
-    // Second search: resolves immediately
-    searchService.getApiV1Search.mockResolvedValueOnce(
-      makeSearchResponse("beta", 2),
+    expect(store.mode).toBe("fulltext");
+    expect(() => store.setMode("semantic")).not.toThrow();
+    expect(store.mode).toBe("semantic");
+  });
+
+  it("persists mode and clear preserves mode and sort", () => {
+    const storage = memoryStorage();
+    const store = createSearchStore(storage);
+
+    store.setMode("hybrid");
+    store.setSort("recency");
+    store.clear();
+
+    expect(storage.setItem).toHaveBeenCalledWith(
+      SEARCH_MODE_STORAGE_KEY,
+      "hybrid",
+    );
+    expect(store.mode).toBe("hybrid");
+    expect(store.sort).toBe("recency");
+  });
+
+  it("calls full-text search with the exact request and normalizes its result", async () => {
+    const store = createSearchStore(memoryStorage());
+    searchService.getApiV1Search.mockResolvedValueOnce(fullTextResponse("needle"));
+
+    store.search("needle", "alpha");
+    await runDebounce();
+
+    expect(searchService.getApiV1Search).toHaveBeenCalledWith({
+      q: "needle",
+      project: "alpha",
+      limit: 30,
+      sort: "relevance",
+    });
+    expect(searchService.getApiV1SearchContent).not.toHaveBeenCalled();
+    expect(store.results).toEqual([
+      {
+        session_id: "full-0",
+        project: "alpha",
+        agent: "codex",
+        name: "Result 0",
+        ordinal: 2,
+        timestamp: "2026-07-01T12:00:00Z",
+        snippet: "before <mark>result 0</mark> after",
+        rank: 0.25,
+        snippetFormat: "highlighted-html",
+      },
+    ]);
+  });
+
+  it.each(["semantic", "hybrid"] as const)(
+    "calls content search with exact %s request and trimmed pattern",
+    async (mode: SearchMode) => {
+      const store = createSearchStore(memoryStorage());
+      store.setMode(mode);
+      searchService.getApiV1SearchContent.mockResolvedValueOnce({
+        matches: [contentMatch("semantic-1", 4, 0.9)],
+      });
+
+      store.search("  padded query  ", "semantic-project");
+      await runDebounce();
+
+      expect(searchService.getApiV1SearchContent).toHaveBeenCalledWith({
+        pattern: "padded query",
+        mode,
+        project: "semantic-project",
+        limit: 120,
+        xAgentsViewSearchIntent: "semantic",
+      });
+      expect(searchService.getApiV1Search).not.toHaveBeenCalled();
+      expect(store.results[0]).toEqual({
+        session_id: "semantic-1",
+        project: "semantic-project",
+        agent: "claude",
+        ordinal: 4,
+        timestamp: "2026-06-04T10:00:00Z",
+        snippet: "semantic snippet 4",
+        rank: 0.9,
+        snippetFormat: "plain-text",
+      });
+    },
+  );
+
+  it("deduplicates ranked content results in response order and truncates to 30", async () => {
+    const store = createSearchStore(
+      memoryStorage({ [SEARCH_MODE_STORAGE_KEY]: "semantic" }),
+    );
+    const matches = [
+      contentMatch("first", 1, 0.1),
+      contentMatch("duplicate", 2, 0.99),
+      contentMatch("duplicate", 3, 1),
+      ...Array.from({ length: 35 }, (_, index) =>
+        contentMatch(`session-${index}`, index + 4, 100 - index),
+      ),
+    ];
+    searchService.getApiV1SearchContent.mockResolvedValueOnce({ matches });
+
+    store.search("ranked");
+    await runDebounce();
+
+    expect(store.results).toHaveLength(30);
+    expect(store.results.map((result) => result.session_id).slice(0, 4)).toEqual([
+      "first",
+      "duplicate",
+      "session-0",
+      "session-1",
+    ]);
+    expect(store.results.find((result) => result.session_id === "duplicate")?.ordinal)
+      .toBe(2);
+    expect(store.results.at(-1)?.session_id).toBe("session-27");
+  });
+
+  it.each([
+    [501, "Semantic search is unavailable: run agentsview embeddings build"],
+    [503, "Embedding provider is temporarily unavailable; retry shortly"],
+  ] as const)("preserves actionable backend detail for HTTP %i", async (status, detail) => {
+    const store = createSearchStore(
+      memoryStorage({ [SEARCH_MODE_STORAGE_KEY]: "semantic" }),
+    );
+    searchService.getApiV1SearchContent.mockRejectedValueOnce(
+      generatedApiError(status, detail),
     );
 
-    // Fire first search
-    searchStore.search("alpha");
-    vi.advanceTimersByTime(DEBOUNCE_MS);
+    store.search("failure");
+    await runDebounce();
 
-    // Query changes to "beta" — this aborts the first request
-    // immediately, before the debounce fires
-    searchStore.search("beta");
-
-    // First request tries to resolve during the debounce window
-    // but its signal is already aborted
-    firstReq.resolve(makeSearchResponse("alpha", 5));
-    await Promise.resolve();
-
-    // Alpha results must not appear
-    expect(searchStore.results.length).toBe(0);
-
-    // Now let the debounce fire for "beta"
-    vi.advanceTimersByTime(DEBOUNCE_MS);
-    await vi.runAllTimersAsync();
-    await Promise.resolve();
-
-    // Results should be from "beta"
-    expect(searchStore.results.length).toBe(2);
-    expect(searchStore.isSearching).toBe(false);
+    expect(store.error).toBe(detail);
+    expect(store.results).toEqual([]);
+    expect(store.isSearching).toBe(false);
   });
 
-  it("should call generated search with query params", async () => {
-    searchService.getApiV1Search.mockResolvedValueOnce(
-      makeSearchResponse("test", 1),
-    );
+  it("clears an earlier error when a new request starts and on clear", async () => {
+    const store = createSearchStore(memoryStorage());
+    searchService.getApiV1Search.mockRejectedValueOnce(new Error("network offline"));
+    store.search("first");
+    await runDebounce();
+    expect(store.error).toBe("network offline");
 
-    searchStore.search("test");
-    vi.advanceTimersByTime(DEBOUNCE_MS);
+    const pending = deferred<SearchResponse>();
+    searchService.getApiV1Search.mockReturnValueOnce(pending.promise as never);
+    store.search("second");
+    await runDebounce();
+    expect(store.error).toBeNull();
+    expect(store.isSearching).toBe(true);
 
-    await vi.runAllTimersAsync();
-    await Promise.resolve();
-
-    expect(searchService.getApiV1Search).toHaveBeenCalledWith(
-      { q: "test", project: undefined, limit: 30, sort: "relevance" },
-    );
+    store.clear();
+    expect(store.error).toBeNull();
+    expect(store.isSearching).toBe(false);
   });
 
-  it("sort defaults to relevance", () => {
-    expect(searchStore.sort).toBe("relevance");
-  });
+  it("mode changes cancel queued work and immediately rerun the active query", async () => {
+    const storage = memoryStorage();
+    const store = createSearchStore(storage);
+    store.search("  rerun me  ", "alpha");
+    searchService.getApiV1SearchContent.mockResolvedValueOnce({ matches: [] });
 
-  it("setSort updates sort state", () => {
-    searchStore.setSort("recency");
-    expect(searchStore.sort).toBe("recency");
-    searchStore.setSort("relevance");
-    expect(searchStore.sort).toBe("relevance");
-  });
+    store.setMode("semantic");
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS + 10);
 
-  it("setSort re-runs search when query is active", async () => {
-    searchService.getApiV1Search
-      .mockResolvedValueOnce(makeSearchResponse("hello", 2))
-      .mockResolvedValueOnce(makeSearchResponse("hello", 1));
-
-    // Run first search
-    searchStore.search("hello");
-    vi.advanceTimersByTime(DEBOUNCE_MS);
-    await vi.runAllTimersAsync();
-    await Promise.resolve();
-
-    expect(searchStore.results.length).toBe(2);
-
-    // Switch sort — should trigger a new search immediately
-    searchStore.setSort("recency");
-    await vi.runAllTimersAsync();
-    await Promise.resolve();
-
-    expect(searchService.getApiV1Search).toHaveBeenCalledTimes(2);
-    expect(searchService.getApiV1Search).toHaveBeenLastCalledWith(
-      expect.objectContaining({ q: "hello", sort: "recency" }),
-    );
-    expect(searchStore.results.length).toBe(1);
-  });
-
-  it("setSort does nothing when no query is active", () => {
-    searchStore.clear();
-    searchStore.setSort("recency");
     expect(searchService.getApiV1Search).not.toHaveBeenCalled();
+    expect(searchService.getApiV1SearchContent).toHaveBeenCalledOnce();
+    expect(searchService.getApiV1SearchContent).toHaveBeenCalledWith({
+      pattern: "rerun me",
+      mode: "semantic",
+      project: "alpha",
+      limit: 120,
+      xAgentsViewSearchIntent: "semantic",
+    });
   });
 
-  it("clear() does not reset sort (sort persists within a palette session)", () => {
-    searchStore.setSort("recency");
-    expect(searchStore.sort).toBe("recency");
-    searchStore.clear();
-    expect(searchStore.sort).toBe("recency");
+  it("stale requests cannot overwrite newer results, loading, or error", async () => {
+    const store = createSearchStore(memoryStorage());
+    const stale = deferred<SearchResponse>();
+    searchService.getApiV1Search.mockReturnValueOnce(stale.promise as never);
+    store.search("stale");
+    await runDebounce();
+
+    searchService.getApiV1SearchContent.mockResolvedValueOnce({
+      matches: [contentMatch("newer", 8, 0.8)],
+    });
+    store.setMode("semantic");
+    await flushMicrotasks();
+
+    stale.reject(new Error("late stale failure"));
+    await flushMicrotasks();
+
+    expect(store.results.map((result) => result.session_id)).toEqual(["newer"]);
+    expect(store.error).toBeNull();
+    expect(store.isSearching).toBe(false);
   });
 
-  it("resetSort() resets sort to relevance", () => {
-    searchStore.setSort("recency");
-    expect(searchStore.sort).toBe("recency");
-    searchStore.resetSort();
-    expect(searchStore.sort).toBe("relevance");
-  });
+  it("clear cancels a generated request so it cannot write later", async () => {
+    const store = createSearchStore(memoryStorage());
+    let completeRequest!: (value: SearchResponse) => void;
+    let wasCancelled = false;
+    const request = new CancelablePromise<SearchResponse>((resolve, _reject, onCancel) => {
+      completeRequest = resolve;
+      onCancel(() => {
+        wasCancelled = true;
+      });
+    });
+    searchService.getApiV1Search.mockReturnValueOnce(request as never);
 
-  it("setSort cancels pending debounced search before running", async () => {
-    searchService.getApiV1Search.mockResolvedValue(makeSearchResponse("hello", 1));
+    store.search("cancel me");
+    await runDebounce();
+    store.clear();
+    completeRequest(fullTextResponse("cancel me", 2));
+    await flushMicrotasks();
 
-    // Start a search but don't let the debounce fire yet
-    searchStore.search("hello");
-    // Immediately switch sort — should cancel the queued debounce
-    searchStore.setSort("recency");
-    // Advance timers past debounce window
-    vi.advanceTimersByTime(DEBOUNCE_MS + 100);
-    await vi.runAllTimersAsync();
-    await Promise.resolve();
-
-    // Only the immediate setSort call should have fired, not the queued debounce
-    expect(searchService.getApiV1Search).toHaveBeenCalledTimes(1);
-    expect(searchService.getApiV1Search).toHaveBeenCalledWith(
-      expect.objectContaining({ q: "hello", sort: "recency" }),
-    );
+    expect(wasCancelled).toBe(true);
+    expect(store.results).toEqual([]);
+    expect(store.query).toBe("");
+    expect(store.isSearching).toBe(false);
   });
 });

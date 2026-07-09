@@ -1,12 +1,15 @@
 <script lang="ts">
   import { m } from "../../i18n/index.js";
-  import { KbdBadge } from "@kenn-io/kit-ui";
+  import {
+    KbdBadge,
+    SegmentedControl,
+    type SegmentedControlOption,
+  } from "@kenn-io/kit-ui";
   import { SearchIcon } from "../../icons.js";
   import { tick, onDestroy, untrack } from "svelte";
   import { ui } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { searchStore } from "../../stores/search.svelte.js";
-  import { messages } from "../../stores/messages.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import {
     formatRelativeTime,
@@ -17,11 +20,20 @@
   import { copyToClipboard } from "../../utils/clipboard.js";
   import { stripIdPrefix } from "../../utils/resume.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
-  import type { Session, SearchResult } from "../../api/types.js";
+  import type { Session } from "../../api/types.js";
+  import type {
+    PaletteSearchResult,
+    SearchMode,
+  } from "../../stores/search.svelte.js";
 
   let inputRef: HTMLInputElement | undefined = $state(undefined);
   let selectedIndex: number = $state(0);
   let inputValue: string = $state(searchStore.query ?? "");
+  let searchModeOptions = $derived<SegmentedControlOption[]>([
+    { value: "fulltext", label: m.command_palette_mode_fulltext() },
+    { value: "semantic", label: m.command_palette_mode_semantic() },
+    { value: "hybrid", label: m.command_palette_mode_hybrid() },
+  ]);
 
   // Clear state and reset sort whenever the palette is unmounted, regardless
   // of close path (Escape key, overlay click, command-palette toggle, or any other
@@ -88,6 +100,10 @@
     }
   }
 
+  function handleControlKeydown(e: KeyboardEvent) {
+    if (e.key !== "Escape") e.stopPropagation();
+  }
+
   function selectCurrent() {
     if (showSearchResults) {
       const result = searchStore.results[selectedIndex];
@@ -108,7 +124,7 @@
     close();
   }
 
-  function selectSearchResult(r: SearchResult) {
+  function selectSearchResult(r: PaletteSearchResult) {
     void sessions.navigateToSession(r.session_id);
     if (r.ordinal !== -1) {
       ui.scrollToOrdinal(r.ordinal, r.session_id);
@@ -172,24 +188,43 @@
       <KbdBadge keys={["⎋"]} ariaLabel="Escape" />
     </div>
 
+    <div class="palette-controls" onkeydown={handleControlKeydown}>
+      <SegmentedControl
+        options={searchModeOptions}
+        value={searchStore.mode}
+        onchange={(value) => {
+          searchStore.setMode(value as SearchMode);
+          selectedIndex = 0;
+        }}
+        ariaLabel={m.command_palette_search_mode_label()}
+      />
+    </div>
+
     <div class="palette-results">
       {#if showSearchResults}
-        <div class="palette-sort">
-          <button
-            class="sort-btn"
-            class:active={searchStore.sort === "relevance"}
-            onmousedown={(e: MouseEvent) => e.preventDefault()}
-            onclick={() => { searchStore.setSort("relevance"); selectedIndex = 0; }}
-          >{m.command_palette_relevance()}</button>
-          <button
-            class="sort-btn"
-            class:active={searchStore.sort === "recency"}
-            onmousedown={(e: MouseEvent) => e.preventDefault()}
-            onclick={() => { searchStore.setSort("recency"); selectedIndex = 0; }}
-          >{m.command_palette_recency()}</button>
-        </div>
+        {#if searchStore.mode === "fulltext"}
+          <div class="palette-sort" onkeydown={handleControlKeydown}>
+            <button
+              class="sort-btn"
+              class:active={searchStore.sort === "relevance"}
+              onmousedown={(e: MouseEvent) => e.preventDefault()}
+              onclick={() => { searchStore.setSort("relevance"); selectedIndex = 0; }}
+            >{m.command_palette_relevance()}</button>
+            <button
+              class="sort-btn"
+              class:active={searchStore.sort === "recency"}
+              onmousedown={(e: MouseEvent) => e.preventDefault()}
+              onclick={() => { searchStore.setSort("recency"); selectedIndex = 0; }}
+            >{m.command_palette_recency()}</button>
+          </div>
+        {/if}
         {#if searchStore.isSearching}
           <div class="palette-empty">{m.command_palette_searching()}</div>
+        {:else if searchStore.error}
+          <div class="palette-error" role="alert">
+            <strong>{m.command_palette_search_error()}</strong>
+            <span>{searchStore.error}</span>
+          </div>
         {:else if searchStore.results.length === 0}
           <div class="palette-empty">{m.command_palette_no_results()}</div>
         {:else}
@@ -210,12 +245,16 @@
                 {/if}
                 {#if result.snippet && result.snippet.replace(/<\/?mark>/g, '') !== result.name}
                   <span class="item-snippet">
-                    {@html sanitizeSnippet(result.snippet)}
+                    {#if result.snippetFormat === "plain-text"}
+                      {result.snippet}
+                    {:else}
+                      {@html sanitizeSnippet(result.snippet)}
+                    {/if}
                   </span>
                 {/if}
               </span>
               <span class="item-meta">
-                {truncate(result.project, 20)}{result.session_ended_at ? ' · ' + formatRelativeTime(result.session_ended_at) : ''}
+                {truncate(result.project, 20)}{result.timestamp ? ' · ' + formatRelativeTime(result.timestamp) : ''}
               </span>
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -312,6 +351,12 @@
     padding: 4px 0;
   }
 
+  .palette-controls {
+    display: flex;
+    padding: 6px 14px;
+    border-bottom: 1px solid var(--border-default);
+  }
+
   .palette-section-label {
     padding: 6px 14px 4px;
     font-size: 10px;
@@ -381,6 +426,20 @@
     text-align: center;
     color: var(--text-muted);
     font-size: 13px;
+  }
+
+  .palette-error {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 16px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+
+  .palette-error strong {
+    color: var(--text-primary);
   }
 
   .palette-sort {
