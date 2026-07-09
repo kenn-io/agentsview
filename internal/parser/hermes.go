@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"os"
@@ -550,6 +551,106 @@ func hermesStatePaths(root string) (stateDB, sessionsDir string, ok bool) {
 	return "", "", false
 }
 
+// HermesStateVirtualPath identifies one Hermes session inside a state.db
+// archive.
+func HermesStateVirtualPath(stateDB, rawID string) string {
+	return VirtualSourcePath(stateDB, rawID)
+}
+
+// SplitHermesStateVirtualPath splits a Hermes state.db virtual source path.
+func SplitHermesStateVirtualPath(path string) (stateDB, rawID string, ok bool) {
+	return ParseVirtualSourcePathForBase(path, "state.db")
+}
+
+// WriteHermesStateSessionJSONL writes one Hermes state.db session as scoped
+// JSONL. It is used by `session export` for sessions whose persisted source is
+// the shared SQLite archive rather than a per-session transcript file.
+func WriteHermesStateSessionJSONL(w io.Writer, stateDB, rawID string) error {
+	if rawID == "" || !IsValidSessionID(rawID) {
+		return fmt.Errorf("invalid hermes session id: %q", rawID)
+	}
+	if _, err := os.Stat(stateDB); err != nil {
+		return err
+	}
+	conn, err := sql.Open("sqlite3", "file:"+sqliteURIPath(stateDB)+"?mode=ro")
+	if err != nil {
+		return fmt.Errorf("open hermes state db: %w", err)
+	}
+	defer conn.Close()
+
+	session, err := readHermesStateSession(conn, rawID)
+	if err != nil {
+		return err
+	}
+	messages, err := readHermesStateMessagesForSession(conn, rawID)
+	if err != nil {
+		return err
+	}
+
+	enc := json.NewEncoder(w)
+	meta := hermesStateExportLine{
+		Role:            "session_meta",
+		Platform:        session.source,
+		Model:           session.model,
+		ParentSessionID: session.parentSessionID,
+		Title:           session.title,
+		Timestamp:       hermesExportTimestamp(session.startedAt),
+	}
+	if err := enc.Encode(meta); err != nil {
+		return fmt.Errorf("write hermes session metadata: %w", err)
+	}
+	for _, message := range messages {
+		if err := enc.Encode(hermesStateMessageExportLine(message)); err != nil {
+			return fmt.Errorf("write hermes message: %w", err)
+		}
+	}
+	return nil
+}
+
+type hermesStateExportLine struct {
+	Role                string          `json:"role"`
+	Platform            string          `json:"platform,omitempty"`
+	Model               string          `json:"model,omitempty"`
+	ParentSessionID     string          `json:"parent_session_id,omitempty"`
+	Title               string          `json:"title,omitempty"`
+	Content             string          `json:"content,omitempty"`
+	ToolCallID          string          `json:"tool_call_id,omitempty"`
+	ToolCalls           json.RawMessage `json:"tool_calls,omitempty"`
+	Timestamp           string          `json:"timestamp,omitempty"`
+	FinishReason        string          `json:"finish_reason,omitempty"`
+	Reasoning           string          `json:"reasoning,omitempty"`
+	ReasoningContent    string          `json:"reasoning_content,omitempty"`
+	ReasoningDetails    string          `json:"reasoning_details,omitempty"`
+	CodexReasoningItems string          `json:"codex_reasoning_items,omitempty"`
+	CodexMessageItems   string          `json:"codex_message_items,omitempty"`
+}
+
+func hermesStateMessageExportLine(message hermesStateMessage) hermesStateExportLine {
+	line := hermesStateExportLine{
+		Role:                message.role,
+		Content:             message.content,
+		ToolCallID:          message.toolCallID,
+		Timestamp:           hermesExportTimestamp(message.timestamp),
+		FinishReason:        message.finishReason,
+		Reasoning:           message.reasoning,
+		ReasoningContent:    message.reasoningContent,
+		ReasoningDetails:    message.reasoningDetails,
+		CodexReasoningItems: message.codexReasoningItems,
+		CodexMessageItems:   message.codexMessageItems,
+	}
+	if message.toolCalls != "" && json.Valid([]byte(message.toolCalls)) {
+		line.ToolCalls = json.RawMessage(message.toolCalls)
+	}
+	return line
+}
+
+func hermesExportTimestamp(ts time.Time) string {
+	if ts.IsZero() {
+		return ""
+	}
+	return ts.Format(time.RFC3339Nano)
+}
+
 func (p *hermesProvider) parseStateDB(
 	stateDB, sessionsDir, project, machine string,
 ) ([]ParseResult, error) {
@@ -600,6 +701,46 @@ func (p *hermesProvider) parseStateDB(
 		return results[i].Session.ID < results[j].Session.ID
 	})
 	return results, nil
+}
+
+func readHermesStateSession(
+	conn *sql.DB, rawID string,
+) (hermesStateSession, error) {
+	var ss hermesStateSession
+	var started, ended float64
+	err := conn.QueryRow(`
+		SELECT id, source, COALESCE(model, ''),
+			COALESCE(parent_session_id, ''), started_at,
+			COALESCE(ended_at, 0), COALESCE(message_count, 0),
+			COALESCE(input_tokens, 0), COALESCE(output_tokens, 0),
+			COALESCE(cache_read_tokens, 0),
+			COALESCE(cache_write_tokens, 0),
+			COALESCE(reasoning_tokens, 0),
+			estimated_cost_usd, actual_cost_usd,
+			COALESCE(cost_status, ''), COALESCE(cost_source, ''),
+			COALESCE(title, ''), COALESCE(api_call_count, 0)
+		FROM sessions
+		WHERE id = ?`, rawID).Scan(
+		&ss.id, &ss.source, &ss.model,
+		&ss.parentSessionID, &started, &ended,
+		&ss.messageCount, &ss.inputTokens, &ss.outputTokens,
+		&ss.cacheReadTokens, &ss.cacheWriteTokens,
+		&ss.reasoningTokens, &ss.estimatedCost, &ss.actualCost,
+		&ss.costStatus, &ss.costSource, &ss.title,
+		&ss.apiCallCount,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return hermesStateSession{}, fmt.Errorf(
+				"hermes session %s not found in state db: %w",
+				rawID, err,
+			)
+		}
+		return hermesStateSession{}, fmt.Errorf("query hermes session %s: %w", rawID, err)
+	}
+	ss.startedAt = hermesUnixTime(started)
+	ss.endedAt = hermesUnixTime(ended)
+	return ss, nil
 }
 
 func readHermesStateSessions(
@@ -679,6 +820,44 @@ func readHermesStateMessages(
 		}
 		hm.timestamp = hermesUnixTime(ts)
 		out[sid] = append(out[sid], hm)
+	}
+	return out, rows.Err()
+}
+
+func readHermesStateMessagesForSession(
+	conn *sql.DB, rawID string,
+) ([]hermesStateMessage, error) {
+	rows, err := conn.Query(`
+		SELECT role, COALESCE(content, ''),
+			COALESCE(tool_call_id, ''), COALESCE(tool_calls, ''),
+			timestamp, COALESCE(finish_reason, ''),
+			COALESCE(reasoning, ''), COALESCE(reasoning_content, ''),
+			COALESCE(reasoning_details, ''),
+			COALESCE(codex_reasoning_items, ''),
+			COALESCE(codex_message_items, '')
+		FROM messages
+		WHERE session_id = ?
+		ORDER BY timestamp ASC, id ASC`, rawID)
+	if err != nil {
+		return nil, fmt.Errorf("query hermes messages for %s: %w", rawID, err)
+	}
+	defer rows.Close()
+
+	var out []hermesStateMessage
+	for rows.Next() {
+		var hm hermesStateMessage
+		var ts float64
+		if err := rows.Scan(
+			&hm.role, &hm.content, &hm.toolCallID,
+			&hm.toolCalls, &ts, &hm.finishReason,
+			&hm.reasoning, &hm.reasoningContent,
+			&hm.reasoningDetails, &hm.codexReasoningItems,
+			&hm.codexMessageItems,
+		); err != nil {
+			return nil, fmt.Errorf("scan hermes message for %s: %w", rawID, err)
+		}
+		hm.timestamp = hermesUnixTime(ts)
+		out = append(out, hm)
 	}
 	return out, rows.Err()
 }

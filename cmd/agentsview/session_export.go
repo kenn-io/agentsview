@@ -4,10 +4,12 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -66,6 +68,26 @@ func newSessionExportCommand() *cobra.Command {
 				return fmt.Errorf(
 					"source file not found for session %s", id,
 				)
+			}
+			if rawID, ok := rawHermesSessionID(id); ok {
+				hermesPath, err := resolveHermesExportPath(
+					cmd.Context(), cfg, id, rawID, storedPath,
+				)
+				if err != nil {
+					return err
+				}
+				if dbPath, sessionID, ok :=
+					parser.SplitHermesStateVirtualPath(hermesPath); ok {
+					return parser.WriteHermesStateSessionJSONL(
+						cmd.OutOrStdout(), dbPath, sessionID,
+					)
+				}
+				if filepath.Base(hermesPath) == "state.db" {
+					return parser.WriteHermesStateSessionJSONL(
+						cmd.OutOrStdout(), hermesPath, rawID,
+					)
+				}
+				storedPath = hermesPath
 			}
 			// Aider stores many repo runs in one Markdown history file,
 			// with sessions keyed by a <history>#<idx> virtual path.
@@ -161,4 +183,53 @@ func rawAiderSessionID(sessionID string) (string, bool) {
 	_, rawID := parser.StripHostPrefix(sessionID)
 	rawID = strings.TrimPrefix(rawID, def.IDPrefix)
 	return rawID, rawID != ""
+}
+
+func rawHermesSessionID(sessionID string) (string, bool) {
+	_, rawID := parser.StripHostPrefix(sessionID)
+	def, ok := parser.AgentByPrefix(rawID)
+	if !ok || def.Type != parser.AgentHermes {
+		return "", false
+	}
+	rawID = strings.TrimPrefix(rawID, def.IDPrefix)
+	return rawID, rawID != ""
+}
+
+func resolveHermesExportPath(
+	ctx context.Context,
+	cfg config.Config,
+	fullID string,
+	rawID string,
+	storedPath string,
+) (string, error) {
+	provider, ok := parser.NewProvider(parser.AgentHermes, parser.ProviderConfig{
+		Roots: cfg.AgentDirs[parser.AgentHermes],
+	})
+	if !ok {
+		return storedPath, nil
+	}
+	source, found, err := provider.FindSource(ctx, parser.FindSourceRequest{
+		RawSessionID:       rawID,
+		FullSessionID:      fullID,
+		StoredFilePath:     storedPath,
+		FingerprintKey:     storedPath,
+		RequireFreshSource: true,
+		PreferStoredSource: true,
+	})
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return storedPath, nil
+	}
+	for _, candidate := range []string{
+		source.DisplayPath,
+		source.FingerprintKey,
+		source.Key,
+	} {
+		if candidate != "" {
+			return candidate, nil
+		}
+	}
+	return storedPath, nil
 }

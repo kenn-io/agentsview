@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -155,9 +156,9 @@ func TestProcessFileHermesArchiveSkipCacheUsesAggregateMtime(t *testing.T) {
 }
 
 // TestProcessFileHermesArchivePersistsAggregateFingerprint confirms the
-// provider-authoritative processFile path stamps every archive session with the
-// state.db path and the aggregate size and mtime, and that a second pass skips
-// once the file info is persisted. This replaces the removed
+// provider-authoritative processFile path stamps every archive session with a
+// state.db virtual path and the aggregate size and mtime, and that a second
+// pass skips once the file info is persisted. This replaces the removed
 // processHermes-based assertions.
 func TestProcessFileHermesArchivePersistsAggregateFingerprint(t *testing.T) {
 	root := t.TempDir()
@@ -190,7 +191,8 @@ func TestProcessFileHermesArchivePersistsAggregateFingerprint(t *testing.T) {
 	require.NoError(t, res.err)
 	require.NotEmpty(t, res.results)
 	for _, result := range res.results {
-		assert.Equal(t, stateDB, result.Session.File.Path)
+		rawID := strings.TrimPrefix(result.Session.ID, "hermes:")
+		assert.Equal(t, parser.HermesStateVirtualPath(stateDB, rawID), result.Session.File.Path)
 		assert.Equal(t, wantSize, result.Session.File.Size)
 		assert.Equal(t, wantMtime, result.Session.File.Mtime)
 	}
@@ -207,7 +209,9 @@ func TestProcessFileHermesArchivePersistsAggregateFingerprint(t *testing.T) {
 	require.Equal(t, 0, failed)
 	require.NotZero(t, written)
 
-	storedSize, storedMtime, ok := database.GetFileInfoByPath(stateDB)
+	storedSize, storedMtime, ok := database.GetFileInfoByPath(
+		parser.HermesStateVirtualPath(stateDB, "child"),
+	)
 	require.True(t, ok)
 	assert.Equal(t, wantSize, storedSize)
 	assert.Equal(t, wantMtime, storedMtime)
@@ -215,8 +219,9 @@ func TestProcessFileHermesArchivePersistsAggregateFingerprint(t *testing.T) {
 
 // TestSyncPathsHermesArchiveTranscriptPersistsAggregateFingerprint confirms that
 // syncing a transcript path inside an archive routes through the provider, which
-// reparses the whole archive and persists the aggregate file info under the
-// state.db path. This replaces the removed syncSingleHermesArchive coverage.
+// reparses the whole archive and persists the aggregate file info under each
+// state.db virtual path. This replaces the removed syncSingleHermesArchive
+// coverage.
 func TestSyncPathsHermesArchiveTranscriptPersistsAggregateFingerprint(t *testing.T) {
 	root := t.TempDir()
 	stateDB := writeHermesArchiveStateDB(t, root)
@@ -242,7 +247,9 @@ func TestSyncPathsHermesArchiveTranscriptPersistsAggregateFingerprint(t *testing
 
 	engine.SyncPaths([]string{transcriptPath})
 
-	storedSize, storedMtime, found := database.GetFileInfoByPath(stateDB)
+	storedSize, storedMtime, found := database.GetFileInfoByPath(
+		parser.HermesStateVirtualPath(stateDB, "child"),
+	)
 	require.True(t, found)
 	assert.Equal(t, wantSize, storedSize)
 	assert.Equal(t, wantMtime, storedMtime)

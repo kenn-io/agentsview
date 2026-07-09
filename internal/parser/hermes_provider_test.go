@@ -2,8 +2,10 @@ package parser
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -416,7 +418,7 @@ func TestHermesProviderParseStateDB(t *testing.T) {
 	require.NoError(t, err)
 	transcriptInfo, err := os.Stat(transcriptPath)
 	require.NoError(t, err)
-	assert.Equal(t, stateDB, result.Result.Session.File.Path)
+	assert.Equal(t, HermesStateVirtualPath(stateDB, "child"), result.Result.Session.File.Path)
 	assert.Equal(
 		t,
 		stateInfo.Size()+transcriptInfo.Size(),
@@ -427,6 +429,43 @@ func TestHermesProviderParseStateDB(t *testing.T) {
 		max(stateInfo.ModTime().UnixNano(), transcriptInfo.ModTime().UnixNano()),
 		result.Result.Session.File.Mtime,
 	)
+}
+
+func TestWriteHermesStateSessionJSONLScopesStateDBExport(t *testing.T) {
+	root := t.TempDir()
+	createHermesStateDB(t, root)
+	stateDB := filepath.Join(root, "state.db")
+	conn, err := sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	_, err = conn.Exec(`
+		INSERT INTO messages (
+			session_id, role, content, tool_calls, timestamp
+		) VALUES (
+			'child', 'assistant', '',
+			'[{"id":"call_1","function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}}]',
+			1778767220.0
+		);
+		INSERT INTO messages (
+			session_id, role, content, tool_call_id, timestamp
+		) VALUES (
+			'child', 'tool', 'file contents', 'call_1', 1778767230.0
+		);
+	`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	var buf strings.Builder
+	require.NoError(t, WriteHermesStateSessionJSONL(&buf, stateDB, "child"))
+
+	out := buf.String()
+	assert.NotContains(t, out, "SQLite format 3")
+	assert.Contains(t, out, `"role":"session_meta"`)
+	assert.Contains(t, out, `"role":"user"`)
+	assert.Contains(t, out, `"content":"state db only has one message"`)
+	assert.Contains(t, out, `"tool_calls":[{"id":"call_1"`)
+	assert.Contains(t, out, `"tool_call_id":"call_1"`)
+	assert.Contains(t, out, `"content":"file contents"`)
+	assert.NotContains(t, out, "\x00")
 }
 
 func TestHermesProviderFindSourceDoesNotReturnStateDBForMissingRawID(t *testing.T) {

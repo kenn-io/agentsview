@@ -4703,11 +4703,11 @@ func (e *Engine) shouldSkipFile(
 
 // providerSourceUnchangedInDB reports whether a provider source's persisted
 // file metadata already matches its current fingerprint, so a reparse would be
-// a no-op. It compares the DB-stored file_size/file_mtime for the source's
-// path against the fingerprint and requires a current data_version, mirroring
-// shouldSkipByPath for the provider-authoritative runtime. A source with no
-// stored row, an empty key, or a non-fingerprint identity (no size, e.g. a
-// tombstone) never matches and therefore reparses.
+// a no-op. It compares DB-stored file_size/file_mtime for the source's path
+// against the fingerprint and requires a current data_version, mirroring
+// shouldSkipByPath for the provider-authoritative runtime. Hermes state.db
+// sources persist per-session virtual paths under the physical state.db key;
+// in that case every active stored hint under the source must be fresh.
 func (e *Engine) providerSourceUnchangedInDB(
 	source parser.SourceRef,
 	fingerprint parser.SourceFingerprint,
@@ -4722,6 +4722,36 @@ func (e *Engine) providerSourceUnchangedInDB(
 	if e.pathRewriter != nil {
 		lookupPath = e.pathRewriter(lookupPath)
 	}
+	if e.providerSourcePathUnchangedInDB(source.Provider, lookupPath, fingerprint) {
+		return true
+	}
+	if source.Provider != parser.AgentHermes {
+		return false
+	}
+
+	hints, err := e.db.ListStoredSourcePathHints(
+		string(source.Provider), []string{lookupPath},
+	)
+	if err != nil {
+		log.Printf("list provider source freshness hints: %v", err)
+		return false
+	}
+	if len(hints) == 0 {
+		return false
+	}
+	for _, hint := range hints {
+		if !e.providerSourcePathUnchangedInDB(source.Provider, hint, fingerprint) {
+			return false
+		}
+	}
+	return true
+}
+
+func (e *Engine) providerSourcePathUnchangedInDB(
+	agent parser.AgentType,
+	lookupPath string,
+	fingerprint parser.SourceFingerprint,
+) bool {
 	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
 	if !ok {
 		return false
@@ -4729,7 +4759,7 @@ func (e *Engine) providerSourceUnchangedInDB(
 	if storedSize != fingerprint.Size || storedMtime != fingerprint.MTimeNS {
 		return false
 	}
-	if !e.providerFingerprintHashMatchesDB(source.Provider, lookupPath, fingerprint) {
+	if !e.providerFingerprintHashMatchesDB(agent, lookupPath, fingerprint) {
 		return false
 	}
 	// A stale stored project (e.g. a generated roborev CI worktree name)

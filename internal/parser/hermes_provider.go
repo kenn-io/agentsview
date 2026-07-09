@@ -97,15 +97,19 @@ func (p *hermesProvider) Parse(
 			return ParseOutcome{}, err
 		}
 		// Mirror the legacy engine's stampHermesArchiveResults: every archive
-		// session's stored file identity is the state.db path with the
+		// session's stored file freshness is the state.db aggregate with the
 		// aggregate (state.db plus transcripts) size and mtime, so a
-		// transcript-only change still refreshes the archive's freshness.
+		// transcript-only change still refreshes the archive's freshness. The
+		// persisted path itself stays virtual so per-session export never
+		// streams the whole shared SQLite archive.
 		size, mtime := hermesArchiveEffectiveFileInfo(path)
 		out := make([]ParseResultOutcome, 0, len(results))
 		for i := range results {
-			results[i].Session.File.Path = path
+			rawID := strings.TrimPrefix(results[i].Session.ID, string(AgentHermes)+":")
+			results[i].Session.File.Path = HermesStateVirtualPath(path, rawID)
 			results[i].Session.File.Size = size
 			results[i].Session.File.Mtime = mtime
+			results[i].Session.File.Hash = req.Fingerprint.Hash
 			out = append(out, ParseResultOutcome{
 				Result:      results[i],
 				DataVersion: DataVersionCurrent,
@@ -224,8 +228,27 @@ func (s hermesSourceSet) FindSource(
 		if path == "" {
 			continue
 		}
+		if _, storedRawID, ok := SplitHermesStateVirtualPath(path); ok &&
+			req.RawSessionID != "" && storedRawID != req.RawSessionID {
+			continue
+		}
 		for _, root := range s.roots {
 			if source, ok := s.sourceForPath(root, path); ok {
+				sourcePath, _ := s.pathFromSource(source)
+				if req.RawSessionID != "" &&
+					filepath.Base(sourcePath) == "state.db" {
+					found, err := hermesStateDBHasSession(sourcePath, req.RawSessionID)
+					switch {
+					case err != nil:
+						log.Printf(
+							"hermes: state db lookup failed for %s: %v; "+
+								"falling back to transcripts", sourcePath, err,
+						)
+						continue
+					case !found:
+						continue
+					}
+				}
 				return source, true, nil
 			}
 		}
@@ -357,6 +380,10 @@ func (s hermesSourceSet) sourceForChangedPath(
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
 	if stateDB, sessionsDir, ok := hermesStatePaths(root); ok {
+		if virtualDB, _, ok := SplitHermesStateVirtualPath(path); ok &&
+			samePath(virtualDB, stateDB) {
+			return hermesArchiveSourceRef(root, stateDB)
+		}
 		if samePath(path, stateDB) || hermesPathInTranscriptDir(sessionsDir, path) {
 			return hermesArchiveSourceRef(root, stateDB)
 		}

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -252,6 +253,122 @@ func TestSessionHelp_ShowsSubcommands(t *testing.T) {
 		"expected --format persistent flag in help")
 	assert.Contains(t, help, "--pg",
 		"expected --pg persistent flag in help")
+}
+
+func TestSessionExportHermesStateDBScopesToSessionJSONL(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		filePath func(string) string
+	}{
+		{
+			name: "virtual state db path",
+			filePath: func(stateDB string) string {
+				return parser.HermesStateVirtualPath(stateDB, "child")
+			},
+		},
+		{
+			name: "legacy physical state db path",
+			filePath: func(stateDB string) string {
+				return stateDB
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dataDir := testDataDir(t)
+			stateRoot := t.TempDir()
+			stateDB := filepath.Join(stateRoot, "state.db")
+			writeHermesSessionExportStateDB(t, stateDB)
+			filePath := tc.filePath(stateDB)
+
+			database := dbtest.OpenTestDBAt(t, sessionsDBPath(dataDir))
+			require.NoError(t, database.UpsertSession(db.Session{
+				ID:               "hermes:child",
+				Project:          "hermes-discord",
+				Machine:          "m",
+				Agent:            string(parser.AgentHermes),
+				MessageCount:     1,
+				UserMessageCount: 1,
+				FilePath:         &filePath,
+			}))
+			require.NoError(t, database.Close())
+
+			out, err := executeCommand(newRootCommand(), "session", "export", "hermes:child")
+			require.NoError(t, err)
+			assert.NotContains(t, out, "SQLite format 3")
+			assert.Contains(t, out, `"role":"session_meta"`)
+			assert.Contains(t, out, `"role":"user"`)
+			assert.Contains(t, out, `"content":"state export question"`)
+			assert.NotContains(t, out, "\x00")
+		})
+	}
+}
+
+func writeHermesSessionExportStateDB(t *testing.T, stateDB string) {
+	t.Helper()
+	conn, err := sql.Open("sqlite3", stateDB)
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+
+	_, err = conn.Exec(`
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			source TEXT NOT NULL,
+			user_id TEXT,
+			model TEXT,
+			model_config TEXT,
+			system_prompt TEXT,
+			parent_session_id TEXT,
+			started_at REAL NOT NULL,
+			ended_at REAL,
+			end_reason TEXT,
+			message_count INTEGER DEFAULT 0,
+			tool_call_count INTEGER DEFAULT 0,
+			input_tokens INTEGER DEFAULT 0,
+			output_tokens INTEGER DEFAULT 0,
+			cache_read_tokens INTEGER DEFAULT 0,
+			cache_write_tokens INTEGER DEFAULT 0,
+			reasoning_tokens INTEGER DEFAULT 0,
+			billing_provider TEXT,
+			billing_base_url TEXT,
+			billing_mode TEXT,
+			estimated_cost_usd REAL,
+			actual_cost_usd REAL,
+			cost_status TEXT,
+			cost_source TEXT,
+			pricing_version TEXT,
+			title TEXT,
+			api_call_count INTEGER DEFAULT 0
+		);
+		CREATE TABLE messages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			role TEXT NOT NULL,
+			content TEXT,
+			tool_call_id TEXT,
+			tool_calls TEXT,
+			tool_name TEXT,
+			timestamp REAL NOT NULL,
+			token_count INTEGER,
+			finish_reason TEXT,
+			reasoning TEXT,
+			reasoning_content TEXT,
+			reasoning_details TEXT,
+			codex_reasoning_items TEXT,
+			codex_message_items TEXT
+		);
+		INSERT INTO sessions (
+			id, source, model, started_at, ended_at, message_count, title
+		) VALUES (
+			'child', 'discord', 'gpt-5.4', 1778767200.0, 1778767800.0, 1,
+			'Child Session'
+		);
+		INSERT INTO messages (
+			session_id, role, content, timestamp
+		) VALUES (
+			'child', 'user', 'state export question', 1778767210.0
+		);
+	`)
+	require.NoError(t, err)
 }
 
 // seedSession opens the SQLite DB at dataDir/sessions.db, inserts
