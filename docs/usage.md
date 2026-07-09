@@ -903,8 +903,8 @@ name or first message.
 
 Type 3 or more characters to search in one of three modes:
 
-- **Full text** searches indexed message content and session
-  names with FTS5.
+- **Full text** searches indexed message content with FTS5. It
+  also matches session display names and first messages.
 - **Semantic** ranks message content by meaning using the active
   embeddings index.
 - **Hybrid** combines semantic and full-text rankings so that
@@ -941,12 +941,15 @@ state, or the embeddings service prevents a search, the palette
 keeps the selected mode and shows actionable remediation rather
 than silently falling back to Full text.
 
-Each result shows:
+Results use a compact row:
 
-- **Role badge** — U (user) or A (assistant) in a colored box
-- **Snippet** — matching text with highlighted search terms
-- **Session name** — the session this result belongs to
-- **Project name** — right-aligned
+- **Full text** may show the session name and a sanitized snippet
+  with highlighted search terms.
+- **Semantic and Hybrid** lead with a plain-text matching snippet.
+  Content search does not return a session name or highlight
+  markup.
+- **All modes** show an agent-colored dot, project and result
+  time, and a copyable session ID.
 
 Select a result to jump to that session and scroll directly to
 the matching message.
