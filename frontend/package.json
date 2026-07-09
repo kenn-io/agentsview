@@ -19,8 +19,8 @@
     "e2e": "playwright test"
   },
   "dependencies": {
-    "@kenn-io/kit-ui": "git+https://github.com/kenn-io/kit-ui.git#0479c75df2c420a3032e10e40f1a288dab4289f0",
-    "@lucide/svelte": "1.22.0",
+    "@kenn-io/kit-ui": "git+https://github.com/kenn-io/kit-ui.git#59f8167e673e0040d29a47f73ffd7b545d57304f",
+    "@lucide/svelte": "1.23.0",
     "@tanstack/virtual-core": "3.17.3",
     "dompurify": "3.4.11",
     "marked": "18.0.5",
@@ -40,12 +40,12 @@
     "svelte": "5.56.4",
     "svelte-check": "4.7.1",
     "typescript": "6.0.3",
-    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.1",
-    "vite-plus": "0.2.1",
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.2",
+    "vite-plus": "0.2.2",
     "vitest": "4.1.9"
   },
   "overrides": {
-    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.1"
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.2"
   },
   "packageManager": "npm@11.18.0"
 }
