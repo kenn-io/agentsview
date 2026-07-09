@@ -918,6 +918,25 @@ func TestExtractOpenCodeToolCall_SkillNameResolution(t *testing.T) {
 			wantSkill: "",
 			wantInput: `{"file_path":"skills/foo/SKILL.md"}`,
 		},
+		{
+			// A non-skill tool whose state carries metadata in a
+			// non-object shape must not lose its input: the generic
+			// state decode only reads input, and metadata is never
+			// consulted for non-skill tools.
+			name:      "non_skill_tool_incompatible_metadata_preserves_input",
+			data:      `{"type":"tool","tool":"read","callID":"c6","state":{"input":{"file_path":"main.go"},"metadata":"not-an-object"}}`,
+			wantSkill: "",
+			wantInput: `{"file_path":"main.go"}`,
+		},
+		{
+			// A skill tool whose metadata fields are mistyped must
+			// degrade to "" via tolerant gjson access rather than
+			// fail the whole tool call; the input.name still wins.
+			name:      "skill_tool_mistyped_metadata_uses_input_name",
+			data:      `{"type":"tool","tool":"skill","callID":"c7","state":{"input":{"name":"create-pr"},"metadata":{"name":123,"dir":false}}}`,
+			wantSkill: "create-pr",
+			wantInput: `{"name":"create-pr"}`,
+		},
 	}
 
 	for _, tc := range tests {

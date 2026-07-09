@@ -774,19 +774,14 @@ type openCodeToolData struct {
 	State    json.RawMessage `json:"state"`
 }
 
-// openCodeToolState holds the nested state of a tool call.
+// openCodeToolState holds the nested state of a tool call. Only the
+// input is decoded structurally: it is kept as raw JSON so any input
+// shape (object, string, array) decodes without error and input
+// extraction for every tool kind stays tolerant. Skill metadata is
+// read separately and tolerantly, only for the skill tool, so an
+// unusual metadata shape cannot block input extraction.
 type openCodeToolState struct {
-	Input    json.RawMessage       `json:"input"`
-	Metadata openCodeSkillMetadata `json:"metadata"`
-}
-
-// openCodeSkillMetadata captures the metadata OpenCode records for
-// its own skill tool. The resolved skill name and directory are
-// stored directly, so attribution does not rely on path-based
-// inference the way other agents do.
-type openCodeSkillMetadata struct {
-	Name string `json:"name"`
-	Dir  string `json:"dir"`
+	Input json.RawMessage `json:"input"`
 }
 
 func extractOpenCodeToolCall(data string) ParsedToolCall {
@@ -805,12 +800,14 @@ func extractOpenCodeToolCall(data string) ParsedToolCall {
 			if len(state.Input) > 0 {
 				inputJSON = string(state.Input)
 			}
-			// OpenCode's skill tool records the skill name
-			// directly in its input and metadata, so the name
-			// is read from there rather than inferred.
-			if d.ToolName == "skill" {
-				skillName = openCodeSkillName(state, inputJSON)
-			}
+		}
+		// OpenCode's skill tool records the skill name directly
+		// in its state (input.name, metadata.name, metadata.dir),
+		// so the name is read from there rather than inferred.
+		// gjson access is tolerant: a non-object or mistyped
+		// metadata cannot make this fail or drop the input.
+		if d.ToolName == "skill" {
+			skillName = openCodeSkillName(string(d.State), inputJSON)
 		}
 	}
 
@@ -826,17 +823,23 @@ func extractOpenCodeToolCall(data string) ParsedToolCall {
 // openCodeSkillName resolves the skill name for an OpenCode skill
 // tool call. OpenCode stores the name directly: first in the tool
 // input's "name" field, then in the resolved skill metadata, and
-// finally derivable from the skill directory's base name.
-func openCodeSkillName(state openCodeToolState, inputJSON string) string {
+// finally derivable from the skill directory's base name. Both
+// state and input are read with gjson so a non-object or mistyped
+// metadata shape degrades to "" rather than failing the parse.
+func openCodeSkillName(state, inputJSON string) string {
 	if name := strings.TrimSpace(
 		gjson.Get(inputJSON, "name").Str,
 	); name != "" {
 		return name
 	}
-	if name := strings.TrimSpace(state.Metadata.Name); name != "" {
+	if name := strings.TrimSpace(
+		gjson.Get(state, "metadata.name").Str,
+	); name != "" {
 		return name
 	}
-	if dir := strings.TrimSpace(state.Metadata.Dir); dir != "" {
+	if dir := strings.TrimSpace(
+		gjson.Get(state, "metadata.dir").Str,
+	); dir != "" {
 		if base := filepath.Base(dir); base != "." &&
 			base != string(filepath.Separator) {
 			return base
