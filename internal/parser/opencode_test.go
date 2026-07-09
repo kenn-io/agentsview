@@ -837,6 +837,104 @@ func TestParseOpenCodeDB_ToolParts(t *testing.T) {
 	}})
 }
 
+// TestParseOpenCodeDB_SkillTool verifies that a "skill" tool part
+// populates ParsedToolCall.SkillName straight from the tool's own
+// input, without going through the read-file/shell-command
+// inference heuristics. Before this fix extractOpenCodeToolCall
+// never set SkillName at all (#1040).
+func TestParseOpenCodeDB_SkillTool(t *testing.T) {
+	dbPath, seeder, db := newTestDB(t)
+	defer db.Close()
+
+	seeder.AddProject("prj_1", "/tmp/proj")
+	seeder.AddSession("ses_skill", "prj_1", "", "", 1700000000000, 1700000030000)
+
+	seeder.AddMessage("msg_u", "ses_skill", 1700000000000, 1700000000000, `{"role":"user"}`)
+	seeder.AddPart("prt_u", "msg_u", "ses_skill", 1700000000000, 1700000000000, `{"type":"text","text":"use the doc-writer skill"}`)
+
+	seeder.AddMessage("msg_a", "ses_skill", 1700000010000, 1700000010000, `{"role":"assistant"}`)
+	seeder.AddPart("prt_t", "msg_a", "ses_skill", 1700000010000, 1700000010000,
+		`{"type":"tool","tool":"skill","callID":"call_skill","state":{"input":{"name":"doc-writer"}}}`)
+
+	sessions, err := parseOpenCodeAll(dbPath, "m")
+	require.NoError(t, err, "ParseOpenCodeDB")
+	require.Len(t, sessions, 1, "sessions len")
+
+	msgs := sessions[0].Messages
+	require.Len(t, msgs, 2, "messages len")
+
+	ast := msgs[1]
+	require.Len(t, ast.ToolCalls, 1, "tool calls len")
+	assertEq(t, "SkillName", ast.ToolCalls[0].SkillName, "doc-writer")
+}
+
+// TestParseOpenCodeDB_SkillNameFromReadTool verifies that a
+// "read" tool part whose input points at a real on-disk SKILL.md
+// infers the skill name from the file's frontmatter, matching the
+// Cursor/Codex read-file heuristic shared via inferOpenCodeSkillName.
+func TestParseOpenCodeDB_SkillNameFromReadTool(t *testing.T) {
+	path := writeTestSkill(t, "foo", "foo")
+
+	dbPath, seeder, db := newTestDB(t)
+	defer db.Close()
+
+	seeder.AddProject("prj_1", "/tmp/proj")
+	seeder.AddSession("ses_read", "prj_1", "", "", 1700000000000, 1700000030000)
+
+	seeder.AddMessage("msg_u", "ses_read", 1700000000000, 1700000000000, `{"role":"user"}`)
+	seeder.AddPart("prt_u", "msg_u", "ses_read", 1700000000000, 1700000000000, `{"type":"text","text":"read the skill file"}`)
+
+	seeder.AddMessage("msg_a", "ses_read", 1700000010000, 1700000010000, `{"role":"assistant"}`)
+	seeder.AddPart("prt_t", "msg_a", "ses_read", 1700000010000, 1700000010000,
+		`{"type":"tool","tool":"read","callID":"call_read","state":{"input":{"file_path":`+
+			quoteJSON(t, path)+`}}}`)
+
+	sessions, err := parseOpenCodeAll(dbPath, "m")
+	require.NoError(t, err, "ParseOpenCodeDB")
+	require.Len(t, sessions, 1, "sessions len")
+
+	msgs := sessions[0].Messages
+	require.Len(t, msgs, 2, "messages len")
+
+	ast := msgs[1]
+	require.Len(t, ast.ToolCalls, 1, "tool calls len")
+	assertEq(t, "SkillName", ast.ToolCalls[0].SkillName, "foo")
+}
+
+// TestParseOpenCodeDB_SkillNameFromShellCommandRelativePath
+// verifies that a "bash" tool part running a relative-path
+// SKILL.md read is resolved against the session's project
+// worktree (threaded through buildOpenCodeMessage), matching the
+// Codex shell-command heuristic.
+func TestParseOpenCodeDB_SkillNameFromShellCommandRelativePath(t *testing.T) {
+	path := writeTestSkill(t, "foo", "foo")
+	worktree := filepath.Dir(filepath.Dir(filepath.Dir(path)))
+
+	dbPath, seeder, db := newTestDB(t)
+	defer db.Close()
+
+	seeder.AddProject("prj_1", worktree)
+	seeder.AddSession("ses_bash", "prj_1", "", "", 1700000000000, 1700000030000)
+
+	seeder.AddMessage("msg_u", "ses_bash", 1700000000000, 1700000000000, `{"role":"user"}`)
+	seeder.AddPart("prt_u", "msg_u", "ses_bash", 1700000000000, 1700000000000, `{"type":"text","text":"cat the skill file"}`)
+
+	seeder.AddMessage("msg_a", "ses_bash", 1700000010000, 1700000010000, `{"role":"assistant"}`)
+	seeder.AddPart("prt_t", "msg_a", "ses_bash", 1700000010000, 1700000010000,
+		`{"type":"tool","tool":"bash","callID":"call_bash","state":{"input":{"command":"cat skills/foo/SKILL.md"}}}`)
+
+	sessions, err := parseOpenCodeAll(dbPath, "m")
+	require.NoError(t, err, "ParseOpenCodeDB")
+	require.Len(t, sessions, 1, "sessions len")
+
+	msgs := sessions[0].Messages
+	require.Len(t, msgs, 2, "messages len")
+
+	ast := msgs[1]
+	require.Len(t, ast.ToolCalls, 1, "tool calls len")
+	assertEq(t, "SkillName", ast.ToolCalls[0].SkillName, "foo")
+}
+
 func TestParseOpenCodeDB_EmptySession(t *testing.T) {
 	dbPath, seeder, db := newTestDB(t)
 	defer db.Close()
