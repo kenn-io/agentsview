@@ -44,7 +44,7 @@ func TestSQLiteContainerPassPromotesOnlyPreDiscoveryCaptures(t *testing.T) {
 		)
 		e.noteSQLiteContainerResult("/data/opencode.db#ses-1", true)
 		e.noteSQLiteContainerResult("/data/opencode.db#ses-2", true)
-		e.finishSQLiteContainerPass(false)
+		e.finishSQLiteContainerPass(false, true)
 		assert.Empty(t, e.trustedSQLiteContainers,
 			"a container without a pre-discovery capture must not be trusted")
 	})
@@ -64,7 +64,7 @@ func TestSQLiteContainerPassPromotesOnlyPreDiscoveryCaptures(t *testing.T) {
 		)
 		e.noteSQLiteContainerResult(dbPath+"#ses-1", true)
 		e.noteSQLiteContainerResult(dbPath+"#ses-2", true)
-		e.finishSQLiteContainerPass(false)
+		e.finishSQLiteContainerPass(false, true)
 		require.Contains(t, e.trustedSQLiteContainers, dbPath)
 		trusted := e.trustedSQLiteContainers[dbPath]
 		assert.Equal(t, pre, trusted.state,
@@ -109,7 +109,7 @@ func TestSQLiteContainerPassFailsOnCaptureDiscoveryMismatch(t *testing.T) {
 		"a mismatched container must not gate-skip its sessions")
 
 	e.noteSQLiteContainerResult(file.Path, true)
-	e.finishSQLiteContainerPass(false)
+	e.finishSQLiteContainerPass(false, true)
 	assert.Equal(t, pre, e.trustedSQLiteContainers[dbPath].state,
 		"a mismatched container must not be promoted past its trusted state")
 }
@@ -137,7 +137,7 @@ func TestSQLiteContainerGateParsesNewlyUnshadowedSession(t *testing.T) {
 		map[string]parser.SQLiteContainerState{dbPath: state},
 	)
 	e.noteSQLiteContainerResult(verified.Path, true)
-	e.finishSQLiteContainerPass(false)
+	e.finishSQLiteContainerPass(false, true)
 	require.Contains(t, e.trustedSQLiteContainers, dbPath)
 
 	// The storage JSON is removed; the DB is untouched. The next pass
@@ -153,4 +153,49 @@ func TestSQLiteContainerGateParsesNewlyUnshadowedSession(t *testing.T) {
 		"the verified session must still gate-skip")
 	assert.False(t, e.sqliteContainerSourceFresh(exposed),
 		"a newly exposed row must parse despite the unchanged container")
+}
+
+// TestSQLiteContainerFullPassDropsUndiscoveredTrust pins the stale-trust
+// cleanup: a complete full-discovery pass that finds no sources for a
+// trusted container (fully shadowed by storage JSONs, or gone) must drop
+// its trusted entry — the session set is no longer being maintained, and
+// stale membership would gate-skip a row re-exposed by a later storage
+// removal that leaves the DB untouched. Scoped and incomplete passes see
+// only a subset of roots, so absence there proves nothing and the entry
+// must survive.
+func TestSQLiteContainerFullPassDropsUndiscoveredTrust(t *testing.T) {
+	trusted := func() map[string]trustedSQLiteContainer {
+		return map[string]trustedSQLiteContainer{
+			"/data/opencode.db": {
+				sessions: map[string]struct{}{"ses-1": {}},
+			},
+		}
+	}
+
+	t.Run("full pass drops the undiscovered container", func(t *testing.T) {
+		e := &Engine{}
+		e.trustedSQLiteContainers = trusted()
+		e.beginSQLiteContainerPass(nil, nil)
+		e.finishSQLiteContainerPass(false, true)
+		assert.Empty(t, e.trustedSQLiteContainers,
+			"a full pass with no discovered sources must drop the trust")
+	})
+
+	t.Run("scoped pass keeps the entry", func(t *testing.T) {
+		e := &Engine{}
+		e.trustedSQLiteContainers = trusted()
+		e.beginSQLiteContainerPass(nil, nil)
+		e.finishSQLiteContainerPass(false, false)
+		assert.Contains(t, e.trustedSQLiteContainers, "/data/opencode.db",
+			"a scoped pass must not drop trust for out-of-scope containers")
+	})
+
+	t.Run("incomplete pass keeps the entry", func(t *testing.T) {
+		e := &Engine{}
+		e.trustedSQLiteContainers = trusted()
+		e.beginSQLiteContainerPass(nil, nil)
+		e.finishSQLiteContainerPass(true, true)
+		assert.Contains(t, e.trustedSQLiteContainers, "/data/opencode.db",
+			"an incomplete pass must not drop any trust")
+	})
 }

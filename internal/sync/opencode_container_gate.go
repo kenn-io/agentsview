@@ -255,12 +255,31 @@ func (e *Engine) poisonSQLiteContainerPass() {
 // without errors, retries, or write failures. incomplete marks passes that
 // must never promote (aborted, cancelled, or discovery failures whose
 // provider cannot be attributed).
-func (e *Engine) finishSQLiteContainerPass(incomplete bool) {
+//
+// fullDiscovery marks passes whose discovery covered every configured
+// root (full syncs, as opposed to changed-path or scoped-root passes).
+// Such a pass is authoritative for which rows are discoverable, so a
+// trusted container it discovered no sources for — fully shadowed by
+// storage JSONs, or gone — loses its trusted entry: the entry's session
+// set is no longer being maintained, and stale membership would otherwise
+// gate-skip a row re-exposed later by a storage removal that leaves the
+// DB untouched.
+func (e *Engine) finishSQLiteContainerPass(incomplete, fullDiscovery bool) {
 	e.containerMu.Lock()
 	defer e.containerMu.Unlock()
 	pass := e.containerPass
 	e.containerPass = nil
-	if pass == nil || pass.poisoned || incomplete {
+	if incomplete {
+		return
+	}
+	if fullDiscovery {
+		for dbPath := range e.trustedSQLiteContainers {
+			if pass == nil || pass.discovered[dbPath] == 0 {
+				delete(e.trustedSQLiteContainers, dbPath)
+			}
+		}
+	}
+	if pass == nil || pass.poisoned {
 		return
 	}
 	for dbPath, state := range pass.captured {

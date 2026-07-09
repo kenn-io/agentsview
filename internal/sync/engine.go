@@ -606,7 +606,7 @@ func (e *Engine) SyncPathsContext(ctx context.Context, paths []string) {
 		ctx, results, len(files), len(files), nil,
 		syncWriteDefault,
 	)
-	e.finishSQLiteContainerPass(true)
+	e.finishSQLiteContainerPass(true, false)
 	e.anomalies.applyTo(&stats)
 	e.persistSkipCache()
 
@@ -2063,8 +2063,11 @@ func (e *Engine) syncAllLocked(
 	}
 	// Discovery failures cannot be attributed to a provider here, so any
 	// failure conservatively blocks every container promotion this pass.
+	// Only unscoped passes discovered every root, so only they may drop
+	// trusted entries for containers that produced no sources.
 	e.finishSQLiteContainerPass(
 		stats.Aborted || ctx.Err() != nil || providerFailures > 0,
+		scope == nil,
 	)
 	stats.nonContainerDiscovered = nonContainerDiscovered
 	if verbose {
