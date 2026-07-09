@@ -408,7 +408,7 @@ func insertRecallEntryTx(tx *sql.Tx, m RecallEntry) error {
 	if err := normalizeRecallEntryReviewState(&m); err != nil {
 		return err
 	}
-	if err := validateRecallEvidenceSessions(m); err != nil {
+	if err := validateRecallEvidenceOwnership(m); err != nil {
 		return err
 	}
 	_, err := tx.Exec(`
@@ -430,16 +430,13 @@ func insertRecallEntryTx(tx *sql.Tx, m RecallEntry) error {
 	}
 
 	for _, e := range m.Evidence {
-		if e.EntryID == "" {
-			e.EntryID = m.ID
-		}
 		_, err = tx.Exec(`
 			INSERT INTO recall_evidence (
 				entry_id, session_id, message_start_ordinal,
 				message_end_ordinal, message_start_source_uuid,
 				message_end_source_uuid, content_digest, tool_use_id, snippet
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			e.EntryID, e.SessionID, e.MessageStartOrdinal,
+			m.ID, e.SessionID, e.MessageStartOrdinal,
 			e.MessageEndOrdinal, e.MessageStartSourceUUID,
 			e.MessageEndSourceUUID, e.ContentDigest, e.ToolUseID, e.Snippet,
 		)
@@ -450,8 +447,15 @@ func insertRecallEntryTx(tx *sql.Tx, m RecallEntry) error {
 	return nil
 }
 
-func validateRecallEvidenceSessions(m RecallEntry) error {
+func validateRecallEvidenceOwnership(m RecallEntry) error {
 	for _, evidence := range m.Evidence {
+		if evidence.EntryID != "" && evidence.EntryID != m.ID {
+			return fmt.Errorf(
+				"recall evidence entry %q does not match inserted entry %q",
+				evidence.EntryID,
+				m.ID,
+			)
+		}
 		if evidence.SessionID != m.SourceSessionID {
 			return fmt.Errorf(
 				"recall evidence session %q does not match source session %q",

@@ -108,6 +108,98 @@ func TestInsertRecallEntryRejectsEvidenceFromDifferentSession(t *testing.T) {
 	assert.Zero(t, evidenceCount)
 }
 
+func TestInsertRecallEntryRejectsEvidenceForDifferentEntry(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "source-a", "agentsview")
+	insertSession(t, d, "source-b", "agentsview")
+	_, err := d.InsertRecallEntry(RecallEntry{
+		ID:              "entry-b",
+		Type:            "fact",
+		Scope:           "project",
+		Status:          "accepted",
+		Title:           "Existing target",
+		Body:            "Evidence for this entry must remain unchanged.",
+		SourceSessionID: "source-b",
+		Evidence: []RecallEvidence{{
+			SessionID:           "source-b",
+			MessageStartOrdinal: 1,
+			MessageEndOrdinal:   2,
+		}},
+	})
+	require.NoError(t, err)
+
+	var baselineEntryCount int
+	require.NoError(t, d.getReader().QueryRow(
+		`SELECT count(*) FROM recall_entries`,
+	).Scan(&baselineEntryCount))
+	var baselineEvidenceCount int
+	require.NoError(t, d.getReader().QueryRow(
+		`SELECT count(*) FROM recall_evidence WHERE entry_id = ?`, "entry-b",
+	).Scan(&baselineEvidenceCount))
+	require.Equal(t, 1, baselineEvidenceCount)
+
+	_, err = d.InsertRecallEntry(RecallEntry{
+		ID:              "entry-a",
+		Type:            "fact",
+		Scope:           "project",
+		Status:          "accepted",
+		Title:           "Redirected evidence",
+		Body:            "This evidence must not attach to another entry.",
+		SourceSessionID: "source-a",
+		Evidence: []RecallEvidence{{
+			EntryID:             "entry-b",
+			SessionID:           "source-a",
+			MessageStartOrdinal: 3,
+			MessageEndOrdinal:   4,
+		}},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "entry-a")
+	assert.Contains(t, err.Error(), "entry-b")
+	got, getErr := d.GetRecallEntry(context.Background(), "entry-a")
+	require.NoError(t, getErr)
+	assert.Nil(t, got)
+	var entryCount int
+	require.NoError(t, d.getReader().QueryRow(
+		`SELECT count(*) FROM recall_entries`,
+	).Scan(&entryCount))
+	assert.Equal(t, baselineEntryCount, entryCount)
+	var evidenceCount int
+	require.NoError(t, d.getReader().QueryRow(
+		`SELECT count(*) FROM recall_evidence WHERE entry_id = ?`, "entry-b",
+	).Scan(&evidenceCount))
+	assert.Equal(t, baselineEvidenceCount, evidenceCount)
+}
+
+func TestInsertRecallEntryAcceptsEvidenceWithMatchingEntryID(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "source-a", "agentsview")
+
+	_, err := d.InsertRecallEntry(RecallEntry{
+		ID:              "entry-a",
+		Type:            "fact",
+		Scope:           "project",
+		Status:          "accepted",
+		Title:           "Matching evidence owner",
+		Body:            "Round-tripped evidence may retain its owning entry ID.",
+		SourceSessionID: "source-a",
+		Evidence: []RecallEvidence{{
+			EntryID:             "entry-a",
+			SessionID:           "source-a",
+			MessageStartOrdinal: 1,
+			MessageEndOrdinal:   2,
+		}},
+	})
+	require.NoError(t, err)
+
+	got, err := d.GetRecallEntry(context.Background(), "entry-a")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Len(t, got.Evidence, 1)
+	assert.Equal(t, "entry-a", got.Evidence[0].EntryID)
+}
+
 func TestOpenRepairsMissingRecallEntrySourceEpisodeIndex(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.db")
 	d, err := Open(path)
