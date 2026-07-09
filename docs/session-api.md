@@ -215,6 +215,10 @@ agentsview session list [flags]
 One-shot and automated sessions are excluded by default. Use the
 `--include-*` flags to opt back in.
 
+Date filters match a session when its activity window overlaps the selected
+date or range. Sessions that start before midnight and remain active after it
+therefore appear on both dates.
+
 | Flag                  | HTTP param          | Notes                             |
 |-----------------------|---------------------|-----------------------------------|
 | `--project`           | `project`           | string                            |

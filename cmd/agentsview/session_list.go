@@ -144,11 +144,11 @@ func newSessionListCommand() *cobra.Command {
 	flags.StringVar(&agent, "agent", "",
 		"Filter by agent (claude, codex, cursor, ...)")
 	flags.StringVar(&date, "date", "",
-		"Filter sessions started on YYYY-MM-DD")
+		"Filter sessions active on YYYY-MM-DD")
 	flags.StringVar(&dateFrom, "date-from", "",
-		"Filter sessions started on or after YYYY-MM-DD")
+		"Filter sessions active on or after YYYY-MM-DD")
 	flags.StringVar(&dateTo, "date-to", "",
-		"Filter sessions started on or before YYYY-MM-DD")
+		"Filter sessions active on or before YYYY-MM-DD")
 	flags.StringVar(&activeSince, "active-since", "",
 		"Filter sessions active since RFC3339 timestamp")
 	flags.StringVar(&since, "since", "",

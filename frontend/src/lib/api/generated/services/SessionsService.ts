@@ -144,15 +144,15 @@ export class SessionsService {
      */
     agent?: string,
     /**
-     * Filter to a single YYYY-MM-DD date
+     * Filter sessions active on this YYYY-MM-DD date
      */
     date?: string,
     /**
-     * Filter start date
+     * Filter sessions active on or after this date
      */
     dateFrom?: string,
     /**
-     * Filter end date
+     * Filter sessions active on or before this date
      */
     dateTo?: string,
     /**
@@ -352,15 +352,15 @@ export class SessionsService {
      */
     agent?: string,
     /**
-     * Filter to a single YYYY-MM-DD date
+     * Filter sessions active on this YYYY-MM-DD date
      */
     date?: string,
     /**
-     * Filter start date
+     * Filter sessions active on or after this date
      */
     dateFrom?: string,
     /**
-     * Filter end date
+     * Filter sessions active on or before this date
      */
     dateTo?: string,
     /**

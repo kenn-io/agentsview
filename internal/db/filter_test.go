@@ -865,16 +865,35 @@ func TestIncludeChildrenExcludeOneShotAgent(t *testing.T) {
 	}
 }
 
-func TestActiveSinceUsesEndedAtOverStartedAt(t *testing.T) {
+func TestSessionDateFilterIncludesOverlappingSessions(t *testing.T) {
 	d := testDB(t)
 
-	// Session started in January, ended in June.
-	// A date_from filter for June would miss it (started too early),
-	// but active_since should catch it via ended_at.
-	insertSession(t, d, "s1", "proj", func(s *Session) {
-		s.StartedAt = new("2024-01-15T10:00:00Z")
-		s.EndedAt = new("2024-06-15T10:00:00Z")
-		s.MessageCount = 5
+	insertSession(t, d, "before", "proj", func(s *Session) {
+		s.StartedAt = new("2024-06-15T08:00:00Z")
+		s.EndedAt = new("2024-06-15T09:00:00Z")
+		s.MessageCount = 2
+	})
+	insertSession(t, d, "spanning", "proj", func(s *Session) {
+		s.StartedAt = new("2024-06-15T23:00:00Z")
+		s.EndedAt = new("2024-06-16T10:00:00Z")
+		s.MessageCount = 2
+	})
+	insertSession(t, d, "open", "proj", func(s *Session) {
+		s.StartedAt = new("2024-06-15T22:00:00Z")
+		s.MessageCount = 2
+	})
+	seedMessage(t, d, "open", 1, "user", "2024-06-16T11:00:00Z", "")
+	insertSession(t, d, "after", "proj", func(s *Session) {
+		s.StartedAt = new("2024-06-17T08:00:00Z")
+		s.EndedAt = new("2024-06-17T09:00:00Z")
+		s.MessageCount = 2
+	})
+	insertSession(t, d, "child", "proj", func(s *Session) {
+		s.StartedAt = new("2024-06-17T08:00:00Z")
+		s.EndedAt = new("2024-06-17T09:00:00Z")
+		s.MessageCount = 1
+		s.ParentSessionID = new("spanning")
+		s.RelationshipType = "subagent"
 	})
 
 	tests := []struct {
@@ -883,14 +902,24 @@ func TestActiveSinceUsesEndedAtOverStartedAt(t *testing.T) {
 		want   []string
 	}{
 		{
-			name:   "DateFrom misses due to early StartedAt",
-			filter: SessionFilter{DateFrom: "2024-06-01"},
-			want:   []string{},
+			name:   "ExactDate",
+			filter: SessionFilter{Date: "2024-06-16"},
+			want:   []string{"spanning", "open"},
 		},
 		{
-			name:   "ActiveSince catches due to later EndedAt",
-			filter: SessionFilter{ActiveSince: "2024-06-01T00:00:00Z"},
-			want:   []string{"s1"},
+			name:   "DateRange",
+			filter: SessionFilter{DateFrom: "2024-06-16", DateTo: "2024-06-16"},
+			want:   []string{"spanning", "open"},
+		},
+		{
+			name:   "DateFrom",
+			filter: SessionFilter{DateFrom: "2024-06-16"},
+			want:   []string{"spanning", "open", "after"},
+		},
+		{
+			name:   "DateTo",
+			filter: SessionFilter{DateTo: "2024-06-15"},
+			want:   []string{"before", "spanning", "open"},
 		},
 	}
 
@@ -899,6 +928,14 @@ func TestActiveSinceUsesEndedAtOverStartedAt(t *testing.T) {
 			requireSessions(t, d, tt.filter, tt.want)
 		})
 	}
+
+	index, err := d.GetSidebarSessionIndex(context.Background(), SessionFilter{
+		Date: "2024-06-16",
+	})
+	require.NoError(t, err, "GetSidebarSessionIndex")
+	requireSidebarIndexIDs(t, index.Sessions, []string{
+		"spanning", "open", "child",
+	})
 }
 
 func TestSessionFilterExcludeOneShot(t *testing.T) {

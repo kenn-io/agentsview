@@ -32,7 +32,8 @@ type QueryDialect struct {
 	placeholderStyle   placeholderStyle
 	trueLiteral        string
 	falseLiteral       string
-	dateExpr           string
+	dateStartExpr      func(func(string) string) string
+	dateEndExpr        func(func(string) string) string
 	dateParam          func(string) string
 	activityExpr       string
 	activityParam      func(string) string
@@ -54,6 +55,14 @@ type QueryDialect struct {
 	nullsLast                   bool
 }
 
+func outerSessionID(q func(string) string) string {
+	id := q("id")
+	if id == "id" {
+		return "sessions.id"
+	}
+	return id
+}
+
 // SQLiteQueryDialect returns the SQLite SQL fragments used by the local store.
 func SQLiteQueryDialect() QueryDialect {
 	return QueryDialect{
@@ -61,8 +70,17 @@ func SQLiteQueryDialect() QueryDialect {
 		placeholderStyle: placeholderQuestion,
 		trueLiteral:      "1",
 		falseLiteral:     "0",
-		dateExpr: "date(COALESCE(NULLIF(started_at, ''), " +
-			"created_at))",
+		dateStartExpr: func(q func(string) string) string {
+			return "date(COALESCE(NULLIF(" + q("started_at") +
+				", ''), " + q("created_at") + "))"
+		},
+		dateEndExpr: func(q func(string) string) string {
+			return "date(COALESCE(NULLIF(" + q("ended_at") +
+				", ''), (SELECT MAX(m.timestamp) FROM messages m" +
+				" WHERE m.session_id = " + outerSessionID(q) +
+				" AND m.timestamp != ''), NULLIF(" + q("started_at") +
+				", ''), " + q("created_at") + "))"
+		},
 		dateParam:              func(ph string) string { return ph },
 		activityExpr:           "COALESCE(NULLIF(ended_at, ''), NULLIF(started_at, ''), created_at)",
 		activityParam:          func(ph string) string { return ph },
@@ -90,8 +108,17 @@ func PostgresQueryDialect() QueryDialect {
 		placeholderStyle: placeholderDollar,
 		trueLiteral:      "TRUE",
 		falseLiteral:     "FALSE",
-		dateExpr: "DATE(COALESCE(started_at, created_at) " +
-			"AT TIME ZONE 'UTC')",
+		dateStartExpr: func(q func(string) string) string {
+			return "DATE(COALESCE(" + q("started_at") + ", " +
+				q("created_at") + ") AT TIME ZONE 'UTC')"
+		},
+		dateEndExpr: func(q func(string) string) string {
+			return "DATE(COALESCE(" + q("ended_at") +
+				", (SELECT MAX(m.timestamp) FROM messages m" +
+				" WHERE m.session_id = " + outerSessionID(q) +
+				" AND m.timestamp IS NOT NULL), " + q("started_at") +
+				", " + q("created_at") + ") AT TIME ZONE 'UTC')"
+		},
 		dateParam:    func(ph string) string { return ph + "::date" },
 		activityExpr: "COALESCE(ended_at, started_at, created_at)",
 		activityParam: func(ph string) string {
@@ -123,7 +150,17 @@ func DuckDBQueryDialect() QueryDialect {
 		placeholderStyle: placeholderQuestion,
 		trueLiteral:      "TRUE",
 		falseLiteral:     "FALSE",
-		dateExpr:         "CAST(COALESCE(started_at, created_at) AS DATE)",
+		dateStartExpr: func(q func(string) string) string {
+			return "CAST(COALESCE(" + q("started_at") + ", " +
+				q("created_at") + ") AS DATE)"
+		},
+		dateEndExpr: func(q func(string) string) string {
+			return "CAST(COALESCE(" + q("ended_at") +
+				", (SELECT MAX(m.timestamp) FROM messages m" +
+				" WHERE m.session_id = " + outerSessionID(q) +
+				" AND m.timestamp IS NOT NULL), " + q("started_at") +
+				", " + q("created_at") + ") AS DATE)"
+		},
 		dateParam: func(ph string) string {
 			return "CAST(" + ph + " AS DATE)"
 		},
@@ -516,15 +553,17 @@ func sessionFilterPredicates(
 			inPredicate(q("agent"), splitCSV(f.Agent), b))
 	}
 	if f.Date != "" {
-		preds = append(preds, b.dialect.dateExpr+" = "+
-			b.dialect.dateParam(b.Add(f.Date)))
+		preds = append(preds, "("+b.dialect.dateEndExpr(q)+" >= "+
+			b.dialect.dateParam(b.Add(f.Date))+" AND "+
+			b.dialect.dateStartExpr(q)+" <= "+
+			b.dialect.dateParam(b.Add(f.Date))+")")
 	}
 	if f.DateFrom != "" {
-		preds = append(preds, b.dialect.dateExpr+" >= "+
+		preds = append(preds, b.dialect.dateEndExpr(q)+" >= "+
 			b.dialect.dateParam(b.Add(f.DateFrom)))
 	}
 	if f.DateTo != "" {
-		preds = append(preds, b.dialect.dateExpr+" <= "+
+		preds = append(preds, b.dialect.dateStartExpr(q)+" <= "+
 			b.dialect.dateParam(b.Add(f.DateTo)))
 	}
 	if f.ActiveSince != "" {

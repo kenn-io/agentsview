@@ -44,9 +44,9 @@ type contentSearchInput struct {
 	Machine          string             `query:"machine" doc:"Filter by machine"`
 	GitBranch        string             `query:"git_branch" doc:"Filter by git branch; opaque (project, branch) tokens from the /branches endpoint"`
 	Agent            string             `query:"agent" doc:"Filter by agent"`
-	Date             string             `query:"date" format:"date" doc:"Filter to a single YYYY-MM-DD date"`
-	DateFrom         string             `query:"date_from" format:"date" doc:"Filter start date"`
-	DateTo           string             `query:"date_to" format:"date" doc:"Filter end date"`
+	Date             string             `query:"date" format:"date" doc:"Filter sessions active on this YYYY-MM-DD date"`
+	DateFrom         string             `query:"date_from" format:"date" doc:"Filter sessions active on or after this date"`
+	DateTo           string             `query:"date_to" format:"date" doc:"Filter sessions active on or before this date"`
 	ActiveSince      string             `query:"active_since" format:"date-time" doc:"Filter sessions active since this RFC3339 timestamp"`
 	IncludeChildren  bool               `query:"include_children" doc:"Include child sessions"`
 	IncludeAutomated bool               `query:"include_automated" doc:"Include automated sessions"`

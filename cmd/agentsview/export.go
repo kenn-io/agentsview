@@ -139,11 +139,11 @@ func newExportSessionsCommand() *cobra.Command {
 	flags.StringVar(&cfg.Agent, "agent", "",
 		"Filter by agent (claude, codex, cursor, ...)")
 	flags.StringVar(&cfg.Date, "date", "",
-		"Filter sessions started on YYYY-MM-DD")
+		"Filter sessions active on YYYY-MM-DD")
 	flags.StringVar(&cfg.DateFrom, "date-from", "",
-		"Filter sessions started on or after YYYY-MM-DD")
+		"Filter sessions active on or after YYYY-MM-DD")
 	flags.StringVar(&cfg.DateTo, "date-to", "",
-		"Filter sessions started on or before YYYY-MM-DD")
+		"Filter sessions active on or before YYYY-MM-DD")
 	flags.StringVar(&cfg.ActiveSince, "active-since", "",
 		"Filter sessions active since RFC3339 timestamp")
 	flags.IntVar(&cfg.MinMessages, "min-messages", 0,

@@ -462,9 +462,9 @@ type SessionFilter struct {
 	// GitBranch is a branchListSep-joined list of opaque (project, branch) tokens (EncodeBranchFilterToken).
 	GitBranch       string
 	Agent           string
-	Date            string // exact date YYYY-MM-DD
-	DateFrom        string // range start (inclusive)
-	DateTo          string // range end (inclusive)
+	Date            string // date overlapped by session activity, YYYY-MM-DD
+	DateFrom        string // activity range start (inclusive)
+	DateTo          string // activity range end (inclusive)
 	ActiveSince     string // ISO-8601 timestamp; filters on most recent activity
 	MinMessages     int    // message_count >= N (0 = no filter)
 	MaxMessages     int    // message_count <= N (0 = no filter)

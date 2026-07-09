@@ -110,9 +110,9 @@ func newSessionSearchCommand() *cobra.Command {
 	flags.StringVar(&excludeProject, "exclude-project", "", "Exclude project")
 	flags.StringVar(&machine, "machine", "", "Filter by machine")
 	flags.StringVar(&agent, "agent", "", "Filter by agent")
-	flags.StringVar(&date, "date", "", "Sessions started on YYYY-MM-DD")
-	flags.StringVar(&dateFrom, "date-from", "", "Sessions on or after YYYY-MM-DD")
-	flags.StringVar(&dateTo, "date-to", "", "Sessions on or before YYYY-MM-DD")
+	flags.StringVar(&date, "date", "", "Sessions active on YYYY-MM-DD")
+	flags.StringVar(&dateFrom, "date-from", "", "Sessions active on or after YYYY-MM-DD")
+	flags.StringVar(&dateTo, "date-to", "", "Sessions active on or before YYYY-MM-DD")
 	flags.StringVar(&activeSince, "active-since", "", "Active since RFC3339 timestamp")
 	flags.StringVar(&since, "since", "",
 		"Only sessions active since a relative duration (12h, 14d, 2w, 3m = 3 months, 1y) or YYYY-MM-DD")

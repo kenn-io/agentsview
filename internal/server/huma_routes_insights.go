@@ -485,10 +485,10 @@ func insightStringValue(s *string) string {
 // derived from, so a non-UTC viewer's summary covers the window the dashboard
 // shows rather than a UTC-shifted one. It applies the same automated-session
 // scope as BuildPrompt's session list so the summary reflects the same work the
-// prompt focuses on; the two otherwise select sessions differently (this uses
-// the activity report's half-open window with an ended_at fallback, BuildPrompt
-// uses ListSessions' calendar-date match on the start date), so the summary is a
-// range-level overview, not a row-for-row mirror of BuildPrompt's session list.
+// prompt focuses on. Both use session activity windows instead of start dates,
+// including the latest-message fallback for open sessions. The report resolves
+// its bounds in the requested timezone, so it remains a range-level overview
+// rather than a row-for-row mirror of BuildPrompt's UTC calendar-date filter.
 func (s *Server) activityRangeSummary(
 	ctx context.Context, req generateInsightRequest,
 ) (*insight.RangeSummary, error) {

@@ -773,9 +773,9 @@ agentsview export sessions [flags]
 | `--machine`           |         | Filter by machine name                                    |
 | `--git-branch`        |         | Filter by project/branch token                            |
 | `--agent`             |         | Filter by agent name                                      |
-| `--date`              |         | Include sessions started on `YYYY-MM-DD`                  |
-| `--date-from`         |         | Include sessions started on or after `YYYY-MM-DD`         |
-| `--date-to`           |         | Include sessions started on or before `YYYY-MM-DD`        |
+| `--date`              |         | Include sessions active on `YYYY-MM-DD`                   |
+| `--date-from`         |         | Include sessions active on or after `YYYY-MM-DD`          |
+| `--date-to`           |         | Include sessions active on or before `YYYY-MM-DD`         |
 | `--active-since`      |         | Include sessions active since an RFC3339 timestamp        |
 | `--min-messages`      | `0`     | Minimum total message count                               |
 | `--max-messages`      | `0`     | Maximum total message count                               |

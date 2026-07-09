@@ -532,7 +532,7 @@ Available URL filters:
 | `agent` | comma-separated agent ids |
 | `machine` | comma-separated machine names |
 | `termination` | comma-separated [status](#session-status-indicator) tiers — any of `active`, `stale`, `unclean`, `clean`, `awaiting_user` |
-| `date`, `date_from`, `date_to` | ISO date or range bounds |
+| `date`, `date_from`, `date_to` | ISO date or activity-overlap range bounds |
 | `active_since` | `true` to limit to the last 24 hours |
 | `min_messages`, `max_messages` | numeric message count bounds |
 | `min_user_messages` | numeric user-message threshold |

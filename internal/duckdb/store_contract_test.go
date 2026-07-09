@@ -5,6 +5,7 @@ package duckdb
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -12,6 +13,51 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDuckDBSessionDateFilterIncludesOverlappingSessions(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	for _, session := range []db.Session{
+		{
+			ID: "before", Project: "date-overlap", Machine: "local", Agent: "claude",
+			StartedAt: new("2024-06-15T08:00:00Z"),
+			EndedAt:   new("2024-06-15T09:00:00Z"), MessageCount: 2,
+		},
+		{
+			ID: "spanning", Project: "date-overlap", Machine: "local", Agent: "claude",
+			StartedAt: new("2024-06-15T23:00:00Z"),
+			EndedAt:   new("2024-06-16T10:00:00Z"), MessageCount: 2,
+		},
+		{
+			ID: "open", Project: "date-overlap", Machine: "local", Agent: "claude",
+			StartedAt: new("2024-06-15T22:00:00Z"), MessageCount: 2,
+		},
+	} {
+		require.NoError(t, local.UpsertSession(session), "upsert %s", session.ID)
+	}
+	require.NoError(t, local.InsertMessages([]db.Message{{
+		SessionID: "open", Ordinal: 1, Role: "user", Content: "x",
+		Timestamp: "2024-06-16T11:00:00Z", ContentLength: 1,
+	}}), "insert open-session message")
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	_, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err, "push to DuckDB")
+	store := NewStoreFromDB(syncer.DB())
+
+	page, err := store.ListSessions(ctx, db.SessionFilter{
+		Project: "date-overlap",
+		Date:    "2024-06-16",
+		Limit:   50,
+	})
+	require.NoError(t, err, "ListSessions")
+	ids := make([]string, len(page.Sessions))
+	for i, session := range page.Sessions {
+		ids[i] = session.ID
+	}
+	slices.Sort(ids)
+	assert.Equal(t, []string{"open", "spanning"}, ids)
+}
 
 func TestDuckDBStoreContract(t *testing.T) {
 	store, fixture := newSyncedStore(t)
