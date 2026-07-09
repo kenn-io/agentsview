@@ -160,6 +160,7 @@ class LinkParser(html.parser.HTMLParser):
         self.style_attrs: list[str] = []
         self.style_blocks: list[str] = []
         self.meta: list[dict[str, str]] = []
+        self.svg_use_hrefs: list[str] = []
         self._in_style = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
@@ -179,6 +180,8 @@ class LinkParser(html.parser.HTMLParser):
             self.assets.append(attr["href"])
         if tag == "meta":
             self.meta.append(attr)
+        if tag == "use" and "href" in attr:
+            self.svg_use_hrefs.append(attr["href"])
         if "style" in attr:
             self.style_attrs.append(attr["style"])
         if tag == "style":
@@ -298,6 +301,15 @@ def check_global_metadata(current: pathlib.Path, parser: LinkParser) -> None:
             fail(f"missing metadata {kind}={name} with value {value} in {current}")
 
 
+def check_no_svg_use_href(current: pathlib.Path, parser: LinkParser) -> None:
+    for href in parser.svg_use_hrefs:
+        fail(
+            f"svg <use href={href!r}> found in {current}; SVGUseElement.href is "
+            "read-only, so Zensical navigation.instant throws while loading the "
+            "page and site navigation freezes. Use xlink:href instead."
+        )
+
+
 def check_discord_header_link(current: pathlib.Path, parser: LinkParser) -> None:
     found = any(
         link.get("href") == "https://discord.gg/fDnmxB8Wkq"
@@ -389,6 +401,7 @@ def main() -> None:
     for current, parser in parsed_by_file.items():
         check_global_metadata(current, parser)
         check_discord_header_link(current, parser)
+        check_no_svg_use_href(current, parser)
 
     for spec in REQUIRED_FRAGMENTS:
         parsed = urllib.parse.urlparse(spec)

@@ -207,6 +207,56 @@ func TestBuiltSiteCheckRequiresMarkdownCompanions(t *testing.T) {
 	assert.Contains(t, string(output), "missing route markdown /")
 }
 
+func TestBuiltSiteCheckRejectsSvgUsePlainHref(t *testing.T) {
+	tests := []struct {
+		name     string
+		useTag   string
+		wantPass bool
+	}{
+		{
+			name:     "plain href breaks instant navigation",
+			useTag:   `<svg viewBox="0 0 24 24"><use href="#icon"/></svg>`,
+			wantPass: false,
+		},
+		{
+			name:     "xlink href is allowed",
+			useTag:   `<svg viewBox="0 0 24 24"><use xlink:href="#icon"/></svg>`,
+			wantPass: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tempDir := t.TempDir()
+			repo := filepath.Join(tempDir, "repo")
+			require.NoError(t, os.MkdirAll(repo, 0o755))
+
+			checkScript := installScript(t, repo, filepath.Join("docs", "scripts", "check_built_site.py"))
+			siteDir := filepath.Join(repo, "docs", "site")
+			writeMinimalBuiltDocsSite(t, siteDir)
+			writeBuiltSiteMarkdownCompanions(t, siteDir)
+
+			indexPath := filepath.Join(siteDir, "index.html")
+			page, err := os.ReadFile(indexPath)
+			require.NoError(t, err)
+			patched := strings.Replace(string(page), "</body>", tt.useTag+"</body>", 1)
+			require.NoError(t, os.WriteFile(indexPath, []byte(patched), 0o644))
+
+			pythonPath := requireRunnablePython3(t)
+			cmd := exec.Command(pythonPath, checkScript)
+			cmd.Dir = filepath.Join(repo, "docs")
+			output, err := cmd.CombinedOutput()
+
+			if tt.wantPass {
+				require.NoError(t, err, string(output))
+				assert.Contains(t, string(output), "built site checks passed")
+			} else {
+				require.Error(t, err, string(output))
+				assert.Contains(t, string(output), "Use xlink:href instead")
+			}
+		})
+	}
+}
+
 func installScript(t *testing.T, repo, scriptRel string) string {
 	t.Helper()
 	script, err := os.ReadFile(filepath.Join("..", scriptRel))
@@ -233,29 +283,30 @@ func requireRunnablePython3(t *testing.T) string {
 	return pythonPath
 }
 
+var builtDocsRoutes = []string{
+	"/",
+	"/quickstart/",
+	"/usage/",
+	"/activity/",
+	"/recent-edits/",
+	"/session-intelligence/",
+	"/mcp/",
+	"/token-usage/",
+	"/chat-import/",
+	"/insights/",
+	"/commands/",
+	"/stats/",
+	"/session-api/",
+	"/configuration/",
+	"/remote-access/",
+	"/pg-sync/",
+	"/duckdb/",
+	"/changelog/",
+}
+
 func writeMinimalBuiltDocsSite(t *testing.T, siteDir string) {
 	t.Helper()
-	routes := []string{
-		"/",
-		"/quickstart/",
-		"/usage/",
-		"/activity/",
-		"/recent-edits/",
-		"/session-intelligence/",
-		"/mcp/",
-		"/token-usage/",
-		"/chat-import/",
-		"/insights/",
-		"/commands/",
-		"/stats/",
-		"/session-api/",
-		"/configuration/",
-		"/remote-access/",
-		"/pg-sync/",
-		"/duckdb/",
-		"/changelog/",
-	}
-	for _, route := range routes {
+	for _, route := range builtDocsRoutes {
 		path := filepath.Join(siteDir, strings.Trim(route, "/"), "index.html")
 		if route == "/" {
 			path = filepath.Join(siteDir, "index.html")
@@ -278,6 +329,17 @@ func writeMinimalBuiltDocsSite(t *testing.T, siteDir string) {
 		[]byte("<urlset><url><loc>https://agentsview.io/</loc></url></urlset>\n"),
 		0o644,
 	))
+}
+
+func writeBuiltSiteMarkdownCompanions(t *testing.T, siteDir string) {
+	t.Helper()
+	for _, route := range builtDocsRoutes {
+		path := filepath.Join(siteDir, strings.Trim(route, "/")+".md")
+		if route == "/" {
+			path = filepath.Join(siteDir, "index.md")
+		}
+		require.NoError(t, os.WriteFile(path, []byte("# Page\n"), 0o644))
+	}
 }
 
 func minimalDocsHTML(ids []string) string {
