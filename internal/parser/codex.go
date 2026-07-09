@@ -282,6 +282,9 @@ func (b *codexSessionBuilder) handleResponseItem(
 	}
 
 	content := extractCodexContent(payload)
+	if role == "user" && b.firstUserContent == "" {
+		content = stripCodexRecommendedPluginsPrefix(content)
+	}
 	if strings.TrimSpace(content) == "" {
 		return
 	}
@@ -1651,6 +1654,9 @@ func (s *codexIncrementalSeed) observeUserMessage(
 		return
 	}
 	content := extractCodexContent(payload)
+	if s.firstUserContent == "" {
+		content = stripCodexRecommendedPluginsPrefix(content)
+	}
 	if strings.TrimSpace(content) == "" {
 		return
 	}
@@ -1766,6 +1772,25 @@ func isCodexSystemMessage(content string) bool {
 		strings.HasPrefix(trimmed, "<skill>") ||
 		isCodexSubagentNotification(content) ||
 		isCodexGoalContext(content)
+}
+
+// stripCodexRecommendedPluginsPrefix removes the plugin-discovery envelope
+// that recent Codex versions prepend to the synthetic context item at the
+// start of a session. It is called only while looking for the first genuine
+// user turn, so a later user message that quotes the envelope is preserved.
+func stripCodexRecommendedPluginsPrefix(content string) string {
+	const (
+		openTag  = "<recommended_plugins>"
+		closeTag = "</recommended_plugins>"
+	)
+	if !strings.HasPrefix(content, openTag) {
+		return content
+	}
+	_, rest, ok := strings.Cut(content[len(openTag):], closeTag)
+	if !ok {
+		return content
+	}
+	return strings.TrimLeft(rest, "\r\n")
 }
 
 // isCodexGoalContext reports whether content is a Codex /goal

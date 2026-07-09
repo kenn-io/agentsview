@@ -1516,6 +1516,57 @@ func TestParseCodexSession_EdgeCases(t *testing.T) {
 		assert.Equal(t, "Actual user message", msgs[0].Content)
 	})
 
+	t.Run("strips recommended plugins from initial context", func(t *testing.T) {
+		plugins := "<recommended_plugins>\n" +
+			"Install Google Drive when useful.\n" +
+			"</recommended_plugins>"
+		initialContext := fmt.Sprintf(
+			`{"timestamp":%q,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":%q},{"type":"input_text","text":%q},{"type":"input_text","text":%q}]}}`,
+			tsEarlyS1,
+			plugins,
+			"# AGENTS.md instructions for /tmp/project\n\n<INSTRUCTIONS>\nrepo rules\n</INSTRUCTIONS>",
+			"<environment_context>\n  <cwd>/tmp/project</cwd>\n</environment_context>",
+		)
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("abc", "/tmp", "user", tsEarly),
+			initialContext,
+			testjsonl.CodexMsgJSON("user", "Review the changes", tsEarlyS5),
+		)
+
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		require.Len(t, msgs, 1)
+		assert.Equal(t, "Review the changes", msgs[0].Content)
+		assert.Equal(t, "Review the changes", sess.FirstMessage)
+		assert.Equal(t, 1, sess.UserMessageCount)
+	})
+
+	t.Run("preserves user prompt after recommended plugins", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("abc", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON(
+				"user",
+				"<recommended_plugins>\nplugin list\n</recommended_plugins>\nFix the parser",
+				tsEarlyS1,
+			),
+			testjsonl.CodexMsgJSON(
+				"user",
+				"<recommended_plugins>later user text</recommended_plugins>",
+				tsEarlyS5,
+			),
+		)
+
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		require.Len(t, msgs, 2)
+		assert.Equal(t, "Fix the parser", msgs[0].Content)
+		assert.Equal(t, "<recommended_plugins>later user text</recommended_plugins>", msgs[1].Content)
+		assert.Equal(t, "Fix the parser", sess.FirstMessage)
+		assert.Equal(t, 2, sess.UserMessageCount)
+	})
+
 	// Codex injects skill template content as role=user JSONL
 	// entries when the model invokes a skill. These look like
 	// follow-up user turns to a naive count, which inflates
@@ -2048,6 +2099,39 @@ func TestParseCodexSessionFrom_DedupsReemittedPrompt(t *testing.T) {
 		assert.Contains(t, newMsgs[0].Content, "No issues found.")
 		assert.Equal(t, len(msgs), newMsgs[0].Ordinal,
 			"kept message must keep contiguous ordinals (no gap from the dropped replay)")
+	})
+
+	t.Run("dedups replay after stripped recommended plugins", func(t *testing.T) {
+		initial := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("inc-plugins", "/tmp", "codex_cli_rs", tsEarly),
+			testjsonl.CodexMsgJSON(
+				"user",
+				"<recommended_plugins>\nplugin list\n</recommended_plugins>\n"+prompt,
+				tsEarlyS1,
+			),
+			testjsonl.CodexMsgJSON("assistant", "looking", tsEarlyS5),
+		)
+		path := createTestFile(t, "incremental-plugins.jsonl", initial)
+		sess, msgs, err := parseCodexTestSession(t, path, "local", false)
+		require.NoError(t, err)
+		require.Equal(t, prompt, sess.FirstMessage)
+		require.Len(t, msgs, 2)
+
+		info, err := os.Stat(path)
+		require.NoError(t, err)
+		offset := info.Size()
+
+		appendLines(t, path, testjsonl.JoinJSONL(
+			testjsonl.CodexMsgJSON("user", "<turn_aborted>\ninterrupted", tsLate),
+			testjsonl.CodexMsgJSON("user", prompt, tsLate),
+			testjsonl.CodexMsgJSON("assistant", "No issues found.", tsLateS5),
+		))
+
+		newMsgs, _, _, err := parseCodexTestSessionFrom(t, path, offset, len(msgs), false)
+		require.NoError(t, err)
+		require.Len(t, newMsgs, 1)
+		assert.Equal(t, RoleAssistant, newMsgs[0].Role)
+		assert.Equal(t, "No issues found.", newMsgs[0].Content)
 	})
 
 	t.Run("keeps a re-emitted prompt when the prefix already had a distinct turn", func(t *testing.T) {

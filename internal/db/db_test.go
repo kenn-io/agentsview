@@ -853,6 +853,11 @@ func TestCurrentDataVersionToolInputNULSanitization(t *testing.T) {
 		"tool-call input_json NUL sanitization requires a data version bump")
 }
 
+func TestCurrentDataVersionRecommendedPluginsFiltering(t *testing.T) {
+	assert.GreaterOrEqual(t, CurrentDataVersion(), 60,
+		"Codex recommended-plugins filtering requires a data version bump")
+}
+
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s-events", "proj")

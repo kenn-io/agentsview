@@ -30,6 +30,11 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
+// Bumped to 60: the Codex parser removes the recommended-plugins
+// discovery envelope injected ahead of the first genuine user turn.
+// Existing Codex rows need re-parsing so the synthetic plugin list is
+// removed from stored messages, previews, and user-message counts.
+//
 // Bumped to 50: parser-derived text is sanitized for PostgreSQL
 // parity and fingerprints. Existing rows need re-parsing so stored
 // message/session shape, timestamps, roles, token counts, and content
@@ -277,7 +282,8 @@ import (
 // (51: Gemini cumulative-to-delta token reparse.)
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
-const dataVersion = 59
+// (60: Codex recommended-plugins prefix filtering.)
+const dataVersion = 60
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
