@@ -399,6 +399,10 @@ func duckContractLocalOnlyMethodsReadOnly(
 	_, err = store.InsertInsight(db.Insight{})
 	requireReadOnlyDuck(t, err)
 	requireReadOnlyDuck(t, store.DeleteInsight(1))
+	_, err = store.RecordRecallQueryEvent(context.Background(), db.RecallQueryEvent{
+		Surface: db.RecallQuerySurfaceQuery,
+	})
+	requireReadOnlyDuck(t, err)
 }
 
 func requireReadOnlyDuck(t *testing.T, err error) {

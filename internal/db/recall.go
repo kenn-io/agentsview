@@ -231,6 +231,9 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 		return fmt.Errorf("begin recall copy: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := copyRecallQueryEventsFromAttachedTx(ctx, tx); err != nil {
+		return err
+	}
 
 	res, err := tx.ExecContext(ctx, `
 		INSERT OR IGNORE INTO recall_entries (

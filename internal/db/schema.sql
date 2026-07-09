@@ -380,6 +380,42 @@ CREATE INDEX IF NOT EXISTS idx_recall_evidence_entry
 CREATE INDEX IF NOT EXISTS idx_recall_evidence_session
     ON recall_evidence(session_id);
 
+-- Append-only demand and exposure snapshots. Exposures deliberately do not
+-- reference recall_entries: measurements must survive recall/session deletion
+-- and full resync even when an exposed entry no longer exists.
+CREATE TABLE IF NOT EXISTS recall_query_events (
+    id                   TEXT PRIMARY KEY,
+    query_text           TEXT NOT NULL,
+    surface              TEXT NOT NULL,
+    filters_json         TEXT NOT NULL DEFAULT '{}',
+    trusted_only         INTEGER NOT NULL DEFAULT 0,
+    score_policy_version TEXT NOT NULL,
+    result_count         INTEGER NOT NULL DEFAULT 0 CHECK (result_count >= 0),
+    packed_count         INTEGER NOT NULL DEFAULT 0 CHECK (packed_count >= 0),
+    top_score            REAL NOT NULL DEFAULT 0,
+    miss_reason          TEXT NOT NULL DEFAULT '',
+    created_at           TEXT NOT NULL
+        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_recall_query_events_created
+    ON recall_query_events(created_at DESC, id);
+CREATE INDEX IF NOT EXISTS idx_recall_query_events_surface
+    ON recall_query_events(surface, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS recall_query_exposures (
+    query_id TEXT NOT NULL
+        REFERENCES recall_query_events(id) ON DELETE CASCADE,
+    rank     INTEGER NOT NULL CHECK (rank >= 1),
+    entry_id TEXT NOT NULL,
+    score    REAL NOT NULL,
+    packed   INTEGER NOT NULL DEFAULT 0 CHECK (packed IN (0, 1)),
+    PRIMARY KEY (query_id, rank)
+);
+
+CREATE INDEX IF NOT EXISTS idx_recall_query_exposures_entry
+    ON recall_query_exposures(entry_id);
+
 -- Pinned messages table
 CREATE TABLE IF NOT EXISTS pinned_messages (
     id          INTEGER PRIMARY KEY,

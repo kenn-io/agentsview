@@ -593,6 +593,10 @@ func contractLocalOnlyMethods(
 		_, err = store.InsertInsight(Insight{})
 		requireReadOnly(t, err)
 		requireReadOnly(t, store.DeleteInsight(1))
+		_, err = store.RecordRecallQueryEvent(ctx, RecallQueryEvent{
+			Surface: RecallQuerySurfaceQuery,
+		})
+		requireReadOnly(t, err)
 		return
 	}
 
@@ -642,6 +646,12 @@ func contractLocalOnlyMethods(
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 	require.NoError(t, store.DeleteInsight(insightID))
+	queryID, err := store.RecordRecallQueryEvent(ctx, RecallQueryEvent{
+		Query:   "store contract recall query",
+		Surface: RecallQuerySurfaceQuery,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, queryID)
 }
 
 func TestStoreContractGetUsageMatchingSessionCountCountsCopilotSessionsWithoutUsageRows(

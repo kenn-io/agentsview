@@ -901,6 +901,8 @@ var readOnlyRequiredTables = []string{
 	"secret_findings",
 	"recall_entries",
 	"recall_evidence",
+	"recall_query_events",
+	"recall_query_exposures",
 }
 
 var (

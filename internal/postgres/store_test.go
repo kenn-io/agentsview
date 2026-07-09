@@ -1541,4 +1541,8 @@ func TestStoreWriteSurfaceSplitByCapability(t *testing.T) {
 		store.ReplaceSessionMessages("x", nil))
 	_, err = store.WriteSessionBatchAtomic(nil)
 	assert.ErrorIs(t, err, db.ErrReadOnly)
+	_, err = store.RecordRecallQueryEvent(ctx, db.RecallQueryEvent{
+		Surface: db.RecallQuerySurfaceQuery,
+	})
+	assert.ErrorIs(t, err, db.ErrReadOnly)
 }

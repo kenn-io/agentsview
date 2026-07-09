@@ -27,6 +27,11 @@ const (
 	StatusArchived = "archived"
 )
 
+// LexicalScorePolicyVersion identifies the ranking policy whose scores are
+// stored in recall query exposure snapshots. Bump it whenever score semantics
+// change so calibration never compares unlike score distributions silently.
+const LexicalScorePolicyVersion = "recall-lexical-v1"
+
 const (
 	ReviewStateHumanReviewed  = "human_reviewed"
 	ReviewStateUnreviewedAuto = "unreviewed_auto"

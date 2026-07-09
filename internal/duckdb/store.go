@@ -157,6 +157,12 @@ func (s *Store) QueryRecallEntries(
 	return db.RecallPage{}, db.ErrReadOnly
 }
 
+func (s *Store) RecordRecallQueryEvent(
+	_ context.Context, _ db.RecallQueryEvent,
+) (string, error) {
+	return "", db.ErrReadOnly
+}
+
 func (s *Store) InsertRecallEntry(_ db.RecallEntry) (string, error) {
 	return "", db.ErrReadOnly
 }

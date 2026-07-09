@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"os"
@@ -254,6 +255,12 @@ func TestOpenReadOnlyWriteMethodsReturnErrReadOnly(t *testing.T) {
 	requireReadOnlyOp(t, "UpdateSessionIncremental", func() error {
 		return readonly.UpdateSessionIncremental("s", IncrementalSessionUpdate{})
 	})
+	requireReadOnlyOp(t, "RecordRecallQueryEvent", func() error {
+		_, err := readonly.RecordRecallQueryEvent(
+			context.Background(), RecallQueryEvent{Surface: "query"},
+		)
+		return err
+	})
 }
 
 func TestOpenReadOnlyRejectsMissingMigratedColumn(t *testing.T) {
@@ -311,6 +318,8 @@ func TestOpenReadOnlyRejectsMissingReadTable(t *testing.T) {
 		{"secret_findings", "id"},
 		{"pg_sync_state", "key"},
 		{"model_pricing", "model_pattern"},
+		{"recall_query_events", "id"},
+		{"recall_query_exposures", "query_id"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.table, func(t *testing.T) {
