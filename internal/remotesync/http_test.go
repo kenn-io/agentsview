@@ -520,9 +520,10 @@ func TestHTTPSyncMirrorPartitionsFileScopedAgents(t *testing.T) {
 	require.NoError(t, err)
 	assert.FileExists(t, scopedLocal)
 
-	// Second sync: the changed session travels as a delta, the
-	// file-scoped export is re-fetched in full, and — despite being
-	// absent from the manifest — survives the mirror deletion pass.
+	// Second sync: the changed session travels as a delta, and the
+	// file-scoped export — cleared by the mirror deletion pass because
+	// it is never in the manifest — is re-fetched in full and lands
+	// back in the mirror.
 	changed := remote.writeSession(t, "a.jsonl", base.Add(5*time.Second),
 		"session a", "session a continued")
 	stats, err = hs.Run(context.Background())
@@ -532,6 +533,18 @@ func TestHTTPSyncMirrorPartitionsFileScopedAgents(t *testing.T) {
 	assert.Equal(t, []string{changed}, remote.archiveRequests[2].DeltaFiles)
 	assert.Contains(t, remote.archiveRequests[3].Files, parser.AgentGemini)
 	assert.FileExists(t, scopedLocal)
+
+	// The file-scoped export disappears from the remote: the deletion
+	// pass clears its mirror copy and nothing re-populates it, matching
+	// the legacy path where only the current export was ever extracted.
+	require.NoError(t, os.Remove(scoped))
+	delete(remote.targets.Dirs, parser.AgentGemini)
+	remote.targets.Files = nil
+	_, err = hs.Run(context.Background())
+	require.NoError(t, err)
+	assert.NoFileExists(t, scopedLocal)
+	assert.Len(t, remote.archiveRequests, 4,
+		"no archive requests when nothing changed and no file-scoped targets remain")
 }
 
 // The mirror lock must already be held when the manifest is fetched:

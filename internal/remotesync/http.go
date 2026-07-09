@@ -155,7 +155,7 @@ func (hs HTTPSync) runMirror(
 	manifest Manifest,
 	mirrorRoot string,
 ) (SyncStats, error) {
-	delta, err := MirrorDiff(mirrorRoot, manifest, targets.dirScoped)
+	delta, err := MirrorDiff(mirrorRoot, manifest)
 	if err != nil {
 		return SyncStats{}, err
 	}
@@ -163,7 +163,9 @@ func (hs HTTPSync) runMirror(
 	// type does not wedge the mirror: a stale file would block
 	// creating a directory of the same name and vice versa.
 	// ApplyMirrorDeletions prunes emptied directories for the same
-	// reason.
+	// reason. The pass also clears all file-scoped mirror content
+	// (never in the manifest); the file-scoped archive re-populates it
+	// below, so exports removed on the remote disappear locally too.
 	if err := ApplyMirrorDeletions(mirrorRoot, delta.Deletions); err != nil {
 		return SyncStats{}, err
 	}

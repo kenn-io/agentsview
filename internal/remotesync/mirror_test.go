@@ -10,16 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/parser"
 )
-
-// coveredClaude is the covered target set matching the remote paths
-// the mirror diff tests write under.
-func coveredClaude() TargetSet {
-	return TargetSet{Dirs: map[parser.AgentType][]string{
-		parser.AgentClaude: {"/home/u/.claude/projects"},
-	}}
-}
 
 func TestMirrorDirDisambiguatesSanitizedCollisions(t *testing.T) {
 	a := MirrorDir("/data", "host:8080")
@@ -56,7 +47,7 @@ func TestMirrorDiffFetchesNewChangedAndDeletesStale(t *testing.T) {
 		{Path: changedSize, Size: 9, MtimeNS: base.UnixNano()},
 		{Path: "/home/u/.claude/projects/p/new.jsonl", Size: 1, MtimeNS: base.UnixNano()},
 	}}
-	delta, err := MirrorDiff(root, m, coveredClaude())
+	delta, err := MirrorDiff(root, m)
 	require.NoError(t, err)
 	assert.Equal(t, []string{
 		changedSize,
@@ -65,26 +56,6 @@ func TestMirrorDiffFetchesNewChangedAndDeletesStale(t *testing.T) {
 	}, delta.Fetch)
 	assert.Equal(t, []string{staleLocal}, delta.Deletions)
 	assert.Equal(t, 4, delta.Total)
-}
-
-func TestMirrorDiffOnlyDeletesUnderCoveredRoots(t *testing.T) {
-	root := t.TempDir()
-	base := time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC)
-	staleLocal := writeMirrorFile(t, root,
-		"/home/u/.claude/projects/p/stale.jsonl", "aa", base)
-	// Mirror content from a file-scoped agent: absent from the
-	// manifest (which never models these agents) but not stale.
-	windsurfLocal := writeMirrorFile(t, root,
-		"/home/u/windsurf/workspaceStorage/1/state.vscdb", "bb", base)
-	extraLocal := writeMirrorFile(t, root, "/home/u/.codex/history.jsonl", "cc", base)
-
-	covered := coveredClaude()
-	covered.ExtraFiles = []string{"/home/u/.codex/history.jsonl"}
-	delta, err := MirrorDiff(root, Manifest{}, covered)
-	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{staleLocal, extraLocal}, delta.Deletions)
-	require.NoError(t, ApplyMirrorDeletions(root, delta.Deletions))
-	assert.FileExists(t, windsurfLocal)
 }
 
 func TestMirrorDiffTruncatesMtimeToMicroseconds(t *testing.T) {
@@ -96,7 +67,7 @@ func TestMirrorDiffTruncatesMtimeToMicroseconds(t *testing.T) {
 		// Same microsecond, different nanosecond remainder: unchanged.
 		{Path: path, Size: 2, MtimeNS: base.UnixNano() + 999},
 	}}
-	delta, err := MirrorDiff(root, m, coveredClaude())
+	delta, err := MirrorDiff(root, m)
 	require.NoError(t, err)
 	assert.Empty(t, delta.Fetch)
 	assert.Empty(t, delta.Deletions)
@@ -107,7 +78,7 @@ func TestMirrorDiffEmptyMirrorFetchesEverything(t *testing.T) {
 	m := Manifest{Files: []ManifestEntry{
 		{Path: "/home/u/.claude/projects/p/s.jsonl", Size: 1, MtimeNS: 1},
 	}}
-	delta, err := MirrorDiff(root, m, coveredClaude())
+	delta, err := MirrorDiff(root, m)
 	require.NoError(t, err)
 	assert.Len(t, delta.Fetch, 1)
 	assert.Empty(t, delta.Deletions)
