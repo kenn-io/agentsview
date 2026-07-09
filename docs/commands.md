@@ -886,24 +886,6 @@ agentsview embeddings retire <id>     # retire a generation
 
 ______________________________________________________________________
 
-### `agentsview recall`
-
-Store and recall reviewed, provenance-linked knowledge over the session archive.
-See [Session Recall](/recall/) for the entry model, the JSONL import format, and
-full command documentation.
-
-```bash
-agentsview recall list                       # list entries with filters
-agentsview recall get <id>                   # one entry with its evidence
-agentsview recall query "<text>"             # ranked keyword recall
-agentsview recall stats                      # counts by type, scope, status
-agentsview recall brief "<task>"             # packed context block for a task
-agentsview recall extract --session <id> --dry-run   # preview extraction chunks
-agentsview recall import <accepted-recall.jsonl>   # import reviewed entries
-```
-
-______________________________________________________________________
-
 ### `agentsview mcp`
 
 Run a read-only Model Context Protocol server for assistant clients that can
