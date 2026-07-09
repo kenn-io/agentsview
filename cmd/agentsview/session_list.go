@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -116,6 +117,14 @@ func newSessionListCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			notice, err := sessionListDefaultExclusionNotice(
+				cmd.Context(), svc, f, list.Total)
+			if err != nil {
+				return err
+			}
+			if notice != "" {
+				fmt.Fprintln(cmd.ErrOrStderr(), notice)
+			}
 			if outputFormat(cmd) == "json" {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(list)
 			}
@@ -186,6 +195,89 @@ func newSessionListCommand() *cobra.Command {
 		"Alias for --resume")
 
 	return cmd
+}
+
+func sessionListDefaultExclusionNotice(
+	ctx context.Context,
+	svc service.SessionService,
+	f service.ListFilter,
+	visibleTotal int,
+) (string, error) {
+	if f.Cursor != "" || (f.IncludeOneShot && f.IncludeAutomated) {
+		return "", nil
+	}
+
+	hiddenOneShot := 0
+	if !f.IncludeOneShot {
+		withOneShot := sessionListCountFilter(f)
+		withOneShot.IncludeOneShot = true
+		withOneShot.IncludeAutomated = f.IncludeAutomated
+		list, err := svc.List(ctx, withOneShot)
+		if err != nil {
+			return "", fmt.Errorf(
+				"counting one-shot session exclusions: %w", err)
+		}
+		hiddenOneShot = hiddenSessionCount(list.Total, visibleTotal)
+	}
+
+	hiddenAutomated := 0
+	if !f.IncludeAutomated {
+		withAutomated := sessionListCountFilter(f)
+		withAutomated.IncludeOneShot = f.IncludeOneShot
+		withAutomated.IncludeAutomated = true
+		list, err := svc.List(ctx, withAutomated)
+		if err != nil {
+			return "", fmt.Errorf(
+				"counting automated session exclusions: %w", err)
+		}
+		hiddenAutomated = hiddenSessionCount(list.Total, visibleTotal)
+	}
+
+	hiddenTotal := hiddenOneShot + hiddenAutomated
+	if hiddenTotal == 0 {
+		return "", nil
+	}
+
+	var hiddenParts []string
+	var flagParts []string
+	if hiddenOneShot > 0 {
+		hiddenParts = append(hiddenParts,
+			fmt.Sprintf("%d one-shot", hiddenOneShot))
+		flagParts = append(flagParts, "--include-one-shot")
+	}
+	if hiddenAutomated > 0 {
+		hiddenParts = append(hiddenParts,
+			fmt.Sprintf("%d automated", hiddenAutomated))
+		flagParts = append(flagParts, "--include-automated")
+	}
+
+	return fmt.Sprintf(
+		"Excluded %d %s by default: %s. Use %s to include them.",
+		hiddenTotal,
+		pluralSession(hiddenTotal),
+		strings.Join(hiddenParts, ", "),
+		strings.Join(flagParts, " and/or "),
+	), nil
+}
+
+func sessionListCountFilter(f service.ListFilter) service.ListFilter {
+	f.Cursor = ""
+	f.Limit = 1
+	return f
+}
+
+func hiddenSessionCount(expandedTotal, visibleTotal int) int {
+	if expandedTotal <= visibleTotal {
+		return 0
+	}
+	return expandedTotal - visibleTotal
+}
+
+func pluralSession(n int) string {
+	if n == 1 {
+		return "session"
+	}
+	return "sessions"
 }
 
 // sessionNameWidth caps the NAME column so a long first message can't
