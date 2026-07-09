@@ -3,6 +3,41 @@ title: Changelog
 description: Release history for AgentsView
 ---
 
+## 0.37.2
+<small>2026-07-08</small>
+
+**Improvements**
+
+- Speed up **periodic syncs for unchanged OpenCode-family SQLite containers**.
+  Once a full pass has verified every session in a shared OpenCode-format
+  SQLite database, later idle passes can skip the container before per-session
+  fingerprinting by comparing SQLite write markers for the database and WAL.
+- Reduce **heap retention after large sync backfills** by periodically
+  returning memory to the operating system while archived signal and secret
+  recomputations walk large message and tool-result payloads.
+
+**Bug fixes**
+
+- Show **OpenCode tool-call skill names** in tool analytics by extracting the
+  dedicated `skill` tool input and applying the existing `SKILL.md` inference
+  heuristics to OpenCode read and shell calls.
+- Shut down **watcher-triggered syncs** cleanly by threading the server run
+  context through changed-path syncs, prioritizing watcher stop signals, and
+  making unwatched-directory polling exit on cancellation.
+- Fix **desktop app icon spacing** by insetting the shared icon artwork and
+  regenerating the checked-in PNG, ICNS, and ICO assets.
+
+**Acknowledgements**
+
+- Thanks to [Marius van Niekerk](https://github.com/mariusvniekerk) for
+  speeding up unchanged OpenCode-family SQLite container syncs.
+- Thanks to [Rod Boev](https://github.com/rodboev) for OpenCode skill-name
+  extraction and large-backfill memory reductions.
+- Thanks to [Wes McKinney](https://github.com/wesm) for watcher shutdown fixes,
+  desktop icon spacing, and release documentation.
+
+---
+
 ## 0.37.1
 <small>2026-07-08</small>
 
