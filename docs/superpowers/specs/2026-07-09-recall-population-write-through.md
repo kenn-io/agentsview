@@ -63,8 +63,11 @@ The following rules apply to every milestone:
   exists in the source archive and is contained within the exact input window.
 - Query instrumentation distinguishes returned results, packed exposure, and
   downstream outcome. It never labels exposure as usefulness.
-- Parser-driven resync preserves recall and either remaps evidence to stable
-  source identities or revokes provenance when the evidence no longer matches.
+- Any transcript rewrite that can alter existing content or ordinals reconciles
+  affected recall evidence in the same transaction. It either remaps evidence
+  to stable source identities or revokes provenance when the evidence no
+  longer matches.
+- Full-database resync preserves both recall and its append-only query ledger.
 - New write paths are opt-in until calibration clears the registered gates.
 
 ## Milestone 1 — population foundation
@@ -87,6 +90,9 @@ The accepted JSONL input does not expose `review_state`. The reviewed importer
 sets `human_reviewed`; eval trajectory ingest sets `eval_raw`; a future
 write-through path sets `unreviewed_auto`. Low-level fixtures may specify the
 field through `RecallEntry`, but user- or model-supplied JSON cannot spoof it.
+The import operation itself is the authorization boundary: an unknown
+`review_state` input member is rejected rather than copied, and a future model
+output path cannot invoke the reviewed-import policy internally.
 
 For Milestone 1, `trusted_only` requires all of:
 
@@ -102,7 +108,13 @@ and an exact query filter; it is not a trust boundary.
 Existing non-eval rows are classified as `human_reviewed`, matching the only
 supported production write surface today. Rows whose source session has machine
 `recall-eval-ingest` are classified as `eval_raw`. The migration is
-non-destructive.
+non-destructive. Existing or future imports that use a `recall-import`
+placeholder session remain human-reviewed but have `provenance_ok` forced false:
+a zero-message placeholder cannot mechanically support evidence. They remain
+visible in untrusted inspection and cannot enter trusted recall. A later sync of
+the real source session does not silently promote them; an explicit revalidation
+may restore provenance only after the evidence range is verified and
+fingerprinted.
 
 ### Append-only demand and exposure ledger
 
@@ -113,6 +125,11 @@ Add two SQLite tables:
   result count, top score, packed count, miss reason, and timestamp.
 - `recall_query_exposures` — one ranked result per event: entry ID, rank, score,
   and whether it was packed into returned context.
+
+Exposure entry IDs are immutable snapshots, not cascading foreign keys. Deleting
+or losing a later recall row must not rewrite measurement history. Both tables
+are copied during full-database resync in the same preservation phase as recall
+entries, including exposures for entries no longer present.
 
 The query ID is returned in CLI/HTTP JSON when recording succeeds. Recording is
 best-effort for ordinary reads: a ledger failure is logged but does not suppress
@@ -126,9 +143,9 @@ Initial miss reasons are:
 - empty — at least one result was returned and, when context was requested, at
   least one entry was packed.
 
-`below_threshold` is reserved until Phase 1 calibrates a versioned score policy.
-Current recall scores combine corpus-dependent IDF and discrete boosts, so this
-design does not invent an arbitrary threshold.
+`below_threshold` is reserved until Milestone 2 calibrates a versioned score
+policy. Current recall scores combine corpus-dependent IDF and discrete boosts,
+so this design does not invent an arbitrary threshold.
 
 Returned-but-unpacked rows are recorded because they explain ranking and packing
 loss. Packed rows are exposures, not proof that a later answer used them. A
@@ -156,7 +173,7 @@ contains:
 - the ordered messages actually supplied to the model
 - stable message `source_uuid` values when available
 - allowed tool-use IDs found inside the window
-- a SHA-256 digest of the canonical window representation
+- a SHA-256 authorization digest of the canonical window representation
 
 The distiller may narrow evidence within that window, but it cannot change the
 session or cite an ordinal/tool-use ID outside it. The host validates
@@ -168,11 +185,26 @@ structured output carries the durable claim plus optional relative/narrowed
 evidence selections; the host binds source session, window, extractor, model,
 prompt version, and review state.
 
-Evidence rows persist stable endpoint source UUIDs and the canonical digest.
-During a full resync, source UUIDs are preferred to remap shifted ordinals. When
-stable IDs are absent, the old ordinal range is retained only if its digest
-still matches. A failed remap or digest check sets `provenance_ok = false`,
-which removes the entry from trusted recall without deleting it.
+The broad authorization window and the narrower durable evidence selection have
+different fingerprints. Evidence rows persist the selection's endpoint source
+UUIDs plus a SHA-256 digest of the canonical selected messages and referenced
+tool calls. The authorization-window bounds and digest belong to the later
+calibration-run or write-through-proposal record; they are not overloaded onto
+the evidence row.
+
+Every full message replacement, in-place diff that changes an existing message,
+and full-database resync reconciles affected evidence. When both endpoint source
+UUIDs exist and resolve uniquely inside the same session, they remap shifted
+ordinals and the selected-range digest is rechecked. When stable endpoints are
+absent or ambiguous, the old ordinal range is retained only if its selected
+digest still matches. A missing endpoint, changed digest, or missing referenced
+tool call sets the parent entry's `provenance_ok = false`, which removes it from
+trusted recall without deleting it. Append-only insertion after all cited
+ordinals does not require reconciliation.
+
+Legacy verified evidence receives endpoint UUIDs and a selected-range digest
+during migration when the current archive range still verifies. Placeholder or
+unverifiable evidence is left without a fingerprint and has provenance revoked.
 
 ### Error and concurrency behavior
 
@@ -185,8 +217,10 @@ which removes the entry from trusted recall without deleting it.
 - Later write-time duplicate detection and insertion must share a serialized
   transaction or uniqueness mechanism; a query-then-insert race is not an
   acceptable gate.
-- Read-only stores return recall normally and omit query recording. They do not
-  turn a read into an `ErrReadOnly` failure.
+- A read-only SQLite open returns recall normally and omits query recording; an
+  attempted measurement write does not turn that read into an `ErrReadOnly`
+  failure. PostgreSQL and DuckDB retain their current recall-unavailable
+  `ErrReadOnly` behavior until their separate parity milestone.
 
 ## Milestone 2 — extractor calibration
 
@@ -232,7 +266,7 @@ construction, scope filters, score-policy version, and threshold are then chosen
 against those labels and reported with detector precision and recall. The
 current unbounded lexical score is not treated as a normalized similarity.
 
-Usefulness is not a Phase 1 go/no-go metric unless held-out tasks produce
+Usefulness is not a Milestone 2 go/no-go metric unless held-out tasks produce
 explicit outcome labels. Query-ledger exposure alone is insufficient.
 
 ## Milestone 3 — explicit write-through pilot
@@ -302,6 +336,7 @@ shows that they improve retrieval enough to justify another generated artifact.
 Milestone 1 requires observable tests for:
 
 - migration classification of reviewed and eval rows
+- provenance revocation for placeholder-session imports
 - trusted-only exclusion of unreviewed/eval entries across DB, service, HTTP,
   and CLI behavior
 - inability of JSONL or model-shaped input to spoof review state
@@ -309,8 +344,12 @@ Milestone 1 requires observable tests for:
   read-only behavior
 - evidence-window construction over real messages and tool calls
 - rejection of out-of-window ordinals and tool-use IDs
-- source-UUID remapping and provenance revocation across a resync that shifts
-  ordinals or changes evidence content
+- source-UUID remapping and provenance revocation across routine message
+  replacement and a full resync that shifts ordinals or changes evidence
+  content
+- query-ledger preservation across full resync, including exposures whose entry
+  no longer survives
+- successful recall reads from a read-only SQLite open without ledger writes
 
 All new Go tests use testify, real temporary SQLite databases, and literal
 expected behavior. After Go changes, run `go fmt ./...`, `go vet ./...`, and the
