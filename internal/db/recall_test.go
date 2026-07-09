@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	corerecall "go.kenn.io/agentsview/internal/recall"
 )
 
 func TestRecallEntriesSchemaIndexesSourceEpisode(t *testing.T) {
@@ -23,6 +25,87 @@ func TestRecallEntriesSchemaIndexesSourceEpisode(t *testing.T) {
 
 	require.NoError(t, err, "query recall source episode index")
 	assert.Equal(t, 1, count)
+}
+
+func TestInsertRecallEntryDefaultsReviewStateToUnreviewedAuto(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "agentsview")
+
+	_, err := d.InsertRecallEntry(RecallEntry{
+		ID:              "implicit-review",
+		Type:            "fact",
+		Scope:           "project",
+		Status:          "accepted",
+		Title:           "Implicit review state",
+		Body:            "An omitted review state must not confer trust.",
+		SourceSessionID: "s1",
+	})
+	require.NoError(t, err)
+
+	got, err := d.GetRecallEntry(context.Background(), "implicit-review")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "unreviewed_auto", got.ReviewState)
+}
+
+func TestRecallSchemaDefaultsReviewStateToUnreviewedAuto(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "agentsview")
+
+	_, err := d.getWriter().Exec(`
+		INSERT INTO recall_entries (
+			id, type, scope, title, body, source_session_id
+		) VALUES (?, ?, ?, ?, ?, ?)`,
+		"schema-default-review", "fact", "project",
+		"Schema default review state",
+		"A direct insert must not receive implicit trust.", "s1",
+	)
+	require.NoError(t, err)
+
+	var reviewState string
+	err = d.getReader().QueryRow(
+		`SELECT review_state FROM recall_entries WHERE id = ?`,
+		"schema-default-review",
+	).Scan(&reviewState)
+	require.NoError(t, err)
+	assert.Equal(t, "unreviewed_auto", reviewState)
+}
+
+func TestInsertRecallEntryRejectsEvidenceFromDifferentSession(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "source-session", "agentsview")
+	insertSession(t, d, "evidence-session", "agentsview")
+
+	_, err := d.InsertRecallEntry(RecallEntry{
+		ID:              "cross-session-evidence",
+		Type:            "fact",
+		Scope:           "project",
+		Status:          "accepted",
+		Title:           "Cross-session evidence",
+		Body:            "Evidence must belong to the entry source session.",
+		SourceSessionID: "source-session",
+		Evidence: []RecallEvidence{{
+			SessionID:           "evidence-session",
+			MessageStartOrdinal: 1,
+			MessageEndOrdinal:   2,
+		}},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "evidence-session")
+	assert.Contains(t, err.Error(), "source-session")
+	var entryCount int
+	require.NoError(t, d.getReader().QueryRow(
+		`SELECT count(*) FROM recall_entries WHERE id = ?`,
+		"cross-session-evidence",
+	).Scan(&entryCount))
+	assert.Zero(t, entryCount)
+	var evidenceCount int
+	require.NoError(t, d.getReader().QueryRow(
+		`SELECT count(*) FROM recall_evidence WHERE entry_id = ?`,
+		"cross-session-evidence",
+	).Scan(&evidenceCount))
+	assert.Zero(t, evidenceCount)
 }
 
 func TestOpenRepairsMissingRecallEntrySourceEpisodeIndex(t *testing.T) {
@@ -297,6 +380,7 @@ func TestQueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
 			Type:            "procedure",
 			Scope:           "project",
 			Status:          "accepted",
+			ReviewState:     corerecall.ReviewStateHumanReviewed,
 			Title:           "Trusted cwd recall",
 			Body:            "Recover from wrong cwd before reading files.",
 			Project:         "agentsview",
@@ -352,6 +436,7 @@ func TestQueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
 			Type:            "procedure",
 			Scope:           "project",
 			Status:          "accepted",
+			ReviewState:     corerecall.ReviewStateHumanReviewed,
 			Title:           "Local cwd recall",
 			Body:            "Recover from wrong cwd before reading files.",
 			Project:         "agentsview",
@@ -365,6 +450,7 @@ func TestQueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
 			Type:            "procedure",
 			Scope:           "project",
 			Status:          "accepted",
+			ReviewState:     corerecall.ReviewStateHumanReviewed,
 			Title:           "Unverified cwd recall",
 			Body:            "Recover from wrong cwd before reading files.",
 			Project:         "agentsview",
@@ -378,6 +464,7 @@ func TestQueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
 			Type:            "procedure",
 			Scope:           "project",
 			Status:          "archived",
+			ReviewState:     corerecall.ReviewStateHumanReviewed,
 			Title:           "Archived cwd recall",
 			Body:            "Recover from wrong cwd before reading files.",
 			Project:         "agentsview",
@@ -1640,26 +1727,29 @@ func TestCopyRecallEntriesFromRevokesDroppedEvidenceSession(t *testing.T) {
 		ToolUseIDs:          []string{"tool-a"},
 	})
 	require.NoError(t, err)
-	_, err = srcDB.InsertRecallEntry(RecallEntry{
-		ID:              "m1",
-		Type:            "fact",
-		Scope:           "project",
-		Status:          "accepted",
-		Title:           "Cross-session evidence",
-		Body:            "Every evidence selection must survive full resync.",
-		SourceSessionID: "entry-session",
-		Transferable:    true,
-		ProvenanceOK:    true,
-		Evidence: []RecallEvidence{{
-			SessionID:              "evidence-session",
-			MessageStartOrdinal:    10,
-			MessageEndOrdinal:      11,
-			MessageStartSourceUUID: metadata.MessageStartSourceUUID,
-			MessageEndSourceUUID:   metadata.MessageEndSourceUUID,
-			ContentDigest:          metadata.ContentDigest,
-			ToolUseID:              "tool-a",
-		}},
-	})
+	// Bypass the insertion invariant to model corrupt, pre-invariant data that
+	// reconciliation must still revoke safely during a full resync.
+	_, err = srcDB.getWriter().Exec(`
+		INSERT INTO recall_entries (
+			id, type, scope, status, review_state, title, body,
+			source_session_id, transferable, provenance_ok
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"m1", "fact", "project", "accepted", "human_reviewed",
+		"Cross-session evidence",
+		"Every evidence selection must survive full resync.",
+		"entry-session", true, true,
+	)
+	require.NoError(t, err)
+	_, err = srcDB.getWriter().Exec(`
+		INSERT INTO recall_evidence (
+			entry_id, session_id, message_start_ordinal,
+			message_end_ordinal, message_start_source_uuid,
+			message_end_source_uuid, content_digest, tool_use_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"m1", "evidence-session", 10, 11,
+		metadata.MessageStartSourceUUID, metadata.MessageEndSourceUUID,
+		metadata.ContentDigest, "tool-a",
+	)
 	require.NoError(t, err)
 	require.NoError(t, srcDB.Close())
 

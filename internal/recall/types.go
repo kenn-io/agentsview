@@ -39,13 +39,13 @@ const (
 	ReviewStateEvalRaw        = "eval_raw"
 )
 
-// NormalizeReviewState returns the canonical review state accepted at trusted
-// write boundaries. Empty preserves compatibility with pre-review-state
-// trusted callers and is classified as human-reviewed; unknown values fail.
+// NormalizeReviewState returns the canonical review state accepted at recall
+// write boundaries. Empty values fail closed as unreviewed; unknown values
+// fail validation.
 func NormalizeReviewState(value string) (string, bool) {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return ReviewStateHumanReviewed, true
+		return ReviewStateUnreviewedAuto, true
 	}
 	switch value {
 	case ReviewStateHumanReviewed,

@@ -15,6 +15,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	corerecall "go.kenn.io/agentsview/internal/recall"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -1386,7 +1387,7 @@ func printRecallResultsHuman(
 func printRecallEntryReviewLine(w io.Writer, recall db.RecallEntry) {
 	reviewState := strings.TrimSpace(recall.ReviewState)
 	if reviewState == "" {
-		reviewState = "human_reviewed"
+		reviewState = corerecall.ReviewStateUnreviewedAuto
 	}
 	fmt.Fprintf(
 		w,
@@ -1573,7 +1574,7 @@ func printRecallEntryHuman(w io.Writer, recall *db.RecallEntry) error {
 	}
 	reviewState := strings.TrimSpace(recall.ReviewState)
 	if reviewState == "" {
-		reviewState = "human_reviewed"
+		reviewState = corerecall.ReviewStateUnreviewedAuto
 	}
 	fmt.Fprintf(w, "Review:   %s\n", sanitizeTerminal(reviewState))
 	if recall.SupersedesEntryID != "" {

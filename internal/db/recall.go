@@ -408,6 +408,9 @@ func insertRecallEntryTx(tx *sql.Tx, m RecallEntry) error {
 	if err := normalizeRecallEntryReviewState(&m); err != nil {
 		return err
 	}
+	if err := validateRecallEvidenceSessions(m); err != nil {
+		return err
+	}
 	_, err := tx.Exec(`
 		INSERT INTO recall_entries (
 			id, type, scope, status, review_state, title, body, trigger,
@@ -442,6 +445,19 @@ func insertRecallEntryTx(tx *sql.Tx, m RecallEntry) error {
 		)
 		if err != nil {
 			return fmt.Errorf("inserting recall evidence: %w", err)
+		}
+	}
+	return nil
+}
+
+func validateRecallEvidenceSessions(m RecallEntry) error {
+	for _, evidence := range m.Evidence {
+		if evidence.SessionID != m.SourceSessionID {
+			return fmt.Errorf(
+				"recall evidence session %q does not match source session %q",
+				evidence.SessionID,
+				m.SourceSessionID,
+			)
 		}
 	}
 	return nil

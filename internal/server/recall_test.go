@@ -15,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	corerecall "go.kenn.io/agentsview/internal/recall"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -125,6 +126,7 @@ func TestListRecallEntriesFiltersTrustedOnly(t *testing.T) {
 	seedRecallEntrySession(t, te)
 	seedRecallEntry(t, te, db.RecallEntry{
 		ID:              "trusted",
+		ReviewState:     corerecall.ReviewStateHumanReviewed,
 		Title:           "Trusted cwd recall",
 		Body:            "Recover from wrong cwd before reading files.",
 		Project:         "agentsview",
@@ -135,6 +137,7 @@ func TestListRecallEntriesFiltersTrustedOnly(t *testing.T) {
 	})
 	seedRecallEntry(t, te, db.RecallEntry{
 		ID:              "untrusted",
+		ReviewState:     corerecall.ReviewStateHumanReviewed,
 		Title:           "Untrusted cwd recall",
 		Body:            "Recover from wrong cwd before reading files.",
 		Project:         "agentsview",
@@ -289,6 +292,7 @@ func TestQueryRecallEntriesReturnsContext(t *testing.T) {
 	seedRecallEntrySession(t, te)
 	seedRecallEntry(t, te, db.RecallEntry{
 		ID:              "m1",
+		ReviewState:     corerecall.ReviewStateHumanReviewed,
 		Title:           "Check cwd before file reads",
 		Body:            "Verify cwd before retrying failed reads.",
 		Project:         "agentsview",
@@ -412,6 +416,7 @@ func TestQueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
 	seedRecallEntrySession(t, te)
 	seedRecallEntry(t, te, db.RecallEntry{
 		ID:              "trusted",
+		ReviewState:     corerecall.ReviewStateHumanReviewed,
 		Title:           "Trusted cwd recall",
 		Body:            "Recover from wrong cwd before reading files.",
 		Project:         "agentsview",
@@ -422,6 +427,7 @@ func TestQueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
 	})
 	seedRecallEntry(t, te, db.RecallEntry{
 		ID:              "untrusted",
+		ReviewState:     corerecall.ReviewStateHumanReviewed,
 		Title:           "Untrusted cwd recall",
 		Body:            "Recover from wrong cwd before reading files.",
 		Project:         "agentsview",

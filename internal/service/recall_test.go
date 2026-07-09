@@ -14,6 +14,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	corerecall "go.kenn.io/agentsview/internal/recall"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -398,6 +399,7 @@ func TestDirectBackend_QueryRecallEntriesHonorsContextMaxBytes(t *testing.T) {
 	seedServiceRecallEntrySession(t, d)
 	seedServiceRecallEntry(t, d, db.RecallEntry{
 		ID:              "m1",
+		ReviewState:     corerecall.ReviewStateHumanReviewed,
 		Title:           "Check cwd before file reads",
 		Body:            "Verify cwd before retrying failed reads.",
 		Project:         "agentsview",
@@ -406,6 +408,7 @@ func TestDirectBackend_QueryRecallEntriesHonorsContextMaxBytes(t *testing.T) {
 	})
 	seedServiceRecallEntry(t, d, db.RecallEntry{
 		ID:              "m2",
+		ReviewState:     corerecall.ReviewStateHumanReviewed,
 		Title:           "Second cwd failed reads note",
 		Body:            "Another recall that should rank but not fit in context.",
 		Project:         "agentsview",
@@ -487,8 +490,9 @@ func TestDirectBackend_QueryRecallEntriesFocusesTruncatedContextOnQuery(t *testi
 	d := dbtest.OpenTestDB(t)
 	seedServiceRecallEntrySession(t, d)
 	seedServiceRecallEntry(t, d, db.RecallEntry{
-		ID:    "m1",
-		Title: "Incident filter option labels",
+		ID:          "m1",
+		ReviewState: corerecall.ReviewStateHumanReviewed,
+		Title:       "Incident filter option labels",
 		Body: strings.Repeat("prefix filler ", 50) +
 			"Filters dropdown includes Incident Mobile, Incident Portal, and My Open Incidents. " +
 			strings.Repeat("suffix filler ", 50),
@@ -730,6 +734,7 @@ func TestDirectBackend_ListRecallEntriesReportsTrustedOnly(t *testing.T) {
 	seedServiceRecallEntrySession(t, d)
 	seedServiceRecallEntry(t, d, db.RecallEntry{
 		ID:              "trusted",
+		ReviewState:     corerecall.ReviewStateHumanReviewed,
 		Title:           "Trusted cwd recall",
 		Body:            "Recover from wrong cwd before reading files.",
 		Project:         "agentsview",
@@ -740,6 +745,7 @@ func TestDirectBackend_ListRecallEntriesReportsTrustedOnly(t *testing.T) {
 	})
 	seedServiceRecallEntry(t, d, db.RecallEntry{
 		ID:              "untrusted",
+		ReviewState:     corerecall.ReviewStateHumanReviewed,
 		Title:           "Untrusted cwd recall",
 		Body:            "Recover from wrong cwd before reading files.",
 		Project:         "agentsview",
@@ -814,6 +820,7 @@ func TestDirectBackend_QueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
 	seedServiceRecallEntrySession(t, d)
 	seedServiceRecallEntry(t, d, db.RecallEntry{
 		ID:              "trusted",
+		ReviewState:     corerecall.ReviewStateHumanReviewed,
 		Title:           "Trusted cwd recall",
 		Body:            "Recover from wrong cwd before reading files.",
 		Project:         "agentsview",
@@ -824,6 +831,7 @@ func TestDirectBackend_QueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
 	})
 	seedServiceRecallEntry(t, d, db.RecallEntry{
 		ID:              "untrusted",
+		ReviewState:     corerecall.ReviewStateHumanReviewed,
 		Title:           "Untrusted cwd recall",
 		Body:            "Recover from wrong cwd before reading files.",
 		Project:         "agentsview",
