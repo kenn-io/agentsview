@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -334,6 +335,40 @@ func (s *Store) GetCachedInsight(
 		return nil, fmt.Errorf("getting cached insight: %w", err)
 	}
 	return &insight, nil
+}
+
+func (s *Store) ListMemories(
+	_ context.Context, _ db.MemoryQuery,
+) ([]db.Memory, error) {
+	return nil, db.ErrReadOnly
+}
+
+func (s *Store) GetMemory(
+	_ context.Context, _ string,
+) (*db.Memory, error) {
+	return nil, db.ErrReadOnly
+}
+
+func (s *Store) QueryMemories(
+	_ context.Context, _ db.MemoryQuery,
+) (db.MemoryPage, error) {
+	return db.MemoryPage{}, db.ErrReadOnly
+}
+
+func (s *Store) InsertMemory(_ db.Memory) (string, error) {
+	return "", db.ErrReadOnly
+}
+
+func (s *Store) ImportAcceptedMemoriesJSONL(
+	_ context.Context, _ io.Reader,
+) (db.MemoryImportResult, error) {
+	return db.MemoryImportResult{}, db.ErrReadOnly
+}
+
+func (s *Store) ImportAcceptedMemoriesJSONLWithOptions(
+	_ context.Context, _ io.Reader, _ db.MemoryImportOptions,
+) (db.MemoryImportResult, error) {
+	return db.MemoryImportResult{}, db.ErrReadOnly
 }
 
 // RenameSession updates the visible session name in PG.

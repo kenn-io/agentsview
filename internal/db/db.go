@@ -356,6 +356,98 @@ CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
 END;
 `
 
+const memoriesFTS = `
+CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+    title,
+    body,
+    trigger,
+    content='memories',
+    content_rowid='rowid',
+    tokenize='porter unicode61'
+);
+
+CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+    INSERT INTO memories_fts(rowid, title, body, trigger)
+        VALUES (new.rowid, new.title, new.body, new.trigger);
+END;
+CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+    INSERT INTO memories_fts(memories_fts, rowid, title, body, trigger)
+        VALUES('delete', old.rowid, old.title, old.body, old.trigger);
+END;
+CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+    INSERT INTO memories_fts(memories_fts, rowid, title, body, trigger)
+        VALUES('delete', old.rowid, old.title, old.body, old.trigger);
+    INSERT INTO memories_fts(rowid, title, body, trigger)
+        VALUES (new.rowid, new.title, new.body, new.trigger);
+END;
+`
+
+const memoriesFTS4 = `
+CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts4(
+    title,
+    body,
+    trigger,
+    tokenize=porter
+);
+
+CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+    INSERT INTO memories_fts(rowid, title, body, trigger)
+        VALUES (new.rowid, new.title, new.body, new.trigger);
+END;
+CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+    DELETE FROM memories_fts WHERE rowid = old.rowid;
+END;
+CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+    DELETE FROM memories_fts WHERE rowid = old.rowid;
+    INSERT INTO memories_fts(rowid, title, body, trigger)
+        VALUES (new.rowid, new.title, new.body, new.trigger);
+END;
+`
+
+const memoryEvidenceFTS = `
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_evidence_fts USING fts5(
+    snippet,
+    content='memory_evidence',
+    content_rowid='id',
+    tokenize='porter unicode61'
+);
+
+CREATE TRIGGER IF NOT EXISTS memory_evidence_ai AFTER INSERT ON memory_evidence BEGIN
+    INSERT INTO memory_evidence_fts(rowid, snippet)
+        VALUES (new.id, new.snippet);
+END;
+CREATE TRIGGER IF NOT EXISTS memory_evidence_ad AFTER DELETE ON memory_evidence BEGIN
+    INSERT INTO memory_evidence_fts(memory_evidence_fts, rowid, snippet)
+        VALUES('delete', old.id, old.snippet);
+END;
+CREATE TRIGGER IF NOT EXISTS memory_evidence_au AFTER UPDATE ON memory_evidence BEGIN
+    INSERT INTO memory_evidence_fts(memory_evidence_fts, rowid, snippet)
+        VALUES('delete', old.id, old.snippet);
+    INSERT INTO memory_evidence_fts(rowid, snippet)
+        VALUES (new.id, new.snippet);
+END;
+`
+
+const memoryEvidenceFTS4 = `
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_evidence_fts USING fts4(
+    snippet,
+    tokenize=porter
+);
+
+CREATE TRIGGER IF NOT EXISTS memory_evidence_ai AFTER INSERT ON memory_evidence BEGIN
+    INSERT INTO memory_evidence_fts(rowid, snippet)
+        VALUES (new.id, new.snippet);
+END;
+CREATE TRIGGER IF NOT EXISTS memory_evidence_ad AFTER DELETE ON memory_evidence BEGIN
+    DELETE FROM memory_evidence_fts WHERE rowid = old.id;
+END;
+CREATE TRIGGER IF NOT EXISTS memory_evidence_au AFTER UPDATE ON memory_evidence BEGIN
+    DELETE FROM memory_evidence_fts WHERE rowid = old.id;
+    INSERT INTO memory_evidence_fts(rowid, snippet)
+        VALUES (new.id, new.snippet);
+END;
+`
+
 // DB manages a write connection and a read-only pool.
 // The reader and writer fields use atomic.Pointer so that
 // concurrent HTTP handler goroutines can safely read while
@@ -1389,6 +1481,14 @@ func (db *DB) migrateColumns() error {
 			"worktree_project_mappings", "layout",
 			"ALTER TABLE worktree_project_mappings ADD COLUMN layout TEXT NOT NULL DEFAULT 'explicit'",
 		},
+		{
+			"memories", "supersedes_memory_id",
+			"ALTER TABLE memories ADD COLUMN supersedes_memory_id TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"memories", "superseded_by_memory_id",
+			"ALTER TABLE memories ADD COLUMN superseded_by_memory_id TEXT NOT NULL DEFAULT ''",
+		},
 	}
 
 	for _, m := range migrations {
@@ -1456,6 +1556,11 @@ func (db *DB) migrateColumns() error {
 	}
 
 	if _, err := w.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_memories_supersession
+		ON memories(supersedes_memory_id, superseded_by_memory_id);
+		CREATE INDEX IF NOT EXISTS idx_memories_source_episode
+		ON memories(source_episode_id);
+
 		CREATE TABLE IF NOT EXISTS remote_skipped_files (
 			host       TEXT NOT NULL,
 			path       TEXT NOT NULL,
@@ -1464,7 +1569,7 @@ func (db *DB) migrateColumns() error {
 		)`,
 	); err != nil {
 		return fmt.Errorf(
-			"creating remote_skipped_files: %w", err,
+			"creating post-migration tables and indexes: %w", err,
 		)
 	}
 
@@ -2220,6 +2325,13 @@ func CurrentDataVersion() int {
 }
 
 // Vacuum runs VACUUM on the database to reclaim space.
+//
+// Note: memories uses a TEXT primary key, so its rowids are not an INTEGER
+// PRIMARY KEY alias, and the SQLite docs warn VACUUM "may change" such
+// rowids -- which would detach the external-content memories_fts index
+// (joined on rowid). The bundled SQLite preserves rowids through VACUUM, so
+// no FTS rebuild is needed; TestVacuumPreservesMemoriesFTSSearchable guards
+// that assumption and will fail if a future SQLite bump changes it.
 func (db *DB) Vacuum() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -2530,6 +2642,84 @@ func (db *DB) init() error {
 				" VALUES('rebuild')",
 		); err != nil {
 			return fmt.Errorf("backfilling FTS: %w", err)
+		}
+	}
+
+	var memoryFTSCount int
+	if err := w.QueryRow(
+		"SELECT count(*) FROM sqlite_master" +
+			" WHERE type='table' AND name='memories_fts'",
+	).Scan(&memoryFTSCount); err != nil {
+		return fmt.Errorf("checking memories fts table: %w", err)
+	}
+	hadMemoryFTS := memoryFTSCount > 0
+	if _, err := w.Exec(memoriesFTS); err != nil {
+		if !strings.Contains(
+			err.Error(), "no such module",
+		) {
+			return fmt.Errorf("initializing memories FTS: %w", err)
+		}
+		if _, err := w.Exec(memoriesFTS4); err != nil {
+			if !strings.Contains(
+				err.Error(), "no such module",
+			) {
+				return fmt.Errorf("initializing memories FTS4: %w", err)
+			}
+		} else if !hadMemoryFTS {
+			if _, err := w.Exec(
+				"INSERT INTO memories_fts(rowid, title, body, trigger)" +
+					" SELECT rowid, title, body, trigger FROM memories",
+			); err != nil {
+				return fmt.Errorf("backfilling memories FTS4: %w", err)
+			}
+		}
+	} else if !hadMemoryFTS {
+		if _, err := w.Exec(
+			"INSERT INTO memories_fts(memories_fts)" +
+				" VALUES('rebuild')",
+		); err != nil {
+			return fmt.Errorf("backfilling memories FTS: %w", err)
+		}
+	}
+
+	var memoryEvidenceFTSCount int
+	if err := w.QueryRow(
+		"SELECT count(*) FROM sqlite_master" +
+			" WHERE type='table' AND name='memory_evidence_fts'",
+	).Scan(&memoryEvidenceFTSCount); err != nil {
+		return fmt.Errorf("checking memory evidence fts table: %w", err)
+	}
+	hadMemoryEvidenceFTS := memoryEvidenceFTSCount > 0
+	if _, err := w.Exec(memoryEvidenceFTS); err != nil {
+		if !strings.Contains(
+			err.Error(), "no such module",
+		) {
+			return fmt.Errorf("initializing memory evidence FTS: %w", err)
+		}
+		if _, err := w.Exec(memoryEvidenceFTS4); err != nil {
+			if !strings.Contains(
+				err.Error(), "no such module",
+			) {
+				return fmt.Errorf(
+					"initializing memory evidence FTS4: %w", err,
+				)
+			}
+		} else if !hadMemoryEvidenceFTS {
+			if _, err := w.Exec(
+				"INSERT INTO memory_evidence_fts(rowid, snippet)" +
+					" SELECT id, snippet FROM memory_evidence",
+			); err != nil {
+				return fmt.Errorf(
+					"backfilling memory evidence FTS4: %w", err,
+				)
+			}
+		}
+	} else if !hadMemoryEvidenceFTS {
+		if _, err := w.Exec(
+			"INSERT INTO memory_evidence_fts(memory_evidence_fts)" +
+				" VALUES('rebuild')",
+		); err != nil {
+			return fmt.Errorf("backfilling memory evidence FTS: %w", err)
 		}
 	}
 

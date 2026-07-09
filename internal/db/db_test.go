@@ -3636,6 +3636,75 @@ func TestCloseAfterCloseConnectionsReopen(t *testing.T) {
 	require.NoError(t, err, "Close")
 }
 
+func TestInsertSessionIfAbsentDoesNotOverwriteRealSession(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// A real session already synced from source files.
+	insertSession(t, d, "s1", "agentsview", func(s *Session) {
+		s.Machine = "laptop"
+		s.MessageCount = 7
+	})
+
+	now := "2026-01-01T00:00:00Z"
+	first := "Memory import placeholder for s1"
+	placeholder := Session{
+		ID: "s1", Project: "agentsview", Machine: "memory-import",
+		FirstMessage: &first, DisplayName: &first,
+		StartedAt: &now, EndedAt: &now, MessageCount: 0,
+		SourceVersion: "memory-import-placeholder",
+	}
+
+	// The placeholder must not clobber the real session's metadata.
+	require.NoError(t, d.insertSessionIfAbsent(ctx, placeholder))
+	got, err := d.GetSession(ctx, "s1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "laptop", got.Machine, "real machine preserved")
+	assert.Equal(t, 7, got.MessageCount, "real message_count preserved")
+
+	// For an absent id the placeholder row is created.
+	placeholder.ID = "s2"
+	require.NoError(t, d.insertSessionIfAbsent(ctx, placeholder))
+	created, err := d.GetSession(ctx, "s2")
+	require.NoError(t, err)
+	require.NotNil(t, created)
+	assert.Equal(t, "memory-import", created.Machine)
+	assert.Equal(t, 0, created.MessageCount)
+}
+
+func TestInsertSessionIfAbsentRejectsTrashedSession(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	// A real session that the user later trashed (soft-deleted).
+	insertSession(t, d, "s1", "agentsview", func(s *Session) {
+		s.MessageCount = 7
+	})
+	require.NoError(t, d.SoftDeleteSession("s1"))
+
+	now := "2026-01-01T00:00:00Z"
+	first := "Memory import placeholder for s1"
+	placeholder := Session{
+		ID: "s1", Project: "agentsview", Machine: "memory-import",
+		FirstMessage: &first, DisplayName: &first,
+		StartedAt: &now, EndedAt: &now, MessageCount: 0,
+		SourceVersion: "memory-import-placeholder",
+	}
+
+	// A trashed row satisfies ON CONFLICT DO NOTHING, so without the guard the
+	// import would silently attach to a hidden session. It must be rejected.
+	err := d.insertSessionIfAbsent(ctx, placeholder)
+	require.ErrorIs(t, err, ErrSessionTrashed)
+
+	// The session stays trashed; the placeholder did not resurrect it.
+	var deletedAt sql.NullString
+	require.NoError(t, d.getWriter().QueryRowContext(
+		ctx, "SELECT deleted_at FROM sessions WHERE id = ?", "s1",
+	).Scan(&deletedAt))
+	assert.True(t, deletedAt.Valid, "session remains soft-deleted")
+}
+
 func TestCopyInsightsFrom(t *testing.T) {
 	dir := t.TempDir()
 

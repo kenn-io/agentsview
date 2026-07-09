@@ -383,6 +383,9 @@ func requireReadOnlySchemaCompatibilityFails(
 
 func TestOpenReadOnlyAllowsMissingFTSTable(t *testing.T) {
 	path := createClosedTestDB(t, tempDBPath(t, "sessions.db"), nil)
+	execRawSQLite(t, path, "DROP TRIGGER IF EXISTS messages_ai")
+	execRawSQLite(t, path, "DROP TRIGGER IF EXISTS messages_au")
+	execRawSQLite(t, path, "DROP TRIGGER IF EXISTS messages_ad")
 	execRawSQLite(t, path, "DROP TABLE IF EXISTS messages_fts")
 
 	readonly, err := OpenReadOnly(path)

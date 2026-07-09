@@ -1220,7 +1220,7 @@ func (db *DB) DeleteParserExcludedSessions(ids []string) (int, error) {
 	return int(deleted), nil
 }
 
-const upsertSessionSQL = `
+const insertSessionSQL = `
 		INSERT INTO sessions (
 			id, project, machine, agent, first_message, session_name,
 			started_at, ended_at, message_count,
@@ -1238,7 +1238,14 @@ const upsertSessionSQL = `
 			file_path, file_size, file_mtime,
 			next_ordinal, last_entry_uuid,
 			file_inode, file_device, file_hash
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+// insertSessionIfAbsentSQL inserts a session only when its id does not already
+// exist, leaving an existing row untouched.
+const insertSessionIfAbsentSQL = insertSessionSQL + `
+		ON CONFLICT(id) DO NOTHING`
+
+const upsertSessionSQL = insertSessionSQL + `
 		ON CONFLICT(id) DO UPDATE SET
 			project = excluded.project,
 			machine = excluded.machine,
@@ -1355,6 +1362,41 @@ func (db *DB) UpsertSession(s Session) error {
 	)
 	if err != nil {
 		return fmt.Errorf("upserting session %s: %w", s.ID, err)
+	}
+	return nil
+}
+
+// insertSessionIfAbsent inserts a session only when no row with its id exists,
+// leaving any existing row untouched (ON CONFLICT DO NOTHING). It is used for
+// placeholder rows (e.g. memory import) that must never overwrite a real
+// session synced concurrently. Permanently-excluded sessions are still
+// rejected so a placeholder cannot resurrect them.
+func (db *DB) insertSessionIfAbsent(ctx context.Context, s Session) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	var excluded int
+	_ = db.getWriter().QueryRowContext(
+		ctx, "SELECT 1 FROM excluded_sessions WHERE id = ?", s.ID,
+	).Scan(&excluded)
+	if excluded == 1 {
+		return ErrSessionExcluded
+	}
+	// A soft-deleted (trashed) session would satisfy ON CONFLICT DO NOTHING and
+	// silently leave the import attached to a hidden session. Reject it like
+	// UpsertSession does, under the same lock to avoid a restore/delete race.
+	var trashed int
+	_ = db.getWriter().QueryRowContext(
+		ctx, "SELECT 1 FROM sessions WHERE id = ? AND deleted_at IS NOT NULL", s.ID,
+	).Scan(&trashed)
+	if trashed == 1 {
+		return ErrSessionTrashed
+	}
+
+	if _, err := db.getWriter().ExecContext(
+		ctx, insertSessionIfAbsentSQL, upsertSessionArgs(s)...,
+	); err != nil {
+		return fmt.Errorf("inserting session %s if absent: %w", s.ID, err)
 	}
 	return nil
 }

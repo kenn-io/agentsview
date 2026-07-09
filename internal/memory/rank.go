@@ -1,0 +1,1063 @@
+package memory
+
+import (
+	"math"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+)
+
+var tokenPattern = regexp.MustCompile(`[A-Za-z0-9_]+`)
+var technicalPhrasePattern = regexp.MustCompile(
+	`(?i)\b(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+\b|\b[A-Za-z0-9_.-]+\.(?:go|py|js|jsx|ts|tsx|rs|java|c|cc|cpp|h|hpp|sql|json|ya?ml|toml|md|txt|sh)\b`,
+)
+var codeSymbolPattern = regexp.MustCompile(
+	`\b[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+\b|\b[A-Za-z][A-Za-z0-9_]*[a-z][A-Z][A-Za-z0-9_]*\b`,
+)
+var errorPhrasePattern = regexp.MustCompile(
+	"(?i)\\b(?:error|failure|panic|exception):\\s*" +
+		"([A-Za-z][A-Za-z0-9 _.-]{2,80}?)(?:[.;,)\\]}`\"'\\n]|$)",
+)
+var quotedPhrasePattern = regexp.MustCompile(
+	"`([^`]+)`|(?:^|\\s)'([^']+)'|\"([^\"]+)\"",
+)
+var actionSpaceBlockPattern = regexp.MustCompile(`(?is)\bAction Space:\s.*?(?:\n\s*\n|$)`)
+var pleaseAnswerSentencePattern = regexp.MustCompile(`(?is)\bPlease answer\b[^.!?\n]*(?:[.!?]|$)`)
+var finalAnswerInstructionTailPattern = regexp.MustCompile(`(?is)\b(?:Mark your final answer|Your final answer)\b.*$`)
+
+type promptInjectionBaitPattern struct {
+	Reason  string
+	Pattern *regexp.Regexp
+}
+
+var promptInjectionBaitPatterns = []promptInjectionBaitPattern{
+	{
+		Reason: "prior_instruction_override",
+		Pattern: regexp.MustCompile(
+			`(?is)\b(?:ignore|disregard)\s+(?:all\s+)?(?:previous|prior|above)\s+instructions\b[^\n.!?]*(?:[\n.!?]|$)`,
+		),
+	},
+	{
+		Reason: "role_marker_override",
+		Pattern: regexp.MustCompile(
+			`(?im)^\s*(?:(?:body|trigger|snippet):\s*)?(?:system|developer|assistant|user|tool)\s*:\s*(?:ignore|disregard|reveal|print|run|execute|fetch|follow|answer|delete|change)\b[^\n]*(?:\n|$)`,
+		),
+	},
+	{
+		Reason: "privileged_instruction_marker",
+		Pattern: regexp.MustCompile(
+			`(?im)^\s*(?:(?:body|trigger|snippet):\s*)?(?:(?:new|updated|override|higher-priority)\s+)?(?:system|developer)\s+(?:message|prompt|instructions?|directive)\s*:\s*(?:ignore|disregard|reveal|print|run|execute|fetch|follow|answer|delete|change|use|obey|treat)\b[^\n]*(?:\n|$)`,
+		),
+	},
+	{
+		Reason: "secret_exfiltration",
+		Pattern: regexp.MustCompile(
+			`(?im)^\s*(?:(?:body|trigger|snippet):\s*)?(?:reveal|print|dump|leak|exfiltrate)\b[^\n]*(?:system|developer)\s+prompt\b[^\n]*(?:\n|$)`,
+		),
+	},
+	{
+		Reason: "secret_exfiltration",
+		Pattern: regexp.MustCompile(
+			`(?im)^\s*(?:(?:body|trigger|snippet):\s*)?(?:reveal|print|dump|leak|exfiltrate)\b[^\n]*(?:api\s*key|secret|token|password)\b[^\n]*(?:\n|$)`,
+		),
+	},
+	{
+		Reason: "command_execution",
+		Pattern: regexp.MustCompile(
+			`(?im)^\s*(?:(?:body|trigger|snippet):\s*)?(?:run|execute)\b[^\n]*(?:curl|wget|rm\s+-rf|bash|sh|python3?|osascript|powershell)\b[^\n]*(?:\n|$)`,
+		),
+	},
+	{
+		Reason: "external_instruction_fetch",
+		Pattern: regexp.MustCompile(
+			`(?im)^\s*(?:(?:body|trigger|snippet):\s*)?(?:fetch|visit|open)\s+https?://\S+[^\n]*(?:follow|obey|use)\s+(?:the\s+)?instructions?\b[^\n]*(?:\n|$)`,
+		),
+	},
+}
+
+var commandPhraseHeads = map[string]struct{}{
+	"agentsview":    {},
+	"cargo":         {},
+	"docker":        {},
+	"git":           {},
+	"go":            {},
+	"golangci":      {},
+	"golangci-lint": {},
+	"make":          {},
+	"node":          {},
+	"npm":           {},
+	"npx":           {},
+	"pnpm":          {},
+	"python":        {},
+	"python3":       {},
+	"sqlite3":       {},
+	"uv":            {},
+	"uvx":           {},
+}
+
+var monthTokens = map[string]time.Month{
+	"jan":       time.January,
+	"january":   time.January,
+	"feb":       time.February,
+	"february":  time.February,
+	"mar":       time.March,
+	"march":     time.March,
+	"apr":       time.April,
+	"april":     time.April,
+	"may":       time.May,
+	"jun":       time.June,
+	"june":      time.June,
+	"jul":       time.July,
+	"july":      time.July,
+	"aug":       time.August,
+	"august":    time.August,
+	"sep":       time.September,
+	"sept":      time.September,
+	"september": time.September,
+	"oct":       time.October,
+	"october":   time.October,
+	"nov":       time.November,
+	"november":  time.November,
+	"dec":       time.December,
+	"december":  time.December,
+}
+
+var smallNumberTokens = map[string]int{
+	"one":   1,
+	"two":   2,
+	"three": 3,
+	"four":  4,
+	"five":  5,
+	"six":   6,
+	"seven": 7,
+	"eight": 8,
+	"nine":  9,
+	"ten":   10,
+	"1":     1,
+	"2":     2,
+	"3":     3,
+	"4":     4,
+	"5":     5,
+	"6":     6,
+	"7":     7,
+	"8":     8,
+	"9":     9,
+	"10":    10,
+}
+
+func Rank(memories []Memory, q Query) []Result {
+	limit := q.Limit
+	if limit <= 0 {
+		limit = len(memories)
+	}
+
+	lexicalQueryText := LexicalQueryText(q.Text)
+	rawQueryTokens := tokenize(lexicalQueryText)
+	queryTokens := scoringQueryTokens(rawQueryTokens)
+	candidates := eligibleMemories(memories, q)
+	idf := queryIDF(candidates, queryTokens)
+	temporalBoosts := temporalBoosts(
+		candidates,
+		tokenize(lexicalQueryText),
+		orderedQueryTokens(lexicalQueryText),
+	)
+
+	var results []Result
+	for _, m := range candidates {
+		breakdown, matchedTerms := scoreMemory(
+			m, lexicalQueryText, queryTokens, idf, temporalBoosts[m.ID],
+		)
+		if breakdown.Total <= 0 {
+			continue
+		}
+		results = append(results, Result{
+			Memory:       m,
+			Score:        breakdown.Total,
+			Breakdown:    breakdown,
+			MatchedTerms: matchedTerms,
+		})
+	}
+
+	sort.SliceStable(results, func(i, j int) bool {
+		if results[i].Score != results[j].Score {
+			return results[i].Score > results[j].Score
+		}
+		return results[i].Memory.ID < results[j].Memory.ID
+	})
+	if len(results) > limit {
+		results = results[:limit]
+	}
+	return results
+}
+
+// LexicalQueryText removes query sections that should not influence lexical
+// retrieval, such as benchmark action-space tool schemas.
+func LexicalQueryText(text string) string {
+	text = actionSpaceBlockPattern.ReplaceAllString(text, " ")
+	text = pleaseAnswerSentencePattern.ReplaceAllString(text, " ")
+	text = stripPromptInjectionBait(text)
+	return finalAnswerInstructionTailPattern.ReplaceAllString(text, " ")
+}
+
+// ContainsPromptInjectionBait reports common prompt-injection bait that should
+// be treated as historical evidence rather than current instructions.
+func ContainsPromptInjectionBait(text string) bool {
+	return len(PromptInjectionBaitReasons(text)) > 0
+}
+
+// PromptInjectionBaitReasons returns stable detector reason labels for common
+// prompt-injection bait in the order the detectors matched.
+func PromptInjectionBaitReasons(text string) []string {
+	var reasons []string
+	seen := map[string]struct{}{}
+	for _, detector := range promptInjectionBaitPatterns {
+		if !detector.Pattern.MatchString(text) {
+			continue
+		}
+		if _, ok := seen[detector.Reason]; ok {
+			continue
+		}
+		reasons = append(reasons, detector.Reason)
+		seen[detector.Reason] = struct{}{}
+	}
+	return reasons
+}
+
+func stripPromptInjectionBait(text string) string {
+	for _, detector := range promptInjectionBaitPatterns {
+		text = detector.Pattern.ReplaceAllString(text, " ")
+	}
+	return text
+}
+
+func eligibleMemories(memories []Memory, q Query) []Memory {
+	// Default to accepted-only recall, but honor an explicitly requested
+	// status (e.g. archived) so status-filtered queries return matches.
+	wantStatus := q.Status
+	if wantStatus == "" {
+		wantStatus = StatusAccepted
+	}
+	candidates := make([]Memory, 0, len(memories))
+	for _, m := range memories {
+		status := m.Status
+		if status == "" {
+			status = StatusAccepted
+		}
+		if status != wantStatus {
+			continue
+		}
+		if !matchesContext(m, q) {
+			continue
+		}
+		candidates = append(candidates, m)
+	}
+	return candidates
+}
+
+func queryIDF(memories []Memory, queryTokens map[string]struct{}) map[string]float64 {
+	if len(queryTokens) == 0 || len(memories) == 0 {
+		return nil
+	}
+	docFreq := make(map[string]int, len(queryTokens))
+	for _, m := range memories {
+		memoryTokens := allMemoryTokens(m)
+		for token := range queryTokens {
+			if _, ok := memoryTokens[token]; ok {
+				docFreq[token]++
+			}
+		}
+	}
+	idf := make(map[string]float64, len(queryTokens))
+	totalDocs := float64(len(memories))
+	for token := range queryTokens {
+		df := float64(docFreq[token])
+		idf[token] = math.Log(1+(totalDocs-df+0.5)/(df+0.5)) + 1
+	}
+	return idf
+}
+
+func scoringQueryTokens(raw map[string]struct{}) map[string]struct{} {
+	tokens := make(map[string]struct{}, len(raw))
+	for token := range raw {
+		if lexicalRankStopwords[token] {
+			continue
+		}
+		tokens[token] = struct{}{}
+	}
+	return tokens
+}
+
+var lexicalRankStopwords = map[string]bool{
+	"a":         true,
+	"action":    true,
+	"am":        true,
+	"and":       true,
+	"answer":    true,
+	"based":     true,
+	"be":        true,
+	"boxed":     true,
+	"can":       true,
+	"custom":    true,
+	"directly":  true,
+	"false":     true,
+	"final":     true,
+	"following": true,
+	"given":     true,
+	"in":        true,
+	"is":        true,
+	"i":         true,
+	"of":        true,
+	"on":        true,
+	"or":        true,
+	"our":       true,
+	"perform":   true,
+	"should":    true,
+	"space":     true,
+	"textbox":   true,
+	"the":       true,
+	"there":     true,
+	"to":        true,
+	"true":      true,
+	"using":     true,
+	"enter":     true,
+	"website":   true,
+	"where":     true,
+	"wrapped":   true,
+}
+
+func matchesContext(m Memory, q Query) bool {
+	if q.Project != "" && m.Project != q.Project {
+		return false
+	}
+	if q.CWD != "" && m.CWD != q.CWD {
+		return false
+	}
+	if q.GitBranch != "" && m.GitBranch != q.GitBranch {
+		return false
+	}
+	if q.Agent != "" && m.Agent != q.Agent {
+		return false
+	}
+	return true
+}
+
+func scoreMemory(
+	m Memory,
+	queryText string,
+	queryTokens map[string]struct{},
+	idf map[string]float64,
+	temporalBoost float64,
+) (ScoreBreakdown, []string) {
+	confidence := confidenceBonus(m)
+	entityBoost := structuredEntityBoost(m, queryText)
+	phraseBoost := exactPhraseBoost(m, queryText)
+	if len(queryTokens) == 0 {
+		const emptyQueryBaseScore = 0.1
+		total := emptyQueryBaseScore +
+			confidence + phraseBoost + entityBoost + temporalBoost
+		return ScoreBreakdown{
+			PhraseBoost:     phraseBoost,
+			EntityBoost:     entityBoost,
+			TemporalBoost:   temporalBoost,
+			ConfidenceBonus: confidence,
+			BaseScore:       emptyQueryBaseScore,
+			Total:           total,
+		}, nil
+	}
+	directTokens := directMemoryTokens(m)
+	evidenceTokens := evidenceMemoryTokens(m)
+	var overlap, evidenceOverlap, scoredEvidenceOverlap int
+	var idfScore, evidenceIDFScore, identifierBoost float64
+	var matchedTerms []string
+	for token := range queryTokens {
+		directMatched := false
+		matched := false
+		if _, ok := directTokens[token]; ok {
+			overlap++
+			idfScore += idf[token]
+			directMatched = true
+			matched = true
+		}
+		if _, ok := evidenceTokens[token]; ok {
+			evidenceOverlap++
+			matched = true
+			if !directMatched {
+				scoredEvidenceOverlap++
+				evidenceIDFScore += idf[token]
+			}
+		}
+		if matched && isIdentifierToken(token) {
+			identifierBoost += 2.0
+		}
+		if matched {
+			matchedTerms = append(matchedTerms, token)
+		}
+	}
+	if overlap == 0 && evidenceOverlap == 0 && phraseBoost == 0 && entityBoost == 0 && temporalBoost == 0 {
+		return ScoreBreakdown{}, nil
+	}
+	if idfScore == 0 {
+		idfScore = float64(overlap)
+	}
+	if evidenceIDFScore == 0 {
+		evidenceIDFScore = float64(scoredEvidenceOverlap)
+	}
+	total := idfScore + evidenceIDFScore + identifierBoost + phraseBoost + entityBoost + temporalBoost + confidence
+	sort.Strings(matchedTerms)
+	return ScoreBreakdown{
+		KeywordOverlap:         overlap,
+		KeywordIDFScore:        idfScore,
+		EvidenceKeywordOverlap: evidenceOverlap,
+		EvidenceIDFScore:       evidenceIDFScore,
+		IdentifierBoost:        identifierBoost,
+		PhraseBoost:            phraseBoost,
+		EntityBoost:            entityBoost,
+		TemporalBoost:          temporalBoost,
+		ConfidenceBonus:        confidence,
+		Total:                  total,
+	}, matchedTerms
+}
+
+func allMemoryTokens(m Memory) map[string]struct{} {
+	tokens := directMemoryTokens(m)
+	for token := range evidenceMemoryTokens(m) {
+		tokens[token] = struct{}{}
+	}
+	return tokens
+}
+
+func directMemoryTokens(m Memory) map[string]struct{} {
+	return tokenize(strings.Join(
+		[]string{m.Title, m.Body, m.Trigger}, " ",
+	))
+}
+
+func evidenceMemoryTokens(m Memory) map[string]struct{} {
+	parts := make([]string, 0, len(m.Evidence))
+	for _, evidence := range m.Evidence {
+		parts = append(parts, evidence.Snippet)
+	}
+	return tokenize(strings.Join(parts, " "))
+}
+
+func isIdentifierToken(token string) bool {
+	if strings.Contains(token, "_") {
+		return true
+	}
+	// Tokens are lowercased, so camelCase is gone; an alphanumeric mix
+	// (utf8, sha256, fts5) still signals a code identifier. Plain words
+	// (however long) and plain numbers do not.
+	var hasLetter, hasDigit bool
+	for _, r := range token {
+		switch {
+		case r >= '0' && r <= '9':
+			hasDigit = true
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z'):
+			hasLetter = true
+		}
+	}
+	return hasLetter && hasDigit
+}
+
+func confidenceBonus(m Memory) float64 {
+	if m.Confidence == nil {
+		return 0
+	}
+	if *m.Confidence < 0 {
+		return 0
+	}
+	if *m.Confidence > 1 {
+		return 0.1
+	}
+	return *m.Confidence * 0.1
+}
+
+// rankEntity is a structured value extracted from a memory that can boost its
+// score when present in the query. Filenames and paths set exact, so they are
+// matched with their punctuation preserved ("memories.go" must appear with its
+// dot) rather than tokenized, which would let "memories go" match memories.go.
+type rankEntity struct {
+	value string
+	exact bool
+}
+
+func structuredEntityBoost(m Memory, queryText string) float64 {
+	normalizedQuery := normalizeEntityText(queryText)
+	if normalizedQuery == "" {
+		return 0
+	}
+	lowerQuery := strings.ToLower(queryText)
+	seen := make(map[string]struct{})
+	var boost float64
+	for _, entity := range structuredEntityValues(m) {
+		var key string
+		var matched bool
+		if entity.exact {
+			value := strings.ToLower(strings.TrimSpace(entity.value))
+			if len(value) < 3 {
+				continue
+			}
+			key = "x:" + value
+			matched = queryContainsExactEntity(lowerQuery, value)
+		} else {
+			normalizedEntity := normalizeEntityText(entity.value)
+			if len(normalizedEntity) < 3 {
+				continue
+			}
+			key = "n:" + normalizedEntity
+			matched = containsNormalizedPhrase(normalizedQuery, normalizedEntity)
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		if matched {
+			boost += 1.5
+		}
+	}
+	return boost
+}
+
+// queryContainsExactEntity reports whether entity appears in lowerQuery as a
+// whole token run (bounded by non-identifier characters), so punctuation in the
+// entity must be present in the query.
+func queryContainsExactEntity(lowerQuery, entity string) bool {
+	for from := 0; from < len(lowerQuery); {
+		i := strings.Index(lowerQuery[from:], entity)
+		if i < 0 {
+			return false
+		}
+		start := from + i
+		end := start + len(entity)
+		leftOK := start == 0 || !isWordByte(lowerQuery[start-1])
+		rightOK := end == len(lowerQuery) || !isWordByte(lowerQuery[end])
+		if leftOK && rightOK {
+			return true
+		}
+		from = start + 1
+	}
+	return false
+}
+
+func isWordByte(b byte) bool {
+	return b == '_' ||
+		(b >= 'a' && b <= 'z') ||
+		(b >= 'A' && b <= 'Z') ||
+		(b >= '0' && b <= '9')
+}
+
+func exactPhraseBoost(m Memory, queryText string) float64 {
+	phrases := queryPhrases(queryText)
+	if len(phrases) == 0 {
+		return 0
+	}
+	memoryText := normalizeEntityText(strings.Join(memoryTextParts(m), " "))
+	if memoryText == "" {
+		return 0
+	}
+	var boost float64
+	for _, phrase := range phrases {
+		if containsNormalizedPhrase(memoryText, phrase.text) {
+			boost += 0.75 * float64(phrase.length)
+		}
+	}
+	return boost
+}
+
+type queryPhrase struct {
+	text   string
+	length int
+}
+
+func queryPhrases(queryText string) []queryPhrase {
+	tokens := tokenPattern.FindAllString(strings.ToLower(queryText), -1)
+	var meaningful []string
+	for _, token := range tokens {
+		if rankPhraseStopwords[token] || lexicalRankStopwords[token] {
+			continue
+		}
+		meaningful = append(meaningful, token)
+	}
+	const minPhraseTokens = 3
+	const maxPhraseTokens = 5
+	if len(meaningful) < minPhraseTokens {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	var phrases []queryPhrase
+	for size := maxPhraseTokens; size >= minPhraseTokens; size-- {
+		if len(meaningful) < size {
+			continue
+		}
+		for start := 0; start+size <= len(meaningful); start++ {
+			text := strings.Join(meaningful[start:start+size], " ")
+			if _, ok := seen[text]; ok {
+				continue
+			}
+			seen[text] = struct{}{}
+			phrases = append(phrases, queryPhrase{text: text, length: size})
+		}
+	}
+	return phrases
+}
+
+var rankPhraseStopwords = map[string]bool{
+	"about":    true,
+	"and":      true,
+	"are":      true,
+	"for":      true,
+	"from":     true,
+	"mentions": true,
+	"note":     true,
+	"that":     true,
+	"the":      true,
+	"this":     true,
+	"what":     true,
+	"when":     true,
+	"where":    true,
+	"which":    true,
+	"with":     true,
+}
+
+func structuredEntityValues(m Memory) []rankEntity {
+	entities := []rankEntity{
+		{value: m.Project}, {value: m.CWD},
+		{value: m.GitBranch}, {value: m.Agent},
+	}
+	if base := pathBase(m.CWD); base != "" {
+		entities = append(entities, rankEntity{value: base})
+	}
+	if base := pathBase(m.GitBranch); base != "" {
+		entities = append(entities, rankEntity{value: base})
+	}
+	entities = append(entities, technicalPhraseEntities(m)...)
+	return entities
+}
+
+func technicalPhraseEntities(m Memory) []rankEntity {
+	text := strings.Join(memoryTextParts(m), " ")
+	var entities []rankEntity
+	// Filenames and paths match with punctuation preserved, and their
+	// basename is added so a filename-only query (memories.go) matches a
+	// full-path entity (internal/db/memories.go).
+	addPathLike := func(value string) {
+		entities = append(entities, rankEntity{value: value, exact: true})
+		if base := pathBase(value); base != "" && base != value {
+			entities = append(entities, rankEntity{value: base, exact: true})
+		}
+	}
+	for _, value := range technicalPhrasePattern.FindAllString(text, -1) {
+		addPathLike(value)
+	}
+	for _, value := range codeSymbolPattern.FindAllString(text, -1) {
+		if strings.Contains(value, ".") {
+			addPathLike(value)
+		} else {
+			entities = append(entities, rankEntity{value: value})
+		}
+	}
+	for _, value := range errorPhraseValues(text) {
+		entities = append(entities, rankEntity{value: value})
+	}
+	for _, value := range quotedCommandPhraseValues(text) {
+		entities = append(entities, rankEntity{value: value})
+	}
+	return entities
+}
+
+func memoryTextParts(m Memory) []string {
+	parts := []string{m.Title, m.Body, m.Trigger}
+	for _, evidence := range m.Evidence {
+		parts = append(parts, evidence.Snippet)
+	}
+	return parts
+}
+
+func errorPhraseValues(text string) []string {
+	var values []string
+	for _, match := range errorPhrasePattern.FindAllStringSubmatch(text, -1) {
+		phrase := strings.TrimSpace(match[1])
+		if len(tokenPattern.FindAllString(phrase, -1)) >= 2 {
+			values = append(values, phrase)
+		}
+	}
+	return values
+}
+
+func quotedCommandPhraseValues(text string) []string {
+	var values []string
+	for _, match := range quotedPhrasePattern.FindAllStringSubmatch(text, -1) {
+		phrase := firstNonEmpty(match[1:])
+		if isCommandPhrase(phrase) {
+			values = append(values, phrase)
+		}
+	}
+	return values
+}
+
+func firstNonEmpty(values []string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func isCommandPhrase(phrase string) bool {
+	tokens := tokenPattern.FindAllString(strings.ToLower(phrase), -1)
+	if len(tokens) < 2 {
+		return false
+	}
+	_, ok := commandPhraseHeads[tokens[0]]
+	return ok
+}
+
+func pathBase(path string) string {
+	path = strings.TrimRight(strings.TrimSpace(path), `/\`)
+	if path == "" {
+		return ""
+	}
+	if idx := strings.LastIndexAny(path, `/\`); idx >= 0 {
+		return path[idx+1:]
+	}
+	return path
+}
+
+func containsNormalizedPhrase(normalizedQuery, normalizedEntity string) bool {
+	return strings.Contains(" "+normalizedQuery+" ", " "+normalizedEntity+" ")
+}
+
+func normalizeEntityText(value string) string {
+	parts := tokenPattern.FindAllString(strings.ToLower(value), -1)
+	return strings.Join(parts, " ")
+}
+
+func temporalBoosts(
+	memories []Memory,
+	queryTokens map[string]struct{},
+	orderedTokens []string,
+) map[string]float64 {
+	windows := queryCalendarWindows(orderedTokens)
+	if len(windows) > 0 {
+		return calendarWindowBoosts(memories, windows)
+	}
+	windows = queryRelativeWindows(memories, queryTokens, orderedTokens)
+	if len(windows) > 0 {
+		return calendarWindowBoosts(memories, windows)
+	}
+	if !queryWantsRecent(queryTokens) {
+		return nil
+	}
+	timestamps := make(map[string]time.Time, len(memories))
+	var minTime, maxTime time.Time
+	for _, m := range memories {
+		ts, ok := effectiveMemoryTime(m)
+		if !ok {
+			continue
+		}
+		timestamps[m.ID] = ts
+		if minTime.IsZero() || ts.Before(minTime) {
+			minTime = ts
+		}
+		if maxTime.IsZero() || ts.After(maxTime) {
+			maxTime = ts
+		}
+	}
+	if len(timestamps) == 0 {
+		return nil
+	}
+	boosts := make(map[string]float64, len(timestamps))
+	span := maxTime.Sub(minTime)
+	for id, ts := range timestamps {
+		if span <= 0 {
+			boosts[id] = 1.0
+			continue
+		}
+		boosts[id] = 0.25 + 0.75*(float64(ts.Sub(minTime))/float64(span))
+	}
+	return boosts
+}
+
+type timeWindow struct {
+	start time.Time
+	end   time.Time
+}
+
+// queryCalendarWindows returns month windows for explicit "<month> <year>"
+// phrases. The month and year tokens must be adjacent in the query so a bare
+// month like "may" only forms a window when paired with a neighboring year, and
+// a stray year elsewhere in the query does not combine with an unrelated month
+// name.
+func queryCalendarWindows(orderedTokens []string) []timeWindow {
+	var windows []timeWindow
+	for i := 0; i+1 < len(orderedTokens); i++ {
+		month, year, ok := monthYearPair(orderedTokens[i], orderedTokens[i+1])
+		if !ok {
+			continue
+		}
+		start := time.Date(year, month, 1, 0, 0, 0, 0, time.UTC)
+		windows = append(windows, timeWindow{
+			start: start,
+			end:   start.AddDate(0, 1, 0),
+		})
+	}
+	return windows
+}
+
+// monthYearPair reports the month and year named by two adjacent tokens in
+// either order ("february 2024" or "2024 february").
+func monthYearPair(a, b string) (time.Month, int, bool) {
+	if month, ok := monthTokens[a]; ok {
+		if year, ok := parseYearToken(b); ok {
+			return month, year, true
+		}
+	}
+	if month, ok := monthTokens[b]; ok {
+		if year, ok := parseYearToken(a); ok {
+			return month, year, true
+		}
+	}
+	return 0, 0, false
+}
+
+func queryRelativeWindows(
+	memories []Memory,
+	queryTokens map[string]struct{},
+	orderedTokens []string,
+) []timeWindow {
+	reference, ok := newestMemoryTime(memories)
+	if !ok {
+		return nil
+	}
+	referenceDay := time.Date(
+		reference.Year(), reference.Month(), reference.Day(),
+		0, 0, 0, 0, time.UTC,
+	)
+	currentMonth := time.Date(reference.Year(), reference.Month(), 1, 0, 0, 0, 0, time.UTC)
+	if windows := queryAgoWindows(
+		reference, referenceDay, queryTokens, orderedTokens,
+	); len(windows) > 0 {
+		return windows
+	}
+	if hasQueryToken(queryTokens, "yesterday") {
+		start := referenceDay.AddDate(0, 0, -1)
+		return []timeWindow{{start: start, end: referenceDay}}
+	}
+	if hasAnyQueryToken(queryTokens, "last", "past", "previous") &&
+		hasQueryToken(queryTokens, "week") {
+		start := reference.AddDate(0, 0, -7)
+		return []timeWindow{{start: start, end: reference}}
+	}
+	if hasAnyQueryToken(queryTokens, "this", "current") &&
+		hasQueryToken(queryTokens, "week") {
+		weekStart := startOfISOWeek(referenceDay)
+		return []timeWindow{{start: weekStart, end: weekStart.AddDate(0, 0, 7)}}
+	}
+	if hasAnyQueryToken(queryTokens, "this", "current") &&
+		hasQueryToken(queryTokens, "month") {
+		return []timeWindow{{start: currentMonth, end: currentMonth.AddDate(0, 1, 0)}}
+	}
+	if !orderedTokensHaveAdjacent(orderedTokens, "last", "month") {
+		return nil
+	}
+	start := currentMonth.AddDate(0, -1, 0)
+	return []timeWindow{{start: start, end: currentMonth}}
+}
+
+// startOfISOWeek returns midnight on the Monday of the ISO week containing day.
+func startOfISOWeek(day time.Time) time.Time {
+	daysSinceMonday := (int(day.Weekday()) + 6) % 7
+	monday := day.AddDate(0, 0, -daysSinceMonday)
+	return time.Date(
+		monday.Year(), monday.Month(), monday.Day(),
+		0, 0, 0, 0, monday.Location(),
+	)
+}
+
+// orderedTokensHaveAdjacent reports whether first is immediately followed by
+// second in the ordered query tokens, so a relative phrase like "last month"
+// only matches when its words are adjacent rather than scattered.
+func orderedTokensHaveAdjacent(orderedTokens []string, first, second string) bool {
+	for i := 0; i+1 < len(orderedTokens); i++ {
+		if orderedTokens[i] == first && orderedTokens[i+1] == second {
+			return true
+		}
+	}
+	return false
+}
+
+func queryAgoWindows(
+	reference, referenceDay time.Time,
+	queryTokens map[string]struct{},
+	orderedTokens []string,
+) []timeWindow {
+	if !hasQueryToken(queryTokens, "ago") {
+		return nil
+	}
+	n, ok := queryAgoNumber(orderedTokens)
+	if !ok || n <= 0 {
+		return nil
+	}
+	if hasAnyQueryToken(queryTokens, "day", "days") {
+		start := referenceDay.AddDate(0, 0, -n)
+		return []timeWindow{{start: start, end: start.AddDate(0, 0, 1)}}
+	}
+	if hasAnyQueryToken(queryTokens, "week", "weeks") {
+		end := reference.AddDate(0, 0, -7*(n-1))
+		start := reference.AddDate(0, 0, -7*n)
+		return []timeWindow{{start: start, end: end}}
+	}
+	if hasAnyQueryToken(queryTokens, "month", "months") {
+		currentMonth := time.Date(
+			reference.Year(), reference.Month(), 1,
+			0, 0, 0, 0, time.UTC,
+		)
+		end := currentMonth.AddDate(0, -(n - 1), 0)
+		start := currentMonth.AddDate(0, -n, 0)
+		return []timeWindow{{start: start, end: end}}
+	}
+	return nil
+}
+
+// agoUnitTokens are the time units that an "N ago" window can target.
+var agoUnitTokens = map[string]struct{}{
+	"day": {}, "days": {}, "week": {}, "weeks": {},
+	"month": {}, "months": {}, "year": {}, "years": {},
+}
+
+// queryAgoNumber returns the count for an "N <unit> ago" phrase by reading the
+// number immediately preceding a time-unit token, rather than the smallest
+// number anywhere in the query. This keeps "10 days ago issue 3" anchored to
+// 10 days rather than 3.
+func queryAgoNumber(orderedTokens []string) (int, bool) {
+	for i := 1; i < len(orderedTokens); i++ {
+		if _, ok := agoUnitTokens[orderedTokens[i]]; !ok {
+			continue
+		}
+		if n, ok := smallNumberTokens[orderedTokens[i-1]]; ok {
+			return n, true
+		}
+	}
+	return 0, false
+}
+
+func orderedQueryTokens(text string) []string {
+	return tokenPattern.FindAllString(strings.ToLower(text), -1)
+}
+
+func newestMemoryTime(memories []Memory) (time.Time, bool) {
+	var newest time.Time
+	for _, m := range memories {
+		ts, ok := effectiveMemoryTime(m)
+		if !ok {
+			continue
+		}
+		if newest.IsZero() || ts.After(newest) {
+			newest = ts
+		}
+	}
+	return newest, !newest.IsZero()
+}
+
+func parseYearToken(token string) (int, bool) {
+	var year int
+	for _, r := range token {
+		if r < '0' || r > '9' {
+			return 0, false
+		}
+		year = year*10 + int(r-'0')
+	}
+	if year < 1970 || year > 2100 {
+		return 0, false
+	}
+	return year, true
+}
+
+func calendarWindowBoosts(memories []Memory, windows []timeWindow) map[string]float64 {
+	boosts := make(map[string]float64)
+	for _, m := range memories {
+		ts, ok := effectiveMemoryTime(m)
+		if !ok {
+			continue
+		}
+		if timeInAnyWindow(ts, windows) {
+			boosts[m.ID] = 1.0
+		}
+	}
+	if len(boosts) == 0 {
+		return nil
+	}
+	return boosts
+}
+
+func timeInAnyWindow(ts time.Time, windows []timeWindow) bool {
+	for _, window := range windows {
+		if !ts.Before(window.start) && ts.Before(window.end) {
+			return true
+		}
+	}
+	return false
+}
+
+func queryWantsRecent(queryTokens map[string]struct{}) bool {
+	for _, token := range []string{"recent", "recently", "latest", "newest", "last", "current"} {
+		if hasQueryToken(queryTokens, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasQueryToken(queryTokens map[string]struct{}, token string) bool {
+	_, ok := queryTokens[token]
+	return ok
+}
+
+func hasAnyQueryToken(queryTokens map[string]struct{}, tokens ...string) bool {
+	for _, token := range tokens {
+		if hasQueryToken(queryTokens, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func effectiveMemoryTime(m Memory) (time.Time, bool) {
+	if ts, ok := parseMemoryTime(m.UpdatedAt); ok {
+		return ts, true
+	}
+	return parseMemoryTime(m.CreatedAt)
+}
+
+func parseMemoryTime(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false
+	}
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05.999999999Z07:00",
+		"2006-01-02 15:04:05.999999Z07:00",
+		"2006-01-02 15:04:05Z07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05.999999",
+		"2006-01-02 15:04:05",
+		"2006-01-02",
+	} {
+		parsed, err := time.Parse(layout, value)
+		if err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
+}
+
+func tokenize(s string) map[string]struct{} {
+	tokens := make(map[string]struct{})
+	for _, token := range tokenPattern.FindAllString(strings.ToLower(s), -1) {
+		tokens[token] = struct{}{}
+	}
+	return tokens
+}

@@ -1550,6 +1550,29 @@ func (e *Engine) resyncAllLocked(
 		}
 	}
 
+	// Copy memories and their evidence from the quiesced old DB. The
+	// fresh DB is built from source files, which never contain
+	// memories, so without this every accepted memory is lost on
+	// resync. Runs after the orphan copy so referenced sessions exist.
+	// Failure aborts the swap to avoid destroying the memory archive.
+	if err := newDB.CopyMemoriesFrom(origPath); err != nil {
+		log.Printf("resync: copy memories: %v", err)
+		stats.Aborted = true
+		stats.Warnings = append(stats.Warnings,
+			"memory copy failed, aborting swap: "+err.Error(),
+		)
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		if rerr := origDB.Reopen(); rerr != nil {
+			log.Printf("resync: recovery reopen: %v", rerr)
+		}
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats
+	}
+
 	// Merge user-managed data (display_name, deleted_at,
 	// starred_sessions, pinned_messages) from the old DB
 	// so renames, soft-deletes, stars, and pins survive.

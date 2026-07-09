@@ -311,6 +311,66 @@ CREATE INDEX IF NOT EXISTS idx_insights_lookup
 CREATE INDEX IF NOT EXISTS idx_insights_created
     ON insights(created_at DESC);
 
+-- Memories table for reviewed, reusable facts learned from prior sessions.
+-- These are not raw transcript chunks: each row is an accepted memory with
+-- provenance back to the session archive.
+CREATE TABLE IF NOT EXISTS memories (
+    id                TEXT PRIMARY KEY,
+    type              TEXT NOT NULL,
+    scope             TEXT NOT NULL,
+    status            TEXT NOT NULL DEFAULT 'accepted',
+    title             TEXT NOT NULL,
+    body              TEXT NOT NULL,
+    trigger           TEXT NOT NULL DEFAULT '',
+    confidence        REAL,
+    uncertainty       TEXT NOT NULL DEFAULT '',
+    project           TEXT NOT NULL DEFAULT '',
+    cwd               TEXT NOT NULL DEFAULT '',
+    git_branch        TEXT NOT NULL DEFAULT '',
+    agent             TEXT NOT NULL DEFAULT '',
+    source_session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    source_episode_id TEXT NOT NULL DEFAULT '',
+    source_run_id     TEXT NOT NULL DEFAULT '',
+    extractor_method  TEXT NOT NULL DEFAULT '',
+    model             TEXT NOT NULL DEFAULT '',
+    transferable      INTEGER NOT NULL DEFAULT 0,
+    provenance_ok     INTEGER NOT NULL DEFAULT 0,
+    supersedes_memory_id TEXT NOT NULL DEFAULT '',
+    superseded_by_memory_id TEXT NOT NULL DEFAULT '',
+    created_at        TEXT NOT NULL
+        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at        TEXT NOT NULL
+        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_memories_context
+    ON memories(project, cwd, git_branch, agent);
+CREATE INDEX IF NOT EXISTS idx_memories_type_scope
+    ON memories(type, scope, status);
+CREATE INDEX IF NOT EXISTS idx_memories_source_session
+    ON memories(source_session_id);
+CREATE INDEX IF NOT EXISTS idx_memories_source_episode
+    ON memories(source_episode_id);
+CREATE INDEX IF NOT EXISTS idx_memories_updated
+    ON memories(updated_at DESC, id);
+
+CREATE TABLE IF NOT EXISTS memory_evidence (
+    id                    INTEGER PRIMARY KEY,
+    memory_id             TEXT NOT NULL
+        REFERENCES memories(id) ON DELETE CASCADE,
+    session_id            TEXT NOT NULL
+        REFERENCES sessions(id) ON DELETE CASCADE,
+    message_start_ordinal INTEGER NOT NULL,
+    message_end_ordinal   INTEGER NOT NULL,
+    tool_use_id           TEXT NOT NULL DEFAULT '',
+    snippet               TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_evidence_memory
+    ON memory_evidence(memory_id);
+CREATE INDEX IF NOT EXISTS idx_memory_evidence_session
+    ON memory_evidence(session_id);
+
 -- Pinned messages table
 CREATE TABLE IF NOT EXISTS pinned_messages (
     id          INTEGER PRIMARY KEY,
