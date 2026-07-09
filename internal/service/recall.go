@@ -1,7 +1,10 @@
 package service
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -11,7 +14,194 @@ import (
 const (
 	defaultRecallContextMaxBytes = 4000
 	minRecallContextEntryBytes   = 450
+	RecallMissReasonNoResults    = "no_results"
+	RecallMissReasonContextEmpty = "context_empty"
 )
+
+func NormalizeRecallQuerySurface(surface string) (string, error) {
+	surface = strings.TrimSpace(surface)
+	if surface == "" {
+		return db.RecallQuerySurfaceQuery, nil
+	}
+	switch surface {
+	case db.RecallQuerySurfaceQuery,
+		db.RecallQuerySurfaceBrief,
+		db.RecallQuerySurfaceCalibration:
+		return surface, nil
+	default:
+		return "", fmt.Errorf("invalid recall query surface %q", surface)
+	}
+}
+
+// QueryRecallStore executes and completes one recall query for both direct and
+// HTTP server paths. Outcome classification and recording live here so the two
+// transports cannot drift or double-record.
+func QueryRecallStore(
+	ctx context.Context,
+	store db.Store,
+	req RecallQuery,
+) (*RecallQueryResult, error) {
+	if err := ValidateRecallEntryLimit(req.Limit); err != nil {
+		return nil, err
+	}
+	if req.IncludeContext {
+		if _, err := NormalizeRecallContextMaxBytes(req.ContextMaxBytes); err != nil {
+			return nil, err
+		}
+	}
+	surface, err := NormalizeRecallQuerySurface(req.Surface)
+	if err != nil {
+		return nil, err
+	}
+	page, err := store.QueryRecallEntries(ctx, db.RecallQuery{
+		Text:                req.Query,
+		Project:             req.Project,
+		CWD:                 req.CWD,
+		GitBranch:           req.GitBranch,
+		Agent:               req.Agent,
+		Type:                req.Type,
+		Scope:               req.Scope,
+		Status:              req.Status,
+		ExtractorMethod:     req.ExtractorMethod,
+		SourceSessionID:     req.SourceSessionID,
+		SourceEpisodeID:     req.SourceEpisodeID,
+		SourceRunID:         req.SourceRunID,
+		SupersedesEntryID:   req.SupersedesEntryID,
+		SupersededByEntryID: req.SupersededByEntryID,
+		TrustedOnly:         req.TrustedOnly,
+		Limit:               req.Limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if page.RecallEntries == nil {
+		page.RecallEntries = []db.RecallResult{}
+	}
+	resp := &RecallQueryResult{
+		RecallEntries: page.RecallEntries,
+		TrustedOnly:   req.TrustedOnly,
+		Summary:       BuildRecallQuerySummary(page.RecallEntries),
+	}
+	if req.IncludeContext {
+		contextText, contextMeta, err := BuildRecallContext(
+			page.RecallEntries, req.ContextMaxBytes, req.Query,
+		)
+		if err != nil {
+			return nil, err
+		}
+		resp.Context = contextText
+		resp.ContextMeta = contextMeta
+		resp.ContextEntries = RecallContextResults(page.RecallEntries, contextMeta)
+		resp.ContextSummary = BuildRecallContextSummary(
+			page.RecallEntries, contextMeta,
+		)
+		switch {
+		case len(page.RecallEntries) == 0:
+			resp.MissReason = RecallMissReasonNoResults
+		case contextMeta == nil || len(contextMeta.IncludedIDs) == 0:
+			resp.MissReason = RecallMissReasonContextEmpty
+		}
+	}
+	if err := recordRecallQueryOutcome(
+		ctx, store, req, surface, resp,
+	); err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+type recallQueryEventFilters struct {
+	Project             string `json:"project"`
+	CWD                 string `json:"cwd"`
+	GitBranch           string `json:"git_branch"`
+	Agent               string `json:"agent"`
+	Type                string `json:"type"`
+	Scope               string `json:"scope"`
+	Status              string `json:"status"`
+	ExtractorMethod     string `json:"extractor_method"`
+	SourceSessionID     string `json:"source_session_id"`
+	SourceEpisodeID     string `json:"source_episode_id"`
+	SourceRunID         string `json:"source_run_id"`
+	SupersedesEntryID   string `json:"supersedes_entry_id"`
+	SupersededByEntryID string `json:"superseded_by_entry_id"`
+	Limit               int    `json:"limit"`
+	IncludeContext      bool   `json:"include_context"`
+	ContextMaxBytes     int    `json:"context_max_bytes"`
+}
+
+func recordRecallQueryOutcome(
+	ctx context.Context,
+	store db.Store,
+	req RecallQuery,
+	surface string,
+	resp *RecallQueryResult,
+) error {
+	if store.ReadOnly() {
+		return nil
+	}
+	filtersJSON, err := json.Marshal(recallQueryEventFilters{
+		Project:             req.Project,
+		CWD:                 req.CWD,
+		GitBranch:           req.GitBranch,
+		Agent:               req.Agent,
+		Type:                req.Type,
+		Scope:               req.Scope,
+		Status:              req.Status,
+		ExtractorMethod:     req.ExtractorMethod,
+		SourceSessionID:     req.SourceSessionID,
+		SourceEpisodeID:     req.SourceEpisodeID,
+		SourceRunID:         req.SourceRunID,
+		SupersedesEntryID:   req.SupersedesEntryID,
+		SupersededByEntryID: req.SupersededByEntryID,
+		Limit:               req.Limit,
+		IncludeContext:      req.IncludeContext,
+		ContextMaxBytes:     req.ContextMaxBytes,
+	})
+	if err != nil {
+		return fmt.Errorf("encoding recall query filters: %w", err)
+	}
+	packedIDs := make(map[string]struct{})
+	if resp.ContextMeta != nil {
+		for _, id := range resp.ContextMeta.IncludedIDs {
+			packedIDs[id] = struct{}{}
+		}
+	}
+	exposures := make([]db.RecallQueryExposure, 0, len(resp.RecallEntries))
+	for i, result := range resp.RecallEntries {
+		_, packed := packedIDs[result.ID]
+		exposures = append(exposures, db.RecallQueryExposure{
+			Rank:    i + 1,
+			EntryID: result.ID,
+			Score:   result.Score,
+			Packed:  packed,
+		})
+	}
+	topScore := 0.0
+	if len(resp.RecallEntries) > 0 {
+		topScore = resp.RecallEntries[0].Score
+	}
+	queryID, err := store.RecordRecallQueryEvent(ctx, db.RecallQueryEvent{
+		Query:              req.Query,
+		Surface:            surface,
+		FiltersJSON:        string(filtersJSON),
+		TrustedOnly:        req.TrustedOnly,
+		ScorePolicyVersion: db.RecallLexicalScorePolicyVersion,
+		ResultCount:        len(resp.RecallEntries),
+		PackedCount:        len(packedIDs),
+		TopScore:           topScore,
+		MissReason:         resp.MissReason,
+		Exposures:          exposures,
+	})
+	if err != nil {
+		if req.StrictRecording {
+			return fmt.Errorf("recording recall query outcome: %w", err)
+		}
+		log.Printf("recall: recording query outcome: %v", err)
+		return nil
+	}
+	resp.QueryID = queryID
+	return nil
+}
 
 func NormalizeRecallContextMaxBytes(maxBytes int) (int, error) {
 	if maxBytes < 0 {

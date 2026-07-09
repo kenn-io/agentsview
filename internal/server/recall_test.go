@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"context"
 	"database/sql"
 	"net/http"
 	"os"
@@ -23,6 +24,8 @@ type listRecallEntriesResponse struct {
 }
 
 type queryRecallEntriesResponse struct {
+	QueryID        string                      `json:"query_id"`
+	MissReason     string                      `json:"miss_reason"`
 	RecallEntries  []db.RecallResult           `json:"entries"`
 	TrustedOnly    bool                        `json:"trusted_only"`
 	Summary        *service.RecallQuerySummary `json:"summary,omitempty"`
@@ -312,6 +315,8 @@ func TestQueryRecallEntriesReturnsContext(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 
 	r := decode[queryRecallEntriesResponse](t, w)
+	assert.NotEmpty(t, r.QueryID)
+	assert.Empty(t, r.MissReason)
 	require.Len(t, r.RecallEntries, 1)
 	assert.Equal(t, "m1", r.RecallEntries[0].ID)
 	require.NotNil(t, r.Summary)
@@ -325,6 +330,15 @@ func TestQueryRecallEntriesReturnsContext(t *testing.T) {
 	require.NotNil(t, r.ContextMeta)
 	assert.Equal(t, 1, r.ContextMeta.EntryCount)
 	assert.Equal(t, []string{"m1"}, r.ContextMeta.IncludedIDs)
+	event, err := te.db.GetRecallQueryEvent(context.Background(), r.QueryID)
+	require.NoError(t, err)
+	require.NotNil(t, event)
+	assert.Equal(t, r.QueryID, event.QueryID)
+	assert.Equal(t, "query", event.Surface)
+	assert.Equal(t, 1, event.ResultCount)
+	assert.Equal(t, 1, event.PackedCount)
+	require.Len(t, event.Exposures, 1)
+	assert.True(t, event.Exposures[0].Packed)
 }
 
 func TestQueryRecallEntriesFiltersBySourceSessionID(t *testing.T) {

@@ -202,6 +202,7 @@ type RecallList struct {
 // RecallQuery mirrors POST /api/v1/recall/query.
 type RecallQuery struct {
 	Query               string `json:"query"`
+	Surface             string `json:"surface,omitempty"`
 	Project             string `json:"project,omitempty"`
 	CWD                 string `json:"cwd,omitempty"`
 	GitBranch           string `json:"git_branch,omitempty"`
@@ -219,10 +220,15 @@ type RecallQuery struct {
 	Limit               int    `json:"limit,omitempty"`
 	IncludeContext      bool   `json:"include_context,omitempty"`
 	ContextMaxBytes     int    `json:"context_max_bytes,omitempty"`
+	// StrictRecording is reserved for local calibration workflows. It is not
+	// transported over JSON; ordinary query paths keep measurement best-effort.
+	StrictRecording bool `json:"-"`
 }
 
 // RecallQueryResult mirrors POST /api/v1/recall/query response.
 type RecallQueryResult struct {
+	QueryID        string              `json:"query_id"`
+	MissReason     string              `json:"miss_reason"`
 	RecallEntries  []db.RecallResult   `json:"entries"`
 	TrustedOnly    bool                `json:"trusted_only"`
 	Summary        *RecallQuerySummary `json:"summary,omitempty"`

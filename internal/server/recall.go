@@ -30,37 +30,6 @@ func handleReadOnly(w http.ResponseWriter, err error) bool {
 	return false
 }
 
-type recallQueryRequest struct {
-	Query               string `json:"query"`
-	Project             string `json:"project"`
-	CWD                 string `json:"cwd"`
-	GitBranch           string `json:"git_branch"`
-	Agent               string `json:"agent"`
-	Type                string `json:"type"`
-	Scope               string `json:"scope"`
-	Status              string `json:"status"`
-	ExtractorMethod     string `json:"extractor_method"`
-	SourceSessionID     string `json:"source_session_id"`
-	SourceEpisodeID     string `json:"source_episode_id"`
-	SourceRunID         string `json:"source_run_id"`
-	SupersedesEntryID   string `json:"supersedes_entry_id"`
-	SupersededByEntryID string `json:"superseded_by_entry_id"`
-	TrustedOnly         bool   `json:"trusted_only"`
-	Limit               int    `json:"limit"`
-	IncludeContext      bool   `json:"include_context"`
-	ContextMaxBytes     int    `json:"context_max_bytes"`
-}
-
-type recallQueryResponse struct {
-	RecallEntries  []db.RecallResult           `json:"entries"`
-	TrustedOnly    bool                        `json:"trusted_only"`
-	Summary        *service.RecallQuerySummary `json:"summary,omitempty"`
-	Context        string                      `json:"context,omitempty"`
-	ContextMeta    *service.RecallContextMeta  `json:"context_meta,omitempty"`
-	ContextEntries []db.RecallResult           `json:"context_entries,omitempty"`
-	ContextSummary *service.RecallQuerySummary `json:"context_summary,omitempty"`
-}
-
 func (s *Server) handleListRecallEntries(
 	w http.ResponseWriter, r *http.Request,
 ) {
@@ -140,7 +109,7 @@ func (s *Server) handleGetRecallEntry(
 func (s *Server) handleQueryRecallEntries(
 	w http.ResponseWriter, r *http.Request,
 ) {
-	var req recallQueryRequest
+	var req service.RecallQuery
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
@@ -149,24 +118,19 @@ func (s *Server) handleQueryRecallEntries(
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	page, err := s.db.QueryRecallEntries(r.Context(), db.RecallQuery{
-		Text:                req.Query,
-		Project:             req.Project,
-		CWD:                 req.CWD,
-		GitBranch:           req.GitBranch,
-		Agent:               req.Agent,
-		Type:                req.Type,
-		Scope:               req.Scope,
-		Status:              req.Status,
-		ExtractorMethod:     req.ExtractorMethod,
-		SourceSessionID:     req.SourceSessionID,
-		SourceEpisodeID:     req.SourceEpisodeID,
-		SourceRunID:         req.SourceRunID,
-		SupersedesEntryID:   req.SupersedesEntryID,
-		SupersededByEntryID: req.SupersededByEntryID,
-		TrustedOnly:         req.TrustedOnly,
-		Limit:               req.Limit,
-	})
+	if req.IncludeContext {
+		if _, err := service.NormalizeRecallContextMaxBytes(
+			req.ContextMaxBytes,
+		); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	if _, err := service.NormalizeRecallQuerySurface(req.Surface); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	resp, err := service.QueryRecallStore(r.Context(), s.db, req)
 	if err != nil {
 		if handleContextError(w, err) {
 			return
@@ -176,31 +140,6 @@ func (s *Server) handleQueryRecallEntries(
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
-	}
-	if page.RecallEntries == nil {
-		page.RecallEntries = []db.RecallResult{}
-	}
-	resp := recallQueryResponse{
-		RecallEntries: page.RecallEntries,
-		TrustedOnly:   req.TrustedOnly,
-		Summary:       service.BuildRecallQuerySummary(page.RecallEntries),
-	}
-	if req.IncludeContext {
-		contextText, contextMeta, err := service.BuildRecallContext(
-			page.RecallEntries, req.ContextMaxBytes, req.Query,
-		)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		resp.Context = contextText
-		resp.ContextMeta = contextMeta
-		resp.ContextEntries = service.RecallContextResults(
-			page.RecallEntries, contextMeta,
-		)
-		resp.ContextSummary = service.BuildRecallContextSummary(
-			page.RecallEntries, contextMeta,
-		)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

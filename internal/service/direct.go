@@ -935,53 +935,7 @@ func (b *directBackend) GetRecallEntry(
 func (b *directBackend) QueryRecallEntries(
 	ctx context.Context, req RecallQuery,
 ) (*RecallQueryResult, error) {
-	if err := ValidateRecallEntryLimit(req.Limit); err != nil {
-		return nil, err
-	}
-	page, err := b.db.QueryRecallEntries(ctx, db.RecallQuery{
-		Text:                req.Query,
-		Project:             req.Project,
-		CWD:                 req.CWD,
-		GitBranch:           req.GitBranch,
-		Agent:               req.Agent,
-		Type:                req.Type,
-		Scope:               req.Scope,
-		Status:              req.Status,
-		ExtractorMethod:     req.ExtractorMethod,
-		SourceSessionID:     req.SourceSessionID,
-		SourceEpisodeID:     req.SourceEpisodeID,
-		SourceRunID:         req.SourceRunID,
-		SupersedesEntryID:   req.SupersedesEntryID,
-		SupersededByEntryID: req.SupersededByEntryID,
-		TrustedOnly:         req.TrustedOnly,
-		Limit:               req.Limit,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if page.RecallEntries == nil {
-		page.RecallEntries = []db.RecallResult{}
-	}
-	resp := RecallQueryResult{
-		RecallEntries: page.RecallEntries,
-		TrustedOnly:   req.TrustedOnly,
-		Summary:       BuildRecallQuerySummary(page.RecallEntries),
-	}
-	if req.IncludeContext {
-		contextText, contextMeta, err := BuildRecallContext(
-			page.RecallEntries, req.ContextMaxBytes, req.Query,
-		)
-		if err != nil {
-			return nil, err
-		}
-		resp.Context = contextText
-		resp.ContextMeta = contextMeta
-		resp.ContextEntries = RecallContextResults(page.RecallEntries, contextMeta)
-		resp.ContextSummary = BuildRecallContextSummary(
-			page.RecallEntries, contextMeta,
-		)
-	}
-	return &resp, nil
+	return QueryRecallStore(ctx, b.db, req)
 }
 
 func (b *directBackend) ImportRecallEntries(

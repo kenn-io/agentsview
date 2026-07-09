@@ -663,6 +663,12 @@ func (b *httpBackend) QueryRecallEntries(
 			return nil, err
 		}
 	}
+	if _, err := NormalizeRecallQuerySurface(req.Surface); err != nil {
+		return nil, err
+	}
+	if req.StrictRecording {
+		return nil, fmt.Errorf("strict recall recording requires a direct backend")
+	}
 	var out RecallQueryResult
 	if err := b.postJSON(ctx, "/api/v1/recall/query", req, &out); err != nil {
 		return nil, err
