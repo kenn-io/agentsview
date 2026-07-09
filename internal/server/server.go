@@ -311,6 +311,7 @@ func (s *Server) routes() {
 	s.mux.Handle("GET /api/v1/memories/{id}", s.withTimeout(s.handleGetMemory))
 	s.mux.Handle("POST /api/v1/memories/query", s.withTimeout(s.handleQueryMemories))
 	s.mux.Handle("POST /api/v1/memories/import", s.withTimeout(s.handleImportMemories))
+	s.registerEvalIngestRoutes()
 
 	// SPA fallback: serve embedded frontend
 	// Do not use timeout handler for static assets to avoid buffering.

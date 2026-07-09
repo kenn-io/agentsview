@@ -371,6 +371,12 @@ func (s *Store) ImportAcceptedMemoriesJSONLWithOptions(
 	return db.MemoryImportResult{}, db.ErrReadOnly
 }
 
+func (s *Store) IngestEvalTrajectory(
+	_ context.Context, _ db.EvalTrajectoryIngest,
+) (db.EvalTrajectoryIngestResult, error) {
+	return db.EvalTrajectoryIngestResult{}, db.ErrReadOnly
+}
+
 // RenameSession updates the visible session name in PG.
 func (s *Store) RenameSession(
 	id string, displayName *string,

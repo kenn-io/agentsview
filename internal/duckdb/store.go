@@ -173,6 +173,12 @@ func (s *Store) ImportAcceptedMemoriesJSONLWithOptions(
 	return db.MemoryImportResult{}, db.ErrReadOnly
 }
 
+func (s *Store) IngestEvalTrajectory(
+	_ context.Context, _ db.EvalTrajectoryIngest,
+) (db.EvalTrajectoryIngestResult, error) {
+	return db.EvalTrajectoryIngestResult{}, db.ErrReadOnly
+}
+
 const duckSessionCols = `id, project, machine, agent,
 	first_message, COALESCE(display_name, session_name) AS display_name, created_at, started_at,
 	ended_at, message_count, user_message_count,

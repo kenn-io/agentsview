@@ -117,6 +117,9 @@ type Store interface {
 	ImportAcceptedMemoriesJSONLWithOptions(
 		ctx context.Context, r io.Reader, opts MemoryImportOptions,
 	) (MemoryImportResult, error)
+	IngestEvalTrajectory(
+		ctx context.Context, in EvalTrajectoryIngest,
+	) (EvalTrajectoryIngestResult, error)
 
 	// Session management.
 	RenameSession(id string, displayName *string) error
