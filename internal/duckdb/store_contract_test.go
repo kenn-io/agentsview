@@ -207,15 +207,28 @@ func duckContractSessionsCursorsAndMetadata(
 	require.NoError(t, err)
 	require.NotNil(t, alpha)
 	require.Equal(t, "alpha", alpha.Project)
+	require.NotNil(t, alpha.LatestDisplayOrdinal)
+	assert.Equal(t, 1, *alpha.LatestDisplayOrdinal)
 
 	full, err := store.GetSessionFull(ctx, fixture.alphaID)
 	require.NoError(t, err)
 	require.NotNil(t, full)
 	require.Equal(t, fixture.alphaID, full.ID)
+	assert.Nil(t, full.LatestDisplayOrdinal)
 
 	index, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{Project: "alpha"})
 	require.NoError(t, err)
 	require.Contains(t, duckSidebarSessionIDs(index.Sessions), fixture.alphaID)
+	var sidebar *db.SidebarSessionIndexRow
+	for i := range index.Sessions {
+		if index.Sessions[i].ID == fixture.alphaID {
+			sidebar = &index.Sessions[i]
+			break
+		}
+	}
+	require.NotNil(t, sidebar)
+	require.NotNil(t, sidebar.LatestDisplayOrdinal)
+	assert.Equal(t, 1, *sidebar.LatestDisplayOrdinal)
 
 	stats, err := store.GetStats(ctx, false, false)
 	require.NoError(t, err)

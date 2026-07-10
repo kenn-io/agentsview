@@ -189,6 +189,134 @@ func TestStoreReadsSessionsMessagesAndMetadata(t *testing.T) {
 	assert.Equal(t, []string{"test-machine"}, machines)
 }
 
+func TestSessionAPILatestDisplayOrdinal(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+
+	display := syncSession("display-cursor", "alpha", "visible", "2026-01-10T00:00:00.000Z", 5)
+	hiddenOnly := syncSession("hidden-only", "alpha", "hidden", "2026-01-10T00:05:00.000Z", 1)
+	parent := syncSession("duck-parent-cursor", "alpha", "parent", "2026-01-10T00:10:00.000Z", 1)
+	child := syncSession("duck-child-cursor", "alpha", "child", "2026-01-10T00:11:00.000Z", 1)
+	parentID := parent.ID
+	child.ParentSessionID = &parentID
+	child.RelationshipType = "subagent"
+
+	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+		{
+			Session: display,
+			Messages: []db.Message{
+				syncMessage(display.ID, 1, "user", "visible", "2026-01-10T00:00:00.000Z"),
+				{
+					SessionID:     display.ID,
+					Ordinal:       3,
+					Role:          "user",
+					Content:       "hidden",
+					IsSystem:      true,
+					Timestamp:     "2026-01-10T00:01:00.000Z",
+					ContentLength: len("hidden"),
+				},
+				{
+					SessionID:         display.ID,
+					Ordinal:           5,
+					Role:              "system",
+					Content:           "compact",
+					IsSystem:          true,
+					IsCompactBoundary: true,
+					Timestamp:         "2026-01-10T00:02:00.000Z",
+					ContentLength:     len("compact"),
+				},
+				{
+					SessionID:     display.ID,
+					Ordinal:       7,
+					Role:          "system",
+					Content:       "continued",
+					IsSystem:      true,
+					SourceSubtype: "continuation",
+					Timestamp:     "2026-01-10T00:03:00.000Z",
+					ContentLength: len("continued"),
+				},
+				syncMessage(display.ID, 9, "user", db.SystemMsgPrefixes[0]+" by metadata", "2026-01-10T00:04:00.000Z"),
+			},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+		{
+			Session: hiddenOnly,
+			Messages: []db.Message{{
+				SessionID:     hiddenOnly.ID,
+				Ordinal:       4,
+				Role:          "user",
+				Content:       "hidden",
+				IsSystem:      true,
+				Timestamp:     "2026-01-10T00:05:00.000Z",
+				ContentLength: len("hidden"),
+			}},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+		{
+			Session:         parent,
+			Messages:        []db.Message{syncMessage(parent.ID, 0, "user", "parent", "2026-01-10T00:10:00.000Z")},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+		{
+			Session:         child,
+			Messages:        []db.Message{syncMessage(child.ID, 2, "assistant", "child", "2026-01-10T00:11:00.000Z")},
+			DataVersion:     1,
+			ReplaceMessages: true,
+		},
+	})
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	_, err = syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store := NewStoreFromDB(syncer.DB())
+
+	session, err := store.GetSession(ctx, display.ID)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.NotNil(t, session.LatestDisplayOrdinal)
+	assert.Equal(t, 7, *session.LatestDisplayOrdinal)
+
+	full, err := store.GetSessionFull(ctx, display.ID)
+	require.NoError(t, err)
+	require.NotNil(t, full)
+	assert.Nil(t, full.LatestDisplayOrdinal)
+
+	page, err := store.ListSessions(ctx, db.SessionFilter{Limit: 10, IncludeChildren: true})
+	require.NoError(t, err)
+	byID := map[string]db.Session{}
+	for _, row := range page.Sessions {
+		byID[row.ID] = row
+	}
+	require.NotNil(t, byID[display.ID].LatestDisplayOrdinal)
+	assert.Equal(t, 7, *byID[display.ID].LatestDisplayOrdinal)
+	assert.Nil(t, byID[hiddenOnly.ID].LatestDisplayOrdinal)
+	require.NotNil(t, byID[child.ID].LatestDisplayOrdinal)
+	assert.Equal(t, 2, *byID[child.ID].LatestDisplayOrdinal)
+
+	index, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{IncludeChildren: true})
+	require.NoError(t, err)
+	var sidebar *db.SidebarSessionIndexRow
+	for i := range index.Sessions {
+		if index.Sessions[i].ID == display.ID {
+			sidebar = &index.Sessions[i]
+			break
+		}
+	}
+	require.NotNil(t, sidebar)
+	require.NotNil(t, sidebar.LatestDisplayOrdinal)
+	assert.Equal(t, 7, *sidebar.LatestDisplayOrdinal)
+
+	children, err := store.GetChildSessions(ctx, parent.ID)
+	require.NoError(t, err)
+	require.Len(t, children, 1)
+	require.NotNil(t, children[0].LatestDisplayOrdinal)
+	assert.Equal(t, 2, *children[0].LatestDisplayOrdinal)
+}
+
 func TestStoreGetStatsPreservesRootAndScopeFilters(t *testing.T) {
 	ctx := context.Background()
 	local := newLocalDB(t)

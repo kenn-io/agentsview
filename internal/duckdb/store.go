@@ -185,7 +185,7 @@ func (s *Store) IngestEvalTrajectory(
 	return db.EvalTrajectoryIngestResult{}, db.ErrReadOnly
 }
 
-const duckSessionCols = `id, project, machine, agent,
+const duckSessionStorageCols = `id, project, machine, agent,
 	first_message, COALESCE(display_name, session_name) AS display_name, created_at, started_at,
 	ended_at, message_count, user_message_count,
 	parent_session_id, relationship_type,
@@ -210,11 +210,21 @@ const duckSessionCols = `id, project, machine, agent,
 	secret_leak_count, secrets_rules_version,
 	deleted_at, termination_status`
 
-func scanSession(rs interface{ Scan(...any) error }) (db.Session, error) {
-	var s db.Session
+var duckSessionAPICols = duckSessionStorageCols + `,
+	(SELECT MAX(m.ordinal) FROM messages m
+	 WHERE m.session_id = sessions.id AND ` + db.DuckDBDisplayMessageSQL("m") + `)
+	 AS latest_display_ordinal`
+
+type duckRowScanner interface {
+	Scan(...any) error
+}
+
+func scanSessionFields(
+	rs duckRowScanner, s *db.Session, extra ...any,
+) error {
 	var createdAt any
 	var startedAt, endedAt, deletedAt any
-	err := rs.Scan(
+	dest := []any{
 		&s.ID, &s.Project, &s.Machine, &s.Agent,
 		&s.FirstMessage, &s.DisplayName,
 		&createdAt, &startedAt, &endedAt,
@@ -242,9 +252,10 @@ func scanSession(rs interface{ Scan(...any) error }) (db.Session, error) {
 		&s.ParserMalformedLines, &s.IsTruncated,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
 		&deletedAt, &s.TerminationStatus,
-	)
+	}
+	err := rs.Scan(append(dest, extra...)...)
 	if err != nil {
-		return s, err
+		return err
 	}
 	s.CreatedAt = formatDBTime(createdAt)
 	if v := formatDBTime(startedAt); v != "" {
@@ -256,13 +267,27 @@ func scanSession(rs interface{ Scan(...any) error }) (db.Session, error) {
 	if v := formatDBTime(deletedAt); v != "" {
 		s.DeletedAt = &v
 	}
-	return s, nil
+	return nil
 }
 
-func scanSessionRows(rows *sql.Rows) ([]db.Session, error) {
+func scanSession(rs duckRowScanner) (db.Session, error) {
+	var s db.Session
+	err := scanSessionFields(rs, &s)
+	return s, err
+}
+
+func scanSessionAPIRow(rs duckRowScanner) (db.Session, error) {
+	var s db.Session
+	err := scanSessionFields(rs, &s, &s.LatestDisplayOrdinal)
+	return s, err
+}
+
+func scanSessionRows(
+	rows *sql.Rows, scan func(duckRowScanner) (db.Session, error),
+) ([]db.Session, error) {
 	sessions := []db.Session{}
 	for rows.Next() {
-		s, err := scanSession(rows)
+		s, err := scan(rows)
 		if err != nil {
 			return nil, fmt.Errorf("scanning duckdb session: %w", err)
 		}
@@ -406,7 +431,7 @@ func (s *Store) ListSessions(ctx context.Context, f db.SessionFilter) (db.Sessio
 		}
 		cursorWhere += " AND " + pageBuilder.CursorPredicate(rs, f, vals, cur.ID)
 	}
-	query := "SELECT " + duckSessionCols +
+	query := "SELECT " + duckSessionAPICols +
 		" FROM sessions WHERE " + cursorWhere + " " +
 		pageBuilder.OrderByClause(rs, f) + " " +
 		pageBuilder.Limit(f.Limit+1)
@@ -416,7 +441,7 @@ func (s *Store) ListSessions(ctx context.Context, f db.SessionFilter) (db.Sessio
 		return db.SessionPage{}, fmt.Errorf("querying duckdb sessions: %w", err)
 	}
 	defer rows.Close()
-	sessions, err := scanSessionRows(rows)
+	sessions, err := scanSessionRows(rows, scanSessionAPIRow)
 	if err != nil {
 		return db.SessionPage{}, err
 	}
@@ -451,6 +476,9 @@ func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) 
 			termination_status,
 			message_count,
 			user_message_count,
+			(SELECT MAX(m.ordinal) FROM messages m
+			 WHERE m.session_id = sessions.id AND ` + db.DuckDBDisplayMessageSQL("m") + `)
+			 AS latest_display_ordinal,
 			is_automated,
 			position('<teammate-message' in COALESCE(first_message, '')) > 0
 		FROM sessions
@@ -486,6 +514,7 @@ func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) 
 			&row.TerminationStatus,
 			&row.MessageCount,
 			&row.UserMessageCount,
+			&row.LatestDisplayOrdinal,
 			&row.IsAutomated,
 			&row.IsTeammate,
 		); err != nil {
@@ -515,10 +544,10 @@ func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) 
 
 func (s *Store) GetSession(ctx context.Context, id string) (*db.Session, error) {
 	row := s.queryRowContext(ctx,
-		"SELECT "+duckSessionCols+" FROM sessions WHERE id = ? AND deleted_at IS NULL",
+		"SELECT "+duckSessionAPICols+" FROM sessions WHERE id = ? AND deleted_at IS NULL",
 		id,
 	)
-	sess, err := scanSession(row)
+	sess, err := scanSessionAPIRow(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -530,7 +559,7 @@ func (s *Store) GetSession(ctx context.Context, id string) (*db.Session, error) 
 
 func (s *Store) GetSessionFull(ctx context.Context, id string) (*db.Session, error) {
 	row := s.queryRowContext(ctx,
-		"SELECT "+duckSessionCols+" FROM sessions WHERE id = ?",
+		"SELECT "+duckSessionStorageCols+" FROM sessions WHERE id = ?",
 		id,
 	)
 	sess, err := scanSession(row)
@@ -545,7 +574,7 @@ func (s *Store) GetSessionFull(ctx context.Context, id string) (*db.Session, err
 
 func (s *Store) GetChildSessions(ctx context.Context, parentID string) ([]db.Session, error) {
 	rows, err := s.queryContext(ctx,
-		"SELECT "+duckSessionCols+` FROM sessions
+		"SELECT "+duckSessionAPICols+` FROM sessions
 		 WHERE parent_session_id = ? AND deleted_at IS NULL
 		 ORDER BY COALESCE(started_at, created_at) ASC`,
 		parentID,
@@ -554,7 +583,7 @@ func (s *Store) GetChildSessions(ctx context.Context, parentID string) ([]db.Ses
 		return nil, fmt.Errorf("querying duckdb child sessions: %w", err)
 	}
 	defer rows.Close()
-	return scanSessionRows(rows)
+	return scanSessionRows(rows, scanSessionAPIRow)
 }
 
 func (s *Store) GetSessionVersion(id string) (int, int64, bool) {

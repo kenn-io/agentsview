@@ -114,6 +114,11 @@ func PostgresDisplayMessageSQL(alias string) string {
 	return displayMessageSQL(alias, systemPrefixPostgres)
 }
 
+// DuckDBDisplayMessageSQL returns the DuckDB transcript-visibility predicate.
+func DuckDBDisplayMessageSQL(alias string) string {
+	return displayMessageSQL(alias, systemPrefixDuckDB)
+}
+
 func displayMessageSQL(alias string, dialect systemPrefixSQLDialect) string {
 	booleanTrue, booleanFalse := "1", "0"
 	prefix := SystemPrefixSQL(alias+".content", alias+".role")
