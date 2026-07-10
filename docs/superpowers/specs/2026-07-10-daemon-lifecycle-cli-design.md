@@ -40,12 +40,12 @@ commands are config-driven, idempotent, and deliberately exclude read-only
 
 Add `daemon` to the root command's core command group.
 
-| Command                     | Behavior                                                                                                                                                     |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `agentsview daemon start`   | Start the writable SQLite daemon in the background. Succeed and report the existing daemon when it is already running.                                       |
-| `agentsview daemon status`  | Report the writable daemon's state, address, PID, version, and uptime. Always exit successfully; output distinguishes running, starting, and stopped states. |
-| `agentsview daemon stop`    | Stop confirmed writable daemon processes. Succeed and report that no daemon is running when already stopped.                                                 |
-| `agentsview daemon restart` | Stop confirmed writable daemon processes and start a new one from current configuration. If stopped, start it and report that it was not previously running. |
+| Command                     | Behavior                                                                                                                                                                             |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `agentsview daemon start`   | Start the writable SQLite daemon in the background. Succeed and report the existing daemon when it is already running.                                                               |
+| `agentsview daemon status`  | Report the writable daemon's state, address, PID, version, and uptime. Exit successfully when state inspection succeeds; output distinguishes running, starting, and stopped states. |
+| `agentsview daemon stop`    | Stop confirmed writable daemon processes. Succeed and report that no daemon is running when already stopped.                                                                         |
+| `agentsview daemon restart` | Stop confirmed writable daemon processes and start a new one from current configuration. If stopped, start it and report that it was not previously running.                         |
 
 The daemon subcommands accept no serve-specific flags. They load the normal
 effective AgentsView configuration: defaults, `config.toml`, and supported
@@ -60,6 +60,11 @@ the `serve --background` compatibility path:
 - A persistent non-loopback `host` in `config.toml` requires
   `require_auth = true`, while an explicit `--host` flag can request a one-off
   unauthenticated non-loopback bind.
+
+This config-only rule also applies when `daemon start` automatically replaces an
+older daemon. It must not inherit runtime-only options from the old record,
+including `NoSync`. Both start and restart launch from the newly loaded
+configuration.
 
 ## Lifecycle Scope
 
@@ -111,9 +116,11 @@ and its compatibility children.
 Extract or add narrowly scoped lifecycle helpers around the existing machinery:
 
 - Discover writable runtime records separately from all server records.
-- During writable discovery, remove a runtime record when its stored process
-  create time proves that the live PID has been reused. Preserve legacy
-  records with no create time for explicit identity handling.
+- During writable discovery, compare stored and live process create times with a
+  tri-state result: match, proven mismatch, or unknown. Remove a runtime
+  record only for a proven mismatch where both values are available and valid.
+  Preserve missing or malformed recorded values and unavailable OS lookups as
+  unknown for explicit identity handling.
 - Render writable-only status without changing legacy `serve status` output.
 - Stop only confirmed writable records for daemon operations.
 - Launch a background child with synthesized `serve` arguments and no
@@ -125,7 +132,8 @@ The background child remains a normal `agentsview serve` process. This avoids a
 second server startup path and preserves existing runtime publication,
 readiness, logging, platform-specific detachment, and graceful-shutdown logic.
 
-`daemon restart` must use the newly loaded configuration. It must not adopt
+`daemon start` and `daemon restart` must use the newly loaded configuration,
+including when start automatically replaces an older daemon. They must not adopt
 transient options recorded by the old runtime, such as an earlier `--no-sync`
 flag. This differs intentionally from compatibility and update paths that need
 to preserve an existing invocation's runtime behavior.
@@ -140,13 +148,17 @@ to preserve an existing invocation's runtime behavior.
    authentication token.
 1. If a compatible writable daemon is running, report it and exit zero.
 1. Apply the existing version and data-compatibility replacement policy when an
-   older daemon requires replacement.
+   older daemon requires replacement, but do not adopt runtime-only launch
+   options from the replaced record.
 1. Spawn the detached `serve` child, wait for its runtime record or early exit,
    and report its URL, PID, and log path.
 
 If another start owns the launch lock, wait using the existing bounded startup
 probe. Exit zero if that operation publishes a writable daemon; otherwise return
-a clear startup-in-progress or startup-failed error.
+a clear startup-in-progress or startup-failed error. If the start lock remains
+held beyond normal startup, include startup-snapshot PID/log details and the
+same manual verification and termination guidance defined for stop; never launch
+a possible second writer.
 
 Normal foreground `serve` startup acquires the same background launch lock
 during its handoff from process discovery through runtime publication.
@@ -177,10 +189,13 @@ including the fallback case where runtime publication fails.
 
 A startup that has not published a runtime record is not safe to signal.
 `daemon stop` returns a retryable error asking the user to wait for startup to
-finish. When a remaining live record cannot be confirmed, report its PID and
-runtime-record path and instruct the user to verify and terminate the process
-manually before retrying. Do not suggest another daemon lifecycle command that
-would refuse the same target.
+finish. Its error also explains that runtime-record publication may have failed
+if the state persists, and includes the PID and log path from the startup
+snapshot when available. In that persistent fallback state, instruct the user to
+verify and terminate the process manually before retrying. When a remaining live
+record cannot be confirmed, report its PID and runtime-record path and give the
+same manual verification and termination guidance. Do not suggest another daemon
+lifecycle command that would refuse the same target.
 
 ### Restart
 
@@ -202,20 +217,30 @@ without signalling it or starting a possible second writer. If the new process
 fails after the old daemon has stopped, return nonzero and include the log path;
 do not claim rollback or restoration.
 
+The same persistent-start-lock recovery guidance used by stop applies when
+restart finds the start lock held after it acquires the launch lock. Restart
+must not infer process identity from a startup snapshot or signal that PID
+automatically.
+
 ## Errors and Exit Behavior
 
 - Repeated start, stop, and restart operations are successful when the requested
   final state already exists or can be reached safely.
-- `daemon status` always exits zero; its human-readable output conveys state.
+- `daemon status` exits zero for successfully inspected running, starting,
+  stopped, incompatible, and invalid multi-writer states. Configuration and
+  runtime-store I/O failures return nonzero.
 - Invalid configuration and incompatible database versions fail before a restart
   stops the existing daemon.
 - Concurrent lifecycle activity is serialized by the launch lock. Operations
   that cannot safely wait return a concise retryable error. Stop and restart
   also check the distinct daemon start lock unconditionally before acting on
   runtime records.
-- Stale or PID-reused records never authorize a signal. `daemon stop` and
-  `daemon restart` return nonzero if a live writable target cannot be
-  confirmed, because neither command can guarantee its requested final state.
+- Stale or PID-reused records never authorize a signal. Only a valid stored
+  create time and a valid, unequal live create time prove PID reuse and permit
+  record cleanup; missing, malformed, or unavailable values remain
+  unconfirmed. `daemon stop` and `daemon restart` return nonzero if a live
+  writable target cannot be confirmed, because neither command can guarantee
+  its requested final state.
 - Child startup failure includes the background log location.
 - Error messages and recovery hints prefer canonical `daemon` commands while
   compatibility commands remain accepted.
@@ -249,6 +274,8 @@ helpers. Cover:
 - Rejection of positional arguments and serve-specific flags on daemon
   subcommands.
 - `start` when stopped, running, and concurrently starting.
+- `start` automatically replacing an older `NoSync` daemon without inheriting
+  that runtime-only option.
 - `start` when only read-only runtime records exist, which must launch a
   writable daemon rather than report that one is already running.
 - `status` for running, starting, stopped, read-only-only, and incompatible
@@ -258,17 +285,22 @@ helpers. Cover:
   runtime records.
 - `stop` refusing before signalling confirmed records when the daemon start lock
   is also held.
+- `stop` and `restart` refusing a persistent start-lock fallback and printing
+  startup-snapshot PID/log recovery details without signalling the process.
 - `restart` when running and stopped, including its distinct result messages.
 - Restart loading current configuration without inheriting old runtime-only
   options.
 - Database/config validation before stop.
 - Launch-lock contention for stop and across the complete restart gap.
 - Refusal to signal an unconfirmed or PID-reused runtime target, including
-  mismatched-create-time cleanup, legacy-record recovery output, and
-  all-target prevalidation before stopping any writable process.
+  proven-mismatch cleanup; preservation of missing, malformed, and
+  OS-unavailable create times; legacy-record recovery output; and all-target
+  prevalidation before stopping any writable process.
 - New-child startup failure after stop, including the reported log path.
 - Existing `serve --background`, `serve status`, and `serve stop` behavior.
 - `serve restart` delegation to writable, config-driven restart behavior.
+- `status` returning nonzero for configuration or runtime-store I/O failures
+  while returning zero for every successfully inspected daemon state.
 
 Run focused `cmd/agentsview` tests during development, followed by the normal Go
 formatting, vetting, and practical repository test commands required by
