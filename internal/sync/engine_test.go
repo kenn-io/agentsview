@@ -1894,6 +1894,81 @@ func TestProcessFileSkipCacheReparsesStaleCodexDataVersion(t *testing.T) {
 	require.Len(t, res.results, 1)
 }
 
+func TestSyncPathsCodexCachedFingerprintStillRefreshesChangedTitle(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	dayDir := filepath.Join(codexDir, "2024", "01", "01")
+	require.NoError(t, os.MkdirAll(dayDir, 0o755))
+
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229ed"
+	path := filepath.Join(
+		dayDir, "rollout-2024-01-01T10-00-00-"+uuid+".jsonl",
+	)
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/home/user/code/agentsview", "codex_cli_rs",
+			"2024-01-01T10:00:00Z",
+		),
+		testjsonl.CodexMsgJSON(
+			"user", "preserve this message", "2024-01-01T10:00:01Z",
+		),
+	)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	indexPath := filepath.Join(root, parser.CodexSessionIndexFilename)
+	require.NoError(t, os.WriteFile(indexPath, []byte(
+		`{"id":"`+uuid+`","thread_name":"Original title"}`+"\n",
+	), 0o600))
+	transcriptTime := time.Now().Add(-2 * time.Hour).Truncate(time.Second)
+	indexTime := time.Now().Add(-time.Hour).Truncate(time.Second)
+	require.NoError(t, os.Chtimes(path, transcriptTime, transcriptTime))
+	require.NoError(t, os.Chtimes(indexPath, indexTime, indexTime))
+
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {codexDir},
+		},
+		Machine: "local",
+	})
+	engine.SyncAll(context.Background(), nil)
+
+	before, err := database.GetSessionFull(
+		context.Background(), "codex:"+uuid,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.NotNil(t, before.SessionName)
+	require.NotNil(t, before.FileMtime)
+	assert.Equal(t, "Original title", *before.SessionName)
+	engine.cacheSkip(path, *before.FileMtime)
+	require.Equal(t, *before.FileMtime, engine.SnapshotSkipCache()[path],
+		"pre-existing skip-cache entry precondition")
+
+	require.NoError(t, os.WriteFile(indexPath, []byte(
+		`{"id":"`+uuid+`","thread_name":"Renamed title"}`+"\n",
+	), 0o600))
+	storedMtime := time.Unix(0, *before.FileMtime)
+	require.NoError(t, os.Chtimes(indexPath, storedMtime, storedMtime))
+	indexInfo, err := os.Stat(indexPath)
+	require.NoError(t, err)
+	require.Equal(t, *before.FileMtime, indexInfo.ModTime().UnixNano())
+
+	engine.SyncPaths([]string{path})
+
+	after, err := database.GetSessionFull(
+		context.Background(), "codex:"+uuid,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	require.NotNil(t, after.SessionName)
+	assert.Equal(t, "Renamed title", *after.SessionName)
+	assert.False(t, after.LastWriteIncremental)
+	msgs, err := database.GetAllMessages(context.Background(), "codex:"+uuid)
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "preserve this message", msgs[0].Content)
+}
+
 func TestProcessFileCodexDBFreshSkipIsNotCached(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()

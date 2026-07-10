@@ -10100,6 +10100,72 @@ func TestIncrementalSync_CodexPartialTailCommitsOnlySafeRecords(t *testing.T) {
 	assert.True(t, sess.LastWriteIncremental)
 }
 
+func TestIncrementalSync_CodexZeroConsumedPartialTailRetriesAtSameMtime(t *testing.T) {
+	env := setupTestEnv(t)
+
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229ec"
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/tmp/proj", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "hello", tsEarlyS1),
+	)
+	path := env.writeCodexSession(
+		t, filepath.Join("2024", "01", "01"),
+		"rollout-2024-01-01T10-00-00-"+uuid+".jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	completeLine := testjsonl.CodexMsgJSON(
+		"assistant", "arrived after partial write", tsEarlyS5,
+	)
+	partialAt := len(completeLine) / 2
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open transcript for partial append")
+	_, err = f.WriteString(completeLine[:partialAt])
+	require.NoError(t, err, "append incomplete record")
+	require.NoError(t, f.Close())
+	fixedMtime := time.Now().Add(-time.Hour).Truncate(time.Second)
+	require.NoError(t, os.Chtimes(path, fixedMtime, fixedMtime))
+
+	env.engine.SyncPaths([]string{path})
+
+	intermediate, err := env.db.GetSessionFull(
+		context.Background(), "codex:"+uuid,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, intermediate)
+	require.NotNil(t, intermediate.FileSize)
+	assert.Equal(t, int64(len(initial)), *intermediate.FileSize,
+		"an incomplete record must not advance the committed offset")
+	assert.Equal(t, 1, intermediate.MessageCount)
+	assert.False(t, intermediate.LastWriteIncremental,
+		"zero consumed bytes must not write an incremental update")
+
+	f, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "reopen transcript to complete record")
+	_, err = f.WriteString(completeLine[partialAt:] + "\n")
+	require.NoError(t, err, "complete record")
+	require.NoError(t, f.Close())
+	require.NoError(t, os.Chtimes(path, fixedMtime, fixedMtime),
+		"restore the exact mtime cached by the partial pass")
+
+	env.engine.SyncPaths([]string{path})
+
+	msgs := fetchMessages(t, env.db, "codex:"+uuid)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, []string{"hello", "arrived after partial write"},
+		[]string{msgs[0].Content, msgs[1].Content})
+	final, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err)
+	require.NotNil(t, final)
+	require.NotNil(t, final.FileSize)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, info.Size(), *final.FileSize)
+	assert.True(t, final.LastWriteIncremental)
+}
+
 func TestIncrementalSync_CodexUnsafeStoredOffsetForcesFullReparse(t *testing.T) {
 	env := setupTestEnv(t)
 

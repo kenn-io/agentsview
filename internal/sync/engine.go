@@ -3676,11 +3676,10 @@ type processResult struct {
 	// skip-cache writes so same-mtime object rewrites do not stay
 	// hidden behind a cached parse failure or non-interactive result.
 	sourceFingerprint string
-	// noCacheSkip suppresses skip-cache recording for an errored
-	// result even when cacheSkip is set for the agent. Read/scan
-	// failures are transient: a permission or readability fix may
-	// not change the file mtime, so caching the failure by mtime
-	// would silently skip the file on later syncs instead of
+	// noCacheSkip suppresses skip-cache recording even when cacheSkip is set
+	// for the agent. Read/scan failures and incomplete append boundaries are
+	// transient: a readability fix or completed record may retain the same file
+	// mtime, so caching either result would silently skip later work instead of
 	// retrying it.
 	noCacheSkip bool
 	needsRetry  bool
@@ -3993,6 +3992,13 @@ func (e *Engine) processProviderFile(
 			if !e.providerSkipCacheEntryFreshInDB(file, source, fingerprint) {
 				e.clearSkip(cacheKey)
 			} else if e.pathNeedsCachedSkipBypass(file.Path) {
+				e.clearSkip(cacheKey)
+			} else if file.Agent == parser.AgentCodex &&
+				e.codexCachedIndexSessionNameChanged(file.Path) {
+				// The transcript fingerprint can remain byte-for-byte identical
+				// while session_index.jsonl changes this session's title. Do not
+				// let a pre-existing transcript skip entry hide that metadata
+				// refresh; non-Codex providers avoid the index lookup entirely.
 				e.clearSkip(cacheKey)
 			} else {
 				return processResult{
@@ -5331,7 +5337,12 @@ func (e *Engine) tryIncrementalJSONL(
 				},
 			}, true
 		}
-		return processResult{skip: true}, true
+		// A larger source with no complete record consumed is an unfinished
+		// append, not evidence that this fingerprint is fully processed. Keep
+		// the persisted cursor unchanged and suppress the mtime skip entry so a
+		// completed record is retried even when the writer restores the same
+		// filesystem timestamp.
+		return processResult{skip: true, noCacheSkip: true}, true
 	}
 
 	// Claude cross-sync split detection: when the first appended
@@ -5513,6 +5524,20 @@ func (e *Engine) codexIndexSessionNameChanged(path string) bool {
 	return e.codexStoredNameDiffersBySession(
 		stored, currentName,
 	)
+}
+
+// codexCachedIndexSessionNameChanged limits title-based cache invalidation to
+// sources that already have stored session state. A cached parse failure has no
+// title to refresh and must retain its retry-suppression semantics.
+func (e *Engine) codexCachedIndexSessionNameChanged(path string) bool {
+	lookupPath := path
+	if e.pathRewriter != nil {
+		lookupPath = e.pathRewriter(path)
+	}
+	if _, _, ok := e.db.GetFileInfoByPath(lookupPath); !ok {
+		return false
+	}
+	return e.codexIndexSessionNameChanged(path)
 }
 
 // classifyCodexIndexPath maps a Codex session_index.jsonl change to the
