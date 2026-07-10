@@ -300,7 +300,10 @@ func TestWriteHermesSessionJSONL_UsesMatchingProfileStateDB(t *testing.T) {
 
 	var buf strings.Builder
 	require.NoError(t, WriteHermesSessionJSONL(
-		&buf, []string{defaultSessions, profileSessions}, "child",
+		&buf,
+		filepath.Join(profileRoot, "state.db"),
+		[]string{defaultSessions, profileSessions},
+		"child",
 	))
 
 	out := buf.String()
@@ -332,7 +335,55 @@ func TestWriteHermesSessionJSONL_TranscriptSourceCopiesFile(t *testing.T) {
 
 	var buf strings.Builder
 	require.NoError(t, WriteHermesSessionJSONL(
-		&buf, []string{sessionsDir}, "child",
+		&buf, filepath.Join(root, "state.db"), []string{sessionsDir}, "child",
+	))
+	assert.Equal(t, body, buf.String())
+}
+
+func TestWriteHermesSessionJSONL_FallsBackWhenStoredStateDBMissesSession(t *testing.T) {
+	defaultRoot := t.TempDir()
+	defaultSessions := filepath.Join(defaultRoot, "sessions")
+	require.NoError(t, os.MkdirAll(defaultSessions, 0o755))
+	createHermesStateDB(t, defaultRoot)
+
+	profileRoot := t.TempDir()
+	profileSessions := filepath.Join(profileRoot, "sessions")
+	require.NoError(t, os.MkdirAll(profileSessions, 0o755))
+	createHermesStateDB(t, profileRoot)
+
+	var buf strings.Builder
+	require.NoError(t, WriteHermesSessionJSONL(
+		&buf,
+		filepath.Join(defaultRoot, "state.db"),
+		[]string{defaultSessions, profileSessions},
+		"child",
+	))
+	assert.Contains(t, buf.String(), "state db only has one message")
+}
+
+func TestWriteHermesSessionJSONL_PrefersTranscriptWhenQualityWins(t *testing.T) {
+	root := t.TempDir()
+	sessionsDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+	createHermesStateDB(t, root)
+	body := strings.Join([]string{
+		`{"role":"session_meta","model":"gpt-4","timestamp":"2026-05-14T10:00:00Z"}`,
+		`{"role":"user","content":"transcript prompt","timestamp":"2026-05-14T10:01:00Z"}`,
+		`{"role":"assistant","content":"transcript answer","timestamp":"2026-05-14T10:02:00Z"}`,
+		"",
+	}, "\n")
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sessionsDir, "child.jsonl"),
+		[]byte(body),
+		0o644,
+	))
+
+	var buf strings.Builder
+	require.NoError(t, WriteHermesSessionJSONL(
+		&buf,
+		filepath.Join(root, "state.db"),
+		[]string{sessionsDir},
+		"child",
 	))
 	assert.Equal(t, body, buf.String())
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -80,8 +81,19 @@ func (p *hermesProvider) Fingerprint(
 }
 
 func WriteHermesSessionJSONL(
-	w io.Writer, roots []string, rawSessionID string,
+	w io.Writer, storedPath string, roots []string, rawSessionID string,
 ) error {
+	if path := ResolveSourceFilePath(storedPath); filepath.Base(path) == "state.db" {
+		if _, err := os.Stat(path); err == nil {
+			err = writeHermesStateSessionJSONL(w, path, rawSessionID)
+			if err == nil {
+				return nil
+			}
+			if !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+		}
+	}
 	provider, ok := NewProvider(AgentHermes, ProviderConfig{Roots: roots})
 	if !ok {
 		return fmt.Errorf("hermes provider unavailable")
@@ -110,16 +122,7 @@ func WriteHermesSessionJSONL(
 	if filepath.Base(path) == "state.db" {
 		return writeHermesStateSessionJSONL(w, path, rawSessionID)
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("open %s: %w", path, os.ErrNotExist)
-		}
-		return fmt.Errorf("open %s: %w", path, err)
-	}
-	defer f.Close()
-	_, err = io.Copy(w, f)
-	return err
+	return copyHermesTranscriptFile(w, path)
 }
 
 func (p *hermesProvider) Parse(

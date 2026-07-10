@@ -150,6 +150,7 @@ func newSessionExportCommand() *cobra.Command {
 				session.SourceSessionID != "" {
 				err := parser.WriteHermesSessionJSONL(
 					cmd.OutOrStdout(),
+					storedPath,
 					cfg.AgentDirs[parser.AgentHermes],
 					session.SourceSessionID,
 				)

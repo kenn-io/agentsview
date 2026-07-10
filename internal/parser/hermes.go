@@ -791,7 +791,31 @@ func writeHermesStateSessionJSONL(
 	if err != nil {
 		return err
 	}
+	selectedPath, _, _, _ := chooseHermesStateSessionSource(
+		ss,
+		messages,
+		filepath.Join(filepath.Dir(stateDB), "sessions"),
+		stateDB,
+		"",
+		"",
+	)
+	if selectedPath != stateDB {
+		return copyHermesTranscriptFile(w, selectedPath)
+	}
 	return encodeHermesStateSessionJSONL(w, ss, messages)
+}
+
+func copyHermesTranscriptFile(w io.Writer, path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("open %s: %w", path, os.ErrNotExist)
+		}
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+	_, err = io.Copy(w, f)
+	return err
 }
 
 func encodeHermesStateSessionJSONL(
@@ -859,31 +883,9 @@ func buildHermesStateResult(
 	ss hermesStateSession, stateMessages []hermesStateMessage,
 	sessionsDir, stateDB, project, machine string,
 ) (ParseResult, bool) {
-	jsonPath := filepath.Join(sessionsDir, "session_"+ss.id+".json")
-	jsonlPath := filepath.Join(sessionsDir, ss.id+".jsonl")
-
-	var sess *ParsedSession
-	var msgs []ParsedMessage
-	var err error
-	selectedPath := stateDB
-	if IsRegularFile(jsonPath) {
-		sess, msgs, err = parseHermesJSONSession(jsonPath, project, machine)
-		if err == nil && sess != nil &&
-			hermesMessageQuality(msgs) >= hermesStateQuality(stateMessages) {
-			selectedPath = jsonPath
-		} else {
-			sess, msgs = nil, nil
-		}
-	}
-	if sess == nil && IsRegularFile(jsonlPath) {
-		sess, msgs, err = parseHermesJSONLSession(jsonlPath, project, machine)
-		if err == nil && sess != nil &&
-			(hermesMessageQuality(msgs) >= hermesStateQuality(stateMessages) || len(stateMessages) == 0) {
-			selectedPath = jsonlPath
-		} else {
-			sess, msgs = nil, nil
-		}
-	}
+	selectedPath, sess, msgs, _ := chooseHermesStateSessionSource(
+		ss, stateMessages, sessionsDir, stateDB, project, machine,
+	)
 	usageEvents := hermesUsageEvents(ss, "hermes:"+ss.id)
 	if sess == nil {
 		msgs = convertHermesStateMessages(stateMessages)
@@ -908,6 +910,33 @@ func buildHermesStateResult(
 		Messages:    msgs,
 		UsageEvents: usageEvents,
 	}, true
+}
+
+func chooseHermesStateSessionSource(
+	ss hermesStateSession,
+	stateMessages []hermesStateMessage,
+	sessionsDir, stateDB, project, machine string,
+) (selectedPath string, sess *ParsedSession, msgs []ParsedMessage, err error) {
+	selectedPath = stateDB
+	jsonPath := filepath.Join(sessionsDir, "session_"+ss.id+".json")
+	jsonlPath := filepath.Join(sessionsDir, ss.id+".jsonl")
+	if IsRegularFile(jsonPath) {
+		sess, msgs, err = parseHermesJSONSession(jsonPath, project, machine)
+		if err == nil && sess != nil &&
+			hermesMessageQuality(msgs) >= hermesStateQuality(stateMessages) {
+			return jsonPath, sess, msgs, nil
+		}
+		sess, msgs = nil, nil
+	}
+	if IsRegularFile(jsonlPath) {
+		sess, msgs, err = parseHermesJSONLSession(jsonlPath, project, machine)
+		if err == nil && sess != nil &&
+			(hermesMessageQuality(msgs) >= hermesStateQuality(stateMessages) || len(stateMessages) == 0) {
+			return jsonlPath, sess, msgs, nil
+		}
+		sess, msgs = nil, nil
+	}
+	return selectedPath, nil, nil, nil
 }
 
 func applyHermesStateMetadata(

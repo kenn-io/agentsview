@@ -1014,9 +1014,11 @@ func createHermesExportStateDB(t *testing.T, root string) string {
 func TestSessionExportHermesStateDB(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 
+	wrongRoot := t.TempDir()
+	_ = createHermesExportStateDB(t, wrongRoot)
 	root := t.TempDir()
 	dbPath := createHermesExportStateDB(t, root)
-	t.Setenv("HERMES_SESSIONS_DIR", filepath.Join(root, "sessions"))
+	t.Setenv("HERMES_SESSIONS_DIR", filepath.Join(wrongRoot, "sessions"))
 
 	seedSessionWithOpts(t, dataDir, "hermes:child", "proj",
 		func(s *db.Session) {
@@ -1033,6 +1035,7 @@ func TestSessionExportHermesStateDB(t *testing.T) {
 	assert.Contains(t, out, `"role":"session_meta"`)
 	assert.Contains(t, out, "target hermes message")
 	assert.NotContains(t, out, "sibling hermes message")
+	assert.NotContains(t, out, "wrong root message")
 
 	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
 		assert.JSONEq(t, line, line)
