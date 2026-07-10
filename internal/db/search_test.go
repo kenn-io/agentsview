@@ -107,6 +107,28 @@ source="goal">state'),
 	}, got)
 }
 
+func TestDisplayMessageSQLDialectForms(t *testing.T) {
+	t.Parallel()
+
+	sqlite := DisplayMessageSQL("m")
+	assert.Contains(t, sqlite, "m.is_compact_boundary = 1")
+	assert.Contains(t, sqlite, "m.is_system = 0")
+	assert.Contains(t, sqlite, SystemPrefixSQL("m.content", "m.role"))
+	assert.Contains(t, sqlite, "unicode(m.content)")
+
+	postgres := PostgresDisplayMessageSQL("m")
+	assert.Contains(t, postgres, "m.is_compact_boundary = TRUE")
+	assert.Contains(t, postgres, "m.is_system = FALSE")
+	assert.Contains(t, postgres, PostgresSystemPrefixSQL("m.content", "m.role"))
+	assert.NotContains(t, postgres, "unicode(m.content)")
+
+	duckdb := DuckDBDisplayMessageSQL("m")
+	assert.Contains(t, duckdb, "m.is_compact_boundary = TRUE")
+	assert.Contains(t, duckdb, "m.is_system = FALSE")
+	assert.Contains(t, duckdb, DuckDBSystemPrefixSQL("m.content", "m.role"))
+	assert.NotContains(t, duckdb, "unicode(m.content)")
+}
+
 func TestSearch(t *testing.T) {
 	d := testDB(t)
 	requireFTS(t, d)

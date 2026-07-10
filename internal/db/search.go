@@ -121,10 +121,15 @@ func DuckDBDisplayMessageSQL(alias string) string {
 
 func displayMessageSQL(alias string, dialect systemPrefixSQLDialect) string {
 	booleanTrue, booleanFalse := "1", "0"
-	prefix := SystemPrefixSQL(alias+".content", alias+".role")
-	if dialect == systemPrefixPostgres {
+	contentCol, roleCol := alias+".content", alias+".role"
+	prefix := SystemPrefixSQL(contentCol, roleCol)
+	switch dialect {
+	case systemPrefixPostgres:
 		booleanTrue, booleanFalse = "TRUE", "FALSE"
-		prefix = PostgresSystemPrefixSQL(alias+".content", alias+".role")
+		prefix = PostgresSystemPrefixSQL(contentCol, roleCol)
+	case systemPrefixDuckDB:
+		booleanTrue, booleanFalse = "TRUE", "FALSE"
+		prefix = DuckDBSystemPrefixSQL(contentCol, roleCol)
 	}
 	quoted := make([]string, len(visibleSystemSubtypes))
 	for i, subtype := range visibleSystemSubtypes {
