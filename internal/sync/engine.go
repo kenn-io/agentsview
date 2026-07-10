@@ -5053,7 +5053,9 @@ func (e *Engine) tryProviderIncrementalAppend(
 ) (processResult, bool) {
 	// Match the legacy tryIncrementalJSONL gate, which suppressed append
 	// deltas only under the engine-wide forceParse (parse-diff) flag. A
-	// per-file ForceParse does not disable incremental append.
+	// per-file ForceParse keeps Claude on its incremental path; Codex is the
+	// explicit exception below because a single-session refresh must rebuild
+	// head-derived metadata.
 	if e.forceParse {
 		return processResult{}, false
 	}

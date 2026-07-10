@@ -9857,9 +9857,6 @@ func TestSyncSingleSessionCodexAppendForcesFullReplacement(t *testing.T) {
 	)
 	require.NoError(t, err, "append assistant message")
 	require.NoError(t, f.Close())
-	require.NoError(t, os.WriteFile(indexPath, []byte(
-		`{"id":"`+uuid+`","thread_name":"Renamed title"}`+"\n",
-	), 0o644))
 
 	require.NoError(t, env.engine.SyncSingleSession("codex:"+uuid))
 
@@ -9867,10 +9864,79 @@ func TestSyncSingleSessionCodexAppendForcesFullReplacement(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.NotNil(t, sess.SessionName)
-	assert.Equal(t, "Renamed title", *sess.SessionName)
+	assert.Equal(t, "Original title", *sess.SessionName)
 	assert.False(t, sess.LastWriteIncremental,
 		"per-file ForceParse must take the full replacement path")
-	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
+	msgs := fetchMessages(t, env.db, "codex:"+uuid)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, []string{"hello", "world"},
+		[]string{msgs[0].Content, msgs[1].Content})
+}
+
+func TestSyncPathsCodexEqualFingerprintTitleOnlyRefreshesName(t *testing.T) {
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir}))
+
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229eb"
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/tmp/proj", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "keep this message", tsEarlyS1),
+	)
+	path := env.writeCodexSession(
+		t, filepath.Join("2024", "01", "01"),
+		"rollout-2024-01-01T10-00-00-"+uuid+".jsonl", initial,
+	)
+	indexPath := filepath.Join(root, "session_index.jsonl")
+	require.NoError(t, os.WriteFile(indexPath, []byte(
+		`{"id":"`+uuid+`","thread_name":"Original title"}`+"\n",
+	), 0o644))
+	transcriptTime := time.Now().Add(-2 * time.Hour)
+	indexTime := time.Now().Add(-time.Hour)
+	require.NoError(t, os.Chtimes(path, transcriptTime, transcriptTime))
+	require.NoError(t, os.Chtimes(indexPath, indexTime, indexTime))
+	env.engine.SyncAll(context.Background(), nil)
+
+	before, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.NotNil(t, before.SessionName)
+	require.NotNil(t, before.FileSize)
+	require.NotNil(t, before.FileMtime)
+	assert.Equal(t, "Original title", *before.SessionName)
+	rolloutInfo, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Equal(t, rolloutInfo.Size(), *before.FileSize,
+		"stored transcript size precondition")
+	require.Less(t, rolloutInfo.ModTime().UnixNano(), *before.FileMtime,
+		"index mtime must determine the composite fingerprint")
+
+	require.NoError(t, os.WriteFile(indexPath, []byte(
+		`{"id":"`+uuid+`","thread_name":"Renamed title"}`+"\n",
+	), 0o644))
+	storedMtime := time.Unix(0, *before.FileMtime)
+	require.NoError(t, os.Chtimes(indexPath, storedMtime, storedMtime),
+		"restore index mtime after title-only rewrite")
+	indexInfo, err := os.Stat(indexPath)
+	require.NoError(t, err)
+	require.Equal(t, *before.FileMtime, indexInfo.ModTime().UnixNano(),
+		"title-only rewrite keeps the stored composite mtime")
+
+	env.engine.SyncPaths([]string{path})
+
+	after, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	require.NotNil(t, after.SessionName)
+	assert.Equal(t, "Renamed title", *after.SessionName)
+	assert.False(t, after.LastWriteIncremental,
+		"title refresh must use an authoritative full replacement")
+	msgs := fetchMessages(t, env.db, "codex:"+uuid)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "keep this message", msgs[0].Content)
 }
 
 // TestIncrementalSync_CodexStoresEffectiveMtime pins that the incremental
