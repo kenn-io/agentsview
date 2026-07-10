@@ -1751,6 +1751,7 @@ type IncrementalInfo struct {
 
 type IncrementalSessionUpdate struct {
 	EndedAt              *string
+	TerminationStatus    *string
 	MsgCount             int
 	UserMsgCount         int
 	FileSize             int64
@@ -1860,9 +1861,9 @@ func (db *DB) FileIdentityChanged(path string, inode, device int64) bool {
 
 // UpdateSessionIncremental updates only the fields that change
 // during an incremental append: ended_at, message_count,
-// user_message_count, file_size, file_mtime, optional file_hash, and token
-// aggregates. All values are absolute (not deltas) so the
-// update is idempotent on retry.
+// user_message_count, file_size, file_mtime, optional file_hash, token
+// aggregates, and termination_status. All values are absolute (not deltas)
+// so the update is idempotent on retry.
 //
 // is_automated is recomputed from the stored transcript's first
 // user message (falling back to first_message for legacy rows)
@@ -1872,16 +1873,11 @@ func (db *DB) FileIdentityChanged(path string, inode, device int64) bool {
 // is_automated=0 indefinitely (UpsertSession sets the flag once
 // at insert; the incremental path never re-evaluates it).
 //
-// termination_status is cleared to NULL on every incremental
-// write. The classifier needs the full message slice to reach the
-// right verdict (orphan tool calls, awaiting_user, etc.) and the
-// incremental path only sees the new tail. Leaving the previous
-// classification in place would surface stale "tool_call_pending"
-// or "awaiting_user" indicators in the UI for up to 15 minutes
-// (the periodic full-resync interval) after the user appended a
-// resolving result or sent a new message. Clearing makes the
-// session render with the time-based StatusDot tier (working /
-// idle / quiet) until the next full sync reclassifies.
+// A non-nil termination_status is an authoritative incremental verdict and
+// is stored as-is. Nil clears the status for parsers such as Claude whose
+// incremental path only sees the new tail and needs the full message slice
+// to classify termination reliably. Clearing prevents a stale prior verdict
+// from remaining visible until the next full sync reclassifies the session.
 func updateSessionIncrementalTx(
 	tx *sql.Tx, id string, update IncrementalSessionUpdate,
 ) error {
@@ -1903,7 +1899,7 @@ func updateSessionIncrementalTx(
 			peak_context_tokens = ?,
 			has_total_output_tokens = ?,
 			has_peak_context_tokens = ?,
-			termination_status = NULL,
+			termination_status = ?,
 			-- Mark the row as last written by the incremental-append path.
 			-- The full-replace writer (upsertSessionArgs) resets this to
 			-- false; parse-diff reads it to classify benign
@@ -1915,7 +1911,8 @@ func updateSessionIncrementalTx(
 		update.FileHash,
 		update.NextOrdinal, lastEntryUUID,
 		update.TotalOutputTokens, update.PeakContextTokens,
-		update.HasTotalOutputTokens, update.HasPeakContextTokens, id,
+		update.HasTotalOutputTokens, update.HasPeakContextTokens,
+		update.TerminationStatus, id,
 	)
 	if err != nil {
 		return fmt.Errorf(

@@ -5704,6 +5704,53 @@ func TestUpdateSessionIncremental(t *testing.T) {
 	assert.Equal(t, "abc123", *got.FileHash, "FileHash")
 }
 
+func TestUpdateSessionIncrementalTerminationStatus(t *testing.T) {
+	tests := []struct {
+		name              string
+		terminationStatus *string
+		wantStatus        string
+		wantNull          bool
+	}{
+		{
+			name:              "stores authoritative status",
+			terminationStatus: new("awaiting_user"),
+			wantStatus:        "awaiting_user",
+		},
+		{
+			name:     "nil clears status",
+			wantNull: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			require.NoError(t, d.UpsertSession(Session{
+				ID:                "incremental-status",
+				Agent:             "claude",
+				TerminationStatus: new("tool_call_pending"),
+			}), "seed session")
+
+			update := IncrementalSessionUpdate{
+				TerminationStatus: tt.terminationStatus,
+			}
+			require.NoError(t, d.UpdateSessionIncremental(
+				"incremental-status", update,
+			), "update session incrementally")
+
+			got, err := d.GetSessionFull(context.Background(), "incremental-status")
+			require.NoError(t, err, "read updated session")
+			require.NotNil(t, got, "updated session")
+			if tt.wantNull {
+				assert.Nil(t, got.TerminationStatus, "termination_status")
+				return
+			}
+			require.NotNil(t, got.TerminationStatus, "termination_status")
+			assert.Equal(t, tt.wantStatus, *got.TerminationStatus, "termination_status")
+		})
+	}
+}
+
 // TestLastWriteIncrementalMarker pins the parse-diff detection signal:
 // a fresh full write (UpsertSession) leaves last_write_incremental
 // false, an incremental append (WriteSessionIncremental) sets it true,
