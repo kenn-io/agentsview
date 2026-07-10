@@ -31,7 +31,7 @@ test.describe("Navigation", () => {
     await expect(sp.exportBtn).toContainText("Export CSV");
   });
 
-  test("Shift+J and Shift+K navigate visible user prompts", async ({ page }) => {
+  test("Shift+J and Shift+K navigate visible user prompts", async ({ page }, testInfo) => {
     const session = page
       .locator(".session-item")
       .filter({ hasText: "project-beta" })
@@ -66,5 +66,16 @@ test.describe("Navigation", () => {
     await page.keyboard.press("?");
     await expect(page.getByText("Next user prompt")).toBeVisible();
     await expect(page.getByText("Previous user prompt")).toBeVisible();
+
+    for (const width of [1280, 768, 400]) {
+      await page.setViewportSize({ width, height: 800 });
+      const box = await page.locator(".shortcuts-modal").boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(0);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+      await page.screenshot({
+        path: testInfo.outputPath(`shortcuts-${width}.png`),
+      });
+    }
   });
 });

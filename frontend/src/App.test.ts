@@ -160,11 +160,15 @@ describe("App session URL date state", () => {
   });
 });
 
-function message(ordinal: number, role: Message["role"]) {
+function message(
+  ordinal: number,
+  role: Message["role"],
+  isSystem = false,
+) {
   return {
     kind: "message" as const,
     ordinals: [ordinal],
-    message: { role } as Message,
+    message: { role, is_system: isSystem } as Message,
   };
 }
 
@@ -204,6 +208,14 @@ describe("findUserPromptOrdinal", () => {
       message(1, "assistant"),
       { kind: "message", ordinals: [5], message: codeOnlyUser },
     ], 1, 1, false)).toBeUndefined();
+  });
+
+  it("skips system boundaries with a user role", () => {
+    expect(findUserPromptOrdinal([
+      message(1, "user"),
+      message(2, "user", true),
+      message(3, "user"),
+    ], 1, 1, true)).toBe(3);
   });
 });
 

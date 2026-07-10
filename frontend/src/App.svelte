@@ -12,7 +12,9 @@
     if (!userVisible) return;
 
     const isUserPrompt = (item: PromptDisplayItem) =>
-      item.kind === "message" && item.message.role === "user";
+      item.kind === "message" &&
+      item.message.role === "user" &&
+      !item.message.is_system;
     if (selected === null) {
       const prompts = items.filter(isUserPrompt);
       return (delta > 0 ? prompts[0] : prompts[prompts.length - 1])
