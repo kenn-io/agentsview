@@ -86,7 +86,10 @@ func (db *DB) WriteSessionBatch(
 					savepoint, err,
 				)
 			}
-			pendingRecallRevocations.appendReleased(sessionRecallRevocations)
+			pendingRecallRevocations = append(
+				pendingRecallRevocations,
+				sessionRecallRevocations...,
+			)
 			result.WrittenSessions++
 			result.WrittenMessages += messagesWritten
 		case errors.Is(err, ErrSessionExcluded),

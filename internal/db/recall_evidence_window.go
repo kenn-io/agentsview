@@ -65,12 +65,6 @@ type recallEvidenceRevocationEvent struct {
 // owner confirms its outermost commit succeeded.
 type recallEvidenceRevocationEvents []recallEvidenceRevocationEvent
 
-func (events *recallEvidenceRevocationEvents) appendReleased(
-	released recallEvidenceRevocationEvents,
-) {
-	*events = append(*events, released...)
-}
-
 func (events recallEvidenceRevocationEvents) flush() {
 	for _, event := range events {
 		log.Printf(
