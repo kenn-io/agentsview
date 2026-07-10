@@ -183,77 +183,87 @@ push session data to a shared database for team or multi-machine setups.
 
 <div class="grid cards" markdown>
 
-- **AI-Powered Insights**
+-   **AI-Powered Insights**
 
-  Generate summaries and analysis of your coding sessions using Claude, Codex,
-  Copilot, or Gemini. Get daily activity digests, multi-day analyses, and
-  recommendations — scoped by project or across everything.
+    Generate summaries and analysis of your coding sessions
+    using Claude, Codex, Copilot, or Gemini. Get daily
+    activity digests, multi-day analyses, and
+    recommendations — scoped by project or across everything.
 
-- **Browse Sessions**
+-   **Browse Sessions**
 
-  Scroll through every session across all your projects. See the full
-  conversation: user prompts, assistant responses, thinking blocks, and tool
-  calls. Filter by project, agent, date, or message count.
+    Scroll through every session across all your projects.
+    See the full conversation: user prompts, assistant
+    responses, thinking blocks, and tool calls. Filter by
+    project, agent, date, or message count.
 
-- **Search Everything**
+-   **Search Everything**
 
-  Full-text search across all message content. Find that one conversation where
-  you discussed a specific function, error message, or design decision — even
-  months later. Opt-in [semantic search](/semantic-search/) matches by meaning
-  when you don't remember the exact words, and every match cites the
-  conversation unit it came from.
+    Full-text search across all message content. Find that
+    one conversation where you discussed a specific function,
+    error message, or design decision — even months later.
+    Opt-in [semantic search](/semantic-search/) matches by
+    meaning when you don't remember the exact words, and every
+    match cites the conversation unit it came from.
 
-- **Recent Edits**
+-   **Recent Edits**
 
-  A cross-session feed of the files your agents changed most recently, grouped
-  by project and path. Expand any file to see its edits and jump straight to the
-  message that made each change, on the [Recent Edits](/recent-edits/) page.
+    A cross-session feed of the files your agents changed most
+    recently, grouped by project and path. Expand any file to see
+    its edits and jump straight to the message that made each
+    change, on the [Recent Edits](/recent-edits/) page.
 
-- **Analyze Your Usage**
+-   **Analyze Your Usage**
 
-  Activity heatmaps, tool usage breakdowns, velocity metrics, session-health
-  analytics, per-project stats, and session distribution charts. Understand how
-  you use agents over time.
+    Activity heatmaps, tool usage breakdowns, velocity
+    metrics, session-health analytics, per-project stats, and
+    session distribution charts. Understand how you use agents
+    over time.
 
-- **Activity & Concurrency**
+-   **Activity & Concurrency**
 
-  See when your agents were actually working, how much ran in parallel, and what
-  it cost — peak concurrency, active versus idle time, agent-minutes, and cost
-  over any time window, on the [Activity](/activity/) page.
+    See when your agents were actually working, how much ran
+    in parallel, and what it cost — peak concurrency, active
+    versus idle time, agent-minutes, and cost over any time
+    window, on the [Activity](/activity/) page.
 
-- **Token Usage & Costs**
+-   **Token Usage & Costs**
 
-  A sub-second [`agentsview usage`](/token-usage/) CLI for daily spend reports
-  and a today's-cost status line. A `ccusage` alternative for token-bearing
-  sessions across multiple agents — including Claude Code, Codex, Copilot CLI,
-  VS Code Copilot, and Zed — that runs 80–220× faster on large session
-  histories.
+    A sub-second [`agentsview usage`](/token-usage/) CLI for
+    daily spend reports and a today's-cost status line. A
+    `ccusage` alternative for token-bearing sessions across
+    multiple agents — including Claude Code, Codex, Copilot CLI,
+    VS Code Copilot, and Zed — that runs 80–220× faster on large
+    session histories.
 
-- **Live Sync**
+-   **Live Sync**
 
-  Watches your session directories for changes and streams new messages in real
-  time. Start a coding session in one window, watch it appear in AgentsView in
-  another.
+    Watches your session directories for changes and
+    streams new messages in real time. Start a coding
+    session in one window, watch it appear in AgentsView
+    in another.
 
-- **Multi-Agent Support**
+-   **Multi-Agent Support**
 
-  Works with
-  [dozens of AI coding session sources](/configuration/#session-discovery)
-  including Claude Code, OpenClaude, Codex, Copilot, Cursor, Gemini, OpenHands,
-  Aider, Claude Cowork, DeepSeek TUI, gptme, Kilo, MiMoCode, Mistral Vibe,
-  OhMyPi, QwenPaw, Reasonix, Shelley, and Visual Studio Copilot. Auto-discovers
-  session directories so there's nothing to configure.
+    Works with [dozens of AI coding session sources](/configuration/#session-discovery)
+    including Claude Code, OpenClaude, Codex, Copilot, Cursor,
+    Gemini, OpenHands, Aider, Claude Cowork, DeepSeek TUI, gptme,
+    Kilo, MiMoCode, Mistral Vibe, OhMyPi, QwenPaw, Reasonix,
+    Shelley, and Visual Studio Copilot. Auto-discovers session
+    directories so there's nothing to configure.
 
-- **Import Chat History**
+-   **Import Chat History**
 
-  Import your [Claude.ai and ChatGPT](/chat-import/) conversations — including
-  images. Upload a zip export and browse everything in one place alongside your
-  agent coding sessions.
+    Import your [Claude.ai and ChatGPT](/chat-import/)
+    conversations — including images. Upload a zip export
+    and browse everything in one place alongside your
+    agent coding sessions.
 
-- **Runs Locally**
+-   **Runs Locally**
 
-  SQLite database, embedded web frontend, no cloud services, no accounts.
-  Install the desktop app or a single binary and run it.
+    SQLite database, embedded web frontend, no cloud
+    services, no accounts. Install the desktop app or
+    a single binary and run it.
 
 </div>
 
