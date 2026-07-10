@@ -36,12 +36,13 @@ docker run --rm -p 127.0.0.1:8080:8080 \
 ## Quick Start
 
 ```bash
-agentsview serve               # start foreground server
-agentsview serve --background  # start server and return to the shell
-agentsview serve status        # show whether a server is running
-agentsview serve stop          # stop the running server
-agentsview session list        # read from the daemon if warm, otherwise SQLite
-agentsview usage daily         # print daily cost summary
+agentsview serve           # start the server in the foreground
+agentsview daemon start    # start the writable SQLite daemon
+agentsview daemon status   # show daemon status
+agentsview daemon restart  # restart from current configuration
+agentsview daemon stop     # stop the writable daemon
+agentsview session list    # read from the daemon if warm, otherwise SQLite
+agentsview usage daily     # print daily cost summary
 ```
 
 On first run, agentsview discovers sessions from every supported agent on your
@@ -68,11 +69,16 @@ back to direct read-only SQLite on a cold archive so one-off scripts stay fast.
 Commands that need fresh data or need to write, such as `sync`, `usage`,
 `token-use`, `pg push`, and `duckdb push`, auto-start the daemon when needed.
 
-Use `agentsview serve --background` when you want to start the daemon
-explicitly. The command prints the server URL, process ID, and log path
-(`~/.agentsview/serve.log`). Check on it with `agentsview serve status` and shut
-it down with `agentsview serve stop`. Background daemons self-exit after an idle
-period unless a client request or daemon-owned job is active.
+Use `agentsview daemon start` when you want to start the writable SQLite daemon
+explicitly. It loads the normal effective configuration from `config.toml` and
+supported environment variables; `daemon start` and `daemon restart` accept no
+serve-specific flags. Background daemons self-exit after an idle period unless a
+client request or daemon-owned job is active.
+
+The existing `agentsview serve --background`, `agentsview serve status`, and
+`agentsview serve stop` commands remain available. Use `serve --background` when
+a one-off daemon needs a serve-only flag, such as `--no-sync` or an
+unauthenticated non-loopback `--host` override.
 
 ## Remote / forwarded access
 

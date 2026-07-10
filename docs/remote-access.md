@@ -13,38 +13,52 @@ In current releases, bearer-token auth is controlled by `require_auth`.
 
 ## Quick Setup
 
-Enable auth in `~/.agentsview/config.toml`:
+For a one-off background server, enable auth in `~/.agentsview/config.toml`:
 
 ```toml
 require_auth = true
 ```
 
-Then start the server on a non-loopback interface:
+Then pass a one-off non-loopback bind:
 
 ```bash
-agentsview serve --host 0.0.0.0
+agentsview serve --background --host 0.0.0.0
 ```
 
-To make the bind persistent — so restarts, auto-started daemons, and reboots
-keep the server reachable — set `host` in `config.toml` instead of passing
-the flag each time:
+Omit `--background` when you want that `serve` invocation to stay in the
+foreground. The explicit `--host` flag also permits a one-off unauthenticated
+non-loopback bind, though authenticated access is strongly recommended.
+
+For a persistent, config-driven node — so restarts and auto-started daemons keep
+the server reachable — set both values in `config.toml` instead of passing a
+flag each time:
 
 ```toml
 host = "0.0.0.0"
+require_auth = true
+```
+
+Then use the canonical writable-daemon lifecycle:
+
+```bash
+agentsview daemon start
+agentsview daemon status
+# After configuration changes:
+agentsview daemon restart
 ```
 
 A non-loopback `host` in `config.toml` requires `require_auth = true`; the
 server refuses to start rather than persistently exposing an unauthenticated
 API. The `--host` flag remains available for one-off unauthenticated binds.
 
-When this command runs inside WSL, AgentsView advertises the WSL `eth0` address
+When the server runs inside WSL, AgentsView advertises the WSL `eth0` address
 instead of `127.0.0.1` so the printed URL is usable from the Windows host and
 nearby LAN clients. An explicit `--public-url` still takes precedence.
 
 When auth is enabled, AgentsView generates a token if needed and stores it in
 `~/.agentsview/config.toml`. Open `http://<your-ip>:8080` from another device
-and enter the configured token in the frontend, or send it in an
-`Authorization` header.
+and enter the configured token in the frontend, or send it in an `Authorization`
+header.
 
 !!! note
 
@@ -84,15 +98,15 @@ token = "remote-token"
 interval = "5m" # optional: sync periodically while the collector daemon runs
 ```
 
-Treat `host` as the remote machine's stable, unique identity. AgentsView uses
-it to namespace imported session IDs, the database skip cache, and the mirror
+Treat `host` as the remote machine's stable, unique identity. AgentsView uses it
+to namespace imported session IDs, the database skip cache, and the mirror
 directory. Changing it creates a new namespace and can duplicate sessions from
 the same machine; reusing it for a different machine can reuse stale cached
 state. Changing only `url` is fine when the same logical machine moves.
 
 The daemon on the remote machine must bind a non-loopback interface (set
-`host = "0.0.0.0"` with `require_auth = true` in its config.toml) or every
-sync fails with a connection-refused error. See
+`host = "0.0.0.0"` with `require_auth = true` in its config.toml) or every sync
+fails with a connection-refused error. See
 [Remote Hosts](/configuration/#remote-hosts) for the full remote-side setup,
 including keeping detached daemons alive.
 
@@ -110,21 +124,21 @@ the public internet.
 HTTP remote sync failures are summarized without echoing remote-controlled URLs
 or response bodies. Common summaries point at the specific fix: a rejected token
 means the collector's per-host `token` does not match the remote daemon's
-`auth_token`; a missing endpoint means the remote host needs a newer
-AgentsView; connection refusal usually means the daemon is not running, is still
-bound to loopback, or the URL port is wrong; DNS and timeout messages point back
-to the configured `url`.
+`auth_token`; a missing endpoint means the remote host needs a newer AgentsView;
+connection refusal usually means the daemon is not running, is still bound to
+loopback, or the URL port is wrong; DNS and timeout messages point back to the
+configured `url`.
 
-For always-available fleet nodes launched with `agentsview serve --background`,
-set:
+For always-available fleet nodes launched with `agentsview daemon start`, set:
 
 ```toml
 daemon_idle_timeout = "0s"
 ```
 
-That setting controls detached background daemons only. Supervised daemons run
-under systemd, launchd, Docker, or a foreground shell never create the idle
-tracker and already stay alive until their supervisor stops them.
+That setting controls detached writable daemons, including config-driven and
+`serve --background` launches. Supervised daemons run under systemd, launchd,
+Docker, or a foreground shell never create the idle tracker and already stay
+alive until their supervisor stops them.
 
 Run `agentsview sync` on the collector to sync local sessions and every
 configured host. Set `interval` on a `[[remote_hosts]]` entry when a running
@@ -141,11 +155,10 @@ machine's syncable source files under:
 <data_dir>/remote-mirrors/<sanitized-host>-<hash>/
 ```
 
-For the default data directory, that parent is
-`~/.agentsview/remote-mirrors/`. The readable host component is followed by a
-hash so names that sanitize to the same directory name do not collide. A lock
-file next to each mirror serializes concurrent syncs of that host from the same
-data directory.
+For the default data directory, that parent is `~/.agentsview/remote-mirrors/`.
+The readable host component is followed by a hash so names that sanitize to the
+same directory name do not collide. A lock file next to each mirror serializes
+concurrent syncs of that host from the same data directory.
 
 The mirror adds an on-disk copy of the remote session sources to the collector,
 in addition to the indexed database. Budget roughly the size of each remote
@@ -155,27 +168,27 @@ run.
 
 ### How A Sync Works
 
-1. The collector asks the remote daemon for its resolved agent roots. The
-   remote controls this allowlist; the collector cannot name arbitrary roots.
-2. The collector locks the host mirror and requests a gzip-compressed manifest
+1. The collector asks the remote daemon for its resolved agent roots. The remote
+   controls this allowlist; the collector cannot name arbitrary roots.
+1. The collector locks the host mirror and requests a gzip-compressed manifest
    of regular, non-symlink files. Each entry carries its absolute remote path,
    size, and modification time.
-3. The collector walks the mirror and compares file size and modification time
-   at microsecond precision. It schedules missing or changed files for fetch
-   and removes mirror files that disappeared from the manifest.
-4. When fewer than half of the manifest's files need fetching, the collector
+1. The collector walks the mirror and compares file size and modification time
+   at microsecond precision. It schedules missing or changed files for fetch and
+   removes mirror files that disappeared from the manifest.
+1. When fewer than half of the manifest's files need fetching, the collector
    requests only that delta. At half or more, it requests a full archive instead
    of sending a large file list. The current collector advertises gzip support
    for both archive modes.
-5. The archive is extracted into the mirror with remote modification times
+1. The archive is extracted into the mirror with remote modification times
    preserved. AgentsView then imports from the complete mirror, so parsers that
    read sibling files behave the same way they do against a full source tree.
    The separate database skip cache avoids unnecessary parsing of unchanged
    sessions during normal syncs.
 
 If no directory-scoped files changed, the collector skips the archive request
-and imports directly from the existing mirror. Files that disappear remotely
-are deleted from the mirror, but remote import is intentionally non-destructive:
+and imports directly from the existing mirror. Files that disappear remotely are
+deleted from the mirror, but remote import is intentionally non-destructive:
 sessions already stored in the AgentsView database remain available.
 
 Windsurf is a special case. Its state database is sanitized into a curated
@@ -195,8 +208,8 @@ A full HTTP transfer occurs in these cases:
 - a collector data-version resync forces its configured remote syncs full
 - a delta request is rejected after a manifest succeeded; the collector retries
   once with a full archive
-- the remote daemon does not support manifests, in which case the collector
-  uses the legacy full-transfer path on every sync
+- the remote daemon does not support manifests, in which case the collector uses
+  the legacy full-transfer path on every sync
 
 Windsurf's curated export is also fetched in full on every sync, independently
 of the directory-scoped archive decision.
@@ -249,8 +262,8 @@ root. Symlinked roots or intermediate components are refused. Mirror deletions
 and type-conflict cleanup are separately confined to the per-host mirror root.
 
 These checks limit what authenticated sync requests can read, but they do not
-replace network isolation or bearer-token security. Keep the daemon on a
-private network and protect its `auth_token` as described above.
+replace network isolation or bearer-token security. Keep the daemon on a private
+network and protect its `auth_token` as described above.
 
 ## SSE Endpoints
 

@@ -32,12 +32,11 @@ self-exits after an idle period. Read-only CLI commands can still open
 `AGENTSVIEW_NO_DAEMON=1` for scripts or CI jobs that must never auto-start a
 daemon.
 
-The Cursor source in code attribution stats is a live, machine-local read
-from `~/.cursor/ai-tracking/ai-code-tracking.db` by default. Set
-`AGENTSVIEW_CURSOR_ATTRIBUTION_DB` when Cursor stores that database
-somewhere else on the host answering the stats request. The attribution
-database is not synced into AgentsView's archive and is not pushed to
-PostgreSQL.
+The Cursor source in code attribution stats is a live, machine-local read from
+`~/.cursor/ai-tracking/ai-code-tracking.db` by default. Set
+`AGENTSVIEW_CURSOR_ATTRIBUTION_DB` when Cursor stores that database somewhere
+else on the host answering the stats request. The attribution database is not
+synced into AgentsView's archive and is not pushed to PostgreSQL.
 
 ## Config File
 
@@ -57,28 +56,28 @@ cursor_admin_api_key = "key_xxxxx"
 daemon_idle_timeout = "20m"
 ```
 
-| Field                               | Description                                                                                                  |
-| ----------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `cursor_secret`                     | Auto-generated HMAC key for pagination cursor signing                                                        |
-| `cursor_admin_api_key`              | Cursor Admin API key used by `agentsview usage cursor`                                                       |
-| `cursor_admin_email`                | Optional default Cursor Admin usage filter by member email                                                   |
-| `cursor_admin_user_id`              | Optional default Cursor Admin usage filter by member user ID                                                 |
-| `github_token`                      | Optional saved GitHub token for Gist publishing                                                              |
-| `result_content_blocked_categories` | Tool categories whose result content is not stored (default: `["Read", "Glob"]`)                             |
-| `host`                              | Interface the server binds to (default `127.0.0.1`); non-loopback values require `require_auth = true`       |
-| `require_auth`                      | Require bearer-token authentication for API access                                                           |
-| `auth_token`                        | Auto-generated 256-bit bearer token for remote access; can be overridden with `AGENTSVIEW_AUTH_TOKEN`        |
-| `public_url`                        | Public URL for hostname/proxy access and origin validation                                                   |
-| `public_origins`                    | Array of additional trusted CORS origins                                                                     |
-| `daemon_idle_timeout`               | Idle timeout for detached `serve --background` daemons; set to `"0s"` to keep them alive                     |
-| `[proxy]`                           | Managed proxy configuration table — see [Remote Access](/remote-access/)                                     |
-| `disable_update_check`              | Disable the automatic update check (see [Privacy](#privacy-and-telemetry))                                   |
-| `[pg]`                              | PostgreSQL sync configuration — see [PostgreSQL Sync](/pg-sync/)                                             |
-| `[duckdb]`                          | DuckDB mirror configuration — see [DuckDB Mirror](/duckdb/)                                                  |
+| Field                               | Description                                                                                                                                                                                                                                          |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cursor_secret`                     | Auto-generated HMAC key for pagination cursor signing                                                                                                                                                                                                |
+| `cursor_admin_api_key`              | Cursor Admin API key used by `agentsview usage cursor`                                                                                                                                                                                               |
+| `cursor_admin_email`                | Optional default Cursor Admin usage filter by member email                                                                                                                                                                                           |
+| `cursor_admin_user_id`              | Optional default Cursor Admin usage filter by member user ID                                                                                                                                                                                         |
+| `github_token`                      | Optional saved GitHub token for Gist publishing                                                                                                                                                                                                      |
+| `result_content_blocked_categories` | Tool categories whose result content is not stored (default: `["Read", "Glob"]`)                                                                                                                                                                     |
+| `host`                              | Interface the server binds to (default `127.0.0.1`); non-loopback values require `require_auth = true`                                                                                                                                               |
+| `require_auth`                      | Require bearer-token authentication for API access                                                                                                                                                                                                   |
+| `auth_token`                        | Auto-generated 256-bit bearer token for remote access; can be overridden with `AGENTSVIEW_AUTH_TOKEN`                                                                                                                                                |
+| `public_url`                        | Public URL for hostname/proxy access and origin validation                                                                                                                                                                                           |
+| `public_origins`                    | Array of additional trusted CORS origins                                                                                                                                                                                                             |
+| `daemon_idle_timeout`               | Idle timeout for detached writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                         |
+| `[proxy]`                           | Managed proxy configuration table — see [Remote Access](/remote-access/)                                                                                                                                                                             |
+| `disable_update_check`              | Disable the automatic update check (see [Privacy](#privacy-and-telemetry))                                                                                                                                                                           |
+| `[pg]`                              | PostgreSQL sync configuration — see [PostgreSQL Sync](/pg-sync/)                                                                                                                                                                                     |
+| `[duckdb]`                          | DuckDB mirror configuration — see [DuckDB Mirror](/duckdb/)                                                                                                                                                                                          |
 | `[vector]`                          | Opt-in semantic-search index; model settings live in `[vector.embeddings]`, named endpoints in `[vector.embeddings.servers.<name>]`, embedding schedule in `[vector.embed]` — see [Semantic Search](/semantic-search/#enabling-vector) for every key |
-| `[[remote_hosts]]`                  | Remote machines synced by a bare `agentsview sync` — see [CLI Reference](/commands/#agentsview-sync)         |
-| `[automated]`                       | Custom automated-session patterns — see [Automated Session Detection](#automated-session-detection)          |
-| `[custom_model_pricing]`            | Per-model price overrides for usage reports — see [Custom Model Pricing](/token-usage/#custom-model-pricing) |
+| `[[remote_hosts]]`                  | Remote machines synced by a bare `agentsview sync` — see [CLI Reference](/commands/#agentsview-sync)                                                                                                                                                 |
+| `[automated]`                       | Custom automated-session patterns — see [Automated Session Detection](#automated-session-detection)                                                                                                                                                  |
+| `[custom_model_pricing]`            | Per-model price overrides for usage reports — see [Custom Model Pricing](/token-usage/#custom-model-pricing)                                                                                                                                         |
 
 The `cursor_secret` is generated automatically on first run. For Gist
 publishing, AgentsView first uses a saved `github_token`. For local browser
@@ -88,6 +87,11 @@ requests, if no token is saved, it then tries `AGENTSVIEW_GITHUB_TOKEN` and then
 UI Settings page or the API endpoint `POST /api/v1/config/github` when you want
 AgentsView to publish gists. Remote access fields can be configured via the
 Settings page or CLI flags — see [Remote Access](/remote-access/) for details.
+
+`agentsview daemon start` and `agentsview daemon restart` load the normal
+effective configuration from this file and supported environment variables; they
+accept no serve-specific flags. `--no-sync` is a runtime-only `serve` option and
+cannot be stored in `config.toml`.
 
 When `require_auth` is enabled, the browser login prompt accepts the configured
 `auth_token`. The value can come from `~/.agentsview/config.toml` or from the
@@ -128,8 +132,8 @@ interval = "5m" # optional; zero or omitted means manual sync only
 
 HTTP remote sync calls the remote daemon's archive endpoints and always uses a
 bearer token, even when the rest of that daemon has `require_auth = false`. The
-per-host `token` is required and must match the remote daemon's `auth_token`.
-Do not reuse the collector daemon's own `auth_token` for untrusted remote
+per-host `token` is required and must match the remote daemon's `auth_token`. Do
+not reuse the collector daemon's own `auth_token` for untrusted remote
 endpoints. HTTP transfers use a persistent per-host mirror and request file
 deltas when fewer than half of the manifest files need fetching; see
 [Remote Access — Incremental Sync](/remote-access/#incremental-sync).
@@ -144,23 +148,35 @@ failures are summarized with actionable messages for common cases such as token
 rejection, missing remote archive endpoints, connection refusal, DNS failures,
 and timeouts.
 
-Set `interval` to a positive duration such as `"5m"` to have a running
-collector daemon sync that host periodically. Zero or omitted disables the
-per-host schedule; manual `agentsview sync` still includes the host.
+Set `interval` to a positive duration such as `"5m"` to have a running collector
+daemon sync that host periodically. Zero or omitted disables the per-host
+schedule; manual `agentsview sync` still includes the host.
 
-The remote daemon must also listen on an interface the collector can reach.
-The server binds `127.0.0.1` by default, so set `host` in the remote
-machine's config.toml (requires `require_auth = true`) or start it with
-`serve --host`:
+The remote daemon must also listen on an interface the collector can reach. The
+server binds `127.0.0.1` by default, so set `host` in the remote machine's
+`config.toml` with `require_auth = true` for a persistent node:
 
 ```toml
 host = "0.0.0.0"
 require_auth = true
 ```
 
-Detached daemons started with `agentsview serve --background` exit after
-`daemon_idle_timeout` when idle. Set it to zero on machines that should stay
-available for HTTP remote sync:
+Then start or restart the config-driven writable daemon:
+
+```bash
+agentsview daemon start
+# After later configuration changes:
+agentsview daemon restart
+```
+
+For a one-off flag override, `agentsview serve --background --host 0.0.0.0`
+remains available, including without auth. Prefer authenticated persistent
+configuration for an always-available remote node.
+
+Detached writable daemons started by `agentsview daemon start`, automatic CLI
+startup, or `agentsview serve --background` exit after `daemon_idle_timeout`
+when idle. Set it to zero on machines that should stay available for HTTP remote
+sync:
 
 ```toml
 daemon_idle_timeout = "0s"
@@ -216,7 +232,7 @@ can still be parsed.
 | Codex                 | `~/.codex/sessions/` and `~/.codex/archived_sessions/`                           | JSONL per session                                                                                                               |
 | Command Code          | `~/.commandcode/projects/`                                                       | JSONL per session, optional `.meta.json` sidecar                                                                                |
 | Copilot CLI           | `~/.copilot/`                                                                    | JSONL per session under `session-state/`                                                                                        |
-| Devin CLI             | `~/.local/share/devin/` (Linux), `~/Library/Application Support/devin/` (macOS)             | Local CLI data rooted at the directory that contains `cli/`; session data is discovered under `<root>/cli/...`                 |
+| Devin CLI             | `~/.local/share/devin/` (Linux), `~/Library/Application Support/devin/` (macOS)  | Local CLI data rooted at the directory that contains `cli/`; session data is discovered under `<root>/cli/...`                  |
 | Cortex Code           | `~/.snowflake/cortex/conversations/`                                             | JSON / JSONL per session                                                                                                        |
 | Cursor                | `~/.cursor/projects/`                                                            | JSONL or plain-text transcripts                                                                                                 |
 | DeepSeek TUI          | `~/.codewhale/sessions/` and `~/.deepseek/sessions/`                             | JSON per session                                                                                                                |
@@ -240,7 +256,7 @@ can still be parsed.
 | Posit Assistant       | `~/.posit/assistant/workspaces/`                                                 | Per-conversation `conversation.json` tree plus `lm-messages.jsonl` transcript                                                   |
 | Positron Assistant    | (platform-specific, see below)                                                   | JSON / JSONL per session                                                                                                        |
 | QClaw                 | `~/.qclaw/assets/static/agents/`                                                 | JSONL per session                                                                                                               |
-| Qoder                 | `~/.qoder/projects/` and `~/.qoderwork/projects/`                                | JSONL project transcripts plus sidecar metadata                                                                                  |
+| Qoder                 | `~/.qoder/projects/` and `~/.qoderwork/projects/`                                | JSONL project transcripts plus sidecar metadata                                                                                 |
 | Qwen Code             | `~/.qwen/projects/`                                                              | JSONL per session                                                                                                               |
 | QwenPaw               | `~/.copaw/workspaces/`                                                           | JSON session files                                                                                                              |
 | Reasonix              | `~/.reasonix/` and `~/AppData/Roaming/reasonix/`                                 | JSONL sessions plus `.jsonl.meta` sidecars                                                                                      |
@@ -276,10 +292,8 @@ named like `*_VSGitHubCopilot_traces.jsonl`; set `VISUALSTUDIO_COPILOT_DIR` or
 
 - **macOS:** `~/Library/Application Support/Windsurf/User/` and
   `~/Library/Application Support/Windsurf - Next/User/`
-- **Linux:** `~/.config/Windsurf/User/` and
-  `~/.config/Windsurf - Next/User/`
-- **Windows:** `%APPDATA%/Windsurf/User/` and
-  `%APPDATA%/Windsurf - Next/User/`
+- **Linux:** `~/.config/Windsurf/User/` and `~/.config/Windsurf - Next/User/`
+- **Windows:** `%APPDATA%/Windsurf/User/` and `%APPDATA%/Windsurf - Next/User/`
 
 Windsurf stores workspace chats in `workspaceStorage/<hash>/state.vscdb`.
 AgentsView watches the `workspaceStorage` subtree and reads chat records from
@@ -302,9 +316,9 @@ product from the Positron IDE's built-in Assistant above. It stores one
 directory per conversation under
 `~/.posit/assistant/workspaces/<workspaceId>/<conversationId>/`, containing a
 `conversation.json` message tree and an append-only `lm-messages.jsonl`
-transcript; subagent runs nest under a `subagents/` subdirectory of their
-parent conversation. All Posit Assistant hosts (Positron/VS Code extension,
-standalone, desktop, TUI) share this location. Set `POSIT_ASSISTANT_DIR` or
+transcript; subagent runs nest under a `subagents/` subdirectory of their parent
+conversation. All Posit Assistant hosts (Positron/VS Code extension, standalone,
+desktop, TUI) share this location. Set `POSIT_ASSISTANT_DIR` or
 `posit_assistant_dirs` if your installation stores its workspaces elsewhere.
 
 **Claude Cowork default directories** follow Claude Desktop's Electron user-data
@@ -396,43 +410,36 @@ databases and AES-encrypted `.pb` files. AgentsView reads whichever source is
 richest, in this order:
 
 1. **Decrypted trajectory sidecar.** For either format, if a
-   `<uuid>.trajectory.json` file sits next to the source `.db`
-   or `.pb` file (under `conversations/` or `implicit/`) and
-   covers the session, AgentsView uses it as the source of
-   truth for the full structured transcript — messages, tool
-   calls, tool results, reasoning, and diffs. This is the
-   highest-fidelity source for both formats. These sidecars are
-   written out-of-process by
-   [agy-reader](https://github.com/mjacobs/agy-reader), which
-   performs the decryption; AgentsView reads the resulting
-   plain JSON as untrusted input and needs no
-   `ANTIGRAVITY_KEY` in this mode.
-2. **SQLite trajectory database.** Newer Antigravity CLI
-   releases write `conversations/<uuid>.db`. Without a covering
-   sidecar (above), AgentsView opens the database read-only and
-   decodes the trajectory steps directly. This direct decode is
-   heuristic: it recovers prompts and tool-call names but not
-   full structured tool results, reasoning, or diffs — a
-   degraded **summary mode** transcript. If both
-   `conversations/<uuid>.db` and `conversations/<uuid>.pb`
-   exist, the SQLite database wins. Change detection also
-   factors in `<uuid>.db-wal` and `<uuid>.db-shm` so active
-   sessions resync as SQLite sidecar files move.
-3. **In-process `.pb` decryption.** With no sidecar present,
-   set `ANTIGRAVITY_KEY` (base64-encoded AES key, 16/24/32
-   bytes after decoding) before starting AgentsView and it
-   decrypts the `.pb` payloads itself, mirroring the upstream
-   Python tool
+   `<uuid>.trajectory.json` file sits next to the source `.db` or `.pb` file
+   (under `conversations/` or `implicit/`) and covers the session, AgentsView
+   uses it as the source of truth for the full structured transcript — messages,
+   tool calls, tool results, reasoning, and diffs. This is the highest-fidelity
+   source for both formats. These sidecars are written out-of-process by
+   [agy-reader](https://github.com/mjacobs/agy-reader), which performs the
+   decryption; AgentsView reads the resulting plain JSON as untrusted input and
+   needs no `ANTIGRAVITY_KEY` in this mode.
+1. **SQLite trajectory database.** Newer Antigravity CLI releases write
+   `conversations/<uuid>.db`. Without a covering sidecar (above), AgentsView
+   opens the database read-only and decodes the trajectory steps directly. This
+   direct decode is heuristic: it recovers prompts and tool-call names but not
+   full structured tool results, reasoning, or diffs — a degraded **summary
+   mode** transcript. If both `conversations/<uuid>.db` and
+   `conversations/<uuid>.pb` exist, the SQLite database wins. Change detection
+   also factors in `<uuid>.db-wal` and `<uuid>.db-shm` so active sessions resync
+   as SQLite sidecar files move.
+1. **In-process `.pb` decryption.** With no sidecar present, set
+   `ANTIGRAVITY_KEY` (base64-encoded AES key, 16/24/32 bytes after decoding)
+   before starting AgentsView and it decrypts the `.pb` payloads itself,
+   mirroring the upstream Python tool
    [`antigravity_decryptor`](https://github.com/arashz/antigravity_decryptor).
 1. **Plaintext summary mode.** Otherwise AgentsView reads only `history.jsonl`
    and the `brain/` summaries — enough to populate session metadata and a
    high-level transcript.
 
-Any session not backed by a covering sidecar — heuristic `.db`
-decode, in-process `.pb` decryption, or plaintext summary mode —
-shows a "Summary mode" badge in the detail header. Install
-`agy-reader` when you want high-resolution transcripts for `.db`
-and `.pb` sessions alike:
+Any session not backed by a covering sidecar — heuristic `.db` decode,
+in-process `.pb` decryption, or plaintext summary mode — shows a "Summary mode"
+badge in the detail header. Install `agy-reader` when you want high-resolution
+transcripts for `.db` and `.pb` sessions alike:
 
 ```bash
 go install github.com/mjacobs/agy-reader@latest
@@ -512,19 +519,18 @@ codex_sessions_dirs = [
 
 The corresponding fields are `aider_dirs`, `amp_dirs`, `antigravity_dirs`,
 `antigravity_cli_dirs`, `claude_project_dirs`, `openclaude_project_dirs`,
-`cowork_dirs`, `devin_dirs`,
-`codex_sessions_dirs`, `commandcode_project_dirs`, `copilot_dirs`,
-`cortex_dirs`, `cursor_project_dirs`, `deepseek_tui_sessions_dirs`,
-`forge_dirs`, `gemini_dirs`, `gptme_dirs`, `hermes_sessions_dirs`, `iflow_dirs`,
-`kilo_dirs`, `kimi_dirs`, `kiro_dirs`, `kiro_ide_dirs`, `mimocode_dirs`,
-`vibe_session_dirs`, `omp_dirs`, `openclaw_dirs`, `opencode_dirs`,
-`openhands_dirs`, `pi_dirs`, `piebald_dirs`, `posit_assistant_dirs`,
-`positron_dirs`, `qclaw_dirs`, `qoder_project_dirs`, `qwen_project_dirs`,
-`qwenpaw_dirs`, `reasonix_dirs`, `shelley_dirs`, `visualstudio_copilot_dirs`,
-`vscode_copilot_dirs`, `windsurf_dirs`, `warp_dirs`,
-`workbuddy_project_dirs`, `zcode_dirs`, `zed_dirs`, and `zencoder_dirs`. Each
-accepts an array of paths. When set, these take precedence over the
-single-directory environment variable and the default path.
+`cowork_dirs`, `devin_dirs`, `codex_sessions_dirs`, `commandcode_project_dirs`,
+`copilot_dirs`, `cortex_dirs`, `cursor_project_dirs`,
+`deepseek_tui_sessions_dirs`, `forge_dirs`, `gemini_dirs`, `gptme_dirs`,
+`hermes_sessions_dirs`, `iflow_dirs`, `kilo_dirs`, `kimi_dirs`, `kiro_dirs`,
+`kiro_ide_dirs`, `mimocode_dirs`, `vibe_session_dirs`, `omp_dirs`,
+`openclaw_dirs`, `opencode_dirs`, `openhands_dirs`, `pi_dirs`, `piebald_dirs`,
+`posit_assistant_dirs`, `positron_dirs`, `qclaw_dirs`, `qoder_project_dirs`,
+`qwen_project_dirs`, `qwenpaw_dirs`, `reasonix_dirs`, `shelley_dirs`,
+`visualstudio_copilot_dirs`, `vscode_copilot_dirs`, `windsurf_dirs`,
+`warp_dirs`, `workbuddy_project_dirs`, `zcode_dirs`, `zed_dirs`, and
+`zencoder_dirs`. Each accepts an array of paths. When set, these take precedence
+over the single-directory environment variable and the default path.
 
 All listed directories are discovered, watched, and synced independently.
 
@@ -608,10 +614,9 @@ in Settings:
   already-imported sessions.
 - The default `explicit` layout maps every matching path to the project name
   stored on the rule. The `repo_dot_worktrees` layout derives the project from
-  the first path segment under the prefix when it is named
-  `<repo>.worktrees`, so a path like
-  `/code/agentsview.worktrees/feature/frontend` resolves to project
-  `agentsview`.
+  the first path segment under the prefix when it is named `<repo>.worktrees`,
+  so a path like `/code/agentsview.worktrees/feature/frontend` resolves to
+  project `agentsview`.
 - Rules are stored in a `worktree_project_mappings` SQLite table scoped to the
   host machine, so a mapping created on one machine does not leak into another
   machine's view of synced sessions.
@@ -718,15 +723,15 @@ Files that fail to parse or contain no interactive content are cached in the
 
 Sync summaries include a `Parser anomalies (this run)` section whenever the
 current run observes parser or sanitizer anomalies. The section can include
-malformed-line counts, unrecognized Antigravity schema sessions,
-sanitized-field counts, and Antigravity `gen_metadata without usage` counts. A
+malformed-line counts, unrecognized Antigravity schema sessions, sanitized-field
+counts, and Antigravity `gen_metadata without usage` counts. A
 `gen_metadata without usage` entry means Antigravity supplied generation
 metadata for one or more records, but AgentsView could not derive normalized
 usage totals from those records during that sync.
 
 When a data-version resync runs, startup output prints durable phase and
 completion lines for the resync steps. Background daemons also publish startup
-state while they hold the start lock, so `agentsview serve status` can show the
+state while they hold the start lock, so `agentsview daemon status` can show the
 starting PID, elapsed time, current phase, progress detail, and log path before
 the HTTP server is ready.
 
@@ -745,26 +750,25 @@ sync_include_cwd_prefixes = [
 ]
 ```
 
-When the list is non-empty, a session is ingested only if its recorded
-working directory equals one of the prefixes or lives underneath one.
-Prefixes and session directories are lexically cleaned before matching:
-trailing separators are ignored and `..` components are resolved, so
-`/home/me/oss/../other` does not match a `/home/me/oss` prefix. Matching
-is path-boundary aware (`/home/me/oss` matches `/home/me/oss/repo` but
-not `/home/me/oss-other`), case-sensitive, and uses the local operating
-system's path separator — on Linux and macOS a backslash is an ordinary
-filename character, not a directory boundary. Use absolute paths; `~` is
-not expanded.
+When the list is non-empty, a session is ingested only if its recorded working
+directory equals one of the prefixes or lives underneath one. Prefixes and
+session directories are lexically cleaned before matching: trailing separators
+are ignored and `..` components are resolved, so `/home/me/oss/../other` does
+not match a `/home/me/oss` prefix. Matching is path-boundary aware
+(`/home/me/oss` matches `/home/me/oss/repo` but not `/home/me/oss-other`),
+case-sensitive, and uses the local operating system's path separator — on Linux
+and macOS a backslash is an ordinary filename character, not a directory
+boundary. Use absolute paths; `~` is not expanded.
 
 Notes:
 
-- Sessions without a recorded working directory (a few agents do not store
-  one) are skipped while the filter is set.
-- The filter gates ingestion only. Sessions already in the archive are
-  preserved (the SQLite database is a persistent archive); remove unwanted
-  existing sessions explicitly with `agentsview prune`.
-- Remote-host sync is unaffected: the prefixes describe local paths, so they
-  are not applied to sessions pulled from `[[remote_hosts]]` entries.
+- Sessions without a recorded working directory (a few agents do not store one)
+  are skipped while the filter is set.
+- The filter gates ingestion only. Sessions already in the archive are preserved
+  (the SQLite database is a persistent archive); remove unwanted existing
+  sessions explicitly with `agentsview prune`.
+- Remote-host sync is unaffected: the prefixes describe local paths, so they are
+  not applied to sessions pulled from `[[remote_hosts]]` entries.
 
 ### Large Watch Trees
 

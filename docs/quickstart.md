@@ -21,8 +21,9 @@ auto-update support.
 
 !!! note
 
-    The desktop app and CLI share the same data directory (`~/.agentsview/`), so you
-    can use one or both. They are fully complementary, not mutually exclusive.
+    The desktop app and CLI share the same data directory (`~/.agentsview/`), so
+    you can use one or both. They are fully complementary, not mutually
+    exclusive.
 
 ### pip / uvx
 
@@ -69,8 +70,8 @@ make install  # installs to ~/.local/bin
 
 !!! note
 
-    CGO is required for the SQLite driver. The `fts5` build tag enables full-text
-    search.
+    CGO is required for the SQLite driver. The `fts5` build tag enables
+    full-text search.
 
 #### Windows on ARM
 
@@ -159,23 +160,37 @@ CLI users can start the web UI explicitly:
 agentsview serve
 ```
 
+Bare `agentsview serve` runs in the foreground until you press `Ctrl+C`.
+
 This will:
 
 1. Initialize the SQLite database at `~/.agentsview/sessions.db`
 1. Discover and sync sessions from all
-    [supported agents](/configuration/#session-discovery)
+   [supported agents](/configuration/#session-discovery)
 1. Start watching session directories for changes
 1. Launch the web UI at `http://127.0.0.1:8080`
 
 Open `http://127.0.0.1:8080` in your browser. Pass `--no-browser` to disable
-automatic browser launch. To keep the server running after your shell exits,
-start it in managed background mode:
+automatic browser launch. To keep the server running after your shell exits, use
+the canonical daemon lifecycle:
 
 ```bash
-agentsview serve --background
-agentsview serve status
-agentsview serve stop
+agentsview daemon start
+agentsview daemon status
+agentsview daemon restart
+agentsview daemon stop
 ```
+
+`daemon start` and `daemon restart` use the normal effective configuration from
+`config.toml` and supported environment variables. They do not accept
+serve-specific flags. `daemon restart` also starts the daemon when it is
+stopped.
+
+The existing `agentsview serve --background`, `agentsview serve status`, and
+`agentsview serve stop` commands remain available. Use `serve --background` when
+a one-off daemon needs a serve-only flag, such as `--no-sync` or an
+unauthenticated non-loopback `--host` override. `--no-sync` is runtime-only and
+cannot be set in `config.toml`.
 
 You do not need to keep a server running for every CLI command. Read-only
 commands attach to the daemon when it is warm, otherwise they read the local
@@ -192,18 +207,19 @@ Override the default port or host:
 agentsview serve --port 9090
 agentsview serve --host 0.0.0.0 --port 3000
 agentsview serve --no-browser  # Disable browser auto-open
-agentsview serve --background  # Run as a managed background server
+agentsview serve --background --no-sync  # One-off flag-driven background run
 ```
 
 !!! tip "Forwarded development environments"
 
     If you open AgentsView through exe.dev, Codespaces, Coder, WSL2, SSH port
-    forwarding, or a reverse proxy, restart the CLI with `--public-url` set to the
-    exact browser origin: `agentsview serve --public-url https://<vm>.exe.xyz`.
+    forwarding, or a reverse proxy, restart the CLI with `--public-url` set to
+    the exact browser origin:
+    `agentsview serve --public-url https://<vm>.exe.xyz`.
 
-    A dashboard flash followed by a settings or API error usually means the server
-    rejected the forwarded host or origin. It is not a missing auth token unless
-    `/api/v1/settings` returns `401`. See
+    A dashboard flash followed by a settings or API error usually means the
+    server rejected the forwarded host or origin. It is not a missing auth
+    token unless `/api/v1/settings` returns `401`. See
     [Remote Access](/remote-access/#forwarded-dev-environments).
 
 Point to custom session directories with environment variables. Aider has no
@@ -264,8 +280,8 @@ claude_project_dirs = ["s3://agent-archive/laptop/raw/claude"]
 codex_sessions_dirs = ["s3://agent-archive/laptop/raw/codex"]
 ```
 
-Set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, and
-optionally `AWS_S3_ENDPOINT` before starting AgentsView. See
+Set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, and optionally
+`AWS_S3_ENDPOINT` before starting AgentsView. See
 [S3-compatible session sources](/configuration/#s3-compatible-session-sources)
 for the expected object layout and sync behavior.
 
@@ -280,7 +296,7 @@ Once running, the web UI provides:
 - **Analytics** including activity heatmaps, tool usage, and velocity charts
 - **Activity reporting** with concurrency, agent-minutes, cost, and session rows
 - **Session export** to standalone HTML, markdown export links for agent
-    handoff, or GitHub Gist
+  handoff, or GitHub Gist
 
 Beyond full-text search, opt-in semantic search lets
 `agentsview session search --semantic` (or `--hybrid`) match session content by
