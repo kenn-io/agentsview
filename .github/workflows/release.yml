@@ -112,20 +112,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: '["self-hosted","macOS","X64"]'
+          - os: macos-15
             goos: darwin
             goarch: amd64
-          - runner: '["self-hosted","macOS","ARM64"]'
+          - os: macos-15
             goos: darwin
             goarch: arm64
-          - runner: '"windows-latest"'
+          - os: windows-latest
             goos: windows
             goarch: amd64
-          - runner: '"windows-11-arm"'
+          - os: windows-11-arm
             goos: windows
             goarch: arm64
 
-    runs-on: ${{ fromJSON(matrix.runner) }}
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:

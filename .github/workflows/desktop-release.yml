@@ -15,7 +15,7 @@ concurrency:
 jobs:
   build-macos:
     name: Desktop Build (macOS ${{ matrix.arch }})
-    runs-on: [self-hosted, macOS, "${{ matrix.runner_arch }}"]
+    runs-on: macos-15
     env:
       AGENTSVIEW_TARGET_TRIPLE: ${{ matrix.target_triple }}
       CARGO_BUILD_TARGET: ${{ matrix.target_triple }}
@@ -24,10 +24,8 @@ jobs:
       matrix:
         include:
           - arch: aarch64
-            runner_arch: ARM64
             target_triple: aarch64-apple-darwin
           - arch: x86_64
-            runner_arch: X64
             target_triple: x86_64-apple-darwin
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
