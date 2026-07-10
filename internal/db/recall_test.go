@@ -1226,6 +1226,57 @@ func TestSupersedeRecallEntryArchivesOldAndLinksReplacement(t *testing.T) {
 	assert.Equal(t, "old", archivedByReplacement[0].ID)
 }
 
+func TestSupersedeRecallEntryRejectsAlreadySupersededTarget(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	for _, id := range []string{"s1", "s2", "s3"} {
+		insertSession(t, d, id, "agentsview")
+	}
+	_, err := d.InsertRecallEntry(RecallEntry{
+		ID:              "old",
+		Type:            "fact",
+		Scope:           "project",
+		Status:          "accepted",
+		Title:           "Old retry policy",
+		Body:            "Retry flaky commands once.",
+		Project:         "agentsview",
+		SourceSessionID: "s1",
+	})
+	require.NoError(t, err)
+	_, err = d.SupersedeRecallEntry(ctx, "old", RecallEntry{
+		ID:              "first-replacement",
+		Type:            "fact",
+		Scope:           "project",
+		Status:          "accepted",
+		Title:           "First replacement",
+		Body:            "Retry flaky commands twice.",
+		Project:         "agentsview",
+		SourceSessionID: "s2",
+	})
+	require.NoError(t, err)
+
+	_, err = d.SupersedeRecallEntry(ctx, "old", RecallEntry{
+		ID:              "second-replacement",
+		Type:            "fact",
+		Scope:           "project",
+		Status:          "accepted",
+		Title:           "Second replacement",
+		Body:            "Retry flaky commands three times.",
+		Project:         "agentsview",
+		SourceSessionID: "s3",
+	})
+
+	require.ErrorContains(t, err, "superseded entry old is not active")
+	second, getErr := d.GetRecallEntry(ctx, "second-replacement")
+	require.NoError(t, getErr)
+	assert.Nil(t, second)
+	old, getErr := d.GetRecallEntry(ctx, "old")
+	require.NoError(t, getErr)
+	require.NotNil(t, old)
+	assert.Equal(t, "archived", old.Status)
+	assert.Equal(t, "first-replacement", old.SupersededByEntryID)
+}
+
 func TestSupersedeRecallEntryRejectsNonAcceptedReplacement(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

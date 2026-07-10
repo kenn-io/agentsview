@@ -428,14 +428,8 @@ func supersedeRecallEntryTx(
 	oldID string,
 	replacement RecallEntry,
 ) error {
-	var existingOldID string
-	if err := tx.QueryRowContext(
-		ctx, "SELECT id FROM recall_entries WHERE id = ?", oldID,
-	).Scan(&existingOldID); err != nil {
-		if err == sql.ErrNoRows {
-			return fmt.Errorf("superseded entry %s not found", oldID)
-		}
-		return fmt.Errorf("checking superseded entry %s: %w", oldID, err)
+	if err := requireActiveRecallSupersessionTarget(ctx, tx, oldID); err != nil {
+		return err
 	}
 
 	if err := insertRecallEntryTx(tx, replacement); err != nil {
@@ -456,6 +450,32 @@ func supersedeRecallEntryTx(
 		return fmt.Errorf("checking superseded entry update: %w", err)
 	} else if rows != 1 {
 		return fmt.Errorf("superseded entry %s not found", oldID)
+	}
+	return nil
+}
+
+type recallQueryRower interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func requireActiveRecallSupersessionTarget(
+	ctx context.Context,
+	queryer recallQueryRower,
+	id string,
+) error {
+	var status, supersededByEntryID string
+	if err := queryer.QueryRowContext(ctx, `
+		SELECT status, superseded_by_entry_id
+		FROM recall_entries
+		WHERE id = ?
+	`, id).Scan(&status, &supersededByEntryID); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("superseded entry %s not found", id)
+		}
+		return fmt.Errorf("checking superseded entry %s: %w", id, err)
+	}
+	if status != corerecall.StatusAccepted || supersededByEntryID != "" {
+		return fmt.Errorf("superseded entry %s is not active", id)
 	}
 	return nil
 }

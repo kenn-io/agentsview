@@ -719,6 +719,51 @@ func TestImportAcceptedRecallEntriesJSONLSupersedesExistingRecallEntry(t *testin
 	assert.Equal(t, "old", newRecallEntry.SupersedesEntryID)
 }
 
+func TestImportAcceptedRecallEntriesJSONLRejectsAlreadySupersededTarget(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dry_run=%t", dryRun), func(t *testing.T) {
+			d := testDB(t)
+			for _, id := range []string{"s1", "s2", "s3"} {
+				insertSession(t, d, id, "agentsview")
+			}
+			_, err := d.InsertRecallEntry(RecallEntry{
+				ID:              "old",
+				Type:            "fact",
+				Scope:           "project",
+				Status:          "accepted",
+				Title:           "Old retry policy",
+				Body:            "Retry flaky commands once.",
+				Project:         "agentsview",
+				SourceSessionID: "s1",
+			})
+			require.NoError(t, err)
+			_, err = d.SupersedeRecallEntry(context.Background(), "old", RecallEntry{
+				ID:              "first-replacement",
+				Type:            "fact",
+				Scope:           "project",
+				Status:          "accepted",
+				Title:           "First replacement",
+				Body:            "Retry flaky commands twice.",
+				Project:         "agentsview",
+				SourceSessionID: "s2",
+			})
+			require.NoError(t, err)
+			input := strings.NewReader(`
+{"candidate_id":"second-replacement","supersedes_entry_id":"old","type":"fact","scope":"project","title":"Second replacement","body":"Retry flaky commands three times.","project":"agentsview","session_id":"s3","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0}}
+`)
+
+			_, err = d.ImportAcceptedRecallEntriesJSONLWithOptions(
+				context.Background(), input, RecallImportOptions{DryRun: dryRun},
+			)
+
+			require.ErrorContains(t, err, "superseded entry old is not active")
+			second, getErr := d.GetRecallEntry(context.Background(), "second-replacement")
+			require.NoError(t, getErr)
+			assert.Nil(t, second)
+		})
+	}
+}
+
 func TestImportAcceptedRecallEntriesJSONLTrimsIdentityAndScopeFields(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {

@@ -120,7 +120,9 @@ func TestIngestEvalTrajectory(t *testing.T) {
 	assert.Equal(t, "traj1", res.TrajectoryID)
 	assert.Equal(t, 3, res.EntriesIndexed)
 
-	id0, err := evalIngestID("eval-trajectory", "run1", "traj1", 0)
+	id0, err := evalTrajectoryChunkID(
+		in, evalTrajectoryContentDigest(long), 0,
+	)
 	require.NoError(t, err)
 	m0, err := d.GetRecallEntry(ctx, id0)
 	require.NoError(t, err)
@@ -147,6 +149,54 @@ func TestIngestEvalTrajectory(t *testing.T) {
 	res2, err := d.IngestEvalTrajectory(ctx, in)
 	require.NoError(t, err)
 	assert.Equal(t, 0, res2.EntriesIndexed, "re-ingest must insert nothing new")
+}
+
+func TestIngestEvalTrajectoryVersionsIdentityByExtractorMetadataAndContent(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	base := EvalTrajectoryIngest{
+		RunID:           "run1",
+		TrajectoryID:    "traj1",
+		Trajectory:      json.RawMessage(`{"text":"first trajectory"}`),
+		ExtractorMethod: "extractor-v1",
+		SourceVersion:   "harness-v1",
+	}
+
+	first, err := d.IngestEvalTrajectory(ctx, base)
+	require.NoError(t, err)
+	assert.Equal(t, 1, first.EntriesIndexed)
+
+	changedExtractor := base
+	changedExtractor.ExtractorMethod = "extractor-v2"
+	second, err := d.IngestEvalTrajectory(ctx, changedExtractor)
+	require.NoError(t, err)
+	assert.Equal(t, 1, second.EntriesIndexed)
+
+	changedSourceVersion := base
+	changedSourceVersion.SourceVersion = "harness-v2"
+	third, err := d.IngestEvalTrajectory(ctx, changedSourceVersion)
+	require.NoError(t, err)
+	assert.Equal(t, 1, third.EntriesIndexed)
+
+	changedContent := base
+	changedContent.Trajectory = json.RawMessage(`{"text":"revised trajectory"}`)
+	fourth, err := d.IngestEvalTrajectory(ctx, changedContent)
+	require.NoError(t, err)
+	assert.Equal(t, 1, fourth.EntriesIndexed)
+
+	entries, err := d.ListRecallEntries(ctx, RecallQuery{
+		SourceRunID: "run1",
+		Status:      corerecall.StatusAccepted,
+		Limit:       10,
+	})
+	require.NoError(t, err)
+	require.Len(t, entries, 4)
+	assert.ElementsMatch(t, []string{
+		"first trajectory",
+		"first trajectory",
+		"first trajectory",
+		"revised trajectory",
+	}, []string{entries[0].Body, entries[1].Body, entries[2].Body, entries[3].Body})
 }
 
 func TestIngestEvalTrajectoryNoStringsIndexesNothing(t *testing.T) {

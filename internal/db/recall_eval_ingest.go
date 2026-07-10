@@ -59,9 +59,11 @@ type EvalTrajectoryIngestResult struct {
 // rows scoped by run_id + extractor_method, so the keyword retriever can
 // recall them. It is lab-only (the HTTP layer guards the
 // production data dir) and idempotent: deterministic ids mean re-ingesting a
-// trajectory inserts only the chunks it is missing. It mirrors the /import
-// write path — a placeholder session satisfies the source_session_id FK, then
-// each chunk is inserted only if absent.
+// trajectory with the same extractor, source version, and normalized content
+// inserts only the chunks it is missing. Changing any of those identity inputs
+// creates a distinct eval corpus instead of silently retaining stale rows. It
+// mirrors the /import write path — a placeholder session satisfies the
+// source_session_id FK, then each chunk is inserted only if absent.
 func (db *DB) IngestEvalTrajectory(
 	ctx context.Context, in EvalTrajectoryIngest,
 ) (EvalTrajectoryIngestResult, error) {
@@ -90,9 +92,8 @@ func (db *DB) IngestEvalTrajectory(
 	if len(chunks) == 0 {
 		return result, nil
 	}
-	sessionID, err := evalIngestID(
-		"eval-trajectory-session", in.RunID, in.TrajectoryID,
-	)
+	contentDigest := evalTrajectoryContentDigest(text)
+	sessionID, err := evalTrajectorySessionID(in, contentDigest)
 	if err != nil {
 		return result, err
 	}
@@ -100,9 +101,7 @@ func (db *DB) IngestEvalTrajectory(
 		return result, fmt.Errorf("preparing eval session: %w", err)
 	}
 	for idx, chunk := range chunks {
-		id, err := evalIngestID(
-			"eval-trajectory", in.RunID, in.TrajectoryID, idx,
-		)
+		id, err := evalTrajectoryChunkID(in, contentDigest, idx)
 		if err != nil {
 			return result, err
 		}
@@ -229,6 +228,38 @@ func evalIngestID(parts ...any) (string, error) {
 	}
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+func evalTrajectoryContentDigest(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:])
+}
+
+func evalTrajectorySessionID(
+	in EvalTrajectoryIngest, contentDigest string,
+) (string, error) {
+	return evalIngestID(
+		"eval-trajectory-session",
+		in.RunID,
+		in.TrajectoryID,
+		in.ExtractorMethod,
+		in.SourceVersion,
+		contentDigest,
+	)
+}
+
+func evalTrajectoryChunkID(
+	in EvalTrajectoryIngest, contentDigest string, idx int,
+) (string, error) {
+	return evalIngestID(
+		"eval-trajectory",
+		in.RunID,
+		in.TrajectoryID,
+		in.ExtractorMethod,
+		in.SourceVersion,
+		contentDigest,
+		idx,
+	)
 }
 
 // ensureEvalTrajectorySession inserts a placeholder session (idempotently) so

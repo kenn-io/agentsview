@@ -41,7 +41,7 @@ type RecallImportOptions struct {
 
 type recallImportQueryer interface {
 	recallEvidenceQueryer
-	QueryRowContext(context.Context, string, ...any) *sql.Row
+	recallQueryRower
 }
 
 type probeAcceptedRecallEntry struct {
@@ -280,18 +280,9 @@ func validateRecallImportSupersessionWithQueryer(
 	if recall.SupersedesEntryID == "" {
 		return nil
 	}
-	var supersededExists bool
-	if err := queryer.QueryRowContext(ctx, `
-		SELECT EXISTS (SELECT 1 FROM recall_entries WHERE id = ?)
-	`, recall.SupersedesEntryID).Scan(&supersededExists); err != nil {
-		return fmt.Errorf("checking superseded entry: %w", err)
-	}
-	if !supersededExists {
-		return fmt.Errorf(
-			"superseded entry %s not found", recall.SupersedesEntryID,
-		)
-	}
-	return nil
+	return requireActiveRecallSupersessionTarget(
+		ctx, queryer, recall.SupersedesEntryID,
+	)
 }
 
 // importAcceptedRecallEntry verifies and binds evidence in the same serialized
