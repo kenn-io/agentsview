@@ -350,23 +350,6 @@ func (s *Store) FindSessionIDsByPartial(
 	return ids, rows.Err()
 }
 
-// scanPGSessionRows iterates rows and scans each.
-func scanPGSessionRows(
-	rows *sql.Rows,
-) ([]db.Session, error) {
-	sessions := []db.Session{}
-	for rows.Next() {
-		s, err := scanPGSession(rows)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"scanning session: %w", err,
-			)
-		}
-		sessions = append(sessions, s)
-	}
-	return sessions, rows.Err()
-}
-
 func scanPGAPISessionRows(rows *sql.Rows) ([]db.Session, error) {
 	sessions := []db.Session{}
 	for rows.Next() {

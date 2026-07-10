@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -43,10 +44,8 @@ func IsDisplayMessage(m Message) bool {
 	if m.IsCompactBoundary {
 		return true
 	}
-	for _, subtype := range visibleSystemSubtypes {
-		if m.SourceSubtype == subtype {
-			return true
-		}
+	if slices.Contains(visibleSystemSubtypes, m.SourceSubtype) {
+		return true
 	}
 	return !m.IsSystem && !IsSystemPrefixed(m.Content, m.Role)
 }

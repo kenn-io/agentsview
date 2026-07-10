@@ -138,13 +138,6 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
-// scanSessionStorageRow scans sessionStorageCols into a Session.
-func scanSessionStorageRow(rs rowScanner) (Session, error) {
-	var s Session
-	err := scanSessionFields(rs, &s)
-	return s, err
-}
-
 func scanSessionAPIRow(rs rowScanner) (Session, error) {
 	var s Session
 	err := scanSessionFields(rs, &s, &s.LatestDisplayOrdinal)
