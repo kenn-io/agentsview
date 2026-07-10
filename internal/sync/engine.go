@@ -3202,6 +3202,16 @@ func (e *Engine) countDBBackedSessions(
 	return total
 }
 
+func (e *Engine) getActiveStoredSession(
+	ctx context.Context, sessionID string,
+) (*db.Session, error) {
+	sess, err := e.db.GetSessionFull(ctx, sessionID)
+	if err != nil || sess == nil || sess.DeletedAt != nil {
+		return nil, err
+	}
+	return sess, nil
+}
+
 // syncProviderDBBacked enumerates a DB-backed provider's sources, parses only
 // the changed ones through the provider facade, and returns their pending
 // writes. Change detection compares the provider fingerprint mtime against the
@@ -4980,7 +4990,7 @@ func (e *Engine) providerSingleSessionFresh(
 	) {
 		return 0, false, true
 	}
-	sess, _ := e.db.GetSession(ctx, e.idPrefix+sessionID)
+	sess, _ := e.getActiveStoredSession(ctx, e.idPrefix+sessionID)
 	return info.ModTime().UnixNano(), sess != nil &&
 		sess.Project != "" &&
 		!parser.NeedsProjectReparse(sess.Project), false
@@ -8407,7 +8417,7 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 			} else if ok && def.Type == parser.AgentCodex {
 				stat = statCodexS3Session
 			}
-			if sess, err := e.db.GetSession(
+			if sess, err := e.getActiveStoredSession(
 				context.Background(), sessionID,
 			); err == nil && sess != nil {
 				switch sess.Agent {
@@ -8674,7 +8684,7 @@ func (e *Engine) SyncSingleSessionContext(
 	switch agent {
 	case parser.AgentClaude:
 		// Try to preserve existing project from DB first
-		if sess, _ := e.db.GetSession(ctx, sessionID); sess != nil &&
+		if sess, _ := e.getActiveStoredSession(ctx, sessionID); sess != nil &&
 			sess.Project != "" &&
 			!parser.NeedsProjectReparse(sess.Project) {
 			file.Project = sess.Project
@@ -8686,7 +8696,7 @@ func (e *Engine) SyncSingleSessionContext(
 		// parsed session, so an empty project here would overwrite the
 		// existing "visualstudio" value. Prefer the stored project; fall
 		// back to the canonical default discovery assigns.
-		if sess, _ := e.db.GetSession(ctx, sessionID); sess != nil &&
+		if sess, _ := e.getActiveStoredSession(ctx, sessionID); sess != nil &&
 			sess.Project != "" &&
 			!parser.NeedsProjectReparse(sess.Project) {
 			file.Project = sess.Project
@@ -8713,7 +8723,7 @@ func (e *Engine) SyncSingleSessionContext(
 	case parser.AgentIflow:
 		// path is <iflowDir>/<project>/session-<uuid>.jsonl
 		// Extract project dir name from parent directory
-		if sess, _ := e.db.GetSession(ctx, sessionID); sess != nil &&
+		if sess, _ := e.getActiveStoredSession(ctx, sessionID); sess != nil &&
 			sess.Project != "" &&
 			!parser.NeedsProjectReparse(sess.Project) {
 			file.Project = sess.Project
@@ -8745,7 +8755,7 @@ func (e *Engine) SyncSingleSessionContext(
 		// from the sessionID prefix as a final fallback that works
 		// even when the DB row is missing or stale.
 		if file.Project == "" {
-			if sess, _ := e.db.GetSession(ctx, sessionID); sess != nil &&
+			if sess, _ := e.getActiveStoredSession(ctx, sessionID); sess != nil &&
 				sess.Project != "" &&
 				!parser.NeedsProjectReparse(sess.Project) {
 				file.Project = sess.Project
@@ -8774,7 +8784,7 @@ func (e *Engine) SyncSingleSessionContext(
 		if classified, ok := e.classifyReasonixPath(path); ok {
 			file.Project = classified.Project
 		} else {
-			if sess, _ := e.db.GetSession(ctx, sessionID); sess != nil &&
+			if sess, _ := e.getActiveStoredSession(ctx, sessionID); sess != nil &&
 				sess.Project != "" &&
 				!parser.NeedsProjectReparse(sess.Project) {
 				file.Project = sess.Project
@@ -8861,7 +8871,7 @@ func (e *Engine) applyWorktreeMappingToSingleSession(
 	sessionID string,
 ) error {
 	ctx := context.Background()
-	sess, err := e.db.GetSession(ctx, sessionID)
+	sess, err := e.getActiveStoredSession(ctx, sessionID)
 	if err != nil || sess == nil || sess.Cwd == "" {
 		return err
 	}
