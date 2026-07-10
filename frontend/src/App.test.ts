@@ -292,6 +292,10 @@ describe("findUserPromptOrdinal", () => {
 
 describe("App analytics date navigation", () => {
   it("restores a retained rolling Sessions range without pinning it", async () => {
+    const sessionLoadDates: Array<{
+      dateFrom: string;
+      dateTo: string;
+    }> = [];
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-07-10T12:00:00"));
     vi.stubGlobal(
@@ -309,7 +313,13 @@ describe("App analytics date navigation", () => {
     vi.spyOn(sync, "loadVersion").mockResolvedValue();
     vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
     vi.spyOn(sync, "startPolling").mockImplementation(() => {});
-    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(sessions, "load").mockImplementation(() => {
+      sessionLoadDates.push({
+        dateFrom: sessions.filters.dateFrom,
+        dateTo: sessions.filters.dateTo,
+      });
+      return Promise.resolve();
+    });
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
@@ -330,9 +340,14 @@ describe("App analytics date navigation", () => {
 
     router.navigate("insights");
     await flushEffects();
+    sessionLoadDates.length = 0;
     router.navigate("sessions");
     await flushEffects();
 
+    expect(sessionLoadDates[0]).toEqual({
+      dateFrom: "2026-06-11",
+      dateTo: "2026-07-10",
+    });
     expect(analytics.isPinned).toBe(false);
     expect(analytics.windowDays).toBe(30);
     expect(router.params.window_days).toBe("30");

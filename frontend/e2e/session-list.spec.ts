@@ -79,4 +79,31 @@ test.describe("Session list", () => {
     await clickNavTab(page, "Sessions");
     await expect(page).toHaveURL(/[?&]project=project-alpha/);
   });
+
+  test("restored rolling dates reach the first Sessions request", async ({
+    page,
+  }) => {
+    await page.locator(".kit-date-range-picker__trigger").click();
+    await page.getByRole("button", { name: "90d", exact: true }).click();
+    await expect(page).toHaveURL(/window_days=90/);
+    const selectedUrl = new URL(page.url());
+    const expectedFrom = selectedUrl.searchParams.get("date_from");
+    const expectedTo = selectedUrl.searchParams.get("date_to");
+    expect(expectedFrom).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(expectedTo).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+
+    await clickNavTab(page, "Insights");
+    await expect(page).toHaveURL(/\/insights/);
+
+    const requestPromise = page.waitForRequest((request) =>
+      new URL(request.url()).pathname.endsWith(
+        "/api/v1/sessions/sidebar-index",
+      )
+    );
+    await clickNavTab(page, "Sessions");
+    const requestUrl = new URL((await requestPromise).url());
+
+    expect(requestUrl.searchParams.get("date_from")).toBe(expectedFrom);
+    expect(requestUrl.searchParams.get("date_to")).toBe(expectedTo);
+  });
 });
