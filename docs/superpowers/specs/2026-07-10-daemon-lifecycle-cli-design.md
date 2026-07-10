@@ -100,8 +100,8 @@ Extract or add narrowly scoped lifecycle helpers around the existing machinery:
 - Stop only confirmed writable records for daemon operations.
 - Launch a background child with synthesized `serve` arguments and no
   serve-specific CLI overrides.
-- Orchestrate restart while holding the existing background launch lock across
-  the complete stop/start gap.
+- Orchestrate stop and restart while holding the existing background launch lock
+  across their complete state transitions.
 
 The background child remains a normal `agentsview serve` process. This avoids a
 second server startup path and preserves existing runtime publication,
@@ -132,13 +132,18 @@ a clear startup-in-progress or startup-failed error.
 
 ### Stop
 
+1. Resolve the data directory and acquire the background launch lock for the
+   complete discovery-and-stop operation. If another lifecycle operation owns
+   the lock, return a retryable contention error rather than reporting success
+   without guaranteeing the stopped state.
 1. Load configuration so runtime discovery uses the correct data directory and
    authentication token.
 1. Select only live writable runtime records.
 1. If none exist and no writable startup is active, report that the daemon was
    not running and exit zero.
-1. Confirm each target's identity using the existing health/start-time checks
-   before signalling it.
+1. Confirm every target's identity using the existing health/start-time checks
+   before signalling any of them. If any live writable target cannot be
+   confirmed, return nonzero without stopping the confirmed subset.
 1. Gracefully stop confirmed targets, escalating with the existing timeout when
    necessary, and clean up managed Caddy children owned by those targets.
 
@@ -173,7 +178,9 @@ do not claim rollback or restoration.
   stops the existing daemon.
 - Concurrent lifecycle activity is serialized by the launch lock. Operations
   that cannot safely wait return a concise retryable error.
-- Stale or PID-reused records never authorize a signal.
+- Stale or PID-reused records never authorize a signal. `daemon stop` and
+  `daemon restart` return nonzero if a live writable target cannot be
+  confirmed, because neither command can guarantee its requested final state.
 - Child startup failure includes the background log location.
 - Error messages and recovery hints prefer canonical `daemon` commands while
   compatibility commands remain accepted.
@@ -211,8 +218,9 @@ helpers. Cover:
 - Restart loading current configuration without inheriting old runtime-only
   options.
 - Database/config validation before stop.
-- Launch-lock contention across the complete restart gap.
-- Refusal to signal an unconfirmed or PID-reused runtime target.
+- Launch-lock contention for stop and across the complete restart gap.
+- Refusal to signal an unconfirmed or PID-reused runtime target, including
+  all-target prevalidation before stopping any writable process.
 - New-child startup failure after stop, including the reported log path.
 - Existing `serve --background`, `serve status`, and `serve stop` behavior.
 - `serve restart` delegation to writable, config-driven restart behavior.
