@@ -270,7 +270,7 @@
     const ordinal = findUserPromptOrdinal(
       items,
       ui.selectedOrdinal,
-      delta,
+      ui.sortNewestFirst ? -delta : delta,
       ui.isBlockVisible("user"),
     );
     if (ordinal !== undefined) navigateToMessageOrdinal(ordinal);
