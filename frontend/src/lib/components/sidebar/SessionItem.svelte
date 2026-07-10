@@ -6,6 +6,7 @@
     type SessionGroupInput,
   } from "../../stores/sessions.svelte.js";
   import { starred } from "../../stores/starred.svelte.js";
+  import { readProgress } from "../../stores/read-progress.svelte.js";
   import { formatRelativeTime, truncate } from "../../utils/format.js";
   import { agentColor as getAgentColor, agentLabel } from "../../utils/agents.js";
   import {
@@ -145,6 +146,9 @@
   );
 
   let isStarred = $derived(starred.isStarred(session.id));
+  let hasUnread = $derived(
+    readProgress.hasUnread(session.id, session.message_count),
+  );
 
   let childCount = $derived(
     continuationCount > 1 ? continuationCount - 1 : 0,
@@ -426,6 +430,9 @@
           {/if}
           <span class="session-time">{timeStr}</span>
           <span class="session-count">{session.user_message_count}</span>
+          {#if hasUnread}
+            <span class="unread-indicator" aria-label="Unread messages" title="Unread messages"></span>
+          {/if}
           {#if hasSubagents}
             <UserRoundIcon class="group-hint-icon" size="9" strokeWidth="2" aria-hidden="true" />
           {/if}
@@ -713,6 +720,14 @@
 
   .session-count::before {
     content: "\2022 ";
+  }
+
+  .unread-indicator {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--accent-blue);
   }
 
   .continuation-badge {

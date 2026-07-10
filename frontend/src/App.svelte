@@ -75,6 +75,7 @@
   import { settings } from "./lib/stores/settings.svelte.js";
   import { yokedDates } from "./lib/stores/yokedDates.svelte.js";
   import { m } from "./lib/i18n/index.js";
+  import { readProgress } from "./lib/stores/read-progress.svelte.js";
   import { setAuthToken, getAuthToken, setServerUrl, getBase } from "./lib/api/runtime.js";
   import { setupVisibilityHealthCheck } from "./lib/utils/health.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
@@ -163,6 +164,20 @@
         sync.unwatchSession();
         pins.clearSession();
       }
+    });
+  });
+
+  // First visits start fully read; visible rows advance later SSE output.
+  $effect(() => {
+    const id = sessions.activeSessionId;
+    const messageSessionId = messages.sessionId;
+    const loading = messages.loading;
+    const loaded = messages.messages;
+    const messageCount = messages.messageCount;
+    untrack(() => {
+      if (!id || id !== messageSessionId || loading) return;
+      const latest = loaded[loaded.length - 1]?.ordinal ?? -1;
+      readProgress.baseline(id, latest, messageCount);
     });
   });
 

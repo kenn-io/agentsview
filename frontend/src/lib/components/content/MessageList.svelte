@@ -25,6 +25,7 @@
   import { resolveMessageLayout } from "../../utils/message-layout.js";
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
   import { sessionActivity } from "../../stores/sessionActivity.svelte.js";
+  import { readProgress } from "../../stores/read-progress.svelte.js";
   import SessionFindBar from "./SessionFindBar.svelte";
   import {
     getAlignedOffsetScrollAlign,
@@ -171,6 +172,31 @@
     sessionActivity.firstVisibleTimestamp = null;
   }
 
+  function recordVisibleProgress() {
+    const v = virtualizer.instance;
+    const sessionId = messages.sessionId;
+    if (!v || !sessionId) return;
+    const top = v.scrollOffset ?? containerRef?.scrollTop ?? 0;
+    const height = containerRef?.clientHeight || v.scrollRect?.height || 0;
+    const bottom = top + height;
+    let latestOrdinal = -1;
+    for (const row of v.getVirtualItems()) {
+      if (row.end <= top || row.start >= bottom) continue;
+      const item = itemAt(row.index);
+      if (!item) continue;
+      for (const ordinal of item.ordinals) {
+        latestOrdinal = Math.max(latestOrdinal, ordinal);
+      }
+    }
+    if (latestOrdinal >= 0) {
+      readProgress.recordVisible(
+        sessionId,
+        latestOrdinal,
+        messages.messageCount,
+      );
+    }
+  }
+
   // Recompute visible timestamp when minimap opens or
   // message content changes (e.g. SSE reload).
   $effect(() => {
@@ -210,8 +236,18 @@
         publishVisibleTimestamp();
       }
 
+      recordVisibleProgress();
+
     });
   }
+
+  $effect(() => {
+    const sessionId = messages.sessionId;
+    const loading = messages.loading;
+    const count = displayItemsAsc.length;
+    if (!sessionId || loading || count === 0) return;
+    requestAnimationFrame(recordVisibleProgress);
+  });
 
   function handleManualScrollIntent() {
     if (ui.followLatest) {
@@ -527,6 +563,16 @@
   let effectiveLayout = $derived(
     resolveMessageLayout(ui.messageLayout, highlightQuery !== ""),
   );
+
+  let unreadStartOrdinal = $derived.by(() => {
+    const marker = readProgress.get(messages.sessionId ?? "");
+    if (!marker) return null;
+    for (const item of displayItemsAsc) {
+      const ordinal = item.ordinals.find((value) => value > marker.ordinal);
+      if (ordinal !== undefined) return ordinal;
+    }
+    return null;
+  });
 </script>
 
 {#if !sessions.activeSessionId}
@@ -569,6 +615,11 @@
               ui.selectOrdinal(item.ordinals[0]!);
             }}
           >
+            {#if unreadStartOrdinal !== null && item.ordinals.includes(unreadStartOrdinal)}
+              <div class="read-progress-divider" role="separator" aria-label="Unread messages">
+                New messages
+              </div>
+            {/if}
             {#if item.kind === "tool-group"}
               <ToolCallGroup
                 messages={item.messages}
@@ -610,6 +661,26 @@
   .virtual-row {
     padding: 5px 12px;
     overflow-anchor: none;
+  }
+
+  .read-progress-divider {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 0;
+    color: var(--accent-blue);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .read-progress-divider::before,
+  .read-progress-divider::after {
+    content: "";
+    height: 1px;
+    flex: 1;
+    background: color-mix(in srgb, var(--accent-blue) 55%, transparent);
   }
 
   .virtual-row.selected > :global(*) {
