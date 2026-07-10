@@ -50,6 +50,27 @@ func TestImportAcceptedRecallEntriesJSONLImportsReviewedKeepers(t *testing.T) {
 	assert.Equal(t, 7, got.Evidence[0].MessageEndOrdinal)
 }
 
+func TestImportAcceptedRecallEntriesJSONLDeduplicatesEvidenceToolUses(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "agentsview")
+	input := strings.NewReader(`
+{"candidate_id":"m-dedup","type":"debugging_method","scope":"repository","title":"Check cwd before file reads","body":"Verify cwd before retrying failed reads.","project":"agentsview","session_id":"s1","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":3,"ordinal_end":7,"tool_use_ids":[" toolu_1 ","toolu_1","toolu_2","  "],"snippets":["Verify cwd","before retrying"]}}
+`)
+
+	result, err := d.ImportAcceptedRecallEntriesJSONL(context.Background(), input)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Imported)
+	got, err := d.GetRecallEntry(context.Background(), "m-dedup")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Len(t, got.Evidence, 2)
+	assert.Equal(t, "toolu_1", got.Evidence[0].ToolUseID)
+	assert.Equal(t, "Verify cwd\nbefore retrying", got.Evidence[0].Snippet)
+	assert.Equal(t, "toolu_2", got.Evidence[1].ToolUseID)
+	assert.Empty(t, got.Evidence[1].Snippet)
+}
+
 func TestImportAcceptedRecallEntriesJSONLRejectsMissingEvidence(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")

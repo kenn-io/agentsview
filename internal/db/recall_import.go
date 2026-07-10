@@ -515,11 +515,16 @@ func normalizeProbeToolUseIDs(ids []string) []string {
 		return nil
 	}
 	out := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
 		id = strings.TrimSpace(id)
 		if id == "" {
 			continue
 		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
 		out = append(out, id)
 	}
 	return out
@@ -940,9 +945,11 @@ func probeEvidenceToDB(
 	}
 	items := make([]RecallEvidence, 0, len(e.ToolUseIDs))
 	for _, toolUseID := range e.ToolUseIDs {
-		items = append(items, probeEvidenceItem(
-			recallID, sessionID, e, toolUseID,
-		))
+		item := probeEvidenceItem(recallID, sessionID, e, toolUseID)
+		if len(items) > 0 {
+			item.Snippet = ""
+		}
+		items = append(items, item)
 	}
 	return items
 }

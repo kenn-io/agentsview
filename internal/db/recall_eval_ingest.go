@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -99,28 +100,23 @@ func (db *DB) IngestEvalTrajectory(
 		return result, err
 	}
 	result.CorpusID = sessionID
-	if err := db.ensureEvalTrajectorySession(ctx, sessionID, in); err != nil {
-		return result, fmt.Errorf("preparing eval session: %w", err)
-	}
+	entries := make([]RecallEntry, 0, len(chunks))
 	for idx, chunk := range chunks {
 		id, err := evalTrajectoryChunkID(in, contentDigest, idx)
 		if err != nil {
 			return result, err
 		}
-		existing, err := db.GetRecallEntry(ctx, id)
-		if err != nil {
-			return result, fmt.Errorf("checking duplicate chunk: %w", err)
-		}
-		if existing != nil {
-			continue
-		}
-		if _, err := db.InsertRecallEntry(
-			newEvalChunkRecallEntry(id, sessionID, in, idx, len(chunks), chunk),
-		); err != nil {
-			return result, fmt.Errorf("inserting chunk %d: %w", idx, err)
-		}
-		result.EntriesIndexed++
+		entries = append(entries, newEvalChunkRecallEntry(
+			id, sessionID, in, idx, len(chunks), chunk,
+		))
 	}
+	indexed, err := db.ingestEvalTrajectoryChunks(
+		ctx, newEvalTrajectorySession(sessionID, in), entries,
+	)
+	if err != nil {
+		return result, err
+	}
+	result.EntriesIndexed = indexed
 	return result, nil
 }
 
@@ -264,17 +260,15 @@ func evalTrajectoryChunkID(
 	)
 }
 
-// ensureEvalTrajectorySession inserts a placeholder session (idempotently) so
-// the chunk entries' source_session_id FK is satisfied, mirroring
-// ensureRecallImportSession. The source_version marker distinguishes eval
-// sessions from real synced ones.
-func (db *DB) ensureEvalTrajectorySession(
-	ctx context.Context, sessionID string, in EvalTrajectoryIngest,
-) error {
+// newEvalTrajectorySession builds the placeholder session required by the
+// chunk entries' source_session_id foreign key.
+func newEvalTrajectorySession(
+	sessionID string, in EvalTrajectoryIngest,
+) Session {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	firstMessage := "Eval trajectory " + in.TrajectoryID
 	displayName := firstMessage
-	return db.insertSessionIfAbsent(ctx, Session{
+	return Session{
 		ID:                sessionID,
 		Project:           in.Project,
 		Machine:           evalTrajectoryMachine,
@@ -290,7 +284,71 @@ func (db *DB) ensureEvalTrajectorySession(
 		Cwd:               in.CWD,
 		GitBranch:         in.GitBranch,
 		SourceVersion:     in.SourceVersion,
-	})
+	}
+}
+
+func (db *DB) ingestEvalTrajectoryChunks(
+	ctx context.Context, session Session, entries []RecallEntry,
+) (int, error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	tx, err := db.getWriter().BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin eval trajectory ingest: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := validateRecallImportPlaceholderSessionStateWithQueryer(
+		ctx, tx, session.ID,
+	); err != nil {
+		return 0, fmt.Errorf("preparing eval session: %w", err)
+	}
+	if _, err := tx.ExecContext(
+		ctx, insertSessionIfAbsentSQL, upsertSessionArgs(session)...,
+	); err != nil {
+		return 0, fmt.Errorf("preparing eval session: %w", err)
+	}
+	indexed := 0
+	for idx, entry := range entries {
+		inserted, err := insertEvalRecallEntryIfAbsentTx(ctx, tx, entry)
+		if err != nil {
+			return 0, fmt.Errorf("inserting chunk %d: %w", idx, err)
+		}
+		if inserted {
+			indexed++
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit eval trajectory ingest: %w", err)
+	}
+	return indexed, nil
+}
+
+func insertEvalRecallEntryIfAbsentTx(
+	ctx context.Context, tx *sql.Tx, entry RecallEntry,
+) (bool, error) {
+	result, err := tx.ExecContext(ctx, `
+		INSERT OR IGNORE INTO recall_entries (
+			id, type, scope, status, review_state, title, body, trigger,
+			confidence, uncertainty, project, cwd, git_branch, agent,
+			source_session_id, source_episode_id, source_run_id,
+			extractor_method, model, transferable, provenance_ok,
+			supersedes_entry_id, superseded_by_entry_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		entry.ID, entry.Type, entry.Scope, entry.Status, entry.ReviewState,
+		entry.Title, entry.Body, entry.Trigger, sqlFloat(entry.Confidence),
+		entry.Uncertainty, entry.Project, entry.CWD, entry.GitBranch, entry.Agent,
+		entry.SourceSessionID, entry.SourceEpisodeID, entry.SourceRunID,
+		entry.ExtractorMethod, entry.Model, entry.Transferable, entry.ProvenanceOK,
+		entry.SupersedesEntryID, entry.SupersededByEntryID,
+	)
+	if err != nil {
+		return false, fmt.Errorf("inserting recall entry: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("counting inserted recall entry: %w", err)
+	}
+	return rows == 1, nil
 }
 
 // newEvalChunkRecallEntry builds the raw-chunk recall row for one chunk.

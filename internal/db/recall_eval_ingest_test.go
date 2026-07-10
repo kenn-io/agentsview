@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -149,6 +150,51 @@ func TestIngestEvalTrajectory(t *testing.T) {
 	res2, err := d.IngestEvalTrajectory(ctx, in)
 	require.NoError(t, err)
 	assert.Equal(t, 0, res2.EntriesIndexed, "re-ingest must insert nothing new")
+}
+
+func TestIngestEvalTrajectoryConcurrentReingestIsIdempotent(t *testing.T) {
+	d := testDB(t)
+	in := EvalTrajectoryIngest{
+		RunID:           "run-concurrent",
+		TrajectoryID:    "traj-concurrent",
+		Trajectory:      json.RawMessage(`{"text":"` + strings.Repeat("x", defaultEvalChunkChars*2+50) + `"}`),
+		ExtractorMethod: "eval-harness-raw-trajectory",
+		SourceVersion:   "test-harness-v1",
+	}
+	const workers = 16
+	start := make(chan struct{})
+	type outcome struct {
+		result EvalTrajectoryIngestResult
+		err    error
+	}
+	outcomes := make(chan outcome, workers)
+	var ready sync.WaitGroup
+	ready.Add(workers)
+	for range workers {
+		go func() {
+			ready.Done()
+			<-start
+			result, err := d.IngestEvalTrajectory(context.Background(), in)
+			outcomes <- outcome{result: result, err: err}
+		}()
+	}
+	ready.Wait()
+	close(start)
+
+	totalIndexed := 0
+	for range workers {
+		outcome := <-outcomes
+		require.NoError(t, outcome.err)
+		totalIndexed += outcome.result.EntriesIndexed
+	}
+	assert.Equal(t, 3, totalIndexed)
+	entries, err := d.ListRecallEntries(context.Background(), RecallQuery{
+		SourceRunID: in.RunID,
+		Status:      corerecall.StatusAccepted,
+		Limit:       10,
+	})
+	require.NoError(t, err)
+	assert.Len(t, entries, 3)
 }
 
 func TestIngestEvalTrajectoryVersionsIdentityByExtractorMetadataAndContent(t *testing.T) {
