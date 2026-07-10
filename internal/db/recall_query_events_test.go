@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -101,6 +102,99 @@ func TestRecallQueryEventDuplicateExposureRankRollsBackAtomically(t *testing.T) 
 		SELECT COUNT(*) FROM recall_query_exposures
 		WHERE query_id = ?`,
 		"query-duplicate-rank",
+	).Scan(&exposureCount))
+	assert.Zero(t, exposureCount)
+}
+
+func TestRecallQueryEventPersistsLargeRankedExposureSnapshot(t *testing.T) {
+	d := testDB(t)
+	exposures := make([]RecallQueryExposure, 205)
+	for i := range exposures {
+		rank := i + 1
+		exposures[i] = RecallQueryExposure{
+			QueryID: "ignored-exposure-query-id",
+			Rank:    rank,
+			EntryID: fmt.Sprintf("entry-%03d", rank),
+			Score:   float64(rank) + 0.25,
+			Packed:  rank%2 == 0,
+		}
+	}
+
+	id, err := d.RecordRecallQueryEvent(context.Background(), RecallQueryEvent{
+		QueryID:     "query-large-snapshot",
+		Query:       "large ranked snapshot",
+		Surface:     "calibration",
+		ResultCount: len(exposures),
+		PackedCount: 102,
+		TopScore:    205.25,
+		Exposures:   exposures,
+	})
+	require.NoError(t, err)
+
+	got, err := d.GetRecallQueryEvent(context.Background(), id)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Len(t, got.Exposures, 205)
+	for i, exposure := range got.Exposures {
+		assert.Equal(t, i+1, exposure.Rank)
+	}
+
+	boundaries := []struct {
+		index   int
+		rank    int
+		entryID string
+		score   float64
+		packed  bool
+	}{
+		{index: 0, rank: 1, entryID: "entry-001", score: 1.25},
+		{index: 99, rank: 100, entryID: "entry-100", score: 100.25, packed: true},
+		{index: 100, rank: 101, entryID: "entry-101", score: 101.25},
+		{index: 199, rank: 200, entryID: "entry-200", score: 200.25, packed: true},
+		{index: 200, rank: 201, entryID: "entry-201", score: 201.25},
+		{index: 204, rank: 205, entryID: "entry-205", score: 205.25},
+	}
+	for _, boundary := range boundaries {
+		exposure := got.Exposures[boundary.index]
+		assert.Equal(t, id, exposure.QueryID)
+		assert.Equal(t, boundary.rank, exposure.Rank)
+		assert.Equal(t, boundary.entryID, exposure.EntryID)
+		assert.Equal(t, boundary.score, exposure.Score)
+		assert.Equal(t, boundary.packed, exposure.Packed)
+	}
+}
+
+func TestRecallQueryEventLateDuplicateRankRollsBackAtomically(t *testing.T) {
+	d := testDB(t)
+	exposures := make([]RecallQueryExposure, 101)
+	for i := range exposures {
+		rank := i + 1
+		exposures[i] = RecallQueryExposure{
+			Rank: rank, EntryID: fmt.Sprintf("entry-%03d", rank),
+			Score: float64(rank),
+		}
+	}
+	exposures[100].Rank = 100
+
+	_, err := d.RecordRecallQueryEvent(context.Background(), RecallQueryEvent{
+		QueryID:     "query-late-duplicate-rank",
+		Query:       "atomic query after many exposures",
+		Surface:     "query",
+		ResultCount: len(exposures),
+		Exposures:   exposures,
+	})
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "exposure ranks 100 through 100")
+
+	got, getErr := d.GetRecallQueryEvent(
+		context.Background(), "query-late-duplicate-rank",
+	)
+	require.NoError(t, getErr)
+	assert.Nil(t, got)
+	var exposureCount int
+	require.NoError(t, d.getReader().QueryRow(`
+		SELECT COUNT(*) FROM recall_query_exposures
+		WHERE query_id = ?`,
+		"query-late-duplicate-rank",
 	).Scan(&exposureCount))
 	assert.Zero(t, exposureCount)
 }

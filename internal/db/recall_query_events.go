@@ -14,6 +14,7 @@ const (
 	RecallQuerySurfaceQuery         = "query"
 	RecallQuerySurfaceBrief         = "brief"
 	RecallQuerySurfaceCalibration   = "calibration"
+	recallExposureInsertBatchSize   = 100
 )
 
 // RecallQueryEvent is an append-only snapshot of one completed recall request.
@@ -102,20 +103,16 @@ func (db *DB) RecordRecallQueryEvent(
 	); err != nil {
 		return "", fmt.Errorf("inserting recall query event: %w", err)
 	}
-	for _, exposure := range event.Exposures {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO recall_query_exposures (
-				query_id, rank, entry_id, score, packed
-			) VALUES (?, ?, ?, ?, ?)`,
-			event.QueryID,
-			exposure.Rank,
-			exposure.EntryID,
-			exposure.Score,
-			exposure.Packed,
+	for start := 0; start < len(event.Exposures); start += recallExposureInsertBatchSize {
+		end := min(start+recallExposureInsertBatchSize, len(event.Exposures))
+		batch := event.Exposures[start:end]
+		if err := insertRecallQueryExposureBatch(
+			ctx, tx, event.QueryID, batch,
 		); err != nil {
 			return "", fmt.Errorf(
-				"inserting recall query exposure rank %d: %w",
-				exposure.Rank,
+				"inserting recall query exposure ranks %d through %d: %w",
+				batch[0].Rank,
+				batch[len(batch)-1].Rank,
 				err,
 			)
 		}
@@ -124,6 +121,39 @@ func (db *DB) RecordRecallQueryEvent(
 		return "", fmt.Errorf("committing recall query event: %w", err)
 	}
 	return event.QueryID, nil
+}
+
+func insertRecallQueryExposureBatch(
+	ctx context.Context,
+	tx *sql.Tx,
+	queryID string,
+	exposures []RecallQueryExposure,
+) error {
+	if len(exposures) == 0 {
+		return nil
+	}
+	var query strings.Builder
+	query.WriteString(`
+		INSERT INTO recall_query_exposures (
+			query_id, rank, entry_id, score, packed
+		) VALUES `)
+	args := make([]any, 0, len(exposures)*5)
+	for i, exposure := range exposures {
+		if i > 0 {
+			query.WriteString(", ")
+		}
+		query.WriteString("(?, ?, ?, ?, ?)")
+		args = append(
+			args,
+			queryID,
+			exposure.Rank,
+			exposure.EntryID,
+			exposure.Score,
+			exposure.Packed,
+		)
+	}
+	_, err := tx.ExecContext(ctx, query.String(), args...)
+	return err
 }
 
 // GetRecallQueryEvent returns one event with exposures ordered by rank. It is
