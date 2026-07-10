@@ -1,9 +1,8 @@
 name: Desktop Artifacts
 
 on:
-  # Build every desktop platform after changes reach main. Pull requests still
-  # exercise the GitHub-hosted Windows and Linux builds, while the macOS job
-  # stays gated from persistent self-hosted runners until merge.
+  # Keep this workflow GitHub-hosted so pull requests cannot select a
+  # persistent runner. macOS builds live in desktop-macos-main.yml.
   push:
     branches: [main]
     paths:
@@ -11,7 +10,8 @@ on:
       - 'frontend/**'
       - 'go.mod'
       - 'go.sum'
-      - '.github/workflows/desktop-*.yml'
+      - '.github/workflows/desktop-artifacts.yml'
+      - '.github/actions/build-desktop-artifact/**'
   pull_request:
     branches: [main]
     paths:
@@ -19,7 +19,8 @@ on:
       - 'frontend/**'
       - 'go.mod'
       - 'go.sum'
-      - '.github/workflows/desktop-*.yml'
+      - '.github/workflows/desktop-artifacts.yml'
+      - '.github/actions/build-desktop-artifact/**'
 
 permissions:
   contents: read
@@ -29,61 +30,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-macos:
+  build:
     name: Desktop Build (${{ matrix.name }})
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: macOS (aarch64)
-            runner: '["self-hosted","macOS","ARM64"]'
-            bundle: app
-            target_triple: aarch64-apple-darwin
-            artifact_name: agentsview-desktop-macos-aarch64
-            artifact_dir: desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/
-          - name: macOS (x86_64)
-            runner: '["self-hosted","macOS","X64"]'
-            bundle: app
-            target_triple: x86_64-apple-darwin
-            artifact_name: agentsview-desktop-macos-x86_64
-            artifact_dir: desktop/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/
-    uses: ./.github/workflows/desktop-artifact-build.yml
-    with:
-      runner: ${{ matrix.runner }}
-      bundle: ${{ matrix.bundle }}
-      target_triple: ${{ matrix.target_triple }}
-      artifact_name: ${{ matrix.artifact_name }}
-      artifact_dir: ${{ matrix.artifact_dir }}
-
-  build-hosted:
-    name: Desktop Build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: Windows
-            runner: '"windows-latest"'
+            os: windows-latest
             bundle: nsis
             target_triple: ""
             artifact_name: agentsview-desktop-windows
             artifact_dir: desktop/src-tauri/target/release/bundle/nsis/
           - name: Linux
-            runner: '"ubuntu-22.04"'
+            os: ubuntu-22.04
             bundle: appimage
             target_triple: ""
             artifact_name: agentsview-desktop-linux
             artifact_dir: desktop/src-tauri/target/release/bundle/appimage/
           - name: Linux (arm64)
-            runner: '"ubuntu-22.04-arm"'
+            os: ubuntu-22.04-arm
             bundle: appimage
             target_triple: aarch64-unknown-linux-gnu
             artifact_name: agentsview-desktop-linux-arm64
             artifact_dir: desktop/src-tauri/target/aarch64-unknown-linux-gnu/release/bundle/appimage/
-    uses: ./.github/workflows/desktop-artifact-build.yml
-    with:
-      runner: ${{ matrix.runner }}
-      bundle: ${{ matrix.bundle }}
-      target_triple: ${{ matrix.target_triple }}
-      artifact_name: ${{ matrix.artifact_name }}
-      artifact_dir: ${{ matrix.artifact_dir }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/build-desktop-artifact
+        with:
+          bundle: ${{ matrix.bundle }}
+          target_triple: ${{ matrix.target_triple }}
+          artifact_name: ${{ matrix.artifact_name }}
+          artifact_dir: ${{ matrix.artifact_dir }}

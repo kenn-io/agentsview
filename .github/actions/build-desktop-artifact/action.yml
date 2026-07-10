@@ -1,0 +1,138 @@
+name: Build desktop artifact
+description: Build, smoke-test, and upload one desktop bundle
+
+inputs:
+  bundle:
+    description: Tauri bundle type
+    required: true
+  target_triple:
+    description: Optional Rust target triple
+    required: true
+  artifact_name:
+    description: Uploaded artifact name
+    required: true
+  artifact_dir:
+    description: Bundle output directory
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6.5.0
+      with:
+        go-version-file: go.mod
+
+    - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
+      with:
+        node-version: "24"
+
+    - name: Setup MinGW (Windows)
+      if: runner.os == 'Windows'
+      uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884  # v2
+      with:
+        msystem: MINGW64
+        update: false
+        install: mingw-w64-x86_64-gcc
+        path-type: inherit
+
+    - name: Install Linux system dependencies
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update -q
+        sudo apt-get install -y \
+          libwebkit2gtk-4.1-dev libgtk-3-dev \
+          libappindicator3-dev librsvg2-dev \
+          patchelf squashfs-tools xdg-utils
+
+    - name: Install Rust target
+      shell: bash
+      env:
+        AGENTSVIEW_TARGET_TRIPLE: ${{ inputs.target_triple }}
+      run: |
+        if [ -n "$AGENTSVIEW_TARGET_TRIPLE" ]; then
+          rustup target add "$AGENTSVIEW_TARGET_TRIPLE"
+        fi
+
+    - name: Install desktop dependencies
+      shell: bash
+      run: npm ci
+      working-directory: desktop
+
+    - name: Desktop sidecar smoke tests
+      shell: bash
+      run: bash desktop/scripts/test-prepare-sidecar.sh
+
+    - name: Build desktop bundle
+      shell: bash
+      env:
+        AGENTSVIEW_TARGET_TRIPLE: ${{ inputs.target_triple }}
+        ARTIFACT_DIR: ${{ inputs.artifact_dir }}
+        BUNDLE: ${{ inputs.bundle }}
+      run: |
+        cd desktop
+        export TAURI_ENV_TARGET_TRIPLE="$AGENTSVIEW_TARGET_TRIPLE"
+        npm run prepare-sidecar
+        build_cmd=(npx tauri build --bundles "$BUNDLE")
+        if [ -n "$AGENTSVIEW_TARGET_TRIPLE" ]; then
+          build_cmd+=(--target "$AGENTSVIEW_TARGET_TRIPLE")
+        fi
+        build_cmd+=(--config '{"bundle":{"createUpdaterArtifacts":false}}')
+        "${build_cmd[@]}"
+        if [ "$BUNDLE" = "appimage" ]; then
+          bash scripts/repair-appimage-diricon.sh \
+            "../${ARTIFACT_DIR}"/*.AppImage
+        fi
+
+    - name: Desktop smoke tests (Rust unit tests)
+      shell: bash
+      env:
+        AGENTSVIEW_TARGET_TRIPLE: ${{ inputs.target_triple }}
+      run: |
+        test_cmd=(cargo test --manifest-path desktop/src-tauri/Cargo.toml --lib)
+        if [ -n "$AGENTSVIEW_TARGET_TRIPLE" ]; then
+          export TAURI_ENV_TARGET_TRIPLE="$AGENTSVIEW_TARGET_TRIPLE"
+          test_cmd+=(--target "$AGENTSVIEW_TARGET_TRIPLE")
+        fi
+        "${test_cmd[@]}"
+
+    - name: Smoke check sidecar metadata
+      shell: bash
+      env:
+        AGENTSVIEW_TARGET_TRIPLE: ${{ inputs.target_triple }}
+      run: |
+        target_triple="${AGENTSVIEW_TARGET_TRIPLE:-$(rustc -vV | awk '/^host: /{print $2}')}"
+        if [ -z "$target_triple" ]; then
+          echo "target triple is empty" >&2
+          exit 1
+        fi
+
+        ext=""
+        if [[ "$target_triple" == *"windows"* ]]; then
+          ext=".exe"
+        fi
+        sidecar="desktop/src-tauri/binaries/agentsview-${target_triple}${ext}"
+        if [ ! -f "$sidecar" ]; then
+          echo "missing sidecar binary: $sidecar" >&2
+          exit 1
+        fi
+
+        "$sidecar" version > sidecar-version.txt
+        if grep -q "agentsview dev" sidecar-version.txt; then
+          echo "sidecar version should not be dev: $(cat sidecar-version.txt)" >&2
+          exit 1
+        fi
+        if grep -q "commit unknown" sidecar-version.txt; then
+          echo "sidecar metadata missing commit: $(cat sidecar-version.txt)" >&2
+          exit 1
+        fi
+        if grep -Eq "built[[:space:]]*\)$" sidecar-version.txt; then
+          echo "sidecar metadata missing build date: $(cat sidecar-version.txt)" >&2
+          exit 1
+        fi
+
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      with:
+        name: ${{ inputs.artifact_name }}
+        path: ${{ inputs.artifact_dir }}
+        if-no-files-found: error

@@ -1,0 +1,55 @@
+name: Desktop Artifacts (macOS)
+
+on:
+  # This workflow is the only workflow allowed to use the ci-runners group.
+  # The organization runner-group policy must pin access to this path on main.
+  push:
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - 'frontend/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/desktop-macos-main.yml'
+      - '.github/actions/build-desktop-artifact/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Desktop Build (${{ matrix.name }})
+    runs-on:
+      group: ci-runners
+      labels: [self-hosted, macOS, "${{ matrix.runner_arch }}"]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (aarch64)
+            runner_arch: ARM64
+            bundle: app
+            target_triple: aarch64-apple-darwin
+            artifact_name: agentsview-desktop-macos-aarch64
+            artifact_dir: desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/
+          - name: macOS (x86_64)
+            runner_arch: X64
+            bundle: app
+            target_triple: x86_64-apple-darwin
+            artifact_name: agentsview-desktop-macos-x86_64
+            artifact_dir: desktop/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/build-desktop-artifact
+        with:
+          bundle: ${{ matrix.bundle }}
+          target_triple: ${{ matrix.target_triple }}
+          artifact_name: ${{ matrix.artifact_name }}
+          artifact_dir: ${{ matrix.artifact_dir }}
