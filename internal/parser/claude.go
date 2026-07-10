@@ -386,6 +386,7 @@ type ClaudeSubagentLink struct {
 	SubagentSessionID string
 	ResultContentRaw  string
 	ResultContentLen  int
+	HasResult         bool
 }
 
 func claudeParseSessionFrom(
@@ -608,6 +609,11 @@ func collectClaudeSubagentLinks(entries []dagEntry) []ClaudeSubagentLink {
 		link, ok := extractToolResultAgentIDLink(entry.line)
 		if !ok {
 			continue
+		}
+		if gjson.Get(entry.line, "isMeta").Bool() {
+			link.ResultContentRaw = ""
+			link.ResultContentLen = 0
+			link.HasResult = false
 		}
 		links = append(links, link)
 	}
@@ -1085,6 +1091,7 @@ func extractToolResultAgentIDLink(line string) (ClaudeSubagentLink, bool) {
 		SubagentSessionID: sessionID,
 		ResultContentRaw:  toolResult.ContentRaw,
 		ResultContentLen:  toolResult.ContentLength,
+		HasResult:         true,
 	}, true
 }
 

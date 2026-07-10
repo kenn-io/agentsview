@@ -9868,6 +9868,41 @@ func TestIncrementalSync_ClaudeAgentIDMissingToolCallAdvancesCursor(t *testing.T
 	assertSessionMessageCount(t, env.db, "parent-missing-link", 1)
 }
 
+func TestIncrementalSync_ClaudeMetaAgentIDResultMatchesFullParse(t *testing.T) {
+	env := setupTestEnv(t)
+
+	initial := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"go"},"cwd":"/tmp"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_meta_link","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}]}}`,
+	)
+	path := env.writeClaudeSession(
+		t, "proj-meta-link", "parent-meta-link.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	appended := `{"type":"user","isMeta":true,"timestamp":"2024-01-01T10:00:02Z","uuid":"r1","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_meta_link","content":"meta-only output"}]},"toolUseResult":{"status":"completed","agentId":"metachild"}}` + "\n"
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, writeErr := f.WriteString(appended)
+	require.NoError(t, f.Close(), "close append")
+	require.NoError(t, writeErr, "append")
+
+	env.engine.SyncPaths([]string{path})
+
+	assertToolCall := func(stage string) {
+		msgs := fetchMessages(t, env.db, "parent-meta-link")
+		require.Len(t, msgs, 2, stage)
+		require.Len(t, msgs[1].ToolCalls, 1, stage)
+		assert.Equal(t, "agent-metachild", msgs[1].ToolCalls[0].SubagentSessionID, stage)
+		assert.Empty(t, msgs[1].ToolCalls[0].ResultContent, stage)
+		assert.Zero(t, msgs[1].ToolCalls[0].ResultContentLength, stage)
+	}
+	assertToolCall("incremental parse")
+
+	env.engine.ResyncAll(context.Background(), nil)
+	assertToolCall("full parse")
+}
+
 func TestIncrementalSync_ClaudeCrossSyncToolResultFallback(t *testing.T) {
 	env := setupTestEnv(t)
 

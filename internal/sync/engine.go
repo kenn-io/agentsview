@@ -7487,7 +7487,7 @@ func (e *Engine) writeIncremental(
 			),
 			ResultContent:    toolCall.ResultContent,
 			ResultContentLen: toolCall.ResultContentLength,
-			HasResult:        true,
+			HasResult:        link.HasResult,
 		}
 	}
 
