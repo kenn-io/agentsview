@@ -1,4 +1,6 @@
 import { test, expect } from "@playwright/test";
+import { createRequire } from "node:module";
+import path from "node:path";
 import {
   createMockSessions,
   handleSessionsRoute,
@@ -30,11 +32,40 @@ function makeMessages(count: number) {
   }));
 }
 
+function renderLintSnippet(scope: string): string {
+  const lintPath = process.env.PR_RENDER_LINT_PATH;
+  if (!lintPath) throw new Error("PR_RENDER_LINT_PATH is required");
+  const require = createRequire(import.meta.url);
+  return (require(lintPath) as {
+    renderLintSnippet: (selector: string, options: object) => string;
+  }).renderLintSnippet(scope, {
+    checks: ["overlap", "clip", "container-escape", "raw-string", "a11y"],
+  });
+}
+
 test("persists read progress until later output is visible", async ({ page }) => {
   let messageCount = 50;
+  let messageRequests = 0;
   const [session] = createMockSessions(1, "read-progress", () => "project");
   session!.id = "read-progress";
   session!.message_count = messageCount;
+  await page.addInitScript(() => {
+    class TestEventSource extends EventTarget {
+      url: string;
+
+      constructor(url: string) {
+        super();
+        this.url = url;
+        (window as Window & { sessionSources: TestEventSource[] }).sessionSources
+          ??= [];
+        (window as Window & { sessionSources: TestEventSource[] }).sessionSources
+          .push(this);
+      }
+
+      close() {}
+    }
+    window.EventSource = TestEventSource as unknown as typeof EventSource;
+  });
 
   await page.route(
     sessionsRoutePattern,
@@ -43,6 +74,7 @@ test("persists read progress until later output is visible", async ({ page }) =>
   await page.route(
     "**/api/v1/sessions/read-progress/messages*",
     async (route) => {
+      messageRequests += 1;
       await route.fulfill({
         json: { messages: makeMessages(messageCount), count: messageCount },
       });
@@ -55,21 +87,81 @@ test("persists read progress until later output is visible", async ({ page }) =>
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem("agentsview-read-progress")))
     .toContain('"messageCount":50');
+  const initialMessageRequests = messageRequests;
 
   messageCount = 60;
   session!.message_count = messageCount;
-  await page.reload();
-  await sp.goto();
-  await sp.selectFirstSession();
+  await expect
+    .poll(() => page.evaluate(() => (
+      window as Window & { sessionSources: Array<{ url: string }> }
+    ).sessionSources.some((source) => source.url.includes("read-progress/watch"))))
+    .toBe(true);
+  await page.evaluate(() => {
+    const source = (window as Window & {
+      sessionSources: Array<EventTarget & { url: string }>;
+    }).sessionSources.find((entry) => entry.url.includes("read-progress/watch"));
+    source?.dispatchEvent(new Event("session_updated"));
+  });
 
   const unreadIndicator = page.locator(".unread-indicator");
   const unreadDivider = page.locator(".read-progress-divider");
   await expect(unreadIndicator).toHaveCount(1);
-
-  await sp.scroller.evaluate((element) => {
-    element.scrollTop = element.scrollHeight;
-    element.dispatchEvent(new Event("scroll"));
-  });
-  await expect(unreadIndicator).toHaveCount(0);
   await expect(unreadDivider).toHaveCount(0);
+  await expect.poll(() => messageRequests).toBeGreaterThan(initialMessageRequests);
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("agentsview-read-progress")))
+    .toContain('"messageCount":50');
+});
+
+test("captures a visible read-progress divider", async ({ page }) => {
+  const artifactDir = process.env.PR_RENDER_ARTIFACT_DIR;
+  test.skip(
+    !process.env.PR_RENDER_LINT_PATH || !artifactDir,
+    "render proof requires PR_RENDER_LINT_PATH and PR_RENDER_ARTIFACT_DIR",
+  );
+  const [session] = createMockSessions(1, "read-progress-proof", () => "project");
+  session!.id = "read-progress-proof";
+  session!.message_count = 5;
+  await page.addInitScript(() => {
+    localStorage.setItem("agentsview-read-progress", JSON.stringify({
+      version: 1,
+      sessions: {
+        "read-progress-proof": { ordinal: 2, messageCount: 3 },
+      },
+    }));
+  });
+  await page.route(
+    sessionsRoutePattern,
+    handleSessionsRoute([{ sessions: [session!], project: null }]),
+  );
+  await page.route(
+    "**/api/v1/sessions/read-progress-proof/messages*",
+    async (route) => route.fulfill({
+      json: { messages: makeMessages(5), count: 5 },
+    }),
+  );
+
+  const sessions = new SessionsPage(page);
+  await sessions.goto();
+  await sessions.selectFirstSession();
+  const divider = page.locator(".read-progress-divider");
+  await expect(divider).toBeVisible();
+
+  const lint: Record<number, unknown> = {};
+  for (const width of [1280, 768, 400]) {
+    await page.setViewportSize({ width, height: 720 });
+    await expect(divider).toBeVisible();
+    lint[width] = {
+      sidebar: await page.evaluate(renderLintSnippet(".session-list-scroll")),
+      transcript: await page.evaluate(renderLintSnippet(".message-list-scroll")),
+    };
+    expect(lint[width]).toEqual({ sidebar: [], transcript: [] });
+    await page.screenshot({
+      path: path.join(artifactDir, `agentsview-T1057-2-after-${width}.png`),
+    });
+  }
+  await page.screenshot({
+    path: path.join(artifactDir, "agentsview-T1057-2-after.png"),
+  });
+  console.log(`render lint ${JSON.stringify(lint)}`);
 });

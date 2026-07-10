@@ -46,7 +46,12 @@ function readStoredMarkers(): Record<string, ReadProgressMarker> {
     const raw = local.getItem(STORAGE_KEY);
     if (!raw) return {};
     const stored = JSON.parse(raw) as Partial<StoredReadProgress>;
-    if (stored.version !== 1 || !stored.sessions || typeof stored.sessions !== "object") {
+    if (
+      stored.version !== 1 ||
+      !stored.sessions ||
+      typeof stored.sessions !== "object" ||
+      Array.isArray(stored.sessions)
+    ) {
       return {};
     }
     return Object.fromEntries(

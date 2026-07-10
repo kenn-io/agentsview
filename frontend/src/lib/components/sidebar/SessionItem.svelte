@@ -146,9 +146,12 @@
   );
 
   let isStarred = $derived(starred.isStarred(session.id));
-  let hasUnread = $derived(
-    readProgress.hasUnread(session.id, session.message_count),
-  );
+  let hasUnread = $derived.by(() => {
+    const group = !expanded && groupSessions ? groupSessions : [session];
+    return group.some((entry) =>
+      readProgress.hasUnread(entry.id, entry.message_count),
+    );
+  });
 
   let childCount = $derived(
     continuationCount > 1 ? continuationCount - 1 : 0,

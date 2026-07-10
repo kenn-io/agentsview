@@ -44,7 +44,10 @@ describe("ReadProgressStore", () => {
     expect(new ReadProgressStore().get("valid")).toBeNull();
     localStorage.setItem(
       "agentsview-read-progress",
-      JSON.stringify({ version: 1, sessions: [] }),
+      JSON.stringify({
+        version: 1,
+        sessions: [{ valid: { ordinal: 2, messageCount: 3 } }],
+      }),
     );
     expect(new ReadProgressStore().get("valid")).toBeNull();
   });

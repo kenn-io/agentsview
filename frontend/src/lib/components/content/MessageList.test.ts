@@ -165,3 +165,112 @@ describe("MessageList follow cancellation", () => {
     });
   });
 });
+describe("MessageList read progress", () => {
+  let component: ReturnType<typeof mount> | undefined;
+  let rafSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    messages.clear();
+    sessions.activeSessionId = "s1";
+    messages.sessionId = "s1";
+    messages.messages = [1, 2, 3, 4, 5].map(makeMessage);
+    messages.messageCount = 5;
+    ui.sortNewestFirst = false;
+    readProgress.clear("s1");
+    readProgress.baseline("s1", 3, 3);
+    virtualizerMock.scrollOffset = 0;
+    virtualizerMock.scrollRect.height = 300;
+    virtualizerMock.getVirtualItems.mockReturnValue(
+      [0, 1, 2, 3, 4].map((index) => ({
+        index,
+        key: `row-${index}`,
+        start: index * 100,
+        end: (index + 1) * 100,
+      })),
+    );
+    rafSpy = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((cb: FrameRequestCallback) => {
+        window.setTimeout(() => cb(performance.now()), 0);
+        return 1;
+      });
+  });
+
+  afterEach(() => {
+    if (component) unmount(component);
+    component = undefined;
+    rafSpy.mockRestore();
+    readProgress.clear("s1");
+    messages.clear();
+    sessions.activeSessionId = null;
+    ui.sortNewestFirst = false;
+    ui.showAllBlocks();
+    document.body.innerHTML = "";
+  });
+
+  it("places one divider at the next ordinal and clears it after it is visible", async () => {
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    expect(document.querySelectorAll(".read-progress-divider")).toHaveLength(1);
+    expect(document.body.textContent).toContain("New messages");
+
+    const scroller = document.querySelector<HTMLElement>(".message-list-scroll");
+    expect(scroller).not.toBeNull();
+    virtualizerMock.scrollOffset = 300;
+    scroller!.dispatchEvent(new Event("scroll"));
+    await vi.waitFor(() => {
+      expect(readProgress.get("s1")).toEqual({ ordinal: 5, messageCount: 5 });
+    });
+    await tick();
+
+    expect(document.querySelectorAll(".read-progress-divider")).toHaveLength(0);
+  });
+
+  it("separates unread and read ranges in newest first and filtered views", async () => {
+    messages.loading = true;
+    ui.sortNewestFirst = true;
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    expect(document.querySelectorAll(".read-progress-divider")).toHaveLength(1);
+    expect(document.querySelectorAll(".virtual-row")[2]?.textContent).toContain("Earlier messages");
+    expect(document.querySelectorAll(".virtual-row")[2]?.textContent).toContain("msg 3");
+
+    ui.sortNewestFirst = false;
+    ui.setBlockVisible("user", false);
+    await tick();
+
+    expect(document.querySelectorAll(".read-progress-divider")).toHaveLength(1);
+    expect(document.body.textContent).toContain("msg 5");
+  });
+
+  it("does not mark every submessage in a visible tool group as read", async () => {
+    messages.messages = [4, 5].map((ordinal) => ({
+      ...makeMessage(ordinal),
+      role: "assistant",
+      content: "",
+      content_length: 0,
+      has_tool_use: true,
+    }));
+    messages.messageCount = 6;
+    readProgress.clear("s1");
+    readProgress.baseline("s1", 3, 4);
+    virtualizerMock.getVirtualItems.mockReturnValue([{
+      index: 0,
+      key: "tool-group",
+      start: 0,
+      end: 100,
+    }]);
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    document.querySelector<HTMLElement>(".message-list-scroll")?.dispatchEvent(
+      new Event("scroll"),
+    );
+    await tick();
+
+    expect(readProgress.get("s1")).toEqual({ ordinal: 3, messageCount: 4 });
+  });
+});

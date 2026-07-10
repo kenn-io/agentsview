@@ -183,10 +183,8 @@
     for (const row of v.getVirtualItems()) {
       if (row.end <= top || row.start >= bottom) continue;
       const item = itemAt(row.index);
-      if (!item) continue;
-      for (const ordinal of item.ordinals) {
-        latestOrdinal = Math.max(latestOrdinal, ordinal);
-      }
+      if (!item || item.kind !== "message") continue;
+      latestOrdinal = Math.max(latestOrdinal, item.message.ordinal);
     }
     if (latestOrdinal >= 0) {
       readProgress.recordVisible(
@@ -240,14 +238,6 @@
 
     });
   }
-
-  $effect(() => {
-    const sessionId = messages.sessionId;
-    const loading = messages.loading;
-    const count = displayItemsAsc.length;
-    if (!sessionId || loading || count === 0) return;
-    requestAnimationFrame(recordVisibleProgress);
-  });
 
   function handleManualScrollIntent() {
     if (ui.followLatest) {
@@ -564,12 +554,24 @@
     resolveMessageLayout(ui.messageLayout, highlightQuery !== ""),
   );
 
-  let unreadStartOrdinal = $derived.by(() => {
+  let readProgressDivider = $derived.by(() => {
     const marker = readProgress.get(messages.sessionId ?? "");
     if (!marker) return null;
-    for (const item of displayItemsAsc) {
-      const ordinal = item.ordinals.find((value) => value > marker.ordinal);
-      if (ordinal !== undefined) return ordinal;
+    const items = ui.sortNewestFirst
+      ? [...displayItemsAsc].reverse()
+      : displayItemsAsc;
+    for (const item of items) {
+      const ordinal = item.ordinals.find((value) =>
+        ui.sortNewestFirst
+          ? value <= marker.ordinal
+          : value > marker.ordinal,
+      );
+      if (ordinal !== undefined) {
+        return {
+          ordinal,
+          label: ui.sortNewestFirst ? "Earlier messages" : "New messages",
+        };
+      }
     }
     return null;
   });
@@ -615,9 +617,9 @@
               ui.selectOrdinal(item.ordinals[0]!);
             }}
           >
-            {#if unreadStartOrdinal !== null && item.ordinals.includes(unreadStartOrdinal)}
-              <div class="read-progress-divider" role="separator" aria-label="Unread messages">
-                New messages
+            {#if readProgressDivider !== null && item.ordinals.includes(readProgressDivider.ordinal)}
+              <div class="read-progress-divider" role="separator" aria-label="Read progress boundary">
+                {readProgressDivider.label}
               </div>
             {/if}
             {#if item.kind === "tool-group"}

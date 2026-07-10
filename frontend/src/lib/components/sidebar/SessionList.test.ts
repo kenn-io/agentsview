@@ -91,6 +91,10 @@ describe("SessionList filter dropdown", () => {
     starred.ids = new Set();
     setLocale("en");
     localStorage.clear();
+    readProgress.clear("read-session");
+    readProgress.clear("neighbouring-session");
+    readProgress.clear("group-root");
+    readProgress.clear("group-child");
   });
 
   afterEach(() => {
@@ -107,6 +111,10 @@ describe("SessionList filter dropdown", () => {
     clientHeightSpy?.mockRestore();
     rafSpy?.mockRestore();
     vi.restoreAllMocks();
+    readProgress.clear("read-session");
+    readProgress.clear("neighbouring-session");
+    readProgress.clear("group-root");
+    readProgress.clear("group-child");
   });
 
   it("bounds the filter menu to the viewport and lets it scroll", async () => {
@@ -824,6 +832,32 @@ describe("SessionList visible hydration", () => {
     await tick();
 
     expect(loadMore).not.toHaveBeenCalled();
+  });
+
+  it("keeps a collapsed continuation unread when a child has newer output", async () => {
+    sessions.sessions = [
+      makeSession({
+        id: "group-root",
+        display_name: "Root",
+        message_count: 3,
+      }),
+      makeSession({
+        id: "group-child",
+        parent_session_id: "group-root",
+        display_name: "Child",
+        message_count: 5,
+      }),
+    ];
+    readProgress.baseline("group-root", 2, 3);
+    readProgress.baseline("group-child", 2, 3);
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    expect(
+      document.querySelector('[data-session-id="group-root"] .unread-indicator'),
+    ).not.toBeNull();
   });
 });
 
