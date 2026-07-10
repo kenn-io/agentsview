@@ -1889,6 +1889,46 @@ func TestRecallQueryTermsDropsQuestionBoilerplate(t *testing.T) {
 	assert.LessOrEqual(t, len(got), MaxRecallSearchTerms)
 }
 
+func TestQueryRecallEntriesPreselectsTermsScoredByRanker(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "test-agent")
+	_, err := d.InsertRecallEntry(RecallEntry{
+		ID:              "zzzz-working-target",
+		Type:            "fact",
+		Scope:           "project",
+		Status:          "accepted",
+		Title:           "Working agreement",
+		Body:            "The working agreement is recorded here.",
+		Project:         "test-agent",
+		SourceSessionID: "s1",
+	})
+	require.NoError(t, err)
+	for i := range MaxRecallEntryLimit {
+		_, err = d.InsertRecallEntry(RecallEntry{
+			ID:              fmt.Sprintf("filler-%03d", i),
+			Type:            "fact",
+			Scope:           "project",
+			Status:          "accepted",
+			Title:           "Unrelated archive note",
+			Body:            "This filler has no matching terms.",
+			Project:         "test-agent",
+			SourceSessionID: "s1",
+		})
+		require.NoError(t, err)
+	}
+
+	page, err := d.QueryRecallEntries(context.Background(), RecallQuery{
+		Text:    "working",
+		Project: "test-agent",
+		Limit:   1,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "zzzz-working-target", page.RecallEntries[0].ID)
+	assert.Contains(t, page.RecallEntries[0].MatchedTerms, "working")
+}
+
 func TestListRecallEntryTextCandidatesRetainsShortCriticalUITermMatch(t *testing.T) {
 	d := testDB(t)
 	requireRecallFTS(t, d)

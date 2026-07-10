@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -16,7 +15,7 @@ import (
 const (
 	DefaultRecallEntryLimit          = 50
 	MaxRecallEntryLimit              = 500
-	MaxRecallSearchTerms             = 12
+	MaxRecallSearchTerms             = corerecall.MaxScoringQueryTerms
 	recallFTS4PreselectLimit         = 50000
 	recallEvidenceFTS4PreselectLimit = 50000
 )
@@ -128,9 +127,6 @@ const recallBaseColsQualified = `recall_entries.id, recall_entries.type,
 	recall_entries.transferable, recall_entries.provenance_ok,
 	recall_entries.supersedes_entry_id, recall_entries.superseded_by_entry_id,
 	recall_entries.created_at, recall_entries.updated_at`
-
-var recallSearchTokenPattern = regexp.MustCompile(`[A-Za-z0-9_]+`)
-var recallQuotedTextPattern = regexp.MustCompile("`([^`]+)`|'([^']+)'|\"([^\"]+)\"")
 
 // ErrInvalidRecallQuery identifies contradictory or unsupported recall filters.
 var ErrInvalidRecallQuery = errors.New("invalid recall query")
@@ -1386,135 +1382,7 @@ func recallFTSUnavailable(err error) bool {
 }
 
 func recallQueryTerms(text string) []string {
-	queryText := corerecall.LexicalQueryText(text)
-	priority := recallQuotedQueryTerms(queryText)
-	raw := recallSearchTokenPattern.FindAllString(strings.ToLower(queryText), -1)
-	seen := make(map[string]struct{}, len(raw))
-	terms := make([]string, 0, len(raw))
-	for _, token := range priority {
-		if _, ok := seen[token]; ok {
-			continue
-		}
-		seen[token] = struct{}{}
-		terms = append(terms, token)
-	}
-	var rest []string
-	for _, token := range raw {
-		if !validRecallQueryTerm(token) {
-			continue
-		}
-		if _, ok := seen[token]; ok {
-			continue
-		}
-		seen[token] = struct{}{}
-		rest = append(rest, token)
-	}
-	sortRecallQueryTerms(rest)
-	terms = append(terms, rest...)
-	if len(terms) > MaxRecallSearchTerms {
-		terms = terms[:MaxRecallSearchTerms]
-	}
-	return terms
-}
-
-func recallQuotedQueryTerms(text string) []string {
-	var terms []string
-	for _, match := range recallQuotedTextPattern.FindAllStringSubmatch(text, -1) {
-		quoted := firstNonEmptyString(match[1:])
-		for _, token := range recallSearchTokenPattern.FindAllString(
-			strings.ToLower(quoted),
-			-1,
-		) {
-			if validRecallQueryTerm(token) {
-				terms = append(terms, token)
-			}
-		}
-	}
-	sortRecallQueryTerms(terms)
-	return terms
-}
-
-func validRecallQueryTerm(token string) bool {
-	if recallSearchStopwords[token] {
-		return false
-	}
-	return len(token) >= 3 || recallSearchShortToken(token)
-}
-
-func sortRecallQueryTerms(terms []string) {
-	sort.SliceStable(terms, func(i, j int) bool {
-		if len(terms[i]) != len(terms[j]) {
-			return len(terms[i]) > len(terms[j])
-		}
-		return terms[i] < terms[j]
-	})
-}
-
-func firstNonEmptyString(values []string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func recallSearchShortToken(token string) bool {
-	switch token {
-	case "go", "js", "ts", "py", "rs", "id":
-		return true
-	default:
-		return false
-	}
-}
-
-var recallSearchStopwords = map[string]bool{
-	"about":      true,
-	"accomplish": true,
-	"agent":      true,
-	"and":        true,
-	"answer":     true,
-	"are":        true,
-	"asked":      true,
-	"between":    true,
-	"contain":    true,
-	"contains":   true,
-	"first":      true,
-	"for":        true,
-	"final":      true,
-	"from":       true,
-	"given":      true,
-	"have":       true,
-	"help":       true,
-	"label":      true,
-	"labels":     true,
-	"mentions":   true,
-	"more":       true,
-	"name":       true,
-	"names":      true,
-	"phrases":    true,
-	"our":        true,
-	"past":       true,
-	"question":   true,
-	"retrieve":   true,
-	"second":     true,
-	"several":    true,
-	"short":      true,
-	"should":     true,
-	"specific":   true,
-	"task":       true,
-	"tell":       true,
-	"that":       true,
-	"the":        true,
-	"this":       true,
-	"trajectory": true,
-	"typically":  true,
-	"what":       true,
-	"when":       true,
-	"where":      true,
-	"which":      true,
-	"with":       true,
-	"working":    true,
+	return corerecall.ScoringQueryTerms(text)
 }
 
 func recallLimit(limit int) int {

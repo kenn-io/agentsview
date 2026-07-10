@@ -22,6 +22,14 @@ var errorPhrasePattern = regexp.MustCompile(
 var quotedPhrasePattern = regexp.MustCompile(
 	"`([^`]+)`|(?:^|\\s)'([^']+)'|\"([^\"]+)\"",
 )
+var scoringQuotedTextPattern = regexp.MustCompile(
+	"`([^`]+)`|'([^']+)'|\"([^\"]+)\"",
+)
+
+// MaxScoringQueryTerms bounds the lexical terms used by both candidate
+// retrieval and ranking. Keeping the limit here prevents the two stages from
+// assigning different meanings to the same query.
+const MaxScoringQueryTerms = 12
 
 type promptInjectionBaitPattern struct {
 	Reason  string
@@ -150,8 +158,7 @@ func Rank(entries []Entry, q Query) []Result {
 	}
 
 	lexicalQueryText := LexicalQueryText(q.Text)
-	rawQueryTokens := tokenize(lexicalQueryText)
-	queryTokens := scoringQueryTokens(rawQueryTokens)
+	queryTokens := scoringQueryTokens(q.Text)
 	candidates := eligibleEntries(entries, q)
 	idf := queryIDF(candidates, queryTokens)
 	temporalBoosts := temporalBoosts(
@@ -192,6 +199,56 @@ func Rank(entries []Entry, q Query) []Result {
 // retrieval, such as prompt-injection bait.
 func LexicalQueryText(text string) string {
 	return stripPromptInjectionBait(text)
+}
+
+// ScoringQueryTerms returns the canonical bounded lexical term set used for
+// candidate retrieval and ranking. Quoted terms are retained first, followed
+// by the most specific remaining terms.
+func ScoringQueryTerms(text string) []string {
+	text = LexicalQueryText(text)
+	seen := make(map[string]struct{})
+	terms := make([]string, 0, MaxScoringQueryTerms)
+	appendTerm := func(token string) {
+		if !validScoringQueryTerm(token) {
+			return
+		}
+		if _, ok := seen[token]; ok {
+			return
+		}
+		seen[token] = struct{}{}
+		terms = append(terms, token)
+	}
+	var quotedTerms []string
+	for _, match := range scoringQuotedTextPattern.FindAllStringSubmatch(text, -1) {
+		quoted := firstNonEmpty(match[1:])
+		for _, token := range orderedQueryTokens(quoted) {
+			if validScoringQueryTerm(token) {
+				quotedTerms = append(quotedTerms, token)
+			}
+		}
+	}
+	sortScoringQueryTerms(quotedTerms)
+	for _, token := range quotedTerms {
+		appendTerm(token)
+	}
+	var remaining []string
+	for _, token := range orderedQueryTokens(text) {
+		if !validScoringQueryTerm(token) {
+			continue
+		}
+		if _, ok := seen[token]; ok {
+			continue
+		}
+		remaining = append(remaining, token)
+	}
+	sortScoringQueryTerms(remaining)
+	for _, token := range remaining {
+		appendTerm(token)
+	}
+	if len(terms) > MaxScoringQueryTerms {
+		terms = terms[:MaxScoringQueryTerms]
+	}
+	return terms
 }
 
 // QueryUsesTemporalSignals reports whether ranking can score entries from
@@ -299,45 +356,105 @@ func queryIDF(entries []Entry, queryTokens map[string]struct{}) map[string]float
 	return idf
 }
 
-func scoringQueryTokens(raw map[string]struct{}) map[string]struct{} {
-	tokens := make(map[string]struct{}, len(raw))
-	for token := range raw {
-		if lexicalRankStopwords[token] {
-			continue
-		}
-		tokens[token] = struct{}{}
+func scoringQueryTokens(text string) map[string]struct{} {
+	terms := ScoringQueryTerms(text)
+	tokens := make(map[string]struct{}, len(terms))
+	for _, term := range terms {
+		tokens[term] = struct{}{}
 	}
 	return tokens
 }
 
+func validScoringQueryTerm(token string) bool {
+	if lexicalRankStopwords[token] {
+		return false
+	}
+	return len(token) >= 3 || scoringShortToken(token)
+}
+
+func sortScoringQueryTerms(terms []string) {
+	sort.SliceStable(terms, func(i, j int) bool {
+		if len(terms[i]) != len(terms[j]) {
+			return len(terms[i]) > len(terms[j])
+		}
+		return terms[i] < terms[j]
+	})
+}
+
+func scoringShortToken(token string) bool {
+	switch token {
+	case "go", "js", "ts", "py", "rs", "id":
+		return true
+	default:
+		return false
+	}
+}
+
 var lexicalRankStopwords = map[string]bool{
-	"a":         true,
-	"am":        true,
-	"and":       true,
-	"answer":    true,
-	"based":     true,
-	"be":        true,
-	"can":       true,
-	"custom":    true,
-	"directly":  true,
-	"false":     true,
-	"final":     true,
-	"following": true,
-	"given":     true,
-	"in":        true,
-	"is":        true,
-	"i":         true,
-	"of":        true,
-	"on":        true,
-	"or":        true,
-	"our":       true,
-	"should":    true,
-	"the":       true,
-	"there":     true,
-	"to":        true,
-	"true":      true,
-	"using":     true,
-	"where":     true,
+	"about":      true,
+	"accomplish": true,
+	"agent":      true,
+	"a":          true,
+	"am":         true,
+	"and":        true,
+	"answer":     true,
+	"are":        true,
+	"asked":      true,
+	"based":      true,
+	"be":         true,
+	"between":    true,
+	"can":        true,
+	"contain":    true,
+	"contains":   true,
+	"custom":     true,
+	"directly":   true,
+	"false":      true,
+	"final":      true,
+	"first":      true,
+	"following":  true,
+	"for":        true,
+	"from":       true,
+	"given":      true,
+	"have":       true,
+	"help":       true,
+	"in":         true,
+	"is":         true,
+	"i":          true,
+	"label":      true,
+	"labels":     true,
+	"mentions":   true,
+	"more":       true,
+	"name":       true,
+	"names":      true,
+	"of":         true,
+	"on":         true,
+	"or":         true,
+	"our":        true,
+	"past":       true,
+	"phrases":    true,
+	"question":   true,
+	"retrieve":   true,
+	"second":     true,
+	"several":    true,
+	"short":      true,
+	"should":     true,
+	"specific":   true,
+	"task":       true,
+	"tell":       true,
+	"that":       true,
+	"the":        true,
+	"there":      true,
+	"this":       true,
+	"to":         true,
+	"trajectory": true,
+	"true":       true,
+	"typically":  true,
+	"using":      true,
+	"what":       true,
+	"when":       true,
+	"where":      true,
+	"which":      true,
+	"with":       true,
 }
 
 func matchesContext(m Entry, q Query) bool {

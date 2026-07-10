@@ -719,6 +719,51 @@ func TestImportAcceptedRecallEntriesJSONLSupersedesExistingRecallEntry(t *testin
 	assert.Equal(t, "old", newRecallEntry.SupersedesEntryID)
 }
 
+func TestImportAcceptedRecallEntriesJSONLRejectsPlaceholderSupersession(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dry_run=%t", dryRun), func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "trusted-source", "agentsview")
+			_, err := d.InsertRecallEntry(RecallEntry{
+				ID:              "trusted-entry",
+				Type:            "fact",
+				Scope:           "project",
+				Status:          "accepted",
+				ReviewState:     "human_reviewed",
+				Title:           "Trusted retry policy",
+				Body:            "Retry flaky commands once.",
+				Project:         "agentsview",
+				SourceSessionID: "trusted-source",
+				ProvenanceOK:    true,
+			})
+			require.NoError(t, err)
+			input := strings.NewReader(`
+{"candidate_id":"placeholder-replacement","supersedes_entry_id":"trusted-entry","type":"fact","scope":"project","title":"Unverified retry policy","body":"Retry flaky commands three times.","project":"agentsview","session_id":"missing-source","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0}}
+`)
+
+			_, err = d.ImportAcceptedRecallEntriesJSONLWithOptions(
+				context.Background(), input, RecallImportOptions{DryRun: dryRun},
+			)
+
+			require.ErrorContains(
+				t, err,
+				"unverified recall import cannot supersede provenance-valid entry trusted-entry",
+			)
+			trusted, getErr := d.GetRecallEntry(context.Background(), "trusted-entry")
+			require.NoError(t, getErr)
+			require.NotNil(t, trusted)
+			assert.Equal(t, "accepted", trusted.Status)
+			assert.Empty(t, trusted.SupersededByEntryID)
+			assert.True(t, trusted.ProvenanceOK)
+			replacement, getErr := d.GetRecallEntry(
+				context.Background(), "placeholder-replacement",
+			)
+			require.NoError(t, getErr)
+			assert.Nil(t, replacement)
+		})
+	}
+}
+
 func TestImportAcceptedRecallEntriesJSONLRejectsAlreadySupersededTarget(t *testing.T) {
 	for _, dryRun := range []bool{false, true} {
 		t.Run(fmt.Sprintf("dry_run=%t", dryRun), func(t *testing.T) {

@@ -94,7 +94,9 @@ still must pass current session, evidence, and supersession validation.
 A replacement may supersede only an active accepted entry that has no existing
 successor. AgentsView archives that entry and links it to the replacement in the
 same transaction. This prevents two accepted replacements from branching from
-one historical entry.
+one historical entry. Imports that use placeholder sessions have unverified
+provenance: they may replace other unverified entries for evaluation, but cannot
+supersede a provenance-valid entry or remove it from trusted recall.
 
 Run the import command with `--dry-run` first. A write requires `--yes`, and a
 remote write also requires `--allow-remote-import`. Local import refuses the

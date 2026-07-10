@@ -250,6 +250,19 @@ func (db *DB) validateRecallImportDryRun(
 		}
 		recall.ProvenanceOK = false
 	}
+	if !opts.RequireExistingSessions {
+		projected := false
+		if recall.SupersedesEntryID != "" {
+			_, projected = projection.activeEntries[recall.SupersedesEntryID]
+		}
+		if !projected {
+			if err := rejectUnverifiedRecallImportTrustedSupersession(
+				ctx, tx, *recall,
+			); err != nil {
+				return false, err
+			}
+		}
+	}
 	if err := projection.validateSupersession(ctx, tx, *recall); err != nil {
 		return false, err
 	}
@@ -323,6 +336,38 @@ func validateRecallImportSupersessionWithQueryer(
 	)
 }
 
+func rejectUnverifiedRecallImportTrustedSupersession(
+	ctx context.Context,
+	queryer recallImportQueryer,
+	recall RecallEntry,
+) error {
+	if recall.SupersedesEntryID == "" {
+		return nil
+	}
+	var provenanceOK bool
+	err := queryer.QueryRowContext(ctx, `
+		SELECT provenance_ok
+		FROM recall_entries
+		WHERE id = ?
+	`, recall.SupersedesEntryID).Scan(&provenanceOK)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf(
+			"checking superseded entry %s provenance: %w",
+			recall.SupersedesEntryID, err,
+		)
+	}
+	if provenanceOK {
+		return fmt.Errorf(
+			"unverified recall import cannot supersede provenance-valid entry %s",
+			recall.SupersedesEntryID,
+		)
+	}
+	return nil
+}
+
 // importAcceptedRecallEntry verifies and binds evidence in the same serialized
 // writer transaction that inserts the entry. A concurrent transcript rewrite
 // can therefore either precede validation or reconcile the committed row; it
@@ -365,6 +410,13 @@ func (db *DB) importAcceptedRecallEntry(
 		}
 		if err := bindVerifiedRecallImportEvidenceWithQueryer(
 			ctx, tx, &recall,
+		); err != nil {
+			return false, err
+		}
+	}
+	if !opts.RequireExistingSessions {
+		if err := rejectUnverifiedRecallImportTrustedSupersession(
+			ctx, tx, recall,
 		); err != nil {
 			return false, err
 		}
