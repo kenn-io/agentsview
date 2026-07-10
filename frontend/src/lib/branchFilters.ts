@@ -1,6 +1,7 @@
 // Keep these in sync with internal/db branch token separators.
 export const BRANCH_TOKEN_SEP = "\u001f";
 export const BRANCH_LIST_SEP = "\u001e";
+export const NO_BRANCH_MATCH_TOKEN = "__agentsview_no_branch_match__";
 
 export function branchFilterToken(project: string, branch: string): string {
   return project + BRANCH_TOKEN_SEP + branch;

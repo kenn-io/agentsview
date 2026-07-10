@@ -639,6 +639,7 @@ func TestGetDailyUsageIncludesCursorUsageEvents(t *testing.T) {
 	require.Len(t, day.AgentBreakdowns, 1)
 	assert.Equal(t, "cursor", day.AgentBreakdowns[0].Agent)
 	assert.InDelta(t, 0.1566, day.AgentBreakdowns[0].Cost, 1e-9)
+	assert.Empty(t, day.BranchBreakdowns, "cursor-only usage has no branch attribution")
 	assert.Empty(t, result.Projects, "cursor-only usage should not emit project identities")
 	assert.NotContains(t, result.Projects, "")
 	assert.Equal(t, 0, result.SessionCounts.Total, "cursor rows should not count as sessions")

@@ -1340,12 +1340,13 @@ func (s *Store) GetDailyUsage(
 	defer rows.Close()
 
 	type accumKey struct {
-		date      string
-		project   string
-		agent     string
-		machine   string
-		model     string
-		gitBranch string
+		date             string
+		project          string
+		agent            string
+		machine          string
+		model            string
+		gitBranch        string
+		branchAttributed bool
 	}
 	type sessionCost struct {
 		estimated     map[accumKey]float64
@@ -1407,13 +1408,14 @@ func (s *Store) GetDailyUsage(
 		// requested, so a plain totals query still sums one row per
 		// (date, project, agent, model) instead of splitting by branch too.
 		gitBranch := ""
-		if f.Breakdowns {
+		branchAttributed := f.Breakdowns && r.usageSource != "cursor"
+		if branchAttributed {
 			gitBranch = r.gitBranch
 		}
 		key := accumKey{
 			date: date, project: r.project,
 			agent: r.agent, machine: r.machine, model: r.model,
-			gitBranch: gitBranch,
+			gitBranch: gitBranch, branchAttributed: branchAttributed,
 		}
 		b, ok := accum[key]
 		if !ok {
@@ -1674,10 +1676,12 @@ func (s *Store) GetDailyUsage(
 		db.AddUsageBucket(dm.projects, key.project, aggregateBucket)
 		db.AddUsageBucket(dm.agents, key.agent, aggregateBucket)
 		db.AddUsageBucket(dm.machines, key.machine, aggregateBucket)
-		db.AddUsageBucket(dm.branches, branchMapKey{
-			project: key.project,
-			branch:  key.gitBranch,
-		}, aggregateBucket)
+		if key.branchAttributed {
+			db.AddUsageBucket(dm.branches, branchMapKey{
+				project: key.project,
+				branch:  key.gitBranch,
+			}, aggregateBucket)
+		}
 	}
 
 	dateKeys := make([]string, 0, len(days))

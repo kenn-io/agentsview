@@ -3460,20 +3460,21 @@ func duckUsageCTEFromRaw(
 }
 
 type duckUsageAggregateRow struct {
-	date          string
-	sessionID     string
-	project       string
-	agent         string
-	machine       string
-	model         string
-	gitBranch     string
-	displayName   string
-	startedAt     string
-	inputTok      int
-	outputTok     int
-	cacheCr       int
-	cacheRd       int
-	billableInput int
+	date             string
+	sessionID        string
+	project          string
+	agent            string
+	machine          string
+	model            string
+	gitBranch        string
+	branchAttributed bool
+	displayName      string
+	startedAt        string
+	inputTok         int
+	outputTok        int
+	cacheCr          int
+	cacheRd          int
+	billableInput    int
 	// Output-rate billable tokens. SQL folds reasoning-only rows into this
 	// value before grouping because reasoning is otherwise a row-level choice.
 	billableOutput        int
@@ -3614,18 +3615,21 @@ func (s *Store) dailyUsageAggregateRows(
 	machineGroup := ""
 	machineOrder := ""
 	branchSelect := "'' AS git_branch"
+	branchAttributedSelect := "FALSE AS branch_attributed"
 	branchGroup := ""
 	branchOrder := ""
 	if f.Breakdowns {
 		machineSelect = "machine"
 		machineGroup = ", machine"
 		machineOrder = ", machine ASC"
-		branchSelect = "git_branch"
-		branchGroup = ", git_branch"
-		branchOrder = ", git_branch ASC"
+		branchSelect = "CASE WHEN source = 'cursor' THEN '' ELSE git_branch END AS git_branch"
+		branchAttributedSelect = "source != 'cursor' AS branch_attributed"
+		branchGroup = ", CASE WHEN source = 'cursor' THEN '' ELSE git_branch END, source != 'cursor'"
+		branchOrder = ", git_branch ASC, branch_attributed ASC"
 	}
 	query := cte + `
 		SELECT session_id, local_date, project, agent, ` + machineSelect + `, model, ` + branchSelect + `,
+			` + branchAttributedSelect + `,
 			SUM(input_tokens_norm) AS input_tokens,
 			SUM(output_tokens_norm) AS output_tokens,
 			SUM(cache_create_norm) AS cache_creation_tokens,
@@ -3655,7 +3659,8 @@ func (s *Store) dailyUsageAggregateRows(
 	for rows.Next() {
 		var r duckUsageAggregateRow
 		if err := rows.Scan(
-			&r.sessionID, &r.date, &r.project, &r.agent, &r.machine, &r.model, &r.gitBranch,
+			&r.sessionID, &r.date, &r.project, &r.agent, &r.machine, &r.model,
+			&r.gitBranch, &r.branchAttributed,
 			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheRd,
 			&r.billableInput, &r.billableOutput, &r.billableReason,
 			&r.billableCacheCr, &r.billableCacheRd,
@@ -3682,12 +3687,13 @@ func (s *Store) GetDailyUsage(
 		return db.DailyUsageResult{}, err
 	}
 	type usageAccumKey struct {
-		date      string
-		project   string
-		agent     string
-		machine   string
-		model     string
-		gitBranch string
+		date             string
+		project          string
+		agent            string
+		machine          string
+		model            string
+		gitBranch        string
+		branchAttributed bool
 	}
 	accum := map[usageAccumKey]*db.UsageBucket{}
 	type sessionCost struct {
@@ -3701,8 +3707,13 @@ func (s *Store) GetDailyUsage(
 	totalSavings := 0.0
 	for _, r := range rows {
 		key := usageAccumKey{
-			date: r.date, project: r.project, agent: r.agent,
-			machine: r.machine, model: r.model, gitBranch: r.gitBranch,
+			date:             r.date,
+			project:          r.project,
+			agent:            r.agent,
+			machine:          r.machine,
+			model:            r.model,
+			gitBranch:        r.gitBranch,
+			branchAttributed: r.branchAttributed,
 		}
 		if r.project != "" {
 			projectLabels[r.project] = true
@@ -3832,10 +3843,12 @@ func (s *Store) GetDailyUsage(
 			db.AddUsageBucket(day.projects, key.project, aggregateBucket)
 			db.AddUsageBucket(day.agents, key.agent, aggregateBucket)
 			db.AddUsageBucket(day.machines, key.machine, aggregateBucket)
-			db.AddUsageBucket(day.branches, branchMapKey{
-				project: key.project,
-				branch:  key.gitBranch,
-			}, aggregateBucket)
+			if key.branchAttributed {
+				db.AddUsageBucket(day.branches, branchMapKey{
+					project: key.project,
+					branch:  key.gitBranch,
+				}, aggregateBucket)
+			}
 		}
 	}
 

@@ -706,12 +706,15 @@ describe("UsageStore session filter params", () => {
       expect.objectContaining({ gitBranch: tokenB }),
     );
 
-    // A stale local selection with no overlap defers to the sidebar
-    // filter instead of silently emptying every chart.
+    // A stale local selection with no overlap stays active and
+    // sends a fail-closed branch token, so the charts show no data
+    // instead of ignoring the visible local selection.
     usage.selectedGitBranch = "proj-c\u001ffeat";
     await usage.fetchAll();
     expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
-      expect.objectContaining({ gitBranch: `${tokenA}\u001e${tokenB}` }),
+      expect.objectContaining({
+        gitBranch: "__agentsview_no_branch_match__",
+      }),
     );
   });
 

@@ -16,7 +16,10 @@ import { sessions } from "./sessions.svelte.js";
 import { sync } from "./sync.svelte.js";
 import { perf, type PerfEntryStatus } from "./perf.svelte.js";
 import { rollingRange, today } from "../utils/dates.js";
-import { BRANCH_LIST_SEP } from "../branchFilters.js";
+import {
+  BRANCH_LIST_SEP,
+  NO_BRANCH_MATCH_TOKEN,
+} from "../branchFilters.js";
 import { toggleListValue } from "../utils/lists.js";
 import type { BranchInfo } from "../api/types/core.js";
 
@@ -338,9 +341,9 @@ class UsageStore {
 
   // The sidebar branch filter and the usage page's own selection are
   // both include lists but share one git_branch API param, so AND them
-  // by intersecting. A persisted local selection that no longer
-  // overlaps the sidebar's defers to the sidebar rather than silently
-  // emptying every chart.
+  // by intersecting. If both controls are active and their selections
+  // do not overlap, send a fail-closed token so the visible local
+  // selection is not silently ignored.
   private effectiveGitBranch(
     sidebarBranch: string,
   ): string | undefined {
@@ -353,7 +356,7 @@ class UsageStore {
       .filter((token) => sidebar.has(token));
     return both.length > 0
       ? both.join(BRANCH_LIST_SEP)
-      : sidebarBranch;
+      : NO_BRANCH_MATCH_TOKEN;
   }
 
   get pairwiseModelOptions(): string[] {
