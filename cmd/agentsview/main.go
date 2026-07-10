@@ -36,11 +36,12 @@ var (
 )
 
 const (
-	periodicSyncInterval  = 15 * time.Minute
-	telemetryPingInterval = 24 * time.Hour
-	unwatchedPollInterval = 2 * time.Minute
-	watcherDebounce       = 500 * time.Millisecond
-	recursiveWatchBudget  = 8192
+	periodicSyncInterval   = 15 * time.Minute
+	telemetryPingInterval  = 24 * time.Hour
+	unwatchedPollInterval  = 2 * time.Minute
+	watcherBatchDelay      = 500 * time.Millisecond
+	watcherSyncMinInterval = 5 * time.Second
+	recursiveWatchBudget   = 8192
 )
 
 func main() {
@@ -1024,7 +1025,12 @@ func startFileWatcher(
 	cfg config.Config, engine *sync.Engine, onChange func(paths []string),
 ) (stopWatcher func(), unwatchedDirs []string) {
 	t := time.Now()
-	watcher, err := sync.NewWatcher(watcherDebounce, onChange, cfg.WatchExcludePatterns)
+	watcher, err := sync.NewWatcherWithInterval(
+		watcherBatchDelay,
+		watcherSyncMinInterval,
+		onChange,
+		cfg.WatchExcludePatterns,
+	)
 	if err != nil {
 		log.Printf(
 			"warning: file watcher unavailable: %v"+
