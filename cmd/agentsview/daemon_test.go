@@ -1,0 +1,560 @@
+package main
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/kit/daemon"
+)
+
+type testDaemonLaunchLock struct {
+	unlocked bool
+}
+
+func (l *testDaemonLaunchLock) Unlock() error {
+	l.unlocked = true
+	return nil
+}
+
+func daemonCommandTestDeps(t *testing.T) (*daemonCommandDeps, *bytes.Buffer) {
+	t.Helper()
+	dir := t.TempDir()
+	out := new(bytes.Buffer)
+	deps := defaultDaemonCommandDeps()
+	deps.resolveDataDir = func() (string, error) { return dir, nil }
+	deps.mkdirAll = func(path string, mode os.FileMode) error {
+		assert.Equal(t, dir, path)
+		return nil
+	}
+	deps.loadConfig = func() (config.Config, error) {
+		return config.Config{DataDir: dir, DBPath: filepath.Join(dir, "sessions.db")}, nil
+	}
+	deps.loadReadOnlyConfig = deps.loadConfig
+	deps.acquireLaunchLock = func(string) (daemonLaunchLock, bool) {
+		return &testDaemonLaunchLock{}, true
+	}
+	deps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) { return nil, nil }
+	deps.statusRecords = func(string) ([]daemon.RuntimeRecord, error) { return nil, nil }
+	deps.isStarting = func(string) bool { return false }
+	deps.readStartupState = func(string) *startupState { return nil }
+	deps.startBackground = func(
+		cfg config.Config, args []string, opts serveReplacementOptions,
+		policy backgroundLaunchPolicy,
+	) (backgroundLaunchResult, error) {
+		return backgroundLaunchResult{
+			Runtime: &DaemonRuntime{
+				Record: daemon.RuntimeRecord{PID: 314},
+				Host:   "127.0.0.1", Port: 8080,
+			},
+			Started: true, LogPath: filepath.Join(dir, "serve.log"), childPID: 314,
+		}, nil
+	}
+	deps.waitContendedLaunch = func(string) daemonLaunchObservation {
+		return daemonLaunchObservation{LockHeld: true}
+	}
+	deps.stopTargetConfirmed = func(daemon.RuntimeRecord, string) bool { return true }
+	deps.stopProcess = func(daemon.RuntimeRecord, time.Duration) error { return nil }
+	deps.stopCaddy = func(daemon.RuntimeRecord) {}
+	deps.checkDataVersion = func(string) error { return nil }
+	deps.now = func() time.Time { return time.Unix(200, 0) }
+	return &deps, out
+}
+
+func executeDaemonCommand(
+	t *testing.T, deps daemonCommandDeps, out io.Writer, args ...string,
+) error {
+	t.Helper()
+	cmd := newDaemonCommandWithDeps(deps)
+	cmd.SetOut(out)
+	cmd.SetErr(out)
+	cmd.SetArgs(args)
+	return cmd.Execute()
+}
+
+func testWritableRecord(pid int, path string) daemon.RuntimeRecord {
+	return daemon.RuntimeRecord{
+		PID: pid, Service: daemonService, Version: "1.2.3",
+		Network: daemon.NetworkTCP, Address: fmt.Sprintf("127.0.0.1:%d", 8000+pid),
+		SourcePath: path,
+		StartedAt:  time.Unix(100, 0),
+		Metadata: map[string]string{
+			runtimeHost: "127.0.0.1", runtimePort: fmt.Sprint(8000 + pid),
+			runtimeAPIVersion:  fmt.Sprint(daemonAPIVersion),
+			runtimeDataVersion: fmt.Sprint(db.CurrentDataVersion()),
+		},
+	}
+}
+
+func TestDaemonCommandRegistrationAndSurface(t *testing.T) {
+	root := newRootCommand()
+	daemonCmd, _, err := root.Find([]string{"daemon"})
+	require.NoError(t, err)
+	require.Equal(t, "daemon", daemonCmd.Name())
+	assert.Equal(t, groupCore, daemonCmd.GroupID)
+
+	names := make(map[string]bool)
+	for _, cmd := range daemonCmd.Commands() {
+		names[cmd.Name()] = true
+		assert.Nil(t, cmd.Flags().Lookup("host"))
+		assert.Nil(t, cmd.Flags().Lookup("no-sync"))
+	}
+	assert.Equal(t, map[string]bool{
+		"restart": true, "start": true, "status": true, "stop": true,
+	}, names)
+
+	help, err := executeCommand(root, "--help")
+	require.NoError(t, err)
+	assert.Contains(t, help, "daemon")
+}
+
+func TestDaemonCommandRejectsArgumentsAndServeFlags(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	for _, subcommand := range []string{"start", "status", "stop", "restart"} {
+		t.Run(subcommand+" arg", func(t *testing.T) {
+			out.Reset()
+			err := executeDaemonCommand(t, *deps, out, subcommand, "extra")
+			require.Error(t, err)
+			assert.ErrorContains(t, err, "unknown command")
+		})
+		for _, flag := range []string{"--host", "--no-sync"} {
+			t.Run(subcommand+" "+flag, func(t *testing.T) {
+				out.Reset()
+				err := executeDaemonCommand(t, *deps, out, subcommand, flag)
+				require.Error(t, err)
+				assert.ErrorContains(t, err, "unknown flag")
+			})
+		}
+	}
+}
+
+func TestDaemonStartUsesConfigOnlyPolicyAndIsIdempotent(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	var gotArgs []string
+	var gotPolicy backgroundLaunchPolicy
+	deps.startBackground = func(
+		cfg config.Config, args []string, _ serveReplacementOptions,
+		policy backgroundLaunchPolicy,
+	) (backgroundLaunchResult, error) {
+		gotArgs = append([]string(nil), args...)
+		gotPolicy = policy
+		return backgroundLaunchResult{
+			Runtime: &DaemonRuntime{Record: daemon.RuntimeRecord{PID: 41}, Host: "127.0.0.1", Port: 9090},
+		}, nil
+	}
+
+	require.NoError(t, executeDaemonCommand(t, *deps, out, "start"))
+	assert.Equal(t, []string{"serve"}, gotArgs)
+	assert.True(t, gotPolicy.ConfigOnly)
+	assert.Equal(t, "daemon start", gotPolicy.Operation)
+	assert.Contains(t, out.String(), "already running")
+	assert.Contains(t, out.String(), "pid 41")
+}
+
+func TestDaemonStartReadOnlyOnlyStillStartsWriter(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	deps.statusRecords = func(string) ([]daemon.RuntimeRecord, error) {
+		rec := testWritableRecord(8, "/read-only.json")
+		rec.Metadata[runtimeReadOnly] = "true"
+		return []daemon.RuntimeRecord{rec}, nil
+	}
+	started := 0
+	originalStart := deps.startBackground
+	deps.startBackground = func(
+		cfg config.Config, args []string, opts serveReplacementOptions,
+		policy backgroundLaunchPolicy,
+	) (backgroundLaunchResult, error) {
+		started++
+		return originalStart(cfg, args, opts, policy)
+	}
+
+	require.NoError(t, executeDaemonCommand(t, *deps, out, "start"))
+	assert.Equal(t, 1, started)
+	assert.Contains(t, out.String(), "running")
+}
+
+func TestDaemonStartPersistentStartupNeverLaunches(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	deps.isStarting = func(string) bool { return true }
+	deps.readStartupState = func(string) *startupState {
+		return &startupState{PID: 77, StartedAt: time.Unix(100, 0), LogPath: "/tmp/serve.log", Phase: "sync"}
+	}
+	started := 0
+	deps.startBackground = func(config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+		started++
+		return backgroundLaunchResult{}, nil
+	}
+
+	err := executeDaemonCommand(t, *deps, out, "start")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "startup is still in progress")
+	assert.ErrorContains(t, err, "pid 77")
+	assert.ErrorContains(t, err, "/tmp/serve.log")
+	assert.ErrorContains(t, err, "verify")
+	assert.Equal(t, 0, started)
+}
+
+func TestDaemonStartLateStartupLockDoesNotReportSuccess(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	starting := false
+	deps.isStarting = func(string) bool { return starting }
+	deps.readStartupState = func(string) *startupState {
+		return &startupState{PID: 78, LogPath: "/tmp/late-serve.log"}
+	}
+	deps.startBackground = func(config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+		starting = true
+		return backgroundLaunchResult{}, nil
+	}
+
+	err := executeDaemonCommand(t, *deps, out, "start")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "startup is still in progress")
+	assert.ErrorContains(t, err, "pid 78")
+	assert.NotContains(t, out.String(), "pid 0")
+}
+
+func TestDaemonStartLaunchContentionTerminalStates(t *testing.T) {
+	tests := []struct {
+		name        string
+		observation daemonLaunchObservation
+		wantErr     string
+		wantOut     string
+	}{
+		{
+			name: "published writable",
+			observation: daemonLaunchObservation{LockHeld: true, Records: []daemon.RuntimeRecord{
+				testWritableRecord(21, "/runtime/21.json"),
+			}},
+			wantOut: "already running",
+		},
+		{
+			name: "persistent startup snapshot",
+			observation: daemonLaunchObservation{LockHeld: true, Starting: true, Snapshot: &startupState{
+				PID: 22, StartedAt: time.Unix(100, 0), LogPath: "/tmp/serve.log", Phase: "opening database",
+			}},
+			wantErr: "startup is still in progress",
+		},
+		{
+			name:        "persistent launch lock without snapshot",
+			observation: daemonLaunchObservation{LockHeld: true},
+			wantErr:     "launch is still in progress",
+		},
+		{
+			name:        "owner failed without publishing",
+			observation: daemonLaunchObservation{},
+			wantErr:     "startup failed",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deps, out := daemonCommandTestDeps(t)
+			loadCalls, startCalls := 0, 0
+			deps.acquireLaunchLock = func(string) (daemonLaunchLock, bool) { return nil, false }
+			deps.waitContendedLaunch = func(string) daemonLaunchObservation { return tt.observation }
+			deps.loadConfig = func() (config.Config, error) { loadCalls++; return config.Config{}, nil }
+			deps.startBackground = func(config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+				startCalls++
+				return backgroundLaunchResult{}, nil
+			}
+
+			err := executeDaemonCommand(t, *deps, out, "start")
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				assert.Contains(t, out.String(), tt.wantOut)
+			} else {
+				require.Error(t, err)
+				assert.ErrorContains(t, err, tt.wantErr)
+			}
+			assert.Equal(t, 0, loadCalls, "contender must not read or write config")
+			assert.Equal(t, 0, startCalls, "contender must never start a second writer")
+		})
+	}
+}
+
+func TestDaemonStatusRendersStoppedStartingReadOnlyAndIncompatible(t *testing.T) {
+	tests := []struct {
+		name   string
+		setup  func(*daemonCommandDeps)
+		wanted []string
+	}{
+		{name: "stopped", setup: func(*daemonCommandDeps) {}, wanted: []string{"No agentsview daemon is running"}},
+		{name: "starting", setup: func(d *daemonCommandDeps) {
+			d.isStarting = func(string) bool { return true }
+			d.readStartupState = func(string) *startupState {
+				return &startupState{PID: 9, StartedAt: time.Unix(100, 0), Phase: "sync", LogPath: "/tmp/log"}
+			}
+		}, wanted: []string{"starting", "pid:     9", "phase:   sync", "/tmp/log"}},
+		{name: "read only", setup: func(d *daemonCommandDeps) {
+			d.statusRecords = func(string) ([]daemon.RuntimeRecord, error) {
+				rec := testWritableRecord(10, "/runtime/10.json")
+				rec.Metadata[runtimeReadOnly] = "true"
+				return []daemon.RuntimeRecord{rec}, nil
+			}
+		}, wanted: []string{"running at", "mode:    read-only"}},
+		{name: "incompatible", setup: func(d *daemonCommandDeps) {
+			d.statusRecords = func(string) ([]daemon.RuntimeRecord, error) {
+				rec := testWritableRecord(11, "/runtime/11.json")
+				rec.Metadata[runtimeAPIVersion] = "0"
+				return []daemon.RuntimeRecord{rec}, nil
+			}
+			d.probeRecord = func(daemon.RuntimeRecord, string) bool { return true }
+		}, wanted: []string{"incompatible", "pid:     11", "API version"}},
+		{name: "running", setup: func(d *daemonCommandDeps) {
+			d.statusRecords = func(string) ([]daemon.RuntimeRecord, error) {
+				return []daemon.RuntimeRecord{testWritableRecord(12, "/runtime/12.json")}, nil
+			}
+			d.probeRecord = func(daemon.RuntimeRecord, string) bool { return true }
+		}, wanted: []string{"running at http://127.0.0.1:8012", "pid:     12", "version: 1.2.3", "uptime:"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deps, out := daemonCommandTestDeps(t)
+			tt.setup(deps)
+			require.NoError(t, executeDaemonCommand(t, *deps, out, "status"))
+			for _, wanted := range tt.wanted {
+				assert.Contains(t, out.String(), wanted)
+			}
+		})
+	}
+}
+
+func TestDaemonStatusListsEveryWriterAndSurfacesInspectionErrors(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	deps.statusRecords = func(string) ([]daemon.RuntimeRecord, error) {
+		return []daemon.RuntimeRecord{
+			testWritableRecord(31, "/runtime/31.json"),
+			testWritableRecord(32, "/runtime/32.json"),
+		}, nil
+	}
+	require.NoError(t, executeDaemonCommand(t, *deps, out, "status"))
+	assert.Contains(t, out.String(), "single-writer invariant")
+	assert.Contains(t, out.String(), "pid:     31")
+	assert.Contains(t, out.String(), "pid:     32")
+
+	out.Reset()
+	deps.statusRecords = func(string) ([]daemon.RuntimeRecord, error) { return nil, errors.New("store unavailable") }
+	err := executeDaemonCommand(t, *deps, out, "status")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "store unavailable")
+
+	deps.loadReadOnlyConfig = func() (config.Config, error) { return config.Config{}, errors.New("bad config") }
+	err = executeDaemonCommand(t, *deps, out, "status")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "bad config")
+}
+
+func TestDaemonStatusNotRespondingIsUseful(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	deps.statusRecords = func(string) ([]daemon.RuntimeRecord, error) {
+		return []daemon.RuntimeRecord{testWritableRecord(55, "/runtime/55.json")}, nil
+	}
+	deps.probeRecord = func(daemon.RuntimeRecord, string) bool { return false }
+	require.NoError(t, executeDaemonCommand(t, *deps, out, "status"))
+	assert.Contains(t, out.String(), "not responding")
+	assert.Contains(t, out.String(), "pid:     55")
+	assert.Contains(t, out.String(), "/runtime/55.json")
+}
+
+func TestDaemonStopPrevalidatesEveryWriterBeforeSignalling(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	records := []daemon.RuntimeRecord{
+		testWritableRecord(61, "/runtime/61.json"),
+		testWritableRecord(62, "/runtime/62.json"),
+	}
+	deps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) { return records, nil }
+	var prevalidated []int
+	deps.stopTargetConfirmed = func(rec daemon.RuntimeRecord, _ string) bool {
+		prevalidated = append(prevalidated, rec.PID)
+		return rec.PID != 61
+	}
+	var signalled []int
+	deps.stopProcess = func(rec daemon.RuntimeRecord, _ time.Duration) error {
+		signalled = append(signalled, rec.PID)
+		return nil
+	}
+
+	err := executeDaemonCommand(t, *deps, out, "stop")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "pid 61")
+	assert.ErrorContains(t, err, "/runtime/61.json")
+	assert.ErrorContains(t, err, "verify")
+	assert.Equal(t, []int{61, 62}, prevalidated, "every target must be checked before stop can return")
+	assert.Empty(t, signalled)
+}
+
+func TestDaemonStopStartingConfigFailureAndContentionSignalNobody(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*daemonCommandDeps)
+		want  string
+	}{
+		{name: "launch contention", setup: func(d *daemonCommandDeps) {
+			d.acquireLaunchLock = func(string) (daemonLaunchLock, bool) { return nil, false }
+		}, want: "launch lock"},
+		{name: "config failure", setup: func(d *daemonCommandDeps) {
+			d.loadConfig = func() (config.Config, error) { return config.Config{}, errors.New("bad config") }
+		}, want: "bad config"},
+		{name: "start lock with confirmed record", setup: func(d *daemonCommandDeps) {
+			d.isStarting = func(string) bool { return true }
+			d.readStartupState = func(string) *startupState { return &startupState{PID: 71, LogPath: "/tmp/serve.log"} }
+			d.writableRecords = func(string) ([]daemon.RuntimeRecord, error) {
+				return []daemon.RuntimeRecord{testWritableRecord(72, "/runtime/72.json")}, nil
+			}
+		}, want: "startup is still in progress"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deps, out := daemonCommandTestDeps(t)
+			tt.setup(deps)
+			signals := 0
+			deps.stopProcess = func(daemon.RuntimeRecord, time.Duration) error { signals++; return nil }
+			err := executeDaemonCommand(t, *deps, out, "stop")
+			require.Error(t, err)
+			assert.ErrorContains(t, err, tt.want)
+			assert.Zero(t, signals)
+		})
+	}
+}
+
+func TestDaemonStopMultipleWritersAndRepeatIsIdempotent(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	records := []daemon.RuntimeRecord{
+		testWritableRecord(81, "/runtime/81.json"),
+		testWritableRecord(82, "/runtime/82.json"),
+	}
+	deps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) { return records, nil }
+	var stopped, caddy []int
+	deps.stopProcess = func(rec daemon.RuntimeRecord, _ time.Duration) error { stopped = append(stopped, rec.PID); return nil }
+	deps.stopCaddy = func(rec daemon.RuntimeRecord) { caddy = append(caddy, rec.PID) }
+	require.NoError(t, executeDaemonCommand(t, *deps, out, "stop"))
+	assert.Equal(t, []int{81, 82}, stopped)
+	assert.Equal(t, []int{81, 82}, caddy)
+	assert.Contains(t, out.String(), "pid 81")
+	assert.Contains(t, out.String(), "pid 82")
+
+	records = nil
+	out.Reset()
+	require.NoError(t, executeDaemonCommand(t, *deps, out, "stop"))
+	assert.Contains(t, out.String(), "not running")
+}
+
+func TestDaemonRestartValidatesBeforeStoppingAndUsesFreshConfig(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	rec := testWritableRecord(91, "/runtime/91.json")
+	rec.Metadata[runtimeNoSync] = "true"
+	deps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) { return []daemon.RuntimeRecord{rec}, nil }
+	var order []string
+	deps.loadConfig = func() (config.Config, error) {
+		order = append(order, "config")
+		return config.Config{DataDir: t.TempDir(), DBPath: "/fresh/sessions.db", NoSync: true}, nil
+	}
+	deps.checkDataVersion = func(path string) error {
+		order = append(order, "data")
+		assert.Equal(t, "/fresh/sessions.db", path)
+		return nil
+	}
+	deps.stopProcess = func(daemon.RuntimeRecord, time.Duration) error { order = append(order, "stop"); return nil }
+	deps.startBackground = func(cfg config.Config, args []string, _ serveReplacementOptions, policy backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+		order = append(order, "start")
+		assert.True(t, cfg.NoSync, "loader result reaches config-only lower layer, which clears runtime NoSync")
+		assert.Equal(t, []string{"serve"}, args)
+		assert.True(t, policy.ConfigOnly)
+		assert.Equal(t, "daemon restart", policy.Operation)
+		return backgroundLaunchResult{Runtime: &DaemonRuntime{Record: daemon.RuntimeRecord{PID: 92}, Host: "127.0.0.1", Port: 8080}, Started: true, LogPath: "/fresh/serve.log"}, nil
+	}
+
+	require.NoError(t, executeDaemonCommand(t, *deps, out, "restart"))
+	assert.Equal(t, []string{"config", "data", "stop", "start"}, order)
+	assert.Contains(t, out.String(), "restarted")
+}
+
+func TestDaemonRestartStoppedStartsAndReadOnlySurvives(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	dir := runtimeTestDir(t)
+	rec := testWritableRecord(os.Getpid(), "")
+	rec.Metadata[runtimeReadOnly] = "true"
+	path, err := writeRuntimeRecordForTest(dir, rec)
+	require.NoError(t, err)
+	deps.resolveDataDir = func() (string, error) { return dir, nil }
+	deps.mkdirAll = func(path string, mode os.FileMode) error {
+		assert.Equal(t, dir, path)
+		return nil
+	}
+	deps.loadConfig = func() (config.Config, error) {
+		return config.Config{DataDir: dir, DBPath: filepath.Join(dir, "sessions.db")}, nil
+	}
+	deps.writableRecords = writableDaemonRecords
+	stopCalls := 0
+	deps.stopProcess = func(daemon.RuntimeRecord, time.Duration) error { stopCalls++; return nil }
+	require.NoError(t, executeDaemonCommand(t, *deps, out, "restart"))
+	assert.Zero(t, stopCalls)
+	assert.FileExists(t, path, "restart must preserve the read-only runtime")
+	assert.Contains(t, out.String(), "started (was not running)")
+}
+
+func TestDaemonRestartFailurePathsSignalNobody(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*daemonCommandDeps)
+		want  string
+	}{
+		{name: "data version", setup: func(d *daemonCommandDeps) {
+			d.checkDataVersion = func(string) error { return errors.New("data too new") }
+		}, want: "data too new"},
+		{name: "persistent start", setup: func(d *daemonCommandDeps) {
+			d.isStarting = func(string) bool { return true }
+			d.readStartupState = func(string) *startupState { return &startupState{PID: 111, LogPath: "/tmp/log"} }
+		}, want: "startup is still in progress"},
+		{name: "unconfirmed", setup: func(d *daemonCommandDeps) {
+			d.writableRecords = func(string) ([]daemon.RuntimeRecord, error) {
+				return []daemon.RuntimeRecord{testWritableRecord(112, "/runtime/112.json")}, nil
+			}
+			d.stopTargetConfirmed = func(daemon.RuntimeRecord, string) bool { return false }
+		}, want: "pid 112"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deps, out := daemonCommandTestDeps(t)
+			tt.setup(deps)
+			signals := 0
+			deps.stopProcess = func(daemon.RuntimeRecord, time.Duration) error { signals++; return nil }
+			err := executeDaemonCommand(t, *deps, out, "restart")
+			require.Error(t, err)
+			assert.ErrorContains(t, err, tt.want)
+			assert.Zero(t, signals)
+		})
+	}
+}
+
+func TestDaemonRestartChildFailureIncludesLogAndHeldLock(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	lock := &testDaemonLaunchLock{}
+	deps.acquireLaunchLock = func(string) (daemonLaunchLock, bool) { return lock, true }
+	deps.startBackground = func(config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+		assert.False(t, lock.unlocked, "restart must retain launch lock across stop/start gap")
+		return backgroundLaunchResult{LogPath: "/tmp/serve.log"}, errors.New("child exited")
+	}
+	err := executeDaemonCommand(t, *deps, out, "restart")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "child exited")
+	assert.ErrorContains(t, err, "/tmp/serve.log")
+	assert.True(t, lock.unlocked)
+}
+
+func TestDaemonStartConfigFailureReturnsError(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	deps.loadConfig = func() (config.Config, error) { return config.Config{}, errors.New("config invalid") }
+	err := executeDaemonCommand(t, *deps, out, "start")
+	require.Error(t, err)
+	assert.True(t, strings.Contains(err.Error(), "config invalid"))
+}

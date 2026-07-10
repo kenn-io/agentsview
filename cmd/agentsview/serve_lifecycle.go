@@ -5,8 +5,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -18,6 +20,49 @@ import (
 const serveStopGraceTimeout = 10 * time.Second
 
 var stopDaemonRuntimeForUpgrade = stopDaemonRuntimeForUpgradeImpl
+
+type daemonStopOperations struct {
+	confirmed func(daemon.RuntimeRecord, string) bool
+	stop      func(daemon.RuntimeRecord, time.Duration) error
+	cleanup   func(daemon.RuntimeRecord)
+}
+
+// stopWritableDaemonRecordsSafely prevalidates the identity of every target
+// before signalling any of them. This prevents a corrupt multi-writer runtime
+// set from being only partially stopped when one record is stale or its PID
+// has been reused.
+func stopWritableDaemonRecordsSafely(
+	w io.Writer,
+	cfg config.Config,
+	records []daemon.RuntimeRecord,
+	ops daemonStopOperations,
+) error {
+	var unconfirmed []string
+	for _, rec := range records {
+		if ops.confirmed(rec, cfg.AuthToken) {
+			continue
+		}
+		detail := fmt.Sprintf("pid %d", rec.PID)
+		if rec.SourcePath != "" {
+			detail += " (runtime record " + rec.SourcePath + ")"
+		}
+		unconfirmed = append(unconfirmed, detail)
+	}
+	if len(unconfirmed) > 0 {
+		return fmt.Errorf(
+			"cannot confirm every writable agentsview daemon: %s; no process was signalled; verify each process and terminate it manually before retrying",
+			strings.Join(unconfirmed, ", "),
+		)
+	}
+	for _, rec := range records {
+		if err := ops.stop(rec, serveStopGraceTimeout); err != nil {
+			return fmt.Errorf("stopping pid %d: %w", rec.PID, err)
+		}
+		ops.cleanup(rec)
+		fmt.Fprintf(w, "Stopped agentsview (pid %d).\n", rec.PID)
+	}
+	return nil
+}
 
 // runServeStatus reports whether a server owns this data dir, and where to
 // reach it. It always exits zero; the output distinguishes the states.
