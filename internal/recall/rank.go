@@ -70,7 +70,12 @@ var promptInjectionBaitPatterns = []promptInjectionBaitPattern{
 	{
 		Reason: "command_execution",
 		Pattern: regexp.MustCompile(
-			`(?im)^\s*(?:(?:body|trigger|snippet):\s*)?(?:run|execute)\b[^\n]*(?:curl|wget|rm\s+-rf|bash|sh|python3?|osascript|powershell)\b[^\n]*(?:\n|$)`,
+			`(?im)^\s*(?:(?:body|trigger|snippet):\s*)?(?:run|execute)\b` +
+				`[^\n]*(?:curl|wget|rm\s+-rf|bash|sh|python3?|osascript|powershell)\b` +
+				`[^\n]*(?:before\s+(?:answering|responding)|then\s+(?:answer|respond)|` +
+				`(?:reveal|print|dump|leak|exfiltrate)\b[^\n]*(?:system|developer)\s+prompt|` +
+				`(?:reveal|print|dump|leak|exfiltrate)\b[^\n]*(?:api\s*key|secret|token|password))` +
+				`[^\n]*(?:\n|$)`,
 		),
 	},
 	{

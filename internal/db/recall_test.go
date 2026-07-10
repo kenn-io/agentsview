@@ -1025,6 +1025,58 @@ func TestQueryRecallEntriesPromptInjectionOnlyReturnsNoResults(t *testing.T) {
 	assert.Empty(t, page.RecallEntries)
 }
 
+func TestQueryRecallEntriesAcceptsLegitimateCommandQueries(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	insertSession(t, d, "s1", "agentsview")
+	for _, entry := range []RecallEntry{
+		{
+			ID:              "python-tests",
+			Type:            "procedure",
+			Scope:           "project",
+			Status:          "accepted",
+			Title:           "Python test command",
+			Body:            "Run Python tests with pytest.",
+			Project:         "agentsview",
+			SourceSessionID: "s1",
+		},
+		{
+			ID:              "bash-script",
+			Type:            "procedure",
+			Scope:           "project",
+			Status:          "accepted",
+			Title:           "Bash release script",
+			Body:            "Execute the bash script for release checks.",
+			Project:         "agentsview",
+			SourceSessionID: "s1",
+		},
+	} {
+		_, err := d.InsertRecallEntry(entry)
+		require.NoError(t, err)
+	}
+
+	tests := []struct {
+		query  string
+		wantID string
+	}{
+		{query: "Run Python tests", wantID: "python-tests"},
+		{query: "Execute bash script", wantID: "bash-script"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			page, err := d.QueryRecallEntries(ctx, RecallQuery{
+				Text:    tt.query,
+				Project: "agentsview",
+				Limit:   1,
+			})
+
+			require.NoError(t, err)
+			require.Len(t, page.RecallEntries, 1)
+			assert.Equal(t, tt.wantID, page.RecallEntries[0].ID)
+		})
+	}
+}
+
 func TestQueryRecallEntriesFiltersBySourceRunID(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
