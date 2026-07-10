@@ -256,8 +256,8 @@ func serveIncompatibleDaemonStatusLines(
 		decision,
 	)
 	return append(lines,
-		"Run `agentsview serve --replace` to replace it, or "+
-			"`agentsview serve stop` to stop it first.",
+		"Run `agentsview daemon restart` to replace it, or "+
+			"`agentsview daemon stop` to stop it first.",
 	)
 }
 

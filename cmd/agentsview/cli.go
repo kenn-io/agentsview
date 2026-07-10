@@ -141,6 +141,10 @@ func newRootCommand() *cobra.Command {
 }
 
 func newServeCommand() *cobra.Command {
+	return newServeCommandWithDaemonDeps(defaultDaemonCommandDeps())
+}
+
+func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 	var background bool
 	var checkDataVersion bool
 	var replace bool
@@ -205,6 +209,7 @@ func newServeCommand() *cobra.Command {
 	config.RegisterServePFlags(cmd.Flags())
 	cmd.AddCommand(newServeStatusCommand())
 	cmd.AddCommand(newServeStopCommand())
+	cmd.AddCommand(newServeRestartCommand(deps))
 	return cmd
 }
 
@@ -236,6 +241,22 @@ func newServeStopCommand() *cobra.Command {
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
 			runServeStop(mustLoadConfig(cmd))
+		},
+	}
+}
+
+func newServeRestartCommand(deps daemonCommandDeps) *cobra.Command {
+	return &cobra.Command{
+		Use:   "restart",
+		Short: "Restart the writable SQLite background daemon",
+		Long: "Restart only the writable SQLite background daemon using settings " +
+			"from config.toml.\n\n" +
+			"Unlike `agentsview serve stop`, this command intentionally leaves " +
+			"read-only PostgreSQL and DuckDB servers running.",
+		SilenceUsage: true,
+		Args:         cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runDaemonRestart(cmd.OutOrStdout(), deps)
 		},
 	}
 }

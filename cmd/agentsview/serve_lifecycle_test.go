@@ -95,8 +95,8 @@ func TestRunServeStatusReportsIncompatibleWritableDaemon(t *testing.T) {
 	assert.Contains(t, out, "API version")
 	assert.Contains(t, out, "data version")
 	assert.Contains(t, out, "compatibility")
-	assert.Contains(t, out, "serve --replace")
-	assert.Contains(t, out, "serve stop")
+	assert.Contains(t, out, "agentsview daemon restart")
+	assert.Contains(t, out, "agentsview daemon stop")
 	assert.NotContains(t, out, "not responding")
 }
 
@@ -124,7 +124,7 @@ func TestRunServeStatusPrefersIncompatibleWritableOverReadOnly(t *testing.T) {
 
 	assert.Contains(t, out, "incompatible")
 	assert.Contains(t, out, strconv.Itoa(writablePID))
-	assert.Contains(t, out, "serve --replace")
+	assert.Contains(t, out, "agentsview daemon restart")
 	assert.NotContains(t, out, "mode:    read-only")
 }
 
@@ -241,6 +241,16 @@ func TestServeCommandHasLifecycleSubcommands(t *testing.T) {
 	}
 	assert.True(t, names["status"], "serve must expose a status subcommand")
 	assert.True(t, names["stop"], "serve must expose a stop subcommand")
+	assert.True(t, names["restart"], "serve must expose a restart subcommand")
+}
+
+func TestServeRestartHelpExplainsWriterOnlyAsymmetry(t *testing.T) {
+	out, err := executeCommand(newRootCommand(), "serve", "restart", "--help")
+	require.NoError(t, err)
+	assert.Contains(t, out, "writable SQLite background daemon")
+	assert.Contains(t, out, "config.toml")
+	assert.Contains(t, out, "agentsview serve stop")
+	assert.Contains(t, out, "read-only PostgreSQL and DuckDB servers")
 }
 
 func TestStopWritableDaemonsForUpdateStopsAllAndRestartsOne(t *testing.T) {

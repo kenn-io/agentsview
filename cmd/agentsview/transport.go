@@ -253,7 +253,7 @@ func ensureTransportContext(
 			return transport{}, errors.New(
 				"daemon autostart is disabled; direct SQLite reads are " +
 					"not supported for this command. Start a daemon with " +
-					"`agentsview serve --background` or unset " +
+					"`agentsview daemon start` or unset " +
 					"AGENTSVIEW_NO_DAEMON",
 			)
 		}

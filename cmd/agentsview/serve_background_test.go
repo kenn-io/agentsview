@@ -1026,7 +1026,7 @@ func TestEnsureBackgroundServeIncompatibleDaemonReturnsError(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, rt)
 	assert.Contains(t, err.Error(), "incompatible daemon")
-	assert.Contains(t, err.Error(), "serve stop")
+	assert.Contains(t, err.Error(), "agentsview daemon stop")
 }
 
 func TestEnsureBackgroundServeIgnoresIncompatibleReadOnlyDaemon(t *testing.T) {
@@ -1093,7 +1093,7 @@ func TestEnsureBackgroundServeLaunchLoserReportsIncompatibleDaemon(
 	require.Error(t, err)
 	assert.Nil(t, rt)
 	assert.Contains(t, err.Error(), "incompatible daemon")
-	assert.Contains(t, err.Error(), "serve stop")
+	assert.Contains(t, err.Error(), "agentsview daemon stop")
 }
 
 func TestEnsureBackgroundServeLaunchLoserWaitsThroughReplacementGap(

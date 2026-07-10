@@ -121,7 +121,7 @@ func TestAcquireWriteOwnerLockExcludesSecondOwner(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, second)
 	assertErrorContainsAll(t, err, writeOwnerLockPath(dataDir),
-		"agentsview serve stop")
+		"agentsview daemon stop")
 }
 
 func TestWriteOwnerLockReleaseAllowsNextOwner(t *testing.T) {
@@ -134,13 +134,13 @@ func TestWriteOwnerLockReleaseAllowsNextOwner(t *testing.T) {
 	require.NoError(t, second.Close())
 }
 
-func TestWriteOwnerLockErrorMentionsServeStop(t *testing.T) {
+func TestWriteOwnerLockErrorMentionsDaemonStop(t *testing.T) {
 	dataDir := t.TempDir()
 
 	holdWriteOwnerLockForTest(t, dataDir)
 
 	_, err := tryAcquireWriteOwnerLock(dataDir)
-	assertErrorContainsAll(t, err, "agentsview serve stop", "idle timeout")
+	assertErrorContainsAll(t, err, "agentsview daemon stop", "idle timeout")
 }
 
 func TestOpenWriteDBRefusesSecondOwner(t *testing.T) {
@@ -168,7 +168,7 @@ func TestOpenWriteDBRefusesLiveWritableRuntime(t *testing.T) {
 	t.Cleanup(func() { RemoveDaemonRuntime(dataDir) })
 
 	assertOpenWriteDBRefused(t, cfg, "refusing to write directly",
-		"agentsview serve stop")
+		"agentsview daemon stop")
 }
 
 func TestOpenWriteDBAllowsStartupLockHeldByCurrentServe(t *testing.T) {
@@ -185,7 +185,7 @@ func TestOpenWriteDBRefusesExternalStartupLock(t *testing.T) {
 	holdExternalStartupLockForTest(t, dataDir)
 
 	assertOpenWriteDBRefused(t, cfg, "daemon is starting",
-		"refusing to write directly")
+		"refusing to write directly", "agentsview daemon stop")
 }
 
 func TestOpenWriteDBRefusesBackgroundLaunchLock(t *testing.T) {
@@ -193,7 +193,7 @@ func TestOpenWriteDBRefusesBackgroundLaunchLock(t *testing.T) {
 	holdBackgroundLaunchLockForTest(t, dataDir)
 
 	assertOpenWriteDBRefused(t, cfg, "daemon launch is in progress",
-		"refusing to write directly")
+		"refusing to write directly", "agentsview daemon stop")
 }
 
 func TestOpenWriteDBAllowsBackgroundChildWithLaunchLock(t *testing.T) {

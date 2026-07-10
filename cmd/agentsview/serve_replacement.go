@@ -82,7 +82,7 @@ func prepareForegroundServeDaemon(
 			releaseReplacementLock()
 			return false, noRelease, fmt.Errorf(
 				"agentsview serve startup is already in progress; " +
-					"wait for it to finish or run `agentsview serve status`",
+					"wait for it to finish or run `agentsview daemon status`",
 			)
 		}
 		fmt.Println("Replacing agentsview daemon")
@@ -118,7 +118,7 @@ func acquireForegroundServeLaunchLock(cfg config.Config) (func(), error) {
 	if !ok {
 		return nil, fmt.Errorf(
 			"agentsview serve --background is already in progress; " +
-				"wait for it to finish or run `agentsview serve status`",
+				"wait for it to finish or run `agentsview daemon status`",
 		)
 	}
 	path := backgroundLaunchLockPath(cfg.DataDir)
@@ -304,17 +304,18 @@ func serveDaemonConflictLines(decision serveReplacementDecision) []string {
 	switch decision.Action {
 	case serveReplacementRefuse:
 		return append(lines,
-			"Run `agentsview serve --replace` to replace it, or "+
-				"`agentsview serve stop` to stop it first.",
+			"Run `agentsview daemon restart` to restart it from config.toml, "+
+				"`agentsview serve --replace` to replace it with these serve "+
+				"flags, or `agentsview daemon stop` to stop it first.",
 		)
 	case serveReplacementUseExisting:
 		return append(lines,
-			"Using the existing daemon. Run `agentsview serve stop` "+
+			"Using the existing daemon. Run `agentsview daemon stop` "+
 				"to stop it first.",
 		)
 	default:
 		return append(lines,
-			"Run `agentsview serve stop` to stop it first.",
+			"Run `agentsview daemon stop` to stop it first.",
 		)
 	}
 }
@@ -328,7 +329,7 @@ func serveDaemonReplacementLines(decision serveReplacementDecision) []string {
 		return lines
 	}
 	return append(lines,
-		"Run `agentsview serve stop` to stop it manually instead.",
+		"Run `agentsview daemon stop` to stop it manually instead.",
 	)
 }
 

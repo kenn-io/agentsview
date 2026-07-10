@@ -1082,7 +1082,7 @@ func TestSchemaUpgradeHint(t *testing.T) {
 		// The original error stays wrappable so logs keep the detail, and the
 		// hint names the command that actually runs the pending migration.
 		assert.ErrorIs(t, got, base)
-		assert.Contains(t, got.Error(), "agentsview serve --replace")
+		assert.Contains(t, got.Error(), "agentsview daemon restart")
 	})
 
 	t.Run("passes unrelated errors through unchanged", func(t *testing.T) {

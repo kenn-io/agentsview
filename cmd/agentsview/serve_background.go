@@ -395,7 +395,7 @@ func ensureBackgroundServe(
 		); err != nil {
 			return nil, fmt.Errorf(
 				"incompatible daemon is already running: %w; run "+
-					"`agentsview serve stop` before starting this version",
+					"`agentsview daemon stop` before starting this version",
 				err,
 			)
 		}
@@ -475,7 +475,7 @@ probeDaemon:
 		} else {
 			return nil, fmt.Errorf(
 				"incompatible daemon is already running: %w; run "+
-					"`agentsview serve stop` before starting this version",
+					"`agentsview daemon stop` before starting this version",
 				err,
 			)
 		}
@@ -521,7 +521,7 @@ probeDaemon:
 			} else {
 				return nil, fmt.Errorf(
 					"incompatible daemon is already running: %w; run "+
-						"`agentsview serve stop` before starting this version",
+						"`agentsview daemon stop` before starting this version",
 					err,
 				)
 			}
@@ -600,7 +600,7 @@ func waitForExternalServeStartup(
 	); rt != nil && err != nil {
 		return nil, true, fmt.Errorf(
 			"incompatible daemon is already running: %w; run "+
-				"`agentsview serve stop` before starting this version",
+				"`agentsview daemon stop` before starting this version",
 			err,
 		)
 	}

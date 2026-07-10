@@ -84,7 +84,7 @@ type writeOwnerLockHeldError struct {
 
 func (e writeOwnerLockHeldError) Error() string {
 	return fmt.Sprintf(
-		"write lock %s is held by another process; run `agentsview serve stop`, "+
+		"write lock %s is held by another process; run `agentsview daemon stop`, "+
 			"wait for the daemon idle timeout, or retry after the offline "+
 			"operation finishes",
 		e.path,

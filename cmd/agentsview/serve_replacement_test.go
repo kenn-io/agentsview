@@ -791,7 +791,7 @@ func TestServeDaemonReplacementLinesIncludeRuntimeDetails(t *testing.T) {
 	assert.Contains(t, lines, "binary version")
 	assert.Contains(t, lines, "API version")
 	assert.Contains(t, lines, "data version")
-	assert.Contains(t, lines, "serve stop")
+	assert.Contains(t, lines, "agentsview daemon stop")
 }
 
 func TestServeCommandHasReplaceFlag(t *testing.T) {

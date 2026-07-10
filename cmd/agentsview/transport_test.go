@@ -339,6 +339,7 @@ func TestEnsureTransport_ReadIntentNoDaemonEnvRefusesDirectRead(t *testing.T) {
 	_, err := ensureTransport(&cfg, transportIntentRead, 100*time.Millisecond)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "direct SQLite reads are not supported")
+	assert.Contains(t, err.Error(), "agentsview daemon start")
 }
 
 func TestEnsureTransport_ReadIntentUnreachableDaemonRefusesDirectRead(t *testing.T) {
@@ -463,6 +464,7 @@ func TestEnsureTransport_ReadIntentNoDaemonEnvRefusesOlderDaemon(
 	require.Error(t, err)
 	assert.Equal(t, transport{}, tr)
 	assert.Contains(t, err.Error(), "daemon restart required")
+	assert.Contains(t, err.Error(), "agentsview daemon restart")
 }
 
 func TestEnsureTransport_ReadIntentPreservesExplicitNoSyncWhenRestartingOlderDaemon(
@@ -1106,7 +1108,7 @@ func TestNewService_DirectIncompatibleRefusesWithoutOpeningDB(t *testing.T) {
 	assert.Nil(t, svc)
 	assert.Nil(t, cleanup)
 	assert.Contains(t, err.Error(), "daemon data version 52 is incompatible")
-	assert.Contains(t, err.Error(), "agentsview serve --replace")
+	assert.Contains(t, err.Error(), "agentsview daemon restart")
 	assert.NoFileExists(t, dbPath)
 }
 

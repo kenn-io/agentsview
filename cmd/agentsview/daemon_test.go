@@ -84,6 +84,17 @@ func executeDaemonCommand(
 	return cmd.Execute()
 }
 
+func executeServeCommand(
+	t *testing.T, deps daemonCommandDeps, out io.Writer, args ...string,
+) error {
+	t.Helper()
+	cmd := newServeCommandWithDaemonDeps(deps)
+	cmd.SetOut(out)
+	cmd.SetErr(out)
+	cmd.SetArgs(args)
+	return cmd.Execute()
+}
+
 func testWritableRecord(pid int, path string) daemon.RuntimeRecord {
 	return daemon.RuntimeRecord{
 		PID: pid, Service: daemonService, Version: "1.2.3",
@@ -540,6 +551,81 @@ func TestDaemonRestartStoppedStartsAndReadOnlySurvives(t *testing.T) {
 	assert.Zero(t, stopCalls)
 	assert.FileExists(t, path, "restart must preserve the read-only runtime")
 	assert.Contains(t, out.String(), "started (was not running)")
+}
+
+func TestServeRestartDelegatesToCanonicalWriterOnlyRestart(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	dir := runtimeTestDir(t)
+	rec := testWritableRecord(os.Getpid(), "")
+	rec.Metadata[runtimeReadOnly] = "true"
+	path, err := writeRuntimeRecordForTest(dir, rec)
+	require.NoError(t, err)
+	deps.resolveDataDir = func() (string, error) { return dir, nil }
+	deps.mkdirAll = func(path string, _ os.FileMode) error {
+		assert.Equal(t, dir, path)
+		return nil
+	}
+	deps.loadConfig = func() (config.Config, error) {
+		return config.Config{DataDir: dir, DBPath: filepath.Join(dir, "sessions.db")}, nil
+	}
+	deps.writableRecords = writableDaemonRecords
+	stopCalls := 0
+	deps.stopProcess = func(daemon.RuntimeRecord, time.Duration) error {
+		stopCalls++
+		return nil
+	}
+	var gotPolicy backgroundLaunchPolicy
+	deps.startBackground = func(
+		_ config.Config, args []string, _ serveReplacementOptions,
+		policy backgroundLaunchPolicy,
+	) (backgroundLaunchResult, error) {
+		assert.Equal(t, []string{"serve"}, args)
+		gotPolicy = policy
+		return backgroundLaunchResult{
+			Runtime: &DaemonRuntime{
+				Record: daemon.RuntimeRecord{PID: 315},
+				Host:   "127.0.0.1", Port: 8080,
+			},
+			Started: true,
+		}, nil
+	}
+
+	require.NoError(t, executeServeCommand(t, *deps, out, "restart"))
+	assert.Zero(t, stopCalls, "read-only servers must not be stopped")
+	assert.FileExists(t, path, "read-only runtime record must survive restart")
+	assert.True(t, gotPolicy.ConfigOnly)
+	assert.Equal(t, "daemon restart", gotPolicy.Operation)
+	assert.Contains(t, out.String(), "started (was not running)")
+}
+
+func TestServeRestartRejectsServeFlagsAndArguments(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "host", args: []string{"restart", "--host", "0.0.0.0"}},
+		{name: "no sync", args: []string{"restart", "--no-sync"}},
+		{name: "host before subcommand", args: []string{"--host", "0.0.0.0", "restart"}},
+		{name: "no sync before subcommand", args: []string{"--no-sync", "restart"}},
+		{name: "argument", args: []string{"restart", "extra"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deps, out := daemonCommandTestDeps(t)
+			starts := 0
+			deps.startBackground = func(
+				config.Config, []string, serveReplacementOptions,
+				backgroundLaunchPolicy,
+			) (backgroundLaunchResult, error) {
+				starts++
+				return backgroundLaunchResult{}, nil
+			}
+
+			err := executeServeCommand(t, *deps, out, tt.args...)
+			require.Error(t, err)
+			assert.Zero(t, starts)
+		})
+	}
 }
 
 func TestDaemonRestartFailurePathsSignalNobody(t *testing.T) {
