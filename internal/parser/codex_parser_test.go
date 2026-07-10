@@ -1568,6 +1568,29 @@ func TestParseCodexSession_EdgeCases(t *testing.T) {
 		assert.Equal(t, 1, sess.UserMessageCount)
 	})
 
+	t.Run("preserves prompt sharing a block with initial context", func(t *testing.T) {
+		initialContext := fmt.Sprintf(
+			`{"timestamp":%q,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":%q}]}}`,
+			tsEarlyS1,
+			"<recommended_plugins>\nplugin list\n</recommended_plugins>\n"+
+				"# AGENTS.md instructions for /tmp/project\n\n"+
+				"<INSTRUCTIONS>\nrepo rules\n</INSTRUCTIONS>\n\n"+
+				"Review the changes",
+		)
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("abc", "/tmp", "user", tsEarly),
+			initialContext,
+		)
+
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		require.Len(t, msgs, 1)
+		assert.Equal(t, "Review the changes", msgs[0].Content)
+		assert.Equal(t, "Review the changes", sess.FirstMessage)
+		assert.Equal(t, 1, sess.UserMessageCount)
+	})
+
 	t.Run("preserves user prompt after recommended plugins", func(t *testing.T) {
 		content := testjsonl.JoinJSONL(
 			testjsonl.CodexSessionMetaJSON("abc", "/tmp", "user", tsEarly),
@@ -1591,6 +1614,23 @@ func TestParseCodexSession_EdgeCases(t *testing.T) {
 		assert.Equal(t, "<recommended_plugins>later user text</recommended_plugins>", msgs[1].Content)
 		assert.Equal(t, "Fix the parser", sess.FirstMessage)
 		assert.Equal(t, 2, sess.UserMessageCount)
+	})
+
+	t.Run("finds recommended plugins after leading whitespace", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("abc", "/tmp", "user", tsEarly),
+			testjsonl.CodexMsgJSON(
+				"user",
+				"\n<recommended_plugins>plugin list</recommended_plugins>\nFix the parser",
+				tsEarlyS1,
+			),
+		)
+
+		sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+		require.NotNil(t, sess)
+		require.Len(t, msgs, 1)
+		assert.Equal(t, "Fix the parser", msgs[0].Content)
 	})
 
 	// Codex injects skill template content as role=user JSONL
