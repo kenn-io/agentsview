@@ -98,6 +98,30 @@ func TestGrokProviderFindSource(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestGrokProviderFirstPromptKeepsSessionVisibleWithoutNumMessages(t *testing.T) {
+	root := t.TempDir()
+	writeGrokFixtureFile(t, grokSummaryPath(root, "cwd-key", "sess-1"), `{
+		"summary": "Find source",
+		"firstPrompt": "Locate the Grok source",
+		"createdAt": "2026-07-08T10:00:00Z"
+	}`)
+
+	provider := newGrokTestProvider(t, root)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: sources[0],
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+
+	session := outcome.Results[0].Result.Session
+	assert.Equal(t, 1, session.MessageCount)
+	assert.Equal(t, 1, session.UserMessageCount)
+}
+
 func TestGrokProviderFingerprintTracksSessionFiles(t *testing.T) {
 	root := t.TempDir()
 	summary := grokSummaryPath(root, "cwd-key", "sess-1")

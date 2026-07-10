@@ -64,6 +64,7 @@ func ParseGrokSummary(
 	if firstPrompt != "" {
 		userMessageCount = 1
 	}
+	messageCount := max(summary.NumMessages, userMessageCount)
 	result := ParseResult{
 		Session: ParsedSession{
 			ID:                 "grok:" + rawID,
@@ -80,7 +81,7 @@ func ParseGrokSummary(
 			SessionName:         strings.TrimSpace(summary.Summary),
 			StartedAt:           startedAt,
 			EndedAt:             endedAt,
-			MessageCount:        max(summary.NumMessages, 0),
+			MessageCount:        messageCount,
 			UserMessageCount:    userMessageCount,
 			CountsAuthoritative: true,
 			File: FileInfo{
