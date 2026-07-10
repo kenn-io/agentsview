@@ -423,12 +423,15 @@
   // the URL with localStorage-restored filters.
   $effect(() => {
     const route = router.route;
+    const currentUrlSessionId = router.sessionId;
+    const filterParams = filtersToParams(sessions.filters);
+    const currentParams = router.params;
     untrack(() => {
       const action = resolveSessionRouteWriteBack({
         route,
-        currentUrlSessionId: router.sessionId,
-        filterParams: filtersToParams(sessions.filters),
-        currentParams: router.params,
+        currentUrlSessionId,
+        filterParams,
+        currentParams,
       });
       if (action.kind === "none") return;
       if (action.clearYoke) {
