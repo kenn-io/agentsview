@@ -344,51 +344,110 @@ func TestStopDaemonProcessKeepsRecordWhenProcessSurvives(t *testing.T) {
 		"runtime record must be kept when the daemon is still alive")
 }
 
-func TestRecordedDaemonStillPresent(t *testing.T) {
-	live, ok := processCreateTimeMillis(os.Getpid())
-	require.True(t, ok)
+func TestStopDaemonProcessDoesNotForceKillUnknownIdentity(t *testing.T) {
+	requirePOSIXSignals(t, "SIGTERM-ignore and SIGKILL behavior is POSIX-specific")
+	setStartProbeTickForTest(t, 10*time.Millisecond)
 
 	tests := []struct {
-		name     string
-		pid      int
-		recorded string
-		want     bool
+		name       string
+		createTime string
 	}{
-		{
-			name:     "exact match",
-			pid:      os.Getpid(),
-			recorded: strconv.FormatInt(live, 10),
-			want:     true,
-		},
-		{
-			name:     "proven mismatch",
-			pid:      os.Getpid(),
-			recorded: strconv.FormatInt(live+1, 10),
-			want:     false,
-		},
-		{name: "missing value", pid: os.Getpid(), want: true},
-		{name: "malformed value", pid: os.Getpid(), recorded: "not-a-time", want: true},
-		{name: "zero value", pid: os.Getpid(), recorded: "0", want: true},
-		{name: "negative value", pid: os.Getpid(), recorded: "-1", want: true},
-		{
-			name:     "live lookup unavailable",
-			pid:      deadPID(t),
-			recorded: "1234",
-			want:     true,
-		},
+		{name: "missing"},
+		{name: "malformed", createTime: "not-a-time"},
+		{name: "zero", createTime: "0"},
+		{name: "negative", createTime: "-1"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := daemon.RuntimeRecord{
-				PID: tt.pid,
-				Metadata: map[string]string{
-					runtimeCreateTime: tt.recorded,
-				},
+			dir := runtimeTestDir(t)
+			pid, reaped := startReapedTERMIgnoringProcess(t)
+			path, err := writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
+				PID:      pid,
+				Network:  daemon.NetworkTCP,
+				Address:  "127.0.0.1:1",
+				Metadata: map[string]string{runtimeCreateTime: tt.createTime},
+			})
+			require.NoError(t, err)
+
+			err = stopDaemonProcess(onlyLiveRuntimeRecord(t, dir), 50*time.Millisecond)
+			assert.Error(t, err)
+			assert.ErrorContains(t, err, "identity")
+			assert.True(t, daemon.ProcessAlive(pid),
+				"unknown identity must not authorize SIGKILL")
+			select {
+			case <-reaped:
+				assert.Fail(t, "unknown identity process was killed")
+			default:
 			}
-			assert.Equal(t, tt.want, recordedDaemonStillPresent(rec))
+			assert.FileExists(t, path,
+				"unknown identity record must remain for manual recovery")
 		})
 	}
+}
+
+func TestStopDaemonProcessForceKillsMatchedIdentity(t *testing.T) {
+	requirePOSIXSignals(t, "SIGTERM-ignore and SIGKILL behavior is POSIX-specific")
+	setStartProbeTickForTest(t, 10*time.Millisecond)
+	dir := runtimeTestDir(t)
+	pid, reaped := startReapedTERMIgnoringProcess(t)
+	createTime, ok := processCreateTimeMillis(pid)
+	require.True(t, ok)
+	path, err := writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
+		PID:     pid,
+		Network: daemon.NetworkTCP,
+		Address: "127.0.0.1:1",
+		Metadata: map[string]string{
+			runtimeCreateTime: strconv.FormatInt(createTime, 10),
+		},
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, stopDaemonProcess(
+		onlyLiveRuntimeRecord(t, dir), 50*time.Millisecond,
+	))
+	<-reaped
+	assert.False(t, daemon.ProcessAlive(pid))
+	assertPathRemoved(t, path,
+		"matched identity record should be removed after force kill")
+}
+
+func TestStopDaemonProcessKeepsRecordWhenIdentityBecomesUnknownAfterForceKill(
+	t *testing.T,
+) {
+	requirePOSIXSignals(t, "relies on POSIX zombie semantics for ProcessAlive")
+	setStartProbeTickForTest(t, 10*time.Millisecond)
+	dir := runtimeTestDir(t)
+	pid := startTERMIgnoringProcess(t)
+	path, err := writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
+		PID:      pid,
+		Network:  daemon.NetworkTCP,
+		Address:  "127.0.0.1:1",
+		Metadata: map[string]string{runtimeCreateTime: "1234"},
+	})
+	require.NoError(t, err)
+	rec := onlyLiveRuntimeRecord(t, dir)
+
+	identityCalls := 0
+	identityState := func(gotPID int, recorded string) processCreateTimeState {
+		assert.Equal(t, pid, gotPID)
+		assert.Equal(t, "1234", recorded)
+		identityCalls++
+		if identityCalls == 1 {
+			return processCreateTimeMatch
+		}
+		return processCreateTimeUnknown
+	}
+
+	err = stopDaemonProcessWithIdentity(
+		rec, 50*time.Millisecond, identityState,
+	)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "identity")
+	assert.ErrorContains(t, err, "after force kill")
+	assert.Equal(t, 2, identityCalls)
+	assert.FileExists(t, path,
+		"unknown post-kill identity must preserve the runtime record")
 }
 
 func TestStopDaemonProcessRemovesRecordWhenPIDReused(t *testing.T) {

@@ -60,9 +60,43 @@ func startSleepProcess(t *testing.T) int {
 // a graceful stop and drives the force-kill escalation path.
 func startTERMIgnoringProcess(t *testing.T) int {
 	t.Helper()
-	return startProcessKilledOnCleanup(
-		t, exec.Command("sh", "-c", "trap '' TERM; sleep 60"),
-	)
+	cmd := exec.Command("sh", "-c", "trap '' TERM; echo ready; exec sleep 60")
+	stdout, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, cmd.Start())
+	ready, err := bufio.NewReader(stdout).ReadString('\n')
+	require.NoError(t, err)
+	require.Equal(t, "ready", strings.TrimSpace(ready))
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	return cmd.Process.Pid
+}
+
+// startReapedTERMIgnoringProcess starts a child that has installed its SIGTERM
+// disposition before returning. The child is reaped concurrently so a test can
+// distinguish a running process from one that stopDaemonProcess force-killed.
+func startReapedTERMIgnoringProcess(t *testing.T) (int, <-chan struct{}) {
+	t.Helper()
+	cmd := exec.Command("sh", "-c", "trap '' TERM; echo ready; exec sleep 60")
+	stdout, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, cmd.Start())
+	ready, err := bufio.NewReader(stdout).ReadString('\n')
+	require.NoError(t, err)
+	require.Equal(t, "ready", strings.TrimSpace(ready))
+
+	reaped := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(reaped)
+	}()
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		<-reaped
+	})
+	return cmd.Process.Pid, reaped
 }
 
 func startProcessKilledOnCleanup(t *testing.T, cmd *exec.Cmd) int {
@@ -923,6 +957,7 @@ func TestCompareProcessCreateTime(t *testing.T) {
 		{name: "negative recorded value", recorded: "-1", live: 1234, liveOK: true, want: processCreateTimeUnknown},
 		{name: "live lookup unavailable", recorded: "1234", live: 0, liveOK: false, want: processCreateTimeUnknown},
 		{name: "nonpositive live value", recorded: "1234", live: 0, liveOK: true, want: processCreateTimeUnknown},
+		{name: "negative live value", recorded: "1234", live: -1, liveOK: true, want: processCreateTimeUnknown},
 	}
 
 	for _, tt := range tests {
@@ -1066,6 +1101,48 @@ func TestWritableDaemonRecordsMigratesLegacyRuntime(t *testing.T) {
 	assert.Equal(t, endpoint.Port, daemonRuntimeFromRecord(records[0]).Port)
 	assert.Equal(t, runtimePathForTest(dir, os.Getpid()), records[0].SourcePath)
 	assertPathRemoved(t, legacyPath, "migrated legacy record should be removed")
+}
+
+func TestWritableDaemonRecordsReportsMismatchedRecordRemovalFailure(
+	t *testing.T,
+) {
+	requirePOSIXSignals(t, "directory removal permissions require POSIX semantics")
+	dir := runtimeTestDir(t)
+	liveCreateTime, ok := processCreateTimeMillis(os.Getpid())
+	require.True(t, ok)
+	path, err := writeRuntimeRecordForTest(dir, daemonRuntimeRecord(
+		"127.0.0.1", 9,
+		withRuntimeMetadata(
+			runtimeCreateTime, strconv.FormatInt(liveCreateTime+1, 10),
+		),
+	))
+	require.NoError(t, err)
+	stored, err := runtimeStore(dir).List()
+	require.NoError(t, err)
+	require.Len(t, stored, 1)
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	records, err := writableDaemonRecordsFromStore(
+		staticRuntimeRecordStore{records: stored},
+	)
+	assert.Nil(t, records)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "remove mismatched daemon runtime record")
+	assert.ErrorContains(t, err, path)
+	assert.FileExists(t, path, "failed cleanup must leave the record recoverable")
+}
+
+type staticRuntimeRecordStore struct {
+	records []daemon.RuntimeRecord
+}
+
+func (staticRuntimeRecordStore) CleanupDead() (int, error) {
+	return 0, nil
+}
+
+func (s staticRuntimeRecordStore) List() ([]daemon.RuntimeRecord, error) {
+	return s.records, nil
 }
 
 type cleanupFailingRuntimeRecordStore struct {

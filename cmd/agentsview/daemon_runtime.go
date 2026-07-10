@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -457,7 +458,13 @@ func writableDaemonRecordsFromStore(
 			rec.PID, rec.Metadata[runtimeCreateTime],
 		) == processCreateTimeMismatch {
 			if rec.SourcePath != "" {
-				_ = os.Remove(rec.SourcePath)
+				if err := os.Remove(rec.SourcePath); err != nil &&
+					!errors.Is(err, os.ErrNotExist) {
+					return nil, fmt.Errorf(
+						"remove mismatched daemon runtime record %s: %w",
+						rec.SourcePath, err,
+					)
+				}
 			}
 			continue
 		}

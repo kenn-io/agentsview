@@ -326,6 +326,16 @@ func caddyStopRecord(pid int, createTime string) daemon.RuntimeRecord {
 // wait is never killed. It cleans up the runtime record if the process leaves
 // one behind.
 func stopDaemonProcess(rec daemon.RuntimeRecord, grace time.Duration) error {
+	return stopDaemonProcessWithIdentity(
+		rec, grace, processCreateTimeStateForPID,
+	)
+}
+
+func stopDaemonProcessWithIdentity(
+	rec daemon.RuntimeRecord,
+	grace time.Duration,
+	identityStateForPID func(int, string) processCreateTimeState,
+) error {
 	proc, err := os.FindProcess(rec.PID)
 	if err != nil {
 		return fmt.Errorf("finding process: %w", err)
@@ -337,37 +347,65 @@ func stopDaemonProcess(rec daemon.RuntimeRecord, grace time.Duration) error {
 		removeRuntimeRecordFile(rec)
 		return nil
 	}
-	if !recordedDaemonStillPresent(rec) {
+	identityState := identityStateForPID(
+		rec.PID, rec.Metadata[runtimeCreateTime],
+	)
+	switch identityState {
+	case processCreateTimeMismatch:
 		// The PID is alive but its identity no longer matches the record: the
 		// daemon exited during the grace wait and the PID was reused by an
 		// unrelated process. Do not force-kill the impostor; just drop the
 		// stale record.
 		removeRuntimeRecordFile(rec)
 		return nil
+	case processCreateTimeUnknown:
+		return processIdentityUnconfirmedError(rec, "after graceful shutdown")
+	case processCreateTimeMatch:
+		// Only an exact identity match authorizes force-kill escalation.
+	default:
+		return processIdentityUnconfirmedError(rec, "after graceful shutdown")
 	}
 	if err := proc.Kill(); err != nil {
 		return fmt.Errorf("force killing: %w", err)
 	}
-	if !waitForProcessExit(rec.PID, grace) && recordedDaemonStillPresent(rec) {
+	if waitForProcessExit(rec.PID, grace) {
+		removeRuntimeRecordFile(rec)
+		return nil
+	}
+	identityState = identityStateForPID(
+		rec.PID, rec.Metadata[runtimeCreateTime],
+	)
+	switch identityState {
+	case processCreateTimeMismatch:
+		// The daemon exited after SIGKILL and the PID was reused. The record
+		// is now proven stale, so remove it without signalling the new owner.
+		removeRuntimeRecordFile(rec)
+		return nil
+	case processCreateTimeUnknown:
+		return processIdentityUnconfirmedError(rec, "after force kill")
+	case processCreateTimeMatch:
 		// The recorded daemon genuinely outlived even SIGKILL. Keep the
 		// runtime record so other commands still see it owns the DB rather
-		// than racing it. (A live PID whose identity no longer matches the
-		// record was reused after the daemon exited, so fall through and
-		// remove the stale record.)
+		// than racing it.
 		return fmt.Errorf("process %d still running after force kill", rec.PID)
+	default:
+		return processIdentityUnconfirmedError(rec, "after force kill")
 	}
-	removeRuntimeRecordFile(rec)
-	return nil
 }
 
-// recordedDaemonStillPresent reports whether rec.PID still belongs to the
-// recorded daemon. A valid mismatched create time proves that an unrelated
-// process reused the PID. Missing, invalid, or unavailable identity evidence is
-// treated conservatively so an ownership record is not removed on uncertainty.
-func recordedDaemonStillPresent(rec daemon.RuntimeRecord) bool {
-	return processCreateTimeStateForPID(
-		rec.PID, rec.Metadata[runtimeCreateTime],
-	) != processCreateTimeMismatch
+func processIdentityUnconfirmedError(
+	rec daemon.RuntimeRecord, phase string,
+) error {
+	if rec.SourcePath != "" {
+		return fmt.Errorf(
+			"process %d identity could not be confirmed %s; refusing further signaling; runtime record preserved at %s for manual recovery",
+			rec.PID, phase, rec.SourcePath,
+		)
+	}
+	return fmt.Errorf(
+		"process %d identity could not be confirmed %s; refusing further signaling; inspect the process manually",
+		rec.PID, phase,
+	)
 }
 
 // waitForProcessExit polls until pid is gone or timeout elapses. It reports
