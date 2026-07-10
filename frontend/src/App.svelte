@@ -39,6 +39,12 @@
 
 <script lang="ts">
   import { onMount, untrack } from "svelte";
+  import {
+    getLastRecentlyDeletedBatch,
+    resolveSessionRouteSync,
+    resolveSessionRouteWriteBack,
+    shouldBaselineReadProgress,
+  } from "./app-logic.js";
   import AppHeader from "./lib/components/layout/AppHeader.svelte";
   import ThreeColumnLayout from "./lib/components/layout/ThreeColumnLayout.svelte";
   import SessionBreadcrumb from "./lib/components/layout/SessionBreadcrumb.svelte";
@@ -81,11 +87,7 @@
   import { registerShortcuts } from "./lib/utils/keyboard.js";
   import { shouldAutoSwitchTranscriptModeToNormal } from "./lib/utils/transcript-mode.js";
   import {
-    filterParamsEqual,
     hasFilterParams,
-    sessionDateIntentCleared,
-    sessionRouteParamsForDetailExit,
-    sessionRouteParamsForFilters,
   } from "./lib/stores/sessionRouteParams.js";
 
   let globalAuthToken: string = $state("");
@@ -176,8 +178,13 @@
     const latestDisplayOrdinal = messages.latestDisplayOrdinal;
     const latestDisplayContentLength = messages.latestDisplayContentLength;
     untrack(() => {
-      if (!id || id !== messageSessionId || loading || !initialLoadSucceeded ||
-        latestDisplayOrdinal === undefined) return;
+      if (!shouldBaselineReadProgress({
+        activeSessionId: id,
+        messageSessionId,
+        loading,
+        initialLoadSucceeded,
+        latestDisplayOrdinal,
+      }) || !id || latestDisplayOrdinal === undefined) return;
       readProgress.baseline(
         id,
         latestDisplayOrdinal,
@@ -304,14 +311,6 @@
     messageListRef?.scrollToOrdinal(ordinal);
   }
 
-  function clearYokeForClearedSessionDates(
-    nextParams: Record<string, string>,
-  ): void {
-    if (sessionDateIntentCleared(router.params, nextParams)) {
-      yokedDates.clear();
-    }
-  }
-
   let lastDetailFilterParamsSignature: string | null = $state(null);
 
   // React to route changes: reload sessions and apply URL params.
@@ -382,52 +381,37 @@
     const activeId = sessions.activeSessionId;
     const currentUrlSessionId = router.sessionId;
     const filterParams = filtersToParams(sessions.filters);
-    const filterParamsSignature = JSON.stringify(filterParams);
     untrack(() => {
-      if (router.route !== "sessions") {
-        lastDetailFilterParamsSignature = null;
-        return;
+      const action = resolveSessionRouteSync({
+        route: router.route,
+        activeSessionId: activeId,
+        currentUrlSessionId,
+        filterParams,
+        currentParams: router.params,
+        lastDetailFilterParamsSignature,
+      });
+
+      if (action.clearYoke) {
+        yokedDates.clear();
       }
-      if (activeId) {
-        const nextParams = sessionRouteParamsForFilters(
-          filterParams,
-          router.params,
-        );
-        if (activeId === currentUrlSessionId) {
-          if (
-            lastDetailFilterParamsSignature !== null &&
-            lastDetailFilterParamsSignature !== filterParamsSignature &&
-            !filterParamsEqual(router.params, nextParams)
-          ) {
-            clearYokeForClearedSessionDates(nextParams);
-            router.replaceParams(nextParams);
-          }
-          lastDetailFilterParamsSignature = filterParamsSignature;
+
+      switch (action.kind) {
+        case "replace-params":
+          router.replaceParams(action.nextParams);
+          lastDetailFilterParamsSignature = action.nextSignature;
           return;
-        }
-        clearYokeForClearedSessionDates(nextParams);
-        router.navigateToSession(activeId, nextParams);
-        lastDetailFilterParamsSignature = filterParamsSignature;
-      } else {
-        if (currentUrlSessionId === null) {
-          lastDetailFilterParamsSignature = null;
+        case "navigate-to-session":
+          router.navigateToSession(action.sessionId, action.nextParams);
+          lastDetailFilterParamsSignature = action.nextSignature;
           return;
-        }
-        const filterChangedOnDetail =
-          lastDetailFilterParamsSignature !== null &&
-          lastDetailFilterParamsSignature !== filterParamsSignature;
-        const nextParams = filterChangedOnDetail
-          ? sessionRouteParamsForFilters(
-              filterParams,
-              router.params,
-            )
-          : sessionRouteParamsForDetailExit(
-              filterParams,
-              router.params,
-            );
-        clearYokeForClearedSessionDates(nextParams);
-        router.navigateFromSession(nextParams);
-        lastDetailFilterParamsSignature = null;
+        case "navigate-from-session":
+          router.navigateFromSession(action.nextParams);
+          lastDetailFilterParamsSignature = action.nextSignature;
+          return;
+        case "reset-signature":
+        case "none":
+          lastDetailFilterParamsSignature = action.nextSignature;
+          return;
       }
     });
   });
@@ -439,16 +423,18 @@
   // the URL with localStorage-restored filters.
   $effect(() => {
     const route = router.route;
-    const newParams = sessionRouteParamsForFilters(
-      filtersToParams(sessions.filters),
-      router.params,
-    );
     untrack(() => {
-      if (route !== "sessions") return;
-      if (router.sessionId) return;
-      if (filterParamsEqual(router.params, newParams)) return;
-      clearYokeForClearedSessionDates(newParams);
-      router.replaceParams(newParams);
+      const action = resolveSessionRouteWriteBack({
+        route,
+        currentUrlSessionId: router.sessionId,
+        filterParams: filtersToParams(sessions.filters),
+        currentParams: router.params,
+      });
+      if (action.kind === "none") return;
+      if (action.clearYoke) {
+        yokedDates.clear();
+      }
+      router.replaceParams(action.nextParams);
     });
   });
 
@@ -628,7 +614,7 @@
       onclick={async (e) => {
         const btn = e.currentTarget;
         if (btn.disabled) return;
-        const last = sessions.recentlyDeleted[sessions.recentlyDeleted.length - 1];
+        const last = getLastRecentlyDeletedBatch(sessions.recentlyDeleted);
         if (!last) return;
         btn.disabled = true;
         try {
