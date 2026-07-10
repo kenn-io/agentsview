@@ -7475,13 +7475,18 @@ func (e *Engine) writeIncremental(
 
 	subagentLinks := make([]db.ToolCallSubagentLink, len(inc.links))
 	for i, link := range inc.links {
+		toolCall := db.ToolCall{
+			ResultContent:       parser.DecodeContent(link.ResultContentRaw),
+			ResultContentLength: link.ResultContentLen,
+		}
+		e.anomalies.recordSanitize(db.SanitizeToolCall(&toolCall))
 		subagentLinks[i] = db.ToolCallSubagentLink{
 			ToolUseID: link.ToolUseID,
 			SubagentSessionID: applyIDPrefixToID(
 				e.idPrefix, link.SubagentSessionID,
 			),
-			ResultContent:    parser.DecodeContent(link.ResultContentRaw),
-			ResultContentLen: link.ResultContentLen,
+			ResultContent:    toolCall.ResultContent,
+			ResultContentLen: toolCall.ResultContentLength,
 			HasResult:        true,
 		}
 	}

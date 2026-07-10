@@ -9635,7 +9635,7 @@ func TestIncrementalSync_ClaudeAgentIDLinksIncrementally(t *testing.T) {
 	// the existing subagent session. Incremental parse will return
 	// ErrClaudeIncrementalNeedsFullParse so the engine must full-
 	// parse with forceReplace to update the stored tool_call row.
-	toolResult := `{"type":"user","timestamp":"2024-01-01T10:00:02Z","uuid":"r1","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_late","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"childlate"}}`
+	toolResult := `{"type":"user","timestamp":"2024-01-01T10:00:02Z","uuid":"r1","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_late","content":"done\u0000\u0001"}]},"toolUseResult":{"status":"completed","agentId":"childlate"}}`
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	require.NoError(t, err, "open for append")
 	_, writeErr := f.WriteString(toolResult + "\n")
@@ -9836,6 +9836,36 @@ func TestIncrementalSync_ClaudeAgentIDDoesNotLinkNonSubagentTool(t *testing.T) {
 		"parent-read-link", "toolu_read_link",
 	).Scan(&got), "query after append")
 	assert.False(t, got.Valid)
+}
+
+func TestIncrementalSync_ClaudeAgentIDMissingToolCallAdvancesCursor(t *testing.T) {
+	env := setupTestEnv(t)
+
+	initial := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"go"},"cwd":"/tmp"}`,
+	)
+	path := env.writeClaudeSession(
+		t, "proj-missing-link", "parent-missing-link.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	appended := `{"type":"user","isMeta":true,"timestamp":"2024-01-01T10:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_missing","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"missingchild"}}` + "\n"
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, writeErr := f.WriteString(appended)
+	require.NoError(t, f.Close(), "close append")
+	require.NoError(t, writeErr, "append")
+
+	env.engine.SyncPaths([]string{path})
+
+	info, err := os.Stat(path)
+	require.NoError(t, err, "stat appended transcript")
+	sess, err := env.db.GetSessionFull(context.Background(), "parent-missing-link")
+	require.NoError(t, err, "get session after append")
+	require.NotNil(t, sess.FileSize)
+	assert.Equal(t, info.Size(), *sess.FileSize)
+	assert.True(t, sess.LastWriteIncremental)
+	assertSessionMessageCount(t, env.db, "parent-missing-link", 1)
 }
 
 func TestIncrementalSync_ClaudeCrossSyncToolResultFallback(t *testing.T) {

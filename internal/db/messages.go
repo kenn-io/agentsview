@@ -2097,10 +2097,7 @@ func applyToolCallSubagentLinkTx(
 		sessionID, link.ToolUseID,
 	).Scan(&toolName, &category, &currentSubagent); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf(
-				"tool_call not found for session %s tool_use_id %s",
-				sessionID, link.ToolUseID,
-			)
+			return nil
 		}
 		return fmt.Errorf(
 			"checking tool_call for %s/%s: %w",
