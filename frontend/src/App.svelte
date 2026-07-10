@@ -7,27 +7,28 @@
     items: PromptDisplayItem[],
     selected: number | null,
     delta: number,
-    newestFirst: boolean,
+    userVisible: boolean,
   ): number | undefined {
-    const chronological = newestFirst ? [...items].reverse() : items;
+    if (!userVisible) return;
+
+    const isUserPrompt = (item: PromptDisplayItem) =>
+      item.kind === "message" && item.message.role === "user";
     if (selected === null) {
-      const prompts = chronological.filter(
-        (item) => item.kind === "message" && item.message.role === "user",
-      );
+      const prompts = items.filter(isUserPrompt);
       return (delta > 0 ? prompts[0] : prompts[prompts.length - 1])
         ?.ordinals[0];
     }
 
-    const selectedIndex = chronological.findIndex((item) =>
+    const selectedIndex = items.findIndex((item) =>
       item.ordinals.includes(selected),
     );
     for (
       let index = selectedIndex + delta;
-      index >= 0 && index < chronological.length;
+      index >= 0 && index < items.length;
       index += delta
     ) {
-      const item = chronological[index]!;
-      if (item.kind === "message" && item.message.role === "user") {
+      const item = items[index]!;
+      if (isUserPrompt(item)) {
         return item.ordinals[0];
       }
     }
@@ -268,7 +269,7 @@
       items,
       ui.selectedOrdinal,
       delta,
-      ui.sortNewestFirst,
+      ui.isBlockVisible("user"),
     );
     if (ordinal !== undefined) navigateToMessageOrdinal(ordinal);
   }
