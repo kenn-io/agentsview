@@ -417,6 +417,65 @@ describe("MessageList read progress", () => {
     }
   });
 
+  it("keeps a queued tool-group observer bound to the original session", async () => {
+    const originalObserver = globalThis.IntersectionObserver;
+    const callbacks: IntersectionObserverCallback[] = [];
+    class ObserverMock {
+      constructor(callback: IntersectionObserverCallback) {
+        callbacks.push(callback);
+      }
+
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+      takeRecords() { return []; }
+      root = null;
+      rootMargin = "0px";
+      thresholds = [];
+    }
+    Object.defineProperty(globalThis, "IntersectionObserver", {
+      configurable: true,
+      writable: true,
+      value: ObserverMock,
+    });
+    try {
+      messages.messages = [3, 4, 5].map((ordinal) => ({
+        ...makeMessage(ordinal),
+        role: "assistant",
+        content: "",
+        content_length: 0,
+        has_tool_use: true,
+      }));
+      virtualizerMock.getVirtualItems.mockReturnValue([{
+        index: 0,
+        key: "tool-group",
+        start: 0,
+        end: 100,
+      }]);
+      readProgress.clear("s1");
+      readProgress.clear("s2");
+      readProgress.baseline("s1", 3);
+      component = mount(MessageList, { target: document.body });
+      await tick();
+
+      const queued = callbacks.at(-1)!;
+      messages.sessionId = "s2";
+      await tick();
+      queued([
+        { isIntersecting: true } as IntersectionObserverEntry,
+      ], {} as IntersectionObserver);
+
+      expect(readProgress.get("s1")).toEqual({ seenOrdinal: 5 });
+      expect(readProgress.get("s2")).toBeNull();
+    } finally {
+      Object.defineProperty(globalThis, "IntersectionObserver", {
+        configurable: true,
+        writable: true,
+        value: originalObserver,
+      });
+    }
+  });
+
   it("acknowledges a trailing system message after its last displayable row is visible", async () => {
     const originalObserver = globalThis.IntersectionObserver;
     const callbacks: IntersectionObserverCallback[] = [];

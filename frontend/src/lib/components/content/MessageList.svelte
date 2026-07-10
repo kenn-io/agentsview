@@ -687,12 +687,9 @@
                 divider={readProgressDivider !== null && item.ordinals.includes(readProgressDivider.ordinal)
                   ? readProgressDivider
                   : undefined}
-                onMessageVisible={(ordinal) => {
-                  const sessionId = messages.sessionId;
-                  if (sessionId) {
-                    recordVisible(sessionId, ordinal);
-                  }
-                }}
+                onMessageVisible={messages.sessionId
+                  ? recordVisible.bind(null, messages.sessionId)
+                  : undefined}
               />
             {:else if item.message.is_compact_boundary}
               <CompactBoundaryDivider message={item.message} />

@@ -64,15 +64,17 @@
   );
 
   function observeMessage(node: HTMLElement, ordinal: number) {
-    if (!onMessageVisible) {
+    const handleVisible = onMessageVisible;
+    if (!handleVisible) {
       return {};
     }
+    const reportVisible = () => handleVisible(ordinal);
     if (typeof IntersectionObserver === "undefined") {
       const root = node.closest(".message-list-scroll");
       const check = () => {
         const rect = node.getBoundingClientRect();
         const rootRect = root?.getBoundingClientRect();
-        if (rootRect && rect.bottom > rootRect.top && rect.top < rootRect.bottom) onMessageVisible(ordinal);
+        if (rootRect && rect.bottom > rootRect.top && rect.top < rootRect.bottom) reportVisible();
       };
       check();
       root?.addEventListener("scroll", check, { passive: true });
@@ -80,7 +82,7 @@
     }
     const observer = new IntersectionObserver((entries) => {
       if (!entries.some((entry) => entry.isIntersecting)) return;
-      onMessageVisible?.(ordinal);
+      reportVisible();
       observer.disconnect();
     }, { root: node.closest(".message-list-scroll") });
     observer.observe(node);
