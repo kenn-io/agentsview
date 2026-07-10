@@ -926,7 +926,6 @@ func chooseHermesStateSessionSource(
 			hermesMessageQuality(msgs) >= hermesStateQuality(stateMessages) {
 			return jsonPath, sess, msgs, nil
 		}
-		sess, msgs = nil, nil
 	}
 	if IsRegularFile(jsonlPath) {
 		sess, msgs, err = parseHermesJSONLSession(jsonlPath, project, machine)
@@ -934,7 +933,6 @@ func chooseHermesStateSessionSource(
 			(hermesMessageQuality(msgs) >= hermesStateQuality(stateMessages) || len(stateMessages) == 0) {
 			return jsonlPath, sess, msgs, nil
 		}
-		sess, msgs = nil, nil
 	}
 	return selectedPath, nil, nil, nil
 }
