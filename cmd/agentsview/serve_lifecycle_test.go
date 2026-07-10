@@ -450,6 +450,41 @@ func TestStopDaemonProcessKeepsRecordWhenIdentityBecomesUnknownAfterForceKill(
 		"unknown post-kill identity must preserve the runtime record")
 }
 
+func TestStopDaemonProcessKeepsRecordWhenMatchedProcessSurvivesForceKill(
+	t *testing.T,
+) {
+	requirePOSIXSignals(t, "relies on POSIX zombie semantics for ProcessAlive")
+	setStartProbeTickForTest(t, 10*time.Millisecond)
+	dir := runtimeTestDir(t)
+	pid := startTERMIgnoringProcess(t)
+	path, err := writeRuntimeRecordForTest(dir, daemon.RuntimeRecord{
+		PID:      pid,
+		Network:  daemon.NetworkTCP,
+		Address:  "127.0.0.1:1",
+		Metadata: map[string]string{runtimeCreateTime: "1234"},
+	})
+	require.NoError(t, err)
+	rec := onlyLiveRuntimeRecord(t, dir)
+
+	identityCalls := 0
+	identityState := func(gotPID int, recorded string) processCreateTimeState {
+		assert.Equal(t, pid, gotPID)
+		assert.Equal(t, "1234", recorded)
+		identityCalls++
+		return processCreateTimeMatch
+	}
+
+	err = stopDaemonProcessWithIdentity(
+		rec, 50*time.Millisecond, identityState,
+	)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "still running after force kill")
+	assert.Equal(t, 2, identityCalls,
+		"identity must be confirmed before and after force kill")
+	assert.FileExists(t, path,
+		"surviving matched process must retain its ownership record")
+}
+
 func TestStopDaemonProcessRemovesRecordWhenPIDReused(t *testing.T) {
 	requirePOSIXSignals(t, "relies on POSIX zombie semantics for ProcessAlive")
 	dir := runtimeTestDir(t)
