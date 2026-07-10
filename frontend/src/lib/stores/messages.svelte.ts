@@ -84,14 +84,15 @@ class MessagesStore {
         countHint > FULL_SESSION_MESSAGE_THRESHOLD
       ) {
         await this.loadProgressively(id, ac.signal);
+        succeeded = true;
       } else {
         await this.loadAllMessages(
           id,
           ac.signal,
           countHint ?? undefined,
         );
+        succeeded = this.hasCompleteMessageRange();
       }
-      succeeded = this.hasCompleteMessageRange();
     } catch (err) {
       if (isAbortError(err)) return;
       console.warn("Failed to load session messages:", err);
@@ -470,8 +471,12 @@ class MessagesStore {
       const newCount = sess.message_count ?? 0;
       const oldCount = this.messageCount;
       if (newCount === oldCount) {
+        if (!this.initialLoadSucceeded && !this.hasOlder) {
+          await this.fullReload(id, signal, newCount);
+          return;
+        }
         await this.refreshLoadedWindow(id, signal);
-        if (this.sessionId === id && this.hasCompleteMessageRange()) {
+        if (this.sessionId === id && (this.hasCompleteMessageRange() || this.hasOlder)) {
           this.initialLoadSucceeded = true;
         }
         return;
@@ -549,6 +554,7 @@ class MessagesStore {
         messageCountHint > FULL_SESSION_MESSAGE_THRESHOLD
       ) {
         await this.loadProgressively(id, signal);
+        this.initialLoadSucceeded = true;
       } else {
         await this.loadAllMessages(
           id,

@@ -434,7 +434,7 @@
           <span class="session-time">{timeStr}</span>
           <span class="session-count">{session.user_message_count}</span>
           {#if hasUnread}
-            <span class="unread-indicator" aria-label="Unread messages" title="Unread messages"></span>
+            <span class="unread-indicator" aria-label={m.read_progress_unread_messages()} title={m.read_progress_unread_messages()}></span>
           {/if}
           {#if hasSubagents}
             <UserRoundIcon class="group-hint-icon" size="9" strokeWidth="2" aria-hidden="true" />

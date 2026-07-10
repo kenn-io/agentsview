@@ -99,6 +99,10 @@
     (baseMessages[baseMessages.length - 1]?.ordinal ?? -1) + 1,
   );
 
+  $effect(() => {
+    readProgress.setVisibleCount(messages.sessionId ?? "", displayedMessageCount);
+  });
+
   function itemAt(index: number) {
     if (ui.sortNewestFirst) {
       const mapped = displayItemsAsc.length - 1 - index;
@@ -599,7 +603,7 @@
       if (ordinal !== undefined) {
         return {
           ordinal,
-          label: ui.sortNewestFirst ? "Earlier messages" : "New messages",
+          label: ui.sortNewestFirst ? m.read_progress_earlier_messages() : m.read_progress_new_messages(),
         };
       }
     }
@@ -648,8 +652,8 @@
               ui.selectOrdinal(item.ordinals[0]!);
             }}
           >
-            {#if item.kind === "message" && readProgressDivider !== null && item.ordinals.includes(readProgressDivider.ordinal)}
-              <div class="read-progress-divider" role="separator" aria-label="Read progress boundary">
+            {#if readProgressDivider !== null && item.ordinals.includes(readProgressDivider.ordinal)}
+              <div class="read-progress-divider" role="separator" aria-label={m.read_progress_boundary()}>
                 {readProgressDivider.label}
               </div>
             {/if}
@@ -659,7 +663,6 @@
                 timestamp={item.timestamp}
                 highlightQuery={highlightQuery}
                 isCurrentHighlight={item.ordinals.includes(inSessionSearch.currentOrdinal ?? -1)}
-                readMarker={readProgress.get(messages.sessionId ?? "")?.ordinal ?? null}
                 sortNewestFirst={ui.sortNewestFirst}
                 onMessageVisible={(ordinal) => {
                   const sessionId = messages.sessionId;

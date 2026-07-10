@@ -1703,5 +1703,9 @@
   "appearance_high_contrast": "고대비",
   "appearance_on": "켜짐",
   "appearance_off": "꺼짐",
-  "appearance_text_size": "텍스트 크기"
+  "appearance_text_size": "텍스트 크기",
+  "read_progress_boundary": "읽기 진행 경계",
+  "read_progress_new_messages": "새 메시지",
+  "read_progress_earlier_messages": "이전 메시지",
+  "read_progress_unread_messages": "읽지 않은 메시지"
 }

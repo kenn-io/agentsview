@@ -70,6 +70,7 @@ export class ReadProgressStore {
   private markers: Record<string, ReadProgressMarker> = $state(
     readStoredMarkers(),
   );
+  private visibleCounts: Record<string, number> = $state({});
 
   get(sessionId: string): ReadProgressMarker | null {
     return this.markers[sessionId] ?? null;
@@ -103,6 +104,13 @@ export class ReadProgressStore {
     this.persist();
   }
 
+  setVisibleCount(sessionId: string, messageCount: number) {
+    if (!sessionId) return;
+    const count = safeCount(messageCount);
+    if (this.visibleCounts[sessionId] === count) return;
+    this.visibleCounts = { ...this.visibleCounts, [sessionId]: count };
+  }
+
   clear(sessionId: string) {
     if (!this.markers[sessionId]) return;
     const { [sessionId]: _, ...remaining } = this.markers;
@@ -112,7 +120,7 @@ export class ReadProgressStore {
 
   hasUnread(sessionId: string, messageCount: number): boolean {
     const marker = this.markers[sessionId];
-    return marker !== undefined && safeCount(messageCount) > marker.messageCount;
+    return marker !== undefined && (this.visibleCounts[sessionId] ?? safeCount(messageCount)) > marker.messageCount;
   }
 
   private persist() {

@@ -1703,5 +1703,9 @@
   "appearance_high_contrast": "高对比度",
   "appearance_on": "开",
   "appearance_off": "关",
-  "appearance_text_size": "文字大小"
+  "appearance_text_size": "文字大小",
+  "read_progress_boundary": "阅读进度边界",
+  "read_progress_new_messages": "新消息",
+  "read_progress_earlier_messages": "较早消息",
+  "read_progress_unread_messages": "未读消息"
 }

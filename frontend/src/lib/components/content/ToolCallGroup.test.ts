@@ -117,18 +117,16 @@ describe("ToolCallGroup read progress", () => {
     rectSpy.mockRestore();
   });
 
-  it("splits tool groups at the watermark in both sort directions", () => {
+  it("leaves the global read boundary to MessageList", () => {
     component = mount(ToolCallGroup, {
       target: document.body,
       props: {
         messages: [makeToolMessage(4), makeToolMessage(5)],
         timestamp: new Date().toISOString(),
-        readMarker: 4,
       },
     });
 
-    expect(document.querySelectorAll(".read-progress-divider")).toHaveLength(1);
-    expect(document.body.textContent).toContain("New messages");
+    expect(document.querySelectorAll(".read-progress-divider")).toHaveLength(0);
 
     unmount(component);
     component = mount(ToolCallGroup, {
@@ -136,12 +134,10 @@ describe("ToolCallGroup read progress", () => {
       props: {
         messages: [makeToolMessage(4), makeToolMessage(5)],
         timestamp: new Date().toISOString(),
-        readMarker: 4,
         sortNewestFirst: true,
       },
     });
 
-    expect(document.querySelectorAll(".read-progress-divider")).toHaveLength(1);
-    expect(document.body.textContent).toContain("Earlier messages");
+    expect(document.querySelectorAll(".read-progress-divider")).toHaveLength(0);
   });
 });

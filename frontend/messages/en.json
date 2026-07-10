@@ -1739,5 +1739,9 @@
   "appearance_high_contrast": "High contrast",
   "appearance_on": "On",
   "appearance_off": "Off",
-  "appearance_text_size": "Text size"
+  "appearance_text_size": "Text size",
+  "read_progress_boundary": "Read progress boundary",
+  "read_progress_new_messages": "New messages",
+  "read_progress_earlier_messages": "Earlier messages",
+  "read_progress_unread_messages": "Unread messages"
 }

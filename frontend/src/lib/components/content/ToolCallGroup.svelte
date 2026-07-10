@@ -23,7 +23,6 @@
     timestamp: string;
     highlightQuery?: string;
     isCurrentHighlight?: boolean;
-    readMarker?: number | null;
     sortNewestFirst?: boolean;
     onMessageVisible?: (ordinal: number) => void;
   }
@@ -33,7 +32,6 @@
     timestamp,
     highlightQuery = "",
     isCurrentHighlight = false,
-    readMarker = null,
     sortNewestFirst = false,
     onMessageVisible,
   }: Props = $props();
@@ -63,27 +61,20 @@
     sortNewestFirst ? [...messages].reverse() : messages,
   );
 
-  let dividerOrdinal = $derived.by(() => {
-    if (readMarker === null) return null;
-    return displayMessages.find((message) =>
-      sortNewestFirst
-        ? message.ordinal <= readMarker
-        : message.ordinal > readMarker,
-    )?.ordinal ?? null;
-  });
-
   function observeMessage(node: HTMLElement, ordinal: number) {
     if (!onMessageVisible) {
       return {};
     }
     if (typeof IntersectionObserver === "undefined") {
       const root = node.closest(".message-list-scroll");
-      const rect = node.getBoundingClientRect();
-      const rootRect = root?.getBoundingClientRect();
-      if (rootRect && rect.bottom > rootRect.top && rect.top < rootRect.bottom) {
-        onMessageVisible(ordinal);
-      }
-      return {};
+      const check = () => {
+        const rect = node.getBoundingClientRect();
+        const rootRect = root?.getBoundingClientRect();
+        if (rootRect && rect.bottom > rootRect.top && rect.top < rootRect.bottom) onMessageVisible(ordinal);
+      };
+      check();
+      root?.addEventListener("scroll", check, { passive: true });
+      return { destroy: () => root?.removeEventListener("scroll", check) };
     }
     const observer = new IntersectionObserver((entries) => {
       if (!entries.some((entry) => entry.isIntersecting)) return;
@@ -187,11 +178,6 @@
       {@const calls = message.tool_calls ?? []}
       {@const turn = turnByMessage.get(message.id)}
       <div use:observeMessage={message.ordinal}>
-      {#if dividerOrdinal === message.ordinal}
-        <div class="read-progress-divider" role="separator" aria-label="Read progress boundary">
-          {sortNewestFirst ? "Earlier messages" : "New messages"}
-        </div>
-      {/if}
       {#if calls.length === 1}
         {@const soloCall = calls[0]!}
         <ToolBlock
@@ -277,26 +263,6 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
-  }
-
-  .read-progress-divider {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin: 8px 0;
-    color: var(--accent-blue);
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .read-progress-divider::before,
-  .read-progress-divider::after {
-    content: "";
-    height: 1px;
-    flex: 1;
-    background: color-mix(in srgb, var(--accent-blue) 55%, transparent);
   }
 
   .tool-group-body :global(.tool-block) {
