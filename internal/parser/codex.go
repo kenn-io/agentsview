@@ -1328,18 +1328,30 @@ func IsCodexExecSessionFile(path string) bool {
 func (p *codexProvider) parseSession(
 	path, machine string, includeExec bool,
 ) (*ParsedSession, []ParsedMessage, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, nil, fmt.Errorf("stat %s: %w", path, err)
-	}
-
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, nil, fmt.Errorf("stat %s: %w", path, err)
+	}
+	return p.parseSessionSnapshot(
+		path, machine, includeExec, f, info,
+	)
+}
 
-	lr := newLineReader(f, maxLineSize)
+// parseSessionSnapshot parses exactly the raw-size snapshot captured from f.
+// Limiting the reader prevents an append racing the scan from being folded into
+// a cursor keyed by the earlier size.
+func (p *codexProvider) parseSessionSnapshot(
+	path, machine string,
+	includeExec bool,
+	f *os.File,
+	info os.FileInfo,
+) (*ParsedSession, []ParsedMessage, error) {
+	lr := newLineReader(io.LimitReader(f, info.Size()), maxLineSize)
 	b := newCodexSessionBuilder(includeExec)
 
 	for {
@@ -1798,8 +1810,8 @@ func (p *codexProvider) parseSessionFromWithReader(
 		)
 	}
 	inode, device := sourceFileIdentity(info)
-	seed, ok := p.cursorCache.Get(path, offset, inode, device)
-	if !ok {
+	seed, cacheHit := p.cursorCache.Get(path, offset, inode, device)
+	if !cacheHit {
 		seed = seedCodexIncrementalState(path, offset)
 	}
 
@@ -1848,6 +1860,9 @@ func (p *codexProvider) parseSessionFromWithReader(
 		cursor:        b.incrementalSeed(),
 		inode:         inode,
 		device:        device,
+	}
+	if !cacheHit {
+		p.cursorCache.Put(path, offset, inode, device, seed)
 	}
 	return result, nil
 }

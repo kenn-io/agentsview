@@ -146,6 +146,151 @@ func TestCodexProviderFactoryScopesCursorCache(t *testing.T) {
 	assert.False(t, isolatedHit)
 }
 
+func TestCodexProviderFullParseSnapshotExcludesLaterGrowth(t *testing.T) {
+	root := t.TempDir()
+	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229ec"
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/home/user/code/api", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexTurnContextJSON("gpt-5.4", tsEarlyS1),
+		testjsonl.CodexMsgJSON("user", "captured request", "2024-01-01T10:00:02Z"),
+		codexEventMsgJSON("task_complete", "2024-01-01T10:00:03Z"),
+	)
+	path := writeCodexProviderSessionContent(t, root, uuid, initial)
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	concrete, ok := provider.(*codexProvider)
+	require.True(t, ok)
+	source := requireCodexProviderSource(t, provider, uuid)
+
+	snapshot, err := os.Open(path)
+	require.NoError(t, err)
+	defer snapshot.Close()
+	capturedInfo, err := snapshot.Stat()
+	require.NoError(t, err)
+	tail := testjsonl.JoinJSONL(
+		testjsonl.CodexTurnContextJSON("gpt-5.5", "2024-01-01T10:00:04Z"),
+		testjsonl.CodexMsgJSON("assistant", "later answer", "2024-01-01T10:00:05Z"),
+		codexEventMsgJSON("task_started", "2024-01-01T10:00:06Z"),
+	)
+	appendCodexProviderContent(t, path, tail)
+
+	sess, messages, err := concrete.parseSessionSnapshot(
+		path, "local", false, snapshot, capturedInfo,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, int64(len(initial)), sess.File.Size)
+	require.Len(t, messages, 1)
+	assert.Equal(t, RoleUser, messages[0].Role)
+	assert.Equal(t, "captured request", messages[0].Content)
+	inode, device := sourceFileIdentity(capturedInfo)
+	seed, seeded := concrete.cursorCache.Get(
+		path, int64(len(initial)), inode, device,
+	)
+	require.True(t, seeded)
+	assert.Equal(t, "gpt-5.4", seed.model)
+	assert.Equal(t, "task_complete", seed.lastTaskEvent)
+
+	currentFingerprint, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	outcome, status, err := provider.ParseIncremental(
+		context.Background(),
+		IncrementalRequest{
+			Source:       source,
+			Fingerprint:  currentFingerprint,
+			SessionID:    "codex:" + uuid,
+			Offset:       int64(len(initial)),
+			StartOrdinal: 1,
+		},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, IncrementalApplied, status)
+	require.Len(t, outcome.Messages, 1)
+	assert.Equal(t, RoleAssistant, outcome.Messages[0].Role)
+	assert.Equal(t, "later answer", outcome.Messages[0].Content)
+	assert.Equal(t, 1, outcome.Messages[0].Ordinal)
+	assert.Equal(t, "gpt-5.5", outcome.Messages[0].Model)
+	assert.Equal(t, int64(len(tail)), outcome.ConsumedBytes)
+}
+
+func TestCodexProviderColdIncrementalStagesRetryCursorVersions(t *testing.T) {
+	root := t.TempDir()
+	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229ed"
+	prefix := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/home/user/code/api", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexTurnContextJSON("gpt-5.4", tsEarlyS1),
+		testjsonl.CodexMsgJSON("user", "persisted request", "2024-01-01T10:00:02Z"),
+		codexEventMsgJSON("task_complete", "2024-01-01T10:00:03Z"),
+	)
+	tail := testjsonl.JoinJSONL(
+		testjsonl.CodexTurnContextJSON("gpt-5.5", "2024-01-01T10:00:04Z"),
+		testjsonl.CodexMsgJSON("assistant", "proposed answer", "2024-01-01T10:00:05Z"),
+		codexEventMsgJSON("task_started", "2024-01-01T10:00:06Z"),
+	)
+	path := writeCodexProviderSessionContent(t, root, uuid, prefix+tail)
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	concrete, ok := provider.(*codexProvider)
+	require.True(t, ok)
+	source := requireCodexProviderSource(t, provider, uuid)
+	fingerprint, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	prefixOffset := int64(len(prefix))
+	_, oldBefore := concrete.cursorCache.Get(
+		path, prefixOffset, fingerprint.Inode, fingerprint.Device,
+	)
+	_, newBefore := concrete.cursorCache.Get(
+		path, fingerprint.Size, fingerprint.Inode, fingerprint.Device,
+	)
+	assert.False(t, oldBefore)
+	assert.False(t, newBefore)
+
+	req := IncrementalRequest{
+		Source:       source,
+		Fingerprint:  fingerprint,
+		SessionID:    "codex:" + uuid,
+		Offset:       prefixOffset,
+		StartOrdinal: 1,
+	}
+	first, status, err := provider.ParseIncremental(context.Background(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, IncrementalApplied, status)
+	require.Len(t, first.Messages, 1)
+	assert.Equal(t, RoleAssistant, first.Messages[0].Role)
+	assert.Equal(t, "proposed answer", first.Messages[0].Content)
+	assert.Equal(t, 1, first.Messages[0].Ordinal)
+	assert.Equal(t, "gpt-5.5", first.Messages[0].Model)
+	oldCursor, oldStaged := concrete.cursorCache.Get(
+		path, prefixOffset, fingerprint.Inode, fingerprint.Device,
+	)
+	newCursor, newStaged := concrete.cursorCache.Get(
+		path, fingerprint.Size, fingerprint.Inode, fingerprint.Device,
+	)
+	require.True(t, oldStaged, "persisted offset must be warm for a DB retry")
+	require.True(t, newStaged, "proposed offset must keep its separate cursor")
+	assert.Equal(t, "gpt-5.4", oldCursor.model)
+	assert.Equal(t, "task_complete", oldCursor.lastTaskEvent)
+	assert.Equal(t, "gpt-5.5", newCursor.model)
+	assert.Equal(t, "task_started", newCursor.lastTaskEvent)
+
+	// Simulate a failed DB write: the persisted offset remains unchanged and
+	// the same tail is retried from the old cursor version.
+	retry, retryStatus, err := provider.ParseIncremental(
+		context.Background(), req,
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, IncrementalApplied, retryStatus)
+	assert.Equal(t, first, retry)
+}
+
 func TestCodexProviderParseIncrementalSuccess(t *testing.T) {
 	root := t.TempDir()
 	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229e4"
@@ -584,10 +729,8 @@ func TestCodexProviderParseIncrementalFallbackDoesNotStage(t *testing.T) {
 	source := requireCodexProviderSource(t, provider, uuid)
 	initialFingerprint, err := provider.Fingerprint(context.Background(), source)
 	require.NoError(t, err)
-	_, err = provider.Parse(context.Background(), ParseRequest{
-		Source: source, Fingerprint: initialFingerprint,
-	})
-	require.NoError(t, err)
+	concrete, ok := provider.(*codexProvider)
+	require.True(t, ok)
 
 	tail := testjsonl.JoinJSONL(
 		testjsonl.CodexTokenCountJSON(tsLateS5, 100_000, 250, 64_000),
@@ -609,15 +752,20 @@ func TestCodexProviderParseIncrementalFallbackDoesNotStage(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, IncrementalNeedsFullParse, status)
 	assert.True(t, outcome.ForceReplace)
-	concrete, ok := provider.(*codexProvider)
-	require.True(t, ok)
-	_, staged := concrete.cursorCache.Get(
+	_, oldStaged := concrete.cursorCache.Get(
+		path,
+		initialFingerprint.Size,
+		currentFingerprint.Inode,
+		currentFingerprint.Device,
+	)
+	_, newStaged := concrete.cursorCache.Get(
 		path,
 		currentFingerprint.Size,
 		currentFingerprint.Inode,
 		currentFingerprint.Device,
 	)
-	assert.False(t, staged)
+	assert.False(t, oldStaged)
+	assert.False(t, newStaged)
 }
 
 func TestCodexProviderParseIncrementalHonorsContext(t *testing.T) {
