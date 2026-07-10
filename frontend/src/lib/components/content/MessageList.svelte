@@ -611,7 +611,10 @@
       return null;
     }
     for (const item of items) {
-      const ordinal = item.ordinals.find((value) =>
+      const ordinals = ui.sortNewestFirst
+        ? [...item.ordinals].reverse()
+        : item.ordinals;
+      const ordinal = ordinals.find((value) =>
         ui.sortNewestFirst
           ? value <= marker.ordinal
           : value > marker.ordinal,

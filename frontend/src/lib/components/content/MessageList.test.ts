@@ -290,8 +290,8 @@ describe("MessageList read progress", () => {
     expect(document.querySelectorAll(".read-progress-divider")).toHaveLength(0);
   });
 
-  it("places the divider inside a tool group and does not mark every submessage read", async () => {
-    messages.messages = [4, 5].map((ordinal) => ({
+  it("uses the rendered newest-first ordinal when a divider falls inside a tool group", async () => {
+    messages.messages = [3, 4, 5].map((ordinal) => ({
       ...makeMessage(ordinal),
       role: "assistant",
       content: "",
@@ -300,7 +300,8 @@ describe("MessageList read progress", () => {
     }));
     messages.messageCount = 6;
     readProgress.clear("s1");
-    readProgress.baseline("s1", 3, 4);
+    readProgress.baseline("s1", 4, 5);
+    ui.sortNewestFirst = true;
     virtualizerMock.getVirtualItems.mockReturnValue([{
       index: 0,
       key: "tool-group",
@@ -318,7 +319,7 @@ describe("MessageList read progress", () => {
     );
     await tick();
 
-    expect(readProgress.get("s1")).toEqual({ ordinal: 3, messageCount: 4 });
+    expect(readProgress.get("s1")).toEqual({ ordinal: 4, messageCount: 5 });
   });
 
   it("records a normal row when its observer reports it visible", async () => {
