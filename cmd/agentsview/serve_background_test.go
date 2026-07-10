@@ -1729,11 +1729,109 @@ func TestStartServeBackgroundReturnsStartupErrorWithLogPath(t *testing.T) {
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, startErr)
-	assert.Contains(t, err.Error(), "daemon start")
-	assert.Contains(t, err.Error(), logPath)
+	assert.Equal(t, "daemon start: fork failed", err.Error())
 	assert.False(t, result.Started)
 	assert.Equal(t, logPath, result.LogPath)
 	assert.Nil(t, result.Runtime)
+}
+
+func TestRunServeBackgroundLaunchErrorPreservesLegacyFatalOutput(t *testing.T) {
+	dir := runtimeTestDir(t)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	logPath := filepath.Join(dir, "serve.log")
+
+	cmd := exec.Command(
+		os.Args[0],
+		"-test.run=^TestRunServeBackgroundLaunchErrorHelper$",
+	)
+	cmd.Env = append(
+		os.Environ(),
+		"AGENTSVIEW_BACKGROUND_LAUNCH_ERROR_HELPER=1",
+		"AGENTSVIEW_BACKGROUND_LAUNCH_ERROR_DIR="+dir,
+		"AGENTSVIEW_BACKGROUND_LAUNCH_ERROR_LOG="+logPath,
+	)
+	out, err := cmd.CombinedOutput()
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr)
+	assert.Equal(t, 1, exitErr.ExitCode())
+	assert.Equal(
+		t,
+		"fatal: serve background: starting server: fork failed\n",
+		string(out),
+	)
+}
+
+func TestRunServeBackgroundLaunchErrorHelper(t *testing.T) {
+	if os.Getenv("AGENTSVIEW_BACKGROUND_LAUNCH_ERROR_HELPER") != "1" {
+		return
+	}
+	dir := os.Getenv("AGENTSVIEW_BACKGROUND_LAUNCH_ERROR_DIR")
+	logPath := os.Getenv("AGENTSVIEW_BACKGROUND_LAUNCH_ERROR_LOG")
+	require.NotEmpty(t, dir)
+	require.NotEmpty(t, logPath)
+
+	startServeBackgroundProcessForRun = func(
+		config.Config, []string,
+	) (*exec.Cmd, string, error) {
+		return nil, logPath, errors.New("starting server: fork failed")
+	}
+	runServeBackground(
+		config.Config{DataDir: dir},
+		[]string{"serve", "--background"},
+		serveReplacementOptions{},
+	)
+}
+
+func TestRunServeBackgroundReadinessErrorRetainsLegacyLogsOutput(t *testing.T) {
+	dir := runtimeTestDir(t)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	logPath := filepath.Join(dir, "serve.log")
+
+	cmd := exec.Command(
+		os.Args[0],
+		"-test.run=^TestRunServeBackgroundReadinessErrorHelper$",
+	)
+	cmd.Env = append(
+		os.Environ(),
+		"AGENTSVIEW_BACKGROUND_READINESS_ERROR_HELPER=1",
+		"AGENTSVIEW_BACKGROUND_READINESS_ERROR_DIR="+dir,
+		"AGENTSVIEW_BACKGROUND_READINESS_ERROR_LOG="+logPath,
+	)
+	out, err := cmd.CombinedOutput()
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr)
+	assert.Equal(t, 1, exitErr.ExitCode())
+	assert.Equal(
+		t,
+		"fatal: serve background: server exited before becoming ready: "+
+			"server process exited\nLogs: "+logPath+"\n",
+		string(out),
+	)
+}
+
+func TestRunServeBackgroundReadinessErrorHelper(t *testing.T) {
+	if os.Getenv("AGENTSVIEW_BACKGROUND_READINESS_ERROR_HELPER") != "1" {
+		return
+	}
+	dir := os.Getenv("AGENTSVIEW_BACKGROUND_READINESS_ERROR_DIR")
+	logPath := os.Getenv("AGENTSVIEW_BACKGROUND_READINESS_ERROR_LOG")
+	require.NotEmpty(t, dir)
+	require.NotEmpty(t, logPath)
+
+	startServeBackgroundProcessForRun = func(
+		config.Config, []string,
+	) (*exec.Cmd, string, error) {
+		child := exec.Command(os.Args[0], "-test.run=^$")
+		if err := child.Start(); err != nil {
+			return nil, logPath, err
+		}
+		return child, logPath, nil
+	}
+	runServeBackground(
+		config.Config{DataDir: dir},
+		[]string{"serve", "--background"},
+		serveReplacementOptions{},
+	)
 }
 
 func TestStartServeBackgroundProcessOpenErrorReturnsLogPath(t *testing.T) {

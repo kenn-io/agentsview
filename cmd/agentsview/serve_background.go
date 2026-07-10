@@ -297,11 +297,6 @@ func startServeBackground(
 	child, logPath, err := startServeBackgroundProcessForRun(cfg, args)
 	result.LogPath = logPath
 	if err != nil {
-		if logPath != "" {
-			return result, fmt.Errorf(
-				"%s: %w; logs: %s", operation, err, logPath,
-			)
-		}
 		return result, fmt.Errorf("%s: %w", operation, err)
 	}
 	result.Started = true
