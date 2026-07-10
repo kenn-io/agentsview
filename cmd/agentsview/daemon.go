@@ -43,6 +43,7 @@ type daemonCommandDeps struct {
 	stopTargetConfirmed func(daemon.RuntimeRecord, string) bool
 	stopProcess         func(daemon.RuntimeRecord, time.Duration) error
 	stopCaddy           func(daemon.RuntimeRecord)
+	validateConfig      func(config.Config) error
 	checkDataVersion    func(string) error
 	probeRecord         func(daemon.RuntimeRecord, string) bool
 	now                 func() time.Time
@@ -66,6 +67,7 @@ func defaultDaemonCommandDeps() daemonCommandDeps {
 		stopTargetConfirmed: stopTargetConfirmed,
 		stopProcess:         stopDaemonProcess,
 		stopCaddy:           stopOrphanedCaddyChild,
+		validateConfig:      validateServeConfig,
 		checkDataVersion:    db.CheckDataVersion,
 		probeRecord: func(rec daemon.RuntimeRecord, token string) bool {
 			return daemonRecordPingConfirmed(rec, token)
@@ -171,22 +173,19 @@ func reportDaemonLaunchContention(
 	if observation.Err != nil {
 		return fmt.Errorf("daemon start: inspecting concurrent launch: %w", observation.Err)
 	}
+	if observation.Starting {
+		return daemonPersistentStartupError("daemon start", dataDir, observation.Snapshot, now)
+	}
 	if len(observation.Records) > 0 {
 		rt := daemonRuntimeFromRecord(observation.Records[0])
 		fmt.Fprintf(w, "agentsview already running at %s (pid %d)\n", urlFromDaemonRuntime(rt), rt.Record.PID)
 		return nil
-	}
-	if observation.Starting && observation.Snapshot != nil {
-		return daemonPersistentStartupError("daemon start", dataDir, observation.Snapshot, now)
 	}
 	if observation.LockHeld {
 		return fmt.Errorf(
 			"daemon start: launch is still in progress under %s; retry later and verify the owning process manually if it persists",
 			backgroundLaunchLockPath(dataDir),
 		)
-	}
-	if observation.Starting {
-		return daemonPersistentStartupError("daemon start", dataDir, observation.Snapshot, now)
 	}
 	return errors.New("daemon start: concurrent startup failed without publishing a writable runtime; inspect serve.log before retrying")
 }
@@ -278,11 +277,9 @@ func runDaemonStatus(w io.Writer, deps daemonCommandDeps) error {
 		return fmt.Errorf("daemon status: inspecting runtime store: %w", err)
 	}
 
-	var writable, readOnly []daemon.RuntimeRecord
+	var writable []daemon.RuntimeRecord
 	for _, rec := range records {
-		if daemonRuntimeFromRecord(rec).ReadOnly {
-			readOnly = append(readOnly, rec)
-		} else {
+		if !daemonRuntimeFromRecord(rec).ReadOnly {
 			writable = append(writable, rec)
 		}
 	}
@@ -301,14 +298,6 @@ func runDaemonStatus(w io.Writer, deps daemonCommandDeps) error {
 		fmt.Fprintln(w, "agentsview daemon is starting up.")
 		for _, line := range serveStartingStatusLines(deps.readStartupState(cfg.DataDir), deps.now()) {
 			fmt.Fprintln(w, line)
-		}
-		return nil
-	}
-	if len(readOnly) > 0 {
-		for _, rec := range readOnly {
-			for _, line := range serveStatusLines(daemonRuntimeFromRecord(rec)) {
-				fmt.Fprintln(w, line)
-			}
 		}
 		return nil
 	}
@@ -393,6 +382,9 @@ func runDaemonRestart(w io.Writer, deps daemonCommandDeps) error {
 	}
 	if deps.isStarting(cfg.DataDir) {
 		return daemonPersistentStartupError("daemon restart", cfg.DataDir, deps.readStartupState(cfg.DataDir), deps.now())
+	}
+	if err := deps.validateConfig(cfg); err != nil {
+		return fmt.Errorf("daemon restart: invalid config: %w", err)
 	}
 	if err := deps.checkDataVersion(cfg.DBPath); err != nil {
 		return fmt.Errorf("daemon restart: checking data version: %w", err)

@@ -66,6 +66,7 @@ func daemonCommandTestDeps(t *testing.T) (*daemonCommandDeps, *bytes.Buffer) {
 	deps.stopTargetConfirmed = func(daemon.RuntimeRecord, string) bool { return true }
 	deps.stopProcess = func(daemon.RuntimeRecord, time.Duration) error { return nil }
 	deps.stopCaddy = func(daemon.RuntimeRecord) {}
+	deps.validateConfig = func(config.Config) error { return nil }
 	deps.checkDataVersion = func(string) error { return nil }
 	deps.now = func() time.Time { return time.Unix(200, 0) }
 	return &deps, out
@@ -283,9 +284,10 @@ func TestDaemonStartLaunchContentionTerminalStates(t *testing.T) {
 
 func TestDaemonStatusRendersStoppedStartingReadOnlyAndIncompatible(t *testing.T) {
 	tests := []struct {
-		name   string
-		setup  func(*daemonCommandDeps)
-		wanted []string
+		name     string
+		setup    func(*daemonCommandDeps)
+		wanted   []string
+		unwanted []string
 	}{
 		{name: "stopped", setup: func(*daemonCommandDeps) {}, wanted: []string{"No agentsview daemon is running"}},
 		{name: "starting", setup: func(d *daemonCommandDeps) {
@@ -300,7 +302,7 @@ func TestDaemonStatusRendersStoppedStartingReadOnlyAndIncompatible(t *testing.T)
 				rec.Metadata[runtimeReadOnly] = "true"
 				return []daemon.RuntimeRecord{rec}, nil
 			}
-		}, wanted: []string{"running at", "mode:    read-only"}},
+		}, wanted: []string{"No agentsview daemon is running."}, unwanted: []string{"running at", "mode:    read-only"}},
 		{name: "incompatible", setup: func(d *daemonCommandDeps) {
 			d.statusRecords = func(string) ([]daemon.RuntimeRecord, error) {
 				rec := testWritableRecord(11, "/runtime/11.json")
@@ -324,8 +326,26 @@ func TestDaemonStatusRendersStoppedStartingReadOnlyAndIncompatible(t *testing.T)
 			for _, wanted := range tt.wanted {
 				assert.Contains(t, out.String(), wanted)
 			}
+			for _, unwanted := range tt.unwanted {
+				assert.NotContains(t, out.String(), unwanted)
+			}
 		})
 	}
+}
+
+func TestDaemonStartContentionStartLockWithoutSnapshotUsesRecoveryError(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	deps.acquireLaunchLock = func(string) (daemonLaunchLock, bool) { return nil, false }
+	deps.waitContendedLaunch = func(string) daemonLaunchObservation {
+		return daemonLaunchObservation{LockHeld: true, Starting: true}
+	}
+
+	err := executeDaemonCommand(t, *deps, out, "start")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "startup is still in progress")
+	assert.ErrorContains(t, err, "runtime publication may have failed")
+	assert.ErrorContains(t, err, startupStateFileName)
+	assert.NotContains(t, err.Error(), "launch is still in progress")
 }
 
 func TestDaemonStatusListsEveryWriterAndSurfacesInspectionErrors(t *testing.T) {
@@ -536,18 +556,90 @@ func TestDaemonRestartFailurePathsSignalNobody(t *testing.T) {
 	}
 }
 
+func TestDaemonRestartInvalidServeConfigDoesNotStopOrStart(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     config.Config
+		wantErr string
+	}{
+		{
+			name:    "non-loopback host without auth",
+			cfg:     config.Config{Host: "0.0.0.0", Port: 8080},
+			wantErr: "require_auth",
+		},
+		{
+			name:    "unsupported proxy",
+			cfg:     config.Config{Host: "127.0.0.1", Port: 8080, Proxy: config.ProxyConfig{Mode: "nginx"}},
+			wantErr: "unsupported proxy mode",
+		},
+		{
+			name: "https proxy without TLS files",
+			cfg: config.Config{
+				Host: "127.0.0.1", Port: 8080,
+				PublicURL: "https://viewer.example.test",
+				Proxy:     config.ProxyConfig{Mode: "caddy", Bin: os.Args[0]},
+			},
+			wantErr: "requires both tls_cert and tls_key",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deps, out := daemonCommandTestDeps(t)
+			tt.cfg.DataDir = t.TempDir()
+			tt.cfg.DBPath = filepath.Join(tt.cfg.DataDir, "sessions.db")
+			deps.loadConfig = func() (config.Config, error) { return tt.cfg, nil }
+			deps.validateConfig = validateServeConfig
+			deps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) {
+				return []daemon.RuntimeRecord{testWritableRecord(121, "/runtime/121.json")}, nil
+			}
+			dataChecks, signals, starts := 0, 0, 0
+			deps.checkDataVersion = func(string) error { dataChecks++; return nil }
+			deps.stopProcess = func(daemon.RuntimeRecord, time.Duration) error { signals++; return nil }
+			deps.startBackground = func(config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+				starts++
+				return backgroundLaunchResult{}, nil
+			}
+
+			err := executeDaemonCommand(t, *deps, out, "restart")
+			require.Error(t, err)
+			assert.ErrorContains(t, err, "daemon restart: invalid config")
+			assert.ErrorContains(t, err, tt.wantErr)
+			assert.Zero(t, dataChecks)
+			assert.Zero(t, signals)
+			assert.Zero(t, starts)
+		})
+	}
+}
+
 func TestDaemonRestartChildFailureIncludesLogAndHeldLock(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
 	lock := &testDaemonLaunchLock{}
-	deps.acquireLaunchLock = func(string) (daemonLaunchLock, bool) { return lock, true }
+	lockAcquisitions := 0
+	deps.acquireLaunchLock = func(string) (daemonLaunchLock, bool) {
+		lockAcquisitions++
+		return lock, true
+	}
+	deps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) {
+		return []daemon.RuntimeRecord{testWritableRecord(131, "/runtime/131.json")}, nil
+	}
+	var order []string
+	deps.stopProcess = func(rec daemon.RuntimeRecord, _ time.Duration) error {
+		assert.Equal(t, 131, rec.PID)
+		assert.False(t, lock.unlocked, "restart must hold the launch lock while stopping")
+		order = append(order, "stop")
+		return nil
+	}
 	deps.startBackground = func(config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
 		assert.False(t, lock.unlocked, "restart must retain launch lock across stop/start gap")
+		order = append(order, "start")
 		return backgroundLaunchResult{LogPath: "/tmp/serve.log"}, errors.New("child exited")
 	}
 	err := executeDaemonCommand(t, *deps, out, "restart")
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "child exited")
 	assert.ErrorContains(t, err, "/tmp/serve.log")
+	assert.Equal(t, []string{"stop", "start"}, order)
+	assert.Equal(t, 1, lockAcquisitions)
 	assert.True(t, lock.unlocked)
 }
 
