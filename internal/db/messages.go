@@ -979,8 +979,8 @@ func (db *DB) WriteSessionIncremental(
 		return err
 	}
 	for _, link := range update.SubagentLinks {
-		if err := setToolCallSubagentSessionTx(
-			tx, sessionID, link.ToolUseID, link.SubagentSessionID,
+		if err := applyToolCallSubagentLinkTx(
+			tx, sessionID, link, update.BlockedResultCategories,
 		); err != nil {
 			return err
 		}
@@ -2074,55 +2074,65 @@ func (db *DB) SetToolCallSubagentSession(
 		return fmt.Errorf("beginning subagent linkage tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := setToolCallSubagentSessionTx(
-		tx, sessionID, toolUseID, subagentSessionID,
+	if err := applyToolCallSubagentLinkTx(
+		tx, sessionID, ToolCallSubagentLink{
+			ToolUseID:         toolUseID,
+			SubagentSessionID: subagentSessionID,
+		}, nil,
 	); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func setToolCallSubagentSessionTx(
-	tx *sql.Tx, sessionID, toolUseID, subagentSessionID string,
+func applyToolCallSubagentLinkTx(
+	tx *sql.Tx, sessionID string, link ToolCallSubagentLink,
+	blockedResultCategories map[string]bool,
 ) error {
-	result, err := tx.Exec(
-		`UPDATE tool_calls
-		 SET subagent_session_id = ?
-		 WHERE session_id = ? AND tool_use_id = ?
-		   AND COALESCE(subagent_session_id, '') = ''
-		   AND (category = 'Task' OR instr(tool_name, 'subagent') > 0)`,
-		subagentSessionID, sessionID, toolUseID,
-	)
-	if err != nil {
-		return fmt.Errorf(
-			"updating subagent_session_id for %s/%s: %w",
-			sessionID, toolUseID, err,
-		)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil || affected > 0 {
-		return err
-	}
-
-	var exists int
+	var toolName, category, currentSubagent string
 	if err := tx.QueryRow(
-		`SELECT COUNT(*)
+		`SELECT tool_name, category, COALESCE(subagent_session_id, '')
 		 FROM tool_calls
 		 WHERE session_id = ? AND tool_use_id = ?`,
-		sessionID, toolUseID,
-	).Scan(&exists); err != nil {
+		sessionID, link.ToolUseID,
+	).Scan(&toolName, &category, &currentSubagent); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf(
+				"tool_call not found for session %s tool_use_id %s",
+				sessionID, link.ToolUseID,
+			)
+		}
 		return fmt.Errorf(
 			"checking tool_call for %s/%s: %w",
-			sessionID, toolUseID, err,
+			sessionID, link.ToolUseID, err,
 		)
 	}
-	if exists == 0 {
-		return fmt.Errorf(
-			"tool_call not found for session %s tool_use_id %s",
-			sessionID, toolUseID,
-		)
+	if currentSubagent == "" &&
+		(category == "Task" || strings.Contains(toolName, "subagent")) {
+		currentSubagent = link.SubagentSessionID
 	}
-	return nil
+
+	if !link.HasResult {
+		_, err := tx.Exec(
+			`UPDATE tool_calls SET subagent_session_id = ?
+			 WHERE session_id = ? AND tool_use_id = ?`,
+			currentSubagent, sessionID, link.ToolUseID,
+		)
+		return err
+	}
+	resultContent := link.ResultContent
+	if blockedResultCategories[category] {
+		resultContent = ""
+	}
+	_, err := tx.Exec(
+		`UPDATE tool_calls
+		 SET subagent_session_id = ?, result_content_length = ?,
+		     result_content = ?
+		 WHERE session_id = ? AND tool_use_id = ?`,
+		currentSubagent, link.ResultContentLen, resultContent,
+		sessionID, link.ToolUseID,
+	)
+	return err
 }
 
 // SystemMessageFingerprint returns the ordered, comma-separated list of

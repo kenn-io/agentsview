@@ -384,6 +384,8 @@ var ErrClaudeIncrementalNeedsFullParse = fmt.Errorf(
 type ClaudeSubagentLink struct {
 	ToolUseID         string
 	SubagentSessionID string
+	ResultContentRaw  string
+	ResultContentLen  int
 }
 
 func claudeParseSessionFrom(
@@ -1064,28 +1066,30 @@ func extractToolResultAgentIDLink(line string) (ClaudeSubagentLink, bool) {
 	if !content.IsArray() {
 		return ClaudeSubagentLink{}, false
 	}
-	var toolUseID string
+	var toolResult ParsedToolResult
 	content.ForEach(func(_, block gjson.Result) bool {
 		if block.Get("type").Str != "tool_result" {
 			return true
 		}
-		tuid := block.Get("tool_use_id").Str
-		if tuid == "" {
+		result, ok := parseToolResult(block)
+		if !ok {
 			return true
 		}
-		if toolUseID != "" {
-			toolUseID = ""
+		if toolResult.ToolUseID != "" {
+			toolResult = ParsedToolResult{}
 			return false
 		}
-		toolUseID = tuid
+		toolResult = result
 		return true
 	})
-	if toolUseID == "" {
+	if toolResult.ToolUseID == "" {
 		return ClaudeSubagentLink{}, false
 	}
 	return ClaudeSubagentLink{
-		ToolUseID:         toolUseID,
+		ToolUseID:         toolResult.ToolUseID,
 		SubagentSessionID: sessionID,
+		ResultContentRaw:  toolResult.ContentRaw,
+		ResultContentLen:  toolResult.ContentLength,
 	}, true
 }
 

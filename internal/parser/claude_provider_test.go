@@ -311,6 +311,8 @@ func TestClaudeProviderParseIncrementalPreservesLinkWithoutMessage(t *testing.T)
 	assert.Equal(t, []ClaudeSubagentLink{{
 		ToolUseID:         "toolu_link_only",
 		SubagentSessionID: "agent-linkonly",
+		ResultContentRaw:  `"done"`,
+		ResultContentLen:  len("done"),
 	}}, outcome.SubagentLinks)
 }
 

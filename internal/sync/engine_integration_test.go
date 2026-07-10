@@ -9660,6 +9660,51 @@ func TestIncrementalSync_ClaudeAgentIDLinksIncrementally(t *testing.T) {
 	).Scan(&got), "query after append")
 	assert.Equal(t, assistantMessageID, gotMessageID, "assistant message row should remain in place during incremental linkage")
 	assert.Equal(t, "agent-childlate", got.String, "subagent_session_id = %q, want %q", got.String, "agent-childlate")
+	msgs := fetchMessages(t, env.db, "parent-late-link")
+	require.Len(t, msgs, 2)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "done", msgs[1].ToolCalls[0].ResultContent)
+	assert.Equal(t, len("done"), msgs[1].ToolCalls[0].ResultContentLength)
+}
+
+func TestIncrementalSync_ClaudeAgentIDLinkUsesRemotePrefix(t *testing.T) {
+	claudeDir := t.TempDir()
+	database := dbtest.OpenTestDB(t)
+	env := &testEnv{claudeDir: claudeDir, db: database}
+	env.engine = sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {claudeDir},
+		},
+		Machine:  "host",
+		IDPrefix: "host~",
+	})
+
+	initial := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"go"},"cwd":"/tmp"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_prefix","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}]}}`,
+	)
+	path := env.writeClaudeSession(
+		t, "proj-prefix-link", "parent-prefix-link.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	toolResult := `{"type":"user","timestamp":"2024-01-01T10:00:02Z","uuid":"r1","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_prefix","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"childprefix"}}`
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, writeErr := f.WriteString(toolResult + "\n")
+	require.NoError(t, f.Close(), "close append")
+	require.NoError(t, writeErr, "append")
+
+	env.engine.SyncPaths([]string{path})
+
+	var got string
+	require.NoError(t, database.Reader().QueryRow(`
+		SELECT subagent_session_id
+		FROM tool_calls
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"host~parent-prefix-link", "toolu_prefix",
+	).Scan(&got), "query prefixed link")
+	assert.Equal(t, "host~agent-childprefix", got)
 }
 
 func TestIncrementalSync_ClaudeAgentIDLinksToolUseFromSameAppend(t *testing.T) {

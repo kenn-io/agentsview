@@ -7476,8 +7476,13 @@ func (e *Engine) writeIncremental(
 	subagentLinks := make([]db.ToolCallSubagentLink, len(inc.links))
 	for i, link := range inc.links {
 		subagentLinks[i] = db.ToolCallSubagentLink{
-			ToolUseID:         link.ToolUseID,
-			SubagentSessionID: link.SubagentSessionID,
+			ToolUseID: link.ToolUseID,
+			SubagentSessionID: applyIDPrefixToID(
+				e.idPrefix, link.SubagentSessionID,
+			),
+			ResultContent:    parser.DecodeContent(link.ResultContentRaw),
+			ResultContentLen: link.ResultContentLen,
+			HasResult:        true,
 		}
 	}
 
@@ -7485,20 +7490,21 @@ func (e *Engine) writeIncremental(
 		inc.sessionID,
 		dbMsgs,
 		db.IncrementalSessionUpdate{
-			EndedAt:              endedAt,
-			TerminationStatus:    inc.terminationStatus,
-			MsgCount:             msgCount,
-			UserMsgCount:         userMsgCount,
-			FileSize:             inc.fileSize,
-			FileMtime:            inc.fileMtime,
-			FileHash:             strPtr(inc.fileHash),
-			NextOrdinal:          inc.nextOrdinal,
-			LastEntryUUID:        inc.lastEntryUUID,
-			TotalOutputTokens:    inc.totalOutputTokens,
-			PeakContextTokens:    inc.peakContextTokens,
-			HasTotalOutputTokens: inc.hasTotalOutputTokens,
-			HasPeakContextTokens: inc.hasPeakContextTokens,
-			SubagentLinks:        subagentLinks,
+			EndedAt:                 endedAt,
+			TerminationStatus:       inc.terminationStatus,
+			MsgCount:                msgCount,
+			UserMsgCount:            userMsgCount,
+			FileSize:                inc.fileSize,
+			FileMtime:               inc.fileMtime,
+			FileHash:                strPtr(inc.fileHash),
+			NextOrdinal:             inc.nextOrdinal,
+			LastEntryUUID:           inc.lastEntryUUID,
+			TotalOutputTokens:       inc.totalOutputTokens,
+			PeakContextTokens:       inc.peakContextTokens,
+			HasTotalOutputTokens:    inc.hasTotalOutputTokens,
+			HasPeakContextTokens:    inc.hasPeakContextTokens,
+			SubagentLinks:           subagentLinks,
+			BlockedResultCategories: e.blockedResultCategories,
 		},
 	); err != nil {
 		return fmt.Errorf(

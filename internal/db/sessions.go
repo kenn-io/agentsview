@@ -1750,25 +1750,29 @@ type IncrementalInfo struct {
 }
 
 type IncrementalSessionUpdate struct {
-	EndedAt              *string
-	TerminationStatus    *string
-	MsgCount             int
-	UserMsgCount         int
-	FileSize             int64
-	FileMtime            int64
-	FileHash             *string
-	NextOrdinal          int
-	LastEntryUUID        string
-	TotalOutputTokens    int
-	PeakContextTokens    int
-	HasTotalOutputTokens bool
-	HasPeakContextTokens bool
-	SubagentLinks        []ToolCallSubagentLink
+	EndedAt                 *string
+	TerminationStatus       *string
+	MsgCount                int
+	UserMsgCount            int
+	FileSize                int64
+	FileMtime               int64
+	FileHash                *string
+	NextOrdinal             int
+	LastEntryUUID           string
+	TotalOutputTokens       int
+	PeakContextTokens       int
+	HasTotalOutputTokens    bool
+	HasPeakContextTokens    bool
+	SubagentLinks           []ToolCallSubagentLink
+	BlockedResultCategories map[string]bool
 }
 
 type ToolCallSubagentLink struct {
 	ToolUseID         string
 	SubagentSessionID string
+	ResultContent     string
+	ResultContentLen  int
+	HasResult         bool
 }
 
 // GetSessionForIncremental returns session state needed for
