@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -1481,6 +1482,272 @@ func TestRunServeBackgroundPreservesNoSyncWhenReplacingOlderDaemon(
 			assert.Equal(t, []string{"serve", "--no-sync"}, gotArgs)
 		})
 	}
+}
+
+func TestRunServeBackgroundConfigOnlyDoesNotAdoptReplacedDaemonNoSync(
+	t *testing.T,
+) {
+	tests := []struct {
+		name         string
+		writeRuntime func(t *testing.T, dir, host string, port int)
+	}{
+		{
+			name: "compatible",
+			writeRuntime: func(t *testing.T, dir, host string, port int) {
+				t.Helper()
+				_, err := WriteDaemonRuntimeWithAuthAndNoSync(
+					dir, host, port, "1.0.0", false, false, true,
+				)
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "incompatible older API",
+			writeRuntime: func(t *testing.T, dir, host string, port int) {
+				t.Helper()
+				_, err := writeRuntimeRecordForTest(dir, daemonRuntimeRecord(
+					host, port,
+					withRuntimeVersion("1.0.0"),
+					withRuntimeRequireAuth(false),
+					withRuntimeNoSync(true),
+					withRuntimeAPIVersion(0),
+				))
+				require.NoError(t, err)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := runtimeTestDir(t)
+			oldHost, oldPort := testPingServer(t)
+			tt.writeRuntime(t, dir, oldHost, oldPort)
+			setTestVersion(t, "1.1.0")
+
+			stubStopDaemonRuntimeForUpgrade(t, func(
+				cfg config.Config, rt *DaemonRuntime,
+			) error {
+				assert.False(t, cfg.NoSync)
+				assert.True(t, rt.NoSync)
+				RemoveDaemonRuntime(dir)
+				return nil
+			})
+
+			newHost, newPort := testPingServer(t)
+			oldStart := startServeBackgroundProcessForRun
+			var gotArgs []string
+			startServeBackgroundProcessForRun = func(
+				cfg config.Config, arguments []string,
+			) (*exec.Cmd, string, error) {
+				assert.False(t, cfg.NoSync)
+				gotArgs = append([]string(nil), arguments...)
+				_, err := WriteDaemonRuntime(
+					dir, newHost, newPort, "1.1.0", false,
+				)
+				if err != nil {
+					return nil, "test.log", err
+				}
+				cmd := exec.Command("sleep", "2")
+				if err := cmd.Start(); err != nil {
+					return nil, "test.log", err
+				}
+				t.Cleanup(func() { _ = cmd.Process.Kill() })
+				return cmd, "test.log", nil
+			}
+			t.Cleanup(func() {
+				startServeBackgroundProcessForRun = oldStart
+				RemoveDaemonRuntime(dir)
+			})
+
+			result, err := startServeBackground(
+				config.Config{DataDir: dir},
+				[]string{"serve", "--background", "--no-sync"},
+				serveReplacementOptions{},
+				backgroundLaunchPolicy{
+					ConfigOnly: true,
+					Operation:  "daemon start",
+				},
+			)
+
+			require.NoError(t, err)
+			assert.True(t, result.Started)
+			require.NotNil(t, result.Runtime)
+			assert.Equal(t, newPort, result.Runtime.Port)
+			assert.Equal(t, []string{"serve"}, gotArgs)
+		})
+	}
+}
+
+func TestRunServeBackgroundConfigOnlyReadOnlyRuntimeStartsWritableChild(
+	t *testing.T,
+) {
+	dir := runtimeTestDir(t)
+	readOnlyHost, readOnlyPort := testPingServer(t)
+	_, err := WriteDaemonRuntime(
+		dir, readOnlyHost, readOnlyPort, version, true,
+	)
+	require.NoError(t, err)
+
+	writableHost, writablePort := testPingServer(t)
+	oldStart := startServeBackgroundProcessForRun
+	var gotArgs []string
+	startServeBackgroundProcessForRun = func(
+		_ config.Config, arguments []string,
+	) (*exec.Cmd, string, error) {
+		gotArgs = append([]string(nil), arguments...)
+		_, err := WriteDaemonRuntime(
+			dir, writableHost, writablePort, version, false,
+		)
+		if err != nil {
+			return nil, "test.log", err
+		}
+		cmd := exec.Command("sleep", "2")
+		if err := cmd.Start(); err != nil {
+			return nil, "test.log", err
+		}
+		t.Cleanup(func() { _ = cmd.Process.Kill() })
+		return cmd, "test.log", nil
+	}
+	t.Cleanup(func() {
+		startServeBackgroundProcessForRun = oldStart
+		RemoveDaemonRuntime(dir)
+	})
+
+	result, err := startServeBackground(
+		config.Config{DataDir: dir},
+		nil,
+		serveReplacementOptions{},
+		backgroundLaunchPolicy{ConfigOnly: true, Operation: "daemon start"},
+	)
+
+	require.NoError(t, err)
+	assert.True(t, result.Started)
+	require.NotNil(t, result.Runtime)
+	assert.False(t, result.Runtime.ReadOnly)
+	assert.Equal(t, writableHost, result.Runtime.Host)
+	assert.Equal(t, writablePort, result.Runtime.Port)
+	assert.Equal(t, []string{"serve"}, gotArgs)
+}
+
+func TestBackgroundStartResultDistinguishesExistingDaemonAndStartedChild(
+	t *testing.T,
+) {
+	t.Run("existing daemon", func(t *testing.T) {
+		dir := runtimeTestDir(t)
+		host, port := testPingServer(t)
+		_, err := WriteDaemonRuntime(dir, host, port, version, false)
+		require.NoError(t, err)
+		t.Cleanup(func() { RemoveDaemonRuntime(dir) })
+
+		oldStart := startServeBackgroundProcessForRun
+		startServeBackgroundProcessForRun = func(
+			config.Config, []string,
+		) (*exec.Cmd, string, error) {
+			t.Fatal("existing writable daemon must be reused")
+			return nil, "", nil
+		}
+		t.Cleanup(func() { startServeBackgroundProcessForRun = oldStart })
+
+		result, err := startServeBackground(
+			config.Config{DataDir: dir},
+			[]string{"serve", "--background"},
+			serveReplacementOptions{},
+			backgroundLaunchPolicy{},
+		)
+
+		require.NoError(t, err)
+		assert.False(t, result.Started)
+		assert.Empty(t, result.LogPath)
+		require.NotNil(t, result.Runtime)
+		assert.Equal(t, host, result.Runtime.Host)
+		assert.Equal(t, port, result.Runtime.Port)
+	})
+
+	t.Run("started child", func(t *testing.T) {
+		dir := runtimeTestDir(t)
+		require.NoError(t, os.MkdirAll(dir, 0o700))
+		host, port := testPingServer(t)
+
+		oldStart := startServeBackgroundProcessForRun
+		startServeBackgroundProcessForRun = func(
+			_ config.Config, arguments []string,
+		) (*exec.Cmd, string, error) {
+			assert.Equal(t, []string{"serve"}, arguments)
+			_, err := WriteDaemonRuntime(dir, host, port, version, false)
+			if err != nil {
+				return nil, "test.log", err
+			}
+			cmd := exec.Command("sleep", "2")
+			if err := cmd.Start(); err != nil {
+				return nil, "test.log", err
+			}
+			t.Cleanup(func() { _ = cmd.Process.Kill() })
+			return cmd, "test.log", nil
+		}
+		t.Cleanup(func() {
+			startServeBackgroundProcessForRun = oldStart
+			RemoveDaemonRuntime(dir)
+		})
+
+		result, err := startServeBackground(
+			config.Config{DataDir: dir},
+			[]string{"serve", "--background"},
+			serveReplacementOptions{},
+			backgroundLaunchPolicy{},
+		)
+
+		require.NoError(t, err)
+		assert.True(t, result.Started)
+		assert.Equal(t, "test.log", result.LogPath)
+		require.NotNil(t, result.Runtime)
+		assert.Equal(t, host, result.Runtime.Host)
+		assert.Equal(t, port, result.Runtime.Port)
+	})
+}
+
+func TestStartServeBackgroundReturnsStartupErrorWithLogPath(t *testing.T) {
+	dir := runtimeTestDir(t)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	startErr := errors.New("fork failed")
+	logPath := filepath.Join(dir, "serve.log")
+
+	oldStart := startServeBackgroundProcessForRun
+	startServeBackgroundProcessForRun = func(
+		_ config.Config, arguments []string,
+	) (*exec.Cmd, string, error) {
+		assert.Equal(t, []string{"serve"}, arguments)
+		return nil, logPath, startErr
+	}
+	t.Cleanup(func() { startServeBackgroundProcessForRun = oldStart })
+
+	result, err := startServeBackground(
+		config.Config{DataDir: dir},
+		nil,
+		serveReplacementOptions{},
+		backgroundLaunchPolicy{ConfigOnly: true, Operation: "daemon start"},
+	)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, startErr)
+	assert.Contains(t, err.Error(), "daemon start")
+	assert.Contains(t, err.Error(), logPath)
+	assert.False(t, result.Started)
+	assert.Equal(t, logPath, result.LogPath)
+	assert.Nil(t, result.Runtime)
+}
+
+func TestStartServeBackgroundProcessOpenErrorReturnsLogPath(t *testing.T) {
+	dir := t.TempDir()
+	notDirectory := filepath.Join(dir, "not-a-directory")
+	require.NoError(t, os.WriteFile(notDirectory, []byte("file"), 0o600))
+
+	child, logPath, err := startServeBackgroundProcess(
+		config.Config{DataDir: notDirectory}, []string{"serve"},
+	)
+
+	require.Error(t, err)
+	assert.Nil(t, child)
+	assert.Equal(t, filepath.Join(notDirectory, "serve.log"), logPath)
 }
 
 func TestRunServeBackgroundKeepsInvocationNoSyncWhenReplacingSyncingDaemon(

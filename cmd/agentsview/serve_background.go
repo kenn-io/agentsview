@@ -28,6 +28,25 @@ var errServeStartupInProgress = errors.New(
 var startServeBackgroundProcessForEnsure = startServeBackgroundProcess
 var startServeBackgroundProcessForRun = startServeBackgroundProcess
 
+type backgroundLaunchPolicy struct {
+	ConfigOnly bool
+	Operation  string
+}
+
+type backgroundLaunchResult struct {
+	Runtime  *DaemonRuntime
+	Started  bool
+	LogPath  string
+	childPID int
+}
+
+func (p backgroundLaunchPolicy) operation() string {
+	if p.Operation != "" {
+		return p.Operation
+	}
+	return "serve background"
+}
+
 // backgroundChildEnvVar marks the re-exec'd serve process as the child of a
 // background launch. The child reads it to keep the auth token out of
 // serve.log; the parent prints the token to the invoking terminal instead.
@@ -117,17 +136,62 @@ func runServeBackgroundCommand(
 	runServeBackground(mustLoadConfig(cmd), os.Args[1:], opts)
 }
 
-// runServeBackground generates the daemon auth token, checks for an existing
-// daemon, and spawns the detached child. The caller must already hold the
-// background launch lock (see runServeBackgroundCommand). The launch lock is
-// distinct from the daemon start lock so the spawned child can still claim the
-// start lock during its own (possibly long) startup.
+// runServeBackground preserves the serve --background CLI's fatal and output
+// behavior around the reusable, error-returning background launch path.
 func runServeBackground(
 	cfg config.Config, args []string, opts serveReplacementOptions,
 ) {
+	result, err := startServeBackground(
+		cfg, args, opts, backgroundLaunchPolicy{},
+	)
+	if err != nil {
+		fatal("%v", err)
+	}
+	if result.Runtime != nil && !result.Started {
+		fmt.Printf(
+			"agentsview already running at %s (pid %d)\n",
+			urlFromDaemonRuntime(result.Runtime),
+			result.Runtime.Record.PID,
+		)
+		return
+	}
+	if !result.Started {
+		return
+	}
+	if result.Runtime != nil {
+		fmt.Printf(
+			"agentsview running at %s (pid %d)\n",
+			urlFromDaemonRuntime(result.Runtime),
+			result.childPID,
+		)
+		fmt.Printf("Logs: %s\n", result.LogPath)
+		return
+	}
+
+	fmt.Printf(
+		"agentsview starting in background (pid %d)\n",
+		result.childPID,
+	)
+	fmt.Printf("Logs: %s\n", result.LogPath)
+}
+
+// startServeBackground generates the daemon auth token, checks for an existing
+// writable daemon, and starts a detached child when needed. The caller must
+// already hold the background launch lock. Unlike runServeBackground, this
+// lower-level entry point returns launch failures for non-CLI callers.
+func startServeBackground(
+	cfg config.Config,
+	args []string,
+	opts serveReplacementOptions,
+	policy backgroundLaunchPolicy,
+) (backgroundLaunchResult, error) {
+	var result backgroundLaunchResult
+	operation := policy.operation()
 	replacementCheckStarted := time.Now()
 	if err := ensureServeAuthToken(&cfg); err != nil {
-		fatal("serve background: generating auth token: %v", err)
+		return result, fmt.Errorf(
+			"%s: generating auth token: %w", operation, err,
+		)
 	}
 	if cfg.RequireAuth {
 		if cfg.AuthToken != "" {
@@ -140,13 +204,10 @@ func runServeBackground(
 	case serveReplacementNone:
 	case serveReplacementUseExisting:
 		if rt := decision.Runtime; rt != nil {
-			fmt.Printf(
-				"agentsview already running at %s (pid %d)\n",
-				urlFromDaemonRuntime(rt),
-				rt.Record.PID,
-			)
+			result.Runtime = rt
+			result.childPID = rt.Record.PID
 		}
-		return
+		return result, nil
 	case serveReplacementAuto, serveReplacementExplicit:
 		waitedForExternalStartup := false
 		if waited, err := waitForExternalServeStartupBeforeReplacement(
@@ -159,9 +220,9 @@ func runServeBackground(
 			if err != nil {
 				if errors.Is(err, errServeStartupInProgress) {
 					fmt.Println(errServeStartupInProgress.Error() + ".")
-					return
+					return result, nil
 				}
-				fatal("serve background: %v", err)
+				return result, fmt.Errorf("%s: %w", operation, err)
 			}
 		}
 		decision = refreshServeDaemonReplacementDecision(
@@ -172,51 +233,50 @@ func runServeBackground(
 		case serveReplacementNone:
 		case serveReplacementUseExisting:
 			if rt := decision.Runtime; rt != nil {
-				fmt.Printf(
-					"agentsview already running at %s (pid %d)\n",
-					urlFromDaemonRuntime(rt),
-					rt.Record.PID,
-				)
+				result.Runtime = rt
+				result.childPID = rt.Record.PID
 			}
-			return
+			return result, nil
 		case serveReplacementAuto, serveReplacementExplicit:
 			if err := checkBackgroundReplacementDataVersion(&cfg); err != nil {
-				fatal("serve background: %v", err)
+				return result, fmt.Errorf("%s: %w", operation, err)
 			}
 			// runServeBackgroundCommand holds the background launch lock across
 			// this stop/start sequence, so another CLI launcher cannot race into
 			// the replacement gap.
-			adoptDaemonRuntimeLaunchOptions(&cfg, decision.Runtime)
+			if !policy.ConfigOnly {
+				adoptDaemonRuntimeLaunchOptions(&cfg, decision.Runtime)
+			}
 			fmt.Println("Replacing agentsview daemon")
 			for _, line := range serveDaemonReplacementLines(decision) {
 				fmt.Println(line)
 			}
 			if err := stopDaemonRuntimeForUpgrade(cfg, decision.Runtime); err != nil {
-				fatal(
-					"serve background: stopping daemon before restart: %v",
-					err,
+				return result, fmt.Errorf(
+					"%s: stopping daemon before restart: %w",
+					operation, err,
 				)
 			}
 		case serveReplacementRefuse:
-			fatal(
-				"serve background: %s",
+			return result, fmt.Errorf(
+				"%s: %s", operation,
 				strings.Join(serveDaemonConflictLines(decision), "\n"),
 			)
 		default:
-			fatal(
-				"serve background: unknown serve replacement action %d",
-				decision.Action,
+			return result, fmt.Errorf(
+				"%s: unknown serve replacement action %d",
+				operation, decision.Action,
 			)
 		}
 	case serveReplacementRefuse:
-		fatal(
-			"serve background: %s",
+		return result, fmt.Errorf(
+			"%s: %s", operation,
 			strings.Join(serveDaemonConflictLines(decision), "\n"),
 		)
 	default:
-		fatal(
-			"serve background: unknown serve replacement action %d",
-			decision.Action,
+		return result, fmt.Errorf(
+			"%s: unknown serve replacement action %d",
+			operation, decision.Action,
 		)
 	}
 
@@ -225,15 +285,27 @@ func runServeBackground(
 	// runtime record. Wait for it instead of racing a second server.
 	if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
 		reportBackgroundLaunchInProgress(cfg.DataDir, cfg.AuthToken)
-		return
+		return result, nil
 	}
 
-	args = serveBackgroundChildArgs(args)
+	if policy.ConfigOnly {
+		args = []string{"serve"}
+	} else {
+		args = serveBackgroundChildArgs(args)
+	}
 	args = serveBackgroundArgsWithNoSync(args, cfg.NoSync)
 	child, logPath, err := startServeBackgroundProcessForRun(cfg, args)
+	result.LogPath = logPath
 	if err != nil {
-		fatal("serve background: %v", err)
+		if logPath != "" {
+			return result, fmt.Errorf(
+				"%s: %w; logs: %s", operation, err, logPath,
+			)
+		}
+		return result, fmt.Errorf("%s: %w", operation, err)
 	}
+	result.Started = true
+	result.childPID = child.Process.Pid
 
 	waitCh := make(chan error, 1)
 	go func() {
@@ -248,28 +320,13 @@ func runServeBackground(
 		backgroundServeReadyTimeout,
 	)
 	if err != nil {
-		fatal(
-			"serve background: server exited before becoming ready: %v\n"+
-				"Logs: %s",
-			err,
-			logPath,
+		return result, fmt.Errorf(
+			"%s: server exited before becoming ready: %w\nLogs: %s",
+			operation, err, logPath,
 		)
 	}
-	if rt != nil {
-		fmt.Printf(
-			"agentsview running at %s (pid %d)\n",
-			urlFromDaemonRuntime(rt),
-			child.Process.Pid,
-		)
-		fmt.Printf("Logs: %s\n", logPath)
-		return
-	}
-
-	fmt.Printf(
-		"agentsview starting in background (pid %d)\n",
-		child.Process.Pid,
-	)
-	fmt.Printf("Logs: %s\n", logPath)
+	result.Runtime = rt
+	return result, nil
 }
 
 func ensureBackgroundServe(
@@ -712,18 +769,18 @@ func startServeBackgroundProcess(
 	cfg config.Config,
 	args []string,
 ) (*exec.Cmd, string, error) {
+	logPath := serveLogPath(cfg.DataDir)
 	exe, err := os.Executable()
 	if err != nil {
-		return nil, "", fmt.Errorf("finding executable: %w", err)
+		return nil, logPath, fmt.Errorf("finding executable: %w", err)
 	}
-	logPath := serveLogPath(cfg.DataDir)
 	// 0o600: the child writes its startup output here, which can include
 	// auth details, so keep the log readable only by the owner.
 	logFile, err := os.OpenFile(
 		logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600,
 	)
 	if err != nil {
-		return nil, "", fmt.Errorf("opening log file: %w", err)
+		return nil, logPath, fmt.Errorf("opening log file: %w", err)
 	}
 	defer logFile.Close()
 
@@ -732,12 +789,12 @@ func startServeBackgroundProcess(
 		"\n--- agentsview serve background start %s ---\n",
 		time.Now().Format(time.RFC3339),
 	); err != nil {
-		return nil, "", fmt.Errorf("writing log header: %w", err)
+		return nil, logPath, fmt.Errorf("writing log header: %w", err)
 	}
 
 	devNull, err := os.Open(os.DevNull)
 	if err != nil {
-		return nil, "", fmt.Errorf("opening null device: %w", err)
+		return nil, logPath, fmt.Errorf("opening null device: %w", err)
 	}
 	defer devNull.Close()
 
@@ -752,7 +809,7 @@ func startServeBackgroundProcess(
 	cmd.Stderr = logFile
 	configureServeBackgroundCommand(cmd)
 	if err := cmd.Start(); err != nil {
-		return nil, "", fmt.Errorf("starting server: %w", err)
+		return nil, logPath, fmt.Errorf("starting server: %w", err)
 	}
 	return cmd, logPath, nil
 }
