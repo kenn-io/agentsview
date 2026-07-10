@@ -132,6 +132,9 @@ const recallBaseColsQualified = `recall_entries.id, recall_entries.type,
 var recallSearchTokenPattern = regexp.MustCompile(`[A-Za-z0-9_]+`)
 var recallQuotedTextPattern = regexp.MustCompile("`([^`]+)`|'([^']+)'|\"([^\"]+)\"")
 
+// ErrInvalidRecallQuery identifies contradictory or unsupported recall filters.
+var ErrInvalidRecallQuery = errors.New("invalid recall query")
+
 var errRecallFTSCandidateQueryUnavailable = errors.New("recall fts candidate query unavailable")
 
 func scanRecallEntryRow(rs rowScanner) (RecallEntry, error) {
@@ -500,6 +503,9 @@ func (db *DB) GetRecallEntry(ctx context.Context, id string) (*RecallEntry, erro
 func (db *DB) ListRecallEntries(
 	ctx context.Context, q RecallQuery,
 ) ([]RecallEntry, error) {
+	if err := ValidateRecallQuery(q); err != nil {
+		return nil, err
+	}
 	q = NormalizeRecallQuery(q)
 	where, args := buildRecallEntryWhere(q, false)
 	limit := recallLimit(q.Limit)
@@ -534,6 +540,9 @@ func (db *DB) ListRecallEntries(
 func (db *DB) ListRecallEntryTextCandidates(
 	ctx context.Context, q RecallQuery,
 ) ([]RecallEntry, error) {
+	if err := ValidateRecallQuery(q); err != nil {
+		return nil, err
+	}
 	q = NormalizeRecallQuery(q)
 	terms := recallQueryTerms(q.Text)
 	if len(terms) == 0 {
@@ -859,6 +868,9 @@ func (db *DB) listRecallEvidenceLikeCandidates(
 func (db *DB) QueryRecallEntries(
 	ctx context.Context, q RecallQuery,
 ) (RecallPage, error) {
+	if err := ValidateRecallQuery(q); err != nil {
+		return RecallPage{}, err
+	}
 	q = NormalizeRecallQuery(q)
 	if strings.TrimSpace(q.Text) == "" {
 		entries, err := db.ListRecallEntries(ctx, q)
@@ -927,6 +939,21 @@ func NormalizeRecallQuery(q RecallQuery) RecallQuery {
 	q.SupersedesEntryID = strings.TrimSpace(q.SupersedesEntryID)
 	q.SupersededByEntryID = strings.TrimSpace(q.SupersededByEntryID)
 	return q
+}
+
+// ValidateRecallQuery rejects filter combinations that cannot produce a
+// meaningful result. Trusted queries always target accepted entries; asking
+// for another explicit status is therefore a caller error, not an empty page.
+func ValidateRecallQuery(q RecallQuery) error {
+	q = NormalizeRecallQuery(q)
+	if q.TrustedOnly && q.Status != "" && q.Status != corerecall.StatusAccepted {
+		return fmt.Errorf(
+			"%w: trusted_only requires status %q",
+			ErrInvalidRecallQuery,
+			corerecall.StatusAccepted,
+		)
+	}
+	return nil
 }
 
 func recallPageFromList(entries []RecallEntry) RecallPage {
@@ -1116,8 +1143,6 @@ func buildRecallEntryWhere(q RecallQuery, includeText bool) (string, []any) {
 		args = append(args, q.SupersededByEntryID)
 	}
 	if q.TrustedOnly {
-		preds = append(preds, "status = ?")
-		args = append(args, corerecall.StatusAccepted)
 		preds = append(preds, "review_state = ?")
 		args = append(args, corerecall.ReviewStateHumanReviewed)
 		preds = append(preds, "transferable = 1")

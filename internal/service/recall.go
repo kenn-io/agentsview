@@ -53,7 +53,7 @@ func QueryRecallStore(
 	if err != nil {
 		return nil, err
 	}
-	page, err := store.QueryRecallEntries(ctx, db.RecallQuery{
+	query := db.RecallQuery{
 		Text:                req.Query,
 		Project:             req.Project,
 		CWD:                 req.CWD,
@@ -70,7 +70,11 @@ func QueryRecallStore(
 		SupersededByEntryID: req.SupersededByEntryID,
 		TrustedOnly:         req.TrustedOnly,
 		Limit:               req.Limit,
-	})
+	}
+	if err := db.ValidateRecallQuery(query); err != nil {
+		return nil, err
+	}
+	page, err := store.QueryRecallEntries(ctx, query)
 	if err != nil {
 		return nil, err
 	}

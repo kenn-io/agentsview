@@ -33,6 +33,47 @@ func (s *failingRecallRecorder) RecordRecallQueryEvent(
 
 func (s *failingRecallRecorder) ReadOnly() bool { return false }
 
+type observingRecallQueryStore struct {
+	db.Store
+	queryCalls  int
+	recordCalls int
+}
+
+func (s *observingRecallQueryStore) QueryRecallEntries(
+	context.Context, db.RecallQuery,
+) (db.RecallPage, error) {
+	s.queryCalls++
+	return db.RecallPage{}, nil
+}
+
+func (s *observingRecallQueryStore) RecordRecallQueryEvent(
+	context.Context, db.RecallQueryEvent,
+) (string, error) {
+	s.recordCalls++
+	return "unexpected-query-event", nil
+}
+
+func (s *observingRecallQueryStore) ReadOnly() bool { return false }
+
+func TestQueryRecallStoreTrustedOnlyRejectsArchivedStatus(t *testing.T) {
+	store := &observingRecallQueryStore{Store: dbtest.OpenTestDB(t)}
+
+	result, err := service.QueryRecallStore(
+		context.Background(), store, service.RecallQuery{
+			Query:       "cwd",
+			Status:      corerecall.StatusArchived,
+			TrustedOnly: true,
+		},
+	)
+
+	require.EqualError(t, err,
+		`invalid recall query: trusted_only requires status "accepted"`)
+	require.ErrorIs(t, err, db.ErrInvalidRecallQuery)
+	assert.Nil(t, result)
+	assert.Zero(t, store.queryCalls, "invalid filters must fail before querying")
+	assert.Zero(t, store.recordCalls, "invalid filters must not create a ledger event")
+}
+
 func TestDirectBackend_RecallNoResultsRecordsMiss(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	svc := service.NewReadOnlyBackend(d)

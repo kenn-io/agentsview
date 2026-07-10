@@ -156,6 +156,21 @@ func TestListRecallEntriesFiltersTrustedOnly(t *testing.T) {
 	assert.True(t, r.TrustedOnly)
 }
 
+func TestListRecallEntriesTrustedOnlyRejectsArchivedStatus(t *testing.T) {
+	te := setup(t)
+
+	w := te.get(t,
+		"/api/v1/recall/entries?trusted_only=true&status=archived")
+
+	assertStatus(t, w, http.StatusBadRequest)
+	assertErrorResponse(t, w,
+		`invalid recall query: trusted_only requires status "accepted"`)
+
+	w = te.get(t,
+		"/api/v1/recall/entries?trusted_only=true&status=accepted")
+	assertStatus(t, w, http.StatusOK)
+}
+
 func TestListRecallEntriesFiltersBySupersessionLinks(t *testing.T) {
 	te := setup(t)
 	seedRecallEntrySession(t, te)
@@ -448,6 +463,27 @@ func TestQueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
 	require.Len(t, r.RecallEntries, 1)
 	assert.Equal(t, "trusted", r.RecallEntries[0].ID)
 	assert.True(t, r.TrustedOnly)
+}
+
+func TestQueryRecallEntriesTrustedOnlyRejectsArchivedStatus(t *testing.T) {
+	te := setup(t)
+
+	w := te.post(t, "/api/v1/recall/query", `{
+		"query":"cwd",
+		"status":"archived",
+		"trusted_only":true
+	}`)
+
+	assertStatus(t, w, http.StatusBadRequest)
+	assertErrorResponse(t, w,
+		`invalid recall query: trusted_only requires status "accepted"`)
+
+	w = te.post(t, "/api/v1/recall/query", `{
+		"query":"cwd",
+		"status":"accepted",
+		"trusted_only":true
+	}`)
+	assertStatus(t, w, http.StatusOK)
 }
 
 func TestQueryRecallEntriesPacksMultipleFocusedContextEntries(t *testing.T) {

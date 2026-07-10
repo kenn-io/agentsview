@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -589,9 +590,69 @@ func TestQueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
 		Limit:       10,
 	})
 
-	require.NoError(t, err, "QueryRecallEntries archived trusted-only")
+	require.EqualError(t, err,
+		`invalid recall query: trusted_only requires status "accepted"`)
+	require.ErrorIs(t, err, ErrInvalidRecallQuery)
 	assert.Empty(t, page.RecallEntries,
 		"trusted-only must never return a non-accepted entry")
+}
+
+func TestRecallQueriesTrustedOnlyRejectArchivedStatus(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	queries := []struct {
+		name string
+		run  func(RecallQuery) error
+	}{
+		{
+			name: "list",
+			run: func(q RecallQuery) error {
+				_, err := d.ListRecallEntries(ctx, q)
+				return err
+			},
+		},
+		{
+			name: "text candidates",
+			run: func(q RecallQuery) error {
+				_, err := d.ListRecallEntryTextCandidates(ctx, q)
+				return err
+			},
+		},
+		{
+			name: "query",
+			run: func(q RecallQuery) error {
+				_, err := d.QueryRecallEntries(ctx, q)
+				return err
+			},
+		},
+	}
+
+	for _, query := range queries {
+		t.Run(query.name, func(t *testing.T) {
+			err := query.run(RecallQuery{
+				Text:        "cwd",
+				Status:      " " + corerecall.StatusArchived + " ",
+				TrustedOnly: true,
+			})
+			require.EqualError(t, err,
+				`invalid recall query: trusted_only requires status "accepted"`)
+			require.True(t, errors.Is(err, ErrInvalidRecallQuery))
+
+			for _, status := range []string{
+				"",
+				corerecall.StatusAccepted,
+				" " + corerecall.StatusAccepted + " ",
+			} {
+				err = query.run(RecallQuery{
+					Text:        "cwd",
+					Status:      status,
+					TrustedOnly: true,
+				})
+				require.NoError(t, err, "status %q remains valid", status)
+			}
+		})
+	}
 }
 
 func TestInsertRecallEntryRejectsUnknownReviewState(t *testing.T) {

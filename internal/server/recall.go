@@ -30,6 +30,14 @@ func handleReadOnly(w http.ResponseWriter, err error) bool {
 	return false
 }
 
+func handleInvalidRecallQuery(w http.ResponseWriter, err error) bool {
+	if errors.Is(err, db.ErrInvalidRecallQuery) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return true
+	}
+	return false
+}
+
 func (s *Server) handleListRecallEntries(
 	w http.ResponseWriter, r *http.Request,
 ) {
@@ -67,6 +75,9 @@ func (s *Server) handleListRecallEntries(
 	page, err := s.db.QueryRecallEntries(r.Context(), query)
 	if err != nil {
 		if handleContextError(w, err) {
+			return
+		}
+		if handleInvalidRecallQuery(w, err) {
 			return
 		}
 		if handleReadOnly(w, err) {
@@ -133,6 +144,9 @@ func (s *Server) handleQueryRecallEntries(
 	resp, err := service.QueryRecallStore(r.Context(), s.db, req)
 	if err != nil {
 		if handleContextError(w, err) {
+			return
+		}
+		if handleInvalidRecallQuery(w, err) {
 			return
 		}
 		if handleReadOnly(w, err) {

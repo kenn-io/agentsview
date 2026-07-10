@@ -1664,6 +1664,40 @@ func TestRecallQueryFiltersTrustedOnly(t *testing.T) {
 	assert.NotContains(t, out, "m-eval-raw")
 }
 
+func TestRecallCLITrustedOnlyRejectsArchivedStatus(t *testing.T) {
+	dataDir := t.TempDir()
+	setRecallTestEnv(t, dataDir)
+	seedRecallEntryFixture(t, dataDir)
+
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{
+			name: "list",
+			args: []string{
+				"recall", "list", "--trusted-only", "--status", "archived",
+			},
+		},
+		{
+			name: "query",
+			args: []string{
+				"recall", "query", "cwd", "--trusted-only", "--status", "archived",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := executeCommand(newRootCommand(), test.args...)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(),
+				`invalid recall query: trusted_only requires status \"accepted\"`)
+		})
+	}
+}
+
 func TestRecallQueryHumanShowsReviewState(t *testing.T) {
 	dataDir := t.TempDir()
 	setRecallTestEnv(t, dataDir)
