@@ -7473,14 +7473,11 @@ func (e *Engine) writeIncremental(
 	// since a long session legitimately exceeds it.
 	endedAt, _ = blankImplausibleTimestampPtr(endedAt)
 
-	for _, link := range inc.links {
-		if err := e.db.SetToolCallSubagentSession(
-			inc.sessionID, link.ToolUseID, link.SubagentSessionID,
-		); err != nil {
-			return fmt.Errorf(
-				"incremental subagent linkage %s %s: %w",
-				inc.sessionID, link.ToolUseID, err,
-			)
+	subagentLinks := make([]db.ToolCallSubagentLink, len(inc.links))
+	for i, link := range inc.links {
+		subagentLinks[i] = db.ToolCallSubagentLink{
+			ToolUseID:         link.ToolUseID,
+			SubagentSessionID: link.SubagentSessionID,
 		}
 	}
 
@@ -7501,6 +7498,7 @@ func (e *Engine) writeIncremental(
 			PeakContextTokens:    inc.peakContextTokens,
 			HasTotalOutputTokens: inc.hasTotalOutputTokens,
 			HasPeakContextTokens: inc.hasPeakContextTokens,
+			SubagentLinks:        subagentLinks,
 		},
 	); err != nil {
 		return fmt.Errorf(

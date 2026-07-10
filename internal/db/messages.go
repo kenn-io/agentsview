@@ -978,6 +978,13 @@ func (db *DB) WriteSessionIncremental(
 	if err := writeMessagesTx(tx, msgs); err != nil {
 		return err
 	}
+	for _, link := range update.SubagentLinks {
+		if err := setToolCallSubagentSessionTx(
+			tx, sessionID, link.ToolUseID, link.SubagentSessionID,
+		); err != nil {
+			return err
+		}
+	}
 	if err := updateSessionIncrementalTx(tx, sessionID, update); err != nil {
 		return err
 	}
@@ -2062,7 +2069,23 @@ func (db *DB) SetToolCallSubagentSession(
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	result, err := db.getWriter().Exec(
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return fmt.Errorf("beginning subagent linkage tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := setToolCallSubagentSessionTx(
+		tx, sessionID, toolUseID, subagentSessionID,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func setToolCallSubagentSessionTx(
+	tx *sql.Tx, sessionID, toolUseID, subagentSessionID string,
+) error {
+	result, err := tx.Exec(
 		`UPDATE tool_calls
 		 SET subagent_session_id = ?
 		 WHERE session_id = ? AND tool_use_id = ?
@@ -2081,7 +2104,7 @@ func (db *DB) SetToolCallSubagentSession(
 	}
 
 	var exists int
-	if err := db.getReader().QueryRow(
+	if err := tx.QueryRow(
 		`SELECT COUNT(*)
 		 FROM tool_calls
 		 WHERE session_id = ? AND tool_use_id = ?`,

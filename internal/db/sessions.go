@@ -1763,6 +1763,12 @@ type IncrementalSessionUpdate struct {
 	PeakContextTokens    int
 	HasTotalOutputTokens bool
 	HasPeakContextTokens bool
+	SubagentLinks        []ToolCallSubagentLink
+}
+
+type ToolCallSubagentLink struct {
+	ToolUseID         string
+	SubagentSessionID string
 }
 
 // GetSessionForIncremental returns session state needed for
