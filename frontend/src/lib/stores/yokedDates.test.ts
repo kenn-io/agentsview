@@ -35,16 +35,19 @@ function fakeStorage(initial: Record<string, string> = {}): Storage {
 }
 
 describe("YokedDatesStore", () => {
-  it("defaults to no stored range", () => {
+  it("defaults to disabled with no shared range", () => {
     const store = new YokedDatesStore(fakeStorage());
 
+    expect(store.enabled).toBe(false);
     expect(store.range).toBeNull();
+    expect(store.seedForPanel()).toBeNull();
   });
 
-  it("hydrates valid stored state", () => {
+  it("hydrates an enabled version 2 rolling range", () => {
     const storage = fakeStorage({
       "yoked-dates": JSON.stringify({
-        version: 1,
+        version: 2,
+        enabled: true,
         range: {
           from: "2026-06-01",
           to: "2026-06-07",
@@ -57,6 +60,7 @@ describe("YokedDatesStore", () => {
 
     const store = new YokedDatesStore(storage);
 
+    expect(store.enabled).toBe(true);
     expect(store.range).toEqual({
       from: "2026-06-01",
       to: "2026-06-07",
@@ -66,33 +70,88 @@ describe("YokedDatesStore", () => {
     });
   });
 
-  it("ignores malformed stored state", () => {
-    const storage = fakeStorage({ "yoked-dates": "not json" });
+  it.each([
+    {
+      name: "valid range",
+      range: {
+        from: "2026-06-01",
+        to: "2026-06-07",
+        mode: "fixed",
+        updatedAt: 123,
+      },
+    },
+    { name: "malformed range", range: { from: "invalid" } },
+  ])(
+    "migrates a version 1 $name to disabled empty state",
+    ({ range }) => {
+      const storage = fakeStorage({
+        "yoked-dates": JSON.stringify({ version: 1, range }),
+      });
 
-    const store = new YokedDatesStore(storage);
+      const store = new YokedDatesStore(storage);
 
-    expect(store.range).toBeNull();
-  });
-
-  it("ignores unsupported storage versions", () => {
-    const storage = fakeStorage({
-      "yoked-dates": JSON.stringify({
+      expect(store.enabled).toBe(false);
+      expect(store.range).toBeNull();
+      expect(JSON.parse(storage.getItem("yoked-dates")!)).toEqual({
         version: 2,
-        range: {
-          from: "2026-06-01",
-          to: "2026-06-07",
-          mode: "fixed",
-          updatedAt: 123,
-        },
-      }),
-    });
+        enabled: false,
+        range: null,
+      });
+    },
+  );
+
+  it.each([
+    {
+      name: "valid range",
+      range: {
+        from: "2026-06-01",
+        to: "2026-06-07",
+        mode: "fixed",
+        updatedAt: 123,
+      },
+    },
+    { name: "malformed range", range: { from: "invalid" } },
+  ])(
+    "normalizes a disabled version 2 $name to a null range",
+    ({ range }) => {
+      const storage = fakeStorage({
+        "yoked-dates": JSON.stringify({
+          version: 2,
+          enabled: false,
+          range,
+        }),
+      });
+
+      const store = new YokedDatesStore(storage);
+
+      expect(store.enabled).toBe(false);
+      expect(store.range).toBeNull();
+      expect(JSON.parse(storage.getItem("yoked-dates")!)).toEqual({
+        version: 2,
+        enabled: false,
+        range: null,
+      });
+    },
+  );
+
+  it.each([
+    "not json",
+    JSON.stringify({ version: 99, enabled: true, range: null }),
+    JSON.stringify({
+      version: 2,
+      enabled: true,
+      range: { from: "bad" },
+    }),
+  ])("fails malformed or unsupported state toward disabled", (raw) => {
+    const storage = fakeStorage({ "yoked-dates": raw });
 
     const store = new YokedDatesStore(storage);
 
+    expect(store.enabled).toBe(false);
     expect(store.range).toBeNull();
   });
 
-  it("writes panel changes unconditionally without an enabled flag", () => {
+  it("ignores panel updates while disabled", () => {
     const storage = fakeStorage();
     const store = new YokedDatesStore(storage, () => 123);
 
@@ -101,47 +160,21 @@ describe("YokedDatesStore", () => {
       to: "2026-06-07",
     });
 
-    expect(store.range).toEqual({
-      from: "2026-06-01",
-      to: "2026-06-07",
-      mode: "fixed",
-      updatedAt: 123,
-    });
-    expect(JSON.parse(storage.getItem("yoked-dates") ?? "{}")).toEqual({
-      version: 1,
-      range: {
-        from: "2026-06-01",
-        to: "2026-06-07",
-        mode: "fixed",
-        updatedAt: 123,
-      },
-    });
+    expect(store.enabled).toBe(false);
+    expect(store.range).toBeNull();
+    expect(store.seedForPanel()).toBeNull();
+    expect(storage.getItem("yoked-dates")).toBeNull();
   });
 
-  it("hydrates legacy disabled state as an always-linked range", () => {
-    const store = new YokedDatesStore(fakeStorage({
-      "yoked-dates": JSON.stringify({
-        version: 1,
-        enabled: false,
-        range: {
-          from: "2026-06-01",
-          to: "2026-06-07",
-          mode: "fixed",
-          updatedAt: 456,
-        },
-      }),
-    }));
-
-    expect(store.range).toEqual({
-      from: "2026-06-01",
-      to: "2026-06-07",
-      mode: "fixed",
-      updatedAt: 456,
+  it("publishes and seeds rolling ranges while enabled", () => {
+    const storage = fakeStorage();
+    const store = new YokedDatesStore(storage, () => 789);
+    store.setEnabled(true);
+    expect(JSON.parse(storage.getItem("yoked-dates")!)).toEqual({
+      version: 2,
+      enabled: true,
+      range: null,
     });
-  });
-
-  it("preserves rolling window intent when writing from a panel", () => {
-    const store = new YokedDatesStore(fakeStorage(), () => 789);
 
     store.updateFromPanel({
       from: "2026-05-21",
@@ -150,12 +183,113 @@ describe("YokedDatesStore", () => {
       windowDays: 30,
     });
 
-    expect(store.range).toEqual({
+    expect(store.seedForPanel()).toEqual({
       from: "2026-05-21",
       to: "2026-06-19",
       mode: "rolling",
       windowDays: 30,
       updatedAt: 789,
+    });
+    expect(JSON.parse(storage.getItem("yoked-dates")!)).toEqual({
+      version: 2,
+      enabled: true,
+      range: {
+        from: "2026-05-21",
+        to: "2026-06-19",
+        mode: "rolling",
+        windowDays: 30,
+        updatedAt: 789,
+      },
+    });
+  });
+
+  it("restores an enabled preference before any range is published", () => {
+    const storage = fakeStorage();
+    const firstStore = new YokedDatesStore(storage);
+    firstStore.setEnabled(true);
+
+    const reloadedStore = new YokedDatesStore(storage);
+
+    expect(reloadedStore.enabled).toBe(true);
+    expect(reloadedStore.range).toBeNull();
+    expect(reloadedStore.seedForPanel()).toBeNull();
+  });
+
+  it("disabling clears the shared range atomically", () => {
+    const storage = fakeStorage();
+    const store = new YokedDatesStore(storage, () => 123);
+    store.setEnabled(true);
+    store.updateFromPanel({
+      from: "2026-06-01",
+      to: "2026-06-07",
+    });
+
+    store.setEnabled(false);
+
+    expect(store.enabled).toBe(false);
+    expect(store.range).toBeNull();
+    expect(JSON.parse(storage.getItem("yoked-dates")!)).toEqual({
+      version: 2,
+      enabled: false,
+      range: null,
+    });
+  });
+
+  it("clear persists an empty range without changing the preference", () => {
+    const storage = fakeStorage();
+    const store = new YokedDatesStore(storage, () => 123);
+    store.setEnabled(true);
+    store.updateFromPanel({
+      from: "2026-06-01",
+      to: "2026-06-07",
+    });
+
+    store.clear();
+
+    expect(store.enabled).toBe(true);
+    expect(store.range).toBeNull();
+    expect(JSON.parse(storage.getItem("yoked-dates")!)).toEqual({
+      version: 2,
+      enabled: true,
+      range: null,
+    });
+  });
+
+  it("fails safely when storage reads throw", () => {
+    const storage = fakeStorage();
+    storage.getItem = () => {
+      throw new Error("storage unavailable");
+    };
+    let store: YokedDatesStore | undefined;
+
+    expect(() => {
+      store = new YokedDatesStore(storage);
+    }).not.toThrow();
+    expect(store).toBeDefined();
+    expect(store!.enabled).toBe(false);
+    expect(store!.range).toBeNull();
+  });
+
+  it("retains current-tab state when storage writes throw", () => {
+    const storage = fakeStorage();
+    storage.setItem = () => {
+      throw new Error("storage full");
+    };
+    const store = new YokedDatesStore(storage, () => 123);
+
+    expect(() => {
+      store.setEnabled(true);
+      store.updateFromPanel({
+        from: "2026-06-01",
+        to: "2026-06-07",
+      });
+    }).not.toThrow();
+    expect(store.enabled).toBe(true);
+    expect(store.range).toEqual({
+      from: "2026-06-01",
+      to: "2026-06-07",
+      mode: "fixed",
+      updatedAt: 123,
     });
   });
 });

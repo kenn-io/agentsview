@@ -1,11 +1,77 @@
-import { describe, expect, it } from "vite-plus/test";
+// @vitest-environment jsdom
+import {
+  afterEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vite-plus/test";
+import { mount, tick, unmount } from "svelte";
+import { analytics } from "./lib/stores/analytics.svelte.js";
+import { analyticsPageDates } from "./lib/stores/analyticsPageDates.js";
+import { insights } from "./lib/stores/insights.svelte.js";
+import { router } from "./lib/stores/router.svelte.js";
+import { sessions } from "./lib/stores/sessions.svelte.js";
+import { settings } from "./lib/stores/settings.svelte.js";
+import { starred } from "./lib/stores/starred.svelte.js";
+import { sync } from "./lib/stores/sync.svelte.js";
+import { yokedDates } from "./lib/stores/yokedDates.svelte.js";
 import type { Message } from "./lib/api/types.js";
 import { hasVisibleSegments } from "./lib/utils/content-parser.js";
-import { findUserPromptOrdinal } from "./App.svelte";
 import sourceRaw from "./App.svelte?raw";
 import { SESSION_FILTER_KEYS } from "./lib/stores/sessionRouteParams.js";
+// @ts-ignore
+import App, { findUserPromptOrdinal } from "./App.svelte";
 
 const source = sourceRaw.replace(/\r\n/g, "\n");
+
+let component: ReturnType<typeof mount> | undefined;
+
+async function flushEffects() {
+  await tick();
+  await Promise.resolve();
+  await tick();
+}
+
+async function selectRelativeRange(days: number) {
+  const trigger = document.querySelector<HTMLButtonElement>(
+    ".kit-date-range-picker__trigger",
+  );
+  expect(trigger).not.toBeNull();
+  trigger!.click();
+  await flushEffects();
+
+  const preset = [
+    ...document.querySelectorAll<HTMLButtonElement>("button"),
+  ].find((button) => button.textContent?.trim() === `${days}d`);
+  expect(preset).not.toBeUndefined();
+  preset!.click();
+  await flushEffects();
+}
+
+afterEach(() => {
+  if (component) {
+    unmount(component);
+    component = undefined;
+  }
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  document.body.innerHTML = "";
+  localStorage.clear();
+  window.history.replaceState(null, "", "/");
+  router.route = "sessions";
+  router.params = {};
+  router.sessionId = null;
+  sessions.activeSessionId = null;
+  sessions.filters.date = "";
+  sessions.filters.dateFrom = "";
+  sessions.filters.dateTo = "";
+  analytics.applyRollingWindow(365);
+  analyticsPageDates.clear();
+  yokedDates.setEnabled(false);
+  settings.needsAuth = false;
+});
 
 function appSourceSlice(startMarker: string, endMarker: string): string {
   const start = source.indexOf(startMarker);
@@ -121,7 +187,6 @@ describe("App session URL date state", () => {
       "function showAbout",
     );
 
-    expect(source).toContain("import { yokedDates");
     expect(source).toContain("function clearYokeForClearedSessionDates");
     expect(source).toContain("sessionDateIntentCleared(");
     expect(source).toContain("yokedDates.clear();");
@@ -159,7 +224,6 @@ describe("App session URL date state", () => {
     expect(undoBlock).not.toContain("await sessions.restoreSession(last.id);");
   });
 });
-
 function message(
   ordinal: number,
   role: Message["role"],
@@ -218,5 +282,64 @@ describe("findUserPromptOrdinal", () => {
       message(2, "user", true),
       message(3, "user"),
     ], 1, 1, true)).toBe(3);
+  });
+});
+
+describe("App analytics date navigation", () => {
+  it("restores a retained rolling Sessions range without pinning it", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-10T12:00:00"));
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(settings, "load").mockResolvedValue();
+    vi.spyOn(starred, "load").mockResolvedValue();
+    vi.spyOn(sync, "loadStatus").mockResolvedValue();
+    vi.spyOn(sync, "loadStats").mockResolvedValue();
+    vi.spyOn(sync, "loadVersion").mockResolvedValue();
+    vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
+    vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(sessions, "loadProjects").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
+    vi.spyOn(analytics, "fetchAll").mockResolvedValue();
+    vi.spyOn(analytics, "fetchSignalsForInsights").mockResolvedValue();
+    vi.spyOn(insights, "load").mockResolvedValue();
+
+    window.history.replaceState(null, "", "/sessions");
+    router.route = "sessions";
+    router.params = {};
+    router.sessionId = null;
+    analytics.applyRollingWindow(365);
+    yokedDates.setEnabled(false);
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    await selectRelativeRange(30);
+
+    router.navigate("insights");
+    await flushEffects();
+    router.navigate("sessions");
+    await flushEffects();
+
+    expect(analytics.isPinned).toBe(false);
+    expect(analytics.windowDays).toBe(30);
+    expect(router.params.window_days).toBe("30");
+    expect(router.params.date_from).toBe("2026-06-11");
+    expect(router.params.date_to).toBe("2026-07-10");
+
+    sessions.filters.date = "";
+    sessions.filters.dateFrom = "";
+    sessions.filters.dateTo = "";
+    router.params = {};
+    await flushEffects();
+
+    expect(router.params).toEqual({});
   });
 });

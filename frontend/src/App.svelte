@@ -73,7 +73,12 @@
   import { starred } from "./lib/stores/starred.svelte.js";
   import { pins } from "./lib/stores/pins.svelte.js";
   import { settings } from "./lib/stores/settings.svelte.js";
-  import { yokedDates } from "./lib/stores/yokedDates.svelte.js";
+  import { analyticsPageDates } from "./lib/stores/analyticsPageDates.js";
+  import {
+    yokedDates,
+    panelStateToRange,
+    rangeToSessionParams,
+  } from "./lib/stores/yokedDates.svelte.js";
   import { m } from "./lib/i18n/index.js";
   import { setAuthToken, getAuthToken, setServerUrl, getBase } from "./lib/api/runtime.js";
   import { setupVisibilityHealthCheck } from "./lib/utils/health.js";
@@ -82,6 +87,8 @@
   import {
     filterParamsEqual,
     hasFilterParams,
+    hasSessionDateIntent,
+    SESSION_ANALYTICS_WINDOW_PARAM,
     sessionDateIntentCleared,
     sessionRouteParamsForDetailExit,
     sessionRouteParamsForFilters,
@@ -292,7 +299,31 @@
     }
   }
 
+  function retainedSessionDateParams(): Record<string, string> | null {
+    if (hasSessionDateIntent(router.params)) return null;
+    const retained = analyticsPageDates.restoreWithIntent("sessions");
+    if (!retained.explicitDateIntent) return null;
+    const range = panelStateToRange(retained.state, Date.now());
+    if (!range) return null;
+
+    const dateParams = rangeToSessionParams(range);
+    sessions.filters.date = dateParams["date"] ?? "";
+    sessions.filters.dateFrom = dateParams["date_from"] ?? "";
+    sessions.filters.dateTo = dateParams["date_to"] ?? "";
+    const params = filtersToParams(sessions.filters);
+    if (
+      retained.state.mode === "rolling" &&
+      retained.state.windowDays
+    ) {
+      params[SESSION_ANALYTICS_WINDOW_PARAM] = String(
+        retained.state.windowDays,
+      );
+    }
+    return params;
+  }
+
   let lastDetailFilterParamsSignature: string | null = $state(null);
+  let previousDateRestoreRoute: string | null = null;
 
   // React to route changes: reload sessions and apply URL params.
   // Only apply URL deep-link params (initFromParams) when the URL
@@ -302,10 +333,16 @@
   $effect(() => {
     const route = router.route;
     const params = router.params;
+    const enteringSessions =
+      route === "sessions" && previousDateRestoreRoute !== "sessions";
     untrack(() => {
+      previousDateRestoreRoute = route;
       const sid = router.sessionId;
       if (!sid && route === "sessions" && hasFilterParams(params)) {
         sessions.initFromParams(params);
+      } else if (!sid && enteringSessions) {
+        const retainedParams = retainedSessionDateParams();
+        if (retainedParams) router.replaceParams(retainedParams);
       }
       if (route === "sessions") {
         sessions.load();

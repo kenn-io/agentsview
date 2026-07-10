@@ -53,7 +53,7 @@ afterEach(() => {
 });
 
 describe("SettingsPage", () => {
-  it("does not mount local-only settings before backend mode is loaded", async () => {
+  it("renders browser-local settings with the read-only worktree status", async () => {
     let resolveSettings!: (value: unknown) => void;
     settingsService.getApiV1Settings.mockReturnValue(
       new Promise((resolve) => {
@@ -67,6 +67,7 @@ describe("SettingsPage", () => {
     await tick();
 
     expect(document.body.textContent).toContain("Loading settings");
+    expect(document.body.textContent).not.toContain("Date ranges");
     expect(
       settingsService.getApiV1SettingsWorktreeMappings,
     ).not.toHaveBeenCalled();
@@ -81,7 +82,16 @@ describe("SettingsPage", () => {
       terminal: { mode: "auto" },
     });
     await tick();
+    await tick();
 
+    expect(document.body.textContent).toContain("Date ranges");
+    expect(document.body.textContent).toContain(
+      "Link date ranges across pages",
+    );
+    expect(document.body.textContent).toContain("Worktree mappings");
+    expect(document.body.textContent).toContain(
+      "Worktree mappings are available in local mode only.",
+    );
     expect(
       settingsService.getApiV1SettingsWorktreeMappings,
     ).not.toHaveBeenCalled();

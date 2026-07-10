@@ -17,9 +17,10 @@ result with the page controls.
 ## Range And Filters
 
 The toolbar uses the shared range picker with calendar **Day**, **Week**,
-**Month**, and **Custom** selections. The Activity page participates in the same
-synchronized date-range selection as the Analytics dashboard and Usage page, so
-a fixed or rolling range chosen in one panel can carry to the others.
+**Month**, and **Custom** selections. Activity opens to the current day. It only
+adopts and publishes shared ranges when **Settings > Date ranges > Link date
+ranges across pages** is enabled; a shared range wider than Activity can
+represent is not adopted.
 
 ![Weekly Activity view](/assets/generated/screenshots/activity-week.png)
 

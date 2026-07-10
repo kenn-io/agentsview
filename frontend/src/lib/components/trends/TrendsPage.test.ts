@@ -72,7 +72,7 @@ describe("TrendsPage", () => {
     trends.response = null;
     trends.loading.terms = false;
     trends.errors.terms = null;
-    yokedDates.range = null;
+    yokedDates.setEnabled(false);
     localStorage.clear();
     window.history.replaceState(null, "", "/trends");
   });
@@ -86,6 +86,7 @@ describe("TrendsPage", () => {
     window.history.replaceState(null, "", "/");
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    yokedDates.setEnabled(false);
   });
 
   it("refreshes with the changed date value", async () => {
@@ -157,9 +158,11 @@ describe("TrendsPage", () => {
     expect(document.body.textContent).toContain("one per line");
   });
 
-  it("preserves the default rolling one-year range on bare trends URLs", async () => {
+  it("materializes its bare default without establishing an enabled empty yoke", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-06-20T12:00:00"));
+    yokedDates.setEnabled(true);
+    expect(yokedDates.range).toBeNull();
 
     component = mount(TrendsPage, { target: document.body });
     await flushPromises();
@@ -170,12 +173,52 @@ describe("TrendsPage", () => {
         to: "2026-06-20",
       }),
     );
-    expect(window.location.search).toContain("window_days=365");
-    expect(window.location.search).toContain("from=2025-06-21");
-    expect(window.location.search).toContain("to=2026-06-20");
+    expect(window.location.search).not.toContain("window_days");
+    expect(window.location.search).not.toContain("from=");
+    expect(window.location.search).not.toContain("to=");
+    expect(yokedDates.range).toBeNull();
+  });
+
+  it("does not turn a bare Trends reload into explicit date intent", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-20T12:00:00"));
+    yokedDates.setEnabled(true);
+
+    component = mount(TrendsPage, { target: document.body });
+    await flushPromises();
+    expect(window.location.search).not.toContain("window_days");
+
+    unmount(component);
+    component = undefined;
+    component = mount(TrendsPage, { target: document.body });
+    await flushPromises();
+
+    expect(window.location.search).not.toContain("window_days");
+    expect(yokedDates.range).toBeNull();
+  });
+
+  it("restores a bare Trends history entry without publishing default dates", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-20T12:00:00"));
+    yokedDates.setEnabled(true);
+
+    component = mount(TrendsPage, { target: document.body });
+    await flushPromises();
+    unmount(component);
+    component = undefined;
+
+    window.history.pushState(null, "", "/usage");
+    window.history.replaceState(null, "", "/trends");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    component = mount(TrendsPage, { target: document.body });
+    await flushPromises();
+
+    expect(window.location.search).not.toContain("window_days");
+    expect(yokedDates.range).toBeNull();
   });
 
   it("seeds bare trends URLs from the saved yoke range", async () => {
+    yokedDates.setEnabled(true);
     yokedDates.updateFromPanel({
       from: "2024-02-01",
       to: "2024-02-07",
@@ -203,6 +246,7 @@ describe("TrendsPage", () => {
       "",
       "/trends?window_days=30&from=2026-01-01&to=2026-01-31",
     );
+    yokedDates.setEnabled(true);
 
     component = mount(TrendsPage, { target: document.body });
     await flushPromises();
@@ -220,6 +264,21 @@ describe("TrendsPage", () => {
     expect(window.location.search).toContain("window_days=30");
   });
 
+  it("does not publish explicit URL dates while linking is disabled", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/trends?window_days=30&from=2026-01-01&to=2026-01-31",
+    );
+
+    component = mount(TrendsPage, { target: document.body });
+    await flushPromises();
+
+    expect(mocks.getApiV1TrendsTerms).toHaveBeenCalled();
+    expect(yokedDates.enabled).toBe(false);
+    expect(yokedDates.range).toBeNull();
+  });
+
   it("recomputes rolling windows before manual refresh", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-06-19T12:00:00"));
@@ -228,6 +287,7 @@ describe("TrendsPage", () => {
       "",
       "/trends?window_days=30&from=2026-01-01&to=2026-01-31",
     );
+    yokedDates.setEnabled(true);
 
     component = mount(TrendsPage, { target: document.body });
     await flushPromises();

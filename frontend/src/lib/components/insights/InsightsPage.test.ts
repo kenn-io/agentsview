@@ -8,7 +8,11 @@ import {
   vi,
 } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
+import { analytics } from "../../stores/analytics.svelte.js";
+import { analyticsPageDates } from "../../stores/analyticsPageDates.js";
+import { router } from "../../stores/router.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
+import { yokedDates } from "../../stores/yokedDates.svelte.js";
 // @ts-ignore
 import InsightsPage from "./InsightsPage.svelte";
 import source from "./InsightsPage.svelte?raw";
@@ -78,18 +82,6 @@ describe("InsightsPage date yoke controls", () => {
     expect(source).toContain("paramsWithInsightDate");
   });
 
-  it("refreshes rolling insight URL/yoke bounds after signal fetches", () => {
-    const fetchIndex = source.indexOf("function fetchInsightSignals");
-    const nextHandlerIndex = source.indexOf(
-      "\n\n  function handleProjectChange",
-      fetchIndex,
-    );
-    const fetchBlock = source.slice(fetchIndex, nextHandlerIndex);
-
-    expect(fetchBlock).toContain("analytics.fetchSignalsForInsights()");
-    expect(fetchBlock).toContain("updateYokeFromInsights(state)");
-  });
-
   it("routes automated scope changes through the insight refresh wrapper", () => {
     const handlerIndex = source.indexOf("function handleAutomatedScopeChange");
     const nextHandlerIndex = source.indexOf(
@@ -104,6 +96,7 @@ describe("InsightsPage date yoke controls", () => {
 });
 
 const mocks = vi.hoisted(() => ({
+  copyToClipboard: vi.fn().mockResolvedValue(true),
   downloadInsightExport: vi.fn().mockResolvedValue(undefined),
   deleteItem: vi.fn(),
   loadAgents: vi.fn(),
@@ -173,6 +166,10 @@ vi.mock("../../api/client.js", () => ({
   watchEvents: mocks.watchEvents,
 }));
 
+vi.mock("../../utils/clipboard.js", () => ({
+  copyToClipboard: mocks.copyToClipboard,
+}));
+
 vi.mock("../../stores/insights.svelte.js", () => ({
   insights: state.insightsStore,
 }));
@@ -226,6 +223,346 @@ vi.mock("../../utils/highlight-fences.js", () => ({
     destroy() {},
   }),
 }));
+
+async function flushEffects() {
+  await tick();
+  await Promise.resolve();
+  await tick();
+}
+
+async function selectRelativeRange(days: number) {
+  const trigger = document.querySelector<HTMLButtonElement>(
+    ".kit-date-range-picker__trigger",
+  );
+  expect(trigger).not.toBeNull();
+  trigger!.click();
+  await flushEffects();
+
+  const preset = [
+    ...document.querySelectorAll<HTMLButtonElement>("button"),
+  ].find((button) => button.textContent?.trim() === `${days}d`);
+  expect(preset).not.toBeUndefined();
+  preset!.click();
+  await flushEffects();
+}
+
+async function selectCustomRange(fromLabel: string, toLabel: string) {
+  const trigger = document.querySelector<HTMLButtonElement>(
+    ".kit-date-range-picker__trigger",
+  );
+  expect(trigger).not.toBeNull();
+  trigger!.click();
+  await flushEffects();
+
+  const customTab = [
+    ...document.querySelectorAll<HTMLElement>('[role="radio"]'),
+  ][2];
+  expect(customTab).not.toBeUndefined();
+  customTab!.click();
+  await flushEffects();
+
+  const from = document.querySelector<HTMLButtonElement>(
+    `.kit-calendar button[aria-label="${fromLabel}"]`,
+  );
+  expect(from).not.toBeNull();
+  from!.click();
+  await flushEffects();
+
+  const to = document.querySelector<HTMLButtonElement>(
+    `.kit-calendar button[aria-label="${toLabel}"]`,
+  );
+  expect(to).not.toBeNull();
+  to!.click();
+  await flushEffects();
+}
+
+describe("InsightsPage date yoke integration", () => {
+  let component: ReturnType<typeof mount> | undefined;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.history.replaceState(null, "", "/insights");
+    router.route = "insights";
+    router.params = {};
+    analytics.isPinned = false;
+    analytics.windowDays = 365;
+    analytics.from = "";
+    analytics.to = "";
+    yokedDates.setEnabled(false);
+    analyticsPageDates.clear();
+    localStorage.clear();
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    if (component) {
+      unmount(component);
+      component = undefined;
+    }
+    vi.restoreAllMocks();
+    document.body.innerHTML = "";
+    window.history.replaceState(null, "", "/");
+    router.route = "sessions";
+    router.params = {};
+    analytics.isPinned = false;
+    analytics.windowDays = 365;
+    analytics.from = "";
+    analytics.to = "";
+    yokedDates.setEnabled(false);
+    analyticsPageDates.clear();
+    localStorage.clear();
+    vi.useRealTimers();
+  });
+
+  it("keeps an enabled empty yoke empty during bare rolling refreshes", async () => {
+    const fetchStates: Array<{
+      isPinned: boolean;
+      windowDays: number;
+      from: string;
+      to: string;
+    }> = [];
+    vi.spyOn(analytics, "fetchSignalsForInsights").mockImplementation(
+      () => {
+        fetchStates.push({
+          isPinned: analytics.isPinned,
+          windowDays: analytics.windowDays,
+          from: analytics.from,
+          to: analytics.to,
+        });
+        return Promise.resolve();
+      },
+    );
+    analytics.isPinned = false;
+    analytics.windowDays = 365;
+    analytics.from = "2025-07-11";
+    analytics.to = "2026-07-10";
+    yokedDates.setEnabled(true);
+
+    component = mount(InsightsPage, { target: document.body });
+    await flushEffects();
+
+    expect(fetchStates[0]).toEqual({
+      isPinned: false,
+      windowDays: 365,
+      from: "2025-07-11",
+      to: "2026-07-10",
+    });
+    expect(router.params.window_days).toBeUndefined();
+    expect(window.location.search).not.toContain("window_days");
+    expect(yokedDates.range).toBeNull();
+
+    const refresh = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Refresh insights"]',
+    );
+    expect(refresh).not.toBeNull();
+    const callsBeforeRefresh = fetchStates.length;
+    refresh!.click();
+    await flushEffects();
+
+    expect(fetchStates.length).toBeGreaterThan(callsBeforeRefresh);
+    expect(fetchStates.at(-1)).toEqual({
+      isPinned: false,
+      windowDays: 365,
+      from: "2025-07-11",
+      to: "2026-07-10",
+    });
+    expect(router.params.window_days).toBeUndefined();
+    expect(yokedDates.range).toBeNull();
+  });
+
+  it("does not turn a bare Insights reload into explicit date intent", async () => {
+    vi.spyOn(analytics, "fetchSignalsForInsights").mockResolvedValue();
+    analytics.applyRollingWindow(365);
+    yokedDates.setEnabled(true);
+
+    component = mount(InsightsPage, { target: document.body });
+    await flushEffects();
+    expect(window.location.search).not.toContain("window_days");
+
+    unmount(component);
+    component = undefined;
+    component = mount(InsightsPage, { target: document.body });
+    await flushEffects();
+
+    expect(router.params.window_days).toBeUndefined();
+    expect(yokedDates.range).toBeNull();
+  });
+
+  it("restores a bare Insights history entry without publishing default dates", async () => {
+    vi.spyOn(analytics, "fetchSignalsForInsights").mockResolvedValue();
+    analytics.applyRollingWindow(365);
+    yokedDates.setEnabled(true);
+
+    component = mount(InsightsPage, { target: document.body });
+    await flushEffects();
+    unmount(component);
+    component = undefined;
+
+    router.navigate("usage");
+    window.history.replaceState(null, "", "/insights");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    expect(router.route).toBe("insights");
+    expect(router.params).toEqual({});
+
+    component = mount(InsightsPage, { target: document.body });
+    await flushEffects();
+
+    expect(window.location.search).toBe("");
+    expect(yokedDates.range).toBeNull();
+  });
+
+  it("keeps picker date intent in copied links after navigation", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-10T12:00:00"));
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(analytics, "fetchAll").mockResolvedValue();
+    vi.spyOn(analytics, "fetchSignalsForInsights").mockResolvedValue();
+    yokedDates.setEnabled(false);
+
+    component = mount(InsightsPage, { target: document.body });
+    await flushEffects();
+    await selectRelativeRange(30);
+
+    router.navigate("usage");
+    unmount(component);
+    component = undefined;
+    router.navigate("insights");
+    component = mount(InsightsPage, { target: document.body });
+    await flushEffects();
+
+    const copyButton = document.querySelector<HTMLButtonElement>(
+      ".insight-link-copy",
+    );
+    expect(copyButton).not.toBeNull();
+    copyButton!.click();
+    await flushEffects();
+
+    expect(mocks.copyToClipboard).toHaveBeenCalledTimes(1);
+    const copiedUrl = new URL(
+      mocks.copyToClipboard.mock.calls[0]![0],
+    );
+    expect(copiedUrl.searchParams.get("window_days")).toBe("30");
+    expect(copiedUrl.searchParams.get("date_from")).toBe("2026-06-11");
+    expect(copiedUrl.searchParams.get("date_to")).toBe("2026-07-10");
+  });
+
+  it("restores fixed picker dates to the URL after navigation", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-10T12:00:00"));
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(analytics, "fetchAll").mockResolvedValue();
+    vi.spyOn(analytics, "fetchSignalsForInsights").mockResolvedValue();
+    yokedDates.setEnabled(false);
+
+    component = mount(InsightsPage, { target: document.body });
+    await flushEffects();
+    await selectCustomRange("Jul 1, 2026", "Jul 7, 2026");
+
+    router.navigate("usage");
+    unmount(component);
+    component = undefined;
+    router.navigate("insights");
+    component = mount(InsightsPage, { target: document.body });
+    await flushEffects();
+
+    expect(analytics.isPinned).toBe(true);
+    expect(router.params.window_days).toBeUndefined();
+    expect(router.params.date_from).toBe("2026-07-01");
+    expect(router.params.date_to).toBe("2026-07-07");
+  });
+
+  it("establishes an enabled empty yoke from explicit URL dates", async () => {
+    const fetchStates: Array<{
+      isPinned: boolean;
+      from: string;
+      to: string;
+    }> = [];
+    vi.spyOn(analytics, "fetchSignalsForInsights").mockImplementation(
+      () => {
+        fetchStates.push({
+          isPinned: analytics.isPinned,
+          from: analytics.from,
+          to: analytics.to,
+        });
+        return Promise.resolve();
+      },
+    );
+    window.history.replaceState(
+      null,
+      "",
+      "/insights?date_from=2026-06-01&date_to=2026-06-07",
+    );
+    router.params = {
+      date_from: "2026-06-01",
+      date_to: "2026-06-07",
+    };
+    yokedDates.setEnabled(true);
+
+    component = mount(InsightsPage, { target: document.body });
+    await flushEffects();
+
+    expect(fetchStates[0]).toEqual({
+      isPinned: true,
+      from: "2026-06-01",
+      to: "2026-06-07",
+    });
+    expect(yokedDates.range).toMatchObject({
+      from: "2026-06-01",
+      to: "2026-06-07",
+      mode: "fixed",
+    });
+  });
+
+  it("seeds bare Insights from an enabled fixed range", async () => {
+    const fetchStates: Array<{
+      isPinned: boolean;
+      from: string;
+      to: string;
+    }> = [];
+    vi.spyOn(analytics, "fetchSignalsForInsights").mockImplementation(
+      () => {
+        fetchStates.push({
+          isPinned: analytics.isPinned,
+          from: analytics.from,
+          to: analytics.to,
+        });
+        return Promise.resolve();
+      },
+    );
+    yokedDates.setEnabled(true);
+    yokedDates.updateFromPanel({
+      from: "2026-06-01",
+      to: "2026-06-07",
+      mode: "fixed",
+    });
+
+    component = mount(InsightsPage, { target: document.body });
+    await flushEffects();
+
+    expect(analytics.isPinned).toBe(true);
+    expect(analytics.from).toBe("2026-06-01");
+    expect(analytics.to).toBe("2026-06-07");
+    expect(fetchStates[0]).toEqual({
+      isPinned: true,
+      from: "2026-06-01",
+      to: "2026-06-07",
+    });
+  });
+});
 
 describe("InsightsPage selected insight actions", () => {
   let component: ReturnType<typeof mount> | undefined;
@@ -342,5 +679,29 @@ describe("InsightsPage selected insight actions", () => {
     );
     expect(generateButton).toBeDefined();
     expect(generateButton!.disabled).toBe(false);
+  });
+
+  it("selects a generated insight without promoting default date intent", async () => {
+    window.history.replaceState(null, "", "/insights");
+    router.route = "insights";
+    router.params = {};
+    analytics.applyRollingWindow(365);
+    yokedDates.setEnabled(true);
+    vi.spyOn(analytics, "fetchSignalsForInsights").mockResolvedValue();
+
+    component = mount(InsightsPage, { target: document.body });
+    await flushEffects();
+
+    const insightButton = document.querySelector<HTMLButtonElement>(
+      ".generated-list button",
+    );
+    expect(insightButton).not.toBeNull();
+    insightButton!.click();
+    await flushEffects();
+
+    expect(state.insightsStore.select).toHaveBeenCalledWith(42);
+    expect(router.params.insight).toBe("42");
+    expect(router.params.window_days).toBeUndefined();
+    expect(yokedDates.range).toBeNull();
   });
 });

@@ -202,7 +202,7 @@ describe("SessionsStore", () => {
     mockSidebarIndex();
     starred.filterOnly = false;
     starred.ids = new Set();
-    yokedDates.clear();
+    yokedDates.setEnabled(false);
     sessions = createSessionsStore();
   });
 
@@ -1664,6 +1664,7 @@ describe("SessionsStore", () => {
       sessions.activeSessionId = "session-1";
       sessions.filters.dateFrom = "2025-05-01";
       sessions.filters.dateTo = "2025-05-31";
+      yokedDates.setEnabled(true);
       yokedDates.updateFromPanel({
         from: "2025-05-01",
         to: "2025-05-31",
@@ -1693,6 +1694,7 @@ describe("SessionsStore", () => {
     it("clears the date yoke before clearing the active session when requested by route intent", () => {
       sessions.activeSessionId = "session-1";
       sessions.filters.agent = "codex";
+      yokedDates.setEnabled(true);
       yokedDates.updateFromPanel({
         from: "2025-05-01",
         to: "2025-05-31",
@@ -1721,6 +1723,7 @@ describe("SessionsStore", () => {
 
     it("keeps the date yoke for non-date filter clears without route date intent", () => {
       sessions.filters.agent = "codex";
+      yokedDates.setEnabled(true);
       yokedDates.updateFromPanel({
         from: "2025-05-01",
         to: "2025-05-31",

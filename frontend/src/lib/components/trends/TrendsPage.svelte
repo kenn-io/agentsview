@@ -42,6 +42,9 @@
 
   let activeTerm: string | null = $state(null);
   let trendsWindowDays: number | null = $state(DEFAULT_TREND_WINDOW_DAYS);
+  // Keep bare defaults out of history so a later mount cannot mistake them
+  // for a user selection, deep link, or shared seed.
+  let trendsDateIntentEstablished = false;
   const trendsPanelDate = $derived(currentTrendsPanelDate());
 
   const GRANULARITIES: TrendsGranularity[] = ["day", "week", "month"];
@@ -110,10 +113,12 @@
     if (current.has("desktop")) {
       q.set("desktop", current.get("desktop") ?? "");
     }
-    q.set("from", trends.from);
-    q.set("to", trends.to);
-    if (trendsWindowDays !== null) {
-      q.set(TREND_WINDOW_PARAM, String(trendsWindowDays));
+    if (trendsDateIntentEstablished) {
+      q.set("from", trends.from);
+      q.set("to", trends.to);
+      if (trendsWindowDays !== null) {
+        q.set(TREND_WINDOW_PARAM, String(trendsWindowDays));
+      }
     }
     q.set("granularity", trends.granularity);
     if (trends.normalized) {
@@ -130,14 +135,17 @@
 
   function materializeRollingWindow(): void {
     if (trendsWindowDays === null) return;
+    const yokeEstablished = yokedDates.range !== null;
     const range = rollingRange(trendsWindowDays);
     if (trends.from === range.from && trends.to === range.to) return;
     trends.from = range.from;
     trends.to = range.to;
-    updateYokeFromTrends(panelDateState(range.from, range.to, {
-      mode: "rolling",
-      windowDays: trendsWindowDays,
-    }));
+    if (yokeEstablished) {
+      updateYokeFromTrends(panelDateState(range.from, range.to, {
+        mode: "rolling",
+        windowDays: trendsWindowDays,
+      }));
+    }
   }
 
   async function refresh() {
@@ -159,6 +167,7 @@
     const range = resolveRange(sel, earliestSession);
     trends.from = range.from;
     trends.to = range.to;
+    trendsDateIntentEstablished = true;
     const yokeState = yokeStateForSelection(sel, range);
     trendsWindowDays = yokeState?.mode === "rolling"
       ? yokeState.windowDays ?? null
@@ -217,6 +226,7 @@
     const seed = yokedDates.seedForPanel();
     const state = seed ? rangeToPanelDate(seed) : null;
     if (!state) return;
+    trendsDateIntentEstablished = true;
     trends.from = state.from;
     trends.to = state.to;
     trendsWindowDays = state.mode === "rolling"
@@ -226,6 +236,7 @@
 
   onMount(() => {
     const hasDateParams = applyQueryParams();
+    trendsDateIntentEstablished = hasDateParams;
     if (hasDateParams) {
       updateYokeFromTrends();
     } else {

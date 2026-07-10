@@ -9,6 +9,7 @@ import { mount, tick, unmount } from "svelte";
 import { router } from "../../stores/router.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { usage } from "../../stores/usage.svelte.js";
+import { yokedDates } from "../../stores/yokedDates.svelte.js";
 import source from "./UsagePage.svelte?raw";
 import UsagePage from "./UsagePage.svelte";
 
@@ -66,7 +67,13 @@ afterEach(() => {
   usage.summary = null;
   usage.topSessions = null;
   usage.errors.summary = null;
+  usage.isPinned = false;
+  usage.windowDays = 30;
+  usage.from = "";
+  usage.to = "";
   sessions.projects = [];
+  yokedDates.setEnabled(false);
+  localStorage.clear();
 });
 
 describe("UsagePage refresh behavior", () => {
@@ -111,6 +118,54 @@ describe("UsagePage refresh behavior", () => {
     await flushEffects();
 
     expect(loadAgents).toHaveBeenCalled();
+  });
+
+  it("seeds bare Usage from an enabled fixed range", async () => {
+    const fetchStates: Array<{
+      isPinned: boolean;
+      from: string;
+      to: string;
+    }> = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(usage, "fetchAll").mockImplementation(() => {
+      fetchStates.push({
+        isPinned: usage.isPinned,
+        from: usage.from,
+        to: usage.to,
+      });
+      return Promise.resolve();
+    });
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    router.route = "usage";
+    router.params = {};
+    usage.isPinned = false;
+    usage.windowDays = 30;
+    usage.from = "2026-05-22";
+    usage.to = "2026-06-20";
+    yokedDates.setEnabled(true);
+    yokedDates.updateFromPanel({
+      from: "2026-06-01",
+      to: "2026-06-07",
+      mode: "fixed",
+    });
+
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+
+    expect(usage.isPinned).toBe(true);
+    expect(usage.from).toBe("2026-06-01");
+    expect(usage.to).toBe("2026-06-07");
+    expect(fetchStates[0]).toEqual({
+      isPinned: true,
+      from: "2026-06-01",
+      to: "2026-06-07",
+    });
   });
 
   it("keeps the note hidden without an unsupported usage signal", async () => {

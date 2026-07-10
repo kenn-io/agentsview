@@ -71,14 +71,26 @@ consistent across panels.
 
 ![Date range picker](/assets/generated/screenshots/date-range.png)
 
-Preset ranges are **rolling** by default: a page left open
-across midnight rolls the window forward at the next refresh
-tick, sync event, or manual refresh, instead of staying
-anchored to the day it loaded. Manually editing either date
-input pins the range; on the Usage and Activity pages,
-navigating to explicit range URLs also pins the range while the
-bare page URL returns to rolling mode. The `All` preset always
-pins to `(earliest_session, today)`.
+Preset ranges are **rolling** by default: a page left open across midnight rolls
+the window forward at the next refresh tick, sync event, or manual refresh,
+instead of staying anchored to the day it loaded. Manually editing either date
+input pins the range. On Usage and Activity, explicit date parameters remain
+authoritative. A bare Usage URL returns to its rolling 30-day default; a bare
+Activity URL returns to its current-day calendar default unless an enabled
+shared range supplies another selection. The `All` preset always pins to
+`(earliest_session, today)`.
+
+Bare pages use independent defaults: the Sessions dashboard opens
+to a rolling 1-year range, Usage opens to a rolling 30-day range,
+and Activity opens to the current day. Cross-page linking is
+disabled by default because applying a broad range automatically
+can make some pages run substantially more expensive queries.
+
+To carry selections among Sessions, Usage, Activity, Trends, and
+Insights, enable **Settings > Date ranges > Link date ranges across
+pages**. An explicit dated URL always controls the target page. With
+linking enabled, that selection can then carry to date-aware pages
+opened later at their bare URLs.
 
 ### Model Filter
 
@@ -1178,6 +1190,7 @@ Settings are organized into sections:
 |---------|----------------------|
 | Language | Interface language (English, Simplified Chinese, Traditional Chinese, or Korean) |
 | Appearance | Theme (light/dark), high-contrast mode, message layout, text size, block visibility, desktop zoom level |
+| Date ranges | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, Trends, and Insights |
 | Agent Directories | Custom paths for each agent's session files. For Devin CLI, point at the local root that contains `cli/` (for example a redacted `.../Application Support/devin` path), not copied config or OAuth files. |
 | Terminal | Default terminal emulator for session resume |
 | Worktree Mappings | Map worktree paths back to their main project (see [Worktree Project Mappings](/configuration/#worktree-project-mappings)) |
@@ -1186,9 +1199,12 @@ Settings are organized into sections:
 
 ![Settings remote access section](/assets/generated/screenshots/settings-remote.png)
 
-Changes are persisted to `~/.agentsview/config.toml` and
-survive restarts. See [Remote Access](/remote-access/) for
-details on the remote access settings.
+Language, Appearance, and Date ranges preferences are stored in the browser and
+do not write `~/.agentsview/config.toml`. Agent directory overrides, terminal
+settings, the saved GitHub token, and the local server's remote-access
+authentication settings use `~/.agentsview/config.toml`. Worktree Mappings live
+separately in the local archive database. See
+[Remote Access](/remote-access/) for details on the remote access settings.
 
 ---
 

@@ -8,12 +8,16 @@ import {
 } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { analytics } from "../../stores/analytics.svelte.js";
+import { analyticsPageDates } from "../../stores/analyticsPageDates.js";
+import { insights } from "../../stores/insights.svelte.js";
 import { router } from "../../stores/router.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
 import sourceRaw from "./AnalyticsPage.svelte?raw";
 // @ts-ignore
 import AnalyticsPage from "./AnalyticsPage.svelte";
+// @ts-ignore
+import InsightsPage from "../insights/InsightsPage.svelte";
 
 const source = sourceRaw.replace(/\r\n/g, "\n");
 
@@ -21,6 +25,22 @@ async function flushEffects() {
   await tick();
   await Promise.resolve();
   await tick();
+}
+
+async function selectRelativeRange(days: number) {
+  const trigger = document.querySelector<HTMLButtonElement>(
+    ".kit-date-range-picker__trigger",
+  );
+  expect(trigger).not.toBeNull();
+  trigger!.click();
+  await flushEffects();
+
+  const preset = [
+    ...document.querySelectorAll<HTMLButtonElement>("button"),
+  ].find((button) => button.textContent?.trim() === `${days}d`);
+  expect(preset).not.toBeUndefined();
+  preset!.click();
+  await flushEffects();
 }
 
 let component: ReturnType<typeof mount> | undefined;
@@ -49,7 +69,8 @@ afterEach(() => {
   sessions.filters.date = "";
   sessions.filters.dateFrom = "";
   sessions.filters.dateTo = "";
-  yokedDates.clear();
+  yokedDates.setEnabled(false);
+  analyticsPageDates.clear();
 });
 
 describe("AnalyticsPage refresh behavior", () => {
@@ -85,6 +106,7 @@ describe("AnalyticsPage refresh behavior", () => {
     sessions.filters.date = "";
     sessions.filters.dateFrom = "2026-05-21";
     sessions.filters.dateTo = "2026-06-20";
+    yokedDates.setEnabled(true);
     yokedDates.updateFromPanel({
       from: "2026-05-21",
       to: "2026-06-20",
@@ -121,6 +143,131 @@ describe("AnalyticsPage refresh behavior", () => {
     expect(sessions.filters.dateFrom).toBe("");
     expect(sessions.filters.dateTo).toBe("");
     expect(yokedDates.range).toBeNull();
+  });
+
+  it("seeds bare Sessions analytics from an enabled rolling range", async () => {
+    const analyticsFetchStates: Array<{
+      isPinned: boolean;
+      windowDays: number;
+      from: string;
+      to: string;
+    }> = [];
+    const sessionLoadStates: typeof analyticsFetchStates = [];
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-06-20T12:00:00"));
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(analytics, "fetchAll").mockImplementation(() => {
+      analyticsFetchStates.push({
+        isPinned: analytics.isPinned,
+        windowDays: analytics.windowDays,
+        from: analytics.from,
+        to: analytics.to,
+      });
+      return Promise.resolve();
+    });
+    vi.spyOn(sessions, "load").mockImplementation(() => {
+      sessionLoadStates.push({
+        isPinned: analytics.isPinned,
+        windowDays: analytics.windowDays,
+        from: analytics.from,
+        to: analytics.to,
+      });
+      return Promise.resolve();
+    });
+    router.route = "sessions";
+    router.params = {};
+    analytics.windowDays = 365;
+    analytics.isPinned = false;
+    analytics.from = "2025-06-21";
+    analytics.to = "2026-06-20";
+    yokedDates.setEnabled(true);
+    yokedDates.updateFromPanel({
+      from: "2026-05-22",
+      to: "2026-06-20",
+      mode: "rolling",
+      windowDays: 30,
+    });
+
+    component = mount(AnalyticsPage, { target: document.body });
+    await flushEffects();
+
+    expect(analytics.isPinned).toBe(false);
+    expect(analytics.windowDays).toBe(30);
+    expect(analytics.from).toBe("2026-05-22");
+    expect(analytics.to).toBe("2026-06-20");
+    expect(analyticsFetchStates[0]).toEqual({
+      isPinned: false,
+      windowDays: 30,
+      from: "2026-05-22",
+      to: "2026-06-20",
+    });
+    expect(sessionLoadStates[0]).toEqual({
+      isPinned: false,
+      windowDays: 30,
+      from: "2026-05-22",
+      to: "2026-06-20",
+    });
+  });
+
+  it("retains independent Sessions and Insights ranges when linking is disabled", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-10T12:00:00"));
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(analytics, "fetchAll").mockResolvedValue();
+    vi.spyOn(analytics, "fetchSignalsForInsights").mockResolvedValue();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(sessions, "loadProjects").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    vi.spyOn(insights, "load").mockResolvedValue();
+
+    analytics.applyRollingWindow(365);
+    router.route = "sessions";
+    router.params = {};
+    yokedDates.setEnabled(false);
+
+    component = mount(AnalyticsPage, { target: document.body });
+    await flushEffects();
+    await selectRelativeRange(30);
+    expect(analytics.windowDays).toBe(30);
+
+    unmount(component);
+    component = undefined;
+    router.navigate("insights");
+    component = mount(InsightsPage, { target: document.body });
+    await flushEffects();
+
+    expect(analytics.windowDays).toBe(365);
+    await selectRelativeRange(7);
+    expect(analytics.windowDays).toBe(7);
+
+    unmount(component);
+    component = undefined;
+    router.navigate("sessions");
+    component = mount(AnalyticsPage, { target: document.body });
+    await flushEffects();
+
+    expect(analytics.windowDays).toBe(30);
+
+    unmount(component);
+    component = undefined;
+    router.navigate("insights");
+    component = mount(InsightsPage, { target: document.body });
+    await flushEffects();
+
+    expect(analytics.windowDays).toBe(7);
   });
 
   it("does not refresh analytical scans from SSE updates", () => {

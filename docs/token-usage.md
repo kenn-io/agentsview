@@ -128,9 +128,12 @@ In 0.23.0, the page also picks up a few workflow improvements:
 
 The toolbar at the top of the page scopes the entire dashboard. Pick a start and
 end date with the date inputs, or narrow down with the Project, Agent, and Model
-filter dropdowns. Filter state is written back to the URL — copying the address
-bar gives you a shareable link to the exact view you're looking at. A **Clear
-filters** link appears next to the refresh button when anything is active.
+filter dropdowns. Usage opens to a rolling 30-day range. Linking its date
+selection to other date-aware pages is optional. Turn it on with **Settings >
+Date ranges > Link date ranges across pages**. Filter state is written back to
+the URL — copying the address bar gives you a shareable link to the exact view
+you're looking at. A **Clear filters** link appears next to the refresh button
+when anything is active.
 
 ![Usage toolbar with filters](/assets/generated/screenshots/usage-toolbar.png)
 

@@ -18,13 +18,19 @@ export interface YokedDateRange {
 }
 
 export interface StoredYokedDates {
-  version: 1;
+  version: 2;
+  enabled: boolean;
   range: YokedDateRange | null;
+}
+
+interface ParsedStoredYokedDates {
+  state: StoredYokedDates;
+  needsRewrite: boolean;
 }
 
 export const YOKED_DATES_STORAGE_KEY = "yoked-dates";
 
-const STORAGE_VERSION = 1;
+const STORAGE_VERSION = 2;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const ACTIVITY_MAX_CUSTOM_RANGE_MS = 365 * 24 * 60 * 60 * 1000;
 
@@ -110,25 +116,60 @@ function parseStoredRange(value: unknown): YokedDateRange | null {
   };
 }
 
-function parseStored(value: unknown): StoredYokedDates | null {
+function disabledStoredState(): StoredYokedDates {
+  return {
+    version: STORAGE_VERSION,
+    enabled: false,
+    range: null,
+  };
+}
+
+function parseStored(value: unknown): ParsedStoredYokedDates | null {
   if (typeof value !== "object" || value === null) {
     return null;
   }
-  const stored = value as Partial<StoredYokedDates>;
-  if (stored.version !== STORAGE_VERSION) {
+  const stored = value as {
+    version?: unknown;
+    enabled?: unknown;
+    range?: unknown;
+  };
+  if (stored.version === 1) {
+    return {
+      state: disabledStoredState(),
+      needsRewrite: true,
+    };
+  }
+  if (
+    stored.version !== STORAGE_VERSION ||
+    typeof stored.enabled !== "boolean"
+  ) {
     return null;
+  }
+  if (!stored.enabled) {
+    return {
+      state: disabledStoredState(),
+      needsRewrite: stored.range !== null,
+    };
   }
   if (stored.range === null) {
     return {
-      version: STORAGE_VERSION,
-      range: null,
+      state: {
+        version: STORAGE_VERSION,
+        enabled: true,
+        range: null,
+      },
+      needsRewrite: false,
     };
   }
   const range = parseStoredRange(stored.range);
   if (!range) return null;
   return {
-    version: STORAGE_VERSION,
-    range,
+    state: {
+      version: STORAGE_VERSION,
+      enabled: true,
+      range,
+    },
+    needsRewrite: false,
   };
 }
 
@@ -281,7 +322,8 @@ export function rangeToInsightParams(
 }
 
 export class YokedDatesStore {
-  range: YokedDateRange | null = $state(null);
+  #enabled: boolean = $state(false);
+  #range: YokedDateRange | null = $state(null);
 
   constructor(
     private readonly storage: Storage | null = getLocalStorage(),
@@ -290,41 +332,68 @@ export class YokedDatesStore {
     this.hydrate();
   }
 
+  get enabled(): boolean {
+    return this.#enabled;
+  }
+
+  get range(): YokedDateRange | null {
+    return this.#range;
+  }
+
+  private resetDisabled(): void {
+    this.#enabled = false;
+    this.#range = null;
+  }
+
   hydrate(): void {
+    this.resetDisabled();
     if (!this.storage) return;
     try {
       const raw = this.storage.getItem(YOKED_DATES_STORAGE_KEY);
       if (!raw) return;
-      const stored = parseStored(JSON.parse(raw));
-      if (!stored) return;
-      this.range = stored.range ? copyRange(stored.range) : null;
+      const parsed = parseStored(JSON.parse(raw));
+      if (!parsed) return;
+      this.#enabled = parsed.state.enabled;
+      this.#range = parsed.state.range
+        ? copyRange(parsed.state.range)
+        : null;
+      if (parsed.needsRewrite) this.persist();
     } catch {
-      this.range = null;
+      this.resetDisabled();
     }
   }
 
+  setEnabled(enabled: boolean): void {
+    this.#enabled = enabled;
+    if (!enabled) this.#range = null;
+    this.persist();
+  }
+
   updateFromPanel(current: PanelDateState): void {
+    if (!this.#enabled) return;
     const range = panelStateToRange(current, this.now());
     if (!range) return;
-    this.range = range;
+    this.#range = range;
     this.persist();
   }
 
   clear(): void {
-    this.range = null;
+    this.#range = null;
     this.persist();
   }
 
   seedForPanel(): YokedDateRange | null {
-    if (!this.range) return null;
-    return copyRange(this.range);
+    if (!this.#enabled || !this.#range) return null;
+    return copyRange(this.#range);
   }
 
   private persist(): void {
+    if (!this.#enabled) this.#range = null;
     if (!this.storage) return;
     const stored: StoredYokedDates = {
       version: STORAGE_VERSION,
-      range: this.range ? copyRange(this.range) : null,
+      enabled: this.#enabled,
+      range: this.#range ? copyRange(this.#range) : null,
     };
     try {
       this.storage.setItem(

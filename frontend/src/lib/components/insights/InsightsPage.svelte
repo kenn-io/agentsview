@@ -2,6 +2,7 @@
   import { m } from "../../i18n/index.js";
   import { onMount, onDestroy, untrack } from "svelte";
   import { analytics } from "../../stores/analytics.svelte.js";
+  import { analyticsPageDates } from "../../stores/analyticsPageDates.js";
   import { insights } from "../../stores/insights.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { getBasePath, router } from "../../stores/router.svelte.js";
@@ -71,6 +72,9 @@
   let signalExamplesError: string | null = $state(null);
   let signalExamplesFilterKey: string | null = $state(null);
   let signalExamplesRequest = 0;
+  // A materialized page default is not date intent. Only picker input, a
+  // dated URL, or a shared seed may serialize dates back into the URL.
+  let insightDateIntentEstablished = false;
 
   const signals = $derived(analytics.signals);
   const summary = $derived(buildQualitySummary(signals));
@@ -238,7 +242,9 @@
   }
 
   function paramsWithInsightDate(
-    state: PanelDateState | null = currentInsightPanelDate(),
+    state: PanelDateState | null = insightDateIntentEstablished
+      ? currentInsightPanelDate()
+      : null,
     extra: Record<string, string> = {},
   ): Record<string, string> {
     const nextParams = { ...router.params };
@@ -260,6 +266,7 @@
 
   function updateYokeFromInsights(state: PanelDateState | null): void {
     if (!state) return;
+    insightDateIntentEstablished = true;
     yokedDates.updateFromPanel(state);
     writeInsightDateParams(state);
   }
@@ -267,6 +274,7 @@
   function seedInsightsYoke(): void {
     const urlState = insightParamsToPanelDate(router.params);
     if (urlState) {
+      insightDateIntentEstablished = true;
       applyInsightPanelDate(urlState);
       yokedDates.updateFromPanel(urlState);
       return;
@@ -274,17 +282,31 @@
     if (hasInsightDateParams(router.params)) return;
 
     const seed = yokedDates.seedForPanel();
-    const state = seed ? rangeToPanelDate(seed) : null;
+    const retained = seed
+      ? null
+      : analyticsPageDates.restoreWithIntent("insights");
+    const state = seed
+      ? rangeToPanelDate(seed)
+      : retained?.state ?? null;
     if (!state) return;
+    if (retained) {
+      insightDateIntentEstablished = retained.explicitDateIntent;
+    }
     applyInsightPanelDate(state);
-    writeInsightDateParams(state);
+    if (seed || retained?.explicitDateIntent) {
+      insightDateIntentEstablished = true;
+      writeInsightDateParams(state);
+    }
   }
 
   function fetchInsightSignals() {
     analytics.fetchSignalsForInsights();
     const state = currentInsightPanelDate();
-    if (state?.mode === "rolling") {
-      updateYokeFromInsights(state);
+    if (state?.mode === "rolling" && insightDateIntentEstablished) {
+      if (yokedDates.range !== null) {
+        yokedDates.updateFromPanel(state);
+      }
+      writeInsightDateParams(state);
     }
   }
 
@@ -471,7 +493,7 @@
   function selectGeneratedInsight(id: number) {
     insights.select(id);
     router.replaceParams(
-      paramsWithInsightDate(currentInsightPanelDate(), {
+      paramsWithInsightDate(undefined, {
         insight: String(id),
       }),
     );
@@ -698,6 +720,14 @@
   });
 
   onDestroy(() => {
+    const state = currentInsightPanelDate();
+    if (state) {
+      analyticsPageDates.retain(
+        "insights",
+        state,
+        insightDateIntentEstablished,
+      );
+    }
     if (refreshTimer !== undefined) clearInterval(refreshTimer);
     clearTimeout(copiedInsightLinkTimer);
     unsubEvents?.();
