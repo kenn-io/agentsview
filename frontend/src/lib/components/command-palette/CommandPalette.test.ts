@@ -38,7 +38,10 @@ const { mockUi, mockSessions, mockSearchStore, mockRouter, mockCopyToClipboard }
     mockSearchStore: {
       results: [] as Array<unknown>,
       isSearching: false,
-      error: null as { detail: string | null } | null,
+      error: null as {
+        detail: string | null;
+        kind: "generic" | "timeout";
+      } | null,
       mode: "fulltext" as "fulltext" | "semantic" | "hybrid",
       sort: "relevance" as "relevance" | "recency",
       search: vi.fn(),
@@ -359,7 +362,10 @@ describe("CommandPalette", () => {
   });
 
   it("mode controls handle activation and arrows without activating results", async () => {
-    mockSearchStore.error = { detail: "temporarily unavailable" };
+    mockSearchStore.error = {
+      detail: "temporarily unavailable",
+      kind: "generic",
+    };
     mockSearchStore.results = [makeSearchResult()];
     const component = mount(CommandPalette, { target: document.body });
     await enterSearchQuery();
@@ -405,7 +411,10 @@ describe("CommandPalette", () => {
     "retries an errored active %s mode once on %s without navigating",
     async (mode, activation) => {
       mockSearchStore.mode = mode;
-      mockSearchStore.error = { detail: "temporarily unavailable" };
+      mockSearchStore.error = {
+        detail: "temporarily unavailable",
+        kind: "generic",
+      };
       mockSearchStore.results = [makeSearchResult()];
       const component = mount(CommandPalette, { target: document.body });
       await enterSearchQuery();
@@ -458,7 +467,7 @@ describe("CommandPalette", () => {
 
   it("renders loading before error, empty state, and results", async () => {
     mockSearchStore.isSearching = true;
-    mockSearchStore.error = { detail: "backend detail" };
+    mockSearchStore.error = { detail: "backend detail", kind: "generic" };
     mockSearchStore.results = [makeSearchResult()];
     const component = mount(CommandPalette, { target: document.body });
     await enterSearchQuery();
@@ -473,6 +482,7 @@ describe("CommandPalette", () => {
   it("renders the localized error heading and exact backend detail before results", async () => {
     mockSearchStore.error = {
       detail: "Run agentsview embeddings build --full-rebuild",
+      kind: "generic",
     };
     mockSearchStore.results = [makeSearchResult()];
     const component = mount(CommandPalette, { target: document.body });
@@ -489,7 +499,7 @@ describe("CommandPalette", () => {
   });
 
   it("renders localized fallback copy for an error without string detail", async () => {
-    mockSearchStore.error = { detail: null };
+    mockSearchStore.error = { detail: null, kind: "generic" };
     const component = mount(CommandPalette, { target: document.body });
     await enterSearchQuery();
 
@@ -498,6 +508,35 @@ describe("CommandPalette", () => {
     expect(error?.querySelector("span")?.textContent).toBe(
       "Search failed. Please try again.",
     );
+
+    unmount(component);
+  });
+
+  it("explains a semantic timeout and offers an explicit retry", async () => {
+    mockSearchStore.mode = "semantic";
+    mockSearchStore.error = {
+      detail: "request timed out",
+      kind: "timeout",
+    };
+    const component = mount(CommandPalette, { target: document.body });
+    await enterSearchQuery();
+
+    const error = document.querySelector(".palette-error");
+    expect(error?.querySelector("strong")?.textContent).toBe(
+      "Search took too long",
+    );
+    expect(error?.querySelector("span")?.textContent).toBe(
+      "Try again. The first Semantic or Hybrid search can be slower while the embedding model warms up.",
+    );
+    expect(error?.textContent).not.toContain("request timed out");
+
+    const retry = Array.from(
+      error?.querySelectorAll<HTMLButtonElement>("button") ?? [],
+    ).find((button) => button.textContent?.trim() === "Retry");
+    expect(retry).toBeDefined();
+    retry?.click();
+    expect(mockSearchStore.retry).toHaveBeenCalledOnce();
+    expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
 
     unmount(component);
   });

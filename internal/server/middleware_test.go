@@ -124,6 +124,7 @@ func TestMiddlewareTimeout(t *testing.T) {
 	}{
 		{"Wrapped_ListSessions", "/api/v1/sessions", true, 0},
 		{"Wrapped_GetStats", "/api/v1/stats", true, 0},
+		{"Unwrapped_SearchContent", "/api/v1/search/content?pattern=needle", false, http.StatusOK},
 		{"Unwrapped_ExportSession", "/api/v1/sessions/invalid-id/export", false, http.StatusNotFound},
 		{"Unwrapped_SPA", "/", false, http.StatusOK},
 	}

@@ -258,7 +258,7 @@ describe("SearchStore", () => {
     store.search("failure");
     await runDebounce();
 
-    expect(store.error).toEqual({ detail });
+    expect(store.error).toEqual({ detail, kind: "generic" });
     expect(store.results).toEqual([]);
     expect(store.isSearching).toBe(false);
   });
@@ -268,7 +268,10 @@ describe("SearchStore", () => {
     searchService.getApiV1Search.mockRejectedValueOnce(new Error("network offline"));
     store.search("first");
     await runDebounce();
-    expect(store.error).toEqual({ detail: "network offline" });
+    expect(store.error).toEqual({
+      detail: "network offline",
+      kind: "generic",
+    });
 
     const pending = deferred<SearchResponse>();
     searchService.getApiV1Search.mockReturnValueOnce(pending.promise as never);
@@ -335,6 +338,26 @@ describe("SearchStore", () => {
     expect(searchService.getApiV1Search).not.toHaveBeenCalled();
   });
 
+  it.each(["semantic", "hybrid"] as const)(
+    "classifies a %s request timeout for friendly presentation",
+    async (mode) => {
+      const store = createSearchStore(
+        memoryStorage({ [SEARCH_MODE_STORAGE_KEY]: mode }),
+      );
+      searchService.getApiV1SearchContent.mockRejectedValueOnce(
+        generatedApiError(503, "request timed out"),
+      );
+
+      store.search("slow first query");
+      await runDebounce();
+
+      expect(store.error).toEqual({
+        detail: "request timed out",
+        kind: "timeout",
+      });
+    },
+  );
+
   it("keeps unknown failures detail-less for localized presentation", async () => {
     const store = createSearchStore(memoryStorage());
     searchService.getApiV1Search.mockRejectedValueOnce({ reason: "offline" });
@@ -342,7 +365,7 @@ describe("SearchStore", () => {
     store.search("unknown failure");
     await runDebounce();
 
-    expect(store.error).toEqual({ detail: null });
+    expect(store.error).toEqual({ detail: null, kind: "generic" });
     expect(store.isSearching).toBe(false);
   });
 

@@ -140,6 +140,8 @@
   "command_palette_mode_hybrid": "Hybrid",
   "command_palette_search_error": "Search unavailable",
   "command_palette_search_failed": "Search failed. Please try again.",
+  "command_palette_search_timeout_title": "Search took too long",
+  "command_palette_search_timeout_detail": "Try again. The first Semantic or Hybrid search can be slower while the embedding model warms up.",
   "command_palette_relevance": "Relevance",
   "command_palette_recency": "Recency",
   "command_palette_searching": "Searching...",

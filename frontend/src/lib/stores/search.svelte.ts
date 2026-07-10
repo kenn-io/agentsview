@@ -21,6 +21,7 @@ export interface PaletteSearchResult {
 
 export interface SearchFailure {
   detail: string | null;
+  kind: "generic" | "timeout";
 }
 
 interface ContentSearchMatch {
@@ -106,6 +107,11 @@ function errorDetail(error: unknown): string | null {
     return error.message || null;
   }
   return null;
+}
+
+function isTimeoutDetail(detail: string | null): boolean {
+  return detail !== null &&
+    /(?:timed out|timeout|deadline exceeded)/i.test(detail);
 }
 
 export class SearchStore {
@@ -208,9 +214,9 @@ export class SearchStore {
     this.abortController = controller;
     this.isSearching = true;
     this.error = null;
+    const mode = this.mode;
 
     try {
-      const mode = this.mode;
       let results: PaletteSearchResult[];
       if (mode === "fulltext") {
         const response = await callGenerated(
@@ -251,7 +257,13 @@ export class SearchStore {
         return;
       }
       this.results = [];
-      this.error = { detail: errorDetail(error) };
+      const detail = errorDetail(error);
+      this.error = {
+        detail,
+        kind: mode !== "fulltext" && isTimeoutDetail(detail)
+          ? "timeout"
+          : "generic",
+      };
     } finally {
       if (requestVersion === this.requestVersion && !signal.aborted) {
         this.isSearching = false;

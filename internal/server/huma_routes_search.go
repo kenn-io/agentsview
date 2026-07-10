@@ -14,7 +14,7 @@ func (s *Server) registerSearchRoutes() {
 	group := newRouteGroup(s.api, "/api/v1/search", "Search")
 
 	get(s, group, "", "Search sessions", s.humaSearch)
-	get(s, group, "/content", "Search session content", s.humaSearchContent)
+	getLong(s, group, "/content", "Search session content", s.humaSearchContent)
 }
 
 type searchSort string

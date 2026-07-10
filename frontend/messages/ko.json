@@ -137,6 +137,8 @@
   "command_palette_mode_hybrid": "하이브리드",
   "command_palette_search_error": "검색을 사용할 수 없음",
   "command_palette_search_failed": "검색에 실패했습니다. 다시 시도해 주세요.",
+  "command_palette_search_timeout_title": "검색 시간이 너무 오래 걸렸습니다",
+  "command_palette_search_timeout_detail": "다시 시도하세요. 임베딩 모델이 준비되는 동안 첫 시맨틱 또는 하이브리드 검색이 더 느릴 수 있습니다.",
   "command_palette_relevance": "관련성",
   "command_palette_recency": "최신순",
   "command_palette_searching": "검색 중...",

@@ -137,6 +137,8 @@
   "command_palette_mode_hybrid": "混合",
   "command_palette_search_error": "搜尋無法使用",
   "command_palette_search_failed": "搜尋失敗。請再試一次。",
+  "command_palette_search_timeout_title": "搜尋耗時過長",
+  "command_palette_search_timeout_detail": "請再試一次。嵌入模型預熱時，首次語意或混合搜尋可能會較慢。",
   "command_palette_relevance": "相關性",
   "command_palette_recency": "最近",
   "command_palette_searching": "正在搜索...",
