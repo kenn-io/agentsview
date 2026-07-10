@@ -64,4 +64,23 @@ describe("ReadProgressStore", () => {
 
     expect(store.get("one")).toEqual({ ordinal: 0, messageCount: 1 });
   });
+
+  it("uses in-memory state when localStorage is not Storage-like", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "localStorage",
+    );
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: { getItem() {} },
+    });
+    try {
+      const store = new ReadProgressStore();
+      store.baseline("one", -1, 0);
+      store.recordVisible("one", 0, 1);
+      expect(store.get("one")).toEqual({ ordinal: 0, messageCount: 1 });
+    } finally {
+      Object.defineProperty(globalThis, "localStorage", descriptor!);
+    }
+  });
 });

@@ -10,6 +10,24 @@ interface StoredReadProgress {
 
 const STORAGE_KEY = "agentsview-read-progress";
 
+type StorageLike = Pick<Storage, "getItem" | "setItem">;
+
+function storage(): StorageLike | null {
+  try {
+    if (
+      typeof localStorage === "undefined" ||
+      localStorage == null ||
+      typeof localStorage.getItem !== "function" ||
+      typeof localStorage.setItem !== "function"
+    ) {
+      return null;
+    }
+    return localStorage;
+  } catch {
+    return null;
+  }
+}
+
 function isMarker(value: unknown): value is ReadProgressMarker {
   if (!value || typeof value !== "object") return false;
   const marker = value as Record<string, unknown>;
@@ -23,8 +41,9 @@ function isMarker(value: unknown): value is ReadProgressMarker {
 
 function readStoredMarkers(): Record<string, ReadProgressMarker> {
   try {
-    if (typeof localStorage === "undefined") return {};
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const local = storage();
+    if (!local) return {};
+    const raw = local.getItem(STORAGE_KEY);
     if (!raw) return {};
     const stored = JSON.parse(raw) as Partial<StoredReadProgress>;
     if (stored.version !== 1 || !stored.sessions || typeof stored.sessions !== "object") {
@@ -93,12 +112,13 @@ export class ReadProgressStore {
 
   private persist() {
     try {
-      if (typeof localStorage === "undefined") return;
+      const local = storage();
+      if (!local) return;
       const value: StoredReadProgress = {
         version: 1,
         sessions: this.markers,
       };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
+      local.setItem(STORAGE_KEY, JSON.stringify(value));
     } catch {
       // Storage is optional, keep the in-memory marker usable.
     }

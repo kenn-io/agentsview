@@ -62,11 +62,14 @@ test("persists read progress until later output is visible", async ({ page }) =>
   await sp.goto();
   await sp.selectFirstSession();
 
-  await expect(page.getByLabel("Unread messages")).toHaveCount(1);
+  const unreadIndicator = page.locator(".unread-indicator");
+  const unreadDivider = page.locator(".read-progress-divider");
+  await expect(unreadIndicator).toHaveCount(1);
 
   await sp.scroller.evaluate((element) => {
     element.scrollTop = element.scrollHeight;
     element.dispatchEvent(new Event("scroll"));
   });
-  await expect(page.getByLabel("Unread messages")).toHaveCount(0);
+  await expect(unreadIndicator).toHaveCount(0);
+  await expect(unreadDivider).toHaveCount(0);
 });
