@@ -9741,6 +9741,38 @@ func TestIncrementalSync_ClaudeAgentIDLinksToolUseFromSameAppend(t *testing.T) {
 	assert.Equal(t, "agent-childsameappend", got.String)
 }
 
+func TestIncrementalSync_ClaudeAgentIDUsesFirstLinkAndLatestResult(t *testing.T) {
+	env := setupTestEnv(t)
+
+	initial := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"go"},"cwd":"/tmp"}`,
+	)
+	path := env.writeClaudeSession(
+		t, "proj-multiple-links", "parent-multiple-links.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	appended := testjsonl.JoinJSONL(
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_multiple_links","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}]}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:02Z","uuid":"r1","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_multiple_links","content":"partial"}]},"toolUseResult":{"status":"running","agentId":"firstchild"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:03Z","uuid":"r2","parentUuid":"r1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_multiple_links","content":"final"}]},"toolUseResult":{"status":"completed","agentId":"laterchild"}}`,
+	)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, writeErr := f.WriteString(appended)
+	require.NoError(t, f.Close(), "close append")
+	require.NoError(t, writeErr, "append")
+
+	env.engine.SyncPaths([]string{path})
+
+	msgs := fetchMessages(t, env.db, "parent-multiple-links")
+	require.Len(t, msgs, 2)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "agent-firstchild", msgs[1].ToolCalls[0].SubagentSessionID)
+	assert.Equal(t, "final", msgs[1].ToolCalls[0].ResultContent)
+	assert.Equal(t, len("final"), msgs[1].ToolCalls[0].ResultContentLength)
+}
+
 func TestIncrementalSync_ClaudeAgentIDPreservesExistingSubagentLink(t *testing.T) {
 	env := setupTestEnv(t)
 

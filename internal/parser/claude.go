@@ -600,7 +600,6 @@ func needsClaudeFullParse(entries []dagEntry) bool {
 }
 
 func collectClaudeSubagentLinks(entries []dagEntry) []ClaudeSubagentLink {
-	seen := make(map[string]struct{})
 	links := make([]ClaudeSubagentLink, 0, len(entries))
 	for _, entry := range entries {
 		if entry.entryType != "user" {
@@ -610,10 +609,6 @@ func collectClaudeSubagentLinks(entries []dagEntry) []ClaudeSubagentLink {
 		if !ok {
 			continue
 		}
-		if _, exists := seen[link.ToolUseID]; exists {
-			continue
-		}
-		seen[link.ToolUseID] = struct{}{}
 		links = append(links, link)
 	}
 	return links

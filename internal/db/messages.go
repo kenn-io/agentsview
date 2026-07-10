@@ -2116,7 +2116,7 @@ func applyToolCallSubagentLinkTx(
 		_, err := tx.Exec(
 			`UPDATE tool_calls SET subagent_session_id = ?
 			 WHERE session_id = ? AND tool_use_id = ?`,
-			currentSubagent, sessionID, link.ToolUseID,
+			nilIfEmpty(currentSubagent), sessionID, link.ToolUseID,
 		)
 		return err
 	}
@@ -2129,7 +2129,7 @@ func applyToolCallSubagentLinkTx(
 		 SET subagent_session_id = ?, result_content_length = ?,
 		     result_content = ?
 		 WHERE session_id = ? AND tool_use_id = ?`,
-		currentSubagent, link.ResultContentLen, resultContent,
+		nilIfEmpty(currentSubagent), link.ResultContentLen, resultContent,
 		sessionID, link.ToolUseID,
 	)
 	return err
