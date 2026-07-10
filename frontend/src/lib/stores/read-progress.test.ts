@@ -37,6 +37,33 @@ describe("ReadProgressStore", () => {
     expect(store.hasUnread("one", 4_001)).toBe(true);
   });
 
+  it("rebaselines stale markers when the backend total shrinks", () => {
+    const store = new ReadProgressStore();
+    store.baseline("one", 99, 100, 100);
+    store.baseline("one", 9, 10, 10);
+
+    expect(store.get("one")).toEqual({
+      ordinal: 9,
+      messageCount: 10,
+      totalMessageCount: 10,
+    });
+    expect(store.hasUnread("one", 10)).toBe(false);
+    expect(store.hasUnread("one", 11)).toBe(true);
+  });
+
+  it("reconciles stale markers when visible progress sees a smaller total", () => {
+    const store = new ReadProgressStore();
+    store.baseline("one", 99, 100, 100);
+    store.recordVisible("one", 9, 9, 10, 10);
+
+    expect(store.get("one")).toEqual({
+      ordinal: 9,
+      messageCount: 10,
+      totalMessageCount: 10,
+    });
+    expect(store.hasUnread("one", 10)).toBe(false);
+  });
+
   it("restores valid records and ignores malformed JSON and wrong records", () => {
     localStorage.setItem(
       "agentsview-read-progress",

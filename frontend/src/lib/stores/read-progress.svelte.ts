@@ -84,6 +84,10 @@ function acknowledgedTotal(
   return eligibleTotal;
 }
 
+function safeOrdinal(value: number): number {
+  return Number.isInteger(value) && value >= -1 ? value : -1;
+}
+
 export class ReadProgressStore {
   private markers: Record<string, ReadProgressMarker> = $state(
     readStoredMarkers(),
@@ -99,18 +103,28 @@ export class ReadProgressStore {
     displayCount: number,
     eligibleAcknowledgedTotal?: number,
   ) {
-    if (!sessionId || this.markers[sessionId]) return;
+    if (!sessionId) return;
+    const ordinal = safeOrdinal(displayOrdinal);
+    const count = safeCount(displayCount);
     const totalMessageCount = acknowledgedTotal(
       displayCount,
       eligibleAcknowledgedTotal,
     );
+    const marker = this.markers[sessionId];
+    if (marker) {
+      const acknowledged = marker.totalMessageCount ?? marker.messageCount;
+      if (
+        ordinal >= marker.ordinal &&
+        (totalMessageCount === undefined || totalMessageCount >= acknowledged)
+      ) {
+        return;
+      }
+    }
     this.markers = {
       ...this.markers,
       [sessionId]: {
-        ordinal: Number.isInteger(displayOrdinal) && displayOrdinal >= -1
-          ? displayOrdinal
-          : -1,
-        messageCount: safeCount(displayCount),
+        ordinal,
+        messageCount: count,
         ...(totalMessageCount !== undefined ? { totalMessageCount } : {}),
       },
     };
@@ -129,10 +143,26 @@ export class ReadProgressStore {
     const totalMessageCount = observedOrdinal === latestDisplayOrdinal
       ? acknowledgedTotal(displayCount, eligibleAcknowledgedTotal)
       : undefined;
+    const acknowledged = marker.totalMessageCount ?? marker.messageCount;
+    if (
+      totalMessageCount !== undefined &&
+      (latestDisplayOrdinal < marker.ordinal || totalMessageCount < acknowledged)
+    ) {
+      this.markers = {
+        ...this.markers,
+        [sessionId]: {
+          ordinal: safeOrdinal(latestDisplayOrdinal),
+          messageCount: safeCount(displayCount),
+          totalMessageCount,
+        },
+      };
+      this.persist();
+      return;
+    }
     if (observedOrdinal <= marker.ordinal) {
       if (
         totalMessageCount !== undefined &&
-        totalMessageCount > (marker.totalMessageCount ?? marker.messageCount)
+        totalMessageCount > acknowledged
       ) {
         this.markers = {
           ...this.markers,
@@ -151,7 +181,7 @@ export class ReadProgressStore {
           Math.min(safeCount(displayCount), observedOrdinal + 1),
         ),
         ...(totalMessageCount !== undefined &&
-          totalMessageCount > (marker.totalMessageCount ?? marker.messageCount)
+          totalMessageCount > acknowledged
           ? { totalMessageCount }
           : {}),
       },

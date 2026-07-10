@@ -36,6 +36,7 @@
 
   let containerRef: HTMLDivElement | undefined = $state(undefined);
   let scrollRaf: number | null = null;
+  let progressRaf: number | null = null;
   let lastScrollRequest = 0;
   let activeFollowScrollRequest: number | null = null;
   let followingScrollRaf: number | null = null;
@@ -191,8 +192,13 @@
     for (const row of v.getVirtualItems()) {
       if (row.end <= top || row.start >= bottom) continue;
       const item = itemAt(row.index);
-      if (!item || item.kind !== "message") continue;
-      latestOrdinal = Math.max(latestOrdinal, item.message.ordinal);
+      if (!item) continue;
+      latestOrdinal = Math.max(
+        latestOrdinal,
+        item.kind === "message"
+          ? item.message.ordinal
+          : Math.max(...item.ordinals),
+      );
     }
     if (latestOrdinal >= 0) {
       recordVisible(sessionId, latestOrdinal);
@@ -240,6 +246,27 @@
       void messages.messages.length;
       publishVisibleTimestamp();
     }
+  });
+
+  $effect(() => {
+    void messages.messageCount;
+    void latestDisplayOrdinal;
+    void displayedMessageCount;
+    const sessionId = messages.sessionId;
+    if (!sessionId || latestDisplayOrdinal < 0) return;
+    if (progressRaf !== null) {
+      cancelAnimationFrame(progressRaf);
+    }
+    progressRaf = requestAnimationFrame(() => {
+      progressRaf = null;
+      recordVisibleProgress();
+    });
+    return () => {
+      if (progressRaf !== null) {
+        cancelAnimationFrame(progressRaf);
+        progressRaf = null;
+      }
+    };
   });
 
   function handleScroll() {
@@ -329,6 +356,10 @@
     if (scrollRaf !== null) {
       cancelAnimationFrame(scrollRaf);
       scrollRaf = null;
+    }
+    if (progressRaf !== null) {
+      cancelAnimationFrame(progressRaf);
+      progressRaf = null;
     }
     if (followingScrollRaf !== null) {
       cancelAnimationFrame(followingScrollRaf);

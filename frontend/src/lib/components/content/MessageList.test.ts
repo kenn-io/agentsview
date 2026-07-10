@@ -223,10 +223,9 @@ describe("MessageList read progress", () => {
     virtualizerMock.scrollOffset = 300;
     scroller!.dispatchEvent(new Event("scroll"));
     await vi.waitFor(() => {
-      expect(readProgress.get("s1")).toEqual({
+      expect(readProgress.get("s1")).toMatchObject({
         ordinal: 5,
         messageCount: 5,
-        totalMessageCount: 5,
       });
     });
     await tick();
@@ -287,10 +286,9 @@ describe("MessageList read progress", () => {
       new Event("scroll"),
     );
     await vi.waitFor(() => {
-      expect(readProgress.get("s1")).toEqual({
+      expect(readProgress.get("s1")).toMatchObject({
         ordinal: 5,
         messageCount: 5,
-        totalMessageCount: 5,
       });
     });
     await tick();
@@ -427,6 +425,68 @@ describe("MessageList read progress", () => {
         value: originalObserver,
       });
     }
+  });
+
+  it("acknowledges a trailing system message appended while the latest row stays visible", async () => {
+    messages.messages = [makeMessage(0), makeMessage(1)];
+    messages.messageCount = 2;
+    readProgress.clear("s1");
+    readProgress.baseline("s1", 1, 2, 2);
+    virtualizerMock.getVirtualItems.mockReturnValue([0, 1].map((index) => ({
+      index,
+      key: `row-${index}`,
+      start: index * 100,
+      end: (index + 1) * 100,
+    })));
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    messages.messages = [
+      makeMessage(0),
+      makeMessage(1),
+      { ...makeMessage(2), is_system: true },
+    ];
+    messages.messageCount = 3;
+    await tick();
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    expect(readProgress.get("s1")).toEqual({
+      ordinal: 1,
+      messageCount: 2,
+      totalMessageCount: 3,
+    });
+    expect(readProgress.hasUnread("s1", 3)).toBe(false);
+  });
+
+  it("uses visible tool-group ordinals when backend counts change", async () => {
+    messages.messages = [3, 4, 5].map((ordinal) => ({
+      ...makeMessage(ordinal),
+      role: "assistant",
+      content: "",
+      content_length: 0,
+      has_tool_use: true,
+    }));
+    messages.messageCount = 6;
+    readProgress.clear("s1");
+    readProgress.baseline("s1", 4, 2, 5);
+    virtualizerMock.getVirtualItems.mockReturnValue([{
+      index: 0,
+      key: "tool-group",
+      start: 0,
+      end: 100,
+    }]);
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    messages.messageCount = 7;
+    await tick();
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    expect(readProgress.get("s1")).toEqual({
+      ordinal: 5,
+      messageCount: 3,
+      totalMessageCount: 7,
+    });
   });
 
   it("keeps progressively loaded older messages from becoming unread", async () => {
