@@ -240,6 +240,11 @@ func (db *DB) validateRecallImportDryRun(
 			return false, err
 		}
 	} else {
+		if err := validateRecallImportPlaceholderSessionStateWithQueryer(
+			ctx, tx, recall.SourceSessionID,
+		); err != nil {
+			return false, err
+		}
 		recall.ProvenanceOK = false
 	}
 	if err := validateRecallImportSupersessionWithQueryer(
@@ -644,31 +649,44 @@ func ensureRecallImportSessionTx(
 	m probeAcceptedRecallEntry,
 ) error {
 	session := recallImportPlaceholderSession(m)
-	var excluded bool
-	if err := tx.QueryRowContext(ctx, `
-		SELECT EXISTS (SELECT 1 FROM excluded_sessions WHERE id = ?)
-	`, session.ID).Scan(&excluded); err != nil {
-		return fmt.Errorf("checking excluded session %s: %w", session.ID, err)
-	}
-	if excluded {
-		return ErrSessionExcluded
-	}
-	var trashed bool
-	if err := tx.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM sessions
-			WHERE id = ? AND deleted_at IS NOT NULL
-		)
-	`, session.ID).Scan(&trashed); err != nil {
-		return fmt.Errorf("checking trashed session %s: %w", session.ID, err)
-	}
-	if trashed {
-		return ErrSessionTrashed
+	if err := validateRecallImportPlaceholderSessionStateWithQueryer(
+		ctx, tx, session.ID,
+	); err != nil {
+		return err
 	}
 	if _, err := tx.ExecContext(
 		ctx, insertSessionIfAbsentSQL, upsertSessionArgs(session)...,
 	); err != nil {
 		return fmt.Errorf("inserting session %s if absent: %w", session.ID, err)
+	}
+	return nil
+}
+
+func validateRecallImportPlaceholderSessionStateWithQueryer(
+	ctx context.Context,
+	queryer recallImportQueryer,
+	sessionID string,
+) error {
+	var excluded bool
+	if err := queryer.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM excluded_sessions WHERE id = ?)
+	`, sessionID).Scan(&excluded); err != nil {
+		return fmt.Errorf("checking excluded session %s: %w", sessionID, err)
+	}
+	if excluded {
+		return ErrSessionExcluded
+	}
+	var trashed bool
+	if err := queryer.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM sessions
+			WHERE id = ? AND deleted_at IS NOT NULL
+		)
+	`, sessionID).Scan(&trashed); err != nil {
+		return fmt.Errorf("checking trashed session %s: %w", sessionID, err)
+	}
+	if trashed {
+		return ErrSessionTrashed
 	}
 	return nil
 }

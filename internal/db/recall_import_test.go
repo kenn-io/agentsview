@@ -214,6 +214,74 @@ func TestImportAcceptedRecallEntriesJSONLCreatesPlaceholderSourceSession(t *test
 	assert.Equal(t, "recall-import-placeholder", session.SourceVersion)
 }
 
+func TestImportAcceptedRecallEntriesJSONLPlaceholderSessionStateParity(
+	t *testing.T,
+) {
+	states := []struct {
+		name string
+		want error
+		seed func(*testing.T, *DB)
+	}{
+		{
+			name: "excluded",
+			want: ErrSessionExcluded,
+			seed: func(t *testing.T, d *DB) {
+				_, err := d.getWriter().Exec(
+					"INSERT INTO excluded_sessions (id) VALUES (?)",
+					"s-blocked",
+				)
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "trashed",
+			want: ErrSessionTrashed,
+			seed: func(t *testing.T, d *DB) {
+				insertSession(t, d, "s-blocked", "agentsview")
+				_, err := d.getWriter().Exec(`
+					UPDATE sessions
+					SET deleted_at = '2026-07-09T00:00:00Z'
+					WHERE id = 's-blocked'`)
+				require.NoError(t, err)
+			},
+		},
+	}
+	modes := []struct {
+		name   string
+		dryRun bool
+	}{
+		{name: "real import"},
+		{name: "dry run", dryRun: true},
+	}
+
+	for _, state := range states {
+		for _, mode := range modes {
+			t.Run(state.name+"/"+mode.name, func(t *testing.T) {
+				d := testDB(t)
+				state.seed(t, d)
+				input := strings.NewReader(`
+{"candidate_id":"m1","type":"fact","scope":"project","title":"Blocked placeholder","body":"Placeholder imports must respect session lifecycle state.","project":"agentsview","session_id":"s-blocked","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0}}
+`)
+
+				result, err := d.ImportAcceptedRecallEntriesJSONLWithOptions(
+					context.Background(), input,
+					RecallImportOptions{
+						DryRun:                  mode.dryRun,
+						RequireExistingSessions: false,
+					},
+				)
+
+				require.ErrorIs(t, err, state.want)
+				assert.Zero(t, result.Imported)
+				assert.Zero(t, result.WouldImport)
+				got, getErr := d.GetRecallEntry(context.Background(), "m1")
+				require.NoError(t, getErr)
+				assert.Nil(t, got)
+			})
+		}
+	}
+}
+
 func TestImportAcceptedRecallEntriesJSONLRejectsReviewStateInput(t *testing.T) {
 	d := testDB(t)
 	input := strings.NewReader(`
