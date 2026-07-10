@@ -46,6 +46,7 @@ var providerMigrationModes = map[AgentType]ProviderMigrationMode{
 	AgentKiroIDE:        ProviderMigrationProviderAuthoritative,
 	AgentCortex:         ProviderMigrationProviderAuthoritative,
 	AgentHermes:         ProviderMigrationProviderAuthoritative,
+	AgentGrok:           ProviderMigrationProviderAuthoritative,
 	AgentWorkBuddy:      ProviderMigrationProviderAuthoritative,
 	AgentForge:          ProviderMigrationProviderAuthoritative,
 	AgentDevin:          ProviderMigrationProviderAuthoritative,
