@@ -105,7 +105,7 @@ Add a pure comparison helper and make existing boolean identity checks wrappers:
 ```go
 func compareProcessCreateTime(recorded string, live int64, liveOK bool) processCreateTimeState {
 	recordedMillis, err := strconv.ParseInt(recorded, 10, 64)
-	if err != nil || !liveOK {
+	if err != nil || recordedMillis <= 0 || !liveOK || live <= 0 {
 		return processCreateTimeUnknown
 	}
 	if recordedMillis == live {
@@ -121,7 +121,7 @@ func processCreateTimeStateForPID(pid int, recorded string) processCreateTimeSta
 ```
 
 Change mismatched-record cleanup to delete only on `processCreateTimeMismatch`;
-missing, malformed, and OS-unavailable values remain unknown.
+missing, malformed, zero, negative, and OS-unavailable values remain unknown.
 
 - [ ] **Step 4: Add writable-only discovery with errors**
 
@@ -276,6 +276,21 @@ with child args `[]string{"serve"}`. If lock contention resolves to a published
 writable daemon, report it and exit zero. A persistent start lock returns
 PID/log manual recovery details without spawning.
 
+Spell out every bounded contention outcome:
+
+- If the lock owner publishes a writable runtime, report it and exit zero.
+
+- If the launch lock remains held and the daemon start lock/snapshot exists,
+  return startup-in-progress with PID/log recovery details.
+
+- If the launch lock remains held without a start-lock snapshot, return a
+  retryable launch-in-progress error that identifies the launch lock; do not
+  load or write config.
+
+- If the launch lock clears without a writable runtime or active start lock,
+  return a startup-failed error. Do not treat it as success and do not start a
+  second launch in the same invocation.
+
 - [ ] **Step 5: Write and implement status behavior**
 
 Test and implement:
@@ -325,7 +340,8 @@ Cover idempotent stopped state, mixed writable/read-only records, multiple
 writable targets, launch-lock contention, start lock held alongside confirmed
 records, persistent start-lock fallback with startup PID/log output, proven
 PID-reuse cleanup, legacy/malformed/unavailable identity recovery, and
-all-target prevalidation before signalling any process.
+all-target prevalidation before signalling any process. Also force configuration
+loading to fail and assert that no target is signalled.
 
 Use injected stop functions/channels and actual runtime fixtures; do not assert
 implementation source text.
@@ -613,7 +629,14 @@ Use `@kenn:commit`, for example:
 chore: remove completed implementation artifacts
 ```
 
-- [ ] **Step 3: Run final verification from the exact PR HEAD**
+- [ ] **Step 3: Scrub public-bound changes**
+
+Run `@kenn:scrub-private-data` over `origin/main...HEAD`, including code, tests,
+commit messages, and Zensical docs. Remove or replace any private machine names,
+paths, tokens, URLs, or user data before pushing. If scrubbing changes tracked
+files, commit those changes with `@kenn:commit` before continuing.
+
+- [ ] **Step 4: Run final verification from the exact PR HEAD**
 
 ```bash
 git status --short
@@ -625,18 +648,14 @@ make docs-check
 
 Expected: clean working tree and all commands pass.
 
-- [ ] **Step 4: Scrub public-bound changes**
-
-Run `@kenn:scrub-private-data` over `origin/main...HEAD`, including code, tests,
-commit messages, and Zensical docs. Remove or replace any private machine names,
-paths, tokens, URLs, or user data before pushing.
-
 - [ ] **Step 5: Push and open a pull request**
 
 Run `@kenn:commit-push-pr`, which will use `@kenn:commit` if any final tracked
-changes exist, push the current branch, and open a rationale-first PR. The PR
-description must be summary-only with no test plan/checklist/verification
-section, per `AGENTS.md`.
+changes exist, push the current branch, and open a rationale-first PR. Enter
+this step with a clean working tree so the verified HEAD is the pushed HEAD. If
+the workflow creates an unexpected commit, stop and repeat the scrub and final
+verification before opening the PR. The PR description must be summary-only with
+no test plan/checklist/verification section, per `AGENTS.md`.
 
 - [ ] **Step 6: Report status without merging**
 
