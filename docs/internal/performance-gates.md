@@ -6,6 +6,10 @@ document records the regression classes we have actually hit, and the gates that
 now guard each one. When you touch a sync or DB hot path, know which gate covers
 you; when you fix a new class of regression, add a gate here.
 
+The watcher scheduler, bounded watcher batches, and Codex continuation cursor
+contracts are documented in
+[Background Sync Efficiency](background-sync-efficiency.md).
+
 ## Regression history
 
 | Class                          | What happened                                                                                                                                                                                           | Fixed in                                       |
@@ -38,6 +42,22 @@ runner noise and fail loudly:
   — root-derived project info is built once per root, not once per source.
 - `internal/server/broadcaster_test.go` — SSE emits coalesce to at most one
   broadcast per window.
+- `TestWatcherBatchesPathsAndEnforcesDispatchFloor`,
+  `TestWatcherSustainedWritesProgress`,
+  `TestWatcherContinuesIntakeDuringCallback`, and
+  `TestWatcherOverflowRunsFullSyncThenRetainsLaterBatch`
+  (`internal/sync/watcher_test.go`) — watcher callbacks remain throttled and
+  serialized, sustained writes make progress, event intake continues during a
+  sync, and an event storm becomes a bounded full rescan.
+- `TestCodexCursorCache`, `TestCodexCursorWarmColdParity`, and the cursor
+  boundary tests in `internal/parser` — continuation state stays bounded and
+  warm/cold parsing remains equivalent at safe offsets.
+- `TestIncrementalSync_CodexAppend`,
+  `TestIncrementalSync_CodexLifecycleTailUpdatesTermination`, the partial-tail
+  tests, and the late-update/title tests in
+  `internal/sync/engine_integration_test.go` — safe Codex growth appends only
+  new rows while lifecycle metadata, incomplete records, title changes, and
+  retroactive updates preserve full-parse behavior.
 
 When you fix a performance bug, prefer adding a gate at this layer: expose or
 reuse a counter (`SyncStats`, `PhaseStats`, `AnomalyStats`, a swappable
@@ -55,6 +75,10 @@ head and its merge base on the same runner, then compares the outputs with
   skip work only; also self-asserts nothing is re-synced or bulk-rewritten).
 - `BenchmarkSyncPathsIncrementalAppend` — absorb one appended line into a
   1,000-message session.
+- `BenchmarkCodexIncrementalSyncReads` — a warm Codex cursor append plus the
+  remaining full-source fingerprint and committed-prefix hash reads. See
+  [Background Sync Efficiency](background-sync-efficiency.md) for the
+  cost-model boundary.
 - `BenchmarkSyncAllColdArchive` — first-sync ingest throughput through the
   default per-session write path.
 - `BenchmarkResyncBulkIngest` — the same archive through the resync bulk-write
@@ -127,6 +151,11 @@ go run ./cmd/benchgate -old old.txt -new new.txt
 
 Cross-backend query benchmarks live separately in `internal/backendbench`
 (`make bench-backends`, requires Docker) and are not part of the PR gate.
+
+`BenchmarkCodexIncrementalCursor` lives in `internal/parser` and compares cold
+prefix reconstruction with an exact warm cursor. It is diagnostic rather than
+PR-gated: `BENCH_GATE_PACKAGES` currently contains only `./internal/sync`,
+`./internal/db`, and `./internal/secrets`.
 
 ## Adding a benchmark to the gate
 

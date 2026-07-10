@@ -698,8 +698,9 @@ full rewrite.
 
 AgentsView keeps the database in sync with session files through two mechanisms:
 
-1. **File watcher** — uses fsnotify to detect file changes in real time (500ms
-   debounce). Common dependency and build folders (`node_modules`,
+1. **File watcher** — uses fsnotify to detect file changes. An isolated edit is
+   batched for 500ms; watcher-driven sync start times remain at least five
+   seconds apart. Common dependency and build folders (`node_modules`,
    `__pycache__`, `.git`, `vendor`, `dist`, etc.) are automatically skipped to
    reduce noise and overhead.
 1. **Periodic sync** — full directory scan every 15 minutes as a safety net
