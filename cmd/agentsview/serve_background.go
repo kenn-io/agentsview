@@ -216,6 +216,9 @@ func startServeBackground(
 			fmt.Println("Auth enabled. Token is configured.")
 		}
 	}
+	if err := validateUniqueWritableDaemonSet(cfg.DataDir); err != nil {
+		return result, fmt.Errorf("%s: %w", operation, err)
+	}
 
 	decision := decideServeDaemonReplacement(cfg, opts)
 	switch decision.Action {
@@ -256,14 +259,13 @@ func startServeBackground(
 			}
 			return result, nil
 		case serveReplacementAuto, serveReplacementExplicit:
-			if err := checkBackgroundReplacementDataVersion(&cfg); err != nil {
-				return result, fmt.Errorf("%s: %w", operation, err)
-			}
 			// runServeBackgroundCommand holds the background launch lock across
 			// this stop/start sequence, so another CLI launcher cannot race into
 			// the replacement gap.
-			if !policy.ConfigOnly {
-				adoptDaemonRuntimeLaunchOptions(&cfg, decision.Runtime)
+			if err := prepareBackgroundReplacement(
+				&cfg, decision.Runtime, !policy.ConfigOnly,
+			); err != nil {
+				return result, fmt.Errorf("%s: %w", operation, err)
 			}
 			fmt.Println("Replacing agentsview daemon")
 			for _, line := range serveDaemonReplacementLines(decision) {
@@ -342,6 +344,48 @@ func startServeBackground(
 	return result, nil
 }
 
+func validateUniqueWritableDaemonSet(dataDir string) error {
+	records, err := writableDaemonRecords(dataDir)
+	if err != nil {
+		return fmt.Errorf("inspecting writable daemon runtimes: %w", err)
+	}
+	if len(records) <= 1 {
+		return nil
+	}
+	return fmt.Errorf(
+		"multiple writable agentsview daemons are running (pids %s); refusing startup or replacement; run `agentsview daemon status`, then `agentsview daemon stop` before retrying",
+		formatRecordPIDList(records),
+	)
+}
+
+func prepareBackgroundReplacement(
+	cfg *config.Config, rt *DaemonRuntime, adoptRuntimeOptions bool,
+) error {
+	if cfg == nil {
+		return errors.New("nil replacement config")
+	}
+	if err := validateUniqueWritableDaemonSet(cfg.DataDir); err != nil {
+		return err
+	}
+	if err := checkBackgroundReplacementDataVersion(cfg); err != nil {
+		return err
+	}
+	if adoptRuntimeOptions {
+		adoptDaemonRuntimeLaunchOptions(cfg, rt)
+	}
+	validationCfg := *cfg
+	if validationCfg.Host == "" {
+		// Config loading supplies the loopback default. Keep direct callers
+		// and tests with a zero-value host aligned with that final child
+		// configuration rather than treating an omitted host as non-loopback.
+		validationCfg.Host = "127.0.0.1"
+	}
+	if err := validateServeConfig(validationCfg); err != nil {
+		return fmt.Errorf("invalid serve configuration: %w", err)
+	}
+	return nil
+}
+
 func ensureBackgroundServe(
 	ctx context.Context,
 	cfg *config.Config,
@@ -414,14 +458,14 @@ func ensureBackgroundServe(
 	if err := ensureServeAuthToken(cfg); err != nil {
 		return nil, fmt.Errorf("generating auth token: %w", err)
 	}
+	if err := validateUniqueWritableDaemonSet(cfg.DataDir); err != nil {
+		return nil, err
+	}
 
 probeDaemon:
 	if rt := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil &&
 		!rt.ReadOnly {
 		if shouldUpgradeDaemonRuntime(rt, version) {
-			if err := checkBackgroundReplacementDataVersion(cfg); err != nil {
-				return nil, err
-			}
 			if waited, err := waitForExternalServeStartupBeforeReplacement(
 				ctx, cfg.DataDir, cfg.AuthToken, waitTimeout,
 			); waited {
@@ -433,7 +477,9 @@ probeDaemon:
 			if serveReplacementTargetChanged(*cfg, rt) {
 				goto probeDaemon
 			}
-			adoptDaemonRuntimeLaunchOptions(cfg, rt)
+			if err := prepareBackgroundReplacement(cfg, rt, true); err != nil {
+				return nil, err
+			}
 			if err := stopDaemonRuntimeForUpgrade(*cfg, rt); err != nil {
 				return nil, fmt.Errorf(
 					"stopping older daemon before restart: %w",
@@ -452,9 +498,6 @@ probeDaemon:
 		cfg.DataDir, cfg.AuthToken,
 	); err != nil {
 		if rt != nil && shouldUpgradeIncompatibleDaemonRuntime(rt, version) {
-			if err := checkBackgroundReplacementDataVersion(cfg); err != nil {
-				return nil, err
-			}
 			if waited, err := waitForExternalServeStartupBeforeReplacement(
 				ctx, cfg.DataDir, cfg.AuthToken, waitTimeout,
 			); waited {
@@ -466,7 +509,9 @@ probeDaemon:
 			if serveReplacementTargetChanged(*cfg, rt) {
 				goto probeDaemon
 			}
-			adoptDaemonRuntimeLaunchOptions(cfg, rt)
+			if err := prepareBackgroundReplacement(cfg, rt, true); err != nil {
+				return nil, err
+			}
 			if stopErr := stopDaemonRuntimeForUpgrade(*cfg, rt); stopErr != nil {
 				return nil, fmt.Errorf(
 					"stopping older daemon before restart: %w",
@@ -497,9 +542,6 @@ probeDaemon:
 			cfg.DataDir, cfg.AuthToken,
 		); err != nil {
 			if rt != nil && shouldUpgradeIncompatibleDaemonRuntime(rt, version) {
-				if err := checkBackgroundReplacementDataVersion(cfg); err != nil {
-					return nil, err
-				}
 				if waited, err := waitForExternalServeStartupBeforeReplacement(
 					ctx, cfg.DataDir, cfg.AuthToken, waitTimeout,
 				); waited {
@@ -511,7 +553,9 @@ probeDaemon:
 				if serveReplacementTargetChanged(*cfg, rt) {
 					goto probeDaemon
 				}
-				adoptDaemonRuntimeLaunchOptions(cfg, rt)
+				if err := prepareBackgroundReplacement(cfg, rt, true); err != nil {
+					return nil, err
+				}
 				if stopErr := stopDaemonRuntimeForUpgrade(*cfg, rt); stopErr != nil {
 					return nil, fmt.Errorf(
 						"stopping older daemon before restart: %w",

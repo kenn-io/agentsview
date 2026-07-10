@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -396,8 +397,8 @@ func TestDaemonMutationRejectsLoadedDataDirMismatch(t *testing.T) {
 			err := executeDaemonCommand(t, *deps, out, command)
 			require.Error(t, err)
 			assert.ErrorContains(t, err, "data dir changed after launch lock")
-			assert.ErrorContains(t, err, lockedDir)
-			assert.ErrorContains(t, err, loadedDir)
+			assert.ErrorContains(t, err, strconv.Quote(lockedDir))
+			assert.ErrorContains(t, err, strconv.Quote(loadedDir))
 			assert.Zero(t, discoveries)
 			assert.Zero(t, signals)
 			assert.Zero(t, starts)

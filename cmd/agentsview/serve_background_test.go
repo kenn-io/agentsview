@@ -452,6 +452,80 @@ func TestRunServeBackgroundRejectsTooNewDatabaseBeforeStop(t *testing.T) {
 		"old daemon runtime should remain when preflight fails")
 }
 
+func TestStartServeBackgroundRejectsMultipleWritableDaemons(t *testing.T) {
+	requirePOSIXSignals(t, "requires long-lived child processes")
+	dir := runtimeTestDir(t)
+	setTestVersion(t, "1.0.0")
+	host, port := testPingServer(t)
+	pids := []int{os.Getpid(), startSleepProcess(t)}
+	_, err := writeRuntimeRecordForTest(dir, daemonRuntimeRecord(
+		host, port, withRuntimePID(pids[0]), withRuntimeVersion("1.0.0"),
+	))
+	require.NoError(t, err)
+	_, err = writeRuntimeRecordForTest(dir, daemonRuntimeRecord(
+		"127.0.0.1", 9101, withRuntimePID(pids[1]),
+	))
+	require.NoError(t, err)
+
+	result, err := startServeBackground(
+		config.Config{DataDir: dir},
+		[]string{"serve", "--background"},
+		serveReplacementOptions{},
+		backgroundLaunchPolicy{ConfigOnly: true, Operation: "daemon start"},
+	)
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "multiple writable agentsview daemons")
+	assert.ErrorContains(t, err, strconv.Itoa(pids[0]))
+	assert.ErrorContains(t, err, strconv.Itoa(pids[1]))
+	assert.False(t, result.Started)
+	assert.Nil(t, result.Runtime)
+}
+
+func TestStartServeBackgroundValidatesConfigBeforeReplacementStop(t *testing.T) {
+	dir := runtimeTestDir(t)
+	host, port := testPingServer(t)
+	_, err := WriteDaemonRuntime(dir, host, port, "1.0.0", false)
+	require.NoError(t, err)
+	setTestVersion(t, "1.1.0")
+
+	stopCalls := 0
+	stubStopDaemonRuntimeForUpgrade(t, func(
+		_ config.Config, _ *DaemonRuntime,
+	) error {
+		stopCalls++
+		RemoveDaemonRuntime(dir)
+		return nil
+	})
+	startCalls := 0
+	oldStart := startServeBackgroundProcessForRun
+	startServeBackgroundProcessForRun = func(
+		config.Config, []string,
+	) (*exec.Cmd, string, error) {
+		startCalls++
+		return nil, "test.log", errors.New("replacement child started")
+	}
+	t.Cleanup(func() {
+		startServeBackgroundProcessForRun = oldStart
+		RemoveDaemonRuntime(dir)
+	})
+
+	result, err := startServeBackground(
+		config.Config{DataDir: dir, Host: "0.0.0.0"},
+		[]string{"serve", "--background"},
+		serveReplacementOptions{},
+		backgroundLaunchPolicy{ConfigOnly: true, Operation: "daemon start"},
+	)
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "require_auth")
+	assert.Zero(t, stopCalls, "invalid config must preserve the incumbent")
+	assert.Zero(t, startCalls, "invalid config must not launch a child")
+	assert.False(t, result.Started)
+	require.NotNil(t, FindDaemonRuntime(dir),
+		"incumbent runtime must remain discoverable")
+}
+
 func TestRunServeBackgroundRejectsTooNewDatabaseBeforeStopHelper(t *testing.T) {
 	if os.Getenv("AGENTSVIEW_BACKGROUND_TOO_NEW_HELPER") != "1" {
 		return
@@ -1303,6 +1377,73 @@ func TestEnsureBackgroundServeReplacesIncompatibleDaemonAfterStartupWait(
 	assert.True(t, stopped)
 	assert.True(t, started)
 	assert.Equal(t, newPort, rt.Port)
+}
+
+func TestEnsureBackgroundServeRejectsMultipleWritableDaemons(t *testing.T) {
+	requirePOSIXSignals(t, "requires long-lived child processes")
+	dir := runtimeTestDir(t)
+	setTestVersion(t, "1.0.0")
+	host, port := testPingServer(t)
+	pids := []int{os.Getpid(), startSleepProcess(t)}
+	_, err := writeRuntimeRecordForTest(dir, daemonRuntimeRecord(
+		host, port, withRuntimePID(pids[0]), withRuntimeVersion("1.0.0"),
+	))
+	require.NoError(t, err)
+	_, err = writeRuntimeRecordForTest(dir, daemonRuntimeRecord(
+		"127.0.0.1", 9201, withRuntimePID(pids[1]),
+	))
+	require.NoError(t, err)
+
+	cfg := config.Config{DataDir: dir}
+	rt, err := ensureBackgroundServe(
+		context.Background(), &cfg, 25*time.Millisecond,
+	)
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "multiple writable agentsview daemons")
+	assert.ErrorContains(t, err, strconv.Itoa(pids[0]))
+	assert.ErrorContains(t, err, strconv.Itoa(pids[1]))
+	assert.Nil(t, rt)
+}
+
+func TestEnsureBackgroundServeValidatesConfigBeforeReplacementStop(t *testing.T) {
+	dir := runtimeTestDir(t)
+	host, port := testPingServer(t)
+	_, err := WriteDaemonRuntime(dir, host, port, "1.0.0", false)
+	require.NoError(t, err)
+	setTestVersion(t, "1.1.0")
+
+	stopCalls := 0
+	stubStopDaemonRuntimeForUpgrade(t, func(
+		_ config.Config, _ *DaemonRuntime,
+	) error {
+		stopCalls++
+		RemoveDaemonRuntime(dir)
+		return nil
+	})
+	startCalls := 0
+	oldStart := startServeBackgroundProcessForEnsure
+	startServeBackgroundProcessForEnsure = func(
+		config.Config, []string,
+	) (*exec.Cmd, string, error) {
+		startCalls++
+		return nil, "test.log", errors.New("replacement child started")
+	}
+	t.Cleanup(func() {
+		startServeBackgroundProcessForEnsure = oldStart
+		RemoveDaemonRuntime(dir)
+	})
+
+	cfg := config.Config{DataDir: dir, Host: "0.0.0.0"}
+	rt, err := ensureBackgroundServe(context.Background(), &cfg, time.Second)
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "require_auth")
+	assert.Zero(t, stopCalls, "invalid config must preserve the incumbent")
+	assert.Zero(t, startCalls, "invalid config must not launch a child")
+	assert.Nil(t, rt)
+	require.NotNil(t, FindDaemonRuntime(dir),
+		"incumbent runtime must remain discoverable")
 }
 
 func TestEnsureBackgroundServePassesNoSyncToChild(t *testing.T) {
