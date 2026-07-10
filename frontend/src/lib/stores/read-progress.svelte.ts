@@ -122,6 +122,12 @@ export class ReadProgressStore {
     this.visibleCounts = { ...this.visibleCounts, [sessionId]: count };
   }
 
+  clearVisibleCount(sessionId: string) {
+    if (!(sessionId in this.visibleCounts)) return;
+    const { [sessionId]: _, ...remaining } = this.visibleCounts;
+    this.visibleCounts = remaining;
+  }
+
   clear(sessionId: string) {
     if (!this.markers[sessionId]) return;
     const { [sessionId]: _, ...remaining } = this.markers;

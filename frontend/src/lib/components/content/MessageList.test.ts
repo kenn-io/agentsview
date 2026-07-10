@@ -248,6 +248,48 @@ describe("MessageList read progress", () => {
     expect(document.body.textContent).toContain("msg 5");
   });
 
+  it("clears a session visible count when the list switches sessions", async () => {
+    messages.messages = [0, 1, 2, 3].map(makeMessage);
+    messages.messageCount = 4;
+    readProgress.clear("s1");
+    readProgress.baseline("s1", 3, 4);
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    messages.sessionId = "s2";
+    await tick();
+
+    expect(readProgress.get("s1")).toEqual({ ordinal: 3, messageCount: 4 });
+    expect(readProgress.hasUnread("s1", 5)).toBe(true);
+  });
+
+  it("hides the newest-first divider for a fully read transcript", async () => {
+    ui.sortNewestFirst = true;
+    readProgress.clear("s1");
+    readProgress.baseline("s1", 5, 6);
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    expect(document.querySelectorAll(".read-progress-divider")).toHaveLength(0);
+  });
+
+  it("hides the newest-first divider after new output becomes visible", async () => {
+    ui.sortNewestFirst = true;
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    expect(document.querySelectorAll(".read-progress-divider")).toHaveLength(1);
+    document.querySelector<HTMLElement>(".message-list-scroll")?.dispatchEvent(
+      new Event("scroll"),
+    );
+    await vi.waitFor(() => {
+      expect(readProgress.get("s1")).toEqual({ ordinal: 5, messageCount: 6 });
+    });
+    await tick();
+
+    expect(document.querySelectorAll(".read-progress-divider")).toHaveLength(0);
+  });
+
   it("does not mark every submessage in a visible tool group as read", async () => {
     messages.messages = [4, 5].map((ordinal) => ({
       ...makeMessage(ordinal),

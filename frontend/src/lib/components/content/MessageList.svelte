@@ -100,7 +100,9 @@
   );
 
   $effect(() => {
-    readProgress.setVisibleCount(messages.sessionId ?? "", displayedMessageCount);
+    const sessionId = messages.sessionId ?? "";
+    readProgress.setVisibleCount(sessionId, displayedMessageCount);
+    return () => readProgress.clearVisibleCount(sessionId);
   });
 
   function itemAt(index: number) {
@@ -594,6 +596,12 @@
     const items = ui.sortNewestFirst
       ? [...displayItemsAsc].reverse()
       : displayItemsAsc;
+    if (
+      ui.sortNewestFirst &&
+      !items.some((item) => item.ordinals.some((value) => value > marker.ordinal))
+    ) {
+      return null;
+    }
     for (const item of items) {
       const ordinal = item.ordinals.find((value) =>
         ui.sortNewestFirst

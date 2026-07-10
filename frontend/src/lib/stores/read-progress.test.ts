@@ -23,6 +23,16 @@ describe("ReadProgressStore", () => {
     expect(store.hasUnread("one", 7)).toBe(true);
   });
 
+  it("uses the current summary after a session stops being visible", () => {
+    const store = new ReadProgressStore();
+    store.baseline("one", 3, 4);
+    store.setVisibleCount("one", 4);
+    store.clearVisibleCount("one");
+
+    expect(store.get("one")).toEqual({ ordinal: 3, messageCount: 4 });
+    expect(store.hasUnread("one", 5)).toBe(true);
+  });
+
   it("restores valid records and ignores malformed JSON and wrong records", () => {
     localStorage.setItem(
       "agentsview-read-progress",
