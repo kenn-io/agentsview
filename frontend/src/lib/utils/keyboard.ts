@@ -40,6 +40,7 @@ function isFindInput(): boolean {
 
 interface ShortcutOptions {
   navigateMessage: (delta: number) => void;
+  navigateUserPrompt: (delta: number) => void;
 }
 
 function handleEscape(): void {
@@ -144,6 +145,12 @@ export function registerShortcuts(
 
     // All other shortcuts: skip when modal open or input focused
     if (ui.activeModal !== null || isInputFocused()) return;
+
+    if (e.shiftKey && (e.key === "J" || e.key === "K")) {
+      e.preventDefault();
+      opts.navigateUserPrompt(e.key === "J" ? 1 : -1);
+      return;
+    }
 
     const keyActions: Record<string, () => void> = {
       j: () => opts.navigateMessage(1),

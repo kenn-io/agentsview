@@ -30,4 +30,35 @@ test.describe("Navigation", () => {
     await expect(sp.analyticsToolbar).toBeVisible();
     await expect(sp.exportBtn).toContainText("Export CSV");
   });
+
+  test("Shift+J and Shift+K navigate visible user prompts", async ({ page }) => {
+    const session = page
+      .locator(".session-item")
+      .filter({ hasText: "project-beta" })
+      .filter({ hasText: "3" });
+    await session.first().click();
+    await expect(sp.messageRows).toHaveCount(6);
+
+    const users = sp.messageRows.filter({
+      has: page.locator(".message.is-user"),
+    });
+    await users.first().click();
+    await expect(users.first()).toHaveClass(/selected/);
+
+    const assistants = sp.messageRows.filter({
+      has: page.locator(".message:not(.is-user)"),
+    });
+    await page.keyboard.press("j");
+    await expect(assistants.first()).toHaveClass(/selected/);
+    await users.first().click();
+
+    await page.keyboard.press("Shift+J");
+    await expect(users.nth(1)).toHaveClass(/selected/);
+    await page.keyboard.press("Shift+K");
+    await expect(users.first()).toHaveClass(/selected/);
+
+    await page.keyboard.press("?");
+    await expect(page.getByText("Next user prompt")).toBeVisible();
+    await expect(page.getByText("Previous user prompt")).toBeVisible();
+  });
 });

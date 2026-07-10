@@ -1438,6 +1438,8 @@
   "shortcuts_close_palette": "팔레트 / 모달 / 검색 닫기",
   "shortcuts_next_message": "다음 메시지",
   "shortcuts_prev_message": "이전 메시지",
+  "shortcuts_next_user_prompt": "다음 사용자 프롬프트",
+  "shortcuts_prev_user_prompt": "이전 사용자 프롬프트",
   "shortcuts_next_session": "다음 세션",
   "shortcuts_prev_session": "이전 세션",
   "shortcuts_toggle_sort": "정렬 순서 전환",

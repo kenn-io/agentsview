@@ -1473,6 +1473,8 @@
   "shortcuts_close_palette": "Close palette / modal / find",
   "shortcuts_next_message": "Next message",
   "shortcuts_prev_message": "Previous message",
+  "shortcuts_next_user_prompt": "Next user prompt",
+  "shortcuts_prev_user_prompt": "Previous user prompt",
   "shortcuts_next_session": "Next session",
   "shortcuts_prev_session": "Previous session",
   "shortcuts_toggle_sort": "Toggle sort order",

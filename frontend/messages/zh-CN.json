@@ -1436,6 +1436,8 @@
   "shortcuts_close_palette": "关闭面板 / 弹窗 / 查找",
   "shortcuts_next_message": "下一条消息",
   "shortcuts_prev_message": "上一条消息",
+  "shortcuts_next_user_prompt": "下一个用户提示",
+  "shortcuts_prev_user_prompt": "上一个用户提示",
   "shortcuts_next_session": "下一个会话",
   "shortcuts_prev_session": "上一个会话",
   "shortcuts_toggle_sort": "切换排序方式",

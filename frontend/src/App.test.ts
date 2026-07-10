@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
+import type { Message } from "./lib/api/types.js";
 import sourceRaw from "./App.svelte?raw";
 import { SESSION_FILTER_KEYS } from "./lib/stores/sessionRouteParams.js";
 
@@ -154,5 +155,38 @@ describe("App session URL date state", () => {
       "await sessions.restoreRecentlyDeleted(last);",
     );
     expect(undoBlock).not.toContain("await sessions.restoreSession(last.id);");
+  });
+});
+
+function message(ordinal: number, role: Message["role"]) {
+  return {
+    kind: "message" as const,
+    ordinals: [ordinal],
+    message: { role } as Message,
+  };
+}
+
+describe("findUserPromptOrdinal", () => {
+  const items = [
+    message(1, "user"),
+    message(2, "assistant"),
+    { kind: "tool-group" as const, ordinals: [3], messages: [], timestamp: "" },
+    message(4, "user"),
+  ];
+
+  it("moves among visible user messages in chronological order", async () => {
+    const { findUserPromptOrdinal } = await import("./App.svelte");
+    expect(findUserPromptOrdinal(items, 1, 1, false)).toBe(4);
+    expect(findUserPromptOrdinal(items, 2, 1, false)).toBe(4);
+    expect(findUserPromptOrdinal(items, 3, -1, false)).toBe(1);
+    expect(findUserPromptOrdinal(items, null, 1, false)).toBe(1);
+    expect(findUserPromptOrdinal(items, null, -1, false)).toBe(4);
+    expect(findUserPromptOrdinal(items.slice(1, 3), 2, 1, false)).toBeUndefined();
+  });
+
+  it("preserves chronological navigation when newest-first is enabled", async () => {
+    const { findUserPromptOrdinal } = await import("./App.svelte");
+    expect(findUserPromptOrdinal([...items].reverse(), 1, 1, true)).toBe(4);
+    expect(findUserPromptOrdinal([...items].reverse(), 4, -1, true)).toBe(1);
   });
 });

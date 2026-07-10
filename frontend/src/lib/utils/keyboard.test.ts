@@ -27,6 +27,7 @@ function fireKey(
 describe("registerShortcuts", () => {
   let cleanup: () => void;
   let navigateMessage: (delta: number) => void;
+  let navigateUserPrompt: (delta: number) => void;
 
   beforeEach(() => {
     ui.activeModal = null;
@@ -38,7 +39,8 @@ describe("registerShortcuts", () => {
       starred.unstar(id);
     }
     navigateMessage = vi.fn();
-    cleanup = registerShortcuts({ navigateMessage });
+    navigateUserPrompt = vi.fn();
+    cleanup = registerShortcuts({ navigateMessage, navigateUserPrompt });
   });
 
   afterEach(() => {
@@ -132,6 +134,38 @@ describe("registerShortcuts", () => {
     it("should allow navigation when no modal is open", () => {
       fireKey("j");
       expect(navigateMessage).toHaveBeenCalledWith(1);
+    });
+
+    it("should block prompt navigation when modal is open", () => {
+      ui.activeModal = "commandPalette";
+      fireKey("J", { shiftKey: true });
+      expect(navigateUserPrompt).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("prompt navigation", () => {
+    it("dispatches Shift+J and Shift+K without changing adjacent navigation", () => {
+      fireKey("J", { shiftKey: true });
+      fireKey("K", { shiftKey: true });
+      fireKey("j");
+      fireKey("k");
+
+      expect(navigateUserPrompt).toHaveBeenNthCalledWith(1, 1);
+      expect(navigateUserPrompt).toHaveBeenNthCalledWith(2, -1);
+      expect(navigateMessage).toHaveBeenNthCalledWith(1, 1);
+      expect(navigateMessage).toHaveBeenNthCalledWith(2, -1);
+    });
+
+    it("suppresses prompt navigation while a focused input owns keys", () => {
+      const input = document.createElement("input");
+      document.body.appendChild(input);
+      input.focus();
+      try {
+        fireKey("J", { shiftKey: true });
+        expect(navigateUserPrompt).not.toHaveBeenCalled();
+      } finally {
+        document.body.removeChild(input);
+      }
     });
   });
 
