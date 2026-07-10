@@ -23,14 +23,18 @@ describe("ReadProgressStore", () => {
     expect(store.hasUnread("one", 7)).toBe(true);
   });
 
-  it("uses the current summary after a session stops being visible", () => {
+  it("uses acknowledged backend totals instead of loaded display counts", () => {
     const store = new ReadProgressStore();
-    store.baseline("one", 3, 4);
-    store.setVisibleCount("one", 4);
-    store.clearVisibleCount("one");
+    store.baseline("one", 3_999, 1_000, 4_000);
+    store.recordVisible("one", 3_999, 3_999, 2_000, 4_000);
 
-    expect(store.get("one")).toEqual({ ordinal: 3, messageCount: 4 });
-    expect(store.hasUnread("one", 5)).toBe(true);
+    expect(store.get("one")).toEqual({
+      ordinal: 3_999,
+      messageCount: 1_000,
+      totalMessageCount: 4_000,
+    });
+    expect(store.hasUnread("one", 4_000)).toBe(false);
+    expect(store.hasUnread("one", 4_001)).toBe(true);
   });
 
   it("restores valid records and ignores malformed JSON and wrong records", () => {
@@ -97,19 +101,19 @@ describe("ReadProgressStore", () => {
     }
   });
 
-  it("acknowledges a complete backend total only at the latest display ordinal", () => {
+  it("acknowledges a backend total only at the latest display ordinal", () => {
     const store = new ReadProgressStore();
     store.baseline("one", 0, 1);
-    store.recordVisible("one", 1, 2, 3, 4);
+    store.recordVisible("one", 1, 2, 3, 400);
     expect(store.get("one")).toEqual({ ordinal: 1, messageCount: 2 });
 
-    store.recordVisible("one", 2, 2, 3, 4);
+    store.recordVisible("one", 2, 2, 3, 400);
     expect(store.get("one")).toEqual({
       ordinal: 2,
       messageCount: 3,
-      totalMessageCount: 4,
+      totalMessageCount: 400,
     });
-    expect(store.hasUnread("one", 4)).toBe(false);
+    expect(store.hasUnread("one", 400)).toBe(false);
   });
 
   it("preserves legacy markers and rejects invalid acknowledged totals", () => {

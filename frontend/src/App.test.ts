@@ -29,6 +29,7 @@ describe("App session URL date state", () => {
     expect(source).toContain(
       "messages.messages.filter((message) => !isSystemMessage(message))",
     );
+    expect(source).toContain("const eligibleAcknowledgedTotal = messages.messageCount;");
   });
 
   it("treats rolling window and termination as sessions route params", () => {

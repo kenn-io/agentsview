@@ -177,9 +177,7 @@
     const displayMessages = messages.messages.filter((message) => !isSystemMessage(message));
     const displayOrdinal = displayMessages.at(-1)?.ordinal ?? -1;
     const displayCount = displayMessages.length;
-    const eligibleAcknowledgedTotal = messages.hasCompleteMessageRange()
-      ? messages.messageCount
-      : undefined;
+    const eligibleAcknowledgedTotal = messages.messageCount;
     untrack(() => {
       if (!id || id !== messageSessionId || loading || !initialLoadSucceeded) return;
       readProgress.baseline(

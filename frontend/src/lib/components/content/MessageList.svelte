@@ -101,15 +101,7 @@
 
   let displayedMessageCount = $derived(baseMessages.length);
 
-  let eligibleAcknowledgedTotal = $derived(
-    messages.hasCompleteMessageRange() ? messages.messageCount : undefined,
-  );
-
-  $effect(() => {
-    const sessionId = messages.sessionId ?? "";
-    readProgress.setVisibleCount(sessionId, displayedMessageCount);
-    return () => readProgress.clearVisibleCount(sessionId);
-  });
+  let eligibleAcknowledgedTotal = $derived(messages.messageCount);
 
   function itemAt(index: number) {
     if (ui.sortNewestFirst) {

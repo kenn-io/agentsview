@@ -178,18 +178,10 @@ test("acknowledges a trailing system message only after the last displayable row
   await expect(page.locator(".unread-indicator")).toHaveCount(0);
 });
 
-test("keeps an incomplete range unacknowledged", async ({ page }) => {
+test("acknowledges a progressive first visit by backend total", async ({ page }) => {
   const [session] = createMockSessions(1, "read-progress-partial", () => "project");
   session!.id = "read-progress-partial";
-  session!.message_count = 3;
-  await page.addInitScript(() => {
-    localStorage.setItem("agentsview-read-progress", JSON.stringify({
-      version: 1,
-      sessions: {
-        "read-progress-partial": { ordinal: 0, messageCount: 1 },
-      },
-    }));
-  });
+  session!.message_count = 3_005;
   await page.route(
     sessionsRoutePattern,
     handleSessionsRoute([{ sessions: [session!], project: null }]),
@@ -197,7 +189,10 @@ test("keeps an incomplete range unacknowledged", async ({ page }) => {
   await page.route(
     "**/api/v1/sessions/read-progress-partial/messages*",
     async (route) => route.fulfill({
-      json: { messages: makeMessages(3).slice(1), count: 3 },
+      json: {
+        messages: makeMessages(3_005).slice(-1_000).reverse(),
+        count: 3_005,
+      },
     }),
   );
 
@@ -210,10 +205,10 @@ test("keeps an incomplete range unacknowledged", async ({ page }) => {
   });
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem("agentsview-read-progress")))
-    .not.toContain('"totalMessageCount"');
+    .toContain('"totalMessageCount":3005');
 
   await page.locator(".breadcrumb-link").click();
-  await expect(page.locator(".unread-indicator")).toHaveCount(1);
+  await expect(page.locator(".unread-indicator")).toHaveCount(0);
 });
 
 test("captures responsive unread state", async ({ page }) => {

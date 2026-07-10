@@ -223,7 +223,11 @@ describe("MessageList read progress", () => {
     virtualizerMock.scrollOffset = 300;
     scroller!.dispatchEvent(new Event("scroll"));
     await vi.waitFor(() => {
-      expect(readProgress.get("s1")).toEqual({ ordinal: 5, messageCount: 5 });
+      expect(readProgress.get("s1")).toEqual({
+        ordinal: 5,
+        messageCount: 5,
+        totalMessageCount: 5,
+      });
     });
     await tick();
 
@@ -283,7 +287,11 @@ describe("MessageList read progress", () => {
       new Event("scroll"),
     );
     await vi.waitFor(() => {
-      expect(readProgress.get("s1")).toEqual({ ordinal: 5, messageCount: 5 });
+      expect(readProgress.get("s1")).toEqual({
+        ordinal: 5,
+        messageCount: 5,
+        totalMessageCount: 5,
+      });
     });
     await tick();
 
@@ -419,5 +427,35 @@ describe("MessageList read progress", () => {
         value: originalObserver,
       });
     }
+  });
+
+  it("keeps progressively loaded older messages from becoming unread", async () => {
+    messages.messages = [3_000, 3_001, 3_002].map(makeMessage);
+    messages.messageCount = 3_003;
+    messages.hasOlder = true;
+    readProgress.clear("s1");
+    readProgress.baseline("s1", 3_002, 3, 3_003);
+    virtualizerMock.getVirtualItems.mockReturnValue([0, 1, 2].map((index) => ({
+      index,
+      key: `row-${index}`,
+      start: index * 100,
+      end: (index + 1) * 100,
+    })));
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    messages.messages = [2_000, 2_001, 2_002, 3_000, 3_001, 3_002].map(makeMessage);
+    await tick();
+    document.querySelector<HTMLElement>(".message-list-scroll")?.dispatchEvent(
+      new Event("scroll"),
+    );
+    await tick();
+
+    expect(readProgress.get("s1")).toEqual({
+      ordinal: 3_002,
+      messageCount: 3,
+      totalMessageCount: 3_003,
+    });
+    expect(readProgress.hasUnread("s1", 3_003)).toBe(false);
   });
 });
