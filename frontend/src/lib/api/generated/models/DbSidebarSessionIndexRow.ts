@@ -10,6 +10,7 @@ export type DbSidebarSessionIndexRow = {
   id: string;
   is_automated: boolean;
   is_teammate: boolean;
+  latest_display_content_length: number | null;
   latest_display_ordinal: number | null;
   machine: string;
   message_count: number;
