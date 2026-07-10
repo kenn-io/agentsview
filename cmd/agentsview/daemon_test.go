@@ -348,6 +348,37 @@ func TestDaemonStartContentionStartLockWithoutSnapshotUsesRecoveryError(t *testi
 	assert.NotContains(t, err.Error(), "launch is still in progress")
 }
 
+func TestDaemonStartContentionPublishedWriterWinsOverHeldLocks(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	deps.acquireLaunchLock = func(string) (daemonLaunchLock, bool) { return nil, false }
+	deps.waitContendedLaunch = func(string) daemonLaunchObservation {
+		return daemonLaunchObservation{
+			LockHeld: true,
+			Starting: true,
+			Snapshot: &startupState{PID: 140, LogPath: "/tmp/serve.log"},
+			Records: []daemon.RuntimeRecord{
+				testWritableRecord(141, "/runtime/141.json"),
+			},
+		}
+	}
+	configLoads, starts := 0, 0
+	deps.loadConfig = func() (config.Config, error) {
+		configLoads++
+		return config.Config{}, nil
+	}
+	deps.startBackground = func(config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+		starts++
+		return backgroundLaunchResult{}, nil
+	}
+
+	require.NoError(t, executeDaemonCommand(t, *deps, out, "start"))
+	assert.Contains(t, out.String(), "already running")
+	assert.Contains(t, out.String(), "pid 141")
+	assert.NotContains(t, out.String(), "pid 140")
+	assert.Zero(t, configLoads)
+	assert.Zero(t, starts)
+}
+
 func TestDaemonStatusListsEveryWriterAndSurfacesInspectionErrors(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
 	deps.statusRecords = func(string) ([]daemon.RuntimeRecord, error) {

@@ -173,13 +173,13 @@ func reportDaemonLaunchContention(
 	if observation.Err != nil {
 		return fmt.Errorf("daemon start: inspecting concurrent launch: %w", observation.Err)
 	}
-	if observation.Starting {
-		return daemonPersistentStartupError("daemon start", dataDir, observation.Snapshot, now)
-	}
 	if len(observation.Records) > 0 {
 		rt := daemonRuntimeFromRecord(observation.Records[0])
 		fmt.Fprintf(w, "agentsview already running at %s (pid %d)\n", urlFromDaemonRuntime(rt), rt.Record.PID)
 		return nil
+	}
+	if observation.Starting {
+		return daemonPersistentStartupError("daemon start", dataDir, observation.Snapshot, now)
 	}
 	if observation.LockHeld {
 		return fmt.Errorf(
