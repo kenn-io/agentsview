@@ -1090,3 +1090,54 @@ func TestSchemaUpgradeHint(t *testing.T) {
 		assert.Equal(t, base, schemaUpgradeHint(base))
 	})
 }
+
+type watchSyncRecorder struct {
+	pathCalls          [][]string
+	fullCalls          int
+	fullProgressNonNil bool
+	ctxValue           any
+}
+
+func (r *watchSyncRecorder) SyncPathsContext(ctx context.Context, paths []string) {
+	r.pathCalls = append(r.pathCalls, append([]string(nil), paths...))
+	r.ctxValue = ctx.Value(watchSyncContextKey{})
+}
+
+func (r *watchSyncRecorder) SyncAll(
+	ctx context.Context, progress agentsync.ProgressFunc,
+) agentsync.SyncStats {
+	r.fullCalls++
+	r.fullProgressNonNil = progress != nil
+	r.ctxValue = ctx.Value(watchSyncContextKey{})
+	return agentsync.SyncStats{}
+}
+
+type watchSyncContextKey struct{}
+
+func TestSyncWatchBatchRoutesOverflowToFullSync(t *testing.T) {
+	ctx := context.WithValue(context.Background(), watchSyncContextKey{}, "serve")
+
+	t.Run("ordinary paths", func(t *testing.T) {
+		recorder := &watchSyncRecorder{}
+		syncWatchBatch(ctx, recorder, agentsync.WatchBatch{
+			Paths: []string{"/sessions/a.jsonl", "/sessions/b.jsonl"},
+		})
+
+		assert.Equal(t, [][]string{{
+			"/sessions/a.jsonl",
+			"/sessions/b.jsonl",
+		}}, recorder.pathCalls)
+		assert.Zero(t, recorder.fullCalls)
+		assert.Equal(t, "serve", recorder.ctxValue)
+	})
+
+	t.Run("overflow", func(t *testing.T) {
+		recorder := &watchSyncRecorder{}
+		syncWatchBatch(ctx, recorder, agentsync.WatchBatch{FullSync: true})
+
+		assert.Empty(t, recorder.pathCalls)
+		assert.Equal(t, 1, recorder.fullCalls)
+		assert.False(t, recorder.fullProgressNonNil)
+		assert.Equal(t, "serve", recorder.ctxValue)
+	})
+}

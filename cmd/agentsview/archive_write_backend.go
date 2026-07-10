@@ -176,7 +176,7 @@ func (b daemonArchiveWriteBackend) DuckDBPushWatch(
 	defer ticker.Stop()
 
 	stopWatcher, unwatchedDirs := startFileWatcher(b.appCfg, nil,
-		func(_ []string) {
+		func(_ syncpkg.WatchBatch) {
 			loop.NotifyDirty()
 		},
 	)
@@ -287,7 +287,7 @@ func (b daemonArchiveWriteBackend) PGPushWatch(
 	defer ticker.Stop()
 
 	stopWatcher, unwatchedDirs := startFileWatcher(b.appCfg, nil,
-		func(_ []string) {
+		func(_ syncpkg.WatchBatch) {
 			loop.NotifyDirty()
 		},
 	)
@@ -482,7 +482,7 @@ func (b *localArchiveWriteBackend) DuckDBPushWatch(
 	defer ticker.Stop()
 
 	stopWatcher, unwatchedDirs := startFileWatcher(b.appCfg, nil,
-		func(_ []string) {
+		func(_ syncpkg.WatchBatch) {
 			loop.NotifyDirty()
 		},
 	)
@@ -605,8 +605,8 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 	defer ticker.Stop()
 
 	stopWatcher, unwatchedDirs := startFileWatcher(b.appCfg, engine,
-		func(paths []string) {
-			engine.SyncPaths(paths)
+		func(batch syncpkg.WatchBatch) {
+			syncWatchBatch(ctx, engine, batch)
 			loop.NotifyDirty()
 		},
 	)

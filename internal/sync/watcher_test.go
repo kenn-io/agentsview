@@ -27,8 +27,36 @@ func startTestWatcherWithIntervalsNoCleanup(
 ) (*Watcher, string) {
 	t.Helper()
 	dir := t.TempDir()
-	w, err := NewWatcherWithInterval(batchDelay, minInterval, onChange, nil)
+	w, err := NewWatcherWithInterval(
+		batchDelay,
+		minInterval,
+		func(batch WatchBatch) { onChange(batch.Paths) },
+		nil,
+	)
 	require.NoError(t, err, "NewWatcherWithInterval")
+	_, _, err = w.WatchRecursive(dir)
+	require.NoError(t, err, "WatchRecursive")
+	w.Start()
+	return w, dir
+}
+
+func startTestWatcherWithBatchLimitsNoCleanup(
+	t *testing.T,
+	onChange func(WatchBatch),
+	batchDelay, minInterval time.Duration,
+	maxEntries, maxPathBytes int,
+) (*Watcher, string) {
+	t.Helper()
+	dir := t.TempDir()
+	w, err := newWatcherWithLimits(
+		batchDelay,
+		minInterval,
+		onChange,
+		nil,
+		maxEntries,
+		maxPathBytes,
+	)
+	require.NoError(t, err, "newWatcherWithLimits")
 	_, _, err = w.WatchRecursive(dir)
 	require.NoError(t, err, "WatchRecursive")
 	w.Start()
@@ -53,7 +81,11 @@ func startTestWatcherNoCleanup(
 ) (*Watcher, string) {
 	t.Helper()
 	dir := t.TempDir()
-	w, err := NewWatcher(delay, onChange, nil)
+	w, err := NewWatcher(
+		delay,
+		func(batch WatchBatch) { onChange(batch.Paths) },
+		nil,
+	)
 	require.NoError(t, err, "NewWatcher")
 	_, _, err = w.WatchRecursive(dir)
 	require.NoError(t, err, "WatchRecursive")
@@ -80,6 +112,17 @@ func receivePaths(t *testing.T, calls <-chan []string) []string {
 	case <-time.After(watcherTestTimeout):
 		t.Fatal("timed out waiting for watcher callback")
 		return nil
+	}
+}
+
+func receiveWatchBatch(t *testing.T, calls <-chan WatchBatch) WatchBatch {
+	t.Helper()
+	select {
+	case batch := <-calls:
+		return batch
+	case <-time.After(watcherTestTimeout):
+		t.Fatal("timed out waiting for watcher callback")
+		return WatchBatch{}
 	}
 }
 
@@ -113,6 +156,61 @@ func pollUntil(t *testing.T, condition func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("pollUntil: condition not met within deadline")
+}
+
+func TestPendingWatchBatchOverflowsByEntryCount(t *testing.T) {
+	pending := newPendingWatchBatch(2, 1_000)
+
+	pending.Add("/sessions/a.jsonl")
+	pending.Add("/sessions/b.jsonl")
+	pending.Add("/sessions/c.jsonl")
+
+	batch, ok := pending.Take()
+	require.True(t, ok)
+	assert.True(t, batch.FullSync)
+	assert.Empty(t, batch.Paths)
+}
+
+func TestPendingWatchBatchOverflowsByPathBytes(t *testing.T) {
+	pending := newPendingWatchBatch(10, len("/sessions/a.jsonl"))
+
+	pending.Add("/sessions/a.jsonl")
+	pending.Add("/sessions/b.jsonl")
+
+	batch, ok := pending.Take()
+	require.True(t, ok)
+	assert.True(t, batch.FullSync)
+	assert.Empty(t, batch.Paths)
+}
+
+func TestPendingWatchBatchCountsDuplicateOnce(t *testing.T) {
+	path := "/sessions/a.jsonl"
+	pending := newPendingWatchBatch(1, len(path))
+
+	pending.Add(path)
+	pending.Add(path)
+
+	batch, ok := pending.Take()
+	require.True(t, ok)
+	assert.False(t, batch.FullSync)
+	assert.Equal(t, []string{path}, batch.Paths)
+}
+
+func TestPendingWatchBatchTakeResetsBounds(t *testing.T) {
+	pending := newPendingWatchBatch(1, 1_000)
+	pending.Add("/sessions/a.jsonl")
+
+	first, ok := pending.Take()
+	require.True(t, ok)
+	assert.Equal(t, []string{"/sessions/a.jsonl"}, first.Paths)
+	_, ok = pending.Take()
+	assert.False(t, ok, "taking an empty accumulator must not dispatch")
+
+	pending.Add("/sessions/b.jsonl")
+	second, ok := pending.Take()
+	require.True(t, ok)
+	assert.False(t, second.FullSync)
+	assert.Equal(t, []string{"/sessions/b.jsonl"}, second.Paths)
 }
 
 func TestWatcherBatchesPathsAndEnforcesDispatchFloor(t *testing.T) {
@@ -269,6 +367,93 @@ func TestWatcherContinuesIntakeDuringCallback(t *testing.T) {
 	secondBatch := receivePaths(t, calls)
 	assert.Contains(t, firstBatch, firstPath)
 	assert.Contains(t, secondBatch, duringCallbackPath)
+	assert.Equal(t, int32(1), maxConcurrent.Load(),
+		"watcher callbacks must remain serialized")
+}
+
+func TestWatcherOverflowRunsFullSyncThenRetainsLaterBatch(t *testing.T) {
+	const (
+		batchDelay  = 20 * time.Millisecond
+		minInterval = 80 * time.Millisecond
+		maxEntries  = 2
+	)
+	firstRelease := make(chan struct{})
+	fullSyncRelease := make(chan struct{})
+	var releaseFirstOnce sync.Once
+	var releaseFullSyncOnce sync.Once
+	releaseFirst := func() { releaseFirstOnce.Do(func() { close(firstRelease) }) }
+	releaseFullSync := func() {
+		releaseFullSyncOnce.Do(func() { close(fullSyncRelease) })
+	}
+
+	calls := make(chan WatchBatch, 4)
+	var callCount atomic.Int32
+	var concurrent atomic.Int32
+	var maxConcurrent atomic.Int32
+	w, dir := startTestWatcherWithBatchLimitsNoCleanup(
+		t,
+		func(batch WatchBatch) {
+			current := concurrent.Add(1)
+			updateMax(&maxConcurrent, current)
+			defer concurrent.Add(-1)
+
+			call := callCount.Add(1)
+			calls <- batch
+			switch call {
+			case 1:
+				<-firstRelease
+			case 2:
+				<-fullSyncRelease
+			}
+		},
+		batchDelay,
+		minInterval,
+		maxEntries,
+		1_000_000,
+	)
+	t.Cleanup(func() {
+		releaseFirst()
+		releaseFullSync()
+		w.Stop()
+	})
+
+	firstPath := filepath.Join(dir, "first")
+	require.NoError(t, os.Mkdir(firstPath, 0o755))
+	firstBatch := receiveWatchBatch(t, calls)
+	assert.False(t, firstBatch.FullSync)
+	assert.Equal(t, []string{firstPath}, firstBatch.Paths)
+
+	var overflowPaths []string
+	for _, name := range []string{"overflow-a", "overflow-b", "overflow-c"} {
+		path := filepath.Join(dir, name)
+		overflowPaths = append(overflowPaths, path)
+		require.NoError(t, os.Mkdir(path, 0o755))
+	}
+	require.Eventually(t, func() bool {
+		return slices.Contains(w.watcher.WatchList(), overflowPaths[2])
+	}, time.Second, 10*time.Millisecond,
+		"watcher did not drain the overflowing event stream")
+	assert.Equal(t, int32(1), callCount.Load(),
+		"a callback started while the first callback was blocked")
+
+	releaseFirst()
+	overflowBatch := receiveWatchBatch(t, calls)
+	assert.True(t, overflowBatch.FullSync)
+	assert.Empty(t, overflowBatch.Paths)
+
+	laterPath := filepath.Join(dir, "after-overflow-dispatch")
+	require.NoError(t, os.Mkdir(laterPath, 0o755))
+	require.Eventually(t, func() bool {
+		return slices.Contains(w.watcher.WatchList(), laterPath)
+	}, time.Second, 10*time.Millisecond,
+		"watcher did not drain an event while full sync was blocked")
+	assert.Equal(t, int32(2), callCount.Load(),
+		"a callback started while full sync was blocked")
+
+	releaseFullSync()
+	laterBatch := receiveWatchBatch(t, calls)
+	assert.False(t, laterBatch.FullSync)
+	assert.Equal(t, []string{laterPath}, laterBatch.Paths)
 	assert.Equal(t, int32(1), maxConcurrent.Load(),
 		"watcher callbacks must remain serialized")
 }
@@ -524,7 +709,7 @@ func TestWatcherHandlesRemoveAndRename(t *testing.T) {
 	w, err := NewWatcherWithInterval(
 		30*time.Millisecond,
 		30*time.Millisecond,
-		func(paths []string) { pathsCh <- paths },
+		func(batch WatchBatch) { pathsCh <- batch.Paths },
 		nil,
 	)
 	require.NoError(t, err, "NewWatcherWithInterval")
@@ -552,7 +737,7 @@ func TestWatcherHandlesRemoveAndRename(t *testing.T) {
 }
 
 func TestWatchRecursive_ExcludesDirectoryNames(t *testing.T) {
-	w, err := NewWatcher(time.Second, func(_ []string) {}, []string{".git", "node_modules"})
+	w, err := NewWatcher(time.Second, func(WatchBatch) {}, []string{".git", "node_modules"})
 	require.NoError(t, err, "NewWatcher")
 	w.Start()
 	t.Cleanup(func() { w.Stop() })
@@ -582,7 +767,7 @@ func TestWatchRecursiveBudget_DegradesWhenBudgetExhausted(t *testing.T) {
 		require.NoError(t, os.MkdirAll(filepath.Join(root, fmt.Sprintf("dir-%d", i)), 0o755))
 	}
 
-	w, err := NewWatcher(time.Second, func(_ []string) {}, nil)
+	w, err := NewWatcher(time.Second, func(WatchBatch) {}, nil)
 	require.NoError(t, err, "NewWatcher")
 	w.Start()
 	t.Cleanup(func() { w.Stop() })
@@ -600,8 +785,8 @@ func TestIsWatchResourceExhaustion(t *testing.T) {
 
 func TestWatcherAutoWatchesNewDirs_RespectsExcludes(t *testing.T) {
 	pathsCh := make(chan []string, 10)
-	w, err := NewWatcher(20*time.Millisecond, func(paths []string) {
-		pathsCh <- paths
+	w, err := NewWatcher(20*time.Millisecond, func(batch WatchBatch) {
+		pathsCh <- batch.Paths
 	}, []string{".git"})
 	require.NoError(t, err, "NewWatcher")
 	t.Cleanup(func() { w.Stop() })
@@ -632,8 +817,8 @@ func TestWatcherAutoWatchesNewDirs_RespectsExcludes(t *testing.T) {
 
 func TestWatcherShallowRootDoesNotAutoWatchNewDirs(t *testing.T) {
 	pathsCh := make(chan []string, 10)
-	w, err := NewWatcher(20*time.Millisecond, func(paths []string) {
-		pathsCh <- paths
+	w, err := NewWatcher(20*time.Millisecond, func(batch WatchBatch) {
+		pathsCh <- batch.Paths
 	}, nil)
 	require.NoError(t, err, "NewWatcher")
 	t.Cleanup(func() { w.Stop() })
@@ -662,8 +847,8 @@ func TestWatcherShallowRootDoesNotAutoWatchNewDirs(t *testing.T) {
 // new date directories live-sync.
 func TestWatcherShallowParentDoesNotShadowRecursiveChild(t *testing.T) {
 	pathsCh := make(chan []string, 10)
-	w, err := NewWatcher(20*time.Millisecond, func(paths []string) {
-		pathsCh <- paths
+	w, err := NewWatcher(20*time.Millisecond, func(batch WatchBatch) {
+		pathsCh <- batch.Paths
 	}, nil)
 	require.NoError(t, err, "NewWatcher")
 	t.Cleanup(func() { w.Stop() })
@@ -711,7 +896,7 @@ func TestWatcherShallowParentDoesNotShadowRecursiveChild(t *testing.T) {
 }
 
 func TestWatchRecursive_RootUnderExcludedAncestorStillWatchesDescendants(t *testing.T) {
-	w, err := NewWatcher(time.Second, func(_ []string) {}, []string{"venv"})
+	w, err := NewWatcher(time.Second, func(WatchBatch) {}, []string{"venv"})
 	require.NoError(t, err, "NewWatcher")
 	w.Start()
 	t.Cleanup(func() { w.Stop() })
@@ -730,7 +915,7 @@ func TestWatchRecursive_RootUnderExcludedAncestorStillWatchesDescendants(t *test
 }
 
 func TestWatchRecursive_ExcludesSlashPatternRelativeToRoot(t *testing.T) {
-	w, err := NewWatcher(time.Second, func(_ []string) {}, []string{"foo/bar"})
+	w, err := NewWatcher(time.Second, func(WatchBatch) {}, []string{"foo/bar"})
 	require.NoError(t, err, "NewWatcher")
 	w.Start()
 	t.Cleanup(func() { w.Stop() })
@@ -751,7 +936,7 @@ func TestWatchRecursive_ExcludesSlashPatternRelativeToRoot(t *testing.T) {
 }
 
 func TestWatchRecursive_OverlappingRoots_UsesMostSpecificRoot(t *testing.T) {
-	w, err := NewWatcher(time.Second, func(_ []string) {}, []string{"venv"})
+	w, err := NewWatcher(time.Second, func(WatchBatch) {}, []string{"venv"})
 	require.NoError(t, err, "NewWatcher")
 	w.Start()
 	t.Cleanup(func() { w.Stop() })
@@ -776,8 +961,8 @@ func TestWatchRecursive_OverlappingRoots_UsesMostSpecificRoot(t *testing.T) {
 
 func TestWatcherExcludedCreateDir_DoesNotTriggerOnChange(t *testing.T) {
 	pathsCh := make(chan []string, 10)
-	w, err := NewWatcher(20*time.Millisecond, func(paths []string) {
-		pathsCh <- paths
+	w, err := NewWatcher(20*time.Millisecond, func(batch WatchBatch) {
+		pathsCh <- batch.Paths
 	}, []string{".git"})
 	require.NoError(t, err, "NewWatcher")
 	t.Cleanup(func() { w.Stop() })

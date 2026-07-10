@@ -26,27 +26,106 @@ type RecursiveWatchResult struct {
 	ResourceExhaustedAt string
 }
 
+const (
+	// A callback can hold one batch while the event loop accumulates the next.
+	// Bounding each batch keeps watcher backpressure below two bounded path
+	// sets instead of allowing a slow sync to retain an unbounded event storm.
+	defaultWatchBatchMaxEntries   = 8192
+	defaultWatchBatchMaxPathBytes = 2 << 20
+)
+
+// WatchBatch describes one serialized watcher callback. FullSync is an
+// explicit overflow signal: Paths is empty and the consumer must rescan all
+// configured sources so coalescing never silently drops a changed path.
+type WatchBatch struct {
+	Paths    []string
+	FullSync bool
+}
+
+// pendingWatchBatch bounds retained strings by both unique path count and the
+// sum of their byte lengths. Map overhead is bounded separately by the entry
+// limit. Once either limit would be exceeded, individual paths are discarded
+// in favor of one full-sync marker until Take resets the accumulator.
+type pendingWatchBatch struct {
+	paths        map[string]struct{}
+	pathBytes    int
+	maxEntries   int
+	maxPathBytes int
+	fullSync     bool
+}
+
+func newPendingWatchBatch(maxEntries, maxPathBytes int) *pendingWatchBatch {
+	return &pendingWatchBatch{
+		paths:        make(map[string]struct{}),
+		maxEntries:   maxEntries,
+		maxPathBytes: maxPathBytes,
+	}
+}
+
+func (p *pendingWatchBatch) Empty() bool {
+	return !p.fullSync && len(p.paths) == 0
+}
+
+func (p *pendingWatchBatch) Add(path string) {
+	if p.fullSync {
+		return
+	}
+	if _, exists := p.paths[path]; exists {
+		return
+	}
+	if len(p.paths)+1 > p.maxEntries ||
+		p.pathBytes+len(path) > p.maxPathBytes {
+		clear(p.paths)
+		p.pathBytes = 0
+		p.fullSync = true
+		return
+	}
+	p.paths[path] = struct{}{}
+	p.pathBytes += len(path)
+}
+
+func (p *pendingWatchBatch) Take() (WatchBatch, bool) {
+	if p.Empty() {
+		return WatchBatch{}, false
+	}
+	if p.fullSync {
+		p.fullSync = false
+		return WatchBatch{FullSync: true}, true
+	}
+
+	paths := make([]string, 0, len(p.paths))
+	for path := range p.paths {
+		paths = append(paths, path)
+	}
+	slices.Sort(paths)
+	clear(p.paths)
+	p.pathBytes = 0
+	return WatchBatch{Paths: paths}, true
+}
+
 // Watcher uses fsnotify to watch session directories for changes and triggers
 // serialized callbacks with short-burst batching and a dispatch floor.
 type Watcher struct {
-	onChange    func(paths []string)
-	watcher     *fsnotify.Watcher
-	batchDelay  time.Duration
-	minInterval time.Duration
-	excludes    []string
-	roots       []string
-	shallow     []string
-	rootsMu     sync.RWMutex
-	dispatchMu  sync.Mutex
-	stopping    bool
-	stop        chan struct{}
-	done        chan struct{}
-	stopOnce    sync.Once
+	onChange     func(batch WatchBatch)
+	watcher      *fsnotify.Watcher
+	batchDelay   time.Duration
+	minInterval  time.Duration
+	maxEntries   int
+	maxPathBytes int
+	excludes     []string
+	roots        []string
+	shallow      []string
+	rootsMu      sync.RWMutex
+	dispatchMu   sync.Mutex
+	stopping     bool
+	stop         chan struct{}
+	done         chan struct{}
+	stopOnce     sync.Once
 }
 
 // NewWatcher creates a file watcher that uses delay for both batching and the
 // minimum interval between callbacks.
-func NewWatcher(delay time.Duration, onChange func(paths []string), excludes []string) (*Watcher, error) {
+func NewWatcher(delay time.Duration, onChange func(batch WatchBatch), excludes []string) (*Watcher, error) {
 	return NewWatcherWithInterval(delay, delay, onChange, excludes)
 }
 
@@ -54,7 +133,22 @@ func NewWatcher(delay time.Duration, onChange func(paths []string), excludes []s
 // minimum callback intervals.
 func NewWatcherWithInterval(
 	batchDelay, minInterval time.Duration,
-	onChange func(paths []string), excludes []string,
+	onChange func(batch WatchBatch), excludes []string,
+) (*Watcher, error) {
+	return newWatcherWithLimits(
+		batchDelay,
+		minInterval,
+		onChange,
+		excludes,
+		defaultWatchBatchMaxEntries,
+		defaultWatchBatchMaxPathBytes,
+	)
+}
+
+func newWatcherWithLimits(
+	batchDelay, minInterval time.Duration,
+	onChange func(batch WatchBatch), excludes []string,
+	maxEntries, maxPathBytes int,
 ) (*Watcher, error) {
 	if onChange == nil {
 		return nil, fmt.Errorf("onChange callback is nil: %w", os.ErrInvalid)
@@ -66,13 +160,15 @@ func NewWatcherWithInterval(
 	}
 
 	w := &Watcher{
-		onChange:    onChange,
-		watcher:     fsw,
-		batchDelay:  batchDelay,
-		minInterval: minInterval,
-		excludes:    normalizeExcludePatterns(excludes),
-		stop:        make(chan struct{}),
-		done:        make(chan struct{}),
+		onChange:     onChange,
+		watcher:      fsw,
+		batchDelay:   batchDelay,
+		minInterval:  minInterval,
+		maxEntries:   maxEntries,
+		maxPathBytes: maxPathBytes,
+		excludes:     normalizeExcludePatterns(excludes),
+		stop:         make(chan struct{}),
+		done:         make(chan struct{}),
 	}
 	return w, nil
 }
@@ -164,19 +260,23 @@ func (w *Watcher) Stop() {
 }
 
 func (w *Watcher) loop() {
-	batches := make(chan []string)
+	batches := make(chan WatchBatch)
 	callbackDone := make(chan time.Time, 1)
 	var worker sync.WaitGroup
 	worker.Go(func() {
-		for paths := range batches {
-			log.Printf("watcher: %d file(s) changed, triggering sync", len(paths))
+		for batch := range batches {
+			if batch.FullSync {
+				log.Printf("watcher: pending path limit exceeded, triggering full sync")
+			} else {
+				log.Printf("watcher: %d file(s) changed, triggering sync", len(batch.Paths))
+			}
 			startedAt := time.Now()
-			w.onChange(paths)
+			w.onChange(batch)
 			callbackDone <- startedAt
 		}
 	})
 
-	pending := make(map[string]struct{})
+	pending := newPendingWatchBatch(w.maxEntries, w.maxPathBytes)
 	var firstPendingAt time.Time
 	var lastDispatch time.Time
 	var timer *time.Timer
@@ -192,14 +292,13 @@ func (w *Watcher) loop() {
 	}
 	defer func() {
 		stopTimer()
-		clear(pending)
 		close(batches)
 		worker.Wait()
 		close(w.done)
 	}()
 
 	schedule := func() {
-		if callbackBusy || len(pending) == 0 || timerC != nil {
+		if callbackBusy || pending.Empty() || timerC != nil {
 			return
 		}
 		deadline := firstPendingAt.Add(w.batchDelay)
@@ -214,7 +313,7 @@ func (w *Watcher) loop() {
 	}
 
 	dispatch := func() bool {
-		if callbackBusy || len(pending) == 0 {
+		if callbackBusy || pending.Empty() {
 			return true
 		}
 		w.dispatchMu.Lock()
@@ -222,15 +321,13 @@ func (w *Watcher) loop() {
 		if w.stopping {
 			return false
 		}
-		paths := make([]string, 0, len(pending))
-		for path := range pending {
-			paths = append(paths, path)
+		batch, ok := pending.Take()
+		if !ok {
+			return true
 		}
-		slices.Sort(paths)
-		clear(pending)
 		firstPendingAt = time.Time{}
 		callbackBusy = true
-		batches <- paths
+		batches <- batch
 		return true
 	}
 
@@ -254,10 +351,10 @@ func (w *Watcher) loop() {
 			if !relevant {
 				continue
 			}
-			if len(pending) == 0 {
+			if pending.Empty() {
 				firstPendingAt = time.Now()
 			}
-			pending[path] = struct{}{}
+			pending.Add(path)
 			schedule()
 
 		case err, ok := <-w.watcher.Errors:

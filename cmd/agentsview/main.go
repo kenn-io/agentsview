@@ -366,14 +366,14 @@ func runServe(cfg config.Config, opts serveOptions) {
 		// debounced signal recomputes.
 		defer engine.Close()
 		stopWatcher, unwatchedDirs := startFileWatcher(
-			cfg, engine, func(paths []string) {
+			cfg, engine, func(batch sync.WatchBatch) {
 				idleTracker.Do(func() {
 					// The serve ctx must reach watcher-driven syncs:
 					// stopWatcher waits for the in-flight callback, so
 					// a sync that ignored SIGTERM would hold shutdown
 					// open until the service manager escalates to
 					// SIGKILL.
-					engine.SyncPathsContext(ctx, paths)
+					syncWatchBatch(ctx, engine, batch)
 				})
 			},
 		)
@@ -1022,7 +1022,7 @@ func formatByteProgress(p sync.Progress) string {
 }
 
 func startFileWatcher(
-	cfg config.Config, engine *sync.Engine, onChange func(paths []string),
+	cfg config.Config, engine *sync.Engine, onChange func(batch sync.WatchBatch),
 ) (stopWatcher func(), unwatchedDirs []string) {
 	t := time.Now()
 	watcher, err := sync.NewWatcherWithInterval(
@@ -1090,6 +1090,19 @@ func startFileWatcher(
 	}
 	watcher.Start()
 	return watcher.Stop, unwatchedDirs
+}
+
+type watchSyncer interface {
+	SyncPathsContext(context.Context, []string)
+	SyncAll(context.Context, sync.ProgressFunc) sync.SyncStats
+}
+
+func syncWatchBatch(ctx context.Context, engine watchSyncer, batch sync.WatchBatch) {
+	if batch.FullSync {
+		engine.SyncAll(ctx, nil)
+		return
+	}
+	engine.SyncPathsContext(ctx, batch.Paths)
 }
 
 type watchRoot struct {
