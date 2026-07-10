@@ -68,6 +68,34 @@ func TestCodexCursorCache(t *testing.T) {
 		assert.Equal(t, replacement, got)
 	})
 
+	t.Run("identical warm put promotes without allocations", func(t *testing.T) {
+		cache := newCodexCursorCache(2, 4096)
+		const path = "rollout.jsonl"
+		other := state
+		other.model = "gpt-5.1"
+		third := state
+		third.model = "gpt-5.2"
+
+		require.True(t, cache.Put(path, 10, 101, 202, state))
+		require.True(t, cache.Put(path, 20, 101, 202, other))
+		putOK := false
+		allocations := testing.AllocsPerRun(100, func() {
+			putOK = cache.Put(path, 10, 101, 202, state)
+		})
+
+		require.True(t, putOK)
+		assert.Zero(t, allocations)
+		require.True(t, cache.Put(path, 30, 101, 202, third))
+		firstGot, firstOK := cache.Get(path, 10, 101, 202)
+		_, secondOK := cache.Get(path, 20, 101, 202)
+		thirdGot, thirdOK := cache.Get(path, 30, 101, 202)
+		require.True(t, firstOK)
+		assert.Equal(t, state, firstGot)
+		assert.False(t, secondOK)
+		require.True(t, thirdOK)
+		assert.Equal(t, third, thirdGot)
+	})
+
 	t.Run("offset versions coexist", func(t *testing.T) {
 		cache := newCodexCursorCache(4, 4096)
 		path := filepath.Join(t.TempDir(), "rollout.jsonl")

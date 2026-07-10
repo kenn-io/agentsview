@@ -159,17 +159,26 @@ func (c *codexCursorCache) Put(
 	if c == nil || c.maxEntries <= 0 || c.maxBytes <= 0 {
 		return false
 	}
-	key := newCodexCursorKey(path, offset, inode, device)
+	key := codexCursorKey{
+		path:   filepath.Clean(path),
+		offset: offset,
+		inode:  inode,
+		device: device,
+	}
 	entryBytes := estimateCodexCursorEntryBytes(key, state)
 	if entryBytes > c.maxBytes {
 		return false
 	}
-	state = cloneCodexCursorState(state)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if elem, ok := c.entries[key]; ok {
 		entry := elem.Value.(codexCursorEntry)
+		if entry.state == state {
+			c.recent.MoveToFront(elem)
+			return true
+		}
+		state = cloneCodexCursorState(state)
 		c.totalBytes -= entry.bytes
 		entry.state = state
 		entry.bytes = entryBytes
@@ -180,6 +189,8 @@ func (c *codexCursorCache) Put(
 		return true
 	}
 
+	key.path = strings.Clone(key.path)
+	state = cloneCodexCursorState(state)
 	entry := codexCursorEntry{key: key, state: state, bytes: entryBytes}
 	elem := c.recent.PushFront(entry)
 	c.entries[key] = elem
