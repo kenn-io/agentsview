@@ -6,8 +6,10 @@ description: Experimental, provenance-linked durable knowledge over the local se
 !!! warning "Active research"
 
     Recall's schema, scoring, trust policy, and workflows may change. Treat its
-    entries and measurement rows as a rebuildable research corpus. The session
-    archive remains authoritative and must not be deleted to reset Recall.
+    entries and measurement rows as a rebuildable research corpus. Until Recall
+    stabilizes, upgrades may require rebuilding its new tables instead of migrating
+    them. The session archive remains authoritative and must not be deleted,
+    truncated, or recreated to reset Recall.
 
 Recall is an experimental layer for durable, provenance-linked knowledge from
 past agent sessions. It stores compact facts, procedures, preferences, and
@@ -38,6 +40,10 @@ the operator explicitly overrides that guard.
 Recall is not available through PostgreSQL or DuckDB stores. It also has no web
 UI and no semantic retrieval over Recall entries.
 
+The daemon exposes the same inspection and query operations over its HTTP API.
+Ordinary queries record measurement data when the SQLite store is writable, but
+read-only archives remain queryable without recording.
+
 ## Evidence and trust
 
 Each durable entry identifies a source session. Its evidence records exact
@@ -50,6 +56,12 @@ changes, the entry's provenance is revoked. Revocation is sticky: later parser
 output does not automatically restore trust or replace the stored digest.
 Experimental users should expect parser improvements to require regeneration of
 some or all of the Recall corpus.
+
+Evidence authorization is host-owned. A model or importer may narrow a window,
+but it cannot select another session, cite messages outside the supplied window,
+or manufacture stable message IDs and digests. Evidence must belong to the same
+source session as its entry. These checks run through the shared insertion and
+reviewed-import boundaries rather than through a separate model write path.
 
 Entries have one of four review states:
 
@@ -65,12 +77,48 @@ transferable and provenance-valid. Automated labels cannot confer
 `human_reviewed`. Raw evaluation entries are deliberately excluded; an eval
 harness inspecting `eval_raw` material must request `trusted_only=false`.
 
+An omitted review state fails closed to `unreviewed_auto`. Archived entries are
+never trusted, and a trusted-only request with an explicit non-accepted status
+is rejected instead of returning a misleading empty result.
+
+## Reviewed imports and supersession
+
+Reviewed JSONL import is the current laboratory population inlet. Candidate IDs
+are immutable import identities: re-importing an existing ID is an idempotent
+skip, even if its transcript has subsequently been reparsed. A new candidate
+still must pass current session, evidence, and supersession validation.
+
+A replacement may supersede only an active accepted entry that has no existing
+successor. AgentsView archives that entry and links it to the replacement in the
+same transaction. This prevents two accepted replacements from branching from
+one historical entry.
+
+Run the import command with `--dry-run` first. A write requires `--yes`, and a
+remote write also requires `--allow-remote-import`. Local import refuses the
+default production data directory unless `--allow-production-import` is supplied
+explicitly. These confirmations acknowledge the risk; they do not relax
+evidence, review-state, or supersession validation.
+
 ## Measurement and data lifecycle
 
 Completed Recall queries record an append-only measurement event with the
 surface, serialized filters, result and packed counts, miss reason, and the
 ranked entries exposed to the caller. This ledger supports retrieval calibration
 without changing the source session archive.
+
+The response returns an opaque query ID when recording succeeds. Initial miss
+reasons distinguish no ranked results from results that could not fit in the
+requested context. Ranked and packed exposure is not treated as proof that an
+answer used the entry or that the entry was helpful.
+
+Ordinary recording is best effort so a ledger failure does not hide useful
+Recall output. Calibration callers can require strict recording. Events and
+their ranked exposure snapshots survive full resync even if a referenced Recall
+entry no longer exists.
+
+The experimental ledger is currently append-only and has no pruning policy.
+Before running calibration at volume, the project must define bounded request
+sizes plus retention and export behavior.
 
 During this research phase, Recall entries and measurement rows may need to be
 rebuilt when schemas, parsers, scoring, or extraction policies change. Reset
@@ -79,14 +127,63 @@ delete or recreate the session archive as a Recall reset strategy.
 
 ## Research direction
 
-The planned population path uses frozen, tools-disabled local models to extract
-candidates from exact session windows. Independent judging is local by default.
-A future calibration run may use a remote frontier judge only after an explicit
-per-run opt-in names the endpoint and model and states that candidate text and
-supporting transcript material will leave the machine. There is no automatic
-remote fallback.
+The current branch is the population foundation. It deliberately does not ship a
+model runner, automatic write-through, bulk extraction, automatic promotion, or
+per-session generated summaries. The next work is intended to earn those
+capabilities in stages.
 
-Model-generated or model-judged entries remain outside trusted Recall until a
-separate trust decision promotes them. LongMemEval-v2 is planned as a later
-long-horizon benchmark after the local extraction and population interfaces
-stabilize; it does not replace evidence-level provenance evaluation.
+### Local extractor calibration
+
+Calibration will run against isolated laboratory copies of real session rows and
+exact host-built ordinal windows. One frozen, tools-disabled local model
+configuration will extract structured candidates at a time. Each run should
+record model and prompt versions, schema and decoding settings, input digests,
+latency, and token or resource cost.
+
+Independent judge models will evaluate correctness, semantic evidence support,
+scope, transferability, harmfulness, and candidate duplication. Judges are local
+by default, preferably from a different model family than the extractor. Small
+blind human audits estimate judge error; the user is not expected to hand-label
+the primary evaluation corpus.
+
+A remote frontier judge is permitted only after an explicit per-run opt-in names
+the endpoint and model and states that candidate text and supporting transcript
+material will leave the machine. There is no automatic cloud fallback. Synthetic
+or otherwise non-sensitive sessions can be selected for remote runs.
+
+Calibration reports yield and abstention alongside keeper precision, harmful
+output, transferability, semantic provenance, duplicate detection quality, and
+local resource cost. Exposure records alone are not usefulness labels. Model
+generation or judging never confers `human_reviewed`; automated entries remain
+outside trusted Recall until a separate promotion policy is approved.
+
+### Explicit write-through pilot
+
+The first population pilot is an explicit callback after an answered Recall
+miss, not an invisible side effect of reading:
+
+1. `recall query` or `recall brief` returns a query ID and mechanical miss
+   reason.
+1. The agent or user finds supporting transcript regions with archive search and
+   message reads.
+1. A future proposal command submits the query ID and selected ordinal windows.
+1. The host rebuilds and verifies those windows, runs the local distiller, and
+   applies calibrated duplicate detection.
+1. Candidates are stored as `unreviewed_auto`; the pilot requires an explicit
+   promotion decision before they enter trusted Recall.
+
+This bounds model cost to explicitly answered misses and keeps the actor, input,
+evidence, and output auditable.
+
+### Earned automation and benchmarks
+
+Demand-driven backfill over sessions surfaced by recorded misses comes before
+end-of-session extraction. Broad extraction is deferred until measured
+precision, provenance, duplicate control, yield, cost, and explicit helpfulness
+outcomes justify it. Semantic or hybrid retrieval over Recall entries is a
+separate later experiment rather than part of population.
+
+LongMemEval-v2 is planned as a complementary long-horizon benchmark once the
+local extraction and population interfaces stabilize. It can measure whether a
+populated corpus answers questions over time, but it does not replace
+candidate-level provenance, harmfulness, and duplication evaluation.

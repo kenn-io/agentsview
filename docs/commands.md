@@ -903,6 +903,16 @@ agentsview recall extract --session <id> --dry-run
 agentsview recall import <accepted-recall.jsonl> --dry-run
 ```
 
+Use an isolated `AGENTSVIEW_DATA_DIR` for Recall population experiments. Import
+with `--dry-run` first; a write requires `--yes`, and a remote write also requires
+`--allow-remote-import`. Import against the default production directory is
+refused unless `--allow-production-import` is supplied explicitly. These flags
+do not bypass Recall's trust or evidence checks.
+
+When `--server <url>` targets an explicit daemon, provide remote credentials with
+`AGENTSVIEW_SERVER_TOKEN` or `--server-token-file <path>`. Recall never sends the
+local daemon token from `config.toml` to an explicitly supplied server.
+
 ______________________________________________________________________
 
 ### `agentsview mcp`
