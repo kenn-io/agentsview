@@ -97,6 +97,12 @@ func WriteHermesSessionJSONL(
 			}
 			storedStateErr = err
 		}
+		if transcript := findHermesSourceFile(
+			filepath.Join(filepath.Dir(path), "sessions"),
+			rawSessionID,
+		); transcript != "" {
+			return copyHermesTranscriptFile(w, transcript)
+		}
 	}
 	provider, ok := NewProvider(AgentHermes, ProviderConfig{Roots: roots})
 	if !ok {

@@ -427,6 +427,61 @@ func TestWriteHermesSessionJSONL_FallsBackWhenStoredStateDBUnreadable(t *testing
 	assert.Equal(t, body, buf.String())
 }
 
+func TestWriteHermesSessionJSONL_PrioritizesAdjacentTranscriptBeforeRoots(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		prepareRoot func(t *testing.T, root string)
+	}{
+		{
+			name: "missing stored state db",
+		},
+		{
+			name: "unreadable stored state db",
+			prepareRoot: func(t *testing.T, root string) {
+				t.Helper()
+				require.NoError(t, os.WriteFile(
+					filepath.Join(root, "state.db"),
+					[]byte("not a sqlite database"),
+					0o644,
+				))
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			storedRoot := t.TempDir()
+			storedSessions := filepath.Join(storedRoot, "sessions")
+			require.NoError(t, os.MkdirAll(storedSessions, 0o755))
+			if tt.prepareRoot != nil {
+				tt.prepareRoot(t, storedRoot)
+			}
+			body := strings.Join([]string{
+				`{"role":"session_meta","model":"gpt-4","timestamp":"2026-05-14T10:00:00Z"}`,
+				`{"role":"user","content":"adjacent stored transcript","timestamp":"2026-05-14T10:01:00Z"}`,
+				"",
+			}, "\n")
+			require.NoError(t, os.WriteFile(
+				filepath.Join(storedSessions, "child.jsonl"),
+				[]byte(body),
+				0o644,
+			))
+
+			otherRoot := t.TempDir()
+			otherSessions := filepath.Join(otherRoot, "sessions")
+			require.NoError(t, os.MkdirAll(otherSessions, 0o755))
+			createHermesStateDB(t, otherRoot)
+
+			var buf strings.Builder
+			require.NoError(t, WriteHermesSessionJSONL(
+				&buf,
+				filepath.Join(storedRoot, "state.db"),
+				[]string{otherSessions, storedSessions},
+				"child",
+			))
+			assert.Equal(t, body, buf.String())
+		})
+	}
+}
+
 func TestWriteHermesSessionJSONL_PrefersTranscriptWhenQualityWins(t *testing.T) {
 	root := t.TempDir()
 	sessionsDir := filepath.Join(root, "sessions")
