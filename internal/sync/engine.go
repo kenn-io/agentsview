@@ -6267,7 +6267,11 @@ func (e *Engine) prepareSessionWrite(
 ) (db.Session, []db.Message, sessionWriteVerdict) {
 	msgs := toDBMessages(pw, e.blockedResultCategories)
 	s := toDBSession(pw)
-	applySessionMessageDerivedFields(&s, msgs)
+	applySessionMessageDerivedFields(
+		&s,
+		msgs,
+		pw.sess.CountsAuthoritative,
+	)
 	e.applyRemoteRewrites(&s, msgs)
 	if s.Cwd != "" && resolveWorktreeProject != nil {
 		if mapped, ok := resolveWorktreeProject(
@@ -6300,7 +6304,11 @@ func (e *Engine) prepareSessionWrite(
 		applyVisualStudioCopilotArchiveSessionFields(
 			&s, archived, parsedMsgs, msgs,
 		)
-		applySessionMessageDerivedFields(&s, msgs)
+		applySessionMessageDerivedFields(
+			&s,
+			msgs,
+			pw.sess.CountsAuthoritative,
+		)
 		applySessionTokenTotalsFromMessages(&s, msgs)
 	}
 	// Snapshot, before sanitizing, whether the session's token aggregates
@@ -6375,8 +6383,14 @@ func (e *Engine) prepareSessionWrite(
 	return s, msgs, sessionWriteOK
 }
 
-func applySessionMessageDerivedFields(s *db.Session, msgs []db.Message) {
-	s.MessageCount, s.UserMessageCount = postFilterCounts(msgs)
+func applySessionMessageDerivedFields(
+	s *db.Session,
+	msgs []db.Message,
+	countsAuthoritative bool,
+) {
+	if !countsAuthoritative {
+		s.MessageCount, s.UserMessageCount = postFilterCounts(msgs)
+	}
 	s.IsAutomated = db.IsAutomatedTranscript(
 		s.UserMessageCount, msgs, s.FirstMessage,
 	)

@@ -928,6 +928,10 @@ type ParsedSession struct {
 	// the usage_events table for catalog-based cost pricing.
 	UsageEvents []ParsedUsageEvent
 
+	// CountsAuthoritative marks parsers that own MessageCount and
+	// UserMessageCount even when they intentionally emit no transcript rows.
+	CountsAuthoritative bool
+
 	// aggregateTokenPresenceKnown marks session aggregate token
 	// coverage as parser-owned and authoritative.
 	aggregateTokenPresenceKnown bool

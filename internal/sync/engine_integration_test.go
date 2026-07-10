@@ -288,6 +288,47 @@ func assignFocusedAgentDir(
 	}
 }
 
+func TestGrokSummaryCountsSurviveSync(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	root := t.TempDir()
+	summaryPath := filepath.Join(
+		root,
+		"cwd-key",
+		"sess-1",
+		"summary.json",
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(summaryPath), 0o755))
+	require.NoError(t, os.WriteFile(summaryPath, []byte(`{
+		"summary":"Preserve Grok counts",
+		"firstPrompt":"resume the build",
+		"modelId":"grok-code-fast",
+		"createdAt":"2026-07-08T10:00:00Z",
+		"updatedAt":"2026-07-08T10:30:00Z",
+		"lastActiveAt":"2026-07-08T10:31:00Z",
+		"numMessages":6,
+		"worktreeLabel":"agentsview"
+	}`), 0o644))
+
+	database := dbtest.OpenTestDB(t)
+	engine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentGrok: {root},
+		},
+		Machine: "local",
+	})
+
+	stats := engine.SyncAll(context.Background(), nil)
+	require.GreaterOrEqual(t, stats.Synced, 1)
+
+	sess, err := database.GetSession(context.Background(), "grok:sess-1")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, 6, sess.MessageCount)
+	assert.Equal(t, 0, sess.UserMessageCount)
+}
+
 type openCodeFamilySQLiteCase struct {
 	name   string
 	agent  parser.AgentType
