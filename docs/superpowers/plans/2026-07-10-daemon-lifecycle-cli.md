@@ -73,7 +73,8 @@ ______________________________________________________________________
 - [ ] **Step 1: Write failing tri-state identity tests**
 
 Add table-driven testify coverage for exact match, proven mismatch, missing
-value, malformed value, and unavailable live lookup. Model the contract with:
+value, malformed value, zero and negative recorded values, unavailable live
+lookup, and a nonpositive live value. Model the contract with:
 
 ```go
 type processCreateTimeState int
