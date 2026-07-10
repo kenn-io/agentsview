@@ -58,9 +58,10 @@ const sessionStorageCols = `id, project, machine, agent,
 	deleted_at, termination_status, created_at`
 
 var sessionAPICols = sessionStorageCols + `,
-	(SELECT MAX(m.ordinal) FROM messages m
-	 WHERE m.session_id = sessions.id AND ` + DisplayMessageSQL("m") + `)
-	 AS latest_display_ordinal`
+	` + LatestDisplayOrdinalSubquery("sessions", "m") + `
+	 AS latest_display_ordinal,
+	` + LatestDisplayContentLengthSubquery("sessions", "m") + `
+	 AS latest_display_content_length`
 
 // sessionPruneCols is the storage projection used by prune reads
 // needed by FindPruneCandidates.
@@ -140,7 +141,12 @@ type rowScanner interface {
 
 func scanSessionAPIRow(rs rowScanner) (Session, error) {
 	var s Session
-	err := scanSessionFields(rs, &s, &s.LatestDisplayOrdinal)
+	err := scanSessionFields(
+		rs,
+		&s,
+		&s.LatestDisplayOrdinal,
+		&s.LatestDisplayContentLength,
+	)
 	return s, err
 }
 
@@ -272,25 +278,26 @@ func (s *Session) UnmarshalJSON(data []byte) error {
 
 // Session represents a row in the sessions table.
 type Session struct {
-	ID                   string  `json:"id"`
-	Project              string  `json:"project"`
-	Machine              string  `json:"machine"`
-	Agent                string  `json:"agent"`
-	FirstMessage         *string `json:"first_message"`
-	DisplayName          *string `json:"display_name,omitempty"`
-	SessionName          *string `json:"-"`
-	StartedAt            *string `json:"started_at"`
-	EndedAt              *string `json:"ended_at"`
-	MessageCount         int     `json:"message_count"`
-	LatestDisplayOrdinal *int    `json:"latest_display_ordinal"`
-	UserMessageCount     int     `json:"user_message_count"`
-	ParentSessionID      *string `json:"parent_session_id,omitempty"`
-	RelationshipType     string  `json:"relationship_type,omitempty"`
-	TotalOutputTokens    int     `json:"total_output_tokens"`
-	PeakContextTokens    int     `json:"peak_context_tokens"`
-	HasTotalOutputTokens bool    `json:"has_total_output_tokens"`
-	HasPeakContextTokens bool    `json:"has_peak_context_tokens"`
-	IsAutomated          bool    `json:"is_automated"`
+	ID                         string  `json:"id"`
+	Project                    string  `json:"project"`
+	Machine                    string  `json:"machine"`
+	Agent                      string  `json:"agent"`
+	FirstMessage               *string `json:"first_message"`
+	DisplayName                *string `json:"display_name,omitempty"`
+	SessionName                *string `json:"-"`
+	StartedAt                  *string `json:"started_at"`
+	EndedAt                    *string `json:"ended_at"`
+	MessageCount               int     `json:"message_count"`
+	LatestDisplayOrdinal       *int    `json:"latest_display_ordinal"`
+	LatestDisplayContentLength *int    `json:"latest_display_content_length"`
+	UserMessageCount           int     `json:"user_message_count"`
+	ParentSessionID            *string `json:"parent_session_id,omitempty"`
+	RelationshipType           string  `json:"relationship_type,omitempty"`
+	TotalOutputTokens          int     `json:"total_output_tokens"`
+	PeakContextTokens          int     `json:"peak_context_tokens"`
+	HasTotalOutputTokens       bool    `json:"has_total_output_tokens"`
+	HasPeakContextTokens       bool    `json:"has_peak_context_tokens"`
+	IsAutomated                bool    `json:"is_automated"`
 
 	// Session signals (computed from messages/tool_calls).
 	ToolFailureSignalCount int      `json:"tool_failure_signal_count"`
@@ -593,22 +600,23 @@ type SessionPage struct {
 }
 
 type SidebarSessionIndexRow struct {
-	ID                   string  `json:"id"`
-	ParentSessionID      *string `json:"parent_session_id,omitempty"`
-	RelationshipType     string  `json:"relationship_type,omitempty"`
-	Project              string  `json:"project"`
-	Machine              string  `json:"machine"`
-	Agent                string  `json:"agent"`
-	DisplayName          *string `json:"display_name,omitempty"`
-	StartedAt            *string `json:"started_at"`
-	EndedAt              *string `json:"ended_at"`
-	CreatedAt            string  `json:"created_at"`
-	TerminationStatus    *string `json:"termination_status,omitempty"`
-	MessageCount         int     `json:"message_count"`
-	LatestDisplayOrdinal *int    `json:"latest_display_ordinal"`
-	UserMessageCount     int     `json:"user_message_count"`
-	IsAutomated          bool    `json:"is_automated"`
-	IsTeammate           bool    `json:"is_teammate"`
+	ID                         string  `json:"id"`
+	ParentSessionID            *string `json:"parent_session_id,omitempty"`
+	RelationshipType           string  `json:"relationship_type,omitempty"`
+	Project                    string  `json:"project"`
+	Machine                    string  `json:"machine"`
+	Agent                      string  `json:"agent"`
+	DisplayName                *string `json:"display_name,omitempty"`
+	StartedAt                  *string `json:"started_at"`
+	EndedAt                    *string `json:"ended_at"`
+	CreatedAt                  string  `json:"created_at"`
+	TerminationStatus          *string `json:"termination_status,omitempty"`
+	MessageCount               int     `json:"message_count"`
+	LatestDisplayOrdinal       *int    `json:"latest_display_ordinal"`
+	LatestDisplayContentLength *int    `json:"latest_display_content_length"`
+	UserMessageCount           int     `json:"user_message_count"`
+	IsAutomated                bool    `json:"is_automated"`
+	IsTeammate                 bool    `json:"is_teammate"`
 }
 
 type SidebarSessionIndex struct {
@@ -735,8 +743,8 @@ func (db *DB) GetSidebarSessionIndex(
 			user_message_count,
 			is_automated,
 			INSTR(COALESCE(first_message, ''), '<teammate-message') > 0,
-			(SELECT MAX(m.ordinal) FROM messages m
-			 WHERE m.session_id = sessions.id AND ` + DisplayMessageSQL("m") + `)
+			` + LatestDisplayOrdinalSubquery("sessions", "m") + `,
+			` + LatestDisplayContentLengthSubquery("sessions", "m") + `
 		FROM sessions
 		WHERE ` + where + `
 		ORDER BY COALESCE(
@@ -774,6 +782,7 @@ func (db *DB) GetSidebarSessionIndex(
 			&row.IsAutomated,
 			&row.IsTeammate,
 			&row.LatestDisplayOrdinal,
+			&row.LatestDisplayContentLength,
 		); err != nil {
 			return SidebarSessionIndex{},
 				fmt.Errorf("scanning sidebar session index: %w", err)
@@ -988,8 +997,8 @@ func (db *DB) getSidebarSessionIndexPage(
 			s.user_message_count,
 			s.is_automated,
 			INSTR(COALESCE(s.first_message, ''), '<teammate-message') > 0,
-			(SELECT MAX(m.ordinal) FROM messages m
-			 WHERE m.session_id = s.id AND ` + DisplayMessageSQL("m") + `)
+			` + LatestDisplayOrdinalSubquery("s", "m") + `,
+			` + LatestDisplayContentLengthSubquery("s", "m") + `
 		FROM sessions s
 		JOIN ranked_tree t ON s.id = t.id
 		ORDER BY
@@ -1023,6 +1032,7 @@ func (db *DB) getSidebarSessionIndexPage(
 			&row.IsAutomated,
 			&row.IsTeammate,
 			&row.LatestDisplayOrdinal,
+			&row.LatestDisplayContentLength,
 		); err != nil {
 			return SidebarSessionIndex{},
 				fmt.Errorf("scanning sidebar tree page: %w", err)

@@ -31,6 +31,7 @@ class MessagesStore {
   sessionId: string | null = $state(null);
   messageCount: number = $state(0);
   latestDisplayOrdinal: number | null | undefined = $state(undefined);
+  latestDisplayContentLength: number | null | undefined = $state(undefined);
   hasOlder: boolean = $state(false);
   loadingOlder: boolean = $state(false);
   private _stableMainModel: string = $state("");
@@ -66,6 +67,7 @@ class MessagesStore {
     try {
       let countHint: number | undefined;
       let latestDisplayOrdinal: number | null | undefined;
+      let latestDisplayContentLength: number | null | undefined;
       try {
         configureGeneratedClient();
         const sess = await withAbort(
@@ -74,6 +76,7 @@ class MessagesStore {
         );
         countHint = sess.message_count ?? 0;
         latestDisplayOrdinal = sess.latest_display_ordinal;
+        latestDisplayContentLength = sess.latest_display_content_length;
       } catch (err) {
         if (isAbortError(err)) return;
         console.warn(
@@ -95,7 +98,10 @@ class MessagesStore {
         );
       }
       succeeded = countHint !== undefined && latestDisplayOrdinal !== undefined;
-      if (succeeded) this.latestDisplayOrdinal = latestDisplayOrdinal;
+      if (succeeded) {
+        this.latestDisplayOrdinal = latestDisplayOrdinal;
+        this.latestDisplayContentLength = latestDisplayContentLength;
+      }
     } catch (err) {
       if (isAbortError(err)) return;
       console.warn("Failed to load session messages:", err);
@@ -150,6 +156,7 @@ class MessagesStore {
     this._stableMainModel = "";
     this.messageCount = 0;
     this.latestDisplayOrdinal = undefined;
+    this.latestDisplayContentLength = undefined;
     this.hasOlder = false;
     this.loadingOlder = false;
     this.reloadPromise = null;
@@ -460,6 +467,7 @@ class MessagesStore {
 
       const newCount = sess.message_count ?? 0;
       const newLatestDisplayOrdinal = sess.latest_display_ordinal;
+      const newLatestDisplayContentLength = sess.latest_display_content_length;
       const oldCount = this.messageCount;
       if (newCount === oldCount) {
         if (!this.initialLoadSucceeded && !this.hasOlder) {
@@ -468,6 +476,7 @@ class MessagesStore {
             signal,
             newCount,
             newLatestDisplayOrdinal,
+            newLatestDisplayContentLength,
           );
           return;
         }
@@ -479,10 +488,12 @@ class MessagesStore {
             signal,
             newCount,
             newLatestDisplayOrdinal,
+            newLatestDisplayContentLength,
           );
           return;
         }
         this.latestDisplayOrdinal = newLatestDisplayOrdinal;
+        this.latestDisplayContentLength = newLatestDisplayContentLength;
         this.initialLoadSucceeded = true;
         return;
       }
@@ -498,12 +509,14 @@ class MessagesStore {
             signal,
             newCount,
             newLatestDisplayOrdinal,
+            newLatestDisplayContentLength,
           );
           return;
         }
 
         this.messageCount = newCount;
         this.latestDisplayOrdinal = newLatestDisplayOrdinal;
+        this.latestDisplayContentLength = newLatestDisplayContentLength;
         this.hasOlder = this.messages.length < this.messageCount;
         this.initialLoadSucceeded = true;
         return;
@@ -514,6 +527,7 @@ class MessagesStore {
         signal,
         newCount,
         newLatestDisplayOrdinal,
+        newLatestDisplayContentLength,
       );
     } catch (err) {
       if (isAbortError(err)) return;
@@ -565,6 +579,7 @@ class MessagesStore {
     signal: AbortSignal,
     messageCountHint?: number,
     latestDisplayOrdinal?: number | null,
+    latestDisplayContentLength?: number | null,
   ) {
     clearContentCaches();
     this.loading = true;
@@ -582,6 +597,7 @@ class MessagesStore {
         );
       }
       this.latestDisplayOrdinal = latestDisplayOrdinal;
+      this.latestDisplayContentLength = latestDisplayContentLength;
       this.initialLoadSucceeded = latestDisplayOrdinal !== undefined;
     } finally {
       if (this.sessionId === id) {

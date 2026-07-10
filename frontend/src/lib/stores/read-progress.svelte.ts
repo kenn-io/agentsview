@@ -1,9 +1,10 @@
 export interface ReadProgressMarker {
   seenOrdinal: number | null;
+  seenContentLength?: number | null;
 }
 
 interface StoredReadProgress {
-  version: 2;
+  version: 3;
   sessions: Record<string, ReadProgressMarker>;
 }
 
@@ -29,9 +30,15 @@ function isOrdinal(value: unknown): value is number | null {
   return value === null || (Number.isInteger(value) && (value as number) >= 0);
 }
 
+function isContentLength(value: unknown): value is number | null | undefined {
+  return value === undefined || value === null ||
+    (Number.isInteger(value) && (value as number) >= 0);
+}
+
 function isMarker(value: unknown): value is ReadProgressMarker {
   return !!value && typeof value === "object" &&
-    isOrdinal((value as Record<string, unknown>).seenOrdinal);
+    isOrdinal((value as Record<string, unknown>).seenOrdinal) &&
+    isContentLength((value as Record<string, unknown>).seenContentLength);
 }
 
 function readStoredMarkers(): Record<string, ReadProgressMarker> {
@@ -45,8 +52,15 @@ function readStoredMarkers(): Record<string, ReadProgressMarker> {
     if (!stored.sessions || typeof stored.sessions !== "object" ||
       Array.isArray(stored.sessions)) return {};
     const entries = Object.entries(stored.sessions);
-    if (stored.version === 2) {
+    if (stored.version === 3) {
       return Object.fromEntries(entries.filter(([, marker]) => isMarker(marker)));
+    }
+    if (stored.version === 2) {
+      return Object.fromEntries(entries.flatMap(([id, value]) =>
+        isMarker(value)
+          ? [[id, { seenOrdinal: value.seenOrdinal }]]
+          : [],
+      ));
     }
     if (stored.version === 1) {
       return Object.fromEntries(entries.flatMap(([id, value]) => {
@@ -71,27 +85,46 @@ export class ReadProgressStore {
     return this.markers[sessionId] ?? null;
   }
 
-  baseline(sessionId: string, latestDisplayOrdinal: number | null) {
-    if (!sessionId || !isOrdinal(latestDisplayOrdinal)) return;
+  baseline(
+    sessionId: string,
+    latestDisplayOrdinal: number | null,
+    latestDisplayContentLength: number | null = null,
+  ) {
+    if (!sessionId || !this.isCursor(latestDisplayOrdinal, latestDisplayContentLength)) return;
     const marker = this.markers[sessionId];
-    if (!marker || this.regressed(marker.seenOrdinal, latestDisplayOrdinal)) {
-      this.set(sessionId, latestDisplayOrdinal);
+    if (
+      !marker ||
+      this.regressed(marker, latestDisplayOrdinal, latestDisplayContentLength) ||
+      this.shouldEnrich(marker, latestDisplayOrdinal, latestDisplayContentLength)
+    ) {
+      this.set(sessionId, latestDisplayOrdinal, latestDisplayContentLength);
     }
   }
 
-  reconcile(sessionId: string, latestDisplayOrdinal: number | null) {
-    if (!sessionId || !isOrdinal(latestDisplayOrdinal)) return;
+  reconcile(
+    sessionId: string,
+    latestDisplayOrdinal: number | null,
+    latestDisplayContentLength: number | null = null,
+  ) {
+    if (!sessionId || !this.isCursor(latestDisplayOrdinal, latestDisplayContentLength)) return;
     const marker = this.markers[sessionId];
-    if (marker && this.regressed(marker.seenOrdinal, latestDisplayOrdinal)) {
-      this.set(sessionId, latestDisplayOrdinal);
+    if (marker && this.regressed(marker, latestDisplayOrdinal, latestDisplayContentLength)) {
+      this.set(sessionId, latestDisplayOrdinal, latestDisplayContentLength);
     }
   }
 
-  recordVisible(sessionId: string, observedOrdinal: number) {
+  recordVisible(
+    sessionId: string,
+    observedOrdinal: number,
+    observedContentLength?: number | null,
+  ) {
     const marker = this.markers[sessionId];
-    if (!marker || !Number.isInteger(observedOrdinal) || observedOrdinal < 0) return;
-    if (marker.seenOrdinal === null || observedOrdinal > marker.seenOrdinal) {
-      this.set(sessionId, observedOrdinal);
+    if (!marker || !this.isCursor(observedOrdinal, observedContentLength)) return;
+    if (
+      this.cursorGreater(observedOrdinal, observedContentLength, marker) ||
+      this.shouldEnrich(marker, observedOrdinal, observedContentLength)
+    ) {
+      this.set(sessionId, observedOrdinal, observedContentLength);
     }
   }
 
@@ -102,28 +135,87 @@ export class ReadProgressStore {
     this.persist();
   }
 
-  hasUnread(sessionId: string, latestDisplayOrdinal: number | null): boolean {
+  hasUnread(
+    sessionId: string,
+    latestDisplayOrdinal: number | null,
+    latestDisplayContentLength: number | null = null,
+  ): boolean {
     const marker = this.markers[sessionId];
-    return !!marker && latestDisplayOrdinal !== null &&
-      (marker.seenOrdinal === null || latestDisplayOrdinal > marker.seenOrdinal);
+    return !!marker &&
+      this.isCursor(latestDisplayOrdinal, latestDisplayContentLength) &&
+      this.cursorGreater(latestDisplayOrdinal, latestDisplayContentLength, marker);
   }
 
-  private regressed(seen: number | null, latest: number | null): boolean {
-    return seen !== null && (latest === null || latest < seen);
+  private regressed(
+    marker: ReadProgressMarker,
+    latestOrdinal: number | null,
+    latestContentLength?: number | null,
+  ): boolean {
+    if (marker.seenOrdinal === null) return false;
+    if (latestOrdinal === null) return true;
+    if (latestOrdinal < marker.seenOrdinal) return true;
+    return latestOrdinal === marker.seenOrdinal &&
+      this.contentLengthLess(latestContentLength, marker.seenContentLength);
   }
 
-  private set(sessionId: string, seenOrdinal: number | null) {
-    this.markers = { ...this.markers, [sessionId]: { seenOrdinal } };
+  private set(
+    sessionId: string,
+    seenOrdinal: number | null,
+    seenContentLength?: number | null,
+  ) {
+    const marker: ReadProgressMarker = { seenOrdinal };
+    if (seenContentLength !== undefined && seenContentLength !== null) {
+      marker.seenContentLength = seenContentLength;
+    }
+    this.markers = { ...this.markers, [sessionId]: marker };
     this.persist();
   }
 
   private persist() {
     try {
-      const value: StoredReadProgress = { version: 2, sessions: this.markers };
+      const value: StoredReadProgress = { version: 3, sessions: this.markers };
       storage()?.setItem(STORAGE_KEY, JSON.stringify(value));
     } catch {
       // Storage is optional, keep the in-memory marker usable.
     }
+  }
+
+  private isCursor(
+    ordinal: number | null,
+    contentLength?: number | null,
+  ): boolean {
+    return isOrdinal(ordinal) && isContentLength(contentLength);
+  }
+
+  private shouldEnrich(
+    marker: ReadProgressMarker,
+    ordinal: number | null,
+    contentLength: number | null | undefined,
+  ): boolean {
+    return ordinal !== null &&
+      marker.seenOrdinal === ordinal &&
+      marker.seenContentLength == null &&
+      contentLength != null;
+  }
+
+  private cursorGreater(
+    ordinal: number | null,
+    contentLength: number | null | undefined,
+    marker: ReadProgressMarker,
+  ): boolean {
+    if (ordinal === null) return false;
+    if (marker.seenOrdinal === null) return true;
+    if (ordinal > marker.seenOrdinal) return true;
+    if (ordinal < marker.seenOrdinal) return false;
+    if (contentLength == null || marker.seenContentLength == null) return false;
+    return contentLength > marker.seenContentLength;
+  }
+
+  private contentLengthLess(
+    current: number | null | undefined,
+    seen: number | null | undefined,
+  ): boolean {
+    return current != null && seen != null && current < seen;
   }
 }
 

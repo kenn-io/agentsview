@@ -69,7 +69,8 @@ describe("ToolCallGroup read progress", () => {
       props: {
         messages: [makeToolMessage(4), makeToolMessage(5)],
         timestamp: new Date().toISOString(),
-        onMessageVisible: (ordinal: number) => seen.push(ordinal),
+        visibleSessionId: "s1",
+        onMessageVisible: (_sessionId: string, ordinal: number) => seen.push(ordinal),
       },
     });
     await tick();
@@ -108,7 +109,8 @@ describe("ToolCallGroup read progress", () => {
       props: {
         messages: [makeToolMessage(4)],
         timestamp: new Date().toISOString(),
-        onMessageVisible: (ordinal: number) => seen.push(ordinal),
+        visibleSessionId: "s1",
+        onMessageVisible: (_sessionId: string, ordinal: number) => seen.push(ordinal),
       },
     });
     await tick();

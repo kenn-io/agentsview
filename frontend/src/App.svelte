@@ -174,10 +174,15 @@
     const loading = messages.loading;
     const initialLoadSucceeded = messages.initialLoadSucceeded;
     const latestDisplayOrdinal = messages.latestDisplayOrdinal;
+    const latestDisplayContentLength = messages.latestDisplayContentLength;
     untrack(() => {
       if (!id || id !== messageSessionId || loading || !initialLoadSucceeded ||
         latestDisplayOrdinal === undefined) return;
-      readProgress.baseline(id, latestDisplayOrdinal);
+      readProgress.baseline(
+        id,
+        latestDisplayOrdinal,
+        latestDisplayContentLength,
+      );
     });
   });
 

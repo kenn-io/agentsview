@@ -30,6 +30,7 @@ export interface Session {
   ended_at: string | null;
   message_count: number;
   latest_display_ordinal: number | null;
+  latest_display_content_length?: number | null;
   user_message_count: number;
   parent_session_id?: string;
   relationship_type?: string;
@@ -98,6 +99,7 @@ export interface SidebarSessionIndexRow {
   termination_status?: string | null;
   message_count: number;
   latest_display_ordinal: number | null;
+  latest_display_content_length?: number | null;
   user_message_count: number;
   is_automated: boolean;
   is_teammate?: boolean;

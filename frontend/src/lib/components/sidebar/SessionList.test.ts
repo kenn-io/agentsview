@@ -867,6 +867,27 @@ describe("SessionList visible hydration", () => {
     ).not.toBeNull();
   });
 
+  it("shows unread state when the latest display message grows at the same ordinal", async () => {
+    sessions.sessions = [
+      makeSession({
+        id: "same-ordinal",
+        display_name: "Same ordinal growth",
+        message_count: 5,
+        latest_display_ordinal: 4,
+        latest_display_content_length: 12,
+      }),
+    ];
+    readProgress.baseline("same-ordinal", 4, 6);
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    expect(
+      document.querySelector('[data-session-id="same-ordinal"] .unread-indicator'),
+    ).not.toBeNull();
+  });
+
   it("shows unread state on a collapsed project group", async () => {
     localStorage.setItem(STORAGE_KEY_GROUP, "project");
     sessions.sessions = [

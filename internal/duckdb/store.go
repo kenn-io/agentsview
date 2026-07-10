@@ -211,9 +211,10 @@ const duckSessionStorageCols = `id, project, machine, agent,
 	deleted_at, termination_status`
 
 var duckSessionAPICols = duckSessionStorageCols + `,
-	(SELECT MAX(m.ordinal) FROM messages m
-	 WHERE m.session_id = sessions.id AND ` + db.DuckDBDisplayMessageSQL("m") + `)
-	 AS latest_display_ordinal`
+	` + db.DuckDBLatestDisplayOrdinalSubquery("sessions", "m") + `
+	 AS latest_display_ordinal,
+	` + db.DuckDBLatestDisplayContentLengthSubquery("sessions", "m") + `
+	 AS latest_display_content_length`
 
 type duckRowScanner interface {
 	Scan(...any) error
@@ -278,7 +279,12 @@ func scanSession(rs duckRowScanner) (db.Session, error) {
 
 func scanSessionAPIRow(rs duckRowScanner) (db.Session, error) {
 	var s db.Session
-	err := scanSessionFields(rs, &s, &s.LatestDisplayOrdinal)
+	err := scanSessionFields(
+		rs,
+		&s,
+		&s.LatestDisplayOrdinal,
+		&s.LatestDisplayContentLength,
+	)
 	return s, err
 }
 
@@ -476,9 +482,10 @@ func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) 
 			termination_status,
 			message_count,
 			user_message_count,
-			(SELECT MAX(m.ordinal) FROM messages m
-			 WHERE m.session_id = sessions.id AND ` + db.DuckDBDisplayMessageSQL("m") + `)
+			` + db.DuckDBLatestDisplayOrdinalSubquery("sessions", "m") + `
 			 AS latest_display_ordinal,
+			` + db.DuckDBLatestDisplayContentLengthSubquery("sessions", "m") + `
+			 AS latest_display_content_length,
 			is_automated,
 			position('<teammate-message' in COALESCE(first_message, '')) > 0
 		FROM sessions
@@ -515,6 +522,7 @@ func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) 
 			&row.MessageCount,
 			&row.UserMessageCount,
 			&row.LatestDisplayOrdinal,
+			&row.LatestDisplayContentLength,
 			&row.IsAutomated,
 			&row.IsTeammate,
 		); err != nil {

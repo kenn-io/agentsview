@@ -54,6 +54,7 @@ export interface SessionGroupInput {
   termination_status?: string | null;
   message_count: number;
   latest_display_ordinal: number | null;
+  latest_display_content_length?: number | null;
   user_message_count?: number;
   is_automated?: boolean;
   is_teammate?: boolean;
@@ -435,7 +436,11 @@ class SessionsStore {
       ]));
       for (const row of index.sessions) {
         if (row.id !== this.activeSessionId && readProgress.get(row.id)) {
-          readProgress.reconcile(row.id, row.latest_display_ordinal);
+          readProgress.reconcile(
+            row.id,
+            row.latest_display_ordinal,
+            row.latest_display_content_length ?? null,
+          );
         }
       }
       this.sessions = index.sessions.map((row) =>
@@ -580,7 +585,11 @@ class SessionsStore {
       this.sessions.push(
         ...index.sessions.map((row) => {
           if (row.id !== this.activeSessionId && readProgress.get(row.id)) {
-            readProgress.reconcile(row.id, row.latest_display_ordinal);
+            readProgress.reconcile(
+              row.id,
+              row.latest_display_ordinal,
+              row.latest_display_content_length ?? null,
+            );
           }
           return sidebarIndexRowToSession(row, this.sessions.find(
             (existing) => existing.id === row.id,
@@ -1325,6 +1334,7 @@ function sidebarIndexRowToSession(
     ended_at: row.ended_at,
     message_count: row.message_count,
     latest_display_ordinal: row.latest_display_ordinal,
+    latest_display_content_length: row.latest_display_content_length ?? null,
     user_message_count: row.user_message_count,
     parent_session_id: row.parent_session_id ?? undefined,
     relationship_type: row.relationship_type ?? undefined,
@@ -1350,6 +1360,7 @@ function sidebarIndexRowToSession(
     ended_at: skinny.ended_at,
     message_count: skinny.message_count,
     latest_display_ordinal: skinny.latest_display_ordinal,
+    latest_display_content_length: skinny.latest_display_content_length,
     user_message_count: skinny.user_message_count,
     parent_session_id: skinny.parent_session_id,
     relationship_type: skinny.relationship_type,

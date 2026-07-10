@@ -73,9 +73,10 @@ const pgSessionStorageCols = `id, project, machine, agent,
 	deleted_at, termination_status`
 
 var pgSessionAPICols = pgSessionStorageCols + `,
-	(SELECT MAX(m.ordinal) FROM messages m
-	 WHERE m.session_id = sessions.id AND ` + db.PostgresDisplayMessageSQL("m") + `)
-	 AS latest_display_ordinal`
+	` + db.PostgresLatestDisplayOrdinalSubquery("sessions", "m") + `
+	 AS latest_display_ordinal,
+	` + db.PostgresLatestDisplayContentLengthSubquery("sessions", "m") + `
+	 AS latest_display_content_length`
 
 // paramBuilder generates numbered PostgreSQL placeholders.
 type paramBuilder struct {
@@ -294,6 +295,7 @@ func scanPGAPISession(
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
 		&deletedAt, &s.TerminationStatus,
 		&s.LatestDisplayOrdinal,
+		&s.LatestDisplayContentLength,
 	}
 	if err := rs.Scan(dest...); err != nil {
 		return s, err
@@ -584,8 +586,8 @@ func (s *Store) GetSidebarSessionIndex(
 			user_message_count,
 			is_automated,
 			position('<teammate-message' in COALESCE(first_message, '')) > 0,
-			(SELECT MAX(m.ordinal) FROM messages m
-			 WHERE m.session_id = sessions.id AND ` + db.PostgresDisplayMessageSQL("m") + `)
+			` + db.PostgresLatestDisplayOrdinalSubquery("sessions", "m") + `,
+			` + db.PostgresLatestDisplayContentLengthSubquery("sessions", "m") + `
 		FROM sessions
 		WHERE ` + where + `
 		ORDER BY COALESCE(
@@ -822,8 +824,8 @@ func (s *Store) getSidebarSessionIndexPage(
 			s.user_message_count,
 			s.is_automated,
 			position('<teammate-message' in COALESCE(s.first_message, '')) > 0,
-			(SELECT MAX(m.ordinal) FROM messages m
-			 WHERE m.session_id = s.id AND ` + db.PostgresDisplayMessageSQL("m") + `)
+			` + db.PostgresLatestDisplayOrdinalSubquery("s", "m") + `,
+			` + db.PostgresLatestDisplayContentLengthSubquery("s", "m") + `
 		FROM sessions s
 		JOIN ranked_tree t ON s.id = t.id
 		ORDER BY
@@ -869,6 +871,7 @@ func scanPGSidebarSessionIndexRows(
 			&row.IsAutomated,
 			&row.IsTeammate,
 			&row.LatestDisplayOrdinal,
+			&row.LatestDisplayContentLength,
 		); err != nil {
 			return nil, fmt.Errorf(
 				"scanning sidebar session index: %w",

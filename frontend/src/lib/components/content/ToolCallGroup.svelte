@@ -25,7 +25,8 @@
     isCurrentHighlight?: boolean;
     sortNewestFirst?: boolean;
     divider?: { ordinal: number; label: string };
-    onMessageVisible?: (ordinal: number) => void;
+    visibleSessionId?: string | null;
+    onMessageVisible?: (sessionId: string, ordinal: number, contentLength: number) => void;
   }
 
   let {
@@ -35,6 +36,7 @@
     isCurrentHighlight = false,
     sortNewestFirst = false,
     divider,
+    visibleSessionId = null,
     onMessageVisible,
   }: Props = $props();
 
@@ -63,12 +65,22 @@
     sortNewestFirst ? [...messages].reverse() : messages,
   );
 
-  function observeMessage(node: HTMLElement, ordinal: number) {
+  function observeMessage(
+    node: HTMLElement,
+    payload:
+      | { sessionId: string; ordinal: number; contentLength: number }
+      | undefined,
+  ) {
     const handleVisible = onMessageVisible;
-    if (!handleVisible) {
+    if (!handleVisible || !payload) {
       return {};
     }
-    const reportVisible = () => handleVisible(ordinal);
+    const reportVisible = () =>
+      handleVisible(
+        payload.sessionId,
+        payload.ordinal,
+        payload.contentLength,
+      );
     if (typeof IntersectionObserver === "undefined") {
       const root = node.closest(".message-list-scroll");
       const check = () => {
@@ -186,7 +198,17 @@
       {/if}
       {@const calls = message.tool_calls ?? []}
       {@const turn = turnByMessage.get(message.id)}
-      <div data-message-ordinal={message.ordinal} use:observeMessage={message.ordinal}>
+      <div
+        data-message-ordinal={message.ordinal}
+        data-message-content-length={message.content_length}
+        use:observeMessage={visibleSessionId
+          ? {
+            sessionId: visibleSessionId,
+            ordinal: message.ordinal,
+            contentLength: message.content_length,
+          }
+          : undefined}
+      >
       {#if calls.length === 1}
         {@const soloCall = calls[0]!}
         <ToolBlock

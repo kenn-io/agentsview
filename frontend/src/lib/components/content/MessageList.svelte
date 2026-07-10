@@ -42,6 +42,12 @@
   let followSettleTimer:
     | ReturnType<typeof setTimeout>
     | null = null;
+  let visibleProgressSignature: string | null = $state(null);
+
+  type ReadCursor = {
+    ordinal: number;
+    contentLength: number | null;
+  };
 
   let baseMessages: Message[] = $derived.by(() =>
     messages.messages.filter((m) => !isSystemMessage(m)),
@@ -179,51 +185,67 @@
     const top = v.scrollOffset ?? containerRef?.scrollTop ?? 0;
     const height = containerRef?.clientHeight || v.scrollRect?.height || 0;
     const bottom = top + height;
-    let latestOrdinal = -1;
+    let latestCursor: ReadCursor | null = null;
     for (const row of v.getVirtualItems()) {
       if (row.end <= top || row.start >= bottom) continue;
       const item = itemAt(row.index);
       if (!item) continue;
       if (item.kind === "message") {
-        latestOrdinal = Math.max(latestOrdinal, item.message.ordinal);
+        latestCursor = maxCursor(latestCursor, {
+          ordinal: item.message.ordinal,
+          contentLength: item.message.content_length,
+        });
       } else {
-        latestOrdinal = Math.max(
-          latestOrdinal,
+        latestCursor = maxCursor(
+          latestCursor,
           latestVisibleToolGroupOrdinal(row.index),
         );
       }
     }
-    if (latestOrdinal >= 0) {
-      recordVisible(sessionId, latestOrdinal);
+    if (latestCursor !== null) {
+      recordVisible(
+        sessionId,
+        latestCursor.ordinal,
+        latestCursor.contentLength,
+      );
     }
   }
 
-  function latestVisibleToolGroupOrdinal(rowIndex: number) {
-    if (!containerRef) return -1;
+  function latestVisibleToolGroupOrdinal(rowIndex: number): ReadCursor | null {
+    if (!containerRef) return null;
     const row = containerRef.querySelector<HTMLElement>(
       `.virtual-row[data-index="${rowIndex}"]`,
     );
-    if (!row) return -1;
+    if (!row) return null;
     const rootRect = containerRef.getBoundingClientRect();
-    let latestOrdinal = -1;
+    let latestCursor: ReadCursor | null = null;
     for (const node of row.querySelectorAll<HTMLElement>("[data-message-ordinal]")) {
       const ordinal = Number(node.dataset.messageOrdinal);
       if (!Number.isInteger(ordinal) || ordinal < 0) continue;
       const rect = node.getBoundingClientRect();
       if (rect.bottom <= rootRect.top || rect.top >= rootRect.bottom) continue;
-      latestOrdinal = Math.max(latestOrdinal, ordinal);
+      const contentLength = parseContentLength(node.dataset.messageContentLength);
+      latestCursor = maxCursor(latestCursor, { ordinal, contentLength });
     }
-    return latestOrdinal;
+    return latestCursor;
   }
 
-  function recordVisible(sessionId: string, ordinal: number) {
-    readProgress.recordVisible(sessionId, ordinal);
+  function recordVisible(
+    sessionId: string,
+    ordinal: number,
+    contentLength?: number | null,
+  ) {
+    readProgress.recordVisible(sessionId, ordinal, contentLength);
   }
 
-  function observeMessage(node: HTMLElement, ordinal: number | undefined) {
+  function observeMessage(
+    node: HTMLElement,
+    payload: { ordinal: number; contentLength: number } | undefined,
+  ) {
     const sessionId = messages.sessionId;
-    if (!sessionId || ordinal === undefined) return {};
-    const record = () => recordVisible(sessionId, ordinal);
+    if (!sessionId || payload === undefined) return {};
+    const record = () =>
+      recordVisible(sessionId, payload.ordinal, payload.contentLength);
     if (typeof IntersectionObserver === "undefined") {
       const root = node.closest(".message-list-scroll");
       const rect = node.getBoundingClientRect();
@@ -251,6 +273,25 @@
       void messages.messages.length;
       publishVisibleTimestamp();
     }
+  });
+
+  $effect(() => {
+    const sessionId = messages.sessionId;
+    const loading = messages.loading;
+    const count = messages.messageCount;
+    const latest = latestDisplaySignature();
+    if (!sessionId || loading || !containerRef) return;
+    const signature = `${sessionId}|${count}|${latest}`;
+    if (visibleProgressSignature === null || !visibleProgressSignature.startsWith(`${sessionId}|`)) {
+      visibleProgressSignature = signature;
+      return;
+    }
+    if (visibleProgressSignature === signature) return;
+    visibleProgressSignature = signature;
+    requestAnimationFrame(() => {
+      if (messages.sessionId !== sessionId || messages.loading) return;
+      recordVisibleProgress();
+    });
   });
 
   function handleScroll() {
@@ -558,6 +599,50 @@
     return `${m.ordinal}:${m.content_length}:${m.timestamp}`;
   }
 
+  function parseContentLength(value: string | undefined): number | null {
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+  }
+
+  function maxCursor(
+    current: ReadCursor | null,
+    next: ReadCursor | null,
+  ): ReadCursor | null {
+    if (!next) return current;
+    if (!current) return next;
+    if (next.ordinal > current.ordinal) return next;
+    if (next.ordinal < current.ordinal) return current;
+    const nextContentLength = next.contentLength ?? -1;
+    const currentContentLength = current.contentLength ?? -1;
+    return nextContentLength > currentContentLength ? next : current;
+  }
+
+  function cursorGreaterThanSeen(
+    ordinal: number,
+    contentLength: number | null,
+    seenOrdinal: number | null,
+    seenContentLength: number | null | undefined,
+  ): boolean {
+    if (seenOrdinal === null) return true;
+    if (ordinal > seenOrdinal) return true;
+    if (ordinal < seenOrdinal) return false;
+    return contentLength != null && seenContentLength != null &&
+      contentLength > seenContentLength;
+  }
+
+  function cursorAtOrBeforeSeen(
+    ordinal: number,
+    contentLength: number | null,
+    seenOrdinal: number | null,
+    seenContentLength: number | null | undefined,
+  ): boolean {
+    if (seenOrdinal === null) return false;
+    if (ordinal < seenOrdinal) return true;
+    if (ordinal > seenOrdinal) return false;
+    return seenContentLength == null || contentLength == null ||
+      contentLength <= seenContentLength;
+  }
+
   $effect(() => {
     const follow = ui.followLatest;
     if (!follow) {
@@ -605,30 +690,61 @@
     const marker = readProgress.get(messages.sessionId ?? "");
     if (!marker) return null;
     const seenOrdinal = marker.seenOrdinal;
+    const seenContentLength = marker.seenContentLength;
     const items = ui.sortNewestFirst
       ? [...displayItemsAsc].reverse()
       : displayItemsAsc;
     if (ui.sortNewestFirst && seenOrdinal === null) return null;
     if (ui.sortNewestFirst &&
-      !items.some((item) => item.ordinals.some((value) => value > seenOrdinal!))) return null;
+      !items.some((item) =>
+        itemCursors(item).some((cursor) =>
+          cursorGreaterThanSeen(
+            cursor.ordinal,
+            cursor.contentLength,
+            seenOrdinal,
+            seenContentLength,
+          ),
+        )
+      )) return null;
     for (const item of items) {
-      const ordinals = ui.sortNewestFirst
-        ? [...item.ordinals].reverse()
-        : item.ordinals;
-      const ordinal = ordinals.find((value) =>
+      const cursor = itemCursors(item).find((value) =>
         ui.sortNewestFirst
-          ? value <= seenOrdinal!
-          : seenOrdinal === null || value > seenOrdinal,
+          ? cursorAtOrBeforeSeen(
+            value.ordinal,
+            value.contentLength,
+            seenOrdinal,
+            seenContentLength,
+          )
+          : cursorGreaterThanSeen(
+            value.ordinal,
+            value.contentLength,
+            seenOrdinal,
+            seenContentLength,
+          ),
       );
-      if (ordinal !== undefined) {
+      if (cursor !== undefined) {
         return {
-          ordinal,
+          ordinal: cursor.ordinal,
           label: ui.sortNewestFirst ? m.read_progress_earlier_messages() : m.read_progress_new_messages(),
         };
       }
     }
     return null;
   });
+
+  function itemCursors(item: DisplayItem): ReadCursor[] {
+    if (item.kind === "message") {
+      return [{
+        ordinal: item.message.ordinal,
+        contentLength: item.message.content_length,
+      }];
+    }
+    const source = ui.sortNewestFirst ? [...item.messages].reverse() : item.messages;
+    return source.map((message) => ({
+      ordinal: message.ordinal,
+      contentLength: message.content_length,
+    }));
+  }
 </script>
 
 {#if !sessions.activeSessionId}
@@ -665,7 +781,12 @@
             data-index={row.index}
             style="position: absolute; top: 0; left: 0; width: 100%; transform: translateY({row.start}px);"
             use:measureElement={virtualizer.instance}
-            use:observeMessage={item.kind === "message" ? item.message.ordinal : undefined}
+            use:observeMessage={item.kind === "message"
+              ? {
+                ordinal: item.message.ordinal,
+                contentLength: item.message.content_length,
+              }
+              : undefined}
             onclick={() => {
               const sel = window.getSelection();
               if (sel && sel.toString().length > 0) return;
@@ -684,11 +805,13 @@
                 highlightQuery={highlightQuery}
                 isCurrentHighlight={item.ordinals.includes(inSessionSearch.currentOrdinal ?? -1)}
                 sortNewestFirst={ui.sortNewestFirst}
+                visibleSessionId={messages.sessionId}
                 divider={readProgressDivider !== null && item.ordinals.includes(readProgressDivider.ordinal)
                   ? readProgressDivider
                   : undefined}
                 onMessageVisible={messages.sessionId
-                  ? recordVisible.bind(null, messages.sessionId)
+                  ? (sessionId, ordinal, contentLength) =>
+                    recordVisible(sessionId, ordinal, contentLength)
                   : undefined}
               />
             {:else if item.message.is_compact_boundary}

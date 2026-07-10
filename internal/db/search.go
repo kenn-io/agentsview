@@ -119,6 +119,83 @@ func DuckDBDisplayMessageSQL(alias string) string {
 	return displayMessageSQL(alias, systemPrefixDuckDB)
 }
 
+func LatestDisplayOrdinalSubquery(
+	sessionAlias, messageAlias string,
+) string {
+	return latestDisplayOrdinalSubquery(
+		sessionAlias,
+		messageAlias,
+		DisplayMessageSQL(messageAlias),
+	)
+}
+
+func PostgresLatestDisplayOrdinalSubquery(
+	sessionAlias, messageAlias string,
+) string {
+	return latestDisplayOrdinalSubquery(
+		sessionAlias,
+		messageAlias,
+		PostgresDisplayMessageSQL(messageAlias),
+	)
+}
+
+func DuckDBLatestDisplayOrdinalSubquery(
+	sessionAlias, messageAlias string,
+) string {
+	return latestDisplayOrdinalSubquery(
+		sessionAlias,
+		messageAlias,
+		DuckDBDisplayMessageSQL(messageAlias),
+	)
+}
+
+func LatestDisplayContentLengthSubquery(
+	sessionAlias, messageAlias string,
+) string {
+	return latestDisplayContentLengthSubquery(
+		sessionAlias,
+		messageAlias,
+		DisplayMessageSQL(messageAlias),
+	)
+}
+
+func PostgresLatestDisplayContentLengthSubquery(
+	sessionAlias, messageAlias string,
+) string {
+	return latestDisplayContentLengthSubquery(
+		sessionAlias,
+		messageAlias,
+		PostgresDisplayMessageSQL(messageAlias),
+	)
+}
+
+func DuckDBLatestDisplayContentLengthSubquery(
+	sessionAlias, messageAlias string,
+) string {
+	return latestDisplayContentLengthSubquery(
+		sessionAlias,
+		messageAlias,
+		DuckDBDisplayMessageSQL(messageAlias),
+	)
+}
+
+func latestDisplayOrdinalSubquery(
+	sessionAlias, messageAlias, predicate string,
+) string {
+	return `(SELECT MAX(` + messageAlias + `.ordinal) FROM messages ` +
+		messageAlias + ` WHERE ` + messageAlias + `.session_id = ` +
+		sessionAlias + `.id AND ` + predicate + `)`
+}
+
+func latestDisplayContentLengthSubquery(
+	sessionAlias, messageAlias, predicate string,
+) string {
+	return `(SELECT ` + messageAlias + `.content_length FROM messages ` +
+		messageAlias + ` WHERE ` + messageAlias + `.session_id = ` +
+		sessionAlias + `.id AND ` + predicate +
+		` ORDER BY ` + messageAlias + `.ordinal DESC LIMIT 1)`
+}
+
 func displayMessageSQL(alias string, dialect systemPrefixSQLDialect) string {
 	booleanTrue, booleanFalse := "1", "0"
 	contentCol, roleCol := alias+".content", alias+".role"

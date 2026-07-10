@@ -209,6 +209,8 @@ func duckContractSessionsCursorsAndMetadata(
 	require.Equal(t, "alpha", alpha.Project)
 	require.NotNil(t, alpha.LatestDisplayOrdinal)
 	assert.Equal(t, 1, *alpha.LatestDisplayOrdinal)
+	require.NotNil(t, alpha.LatestDisplayContentLength)
+	assert.Greater(t, *alpha.LatestDisplayContentLength, 0)
 
 	full, err := store.GetSessionFull(ctx, fixture.alphaID)
 	require.NoError(t, err)
@@ -229,6 +231,8 @@ func duckContractSessionsCursorsAndMetadata(
 	require.NotNil(t, sidebar)
 	require.NotNil(t, sidebar.LatestDisplayOrdinal)
 	assert.Equal(t, 1, *sidebar.LatestDisplayOrdinal)
+	require.NotNil(t, sidebar.LatestDisplayContentLength)
+	assert.Greater(t, *sidebar.LatestDisplayContentLength, 0)
 
 	stats, err := store.GetStats(ctx, false, false)
 	require.NoError(t, err)

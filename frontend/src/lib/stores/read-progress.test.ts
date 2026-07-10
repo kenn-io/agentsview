@@ -24,6 +24,39 @@ describe("ReadProgressStore", () => {
     expect(store.hasUnread("missing", 6)).toBe(false);
   });
 
+  it("tracks same-ordinal content growth when both cursors have content lengths", () => {
+    const store = new ReadProgressStore();
+    store.baseline("one", 5, 12);
+
+    expect(store.hasUnread("one", 5, 12)).toBe(false);
+    expect(store.hasUnread("one", 5, 18)).toBe(true);
+
+    store.recordVisible("one", 5, 18);
+
+    expect(store.get("one")).toEqual({
+      seenOrdinal: 5,
+      seenContentLength: 18,
+    });
+    expect(store.hasUnread("one", 5, 18)).toBe(false);
+  });
+
+  it("enriches same-ordinal legacy markers with a content-length cursor", () => {
+    const store = new ReadProgressStore();
+    store.baseline("one", 5);
+
+    store.baseline("one", 5, 12);
+    expect(store.get("one")).toEqual({
+      seenOrdinal: 5,
+      seenContentLength: 12,
+    });
+
+    store.recordVisible("one", 5, 18);
+    expect(store.get("one")).toEqual({
+      seenOrdinal: 5,
+      seenContentLength: 18,
+    });
+  });
+
   it("treats null followed by ordinal zero as unread until observed", () => {
     const store = new ReadProgressStore();
     store.baseline("one", null);
@@ -54,7 +87,7 @@ describe("ReadProgressStore", () => {
     expect(store.hasUnread("one", 5)).toBe(true);
   });
 
-  it("migrates valid version one ordinals and validates version two", () => {
+  it("migrates valid version one and two cursors and validates version three", () => {
     localStorage.setItem("agentsview-read-progress", JSON.stringify({
       version: 1,
       sessions: {
@@ -80,6 +113,22 @@ describe("ReadProgressStore", () => {
     expect(store.get("numeric")).toEqual({ seenOrdinal: 4 });
     expect(store.get("empty")).toEqual({ seenOrdinal: null });
     expect(store.get("invalid")).toBeNull();
+
+    localStorage.setItem("agentsview-read-progress", JSON.stringify({
+      version: 3,
+      sessions: {
+        numeric: { seenOrdinal: 4, seenContentLength: 11 },
+        empty: { seenOrdinal: null },
+        invalid: { seenOrdinal: 4, seenContentLength: -1 },
+      },
+    }));
+    store = new ReadProgressStore();
+    expect(store.get("numeric")).toEqual({
+      seenOrdinal: 4,
+      seenContentLength: 11,
+    });
+    expect(store.get("empty")).toEqual({ seenOrdinal: null });
+    expect(store.get("invalid")).toBeNull();
   });
 
   it("ignores malformed storage and keeps in-memory state when writes fail", () => {
@@ -95,13 +144,13 @@ describe("ReadProgressStore", () => {
     expect(store.get("one")).toEqual({ seenOrdinal: 0 });
   });
 
-  it("persists the version two cursor shape", () => {
+  it("persists the version three cursor shape", () => {
     const store = new ReadProgressStore();
-    store.baseline("one", 7);
+    store.baseline("one", 7, 12);
 
     expect(JSON.parse(localStorage.getItem("agentsview-read-progress")!)).toEqual({
-      version: 2,
-      sessions: { one: { seenOrdinal: 7 } },
+      version: 3,
+      sessions: { one: { seenOrdinal: 7, seenContentLength: 12 } },
     });
   });
 });

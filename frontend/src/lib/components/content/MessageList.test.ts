@@ -263,6 +263,29 @@ describe("MessageList read progress", () => {
     expect(readProgress.hasUnread("s1", 1)).toBe(true);
   });
 
+  it("treats same-ordinal content growth as unread and places the divider before that message", async () => {
+    messages.messages = [
+      { ...makeMessage(0), content_length: 4, content: "old0" },
+      { ...makeMessage(1), content_length: 12, content: "grown message" },
+    ];
+    messages.messageCount = 2;
+    readProgress.clear("s1");
+    readProgress.baseline("s1", 1, 6);
+    virtualizerMock.getVirtualItems.mockReturnValue([0, 1].map((index) => ({
+      index,
+      key: `row-${index}`,
+      start: index * 100,
+      end: (index + 1) * 100,
+    })));
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    const divider = document.querySelector(".read-progress-divider");
+    expect(divider?.parentElement?.textContent).toContain("grown message");
+    expect(readProgress.hasUnread("s1", 1, 12)).toBe(true);
+  });
+
   it("places one divider at the next ordinal and clears it after it is visible", async () => {
     component = mount(MessageList, { target: document.body });
     await tick();
@@ -375,7 +398,7 @@ describe("MessageList read progress", () => {
     );
     await tick();
 
-    expect(readProgress.get("s1")).toEqual({ seenOrdinal: 4 });
+    expect(readProgress.get("s1")).toMatchObject({ seenOrdinal: 4 });
   });
 
   it("records a normal row when its observer reports it visible", async () => {
@@ -407,7 +430,10 @@ describe("MessageList read progress", () => {
         { isIntersecting: true } as IntersectionObserverEntry,
       ], {} as IntersectionObserver);
 
-      expect(readProgress.get("s1")).toEqual({ seenOrdinal: 4 });
+      expect(readProgress.get("s1")).toMatchObject({
+        seenOrdinal: 4,
+        seenContentLength: 6,
+      });
     } finally {
       Object.defineProperty(globalThis, "IntersectionObserver", {
         configurable: true,
@@ -465,7 +491,10 @@ describe("MessageList read progress", () => {
         { isIntersecting: true } as IntersectionObserverEntry,
       ], {} as IntersectionObserver);
 
-      expect(readProgress.get("s1")).toEqual({ seenOrdinal: 5 });
+      expect(readProgress.get("s1")).toMatchObject({
+        seenOrdinal: 5,
+        seenContentLength: 0,
+      });
       expect(readProgress.get("s2")).toBeNull();
     } finally {
       Object.defineProperty(globalThis, "IntersectionObserver", {
@@ -519,7 +548,10 @@ describe("MessageList read progress", () => {
         { isIntersecting: true } as IntersectionObserverEntry,
       ], {} as IntersectionObserver);
 
-      expect(readProgress.get("s1")).toEqual({ seenOrdinal: 1 });
+      expect(readProgress.get("s1")).toMatchObject({
+        seenOrdinal: 1,
+        seenContentLength: 6,
+      });
       messages.sessionId = "s2";
       await tick();
       expect(readProgress.hasUnread("s1", 1)).toBe(false);
@@ -555,7 +587,10 @@ describe("MessageList read progress", () => {
     await tick();
     await new Promise((resolve) => window.setTimeout(resolve, 0));
 
-    expect(readProgress.get("s1")).toEqual({ seenOrdinal: 1 });
+    expect(readProgress.get("s1")).toMatchObject({
+      seenOrdinal: 1,
+      seenContentLength: 6,
+    });
     expect(readProgress.hasUnread("s1", 1)).toBe(false);
   });
 
@@ -589,7 +624,10 @@ describe("MessageList read progress", () => {
     await tick();
     await new Promise((resolve) => window.setTimeout(resolve, 0));
 
-    expect(readProgress.get("s1")).toEqual({ seenOrdinal: 4 });
+    expect(readProgress.get("s1")).toMatchObject({
+      seenOrdinal: 4,
+      seenContentLength: 0,
+    });
     expect(readProgress.hasUnread("s1", 5)).toBe(true);
   });
 
@@ -623,7 +661,10 @@ describe("MessageList read progress", () => {
     await tick();
     await new Promise((resolve) => window.setTimeout(resolve, 0));
 
-    expect(readProgress.get("s1")).toEqual({ seenOrdinal: 5 });
+    expect(readProgress.get("s1")).toMatchObject({
+      seenOrdinal: 5,
+      seenContentLength: 0,
+    });
   });
 
   it("keeps progressively loaded older messages from becoming unread", async () => {
@@ -648,7 +689,9 @@ describe("MessageList read progress", () => {
     );
     await tick();
 
-    expect(readProgress.get("s1")).toEqual({ seenOrdinal: 3_002 });
+    expect(readProgress.get("s1")).toMatchObject({
+      seenOrdinal: 3_002,
+    });
     expect(readProgress.hasUnread("s1", 3_002)).toBe(false);
   });
 });

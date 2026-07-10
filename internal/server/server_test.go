@@ -956,6 +956,10 @@ func TestOpenAPIEndpointDocumentsLatestDisplayOrdinal(t *testing.T) {
 		property, ok := schema.Properties["latest_display_ordinal"]
 		require.True(t, ok, "schema %s cursor missing", name)
 		assert.JSONEq(t, `["integer","null"]`, string(property.Type))
+		assert.Contains(t, schema.Required, "latest_display_content_length")
+		contentLength, ok := schema.Properties["latest_display_content_length"]
+		require.True(t, ok, "schema %s content-length cursor missing", name)
+		assert.JSONEq(t, `["integer","null"]`, string(contentLength.Type))
 	}
 }
 

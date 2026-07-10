@@ -75,8 +75,8 @@ func TestSessionAPILatestDisplayOrdinal(t *testing.T) {
 	insertMessages(t, d,
 		userMsg("display-cursor", 1, "visible"),
 		Message{SessionID: "display-cursor", Ordinal: 3, Role: "user", Content: "hidden", IsSystem: true},
-		Message{SessionID: "display-cursor", Ordinal: 5, Role: "system", Content: "compact", IsSystem: true, IsCompactBoundary: true},
-		Message{SessionID: "display-cursor", Ordinal: 7, Role: "system", Content: "continued", IsSystem: true, SourceSubtype: "continuation"},
+		Message{SessionID: "display-cursor", Ordinal: 5, Role: "system", Content: "compact", ContentLength: 7, IsSystem: true, IsCompactBoundary: true},
+		Message{SessionID: "display-cursor", Ordinal: 7, Role: "system", Content: "continued here", ContentLength: 14, IsSystem: true, SourceSubtype: "continuation"},
 		userMsg("display-cursor", 9, "This session is being continued by metadata"),
 		Message{SessionID: "hidden-only", Ordinal: 4, Role: "user", Content: "hidden", IsSystem: true},
 	)
@@ -86,6 +86,8 @@ func TestSessionAPILatestDisplayOrdinal(t *testing.T) {
 	require.NotNil(t, session)
 	require.NotNil(t, session.LatestDisplayOrdinal)
 	assert.Equal(t, 7, *session.LatestDisplayOrdinal)
+	require.NotNil(t, session.LatestDisplayContentLength)
+	assert.Equal(t, 14, *session.LatestDisplayContentLength)
 
 	page, err := d.ListSessions(ctx, SessionFilter{Limit: 10, IncludeChildren: true})
 	require.NoError(t, err)
@@ -95,7 +97,10 @@ func TestSessionAPILatestDisplayOrdinal(t *testing.T) {
 	}
 	require.NotNil(t, byID["display-cursor"].LatestDisplayOrdinal)
 	assert.Equal(t, 7, *byID["display-cursor"].LatestDisplayOrdinal)
+	require.NotNil(t, byID["display-cursor"].LatestDisplayContentLength)
+	assert.Equal(t, 14, *byID["display-cursor"].LatestDisplayContentLength)
 	assert.Nil(t, byID["hidden-only"].LatestDisplayOrdinal)
+	assert.Nil(t, byID["hidden-only"].LatestDisplayContentLength)
 
 	index, err := d.GetSidebarSessionIndex(ctx, SessionFilter{})
 	require.NoError(t, err)
@@ -108,6 +113,8 @@ func TestSessionAPILatestDisplayOrdinal(t *testing.T) {
 	require.NotNil(t, sidebar)
 	require.NotNil(t, sidebar.LatestDisplayOrdinal)
 	assert.Equal(t, 7, *sidebar.LatestDisplayOrdinal)
+	require.NotNil(t, sidebar.LatestDisplayContentLength)
+	assert.Equal(t, 14, *sidebar.LatestDisplayContentLength)
 
 	require.NoError(t, d.SoftDeleteSession("display-cursor"))
 	trashed, err := d.ListTrashedSessions(ctx)
@@ -115,6 +122,8 @@ func TestSessionAPILatestDisplayOrdinal(t *testing.T) {
 	require.Len(t, trashed, 1)
 	require.NotNil(t, trashed[0].LatestDisplayOrdinal)
 	assert.Equal(t, 7, *trashed[0].LatestDisplayOrdinal)
+	require.NotNil(t, trashed[0].LatestDisplayContentLength)
+	assert.Equal(t, 14, *trashed[0].LatestDisplayContentLength)
 }
 
 func TestIsDisplayMessage(t *testing.T) {
