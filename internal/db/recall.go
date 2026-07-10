@@ -636,6 +636,43 @@ func (db *DB) ListRecallEntryTextCandidates(
 	return db.mergeRecallEntryCandidatesWithEvidence(ctx, q, terms, direct)
 }
 
+func (db *DB) listRecallMetadataCandidates(
+	ctx context.Context, q RecallQuery, terms []string,
+) ([]RecallEntry, error) {
+	if len(terms) == 0 {
+		return nil, nil
+	}
+	where, args := buildRecallEntryWhere(q, false)
+	metadataWhere, metadataArgs := buildRecallMetadataWhere(terms)
+	query := "SELECT " + recallBaseCols +
+		" FROM recall_entries WHERE " + where +
+		" AND (" + metadataWhere + ")" +
+		" ORDER BY " + recallStableSQLTieOrder("") +
+		", updated_at DESC, id ASC"
+	args = append(args, metadataArgs...)
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying recall metadata candidates: %w", err)
+	}
+	defer rows.Close()
+	return scanRecallEntryRowsWithEvidence(ctx, db, rows)
+}
+
+func (db *DB) listRecallEntriesForTemporalRanking(
+	ctx context.Context, q RecallQuery,
+) ([]RecallEntry, error) {
+	where, args := buildRecallEntryWhere(q, false)
+	query := "SELECT " + recallBaseCols +
+		" FROM recall_entries WHERE " + where +
+		" ORDER BY updated_at DESC, id ASC"
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("querying temporal recall candidates: %w", err)
+	}
+	defer rows.Close()
+	return scanRecallEntryRowsWithEvidence(ctx, db, rows)
+}
+
 func (db *DB) listRecallFTSCandidates(
 	ctx context.Context, q RecallQuery, terms []string,
 ) ([]RecallEntry, error) {
@@ -962,6 +999,18 @@ func (db *DB) QueryRecallEntries(
 	if err != nil {
 		return RecallPage{}, err
 	}
+	var supplemental []RecallEntry
+	if corerecall.QueryUsesTemporalSignals(q.Text) {
+		supplemental, err = db.listRecallEntriesForTemporalRanking(ctx, candidateQuery)
+	} else {
+		supplemental, err = db.listRecallMetadataCandidates(
+			ctx, candidateQuery, recallQueryTerms(q.Text),
+		)
+	}
+	if err != nil {
+		return RecallPage{}, err
+	}
+	candidates = mergeRecallEntryCandidateSets(candidates, supplemental)
 	if len(candidates) == 0 {
 		candidates, err = db.ListRecallEntries(ctx, candidateQuery)
 		if err != nil {
@@ -1246,6 +1295,37 @@ func buildRecallEntryTextWhere(terms []string) (string, []any) {
 		args = append(args, like, like, like)
 	}
 	return strings.Join(preds, " OR "), args
+}
+
+func buildRecallMetadataWhere(terms []string) (string, []any) {
+	preds := make([]string, 0, len(terms))
+	var args []any
+	for _, term := range terms {
+		like := "%" + escapeLike(term) + "%"
+		preds = append(preds, `(
+			project LIKE ? ESCAPE '\'
+			OR cwd LIKE ? ESCAPE '\'
+			OR git_branch LIKE ? ESCAPE '\'
+			OR agent LIKE ? ESCAPE '\'
+		)`)
+		args = append(args, like, like, like, like)
+	}
+	return strings.Join(preds, " OR "), args
+}
+
+func mergeRecallEntryCandidateSets(sets ...[]RecallEntry) []RecallEntry {
+	seen := make(map[string]struct{})
+	var merged []RecallEntry
+	for _, entries := range sets {
+		for _, entry := range entries {
+			if _, ok := seen[entry.ID]; ok {
+				continue
+			}
+			seen[entry.ID] = struct{}{}
+			merged = append(merged, entry)
+		}
+	}
+	return merged
 }
 
 func buildRecallEvidenceTextWhere(terms []string) (string, []any) {

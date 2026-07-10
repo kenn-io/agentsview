@@ -75,7 +75,10 @@ Entries have one of four review states:
 A trusted-only read requires an accepted, `human_reviewed` entry that is both
 transferable and provenance-valid. Automated labels cannot confer
 `human_reviewed`. Raw evaluation entries are deliberately excluded; an eval
-harness inspecting `eval_raw` material must request `trusted_only=false`.
+harness inspecting `eval_raw` material must request `trusted_only=false`. The
+build-tagged eval-ingest response returns a versioned `corpus_id`; pass it as
+`source_session_id` when querying so changed trajectory content or source
+versions do not mix with earlier corpus versions from the same run.
 
 An omitted review state fails closed to `unreviewed_auto`. Archived entries are
 never trusted, and a trusted-only request with an explicit non-accepted status

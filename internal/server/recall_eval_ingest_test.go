@@ -4,6 +4,7 @@ package server_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -22,6 +23,13 @@ type evalQueryResponse struct {
 	RecallEntries []db.RecallResult `json:"entries"`
 	TrustedOnly   bool              `json:"trusted_only"`
 	Context       string            `json:"context"`
+}
+
+type evalIngestResponse struct {
+	RunID          string `json:"run_id"`
+	TrajectoryID   string `json:"trajectory_id"`
+	CorpusID       string `json:"corpus_id"`
+	EntriesIndexed int    `json:"entries_indexed"`
 }
 
 func TestIngestEvalTrajectoryEndToEnd(t *testing.T) {
@@ -82,6 +90,42 @@ func TestIngestEvalTrajectoryIdempotent(t *testing.T) {
 	w2 := te.post(t, "/api/v1/recall/eval/trajectories", body)
 	assertStatus(t, w2, http.StatusOK)
 	assert.Equal(t, 0, decode[db.EvalTrajectoryIngestResult](t, w2).EntriesIndexed)
+}
+
+func TestIngestEvalTrajectoryVersionsExposeQueryableCorpusID(t *testing.T) {
+	te := setup(t)
+	first := decode[evalIngestResponse](t, te.post(
+		t,
+		"/api/v1/recall/eval/trajectories",
+		`{"run_id":"run-versioned","trajectory_id":"traj-versioned","extractor_method":"eval-harness-raw-trajectory","source_version":"harness-v1","trajectory":{"text":"alpha memory"}}`,
+	))
+	require.NotEmpty(t, first.CorpusID)
+	assert.Equal(t, 1, first.EntriesIndexed)
+
+	second := decode[evalIngestResponse](t, te.post(
+		t,
+		"/api/v1/recall/eval/trajectories",
+		`{"run_id":"run-versioned","trajectory_id":"traj-versioned","extractor_method":"eval-harness-raw-trajectory","source_version":"harness-v2","trajectory":{"text":"beta memory"}}`,
+	))
+	require.NotEmpty(t, second.CorpusID)
+	assert.NotEqual(t, first.CorpusID, second.CorpusID)
+	assert.Equal(t, 1, second.EntriesIndexed)
+
+	queryCorpus := func(corpusID string) evalQueryResponse {
+		body := fmt.Sprintf(
+			`{"query":"memory","source_run_id":"run-versioned","extractor_method":"eval-harness-raw-trajectory","source_session_id":"%s","trusted_only":false,"limit":10}`,
+			corpusID,
+		)
+		w := te.post(t, "/api/v1/recall/query", body)
+		assertStatus(t, w, http.StatusOK)
+		return decode[evalQueryResponse](t, w)
+	}
+	firstCorpus := queryCorpus(first.CorpusID)
+	require.Len(t, firstCorpus.RecallEntries, 1)
+	assert.Equal(t, "alpha memory", firstCorpus.RecallEntries[0].Body)
+	secondCorpus := queryCorpus(second.CorpusID)
+	require.Len(t, secondCorpus.RecallEntries, 1)
+	assert.Equal(t, "beta memory", secondCorpus.RecallEntries[0].Body)
 }
 
 func TestIngestEvalTrajectoryRefusesDefaultDataDir(t *testing.T) {

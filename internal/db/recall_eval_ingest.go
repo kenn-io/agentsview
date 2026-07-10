@@ -52,6 +52,7 @@ type EvalTrajectoryIngest struct {
 type EvalTrajectoryIngestResult struct {
 	RunID          string `json:"run_id"`
 	TrajectoryID   string `json:"trajectory_id"`
+	CorpusID       string `json:"corpus_id,omitempty"`
 	EntriesIndexed int    `json:"entries_indexed"`
 }
 
@@ -97,6 +98,7 @@ func (db *DB) IngestEvalTrajectory(
 	if err != nil {
 		return result, err
 	}
+	result.CorpusID = sessionID
 	if err := db.ensureEvalTrajectorySession(ctx, sessionID, in); err != nil {
 		return result, fmt.Errorf("preparing eval session: %w", err)
 	}

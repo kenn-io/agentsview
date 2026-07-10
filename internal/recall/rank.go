@@ -194,6 +194,34 @@ func LexicalQueryText(text string) string {
 	return stripPromptInjectionBait(text)
 }
 
+// QueryUsesTemporalSignals reports whether ranking can score entries from
+// their timestamps independently of lexical or structured-entity matches.
+func QueryUsesTemporalSignals(text string) bool {
+	text = LexicalQueryText(text)
+	queryTokens := tokenize(text)
+	orderedTokens := orderedQueryTokens(text)
+	if len(queryCalendarWindows(orderedTokens)) > 0 || queryWantsRecent(queryTokens) {
+		return true
+	}
+	if hasQueryToken(queryTokens, "yesterday") {
+		return true
+	}
+	if hasQueryToken(queryTokens, "ago") &&
+		hasAnyQueryToken(
+			queryTokens, "day", "days", "week", "weeks", "month", "months",
+		) {
+		if _, ok := queryAgoNumber(orderedTokens); ok {
+			return true
+		}
+	}
+	if hasAnyQueryToken(queryTokens, "last", "past", "previous") &&
+		hasQueryToken(queryTokens, "week") {
+		return true
+	}
+	return hasAnyQueryToken(queryTokens, "this", "current") &&
+		hasAnyQueryToken(queryTokens, "week", "month")
+}
+
 // ContainsPromptInjectionBait reports common prompt-injection bait that should
 // be treated as historical evidence rather than current instructions.
 func ContainsPromptInjectionBait(text string) bool {

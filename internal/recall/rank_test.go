@@ -661,6 +661,28 @@ func TestRankBoostsNewerEntriesForRecencyQueries(t *testing.T) {
 	assert.Equal(t, got[0].Score, got[0].Breakdown.Total)
 }
 
+func TestQueryUsesTemporalSignalsMatchesRankingSyntax(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{name: "recent", text: "recent database setup", want: true},
+		{name: "calendar month", text: "february 2024", want: true},
+		{name: "yesterday", text: "changes from yesterday", want: true},
+		{name: "days ago", text: "changes from two days ago", want: true},
+		{name: "past week", text: "changes from the past week", want: true},
+		{name: "this month", text: "changes from this month", want: true},
+		{name: "unsupported years ago", text: "changes from two years ago", want: false},
+		{name: "ordinary lexical query", text: "database setup", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, recall.QueryUsesTemporalSignals(tt.text))
+		})
+	}
+}
+
 func TestRankBoostsEntriesInQueriedCalendarMonth(t *testing.T) {
 	entries := []recall.Entry{
 		{

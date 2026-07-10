@@ -1384,6 +1384,107 @@ func TestQueryRecallEntriesRanksBeyondRequestedResultLimit(t *testing.T) {
 	assert.Equal(t, "target", page.RecallEntries[0].ID)
 }
 
+func TestQueryRecallEntriesIncludesMetadataOnlyWinnerWithTextCandidate(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	insertSession(t, d, "s1", "project-a")
+	insertSession(t, d, "s2", "project-b")
+	_, err := d.InsertRecallEntry(RecallEntry{
+		ID:              "metadata-target",
+		Type:            "fact",
+		Scope:           "project",
+		Status:          "accepted",
+		Title:           "Build policy",
+		Body:            "Run focused checks before submitting changes.",
+		Project:         "quasarproject",
+		SourceSessionID: "s1",
+	})
+	require.NoError(t, err)
+	_, err = d.InsertRecallEntry(RecallEntry{
+		ID:              "text-candidate",
+		Type:            "fact",
+		Scope:           "project",
+		Status:          "accepted",
+		Title:           "Quasarproject mention",
+		Body:            "This generic note mentions the project name.",
+		Project:         "other-project",
+		SourceSessionID: "s2",
+	})
+	require.NoError(t, err)
+	_, err = d.InsertRecallEntry(RecallEntry{
+		ID:              "second-text-candidate",
+		Type:            "fact",
+		Scope:           "project",
+		Status:          "accepted",
+		Title:           "Another quasarproject mention",
+		Body:            "This second generic note repeats the project name.",
+		Project:         "other-project",
+		SourceSessionID: "s2",
+	})
+	require.NoError(t, err)
+
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{
+		Text:  "quasarproject",
+		Limit: 1,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 1)
+	assert.Equal(t, "metadata-target", page.RecallEntries[0].ID)
+	assert.Greater(t, page.RecallEntries[0].ScoreBreakdown.EntityBoost, 0.0)
+	assert.Zero(t, page.RecallEntries[0].ScoreBreakdown.KeywordOverlap)
+}
+
+func TestQueryRecallEntriesIncludesTemporalOnlyCandidateWithTextCandidate(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	insertSession(t, d, "s1", "project-a")
+	_, err := d.InsertRecallEntry(RecallEntry{
+		ID:              "temporal-target",
+		Type:            "fact",
+		Scope:           "project",
+		Status:          "accepted",
+		Title:           "Build policy",
+		Body:            "Run focused checks before submitting changes.",
+		SourceSessionID: "s1",
+	})
+	require.NoError(t, err)
+	_, err = d.InsertRecallEntry(RecallEntry{
+		ID:              "text-candidate",
+		Type:            "fact",
+		Scope:           "project",
+		Status:          "accepted",
+		Title:           "February retrospective",
+		Body:            "This note mentions the month without a year.",
+		SourceSessionID: "s1",
+	})
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(ctx, `
+		UPDATE recall_entries SET updated_at = CASE id
+			WHEN 'temporal-target' THEN '2024-02-15T00:00:00Z'
+			WHEN 'text-candidate' THEN '2024-01-15T00:00:00Z'
+			ELSE updated_at
+		END
+		WHERE id IN ('temporal-target', 'text-candidate')`)
+	require.NoError(t, err)
+
+	page, err := d.QueryRecallEntries(ctx, RecallQuery{
+		Text:  "february 2024",
+		Limit: 2,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, page.RecallEntries, 2)
+	byID := make(map[string]RecallResult, len(page.RecallEntries))
+	for _, entry := range page.RecallEntries {
+		byID[entry.ID] = entry
+	}
+	target, ok := byID["temporal-target"]
+	require.True(t, ok)
+	assert.Greater(t, target.ScoreBreakdown.TemporalBoost, 0.0)
+	assert.Zero(t, target.ScoreBreakdown.KeywordOverlap)
+}
+
 func TestQueryRecallEntriesFindsTextMatchBeyondRecentCandidateCap(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
