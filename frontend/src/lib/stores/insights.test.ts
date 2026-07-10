@@ -79,6 +79,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     is_automated: false,
     created_at: "2026-07-05T14:30:00Z",
     ...overrides,
+    latest_display_ordinal: overrides.latest_display_ordinal ?? 1,
   };
 }
 

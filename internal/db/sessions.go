@@ -28,9 +28,8 @@ var ErrSessionExcluded = errors.New("session excluded")
 // should surface a conflict instead of silently overwriting it.
 var ErrSessionTrashed = errors.New("session trashed")
 
-// sessionBaseCols is the column list for standard session queries
-// (list, get). Keep in sync with scanSessionRow.
-const sessionBaseCols = `id, project, machine, agent,
+// sessionStorageCols is the persisted projection for session reads.
+const sessionStorageCols = `id, project, machine, agent,
 	first_message, COALESCE(display_name, session_name) AS display_name, started_at, ended_at,
 	message_count, user_message_count,
 	parent_session_id, relationship_type,
@@ -58,7 +57,12 @@ const sessionBaseCols = `id, project, machine, agent,
 	parser_malformed_lines, is_truncated,
 	deleted_at, termination_status, created_at`
 
-// sessionPruneCols extends sessionBaseCols with file metadata
+var sessionAPICols = sessionStorageCols + `,
+	(SELECT MAX(m.ordinal) FROM messages m
+	 WHERE m.session_id = sessions.id AND ` + DisplayMessageSQL("m") + `)
+	 AS latest_display_ordinal`
+
+// sessionPruneCols is the storage projection used by prune reads
 // needed by FindPruneCandidates.
 const sessionPruneCols = `id, project, machine, agent,
 	first_message, COALESCE(display_name, session_name) AS display_name, started_at, ended_at,
@@ -134,10 +138,21 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
-// scanSessionRow scans sessionBaseCols into a Session.
-func scanSessionRow(rs rowScanner) (Session, error) {
+// scanSessionStorageRow scans sessionStorageCols into a Session.
+func scanSessionStorageRow(rs rowScanner) (Session, error) {
 	var s Session
-	err := rs.Scan(
+	err := scanSessionFields(rs, &s)
+	return s, err
+}
+
+func scanSessionAPIRow(rs rowScanner) (Session, error) {
+	var s Session
+	err := scanSessionFields(rs, &s, &s.LatestDisplayOrdinal)
+	return s, err
+}
+
+func scanSessionFields(rs rowScanner, s *Session, extra ...any) error {
+	dest := []any{
 		&s.ID, &s.Project, &s.Machine, &s.Agent,
 		&s.FirstMessage, &s.DisplayName, &s.StartedAt, &s.EndedAt,
 		&s.MessageCount, &s.UserMessageCount,
@@ -166,8 +181,8 @@ func scanSessionRow(rs rowScanner) (Session, error) {
 		&s.TranscriptFidelity,
 		&s.ParserMalformedLines, &s.IsTruncated,
 		&s.DeletedAt, &s.TerminationStatus, &s.CreatedAt,
-	)
-	return s, err
+	}
+	return rs.Scan(append(dest, extra...)...)
 }
 
 const CurrentQualitySignalVersion = 2
@@ -274,6 +289,7 @@ type Session struct {
 	StartedAt            *string `json:"started_at"`
 	EndedAt              *string `json:"ended_at"`
 	MessageCount         int     `json:"message_count"`
+	LatestDisplayOrdinal *int    `json:"latest_display_ordinal"`
 	UserMessageCount     int     `json:"user_message_count"`
 	ParentSessionID      *string `json:"parent_session_id,omitempty"`
 	RelationshipType     string  `json:"relationship_type,omitempty"`
@@ -584,21 +600,22 @@ type SessionPage struct {
 }
 
 type SidebarSessionIndexRow struct {
-	ID                string  `json:"id"`
-	ParentSessionID   *string `json:"parent_session_id,omitempty"`
-	RelationshipType  string  `json:"relationship_type,omitempty"`
-	Project           string  `json:"project"`
-	Machine           string  `json:"machine"`
-	Agent             string  `json:"agent"`
-	DisplayName       *string `json:"display_name,omitempty"`
-	StartedAt         *string `json:"started_at"`
-	EndedAt           *string `json:"ended_at"`
-	CreatedAt         string  `json:"created_at"`
-	TerminationStatus *string `json:"termination_status,omitempty"`
-	MessageCount      int     `json:"message_count"`
-	UserMessageCount  int     `json:"user_message_count"`
-	IsAutomated       bool    `json:"is_automated"`
-	IsTeammate        bool    `json:"is_teammate"`
+	ID                   string  `json:"id"`
+	ParentSessionID      *string `json:"parent_session_id,omitempty"`
+	RelationshipType     string  `json:"relationship_type,omitempty"`
+	Project              string  `json:"project"`
+	Machine              string  `json:"machine"`
+	Agent                string  `json:"agent"`
+	DisplayName          *string `json:"display_name,omitempty"`
+	StartedAt            *string `json:"started_at"`
+	EndedAt              *string `json:"ended_at"`
+	CreatedAt            string  `json:"created_at"`
+	TerminationStatus    *string `json:"termination_status,omitempty"`
+	MessageCount         int     `json:"message_count"`
+	LatestDisplayOrdinal *int    `json:"latest_display_ordinal"`
+	UserMessageCount     int     `json:"user_message_count"`
+	IsAutomated          bool    `json:"is_automated"`
+	IsTeammate           bool    `json:"is_teammate"`
 }
 
 type SidebarSessionIndex struct {
@@ -663,7 +680,7 @@ func (db *DB) ListSessions(
 		)
 	}
 
-	query := "SELECT " + sessionBaseCols +
+	query := "SELECT " + sessionAPICols +
 		" FROM sessions WHERE " + cursorWhere + " " +
 		pageBuilder.OrderByClause(rs, f) + " " +
 		pageBuilder.Limit(f.Limit+1)
@@ -676,7 +693,7 @@ func (db *DB) ListSessions(
 	}
 	defer rows.Close()
 
-	sessions, err := scanSessionRows(rows)
+	sessions, err := scanSessionAPIRows(rows)
 	if err != nil {
 		return SessionPage{}, err
 	}
@@ -724,7 +741,9 @@ func (db *DB) GetSidebarSessionIndex(
 			message_count,
 			user_message_count,
 			is_automated,
-			INSTR(COALESCE(first_message, ''), '<teammate-message') > 0
+			INSTR(COALESCE(first_message, ''), '<teammate-message') > 0,
+			(SELECT MAX(m.ordinal) FROM messages m
+			 WHERE m.session_id = sessions.id AND ` + DisplayMessageSQL("m") + `)
 		FROM sessions
 		WHERE ` + where + `
 		ORDER BY COALESCE(
@@ -761,6 +780,7 @@ func (db *DB) GetSidebarSessionIndex(
 			&row.UserMessageCount,
 			&row.IsAutomated,
 			&row.IsTeammate,
+			&row.LatestDisplayOrdinal,
 		); err != nil {
 			return SidebarSessionIndex{},
 				fmt.Errorf("scanning sidebar session index: %w", err)
@@ -974,7 +994,9 @@ func (db *DB) getSidebarSessionIndexPage(
 			s.message_count,
 			s.user_message_count,
 			s.is_automated,
-			INSTR(COALESCE(s.first_message, ''), '<teammate-message') > 0
+			INSTR(COALESCE(s.first_message, ''), '<teammate-message') > 0,
+			(SELECT MAX(m.ordinal) FROM messages m
+			 WHERE m.session_id = s.id AND ` + DisplayMessageSQL("m") + `)
 		FROM sessions s
 		JOIN ranked_tree t ON s.id = t.id
 		ORDER BY
@@ -1007,6 +1029,7 @@ func (db *DB) getSidebarSessionIndexPage(
 			&row.UserMessageCount,
 			&row.IsAutomated,
 			&row.IsTeammate,
+			&row.LatestDisplayOrdinal,
 		); err != nil {
 			return SidebarSessionIndex{},
 				fmt.Errorf("scanning sidebar tree page: %w", err)
@@ -1028,11 +1051,11 @@ func (db *DB) GetSession(
 ) (*Session, error) {
 	row := db.getReader().QueryRowContext(
 		ctx,
-		"SELECT "+sessionBaseCols+" FROM sessions WHERE id = ? AND deleted_at IS NULL",
+		"SELECT "+sessionAPICols+" FROM sessions WHERE id = ? AND deleted_at IS NULL",
 		id,
 	)
 
-	s, err := scanSessionRow(row)
+	s, err := scanSessionAPIRow(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -1406,7 +1429,7 @@ func (db *DB) insertSessionIfAbsent(ctx context.Context, s Session) error {
 func (db *DB) GetChildSessions(
 	ctx context.Context, parentID string,
 ) ([]Session, error) {
-	query := "SELECT " + sessionBaseCols +
+	query := "SELECT " + sessionAPICols +
 		" FROM sessions WHERE parent_session_id = ?" +
 		" AND deleted_at IS NULL" +
 		" ORDER BY started_at"
@@ -1418,7 +1441,7 @@ func (db *DB) GetChildSessions(
 	}
 	defer rows.Close()
 
-	return scanSessionRows(rows)
+	return scanSessionAPIRows(rows)
 }
 
 // LinkSubagentSessions sets parent_session_id and
@@ -2614,12 +2637,11 @@ func (db *DB) GetBranches(
 	return branches, rows.Err()
 }
 
-// scanSessionRows iterates rows and scans each using
-// scanSessionRow.
-func scanSessionRows(rows *sql.Rows) ([]Session, error) {
+// scanSessionAPIRows scans the public session projection.
+func scanSessionAPIRows(rows *sql.Rows) ([]Session, error) {
 	sessions := []Session{}
 	for rows.Next() {
-		s, err := scanSessionRow(rows)
+		s, err := scanSessionAPIRow(rows)
 		if err != nil {
 			return nil, fmt.Errorf("scanning session: %w", err)
 		}
@@ -2844,7 +2866,7 @@ func (db *DB) RenameSession(id string, displayName *string) error {
 func (db *DB) ListTrashedSessions(
 	ctx context.Context,
 ) ([]Session, error) {
-	query := "SELECT " + sessionBaseCols +
+	query := "SELECT " + sessionAPICols +
 		" FROM sessions WHERE deleted_at IS NOT NULL" +
 		" ORDER BY deleted_at DESC LIMIT 500"
 	rows, err := db.getReader().QueryContext(ctx, query)
@@ -2852,7 +2874,7 @@ func (db *DB) ListTrashedSessions(
 		return nil, fmt.Errorf("querying trashed sessions: %w", err)
 	}
 	defer rows.Close()
-	return scanSessionRows(rows)
+	return scanSessionAPIRows(rows)
 }
 
 // EmptyTrash permanently deletes all soft-deleted sessions.

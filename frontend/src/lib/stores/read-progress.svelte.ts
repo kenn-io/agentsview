@@ -1,11 +1,9 @@
 export interface ReadProgressMarker {
-  ordinal: number;
-  messageCount: number;
-  totalMessageCount?: number;
+  seenOrdinal: number | null;
 }
 
 interface StoredReadProgress {
-  version: 1;
+  version: 2;
   sessions: Record<string, ReadProgressMarker>;
 }
 
@@ -20,72 +18,48 @@ function storage(): StorageLike | null {
       localStorage == null ||
       typeof localStorage.getItem !== "function" ||
       typeof localStorage.setItem !== "function"
-    ) {
-      return null;
-    }
+    ) return null;
     return localStorage;
   } catch {
     return null;
   }
 }
 
+function isOrdinal(value: unknown): value is number | null {
+  return value === null || (Number.isInteger(value) && (value as number) >= 0);
+}
+
 function isMarker(value: unknown): value is ReadProgressMarker {
-  if (!value || typeof value !== "object") return false;
-  const marker = value as Record<string, unknown>;
-  return (
-    Number.isInteger(marker.ordinal) &&
-    (marker.ordinal as number) >= -1 &&
-    Number.isInteger(marker.messageCount) &&
-    (marker.messageCount as number) >= 0 &&
-    (marker.totalMessageCount === undefined ||
-      (Number.isInteger(marker.totalMessageCount) &&
-        (marker.totalMessageCount as number) >= (marker.messageCount as number)))
-  );
+  return !!value && typeof value === "object" &&
+    isOrdinal((value as Record<string, unknown>).seenOrdinal);
 }
 
 function readStoredMarkers(): Record<string, ReadProgressMarker> {
   try {
-    const local = storage();
-    if (!local) return {};
-    const raw = local.getItem(STORAGE_KEY);
+    const raw = storage()?.getItem(STORAGE_KEY);
     if (!raw) return {};
-    const stored = JSON.parse(raw) as Partial<StoredReadProgress>;
-    if (
-      stored.version !== 1 ||
-      !stored.sessions ||
-      typeof stored.sessions !== "object" ||
-      Array.isArray(stored.sessions)
-    ) {
-      return {};
+    const stored = JSON.parse(raw) as {
+      version?: unknown;
+      sessions?: unknown;
+    };
+    if (!stored.sessions || typeof stored.sessions !== "object" ||
+      Array.isArray(stored.sessions)) return {};
+    const entries = Object.entries(stored.sessions);
+    if (stored.version === 2) {
+      return Object.fromEntries(entries.filter(([, marker]) => isMarker(marker)));
     }
-    return Object.fromEntries(
-      Object.entries(stored.sessions).filter(([, marker]) => isMarker(marker)),
-    );
+    if (stored.version === 1) {
+      return Object.fromEntries(entries.flatMap(([id, value]) => {
+        const ordinal = (value as Record<string, unknown> | null)?.ordinal;
+        return Number.isInteger(ordinal) && (ordinal as number) >= -1
+          ? [[id, { seenOrdinal: ordinal === -1 ? null : ordinal as number }]]
+          : [];
+      }));
+    }
+    return {};
   } catch {
     return {};
   }
-}
-
-function safeCount(value: number): number {
-  return Number.isInteger(value) && value >= 0 ? value : 0;
-}
-
-function acknowledgedTotal(
-  displayCount: number,
-  eligibleTotal: number | undefined,
-): number | undefined {
-  if (
-    eligibleTotal === undefined ||
-    !Number.isInteger(eligibleTotal) ||
-    eligibleTotal < safeCount(displayCount)
-  ) {
-    return undefined;
-  }
-  return eligibleTotal;
-}
-
-function safeOrdinal(value: number): number {
-  return Number.isInteger(value) && value >= -1 ? value : -1;
 }
 
 export class ReadProgressStore {
@@ -97,101 +71,28 @@ export class ReadProgressStore {
     return this.markers[sessionId] ?? null;
   }
 
-  baseline(
-    sessionId: string,
-    displayOrdinal: number,
-    displayCount: number,
-    eligibleAcknowledgedTotal?: number,
-  ) {
-    if (!sessionId) return;
-    const ordinal = safeOrdinal(displayOrdinal);
-    const count = safeCount(displayCount);
-    const totalMessageCount = acknowledgedTotal(
-      displayCount,
-      eligibleAcknowledgedTotal,
-    );
+  baseline(sessionId: string, latestDisplayOrdinal: number | null) {
+    if (!sessionId || !isOrdinal(latestDisplayOrdinal)) return;
     const marker = this.markers[sessionId];
-    if (marker) {
-      const acknowledged = marker.totalMessageCount ?? marker.messageCount;
-      const hiddenOnlyGrowth = ordinal === -1 &&
-        count === 0 &&
-        totalMessageCount !== undefined &&
-        totalMessageCount > acknowledged;
-      if (
-        !hiddenOnlyGrowth &&
-        ordinal >= marker.ordinal &&
-        (totalMessageCount === undefined || totalMessageCount >= acknowledged)
-      ) {
-        return;
-      }
+    if (!marker || this.regressed(marker.seenOrdinal, latestDisplayOrdinal)) {
+      this.set(sessionId, latestDisplayOrdinal);
     }
-    this.markers = {
-      ...this.markers,
-      [sessionId]: {
-        ordinal,
-        messageCount: count,
-        ...(totalMessageCount !== undefined ? { totalMessageCount } : {}),
-      },
-    };
-    this.persist();
   }
 
-  recordVisible(
-    sessionId: string,
-    observedOrdinal: number,
-    latestDisplayOrdinal: number,
-    displayCount: number,
-    eligibleAcknowledgedTotal?: number,
-  ) {
+  reconcile(sessionId: string, latestDisplayOrdinal: number | null) {
+    if (!sessionId || !isOrdinal(latestDisplayOrdinal)) return;
     const marker = this.markers[sessionId];
-    if (!marker || !Number.isInteger(observedOrdinal)) return;
-    const totalMessageCount = observedOrdinal === latestDisplayOrdinal
-      ? acknowledgedTotal(displayCount, eligibleAcknowledgedTotal)
-      : undefined;
-    const acknowledged = marker.totalMessageCount ?? marker.messageCount;
-    if (
-      totalMessageCount !== undefined &&
-      (latestDisplayOrdinal < marker.ordinal || totalMessageCount < acknowledged)
-    ) {
-      this.markers = {
-        ...this.markers,
-        [sessionId]: {
-          ordinal: safeOrdinal(latestDisplayOrdinal),
-          messageCount: safeCount(displayCount),
-          totalMessageCount,
-        },
-      };
-      this.persist();
-      return;
+    if (marker && this.regressed(marker.seenOrdinal, latestDisplayOrdinal)) {
+      this.set(sessionId, latestDisplayOrdinal);
     }
-    if (observedOrdinal <= marker.ordinal) {
-      if (
-        totalMessageCount !== undefined &&
-        totalMessageCount > acknowledged
-      ) {
-        this.markers = {
-          ...this.markers,
-          [sessionId]: { ...marker, totalMessageCount },
-        };
-        this.persist();
-      }
-      return;
+  }
+
+  recordVisible(sessionId: string, observedOrdinal: number) {
+    const marker = this.markers[sessionId];
+    if (!marker || !Number.isInteger(observedOrdinal) || observedOrdinal < 0) return;
+    if (marker.seenOrdinal === null || observedOrdinal > marker.seenOrdinal) {
+      this.set(sessionId, observedOrdinal);
     }
-    this.markers = {
-      ...this.markers,
-      [sessionId]: {
-        ordinal: observedOrdinal,
-        messageCount: Math.max(
-          marker.messageCount,
-          Math.min(safeCount(displayCount), observedOrdinal + 1),
-        ),
-        ...(totalMessageCount !== undefined &&
-          totalMessageCount > acknowledged
-          ? { totalMessageCount }
-          : {}),
-      },
-    };
-    this.persist();
   }
 
   clear(sessionId: string) {
@@ -201,21 +102,25 @@ export class ReadProgressStore {
     this.persist();
   }
 
-  hasUnread(sessionId: string, messageCount: number): boolean {
+  hasUnread(sessionId: string, latestDisplayOrdinal: number | null): boolean {
     const marker = this.markers[sessionId];
-    if (!marker) return false;
-    return safeCount(messageCount) > (marker.totalMessageCount ?? marker.messageCount);
+    return !!marker && latestDisplayOrdinal !== null &&
+      (marker.seenOrdinal === null || latestDisplayOrdinal > marker.seenOrdinal);
+  }
+
+  private regressed(seen: number | null, latest: number | null): boolean {
+    return seen !== null && (latest === null || latest < seen);
+  }
+
+  private set(sessionId: string, seenOrdinal: number | null) {
+    this.markers = { ...this.markers, [sessionId]: { seenOrdinal } };
+    this.persist();
   }
 
   private persist() {
     try {
-      const local = storage();
-      if (!local) return;
-      const value: StoredReadProgress = {
-        version: 1,
-        sessions: this.markers,
-      };
-      local.setItem(STORAGE_KEY, JSON.stringify(value));
+      const value: StoredReadProgress = { version: 2, sessions: this.markers };
+      storage()?.setItem(STORAGE_KEY, JSON.stringify(value));
     } catch {
       // Storage is optional, keep the in-memory marker usable.
     }

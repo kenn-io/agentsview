@@ -18,6 +18,7 @@ import { yokedDates } from "./yokedDates.svelte.js";
 import type { Filters } from "./sessions.svelte.js";
 import type { Session } from "../api/types.js";
 import { callGenerated } from "../api/runtime.js";
+import { readProgress } from "./read-progress.svelte.js";
 
 const api = vi.hoisted(() => ({
   listSessions: vi.fn(),
@@ -112,6 +113,7 @@ type SkinnySessionRow = {
   created_at: string;
   termination_status?: string | null;
   message_count: number;
+  latest_display_ordinal: number | null;
   user_message_count: number;
   is_automated: boolean;
   is_teammate?: boolean;
@@ -130,6 +132,7 @@ function makeSkinnyRow(
     created_at: "2024-01-01T00:00:00Z",
     termination_status: null,
     message_count: 1,
+    latest_display_ordinal: 0,
     user_message_count: 1,
     is_automated: false,
     is_teammate: false,
@@ -204,6 +207,7 @@ describe("SessionsStore", () => {
     starred.ids = new Set();
     yokedDates.clear();
     sessions = createSessionsStore();
+    for (const id of ["inactive", "absent", "active"]) readProgress.clear(id);
   });
 
   describe("initFromParams", () => {
@@ -288,6 +292,23 @@ describe("SessionsStore", () => {
   });
 
   describe("sidebar loading", () => {
+    it("reconciles only tracked inactive cursor regressions", async () => {
+      readProgress.baseline("inactive", 9);
+      sessions.activeSessionId = "active";
+      readProgress.baseline("active", 9);
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "inactive", latest_display_ordinal: 4 }),
+        makeSkinnyRow({ id: "absent", latest_display_ordinal: 4 }),
+        makeSkinnyRow({ id: "active", latest_display_ordinal: 4 }),
+      ]);
+
+      await sessions.load();
+
+      expect(readProgress.get("inactive")).toEqual({ seenOrdinal: 4 });
+      expect(readProgress.get("absent")).toBeNull();
+      expect(readProgress.get("active")).toEqual({ seenOrdinal: 9 });
+    });
+
     it("does not load sessions when no sidebar consumer is mounted", async () => {
       sessions.refreshSidebarIfAttached();
 
@@ -2287,6 +2308,7 @@ function makeSession(
     is_automated: false,
     created_at: "2024-01-01T00:00:00Z",
     ...overrides,
+    latest_display_ordinal: overrides.latest_display_ordinal ?? 0,
   };
 }
 

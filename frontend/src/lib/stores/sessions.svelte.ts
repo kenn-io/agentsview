@@ -18,6 +18,7 @@ import { sync } from "./sync.svelte.js";
 import { events } from "./events.svelte.js";
 import { starred } from "./starred.svelte.js";
 import { yokedDates } from "./yokedDates.svelte.js";
+import { readProgress } from "./read-progress.svelte.js";
 
 type SidebarIndexParams = Parameters<
   typeof SessionsService.getApiV1SessionsSidebarIndex
@@ -52,6 +53,7 @@ export interface SessionGroupInput {
   created_at: string;
   termination_status?: string | null;
   message_count: number;
+  latest_display_ordinal: number | null;
   user_message_count?: number;
   is_automated?: boolean;
   is_teammate?: boolean;
@@ -431,6 +433,11 @@ class SessionsStore {
         session.id,
         session,
       ]));
+      for (const row of index.sessions) {
+        if (row.id !== this.activeSessionId && readProgress.get(row.id)) {
+          readProgress.reconcile(row.id, row.latest_display_ordinal);
+        }
+      }
       this.sessions = index.sessions.map((row) =>
         sidebarIndexRowToSession(row, existing.get(row.id))
       );
@@ -571,11 +578,14 @@ class SessionsStore {
       }) as unknown as SidebarSessionIndexResponse;
       if (this.loadVersion !== version) return;
       this.sessions.push(
-        ...index.sessions.map((row) =>
-          sidebarIndexRowToSession(row, this.sessions.find(
+        ...index.sessions.map((row) => {
+          if (row.id !== this.activeSessionId && readProgress.get(row.id)) {
+            readProgress.reconcile(row.id, row.latest_display_ordinal);
+          }
+          return sidebarIndexRowToSession(row, this.sessions.find(
             (existing) => existing.id === row.id,
-          ))
-        ),
+          ));
+        }),
       );
       this.nextCursor = index.next_cursor ?? null;
       this.total = index.total;
@@ -1314,6 +1324,7 @@ function sidebarIndexRowToSession(
     started_at: row.started_at,
     ended_at: row.ended_at,
     message_count: row.message_count,
+    latest_display_ordinal: row.latest_display_ordinal,
     user_message_count: row.user_message_count,
     parent_session_id: row.parent_session_id ?? undefined,
     relationship_type: row.relationship_type ?? undefined,
@@ -1338,6 +1349,7 @@ function sidebarIndexRowToSession(
     started_at: skinny.started_at,
     ended_at: skinny.ended_at,
     message_count: skinny.message_count,
+    latest_display_ordinal: skinny.latest_display_ordinal,
     user_message_count: skinny.user_message_count,
     parent_session_id: skinny.parent_session_id,
     relationship_type: skinny.relationship_type,

@@ -12,6 +12,7 @@ interface MockSession {
   started_at: string;
   ended_at: string;
   message_count: number;
+  latest_display_ordinal: number | null;
   user_message_count?: number;
   created_at: string;
   file_path: string;
@@ -35,6 +36,7 @@ export function createMockSessions(
     started_at: now,
     ended_at: now,
     message_count: 10,
+    latest_display_ordinal: 9,
     user_message_count: 5,
     created_at: now,
     file_path: `/tmp/${prefix}-${i}.json`,
@@ -154,6 +156,7 @@ function toSidebarIndexRow(session: MockSession) {
     created_at: session.created_at,
     termination_status: session.termination_status ?? null,
     message_count: session.message_count,
+    latest_display_ordinal: session.latest_display_ordinal,
     user_message_count:
       session.user_message_count ?? session.message_count,
     is_automated: session.is_automated ?? false,

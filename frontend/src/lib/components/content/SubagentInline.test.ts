@@ -66,6 +66,7 @@ function makeSession(
     is_automated: false,
     created_at: "2026-02-20T12:30:00Z",
     ...overrides,
+    latest_display_ordinal: overrides.latest_display_ordinal ?? 0,
   };
 }
 

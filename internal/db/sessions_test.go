@@ -63,6 +63,79 @@ func TestFindSessionIDsByPartial(t *testing.T) {
 	assert.Nil(t, got, "empty input")
 }
 
+func TestSessionAPILatestDisplayOrdinal(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	for _, id := range []string{"display-cursor", "hidden-only"} {
+		insertSession(t, d, id, "proj", func(s *Session) {
+			s.MessageCount = 5
+			s.UserMessageCount = 1
+		})
+	}
+	insertMessages(t, d,
+		userMsg("display-cursor", 1, "visible"),
+		Message{SessionID: "display-cursor", Ordinal: 3, Role: "user", Content: "hidden", IsSystem: true},
+		Message{SessionID: "display-cursor", Ordinal: 5, Role: "system", Content: "compact", IsSystem: true, IsCompactBoundary: true},
+		Message{SessionID: "display-cursor", Ordinal: 7, Role: "system", Content: "continued", IsSystem: true, SourceSubtype: "continuation"},
+		userMsg("display-cursor", 9, "This session is being continued by metadata"),
+		Message{SessionID: "hidden-only", Ordinal: 4, Role: "user", Content: "hidden", IsSystem: true},
+	)
+
+	session, err := d.GetSession(ctx, "display-cursor")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	require.NotNil(t, session.LatestDisplayOrdinal)
+	assert.Equal(t, 7, *session.LatestDisplayOrdinal)
+
+	page, err := d.ListSessions(ctx, SessionFilter{Limit: 10, IncludeChildren: true})
+	require.NoError(t, err)
+	byID := make(map[string]Session, len(page.Sessions))
+	for _, row := range page.Sessions {
+		byID[row.ID] = row
+	}
+	require.NotNil(t, byID["display-cursor"].LatestDisplayOrdinal)
+	assert.Equal(t, 7, *byID["display-cursor"].LatestDisplayOrdinal)
+	assert.Nil(t, byID["hidden-only"].LatestDisplayOrdinal)
+
+	index, err := d.GetSidebarSessionIndex(ctx, SessionFilter{})
+	require.NoError(t, err)
+	var sidebar *SidebarSessionIndexRow
+	for i := range index.Sessions {
+		if index.Sessions[i].ID == "display-cursor" {
+			sidebar = &index.Sessions[i]
+		}
+	}
+	require.NotNil(t, sidebar)
+	require.NotNil(t, sidebar.LatestDisplayOrdinal)
+	assert.Equal(t, 7, *sidebar.LatestDisplayOrdinal)
+
+	require.NoError(t, d.SoftDeleteSession("display-cursor"))
+	trashed, err := d.ListTrashedSessions(ctx)
+	require.NoError(t, err)
+	require.Len(t, trashed, 1)
+	require.NotNil(t, trashed[0].LatestDisplayOrdinal)
+	assert.Equal(t, 7, *trashed[0].LatestDisplayOrdinal)
+}
+
+func TestIsDisplayMessage(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  Message
+		want bool
+	}{
+		{"ordinary", userMsg("s", 0, "hello"), true},
+		{"system", Message{IsSystem: true}, false},
+		{"compact", Message{IsSystem: true, IsCompactBoundary: true}, true},
+		{"promoted", Message{IsSystem: true, SourceSubtype: "stop_hook"}, true},
+		{"legacy prefix", userMsg("s", 0, "  <task-notification>hidden"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, IsDisplayMessage(tt.msg))
+		})
+	}
+}
+
 func TestFindSessionIDsByPartialLiteralCaseSensitive(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "abc_def", "proj")

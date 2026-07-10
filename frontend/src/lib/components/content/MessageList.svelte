@@ -36,7 +36,6 @@
 
   let containerRef: HTMLDivElement | undefined = $state(undefined);
   let scrollRaf: number | null = null;
-  let progressRaf: number | null = null;
   let lastScrollRequest = 0;
   let activeFollowScrollRequest: number | null = null;
   let followingScrollRaf: number | null = null;
@@ -95,14 +94,6 @@
       },
     ).filter(isItemVisible);
   });
-
-  let latestDisplayOrdinal = $derived(
-    baseMessages[baseMessages.length - 1]?.ordinal ?? -1,
-  );
-
-  let displayedMessageCount = $derived(baseMessages.length);
-
-  let eligibleAcknowledgedTotal = $derived(messages.messageCount);
 
   function itemAt(index: number) {
     if (ui.sortNewestFirst) {
@@ -226,13 +217,7 @@
   }
 
   function recordVisible(sessionId: string, ordinal: number) {
-    readProgress.recordVisible(
-      sessionId,
-      ordinal,
-      latestDisplayOrdinal,
-      displayedMessageCount,
-      eligibleAcknowledgedTotal,
-    );
+    readProgress.recordVisible(sessionId, ordinal);
   }
 
   function observeMessage(node: HTMLElement, ordinal: number | undefined) {
@@ -266,27 +251,6 @@
       void messages.messages.length;
       publishVisibleTimestamp();
     }
-  });
-
-  $effect(() => {
-    void messages.messageCount;
-    void latestDisplayOrdinal;
-    void displayedMessageCount;
-    const sessionId = messages.sessionId;
-    if (!sessionId || latestDisplayOrdinal < 0) return;
-    if (progressRaf !== null) {
-      cancelAnimationFrame(progressRaf);
-    }
-    progressRaf = requestAnimationFrame(() => {
-      progressRaf = null;
-      recordVisibleProgress();
-    });
-    return () => {
-      if (progressRaf !== null) {
-        cancelAnimationFrame(progressRaf);
-        progressRaf = null;
-      }
-    };
   });
 
   function handleScroll() {
@@ -376,10 +340,6 @@
     if (scrollRaf !== null) {
       cancelAnimationFrame(scrollRaf);
       scrollRaf = null;
-    }
-    if (progressRaf !== null) {
-      cancelAnimationFrame(progressRaf);
-      progressRaf = null;
     }
     if (followingScrollRaf !== null) {
       cancelAnimationFrame(followingScrollRaf);
@@ -644,23 +604,21 @@
   let readProgressDivider = $derived.by(() => {
     const marker = readProgress.get(messages.sessionId ?? "");
     if (!marker) return null;
+    const seenOrdinal = marker.seenOrdinal;
     const items = ui.sortNewestFirst
       ? [...displayItemsAsc].reverse()
       : displayItemsAsc;
-    if (
-      ui.sortNewestFirst &&
-      !items.some((item) => item.ordinals.some((value) => value > marker.ordinal))
-    ) {
-      return null;
-    }
+    if (ui.sortNewestFirst && seenOrdinal === null) return null;
+    if (ui.sortNewestFirst &&
+      !items.some((item) => item.ordinals.some((value) => value > seenOrdinal!))) return null;
     for (const item of items) {
       const ordinals = ui.sortNewestFirst
         ? [...item.ordinals].reverse()
         : item.ordinals;
       const ordinal = ordinals.find((value) =>
         ui.sortNewestFirst
-          ? value <= marker.ordinal
-          : value > marker.ordinal,
+          ? value <= seenOrdinal!
+          : seenOrdinal === null || value > seenOrdinal,
       );
       if (ordinal !== undefined) {
         return {

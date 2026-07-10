@@ -30,6 +30,27 @@ var SystemMsgPrefixes = []string{
 	"Stop hook feedback:",
 }
 
+var visibleSystemSubtypes = []string{
+	"continuation",
+	"resume",
+	"interrupted",
+	"task_notification",
+	"stop_hook",
+}
+
+// IsDisplayMessage reports whether a message belongs in the transcript.
+func IsDisplayMessage(m Message) bool {
+	if m.IsCompactBoundary {
+		return true
+	}
+	for _, subtype := range visibleSystemSubtypes {
+		if m.SourceSubtype == subtype {
+			return true
+		}
+	}
+	return !m.IsSystem && !IsSystemPrefixed(m.Content, m.Role)
+}
+
 const (
 	legacyGoalContextPrefix        = "<goal_context>"
 	codexInternalContextTagPrefix  = "<codex_internal_context"
@@ -82,6 +103,32 @@ func PostgresSystemPrefixSQL(contentCol, roleCol string) string {
 // DuckDBSystemPrefixSQL is the DuckDB form of SystemPrefixSQL.
 func DuckDBSystemPrefixSQL(contentCol, roleCol string) string {
 	return systemPrefixSQL(contentCol, roleCol, systemPrefixDuckDB)
+}
+
+// DisplayMessageSQL returns the SQLite transcript-visibility predicate.
+func DisplayMessageSQL(alias string) string {
+	return displayMessageSQL(alias, systemPrefixSQLite)
+}
+
+// PostgresDisplayMessageSQL returns the PostgreSQL transcript-visibility predicate.
+func PostgresDisplayMessageSQL(alias string) string {
+	return displayMessageSQL(alias, systemPrefixPostgres)
+}
+
+func displayMessageSQL(alias string, dialect systemPrefixSQLDialect) string {
+	booleanTrue, booleanFalse := "1", "0"
+	prefix := SystemPrefixSQL(alias+".content", alias+".role")
+	if dialect == systemPrefixPostgres {
+		booleanTrue, booleanFalse = "TRUE", "FALSE"
+		prefix = PostgresSystemPrefixSQL(alias+".content", alias+".role")
+	}
+	quoted := make([]string, len(visibleSystemSubtypes))
+	for i, subtype := range visibleSystemSubtypes {
+		quoted[i] = "'" + subtype + "'"
+	}
+	return "(" + alias + ".is_compact_boundary = " + booleanTrue +
+		" OR " + alias + ".source_subtype IN (" + strings.Join(quoted, ", ") + ")" +
+		" OR (" + alias + ".is_system = " + booleanFalse + " AND " + prefix + "))"
 }
 
 func systemPrefixSQL(

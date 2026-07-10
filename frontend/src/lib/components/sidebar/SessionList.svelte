@@ -212,7 +212,7 @@
 
   function hasUnread(entries: SessionGroupInput[]): boolean {
     return entries.some((entry) =>
-      readProgress.hasUnread(entry.id, entry.message_count),
+      readProgress.hasUnread(entry.id, entry.latest_display_ordinal),
     );
   }
 

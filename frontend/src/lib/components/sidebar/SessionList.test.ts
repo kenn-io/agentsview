@@ -845,16 +845,18 @@ describe("SessionList visible hydration", () => {
         id: "group-root",
         display_name: "Root",
         message_count: 3,
+        latest_display_ordinal: 2,
       }),
       makeSession({
         id: "group-child",
         parent_session_id: "group-root",
         display_name: "Child",
         message_count: 5,
+        latest_display_ordinal: 4,
       }),
     ];
-    readProgress.baseline("group-root", 2, 3);
-    readProgress.baseline("group-child", 2, 3);
+    readProgress.baseline("group-root", 2);
+    readProgress.baseline("group-child", 2);
     vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
 
     component = mount(SessionList, { target: document.body });
@@ -872,9 +874,10 @@ describe("SessionList visible hydration", () => {
         id: "group-root",
         display_name: "Root",
         message_count: 5,
+        latest_display_ordinal: 4,
       }),
     ];
-    readProgress.baseline("group-root", 2, 3);
+    readProgress.baseline("group-root", 2);
     vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
 
     component = mount(SessionList, { target: document.body });
@@ -886,7 +889,7 @@ describe("SessionList visible hydration", () => {
   it("keeps a starred subagent descendant unread when its parent is filtered", async () => {
     localStorage.setItem(STORAGE_KEY_GROUP, "none");
     sessions.sessions = [
-      makeSession({ id: "group-root", display_name: "Root", message_count: 3 }),
+      makeSession({ id: "group-root", display_name: "Root", message_count: 3, latest_display_ordinal: 2 }),
       makeSession({
         id: "filtered-subagent",
         parent_session_id: "group-root",
@@ -898,12 +901,13 @@ describe("SessionList visible hydration", () => {
         parent_session_id: "filtered-subagent",
         display_name: "Starred subagent",
         message_count: 5,
+        latest_display_ordinal: 4,
       }),
     ];
     starred.filterOnly = true;
     starred.ids = new Set(["group-root", "starred-subagent"]);
-    readProgress.baseline("group-root", 2, 3);
-    readProgress.baseline("starred-subagent", 2, 3);
+    readProgress.baseline("group-root", 2);
+    readProgress.baseline("starred-subagent", 2);
     vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
 
     component = mount(SessionList, { target: document.body });
@@ -926,6 +930,7 @@ function makeSession(
     started_at: "2024-01-01T00:00:00Z",
     ended_at: "2024-01-01T00:01:00Z",
     message_count: 1,
+    latest_display_ordinal: 0,
     user_message_count: 1,
     total_output_tokens: 0,
     peak_context_tokens: 0,

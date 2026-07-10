@@ -8,172 +8,100 @@ afterEach(() => {
 });
 
 describe("ReadProgressStore", () => {
-  it("keeps absent state distinct and advances one session monotonically", () => {
+  it("keeps absent markers distinct and advances sessions monotonically", () => {
     const store = new ReadProgressStore();
 
     expect(store.get("one")).toBeNull();
-    store.baseline("one", 3, 4);
-    store.baseline("two", 8, 9);
-    store.recordVisible("one", 2, 3, 4);
-    store.recordVisible("one", 5, 5, 6);
+    store.baseline("one", 3);
+    store.baseline("two", 8);
+    store.recordVisible("one", 2);
+    store.recordVisible("one", 5);
 
-    expect(store.get("one")).toEqual({ ordinal: 5, messageCount: 6 });
-    expect(store.get("two")).toEqual({ ordinal: 8, messageCount: 9 });
-    expect(store.hasUnread("one", 6)).toBe(false);
-    expect(store.hasUnread("one", 7)).toBe(true);
+    expect(store.get("one")).toEqual({ seenOrdinal: 5 });
+    expect(store.get("two")).toEqual({ seenOrdinal: 8 });
+    expect(store.hasUnread("one", 5)).toBe(false);
+    expect(store.hasUnread("one", 6)).toBe(true);
+    expect(store.hasUnread("missing", 6)).toBe(false);
   });
 
-  it("uses acknowledged backend totals instead of loaded display counts", () => {
+  it("treats null followed by ordinal zero as unread until observed", () => {
     const store = new ReadProgressStore();
-    store.baseline("one", 3_999, 1_000, 4_000);
-    store.recordVisible("one", 3_999, 3_999, 2_000, 4_000);
+    store.baseline("one", null);
 
-    expect(store.get("one")).toEqual({
-      ordinal: 3_999,
-      messageCount: 1_000,
-      totalMessageCount: 4_000,
-    });
-    expect(store.hasUnread("one", 4_000)).toBe(false);
-    expect(store.hasUnread("one", 4_001)).toBe(true);
+    expect(store.hasUnread("one", 0)).toBe(true);
+    store.recordVisible("one", 0);
+    expect(store.get("one")).toEqual({ seenOrdinal: 0 });
+    expect(store.hasUnread("one", 0)).toBe(false);
   });
 
-  it("rebaselines stale markers when the backend total shrinks", () => {
+  it("repairs regressions without creating inactive markers", () => {
     const store = new ReadProgressStore();
-    store.baseline("one", 99, 100, 100);
-    store.baseline("one", 9, 10, 10);
+    store.baseline("tracked", 99);
 
-    expect(store.get("one")).toEqual({
-      ordinal: 9,
-      messageCount: 10,
-      totalMessageCount: 10,
-    });
-    expect(store.hasUnread("one", 10)).toBe(false);
-    expect(store.hasUnread("one", 11)).toBe(true);
+    store.reconcile("tracked", 9);
+    store.reconcile("absent", 9);
+
+    expect(store.get("tracked")).toEqual({ seenOrdinal: 9 });
+    expect(store.get("absent")).toBeNull();
   });
 
-  it("acknowledges backend total growth for hidden-only sessions", () => {
+  it("keeps existing lower markers unread on a successful baseline", () => {
     const store = new ReadProgressStore();
-    store.baseline("one", -1, 0, 2);
-    store.baseline("one", -1, 0, 3);
+    store.baseline("one", 3);
+    store.baseline("one", 5);
 
-    expect(store.get("one")).toEqual({
-      ordinal: -1,
-      messageCount: 0,
-      totalMessageCount: 3,
-    });
-    expect(store.hasUnread("one", 3)).toBe(false);
+    expect(store.get("one")).toEqual({ seenOrdinal: 3 });
+    expect(store.hasUnread("one", 5)).toBe(true);
   });
 
-  it("reconciles stale markers when visible progress sees a smaller total", () => {
-    const store = new ReadProgressStore();
-    store.baseline("one", 99, 100, 100);
-    store.recordVisible("one", 9, 9, 10, 10);
+  it("migrates valid version one ordinals and validates version two", () => {
+    localStorage.setItem("agentsview-read-progress", JSON.stringify({
+      version: 1,
+      sessions: {
+        numeric: { ordinal: 2, messageCount: 3 },
+        empty: { ordinal: -1, messageCount: 0 },
+        invalid: { ordinal: "2", messageCount: 3 },
+      },
+    }));
+    let store = new ReadProgressStore();
+    expect(store.get("numeric")).toEqual({ seenOrdinal: 2 });
+    expect(store.get("empty")).toEqual({ seenOrdinal: null });
+    expect(store.get("invalid")).toBeNull();
 
-    expect(store.get("one")).toEqual({
-      ordinal: 9,
-      messageCount: 10,
-      totalMessageCount: 10,
-    });
-    expect(store.hasUnread("one", 10)).toBe(false);
+    localStorage.setItem("agentsview-read-progress", JSON.stringify({
+      version: 2,
+      sessions: {
+        numeric: { seenOrdinal: 4 },
+        empty: { seenOrdinal: null },
+        invalid: { seenOrdinal: -1 },
+      },
+    }));
+    store = new ReadProgressStore();
+    expect(store.get("numeric")).toEqual({ seenOrdinal: 4 });
+    expect(store.get("empty")).toEqual({ seenOrdinal: null });
+    expect(store.get("invalid")).toBeNull();
   });
 
-  it("restores valid records and ignores malformed JSON and wrong records", () => {
-    localStorage.setItem(
-      "agentsview-read-progress",
-      JSON.stringify({
-        version: 1,
-        sessions: {
-          valid: { ordinal: 2, messageCount: 3 },
-          invalid: { ordinal: "2", messageCount: 3 },
-        },
-      }),
-    );
-    expect(new ReadProgressStore().get("valid")).toEqual({
-      ordinal: 2,
-      messageCount: 3,
-    });
-    expect(new ReadProgressStore().get("invalid")).toBeNull();
-
+  it("ignores malformed storage and keeps in-memory state when writes fail", () => {
     localStorage.setItem("agentsview-read-progress", "malformed JSON");
-    expect(new ReadProgressStore().get("valid")).toBeNull();
-    localStorage.setItem(
-      "agentsview-read-progress",
-      JSON.stringify({
-        version: 1,
-        sessions: [{ valid: { ordinal: 2, messageCount: 3 } }],
-      }),
-    );
-    expect(new ReadProgressStore().get("valid")).toBeNull();
-  });
-
-  it("keeps rendering state when storage access or writes fail", () => {
-    const getItem = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
-      throw new Error("storage unavailable");
-    });
     const store = new ReadProgressStore();
-    getItem.mockRestore();
-    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new Error("quota exceeded");
     });
 
-    store.baseline("one", -1, 0);
-    store.recordVisible("one", 0, 0, 1);
+    store.baseline("one", null);
+    store.recordVisible("one", 0);
 
-    expect(store.get("one")).toEqual({ ordinal: 0, messageCount: 1 });
+    expect(store.get("one")).toEqual({ seenOrdinal: 0 });
   });
 
-  it("uses in-memory state when localStorage is not Storage-like", () => {
-    const descriptor = Object.getOwnPropertyDescriptor(
-      globalThis,
-      "localStorage",
-    );
-    Object.defineProperty(globalThis, "localStorage", {
-      configurable: true,
-      value: { getItem() {} },
-    });
-    try {
-      const store = new ReadProgressStore();
-      store.baseline("one", -1, 0);
-      store.recordVisible("one", 0, 0, 1);
-      expect(store.get("one")).toEqual({ ordinal: 0, messageCount: 1 });
-    } finally {
-      Object.defineProperty(globalThis, "localStorage", descriptor!);
-    }
-  });
-
-  it("acknowledges a backend total only at the latest display ordinal", () => {
+  it("persists the version two cursor shape", () => {
     const store = new ReadProgressStore();
-    store.baseline("one", 0, 1);
-    store.recordVisible("one", 1, 2, 3, 400);
-    expect(store.get("one")).toEqual({ ordinal: 1, messageCount: 2 });
+    store.baseline("one", 7);
 
-    store.recordVisible("one", 2, 2, 3, 400);
-    expect(store.get("one")).toEqual({
-      ordinal: 2,
-      messageCount: 3,
-      totalMessageCount: 400,
+    expect(JSON.parse(localStorage.getItem("agentsview-read-progress")!)).toEqual({
+      version: 2,
+      sessions: { one: { seenOrdinal: 7 } },
     });
-    expect(store.hasUnread("one", 400)).toBe(false);
-  });
-
-  it("preserves legacy markers and rejects invalid acknowledged totals", () => {
-    localStorage.setItem(
-      "agentsview-read-progress",
-      JSON.stringify({
-        version: 1,
-        sessions: {
-          legacy: { ordinal: 2, messageCount: 3 },
-          invalid: { ordinal: 2, messageCount: 3, totalMessageCount: 2 },
-        },
-      }),
-    );
-    const store = new ReadProgressStore();
-    expect(store.get("legacy")).toEqual({ ordinal: 2, messageCount: 3 });
-    expect(store.get("invalid")).toBeNull();
-
-    store.baseline("one", 1, 2, 1);
-    expect(store.get("one")).toEqual({ ordinal: 1, messageCount: 2 });
-    store.recordVisible("one", 2, 2, 3, 2);
-    expect(store.get("one")).toEqual({ ordinal: 2, messageCount: 3 });
   });
 });

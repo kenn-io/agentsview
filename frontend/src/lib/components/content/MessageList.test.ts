@@ -194,7 +194,7 @@ describe("MessageList read progress", () => {
     messages.messageCount = 5;
     ui.sortNewestFirst = false;
     readProgress.clear("s1");
-    readProgress.baseline("s1", 3, 3);
+    readProgress.baseline("s1", 3);
     virtualizerMock.scrollOffset = 0;
     virtualizerMock.scrollRect.height = 300;
     virtualizerMock.getVirtualItems.mockReturnValue(
@@ -225,6 +225,44 @@ describe("MessageList read progress", () => {
     document.body.innerHTML = "";
   });
 
+  it("places the chronological divider before ordinal zero from a null cursor", async () => {
+    messages.messages = [0, 1].map(makeMessage);
+    readProgress.clear("s1");
+    readProgress.baseline("s1", null);
+    virtualizerMock.getVirtualItems.mockReturnValue([0, 1].map((index) => ({
+      index,
+      key: `row-${index}`,
+      start: index * 100,
+      end: (index + 1) * 100,
+    })));
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    const divider = document.querySelector(".read-progress-divider");
+    expect(divider?.parentElement?.textContent).toContain("msg 0");
+    expect(divider?.textContent).toContain("New messages");
+  });
+
+  it("renders no earlier divider when newest-first has no read range", async () => {
+    messages.messages = [0, 1].map(makeMessage);
+    readProgress.clear("s1");
+    readProgress.baseline("s1", null);
+    ui.sortNewestFirst = true;
+    virtualizerMock.getVirtualItems.mockReturnValue([0, 1].map((index) => ({
+      index,
+      key: `row-${index}`,
+      start: index * 100,
+      end: (index + 1) * 100,
+    })));
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    expect(document.querySelectorAll(".read-progress-divider")).toHaveLength(0);
+    expect(readProgress.hasUnread("s1", 1)).toBe(true);
+  });
+
   it("places one divider at the next ordinal and clears it after it is visible", async () => {
     component = mount(MessageList, { target: document.body });
     await tick();
@@ -238,8 +276,7 @@ describe("MessageList read progress", () => {
     scroller!.dispatchEvent(new Event("scroll"));
     await vi.waitFor(() => {
       expect(readProgress.get("s1")).toMatchObject({
-        ordinal: 5,
-        messageCount: 5,
+        seenOrdinal: 5,
       });
     });
     await tick();
@@ -269,21 +306,21 @@ describe("MessageList read progress", () => {
     messages.messages = [0, 1, 2, 3].map(makeMessage);
     messages.messageCount = 4;
     readProgress.clear("s1");
-    readProgress.baseline("s1", 3, 4);
+    readProgress.baseline("s1", 3);
     component = mount(MessageList, { target: document.body });
     await tick();
 
     messages.sessionId = "s2";
     await tick();
 
-    expect(readProgress.get("s1")).toEqual({ ordinal: 3, messageCount: 4 });
+    expect(readProgress.get("s1")).toEqual({ seenOrdinal: 3 });
     expect(readProgress.hasUnread("s1", 5)).toBe(true);
   });
 
   it("hides the newest-first divider for a fully read transcript", async () => {
     ui.sortNewestFirst = true;
     readProgress.clear("s1");
-    readProgress.baseline("s1", 5, 6);
+    readProgress.baseline("s1", 5);
     component = mount(MessageList, { target: document.body });
     await tick();
 
@@ -301,8 +338,7 @@ describe("MessageList read progress", () => {
     );
     await vi.waitFor(() => {
       expect(readProgress.get("s1")).toMatchObject({
-        ordinal: 5,
-        messageCount: 5,
+        seenOrdinal: 5,
       });
     });
     await tick();
@@ -320,7 +356,7 @@ describe("MessageList read progress", () => {
     }));
     messages.messageCount = 6;
     readProgress.clear("s1");
-    readProgress.baseline("s1", 4, 5);
+    readProgress.baseline("s1", 4);
     ui.sortNewestFirst = true;
     virtualizerMock.getVirtualItems.mockReturnValue([{
       index: 0,
@@ -339,7 +375,7 @@ describe("MessageList read progress", () => {
     );
     await tick();
 
-    expect(readProgress.get("s1")).toEqual({ ordinal: 4, messageCount: 5 });
+    expect(readProgress.get("s1")).toEqual({ seenOrdinal: 4 });
   });
 
   it("records a normal row when its observer reports it visible", async () => {
@@ -371,7 +407,7 @@ describe("MessageList read progress", () => {
         { isIntersecting: true } as IntersectionObserverEntry,
       ], {} as IntersectionObserver);
 
-      expect(readProgress.get("s1")).toEqual({ ordinal: 4, messageCount: 5 });
+      expect(readProgress.get("s1")).toEqual({ seenOrdinal: 4 });
     } finally {
       Object.defineProperty(globalThis, "IntersectionObserver", {
         configurable: true,
@@ -410,7 +446,7 @@ describe("MessageList read progress", () => {
       ];
       messages.messageCount = 3;
       readProgress.clear("s1");
-      readProgress.baseline("s1", 0, 1);
+      readProgress.baseline("s1", 0);
       virtualizerMock.getVirtualItems.mockReturnValue([0, 1].map((index) => ({
         index,
         key: `row-${index}`,
@@ -424,14 +460,10 @@ describe("MessageList read progress", () => {
         { isIntersecting: true } as IntersectionObserverEntry,
       ], {} as IntersectionObserver);
 
-      expect(readProgress.get("s1")).toEqual({
-        ordinal: 1,
-        messageCount: 2,
-        totalMessageCount: 3,
-      });
+      expect(readProgress.get("s1")).toEqual({ seenOrdinal: 1 });
       messages.sessionId = "s2";
       await tick();
-      expect(readProgress.hasUnread("s1", 3)).toBe(false);
+      expect(readProgress.hasUnread("s1", 1)).toBe(false);
     } finally {
       Object.defineProperty(globalThis, "IntersectionObserver", {
         configurable: true,
@@ -445,7 +477,7 @@ describe("MessageList read progress", () => {
     messages.messages = [makeMessage(0), makeMessage(1)];
     messages.messageCount = 2;
     readProgress.clear("s1");
-    readProgress.baseline("s1", 1, 2, 2);
+    readProgress.baseline("s1", 1);
     virtualizerMock.getVirtualItems.mockReturnValue([0, 1].map((index) => ({
       index,
       key: `row-${index}`,
@@ -464,12 +496,8 @@ describe("MessageList read progress", () => {
     await tick();
     await new Promise((resolve) => window.setTimeout(resolve, 0));
 
-    expect(readProgress.get("s1")).toEqual({
-      ordinal: 1,
-      messageCount: 2,
-      totalMessageCount: 3,
-    });
-    expect(readProgress.hasUnread("s1", 3)).toBe(false);
+    expect(readProgress.get("s1")).toEqual({ seenOrdinal: 1 });
+    expect(readProgress.hasUnread("s1", 1)).toBe(false);
   });
 
   it("does not acknowledge hidden tool-group submessages when backend counts change", async () => {
@@ -482,7 +510,7 @@ describe("MessageList read progress", () => {
     }));
     messages.messageCount = 6;
     readProgress.clear("s1");
-    readProgress.baseline("s1", 3, 1, 3);
+    readProgress.baseline("s1", 3);
     virtualizerMock.getVirtualItems.mockReturnValue([{
       index: 0,
       key: "tool-group",
@@ -498,14 +526,12 @@ describe("MessageList read progress", () => {
     vi.spyOn(document.querySelector<HTMLElement>('[data-message-ordinal="4"]')!, "getBoundingClientRect").mockReturnValue(rect(20, 80));
     vi.spyOn(document.querySelector<HTMLElement>('[data-message-ordinal="5"]')!, "getBoundingClientRect").mockReturnValue(rect(120, 180));
     messages.messageCount = 7;
+    scroller.dispatchEvent(new Event("scroll"));
     await tick();
     await new Promise((resolve) => window.setTimeout(resolve, 0));
 
-    expect(readProgress.get("s1")).toEqual({
-      ordinal: 4,
-      messageCount: 3,
-    });
-    expect(readProgress.hasUnread("s1", 7)).toBe(true);
+    expect(readProgress.get("s1")).toEqual({ seenOrdinal: 4 });
+    expect(readProgress.hasUnread("s1", 5)).toBe(true);
   });
 
   it("acknowledges visible latest tool-group submessages when backend counts change", async () => {
@@ -518,7 +544,7 @@ describe("MessageList read progress", () => {
     }));
     messages.messageCount = 6;
     readProgress.clear("s1");
-    readProgress.baseline("s1", 4, 2, 5);
+    readProgress.baseline("s1", 4);
     virtualizerMock.getVirtualItems.mockReturnValue([{
       index: 0,
       key: "tool-group",
@@ -534,14 +560,11 @@ describe("MessageList read progress", () => {
     vi.spyOn(document.querySelector<HTMLElement>('[data-message-ordinal="4"]')!, "getBoundingClientRect").mockReturnValue(rect(-80, -20));
     vi.spyOn(document.querySelector<HTMLElement>('[data-message-ordinal="5"]')!, "getBoundingClientRect").mockReturnValue(rect(20, 80));
     messages.messageCount = 7;
+    scroller.dispatchEvent(new Event("scroll"));
     await tick();
     await new Promise((resolve) => window.setTimeout(resolve, 0));
 
-    expect(readProgress.get("s1")).toEqual({
-      ordinal: 5,
-      messageCount: 3,
-      totalMessageCount: 7,
-    });
+    expect(readProgress.get("s1")).toEqual({ seenOrdinal: 5 });
   });
 
   it("keeps progressively loaded older messages from becoming unread", async () => {
@@ -549,7 +572,7 @@ describe("MessageList read progress", () => {
     messages.messageCount = 3_003;
     messages.hasOlder = true;
     readProgress.clear("s1");
-    readProgress.baseline("s1", 3_002, 3, 3_003);
+    readProgress.baseline("s1", 3_002);
     virtualizerMock.getVirtualItems.mockReturnValue([0, 1, 2].map((index) => ({
       index,
       key: `row-${index}`,
@@ -566,11 +589,7 @@ describe("MessageList read progress", () => {
     );
     await tick();
 
-    expect(readProgress.get("s1")).toEqual({
-      ordinal: 3_002,
-      messageCount: 3,
-      totalMessageCount: 3_003,
-    });
-    expect(readProgress.hasUnread("s1", 3_003)).toBe(false);
+    expect(readProgress.get("s1")).toEqual({ seenOrdinal: 3_002 });
+    expect(readProgress.hasUnread("s1", 3_002)).toBe(false);
   });
 });

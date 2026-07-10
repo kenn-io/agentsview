@@ -30,6 +30,7 @@ class MessagesStore {
   initialLoadSucceeded: boolean = $state(false);
   sessionId: string | null = $state(null);
   messageCount: number = $state(0);
+  latestDisplayOrdinal: number | null | undefined = $state(undefined);
   hasOlder: boolean = $state(false);
   loadingOlder: boolean = $state(false);
   private _stableMainModel: string = $state("");
@@ -63,7 +64,8 @@ class MessagesStore {
 
     let succeeded = false;
     try {
-      let countHint: number | null = null;
+      let countHint: number | undefined;
+      let latestDisplayOrdinal: number | null | undefined;
       try {
         configureGeneratedClient();
         const sess = await withAbort(
@@ -71,6 +73,7 @@ class MessagesStore {
           ac.signal,
         );
         countHint = sess.message_count ?? 0;
+        latestDisplayOrdinal = sess.latest_display_ordinal;
       } catch (err) {
         if (isAbortError(err)) return;
         console.warn(
@@ -80,19 +83,19 @@ class MessagesStore {
       }
 
       if (
-        countHint !== null &&
+        countHint !== undefined &&
         countHint > FULL_SESSION_MESSAGE_THRESHOLD
       ) {
-        await this.loadProgressively(id, ac.signal);
-        succeeded = true;
+        await this.loadProgressively(id, ac.signal, countHint);
       } else {
         await this.loadAllMessages(
           id,
           ac.signal,
-          countHint ?? undefined,
+          countHint,
         );
-        succeeded = this.hasCompleteMessageRange();
       }
+      succeeded = countHint !== undefined && latestDisplayOrdinal !== undefined;
+      if (succeeded) this.latestDisplayOrdinal = latestDisplayOrdinal;
     } catch (err) {
       if (isAbortError(err)) return;
       console.warn("Failed to load session messages:", err);
@@ -146,23 +149,13 @@ class MessagesStore {
     this.initialLoadSucceeded = false;
     this._stableMainModel = "";
     this.messageCount = 0;
+    this.latestDisplayOrdinal = undefined;
     this.hasOlder = false;
     this.loadingOlder = false;
     this.reloadPromise = null;
     this.reloadSessionId = null;
     this.pendingReload = false;
     this.loadOlderPromise = null;
-  }
-
-  hasCompleteMessageRange(): boolean {
-    const first = this.messages[0];
-    const last = this.messages[this.messages.length - 1];
-    return this.messageCount === 0
-      ? this.messages.length === 0 && !this.hasOlder
-      : this.messages.length === this.messageCount &&
-        first?.ordinal === 0 &&
-        last?.ordinal === this.messageCount - 1 &&
-        !this.hasOlder;
   }
 
   private async fetchPages(
@@ -232,10 +225,7 @@ class MessagesStore {
       loaded = [...loaded, ...res.messages];
       this.messages = loaded;
 
-      const newest = loaded[loaded.length - 1];
-      this.messageCount =
-        messageCountHint ??
-        (newest ? newest.ordinal + 1 : loaded.length);
+      this.messageCount = messageCountHint ?? loaded.length;
       this.hasOlder = false;
 
       if (res.messages.length < MESSAGE_PAGE_SIZE) break;
@@ -246,16 +236,14 @@ class MessagesStore {
       from = nextFrom;
     }
 
-    const newest = this.messages[this.messages.length - 1];
-    this.messageCount =
-      messageCountHint ??
-      (newest ? newest.ordinal + 1 : this.messages.length);
+    this.messageCount = messageCountHint ?? this.messages.length;
     this.hasOlder = false;
   }
 
   private async loadProgressively(
     id: string,
     signal: AbortSignal,
+    messageCountHint: number,
   ) {
     configureGeneratedClient();
     const firstRes = await withAbort(
@@ -268,18 +256,15 @@ class MessagesStore {
     );
 
     this.messages = [...firstRes.messages].reverse();
-    const newest = this.messages[this.messages.length - 1];
-    this.messageCount = newest ? newest.ordinal + 1 : 0;
-    const oldest = this.messages[0]?.ordinal;
-    this.hasOlder =
-      oldest !== undefined ? oldest > 0 : false;
+    this.messageCount = messageCountHint;
+    this.hasOlder = this.messages.length < this.messageCount;
   }
 
   private async loadFrom(
     id: string,
     from: number,
     signal: AbortSignal,
-  ) {
+  ): Promise<number> {
     const pages = await this.fetchPages(id, {
       from,
       limit: MESSAGE_PAGE_SIZE,
@@ -301,7 +286,9 @@ class MessagesStore {
         ...this.messages.map((m) => updates.get(m.ordinal) ?? m),
         ...appended,
       ];
+      return appended.length;
     }
+    return 0;
   }
 
   async loadOlder() {
@@ -328,10 +315,6 @@ class MessagesStore {
     if (!id || this.messages.length === 0) return;
 
     const oldest = this.messages[0]!.ordinal;
-    if (oldest <= 0) {
-      this.hasOlder = false;
-      return;
-    }
 
     const signal = this.abortController?.signal;
     if (!signal || signal.aborted) return;
@@ -354,8 +337,12 @@ class MessagesStore {
         return;
       }
       const chunk = [...res.messages].reverse();
+      if (chunk[0]!.ordinal >= oldest) {
+        this.hasOlder = false;
+        return;
+      }
       this.messages.unshift(...chunk);
-      this.hasOlder = chunk[0]!.ordinal > 0;
+      this.hasOlder = this.messages.length < this.messageCount;
     } catch (err) {
       if (isAbortError(err)) return;
       console.warn("Failed to load older messages:", err);
@@ -405,8 +392,9 @@ class MessagesStore {
       let from = this.messages[0]!.ordinal - 1;
       let lastOldest = this.messages[0]!.ordinal;
       const chunks: Message[][] = [];
+      let loadedCount = this.messages.length;
 
-      while (from >= 0) {
+      while (loadedCount < this.messageCount) {
         configureGeneratedClient();
         const res = await withAbort(
           SessionsService.getApiV1SessionsIdMessages({
@@ -425,6 +413,7 @@ class MessagesStore {
 
         const chunk = [...res.messages].reverse();
         chunks.push(chunk);
+        loadedCount += chunk.length;
         const chunkOldest = chunk[0]!.ordinal;
 
         if (chunkOldest <= targetOrdinal) break;
@@ -443,7 +432,7 @@ class MessagesStore {
 
       const oldestNow = this.messages[0]?.ordinal;
       this.hasOlder =
-        oldestNow !== undefined && oldestNow > 0;
+        oldestNow !== undefined && this.messages.length < this.messageCount;
     } catch (err) {
       if (isAbortError(err)) return;
       console.warn(
@@ -470,39 +459,62 @@ class MessagesStore {
       if (this.sessionId !== id) return;
 
       const newCount = sess.message_count ?? 0;
+      const newLatestDisplayOrdinal = sess.latest_display_ordinal;
       const oldCount = this.messageCount;
       if (newCount === oldCount) {
         if (!this.initialLoadSucceeded && !this.hasOlder) {
-          await this.fullReload(id, signal, newCount);
+          await this.fullReload(
+            id,
+            signal,
+            newCount,
+            newLatestDisplayOrdinal,
+          );
           return;
         }
-        await this.refreshLoadedWindow(id, signal);
-        if (this.sessionId === id && (this.hasCompleteMessageRange() || this.hasOlder)) {
-          this.initialLoadSucceeded = true;
+        const identitiesMatch = await this.refreshLoadedWindow(id, signal);
+        if (this.sessionId !== id) return;
+        if (!identitiesMatch) {
+          await this.fullReload(
+            id,
+            signal,
+            newCount,
+            newLatestDisplayOrdinal,
+          );
+          return;
         }
+        this.latestDisplayOrdinal = newLatestDisplayOrdinal;
+        this.initialLoadSucceeded = true;
         return;
       }
 
       if (newCount > oldCount && this.messages.length > 0) {
         const oldestOrdinal = this.messages[0]!.ordinal;
-        await this.loadFrom(id, oldestOrdinal, signal);
+        const appended = await this.loadFrom(id, oldestOrdinal, signal);
         if (this.sessionId !== id) return;
 
-        const newest =
-          this.messages[this.messages.length - 1];
-        if (newest && newest.ordinal !== newCount - 1) {
-          await this.fullReload(id, signal, newCount);
+        if (appended !== newCount - oldCount) {
+          await this.fullReload(
+            id,
+            signal,
+            newCount,
+            newLatestDisplayOrdinal,
+          );
           return;
         }
 
         this.messageCount = newCount;
-        if (this.hasCompleteMessageRange()) {
-          this.initialLoadSucceeded = true;
-        }
+        this.latestDisplayOrdinal = newLatestDisplayOrdinal;
+        this.hasOlder = this.messages.length < this.messageCount;
+        this.initialLoadSucceeded = true;
         return;
       }
 
-      await this.fullReload(id, signal, newCount);
+      await this.fullReload(
+        id,
+        signal,
+        newCount,
+        newLatestDisplayOrdinal,
+      );
     } catch (err) {
       if (isAbortError(err)) return;
       console.warn("Reload failed:", err);
@@ -512,10 +524,10 @@ class MessagesStore {
   private async refreshLoadedWindow(
     id: string,
     signal: AbortSignal,
-  ) {
+  ): Promise<boolean> {
     const oldest = this.messages[0];
     const newest = this.messages[this.messages.length - 1];
-    if (!oldest || !newest) return;
+    if (!oldest || !newest) return this.messages.length === 0;
 
     const refreshed = await this.fetchPages(id, {
       from: oldest.ordinal,
@@ -523,9 +535,14 @@ class MessagesStore {
       direction: "asc",
       signal,
     });
-    if (this.sessionId !== id || refreshed.length === 0) {
-      return;
-    }
+    if (this.sessionId !== id) return true;
+
+    const existingOrdinals = this.messages.map((m) => m.ordinal);
+    const refreshedOrdinals = refreshed.map((m) => m.ordinal);
+    if (
+      refreshedOrdinals.length !== existingOrdinals.length ||
+      refreshedOrdinals.some((ordinal, index) => ordinal !== existingOrdinals[index])
+    ) return false;
 
     const updates = new Map(
       refreshed
@@ -540,12 +557,14 @@ class MessagesStore {
     this.messages = this.messages.map(
       (m) => updates.get(m.ordinal) ?? m,
     );
+    return true;
   }
 
   private async fullReload(
     id: string,
     signal: AbortSignal,
     messageCountHint?: number,
+    latestDisplayOrdinal?: number | null,
   ) {
     clearContentCaches();
     this.loading = true;
@@ -554,8 +573,7 @@ class MessagesStore {
         messageCountHint !== undefined &&
         messageCountHint > FULL_SESSION_MESSAGE_THRESHOLD
       ) {
-        await this.loadProgressively(id, signal);
-        this.initialLoadSucceeded = true;
+        await this.loadProgressively(id, signal, messageCountHint);
       } else {
         await this.loadAllMessages(
           id,
@@ -563,9 +581,8 @@ class MessagesStore {
           messageCountHint,
         );
       }
-      if (this.hasCompleteMessageRange()) {
-        this.initialLoadSucceeded = true;
-      }
+      this.latestDisplayOrdinal = latestDisplayOrdinal;
+      this.initialLoadSucceeded = latestDisplayOrdinal !== undefined;
     } finally {
       if (this.sessionId === id) {
         this.loading = false;

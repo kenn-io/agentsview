@@ -531,7 +531,7 @@ func (s *Store) ListTrashedSessions(
 	ctx context.Context,
 ) ([]db.Session, error) {
 	rows, err := s.pg.QueryContext(ctx,
-		"SELECT "+pgSessionCols+
+		"SELECT "+pgSessionAPICols+
 			" FROM sessions WHERE deleted_at IS NOT NULL"+
 			" ORDER BY deleted_at DESC LIMIT 500",
 	)
@@ -539,7 +539,7 @@ func (s *Store) ListTrashedSessions(
 		return nil, fmt.Errorf("querying trashed sessions: %w", err)
 	}
 	defer rows.Close()
-	return scanPGSessionRows(rows)
+	return scanPGAPISessionRows(rows)
 }
 
 // EmptyTrash permanently deletes every trashed session.

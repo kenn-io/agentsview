@@ -1827,7 +1827,7 @@ func CheckSchemaCompat(
 	ctx context.Context, db *sql.DB,
 ) error {
 	rows, err := db.QueryContext(ctx,
-		`SELECT updated_at, `+pgSessionCols+`
+		`SELECT updated_at, `+pgSessionStorageCols+`
 		 FROM sessions LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(

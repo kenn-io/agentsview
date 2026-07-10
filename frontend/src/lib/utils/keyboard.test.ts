@@ -258,6 +258,7 @@ describe("registerShortcuts", () => {
         started_at: null,
         ended_at: null,
         message_count: 1,
+        latest_display_ordinal: 0,
         user_message_count: 1,
         total_output_tokens: 0,
         peak_context_tokens: 0,

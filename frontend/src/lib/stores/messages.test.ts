@@ -71,6 +71,7 @@ function generatedCancelError(): Error & { isCancelled: true } {
 function makeSession(
   id: string,
   messageCount: number,
+  latestDisplayOrdinal: number | null = messageCount > 0 ? messageCount - 1 : null,
 ): Session {
   return {
     id,
@@ -81,6 +82,7 @@ function makeSession(
     started_at: null,
     ended_at: null,
     message_count: messageCount,
+    latest_display_ordinal: latestDisplayOrdinal,
     user_message_count: messageCount,
     total_output_tokens: 0,
     peak_context_tokens: 0,
@@ -154,6 +156,87 @@ describe('MessagesStore', () => {
     expect(messages.initialLoadSucceeded).toBe(true);
   });
 
+  it('treats non-zero-based complete loads as successful', async () => {
+    vi.mocked(api.getSession).mockResolvedValue(makeSession('s1', 2, 2));
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse([makeMessage(1), makeMessage(2)]),
+    );
+
+    await messages.loadSession('s1');
+
+    expect(messages.initialLoadSucceeded).toBe(true);
+
+    vi.mocked(api.getSession).mockResolvedValueOnce(makeSession('s1', 2, 2));
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse([makeMessage(1), makeMessage(2)]),
+    );
+    await messages.reload();
+
+    expect(messages.initialLoadSucceeded).toBe(true);
+    expect(vi.mocked(api.getMessages)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(api.getMessages)).toHaveBeenLastCalledWith(
+      's1',
+      expect.objectContaining({
+        from: 1,
+        limit: 1000,
+        direction: 'asc',
+      }),
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+      }),
+    );
+  });
+
+  it('treats sparse complete loads as successful', async () => {
+    vi.mocked(api.getSession).mockResolvedValue(makeSession('s1', 2, 20));
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse([makeMessage(10), makeMessage(20)]),
+    );
+
+    await messages.loadSession('s1');
+
+    expect(messages.initialLoadSucceeded).toBe(true);
+
+    vi.mocked(api.getSession).mockResolvedValueOnce(makeSession('s1', 2, 20));
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse([makeMessage(10), makeMessage(20)]),
+    );
+    await messages.reload();
+
+    expect(messages.initialLoadSucceeded).toBe(true);
+    expect(vi.mocked(api.getMessages)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(api.getMessages)).toHaveBeenLastCalledWith(
+      's1',
+      expect.objectContaining({
+        from: 10,
+        limit: 1000,
+        direction: 'asc',
+      }),
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+      }),
+    );
+  });
+
+  it('full reloads an equal-count sparse ordinal identity rewrite', async () => {
+    vi.mocked(api.getSession).mockResolvedValue(makeSession('s1', 2, 3));
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse([makeMessage(1), makeMessage(3)]),
+    );
+    await messages.loadSession('s1');
+
+    vi.mocked(api.getSession).mockResolvedValueOnce(makeSession('s1', 2, 4));
+    vi.mocked(api.getMessages)
+      .mockResolvedValueOnce(makeMessagesResponse([makeMessage(1), makeMessage(4)]))
+      .mockResolvedValueOnce(makeMessagesResponse([makeMessage(1), makeMessage(4)]));
+
+    await messages.reload();
+
+    expect(messages.messages.map((message) => message.ordinal)).toEqual([1, 4]);
+    expect(messages.messages.some((message) => message.ordinal === 3)).toBe(false);
+    expect(messages.latestDisplayOrdinal).toBe(4);
+  });
+
   it('marks a recovered reload as an initial-load success', async () => {
       vi.mocked(api.getSession).mockResolvedValue(makeSession('s1', 1));
       vi.mocked(api.getMessages).mockRejectedValue(new Error('offline'));
@@ -170,7 +253,7 @@ describe('MessagesStore', () => {
     expect(messages.initialLoadSucceeded).toBe(true);
   });
 
-  it('keeps a partial paged recovery from becoming the initial baseline', async () => {
+  it('marks a completed recovery successful without ordinal endpoint checks', async () => {
     const firstPage = Array.from({ length: 1_000 }, (_, ordinal) =>
       makeMessage(ordinal),
     );
@@ -192,7 +275,7 @@ describe('MessagesStore', () => {
       .mockResolvedValueOnce(makeMessagesResponse([]));
     await messages.reload();
 
-    expect(messages.initialLoadSucceeded).toBe(false);
+    expect(messages.initialLoadSucceeded).toBe(true);
   });
 
   it('should clear reload state when loading a new session', async () => {

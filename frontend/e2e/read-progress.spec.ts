@@ -62,6 +62,7 @@ test("persists read progress until later output is visible", async ({ page }) =>
   const [session] = createMockSessions(1, "read-progress", () => "project");
   session!.id = "read-progress";
   session!.message_count = messageCount;
+  session!.latest_display_ordinal = messageCount - 1;
   await page.addInitScript(() => {
     class TestEventSource extends EventTarget {
       url: string;
@@ -99,11 +100,12 @@ test("persists read progress until later output is visible", async ({ page }) =>
   await sp.selectFirstSession();
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem("agentsview-read-progress")))
-    .toContain('"messageCount":50');
+    .toContain('"seenOrdinal":49');
   const initialMessageRequests = messageRequests;
 
   messageCount = 60;
   session!.message_count = messageCount;
+  session!.latest_display_ordinal = messageCount - 1;
   await expect
     .poll(() => page.evaluate(() => (
       window as Window & { sessionSources: Array<{ url: string }> }
@@ -123,7 +125,7 @@ test("persists read progress until later output is visible", async ({ page }) =>
   await expect.poll(() => messageRequests).toBeGreaterThan(initialMessageRequests);
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem("agentsview-read-progress")))
-    .toContain('"messageCount":50');
+    .toContain('"seenOrdinal":49');
   await page.reload();
   await sp.goto();
   await sp.selectFirstSession();
@@ -135,7 +137,7 @@ test("persists read progress until later output is visible", async ({ page }) =>
   await expect(page.getByText("Message 59")).toBeVisible();
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem("agentsview-read-progress")))
-    .toContain('"messageCount":60');
+    .toContain('"seenOrdinal":59');
   await expect(unreadIndicator).toHaveCount(0);
   await expect(unreadDivider).toHaveCount(0);
 });
@@ -144,6 +146,7 @@ test("acknowledges a trailing system message only after the last displayable row
   const [session] = createMockSessions(1, "read-progress-system", () => "project");
   session!.id = "read-progress-system";
   session!.message_count = 3;
+  session!.latest_display_ordinal = 1;
   await page.addInitScript(() => {
     localStorage.setItem("agentsview-read-progress", JSON.stringify({
       version: 1,
@@ -172,7 +175,7 @@ test("acknowledges a trailing system message only after the last displayable row
   });
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem("agentsview-read-progress")))
-    .toContain('"totalMessageCount":3');
+    .toContain('"seenOrdinal":1');
 
   await page.locator(".breadcrumb-link").click();
   await expect(page.locator(".unread-indicator")).toHaveCount(0);
@@ -182,6 +185,7 @@ test("acknowledges a progressive first visit by backend total", async ({ page })
   const [session] = createMockSessions(1, "read-progress-partial", () => "project");
   session!.id = "read-progress-partial";
   session!.message_count = 3_005;
+  session!.latest_display_ordinal = 3_004;
   await page.route(
     sessionsRoutePattern,
     handleSessionsRoute([{ sessions: [session!], project: null }]),
@@ -205,7 +209,7 @@ test("acknowledges a progressive first visit by backend total", async ({ page })
   });
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem("agentsview-read-progress")))
-    .toContain('"totalMessageCount":3005');
+    .toContain('"seenOrdinal":3004');
 
   await page.locator(".breadcrumb-link").click();
   await expect(page.locator(".unread-indicator")).toHaveCount(0);
@@ -220,11 +224,12 @@ test("captures responsive unread state", async ({ page }) => {
   const [session] = createMockSessions(1, "read-progress-proof", () => "project");
   session!.id = "read-progress-proof";
   session!.message_count = 60;
+  session!.latest_display_ordinal = 59;
   await page.addInitScript(() => {
     localStorage.setItem("agentsview-read-progress", JSON.stringify({
-      version: 1,
+      version: 2,
       sessions: {
-        "read-progress-proof": { ordinal: 4, messageCount: 5 },
+        "read-progress-proof": { seenOrdinal: 4 },
       },
     }));
     window.IntersectionObserver = class {

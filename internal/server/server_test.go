@@ -928,6 +928,37 @@ func TestOpenAPIEndpointDocumentsBatchDeleteSessionIDsAsNonNullableArray(t *test
 		`session_ids must be a non-nullable array, not the nullable ["array","null"] union`)
 }
 
+func TestOpenAPIEndpointDocumentsLatestDisplayOrdinal(t *testing.T) {
+	te := setup(t)
+	w := te.get(t, "/api/openapi.json")
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	var spec struct {
+		Components struct {
+			Schemas map[string]struct {
+				Required   []string `json:"required"`
+				Properties map[string]struct {
+					Type json.RawMessage `json:"type"`
+				} `json:"properties"`
+			} `json:"schemas"`
+		} `json:"components"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+
+	for _, name := range []string{
+		"DbSession",
+		"ServiceSessionDetail",
+		"DbSidebarSessionIndexRow",
+	} {
+		schema, ok := spec.Components.Schemas[name]
+		require.True(t, ok, "schema %s missing", name)
+		assert.Contains(t, schema.Required, "latest_display_ordinal")
+		property, ok := schema.Properties["latest_display_ordinal"]
+		require.True(t, ok, "schema %s cursor missing", name)
+		assert.JSONEq(t, `["integer","null"]`, string(property.Type))
+	}
+}
+
 func TestOpenAPIEndpointDocumentsQualitySignalResponses(t *testing.T) {
 	te := setup(t)
 

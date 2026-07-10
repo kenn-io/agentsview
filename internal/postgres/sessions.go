@@ -42,10 +42,10 @@ type Store struct {
 	semanticUnavailableReason string
 }
 
-// pgSessionCols is the column list for standard PG session
-// queries. PG has no file_path, file_size, file_mtime,
+// pgSessionStorageCols is the persisted PG session projection.
+// PG has no file_path, file_size, file_mtime,
 // file_hash, or local_modified_at columns.
-const pgSessionCols = `id, project, machine, agent,
+const pgSessionStorageCols = `id, project, machine, agent,
 	first_message, COALESCE(display_name, session_name) AS display_name, created_at, started_at,
 	ended_at, message_count, user_message_count,
 	parent_session_id, relationship_type,
@@ -71,6 +71,11 @@ const pgSessionCols = `id, project, machine, agent,
 	transcript_fidelity, parser_malformed_lines, is_truncated,
 	secret_leak_count, secrets_rules_version,
 	deleted_at, termination_status`
+
+var pgSessionAPICols = pgSessionStorageCols + `,
+	(SELECT MAX(m.ordinal) FROM messages m
+	 WHERE m.session_id = sessions.id AND ` + db.PostgresDisplayMessageSQL("m") + `)
+	 AS latest_display_ordinal`
 
 // paramBuilder generates numbered PostgreSQL placeholders.
 type paramBuilder struct {
@@ -193,7 +198,7 @@ func pgTerminationPred(status string, pb *paramBuilder) string {
 	return "(" + strings.Join(preds, " OR ") + ")"
 }
 
-// scanPGSession scans a row with pgSessionCols into a
+// scanPGSession scans a row with pgSessionStorageCols into a
 // db.Session, converting TIMESTAMPTZ columns to string.
 func scanPGSession(
 	rs interface{ Scan(...any) error },
@@ -201,7 +206,7 @@ func scanPGSession(
 	var s db.Session
 	var createdAt *time.Time
 	var startedAt, endedAt, deletedAt *time.Time
-	err := rs.Scan(
+	dest := []any{
 		&s.ID, &s.Project, &s.Machine, &s.Agent,
 		&s.FirstMessage, &s.DisplayName,
 		&createdAt, &startedAt, &endedAt,
@@ -230,8 +235,67 @@ func scanPGSession(
 		&s.TranscriptFidelity, &s.ParserMalformedLines, &s.IsTruncated,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
 		&deletedAt, &s.TerminationStatus,
-	)
+	}
+	err := rs.Scan(dest...)
 	if err != nil {
+		return s, err
+	}
+	if createdAt != nil {
+		s.CreatedAt = FormatISO8601(*createdAt)
+	}
+	if startedAt != nil {
+		str := FormatISO8601(*startedAt)
+		s.StartedAt = &str
+	}
+	if endedAt != nil {
+		str := FormatISO8601(*endedAt)
+		s.EndedAt = &str
+	}
+	if deletedAt != nil {
+		str := FormatISO8601(*deletedAt)
+		s.DeletedAt = &str
+	}
+	return s, nil
+}
+
+func scanPGAPISession(
+	rs interface{ Scan(...any) error },
+) (db.Session, error) {
+	var s db.Session
+	var createdAt *time.Time
+	var startedAt, endedAt, deletedAt *time.Time
+	dest := []any{
+		&s.ID, &s.Project, &s.Machine, &s.Agent,
+		&s.FirstMessage, &s.DisplayName,
+		&createdAt, &startedAt, &endedAt,
+		&s.MessageCount, &s.UserMessageCount,
+		&s.ParentSessionID, &s.RelationshipType,
+		&s.TotalOutputTokens, &s.PeakContextTokens,
+		&s.HasTotalOutputTokens, &s.HasPeakContextTokens,
+		&s.IsAutomated,
+		&s.ToolFailureSignalCount, &s.ToolRetryCount,
+		&s.EditChurnCount, &s.ConsecutiveFailureMax,
+		&s.Outcome, &s.OutcomeConfidence,
+		&s.EndedWithRole, &s.FinalFailureStreak,
+		&s.SignalsPendingSince,
+		&s.CompactionCount, &s.MidTaskCompactionCount,
+		&s.ContextPressureMax,
+		&s.HealthScore, &s.HealthGrade,
+		&s.HasToolCalls, &s.HasContextData,
+		&s.QualitySignalVersion,
+		&s.ShortPromptCount, &s.UnstructuredStart,
+		&s.MissingSuccessCriteriaCount,
+		&s.MissingVerificationCount, &s.DuplicatePromptCount,
+		&s.NoCodeContextCount, &s.RunawayToolLoopCount,
+		&s.DataVersion,
+		&s.Cwd, &s.GitBranch,
+		&s.SourceSessionID, &s.SourceVersion,
+		&s.TranscriptFidelity, &s.ParserMalformedLines, &s.IsTruncated,
+		&s.SecretLeakCount, &s.SecretsRulesVersion,
+		&deletedAt, &s.TerminationStatus,
+		&s.LatestDisplayOrdinal,
+	}
+	if err := rs.Scan(dest...); err != nil {
 		return s, err
 	}
 	if createdAt != nil {
@@ -297,6 +361,18 @@ func scanPGSessionRows(
 			return nil, fmt.Errorf(
 				"scanning session: %w", err,
 			)
+		}
+		sessions = append(sessions, s)
+	}
+	return sessions, rows.Err()
+}
+
+func scanPGAPISessionRows(rows *sql.Rows) ([]db.Session, error) {
+	sessions := []db.Session{}
+	for rows.Next() {
+		s, err := scanPGAPISession(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scanning session: %w", err)
 		}
 		sessions = append(sessions, s)
 	}
@@ -458,7 +534,7 @@ func (s *Store) ListSessions(
 		)
 	}
 
-	query := "SELECT " + pgSessionCols +
+	query := "SELECT " + pgSessionAPICols +
 		" FROM sessions WHERE " + cursorWhere + " " +
 		pageBuilder.OrderByClause(rs, f) + " " +
 		pageBuilder.Limit(f.Limit+1)
@@ -473,7 +549,7 @@ func (s *Store) ListSessions(
 	}
 	defer rows.Close()
 
-	sessions, err := scanPGSessionRows(rows)
+	sessions, err := scanPGAPISessionRows(rows)
 	if err != nil {
 		return db.SessionPage{}, err
 	}
@@ -524,7 +600,9 @@ func (s *Store) GetSidebarSessionIndex(
 			message_count,
 			user_message_count,
 			is_automated,
-			position('<teammate-message' in COALESCE(first_message, '')) > 0
+			position('<teammate-message' in COALESCE(first_message, '')) > 0,
+			(SELECT MAX(m.ordinal) FROM messages m
+			 WHERE m.session_id = sessions.id AND ` + db.PostgresDisplayMessageSQL("m") + `)
 		FROM sessions
 		WHERE ` + where + `
 		ORDER BY COALESCE(
@@ -760,7 +838,9 @@ func (s *Store) getSidebarSessionIndexPage(
 			s.message_count,
 			s.user_message_count,
 			s.is_automated,
-			position('<teammate-message' in COALESCE(s.first_message, '')) > 0
+			position('<teammate-message' in COALESCE(s.first_message, '')) > 0,
+			(SELECT MAX(m.ordinal) FROM messages m
+			 WHERE m.session_id = s.id AND ` + db.PostgresDisplayMessageSQL("m") + `)
 		FROM sessions s
 		JOIN ranked_tree t ON s.id = t.id
 		ORDER BY
@@ -805,6 +885,7 @@ func scanPGSidebarSessionIndexRows(
 			&row.UserMessageCount,
 			&row.IsAutomated,
 			&row.IsTeammate,
+			&row.LatestDisplayOrdinal,
 		); err != nil {
 			return nil, fmt.Errorf(
 				"scanning sidebar session index: %w",
@@ -837,12 +918,12 @@ func (s *Store) GetSession(
 ) (*db.Session, error) {
 	row := s.pg.QueryRowContext(
 		ctx,
-		"SELECT "+pgSessionCols+
+		"SELECT "+pgSessionAPICols+
 			" FROM sessions WHERE id = $1"+
 			" AND deleted_at IS NULL",
 		id,
 	)
-	sess, err := scanPGSession(row)
+	sess, err := scanPGAPISession(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -909,7 +990,7 @@ func (s *Store) GetSessionFull(
 ) (*db.Session, error) {
 	row := s.pg.QueryRowContext(
 		ctx,
-		"SELECT "+pgSessionCols+
+		"SELECT "+pgSessionStorageCols+
 			" FROM sessions WHERE id = $1",
 		id,
 	)
@@ -930,7 +1011,7 @@ func (s *Store) GetSessionFull(
 func (s *Store) GetChildSessions(
 	ctx context.Context, parentID string,
 ) ([]db.Session, error) {
-	query := "SELECT " + pgSessionCols +
+	query := "SELECT " + pgSessionAPICols +
 		" FROM sessions" +
 		" WHERE parent_session_id = $1" +
 		" AND deleted_at IS NULL" +
@@ -944,7 +1025,7 @@ func (s *Store) GetChildSessions(
 	}
 	defer rows.Close()
 
-	return scanPGSessionRows(rows)
+	return scanPGAPISessionRows(rows)
 }
 
 // GetStats returns database statistics, counting only root

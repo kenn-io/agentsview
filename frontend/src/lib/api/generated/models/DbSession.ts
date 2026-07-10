@@ -31,6 +31,7 @@ export type DbSession = {
   id: string;
   is_automated: boolean;
   is_truncated?: boolean;
+  latest_display_ordinal: number | null;
   local_modified_at?: string;
   machine: string;
   message_count: number;

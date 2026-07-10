@@ -149,7 +149,7 @@
   let hasUnread = $derived.by(() => {
     const group = !expanded && groupSessions ? groupSessions : [session];
     return group.some((entry) =>
-      readProgress.hasUnread(entry.id, entry.message_count),
+      readProgress.hasUnread(entry.id, entry.latest_display_ordinal),
     );
   });
 
