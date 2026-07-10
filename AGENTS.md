@@ -8,6 +8,13 @@ Instructions for autonomous coding agents working in this repository.
 - If multiple instruction files exist, follow the most specific one for the
   files you are editing.
 
+## Roborev
+
+- Never manually invoke `roborev review` in any form unless the user explicitly
+  asks for it. Never invoke a roborev skill (including `roborev-fix` or
+  `roborev-design-review-branch`) unless the user explicitly asks for that
+  skill.
+
 ## Required Git Rules
 
 1. Commit every turn that changes tracked files.
@@ -15,9 +22,8 @@ Instructions for autonomous coding agents working in this repository.
    files, state that no commit was made.
 1. Do not amend commits.
 1. Do not change branches without explicit user permission.
-1. Do not merge pull requests. Open them and report status; merging is
-   always the user's decision, even when checks are green and the change
-   is urgent.
+1. Do not merge pull requests. Open them and report status; merging is always
+   the user's decision, even when checks are green and the change is urgent.
 
 ## Commit Expectations
 
