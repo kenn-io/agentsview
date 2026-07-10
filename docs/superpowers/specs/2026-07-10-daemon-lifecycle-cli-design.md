@@ -53,6 +53,14 @@ environment configuration such as `AGENTSVIEW_DATA_DIR`. Network, browser,
 authentication, proxy, TLS, sync, and idle-timeout behavior therefore comes from
 configuration rather than transient daemon command flags.
 
+Two existing one-off modes cannot be expressed by `daemon start` and remain on
+the `serve --background` compatibility path:
+
+- `--no-sync` is runtime-only (`NoSync` is not a `config.toml` key).
+- A persistent non-loopback `host` in `config.toml` requires
+  `require_auth = true`, while an explicit `--host` flag can request a one-off
+  unauthenticated non-loopback bind.
+
 ## Lifecycle Scope
 
 The new command family manages only writable SQLite daemon runtime records.
@@ -68,6 +76,10 @@ and restart operations stop all confirmed writable processes before starting one
 replacement. This restores the single-writer invariant without affecting
 read-only servers.
 
+In that invalid multi-writer state, `daemon status` lists every live writable
+daemon and warns that the single-writer invariant is violated. It must not
+silently select the first runtime record.
+
 ## Compatibility Interfaces
 
 The existing `serve` behavior remains visible and documented:
@@ -78,8 +90,11 @@ The existing `serve` behavior remains visible and documented:
   serve flag overrides.
 - `agentsview serve status` and `agentsview serve stop` keep their existing
   broader legacy scope, including read-only server records.
-- Add `agentsview serve restart` as a compatibility spelling for the writable,
-  config-driven `agentsview daemon restart` operation.
+- Add `agentsview serve restart` as a new compatibility-shaped spelling for the
+  writable, config-driven `agentsview daemon restart` operation. Help and
+  documentation must call out that its writable-only scope intentionally
+  differs from the broader legacy `serve stop`; it is not equivalent to
+  running `serve stop` followed by a start.
 
 New help text, documentation, and recovery guidance should prefer
 `agentsview daemon ...`. Internal launch paths that need to preserve transient
@@ -96,6 +111,9 @@ and its compatibility children.
 Extract or add narrowly scoped lifecycle helpers around the existing machinery:
 
 - Discover writable runtime records separately from all server records.
+- During writable discovery, remove a runtime record when its stored process
+  create time proves that the live PID has been reused. Preserve legacy
+  records with no create time for explicit identity handling.
 - Render writable-only status without changing legacy `serve status` output.
 - Stop only confirmed writable records for daemon operations.
 - Launch a background child with synthesized `serve` arguments and no
@@ -130,6 +148,12 @@ If another start owns the launch lock, wait using the existing bounded startup
 probe. Exit zero if that operation publishes a writable daemon; otherwise return
 a clear startup-in-progress or startup-failed error.
 
+Normal foreground `serve` startup acquires the same background launch lock
+during its handoff from process discovery through runtime publication.
+Background children rely on their parent launcher holding that lock. The
+separate daemon start lock remains authoritative for startup-in-progress state,
+including the fallback case where runtime publication fails.
+
 ### Stop
 
 1. Resolve the data directory and acquire the background launch lock for the
@@ -138,9 +162,13 @@ a clear startup-in-progress or startup-failed error.
    without guaranteeing the stopped state.
 1. Load configuration so runtime discovery uses the correct data directory and
    authentication token.
+1. Check the daemon start lock before examining runtime records. If it is held,
+   return a retryable startup-in-progress error even when live writable
+   records also exist; do not signal any process.
 1. Select only live writable runtime records.
-1. If none exist and no writable startup is active, report that the daemon was
-   not running and exit zero.
+1. Remove records whose stored process create time proves that the live PID has
+   been reused. If no writable records remain, report that the daemon was not
+   running and exit zero.
 1. Confirm every target's identity using the existing health/start-time checks
    before signalling any of them. If any live writable target cannot be
    confirmed, return nonzero without stopping the confirmed subset.
@@ -149,13 +177,18 @@ a clear startup-in-progress or startup-failed error.
 
 A startup that has not published a runtime record is not safe to signal.
 `daemon stop` returns a retryable error asking the user to wait for startup to
-finish.
+finish. When a remaining live record cannot be confirmed, report its PID and
+runtime-record path and instruct the user to verify and terminate the process
+manually before retrying. Do not suggest another daemon lifecycle command that
+would refuse the same target.
 
 ### Restart
 
 1. Resolve the data directory and acquire the background launch lock for the
    entire operation.
 1. Load and validate current configuration.
+1. Return a retryable error if the daemon start lock remains held after
+   acquiring the launch lock.
 1. Check database compatibility before stopping any running daemon.
 1. Discover and safely stop every confirmed writable runtime record while
    leaving read-only records untouched.
@@ -177,7 +210,9 @@ do not claim rollback or restoration.
 - Invalid configuration and incompatible database versions fail before a restart
   stops the existing daemon.
 - Concurrent lifecycle activity is serialized by the launch lock. Operations
-  that cannot safely wait return a concise retryable error.
+  that cannot safely wait return a concise retryable error. Stop and restart
+  also check the distinct daemon start lock unconditionally before acting on
+  runtime records.
 - Stale or PID-reused records never authorize a signal. `daemon stop` and
   `daemon restart` return nonzero if a live writable target cannot be
   confirmed, because neither command can guarantee its requested final state.
@@ -194,8 +229,12 @@ Update the README and CLI reference to:
 - Describe `serve` as the foreground command.
 - Label `serve --background` and the `serve` lifecycle subcommands as
   compatibility interfaces, without deprecating or hiding them.
+- Explain the writable-only `serve restart` scope and its intentional asymmetry
+  with broad legacy `serve stop`.
 - Explain that daemon lifecycle settings come from `config.toml` and that
   read-only PG/DuckDB servers are outside the daemon command's scope.
+- Document `--no-sync` and a one-off unauthenticated non-loopback bind as cases
+  that still require `serve --background`.
 
 Update user-facing restart and stop hints where the writable daemon is intended.
 Retain backend-specific or compatibility wording where a broader server scope is
@@ -210,16 +249,22 @@ helpers. Cover:
 - Rejection of positional arguments and serve-specific flags on daemon
   subcommands.
 - `start` when stopped, running, and concurrently starting.
+- `start` when only read-only runtime records exist, which must launch a
+  writable daemon rather than report that one is already running.
 - `status` for running, starting, stopped, read-only-only, and incompatible
   writable daemon states.
+- `status` reporting every writable runtime in an invalid multi-writer state.
 - Idempotent `stop` and writable-only filtering with mixed writable/read-only
   runtime records.
+- `stop` refusing before signalling confirmed records when the daemon start lock
+  is also held.
 - `restart` when running and stopped, including its distinct result messages.
 - Restart loading current configuration without inheriting old runtime-only
   options.
 - Database/config validation before stop.
 - Launch-lock contention for stop and across the complete restart gap.
 - Refusal to signal an unconfirmed or PID-reused runtime target, including
+  mismatched-create-time cleanup, legacy-record recovery output, and
   all-target prevalidation before stopping any writable process.
 - New-child startup failure after stop, including the reported log path.
 - Existing `serve --background`, `serve status`, and `serve stop` behavior.
