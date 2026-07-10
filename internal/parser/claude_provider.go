@@ -173,6 +173,7 @@ func (p *claudeProvider) ParseIncremental(
 		if consumed > 0 {
 			return IncrementalOutcome{
 				SessionID:     req.SessionID,
+				SubagentLinks: links,
 				EndedAt:       endedAt,
 				ConsumedBytes: consumed,
 			}, IncrementalApplied, nil
