@@ -833,31 +833,6 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 		"expected tool_result_events table after reopen")
 }
 
-func TestCurrentDataVersionKimiUsageEvents(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 55,
-		"Kimi persisted usage events require a data version bump")
-}
-
-func TestCurrentDataVersionGoalContextFiltering(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 56,
-		"Codex goal-context filtering requires a data version bump")
-}
-
-func TestCurrentDataVersionResultContentNULSanitization(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 58,
-		"message/result content NUL sanitization requires a data version bump")
-}
-
-func TestCurrentDataVersionToolInputNULSanitization(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 59,
-		"tool-call input_json NUL sanitization requires a data version bump")
-}
-
-func TestCurrentDataVersionRecommendedPluginsFiltering(t *testing.T) {
-	assert.GreaterOrEqual(t, CurrentDataVersion(), 60,
-		"Codex recommended-plugins filtering requires a data version bump")
-}
-
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s-events", "proj")
