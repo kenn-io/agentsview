@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -904,6 +905,219 @@ func TestLiveWritableRuntimeWithMismatchedCreateTimeIsRemoved(t *testing.T) {
 	assert.False(t, IsLocalDaemonActive(dir))
 	assertRuntimeRecordRemoved(t, dir, os.Getpid(),
 		"mismatched create-time runtime record should be removed")
+}
+
+func TestCompareProcessCreateTime(t *testing.T) {
+	tests := []struct {
+		name     string
+		recorded string
+		live     int64
+		liveOK   bool
+		want     processCreateTimeState
+	}{
+		{name: "exact match", recorded: "1234", live: 1234, liveOK: true, want: processCreateTimeMatch},
+		{name: "proven mismatch", recorded: "1234", live: 1235, liveOK: true, want: processCreateTimeMismatch},
+		{name: "missing recorded value", recorded: "", live: 1234, liveOK: true, want: processCreateTimeUnknown},
+		{name: "malformed recorded value", recorded: "not-a-time", live: 1234, liveOK: true, want: processCreateTimeUnknown},
+		{name: "zero recorded value", recorded: "0", live: 1234, liveOK: true, want: processCreateTimeUnknown},
+		{name: "negative recorded value", recorded: "-1", live: 1234, liveOK: true, want: processCreateTimeUnknown},
+		{name: "live lookup unavailable", recorded: "1234", live: 0, liveOK: false, want: processCreateTimeUnknown},
+		{name: "nonpositive live value", recorded: "1234", live: 0, liveOK: true, want: processCreateTimeUnknown},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, compareProcessCreateTime(
+				tt.recorded, tt.live, tt.liveOK,
+			))
+		})
+	}
+}
+
+func TestWritableDaemonRecordsFiltersAndCleansRuntimeRecords(t *testing.T) {
+	liveCreateTime, ok := processCreateTimeMillis(os.Getpid())
+	if !ok {
+		t.Skip("process create time is unavailable on this platform")
+	}
+
+	tests := []struct {
+		name        string
+		options     []runtimeRecordOption
+		wantRecords int
+		wantFile    bool
+	}{
+		{
+			name:        "matching writable record",
+			options:     []runtimeRecordOption{withRuntimeMetadata(runtimeCreateTime, strconv.FormatInt(liveCreateTime, 10))},
+			wantRecords: 1,
+			wantFile:    true,
+		},
+		{
+			name:        "missing create time is preserved as unknown",
+			wantRecords: 1,
+			wantFile:    true,
+		},
+		{
+			name:        "malformed create time is preserved as unknown",
+			options:     []runtimeRecordOption{withRuntimeMetadata(runtimeCreateTime, "not-a-time")},
+			wantRecords: 1,
+			wantFile:    true,
+		},
+		{
+			name:        "zero create time is preserved as unknown",
+			options:     []runtimeRecordOption{withRuntimeMetadata(runtimeCreateTime, "0")},
+			wantRecords: 1,
+			wantFile:    true,
+		},
+		{
+			name:        "negative create time is preserved as unknown",
+			options:     []runtimeRecordOption{withRuntimeMetadata(runtimeCreateTime, "-1")},
+			wantRecords: 1,
+			wantFile:    true,
+		},
+		{
+			name:        "proven mismatch is removed",
+			options:     []runtimeRecordOption{withRuntimeMetadata(runtimeCreateTime, strconv.FormatInt(liveCreateTime+1, 10))},
+			wantRecords: 0,
+			wantFile:    false,
+		},
+		{
+			name:        "read only record is ignored but preserved",
+			options:     []runtimeRecordOption{withRuntimeReadOnly(true)},
+			wantRecords: 0,
+			wantFile:    true,
+		},
+		{
+			name:        "another service is ignored but preserved",
+			options:     []runtimeRecordOption{func(rec *daemon.RuntimeRecord) { rec.Service = "other" }},
+			wantRecords: 0,
+			wantFile:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := runtimeTestDir(t)
+			path, err := writeRuntimeRecordForTest(dir, daemonRuntimeRecord(
+				"127.0.0.1", 9, tt.options...,
+			))
+			require.NoError(t, err)
+
+			records, err := writableDaemonRecords(dir)
+			require.NoError(t, err)
+			require.Len(t, records, tt.wantRecords)
+			if tt.wantRecords > 0 {
+				assert.Equal(t, os.Getpid(), records[0].PID)
+				assert.Equal(t, path, records[0].SourcePath)
+			}
+			if tt.wantFile {
+				assert.FileExists(t, path)
+			} else {
+				assertPathRemoved(t, path)
+			}
+		})
+	}
+}
+
+func TestWritableDaemonRecordsCleansDeadRecord(t *testing.T) {
+	dir := runtimeTestDir(t)
+	pid := deadPID(t)
+	path, err := writeRuntimeRecordForTest(dir, daemonRuntimeRecord(
+		"127.0.0.1", 9, withRuntimePID(pid),
+	))
+	require.NoError(t, err)
+
+	records, err := writableDaemonRecords(dir)
+	require.NoError(t, err)
+	assert.Empty(t, records)
+	assertPathRemoved(t, path, "dead runtime record should be cleaned up")
+}
+
+func TestWritableDaemonRecordsReturnsEveryLiveWritableRecord(t *testing.T) {
+	requirePOSIXSignals(t, "requires a long-lived child process")
+	dir := runtimeTestDir(t)
+	pids := []int{os.Getpid(), startSleepProcess(t)}
+	wantPaths := make(map[int]string, len(pids))
+	for i, pid := range pids {
+		path, err := writeRuntimeRecordForTest(dir, daemonRuntimeRecord(
+			"127.0.0.1", 10+i, withRuntimePID(pid),
+		))
+		require.NoError(t, err)
+		wantPaths[pid] = path
+	}
+
+	records, err := writableDaemonRecords(dir)
+	require.NoError(t, err)
+	require.Len(t, records, len(pids))
+	for _, rec := range records {
+		assert.Equal(t, wantPaths[rec.PID], rec.SourcePath)
+		delete(wantPaths, rec.PID)
+	}
+	assert.Empty(t, wantPaths, "all live writable records should be returned")
+}
+
+func TestWritableDaemonRecordsMigratesLegacyRuntime(t *testing.T) {
+	dir := runtimeTestDir(t)
+	endpoint, legacyPath := writeProbeableLegacyRuntime(t, dir, legacyStateFile{})
+
+	records, err := writableDaemonRecords(dir)
+	require.NoError(t, err)
+	require.Len(t, records, 1)
+	assert.Equal(t, endpoint.Port, daemonRuntimeFromRecord(records[0]).Port)
+	assert.Equal(t, runtimePathForTest(dir, os.Getpid()), records[0].SourcePath)
+	assertPathRemoved(t, legacyPath, "migrated legacy record should be removed")
+}
+
+type cleanupFailingRuntimeRecordStore struct {
+	err error
+}
+
+func (s cleanupFailingRuntimeRecordStore) CleanupDead() (int, error) {
+	return 0, s.err
+}
+
+func (cleanupFailingRuntimeRecordStore) List() ([]daemon.RuntimeRecord, error) {
+	return nil, nil
+}
+
+type listFailingRuntimeRecordStore struct {
+	err error
+}
+
+func (listFailingRuntimeRecordStore) CleanupDead() (int, error) {
+	return 0, nil
+}
+
+func (s listFailingRuntimeRecordStore) List() ([]daemon.RuntimeRecord, error) {
+	return nil, s.err
+}
+
+func TestWritableDaemonRecordsSurfacesRuntimeStoreErrors(t *testing.T) {
+	tests := []struct {
+		name  string
+		store daemonRuntimeRecordStore
+		want  string
+	}{
+		{
+			name:  "cleanup failure",
+			store: cleanupFailingRuntimeRecordStore{err: errors.New("cleanup failed")},
+			want:  "cleanup failed",
+		},
+		{
+			name:  "list failure",
+			store: listFailingRuntimeRecordStore{err: errors.New("list failed")},
+			want:  "list failed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			records, err := writableDaemonRecordsFromStore(tt.store)
+			assert.Nil(t, records)
+			require.Error(t, err)
+			assert.ErrorContains(t, err, tt.want)
+		})
+	}
 }
 
 func TestStartLock_OwnProcess(t *testing.T) {

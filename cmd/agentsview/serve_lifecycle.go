@@ -269,18 +269,9 @@ func processIdentityConfirmed(rec daemon.RuntimeRecord) bool {
 // or unparseable recordedMillis (legacy, or unreadable at write time) returns
 // false.
 func processCreateTimeMatches(pid int, recordedMillis string) bool {
-	if recordedMillis == "" {
-		return false
-	}
-	recorded, err := strconv.ParseInt(recordedMillis, 10, 64)
-	if err != nil {
-		return false
-	}
-	live, ok := processCreateTimeMillis(pid)
-	if !ok {
-		return false
-	}
-	return live == recorded
+	return processCreateTimeStateForPID(
+		pid, recordedMillis,
+	) == processCreateTimeMatch
 }
 
 // stopOrphanedCaddyChild terminates a managed Caddy child recorded in rec if it
