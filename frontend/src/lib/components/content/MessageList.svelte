@@ -209,7 +209,7 @@
     const record = () => readProgress.recordVisible(
       sessionId,
       ordinal,
-      displayedMessageCount,
+      (messages.messages.filter((message) => !isSystemMessage(message)).at(-1)?.ordinal ?? -1) + 1,
     );
     if (typeof IntersectionObserver === "undefined") {
       const root = node.closest(".message-list-scroll");

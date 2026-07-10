@@ -1,6 +1,7 @@
 export interface ReadProgressMarker {
   ordinal: number;
   messageCount: number;
+  totalMessageCount?: number;
 }
 
 interface StoredReadProgress {
@@ -88,9 +89,16 @@ export class ReadProgressStore {
     this.persist();
   }
 
-  recordVisible(sessionId: string, ordinal: number, messageCount: number) {
+  recordVisible(sessionId: string, ordinal: number, messageCount: number, totalMessageCount = messageCount) {
     const marker = this.markers[sessionId];
-    if (!marker || !Number.isInteger(ordinal) || ordinal <= marker.ordinal) return;
+    if (!marker || !Number.isInteger(ordinal)) return;
+    if (ordinal <= marker.ordinal) {
+      if (safeCount(messageCount) <= marker.messageCount && safeCount(totalMessageCount) > (marker.totalMessageCount ?? marker.messageCount)) {
+        this.markers = { ...this.markers, [sessionId]: { ...marker, totalMessageCount: safeCount(totalMessageCount) } };
+        this.persist();
+      }
+      return;
+    }
     this.markers = {
       ...this.markers,
       [sessionId]: {
@@ -99,6 +107,9 @@ export class ReadProgressStore {
           marker.messageCount,
           Math.min(safeCount(messageCount), ordinal + 1),
         ),
+        ...(safeCount(totalMessageCount) > safeCount(messageCount)
+          ? { totalMessageCount: safeCount(totalMessageCount) }
+          : {}),
       },
     };
     this.persist();
@@ -120,7 +131,9 @@ export class ReadProgressStore {
 
   hasUnread(sessionId: string, messageCount: number): boolean {
     const marker = this.markers[sessionId];
-    return marker !== undefined && (this.visibleCounts[sessionId] ?? safeCount(messageCount)) > marker.messageCount;
+    if (!marker) return false;
+    if (this.visibleCounts[sessionId] !== undefined) return this.visibleCounts[sessionId] > marker.messageCount;
+    return safeCount(messageCount) > (marker.totalMessageCount ?? marker.messageCount);
   }
 
   private persist() {

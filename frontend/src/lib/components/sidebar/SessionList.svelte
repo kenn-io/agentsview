@@ -621,7 +621,7 @@
             <span class="group-name">{item.label}</span>
             <span class="group-count">{item.count}</span>
             {#if section && hasUnread(section.groups.flatMap((group) => group.sessions))}
-              <span class="group-unread-indicator" aria-label="Unread messages"></span>
+              <span class="group-unread-indicator" aria-label={m.read_progress_unread_messages()}></span>
             {/if}
           </button>
         {:else if item.type === "subagent-group" && item.group}
@@ -644,7 +644,7 @@
             <span class="sub-group-label">{m.sidebar_subagents()}</span>
             <span class="sub-group-count">({item.count})</span>
             {#if hasUnread(subagents)}
-              <span class="group-unread-indicator" aria-label="Unread messages"></span>
+              <span class="group-unread-indicator" aria-label={m.read_progress_unread_messages()}></span>
             {/if}
           </button>
         {:else if item.type === "team-group" && item.group}
@@ -667,7 +667,7 @@
             <span class="sub-group-label">{m.sidebar_team()}</span>
             <span class="sub-group-count">({item.count})</span>
             {#if hasUnread(teammates)}
-              <span class="group-unread-indicator" aria-label="Unread messages"></span>
+              <span class="group-unread-indicator" aria-label={m.read_progress_unread_messages()}></span>
             {/if}
           </button>
         {:else if item.isChild && item.session}
