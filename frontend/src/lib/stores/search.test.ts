@@ -198,6 +198,8 @@ describe("SearchStore", () => {
         project: "semantic-project",
         limit: 120,
         xAgentsViewSearchIntent: "semantic",
+        includeOneShot: true,
+        includeAutomated: true,
       });
       expect(searchService.getApiV1Search).not.toHaveBeenCalled();
       expect(store.results[0]).toEqual({
@@ -298,6 +300,8 @@ describe("SearchStore", () => {
       project: "alpha",
       limit: 120,
       xAgentsViewSearchIntent: "semantic",
+      includeOneShot: true,
+      includeAutomated: true,
     });
   });
 
@@ -325,6 +329,8 @@ describe("SearchStore", () => {
       project: "alpha",
       limit: 120,
       xAgentsViewSearchIntent: "semantic",
+      includeOneShot: true,
+      includeAutomated: true,
     });
     expect(searchService.getApiV1Search).not.toHaveBeenCalled();
   });

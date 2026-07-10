@@ -231,6 +231,8 @@ export class SearchStore {
             project: project || undefined,
             limit: CONTENT_SEARCH_LIMIT,
             xAgentsViewSearchIntent: "semantic",
+            includeOneShot: true,
+            includeAutomated: true,
           }) as unknown as Promise<ContentSearchResponse>,
           signal,
         );
