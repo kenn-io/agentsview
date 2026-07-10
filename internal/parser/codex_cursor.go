@@ -30,6 +30,8 @@ type codexCursorState struct {
 	firstUserSeen            bool
 	sawUserTurnAfterFirst    bool
 	mayReplayFirstUserPrompt bool
+	lastTokenUsageDigest     [sha256.Size]byte
+	lastTokenUsageSeen       bool
 	forkGate                 codexForkGate
 	lastTaskEvent            string
 }
@@ -71,6 +73,16 @@ func (s *codexCursorState) observeTaskEvent(eventType string) {
 			s.markFirstUserReplayPossible()
 		}
 	}
+}
+
+// observeTokenUsage records the exact streaming token payload compactly and
+// reports whether it repeats the most recently observed payload.
+func (s *codexCursorState) observeTokenUsage(raw string) bool {
+	digest := sha256.Sum256([]byte(raw))
+	duplicate := s.lastTokenUsageSeen && digest == s.lastTokenUsageDigest
+	s.lastTokenUsageDigest = digest
+	s.lastTokenUsageSeen = true
+	return duplicate
 }
 
 type codexCursorKey struct {

@@ -1,11 +1,13 @@
 package parser
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -2804,7 +2806,9 @@ func TestSeedCodexIncrementalState_SkipsInvalidJSON(
 
 	info, err := os.Stat(path)
 	require.NoError(t, err)
-	got := seedCodexIncrementalState(path, info.Size()).model
+	seed, err := seedCodexIncrementalState(path, info.Size())
+	require.NoError(t, err)
+	got := seed.model
 	assert.Equal(t, "gpt-5.4", got,
 		"truncated turn_context should be skipped")
 }
@@ -2833,19 +2837,33 @@ func TestSeedCodexIncrementalState_Model(t *testing.T) {
 	t.Run("full file returns last model", func(t *testing.T) {
 		info, err := os.Stat(path)
 		require.NoError(t, err)
-		got := seedCodexIncrementalState(path, info.Size()).model
+		seed, err := seedCodexIncrementalState(path, info.Size())
+		require.NoError(t, err)
+		got := seed.model
 		assert.Equal(t, "gpt-5.4", got)
 	})
 
 	t.Run("zero offset returns empty", func(t *testing.T) {
-		got := seedCodexIncrementalState(path, 0).model
+		seed, err := seedCodexIncrementalState(path, 0)
+		require.NoError(t, err)
+		got := seed.model
 		assert.Equal(t, "", got)
 	})
 
-	t.Run("nonexistent file returns empty", func(t *testing.T) {
-		got := seedCodexIncrementalState("/no/such/file", 100).model
-		assert.Equal(t, "", got)
+	t.Run("nonexistent file returns error", func(t *testing.T) {
+		_, err := seedCodexIncrementalState("/no/such/file", 100)
+		require.Error(t, err)
 	})
+}
+
+func TestSeedCodexIncrementalStatePropagatesReaderError(t *testing.T) {
+	wantErr := errors.New("prefix read failed")
+
+	_, err := seedCodexIncrementalStateFromReader(
+		iotest.ErrReader(wantErr),
+	)
+
+	require.ErrorIs(t, err, wantErr)
 }
 
 // TestParseCodexSession_TurnAbortedNotCountedAsUser pins the

@@ -67,7 +67,6 @@ type codexSessionBuilder struct {
 	agentWaitCalls       map[string]string
 	pendingAgentEvents   map[string][]codexPendingEvent
 	orphanNotificationIx map[string]int
-	lastTokenUsageRaw    string // dedup streaming duplicates
 	unattachedTokenUsage bool
 }
 
@@ -338,10 +337,9 @@ func (b *codexSessionBuilder) handleTokenCountEvent(
 	payload gjson.Result,
 ) {
 	raw := payload.Get("info.last_token_usage").Raw
-	if raw == "" || raw == b.lastTokenUsageRaw {
+	if raw == "" || b.observeTokenUsage(raw) {
 		return
 	}
-	b.lastTokenUsageRaw = raw
 
 	// Find last assistant message without usage in the current
 	// turn. Stop at user message boundary so we don't cross
@@ -1374,7 +1372,7 @@ func (p *codexProvider) parseSessionSnapshot(
 
 	b.flushPendingAgentResults()
 	b.normalizeOrdinals()
-	if safe, safeErr := codexSafeResumeOffset(path, info.Size()); safeErr == nil && safe {
+	if safe, safeErr := codexSafeResumeOffsetFile(f, info.Size()); safeErr == nil && safe {
 		inode, device := sourceFileIdentity(info)
 		p.cursorCache.Put(
 			path,
@@ -1608,15 +1606,30 @@ type codexIncrementalSeed = codexCursorState
 // incremental parse must keep suppressing appended replay lines.
 func seedCodexIncrementalState(
 	path string, offset int64,
-) codexIncrementalSeed {
-	var seed codexIncrementalSeed
+) (codexIncrementalSeed, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return seed
+		return codexIncrementalSeed{}, fmt.Errorf(
+			"open codex prefix %s: %w", path, err,
+		)
 	}
 	defer f.Close()
+	seed, err := seedCodexIncrementalStateFromReader(
+		io.LimitReader(f, offset),
+	)
+	if err != nil {
+		return codexIncrementalSeed{}, fmt.Errorf(
+			"read codex prefix %s: %w", path, err,
+		)
+	}
+	return seed, nil
+}
 
-	lr := newLineReader(io.LimitReader(f, offset), maxLineSize)
+func seedCodexIncrementalStateFromReader(
+	r io.Reader,
+) (codexIncrementalSeed, error) {
+	var seed codexIncrementalSeed
+	lr := newLineReader(r, maxLineSize)
 	for {
 		line, ok := lr.next()
 		if !ok {
@@ -1649,12 +1662,22 @@ func seedCodexIncrementalState(
 		case codexTypeTurnContext:
 			seed.model = payload.Get("model").Str
 		case codexTypeEventMsg:
-			seed.observeTaskEvent(payload.Get("type").Str)
+			eventType := payload.Get("type").Str
+			seed.observeTaskEvent(eventType)
+			if eventType == "token_count" {
+				raw := payload.Get("info.last_token_usage").Raw
+				if raw != "" {
+					seed.observeTokenUsage(raw)
+				}
+			}
 		case codexTypeResponseItem:
 			observeCodexIncrementalUserMessage(&seed, payload)
 		}
 	}
-	return seed
+	if err := lr.Err(); err != nil {
+		return codexIncrementalSeed{}, err
+	}
+	return seed, nil
 }
 
 // observeUserMessage feeds one response_item into the
@@ -1709,20 +1732,44 @@ func readCodexJSONLFrom(
 		return 0, fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
-	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return 0, fmt.Errorf("seek %s to %d: %w", path, offset, err)
+	info, err := f.Stat()
+	if err != nil {
+		return 0, fmt.Errorf("stat %s: %w", path, err)
 	}
+	return readCodexJSONLSection(f, offset, info.Size(), fn)
+}
 
-	lr := newLineReader(f, maxLineSize)
+// readCodexJSONLSection applies the conservative Codex JSONL rules to the
+// exact byte range [offset, limit). A SectionReader makes the captured limit a
+// real EOF even if the underlying descriptor has since grown.
+func readCodexJSONLSection(
+	f *os.File,
+	offset int64,
+	limit int64,
+	fn func(line string),
+) (consumed int64, err error) {
+	if offset < 0 || limit < offset {
+		return 0, fmt.Errorf(
+			"invalid codex JSONL section [%d,%d)", offset, limit,
+		)
+	}
+	section := io.NewSectionReader(f, offset, limit-offset)
+	return readCodexJSONLReader(section, section, fn)
+}
+
+func readCodexJSONLReader(
+	r io.Reader,
+	at io.ReaderAt,
+	fn func(line string),
+) (consumed int64, err error) {
+	lr := newLineReader(r, maxLineSize)
 	for {
 		line, ok := lr.next()
 		if !ok {
 			break
 		}
 		var terminator [1]byte
-		if _, err := f.ReadAt(
-			terminator[:], offset+lr.bytesRead-1,
-		); err != nil {
+		if _, err := at.ReadAt(terminator[:], lr.bytesRead-1); err != nil {
 			return consumed, err
 		}
 		if terminator[0] != '\n' {
@@ -1743,22 +1790,23 @@ func readCodexJSONLFrom(
 // boundary. Offset zero is always safe; every nonzero offset must immediately
 // follow a newline byte.
 func codexSafeResumeOffset(path string, offset int64) (bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	return codexSafeResumeOffsetFile(f, offset)
+}
+
+func codexSafeResumeOffsetFile(f *os.File, offset int64) (bool, error) {
 	if offset == 0 {
 		return true, nil
 	}
 	if offset < 0 {
 		return false, nil
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return false, err
-	}
-	defer f.Close()
-	if _, err := f.Seek(offset-1, io.SeekStart); err != nil {
-		return false, err
-	}
 	var previous [1]byte
-	if _, err := io.ReadFull(f, previous[:]); err != nil {
+	if _, err := f.ReadAt(previous[:], offset-1); err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 			return false, nil
 		}
@@ -1771,6 +1819,7 @@ type codexIncrementalParseResult struct {
 	messages      []ParsedMessage
 	endedAt       time.Time
 	consumedBytes int64
+	initialCursor codexCursorState
 	cursor        codexCursorState
 	inode         uint64
 	device        uint64
@@ -1787,12 +1836,47 @@ func (p *codexProvider) parseSessionFromDetailed(
 	startOrdinal int,
 	includeExec bool,
 ) (codexIncrementalParseResult, error) {
-	return p.parseSessionFromWithReader(
+	f, err := os.Open(path)
+	if err != nil {
+		return codexIncrementalParseResult{}, fmt.Errorf(
+			"open codex %s: %w", path, err,
+		)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return codexIncrementalParseResult{}, fmt.Errorf(
+			"stat codex %s: %w", path, err,
+		)
+	}
+	return p.parseSessionFromSnapshot(
+		path, offset, startOrdinal, includeExec, f, info, info.Size(),
+	)
+}
+
+func (p *codexProvider) parseSessionFromSnapshot(
+	path string,
+	offset int64,
+	startOrdinal int,
+	includeExec bool,
+	f *os.File,
+	info os.FileInfo,
+	limit int64,
+) (codexIncrementalParseResult, error) {
+	return p.parseSessionFromWithSources(
 		path,
 		offset,
 		startOrdinal,
 		includeExec,
-		readCodexJSONLFrom,
+		info,
+		func(fn func(string)) (int64, error) {
+			return readCodexJSONLSection(f, offset, limit, fn)
+		},
+		func() (codexIncrementalSeed, error) {
+			return seedCodexIncrementalStateFromReader(
+				io.NewSectionReader(f, 0, offset),
+			)
+		},
 	)
 }
 
@@ -1803,16 +1887,65 @@ func (p *codexProvider) parseSessionFromWithReader(
 	includeExec bool,
 	readLines func(string, int64, func(string)) (int64, error),
 ) (codexIncrementalParseResult, error) {
+	return p.parseSessionFromWithReaders(
+		path,
+		offset,
+		startOrdinal,
+		includeExec,
+		readLines,
+		seedCodexIncrementalState,
+	)
+}
+
+func (p *codexProvider) parseSessionFromWithReaders(
+	path string,
+	offset int64,
+	startOrdinal int,
+	includeExec bool,
+	readLines func(string, int64, func(string)) (int64, error),
+	readSeed func(string, int64) (codexIncrementalSeed, error),
+) (codexIncrementalParseResult, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return codexIncrementalParseResult{}, fmt.Errorf(
 			"stat codex %s: %w", path, err,
 		)
 	}
+	return p.parseSessionFromWithSources(
+		path,
+		offset,
+		startOrdinal,
+		includeExec,
+		info,
+		func(fn func(string)) (int64, error) {
+			return readLines(path, offset, fn)
+		},
+		func() (codexIncrementalSeed, error) {
+			return readSeed(path, offset)
+		},
+	)
+}
+
+func (p *codexProvider) parseSessionFromWithSources(
+	path string,
+	offset int64,
+	startOrdinal int,
+	includeExec bool,
+	info os.FileInfo,
+	readLines func(func(string)) (int64, error),
+	readSeed func() (codexIncrementalSeed, error),
+) (codexIncrementalParseResult, error) {
 	inode, device := sourceFileIdentity(info)
 	seed, cacheHit := p.cursorCache.Get(path, offset, inode, device)
 	if !cacheHit {
-		seed = seedCodexIncrementalState(path, offset)
+		var err error
+		seed, err = readSeed()
+		if err != nil {
+			return codexIncrementalParseResult{}, fmt.Errorf(
+				"seed codex %s at offset %d: %w",
+				path, offset, err,
+			)
+		}
 	}
 
 	b := newCodexSessionBuilder(includeExec)
@@ -1821,7 +1954,7 @@ func (p *codexProvider) parseSessionFromWithReader(
 	var fallbackErr error
 
 	consumed, err := readLines(
-		path, offset, func(line string) {
+		func(line string) {
 			if fallbackErr != nil {
 				return
 			}
@@ -1857,12 +1990,10 @@ func (p *codexProvider) parseSessionFromWithReader(
 		messages:      b.messages,
 		endedAt:       b.endedAt,
 		consumedBytes: consumed,
+		initialCursor: seed,
 		cursor:        b.incrementalSeed(),
 		inode:         inode,
 		device:        device,
-	}
-	if !cacheHit {
-		p.cursorCache.Put(path, offset, inode, device, seed)
 	}
 	return result, nil
 }

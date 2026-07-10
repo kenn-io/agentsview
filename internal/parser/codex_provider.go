@@ -188,7 +188,23 @@ func (p *codexProvider) ParseIncremental(
 		return IncrementalOutcome{ForceReplace: true},
 			IncrementalNeedsFullParse, nil
 	}
-	safe, err := codexSafeResumeOffset(path, req.Offset)
+	f, err := os.Open(path)
+	if err != nil {
+		return IncrementalOutcome{}, IncrementalNeedsFullParse, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return IncrementalOutcome{}, IncrementalNeedsFullParse, err
+	}
+	inode, device := sourceFileIdentity(info)
+	if (req.Fingerprint.Inode != 0 && req.Fingerprint.Inode != inode) ||
+		(req.Fingerprint.Device != 0 && req.Fingerprint.Device != device) ||
+		info.Size() < req.Fingerprint.Size {
+		return IncrementalOutcome{ForceReplace: true},
+			IncrementalNeedsFullParse, nil
+	}
+	safe, err := codexSafeResumeOffsetFile(f, req.Offset)
 	if err != nil {
 		return IncrementalOutcome{}, IncrementalNeedsFullParse, err
 	}
@@ -200,11 +216,14 @@ func (p *codexProvider) ParseIncremental(
 		return IncrementalOutcome{}, IncrementalNoNewData, nil
 	}
 
-	result, err := p.parseSessionFromDetailed(
+	result, err := p.parseSessionFromSnapshot(
 		path,
 		req.Offset,
 		req.StartOrdinal,
 		false,
+		f,
+		info,
+		req.Fingerprint.Size,
 	)
 	if err != nil {
 		if IsIncrementalFullParseFallback(err) {
@@ -213,6 +232,20 @@ func (p *codexProvider) ParseIncremental(
 		}
 		return IncrementalOutcome{}, IncrementalNeedsFullParse, err
 	}
+	if !result.initialCursor.firstUserSeen && result.cursor.firstUserSeen {
+		// The stored session has no genuine first prompt yet, so appending this
+		// tail would leave its persisted FirstMessage preview stale. A full parse
+		// can rebuild both the messages and the session summary atomically.
+		return IncrementalOutcome{ForceReplace: true},
+			IncrementalNeedsFullParse, nil
+	}
+	p.cursorCache.Put(
+		path,
+		req.Offset,
+		result.inode,
+		result.device,
+		result.initialCursor,
+	)
 	if result.consumedBytes == 0 {
 		return IncrementalOutcome{}, IncrementalNoNewData, nil
 	}
