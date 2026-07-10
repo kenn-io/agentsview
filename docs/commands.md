@@ -886,6 +886,25 @@ agentsview embeddings retire <id>     # retire a generation
 
 ______________________________________________________________________
 
+### `agentsview recall`
+
+Inspect the experimental durable-knowledge layer over the local session
+archive. Recall is active research and its corpus may require rebuilding as the
+schema, scoring, and trust policy evolve. See
+[Recall (Experimental)](/recall/) for its current guarantees and limitations.
+
+```bash
+agentsview recall list
+agentsview recall get <id>
+agentsview recall query <text>
+agentsview recall brief <task>
+agentsview recall stats
+agentsview recall extract --session <id> --dry-run
+agentsview recall import <accepted-recall.jsonl> --dry-run
+```
+
+______________________________________________________________________
+
 ### `agentsview mcp`
 
 Run a read-only Model Context Protocol server for assistant clients that can

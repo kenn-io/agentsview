@@ -27,6 +27,7 @@ nav = [
   {"Session API" = "session-api.md"},
   {"Semantic Search" = "semantic-search.md"},
   {"Semantic Search Internals" = "semantic-search-internals.md"},
+  {"Recall (Experimental)" = "recall.md"},
   {"Configuration" = "configuration.md"},
   {"Remote Access" = "remote-access.md"},
   {"PostgreSQL Sync" = "pg-sync.md"},
