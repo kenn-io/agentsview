@@ -293,6 +293,9 @@
       insightDateIntentEstablished = retained.explicitDateIntent;
     }
     applyInsightPanelDate(state);
+    if (retained?.explicitDateIntent) {
+      yokedDates.updateFromPanel(state);
+    }
     if (seed || retained?.explicitDateIntent) {
       insightDateIntentEstablished = true;
       writeInsightDateParams(state);

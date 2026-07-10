@@ -15,6 +15,7 @@ import { sessions } from "./lib/stores/sessions.svelte.js";
 import { settings } from "./lib/stores/settings.svelte.js";
 import { starred } from "./lib/stores/starred.svelte.js";
 import { sync } from "./lib/stores/sync.svelte.js";
+import { usage } from "./lib/stores/usage.svelte.js";
 import { yokedDates } from "./lib/stores/yokedDates.svelte.js";
 import type { Message } from "./lib/api/types.js";
 import { hasVisibleSegments } from "./lib/utils/content-parser.js";
@@ -68,6 +69,10 @@ afterEach(() => {
   sessions.filters.dateFrom = "";
   sessions.filters.dateTo = "";
   analytics.applyRollingWindow(365);
+  usage.isPinned = false;
+  usage.windowDays = 30;
+  usage.from = "";
+  usage.to = "";
   analyticsPageDates.clear();
   yokedDates.setEnabled(false);
   settings.needsAuth = false;
@@ -341,5 +346,57 @@ describe("App analytics date navigation", () => {
     await flushEffects();
 
     expect(router.params).toEqual({});
+  });
+
+  it("shares a retained Insights range after linking is enabled", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-10T12:00:00"));
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(settings, "load").mockResolvedValue();
+    vi.spyOn(starred, "load").mockResolvedValue();
+    vi.spyOn(sync, "loadStatus").mockResolvedValue();
+    vi.spyOn(sync, "loadStats").mockResolvedValue();
+    vi.spyOn(sync, "loadVersion").mockResolvedValue();
+    vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
+    vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(sessions, "loadProjects").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
+    vi.spyOn(analytics, "fetchAll").mockResolvedValue();
+    vi.spyOn(analytics, "fetchSignalsForInsights").mockResolvedValue();
+    vi.spyOn(insights, "load").mockResolvedValue();
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+
+    window.history.replaceState(null, "", "/insights");
+    router.route = "insights";
+    router.params = {};
+    router.sessionId = null;
+    analytics.applyRollingWindow(365);
+    yokedDates.setEnabled(false);
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    await selectRelativeRange(90);
+
+    router.navigate("settings");
+    await flushEffects();
+    yokedDates.setEnabled(true);
+    router.navigate("insights");
+    await flushEffects();
+    router.navigate("usage");
+    await flushEffects();
+
+    expect(usage.isPinned).toBe(false);
+    expect(usage.windowDays).toBe(90);
+    expect(usage.from).toBe("2026-04-12");
+    expect(usage.to).toBe("2026-07-10");
   });
 });

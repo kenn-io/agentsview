@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { expectActiveNavTab } from "./helpers/nav";
+import { clickNavTab, expectActiveNavTab } from "./helpers/nav";
 
 test.describe("Usage page", () => {
   test.beforeEach(async ({ page }) => {
@@ -175,5 +175,30 @@ test.describe("Usage page", () => {
 
     // URL should contain the exclude_project param.
     await expect(page).toHaveURL(/exclude_project=/);
+  });
+
+  test("adopts a retained Insights range after linking is enabled", async ({
+    page,
+  }) => {
+    await page.goto("/insights");
+    await expect(page.locator(".insights-page")).toBeVisible();
+
+    await page.locator(".kit-date-range-picker__trigger").click();
+    await page.getByRole("button", { name: "90d", exact: true }).click();
+    await expect(page).toHaveURL(/window_days=90/);
+
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page
+      .getByRole("checkbox", { name: "Link date ranges across pages" })
+      .check();
+
+    await clickNavTab(page, "Insights");
+    await expect(page).toHaveURL(/window_days=90/);
+    await clickNavTab(page, "Usage");
+
+    await expect(page.locator(".usage-page")).toBeVisible();
+    await expect(
+      page.locator(".kit-date-range-picker__trigger"),
+    ).toContainText("Last 90 days");
   });
 });
