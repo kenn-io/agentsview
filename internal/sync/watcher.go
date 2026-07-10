@@ -165,15 +165,14 @@ func (w *Watcher) Stop() {
 
 func (w *Watcher) loop() {
 	batches := make(chan []string)
-	callbackStarted := make(chan time.Time)
-	callbackDone := make(chan struct{}, 1)
+	callbackDone := make(chan time.Time, 1)
 	var worker sync.WaitGroup
 	worker.Go(func() {
 		for paths := range batches {
 			log.Printf("watcher: %d file(s) changed, triggering sync", len(paths))
-			callbackStarted <- time.Now()
+			startedAt := time.Now()
 			w.onChange(paths)
-			callbackDone <- struct{}{}
+			callbackDone <- startedAt
 		}
 	})
 
@@ -232,7 +231,6 @@ func (w *Watcher) loop() {
 		firstPendingAt = time.Time{}
 		callbackBusy = true
 		batches <- paths
-		lastDispatch = <-callbackStarted
 		return true
 	}
 
@@ -280,7 +278,8 @@ func (w *Watcher) loop() {
 				return
 			}
 
-		case <-callbackDone:
+		case startedAt := <-callbackDone:
+			lastDispatch = startedAt
 			callbackBusy = false
 			schedule()
 		}
