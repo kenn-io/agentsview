@@ -1,8 +1,11 @@
 package db
 
 import (
+	"bytes"
 	"context"
+	"log"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -235,6 +238,133 @@ func TestRecallEvidenceReplaceRemapsStableEndpoints(t *testing.T) {
 	}
 }
 
+func TestRecallEvidenceSourceUUIDLookupUsesPartialIndex(t *testing.T) {
+	d := testDB(t)
+	seedRecallEvidenceWindow(t, d, "query-plan", 10, "stable", "")
+
+	tx, err := d.getReader().BeginTx(
+		context.Background(),
+		nil,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tx.Rollback() })
+	rows, err := tx.QueryContext(
+		context.Background(),
+		"EXPLAIN QUERY PLAN "+recallEvidenceOrdinalBySourceUUIDSQL,
+		"query-plan",
+		"stable-10",
+	)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var details []string
+	for rows.Next() {
+		var id int
+		var parent int
+		var unused int
+		var detail string
+		require.NoError(t, rows.Scan(&id, &parent, &unused, &detail))
+		details = append(details, detail)
+	}
+	require.NoError(t, rows.Err())
+	assert.Contains(t, details, "SEARCH messages USING INDEX idx_messages_source_uuid (source_uuid=?)")
+}
+
+func TestRecallEvidenceReplaceResolvesMixedEndpointsIndependently(t *testing.T) {
+	tests := []struct {
+		name          string
+		anchoredStart bool
+		wantReason    string
+	}{
+		{
+			name:          "stable start and legacy end",
+			anchoredStart: true,
+			wantReason:    "start_endpoint_unresolved",
+		},
+		{
+			name:          "legacy start and stable end",
+			anchoredStart: false,
+			wantReason:    "end_endpoint_unresolved",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			seedRecallEvidenceWindow(t, d, "mixed", 10, "stable", "")
+			original := insertVerifiedRecallSelection(
+				t, d, "m1", "mixed", 10, 11, []string{"tool-a"},
+			)
+
+			// A legacy endpoint has no stable identity, so its stored ordinal
+			// already names the post-rewrite boundary. The digest still binds
+			// the same selected content because coordinates are intentionally
+			// excluded from it.
+			var updateEvidence string
+			if tt.anchoredStart {
+				updateEvidence = `
+					UPDATE recall_evidence
+					SET message_end_ordinal = 12,
+					    message_end_source_uuid = ''
+					WHERE entry_id = 'm1'`
+			} else {
+				updateEvidence = `
+					UPDATE recall_evidence
+					SET message_start_ordinal = 11,
+					    message_start_source_uuid = ''
+					WHERE entry_id = 'm1'`
+			}
+			result, err := d.getWriter().Exec(updateEvidence)
+			require.NoError(t, err)
+			rows, err := result.RowsAffected()
+			require.NoError(t, err)
+			require.EqualValues(t, 1, rows)
+
+			shifted := shiftedRecallMessages(t, d, "mixed", 1)
+			if tt.anchoredStart {
+				shifted[2].SourceUUID = ""
+			} else {
+				shifted[1].SourceUUID = ""
+			}
+			err = d.ReplaceSessionMessages("mixed", shifted)
+			require.NoError(t, err)
+
+			got := requireRecallEntry(t, d, "m1")
+			assert.True(t, got.ProvenanceOK)
+			require.Len(t, got.Evidence, 1)
+			assert.Equal(t, 11, got.Evidence[0].MessageStartOrdinal)
+			assert.Equal(t, 12, got.Evidence[0].MessageEndOrdinal)
+			assert.Equal(t, original.ContentDigest, got.Evidence[0].ContentDigest)
+			if tt.anchoredStart {
+				assert.Equal(t, "stable-10", got.Evidence[0].MessageStartSourceUUID)
+				assert.Empty(t, got.Evidence[0].MessageEndSourceUUID)
+			} else {
+				assert.Empty(t, got.Evidence[0].MessageStartSourceUUID)
+				assert.Equal(t, "stable-11", got.Evidence[0].MessageEndSourceUUID)
+			}
+
+			messages, err := d.GetAllMessages(context.Background(), "mixed")
+			require.NoError(t, err)
+			if tt.anchoredStart {
+				messages[1].SourceUUID = ""
+			} else {
+				messages[2].SourceUUID = ""
+			}
+			logs := captureRecallEvidenceLog(t)
+			err = d.ReplaceSessionMessages("mixed", messages)
+			require.NoError(t, err)
+
+			got = requireRecallEntry(t, d, "m1")
+			assert.False(t, got.ProvenanceOK)
+			assert.Equal(
+				t,
+				"recall: revoked provenance entry=m1 session=mixed reason="+
+					tt.wantReason,
+				strings.TrimSpace(logs.String()),
+			)
+		})
+	}
+}
+
 func TestRecallEvidenceDiffRevokesChangedContent(t *testing.T) {
 	d := testDB(t)
 	seedRecallEvidenceWindow(t, d, "diff", 10, "stable", "")
@@ -295,6 +425,182 @@ func TestRecallEvidenceDiffRevokesOrdinalFallbackWhenDigestChanges(t *testing.T)
 	require.NoError(t, err)
 	got := requireRecallEntry(t, d, "m1")
 	assert.False(t, got.ProvenanceOK)
+}
+
+func TestRecallEvidenceReconciliationLogsStableReason(t *testing.T) {
+	tests := []struct {
+		name         string
+		sourcePrefix string
+		wantReason   string
+		mutate       func(*testing.T, *DB, []Message) []Message
+	}{
+		{
+			name:         "both unresolved endpoints prefer start",
+			sourcePrefix: "stable",
+			wantReason:   "start_endpoint_unresolved",
+			mutate: func(_ *testing.T, _ *DB, messages []Message) []Message {
+				for i := range messages {
+					messages[i].SourceUUID = ""
+				}
+				return messages
+			},
+		},
+		{
+			name:         "end endpoint unresolved",
+			sourcePrefix: "stable",
+			wantReason:   "end_endpoint_unresolved",
+			mutate: func(_ *testing.T, _ *DB, messages []Message) []Message {
+				messages[1].SourceUUID = ""
+				return messages
+			},
+		},
+		{
+			name:         "invalid resolved range",
+			sourcePrefix: "stable",
+			wantReason:   "invalid_resolved_range",
+			mutate: func(_ *testing.T, _ *DB, messages []Message) []Message {
+				messages[0].SourceUUID, messages[1].SourceUUID =
+					messages[1].SourceUUID, messages[0].SourceUUID
+				return messages
+			},
+		},
+		{
+			name:         "window invalid",
+			sourcePrefix: "",
+			wantReason:   "window_invalid",
+			mutate: func(_ *testing.T, _ *DB, messages []Message) []Message {
+				return messages[1:]
+			},
+		},
+		{
+			name:         "selection invalid",
+			sourcePrefix: "stable",
+			wantReason:   "selection_invalid",
+			mutate: func(t *testing.T, _ *DB, messages []Message) []Message {
+				require.Len(t, messages[1].ToolCalls, 2)
+				messages[1].ToolCalls = messages[1].ToolCalls[:1]
+				return messages
+			},
+		},
+		{
+			name:         "missing digest",
+			sourcePrefix: "stable",
+			wantReason:   "missing_digest",
+			mutate: func(t *testing.T, d *DB, messages []Message) []Message {
+				result, err := d.getWriter().Exec(`
+					UPDATE recall_evidence
+					SET content_digest = ''
+					WHERE entry_id = 'reason-entry'`)
+				require.NoError(t, err)
+				rows, err := result.RowsAffected()
+				require.NoError(t, err)
+				require.EqualValues(t, 1, rows)
+				messages[0].Timestamp = "2026-07-09T13:00:00Z"
+				return messages
+			},
+		},
+		{
+			name:         "content digest mismatch",
+			sourcePrefix: "stable",
+			wantReason:   "content_digest_mismatch",
+			mutate: func(_ *testing.T, _ *DB, messages []Message) []Message {
+				messages[0].Content = "Changed evidence content."
+				messages[0].ContentLength = len(messages[0].Content)
+				return messages
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := testDB(t)
+			seedRecallEvidenceWindow(
+				t, d, "reason-session", 10, tt.sourcePrefix, "",
+			)
+			insertVerifiedRecallSelection(
+				t,
+				d,
+				"reason-entry",
+				"reason-session",
+				10,
+				11,
+				[]string{"tool-a"},
+			)
+			messages, err := d.GetAllMessages(
+				context.Background(),
+				"reason-session",
+			)
+			require.NoError(t, err)
+			messages = tt.mutate(t, d, messages)
+			logs := captureRecallEvidenceLog(t)
+
+			err = d.ReplaceSessionMessages("reason-session", messages)
+
+			require.NoError(t, err)
+			got := requireRecallEntry(t, d, "reason-entry")
+			assert.False(t, got.ProvenanceOK)
+			assert.Equal(
+				t,
+				"recall: revoked provenance entry=reason-entry "+
+					"session=reason-session reason="+tt.wantReason,
+				strings.TrimSpace(logs.String()),
+			)
+		})
+	}
+}
+
+func TestRecallEvidenceReconciliationLogsOnlyFirstRevocation(t *testing.T) {
+	d := testDB(t)
+	seedRecallEvidenceWindow(t, d, "multi-group", 10, "stable", "")
+	insertVerifiedRecallSelection(
+		t, d, "multi-entry", "multi-group", 10, 11, []string{"tool-a"},
+	)
+	window, err := d.BuildRecallEvidenceWindow(
+		context.Background(),
+		"multi-group",
+		11,
+		12,
+	)
+	require.NoError(t, err)
+	metadata, err := window.BindSelection(RecallEvidenceSelection{
+		MessageStartOrdinal: 11,
+		MessageEndOrdinal:   12,
+		ToolUseIDs:          []string{"tool-z"},
+	})
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(`
+		INSERT INTO recall_evidence (
+			entry_id, session_id, message_start_ordinal,
+			message_end_ordinal, message_start_source_uuid,
+			message_end_source_uuid, content_digest, tool_use_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		"multi-entry", "multi-group", 11, 12,
+		metadata.MessageStartSourceUUID, metadata.MessageEndSourceUUID,
+		metadata.ContentDigest, "tool-z",
+	)
+	require.NoError(t, err)
+	messages, err := d.GetAllMessages(context.Background(), "multi-group")
+	require.NoError(t, err)
+	messages[0].SourceUUID = ""
+	messages[2].SourceUUID = ""
+	logs := captureRecallEvidenceLog(t)
+
+	err = d.ReplaceSessionMessages("multi-group", messages)
+
+	require.NoError(t, err)
+	got := requireRecallEntry(t, d, "multi-entry")
+	assert.False(t, got.ProvenanceOK)
+	assert.Equal(
+		t,
+		"recall: revoked provenance entry=multi-entry "+
+			"session=multi-group reason=start_endpoint_unresolved",
+		strings.TrimSpace(logs.String()),
+	)
+
+	logs.Reset()
+	messages[0].Timestamp = "2026-07-09T13:00:00Z"
+	err = d.ReplaceSessionMessages("multi-group", messages)
+	require.NoError(t, err)
+	assert.Empty(t, logs.String(), "revoked provenance must remain sticky")
 }
 
 func TestRecallEvidenceReplaceRevokesMissingOrAmbiguousEndpoints(t *testing.T) {
@@ -656,4 +962,21 @@ func requireRecallEntry(t *testing.T, d *DB, id string) *RecallEntry {
 	require.NoError(t, err)
 	require.NotNil(t, entry)
 	return entry
+}
+
+func captureRecallEvidenceLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var output bytes.Buffer
+	previousWriter := log.Writer()
+	previousFlags := log.Flags()
+	previousPrefix := log.Prefix()
+	log.SetOutput(&output)
+	log.SetFlags(0)
+	log.SetPrefix("")
+	t.Cleanup(func() {
+		log.SetOutput(previousWriter)
+		log.SetFlags(previousFlags)
+		log.SetPrefix(previousPrefix)
+	})
+	return &output
 }

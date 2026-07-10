@@ -1910,28 +1910,30 @@ func TestCopyRecallEntriesFromRevokesDroppedEvidenceSession(t *testing.T) {
 	require.NoError(t, err)
 	// Bypass the insertion invariant to model corrupt, pre-invariant data that
 	// reconciliation must still revoke safely during a full resync.
-	_, err = srcDB.getWriter().Exec(`
-		INSERT INTO recall_entries (
-			id, type, scope, status, review_state, title, body,
-			source_session_id, transferable, provenance_ok
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"m1", "fact", "project", "accepted", "human_reviewed",
-		"Cross-session evidence",
-		"Every evidence selection must survive full resync.",
-		"entry-session", true, true,
-	)
-	require.NoError(t, err)
-	_, err = srcDB.getWriter().Exec(`
-		INSERT INTO recall_evidence (
-			entry_id, session_id, message_start_ordinal,
-			message_end_ordinal, message_start_source_uuid,
-			message_end_source_uuid, content_digest, tool_use_id
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		"m1", "evidence-session", 10, 11,
-		metadata.MessageStartSourceUUID, metadata.MessageEndSourceUUID,
-		metadata.ContentDigest, "tool-a",
-	)
-	require.NoError(t, err)
+	for _, entryID := range []string{"z-entry", "a-entry"} {
+		_, err = srcDB.getWriter().Exec(`
+			INSERT INTO recall_entries (
+				id, type, scope, status, review_state, title, body,
+				source_session_id, transferable, provenance_ok
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			entryID, "fact", "project", "accepted", "human_reviewed",
+			"Cross-session evidence",
+			"Every evidence selection must survive full resync.",
+			"entry-session", true, true,
+		)
+		require.NoError(t, err)
+		_, err = srcDB.getWriter().Exec(`
+			INSERT INTO recall_evidence (
+				entry_id, session_id, message_start_ordinal,
+				message_end_ordinal, message_start_source_uuid,
+				message_end_source_uuid, content_digest, tool_use_id
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			entryID, "evidence-session", 10, 11,
+			metadata.MessageStartSourceUUID, metadata.MessageEndSourceUUID,
+			metadata.ContentDigest, "tool-a",
+		)
+		require.NoError(t, err)
+	}
 	require.NoError(t, srcDB.Close())
 
 	dstPath := filepath.Join(dir, "new-dropped-evidence.db")
@@ -1939,12 +1941,23 @@ func TestCopyRecallEntriesFromRevokesDroppedEvidenceSession(t *testing.T) {
 	require.NoError(t, err)
 	defer dstDB.Close()
 	insertSession(t, dstDB, "entry-session", "agentsview")
+	logs := captureRecallEvidenceLog(t)
 
 	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
 
-	got := requireRecallEntry(t, dstDB, "m1")
-	assert.False(t, got.ProvenanceOK)
-	assert.Empty(t, got.Evidence)
+	for _, entryID := range []string{"a-entry", "z-entry"} {
+		got := requireRecallEntry(t, dstDB, entryID)
+		assert.False(t, got.ProvenanceOK)
+		assert.Empty(t, got.Evidence)
+	}
+	assert.Equal(
+		t,
+		"recall: revoked provenance entry=a-entry session=entry-session "+
+			"reason=evidence_dropped_during_resync\n"+
+			"recall: revoked provenance entry=z-entry session=entry-session "+
+			"reason=evidence_dropped_during_resync",
+		strings.TrimSpace(logs.String()),
+	)
 }
 
 func TestCopyRecallEntriesFromRevokesEvidenceWithoutFingerprint(t *testing.T) {

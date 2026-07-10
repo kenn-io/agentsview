@@ -286,22 +286,8 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 		  AND session_id IN (SELECT id FROM main.sessions)`); err != nil {
 		return fmt.Errorf("copying recall evidence: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE recall_entries
-		SET provenance_ok = 0,
-		    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		WHERE provenance_ok = 1
-		  AND id IN (SELECT id FROM old_db.recall_entries)
-		  AND (
-			SELECT count(*)
-			FROM old_db.recall_evidence old_e
-			WHERE old_e.entry_id = recall_entries.id
-		  ) != (
-			SELECT count(*)
-			FROM main.recall_evidence new_e
-			WHERE new_e.entry_id = recall_entries.id
-		  )`); err != nil {
-		return fmt.Errorf("revoking recall with dropped evidence: %w", err)
+	if err := revokeRecallEntriesWithDroppedEvidenceTx(ctx, tx); err != nil {
+		return err
 	}
 	if err := reconcileAllRecallEvidenceTx(ctx, tx); err != nil {
 		return fmt.Errorf("reconciling copied recall evidence: %w", err)
@@ -317,6 +303,61 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 				"source session not preserved)",
 			copied, total, total-copied,
 		)
+	}
+	return nil
+}
+
+func revokeRecallEntriesWithDroppedEvidenceTx(
+	ctx context.Context,
+	tx *sql.Tx,
+) error {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT entry.id, entry.source_session_id
+		FROM recall_entries entry
+		WHERE entry.provenance_ok = 1
+		  AND entry.id IN (SELECT id FROM old_db.recall_entries)
+		  AND (
+			SELECT count(*)
+			FROM old_db.recall_evidence old_e
+			WHERE old_e.entry_id = entry.id
+		  ) != (
+			SELECT count(*)
+			FROM main.recall_evidence new_e
+			WHERE new_e.entry_id = entry.id
+		  )
+		ORDER BY entry.id ASC`)
+	if err != nil {
+		return fmt.Errorf("querying recall with dropped evidence: %w", err)
+	}
+	type droppedEvidenceEntry struct {
+		id        string
+		sessionID string
+	}
+	entries := make([]droppedEvidenceEntry, 0)
+	for rows.Next() {
+		var entry droppedEvidenceEntry
+		if err := rows.Scan(&entry.id, &entry.sessionID); err != nil {
+			rows.Close()
+			return fmt.Errorf("scanning recall with dropped evidence: %w", err)
+		}
+		entries = append(entries, entry)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("closing recall with dropped evidence: %w", err)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("reading recall with dropped evidence: %w", err)
+	}
+	for _, entry := range entries {
+		if err := revokeRecallEvidenceEntryTx(
+			ctx,
+			tx,
+			entry.id,
+			entry.sessionID,
+			recallEvidenceRevocationEvidenceDroppedDuringResync,
+		); err != nil {
+			return fmt.Errorf("revoking recall with dropped evidence: %w", err)
+		}
 	}
 	return nil
 }

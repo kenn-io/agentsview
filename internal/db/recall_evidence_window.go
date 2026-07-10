@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 )
@@ -32,8 +33,26 @@ func isRecallEvidenceValidationError(err error) bool {
 }
 
 const (
-	recallEvidenceWindowDigestVersion  = "recall-evidence-window/v1"
-	recallEvidenceContentDigestVersion = "recall-evidence-content/v1"
+	recallEvidenceWindowDigestVersion    = "recall-evidence-window/v1"
+	recallEvidenceContentDigestVersion   = "recall-evidence-content/v1"
+	recallEvidenceOrdinalBySourceUUIDSQL = `
+		SELECT COUNT(*), MIN(ordinal)
+		FROM messages
+		WHERE session_id = ? AND source_uuid = ?
+		  AND source_uuid != ''`
+)
+
+type recallEvidenceRevocationReason string
+
+const (
+	recallEvidenceRevocationStartEndpointUnresolved     recallEvidenceRevocationReason = "start_endpoint_unresolved"
+	recallEvidenceRevocationEndEndpointUnresolved       recallEvidenceRevocationReason = "end_endpoint_unresolved"
+	recallEvidenceRevocationInvalidResolvedRange        recallEvidenceRevocationReason = "invalid_resolved_range"
+	recallEvidenceRevocationWindowInvalid               recallEvidenceRevocationReason = "window_invalid"
+	recallEvidenceRevocationSelectionInvalid            recallEvidenceRevocationReason = "selection_invalid"
+	recallEvidenceRevocationMissingDigest               recallEvidenceRevocationReason = "missing_digest"
+	recallEvidenceRevocationContentDigestMismatch       recallEvidenceRevocationReason = "content_digest_mismatch"
+	recallEvidenceRevocationEvidenceDroppedDuringResync recallEvidenceRevocationReason = "evidence_dropped_during_resync"
 )
 
 // RecallEvidenceWindow is the host-authorized transcript region supplied to an
@@ -523,8 +542,7 @@ func reconcileRecallEvidenceForSessionTx(
 	for _, group := range groups {
 		startOrdinal := group.key.messageStartOrdinal
 		endOrdinal := group.key.messageEndOrdinal
-		if group.key.messageStartSourceID != "" &&
-			group.key.messageEndSourceID != "" {
+		if group.key.messageStartSourceID != "" {
 			startOrdinal, err = uniqueRecallEvidenceOrdinalTx(
 				ctx,
 				tx,
@@ -534,6 +552,20 @@ func reconcileRecallEvidenceForSessionTx(
 			if err != nil {
 				return err
 			}
+			if startOrdinal < 0 {
+				if err := revokeRecallEvidenceEntryTx(
+					ctx,
+					tx,
+					group.key.entryID,
+					sessionID,
+					recallEvidenceRevocationStartEndpointUnresolved,
+				); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+		if group.key.messageEndSourceID != "" {
 			endOrdinal, err = uniqueRecallEvidenceOrdinalTx(
 				ctx,
 				tx,
@@ -543,14 +575,30 @@ func reconcileRecallEvidenceForSessionTx(
 			if err != nil {
 				return err
 			}
-			if startOrdinal < 0 || endOrdinal < startOrdinal {
+			if endOrdinal < 0 {
 				if err := revokeRecallEvidenceEntryTx(
-					ctx, tx, group.key.entryID,
+					ctx,
+					tx,
+					group.key.entryID,
+					sessionID,
+					recallEvidenceRevocationEndEndpointUnresolved,
 				); err != nil {
 					return err
 				}
 				continue
 			}
+		}
+		if startOrdinal < 0 || endOrdinal < 0 || endOrdinal < startOrdinal {
+			if err := revokeRecallEvidenceEntryTx(
+				ctx,
+				tx,
+				group.key.entryID,
+				sessionID,
+				recallEvidenceRevocationInvalidResolvedRange,
+			); err != nil {
+				return err
+			}
+			continue
 		}
 
 		window, err := buildRecallEvidenceWindow(
@@ -563,7 +611,11 @@ func reconcileRecallEvidenceForSessionTx(
 		if err != nil {
 			if isRecallEvidenceValidationError(err) {
 				if err := revokeRecallEvidenceEntryTx(
-					ctx, tx, group.key.entryID,
+					ctx,
+					tx,
+					group.key.entryID,
+					sessionID,
+					recallEvidenceRevocationWindowInvalid,
 				); err != nil {
 					return err
 				}
@@ -579,7 +631,11 @@ func reconcileRecallEvidenceForSessionTx(
 		if err != nil {
 			if isRecallEvidenceValidationError(err) {
 				if err := revokeRecallEvidenceEntryTx(
-					ctx, tx, group.key.entryID,
+					ctx,
+					tx,
+					group.key.entryID,
+					sessionID,
+					recallEvidenceRevocationSelectionInvalid,
 				); err != nil {
 					return err
 				}
@@ -587,10 +643,25 @@ func reconcileRecallEvidenceForSessionTx(
 			}
 			return err
 		}
-		if group.key.contentDigest == "" ||
-			group.key.contentDigest != metadata.ContentDigest {
+		if group.key.contentDigest == "" {
 			if err := revokeRecallEvidenceEntryTx(
-				ctx, tx, group.key.entryID,
+				ctx,
+				tx,
+				group.key.entryID,
+				sessionID,
+				recallEvidenceRevocationMissingDigest,
+			); err != nil {
+				return err
+			}
+			continue
+		}
+		if group.key.contentDigest != metadata.ContentDigest {
+			if err := revokeRecallEvidenceEntryTx(
+				ctx,
+				tx,
+				group.key.entryID,
+				sessionID,
+				recallEvidenceRevocationContentDigestMismatch,
 			); err != nil {
 				return err
 			}
@@ -696,10 +767,7 @@ func uniqueRecallEvidenceOrdinalTx(
 ) (int, error) {
 	var count int
 	var ordinal sql.NullInt64
-	if err := tx.QueryRowContext(ctx, `
-		SELECT COUNT(*), MIN(ordinal)
-		FROM messages
-		WHERE session_id = ? AND source_uuid = ?`,
+	if err := tx.QueryRowContext(ctx, recallEvidenceOrdinalBySourceUUIDSQL,
 		sessionID,
 		sourceUUID,
 	).Scan(&count, &ordinal); err != nil {
@@ -719,18 +787,37 @@ func revokeRecallEvidenceEntryTx(
 	ctx context.Context,
 	tx *sql.Tx,
 	entryID string,
+	sessionID string,
+	reason recallEvidenceRevocationReason,
 ) error {
-	if _, err := tx.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 		UPDATE recall_entries
 		SET provenance_ok = 0,
 		    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		WHERE id = ? AND provenance_ok != 0`,
+		WHERE id = ? AND provenance_ok = 1`,
 		entryID,
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf(
 			"revoking recall evidence provenance for %s: %w",
 			entryID,
 			err,
+		)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf(
+			"checking recall evidence provenance revocation for %s: %w",
+			entryID,
+			err,
+		)
+	}
+	if affected == 1 {
+		log.Printf(
+			"recall: revoked provenance entry=%s session=%s reason=%s",
+			entryID,
+			sessionID,
+			reason,
 		)
 	}
 	return nil
