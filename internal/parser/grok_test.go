@@ -73,6 +73,9 @@ func TestGrokProviderSummarySource(t *testing.T) {
 	assert.Equal(t, 321, session.TotalOutputTokens)
 	assert.Equal(t, 4096, session.PeakContextTokens)
 	assert.Equal(t, filepath.Clean(grokSummaryPath(root, "cwd-key", "sess-1")), filepath.Clean(session.File.Path))
+	require.Len(t, outcome.Results[0].Result.Messages, 1)
+	assert.Equal(t, RoleUser, outcome.Results[0].Result.Messages[0].Role)
+	assert.Equal(t, "Investigate the failing Grok session import", outcome.Results[0].Result.Messages[0].Content)
 }
 
 func TestGrokProviderFindSource(t *testing.T) {
@@ -120,6 +123,9 @@ func TestGrokProviderFirstPromptKeepsSessionVisibleWithoutNumMessages(t *testing
 	session := outcome.Results[0].Result.Session
 	assert.Equal(t, 1, session.MessageCount)
 	assert.Equal(t, 1, session.UserMessageCount)
+	require.Len(t, outcome.Results[0].Result.Messages, 1)
+	assert.Equal(t, RoleUser, outcome.Results[0].Result.Messages[0].Role)
+	assert.Equal(t, "Locate the Grok source", outcome.Results[0].Result.Messages[0].Content)
 }
 
 func TestGrokProviderFingerprintTracksSessionFiles(t *testing.T) {

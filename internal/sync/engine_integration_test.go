@@ -327,6 +327,22 @@ func TestGrokSummaryCountsSurviveSync(t *testing.T) {
 	require.NotNil(t, sess)
 	assert.Equal(t, 6, sess.MessageCount)
 	assert.Equal(t, 1, sess.UserMessageCount)
+
+	promptSearch, err := database.Search(context.Background(), db.SearchFilter{
+		Query: "resume the build",
+		Limit: 5,
+	})
+	require.NoError(t, err)
+	require.Len(t, promptSearch.Results, 1)
+	assert.Equal(t, "grok:sess-1", promptSearch.Results[0].SessionID)
+
+	nameSearch, err := database.Search(context.Background(), db.SearchFilter{
+		Query: "Preserve Grok counts",
+		Limit: 5,
+	})
+	require.NoError(t, err)
+	require.Len(t, nameSearch.Results, 1)
+	assert.Equal(t, "grok:sess-1", nameSearch.Results[0].SessionID)
 }
 
 type openCodeFamilySQLiteCase struct {

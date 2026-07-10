@@ -65,6 +65,14 @@ func ParseGrokSummary(
 		userMessageCount = 1
 	}
 	messageCount := max(summary.NumMessages, userMessageCount)
+	var messages []ParsedMessage
+	if firstPrompt != "" {
+		messages = []ParsedMessage{{
+			Role:      "user",
+			Content:   firstPrompt,
+			Timestamp: startedAt,
+		}}
+	}
 	result := ParseResult{
 		Session: ParsedSession{
 			ID:                 "grok:" + rawID,
@@ -90,6 +98,7 @@ func ParseGrokSummary(
 				Mtime: info.ModTime().UnixNano(),
 			},
 		},
+		Messages: messages,
 	}
 	if signals.TotalOutputTokens > 0 {
 		result.Session.TotalOutputTokens = signals.TotalOutputTokens
