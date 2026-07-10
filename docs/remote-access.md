@@ -428,6 +428,7 @@ Changes that affect bind or auth behavior may require a server restart.
 | Flag                | Default     | Description                                         |
 | ------------------- | ----------- | --------------------------------------------------- |
 | `--host`            | `127.0.0.1` | Interface to bind                                   |
+| `--require-auth`    | `false`     | Require a bearer token for API requests             |
 | `--public-url`      |             | Public URL for hostname or proxy access             |
 | `--public-origin`   |             | Trusted browser origin (repeatable/comma-separated) |
 | `--proxy`           |             | Managed proxy mode (`caddy`)                        |
@@ -460,6 +461,7 @@ allowed_subnets = ["192.168.1.0/24"]
 
 | Field                   | Description                                                                |
 | ----------------------- | -------------------------------------------------------------------------- |
+| `host`                  | Server bind interface; non-loopback values require `require_auth = true`   |
 | `require_auth`          | Require bearer-token authentication for API access                         |
 | `auth_token`            | Auto-generated 256-bit bearer token; overridden by `AGENTSVIEW_AUTH_TOKEN` |
 | `public_url`            | Public URL for host/origin validation                                      |
