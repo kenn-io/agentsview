@@ -51,6 +51,19 @@ describe("ReadProgressStore", () => {
     expect(store.hasUnread("one", 11)).toBe(true);
   });
 
+  it("acknowledges backend total growth for hidden-only sessions", () => {
+    const store = new ReadProgressStore();
+    store.baseline("one", -1, 0, 2);
+    store.baseline("one", -1, 0, 3);
+
+    expect(store.get("one")).toEqual({
+      ordinal: -1,
+      messageCount: 0,
+      totalMessageCount: 3,
+    });
+    expect(store.hasUnread("one", 3)).toBe(false);
+  });
+
   it("reconciles stale markers when visible progress sees a smaller total", () => {
     const store = new ReadProgressStore();
     store.baseline("one", 99, 100, 100);

@@ -113,7 +113,12 @@ export class ReadProgressStore {
     const marker = this.markers[sessionId];
     if (marker) {
       const acknowledged = marker.totalMessageCount ?? marker.messageCount;
+      const hiddenOnlyGrowth = ordinal === -1 &&
+        count === 0 &&
+        totalMessageCount !== undefined &&
+        totalMessageCount > acknowledged;
       if (
+        !hiddenOnlyGrowth &&
         ordinal >= marker.ordinal &&
         (totalMessageCount === undefined || totalMessageCount >= acknowledged)
       ) {
