@@ -166,6 +166,10 @@ jobs:
         env:
           CGO_ENABLED: "1"
 
+      - name: Run eval-ingest build-tag tests
+        if: runner.os == 'Linux'
+        run: make test-evalingest
+
       - name: Run Go tests (race detector)
         if: runner.os == 'Linux'
         run: |
