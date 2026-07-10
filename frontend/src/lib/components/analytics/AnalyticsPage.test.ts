@@ -145,7 +145,7 @@ describe("AnalyticsPage refresh behavior", () => {
     expect(yokedDates.range).toBeNull();
   });
 
-  it("seeds bare Sessions analytics from an enabled rolling range", async () => {
+  it("advances a restored rolling seed to the current day", async () => {
     const analyticsFetchStates: Array<{
       isPinned: boolean;
       windowDays: number;
@@ -193,25 +193,33 @@ describe("AnalyticsPage refresh behavior", () => {
       mode: "rolling",
       windowDays: 30,
     });
+    vi.setSystemTime(new Date("2026-06-21T12:00:00"));
 
     component = mount(AnalyticsPage, { target: document.body });
     await flushEffects();
 
     expect(analytics.isPinned).toBe(false);
     expect(analytics.windowDays).toBe(30);
-    expect(analytics.from).toBe("2026-05-22");
-    expect(analytics.to).toBe("2026-06-20");
+    expect(analytics.from).toBe("2026-05-23");
+    expect(analytics.to).toBe("2026-06-21");
+    expect(sessions.filters.dateFrom).toBe("2026-05-23");
+    expect(sessions.filters.dateTo).toBe("2026-06-21");
+    expect(router.params).toMatchObject({
+      window_days: "30",
+      date_from: "2026-05-23",
+      date_to: "2026-06-21",
+    });
     expect(analyticsFetchStates[0]).toEqual({
       isPinned: false,
       windowDays: 30,
-      from: "2026-05-22",
-      to: "2026-06-20",
+      from: "2026-05-23",
+      to: "2026-06-21",
     });
     expect(sessionLoadStates[0]).toEqual({
       isPinned: false,
       windowDays: 30,
-      from: "2026-05-22",
-      to: "2026-06-20",
+      from: "2026-05-23",
+      to: "2026-06-21",
     });
   });
 

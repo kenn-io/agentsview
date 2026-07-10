@@ -36,6 +36,7 @@
     yokedDates,
     panelDateState,
     panelStateToRange,
+    rangeToPanelDate,
     rangeToSessionParams,
     sessionParamsToPanelDate,
     type PanelDateState,
@@ -452,10 +453,7 @@
             ? null
             : analyticsPageDates.restoreWithIntent("sessions");
           state = seed
-            ? panelDateState(seed.from, seed.to, {
-                mode: seed.mode,
-                windowDays: seed.windowDays,
-              })
+            ? rangeToPanelDate(seed)
             : retained?.state ?? null;
           sessionDateIntentEstablished = seed !== null ||
             retained?.explicitDateIntent === true;
