@@ -157,7 +157,25 @@ draining fsnotify while busy, retains pending paths, and schedules or dispatches
 them when the worker reports completion. Stop cancels the timer, discards
 pending paths, closes the worker input, and waits for an in-flight callback.
 
-- [ ] **Step 6: Configure production for 500 ms batching and a five-second
+- [ ] **Step 6: Replace obsolete white-box watcher tests**
+
+Rewrite tests that directly mutate `w.pending`, replace `w.now`, read
+`w.debounce`, or call `w.flush()`. In particular, replace the existing pending
+flush/stop, remove-and-rename, and debounce-logic tests with public
+filesystem-event tests that assert:
+
+- remove and rename paths arrive in the callback payload;
+- a pending one-shot timer is canceled by `Stop` without a post-stop callback;
+- `Stop` waits for at most the already-running callback and never dispatches a
+  second batch; and
+- repeated events are coalesced and dispatched by the observable timing
+  contract.
+
+Do not retain production-only compatibility fields or methods solely for old
+tests. Keep direct inspection only for the fsnotify watch list, which is the
+existing integration boundary for recursive-watch coverage.
+
+- [ ] **Step 7: Configure production for 500 ms batching and a five-second
   floor**
 
 In `cmd/agentsview/main.go`, replace `watcherDebounce` with:
@@ -169,7 +187,7 @@ watcherSyncMinInterval = 5 * time.Second
 
 Construct the watcher through `NewWatcherWithInterval`.
 
-- [ ] **Step 7: Run watcher tests and race coverage**
+- [ ] **Step 8: Run watcher tests and race coverage**
 
 Run:
 
@@ -180,7 +198,7 @@ CGO_ENABLED=1 go test -race -tags fts5 ./internal/sync -run TestWatcher -count=1
 
 Expected: PASS with no race reports.
 
-- [ ] **Step 8: Commit the watcher change**
+- [ ] **Step 9: Commit the watcher change**
 
 Use `@kenn:commit` and commit only the three watcher files:
 
