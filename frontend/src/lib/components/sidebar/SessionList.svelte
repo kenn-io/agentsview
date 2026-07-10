@@ -1,8 +1,12 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import { m } from "../../i18n/index.js";
-  import { sessions } from "../../stores/sessions.svelte.js";
+  import {
+    sessions,
+    type SessionGroupInput,
+  } from "../../stores/sessions.svelte.js";
   import { starred } from "../../stores/starred.svelte.js";
+  import { readProgress } from "../../stores/read-progress.svelte.js";
   import SessionItem from "./SessionItem.svelte";
   import SessionFilterControl from "../filters/SessionFilterControl.svelte";
   import {
@@ -27,6 +31,7 @@
     computeTotalSize,
     findStart,
     isSubagentDescendant,
+    isTeammateDescendant,
     selectPrimaryId,
   } from "./session-list-utils.js";
 
@@ -203,6 +208,21 @@
     return item.group?.sessions.find(
       (s) => s.id === item.group!.primarySessionId,
     ) ?? item.group?.sessions[0];
+  }
+
+  function hasUnread(entries: SessionGroupInput[]): boolean {
+    return entries.some((entry) =>
+      readProgress.hasUnread(entry.id, entry.message_count),
+    );
+  }
+
+  function childSessions(
+    group: NonNullable<DisplayItem["group"]>,
+    predicate: (entry: SessionGroupInput) => boolean,
+  ): SessionGroupInput[] {
+    return group.sessions.filter((entry) =>
+      entry.id !== group.primarySessionId && predicate(entry),
+    );
   }
 
   function needsVisibleHydration(item: DisplayItem): boolean {
@@ -574,6 +594,7 @@
         style="position: absolute; top: 0; left: 0; width: 100%; height: {item.height}px; transform: translateY({item.top}px);"
       >
         {#if item.type === "header"}
+          {@const section = groupSections.find((entry) => entry.label === item.label)}
           <button
             class="group-header"
             onclick={() => toggleGroup(item.label)}
@@ -595,10 +616,14 @@
             {/if}
             <span class="group-name">{item.label}</span>
             <span class="group-count">{item.count}</span>
+            {#if section && hasUnread(section.groups.flatMap((group) => group.sessions))}
+              <span class="group-unread-indicator" aria-label="Unread messages"></span>
+            {/if}
           </button>
         {:else if item.type === "subagent-group" && item.group}
           {@const subKey = `subagent:${item.group.key}`}
           {@const subExpanded = expandedGroups.has(subKey)}
+          {@const subagents = childSessions(item.group, (entry) => isSubagentDescendant(entry, item.group!.sessions))}
           <button
             class="sub-group-header"
             style:padding-left="{8 + (item.depth ?? 1) * 16}px"
@@ -614,10 +639,14 @@
             <UserRoundIcon class="sub-group-icon" size="10" strokeWidth="2" aria-hidden="true" />
             <span class="sub-group-label">{m.sidebar_subagents()}</span>
             <span class="sub-group-count">({item.count})</span>
+            {#if hasUnread(subagents)}
+              <span class="group-unread-indicator" aria-label="Unread messages"></span>
+            {/if}
           </button>
         {:else if item.type === "team-group" && item.group}
           {@const teamKey = `team:${item.group.key}`}
           {@const teamExpanded = expandedGroups.has(teamKey)}
+          {@const teammates = childSessions(item.group, (entry) => isTeammateDescendant(entry, item.group!.sessions))}
           <button
             class="sub-group-header"
             style:padding-left="{8 + (item.depth ?? 1) * 16}px"
@@ -633,6 +662,9 @@
             <UsersRoundIcon class="sub-group-icon" size="12" strokeWidth="2" aria-hidden="true" />
             <span class="sub-group-label">{m.sidebar_team()}</span>
             <span class="sub-group-count">({item.count})</span>
+            {#if hasUnread(teammates)}
+              <span class="group-unread-indicator" aria-label="Unread messages"></span>
+            {/if}
           </button>
         {:else if item.isChild && item.session}
           <SessionItem
@@ -864,6 +896,14 @@
     padding: 0 5px;
     border-radius: 8px;
     line-height: 16px;
+  }
+
+  .group-unread-indicator {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--accent-blue);
   }
 
   /* Sub-group headers (Subagents, Team) at depth 1 */

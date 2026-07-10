@@ -195,6 +195,32 @@
     }
   }
 
+  function observeMessage(node: HTMLElement, ordinal: number | undefined) {
+    const sessionId = messages.sessionId;
+    if (!sessionId || ordinal === undefined) return {};
+    const record = () => readProgress.recordVisible(
+      sessionId,
+      ordinal,
+      messages.messageCount,
+    );
+    if (typeof IntersectionObserver === "undefined") {
+      const root = node.closest(".message-list-scroll");
+      const rect = node.getBoundingClientRect();
+      const rootRect = root?.getBoundingClientRect();
+      if (rootRect && rect.bottom > rootRect.top && rect.top < rootRect.bottom) {
+        record();
+      }
+      return {};
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      record();
+      observer.disconnect();
+    }, { root: node.closest(".message-list-scroll") });
+    observer.observe(node);
+    return { destroy: () => observer.disconnect() };
+  }
+
   // Recompute visible timestamp when minimap opens or
   // message content changes (e.g. SSE reload).
   $effect(() => {
@@ -611,6 +637,7 @@
             data-index={row.index}
             style="position: absolute; top: 0; left: 0; width: 100%; transform: translateY({row.start}px);"
             use:measureElement={virtualizer.instance}
+            use:observeMessage={item.kind === "message" ? item.message.ordinal : undefined}
             onclick={() => {
               const sel = window.getSelection();
               if (sel && sel.toString().length > 0) return;

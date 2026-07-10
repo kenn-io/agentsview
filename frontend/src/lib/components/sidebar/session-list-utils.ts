@@ -157,6 +157,13 @@ function isTeammate(
   return false;
 }
 
+export function isTeammateDescendant(
+  session: SessionGroupInput,
+  groupSessions: SessionGroupInput[],
+): boolean {
+  return isTeammate(session, groupSessions);
+}
+
 /**
  * Check if a session is a subagent (has relationship_type === "subagent").
  * Continuation/fork sessions are NOT subagents.

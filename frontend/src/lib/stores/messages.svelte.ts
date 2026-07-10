@@ -461,6 +461,7 @@ class MessagesStore {
       const oldCount = this.messageCount;
       if (newCount === oldCount) {
         await this.refreshLoadedWindow(id, signal);
+        if (this.sessionId === id) this.initialLoadSucceeded = true;
         return;
       }
 
@@ -477,6 +478,7 @@ class MessagesStore {
         }
 
         this.messageCount = newCount;
+        this.initialLoadSucceeded = true;
         return;
       }
 
@@ -540,6 +542,7 @@ class MessagesStore {
           messageCountHint,
         );
       }
+      this.initialLoadSucceeded = true;
     } finally {
       if (this.sessionId === id) {
         this.loading = false;

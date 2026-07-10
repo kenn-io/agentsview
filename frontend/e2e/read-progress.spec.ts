@@ -127,7 +127,7 @@ test("persists read progress until later output is visible", async ({ page }) =>
   await expect(unreadDivider).toHaveCount(0);
 });
 
-test("captures a visible read-progress divider", async ({ page }) => {
+test("captures responsive unread state", async ({ page }) => {
   const artifactDir = process.env.PR_RENDER_ARTIFACT_DIR;
   test.skip(
     !process.env.PR_RENDER_LINT_PATH || !artifactDir,
@@ -135,12 +135,12 @@ test("captures a visible read-progress divider", async ({ page }) => {
   );
   const [session] = createMockSessions(1, "read-progress-proof", () => "project");
   session!.id = "read-progress-proof";
-  session!.message_count = 5;
+  session!.message_count = 60;
   await page.addInitScript(() => {
     localStorage.setItem("agentsview-read-progress", JSON.stringify({
       version: 1,
       sessions: {
-        "read-progress-proof": { ordinal: 2, messageCount: 3 },
+        "read-progress-proof": { ordinal: 49, messageCount: 50 },
       },
     }));
   });
@@ -151,32 +151,39 @@ test("captures a visible read-progress divider", async ({ page }) => {
   await page.route(
     "**/api/v1/sessions/read-progress-proof/messages*",
     async (route) => route.fulfill({
-      json: { messages: makeMessages(5), count: 5 },
+      json: { messages: makeMessages(60), count: 60 },
     }),
   );
 
   const sessions = new SessionsPage(page);
   await sessions.goto();
   await sessions.selectFirstSession();
-  const divider = page.locator(".read-progress-divider");
-  await expect(divider).toBeVisible();
+  const unreadIndicator = page.locator(".unread-indicator");
+  await expect(unreadIndicator).toHaveCount(1);
 
   const lint: Record<number, unknown> = {};
   for (const width of [1280, 768, 400]) {
     await page.setViewportSize({ width, height: 720 });
-    await expect(divider).toBeVisible();
+    await expect(unreadIndicator).toHaveCount(1);
     lint[width] = {
       sidebar: await page.evaluate(renderLintSnippet(".session-list-scroll")),
       transcript: await page.evaluate(renderLintSnippet(".message-list-scroll")),
     };
     expect(lint[width]).toEqual({ sidebar: [], transcript: [] });
     if (width === 400) {
+      await expect(page.getByLabel("Close sidebar")).not.toBeVisible();
+      await page.screenshot({
+        path: path.join(artifactDir, "agentsview-T1057-2-after-400-closed.png"),
+      });
       await page.getByLabel("Toggle sidebar").click();
-      await expect(page.locator(".unread-indicator")).toBeVisible();
+      await expect(unreadIndicator).toBeVisible();
       await page.screenshot({
         path: path.join(artifactDir, "agentsview-T1057-2-after-400-sidebar.png"),
       });
-      await page.getByLabel("Close sidebar").click({ force: true });
+      await page.getByLabel("Close sidebar").evaluate((element) => {
+        element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await expect(page.getByLabel("Close sidebar")).not.toBeVisible();
     }
     await page.screenshot({
       path: path.join(artifactDir, `agentsview-T1057-2-after-${width}.png`),

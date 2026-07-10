@@ -63,12 +63,14 @@
     sortNewestFirst ? [...messages].reverse() : messages,
   );
 
-  function isBoundary(ordinal: number): boolean {
-    if (readMarker === null) return false;
-    return sortNewestFirst
-      ? ordinal <= readMarker
-      : ordinal > readMarker;
-  }
+  let dividerOrdinal = $derived.by(() => {
+    if (readMarker === null) return null;
+    return displayMessages.find((message) =>
+      sortNewestFirst
+        ? message.ordinal <= readMarker
+        : message.ordinal > readMarker,
+    )?.ordinal ?? null;
+  });
 
   function observeMessage(node: HTMLElement, ordinal: number) {
     if (!onMessageVisible || typeof IntersectionObserver === "undefined") {
@@ -176,7 +178,7 @@
       {@const calls = message.tool_calls ?? []}
       {@const turn = turnByMessage.get(message.id)}
       <div use:observeMessage={message.ordinal}>
-      {#if isBoundary(message.ordinal)}
+      {#if dividerOrdinal === message.ordinal}
         <div class="read-progress-divider" role="separator" aria-label="Read progress boundary">
           {sortNewestFirst ? "Earlier messages" : "New messages"}
         </div>

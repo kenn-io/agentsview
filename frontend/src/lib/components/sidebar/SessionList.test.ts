@@ -15,12 +15,13 @@ import sessionItemSource from "./SessionItem.svelte?raw";
 import { sessions } from "../../stores/sessions.svelte.js";
 import type { Session } from "../../api/types.js";
 import { starred } from "../../stores/starred.svelte.js";
-import { m, setLocale } from "../../i18n/index.js";
+  import { m, setLocale } from "../../i18n/index.js";
 import {
   ITEM_HEIGHT,
   OVERSCAN,
   STORAGE_KEY_GROUP,
 } from "./session-list-utils.js";
+  import { readProgress } from "../../stores/read-progress.svelte.js";
 
 vi.mock("../../api/client.js", () => ({
   listSessions: vi.fn().mockResolvedValue({
@@ -91,6 +92,7 @@ describe("SessionList filter dropdown", () => {
     starred.ids = new Set();
     setLocale("en");
     localStorage.clear();
+    localStorage.removeItem(STORAGE_KEY_GROUP);
     readProgress.clear("read-session");
     readProgress.clear("neighbouring-session");
     readProgress.clear("group-root");
@@ -111,6 +113,7 @@ describe("SessionList filter dropdown", () => {
     clientHeightSpy?.mockRestore();
     rafSpy?.mockRestore();
     vi.restoreAllMocks();
+    localStorage.removeItem(STORAGE_KEY_GROUP);
     readProgress.clear("read-session");
     readProgress.clear("neighbouring-session");
     readProgress.clear("group-root");
@@ -858,6 +861,24 @@ describe("SessionList visible hydration", () => {
     expect(
       document.querySelector('[data-session-id="group-root"] .unread-indicator'),
     ).not.toBeNull();
+  });
+
+  it("shows unread state on a collapsed project group", async () => {
+    localStorage.setItem(STORAGE_KEY_GROUP, "project");
+    sessions.sessions = [
+      makeSession({
+        id: "group-root",
+        display_name: "Root",
+        message_count: 5,
+      }),
+    ];
+    readProgress.baseline("group-root", 2, 3);
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    expect(document.querySelector(".group-header .group-unread-indicator")).not.toBeNull();
   });
 });
 

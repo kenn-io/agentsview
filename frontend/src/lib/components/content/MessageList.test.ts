@@ -273,4 +273,43 @@ describe("MessageList read progress", () => {
 
     expect(readProgress.get("s1")).toEqual({ ordinal: 3, messageCount: 4 });
   });
+
+  it("records a normal row when its observer reports it visible", async () => {
+    const originalObserver = globalThis.IntersectionObserver;
+    const callbacks: IntersectionObserverCallback[] = [];
+    class ObserverMock {
+      constructor(callback: IntersectionObserverCallback) {
+        callbacks.push(callback);
+      }
+
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+      takeRecords() { return []; }
+      root = null;
+      rootMargin = "0px";
+      thresholds = [];
+    }
+    Object.defineProperty(globalThis, "IntersectionObserver", {
+      configurable: true,
+      writable: true,
+      value: ObserverMock,
+    });
+    try {
+      component = mount(MessageList, { target: document.body });
+      await tick();
+
+      callbacks[3]!([
+        { isIntersecting: true } as IntersectionObserverEntry,
+      ], {} as IntersectionObserver);
+
+      expect(readProgress.get("s1")).toEqual({ ordinal: 4, messageCount: 5 });
+    } finally {
+      Object.defineProperty(globalThis, "IntersectionObserver", {
+        configurable: true,
+        writable: true,
+        value: originalObserver,
+      });
+    }
+  });
 });

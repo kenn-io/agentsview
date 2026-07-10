@@ -154,6 +154,22 @@ describe('MessagesStore', () => {
     expect(messages.initialLoadSucceeded).toBe(true);
   });
 
+  it('marks a recovered reload as an initial-load success', async () => {
+      vi.mocked(api.getSession).mockResolvedValue(makeSession('s1', 1));
+      vi.mocked(api.getMessages).mockRejectedValue(new Error('offline'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await messages.loadSession('s1');
+    expect(messages.initialLoadSucceeded).toBe(false);
+
+      vi.mocked(api.getMessages).mockResolvedValue(
+        makeMessagesResponse([makeMessage(0)]),
+      );
+    await messages.reload();
+
+    expect(messages.initialLoadSucceeded).toBe(true);
+  });
+
   it('should clear reload state when loading a new session', async () => {
     await setupSession('s1', 10);
     expect(messages.sessionId).toBe('s1');
