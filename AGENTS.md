@@ -10,10 +10,11 @@ Instructions for autonomous coding agents working in this repository.
 
 ## Roborev
 
-- Never manually invoke `roborev review` in any form unless the user explicitly
-  asks for it. Never invoke a roborev skill (including `roborev-fix` or
-  `roborev-design-review-branch`) unless the user explicitly asks for that
-  skill.
+- Never invoke the `roborev review` CLI command in any form unless the user
+  explicitly asks for it. Use all other `roborev` CLI commands normally when
+  they are appropriate for interacting with roborev. Never invoke a roborev
+  skill (including `roborev-fix` or `roborev-design-review-branch`) unless the
+  user explicitly asks for that skill.
 
 ## Required Git Rules
 
