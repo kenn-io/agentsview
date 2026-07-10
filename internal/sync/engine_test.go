@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -2158,6 +2159,100 @@ func TestProcessCodexAppendedStaleProjectCarriesForceReplace(t *testing.T) {
 	assert.Equal(t, "agentsview", res.results[0].Session.Project)
 	assert.True(t, res.forceReplace,
 		"fallback-triggering appended data must replace existing messages")
+}
+
+type incrementalRequestRecorder struct {
+	parser.ProviderBase
+	request parser.IncrementalRequest
+}
+
+func (p *incrementalRequestRecorder) Parse(
+	context.Context,
+	parser.ParseRequest,
+) (parser.ParseOutcome, error) {
+	return parser.ParseOutcome{}, errors.New("unexpected full parse")
+}
+
+func (p *incrementalRequestRecorder) ParseIncremental(
+	_ context.Context,
+	req parser.IncrementalRequest,
+) (parser.IncrementalOutcome, parser.IncrementalStatus, error) {
+	p.request = req
+	return parser.IncrementalOutcome{
+		SessionID:     req.SessionID,
+		ConsumedBytes: 3,
+	}, parser.IncrementalApplied, nil
+}
+
+func TestTryProviderIncrementalAppendPassesPersistedSessionID(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	path := filepath.Join(
+		root, "rollout-2024-01-01T00-00-00-abc.jsonl",
+	)
+	require.NoError(t, os.WriteFile(path, []byte("{}\n{}\n"), 0o600))
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+
+	const persistedID = "remote~codex:abc"
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID:               persistedID,
+		Project:          "project",
+		Machine:          "remote",
+		Agent:            string(parser.AgentCodex),
+		FirstMessage:     strPtr("hello"),
+		MessageCount:     1,
+		UserMessageCount: 1,
+		FilePath:         strPtr(path),
+		FileSize:         int64Ptr(3),
+		FileMtime:        int64Ptr(info.ModTime().UnixNano()),
+		NextOrdinal:      1,
+	}))
+	require.NoError(t, database.SetSessionDataVersion(
+		persistedID, db.CurrentDataVersion(),
+	))
+	require.NoError(t, database.InsertMessages([]db.Message{{
+		SessionID: persistedID,
+		Ordinal:   0,
+		Role:      "user",
+		Content:   "hello",
+	}}))
+
+	provider := &incrementalRequestRecorder{ProviderBase: parser.ProviderBase{
+		Def: parser.AgentDef{
+			Type:     parser.AgentCodex,
+			IDPrefix: "codex:",
+		},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			IncrementalAppend: parser.CapabilitySupported,
+		}},
+	}}
+	e := &Engine{
+		db:       database,
+		idPrefix: "remote~",
+	}
+	source := parser.SourceRef{
+		Provider:       parser.AgentCodex,
+		DisplayPath:    path,
+		FingerprintKey: path,
+	}
+	result, applied := e.tryProviderIncrementalAppend(
+		context.Background(),
+		provider,
+		source,
+		parser.DiscoveredFile{Agent: parser.AgentCodex, Path: path},
+		parser.SourceFingerprint{
+			Key:     path,
+			Size:    info.Size(),
+			MTimeNS: info.ModTime().UnixNano(),
+		},
+	)
+
+	require.True(t, applied)
+	require.NotNil(t, result.incremental)
+	assert.Equal(t, persistedID, provider.request.SessionID,
+		"provider continuation identity must come from the persisted row")
+	assert.Equal(t, persistedID, result.incremental.sessionID)
 }
 
 func TestCollectAndBatchPrefixesParserExcludedIDs(t *testing.T) {

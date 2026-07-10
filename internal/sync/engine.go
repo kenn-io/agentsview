@@ -3635,6 +3635,7 @@ type incrementalUpdate struct {
 	cwd                  string
 	msgs                 []parser.ParsedMessage
 	endedAt              time.Time
+	terminationStatus    *string
 	msgCount             int // total (old + new)
 	userMsgCount         int // total (old + new)
 	fileSize             int64
@@ -4128,7 +4129,7 @@ func (e *Engine) processProviderFile(
 		forceReplace:          outcome.ForceReplace || incForceReplace,
 		suppressPresenceSweep: !outcome.ResultSetComplete,
 	}
-	// Incremental-append providers (Claude) need the stored file
+	// Incremental-append providers (Claude and Codex) need the stored file
 	// identity so a later sync can detect an atomic file replacement
 	// (new inode/device) and fall back to a full parse instead of
 	// appending on top of stale state. Match the legacy process arm,
@@ -4854,6 +4855,9 @@ func (e *Engine) providerSingleSessionFresh(
 	// append-only incremental path. Its source stem is the session ID,
 	// so DB freshness can be checked by that ID even though a DAG fork
 	// can later split the file into several sessions.
+	if provider.Definition().Type != parser.AgentClaude {
+		return 0, false, false
+	}
 	if provider.Capabilities().Source.IncrementalAppend !=
 		parser.CapabilitySupported {
 		return 0, false, false
@@ -5001,11 +5005,11 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 }
 
 // stampProviderFileIdentity copies the source file's inode and device onto
-// every parsed result for an incremental-append provider (Claude). The
-// legacy process arm stamped this identity from the source stat so the
-// incremental path can later detect an atomic file replacement and fall
-// back to a full parse. Providers whose source is not a single physical
-// file, or that do not support incremental append, are left untouched.
+// every parsed result for an incremental-append provider. The legacy Claude
+// process arm stamped this identity from the source stat so the incremental
+// path can later detect an atomic file replacement and fall back to a full
+// parse; Codex uses the same guard. Providers whose source is not a single
+// physical file, or that do not support incremental append, are left untouched.
 func (e *Engine) stampProviderFileIdentity(
 	provider parser.Provider,
 	source parser.SourceRef,
@@ -5032,7 +5036,7 @@ func (e *Engine) stampProviderFileIdentity(
 
 // tryProviderIncrementalAppend reproduces the legacy incremental-append
 // sync path for a provider-authoritative agent that supports append-only
-// incremental parsing (Claude). The provider owns the byte-offset parse
+// incremental parsing (Claude or Codex). The provider owns the byte-offset parse
 // via ParseIncremental, but the engine still owns the DB-aware
 // bookkeeping (session lookup, data-version and identity guards, ordinal
 // resume, cross-sync split detection, and cumulative counters), so this
@@ -5061,20 +5065,31 @@ func (e *Engine) tryProviderIncrementalAppend(
 	if path == "" {
 		return processResult{}, false
 	}
+	if provider.Definition().Type == parser.AgentCodex &&
+		(file.ForceParse ||
+			e.codexIndexSessionNameChanged(path) ||
+			e.pathNeedsProjectReparse(path)) {
+		// Codex incremental parsing intentionally preserves head-derived
+		// metadata. A manual refresh, title change, or stale project needs the
+		// authoritative full parse, and forceReplace prevents the later DB skip
+		// gates from swallowing that refresh.
+		return processResult{forceReplace: true}, false
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return processResult{}, false
 	}
 
 	parseFn := func(
-		_ string, offset int64, startOrdinal int, lastEntryUUID string,
-	) ([]parser.ParsedMessage, time.Time, int64, error) {
+		_ string, sessionID string, offset int64,
+		startOrdinal int, lastEntryUUID string,
+	) ([]parser.ParsedMessage, time.Time, int64, *string, error) {
 		outcome, status, perr := provider.ParseIncremental(
 			ctx,
 			parser.IncrementalRequest{
 				Source:        source,
 				Fingerprint:   fingerprint,
-				SessionID:     e.idPrefix + claudeSessionIDFromPath(path),
+				SessionID:     sessionID,
 				Offset:        offset,
 				StartOrdinal:  startOrdinal,
 				Machine:       e.machine,
@@ -5082,25 +5097,30 @@ func (e *Engine) tryProviderIncrementalAppend(
 			},
 		)
 		if perr != nil {
-			return nil, time.Time{}, 0, perr
+			return nil, time.Time{}, 0, nil, perr
 		}
 		switch status {
 		case parser.IncrementalNeedsFullParse:
 			if outcome.ForceReplace {
 				// Signal the shared helper to fall back to a
 				// full parse that replaces stored messages.
-				return nil, time.Time{}, 0,
+				return nil, time.Time{}, 0, nil,
 					parser.ErrClaudeIncrementalNeedsFullParse
 			}
 			// A plain full-parse fallback (e.g. DAG detected):
 			// return a non-fallback error so the helper runs a
 			// normal full parse without forceReplace.
-			return nil, time.Time{}, 0, parser.ErrDAGDetected
+			return nil, time.Time{}, 0, nil, parser.ErrDAGDetected
 		case parser.IncrementalNoNewData:
-			return nil, time.Time{}, 0, nil
+			return nil, time.Time{}, 0, nil, nil
 		default:
+			var terminationStatus *string
+			if outcome.TerminationStatus != nil {
+				status := string(*outcome.TerminationStatus)
+				terminationStatus = &status
+			}
 			return outcome.Messages, outcome.EndedAt,
-				outcome.ConsumedBytes, nil
+				outcome.ConsumedBytes, terminationStatus, nil
 		}
 	}
 
@@ -5109,13 +5129,14 @@ func (e *Engine) tryProviderIncrementalAppend(
 
 // incrementalParseFunc reads new JSONL lines from a file
 // starting at the given byte offset with the given starting
-// ordinal. Returns parsed messages, the latest timestamp
-// (endedAt), bytes consumed (relative to offset), and any
-// error. The consumed count covers only complete, valid JSON
-// lines so it can be used as a safe resume offset.
+// ordinal and persisted session ID. Returns parsed messages, the latest
+// timestamp (endedAt), bytes consumed (relative to offset), an optional
+// authoritative termination status, and any error. The consumed count covers
+// only complete, valid JSON lines so it can be used as a safe resume offset.
 type incrementalParseFunc func(
-	path string, offset int64, startOrdinal int, lastEntryUUID string,
-) ([]parser.ParsedMessage, time.Time, int64, error)
+	path string, sessionID string, offset int64,
+	startOrdinal int, lastEntryUUID string,
+) ([]parser.ParsedMessage, time.Time, int64, *string, error)
 
 // tryIncrementalJSONL attempts an incremental parse of an
 // append-only JSONL file by reading only bytes appended since
@@ -5211,6 +5232,12 @@ func (e *Engine) tryIncrementalJSONL(
 		return processResult{forceReplace: true}, false
 	}
 	if currentSize == inc.FileSize {
+		if agent == parser.AgentCodex {
+			// Codex's composite mtime can change when session_index.jsonl does,
+			// even though the transcript has no new bytes. Let the later Codex
+			// fingerprint/title check decide whether to skip or full-parse.
+			return processResult{}, false
+		}
 		log.Printf(
 			"incremental %s %s: file size unchanged at %d but changed since last sync, full parse",
 			agent, file.Path, currentSize,
@@ -5232,8 +5259,8 @@ func (e *Engine) tryIncrementalJSONL(
 		incMtime = parser.CodexEffectiveMtime(file.Path, incMtime)
 	}
 
-	newMsgs, endedAt, consumed, err := parseFn(
-		file.Path, inc.FileSize, inc.NextOrdinal, inc.LastEntryUUID,
+	newMsgs, endedAt, consumed, terminationStatus, err := parseFn(
+		file.Path, inc.ID, inc.FileSize, inc.NextOrdinal, inc.LastEntryUUID,
 	)
 	if err != nil {
 		if parser.IsIncrementalFullParseFallback(err) {
@@ -5287,6 +5314,7 @@ func (e *Engine) tryIncrementalJSONL(
 					machine:              inc.Machine,
 					cwd:                  inc.Cwd,
 					endedAt:              endedAt,
+					terminationStatus:    terminationStatus,
 					msgCount:             inc.MsgCount,
 					userMsgCount:         inc.UserMsgCount,
 					fileSize:             newOffset,
@@ -5370,6 +5398,7 @@ func (e *Engine) tryIncrementalJSONL(
 			cwd:                  inc.Cwd,
 			msgs:                 newMsgs,
 			endedAt:              endedAt,
+			terminationStatus:    terminationStatus,
 			msgCount:             inc.MsgCount + len(newMsgs),
 			userMsgCount:         inc.UserMsgCount + newUserCount,
 			fileSize:             newOffset,
@@ -7333,6 +7362,7 @@ func (e *Engine) writeIncremental(
 		dbMsgs,
 		db.IncrementalSessionUpdate{
 			EndedAt:              endedAt,
+			TerminationStatus:    inc.terminationStatus,
 			MsgCount:             msgCount,
 			UserMsgCount:         userMsgCount,
 			FileSize:             inc.fileSize,
