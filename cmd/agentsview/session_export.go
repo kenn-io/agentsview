@@ -61,6 +61,15 @@ func newSessionExportCommand() *cobra.Command {
 					"session not in local archive: %s", args[0],
 				)
 			}
+			session, err := d.GetSession(cmd.Context(), id)
+			if err != nil {
+				return err
+			}
+			if session == nil {
+				return fmt.Errorf(
+					"session not in local archive: %s", args[0],
+				)
+			}
 			storedPath := d.GetSessionFilePath(id)
 			if storedPath == "" {
 				return fmt.Errorf(
@@ -132,6 +141,21 @@ func newSessionExportCommand() *cobra.Command {
 				if errors.Is(err, os.ErrNotExist) {
 					return fmt.Errorf(
 						"source file not found: %s", dbPath,
+					)
+				}
+				return err
+			}
+			if session.Agent == string(parser.AgentHermes) &&
+				session.SourceVersion == "hermes-state-db" &&
+				session.SourceSessionID != "" {
+				err := parser.WriteHermesSessionJSONL(
+					cmd.OutOrStdout(),
+					cfg.AgentDirs[parser.AgentHermes],
+					session.SourceSessionID,
+				)
+				if errors.Is(err, os.ErrNotExist) {
+					return fmt.Errorf(
+						"source file not found for session %s", id,
 					)
 				}
 				return err

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -947,6 +948,95 @@ func TestSessionExport_StreamsFromDisk(t *testing.T) {
 		"session", "export", "s-1")
 	require.NoError(t, err)
 	assert.Equal(t, body, out)
+}
+
+func createHermesExportStateDB(t *testing.T, root string) string {
+	t.Helper()
+	sessionsDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+
+	dbPath := filepath.Join(root, "state.db")
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+
+	_, err = conn.Exec(`
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			source TEXT NOT NULL,
+			model TEXT,
+			parent_session_id TEXT,
+			started_at REAL NOT NULL,
+			ended_at REAL,
+			message_count INTEGER DEFAULT 0,
+			input_tokens INTEGER DEFAULT 0,
+			output_tokens INTEGER DEFAULT 0,
+			cache_read_tokens INTEGER DEFAULT 0,
+			cache_write_tokens INTEGER DEFAULT 0,
+			reasoning_tokens INTEGER DEFAULT 0,
+			estimated_cost_usd REAL,
+			actual_cost_usd REAL,
+			cost_status TEXT,
+			cost_source TEXT,
+			title TEXT,
+			api_call_count INTEGER DEFAULT 0
+		);
+		CREATE TABLE messages (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			session_id TEXT NOT NULL,
+			role TEXT NOT NULL,
+			content TEXT,
+			tool_call_id TEXT,
+			tool_calls TEXT,
+			timestamp REAL NOT NULL,
+			finish_reason TEXT,
+			reasoning TEXT,
+			reasoning_content TEXT,
+			reasoning_details TEXT,
+			codex_reasoning_items TEXT,
+			codex_message_items TEXT
+		);
+		INSERT INTO sessions (
+			id, source, model, started_at, ended_at, message_count, title
+		) VALUES
+			('child', 'profile', 'gpt-5.4', 1778767200.0, 1778767800.0, 1, 'Child Session'),
+			('sibling', 'profile', 'gpt-5.4', 1778767200.0, 1778767800.0, 1, 'Sibling Session');
+		INSERT INTO messages (
+			session_id, role, content, timestamp
+		) VALUES
+			('child', 'user', 'target hermes message', 1778767210.0),
+			('sibling', 'user', 'sibling hermes message', 1778767211.0);
+	`)
+	require.NoError(t, err)
+	return dbPath
+}
+
+func TestSessionExportHermesStateDB(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+
+	root := t.TempDir()
+	dbPath := createHermesExportStateDB(t, root)
+	t.Setenv("HERMES_SESSIONS_DIR", filepath.Join(root, "sessions"))
+
+	seedSessionWithOpts(t, dataDir, "hermes:child", "proj",
+		func(s *db.Session) {
+			s.Agent = string(parser.AgentHermes)
+			s.SourceSessionID = "child"
+			s.SourceVersion = "hermes-state-db"
+			s.FilePath = &dbPath
+		})
+
+	out, err := executeCommand(newRootCommand(),
+		"session", "export", "hermes:child")
+	require.NoError(t, err)
+	assert.NotContains(t, out, "SQLite format 3")
+	assert.Contains(t, out, `"role":"session_meta"`)
+	assert.Contains(t, out, "target hermes message")
+	assert.NotContains(t, out, "sibling hermes message")
+
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
+		assert.JSONEq(t, line, line)
+	}
 }
 
 func TestSessionExport_AiderVirtualPathStreamsOnlySelectedRun(t *testing.T) {

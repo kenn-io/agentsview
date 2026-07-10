@@ -79,6 +79,49 @@ func (p *hermesProvider) Fingerprint(
 	return p.sources.Fingerprint(ctx, source)
 }
 
+func WriteHermesSessionJSONL(
+	w io.Writer, roots []string, rawSessionID string,
+) error {
+	provider, ok := NewProvider(AgentHermes, ProviderConfig{Roots: roots})
+	if !ok {
+		return fmt.Errorf("hermes provider unavailable")
+	}
+	hp, ok := provider.(*hermesProvider)
+	if !ok {
+		return fmt.Errorf("hermes provider unavailable")
+	}
+	source, found, err := hp.FindSource(
+		context.Background(),
+		FindSourceRequest{RawSessionID: rawSessionID},
+	)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf(
+			"hermes session %s source not found: %w",
+			rawSessionID, os.ErrNotExist,
+		)
+	}
+	path, ok := hp.sources.pathFromSource(source)
+	if !ok {
+		return fmt.Errorf("hermes source path unavailable")
+	}
+	if filepath.Base(path) == "state.db" {
+		return writeHermesStateSessionJSONL(w, path, rawSessionID)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("open %s: %w", path, os.ErrNotExist)
+		}
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+	_, err = io.Copy(w, f)
+	return err
+}
+
 func (p *hermesProvider) Parse(
 	ctx context.Context,
 	req ParseRequest,

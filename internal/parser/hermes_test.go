@@ -249,6 +249,94 @@ func TestParseHermesArchive_FallsBackToTranscriptsWhenStateDBUnreadable(
 	assert.Empty(t, res.UsageEvents)
 }
 
+func TestWriteHermesSessionJSONL_UsesMatchingProfileStateDB(t *testing.T) {
+	defaultRoot := t.TempDir()
+	defaultSessions := filepath.Join(defaultRoot, "sessions")
+	require.NoError(t, os.MkdirAll(defaultSessions, 0o755))
+	createHermesStateDB(t, defaultRoot)
+
+	defaultDB, err := sql.Open("sqlite3", filepath.Join(defaultRoot, "state.db"))
+	require.NoError(t, err)
+	defer func() { _ = defaultDB.Close() }()
+	_, err = defaultDB.Exec(`
+		DELETE FROM messages;
+		DELETE FROM sessions;
+		INSERT INTO sessions (
+			id, source, model, started_at, ended_at, message_count, title
+		) VALUES (
+			'default-only', 'default', 'gpt-default',
+			1778767200.0, 1778767800.0, 1, 'Default Session'
+		);
+		INSERT INTO messages (
+			session_id, role, content, timestamp
+		) VALUES (
+			'default-only', 'user', 'wrong root message', 1778767210.0
+		);
+	`)
+	require.NoError(t, err)
+
+	profileRoot := t.TempDir()
+	profileSessions := filepath.Join(profileRoot, "sessions")
+	require.NoError(t, os.MkdirAll(profileSessions, 0o755))
+	createHermesStateDB(t, profileRoot)
+
+	profileDB, err := sql.Open("sqlite3", filepath.Join(profileRoot, "state.db"))
+	require.NoError(t, err)
+	defer func() { _ = profileDB.Close() }()
+	_, err = profileDB.Exec(`
+		INSERT INTO sessions (
+			id, source, model, started_at, ended_at, message_count, title
+		) VALUES (
+			'sibling', 'profile', 'gpt-sibling',
+			1778767200.0, 1778767800.0, 1, 'Sibling Session'
+		);
+		INSERT INTO messages (
+			session_id, role, content, timestamp
+		) VALUES (
+			'sibling', 'user', 'sibling message', 1778767211.0
+		);
+	`)
+	require.NoError(t, err)
+
+	var buf strings.Builder
+	require.NoError(t, WriteHermesSessionJSONL(
+		&buf, []string{defaultSessions, profileSessions}, "child",
+	))
+
+	out := buf.String()
+	assert.NotContains(t, out, "SQLite format 3")
+	assert.Contains(t, out, `"role":"session_meta"`)
+	assert.Contains(t, out, "state db only has one message")
+	assert.NotContains(t, out, "wrong root message")
+	assert.NotContains(t, out, "sibling message")
+
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
+		assert.JSONEq(t, line, line)
+	}
+}
+
+func TestWriteHermesSessionJSONL_TranscriptSourceCopiesFile(t *testing.T) {
+	root := t.TempDir()
+	sessionsDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+	body := strings.Join([]string{
+		`{"role":"session_meta","model":"gpt-4","timestamp":"2026-04-03T15:27:00Z"}`,
+		`{"role":"user","content":"hello from transcript","timestamp":"2026-04-03T15:28:00Z"}`,
+		"",
+	}, "\n")
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sessionsDir, "child.jsonl"),
+		[]byte(body),
+		0o644,
+	))
+
+	var buf strings.Builder
+	require.NoError(t, WriteHermesSessionJSONL(
+		&buf, []string{sessionsDir}, "child",
+	))
+	assert.Equal(t, body, buf.String())
+}
+
 func TestParseHermesArchive_UsesStateMessagesWhenJSONLIsLowerQuality(
 	t *testing.T,
 ) {
