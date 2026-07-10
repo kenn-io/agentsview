@@ -142,7 +142,7 @@ func TestDaemonWaitForLaunchContentionRejectsIncompatibleResponsiveWriter(t *tes
 	waitDeps.loadReadOnlyConfig = func() (config.Config, error) {
 		return config.Config{DataDir: dir}, nil
 	}
-	waitDeps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) {
+	waitDeps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
 		return []daemon.RuntimeRecord{rec}, nil
 	}
 
@@ -174,7 +174,7 @@ func TestDaemonWaitForLaunchContentionRejectsCompatibleUnresponsiveWriter(t *tes
 	waitDeps.loadReadOnlyConfig = func() (config.Config, error) {
 		return config.Config{DataDir: dir}, nil
 	}
-	waitDeps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) {
+	waitDeps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
 		return []daemon.RuntimeRecord{rec}, nil
 	}
 
@@ -211,7 +211,7 @@ func TestDaemonStopRevalidatesIdentityBeforeEverySignal(t *testing.T) {
 		testWritableRecord(202, "/runtime/202.json"),
 		testWritableRecord(203, "/runtime/203.json"),
 	}
-	deps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) { return records, nil }
+	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) { return records, nil }
 	identityChanged := false
 	var confirmations, signalled []int
 	deps.stopTargetConfirmed = func(rec daemon.RuntimeRecord, _ string) bool {
@@ -238,7 +238,7 @@ func TestDaemonStopRevalidatesIdentityBeforeEverySignal(t *testing.T) {
 func TestDaemonStopRevalidationFailureBeforeFirstSignalSaysAborted(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
 	rec := testWritableRecord(204, "/runtime/204.json")
-	deps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) {
+	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
 		return []daemon.RuntimeRecord{rec}, nil
 	}
 	confirmations := 0
@@ -282,7 +282,7 @@ func TestDaemonRestartSlowReadinessIsNotReportedSuccessful(t *testing.T) {
 		t.Run(fmt.Sprintf("was-running-%t", wasRunning), func(t *testing.T) {
 			deps, out := daemonCommandTestDeps(t)
 			if wasRunning {
-				deps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) {
+				deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
 					return []daemon.RuntimeRecord{testWritableRecord(302, "/runtime/302.json")}, nil
 				}
 			}
@@ -307,7 +307,7 @@ func TestDaemonCanonicalCleanupFailureStopsRestart(t *testing.T) {
 	for _, command := range []string{"stop", "restart"} {
 		t.Run(command, func(t *testing.T) {
 			deps, out := daemonCommandTestDeps(t)
-			deps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) {
+			deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
 				return []daemon.RuntimeRecord{testWritableRecord(401, "/runtime/401.json")}, nil
 			}
 			deps.stopCaddy = func(w io.Writer, rec daemon.RuntimeRecord) error {
@@ -332,7 +332,7 @@ func TestDaemonCanonicalCleanupFailureStopsRestart(t *testing.T) {
 
 func TestDaemonStatusReportsIncompatibleAndNotResponding(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
-	deps.statusRecords = func(string) ([]daemon.RuntimeRecord, error) {
+	deps.statusRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
 		rec := testWritableRecord(501, "/runtime/501.json")
 		rec.Metadata[runtimeAPIVersion] = "0"
 		return []daemon.RuntimeRecord{rec}, nil
@@ -384,7 +384,7 @@ func TestDaemonMutationRejectsLoadedDataDirMismatch(t *testing.T) {
 				}, nil
 			}
 			discoveries, signals, starts := 0, 0, 0
-			deps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) {
+			deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
 				discoveries++
 				return nil, nil
 			}

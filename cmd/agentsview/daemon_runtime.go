@@ -430,8 +430,10 @@ type daemonRuntimeRecordStore interface {
 
 // writableDaemonRecords returns every live writable agentsview runtime record.
 // It does not probe the daemon, so callers can recover or stop a hung process.
-func writableDaemonRecords(dataDir string) ([]daemon.RuntimeRecord, error) {
-	migrateLegacyDaemonRuntimes(dataDir)
+func writableDaemonRecords(
+	dataDir string, authToken string,
+) ([]daemon.RuntimeRecord, error) {
+	migrateLegacyDaemonRuntimes(dataDir, authToken)
 	return writableDaemonRecordsFromStore(runtimeStore(dataDir))
 }
 

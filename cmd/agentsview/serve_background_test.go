@@ -482,6 +482,38 @@ func TestStartServeBackgroundRejectsMultipleWritableDaemons(t *testing.T) {
 	assert.Nil(t, result.Runtime)
 }
 
+func TestStartServeBackgroundCountsAuthenticatedLegacyWriterForUniqueness(
+	t *testing.T,
+) {
+	requirePOSIXSignals(t, "requires a long-lived child process")
+	dir := runtimeTestDir(t)
+	setTestVersion(t, "1.0.0")
+	const token = "uniqueness-secret"
+	_, legacyPath := writeAuthenticatedProbeableLegacyRuntime(
+		t, dir, token, legacyStateFile{Version: "1.0.0"},
+	)
+	secondPID := startSleepProcess(t)
+	_, err := writeRuntimeRecordForTest(dir, daemonRuntimeRecord(
+		"127.0.0.1", 9102, withRuntimePID(secondPID),
+	))
+	require.NoError(t, err)
+
+	result, err := startServeBackground(
+		config.Config{DataDir: dir, AuthToken: token},
+		[]string{"serve", "--background"},
+		serveReplacementOptions{},
+		backgroundLaunchPolicy{ConfigOnly: true, Operation: "daemon start"},
+	)
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "multiple writable agentsview daemons")
+	assert.ErrorContains(t, err, strconv.Itoa(os.Getpid()))
+	assert.ErrorContains(t, err, strconv.Itoa(secondPID))
+	assert.False(t, result.Started)
+	assert.Nil(t, result.Runtime)
+	assertPathRemoved(t, legacyPath, "authenticated legacy state should migrate")
+}
+
 func TestStartServeBackgroundValidatesConfigBeforeReplacementStop(t *testing.T) {
 	dir := runtimeTestDir(t)
 	host, port := testPingServer(t)

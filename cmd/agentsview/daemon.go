@@ -34,7 +34,7 @@ type daemonLaunchObservation struct {
 type daemonLaunchWaitDeps struct {
 	acquireLaunchLock  func(string) (*flock.Flock, bool, error)
 	loadReadOnlyConfig func() (config.Config, error)
-	writableRecords    func(string) ([]daemon.RuntimeRecord, error)
+	writableRecords    func(string, string) ([]daemon.RuntimeRecord, error)
 	confirmed          func(daemon.RuntimeRecord, string) bool
 	probe              func(daemon.RuntimeRecord, string) bool
 	isStarting         func(string) bool
@@ -69,8 +69,8 @@ type daemonCommandDeps struct {
 	loadReadOnlyConfig         func() (config.Config, error)
 	acquireLaunchLockWithError func(string) (daemonLaunchLock, bool, error)
 	waitContendedLaunch        func(string) daemonLaunchObservation
-	writableRecords            func(string) ([]daemon.RuntimeRecord, error)
-	statusRecords              func(string) ([]daemon.RuntimeRecord, error)
+	writableRecords            func(string, string) ([]daemon.RuntimeRecord, error)
+	statusRecords              func(string, string) ([]daemon.RuntimeRecord, error)
 	isStarting                 func(string) bool
 	readStartupState           func(string) *startupState
 	startBackground            func(config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error)
@@ -277,7 +277,7 @@ func waitForDaemonLaunchContentionWithDeps(
 				_ = lock.Unlock()
 				return daemonLaunchObservation{Err: dataDirErr}
 			}
-			records, recordsErr := deps.writableRecords(dataDir)
+			records, recordsErr := deps.writableRecords(dataDir, cfg.AuthToken)
 			if recordsErr != nil {
 				_ = lock.Unlock()
 				return daemonLaunchObservation{Err: recordsErr}
@@ -431,7 +431,7 @@ func runDaemonStatus(w io.Writer, deps daemonCommandDeps) error {
 	if err != nil {
 		return fmt.Errorf("daemon status: loading config: %w", err)
 	}
-	records, err := deps.statusRecords(cfg.DataDir)
+	records, err := deps.statusRecords(cfg.DataDir, cfg.AuthToken)
 	if err != nil {
 		return fmt.Errorf("daemon status: inspecting runtime store: %w", err)
 	}
@@ -523,7 +523,7 @@ func runDaemonStop(w io.Writer, deps daemonCommandDeps) error {
 	if deps.isStarting(cfg.DataDir) {
 		return daemonPersistentStartupError("daemon stop", cfg.DataDir, deps.readStartupState(cfg.DataDir), deps.now())
 	}
-	records, err := deps.writableRecords(cfg.DataDir)
+	records, err := deps.writableRecords(cfg.DataDir, cfg.AuthToken)
 	if err != nil {
 		return fmt.Errorf("daemon stop: inspecting runtime store: %w", err)
 	}
@@ -568,7 +568,7 @@ func runDaemonRestart(w io.Writer, deps daemonCommandDeps) error {
 	if err := deps.checkDataVersion(cfg.DBPath); err != nil {
 		return fmt.Errorf("daemon restart: checking data version: %w", err)
 	}
-	records, err := deps.writableRecords(cfg.DataDir)
+	records, err := deps.writableRecords(cfg.DataDir, cfg.AuthToken)
 	if err != nil {
 		return fmt.Errorf("daemon restart: inspecting runtime store: %w", err)
 	}
@@ -612,8 +612,10 @@ func runDaemonRestart(w io.Writer, deps daemonCommandDeps) error {
 	return nil
 }
 
-func daemonStatusRecords(dataDir string) ([]daemon.RuntimeRecord, error) {
-	migrateLegacyDaemonRuntimes(dataDir)
+func daemonStatusRecords(
+	dataDir string, authToken string,
+) ([]daemon.RuntimeRecord, error) {
+	migrateLegacyDaemonRuntimes(dataDir, authToken)
 	store := runtimeStore(dataDir)
 	if _, err := store.CleanupDead(); err != nil {
 		return nil, fmt.Errorf("clean dead daemon runtime records: %w", err)

@@ -45,8 +45,8 @@ func daemonCommandTestDeps(t *testing.T) (*daemonCommandDeps, *bytes.Buffer) {
 	deps.acquireLaunchLockWithError = func(string) (daemonLaunchLock, bool, error) {
 		return &testDaemonLaunchLock{}, true, nil
 	}
-	deps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) { return nil, nil }
-	deps.statusRecords = func(string) ([]daemon.RuntimeRecord, error) { return nil, nil }
+	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) { return nil, nil }
+	deps.statusRecords = func(string, string) ([]daemon.RuntimeRecord, error) { return nil, nil }
 	deps.isStarting = func(string) bool { return false }
 	deps.readStartupState = func(string) *startupState { return nil }
 	deps.startBackground = func(
@@ -296,14 +296,14 @@ func TestDaemonStatusRendersStoppedStartingReadOnlyAndIncompatible(t *testing.T)
 			}
 		}, wanted: []string{"starting", "pid:     9", "phase:   sync", "/tmp/log"}},
 		{name: "read only", setup: func(d *daemonCommandDeps) {
-			d.statusRecords = func(string) ([]daemon.RuntimeRecord, error) {
+			d.statusRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
 				rec := testWritableRecord(10, "/runtime/10.json")
 				rec.Metadata[runtimeReadOnly] = "true"
 				return []daemon.RuntimeRecord{rec}, nil
 			}
 		}, wanted: []string{"No agentsview daemon is running."}, unwanted: []string{"running at", "mode:    read-only"}},
 		{name: "incompatible", setup: func(d *daemonCommandDeps) {
-			d.statusRecords = func(string) ([]daemon.RuntimeRecord, error) {
+			d.statusRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
 				rec := testWritableRecord(11, "/runtime/11.json")
 				rec.Metadata[runtimeAPIVersion] = "0"
 				return []daemon.RuntimeRecord{rec}, nil
@@ -311,7 +311,7 @@ func TestDaemonStatusRendersStoppedStartingReadOnlyAndIncompatible(t *testing.T)
 			d.probeRecord = func(daemon.RuntimeRecord, string) bool { return true }
 		}, wanted: []string{"incompatible", "pid:     11", "API version"}},
 		{name: "running", setup: func(d *daemonCommandDeps) {
-			d.statusRecords = func(string) ([]daemon.RuntimeRecord, error) {
+			d.statusRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
 				return []daemon.RuntimeRecord{testWritableRecord(12, "/runtime/12.json")}, nil
 			}
 			d.probeRecord = func(daemon.RuntimeRecord, string) bool { return true }
@@ -381,7 +381,7 @@ func TestDaemonStartContentionHeldStartLockWinsOverPreexistingRecord(t *testing.
 
 func TestDaemonStatusListsEveryWriterAndSurfacesInspectionErrors(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
-	deps.statusRecords = func(string) ([]daemon.RuntimeRecord, error) {
+	deps.statusRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
 		return []daemon.RuntimeRecord{
 			testWritableRecord(31, "/runtime/31.json"),
 			testWritableRecord(32, "/runtime/32.json"),
@@ -393,7 +393,7 @@ func TestDaemonStatusListsEveryWriterAndSurfacesInspectionErrors(t *testing.T) {
 	assert.Contains(t, out.String(), "pid:     32")
 
 	out.Reset()
-	deps.statusRecords = func(string) ([]daemon.RuntimeRecord, error) { return nil, errors.New("store unavailable") }
+	deps.statusRecords = func(string, string) ([]daemon.RuntimeRecord, error) { return nil, errors.New("store unavailable") }
 	err := executeDaemonCommand(t, *deps, out, "status")
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "store unavailable")
@@ -406,7 +406,7 @@ func TestDaemonStatusListsEveryWriterAndSurfacesInspectionErrors(t *testing.T) {
 
 func TestDaemonStatusNotRespondingIsUseful(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
-	deps.statusRecords = func(string) ([]daemon.RuntimeRecord, error) {
+	deps.statusRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
 		return []daemon.RuntimeRecord{testWritableRecord(55, "/runtime/55.json")}, nil
 	}
 	deps.probeRecord = func(daemon.RuntimeRecord, string) bool { return false }
@@ -416,13 +416,60 @@ func TestDaemonStatusNotRespondingIsUseful(t *testing.T) {
 	assert.Contains(t, out.String(), "/runtime/55.json")
 }
 
+func TestDaemonStatusDiscoversAuthenticatedLegacyDaemon(t *testing.T) {
+	dir := runtimeTestDir(t)
+	const token = "status-secret"
+	endpoint, legacyPath := writeAuthenticatedProbeableLegacyRuntime(
+		t, dir, token, legacyStateFile{Version: version},
+	)
+	deps, out := daemonCommandTestDeps(t)
+	deps.loadReadOnlyConfig = func() (config.Config, error) {
+		return config.Config{DataDir: dir, AuthToken: token}, nil
+	}
+	deps.statusRecords = daemonStatusRecords
+
+	require.NoError(t, executeDaemonCommand(t, *deps, out, "status"))
+	assert.Contains(t, out.String(), "running at")
+	assert.Contains(t, out.String(), fmt.Sprintf("pid:     %d", os.Getpid()))
+	assert.Contains(t, out.String(), fmt.Sprintf(":%d", endpoint.Port))
+	assertPathRemoved(t, legacyPath, "authenticated legacy state should migrate")
+}
+
+func TestDaemonStopDiscoversAuthenticatedLegacyDaemon(t *testing.T) {
+	dir := runtimeTestDir(t)
+	const token = "stop-secret"
+	_, legacyPath := writeAuthenticatedProbeableLegacyRuntime(
+		t, dir, token, legacyStateFile{Version: version},
+	)
+	deps, out := daemonCommandTestDeps(t)
+	deps.resolveDataDir = func() (string, error) { return dir, nil }
+	deps.mkdirAll = func(path string, _ os.FileMode) error {
+		assert.Equal(t, dir, path)
+		return nil
+	}
+	deps.loadConfig = func() (config.Config, error) {
+		return config.Config{DataDir: dir, AuthToken: token}, nil
+	}
+	deps.writableRecords = writableDaemonRecords
+	var stopped []int
+	deps.stopProcess = func(rec daemon.RuntimeRecord, _ time.Duration) error {
+		stopped = append(stopped, rec.PID)
+		return nil
+	}
+
+	require.NoError(t, executeDaemonCommand(t, *deps, out, "stop"))
+	assert.Equal(t, []int{os.Getpid()}, stopped)
+	assert.Contains(t, out.String(), fmt.Sprintf("pid %d", os.Getpid()))
+	assertPathRemoved(t, legacyPath, "authenticated legacy state should migrate")
+}
+
 func TestDaemonStopPrevalidatesEveryWriterBeforeSignalling(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
 	records := []daemon.RuntimeRecord{
 		testWritableRecord(61, "/runtime/61.json"),
 		testWritableRecord(62, "/runtime/62.json"),
 	}
-	deps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) { return records, nil }
+	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) { return records, nil }
 	var prevalidated []int
 	deps.stopTargetConfirmed = func(rec daemon.RuntimeRecord, _ string) bool {
 		prevalidated = append(prevalidated, rec.PID)
@@ -458,7 +505,7 @@ func TestDaemonStopStartingConfigFailureAndContentionSignalNobody(t *testing.T) 
 		{name: "start lock with confirmed record", setup: func(d *daemonCommandDeps) {
 			d.isStarting = func(string) bool { return true }
 			d.readStartupState = func(string) *startupState { return &startupState{PID: 71, LogPath: "/tmp/serve.log"} }
-			d.writableRecords = func(string) ([]daemon.RuntimeRecord, error) {
+			d.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
 				return []daemon.RuntimeRecord{testWritableRecord(72, "/runtime/72.json")}, nil
 			}
 		}, want: "startup is still in progress"},
@@ -483,7 +530,7 @@ func TestDaemonStopMultipleWritersAndRepeatIsIdempotent(t *testing.T) {
 		testWritableRecord(81, "/runtime/81.json"),
 		testWritableRecord(82, "/runtime/82.json"),
 	}
-	deps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) { return records, nil }
+	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) { return records, nil }
 	var stopped, caddy []int
 	deps.stopProcess = func(rec daemon.RuntimeRecord, _ time.Duration) error { stopped = append(stopped, rec.PID); return nil }
 	deps.stopCaddy = func(_ io.Writer, rec daemon.RuntimeRecord) error {
@@ -512,7 +559,7 @@ func TestDaemonRestartValidatesBeforeStoppingAndUsesFreshConfig(t *testing.T) {
 	}
 	rec := testWritableRecord(91, "/runtime/91.json")
 	rec.Metadata[runtimeNoSync] = "true"
-	deps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) { return []daemon.RuntimeRecord{rec}, nil }
+	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) { return []daemon.RuntimeRecord{rec}, nil }
 	var order []string
 	deps.loadConfig = func() (config.Config, error) {
 		order = append(order, "config")
@@ -657,7 +704,7 @@ func TestDaemonRestartFailurePathsSignalNobody(t *testing.T) {
 			d.readStartupState = func(string) *startupState { return &startupState{PID: 111, LogPath: "/tmp/log"} }
 		}, want: "startup is still in progress"},
 		{name: "unconfirmed", setup: func(d *daemonCommandDeps) {
-			d.writableRecords = func(string) ([]daemon.RuntimeRecord, error) {
+			d.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
 				return []daemon.RuntimeRecord{testWritableRecord(112, "/runtime/112.json")}, nil
 			}
 			d.stopTargetConfirmed = func(daemon.RuntimeRecord, string) bool { return false }
@@ -715,7 +762,7 @@ func TestDaemonRestartInvalidServeConfigDoesNotStopOrStart(t *testing.T) {
 			}
 			deps.loadConfig = func() (config.Config, error) { return tt.cfg, nil }
 			deps.validateConfig = validateServeConfig
-			deps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) {
+			deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
 				return []daemon.RuntimeRecord{testWritableRecord(121, "/runtime/121.json")}, nil
 			}
 			dataChecks, signals, starts := 0, 0, 0
@@ -745,7 +792,7 @@ func TestDaemonRestartChildFailureIncludesLogAndHeldLock(t *testing.T) {
 		lockAcquisitions++
 		return lock, true, nil
 	}
-	deps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) {
+	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
 		return []daemon.RuntimeRecord{testWritableRecord(131, "/runtime/131.json")}, nil
 	}
 	var order []string

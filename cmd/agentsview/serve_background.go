@@ -216,7 +216,7 @@ func startServeBackground(
 			fmt.Println("Auth enabled. Token is configured.")
 		}
 	}
-	if err := validateUniqueWritableDaemonSet(cfg.DataDir); err != nil {
+	if err := validateUniqueWritableDaemonSet(cfg.DataDir, cfg.AuthToken); err != nil {
 		return result, fmt.Errorf("%s: %w", operation, err)
 	}
 
@@ -344,8 +344,8 @@ func startServeBackground(
 	return result, nil
 }
 
-func validateUniqueWritableDaemonSet(dataDir string) error {
-	records, err := writableDaemonRecords(dataDir)
+func validateUniqueWritableDaemonSet(dataDir, authToken string) error {
+	records, err := writableDaemonRecords(dataDir, authToken)
 	if err != nil {
 		return fmt.Errorf("inspecting writable daemon runtimes: %w", err)
 	}
@@ -364,7 +364,7 @@ func prepareBackgroundReplacement(
 	if cfg == nil {
 		return errors.New("nil replacement config")
 	}
-	if err := validateUniqueWritableDaemonSet(cfg.DataDir); err != nil {
+	if err := validateUniqueWritableDaemonSet(cfg.DataDir, cfg.AuthToken); err != nil {
 		return err
 	}
 	if err := checkBackgroundReplacementDataVersion(cfg); err != nil {
@@ -458,7 +458,7 @@ func ensureBackgroundServe(
 	if err := ensureServeAuthToken(cfg); err != nil {
 		return nil, fmt.Errorf("generating auth token: %w", err)
 	}
-	if err := validateUniqueWritableDaemonSet(cfg.DataDir); err != nil {
+	if err := validateUniqueWritableDaemonSet(cfg.DataDir, cfg.AuthToken); err != nil {
 		return nil, err
 	}
 

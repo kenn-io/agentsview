@@ -639,6 +639,26 @@ func writeProbeableLegacyRuntime(
 	return endpoint, writeLegacyRuntimeStateForTest(t, dataDir, state)
 }
 
+func writeAuthenticatedProbeableLegacyRuntime(
+	t *testing.T,
+	dataDir string,
+	token string,
+	state legacyStateFile,
+) (testDaemonEndpoint, string) {
+	t.Helper()
+	endpoint := newAuthenticatedPingDaemon(t, token)
+	if state.PID == 0 {
+		state.PID = os.Getpid()
+	}
+	if state.Host == "" {
+		state.Host = endpoint.Host
+	}
+	if state.Port == 0 {
+		state.Port = endpoint.Port
+	}
+	return endpoint, writeLegacyRuntimeStateForTest(t, dataDir, state)
+}
+
 func rewriteLegacyState(
 	t *testing.T,
 	path string,
@@ -1038,7 +1058,7 @@ func TestWritableDaemonRecordsFiltersAndCleansRuntimeRecords(t *testing.T) {
 			))
 			require.NoError(t, err)
 
-			records, err := writableDaemonRecords(dir)
+			records, err := writableDaemonRecords(dir, "")
 			require.NoError(t, err)
 			require.Len(t, records, tt.wantRecords)
 			if tt.wantRecords > 0 {
@@ -1062,7 +1082,7 @@ func TestWritableDaemonRecordsCleansDeadRecord(t *testing.T) {
 	))
 	require.NoError(t, err)
 
-	records, err := writableDaemonRecords(dir)
+	records, err := writableDaemonRecords(dir, "")
 	require.NoError(t, err)
 	assert.Empty(t, records)
 	assertPathRemoved(t, path, "dead runtime record should be cleaned up")
@@ -1081,7 +1101,7 @@ func TestWritableDaemonRecordsReturnsEveryLiveWritableRecord(t *testing.T) {
 		wantPaths[pid] = path
 	}
 
-	records, err := writableDaemonRecords(dir)
+	records, err := writableDaemonRecords(dir, "")
 	require.NoError(t, err)
 	require.Len(t, records, len(pids))
 	for _, rec := range records {
@@ -1095,7 +1115,7 @@ func TestWritableDaemonRecordsMigratesLegacyRuntime(t *testing.T) {
 	dir := runtimeTestDir(t)
 	endpoint, legacyPath := writeProbeableLegacyRuntime(t, dir, legacyStateFile{})
 
-	records, err := writableDaemonRecords(dir)
+	records, err := writableDaemonRecords(dir, "")
 	require.NoError(t, err)
 	require.Len(t, records, 1)
 	assert.Equal(t, endpoint.Port, daemonRuntimeFromRecord(records[0]).Port)
