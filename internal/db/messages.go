@@ -1801,49 +1801,17 @@ func (db *DB) MessageTokenFingerprint(sessionID string) (string, error) {
 
 	var b strings.Builder
 	for rows.Next() {
-		var ordinal, contextTokens, outputTokens int
-		var model, tokenUsage string
-		var hasContextTokens, hasOutputTokens bool
-		var claudeMsgID, claudeReqID string
-		var srcType, srcSubtype, srcUUID, srcParentUUID string
-		var isSidechain, isCompactBoundary bool
+		var r tokenFingerprintRow
 		if err := rows.Scan(
-			&ordinal, &model, &tokenUsage, &contextTokens,
-			&outputTokens, &hasContextTokens, &hasOutputTokens,
-			&claudeMsgID, &claudeReqID,
-			&srcType, &srcSubtype, &srcUUID, &srcParentUUID,
-			&isSidechain, &isCompactBoundary,
+			&r.ordinal, &r.model, &r.tokenUsage, &r.contextTokens,
+			&r.outputTokens, &r.hasContextTokens, &r.hasOutputTokens,
+			&r.claudeMessageID, &r.claudeRequestID,
+			&r.sourceType, &r.sourceSubtype, &r.sourceUUID,
+			&r.sourceParentUUID, &r.isSidechain, &r.isCompactBoundary,
 		); err != nil {
 			return "", err
 		}
-		// Sanitize before measuring: the PG-readback
-		// fingerprint sees values sanitized at insert time,
-		// so raw values (e.g. NUL bytes from a corrupt parse)
-		// would never match and the fast path would rewrite
-		// the session on every push.
-		model = SanitizeUTF8(model)
-		tokenUsage = SanitizeUTF8(tokenUsage)
-		claudeMsgID = SanitizeUTF8(claudeMsgID)
-		claudeReqID = SanitizeUTF8(claudeReqID)
-		srcType = SanitizeUTF8(srcType)
-		srcSubtype = SanitizeUTF8(srcSubtype)
-		srcUUID = SanitizeUTF8(srcUUID)
-		srcParentUUID = SanitizeUTF8(srcParentUUID)
-		fmt.Fprintf(&b,
-			"%d|%d:%s|%d:%s|%d|%d|%t|%t|%s|%s|"+
-				"%d:%s|%d:%s|%d:%s|%d:%s|%t|%t;",
-			ordinal,
-			len(model), model,
-			len(tokenUsage), tokenUsage,
-			contextTokens, outputTokens,
-			hasContextTokens, hasOutputTokens,
-			claudeMsgID, claudeReqID,
-			len(srcType), srcType,
-			len(srcSubtype), srcSubtype,
-			len(srcUUID), srcUUID,
-			len(srcParentUUID), srcParentUUID,
-			isSidechain, isCompactBoundary,
-		)
+		r.appendTo(&b)
 	}
 	return b.String(), rows.Err()
 }
@@ -1876,8 +1844,7 @@ func (db *DB) MessageContentHashFingerprint(sessionID string) (string, error) {
 		); err != nil {
 			return "", err
 		}
-		sum := sha256.Sum256([]byte(SanitizeUTF8(content)))
-		fmt.Fprintf(&b, "%d|%d|%x;", ordinal, contentLength, sum)
+		appendContentHashFingerprintRow(&b, ordinal, contentLength, content)
 	}
 	return b.String(), rows.Err()
 }
@@ -1928,12 +1895,9 @@ func (db *DB) MessageRoleTimeFingerprintWithTimestampNormalizer(
 		if err := rows.Scan(&ordinal, &role, &timestamp); err != nil {
 			return "", err
 		}
-		role = SanitizeUTF8(role)
-		if normalizeTimestamp != nil {
-			timestamp = normalizeTimestamp(timestamp)
-		}
-		fmt.Fprintf(&b, "%d|%d:%s|%d:%s;",
-			ordinal, len(role), role, len(timestamp), timestamp)
+		appendRoleTimeFingerprintRow(
+			&b, ordinal, role, timestamp, normalizeTimestamp,
+		)
 	}
 	return b.String(), rows.Err()
 }
@@ -1962,17 +1926,14 @@ func (db *DB) MessageFlagsFingerprint(sessionID string) (string, error) {
 
 	var b strings.Builder
 	for rows.Next() {
-		var ordinal int
-		var isSystem, hasThinking, hasToolUse bool
-		var thinkingText string
+		var r flagsFingerprintRow
 		if err := rows.Scan(
-			&ordinal, &isSystem, &hasThinking, &hasToolUse, &thinkingText,
+			&r.ordinal, &r.isSystem, &r.hasThinking, &r.hasToolUse,
+			&r.thinkingText,
 		); err != nil {
 			return "", err
 		}
-		sum := sha256.Sum256([]byte(SanitizeUTF8(thinkingText)))
-		fmt.Fprintf(&b, "%d|%t|%t|%t|%x;",
-			ordinal, isSystem, hasThinking, hasToolUse, sum)
+		r.appendTo(&b)
 	}
 	return b.String(), rows.Err()
 }
@@ -2115,46 +2076,19 @@ func (db *DB) ToolCallFingerprint(sessionID string) (string, error) {
 	defer rows.Close()
 
 	var b strings.Builder
-	lastMessageOrdinal := -1
-	callIndex := 0
+	var indexer toolCallIndexer
 	for rows.Next() {
-		var messageOrdinal, resultContentLength int
-		var toolName, category, toolUseID, inputJSON string
-		var skillName, subagentSessionID, resultContent, filePath string
+		var r toolCallFingerprintRow
 		if err := rows.Scan(
-			&messageOrdinal, &toolName, &category,
-			&toolUseID, &inputJSON, &skillName, &subagentSessionID,
-			&resultContentLength, &resultContent, &filePath,
+			&r.messageOrdinal, &r.toolName, &r.category,
+			&r.toolUseID, &r.inputJSON, &r.skillName,
+			&r.subagentSessionID, &r.resultContentLength,
+			&r.resultContent, &r.filePath,
 		); err != nil {
 			return "", err
 		}
-		if messageOrdinal == lastMessageOrdinal {
-			callIndex++
-		} else {
-			lastMessageOrdinal = messageOrdinal
-			callIndex = 0
-		}
-		toolName = SanitizeUTF8(toolName)
-		category = SanitizeUTF8(category)
-		toolUseID = SanitizeUTF8(toolUseID)
-		inputJSON = SanitizeUTF8(inputJSON)
-		skillName = SanitizeUTF8(skillName)
-		subagentSessionID = SanitizeUTF8(subagentSessionID)
-		resultContent = SanitizeUTF8(resultContent)
-		filePath = SanitizeUTF8(filePath)
-		fmt.Fprintf(&b,
-			"%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%d:%s|%d:%s;",
-			messageOrdinal, callIndex,
-			len(toolName), toolName,
-			len(category), category,
-			len(toolUseID), toolUseID,
-			len(inputJSON), inputJSON,
-			len(skillName), skillName,
-			len(subagentSessionID), subagentSessionID,
-			resultContentLength,
-			len(resultContent), resultContent,
-			len(filePath), filePath,
-		)
+		r.callIndex = indexer.next(sessionID, r.messageOrdinal)
+		r.appendTo(&b)
 	}
 	return b.String(), rows.Err()
 }
@@ -2184,39 +2118,16 @@ func (db *DB) ToolResultEventFingerprintWithTimestampNormalizer(
 
 	var b strings.Builder
 	for rows.Next() {
-		var messageOrdinal, callIndex, eventIndex, contentLength int
-		var toolUseID, agentID, subagentSessionID string
-		var source, status, content, timestamp string
+		var r toolResultEventFingerprintRow
 		if err := rows.Scan(
-			&messageOrdinal, &callIndex, &eventIndex,
-			&toolUseID, &agentID, &subagentSessionID,
-			&source, &status, &content, &contentLength, &timestamp,
+			&r.messageOrdinal, &r.callIndex, &r.eventIndex,
+			&r.toolUseID, &r.agentID, &r.subagentSessionID,
+			&r.source, &r.status, &r.content, &r.contentLength,
+			&r.timestamp,
 		); err != nil {
 			return "", err
 		}
-		if normalizeTimestamp != nil {
-			timestamp = normalizeTimestamp(timestamp)
-		}
-		toolUseID = SanitizeUTF8(toolUseID)
-		agentID = SanitizeUTF8(agentID)
-		subagentSessionID = SanitizeUTF8(subagentSessionID)
-		source = SanitizeUTF8(source)
-		status = SanitizeUTF8(status)
-		content = SanitizeUTF8(content)
-		contentSum := sha256.Sum256([]byte(content))
-		fmt.Fprintf(
-			&b,
-			"%d|%d|%d|%d:%s|%d:%s|%d:%s|%d:%s|%d:%s|%d|%x|%d:%s;",
-			messageOrdinal, callIndex, eventIndex,
-			len(toolUseID), toolUseID,
-			len(agentID), agentID,
-			len(subagentSessionID), subagentSessionID,
-			len(source), source,
-			len(status), status,
-			contentLength,
-			contentSum,
-			len(timestamp), timestamp,
-		)
+		r.appendTo(&b, normalizeTimestamp)
 	}
 	return b.String(), rows.Err()
 }

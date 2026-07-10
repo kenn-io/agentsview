@@ -30,6 +30,16 @@ type Store struct {
 	pricingLoadMu sync.Mutex
 	pricingLoad   *pricingLoad
 	customPricing map[string]config.CustomModelRate
+
+	// vectorMu guards the semantic-search seam. vectorSearcher is the PG
+	// vector searcher wired at pg serve startup when a generation matches
+	// the configured embeddings fingerprint; semanticUnavailableReason is a
+	// human explanation surfaced (wrapped in db.ErrSemanticUnavailable) when
+	// no searcher could be wired (extension missing, no matching generation,
+	// stale build).
+	vectorMu                  sync.RWMutex
+	vectorSearcher            db.VectorSearcher
+	semanticUnavailableReason string
 }
 
 // pgSessionCols is the column list for standard PG session

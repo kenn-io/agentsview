@@ -490,7 +490,10 @@ func directIncompatibleDaemonError(tr transport) error {
 // newPGReadService builds a read-only SessionService over the
 // configured PostgreSQL sync store. It shares the same store
 // construction path as pg serve, but leaves schema repair/migration
-// to pg push/serve because CLI read commands never mutate PG.
+// to pg push/serve because CLI read commands never mutate PG. Like
+// pg serve, it runs the PG vector gate so `session search --pg
+// --semantic|--hybrid` and `mcp --pg` get the same semantic search
+// the SQLite direct path wires via installDirectVectorSearcher.
 func newPGReadService(
 	cfg config.Config, pgCfg config.PGConfig,
 ) (service.SessionService, func(), error) {
@@ -506,5 +509,6 @@ func newPGReadService(
 			priced.SetCustomPricing(cfg.CustomModelPricing)
 		}
 	}
+	wirePGReadVectorSearchFn(cfg, store)
 	return service.NewReadOnlyBackend(store), cleanup, nil
 }

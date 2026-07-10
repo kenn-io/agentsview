@@ -569,6 +569,7 @@ func newPGCommand() *cobra.Command {
 	cmd.AddCommand(newPGPushCommand())
 	cmd.AddCommand(newPGStatusCommand())
 	cmd.AddCommand(newPGServeCommand())
+	cmd.AddCommand(newPGVectorsCommand())
 	cmd.AddCommand(newPGServiceCommand())
 	return cmd
 }
@@ -617,6 +618,7 @@ func newPGPushCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&cfg.Watch, "watch", false, "Run continuously, pushing on change plus a periodic floor")
 	cmd.Flags().DurationVar(&cfg.Debounce, "debounce", defaultWatchDebounce, "Coalesce window after a change before pushing (--watch only)")
 	cmd.Flags().DurationVar(&cfg.Interval, "interval", defaultWatchInterval, "Periodic floor push interval (--watch only)")
+	cmd.Flags().BoolVar(&cfg.NoVectors, "no-vectors", false, "Skip pushing semantic-search vectors")
 	return cmd
 }
 

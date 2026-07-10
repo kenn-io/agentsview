@@ -107,6 +107,23 @@ func TestEmbeddingsRoutesRegisteredWhenManagerNil(t *testing.T) {
 	assert.NotEqual(t, "/", patternWith)
 }
 
+// TestEmbeddingsUnavailableReasonReplacesGeneric501 pins that a recorded
+// unavailability reason (e.g. vector serving disabled at startup because
+// vectors.write.lock was held) reaches the 501 body, so CLI users see why
+// the daemon cannot build and how to recover instead of the generic message.
+func TestEmbeddingsUnavailableReasonReplacesGeneric501(t *testing.T) {
+	reason := "vector serving is disabled for this daemon run: restart the daemon"
+	srv := testServer(t, 0, WithEmbeddingsUnavailableReason(reason))
+
+	w := serveGet(t, srv, "/api/v1/embeddings/status")
+	assertRecorderStatus(t, w, http.StatusNotImplemented)
+	assert.Contains(t, w.Body.String(), reason)
+
+	generic := serveGet(t, newEmbeddingsTestServer(t, nil), "/api/v1/embeddings/status")
+	assertRecorderStatus(t, generic, http.StatusNotImplemented)
+	assert.Contains(t, generic.Body.String(), "embeddings manager not available")
+}
+
 func TestOpenAPIDocumentsEmbeddingsRoutesWithoutManager(t *testing.T) {
 	spec := readOpenAPISpec(t, testServer(t, 0).Handler())
 

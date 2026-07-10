@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"os"
 	"path/filepath"
+	stdsync "sync"
 	"time"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -94,6 +97,72 @@ type daemonArchiveWriteBackend struct {
 	tr     transport
 }
 
+// daemonPushHeartbeatInterval bounds how often the daemon-delegated push
+// prints an elapsed-time line while waiting. A package var so tests can
+// shrink it.
+var daemonPushHeartbeatInterval = 30 * time.Second
+
+// startDaemonPushHeartbeat announces that the push runs inside the daemon
+// and then prints an elapsed-time line every interval until the returned
+// stop func is called. The daemon streams per-session progress once its
+// push loop starts, but the phases before it — the daemon-side local sync
+// and the remote schema migration — produce no progress events, so without
+// a heartbeat a long first push would look hung until the first session
+// lands. The caller stops the heartbeat on the first streamed progress
+// event; stop is idempotent-unsafe, so wrap it (see daemonPushProgress).
+func startDaemonPushHeartbeat(label string) func() {
+	return startDaemonPushHeartbeatTo(os.Stdout, label)
+}
+
+func startDaemonPushHeartbeatTo(w io.Writer, label string) func() {
+	fmt.Fprintf(w, "Pushing to %s via the local daemon...\n", label)
+	start := time.Now()
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		ticker := time.NewTicker(daemonPushHeartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				fmt.Fprintf(w,
+					"still pushing to %s via the daemon (%s elapsed)\n",
+					label, time.Since(start).Round(time.Second),
+				)
+			}
+		}
+	}()
+	return func() {
+		close(done)
+		<-finished
+	}
+}
+
+// daemonPushProgress pairs a running heartbeat with a streamed-progress
+// renderer: the heartbeat covers the daemon-side phases that emit no
+// progress events (local sync, schema migration), and the first streamed
+// event silences it for good so heartbeat lines never interleave with the
+// in-place progress line. The returned finish func stops the heartbeat (if
+// no event ever arrived) and clears the in-place line.
+func daemonPushProgress[P any](
+	label string, render func(P),
+) (onProgress func(P), finish func()) {
+	stop := startDaemonPushHeartbeat(label)
+	var once stdsync.Once
+	stopHeartbeat := func() { once.Do(stop) }
+	onProgress = func(p P) {
+		stopHeartbeat()
+		render(p)
+	}
+	return onProgress, func() {
+		stopHeartbeat()
+		fmt.Print("\r\033[K")
+	}
+}
+
 func (b daemonArchiveWriteBackend) PGPush(
 	ctx context.Context,
 	target pgTargetSelection,
@@ -101,6 +170,10 @@ func (b daemonArchiveWriteBackend) PGPush(
 	projects []string,
 	excludeProjects []string,
 ) (postgres.PushResult, error) {
+	onProgress, finish := daemonPushProgress(
+		"PostgreSQL", newPGPushProgressPrinter(),
+	)
+	defer finish()
 	return postDaemonPush[postgres.PushResult](
 		ctx, b.tr, b.appCfg.AuthToken, "/api/v1/push/pg",
 		daemonPushRequest{
@@ -110,7 +183,9 @@ func (b daemonArchiveWriteBackend) PGPush(
 			PG:                     &target.PG,
 			SyncStateTarget:        target.SyncStateTarget,
 			MigrateLegacySyncState: target.MigrateLegacySyncState,
+			NoVectors:              cfg.NoVectors,
 		},
+		onProgress,
 	)
 }
 
@@ -210,6 +285,15 @@ func (b daemonArchiveWriteBackend) duckDBPush(
 	if syncStateTarget == "" {
 		syncStateTarget = duckdbsync.SyncStateTargetForConfig(duckCfg)
 	}
+	onProgress, finish := daemonPushProgress(
+		"DuckDB", func(p duckdbsync.PushProgress) {
+			fmt.Printf(
+				"\rPushing... %d/%d sessions, %d messages\x1b[K",
+				p.SessionsDone, p.SessionsTotal, p.MessagesDone,
+			)
+		},
+	)
+	defer finish()
 	return postDaemonPush[duckdbsync.PushResult](
 		ctx, b.tr, b.appCfg.AuthToken, "/api/v1/push/duckdb",
 		daemonPushRequest{
@@ -219,6 +303,7 @@ func (b daemonArchiveWriteBackend) duckDBPush(
 			DuckDB:          &duckCfg,
 			SyncStateTarget: syncStateTarget,
 		},
+		onProgress,
 	)
 }
 
@@ -327,7 +412,10 @@ func (b *localArchiveWriteBackend) PGPush(
 	ps, err := postgres.New(
 		target.PG.URL, target.PG.Schema, b.database,
 		target.PG.MachineName, target.PG.AllowInsecure,
-		target.syncOptions(projects, excludeProjects),
+		target.syncOptions(
+			projects, excludeProjects,
+			pgVectorPushSource(b.appCfg, target, cfg),
+		),
 	)
 	if err != nil {
 		return postgres.PushResult{}, err
@@ -348,11 +436,7 @@ func (b *localArchiveWriteBackend) PGPush(
 		time.Since(schemaStart).Round(time.Millisecond),
 	)
 	fmt.Println("Starting PostgreSQL push...")
-	result, err := ps.Push(ctx, forceFull,
-		func(p postgres.PushProgress) {
-			printPGPushProgress(p)
-		},
-	)
+	result, err := ps.Push(ctx, forceFull, newPGPushProgressPrinter())
 	fmt.Print("\r\033[K")
 	if err != nil {
 		return postgres.PushResult{}, err
@@ -432,7 +516,7 @@ func (b *localArchiveWriteBackend) duckDBPush(
 	result, err := syncer.Push(ctx, forceFull,
 		func(p duckdbsync.PushProgress) {
 			fmt.Printf(
-				"\rPushing... %d/%d sessions, %d messages",
+				"\rPushing... %d/%d sessions, %d messages\x1b[K",
 				p.SessionsDone, p.SessionsTotal, p.MessagesDone,
 			)
 		},
@@ -577,7 +661,10 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 			s, cErr := postgres.New(
 				target.PG.URL, target.PG.Schema, b.database,
 				target.PG.MachineName, target.PG.AllowInsecure,
-				target.syncOptions(projects, exclude),
+				target.syncOptions(
+					projects, exclude,
+					pgVectorPushSource(b.appCfg, target, cfg),
+				),
 			)
 			if cErr != nil {
 				return nil, cErr

@@ -359,9 +359,78 @@ func TestEmbeddingsBuildDirectPrintsProgress(t *testing.T) {
 	cmd.SetArgs(nil)
 	require.NoError(t, cmd.Execute())
 
-	assert.Regexp(t, `progress: \d+/\d+ chunks \(\d+\.\d%\)`, out.String(),
+	// The scan-phase line is the deterministic progress signal here: the
+	// build reports "scanning" until the stub's first (deliberately slow)
+	// encode call reports chunk counters, and the poll ticker fires many
+	// times inside that window. A chunk-counter line may or may not appear
+	// depending on how quickly the build finishes after that first report.
+	assert.Contains(t, out.String(),
+		"progress: scanning archive for changed documents...",
 		"a running build must print at least one progress line")
 	assert.Contains(t, out.String(), "Embedded 2 documents (2 chunks), skipped 0, stale 0")
+}
+
+// TestPrintBuildProgressPhases pins per-phase progress rendering: the scan
+// phase (and an empty phase from a daemon predating the scanning report)
+// prints the scan line instead of a misleading "0/0 chunks", while the
+// embedding phase prints chunk counters.
+func TestPrintBuildProgressPhases(t *testing.T) {
+	tests := []struct {
+		name  string
+		phase string
+		done  int64
+		total int64
+		want  string
+	}{
+		{
+			name: "scanning phase", phase: "scanning",
+			want: "progress: scanning archive for changed documents...\n",
+		},
+		{
+			name: "empty phase without totals treated as scanning", phase: "",
+			want: "progress: scanning archive for changed documents...\n",
+		},
+		{
+			name: "embedding phase with zero chunks", phase: "embedding",
+			want: "progress: 0/0 chunks (0.0%)\n",
+		},
+		{
+			name: "embedding phase with counters", phase: "embedding",
+			done: 587, total: 6004,
+			want: "progress: 587/6004 chunks (9.8%)\n",
+		},
+		{
+			name: "totals without phase still print counters", phase: "",
+			done: 1, total: 4,
+			want: "progress: 1/4 chunks (25.0%)\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			printBuildProgress(&out, tt.phase, tt.done, tt.total)
+			assert.Equal(t, tt.want, out.String())
+		})
+	}
+}
+
+// TestBuildProgressPrinterDeduplicates pins that unchanged status between
+// polls prints nothing: a long scan renders one scan line, not one per poll,
+// and a stalled chunk counter is not repeated.
+func TestBuildProgressPrinterDeduplicates(t *testing.T) {
+	var out bytes.Buffer
+	var p buildProgressPrinter
+	p.print(&out, "scanning", 0, 0)
+	p.print(&out, "scanning", 0, 0)
+	p.print(&out, "scanning", 0, 0)
+	p.print(&out, "embedding", 10, 40)
+	p.print(&out, "embedding", 10, 40)
+	p.print(&out, "embedding", 17, 40)
+	assert.Equal(t,
+		"progress: scanning archive for changed documents...\n"+
+			"progress: 10/40 chunks (25.0%)\n"+
+			"progress: 17/40 chunks (42.5%)\n",
+		out.String())
 }
 
 // TestEmbeddingsBuildDirectConcurrentFlockFails asserts a second direct

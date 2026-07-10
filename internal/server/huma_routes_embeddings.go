@@ -29,6 +29,25 @@ func WithEmbeddingsManager(m EmbeddingsManager) Option {
 	return func(s *Server) { s.embeddingsManager = m }
 }
 
+// WithEmbeddingsUnavailableReason records why the embeddings routes are
+// unavailable, so their 501 responses carry an actionable message instead of
+// the generic "embeddings manager not available" — e.g. when the daemon
+// disabled vector serving at startup because another process held
+// vectors.write.lock.
+func WithEmbeddingsUnavailableReason(reason string) Option {
+	return func(s *Server) { s.embeddingsUnavailableReason = reason }
+}
+
+// embeddingsUnavailableError is the 501 every embeddings route returns while
+// no manager is wired, carrying the recorded cause when one exists.
+func (s *Server) embeddingsUnavailableError() error {
+	msg := s.embeddingsUnavailableReason
+	if msg == "" {
+		msg = "embeddings manager not available"
+	}
+	return apiError(http.StatusNotImplemented, msg)
+}
+
 func (s *Server) registerEmbeddingsRoutes() {
 	group := newRouteGroup(s.api, "/api/v1/embeddings", "Embeddings")
 
@@ -71,7 +90,7 @@ func (s *Server) humaEmbeddingsBuild(
 	_ context.Context, in *embeddingsBuildInput,
 ) (*embeddingsBuildOutput, error) {
 	if s.embeddingsManager == nil {
-		return nil, apiError(http.StatusNotImplemented, "embeddings manager not available")
+		return nil, s.embeddingsUnavailableError()
 	}
 	if err := s.embeddingsManager.StartBuild(in.Body); err != nil {
 		if errors.Is(err, vector.ErrBuildRunning) {
@@ -92,7 +111,7 @@ func (s *Server) humaEmbeddingsStatus(
 	_ context.Context, _ *emptyInput,
 ) (*jsonOutput[vector.BuildStatus], error) {
 	if s.embeddingsManager == nil {
-		return nil, apiError(http.StatusNotImplemented, "embeddings manager not available")
+		return nil, s.embeddingsUnavailableError()
 	}
 	return &jsonOutput[vector.BuildStatus]{Body: s.embeddingsManager.Status()}, nil
 }
@@ -101,7 +120,7 @@ func (s *Server) humaEmbeddingsGenerations(
 	ctx context.Context, _ *emptyInput,
 ) (*jsonOutput[embeddingsGenerationsResponse], error) {
 	if s.embeddingsManager == nil {
-		return nil, apiError(http.StatusNotImplemented, "embeddings manager not available")
+		return nil, s.embeddingsUnavailableError()
 	}
 	gens, err := s.embeddingsManager.Generations(ctx)
 	if err != nil {
@@ -119,7 +138,7 @@ func (s *Server) humaEmbeddingsActivate(
 	ctx context.Context, in *embeddingsGenerationActionInput,
 ) (*noContentOutput, error) {
 	if s.embeddingsManager == nil {
-		return nil, apiError(http.StatusNotImplemented, "embeddings manager not available")
+		return nil, s.embeddingsUnavailableError()
 	}
 	if err := s.embeddingsManager.Activate(ctx, in.ID, in.Body.Force); err != nil {
 		return nil, embeddingsActionError(err)
@@ -131,7 +150,7 @@ func (s *Server) humaEmbeddingsRetire(
 	ctx context.Context, in *embeddingsGenerationActionInput,
 ) (*noContentOutput, error) {
 	if s.embeddingsManager == nil {
-		return nil, apiError(http.StatusNotImplemented, "embeddings manager not available")
+		return nil, s.embeddingsUnavailableError()
 	}
 	if err := s.embeddingsManager.Retire(ctx, in.ID, in.Body.Force); err != nil {
 		return nil, embeddingsActionError(err)

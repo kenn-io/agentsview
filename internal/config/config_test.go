@@ -1820,3 +1820,48 @@ func TestIsDefaultAgentsviewDBPath(t *testing.T) {
 		})
 	}
 }
+
+func TestPGConfigPushVectorsEnabled(t *testing.T) {
+	boolPtr := func(b bool) *bool { return &b }
+	tests := []struct {
+		name string
+		cfg  PGConfig
+		want bool
+	}{
+		{"unset defaults to true", PGConfig{}, true},
+		{"explicit false", PGConfig{PushVectors: boolPtr(false)}, false},
+		{"explicit true", PGConfig{PushVectors: boolPtr(true)}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.cfg.PushVectorsEnabled())
+		})
+	}
+}
+
+func TestPGConfig_LoadsFromTOML(t *testing.T) {
+	f := newConfigFixture(t)
+	f.WriteTOML(t, map[string]any{
+		"pg": map[string]any{
+			"url":          "postgres://localhost/test",
+			"push_vectors": false,
+		},
+	})
+
+	cfg := f.LoadMinimal(t)
+
+	assert.False(t, cfg.PG.PushVectorsEnabled())
+}
+
+func TestPGConfig_PushVectorsDefaultsTrue(t *testing.T) {
+	f := newConfigFixture(t)
+	f.WriteTOML(t, map[string]any{
+		"pg": map[string]any{
+			"url": "postgres://localhost/test",
+		},
+	})
+
+	cfg := f.LoadMinimal(t)
+
+	assert.True(t, cfg.PG.PushVectorsEnabled())
+}

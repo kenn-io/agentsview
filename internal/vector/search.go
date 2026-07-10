@@ -222,6 +222,26 @@ func (ix *Index) resolveHit(h kitvec.Hit[string], doc mirrorDoc) Hit {
 	return hit
 }
 
+// DocAnchor resolves the anchor ordinal and display snippet for a matched
+// chunk of a document, for backends that store the mirror elsewhere (the PG
+// vector searcher). It mirrors resolveHit exactly: a user document (empty
+// offsets) anchors to its own docOrdinal with a chunk snippet (see
+// chunkSnippet); a run document anchors to the member whose rune span
+// contains the matched chunk's center rune, with a member-local snippet
+// (see resolveRunAnchor).
+func DocAnchor(
+	content string, offsets []db.UnitOffset, docOrdinal, chunkIndex, maxInputChars int,
+) (int, string) {
+	split := kitvec.SplitOptions{
+		MaxRunes: maxInputChars,
+		Overlap:  ChunkOverlap(maxInputChars),
+	}
+	if len(offsets) == 0 {
+		return docOrdinal, chunkSnippet(content, chunkIndex, split)
+	}
+	return resolveRunAnchor(content, offsets, chunkIndex, split)
+}
+
 // runMemberSeparatorRunes is the rune length of the "\n\n" separator
 // db's runUnit joins run members with (see internal/db's runUnit). The
 // separator belongs to no member's span, so a member's text within the
@@ -233,15 +253,24 @@ const runMemberSeparatorRunes = 2
 // chunk's center rune (see anchorMemberIndex), and the snippet is the
 // intersection of the chunk's rune window with that member's span — always
 // a substring of the anchor message's own text, so the db layer's snippet
-// centering (semanticSnippet) can locate it inside the anchor message's
+// centering (SemanticSnippet) can locate it inside the anchor message's
 // content. A degenerate/stale ChunkIndex whose re-split window misses the
 // member entirely falls back to the anchor member's whole span text; the
 // result is never text from a different member, and never a panic.
 func (ix *Index) resolveRunHit(
 	content string, offsets []db.UnitOffset, chunkIndex int,
 ) (ordinal int, snippet string) {
+	return resolveRunAnchor(content, offsets, chunkIndex, ix.split)
+}
+
+// resolveRunAnchor is resolveRunHit's package-level body, shared with
+// DocAnchor for backends (the PG vector searcher) that resolve chunk hits
+// against a document loaded outside an Index.
+func resolveRunAnchor(
+	content string, offsets []db.UnitOffset, chunkIndex int, split kitvec.SplitOptions,
+) (ordinal int, snippet string) {
 	runes := []rune(content)
-	start, end := chunkWindow(len(runes), chunkIndex, ix.split)
+	start, end := chunkWindow(len(runes), chunkIndex, split)
 	member := anchorMemberIndex(offsets, start, end)
 
 	memberStart := min(offsets[member].RuneStart, len(runes))
@@ -344,7 +373,14 @@ SELECT doc_key, session_id, ordinal, ordinal_end, subordinate, offsets, content
 // content's chunk count (content changed since embedding) yields an empty
 // snippet rather than a panic.
 func (ix *Index) snippet(content string, chunkIndex int) string {
-	chunks := kitvec.Split(content, ix.split)
+	return chunkSnippet(content, chunkIndex, ix.split)
+}
+
+// chunkSnippet is the snippet method's package-level body, shared with
+// DocAnchor for backends (the PG vector searcher) that resolve chunk hits
+// against a document loaded outside an Index.
+func chunkSnippet(content string, chunkIndex int, split kitvec.SplitOptions) string {
+	chunks := kitvec.Split(content, split)
 	if chunkIndex < 0 || chunkIndex >= len(chunks) {
 		return ""
 	}

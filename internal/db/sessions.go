@@ -3129,6 +3129,41 @@ func (db *DB) ListSessionsModifiedBetween(
 	return sessions, rows.Err()
 }
 
+// SessionProjectsByIDs returns each session's current project keyed by session
+// ID. IDs with no sessions row are absent from the result, so a caller can tell
+// "unknown session" (missing key) from "empty project" (present, empty value).
+// It is the live-project source for scoping a filtered push by each session's
+// current project rather than by a possibly stale mirror.
+func (db *DB) SessionProjectsByIDs(
+	ctx context.Context, ids []string,
+) (map[string]string, error) {
+	out := make(map[string]string, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	err := queryChunked(ids, func(chunk []string) error {
+		placeholders, args := inPlaceholders(chunk)
+		rows, err := db.getReader().QueryContext(ctx,
+			"SELECT id, project FROM sessions WHERE id IN "+placeholders, args...)
+		if err != nil {
+			return fmt.Errorf("reading session projects: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id, project string
+			if err := rows.Scan(&id, &project); err != nil {
+				return fmt.Errorf("scanning session project: %w", err)
+			}
+			out[id] = project
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // trustedSQLiteExpr is a string type for SQL expressions known to be safe
 // (literals, column references). Using a distinct type prevents accidental
 // injection of user input, mirroring the trustedSQL pattern in pgsync/time.go.

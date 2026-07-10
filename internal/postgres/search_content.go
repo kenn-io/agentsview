@@ -44,9 +44,13 @@ func (s *Store) SearchContent(
 		if err := db.ValidateSemanticFilter(f); err != nil {
 			return db.ContentSearchPage{}, err
 		}
-		// No VectorSearcher seam on the PostgreSQL store yet (HasSemantic
-		// always false): gate after input validation.
-		return db.ContentSearchPage{}, db.ErrSemanticUnavailable
+		if s.getVectorSearcher() == nil {
+			return db.ContentSearchPage{}, s.semanticUnavailableError()
+		}
+		if f.Mode == "semantic" {
+			return s.searchContentSemanticPG(ctx, f)
+		}
+		return s.searchContentHybridPG(ctx, f)
 	}
 
 	if len(f.Sources) == 0 {

@@ -395,6 +395,82 @@ func TestWritePGPushSummaryIncludesSkippedConflicts(t *testing.T) {
 		"Warning: skipped 2 session(s) owned by another PostgreSQL push marker")
 }
 
+func TestWritePGPushSummaryVectorPhase(t *testing.T) {
+	tests := []struct {
+		name        string
+		vectors     postgres.VectorPushResult
+		wantContain []string
+		wantAbsent  []string
+	}{
+		{
+			name: "counters",
+			vectors: postgres.VectorPushResult{
+				SessionsPushed:    2,
+				SessionsUnchanged: 5,
+				DocsPushed:        7,
+				ChunksPushed:      9,
+			},
+			wantContain: []string{
+				"Vectors: 2 session(s) pushed, 5 unchanged, 7 docs, 9 chunks",
+			},
+			wantAbsent: []string{"skipped", "Warning: skipped"},
+		},
+		{
+			name: "skipped with reason",
+			vectors: postgres.VectorPushResult{
+				Skipped:       true,
+				SkippedReason: "pgvector extension unavailable",
+			},
+			wantContain: []string{"Vectors: skipped (pgvector extension unavailable)"},
+		},
+		{
+			name:       "skipped without reason prints nothing",
+			vectors:    postgres.VectorPushResult{Skipped: true},
+			wantAbsent: []string{"Vectors:"},
+		},
+		{
+			name: "conflicts warning",
+			vectors: postgres.VectorPushResult{
+				SessionsPushed: 1,
+				Conflicts:      3,
+			},
+			wantContain: []string{
+				"Vectors: 1 session(s) pushed, 0 unchanged, 0 docs, 0 chunks",
+				"Warning: skipped 3 vector session(s) owned by another PostgreSQL push marker",
+			},
+		},
+		{
+			name: "deferred warning",
+			vectors: postgres.VectorPushResult{
+				SessionsPushed:   1,
+				SessionsDeferred: 2,
+			},
+			wantContain: []string{
+				"Vectors: 1 session(s) pushed, 0 unchanged, 0 docs, 0 chunks",
+				"Warning: deferred vectors for 2 session(s) whose session push failed; the next successful push sends them",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			writePGPushSummary(&out, postgres.PushResult{
+				SessionsPushed: 1,
+				MessagesPushed: 1,
+				Duration:       time.Second,
+				Vectors:        tt.vectors,
+			})
+			got := out.String()
+			for _, want := range tt.wantContain {
+				assert.Contains(t, got, want)
+			}
+			for _, absent := range tt.wantAbsent {
+				assert.NotContains(t, got, absent)
+			}
+		})
+	}
+}
+
 func TestWritePGPushSummaryReportsErrorCount(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -463,5 +539,55 @@ func TestWritePGPushSummaryReportsErrorCount(t *testing.T) {
 				assert.NotContains(t, got, absent)
 			}
 		})
+	}
+}
+
+// TestPGPushProgressPrinterKeepsCompletedStages pins the stage-aware
+// renderer: reports within a stage rerender one line in place, and a stage
+// transition finishes the line with a newline so completed stages stay in
+// the scrollback instead of being overwritten by the next stage.
+func TestPGPushProgressPrinterKeepsCompletedStages(t *testing.T) {
+	out := captureStdout(t, func() {
+		print := newPGPushProgressPrinter()
+		print(postgres.PushProgress{Phase: "preparing"})
+		print(postgres.PushProgress{Phase: "preparing"})
+		print(postgres.PushProgress{
+			Phase: "preparing", SessionsDone: 500, SessionsTotal: 1000,
+		})
+		print(postgres.PushProgress{
+			Phase: "preparing", SessionsDone: 1000, SessionsTotal: 1000,
+		})
+		print(postgres.PushProgress{
+			SessionsDone: 1, SessionsTotal: 9, MessagesDone: 5,
+		})
+		print(postgres.PushProgress{
+			Phase: "vectors", VectorSessionsDone: 1,
+			VectorSessionsTotal: 2, VectorChunksPushed: 3,
+		})
+	})
+
+	lines := strings.Split(out, "\n")
+	require.Len(t, lines, 4, "one line per stage: %q", out)
+
+	// Within a line, in-place rerenders are separated by carriage returns;
+	// the text a terminal leaves visible is the segment after the last one.
+	// Every render carries a wall-clock elapsed suffix, so assert on the
+	// stable prefix and the suffix shape rather than the exact duration.
+	visible := func(line string) string {
+		parts := strings.Split(line, "\r")
+		return strings.TrimSuffix(parts[len(parts)-1], "\x1b[K")
+	}
+	wantPrefixes := []string{
+		"Preparing push (sync state, metadata, fingerprints)...",
+		"Preparing... 1000/1000 sessions fingerprinted",
+		"Pushing... 1/9 sessions, 5 messages",
+		"Pushing vectors... 1/2 sessions scanned, 3 chunks",
+	}
+	for i, want := range wantPrefixes {
+		got := visible(lines[i])
+		assert.True(t, strings.HasPrefix(got, want),
+			"line %d: %q must start with %q", i, got, want)
+		assert.Regexp(t, ` \([0-9a-z.]+ elapsed\)$`, got,
+			"line %d must end with an elapsed suffix", i)
 	}
 }

@@ -379,7 +379,17 @@ func setupVectorServing(
 				"disabling vector serving for this run",
 			vectorsWriteLockRetryTimeout,
 		)
-		return vectorServing{}, nil
+		// The 501s this leaves behind must say why and how to recover: the
+		// generic "embeddings manager not available" reads like a missing
+		// feature, when the actual fix is restarting the daemon once the
+		// lock-holding process (typically a direct build) exits.
+		return vectorServing{ServerOpts: []server.Option{
+			server.WithEmbeddingsUnavailableReason(
+				"vector serving is disabled for this daemon run: another " +
+					"process (typically a direct 'agentsview embeddings build') " +
+					"held vectors.write.lock at startup; wait for it to finish, " +
+					"then restart the daemon"),
+		}}, nil
 	}
 
 	ix, err := vector.Open(

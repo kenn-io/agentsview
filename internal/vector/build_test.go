@@ -396,6 +396,9 @@ func TestBuildProgressReceivesFinalDoneEqualToTotalChunks(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotEmpty(t, calls)
+	assert.Equal(t, "scanning", calls[0].Phase,
+		"the first report must announce the mirror-refresh scan, before any "+
+			"chunk totals exist, so consumers can render more than 0/0 chunks")
 	last := calls[len(calls)-1]
 	assert.EqualValues(t, result.Fill.Chunks, last.Done)
 	assert.EqualValues(t, result.Fill.Chunks, last.Total,

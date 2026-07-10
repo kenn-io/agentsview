@@ -5,7 +5,7 @@
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: agentsview_test
       POSTGRES_PASSWORD: agentsview_test_password

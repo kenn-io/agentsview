@@ -160,6 +160,10 @@ type Sync struct {
 	projects        []string
 	excludeProjects []string
 
+	// vectorSource, when set, supplies the local vectors.db active generation
+	// pushed as a phase at the end of Push. Nil disables the phase.
+	vectorSource VectorPushSource
+
 	closeOnce sync.Once
 	closeErr  error
 
@@ -194,6 +198,9 @@ type SyncOptions struct {
 	// MigrateLegacySyncState moves unsuffixed legacy sync-state keys into the
 	// named default target the first time that target runs.
 	MigrateLegacySyncState bool
+	// VectorSource, when non-nil, enables the vector push phase, replicating
+	// the local vectors.db active generation into PG. Nil skips the phase.
+	VectorSource VectorPushSource
 }
 
 // New creates a Sync instance and verifies the PG connection.
@@ -271,6 +278,7 @@ func New(
 		migrateLegacySyncState: migrateLegacySyncState,
 		projects:               opts.Projects,
 		excludeProjects:        opts.ExcludeProjects,
+		vectorSource:           opts.VectorSource,
 	}, nil
 }
 
@@ -389,6 +397,15 @@ func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 		// existing rows.
 		if err := runSchemaDataRepairsPG(ctx, s.pg); err != nil {
 			return err
+		}
+		// pushSchemaCurrent predates the vector tables, so a schema
+		// created before this feature is "current" yet lacks them; a
+		// plain post-upgrade pg push would never create them. Run the
+		// same best-effort vector setup the full EnsureSchema path does
+		// (schema.go), once per Sync via the schemaDone memo. Failure
+		// leaves semantic search unavailable but must not fail the push.
+		if _, err := ensureVectorBaseSchemaPG(ctx, s.pg); err != nil {
+			log.Printf("pg schema: vector schema setup failed: %v", err)
 		}
 		s.schemaDone = true
 		return nil

@@ -709,3 +709,63 @@ func TestResolveMessageUnitsVersionMismatchGate(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrMirrorVersionMismatch)
 }
+
+// runDocAnchorFixture returns the three-member run content and offsets
+// shared by TestDocAnchor's run-doc cases: "aaaaa" (ordinal 5), "bbbbb"
+// (ordinal 6), "ccccc" (ordinal 7), joined with "\n\n" as db's runUnit does.
+func runDocAnchorFixture() (string, []db.UnitOffset) {
+	content := "aaaaa\n\nbbbbb\n\nccccc"
+	offsets := []db.UnitOffset{
+		{Ordinal: 5, RuneStart: 0, ByteStart: 0},
+		{Ordinal: 6, RuneStart: 7, ByteStart: 7},
+		{Ordinal: 7, RuneStart: 14, ByteStart: 14},
+	}
+	return content, offsets
+}
+
+// TestDocAnchorRunDocReturnsMemberAnchorAndLocalSnippet pins DocAnchor's run
+// branch: with maxInputChars large enough that the whole content is one
+// chunk, the anchor is the member whose span contains the chunk's center
+// rune, and the snippet is confined to that member's own text rather than
+// spilling into a neighboring member.
+func TestDocAnchorRunDocReturnsMemberAnchorAndLocalSnippet(t *testing.T) {
+	content, offsets := runDocAnchorFixture()
+
+	anchor, snippet := DocAnchor(content, offsets, 0, 0, 100)
+
+	assert.Equal(t, 6, anchor, "anchor must be the member containing the chunk's center rune")
+	assert.Equal(t, "bbbbb", snippet, "snippet must be the anchor member's own text")
+}
+
+// TestDocAnchorEmptyOffsetsReturnsDocOrdinalAndWholeSnippet pins DocAnchor's
+// user-doc branch: empty offsets means the caller-supplied docOrdinal
+// anchors as-is, with a snippet of the whole matched chunk.
+func TestDocAnchorEmptyOffsetsReturnsDocOrdinalAndWholeSnippet(t *testing.T) {
+	anchor, snippet := DocAnchor("a plain user question", nil, 3, 0, 100)
+
+	assert.Equal(t, 3, anchor)
+	assert.Equal(t, "a plain user question", snippet)
+}
+
+// TestDocAnchorOutOfRangeChunkIndexFallsBack pins the documented fallback
+// for a stale/degenerate ChunkIndex whose re-split window misses the
+// content entirely: a user doc yields an empty snippet (see chunkSnippet),
+// while a run doc falls back to the anchor member's own span text (see
+// resolveRunAnchor) rather than a panic or cross-member text.
+func TestDocAnchorOutOfRangeChunkIndexFallsBack(t *testing.T) {
+	t.Run("user doc", func(t *testing.T) {
+		anchor, snippet := DocAnchor("a plain user question", nil, 3, 99, 100)
+
+		assert.Equal(t, 3, anchor)
+		assert.Empty(t, snippet)
+	})
+
+	t.Run("run doc", func(t *testing.T) {
+		content, offsets := runDocAnchorFixture()
+
+		anchor, snippet := DocAnchor(content, offsets, 0, 99, 10)
+
+		assert.Equal(t, 7, anchor)
+		assert.Equal(t, "ccccc", snippet)
+	})
+}

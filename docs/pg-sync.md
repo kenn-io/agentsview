@@ -84,6 +84,7 @@ agentsview pg push [target] [flags]
 |------|---------|-------------|
 | `--all` | `false` | Push every configured PG target sequentially |
 | `--full` | `false` | Force full local resync and re-push, bypassing change detection |
+| `--no-vectors` | `false` | Skip the semantic-search vector phase for this run |
 | `--projects` | | Comma-separated projects to push (inclusive) |
 | `--exclude-projects` | | Comma-separated projects to exclude |
 | `--all-projects` | `false` | Ignore configured project filters for this run |
@@ -226,6 +227,23 @@ guarantees as session content (`secret_findings` table,
 per-session `secret_leak_count`, and the
 [`has-secret`](/session-api/#agentsview-session-list) list
 filter).
+
+#### Vector Push
+
+When `[vector]` is enabled locally, `pg push` runs a vector phase
+after the session and message phases, copying the machine's
+active embedding generation from `vectors.db` into pgvector so a
+shared PostgreSQL deployment can answer `--semantic`/`--hybrid`.
+Only changed sessions are re-sent. Skip the phase for one run
+with `--no-vectors`, or disable it persistently with
+`push_vectors = false` under `[pg]`. Databases without pgvector
+(for example CockroachDB) skip the phase and keep syncing session
+content. See
+[semantic search: PostgreSQL](/semantic-search/#postgresql) for
+the full push, serve, and maintenance workflow.
+
+`pg vectors list` and `pg vectors drop <id>` inspect and remove
+pushed generations.
 
 ### `agentsview pg status`
 

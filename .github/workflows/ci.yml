@@ -248,7 +248,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:18-alpine
+        image: pgvector/pgvector:pg18
         env:
           POSTGRES_USER: agentsview_test
           POSTGRES_PASSWORD: agentsview_test_password

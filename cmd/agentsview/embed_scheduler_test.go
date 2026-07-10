@@ -652,9 +652,15 @@ func TestSetupVectorServingDisablesWhenWriteLockHeld(t *testing.T) {
 	require.NoError(t, err, "a held lock must degrade, not fail, daemon startup")
 	assert.Nil(t, vs.Scheduler)
 	assert.Nil(t, vs.Close)
-	assert.Empty(t, vs.ServerOpts)
 	assert.Contains(t, logBuf.String(), "vectors.write.lock")
 	assert.Contains(t, logBuf.String(), "disabling vector serving")
+
+	// The degraded run still carries one server option: the unavailability
+	// reason, so the embeddings routes' 501s explain the lock conflict and
+	// the restart remedy instead of the generic "manager not available"
+	// (the reason-to-501 threading itself is pinned in internal/server's
+	// TestEmbeddingsUnavailableReasonReplacesGeneric501).
+	assert.Len(t, vs.ServerOpts, 1)
 }
 
 // TestSetupVectorServingAcquiresAndReleasesWriteLock asserts a free

@@ -298,6 +298,9 @@ func runServe(cfg config.Config, opts serveOptions) {
 		server.WithPprof(opts.Pprof),
 	}
 	srvOpts = append(srvOpts, vectorServe.ServerOpts...)
+	if src := newVectorPushSource(cfg); src != nil {
+		srvOpts = append(srvOpts, server.WithVectorPushSource(src))
+	}
 	srv := server.New(cfg, database, engine, srvOpts...)
 
 	startupProgress.SetPhase("starting HTTP server")

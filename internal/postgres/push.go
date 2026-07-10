@@ -50,15 +50,47 @@ type PushResult struct {
 	SkippedConflicts int
 	Errors           int
 	Duration         time.Duration
+	Vectors          VectorPushResult
+}
+
+// pushPrepareProgressStride bounds how many sessions the fingerprint loop
+// processes between "preparing" progress reports.
+const pushPrepareProgressStride = 500
+
+// timedPushSetupStep runs one pre-batch setup step and logs its duration when
+// it exceeds a second, so a slow silent stretch of a push (per-row metadata
+// upserts against a remote target, for example) is attributable in the log.
+func timedPushSetupStep(name string, fn func() error) error {
+	start := time.Now()
+	if err := fn(); err != nil {
+		return err
+	}
+	if d := time.Since(start); d > time.Second {
+		log.Printf("pgsync: %s took %s", name, d.Round(time.Millisecond))
+	}
+	return nil
 }
 
 // PushProgress is reported after each batch during Push.
 type PushProgress struct {
+	// Phase is "preparing" while per-session push fingerprints are computed
+	// (SessionsDone/SessionsTotal count candidate sessions fingerprinted; on
+	// a full push this covers every local session and can run for minutes),
+	// "" during the session/message push, and "vectors" during the vector
+	// phase, whose progress is carried by the Vector* fields.
+	Phase            string
 	SessionsDone     int
 	SessionsTotal    int
 	MessagesDone     int
 	SkippedConflicts int
 	Errors           int
+	// VectorSessionsDone counts local sessions examined by the vector
+	// phase's delta scan (most are unchanged and skipped cheaply);
+	// VectorSessionsTotal is the local candidate count and
+	// VectorChunksPushed the embedding chunks written so far.
+	VectorSessionsDone  int
+	VectorSessionsTotal int
+	VectorChunksPushed  int
 }
 
 // Push syncs local sessions and messages to PostgreSQL.
@@ -72,6 +104,14 @@ func (s *Sync) Push(
 	var result PushResult
 	state := s.effectiveSyncState()
 	aliasBackfillState := s.aliasBackfillSyncStateOrDefault()
+
+	// Announce the preparation phase immediately: everything between here
+	// and the first batch (marker checks, metadata syncs, fingerprints)
+	// produces no per-batch reports, and some of it runs for minutes on a
+	// full push against a remote target.
+	if onProgress != nil {
+		onProgress(PushProgress{Phase: "preparing"})
+	}
 
 	if err := CheckDataVersionCompat(ctx, s.pg); err != nil {
 		return result, err
@@ -208,13 +248,16 @@ func (s *Sync) Push(
 			}
 		}
 	}
-	if err := s.syncModelPricing(ctx); err != nil {
+	if err := timedPushSetupStep("model pricing sync",
+		func() error { return s.syncModelPricing(ctx) }); err != nil {
 		return result, err
 	}
-	if err := s.syncCursorUsageEvents(ctx); err != nil {
+	if err := timedPushSetupStep("cursor usage event sync",
+		func() error { return s.syncCursorUsageEvents(ctx) }); err != nil {
 		return result, err
 	}
-	if err := s.syncProjectIdentityObservations(ctx); err != nil {
+	if err := timedPushSetupStep("project identity observation sync",
+		func() error { return s.syncProjectIdentityObservations(ctx) }); err != nil {
 		return result, err
 	}
 
@@ -293,22 +336,55 @@ func (s *Sync) Push(
 			"computing local usage event fingerprints: %w", err,
 		)
 	}
-	for id, sess := range sessionByID {
-		usageFP, usageKnown := usageFingerprints[id]
-		dependencyFP, err := localSessionDependencyPushFingerprint(
-			ctx, s.local, id, usageFP, usageKnown,
-		)
-		if err != nil {
-			return result, fmt.Errorf(
-				"computing local dependency fingerprint %s: %w",
-				id, err,
-			)
+	// The fingerprint loop issues several local queries per candidate
+	// session; on a full push that covers every session and runs for
+	// minutes, so it reports its own progress phase rather than sitting
+	// silent until the first batch lands.
+	log.Printf("pgsync: computing push fingerprints for %d candidate session(s)",
+		len(sessionByID))
+	reportPrepare := func(done int) {
+		if onProgress == nil {
+			return
 		}
-		sessionFingerprints[id] = sessionPushFingerprint(
-			sess, pushedSessionMachine(sess, s.machine),
-			usageFP, markerID, dependencyFP,
-		)
+		onProgress(PushProgress{
+			Phase:         "preparing",
+			SessionsDone:  done,
+			SessionsTotal: len(sessionByID),
+		})
 	}
+	reportPrepare(0)
+	prepared := 0
+	candidateIDs := mapKeys(sessionByID)
+	for start := 0; start < len(candidateIDs); start += pushComparisonBatchSize {
+		end := min(start+pushComparisonBatchSize, len(candidateIDs))
+		chunk := candidateIDs[start:end]
+		depState, err := readLocalPushDependencyState(ctx, s.local, chunk)
+		if err != nil {
+			return result, err
+		}
+		for _, id := range chunk {
+			usageFP, usageKnown := usageFingerprints[id]
+			dependencyFP, err := depState.dependencyFingerprint(
+				s.local, id, usageFP, usageKnown,
+			)
+			if err != nil {
+				return result, fmt.Errorf(
+					"computing local dependency fingerprint %s: %w",
+					id, err,
+				)
+			}
+			sess := sessionByID[id]
+			sessionFingerprints[id] = sessionPushFingerprint(
+				sess, pushedSessionMachine(sess, s.machine),
+				usageFP, markerID, dependencyFP,
+			)
+			prepared++
+			if prepared%pushPrepareProgressStride == 0 {
+				reportPrepare(prepared)
+			}
+		}
+	}
+	reportPrepare(prepared)
 
 	if len(priorFingerprints) > 0 {
 		for id := range sessionByID {
@@ -362,11 +438,19 @@ func (s *Sync) Push(
 		); err != nil {
 			return result, err
 		}
+		result.Vectors, err = s.runVectorPushPhase(ctx, full, nil, onProgress)
+		if err != nil {
+			return result, err
+		}
 		result.Duration = time.Since(start)
 		return result, nil
 	}
 
 	var pushed []db.Session
+	// Sessions whose individual retry also failed: their PG sessions/messages
+	// rows are stale or absent, so the vector phase must not push their newer
+	// local vectors ahead of them.
+	var failedSessions map[string]struct{}
 	const batchSize = 50
 	for i := 0; i < len(sessions); i += batchSize {
 		end := min(i+batchSize, len(sessions))
@@ -401,6 +485,10 @@ func (s *Sync) Push(
 					result.SkippedConflicts += sr.skippedConflicts
 				} else {
 					result.Errors++
+					if failedSessions == nil {
+						failedSessions = make(map[string]struct{})
+					}
+					failedSessions[sess.ID] = struct{}{}
 				}
 			}
 		}
@@ -455,8 +543,36 @@ func (s *Sync) Push(
 	); err != nil {
 		return result, err
 	}
+	result.Vectors, err = s.runVectorPushPhase(ctx, full, failedSessions, onProgress)
+	if err != nil {
+		return result, err
+	}
 	result.Duration = time.Since(start)
 	return result, nil
+}
+
+// runVectorPushPhase runs the vector push phase and wraps its error. With no
+// source attached the phase never runs: it returns a Skipped result with an
+// empty reason, which the summary printer renders as nothing (an unconfigured
+// phase is not a diagnosable skip like an unavailable extension). Without this
+// the zero-valued VectorPushResult would print "Vectors: 0 session(s) pushed".
+// failedSessions names sessions whose session-phase push failed; their vectors
+// are deferred so pgvector data never runs ahead of the sessions/messages rows.
+// full bypasses the unchanged-hash skip so a --full push also repairs vector
+// rows whose push state wrongly reports them current. onProgress, when
+// non-nil, receives Phase "vectors" reports as the delta scan advances.
+func (s *Sync) runVectorPushPhase(
+	ctx context.Context, full bool, failedSessions map[string]struct{},
+	onProgress func(PushProgress),
+) (VectorPushResult, error) {
+	if s.vectorSource == nil {
+		return VectorPushResult{Skipped: true}, nil
+	}
+	res, err := s.pushVectors(ctx, full, failedSessions, onProgress)
+	if err != nil {
+		return res, fmt.Errorf("vector push: %w", err)
+	}
+	return res, nil
 }
 
 func (s *Sync) syncProjectIdentityObservations(ctx context.Context) error {
@@ -470,19 +586,20 @@ func (s *Sync) syncProjectIdentityObservations(ctx context.Context) error {
 	if len(observations) == 0 {
 		return nil
 	}
+	log.Printf("pgsync: syncing %d project identity observation(s)",
+		len(observations))
+	for i, obs := range observations {
+		observations[i] = export.SanitizeStoredProjectIdentityObservation(obs)
+	}
 	tx, err := s.pg.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning project identity observation sync: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	for _, obs := range observations {
-		obs = export.SanitizeStoredProjectIdentityObservation(obs)
-		if err := upsertProjectIdentityObservation(ctx, tx, obs, ""); err != nil {
-			return fmt.Errorf(
-				"syncing project identity observation %s/%s/%s: %w",
-				obs.Project, obs.Machine, obs.RootPath, err,
-			)
-		}
+	if err := syncProjectIdentityObservationsBatch(
+		ctx, tx, observations,
+	); err != nil {
+		return fmt.Errorf("syncing project identity observations: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing project identity observation sync: %w", err)

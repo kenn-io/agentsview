@@ -22,6 +22,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/insight"
+	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/web"
@@ -99,6 +100,17 @@ type Server struct {
 	// build lifecycle routes. Nil (the default) leaves those routes
 	// unregistered, e.g. when semantic search is not configured.
 	embeddingsManager EmbeddingsManager
+
+	// embeddingsUnavailableReason, when non-empty, replaces the generic
+	// "embeddings manager not available" 501 message on the embeddings
+	// routes with a cause-specific one (e.g. vector serving disabled at
+	// startup because vectors.write.lock was held).
+	embeddingsUnavailableReason string
+
+	// vectorPushSource, when set, supplies the local vectors.db active
+	// generation to the daemon's pg push handler. Nil leaves the vector
+	// push phase skipped, e.g. when [vector] is disabled.
+	vectorPushSource postgres.VectorPushSource
 }
 
 // New creates a new Server.

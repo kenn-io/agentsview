@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"path/filepath"
+	"strings"
+	stdsync "sync"
 	"testing"
 	"time"
 
@@ -11,8 +14,76 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/postgres"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
+
+// TestDaemonPushHeartbeat pins the daemon-delegated push's client-side
+// output: an immediate delegation announcement, elapsed-time heartbeats
+// while the blocking POST is in flight, and silence after stop.
+func TestDaemonPushHeartbeat(t *testing.T) {
+	orig := daemonPushHeartbeatInterval
+	daemonPushHeartbeatInterval = 5 * time.Millisecond
+	t.Cleanup(func() { daemonPushHeartbeatInterval = orig })
+
+	var out syncBuffer
+	stop := startDaemonPushHeartbeatTo(&out, "PostgreSQL")
+	assert.Contains(t, out.String(),
+		"Pushing to PostgreSQL via the local daemon")
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(out.String(),
+			"still pushing to PostgreSQL via the daemon")
+	}, time.Second, time.Millisecond, "heartbeat line must appear")
+
+	stop()
+	settled := out.String()
+	time.Sleep(20 * time.Millisecond)
+	assert.Equal(t, settled, out.String(), "no output after stop")
+}
+
+// TestDaemonPushProgressSilencesHeartbeat pins that the first streamed
+// progress event stops the elapsed-time heartbeat for good: once the daemon
+// starts reporting real progress, heartbeat lines must not interleave with
+// the in-place progress line.
+func TestDaemonPushProgressSilencesHeartbeat(t *testing.T) {
+	orig := daemonPushHeartbeatInterval
+	daemonPushHeartbeatInterval = 50 * time.Millisecond
+	t.Cleanup(func() { daemonPushHeartbeatInterval = orig })
+
+	out := captureStdout(t, func() {
+		onProgress, finish := daemonPushProgress(
+			"PostgreSQL", newPGPushProgressPrinter(),
+		)
+		onProgress(postgres.PushProgress{SessionsDone: 1, SessionsTotal: 2})
+		time.Sleep(150 * time.Millisecond)
+		finish()
+	})
+
+	assert.Contains(t, out, "Pushing to PostgreSQL via the local daemon")
+	assert.Contains(t, out, "Pushing... 1/2 sessions")
+	assert.NotContains(t, out, "still pushing",
+		"heartbeat must stay silent after the first progress event")
+}
+
+// syncBuffer is a mutex-guarded bytes.Buffer: the heartbeat goroutine writes
+// while the test reads.
+type syncBuffer struct {
+	mu  stdsync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 func TestLocalArchiveWriteBackendPGPushStopsAfterCanceledLocalSync(t *testing.T) {
 	testLocalArchivePushStopsAfterCanceledSync(t,

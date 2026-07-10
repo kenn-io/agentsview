@@ -28,15 +28,15 @@ special-casing during the swap instead of a plain re-scan afterward.
 
 ### Embedding stores and `IndexSpec`
 
-`vectors.db` can host more than one embedding store. Each store is bound by
-an `IndexSpec` (internal/vector): its documents table, its own key/value
-metadata table, and a table prefix for the kit-managed generation
-bookkeeping. Schema-version resets, metadata (watermarks, scope, generation
-model names), and generation lifecycles are all scoped per store, so
-resetting or rebuilding one store never touches another. The conversation
-message store described in this document is the spec returned by
-`MessageIndexSpec()`; `embeddings list/activate/retire` accept `--store`
-(default `messages`) because generation IDs are only unique within a store.
+`vectors.db` can host more than one embedding store. Each store is bound by an
+`IndexSpec` (internal/vector): its documents table, its own key/value metadata
+table, and a table prefix for the kit-managed generation bookkeeping.
+Schema-version resets, metadata (watermarks, scope, generation model names), and
+generation lifecycles are all scoped per store, so resetting or rebuilding one
+store never touches another. The conversation message store described in this
+document is the spec returned by `MessageIndexSpec()`;
+`embeddings list/activate/retire` accept `--store` (default `messages`) because
+generation IDs are only unique within a store.
 
 ## Unit model: user documents and runs
 
@@ -493,6 +493,128 @@ across backends.
   and are CI-gated. If real-corpus profiling ever shows meaningful cost, the
   remedy is an explicit opt-out — citations must never silently self-disable
   based on index or corpus state.
+
+## PostgreSQL replica
+
+`internal/postgres` implements the same `db.VectorSearcher` seam over
+[pgvector](https://github.com/pgvector/pgvector), making PostgreSQL a passive
+replica of the local `vectors.db`: embeddings are never computed server-side,
+and `pg push` copies the active generation's documents and chunks. The fusion
+machinery — `RRFMerge`, unit fusion keys, the subordinate penalty, snippet
+construction — is exported from `internal/db` and reused rather than duplicated,
+so semantic/hybrid parity between backends holds by construction. The
+user-facing behavior (fingerprint gate, graceful 501 degradation, shared
+generations) is described in
+[Semantic Search — PostgreSQL](/semantic-search/#postgresql); this section
+covers the invariants.
+
+### Schema shape
+
+- `vector_generations` is keyed by the **same config fingerprint** as local
+  generations, so machines with identical `[vector.embeddings]` configs share
+  one generation; `vector_generation_machines` records contributors for
+  observability.
+- `vector_documents` mirrors the local `vector_messages` table: `doc_key`
+  primary key plus a `UNIQUE (session_id, ordinal)` index, with full document
+  content duplicated into PG so snippets and anchoring reuse the exact local
+  mirror semantics (rebuilding content from `messages` at query time would
+  need duplicate extraction logic that can drift).
+- `vector_chunks_g<id>` is one table per generation with a `halfvec(N)` column
+  and an HNSW cosine index. Per-generation tables are required because a
+  pgvector column has a fixed typed dimension; `halfvec` stays under HNSW's
+  dimension ceiling (covering 2560-dim models that plain `vector` cannot
+  index) and halves storage. Index DDL schema-qualifies the type and operator
+  (`OPERATOR(schema.<=>)`) because the session `search_path` is
+  target-schema-only.
+- **`vector_documents` is deliberately shared across generations.** A newer push
+  can overwrite content an older generation's chunks hydrate against — the
+  same transient skew the local `vectors.db` has with its single shared mirror
+  table. Serve only ever targets one fingerprint-matched generation, the skew
+  self-heals on the next re-push, and generation-scoping the documents would
+  duplicate full content per generation for no read-path benefit. Do not "fix"
+  this by forking the mirror shapes.
+
+### Push invariants
+
+- **Delta state lives in PG, not the local sync-state store.**
+  `vector_push_state (generation_id, session_id, doc_agg_hash)` is written in
+  the same transaction as the doc/chunk upserts; `doc_agg_hash` is a sha256
+  over each embedded doc's full row identity (`doc_key`, `source_uuid`,
+  ordinals, `subordinate`, offsets, `content_hash`), so metadata-only changes
+  re-push, not just content changes. State living with the data makes a PG
+  reset self-healing — state and vectors vanish together.
+- **Doc replacement is park-to-sentinel.** `doc_key` is stable but ordinals
+  shift, so plain `ON CONFLICT (doc_key)` upserts collide with
+  `UNIQUE (session_id, ordinal)`. Each changed session first parks its
+  existing rows at unique negative ordinals (seeded below `MIN(ordinal)`, like
+  the local mirror's parking floor), upserts current docs onto the freed
+  slots, then deletes rows still parked — docs that vanished locally —
+  together with every generation's chunks for them. The cascade matters: local
+  kit removal deletes a vanished doc's vectors from all generations, and
+  preserving another generation's chunks in PG would leave them referencing a
+  row hidden behind the read path's `ordinal >= 0` tombstone guard — dead KNN
+  slots that never hydrate. Whole-session eviction, by contrast, preserves doc
+  rows another generation still references (they stay at non-negative,
+  hydratable ordinals), because an evicted session may merely have left this
+  pusher's project filter while its docs still exist locally.
+- **Eviction is scoped by push ownership, not machine names.** Deletions apply
+  only to sessions this pusher owns per its owner marker, because machine
+  names are aliasable. Both the per-session push transaction and each eviction
+  transaction re-probe the `sessions` row `FOR UPDATE` and re-adjudicate
+  ownership inside the transaction — the delta scan's ownership read can be
+  minutes stale, and without the re-probe one pusher could delete chunks a
+  concurrent pusher claimed and pushed after the scan. Legacy rows with an
+  empty `owner_marker` fall back to the `sessions.machine` column checked
+  against this pusher's machine name and marker aliases — a legacy row naming
+  another machine is a conflict on both the push and evict paths, never
+  adopted. Filtered pushes additionally scope by *local* project membership,
+  so a session that moved out of the project filter locally is not evicted
+  based on a stale PG-side project value. Sessions whose session-phase push
+  failed are never eviction candidates in the same run — a failed session
+  whose embedded docs all vanished locally is counted as deferred, keeping
+  vector state from running ahead of the sessions rows that failed to write.
+- **A partially embedded local index defers the whole phase.** A
+  same-fingerprint full rebuild clears and refills the active generation in
+  place, so a push running concurrently would read partial session coverage as
+  truth and evict valid PG vectors. The push source refuses to export a
+  generation with missing embeddings (`ErrVectorSourceNotReady`, a clean phase
+  skip), and the push re-checks the source immediately before running its
+  eviction list in case a rebuild started mid-push.
+- **A session is replaced only when its export matches the delta scan.**
+  `ExportSessionDocs` reads docs, chunks, and the session's aggregate hash in
+  one local read snapshot and returns the hash of exactly the exported set;
+  the push defers the session (writing nothing) when that hash differs from
+  the hash its delta scan read. Without this, a rebuild starting between the
+  scan and the export could replace valid PG vectors with a partial view and
+  record the scan's hash as current — a state a same-fingerprint rebuild (same
+  content, same hash) would never repair. On the first deferral the push also
+  re-checks the source; an unready or swapped generation stops the phase,
+  since every remaining session would diverge the same way.
+
+### Read path
+
+- Startup wiring verifies **both** the fingerprint-matched generation row and
+  its chunk table. Registering a generation and creating its chunk table are
+  separate statements on the push side, so an interrupted push can leave the
+  row without the table; wiring a searcher against it would fail every query
+  with a missing-relation error instead of degrading to
+  `ErrSemanticUnavailable`.
+- The KNN query fetches **exactly k chunks** — no over-fetch multiplier — to
+  match the SQLite searcher's brute-force contract; the shared caller already
+  over-fetches for metadata post-filtering.
+- HNSW's default candidate pool (`hnsw.ef_search = 40`) silently caps results
+  below k for large fetches, so each search runs
+  `SET LOCAL hnsw.ef_search = clamp(k, 40, 1000)` in the query transaction.
+  For k past pgvector's 1000 ceiling, `hnsw.iterative_scan = 'relaxed_order'`
+  (pgvector >= 0.8) lets the scan continue; the GUC is probed with
+  `current_setting(..., missing_ok)` first so older pgvector skips it instead
+  of aborting the transaction.
+- The hybrid keyword leg selects ILIKE candidates in recency order over the
+  embedded-universe predicates, resolves them to units through
+  `ResolveMessageUnits` point lookups against `vector_documents`, and feeds
+  the shared RRF merge — everything after candidate selection matches the
+  SQLite contract, with the BM25-vs-recency leg-ranking difference documented
+  in the [user-facing docs](/semantic-search/#hybrid-keyword-leg).
 
 ## Error taxonomy
 

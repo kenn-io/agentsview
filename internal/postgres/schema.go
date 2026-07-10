@@ -812,6 +812,9 @@ func EnsureSchema(
 		"pg schema: content search index step completed in %s",
 		time.Since(step).Round(time.Millisecond),
 	)
+	if _, err := ensureVectorBaseSchemaPG(ctx, db); err != nil {
+		log.Printf("pg schema: vector schema setup failed: %v", err)
+	}
 	step = time.Now()
 	runRepair, err := shouldRunTokenCoverageRepair(
 		ctx, db, tokenCoverageColumnsAdded,

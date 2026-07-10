@@ -466,6 +466,7 @@ agentsview pg push [target] [flags]
 | Flag                 | Default | Description                                                    |
 | -------------------- | ------- | -------------------------------------------------------------- |
 | `--full`             | `false` | Force full local resync and re-push                            |
+| `--no-vectors`       | `false` | Skip the semantic-search vector phase for this run             |
 | `--projects`         |         | Comma-separated projects to push (inclusive)                   |
 | `--exclude-projects` |         | Comma-separated projects to exclude from push                  |
 | `--all-projects`     | `false` | Ignore configured project filters for this run                 |
@@ -506,7 +507,10 @@ agentsview pg serve [flags]
 ```
 
 Accepts the same serve flags (`--host`, `--port`, `--proxy`, etc.) plus
-PostgreSQL configuration from `config.toml`.
+PostgreSQL configuration from `config.toml`. When the host's `[vector]` config
+matches a generation pushed to PostgreSQL, semantic and hybrid search are served
+from pgvector — see
+[Semantic Search — PostgreSQL](/semantic-search/#postgresql).
 
 ______________________________________________________________________
 
@@ -535,6 +539,28 @@ agentsview pg service uninstall
 | `start`     | Start the installed service                               |
 | `stop`      | Stop the installed service                                |
 | `uninstall` | Stop and remove the service unit                          |
+
+______________________________________________________________________
+
+### `agentsview pg vectors`
+
+Inspect and drop semantic-search embedding generations stored in PostgreSQL.
+See [Semantic Search — Maintenance](/semantic-search/#maintenance) for details.
+
+```bash
+agentsview pg vectors list [flags]
+agentsview pg vectors drop <id> [flags]
+```
+
+| Command     | Description                                                                              |
+| ----------- | ---------------------------------------------------------------------------------------- |
+| `list`      | List generations with model, dimension, document/chunk counts, and contributing machines |
+| `drop <id>` | Drop a generation and all of its embeddings (prompts for confirmation)                   |
+
+| Flag       | Default | Description                                          |
+| ---------- | ------- | ---------------------------------------------------- |
+| `--target` |         | PG target name (default: the default configured target) |
+| `--yes`    | `false` | Skip the confirmation prompt (`drop` only)           |
 
 ______________________________________________________________________
 

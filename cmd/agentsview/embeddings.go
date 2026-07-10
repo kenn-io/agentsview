@@ -441,6 +441,7 @@ func runDirectBuild(
 
 	ticker := time.NewTicker(directBuildProgressInterval)
 	defer ticker.Stop()
+	var progress buildProgressPrinter
 	for {
 		select {
 		case res := <-resultCh:
@@ -456,7 +457,7 @@ func runDirectBuild(
 			return nil
 		case <-ticker.C:
 			if status := m.Status(); status.Running {
-				printBuildProgress(out, status.Done, status.Total)
+				progress.print(out, status.Phase, status.Done, status.Total)
 			}
 		}
 	}
@@ -497,6 +498,7 @@ func buildViaDaemon(
 func pollDaemonBuildStatus(
 	ctx context.Context, out io.Writer, client embeddingsDaemonClient,
 ) error {
+	var progress buildProgressPrinter
 	for {
 		status, err := client.status(ctx)
 		if err != nil {
@@ -505,7 +507,7 @@ func pollDaemonBuildStatus(
 		if !status.Running {
 			return finalizeBuildStatus(out, status)
 		}
-		printBuildProgress(out, status.Done, status.Total)
+		progress.print(out, status.Phase, status.Done, status.Total)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -527,8 +529,37 @@ func finalizeBuildStatus(out io.Writer, status vector.BuildStatus) error {
 	return nil
 }
 
-// printBuildProgress writes one progress line for either build path.
-func printBuildProgress(w io.Writer, done, total int64) {
+// buildProgressPrinter deduplicates the per-poll progress lines: both build
+// paths poll on a fixed interval and the status often has not moved between
+// polls, which used to print the same line dozens of times (worst during the
+// scan phase, where every poll rendered an identical "0/0 chunks").
+type buildProgressPrinter struct {
+	printed   bool
+	lastPhase string
+	lastDone  int64
+	lastTotal int64
+}
+
+func (p *buildProgressPrinter) print(w io.Writer, phase string, done, total int64) {
+	if p.printed && phase == p.lastPhase && done == p.lastDone && total == p.lastTotal {
+		return
+	}
+	p.printed = true
+	p.lastPhase, p.lastDone, p.lastTotal = phase, done, total
+	printBuildProgress(w, phase, done, total)
+}
+
+// printBuildProgress writes one progress line for either build path. Before
+// the embedding fill starts, the build scans the archive to reconcile the
+// mirror and chunk totals are not known yet; printing the chunk counters
+// there would render a misleading "0/0 chunks" for the whole scan, so any
+// non-embedding report without a total prints the scan line instead (an
+// empty phase covers daemons predating the scanning phase report).
+func printBuildProgress(w io.Writer, phase string, done, total int64) {
+	if phase != "embedding" && total == 0 {
+		fmt.Fprintln(w, "progress: scanning archive for changed documents...")
+		return
+	}
 	pct := 0.0
 	if total > 0 {
 		pct = float64(done) / float64(total) * 100

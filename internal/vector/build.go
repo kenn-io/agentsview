@@ -102,6 +102,13 @@ func (ix *Index) Build(
 	// build compares against a real stored scope again.
 	scopeChanged := !hasScope || storedScope != o.IncludeAutomated
 	full := o.FullRebuild || o.Backstop || firstEver || scopeChanged
+	// Report the scanning phase before the mirror refresh: on a large archive
+	// the refresh (and the pending count below) can run for a while with no
+	// chunk totals yet, and without a phase report a progress consumer can
+	// only render a misleading "0/0 chunks".
+	if o.Progress != nil {
+		o.Progress(BuildProgress{Phase: "scanning"})
+	}
 	refreshStats, err := ix.Refresh(ctx, src, full, o.IncludeAutomated)
 	if err != nil {
 		return BuildResult{}, err

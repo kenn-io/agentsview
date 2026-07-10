@@ -231,10 +231,10 @@ func TestSearchContentHybridRedactsSecretPastChunkTruncation(t *testing.T) {
 }
 
 // mergedKeys projects a merged result to its keys in rank order.
-func mergedKeys(merged []mergedUnit) []string {
+func mergedKeys(merged []FusedUnit) []string {
 	keys := make([]string, len(merged))
 	for i, m := range merged {
-		keys[i] = m.unit.Key
+		keys[i] = m.Unit.Key
 	}
 	return keys
 }
@@ -243,33 +243,33 @@ func mergedKeys(merged []mergedUnit) []string {
 // merge level: a unit ranked by both legs scores the sum of its per-leg
 // reciprocal ranks and outranks a unit seen by only one leg.
 func TestRRFMergeBothLegsOutrankSingleLeg(t *testing.T) {
-	merged := rrfMerge([][]unitRanked{
+	merged := RRFMerge([][]RankedUnit{
 		{{Key: "a"}, {Key: "b"}},
 		{{Key: "a"}},
 	}, 0)
 	require.Equal(t, []string{"a", "b"}, mergedKeys(merged))
-	assert.InDelta(t, 2.0/61.0, merged[0].score, 1e-12, "double-leg score")
-	assert.InDelta(t, 1.0/62.0, merged[1].score, 1e-12, "single-leg score")
+	assert.InDelta(t, 2.0/61.0, merged[0].Score, 1e-12, "double-leg score")
+	assert.InDelta(t, 1.0/62.0, merged[1].Score, 1e-12, "single-leg score")
 }
 
 // TestRRFMergeSubordinatePenaltyAcrossLegs pins the rank+5 penalty: a
 // subordinate unit at leg rank 1 must fall below a top-level unit at the
 // same rank in the other leg.
 func TestRRFMergeSubordinatePenaltyAcrossLegs(t *testing.T) {
-	merged := rrfMerge([][]unitRanked{
+	merged := RRFMerge([][]RankedUnit{
 		{{Key: "sub", Subordinate: true}},
 		{{Key: "top"}},
 	}, 0)
 	require.Equal(t, []string{"top", "sub"}, mergedKeys(merged))
-	assert.InDelta(t, 1.0/61.0, merged[0].score, 1e-12)
-	assert.InDelta(t, 1.0/66.0, merged[1].score, 1e-12, "subordinate uses rank+5")
+	assert.InDelta(t, 1.0/61.0, merged[0].Score, 1e-12)
+	assert.InDelta(t, 1.0/66.0, merged[1].Score, 1e-12, "subordinate uses rank+5")
 }
 
 // TestRRFMergeOneLegSubordinatePenaltyReorders pins the one-leg (semantic-
 // only) fusion contract: a subordinate unit ranked immediately above a
 // top-level unit drops below it after the merge.
 func TestRRFMergeOneLegSubordinatePenaltyReorders(t *testing.T) {
-	merged := rrfMerge([][]unitRanked{{
+	merged := RRFMerge([][]RankedUnit{{
 		{Key: "sub", Subordinate: true},
 		{Key: "top"},
 	}}, 0)
@@ -280,13 +280,13 @@ func TestRRFMergeOneLegSubordinatePenaltyReorders(t *testing.T) {
 // rank 1 (effective rank 6) scores exactly like a top-level unit at rank 6,
 // and the tie breaks by ascending key, not map iteration order.
 func TestRRFMergeDeterministicTieBreak(t *testing.T) {
-	leg := []unitRanked{
+	leg := []RankedUnit{
 		{Key: "zzz", Subordinate: true},
 		{Key: "m2"}, {Key: "m3"}, {Key: "m4"}, {Key: "m5"},
 		{Key: "aaa"},
 	}
 	for range 20 {
-		merged := rrfMerge([][]unitRanked{leg}, 0)
+		merged := RRFMerge([][]RankedUnit{leg}, 0)
 		require.Equal(t,
 			[]string{"m2", "m3", "m4", "m5", "aaa", "zzz"}, mergedKeys(merged))
 	}
@@ -295,7 +295,7 @@ func TestRRFMergeDeterministicTieBreak(t *testing.T) {
 // TestRRFMergeLimitHonored pins truncation: limit > 0 caps the merged list
 // at the top-scored units.
 func TestRRFMergeLimitHonored(t *testing.T) {
-	merged := rrfMerge([][]unitRanked{
+	merged := RRFMerge([][]RankedUnit{
 		{{Key: "a"}, {Key: "b"}, {Key: "c"}},
 	}, 2)
 	assert.Equal(t, []string{"a", "b"}, mergedKeys(merged))
@@ -564,7 +564,7 @@ func TestSearchContentHybridMatchCarriesUnitRangeAndLineage(t *testing.T) {
 
 // TestSearchContentHybridFTSLegCollapseRefillsFromDeeperRanks pins the
 // batched FTS leg against unit collapse: when more than k (the
-// semanticOverfetchMin=200 fusion depth) rank-ordered FTS rows all fall
+// SemanticOverfetchMin=200 fusion depth) rank-ordered FTS rows all fall
 // inside ONE run-unit, they collapse to a single leg entry, and a match in a
 // different unit ranked below all of them must still be fetched and returned
 // rather than being cut off by the first batch's window.

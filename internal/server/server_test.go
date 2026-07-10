@@ -2494,6 +2494,43 @@ func TestDuckDBPushLocalNoSyncDaemonWritesConfiguredPath(t *testing.T) {
 	assert.FileExists(t, target)
 }
 
+// TestDuckDBPushStreamsSSEDoneEvent pins the push route's SSE mode: a client
+// that accepts text/event-stream (the CLI's daemon-delegated push) gets an
+// event stream ending in a done event carrying the push result, instead of a
+// single JSON body after a silent wait.
+func TestDuckDBPushStreamsSSEDoneEvent(t *testing.T) {
+	if runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
+		t.Skip("duckdb-go-bindings does not ship a windows/arm64 library")
+	}
+
+	te := setupNoSyncMode(t)
+	target := filepath.Join(t.TempDir(), "agentsview.duckdb")
+	body, err := json.Marshal(struct {
+		Full   bool                `json:"full"`
+		DuckDB config.DuckDBConfig `json:"duckdb"`
+	}{
+		Full: true,
+		DuckDB: config.DuckDBConfig{
+			Path:        target,
+			MachineName: "workstation",
+		},
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/push/duckdb",
+		strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "http://127.0.0.1:0")
+	req.Header.Set("Accept", "text/event-stream")
+	w := httptest.NewRecorder()
+	te.handler.ServeHTTP(w, req)
+
+	assertStatus(t, w, http.StatusOK)
+	assert.Contains(t, w.Header().Get("Content-Type"), "text/event-stream")
+	assert.Contains(t, w.Body.String(), "event: done")
+	assert.FileExists(t, target)
+}
+
 func TestCORSPreflightRejectsBadOrigin(t *testing.T) {
 	te := setupHostOnly(t)
 

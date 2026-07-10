@@ -1,18 +1,119 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
+	"go.kenn.io/agentsview/internal/postgres"
 )
+
+// stubVectorPushSource is a no-op postgres.VectorPushSource: the gating test
+// only needs identity, never a method call.
+type stubVectorPushSource struct{}
+
+func (stubVectorPushSource) Generation(
+	context.Context,
+) (postgres.VectorGenerationInfo, bool, error) {
+	return postgres.VectorGenerationInfo{}, false, nil
+}
+
+func (stubVectorPushSource) SessionDocHashes(
+	context.Context,
+) (map[string]string, error) {
+	return nil, nil
+}
+
+func (stubVectorPushSource) SessionDocs(
+	context.Context, string,
+) ([]postgres.VectorPushDoc, string, error) {
+	return nil, "", nil
+}
+
+// TestPGPushProgressLoggerThrottlesAndReportsPhases pins the daemon-side
+// push heartbeat: reports inside the throttle window log nothing, and the
+// vector phase logs its own counters instead of the session line.
+func TestPGPushProgressLoggerThrottlesAndReportsPhases(t *testing.T) {
+	origInterval := pushProgressLogInterval
+	pushProgressLogInterval = time.Hour
+	t.Cleanup(func() { pushProgressLogInterval = origInterval })
+
+	var buf bytes.Buffer
+	origOut := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(origOut) })
+
+	logProgress := newPGPushProgressLogger()
+	logProgress(postgres.PushProgress{SessionsDone: 1, SessionsTotal: 10, MessagesDone: 5})
+	logProgress(postgres.PushProgress{SessionsDone: 2, SessionsTotal: 10, MessagesDone: 9})
+	assert.Contains(t, buf.String(), "pg push: 1/10 session(s), 5 messages")
+	assert.NotContains(t, buf.String(), "2/10",
+		"second report inside the throttle window must not log")
+
+	pushProgressLogInterval = 0
+	logProgress(postgres.PushProgress{
+		Phase:               "vectors",
+		VectorSessionsDone:  3,
+		VectorSessionsTotal: 7,
+		VectorChunksPushed:  42,
+	})
+	assert.Contains(t, buf.String(),
+		"pg push: vectors 3/7 session(s) scanned, 42 chunks")
+
+	logProgress(postgres.PushProgress{
+		Phase:         "preparing",
+		SessionsDone:  500,
+		SessionsTotal: 46000,
+	})
+	assert.Contains(t, buf.String(), "pg push: preparing 500/46000 session(s)")
+
+	logProgress(postgres.PushProgress{Phase: "preparing"})
+	assert.Contains(t, buf.String(),
+		"pg push: preparing (sync state, metadata, fingerprints)",
+		"zero-total preparing report renders the setup-stage line")
+}
+
+func TestPGPushVectorSourceGating(t *testing.T) {
+	disabled := false
+	tests := []struct {
+		name      string
+		wired     bool
+		pushFlag  *bool
+		noVectors bool
+		wantSrc   bool
+	}{
+		{name: "wired and enabled", wired: true, wantSrc: true},
+		{name: "no source wired", wired: false, wantSrc: false},
+		{name: "target opts out", wired: true, pushFlag: &disabled, wantSrc: false},
+		{name: "caller passed --no-vectors", wired: true, noVectors: true, wantSrc: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Server{}
+			if tt.wired {
+				s.vectorPushSource = stubVectorPushSource{}
+			}
+			got := s.pgPushVectorSource(
+				config.PGConfig{PushVectors: tt.pushFlag}, tt.noVectors,
+			)
+			if tt.wantSrc {
+				assert.NotNil(t, got)
+			} else {
+				assert.Nil(t, got)
+			}
+		})
+	}
+}
 
 type openAPISpec struct {
 	Paths map[string]map[string]openAPIOperation `json:"paths"`
@@ -191,4 +292,37 @@ func TestSyncRemotesRouteIsStreaming(t *testing.T) {
 	op := requireOpenAPIOperation(t, spec, "post", "/api/v1/sync/remotes")
 	require.Contains(t, op.Responses, "200")
 	assertStreamingResponseContent(t, op.Responses["200"].Content)
+}
+
+// TestPushRoutesAreStreaming pins that both push routes negotiate SSE (the
+// CLI's daemon-delegated push renders the streamed progress) while still
+// declaring a plain JSON response for non-streaming clients.
+func TestPushRoutesAreStreaming(t *testing.T) {
+	s := testServer(t, 30)
+	spec := readOpenAPISpec(t, s.Handler())
+	for _, path := range []string{"/api/v1/push/pg", "/api/v1/push/duckdb"} {
+		op := requireOpenAPIOperation(t, spec, "post", path)
+		require.Contains(t, op.Responses, "200", path)
+		assertStreamingResponseContent(t, op.Responses["200"].Content)
+	}
+}
+
+// TestNewPushProgressStreamSenderThrottles pins the SSE fan-out throttle: the
+// session loop reports per session, and forwarding every report would emit
+// one SSE event per row.
+func TestNewPushProgressStreamSenderThrottles(t *testing.T) {
+	origInterval := pushProgressStreamInterval
+	pushProgressStreamInterval = time.Hour
+	t.Cleanup(func() { pushProgressStreamInterval = origInterval })
+
+	var got []int
+	send := newPushProgressStreamSender(func(v int) { got = append(got, v) })
+	send(1)
+	send(2)
+	assert.Equal(t, []int{1}, got,
+		"second report inside the throttle window must not send")
+
+	pushProgressStreamInterval = 0
+	send(3)
+	assert.Equal(t, []int{1, 3}, got)
 }

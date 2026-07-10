@@ -13,12 +13,12 @@ For the architecture behind this page — storage layout, generations,
 concurrency, and the search path — see
 [Semantic Search Internals](/semantic-search-internals/).
 
-!!! note "SQLite only"
+!!! note "Backends"
 
-    Semantic and hybrid search require the local SQLite archive.
-    [PostgreSQL sync](/pg-sync/) and the [DuckDB mirror](/duckdb/) do not support a
-    vector backend yet, so `--semantic`/`--hybrid` against `--pg` or a DuckDB-backed
-    server return the same "not available" error described below.
+    Semantic and hybrid search run on the local SQLite archive and on
+    [PostgreSQL](#postgresql) via pgvector. The [DuckDB mirror](/duckdb/) has no
+    vector backend, so `--semantic`/`--hybrid` against a DuckDB-backed server return
+    the "not available" error described below.
 
 ## Enabling `[vector]`
 
@@ -432,22 +432,127 @@ of `ordinal_range` to read the whole stretch.
 
 ## Error taxonomy
 
-| Situation                                                                                        | Message                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `[vector]` not enabled                                                                           | `vector search is not enabled: set [vector] enabled = true in config.toml` (from `agentsview embeddings ...`)                                              |
-| No `VectorSearcher` wired (index never built, or PG/DuckDB backend)                              | `semantic search not available: enable [vector] in config.toml and run 'agentsview embeddings build'`                                                      |
-| Only a building generation exists                                                                | same message, plus `: index is building: N% complete`                                                                                                      |
-| Active generation's fingerprint no longer matches config (model, dimension, or chunking changed) | same message, plus `: index is stale (embedding config changed): run 'agentsview embeddings build --full-rebuild'`                                         |
-| Index was built by an incompatible agentsview version (mirror schema mismatch)                   | same message, plus `` : vector index was built by an incompatible version: run `agentsview embeddings build` ``                                            |
-| `--scope` with a lexical mode (or without `--semantic`/`--hybrid`)                               | CLI: `--scope requires --semantic or --hybrid`; HTTP/MCP: `scope is only supported for semantic and hybrid search modes`                                   |
-| Embeddings endpoint unreachable or timed out                                                     | `[vector.embeddings] request: ...` (the underlying transport error)                                                                                        |
-| Embeddings endpoint returned non-200                                                             | `[vector.embeddings] status <code>: <body>`                                                                                                                |
-| `--in` names a source other than `messages` with `--semantic`/`--hybrid`                         | CLI: `--semantic searches messages only; drop --in` (or `--hybrid ...`); HTTP/MCP: `search: semantic search only supports the messages source (got "...")` |
-| `--cursor` with `--semantic`/`--hybrid`                                                          | `semantic search returns a single ranked page; cursor pagination is not supported`                                                                         |
+| Situation                                                                                               | Message                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `[vector]` not enabled                                                                                  | `vector search is not enabled: set [vector] enabled = true in config.toml` (from `agentsview embeddings ...`)                                              |
+| No `VectorSearcher` wired (index never built, DuckDB backend, or PG with no matching pushed generation) | `semantic search not available: enable [vector] in config.toml and run 'agentsview embeddings build'`                                                      |
+| Only a building generation exists                                                                       | same message, plus `: index is building: N% complete`                                                                                                      |
+| Active generation's fingerprint no longer matches config (model, dimension, or chunking changed)        | same message, plus `: index is stale (embedding config changed): run 'agentsview embeddings build --full-rebuild'`                                         |
+| Index was built by an incompatible agentsview version (mirror schema mismatch)                          | same message, plus `` : vector index was built by an incompatible version: run `agentsview embeddings build` ``                                            |
+| `--scope` with a lexical mode (or without `--semantic`/`--hybrid`)                                      | CLI: `--scope requires --semantic or --hybrid`; HTTP/MCP: `scope is only supported for semantic and hybrid search modes`                                   |
+| Embeddings endpoint unreachable or timed out                                                            | `[vector.embeddings] request: ...` (the underlying transport error)                                                                                        |
+| Embeddings endpoint returned non-200                                                                    | `[vector.embeddings] status <code>: <body>`                                                                                                                |
+| `--in` names a source other than `messages` with `--semantic`/`--hybrid`                                | CLI: `--semantic searches messages only; drop --in` (or `--hybrid ...`); HTTP/MCP: `search: semantic search only supports the messages source (got "...")` |
+| `--cursor` with `--semantic`/`--hybrid`                                                                 | `semantic search returns a single ranked page; cursor pagination is not supported`                                                                         |
 
 Over HTTP (`GET /api/v1/search/content`) and MCP (`search_content`), the "not
 available" family of errors maps to HTTP `501 Not Implemented` and the matching
 MCP tool error, carrying the same remediation text.
+
+## PostgreSQL
+
+The `--pg` read path and `agentsview pg serve` support semantic and hybrid
+search backed by [pgvector](https://github.com/pgvector/pgvector), so a shared
+PostgreSQL deployment answers `--semantic`/`--hybrid` the same way a local
+SQLite index does. Only the DuckDB mirror lacks a vector backend and still
+returns the "not available" error (HTTP 501).
+
+### Pushing embeddings
+
+`agentsview pg push` runs a vector phase after the session and message phases:
+it copies the machine's active generation from the local `vectors.db` mirror
+into PostgreSQL as per-generation `halfvec` chunk tables. Only the active
+generation is pushed, and only sessions whose document set changed since the
+last push are re-sent, mirroring the incremental session push (`pg push --full`
+bypasses the change detection and re-sends every session's vectors). The
+`pg push` summary reports the phase as
+`Vectors: N session(s) pushed, ... docs, ... chunks`, or
+`Vectors: skipped (<reason>)` when it does not run.
+
+Skip the phase for a single run with `--no-vectors`, or disable it persistently:
+
+```toml
+[pg]
+push_vectors = false
+```
+
+`push_vectors` defaults to true, so a machine with `[vector]` enabled pushes its
+embeddings automatically. A machine without `[vector]` enabled has no generation
+to push and skips the phase regardless.
+
+### Serving semantic search
+
+`pg serve` — and every `--pg` direct-read command — wires PG-backed semantic
+search at startup when three conditions hold on the serving host:
+
+1. `[vector]` is enabled in that host's `config.toml`.
+1. The host's embedding config fingerprint (model, dimension, chunking, prompt
+   affixes) matches a generation already pushed to PostgreSQL. The fingerprint
+   is immutable, so a startup match cannot go stale while the process runs;
+   changing the local embeddings config changes the fingerprint and requires a
+   restart to pick up.
+1. The configured embeddings server is reachable from the serving host, because
+   query text is embedded at search time with the same encoder the index was
+   built with.
+
+If no generation matches, `pg serve` starts normally but semantic and hybrid
+search return the 501 "not available" error carrying the mismatch reason, which
+lists the fingerprints PostgreSQL does have so an operator can tell a "wrong
+config" miss from a "never pushed" one. A missing pgvector extension or vector
+tables degrade the same way — see
+[Backends without pgvector](#backends-without-pgvector).
+
+### Shared generations across machines
+
+A generation is keyed by its config fingerprint, so every machine with an
+identical `[vector.embeddings]` config pushes into the *same* PostgreSQL
+generation. Their documents and chunks accumulate side by side, and any serving
+host with the matching fingerprint searches the union. Coverage is partial by
+construction: a session becomes semantically searchable only once the machine
+that owns it has pushed its embeddings, so a freshly pushed session's text can
+match lexically (through the hybrid keyword leg) before its vectors arrive.
+
+### Storage and indexing
+
+Embeddings are stored as pgvector `halfvec` (16-bit) columns, one chunk table
+per generation, each indexed with an HNSW cosine index. `halfvec` halves storage
+versus 32-bit `vector` and stays under HNSW's dimension ceiling, so models up to
+2560 dimensions index cleanly where plain `vector` cannot. Per-generation tables
+are required because a pgvector column has a fixed typed dimension.
+
+### Backends without pgvector
+
+Semantic search degrades gracefully when the extension is absent or too old.
+`pg push` best-effort runs `CREATE EXTENSION IF NOT EXISTS vector`; if that
+fails — CockroachDB, which has no pgvector; a database where the extension
+package is not installed; or a role lacking `CREATE` privilege — schema setup
+logs a one-line notice and continues, and the vector phase is skipped. `halfvec`
+needs pgvector 0.7.0 or newer: `CREATE EXTENSION IF NOT EXISTS` never upgrades
+an existing extension object, so when an older version is installed `pg push`
+attempts `ALTER EXTENSION vector UPDATE` (healing servers whose pgvector package
+was upgraded in place) and otherwise skips the vector phase, reporting the
+installed version. Session and message sync are unaffected in every case. On the
+read side a missing vector table is treated as "no generation found", so
+`pg serve` starts and only `--semantic`/`--hybrid` return 501 while lexical
+search keeps working.
+
+### Maintenance
+
+`agentsview pg vectors list` prints every generation with its model, dimension,
+document and chunk counts, contributing machines, and creation time.
+`agentsview pg vectors drop <id>` removes a generation and all of its embeddings
+(prompted unless `--yes`); use it to reclaim space after retiring an embedding
+model. Both accept `--target` to select a non-default PG target.
+
+### Hybrid keyword leg
+
+Both backends fuse the same two legs with the same reciprocal-rank merge, but
+their keyword legs rank differently. SQLite's hybrid keyword leg is BM25-ranked
+through FTS5; PostgreSQL's is an `ILIKE` scan ordered by recency (newest first).
+The vector leg, the RRF fusion, the subordinate-unit penalty, scope filtering,
+and hit anchoring are identical, so top results usually agree — but the
+keyword-leg input order, and therefore fusion ties broken by keyword rank, can
+differ between the backends.
 
 ## Limitations
 
@@ -473,10 +578,10 @@ MCP tool error, carrying the same remediation text.
   messages append — but its content changes, so each build re-embeds the
   current tail. That is the intended cost of grouping; finished runs never
   re-embed.
-- **SQLite only.** PostgreSQL sync and the DuckDB mirror have no vector backend;
-  `--semantic`/`--hybrid` against `--pg` or a DuckDB-backed server return the
-  "not available" error (HTTP 501) described above. `pgvector` support is a
-  possible follow-up.
+- **DuckDB mirror has no vector backend.** `--semantic`/`--hybrid` against a
+  DuckDB-backed server return the "not available" error (HTTP 501) described
+  above. PostgreSQL is supported through pgvector — see
+  [PostgreSQL](#postgresql).
 - **The index embeds message `content` verbatim.** Like `--fts`, it only draws
   from the `messages` source, so raw tool_input/tool_result rows are never
   candidates. System messages are handled more strictly, though: `--fts` still
