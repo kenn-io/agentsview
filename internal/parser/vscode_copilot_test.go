@@ -598,9 +598,9 @@ func TestReconstructJSONL(t *testing.T) {
 			},
 		},
 		{
-			name: "push with splice index",
+			name: "push with splice index replaces existing items",
 			lines: []string{
-				`{"kind":0,"v":{"items":["a","c"]}}`,
+				`{"kind":0,"v":{"items":["a","old","c"]}}`,
 				`{"kind":2,"k":["items"],"v":["b"],"i":1}`,
 			},
 			check: func(t *testing.T, data []byte) {
@@ -612,7 +612,7 @@ func TestReconstructJSONL(t *testing.T) {
 			},
 		},
 		{
-			name: "push with negative splice index",
+			name: "push with negative splice index replaces from front",
 			lines: []string{
 				`{"kind":0,"v":{"items":["a","b"]}}`,
 				`{"kind":2,"k":["items"],"v":["z"],"i":-1}`,
@@ -621,8 +621,8 @@ func TestReconstructJSONL(t *testing.T) {
 				var m map[string]any
 				require.NoError(t, json.Unmarshal(data, &m))
 				items := m["items"].([]any)
-				require.Len(t, items, 3, "len")
-				// Negative index clamped to 0: inserted at front
+				require.Len(t, items, 2, "len")
+				// Negative index clamped to 0: replaced at front.
 				assert.Equal(t, "z", items[0], "items[0]")
 			},
 		},

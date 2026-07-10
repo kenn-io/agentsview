@@ -816,12 +816,13 @@ func jsonlPush(
 		}
 		if spliceIdx != nil {
 			idx := max(0, min(*spliceIdx, len(arr)))
+			end := min(idx+len(items), len(arr))
 			newArr := make(
-				[]any, 0, len(arr)+len(items),
+				[]any, 0, len(arr)-(end-idx)+len(items),
 			)
 			newArr = append(newArr, arr[:idx]...)
 			newArr = append(newArr, items...)
-			newArr = append(newArr, arr[idx:]...)
+			newArr = append(newArr, arr[end:]...)
 			p[lastKey] = newArr
 		} else {
 			p[lastKey] = append(arr, items...)
@@ -837,12 +838,13 @@ func jsonlPush(
 		}
 		if spliceIdx != nil {
 			si := max(0, min(*spliceIdx, len(arr)))
+			end := min(si+len(items), len(arr))
 			newArr := make(
-				[]any, 0, len(arr)+len(items),
+				[]any, 0, len(arr)-(end-si)+len(items),
 			)
 			newArr = append(newArr, arr[:si]...)
 			newArr = append(newArr, items...)
-			newArr = append(newArr, arr[si:]...)
+			newArr = append(newArr, arr[end:]...)
 			p[idx] = newArr
 		} else {
 			p[idx] = append(arr, items...)
