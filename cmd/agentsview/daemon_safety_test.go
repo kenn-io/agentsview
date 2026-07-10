@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 func TestDaemonWaitForLaunchContentionDoesNotAcceptRecordWhileLockHeld(t *testing.T) {
 	setStartProbeTickForTest(t, 10*time.Millisecond)
 	dir := runtimeTestDir(t)
+	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
 	lock, ok := acquireBackgroundLaunchLock(dir)
 	require.True(t, ok)
 	locked := true
@@ -33,8 +35,19 @@ func TestDaemonWaitForLaunchContentionDoesNotAcceptRecordWhileLockHeld(t *testin
 	)
 	require.NoError(t, err)
 
+	attempted := make(chan struct{})
+	var attemptOnce sync.Once
+	waitDeps := defaultDaemonLaunchWaitDeps()
+	waitDeps.onAttempt = func() { attemptOnce.Do(func() { close(attempted) }) }
 	resultCh := make(chan daemonLaunchObservation, 1)
-	go func() { resultCh <- waitForDaemonLaunchContention(dir) }()
+	go func() {
+		resultCh <- waitForDaemonLaunchContentionWithDeps(dir, waitDeps)
+	}()
+	select {
+	case <-attempted:
+	case <-time.After(time.Second):
+		require.Fail(t, "waiter never attempted the held launch lock")
+	}
 	select {
 	case observation := <-resultCh:
 		assert.Fail(t, "contender returned while mutating owner held lock",
@@ -56,6 +69,79 @@ func TestDaemonWaitForLaunchContentionDoesNotAcceptRecordWhileLockHeld(t *testin
 	case <-time.After(time.Second):
 		require.Fail(t, "waiter did not inspect final state after lock release")
 	}
+}
+
+func TestDaemonWaitForLaunchContentionRejectsUnconfirmedLiveWriter(t *testing.T) {
+	setStartProbeTickForTest(t, 10*time.Millisecond)
+	dir := runtimeTestDir(t)
+	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
+	lock, ok := acquireBackgroundLaunchLock(dir)
+	require.True(t, ok)
+	locked := true
+	t.Cleanup(func() {
+		if locked {
+			_ = lock.Unlock()
+		}
+	})
+
+	pid := startSleepProcess(t)
+	rec := testWritableRecord(pid, "")
+	rec.Address = "127.0.0.1:1"
+	rec.Metadata[runtimePort] = "1"
+	path, err := writeRuntimeRecordForTest(dir, rec)
+	require.NoError(t, err)
+
+	attempted := make(chan struct{})
+	var attemptOnce sync.Once
+	waitDeps := defaultDaemonLaunchWaitDeps()
+	waitDeps.onAttempt = func() { attemptOnce.Do(func() { close(attempted) }) }
+	resultCh := make(chan daemonLaunchObservation, 1)
+	go func() {
+		resultCh <- waitForDaemonLaunchContentionWithDeps(dir, waitDeps)
+	}()
+	select {
+	case <-attempted:
+	case <-time.After(time.Second):
+		require.Fail(t, "waiter never attempted the held launch lock")
+	}
+	require.NoError(t, lock.Unlock())
+	locked = false
+
+	var observation daemonLaunchObservation
+	select {
+	case observation = <-resultCh:
+	case <-time.After(2 * time.Second):
+		require.Fail(t, "waiter did not inspect writer after lock release")
+	}
+	assert.Empty(t, observation.Records)
+	require.Len(t, observation.UnconfirmedRecords, 1)
+	assert.Equal(t, pid, observation.UnconfirmedRecords[0].PID)
+
+	var out bytes.Buffer
+	err = reportDaemonLaunchContention(&out, dir, observation, time.Now())
+	require.Error(t, err)
+	assert.ErrorContains(t, err, fmt.Sprintf("pid %d", pid))
+	assert.ErrorContains(t, err, path)
+	assert.ErrorContains(t, err, "verify")
+	assert.ErrorContains(t, err, "terminate")
+	assert.NotContains(t, out.String(), "already running")
+	assert.True(t, daemon.ProcessAlive(pid))
+}
+
+func TestDaemonWaitForLaunchContentionSurfacesReadOnlyConfigError(t *testing.T) {
+	dir := runtimeTestDir(t)
+	waitDeps := defaultDaemonLaunchWaitDeps()
+	waitDeps.loadReadOnlyConfig = func() (config.Config, error) {
+		return config.Config{}, errors.New("read-only config failed")
+	}
+
+	observation := waitForDaemonLaunchContentionWithDeps(dir, waitDeps)
+	require.Error(t, observation.Err)
+	assert.ErrorContains(t, observation.Err, "read-only config failed")
+	var out bytes.Buffer
+	err := reportDaemonLaunchContention(&out, dir, observation, time.Now())
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "read-only config failed")
 }
 
 func TestDaemonStopRevalidatesIdentityBeforeEverySignal(t *testing.T) {
@@ -87,6 +173,32 @@ func TestDaemonStopRevalidatesIdentityBeforeEverySignal(t *testing.T) {
 	assert.Equal(t, []int{201, 202, 203, 201, 202}, confirmations)
 	assert.Equal(t, []int{201}, signalled,
 		"changed and later identities must never be signalled")
+}
+
+func TestDaemonStopRevalidationFailureBeforeFirstSignalSaysAborted(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	rec := testWritableRecord(204, "/runtime/204.json")
+	deps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) {
+		return []daemon.RuntimeRecord{rec}, nil
+	}
+	confirmations := 0
+	deps.stopTargetConfirmed = func(daemon.RuntimeRecord, string) bool {
+		confirmations++
+		return confirmations == 1
+	}
+	signals := 0
+	deps.stopProcess = func(daemon.RuntimeRecord, time.Duration) error {
+		signals++
+		return nil
+	}
+
+	err := executeDaemonCommand(t, *deps, out, "stop")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "stop aborted before signaling")
+	assert.ErrorContains(t, err, "no process was signalled")
+	assert.ErrorContains(t, err, "remaining pids 204")
+	assert.NotContains(t, err.Error(), "partial stop")
+	assert.Zero(t, signals)
 }
 
 func TestDaemonStartSlowReadinessIsNotReportedRunning(t *testing.T) {
@@ -248,4 +360,32 @@ func TestStopOrphanedCaddyChildWithWriterReportsCanonicalOutput(t *testing.T) {
 	require.NoError(t, stopOrphanedCaddyChildWithWriter(&out, rec))
 	<-reaped
 	assert.Contains(t, out.String(), fmt.Sprintf("Stopped managed caddy (pid %d).", pid))
+}
+
+func TestStopOrphanedCaddyChildWithWriterRejectsUnknownIdentity(t *testing.T) {
+	pid := startSleepProcess(t)
+	rec := daemon.RuntimeRecord{Metadata: map[string]string{
+		runtimeCaddyPID: fmt.Sprint(pid),
+	}}
+	var out bytes.Buffer
+
+	err := stopOrphanedCaddyChildWithWriter(&out, rec)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "identity could not be confirmed")
+	assert.ErrorContains(t, err, fmt.Sprintf("pid %d", pid))
+	assert.True(t, daemon.ProcessAlive(pid))
+	assert.Empty(t, out.String())
+}
+
+func TestStopOrphanedCaddyChildLegacyWarnsOnUnknownIdentity(t *testing.T) {
+	pid := startSleepProcess(t)
+	rec := daemon.RuntimeRecord{Metadata: map[string]string{
+		runtimeCaddyPID: fmt.Sprint(pid),
+	}}
+
+	out := captureStdout(t, func() { stopOrphanedCaddyChild(rec) })
+	assert.Contains(t, out, "warning: could not stop managed caddy")
+	assert.Contains(t, out, fmt.Sprintf("pid %d", pid))
+	assert.Contains(t, out, "identity could not be confirmed")
+	assert.True(t, daemon.ProcessAlive(pid))
 }

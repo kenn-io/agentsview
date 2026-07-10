@@ -37,11 +37,11 @@ func stopWritableDaemonRecordsSafely(
 	records []daemon.RuntimeRecord,
 	ops daemonStopOperations,
 ) error {
+	_, unconfirmedRecords := partitionConfirmedDaemonRecords(
+		records, cfg.AuthToken, ops.confirmed,
+	)
 	var unconfirmed []string
-	for _, rec := range records {
-		if ops.confirmed(rec, cfg.AuthToken) {
-			continue
-		}
+	for _, rec := range unconfirmedRecords {
 		detail := fmt.Sprintf("pid %d", rec.PID)
 		if rec.SourcePath != "" {
 			detail += " (runtime record " + rec.SourcePath + ")"
@@ -57,6 +57,12 @@ func stopWritableDaemonRecordsSafely(
 	stopped := make([]int, 0, len(records))
 	for i, rec := range records {
 		if !ops.confirmed(rec, cfg.AuthToken) {
+			if len(stopped) == 0 {
+				return fmt.Errorf(
+					"stop aborted before signaling; no process was signalled; remaining pids %s; pid %d identity changed; verify remaining processes and terminate them manually before retrying",
+					formatRecordPIDList(records[i:]), rec.PID,
+				)
+			}
 			return partialDaemonStopError(
 				stopped, records[i:],
 				fmt.Errorf("pid %d identity changed before signaling", rec.PID),
@@ -77,6 +83,29 @@ func stopWritableDaemonRecordsSafely(
 		}
 	}
 	return nil
+}
+
+func partitionConfirmedDaemonRecords(
+	records []daemon.RuntimeRecord,
+	authToken string,
+	confirmed func(daemon.RuntimeRecord, string) bool,
+) (confirmedRecords, unconfirmedRecords []daemon.RuntimeRecord) {
+	for _, rec := range records {
+		if confirmed(rec, authToken) {
+			confirmedRecords = append(confirmedRecords, rec)
+		} else {
+			unconfirmedRecords = append(unconfirmedRecords, rec)
+		}
+	}
+	return confirmedRecords, unconfirmedRecords
+}
+
+func formatRecordPIDList(records []daemon.RuntimeRecord) string {
+	pids := make([]int, 0, len(records))
+	for _, rec := range records {
+		pids = append(pids, rec.PID)
+	}
+	return formatPIDList(pids)
 }
 
 func partialDaemonStopError(
@@ -404,8 +433,21 @@ func stopOrphanedCaddyChildWithWriter(
 		return nil
 	}
 	caddyCreateTime := rec.Metadata[runtimeCaddyCreateTime]
-	if !processCreateTimeMatches(pid, caddyCreateTime) {
+	switch processCreateTimeStateForPID(pid, caddyCreateTime) {
+	case processCreateTimeMismatch:
 		return nil
+	case processCreateTimeUnknown:
+		return fmt.Errorf(
+			"managed caddy pid %d identity could not be confirmed; refusing to signal it",
+			pid,
+		)
+	case processCreateTimeMatch:
+		// Exact identity authorizes shutdown below.
+	default:
+		return fmt.Errorf(
+			"managed caddy pid %d identity could not be confirmed; refusing to signal it",
+			pid,
+		)
 	}
 	if err := stopDaemonProcess(
 		caddyStopRecord(pid, caddyCreateTime), serveStopGraceTimeout,

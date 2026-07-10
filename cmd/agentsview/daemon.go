@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -22,11 +23,41 @@ type daemonLaunchLock interface {
 }
 
 type daemonLaunchObservation struct {
-	LockHeld bool
-	Starting bool
-	Snapshot *startupState
-	Records  []daemon.RuntimeRecord
-	Err      error
+	LockHeld           bool
+	Starting           bool
+	Snapshot           *startupState
+	Records            []daemon.RuntimeRecord
+	UnconfirmedRecords []daemon.RuntimeRecord
+	Err                error
+}
+
+type daemonLaunchWaitDeps struct {
+	acquireLaunchLock  func(string) (*flock.Flock, bool, error)
+	loadReadOnlyConfig func() (config.Config, error)
+	writableRecords    func(string) ([]daemon.RuntimeRecord, error)
+	confirmed          func(daemon.RuntimeRecord, string) bool
+	isStarting         func(string) bool
+	readStartupState   func(string) *startupState
+	now                func() time.Time
+	sleep              func(time.Duration)
+	timeout            time.Duration
+	tick               time.Duration
+	onAttempt          func()
+}
+
+func defaultDaemonLaunchWaitDeps() daemonLaunchWaitDeps {
+	return daemonLaunchWaitDeps{
+		acquireLaunchLock:  acquireBackgroundLaunchLockWithError,
+		loadReadOnlyConfig: config.LoadReadOnly,
+		writableRecords:    writableDaemonRecords,
+		confirmed:          stopTargetConfirmed,
+		isStarting:         IsDaemonStarting,
+		readStartupState:   readStartupState,
+		now:                time.Now,
+		sleep:              time.Sleep,
+		timeout:            backgroundServeReadyTimeout,
+		tick:               startProbeTick(),
+	}
 }
 
 type daemonCommandDeps struct {
@@ -192,6 +223,11 @@ func reportDaemonLaunchContention(
 			backgroundLaunchLockPath(dataDir),
 		)
 	}
+	if len(observation.UnconfirmedRecords) > 0 {
+		return unconfirmedWritableDaemonError(
+			"daemon start", observation.UnconfirmedRecords,
+		)
+	}
 	if len(observation.Records) > 0 {
 		rt := daemonRuntimeFromRecord(observation.Records[0])
 		fmt.Fprintf(w, "agentsview already running at %s (pid %d)\n", urlFromDaemonRuntime(rt), rt.Record.PID)
@@ -204,40 +240,85 @@ func reportDaemonLaunchContention(
 }
 
 func waitForDaemonLaunchContention(dataDir string) daemonLaunchObservation {
-	deadline := time.Now().Add(backgroundServeReadyTimeout)
+	return waitForDaemonLaunchContentionWithDeps(
+		dataDir, defaultDaemonLaunchWaitDeps(),
+	)
+}
+
+func waitForDaemonLaunchContentionWithDeps(
+	dataDir string, deps daemonLaunchWaitDeps,
+) daemonLaunchObservation {
+	deadline := deps.now().Add(deps.timeout)
 	for {
-		lock, acquired, err := acquireBackgroundLaunchLockWithError(dataDir)
+		lock, acquired, err := deps.acquireLaunchLock(dataDir)
+		if deps.onAttempt != nil {
+			deps.onAttempt()
+		}
 		if err != nil {
 			return daemonLaunchObservation{Err: err}
 		}
 		if acquired {
-			records, recordsErr := writableDaemonRecords(dataDir)
+			cfg, configErr := deps.loadReadOnlyConfig()
+			if configErr != nil {
+				_ = lock.Unlock()
+				return daemonLaunchObservation{
+					Err: fmt.Errorf("loading read-only config: %w", configErr),
+				}
+			}
+			if dataDirErr := validateLockedDataDir(dataDir, cfg.DataDir); dataDirErr != nil {
+				_ = lock.Unlock()
+				return daemonLaunchObservation{Err: dataDirErr}
+			}
+			records, recordsErr := deps.writableRecords(dataDir)
 			if recordsErr != nil {
 				_ = lock.Unlock()
 				return daemonLaunchObservation{Err: recordsErr}
 			}
-			starting := IsDaemonStarting(dataDir)
+			confirmed, unconfirmed := partitionConfirmedDaemonRecords(
+				records, cfg.AuthToken, deps.confirmed,
+			)
+			starting := deps.isStarting(dataDir)
 			var snapshot *startupState
 			if starting {
-				snapshot = readStartupState(dataDir)
+				snapshot = deps.readStartupState(dataDir)
 			}
 			_ = lock.Unlock()
 			return daemonLaunchObservation{
-				Starting: starting, Snapshot: snapshot, Records: records,
+				Starting:           starting,
+				Snapshot:           snapshot,
+				Records:            confirmed,
+				UnconfirmedRecords: unconfirmed,
 			}
 		}
-		if time.Now().After(deadline) {
-			starting := IsDaemonStarting(dataDir)
+		if deps.now().After(deadline) {
+			starting := deps.isStarting(dataDir)
 			var snapshot *startupState
 			if starting {
-				snapshot = readStartupState(dataDir)
+				snapshot = deps.readStartupState(dataDir)
 			}
 			return daemonLaunchObservation{
 				LockHeld: true, Starting: starting, Snapshot: snapshot,
 			}
 		}
-		time.Sleep(startProbeTick())
+		deps.sleep(deps.tick)
 	}
+}
+
+func unconfirmedWritableDaemonError(
+	operation string, records []daemon.RuntimeRecord,
+) error {
+	details := make([]string, 0, len(records))
+	for _, rec := range records {
+		detail := fmt.Sprintf("pid %d", rec.PID)
+		if rec.SourcePath != "" {
+			detail += " (runtime record " + rec.SourcePath + ")"
+		}
+		details = append(details, detail)
+	}
+	return fmt.Errorf(
+		"%s: cannot confirm existing writable daemon identity: %s; refusing to launch another writer; verify each process and terminate it manually before retrying",
+		operation, strings.Join(details, ", "),
+	)
 }
 
 func daemonPersistentStartupError(
