@@ -3241,13 +3241,13 @@ func TestSetToolCallSubagentSession(t *testing.T) {
 			{
 				SessionID: "s1",
 				ToolName:  "Task",
-				Category:  "Tool",
+				Category:  "Task",
 				ToolUseID: "toolu_task1",
 			},
 			{
 				SessionID:         "s1",
 				ToolName:          "Task",
-				Category:          "Tool",
+				Category:          "Task",
 				ToolUseID:         "toolu_task2",
 				SubagentSessionID: "agent-existing",
 			},

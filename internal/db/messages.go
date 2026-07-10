@@ -2089,8 +2089,9 @@ func setToolCallSubagentSessionTx(
 		`UPDATE tool_calls
 		 SET subagent_session_id = ?
 		 WHERE session_id = ? AND tool_use_id = ?
-		   AND COALESCE(subagent_session_id, '') != ?`,
-		subagentSessionID, sessionID, toolUseID, subagentSessionID,
+		   AND COALESCE(subagent_session_id, '') = ''
+		   AND (category = 'Task' OR instr(tool_name, 'subagent') > 0)`,
+		subagentSessionID, sessionID, toolUseID,
 	)
 	if err != nil {
 		return fmt.Errorf(

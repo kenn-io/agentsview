@@ -9696,6 +9696,71 @@ func TestIncrementalSync_ClaudeAgentIDLinksToolUseFromSameAppend(t *testing.T) {
 	assert.Equal(t, "agent-childsameappend", got.String)
 }
 
+func TestIncrementalSync_ClaudeAgentIDPreservesExistingSubagentLink(t *testing.T) {
+	env := setupTestEnv(t)
+
+	initial := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"go"},"cwd":"/tmp"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_first_link","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}]}}`,
+		`{"type":"queue-operation","operation":"enqueue","timestamp":"2024-01-01T10:00:02Z","sessionId":"parent-first-link","content":"{\"task_id\":\"queuefirst\",\"tool_use_id\":\"toolu_first_link\",\"description\":\"d\",\"task_type\":\"local_agent\"}"}`,
+	)
+	path := env.writeClaudeSession(
+		t, "proj-first-link", "parent-first-link.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	toolResult := `{"type":"user","timestamp":"2024-01-01T10:00:03Z","uuid":"r1","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_first_link","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"laterresult"}}`
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, writeErr := f.WriteString(toolResult + "\n")
+	require.NoError(t, f.Close(), "close append")
+	require.NoError(t, writeErr, "append")
+
+	env.engine.SyncPaths([]string{path})
+
+	var got string
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT subagent_session_id
+		FROM tool_calls
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"parent-first-link", "toolu_first_link",
+	).Scan(&got), "query after append")
+	assert.Equal(t, "agent-queuefirst", got)
+}
+
+func TestIncrementalSync_ClaudeAgentIDDoesNotLinkNonSubagentTool(t *testing.T) {
+	env := setupTestEnv(t)
+
+	initial := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"go"},"cwd":"/tmp"}`,
+	)
+	path := env.writeClaudeSession(
+		t, "proj-read-link", "parent-read-link.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	appended := testjsonl.JoinJSONL(
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_read_link","name":"Read","input":{"file_path":"README.md"}}]}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:02Z","uuid":"r1","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_read_link","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"notasubagent"}}`,
+	)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, writeErr := f.WriteString(appended)
+	require.NoError(t, f.Close(), "close append")
+	require.NoError(t, writeErr, "append")
+
+	env.engine.SyncPaths([]string{path})
+
+	var got sql.NullString
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT subagent_session_id
+		FROM tool_calls
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"parent-read-link", "toolu_read_link",
+	).Scan(&got), "query after append")
+	assert.False(t, got.Valid)
+}
+
 func TestIncrementalSync_ClaudeCrossSyncToolResultFallback(t *testing.T) {
 	env := setupTestEnv(t)
 
