@@ -3,6 +3,32 @@ title: Changelog
 description: Release history for AgentsView
 ---
 
+## 0.37.5
+<small>2026-07-09</small>
+
+**New features**
+
+- Prefer richer **`agy-reader` trajectory sidecars** when parsing Antigravity
+  IDE sessions, falling back to the existing heuristic decode when a sidecar is
+  missing, malformed, or does not cover the session's database steps.
+
+**Bug fixes**
+
+- Remove **recommended-plugin context injected into Codex sessions** from
+  parsed transcripts so it no longer appears as user-authored content.
+- Include **overnight session activity** in date-filtered results by matching
+  dates against session activity windows instead of only session start dates.
+
+**Acknowledgements**
+
+- Thanks to [Matthew Jacobs](https://github.com/mjacobs) for `agy-reader`
+  trajectory sidecar support in Antigravity IDE sessions.
+- Thanks to [Wes McKinney](https://github.com/wesm) for Codex
+  recommended-plugin filtering, overnight date-filter support, and release
+  documentation.
+
+---
+
 ## 0.37.4
 <small>2026-07-09</small>
 
