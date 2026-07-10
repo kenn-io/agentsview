@@ -557,6 +557,21 @@ covers the invariants.
   rows another generation still references (they stay at non-negative,
   hydratable ordinals), because an evicted session may merely have left this
   pusher's project filter while its docs still exist locally.
+- **Changed documents leave older generations' chunks in place — by design.**
+  `vector_documents` is shared across generations while chunk tables are
+  per-generation, mirroring the local mirror + per-generation vec0 layout.
+  When content changes, the pusher re-embeds only its active generation, so
+  another generation's chunks for the same doc now pair an older embedding
+  with the current shared metadata. This is a deliberate staleness trade-off,
+  not a race: deleting those chunks would permanently blind readers still on
+  that generation (only a pusher running that embedding config can rebuild
+  them, and per-generation `vector_push_state` means such a pusher's next push
+  re-sends exactly the changed docs). The skew is bounded to ranking —
+  hydration always reads the current shared row, and anchor/snippet resolution
+  clamps a stale chunk index (`vector.DocAnchor`): a hit anchors to a real
+  current member and snippets that member's own text, never another member's
+  and never a panic. Vanished docs are the opposite case and DO cascade across
+  every generation, per the previous bullet.
 - **Eviction is scoped by push ownership, not machine names.** Deletions apply
   only to sessions this pusher owns per its owner marker, because machine
   names are aliasable. Both the per-session push transaction and each eviction
