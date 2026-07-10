@@ -71,6 +71,20 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function rect(top: number, bottom: number): DOMRect {
+  return {
+    top,
+    bottom,
+    left: 0,
+    right: 100,
+    width: 100,
+    height: bottom - top,
+    x: 0,
+    y: top,
+    toJSON: () => ({}),
+  } as DOMRect;
+}
+
 describe("MessageList follow cancellation", () => {
   let component: ReturnType<typeof mount> | undefined;
   let rafSpy: ReturnType<typeof vi.spyOn>;
@@ -458,7 +472,43 @@ describe("MessageList read progress", () => {
     expect(readProgress.hasUnread("s1", 3)).toBe(false);
   });
 
-  it("uses visible tool-group ordinals when backend counts change", async () => {
+  it("does not acknowledge hidden tool-group submessages when backend counts change", async () => {
+    messages.messages = [3, 4, 5].map((ordinal) => ({
+      ...makeMessage(ordinal),
+      role: "assistant",
+      content: "",
+      content_length: 0,
+      has_tool_use: true,
+    }));
+    messages.messageCount = 6;
+    readProgress.clear("s1");
+    readProgress.baseline("s1", 3, 1, 3);
+    virtualizerMock.getVirtualItems.mockReturnValue([{
+      index: 0,
+      key: "tool-group",
+      start: 0,
+      end: 100,
+    }]);
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    const scroller = document.querySelector<HTMLElement>(".message-list-scroll")!;
+    vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue(rect(0, 100));
+    vi.spyOn(document.querySelector<HTMLElement>('[data-message-ordinal="3"]')!, "getBoundingClientRect").mockReturnValue(rect(-80, -20));
+    vi.spyOn(document.querySelector<HTMLElement>('[data-message-ordinal="4"]')!, "getBoundingClientRect").mockReturnValue(rect(20, 80));
+    vi.spyOn(document.querySelector<HTMLElement>('[data-message-ordinal="5"]')!, "getBoundingClientRect").mockReturnValue(rect(120, 180));
+    messages.messageCount = 7;
+    await tick();
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    expect(readProgress.get("s1")).toEqual({
+      ordinal: 4,
+      messageCount: 3,
+    });
+    expect(readProgress.hasUnread("s1", 7)).toBe(true);
+  });
+
+  it("acknowledges visible latest tool-group submessages when backend counts change", async () => {
     messages.messages = [3, 4, 5].map((ordinal) => ({
       ...makeMessage(ordinal),
       role: "assistant",
@@ -478,6 +528,11 @@ describe("MessageList read progress", () => {
     component = mount(MessageList, { target: document.body });
     await tick();
 
+    const scroller = document.querySelector<HTMLElement>(".message-list-scroll")!;
+    vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue(rect(0, 100));
+    vi.spyOn(document.querySelector<HTMLElement>('[data-message-ordinal="3"]')!, "getBoundingClientRect").mockReturnValue(rect(-180, -120));
+    vi.spyOn(document.querySelector<HTMLElement>('[data-message-ordinal="4"]')!, "getBoundingClientRect").mockReturnValue(rect(-80, -20));
+    vi.spyOn(document.querySelector<HTMLElement>('[data-message-ordinal="5"]')!, "getBoundingClientRect").mockReturnValue(rect(20, 80));
     messages.messageCount = 7;
     await tick();
     await new Promise((resolve) => window.setTimeout(resolve, 0));

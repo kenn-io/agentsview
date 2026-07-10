@@ -193,16 +193,36 @@
       if (row.end <= top || row.start >= bottom) continue;
       const item = itemAt(row.index);
       if (!item) continue;
-      latestOrdinal = Math.max(
-        latestOrdinal,
-        item.kind === "message"
-          ? item.message.ordinal
-          : Math.max(...item.ordinals),
-      );
+      if (item.kind === "message") {
+        latestOrdinal = Math.max(latestOrdinal, item.message.ordinal);
+      } else {
+        latestOrdinal = Math.max(
+          latestOrdinal,
+          latestVisibleToolGroupOrdinal(row.index),
+        );
+      }
     }
     if (latestOrdinal >= 0) {
       recordVisible(sessionId, latestOrdinal);
     }
+  }
+
+  function latestVisibleToolGroupOrdinal(rowIndex: number) {
+    if (!containerRef) return -1;
+    const row = containerRef.querySelector<HTMLElement>(
+      `.virtual-row[data-index="${rowIndex}"]`,
+    );
+    if (!row) return -1;
+    const rootRect = containerRef.getBoundingClientRect();
+    let latestOrdinal = -1;
+    for (const node of row.querySelectorAll<HTMLElement>("[data-message-ordinal]")) {
+      const ordinal = Number(node.dataset.messageOrdinal);
+      if (!Number.isInteger(ordinal) || ordinal < 0) continue;
+      const rect = node.getBoundingClientRect();
+      if (rect.bottom <= rootRect.top || rect.top >= rootRect.bottom) continue;
+      latestOrdinal = Math.max(latestOrdinal, ordinal);
+    }
+    return latestOrdinal;
   }
 
   function recordVisible(sessionId: string, ordinal: number) {
