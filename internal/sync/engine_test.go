@@ -2131,6 +2131,8 @@ func TestProcessFileCodexDBFreshSkipIsNotCached(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 	info, err := os.Stat(path)
 	require.NoError(t, err, "stat codex fixture")
+	fileHash, err := ComputeFileHash(path)
+	require.NoError(t, err, "hash codex fixture")
 
 	sess := db.Session{
 		ID:        "host~codex:abc",
@@ -2140,6 +2142,7 @@ func TestProcessFileCodexDBFreshSkipIsNotCached(t *testing.T) {
 		FilePath:  strPtr("host:" + path),
 		FileSize:  int64Ptr(info.Size()),
 		FileMtime: int64Ptr(info.ModTime().UnixNano()),
+		FileHash:  &fileHash,
 	}
 	require.NoError(t, database.UpsertSession(sess))
 	require.NoError(t, database.SetSessionDataVersion(
@@ -2385,6 +2388,77 @@ func TestProcessCodexAppendedStaleProjectCarriesForceReplace(t *testing.T) {
 type incrementalRequestRecorder struct {
 	parser.ProviderBase
 	request parser.IncrementalRequest
+}
+
+func TestStampProviderFileIdentityPreservesProviderSnapshotIdentity(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "session.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte("old snapshot\n"), 0o600))
+	oldInfo, err := os.Stat(path)
+	require.NoError(t, err)
+	oldInode, oldDevice := getFileIdentity(oldInfo)
+
+	replacementPath := path + ".replacement"
+	require.NoError(t, os.WriteFile(replacementPath, []byte("new pathname\n"), 0o600))
+	if runtime.GOOS == "windows" {
+		require.NoError(t, os.Remove(path))
+	}
+	require.NoError(t, os.Rename(replacementPath, path))
+	replacementInfo, err := os.Stat(path)
+	require.NoError(t, err)
+	replacementInode, replacementDevice := getFileIdentity(replacementInfo)
+
+	// Platforms without file identity report 0/0. Use a provider-owned token
+	// there so this still proves that an authoritative nonzero result is not
+	// erased merely because a later path stat cannot supply an identity.
+	authoritativeInode, authoritativeDevice := oldInode, oldDevice
+	if authoritativeInode == 0 && authoritativeDevice == 0 {
+		authoritativeInode, authoritativeDevice = 101, 202
+	}
+
+	provider := &incrementalRequestRecorder{ProviderBase: parser.ProviderBase{
+		Def: parser.AgentDef{Type: parser.AgentCodex},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			IncrementalAppend: parser.CapabilitySupported,
+		}},
+	}}
+	results := []parser.ParseResult{
+		{Session: parser.ParsedSession{File: parser.FileInfo{
+			Path: path, Inode: authoritativeInode, Device: authoritativeDevice,
+		}}},
+		{Session: parser.ParsedSession{File: parser.FileInfo{Path: path}}},
+	}
+
+	(&Engine{}).stampProviderFileIdentity(
+		provider,
+		parser.SourceRef{Provider: parser.AgentCodex, DisplayPath: path},
+		results,
+	)
+
+	assert.Equal(t, authoritativeInode, results[0].Session.File.Inode)
+	assert.Equal(t, authoritativeDevice, results[0].Session.File.Device)
+	assert.Equal(t, replacementInode, results[1].Session.File.Inode)
+	assert.Equal(t, replacementDevice, results[1].Session.File.Device)
+}
+
+func TestProviderProcessCacheKeyCodexStaysContentIndependent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	file := parser.DiscoveredFile{Path: path, Agent: parser.AgentCodex}
+	source := parser.SourceRef{
+		Provider:       parser.AgentCodex,
+		FingerprintKey: path,
+	}
+
+	first := providerProcessCacheKey(file, source, parser.SourceFingerprint{
+		Key: path, Hash: "first-content-hash",
+	})
+	second := providerProcessCacheKey(file, source, parser.SourceFingerprint{
+		Key: path, Hash: "second-content-hash",
+	})
+
+	assert.Equal(t, path, first)
+	assert.Equal(t, first, second,
+		"Codex content versions must reuse one bounded skip-cache key")
 }
 
 func (p *incrementalRequestRecorder) Parse(

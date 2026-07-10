@@ -1372,8 +1372,8 @@ func (p *codexProvider) parseSessionSnapshot(
 
 	b.flushPendingAgentResults()
 	b.normalizeOrdinals()
+	inode, device := sourceFileIdentity(info)
 	if safe, safeErr := codexSafeResumeOffsetFile(f, info.Size()); safeErr == nil && safe {
-		inode, device := sourceFileIdentity(info)
 		p.cursorCache.Put(
 			path,
 			info.Size(),
@@ -1422,9 +1422,11 @@ func (p *codexProvider) parseSessionSnapshot(
 		UserMessageCount:  userCount,
 		TerminationStatus: classifyCodexTermination(b.lastTaskEvent),
 		File: FileInfo{
-			Path:  path,
-			Size:  info.Size(),
-			Mtime: mtime,
+			Path:   path,
+			Size:   info.Size(),
+			Mtime:  mtime,
+			Inode:  int64(inode),
+			Device: int64(device),
 		},
 	}
 
@@ -1449,13 +1451,22 @@ func CodexSessionIndexTitles(indexPath string) map[string]string {
 	return titles
 }
 
-// EvictCodexSessionIndex removes one cached session_index.jsonl entry. S3
-// sync uses transient temp files for hydrated indexes, so those cache entries
-// should not live beyond the parse that needed them.
+// EvictCodexSessionIndex removes one cached session_index.jsonl entry. Callers
+// use it when an explicit change event makes the sidecar stat tuple insufficient
+// and when transient hydrated indexes should not outlive their parse.
 func EvictCodexSessionIndex(indexPath string) {
 	codexSessionIndexCache.mu.Lock()
 	delete(codexSessionIndexCache.entries, indexPath)
 	codexSessionIndexCache.mu.Unlock()
+}
+
+// EvictCodexSessionIndexForSession removes the cached sidecar associated with
+// one Codex transcript. Explicit full-parse callers use this when an external
+// event says the sidecar changed even if its stat tuple did not.
+func EvictCodexSessionIndexForSession(sessionPath string) {
+	if indexPath := codexSessionIndexPath(sessionPath); indexPath != "" {
+		EvictCodexSessionIndex(indexPath)
+	}
 }
 
 // LookupCodexThreadName returns the current Codex thread name for a session

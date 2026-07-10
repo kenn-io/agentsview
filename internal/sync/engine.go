@@ -4462,15 +4462,28 @@ func providerProcessCacheKeyWithHash(
 	if key == "" {
 		return ""
 	}
-	if fingerprint.Hash == "" || !providerFingerprintHashRequiredForFreshness(agent) {
+	if fingerprint.Hash == "" || !providerFingerprintHashInCacheKey(agent) {
 		return key
 	}
 	return key + "?source_hash=" + fingerprint.Hash
 }
 
-func providerFingerprintHashRequiredForFreshness(agent parser.AgentType) bool {
+func providerFingerprintHashInCacheKey(agent parser.AgentType) bool {
 	switch agent {
 	case parser.AgentDevin, parser.AgentQoder, parser.AgentWindsurf:
+		return true
+	default:
+		return false
+	}
+}
+
+// providerFingerprintHashRequiredForFreshness is deliberately broader than
+// providerFingerprintHashInCacheKey. Codex hashes every transcript to verify a
+// same-stat rewrite against the persisted row, but retaining one skip-cache key
+// per content version would make the cache grow with a hot append-only file.
+func providerFingerprintHashRequiredForFreshness(agent parser.AgentType) bool {
+	switch agent {
+	case parser.AgentCodex, parser.AgentDevin, parser.AgentQoder, parser.AgentWindsurf:
 		return true
 	default:
 		return false
@@ -4492,6 +4505,17 @@ func (e *Engine) providerSkipCacheEntryFreshInDB(
 	lookupPath := providerSkipLookupPath(file, source, fingerprint)
 	if e.pathRewriter != nil {
 		lookupPath = e.pathRewriter(lookupPath)
+	}
+	if agent == parser.AgentCodex {
+		storedIDs, err := e.db.ListSessionIDsByFilePath(
+			lookupPath, string(parser.AgentCodex),
+		)
+		if err == nil && len(storedIDs) == 0 {
+			// A cached parse failure has no persisted source row or hash to
+			// compare. Retain its retry suppression until a source signal changes;
+			// hash validation applies once a session has actually been stored.
+			return true
+		}
 	}
 	return e.providerFingerprintHashMatchesDB(agent, lookupPath, fingerprint)
 }
@@ -5010,11 +5034,12 @@ func (e *Engine) providerSourceFreshBeforeFingerprint(
 	return 0, false
 }
 
-// stampProviderFileIdentity copies the source file's inode and device onto
-// every parsed result for an incremental-append provider. The legacy Claude
-// process arm stamped this identity from the source stat so the incremental
-// path can later detect an atomic file replacement and fall back to a full
-// parse; Codex uses the same guard. Providers whose source is not a single
+// stampProviderFileIdentity fills a missing source inode/device on parsed
+// results for an incremental-append provider. A provider may have captured an
+// authoritative identity from the same descriptor it parsed, so a later path
+// stat must not overwrite that snapshot after an atomic replacement. The
+// legacy Claude process arm relies on this fallback because Claude does not
+// supply descriptor identity itself. Providers whose source is not a single
 // physical file, or that do not support incremental append, are left untouched.
 func (e *Engine) stampProviderFileIdentity(
 	provider parser.Provider,
@@ -5035,6 +5060,10 @@ func (e *Engine) stampProviderFileIdentity(
 	}
 	inode, device := getFileIdentity(info)
 	for i := range results {
+		if results[i].Session.File.Inode != 0 ||
+			results[i].Session.File.Device != 0 {
+			continue
+		}
 		results[i].Session.File.Inode = inode
 		results[i].Session.File.Device = device
 	}
@@ -5448,7 +5477,7 @@ func (e *Engine) shouldSkipProviderSourceByDB(
 // shouldSkipCodexFingerprint reproduces the legacy shouldSkipCodex decision in
 // terms of a provider SourceFingerprint. The fingerprint MTimeNS already folds
 // in session_index.jsonl via CodexEffectiveMtime, so:
-//   - a stored size mismatch or stale data version forces a reparse;
+//   - a stored size/hash mismatch or stale data version forces a reparse;
 //   - an exact effective-mtime match skips;
 //   - an effective mtime ahead of the stored mtime driven only by the index
 //     (the raw transcript mtime is still at or below the stored mtime) skips
@@ -5462,6 +5491,11 @@ func (e *Engine) shouldSkipCodexFingerprint(
 	}
 	storedSize, storedMtime, ok := e.db.GetFileInfoByPath(lookupPath)
 	if !ok || storedSize != fingerprint.Size {
+		return false
+	}
+	if !e.providerFingerprintHashMatchesDB(
+		parser.AgentCodex, lookupPath, fingerprint,
+	) {
 		return false
 	}
 	if project, ok := e.db.GetProjectByPath(lookupPath); ok &&
@@ -5562,6 +5596,7 @@ func (e *Engine) classifyCodexIndexPath(
 	if len(sessionRoots) == 0 {
 		return nil
 	}
+	parser.EvictCodexSessionIndex(path)
 	titles := parser.CodexSessionIndexTitles(path)
 	if len(titles) == 0 {
 		return nil

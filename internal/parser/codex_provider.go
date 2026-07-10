@@ -139,6 +139,9 @@ func (p *codexProvider) Parse(
 	if !ok {
 		return ParseOutcome{}, fmt.Errorf("codex source path unavailable")
 	}
+	if req.ForceParse {
+		EvictCodexSessionIndexForSession(path)
+	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 	sess, msgs, err := p.parseSession(path, machine, false)
 	if err != nil {

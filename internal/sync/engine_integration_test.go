@@ -9692,6 +9692,145 @@ func TestIncrementalSync_CodexAppend(t *testing.T) {
 	assert.Equal(t, 1, sess.UserMessageCount)
 }
 
+func TestSyncPathsCodexSameStatInPlaceRewriteUsesContentHash(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
+
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229f5"
+	original := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/tmp/proj", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "alpha request", tsEarlyS1),
+	)
+	rewritten := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/tmp/proj", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "bravo request", tsEarlyS1),
+	)
+	require.Len(t, rewritten, len(original), "transcript fixtures must have equal length")
+	path := env.writeCodexSession(
+		t, filepath.Join("2024", "01", "01"),
+		"rollout-2024-01-01T10-00-00-"+uuid+".jsonl", original,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	before, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.NotNil(t, before.FileHash)
+	beforeHash := *before.FileHash
+	beforeInfo, err := os.Stat(path)
+	require.NoError(t, err)
+	env.engine.InjectSkipCache(map[string]int64{
+		path: beforeInfo.ModTime().UnixNano(),
+	})
+
+	require.NoError(t, os.WriteFile(path, []byte(rewritten), 0o644))
+	require.NoError(t, os.Chtimes(path, beforeInfo.ModTime(), beforeInfo.ModTime()))
+	afterInfo, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Equal(t, beforeInfo.Size(), afterInfo.Size(), "rewrite must keep file size")
+	require.Equal(t, beforeInfo.ModTime(), afterInfo.ModTime(), "rewrite must keep mtime")
+	require.True(t, os.SameFile(beforeInfo, afterInfo), "rewrite must keep file identity")
+
+	env.engine.SyncPaths([]string{path})
+
+	msgs := fetchMessages(t, env.db, "codex:"+uuid)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "bravo request", msgs[0].Content)
+	after, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	require.NotNil(t, after.FileHash)
+	assert.False(t, after.LastWriteIncremental,
+		"same-size rewrite must use a full replacement")
+	assert.NotEqual(t, beforeHash, *after.FileHash)
+	wantHash, err := sync.ComputeFileHash(path)
+	require.NoError(t, err)
+	assert.Equal(t, wantHash, *after.FileHash)
+}
+
+func TestSyncAllCodexPathRewriterSameStatRewriteUsesContentHash(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+	database := dbtest.OpenTestDB(t)
+	firstRoot := filepath.Join(t.TempDir(), "sessions")
+	secondRoot := filepath.Join(t.TempDir(), "sessions")
+	const (
+		uuid       = "019eb791-cf7d-75c1-8439-9ed74c1229f6"
+		remoteRoot = "/home/test/.codex/sessions"
+	)
+	original := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/tmp/proj", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "alpha request", tsEarlyS1),
+	)
+	rewritten := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/tmp/proj", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "bravo request", tsEarlyS1),
+	)
+	require.Len(t, rewritten, len(original), "transcript fixtures must have equal length")
+	relPath := filepath.Join(
+		"2024", "01", "01",
+		"rollout-2024-01-01T10-00-00-"+uuid+".jsonl",
+	)
+	firstPath := filepath.Join(firstRoot, relPath)
+	secondPath := filepath.Join(secondRoot, relPath)
+	dbtest.WriteTestFile(t, firstPath, []byte(original))
+	firstInfo, err := os.Stat(firstPath)
+	require.NoError(t, err)
+	dbtest.WriteTestFile(t, secondPath, []byte(rewritten))
+	require.NoError(t, os.Chtimes(secondPath, firstInfo.ModTime(), firstInfo.ModTime()))
+	secondInfo, err := os.Stat(secondPath)
+	require.NoError(t, err)
+	require.Equal(t, firstInfo.Size(), secondInfo.Size())
+	require.Equal(t, firstInfo.ModTime(), secondInfo.ModTime())
+
+	rewriter := func(path string) string {
+		for _, root := range []string{firstRoot, secondRoot} {
+			rel, relErr := filepath.Rel(root, path)
+			if relErr == nil && !strings.HasPrefix(rel, "..") {
+				return "host:" + filepath.ToSlash(filepath.Join(remoteRoot, rel))
+			}
+		}
+		return "host:" + filepath.ToSlash(path)
+	}
+	firstEngine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {firstRoot}},
+		Machine:   "host", IDPrefix: "host~", PathRewriter: rewriter, Ephemeral: true,
+	})
+	runSyncAndAssert(t, firstEngine, sync.SyncStats{TotalSessions: 1, Synced: 1})
+	before, err := database.GetSessionFull(context.Background(), "host~codex:"+uuid)
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.NotNil(t, before.FileHash)
+	beforeHash := *before.FileHash
+
+	secondEngine := sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {secondRoot}},
+		Machine:   "host", IDPrefix: "host~", PathRewriter: rewriter, Ephemeral: true,
+	})
+	runSyncAndAssert(t, secondEngine, sync.SyncStats{TotalSessions: 1, Synced: 1})
+
+	msgs := fetchMessages(t, database, "host~codex:"+uuid)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "bravo request", msgs[0].Content)
+	after, err := database.GetSessionFull(context.Background(), "host~codex:"+uuid)
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	require.NotNil(t, after.FileHash)
+	assert.False(t, after.LastWriteIncremental)
+	assert.NotEqual(t, beforeHash, *after.FileHash)
+	wantHash, err := sync.ComputeFileHash(secondPath)
+	require.NoError(t, err)
+	assert.Equal(t, wantHash, *after.FileHash)
+}
+
 func TestIncrementalSync_CodexLifecycleTailUpdatesTermination(t *testing.T) {
 	env := setupTestEnv(t)
 
@@ -9937,6 +10076,58 @@ func TestSyncPathsCodexEqualFingerprintTitleOnlyRefreshesName(t *testing.T) {
 	msgs := fetchMessages(t, env.db, "codex:"+uuid)
 	require.Len(t, msgs, 1)
 	assert.Equal(t, "keep this message", msgs[0].Content)
+}
+
+func TestSyncPathsCodexIndexEventReloadsSameStatTitle(t *testing.T) {
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir}))
+
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229f7"
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/tmp/proj", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "keep this message", tsEarlyS1),
+	)
+	env.writeCodexSession(
+		t, filepath.Join("2024", "01", "01"),
+		"rollout-2024-01-01T10-00-00-"+uuid+".jsonl", initial,
+	)
+	indexPath := filepath.Join(root, parser.CodexSessionIndexFilename)
+	original := `{"id":"` + uuid + `","thread_name":"Alpha title"}` + "\n"
+	rewritten := `{"id":"` + uuid + `","thread_name":"Bravo title"}` + "\n"
+	require.Len(t, rewritten, len(original), "index fixtures must have equal length")
+	require.NoError(t, os.WriteFile(indexPath, []byte(original), 0o644))
+	stableTime := time.Unix(1_800_000_000, 456_000_000)
+	require.NoError(t, os.Chtimes(indexPath, stableTime, stableTime))
+	env.engine.SyncAll(context.Background(), nil)
+
+	before, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.NotNil(t, before.SessionName)
+	assert.Equal(t, "Alpha title", *before.SessionName)
+	indexInfo, err := os.Stat(indexPath)
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(indexPath, []byte(rewritten), 0o644))
+	require.NoError(t, os.Chtimes(indexPath, indexInfo.ModTime(), indexInfo.ModTime()))
+	rewrittenInfo, err := os.Stat(indexPath)
+	require.NoError(t, err)
+	require.Equal(t, indexInfo.Size(), rewrittenInfo.Size())
+	require.Equal(t, indexInfo.ModTime(), rewrittenInfo.ModTime())
+
+	env.engine.SyncPaths([]string{indexPath})
+
+	after, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	require.NotNil(t, after.SessionName)
+	assert.Equal(t, "Bravo title", *after.SessionName)
+	assert.False(t, after.LastWriteIncremental,
+		"index event refresh must use a full replacement")
 }
 
 // TestIncrementalSync_CodexStoresEffectiveMtime pins that the incremental

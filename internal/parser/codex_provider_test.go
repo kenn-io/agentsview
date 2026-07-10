@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -94,6 +95,51 @@ func TestCodexProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, "Renamed title", result.Result.Session.SessionName)
 	assert.Equal(t, fingerprint.Hash, result.Result.Session.File.Hash)
 	assert.Len(t, result.Result.Messages, 1)
+}
+
+func TestCodexProviderForceParseReloadsSameStatSessionIndex(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "sessions")
+	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229f3"
+	writeCodexProviderSession(t, root, uuid, "keep this prompt")
+	indexPath := filepath.Join(base, CodexSessionIndexFilename)
+	original := `{"id":"` + uuid + `","thread_name":"Alpha title"}` + "\n"
+	rewritten := `{"id":"` + uuid + `","thread_name":"Bravo title"}` + "\n"
+	require.Len(t, rewritten, len(original), "index fixtures must have equal length")
+	require.NoError(t, os.WriteFile(indexPath, []byte(original), 0o644))
+	stableTime := time.Unix(1_800_000_000, 123_000_000)
+	require.NoError(t, os.Chtimes(indexPath, stableTime, stableTime))
+
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	source := requireCodexProviderSource(t, provider, uuid)
+	fingerprint, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	first, err := provider.Parse(context.Background(), ParseRequest{
+		Source: source, Fingerprint: fingerprint,
+	})
+	require.NoError(t, err)
+	require.Len(t, first.Results, 1)
+	assert.Equal(t, "Alpha title", first.Results[0].Result.Session.SessionName)
+
+	before, err := os.Stat(indexPath)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(indexPath, []byte(rewritten), 0o644))
+	require.NoError(t, os.Chtimes(indexPath, before.ModTime(), before.ModTime()))
+	after, err := os.Stat(indexPath)
+	require.NoError(t, err)
+	require.Equal(t, before.Size(), after.Size(), "index size must stay unchanged")
+	require.Equal(t, before.ModTime(), after.ModTime(), "index mtime must stay unchanged")
+
+	forced, err := provider.Parse(context.Background(), ParseRequest{
+		Source:      source,
+		Fingerprint: fingerprint,
+		ForceParse:  true,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, forced.Results, 1)
+	assert.Equal(t, "Bravo title", forced.Results[0].Result.Session.SessionName)
 }
 
 func TestCodexProviderAdvertisesIncrementalAppend(t *testing.T) {
@@ -217,6 +263,70 @@ func TestCodexProviderFullParseSnapshotExcludesLaterGrowth(t *testing.T) {
 	assert.Equal(t, 1, outcome.Messages[0].Ordinal)
 	assert.Equal(t, "gpt-5.5", outcome.Messages[0].Model)
 	assert.Equal(t, int64(len(tail)), outcome.ConsumedBytes)
+}
+
+func TestCodexProviderFullParseSnapshotKeepsDescriptorIdentityAfterReplacement(
+	t *testing.T,
+) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows cannot atomically replace an open file")
+	}
+	root := t.TempDir()
+	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229f4"
+	original := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/workspace/original", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "old snapshot", tsEarlyS1),
+	)
+	replacement := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/workspace/replaced", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "new pathname", tsEarlyS1),
+	)
+	path := writeCodexProviderSessionContent(t, root, uuid, original)
+	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+	concrete, ok := provider.(*codexProvider)
+	require.True(t, ok)
+
+	snapshot, err := os.Open(path)
+	require.NoError(t, err)
+	defer snapshot.Close()
+	snapshotInfo, err := snapshot.Stat()
+	require.NoError(t, err)
+	oldInode, oldDevice := sourceFileIdentity(snapshotInfo)
+
+	replacementPath := path + ".replacement"
+	require.NoError(t, os.WriteFile(replacementPath, []byte(replacement), 0o644))
+	require.NoError(t, os.Rename(replacementPath, path))
+	currentInfo, err := os.Stat(path)
+	require.NoError(t, err)
+	newInode, newDevice := sourceFileIdentity(currentInfo)
+
+	sess, messages, err := concrete.parseSessionSnapshot(
+		path, "local", false, snapshot, snapshotInfo,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "old snapshot", messages[0].Content)
+	assert.Equal(t, "/workspace/original", sess.Cwd)
+	assert.Equal(t, int64(oldInode), sess.File.Inode)
+	assert.Equal(t, int64(oldDevice), sess.File.Device)
+	_, oldCursor := concrete.cursorCache.Get(
+		path, snapshotInfo.Size(), oldInode, oldDevice,
+	)
+	assert.True(t, oldCursor, "snapshot cursor must use the descriptor identity")
+	if oldInode != newInode || oldDevice != newDevice {
+		_, replacementCursor := concrete.cursorCache.Get(
+			path, snapshotInfo.Size(), newInode, newDevice,
+		)
+		assert.False(t, replacementCursor,
+			"old snapshot state must not be keyed to the replacement identity")
+	}
 }
 
 func TestCodexProviderIncrementalSnapshotExcludesLaterGrowth(t *testing.T) {
