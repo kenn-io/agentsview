@@ -70,9 +70,12 @@ test.describe("Navigation", () => {
     await expect(page.getByText("Next user prompt")).toBeVisible();
     await expect(page.getByText("Previous user prompt")).toBeVisible();
 
+    const shortcutsModal = page.getByRole("dialog", {
+      name: "Keyboard Shortcuts",
+    });
     for (const width of [1280, 768, 400]) {
       await page.setViewportSize({ width, height: 800 });
-      const box = await page.locator(".shortcuts-modal").boundingBox();
+      const box = await shortcutsModal.boundingBox();
       expect(box).not.toBeNull();
       expect(box!.x).toBeGreaterThanOrEqual(0);
       expect(box!.x + box!.width).toBeLessThanOrEqual(width);
