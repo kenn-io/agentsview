@@ -361,6 +361,72 @@ func TestWriteHermesSessionJSONL_FallsBackWhenStoredStateDBMissesSession(t *test
 	assert.Contains(t, buf.String(), "state db only has one message")
 }
 
+func TestWriteHermesSessionJSONL_FallsBackToTranscriptWhenStateDBMissesSessionInSameRoot(t *testing.T) {
+	root := t.TempDir()
+	sessionsDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+	createHermesStateDB(t, root)
+	dbPath := filepath.Join(root, "state.db")
+
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	_, err = conn.Exec(`DELETE FROM messages WHERE session_id = 'child'`)
+	require.NoError(t, err)
+	_, err = conn.Exec(`DELETE FROM sessions WHERE id = 'child'`)
+	require.NoError(t, err)
+
+	body := strings.Join([]string{
+		`{"role":"session_meta","model":"gpt-4","timestamp":"2026-05-14T10:00:00Z"}`,
+		`{"role":"user","content":"fallback transcript prompt","timestamp":"2026-05-14T10:01:00Z"}`,
+		"",
+	}, "\n")
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sessionsDir, "child.jsonl"),
+		[]byte(body),
+		0o644,
+	))
+
+	var buf strings.Builder
+	require.NoError(t, WriteHermesSessionJSONL(
+		&buf,
+		dbPath,
+		[]string{sessionsDir},
+		"child",
+	))
+	assert.Equal(t, body, buf.String())
+}
+
+func TestWriteHermesSessionJSONL_FallsBackWhenStoredStateDBUnreadable(t *testing.T) {
+	root := t.TempDir()
+	sessionsDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "state.db"),
+		[]byte("not a sqlite database"),
+		0o644,
+	))
+	body := strings.Join([]string{
+		`{"role":"session_meta","model":"gpt-4","timestamp":"2026-05-14T10:00:00Z"}`,
+		`{"role":"user","content":"fallback unreadable transcript","timestamp":"2026-05-14T10:01:00Z"}`,
+		"",
+	}, "\n")
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sessionsDir, "child.jsonl"),
+		[]byte(body),
+		0o644,
+	))
+
+	var buf strings.Builder
+	require.NoError(t, WriteHermesSessionJSONL(
+		&buf,
+		filepath.Join(root, "state.db"),
+		[]string{sessionsDir},
+		"child",
+	))
+	assert.Equal(t, body, buf.String())
+}
+
 func TestWriteHermesSessionJSONL_PrefersTranscriptWhenQualityWins(t *testing.T) {
 	root := t.TempDir()
 	sessionsDir := filepath.Join(root, "sessions")

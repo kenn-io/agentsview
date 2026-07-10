@@ -773,13 +773,15 @@ func writeHermesStateSessionJSONL(
 ) error {
 	conn, err := sql.Open("sqlite3", "file:"+sqliteURIPath(stateDB)+"?mode=ro")
 	if err != nil {
-		return fmt.Errorf("open hermes state db: %w", err)
+		return hermesStateLookupError{
+			err: fmt.Errorf("open hermes state db: %w", err),
+		}
 	}
 	defer conn.Close()
 
 	ss, found, err := readHermesStateSession(conn, rawSessionID)
 	if err != nil {
-		return err
+		return hermesStateLookupError{err: err}
 	}
 	if !found {
 		return fmt.Errorf(
@@ -789,7 +791,7 @@ func writeHermesStateSessionJSONL(
 	}
 	messages, err := readHermesStateMessagesForSession(conn, rawSessionID)
 	if err != nil {
-		return err
+		return hermesStateLookupError{err: err}
 	}
 	selectedPath, _, _, _ := chooseHermesStateSessionSource(
 		ss,

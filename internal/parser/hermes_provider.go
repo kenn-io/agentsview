@@ -83,15 +83,19 @@ func (p *hermesProvider) Fingerprint(
 func WriteHermesSessionJSONL(
 	w io.Writer, storedPath string, roots []string, rawSessionID string,
 ) error {
+	var storedStateErr error
 	if path := ResolveSourceFilePath(storedPath); filepath.Base(path) == "state.db" {
 		if _, err := os.Stat(path); err == nil {
 			err = writeHermesStateSessionJSONL(w, path, rawSessionID)
 			if err == nil {
 				return nil
 			}
-			if !errors.Is(err, os.ErrNotExist) {
+			var lookupErr hermesStateLookupError
+			if !errors.Is(err, os.ErrNotExist) &&
+				!errors.As(err, &lookupErr) {
 				return err
 			}
+			storedStateErr = err
 		}
 	}
 	provider, ok := NewProvider(AgentHermes, ProviderConfig{Roots: roots})
@@ -110,6 +114,9 @@ func WriteHermesSessionJSONL(
 		return err
 	}
 	if !found {
+		if storedStateErr != nil && !errors.Is(storedStateErr, os.ErrNotExist) {
+			return storedStateErr
+		}
 		return fmt.Errorf(
 			"hermes session %s source not found: %w",
 			rawSessionID, os.ErrNotExist,
@@ -294,7 +301,6 @@ func (s hermesSourceSet) FindSource(
 						"falling back to transcripts", stateDB, err,
 				)
 			case !found:
-				continue
 			default:
 				if source, ok := s.sourceRef(root, stateDB); ok {
 					return source, true, nil
@@ -311,6 +317,18 @@ func (s hermesSourceSet) FindSource(
 		}
 	}
 	return SourceRef{}, false, nil
+}
+
+type hermesStateLookupError struct {
+	err error
+}
+
+func (e hermesStateLookupError) Error() string {
+	return e.err.Error()
+}
+
+func (e hermesStateLookupError) Unwrap() error {
+	return e.err
 }
 
 func hermesStateDBHasSession(stateDB string, rawID string) (bool, error) {
