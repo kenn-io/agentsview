@@ -36,6 +36,7 @@ type daemonLaunchWaitDeps struct {
 	loadReadOnlyConfig func() (config.Config, error)
 	writableRecords    func(string) ([]daemon.RuntimeRecord, error)
 	confirmed          func(daemon.RuntimeRecord, string) bool
+	probe              func(daemon.RuntimeRecord, string) bool
 	isStarting         func(string) bool
 	readStartupState   func(string) *startupState
 	now                func() time.Time
@@ -51,6 +52,7 @@ func defaultDaemonLaunchWaitDeps() daemonLaunchWaitDeps {
 		loadReadOnlyConfig: config.LoadReadOnly,
 		writableRecords:    writableDaemonRecords,
 		confirmed:          stopTargetConfirmed,
+		probe:              daemonRecordPingConfirmed,
 		isStarting:         IsDaemonStarting,
 		readStartupState:   readStartupState,
 		now:                time.Now,
@@ -228,6 +230,12 @@ func reportDaemonLaunchContention(
 			"daemon start", observation.UnconfirmedRecords,
 		)
 	}
+	if len(observation.Records) > 1 {
+		return fmt.Errorf(
+			"daemon start: multiple writable agentsview daemons are running (pids %s); run `agentsview daemon status`, then `agentsview daemon stop` before retrying",
+			formatRecordPIDList(observation.Records),
+		)
+	}
 	if len(observation.Records) > 0 {
 		rt := daemonRuntimeFromRecord(observation.Records[0])
 		fmt.Fprintf(w, "agentsview already running at %s (pid %d)\n", urlFromDaemonRuntime(rt), rt.Record.PID)
@@ -277,6 +285,26 @@ func waitForDaemonLaunchContentionWithDeps(
 			confirmed, unconfirmed := partitionConfirmedDaemonRecords(
 				records, cfg.AuthToken, deps.confirmed,
 			)
+			if len(unconfirmed) == 0 {
+				for _, rec := range confirmed {
+					if !deps.probe(rec, cfg.AuthToken) {
+						_ = lock.Unlock()
+						return daemonLaunchObservation{Err: fmt.Errorf(
+							"writable daemon pid %d is not responding to its health probe; run `agentsview daemon restart` to replace it",
+							rec.PID,
+						)}
+					}
+					if compatibilityErr := daemonRuntimeCompatibilityError(
+						daemonRuntimeFromRecord(rec),
+					); compatibilityErr != nil {
+						_ = lock.Unlock()
+						return daemonLaunchObservation{Err: fmt.Errorf(
+							"writable daemon pid %d is incompatible: %w; run `agentsview daemon restart` to replace it",
+							rec.PID, compatibilityErr,
+						)}
+					}
+				}
+			}
 			starting := deps.isStarting(dataDir)
 			var snapshot *startupState
 			if starting {

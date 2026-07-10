@@ -128,6 +128,65 @@ func TestDaemonWaitForLaunchContentionRejectsUnconfirmedLiveWriter(t *testing.T)
 	assert.True(t, daemon.ProcessAlive(pid))
 }
 
+func TestDaemonWaitForLaunchContentionRejectsIncompatibleResponsiveWriter(t *testing.T) {
+	dir := runtimeTestDir(t)
+	endpoint, probed := newPingDaemonWithProbeSignal(t)
+	rec := testWritableRecord(os.Getpid(), "/runtime/incompatible.json")
+	rec.Address = endpoint.Addr
+	rec.Metadata[runtimeHost] = endpoint.Host
+	rec.Metadata[runtimePort] = fmt.Sprint(endpoint.Port)
+	rec.Metadata[runtimeAPIVersion] = fmt.Sprint(daemonAPIVersion + 1)
+
+	waitDeps := defaultDaemonLaunchWaitDeps()
+	waitDeps.loadReadOnlyConfig = func() (config.Config, error) {
+		return config.Config{DataDir: dir}, nil
+	}
+	waitDeps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) {
+		return []daemon.RuntimeRecord{rec}, nil
+	}
+
+	observation := waitForDaemonLaunchContentionWithDeps(dir, waitDeps)
+	select {
+	case <-probed:
+	case <-time.After(time.Second):
+		require.Fail(t, "responsive writer was not probed")
+	}
+	var out bytes.Buffer
+	err := reportDaemonLaunchContention(&out, dir, observation, time.Now())
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "incompatible")
+	assert.ErrorContains(t, err, fmt.Sprintf("pid %d", rec.PID))
+	assert.ErrorContains(t, err, "daemon restart")
+	assert.NotContains(t, out.String(), "already running")
+}
+
+func TestDaemonWaitForLaunchContentionRejectsCompatibleUnresponsiveWriter(t *testing.T) {
+	dir := runtimeTestDir(t)
+	rec := testWritableRecord(os.Getpid(), "/runtime/unresponsive.json")
+	rec.Address = "127.0.0.1:1"
+	rec.Metadata[runtimePort] = "1"
+	createTime, ok := processCreateTimeMillis(rec.PID)
+	require.True(t, ok)
+	rec.Metadata[runtimeCreateTime] = fmt.Sprint(createTime)
+
+	waitDeps := defaultDaemonLaunchWaitDeps()
+	waitDeps.loadReadOnlyConfig = func() (config.Config, error) {
+		return config.Config{DataDir: dir}, nil
+	}
+	waitDeps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) {
+		return []daemon.RuntimeRecord{rec}, nil
+	}
+
+	observation := waitForDaemonLaunchContentionWithDeps(dir, waitDeps)
+	var out bytes.Buffer
+	err := reportDaemonLaunchContention(&out, dir, observation, time.Now())
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "not responding")
+	assert.ErrorContains(t, err, fmt.Sprintf("pid %d", rec.PID))
+	assert.ErrorContains(t, err, "daemon restart")
+	assert.NotContains(t, out.String(), "already running")
+}
+
 func TestDaemonWaitForLaunchContentionSurfacesReadOnlyConfigError(t *testing.T) {
 	dir := runtimeTestDir(t)
 	waitDeps := defaultDaemonLaunchWaitDeps()

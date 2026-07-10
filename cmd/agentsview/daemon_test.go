@@ -230,6 +230,14 @@ func TestDaemonStartLaunchContentionTerminalStates(t *testing.T) {
 			wantOut: "already running",
 		},
 		{
+			name: "multiple published writables",
+			observation: daemonLaunchObservation{Records: []daemon.RuntimeRecord{
+				testWritableRecord(31, "/runtime/31.json"),
+				testWritableRecord(32, "/runtime/32.json"),
+			}},
+			wantErr: "multiple writable agentsview daemons",
+		},
+		{
 			name: "persistent startup snapshot",
 			observation: daemonLaunchObservation{LockHeld: true, Starting: true, Snapshot: &startupState{
 				PID: 22, StartedAt: time.Unix(100, 0), LogPath: "/tmp/serve.log", Phase: "opening database",
@@ -555,6 +563,7 @@ func TestDaemonRestartStoppedStartsAndReadOnlySurvives(t *testing.T) {
 }
 
 func TestServeRestartDelegatesToCanonicalWriterOnlyRestart(t *testing.T) {
+	requirePOSIXSignals(t, "requires POSIX sleep/process signals")
 	deps, out := daemonCommandTestDeps(t)
 	dir := runtimeTestDir(t)
 	pid, _ := startReapedSleepProcess(t)

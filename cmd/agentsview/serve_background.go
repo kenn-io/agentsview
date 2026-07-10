@@ -80,6 +80,7 @@ func acquireBackgroundLaunchLockWithError(
 ) (*flock.Flock, bool, error) {
 	lock := flock.New(backgroundLaunchLockPath(dataDir))
 	locked, err := lock.TryLock()
+	locked, err = classifyBackgroundLaunchLockResult(locked, err)
 	if err != nil {
 		return nil, false, err
 	}
