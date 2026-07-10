@@ -225,6 +225,16 @@ func TestEvictCodexSessionIndexCache(t *testing.T) {
 	_, cached = codexSessionIndexCache.entries[indexPath]
 	codexSessionIndexCache.mu.Unlock()
 	assert.False(t, cached, "session index cache entry should be evicted")
+
+	otherPath := filepath.Join(root, "other-session_index.jsonl")
+	require.NoError(t, os.WriteFile(otherPath, []byte(index), 0o644))
+	CodexSessionIndexTitles(indexPath)
+	CodexSessionIndexTitles(otherPath)
+	EvictAllCodexSessionIndexes()
+	codexSessionIndexCache.mu.Lock()
+	remaining := len(codexSessionIndexCache.entries)
+	codexSessionIndexCache.mu.Unlock()
+	assert.Zero(t, remaining, "all session index cache entries should be evicted")
 }
 
 func TestParseCodexSession_PreservesAssistantBlockquotes(t *testing.T) {

@@ -1164,6 +1164,48 @@ func TestSyncEngineOpenCodeStorageSameMtimeContentChangeUsesFingerprint(
 		"successful rewrite must bump local_modified_at for push windows")
 }
 
+func TestWatcherOverflowReverifiesSameStatOpenCodeStorage(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
+	storage := createOpenCodeStorageFixture(t, env.opencodeDir)
+	storage.addSession(
+		t, "proj", "overflow-same-stat",
+		"/home/user/code/opencode-app", "Overflow Guard",
+		1779012000000, 1779012030000,
+	)
+	storage.addMessage(
+		t, "overflow-same-stat", "msg-user", "user",
+		1779012000000, nil,
+	)
+	partPath := storage.addTextPart(
+		t, "overflow-same-stat", "msg-user", "part-user",
+		"original prompt", 1779012000000,
+	)
+
+	stats := env.engine.SyncAll(context.Background(), nil)
+	require.False(t, stats.Aborted)
+	require.Equal(t, 1, stats.Synced)
+	const sessionID = "opencode:overflow-same-stat"
+	assertMessageContent(t, env.db, sessionID, "original prompt")
+	partInfo, err := os.Stat(partPath)
+	require.NoError(t, err)
+
+	storage.addTextPart(
+		t, "overflow-same-stat", "msg-user", "part-user",
+		"modified prompt", 1779012000000,
+	)
+	require.NoError(t, os.Chtimes(partPath, partInfo.ModTime(), partInfo.ModTime()))
+	rewrittenInfo, err := os.Stat(partPath)
+	require.NoError(t, err)
+	require.Equal(t, partInfo.Size(), rewrittenInfo.Size())
+	require.Equal(t, partInfo.ModTime(), rewrittenInfo.ModTime())
+
+	stats = env.engine.SyncAllAfterWatcherOverflow(context.Background(), nil)
+	require.False(t, stats.Aborted)
+	assert.Equal(t, 1, stats.Synced,
+		"overflow recovery must reparse event-sensitive storage sessions")
+	assertMessageContent(t, env.db, sessionID, "modified prompt")
+}
+
 func TestSyncEngineKiroSQLiteUpdatePaths(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
 	ks := createKiroSQLiteDB(t, env.kiroDir)
@@ -10128,6 +10170,60 @@ func TestSyncPathsCodexIndexEventReloadsSameStatTitle(t *testing.T) {
 	assert.Equal(t, "Bravo title", *after.SessionName)
 	assert.False(t, after.LastWriteIncremental,
 		"index event refresh must use a full replacement")
+}
+
+func TestWatcherOverflowReloadsSameStatCodexIndexTitle(t *testing.T) {
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir}))
+
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229f8"
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/tmp/proj", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexMsgJSON("user", "keep overflow message", tsEarlyS1),
+	)
+	env.writeCodexSession(
+		t, filepath.Join("2024", "01", "01"),
+		"rollout-2024-01-01T10-00-00-"+uuid+".jsonl", initial,
+	)
+	indexPath := filepath.Join(root, parser.CodexSessionIndexFilename)
+	original := `{"id":"` + uuid + `","thread_name":"Alpha title"}` + "\n"
+	rewritten := `{"id":"` + uuid + `","thread_name":"Bravo title"}` + "\n"
+	require.Len(t, rewritten, len(original), "index fixtures must have equal length")
+	require.NoError(t, os.WriteFile(indexPath, []byte(original), 0o644))
+	stableTime := time.Unix(1_800_000_001, 456_000_000)
+	require.NoError(t, os.Chtimes(indexPath, stableTime, stableTime))
+	env.engine.SyncAll(context.Background(), nil)
+
+	before, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.NotNil(t, before.SessionName)
+	assert.Equal(t, "Alpha title", *before.SessionName)
+	indexInfo, err := os.Stat(indexPath)
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(indexPath, []byte(rewritten), 0o644))
+	require.NoError(t, os.Chtimes(indexPath, indexInfo.ModTime(), indexInfo.ModTime()))
+	rewrittenInfo, err := os.Stat(indexPath)
+	require.NoError(t, err)
+	require.Equal(t, indexInfo.Size(), rewrittenInfo.Size())
+	require.Equal(t, indexInfo.ModTime(), rewrittenInfo.ModTime())
+
+	stats := env.engine.SyncAllAfterWatcherOverflow(context.Background(), nil)
+	require.False(t, stats.Aborted)
+	after, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	require.NotNil(t, after.SessionName)
+	assert.Equal(t, "Bravo title", *after.SessionName)
+	assert.False(t, after.LastWriteIncremental)
+	msgs := fetchMessages(t, env.db, "codex:"+uuid)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "keep overflow message", msgs[0].Content)
 }
 
 // TestIncrementalSync_CodexStoresEffectiveMtime pins that the incremental

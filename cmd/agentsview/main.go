@@ -1094,12 +1094,12 @@ func startFileWatcher(
 
 type watchSyncer interface {
 	SyncPathsContext(context.Context, []string)
-	SyncAll(context.Context, sync.ProgressFunc) sync.SyncStats
+	SyncAllAfterWatcherOverflow(context.Context, sync.ProgressFunc) sync.SyncStats
 }
 
 func syncWatchBatch(ctx context.Context, engine watchSyncer, batch sync.WatchBatch) {
 	if batch.FullSync {
-		engine.SyncAll(ctx, nil)
+		engine.SyncAllAfterWatcherOverflow(ctx, nil)
 		return
 	}
 	engine.SyncPathsContext(ctx, batch.Paths)

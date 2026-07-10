@@ -1460,6 +1460,15 @@ func EvictCodexSessionIndex(indexPath string) {
 	codexSessionIndexCache.mu.Unlock()
 }
 
+// EvictAllCodexSessionIndexes removes every cached session_index.jsonl entry.
+// Watcher overflow recovery uses this before a force-reverification pass,
+// because the individual index paths that changed were deliberately coalesced.
+func EvictAllCodexSessionIndexes() {
+	codexSessionIndexCache.mu.Lock()
+	clear(codexSessionIndexCache.entries)
+	codexSessionIndexCache.mu.Unlock()
+}
+
 // EvictCodexSessionIndexForSession removes the cached sidecar associated with
 // one Codex transcript. Explicit full-parse callers use this when an external
 // event says the sidecar changed even if its stat tuple did not.

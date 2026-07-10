@@ -1103,7 +1103,7 @@ func (r *watchSyncRecorder) SyncPathsContext(ctx context.Context, paths []string
 	r.ctxValue = ctx.Value(watchSyncContextKey{})
 }
 
-func (r *watchSyncRecorder) SyncAll(
+func (r *watchSyncRecorder) SyncAllAfterWatcherOverflow(
 	ctx context.Context, progress agentsync.ProgressFunc,
 ) agentsync.SyncStats {
 	r.fullCalls++

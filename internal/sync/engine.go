@@ -1369,7 +1369,7 @@ func (e *Engine) resyncAllLocked(
 		"",
 	)
 	stats = e.syncAllLocked(
-		ctx, reportResyncProgress, time.Time{}, nil, syncWriteBulk, true,
+		ctx, reportResyncProgress, time.Time{}, nil, syncWriteBulk, true, false,
 	)
 	e.db = origDB // restore immediately
 	e.openCodeArchiveStore = nil
@@ -1779,13 +1779,13 @@ func (e *Engine) SyncThenRun(
 		if stats.Aborted && ctx.Err() == nil {
 			stats = e.syncAllLocked(
 				ctx, onProgress, time.Time{}, nil,
-				syncWriteDefault, true,
+				syncWriteDefault, true, false,
 			)
 		}
 	} else {
 		stats = e.syncAllLocked(
 			ctx, onProgress, time.Time{}, nil,
-			syncWriteDefault, true,
+			syncWriteDefault, true, false,
 		)
 	}
 	if ctx.Err() != nil {
@@ -1834,7 +1834,34 @@ func (e *Engine) SyncAll(
 	defer e.syncMu.Unlock()
 	defer e.clearCurrentProgress()
 	stats = e.syncAllLocked(
-		ctx, onProgress, time.Time{}, nil, syncWriteDefault, true,
+		ctx, onProgress, time.Time{}, nil, syncWriteDefault, true, false,
+	)
+	return
+}
+
+// SyncAllAfterWatcherOverflow performs a full discovery pass after the watcher
+// coalesced too many distinct paths to retain them individually. A routine
+// SyncAll is insufficient here: the discarded paths may be the only signal for
+// same-stat rewrites. Clear event-sensitive trust and force every discovered
+// file through its authoritative parse path before rebuilding those caches.
+func (e *Engine) SyncAllAfterWatcherOverflow(
+	ctx context.Context, onProgress ProgressFunc,
+) (stats SyncStats) {
+	if e.refuseWriteInForceParse("SyncAllAfterWatcherOverflow") {
+		return SyncStats{}
+	}
+	e.syncMu.Lock()
+	defer func() {
+		if stats.Synced > 0 {
+			e.emit("sessions")
+		}
+	}()
+	defer e.syncMu.Unlock()
+	defer e.clearCurrentProgress()
+
+	e.clearWatcherOverflowCaches()
+	stats = e.syncAllLocked(
+		ctx, onProgress, time.Time{}, nil, syncWriteDefault, true, true,
 	)
 	return
 }
@@ -1861,7 +1888,7 @@ func (e *Engine) SyncAllSince(
 	defer e.syncMu.Unlock()
 	defer e.clearCurrentProgress()
 	stats = e.syncAllLocked(
-		ctx, onProgress, since, nil, syncWriteDefault, true,
+		ctx, onProgress, since, nil, syncWriteDefault, true, false,
 	)
 	return
 }
@@ -1886,7 +1913,7 @@ func (e *Engine) SyncRootsSince(
 	defer e.clearCurrentProgress()
 	scope := newRootSyncScope(roots)
 	stats = e.syncAllLocked(
-		ctx, onProgress, since, scope, syncWriteDefault, scope == nil,
+		ctx, onProgress, since, scope, syncWriteDefault, scope == nil, false,
 	)
 	return
 }
@@ -1959,6 +1986,7 @@ func samePathOrDescendant(path, root string) bool {
 func (e *Engine) syncAllLocked(
 	ctx context.Context, onProgress ProgressFunc, since time.Time,
 	scope *rootSyncScope, writeMode syncWriteMode, recordSyncState bool,
+	forceDiscoveredFiles bool,
 ) (stats SyncStats) {
 	if ctx.Err() != nil {
 		return SyncStats{Aborted: true}
@@ -2028,6 +2056,11 @@ func (e *Engine) syncAllLocked(
 	}
 	all = e.dedupeClaudeDiscoveredFiles(all)
 	all = e.filterShadowedLegacyKiroFiles(all)
+	if forceDiscoveredFiles {
+		for i := range all {
+			all[i].ForceParse = true
+		}
+	}
 
 	verbose := onProgress == nil
 
@@ -4704,6 +4737,24 @@ func (e *Engine) clearSkip(path string) {
 	delete(e.skipFingerprints, path)
 	e.skipMu.Unlock()
 	_ = e.db.DeleteSkippedFile(path)
+}
+
+// clearWatcherOverflowCaches invalidates every freshness shortcut whose
+// correctness can depend on receiving a concrete changed path. The following
+// forced discovery pass rebuilds these caches from parsed source state.
+func (e *Engine) clearWatcherOverflowCaches() {
+	e.skipMu.Lock()
+	e.skipCache = make(map[string]int64)
+	e.skipFingerprints = make(map[string]string)
+	e.skipMu.Unlock()
+	if !e.ephemeral {
+		if err := e.db.ReplaceSkippedFiles(map[string]int64{}); err != nil {
+			log.Printf("clearing skipped files after watcher overflow: %v", err)
+		}
+	}
+	e.clearTrustedOpenCodeStorageSessions()
+	e.clearTrustedSQLiteContainers()
+	parser.EvictAllCodexSessionIndexes()
 }
 
 // InjectSkipCache merges entries into the in-memory skip

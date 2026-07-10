@@ -19,9 +19,10 @@ lives primarily in `internal/sync/watcher.go`,
   of path-string bytes. At most one batch is in flight while one more
   accumulates. Entry count separately bounds map and slice overhead.
 - Exceeding either batch limit replaces its individual paths with one explicit
-  full-sync marker. The worker runs a normal source rescan under the same
-  serialization, dispatch-floor, cancellation, and shutdown rules, so overflow
-  bounds memory without losing source changes.
+  full-sync marker. The worker clears event-sensitive freshness caches and
+  force-verifies every discovered file under the same serialization,
+  dispatch-floor, cancellation, and shutdown rules, so overflow bounds memory
+  without losing same-stat source changes.
 - Shutdown discards pending paths and waits only for an already-running
   callback. Normal discovery on the next startup recovers discarded changes.
 
