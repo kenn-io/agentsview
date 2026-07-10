@@ -761,6 +761,8 @@
   "analytics_skill_trend_title": "Skill Usage Over Time",
   "analytics_skill_trend_other": "Other",
   "analytics_skill_trend_legend": "Toggle skills",
+  "analytics_skill_trend_chart_label": "Skill usage over time. Use the left and right arrow keys to inspect dates.",
+  "analytics_skill_trend_date": "Date",
   "analytics_skill_trend_loading": "Loading skill usage...",
   "analytics_skill_trend_empty": "No skill usage data",
   "usage_model": "Model",

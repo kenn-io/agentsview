@@ -737,6 +737,8 @@
   "analytics_skill_trend_title": "시간별 스킬 사용량",
   "analytics_skill_trend_other": "기타",
   "analytics_skill_trend_legend": "스킬 표시 전환",
+  "analytics_skill_trend_chart_label": "시간별 스킬 사용량입니다. 왼쪽 및 오른쪽 화살표 키를 사용하여 날짜를 확인하세요.",
+  "analytics_skill_trend_date": "날짜",
   "analytics_skill_trend_loading": "스킬 사용 데이터 불러오는 중...",
   "analytics_skill_trend_empty": "스킬 사용 데이터가 없습니다",
   "usage_model": "모델",

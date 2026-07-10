@@ -6,14 +6,16 @@ import {
   expect,
   it,
   vi,
-} from "vitest";
+} from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 // @ts-ignore
 import SkillTrend from "./SkillTrend.svelte";
 import { analytics } from "../../stores/analytics.svelte.js";
+import { setLocale } from "../../i18n/index.js";
 
 describe("SkillTrend", () => {
   beforeEach(() => {
+    setLocale("en");
     vi.stubGlobal(
       "ResizeObserver",
       class {
@@ -25,6 +27,7 @@ describe("SkillTrend", () => {
   });
 
   afterEach(() => {
+    setLocale("en");
     analytics.skills = null;
     analytics.skillsGranularity = "week";
     // @ts-ignore
@@ -86,10 +89,10 @@ describe("SkillTrend", () => {
 
     const lines = document.querySelectorAll(".series-line");
     expect(lines).toHaveLength(3);
-    expect(document.body.textContent).toContain("01-01");
-    expect(document.body.textContent).toContain("01-08");
+    expect(document.body.textContent).toContain("Jan 1");
+    expect(document.body.textContent).toContain("Jan 8");
 
-    unmount(component);
+    await unmount(component);
   });
 
   it("hides a series line when its legend chip is toggled", async () => {
@@ -110,7 +113,7 @@ describe("SkillTrend", () => {
     await tick();
     expect(document.querySelectorAll(".series-line")).toHaveLength(3);
 
-    unmount(component);
+    await unmount(component);
   });
 
   it("keeps survivor colors stable when a series is hidden", async () => {
@@ -131,7 +134,7 @@ describe("SkillTrend", () => {
     // With "commit" hidden, "review" keeps its slot-2 hue.
     expect(lineStyles()[0]).toContain("--chart-series-2");
 
-    unmount(component);
+    await unmount(component);
   });
 
   it("folds skills past the series cap into Other", async () => {
@@ -156,7 +159,7 @@ describe("SkillTrend", () => {
 
     expect(document.querySelectorAll(".series-line")).toHaveLength(7);
 
-    unmount(component);
+    await unmount(component);
   });
 
   it("shows a crosshair tooltip listing every visible series", async () => {
@@ -175,7 +178,7 @@ describe("SkillTrend", () => {
 
     const tooltip = document.querySelector(".tooltip")!;
     expect(tooltip).toBeTruthy();
-    expect(tooltip.textContent).toContain("2024-01-01");
+    expect(tooltip.textContent).toContain("Jan 1, 2024");
     const rows = tooltip.querySelectorAll(".tooltip-row");
     expect(rows).toHaveLength(3);
     // Rows sorted by value: commit 4, review 2, deploy 0.
@@ -185,14 +188,70 @@ describe("SkillTrend", () => {
     expect(rows[2]!.textContent).toContain("deploy");
     expect(document.querySelectorAll(".crosshair")).toHaveLength(1);
 
-    svg.dispatchEvent(new MouseEvent("mouseleave"));
+    document.querySelector<HTMLElement>(".chart")!
+      .dispatchEvent(new MouseEvent("mouseleave"));
     await tick();
     expect(document.querySelector(".tooltip")).toBeNull();
 
-    unmount(component);
+    await unmount(component);
   });
 
-  it("changes granularity through the shared picker", async () => {
+  it("exposes trend buckets to keyboard and assistive technology", async () => {
+    const component = mountWithData();
+    await tick();
+
+    const chart = document.querySelector<HTMLElement>(".chart")!;
+    expect(chart.getAttribute("role")).toBe("slider");
+    expect(chart.getAttribute("tabindex")).toBe("0");
+    expect(chart.getAttribute("aria-describedby")).toBe(
+      "skill-trend-data",
+    );
+
+    const dataTable = document.querySelector("#skill-trend-data")!;
+    expect(dataTable.textContent).toContain("commit");
+    expect(dataTable.textContent).toContain("Jan 1, 2024");
+    expect(dataTable.textContent).toContain("4");
+
+    chart.dispatchEvent(new FocusEvent("focus"));
+    await tick();
+    expect(document.querySelector(".tooltip-date")?.textContent)
+      .toContain("Jan 1, 2024");
+
+    chart.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "ArrowRight",
+        bubbles: true,
+      }),
+    );
+    await tick();
+    expect(document.querySelector(".tooltip-date")?.textContent)
+      .toContain("Jan 8, 2024");
+
+    await unmount(component);
+  });
+
+  it("formats visible dates with the active locale", async () => {
+    setLocale("zh-CN");
+    const component = mountWithData();
+    await tick();
+
+    const chart = document.querySelector<HTMLElement>(".chart")!;
+    chart.dispatchEvent(
+      new MouseEvent("mousemove", {
+        bubbles: true,
+        clientX: 0,
+        clientY: 20,
+      }),
+    );
+    await tick();
+
+    expect(document.querySelector(".tooltip-date")?.textContent)
+      .toContain("2024年1月1日");
+
+    await unmount(component);
+  });
+
+  it("requests granularity changes through the shared picker", async () => {
     const fetchSpy = vi
       .spyOn(analytics, "fetchSkills")
       .mockResolvedValue("ok");
@@ -208,10 +267,10 @@ describe("SkillTrend", () => {
     monthBtn!.click();
     await tick();
 
-    expect(analytics.skillsGranularity).toBe("month");
     expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(fetchSpy).toHaveBeenCalledWith("month");
 
-    unmount(component);
+    await unmount(component);
   });
 
   it("renders empty state", async () => {
@@ -221,7 +280,7 @@ describe("SkillTrend", () => {
 
     expect(document.body.textContent).toContain("No skill usage data");
 
-    unmount(component);
+    await unmount(component);
   });
 
   it("renders error state and retries", async () => {
@@ -243,6 +302,6 @@ describe("SkillTrend", () => {
 
     expect(retrySpy).toHaveBeenCalledOnce();
 
-    unmount(component);
+    await unmount(component);
   });
 });

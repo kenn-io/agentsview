@@ -1,7 +1,8 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
   import GranularityPicker from "../shared/GranularityPicker.svelte";
-  import { m } from "../../i18n/index.js";
+  import { formatDateTime, m } from "../../i18n/index.js";
+  import { parseLocalDate } from "../../utils/dates.js";
 
   // Soft cap from the series-count ladder: past six skills the tail folds
   // into "Other" instead of generating more hues.
@@ -146,11 +147,28 @@
 
   function bucketLabel(date: string, index: number): string {
     if (index % labelStep !== 0) return "";
-    if (date.length < 10) return date;
+    const parsed = parseLocalDate(date);
+    if (!parsed) return date;
     if (analytics.skillsGranularity === "month") {
-      return date.slice(0, 7);
+      return formatDateTime(parsed, {
+        year: "numeric",
+        month: "short",
+      });
     }
-    return date.slice(5);
+    return formatDateTime(parsed, {
+      month: "short",
+      day: "numeric",
+    });
+  }
+
+  function bucketDateLabel(date: string): string {
+    const parsed = parseLocalDate(date);
+    if (!parsed) return date;
+    return formatDateTime(parsed, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
   }
 
   // Edge labels anchor inward so they never clip at the chart bounds.
@@ -190,6 +208,32 @@
     tooltipPos = null;
   }
 
+  function setKeyboardHover(element: HTMLElement, index: number) {
+    const rect = element.getBoundingClientRect();
+    hoverIndex = index;
+    tooltipPos = {
+      x: rect.left + xAt(index),
+      y: rect.top + PLOT_TOP - 6,
+    };
+  }
+
+  function handleFocus(e: FocusEvent) {
+    if (trendEntries.length === 0) return;
+    setKeyboardHover(e.currentTarget as HTMLElement, 0);
+  }
+
+  function handleKeydown(e: KeyboardEvent) {
+    if (trendEntries.length === 0) return;
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    const delta = e.key === "ArrowRight" ? 1 : -1;
+    const index = Math.min(
+      Math.max((hoverIndex ?? 0) + delta, 0),
+      trendEntries.length - 1,
+    );
+    setKeyboardHover(e.currentTarget as HTMLElement, index);
+  }
+
   const hoverReadout = $derived.by(() => {
     if (hoverIndex === null) return [];
     const index = hoverIndex;
@@ -210,6 +254,7 @@
     <GranularityPicker
       value={analytics.skillsGranularity}
       onChange={(g) => analytics.setSkillsGranularity(g)}
+      disabled={analytics.querying.skills}
     />
   </div>
 
@@ -250,14 +295,30 @@
       {/each}
     </div>
 
-    <div class="chart" bind:clientWidth={measuredWidth}>
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="chart"
+      bind:clientWidth={measuredWidth}
+      role="slider"
+      tabindex="0"
+      aria-label={m.analytics_skill_trend_chart_label()}
+      aria-describedby="skill-trend-data"
+      aria-valuemin="0"
+      aria-valuemax={Math.max(trendEntries.length - 1, 0)}
+      aria-valuenow={hoverIndex ?? 0}
+      aria-valuetext={bucketDateLabel(
+        trendEntries[hoverIndex ?? 0]?.date ?? "",
+      )}
+      onmousemove={handleMove}
+      onmouseleave={handleLeave}
+      onfocus={handleFocus}
+      onblur={handleLeave}
+      onkeydown={handleKeydown}
+    >
       <svg
         width={chartWidth}
         height={SVG_HEIGHT}
         class="chart-svg"
-        onmousemove={handleMove}
-        onmouseleave={handleLeave}
+        aria-hidden="true"
       >
         <line
           class="baseline"
@@ -318,15 +379,38 @@
           {/if}
         {/each}
       </svg>
+      <table id="skill-trend-data" class="kit-sr-only">
+        <caption>{m.analytics_skill_trend_title()}</caption>
+        <thead>
+          <tr>
+            <th scope="col">{m.analytics_skill_trend_date()}</th>
+            {#each allSeries as series (series.key)}
+              <th scope="col">{series.label}</th>
+            {/each}
+          </tr>
+        </thead>
+        <tbody>
+          {#each trendEntries as entry, index (entry.date)}
+            <tr>
+              <th scope="row">{bucketDateLabel(entry.date)}</th>
+              {#each allSeries as series (series.key)}
+                <td>{(series.values[index] ?? 0).toLocaleString()}</td>
+              {/each}
+            </tr>
+          {/each}
+        </tbody>
+      </table>
     </div>
 
     {#if hoverIndex !== null && tooltipPos}
       <div
         class="tooltip"
+        role="status"
+        aria-live="polite"
         style="left: {tooltipPos.x}px; top: {tooltipPos.y}px;"
       >
         <div class="tooltip-date">
-          {trendEntries[hoverIndex]?.date}
+          {bucketDateLabel(trendEntries[hoverIndex]?.date ?? "")}
         </div>
         {#each hoverReadout as row (row.key)}
           <div class="tooltip-row">

@@ -1876,7 +1876,9 @@ func (s *Store) GetAnalyticsSkills(
 		ids = append(ids, r.id)
 	}
 	if len(ids) == 0 {
-		return db.BuildSkillsAnalytics(nil, granularity), nil
+		return db.BuildSkillsAnalytics(
+			nil, f.From, f.To, granularity,
+		), nil
 	}
 
 	var skillRows []db.SkillAnalyticsRow
@@ -1932,7 +1934,9 @@ func (s *Store) GetAnalyticsSkills(
 	if err != nil {
 		return db.SkillsAnalyticsResponse{}, err
 	}
-	return db.BuildSkillsAnalytics(skillRows, granularity), nil
+	return db.BuildSkillsAnalytics(
+		skillRows, f.From, f.To, granularity,
+	), nil
 }
 
 func (s *Store) GetAnalyticsVelocity(

@@ -737,6 +737,8 @@
   "analytics_skill_trend_title": "Skill 使用趋势",
   "analytics_skill_trend_other": "其他",
   "analytics_skill_trend_legend": "切换 skill 显示",
+  "analytics_skill_trend_chart_label": "Skill 使用趋势。使用左右箭头键查看日期。",
+  "analytics_skill_trend_date": "日期",
   "analytics_skill_trend_loading": "正在加载 skill 使用数据...",
   "analytics_skill_trend_empty": "无 skill 使用数据",
   "usage_model": "模型",

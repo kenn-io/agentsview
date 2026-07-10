@@ -2250,7 +2250,9 @@ func (s *Store) GetAnalyticsSkills(
 			fmt.Errorf("iterating skill sessions: %w", err)
 	}
 	if len(sessionIDs) == 0 {
-		return db.BuildSkillsAnalytics(nil, granularity), nil
+		return db.BuildSkillsAnalytics(
+			nil, f.From, f.To, granularity,
+		), nil
 	}
 
 	var skillRows []db.SkillAnalyticsRow
@@ -2320,7 +2322,9 @@ func (s *Store) GetAnalyticsSkills(
 		return db.SkillsAnalyticsResponse{}, err
 	}
 
-	return db.BuildSkillsAnalytics(skillRows, granularity), nil
+	return db.BuildSkillsAnalytics(
+		skillRows, f.From, f.To, granularity,
+	), nil
 }
 
 // --- Velocity ---

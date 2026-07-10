@@ -3040,10 +3040,27 @@ func TestBuildSkillsAnalyticsTrendGranularity(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resp := BuildSkillsAnalytics(rows, tt.granularity)
+			resp := BuildSkillsAnalytics(rows, "", "", tt.granularity)
 			assert.Equal(t, tt.want, resp.Trend, "Trend buckets")
 		})
 	}
+}
+
+func TestBuildSkillsAnalyticsIncludesEmptyTrendBuckets(t *testing.T) {
+	rows := []SkillAnalyticsRow{
+		{SessionID: "a", SkillName: "deploy", Date: "2024-06-03", Count: 2},
+		{SessionID: "b", SkillName: "deploy", Date: "2024-06-17", Count: 1},
+	}
+
+	resp := BuildSkillsAnalytics(
+		rows, "2024-06-03", "2024-06-17", "week",
+	)
+
+	assert.Equal(t, []SkillTrendEntry{
+		{Date: "2024-06-03", BySkill: map[string]int{"deploy": 2}},
+		{Date: "2024-06-10", BySkill: map[string]int{}},
+		{Date: "2024-06-17", BySkill: map[string]int{"deploy": 1}},
+	}, resp.Trend)
 }
 
 func TestBuildSkillsAnalyticsLastUsedChronological(t *testing.T) {
@@ -3061,7 +3078,7 @@ func TestBuildSkillsAnalyticsLastUsedChronological(t *testing.T) {
 		},
 	}
 
-	resp := BuildSkillsAnalytics(rows, "week")
+	resp := BuildSkillsAnalytics(rows, "", "", "week")
 	require.Len(t, resp.BySkill, 1, "BySkill")
 	assert.Equal(t, "2024-06-10T09:00:00.500Z",
 		resp.BySkill[0].LastUsedAt,

@@ -2876,16 +2876,14 @@ func skillsTrendGranularity(granularity string) string {
 // BuildSkillsAnalytics folds backend-neutral skill rows into the public
 // response shape. Skill names are trimmed and empty names are ignored.
 // granularity picks the trend bucket size (day, week, or month); empty
-// or unknown values fall back to week.
+// or unknown values fall back to week. When from and to are present, the
+// trend includes every bucket in that range, including zero-usage buckets.
 func BuildSkillsAnalytics(
-	rows []SkillAnalyticsRow, granularity string,
+	rows []SkillAnalyticsRow, from, to, granularity string,
 ) SkillsAnalyticsResponse {
 	resp := SkillsAnalyticsResponse{
 		BySkill: []SkillUsage{},
 		Trend:   []SkillTrendEntry{},
-	}
-	if len(rows) == 0 {
-		return resp
 	}
 
 	bucket := skillsTrendGranularity(granularity)
@@ -2930,6 +2928,14 @@ func BuildSkillsAnalytics(
 	}
 
 	resp.DistinctSkills = len(bySkill)
+	if resp.DistinctSkills == 0 {
+		return resp
+	}
+	for _, entry := range TrendBucketRange(from, to, bucket) {
+		if trendBuckets[entry.Date] == nil {
+			trendBuckets[entry.Date] = map[string]int{}
+		}
+	}
 	for name, acc := range bySkill {
 		usage := SkillUsage{
 			SkillName:        name,
@@ -3244,7 +3250,7 @@ func (db *DB) GetAnalyticsSkills(
 			fmt.Errorf("iterating skill sessions: %w", err)
 	}
 	if len(sessionIDs) == 0 {
-		return BuildSkillsAnalytics(nil, granularity), nil
+		return BuildSkillsAnalytics(nil, f.From, f.To, granularity), nil
 	}
 
 	var skillRows []SkillAnalyticsRow
@@ -3298,7 +3304,9 @@ func (db *DB) GetAnalyticsSkills(
 		return SkillsAnalyticsResponse{}, err
 	}
 
-	return BuildSkillsAnalytics(skillRows, granularity), nil
+	return BuildSkillsAnalytics(
+		skillRows, f.From, f.To, granularity,
+	), nil
 }
 
 // --- Velocity ---
