@@ -223,7 +223,7 @@ describe("MessageList read progress", () => {
     virtualizerMock.scrollOffset = 300;
     scroller!.dispatchEvent(new Event("scroll"));
     await vi.waitFor(() => {
-      expect(readProgress.get("s1")).toEqual({ ordinal: 5, messageCount: 6 });
+      expect(readProgress.get("s1")).toEqual({ ordinal: 5, messageCount: 5 });
     });
     await tick();
 
@@ -283,14 +283,14 @@ describe("MessageList read progress", () => {
       new Event("scroll"),
     );
     await vi.waitFor(() => {
-      expect(readProgress.get("s1")).toEqual({ ordinal: 5, messageCount: 6 });
+      expect(readProgress.get("s1")).toEqual({ ordinal: 5, messageCount: 5 });
     });
     await tick();
 
     expect(document.querySelectorAll(".read-progress-divider")).toHaveLength(0);
   });
 
-  it("does not mark every submessage in a visible tool group as read", async () => {
+  it("places the divider inside a tool group and does not mark every submessage read", async () => {
     messages.messages = [4, 5].map((ordinal) => ({
       ...makeMessage(ordinal),
       role: "assistant",
@@ -309,6 +309,9 @@ describe("MessageList read progress", () => {
     }]);
     component = mount(MessageList, { target: document.body });
     await tick();
+
+    const boundary = document.querySelector(".read-progress-divider");
+    expect(boundary?.nextElementSibling?.getAttribute("data-message-ordinal")).toBe("4");
 
     document.querySelector<HTMLElement>(".message-list-scroll")?.dispatchEvent(
       new Event("scroll"),
@@ -357,7 +360,7 @@ describe("MessageList read progress", () => {
     }
   });
 
-  it("uses the last displayable message for read progress count", async () => {
+  it("acknowledges a trailing system message after its last displayable row is visible", async () => {
     const originalObserver = globalThis.IntersectionObserver;
     const callbacks: IntersectionObserverCallback[] = [];
     class ObserverMock {
@@ -400,7 +403,14 @@ describe("MessageList read progress", () => {
         { isIntersecting: true } as IntersectionObserverEntry,
       ], {} as IntersectionObserver);
 
-      expect(readProgress.get("s1")).toEqual({ ordinal: 1, messageCount: 2 });
+      expect(readProgress.get("s1")).toEqual({
+        ordinal: 1,
+        messageCount: 2,
+        totalMessageCount: 3,
+      });
+      messages.sessionId = "s2";
+      await tick();
+      expect(readProgress.hasUnread("s1", 3)).toBe(false);
     } finally {
       Object.defineProperty(globalThis, "IntersectionObserver", {
         configurable: true,

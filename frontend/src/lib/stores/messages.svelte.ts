@@ -154,14 +154,15 @@ class MessagesStore {
     this.loadOlderPromise = null;
   }
 
-  private hasCompleteMessageRange(): boolean {
+  hasCompleteMessageRange(): boolean {
     const first = this.messages[0];
     const last = this.messages[this.messages.length - 1];
     return this.messageCount === 0
-      ? this.messages.length === 0
+      ? this.messages.length === 0 && !this.hasOlder
       : this.messages.length === this.messageCount &&
         first?.ordinal === 0 &&
-        last?.ordinal === this.messageCount - 1;
+        last?.ordinal === this.messageCount - 1 &&
+        !this.hasOlder;
   }
 
   private async fetchPages(

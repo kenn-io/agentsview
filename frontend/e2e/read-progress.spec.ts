@@ -32,6 +32,19 @@ function makeMessages(count: number) {
   }));
 }
 
+function makeMessagesWithTrailingSystem() {
+  return [
+    ...makeMessages(2),
+    {
+      ...makeMessages(1)[0]!,
+      id: 3,
+      ordinal: 2,
+      content: "system",
+      is_system: true,
+    },
+  ];
+}
+
 function renderLintSnippet(scope: string): string {
   const lintPath = process.env.PR_RENDER_LINT_PATH;
   if (!lintPath) throw new Error("PR_RENDER_LINT_PATH is required");
@@ -125,6 +138,82 @@ test("persists read progress until later output is visible", async ({ page }) =>
     .toContain('"messageCount":60');
   await expect(unreadIndicator).toHaveCount(0);
   await expect(unreadDivider).toHaveCount(0);
+});
+
+test("acknowledges a trailing system message only after the last displayable row", async ({ page }) => {
+  const [session] = createMockSessions(1, "read-progress-system", () => "project");
+  session!.id = "read-progress-system";
+  session!.message_count = 3;
+  await page.addInitScript(() => {
+    localStorage.setItem("agentsview-read-progress", JSON.stringify({
+      version: 1,
+      sessions: {
+        "read-progress-system": { ordinal: 0, messageCount: 1 },
+      },
+    }));
+  });
+  await page.route(
+    sessionsRoutePattern,
+    handleSessionsRoute([{ sessions: [session!], project: null }]),
+  );
+  await page.route(
+    "**/api/v1/sessions/read-progress-system/messages*",
+    async (route) => route.fulfill({
+      json: { messages: makeMessagesWithTrailingSystem(), count: 3 },
+    }),
+  );
+
+  const sessions = new SessionsPage(page);
+  await sessions.goto();
+  await sessions.selectFirstSession();
+  await sessions.scroller.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("agentsview-read-progress")))
+    .toContain('"totalMessageCount":3');
+
+  await page.locator(".breadcrumb-link").click();
+  await expect(page.locator(".unread-indicator")).toHaveCount(0);
+});
+
+test("keeps an incomplete range unacknowledged", async ({ page }) => {
+  const [session] = createMockSessions(1, "read-progress-partial", () => "project");
+  session!.id = "read-progress-partial";
+  session!.message_count = 3;
+  await page.addInitScript(() => {
+    localStorage.setItem("agentsview-read-progress", JSON.stringify({
+      version: 1,
+      sessions: {
+        "read-progress-partial": { ordinal: 0, messageCount: 1 },
+      },
+    }));
+  });
+  await page.route(
+    sessionsRoutePattern,
+    handleSessionsRoute([{ sessions: [session!], project: null }]),
+  );
+  await page.route(
+    "**/api/v1/sessions/read-progress-partial/messages*",
+    async (route) => route.fulfill({
+      json: { messages: makeMessages(3).slice(1), count: 3 },
+    }),
+  );
+
+  const sessions = new SessionsPage(page);
+  await sessions.goto();
+  await sessions.selectFirstSession();
+  await sessions.scroller.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("agentsview-read-progress")))
+    .not.toContain('"totalMessageCount"');
+
+  await page.locator(".breadcrumb-link").click();
+  await expect(page.locator(".unread-indicator")).toHaveCount(1);
 });
 
 test("captures responsive unread state", async ({ page }) => {

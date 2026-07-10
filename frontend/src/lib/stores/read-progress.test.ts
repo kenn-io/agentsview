@@ -14,8 +14,8 @@ describe("ReadProgressStore", () => {
     expect(store.get("one")).toBeNull();
     store.baseline("one", 3, 4);
     store.baseline("two", 8, 9);
-    store.recordVisible("one", 2, 3);
-    store.recordVisible("one", 5, 6);
+    store.recordVisible("one", 2, 3, 4);
+    store.recordVisible("one", 5, 5, 6);
 
     expect(store.get("one")).toEqual({ ordinal: 5, messageCount: 6 });
     expect(store.get("two")).toEqual({ ordinal: 8, messageCount: 9 });
@@ -73,7 +73,7 @@ describe("ReadProgressStore", () => {
     });
 
     store.baseline("one", -1, 0);
-    store.recordVisible("one", 0, 1);
+    store.recordVisible("one", 0, 0, 1);
 
     expect(store.get("one")).toEqual({ ordinal: 0, messageCount: 1 });
   });
@@ -90,10 +90,46 @@ describe("ReadProgressStore", () => {
     try {
       const store = new ReadProgressStore();
       store.baseline("one", -1, 0);
-      store.recordVisible("one", 0, 1);
+      store.recordVisible("one", 0, 0, 1);
       expect(store.get("one")).toEqual({ ordinal: 0, messageCount: 1 });
     } finally {
       Object.defineProperty(globalThis, "localStorage", descriptor!);
     }
+  });
+
+  it("acknowledges a complete backend total only at the latest display ordinal", () => {
+    const store = new ReadProgressStore();
+    store.baseline("one", 0, 1);
+    store.recordVisible("one", 1, 2, 3, 4);
+    expect(store.get("one")).toEqual({ ordinal: 1, messageCount: 2 });
+
+    store.recordVisible("one", 2, 2, 3, 4);
+    expect(store.get("one")).toEqual({
+      ordinal: 2,
+      messageCount: 3,
+      totalMessageCount: 4,
+    });
+    expect(store.hasUnread("one", 4)).toBe(false);
+  });
+
+  it("preserves legacy markers and rejects invalid acknowledged totals", () => {
+    localStorage.setItem(
+      "agentsview-read-progress",
+      JSON.stringify({
+        version: 1,
+        sessions: {
+          legacy: { ordinal: 2, messageCount: 3 },
+          invalid: { ordinal: 2, messageCount: 3, totalMessageCount: 2 },
+        },
+      }),
+    );
+    const store = new ReadProgressStore();
+    expect(store.get("legacy")).toEqual({ ordinal: 2, messageCount: 3 });
+    expect(store.get("invalid")).toBeNull();
+
+    store.baseline("one", 1, 2, 1);
+    expect(store.get("one")).toEqual({ ordinal: 1, messageCount: 2 });
+    store.recordVisible("one", 2, 2, 3, 2);
+    expect(store.get("one")).toEqual({ ordinal: 2, messageCount: 3 });
   });
 });

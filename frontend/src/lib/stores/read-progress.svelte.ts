@@ -36,7 +36,10 @@ function isMarker(value: unknown): value is ReadProgressMarker {
     Number.isInteger(marker.ordinal) &&
     (marker.ordinal as number) >= -1 &&
     Number.isInteger(marker.messageCount) &&
-    (marker.messageCount as number) >= 0
+    (marker.messageCount as number) >= 0 &&
+    (marker.totalMessageCount === undefined ||
+      (Number.isInteger(marker.totalMessageCount) &&
+        (marker.totalMessageCount as number) >= (marker.messageCount as number)))
   );
 }
 
@@ -67,6 +70,20 @@ function safeCount(value: number): number {
   return Number.isInteger(value) && value >= 0 ? value : 0;
 }
 
+function acknowledgedTotal(
+  displayCount: number,
+  eligibleTotal: number | undefined,
+): number | undefined {
+  if (
+    eligibleTotal === undefined ||
+    !Number.isInteger(eligibleTotal) ||
+    eligibleTotal < safeCount(displayCount)
+  ) {
+    return undefined;
+  }
+  return eligibleTotal;
+}
+
 export class ReadProgressStore {
   private markers: Record<string, ReadProgressMarker> = $state(
     readStoredMarkers(),
@@ -77,24 +94,52 @@ export class ReadProgressStore {
     return this.markers[sessionId] ?? null;
   }
 
-  baseline(sessionId: string, ordinal: number, messageCount: number) {
+  baseline(
+    sessionId: string,
+    displayOrdinal: number,
+    displayCount: number,
+    eligibleAcknowledgedTotal?: number,
+  ) {
     if (!sessionId || this.markers[sessionId]) return;
+    const totalMessageCount = acknowledgedTotal(
+      displayCount,
+      eligibleAcknowledgedTotal,
+    );
     this.markers = {
       ...this.markers,
       [sessionId]: {
-        ordinal: Number.isInteger(ordinal) && ordinal >= -1 ? ordinal : -1,
-        messageCount: safeCount(messageCount),
+        ordinal: Number.isInteger(displayOrdinal) && displayOrdinal >= -1
+          ? displayOrdinal
+          : -1,
+        messageCount: safeCount(displayCount),
+        ...(totalMessageCount !== undefined ? { totalMessageCount } : {}),
       },
     };
     this.persist();
   }
 
-  recordVisible(sessionId: string, ordinal: number, messageCount: number, totalMessageCount = messageCount) {
+  recordVisible(
+    sessionId: string,
+    observedOrdinal: number,
+    latestDisplayOrdinal: number,
+    displayCount: number,
+    eligibleAcknowledgedTotal?: number,
+  ) {
     const marker = this.markers[sessionId];
-    if (!marker || !Number.isInteger(ordinal)) return;
-    if (ordinal <= marker.ordinal) {
-      if (safeCount(messageCount) <= marker.messageCount && safeCount(totalMessageCount) > (marker.totalMessageCount ?? marker.messageCount)) {
-        this.markers = { ...this.markers, [sessionId]: { ...marker, totalMessageCount: safeCount(totalMessageCount) } };
+    if (!marker || !Number.isInteger(observedOrdinal)) return;
+    const totalMessageCount = observedOrdinal === latestDisplayOrdinal
+      ? acknowledgedTotal(displayCount, eligibleAcknowledgedTotal)
+      : undefined;
+    if (observedOrdinal <= marker.ordinal) {
+      if (
+        safeCount(displayCount) <= marker.messageCount &&
+        totalMessageCount !== undefined &&
+        totalMessageCount > (marker.totalMessageCount ?? marker.messageCount)
+      ) {
+        this.markers = {
+          ...this.markers,
+          [sessionId]: { ...marker, totalMessageCount },
+        };
         this.persist();
       }
       return;
@@ -102,13 +147,14 @@ export class ReadProgressStore {
     this.markers = {
       ...this.markers,
       [sessionId]: {
-        ordinal,
+        ordinal: observedOrdinal,
         messageCount: Math.max(
           marker.messageCount,
-          Math.min(safeCount(messageCount), ordinal + 1),
+          Math.min(safeCount(displayCount), observedOrdinal + 1),
         ),
-        ...(safeCount(totalMessageCount) > safeCount(messageCount)
-          ? { totalMessageCount: safeCount(totalMessageCount) }
+        ...(totalMessageCount !== undefined &&
+          totalMessageCount > (marker.totalMessageCount ?? marker.messageCount)
+          ? { totalMessageCount }
           : {}),
       },
     };

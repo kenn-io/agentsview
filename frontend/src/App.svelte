@@ -173,12 +173,20 @@
     const messageSessionId = messages.sessionId;
     const loading = messages.loading;
     const initialLoadSucceeded = messages.initialLoadSucceeded;
-    const loaded = messages.messages;
-    const messageCount = messages.messageCount;
+    const displayMessages = messages.messages.filter((message) => !message.is_system);
+    const displayOrdinal = displayMessages.at(-1)?.ordinal ?? -1;
+    const displayCount = displayMessages.length;
+    const eligibleAcknowledgedTotal = messages.hasCompleteMessageRange()
+      ? messages.messageCount
+      : undefined;
     untrack(() => {
       if (!id || id !== messageSessionId || loading || !initialLoadSucceeded) return;
-      const latest = loaded[loaded.length - 1]?.ordinal ?? -1;
-      readProgress.baseline(id, latest, messageCount);
+      readProgress.baseline(
+        id,
+        displayOrdinal,
+        displayCount,
+        eligibleAcknowledgedTotal,
+      );
     });
   });
 

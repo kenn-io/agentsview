@@ -117,27 +117,34 @@ describe("ToolCallGroup read progress", () => {
     rectSpy.mockRestore();
   });
 
-  it("leaves the global read boundary to MessageList", () => {
+  it("places the divider immediately before its chronological submessage", () => {
     component = mount(ToolCallGroup, {
       target: document.body,
       props: {
         messages: [makeToolMessage(4), makeToolMessage(5)],
         timestamp: new Date().toISOString(),
+        divider: { ordinal: 5, label: "New messages" },
       },
     });
 
-    expect(document.querySelectorAll(".read-progress-divider")).toHaveLength(0);
+    const target = document.querySelector('[data-message-ordinal="5"]');
+    expect(target?.previousElementSibling?.classList.contains("read-progress-divider")).toBe(true);
+    expect(target?.previousElementSibling?.textContent).toContain("New messages");
+  });
 
-    unmount(component);
+  it("places the divider immediately before its newest-first submessage", () => {
     component = mount(ToolCallGroup, {
       target: document.body,
       props: {
         messages: [makeToolMessage(4), makeToolMessage(5)],
         timestamp: new Date().toISOString(),
         sortNewestFirst: true,
+        divider: { ordinal: 5, label: "Earlier messages" },
       },
     });
 
-    expect(document.querySelectorAll(".read-progress-divider")).toHaveLength(0);
+    const target = document.querySelector('[data-message-ordinal="5"]');
+    expect(target?.previousElementSibling?.classList.contains("read-progress-divider")).toBe(true);
+    expect(target?.previousElementSibling?.textContent).toContain("Earlier messages");
   });
 });

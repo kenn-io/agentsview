@@ -95,8 +95,14 @@
     ).filter(isItemVisible);
   });
 
-  let displayedMessageCount = $derived(
-    (baseMessages[baseMessages.length - 1]?.ordinal ?? -1) + 1,
+  let latestDisplayOrdinal = $derived(
+    baseMessages[baseMessages.length - 1]?.ordinal ?? -1,
+  );
+
+  let displayedMessageCount = $derived(baseMessages.length);
+
+  let eligibleAcknowledgedTotal = $derived(
+    messages.hasCompleteMessageRange() ? messages.messageCount : undefined,
   );
 
   $effect(() => {
@@ -197,22 +203,24 @@
       latestOrdinal = Math.max(latestOrdinal, item.message.ordinal);
     }
     if (latestOrdinal >= 0) {
-      readProgress.recordVisible(
-        sessionId,
-        latestOrdinal,
-        displayedMessageCount,
-      );
+      recordVisible(sessionId, latestOrdinal);
     }
+  }
+
+  function recordVisible(sessionId: string, ordinal: number) {
+    readProgress.recordVisible(
+      sessionId,
+      ordinal,
+      latestDisplayOrdinal,
+      displayedMessageCount,
+      eligibleAcknowledgedTotal,
+    );
   }
 
   function observeMessage(node: HTMLElement, ordinal: number | undefined) {
     const sessionId = messages.sessionId;
     if (!sessionId || ordinal === undefined) return {};
-    const record = () => readProgress.recordVisible(
-      sessionId,
-      ordinal,
-      (messages.messages.filter((message) => !isSystemMessage(message)).at(-1)?.ordinal ?? -1) + 1,
-    );
+    const record = () => recordVisible(sessionId, ordinal);
     if (typeof IntersectionObserver === "undefined") {
       const root = node.closest(".message-list-scroll");
       const rect = node.getBoundingClientRect();
@@ -660,7 +668,7 @@
               ui.selectOrdinal(item.ordinals[0]!);
             }}
           >
-            {#if readProgressDivider !== null && item.ordinals.includes(readProgressDivider.ordinal)}
+            {#if item.kind !== "tool-group" && readProgressDivider !== null && item.ordinals.includes(readProgressDivider.ordinal)}
               <div class="read-progress-divider" role="separator" aria-label={m.read_progress_boundary()}>
                 {readProgressDivider.label}
               </div>
@@ -672,14 +680,13 @@
                 highlightQuery={highlightQuery}
                 isCurrentHighlight={item.ordinals.includes(inSessionSearch.currentOrdinal ?? -1)}
                 sortNewestFirst={ui.sortNewestFirst}
+                divider={readProgressDivider !== null && item.ordinals.includes(readProgressDivider.ordinal)
+                  ? readProgressDivider
+                  : undefined}
                 onMessageVisible={(ordinal) => {
                   const sessionId = messages.sessionId;
                   if (sessionId) {
-                    readProgress.recordVisible(
-                      sessionId,
-                      ordinal,
-                      displayedMessageCount,
-                    );
+                    recordVisible(sessionId, ordinal);
                   }
                 }}
               />

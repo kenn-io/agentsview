@@ -24,6 +24,7 @@
     highlightQuery?: string;
     isCurrentHighlight?: boolean;
     sortNewestFirst?: boolean;
+    divider?: { ordinal: number; label: string };
     onMessageVisible?: (ordinal: number) => void;
   }
 
@@ -33,6 +34,7 @@
     highlightQuery = "",
     isCurrentHighlight = false,
     sortNewestFirst = false,
+    divider,
     onMessageVisible,
   }: Props = $props();
 
@@ -175,9 +177,14 @@
 
   <div class="tool-group-body">
     {#each displayMessages as message (message.ordinal)}
+      {#if divider?.ordinal === message.ordinal}
+        <div class="read-progress-divider" role="separator" aria-label={m.read_progress_boundary()}>
+          {divider.label}
+        </div>
+      {/if}
       {@const calls = message.tool_calls ?? []}
       {@const turn = turnByMessage.get(message.id)}
-      <div use:observeMessage={message.ordinal}>
+      <div data-message-ordinal={message.ordinal} use:observeMessage={message.ordinal}>
       {#if calls.length === 1}
         {@const soloCall = calls[0]!}
         <ToolBlock
