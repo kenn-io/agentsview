@@ -29,6 +29,8 @@ var startServeBackgroundProcessForEnsure = startServeBackgroundProcess
 var startServeBackgroundProcessForRun = startServeBackgroundProcess
 
 type backgroundLaunchPolicy struct {
+	// ConfigOnly starts exclusively from persistent configuration. In
+	// particular, NoSync is a CLI/runtime option rather than a config key.
 	ConfigOnly bool
 	Operation  string
 }
@@ -187,6 +189,9 @@ func startServeBackground(
 ) (backgroundLaunchResult, error) {
 	var result backgroundLaunchResult
 	operation := policy.operation()
+	if policy.ConfigOnly {
+		cfg.NoSync = false
+	}
 	replacementCheckStarted := time.Now()
 	if err := ensureServeAuthToken(&cfg); err != nil {
 		return result, fmt.Errorf(

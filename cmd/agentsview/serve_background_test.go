@@ -1578,26 +1578,18 @@ func TestRunServeBackgroundConfigOnlyDoesNotAdoptReplacedDaemonNoSync(
 	}
 }
 
-func TestRunServeBackgroundConfigOnlyReadOnlyRuntimeStartsWritableChild(
-	t *testing.T,
-) {
+func TestRunServeBackgroundConfigOnlyIgnoresConfigNoSync(t *testing.T) {
 	dir := runtimeTestDir(t)
-	readOnlyHost, readOnlyPort := testPingServer(t)
-	_, err := WriteDaemonRuntime(
-		dir, readOnlyHost, readOnlyPort, version, true,
-	)
-	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	host, port := testPingServer(t)
 
-	writableHost, writablePort := testPingServer(t)
 	oldStart := startServeBackgroundProcessForRun
 	var gotArgs []string
 	startServeBackgroundProcessForRun = func(
 		_ config.Config, arguments []string,
 	) (*exec.Cmd, string, error) {
 		gotArgs = append([]string(nil), arguments...)
-		_, err := WriteDaemonRuntime(
-			dir, writableHost, writablePort, version, false,
-		)
+		_, err := WriteDaemonRuntime(dir, host, port, version, false)
 		if err != nil {
 			return nil, "test.log", err
 		}
@@ -1614,6 +1606,65 @@ func TestRunServeBackgroundConfigOnlyReadOnlyRuntimeStartsWritableChild(
 	})
 
 	result, err := startServeBackground(
+		config.Config{DataDir: dir, NoSync: true},
+		nil,
+		serveReplacementOptions{},
+		backgroundLaunchPolicy{ConfigOnly: true, Operation: "daemon start"},
+	)
+
+	require.NoError(t, err)
+	assert.True(t, result.Started)
+	assert.Equal(t, []string{"serve"}, gotArgs)
+}
+
+func TestRunServeBackgroundConfigOnlyReadOnlyRuntimeStartsWritableChild(
+	t *testing.T,
+) {
+	dir := runtimeTestDir(t)
+	readOnlyHost, readOnlyPort := testPingServer(t)
+	readOnlyPath, err := WriteDaemonRuntime(
+		dir, readOnlyHost, readOnlyPort, version, true,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Remove(readOnlyPath) })
+
+	writablePID := startSleepProcess(t)
+	writableEndpoint := newPingDaemonWithPID(t, writablePID)
+	oldStart := startServeBackgroundProcessForRun
+	var gotArgs []string
+	var writablePath string
+	startServeBackgroundProcessForRun = func(
+		_ config.Config, arguments []string,
+	) (*exec.Cmd, string, error) {
+		gotArgs = append([]string(nil), arguments...)
+		var err error
+		writablePath, err = writeRuntimeRecordForTest(
+			dir,
+			daemonRuntimeRecord(
+				writableEndpoint.Host,
+				writableEndpoint.Port,
+				withRuntimePID(writablePID),
+				withRuntimeVersion(version),
+			),
+		)
+		if err != nil {
+			return nil, "test.log", err
+		}
+		cmd := exec.Command("sleep", "2")
+		if err := cmd.Start(); err != nil {
+			return nil, "test.log", err
+		}
+		t.Cleanup(func() { _ = cmd.Process.Kill() })
+		return cmd, "test.log", nil
+	}
+	t.Cleanup(func() {
+		startServeBackgroundProcessForRun = oldStart
+		if writablePath != "" {
+			_ = os.Remove(writablePath)
+		}
+	})
+
+	result, err := startServeBackground(
 		config.Config{DataDir: dir},
 		nil,
 		serveReplacementOptions{},
@@ -1624,9 +1675,20 @@ func TestRunServeBackgroundConfigOnlyReadOnlyRuntimeStartsWritableChild(
 	assert.True(t, result.Started)
 	require.NotNil(t, result.Runtime)
 	assert.False(t, result.Runtime.ReadOnly)
-	assert.Equal(t, writableHost, result.Runtime.Host)
-	assert.Equal(t, writablePort, result.Runtime.Port)
+	assert.Equal(t, writableEndpoint.Host, result.Runtime.Host)
+	assert.Equal(t, writableEndpoint.Port, result.Runtime.Port)
 	assert.Equal(t, []string{"serve"}, gotArgs)
+
+	records := liveDaemonRecords(dir)
+	require.Len(t, records, 2)
+	readOnlyModes := make([]bool, 0, len(records))
+	pids := make([]int, 0, len(records))
+	for _, rec := range records {
+		readOnlyModes = append(readOnlyModes, daemonRuntimeFromRecord(rec).ReadOnly)
+		pids = append(pids, rec.PID)
+	}
+	assert.ElementsMatch(t, []bool{true, false}, readOnlyModes)
+	assert.ElementsMatch(t, []int{os.Getpid(), writablePID}, pids)
 }
 
 func TestBackgroundStartResultDistinguishesExistingDaemonAndStartedChild(
