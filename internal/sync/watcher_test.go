@@ -144,36 +144,78 @@ func TestWatcherBatchesPathsAndEnforcesDispatchFloor(t *testing.T) {
 
 func TestWatcherSustainedWritesProgress(t *testing.T) {
 	const (
-		batchDelay  = 50 * time.Millisecond
-		minInterval = 300 * time.Millisecond
-		writeEvery  = 10 * time.Millisecond
+		batchDelay        = 50 * time.Millisecond
+		minInterval       = 300 * time.Millisecond
+		writeEvery        = 10 * time.Millisecond
+		dispatchTolerance = 250 * time.Millisecond
 	)
-	calls := make(chan []string, 2)
+	calls := make(chan watcherCall, 4)
 	_, dir := startTestWatcherWithIntervals(
-		t, func(paths []string) { calls <- paths }, batchDelay, minInterval,
+		t, func(paths []string) {
+			calls <- watcherCall{paths: paths, at: time.Now()}
+		}, batchDelay, minInterval,
 	)
 	path := filepath.Join(dir, "active.jsonl")
 
-	started := time.Now()
 	require.NoError(t, os.WriteFile(path, []byte("initial"), 0o644))
-	writeTicker := time.NewTicker(writeEvery)
-	defer writeTicker.Stop()
-	deadline := time.NewTimer(minInterval)
-	defer deadline.Stop()
+	stopWrites := make(chan struct{})
+	writesDone := make(chan struct{})
+	writeErr := make(chan error, 1)
+	go func() {
+		defer close(writesDone)
+		writeTicker := time.NewTicker(writeEvery)
+		defer writeTicker.Stop()
+		for {
+			select {
+			case <-stopWrites:
+				return
+			case <-writeTicker.C:
+				if err := os.WriteFile(path, []byte("update"), 0o644); err != nil {
+					writeErr <- err
+					return
+				}
+			}
+		}
+	}()
+	var stopWriterOnce sync.Once
+	stopWriter := func() {
+		stopWriterOnce.Do(func() {
+			close(stopWrites)
+			<-writesDone
+		})
+	}
+	t.Cleanup(stopWriter)
 
-	for {
+	receiveCall := func() watcherCall {
+		t.Helper()
 		select {
-		case paths := <-calls:
-			assert.Contains(t, paths, path)
-			assert.Less(t, time.Since(started), minInterval,
-				"continuous writes should not move the first-event deadline")
-			return
-		case <-writeTicker.C:
-			require.NoError(t, os.WriteFile(path, []byte("update"), 0o644))
-		case <-deadline.C:
+		case call := <-calls:
+			return call
+		case err := <-writeErr:
+			require.NoError(t, err)
+			return watcherCall{}
+		case <-time.After(minInterval + dispatchTolerance):
 			t.Fatal("continuous writes starved the watcher callback")
+			return watcherCall{}
 		}
 	}
+
+	first := receiveCall()
+	second := receiveCall()
+	stopWriter()
+	select {
+	case err := <-writeErr:
+		require.NoError(t, err)
+	default:
+	}
+
+	assert.Contains(t, first.paths, path)
+	assert.Contains(t, second.paths, path)
+	spacing := second.at.Sub(first.at)
+	assert.GreaterOrEqual(t, spacing, minInterval,
+		"sustained-write callbacks started too close together")
+	assert.LessOrEqual(t, spacing, minInterval+dispatchTolerance,
+		"sustained writes did not make bounded progress")
 }
 
 func TestWatcherContinuesIntakeDuringCallback(t *testing.T) {
