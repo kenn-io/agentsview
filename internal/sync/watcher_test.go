@@ -131,9 +131,7 @@ func TestWatcherBatchesPathsAndEnforcesDispatchFloor(t *testing.T) {
 	require.NoError(t, os.WriteFile(secondPath, []byte("b"), 0o644))
 
 	first := receiveWatcherCall(t, calls)
-	expectedFirst := []string{firstPath, secondPath}
-	slices.Sort(expectedFirst)
-	assert.Equal(t, expectedFirst, first.paths,
+	assert.Equal(t, []string{firstPath, secondPath}, first.paths,
 		"one write burst should produce one unique path batch")
 
 	laterPath := filepath.Join(dir, "c.jsonl")
