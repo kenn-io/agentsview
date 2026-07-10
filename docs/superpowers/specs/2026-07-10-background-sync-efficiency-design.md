@@ -105,8 +105,11 @@ offset. A later watcher pass full-parses until the file again ends at a safe
 record boundary. Incremental writes advance the stored offset and cursor only
 through the last complete valid JSON record.
 
-An incremental parse or database-write failure advances neither the persisted
-offset nor the cache entry. The same bytes are retried on the next batch.
+An incremental parse failure advances neither the persisted offset nor the
+cache. A database-write failure leaves the persisted offset unchanged, so the
+same bytes are retried on the next batch. A cursor staged at the proposed new
+offset is not eligible until a later request presents that exact,
+database-committed offset.
 
 ## In-memory cursor cache
 
@@ -119,7 +122,8 @@ lifetime, and a daemon restart naturally starts with an empty cache.
 
 ### Cursor contents
 
-Each entry is keyed by the cleaned physical transcript path and records:
+Each entry is keyed by the cleaned physical transcript path, file identity, and
+safe byte offset. It records:
 
 - the exact safe byte offset;
 - file inode and device when the platform exposes them;
@@ -139,13 +143,24 @@ it cannot change parsed output.
 
 After a successful full parse at a safe record boundary, the provider seeds a
 cursor without a second prefix scan. After a successful incremental parse, it
-replaces the old entry with state at the new safe offset.
+stages another entry at the proposed new safe offset without deleting the
+old-offset entry.
+
+The database offset is the cursor commit token. The engine's next incremental
+request contains the last offset committed by the database transaction, and the
+cache returns only an exact path, identity, and offset match. If the write
+succeeds, the next request selects the new entry. If it fails, the next request
+still selects the old entry; the uncommitted new-offset entry is unreachable and
+is eventually removed by LRU eviction. This avoids adding a provider
+commit/rollback callback while making it impossible to skip uncommitted bytes.
 
 ### Validation and eviction
 
-A cursor is usable only when its offset matches the database request and its
-file identity matches the current source. Replacement, truncation, an offset
-mismatch, or an explicit full-parse request discards or bypasses it.
+A cursor is usable only when its offset exactly matches the database request and
+its file identity matches the current source. Replacement, truncation, an offset
+mismatch, or an explicit full-parse request discards or bypasses it. Older and
+uncommitted cursor versions for one path count against the same cache limits and
+are reclaimed normally by the global LRU.
 
 The cache uses least-recently-used eviction with two hard limits:
 
@@ -174,8 +189,9 @@ measurements show hashing dominates after this change.
    sidecar gates before calling `ParseIncremental`.
 1. The provider resumes from a matching cached cursor or reconstructs the cursor
    from the stored prefix, then parses only complete appended records.
-1. A safe tail produces an incremental database write and advances both the
-   persisted offset and the cursor. An unsafe tail falls through to a full
+1. A safe tail stages a cursor at the proposed offset and produces an
+   incremental database write. Committing the write makes that exact-offset
+   cursor eligible for the next append. An unsafe tail falls through to a full
    parse and message replacement.
 1. The existing broadcaster emits after a successful sync. Fewer sync passes
    naturally produce fewer SSE notifications and status-driven API refreshes.
@@ -216,7 +232,8 @@ Provider and sync integration tests will assert that:
   fall back without losing data;
 - retroactive token/tool/subagent records still full-parse and replace earlier
   rows correctly; and
-- failed parses do not advance the stored offset or cached cursor.
+- failed parses do not stage a cursor, and failed database writes leave the old
+  stored offset selecting the old cursor.
 
 Cache tests will exercise observable hit/miss and eviction behavior by looking
 up old and new keys after exceeding each limit. They will not mirror private LRU
