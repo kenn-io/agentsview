@@ -1,11 +1,9 @@
 name: Desktop Artifacts
 
 on:
-  workflow_dispatch:
-  # Only build the expensive desktop/tauri bundles on the main branch and on
-  # pull requests targeting main, and only when desktop-relevant files change.
-  # Stacked PRs that target another feature branch run the test suite via ci.yml
-  # but skip these multi-platform bundle builds until they reach main.
+  # Only build the expensive desktop/tauri bundles after changes reach main.
+  # Pull requests run the test suite via ci.yml without executing code on the
+  # persistent self-hosted macOS runners.
   push:
     branches: [main]
     paths:
@@ -14,15 +12,6 @@ on:
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/desktop-*.yml'
-  pull_request:
-    branches: [main]
-    paths:
-      - 'desktop/**'
-      - 'frontend/**'
-      - 'go.mod'
-      - 'go.sum'
-      - '.github/workflows/desktop-*.yml'
-
 permissions:
   contents: read
 
@@ -33,7 +22,7 @@ concurrency:
 jobs:
   build:
     name: Desktop Build (${{ matrix.name }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ fromJSON(matrix.runner) }}
     env:
       AGENTSVIEW_TARGET_TRIPLE: ${{ matrix.target_triple }}
     strategy:
@@ -41,31 +30,31 @@ jobs:
       matrix:
         include:
           - name: macOS (aarch64)
-            os: macos-15
+            runner: '["self-hosted","macOS","ARM64"]'
             bundle: app
             target_triple: aarch64-apple-darwin
             artifact_name: agentsview-desktop-macos-aarch64
             artifact_dir: desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/
           - name: macOS (x86_64)
-            os: macos-15
+            runner: '["self-hosted","macOS","X64"]'
             bundle: app
             target_triple: x86_64-apple-darwin
             artifact_name: agentsview-desktop-macos-x86_64
             artifact_dir: desktop/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/
           - name: Windows
-            os: windows-latest
+            runner: '"windows-latest"'
             bundle: nsis
             target_triple: ""
             artifact_name: agentsview-desktop-windows
             artifact_dir: desktop/src-tauri/target/release/bundle/nsis/
           - name: Linux
-            os: ubuntu-22.04
+            runner: '"ubuntu-22.04"'
             bundle: appimage
             target_triple: ""
             artifact_name: agentsview-desktop-linux
             artifact_dir: desktop/src-tauri/target/release/bundle/appimage/
           - name: Linux (arm64)
-            os: ubuntu-22.04-arm
+            runner: '"ubuntu-22.04-arm"'
             bundle: appimage
             target_triple: aarch64-unknown-linux-gnu
             artifact_name: agentsview-desktop-linux-arm64
