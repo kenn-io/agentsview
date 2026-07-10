@@ -186,6 +186,8 @@ describe("findUserPromptOrdinal", () => {
     expect(findUserPromptOrdinal(items, 3, -1, true)).toBe(1);
     expect(findUserPromptOrdinal(items, null, 1, true)).toBe(1);
     expect(findUserPromptOrdinal(items, null, -1, true)).toBe(4);
+    expect(findUserPromptOrdinal(items, 99, 1, true)).toBe(1);
+    expect(findUserPromptOrdinal(items, 99, -1, true)).toBe(4);
     expect(findUserPromptOrdinal(items.slice(1, 3), 2, 1, true)).toBeUndefined();
   });
 

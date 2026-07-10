@@ -57,11 +57,14 @@ test.describe("Navigation", () => {
     await page.keyboard.press("Shift+K");
     await expect(users.first()).toHaveClass(/selected/);
 
+    await users.nth(1).click();
     await sp.toggleSortOrder();
+    await expect(users.nth(1)).toHaveClass(/selected/);
     await page.keyboard.press("Shift+J");
     await expect(users.nth(2)).toHaveClass(/selected/);
+    await users.nth(1).click();
     await page.keyboard.press("Shift+K");
-    await expect(users.nth(1)).toHaveClass(/selected/);
+    await expect(users.nth(0)).toHaveClass(/selected/);
 
     await page.keyboard.press("?");
     await expect(page.getByText("Next user prompt")).toBeVisible();

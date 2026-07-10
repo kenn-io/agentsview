@@ -15,15 +15,15 @@
       item.kind === "message" &&
       item.message.role === "user" &&
       !item.message.is_system;
-    if (selected === null) {
+    const selectedIndex = items.findIndex((item) =>
+      item.ordinals.includes(selected ?? -1),
+    );
+    if (selectedIndex < 0) {
       const prompts = items.filter(isUserPrompt);
       return (delta > 0 ? prompts[0] : prompts[prompts.length - 1])
         ?.ordinals[0];
     }
 
-    const selectedIndex = items.findIndex((item) =>
-      item.ordinals.includes(selected),
-    );
     for (
       let index = selectedIndex + delta;
       index >= 0 && index < items.length;
