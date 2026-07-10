@@ -329,7 +329,7 @@ func (e *Engine) hydrateS3DiscoveredFile(
 	if !isS3SourcePath(file.Path) {
 		return
 	}
-	if sess, _ := e.db.GetSession(ctx, sessionID); sess != nil {
+	if sess, _ := e.getActiveStoredSession(ctx, sessionID); sess != nil {
 		if sess.Project != "" &&
 			!parser.NeedsProjectReparse(sess.Project) {
 			file.Project = sess.Project

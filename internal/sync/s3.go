@@ -194,7 +194,7 @@ func (e *Engine) processS3Session(
 			idPrefix, sessionID, sourceInfo, sourceFingerprint,
 		) &&
 			e.db.GetSessionFilePath(fullID) == file.Path {
-			sess, _ := e.db.GetSession(ctx, fullID)
+			sess, _ := e.getActiveStoredSession(ctx, fullID)
 			if sess != nil &&
 				sess.Project != "" &&
 				!parser.NeedsProjectReparse(sess.Project) {
@@ -211,7 +211,7 @@ func (e *Engine) processS3Session(
 				idPrefix, sessionID, sourceInfo, sourceFingerprint,
 			) &&
 				e.db.GetSessionFilePath(fullID) == file.Path {
-				sess, _ := e.db.GetSession(ctx, fullID)
+				sess, _ := e.getActiveStoredSession(ctx, fullID)
 				indexNameChanged := false
 				if sess != nil &&
 					sess.Project != "" &&
