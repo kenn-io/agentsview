@@ -683,6 +683,32 @@ func TestRecallQueriesTrustedOnlyRejectArchivedStatus(t *testing.T) {
 	}
 }
 
+func TestListRecallEntriesClampsOversizedLimit(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	insertSession(t, d, "limit-session", "agentsview")
+	for i := range DefaultRecallEntryLimit + 1 {
+		_, err := d.InsertRecallEntry(RecallEntry{
+			ID:              fmt.Sprintf("limit-entry-%03d", i),
+			Type:            "fact",
+			Scope:           "project",
+			Status:          corerecall.StatusAccepted,
+			Title:           "Oversized limit entry",
+			Body:            "This entry proves an oversized limit does not shrink.",
+			SourceSessionID: "limit-session",
+		})
+		require.NoError(t, err)
+	}
+
+	entries, err := d.ListRecallEntries(ctx, RecallQuery{
+		Limit: MaxRecallEntryLimit + 1,
+	})
+
+	require.NoError(t, err)
+	assert.Len(t, entries, DefaultRecallEntryLimit+1,
+		"an oversized limit must clamp to the maximum, not reset to the default")
+}
+
 func TestInsertRecallEntryRejectsUnknownReviewState(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")

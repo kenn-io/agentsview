@@ -1415,8 +1415,11 @@ var recallSearchStopwords = map[string]bool{
 }
 
 func recallLimit(limit int) int {
-	if limit <= 0 || limit > MaxRecallEntryLimit {
+	if limit <= 0 {
 		return DefaultRecallEntryLimit
+	}
+	if limit > MaxRecallEntryLimit {
+		return MaxRecallEntryLimit
 	}
 	return limit
 }

@@ -167,7 +167,7 @@ func newRecallStatsCommand() *cobra.Command {
 			); err != nil {
 				return err
 			}
-			if f.Limit <= 0 {
+			if f.Limit <= 0 || f.Limit > db.MaxRecallEntryLimit {
 				f.Limit = db.MaxRecallEntryLimit
 			}
 			list, err := svc.ListRecallEntries(cmd.Context(), f)

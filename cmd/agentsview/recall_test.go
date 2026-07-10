@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -1826,6 +1828,49 @@ func TestRecallStatsHumanSummarizesAcceptedRecallEntryCorpus(t *testing.T) {
 	assert.Contains(t, out, "  without_evidence  1")
 	assert.Contains(t, out, "By lifecycle:")
 	assert.Contains(t, out, "  active  2")
+}
+
+func TestRecallStatsJSONClampsOversizedLimitConsistently(t *testing.T) {
+	dataDir := t.TempDir()
+	setRecallTestEnv(t, dataDir)
+	d, err := db.Open(filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, err)
+	require.NoError(t, d.UpsertSession(db.Session{
+		ID:      "limit-session",
+		Project: "agentsview",
+		Machine: "test",
+		Agent:   "codex",
+	}))
+	for i := range db.DefaultRecallEntryLimit + 1 {
+		_, err := d.InsertRecallEntry(db.RecallEntry{
+			ID:              fmt.Sprintf("limit-entry-%03d", i),
+			Type:            "fact",
+			Scope:           "project",
+			Status:          "accepted",
+			Title:           "Oversized stats limit entry",
+			Body:            "This entry must remain in the stats summary.",
+			SourceSessionID: "limit-session",
+		})
+		require.NoError(t, err)
+	}
+	require.NoError(t, d.Close())
+
+	out, err := executeCommand(newRootCommand(),
+		"recall", "stats",
+		"--limit", strconv.Itoa(db.MaxRecallEntryLimit+1),
+		"--format", "json")
+
+	require.NoError(t, err)
+	var got struct {
+		Count     int  `json:"count"`
+		Limit     int  `json:"limit"`
+		Truncated bool `json:"truncated"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &got),
+		"stdout should be valid JSON: %q", out)
+	assert.Equal(t, db.DefaultRecallEntryLimit+1, got.Count)
+	assert.Equal(t, db.MaxRecallEntryLimit, got.Limit)
+	assert.False(t, got.Truncated)
 }
 
 func TestRecallStatsHumanReportsTrustedOnly(t *testing.T) {
