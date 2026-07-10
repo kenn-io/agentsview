@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,6 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	corerecall "go.kenn.io/agentsview/internal/recall"
+	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
 )
 
@@ -34,6 +37,20 @@ type queryRecallEntriesResponse struct {
 	ContextMeta    *service.RecallContextMeta  `json:"context_meta,omitempty"`
 	ContextEntries []db.RecallResult           `json:"context_entries,omitempty"`
 }
+
+type readOnlyRecallQueryStore struct {
+	db.Store
+	queryCalls int
+}
+
+func (s *readOnlyRecallQueryStore) QueryRecallEntries(
+	context.Context, db.RecallQuery,
+) (db.RecallPage, error) {
+	s.queryCalls++
+	return db.RecallPage{}, db.ErrReadOnly
+}
+
+func (*readOnlyRecallQueryStore) ReadOnly() bool { return true }
 
 func TestListRecallEntriesFiltersByProject(t *testing.T) {
 	te := setup(t)
@@ -158,6 +175,16 @@ func TestListRecallEntriesFiltersTrustedOnly(t *testing.T) {
 
 func TestListRecallEntriesTrustedOnlyRejectsArchivedStatus(t *testing.T) {
 	te := setup(t)
+	seedRecallEntrySession(t, te)
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "trusted-status-control",
+		ReviewState:     corerecall.ReviewStateHumanReviewed,
+		Title:           "Trusted cwd control",
+		Body:            "Check the cwd before reading files.",
+		SourceSessionID: "recall-session",
+		Transferable:    true,
+		ProvenanceOK:    true,
+	})
 
 	w := te.get(t,
 		"/api/v1/recall/entries?trusted_only=true&status=archived")
@@ -169,6 +196,36 @@ func TestListRecallEntriesTrustedOnlyRejectsArchivedStatus(t *testing.T) {
 	w = te.get(t,
 		"/api/v1/recall/entries?trusted_only=true&status=accepted")
 	assertStatus(t, w, http.StatusOK)
+	r := decode[listRecallEntriesResponse](t, w)
+	require.Len(t, r.RecallEntries, 1)
+	assert.Equal(t, "trusted-status-control", r.RecallEntries[0].ID)
+}
+
+func TestListRecallEntriesTrustedOnlyRejectsArchivedStatusBeforeReadOnlyStore(
+	t *testing.T,
+) {
+	dataDir := t.TempDir()
+	cfg := config.Config{
+		Host:         "127.0.0.1",
+		Port:         0,
+		DataDir:      dataDir,
+		DBPath:       filepath.Join(dataDir, "unused.db"),
+		WriteTimeout: 30 * time.Second,
+	}
+	store := &readOnlyRecallQueryStore{}
+	srv := server.New(cfg, store, nil)
+	handler := wrapTestHandler(cfg, srv.Handler())
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/recall/entries?trusted_only=true&status=archived", nil)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assertStatus(t, w, http.StatusBadRequest)
+	assertErrorResponse(t, w,
+		`invalid recall query: trusted_only requires status "accepted"`)
+	assert.Zero(t, store.queryCalls,
+		"invalid filters must fail before a read-only store is queried")
 }
 
 func TestListRecallEntriesFiltersBySupersessionLinks(t *testing.T) {
@@ -467,6 +524,16 @@ func TestQueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
 
 func TestQueryRecallEntriesTrustedOnlyRejectsArchivedStatus(t *testing.T) {
 	te := setup(t)
+	seedRecallEntrySession(t, te)
+	seedRecallEntry(t, te, db.RecallEntry{
+		ID:              "trusted-status-control",
+		ReviewState:     corerecall.ReviewStateHumanReviewed,
+		Title:           "Trusted cwd control",
+		Body:            "Check the cwd before reading files.",
+		SourceSessionID: "recall-session",
+		Transferable:    true,
+		ProvenanceOK:    true,
+	})
 
 	w := te.post(t, "/api/v1/recall/query", `{
 		"query":"cwd",
@@ -480,10 +547,13 @@ func TestQueryRecallEntriesTrustedOnlyRejectsArchivedStatus(t *testing.T) {
 
 	w = te.post(t, "/api/v1/recall/query", `{
 		"query":"cwd",
-		"status":"accepted",
+		"status":" accepted ",
 		"trusted_only":true
 	}`)
 	assertStatus(t, w, http.StatusOK)
+	r := decode[queryRecallEntriesResponse](t, w)
+	require.Len(t, r.RecallEntries, 1)
+	assert.Equal(t, "trusted-status-control", r.RecallEntries[0].ID)
 }
 
 func TestQueryRecallEntriesPacksMultipleFocusedContextEntries(t *testing.T) {

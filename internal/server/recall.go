@@ -72,6 +72,13 @@ func (s *Server) handleListRecallEntries(
 		TrustedOnly:         trustedOnly,
 		Limit:               limit,
 	}
+	if err := db.ValidateRecallQuery(query); err != nil {
+		if handleInvalidRecallQuery(w, err) {
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	page, err := s.db.QueryRecallEntries(r.Context(), query)
 	if err != nil {
 		if handleContextError(w, err) {

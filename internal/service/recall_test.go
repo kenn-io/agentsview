@@ -55,6 +55,28 @@ func (s *observingRecallQueryStore) RecordRecallQueryEvent(
 
 func (s *observingRecallQueryStore) ReadOnly() bool { return false }
 
+type readOnlyRecallListStore struct {
+	db.Store
+	listCalls  int
+	queryCalls int
+}
+
+func (s *readOnlyRecallListStore) ListRecallEntries(
+	context.Context, db.RecallQuery,
+) ([]db.RecallEntry, error) {
+	s.listCalls++
+	return nil, db.ErrReadOnly
+}
+
+func (s *readOnlyRecallListStore) QueryRecallEntries(
+	context.Context, db.RecallQuery,
+) (db.RecallPage, error) {
+	s.queryCalls++
+	return db.RecallPage{}, db.ErrReadOnly
+}
+
+func (*readOnlyRecallListStore) ReadOnly() bool { return true }
+
 func TestQueryRecallStoreTrustedOnlyRejectsArchivedStatus(t *testing.T) {
 	store := &observingRecallQueryStore{Store: dbtest.OpenTestDB(t)}
 
@@ -72,6 +94,38 @@ func TestQueryRecallStoreTrustedOnlyRejectsArchivedStatus(t *testing.T) {
 	assert.Nil(t, result)
 	assert.Zero(t, store.queryCalls, "invalid filters must fail before querying")
 	assert.Zero(t, store.recordCalls, "invalid filters must not create a ledger event")
+}
+
+func TestDirectBackendListRecallTrustedOnlyRejectsArchivedStatusBeforeStore(
+	t *testing.T,
+) {
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{name: "list path"},
+		{name: "query path", query: "cwd"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &readOnlyRecallListStore{}
+			svc := service.NewReadOnlyBackend(store)
+
+			result, err := svc.ListRecallEntries(
+				context.Background(), service.RecallFilter{
+					Query:       test.query,
+					Status:      corerecall.StatusArchived,
+					TrustedOnly: true,
+				},
+			)
+
+			require.ErrorIs(t, err, db.ErrInvalidRecallQuery)
+			assert.Nil(t, result)
+			assert.Zero(t, store.listCalls)
+			assert.Zero(t, store.queryCalls)
+		})
+	}
 }
 
 func TestDirectBackend_RecallNoResultsRecordsMiss(t *testing.T) {

@@ -600,37 +600,63 @@ func TestQueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
 func TestRecallQueriesTrustedOnlyRejectArchivedStatus(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()
+	insertSession(t, d, "trusted-status-session", "agentsview")
+	_, err := d.InsertRecallEntry(RecallEntry{
+		ID:              "trusted-status-control",
+		Type:            "procedure",
+		Scope:           "project",
+		Status:          corerecall.StatusAccepted,
+		ReviewState:     corerecall.ReviewStateHumanReviewed,
+		Title:           "Trusted cwd control",
+		Body:            "Check the cwd before reading files.",
+		SourceSessionID: "trusted-status-session",
+		Transferable:    true,
+		ProvenanceOK:    true,
+	})
+	require.NoError(t, err)
 
 	queries := []struct {
 		name string
-		run  func(RecallQuery) error
+		run  func(RecallQuery) ([]string, error)
 	}{
 		{
 			name: "list",
-			run: func(q RecallQuery) error {
-				_, err := d.ListRecallEntries(ctx, q)
-				return err
+			run: func(q RecallQuery) ([]string, error) {
+				entries, err := d.ListRecallEntries(ctx, q)
+				ids := make([]string, 0, len(entries))
+				for _, entry := range entries {
+					ids = append(ids, entry.ID)
+				}
+				return ids, err
 			},
 		},
 		{
 			name: "text candidates",
-			run: func(q RecallQuery) error {
-				_, err := d.ListRecallEntryTextCandidates(ctx, q)
-				return err
+			run: func(q RecallQuery) ([]string, error) {
+				entries, err := d.ListRecallEntryTextCandidates(ctx, q)
+				ids := make([]string, 0, len(entries))
+				for _, entry := range entries {
+					ids = append(ids, entry.ID)
+				}
+				return ids, err
 			},
 		},
 		{
 			name: "query",
-			run: func(q RecallQuery) error {
-				_, err := d.QueryRecallEntries(ctx, q)
-				return err
+			run: func(q RecallQuery) ([]string, error) {
+				page, err := d.QueryRecallEntries(ctx, q)
+				ids := make([]string, 0, len(page.RecallEntries))
+				for _, entry := range page.RecallEntries {
+					ids = append(ids, entry.ID)
+				}
+				return ids, err
 			},
 		},
 	}
 
 	for _, query := range queries {
 		t.Run(query.name, func(t *testing.T) {
-			err := query.run(RecallQuery{
+			_, err := query.run(RecallQuery{
 				Text:        "cwd",
 				Status:      " " + corerecall.StatusArchived + " ",
 				TrustedOnly: true,
@@ -644,12 +670,14 @@ func TestRecallQueriesTrustedOnlyRejectArchivedStatus(t *testing.T) {
 				corerecall.StatusAccepted,
 				" " + corerecall.StatusAccepted + " ",
 			} {
-				err = query.run(RecallQuery{
+				ids, err := query.run(RecallQuery{
 					Text:        "cwd",
 					Status:      status,
 					TrustedOnly: true,
 				})
 				require.NoError(t, err, "status %q remains valid", status)
+				assert.Equal(t, []string{"trusted-status-control"}, ids,
+					"status %q must retain the trusted entry", status)
 			}
 		})
 	}

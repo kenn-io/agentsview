@@ -895,6 +895,9 @@ func (b *directBackend) ListRecallEntries(
 		return nil, err
 	}
 	query := recallFilterToDB(f)
+	if err := db.ValidateRecallQuery(query); err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(f.Query) == "" {
 		entries, err := b.db.ListRecallEntries(ctx, query)
 		if err != nil {
