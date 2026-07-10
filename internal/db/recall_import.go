@@ -92,6 +92,7 @@ func (db *DB) ImportAcceptedRecallEntriesJSONLWithOptions(
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	lineNo := 0
 	seen := make(map[string]struct{})
+	dryRunProjection := newRecallImportDryRunProjection()
 	for scanner.Scan() {
 		lineNo++
 		line := strings.TrimSpace(scanner.Text())
@@ -154,7 +155,7 @@ func (db *DB) ImportAcceptedRecallEntriesJSONLWithOptions(
 		seen[recall.ID] = struct{}{}
 		if opts.DryRun {
 			duplicate, err := db.validateRecallImportDryRun(
-				ctx, item, &recall, opts,
+				ctx, item, &recall, opts, dryRunProjection,
 			)
 			if err != nil {
 				return result, fmt.Errorf(
@@ -169,6 +170,7 @@ func (db *DB) ImportAcceptedRecallEntriesJSONLWithOptions(
 				)
 				continue
 			}
+			dryRunProjection.add(recall)
 			result.WouldImport++
 			result.WouldImportEntries = append(
 				result.WouldImportEntries,
@@ -212,6 +214,7 @@ func (db *DB) validateRecallImportDryRun(
 	item probeAcceptedRecallEntry,
 	recall *RecallEntry,
 	opts RecallImportOptions,
+	projection *recallImportDryRunProjection,
 ) (bool, error) {
 	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -247,15 +250,50 @@ func (db *DB) validateRecallImportDryRun(
 		}
 		recall.ProvenanceOK = false
 	}
-	if err := validateRecallImportSupersessionWithQueryer(
-		ctx, tx, *recall,
-	); err != nil {
+	if err := projection.validateSupersession(ctx, tx, *recall); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("commit recall import dry-run: %w", err)
 	}
 	return false, nil
+}
+
+type recallImportDryRunProjection struct {
+	activeEntries    map[string]struct{}
+	consumedEntryIDs map[string]struct{}
+}
+
+func newRecallImportDryRunProjection() *recallImportDryRunProjection {
+	return &recallImportDryRunProjection{
+		activeEntries:    make(map[string]struct{}),
+		consumedEntryIDs: make(map[string]struct{}),
+	}
+}
+
+func (p *recallImportDryRunProjection) validateSupersession(
+	ctx context.Context,
+	queryer recallImportQueryer,
+	recall RecallEntry,
+) error {
+	targetID := recall.SupersedesEntryID
+	if targetID == "" {
+		return nil
+	}
+	if _, consumed := p.consumedEntryIDs[targetID]; consumed {
+		return fmt.Errorf("superseded entry %s is not active", targetID)
+	}
+	if _, projected := p.activeEntries[targetID]; projected {
+		return nil
+	}
+	return requireActiveRecallSupersessionTarget(ctx, queryer, targetID)
+}
+
+func (p *recallImportDryRunProjection) add(recall RecallEntry) {
+	p.activeEntries[recall.ID] = struct{}{}
+	if recall.SupersedesEntryID != "" {
+		p.consumedEntryIDs[recall.SupersedesEntryID] = struct{}{}
+	}
 }
 
 func recallImportEntryExistsWithQueryer(

@@ -626,6 +626,11 @@ func (b *httpBackend) ListRecallEntries(
 	q := recallFilterToQuery(f)
 	var out RecallList
 	if err := b.getJSON(ctx, "/api/v1/recall/entries?"+q.Encode(), &out); err != nil {
+		if errors.Is(err, errHTTPNotImplemented) {
+			return nil, fmt.Errorf(
+				"recall list: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
+			)
+		}
 		return nil, err
 	}
 	if out.RecallEntries == nil {
@@ -645,6 +650,11 @@ func (b *httpBackend) GetRecallEntry(
 	err := b.getJSON(ctx, path, &out)
 	if errors.Is(err, errHTTPNotFound) {
 		return nil, nil
+	}
+	if errors.Is(err, errHTTPNotImplemented) {
+		return nil, fmt.Errorf(
+			"recall get: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
+		)
 	}
 	if err != nil {
 		return nil, err
@@ -671,6 +681,11 @@ func (b *httpBackend) QueryRecallEntries(
 	}
 	var out RecallQueryResult
 	if err := b.postJSON(ctx, "/api/v1/recall/query", req, &out); err != nil {
+		if errors.Is(err, errHTTPNotImplemented) {
+			return nil, fmt.Errorf(
+				"recall query: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
+			)
+		}
 		return nil, err
 	}
 	if out.RecallEntries == nil {
@@ -979,6 +994,10 @@ func (b *httpBackend) postJSON(
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
 		return errHTTPNotFound
+	}
+	if resp.StatusCode == http.StatusNotImplemented {
+		body, _ := io.ReadAll(resp.Body)
+		return &errNotImplementedBody{message: notImplementedMessage(body)}
 	}
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(resp.Body)

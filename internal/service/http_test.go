@@ -110,6 +110,22 @@ type readOnlyHTTPStore struct {
 
 func (readOnlyHTTPStore) ReadOnly() bool { return true }
 
+type recallUnavailableHTTPStore struct {
+	readOnlyHTTPStore
+}
+
+func (recallUnavailableHTTPStore) GetRecallEntry(
+	context.Context, string,
+) (*db.RecallEntry, error) {
+	return nil, db.ErrReadOnly
+}
+
+func (recallUnavailableHTTPStore) QueryRecallEntries(
+	context.Context, db.RecallQuery,
+) (db.RecallPage, error) {
+	return db.RecallPage{}, db.ErrReadOnly
+}
+
 // requireWatchEvent reads from ch until an event with the given name
 // arrives, skipping other events, and returns it. It fails the test if
 // the channel closes or the timeout elapses first.
@@ -734,6 +750,52 @@ func TestHTTPBackend_ImportRecallEntries_RemoteReadOnly(t *testing.T) {
 	assert.True(t, errors.Is(err, db.ErrReadOnly),
 		"want db.ErrReadOnly, got %v", err)
 	assert.Contains(t, err.Error(), srv.URL)
+}
+
+func TestHTTPBackend_RecallReads_RemoteReadOnly(t *testing.T) {
+	t.Parallel()
+	env := newHTTPBackendEnv(t, withHTTPStore(func(d *db.DB) db.Store {
+		return recallUnavailableHTTPStore{
+			readOnlyHTTPStore: readOnlyHTTPStore{DB: d},
+		}
+	}))
+	svc := env.Backend("", false)
+
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: "list",
+			run: func() error {
+				_, err := svc.ListRecallEntries(context.Background(), service.RecallFilter{})
+				return err
+			},
+		},
+		{
+			name: "get",
+			run: func() error {
+				_, err := svc.GetRecallEntry(context.Background(), "entry-1")
+				return err
+			},
+		},
+		{
+			name: "query",
+			run: func() error {
+				_, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
+					Query: "retry policy",
+				})
+				return err
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.run()
+			require.ErrorIs(t, err, db.ErrReadOnly)
+			assert.Contains(t, err.Error(), env.BaseURL)
+		})
+	}
 }
 
 func TestHTTPBackend_Watch_ReceivesSessionUpdated(t *testing.T) {

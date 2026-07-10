@@ -952,6 +952,9 @@ func (db *DB) QueryRecallEntries(
 		}
 		return recallPageFromList(entries), nil
 	}
+	if strings.TrimSpace(corerecall.LexicalQueryText(q.Text)) == "" {
+		return RecallPage{RecallEntries: []RecallResult{}}, nil
+	}
 
 	candidateQuery := q
 	candidateQuery.Limit = MaxRecallEntryLimit

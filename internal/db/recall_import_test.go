@@ -764,6 +764,67 @@ func TestImportAcceptedRecallEntriesJSONLRejectsAlreadySupersededTarget(t *testi
 	}
 }
 
+func TestImportAcceptedRecallEntriesJSONLDryRunTracksSupersessionWithinStream(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dry_run=%t", dryRun), func(t *testing.T) {
+			d := testDB(t)
+			for _, id := range []string{"s1", "s2", "s3"} {
+				insertSession(t, d, id, "agentsview")
+			}
+			_, err := d.InsertRecallEntry(RecallEntry{
+				ID:              "old",
+				Type:            "fact",
+				Scope:           "project",
+				Status:          "accepted",
+				Title:           "Old retry policy",
+				Body:            "Retry flaky commands once.",
+				Project:         "agentsview",
+				SourceSessionID: "s1",
+			})
+			require.NoError(t, err)
+			input := strings.NewReader(`
+{"candidate_id":"first-replacement","supersedes_entry_id":"old","type":"fact","scope":"project","title":"First replacement","body":"Retry flaky commands twice.","project":"agentsview","session_id":"s2","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0}}
+{"candidate_id":"second-replacement","supersedes_entry_id":"old","type":"fact","scope":"project","title":"Second replacement","body":"Retry flaky commands three times.","project":"agentsview","session_id":"s3","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0}}
+`)
+
+			result, err := d.ImportAcceptedRecallEntriesJSONLWithOptions(
+				context.Background(), input, RecallImportOptions{DryRun: dryRun},
+			)
+
+			require.ErrorContains(t, err, "superseded entry old is not active")
+			if dryRun {
+				assert.Equal(t, 1, result.WouldImport)
+				assert.Zero(t, result.Imported)
+			} else {
+				assert.Equal(t, 1, result.Imported)
+				assert.Zero(t, result.WouldImport)
+			}
+			second, getErr := d.GetRecallEntry(context.Background(), "second-replacement")
+			require.NoError(t, getErr)
+			assert.Nil(t, second)
+		})
+	}
+}
+
+func TestImportAcceptedRecallEntriesJSONLDryRunProjectsSupersessionChain(t *testing.T) {
+	d := testDB(t)
+	for _, id := range []string{"s1", "s2"} {
+		insertSession(t, d, id, "agentsview")
+	}
+	input := strings.NewReader(`
+{"candidate_id":"first","type":"fact","scope":"project","title":"First policy","body":"Retry flaky commands twice.","project":"agentsview","session_id":"s1","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0}}
+{"candidate_id":"second","supersedes_entry_id":"first","type":"fact","scope":"project","title":"Second policy","body":"Retry flaky commands three times.","project":"agentsview","session_id":"s2","label":"correct","transferable":true,"provenance_ok":true,"evidence":{"ordinal_start":0,"ordinal_end":0}}
+`)
+
+	result, err := d.ImportAcceptedRecallEntriesJSONLWithOptions(
+		context.Background(), input, RecallImportOptions{DryRun: true},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.WouldImport)
+	assert.Zero(t, result.Imported)
+}
+
 func TestImportAcceptedRecallEntriesJSONLTrimsIdentityAndScopeFields(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview", func(s *Session) {
