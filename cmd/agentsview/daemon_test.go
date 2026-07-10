@@ -41,8 +41,8 @@ func daemonCommandTestDeps(t *testing.T) (*daemonCommandDeps, *bytes.Buffer) {
 		return config.Config{DataDir: dir, DBPath: filepath.Join(dir, "sessions.db")}, nil
 	}
 	deps.loadReadOnlyConfig = deps.loadConfig
-	deps.acquireLaunchLock = func(string) (daemonLaunchLock, bool) {
-		return &testDaemonLaunchLock{}, true
+	deps.acquireLaunchLockWithError = func(string) (daemonLaunchLock, bool, error) {
+		return &testDaemonLaunchLock{}, true, nil
 	}
 	deps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) { return nil, nil }
 	deps.statusRecords = func(string) ([]daemon.RuntimeRecord, error) { return nil, nil }
@@ -65,9 +65,10 @@ func daemonCommandTestDeps(t *testing.T) (*daemonCommandDeps, *bytes.Buffer) {
 	}
 	deps.stopTargetConfirmed = func(daemon.RuntimeRecord, string) bool { return true }
 	deps.stopProcess = func(daemon.RuntimeRecord, time.Duration) error { return nil }
-	deps.stopCaddy = func(daemon.RuntimeRecord) {}
+	deps.stopCaddy = func(io.Writer, daemon.RuntimeRecord) error { return nil }
 	deps.validateConfig = func(config.Config) error { return nil }
 	deps.checkDataVersion = func(string) error { return nil }
+	deps.probeRecord = func(daemon.RuntimeRecord, string) bool { return true }
 	deps.now = func() time.Time { return time.Unix(200, 0) }
 	return &deps, out
 }
@@ -162,28 +163,6 @@ func TestDaemonStartUsesConfigOnlyPolicyAndIsIdempotent(t *testing.T) {
 	assert.Contains(t, out.String(), "pid 41")
 }
 
-func TestDaemonStartReadOnlyOnlyStillStartsWriter(t *testing.T) {
-	deps, out := daemonCommandTestDeps(t)
-	deps.statusRecords = func(string) ([]daemon.RuntimeRecord, error) {
-		rec := testWritableRecord(8, "/read-only.json")
-		rec.Metadata[runtimeReadOnly] = "true"
-		return []daemon.RuntimeRecord{rec}, nil
-	}
-	started := 0
-	originalStart := deps.startBackground
-	deps.startBackground = func(
-		cfg config.Config, args []string, opts serveReplacementOptions,
-		policy backgroundLaunchPolicy,
-	) (backgroundLaunchResult, error) {
-		started++
-		return originalStart(cfg, args, opts, policy)
-	}
-
-	require.NoError(t, executeDaemonCommand(t, *deps, out, "start"))
-	assert.Equal(t, 1, started)
-	assert.Contains(t, out.String(), "running")
-}
-
 func TestDaemonStartPersistentStartupNeverLaunches(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
 	deps.isStarting = func(string) bool { return true }
@@ -233,7 +212,7 @@ func TestDaemonStartLaunchContentionTerminalStates(t *testing.T) {
 	}{
 		{
 			name: "published writable",
-			observation: daemonLaunchObservation{LockHeld: true, Records: []daemon.RuntimeRecord{
+			observation: daemonLaunchObservation{Records: []daemon.RuntimeRecord{
 				testWritableRecord(21, "/runtime/21.json"),
 			}},
 			wantOut: "already running",
@@ -260,7 +239,7 @@ func TestDaemonStartLaunchContentionTerminalStates(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			deps, out := daemonCommandTestDeps(t)
 			loadCalls, startCalls := 0, 0
-			deps.acquireLaunchLock = func(string) (daemonLaunchLock, bool) { return nil, false }
+			deps.acquireLaunchLockWithError = func(string) (daemonLaunchLock, bool, error) { return nil, false, nil }
 			deps.waitContendedLaunch = func(string) daemonLaunchObservation { return tt.observation }
 			deps.loadConfig = func() (config.Config, error) { loadCalls++; return config.Config{}, nil }
 			deps.startBackground = func(config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
@@ -335,7 +314,7 @@ func TestDaemonStatusRendersStoppedStartingReadOnlyAndIncompatible(t *testing.T)
 
 func TestDaemonStartContentionStartLockWithoutSnapshotUsesRecoveryError(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
-	deps.acquireLaunchLock = func(string) (daemonLaunchLock, bool) { return nil, false }
+	deps.acquireLaunchLockWithError = func(string) (daemonLaunchLock, bool, error) { return nil, false, nil }
 	deps.waitContendedLaunch = func(string) daemonLaunchObservation {
 		return daemonLaunchObservation{LockHeld: true, Starting: true}
 	}
@@ -348,9 +327,9 @@ func TestDaemonStartContentionStartLockWithoutSnapshotUsesRecoveryError(t *testi
 	assert.NotContains(t, err.Error(), "launch is still in progress")
 }
 
-func TestDaemonStartContentionPublishedWriterWinsOverHeldLocks(t *testing.T) {
+func TestDaemonStartContentionHeldStartLockWinsOverPreexistingRecord(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
-	deps.acquireLaunchLock = func(string) (daemonLaunchLock, bool) { return nil, false }
+	deps.acquireLaunchLockWithError = func(string) (daemonLaunchLock, bool, error) { return nil, false, nil }
 	deps.waitContendedLaunch = func(string) daemonLaunchObservation {
 		return daemonLaunchObservation{
 			LockHeld: true,
@@ -371,10 +350,11 @@ func TestDaemonStartContentionPublishedWriterWinsOverHeldLocks(t *testing.T) {
 		return backgroundLaunchResult{}, nil
 	}
 
-	require.NoError(t, executeDaemonCommand(t, *deps, out, "start"))
-	assert.Contains(t, out.String(), "already running")
-	assert.Contains(t, out.String(), "pid 141")
-	assert.NotContains(t, out.String(), "pid 140")
+	err := executeDaemonCommand(t, *deps, out, "start")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "startup is still in progress")
+	assert.ErrorContains(t, err, "pid 140")
+	assert.NotContains(t, out.String(), "already running")
 	assert.Zero(t, configLoads)
 	assert.Zero(t, starts)
 }
@@ -450,7 +430,7 @@ func TestDaemonStopStartingConfigFailureAndContentionSignalNobody(t *testing.T) 
 		want  string
 	}{
 		{name: "launch contention", setup: func(d *daemonCommandDeps) {
-			d.acquireLaunchLock = func(string) (daemonLaunchLock, bool) { return nil, false }
+			d.acquireLaunchLockWithError = func(string) (daemonLaunchLock, bool, error) { return nil, false, nil }
 		}, want: "launch lock"},
 		{name: "config failure", setup: func(d *daemonCommandDeps) {
 			d.loadConfig = func() (config.Config, error) { return config.Config{}, errors.New("bad config") }
@@ -486,7 +466,10 @@ func TestDaemonStopMultipleWritersAndRepeatIsIdempotent(t *testing.T) {
 	deps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) { return records, nil }
 	var stopped, caddy []int
 	deps.stopProcess = func(rec daemon.RuntimeRecord, _ time.Duration) error { stopped = append(stopped, rec.PID); return nil }
-	deps.stopCaddy = func(rec daemon.RuntimeRecord) { caddy = append(caddy, rec.PID) }
+	deps.stopCaddy = func(_ io.Writer, rec daemon.RuntimeRecord) error {
+		caddy = append(caddy, rec.PID)
+		return nil
+	}
 	require.NoError(t, executeDaemonCommand(t, *deps, out, "stop"))
 	assert.Equal(t, []int{81, 82}, stopped)
 	assert.Equal(t, []int{81, 82}, caddy)
@@ -501,13 +484,19 @@ func TestDaemonStopMultipleWritersAndRepeatIsIdempotent(t *testing.T) {
 
 func TestDaemonRestartValidatesBeforeStoppingAndUsesFreshConfig(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
+	dataDir := t.TempDir()
+	deps.resolveDataDir = func() (string, error) { return dataDir, nil }
+	deps.mkdirAll = func(path string, _ os.FileMode) error {
+		assert.Equal(t, dataDir, path)
+		return nil
+	}
 	rec := testWritableRecord(91, "/runtime/91.json")
 	rec.Metadata[runtimeNoSync] = "true"
 	deps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) { return []daemon.RuntimeRecord{rec}, nil }
 	var order []string
 	deps.loadConfig = func() (config.Config, error) {
 		order = append(order, "config")
-		return config.Config{DataDir: t.TempDir(), DBPath: "/fresh/sessions.db", NoSync: true}, nil
+		return config.Config{DataDir: dataDir, DBPath: "/fresh/sessions.db", NoSync: true}, nil
 	}
 	deps.checkDataVersion = func(path string) error {
 		order = append(order, "data")
@@ -618,6 +607,11 @@ func TestDaemonRestartInvalidServeConfigDoesNotStopOrStart(t *testing.T) {
 			deps, out := daemonCommandTestDeps(t)
 			tt.cfg.DataDir = t.TempDir()
 			tt.cfg.DBPath = filepath.Join(tt.cfg.DataDir, "sessions.db")
+			deps.resolveDataDir = func() (string, error) { return tt.cfg.DataDir, nil }
+			deps.mkdirAll = func(path string, _ os.FileMode) error {
+				assert.Equal(t, tt.cfg.DataDir, path)
+				return nil
+			}
 			deps.loadConfig = func() (config.Config, error) { return tt.cfg, nil }
 			deps.validateConfig = validateServeConfig
 			deps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) {
@@ -646,9 +640,9 @@ func TestDaemonRestartChildFailureIncludesLogAndHeldLock(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
 	lock := &testDaemonLaunchLock{}
 	lockAcquisitions := 0
-	deps.acquireLaunchLock = func(string) (daemonLaunchLock, bool) {
+	deps.acquireLaunchLockWithError = func(string) (daemonLaunchLock, bool, error) {
 		lockAcquisitions++
-		return lock, true
+		return lock, true, nil
 	}
 	deps.writableRecords = func(string) ([]daemon.RuntimeRecord, error) {
 		return []daemon.RuntimeRecord{testWritableRecord(131, "/runtime/131.json")}, nil

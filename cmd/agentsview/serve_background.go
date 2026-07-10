@@ -69,12 +69,24 @@ func backgroundLaunchLockPath(dataDir string) string {
 // acquireBackgroundLaunchLock takes the background launch lock without
 // blocking. ok is false when another launch already holds it.
 func acquireBackgroundLaunchLock(dataDir string) (*flock.Flock, bool) {
+	lock, acquired, _ := acquireBackgroundLaunchLockWithError(dataDir)
+	return lock, acquired
+}
+
+// acquireBackgroundLaunchLockWithError distinguishes a lock held by another
+// lifecycle operation from an I/O failure opening or acquiring the lock.
+func acquireBackgroundLaunchLockWithError(
+	dataDir string,
+) (*flock.Flock, bool, error) {
 	lock := flock.New(backgroundLaunchLockPath(dataDir))
 	locked, err := lock.TryLock()
-	if err != nil || !locked {
-		return nil, false
+	if err != nil {
+		return nil, false, err
 	}
-	return lock, true
+	if !locked {
+		return nil, false, nil
+	}
+	return lock, true, nil
 }
 
 func isBackgroundLaunchActive(dataDir string) bool {

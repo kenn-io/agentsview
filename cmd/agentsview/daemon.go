@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -29,24 +30,24 @@ type daemonLaunchObservation struct {
 }
 
 type daemonCommandDeps struct {
-	resolveDataDir      func() (string, error)
-	mkdirAll            func(string, os.FileMode) error
-	loadConfig          func() (config.Config, error)
-	loadReadOnlyConfig  func() (config.Config, error)
-	acquireLaunchLock   func(string) (daemonLaunchLock, bool)
-	waitContendedLaunch func(string) daemonLaunchObservation
-	writableRecords     func(string) ([]daemon.RuntimeRecord, error)
-	statusRecords       func(string) ([]daemon.RuntimeRecord, error)
-	isStarting          func(string) bool
-	readStartupState    func(string) *startupState
-	startBackground     func(config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error)
-	stopTargetConfirmed func(daemon.RuntimeRecord, string) bool
-	stopProcess         func(daemon.RuntimeRecord, time.Duration) error
-	stopCaddy           func(daemon.RuntimeRecord)
-	validateConfig      func(config.Config) error
-	checkDataVersion    func(string) error
-	probeRecord         func(daemon.RuntimeRecord, string) bool
-	now                 func() time.Time
+	resolveDataDir             func() (string, error)
+	mkdirAll                   func(string, os.FileMode) error
+	loadConfig                 func() (config.Config, error)
+	loadReadOnlyConfig         func() (config.Config, error)
+	acquireLaunchLockWithError func(string) (daemonLaunchLock, bool, error)
+	waitContendedLaunch        func(string) daemonLaunchObservation
+	writableRecords            func(string) ([]daemon.RuntimeRecord, error)
+	statusRecords              func(string) ([]daemon.RuntimeRecord, error)
+	isStarting                 func(string) bool
+	readStartupState           func(string) *startupState
+	startBackground            func(config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error)
+	stopTargetConfirmed        func(daemon.RuntimeRecord, string) bool
+	stopProcess                func(daemon.RuntimeRecord, time.Duration) error
+	stopCaddy                  func(io.Writer, daemon.RuntimeRecord) error
+	validateConfig             func(config.Config) error
+	checkDataVersion           func(string) error
+	probeRecord                func(daemon.RuntimeRecord, string) bool
+	now                        func() time.Time
 }
 
 func defaultDaemonCommandDeps() daemonCommandDeps {
@@ -55,8 +56,8 @@ func defaultDaemonCommandDeps() daemonCommandDeps {
 		mkdirAll:           os.MkdirAll,
 		loadConfig:         config.LoadMinimal,
 		loadReadOnlyConfig: config.LoadReadOnly,
-		acquireLaunchLock: func(dataDir string) (daemonLaunchLock, bool) {
-			return acquireBackgroundLaunchLock(dataDir)
+		acquireLaunchLockWithError: func(dataDir string) (daemonLaunchLock, bool, error) {
+			return acquireBackgroundLaunchLockWithError(dataDir)
 		},
 		waitContendedLaunch: waitForDaemonLaunchContention,
 		writableRecords:     writableDaemonRecords,
@@ -66,7 +67,7 @@ func defaultDaemonCommandDeps() daemonCommandDeps {
 		startBackground:     startServeBackground,
 		stopTargetConfirmed: stopTargetConfirmed,
 		stopProcess:         stopDaemonProcess,
-		stopCaddy:           stopOrphanedCaddyChild,
+		stopCaddy:           stopOrphanedCaddyChildWithWriter,
 		validateConfig:      validateServeConfig,
 		checkDataVersion:    db.CheckDataVersion,
 		probeRecord: func(rec daemon.RuntimeRecord, token string) bool {
@@ -137,7 +138,10 @@ func runDaemonStart(w io.Writer, deps daemonCommandDeps) error {
 	if err != nil {
 		return fmt.Errorf("daemon start: %w", err)
 	}
-	launchLock, ok := deps.acquireLaunchLock(dataDir)
+	launchLock, ok, err := deps.acquireLaunchLockWithError(dataDir)
+	if err != nil {
+		return fmt.Errorf("daemon start: acquiring launch lock: %w", err)
+	}
 	if !ok {
 		return reportDaemonLaunchContention(w, dataDir, deps.waitContendedLaunch(dataDir), deps.now())
 	}
@@ -146,6 +150,9 @@ func runDaemonStart(w io.Writer, deps daemonCommandDeps) error {
 	cfg, err := deps.loadConfig()
 	if err != nil {
 		return fmt.Errorf("daemon start: loading config: %w", err)
+	}
+	if err := validateLockedDataDir(dataDir, cfg.DataDir); err != nil {
+		return fmt.Errorf("daemon start: %w", err)
 	}
 	if deps.isStarting(cfg.DataDir) {
 		return daemonPersistentStartupError("daemon start", cfg.DataDir, deps.readStartupState(cfg.DataDir), deps.now())
@@ -156,6 +163,9 @@ func runDaemonStart(w io.Writer, deps daemonCommandDeps) error {
 	)
 	if err != nil {
 		return backgroundResultError(err, result)
+	}
+	if result.Started && result.Runtime == nil {
+		return daemonSlowStartupError("daemon start", result)
 	}
 	if !result.Started && result.Runtime == nil {
 		if deps.isStarting(cfg.DataDir) {
@@ -173,6 +183,15 @@ func reportDaemonLaunchContention(
 	if observation.Err != nil {
 		return fmt.Errorf("daemon start: inspecting concurrent launch: %w", observation.Err)
 	}
+	if observation.LockHeld {
+		if observation.Starting {
+			return daemonPersistentStartupError("daemon start", dataDir, observation.Snapshot, now)
+		}
+		return fmt.Errorf(
+			"daemon start: launch is still in progress under %s; retry later and verify the owning process manually if it persists",
+			backgroundLaunchLockPath(dataDir),
+		)
+	}
 	if len(observation.Records) > 0 {
 		rt := daemonRuntimeFromRecord(observation.Records[0])
 		fmt.Fprintf(w, "agentsview already running at %s (pid %d)\n", urlFromDaemonRuntime(rt), rt.Record.PID)
@@ -181,33 +200,41 @@ func reportDaemonLaunchContention(
 	if observation.Starting {
 		return daemonPersistentStartupError("daemon start", dataDir, observation.Snapshot, now)
 	}
-	if observation.LockHeld {
-		return fmt.Errorf(
-			"daemon start: launch is still in progress under %s; retry later and verify the owning process manually if it persists",
-			backgroundLaunchLockPath(dataDir),
-		)
-	}
 	return errors.New("daemon start: concurrent startup failed without publishing a writable runtime; inspect serve.log before retrying")
 }
 
 func waitForDaemonLaunchContention(dataDir string) daemonLaunchObservation {
 	deadline := time.Now().Add(backgroundServeReadyTimeout)
 	for {
-		records, err := writableDaemonRecords(dataDir)
+		lock, acquired, err := acquireBackgroundLaunchLockWithError(dataDir)
 		if err != nil {
 			return daemonLaunchObservation{Err: err}
 		}
-		starting := IsDaemonStarting(dataDir)
-		var snapshot *startupState
-		if starting {
-			snapshot = readStartupState(dataDir)
+		if acquired {
+			records, recordsErr := writableDaemonRecords(dataDir)
+			if recordsErr != nil {
+				_ = lock.Unlock()
+				return daemonLaunchObservation{Err: recordsErr}
+			}
+			starting := IsDaemonStarting(dataDir)
+			var snapshot *startupState
+			if starting {
+				snapshot = readStartupState(dataDir)
+			}
+			_ = lock.Unlock()
+			return daemonLaunchObservation{
+				Starting: starting, Snapshot: snapshot, Records: records,
+			}
 		}
-		lockHeld := isBackgroundLaunchActive(dataDir)
-		observation := daemonLaunchObservation{
-			LockHeld: lockHeld, Starting: starting, Snapshot: snapshot, Records: records,
-		}
-		if len(records) > 0 || !lockHeld || time.Now().After(deadline) {
-			return observation
+		if time.Now().After(deadline) {
+			starting := IsDaemonStarting(dataDir)
+			var snapshot *startupState
+			if starting {
+				snapshot = readStartupState(dataDir)
+			}
+			return daemonLaunchObservation{
+				LockHeld: true, Starting: starting, Snapshot: snapshot,
+			}
 		}
 		time.Sleep(startProbeTick())
 	}
@@ -267,6 +294,29 @@ func backgroundResultError(err error, result backgroundLaunchResult) error {
 	return err
 }
 
+func daemonSlowStartupError(
+	operation string, result backgroundLaunchResult,
+) error {
+	details := []string{fmt.Sprintf("pid %d", result.childPID)}
+	if result.LogPath != "" {
+		details = append(details, "log "+result.LogPath)
+	}
+	return fmt.Errorf(
+		"%s: startup is still in progress (%s); the child continues running; retry `agentsview daemon status`",
+		operation, strings.Join(details, ", "),
+	)
+}
+
+func validateLockedDataDir(locked, loaded string) error {
+	if filepath.Clean(locked) == filepath.Clean(loaded) {
+		return nil
+	}
+	return fmt.Errorf(
+		"data dir changed after launch lock: locked %q, loaded %q",
+		locked, loaded,
+	)
+}
+
 func runDaemonStatus(w io.Writer, deps daemonCommandDeps) error {
 	cfg, err := deps.loadReadOnlyConfig()
 	if err != nil {
@@ -309,7 +359,23 @@ func writeDaemonRecordStatus(
 	w io.Writer, cfg config.Config, rec daemon.RuntimeRecord, deps daemonCommandDeps,
 ) {
 	rt := daemonRuntimeFromRecord(rec)
-	if !deps.probeRecord(rec, cfg.AuthToken) {
+	compatErr := daemonRuntimeCompatibilityError(rt)
+	responding := deps.probeRecord(rec, cfg.AuthToken)
+	if compatErr != nil {
+		fmt.Fprintln(w, "agentsview found an incompatible running writable daemon.")
+		for _, line := range serveStatusLines(rt) {
+			fmt.Fprintln(w, line)
+		}
+		fmt.Fprintf(w, "  compatibility: %v\n", compatErr)
+		if !responding {
+			fmt.Fprintln(w, "  health: not responding to health checks")
+		}
+		if rec.SourcePath != "" {
+			fmt.Fprintf(w, "  runtime: %s\n", rec.SourcePath)
+		}
+		return
+	}
+	if !responding {
 		fmt.Fprintln(w, "agentsview daemon process is running but not responding to health checks.")
 		for _, line := range serveStatusLines(rt) {
 			fmt.Fprintln(w, line)
@@ -317,14 +383,6 @@ func writeDaemonRecordStatus(
 		if rec.SourcePath != "" {
 			fmt.Fprintf(w, "  runtime: %s\n", rec.SourcePath)
 		}
-		return
-	}
-	if compatErr := daemonRuntimeCompatibilityError(rt); compatErr != nil {
-		fmt.Fprintln(w, "agentsview found an incompatible running writable daemon.")
-		for _, line := range serveStatusLines(rt) {
-			fmt.Fprintln(w, line)
-		}
-		fmt.Fprintf(w, "  compatibility: %v\n", compatErr)
 		return
 	}
 	for _, line := range serveStatusLines(rt) {
@@ -337,7 +395,10 @@ func runDaemonStop(w io.Writer, deps daemonCommandDeps) error {
 	if err != nil {
 		return fmt.Errorf("daemon stop: %w", err)
 	}
-	launchLock, ok := deps.acquireLaunchLock(dataDir)
+	launchLock, ok, err := deps.acquireLaunchLockWithError(dataDir)
+	if err != nil {
+		return fmt.Errorf("daemon stop: acquiring launch lock: %w", err)
+	}
 	if !ok {
 		return fmt.Errorf("daemon stop: launch lock %s is busy; retry later", backgroundLaunchLockPath(dataDir))
 	}
@@ -346,6 +407,9 @@ func runDaemonStop(w io.Writer, deps daemonCommandDeps) error {
 	cfg, err := deps.loadConfig()
 	if err != nil {
 		return fmt.Errorf("daemon stop: loading config: %w", err)
+	}
+	if err := validateLockedDataDir(dataDir, cfg.DataDir); err != nil {
+		return fmt.Errorf("daemon stop: %w", err)
 	}
 	if deps.isStarting(cfg.DataDir) {
 		return daemonPersistentStartupError("daemon stop", cfg.DataDir, deps.readStartupState(cfg.DataDir), deps.now())
@@ -370,7 +434,10 @@ func runDaemonRestart(w io.Writer, deps daemonCommandDeps) error {
 	if err != nil {
 		return fmt.Errorf("daemon restart: %w", err)
 	}
-	launchLock, ok := deps.acquireLaunchLock(dataDir)
+	launchLock, ok, err := deps.acquireLaunchLockWithError(dataDir)
+	if err != nil {
+		return fmt.Errorf("daemon restart: acquiring launch lock: %w", err)
+	}
 	if !ok {
 		return fmt.Errorf("daemon restart: launch lock %s is busy; retry later", backgroundLaunchLockPath(dataDir))
 	}
@@ -379,6 +446,9 @@ func runDaemonRestart(w io.Writer, deps daemonCommandDeps) error {
 	cfg, err := deps.loadConfig()
 	if err != nil {
 		return fmt.Errorf("daemon restart: loading config: %w", err)
+	}
+	if err := validateLockedDataDir(dataDir, cfg.DataDir); err != nil {
+		return fmt.Errorf("daemon restart: %w", err)
 	}
 	if deps.isStarting(cfg.DataDir) {
 		return daemonPersistentStartupError("daemon restart", cfg.DataDir, deps.readStartupState(cfg.DataDir), deps.now())
@@ -409,6 +479,9 @@ func runDaemonRestart(w io.Writer, deps daemonCommandDeps) error {
 	)
 	if err != nil {
 		return backgroundResultError(err, result)
+	}
+	if result.Started && result.Runtime == nil {
+		return daemonSlowStartupError("daemon restart", result)
 	}
 	if !result.Started && result.Runtime == nil {
 		if deps.isStarting(cfg.DataDir) {

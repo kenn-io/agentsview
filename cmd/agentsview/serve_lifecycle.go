@@ -24,7 +24,7 @@ var stopDaemonRuntimeForUpgrade = stopDaemonRuntimeForUpgradeImpl
 type daemonStopOperations struct {
 	confirmed func(daemon.RuntimeRecord, string) bool
 	stop      func(daemon.RuntimeRecord, time.Duration) error
-	cleanup   func(daemon.RuntimeRecord)
+	cleanup   func(io.Writer, daemon.RuntimeRecord) error
 }
 
 // stopWritableDaemonRecordsSafely prevalidates the identity of every target
@@ -54,14 +54,65 @@ func stopWritableDaemonRecordsSafely(
 			strings.Join(unconfirmed, ", "),
 		)
 	}
-	for _, rec := range records {
-		if err := ops.stop(rec, serveStopGraceTimeout); err != nil {
-			return fmt.Errorf("stopping pid %d: %w", rec.PID, err)
+	stopped := make([]int, 0, len(records))
+	for i, rec := range records {
+		if !ops.confirmed(rec, cfg.AuthToken) {
+			return partialDaemonStopError(
+				stopped, records[i:],
+				fmt.Errorf("pid %d identity changed before signaling", rec.PID),
+			)
 		}
-		ops.cleanup(rec)
+		if err := ops.stop(rec, serveStopGraceTimeout); err != nil {
+			return partialDaemonStopError(
+				stopped, records[i:], fmt.Errorf("stopping pid %d: %w", rec.PID, err),
+			)
+		}
+		stopped = append(stopped, rec.PID)
 		fmt.Fprintf(w, "Stopped agentsview (pid %d).\n", rec.PID)
+		if err := ops.cleanup(w, rec); err != nil {
+			return partialDaemonStopError(
+				stopped, records[i+1:],
+				fmt.Errorf("managed caddy cleanup for pid %d: %w", rec.PID, err),
+			)
+		}
 	}
 	return nil
+}
+
+func partialDaemonStopError(
+	stopped []int, remaining []daemon.RuntimeRecord, cause error,
+) error {
+	stoppedText := "none"
+	if len(stopped) > 0 {
+		stoppedText = formatPIDList(stopped)
+	}
+	remainingPIDs := make([]int, 0, len(remaining))
+	for _, rec := range remaining {
+		remainingPIDs = append(remainingPIDs, rec.PID)
+	}
+	remainingText := "none"
+	if len(remainingPIDs) > 0 {
+		remainingText = formatPIDList(remainingPIDs)
+	}
+	return fmt.Errorf(
+		"partial stop: stopped pid%s %s; remaining pids %s; %w; verify remaining processes and terminate them manually before retrying",
+		pluralSuffix(len(stopped)), stoppedText, remainingText, cause,
+	)
+}
+
+func formatPIDList(pids []int) string {
+	parts := make([]string, 0, len(pids))
+	for _, pid := range pids {
+		parts = append(parts, strconv.Itoa(pid))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func pluralSuffix(count int) string {
+	if count == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // runServeStatus reports whether a server owns this data dir, and where to
@@ -327,30 +378,42 @@ func processCreateTimeMatches(pid int, recordedMillis string) bool {
 // otherwise keep holding the public port. The create time is matched exactly
 // before signalling, so a reused Caddy PID is never touched.
 func stopOrphanedCaddyChild(rec daemon.RuntimeRecord) {
+	if err := stopOrphanedCaddyChildWithWriter(os.Stdout, rec); err != nil {
+		raw := rec.Metadata[runtimeCaddyPID]
+		fmt.Printf(
+			"warning: could not stop managed caddy (pid %s): %v\n", raw, err,
+		)
+	}
+}
+
+// stopOrphanedCaddyChildWithWriter is the canonical, error-returning managed
+// Caddy cleanup path. Callers choose the output writer and decide whether a
+// cleanup failure is fatal to a larger lifecycle transition.
+func stopOrphanedCaddyChildWithWriter(
+	w io.Writer, rec daemon.RuntimeRecord,
+) error {
 	raw := rec.Metadata[runtimeCaddyPID]
 	if raw == "" {
-		return
+		return nil
 	}
 	pid, err := strconv.Atoi(raw)
 	if err != nil || pid <= 0 {
-		return
+		return nil
 	}
 	if !daemon.ProcessAlive(pid) {
-		return
+		return nil
 	}
 	caddyCreateTime := rec.Metadata[runtimeCaddyCreateTime]
 	if !processCreateTimeMatches(pid, caddyCreateTime) {
-		return
+		return nil
 	}
 	if err := stopDaemonProcess(
 		caddyStopRecord(pid, caddyCreateTime), serveStopGraceTimeout,
 	); err != nil {
-		fmt.Printf(
-			"warning: could not stop managed caddy (pid %d): %v\n", pid, err,
-		)
-		return
+		return err
 	}
-	fmt.Printf("Stopped managed caddy (pid %d).\n", pid)
+	fmt.Fprintf(w, "Stopped managed caddy (pid %d).\n", pid)
+	return nil
 }
 
 // caddyStopRecord builds the record used to stop a managed Caddy child. It has
