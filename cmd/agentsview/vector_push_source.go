@@ -5,6 +5,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"sync"
 
@@ -23,10 +25,10 @@ import (
 // snapshotted ordinal, so a build that activates mid-push cannot pair this
 // generation's fingerprint with a newer generation's docs; the next Generation
 // call refreshes the snapshot, keeping successive daemon pushes current. The
-// read-only handle stays open for the adapter's lifetime — the CLI path is
-// short-lived and the daemon reuses one adapter until process exit; Close
-// releases it explicitly (tests need that on Windows, where an open sqlite
-// file cannot be deleted).
+// read-only handle stays open for the adapter's lifetime; the creator owns
+// that lifetime and must release it via closeVectorPushSource — per push in
+// PGPush, at loop exit in the watch path (which reuses one adapter across
+// reconnects) — since postgres.Sync never closes its source.
 type vectorPushSource struct {
 	cfg config.Config
 
@@ -47,6 +49,22 @@ func newVectorPushSource(appCfg config.Config) postgres.VectorPushSource {
 		return nil
 	}
 	return &vectorPushSource{cfg: appCfg}
+}
+
+// closeVectorPushSource releases a push source's memoized read-only
+// vectors.db handle. postgres.Sync never closes its source — the creator
+// owns the handle's lifetime — so every call site that builds a source must
+// close it when the push (or watch loop) is done, or repeated pushes leak
+// one SQLite handle each. Safe on a nil source and on sources holding no
+// handle.
+func closeVectorPushSource(src postgres.VectorPushSource) {
+	c, ok := src.(io.Closer)
+	if !ok {
+		return
+	}
+	if err := c.Close(); err != nil {
+		log.Printf("closing vectors.db push source: %v", err)
+	}
 }
 
 // openIndex opens vectors.db read-only and memoizes only a successful open. A

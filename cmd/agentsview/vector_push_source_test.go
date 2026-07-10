@@ -250,3 +250,32 @@ func TestVectorPushSourceRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// TestCloseVectorPushSource pins the creator-owned handle lifecycle: closing
+// releases the memoized read-only vectors.db handle (so per-push and
+// per-watch-loop sources do not leak SQLite handles), a nil source is a
+// no-op, and a closed adapter transparently reopens on the next call.
+func TestCloseVectorPushSource(t *testing.T) {
+	closeVectorPushSource(nil) // must not panic
+
+	cfg := enabledVectorConfig(t)
+	buildTestVectorsDB(t, cfg)
+	src := newVectorPushSource(cfg)
+	require.NotNil(t, src)
+
+	ctx := context.Background()
+	_, ok, err := src.Generation(ctx)
+	require.NoError(t, err)
+	require.True(t, ok)
+	adapter := src.(*vectorPushSource)
+	require.NotNil(t, adapter.ix, "Generation memoizes the open handle")
+
+	closeVectorPushSource(src)
+	assert.Nil(t, adapter.ix, "close releases the memoized handle")
+	closeVectorPushSource(src) // idempotent
+
+	_, ok, err = src.Generation(ctx)
+	require.NoError(t, err)
+	assert.True(t, ok, "a closed adapter reopens lazily")
+	closePushSource(t, src)
+}

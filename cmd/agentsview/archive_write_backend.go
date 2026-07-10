@@ -409,13 +409,12 @@ func (b *localArchiveWriteBackend) PGPush(
 	fmt.Println("Connecting to PostgreSQL...")
 	connectStart := time.Now()
 	applyClassifierConfig(b.appCfg)
+	vectorSource := pgVectorPushSource(b.appCfg, target, cfg)
+	defer closeVectorPushSource(vectorSource)
 	ps, err := postgres.New(
 		target.PG.URL, target.PG.Schema, b.database,
 		target.PG.MachineName, target.PG.AllowInsecure,
-		target.syncOptions(
-			projects, excludeProjects,
-			pgVectorPushSource(b.appCfg, target, cfg),
-		),
+		target.syncOptions(projects, excludeProjects, vectorSource),
 	)
 	if err != nil {
 		return postgres.PushResult{}, err
@@ -647,6 +646,14 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 		return err
 	}
 
+	// One vectors.db adapter for the watch loop's lifetime: connect runs on
+	// every reconnect, and a fresh source per reconnect would leak the
+	// previous one's memoized read-only handle (postgres.Sync never closes
+	// its source). The adapter is designed for reuse — it reopens lazily
+	// after transient failures.
+	vectorSource := pgVectorPushSource(b.appCfg, target, cfg)
+	defer closeVectorPushSource(vectorSource)
+
 	pusher := &pgPusher{
 		localSync: func(c context.Context) error {
 			engine.SyncAll(c, nil)
@@ -661,10 +668,7 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 			s, cErr := postgres.New(
 				target.PG.URL, target.PG.Schema, b.database,
 				target.PG.MachineName, target.PG.AllowInsecure,
-				target.syncOptions(
-					projects, exclude,
-					pgVectorPushSource(b.appCfg, target, cfg),
-				),
+				target.syncOptions(projects, exclude, vectorSource),
 			)
 			if cErr != nil {
 				return nil, cErr

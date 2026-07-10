@@ -143,6 +143,16 @@ func isUndefinedColumn(err error) bool {
 	return strings.Contains(err.Error(), "42703")
 }
 
+// isInsufficientPrivilege returns true when the role lacks a required
+// privilege (PG SQLSTATE 42501) — e.g. a restricted push role that cannot
+// create vector tables in a schema provisioned by a privileged role.
+func isInsufficientPrivilege(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "42501")
+}
+
 // Sync manages push-only sync from local SQLite to a remote
 // PostgreSQL database.
 type Sync struct {

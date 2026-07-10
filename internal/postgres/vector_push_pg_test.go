@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"testing"
 
@@ -1351,4 +1352,91 @@ func TestVectorPushFilteredEvictionScopesByLocalProject(t *testing.T) {
 		"locally-absent session with out-of-filter PG project is untouched")
 	assert.Equal(t, 0, chunkCount("gone-in"),
 		"locally-absent session with in-filter PG project is evicted")
+}
+
+// TestVectorPushSkipsOnInsufficientPrivilege pins the restricted-role degrade
+// path: a schema provisioned by a privileged role (core tables exist) whose
+// push role cannot CREATE means the vector base DDL fails with SQLSTATE
+// 42501. That must skip the vector phase with a reason — matching a database
+// without pgvector — not fail a push whose session phase succeeded.
+func TestVectorPushSkipsOnInsufficientPrivilege(t *testing.T) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_vector_privilege_test"
+	const role = "agentsview_vector_restricted"
+	const rolePassword = "agentsview_vector_restricted_pw"
+
+	admin, err := Open(pgURL, schema, true)
+	require.NoError(t, err, "Open admin")
+	t.Cleanup(func() { _ = admin.Close() })
+
+	ctx := context.Background()
+	_, err = admin.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err, "drop schema")
+	require.NoError(t, EnsureSchema(ctx, admin, schema))
+	unavailable, err := ensureVectorBaseSchemaPG(ctx, admin)
+	require.NoError(t, err)
+	if unavailable != "" {
+		t.Skip(unavailable)
+	}
+
+	// Simulate a schema provisioned by an older, pre-vector agentsview:
+	// core tables exist but the vector tables do not, so the restricted
+	// role's own setup must CREATE them — and cannot.
+	for _, tbl := range []string{
+		"vector_push_state", "vector_documents",
+		"vector_generation_machines", "vector_generations",
+	} {
+		_, err = admin.Exec(`DROP TABLE IF EXISTS ` + tbl + ` CASCADE`)
+		require.NoError(t, err, tbl)
+	}
+
+	_, _ = admin.Exec(`DROP OWNED BY ` + role) // clear grants from prior runs
+	_, _ = admin.Exec(`DROP ROLE IF EXISTS ` + role)
+	_, err = admin.Exec(
+		`CREATE ROLE ` + role + ` LOGIN PASSWORD '` + rolePassword + `'`)
+	require.NoError(t, err, "create restricted role")
+	t.Cleanup(func() {
+		_, _ = admin.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+		_, _ = admin.Exec(`DROP OWNED BY ` + role)
+		_, _ = admin.Exec(`DROP ROLE IF EXISTS ` + role)
+	})
+	for _, grant := range []string{
+		`GRANT USAGE ON SCHEMA ` + schema + ` TO ` + role,
+		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ` +
+			schema + ` TO ` + role,
+	} {
+		_, err = admin.Exec(grant)
+		require.NoError(t, err, grant)
+	}
+
+	restrictedURL, err := url.Parse(pgURL)
+	require.NoError(t, err)
+	restrictedURL.User = url.UserPassword(role, rolePassword)
+	restricted, err := Open(restrictedURL.String(), schema, true)
+	require.NoError(t, err, "Open restricted")
+	t.Cleanup(func() { _ = restricted.Close() })
+
+	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	t.Cleanup(func() { _ = localDB.Close() })
+
+	sync := &Sync{
+		pg:         restricted,
+		local:      localDB,
+		machine:    "test-machine",
+		schema:     schema,
+		schemaDone: true,
+	}
+	sync.vectorSource = &fakeVectorSource{
+		gen: VectorGenerationInfo{
+			Fingerprint: "fp-priv", Model: "m", Dimension: 4,
+		},
+		hasGen: true,
+		hashes: map[string]string{},
+	}
+
+	res, err := sync.pushVectors(ctx, false, nil, nil)
+	require.NoError(t, err, "privilege failure must skip, not fail the push")
+	assert.True(t, res.Skipped)
+	assert.Contains(t, res.SkippedReason, "privileges")
 }

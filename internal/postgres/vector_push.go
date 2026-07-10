@@ -227,6 +227,9 @@ func (s *Sync) pushVectors(
 	}
 	unavailable, err := ensureVectorBaseSchemaPG(ctx, s.pg)
 	if err != nil {
+		if s.skipVectorsOnPrivilegeError(err, &res) {
+			return res, nil
+		}
 		return res, err
 	}
 	if unavailable != "" {
@@ -235,6 +238,9 @@ func (s *Sync) pushVectors(
 	}
 	resolved, err := s.resolveVectorGeneration(ctx, gen)
 	if err != nil {
+		if s.skipVectorsOnPrivilegeError(err, &res) {
+			return res, nil
+		}
 		return res, err
 	}
 	owner, err := s.vectorOwnerIdentity(ctx)
@@ -261,6 +267,24 @@ func (s *Sync) pushVectors(
 		res.SessionsPushed, res.SessionsUnchanged, res.SessionsDeferred,
 		res.SessionsEvicted, res.ChunksPushed)
 	return res, nil
+}
+
+// skipVectorsOnPrivilegeError reports whether err is an
+// insufficient-privilege error (SQLSTATE 42501) from the vector SETUP phase
+// — base tables, generation registration, chunk table — and marks res as
+// skipped when it is: a restricted role that cannot create vector tables in
+// an already-provisioned schema degrades exactly like a database without
+// pgvector, instead of failing a push whose session phase succeeded.
+// Privilege errors AFTER setup (mid-push writes) never reach this and still
+// fail the push loudly.
+func (s *Sync) skipVectorsOnPrivilegeError(err error, res *VectorPushResult) bool {
+	if !isInsufficientPrivilege(err) {
+		return false
+	}
+	res.Skipped = true
+	res.SkippedReason = "insufficient PostgreSQL privileges for vector tables"
+	log.Printf("vector push: skipped: %v", err)
+	return true
 }
 
 // applyVectorDeltas pushes changed/new sessions and evicts sessions absent from
