@@ -33,10 +33,11 @@ func BenchmarkCodexIncrementalSyncReads(b *testing.B) {
 	b.StopTimer()
 	ctx := context.Background()
 	root, path, prefix, tail, startOrdinal := writeCodexSyncBenchmarkTranscript(b)
-	provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{
+	cfg := parser.ProviderConfig{
 		Roots:   []string{root},
 		Machine: "benchmark-host",
-	})
+	}
+	provider, ok := parser.NewProvider(parser.AgentCodex, cfg)
 	require.True(b, ok)
 	source, found, err := provider.FindSource(ctx, parser.FindSourceRequest{
 		FullSessionID: "codex:" + codexSyncBenchmarkUUID,
@@ -55,6 +56,16 @@ func BenchmarkCodexIncrementalSyncReads(b *testing.B) {
 	require.Len(b, full.Results, 1)
 	assert.Len(b, full.Results[0].Result.Messages, startOrdinal)
 
+	// Keep the timed provider untouched after its prefix-only full parse. A
+	// separately seeded provider handles output validation after the append.
+	validationProvider, ok := parser.NewProvider(parser.AgentCodex, cfg)
+	require.True(b, ok)
+	_, err = validationProvider.Parse(ctx, parser.ParseRequest{
+		Source:      source,
+		Fingerprint: prefixFingerprint,
+	})
+	require.NoError(b, err)
+
 	appendCodexSyncBenchmarkTail(b, path, tail)
 	req := parser.IncrementalRequest{
 		Source:       source,
@@ -64,15 +75,16 @@ func BenchmarkCodexIncrementalSyncReads(b *testing.B) {
 	}
 
 	currentFingerprint, outcome, status, committedHash, err :=
-		runCodexIncrementalSyncReads(ctx, provider, source, path, req)
+		runCodexIncrementalSyncReads(ctx, validationProvider, source, path, req)
 	require.NoError(b, err)
 	requireCodexSyncBenchmarkOutcome(
 		b, outcome, status, startOrdinal, int64(len(tail)),
 	)
-	assert.Equal(b, int64(len(prefix)+len(tail)), currentFingerprint.Size)
-	assert.Equal(b, currentFingerprint.Size, req.Offset+outcome.ConsumedBytes)
-	assert.Len(b, committedHash, 64)
-	assert.NotEmpty(b, currentFingerprint.Hash)
+	require.Equal(b, int64(len(prefix)+len(tail)), currentFingerprint.Size)
+	require.Equal(b, currentFingerprint.Size, req.Offset+outcome.ConsumedBytes)
+	require.NotEmpty(b, currentFingerprint.Hash)
+	require.Len(b, committedHash, 64)
+	require.Equal(b, currentFingerprint.Hash, committedHash)
 
 	// Two full-length linear reads dominate this pipeline: the provider source
 	// fingerprint and the engine's committed-prefix hash. The warm tail parse is
@@ -87,14 +99,17 @@ func BenchmarkCodexIncrementalSyncReads(b *testing.B) {
 		)
 		if err != nil || !codexSyncBenchmarkOutcomeValid(
 			outcome, status, startOrdinal, int64(len(tail)),
-		) || fingerprint.Size != int64(len(prefix)+len(tail)) || len(hash) != 64 {
+		) || fingerprint.Size != int64(len(prefix)+len(tail)) ||
+			fingerprint.Hash == "" || len(hash) != 64 || fingerprint.Hash != hash {
 			b.StopTimer()
 			require.NoError(b, err)
 			requireCodexSyncBenchmarkOutcome(
 				b, outcome, status, startOrdinal, int64(len(tail)),
 			)
 			assert.Equal(b, int64(len(prefix)+len(tail)), fingerprint.Size)
+			require.NotEmpty(b, fingerprint.Hash)
 			assert.Len(b, hash, 64)
+			assert.Equal(b, fingerprint.Hash, hash)
 			b.StartTimer()
 		}
 		codexSyncBenchmarkOutcomeSink = outcome

@@ -38,26 +38,44 @@ func BenchmarkCodexIncrementalCursor(b *testing.B) {
 		return newCodexProviderFactory(def).NewProvider(cfg)
 	}
 
-	warmProvider := newProvider()
-	source, found, err := warmProvider.FindSource(ctx, FindSourceRequest{
+	timedWarmProvider := newProvider()
+	source, found, err := timedWarmProvider.FindSource(ctx, FindSourceRequest{
 		FullSessionID: "codex:" + codexBenchmarkUUID,
 	})
 	require.NoError(b, err)
 	require.True(b, found)
 
-	prefixFingerprint, err := warmProvider.Fingerprint(ctx, source)
+	prefixFingerprint, err := timedWarmProvider.Fingerprint(ctx, source)
 	require.NoError(b, err)
 	assert.Equal(b, int64(len(prefix)), prefixFingerprint.Size)
-	full, err := warmProvider.Parse(ctx, ParseRequest{
+	full, err := timedWarmProvider.Parse(ctx, ParseRequest{
 		Source:      source,
 		Fingerprint: prefixFingerprint,
 	})
 	require.NoError(b, err)
 	require.Len(b, full.Results, 1)
 	assert.Len(b, full.Results[0].Result.Messages, startOrdinal)
+	timedConcrete, ok := timedWarmProvider.(*codexProvider)
+	require.True(b, ok)
+	_, timedPrefixSeeded := timedConcrete.cursorCache.Get(
+		path,
+		prefixFingerprint.Size,
+		prefixFingerprint.Inode,
+		prefixFingerprint.Device,
+	)
+	require.True(b, timedPrefixSeeded)
+
+	// Validate warm output through a separately seeded provider so the timed
+	// provider cannot acquire its prefix cursor from a preflight tail parse.
+	validationWarmProvider := newProvider()
+	_, err = validationWarmProvider.Parse(ctx, ParseRequest{
+		Source:      source,
+		Fingerprint: prefixFingerprint,
+	})
+	require.NoError(b, err)
 
 	appendCodexBenchmarkTail(b, path, tail)
-	currentFingerprint, err := warmProvider.Fingerprint(ctx, source)
+	currentFingerprint, err := timedWarmProvider.Fingerprint(ctx, source)
 	require.NoError(b, err)
 	assert.Equal(b, int64(len(prefix)+len(tail)), currentFingerprint.Size)
 	req := IncrementalRequest{
@@ -75,7 +93,9 @@ func BenchmarkCodexIncrementalCursor(b *testing.B) {
 	requireCodexBenchmarkOutcome(
 		b, coldOutcome, coldStatus, err, startOrdinal, int64(len(tail)),
 	)
-	warmOutcome, warmStatus, err := warmProvider.ParseIncremental(ctx, req)
+	warmOutcome, warmStatus, err := validationWarmProvider.ParseIncremental(
+		ctx, req,
+	)
 	requireCodexBenchmarkOutcome(
 		b, warmOutcome, warmStatus, err, startOrdinal, int64(len(tail)),
 	)
@@ -107,7 +127,7 @@ func BenchmarkCodexIncrementalCursor(b *testing.B) {
 		b.SetBytes(int64(len(tail)))
 		b.ResetTimer()
 		for b.Loop() {
-			outcome, status, err := warmProvider.ParseIncremental(ctx, req)
+			outcome, status, err := timedWarmProvider.ParseIncremental(ctx, req)
 			if !codexBenchmarkOutcomeValid(
 				outcome, status, err, startOrdinal, int64(len(tail)),
 			) {
