@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -146,13 +147,16 @@ func newSessionExportCommand() *cobra.Command {
 				return err
 			}
 			if session.Agent == string(parser.AgentHermes) &&
-				session.SourceVersion == "hermes-state-db" &&
-				session.SourceSessionID != "" {
+				filepath.Base(parser.ResolveSourceFilePath(storedPath)) == "state.db" {
+				rawSessionID := session.SourceSessionID
+				if rawSessionID == "" {
+					rawSessionID, _ = rawHermesSessionID(id)
+				}
 				err := parser.WriteHermesSessionJSONL(
 					cmd.OutOrStdout(),
 					storedPath,
 					cfg.AgentDirs[parser.AgentHermes],
-					session.SourceSessionID,
+					rawSessionID,
 				)
 				if errors.Is(err, os.ErrNotExist) {
 					return fmt.Errorf(
@@ -181,6 +185,16 @@ func newSessionExportCommand() *cobra.Command {
 func rawAiderSessionID(sessionID string) (string, bool) {
 	def, ok := parser.AgentByPrefix(sessionID)
 	if !ok || def.Type != parser.AgentAider {
+		return "", false
+	}
+	_, rawID := parser.StripHostPrefix(sessionID)
+	rawID = strings.TrimPrefix(rawID, def.IDPrefix)
+	return rawID, rawID != ""
+}
+
+func rawHermesSessionID(sessionID string) (string, bool) {
+	def, ok := parser.AgentByPrefix(sessionID)
+	if !ok || def.Type != parser.AgentHermes {
 		return "", false
 	}
 	_, rawID := parser.StripHostPrefix(sessionID)

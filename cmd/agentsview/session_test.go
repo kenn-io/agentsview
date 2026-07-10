@@ -1042,6 +1042,31 @@ func TestSessionExportHermesStateDB(t *testing.T) {
 	}
 }
 
+func TestSessionExportHermesStateDBWithoutSourceVersion(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+
+	root := t.TempDir()
+	dbPath := createHermesExportStateDB(t, root)
+
+	seedSessionWithOpts(t, dataDir, "hermes:child", "proj",
+		func(s *db.Session) {
+			s.Agent = string(parser.AgentHermes)
+			s.FilePath = &dbPath
+		})
+
+	out, err := executeCommand(newRootCommand(),
+		"session", "export", "hermes:child")
+	require.NoError(t, err)
+	assert.NotContains(t, out, "SQLite format 3")
+	assert.Contains(t, out, `"role":"session_meta"`)
+	assert.Contains(t, out, "target hermes message")
+	assert.NotContains(t, out, "sibling hermes message")
+
+	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
+		assert.JSONEq(t, line, line)
+	}
+}
+
 func TestSessionExport_AiderVirtualPathStreamsOnlySelectedRun(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 
