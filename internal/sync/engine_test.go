@@ -1969,6 +1969,152 @@ func TestSyncPathsCodexCachedFingerprintStillRefreshesChangedTitle(t *testing.T)
 	assert.Equal(t, "preserve this message", msgs[0].Content)
 }
 
+func cacheCodexProviderFingerprint(
+	t *testing.T, engine *Engine, path string,
+) (string, int64) {
+	t.Helper()
+	factory, ok := engine.providerFactories[parser.AgentCodex]
+	require.True(t, ok)
+	provider := factory.NewProvider(parser.ProviderConfig{
+		Roots:        engine.agentDirs[parser.AgentCodex],
+		Machine:      engine.machine,
+		PathRewriter: engine.pathRewriter,
+	})
+	file := parser.DiscoveredFile{Agent: parser.AgentCodex, Path: path}
+	source, found, err := engine.providerSourceForDiscoveredFile(
+		context.Background(), provider, file,
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	fingerprint, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	key := providerProcessCacheKey(file, source, fingerprint)
+	require.NotEmpty(t, key)
+	return key, fingerprint.MTimeNS
+}
+
+func TestSyncPathsCodexCachedFailureWithoutStoredSessionStaysSkipped(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	dayDir := filepath.Join(codexDir, "2024", "01", "01")
+	require.NoError(t, os.MkdirAll(dayDir, 0o755))
+
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229ee"
+	path := filepath.Join(
+		dayDir, "rollout-2024-01-01T10-00-00-"+uuid+".jsonl",
+	)
+	require.NoError(t, os.WriteFile(path, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/home/user/code/project-a", "codex_cli_rs",
+			"2024-01-01T10:00:00Z",
+		),
+		testjsonl.CodexMsgJSON(
+			"user", "this source must stay suppressed", "2024-01-01T10:00:01Z",
+		),
+	)), 0o600))
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {codexDir},
+		},
+		Machine: "local",
+	})
+	cacheKey, mtime := cacheCodexProviderFingerprint(t, engine, path)
+	engine.cacheSkip(cacheKey, mtime)
+
+	engine.SyncPaths([]string{path})
+
+	sess, err := database.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err)
+	assert.Nil(t, sess,
+		"a cached failure without stored state must not be reparsed")
+	assert.Equal(t, mtime, engine.SnapshotSkipCache()[cacheKey],
+		"cached failure remains applicable after the skipped pass")
+}
+
+func TestSyncPathsCodexCachedTitleRefreshUsesRewrittenDBPath(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	dayDir := filepath.Join(codexDir, "2024", "01", "01")
+	require.NoError(t, os.MkdirAll(dayDir, 0o755))
+
+	const uuid = "019eb791-cf7d-75c1-8439-9ed74c1229ef"
+	filename := "rollout-2024-01-01T10-00-00-" + uuid + ".jsonl"
+	path := filepath.Join(dayDir, filename)
+	logicalPath := "remote:/sessions/" + filename
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			uuid, "/home/user/code/project-a", "codex_cli_rs",
+			"2024-01-01T10:00:00Z",
+		),
+		testjsonl.CodexMsgJSON(
+			"user", "preserve rewritten session", "2024-01-01T10:00:01Z",
+		),
+	)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	indexPath := filepath.Join(root, parser.CodexSessionIndexFilename)
+	require.NoError(t, os.WriteFile(indexPath, []byte(
+		`{"id":"`+uuid+`","thread_name":"Original title"}`+"\n",
+	), 0o600))
+	transcriptTime := time.Now().Add(-2 * time.Hour).Truncate(time.Second)
+	indexTime := time.Now().Add(-time.Hour).Truncate(time.Second)
+	require.NoError(t, os.Chtimes(path, transcriptTime, transcriptTime))
+	require.NoError(t, os.Chtimes(indexPath, indexTime, indexTime))
+
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {codexDir},
+		},
+		Machine:  "remote",
+		IDPrefix: "remote~",
+		PathRewriter: func(candidate string) string {
+			if filepath.Clean(candidate) == filepath.Clean(path) {
+				return logicalPath
+			}
+			return "remote:" + candidate
+		},
+	})
+	engine.SyncAll(context.Background(), nil)
+
+	const sessionID = "remote~codex:" + uuid
+	before, err := database.GetSessionFull(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.NotNil(t, before.FilePath)
+	require.NotNil(t, before.FileMtime)
+	require.NotNil(t, before.SessionName)
+	assert.Equal(t, logicalPath, *before.FilePath)
+	assert.Equal(t, "Original title", *before.SessionName)
+	cacheKey, mtime := cacheCodexProviderFingerprint(t, engine, path)
+	engine.cacheSkip(cacheKey, mtime)
+	require.Equal(t, mtime, engine.SnapshotSkipCache()[cacheKey])
+
+	require.NoError(t, os.WriteFile(indexPath, []byte(
+		`{"id":"`+uuid+`","thread_name":"Renamed title"}`+"\n",
+	), 0o600))
+	storedMtime := time.Unix(0, *before.FileMtime)
+	require.NoError(t, os.Chtimes(indexPath, storedMtime, storedMtime))
+	indexInfo, err := os.Stat(indexPath)
+	require.NoError(t, err)
+	require.Equal(t, *before.FileMtime, indexInfo.ModTime().UnixNano())
+
+	engine.SyncPaths([]string{path})
+
+	after, err := database.GetSessionFull(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	require.NotNil(t, after.SessionName)
+	require.NotNil(t, after.FilePath)
+	assert.Equal(t, "Renamed title", *after.SessionName)
+	assert.Equal(t, logicalPath, *after.FilePath)
+	assert.False(t, after.LastWriteIncremental)
+	msgs, err := database.GetAllMessages(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "preserve rewritten session", msgs[0].Content)
+}
+
 func TestProcessFileCodexDBFreshSkipIsNotCached(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
