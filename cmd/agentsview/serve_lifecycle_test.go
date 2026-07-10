@@ -348,21 +348,47 @@ func TestRecordedDaemonStillPresent(t *testing.T) {
 	live, ok := processCreateTimeMillis(os.Getpid())
 	require.True(t, ok)
 
-	assert.True(t, recordedDaemonStillPresent(daemon.RuntimeRecord{
-		PID: os.Getpid(),
-		Metadata: map[string]string{
-			runtimeCreateTime: strconv.FormatInt(live, 10),
+	tests := []struct {
+		name     string
+		pid      int
+		recorded string
+		want     bool
+	}{
+		{
+			name:     "exact match",
+			pid:      os.Getpid(),
+			recorded: strconv.FormatInt(live, 10),
+			want:     true,
 		},
-	}), "exact create-time match means the daemon is still present")
+		{
+			name:     "proven mismatch",
+			pid:      os.Getpid(),
+			recorded: strconv.FormatInt(live+1, 10),
+			want:     false,
+		},
+		{name: "missing value", pid: os.Getpid(), want: true},
+		{name: "malformed value", pid: os.Getpid(), recorded: "not-a-time", want: true},
+		{name: "zero value", pid: os.Getpid(), recorded: "0", want: true},
+		{name: "negative value", pid: os.Getpid(), recorded: "-1", want: true},
+		{
+			name:     "live lookup unavailable",
+			pid:      deadPID(t),
+			recorded: "1234",
+			want:     true,
+		},
+	}
 
-	assert.False(t, recordedDaemonStillPresent(daemon.RuntimeRecord{
-		PID:      os.Getpid(),
-		Metadata: map[string]string{runtimeCreateTime: "1"},
-	}), "mismatched create time means the PID was reused, daemon is gone")
-
-	assert.True(t, recordedDaemonStillPresent(daemon.RuntimeRecord{
-		PID: os.Getpid(),
-	}), "legacy record without a create time conservatively assumes presence")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := daemon.RuntimeRecord{
+				PID: tt.pid,
+				Metadata: map[string]string{
+					runtimeCreateTime: tt.recorded,
+				},
+			}
+			assert.Equal(t, tt.want, recordedDaemonStillPresent(rec))
+		})
+	}
 }
 
 func TestStopDaemonProcessRemovesRecordWhenPIDReused(t *testing.T) {

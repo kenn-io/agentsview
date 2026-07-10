@@ -361,16 +361,13 @@ func stopDaemonProcess(rec daemon.RuntimeRecord, grace time.Duration) error {
 }
 
 // recordedDaemonStillPresent reports whether rec.PID still belongs to the
-// recorded daemon. With a persisted create time it is an exact identity match,
-// so a PID reused by an unrelated process is reported as not present. Without a
-// create time (legacy record) it conservatively assumes the live PID is still
-// the daemon.
+// recorded daemon. A valid mismatched create time proves that an unrelated
+// process reused the PID. Missing, invalid, or unavailable identity evidence is
+// treated conservatively so an ownership record is not removed on uncertainty.
 func recordedDaemonStillPresent(rec daemon.RuntimeRecord) bool {
-	raw := rec.Metadata[runtimeCreateTime]
-	if raw == "" {
-		return true
-	}
-	return processCreateTimeMatches(rec.PID, raw)
+	return processCreateTimeStateForPID(
+		rec.PID, rec.Metadata[runtimeCreateTime],
+	) != processCreateTimeMismatch
 }
 
 // waitForProcessExit polls until pid is gone or timeout elapses. It reports
