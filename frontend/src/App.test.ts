@@ -4,6 +4,8 @@ import { hasVisibleSegments } from "./lib/utils/content-parser.js";
 import { findUserPromptOrdinal } from "./App.svelte";
 import sourceRaw from "./App.svelte?raw";
 import { SESSION_FILTER_KEYS } from "./lib/stores/sessionRouteParams.js";
+import { isSystemMessage } from "./lib/utils/messages.js";
+import type { Message } from "./lib/api/types.js";
 
 const source = sourceRaw.replace(/\r\n/g, "\n");
 
@@ -16,6 +18,19 @@ function appSourceSlice(startMarker: string, endMarker: string): string {
 }
 
 describe("App session URL date state", () => {
+  it("uses the transcript classifier for visible system subtypes in its baseline", () => {
+    const visibleContinuation = {
+      is_system: true,
+      source_subtype: "continuation",
+    } as Message;
+
+    expect(isSystemMessage(visibleContinuation)).toBe(false);
+    expect(source).toContain('import { isSystemMessage } from "./lib/utils/messages.js";');
+    expect(source).toContain(
+      "messages.messages.filter((message) => !isSystemMessage(message))",
+    );
+  });
+
   it("treats rolling window and termination as sessions route params", () => {
     expect(SESSION_FILTER_KEYS.has("window_days")).toBe(true);
     expect(SESSION_FILTER_KEYS.has("termination")).toBe(true);

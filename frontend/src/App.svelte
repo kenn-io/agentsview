@@ -80,6 +80,7 @@
   import { setupVisibilityHealthCheck } from "./lib/utils/health.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
   import { shouldAutoSwitchTranscriptModeToNormal } from "./lib/utils/transcript-mode.js";
+  import { isSystemMessage } from "./lib/utils/messages.js";
   import {
     filterParamsEqual,
     hasFilterParams,
@@ -173,7 +174,7 @@
     const messageSessionId = messages.sessionId;
     const loading = messages.loading;
     const initialLoadSucceeded = messages.initialLoadSucceeded;
-    const displayMessages = messages.messages.filter((message) => !message.is_system);
+    const displayMessages = messages.messages.filter((message) => !isSystemMessage(message));
     const displayOrdinal = displayMessages.at(-1)?.ordinal ?? -1;
     const displayCount = displayMessages.length;
     const eligibleAcknowledgedTotal = messages.hasCompleteMessageRange()
