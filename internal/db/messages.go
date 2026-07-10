@@ -1095,6 +1095,7 @@ func (db *DB) ReplaceSessionMessages(
 		return fmt.Errorf("beginning tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	var pendingRecallRevocations recallEvidenceRevocationEvents
 
 	if useDiff {
 		if err := applySessionMessageDiffTx(tx, sessionID, plan); err != nil {
@@ -1105,7 +1106,7 @@ func (db *DB) ReplaceSessionMessages(
 	}
 	if !useDiff || len(plan.updates) > 0 {
 		if err := reconcileRecallEvidenceForSessionTx(
-			context.Background(), tx, sessionID,
+			context.Background(), tx, sessionID, &pendingRecallRevocations,
 		); err != nil {
 			return err
 		}
@@ -1128,7 +1129,11 @@ func (db *DB) ReplaceSessionMessages(
 	if err := invalidateSessionSignalsTx(tx, sessionID); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	pendingRecallRevocations.flush()
+	return nil
 }
 
 // replaceSessionMessagesTx performs the full message-replace sequence within
@@ -1252,6 +1257,7 @@ func (db *DB) ReplaceSessionContent(
 		return fmt.Errorf("beginning tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	var pendingRecallRevocations recallEvidenceRevocationEvents
 
 	if useDiff {
 		if err := applySessionMessageDiffTx(tx, sessionID, plan); err != nil {
@@ -1262,7 +1268,7 @@ func (db *DB) ReplaceSessionContent(
 	}
 	if !useDiff || len(plan.updates) > 0 {
 		if err := reconcileRecallEvidenceForSessionTx(
-			context.Background(), tx, sessionID,
+			context.Background(), tx, sessionID, &pendingRecallRevocations,
 		); err != nil {
 			return err
 		}
@@ -1285,7 +1291,11 @@ func (db *DB) ReplaceSessionContent(
 		signals.SecretLeakCount, signals.SecretsRulesVersion); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	pendingRecallRevocations.flush()
+	return nil
 }
 
 func updateSessionAutomationFromMessagesTx(

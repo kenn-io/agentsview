@@ -267,7 +267,20 @@ func TestRecallEvidenceSourceUUIDLookupUsesPartialIndex(t *testing.T) {
 		details = append(details, detail)
 	}
 	require.NoError(t, rows.Err())
-	assert.Contains(t, details, "SEARCH messages USING INDEX idx_messages_source_uuid (source_uuid=?)")
+	usesSourceUUIDIndex := false
+	for _, detail := range details {
+		if strings.Contains(detail, "SEARCH messages") &&
+			strings.Contains(detail, "idx_messages_source_uuid") {
+			usesSourceUUIDIndex = true
+			break
+		}
+	}
+	assert.True(
+		t,
+		usesSourceUUIDIndex,
+		"query plan must search via idx_messages_source_uuid: %v",
+		details,
+	)
 }
 
 func TestRecallEvidenceReplaceResolvesMixedEndpointsIndependently(t *testing.T) {
@@ -382,6 +395,46 @@ func TestRecallEvidenceDiffRevokesChangedContent(t *testing.T) {
 	got := requireRecallEntry(t, d, "m1")
 	assert.False(t, got.ProvenanceOK)
 	assert.Equal(t, 10, got.Evidence[0].MessageStartOrdinal)
+}
+
+func TestRecallEvidenceReplaceSessionContentLogsCommittedRevocation(t *testing.T) {
+	d := testDB(t)
+	seedRecallEvidenceWindow(t, d, "replace-content", 10, "stable", "")
+	insertVerifiedRecallSelection(
+		t,
+		d,
+		"content-entry",
+		"replace-content",
+		10,
+		11,
+		[]string{"tool-a"},
+	)
+	messages, err := d.GetAllMessages(context.Background(), "replace-content")
+	require.NoError(t, err)
+	messages[0].Content = "Changed by ReplaceSessionContent."
+	messages[0].ContentLength = len(messages[0].Content)
+	logs := captureRecallEvidenceLog(t)
+
+	err = d.ReplaceSessionContent(
+		"replace-content",
+		messages,
+		SessionSignalUpdate{},
+		nil,
+	)
+
+	require.NoError(t, err)
+	entry := requireRecallEntry(t, d, "content-entry")
+	assert.False(t, entry.ProvenanceOK)
+	stored, err := d.GetAllMessages(context.Background(), "replace-content")
+	require.NoError(t, err)
+	require.Len(t, stored, 3)
+	assert.Equal(t, "Changed by ReplaceSessionContent.", stored[0].Content)
+	assert.Equal(
+		t,
+		"recall: revoked provenance entry=content-entry "+
+			"session=replace-content reason=content_digest_mismatch",
+		strings.TrimSpace(logs.String()),
+	)
 }
 
 func TestRecallEvidenceReplaceKeepsOrdinalFallbackWhenDigestMatches(t *testing.T) {
@@ -734,10 +787,18 @@ func TestRecallEvidenceAppendPreservesMetadata(t *testing.T) {
 func TestRecallEvidenceReplaceRollbackOnReconcileFailure(t *testing.T) {
 	d := testDB(t)
 	seedRecallEvidenceWindow(t, d, "rollback", 10, "stable", "")
+	insertVerifiedRecallSelection(
+		t, d, "a-revoked", "rollback", 10, 11, []string{"tool-a"},
+	)
 	original := insertVerifiedRecallSelection(
-		t, d, "m1", "rollback", 10, 11, []string{"tool-a"},
+		t, d, "z-updated", "rollback", 10, 11, []string{"tool-a"},
 	)
 	_, err := d.getWriter().Exec(`
+		UPDATE recall_evidence
+		SET content_digest = 'stale-digest'
+		WHERE entry_id = 'a-revoked'`)
+	require.NoError(t, err)
+	_, err = d.getWriter().Exec(`
 		CREATE TRIGGER fail_recall_evidence_reconcile
 		BEFORE UPDATE ON recall_evidence
 		BEGIN
@@ -745,20 +806,184 @@ func TestRecallEvidenceReplaceRollbackOnReconcileFailure(t *testing.T) {
 		END`)
 	require.NoError(t, err)
 	shifted := shiftedRecallMessages(t, d, "rollback", 1)
+	logs := captureRecallEvidenceLog(t)
 
 	err = d.ReplaceSessionMessages("rollback", shifted)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "forced reconciliation failure")
+	assert.Empty(t, logs.String(), "rolled-back revocations must not be logged")
 	messages, readErr := d.GetAllMessages(context.Background(), "rollback")
 	require.NoError(t, readErr)
 	require.Len(t, messages, 3)
 	assert.Equal(t, 10, messages[0].Ordinal)
 	assert.Equal(t, "Run the formatter.", messages[0].Content)
-	got := requireRecallEntry(t, d, "m1")
-	assert.True(t, got.ProvenanceOK)
-	assert.Equal(t, 10, got.Evidence[0].MessageStartOrdinal)
-	assert.Equal(t, original.ContentDigest, got.Evidence[0].ContentDigest)
+	revoked := requireRecallEntry(t, d, "a-revoked")
+	assert.True(t, revoked.ProvenanceOK)
+	require.Len(t, revoked.Evidence, 1)
+	assert.Equal(t, "stale-digest", revoked.Evidence[0].ContentDigest)
+	updated := requireRecallEntry(t, d, "z-updated")
+	assert.True(t, updated.ProvenanceOK)
+	require.Len(t, updated.Evidence, 1)
+	assert.Equal(t, 10, updated.Evidence[0].MessageStartOrdinal)
+	assert.Equal(t, original.ContentDigest, updated.Evidence[0].ContentDigest)
+}
+
+func TestRecallEvidenceWriteSessionBatchDiscardsSavepointRevocations(t *testing.T) {
+	d := testDB(t)
+	seedRecallEvidenceWindow(t, d, "batch-failed", 10, "failed", "")
+	seedRecallEvidenceWindow(t, d, "batch-committed", 10, "committed", "")
+	insertVerifiedRecallSelection(
+		t,
+		d,
+		"failed-entry",
+		"batch-failed",
+		10,
+		11,
+		[]string{"tool-a"},
+	)
+	insertVerifiedRecallSelection(
+		t,
+		d,
+		"committed-entry",
+		"batch-committed",
+		10,
+		11,
+		[]string{"tool-a"},
+	)
+	failedMessages, err := d.GetAllMessages(
+		context.Background(),
+		"batch-failed",
+	)
+	require.NoError(t, err)
+	failedMessages[0].Content = "Changed before savepoint rollback."
+	failedMessages[0].ContentLength = len(failedMessages[0].Content)
+	committedMessages, err := d.GetAllMessages(
+		context.Background(),
+		"batch-committed",
+	)
+	require.NoError(t, err)
+	committedMessages[0].Content = "Changed and committed."
+	committedMessages[0].ContentLength = len(committedMessages[0].Content)
+	failedSession, err := d.GetSession(context.Background(), "batch-failed")
+	require.NoError(t, err)
+	require.NotNil(t, failedSession)
+	committedSession, err := d.GetSession(
+		context.Background(),
+		"batch-committed",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, committedSession)
+	_, err = d.getWriter().Exec(`
+		CREATE TRIGGER fail_batch_after_reconcile
+		BEFORE UPDATE OF data_version ON sessions
+		WHEN OLD.id = 'batch-failed'
+		BEGIN
+			SELECT RAISE(ABORT, 'forced savepoint failure');
+		END`)
+	require.NoError(t, err)
+	logs := captureRecallEvidenceLog(t)
+
+	result, err := d.WriteSessionBatch([]SessionBatchWrite{
+		{
+			Session:         *failedSession,
+			Messages:        failedMessages,
+			DataVersion:     999,
+			ReplaceMessages: true,
+		},
+		{
+			Session:         *committedSession,
+			Messages:        committedMessages,
+			DataVersion:     999,
+			ReplaceMessages: true,
+		},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.WrittenSessions)
+	assert.Equal(t, 1, result.FailedSessions)
+	require.Len(t, result.Errors, 1)
+	assert.Contains(t, result.Errors[0].Error(), "forced savepoint failure")
+	failed := requireRecallEntry(t, d, "failed-entry")
+	assert.True(t, failed.ProvenanceOK)
+	failedStored, err := d.GetAllMessages(context.Background(), "batch-failed")
+	require.NoError(t, err)
+	require.Len(t, failedStored, 3)
+	assert.Equal(t, "Run the formatter.", failedStored[0].Content)
+	committed := requireRecallEntry(t, d, "committed-entry")
+	assert.False(t, committed.ProvenanceOK)
+	committedStored, err := d.GetAllMessages(
+		context.Background(),
+		"batch-committed",
+	)
+	require.NoError(t, err)
+	require.Len(t, committedStored, 3)
+	assert.Equal(t, "Changed and committed.", committedStored[0].Content)
+	assert.Equal(
+		t,
+		"recall: revoked provenance entry=committed-entry "+
+			"session=batch-committed reason=content_digest_mismatch",
+		strings.TrimSpace(logs.String()),
+	)
+}
+
+func TestRecallEvidenceWriteSessionBatchAtomicLogsOnlyAfterCommit(t *testing.T) {
+	d := testDB(t)
+	seedRecallEvidenceWindow(t, d, "batch-atomic", 10, "atomic", "")
+	insertVerifiedRecallSelection(
+		t,
+		d,
+		"atomic-entry",
+		"batch-atomic",
+		10,
+		11,
+		[]string{"tool-a"},
+	)
+	messages, err := d.GetAllMessages(context.Background(), "batch-atomic")
+	require.NoError(t, err)
+	messages[0].Content = "Changed only if the atomic batch commits."
+	messages[0].ContentLength = len(messages[0].Content)
+	session, err := d.GetSession(context.Background(), "batch-atomic")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	write := SessionBatchWrite{
+		Session:         *session,
+		Messages:        messages,
+		ReplaceMessages: true,
+	}
+	logs := captureRecallEvidenceLog(t)
+
+	result, err := d.WriteSessionBatchAtomic(
+		[]SessionBatchWrite{write},
+		func() error { return assert.AnError },
+	)
+
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Zero(t, result.WrittenSessions)
+	assert.Empty(t, logs.String(), "rejected atomic writes must not be logged")
+	entry := requireRecallEntry(t, d, "atomic-entry")
+	assert.True(t, entry.ProvenanceOK)
+	stored, err := d.GetAllMessages(context.Background(), "batch-atomic")
+	require.NoError(t, err)
+	require.Len(t, stored, 3)
+	assert.Equal(t, "Run the formatter.", stored[0].Content)
+
+	logs.Reset()
+	result, err = d.WriteSessionBatchAtomic([]SessionBatchWrite{write})
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.WrittenSessions)
+	entry = requireRecallEntry(t, d, "atomic-entry")
+	assert.False(t, entry.ProvenanceOK)
+	stored, err = d.GetAllMessages(context.Background(), "batch-atomic")
+	require.NoError(t, err)
+	require.Len(t, stored, 3)
+	assert.Equal(t, "Changed only if the atomic batch commits.", stored[0].Content)
+	assert.Equal(
+		t,
+		"recall: revoked provenance entry=atomic-entry "+
+			"session=batch-atomic reason=content_digest_mismatch",
+		strings.TrimSpace(logs.String()),
+	)
 }
 
 func TestRecallEvidenceWriteSessionBatchRemapsStableEndpoints(t *testing.T) {

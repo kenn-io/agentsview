@@ -61,6 +61,7 @@ func (db *DB) WriteSessionBatch(
 		return result, fmt.Errorf("beginning batch tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	var pendingRecallRevocations recallEvidenceRevocationEvents
 
 	for i, write := range writes {
 		write = sanitizeSessionBatchWrite(write)
@@ -71,7 +72,12 @@ func (db *DB) WriteSessionBatch(
 			)
 		}
 
-		messagesWritten, err := writeOneSessionBatchTx(tx, write)
+		var sessionRecallRevocations recallEvidenceRevocationEvents
+		messagesWritten, err := writeOneSessionBatchTx(
+			tx,
+			write,
+			&sessionRecallRevocations,
+		)
 		switch {
 		case err == nil:
 			if _, err := tx.Exec("RELEASE SAVEPOINT " + savepoint); err != nil {
@@ -80,6 +86,7 @@ func (db *DB) WriteSessionBatch(
 					savepoint, err,
 				)
 			}
+			pendingRecallRevocations.appendReleased(sessionRecallRevocations)
 			result.WrittenSessions++
 			result.WrittenMessages += messagesWritten
 		case errors.Is(err, ErrSessionExcluded),
@@ -104,6 +111,7 @@ func (db *DB) WriteSessionBatch(
 	if err := tx.Commit(); err != nil {
 		return result, fmt.Errorf("committing batch tx: %w", err)
 	}
+	pendingRecallRevocations.flush()
 	return result, nil
 }
 
@@ -130,10 +138,15 @@ func (db *DB) WriteSessionBatchAtomic(
 		return result, fmt.Errorf("beginning batch tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	var pendingRecallRevocations recallEvidenceRevocationEvents
 
 	for _, write := range writes {
 		write = sanitizeSessionBatchWrite(write)
-		messagesWritten, err := writeOneSessionBatchTx(tx, write)
+		messagesWritten, err := writeOneSessionBatchTx(
+			tx,
+			write,
+			&pendingRecallRevocations,
+		)
 		if err != nil {
 			result.WrittenSessions = 0
 			result.WrittenMessages = 0
@@ -166,6 +179,7 @@ func (db *DB) WriteSessionBatchAtomic(
 	if err := tx.Commit(); err != nil {
 		return result, fmt.Errorf("committing batch tx: %w", err)
 	}
+	pendingRecallRevocations.flush()
 	return result, nil
 }
 
@@ -267,7 +281,9 @@ func rollbackSavepoint(tx *sql.Tx, savepoint string) error {
 }
 
 func writeOneSessionBatchTx(
-	tx *sql.Tx, write SessionBatchWrite,
+	tx *sql.Tx,
+	write SessionBatchWrite,
+	pendingRecallRevocations *recallEvidenceRevocationEvents,
 ) (int, error) {
 	var excluded int
 	err := tx.QueryRow(
@@ -355,7 +371,10 @@ func writeOneSessionBatchTx(
 	}
 	if write.ReplaceMessages && sessionExists {
 		if err := reconcileRecallEvidenceForSessionTx(
-			context.Background(), tx, write.Session.ID,
+			context.Background(),
+			tx,
+			write.Session.ID,
+			pendingRecallRevocations,
 		); err != nil {
 			return 0, err
 		}

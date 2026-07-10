@@ -234,6 +234,7 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 		return fmt.Errorf("begin recall copy: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	var pendingRecallRevocations recallEvidenceRevocationEvents
 	if err := copyRecallQueryEventsFromAttachedTx(ctx, tx); err != nil {
 		return err
 	}
@@ -286,16 +287,25 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 		  AND session_id IN (SELECT id FROM main.sessions)`); err != nil {
 		return fmt.Errorf("copying recall evidence: %w", err)
 	}
-	if err := revokeRecallEntriesWithDroppedEvidenceTx(ctx, tx); err != nil {
+	if err := revokeRecallEntriesWithDroppedEvidenceTx(
+		ctx,
+		tx,
+		&pendingRecallRevocations,
+	); err != nil {
 		return err
 	}
-	if err := reconcileAllRecallEvidenceTx(ctx, tx); err != nil {
+	if err := reconcileAllRecallEvidenceTx(
+		ctx,
+		tx,
+		&pendingRecallRevocations,
+	); err != nil {
 		return fmt.Errorf("reconciling copied recall evidence: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit recall copy: %w", err)
 	}
+	pendingRecallRevocations.flush()
 
 	if total > copied {
 		log.Printf(
@@ -310,6 +320,7 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 func revokeRecallEntriesWithDroppedEvidenceTx(
 	ctx context.Context,
 	tx *sql.Tx,
+	pending *recallEvidenceRevocationEvents,
 ) error {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT entry.id, entry.source_session_id
@@ -355,6 +366,7 @@ func revokeRecallEntriesWithDroppedEvidenceTx(
 			entry.id,
 			entry.sessionID,
 			recallEvidenceRevocationEvidenceDroppedDuringResync,
+			pending,
 		); err != nil {
 			return fmt.Errorf("revoking recall with dropped evidence: %w", err)
 		}

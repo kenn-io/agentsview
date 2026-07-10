@@ -55,6 +55,33 @@ const (
 	recallEvidenceRevocationEvidenceDroppedDuringResync recallEvidenceRevocationReason = "evidence_dropped_during_resync"
 )
 
+type recallEvidenceRevocationEvent struct {
+	entryID   string
+	sessionID string
+	reason    recallEvidenceRevocationReason
+}
+
+// recallEvidenceRevocationEvents buffers diagnostics until the transaction
+// owner confirms its outermost commit succeeded.
+type recallEvidenceRevocationEvents []recallEvidenceRevocationEvent
+
+func (events *recallEvidenceRevocationEvents) appendReleased(
+	released recallEvidenceRevocationEvents,
+) {
+	*events = append(*events, released...)
+}
+
+func (events recallEvidenceRevocationEvents) flush() {
+	for _, event := range events {
+		log.Printf(
+			"recall: revoked provenance entry=%s session=%s reason=%s",
+			event.entryID,
+			event.sessionID,
+			event.reason,
+		)
+	}
+}
+
 // RecallEvidenceWindow is the host-authorized transcript region supplied to an
 // extractor. Its authorization digest binds the source session, exact ordinal
 // coordinates, stable message identities, visible content, and tool calls.
@@ -534,6 +561,7 @@ func reconcileRecallEvidenceForSessionTx(
 	ctx context.Context,
 	tx *sql.Tx,
 	sessionID string,
+	pending *recallEvidenceRevocationEvents,
 ) error {
 	groups, err := loadTrustedRecallEvidenceGroupsTx(ctx, tx, sessionID)
 	if err != nil {
@@ -559,6 +587,7 @@ func reconcileRecallEvidenceForSessionTx(
 					group.key.entryID,
 					sessionID,
 					recallEvidenceRevocationStartEndpointUnresolved,
+					pending,
 				); err != nil {
 					return err
 				}
@@ -582,6 +611,7 @@ func reconcileRecallEvidenceForSessionTx(
 					group.key.entryID,
 					sessionID,
 					recallEvidenceRevocationEndEndpointUnresolved,
+					pending,
 				); err != nil {
 					return err
 				}
@@ -595,6 +625,7 @@ func reconcileRecallEvidenceForSessionTx(
 				group.key.entryID,
 				sessionID,
 				recallEvidenceRevocationInvalidResolvedRange,
+				pending,
 			); err != nil {
 				return err
 			}
@@ -616,6 +647,7 @@ func reconcileRecallEvidenceForSessionTx(
 					group.key.entryID,
 					sessionID,
 					recallEvidenceRevocationWindowInvalid,
+					pending,
 				); err != nil {
 					return err
 				}
@@ -636,6 +668,7 @@ func reconcileRecallEvidenceForSessionTx(
 					group.key.entryID,
 					sessionID,
 					recallEvidenceRevocationSelectionInvalid,
+					pending,
 				); err != nil {
 					return err
 				}
@@ -650,6 +683,7 @@ func reconcileRecallEvidenceForSessionTx(
 				group.key.entryID,
 				sessionID,
 				recallEvidenceRevocationMissingDigest,
+				pending,
 			); err != nil {
 				return err
 			}
@@ -662,6 +696,7 @@ func reconcileRecallEvidenceForSessionTx(
 				group.key.entryID,
 				sessionID,
 				recallEvidenceRevocationContentDigestMismatch,
+				pending,
 			); err != nil {
 				return err
 			}
@@ -789,6 +824,7 @@ func revokeRecallEvidenceEntryTx(
 	entryID string,
 	sessionID string,
 	reason recallEvidenceRevocationReason,
+	pending *recallEvidenceRevocationEvents,
 ) error {
 	result, err := tx.ExecContext(ctx, `
 		UPDATE recall_entries
@@ -813,12 +849,11 @@ func revokeRecallEvidenceEntryTx(
 		)
 	}
 	if affected == 1 {
-		log.Printf(
-			"recall: revoked provenance entry=%s session=%s reason=%s",
-			entryID,
-			sessionID,
-			reason,
-		)
+		*pending = append(*pending, recallEvidenceRevocationEvent{
+			entryID:   entryID,
+			sessionID: sessionID,
+			reason:    reason,
+		})
 	}
 	return nil
 }
@@ -826,6 +861,7 @@ func revokeRecallEvidenceEntryTx(
 func reconcileAllRecallEvidenceTx(
 	ctx context.Context,
 	tx *sql.Tx,
+	pending *recallEvidenceRevocationEvents,
 ) error {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT DISTINCT e.session_id
@@ -856,6 +892,7 @@ func reconcileAllRecallEvidenceTx(
 			ctx,
 			tx,
 			sessionID,
+			pending,
 		); err != nil {
 			return err
 		}
