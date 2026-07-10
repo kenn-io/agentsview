@@ -375,6 +375,7 @@ type IncrementalOutcome struct {
 	PeakContextTokens    int
 	HasTotalOutputTokens bool
 	HasPeakContextTokens bool
+	TerminationStatus    *TerminationStatus
 	ForceReplace         bool
 }
 

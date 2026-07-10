@@ -12,22 +12,26 @@ import (
 var _ Provider = (*codexProvider)(nil)
 
 type codexProviderFactory struct {
-	def AgentDef
+	def         AgentDef
+	cursorCache *codexCursorCache
 }
 
 func newCodexProviderFactory(def AgentDef) ProviderFactory {
-	return codexProviderFactory{def: cloneAgentDef(def)}
+	return &codexProviderFactory{
+		def:         cloneAgentDef(def),
+		cursorCache: newProductionCodexCursorCache(),
+	}
 }
 
-func (f codexProviderFactory) Definition() AgentDef {
+func (f *codexProviderFactory) Definition() AgentDef {
 	return cloneAgentDef(f.def)
 }
 
-func (f codexProviderFactory) Capabilities() Capabilities {
+func (f *codexProviderFactory) Capabilities() Capabilities {
 	return codexProviderCapabilities()
 }
 
-func (f codexProviderFactory) NewProvider(cfg ProviderConfig) Provider {
+func (f *codexProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 	cfg = cfg.Clone()
 	return &codexProvider{
 		ProviderBase: ProviderBase{
@@ -35,13 +39,15 @@ func (f codexProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 			Caps:   codexProviderCapabilities(),
 			Config: cfg,
 		},
-		sources: newCodexSourceSet(cfg.Roots),
+		sources:     newCodexSourceSet(cfg.Roots),
+		cursorCache: f.cursorCache,
 	}
 }
 
 type codexProvider struct {
 	ProviderBase
-	sources codexSourceSet
+	sources     codexSourceSet
+	cursorCache *codexCursorCache
 }
 
 func (p *codexProvider) Discover(ctx context.Context) ([]SourceRef, error) {
@@ -156,10 +162,10 @@ func (p *codexProvider) Parse(
 			DataVersion: DataVersionCurrent,
 		}},
 		ResultSetComplete: true,
-		// Codex transcripts are append-only and the provider always emits a full
-		// parse (it does not advertise incremental append). A full parse is the
-		// authoritative message set, so force-replace the stored rows; this
-		// preserves the legacy behavior where a late token_count line appended to
+		// A requested full parse is the authoritative message set, so
+		// force-replace the stored rows; this remains distinct from the provider's
+		// incremental append path and preserves the legacy behavior where a late
+		// token_count line appended to
 		// an existing turn rewrites the stored message instead of being dropped by
 		// an append-only write.
 		ForceReplace: true,
@@ -168,12 +174,72 @@ func (p *codexProvider) Parse(
 
 func (p *codexProvider) ParseIncremental(
 	ctx context.Context,
-	_ IncrementalRequest,
+	req IncrementalRequest,
 ) (IncrementalOutcome, IncrementalStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return IncrementalOutcome{}, IncrementalUnsupported, err
 	}
-	return IncrementalOutcome{}, IncrementalUnsupported, nil
+	path, ok := p.sources.pathFromSource(req.Source)
+	if !ok {
+		return IncrementalOutcome{}, IncrementalUnsupported,
+			fmt.Errorf("codex source path unavailable")
+	}
+	if req.Offset < 0 || req.Fingerprint.Size < req.Offset {
+		return IncrementalOutcome{ForceReplace: true},
+			IncrementalNeedsFullParse, nil
+	}
+	safe, err := codexSafeResumeOffset(path, req.Offset)
+	if err != nil {
+		return IncrementalOutcome{}, IncrementalNeedsFullParse, err
+	}
+	if !safe {
+		return IncrementalOutcome{ForceReplace: true},
+			IncrementalNeedsFullParse, nil
+	}
+	if req.Fingerprint.Size == req.Offset {
+		return IncrementalOutcome{}, IncrementalNoNewData, nil
+	}
+
+	result, err := p.parseSessionFromDetailed(
+		path,
+		req.Offset,
+		req.StartOrdinal,
+		false,
+	)
+	if err != nil {
+		if IsIncrementalFullParseFallback(err) {
+			return IncrementalOutcome{ForceReplace: true},
+				IncrementalNeedsFullParse, nil
+		}
+		return IncrementalOutcome{}, IncrementalNeedsFullParse, err
+	}
+	if result.consumedBytes == 0 {
+		return IncrementalOutcome{}, IncrementalNoNewData, nil
+	}
+	p.cursorCache.Put(
+		path,
+		req.Offset+result.consumedBytes,
+		result.inode,
+		result.device,
+		result.cursor,
+	)
+
+	totalOut, peakCtx, hasTotalOut, hasPeakCtx :=
+		codexProviderTokenTotals(result.messages)
+	termination := codexIncrementalTermination(result.cursor.lastTaskEvent)
+	return IncrementalOutcome{
+		SessionID:            req.SessionID,
+		Messages:             result.messages,
+		EndedAt:              result.endedAt,
+		ConsumedBytes:        result.consumedBytes,
+		MessageCount:         len(result.messages),
+		UserMessageCount:     codexProviderUserMessageCount(result.messages),
+		TotalOutputTokens:    totalOut,
+		PeakContextTokens:    peakCtx,
+		HasTotalOutputTokens: hasTotalOut,
+		HasPeakContextTokens: hasPeakCtx,
+		TerminationStatus:    termination,
+	}, IncrementalApplied, nil
 }
 
 type codexSource struct {
@@ -466,10 +532,13 @@ func (s codexSourceSet) Fingerprint(
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
+	inode, device := sourceFileIdentity(info)
 	return SourceFingerprint{
 		Key:     firstNonEmptyJSONLString(source.FingerprintKey, source.Key, path),
 		Size:    info.Size(),
 		MTimeNS: CodexEffectiveMtime(path, info.ModTime().UnixNano()),
+		Inode:   inode,
+		Device:  device,
 		Hash:    hash,
 	}, nil
 }
@@ -611,6 +680,43 @@ func preferCodexSource(candidate, current SourceRef) bool {
 	return candidate.DisplayPath < current.DisplayPath
 }
 
+func codexProviderUserMessageCount(messages []ParsedMessage) int {
+	count := 0
+	for _, message := range messages {
+		if message.Role == RoleUser && message.Content != "" {
+			count++
+		}
+	}
+	return count
+}
+
+func codexProviderTokenTotals(
+	messages []ParsedMessage,
+) (totalOut int, peakCtx int, hasTotalOut bool, hasPeakCtx bool) {
+	for _, message := range messages {
+		if message.HasOutputTokens {
+			totalOut += message.OutputTokens
+			hasTotalOut = true
+		}
+		if message.HasContextTokens &&
+			(!hasPeakCtx || message.ContextTokens > peakCtx) {
+			peakCtx = message.ContextTokens
+			hasPeakCtx = true
+		}
+	}
+	return totalOut, peakCtx, hasTotalOut, hasPeakCtx
+}
+
+func codexIncrementalTermination(
+	lastTaskEvent string,
+) *TerminationStatus {
+	status := classifyCodexTermination(lastTaskEvent)
+	if status == "" {
+		return nil
+	}
+	return &status
+}
+
 func codexProviderCapabilities() Capabilities {
 	return Capabilities{
 		Source: SourceCapabilities{
@@ -619,7 +725,7 @@ func codexProviderCapabilities() Capabilities {
 			ClassifyChangedPath:  CapabilitySupported,
 			FindSource:           CapabilitySupported,
 			CompositeFingerprint: CapabilitySupported,
-			IncrementalAppend:    CapabilityNotApplicable,
+			IncrementalAppend:    CapabilitySupported,
 			MultiSessionSource:   CapabilityNotApplicable,
 			PerSessionErrors:     CapabilityNotApplicable,
 			ExcludedSessions:     CapabilityNotApplicable,

@@ -1952,6 +1952,136 @@ func TestParseCodexSession_TerminationStatus(t *testing.T) {
 	})
 }
 
+func TestCodexCursorWarmColdParity(t *testing.T) {
+	prefix := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			"cursor-parity", "/workspace/project-a", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexTurnContextJSON("gpt-5.4", tsEarlyS1),
+		testjsonl.CodexMsgJSON("user", "First request", "2024-01-01T10:00:02Z"),
+		codexEventMsgJSON("task_started", "2024-01-01T10:00:03Z"),
+		testjsonl.CodexMsgJSON("assistant", "Working", "2024-01-01T10:00:04Z"),
+		codexEventMsgJSON("task_complete", "2024-01-01T10:00:05Z"),
+	)
+	path := createTestFile(t, "cursor-parity.jsonl", prefix)
+	warmProvider := newCodexTestProvider(t)
+	sess, prefixMessages, err := warmProvider.parseSession(path, "local", false)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, prefixMessages, 2)
+
+	prefixInfo, err := os.Stat(path)
+	require.NoError(t, err)
+	prefixOffset := prefixInfo.Size()
+	inode, device := sourceFileIdentity(prefixInfo)
+	_, cursorHit := warmProvider.cursorCache.Get(
+		path, prefixOffset, inode, device,
+	)
+	require.True(t, cursorHit, "full parse must seed the warm continuation cursor")
+
+	tail := testjsonl.JoinJSONL(
+		testjsonl.CodexTurnContextJSON("gpt-5.5", "2024-01-01T10:00:06Z"),
+		testjsonl.CodexMsgJSON("user", "Second request", "2024-01-01T10:00:07Z"),
+		codexEventMsgJSON("task_started", "2024-01-01T10:00:08Z"),
+		testjsonl.CodexMsgJSON("assistant", "Second answer", "2024-01-01T10:00:09Z"),
+		codexEventMsgJSON("task_complete", "2024-01-01T10:00:10Z"),
+	)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(tail)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	warm, err := warmProvider.parseSessionFromDetailed(
+		path, prefixOffset, 2, false,
+	)
+	require.NoError(t, err)
+	coldProvider := newCodexTestProvider(t)
+	cold, err := coldProvider.parseSessionFromDetailed(
+		path, prefixOffset, 2, false,
+	)
+	require.NoError(t, err)
+
+	assert.Equal(t, cold, warm)
+	require.Len(t, warm.messages, 2)
+	assert.Equal(t, RoleUser, warm.messages[0].Role)
+	assert.Equal(t, "Second request", warm.messages[0].Content)
+	assert.Equal(t, 2, warm.messages[0].Ordinal)
+	assert.Equal(t, "gpt-5.5", warm.messages[0].Model)
+	assert.Equal(t, RoleAssistant, warm.messages[1].Role)
+	assert.Equal(t, "Second answer", warm.messages[1].Content)
+	assert.Equal(t, 3, warm.messages[1].Ordinal)
+	assert.Equal(t, "gpt-5.5", warm.messages[1].Model)
+	assert.Equal(t, "/workspace/project-a", warm.cursor.cwd)
+	assert.Equal(t, "task_complete", warm.cursor.lastTaskEvent)
+}
+
+func TestCodexPromptReplayDigestParity(t *testing.T) {
+	const prompt = "Implement the bounded continuation cursor"
+	initialEnvelope := "<recommended_plugins>\nplugin list\n</recommended_plugins>\n" +
+		"<environment_context>\n<cwd>/workspace/project-a</cwd>\n</environment_context>\n" +
+		prompt
+	prefix := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(
+			"cursor-replay", "/workspace/project-a", "codex_cli_rs", tsEarly,
+		),
+		testjsonl.CodexTurnContextJSON("gpt-5.4", tsEarlyS1),
+		testjsonl.CodexMsgJSON("user", initialEnvelope, "2024-01-01T10:00:02Z"),
+		testjsonl.CodexMsgJSON("assistant", "Starting", "2024-01-01T10:00:03Z"),
+		codexEventMsgJSON("turn_aborted", "2024-01-01T10:00:04Z"),
+	)
+	path := createTestFile(t, "cursor-replay.jsonl", prefix)
+	warmProvider := newCodexTestProvider(t)
+	sess, prefixMessages, err := warmProvider.parseSession(path, "local", false)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, prompt, sess.FirstMessage)
+	require.Len(t, prefixMessages, 2)
+	assert.Equal(t, prompt, prefixMessages[0].Content)
+
+	prefixInfo, err := os.Stat(path)
+	require.NoError(t, err)
+	prefixOffset := prefixInfo.Size()
+	inode, device := sourceFileIdentity(prefixInfo)
+	seed, cursorHit := warmProvider.cursorCache.Get(
+		path, prefixOffset, inode, device,
+	)
+	require.True(t, cursorHit, "full parse must seed the warm continuation cursor")
+	assert.True(t, seed.firstUserSeen)
+	assert.True(t, seed.mayReplayFirstUserPrompt)
+	assert.Equal(t, "turn_aborted", seed.lastTaskEvent)
+
+	tail := testjsonl.JoinJSONL(
+		testjsonl.CodexMsgJSON("user", prompt, "2024-01-01T10:00:05Z"),
+		testjsonl.CodexTurnContextJSON("gpt-5.5", "2024-01-01T10:00:06Z"),
+		testjsonl.CodexMsgJSON("assistant", "Cursor implemented", "2024-01-01T10:00:07Z"),
+		codexEventMsgJSON("task_complete", "2024-01-01T10:00:08Z"),
+	)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(tail)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	warm, err := warmProvider.parseSessionFromDetailed(
+		path, prefixOffset, 2, false,
+	)
+	require.NoError(t, err)
+	coldProvider := newCodexTestProvider(t)
+	cold, err := coldProvider.parseSessionFromDetailed(
+		path, prefixOffset, 2, false,
+	)
+	require.NoError(t, err)
+
+	assert.Equal(t, cold, warm)
+	require.Len(t, warm.messages, 1, "the first-prompt replay must be suppressed")
+	assert.Equal(t, RoleAssistant, warm.messages[0].Role)
+	assert.Equal(t, "Cursor implemented", warm.messages[0].Content)
+	assert.Equal(t, 2, warm.messages[0].Ordinal)
+	assert.Equal(t, "gpt-5.5", warm.messages[0].Model)
+	assert.Equal(t, "task_complete", warm.cursor.lastTaskEvent)
+}
+
 func TestParseCodexSessionFrom_Incremental(t *testing.T) {
 	t.Parallel()
 
