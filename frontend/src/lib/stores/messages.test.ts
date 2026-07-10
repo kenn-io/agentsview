@@ -140,6 +140,20 @@ describe('MessagesStore', () => {
     vi.clearAllMocks();
   });
 
+  it('marks the initial load successful only after messages load', async () => {
+    vi.mocked(api.getSession).mockResolvedValue(makeSession('s1', 1));
+    vi.mocked(api.getMessages).mockRejectedValue(new Error('offline'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await messages.loadSession('s1');
+
+    expect(messages.initialLoadSucceeded).toBe(false);
+
+    await setupSession('s1', 1, [makeMessage(0)]);
+
+    expect(messages.initialLoadSucceeded).toBe(true);
+  });
+
   it('should clear reload state when loading a new session', async () => {
     await setupSession('s1', 10);
     expect(messages.sessionId).toBe('s1');

@@ -172,10 +172,11 @@
     const id = sessions.activeSessionId;
     const messageSessionId = messages.sessionId;
     const loading = messages.loading;
+    const initialLoadSucceeded = messages.initialLoadSucceeded;
     const loaded = messages.messages;
     const messageCount = messages.messageCount;
     untrack(() => {
-      if (!id || id !== messageSessionId || loading) return;
+      if (!id || id !== messageSessionId || loading || !initialLoadSucceeded) return;
       const latest = loaded[loaded.length - 1]?.ordinal ?? -1;
       readProgress.baseline(id, latest, messageCount);
     });

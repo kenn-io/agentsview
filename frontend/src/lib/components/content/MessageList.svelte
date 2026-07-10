@@ -617,7 +617,7 @@
               ui.selectOrdinal(item.ordinals[0]!);
             }}
           >
-            {#if readProgressDivider !== null && item.ordinals.includes(readProgressDivider.ordinal)}
+            {#if item.kind === "message" && readProgressDivider !== null && item.ordinals.includes(readProgressDivider.ordinal)}
               <div class="read-progress-divider" role="separator" aria-label="Read progress boundary">
                 {readProgressDivider.label}
               </div>
@@ -628,6 +628,18 @@
                 timestamp={item.timestamp}
                 highlightQuery={highlightQuery}
                 isCurrentHighlight={item.ordinals.includes(inSessionSearch.currentOrdinal ?? -1)}
+                readMarker={readProgress.get(messages.sessionId ?? "")?.ordinal ?? null}
+                sortNewestFirst={ui.sortNewestFirst}
+                onMessageVisible={(ordinal) => {
+                  const sessionId = messages.sessionId;
+                  if (sessionId) {
+                    readProgress.recordVisible(
+                      sessionId,
+                      ordinal,
+                      messages.messageCount,
+                    );
+                  }
+                }}
               />
             {:else if item.message.is_compact_boundary}
               <CompactBoundaryDivider message={item.message} />

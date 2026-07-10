@@ -23,6 +23,9 @@
     timestamp: string;
     highlightQuery?: string;
     isCurrentHighlight?: boolean;
+    readMarker?: number | null;
+    sortNewestFirst?: boolean;
+    onMessageVisible?: (ordinal: number) => void;
   }
 
   let {
@@ -30,6 +33,9 @@
     timestamp,
     highlightQuery = "",
     isCurrentHighlight = false,
+    readMarker = null,
+    sortNewestFirst = false,
+    onMessageVisible,
   }: Props = $props();
 
   let copied = $state(false);
@@ -52,6 +58,30 @@
   );
 
   let label = $derived(m.tool_call_group_call_count({ count: totalCalls }));
+
+  let displayMessages = $derived(
+    sortNewestFirst ? [...messages].reverse() : messages,
+  );
+
+  function isBoundary(ordinal: number): boolean {
+    if (readMarker === null) return false;
+    return sortNewestFirst
+      ? ordinal <= readMarker
+      : ordinal > readMarker;
+  }
+
+  function observeMessage(node: HTMLElement, ordinal: number) {
+    if (!onMessageVisible || typeof IntersectionObserver === "undefined") {
+      return {};
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      onMessageVisible?.(ordinal);
+      observer.disconnect();
+    }, { root: node.closest(".message-list-scroll") });
+    observer.observe(node);
+    return { destroy: () => observer.disconnect() };
+  }
 
   /** Index turn timings by message id for O(1) lookup. */
   let turnByMessage = $derived.by(() => {
@@ -142,9 +172,15 @@
   </div>
 
   <div class="tool-group-body">
-    {#each messages as message (message.ordinal)}
+    {#each displayMessages as message (message.ordinal)}
       {@const calls = message.tool_calls ?? []}
       {@const turn = turnByMessage.get(message.id)}
+      <div use:observeMessage={message.ordinal}>
+      {#if isBoundary(message.ordinal)}
+        <div class="read-progress-divider" role="separator" aria-label="Read progress boundary">
+          {sortNewestFirst ? "Earlier messages" : "New messages"}
+        </div>
+      {/if}
       {#if calls.length === 1}
         {@const soloCall = calls[0]!}
         <ToolBlock
@@ -183,6 +219,7 @@
           />
         {/each}
       {/if}
+      </div>
     {/each}
   </div>
 </div>
@@ -229,6 +266,26 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+  }
+
+  .read-progress-divider {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 0;
+    color: var(--accent-blue);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .read-progress-divider::before,
+  .read-progress-divider::after {
+    content: "";
+    height: 1px;
+    flex: 1;
+    background: color-mix(in srgb, var(--accent-blue) 55%, transparent);
   }
 
   .tool-group-body :global(.tool-block) {

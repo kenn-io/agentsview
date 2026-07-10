@@ -111,6 +111,20 @@ test("persists read progress until later output is visible", async ({ page }) =>
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem("agentsview-read-progress")))
     .toContain('"messageCount":50');
+  await page.reload();
+  await sp.goto();
+  await sp.selectFirstSession();
+  await expect(unreadIndicator).toHaveCount(1);
+  await sp.scroller.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await expect(page.getByText("Message 59")).toBeVisible();
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("agentsview-read-progress")))
+    .toContain('"messageCount":60');
+  await expect(unreadIndicator).toHaveCount(0);
+  await expect(unreadDivider).toHaveCount(0);
 });
 
 test("captures a visible read-progress divider", async ({ page }) => {
@@ -156,6 +170,14 @@ test("captures a visible read-progress divider", async ({ page }) => {
       transcript: await page.evaluate(renderLintSnippet(".message-list-scroll")),
     };
     expect(lint[width]).toEqual({ sidebar: [], transcript: [] });
+    if (width === 400) {
+      await page.getByLabel("Toggle sidebar").click();
+      await expect(page.locator(".unread-indicator")).toBeVisible();
+      await page.screenshot({
+        path: path.join(artifactDir, "agentsview-T1057-2-after-400-sidebar.png"),
+      });
+      await page.getByLabel("Close sidebar").click({ force: true });
+    }
     await page.screenshot({
       path: path.join(artifactDir, `agentsview-T1057-2-after-${width}.png`),
     });

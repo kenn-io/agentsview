@@ -27,6 +27,7 @@ interface FetchPageOptions {
 class MessagesStore {
   messages: Message[] = $state([]);
   loading: boolean = $state(false);
+  initialLoadSucceeded: boolean = $state(false);
   sessionId: string | null = $state(null);
   messageCount: number = $state(0);
   hasOlder: boolean = $state(false);
@@ -60,6 +61,7 @@ class MessagesStore {
     const ac = new AbortController();
     this.abortController = ac;
 
+    let succeeded = false;
     try {
       let countHint: number | null = null;
       try {
@@ -89,12 +91,14 @@ class MessagesStore {
           countHint ?? undefined,
         );
       }
+      succeeded = true;
     } catch (err) {
       if (isAbortError(err)) return;
       console.warn("Failed to load session messages:", err);
     } finally {
       if (this.sessionId === id) {
         this.loading = false;
+        this.initialLoadSucceeded = succeeded;
         this._stableMainModel =
           this.messages.length > 0
             ? computeMainModel(this.messages)
@@ -138,6 +142,7 @@ class MessagesStore {
     clearContentCaches();
     this.sessionId = null;
     this.loading = false;
+    this.initialLoadSucceeded = false;
     this._stableMainModel = "";
     this.messageCount = 0;
     this.hasOlder = false;
