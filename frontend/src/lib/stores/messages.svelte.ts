@@ -91,7 +91,7 @@ class MessagesStore {
           countHint ?? undefined,
         );
       }
-      succeeded = true;
+      succeeded = this.hasCompleteMessageRange();
     } catch (err) {
       if (isAbortError(err)) return;
       console.warn("Failed to load session messages:", err);
@@ -151,6 +151,16 @@ class MessagesStore {
     this.reloadSessionId = null;
     this.pendingReload = false;
     this.loadOlderPromise = null;
+  }
+
+  private hasCompleteMessageRange(): boolean {
+    const first = this.messages[0];
+    const last = this.messages[this.messages.length - 1];
+    return this.messageCount === 0
+      ? this.messages.length === 0
+      : this.messages.length === this.messageCount &&
+        first?.ordinal === 0 &&
+        last?.ordinal === this.messageCount - 1;
   }
 
   private async fetchPages(
@@ -461,7 +471,9 @@ class MessagesStore {
       const oldCount = this.messageCount;
       if (newCount === oldCount) {
         await this.refreshLoadedWindow(id, signal);
-        if (this.sessionId === id) this.initialLoadSucceeded = true;
+        if (this.sessionId === id && this.hasCompleteMessageRange()) {
+          this.initialLoadSucceeded = true;
+        }
         return;
       }
 
@@ -478,7 +490,9 @@ class MessagesStore {
         }
 
         this.messageCount = newCount;
-        this.initialLoadSucceeded = true;
+        if (this.hasCompleteMessageRange()) {
+          this.initialLoadSucceeded = true;
+        }
         return;
       }
 
@@ -542,7 +556,9 @@ class MessagesStore {
           messageCountHint,
         );
       }
-      this.initialLoadSucceeded = true;
+      if (this.hasCompleteMessageRange()) {
+        this.initialLoadSucceeded = true;
+      }
     } finally {
       if (this.sessionId === id) {
         this.loading = false;

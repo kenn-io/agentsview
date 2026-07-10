@@ -12,17 +12,19 @@ import type { Message } from "../../api/types.js";
 import { messages } from "../../stores/messages.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
+import { readProgress } from "../../stores/read-progress.svelte.js";
 import { setLocale } from "../../i18n/index.js";
 
 const virtualizerMock = vi.hoisted(() => ({
   options: { count: 0 },
   scrollOffset: 0,
-  getVirtualItems: vi.fn(() => []),
+  getVirtualItems: vi.fn<() => unknown[]>(() => []),
   getTotalSize: vi.fn(() => 120),
   measureElement: vi.fn(),
   scrollToIndex: vi.fn(),
   scrollToOffset: vi.fn(),
   getOffsetForIndex: vi.fn(),
+  scrollRect: { height: 300 },
 }));
 
 vi.mock("../../virtual/createVirtualizer.svelte.js", () => ({
@@ -221,7 +223,7 @@ describe("MessageList read progress", () => {
     virtualizerMock.scrollOffset = 300;
     scroller!.dispatchEvent(new Event("scroll"));
     await vi.waitFor(() => {
-      expect(readProgress.get("s1")).toEqual({ ordinal: 5, messageCount: 5 });
+      expect(readProgress.get("s1")).toEqual({ ordinal: 5, messageCount: 6 });
     });
     await tick();
 
@@ -304,6 +306,59 @@ describe("MessageList read progress", () => {
       ], {} as IntersectionObserver);
 
       expect(readProgress.get("s1")).toEqual({ ordinal: 4, messageCount: 5 });
+    } finally {
+      Object.defineProperty(globalThis, "IntersectionObserver", {
+        configurable: true,
+        writable: true,
+        value: originalObserver,
+      });
+    }
+  });
+
+  it("uses the last displayable message for read progress count", async () => {
+    const originalObserver = globalThis.IntersectionObserver;
+    const callbacks: IntersectionObserverCallback[] = [];
+    class ObserverMock {
+      constructor(callback: IntersectionObserverCallback) {
+        callbacks.push(callback);
+      }
+
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+      takeRecords() { return []; }
+      root = null;
+      rootMargin = "0px";
+      thresholds = [];
+    }
+    Object.defineProperty(globalThis, "IntersectionObserver", {
+      configurable: true,
+      writable: true,
+      value: ObserverMock,
+    });
+    try {
+      messages.messages = [
+        makeMessage(0),
+        makeMessage(1),
+        { ...makeMessage(2), is_system: true },
+      ];
+      messages.messageCount = 3;
+      readProgress.clear("s1");
+      readProgress.baseline("s1", 0, 1);
+      virtualizerMock.getVirtualItems.mockReturnValue([0, 1].map((index) => ({
+        index,
+        key: `row-${index}`,
+        start: index * 100,
+        end: (index + 1) * 100,
+      })));
+      component = mount(MessageList, { target: document.body });
+      await tick();
+
+      callbacks[1]!([
+        { isIntersecting: true } as IntersectionObserverEntry,
+      ], {} as IntersectionObserver);
+
+      expect(readProgress.get("s1")).toEqual({ ordinal: 1, messageCount: 2 });
     } finally {
       Object.defineProperty(globalThis, "IntersectionObserver", {
         configurable: true,

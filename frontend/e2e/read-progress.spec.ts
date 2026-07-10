@@ -140,9 +140,15 @@ test("captures responsive unread state", async ({ page }) => {
     localStorage.setItem("agentsview-read-progress", JSON.stringify({
       version: 1,
       sessions: {
-        "read-progress-proof": { ordinal: 49, messageCount: 50 },
+        "read-progress-proof": { ordinal: 4, messageCount: 5 },
       },
     }));
+    window.IntersectionObserver = class {
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+      takeRecords() { return []; }
+    } as unknown as typeof IntersectionObserver;
   });
   await page.route(
     sessionsRoutePattern,
@@ -159,17 +165,18 @@ test("captures responsive unread state", async ({ page }) => {
   await sessions.goto();
   await sessions.selectFirstSession();
   const unreadIndicator = page.locator(".unread-indicator");
+  const unreadDivider = page.locator(".read-progress-divider");
   await expect(unreadIndicator).toHaveCount(1);
+  await expect(unreadDivider).toBeVisible();
 
   const lint: Record<number, unknown> = {};
   for (const width of [1280, 768, 400]) {
     await page.setViewportSize({ width, height: 720 });
     await expect(unreadIndicator).toHaveCount(1);
-    lint[width] = {
-      sidebar: await page.evaluate(renderLintSnippet(".session-list-scroll")),
-      transcript: await page.evaluate(renderLintSnippet(".message-list-scroll")),
-    };
-    expect(lint[width]).toEqual({ sidebar: [], transcript: [] });
+    await expect(unreadDivider).toBeVisible();
+    const transcript = await page.evaluate(
+      renderLintSnippet(".message-list-scroll"),
+    );
     if (width === 400) {
       await expect(page.getByLabel("Close sidebar")).not.toBeVisible();
       await page.screenshot({
@@ -177,6 +184,11 @@ test("captures responsive unread state", async ({ page }) => {
       });
       await page.getByLabel("Toggle sidebar").click();
       await expect(unreadIndicator).toBeVisible();
+      lint[width] = {
+        sidebar: await page.evaluate(renderLintSnippet(".session-list-scroll")),
+        transcript,
+      };
+      expect(lint[width]).toEqual({ sidebar: [], transcript: [] });
       await page.screenshot({
         path: path.join(artifactDir, "agentsview-T1057-2-after-400-sidebar.png"),
       });
@@ -184,6 +196,12 @@ test("captures responsive unread state", async ({ page }) => {
         element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       });
       await expect(page.getByLabel("Close sidebar")).not.toBeVisible();
+    } else {
+      lint[width] = {
+        sidebar: await page.evaluate(renderLintSnippet(".session-list-scroll")),
+        transcript,
+      };
+      expect(lint[width]).toEqual({ sidebar: [], transcript: [] });
     }
     await page.screenshot({
       path: path.join(artifactDir, `agentsview-T1057-2-after-${width}.png`),

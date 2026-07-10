@@ -97,6 +97,7 @@ describe("SessionList filter dropdown", () => {
     readProgress.clear("neighbouring-session");
     readProgress.clear("group-root");
     readProgress.clear("group-child");
+    readProgress.clear("starred-subagent");
   });
 
   afterEach(() => {
@@ -118,6 +119,7 @@ describe("SessionList filter dropdown", () => {
     readProgress.clear("neighbouring-session");
     readProgress.clear("group-root");
     readProgress.clear("group-child");
+    readProgress.clear("starred-subagent");
   });
 
   it("bounds the filter menu to the viewport and lets it scroll", async () => {
@@ -879,6 +881,37 @@ describe("SessionList visible hydration", () => {
     await tick();
 
     expect(document.querySelector(".group-header .group-unread-indicator")).not.toBeNull();
+  });
+
+  it("keeps a starred subagent descendant unread when its parent is filtered", async () => {
+    localStorage.setItem(STORAGE_KEY_GROUP, "none");
+    sessions.sessions = [
+      makeSession({ id: "group-root", display_name: "Root", message_count: 3 }),
+      makeSession({
+        id: "filtered-subagent",
+        parent_session_id: "group-root",
+        relationship_type: "subagent",
+        display_name: "Filtered subagent",
+      }),
+      makeSession({
+        id: "starred-subagent",
+        parent_session_id: "filtered-subagent",
+        display_name: "Starred subagent",
+        message_count: 5,
+      }),
+    ];
+    starred.filterOnly = true;
+    starred.ids = new Set(["group-root", "starred-subagent"]);
+    readProgress.baseline("group-root", 2, 3);
+    readProgress.baseline("starred-subagent", 2, 3);
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+    document.querySelector<HTMLButtonElement>(".tree-toggle")?.click();
+    await tick();
+
+    expect(document.querySelector(".sub-group-header .group-unread-indicator")).not.toBeNull();
   });
 });
 

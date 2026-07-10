@@ -218,10 +218,14 @@
 
   function childSessions(
     group: NonNullable<DisplayItem["group"]>,
-    predicate: (entry: SessionGroupInput) => boolean,
+    predicate: (
+      entry: SessionGroupInput,
+      allSessions: SessionGroupInput[],
+    ) => boolean,
   ): SessionGroupInput[] {
+    const allSessions = group.allSessions ?? group.sessions;
     return group.sessions.filter((entry) =>
-      entry.id !== group.primarySessionId && predicate(entry),
+      entry.id !== group.primarySessionId && predicate(entry, allSessions),
     );
   }
 
@@ -623,7 +627,7 @@
         {:else if item.type === "subagent-group" && item.group}
           {@const subKey = `subagent:${item.group.key}`}
           {@const subExpanded = expandedGroups.has(subKey)}
-          {@const subagents = childSessions(item.group, (entry) => isSubagentDescendant(entry, item.group!.sessions))}
+          {@const subagents = childSessions(item.group, isSubagentDescendant)}
           <button
             class="sub-group-header"
             style:padding-left="{8 + (item.depth ?? 1) * 16}px"
@@ -646,7 +650,7 @@
         {:else if item.type === "team-group" && item.group}
           {@const teamKey = `team:${item.group.key}`}
           {@const teamExpanded = expandedGroups.has(teamKey)}
-          {@const teammates = childSessions(item.group, (entry) => isTeammateDescendant(entry, item.group!.sessions))}
+          {@const teammates = childSessions(item.group, isTeammateDescendant)}
           <button
             class="sub-group-header"
             style:padding-left="{8 + (item.depth ?? 1) * 16}px"

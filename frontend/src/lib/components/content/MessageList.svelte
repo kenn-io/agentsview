@@ -95,6 +95,10 @@
     ).filter(isItemVisible);
   });
 
+  let displayedMessageCount = $derived(
+    (baseMessages[baseMessages.length - 1]?.ordinal ?? -1) + 1,
+  );
+
   function itemAt(index: number) {
     if (ui.sortNewestFirst) {
       const mapped = displayItemsAsc.length - 1 - index;
@@ -190,7 +194,7 @@
       readProgress.recordVisible(
         sessionId,
         latestOrdinal,
-        messages.messageCount,
+        displayedMessageCount,
       );
     }
   }
@@ -201,7 +205,7 @@
     const record = () => readProgress.recordVisible(
       sessionId,
       ordinal,
-      messages.messageCount,
+      displayedMessageCount,
     );
     if (typeof IntersectionObserver === "undefined") {
       const root = node.closest(".message-list-scroll");
@@ -663,7 +667,7 @@
                     readProgress.recordVisible(
                       sessionId,
                       ordinal,
-                      messages.messageCount,
+                      displayedMessageCount,
                     );
                   }
                 }}

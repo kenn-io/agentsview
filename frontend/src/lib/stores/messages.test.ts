@@ -170,6 +170,31 @@ describe('MessagesStore', () => {
     expect(messages.initialLoadSucceeded).toBe(true);
   });
 
+  it('keeps a partial paged recovery from becoming the initial baseline', async () => {
+    const firstPage = Array.from({ length: 1_000 }, (_, ordinal) =>
+      makeMessage(ordinal),
+    );
+    vi.mocked(api.getSession).mockResolvedValue(makeSession('s1', 1_001));
+    vi.mocked(api.getMessages)
+      .mockResolvedValueOnce(makeMessagesResponse(firstPage))
+      .mockRejectedValueOnce(new Error('missing page'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await messages.loadSession('s1');
+
+    expect(messages.messageCount).toBe(1_001);
+    expect(messages.messages).toHaveLength(1_000);
+    expect(messages.initialLoadSucceeded).toBe(false);
+
+    vi.mocked(api.getMessages).mockReset();
+    vi.mocked(api.getMessages)
+      .mockResolvedValueOnce(makeMessagesResponse(firstPage))
+      .mockResolvedValueOnce(makeMessagesResponse([]));
+    await messages.reload();
+
+    expect(messages.initialLoadSucceeded).toBe(false);
+  });
+
   it('should clear reload state when loading a new session', async () => {
     await setupSession('s1', 10);
     expect(messages.sessionId).toBe('s1');

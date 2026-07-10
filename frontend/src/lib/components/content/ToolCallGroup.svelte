@@ -73,7 +73,16 @@
   });
 
   function observeMessage(node: HTMLElement, ordinal: number) {
-    if (!onMessageVisible || typeof IntersectionObserver === "undefined") {
+    if (!onMessageVisible) {
+      return {};
+    }
+    if (typeof IntersectionObserver === "undefined") {
+      const root = node.closest(".message-list-scroll");
+      const rect = node.getBoundingClientRect();
+      const rootRect = root?.getBoundingClientRect();
+      if (rootRect && rect.bottom > rootRect.top && rect.top < rootRect.bottom) {
+        onMessageVisible(ordinal);
+      }
       return {};
     }
     const observer = new IntersectionObserver((entries) => {
