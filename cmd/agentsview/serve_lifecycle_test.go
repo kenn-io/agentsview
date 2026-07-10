@@ -249,8 +249,9 @@ func TestServeRestartHelpExplainsWriterOnlyAsymmetry(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "writable SQLite background daemon")
 	assert.Contains(t, out, "config.toml")
-	assert.Contains(t, out, "agentsview serve stop")
-	assert.Contains(t, out, "read-only PostgreSQL and DuckDB servers")
+	assert.Contains(t, out,
+		"Unlike `agentsview serve stop`, this command intentionally leaves "+
+			"read-only PostgreSQL and DuckDB servers running.")
 }
 
 func TestStopWritableDaemonsForUpdateStopsAllAndRestartsOne(t *testing.T) {

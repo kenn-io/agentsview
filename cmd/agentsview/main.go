@@ -572,8 +572,7 @@ func rejectLiveWritableDaemonBeforeDirectWrite(cfg config.Config) error {
 	if isExternalDaemonStarting(dataDir) || isLegacyDaemonStarting(dataDir) {
 		return fmt.Errorf(
 			"local daemon is starting and owns the SQLite archive; " +
-				"refusing to write directly. Retry once it is ready " +
-				"or run `agentsview daemon stop` first",
+				"refusing to write directly. Retry once it is ready",
 		)
 	}
 	if isBackgroundLaunchActive(dataDir) &&
@@ -581,8 +580,7 @@ func rejectLiveWritableDaemonBeforeDirectWrite(cfg config.Config) error {
 		!runningAsBackgroundChild() {
 		return fmt.Errorf(
 			"local daemon launch is in progress and owns the SQLite archive; " +
-				"refusing to write directly. Retry once it is ready " +
-				"or run `agentsview daemon stop` first",
+				"refusing to write directly. Retry once it is ready",
 		)
 	}
 	if !hasLiveWritableDaemonRuntime(dataDir, cfg.AuthToken) {

@@ -46,13 +46,14 @@ func assertOpenWriteDBRefused(
 	t *testing.T,
 	cfg config.Config,
 	wantSubstrings ...string,
-) {
+) error {
 	t.Helper()
 	database, lock, err := openWriteDB(context.Background(), cfg)
 	require.Error(t, err)
 	require.Nil(t, database)
 	require.Nil(t, lock)
 	assertErrorContainsAll(t, err, wantSubstrings...)
+	return err
 }
 
 func requireOpenWriteDBForTest(
@@ -184,16 +185,20 @@ func TestOpenWriteDBRefusesExternalStartupLock(t *testing.T) {
 	dataDir, cfg := writeDBConfigForTest(t)
 	holdExternalStartupLockForTest(t, dataDir)
 
-	assertOpenWriteDBRefused(t, cfg, "daemon is starting",
-		"refusing to write directly", "agentsview daemon stop")
+	err := assertOpenWriteDBRefused(t, cfg)
+	assert.EqualError(t, err,
+		"local daemon is starting and owns the SQLite archive; refusing to "+
+			"write directly. Retry once it is ready")
 }
 
 func TestOpenWriteDBRefusesBackgroundLaunchLock(t *testing.T) {
 	dataDir, cfg := writeDBConfigForTest(t)
 	holdBackgroundLaunchLockForTest(t, dataDir)
 
-	assertOpenWriteDBRefused(t, cfg, "daemon launch is in progress",
-		"refusing to write directly", "agentsview daemon stop")
+	err := assertOpenWriteDBRefused(t, cfg)
+	assert.EqualError(t, err,
+		"local daemon launch is in progress and owns the SQLite archive; "+
+			"refusing to write directly. Retry once it is ready")
 }
 
 func TestOpenWriteDBAllowsBackgroundChildWithLaunchLock(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -556,8 +557,12 @@ func TestDaemonRestartStoppedStartsAndReadOnlySurvives(t *testing.T) {
 func TestServeRestartDelegatesToCanonicalWriterOnlyRestart(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
 	dir := runtimeTestDir(t)
-	rec := testWritableRecord(os.Getpid(), "")
+	pid, _ := startReapedSleepProcess(t)
+	createTime, ok := processCreateTimeMillis(pid)
+	require.True(t, ok, "read-only child create time must be available")
+	rec := testWritableRecord(pid, "")
 	rec.Metadata[runtimeReadOnly] = "true"
+	rec.Metadata[runtimeCreateTime] = strconv.FormatInt(createTime, 10)
 	path, err := writeRuntimeRecordForTest(dir, rec)
 	require.NoError(t, err)
 	deps.resolveDataDir = func() (string, error) { return dir, nil }
@@ -592,6 +597,7 @@ func TestServeRestartDelegatesToCanonicalWriterOnlyRestart(t *testing.T) {
 
 	require.NoError(t, executeServeCommand(t, *deps, out, "restart"))
 	assert.Zero(t, stopCalls, "read-only servers must not be stopped")
+	assert.True(t, daemon.ProcessAlive(pid), "read-only server must remain alive")
 	assert.FileExists(t, path, "read-only runtime record must survive restart")
 	assert.True(t, gotPolicy.ConfigOnly)
 	assert.Equal(t, "daemon restart", gotPolicy.Operation)
