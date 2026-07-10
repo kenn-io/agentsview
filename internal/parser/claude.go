@@ -376,18 +376,22 @@ var ErrDAGDetected = fmt.Errorf(
 
 // ErrClaudeIncrementalNeedsFullParse signals that appended Claude
 // lines contain content the incremental path cannot stitch into
-// already-stored rows (subagent linkage updates from
-// toolUseResult.agentId, or same-message.id chunk merging).
+// already-stored rows (currently same-message.id chunk merging).
 var ErrClaudeIncrementalNeedsFullParse = fmt.Errorf(
 	"incremental parse: appended Claude lines require full parse",
 )
+
+type ClaudeSubagentLink struct {
+	ToolUseID         string
+	SubagentSessionID string
+}
 
 func claudeParseSessionFrom(
 	path string,
 	offset int64,
 	startOrdinal int,
 	lastEntryUUID string,
-) ([]ParsedMessage, time.Time, int64, error) {
+) ([]ParsedMessage, []ClaudeSubagentLink, time.Time, int64, error) {
 	var (
 		entries        []dagEntry
 		queuedCommands []claudeQueuedCommand
@@ -472,7 +476,7 @@ func claudeParseSessionFrom(
 		},
 	)
 	if err != nil {
-		return nil, time.Time{}, 0, fmt.Errorf(
+		return nil, nil, time.Time{}, 0, fmt.Errorf(
 			"reading claude %s from offset %d: %w",
 			path, offset, err,
 		)
@@ -482,33 +486,33 @@ func claudeParseSessionFrom(
 	// the empty-entries early return below would silently succeed. Check
 	// first and force a full parse so the display name is persisted.
 	if sawRename {
-		return nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
+		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
 
 	// Queue/progress events can repair subagent linkage on an already-stored
 	// tool call. If the mapped tool_use_id is not introduced in this append,
 	// incremental parsing would advance file_size without updating that row.
 	if needsClaudeFullParseForSubagentMap(entries, subagentMap) {
-		return nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
+		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
 
 	if len(entries) == 0 && len(queuedCommands) == 0 {
-		return nil, latestTS, consumed, nil
+		return nil, nil, latestTS, consumed, nil
 	}
 
 	// Detect forks: if any entry's parentUuid doesn't
 	// match the previous entry's uuid, the appended data
 	// contains a branch that requires full DAG processing.
 	if hasDAGFork(entries, lastEntryUUID) {
-		return nil, time.Time{}, 0, ErrDAGDetected
+		return nil, nil, time.Time{}, 0, ErrDAGDetected
 	}
 
-	// Subagent linkage updates (toolUseResult.agentId) and
-	// same-message.id chunk merging both need state the full
-	// parser builds across the whole file. Bail to a full parse
-	// when appended lines contain either.
+	links := collectClaudeSubagentLinks(entries)
+
+	// same-message.id chunk merging still needs state the full parser
+	// builds across the whole file.
 	if needsClaudeFullParse(entries) {
-		return nil, time.Time{}, 0,
+		return nil, nil, time.Time{}, 0,
 			ErrClaudeIncrementalNeedsFullParse
 	}
 
@@ -532,22 +536,19 @@ func claudeParseSessionFrom(
 	if latestTS.After(endedAt) {
 		endedAt = latestTS
 	}
-	return msgs, endedAt, consumed, nil
+	return msgs, links, endedAt, consumed, nil
 }
 
 // needsClaudeFullParse returns true when appended entries contain
-// either a tool_result with toolUseResult.agentId (whose linkage
-// must update an already-stored tool_call row) or a consecutive
-// same-message.id assistant run (whose chunks the full parser
-// merges into one message). Both cases require a full re-parse.
+// a consecutive same-message.id assistant run whose chunks the full
+// parser merges into one message, or a tool_result that still refers to
+// a tool_use outside this append without a typed incremental linkage path.
 func needsClaudeFullParse(entries []dagEntry) bool {
 	toolUseIDs := make(map[string]struct{})
 	var prevAssistantMID string
 	for _, e := range entries {
 		if e.entryType == "user" {
-			if gjson.Get(e.line, "toolUseResult.agentId").Str != "" {
-				return true
-			}
+			link, hasLink := extractToolResultAgentIDLink(e.line)
 			content := gjson.Get(e.line, "message.content")
 			if content.IsArray() {
 				unmatched := false
@@ -559,7 +560,8 @@ func needsClaudeFullParse(entries []dagEntry) bool {
 					if toolUseID == "" {
 						return true
 					}
-					if _, ok := toolUseIDs[toolUseID]; !ok {
+					if _, ok := toolUseIDs[toolUseID]; !ok &&
+						(!hasLink || toolUseID != link.ToolUseID) {
 						unmatched = true
 						return false
 					}
@@ -593,6 +595,26 @@ func needsClaudeFullParse(entries []dagEntry) bool {
 		prevAssistantMID = ""
 	}
 	return false
+}
+
+func collectClaudeSubagentLinks(entries []dagEntry) []ClaudeSubagentLink {
+	seen := make(map[string]struct{})
+	links := make([]ClaudeSubagentLink, 0, len(entries))
+	for _, entry := range entries {
+		if entry.entryType != "user" {
+			continue
+		}
+		link, ok := extractToolResultAgentIDLink(entry.line)
+		if !ok {
+			continue
+		}
+		if _, exists := seen[link.ToolUseID]; exists {
+			continue
+		}
+		seen[link.ToolUseID] = struct{}{}
+		links = append(links, link)
+	}
+	return links
 }
 
 func needsClaudeFullParseForSubagentMap(
@@ -1019,9 +1041,19 @@ func parseDAG(
 }
 
 func collectToolResultAgentID(line string, subagentMap map[string]string) {
+	link, ok := extractToolResultAgentIDLink(line)
+	if !ok {
+		return
+	}
+	if _, exists := subagentMap[link.ToolUseID]; !exists {
+		subagentMap[link.ToolUseID] = link.SubagentSessionID
+	}
+}
+
+func extractToolResultAgentIDLink(line string) (ClaudeSubagentLink, bool) {
 	agentID := gjson.Get(line, "toolUseResult.agentId").Str
 	if agentID == "" {
-		return
+		return ClaudeSubagentLink{}, false
 	}
 	sessionID := agentID
 	if !strings.HasPrefix(sessionID, "agent-") {
@@ -1030,7 +1062,7 @@ func collectToolResultAgentID(line string, subagentMap map[string]string) {
 
 	content := gjson.Get(line, "message.content")
 	if !content.IsArray() {
-		return
+		return ClaudeSubagentLink{}, false
 	}
 	var toolUseID string
 	content.ForEach(func(_, block gjson.Result) bool {
@@ -1049,11 +1081,12 @@ func collectToolResultAgentID(line string, subagentMap map[string]string) {
 		return true
 	})
 	if toolUseID == "" {
-		return
+		return ClaudeSubagentLink{}, false
 	}
-	if _, exists := subagentMap[toolUseID]; !exists {
-		subagentMap[toolUseID] = sessionID
-	}
+	return ClaudeSubagentLink{
+		ToolUseID:         toolUseID,
+		SubagentSessionID: sessionID,
+	}, true
 }
 
 // extractQueuedCommand parses a Claude Code attachment entry and

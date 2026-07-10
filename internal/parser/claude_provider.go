@@ -156,7 +156,7 @@ func (p *claudeProvider) ParseIncremental(
 	if req.Fingerprint.Size == req.Offset {
 		return IncrementalOutcome{}, IncrementalNoNewData, nil
 	}
-	newMsgs, endedAt, consumed, err := claudeParseSessionFrom(
+	newMsgs, links, endedAt, consumed, err := claudeParseSessionFrom(
 		path,
 		req.Offset,
 		req.StartOrdinal,
@@ -183,6 +183,7 @@ func (p *claudeProvider) ParseIncremental(
 	return IncrementalOutcome{
 		SessionID:            req.SessionID,
 		Messages:             newMsgs,
+		SubagentLinks:        links,
 		EndedAt:              endedAt,
 		ConsumedBytes:        consumed,
 		MessageCount:         len(newMsgs),

@@ -9577,15 +9577,12 @@ func TestIncrementalSync_ClaudeMidStreamSplitFallsBackToFullParse(t *testing.T) 
 	assert.Equal(t, "Hello world", msgs[1].Content, "msgs[1].Content = %q, want exactly %q", msgs[1].Content, "Hello world")
 }
 
-// TestIncrementalSync_ClaudeAgentIDFallbackUpdatesStoredToolCall covers
-// the cross-sync subagent linkage case: the first sync stores an
-// assistant tool_use row with no subagent_session_id, and a later sync
-// appends a tool_result whose toolUseResult.agentId should populate the
-// already-stored tool_call. The parser signals
-// IsIncrementalFullParseFallback, so the full-parse fallback must run
-// with forceReplace=true; otherwise the append-only write path skips
-// the existing row and the linkage is silently dropped.
-func TestIncrementalSync_ClaudeAgentIDFallbackUpdatesStoredToolCall(t *testing.T) {
+// TestIncrementalSync_ClaudeAgentIDLinksIncrementally covers the cross-
+// sync subagent linkage case: the first sync stores an assistant
+// tool_use row with no subagent_session_id, and a later sync appends a
+// tool_result whose toolUseResult.agentId should populate the
+// already-stored tool_call without forcing a full message replacement.
+func TestIncrementalSync_ClaudeAgentIDLinksIncrementally(t *testing.T) {
 	env := setupTestEnv(t)
 
 	parentInitial := testjsonl.JoinJSONL(
@@ -9615,6 +9612,14 @@ func TestIncrementalSync_ClaudeAgentIDFallbackUpdatesStoredToolCall(t *testing.T
 	env.engine.SyncAll(context.Background(), nil)
 
 	// Linkage starts empty (the toolUseResult hasn't appeared yet).
+	var assistantMessageID int64
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT id
+		FROM messages
+		WHERE session_id = ? AND ordinal = 1`,
+		"parent-late-link",
+	).Scan(&assistantMessageID), "query message id before append")
+
 	var got sql.NullString
 	require.NoError(t, env.db.Reader().QueryRow(`
 		SELECT subagent_session_id
@@ -9639,12 +9644,21 @@ func TestIncrementalSync_ClaudeAgentIDFallbackUpdatesStoredToolCall(t *testing.T
 
 	env.engine.SyncPaths([]string{path})
 
+	var gotMessageID int64
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT id
+		FROM messages
+		WHERE session_id = ? AND ordinal = 1`,
+		"parent-late-link",
+	).Scan(&gotMessageID), "query message id after append")
+
 	require.NoError(t, env.db.Reader().QueryRow(`
 		SELECT subagent_session_id
 		FROM tool_calls
 		WHERE session_id = ? AND tool_use_id = ?`,
 		"parent-late-link", "toolu_late",
 	).Scan(&got), "query after append")
+	assert.Equal(t, assistantMessageID, gotMessageID, "assistant message row should remain in place during incremental linkage")
 	assert.Equal(t, "agent-childlate", got.String, "subagent_session_id = %q, want %q", got.String, "agent-childlate")
 }
 

@@ -2056,6 +2056,51 @@ func (db *DB) ToolCallCount(sessionID string) (int, error) {
 	return n, err
 }
 
+func (db *DB) SetToolCallSubagentSession(
+	sessionID, toolUseID, subagentSessionID string,
+) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	result, err := db.getWriter().Exec(
+		`UPDATE tool_calls
+		 SET subagent_session_id = ?
+		 WHERE session_id = ? AND tool_use_id = ?
+		   AND COALESCE(subagent_session_id, '') != ?`,
+		subagentSessionID, sessionID, toolUseID, subagentSessionID,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"updating subagent_session_id for %s/%s: %w",
+			sessionID, toolUseID, err,
+		)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil || affected > 0 {
+		return err
+	}
+
+	var exists int
+	if err := db.getReader().QueryRow(
+		`SELECT COUNT(*)
+		 FROM tool_calls
+		 WHERE session_id = ? AND tool_use_id = ?`,
+		sessionID, toolUseID,
+	).Scan(&exists); err != nil {
+		return fmt.Errorf(
+			"checking tool_call for %s/%s: %w",
+			sessionID, toolUseID, err,
+		)
+	}
+	if exists == 0 {
+		return fmt.Errorf(
+			"tool_call not found for session %s tool_use_id %s",
+			sessionID, toolUseID,
+		)
+	}
+	return nil
+}
+
 // SystemMessageFingerprint returns the ordered, comma-separated list of
 // ordinals for system messages in a session (e.g. "0,2,5"). This is an
 // exact fingerprint of the system-message ordinal set: any reclassification
