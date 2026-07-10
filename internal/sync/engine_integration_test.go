@@ -326,7 +326,7 @@ func TestGrokSummaryCountsSurviveSync(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, 6, sess.MessageCount)
-	assert.Equal(t, 0, sess.UserMessageCount)
+	assert.Equal(t, 1, sess.UserMessageCount)
 }
 
 type openCodeFamilySQLiteCase struct {

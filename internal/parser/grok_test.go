@@ -69,6 +69,7 @@ func TestGrokProviderSummarySource(t *testing.T) {
 	assert.Equal(t, "Fix parser regression", session.SessionName)
 	assert.Equal(t, "agentsview", session.Project)
 	assert.Equal(t, 6, session.MessageCount)
+	assert.Equal(t, 1, session.UserMessageCount)
 	assert.Equal(t, 321, session.TotalOutputTokens)
 	assert.Equal(t, 4096, session.PeakContextTokens)
 	assert.Equal(t, filepath.Clean(grokSummaryPath(root, "cwd-key", "sess-1")), filepath.Clean(session.File.Path))
