@@ -40,6 +40,19 @@ const zcodeTestSchema = `
 		duration_ms INTEGER,
 		tool_call_count INTEGER
 	);
+	CREATE TABLE message (
+		id TEXT PRIMARY KEY NOT NULL,
+		session_id TEXT NOT NULL,
+		time_created TEXT,
+		data TEXT
+	);
+	CREATE TABLE part (
+		id TEXT PRIMARY KEY NOT NULL,
+		message_id TEXT NOT NULL,
+		session_id TEXT NOT NULL,
+		time_created TEXT,
+		data TEXT
+	);
 `
 
 type zcodeTestFixture struct {
@@ -116,6 +129,57 @@ func (f *zcodeTestFixture) insertUsage(
 	require.NoError(t, err)
 }
 
+func (f *zcodeTestFixture) insertMessage(
+	t *testing.T,
+	id, sessionID string,
+	createdAt any,
+	data string,
+) {
+	t.Helper()
+	_, err := f.database.Exec(`
+		INSERT INTO message (
+			id, session_id, time_created, data
+		) VALUES (?, ?, ?, ?)
+	`, id, sessionID, createdAt, data)
+	require.NoError(t, err)
+}
+
+func (f *zcodeTestFixture) insertPart(
+	t *testing.T,
+	id, messageID, sessionID string,
+	data string,
+) {
+	t.Helper()
+	f.insertPartAt(t, id, messageID, sessionID, nil, data)
+}
+
+func (f *zcodeTestFixture) insertPartAt(
+	t *testing.T,
+	id, messageID, sessionID string,
+	createdAt any,
+	data string,
+) {
+	t.Helper()
+	_, err := f.database.Exec(`
+		INSERT INTO part (
+			id, message_id, session_id, time_created, data
+		) VALUES (?, ?, ?, ?, ?)
+	`, id, messageID, sessionID, createdAt, data)
+	require.NoError(t, err)
+}
+
+func TestZCodeProviderCapabilities(t *testing.T) {
+	caps := zcodeProviderCapabilities()
+	assert.Equal(t, CapabilitySupported, caps.Content.FirstMessage)
+	assert.Equal(t, CapabilitySupported, caps.Content.SessionName)
+	assert.Equal(t, CapabilitySupported, caps.Content.Cwd)
+	assert.Equal(t, CapabilitySupported, caps.Content.Thinking)
+	assert.Equal(t, CapabilitySupported, caps.Content.ToolCalls)
+	assert.Equal(t, CapabilitySupported, caps.Content.ToolResults)
+	assert.Equal(t, CapabilitySupported, caps.Content.AggregateUsageEvents)
+	assert.Equal(t, CapabilitySupported, caps.Content.Model)
+}
+
 func TestZCodeParsesReportedIntegerTimestamps(t *testing.T) {
 	fixture := newZCodeTestFixture(t)
 	fixture.insertSession(
@@ -190,6 +254,65 @@ func TestZCodeProviderSourceMethodsAndParse(t *testing.T) {
 		600,
 		0,
 	)
+	fixture.insertMessage(
+		t,
+		"msg-1",
+		"session-001",
+		"2026-07-06T13:00:01Z",
+		`{"role":"user"}`,
+	)
+	fixture.insertPart(
+		t,
+		"part-1",
+		"msg-1",
+		"session-001",
+		`{"type":"text","text":"Inspect the login flow."}`,
+	)
+	fixture.insertMessage(
+		t,
+		"msg-2",
+		"session-001",
+		"2026-07-06T13:00:02Z",
+		`{"role":"assistant","model":{"modelID":"claude-sonnet-4-6"}}`,
+	)
+	fixture.insertPartAt(
+		t,
+		"part-z",
+		"msg-2",
+		"session-001",
+		"2026-07-06T13:00:02Z",
+		`{"type":"thinking","thinking":"I should read the auth code first."}`,
+	)
+	fixture.insertPartAt(
+		t,
+		"part-a",
+		"msg-2",
+		"session-001",
+		"2026-07-06T13:00:03Z",
+		`{"type":"text","text":"I'll inspect the auth code first."}`,
+	)
+	fixture.insertPartAt(
+		t,
+		"part-4",
+		"msg-2",
+		"session-001",
+		"2026-07-06T13:00:04Z",
+		`{"type":"tool_use","id":"call-1","name":"Read","input":{"file_path":"auth.go"}}`,
+	)
+	fixture.insertMessage(
+		t,
+		"msg-3",
+		"session-001",
+		"2026-07-06T13:00:03Z",
+		`{"role":"user"}`,
+	)
+	fixture.insertPart(
+		t,
+		"part-5",
+		"msg-3",
+		"session-001",
+		`{"type":"tool_result","tool_use_id":"call-1","content":"package auth"}`,
+	)
 
 	provider, ok := NewProvider(AgentZCode, ProviderConfig{
 		Roots: []string{
@@ -246,10 +369,27 @@ func TestZCodeProviderSourceMethodsAndParse(t *testing.T) {
 	assert.Equal(t, "/Users/alice/code/acme-app", sess.Cwd)
 	assert.Equal(t, "Acme session", sess.SessionName)
 	assert.Equal(t, "Acme session", sess.FirstMessage)
-	assert.Equal(t, 0, sess.MessageCount)
-	assert.Equal(t, 0, sess.UserMessageCount)
+	assert.Equal(t, 3, sess.MessageCount)
+	assert.Equal(t, 2, sess.UserMessageCount)
 	assert.Equal(t, fixture.DBPath+"#session-001", sess.File.Path)
 	assert.NotZero(t, sess.File.Size)
+	require.Len(t, result.Result.Messages, 3)
+	assert.Equal(t, RoleUser, result.Result.Messages[0].Role)
+	assert.Equal(t, "Inspect the login flow.", result.Result.Messages[0].Content)
+	assert.Equal(t, RoleAssistant, result.Result.Messages[1].Role)
+	assert.True(t, result.Result.Messages[1].HasThinking)
+	assert.True(t, result.Result.Messages[1].HasToolUse)
+	assert.Equal(t, "claude-sonnet-4-6", result.Result.Messages[1].Model)
+	assert.Equal(
+		t,
+		"[Thinking]\nI should read the auth code first.\n[/Thinking]\nI'll inspect the auth code first.",
+		result.Result.Messages[1].Content,
+	)
+	require.Len(t, result.Result.Messages[1].ToolCalls, 1)
+	assert.Equal(t, "Read", result.Result.Messages[1].ToolCalls[0].Category)
+	assert.Equal(t, RoleUser, result.Result.Messages[2].Role)
+	require.Len(t, result.Result.Messages[2].ToolResults, 1)
+	assert.Equal(t, "package auth", DecodeContent(result.Result.Messages[2].ToolResults[0].ContentRaw))
 	assert.Equal(t, 2, len(result.Result.UsageEvents))
 	assert.Equal(t, 275, sess.TotalOutputTokens)
 	assert.True(t, sess.HasTotalOutputTokens)
@@ -338,6 +478,221 @@ func TestZCodeUsageEventMapping(t *testing.T) {
 	assert.Contains(t, event.DedupKey, "turn=turn-alpha")
 	assert.Contains(t, event.DedupKey, "provider=builtin:bigmodel-coding-plan")
 	assert.Contains(t, event.DedupKey, "model=claude-sonnet-4-6")
+}
+
+func TestZCodeIngestsTranscriptMessages(t *testing.T) {
+	fixture := newZCodeTestFixture(t)
+	fixture.insertSession(
+		t,
+		"session-transcript",
+		"/Users/alice/code/acme-app",
+		"Transcript session",
+		"2026-07-06T13:00:01Z",
+		"2026-07-06T13:05:00Z",
+		"",
+		"",
+	)
+	fixture.insertMessage(
+		t,
+		"msg-1",
+		"session-transcript",
+		"2026-07-06T13:00:01Z",
+		`{"role":"user"}`,
+	)
+	fixture.insertPart(
+		t,
+		"part-1",
+		"msg-1",
+		"session-transcript",
+		`{"type":"text","text":"Fix the login bug."}`,
+	)
+	fixture.insertMessage(
+		t,
+		"msg-2",
+		"session-transcript",
+		"2026-07-06T13:00:02Z",
+		`{"role":"assistant","model":{"modelID":"claude-sonnet-4-6"}}`,
+	)
+	fixture.insertPartAt(
+		t,
+		"part-z",
+		"msg-2",
+		"session-transcript",
+		"2026-07-06T13:00:02Z",
+		`{"type":"thinking","thinking":"I should inspect the auth flow."}`,
+	)
+	fixture.insertPartAt(
+		t,
+		"part-a",
+		"msg-2",
+		"session-transcript",
+		"2026-07-06T13:00:03Z",
+		`{"type":"text","text":"I'll inspect the auth flow."}`,
+	)
+
+	result, err := parseZCodeSession(fixture.DBPath, "session-transcript", "devbox")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 2, result.Session.MessageCount)
+	assert.Equal(t, 1, result.Session.UserMessageCount)
+	require.Len(t, result.Messages, 2)
+	assert.Equal(t, RoleUser, result.Messages[0].Role)
+	assert.Equal(t, "Fix the login bug.", result.Messages[0].Content)
+	assert.Equal(t, RoleAssistant, result.Messages[1].Role)
+	assert.True(t, result.Messages[1].HasThinking)
+	assert.Equal(t, "I should inspect the auth flow.", result.Messages[1].ThinkingText)
+	assert.Equal(
+		t,
+		"[Thinking]\nI should inspect the auth flow.\n[/Thinking]\nI'll inspect the auth flow.",
+		result.Messages[1].Content,
+	)
+	assert.Equal(t, "claude-sonnet-4-6", result.Messages[1].Model)
+}
+
+func TestZCodeToolCallsAndResults(t *testing.T) {
+	fixture := newZCodeTestFixture(t)
+	fixture.insertSession(
+		t,
+		"session-tools",
+		"/Users/alice/code/acme-app",
+		"Tool session",
+		"2026-07-06T13:00:01Z",
+		"2026-07-06T13:05:00Z",
+		"",
+		"",
+	)
+	fixture.insertMessage(
+		t,
+		"msg-1",
+		"session-tools",
+		"2026-07-06T13:00:01Z",
+		`{"role":"assistant","modelID":"claude-sonnet-4-6"}`,
+	)
+	fixture.insertPart(
+		t,
+		"part-1",
+		"msg-1",
+		"session-tools",
+		`{"type":"tool_use","id":"call-read","name":"Read","input":{"file_path":"auth.go"}}`,
+	)
+	fixture.insertMessage(
+		t,
+		"msg-2",
+		"session-tools",
+		"2026-07-06T13:00:02Z",
+		`{"role":"user"}`,
+	)
+	fixture.insertPart(
+		t,
+		"part-2",
+		"msg-2",
+		"session-tools",
+		`{"type":"tool_result","tool_use_id":"call-read","content":"package auth"}`,
+	)
+
+	result, err := parseZCodeSession(fixture.DBPath, "session-tools", "devbox")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Messages, 2)
+
+	assistant := result.Messages[0]
+	assert.Equal(t, RoleAssistant, assistant.Role)
+	assert.True(t, assistant.HasToolUse)
+	require.Len(t, assistant.ToolCalls, 1)
+	assert.Equal(t, "call-read", assistant.ToolCalls[0].ToolUseID)
+	assert.Equal(t, "Read", assistant.ToolCalls[0].ToolName)
+	assert.Equal(t, "Read", assistant.ToolCalls[0].Category)
+	assert.Equal(t, `{"file_path":"auth.go"}`, assistant.ToolCalls[0].InputJSON)
+
+	toolResult := result.Messages[1]
+	assert.Equal(t, RoleUser, toolResult.Role)
+	require.Len(t, toolResult.ToolResults, 1)
+	assert.Equal(t, "call-read", toolResult.ToolResults[0].ToolUseID)
+	assert.Equal(t, len("package auth"), toolResult.ToolResults[0].ContentLength)
+	assert.Equal(t, "package auth", DecodeContent(toolResult.ToolResults[0].ContentRaw))
+}
+
+func TestZCodeOpenCodeStyleReasoningAndToolParts(t *testing.T) {
+	fixture := newZCodeTestFixture(t)
+	fixture.insertSession(
+		t,
+		"session-opencode-parts",
+		"/Users/alice/code/acme-app",
+		"OpenCode-style parts",
+		"2026-07-06T13:00:01Z",
+		"2026-07-06T13:05:00Z",
+		"",
+		"",
+	)
+	fixture.insertMessage(
+		t,
+		"msg-1",
+		"session-opencode-parts",
+		"2026-07-06T13:00:01Z",
+		`{"role":"user"}`,
+	)
+	fixture.insertPart(
+		t,
+		"part-1",
+		"msg-1",
+		"session-opencode-parts",
+		`{"type":"text","text":"Inspect the auth flow."}`,
+	)
+	fixture.insertMessage(
+		t,
+		"msg-2",
+		"session-opencode-parts",
+		"2026-07-06T13:00:02Z",
+		`{"role":"assistant","modelID":"claude-sonnet-4-6"}`,
+	)
+	fixture.insertPartAt(
+		t,
+		"part-b",
+		"msg-2",
+		"session-opencode-parts",
+		"2026-07-06T13:00:02Z",
+		`{"type":"reasoning","text":"I should inspect the auth flow."}`,
+	)
+	fixture.insertPartAt(
+		t,
+		"part-c",
+		"msg-2",
+		"session-opencode-parts",
+		"2026-07-06T13:00:03Z",
+		`{"type":"text","text":"I'll inspect the auth flow."}`,
+	)
+	fixture.insertPartAt(
+		t,
+		"part-a",
+		"msg-2",
+		"session-opencode-parts",
+		"2026-07-06T13:00:04Z",
+		`{"type":"tool","tool":"Read","callID":"call-read","state":{"input":{"file_path":"auth.go"},"output":"package auth"}}`,
+	)
+
+	result, err := parseZCodeSession(fixture.DBPath, "session-opencode-parts", "devbox")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Messages, 2)
+
+	assistant := result.Messages[1]
+	assert.Equal(t, RoleAssistant, assistant.Role)
+	assert.True(t, assistant.HasThinking)
+	assert.True(t, assistant.HasToolUse)
+	assert.Equal(t, "I should inspect the auth flow.", assistant.ThinkingText)
+	assert.Equal(
+		t,
+		"[Thinking]\nI should inspect the auth flow.\n[/Thinking]\nI'll inspect the auth flow.",
+		assistant.Content,
+	)
+	require.Len(t, assistant.ToolCalls, 1)
+	assert.Equal(t, "call-read", assistant.ToolCalls[0].ToolUseID)
+	assert.Equal(t, "Read", assistant.ToolCalls[0].ToolName)
+	assert.Equal(t, `{"file_path":"auth.go"}`, assistant.ToolCalls[0].InputJSON)
+	require.Len(t, assistant.ToolResults, 1)
+	assert.Equal(t, "call-read", assistant.ToolResults[0].ToolUseID)
+	assert.Equal(t, len("package auth"), assistant.ToolResults[0].ContentLength)
+	assert.Equal(t, "package auth", DecodeContent(assistant.ToolResults[0].ContentRaw))
 }
 
 func TestZCodeFingerprintTracksUsageMtime(t *testing.T) {
@@ -501,6 +856,47 @@ func TestZCodeParsesSessionWhenUsageTableIsMissing(t *testing.T) {
 	assert.False(t, result.Session.HasPeakContextTokens)
 }
 
+func TestZCodeMissingTranscriptTables(t *testing.T) {
+	fixture := newZCodeTestFixture(t)
+	_, err := fixture.database.Exec(`DROP TABLE part`)
+	require.NoError(t, err)
+	_, err = fixture.database.Exec(`DROP TABLE message`)
+	require.NoError(t, err)
+	fixture.insertSession(
+		t,
+		"session-no-transcript",
+		"/Users/alice/code/acme-app",
+		"No transcript",
+		"2026-07-06T13:00:01Z",
+		"2026-07-06T13:05:00Z",
+		"",
+		"",
+	)
+	fixture.insertUsage(
+		t,
+		"session-no-transcript",
+		"1",
+		"builtin:bigmodel-coding-plan",
+		"claude-sonnet-4-6",
+		"done",
+		1000, 200, 40, 50, 25, 1315,
+		"2026-07-06T13:00:02Z",
+		"2026-07-06T13:00:03Z",
+		1000,
+		2,
+	)
+
+	result, err := parseZCodeSession(fixture.DBPath, "session-no-transcript", "devbox")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 0, result.Session.MessageCount)
+	assert.Equal(t, 0, result.Session.UserMessageCount)
+	assert.Empty(t, result.Messages)
+	require.Len(t, result.UsageEvents, 1)
+	assert.Equal(t, 200, result.Session.TotalOutputTokens)
+	assert.True(t, result.Session.HasTotalOutputTokens)
+}
+
 func TestZCodeProviderRootWithoutDB(t *testing.T) {
 	root := t.TempDir()
 	cliRoot := filepath.Join(root, ".zcode", "cli")
@@ -522,4 +918,38 @@ func nullableZCodeString(v string) any {
 		return nil
 	}
 	return v
+}
+func TestZCodeSystemMessagesAreMarkedSystem(t *testing.T) {
+	fixture := newZCodeTestFixture(t)
+	fixture.insertSession(
+		t,
+		"session-system",
+		"/Users/alice/code/acme-app",
+		"System session",
+		"2026-07-06T13:00:01Z",
+		"2026-07-06T13:05:00Z",
+		"",
+		"",
+	)
+	fixture.insertMessage(
+		t,
+		"msg-system",
+		"session-system",
+		"2026-07-06T13:00:01Z",
+		`{"role":"system"}`,
+	)
+	fixture.insertPart(
+		t,
+		"part-system",
+		"msg-system",
+		"session-system",
+		`{"type":"text","text":"You are a code reviewer."}`,
+	)
+
+	result, err := parseZCodeSession(fixture.DBPath, "session-system", "devbox")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Messages, 1)
+	assert.Equal(t, RoleSystem, result.Messages[0].Role)
+	assert.True(t, result.Messages[0].IsSystem)
 }

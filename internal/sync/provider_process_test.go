@@ -302,7 +302,11 @@ func TestProcessFileProviderZCodeVirtualSource(t *testing.T) {
 	assert.Equal(t, "zcode:session-001", res.results[0].Session.ID)
 	assert.Equal(t, parser.AgentZCode, res.results[0].Session.Agent)
 	assert.Equal(t, "devbox", res.results[0].Session.Machine)
-	assert.Empty(t, res.results[0].Messages)
+	require.Len(t, res.results[0].Messages, 3)
+	assert.Equal(t, parser.RoleAssistant, res.results[0].Messages[1].Role)
+	assert.True(t, res.results[0].Messages[1].HasToolUse)
+	require.Len(t, res.results[0].Messages[1].ToolCalls, 1)
+	assert.Equal(t, "call-read", res.results[0].Messages[1].ToolCalls[0].ToolUseID)
 	require.Len(t, res.results[0].UsageEvents, 1)
 	assert.Equal(t, 1, res.results[0].UsageEvents[0].InputTokens)
 	assert.Equal(t, 2, res.results[0].UsageEvents[0].OutputTokens)
@@ -1435,6 +1439,18 @@ func writeProcessProviderZCodeDB(t *testing.T, cliRoot string) string {
 			duration_ms INTEGER,
 			tool_call_count INTEGER
 		);
+		CREATE TABLE message (
+			id TEXT PRIMARY KEY NOT NULL,
+			session_id TEXT NOT NULL,
+			time_created TEXT,
+			data TEXT
+		);
+		CREATE TABLE part (
+			id TEXT PRIMARY KEY NOT NULL,
+			message_id TEXT NOT NULL,
+			session_id TEXT NOT NULL,
+			data TEXT
+		);
 	`)
 	mustExecProcessProviderSQL(t, database,
 		`INSERT INTO session (
@@ -1455,6 +1471,45 @@ func writeProcessProviderZCodeDB(t *testing.T, cliRoot string) string {
 		"session-001", "1", "builtin:bigmodel-coding-plan", "claude-sonnet-4-6", "done",
 		int64(1), int64(2), int64(0), int64(0), int64(0), int64(3),
 		"2026-07-06T13:00:02Z", "2026-07-06T13:00:03Z", int64(1000), int64(1),
+	)
+	mustExecProcessProviderSQL(t, database,
+		`INSERT INTO message (
+			id, session_id, time_created, data
+		) VALUES (?, ?, ?, ?)`,
+		"msg-1", "session-001", "2026-07-06T13:00:01Z", `{"role":"user"}`,
+	)
+	mustExecProcessProviderSQL(t, database,
+		`INSERT INTO part (
+			id, message_id, session_id, data
+		) VALUES (?, ?, ?, ?)`,
+		"part-1", "msg-1", "session-001", `{"type":"text","text":"Inspect the auth flow."}`,
+	)
+	mustExecProcessProviderSQL(t, database,
+		`INSERT INTO message (
+			id, session_id, time_created, data
+		) VALUES (?, ?, ?, ?)`,
+		"msg-2", "session-001", "2026-07-06T13:00:02Z",
+		`{"role":"assistant","modelID":"claude-sonnet-4-6"}`,
+	)
+	mustExecProcessProviderSQL(t, database,
+		`INSERT INTO part (
+			id, message_id, session_id, data
+		) VALUES (?, ?, ?, ?)`,
+		"part-2", "msg-2", "session-001",
+		`{"type":"tool_use","id":"call-read","name":"Read","input":{"file_path":"auth.go"}}`,
+	)
+	mustExecProcessProviderSQL(t, database,
+		`INSERT INTO message (
+			id, session_id, time_created, data
+		) VALUES (?, ?, ?, ?)`,
+		"msg-3", "session-001", "2026-07-06T13:00:03Z", `{"role":"user"}`,
+	)
+	mustExecProcessProviderSQL(t, database,
+		`INSERT INTO part (
+			id, message_id, session_id, data
+		) VALUES (?, ?, ?, ?)`,
+		"part-3", "msg-3", "session-001",
+		`{"type":"tool_result","tool_use_id":"call-read","content":"package auth"}`,
 	)
 	return dbPath
 }

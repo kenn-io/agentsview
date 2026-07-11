@@ -13,7 +13,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-func TestSyncZCode(t *testing.T) {
+func TestSyncZCodeTranscript(t *testing.T) {
 	root := t.TempDir()
 	dbPath := writeProcessProviderZCodeDB(t, filepath.Join(root, ".zcode", "cli"))
 	database := openTestDB(t)
@@ -29,12 +29,21 @@ func TestSyncZCode(t *testing.T) {
 	sess, err := database.GetSession(context.Background(), "zcode:session-001")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
-	assert.Equal(t, 0, sess.MessageCount)
+	assert.Equal(t, 2, sess.MessageCount)
 	assert.Equal(t, "acme_app", sess.Project)
 	assert.Equal(t, dbPath+"#session-001", database.GetSessionFilePath("zcode:session-001"))
 	_, storedMtime, ok := database.GetSessionFileInfo("zcode:session-001")
 	require.True(t, ok)
 	assert.Equal(t, engine.SourceMtime("zcode:session-001"), storedMtime)
+
+	msgs, err := database.GetMessages(context.Background(), "zcode:session-001", 0, 100, true)
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "Inspect the auth flow.", msgs[0].Content)
+	assert.Equal(t, "assistant", msgs[1].Role)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "Read", msgs[1].ToolCalls[0].ToolName)
+	assert.Equal(t, "package auth", msgs[1].ToolCalls[0].ResultContent)
 
 	events, err := database.GetUsageEvents(context.Background(), "zcode:session-001")
 	require.NoError(t, err)

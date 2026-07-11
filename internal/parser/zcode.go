@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tidwall/gjson"
 )
 
 const ZCodeDBName = "db.sqlite"
@@ -53,7 +55,11 @@ func zcodeProviderCapabilities() Capabilities {
 			FirstMessage:         CapabilitySupported,
 			SessionName:          CapabilitySupported,
 			Cwd:                  CapabilitySupported,
+			Thinking:             CapabilitySupported,
+			ToolCalls:            CapabilitySupported,
+			ToolResults:          CapabilitySupported,
 			AggregateUsageEvents: CapabilitySupported,
+			Model:                CapabilitySupported,
 		},
 	}
 }
@@ -249,6 +255,19 @@ type zcodeUsageRow struct {
 	toolCallCount            sql.NullInt64
 }
 
+type zcodeMessageRow struct {
+	id          string
+	data        string
+	timeCreated string
+}
+
+type zcodePartRow struct {
+	id          string
+	messageID   string
+	timeCreated string
+	data        string
+}
+
 func loadZCodeSessionRow(db *sql.DB, sessionID string) (zcodeSessionRow, error) {
 	row := db.QueryRow(`
 		SELECT id,
@@ -317,17 +336,34 @@ func buildZCodeParseResult(
 		firstMessage = truncate(strings.ReplaceAll(firstMessage, "\n", " "), 300)
 	}
 
+	msgs, err := loadZCodeMessages(db, row.id)
+	if err != nil {
+		return ParseResult{}, err
+	}
+	parts, err := loadZCodeParts(db, row.id)
+	if err != nil {
+		return ParseResult{}, err
+	}
+	parsedMessages := buildZCodeMessages(msgs, parts)
+	userMessageCount := 0
+	for _, msg := range parsedMessages {
+		if msg.Role == RoleUser {
+			userMessageCount++
+		}
+	}
+
 	sess := ParsedSession{
-		ID:           "zcode:" + row.id,
-		Project:      project,
-		Machine:      machine,
-		Agent:        AgentZCode,
-		Cwd:          directory,
-		FirstMessage: firstMessage,
-		SessionName:  title,
-		StartedAt:    startedAt,
-		EndedAt:      endedAt,
-		MessageCount: 0,
+		ID:               "zcode:" + row.id,
+		Project:          project,
+		Machine:          machine,
+		Agent:            AgentZCode,
+		Cwd:              directory,
+		FirstMessage:     firstMessage,
+		SessionName:      title,
+		StartedAt:        startedAt,
+		EndedAt:          endedAt,
+		MessageCount:     len(parsedMessages),
+		UserMessageCount: userMessageCount,
 		File: FileInfo{
 			Path: ZCodeSQLiteVirtualPath(dbPath, row.id),
 		},
@@ -345,8 +381,362 @@ func buildZCodeParseResult(
 
 	return ParseResult{
 		Session:     sess,
+		Messages:    parsedMessages,
 		UsageEvents: usageEvents,
 	}, nil
+}
+
+func loadZCodeMessages(
+	db *sql.DB, sessionID string,
+) ([]zcodeMessageRow, error) {
+	rows, err := db.Query(`
+		SELECT id,
+		       COALESCE(data, '{}'),
+		       CAST(COALESCE(time_created, '') AS TEXT)
+		  FROM message
+		 WHERE session_id = ?
+		 ORDER BY CAST(COALESCE(time_created, '') AS TEXT), id
+	`, sessionID)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such table: message") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("listing zcode messages for %s: %w", sessionID, err)
+	}
+	defer rows.Close()
+
+	msgs := make([]zcodeMessageRow, 0)
+	for rows.Next() {
+		var row zcodeMessageRow
+		if err := rows.Scan(&row.id, &row.data, &row.timeCreated); err != nil {
+			return nil, fmt.Errorf("scanning zcode message row: %w", err)
+		}
+		if row.id == "" {
+			continue
+		}
+		msgs = append(msgs, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return msgs, nil
+}
+
+func loadZCodeParts(
+	db *sql.DB, sessionID string,
+) (map[string][]zcodePartRow, error) {
+	selectTime := `''`
+	orderBy := `id`
+	if has, err := zcodeTableHasColumn(db, "part", "time_created"); err != nil {
+		return nil, err
+	} else if has {
+		selectTime = `CAST(COALESCE(time_created, '') AS TEXT)`
+		orderBy = selectTime + `, id`
+	}
+
+	rows, err := db.Query(`
+		SELECT id,
+		       message_id,
+		       `+selectTime+`,
+		       COALESCE(data, '{}')
+		  FROM part
+		 WHERE session_id = ?
+		 ORDER BY `+orderBy, sessionID)
+	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no such table: part") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("listing zcode parts for %s: %w", sessionID, err)
+	}
+	defer rows.Close()
+
+	parts := make(map[string][]zcodePartRow)
+	for rows.Next() {
+		var row zcodePartRow
+		if err := rows.Scan(&row.id, &row.messageID, &row.timeCreated, &row.data); err != nil {
+			return nil, fmt.Errorf("scanning zcode part row: %w", err)
+		}
+		if row.messageID == "" {
+			continue
+		}
+		parts[row.messageID] = append(parts[row.messageID], row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return parts, nil
+}
+
+func buildZCodeMessages(
+	msgs []zcodeMessageRow,
+	parts map[string][]zcodePartRow,
+) []ParsedMessage {
+	if msgs == nil || parts == nil {
+		return nil
+	}
+
+	parsed := make([]ParsedMessage, 0, len(msgs))
+	for _, row := range msgs {
+		msg, ok := buildZCodeMessage(len(parsed), row, parts[row.id])
+		if !ok {
+			continue
+		}
+		parsed = append(parsed, msg)
+	}
+	return parsed
+}
+
+func buildZCodeMessage(
+	ordinal int,
+	row zcodeMessageRow,
+	parts []zcodePartRow,
+) (ParsedMessage, bool) {
+	role, ok := normalizeZCodeRole(gjson.Get(row.data, "role").Str)
+	if !ok {
+		return ParsedMessage{}, false
+	}
+
+	msg := ParsedMessage{
+		Ordinal:   ordinal,
+		Role:      role,
+		Timestamp: zcodeParseTime(row.timeCreated),
+		Model:     zcodeMessageModel(row.data),
+		IsSystem:  role == RoleSystem,
+	}
+
+	var texts []string
+	var thinking []string
+	for _, part := range parts {
+		block := gjson.Parse(part.data)
+		switch block.Get("type").Str {
+		case "text":
+			if text := zcodeBlockText(block); text != "" {
+				texts = append(texts, text)
+			}
+		case "thinking", "reasoning":
+			text := zcodeThinkingText(block)
+			if text == "" {
+				continue
+			}
+			msg.HasThinking = true
+			thinking = append(thinking, text)
+			texts = append(texts, "[Thinking]\n"+text+"\n[/Thinking]")
+		case "tool_use", "tool":
+			msg.HasToolUse = true
+			if tc, ok := zcodeParseToolCall(block); ok {
+				msg.ToolCalls = append(msg.ToolCalls, tc)
+			}
+			if tr, ok := zcodeParseToolResult(block); ok {
+				msg.ToolResults = append(msg.ToolResults, tr)
+			}
+		case "tool_result":
+			if tr, ok := zcodeParseToolResult(block); ok {
+				msg.ToolResults = append(msg.ToolResults, tr)
+			}
+		}
+	}
+
+	msg.Content = strings.Join(texts, "\n")
+	msg.ThinkingText = strings.Join(thinking, "\n\n")
+	msg.ContentLength = len(msg.Content)
+	return msg, true
+}
+
+func normalizeZCodeRole(role string) (RoleType, bool) {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "user":
+		return RoleUser, true
+	case "assistant", "model":
+		return RoleAssistant, true
+	case "system":
+		return RoleSystem, true
+	default:
+		return "", false
+	}
+}
+
+func zcodeMessageModel(raw string) string {
+	for _, path := range []string{
+		"modelID",
+		"model_id",
+		"model.modelID",
+		"model.id",
+		"model.name",
+		"model",
+	} {
+		if model := strings.TrimSpace(gjson.Get(raw, path).Str); model != "" {
+			return model
+		}
+	}
+	return ""
+}
+
+func zcodeBlockText(block gjson.Result) string {
+	for _, path := range []string{"text", "content", "value"} {
+		value := block.Get(path)
+		if !value.Exists() {
+			continue
+		}
+		if text := decodeContent(value); text != "" {
+			return text
+		}
+		if value.Type == gjson.String && value.Str != "" {
+			return value.Str
+		}
+	}
+	return ""
+}
+
+func zcodeThinkingText(block gjson.Result) string {
+	for _, path := range []string{"thinking", "text", "content"} {
+		value := block.Get(path)
+		if !value.Exists() {
+			continue
+		}
+		if text := decodeContent(value); text != "" {
+			return text
+		}
+		if value.Type == gjson.String && value.Str != "" {
+			return value.Str
+		}
+	}
+	return ""
+}
+
+func zcodeParseToolCall(block gjson.Result) (ParsedToolCall, bool) {
+	name := block.Get("name").Str
+	if name == "" {
+		name = block.Get("tool_name").Str
+	}
+	if name == "" {
+		name = block.Get("toolName").Str
+	}
+	if name == "" {
+		name = block.Get("tool").Str
+	}
+	if name == "" {
+		return ParsedToolCall{}, false
+	}
+
+	input := toolCallInput(block)
+	if input.Raw == "" || input.Raw == "{}" {
+		if stateInput := block.Get("state.input"); stateInput.Exists() {
+			input = stateInput
+		}
+	}
+	inputJSON := input.Raw
+	if inputJSON == "" {
+		inputJSON = "{}"
+	}
+	toolUseID := block.Get("id").Str
+	if toolUseID == "" {
+		toolUseID = block.Get("tool_use_id").Str
+	}
+	if toolUseID == "" {
+		toolUseID = block.Get("toolUseID").Str
+	}
+	if toolUseID == "" {
+		toolUseID = block.Get("callID").Str
+	}
+	if toolUseID == "" {
+		toolUseID = block.Get("callId").Str
+	}
+
+	call := ParsedToolCall{
+		ToolUseID: toolUseID,
+		ToolName:  name,
+		Category:  NormalizeToolCategory(name),
+		InputJSON: inputJSON,
+	}
+	switch name {
+	case "Skill", "skill":
+		call.SkillName = input.Get("skill").Str
+		if call.SkillName == "" {
+			call.SkillName = input.Get("name").Str
+		}
+	default:
+		call.SkillName = inferToolSkillName(name, inputJSON)
+	}
+	return call, true
+}
+
+func zcodeParseToolResult(block gjson.Result) (ParsedToolResult, bool) {
+	toolUseID := block.Get("tool_use_id").Str
+	if toolUseID == "" {
+		toolUseID = block.Get("toolUseID").Str
+	}
+	if toolUseID == "" {
+		toolUseID = block.Get("tool_call_id").Str
+	}
+	if toolUseID == "" {
+		toolUseID = block.Get("callID").Str
+	}
+	if toolUseID == "" {
+		toolUseID = block.Get("callId").Str
+	}
+	if toolUseID == "" {
+		return ParsedToolResult{}, false
+	}
+
+	content := block.Get("content")
+	if !content.Exists() || content.Type == gjson.Null {
+		content = block.Get("result")
+	}
+	if !content.Exists() || content.Type == gjson.Null {
+		content = block.Get("output")
+	}
+	if !content.Exists() || content.Type == gjson.Null {
+		content = block.Get("state.output")
+	}
+	if content.Exists() && content.Type != gjson.Null {
+		return ParsedToolResult{
+			ToolUseID:     toolUseID,
+			ContentLength: toolResultContentLength(content),
+			ContentRaw:    content.Raw,
+		}, true
+	}
+
+	for _, key := range []string{"text", "error", "value"} {
+		if text := block.Get(key).Str; text != "" {
+			return ParsedToolResult{
+				ToolUseID:     toolUseID,
+				ContentLength: len(text),
+				ContentRaw:    strconv.Quote(text),
+			}, true
+		}
+	}
+	return ParsedToolResult{}, false
+}
+
+func zcodeTableHasColumn(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return false, fmt.Errorf("listing zcode table info for %s: %w", table, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			typeName   string
+			notNull    int
+			defaultV   sql.NullString
+			primaryKey int
+		)
+		if err := rows.Scan(
+			&cid, &name, &typeName, &notNull, &defaultV, &primaryKey,
+		); err != nil {
+			return false, fmt.Errorf("scanning zcode table info for %s: %w", table, err)
+		}
+		if strings.EqualFold(name, column) {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 func listZCodeUsageEvents(
