@@ -1767,55 +1767,14 @@ func (db *DB) backfillIsAutomatedLocked(w *writerHandle) error {
 		)
 	}
 
-	rows, err := w.Query(
-		`SELECT
-			s.id,
-			s.first_message,
-			s.user_message_count,
-			s.is_automated,
-			(
-				SELECT m.content
-				FROM messages m
-				WHERE m.session_id = s.id
-				  AND m.role = 'user'
-				  AND m.is_system = 0
-				  AND TRIM(m.content) <> ''
-				ORDER BY m.ordinal
-				LIMIT 1
-			) AS first_user_message
-		 FROM sessions s`,
-	)
-	if err != nil {
-		return fmt.Errorf(
-			"querying automated backfill candidates: %w", err,
-		)
-	}
-	defer rows.Close()
-
+	patterns := snapshotAutomationPatterns()
 	var setIDs, clearIDs []string
-	for rows.Next() {
-		var id string
-		var fm sql.NullString
-		var firstUser sql.NullString
-		var umc int
-		var rowAutomated bool
-		if err := rows.Scan(
-			&id, &fm, &umc, &rowAutomated, &firstUser,
-		); err != nil {
-			return fmt.Errorf(
-				"scanning backfill candidate: %w", err,
-			)
-		}
-		want := isAutomatedFromTextCandidates(
-			umc, firstUser, fm,
-		)
-		if want && !rowAutomated {
-			setIDs = append(setIDs, id)
-		} else if !want && rowAutomated {
-			clearIDs = append(clearIDs, id)
-		}
+	if stored == current {
+		setIDs, clearIDs, err = auditAutomatedMatchingHash(w, patterns)
+	} else {
+		setIDs, clearIDs, err = auditAutomatedFull(w, patterns)
 	}
-	if err := rows.Err(); err != nil {
+	if err != nil {
 		return err
 	}
 

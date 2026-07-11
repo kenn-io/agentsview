@@ -3,12 +3,162 @@ package db
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAutomationVerdictFromPrefix(t *testing.T) {
+	SetUserAutomationPrefixes([]string{"Custom automation:"})
+	t.Cleanup(func() { SetUserAutomationPrefixes(nil) })
+
+	tests := []struct {
+		name           string
+		prefix         string
+		fullByteLength int64
+		wantMatched    bool
+		wantConclusive bool
+	}{
+		{
+			name: "built-in prefix", prefix: "You are a code reviewer. Review",
+			fullByteLength: 200, wantMatched: true, wantConclusive: true,
+		},
+		{
+			name: "user prefix", prefix: "Custom automation: inspect",
+			fullByteLength: 100, wantMatched: true, wantConclusive: true,
+		},
+		{
+			name: "substring visible", prefix: "This was invoked by roborev to perform this review",
+			fullByteLength: 100, wantMatched: true, wantConclusive: true,
+		},
+		{
+			name: "complete exact with Unicode whitespace", prefix: "\u2003Warmup\u00a0",
+			fullByteLength: int64(len("\u2003Warmup\u00a0")),
+			wantMatched:    true, wantConclusive: true,
+		},
+		{
+			name: "exact followed by unseen suffix", prefix: "Warmup",
+			fullByteLength: int64(len("Warmup and continue")),
+			wantMatched:    false, wantConclusive: false,
+		},
+		{
+			name: "complete non-match", prefix: "Explain this code",
+			fullByteLength: int64(len("Explain this code")),
+			wantMatched:    false, wantConclusive: true,
+		},
+		{
+			name: "substring beyond prefix", prefix: strings.Repeat("x", 32),
+			fullByteLength: 200, wantMatched: false, wantConclusive: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			matched, conclusive := AutomationVerdictFromPrefix(
+				[]byte(tt.prefix), tt.fullByteLength,
+			)
+			assert.Equal(t, tt.wantMatched, matched)
+			assert.Equal(t, tt.wantConclusive, conclusive)
+		})
+	}
+}
+
+func TestBackfillIsAutomatedMatchingHashBoundsTextAllocations(t *testing.T) {
+	d := testDB(t)
+	const (
+		largeConclusiveBytes = 4 << 20
+		unresolvedBytes      = 256 << 10
+		allocationCeiling    = 6 << 20
+	)
+
+	prefixPrompt := "You are a code reviewer." +
+		strings.Repeat("x", largeConclusiveBytes)
+	insertSession(t, d, "prefix-first-message", "proj", func(s *Session) {
+		s.FirstMessage = &prefixPrompt
+		s.UserMessageCount = 1
+	})
+
+	title := "Generated title"
+	insertSession(t, d, "prefix-first-user", "proj", func(s *Session) {
+		s.FirstMessage = &title
+		s.UserMessageCount = 1
+	})
+	require.NoError(t, d.ReplaceSessionMessages(
+		"prefix-first-user",
+		[]Message{userMsg("prefix-first-user", 0, prefixPrompt)},
+	), "store large prefix-matching first user message")
+
+	humanPrompt := strings.Repeat("h", unresolvedBytes)
+	insertSession(t, d, "large-human", "proj", func(s *Session) {
+		s.FirstMessage = &humanPrompt
+		s.UserMessageCount = 1
+	})
+
+	lateSubstringPrompt := strings.Repeat("z", unresolvedBytes) +
+		" invoked by roborev to perform this review"
+	insertSession(t, d, "late-substring", "proj", func(s *Session) {
+		s.FirstMessage = &lateSubstringPrompt
+		s.UserMessageCount = 1
+	})
+
+	largeMultiTurn := strings.Repeat("m", largeConclusiveBytes)
+	insertSession(t, d, "stale-multi-turn", "proj", func(s *Session) {
+		s.FirstMessage = &largeMultiTurn
+		s.UserMessageCount = 2
+	})
+
+	_, err := d.getWriter().Exec(`
+		UPDATE sessions
+		SET is_automated = CASE id
+			WHEN 'prefix-first-message' THEN 0
+			WHEN 'prefix-first-user' THEN 0
+			WHEN 'late-substring' THEN 0
+			WHEN 'stale-multi-turn' THEN 1
+			ELSE is_automated
+		END
+		WHERE id IN (
+			'prefix-first-message', 'prefix-first-user',
+			'late-substring', 'stale-multi-turn'
+		)`)
+	require.NoError(t, err, "seed stale automation flags")
+	_, err = d.getWriter().Exec(
+		`INSERT INTO stats (key, value) VALUES (?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		ClassifierHashKey, ClassifierHash(),
+	)
+	require.NoError(t, err, "stamp current classifier hash")
+
+	result := testing.Benchmark(func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			d.mu.Lock()
+			err := d.backfillIsAutomatedLocked(d.getWriter())
+			d.mu.Unlock()
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	t.Logf("matching-hash audit: %s, %d B/op", result, result.AllocedBytesPerOp())
+	assert.Less(t, result.AllocedBytesPerOp(), int64(allocationCeiling),
+		"matching-hash audit copied conclusive large prompts: %s", result.String())
+
+	for id, want := range map[string]bool{
+		"prefix-first-message": true,
+		"prefix-first-user":    true,
+		"large-human":          false,
+		"late-substring":       true,
+		"stale-multi-turn":     false,
+	} {
+		session, err := d.GetSession(context.Background(), id)
+		require.NoError(t, err, "get %s", id)
+		require.NotNil(t, session, "missing %s", id)
+		assert.Equal(t, want, session.IsAutomated, id)
+	}
+}
 
 func TestBackfillIsAutomatedBidirectional(t *testing.T) {
 	d := testDB(t)

@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"database/sql"
 	"slices"
 	"strings"
@@ -51,6 +52,11 @@ var automatedExactMatches = []string{
 	"Respond with exactly: OK",
 	"Reply with exactly OK.",
 }
+
+var (
+	automatedPrefixBytes    = automationPatternsAsBytes(automatedPrefixes)
+	automatedSubstringBytes = automationPatternsAsBytes(automatedSubstrings)
+)
 
 const userPatternMaxLen = 1024
 
@@ -130,6 +136,36 @@ func snapshotUserAutomationPatterns() (
 		append([]string(nil), userExactMatches...)
 }
 
+type automationPatternSnapshot struct {
+	userPrefixes       []string
+	userSubstrings     []string
+	userExactMatches   []string
+	userPrefixBytes    [][]byte
+	userSubstringBytes [][]byte
+}
+
+func snapshotAutomationPatterns() automationPatternSnapshot {
+	prefixes, substrings, exactMatches := snapshotUserAutomationPatterns()
+	return automationPatternSnapshot{
+		userPrefixes:       prefixes,
+		userSubstrings:     substrings,
+		userExactMatches:   exactMatches,
+		userPrefixBytes:    automationPatternsAsBytes(prefixes),
+		userSubstringBytes: automationPatternsAsBytes(substrings),
+	}
+}
+
+func automationPatternsAsBytes(patterns []string) [][]byte {
+	if len(patterns) == 0 {
+		return nil
+	}
+	out := make([][]byte, len(patterns))
+	for i, pattern := range patterns {
+		out[i] = []byte(pattern)
+	}
+	return out
+}
+
 // normalizeUserAutomationPatterns applies the validation rules from the
 // design spec ("Validation behavior" section). Built-in overlap is checked
 // against the category-specific pattern slice directly.
@@ -159,14 +195,16 @@ func normalizeUserAutomationPatterns(in []string, builtIns []string) []string {
 // IsAutomatedSession returns true if the first message
 // matches a known automated review/fix prompt pattern.
 func IsAutomatedSession(firstMessage string) bool {
-	prefixes, substrings, exactMatches := snapshotUserAutomationPatterns()
+	return snapshotAutomationPatterns().matches(firstMessage)
+}
 
+func (patterns automationPatternSnapshot) matches(firstMessage string) bool {
 	for _, prefix := range automatedPrefixes {
 		if strings.HasPrefix(firstMessage, prefix) {
 			return true
 		}
 	}
-	for _, prefix := range prefixes {
+	for _, prefix := range patterns.userPrefixes {
 		if strings.HasPrefix(firstMessage, prefix) {
 			return true
 		}
@@ -176,7 +214,7 @@ func IsAutomatedSession(firstMessage string) bool {
 			return true
 		}
 	}
-	for _, sub := range substrings {
+	for _, sub := range patterns.userSubstrings {
 		if strings.Contains(firstMessage, sub) {
 			return true
 		}
@@ -185,10 +223,99 @@ func IsAutomatedSession(firstMessage string) bool {
 	if slices.Contains(automatedExactMatches, trimmed) {
 		return true
 	}
-	if slices.Contains(exactMatches, trimmed) {
+	if slices.Contains(patterns.userExactMatches, trimmed) {
 		return true
 	}
 	return false
+}
+
+// AutomationVerdictFromPrefix classifies bounded byte evidence. A visible
+// prefix or substring match is definitive even when text was truncated. A
+// non-match is definitive only when the prefix contains the complete value;
+// unseen bytes may contain a substring or change an exact-match verdict.
+func AutomationVerdictFromPrefix(
+	prefix []byte, fullByteLength int64,
+) (matched, conclusive bool) {
+	return snapshotAutomationPatterns().verdictFromPrefix(
+		prefix, fullByteLength,
+	)
+}
+
+func (patterns automationPatternSnapshot) verdictFromPrefix(
+	prefix []byte, fullByteLength int64,
+) (matched, conclusive bool) {
+	for _, pattern := range automatedPrefixBytes {
+		if bytes.HasPrefix(prefix, pattern) {
+			return true, true
+		}
+	}
+	for _, pattern := range patterns.userPrefixBytes {
+		if bytes.HasPrefix(prefix, pattern) {
+			return true, true
+		}
+	}
+	for _, pattern := range automatedSubstringBytes {
+		if bytes.Contains(prefix, pattern) {
+			return true, true
+		}
+	}
+	for _, pattern := range patterns.userSubstringBytes {
+		if bytes.Contains(prefix, pattern) {
+			return true, true
+		}
+	}
+	if fullByteLength != int64(len(prefix)) {
+		return false, false
+	}
+	trimmed := strings.TrimSpace(string(prefix))
+	return slices.Contains(automatedExactMatches, trimmed) ||
+		slices.Contains(patterns.userExactMatches, trimmed), true
+}
+
+// AutomationTextEvidence is bounded text and its complete byte length. Valid
+// distinguishes a missing SQL value from an empty complete string.
+type AutomationTextEvidence struct {
+	Prefix         []byte
+	FullByteLength int64
+	Valid          bool
+}
+
+// AutomationVerdictFromEvidence combines the first stored user message and
+// fallback first_message using the same ordering and single-turn rule as the
+// full-text classifier. An inconclusive result requires full-text fallback.
+func AutomationVerdictFromEvidence(
+	userMessageCount int,
+	firstUser, firstMessage AutomationTextEvidence,
+) (matched, conclusive bool) {
+	return snapshotAutomationPatterns().verdictFromEvidence(
+		userMessageCount, firstUser, firstMessage,
+	)
+}
+
+func (patterns automationPatternSnapshot) verdictFromEvidence(
+	userMessageCount int,
+	firstUser, firstMessage AutomationTextEvidence,
+) (matched, conclusive bool) {
+	if userMessageCount > 1 {
+		return false, true
+	}
+
+	unresolved := false
+	for _, candidate := range [...]AutomationTextEvidence{firstUser, firstMessage} {
+		if !candidate.Valid {
+			continue
+		}
+		matched, conclusive := patterns.verdictFromPrefix(
+			candidate.Prefix, candidate.FullByteLength,
+		)
+		if matched {
+			return true, true
+		}
+		if !conclusive {
+			unresolved = true
+		}
+	}
+	return false, !unresolved
 }
 
 // IsAutomatedTranscript classifies automation from the actual
@@ -227,13 +354,22 @@ func isAutomatedFromTextCandidates(
 	userMessageCount int,
 	firstUserMessage, firstMessage sql.NullString,
 ) bool {
+	return snapshotAutomationPatterns().matchesTextCandidates(
+		userMessageCount, firstUserMessage, firstMessage,
+	)
+}
+
+func (patterns automationPatternSnapshot) matchesTextCandidates(
+	userMessageCount int,
+	firstUserMessage, firstMessage sql.NullString,
+) bool {
 	if userMessageCount > 1 {
 		return false
 	}
 	if firstUserMessage.Valid &&
 		strings.TrimSpace(firstUserMessage.String) != "" &&
-		IsAutomatedSession(firstUserMessage.String) {
+		patterns.matches(firstUserMessage.String) {
 		return true
 	}
-	return firstMessage.Valid && IsAutomatedSession(firstMessage.String)
+	return firstMessage.Valid && patterns.matches(firstMessage.String)
 }
