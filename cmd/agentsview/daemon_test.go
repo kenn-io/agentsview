@@ -177,6 +177,28 @@ func TestDaemonStartUsesConfigOnlyPolicyAndIsIdempotent(t *testing.T) {
 	assert.Contains(t, out.String(), "pid 41")
 }
 
+func TestDaemonStopUsesStartupStateFallbackWhileStarting(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	deps.isStarting = func(string) bool { return true }
+	deps.readStartupState = func(string) *startupState {
+		return &startupState{PID: 77, Phase: "starting HTTP server"}
+	}
+	var stopped daemon.RuntimeRecord
+	deps.writableRuntime = func(string, string) *DaemonRuntime {
+		return &DaemonRuntime{Record: testWritableRecord(77, "")}
+	}
+	deps.stopProcess = func(rec daemon.RuntimeRecord, _ time.Duration) error {
+		stopped = rec
+		return nil
+	}
+
+	err := executeDaemonCommand(t, *deps, out, "stop")
+	require.NoError(t, err)
+	assert.Equal(t, 77, stopped.PID)
+	assert.Contains(t, out.String(), "Stopped agentsview (pid 77).")
+	assert.NotContains(t, out.String(), "starting up")
+}
+
 func TestDaemonStartPersistentStartupNeverLaunches(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
 	deps.isStarting = func(string) bool { return true }

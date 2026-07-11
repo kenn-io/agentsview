@@ -533,9 +533,6 @@ func runDaemonStop(w io.Writer, deps daemonCommandDeps) error {
 	if err := validateLockedDataDir(dataDir, cfg.DataDir); err != nil {
 		return fmt.Errorf("daemon stop: %w", err)
 	}
-	if deps.isStarting(cfg.DataDir) {
-		return daemonPersistentStartupError("daemon stop", cfg.DataDir, deps.readStartupState(cfg.DataDir), deps.now())
-	}
 	records, err := deps.writableRecords(cfg.DataDir, cfg.AuthToken)
 	if err != nil {
 		return fmt.Errorf("daemon stop: inspecting runtime store: %w", err)
@@ -546,6 +543,9 @@ func runDaemonStop(w io.Writer, deps daemonCommandDeps) error {
 				records = []daemon.RuntimeRecord{rt.Record}
 			}
 		}
+	}
+	if len(records) == 0 && deps.isStarting(cfg.DataDir) {
+		return daemonPersistentStartupError("daemon stop", cfg.DataDir, deps.readStartupState(cfg.DataDir), deps.now())
 	}
 	if len(records) == 0 {
 		fmt.Fprintln(w, "agentsview daemon is not running.")
