@@ -578,7 +578,7 @@ func runPGServe(appCfg config.Config, basePath string) {
 	// Write the kit runtime record so CLI commands can discover this
 	// daemon. ReadOnly=true marks it as pg serve (read-only)
 	// so clients can select an appropriate transport.
-	if _, sfErr := WriteDaemonRuntimeWithAuth(
+	if _, sfErr := writeDaemonRuntimeWithAuth(
 		rt.Cfg.DataDir, rt.Cfg.Host, rt.Cfg.Port, version, true,
 		rt.Cfg.RequireAuth,
 		rt.Caddy.Pid(),

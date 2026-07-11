@@ -6,6 +6,11 @@ import (
 	"log"
 )
 
+var (
+	writeDaemonRuntimeWithAuthAndNoSync = WriteDaemonRuntimeWithAuthAndNoSync
+	writeDaemonRuntimeWithAuth          = WriteDaemonRuntimeWithAuth
+)
+
 func warnRuntimeRecordWrite(
 	out io.Writer, err error, context, remedy string,
 ) {

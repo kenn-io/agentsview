@@ -5,8 +5,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -40,27 +42,16 @@ func TestRuntimeWarningHelper(t *testing.T) {
 }
 
 func TestServeRuntimeRecordWriteFailureWarnsVisible(t *testing.T) {
-	var visible bytes.Buffer
-	reportRuntimeRecordWrite(
-		&visible, errors.New("permission denied"),
-		"keeping start lock as fallback",
-		"To fix permissions, run: icacls <dir> /setowner <user>",
-	)
-
-	assert.Contains(t, visible.String(), "could not write daemon runtime record")
-	assert.Contains(t, visible.String(), "icacls <dir> /setowner <user>")
+	out, err := runServeRuntimeWarningHelper(t, true)
+	require.NoError(t, err, string(out))
+	assert.Contains(t, string(out), "could not write daemon runtime record")
+	assert.Contains(t, string(out), "icacls <dir> /setowner <user>")
 }
 
 func TestServeRuntimeRecordWriteSuccessDoesNotWarnVisible(t *testing.T) {
-	var visible bytes.Buffer
-	logOutput := captureLogOutput(t)
-	reportRuntimeRecordWrite(
-		&visible, nil, "keeping start lock as fallback",
-		"To fix permissions, run: icacls <dir> /setowner <user>",
-	)
-
-	assert.NotContains(t, visible.String(), "could not write daemon runtime record")
-	assert.NotContains(t, logOutput.String(), "could not write daemon runtime record")
+	out, err := runServeRuntimeWarningHelper(t, false)
+	require.NoError(t, err, string(out))
+	assert.NotContains(t, string(out), "could not write daemon runtime record")
 }
 
 func TestPGServeRuntimeRecordWriteFailureWarnsVisible(t *testing.T) {
@@ -83,30 +74,41 @@ func TestDuckDBServeRuntimeRecordWriteFailureWarnsVisible(t *testing.T) {
 	assert.Contains(t, visible.String(), "could not write daemon runtime record")
 }
 
-func TestServeRuntimeRecordWriteCallSitesUseVisibleSink(t *testing.T) {
-	tests := []struct {
-		file string
-		call string
-	}{
-		{file: "main.go", call: "WriteDaemonRuntimeWithAuthAndNoSync("},
-		{file: "pg.go", call: "WriteDaemonRuntimeWithAuth("},
-		{file: "duckdb.go", call: "WriteDaemonRuntimeWithAuth("},
+func runServeRuntimeWarningHelper(t *testing.T, failWrite bool) ([]byte, error) {
+	t.Helper()
+	dataDir := t.TempDir()
+	cmd := exec.Command(os.Args[0], "-test.run=TestRunServeRuntimeWarningHelperProcess")
+	cmd.Env = append(
+		os.Environ(),
+		"AGENTSVIEW_RUN_SERVE_RUNTIME_WARNING_HELPER=1",
+		"AGENTSVIEW_RUN_SERVE_RUNTIME_WARNING_FAIL="+fmt.Sprint(failWrite),
+		"AGENTSVIEW_DATA_DIR="+dataDir,
+	)
+	return cmd.CombinedOutput()
+}
+
+func TestRunServeRuntimeWarningHelperProcess(t *testing.T) {
+	if os.Getenv("AGENTSVIEW_RUN_SERVE_RUNTIME_WARNING_HELPER") != "1" {
+		return
 	}
-	for _, tt := range tests {
-		t.Run(tt.file, func(t *testing.T) {
-			source, err := os.ReadFile(tt.file)
-			require.NoError(t, err)
-			branchStart := strings.Index(string(source), tt.call)
-			require.GreaterOrEqual(t, branchStart, 0)
-			branch := string(source)[branchStart:]
-			branchEnd := strings.Index(branch, "\n\t} else {")
-			require.Greater(t, branchEnd, 0)
-			branch = branch[:branchEnd]
-			assert.Contains(t, branch, "reportRuntimeRecordWrite(")
-			assert.Contains(t, branch, "os.Stdout")
-			assert.NotContains(t, branch, "log.Printf")
-		})
+	if os.Getenv("AGENTSVIEW_RUN_SERVE_RUNTIME_WARNING_FAIL") == "true" {
+		writeDaemonRuntimeWithAuthAndNoSync = func(
+			string, string, int, string, bool, bool, bool, ...int,
+		) (string, error) {
+			return "", errors.New("forced runtime-record write failure")
+		}
 	}
+	go func() {
+		time.Sleep(time.Second)
+		os.Exit(0)
+	}()
+	runServe(config.Config{
+		Host:    "127.0.0.1",
+		Port:    0,
+		DataDir: os.Getenv("AGENTSVIEW_DATA_DIR"),
+		DBPath:  filepath.Join(os.Getenv("AGENTSVIEW_DATA_DIR"), "sessions.db"),
+		NoSync:  true,
+	}, serveOptions{})
 }
 
 func TestMustLoadConfig(t *testing.T) {

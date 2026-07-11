@@ -338,7 +338,7 @@ func runDuckDBServe(appCfg config.Config, basePath string) {
 		}
 		fatal("duckdb serve: %v", err)
 	}
-	if _, sfErr := WriteDaemonRuntimeWithAuth(
+	if _, sfErr := writeDaemonRuntimeWithAuth(
 		rt.Cfg.DataDir, rt.Cfg.Host, rt.Cfg.Port, version, true,
 		rt.Cfg.RequireAuth,
 		rt.Caddy.Pid(),
