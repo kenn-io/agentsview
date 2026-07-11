@@ -72,6 +72,25 @@ func TestDetectTransport_UsesStartupStateFallbackWithoutRuntimeRecord(t *testing
 	assert.Equal(t, fmt.Sprintf("http://%s:%d", host, port), tr.URL)
 }
 
+func TestEnsureTransport_SameVersionFallbackDoesNotAutostart(t *testing.T) {
+	dir := runtimeTestDir(t)
+	host, port := testPingServer(t)
+	createTime, ok := processCreateTimeMillis(os.Getpid())
+	require.True(t, ok)
+	writeStartupFallbackFixture(t, dir, host, port, os.Getpid(), strconv.FormatInt(createTime, 10))
+	setTestVersion(t, "test")
+	forbidStartBackgroundServeForTransport(t,
+		"same-version fallback daemon must not trigger autostart")
+
+	cfg := config.Config{DataDir: dir}
+	tr, err := ensureTransport(&cfg, transportIntentRead, time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, transportHTTP, tr.Mode)
+	assert.Equal(t, fmt.Sprintf("http://%s:%d", host, port), tr.URL)
+	require.NotNil(t, tr.Runtime)
+	assert.Equal(t, "test", tr.Runtime.Record.Version)
+}
+
 // incompatibleRuntimeRecord builds a writable runtime record whose API
 // version metadata is "0", which the compatibility check rejects. It
 // models a daemon from an older release that still owns the archive.

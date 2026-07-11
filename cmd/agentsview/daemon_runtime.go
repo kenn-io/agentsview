@@ -278,6 +278,7 @@ func findStartupStateFallback(dataDir, authToken string) *DaemonRuntime {
 	if err != nil || info.PID != st.PID {
 		return nil
 	}
+	rec.Version = info.Version
 	rt := daemonRuntimeFromRecord(rec)
 	rt.RuntimeFallback = true
 	rt.RuntimeError = st.RuntimeError
