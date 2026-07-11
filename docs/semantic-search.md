@@ -35,6 +35,7 @@ include_automated = false         # default; automated sessions (e.g. roborev) a
 model = "nomic-embed-text"
 dimension = 768                   # every returned vector must have this length
 max_input_chars = 8192            # per-chunk rune cap (default 8192)
+# request_dimensions = true      # ask for Matryoshka-reduced vectors of exactly `dimension` (see below)
 # input_suffix = "<|endoftext|>"  # appended to every embedded text; default empty (see below)
 default_server = "local"          # server used for query encoding and unnamed builds
 
@@ -58,11 +59,12 @@ parse. Restart the daemon (or run a CLI command) after editing the file.
 
 ### Named embeddings servers
 
-Model identity — `model`, `dimension`, `max_input_chars`, `input_suffix` — is
-global: every server in the `servers` table must serve that same model, so
-vectors produced by any of them are interchangeable and land in the same
-generation. What varies per server is transport and capacity: `endpoint`,
-`api_key_env`, `timeout`, `max_retries`, `batch_size`, and `concurrency`.
+Model identity — `model`, `dimension`, `request_dimensions`, `max_input_chars`,
+`input_suffix` — is global: every server in the `servers` table must serve that
+same model, so vectors produced by any of them are interchangeable and land in
+the same generation. What varies per server is transport and capacity:
+`endpoint`, `api_key_env`, `timeout`, `max_retries`, `batch_size`, and
+`concurrency`.
 
 This split exists so you can encode search queries against a fast local server
 while offloading bulk index builds to a bigger remote machine:
@@ -112,6 +114,50 @@ served by llama.cpp, which is benchmarked with `<|endoftext|>` appended to each
 input. The suffix is part of the generation fingerprint, so changing it
 (including setting it for the first time) re-embeds the whole archive on the
 next build.
+
+### Reduced output dimensions (Matryoshka)
+
+Matryoshka-trained embedding models — Qwen3-Embedding, OpenAI's
+`text-embedding-3-*` — can serve shorter vectors than their native output by
+truncating and renormalizing server-side, trading a little recall for a smaller,
+faster index. By default agentsview never asks for this: `dimension` only
+validates that responses have the expected length, and nothing extra goes on the
+wire. Setting `request_dimensions = true` sends `dimension` as the
+OpenAI-compatible `dimensions` request field on every embeddings call — document
+builds and search-query encoding alike, so both always use the same requested
+length:
+
+```toml
+[vector]
+enabled = true
+
+[vector.embeddings]
+model = "qwen3-embedding:0.6b"
+dimension = 256                 # reduced from the model's native 1024
+request_dimensions = true
+
+[vector.embeddings.servers.local]
+endpoint = "http://localhost:11434/v1"
+```
+
+```bash
+# Qwen3-Embedding supports Matryoshka reduction; Ollama's OpenAI-compatible
+# /v1/embeddings route passes the dimensions field through to it.
+ollama pull qwen3-embedding:0.6b
+```
+
+This requires an endpoint and model that support dimension selection. Reduction
+is never faked client-side: an endpoint that rejects the `dimensions` field
+fails the build or query with an error naming `request_dimensions` and the fix,
+and one that silently ignores the field and returns native-length vectors fails
+the dimension check with the same guidance, rather than agentsview truncating
+vectors itself. Endpoints that don't support the field keep working as long as
+`request_dimensions` stays unset.
+
+`request_dimensions` is part of the generation fingerprint (like `input_suffix`,
+only when enabled): reduced vectors are renormalized prefixes, not
+byte-identical to native output, so enabling it — or changing `dimension` —
+makes the existing index stale and re-embeds the archive on the next build.
 
 The first scheduled build that `run_after_sync` triggers after enabling
 `[vector]` embeds the entire existing archive, not just deltas, since the mirror

@@ -178,19 +178,20 @@ The vector index moves through kit's generation lifecycle: **building → active
 retired**. A generation's fingerprint is derived from `model` + `dimension` +
 the params map
 `{max_input_chars, doc_unit_scheme: "run_v1", chunk_overlap_chars}`
-(`vectorGeneration` in `cmd/agentsview/embeddings.go`), plus `input_suffix` when
-configured — an empty suffix is omitted from the map rather than included as
-`""`, so configs written before the key existed keep their fingerprints.
-`chunk_overlap_chars` is computed by `vector.ChunkOverlap` —
-`max_input_chars * 15 / 100` — the same function `Open` uses for kit's
-`SplitOptions`, so the split behavior and its fingerprint can never drift apart.
-Changing any input — the model, the dimension, the chunking cap, the input
-suffix, the overlap formula, or the document-unit scheme — produces a different
-fingerprint and cuts a new generation. Which
-`[vector.embeddings.servers.<name>]` entry encoded a document is deliberately
-*not* a fingerprint input: every server serves the same globally-configured
-model, so their vectors are interchangeable and a build may switch servers
-(`embeddings build --using <name>`) without invalidating the generation.
+(`vectorGeneration` in `cmd/agentsview/embeddings.go`), plus `input_suffix` and
+`request_dimensions` when configured — an unset value is omitted from the map
+rather than included as `""`/`false`, so configs written before those keys
+existed keep their fingerprints. `chunk_overlap_chars` is computed by
+`vector.ChunkOverlap` — `max_input_chars * 15 / 100` — the same function `Open`
+uses for kit's `SplitOptions`, so the split behavior and its fingerprint can
+never drift apart. Changing any input — the model, the dimension, whether
+reduced output dimensions are requested, the chunking cap, the input suffix, the
+overlap formula, or the document-unit scheme — produces a different fingerprint
+and cuts a new generation. Which `[vector.embeddings.servers.<name>]` entry
+encoded a document is deliberately *not* a fingerprint input: every server
+serves the same globally-configured model, so their vectors are interchangeable
+and a build may switch servers (`embeddings build --using <name>`) without
+invalidating the generation.
 
 - `embeddings build` (incremental): mirror refresh, then fill whatever the
   active generation is missing.

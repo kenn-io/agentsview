@@ -304,6 +304,24 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 		assert.Equal(t, "24h", cfg.Vector.Embed.BackstopInterval, "unset backstop_interval keeps default")
 		assert.False(t, cfg.Vector.IncludeAutomated, "unset include_automated keeps the false default")
 		assert.Empty(t, cfg.Vector.Embeddings.InputSuffix, "unset input_suffix defaults to empty")
+		assert.False(t, cfg.Vector.Embeddings.RequestDimensions,
+			"unset request_dimensions keeps the false default")
+	})
+
+	t.Run("request_dimensions true is loaded", func(t *testing.T) {
+		cfg := loadMinimalWithConfig(t, map[string]any{
+			"vector": map[string]any{
+				"enabled": true,
+				"embeddings": map[string]any{
+					"model":              "qwen3-embedding:0.6b",
+					"dimension":          256,
+					"request_dimensions": true,
+					"servers":            minimalServers(),
+				},
+			},
+		})
+		assert.True(t, cfg.Vector.Embeddings.RequestDimensions)
+		assert.Equal(t, 256, cfg.Vector.Embeddings.Dimension)
 	})
 
 	t.Run("named servers with default_server load and resolve", func(t *testing.T) {

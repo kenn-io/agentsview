@@ -2,9 +2,15 @@ package vector
 
 import (
 	"context"
+	"encoding/json"
+	"math"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
@@ -768,4 +774,105 @@ func TestDocAnchorOutOfRangeChunkIndexFallsBack(t *testing.T) {
 		assert.Equal(t, 7, anchor)
 		assert.Equal(t, "ccccc", snippet)
 	})
+}
+
+// TestSearchReducedDimensionsEndToEnd exercises the full reduced-dimension
+// path against a Matryoshka-style stub server: every embeddings request —
+// document builds and the search query alike — carries the configured
+// dimensions field, the index stores vectors at the reduced length, and
+// semantic search ranks in the reduced space. The stub serves native
+// 4-dimensional vectors and honors the OpenAI-compatible dimensions field by
+// slicing and renormalizing, the way Matryoshka-capable endpoints do.
+func TestSearchReducedDimensionsEndToEnd(t *testing.T) {
+	const nativeDim, reducedDim = 4, 3
+
+	nativeVector := func(text string) []float32 {
+		switch {
+		case strings.Contains(text, "alpha"):
+			return []float32{1, 0, 0, 1}
+		case strings.Contains(text, "beta"):
+			return []float32{0, 1, 0, 1}
+		default:
+			return []float32{0, 0, 1, 1}
+		}
+	}
+
+	var mu sync.Mutex
+	var requestedDims []int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Input      []string `json:"input"`
+			Dimensions int      `json:"dimensions"`
+		}
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		mu.Lock()
+		requestedDims = append(requestedDims, req.Dimensions)
+		mu.Unlock()
+
+		dim := nativeDim
+		if req.Dimensions > 0 {
+			dim = req.Dimensions
+		}
+		data := make([]map[string]any, len(req.Input))
+		for i, text := range req.Input {
+			sliced := nativeVector(text)[:dim]
+			var norm float64
+			for _, v := range sliced {
+				norm += float64(v) * float64(v)
+			}
+			norm = math.Sqrt(norm)
+			vec := make([]float32, dim)
+			for j, v := range sliced {
+				vec[j] = float32(float64(v) / norm)
+			}
+			data[i] = map[string]any{"index": i, "embedding": vec}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"data": data}))
+	}))
+	defer srv.Close()
+
+	enc := NewEncoder(EncoderConfig{
+		Endpoint:          srv.URL + "/v1",
+		Model:             "matryoshka-model",
+		Dimension:         reducedDim,
+		RequestDimensions: true,
+		Timeout:           5 * time.Second,
+		MaxRetries:        1,
+	})
+
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	gen := kitvec.Generation{
+		Model:      "matryoshka-model",
+		Dimensions: reducedDim,
+		Params:     map[string]string{"request_dimensions": "true"},
+	}
+
+	result, err := ix.Build(ctx, threeDocSearchSource(), enc, gen, BuildOptions{})
+	require.NoError(t, err)
+	assert.True(t, result.Activated)
+	assert.Equal(t, 3, result.Fill.Documents)
+
+	gens, err := ix.Generations(ctx)
+	require.NoError(t, err)
+	require.Len(t, gens, 1)
+	assert.Equal(t, reducedDim, gens[0].Dimension,
+		"the generation stores the reduced dimension")
+
+	hits, err := ix.Search(ctx, enc, "alpha", 10)
+	require.NoError(t, err)
+	require.NotEmpty(t, hits)
+	assert.Equal(t, "s1", hits[0].SessionID)
+	assert.Equal(t, 0, hits[0].Ordinal)
+	assert.Contains(t, hits[0].Snippet, "alpha")
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.GreaterOrEqual(t, len(requestedDims), 2,
+		"at least one build request and the query request reached the server")
+	for i, d := range requestedDims {
+		assert.Equal(t, reducedDim, d,
+			"request %d must ask for the reduced dimension", i)
+	}
 }

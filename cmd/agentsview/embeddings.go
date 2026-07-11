@@ -247,6 +247,13 @@ func vectorGeneration(c config.VectorEmbeddingsConfig) kitvec.Generation {
 	if c.InputSuffix != "" {
 		params["input_suffix"] = c.InputSuffix
 	}
+	// request_dimensions likewise joins only when enabled. Reduced vectors
+	// are renormalized prefixes, not byte-identical to a native embedding of
+	// the same length, so flipping the flag must cut a new generation even
+	// when the dimension value itself is unchanged.
+	if c.RequestDimensions {
+		params["request_dimensions"] = "true"
+	}
 	return kitvec.Generation{
 		Model:      c.Model,
 		Dimensions: c.Dimension,
@@ -268,13 +275,14 @@ func newVectorEncoder(c config.VectorEmbeddingsConfig, serverName string) (kitve
 			"parsing [vector.embeddings.servers.%s] timeout %q: %w", name, server.Timeout, err)
 	}
 	return vector.NewEncoder(vector.EncoderConfig{
-		Endpoint:    server.Endpoint,
-		APIKey:      server.APIKey(),
-		Model:       c.Model,
-		Dimension:   c.Dimension,
-		Timeout:     timeout,
-		MaxRetries:  server.MaxRetries,
-		InputSuffix: c.InputSuffix,
+		Endpoint:          server.Endpoint,
+		APIKey:            server.APIKey(),
+		Model:             c.Model,
+		Dimension:         c.Dimension,
+		RequestDimensions: c.RequestDimensions,
+		Timeout:           timeout,
+		MaxRetries:        server.MaxRetries,
+		InputSuffix:       c.InputSuffix,
 	}), nil
 }
 

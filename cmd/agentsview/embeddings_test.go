@@ -142,6 +142,23 @@ func TestVectorGenerationParams(t *testing.T) {
 		"chunk_overlap_chars": strconv.Itoa(vector.ChunkOverlap(4000)),
 		"input_suffix":        "<|endoftext|>",
 	}, gen.Params)
+
+	// request_dimensions follows the same only-when-set rule, and enabling it
+	// must change the fingerprint even at an unchanged dimension value, so
+	// the staleness gate forces a rebuild before reduced query vectors are
+	// compared against native-dimension stored vectors.
+	nativeFingerprint := gen.Fingerprint()
+	c.RequestDimensions = true
+	gen = vectorGeneration(c)
+	assert.Equal(t, map[string]string{
+		"max_input_chars":     "4000",
+		"doc_unit_scheme":     "run_v1",
+		"chunk_overlap_chars": strconv.Itoa(vector.ChunkOverlap(4000)),
+		"input_suffix":        "<|endoftext|>",
+		"request_dimensions":  "true",
+	}, gen.Params)
+	assert.NotEqual(t, nativeFingerprint, gen.Fingerprint(),
+		"enabling request_dimensions cuts a new generation")
 }
 
 // TestEmbeddingsDisabledReturnsError asserts every subcommand refuses with

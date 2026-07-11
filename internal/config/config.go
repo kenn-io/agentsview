@@ -132,15 +132,24 @@ type VectorConfig struct {
 // VectorEmbeddingsConfig describes the embedding space — the model identity
 // every server must share — and the named servers that can encode it.
 //
-// Model identity (model, dimension, max_input_chars, input_suffix) is
-// deliberately global rather than per-server: it joins the generation
-// fingerprint, and query vectors are only comparable to stored document
-// vectors from the same space. Servers differ only in transport and
+// Model identity (model, dimension, request_dimensions, max_input_chars,
+// input_suffix) is deliberately global rather than per-server: it joins the
+// generation fingerprint, and query vectors are only comparable to stored
+// document vectors from the same space. Servers differ only in transport and
 // capacity, so a build run on any server produces vectors every other
 // server's queries can search.
 type VectorEmbeddingsConfig struct {
 	Model     string `toml:"model" json:"model"`
 	Dimension int    `toml:"dimension" json:"dimension"`
+	// RequestDimensions, when true, sends Dimension as the OpenAI-compatible
+	// "dimensions" request field — for documents at build time and queries at
+	// search time alike — asking the endpoint for Matryoshka-reduced vectors
+	// of exactly that length (e.g. Qwen3-Embedding through Ollama). Requires
+	// a model and endpoint that support dimension selection; when false (the
+	// default) the field is never sent and Dimension only validates response
+	// length. Part of the generation fingerprint: enabling it re-embeds the
+	// archive on the next build.
+	RequestDimensions bool `toml:"request_dimensions" json:"request_dimensions,omitempty"`
 	// MaxInputChars caps the rune length of each chunk sent for
 	// embedding. Default 8192.
 	MaxInputChars int `toml:"max_input_chars" json:"max_input_chars"`
@@ -1112,6 +1121,9 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if file.Vector.Embeddings.Dimension != 0 {
 		c.Vector.Embeddings.Dimension = file.Vector.Embeddings.Dimension
+	}
+	if file.Vector.Embeddings.RequestDimensions {
+		c.Vector.Embeddings.RequestDimensions = true
 	}
 	if meta.IsDefined("vector", "embeddings", "max_input_chars") {
 		c.Vector.Embeddings.MaxInputChars = file.Vector.Embeddings.MaxInputChars

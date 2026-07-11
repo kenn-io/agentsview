@@ -284,6 +284,210 @@ func TestEncoderDimensionMismatch(t *testing.T) {
 	assert.Contains(t, err.Error(), "[vector.embeddings] dimension")
 }
 
+// TestEncoderRequestDimensionsSentWhenConfigured asserts an encoder with
+// RequestDimensions set sends the configured Dimension as the
+// OpenAI-compatible "dimensions" request field and accepts the reduced
+// vectors an honoring server returns.
+func TestEncoderRequestDimensionsSentWhenConfigured(t *testing.T) {
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotBody))
+		writeJSON(t, w, http.StatusOK, embeddingsResponse{
+			Data: []embeddingDatum{{Index: 0, Embedding: []float32{1, 2}}},
+		})
+	}))
+	defer srv.Close()
+
+	enc := NewEncoder(EncoderConfig{
+		Endpoint:          srv.URL + "/v1",
+		Model:             "test-model",
+		Dimension:         2,
+		RequestDimensions: true,
+		Timeout:           5 * time.Second,
+		MaxRetries:        1,
+	})
+
+	out, err := enc(context.Background(), []string{"hello"})
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	assert.Equal(t, []float32{1, 2}, out[0])
+
+	require.Contains(t, gotBody, "dimensions")
+	assert.EqualValues(t, 2, gotBody["dimensions"],
+		"the configured dimension is the requested output length")
+}
+
+// TestEncoderOmitsDimensionsFieldByDefault asserts the wire format is
+// unchanged for native-dimension configurations: without RequestDimensions
+// the request body carries no "dimensions" key at all, so endpoints that
+// reject unknown fields keep working.
+func TestEncoderOmitsDimensionsFieldByDefault(t *testing.T) {
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(body, &gotBody))
+		writeJSON(t, w, http.StatusOK, embeddingsResponse{
+			Data: []embeddingDatum{{Index: 0, Embedding: []float32{1, 2, 3}}},
+		})
+	}))
+	defer srv.Close()
+
+	enc := NewEncoder(EncoderConfig{
+		Endpoint:   srv.URL + "/v1",
+		Model:      "test-model",
+		Dimension:  3,
+		Timeout:    5 * time.Second,
+		MaxRetries: 1,
+	})
+
+	_, err := enc(context.Background(), []string{"hello"})
+	require.NoError(t, err)
+	assert.NotContains(t, gotBody, "dimensions")
+}
+
+// TestEncoderDimensionsRejectionFailsFastWithActionableError asserts a 4xx
+// response naming the dimensions field aborts immediately — no retry, no
+// silent downgrade that would change the embedding space — with an error
+// that names the request_dimensions setting and still carries the
+// HTTPStatusError for the build loop's permanence classification.
+func TestEncoderDimensionsRejectionFailsFastWithActionableError(t *testing.T) {
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		writeJSON(t, w, http.StatusBadRequest, map[string]any{
+			"error": "this model does not support the dimensions parameter",
+		})
+	}))
+	defer srv.Close()
+
+	enc := NewEncoder(EncoderConfig{
+		Endpoint:          srv.URL + "/v1",
+		Model:             "test-model",
+		Dimension:         2,
+		RequestDimensions: true,
+		Timeout:           5 * time.Second,
+		MaxRetries:        3,
+	})
+
+	_, err := enc(context.Background(), []string{"hello"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "request_dimensions",
+		"the error names the setting to change")
+	assert.Contains(t, err.Error(), "native output length")
+	assert.Equal(t, int32(1), requests.Load(), "a 4xx rejection is not retried")
+
+	var statusErr *HTTPStatusError
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusBadRequest, statusErr.Status)
+	assert.False(t, statusErr.Permanent(),
+		"a config-level rejection must abort the build, not skip-stamp documents")
+}
+
+// TestEncoderNoDimensionsHintWhenFieldNotRequested asserts the actionable
+// hint is gated on having actually sent the field: with RequestDimensions
+// unset, a 4xx body that happens to mention dimensions flows through the
+// normal error path untouched.
+func TestEncoderNoDimensionsHintWhenFieldNotRequested(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, http.StatusBadRequest, map[string]any{
+			"error": "input exceeds supported dimensions",
+		})
+	}))
+	defer srv.Close()
+
+	enc := NewEncoder(EncoderConfig{
+		Endpoint:   srv.URL + "/v1",
+		Model:      "test-model",
+		Dimension:  3,
+		Timeout:    5 * time.Second,
+		MaxRetries: 1,
+	})
+
+	_, err := enc(context.Background(), []string{"hello"})
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "request_dimensions")
+}
+
+// TestEncoderDimensionMismatchWhenEndpointIgnoresRequestedDimensions asserts
+// a server that silently ignores the dimensions field and returns
+// native-length vectors produces an error saying so, instead of the vectors
+// being truncated client-side or the generic mismatch message leaving the
+// user to guess.
+func TestEncoderDimensionMismatchWhenEndpointIgnoresRequestedDimensions(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, http.StatusOK, embeddingsResponse{
+			Data: []embeddingDatum{{Index: 0, Embedding: []float32{1, 2, 3, 4}}},
+		})
+	}))
+	defer srv.Close()
+
+	enc := NewEncoder(EncoderConfig{
+		Endpoint:          srv.URL + "/v1",
+		Model:             "test-model",
+		Dimension:         2,
+		RequestDimensions: true,
+		Timeout:           5 * time.Second,
+		MaxRetries:        3,
+	})
+
+	out, err := enc(context.Background(), []string{"hello"})
+	require.Error(t, err)
+	assert.Nil(t, out, "wrong-length vectors are never truncated client-side")
+	assert.Contains(t, err.Error(), "got 4, want 2")
+	assert.Contains(t, err.Error(), "ignored the requested dimensions field")
+	assert.Contains(t, err.Error(), "request_dimensions")
+}
+
+// TestEncoderBase64FallbackKeepsRequestedDimensions asserts the
+// encoding_format float downgrade re-marshals the request with the
+// dimensions field intact, so the transport fallback cannot silently change
+// the requested output length.
+func TestEncoderBase64FallbackKeepsRequestedDimensions(t *testing.T) {
+	var bodies []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		var decoded map[string]any
+		require.NoError(t, json.Unmarshal(body, &decoded))
+		bodies = append(bodies, decoded)
+
+		if _, ok := decoded["encoding_format"]; ok {
+			writeJSON(t, w, http.StatusBadRequest, map[string]any{
+				"error": "unknown field: encoding_format",
+			})
+			return
+		}
+		writeJSON(t, w, http.StatusOK, embeddingsResponse{
+			Data: []embeddingDatum{{Index: 0, Embedding: []float32{1, 2}}},
+		})
+	}))
+	defer srv.Close()
+
+	enc := NewEncoder(EncoderConfig{
+		Endpoint:          srv.URL + "/v1",
+		Model:             "test-model",
+		Dimension:         2,
+		RequestDimensions: true,
+		Timeout:           5 * time.Second,
+	})
+
+	out, err := enc(context.Background(), []string{"hello"})
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	assert.Equal(t, []float32{1, 2}, out[0])
+
+	require.Len(t, bodies, 2, "base64 attempt plus the float retry")
+	for i, b := range bodies {
+		assert.EqualValues(t, 2, b["dimensions"],
+			"request %d carries the requested dimensions", i)
+	}
+}
+
 func TestEncoderCountMismatch(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(t, w, http.StatusOK, embeddingsResponse{
