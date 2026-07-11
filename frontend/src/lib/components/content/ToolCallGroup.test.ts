@@ -133,6 +133,40 @@ describe("ToolCallGroup read progress", () => {
     rectSpy.mockRestore();
   });
 
+  it("cleans up the fallback listener on destroy", async () => {
+    originalObserver = globalThis.IntersectionObserver;
+    Object.defineProperty(globalThis, "IntersectionObserver", {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    });
+    const seen: number[] = [];
+    const target = document.createElement("div");
+    target.className = "message-list-scroll";
+    document.body.append(target);
+    const rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue({
+        bottom: 100, height: 100, left: 0, right: 100, top: 0, width: 100,
+        x: 0, y: 0, toJSON: () => ({}),
+      });
+    component = mount(ToolCallGroup, {
+      target,
+      props: {
+        messages: [makeToolMessage(4)],
+        timestamp: new Date().toISOString(),
+        visibleSessionId: "s1",
+        onMessageVisible: (_sessionId: string, ordinal: number) => seen.push(ordinal),
+      },
+    });
+    await tick();
+    expect(seen).toEqual([4]);
+    unmount(component);
+    component = undefined;
+    target.dispatchEvent(new Event("scroll"));
+    expect(seen).toEqual([4]);
+    rectSpy.mockRestore();
+  });
+
   it("places the divider immediately before its chronological submessage", () => {
     component = mount(ToolCallGroup, {
       target: document.body,

@@ -451,12 +451,15 @@ describe("MessageList read progress", () => {
     const originalObserver = globalThis.IntersectionObserver;
     const callbacks: IntersectionObserverCallback[] = [];
     class ObserverMock {
+      active = true;
       constructor(callback: IntersectionObserverCallback) {
-        callbacks.push(callback);
+        callbacks.push((entries, observer) => {
+          if (this.active) callback(entries, observer);
+        });
       }
 
       observe() {}
-      disconnect() {}
+      disconnect() { this.active = false; }
       unobserve() {}
       takeRecords() { return []; }
       root = null;
@@ -489,16 +492,19 @@ describe("MessageList read progress", () => {
     }
   });
 
-  it("keeps a queued tool-group observer bound to the original session", async () => {
+  it("disconnects a reused observer before a session change", async () => {
     const originalObserver = globalThis.IntersectionObserver;
     const callbacks: IntersectionObserverCallback[] = [];
     class ObserverMock {
+      active = true;
       constructor(callback: IntersectionObserverCallback) {
-        callbacks.push(callback);
+        callbacks.push((entries, observer) => {
+          if (this.active) callback(entries, observer);
+        });
       }
 
       observe() {}
-      disconnect() {}
+      disconnect() { this.active = false; }
       unobserve() {}
       takeRecords() { return []; }
       root = null;
@@ -511,7 +517,7 @@ describe("MessageList read progress", () => {
       value: ObserverMock,
     });
     try {
-      messages.messages = [3, 4, 5].map((ordinal) => ({
+      messages.messages = [5].map((ordinal) => ({
         ...makeMessage(ordinal),
         role: "assistant",
         content: "",
@@ -532,16 +538,18 @@ describe("MessageList read progress", () => {
 
       const queued = callbacks.at(-1)!;
       messages.sessionId = "s2";
+      messages.messages = [...messages.messages];
       await tick();
-      queued([
-        { isIntersecting: true } as IntersectionObserverEntry,
-      ], {} as IntersectionObserver);
+      await tick();
+      expect(queued).not.toBe(callbacks.at(-1));
+      for (const callback of callbacks) {
+        callback(
+          [{ isIntersecting: true } as IntersectionObserverEntry],
+          {} as IntersectionObserver,
+        );
+      }
 
-      expect(readProgress.get("s1")).toMatchObject({
-        seenOrdinal: 5,
-        seenContentLength: 0,
-      });
-      expect(readProgress.get("s2")).toBeNull();
+      expect(readProgress.get("s1")).toMatchObject({ seenOrdinal: 3 });
     } finally {
       Object.defineProperty(globalThis, "IntersectionObserver", {
         configurable: true,

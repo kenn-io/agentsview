@@ -129,6 +129,20 @@ func TestDisplayMessageSQLDialectForms(t *testing.T) {
 	assert.NotContains(t, duckdb, "unicode(m.content)")
 }
 
+func TestLatestDisplayContentLengthSubqueryUsesDialectToolCallLineage(t *testing.T) {
+	sqlite := LatestDisplayContentLengthSubquery("s", "m")
+	assert.Contains(t, sqlite, "tc.message_id = m.id")
+	assert.NotContains(t, sqlite, "tc.message_ordinal = m.ordinal")
+
+	postgres := PostgresLatestDisplayContentLengthSubquery("s", "m")
+	assert.Contains(t, postgres, "tc.message_ordinal = m.ordinal")
+	assert.NotContains(t, postgres, "tc.message_id = m.id")
+
+	duckdb := DuckDBLatestDisplayContentLengthSubquery("s", "m")
+	assert.Contains(t, duckdb, "tc.message_id = m.id")
+	assert.NotContains(t, duckdb, "tc.message_ordinal = m.ordinal")
+}
+
 func TestSearch(t *testing.T) {
 	d := testDB(t)
 	requireFTS(t, d)

@@ -156,6 +156,7 @@ func LatestDisplayContentLengthSubquery(
 		sessionAlias,
 		messageAlias,
 		DisplayMessageSQL(messageAlias),
+		"tc.message_id = "+messageAlias+".id",
 	)
 }
 
@@ -166,6 +167,7 @@ func PostgresLatestDisplayContentLengthSubquery(
 		sessionAlias,
 		messageAlias,
 		PostgresDisplayMessageSQL(messageAlias),
+		"tc.message_ordinal = "+messageAlias+".ordinal",
 	)
 }
 
@@ -176,6 +178,7 @@ func DuckDBLatestDisplayContentLengthSubquery(
 		sessionAlias,
 		messageAlias,
 		DuckDBDisplayMessageSQL(messageAlias),
+		"tc.message_id = "+messageAlias+".id",
 	)
 }
 
@@ -188,12 +191,12 @@ func latestDisplayOrdinalSubquery(
 }
 
 func latestDisplayContentLengthSubquery(
-	sessionAlias, messageAlias, predicate string,
+	sessionAlias, messageAlias, predicate, toolCallPredicate string,
 ) string {
 	return `(SELECT COALESCE(` + messageAlias + `.content_length, 0) +
 		COALESCE((SELECT SUM(tc.result_content_length) FROM tool_calls tc` +
 		` WHERE tc.session_id = ` + messageAlias + `.session_id` +
-		` AND tc.message_id = ` + messageAlias + `.id), 0) +
+		` AND ` + toolCallPredicate + `), 0) +
 		COALESCE((SELECT SUM(tre.content_length) FROM tool_result_events tre` +
 		` WHERE tre.session_id = ` + messageAlias + `.session_id` +
 		` AND tre.tool_call_message_ordinal = ` + messageAlias + `.ordinal), 0)` +

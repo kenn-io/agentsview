@@ -72,34 +72,35 @@
       | { sessionId: string; ordinal: number; contentLength: number }
       | undefined,
   ) {
-    const handleVisible = onMessageVisible;
-    if (!handleVisible || !payload) {
-      return {};
-    }
-    const reportVisible = () =>
-      handleVisible(
-        payload.sessionId,
-        payload.ordinal,
-        payload.contentLength,
-      );
-    if (typeof IntersectionObserver === "undefined") {
-      const root = node.closest(".message-list-scroll");
-      const check = () => {
-        const rect = node.getBoundingClientRect();
-        const rootRect = root?.getBoundingClientRect();
-        if (rootRect && rect.bottom > rootRect.top && rect.top < rootRect.bottom) reportVisible();
-      };
-      check();
-      root?.addEventListener("scroll", check, { passive: true });
-      return { destroy: () => root?.removeEventListener("scroll", check) };
-    }
-    const observer = new IntersectionObserver((entries) => {
-      if (!entries.some((entry) => entry.isIntersecting)) return;
-      reportVisible();
-      observer.disconnect();
-    }, { root: node.closest(".message-list-scroll") });
-    observer.observe(node);
-    return { destroy: () => observer.disconnect() };
+    let cleanup = () => {};
+    const bind = (next: typeof payload) => {
+      cleanup();
+      cleanup = () => {};
+      if (!onMessageVisible || !next) return;
+      const reportVisible = () =>
+        onMessageVisible(next.sessionId, next.ordinal, next.contentLength);
+      if (typeof IntersectionObserver === "undefined") {
+        const root = node.closest(".message-list-scroll");
+        const check = () => {
+          const rect = node.getBoundingClientRect();
+          const rootRect = root?.getBoundingClientRect();
+          if (rootRect && rect.bottom > rootRect.top && rect.top < rootRect.bottom) reportVisible();
+        };
+        check();
+        root?.addEventListener("scroll", check, { passive: true });
+        cleanup = () => root?.removeEventListener("scroll", check);
+        return;
+      }
+      const observer = new IntersectionObserver((entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        reportVisible();
+        observer.disconnect();
+      }, { root: node.closest(".message-list-scroll") });
+      observer.observe(node);
+      cleanup = () => observer.disconnect();
+    };
+    bind(payload);
+    return { update: bind, destroy: () => cleanup() };
   }
 
   /** Index turn timings by message id for O(1) lookup. */

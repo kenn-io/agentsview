@@ -243,28 +243,50 @@
 
   function observeMessage(
     node: HTMLElement,
-    payload: { ordinal: number; contentLength: number } | undefined,
+    payload:
+      | {
+          sessionId: string;
+          ordinal: number;
+          contentLength: number;
+        }
+      | undefined,
   ) {
-    const sessionId = messages.sessionId;
-    if (!sessionId || payload === undefined) return {};
-    const record = () =>
-      recordVisible(sessionId, payload.ordinal, payload.contentLength);
-    if (typeof IntersectionObserver === "undefined") {
-      const root = node.closest(".message-list-scroll");
-      const rect = node.getBoundingClientRect();
-      const rootRect = root?.getBoundingClientRect();
-      if (rootRect && rect.bottom > rootRect.top && rect.top < rootRect.bottom) {
-        record();
+    let cleanup = () => {};
+
+    const bind = (next: typeof payload) => {
+      cleanup();
+      cleanup = () => {};
+      if (!next) return;
+      const record = () =>
+        recordVisible(next.sessionId, next.ordinal, next.contentLength);
+      if (typeof IntersectionObserver === "undefined") {
+        const root = node.closest(".message-list-scroll");
+        const check = () => {
+          const rect = node.getBoundingClientRect();
+          const rootRect = root?.getBoundingClientRect();
+          if (rootRect && rect.bottom > rootRect.top && rect.top < rootRect.bottom) {
+            record();
+          }
+        };
+        check();
+        root?.addEventListener("scroll", check, { passive: true });
+        cleanup = () => root?.removeEventListener("scroll", check);
+        return;
       }
-      return {};
-    }
-    const observer = new IntersectionObserver((entries) => {
-      if (!entries.some((entry) => entry.isIntersecting)) return;
-      record();
-      observer.disconnect();
-    }, { root: node.closest(".message-list-scroll") });
-    observer.observe(node);
-    return { destroy: () => observer.disconnect() };
+      const observer = new IntersectionObserver((entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        record();
+        observer.disconnect();
+      }, { root: node.closest(".message-list-scroll") });
+      observer.observe(node);
+      cleanup = () => observer.disconnect();
+    };
+
+    bind(payload);
+    return {
+      update: bind,
+      destroy: () => cleanup(),
+    };
   }
 
   // Recompute visible timestamp when minimap opens or
@@ -784,8 +806,9 @@
             data-index={row.index}
             style="position: absolute; top: 0; left: 0; width: 100%; transform: translateY({row.start}px);"
             use:measureElement={virtualizer.instance}
-            use:observeMessage={item.kind === "message"
+            use:observeMessage={item.kind === "message" && messages.sessionId
               ? {
+                sessionId: messages.sessionId,
                 ordinal: item.message.ordinal,
                 contentLength: renderedContentLength(item.message),
               }
