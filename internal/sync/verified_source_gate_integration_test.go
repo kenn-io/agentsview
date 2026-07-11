@@ -206,6 +206,61 @@ func TestVerifiedSourceGateWarmFingerprintWorkIsCardinalityIndependent(
 	}
 }
 
+func TestVerifiedSourceGateWarmTrustDoesNotMaskDatabaseRepair(t *testing.T) {
+	const sessionID = "codex:00000000-0000-0000-0000-000000000001"
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, *db.DB)
+	}{
+		{
+			name: "missing row",
+			mutate: func(t *testing.T, database *db.DB) {
+				t.Helper()
+				require.NoError(t, database.DeleteSession(sessionID))
+			},
+		},
+		{
+			name: "stale data version",
+			mutate: func(t *testing.T, database *db.DB) {
+				t.Helper()
+				require.NoError(t, database.SetSessionDataVersion(
+					sessionID, db.CurrentDataVersion()-1,
+				))
+			},
+		},
+		{
+			name: "project requires reparse",
+			mutate: func(t *testing.T, database *db.DB) {
+				t.Helper()
+				session, err := database.GetSessionFull(
+					context.Background(), sessionID,
+				)
+				require.NoError(t, err)
+				require.NotNil(t, session)
+				session.Project = "_tmp_workspace"
+				require.NoError(t, database.UpsertSession(*session))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			engine, provider, files := newVerifiedSourceArchive(t, 1)
+			runVerifiedSourcePass(t, engine, files)
+			runVerifiedSourcePass(t, engine, files)
+			require.Equal(t, 1, provider.fingerprintCalls)
+
+			tt.mutate(t, engine.db)
+			res := engine.processFile(context.Background(), files[0])
+
+			require.ErrorContains(t, res.err,
+				"unexpected parse after seeding stored source state")
+			assert.Equal(t, 2, provider.fingerprintCalls,
+				"persisted state requiring repair must bypass warm trust")
+		})
+	}
+}
+
 func TestVerifiedSourceGateRechecksAfterStatAndWatcherInvalidation(t *testing.T) {
 	engine, provider, files := newVerifiedSourceArchive(t, 1)
 	file := files[0]

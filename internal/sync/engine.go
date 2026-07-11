@@ -3998,10 +3998,13 @@ func (e *Engine) processProviderFile(
 	verifiedCapture, verifiedMtime, verifiedFresh, verifiedStateOK :=
 		e.verifiedProviderSourceState(provider, source, file)
 	if verifiedStateOK && verifiedFresh {
-		return processResult{
-			skip:  true,
-			mtime: verifiedMtime,
-		}, true
+		if e.verifiedProviderSourceFreshInDB(source) {
+			return processResult{
+				skip:  true,
+				mtime: verifiedMtime,
+			}, true
+		}
+		e.invalidateVerifiedSource(verifiedCapture.path)
 	}
 
 	// DB-freshness skip for single-session JSONL providers (Claude):
