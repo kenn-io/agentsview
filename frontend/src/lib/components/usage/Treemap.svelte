@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { m } from "../../i18n/index.js";
   import { squarify } from "../../utils/treemap.js";
 
   interface TreemapItem {
@@ -14,9 +13,19 @@
     items: TreemapItem[];
     height?: number;
     onSelect: (id: string) => void;
+    // Localized tooltip/aria copy comes from the caller because it
+    // depends on what selecting a tile does there (hide vs. filter).
+    titleFor: (id: string, label: string) => string;
+    ariaLabelFor: (id: string, label: string) => string;
   }
 
-  const { items, height = 260, onSelect }: Props = $props();
+  const {
+    items,
+    height = 260,
+    onSelect,
+    titleFor,
+    ariaLabelFor,
+  }: Props = $props();
 
   let containerEl: HTMLDivElement | undefined = $state();
   let width = $state(600);
@@ -110,12 +119,12 @@
       class="tile"
       tabindex={0}
       role="button"
-      aria-label={m.usage_hide_from_chart({ label: tile.label })}
+      aria-label={ariaLabelFor(tile.id, tile.label)}
       onclick={() => onSelect(tile.id)}
       onkeydown={(e) => handleKey(e, tile.id)}
       clip-path="url(#{clipId})"
     >
-      <title>{m.usage_click_to_hide({ label: tile.label })}</title>
+      <title>{titleFor(tile.id, tile.label)}</title>
       <rect
         x={tile.x}
         y={tile.y}

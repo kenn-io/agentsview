@@ -114,6 +114,33 @@
     }
   }
 
+  // Project and agent clicks exclude the item ("hide"); model and
+  // branch clicks toggle an include-based selection ("filter"), so the
+  // hint, tooltip, and aria copy must describe different actions.
+  const includeBased = $derived(
+    groupBy === "model" || groupBy === "branch",
+  );
+
+  function isRowSelected(id: string): boolean {
+    if (groupBy === "model") return usage.isModelSelected(id);
+    if (groupBy === "branch") return usage.isBranchSelected(id);
+    return false;
+  }
+
+  function rowTitle(id: string, label: string): string {
+    if (!includeBased) return m.usage_click_to_hide({ label });
+    return isRowSelected(id)
+      ? m.usage_click_to_clear_filter({ label })
+      : m.usage_click_to_filter({ label });
+  }
+
+  function rowAriaLabel(id: string, label: string): string {
+    if (!includeBased) return m.usage_hide_from_chart({ label });
+    return isRowSelected(id)
+      ? m.usage_clear_filter_item({ label })
+      : m.usage_filter_to_item({ label });
+  }
+
   function handleGroupByChange(g: GroupBy) {
     usage.setAttributionGroupBy(g);
   }
@@ -179,7 +206,11 @@
   {#if rows.length === 0}
     <div class="empty">{m.shared_no_data_for_period()}</div>
   {:else}
-    <div class="hint">{m.usage_click_to_hide_hint()}</div>
+    <div class="hint">
+      {includeBased
+        ? m.usage_click_to_filter_hint()
+        : m.usage_click_to_hide_hint()}
+    </div>
     {#if view === "treemap"}
       <div class="treemap-layout">
         <div class="treemap-main">
@@ -187,6 +218,8 @@
             items={treemapItems}
             height={260}
             onSelect={handleSelect}
+            titleFor={rowTitle}
+            ariaLabelFor={rowAriaLabel}
           />
         </div>
         <div class="side-rail">
@@ -195,7 +228,7 @@
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
               class="rail-row"
-              title={m.usage_click_to_hide({ label: row.label })}
+              title={rowTitle(row.id, row.label)}
               onclick={() => handleSelect(row.id)}
             >
               <span class="rail-rank">{i + 1}</span>
@@ -216,7 +249,7 @@
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
             class="list-row"
-            title={m.usage_click_to_hide({ label: row.label })}
+            title={rowTitle(row.id, row.label)}
             onclick={() => handleSelect(row.id)}
           >
             <span class="list-rank">{i + 1}</span>

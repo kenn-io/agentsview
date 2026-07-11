@@ -141,6 +141,19 @@ describe("AttributionPanel agent exclusion", () => {
     );
     unmount(component);
   });
+
+  // Agent clicks exclude the clicked agent, so the hide copy stays.
+  it("describes agent rows as hide actions", async () => {
+    const component = mount(AttributionPanel, { target: document.body });
+    await tick();
+
+    expect(
+      document.querySelector(".hint")?.textContent?.trim(),
+    ).toBe("Click to hide from chart");
+    const rows = document.querySelectorAll<HTMLElement>(".list-row");
+    expect(rows[0]?.getAttribute("title")).toBe("Click to hide claude");
+    unmount(component);
+  });
 });
 
 function usageSummary(): UsageSummaryResponse {
@@ -306,11 +319,36 @@ describe("AttributionPanel branch mode", () => {
     unmount(component);
   });
 
-  it("shows the click-to-hide hint in branch mode", async () => {
+  // Branch clicks filter the dashboard to the clicked branch (include
+  // semantics), so the copy must say "filter", not "hide".
+  it("describes branch rows as filter actions", async () => {
     const component = mount(AttributionPanel, { target: document.body });
     await tick();
 
-    expect(document.querySelector(".hint")).toBeTruthy();
+    expect(
+      document.querySelector(".hint")?.textContent?.trim(),
+    ).toBe("Click to filter the chart");
+
+    const row = Array.from(
+      document.querySelectorAll<HTMLDivElement>(".list-row"),
+    ).find((r) => r.textContent?.includes("alpha/dev"));
+    expect(row?.getAttribute("title")).toBe(
+      "Click to filter by alpha/dev",
+    );
+    unmount(component);
+  });
+
+  it("describes a selected branch row as clearing its filter", async () => {
+    usage.selectedGitBranch = branchFilterToken("alpha", "dev");
+    const component = mount(AttributionPanel, { target: document.body });
+    await tick();
+
+    const row = Array.from(
+      document.querySelectorAll<HTMLDivElement>(".list-row"),
+    ).find((r) => r.textContent?.includes("alpha/dev"));
+    expect(row?.getAttribute("title")).toBe(
+      "Click to clear the alpha/dev filter",
+    );
     unmount(component);
   });
 });
