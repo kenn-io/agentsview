@@ -13,7 +13,9 @@ func verifiedSourceSignatureForTest(seed int64) verifiedSourceSignature {
 	return verifiedSourceSignature{
 		size: seed + 10, mtime: seed + 20,
 		inode: seed + 30, device: seed + 40,
-		changeTime: seed + 50, sidecarMtime: seed + 60,
+		changeTime: seed + 50, sidecarSize: seed + 60,
+		sidecarMtime: seed + 70, sidecarInode: seed + 80,
+		sidecarDevice: seed + 90, sidecarChangeTime: seed + 100,
 	}
 }
 

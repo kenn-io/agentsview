@@ -3477,6 +3477,72 @@ func TestSyncAllSinceCodexIndexRenameBelowStoredMtimeRefreshesName(t *testing.T)
 	}
 }
 
+func TestSyncAllWarmGateCodexIndexSameStatRenameRefreshesName(t *testing.T) {
+	root := t.TempDir()
+	codexDir := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(codexDir, 0o755))
+	env := setupTestEnv(t, WithCodexDirs([]string{codexDir}))
+
+	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229e1"
+	content := testjsonl.NewSessionBuilder().
+		AddCodexMeta(tsEarly, uuid, "/tmp/project", "user").
+		AddCodexMessage(tsEarlyS1, "user", "Rename me").
+		String()
+	path := env.writeCodexSession(
+		t,
+		filepath.Join("2026", "06", "11"),
+		"rollout-2026-06-11T12-44-06-"+uuid+".jsonl",
+		content,
+	)
+
+	indexPath := filepath.Join(root, parser.CodexSessionIndexFilename)
+	indexLine := func(title string) []byte {
+		return fmt.Appendf(nil,
+			`{"id":"%s","thread_name":"%s","updated_at":"2026-06-11T17:34:20Z"}`+"\n",
+			uuid, title,
+		)
+	}
+	originalIndex := indexLine("Title Alpha")
+	renamedIndex := indexLine("Title Bravo")
+	require.Len(t, renamedIndex, len(originalIndex),
+		"fixture must preserve the index size")
+	require.NoError(t, os.WriteFile(indexPath, originalIndex, 0o644))
+
+	transcriptTime := time.Now().Add(-30 * time.Minute)
+	indexTime := time.Now().Add(-2 * time.Hour)
+	require.NoError(t, os.Chtimes(path, transcriptTime, transcriptTime))
+	require.NoError(t, os.Chtimes(indexPath, indexTime, indexTime))
+
+	first := env.engine.SyncAll(context.Background(), nil)
+	require.Equal(t, 1, first.Synced)
+	second := env.engine.SyncAll(context.Background(), nil)
+	require.Equal(t, 0, second.Synced, "second pass must warm source trust")
+
+	sess, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.NotNil(t, sess.SessionName)
+	require.Equal(t, "Title Alpha", *sess.SessionName)
+	require.NotNil(t, sess.FileMtime)
+	require.Equal(t, transcriptTime.UnixNano(), *sess.FileMtime,
+		"transcript mtime must remain the stored watermark")
+
+	// Simulate a missed watcher event: rewrite only the sidecar while restoring
+	// its lower mtime and preserving its size. The full sync must still reload
+	// the index and repair the persisted title.
+	require.NoError(t, os.WriteFile(indexPath, renamedIndex, 0o644))
+	require.NoError(t, os.Chtimes(indexPath, indexTime, indexTime))
+
+	third := env.engine.SyncAll(context.Background(), nil)
+	require.Equal(t, 1, third.Synced,
+		"same-stat title rewrite must bypass warm source trust")
+	sess, err = env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.NotNil(t, sess.SessionName)
+	assert.Equal(t, "Title Bravo", *sess.SessionName)
+}
+
 func TestSyncAllSinceCodexIndexRefreshOnlySyncsRenamedSession(t *testing.T) {
 	root := t.TempDir()
 	codexDir := filepath.Join(root, "sessions")

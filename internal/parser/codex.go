@@ -45,9 +45,11 @@ var codexSessionIndexCache = struct {
 }
 
 type codexSessionIndexEntry struct {
-	mtime  int64
-	size   int64
-	titles map[string]string
+	mtime          int64
+	size           int64
+	changeTime     int64
+	changeTimeOkay bool
+	titles         map[string]string
 }
 
 // codexSessionBuilder accumulates state while scanning a Codex
@@ -1509,6 +1511,13 @@ func CodexEffectiveMtime(sessionPath string, fileMtime int64) int64 {
 	return fileMtime
 }
 
+// CodexSessionIndexPath returns the local session_index.jsonl path associated
+// with a Codex transcript, or an empty string when the transcript is outside a
+// recognized Codex session directory.
+func CodexSessionIndexPath(sessionPath string) string {
+	return codexSessionIndexPath(sessionPath)
+}
+
 func codexSessionIndexPath(sessionPath string) string {
 	dir := filepath.Dir(sessionPath)
 	for dir != "" {
@@ -1535,10 +1544,13 @@ func loadCodexSessionIndex(indexPath string) (map[string]string, error) {
 
 	mtime := info.ModTime().UnixNano()
 	size := info.Size()
+	changeTime, changeTimeOkay := codexIndexChangeTime(indexPath, info)
 
 	codexSessionIndexCache.mu.Lock()
 	if entry, ok := codexSessionIndexCache.entries[indexPath]; ok &&
-		entry.mtime == mtime && entry.size == size {
+		entry.mtime == mtime && entry.size == size &&
+		(!changeTimeOkay ||
+			(entry.changeTimeOkay && entry.changeTime == changeTime)) {
 		codexSessionIndexCache.mu.Unlock()
 		return entry.titles, nil
 	}
@@ -1557,9 +1569,11 @@ func loadCodexSessionIndex(indexPath string) (map[string]string, error) {
 
 	codexSessionIndexCache.mu.Lock()
 	codexSessionIndexCache.entries[indexPath] = codexSessionIndexEntry{
-		mtime:  mtime,
-		size:   size,
-		titles: titles,
+		mtime:          mtime,
+		size:           size,
+		changeTime:     changeTime,
+		changeTimeOkay: changeTimeOkay,
+		titles:         titles,
 	}
 	codexSessionIndexCache.mu.Unlock()
 

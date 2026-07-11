@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,15 +11,19 @@ import (
 )
 
 // verifiedSourceSignature is the complete local filesystem identity trusted
-// by the gate. sidecarMtime is zero for providers without an auxiliary source
-// and carries Codex's effective index watermark when that provider opts in.
+// by the gate. Sidecar fields are zero for providers without an auxiliary
+// source and carry the raw Codex index identity when that provider opts in.
 type verifiedSourceSignature struct {
-	size         int64
-	mtime        int64
-	inode        int64
-	device       int64
-	changeTime   int64
-	sidecarMtime int64
+	size              int64
+	mtime             int64
+	inode             int64
+	device            int64
+	changeTime        int64
+	sidecarSize       int64
+	sidecarMtime      int64
+	sidecarInode      int64
+	sidecarDevice     int64
+	sidecarChangeTime int64
 }
 
 // verifiedSourceRecord deliberately combines trust, invalidation, and pass
@@ -181,20 +186,47 @@ func (e *Engine) verifiedProviderSourceState(
 	}
 	inode, device := getFileIdentity(info)
 	mtime := info.ModTime().UnixNano()
-	sidecarMtime := int64(0)
+	sidecar := verifiedSourceSignature{}
 	if provider.Definition().Type == parser.AgentCodex {
-		sidecarMtime = parser.CodexEffectiveMtime(path, mtime)
+		indexPath := parser.CodexSessionIndexPath(path)
+		if indexPath != "" {
+			indexInfo, indexErr := os.Stat(indexPath)
+			switch {
+			case indexErr == nil:
+				if !indexInfo.Mode().IsRegular() {
+					return verifiedSourceCapture{}, 0, false, false
+				}
+				indexChangeTime, reliable := fileChangeTime(
+					indexPath, indexInfo,
+				)
+				if !reliable {
+					return verifiedSourceCapture{}, 0, false, false
+				}
+				indexInode, indexDevice := getFileIdentity(indexInfo)
+				sidecar.sidecarSize = indexInfo.Size()
+				sidecar.sidecarMtime = indexInfo.ModTime().UnixNano()
+				sidecar.sidecarInode = indexInode
+				sidecar.sidecarDevice = indexDevice
+				sidecar.sidecarChangeTime = indexChangeTime
+			case !errors.Is(indexErr, os.ErrNotExist):
+				return verifiedSourceCapture{}, 0, false, false
+			}
+		}
 	}
 	capture, fresh := e.captureVerifiedSource(path, verifiedSourceSignature{
-		size:         info.Size(),
-		mtime:        mtime,
-		inode:        inode,
-		device:       device,
-		changeTime:   changeTime,
-		sidecarMtime: sidecarMtime,
+		size:              info.Size(),
+		mtime:             mtime,
+		inode:             inode,
+		device:            device,
+		changeTime:        changeTime,
+		sidecarSize:       sidecar.sidecarSize,
+		sidecarMtime:      sidecar.sidecarMtime,
+		sidecarInode:      sidecar.sidecarInode,
+		sidecarDevice:     sidecar.sidecarDevice,
+		sidecarChangeTime: sidecar.sidecarChangeTime,
 	})
-	if sidecarMtime > mtime {
-		mtime = sidecarMtime
+	if sidecar.sidecarMtime > mtime {
+		mtime = sidecar.sidecarMtime
 	}
 	return capture, mtime, fresh, true
 }
