@@ -241,6 +241,7 @@ export DEEPSEEK_TUI_SESSIONS_DIR=~/custom/deepseek/sessions
 export FORGE_DIR=~/custom/forge
 export GEMINI_DIR=~/custom/gemini
 export GPTME_DIR=~/custom/gptme/logs
+export GROK_DIR=~/custom/grok/sessions
 export HERMES_SESSIONS_DIR=~/custom/hermes
 export IFLOW_DIR=~/custom/iflow/projects
 export KILO_DIR=~/custom/kilo

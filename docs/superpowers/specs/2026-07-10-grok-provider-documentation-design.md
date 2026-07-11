@@ -23,6 +23,9 @@ Grok page:
   guide's session-discovery table.
 - Add `grok_dirs` to the configuration guide's complete list of directory
   override fields.
+- Add `GROK_DIR` to the configuration guide's full single-directory environment
+  variable example, the quickstart's custom session-directory example, and the
+  CLI reference's environment-variable table.
 - Add Grok to the documentation homepage provider grid, linking to the
   session-discovery reference.
 - Add a short note near the provider tables explaining the metadata-first
@@ -35,7 +38,10 @@ while avoiding a standalone page for a small, stable configuration surface.
 
 Run `make docs-check` and inspect the rendered Markdown source for consistent
 table formatting, links, and terminology. Confirm that Grok appears in
-`README.md`, `docs/configuration.md`, and `docs/index.md`, and that the public
-documentation covers `GROK_DIR`, `grok_dirs`, `~/.grok/sessions/`, and the
-summary-only transcript fidelity. No product code or localized UI copy changes
-are required.
+`README.md`, `docs/configuration.md`, `docs/quickstart.md`, `docs/commands.md`,
+and `docs/index.md`, and that the public documentation covers `GROK_DIR`,
+`grok_dirs`, `~/.grok/sessions/`, and the summary-only transcript fidelity.
+Confirm that `GROK_DIR` appears in the configuration guide's full environment
+variable example, the quickstart's custom session-directory example, and the
+CLI reference's environment-variable table. No product code or localized UI
+copy changes are required.

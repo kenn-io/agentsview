@@ -1128,6 +1128,7 @@ agentsview help
 | `FORGE_DIR`                       | `~/.forge`                                           | Forge directory (contains `.forge.db`)                                                              |
 | `GEMINI_DIR`                      | `~/.gemini`                                          | Gemini CLI directory                                                                                |
 | `GPTME_DIR`                       | `~/.local/share/gptme/logs`                          | gptme logs directory                                                                                |
+| `GROK_DIR`                        | `~/.grok/sessions`                                   | Grok sessions directory                                                                             |
 | `HERMES_SESSIONS_DIR`             | `~/.hermes/sessions`                                 | Hermes Agent sessions directory                                                                     |
 | `IFLOW_DIR`                       | `~/.iflow/projects`                                  | iFlow projects directory                                                                            |
 | `KILO_DIR`                        | `~/.local/share/kilo`                                | Kilo data directory                                                                                 |
