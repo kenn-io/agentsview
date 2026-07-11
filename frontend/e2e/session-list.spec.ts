@@ -106,4 +106,38 @@ test.describe("Session list", () => {
     expect(requestUrl.searchParams.get("date_from")).toBe(expectedFrom);
     expect(requestUrl.searchParams.get("date_to")).toBe(expectedTo);
   });
+
+  test("linked dates reach the first request on direct detail entry", async ({
+    page,
+  }) => {
+    const sessionId = await sp.sessionItems.first().getAttribute(
+      "data-session-id",
+    );
+    expect(sessionId).toBeTruthy();
+
+    await page.locator(".kit-date-range-picker__trigger").click();
+    await page.getByRole("button", { name: "90d", exact: true }).click();
+    await expect(page).toHaveURL(/window_days=90/);
+    const selectedUrl = new URL(page.url());
+    const expectedFrom = selectedUrl.searchParams.get("date_from");
+    const expectedTo = selectedUrl.searchParams.get("date_to");
+
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page
+      .getByRole("checkbox", { name: "Link date ranges across pages" })
+      .check();
+
+    const requestPromise = page.waitForRequest((request) =>
+      new URL(request.url()).pathname.endsWith(
+        "/api/v1/sessions/sidebar-index",
+      )
+    );
+    await page.goto(`/sessions/${encodeURIComponent(sessionId!)}`);
+    const requestUrl = new URL((await requestPromise).url());
+
+    expect(requestUrl.searchParams.get("date_from")).toBe(expectedFrom);
+    expect(requestUrl.searchParams.get("date_to")).toBe(expectedTo);
+    await expect(page).toHaveURL(/date_from=/);
+    await expect(page).toHaveURL(/date_to=/);
+  });
 });

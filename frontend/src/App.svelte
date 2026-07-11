@@ -344,10 +344,14 @@
     untrack(() => {
       previousDateRestoreRoute = route;
       const sid = router.sessionId;
-      if (!sid && route === "sessions" && hasFilterParams(params)) {
+      if (
+        route === "sessions" &&
+        hasFilterParams(params) &&
+        (!sid || enteringSessions)
+      ) {
         sessions.initFromParams(params);
       }
-      if (!sid && enteringSessions) {
+      if (enteringSessions) {
         const entryParams = sessionEntryDateParams(params);
         if (entryParams) router.replaceParams(entryParams);
       }

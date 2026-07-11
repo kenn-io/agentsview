@@ -292,6 +292,71 @@ describe("findUserPromptOrdinal", () => {
 });
 
 describe("App analytics date navigation", () => {
+  it("applies an enabled shared range when entering session detail", async () => {
+    const sessionLoadDates: Array<{
+      dateFrom: string;
+      dateTo: string;
+    }> = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(settings, "load").mockResolvedValue();
+    vi.spyOn(starred, "load").mockResolvedValue();
+    vi.spyOn(sync, "loadStatus").mockResolvedValue();
+    vi.spyOn(sync, "loadStats").mockResolvedValue();
+    vi.spyOn(sync, "loadVersion").mockResolvedValue();
+    vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
+    vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(sync, "watchSession").mockImplementation(() => {});
+    vi.spyOn(sessions, "load").mockImplementation(() => {
+      sessionLoadDates.push({
+        dateFrom: sessions.filters.dateFrom,
+        dateTo: sessions.filters.dateTo,
+      });
+      return Promise.resolve();
+    });
+    vi.spyOn(sessions, "loadProjects").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
+    vi.spyOn(sessions, "navigateToSession").mockImplementation(async (id) => {
+      sessions.activeSessionId = id;
+    });
+    vi.spyOn(analytics, "fetchAll").mockResolvedValue();
+    vi.spyOn(analytics, "fetchSignalsForInsights").mockResolvedValue();
+    vi.spyOn(insights, "load").mockResolvedValue();
+
+    window.history.replaceState(null, "", "/insights");
+    router.route = "insights";
+    router.params = {};
+    router.sessionId = null;
+    yokedDates.setEnabled(true);
+    yokedDates.updateFromPanel({
+      from: "2026-05-01",
+      to: "2026-05-31",
+      mode: "fixed",
+    });
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    sessionLoadDates.length = 0;
+
+    router.navigateToSession("session-1");
+    await flushEffects();
+
+    expect(sessionLoadDates[0]).toEqual({
+      dateFrom: "2026-05-01",
+      dateTo: "2026-05-31",
+    });
+    expect(router.sessionId).toBe("session-1");
+    expect(router.params.date_from).toBe("2026-05-01");
+    expect(router.params.date_to).toBe("2026-05-31");
+  });
+
   it("applies an enabled shared range to the first Sessions load", async () => {
     const sessionLoadFilters: Array<{
       project: string;
