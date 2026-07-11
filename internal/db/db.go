@@ -30,6 +30,11 @@ import (
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
+// Bumped to 61: the ZCode parser now persists transcript messages,
+// tool calls, and tool results from the message/part tables.
+// Existing ZCode rows need re-parsing so stored sessions backfill
+// message counts and transcript content.
+//
 // Bumped to 60: the Codex parser removes the recommended-plugins
 // discovery envelope injected ahead of the first genuine user turn.
 // Existing Codex rows need re-parsing so the synthetic plugin list is
@@ -283,7 +288,7 @@ import (
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
 // (60: Codex recommended-plugins prefix filtering.)
-const dataVersion = 60
+const dataVersion = 61
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
