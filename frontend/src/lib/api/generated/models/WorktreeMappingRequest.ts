@@ -9,3 +9,4 @@ export type WorktreeMappingRequest = {
   path_prefix?: string;
   project?: string;
 };
+

@@ -9,6 +9,7 @@ export type DaemonPushRequest = {
   exclude_projects?: any[] | null;
   full: boolean;
   migrate_legacy_sync_state?: boolean;
+  no_vectors?: boolean;
   pg?: ConfigPGConfig;
   projects?: any[] | null;
   sync_state_target?: string;

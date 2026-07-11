@@ -7,6 +7,7 @@ export type ConfigPGConfig = {
   exclude_projects?: any[] | null;
   machine_name: string;
   projects?: any[] | null;
+  push_vectors?: boolean;
   schema: string;
   url: string;
 };

@@ -10,5 +10,6 @@ export type VectorGenerationInfo = {
   missing: number;
   model: string;
   state: string;
+  store?: string;
 };
 
