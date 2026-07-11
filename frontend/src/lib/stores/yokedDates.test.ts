@@ -315,6 +315,27 @@ describe("YokedDatesStore", () => {
 });
 
 describe("yoked date adapters", () => {
+  it("maps a Sessions rolling window before materialized bounds", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-07-10T12:00:00"));
+      expect(
+        sessionParamsToPanelDate({
+          window_days: "30",
+          date_from: "2026-01-01",
+          date_to: "2026-01-07",
+        }),
+      ).toEqual({
+        from: "2026-06-11",
+        to: "2026-07-10",
+        mode: "rolling",
+        windowDays: 30,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("maps a sessions single date to a same-day range", () => {
     expect(sessionParamsToPanelDate({ date: "2026-06-19" })).toEqual({
       from: "2026-06-19",

@@ -78,6 +78,7 @@
     yokedDates,
     panelDateToSessionFilterParams,
     rangeToPanelDate,
+    sessionParamsToPanelDate,
   } from "./lib/stores/yokedDates.svelte.js";
   import { m } from "./lib/i18n/index.js";
   import { setAuthToken, getAuthToken, setServerUrl, getBase } from "./lib/api/runtime.js";
@@ -352,6 +353,8 @@
         sessions.initFromParams(params);
       }
       if (enteringSessions) {
+        const explicitState = sessionParamsToPanelDate(params);
+        if (explicitState) yokedDates.updateFromPanel(explicitState);
         const entryParams = sessionEntryDateParams(params);
         if (entryParams) router.replaceParams(entryParams);
       }

@@ -10,7 +10,10 @@ import { mount, tick, unmount } from "svelte";
 import { analytics } from "./lib/stores/analytics.svelte.js";
 import { analyticsPageDates } from "./lib/stores/analyticsPageDates.js";
 import { insights } from "./lib/stores/insights.svelte.js";
+import { messages } from "./lib/stores/messages.svelte.js";
+import { pins } from "./lib/stores/pins.svelte.js";
 import { router } from "./lib/stores/router.svelte.js";
+import { sessionTiming } from "./lib/stores/sessionTiming.svelte.js";
 import { sessions } from "./lib/stores/sessions.svelte.js";
 import { settings } from "./lib/stores/settings.svelte.js";
 import { starred } from "./lib/stores/starred.svelte.js";
@@ -292,6 +295,87 @@ describe("findUserPromptOrdinal", () => {
 });
 
 describe("App analytics date navigation", () => {
+  it("publishes explicit detail dates to the next linked page", async () => {
+    const sharedDatesAtSessionLoad: Array<{
+      from: string;
+      to: string;
+    } | null> = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(settings, "load").mockResolvedValue();
+    vi.spyOn(starred, "load").mockResolvedValue();
+    vi.spyOn(sync, "loadStatus").mockResolvedValue();
+    vi.spyOn(sync, "loadStats").mockResolvedValue();
+    vi.spyOn(sync, "loadVersion").mockResolvedValue();
+    vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
+    vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(sync, "watchSession").mockImplementation(() => {});
+    vi.spyOn(sessions, "load").mockImplementation(() => {
+      const shared = yokedDates.seedForPanel();
+      sharedDatesAtSessionLoad.push(
+        shared ? { from: shared.from, to: shared.to } : null,
+      );
+      return Promise.resolve();
+    });
+    vi.spyOn(sessions, "loadProjects").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
+    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue();
+    vi.spyOn(sessions, "navigateToSession").mockImplementation(async (id) => {
+      sessions.activeSessionId = id;
+    });
+    vi.spyOn(messages, "loadSession").mockResolvedValue();
+    vi.spyOn(sessionTiming, "load").mockResolvedValue();
+    vi.spyOn(pins, "loadForSession").mockResolvedValue();
+    vi.spyOn(analytics, "fetchAll").mockResolvedValue();
+    vi.spyOn(analytics, "fetchSignalsForInsights").mockResolvedValue();
+    vi.spyOn(insights, "load").mockResolvedValue();
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+
+    window.history.replaceState(null, "", "/insights");
+    router.route = "insights";
+    router.params = {};
+    router.sessionId = null;
+    yokedDates.setEnabled(true);
+    yokedDates.updateFromPanel({
+      from: "2026-05-01",
+      to: "2026-05-31",
+      mode: "fixed",
+    });
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+
+    router.navigateToSession("session-1", {
+      date_from: "2026-06-01",
+      date_to: "2026-06-07",
+    });
+    await flushEffects();
+
+    expect(sharedDatesAtSessionLoad[0]).toEqual({
+      from: "2026-06-01",
+      to: "2026-06-07",
+    });
+    expect(yokedDates.seedForPanel()).toMatchObject({
+      from: "2026-06-01",
+      to: "2026-06-07",
+      mode: "fixed",
+    });
+
+    router.navigate("usage");
+    await flushEffects();
+
+    expect(usage.isPinned).toBe(true);
+    expect(usage.from).toBe("2026-06-01");
+    expect(usage.to).toBe("2026-06-07");
+  });
+
   it("applies an enabled shared range when entering session detail", async () => {
     const sessionLoadDates: Array<{
       dateFrom: string;

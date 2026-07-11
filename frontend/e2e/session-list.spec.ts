@@ -140,4 +140,36 @@ test.describe("Session list", () => {
     await expect(page).toHaveURL(/date_from=/);
     await expect(page).toHaveURL(/date_to=/);
   });
+
+  test("explicit detail dates replace the shared range", async ({ page }) => {
+    const sessionId = await sp.sessionItems.first().getAttribute(
+      "data-session-id",
+    );
+    expect(sessionId).toBeTruthy();
+
+    await page.locator(".kit-date-range-picker__trigger").click();
+    await page.getByRole("button", { name: "90d", exact: true }).click();
+    await page.getByRole("button", { name: "Settings" }).click();
+    await page
+      .getByRole("checkbox", { name: "Link date ranges across pages" })
+      .check();
+
+    await page.goto(
+      `/sessions/${encodeURIComponent(sessionId!)}?date_from=2026-05-01&date_to=2026-05-07`,
+    );
+    const requestPromise = page.waitForRequest((request) =>
+      new URL(request.url()).pathname.endsWith("/api/v1/usage/summary")
+    );
+    await clickNavTab(page, "Usage");
+    const requestUrl = new URL((await requestPromise).url());
+
+    expect(requestUrl.searchParams.get("from")).toBe("2026-05-01");
+    expect(requestUrl.searchParams.get("to")).toBe("2026-05-07");
+    await expect(
+      page.locator(".kit-date-range-picker__trigger"),
+    ).toContainText("2026-05-01");
+    await expect(
+      page.locator(".kit-date-range-picker__trigger"),
+    ).toContainText("2026-05-07");
+  });
 });

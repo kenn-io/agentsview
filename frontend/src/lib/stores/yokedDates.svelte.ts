@@ -63,6 +63,14 @@ function validWindowDays(value: unknown): number | undefined {
   return value;
 }
 
+function windowDaysParam(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const windowDays = validWindowDays(Number.parseInt(value, 10));
+  return windowDays !== undefined && String(windowDays) === value
+    ? windowDays
+    : undefined;
+}
+
 function copyRange(range: YokedDateRange): YokedDateRange {
   return range.windowDays === undefined
     ? {
@@ -239,6 +247,14 @@ export function sessionParamsToPanelDate(
   params: Record<string, string>,
   bounds: { earliest?: string; latest?: string } = {},
 ): PanelDateState | null {
+  const windowDays = windowDaysParam(params["window_days"]);
+  if (windowDays !== undefined) {
+    const range = rollingRange(windowDays);
+    return panelDateState(range.from, range.to, {
+      mode: "rolling",
+      windowDays,
+    });
+  }
   if (params["date"]) {
     return panelDateState(params["date"], params["date"], {
       mode: "fixed",
