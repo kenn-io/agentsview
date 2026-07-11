@@ -367,6 +367,7 @@ type IncrementalRequest struct {
 type IncrementalOutcome struct {
 	SessionID            string
 	Messages             []ParsedMessage
+	SubagentLinks        []ClaudeSubagentLink
 	EndedAt              time.Time
 	ConsumedBytes        int64
 	MessageCount         int

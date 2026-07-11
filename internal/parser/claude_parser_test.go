@@ -31,6 +31,15 @@ func runClaudeParserTest(t *testing.T, fileName, content string) (ParsedSession,
 func callParseClaudeSessionFrom(
 	path string, offset int64, startOrdinal int, lastEntryUUID string,
 ) ([]ParsedMessage, time.Time, int64, error) {
+	msgs, _, endedAt, consumed, err := callParseClaudeSessionFromWithLinks(
+		path, offset, startOrdinal, lastEntryUUID,
+	)
+	return msgs, endedAt, consumed, err
+}
+
+func callParseClaudeSessionFromWithLinks(
+	path string, offset int64, startOrdinal int, lastEntryUUID string,
+) ([]ParsedMessage, []ClaudeSubagentLink, time.Time, int64, error) {
 	fn := reflect.ValueOf(claudeParseSessionFrom)
 	args := []reflect.Value{
 		reflect.ValueOf(path),
@@ -46,14 +55,26 @@ func callParseClaudeSessionFrom(
 	if !out[0].IsNil() {
 		msgs = out[0].Interface().([]ParsedMessage)
 	}
-	endedAt := out[1].Interface().(time.Time)
-	consumed := out[2].Interface().(int64)
+	var links []ClaudeSubagentLink
+	endedIdx := 1
+	consumedIdx := 2
+	errIdx := 3
+	if len(out) == 5 {
+		if !out[1].IsNil() {
+			links = out[1].Interface().([]ClaudeSubagentLink)
+		}
+		endedIdx = 2
+		consumedIdx = 3
+		errIdx = 4
+	}
+	endedAt := out[endedIdx].Interface().(time.Time)
+	consumed := out[consumedIdx].Interface().(int64)
 
 	var err error
-	if !out[3].IsNil() {
-		err = out[3].Interface().(error)
+	if !out[errIdx].IsNil() {
+		err = out[errIdx].Interface().(error)
 	}
-	return msgs, endedAt, consumed, err
+	return msgs, links, endedAt, consumed, err
 }
 
 // TestParseClaudeSession_UsageProbe verifies that sessions whose only
@@ -910,11 +931,10 @@ func TestParseClaudeSessionFrom_LinearUUID(
 	assert.False(t, endedAt.IsZero())
 }
 
-// Appended user entry carries toolUseResult.agentId, which the
-// incremental path can't propagate to an already-stored tool_call
-// row. ParseClaudeSessionFrom must signal full-parse fallback so
-// the engine re-parses the whole session.
-func TestParseClaudeSessionFrom_ToolUseResultAgentIDFallsBack(
+// Appended user entry carries toolUseResult.agentId. The incremental
+// parser should return a typed linkage effect while still parsing the
+// appended user message.
+func TestParseClaudeSessionFrom_ToolUseResultAgentIDLinksIncrementally(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -947,9 +967,14 @@ func TestParseClaudeSessionFrom_ToolUseResultAgentIDFallsBack(
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, _, _, err = callParseClaudeSessionFrom(path, offset, 1, "")
-	assert.ErrorIs(t, err, ErrClaudeIncrementalNeedsFullParse)
-	assert.True(t, IsIncrementalFullParseFallback(err))
+	newMsgs, links, _, _, err := callParseClaudeSessionFromWithLinks(
+		path, offset, 1, "",
+	)
+	require.NoError(t, err)
+	assert.Len(t, newMsgs, 1)
+	require.Len(t, links, 1)
+	assert.Equal(t, "toolu_x", links[0].ToolUseID)
+	assert.Equal(t, "agent-abc123", links[0].SubagentSessionID)
 }
 
 func TestParseClaudeSession_ResolvesPersistedToolResultOutput(

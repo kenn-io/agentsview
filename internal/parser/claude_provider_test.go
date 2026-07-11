@@ -267,6 +267,53 @@ func TestClaudeProviderParseIncremental(t *testing.T) {
 	assert.Contains(t, outcome.Messages[1].Content, "got it")
 }
 
+func TestClaudeProviderParseIncrementalPreservesLinkWithoutMessage(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "-Users-dev-code-demo", "inc-link-only.jsonl")
+	initial := claudeProviderFixture("hello world")
+	writeSourceFile(t, sourcePath, initial)
+
+	appended := `{"type":"user","isMeta":true,"timestamp":"2024-01-01T10:00:05Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_link_only","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"linkonly"}}` + "\n"
+	f, err := os.OpenFile(sourcePath, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	provider, ok := NewProvider(AgentClaude, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		RawSessionID: "inc-link-only",
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	outcome, status, err := provider.ParseIncremental(
+		context.Background(),
+		IncrementalRequest{
+			Source: source,
+			Fingerprint: SourceFingerprint{
+				Key:  sourcePath,
+				Size: int64(len(initial) + len(appended)),
+			},
+			SessionID:    "inc-link-only",
+			Offset:       int64(len(initial)),
+			StartOrdinal: 2,
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, IncrementalApplied, status)
+	assert.Empty(t, outcome.Messages)
+	assert.Equal(t, int64(len(appended)), outcome.ConsumedBytes)
+	assert.Equal(t, []ClaudeSubagentLink{{
+		ToolUseID:         "toolu_link_only",
+		SubagentSessionID: "agent-linkonly",
+	}}, outcome.SubagentLinks)
+}
+
 func TestClaudeProviderParseIncrementalTruncatedNeedsFullParse(t *testing.T) {
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "-Users-dev-code-demo", "truncated.jsonl")

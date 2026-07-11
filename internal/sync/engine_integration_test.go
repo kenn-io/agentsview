@@ -9577,15 +9577,12 @@ func TestIncrementalSync_ClaudeMidStreamSplitFallsBackToFullParse(t *testing.T) 
 	assert.Equal(t, "Hello world", msgs[1].Content, "msgs[1].Content = %q, want exactly %q", msgs[1].Content, "Hello world")
 }
 
-// TestIncrementalSync_ClaudeAgentIDFallbackUpdatesStoredToolCall covers
-// the cross-sync subagent linkage case: the first sync stores an
-// assistant tool_use row with no subagent_session_id, and a later sync
-// appends a tool_result whose toolUseResult.agentId should populate the
-// already-stored tool_call. The parser signals
-// IsIncrementalFullParseFallback, so the full-parse fallback must run
-// with forceReplace=true; otherwise the append-only write path skips
-// the existing row and the linkage is silently dropped.
-func TestIncrementalSync_ClaudeAgentIDFallbackUpdatesStoredToolCall(t *testing.T) {
+// TestIncrementalSync_ClaudeAgentIDLinksIncrementally covers the cross-
+// sync subagent linkage case: the first sync stores an assistant
+// tool_use row with no subagent_session_id, and a later sync appends a
+// tool_result whose toolUseResult.agentId should populate the
+// already-stored tool_call without forcing a full message replacement.
+func TestIncrementalSync_ClaudeAgentIDLinksIncrementally(t *testing.T) {
 	env := setupTestEnv(t)
 
 	parentInitial := testjsonl.JoinJSONL(
@@ -9615,6 +9612,14 @@ func TestIncrementalSync_ClaudeAgentIDFallbackUpdatesStoredToolCall(t *testing.T
 	env.engine.SyncAll(context.Background(), nil)
 
 	// Linkage starts empty (the toolUseResult hasn't appeared yet).
+	var assistantMessageID int64
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT id
+		FROM messages
+		WHERE session_id = ? AND ordinal = 1`,
+		"parent-late-link",
+	).Scan(&assistantMessageID), "query message id before append")
+
 	var got sql.NullString
 	require.NoError(t, env.db.Reader().QueryRow(`
 		SELECT subagent_session_id
@@ -9630,7 +9635,7 @@ func TestIncrementalSync_ClaudeAgentIDFallbackUpdatesStoredToolCall(t *testing.T
 	// the existing subagent session. Incremental parse will return
 	// ErrClaudeIncrementalNeedsFullParse so the engine must full-
 	// parse with forceReplace to update the stored tool_call row.
-	toolResult := `{"type":"user","timestamp":"2024-01-01T10:00:02Z","uuid":"r1","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_late","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"childlate"}}`
+	toolResult := `{"type":"user","timestamp":"2024-01-01T10:00:02Z","uuid":"r1","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_late","content":"done\u0000\u0001"}]},"toolUseResult":{"status":"completed","agentId":"childlate"}}`
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	require.NoError(t, err, "open for append")
 	_, writeErr := f.WriteString(toolResult + "\n")
@@ -9639,13 +9644,263 @@ func TestIncrementalSync_ClaudeAgentIDFallbackUpdatesStoredToolCall(t *testing.T
 
 	env.engine.SyncPaths([]string{path})
 
+	var gotMessageID int64
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT id
+		FROM messages
+		WHERE session_id = ? AND ordinal = 1`,
+		"parent-late-link",
+	).Scan(&gotMessageID), "query message id after append")
+
 	require.NoError(t, env.db.Reader().QueryRow(`
 		SELECT subagent_session_id
 		FROM tool_calls
 		WHERE session_id = ? AND tool_use_id = ?`,
 		"parent-late-link", "toolu_late",
 	).Scan(&got), "query after append")
+	assert.Equal(t, assistantMessageID, gotMessageID, "assistant message row should remain in place during incremental linkage")
 	assert.Equal(t, "agent-childlate", got.String, "subagent_session_id = %q, want %q", got.String, "agent-childlate")
+	msgs := fetchMessages(t, env.db, "parent-late-link")
+	require.Len(t, msgs, 2)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "done", msgs[1].ToolCalls[0].ResultContent)
+	assert.Equal(t, len("done"), msgs[1].ToolCalls[0].ResultContentLength)
+}
+
+func TestIncrementalSync_ClaudeAgentIDLinkUsesRemotePrefix(t *testing.T) {
+	claudeDir := t.TempDir()
+	database := dbtest.OpenTestDB(t)
+	env := &testEnv{claudeDir: claudeDir, db: database}
+	env.engine = sync.NewEngine(database, sync.EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {claudeDir},
+		},
+		Machine:  "host",
+		IDPrefix: "host~",
+	})
+
+	initial := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"go"},"cwd":"/tmp"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_prefix","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}]}}`,
+	)
+	path := env.writeClaudeSession(
+		t, "proj-prefix-link", "parent-prefix-link.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	toolResult := `{"type":"user","timestamp":"2024-01-01T10:00:02Z","uuid":"r1","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_prefix","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"childprefix"}}`
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, writeErr := f.WriteString(toolResult + "\n")
+	require.NoError(t, f.Close(), "close append")
+	require.NoError(t, writeErr, "append")
+
+	env.engine.SyncPaths([]string{path})
+
+	var got string
+	require.NoError(t, database.Reader().QueryRow(`
+		SELECT subagent_session_id
+		FROM tool_calls
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"host~parent-prefix-link", "toolu_prefix",
+	).Scan(&got), "query prefixed link")
+	assert.Equal(t, "host~agent-childprefix", got)
+}
+
+func TestIncrementalSync_ClaudeAgentIDLinksToolUseFromSameAppend(t *testing.T) {
+	env := setupTestEnv(t)
+
+	initial := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"go"},"cwd":"/tmp"}`,
+	)
+	path := env.writeClaudeSession(
+		t, "proj-same-append-link", "parent-same-append-link.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	appended := testjsonl.JoinJSONL(
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"id":"msg_one","content":[{"type":"tool_use","id":"toolu_same_append","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:02Z","uuid":"r1","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_same_append","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"childsameappend"}}`,
+	)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, writeErr := f.WriteString(appended)
+	require.NoError(t, f.Close(), "close append")
+	require.NoError(t, writeErr, "append")
+
+	env.engine.SyncPaths([]string{path})
+
+	assertSessionMessageCount(t, env.db, "parent-same-append-link", 2)
+	var got sql.NullString
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT subagent_session_id
+		FROM tool_calls
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"parent-same-append-link", "toolu_same_append",
+	).Scan(&got), "query after append")
+	assert.Equal(t, "agent-childsameappend", got.String)
+}
+
+func TestIncrementalSync_ClaudeAgentIDUsesFirstLinkAndLatestResult(t *testing.T) {
+	env := setupTestEnv(t)
+
+	initial := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"go"},"cwd":"/tmp"}`,
+	)
+	path := env.writeClaudeSession(
+		t, "proj-multiple-links", "parent-multiple-links.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	appended := testjsonl.JoinJSONL(
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_multiple_links","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}]}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:02Z","uuid":"r1","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_multiple_links","content":"partial"}]},"toolUseResult":{"status":"running","agentId":"firstchild"}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:03Z","uuid":"r2","parentUuid":"r1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_multiple_links","content":"final"}]},"toolUseResult":{"status":"completed","agentId":"laterchild"}}`,
+	)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, writeErr := f.WriteString(appended)
+	require.NoError(t, f.Close(), "close append")
+	require.NoError(t, writeErr, "append")
+
+	env.engine.SyncPaths([]string{path})
+
+	msgs := fetchMessages(t, env.db, "parent-multiple-links")
+	require.Len(t, msgs, 2)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	assert.Equal(t, "agent-firstchild", msgs[1].ToolCalls[0].SubagentSessionID)
+	assert.Equal(t, "final", msgs[1].ToolCalls[0].ResultContent)
+	assert.Equal(t, len("final"), msgs[1].ToolCalls[0].ResultContentLength)
+}
+
+func TestIncrementalSync_ClaudeAgentIDPreservesExistingSubagentLink(t *testing.T) {
+	env := setupTestEnv(t)
+
+	initial := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"go"},"cwd":"/tmp"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_first_link","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}]}}`,
+		`{"type":"queue-operation","operation":"enqueue","timestamp":"2024-01-01T10:00:02Z","sessionId":"parent-first-link","content":"{\"task_id\":\"queuefirst\",\"tool_use_id\":\"toolu_first_link\",\"description\":\"d\",\"task_type\":\"local_agent\"}"}`,
+	)
+	path := env.writeClaudeSession(
+		t, "proj-first-link", "parent-first-link.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	toolResult := `{"type":"user","timestamp":"2024-01-01T10:00:03Z","uuid":"r1","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_first_link","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"laterresult"}}`
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, writeErr := f.WriteString(toolResult + "\n")
+	require.NoError(t, f.Close(), "close append")
+	require.NoError(t, writeErr, "append")
+
+	env.engine.SyncPaths([]string{path})
+
+	var got string
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT subagent_session_id
+		FROM tool_calls
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"parent-first-link", "toolu_first_link",
+	).Scan(&got), "query after append")
+	assert.Equal(t, "agent-queuefirst", got)
+}
+
+func TestIncrementalSync_ClaudeAgentIDDoesNotLinkNonSubagentTool(t *testing.T) {
+	env := setupTestEnv(t)
+
+	initial := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"go"},"cwd":"/tmp"}`,
+	)
+	path := env.writeClaudeSession(
+		t, "proj-read-link", "parent-read-link.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	appended := testjsonl.JoinJSONL(
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_read_link","name":"Read","input":{"file_path":"README.md"}}]}}`,
+		`{"type":"user","timestamp":"2024-01-01T10:00:02Z","uuid":"r1","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_read_link","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"notasubagent"}}`,
+	)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, writeErr := f.WriteString(appended)
+	require.NoError(t, f.Close(), "close append")
+	require.NoError(t, writeErr, "append")
+
+	env.engine.SyncPaths([]string{path})
+
+	var got sql.NullString
+	require.NoError(t, env.db.Reader().QueryRow(`
+		SELECT subagent_session_id
+		FROM tool_calls
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"parent-read-link", "toolu_read_link",
+	).Scan(&got), "query after append")
+	assert.False(t, got.Valid)
+}
+
+func TestIncrementalSync_ClaudeAgentIDMissingToolCallAdvancesCursor(t *testing.T) {
+	env := setupTestEnv(t)
+
+	initial := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"go"},"cwd":"/tmp"}`,
+	)
+	path := env.writeClaudeSession(
+		t, "proj-missing-link", "parent-missing-link.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	appended := `{"type":"user","isMeta":true,"timestamp":"2024-01-01T10:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_missing","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"missingchild"}}` + "\n"
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, writeErr := f.WriteString(appended)
+	require.NoError(t, f.Close(), "close append")
+	require.NoError(t, writeErr, "append")
+
+	env.engine.SyncPaths([]string{path})
+
+	info, err := os.Stat(path)
+	require.NoError(t, err, "stat appended transcript")
+	sess, err := env.db.GetSessionFull(context.Background(), "parent-missing-link")
+	require.NoError(t, err, "get session after append")
+	require.NotNil(t, sess.FileSize)
+	assert.Equal(t, info.Size(), *sess.FileSize)
+	assert.True(t, sess.LastWriteIncremental)
+	assertSessionMessageCount(t, env.db, "parent-missing-link", 1)
+}
+
+func TestIncrementalSync_ClaudeMetaAgentIDResultMatchesFullParse(t *testing.T) {
+	env := setupTestEnv(t)
+
+	initial := testjsonl.JoinJSONL(
+		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"go"},"cwd":"/tmp"}`,
+		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_meta_link","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}]}}`,
+	)
+	path := env.writeClaudeSession(
+		t, "proj-meta-link", "parent-meta-link.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	appended := `{"type":"user","isMeta":true,"timestamp":"2024-01-01T10:00:02Z","uuid":"r1","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_meta_link","content":"meta-only output"}]},"toolUseResult":{"status":"completed","agentId":"metachild"}}` + "\n"
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, writeErr := f.WriteString(appended)
+	require.NoError(t, f.Close(), "close append")
+	require.NoError(t, writeErr, "append")
+
+	env.engine.SyncPaths([]string{path})
+
+	assertToolCall := func(stage string) {
+		msgs := fetchMessages(t, env.db, "parent-meta-link")
+		require.Len(t, msgs, 2, stage)
+		require.Len(t, msgs[1].ToolCalls, 1, stage)
+		assert.Equal(t, "agent-metachild", msgs[1].ToolCalls[0].SubagentSessionID, stage)
+		assert.Empty(t, msgs[1].ToolCalls[0].ResultContent, stage)
+		assert.Zero(t, msgs[1].ToolCalls[0].ResultContentLength, stage)
+	}
+	assertToolCall("incremental parse")
+
+	env.engine.ResyncAll(context.Background(), nil)
+	assertToolCall("full parse")
 }
 
 func TestIncrementalSync_ClaudeCrossSyncToolResultFallback(t *testing.T) {

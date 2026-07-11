@@ -978,6 +978,13 @@ func (db *DB) WriteSessionIncremental(
 	if err := writeMessagesTx(tx, msgs); err != nil {
 		return err
 	}
+	for _, link := range update.SubagentLinks {
+		if err := applyToolCallSubagentLinkTx(
+			tx, sessionID, link, update.BlockedResultCategories,
+		); err != nil {
+			return err
+		}
+	}
 	if err := updateSessionIncrementalTx(tx, sessionID, update); err != nil {
 		return err
 	}
@@ -2015,6 +2022,75 @@ func (db *DB) ToolCallCount(sessionID string) (int, error) {
 		sessionID,
 	).Scan(&n)
 	return n, err
+}
+
+func (db *DB) SetToolCallSubagentSession(
+	sessionID, toolUseID, subagentSessionID string,
+) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	tx, err := db.getWriter().Begin()
+	if err != nil {
+		return fmt.Errorf("beginning subagent linkage tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := applyToolCallSubagentLinkTx(
+		tx, sessionID, ToolCallSubagentLink{
+			ToolUseID:         toolUseID,
+			SubagentSessionID: subagentSessionID,
+		}, nil,
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func applyToolCallSubagentLinkTx(
+	tx *sql.Tx, sessionID string, link ToolCallSubagentLink,
+	blockedResultCategories map[string]bool,
+) error {
+	var toolName, category, currentSubagent string
+	if err := tx.QueryRow(
+		`SELECT tool_name, category, COALESCE(subagent_session_id, '')
+		 FROM tool_calls
+		 WHERE session_id = ? AND tool_use_id = ?`,
+		sessionID, link.ToolUseID,
+	).Scan(&toolName, &category, &currentSubagent); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf(
+			"checking tool_call for %s/%s: %w",
+			sessionID, link.ToolUseID, err,
+		)
+	}
+	if currentSubagent == "" &&
+		(category == "Task" || strings.Contains(toolName, "subagent")) {
+		currentSubagent = link.SubagentSessionID
+	}
+
+	if !link.HasResult {
+		_, err := tx.Exec(
+			`UPDATE tool_calls SET subagent_session_id = ?
+			 WHERE session_id = ? AND tool_use_id = ?`,
+			nilIfEmpty(currentSubagent), sessionID, link.ToolUseID,
+		)
+		return err
+	}
+	resultContent := link.ResultContent
+	if blockedResultCategories[category] {
+		resultContent = ""
+	}
+	_, err := tx.Exec(
+		`UPDATE tool_calls
+		 SET subagent_session_id = ?, result_content_length = ?,
+		     result_content = ?
+		 WHERE session_id = ? AND tool_use_id = ?`,
+		nilIfEmpty(currentSubagent), link.ResultContentLen, resultContent,
+		sessionID, link.ToolUseID,
+	)
+	return err
 }
 
 // SystemMessageFingerprint returns the ordered, comma-separated list of

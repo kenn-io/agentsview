@@ -3667,6 +3667,7 @@ type incrementalUpdate struct {
 	machine              string
 	cwd                  string
 	msgs                 []parser.ParsedMessage
+	links                []parser.ClaudeSubagentLink
 	endedAt              time.Time
 	terminationStatus    *string
 	msgCount             int // total (old + new)
@@ -5171,7 +5172,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 	parseFn := func(
 		_ string, sessionID string, offset int64,
 		startOrdinal int, lastEntryUUID string,
-	) ([]parser.ParsedMessage, time.Time, int64, *string, error) {
+	) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, time.Time, int64, *string, error) {
 		outcome, status, perr := provider.ParseIncremental(
 			ctx,
 			parser.IncrementalRequest{
@@ -5185,30 +5186,30 @@ func (e *Engine) tryProviderIncrementalAppend(
 			},
 		)
 		if perr != nil {
-			return nil, time.Time{}, 0, nil, perr
+			return nil, nil, time.Time{}, 0, nil, perr
 		}
 		switch status {
 		case parser.IncrementalNeedsFullParse:
 			if outcome.ForceReplace {
 				// Signal the shared helper to fall back to a
 				// full parse that replaces stored messages.
-				return nil, time.Time{}, 0, nil,
+				return nil, nil, time.Time{}, 0, nil,
 					parser.ErrClaudeIncrementalNeedsFullParse
 			}
 			// A plain full-parse fallback (e.g. DAG detected):
 			// return a non-fallback error so the helper runs a
 			// normal full parse without forceReplace.
-			return nil, time.Time{}, 0, nil, parser.ErrDAGDetected
+			return nil, nil, time.Time{}, 0, nil, parser.ErrDAGDetected
 		case parser.IncrementalNoNewData:
-			return nil, time.Time{}, 0, nil, nil
+			return nil, nil, time.Time{}, 0, nil, nil
 		default:
 			var terminationStatus *string
 			if outcome.TerminationStatus != nil {
 				status := string(*outcome.TerminationStatus)
 				terminationStatus = &status
 			}
-			return outcome.Messages, outcome.EndedAt,
-				outcome.ConsumedBytes, terminationStatus, nil
+			return outcome.Messages, outcome.SubagentLinks,
+				outcome.EndedAt, outcome.ConsumedBytes, terminationStatus, nil
 		}
 	}
 
@@ -5224,7 +5225,7 @@ func (e *Engine) tryProviderIncrementalAppend(
 type incrementalParseFunc func(
 	path string, sessionID string, offset int64,
 	startOrdinal int, lastEntryUUID string,
-) ([]parser.ParsedMessage, time.Time, int64, *string, error)
+) ([]parser.ParsedMessage, []parser.ClaudeSubagentLink, time.Time, int64, *string, error)
 
 // tryIncrementalJSONL attempts an incremental parse of an
 // append-only JSONL file by reading only bytes appended since
@@ -5347,7 +5348,7 @@ func (e *Engine) tryIncrementalJSONL(
 		incMtime = parser.CodexEffectiveMtime(file.Path, incMtime)
 	}
 
-	newMsgs, endedAt, consumed, terminationStatus, err := parseFn(
+	newMsgs, links, endedAt, consumed, terminationStatus, err := parseFn(
 		file.Path, inc.ID, inc.FileSize, inc.NextOrdinal, inc.LastEntryUUID,
 	)
 	if err != nil {
@@ -5401,6 +5402,7 @@ func (e *Engine) tryIncrementalJSONL(
 					project:              inc.Project,
 					machine:              inc.Machine,
 					cwd:                  inc.Cwd,
+					links:                links,
 					endedAt:              endedAt,
 					terminationStatus:    terminationStatus,
 					msgCount:             inc.MsgCount,
@@ -5490,6 +5492,7 @@ func (e *Engine) tryIncrementalJSONL(
 			machine:              inc.Machine,
 			cwd:                  inc.Cwd,
 			msgs:                 newMsgs,
+			links:                links,
 			endedAt:              endedAt,
 			terminationStatus:    terminationStatus,
 			msgCount:             inc.MsgCount + len(newMsgs),
@@ -7470,23 +7473,43 @@ func (e *Engine) writeIncremental(
 	// since a long session legitimately exceeds it.
 	endedAt, _ = blankImplausibleTimestampPtr(endedAt)
 
+	subagentLinks := make([]db.ToolCallSubagentLink, len(inc.links))
+	for i, link := range inc.links {
+		toolCall := db.ToolCall{
+			ResultContent:       parser.DecodeContent(link.ResultContentRaw),
+			ResultContentLength: link.ResultContentLen,
+		}
+		e.anomalies.recordSanitize(db.SanitizeToolCall(&toolCall))
+		subagentLinks[i] = db.ToolCallSubagentLink{
+			ToolUseID: link.ToolUseID,
+			SubagentSessionID: applyIDPrefixToID(
+				e.idPrefix, link.SubagentSessionID,
+			),
+			ResultContent:    toolCall.ResultContent,
+			ResultContentLen: toolCall.ResultContentLength,
+			HasResult:        link.HasResult,
+		}
+	}
+
 	if err := e.db.WriteSessionIncremental(
 		inc.sessionID,
 		dbMsgs,
 		db.IncrementalSessionUpdate{
-			EndedAt:              endedAt,
-			TerminationStatus:    inc.terminationStatus,
-			MsgCount:             msgCount,
-			UserMsgCount:         userMsgCount,
-			FileSize:             inc.fileSize,
-			FileMtime:            inc.fileMtime,
-			FileHash:             strPtr(inc.fileHash),
-			NextOrdinal:          inc.nextOrdinal,
-			LastEntryUUID:        inc.lastEntryUUID,
-			TotalOutputTokens:    inc.totalOutputTokens,
-			PeakContextTokens:    inc.peakContextTokens,
-			HasTotalOutputTokens: inc.hasTotalOutputTokens,
-			HasPeakContextTokens: inc.hasPeakContextTokens,
+			EndedAt:                 endedAt,
+			TerminationStatus:       inc.terminationStatus,
+			MsgCount:                msgCount,
+			UserMsgCount:            userMsgCount,
+			FileSize:                inc.fileSize,
+			FileMtime:               inc.fileMtime,
+			FileHash:                strPtr(inc.fileHash),
+			NextOrdinal:             inc.nextOrdinal,
+			LastEntryUUID:           inc.lastEntryUUID,
+			TotalOutputTokens:       inc.totalOutputTokens,
+			PeakContextTokens:       inc.peakContextTokens,
+			HasTotalOutputTokens:    inc.hasTotalOutputTokens,
+			HasPeakContextTokens:    inc.hasPeakContextTokens,
+			SubagentLinks:           subagentLinks,
+			BlockedResultCategories: e.blockedResultCategories,
 		},
 	); err != nil {
 		return fmt.Errorf(

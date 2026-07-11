@@ -3226,6 +3226,100 @@ func TestToolCallSubagentSessionID(t *testing.T) {
 		nullSubagent.String)
 }
 
+func TestSetToolCallSubagentSession(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "proj")
+	insertMessages(t, d, Message{
+		SessionID:     "s1",
+		Ordinal:       0,
+		Role:          "assistant",
+		Content:       "[Task: implement feature]",
+		ContentLength: 24,
+		Timestamp:     tsZero,
+		HasToolUse:    true,
+		ToolCalls: []ToolCall{
+			{
+				SessionID: "s1",
+				ToolName:  "Task",
+				Category:  "Task",
+				ToolUseID: "toolu_task1",
+			},
+			{
+				SessionID:         "s1",
+				ToolName:          "Task",
+				Category:          "Task",
+				ToolUseID:         "toolu_task2",
+				SubagentSessionID: "agent-existing",
+			},
+		},
+	})
+
+	requireNoError(t, d.SetToolCallSubagentSession("s1", "toolu_task1", "agent-new"), "set subagent session")
+
+	rows, err := d.Reader().Query(`
+		SELECT tool_use_id, COALESCE(subagent_session_id, '')
+		FROM tool_calls
+		WHERE session_id = 's1'
+		ORDER BY tool_use_id`)
+	requireNoError(t, err, "query tool_calls")
+	defer rows.Close()
+
+	got := map[string]string{}
+	for rows.Next() {
+		var toolUseID, subagent string
+		requireNoError(t, rows.Scan(&toolUseID, &subagent), "scan tool_calls")
+		got[toolUseID] = subagent
+	}
+	requireNoError(t, rows.Err(), "rows")
+	assert.Equal(t, "agent-new", got["toolu_task1"], "toolu_task1 subagent")
+	assert.Equal(t, "agent-existing", got["toolu_task2"], "toolu_task2 subagent")
+}
+
+func TestWriteSessionIncrementalBlocksLinkedResultContent(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "s1", "proj")
+	insertMessages(t, d, Message{
+		SessionID:  "s1",
+		Ordinal:    0,
+		Role:       "assistant",
+		HasToolUse: true,
+		ToolCalls: []ToolCall{{
+			SessionID: "s1",
+			ToolName:  "Agent",
+			Category:  "Task",
+			ToolUseID: "toolu_blocked",
+		}},
+	})
+
+	require.NoError(t, d.WriteSessionIncremental(
+		"s1", nil, IncrementalSessionUpdate{
+			MsgCount:    1,
+			NextOrdinal: 1,
+			SubagentLinks: []ToolCallSubagentLink{{
+				ToolUseID:         "toolu_blocked",
+				SubagentSessionID: "agent-child",
+				ResultContent:     "secret result",
+				ResultContentLen:  len("secret result"),
+				HasResult:         true,
+			}},
+			BlockedResultCategories: map[string]bool{"Task": true},
+		},
+	), "incremental write")
+
+	var subagent, content string
+	var contentLen int
+	require.NoError(t, d.Reader().QueryRow(`
+		SELECT COALESCE(subagent_session_id, ''), result_content_length,
+		       COALESCE(result_content, '')
+		FROM tool_calls
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"s1", "toolu_blocked",
+	).Scan(&subagent, &contentLen, &content), "query linked result")
+	assert.Equal(t, "agent-child", subagent)
+	assert.Equal(t, len("secret result"), contentLen)
+	assert.Empty(t, content)
+}
+
 func TestFTSBackfill(t *testing.T) {
 	dCheck := testDB(t)
 	requireFTS(t, dCheck)
