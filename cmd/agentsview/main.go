@@ -323,10 +323,9 @@ func runServe(cfg config.Config, opts serveOptions) {
 		rt.Cfg.RequireAuth, rt.Cfg.NoSync,
 		rt.Caddy.Pid(),
 	); sfErr != nil {
-		log.Printf(
-			"warning: could not write daemon runtime record: %v"+
-				" (keeping start lock as fallback)",
-			sfErr,
+		warnRuntimeRecordWrite(
+			os.Stdout, sfErr, "keeping start lock as fallback",
+			"To fix permissions, run: icacls <dir> /setowner <user>",
 		)
 	} else {
 		runtimeRecordDataDir = rt.Cfg.DataDir

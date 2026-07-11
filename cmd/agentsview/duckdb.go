@@ -343,10 +343,9 @@ func runDuckDBServe(appCfg config.Config, basePath string) {
 		rt.Cfg.RequireAuth,
 		rt.Caddy.Pid(),
 	); sfErr != nil {
-		log.Printf(
-			"warning: could not write daemon runtime record: %v"+
-				" (duckdb serve daemon may not be discoverable by CLI)",
-			sfErr,
+		warnRuntimeRecordWrite(
+			os.Stdout, sfErr,
+			"duckdb serve daemon may not be discoverable by CLI", "",
 		)
 	} else {
 		defer RemoveDaemonRuntime(rt.Cfg.DataDir)

@@ -24,6 +24,58 @@ import (
 	agentsync "go.kenn.io/agentsview/internal/sync"
 )
 
+func TestRuntimeWarningHelper(t *testing.T) {
+	logOutput := captureLogOutput(t)
+	var visible bytes.Buffer
+
+	warnRuntimeRecordWrite(
+		&visible, errors.New("permission denied"),
+		"keeping start lock as fallback",
+		"To fix permissions, run: icacls <dir> /setowner <user>",
+	)
+
+	assert.Contains(t, visible.String(), "could not write daemon runtime record")
+	assert.Contains(t, visible.String(), "icacls <dir> /setowner <user>")
+	assert.Contains(t, logOutput.String(), "could not write daemon runtime record")
+}
+
+func TestServeRuntimeRecordWriteFailureWarnsVisible(t *testing.T) {
+	var visible bytes.Buffer
+	warnRuntimeRecordWrite(
+		&visible, errors.New("permission denied"),
+		"keeping start lock as fallback",
+		"To fix permissions, run: icacls <dir> /setowner <user>",
+	)
+
+	assert.Contains(t, visible.String(), "could not write daemon runtime record")
+	assert.Contains(t, visible.String(), "icacls <dir> /setowner <user>")
+}
+
+func TestServeRuntimeRecordWriteSuccessDoesNotWarnVisible(t *testing.T) {
+	var visible bytes.Buffer
+	assert.NotContains(t, visible.String(), "could not write daemon runtime record")
+}
+
+func TestPGServeRuntimeRecordWriteFailureWarnsVisible(t *testing.T) {
+	var visible bytes.Buffer
+	warnRuntimeRecordWrite(
+		&visible, errors.New("permission denied"),
+		"pg serve daemon may not be discoverable by CLI", "",
+	)
+
+	assert.Contains(t, visible.String(), "could not write daemon runtime record")
+}
+
+func TestDuckDBServeRuntimeRecordWriteFailureWarnsVisible(t *testing.T) {
+	var visible bytes.Buffer
+	warnRuntimeRecordWrite(
+		&visible, errors.New("permission denied"),
+		"duckdb serve daemon may not be discoverable by CLI", "",
+	)
+
+	assert.Contains(t, visible.String(), "could not write daemon runtime record")
+}
+
 func TestMustLoadConfig(t *testing.T) {
 	tests := []struct {
 		name          string

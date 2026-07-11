@@ -583,10 +583,9 @@ func runPGServe(appCfg config.Config, basePath string) {
 		rt.Cfg.RequireAuth,
 		rt.Caddy.Pid(),
 	); sfErr != nil {
-		log.Printf(
-			"warning: could not write daemon runtime record: %v"+
-				" (pg serve daemon may not be discoverable by CLI)",
-			sfErr,
+		warnRuntimeRecordWrite(
+			os.Stdout, sfErr,
+			"pg serve daemon may not be discoverable by CLI", "",
 		)
 	} else {
 		defer RemoveDaemonRuntime(rt.Cfg.DataDir)
