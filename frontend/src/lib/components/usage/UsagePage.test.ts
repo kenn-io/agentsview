@@ -123,6 +123,42 @@ describe("UsagePage refresh behavior", () => {
     });
   });
 
+  it("refreshes an unpinned rolling range after midnight", async () => {
+    const fetchDates: Array<{ from: string; to: string }> = [];
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-10T12:00:00"));
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(usage, "fetchAll").mockImplementation(() => {
+      fetchDates.push({ from: usage.from, to: usage.to });
+      return Promise.resolve();
+    });
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    router.route = "usage";
+    router.params = {};
+    usage.isPinned = false;
+    usage.windowDays = 30;
+    usage.from = "2026-06-10";
+    usage.to = "2026-07-09";
+    yokedDates.setEnabled(false);
+
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+
+    expect(usage.isPinned).toBe(false);
+    expect(usage.from).toBe("2026-06-11");
+    expect(usage.to).toBe("2026-07-10");
+    expect(fetchDates[0]).toEqual({
+      from: "2026-06-11",
+      to: "2026-07-10",
+    });
+  });
+
   it("renders the unsupported Copilot note from the summary contract", async () => {
     vi.stubGlobal(
       "ResizeObserver",

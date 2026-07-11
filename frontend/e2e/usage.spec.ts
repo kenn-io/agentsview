@@ -177,17 +177,18 @@ test.describe("Usage page", () => {
     await expect(page).toHaveURL(/exclude_project=/);
   });
 
-  test("returning bare materializes rolling bounds before requesting", async ({
+  test("returning bare refreshes rolling bounds after midnight", async ({
     page,
   }) => {
-    await page.clock.setFixedTime(new Date("2026-07-10T12:00:00"));
-    await page.goto("/usage?from=2026-01-01&to=2026-01-07");
+    await page.clock.setFixedTime(new Date("2026-07-09T23:59:00"));
+    await page.goto("/usage?window_days=30");
     await expect(page.locator(".usage-page")).toBeVisible();
     await expect(
       page.locator(".kit-date-range-picker__trigger"),
-    ).toContainText("2026-01-01");
+    ).toContainText("Last 30 days");
 
     await clickNavTab(page, "Sessions");
+    await page.clock.setFixedTime(new Date("2026-07-10T00:01:00"));
     const requestPromise = page.waitForRequest((request) =>
       new URL(request.url()).pathname.endsWith("/api/v1/usage/summary")
     );

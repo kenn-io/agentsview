@@ -230,7 +230,7 @@
           : null;
         if (state) {
           changed = applyUsagePanelDate(state) || changed;
-        } else if (usage.isPinned) {
+        } else {
           changed = applyUsagePanelDate({
             from: usage.from,
             to: usage.to,
