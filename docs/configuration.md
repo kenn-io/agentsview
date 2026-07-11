@@ -239,6 +239,7 @@ can still be parsed.
 | Forge                 | `~/.forge/`                                                                      | SQLite database (`.forge.db`)                                                                                                   |
 | Gemini CLI            | `~/.gemini/`                                                                     | JSONL in `tmp/` subdirectory                                                                                                    |
 | gptme                 | `~/.local/share/gptme/logs/`                                                     | JSONL logs                                                                                                                      |
+| Grok                  | `~/.grok/sessions/`                                                              | `summary.json` metadata plus optional `signals.json` token counters                                                             |
 | Hermes Agent          | `~/.hermes/sessions/`                                                            | JSONL / JSON per session                                                                                                        |
 | iFlow                 | `~/.iflow/projects/`                                                             | JSONL per session                                                                                                               |
 | Kilo                  | `~/.local/share/kilo/`                                                           | SQLite DB or `storage/` JSON files                                                                                              |
@@ -269,6 +270,13 @@ can still be parsed.
 | ZCode                 | `~/.zcode/cli/db/` or `~/.zcode/cli/`                                            | SQLite database (`db.sqlite`) with usage rows                                                                                   |
 | Zed                   | (platform-specific, see below)                                                   | SQLite database (`threads/threads.db`)                                                                                          |
 | Zencoder              | `~/.zencoder/sessions/`                                                          | JSONL per session                                                                                                               |
+
+Grok support is summary-only: AgentsView reads the summary, searchable first
+prompt, timestamps, project label, and message count from `summary.json`, plus
+total output tokens and peak context tokens from `signals.json` when present.
+It does not decode the full transcript from `updates.jsonl` or
+`chat_history.jsonl`. Set `GROK_DIR` or `grok_dirs` to override the default
+directory.
 
 **VS Code Copilot default directories** vary by platform:
 
@@ -522,15 +530,16 @@ The corresponding fields are `aider_dirs`, `amp_dirs`, `antigravity_dirs`,
 `cowork_dirs`, `devin_dirs`, `codex_sessions_dirs`, `commandcode_project_dirs`,
 `copilot_dirs`, `cortex_dirs`, `cursor_project_dirs`,
 `deepseek_tui_sessions_dirs`, `forge_dirs`, `gemini_dirs`, `gptme_dirs`,
-`hermes_sessions_dirs`, `iflow_dirs`, `kilo_dirs`, `kimi_dirs`, `kiro_dirs`,
-`kiro_ide_dirs`, `mimocode_dirs`, `vibe_session_dirs`, `omp_dirs`,
-`openclaw_dirs`, `opencode_dirs`, `openhands_dirs`, `pi_dirs`, `piebald_dirs`,
-`posit_assistant_dirs`, `positron_dirs`, `qclaw_dirs`, `qoder_project_dirs`,
-`qwen_project_dirs`, `qwenpaw_dirs`, `reasonix_dirs`, `shelley_dirs`,
-`visualstudio_copilot_dirs`, `vscode_copilot_dirs`, `windsurf_dirs`,
-`warp_dirs`, `workbuddy_project_dirs`, `zcode_dirs`, `zed_dirs`, and
-`zencoder_dirs`. Each accepts an array of paths. When set, these take precedence
-over the single-directory environment variable and the default path.
+`grok_dirs`, `hermes_sessions_dirs`, `iflow_dirs`, `kilo_dirs`, `kimi_dirs`,
+`kiro_dirs`, `kiro_ide_dirs`, `mimocode_dirs`, `vibe_session_dirs`,
+`omp_dirs`, `openclaw_dirs`, `opencode_dirs`, `openhands_dirs`, `pi_dirs`,
+`piebald_dirs`, `posit_assistant_dirs`, `positron_dirs`, `qclaw_dirs`,
+`qoder_project_dirs`, `qwen_project_dirs`, `qwenpaw_dirs`, `reasonix_dirs`,
+`shelley_dirs`, `visualstudio_copilot_dirs`, `vscode_copilot_dirs`,
+`windsurf_dirs`, `warp_dirs`, `workbuddy_project_dirs`, `zcode_dirs`,
+`zed_dirs`, and `zencoder_dirs`. Each accepts an array of paths. When set,
+these take precedence over the single-directory environment variable and the
+default path.
 
 All listed directories are discovered, watched, and synced independently.
 

@@ -68,6 +68,7 @@ across every project, model, and tool.
   <a class="agent-chip" data-agent="commandcode" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Cc</span><span class="agent-chip__name">Command Code</span></a>
   <a class="agent-chip" data-agent="cortex-code" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Cx</span><span class="agent-chip__name">Cortex Code</span></a>
   <a class="agent-chip" data-agent="forge" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Fo</span><span class="agent-chip__name">Forge</span></a>
+  <a class="agent-chip" data-agent="grok" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Gr</span><span class="agent-chip__name">Grok</span></a>
   <a class="agent-chip" data-agent="hermes" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">He</span><span class="agent-chip__name">Hermes</span></a>
   <a class="agent-chip" data-agent="iflow" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">iF</span><span class="agent-chip__name">iFlow</span></a>
   <a class="agent-chip" data-agent="mimocode" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Mi</span><span class="agent-chip__name">MiMoCode</span></a>

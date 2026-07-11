@@ -326,6 +326,7 @@ thread JSON files.
 | Forge                 | `~/.forge/`                                                                                                                                                             |
 | Gemini CLI            | `~/.gemini/`                                                                                                                                                            |
 | gptme                 | `~/.local/share/gptme/logs/`                                                                                                                                            |
+| Grok                  | `~/.grok/sessions/`                                                                                                                                                     |
 | Hermes Agent          | `~/.hermes/sessions/`                                                                                                                                                   |
 | iFlow                 | `~/.iflow/projects/`                                                                                                                                                    |
 | Kilo                  | `~/.local/share/kilo/`                                                                                                                                                  |
@@ -355,6 +356,13 @@ thread JSON files.
 | ZCode                 | `~/.zcode/cli/db/`, `~/.zcode/cli/`                                                                                                                                     |
 | Zed                   | `~/Library/Application Support/Zed/` (macOS)                                                                                                                            |
 | Zencoder              | `~/.zencoder/sessions/`                                                                                                                                                 |
+
+Grok support is currently summary-only. AgentsView reads the summary,
+searchable first prompt, timestamps, project label, and message count from
+`summary.json`, plus total output tokens and peak context tokens from
+`signals.json` when present. It does not decode the full transcript from
+`updates.jsonl` or `chat_history.jsonl`. Set `GROK_DIR` or `grok_dirs` to
+override the default directory.
 
 Each directory can be overridden with an environment variable. See the
 [configuration docs](https://agentsview.io/configuration/) for details. Cursor
