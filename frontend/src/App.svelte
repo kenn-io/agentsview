@@ -79,6 +79,7 @@
     panelDateToSessionFilterParams,
     rangeToPanelDate,
     sessionParamsToPanelDate,
+    type PanelDateState,
   } from "./lib/stores/yokedDates.svelte.js";
   import { m } from "./lib/i18n/index.js";
   import { setAuthToken, getAuthToken, setServerUrl, getBase } from "./lib/api/runtime.js";
@@ -300,18 +301,9 @@
     }
   }
 
-  function sessionEntryDateParams(
-    routeParams: Record<string, string>,
+  function applySessionDateState(
+    state: PanelDateState,
   ): Record<string, string> | null {
-    if (hasSessionDateIntent(routeParams)) return null;
-    const retained = analyticsPageDates.restoreWithIntent("sessions");
-    const shared = yokedDates.seedForPanel();
-    const state = shared
-      ? rangeToPanelDate(shared)
-      : retained.explicitDateIntent
-        ? retained.state
-        : null;
-    if (!state) return null;
     const dateParams = panelDateToSessionFilterParams(state);
     if (Object.keys(dateParams).length === 0) return null;
     sessions.filters.date = dateParams["date"] ?? "";
@@ -327,6 +319,20 @@
       );
     }
     return params;
+  }
+
+  function sessionEntryDateParams(
+    routeParams: Record<string, string>,
+  ): Record<string, string> | null {
+    if (hasSessionDateIntent(routeParams)) return null;
+    const retained = analyticsPageDates.restoreWithIntent("sessions");
+    const shared = yokedDates.seedForPanel();
+    const state = shared
+      ? rangeToPanelDate(shared)
+      : retained.explicitDateIntent
+        ? retained.state
+        : null;
+    return state ? applySessionDateState(state) : null;
   }
 
   let lastDetailFilterParamsSignature: string | null = $state(null);
@@ -355,7 +361,10 @@
       if (enteringSessions) {
         const explicitState = sessionParamsToPanelDate(params);
         if (explicitState) yokedDates.updateFromPanel(explicitState);
-        const entryParams = sessionEntryDateParams(params);
+        const entryParams =
+          explicitState?.mode === "rolling"
+            ? applySessionDateState(explicitState)
+            : sessionEntryDateParams(params);
         if (entryParams) router.replaceParams(entryParams);
       }
       if (route === "sessions") {

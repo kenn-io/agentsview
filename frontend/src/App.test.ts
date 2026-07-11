@@ -295,11 +295,13 @@ describe("findUserPromptOrdinal", () => {
 });
 
 describe("App analytics date navigation", () => {
-  it("publishes explicit detail dates to the next linked page", async () => {
-    const sharedDatesAtSessionLoad: Array<{
-      from: string;
-      to: string;
-    } | null> = [];
+  it("materializes and publishes rolling detail dates before loading", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-10T12:00:00"));
+    const datesAtSessionLoad: Array<{
+      shared: { from: string; to: string } | null;
+      filters: { from: string; to: string };
+    }> = [];
     vi.stubGlobal(
       "ResizeObserver",
       class {
@@ -318,9 +320,13 @@ describe("App analytics date navigation", () => {
     vi.spyOn(sync, "watchSession").mockImplementation(() => {});
     vi.spyOn(sessions, "load").mockImplementation(() => {
       const shared = yokedDates.seedForPanel();
-      sharedDatesAtSessionLoad.push(
-        shared ? { from: shared.from, to: shared.to } : null,
-      );
+      datesAtSessionLoad.push({
+        shared: shared ? { from: shared.from, to: shared.to } : null,
+        filters: {
+          from: sessions.filters.dateFrom,
+          to: sessions.filters.dateTo,
+        },
+      });
       return Promise.resolve();
     });
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
@@ -353,27 +359,35 @@ describe("App analytics date navigation", () => {
     await flushEffects();
 
     router.navigateToSession("session-1", {
-      date_from: "2026-06-01",
-      date_to: "2026-06-07",
+      window_days: "30",
+      date_from: "2026-01-01",
+      date_to: "2026-01-30",
     });
     await flushEffects();
 
-    expect(sharedDatesAtSessionLoad[0]).toEqual({
-      from: "2026-06-01",
-      to: "2026-06-07",
+    expect(datesAtSessionLoad[0]).toEqual({
+      shared: { from: "2026-06-11", to: "2026-07-10" },
+      filters: { from: "2026-06-11", to: "2026-07-10" },
     });
     expect(yokedDates.seedForPanel()).toMatchObject({
-      from: "2026-06-01",
-      to: "2026-06-07",
-      mode: "fixed",
+      from: "2026-06-11",
+      to: "2026-07-10",
+      mode: "rolling",
+      windowDays: 30,
+    });
+    expect(router.params).toMatchObject({
+      window_days: "30",
+      date_from: "2026-06-11",
+      date_to: "2026-07-10",
     });
 
     router.navigate("usage");
     await flushEffects();
 
-    expect(usage.isPinned).toBe(true);
-    expect(usage.from).toBe("2026-06-01");
-    expect(usage.to).toBe("2026-06-07");
+    expect(usage.isPinned).toBe(false);
+    expect(usage.windowDays).toBe(30);
+    expect(usage.from).toBe("2026-06-11");
+    expect(usage.to).toBe("2026-07-10");
   });
 
   it("applies an enabled shared range when entering session detail", async () => {

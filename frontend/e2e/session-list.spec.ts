@@ -141,6 +141,33 @@ test.describe("Session list", () => {
     await expect(page).toHaveURL(/date_to=/);
   });
 
+  test("rolling detail routes refresh stale bounds before loading", async ({
+    page,
+  }) => {
+    const sessionId = await sp.sessionItems.first().getAttribute(
+      "data-session-id",
+    );
+    expect(sessionId).toBeTruthy();
+    await page.clock.setFixedTime(new Date("2026-07-10T12:00:00"));
+
+    const requestPromise = page.waitForRequest((request) =>
+      new URL(request.url()).pathname.endsWith(
+        "/api/v1/sessions/sidebar-index",
+      )
+    );
+    await page.goto(
+      `/sessions/${encodeURIComponent(sessionId!)}?window_days=30&date_from=2026-01-01&date_to=2026-01-30`,
+    );
+    const requestUrl = new URL((await requestPromise).url());
+
+    expect(requestUrl.searchParams.get("date_from")).toBe("2026-06-11");
+    expect(requestUrl.searchParams.get("date_to")).toBe("2026-07-10");
+    const routeUrl = new URL(page.url());
+    expect(routeUrl.searchParams.get("window_days")).toBe("30");
+    expect(routeUrl.searchParams.get("date_from")).toBe("2026-06-11");
+    expect(routeUrl.searchParams.get("date_to")).toBe("2026-07-10");
+  });
+
   test("explicit detail dates replace the shared range", async ({ page }) => {
     const sessionId = await sp.sessionItems.first().getAttribute(
       "data-session-id",
