@@ -583,7 +583,7 @@ func runPGServe(appCfg config.Config, basePath string) {
 		rt.Cfg.RequireAuth,
 		rt.Caddy.Pid(),
 	); sfErr != nil {
-		warnRuntimeRecordWrite(
+		reportRuntimeRecordWrite(
 			os.Stdout, sfErr,
 			"pg serve daemon may not be discoverable by CLI", "",
 		)

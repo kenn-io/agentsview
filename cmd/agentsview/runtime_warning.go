@@ -20,3 +20,12 @@ func warnRuntimeRecordWrite(
 		fmt.Fprintln(out, remedy)
 	}
 }
+
+func reportRuntimeRecordWrite(
+	out io.Writer, err error, context, remedy string,
+) {
+	if err == nil {
+		return
+	}
+	warnRuntimeRecordWrite(out, err, context, remedy)
+}

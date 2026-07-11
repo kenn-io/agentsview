@@ -323,7 +323,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 		rt.Cfg.RequireAuth, rt.Cfg.NoSync,
 		rt.Caddy.Pid(),
 	); sfErr != nil {
-		warnRuntimeRecordWrite(
+		reportRuntimeRecordWrite(
 			os.Stdout, sfErr, "keeping start lock as fallback",
 			"To fix permissions, run: icacls <dir> /setowner <user>",
 		)

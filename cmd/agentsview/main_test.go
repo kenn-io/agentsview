@@ -28,7 +28,7 @@ func TestRuntimeWarningHelper(t *testing.T) {
 	logOutput := captureLogOutput(t)
 	var visible bytes.Buffer
 
-	warnRuntimeRecordWrite(
+	reportRuntimeRecordWrite(
 		&visible, errors.New("permission denied"),
 		"keeping start lock as fallback",
 		"To fix permissions, run: icacls <dir> /setowner <user>",
@@ -41,7 +41,7 @@ func TestRuntimeWarningHelper(t *testing.T) {
 
 func TestServeRuntimeRecordWriteFailureWarnsVisible(t *testing.T) {
 	var visible bytes.Buffer
-	warnRuntimeRecordWrite(
+	reportRuntimeRecordWrite(
 		&visible, errors.New("permission denied"),
 		"keeping start lock as fallback",
 		"To fix permissions, run: icacls <dir> /setowner <user>",
@@ -53,12 +53,19 @@ func TestServeRuntimeRecordWriteFailureWarnsVisible(t *testing.T) {
 
 func TestServeRuntimeRecordWriteSuccessDoesNotWarnVisible(t *testing.T) {
 	var visible bytes.Buffer
+	logOutput := captureLogOutput(t)
+	reportRuntimeRecordWrite(
+		&visible, nil, "keeping start lock as fallback",
+		"To fix permissions, run: icacls <dir> /setowner <user>",
+	)
+
 	assert.NotContains(t, visible.String(), "could not write daemon runtime record")
+	assert.NotContains(t, logOutput.String(), "could not write daemon runtime record")
 }
 
 func TestPGServeRuntimeRecordWriteFailureWarnsVisible(t *testing.T) {
 	var visible bytes.Buffer
-	warnRuntimeRecordWrite(
+	reportRuntimeRecordWrite(
 		&visible, errors.New("permission denied"),
 		"pg serve daemon may not be discoverable by CLI", "",
 	)
@@ -68,12 +75,38 @@ func TestPGServeRuntimeRecordWriteFailureWarnsVisible(t *testing.T) {
 
 func TestDuckDBServeRuntimeRecordWriteFailureWarnsVisible(t *testing.T) {
 	var visible bytes.Buffer
-	warnRuntimeRecordWrite(
+	reportRuntimeRecordWrite(
 		&visible, errors.New("permission denied"),
 		"duckdb serve daemon may not be discoverable by CLI", "",
 	)
 
 	assert.Contains(t, visible.String(), "could not write daemon runtime record")
+}
+
+func TestServeRuntimeRecordWriteCallSitesUseVisibleSink(t *testing.T) {
+	tests := []struct {
+		file string
+		call string
+	}{
+		{file: "main.go", call: "WriteDaemonRuntimeWithAuthAndNoSync("},
+		{file: "pg.go", call: "WriteDaemonRuntimeWithAuth("},
+		{file: "duckdb.go", call: "WriteDaemonRuntimeWithAuth("},
+	}
+	for _, tt := range tests {
+		t.Run(tt.file, func(t *testing.T) {
+			source, err := os.ReadFile(tt.file)
+			require.NoError(t, err)
+			branchStart := strings.Index(string(source), tt.call)
+			require.GreaterOrEqual(t, branchStart, 0)
+			branch := string(source)[branchStart:]
+			branchEnd := strings.Index(branch, "\n\t} else {")
+			require.Greater(t, branchEnd, 0)
+			branch = branch[:branchEnd]
+			assert.Contains(t, branch, "reportRuntimeRecordWrite(")
+			assert.Contains(t, branch, "os.Stdout")
+			assert.NotContains(t, branch, "log.Printf")
+		})
+	}
 }
 
 func TestMustLoadConfig(t *testing.T) {
