@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   YokedDatesStore,
   panelDateState,
+  panelDateToSessionFilterParams,
   panelStateToRange,
   rangeToActivityParams,
   rangeToInsightParams,
@@ -448,6 +449,20 @@ describe("yoked date adapters", () => {
 
     expect(rangeToSessionParams(range)).toEqual({
       window_days: "30",
+    });
+  });
+
+  it("materializes rolling panel dates for session request filters", () => {
+    expect(
+      panelDateToSessionFilterParams({
+        from: "2026-05-21",
+        to: "2026-06-19",
+        mode: "rolling",
+        windowDays: 30,
+      }),
+    ).toEqual({
+      date_from: "2026-05-21",
+      date_to: "2026-06-19",
     });
   });
 

@@ -341,9 +341,28 @@ describe("App analytics date navigation", () => {
     router.navigate("insights");
     await flushEffects();
     sessionLoadDates.length = 0;
-    router.navigate("sessions");
+    const dateFiltersAtRouteReplace: Array<{
+      dateFrom: string;
+      dateTo: string;
+    }> = [];
+    const replaceParams = router.replaceParams.bind(router);
+    vi.spyOn(router, "replaceParams").mockImplementation((params) => {
+      if (params.window_days === "30") {
+        dateFiltersAtRouteReplace.push({
+          dateFrom: sessions.filters.dateFrom,
+          dateTo: sessions.filters.dateTo,
+        });
+      }
+      replaceParams(params);
+    });
+    window.history.replaceState(null, "", "/sessions");
+    window.dispatchEvent(new PopStateEvent("popstate"));
     await flushEffects();
 
+    expect(dateFiltersAtRouteReplace[0]).toEqual({
+      dateFrom: "2026-06-11",
+      dateTo: "2026-07-10",
+    });
     expect(sessionLoadDates[0]).toEqual({
       dateFrom: "2026-06-11",
       dateTo: "2026-07-10",

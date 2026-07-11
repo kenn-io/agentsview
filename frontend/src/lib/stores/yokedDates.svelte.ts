@@ -275,6 +275,19 @@ export function rangeToSessionParams(
   };
 }
 
+/** Concrete date filters for Sessions requests. Rolling intent belongs in
+ * `window_days` on the route, but the API request still needs materialized
+ * bounds. */
+export function panelDateToSessionFilterParams(
+  state: PanelDateState,
+): Record<string, string> {
+  const range = panelStateToRange(
+    { ...state, mode: "fixed", windowDays: undefined },
+    0,
+  );
+  return range ? rangeToSessionParams(range) : {};
+}
+
 export function rangeToActivityParams(
   range: YokedDateRange,
   now: Date = new Date(),

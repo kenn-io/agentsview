@@ -76,8 +76,7 @@
   import { analyticsPageDates } from "./lib/stores/analyticsPageDates.js";
   import {
     yokedDates,
-    panelStateToRange,
-    rangeToSessionParams,
+    panelDateToSessionFilterParams,
   } from "./lib/stores/yokedDates.svelte.js";
   import { m } from "./lib/i18n/index.js";
   import { setAuthToken, getAuthToken, setServerUrl, getBase } from "./lib/api/runtime.js";
@@ -303,10 +302,8 @@
     if (hasSessionDateIntent(router.params)) return null;
     const retained = analyticsPageDates.restoreWithIntent("sessions");
     if (!retained.explicitDateIntent) return null;
-    const range = panelStateToRange(retained.state, Date.now());
-    if (!range) return null;
-
-    const dateParams = rangeToSessionParams(range);
+    const dateParams = panelDateToSessionFilterParams(retained.state);
+    if (Object.keys(dateParams).length === 0) return null;
     sessions.filters.date = dateParams["date"] ?? "";
     sessions.filters.dateFrom = dateParams["date_from"] ?? "";
     sessions.filters.dateTo = dateParams["date_to"] ?? "";

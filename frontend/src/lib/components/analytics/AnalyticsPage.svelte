@@ -35,9 +35,8 @@
   import {
     yokedDates,
     panelDateState,
-    panelStateToRange,
+    panelDateToSessionFilterParams,
     rangeToPanelDate,
-    rangeToSessionParams,
     sessionParamsToPanelDate,
     type PanelDateState,
   } from "../../stores/yokedDates.svelte.js";
@@ -170,18 +169,10 @@
   ): boolean {
     const before = JSON.stringify(filtersToParams(sessions.filters));
     clearSessionDateFilters();
-    const range = panelStateToRange(
-      state.mode === "rolling"
-        ? { ...state, mode: "fixed", windowDays: undefined }
-        : state,
-      Date.now(),
-    );
-    if (range) {
-      const params = rangeToSessionParams(range);
-      sessions.filters.date = params["date"] ?? "";
-      sessions.filters.dateFrom = params["date_from"] ?? "";
-      sessions.filters.dateTo = params["date_to"] ?? "";
-    }
+    const params = panelDateToSessionFilterParams(state);
+    sessions.filters.date = params["date"] ?? "";
+    sessions.filters.dateFrom = params["date_from"] ?? "";
+    sessions.filters.dateTo = params["date_to"] ?? "";
     const after = JSON.stringify(filtersToParams(sessions.filters));
     return before !== after;
   }
