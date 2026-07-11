@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const automationAuditPrefixBytes = userPatternMaxLen
+const automationAuditPrefixBytes = AutomationEvidencePrefixBytes
 
 type boundedAutomationText struct {
 	prefix         sql.RawBytes

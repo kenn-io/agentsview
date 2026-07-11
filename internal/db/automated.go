@@ -60,6 +60,10 @@ var (
 
 const userPatternMaxLen = 1024
 
+// AutomationEvidencePrefixBytes is the bounded prefix size used by backend
+// integrity audits. It is large enough to hold every accepted user pattern.
+const AutomationEvidencePrefixBytes = userPatternMaxLen
+
 var (
 	userPatternsMu   sync.RWMutex
 	userPrefixes     []string
@@ -142,6 +146,19 @@ type automationPatternSnapshot struct {
 	userExactMatches   []string
 	userPrefixBytes    [][]byte
 	userSubstringBytes [][]byte
+}
+
+// AutomationClassifier is an immutable pattern snapshot for a complete
+// storage audit. Reusing it keeps every row on the same classifier version and
+// avoids rebuilding user-pattern byte slices per row.
+type AutomationClassifier struct {
+	patterns automationPatternSnapshot
+}
+
+// SnapshotAutomationClassifier captures the current built-in and user
+// automation patterns for reuse across one backend audit.
+func SnapshotAutomationClassifier() AutomationClassifier {
+	return AutomationClassifier{patterns: snapshotAutomationPatterns()}
 }
 
 func snapshotAutomationPatterns() automationPatternSnapshot {
@@ -287,7 +304,17 @@ func AutomationVerdictFromEvidence(
 	userMessageCount int,
 	firstUser, firstMessage AutomationTextEvidence,
 ) (matched, conclusive bool) {
-	return snapshotAutomationPatterns().verdictFromEvidence(
+	return SnapshotAutomationClassifier().VerdictFromEvidence(
+		userMessageCount, firstUser, firstMessage,
+	)
+}
+
+// VerdictFromEvidence classifies bounded evidence using this snapshot.
+func (classifier AutomationClassifier) VerdictFromEvidence(
+	userMessageCount int,
+	firstUser, firstMessage AutomationTextEvidence,
+) (matched, conclusive bool) {
+	return classifier.patterns.verdictFromEvidence(
 		userMessageCount, firstUser, firstMessage,
 	)
 }
@@ -354,7 +381,29 @@ func isAutomatedFromTextCandidates(
 	userMessageCount int,
 	firstUserMessage, firstMessage sql.NullString,
 ) bool {
-	return snapshotAutomationPatterns().matchesTextCandidates(
+	return IsAutomatedFromTextCandidates(
+		userMessageCount, firstUserMessage, firstMessage,
+	)
+}
+
+// IsAutomatedFromTextCandidates applies the authoritative transcript fallback
+// order to storage values shared by the SQLite and PostgreSQL audits.
+func IsAutomatedFromTextCandidates(
+	userMessageCount int,
+	firstUserMessage, firstMessage sql.NullString,
+) bool {
+	return SnapshotAutomationClassifier().IsAutomatedFromTextCandidates(
+		userMessageCount, firstUserMessage, firstMessage,
+	)
+}
+
+// IsAutomatedFromTextCandidates applies the full-text fallback order using
+// this classifier snapshot.
+func (classifier AutomationClassifier) IsAutomatedFromTextCandidates(
+	userMessageCount int,
+	firstUserMessage, firstMessage sql.NullString,
+) bool {
+	return classifier.patterns.matchesTextCandidates(
 		userMessageCount, firstUserMessage, firstMessage,
 	)
 }
