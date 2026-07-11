@@ -36,6 +36,8 @@ func TestHTTPBackendStats(t *testing.T) {
 		Since:                 "2026-04-01",
 		Until:                 "2026-04-15",
 		Agent:                 "codex",
+		IncludeOneShot:        true,
+		IncludeAutomated:      true,
 		IncludeProjects:       []string{"alpha"},
 		ExcludeProjects:       []string{"beta"},
 		Timezone:              "UTC",
@@ -49,10 +51,35 @@ func TestHTTPBackendStats(t *testing.T) {
 	assert.Equal(t, "2026-04-01", gotQuery.Get("since"))
 	assert.Equal(t, "2026-04-15", gotQuery.Get("until"))
 	assert.Equal(t, "codex", gotQuery.Get("agent"))
+	assert.Equal(t, "true", gotQuery.Get("include_one_shot"))
+	assert.Equal(t, "true", gotQuery.Get("include_automated"))
 	assert.Equal(t, "alpha", gotQuery.Get("include_project"))
 	assert.Equal(t, "beta", gotQuery.Get("exclude_project"))
 	assert.Equal(t, "UTC", gotQuery.Get("timezone"))
 	assert.Equal(t, "true", gotQuery.Get("include_git_outcomes"))
 	assert.Equal(t, "true", gotQuery.Get("include_github_outcomes"))
 	assert.Equal(t, 7, stats.Totals.SessionsAll)
+}
+
+func TestHTTPBackendStatsDisablesDefaultVisibilityWithExplicitIncludes(t *testing.T) {
+	t.Parallel()
+	var gotQuery url.Values
+	srv := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			gotQuery = r.URL.Query()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"schema_version":1,"totals":{"sessions_all":2}}`))
+		}))
+	t.Cleanup(srv.Close)
+	svc := service.NewHTTPBackend(srv.URL, "", false)
+
+	stats, err := svc.Stats(context.Background(), service.StatsFilter{
+		Since: "28d",
+		Agent: "all",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, stats)
+	assert.Equal(t, "true", gotQuery.Get("include_one_shot"))
+	assert.Equal(t, "true", gotQuery.Get("include_automated"))
 }

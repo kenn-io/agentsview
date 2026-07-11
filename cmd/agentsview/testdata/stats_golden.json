@@ -2,35 +2,35 @@
   "adoption": {
     "claude_only": true,
     "distinct_skills": 1,
-    "plan_mode_rate": 0.1111111111111111,
-    "subagents_per_session": 0.2222222222222222
+    "plan_mode_rate": 0.14285714285714285,
+    "subagents_per_session": 0.2857142857142857
   },
   "agent_portfolio": {
     "by_messages": {
-      "claude": 322,
+      "claude": 318,
       "codex": 20,
       "cursor": 6
     },
     "by_messages_human": {
-      "claude": 322,
+      "claude": 318,
       "codex": 20,
       "cursor": 6
     },
     "by_sessions": {
-      "claude": 9,
+      "claude": 7,
       "codex": 1,
       "cursor": 1
     },
     "by_sessions_human": {
-      "claude": 9,
+      "claude": 7,
       "codex": 1,
       "cursor": 1
     },
     "by_tokens": {
-      "claude": 151420
+      "claude": 151020
     },
     "by_tokens_human": {
-      "claude": 151420
+      "claude": 151020
     },
     "primary": "claude",
     "primary_human": "claude"
@@ -39,9 +39,9 @@
     "automation": 0,
     "deep": 2,
     "marathon": 1,
-    "primary": "quick",
-    "primary_human": "quick",
-    "quick": 5,
+    "primary": "standard",
+    "primary_human": "standard",
+    "quick": 3,
     "standard": 3
   },
   "cache_economics": {
@@ -62,7 +62,7 @@
           ]
         },
         {
-          "count": 9,
+          "count": 7,
           "edge": [
             0.5,
             0.75
@@ -83,11 +83,11 @@
           ]
         }
       ],
-      "overall": 0.5793498147018812
+      "overall": 0.579437494120967
     },
     "claude_only": true,
-    "dollars_saved_vs_uncached": 2.373315,
-    "dollars_spent": 6.751545
+    "dollars_saved_vs_uncached": 2.3702250000000005,
+    "dollars_spent": 6.7420350000000004
   },
   "code_attribution": {
     "sources": [
@@ -113,14 +113,14 @@
             ]
           },
           {
-            "count": 1,
+            "count": 0,
             "edge": [
               1,
               5
             ]
           },
           {
-            "count": 3,
+            "count": 2,
             "edge": [
               5,
               20
@@ -148,7 +148,7 @@
             ]
           }
         ],
-        "mean": 60.36363636363637
+        "mean": 72.77777777777777
       },
       "scope_human": {
         "buckets": [
@@ -160,14 +160,14 @@
             ]
           },
           {
-            "count": 1,
+            "count": 0,
             "edge": [
               1,
               5
             ]
           },
           {
-            "count": 3,
+            "count": 2,
             "edge": [
               5,
               20
@@ -195,12 +195,12 @@
             ]
           }
         ],
-        "mean": 60.36363636363637
+        "mean": 72.77777777777777
       }
     },
     "peak_context_tokens": {
       "claude_only": false,
-      "null_count": 4,
+      "null_count": 2,
       "scope_all": {
         "buckets": [
           {
@@ -300,7 +300,7 @@
       "scope_all": {
         "buckets": [
           {
-            "count": 9,
+            "count": 7,
             "edge": [
               0,
               1
@@ -342,12 +342,12 @@
             ]
           }
         ],
-        "mean": 0.3195454545454545
+        "mean": 0.39055555555555554
       },
       "scope_human": {
         "buckets": [
           {
-            "count": 9,
+            "count": 7,
             "edge": [
               0,
               1
@@ -389,14 +389,14 @@
             ]
           }
         ],
-        "mean": 0.3195454545454545
+        "mean": 0.39055555555555554
       }
     },
     "user_messages": {
       "scope_all": {
         "buckets": [
           {
-            "count": 2,
+            "count": 0,
             "edge": [
               0,
               2
@@ -438,7 +438,7 @@
             ]
           }
         ],
-        "mean": 15.818181818181818
+        "mean": 19.11111111111111
       },
       "scope_human": {
         "buckets": [
@@ -490,36 +490,26 @@
   "model_mix": {
     "by_tokens": {
       "claude-opus-4-20250514": 33740,
-      "claude-sonnet-4-20250514": 117680
+      "claude-sonnet-4-20250514": 117280
     }
   },
   "outcomes": {
-    "avg_edit_churn": 0.7777777777777778,
+    "avg_edit_churn": 1,
     "claude_only": true,
-    "compactions_per_session": 0.3333333333333333,
+    "compactions_per_session": 0.42857142857142855,
     "failure": 1,
     "grade_distribution": {
-      "A": 5,
+      "A": 3,
       "B": 3,
       "C": 1
     },
-    "success": 8,
+    "success": 6,
     "tool_retry_rate": 0.23076923076923078,
     "unknown": 0
   },
   "schema_version": 1,
   "temporal": {
     "hourly_utc": [
-      {
-        "sessions": 1,
-        "ts": "2026-04-05T10:00:00Z",
-        "user_messages": 1
-      },
-      {
-        "sessions": 1,
-        "ts": "2026-04-05T11:00:00Z",
-        "user_messages": 1
-      },
       {
         "sessions": 1,
         "ts": "2026-04-06T10:00:00Z",
@@ -583,12 +573,12 @@
     "total_calls": 26
   },
   "totals": {
-    "messages_total": 348,
-    "sessions_all": 11,
+    "messages_total": 344,
+    "sessions_all": 9,
     "sessions_automation": 0,
-    "sessions_human": 11,
+    "sessions_human": 9,
     "sessions_subagent": 0,
-    "user_messages_total": 174
+    "user_messages_total": 172
   },
   "velocity": {
     "first_response_seconds": {
@@ -596,7 +586,7 @@
       "p50": 10,
       "p90": 10
     },
-    "messages_per_active_hour": 126.67340748230536,
+    "messages_per_active_hour": 125.47112462006079,
     "turn_cycle_seconds": {
       "mean": 10,
       "p50": 10,

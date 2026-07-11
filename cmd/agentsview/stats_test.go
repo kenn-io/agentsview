@@ -432,7 +432,7 @@ func TestStatsCommandSkipsReadOnlyDaemon(t *testing.T) {
 	assert.False(t, called, "read-only daemon stats endpoint should be skipped")
 	var got db.SessionStats
 	require.NoError(t, json.Unmarshal([]byte(out), &got))
-	assert.Equal(t, len(goldenFixtureSessions), got.Totals.SessionsAll)
+	assert.Equal(t, 9, got.Totals.SessionsAll)
 }
 
 // updateGolden toggles regeneration of stats_golden.json.

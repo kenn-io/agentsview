@@ -28,6 +28,7 @@ type statsInput struct {
 }
 
 type sessionStatsInput struct {
+	BoolIncludeInput
 	Since                 string   `query:"since" doc:"Start of window"`
 	Until                 string   `query:"until" doc:"End of window"`
 	Agent                 string   `query:"agent" doc:"Filter by agent"`
@@ -74,15 +75,18 @@ func (s *Server) humaGetSessionStats(
 		githubToken = s.githubToken(ctx)
 	}
 	stats, err := s.sessions.Stats(ctx, service.StatsFilter{
-		Since:                 in.Since,
-		Until:                 in.Until,
-		Agent:                 in.Agent,
-		IncludeProjects:       in.IncludeProjects,
-		ExcludeProjects:       in.ExcludeProjects,
-		Timezone:              in.Timezone,
-		IncludeGitOutcomes:    in.IncludeGitOutcomes,
-		IncludeGitHubOutcomes: in.IncludeGitHubOutcomes,
-		GHToken:               githubToken,
+		ApplyDefaultVisibility: true,
+		Since:                  in.Since,
+		Until:                  in.Until,
+		Agent:                  in.Agent,
+		IncludeOneShot:         in.IncludeOneShot,
+		IncludeAutomated:       in.IncludeAutomated,
+		IncludeProjects:        in.IncludeProjects,
+		ExcludeProjects:        in.ExcludeProjects,
+		Timezone:               in.Timezone,
+		IncludeGitOutcomes:     in.IncludeGitOutcomes,
+		IncludeGitHubOutcomes:  in.IncludeGitHubOutcomes,
+		GHToken:                githubToken,
 	})
 	if err != nil {
 		if handled := handleHumaContextError(err); handled != nil {

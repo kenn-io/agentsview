@@ -19,15 +19,18 @@ import (
 // StatsFilter mirrors the service-layer StatsFilter but lives in db
 // because db functions take typed filters without cross-package deps.
 type StatsFilter struct {
-	Since                 string
-	Until                 string
-	Agent                 string
-	IncludeProjects       []string
-	ExcludeProjects       []string
-	Timezone              string
-	IncludeGitOutcomes    bool
-	IncludeGitHubOutcomes bool
-	GHToken               string
+	Since                  string
+	Until                  string
+	Agent                  string
+	ApplyDefaultVisibility bool
+	IncludeOneShot         bool
+	IncludeAutomated       bool
+	IncludeProjects        []string
+	ExcludeProjects        []string
+	Timezone               string
+	IncludeGitOutcomes     bool
+	IncludeGitHubOutcomes  bool
+	GHToken                string
 }
 
 // StatsInputError marks invalid user-supplied stats filters so HTTP
@@ -443,6 +446,19 @@ func (db *DB) loadSessionsInWindow(
 	args := []any{
 		from.UTC().Format(time.RFC3339Nano),
 		to.UTC().Format(time.RFC3339Nano),
+	}
+	if f.ApplyDefaultVisibility {
+		visibilityBuilder := NewQueryBuilder(SQLiteQueryDialect(), len(args))
+		preds, _ = appendSessionVisibilityPredicates(
+			preds,
+			SessionFilter{
+				ExcludeOneShot:   !f.IncludeOneShot,
+				ExcludeAutomated: !f.IncludeAutomated,
+			},
+			visibilityBuilder,
+			func(col string) string { return "s." + col },
+		)
+		args = append(args, visibilityBuilder.Args()...)
 	}
 
 	if f.Agent != "" {

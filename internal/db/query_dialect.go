@@ -586,24 +586,9 @@ func sessionFilterPredicates(
 		preds = append(preds, pred)
 	}
 
-	scope := normalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
-	oneShotPred := ""
-	if f.ExcludeOneShot {
-		pred := oneShotPredicate(f, b, q, scope)
-		if f.IncludeChildren {
-			oneShotPred = pred
-		} else {
-			preds = append(preds, pred)
-		}
-	}
-	switch scope {
-	case "human":
-		preds = append(preds, q("is_automated")+" = "+
-			b.dialect.falseLiteral)
-	case "automated":
-		preds = append(preds, q("is_automated")+" = "+
-			b.dialect.trueLiteral)
-	}
+	preds, oneShotPred := appendSessionVisibilityPredicates(
+		preds, f, b, q,
+	)
 	if len(f.Outcome) > 0 {
 		preds = append(preds,
 			inPredicate(q("outcome"), f.Outcome, b))
@@ -630,6 +615,33 @@ func sessionFilterPredicates(
 		preds = append(preds,
 			"EXISTS (SELECT 1 FROM starred_sessions ss WHERE ss.session_id = "+
 				q("id")+")")
+	}
+	return preds, oneShotPred
+}
+
+func appendSessionVisibilityPredicates(
+	preds []string,
+	f SessionFilter,
+	b *QueryBuilder,
+	q func(string) string,
+) ([]string, string) {
+	scope := normalizeAutomatedScope(f.AutomatedScope, f.ExcludeAutomated)
+	oneShotPred := ""
+	if f.ExcludeOneShot {
+		pred := oneShotPredicate(f, b, q, scope)
+		if f.IncludeChildren {
+			oneShotPred = pred
+		} else {
+			preds = append(preds, pred)
+		}
+	}
+	switch scope {
+	case "human":
+		preds = append(preds, q("is_automated")+" = "+
+			b.dialect.falseLiteral)
+	case "automated":
+		preds = append(preds, q("is_automated")+" = "+
+			b.dialect.trueLiteral)
 	}
 	return preds, oneShotPred
 }

@@ -348,6 +348,14 @@ func (b *httpBackend) Stats(
 	setIfNotEmpty("until", f.Until)
 	setIfNotEmpty("agent", f.Agent)
 	setIfNotEmpty("timezone", f.Timezone)
+	includeOneShot := f.IncludeOneShot
+	includeAutomated := f.IncludeAutomated
+	if !f.ApplyDefaultVisibility {
+		includeOneShot = true
+		includeAutomated = true
+	}
+	q.Set("include_one_shot", strconv.FormatBool(includeOneShot))
+	q.Set("include_automated", strconv.FormatBool(includeAutomated))
 	for _, p := range f.IncludeProjects {
 		q.Add("include_project", p)
 	}

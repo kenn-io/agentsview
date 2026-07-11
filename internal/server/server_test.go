@@ -2295,6 +2295,56 @@ func TestGetStats_ExcludeOneShotDefault(t *testing.T) {
 	}
 }
 
+func TestSessionStats_DefaultVisibilityMatchesListDefaults(t *testing.T) {
+	te := setup(t)
+	startedAt := time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339)
+	endedAt := time.Now().UTC().Add(-90 * time.Minute).Format(time.RFC3339)
+	te.seedSession(t, "deep", "my-app", 10, func(s *db.Session) {
+		s.UserMessageCount = 5
+		s.StartedAt = &startedAt
+		s.EndedAt = &endedAt
+	})
+	te.seedSession(t, "one-shot", "my-app", 5, func(s *db.Session) {
+		s.UserMessageCount = 1
+		s.StartedAt = &startedAt
+		s.EndedAt = &endedAt
+	})
+	te.seedSession(t, "automated", "my-app", 6, func(s *db.Session) {
+		fm := "You are a code reviewer. Review the code."
+		s.FirstMessage = &fm
+		s.UserMessageCount = 1
+		s.StartedAt = &startedAt
+		s.EndedAt = &endedAt
+	})
+	te.seedMessages(t, "deep", 10)
+	te.seedMessages(t, "one-shot", 5)
+	te.seedMessages(t, "automated", 6)
+
+	w := te.get(t, "/api/v1/session-stats")
+	assertStatus(t, w, http.StatusOK)
+	resp := decode[db.SessionStats](t, w)
+	assert.Equal(t, 1, resp.Totals.SessionsAll, "default sessions_all")
+	assert.Equal(t, 10, resp.Totals.MessagesTotal, "default messages_total")
+
+	w = te.get(t, "/api/v1/session-stats?include_one_shot=true")
+	assertStatus(t, w, http.StatusOK)
+	resp = decode[db.SessionStats](t, w)
+	assert.Equal(t, 2, resp.Totals.SessionsAll, "include_one_shot sessions_all")
+	assert.Equal(t, 15, resp.Totals.MessagesTotal, "include_one_shot messages_total")
+
+	w = te.get(t, "/api/v1/session-stats?include_automated=true")
+	assertStatus(t, w, http.StatusOK)
+	resp = decode[db.SessionStats](t, w)
+	assert.Equal(t, 2, resp.Totals.SessionsAll, "include_automated sessions_all")
+	assert.Equal(t, 16, resp.Totals.MessagesTotal, "include_automated messages_total")
+
+	w = te.get(t, "/api/v1/session-stats?include_one_shot=true&include_automated=true")
+	assertStatus(t, w, http.StatusOK)
+	resp = decode[db.SessionStats](t, w)
+	assert.Equal(t, 3, resp.Totals.SessionsAll, "include_all sessions_all")
+	assert.Equal(t, 21, resp.Totals.MessagesTotal, "include_all messages_total")
+}
+
 func TestListMachines_ExcludeOneShotDefault(t *testing.T) {
 	te := setup(t)
 	te.seedSession(t, "s1", "my-app", 5, func(s *db.Session) {
