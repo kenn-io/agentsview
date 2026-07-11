@@ -337,7 +337,9 @@ func TestDaemonStatusReportsIncompatibleAndNotResponding(t *testing.T) {
 		rec.Metadata[runtimeAPIVersion] = "0"
 		return []daemon.RuntimeRecord{rec}, nil
 	}
-	deps.probeRecord = func(daemon.RuntimeRecord, string) bool { return false }
+	deps.probeRecord = func(daemon.RuntimeRecord, string) (daemon.PingInfo, bool) {
+		return daemon.PingInfo{}, false
+	}
 
 	require.NoError(t, executeDaemonCommand(t, *deps, out, "status"))
 	assert.Contains(t, out.String(), "incompatible")

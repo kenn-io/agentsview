@@ -69,7 +69,9 @@ func daemonCommandTestDeps(t *testing.T) (*daemonCommandDeps, *bytes.Buffer) {
 	deps.stopCaddy = func(io.Writer, daemon.RuntimeRecord) error { return nil }
 	deps.validateConfig = func(config.Config) error { return nil }
 	deps.checkDataVersion = func(string) error { return nil }
-	deps.probeRecord = func(daemon.RuntimeRecord, string) bool { return true }
+	deps.probeRecord = func(rec daemon.RuntimeRecord, _ string) (daemon.PingInfo, bool) {
+		return daemon.PingInfo{PID: rec.PID}, true
+	}
 	deps.now = func() time.Time { return time.Unix(200, 0) }
 	return &deps, out
 }
@@ -308,13 +310,17 @@ func TestDaemonStatusRendersStoppedStartingReadOnlyAndIncompatible(t *testing.T)
 				rec.Metadata[runtimeAPIVersion] = "0"
 				return []daemon.RuntimeRecord{rec}, nil
 			}
-			d.probeRecord = func(daemon.RuntimeRecord, string) bool { return true }
+			d.probeRecord = func(rec daemon.RuntimeRecord, _ string) (daemon.PingInfo, bool) {
+				return daemon.PingInfo{PID: rec.PID}, true
+			}
 		}, wanted: []string{"incompatible", "pid:     11", "API version"}},
 		{name: "running", setup: func(d *daemonCommandDeps) {
 			d.statusRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
 				return []daemon.RuntimeRecord{testWritableRecord(12, "/runtime/12.json")}, nil
 			}
-			d.probeRecord = func(daemon.RuntimeRecord, string) bool { return true }
+			d.probeRecord = func(rec daemon.RuntimeRecord, _ string) (daemon.PingInfo, bool) {
+				return daemon.PingInfo{PID: rec.PID}, true
+			}
 		}, wanted: []string{"running at http://127.0.0.1:8012", "pid:     12", "version: 1.2.3", "uptime:"}},
 	}
 	for _, tt := range tests {
@@ -409,11 +415,42 @@ func TestDaemonStatusNotRespondingIsUseful(t *testing.T) {
 	deps.statusRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
 		return []daemon.RuntimeRecord{testWritableRecord(55, "/runtime/55.json")}, nil
 	}
-	deps.probeRecord = func(daemon.RuntimeRecord, string) bool { return false }
+	deps.probeRecord = func(daemon.RuntimeRecord, string) (daemon.PingInfo, bool) {
+		return daemon.PingInfo{}, false
+	}
 	require.NoError(t, executeDaemonCommand(t, *deps, out, "status"))
 	assert.Contains(t, out.String(), "not responding")
 	assert.Contains(t, out.String(), "pid:     55")
 	assert.Contains(t, out.String(), "/runtime/55.json")
+}
+
+func TestDaemonStatusUsesPingVersionAsAuthoritative(t *testing.T) {
+	endpoint := newPingDaemon(t)
+	for _, tt := range []struct {
+		name          string
+		recordVersion string
+	}{
+		{name: "missing runtime version"},
+		{name: "stale runtime version", recordVersion: "stale-record-version"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := testWritableRecord(os.Getpid(), "")
+			rec.Version = tt.recordVersion
+			rec.Address = endpoint.Addr
+			rec.Metadata[runtimeHost] = endpoint.Host
+			rec.Metadata[runtimePort] = strconv.Itoa(endpoint.Port)
+
+			deps, out := daemonCommandTestDeps(t)
+			deps.statusRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+				return []daemon.RuntimeRecord{rec}, nil
+			}
+			deps.probeRecord = probeDaemonRecord
+
+			require.NoError(t, executeDaemonCommand(t, *deps, out, "status"))
+			assert.Contains(t, out.String(), "version: test")
+			assert.NotContains(t, out.String(), "stale-record-version")
+		})
+	}
 }
 
 func TestDaemonStatusDiscoversAuthenticatedLegacyDaemon(t *testing.T) {

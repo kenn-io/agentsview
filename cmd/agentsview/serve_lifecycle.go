@@ -371,13 +371,22 @@ func stopTargetConfirmed(rec daemon.RuntimeRecord, authToken string) bool {
 func daemonRecordPingConfirmed(
 	rec daemon.RuntimeRecord, authToken string,
 ) bool {
+	_, confirmed := probeDaemonRecord(rec, authToken)
+	return confirmed
+}
+
+// probeDaemonRecord returns the ping identity when rec's PID answers as the
+// agentsview daemon it claims to be.
+func probeDaemonRecord(
+	rec daemon.RuntimeRecord, authToken string,
+) (daemon.PingInfo, bool) {
 	info, err := probeRuntime(
 		context.Background(), rec, authToken, daemon.ProbeOptions{
 			ExpectedService: daemonService,
 			Timeout:         500 * time.Millisecond,
 		},
 	)
-	return err == nil && info.PID == rec.PID
+	return info, err == nil && info.PID == rec.PID
 }
 
 // processIdentityConfirmed reports whether the process now holding rec.PID is

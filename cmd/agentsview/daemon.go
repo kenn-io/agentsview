@@ -79,7 +79,7 @@ type daemonCommandDeps struct {
 	stopCaddy                  func(io.Writer, daemon.RuntimeRecord) error
 	validateConfig             func(config.Config) error
 	checkDataVersion           func(string) error
-	probeRecord                func(daemon.RuntimeRecord, string) bool
+	probeRecord                func(daemon.RuntimeRecord, string) (daemon.PingInfo, bool)
 	now                        func() time.Time
 }
 
@@ -103,10 +103,8 @@ func defaultDaemonCommandDeps() daemonCommandDeps {
 		stopCaddy:           stopOrphanedCaddyChildWithWriter,
 		validateConfig:      validateServeConfig,
 		checkDataVersion:    db.CheckDataVersion,
-		probeRecord: func(rec daemon.RuntimeRecord, token string) bool {
-			return daemonRecordPingConfirmed(rec, token)
-		},
-		now: time.Now,
+		probeRecord:         probeDaemonRecord,
+		now:                 time.Now,
 	}
 }
 
@@ -469,7 +467,10 @@ func writeDaemonRecordStatus(
 ) {
 	rt := daemonRuntimeFromRecord(rec)
 	compatErr := daemonRuntimeCompatibilityError(rt)
-	responding := deps.probeRecord(rec, cfg.AuthToken)
+	info, responding := deps.probeRecord(rec, cfg.AuthToken)
+	if responding && info.Version != "" {
+		rt.Record.Version = info.Version
+	}
 	if compatErr != nil {
 		fmt.Fprintln(w, "agentsview found an incompatible running writable daemon.")
 		for _, line := range serveStatusLines(rt) {
