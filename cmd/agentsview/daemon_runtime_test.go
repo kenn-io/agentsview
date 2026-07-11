@@ -515,6 +515,48 @@ func testPingServer(t *testing.T) (host string, port int) {
 	return endpoint.Host, endpoint.Port
 }
 
+func writeStartupFallbackFixture(
+	t *testing.T, dir, host string, port, pid int, createTime string,
+) {
+	t.Helper()
+	MarkDaemonStarting(dir)
+	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+	state := startupState{
+		PID:          pid,
+		StartedAt:    time.Now().Add(-time.Minute),
+		Phase:        "starting HTTP server",
+		Host:         host,
+		Port:         port,
+		RuntimeError: "permission denied writing runtime record",
+		CreateTime:   createTime,
+		UpdatedAt:    time.Now(),
+	}
+	data, err := json.Marshal(state)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(startupStatePath(dir), data, 0o600))
+}
+
+func TestWritableDaemonFallbackResolver(t *testing.T) {
+	dir := runtimeTestDir(t)
+	host, port := testPingServer(t)
+	createTime, ok := processCreateTimeMillis(os.Getpid())
+	require.True(t, ok)
+	writeStartupFallbackFixture(t, dir, host, port, os.Getpid(), strconv.FormatInt(createTime, 10))
+
+	rt := FindWritableDaemonRuntime(dir)
+	require.NotNil(t, rt)
+	assert.True(t, rt.RuntimeFallback)
+	assert.Equal(t, port, rt.Port)
+
+	state := readStartupState(dir)
+	require.NotNil(t, state)
+	state.CreateTime = "1"
+	data, err := json.Marshal(state)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(startupStatePath(dir), data, 0o600))
+	assert.Nil(t, FindWritableDaemonRuntime(dir), "stale fallback must fail closed")
+}
+
 func newAuthenticatedPingDaemon(t *testing.T, token string) testDaemonEndpoint {
 	t.Helper()
 	ping := daemon.NewPingHandler(daemon.PingHandlerOptions{

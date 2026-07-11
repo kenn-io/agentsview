@@ -56,6 +56,8 @@ type DaemonRuntime struct {
 	NoSync           bool
 	API              int
 	Data             int
+	RuntimeFallback  bool
+	RuntimeError     string
 }
 
 func runtimeStore(dataDir string) daemon.RuntimeStore {
@@ -116,7 +118,14 @@ func WriteDaemonRuntimeWithAuthAndNoSync(
 			rec.Metadata[runtimeCaddyCreateTime] = strconv.FormatInt(ct, 10)
 		}
 	}
-	return runtimeStore(dataDir).Write(rec)
+	path, err := runtimeStore(dataDir).Write(rec)
+	if err != nil {
+		if !readOnly {
+			publishStartupStateFallback(dataDir, host, port, err)
+		}
+		return "", err
+	}
+	return path, nil
 }
 
 // processCreateTimeMillis returns the OS-reported create time of pid in
@@ -188,6 +197,7 @@ func FindDaemonRuntime(dataDir string, authToken ...string) *DaemonRuntime {
 	ctx := context.Background()
 	token := firstAuthToken(authToken)
 	var readOnly *DaemonRuntime
+	writableRecordSeen := false
 	for _, rec := range records {
 		if rec.Service != "" && rec.Service != daemonService {
 			continue
@@ -197,6 +207,9 @@ func FindDaemonRuntime(dataDir string, authToken ...string) *DaemonRuntime {
 		}
 		if runtimeRecordHasMismatchedCreateTime(store, rec) {
 			continue
+		}
+		if !daemonRuntimeFromRecord(rec).ReadOnly {
+			writableRecordSeen = true
 		}
 		info, err := probeRuntime(ctx, rec, token, daemon.ProbeOptions{
 			ExpectedService: daemonService,
@@ -216,7 +229,59 @@ func FindDaemonRuntime(dataDir string, authToken ...string) *DaemonRuntime {
 			readOnly = rt
 		}
 	}
+	if !writableRecordSeen {
+		if rt := findStartupStateFallback(dataDir, token); rt != nil {
+			return rt
+		}
+	}
 	return readOnly
+}
+
+// FindWritableDaemonRuntime resolves the writable daemon used by lifecycle
+// operations. Runtime records stay primary; the startup-state fallback is
+// accepted only for a writable daemon with a live, identity-matching ping.
+func FindWritableDaemonRuntime(dataDir string, authToken ...string) *DaemonRuntime {
+	rt := FindDaemonRuntime(dataDir, authToken...)
+	if rt == nil || rt.ReadOnly {
+		return nil
+	}
+	return rt
+}
+
+func findStartupStateFallback(dataDir, authToken string) *DaemonRuntime {
+	if !IsDaemonStarting(dataDir) {
+		return nil
+	}
+	st := readStartupState(dataDir)
+	if st == nil || st.PID <= 0 || st.Host == "" || st.Port <= 0 ||
+		st.RuntimeError == "" || st.CreateTime == "" ||
+		!daemon.ProcessAlive(st.PID) ||
+		!processCreateTimeMatches(st.PID, st.CreateTime) {
+		return nil
+	}
+	rec := daemon.NewRuntimeRecord(daemonService, "", daemon.Endpoint{
+		Network: daemon.NetworkTCP,
+		Address: net.JoinHostPort(probeHostForDial(st.Host), strconv.Itoa(st.Port)),
+	})
+	rec.PID = st.PID
+	rec.StartedAt = st.StartedAt
+	rec.Metadata = map[string]string{
+		runtimeHost:        st.Host,
+		runtimePort:        strconv.Itoa(st.Port),
+		runtimeReadOnly:    "false",
+		runtimeAPIVersion:  strconv.Itoa(daemonAPIVersion),
+		runtimeDataVersion: strconv.Itoa(db.CurrentDataVersion()),
+		runtimeCreateTime:  st.CreateTime,
+	}
+	info, err := probeRuntime(context.Background(), rec, authToken,
+		daemon.ProbeOptions{ExpectedService: daemonService, Timeout: 500 * time.Millisecond})
+	if err != nil || info.PID != st.PID {
+		return nil
+	}
+	rt := daemonRuntimeFromRecord(rec)
+	rt.RuntimeFallback = true
+	rt.RuntimeError = st.RuntimeError
+	return rt
 }
 
 func FindIncompatibleDaemonRuntime(

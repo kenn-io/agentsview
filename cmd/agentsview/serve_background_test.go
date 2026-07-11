@@ -1004,6 +1004,22 @@ func TestEnsureBackgroundServeReprobesWhenExternalStartupFinishesBeforeWait(
 	assert.Equal(t, newDaemon.Port, rt.Port)
 }
 
+func TestWaitForBackgroundServeReady_UsesStartupStateFallbackWithoutRuntimeRecord(t *testing.T) {
+	dir := runtimeTestDir(t)
+	host, port := testPingServer(t)
+	createTime, ok := processCreateTimeMillis(os.Getpid())
+	require.True(t, ok)
+	writeStartupFallbackFixture(t, dir, host, port, os.Getpid(), strconv.FormatInt(createTime, 10))
+
+	waitCh := make(chan error)
+	rt, err := waitForBackgroundServeReady(
+		context.Background(), dir, "", waitCh, time.Second,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, rt)
+	assert.Equal(t, port, rt.Port)
+}
+
 func TestEnsureBackgroundServeLaunchLoserReplacesStaleDaemonAfterStartup(
 	t *testing.T,
 ) {

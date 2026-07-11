@@ -168,10 +168,12 @@ func runServeStatus(cfg config.Config) {
 	}
 	if IsDaemonStarting(cfg.DataDir) {
 		fmt.Println("agentsview is starting up.")
-		for _, line := range serveStartingStatusLines(
-			readStartupState(cfg.DataDir), time.Now(),
-		) {
+		st := readStartupState(cfg.DataDir)
+		for _, line := range serveStartingStatusLines(st, time.Now()) {
 			fmt.Println(line)
+		}
+		if st != nil && st.Host != "" && st.Port > 0 && st.RuntimeError != "" {
+			fmt.Println("  stale fallback: endpoint or process identity could not be confirmed")
 		}
 		return
 	}
@@ -207,6 +209,9 @@ func serveStatusLines(rt *DaemonRuntime) []string {
 	}
 	if rt.ReadOnly {
 		lines = append(lines, "  mode:    read-only")
+	}
+	if rt.RuntimeFallback {
+		lines = append(lines, "  runtime record unwritten: "+rt.RuntimeError)
 	}
 	return lines
 }
@@ -269,6 +274,11 @@ func serveIncompatibleDaemonStatusLines(
 // signalling a stale record whose PID belongs to something else.
 func runServeStop(cfg config.Config) {
 	records := liveDaemonRecords(cfg.DataDir)
+	if len(records) == 0 {
+		if rt := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil {
+			records = []daemon.RuntimeRecord{rt.Record}
+		}
+	}
 	if len(records) == 0 {
 		if IsDaemonStarting(cfg.DataDir) {
 			fatal("serve stop: a server is starting; retry once it is ready")

@@ -80,6 +80,7 @@ type daemonCommandDeps struct {
 	validateConfig             func(config.Config) error
 	checkDataVersion           func(string) error
 	probeRecord                func(daemon.RuntimeRecord, string) (daemon.PingInfo, bool)
+	writableRuntime            func(string, string) *DaemonRuntime
 	now                        func() time.Time
 }
 
@@ -104,7 +105,10 @@ func defaultDaemonCommandDeps() daemonCommandDeps {
 		validateConfig:      validateServeConfig,
 		checkDataVersion:    db.CheckDataVersion,
 		probeRecord:         probeDaemonRecord,
-		now:                 time.Now,
+		writableRuntime: func(dataDir, authToken string) *DaemonRuntime {
+			return FindWritableDaemonRuntime(dataDir, authToken)
+		},
+		now: time.Now,
 	}
 }
 
@@ -451,6 +455,14 @@ func runDaemonStatus(w io.Writer, deps daemonCommandDeps) error {
 		writeDaemonRecordStatus(w, cfg, writable[0], deps)
 		return nil
 	}
+	if deps.writableRuntime != nil {
+		if rt := deps.writableRuntime(cfg.DataDir, cfg.AuthToken); rt != nil {
+			for _, line := range serveStatusLines(rt) {
+				fmt.Fprintln(w, line)
+			}
+			return nil
+		}
+	}
 	if deps.isStarting(cfg.DataDir) {
 		fmt.Fprintln(w, "agentsview daemon is starting up.")
 		for _, line := range serveStartingStatusLines(deps.readStartupState(cfg.DataDir), deps.now()) {
@@ -527,6 +539,13 @@ func runDaemonStop(w io.Writer, deps daemonCommandDeps) error {
 	records, err := deps.writableRecords(cfg.DataDir, cfg.AuthToken)
 	if err != nil {
 		return fmt.Errorf("daemon stop: inspecting runtime store: %w", err)
+	}
+	if len(records) == 0 {
+		if deps.writableRuntime != nil {
+			if rt := deps.writableRuntime(cfg.DataDir, cfg.AuthToken); rt != nil {
+				records = []daemon.RuntimeRecord{rt.Record}
+			}
+		}
 	}
 	if len(records) == 0 {
 		fmt.Fprintln(w, "agentsview daemon is not running.")

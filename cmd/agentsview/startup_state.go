@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -22,12 +23,16 @@ const startupStateFileName = "startup-state.json"
 const startupDetailThrottle = time.Second
 
 type startupState struct {
-	PID       int       `json:"pid"`
-	StartedAt time.Time `json:"started_at"`
-	Phase     string    `json:"phase"`
-	Detail    string    `json:"detail,omitempty"`
-	LogPath   string    `json:"log_path,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	PID          int       `json:"pid"`
+	StartedAt    time.Time `json:"started_at"`
+	Phase        string    `json:"phase"`
+	Detail       string    `json:"detail,omitempty"`
+	LogPath      string    `json:"log_path,omitempty"`
+	Host         string    `json:"host,omitempty"`
+	Port         int       `json:"port,omitempty"`
+	RuntimeError string    `json:"runtime_error,omitempty"`
+	CreateTime   string    `json:"create_time,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 func startupStatePath(dataDir string) string {
@@ -143,6 +148,37 @@ func readStartupState(dataDir string) *startupState {
 		return nil
 	}
 	return &st
+}
+
+// publishStartupStateFallback records the endpoint after bind when the
+// definitive runtime record cannot be written. Keep the existing snapshot so
+// lifecycle readers can still report startup progress and require a daemon-
+// authored snapshot before trusting this fallback.
+func publishStartupStateFallback(
+	dataDir, host string, port int, runtimeErr error,
+) {
+	st := readStartupState(dataDir)
+	if st == nil || host == "" || port <= 0 || runtimeErr == nil {
+		return
+	}
+	st.Host = host
+	st.Port = port
+	st.RuntimeError = runtimeErr.Error()
+	if createTime, ok := processCreateTimeMillis(st.PID); ok {
+		st.CreateTime = strconv.FormatInt(createTime, 10)
+	}
+	st.UpdatedAt = time.Now()
+	data, err := json.Marshal(st)
+	if err != nil {
+		return
+	}
+	tmp := startupStatePath(dataDir) + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return
+	}
+	if err := os.Rename(tmp, startupStatePath(dataDir)); err != nil {
+		_ = os.Remove(tmp)
+	}
 }
 
 func removeStartupState(dataDir string) {

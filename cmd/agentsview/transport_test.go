@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -56,6 +57,19 @@ func writeUnreachableDaemonRuntime(t *testing.T, dir string, readOnly bool) int 
 	ln.Close()
 	writeDaemonRuntimeForTest(t, dir, "127.0.0.1", port, "test", readOnly)
 	return port
+}
+
+func TestDetectTransport_UsesStartupStateFallbackWithoutRuntimeRecord(t *testing.T) {
+	dir := runtimeTestDir(t)
+	host, port := testPingServer(t)
+	createTime, ok := processCreateTimeMillis(os.Getpid())
+	require.True(t, ok)
+	writeStartupFallbackFixture(t, dir, host, port, os.Getpid(), strconv.FormatInt(createTime, 10))
+
+	tr, err := detectTransportContext(context.Background(), dir, "", time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, transportHTTP, tr.Mode)
+	assert.Equal(t, fmt.Sprintf("http://%s:%d", host, port), tr.URL)
 }
 
 // incompatibleRuntimeRecord builds a writable runtime record whose API
