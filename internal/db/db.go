@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -300,6 +301,9 @@ const (
 	walCheckpointInterval    = 5 * time.Minute
 	walCheckpointAttempts    = 3
 	walCheckpointRetryDelay  = 250 * time.Millisecond
+	sqliteCacheSizeKiB       = -8 * 1024
+	readerMaxOpenConns       = 4
+	readerConnMaxIdleTime    = 5 * time.Minute
 )
 
 // ErrWALCheckpointBusy reports that a truncate checkpoint could not reset
@@ -758,8 +762,7 @@ func makeDSN(path string, readOnly bool) string {
 	params := url.Values{}
 	params.Set("_busy_timeout", "5000")
 	params.Set("_foreign_keys", "ON")
-	params.Set("_mmap_size", "268435456")
-	params.Set("_cache_size", "-64000")
+	params.Set("_cache_size", strconv.Itoa(sqliteCacheSizeKiB))
 	if readOnly {
 		params.Set("mode", "ro")
 	} else {
@@ -770,8 +773,13 @@ func makeDSN(path string, readOnly bool) string {
 	return "file:" + escaped + "?" + params.Encode()
 }
 
+func configureReaderPool(reader *sql.DB) {
+	reader.SetMaxOpenConns(readerMaxOpenConns)
+	reader.SetConnMaxIdleTime(readerConnMaxIdleTime)
+}
+
 // Open creates or opens a SQLite database at the given path.
-// It configures WAL mode, mmap, and returns a DB with separate
+// It configures WAL mode and returns a DB with separate
 // writer and reader connections.
 //
 // If an existing database has an outdated schema (missing
@@ -857,7 +865,7 @@ func OpenReadOnly(path string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening read-only reader: %w", err)
 	}
-	reader.SetMaxOpenConns(4)
+	configureReaderPool(reader)
 	if err := reader.Ping(); err != nil {
 		reader.Close()
 		return nil, fmt.Errorf("opening read-only reader: %w", err)
@@ -2369,7 +2377,7 @@ func openAndInit(path string) (*DB, error) {
 		writer.Close()
 		return nil, fmt.Errorf("opening reader: %w", err)
 	}
-	reader.SetMaxOpenConns(4)
+	configureReaderPool(reader)
 
 	db := &DB{path: path}
 	db.writer.Store(writer)
@@ -2827,7 +2835,7 @@ func (db *DB) reopenLocked() error {
 		writer.Close()
 		return fmt.Errorf("reopening reader: %w", err)
 	}
-	reader.SetMaxOpenConns(4)
+	configureReaderPool(reader)
 
 	db.connMu.Lock()
 	retired := append([]*sql.DB(nil), db.retired...)
