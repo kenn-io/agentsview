@@ -127,14 +127,15 @@ describe("RangePicker", () => {
     await fireEvent.click(screen.getByRole("radio", { name: "Relative" }));
     await fireEvent.click(screen.getByRole("button", { name: "7d" }));
     await fireEvent.click(screen.getByRole("radio", { name: "Custom" }));
-    // kit-ui seeds "last 7 days" inclusively of today (from = today - 6), so
-    // the From endpoint readout shows Jun 11. This only affects the seed;
-    // committed ranges still resolve through the app's own resolveRange().
+    // kit-ui seeds "last 7 days" inclusively of today (from = today - 6).
+    // Custom endpoint readouts stay canonical YYYY-MM-DD regardless of the
+    // app locale. This only affects the seed; committed ranges still resolve
+    // through the app's own resolveRange().
     const endpoints = document.querySelectorAll(
       ".kit-date-range-picker__endpoint-value",
     );
-    expect(endpoints[0]?.textContent).toContain("Jun 11");
-    expect(endpoints[1]?.textContent).toContain("Jun 17");
+    expect(endpoints[0]?.textContent).toBe("2026-06-11");
+    expect(endpoints[1]?.textContent).toBe("2026-06-17");
   });
 
   it("orders a range picked back-to-front before emitting", async () => {

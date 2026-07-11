@@ -315,6 +315,8 @@ describe("InsightsPage date yoke integration", () => {
   });
 
   it("keeps an enabled empty yoke empty during bare rolling refreshes", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-10T12:00:00"));
     const fetchStates: Array<{
       isPinned: boolean;
       windowDays: number;
