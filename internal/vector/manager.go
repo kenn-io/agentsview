@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	kitvec "go.kenn.io/kit/vector"
 	"go.kenn.io/kit/vector/sqlitevec"
@@ -75,6 +76,10 @@ type Manager struct {
 	mu      sync.Mutex
 	running bool
 	status  BuildStatus
+
+	// now stamps BuildStatus.StartedAt when a build begins; a test hook
+	// defaulting to time.Now.
+	now func() time.Time
 }
 
 // BuildRequest is the caller-controlled subset of BuildOptions the manager
@@ -96,12 +101,27 @@ type BuildRequest struct {
 // BuildStatus reports the manager's current build state, for polling
 // clients (CLI and HTTP API).
 type BuildStatus struct {
-	Running    bool         `json:"running"`
+	Running bool `json:"running"`
+	// BuildID identifies one build within this daemon process: it increments
+	// each time a build starts, so a polling client can tell two builds
+	// apart (e.g. to reset a progress-rate estimator across page reloads)
+	// instead of treating unrelated builds as continuous. Zero until the
+	// first build of the process.
+	BuildID int64 `json:"build_id,omitempty"`
+	// StartedAt is when the current (or, once it finished, most recent)
+	// build began, RFC3339 UTC. Empty until the first build of the process.
+	StartedAt  string       `json:"started_at,omitempty"`
 	Phase      string       `json:"phase,omitempty"`
 	Done       int64        `json:"done"`
 	Total      int64        `json:"total"`
 	LastError  string       `json:"last_error,omitempty"`
 	LastResult *BuildResult `json:"last_result,omitempty"`
+	// Model and Dimension identify the configured embedding space the
+	// manager builds ([vector.embeddings] model/dimension), so status
+	// consumers can display the target space even before any generation
+	// exists. They describe config, not a specific build.
+	Model     string `json:"model,omitempty"`
+	Dimension int    `json:"dimension,omitempty"`
 }
 
 // EncodeSettings groups the encode-shape knobs of one embeddings server,
@@ -143,7 +163,7 @@ func NewManager(
 		me.Encode = recoveringEncoder(me.Encode)
 		wrapped.ByName[name] = me
 	}
-	return &Manager{ix: ix, src: src, encoders: wrapped, gen: gen}
+	return &Manager{ix: ix, src: src, encoders: wrapped, gen: gen, now: time.Now}
 }
 
 // resolveEncoder picks the encoder a build request encodes with: the named
@@ -213,7 +233,8 @@ func (m *Manager) TryBuild(ctx context.Context, req BuildRequest) (bool, error) 
 	return true, err
 }
 
-// Status returns a snapshot of the manager's current build state.
+// Status returns a snapshot of the manager's current build state, stamped
+// with the configured embedding space's identity.
 func (m *Manager) Status() BuildStatus {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -222,6 +243,8 @@ func (m *Manager) Status() BuildStatus {
 		result := *status.LastResult
 		status.LastResult = &result
 	}
+	status.Model = m.gen.Model
+	status.Dimension = m.gen.Dimensions
 	return status
 }
 
@@ -291,6 +314,8 @@ func (m *Manager) begin() error {
 	}
 	m.running = true
 	m.status.Running = true
+	m.status.BuildID++
+	m.status.StartedAt = m.now().UTC().Format(time.RFC3339)
 	m.status.Phase = ""
 	m.status.Done = 0
 	m.status.Total = 0

@@ -1546,6 +1546,67 @@
   "settings_github_not_configured": "Not configured",
   "settings_github_saving": "Saving...",
   "settings_github_save_token": "Save token",
+  "settings_embeddings_title": "Embeddings",
+  "settings_embeddings_description": "Semantic search index build status for session content.",
+  "settings_embeddings_loading": "Loading embeddings status...",
+  "settings_embeddings_unavailable": "Semantic search embeddings are not available on this server.",
+  "settings_embeddings_load_failed": "Failed to load embeddings status",
+  "settings_embeddings_model_label": "Model",
+  "settings_embeddings_dimension_label": "Dimensions",
+  "settings_embeddings_status_label": "Status",
+  "settings_embeddings_status_idle": "Idle",
+  "settings_embeddings_status_scanning": "Scanning",
+  "settings_embeddings_status_embedding": "Embedding",
+  "settings_embeddings_status_running": "Running",
+  "settings_embeddings_scanning_hint": "Scanning sessions for changes - the total amount of work is not known yet.",
+  "settings_embeddings_progress_chunks": [
+    {
+      "declarations": [
+        "input count",
+        "input doneLabel",
+        "input totalLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{doneLabel} / {totalLabel} chunk",
+        "countPlural=other": "{doneLabel} / {totalLabel} chunks"
+      }
+    }
+  ],
+  "settings_embeddings_rate": [
+    {
+      "declarations": [
+        "input count",
+        "input rateLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{rateLabel} chunk/s",
+        "countPlural=other": "{rateLabel} chunks/s"
+      }
+    }
+  ],
+  "settings_embeddings_elapsed": "Elapsed {duration}",
+  "settings_embeddings_eta": "ETA {duration}",
+  "settings_embeddings_eta_estimating": "Estimating time remaining...",
+  "settings_embeddings_duration_hours_minutes": "{hours}h {minutes}m",
+  "settings_embeddings_duration_minutes_seconds": "{minutes}m {seconds}s",
+  "settings_embeddings_duration_seconds": "{seconds}s",
+  "settings_embeddings_last_build_label": "Last build",
+  "settings_embeddings_last_build_completed": "Completed",
+  "settings_embeddings_last_build_failed": "Failed",
+  "settings_embeddings_last_build_activated": "new generation activated",
+  "settings_embeddings_last_build_documents": "Documents embedded",
+  "settings_embeddings_last_build_chunks": "Chunks embedded",
+  "settings_embeddings_generations_title": "Generations",
+  "settings_embeddings_generations_empty": "No embedding generations exist yet.",
+  "settings_embeddings_state_active": "Active",
+  "settings_embeddings_state_building": "Building",
+  "settings_embeddings_state_retired": "Retired",
+  "settings_embeddings_coverage": "{embeddedLabel} embedded · {missingLabel} missing",
+  "settings_embeddings_progress_aria": "Embedding progress",
   "settings_remote_connected_version": "Connected (v{version})",
   "settings_remote_server_returned": "Server returned {status}",
   "settings_remote_connection_failed": "Connection failed",

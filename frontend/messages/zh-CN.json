@@ -1509,6 +1509,65 @@
   "settings_github_not_configured": "未配置",
   "settings_github_saving": "正在保存...",
   "settings_github_save_token": "保存令牌",
+  "settings_embeddings_title": "语义嵌入",
+  "settings_embeddings_description": "会话内容语义搜索索引的构建状态。",
+  "settings_embeddings_loading": "正在加载嵌入状态...",
+  "settings_embeddings_unavailable": "此服务器不支持语义搜索嵌入。",
+  "settings_embeddings_load_failed": "加载嵌入状态失败",
+  "settings_embeddings_model_label": "模型",
+  "settings_embeddings_dimension_label": "维度",
+  "settings_embeddings_status_label": "状态",
+  "settings_embeddings_status_idle": "空闲",
+  "settings_embeddings_status_scanning": "扫描中",
+  "settings_embeddings_status_embedding": "嵌入中",
+  "settings_embeddings_status_running": "运行中",
+  "settings_embeddings_scanning_hint": "正在扫描会话变更 - 总工作量尚未确定。",
+  "settings_embeddings_progress_chunks": [
+    {
+      "declarations": [
+        "input count",
+        "input doneLabel",
+        "input totalLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{doneLabel} / {totalLabel} 个块"
+      }
+    }
+  ],
+  "settings_embeddings_rate": [
+    {
+      "declarations": [
+        "input count",
+        "input rateLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{rateLabel} 块/秒"
+      }
+    }
+  ],
+  "settings_embeddings_elapsed": "已用 {duration}",
+  "settings_embeddings_eta": "预计剩余 {duration}",
+  "settings_embeddings_eta_estimating": "正在估算剩余时间...",
+  "settings_embeddings_duration_hours_minutes": "{hours} 小时 {minutes} 分",
+  "settings_embeddings_duration_minutes_seconds": "{minutes} 分 {seconds} 秒",
+  "settings_embeddings_duration_seconds": "{seconds} 秒",
+  "settings_embeddings_last_build_label": "上次构建",
+  "settings_embeddings_last_build_completed": "已完成",
+  "settings_embeddings_last_build_failed": "失败",
+  "settings_embeddings_last_build_activated": "已激活新代",
+  "settings_embeddings_last_build_documents": "已嵌入文档数",
+  "settings_embeddings_last_build_chunks": "已嵌入块数",
+  "settings_embeddings_generations_title": "嵌入代",
+  "settings_embeddings_generations_empty": "尚无嵌入代。",
+  "settings_embeddings_state_active": "活跃",
+  "settings_embeddings_state_building": "构建中",
+  "settings_embeddings_state_retired": "已停用",
+  "settings_embeddings_coverage": "已嵌入 {embeddedLabel} · 缺少 {missingLabel}",
+  "settings_embeddings_progress_aria": "嵌入进度",
   "settings_remote_connected_version": "已连接 (v{version})",
   "settings_remote_server_returned": "服务器返回 {status}",
   "settings_remote_connection_failed": "连接失败",

@@ -1511,6 +1511,65 @@
   "settings_github_not_configured": "설정되지 않음",
   "settings_github_saving": "저장 중...",
   "settings_github_save_token": "토큰 저장",
+  "settings_embeddings_title": "시맨틱 임베딩",
+  "settings_embeddings_description": "세션 콘텐츠 시맨틱 검색 인덱스의 빌드 상태입니다.",
+  "settings_embeddings_loading": "임베딩 상태를 불러오는 중...",
+  "settings_embeddings_unavailable": "이 서버에서는 시맨틱 검색 임베딩을 사용할 수 없습니다.",
+  "settings_embeddings_load_failed": "임베딩 상태를 불러오지 못했습니다",
+  "settings_embeddings_model_label": "모델",
+  "settings_embeddings_dimension_label": "차원",
+  "settings_embeddings_status_label": "상태",
+  "settings_embeddings_status_idle": "대기",
+  "settings_embeddings_status_scanning": "스캔 중",
+  "settings_embeddings_status_embedding": "임베딩 중",
+  "settings_embeddings_status_running": "실행 중",
+  "settings_embeddings_scanning_hint": "세션 변경 사항을 스캔하는 중입니다 - 전체 작업량은 아직 알 수 없습니다.",
+  "settings_embeddings_progress_chunks": [
+    {
+      "declarations": [
+        "input count",
+        "input doneLabel",
+        "input totalLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "{doneLabel} / {totalLabel} 청크"
+      }
+    }
+  ],
+  "settings_embeddings_rate": [
+    {
+      "declarations": [
+        "input count",
+        "input rateLabel",
+        "local countPlural = count: plural"
+      ],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=other": "초당 {rateLabel} 청크"
+      }
+    }
+  ],
+  "settings_embeddings_elapsed": "경과 {duration}",
+  "settings_embeddings_eta": "예상 남은 시간 {duration}",
+  "settings_embeddings_eta_estimating": "남은 시간을 추정하는 중...",
+  "settings_embeddings_duration_hours_minutes": "{hours}시간 {minutes}분",
+  "settings_embeddings_duration_minutes_seconds": "{minutes}분 {seconds}초",
+  "settings_embeddings_duration_seconds": "{seconds}초",
+  "settings_embeddings_last_build_label": "마지막 빌드",
+  "settings_embeddings_last_build_completed": "완료됨",
+  "settings_embeddings_last_build_failed": "실패",
+  "settings_embeddings_last_build_activated": "새 세대가 활성화됨",
+  "settings_embeddings_last_build_documents": "임베딩된 문서 수",
+  "settings_embeddings_last_build_chunks": "임베딩된 청크 수",
+  "settings_embeddings_generations_title": "임베딩 세대",
+  "settings_embeddings_generations_empty": "아직 임베딩 세대가 없습니다.",
+  "settings_embeddings_state_active": "활성",
+  "settings_embeddings_state_building": "빌드 중",
+  "settings_embeddings_state_retired": "사용 중지됨",
+  "settings_embeddings_coverage": "임베딩됨 {embeddedLabel} · 누락 {missingLabel}",
+  "settings_embeddings_progress_aria": "임베딩 진행률",
   "settings_remote_connected_version": "연결됨 (v{version})",
   "settings_remote_server_returned": "서버가 {status}를 반환했습니다",
   "settings_remote_connection_failed": "연결 실패",

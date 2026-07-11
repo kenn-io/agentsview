@@ -189,6 +189,41 @@ func TestManagerStatusSetsLastErrorOnEncoderFailure(t *testing.T) {
 	assert.Nil(t, status.LastResult)
 }
 
+func TestManagerStatusStampsBuildIdentityAndSpace(t *testing.T) {
+	ix := openTestIndex(t)
+	src := twoDocSource()
+	gen := fakeGeneration("fake-model")
+	m := NewManager(ix, src, soloEncoders(fakeBuildEncoder()), gen)
+
+	base := time.Date(2026, 7, 11, 10, 0, 0, 0, time.UTC)
+	m.now = func() time.Time { return base }
+
+	status := m.Status()
+	assert.Zero(t, status.BuildID, "no build has started yet")
+	assert.Empty(t, status.StartedAt)
+	assert.Equal(t, "fake-model", status.Model,
+		"the configured space is reported even before any build")
+	assert.Equal(t, 3, status.Dimension)
+
+	started, err := m.TryBuild(context.Background(), BuildRequest{})
+	require.NoError(t, err)
+	require.True(t, started)
+
+	status = m.Status()
+	assert.Equal(t, int64(1), status.BuildID)
+	assert.Equal(t, "2026-07-11T10:00:00Z", status.StartedAt)
+
+	m.now = func() time.Time { return base.Add(time.Minute) }
+	started, err = m.TryBuild(context.Background(), BuildRequest{FullRebuild: true})
+	require.NoError(t, err)
+	require.True(t, started)
+
+	status = m.Status()
+	assert.Equal(t, int64(2), status.BuildID,
+		"each build start must get a fresh identity so pollers can tell builds apart")
+	assert.Equal(t, "2026-07-11T10:01:00Z", status.StartedAt)
+}
+
 func TestManagerGenerationsDelegatesToIndex(t *testing.T) {
 	ix := openTestIndex(t)
 	ctx := context.Background()
