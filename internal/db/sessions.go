@@ -2045,14 +2045,21 @@ func (db *DB) GetProjectByPath(path string) (project string, ok bool) {
 	return project, true
 }
 
-// GetSourceRepairStateByPath returns the newest active session project and
-// minimum active parser data version for one source path. It combines the
-// lightweight self-healing checks used by hot sync paths into one query.
+// GetSourceRepairStateByPath returns the newest active session's project and
+// file metadata plus the minimum active parser data version for one source
+// path. It combines the lightweight self-healing checks used by hot sync paths
+// into one query.
 func (db *DB) GetSourceRepairStateByPath(
 	path string,
-) (project string, dataVersion int, ok bool) {
+) (
+	project string,
+	dataVersion int,
+	fileSize int64,
+	fileMtime int64,
+	ok bool,
+) {
 	err := db.getReader().QueryRow(`
-		SELECT project, (
+		SELECT project, file_size, file_mtime, (
 			SELECT MIN(data_version)
 			FROM sessions
 			WHERE file_path = ? AND deleted_at IS NULL
@@ -2061,11 +2068,11 @@ func (db *DB) GetSourceRepairStateByPath(
 		WHERE file_path = ? AND deleted_at IS NULL
 		ORDER BY file_mtime DESC
 		LIMIT 1`, path, path,
-	).Scan(&project, &dataVersion)
+	).Scan(&project, &fileSize, &fileMtime, &dataVersion)
 	if err != nil {
-		return "", 0, false
+		return "", 0, 0, 0, false
 	}
-	return project, dataVersion, true
+	return project, dataVersion, fileSize, fileMtime, true
 }
 
 // GetFileHashByPath returns the stored file_hash for the session

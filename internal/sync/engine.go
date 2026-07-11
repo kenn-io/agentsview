@@ -3998,7 +3998,9 @@ func (e *Engine) processProviderFile(
 	verifiedCapture, verifiedMtime, verifiedFresh, verifiedStateOK :=
 		e.verifiedProviderSourceState(provider, source, file)
 	if verifiedStateOK && verifiedFresh {
-		if e.verifiedProviderSourceFreshInDB(source) {
+		if e.verifiedProviderSourceFreshInDB(
+			source, verifiedCapture.signature.size, verifiedMtime,
+		) {
 			return processResult{
 				skip:  true,
 				mtime: verifiedMtime,

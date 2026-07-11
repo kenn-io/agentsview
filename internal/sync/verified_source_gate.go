@@ -201,20 +201,24 @@ func (e *Engine) verifiedProviderSourceState(
 
 // verifiedProviderSourceFreshInDB preserves the self-healing checks that run
 // below the verified-source fast path. A matching filesystem signature cannot
-// hide a missing active row, an old parser data version, or a project value
-// that the current parser knows how to repair.
+// hide a missing active row, forced file-metadata reset, old parser data
+// version, or project value that the current parser knows how to repair.
 func (e *Engine) verifiedProviderSourceFreshInDB(
 	source parser.SourceRef,
+	wantSize, wantMtime int64,
 ) bool {
 	path := providerDiscoveredPath(source)
 	if path == "" {
 		return false
 	}
-	project, dataVersion, ok := e.db.GetSourceRepairStateByPath(path)
+	project, dataVersion, storedSize, storedMtime, ok :=
+		e.db.GetSourceRepairStateByPath(path)
 	if !ok || parser.NeedsProjectReparse(project) {
 		return false
 	}
-	return dataVersion >= db.CurrentDataVersion()
+	return storedSize == wantSize &&
+		storedMtime == wantMtime &&
+		dataVersion >= db.CurrentDataVersion()
 }
 
 func (e *Engine) verifiedLocalStatSupported(agent parser.AgentType) bool {

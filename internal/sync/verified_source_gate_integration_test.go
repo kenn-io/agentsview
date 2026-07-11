@@ -241,6 +241,13 @@ func TestVerifiedSourceGateWarmTrustDoesNotMaskDatabaseRepair(t *testing.T) {
 				require.NoError(t, database.UpsertSession(*session))
 			},
 		},
+		{
+			name: "file mtimes reset",
+			mutate: func(t *testing.T, database *db.DB) {
+				t.Helper()
+				require.NoError(t, database.ResetAllMtimes())
+			},
+		},
 	}
 
 	for _, tt := range tests {
