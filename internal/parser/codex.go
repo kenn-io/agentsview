@@ -1350,6 +1350,7 @@ func (p *codexProvider) parseSessionSnapshot(
 	info os.FileInfo,
 ) (*ParsedSession, []ParsedMessage, error) {
 	lr := newLineReader(io.LimitReader(f, info.Size()), maxLineSize)
+	defer releaseLineReader(lr)
 	b := newCodexSessionBuilder(includeExec)
 
 	for {
@@ -1650,6 +1651,7 @@ func seedCodexIncrementalStateFromReader(
 ) (codexIncrementalSeed, error) {
 	var seed codexIncrementalSeed
 	lr := newLineReader(r, maxLineSize)
+	defer releaseLineReader(lr)
 	for {
 		line, ok := lr.next()
 		if !ok {
@@ -1783,6 +1785,7 @@ func readCodexJSONLReader(
 	fn func(line string),
 ) (consumed int64, err error) {
 	lr := newLineReader(r, maxLineSize)
+	defer releaseLineReader(lr)
 	for {
 		line, ok := lr.next()
 		if !ok {

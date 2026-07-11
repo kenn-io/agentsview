@@ -29,6 +29,7 @@ func (p *qClawProvider) parseSession(
 	defer f.Close()
 
 	lr := newLineReader(f, maxLineSize)
+	defer releaseLineReader(lr)
 	var (
 		messages      []ParsedMessage
 		startedAt     time.Time

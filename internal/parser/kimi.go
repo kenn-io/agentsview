@@ -144,6 +144,7 @@ func parseKimiSession(
 	defer f.Close()
 
 	lr := newLineReader(f, maxLineSize)
+	defer releaseLineReader(lr)
 
 	// Extract session ID from path. Both legacy and .kimi-code
 	// layouts are supported.

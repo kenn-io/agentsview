@@ -121,6 +121,7 @@ func (p *kiroProvider) parseLegacySession(
 	defer f.Close()
 
 	lr := newLineReader(f, maxLineSize)
+	defer releaseLineReader(lr)
 	var messages []ParsedMessage
 	var firstMessage string
 	ordinal := 0

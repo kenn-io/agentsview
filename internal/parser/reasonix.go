@@ -187,6 +187,7 @@ func parseReasonixSession(
 	defer f.Close()
 
 	lr := newLineReader(f, maxLineSize)
+	defer releaseLineReader(lr)
 	b := newReasonixSessionBuilder()
 
 	// Extract session ID from path

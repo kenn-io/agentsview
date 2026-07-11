@@ -274,6 +274,7 @@ func extractCoworkAITitle(transcriptPath string) string {
 	defer f.Close()
 
 	lr := newLineReader(f, maxLineSize)
+	defer releaseLineReader(lr)
 	title := ""
 	for {
 		line, ok := lr.next()

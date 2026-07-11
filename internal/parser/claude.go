@@ -106,6 +106,7 @@ func claudeParseWithExclusions(
 	parentSessionID = claudeCompanionParentSessionID(path, sessionID)
 
 	lr := newLineReader(f, maxLineSize)
+	defer releaseLineReader(lr)
 	lastLineFailed := false
 	for {
 		line, ok := lr.next()
@@ -1868,6 +1869,7 @@ func ExtractClaudeProjectHints(
 	defer f.Close()
 
 	lr := newLineReader(f, maxLineSize)
+	defer releaseLineReader(lr)
 
 	for {
 		line, ok := lr.next()

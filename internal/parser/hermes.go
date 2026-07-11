@@ -140,6 +140,7 @@ func parseHermesJSONLSession(path, project, machine string) (*ParsedSession, []P
 	defer f.Close()
 
 	lr := newLineReader(f, maxLineSize)
+	defer releaseLineReader(lr)
 
 	var (
 		messages        []ParsedMessage

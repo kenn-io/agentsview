@@ -462,6 +462,7 @@ func parseZencoderSession(
 	defer f.Close()
 
 	lr := newLineReader(f, maxLineSize)
+	defer releaseLineReader(lr)
 	b := newZencoderSessionBuilder()
 
 	lineNum := 0

@@ -356,6 +356,7 @@ func (p *copilotProvider) parseSession(
 	defer f.Close()
 
 	lr := newLineReader(f, maxLineSize)
+	defer releaseLineReader(lr)
 	b := newCopilotSessionBuilder()
 
 	for {

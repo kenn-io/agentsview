@@ -339,6 +339,7 @@ func parseOpenClaudeSession(
 	defer f.Close()
 
 	lr := newLineReader(f, maxLineSize)
+	defer releaseLineReader(lr)
 	lastLine := ""
 	malformedLines := 0
 	ordinal := 0

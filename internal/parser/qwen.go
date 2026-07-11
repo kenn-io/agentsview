@@ -39,6 +39,7 @@ func parseQwenSession(
 	defer f.Close()
 
 	lr := newLineReader(f, maxLineSize)
+	defer releaseLineReader(lr)
 
 	var (
 		sessionID    string

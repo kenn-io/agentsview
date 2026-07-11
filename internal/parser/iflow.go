@@ -67,6 +67,7 @@ func parseIflowSession(
 	allHaveUUID = true
 
 	lr := newLineReader(f, maxLineSize)
+	defer releaseLineReader(lr)
 	for {
 		line, ok := lr.next()
 		if !ok {
@@ -419,6 +420,7 @@ func ExtractIflowProjectHints(
 	defer f.Close()
 
 	lr := newLineReader(f, maxLineSize)
+	defer releaseLineReader(lr)
 
 	for {
 		line, ok := lr.next()

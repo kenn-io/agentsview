@@ -183,6 +183,7 @@ func parseVibeResultFile(path string, fileInfo FileInfo) (ParseResult, error) {
 	defer file.Close()
 
 	lr := newLineReader(file, maxLineSize)
+	defer releaseLineReader(lr)
 	messageOrdinal := 0
 	var firstUserContent string
 

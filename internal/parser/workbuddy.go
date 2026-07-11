@@ -44,6 +44,7 @@ func parseWorkBuddySession(path, project, machine string) (*ParsedSession, []Par
 	)
 
 	lr := newLineReader(f, maxLineSize)
+	defer releaseLineReader(lr)
 	for {
 		line, ok := lr.next()
 		if !ok {

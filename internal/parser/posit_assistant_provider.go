@@ -794,6 +794,7 @@ func readPositAssistantLMMessages(
 	lines := make(map[int]gjson.Result)
 	malformed := 0
 	lr := newLineReader(f, maxLineSize)
+	defer releaseLineReader(lr)
 	for {
 		line, ok := lr.next()
 		if !ok {

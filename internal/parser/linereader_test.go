@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"strings"
@@ -74,6 +75,7 @@ func TestLineReader(t *testing.T) {
 			lr := newLineReader(
 				strings.NewReader(tt.input), tt.maxLen,
 			)
+			defer releaseLineReader(lr)
 			var got []string
 			for {
 				line, ok := lr.next()
@@ -120,6 +122,7 @@ func TestLineReaderBytesRead(t *testing.T) {
 			lr := newLineReader(
 				strings.NewReader(tt.input), 100,
 			)
+			defer releaseLineReader(lr)
 			for {
 				_, ok := lr.next()
 				if !ok {
@@ -139,6 +142,7 @@ func TestLineReaderIOError(t *testing.T) {
 	)
 
 	lr := newLineReader(r, 100)
+	defer releaseLineReader(lr)
 	var got []string
 	for {
 		line, ok := lr.next()
@@ -151,4 +155,15 @@ func TestLineReaderIOError(t *testing.T) {
 	require.Len(t, got, 2)
 	require.Error(t, lr.Err(), "expected non-nil Err() after I/O failure")
 	require.ErrorIs(t, lr.Err(), ioErr)
+}
+
+func TestReadCodexJSONLReaderReusesWorkspace(t *testing.T) {
+	var readErr error
+	allocs := testing.AllocsPerRun(100, func() {
+		r := bytes.NewReader(nil)
+		_, readErr = readCodexJSONLReader(r, r, func(string) {})
+	})
+
+	require.NoError(t, readErr)
+	assert.LessOrEqual(t, allocs, 1.0)
 }
