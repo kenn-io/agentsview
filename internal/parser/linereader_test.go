@@ -158,6 +158,10 @@ func TestLineReaderIOError(t *testing.T) {
 }
 
 func TestReadCodexJSONLReaderReusesWorkspace(t *testing.T) {
+	if raceEnabled {
+		t.Skip("allocation counts are unreliable under the race detector")
+	}
+
 	var readErr error
 	allocs := testing.AllocsPerRun(100, func() {
 		r := bytes.NewReader(nil)
