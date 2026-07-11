@@ -262,6 +262,27 @@ func stubRunHTTPRemoteSync(
 	t.Cleanup(func() { runHTTPRemoteSync = originalRunHTTPRemoteSync })
 }
 
+func stubRunHTTPRemoteSyncWithRepair(
+	t *testing.T,
+	fn func(context.Context, config.RemoteHost, bool, bool) (remotesync.SyncStats, error),
+) {
+	t.Helper()
+	originalRunHTTPRemoteSyncWithRepair := runHTTPRemoteSyncWithRepair
+	runHTTPRemoteSyncWithRepair = func(
+		ctx context.Context,
+		_ config.Config,
+		_ *db.DB,
+		rh config.RemoteHost,
+		full, repairMirror bool,
+		_ func(syncpkg.Progress),
+	) (remotesync.SyncStats, error) {
+		return fn(ctx, rh, full, repairMirror)
+	}
+	t.Cleanup(func() {
+		runHTTPRemoteSyncWithRepair = originalRunHTTPRemoteSyncWithRepair
+	})
+}
+
 func TestSyncEngineForLocalReusesNoSyncEngineConcurrently(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
@@ -685,6 +706,44 @@ func TestSyncRemotesUsesStoredConfigForConfiguredHost(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	assert.Equal(t, stored.URL, got.URL)
 	assert.Equal(t, stored.Token, got.Token)
+}
+
+func TestSyncRemotesRelaysRepairMirrorToConfiguredHTTPHost(t *testing.T) {
+	stored := config.RemoteHost{
+		Host:      "devbox",
+		Transport: config.RemoteTransportHTTP,
+		URL:       "http://stored.example",
+		Token:     "stored-token",
+	}
+	f := newSyncRouteFixture(t, withRemoteHosts(stored))
+	called := false
+	var got config.RemoteHost
+	var gotFull, gotRepair bool
+	stubRunHTTPRemoteSyncWithRepair(t, func(
+		_ context.Context,
+		rh config.RemoteHost,
+		full, repairMirror bool,
+	) (remotesync.SyncStats, error) {
+		called = true
+		got = rh
+		gotFull = full
+		gotRepair = repairMirror
+		return remotesync.SyncStats{SessionsSynced: 1, SessionsTotal: 1}, nil
+	})
+
+	w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sync/remotes",
+		remoteSyncRequest{
+			Full:         true,
+			RepairMirror: true,
+			Hosts:        []config.RemoteHost{{Host: "devbox"}},
+		},
+		withRemoteAddr("203.0.113.10:9999"))
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	assert.True(t, called)
+	assert.Equal(t, stored, got)
+	assert.True(t, gotFull)
+	assert.True(t, gotRepair)
 }
 
 func TestSyncRemotesRedactsStoredHTTPConfigOnFailure(t *testing.T) {

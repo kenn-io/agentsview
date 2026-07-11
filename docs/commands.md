@@ -237,11 +237,17 @@ token = "remote-token"
 With hosts configured, `agentsview sync` (no `--host`) runs the local sync
 first, then syncs each configured host in the order declared using its
 configured transport. `--full` applies to every host; for HTTP hosts it
-re-downloads the full archive into the persistent mirror and bypasses the remote
+reparses every session while keeping manifest-based mirror transfer incremental
+and bypassing the remote
 path/mtime skip cache (see
 [Incremental Sync](/remote-access/#incremental-sync)). A failing host is
 reported on stderr and skipped so the remaining hosts still run; the command
 exits non-zero if any host failed.
+
+Use `--repair-mirror` when a configured HTTP host's mirror bytes need a full
+archive refresh, such as same-size, same-mtime corruption. For HTTP hosts it
+also reparses every imported remote session after the repair. The repair flag
+doesn't change SSH behavior.
 
 `agentsview sync --host X` syncs one host, not the whole configured list. When
 the local daemon knows a configured host with that identity, it uses the stored

@@ -47,6 +47,7 @@ type remoteSyncInput struct {
 
 type remoteSyncRequest struct {
 	Full         bool                `json:"full"`
+	RepairMirror bool                `json:"repair_mirror,omitempty"`
 	IncludeLocal bool                `json:"include_local"`
 	Hosts        []config.RemoteHost `json:"hosts"`
 }
@@ -76,6 +77,17 @@ var runHTTPRemoteSync = func(
 	full bool,
 	progress func(syncpkg.Progress),
 ) (remotesync.SyncStats, error) {
+	return runHTTPRemoteSyncWithRepair(ctx, cfg, local, rh, full, false, progress)
+}
+
+var runHTTPRemoteSyncWithRepair = func(
+	ctx context.Context,
+	cfg config.Config,
+	local *db.DB,
+	rh config.RemoteHost,
+	full, repairMirror bool,
+	progress func(syncpkg.Progress),
+) (remotesync.SyncStats, error) {
 	token := rh.Token
 	if token == "" {
 		return remotesync.SyncStats{}, fmt.Errorf(
@@ -88,6 +100,7 @@ var runHTTPRemoteSync = func(
 		URL:                     rh.URL,
 		Token:                   token,
 		Full:                    full,
+		RepairMirror:            repairMirror,
 		DataDir:                 cfg.DataDir,
 		DB:                      local,
 		BlockedResultCategories: cfg.ResultContentBlockedCategories,
@@ -332,21 +345,21 @@ func (s *Server) runRemoteSyncRequest(
 	var localStats *syncpkg.SyncStats
 	failures := make([]remoteSyncFailure, 0)
 	var remoteStats remotesync.SyncStats
-	run := func(full bool) {
-		failures, remoteStats = s.runRemoteSyncHosts(
-			ctx, local, req.Hosts, full, progress,
+	run := func(full, repairMirror bool) {
+		failures, remoteStats = s.runRemoteSyncHostsWithRepair(
+			ctx, local, req.Hosts, full, repairMirror, progress,
 		)
 	}
 	if req.IncludeLocal {
 		stats, _ := engine.SyncThenRun(ctx, req.Full, progress,
 			func(forceFull bool) error {
-				run(forceFull)
+				run(forceFull, req.RepairMirror)
 				return nil
 			})
 		localStats = &stats
 	} else {
 		_ = engine.RunExclusive(func() error {
-			run(req.Full)
+			run(req.Full, req.RepairMirror)
 			return nil
 		})
 	}
@@ -363,6 +376,16 @@ func (s *Server) runRemoteSyncHosts(
 	local *db.DB,
 	hosts []config.RemoteHost,
 	full bool,
+	progress func(syncpkg.Progress),
+) ([]remoteSyncFailure, remotesync.SyncStats) {
+	return s.runRemoteSyncHostsWithRepair(ctx, local, hosts, full, false, progress)
+}
+
+func (s *Server) runRemoteSyncHostsWithRepair(
+	ctx context.Context,
+	local *db.DB,
+	hosts []config.RemoteHost,
+	full, repairMirror bool,
 	progress func(syncpkg.Progress),
 ) ([]remoteSyncFailure, remotesync.SyncStats) {
 	failures := make([]remoteSyncFailure, 0)
@@ -383,7 +406,11 @@ func (s *Server) runRemoteSyncHosts(
 			}
 			stats, err = runRemoteSync(ctx, rs)
 		case config.RemoteTransportHTTP:
-			stats, err = runHTTPRemoteSync(ctx, s.cfg, local, rh, full, progress)
+			if repairMirror {
+				stats, err = runHTTPRemoteSyncWithRepair(ctx, s.cfg, local, rh, full, true, progress)
+			} else {
+				stats, err = runHTTPRemoteSync(ctx, s.cfg, local, rh, full, progress)
+			}
 		default:
 			err = fmt.Errorf("invalid remote transport %q", rh.Transport)
 		}

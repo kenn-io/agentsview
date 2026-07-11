@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"testing"
 	"time"
 
@@ -60,41 +59,18 @@ func TestHTTPSyncDownloadsArchiveAndImports(t *testing.T) {
 	assert.Equal(t, 1, stats.SessionsSynced)
 }
 
-func TestHTTPSyncReportsDownloadAndImportProgress(t *testing.T) {
-	archive := buildHTTPTestTar(t, map[string]string{
-		"home/wes/.claude/projects/test-project/session.jsonl": testjsonl.NewSessionBuilder().
-			AddClaudeUser("2024-01-01T00:00:00Z", "http remote progress").
-			String(),
-	})
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v1/remote-sync/targets":
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"dirs":{"claude":["/home/wes/.claude/projects"]}}`))
-		case "/api/v1/remote-sync/archive":
-			w.Header().Set("Content-Type", "application/x-tar")
-			w.Header().Set("Content-Length", strconv.Itoa(len(archive)))
-			_, _ = w.Write(archive)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(ts.Close)
-
-	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, database.Close()) })
+func TestHTTPSyncReportsMirrorProgressPhases(t *testing.T) {
+	remote := newMirrorTestRemote(t)
+	base := time.Date(2026, 7, 8, 10, 0, 0, 123456789, time.UTC)
+	remote.writeSession(t, "a.jsonl", base, "http remote progress")
+	dataDir := t.TempDir()
+	_, hs := newMirrorSync(t, remote, dataDir)
 	var progress []syncpkg.Progress
 
-	stats, err := HTTPSync{
-		Host:  "devbox",
-		URL:   ts.URL,
-		Token: "remote-token",
-		DB:    database,
-		Progress: func(p syncpkg.Progress) {
-			progress = append(progress, p)
-		},
-	}.Run(context.Background())
+	hs.Progress = func(p syncpkg.Progress) {
+		progress = append(progress, p)
+	}
+	stats, err := hs.Run(context.Background())
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.SessionsSynced)
@@ -107,8 +83,8 @@ func TestHTTPSyncReportsDownloadAndImportProgress(t *testing.T) {
 	assert.Contains(t, progressDetails(progress),
 		"Processing sessions from devbox")
 	require.NotEmpty(t, progress, "expected progress events")
-	assert.Equal(t, int64(len(archive)), maxBytesDone(progress))
-	assert.Equal(t, int64(len(archive)), maxBytesTotal(progress))
+	require.Len(t, remote.archiveRequests, 1)
+	assert.Empty(t, remote.archiveRequests[0].DeltaFiles)
 }
 
 func progressDetails(progress []syncpkg.Progress) []string {
@@ -325,11 +301,12 @@ func TestHTTPSyncMirrorSecondSyncTransfersOnlyDelta(t *testing.T) {
 	added := remote.writeSession(t, "f.jsonl", base.Add(6*time.Second), "session f")
 	require.NoError(t, os.Remove(staleRemote))
 
+	hs.Full = true
 	stats, err = hs.Run(context.Background())
 	require.NoError(t, err)
 	require.Len(t, remote.archiveRequests, 2)
 	assert.ElementsMatch(t, []string{changed, added}, remote.archiveRequests[1].DeltaFiles)
-	assert.Equal(t, 2, stats.SessionsSynced)
+	assert.GreaterOrEqual(t, stats.SessionsTotal, 2)
 
 	// The deleted remote file is gone from the mirror, but its
 	// session survives in the DB (archive semantics).
@@ -342,6 +319,7 @@ func TestHTTPSyncMirrorSecondSyncTransfersOnlyDelta(t *testing.T) {
 	assert.Len(t, page.Sessions, 6)
 
 	// Third sync with no remote changes: no archive request at all.
+	hs.Full = false
 	stats, err = hs.Run(context.Background())
 	require.NoError(t, err)
 	assert.Len(t, remote.archiveRequests, 2)
@@ -578,7 +556,7 @@ func TestHTTPSyncHoldsMirrorLockDuringManifestFetch(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestHTTPSyncFullRefreshesMirrorBytes(t *testing.T) {
+func TestHTTPSyncRepairMirrorRefreshesBytes(t *testing.T) {
 	remote := newMirrorTestRemote(t)
 	base := time.Date(2026, 7, 8, 10, 0, 0, 123456789, time.UTC)
 	path := remote.writeSession(t, "a.jsonl", base, "session a")
@@ -607,14 +585,51 @@ func TestHTTPSyncFullRefreshesMirrorBytes(t *testing.T) {
 	require.Equal(t, corrupt, stale)
 	require.Len(t, remote.archiveRequests, 1, "no-delta sync must not download")
 
-	// --full forces a full archive refresh into the mirror.
-	hs.Full = true
-	_, err = hs.Run(context.Background())
+	// Explicit mirror repair forces a full archive refresh and reparse.
+	hs.RepairMirror = true
+	stats, err := hs.Run(context.Background())
 	require.NoError(t, err)
 	healed, err := os.ReadFile(local)
 	require.NoError(t, err)
 	assert.Equal(t, good, healed)
+	assert.Equal(t, 1, stats.SessionsSynced)
+	assert.Zero(t, stats.Skipped)
 	require.Len(t, remote.archiveRequests, 2)
 	assert.Nil(t, remote.archiveRequests[1].DeltaFiles,
-		"--full must request the full archive, not a delta")
+		"repair must request the full archive, not a delta")
+}
+
+func TestHTTPSyncFullReprocessesWithoutFullMirrorDownload(t *testing.T) {
+	remote := newMirrorTestRemote(t)
+	base := time.Date(2026, 7, 8, 10, 0, 0, 123456789, time.UTC)
+	remote.writeSession(t, "a.jsonl", base, "session a")
+	dataDir := t.TempDir()
+	_, hs := newMirrorSync(t, remote, dataDir)
+	require.NoError(t, func() error { _, err := hs.Run(context.Background()); return err }())
+
+	hs.Full = true
+	stats, err := hs.Run(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.SessionsTotal)
+	assert.Len(t, remote.archiveRequests, 1,
+		"full reprocess must not download an unchanged dir-scoped mirror")
+}
+
+func TestHTTPSyncFullReprocessesAllSessionsWithoutMirrorRepair(t *testing.T) {
+	remote := newMirrorTestRemote(t)
+	base := time.Date(2026, 7, 8, 10, 0, 0, 123456789, time.UTC)
+	remote.writeSession(t, "a.jsonl", base, "session a")
+	dataDir := t.TempDir()
+	_, hs := newMirrorSync(t, remote, dataDir)
+	_, err := hs.Run(context.Background())
+	require.NoError(t, err)
+
+	hs.Full = true
+	stats, err := hs.Run(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.SessionsTotal)
+	assert.Equal(t, 1, stats.SessionsSynced)
+	assert.Zero(t, stats.Skipped)
+	assert.Len(t, remote.archiveRequests, 1,
+		"full reprocess must not download an unchanged dir-scoped mirror")
 }

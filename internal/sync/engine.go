@@ -80,6 +80,15 @@ type EngineConfig struct {
 	// local sync watermarks or pollute the skipped_files table
 	// with temp-dir paths.
 	Ephemeral bool
+	// ForceParse disables stored-state freshness skips so every
+	// discovered source is reparsed even when its persisted file
+	// metadata still matches.
+	ForceParse bool
+	// AllowForceParseWrites permits sync entrypoints to run on a
+	// force-parse engine. parse-diff leaves this false; remotesync
+	// full reparse opts in so it can bypass freshness skips and still
+	// write refreshed rows.
+	AllowForceParseWrites bool
 	// Emitter, when non-nil, is called once after each sync pass
 	// that wrote data. Safe to leave nil (e.g., in PG serve mode
 	// where the engine is not run).
@@ -133,6 +142,9 @@ type Engine struct {
 	// parse-diff fully re-parses every discovered file. Normal sync
 	// never sets it; behavior must be identical when false.
 	forceParse bool
+	// allowForceParseWrites lets a force-parse engine perform normal
+	// writes. It stays false for report-only parse-diff engines.
+	allowForceParseWrites bool
 
 	// phaseStats accumulates per-phase wall-clock time inside the bulk
 	// write path. Exposed via PhaseStats() so a CLI driver can log the
@@ -200,6 +212,9 @@ func (e *Engine) refuseWriteInForceParse(op string) bool {
 	if !e.forceParse {
 		return false
 	}
+	if e.allowForceParseWrites {
+		return false
+	}
 	log.Printf(
 		"sync: refusing %s on a report-only (parse-diff) engine; "+
 			"forceParse engines never write", op,
@@ -262,6 +277,8 @@ func NewEngine(
 		skipFingerprints:        make(map[string]string),
 		s3CodexIndexCache:       make(map[string]s3CodexIndexSnapshot),
 		ephemeral:               cfg.Ephemeral,
+		forceParse:              cfg.ForceParse,
+		allowForceParseWrites:   cfg.AllowForceParseWrites,
 		idPrefix:                cfg.IDPrefix,
 		pathRewriter:            cfg.PathRewriter,
 		emitter:                 cfg.Emitter,

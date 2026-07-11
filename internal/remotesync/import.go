@@ -51,6 +51,8 @@ func (im Importer) ImportExtracted(
 		IDPrefix:                im.Host + "~",
 		PathRewriter:            rewriter,
 		Ephemeral:               true,
+		ForceParse:              im.Full,
+		AllowForceParseWrites:   im.Full,
 		BlockedResultCategories: im.BlockedResultCategories,
 	})
 	defer engine.Close()

@@ -84,6 +84,32 @@ func TestRunRemoteSyncOnceDispatchesHTTP(t *testing.T) {
 	assert.Equal(t, "http://devbox:8080", called.URL)
 }
 
+func TestRunRemoteSyncOnceWithRepairDispatchesHTTPRepairDirectly(t *testing.T) {
+	var called config.RemoteHost
+	var gotFull, gotRepair bool
+	restore := stubHTTPRemoteSyncWithRepairForTest(t, func(
+		_ context.Context,
+		rh config.RemoteHost,
+		full, repairMirror bool,
+	) (remotesync.SyncStats, error) {
+		called = rh
+		gotFull = full
+		gotRepair = repairMirror
+		return remotesync.SyncStats{SessionsSynced: 2}, nil
+	})
+	defer restore()
+
+	err := runRemoteSyncOnceWithRepair(config.Config{}, nil, config.RemoteHost{
+		Host: "devbox", Transport: config.RemoteTransportHTTP,
+		URL: "http://devbox:8080", Token: "remote-token",
+	}, true, true)
+
+	require.NoError(t, err)
+	assert.Equal(t, "http://devbox:8080", called.URL)
+	assert.True(t, gotFull)
+	assert.True(t, gotRepair)
+}
+
 func TestRunHTTPRemoteSyncRequiresExplicitHTTPToken(t *testing.T) {
 	called := false
 	ts := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
@@ -124,6 +150,24 @@ func stubHTTPRemoteSyncForTest(
 		return fn(ctx, rh, full)
 	}
 	return func() { runHTTPRemoteSync = orig }
+}
+
+func stubHTTPRemoteSyncWithRepairForTest(
+	t *testing.T,
+	fn func(context.Context, config.RemoteHost, bool, bool) (remotesync.SyncStats, error),
+) func() {
+	t.Helper()
+	orig := runHTTPRemoteSyncWithRepair
+	runHTTPRemoteSyncWithRepair = func(
+		ctx context.Context,
+		_ config.Config,
+		_ *db.DB,
+		rh config.RemoteHost,
+		full, repairMirror bool,
+	) (remotesync.SyncStats, error) {
+		return fn(ctx, rh, full, repairMirror)
+	}
+	return func() { runHTTPRemoteSyncWithRepair = orig }
 }
 
 func TestSyncLocalAndRemotes_ResyncForcesRemoteFull(t *testing.T) {
@@ -344,7 +388,7 @@ func TestResyncProgressPrinterRendersDoneProgressBeforeCompletion(t *testing.T) 
 		"\n  Syncing sessions into rebuilt database completed in 1s\n")
 }
 
-func TestRemoteProgressPrinterWritesTimedStepLines(t *testing.T) {
+func TestRemoteProgressPrinterRendersMirrorPhasesAndThroughput(t *testing.T) {
 	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
 	clock := func() time.Time { return now }
 	var out bytes.Buffer
@@ -385,7 +429,7 @@ func TestRemoteProgressPrinterWritesTimedStepLines(t *testing.T) {
 	assert.Contains(t, got, "  Downloading session data from devbox (3 agents)...\n")
 	assert.Contains(t, got, "  Downloading session data from devbox (3 agents) completed in 2s\n")
 	assert.Contains(t, got, "\r  Processing sessions from devbox: 10/10 sessions (100%) · 100 messages\x1b[K")
-	assert.Contains(t, got, "\n  Processing sessions from devbox completed in 3.35s\n")
+	assert.Contains(t, got, "\n  Processing sessions from devbox completed in 3.35s, 3.0 sessions/s\n")
 	assert.Contains(t, got, "  Synced 10 sessions from devbox (1 unchanged)\n")
 	assert.True(t, strings.HasSuffix(got, "\n"), "remote progress should finish on a newline")
 }
@@ -591,15 +635,17 @@ func TestDoSyncRemoteHostUsesDaemonRouteWhenWritableDaemonRunning(t *testing.T) 
 	registerSyncRouteTestRuntime(t, env.DataDir, ts.URL)
 
 	hadFailures := doSync(SyncConfig{
-		Host: "devbox",
-		User: "alice",
-		Port: 2222,
-		Full: true,
+		Host:         "devbox",
+		User:         "alice",
+		Port:         2222,
+		Full:         true,
+		RepairMirror: true,
 	})
 
 	require.False(t, hadFailures)
 	assert.False(t, got.IncludeLocal)
 	assert.True(t, got.Full)
+	assert.True(t, got.RepairMirror)
 	require.Len(t, got.Hosts, 1)
 	assert.Equal(t, config.RemoteHost{
 		Host: "devbox",
@@ -748,8 +794,15 @@ func (e syncCLIEnv) assertNoLocalDB(t *testing.T) {
 // /api/v1/sync/remotes route.
 type remoteSyncRequest struct {
 	Full         bool                `json:"full"`
+	RepairMirror bool                `json:"repair_mirror"`
 	IncludeLocal bool                `json:"include_local"`
 	Hosts        []config.RemoteHost `json:"hosts"`
+}
+
+func TestRemoteSyncRepairIntentContract(t *testing.T) {
+	body, err := json.Marshal(remoteSyncRequest{Full: true, RepairMirror: true})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"full":true,"repair_mirror":true,"include_local":false,"hosts":null}`, string(body))
 }
 
 // captureRemoteSyncRequest returns a handler that records the decoded remote

@@ -22,6 +22,7 @@ type HTTPSync struct {
 	URL                     string
 	Token                   string
 	Full                    bool
+	RepairMirror            bool
 	DataDir                 string
 	DB                      *db.DB
 	BlockedResultCategories []string
@@ -116,7 +117,7 @@ func (hs HTTPSync) importRoot(
 ) (SyncStats, error) {
 	stats, err := Importer{
 		Host:                    hs.Host,
-		Full:                    hs.Full,
+		Full:                    hs.Full || hs.RepairMirror,
 		DB:                      hs.DB,
 		BlockedResultCategories: hs.BlockedResultCategories,
 		Progress:                hs.Progress,
@@ -174,14 +175,13 @@ func (hs HTTPSync) runMirror(
 	if err := RemoveMirrorTypeConflicts(mirrorRoot, delta.Fetch); err != nil {
 		return SyncStats{}, err
 	}
-	if len(delta.Fetch) > 0 || hs.Full {
+	if len(delta.Fetch) > 0 || hs.RepairMirror {
 		// Bootstrap heuristic: past half the corpus a full archive is
 		// cheaper than uploading a huge file list, and it doubles as
-		// the empty-mirror bootstrap (fetch == total). --full bypasses
-		// the stat diff entirely: it is the user's remedy for a stale
-		// or corrupt mirror, which the size/mtime comparison cannot
-		// detect (a same-size same-mtime rewrite, or local bit rot).
-		full := hs.Full || len(delta.Fetch)*2 >= delta.Total
+		// the empty-mirror bootstrap (fetch == total). Repair bypasses
+		// the stat diff for stale or corrupt mirror bytes, which size and
+		// mtime comparison cannot detect.
+		full := hs.RepairMirror || len(delta.Fetch)*2 >= delta.Total
 		err := hs.downloadIntoMirror(ctx, client, targets.dirScoped, delta.Fetch, full, mirrorRoot)
 		var statusErr *StatusError
 		if err != nil && !full && errors.As(err, &statusErr) {
@@ -333,6 +333,7 @@ func (hs HTTPSync) downloadIntoMirror(
 	if err := os.MkdirAll(mirrorRoot, 0o755); err != nil {
 		return fmt.Errorf("create mirror dir: %w", err)
 	}
+	hs.report(syncpkg.Progress{Detail: fmt.Sprintf("Extracting session archive from %s", hs.Host)})
 	if _, err := ExtractTarStream(ctx, stream, mirrorRoot); err != nil {
 		return fmt.Errorf("extract archive into mirror: %w", err)
 	}

@@ -26,10 +26,11 @@ import (
 
 // SyncConfig holds parsed CLI options for the sync command.
 type SyncConfig struct {
-	Full bool
-	Host string
-	User string
-	Port int
+	Full         bool
+	RepairMirror bool
+	Host         string
+	User         string
+	Port         int
 	// CPUProfile, MemProfile, and Trace are hidden flags that capture a
 	// pprof CPU profile, allocation snapshot, and runtime trace for the
 	// sync pass. Empty strings disable each independently.
@@ -93,9 +94,9 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 			if useDaemon && len(remoteHosts) > 0 {
 				fmt.Println("Running sync with remotes via daemon...")
 				progress := newRemoteProgressPrinter(os.Stdout, time.Now)
-				failures, err := runDaemonRemoteSync(
+				failures, err := runDaemonRemoteSyncWithRepair(
 					context.Background(), tr, appCfg.AuthToken,
-					remoteHosts, cfg.Full, includeLocal, progress.Print,
+					remoteHosts, cfg.Full, cfg.RepairMirror, includeLocal, progress.Print,
 				)
 				progress.Finish()
 				if err != nil {
@@ -161,7 +162,7 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 			)
 		},
 		func(rh config.RemoteHost, full bool) error {
-			return runRemoteSyncOnce(appCfg, database, rh, full)
+			return runRemoteSyncOnceWithRepair(appCfg, database, rh, full, cfg.RepairMirror)
 		},
 	)
 	reportRemoteFailures(failures)
@@ -185,6 +186,7 @@ type remoteProgressPrinter struct {
 	started  time.Time
 	inPlace  bool
 	finished bool
+	progress sync.Progress
 }
 
 const remoteLocalSyncProgressLabel = "Syncing local sessions"
@@ -234,6 +236,9 @@ func (p *remoteProgressPrinter) Print(progress sync.Progress) {
 			p.label = label
 			p.started = p.now()
 		}
+		if strings.Contains(label, "Processing") {
+			p.progress = progress
+		}
 		p.inPlace = true
 		fmt.Fprintf(p.w, "\r  %s\x1b[K", formatSyncProgress(progress))
 		return
@@ -273,10 +278,15 @@ func (p *remoteProgressPrinter) finishCurrent() {
 		fmt.Fprint(p.w, "\n")
 	}
 	elapsed := p.now().Sub(p.started).Round(time.Millisecond)
-	fmt.Fprintf(p.w, "  %s completed in %s\n", p.label, elapsed)
+	throughput := ""
+	if p.progress.SessionsDone > 0 && elapsed > 0 {
+		throughput = fmt.Sprintf(", %.1f sessions/s", float64(p.progress.SessionsDone)/elapsed.Seconds())
+	}
+	fmt.Fprintf(p.w, "  %s completed in %s%s\n", p.label, elapsed, throughput)
 	p.label = ""
 	p.started = time.Time{}
 	p.inPlace = false
+	p.progress = sync.Progress{}
 }
 
 // syncLocalAndRemotes runs the local sync, then the configured
@@ -303,8 +313,8 @@ func runRemoteSync(
 		User: cfg.User,
 		Port: cfg.Port,
 	}
-	if err := runRemoteSyncOnce(
-		appCfg, database, rh, cfg.Full,
+	if err := runRemoteSyncOnceWithRepair(
+		appCfg, database, rh, cfg.Full, cfg.RepairMirror,
 	); err != nil {
 		fatal("remote sync: %v", err)
 	}
@@ -317,6 +327,17 @@ func runRemoteSyncOnce(
 	appCfg config.Config, database *db.DB,
 	rh config.RemoteHost, full bool,
 ) error {
+	return runRemoteSyncOnceWithRepair(appCfg, database, rh, full, false)
+}
+
+func runRemoteSyncOnceWithRepair(
+	appCfg config.Config, database *db.DB,
+	rh config.RemoteHost, full, repairMirror bool,
+) error {
+	if repairMirror && rh.Transport == config.RemoteTransportHTTP {
+		_, err := runHTTPRemoteSyncWithRepair(context.Background(), appCfg, database, rh, full, true)
+		return err
+	}
 	_, err := runRemoteSyncTransport(
 		context.Background(), appCfg, database, rh, full,
 	)
@@ -367,6 +388,16 @@ var runHTTPRemoteSync = func(
 	rh config.RemoteHost,
 	full bool,
 ) (remotesync.SyncStats, error) {
+	return runHTTPRemoteSyncWithRepair(ctx, appCfg, database, rh, full, false)
+}
+
+var runHTTPRemoteSyncWithRepair = func(
+	ctx context.Context,
+	appCfg config.Config,
+	database *db.DB,
+	rh config.RemoteHost,
+	full, repairMirror bool,
+) (remotesync.SyncStats, error) {
 	token := rh.Token
 	if token == "" {
 		return remotesync.SyncStats{}, fmt.Errorf(
@@ -379,6 +410,7 @@ var runHTTPRemoteSync = func(
 		URL:                     rh.URL,
 		Token:                   token,
 		Full:                    full,
+		RepairMirror:            repairMirror,
 		DataDir:                 appCfg.DataDir,
 		DB:                      database,
 		BlockedResultCategories: appCfg.ResultContentBlockedCategories,
@@ -549,12 +581,27 @@ func runDaemonRemoteSync(
 	includeLocal bool,
 	onProgress sync.ProgressFunc,
 ) ([]remoteHostFailure, error) {
+	return runDaemonRemoteSyncWithRepair(ctx, tr, authToken, hosts, full, false, includeLocal, onProgress)
+}
+
+func runDaemonRemoteSyncWithRepair(
+	ctx context.Context,
+	tr transport,
+	authToken string,
+	hosts []config.RemoteHost,
+	full bool,
+	repairMirror bool,
+	includeLocal bool,
+	onProgress sync.ProgressFunc,
+) ([]remoteHostFailure, error) {
 	body, err := json.Marshal(struct {
 		Full         bool                `json:"full"`
+		RepairMirror bool                `json:"repair_mirror,omitempty"`
 		IncludeLocal bool                `json:"include_local"`
 		Hosts        []config.RemoteHost `json:"hosts"`
 	}{
 		Full:         full,
+		RepairMirror: repairMirror,
 		IncludeLocal: includeLocal,
 		Hosts:        hosts,
 	})

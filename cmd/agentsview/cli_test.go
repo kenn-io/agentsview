@@ -325,7 +325,33 @@ func TestRootHelpDocumentsRemoteHosts(t *testing.T) {
 func TestSyncHelpMentionsConfiguredHosts(t *testing.T) {
 	help, err := executeCommand(newRootCommand(), "sync", "--help")
 	require.NoError(t, err, "Execute")
-	for _, want := range []string{"remote_hosts", "--host", "passwordless"} {
+	for _, want := range []string{"remote_hosts", "--host", "--repair-mirror", "passwordless"} {
 		assert.Contains(t, help, want, "sync help missing %q", want)
 	}
+}
+
+func TestSyncCommandParsesRepairMirrorFlag(t *testing.T) {
+	env := newSyncCLIEnv(t)
+
+	got, handler := captureRemoteSyncRequest(t)
+	ts := remoteSyncRouteTestServer(t, handler)
+	registerSyncRouteTestRuntime(t, env.DataDir, ts.URL)
+
+	_, err := executeCommand(
+		newRootCommand(),
+		"sync",
+		"--host", "devbox",
+		"--user", "alice",
+		"--port", "2222",
+		"--repair-mirror",
+	)
+	require.NoError(t, err)
+	assert.False(t, got.IncludeLocal)
+	assert.False(t, got.Full)
+	assert.True(t, got.RepairMirror)
+	require.Len(t, got.Hosts, 1)
+	assert.Equal(t, "devbox", got.Hosts[0].Host)
+	assert.Equal(t, "alice", got.Hosts[0].User)
+	assert.Equal(t, 2222, got.Hosts[0].Port)
+	env.assertNoLocalDB(t)
 }

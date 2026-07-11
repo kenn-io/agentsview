@@ -203,9 +203,8 @@ of the remote state database.
 A full HTTP transfer occurs in these cases:
 
 - the per-host mirror is new or was removed
-- `agentsview sync --full` is used
+- `agentsview sync --repair-mirror` is used
 - at least half of the manifest files are missing or changed
-- a collector data-version resync forces its configured remote syncs full
 - a delta request is rejected after a manifest succeeded; the collector retries
   once with a full archive
 - the remote daemon does not support manifests, in which case the collector uses
@@ -214,9 +213,14 @@ A full HTTP transfer occurs in these cases:
 Windsurf's curated export is also fetched in full on every sync, independently
 of the directory-scoped archive decision.
 
-`--full` refreshes the mirror bytes and bypasses the persistent remote
-path/mtime skip cache during import. It does not delete the local database or
-turn remote sync into a destructive reconciliation.
+`--full` bypasses the persistent remote path/mtime skip cache during import, so
+it reparses every session without implying a full mirror transfer.
+An automatic collector data-version resync also reparses configured remotes
+full, but it stays on the manifest and delta mirror path unless repair or
+fallback rules require a full archive.
+`--repair-mirror` refreshes the dir-scoped mirror from a full archive and then
+reparses every imported remote session. Neither flag deletes the local database
+or turns remote sync into a destructive reconciliation.
 
 ### Compatibility And Recovery
 
@@ -234,14 +238,15 @@ an interrupted extraction.
 
 The comparison does not hash file content. A remote rewrite that preserves both
 size and modification time, or local mirror corruption with the same metadata,
-can therefore look unchanged. Run a full sync to refresh the bytes:
+can therefore look unchanged. Request an explicit mirror repair to refresh the
+bytes:
 
 ```bash
 # Refresh local sessions and every configured remote.
-agentsview sync --full
+agentsview sync --repair-mirror
 
 # Refresh one configured host through the local daemon.
-agentsview sync --host devbox1 --full
+agentsview sync --host devbox1 --repair-mirror
 ```
 
 The second form requires `devbox1` to match a configured `[[remote_hosts]]`

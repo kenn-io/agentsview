@@ -322,6 +322,10 @@ func newSyncCommand() *cobra.Command {
 		&cfg.Full, "full", false,
 		"Force a full resync regardless of data version",
 	)
+	cmd.Flags().BoolVar(
+		&cfg.RepairMirror, "repair-mirror", false,
+		"Refresh configured HTTP remote mirrors from a full archive",
+	)
 	cmd.Flags().StringVar(
 		&cfg.Host, "host", "",
 		"SSH hostname for remote sync",
