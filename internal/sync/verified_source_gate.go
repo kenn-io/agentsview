@@ -1,5 +1,13 @@
 package sync
 
+import (
+	"os"
+	"path/filepath"
+	"strings"
+
+	"go.kenn.io/agentsview/internal/parser"
+)
+
 // verifiedSourceSignature is the complete local filesystem identity trusted
 // by the gate. sidecarMtime is zero for providers without an auxiliary source
 // and carries Codex's effective index watermark when that provider opts in.
@@ -141,4 +149,100 @@ func (e *Engine) finishVerifiedSourcePass(pass uint64, complete bool) {
 		}
 	}
 	e.verifiedSourceActivePass = 0
+}
+
+// verifiedProviderSourceState captures the local stat/ctime signature before
+// any content verification. Providers must opt in explicitly; forced,
+// path-rewritten, non-regular, and unreliable-change-time sources bypass the
+// gate and retain their existing verification path.
+func (e *Engine) verifiedProviderSourceState(
+	provider parser.Provider,
+	source parser.SourceRef,
+	file parser.DiscoveredFile,
+) (verifiedSourceCapture, int64, bool, bool) {
+	if e.forceParse || file.ForceParse || e.pathRewriter != nil ||
+		provider.Capabilities().Source.VerifiedLocalStat !=
+			parser.CapabilitySupported {
+		return verifiedSourceCapture{}, 0, false, false
+	}
+	path := providerDiscoveredPath(source)
+	if path == "" || strings.HasPrefix(path, "s3://") {
+		return verifiedSourceCapture{}, 0, false, false
+	}
+	path = filepath.Clean(path)
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return verifiedSourceCapture{}, 0, false, false
+	}
+	changeTime, ok := fileChangeTime(path, info)
+	if !ok {
+		return verifiedSourceCapture{}, 0, false, false
+	}
+	inode, device := getFileIdentity(info)
+	mtime := info.ModTime().UnixNano()
+	sidecarMtime := int64(0)
+	if provider.Definition().Type == parser.AgentCodex {
+		sidecarMtime = parser.CodexEffectiveMtime(path, mtime)
+	}
+	capture, fresh := e.captureVerifiedSource(path, verifiedSourceSignature{
+		size:         info.Size(),
+		mtime:        mtime,
+		inode:        inode,
+		device:       device,
+		changeTime:   changeTime,
+		sidecarMtime: sidecarMtime,
+	})
+	if sidecarMtime > mtime {
+		mtime = sidecarMtime
+	}
+	return capture, mtime, fresh, true
+}
+
+func (e *Engine) verifiedLocalStatSupported(agent parser.AgentType) bool {
+	factory, ok := e.providerFactories[agent]
+	return ok && factory != nil &&
+		factory.Capabilities().Source.VerifiedLocalStat ==
+			parser.CapabilitySupported
+}
+
+func (e *Engine) markVerifiedSourceSeen(path string) {
+	if path == "" {
+		return
+	}
+	path = filepath.Clean(path)
+	e.verifiedSourceMu.Lock()
+	defer e.verifiedSourceMu.Unlock()
+	if e.verifiedSourceActivePass == 0 {
+		return
+	}
+	record, ok := e.verifiedSources[path]
+	if !ok {
+		return
+	}
+	record.lastSeenPass = e.verifiedSourceActivePass
+	e.verifiedSources[path] = record
+}
+
+// markVerifiedDiscoveredSources preserves trusted records for gateable sources
+// present in the full pre-filter discovery set, including files omitted later
+// by a quick-sync cutoff.
+func (e *Engine) markVerifiedDiscoveredSources(files []parser.DiscoveredFile) {
+	if e.pathRewriter != nil {
+		return
+	}
+	for _, file := range files {
+		if e.verifiedLocalStatSupported(file.Agent) {
+			e.markVerifiedSourceSeen(file.Path)
+		}
+	}
+}
+
+// invalidateVerifiedDiscoveredSource makes a concrete changed-path signal win
+// over a matching stat signature. Only opted-in local providers allocate
+// invalidation records.
+func (e *Engine) invalidateVerifiedDiscoveredSource(file parser.DiscoveredFile) {
+	if e.pathRewriter != nil || !e.verifiedLocalStatSupported(file.Agent) {
+		return
+	}
+	e.invalidateVerifiedSource(filepath.Clean(file.Path))
 }

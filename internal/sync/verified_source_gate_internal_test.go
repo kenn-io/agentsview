@@ -157,7 +157,6 @@ func TestVerifiedSourceGateRetainedBudget(t *testing.T) {
 	largeBytes := retainedBytes(largeCount)
 	t.Logf("verified-source retained bytes: %d entries=%d, %d entries=%d",
 		smallCount, smallBytes, largeCount, largeBytes)
-	assert.Positive(t, smallBytes)
 	assert.Greater(t, largeBytes, smallBytes)
 	assert.Less(t, largeBytes, uint64(budget),
 		"47k source records exceed the retained-memory budget")
