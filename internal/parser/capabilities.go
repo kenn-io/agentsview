@@ -37,6 +37,7 @@ type SourceCapabilities struct {
 	PerSessionErrors     CapabilitySupport
 	ExcludedSessions     CapabilitySupport
 	ForceReplaceOnParse  CapabilitySupport
+	VerifiedLocalStat    CapabilitySupport
 }
 
 // ContentCapabilities declares optional normalized content fields a provider
