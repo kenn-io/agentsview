@@ -468,6 +468,10 @@ func loadPGServeConfig(cmd *cobra.Command) (config.Config, string, error) {
 
 func runPGServe(appCfg config.Config, basePath string) {
 	setupLogFile(appCfg.DataDir)
+	if pgServeTestStartup != nil {
+		pgServeTestStartup()
+		return
+	}
 	if appCfg.RequireAuth {
 		if err := appCfg.EnsureAuthToken(); err != nil {
 			fatal("pg serve: generating auth token: %v", err)
@@ -578,16 +582,7 @@ func runPGServe(appCfg config.Config, basePath string) {
 	// Write the kit runtime record so CLI commands can discover this
 	// daemon. ReadOnly=true marks it as pg serve (read-only)
 	// so clients can select an appropriate transport.
-	if _, sfErr := writeDaemonRuntimeWithAuth(
-		rt.Cfg.DataDir, rt.Cfg.Host, rt.Cfg.Port, version, true,
-		rt.Cfg.RequireAuth,
-		rt.Caddy.Pid(),
-	); sfErr != nil {
-		reportRuntimeRecordWrite(
-			os.Stdout, sfErr,
-			"pg serve daemon may not be discoverable by CLI", "",
-		)
-	} else {
+	if writePGServeRuntimeRecord(rt) {
 		defer RemoveDaemonRuntime(rt.Cfg.DataDir)
 	}
 
@@ -612,6 +607,21 @@ func runPGServe(appCfg config.Config, basePath string) {
 	if err := waitForServerRuntime(ctx, srv, rt); err != nil {
 		fatal("pg serve: %v", err)
 	}
+}
+
+func writePGServeRuntimeRecord(rt *serveRuntime) bool {
+	if _, sfErr := writeDaemonRuntimeWithAuth(
+		rt.Cfg.DataDir, rt.Cfg.Host, rt.Cfg.Port, version, true,
+		rt.Cfg.RequireAuth,
+		rt.Caddy.Pid(),
+	); sfErr != nil {
+		reportRuntimeRecordWrite(
+			os.Stdout, sfErr,
+			"pg serve daemon may not be discoverable by CLI", "",
+		)
+		return false
+	}
+	return true
 }
 
 func resolvePushProjects(
