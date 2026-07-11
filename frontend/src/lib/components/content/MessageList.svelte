@@ -21,7 +21,10 @@
   import {
     hasVisibleSegments,
   } from "../../utils/content-parser.js";
-  import { isSystemMessage } from "../../utils/messages.js";
+  import {
+    isSystemMessage,
+    renderedContentLength,
+  } from "../../utils/messages.js";
   import { resolveMessageLayout } from "../../utils/message-layout.js";
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
   import { sessionActivity } from "../../stores/sessionActivity.svelte.js";
@@ -193,7 +196,7 @@
       if (item.kind === "message") {
         latestCursor = maxCursor(latestCursor, {
           ordinal: item.message.ordinal,
-          contentLength: item.message.content_length,
+          contentLength: renderedContentLength(item.message),
         });
       } else {
         latestCursor = maxCursor(
@@ -592,11 +595,11 @@
     if (!item) return "";
     if (item.kind === "tool-group") {
       return item.messages
-        .map((m) => `${m.ordinal}:${m.content_length}:${m.timestamp}`)
+        .map((m) => `${m.ordinal}:${renderedContentLength(m)}:${m.timestamp}`)
         .join("|");
     }
     const m = item.message;
-    return `${m.ordinal}:${m.content_length}:${m.timestamp}`;
+    return `${m.ordinal}:${renderedContentLength(m)}:${m.timestamp}`;
   }
 
   function parseContentLength(value: string | undefined): number | null {
@@ -736,13 +739,13 @@
     if (item.kind === "message") {
       return [{
         ordinal: item.message.ordinal,
-        contentLength: item.message.content_length,
+        contentLength: renderedContentLength(item.message),
       }];
     }
     const source = ui.sortNewestFirst ? [...item.messages].reverse() : item.messages;
     return source.map((message) => ({
       ordinal: message.ordinal,
-      contentLength: message.content_length,
+      contentLength: renderedContentLength(message),
     }));
   }
 </script>
@@ -784,7 +787,7 @@
             use:observeMessage={item.kind === "message"
               ? {
                 ordinal: item.message.ordinal,
-                contentLength: item.message.content_length,
+                contentLength: renderedContentLength(item.message),
               }
               : undefined}
             onclick={() => {

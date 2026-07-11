@@ -63,21 +63,35 @@ describe("ToolCallGroup read progress", () => {
       writable: true,
       value: ObserverMock,
     });
-    const seen: number[] = [];
+    const seen: Array<[number, number]> = [];
     component = mount(ToolCallGroup, {
       target: document.body,
       props: {
-        messages: [makeToolMessage(4), makeToolMessage(5)],
+        messages: [makeToolMessage(4), {
+          ...makeToolMessage(5),
+          content_length: 4,
+          tool_calls: [{
+            tool_name: "Bash",
+            result_content_length: 3,
+            result_events: [{
+              source: "tool",
+              status: "completed",
+              content: "event",
+              content_length: 5,
+              event_index: 0,
+            }],
+          }],
+        }],
         timestamp: new Date().toISOString(),
         visibleSessionId: "s1",
-        onMessageVisible: (_sessionId: string, ordinal: number) => seen.push(ordinal),
+        onMessageVisible: (_sessionId: string, ordinal: number, contentLength: number) => seen.push([ordinal, contentLength]),
       },
     });
     await tick();
 
     callbacks[1]!([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
 
-    expect(seen).toEqual([5]);
+    expect(seen).toEqual([[5, 12]]);
   });
 
   it("reports tool messages without IntersectionObserver", async () => {

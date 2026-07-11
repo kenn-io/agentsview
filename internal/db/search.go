@@ -190,7 +190,14 @@ func latestDisplayOrdinalSubquery(
 func latestDisplayContentLengthSubquery(
 	sessionAlias, messageAlias, predicate string,
 ) string {
-	return `(SELECT ` + messageAlias + `.content_length FROM messages ` +
+	return `(SELECT COALESCE(` + messageAlias + `.content_length, 0) +
+		COALESCE((SELECT SUM(tc.result_content_length) FROM tool_calls tc` +
+		` WHERE tc.session_id = ` + messageAlias + `.session_id` +
+		` AND tc.message_id = ` + messageAlias + `.id), 0) +
+		COALESCE((SELECT SUM(tre.content_length) FROM tool_result_events tre` +
+		` WHERE tre.session_id = ` + messageAlias + `.session_id` +
+		` AND tre.tool_call_message_ordinal = ` + messageAlias + `.ordinal), 0)` +
+		` FROM messages ` +
 		messageAlias + ` WHERE ` + messageAlias + `.session_id = ` +
 		sessionAlias + `.id AND ` + predicate +
 		` ORDER BY ` + messageAlias + `.ordinal DESC LIMIT 1)`

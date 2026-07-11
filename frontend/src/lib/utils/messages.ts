@@ -72,6 +72,18 @@ export function isCompactBoundary(m: Message): boolean {
   return Boolean(m.is_compact_boundary);
 }
 
+export function renderedContentLength(message: Message): number {
+  return message.content_length + (message.tool_calls ?? []).reduce(
+    (total, toolCall) => total +
+      (toolCall.result_content_length ?? 0) +
+      (toolCall.result_events ?? []).reduce(
+        (eventTotal, event) => eventTotal + event.content_length,
+        0,
+      ),
+    0,
+  );
+}
+
 export interface MessagePreview {
   /** Display text, with Claude Code shell-shortcut wrappers
    *  replaced: `<bash-input>cmd</bash-input>` becomes `!cmd`,

@@ -2061,11 +2061,13 @@ func seedDuckDBSyncFixture(t *testing.T, local *db.DB) syncFixture {
 				syncMessage(alphaID, 0, "user", "alpha first", "2026-01-10T00:00:00.000Z"),
 				syncMessage(alphaID, 1, "assistant", alphaSecret, "2026-01-10T00:01:00.000Z",
 					db.ToolCall{
-						ToolName:  "search",
-						Category:  "search",
-						SkillName: "duck-search",
-						ToolUseID: "tool-alpha",
-						InputJSON: `{"query":"duck"}`,
+						ToolName:            "search",
+						Category:            "search",
+						SkillName:           "duck-search",
+						ToolUseID:           "tool-alpha",
+						InputJSON:           `{"query":"duck"}`,
+						ResultContent:       "legacy",
+						ResultContentLength: len("legacy"),
 						ResultEvents: []db.ToolResultEvent{{
 							Source:        "tool",
 							Status:        "complete",

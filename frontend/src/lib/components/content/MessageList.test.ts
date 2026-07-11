@@ -286,6 +286,52 @@ describe("MessageList read progress", () => {
     expect(readProgress.hasUnread("s1", 1, 12)).toBe(true);
   });
 
+  it("tracks same-ordinal tool result growth with the rendered cursor", async () => {
+    messages.messages = [
+      makeMessage(0),
+      {
+        ...makeMessage(1),
+        role: "assistant",
+        content: "tool",
+        content_length: 4,
+        has_tool_use: true,
+        tool_calls: [{
+          tool_name: "Bash",
+          result_content: "old",
+          result_content_length: 3,
+          result_events: [{
+            source: "tool",
+            status: "completed",
+            content: "event",
+            content_length: 5,
+            event_index: 0,
+          }],
+        }],
+      },
+    ];
+    messages.messageCount = 2;
+    readProgress.clear("s1");
+    readProgress.baseline("s1", 1, 11);
+    virtualizerMock.getVirtualItems.mockReturnValue([0, 1].map((index) => ({
+      index,
+      key: `row-${index}`,
+      start: index * 100,
+      end: (index + 1) * 100,
+    })));
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    expect(readProgress.hasUnread("s1", 1, 12)).toBe(true);
+    document.querySelector<HTMLElement>(".message-list-scroll")!.dispatchEvent(new Event("scroll"));
+    await vi.waitFor(() => {
+      expect(readProgress.get("s1")).toEqual({
+        seenOrdinal: 1,
+        seenContentLength: 12,
+      });
+    });
+  });
+
   it("places one divider at the next ordinal and clears it after it is visible", async () => {
     component = mount(MessageList, { target: document.body });
     await tick();

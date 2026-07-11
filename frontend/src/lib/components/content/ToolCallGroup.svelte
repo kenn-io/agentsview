@@ -15,6 +15,7 @@
   import ParallelGroup from "./ParallelGroup.svelte";
   import { CopyButton } from "@kenn-io/kit-ui";
   import { displayToolName } from "../../utils/toolDisplay.js";
+  import { renderedContentLength } from "../../utils/messages.js";
   import { SettingsIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
 
@@ -200,12 +201,12 @@
       {@const turn = turnByMessage.get(message.id)}
       <div
         data-message-ordinal={message.ordinal}
-        data-message-content-length={message.content_length}
+        data-message-content-length={renderedContentLength(message)}
         use:observeMessage={visibleSessionId
           ? {
             sessionId: visibleSessionId,
             ordinal: message.ordinal,
-            contentLength: message.content_length,
+            contentLength: renderedContentLength(message),
           }
           : undefined}
       >
