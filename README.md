@@ -357,7 +357,7 @@ thread JSON files.
 | Zed                   | `~/Library/Application Support/Zed/` (macOS)                                                                                                                            |
 | Zencoder              | `~/.zencoder/sessions/`                                                                                                                                                 |
 
-Grok support is currently summary-only. AgentsView reads the summary,
+Grok support is summary-only: AgentsView reads the summary,
 searchable first prompt, timestamps, project label, and message count from
 `summary.json`, plus total output tokens and peak context tokens from
 `signals.json` when present. It does not decode the full transcript from
