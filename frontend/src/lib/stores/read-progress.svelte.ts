@@ -5,10 +5,18 @@ export interface ReadProgressMarker {
 
 interface StoredReadProgress {
   version: 3;
+  /** Session IDs ordered from least to most recently visited. */
+  recency: string[];
   sessions: Record<string, ReadProgressMarker>;
 }
 
 const STORAGE_KEY = "agentsview-read-progress";
+const DEFAULT_CAPACITY = 1_000;
+
+interface ReadProgressSnapshot {
+  sessions: Record<string, ReadProgressMarker>;
+  recency: string[];
+}
 
 type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
@@ -41,45 +49,85 @@ function isMarker(value: unknown): value is ReadProgressMarker {
     isContentLength((value as Record<string, unknown>).seenContentLength);
 }
 
-function readStoredMarkers(): Record<string, ReadProgressMarker> {
+function snapshot(
+  sessions: Record<string, ReadProgressMarker>,
+  recency: unknown,
+): ReadProgressSnapshot {
+  const ordered: string[] = [];
+  const seen = new Set<string>();
+  if (Array.isArray(recency)) {
+    for (const id of recency) {
+      if (typeof id !== "string" || seen.has(id) || !sessions[id]) continue;
+      seen.add(id);
+      ordered.push(id);
+    }
+  }
+  for (const id of Object.keys(sessions)) {
+    if (seen.has(id)) continue;
+    ordered.push(id);
+  }
+  return { sessions, recency: ordered };
+}
+
+function readStoredMarkers(): ReadProgressSnapshot {
   try {
     const raw = storage()?.getItem(STORAGE_KEY);
-    if (!raw) return {};
+    if (!raw) return snapshot({}, []);
     const stored = JSON.parse(raw) as {
       version?: unknown;
       sessions?: unknown;
+      recency?: unknown;
     };
     if (!stored.sessions || typeof stored.sessions !== "object" ||
-      Array.isArray(stored.sessions)) return {};
+      Array.isArray(stored.sessions)) return snapshot({}, []);
     const entries = Object.entries(stored.sessions);
     if (stored.version === 3) {
-      return Object.fromEntries(entries.filter(([, marker]) => isMarker(marker)));
+      if (!Array.isArray(stored.recency)) return snapshot({}, []);
+      return snapshot(
+        Object.fromEntries(entries.filter(([, marker]) => isMarker(marker))),
+        stored.recency,
+      );
     }
     if (stored.version === 2) {
-      return Object.fromEntries(entries.flatMap(([id, value]) =>
+      const sessions = Object.fromEntries(entries.flatMap(([id, value]) =>
         isMarker(value)
           ? [[id, { seenOrdinal: value.seenOrdinal }]]
-          : [],
+          : []
       ));
+      return snapshot(sessions, Object.keys(sessions));
     }
     if (stored.version === 1) {
-      return Object.fromEntries(entries.flatMap(([id, value]) => {
+      const sessions = Object.fromEntries(entries.flatMap(([id, value]) => {
         const ordinal = (value as Record<string, unknown> | null)?.ordinal;
         return Number.isInteger(ordinal) && (ordinal as number) >= -1
           ? [[id, { seenOrdinal: ordinal === -1 ? null : ordinal as number }]]
           : [];
       }));
+      return snapshot(sessions, Object.keys(sessions));
     }
-    return {};
+    return snapshot({}, []);
   } catch {
-    return {};
+    return snapshot({}, []);
   }
 }
 
 export class ReadProgressStore {
-  private markers: Record<string, ReadProgressMarker> = $state(
-    readStoredMarkers(),
-  );
+  private markers: Record<string, ReadProgressMarker> = $state({});
+  private recency: string[] = [];
+
+  constructor(private readonly capacity = DEFAULT_CAPACITY) {
+    if (!Number.isInteger(capacity) || capacity < 1) {
+      throw new Error(
+        `Read progress capacity must be a positive integer, got ${capacity}`,
+      );
+    }
+    const stored = readStoredMarkers();
+    this.recency = stored.recency.slice(-capacity);
+    this.markers = Object.fromEntries(
+      this.recency.map((id) => [id, stored.sessions[id]!]),
+    );
+    if (this.recency.length < stored.recency.length) this.persist();
+  }
 
   get(sessionId: string): ReadProgressMarker | null {
     return this.markers[sessionId] ?? null;
@@ -98,6 +146,8 @@ export class ReadProgressStore {
       this.shouldEnrich(marker, latestDisplayOrdinal, latestDisplayContentLength)
     ) {
       this.set(sessionId, latestDisplayOrdinal, latestDisplayContentLength);
+    } else {
+      this.touch(sessionId);
     }
   }
 
@@ -132,6 +182,7 @@ export class ReadProgressStore {
     if (!this.markers[sessionId]) return;
     const { [sessionId]: _, ...remaining } = this.markers;
     this.markers = remaining;
+    this.recency = this.recency.filter((id) => id !== sessionId);
     this.persist();
   }
 
@@ -167,13 +218,35 @@ export class ReadProgressStore {
     if (seenContentLength !== undefined && seenContentLength !== null) {
       marker.seenContentLength = seenContentLength;
     }
-    this.markers = { ...this.markers, [sessionId]: marker };
+    this.storeMarker(sessionId, marker);
+  }
+
+  private touch(sessionId: string) {
+    const marker = this.markers[sessionId];
+    if (!marker || this.recency.at(-1) === sessionId) return;
+    this.storeMarker(sessionId, marker);
+  }
+
+  private storeMarker(sessionId: string, marker: ReadProgressMarker) {
+    const recency = this.recency.filter((id) => id !== sessionId);
+    recency.push(sessionId);
+    const evicted = recency.length > this.capacity
+      ? recency.splice(0, recency.length - this.capacity)
+      : [];
+    const markers = { ...this.markers, [sessionId]: marker };
+    for (const id of evicted) delete markers[id];
+    this.recency = recency;
+    this.markers = markers;
     this.persist();
   }
 
   private persist() {
     try {
-      const value: StoredReadProgress = { version: 3, sessions: this.markers };
+      const value: StoredReadProgress = {
+        version: 3,
+        recency: this.recency,
+        sessions: this.markers,
+      };
       storage()?.setItem(STORAGE_KEY, JSON.stringify(value));
     } catch {
       // Storage is optional, keep the in-memory marker usable.
