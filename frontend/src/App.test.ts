@@ -68,6 +68,7 @@ afterEach(() => {
   sessions.filters.date = "";
   sessions.filters.dateFrom = "";
   sessions.filters.dateTo = "";
+  sessions.filters.project = "";
   analytics.applyRollingWindow(365);
   usage.isPinned = false;
   usage.windowDays = 30;
@@ -291,6 +292,76 @@ describe("findUserPromptOrdinal", () => {
 });
 
 describe("App analytics date navigation", () => {
+  it("applies an enabled shared range to the first Sessions load", async () => {
+    const sessionLoadFilters: Array<{
+      project: string;
+      dateFrom: string;
+      dateTo: string;
+    }> = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(settings, "load").mockResolvedValue();
+    vi.spyOn(starred, "load").mockResolvedValue();
+    vi.spyOn(sync, "loadStatus").mockResolvedValue();
+    vi.spyOn(sync, "loadStats").mockResolvedValue();
+    vi.spyOn(sync, "loadVersion").mockResolvedValue();
+    vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
+    vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(sessions, "load").mockImplementation(() => {
+      sessionLoadFilters.push({
+        project: sessions.filters.project,
+        dateFrom: sessions.filters.dateFrom,
+        dateTo: sessions.filters.dateTo,
+      });
+      return Promise.resolve();
+    });
+    vi.spyOn(sessions, "loadProjects").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
+    vi.spyOn(analytics, "fetchAll").mockResolvedValue();
+    vi.spyOn(analytics, "fetchSignalsForInsights").mockResolvedValue();
+    vi.spyOn(insights, "load").mockResolvedValue();
+
+    window.history.replaceState(null, "", "/insights");
+    router.route = "insights";
+    router.params = {};
+    router.sessionId = null;
+    analyticsPageDates.retain(
+      "sessions",
+      {
+        from: "2026-01-01",
+        to: "2026-01-31",
+        mode: "fixed",
+      },
+      true,
+    );
+    yokedDates.setEnabled(true);
+    yokedDates.updateFromPanel({
+      from: "2026-05-01",
+      to: "2026-05-31",
+      mode: "fixed",
+    });
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    sessionLoadFilters.length = 0;
+
+    router.navigate("sessions", { project: "project-alpha" });
+    await flushEffects();
+
+    expect(sessionLoadFilters[0]).toEqual({
+      project: "project-alpha",
+      dateFrom: "2026-05-01",
+      dateTo: "2026-05-31",
+    });
+  });
+
   it("restores a retained rolling Sessions range without pinning it", async () => {
     const sessionLoadDates: Array<{
       dateFrom: string;

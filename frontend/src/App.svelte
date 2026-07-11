@@ -77,6 +77,7 @@
   import {
     yokedDates,
     panelDateToSessionFilterParams,
+    rangeToPanelDate,
   } from "./lib/stores/yokedDates.svelte.js";
   import { m } from "./lib/i18n/index.js";
   import { setAuthToken, getAuthToken, setServerUrl, getBase } from "./lib/api/runtime.js";
@@ -298,22 +299,30 @@
     }
   }
 
-  function retainedSessionDateParams(): Record<string, string> | null {
-    if (hasSessionDateIntent(router.params)) return null;
+  function sessionEntryDateParams(
+    routeParams: Record<string, string>,
+  ): Record<string, string> | null {
+    if (hasSessionDateIntent(routeParams)) return null;
     const retained = analyticsPageDates.restoreWithIntent("sessions");
-    if (!retained.explicitDateIntent) return null;
-    const dateParams = panelDateToSessionFilterParams(retained.state);
+    const shared = yokedDates.seedForPanel();
+    const state = shared
+      ? rangeToPanelDate(shared)
+      : retained.explicitDateIntent
+        ? retained.state
+        : null;
+    if (!state) return null;
+    const dateParams = panelDateToSessionFilterParams(state);
     if (Object.keys(dateParams).length === 0) return null;
     sessions.filters.date = dateParams["date"] ?? "";
     sessions.filters.dateFrom = dateParams["date_from"] ?? "";
     sessions.filters.dateTo = dateParams["date_to"] ?? "";
     const params = filtersToParams(sessions.filters);
     if (
-      retained.state.mode === "rolling" &&
-      retained.state.windowDays
+      state.mode === "rolling" &&
+      state.windowDays
     ) {
       params[SESSION_ANALYTICS_WINDOW_PARAM] = String(
-        retained.state.windowDays,
+        state.windowDays,
       );
     }
     return params;
@@ -327,7 +336,7 @@
   // actually contains filter keys — a bare /sessions preserves the
   // current store state (restored from localStorage).
   // Only track route and params — NOT sessionId.
-  $effect(() => {
+  $effect.pre(() => {
     const route = router.route;
     const params = router.params;
     const enteringSessions =
@@ -337,9 +346,10 @@
       const sid = router.sessionId;
       if (!sid && route === "sessions" && hasFilterParams(params)) {
         sessions.initFromParams(params);
-      } else if (!sid && enteringSessions) {
-        const retainedParams = retainedSessionDateParams();
-        if (retainedParams) router.replaceParams(retainedParams);
+      }
+      if (!sid && enteringSessions) {
+        const entryParams = sessionEntryDateParams(params);
+        if (entryParams) router.replaceParams(entryParams);
       }
       if (route === "sessions") {
         sessions.load();
