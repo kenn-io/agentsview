@@ -334,6 +334,11 @@ func stopWritableDaemonsForUpdate(
 	cfg config.Config,
 ) (updateDaemonStopResult, error) {
 	records := liveDaemonRecords(cfg.DataDir)
+	if len(records) == 0 {
+		if rt := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil {
+			records = []daemon.RuntimeRecord{rt.Record}
+		}
+	}
 	var result updateDaemonStopResult
 	for _, rec := range records {
 		rt := daemonRuntimeFromRecord(rec)

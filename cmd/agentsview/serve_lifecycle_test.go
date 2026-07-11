@@ -363,6 +363,30 @@ func TestStopWritableDaemonsForUpdateStopsAllAndRestartsOne(t *testing.T) {
 	assert.ElementsMatch(t, []int{os.Getpid(), secondPID}, stopped)
 }
 
+func TestStopWritableDaemonsForUpdateUsesStartupStateFallback(t *testing.T) {
+	dir := runtimeTestDir(t)
+	host, port := testPingServer(t)
+	createTime, ok := processCreateTimeMillis(os.Getpid())
+	require.True(t, ok)
+	writeStartupFallbackFixture(t, dir, host, port, os.Getpid(), strconv.FormatInt(createTime, 10))
+
+	oldStop := stopDaemonRuntimeForUpgrade
+	var stopped *DaemonRuntime
+	stopDaemonRuntimeForUpgrade = func(_ config.Config, rt *DaemonRuntime) error {
+		stopped = rt
+		return nil
+	}
+	t.Cleanup(func() { stopDaemonRuntimeForUpgrade = oldStop })
+
+	result, err := stopWritableDaemonsForUpdate(config.Config{DataDir: dir})
+	require.NoError(t, err)
+	assert.True(t, result.Stopped)
+	assert.Equal(t, host, result.Host)
+	assert.Equal(t, port, result.Port)
+	require.NotNil(t, stopped)
+	assert.Equal(t, os.Getpid(), stopped.Record.PID)
+}
+
 func TestStopDaemonProcessTerminatesAndCleansRecord(t *testing.T) {
 	requirePOSIXSignals(t, "graceful SIGTERM termination is POSIX-specific")
 	dir := runtimeTestDir(t)
