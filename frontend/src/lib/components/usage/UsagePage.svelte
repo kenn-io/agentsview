@@ -220,14 +220,6 @@
       let changed = false;
       let sessionChanged = false;
 
-      // Sync pin state from URL: dated URL pins, undated URL unpins.
-      // Runs before the !hasFilterKeys early return so a fully bare URL
-      // (no exclude_* either) still flips the pin off.
-      if (usage.isPinned !== hasDateParam) {
-        usage.isPinned = hasDateParam;
-        changed = true;
-      }
-
       if (!hasDateParam && parsedWindowDays === null) {
         const seed = yokedDates.seedForPanel();
         const state = seed
@@ -238,6 +230,13 @@
           : null;
         if (state) {
           changed = applyUsagePanelDate(state) || changed;
+        } else if (usage.isPinned) {
+          changed = applyUsagePanelDate({
+            from: usage.from,
+            to: usage.to,
+            mode: "rolling",
+            windowDays: usage.windowDays,
+          }) || changed;
         }
       }
 

@@ -177,6 +177,30 @@ test.describe("Usage page", () => {
     await expect(page).toHaveURL(/exclude_project=/);
   });
 
+  test("returning bare materializes rolling bounds before requesting", async ({
+    page,
+  }) => {
+    await page.clock.setFixedTime(new Date("2026-07-10T12:00:00"));
+    await page.goto("/usage?from=2026-01-01&to=2026-01-07");
+    await expect(page.locator(".usage-page")).toBeVisible();
+    await expect(
+      page.locator(".kit-date-range-picker__trigger"),
+    ).toContainText("2026-01-01");
+
+    await clickNavTab(page, "Sessions");
+    const requestPromise = page.waitForRequest((request) =>
+      new URL(request.url()).pathname.endsWith("/api/v1/usage/summary")
+    );
+    await clickNavTab(page, "Usage");
+    const requestUrl = new URL((await requestPromise).url());
+
+    expect(requestUrl.searchParams.get("from")).toBe("2026-06-11");
+    expect(requestUrl.searchParams.get("to")).toBe("2026-07-10");
+    await expect(
+      page.locator(".kit-date-range-picker__trigger"),
+    ).toContainText("Last 30 days");
+  });
+
   test("adopts a retained Insights range after linking is enabled", async ({
     page,
   }) => {
