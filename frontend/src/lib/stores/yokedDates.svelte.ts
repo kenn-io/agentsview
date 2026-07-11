@@ -337,6 +337,7 @@ export function rangeToInsightParams(
 export class YokedDatesStore {
   #enabled: boolean = $state(false);
   #range: YokedDateRange | null = $state(null);
+  #disabledCandidate: YokedDateRange | null = null;
 
   constructor(
     private readonly storage: Storage | null = getLocalStorage(),
@@ -356,6 +357,7 @@ export class YokedDatesStore {
   private resetDisabled(): void {
     this.#enabled = false;
     this.#range = null;
+    this.#disabledCandidate = null;
   }
 
   hydrate(): void {
@@ -377,21 +379,33 @@ export class YokedDatesStore {
   }
 
   setEnabled(enabled: boolean): void {
-    this.#enabled = enabled;
-    if (!enabled) this.#range = null;
+    if (!enabled) {
+      this.resetDisabled();
+      this.persist();
+      return;
+    }
+    this.#enabled = true;
+    if (this.#disabledCandidate) {
+      this.#range = copyRange(this.#disabledCandidate);
+      this.#disabledCandidate = null;
+    }
     this.persist();
   }
 
   updateFromPanel(current: PanelDateState): void {
-    if (!this.#enabled) return;
     const range = panelStateToRange(current, this.now());
     if (!range) return;
+    if (!this.#enabled) {
+      this.#disabledCandidate = range;
+      return;
+    }
     this.#range = range;
     this.persist();
   }
 
   clear(): void {
     this.#range = null;
+    this.#disabledCandidate = null;
     this.persist();
   }
 

@@ -152,7 +152,7 @@ describe("YokedDatesStore", () => {
     expect(store.range).toBeNull();
   });
 
-  it("ignores panel updates while disabled", () => {
+  it("publishes the latest disabled panel selection when enabled", () => {
     const storage = fakeStorage();
     const store = new YokedDatesStore(storage, () => 123);
 
@@ -165,6 +165,25 @@ describe("YokedDatesStore", () => {
     expect(store.range).toBeNull();
     expect(store.seedForPanel()).toBeNull();
     expect(storage.getItem("yoked-dates")).toBeNull();
+
+    store.setEnabled(true);
+
+    expect(store.seedForPanel()).toEqual({
+      from: "2026-06-01",
+      to: "2026-06-07",
+      mode: "fixed",
+      updatedAt: 123,
+    });
+    expect(JSON.parse(storage.getItem("yoked-dates")!)).toEqual({
+      version: 2,
+      enabled: true,
+      range: {
+        from: "2026-06-01",
+        to: "2026-06-07",
+        mode: "fixed",
+        updatedAt: 123,
+      },
+    });
   });
 
   it("publishes and seeds rolling ranges while enabled", () => {

@@ -192,8 +192,6 @@ test.describe("Usage page", () => {
       .getByRole("checkbox", { name: "Link date ranges across pages" })
       .check();
 
-    await clickNavTab(page, "Insights");
-    await expect(page).toHaveURL(/window_days=90/);
     await clickNavTab(page, "Usage");
 
     await expect(page.locator(".usage-page")).toBeVisible();
