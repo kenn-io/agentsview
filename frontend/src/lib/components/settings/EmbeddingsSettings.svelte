@@ -441,7 +441,7 @@
   .generation-row {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-4);
     font-size: 12px;
   }
 
