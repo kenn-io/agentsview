@@ -1104,6 +1104,27 @@ func (db *DB) GetSessionFull(
 	return &s, nil
 }
 
+// GetSessionName returns the raw agent-provided session name without loading
+// the rest of the session row. A NULL name is reported as an empty string for
+// an existing row; found distinguishes that case from a missing session.
+func (db *DB) GetSessionName(
+	ctx context.Context, id string,
+) (name string, found bool, err error) {
+	var stored sql.NullString
+	err = db.getReader().QueryRowContext(
+		ctx,
+		"SELECT session_name FROM sessions WHERE id = ?",
+		id,
+	).Scan(&stored)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("getting session name %s: %w", id, err)
+	}
+	return stored.String, true, nil
+}
+
 // IsSessionExcluded returns true if the session ID was
 // permanently deleted by the user.
 func (db *DB) IsSessionExcluded(id string) bool {

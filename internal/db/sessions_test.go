@@ -549,6 +549,39 @@ func TestGetSessionFullPopulatesSessionName(t *testing.T) {
 	assert.Equal(t, "Agent Title", *s.SessionName, "SessionName unchanged after rename")
 }
 
+func TestGetSessionName(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	require.NoError(t, d.UpsertSession(Session{
+		ID: "null-name", Project: "p", Machine: "local", Agent: "codex",
+	}), "upsert session with null name")
+	require.NoError(t, d.UpsertSession(Session{
+		ID: "stored-name", Project: "p", Machine: "local", Agent: "codex",
+		SessionName: Ptr("Agent Title"),
+	}), "upsert session with stored name")
+
+	tests := []struct {
+		name      string
+		id        string
+		wantName  string
+		wantFound bool
+	}{
+		{name: "missing", id: "missing", wantFound: false},
+		{name: "null", id: "null-name", wantFound: true},
+		{name: "stored", id: "stored-name", wantName: "Agent Title", wantFound: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			name, found, err := d.GetSessionName(ctx, tt.id)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantName, name)
+			assert.Equal(t, tt.wantFound, found)
+		})
+	}
+}
+
 func TestRenameSessionSetsAndClears(t *testing.T) {
 	d := testDB(t)
 	requireNoError(t, d.UpsertSession(Session{

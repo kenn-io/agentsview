@@ -5593,15 +5593,13 @@ func (e *Engine) codexIndexSessionNameChanged(path string) bool {
 		return false
 	}
 	currentName := parser.LookupCodexThreadName(path, uuid)
-	stored, err := e.db.GetSessionFull(
+	storedName, found, err := e.db.GetSessionName(
 		context.Background(), e.idPrefix+"codex:"+uuid,
 	)
-	if err != nil || stored == nil {
+	if err != nil || !found {
 		return true
 	}
-	return e.codexStoredNameDiffersBySession(
-		stored, currentName,
-	)
+	return codexSessionNameDiffers(storedName, currentName)
 }
 
 // codexCachedIndexSessionNameChanged limits title-based cache invalidation to
@@ -5746,21 +5744,17 @@ func (e *Engine) codexStoredNameDiffersBySessionID(
 	sessionID, indexTitle string,
 	missingDiffers bool,
 ) bool {
-	stored, err := e.db.GetSessionFull(context.Background(), sessionID)
-	if err != nil || stored == nil {
+	storedName, found, err := e.db.GetSessionName(
+		context.Background(), sessionID,
+	)
+	if err != nil || !found {
 		return missingDiffers
 	}
-	return e.codexStoredNameDiffersBySession(stored, indexTitle)
+	return codexSessionNameDiffers(storedName, indexTitle)
 }
 
-func (e *Engine) codexStoredNameDiffersBySession(
-	stored *db.Session, indexTitle string,
-) bool {
-	storedName := ""
-	if stored.SessionName != nil {
-		storedName = strings.TrimSpace(*stored.SessionName)
-	}
-	return strings.TrimSpace(indexTitle) != storedName
+func codexSessionNameDiffers(storedName, indexTitle string) bool {
+	return strings.TrimSpace(indexTitle) != strings.TrimSpace(storedName)
 }
 
 func pickPreferredCodexDiscoveredFile(

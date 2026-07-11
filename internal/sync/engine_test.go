@@ -5303,6 +5303,55 @@ func TestCodexIndexSessionNameChangedDetectsTitleRenameBelowStoredMtime(t *testi
 		"title-only rename at or below stored watermark must report a change")
 }
 
+func TestCodexStoredNameDiffersPreservesMissingSemantics(t *testing.T) {
+	database := openTestDB(t)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "codex:null-name", Project: "p", Machine: "host", Agent: "codex",
+	}))
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "codex:stored-name", Project: "p", Machine: "host", Agent: "codex",
+		SessionName: strPtr("Stored Title"),
+	}))
+	e := &Engine{db: database}
+
+	tests := []struct {
+		name           string
+		sessionID      string
+		indexTitle     string
+		missingDiffers bool
+		want           bool
+	}{
+		{
+			name: "direct refresh treats missing as changed", sessionID: "missing",
+			missingDiffers: true, want: true,
+		},
+		{
+			name: "index-only lookup ignores missing", sessionID: "missing",
+			indexTitle: "New Title", want: false,
+		},
+		{
+			name: "null name equals blank index title", sessionID: "codex:null-name",
+			indexTitle: "  ", want: false,
+		},
+		{
+			name: "stored name trims whitespace", sessionID: "codex:stored-name",
+			indexTitle: " Stored Title ", want: false,
+		},
+		{
+			name: "stored rename differs", sessionID: "codex:stored-name",
+			indexTitle: "Renamed Title", want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, e.codexStoredNameDiffersBySessionID(
+				tt.sessionID, tt.indexTitle, tt.missingDiffers,
+			))
+		})
+	}
+}
+
 func TestEngine_ClassifyPathsProviderRemoveSkipsMissingGeminiSource(
 	t *testing.T,
 ) {
