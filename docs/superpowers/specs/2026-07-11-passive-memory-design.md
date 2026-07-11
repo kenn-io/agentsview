@@ -58,6 +58,12 @@ content verification whose result the archive absorbed. The signature includes
 size, mtime, inode/device where available, a platform change-time value, and the
 Codex effective sidecar mtime when applicable.
 
+Eligibility is declared as a provider source capability and defaults to
+unsupported. Only the Claude and Codex providers enable it in this change. The
+engine consults the capability rather than maintaining an agent-type allowlist,
+so future providers cannot accidentally receive the extra stat scheduling input
+without explicitly adopting its correctness contract.
+
 The first pass after process start still performs the existing content hash. A
 later full or scheduled pass may skip before hashing only when the signature
 matches a trusted entry. Changed-path classification invalidates the affected
@@ -119,10 +125,11 @@ repaired.
 
 ## Codex title lookup
 
-Replace `GetSessionFull` in the Codex index-title comparison with a narrow query
-that returns only `session_name`. Preserve ID prefixing, path rewriting, missing
-rows, explicit refreshes, and title-only index changes. This removes large row
-and schema allocations without changing title-refresh decisions.
+Replace `GetSessionFull` in both Codex index-title comparison paths with a
+narrow query that returns only `session_name`. Preserve their distinct
+missing-row semantics along with ID prefixing, path rewriting, explicit
+refreshes, and title-only index changes. This removes large row and schema
+allocations without changing title-refresh decisions.
 
 ## Hash buffers
 
