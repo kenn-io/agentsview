@@ -3,22 +3,11 @@ export interface ReadProgressMarker {
   seenContentLength?: number | null;
 }
 
-interface StoredReadProgress {
-  version: 3;
-  /** Session IDs ordered from least to most recently visited. */
-  recency: string[];
-  sessions: Record<string, ReadProgressMarker>;
-}
-
-const STORAGE_KEY = "agentsview-read-progress";
+const INDEX_KEY = "agentsview-read-progress:index";
+const MARKER_KEY_PREFIX = "agentsview-read-progress:session:";
 const DEFAULT_CAPACITY = 1_000;
 
-interface ReadProgressSnapshot {
-  sessions: Record<string, ReadProgressMarker>;
-  recency: string[];
-}
-
-type StorageLike = Pick<Storage, "getItem" | "setItem">;
+type StorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
 function storage(): StorageLike | null {
   try {
@@ -26,7 +15,8 @@ function storage(): StorageLike | null {
       typeof localStorage === "undefined" ||
       localStorage == null ||
       typeof localStorage.getItem !== "function" ||
-      typeof localStorage.setItem !== "function"
+      typeof localStorage.setItem !== "function" ||
+      typeof localStorage.removeItem !== "function"
     ) return null;
     return localStorage;
   } catch {
@@ -49,65 +39,59 @@ function isMarker(value: unknown): value is ReadProgressMarker {
     isContentLength((value as Record<string, unknown>).seenContentLength);
 }
 
-function snapshot(
-  sessions: Record<string, ReadProgressMarker>,
-  recency: unknown,
-): ReadProgressSnapshot {
-  const ordered: string[] = [];
-  const seen = new Set<string>();
-  if (Array.isArray(recency)) {
-    for (const id of recency) {
-      if (typeof id !== "string" || seen.has(id) || !sessions[id]) continue;
-      seen.add(id);
-      ordered.push(id);
-    }
-  }
-  for (const id of Object.keys(sessions)) {
-    if (seen.has(id)) continue;
-    ordered.push(id);
-  }
-  return { sessions, recency: ordered };
+function markerKey(sessionId: string): string {
+  return `${MARKER_KEY_PREFIX}${sessionId}`;
 }
 
-function readStoredMarkers(): ReadProgressSnapshot {
+function readStoredRecency(): string[] {
   try {
-    const raw = storage()?.getItem(STORAGE_KEY);
-    if (!raw) return snapshot({}, []);
-    const stored = JSON.parse(raw) as {
-      version?: unknown;
-      sessions?: unknown;
-      recency?: unknown;
-    };
-    if (!stored.sessions || typeof stored.sessions !== "object" ||
-      Array.isArray(stored.sessions)) return snapshot({}, []);
-    const entries = Object.entries(stored.sessions);
-    if (stored.version === 3) {
-      if (!Array.isArray(stored.recency)) return snapshot({}, []);
-      return snapshot(
-        Object.fromEntries(entries.filter(([, marker]) => isMarker(marker))),
-        stored.recency,
-      );
-    }
-    if (stored.version === 2) {
-      const sessions = Object.fromEntries(entries.flatMap(([id, value]) =>
-        isMarker(value)
-          ? [[id, { seenOrdinal: value.seenOrdinal }]]
-          : []
-      ));
-      return snapshot(sessions, Object.keys(sessions));
-    }
-    if (stored.version === 1) {
-      const sessions = Object.fromEntries(entries.flatMap(([id, value]) => {
-        const ordinal = (value as Record<string, unknown> | null)?.ordinal;
-        return Number.isInteger(ordinal) && (ordinal as number) >= -1
-          ? [[id, { seenOrdinal: ordinal === -1 ? null : ordinal as number }]]
-          : [];
-      }));
-      return snapshot(sessions, Object.keys(sessions));
-    }
-    return snapshot({}, []);
+    const raw = storage()?.getItem(INDEX_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const seen = new Set<string>();
+    return [...parsed].reverse().flatMap((id) => {
+      if (typeof id !== "string" || !id || seen.has(id)) return [];
+      seen.add(id);
+      return [id];
+    }).reverse();
   } catch {
-    return snapshot({}, []);
+    return [];
+  }
+}
+
+function readStoredMarker(sessionId: string): ReadProgressMarker | null {
+  try {
+    const raw = storage()?.getItem(markerKey(sessionId));
+    if (!raw) return null;
+    const marker = JSON.parse(raw) as unknown;
+    return isMarker(marker) ? marker : null;
+  } catch {
+    return null;
+  }
+}
+
+function removeStoredMarker(sessionId: string) {
+  try {
+    storage()?.removeItem(markerKey(sessionId));
+  } catch {
+    // Storage is optional, keep the in-memory marker usable.
+  }
+}
+
+function persistRecency(recency: string[]) {
+  try {
+    storage()?.setItem(INDEX_KEY, JSON.stringify(recency));
+  } catch {
+    // Storage is optional, keep the in-memory marker usable.
+  }
+}
+
+function persistMarker(sessionId: string, marker: ReadProgressMarker) {
+  try {
+    storage()?.setItem(markerKey(sessionId), JSON.stringify(marker));
+  } catch {
+    // Storage is optional, keep the in-memory marker usable.
   }
 }
 
@@ -121,12 +105,26 @@ export class ReadProgressStore {
         `Read progress capacity must be a positive integer, got ${capacity}`,
       );
     }
-    const stored = readStoredMarkers();
-    this.recency = stored.recency.slice(-capacity);
-    this.markers = Object.fromEntries(
-      this.recency.map((id) => [id, stored.sessions[id]!]),
-    );
-    if (this.recency.length < stored.recency.length) this.persist();
+    const storedRecency = readStoredRecency();
+    const retained = storedRecency.slice(-capacity);
+    for (const id of storedRecency.slice(0, -capacity)) {
+      removeStoredMarker(id);
+    }
+    for (const id of retained) {
+      const marker = readStoredMarker(id);
+      if (marker) {
+        this.markers[id] = marker;
+        this.recency.push(id);
+      } else {
+        removeStoredMarker(id);
+      }
+    }
+    if (
+      this.recency.length !== storedRecency.length ||
+      this.recency.some((id, index) => id !== storedRecency[index])
+    ) {
+      persistRecency(this.recency);
+    }
   }
 
   get(sessionId: string): ReadProgressMarker | null {
@@ -146,9 +144,8 @@ export class ReadProgressStore {
       this.shouldEnrich(marker, latestDisplayOrdinal, latestDisplayContentLength)
     ) {
       this.set(sessionId, latestDisplayOrdinal, latestDisplayContentLength);
-    } else {
-      this.touch(sessionId);
     }
+    this.touch(sessionId);
   }
 
   reconcile(
@@ -180,10 +177,10 @@ export class ReadProgressStore {
 
   clear(sessionId: string) {
     if (!this.markers[sessionId]) return;
-    const { [sessionId]: _, ...remaining } = this.markers;
-    this.markers = remaining;
+    delete this.markers[sessionId];
     this.recency = this.recency.filter((id) => id !== sessionId);
-    this.persist();
+    removeStoredMarker(sessionId);
+    persistRecency(this.recency);
   }
 
   hasUnread(
@@ -218,39 +215,23 @@ export class ReadProgressStore {
     if (seenContentLength !== undefined && seenContentLength !== null) {
       marker.seenContentLength = seenContentLength;
     }
-    this.storeMarker(sessionId, marker);
+    this.markers[sessionId] = marker;
+    persistMarker(sessionId, marker);
   }
 
   private touch(sessionId: string) {
-    const marker = this.markers[sessionId];
-    if (!marker || this.recency.at(-1) === sessionId) return;
-    this.storeMarker(sessionId, marker);
-  }
-
-  private storeMarker(sessionId: string, marker: ReadProgressMarker) {
+    if (!this.markers[sessionId] || this.recency.at(-1) === sessionId) return;
     const recency = this.recency.filter((id) => id !== sessionId);
     recency.push(sessionId);
     const evicted = recency.length > this.capacity
       ? recency.splice(0, recency.length - this.capacity)
       : [];
-    const markers = { ...this.markers, [sessionId]: marker };
-    for (const id of evicted) delete markers[id];
-    this.recency = recency;
-    this.markers = markers;
-    this.persist();
-  }
-
-  private persist() {
-    try {
-      const value: StoredReadProgress = {
-        version: 3,
-        recency: this.recency,
-        sessions: this.markers,
-      };
-      storage()?.setItem(STORAGE_KEY, JSON.stringify(value));
-    } catch {
-      // Storage is optional, keep the in-memory marker usable.
+    for (const id of evicted) {
+      delete this.markers[id];
+      removeStoredMarker(id);
     }
+    this.recency = recency;
+    persistRecency(this.recency);
   }
 
   private isCursor(

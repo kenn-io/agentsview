@@ -99,7 +99,9 @@ test("persists read progress until later output is visible", async ({ page }) =>
   await sp.goto();
   await sp.selectFirstSession();
   await expect
-    .poll(() => page.evaluate(() => localStorage.getItem("agentsview-read-progress")))
+    .poll(() => page.evaluate(() =>
+      localStorage.getItem("agentsview-read-progress:session:read-progress")
+    ))
     .toContain('"seenOrdinal":49');
   const initialMessageRequests = messageRequests;
 
@@ -124,7 +126,9 @@ test("persists read progress until later output is visible", async ({ page }) =>
   await expect(unreadDivider).toHaveCount(0);
   await expect.poll(() => messageRequests).toBeGreaterThan(initialMessageRequests);
   await expect
-    .poll(() => page.evaluate(() => localStorage.getItem("agentsview-read-progress")))
+    .poll(() => page.evaluate(() =>
+      localStorage.getItem("agentsview-read-progress:session:read-progress")
+    ))
     .toContain('"seenOrdinal":49');
   await page.reload();
   await sp.goto();
@@ -136,7 +140,9 @@ test("persists read progress until later output is visible", async ({ page }) =>
   });
   await expect(page.getByText("Message 59")).toBeVisible();
   await expect
-    .poll(() => page.evaluate(() => localStorage.getItem("agentsview-read-progress")))
+    .poll(() => page.evaluate(() =>
+      localStorage.getItem("agentsview-read-progress:session:read-progress")
+    ))
     .toContain('"seenOrdinal":59');
   await expect(unreadIndicator).toHaveCount(0);
   await expect(unreadDivider).toHaveCount(0);
@@ -148,12 +154,14 @@ test("acknowledges a trailing system message only after the last displayable row
   session!.message_count = 3;
   session!.latest_display_ordinal = 1;
   await page.addInitScript(() => {
-    localStorage.setItem("agentsview-read-progress", JSON.stringify({
-      version: 1,
-      sessions: {
-        "read-progress-system": { ordinal: 0, messageCount: 1 },
-      },
-    }));
+    localStorage.setItem(
+      "agentsview-read-progress:index",
+      JSON.stringify(["read-progress-system"]),
+    );
+    localStorage.setItem(
+      "agentsview-read-progress:session:read-progress-system",
+      JSON.stringify({ seenOrdinal: 0 }),
+    );
   });
   await page.route(
     sessionsRoutePattern,
@@ -174,7 +182,11 @@ test("acknowledges a trailing system message only after the last displayable row
     element.dispatchEvent(new Event("scroll"));
   });
   await expect
-    .poll(() => page.evaluate(() => localStorage.getItem("agentsview-read-progress")))
+    .poll(() => page.evaluate(() =>
+      localStorage.getItem(
+        "agentsview-read-progress:session:read-progress-system",
+      )
+    ))
     .toContain('"seenOrdinal":1');
 
   await page.locator(".breadcrumb-link").click();
@@ -208,7 +220,11 @@ test("acknowledges a progressive first visit by backend total", async ({ page })
     element.dispatchEvent(new Event("scroll"));
   });
   await expect
-    .poll(() => page.evaluate(() => localStorage.getItem("agentsview-read-progress")))
+    .poll(() => page.evaluate(() =>
+      localStorage.getItem(
+        "agentsview-read-progress:session:read-progress-partial",
+      )
+    ))
     .toContain('"seenOrdinal":3004');
 
   await page.locator(".breadcrumb-link").click();
@@ -226,12 +242,14 @@ test("captures responsive unread state", async ({ page }) => {
   session!.message_count = 60;
   session!.latest_display_ordinal = 59;
   await page.addInitScript(() => {
-    localStorage.setItem("agentsview-read-progress", JSON.stringify({
-      version: 2,
-      sessions: {
-        "read-progress-proof": { seenOrdinal: 4 },
-      },
-    }));
+    localStorage.setItem(
+      "agentsview-read-progress:index",
+      JSON.stringify(["read-progress-proof"]),
+    );
+    localStorage.setItem(
+      "agentsview-read-progress:session:read-progress-proof",
+      JSON.stringify({ seenOrdinal: 4 }),
+    );
     window.IntersectionObserver = class {
       observe() {}
       disconnect() {}

@@ -103,28 +103,29 @@ describe("ReadProgressStore", () => {
     expect(store.hasUnread("oldest", 9)).toBe(true);
     expect(store.get("newest")).toEqual({ seenOrdinal: 3 });
     expect(store.get("incoming")).toEqual({ seenOrdinal: 4 });
-    expect(JSON.parse(localStorage.getItem("agentsview-read-progress")!)).toEqual({
-      version: 3,
-      recency: ["newest", "oldest", "incoming"],
-      sessions: {
-        oldest: { seenOrdinal: 1 },
-        newest: { seenOrdinal: 3 },
-        incoming: { seenOrdinal: 4 },
-      },
-    });
+    expect(localStorage.getItem("agentsview-read-progress:session:middle"))
+      .toBeNull();
+    expect(JSON.parse(
+      localStorage.getItem("agentsview-read-progress:index")!,
+    )).toEqual(["newest", "oldest", "incoming"]);
   });
 
   it("prunes oversized persisted progress when loading", () => {
-    localStorage.setItem("agentsview-read-progress", JSON.stringify({
-      version: 3,
-      recency: ["one", "two", "three", "four"],
-      sessions: {
-        one: { seenOrdinal: 1 },
-        two: { seenOrdinal: 2 },
-        three: { seenOrdinal: 3 },
-        four: { seenOrdinal: 4 },
-      },
-    }));
+    localStorage.setItem(
+      "agentsview-read-progress:index",
+      JSON.stringify(["one", "two", "three", "four"]),
+    );
+    for (const [id, seenOrdinal] of Object.entries({
+      one: 1,
+      two: 2,
+      three: 3,
+      four: 4,
+    })) {
+      localStorage.setItem(
+        `agentsview-read-progress:session:${id}`,
+        JSON.stringify({ seenOrdinal }),
+      );
+    }
 
     const store = new ReadProgressStore(2);
 
@@ -132,63 +133,31 @@ describe("ReadProgressStore", () => {
     expect(store.get("two")).toBeNull();
     expect(store.get("three")).toEqual({ seenOrdinal: 3 });
     expect(store.get("four")).toEqual({ seenOrdinal: 4 });
-    expect(JSON.parse(localStorage.getItem("agentsview-read-progress")!)).toEqual({
-      version: 3,
-      recency: ["three", "four"],
-      sessions: {
-        three: { seenOrdinal: 3 },
-        four: { seenOrdinal: 4 },
-      },
-    });
+    expect(localStorage.getItem("agentsview-read-progress:session:one"))
+      .toBeNull();
+    expect(localStorage.getItem("agentsview-read-progress:session:two"))
+      .toBeNull();
+    expect(JSON.parse(
+      localStorage.getItem("agentsview-read-progress:index")!,
+    )).toEqual(["three", "four"]);
   });
 
-  it("migrates valid version one and two cursors and validates version three", () => {
-    localStorage.setItem("agentsview-read-progress", JSON.stringify({
-      version: 1,
-      sessions: {
-        numeric: { ordinal: 2, messageCount: 3 },
-        empty: { ordinal: -1, messageCount: 0 },
-        invalid: { ordinal: "2", messageCount: 3 },
-      },
-    }));
-    let store = new ReadProgressStore();
-    expect(store.get("numeric")).toEqual({ seenOrdinal: 2 });
-    expect(store.get("empty")).toEqual({ seenOrdinal: null });
-    expect(store.get("invalid")).toBeNull();
+  it("writes only the active marker when visible progress advances", () => {
+    const store = new ReadProgressStore();
+    store.baseline("one", 1);
+    const write = vi.spyOn(localStorage, "setItem");
 
-    localStorage.setItem("agentsview-read-progress", JSON.stringify({
-      version: 2,
-      sessions: {
-        numeric: { seenOrdinal: 4 },
-        empty: { seenOrdinal: null },
-        invalid: { seenOrdinal: -1 },
-      },
-    }));
-    store = new ReadProgressStore();
-    expect(store.get("numeric")).toEqual({ seenOrdinal: 4 });
-    expect(store.get("empty")).toEqual({ seenOrdinal: null });
-    expect(store.get("invalid")).toBeNull();
+    store.recordVisible("one", 2);
 
-    localStorage.setItem("agentsview-read-progress", JSON.stringify({
-      version: 3,
-      recency: ["numeric", "empty", "invalid"],
-      sessions: {
-        numeric: { seenOrdinal: 4, seenContentLength: 11 },
-        empty: { seenOrdinal: null },
-        invalid: { seenOrdinal: 4, seenContentLength: -1 },
-      },
-    }));
-    store = new ReadProgressStore();
-    expect(store.get("numeric")).toEqual({
-      seenOrdinal: 4,
-      seenContentLength: 11,
-    });
-    expect(store.get("empty")).toEqual({ seenOrdinal: null });
-    expect(store.get("invalid")).toBeNull();
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith(
+      "agentsview-read-progress:session:one",
+      JSON.stringify({ seenOrdinal: 2 }),
+    );
   });
 
   it("ignores malformed storage and keeps in-memory state when writes fail", () => {
-    localStorage.setItem("agentsview-read-progress", "malformed JSON");
+    localStorage.setItem("agentsview-read-progress:index", "malformed JSON");
     const store = new ReadProgressStore();
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new Error("quota exceeded");
@@ -200,14 +169,15 @@ describe("ReadProgressStore", () => {
     expect(store.get("one")).toEqual({ seenOrdinal: 0 });
   });
 
-  it("persists the version three cursor shape", () => {
+  it("persists a marker separately from the recency index", () => {
     const store = new ReadProgressStore();
     store.baseline("one", 7, 12);
 
-    expect(JSON.parse(localStorage.getItem("agentsview-read-progress")!)).toEqual({
-      version: 3,
-      recency: ["one"],
-      sessions: { one: { seenOrdinal: 7, seenContentLength: 12 } },
-    });
+    expect(JSON.parse(
+      localStorage.getItem("agentsview-read-progress:session:one")!,
+    )).toEqual({ seenOrdinal: 7, seenContentLength: 12 });
+    expect(JSON.parse(
+      localStorage.getItem("agentsview-read-progress:index")!,
+    )).toEqual(["one"]);
   });
 });
