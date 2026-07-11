@@ -688,6 +688,9 @@ func zcodeParseToolResult(block gjson.Result) (ParsedToolResult, bool) {
 	if !content.Exists() || content.Type == gjson.Null {
 		content = block.Get("state.output")
 	}
+	if !content.Exists() || content.Type == gjson.Null {
+		content = block.Get("state.error")
+	}
 	if content.Exists() && content.Type != gjson.Null {
 		return ParsedToolResult{
 			ToolUseID:     toolUseID,

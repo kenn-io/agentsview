@@ -695,6 +695,49 @@ func TestZCodeOpenCodeStyleReasoningAndToolParts(t *testing.T) {
 	assert.Equal(t, "package auth", DecodeContent(assistant.ToolResults[0].ContentRaw))
 }
 
+func TestZCodeOpenCodeStyleFailedToolPart(t *testing.T) {
+	fixture := newZCodeTestFixture(t)
+	fixture.insertSession(
+		t,
+		"session-tool-error",
+		"/Users/alice/code/acme-app",
+		"Tool error",
+		"2026-07-06T13:00:01Z",
+		"2026-07-06T13:05:00Z",
+		"",
+		"",
+	)
+	fixture.insertMessage(
+		t,
+		"msg-1",
+		"session-tool-error",
+		"2026-07-06T13:00:02Z",
+		`{"role":"assistant","modelID":"claude-sonnet-4-6"}`,
+	)
+	fixture.insertPartAt(
+		t,
+		"part-1",
+		"msg-1",
+		"session-tool-error",
+		"2026-07-06T13:00:03Z",
+		`{"type":"tool","tool":"Read","callID":"call-read","state":{"input":{"file_path":"auth.go"},"error":"permission denied"}}`,
+	)
+
+	result, err := parseZCodeSession(fixture.DBPath, "session-tool-error", "devbox")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, result.Messages, 1)
+
+	assistant := result.Messages[0]
+	assert.Equal(t, RoleAssistant, assistant.Role)
+	assert.True(t, assistant.HasToolUse)
+	require.Len(t, assistant.ToolCalls, 1)
+	require.Len(t, assistant.ToolResults, 1)
+	assert.Equal(t, "call-read", assistant.ToolResults[0].ToolUseID)
+	assert.Equal(t, len("permission denied"), assistant.ToolResults[0].ContentLength)
+	assert.Equal(t, "permission denied", DecodeContent(assistant.ToolResults[0].ContentRaw))
+}
+
 func TestZCodeFingerprintTracksUsageMtime(t *testing.T) {
 	fixture := newZCodeTestFixture(t)
 	fixture.insertSession(
