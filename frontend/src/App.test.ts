@@ -18,6 +18,7 @@ import { sessions } from "./lib/stores/sessions.svelte.js";
 import { settings } from "./lib/stores/settings.svelte.js";
 import { starred } from "./lib/stores/starred.svelte.js";
 import { sync } from "./lib/stores/sync.svelte.js";
+import { ui } from "./lib/stores/ui.svelte.js";
 import { usage } from "./lib/stores/usage.svelte.js";
 import { yokedDates } from "./lib/stores/yokedDates.svelte.js";
 import type { Message } from "./lib/api/types.js";
@@ -79,6 +80,7 @@ afterEach(() => {
   usage.to = "";
   analyticsPageDates.clear();
   yokedDates.setEnabled(false);
+  ui.clearScrollState();
   settings.needsAuth = false;
 });
 
@@ -359,6 +361,7 @@ describe("App analytics date navigation", () => {
     await flushEffects();
 
     router.navigateToSession("session-1", {
+      msg: "42",
       window_days: "30",
       date_from: "2026-01-01",
       date_to: "2026-01-30",
@@ -376,10 +379,12 @@ describe("App analytics date navigation", () => {
       windowDays: 30,
     });
     expect(router.params).toMatchObject({
+      msg: "42",
       window_days: "30",
       date_from: "2026-06-11",
       date_to: "2026-07-10",
     });
+    expect(ui.selectedOrdinal).toBe(42);
 
     router.navigate("usage");
     await flushEffects();

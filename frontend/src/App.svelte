@@ -303,13 +303,23 @@
 
   function applySessionDateState(
     state: PanelDateState,
+    routeParams: Record<string, string>,
   ): Record<string, string> | null {
     const dateParams = panelDateToSessionFilterParams(state);
     if (Object.keys(dateParams).length === 0) return null;
     sessions.filters.date = dateParams["date"] ?? "";
     sessions.filters.dateFrom = dateParams["date_from"] ?? "";
     sessions.filters.dateTo = dateParams["date_to"] ?? "";
-    const params = filtersToParams(sessions.filters);
+    const params = { ...routeParams };
+    for (const key of [
+      "date",
+      "date_from",
+      "date_to",
+      SESSION_ANALYTICS_WINDOW_PARAM,
+    ]) {
+      delete params[key];
+    }
+    Object.assign(params, filtersToParams(sessions.filters));
     if (
       state.mode === "rolling" &&
       state.windowDays
@@ -332,7 +342,7 @@
       : retained.explicitDateIntent
         ? retained.state
         : null;
-    return state ? applySessionDateState(state) : null;
+    return state ? applySessionDateState(state, routeParams) : null;
   }
 
   let lastDetailFilterParamsSignature: string | null = $state(null);
@@ -363,7 +373,7 @@
         if (explicitState) yokedDates.updateFromPanel(explicitState);
         const entryParams =
           explicitState?.mode === "rolling"
-            ? applySessionDateState(explicitState)
+            ? applySessionDateState(explicitState, params)
             : sessionEntryDateParams(params);
         if (entryParams) router.replaceParams(entryParams);
       }
