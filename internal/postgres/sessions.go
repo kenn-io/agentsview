@@ -523,6 +523,8 @@ func (s *Store) GetSidebarSessionIndex(
 			termination_status,
 			message_count,
 			user_message_count,
+			file_hash,
+			local_modified_at,
 			is_automated,
 			position('<teammate-message' in COALESCE(first_message, '')) > 0
 		FROM sessions
@@ -759,6 +761,8 @@ func (s *Store) getSidebarSessionIndexPage(
 			s.termination_status,
 			s.message_count,
 			s.user_message_count,
+			s.file_hash,
+			s.local_modified_at,
 			s.is_automated,
 			position('<teammate-message' in COALESCE(s.first_message, '')) > 0
 		FROM sessions s
@@ -789,6 +793,7 @@ func scanPGSidebarSessionIndexRows(
 	for rows.Next() {
 		var row db.SidebarSessionIndexRow
 		var startedAt, endedAt, createdAt *time.Time
+		var localModifiedAt *time.Time
 		if err := rows.Scan(
 			&row.ID,
 			&row.ParentSessionID,
@@ -803,6 +808,8 @@ func scanPGSidebarSessionIndexRows(
 			&row.TerminationStatus,
 			&row.MessageCount,
 			&row.UserMessageCount,
+			&row.FileHash,
+			&localModifiedAt,
 			&row.IsAutomated,
 			&row.IsTeammate,
 		); err != nil {
@@ -821,6 +828,10 @@ func scanPGSidebarSessionIndexRows(
 		}
 		if createdAt != nil {
 			row.CreatedAt = FormatISO8601(*createdAt)
+		}
+		if localModifiedAt != nil {
+			str := FormatISO8601(*localModifiedAt)
+			row.LocalModifiedAt = &str
 		}
 		sessions = append(sessions, row)
 	}

@@ -6,6 +6,7 @@
   import { messages } from "../../stores/messages.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
+  import { readProgress } from "../../stores/read-progress.svelte.js";
   import { MessageSquareIcon } from "../../icons.js";
   import { createVirtualizer } from "../../virtual/createVirtualizer.svelte.js";
   import MessageContent from "./MessageContent.svelte";
@@ -41,6 +42,7 @@
   let followSettleTimer:
     | ReturnType<typeof setTimeout>
     | null = null;
+  let visibleProgressSignature: string | null = $state(null);
 
   let baseMessages: Message[] = $derived.by(() =>
     messages.messages.filter((m) => !isSystemMessage(m)),
@@ -171,6 +173,114 @@
     sessionActivity.firstVisibleTimestamp = null;
   }
 
+  function recordVisibleProgress() {
+    const v = virtualizer.instance;
+    const sessionId = messages.sessionId;
+    const currentToken = messages.activeSessionToken;
+    const marker = sessionId
+      ? readProgress.get(sessionId)
+      : null;
+    if (
+      !v ||
+      !sessionId ||
+      !currentToken ||
+      !marker ||
+      marker.token === currentToken
+    ) {
+      return;
+    }
+
+    const top = v.scrollOffset ?? containerRef?.scrollTop ?? 0;
+    const height = containerRef?.clientHeight || v.scrollRect?.height || 0;
+    const bottom = top + height;
+    let minVisibleOrdinal: number | null = null;
+    let maxVisibleOrdinal: number | null = null;
+
+    for (const row of v.getVirtualItems()) {
+      if (row.end <= top || row.start >= bottom) continue;
+      const item = itemAt(row.index);
+      if (!item) continue;
+      if (item.kind === "message") {
+        minVisibleOrdinal = minVisibleOrdinal === null
+          ? item.message.ordinal
+          : Math.min(minVisibleOrdinal, item.message.ordinal);
+        maxVisibleOrdinal = maxVisibleOrdinal === null
+          ? item.message.ordinal
+          : Math.max(maxVisibleOrdinal, item.message.ordinal);
+        continue;
+      }
+
+      const bounds = visibleToolGroupOrdinals(row.index);
+      if (!bounds) continue;
+      minVisibleOrdinal = minVisibleOrdinal === null
+        ? bounds.min
+        : Math.min(minVisibleOrdinal, bounds.min);
+      maxVisibleOrdinal = maxVisibleOrdinal === null
+        ? bounds.max
+        : Math.max(maxVisibleOrdinal, bounds.max);
+    }
+
+    if (maxVisibleOrdinal === null || latestLoadedOrdinal === null) return;
+
+    if (ui.sortNewestFirst) {
+      const completionOrdinal = marker.ordinal === null
+        ? latestLoadedOrdinal
+        : latestLoadedOrdinal <= marker.ordinal
+          ? latestLoadedOrdinal
+          : marker.ordinal + 1;
+      if (
+        minVisibleOrdinal !== null &&
+        completionOrdinal !== null &&
+        minVisibleOrdinal <= completionOrdinal
+      ) {
+        readProgress.markRead(
+          sessionId,
+          currentToken,
+          latestLoadedOrdinal,
+        );
+      }
+      return;
+    }
+
+    if (maxVisibleOrdinal >= latestLoadedOrdinal) {
+      readProgress.markRead(
+        sessionId,
+        currentToken,
+        latestLoadedOrdinal,
+      );
+      return;
+    }
+
+    readProgress.advanceOrdinal(sessionId, maxVisibleOrdinal);
+  }
+
+  function visibleToolGroupOrdinals(
+    rowIndex: number,
+  ): { min: number; max: number } | null {
+    if (!containerRef) return null;
+    const row = containerRef.querySelector<HTMLElement>(
+      `.virtual-row[data-index="${rowIndex}"]`,
+    );
+    if (!row) return null;
+    const rootRect = containerRef.getBoundingClientRect();
+    let minVisibleOrdinal: number | null = null;
+    let maxVisibleOrdinal: number | null = null;
+    for (const node of row.querySelectorAll<HTMLElement>("[data-message-ordinal]")) {
+      const ordinal = Number(node.dataset.messageOrdinal);
+      if (!Number.isInteger(ordinal) || ordinal < 0) continue;
+      const rect = node.getBoundingClientRect();
+      if (rect.bottom <= rootRect.top || rect.top >= rootRect.bottom) continue;
+      minVisibleOrdinal = minVisibleOrdinal === null
+        ? ordinal
+        : Math.min(minVisibleOrdinal, ordinal);
+      maxVisibleOrdinal = maxVisibleOrdinal === null
+        ? ordinal
+        : Math.max(maxVisibleOrdinal, ordinal);
+    }
+    if (minVisibleOrdinal === null || maxVisibleOrdinal === null) return null;
+    return { min: minVisibleOrdinal, max: maxVisibleOrdinal };
+  }
+
   // Recompute visible timestamp when minimap opens or
   // message content changes (e.g. SSE reload).
   $effect(() => {
@@ -180,6 +290,48 @@
       void messages.messages.length;
       publishVisibleTimestamp();
     }
+  });
+
+  let latestLoadedOrdinal = $derived(
+    baseMessages[baseMessages.length - 1]?.ordinal ?? null,
+  );
+
+  $effect(() => {
+    const sessionId = messages.sessionId;
+    const currentToken = messages.activeSessionToken;
+    const loading = messages.loading;
+    const latestOrdinal = latestLoadedOrdinal;
+    if (!sessionId || !currentToken || loading) return;
+    readProgress.baseline(sessionId, currentToken, latestOrdinal);
+  });
+
+  $effect(() => {
+    const sessionId = messages.sessionId;
+    const currentToken = messages.activeSessionToken;
+    const loading = messages.loading;
+    const count = messages.messageCount;
+    const latest = latestDisplaySignature();
+    if (!sessionId || !currentToken || loading || !containerRef) return;
+    const signature = `${sessionId}|${currentToken}|${count}|${latest}`;
+    if (
+      visibleProgressSignature === null ||
+      !visibleProgressSignature.startsWith(`${sessionId}|`)
+    ) {
+      visibleProgressSignature = signature;
+      return;
+    }
+    if (visibleProgressSignature === signature) return;
+    visibleProgressSignature = signature;
+    requestAnimationFrame(() => {
+      if (
+        messages.sessionId !== sessionId ||
+        messages.loading ||
+        messages.activeSessionToken !== currentToken
+      ) {
+        return;
+      }
+      recordVisibleProgress();
+    });
   });
 
   function handleScroll() {
@@ -209,6 +361,8 @@
       if (ui.vitalsOpen) {
         publishVisibleTimestamp();
       }
+
+      recordVisibleProgress();
 
     });
   }
@@ -338,6 +492,21 @@
           Math.round(offset),
           { align: getAlignedOffsetScrollAlign(align) },
         );
+        return;
+      }
+      v.scrollToIndex(index, { align });
+      if (scrollRetries < 15) {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            scrollToDisplayIndex(
+              index,
+              waitFrames,
+              scrollRetries + 1,
+              reqId,
+              align,
+            );
+          });
+        });
       }
       return;
     }
@@ -485,6 +654,14 @@
     return `${m.ordinal}:${m.content_length}:${m.timestamp}`;
   }
 
+  function itemOrdinals(item: DisplayItem): number[] {
+    if (item.kind === "message") return [item.message.ordinal];
+    const source = ui.sortNewestFirst
+      ? [...item.messages].reverse()
+      : item.messages;
+    return source.map((message) => message.ordinal);
+  }
+
   $effect(() => {
     const follow = ui.followLatest;
     if (!follow) {
@@ -527,6 +704,61 @@
   let effectiveLayout = $derived(
     resolveMessageLayout(ui.messageLayout, highlightQuery !== ""),
   );
+
+  let readProgressDivider = $derived.by(() => {
+    const sessionId = messages.sessionId;
+    const currentToken = messages.activeSessionToken;
+    const marker = sessionId
+      ? readProgress.get(sessionId)
+      : null;
+    const latestOrdinal = latestLoadedOrdinal;
+    if (
+      !sessionId ||
+      !currentToken ||
+      !marker ||
+      marker.token === currentToken ||
+      latestOrdinal === null
+    ) {
+      return null;
+    }
+
+    const items = ui.sortNewestFirst
+      ? [...displayItemsAsc].reverse()
+      : displayItemsAsc;
+
+    if (ui.sortNewestFirst) {
+      if (marker.ordinal === null) return null;
+      for (const item of items) {
+        for (const ordinal of itemOrdinals(item)) {
+          if (ordinal <= marker.ordinal) {
+            return {
+              ordinal,
+              label: m.read_progress_earlier_messages(),
+            };
+          }
+        }
+      }
+      return null;
+    }
+
+    const hasTailOnlyUnread = marker.ordinal !== null &&
+      latestOrdinal <= marker.ordinal;
+    for (const item of items) {
+      for (const ordinal of itemOrdinals(item)) {
+        if (
+          marker.ordinal === null ||
+          ordinal > marker.ordinal ||
+          (hasTailOnlyUnread && ordinal === latestOrdinal)
+        ) {
+          return {
+            ordinal,
+            label: m.read_progress_new_messages(),
+          };
+        }
+      }
+    }
+    return null;
+  });
 </script>
 
 {#if !sessions.activeSessionId}
@@ -569,12 +801,21 @@
               ui.selectOrdinal(item.ordinals[0]!);
             }}
           >
+            {#if item.kind !== "tool-group" && readProgressDivider !== null && item.ordinals.includes(readProgressDivider.ordinal)}
+              <div class="read-progress-divider" role="separator" aria-label={m.read_progress_boundary()}>
+                {readProgressDivider.label}
+              </div>
+            {/if}
             {#if item.kind === "tool-group"}
               <ToolCallGroup
                 messages={item.messages}
                 timestamp={item.timestamp}
                 highlightQuery={highlightQuery}
                 isCurrentHighlight={item.ordinals.includes(inSessionSearch.currentOrdinal ?? -1)}
+                sortNewestFirst={ui.sortNewestFirst}
+                divider={readProgressDivider !== null && item.ordinals.includes(readProgressDivider.ordinal)
+                  ? readProgressDivider
+                  : undefined}
               />
             {:else if item.message.is_compact_boundary}
               <CompactBoundaryDivider message={item.message} />
@@ -616,6 +857,28 @@
     outline: 2px solid var(--accent-blue);
     outline-offset: -2px;
     border-radius: var(--radius-md, 6px);
+  }
+
+  .read-progress-divider {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    color: var(--accent-blue);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .read-progress-divider::before,
+  .read-progress-divider::after {
+    content: "";
+    height: 1px;
+    flex: 1;
+    background: color-mix(
+      in srgb, var(--accent-blue) 35%, transparent
+    );
   }
 
   /* ── Compact layout ── */

@@ -12,6 +12,7 @@ import { mount, tick, unmount } from "svelte";
 import SessionList from "./SessionList.svelte";
 import sessionFilterControlSource from "../filters/SessionFilterControl.svelte?raw";
 import sessionItemSource from "./SessionItem.svelte?raw";
+import { readProgress } from "../../stores/read-progress.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import type { Session } from "../../api/types.js";
 import { starred } from "../../stores/starred.svelte.js";
@@ -87,6 +88,7 @@ describe("SessionList filter dropdown", () => {
     sessions.hydratedSessionsByVersion = new Map([
       [sessions.sidebarIndexVersion, new Map()],
     ]);
+    readProgress.reset();
     starred.filterOnly = false;
     starred.ids = new Set();
     setLocale("en");
@@ -106,6 +108,7 @@ describe("SessionList filter dropdown", () => {
     });
     clientHeightSpy?.mockRestore();
     rafSpy?.mockRestore();
+    readProgress.reset();
     vi.restoreAllMocks();
   });
 
@@ -210,6 +213,44 @@ describe("SessionList filter dropdown", () => {
     expect(batchSelectButton?.textContent?.trim()).toBe("清除");
     expect(document.body.textContent).toContain("取消");
   });
+
+  it("shows the unread indicator only for rows whose hydrated token changed", async () => {
+    sessions.sessions = [
+      makeSession({
+        id: "changed",
+        display_name: "Changed",
+        file_hash: "new",
+        local_modified_at: "2026-07-11T12:00:00Z",
+        is_index_only: true,
+      }),
+      makeSession({
+        id: "same",
+        display_name: "Same",
+        file_hash: "same",
+        local_modified_at: "2026-07-11T12:00:00Z",
+        is_index_only: true,
+      }),
+    ];
+    readProgress.baseline(
+      "changed",
+      "h:old|m:2026-07-11T11:00:00Z",
+      1,
+    );
+    readProgress.baseline(
+      "same",
+      "h:same|m:2026-07-11T12:00:00Z",
+      1,
+    );
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    const indicators = document.querySelectorAll(
+      '[aria-label="Unread messages"]',
+    );
+    expect(indicators).toHaveLength(1);
+  });
 });
 
 describe("SessionList visible hydration", () => {
@@ -244,6 +285,7 @@ describe("SessionList visible hydration", () => {
     sessions.hydratedSessionsByVersion = new Map([
       [sessions.sidebarIndexVersion, new Map()],
     ]);
+    readProgress.reset();
     starred.filterOnly = false;
     starred.ids = new Set();
     setLocale("en");
@@ -263,6 +305,7 @@ describe("SessionList visible hydration", () => {
     });
     clientHeightSpy?.mockRestore();
     rafSpy?.mockRestore();
+    readProgress.reset();
     vi.restoreAllMocks();
   });
 

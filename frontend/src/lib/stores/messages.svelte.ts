@@ -13,6 +13,7 @@ import {
 } from "../api/runtime.js";
 import { clearContentCaches } from "../utils/content-parser.js";
 import { computeMainModel } from "../utils/model.js";
+import { buildReadProgressToken } from "./read-progress.svelte.js";
 
 const MESSAGE_PAGE_SIZE = 1000;
 const FULL_SESSION_MESSAGE_THRESHOLD = 3_000;
@@ -29,6 +30,7 @@ class MessagesStore {
   loading: boolean = $state(false);
   sessionId: string | null = $state(null);
   messageCount: number = $state(0);
+  activeSessionToken: string | null = $state(null);
   hasOlder: boolean = $state(false);
   loadingOlder: boolean = $state(false);
   private _stableMainModel: string = $state("");
@@ -55,6 +57,7 @@ class MessagesStore {
     this.clear();
     this._stableMainModel = "";
     this.sessionId = id;
+    this.activeSessionToken = null;
     this.loading = true;
 
     const ac = new AbortController();
@@ -69,6 +72,9 @@ class MessagesStore {
           ac.signal,
         );
         countHint = sess.message_count ?? 0;
+        if (this.sessionId === id) {
+          this.activeSessionToken = buildReadProgressToken(sess);
+        }
       } catch (err) {
         if (isAbortError(err)) return;
         console.warn(
@@ -140,6 +146,7 @@ class MessagesStore {
     this.loading = false;
     this._stableMainModel = "";
     this.messageCount = 0;
+    this.activeSessionToken = null;
     this.hasOlder = false;
     this.loadingOlder = false;
     this.reloadPromise = null;
@@ -452,6 +459,7 @@ class MessagesStore {
       );
       if (this.sessionId !== id) return;
 
+      this.activeSessionToken = buildReadProgressToken(sess);
       const newCount = sess.message_count ?? 0;
       const oldCount = this.messageCount;
       if (newCount === oldCount) {

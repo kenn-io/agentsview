@@ -597,6 +597,8 @@ type SidebarSessionIndexRow struct {
 	TerminationStatus *string `json:"termination_status,omitempty"`
 	MessageCount      int     `json:"message_count"`
 	UserMessageCount  int     `json:"user_message_count"`
+	FileHash          *string `json:"file_hash,omitempty"`
+	LocalModifiedAt   *string `json:"local_modified_at,omitempty"`
 	IsAutomated       bool    `json:"is_automated"`
 	IsTeammate        bool    `json:"is_teammate"`
 }
@@ -723,6 +725,8 @@ func (db *DB) GetSidebarSessionIndex(
 			termination_status,
 			message_count,
 			user_message_count,
+			file_hash,
+			local_modified_at,
 			is_automated,
 			INSTR(COALESCE(first_message, ''), '<teammate-message') > 0
 		FROM sessions
@@ -759,6 +763,8 @@ func (db *DB) GetSidebarSessionIndex(
 			&row.TerminationStatus,
 			&row.MessageCount,
 			&row.UserMessageCount,
+			&row.FileHash,
+			&row.LocalModifiedAt,
 			&row.IsAutomated,
 			&row.IsTeammate,
 		); err != nil {
@@ -973,6 +979,8 @@ func (db *DB) getSidebarSessionIndexPage(
 			s.termination_status,
 			s.message_count,
 			s.user_message_count,
+			s.file_hash,
+			s.local_modified_at,
 			s.is_automated,
 			INSTR(COALESCE(s.first_message, ''), '<teammate-message') > 0
 		FROM sessions s
@@ -1005,6 +1013,8 @@ func (db *DB) getSidebarSessionIndexPage(
 			&row.TerminationStatus,
 			&row.MessageCount,
 			&row.UserMessageCount,
+			&row.FileHash,
+			&row.LocalModifiedAt,
 			&row.IsAutomated,
 			&row.IsTeammate,
 		); err != nil {

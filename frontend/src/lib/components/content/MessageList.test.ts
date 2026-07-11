@@ -10,6 +10,7 @@ import {
 import { mount, tick, unmount } from "svelte";
 import type { Message } from "../../api/types.js";
 import { messages } from "../../stores/messages.svelte.js";
+import { readProgress } from "../../stores/read-progress.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
 import { setLocale } from "../../i18n/index.js";
@@ -17,7 +18,14 @@ import { setLocale } from "../../i18n/index.js";
 const virtualizerMock = vi.hoisted(() => ({
   options: { count: 0 },
   scrollOffset: 0,
-  getVirtualItems: vi.fn(() => []),
+  getVirtualItems: vi.fn<
+    () => Array<{
+      index: number;
+      key: string;
+      start: number;
+      end: number;
+    }>
+  >(() => []),
   getTotalSize: vi.fn(() => 120),
   measureElement: vi.fn(),
   scrollToIndex: vi.fn(),
@@ -69,6 +77,17 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function setVirtualRows(count: number) {
+  virtualizerMock.getVirtualItems.mockReturnValue(
+    Array.from({ length: count }, (_, index) => ({
+      index,
+      key: `row-${index}`,
+      start: index * 100,
+      end: index * 100 + 100,
+    })),
+  );
+}
+
 describe("MessageList follow cancellation", () => {
   let component: ReturnType<typeof mount> | undefined;
   let rafSpy: ReturnType<typeof vi.spyOn>;
@@ -80,6 +99,7 @@ describe("MessageList follow cancellation", () => {
     messages.sessionId = "s1";
     messages.messages = [makeMessage(10)];
     messages.messageCount = 11;
+    messages.activeSessionToken = "current";
     messages.hasOlder = true;
     ui.followLatest = true;
     ui.followLatestRequest = 1;
@@ -87,6 +107,8 @@ describe("MessageList follow cancellation", () => {
     ui.selectedOrdinal = null;
     ui.pendingScrollOrdinal = null;
     ui.pendingScrollSession = null;
+    readProgress.reset();
+    setVirtualRows(1);
     rafSpy = vi
       .spyOn(window, "requestAnimationFrame")
       .mockImplementation((cb: FrameRequestCallback) => {
@@ -105,6 +127,7 @@ describe("MessageList follow cancellation", () => {
     messages.clear();
     sessions.activeSessionId = null;
     ui.followLatest = false;
+    readProgress.reset();
     document.body.innerHTML = "";
   });
 
@@ -163,5 +186,50 @@ describe("MessageList follow cancellation", () => {
     expect(virtualizerMock.scrollToIndex).toHaveBeenCalledWith(0, {
       align: "start",
     });
+  });
+
+  it("renders the unread divider before the first unread message", async () => {
+    messages.messages = [
+      makeMessage(0),
+      makeMessage(1),
+      makeMessage(2),
+      makeMessage(3),
+    ];
+    messages.messageCount = 4;
+    messages.activeSessionToken = "current";
+    setVirtualRows(4);
+    readProgress.baseline("s1", "previous", 1);
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    const divider = document.querySelector(".read-progress-divider");
+    expect(divider?.textContent).toContain("New messages");
+    expect(
+      divider?.closest(".virtual-row")?.getAttribute("data-index"),
+    ).toBe("2");
+  });
+
+  it("keeps the newest-first divider on the first already-read row", async () => {
+    messages.messages = [
+      makeMessage(0),
+      makeMessage(1),
+      makeMessage(2),
+      makeMessage(3),
+    ];
+    messages.messageCount = 4;
+    messages.activeSessionToken = "current";
+    ui.sortNewestFirst = true;
+    setVirtualRows(4);
+    readProgress.baseline("s1", "previous", 1);
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    const divider = document.querySelector(".read-progress-divider");
+    expect(divider?.textContent).toContain("Earlier messages");
+    expect(
+      divider?.closest(".virtual-row")?.getAttribute("data-index"),
+    ).toBe("2");
   });
 });
