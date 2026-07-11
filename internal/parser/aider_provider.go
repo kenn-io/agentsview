@@ -301,18 +301,10 @@ func aiderParseContainer(
 
 func aiderProviderCapabilities() Capabilities {
 	return Capabilities{
-		Source: SourceCapabilities{
-			DiscoverSources:      CapabilitySupported,
-			WatchSources:         CapabilitySupported,
-			ClassifyChangedPath:  CapabilitySupported,
-			FindSource:           CapabilitySupported,
-			CompositeFingerprint: CapabilityNotApplicable,
-			IncrementalAppend:    CapabilityNotApplicable,
-			MultiSessionSource:   CapabilitySupported,
-			PerSessionErrors:     CapabilityNotApplicable,
-			ExcludedSessions:     CapabilityNotApplicable,
-			ForceReplaceOnParse:  CapabilitySupported,
-		},
+		Source: multiSessionContainerSourceCapabilities(
+			CapabilityNotApplicable,
+			CapabilityUnsupported,
+		),
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
 			Cwd:                  CapabilitySupported,

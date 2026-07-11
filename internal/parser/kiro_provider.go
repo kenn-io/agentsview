@@ -669,6 +669,7 @@ func kiroLegacyPathUnderRoot(root, path string) bool {
 
 func kiroProviderCapabilities() Capabilities {
 	source := jsonlFileProviderSourceCapabilities()
+	source.StoredSourceHints = CapabilitySupported
 	source.MultiSessionSource = CapabilitySupported
 	source.PerSessionErrors = CapabilitySupported
 	source.ForceReplaceOnParse = CapabilitySupported

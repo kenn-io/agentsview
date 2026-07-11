@@ -7,6 +7,10 @@ Instructions for autonomous coding agents working in this repository.
 - Applies to all agent-driven work in this repo.
 - If multiple instruction files exist, follow the most specific one for the
   files you are editing.
+- Requests to review, analyze, or explain are read-only unless the user also
+  asks for changes.
+- `AGENTS.md` is the source of truth for standing rules; keep `CLAUDE.md` as a
+  symlink to it and record new durable rules here.
 
 ## Roborev
 
@@ -21,8 +25,9 @@ Instructions for autonomous coding agents working in this repository.
 1. Commit every turn that changes tracked files.
 1. Do not make empty commits. If a turn is read-only or only changes ignored
    files, state that no commit was made.
-1. Do not amend commits.
+1. Do not amend, squash, or rebase commits unless explicitly requested.
 1. Do not change branches without explicit user permission.
+1. Deliver changes through pull requests from feature branches.
 1. Do not merge pull requests. Open them and report status; merging is always
    the user's decision, even when checks are green and the change is urgent.
 
@@ -34,12 +39,45 @@ Instructions for autonomous coding agents working in this repository.
 - Do not include generated-with lines, attribution blocks, validation footers,
   or command transcripts in commit messages.
 
+## Content Hygiene
+
+- Keep private project names, hostnames, personal identities, infrastructure
+  details, and absolute user paths out of code, tests, fixtures, docs, commit
+  messages, and pull request text. Run the private-data scrub before
+  publishing.
+- Keep pull request titles and descriptions synchronized with the current diff.
+- Do not post pull request or issue comments unless explicitly requested.
+
 ## Validation
 
 - Run relevant tests before committing when practical.
 - If tests cannot be run, state that clearly in the handoff.
 - After Go code changes, run `go fmt ./...` and `go vet ./...` before
   committing.
+
+## Background Memory
+
+- Keep passive daemon memory within a few hundred megabytes on macOS, Linux, and
+  Windows. Treat sustained growth beyond that range as a regression.
+- Background watcher, polling, and sync work must be bounded by the changed
+  batch, not by total archive size. Do not scan or materialize every stored
+  session for each filesystem event.
+- Declare expensive scheduling inputs as provider capabilities and compute them
+  only for providers that observably consume them. Default new capabilities to
+  unsupported.
+- Add cardinality-scaling regressions for background paths: compare small and
+  large archives and assert that unchanged per-event work remains bounded.
+  Preserve deletion, tombstone, and persistent-archive behavior in the same
+  tests.
+- Diagnose long-running memory with allocation and CPU profiles plus live heap,
+  forced-GC heap, and operating-system physical/dirty memory. Raw RSS alone is
+  not proof of live memory because it includes clean reclaimable mappings.
+- Profile branch binaries only against isolated production-scale database and
+  source clones. Never point profiling workloads at live archives or live
+  agent transcripts.
+- Include a retention observation long enough to reproduce the reported growth
+  window. On macOS record `vmmap` physical footprint and dirty memory; use
+  portable Go allocation and heap metrics for Linux and Windows.
 
 ## Backend Parity
 
@@ -76,6 +114,11 @@ Instructions for autonomous coding agents working in this repository.
 - Do not revert user-authored or unrelated local changes unless explicitly
   requested.
 - Avoid destructive git commands unless explicitly requested.
+- Never install over a live binary, run migrations against a production
+  database, or write to live data directories without explicit permission.
+  Point branch builds and profiling runs at isolated scratch data.
+- For login or OAuth flows, give the user the exact command to run rather than
+  driving the interactive authentication flow.
 - The SQLite database is a persistent archive. Never delete, drop, truncate, or
   recreate it to handle data version changes. Schema changes use
   non-destructive migrations such as `ALTER TABLE` and `UPDATE`; parser

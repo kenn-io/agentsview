@@ -29,6 +29,7 @@ type SourceCapabilities struct {
 	DiscoverSources      CapabilitySupport
 	WatchSources         CapabilitySupport
 	ClassifyChangedPath  CapabilitySupport
+	StoredSourceHints    CapabilitySupport
 	FindSource           CapabilitySupport
 	CompositeFingerprint CapabilitySupport
 	IncrementalAppend    CapabilitySupport

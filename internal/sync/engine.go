@@ -730,7 +730,7 @@ func (e *Engine) classifyProviderChangedPath(
 		}
 		for _, watchRoot := range watchRoots {
 			var storedSourcePaths []string
-			if providerChangedPathWantsStoredHints(def.Type) {
+			if provider.Capabilities().Source.StoredSourceHints == parser.CapabilitySupported {
 				var err error
 				storedSourcePaths, err = e.db.ListStoredSourcePathHints(
 					string(def.Type),
@@ -873,16 +873,6 @@ func providerChangedPathForceParse(
 	}
 	return eventKind == "remove" &&
 		providerDeletedPhysicalSQLiteSource(agent, sourcePath)
-}
-
-// providerChangedPathWantsStoredHints reports whether an agent's
-// SourcesForChangedPath implementation reads
-// ChangedPathRequest.StoredSourcePaths. The OpenCode-family source sets
-// resolve changed paths purely from the on-disk layout, so the per-event
-// stored-hints lookup — a LIKE scan over every stored session row of the
-// agent — would be computed and discarded on every watcher event.
-func providerChangedPathWantsStoredHints(agent parser.AgentType) bool {
-	return !isOpenCodeFormatStorageAgent(agent)
 }
 
 func providerVirtualSourceBackedByEvent(sourcePath, eventPath string) bool {

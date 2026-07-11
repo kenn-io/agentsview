@@ -88,6 +88,25 @@ type multiSessionConfig struct {
 
 type MultiSessionOption func(*multiSessionConfig)
 
+func multiSessionContainerSourceCapabilities(
+	compositeFingerprint CapabilitySupport,
+	storedSourceHints CapabilitySupport,
+) SourceCapabilities {
+	return SourceCapabilities{
+		DiscoverSources:      CapabilitySupported,
+		WatchSources:         CapabilitySupported,
+		ClassifyChangedPath:  CapabilitySupported,
+		StoredSourceHints:    storedSourceHints,
+		FindSource:           CapabilitySupported,
+		CompositeFingerprint: compositeFingerprint,
+		IncrementalAppend:    CapabilityNotApplicable,
+		MultiSessionSource:   CapabilitySupported,
+		PerSessionErrors:     CapabilityNotApplicable,
+		ExcludedSessions:     CapabilityNotApplicable,
+		ForceReplaceOnParse:  CapabilitySupported,
+	}
+}
+
 func WithContainerDiscovery(fn func(root string) []string) MultiSessionOption {
 	return func(c *multiSessionConfig) { c.discoverContainers = fn }
 }

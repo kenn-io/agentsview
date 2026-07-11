@@ -666,18 +666,10 @@ func visualStudioCopilotTraceUnderRoot(
 
 func visualStudioCopilotProviderCapabilities() Capabilities {
 	return Capabilities{
-		Source: SourceCapabilities{
-			DiscoverSources:      CapabilitySupported,
-			WatchSources:         CapabilitySupported,
-			ClassifyChangedPath:  CapabilitySupported,
-			FindSource:           CapabilitySupported,
-			CompositeFingerprint: CapabilitySupported,
-			IncrementalAppend:    CapabilityNotApplicable,
-			MultiSessionSource:   CapabilitySupported,
-			PerSessionErrors:     CapabilityNotApplicable,
-			ExcludedSessions:     CapabilityNotApplicable,
-			ForceReplaceOnParse:  CapabilitySupported,
-		},
+		Source: multiSessionContainerSourceCapabilities(
+			CapabilitySupported,
+			CapabilitySupported,
+		),
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
 			ToolCalls:            CapabilitySupported,

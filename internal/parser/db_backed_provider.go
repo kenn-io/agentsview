@@ -545,6 +545,7 @@ func warpProviderSpec() dbBackedProviderSpec {
 
 func dbBackedSourceCapabilities(multiSession CapabilitySupport) SourceCapabilities {
 	source := jsonlFileProviderSourceCapabilities()
+	source.StoredSourceHints = CapabilitySupported
 	source.MultiSessionSource = multiSession
 	source.ForceReplaceOnParse = CapabilitySupported
 	return source

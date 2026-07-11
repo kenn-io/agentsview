@@ -147,6 +147,31 @@ func TestProviderRegistryMirrorsAgentRegistry(t *testing.T) {
 	}
 }
 
+func TestStoredSourceHintCapabilitiesMatchConsumers(t *testing.T) {
+	wantSupported := map[AgentType]bool{
+		AgentDevin:     true,
+		AgentForge:     true,
+		AgentKiro:      true,
+		AgentPiebald:   true,
+		AgentShelley:   true,
+		AgentVSCopilot: true,
+		AgentWarp:      true,
+		AgentWindsurf:  true,
+		AgentZCode:     true,
+		AgentZed:       true,
+	}
+
+	for _, factory := range ProviderFactories() {
+		agent := factory.Definition().Type
+		got := factory.Capabilities().Source.StoredSourceHints
+		if wantSupported[agent] {
+			assert.Equalf(t, CapabilitySupported, got, "%s consumes stored path hints", agent)
+		} else {
+			assert.Equalf(t, CapabilityUnsupported, got, "%s must not schedule stored path hints", agent)
+		}
+	}
+}
+
 func TestProviderFactoryLookupRejectsMissingAgent(t *testing.T) {
 	require.NotEmpty(t, Registry)
 	agent := Registry[0].Type

@@ -928,6 +928,7 @@ func windsurfProviderCapabilities() Capabilities {
 			DiscoverSources:      CapabilitySupported,
 			WatchSources:         CapabilitySupported,
 			ClassifyChangedPath:  CapabilitySupported,
+			StoredSourceHints:    CapabilitySupported,
 			FindSource:           CapabilitySupported,
 			CompositeFingerprint: CapabilitySupported,
 			IncrementalAppend:    CapabilityNotApplicable,
