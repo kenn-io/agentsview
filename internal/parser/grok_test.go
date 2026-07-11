@@ -46,8 +46,6 @@ func TestGrokProviderSummarySource(t *testing.T) {
 			"peakContextTokens": 4096
 		}
 	}`)
-	writeGrokFixtureFile(t, filepath.Join(root, "cwd-key", "sess-1", "updates.jsonl"), "{}\n")
-
 	provider := newGrokTestProvider(t, root)
 	sources, err := provider.Discover(context.Background())
 	require.NoError(t, err)
@@ -128,7 +126,7 @@ func TestGrokProviderFirstPromptKeepsSessionVisibleWithoutNumMessages(t *testing
 	assert.Equal(t, "Locate the Grok source", outcome.Results[0].Result.Messages[0].Content)
 }
 
-func TestGrokProviderFingerprintTracksSessionFiles(t *testing.T) {
+func TestGrokProviderFingerprintTracksParsedFiles(t *testing.T) {
 	root := t.TempDir()
 	summary := grokSummaryPath(root, "cwd-key", "sess-1")
 	signals := filepath.Join(root, "cwd-key", "sess-1", "signals.json")
@@ -151,20 +149,54 @@ func TestGrokProviderFingerprintTracksSessionFiles(t *testing.T) {
 	base, err := provider.Fingerprint(context.Background(), source)
 	require.NoError(t, err)
 
-	writeGrokFixtureFile(t, updates, "{\"delta\":1}\n")
-	afterUpdates, err := provider.Fingerprint(context.Background(), source)
+	writeGrokFixtureFile(t, summary, `{"summary":"Fingerprint changed","firstPrompt":"hello","createdAt":"2026-07-08T10:00:00Z"}`)
+	afterSummary, err := provider.Fingerprint(context.Background(), source)
 	require.NoError(t, err)
-	assert.NotEqual(t, base.Hash, afterUpdates.Hash)
-
-	writeGrokFixtureFile(t, unrelated, "still ignored")
-	afterUnrelated, err := provider.Fingerprint(context.Background(), source)
-	require.NoError(t, err)
-	assert.Equal(t, afterUpdates.Hash, afterUnrelated.Hash)
+	assert.NotEqual(t, base.Hash, afterSummary.Hash)
 
 	writeGrokFixtureFile(t, signals, `{"tokenUsage":{"totalOutputTokens":2}}`)
 	afterSignals, err := provider.Fingerprint(context.Background(), source)
 	require.NoError(t, err)
-	assert.NotEqual(t, afterUpdates.Hash, afterSignals.Hash)
+	assert.NotEqual(t, afterSummary.Hash, afterSignals.Hash)
+
+	writeGrokFixtureFile(t, updates, "{\"delta\":1}\n")
+	afterUpdates, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	assert.Equal(t, afterSignals.Hash, afterUpdates.Hash)
+
+	writeGrokFixtureFile(t, chat, "{\"message\":1}\n")
+	afterChat, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	assert.Equal(t, afterUpdates.Hash, afterChat.Hash)
+
+	writeGrokFixtureFile(t, unrelated, "still ignored")
+	afterUnrelated, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	assert.Equal(t, afterChat.Hash, afterUnrelated.Hash)
+}
+
+func TestGrokProviderChangedPathTracksParsedFiles(t *testing.T) {
+	root := t.TempDir()
+	summary := grokSummaryPath(root, "cwd-key", "sess-1")
+	writeGrokFixtureFile(t, summary, `{"summary":"Changed path","firstPrompt":"hello","createdAt":"2026-07-08T10:00:00Z"}`)
+	provider := newGrokTestProvider(t, root)
+
+	for _, name := range []string{"summary.json", "signals.json"} {
+		changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+			Path: filepath.Join(root, "cwd-key", "sess-1", name),
+		})
+		require.NoError(t, err)
+		require.Len(t, changed, 1)
+		assert.Equal(t, filepath.Clean(summary), filepath.Clean(changed[0].FingerprintKey))
+	}
+
+	for _, name := range []string{"updates.jsonl", "chat_history.jsonl"} {
+		changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+			Path: filepath.Join(root, "cwd-key", "sess-1", name),
+		})
+		require.NoError(t, err)
+		assert.Empty(t, changed)
+	}
 }
 
 func TestGrokProviderArtifactBoundaries(t *testing.T) {
