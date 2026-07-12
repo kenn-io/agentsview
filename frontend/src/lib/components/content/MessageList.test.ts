@@ -342,6 +342,32 @@ describe("MessageList follow cancellation", () => {
     expect(readProgress.get("s1")?.token).toBe("current");
   });
 
+  it("rechecks visible progress when filters change after mounting", async () => {
+    messages.messages = [
+      { ...makeMessage(0), role: "user" },
+      { ...makeMessage(1), role: "assistant" },
+      { ...makeMessage(2), role: "user" },
+    ];
+    messages.messageCount = 3;
+    messages.activeSessionToken = "current";
+    ui.sortNewestFirst = true;
+    virtualizerMock.getVirtualItems.mockReturnValue([
+      { index: 0, key: "row-0", start: 0, end: 100 },
+    ]);
+    readProgress.baseline("s1", "previous", 0);
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+    expect(readProgress.get("s1")?.token).toBe("previous");
+
+    ui.setBlockVisible("assistant", false);
+    await tick();
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+
+    expect(readProgress.get("s1")?.token).toBe("current");
+  });
+
   it("marks a short newest-first transcript read when its unread boundary is initially visible", async () => {
     messages.messages = [makeMessage(0), makeMessage(1)];
     messages.messageCount = 2;

@@ -100,6 +100,14 @@
     ).filter(isItemVisible);
   });
 
+  let displayedOrdinals = $derived.by(() =>
+    displayItemsAsc.flatMap((item) => item.ordinals),
+  );
+
+  let displayedOrdinalsSignature = $derived(
+    displayedOrdinals.join(","),
+  );
+
   function itemAt(index: number) {
     if (ui.sortNewestFirst) {
       const mapped = displayItemsAsc.length - 1 - index;
@@ -203,9 +211,6 @@
       return;
     }
 
-    const displayedOrdinals = displayItemsAsc.flatMap((item) =>
-      item.ordinals
-    );
     const latestDisplayedOrdinal = displayedOrdinals.at(-1);
     if (latestDisplayedOrdinal === undefined) {
       readProgress.markRead(
@@ -360,10 +365,11 @@
     const loading = messages.loading;
     const count = messages.messageCount;
     const latest = latestDisplaySignature();
+    const displayed = displayedOrdinalsSignature;
     const unreadOrdinal = messages.activeSessionUnreadOrdinal;
     if (!sessionId || !currentToken || loading || !containerRef) return;
     const signature =
-      `${sessionId}|${currentToken}|${count}|${latest}|${unreadOrdinal}`;
+      `${sessionId}|${currentToken}|${count}|${latest}|${unreadOrdinal}|${displayed}`;
     if (
       visibleProgressSignature === null ||
       !visibleProgressSignature.startsWith(`${sessionId}|`)
