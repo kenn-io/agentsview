@@ -58,6 +58,18 @@ func TestPlanProjectIdentityObservationSync(t *testing.T) {
 			wantRoots:     []string{"/a"},
 		},
 		{
+			name: "ambiguous wins over later unknown fallback",
+			observations: func() []export.ProjectIdentityObservation {
+				ambiguous := identityObs("/a", "", "")
+				ambiguous.RemoteResolution = export.ProjectResolutionAmbiguous
+				ambiguous.RemoteCandidateCount = 2
+				unknown := identityObs("/a", "", "")
+				unknown.RemoteResolution = export.ProjectResolutionUnknown
+				return []export.ProjectIdentityObservation{ambiguous, unknown}
+			}(),
+			wantAmbiguous: []string{"/a"},
+		},
+		{
 			name: "fallback without real survives to the pg check",
 			observations: []export.ProjectIdentityObservation{
 				identityObs("/a", "", ""),

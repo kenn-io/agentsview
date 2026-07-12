@@ -816,8 +816,11 @@ func upsertProjectIdentityObservationExecExcludingRemote(
 		query := `
 			SELECT 1 FROM project_identity_observations
 			WHERE project = ? AND machine = ? AND root_path = ?
-			  AND git_remote != ''`
-		args := []any{obs.Project, obs.Machine, obs.RootPath}
+			  AND (git_remote != '' OR remote_resolution = ?)`
+		args := []any{
+			obs.Project, obs.Machine, obs.RootPath,
+			export.ProjectResolutionAmbiguous,
+		}
 		if excludeRemote != "" {
 			query += ` AND git_remote != ?`
 			args = append(args, excludeRemote)

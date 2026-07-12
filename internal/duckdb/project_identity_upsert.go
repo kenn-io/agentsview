@@ -204,9 +204,10 @@ func upsertProjectIdentityObservation(
 			SELECT COUNT(*) FROM source_project_identity_observations
 			WHERE source_archive_id = ? AND project = ?
 			  AND machine = ? AND root_path = ?
-			  AND git_remote != ''
+			  AND (git_remote != '' OR remote_resolution = ?)
 			  AND (? = '' OR git_remote != ?)`,
 			obs.SourceArchiveID, obs.Project, obs.Machine, obs.RootPath,
+			export.ProjectResolutionAmbiguous,
 			excludeRemote, excludeRemote,
 		).Scan(&exists); err != nil {
 			return fmt.Errorf(

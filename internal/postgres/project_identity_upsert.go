@@ -141,10 +141,11 @@ func upsertProjectIdentityObservation(
 				SELECT 1 FROM source_project_identity_observations
 				WHERE source_archive_id = $1 AND project = $2
 				  AND machine = $3 AND root_path = $4
-				  AND git_remote != ''
-				  AND ($5 = '' OR git_remote != $5)
+				  AND (git_remote != '' OR remote_resolution = $5)
+				  AND ($6 = '' OR git_remote != $6)
 			)`,
-			obs.SourceArchiveID, obs.Project, obs.Machine, obs.RootPath, excludeRemote,
+			obs.SourceArchiveID, obs.Project, obs.Machine, obs.RootPath,
+			export.ProjectResolutionAmbiguous, excludeRemote,
 		).Scan(&exists); err != nil {
 			return fmt.Errorf(
 				"checking pg project identity remote observation: %w", err,
@@ -266,8 +267,13 @@ func planProjectIdentityObservationSync(
 		key := conflictKey{
 			root: observationRootKey(obs), gitRemote: obs.GitRemote,
 		}
-		if _, seen := latest[key]; !seen {
+		previous, seen := latest[key]
+		if !seen {
 			keyOrder = append(keyOrder, key)
+		} else if key.gitRemote == "" &&
+			previous.RemoteResolution == export.ProjectResolutionAmbiguous &&
+			obs.RemoteResolution != export.ProjectResolutionAmbiguous {
+			continue
 		}
 		latest[key] = obs
 		if obs.GitRemote != "" && !realRootSet[key.root] {
@@ -390,10 +396,13 @@ func projectIdentityFallbacksWithoutRealRemote(
 			keys = append(keys, observationRootKey(obs))
 		}
 		tuples, args := rootKeyTupleArgs(keys)
+		ambiguousParam := len(args) + 1
+		args = append(args, export.ProjectResolutionAmbiguous)
 		rows, err := tx.QueryContext(ctx, `
 			SELECT DISTINCT source_archive_id, project, machine, root_path
 			FROM source_project_identity_observations
-			WHERE git_remote != ''
+			WHERE (git_remote != '' OR remote_resolution = $`+
+			fmt.Sprint(ambiguousParam)+`)
 			  AND (source_archive_id, project, machine, root_path) IN (`+tuples+`)`,
 			args...,
 		)

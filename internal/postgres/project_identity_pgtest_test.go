@@ -90,6 +90,10 @@ func TestSyncProjectIdentityObservationsBatchMatchesSequential(t *testing.T) {
 	preExistingAmbiguous.RemoteResolution = export.ProjectResolutionAmbiguous
 	preExistingAmbiguous.RemoteCandidateCount = 2
 	preExisting = append(preExisting, preExistingAmbiguous)
+	preExistingAmbiguousOnly := obs("/preexisting-ambiguous-only", "", "")
+	preExistingAmbiguousOnly.RemoteResolution = export.ProjectResolutionAmbiguous
+	preExistingAmbiguousOnly.RemoteCandidateCount = 2
+	preExisting = append(preExisting, preExistingAmbiguousOnly)
 
 	// The batch covers: real+fallback for one root in both orders, a
 	// surviving fallback, a fallback suppressed by pre-existing state, a
@@ -106,6 +110,7 @@ func TestSyncProjectIdentityObservationsBatchMatchesSequential(t *testing.T) {
 		obs("/replaced-fallback", "git@x:r.git", "origin"),
 		obs("/updated", "git@x:u.git", "dup-old"),
 		obs("/updated", "git@x:u.git", "new-name"),
+		obs("/preexisting-ambiguous-only", "", ""),
 	}
 	ambiguous := obs("/ambiguous-with-real", "", "")
 	ambiguous.RemoteResolution = export.ProjectResolutionAmbiguous
@@ -169,11 +174,22 @@ func TestSyncProjectIdentityObservationsBatchMatchesSequential(t *testing.T) {
 			"/preexisting-ambiguous|"},
 		{"proj", "m1", "/preexisting-ambiguous", "git@x:p.git", "origin",
 			"/preexisting-ambiguous|git@x:p.git"},
+		{"proj", "m1", "/preexisting-ambiguous-only", "", "",
+			"/preexisting-ambiguous-only|"},
 		{"proj", "m1", "/replaced-fallback", "git@x:r.git", "origin",
 			"/replaced-fallback|git@x:r.git"},
 		{"proj", "m1", "/updated", "git@x:u.git", "new-name",
 			"/updated|git@x:u.git"},
 	}, batched)
+	var ambiguousResolution string
+	require.NoError(t, pg.QueryRowContext(ctx, `
+		SELECT remote_resolution
+		FROM source_project_identity_observations
+		WHERE source_archive_id = 'archive-batch'
+		  AND root_path = '/preexisting-ambiguous-only'
+		  AND git_remote = ''`).Scan(&ambiguousResolution))
+	assert.Equal(t, string(export.ProjectResolutionAmbiguous),
+		ambiguousResolution)
 	projects, err := (&Store{pg: pg}).BuildProjectIdentityMap(ctx, []string{"proj"})
 	require.NoError(t, err)
 	assert.Equal(t, export.ProjectResolutionAmbiguous,
