@@ -459,6 +459,11 @@ type Config struct {
 	Automated            AutomatedConfig        `json:"automated,omitempty" toml:"automated"`
 	Agent                map[string]AgentConfig `json:"agent,omitempty" toml:"agent"`
 	WriteTimeout         time.Duration          `json:"-" toml:"-"`
+	// LocalMachineName is the operating-system hostname used to identify
+	// sessions ingested from this machine. It is runtime-derived rather than
+	// persisted configuration so local and remote source labels share the same
+	// hostname namespace.
+	LocalMachineName string `json:"-" toml:"-"`
 
 	// AgentDirs maps each AgentType to its configured
 	// directories. Single-dir agents store a one-element
@@ -665,6 +670,13 @@ func Default() (Config, error) {
 		)
 	}
 	dataDir := filepath.Join(home, ".agentsview")
+	hostname, err := os.Hostname()
+	if err != nil {
+		return Config{}, fmt.Errorf("identify local sync machine: %w", err)
+	}
+	if strings.TrimSpace(hostname) == "" {
+		return Config{}, fmt.Errorf("identify local sync machine: hostname is empty")
+	}
 
 	agentDirs := make(map[parser.AgentType][]string)
 	agentDirSource := make(map[parser.AgentType]dirSource)
@@ -691,6 +703,7 @@ func Default() (Config, error) {
 		DataDir:                        dataDir,
 		DBPath:                         filepath.Join(dataDir, "sessions.db"),
 		WriteTimeout:                   30 * time.Second,
+		LocalMachineName:               hostname,
 		AgentDirs:                      agentDirs,
 		agentDirSource:                 agentDirSource,
 		WatchExcludePatterns:           []string{".git", "node_modules", "__pycache__", ".venv", "venv", "vendor", ".next"},
@@ -1615,6 +1628,9 @@ func splitFlagList(value string) []string {
 
 func finalize(cfg *Config) error {
 	var err error
+	if strings.TrimSpace(cfg.LocalMachineName) == "" {
+		return fmt.Errorf("identify local sync machine: hostname is empty")
+	}
 	if err := normalizeProxyConfig(&cfg.Proxy); err != nil {
 		return err
 	}

@@ -202,6 +202,43 @@ func TestResyncAbortsWhenContributorLosesHistoricalSource(t *testing.T) {
 	assert.NotNil(t, remote, "aborted rebuild must preserve the active archive")
 }
 
+func TestResyncDoesNotTreatSameNamedContributorAsLocalHistory(t *testing.T) {
+	localRoot := t.TempDir()
+	remoteRoot := t.TempDir()
+	remotePath := filepath.Join(remoteRoot, "project", "remote.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(remotePath), 0o755))
+	require.NoError(t, os.WriteFile(remotePath, []byte(testjsonl.NewSessionBuilder().
+		AddClaudeUser("2026-01-01T00:00:00Z", "same-name remote source").String()), 0o644))
+	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {localRoot}},
+		Machine:   "collector-host",
+	})
+	t.Cleanup(engine.Close)
+	options := RebuildOptions{Contributors: []RebuildContributor{{
+		Name: "collector-host",
+		Config: EngineConfig{
+			AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {remoteRoot}},
+			Machine:   "collector-host", IDPrefix: "collector-host~", Ephemeral: true,
+		},
+	}}}
+
+	initial, err := engine.ResyncAllWithOptions(context.Background(), nil, options)
+	require.NoError(t, err)
+	require.False(t, initial.Aborted)
+
+	stats, err := engine.ResyncAllWithOptions(context.Background(), nil, options)
+
+	require.NoError(t, err)
+	assert.False(t, stats.Aborted,
+		"remote-prefixed history must not make an empty local source look incomplete")
+	remote, err := database.GetSession(context.Background(), "collector-host~remote")
+	require.NoError(t, err)
+	assert.NotNil(t, remote)
+}
+
 func TestResyncContributorPostSwapReopenFailureReturnsCoordinatorError(t *testing.T) {
 	root := t.TempDir()
 	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))

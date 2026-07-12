@@ -122,7 +122,7 @@ func (s *Server) localWorktreeMappingHumaDB() (*db.DB, string, error) {
 	}
 	machine := strings.TrimSpace(s.engine.Machine())
 	if machine == "" {
-		machine = "local"
+		machine = s.cfg.LocalMachineName
 	}
 	return localDB, machine, nil
 }

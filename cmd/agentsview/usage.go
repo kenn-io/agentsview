@@ -311,7 +311,7 @@ func ensureFreshData(
 		engine := sync.NewEngine(database, sync.EngineConfig{
 			AgentDirs:          appCfg.AgentDirs,
 			IncludeCwdPrefixes: appCfg.SyncIncludeCwdPrefixes,
-			Machine:            "local",
+			Machine:            appCfg.LocalMachineName,
 		})
 		defer engine.Close()
 		fmt.Fprintln(os.Stderr,
@@ -335,7 +335,7 @@ func ensureFreshData(
 	engine := sync.NewEngine(database, sync.EngineConfig{
 		AgentDirs:          appCfg.AgentDirs,
 		IncludeCwdPrefixes: appCfg.SyncIncludeCwdPrefixes,
-		Machine:            "local",
+		Machine:            appCfg.LocalMachineName,
 	})
 	defer engine.Close()
 

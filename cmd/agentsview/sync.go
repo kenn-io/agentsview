@@ -834,7 +834,7 @@ func coordinateLocalSync(
 	engine := sync.NewEngine(database, sync.EngineConfig{
 		AgentDirs:               appCfg.AgentDirs,
 		IncludeCwdPrefixes:      appCfg.SyncIncludeCwdPrefixes,
-		Machine:                 "local",
+		Machine:                 appCfg.LocalMachineName,
 		BlockedResultCategories: appCfg.ResultContentBlockedCategories,
 	})
 	defer engine.Close()

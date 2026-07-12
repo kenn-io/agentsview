@@ -58,7 +58,7 @@ func nonSourceBackedAgents() []parser.AgentType {
 func (db *DB) FileBackedSessionCount(
 	ctx context.Context,
 ) (int, error) {
-	return db.fileBackedSessionCount(ctx, "", false)
+	return db.fileBackedSessionCount(ctx, "", "", false)
 }
 
 // FileBackedSessionCountForMachine returns the protected root-session count
@@ -67,17 +67,30 @@ func (db *DB) FileBackedSessionCount(
 func (db *DB) FileBackedSessionCountForMachine(
 	ctx context.Context, machine string,
 ) (int, error) {
-	return db.fileBackedSessionCount(ctx, machine, true)
+	return db.fileBackedSessionCount(ctx, machine, "", true)
+}
+
+// FileBackedSessionCountForSource returns the protected root-session count
+// for one namespaced rebuild contributor. ID prefixes distinguish a remote
+// contributor from local sessions when both machines have the same hostname.
+func (db *DB) FileBackedSessionCountForSource(
+	ctx context.Context, machine, idPrefix string,
+) (int, error) {
+	return db.fileBackedSessionCount(ctx, machine, idPrefix, true)
 }
 
 func (db *DB) fileBackedSessionCount(
-	ctx context.Context, machine string, scoped bool,
+	ctx context.Context, machine, idPrefix string, scoped bool,
 ) (int, error) {
 	machinePredicate := ""
 	args := nonSourceBackedAgentArgs()
 	if scoped {
 		machinePredicate = " AND machine = ?"
 		args = append(args, machine)
+	}
+	if idPrefix != "" {
+		machinePredicate += " AND substr(id, 1, length(?)) = ?"
+		args = append(args, idPrefix, idPrefix)
 	}
 	var count int
 	err := db.getReader().QueryRowContext(ctx,

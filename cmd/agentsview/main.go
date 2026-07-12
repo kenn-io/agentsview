@@ -211,7 +211,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 		engine = sync.NewEngine(database, sync.EngineConfig{
 			AgentDirs:               cfg.AgentDirs,
 			IncludeCwdPrefixes:      cfg.SyncIncludeCwdPrefixes,
-			Machine:                 "local",
+			Machine:                 cfg.LocalMachineName,
 			BlockedResultCategories: cfg.ResultContentBlockedCategories,
 			Emitter:                 emitter,
 			DeferStartupMaintenance: opts.SkipInitialSync,
@@ -276,7 +276,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 	identityBackfillEngine := engine
 	if identityBackfillEngine == nil {
 		identityBackfillEngine = sync.NewEngine(database, sync.EngineConfig{
-			Machine: "local",
+			Machine: cfg.LocalMachineName,
 		})
 	}
 	go idleTracker.Do(func() {

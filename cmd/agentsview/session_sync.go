@@ -75,7 +75,7 @@ func syncService(
 	engine := sync.NewEngine(d, sync.EngineConfig{
 		AgentDirs:          cfg.AgentDirs,
 		IncludeCwdPrefixes: cfg.SyncIncludeCwdPrefixes,
-		Machine:            "local",
+		Machine:            cfg.LocalMachineName,
 	})
 	// Close the engine before the DB so pending debounced signal
 	// recomputes flush while the DB is still open.

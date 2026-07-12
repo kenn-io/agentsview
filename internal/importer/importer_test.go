@@ -125,7 +125,7 @@ func TestImportClaudeAI(t *testing.T) {
 	ctx := context.Background()
 
 	stats, err := ImportClaudeAI(
-		ctx, d, strings.NewReader(testConversationsJSON), nil,
+		ctx, d, strings.NewReader(testConversationsJSON), nil, "workstation",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.Imported)
@@ -136,6 +136,7 @@ func TestImportClaudeAI(t *testing.T) {
 	require.NotNil(t, s)
 	assert.Equal(t, "claude.ai", s.Project)
 	assert.Equal(t, "claude-ai", s.Agent)
+	assert.Equal(t, "workstation", s.Machine)
 	require.NotNil(t, s.DisplayName)
 	assert.Equal(t, "First Chat", *s.DisplayName)
 
@@ -287,7 +288,7 @@ func TestImportChatGPT(t *testing.T) {
 	assetsDir := filepath.Join(t.TempDir(), "assets")
 
 	stats, err := ImportChatGPT(
-		ctx, d, dir, assetsDir, nil,
+		ctx, d, dir, assetsDir, nil, "workstation",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.Imported)
@@ -297,6 +298,7 @@ func TestImportChatGPT(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, s)
 	assert.Equal(t, "chatgpt.com", s.Project)
+	assert.Equal(t, "workstation", s.Machine)
 }
 
 func TestImportChatGPTSanitizesParserRows(t *testing.T) {

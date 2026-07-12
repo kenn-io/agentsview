@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -103,6 +104,7 @@ func ImportClaudeAI(
 	store db.Store,
 	r io.Reader,
 	cb *ImportCallbacks,
+	machine ...string,
 ) (stats ImportStats, retErr error) {
 	fts := newLazyFTS(store, cb.indexing)
 	defer func() {
@@ -131,6 +133,9 @@ func ImportClaudeAI(
 			return ctx.Err()
 		}
 
+		result.Session.Machine = resolvedImportMachine(
+			result.Session.Machine, machine,
+		)
 		status, err := upsertConversation(
 			ctx, store, result, fts,
 		)
@@ -285,6 +290,7 @@ func ImportChatGPT(
 	dir string,
 	assetsDir string,
 	cb *ImportCallbacks,
+	machine ...string,
 ) (stats ImportStats, retErr error) {
 	fts := newLazyFTS(store, cb.indexing)
 	defer func() {
@@ -319,6 +325,7 @@ func ImportChatGPT(
 			}
 
 			s := result.Session
+			s.Machine = resolvedImportMachine(s.Machine, machine)
 
 			existing, err := store.GetSession(ctx, s.ID)
 			if err != nil {
@@ -416,6 +423,13 @@ func ImportChatGPT(
 
 	retErr = err
 	return
+}
+
+func resolvedImportMachine(current string, override []string) string {
+	if len(override) > 0 && strings.TrimSpace(override[0]) != "" {
+		return override[0]
+	}
+	return current
 }
 
 func ptrEqual(a, b *string) bool {

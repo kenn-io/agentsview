@@ -23,6 +23,10 @@ description: Release history for AgentsView
 
 **Bug fixes**
 
+- Identify locally ingested sessions by the machine's hostname instead of the
+  ambiguous `local` label, and keep full-rebuild safety independent when a
+  configured remote has the same hostname as the collector.
+
 - Remove **recommended-plugin context injected into Codex sessions** from
   parsed transcripts so it no longer appears as user-authored content.
 - Include **overnight session activity** in date-filtered results by matching

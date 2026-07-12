@@ -250,7 +250,7 @@ func (b localArchiveQueryBackend) SessionUsage(
 		engine := sync.NewEngine(b.database, sync.EngineConfig{
 			AgentDirs:               b.cfg.AgentDirs,
 			IncludeCwdPrefixes:      b.cfg.SyncIncludeCwdPrefixes,
-			Machine:                 "local",
+			Machine:                 b.cfg.LocalMachineName,
 			BlockedResultCategories: b.cfg.ResultContentBlockedCategories,
 		})
 		if syncErr := engine.SyncSingleSessionContext(

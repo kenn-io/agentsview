@@ -1306,7 +1306,7 @@ func (e *Engine) resyncAllWithOptionsLocked(
 	// between storage and SQLite sources across resyncs. Fail closed:
 	// if we can't query, assume old DB has file-backed data
 	// worth protecting.
-	oldFileSessions, err := e.protectedFileSessionCount(origDB, "", false)
+	oldFileSessions, err := e.protectedFileSessionCount(origDB, "", "", false)
 	if err != nil {
 		log.Printf("resync: get old file count: %v", err)
 		oldFileSessions = 1
@@ -1316,16 +1316,16 @@ func (e *Engine) resyncAllWithOptionsLocked(
 	contributorOldFileSessions := make([]int, len(opts.Contributors))
 	if len(opts.Contributors) > 0 {
 		localOldFileSessions, err = e.protectedFileSessionCount(
-			origDB, e.machine, e.machine != "",
+			origDB, e.machine, "", e.machine != "",
 		)
 		if err != nil {
 			log.Printf("resync: get old local file count: %v", err)
 			localOldFileSessions = 1
 		}
-		rebuildOldFileSessions = localOldFileSessions
 		for i, contributor := range opts.Contributors {
 			count, countErr := e.protectedFileSessionCount(
 				origDB, contributor.Config.Machine,
+				contributor.Config.IDPrefix,
 				contributor.Config.Machine != "",
 			)
 			if countErr != nil {
@@ -1336,6 +1336,16 @@ func (e *Engine) resyncAllWithOptionsLocked(
 				count = 1
 			}
 			contributorOldFileSessions[i] = count
+			if contributor.Config.Machine == e.machine &&
+				contributor.Config.IDPrefix != "" {
+				localOldFileSessions -= count
+				if localOldFileSessions < 0 {
+					localOldFileSessions = 0
+				}
+			}
+		}
+		rebuildOldFileSessions = localOldFileSessions
+		for _, count := range contributorOldFileSessions {
 			rebuildOldFileSessions += count
 		}
 	}
@@ -1935,7 +1945,7 @@ func removeWAL(path string) {
 }
 
 func (e *Engine) countRootOpenCodeFormatSessions(
-	database *db.DB, agent parser.AgentType, machine string, scoped bool,
+	database *db.DB, agent parser.AgentType, machine, idPrefix string, scoped bool,
 ) int {
 	if !isOpenCodeFormatStorageAgent(agent) {
 		return 0
@@ -1945,6 +1955,10 @@ func (e *Engine) countRootOpenCodeFormatSessions(
 	if scoped {
 		machinePredicate = " AND machine = ?"
 		args = append(args, machine)
+	}
+	if idPrefix != "" {
+		machinePredicate += " AND substr(id, 1, length(?)) = ?"
+		args = append(args, idPrefix, idPrefix)
 	}
 	var count int
 	err := database.Reader().QueryRow(`
@@ -1961,14 +1975,20 @@ func (e *Engine) countRootOpenCodeFormatSessions(
 }
 
 func (e *Engine) protectedFileSessionCount(
-	database *db.DB, machine string, scoped bool,
+	database *db.DB, machine, idPrefix string, scoped bool,
 ) (int, error) {
 	var count int
 	var err error
 	if scoped {
-		count, err = database.FileBackedSessionCountForMachine(
-			context.Background(), machine,
-		)
+		if idPrefix != "" {
+			count, err = database.FileBackedSessionCountForSource(
+				context.Background(), machine, idPrefix,
+			)
+		} else {
+			count, err = database.FileBackedSessionCountForMachine(
+				context.Background(), machine,
+			)
+		}
 	} else {
 		count, err = database.FileBackedSessionCount(context.Background())
 	}
@@ -1982,7 +2002,7 @@ func (e *Engine) protectedFileSessionCount(
 		parser.AgentIcodemate,
 	} {
 		count -= e.countRootOpenCodeFormatSessions(
-			database, agent, machine, scoped,
+			database, agent, machine, idPrefix, scoped,
 		)
 	}
 	if count < 0 {

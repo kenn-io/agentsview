@@ -156,7 +156,7 @@ agentsview session get <id> [--format json]
 {
   "id": "abc-123",
   "project": "myapp",
-  "machine": "local",
+  "machine": "workstation",
   "agent": "claude",
   "first_message": "...",
   "display_name": "...",

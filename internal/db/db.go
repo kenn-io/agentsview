@@ -291,7 +291,10 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // (17: Codex <skill> template filtering.)
 // (16: <turn_aborted> system messages.)
 // (60: Codex recommended-plugins prefix filtering.)
-const dataVersion = 61
+// (62: Local session machine identity now uses the operating-system hostname
+// instead of the ambiguous literal "local". Re-parsing updates existing
+// source-backed rows while the resync archive copy preserves orphaned history.)
+const dataVersion = 62
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

@@ -1332,6 +1332,16 @@ func TestResolvePG_Defaults(t *testing.T) {
 	assert.NotEmpty(t, resolved.MachineName, "MachineName should default to hostname")
 }
 
+func TestLoadResolvesLocalMachineNameFromHostname(t *testing.T) {
+	setupTestEnv(t)
+	cfg, err := loadConfigFromPFlags(t)
+	require.NoError(t, err)
+	hostname, err := os.Hostname()
+	require.NoError(t, err)
+
+	assert.Equal(t, hostname, cfg.LocalMachineName)
+}
+
 func TestResolvePG_ExpandsEnvVars(t *testing.T) {
 	t.Setenv("PGPASS", "env-secret")
 	t.Setenv("PGURL", "postgres://localhost/test")
