@@ -51,13 +51,14 @@ type SyncResult struct {
 // produced at least one session — used by ResyncAll to compare
 // against Failed on the same unit.
 type SyncStats struct {
-	TotalSessions  int      `json:"total_sessions"`
-	Synced         int      `json:"synced"`
-	Skipped        int      `json:"skipped"`
-	Failed         int      `json:"failed"`
-	OrphanedCopied int      `json:"orphaned_copied,omitempty"`
-	Warnings       []string `json:"warnings,omitempty"`
-	Aborted        bool     `json:"aborted,omitempty"`
+	TotalSessions  int                 `json:"total_sessions"`
+	Synced         int                 `json:"synced"`
+	Skipped        int                 `json:"skipped"`
+	Failed         int                 `json:"failed"`
+	OrphanedCopied int                 `json:"orphaned_copied,omitempty"`
+	Warnings       []string            `json:"warnings,omitempty"`
+	Aborted        bool                `json:"aborted,omitempty"`
+	RebuildPhases  []RebuildPhaseStats `json:"rebuild_phases,omitempty"`
 
 	// Anomalies aggregates per-run parser/sanitizer anomaly signals
 	// surfaced in the CLI sync summary. These are live per-run counters

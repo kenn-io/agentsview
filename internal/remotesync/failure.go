@@ -21,6 +21,11 @@ func FailureSummary(err error) string {
 	if err == nil {
 		return generic
 	}
+	var pending *PendingCleanupError
+	if errors.As(err, &pending) {
+		return "HTTP remote sync blocked: cleanup from an earlier sync " +
+			"still owns resources"
+	}
 
 	var statusErr *StatusError
 	if errors.As(err, &statusErr) {

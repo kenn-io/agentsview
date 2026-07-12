@@ -43,6 +43,14 @@ func TestFailureSummary(t *testing.T) {
 			want: "HTTP remote sync failed",
 		},
 		{
+			name: "pending cleanup takes precedence over retained status",
+			err: &PendingCleanupError{Err: &StatusError{
+				Code: 403, Detail: "private retained response",
+			}},
+			want: "HTTP remote sync blocked: cleanup from an earlier sync " +
+				"still owns resources",
+		},
+		{
 			name: "unauthorized status",
 			err: fmt.Errorf("fetch targets: %w", &StatusError{
 				Code:   401,

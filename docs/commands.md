@@ -234,14 +234,21 @@ url = "http://devbox1.tailnet.ts.net:8080"
 token = "remote-token"
 ```
 
-With hosts configured, `agentsview sync` (no `--host`) runs the local sync
-first, then syncs each configured host in the order declared using its
-configured transport. `--full` applies to every host; for HTTP hosts it
-re-downloads the full archive into the persistent mirror and bypasses the remote
-path/mtime skip cache (see
-[Incremental Sync](/remote-access/#incremental-sync)). A failing host is
-reported on stderr and skipped so the remaining hosts still run; the command
-exits non-zero if any host failed.
+With hosts configured, `agentsview sync` (no `--host`) includes local sources
+and configured HTTP hosts in one coordinated sync. During a full or automatic
+data-version rebuild, AgentsView prepares every HTTP mirror, bulk-ingests the
+local and HTTP sources into one temporary database with FTS updates suspended,
+rebuilds FTS once, and atomically swaps the completed archive into place. SSH
+hosts run through their existing active-archive path only after that swap.
+
+`--full` reparses every discovered local and remote session, but it does not
+force unchanged HTTP mirror files to be transferred again. Manifest-capable
+spokes still send only changed files; older HTTP-capable spokes fall back to
+their existing full-archive endpoint. An HTTP preparation or contributor
+failure aborts the combined rebuild without replacing the active archive or
+running SSH. Ordinary incremental and post-swap SSH failures retain per-host
+reporting, and the command exits non-zero if any host failed. See
+[Incremental Sync](/remote-access/#incremental-sync).
 
 `agentsview sync --host X` syncs one host, not the whole configured list. When
 the local daemon knows a configured host with that identity, it uses the stored
@@ -258,11 +265,13 @@ endpoints. Ad hoc HTTP remotes are not supported. Hosts must be unique within
 the list, since remote sessions are namespaced by host.
 
 During HTTP remote sync, the collector prints durable phase lines for resolving
-remote roots, downloading and extracting the archive, processing sessions, and
-the final per-host summary. Archive downloads also show live byte progress when
-the remote daemon provides a `Content-Length` header. If an upgraded binary does
-not show those phases, restart the local collector daemon; restarting the remote
-daemon as well avoids version skew while smoke testing.
+remote roots, fetching and comparing the manifest, transferring and extracting
+changed files, processing each contributor, rebuilding FTS, and swapping the
+database. Archive downloads also show live compressed-byte progress when the
+remote daemon provides a `Content-Length` header. The new phases and bulk-ingest
+path come from the collector; a spoke upgrade is needed only for manifest-delta
+transfer. If an upgraded binary does not show those phases, restart the local
+collector daemon.
 
 ______________________________________________________________________
 

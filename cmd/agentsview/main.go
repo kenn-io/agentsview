@@ -318,6 +318,7 @@ func runServe(cfg config.Config, opts serveOptions) {
 		server.WithBaseContext(ctx),
 		server.WithBroadcaster(broadcaster),
 		server.WithIdleTracker(idleTracker),
+		server.WithHTTPRemoteCleanupRegistry(httpRemoteCleanupRegistry),
 		server.WithPprof(opts.Pprof),
 	}
 	srvOpts = append(srvOpts, vectorServe.ServerOpts...)

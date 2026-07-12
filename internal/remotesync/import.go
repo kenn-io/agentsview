@@ -13,7 +13,7 @@ import (
 func (im Importer) ImportExtracted(
 	ctx context.Context,
 	targets TargetSet,
-	tmpDir string,
+	root string,
 ) (SyncStats, error) {
 	var stats SyncStats
 	if err := validateTargetSetPaths(targets); err != nil {
@@ -22,55 +22,24 @@ func (im Importer) ImportExtracted(
 	if len(targets.Dirs) == 0 {
 		return stats, nil
 	}
-	engineDirs := make(map[parser.AgentType][]string)
-	remoteDirs := make([]string, 0)
-	tempDirs := make([]string, 0)
-	for agentType, agentDirList := range targets.Dirs {
-		for _, remoteDir := range agentDirList {
-			local, err := safeRemappedRemotePath(tmpDir, remoteDir)
-			if err != nil {
-				return stats, err
-			}
-			engineDirs[agentType] = append(engineDirs[agentType], local)
-			remoteDirs = append(remoteDirs, remoteDir)
-			tempDirs = append(tempDirs, local)
-		}
+	layout, config, err := newImportInputs(
+		im.Host, im.BlockedResultCategories, targets, root,
+	)
+	if err != nil {
+		return stats, err
 	}
 
-	rewriter := func(tempPath string) string {
-		remotePath, ok := tempPathToRemotePath(tempPath, remoteDirs, tempDirs)
-		if !ok {
-			remotePath = RemapToRemotePath(tmpDir, "", tempPath)
-		}
-		return im.Host + ":" + remotePath
-	}
-
-	engine := syncpkg.NewEngine(im.DB, syncpkg.EngineConfig{
-		AgentDirs:               engineDirs,
-		Machine:                 im.Host,
-		IDPrefix:                im.Host + "~",
-		PathRewriter:            rewriter,
-		Ephemeral:               true,
-		BlockedResultCategories: im.BlockedResultCategories,
-	})
+	engine := syncpkg.NewEngine(im.DB, config)
 	defer engine.Close()
 
 	if !im.Full {
-		remoteCache, err := im.DB.LoadRemoteSkippedFiles(im.Host)
-		if err != nil {
-			return stats, fmt.Errorf("load skip cache: %w", err)
+		if err := loadImportSkipCache(im.DB, im.Host, engine, layout); err != nil {
+			return stats, err
 		}
-		remoteCache = migrateVisualStudioCopilotRemoteSkips(
-			im.DB, im.Host, remoteCache,
-		)
-		translated := translateRemoteCacheToTemp(
-			remoteCache, remoteDirs, tempDirs,
-		)
-		engine.InjectSkipCache(translated)
 	}
 
-	engineStats := engine.SyncAll(ctx, im.hostProgress)
-	if err := im.saveSkipCache(engine, remoteDirs, tempDirs); err != nil {
+	engineStats := engine.SyncAll(ctx, hostProgress(im.Host, im.Progress))
+	if err := saveEngineSkipCache(im.DB, engine, layout.paths); err != nil {
 		return stats, err
 	}
 	stats.SessionsSynced = engineStats.Synced
@@ -80,19 +49,119 @@ func (im Importer) ImportExtracted(
 	return stats, nil
 }
 
-func (im Importer) hostProgress(p syncpkg.Progress) {
-	if im.Progress == nil {
-		return
+// importLayout maps stable remote paths to one prepared source root. Keeping
+// this mapping independent from Importer lets prepared HTTP imports and future
+// rebuild contributors share the exact engine inputs and cache translation.
+type importLayout struct {
+	engineDirs map[parser.AgentType][]string
+	paths      remotePathMap
+}
+
+type remotePathMap struct {
+	host       string
+	root       string
+	remoteDirs []string
+	localDirs  []string
+}
+
+func newImportLayout(targets TargetSet, root string) (importLayout, error) {
+	layout := importLayout{
+		engineDirs: make(map[parser.AgentType][]string),
 	}
+	layout.paths.root = root
+	for agentType, agentDirList := range targets.Dirs {
+		for _, remoteDir := range agentDirList {
+			local, err := safeRemappedRemotePath(root, remoteDir)
+			if err != nil {
+				return importLayout{}, err
+			}
+			layout.engineDirs[agentType] = append(layout.engineDirs[agentType], local)
+			layout.paths.remoteDirs = append(layout.paths.remoteDirs, remoteDir)
+			layout.paths.localDirs = append(layout.paths.localDirs, local)
+		}
+	}
+	return layout, nil
+}
+
+func newImportInputs(
+	host string,
+	blockedResultCategories []string,
+	targets TargetSet,
+	root string,
+) (importLayout, syncpkg.EngineConfig, error) {
+	layout, err := newImportLayout(targets, root)
+	if err != nil {
+		return importLayout{}, syncpkg.EngineConfig{}, err
+	}
+	layout.paths.host = host
+	return layout, importEngineConfig(
+		host, blockedResultCategories, layout,
+	), nil
+}
+
+func (p remotePathMap) pathRewriter() func(string) string {
+	return func(localPath string) string {
+		remotePath, ok := tempPathToRemotePath(
+			localPath, p.remoteDirs, p.localDirs,
+		)
+		if !ok {
+			remotePath = RemapToRemotePath(p.root, "", localPath)
+		}
+		return p.host + ":" + remotePath
+	}
+}
+
+func importEngineConfig(
+	host string,
+	blockedResultCategories []string,
+	layout importLayout,
+) syncpkg.EngineConfig {
+	return syncpkg.EngineConfig{
+		AgentDirs:               layout.engineDirs,
+		Machine:                 host,
+		IDPrefix:                host + "~",
+		PathRewriter:            layout.paths.pathRewriter(),
+		Ephemeral:               true,
+		BlockedResultCategories: blockedResultCategories,
+	}
+}
+
+func loadImportSkipCache(
+	database *db.DB,
+	host string,
+	engine *syncpkg.Engine,
+	layout importLayout,
+) error {
+	remoteCache, err := database.LoadRemoteSkippedFiles(host)
+	if err != nil {
+		return fmt.Errorf("load skip cache: %w", err)
+	}
+	remoteCache = migrateVisualStudioCopilotRemoteSkips(database, host, remoteCache)
+	engine.InjectSkipCache(translateRemoteCacheToTemp(
+		remoteCache, layout.paths.remoteDirs, layout.paths.localDirs,
+	))
+	return nil
+}
+
+func hostProgress(host string, progress syncpkg.ProgressFunc) syncpkg.ProgressFunc {
+	if progress == nil {
+		return nil
+	}
+	return func(p syncpkg.Progress) {
+		progress(transformHostProgress(host, p))
+	}
+}
+
+func transformHostProgress(host string, p syncpkg.Progress) syncpkg.Progress {
 	switch {
 	case p.Phase == syncpkg.PhaseDiscovering:
-		p.Detail = fmt.Sprintf("Discovering sessions from %s", im.Host)
+		p.Detail = fmt.Sprintf("Discovering sessions from %s", host)
 	case p.Phase == syncpkg.PhaseSyncing && p.SessionsTotal > 0:
-		p.Detail = fmt.Sprintf("Processing sessions from %s", im.Host)
+		p.Detail = fmt.Sprintf("Processing sessions from %s", host)
 	case p.Phase == syncpkg.PhaseDone && p.SessionsTotal > 0:
-		p.Detail = fmt.Sprintf("Processing sessions from %s", im.Host)
+		p.Detail = fmt.Sprintf("Processing sessions from %s", host)
 	}
-	im.Progress(p)
+	return p
 }
 
 func translateRemoteCacheToTemp(
@@ -116,22 +185,22 @@ func translateRemoteCacheToTemp(
 	return translated
 }
 
-func (im Importer) saveSkipCache(
+func saveEngineSkipCache(
+	database *db.DB,
 	engine *syncpkg.Engine,
-	remoteDirs []string,
-	tempDirs []string,
+	paths remotePathMap,
 ) error {
 	snapshot := engine.SnapshotSkipCache()
 	remoteCache := make(map[string]int64, len(snapshot))
-	for tempPath, mtime := range snapshot {
-		remotePath, ok := tempPathToRemotePath(tempPath, remoteDirs, tempDirs)
+	for localPath, mtime := range snapshot {
+		remotePath, ok := tempPathToRemotePath(
+			localPath, paths.remoteDirs, paths.localDirs,
+		)
 		if ok {
 			remoteCache[remotePath] = mtime
 		}
 	}
-	if err := im.DB.ReplaceRemoteSkippedFiles(
-		im.Host, remoteCache,
-	); err != nil {
+	if err := database.ReplaceRemoteSkippedFiles(paths.host, remoteCache); err != nil {
 		return fmt.Errorf("save skip cache: %w", err)
 	}
 	return nil

@@ -591,6 +591,168 @@ func TestSyncSingleSessionProviderAuthoritativeBypassesProviderSkipCache(t *test
 	assert.False(t, cached)
 }
 
+func TestProcessFileClaudeCachedSourceWithoutStoredSessionSkipsParse(t *testing.T) {
+	root := t.TempDir()
+	sourcePath, fingerprint := writeProcessProviderSource(t, root, "noninteractive.jsonl")
+	fingerprint.Hash = "unchanged-content"
+	source := processFixtureSource(sourcePath)
+	source.Provider = parser.AgentClaude
+	provider := newProcessFixtureProvider(
+		source,
+		fingerprint,
+		parser.ParseOutcome{ResultSetComplete: true},
+	)
+	provider.Def.Type = parser.AgentClaude
+	provider.Def.IDPrefix = "claude:"
+	engine := NewEngine(openTestDB(t), EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {root},
+		},
+		Machine:           "devbox",
+		ProviderFactories: []parser.ProviderFactory{processFixtureFactory{provider: provider}},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentClaude: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	engine.cacheSkip(providerProcessCacheKey(
+		parser.DiscoveredFile{Path: sourcePath, Agent: parser.AgentClaude},
+		source, fingerprint,
+	), fingerprint.MTimeNS)
+
+	res := engine.processFile(context.Background(), parser.DiscoveredFile{
+		Path:  sourcePath,
+		Agent: parser.AgentClaude,
+	})
+
+	require.NoError(t, res.err)
+	assert.True(t, res.skip)
+	assert.Equal(t, []string{"find-source", "fingerprint"}, provider.calls)
+	assert.Empty(t, provider.parseRequests)
+}
+
+func TestProcessFileRowlessCachedSourceChangedHashReparses(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentClaude, parser.AgentCodex} {
+		t.Run(string(agent), func(t *testing.T) {
+			root := t.TempDir()
+			sourcePath, fingerprint := writeProcessProviderSource(
+				t, root, "became-interactive.jsonl",
+			)
+			fingerprint.Hash = "new-valid-content"
+			source := processFixtureSource(sourcePath)
+			source.Provider = agent
+			provider := newProcessFixtureProvider(
+				source,
+				fingerprint,
+				parser.ParseOutcome{
+					Results: []parser.ParseResultOutcome{{
+						Result: processFixtureResult(
+							string(agent)+":valid", agent, "fixture-project",
+							sourcePath, fingerprint,
+						),
+						DataVersion: parser.DataVersionCurrent,
+					}},
+					ResultSetComplete: true,
+				},
+			)
+			provider.Def.Type = agent
+			provider.Def.IDPrefix = string(agent) + ":"
+			engine := NewEngine(openTestDB(t), EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{agent: {root}},
+				Machine:   "devbox",
+				ProviderFactories: []parser.ProviderFactory{
+					processFixtureFactory{provider: provider},
+				},
+				ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+					agent: parser.ProviderMigrationProviderAuthoritative,
+				},
+			})
+			oldFingerprint := fingerprint
+			oldFingerprint.Hash = "old-ignored-content"
+			oldKey := providerProcessCacheKey(
+				parser.DiscoveredFile{Path: sourcePath, Agent: agent},
+				source, oldFingerprint,
+			)
+			engine.cacheSkip(oldKey, fingerprint.MTimeNS)
+
+			res := engine.processFile(context.Background(), parser.DiscoveredFile{
+				Path: sourcePath, Agent: agent,
+			})
+
+			require.NoError(t, res.err)
+			assert.False(t, res.skip)
+			assert.Equal(t, []string{"find-source", "fingerprint", "parse"}, provider.calls)
+			require.Len(t, provider.parseRequests, 1)
+		})
+	}
+}
+
+func TestCacheSkipRetainsOnlyLatestSourceHashKey(t *testing.T) {
+	engine := &Engine{
+		skipCache:        make(map[string]int64),
+		skipFingerprints: make(map[string]string),
+	}
+	const (
+		plain = "/archive/session.jsonl"
+		base  = plain + "?source_hash="
+	)
+	engine.cacheSkip(plain, 1)
+	engine.cacheSkip(base+"old", 1)
+	engine.cacheSkip(base+"new", 1)
+
+	assert.Equal(t, map[string]int64{base + "new": 1}, engine.SnapshotSkipCache())
+}
+
+func TestProcessFileClaudeCachedStoredSessionChangedHashReparses(t *testing.T) {
+	root := t.TempDir()
+	sourcePath, fingerprint := writeProcessProviderSource(t, root, "stored.jsonl")
+	fingerprint.Hash = "new-content"
+	source := processFixtureSource(sourcePath)
+	source.Provider = parser.AgentClaude
+	provider := newProcessFixtureProvider(
+		source,
+		fingerprint,
+		parser.ParseOutcome{ResultSetComplete: true},
+	)
+	provider.Def.Type = parser.AgentClaude
+	provider.Def.IDPrefix = "claude:"
+	engine := NewEngine(openTestDB(t), EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentClaude: {root},
+		},
+		Machine:           "devbox",
+		ProviderFactories: []parser.ProviderFactory{processFixtureFactory{provider: provider}},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			parser.AgentClaude: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	stored := processFixtureResult(
+		"claude:stored",
+		parser.AgentClaude,
+		"fixture-project",
+		sourcePath,
+		fingerprint,
+	)
+	stored.Session.File.Hash = "old-content"
+	written, _, failed, _ := engine.writeBatch(
+		[]pendingWrite{{sess: stored.Session, msgs: stored.Messages}},
+		syncWriteDefault,
+		false,
+	)
+	require.Equal(t, 1, written)
+	require.Zero(t, failed)
+	engine.cacheSkip(source.FingerprintKey, fingerprint.MTimeNS)
+
+	res := engine.processFile(context.Background(), parser.DiscoveredFile{
+		Path:  sourcePath,
+		Agent: parser.AgentClaude,
+	})
+
+	require.NoError(t, res.err)
+	assert.False(t, res.skip)
+	assert.Equal(t, []string{"find-source", "fingerprint", "parse"}, provider.calls)
+	require.Len(t, provider.parseRequests, 1)
+}
+
 func TestProcessFileProviderDevinSkipsStoredFreshSource(t *testing.T) {
 	root := t.TempDir()
 	dbPath, transcriptPath := writeProcessProviderDevinFixture(

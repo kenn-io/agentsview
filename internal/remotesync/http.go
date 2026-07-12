@@ -11,7 +11,9 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 
 	"go.kenn.io/agentsview/internal/db"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
@@ -27,88 +29,67 @@ type HTTPSync struct {
 	BlockedResultCategories []string
 	Progress                syncpkg.ProgressFunc
 	Client                  *http.Client
+	runPrepare              func(context.Context) (*PreparedHTTP, error)
+	removeArchiveSpool      func(string) error
 }
 
-func (hs HTTPSync) Run(ctx context.Context) (SyncStats, error) {
-	client := hs.Client
-	if client == nil {
-		client = http.DefaultClient
+// PreparedCleanupError reports an operation failure while retaining a prepared
+// HTTP source whose cleanup still needs to be retried. RetryCleanup is safe to
+// call more than once. Error matching traverses the original operation and
+// cleanup causes through Unwrap.
+type PreparedCleanupError struct {
+	mu       sync.Mutex
+	cause    error
+	prepared *PreparedHTTP
+}
+
+func (e *PreparedCleanupError) Error() string { return e.cause.Error() }
+
+func (e *PreparedCleanupError) Unwrap() error { return e.cause }
+
+// RetryCleanup retries release of the source retained by this error.
+func (e *PreparedCleanupError) RetryCleanup() error {
+	if e == nil {
+		return nil
 	}
-	hs.report(syncpkg.Progress{
-		Detail: fmt.Sprintf("Resolving agent directories on %s", hs.Host),
-	})
-	targets, err := hs.fetchTargets(ctx, client)
-	if err != nil {
-		return SyncStats{}, err
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.prepared == nil {
+		return nil
 	}
-	if err := validateTargetSetPaths(targets); err != nil {
-		return SyncStats{}, err
+	if err := e.prepared.Close(); err != nil {
+		return err
 	}
-	if hs.DataDir != "" {
-		stats, handled, err := hs.tryMirrorSync(ctx, client, targets)
-		if handled || err != nil {
-			return stats, err
+	e.prepared = nil
+	return nil
+}
+
+func (hs HTTPSync) Run(ctx context.Context) (stats SyncStats, err error) {
+	prepare := hs.Prepare
+	if hs.runPrepare != nil {
+		prepare = hs.runPrepare
+	}
+	prepared, prepareErr := prepare(ctx)
+	if prepareErr != nil {
+		if prepared == nil {
+			return SyncStats{}, prepareErr
 		}
-		hs.report(syncpkg.Progress{
-			Detail: fmt.Sprintf(
-				"Remote %s does not support incremental sync; downloading full archive",
-				hs.Host,
-			),
-		})
+		cleanupErr := prepared.Close()
+		if cleanupErr == nil {
+			return SyncStats{}, prepareErr
+		}
+		return SyncStats{}, &PreparedCleanupError{
+			cause: errors.Join(prepareErr, cleanupErr), prepared: prepared,
+		}
 	}
-	return hs.runLegacy(ctx, client, targets)
-}
-
-// tryMirrorSync runs the incremental mirror flow, reporting
-// handled=false when the remote lacks manifest support and the caller
-// should fall back to the legacy full-archive path. The mirror lock is
-// acquired BEFORE the manifest fetch: concurrent syncs of the same
-// host would otherwise fetch manifests in one order and apply them in
-// another, and the stale manifest's deletion pass would remove files
-// the newer sync just mirrored.
-func (hs HTTPSync) tryMirrorSync(
-	ctx context.Context, client *http.Client, targets TargetSet,
-) (SyncStats, bool, error) {
-	// The manifest covers only dir-scoped agents; file-scoped agents
-	// (Windsurf) stream curated, sanitized exports the manifest cannot
-	// model, so they are fetched as a separate small full archive on
-	// every mirror sync instead of dragging the whole host onto the
-	// full-archive path.
-	dirScoped, fileScoped := targets.SplitFileScoped()
-	mirrorRoot := MirrorDir(hs.DataDir, hs.Host)
-	lock, err := AcquireMirrorLock(ctx, mirrorRoot)
-	if err != nil {
-		return SyncStats{}, true, err
-	}
-	defer func() { _ = lock.Close() }()
-	manifest, supported, err := hs.fetchManifest(ctx, client, dirScoped)
-	if err != nil {
-		return SyncStats{}, true, err
-	}
-	if !supported {
-		return SyncStats{}, false, nil
-	}
-	split := splitTargets{
-		all:        targets,
-		dirScoped:  dirScoped,
-		fileScoped: fileScoped,
-	}
-	stats, err := hs.runMirror(ctx, client, split, manifest, mirrorRoot)
-	return stats, true, err
-}
-
-// runLegacy is the pre-manifest flow: download the full tree into a
-// throwaway temp dir and import it. It remains the path for old
-// daemons (no manifest endpoint) and for callers without a DataDir.
-func (hs HTTPSync) runLegacy(
-	ctx context.Context, client *http.Client, targets TargetSet,
-) (SyncStats, error) {
-	tmpDir, err := hs.downloadAndExtract(ctx, client, targets)
-	if err != nil {
-		return SyncStats{}, err
-	}
-	defer os.RemoveAll(tmpDir)
-	return hs.importRoot(ctx, targets, tmpDir)
+	defer func() {
+		if cleanupErr := prepared.Close(); cleanupErr != nil {
+			err = &PreparedCleanupError{
+				cause: errors.Join(err, cleanupErr), prepared: prepared,
+			}
+		}
+	}()
+	return prepared.ImportActive(ctx)
 }
 
 func (hs HTTPSync) importRoot(
@@ -131,81 +112,6 @@ func (hs HTTPSync) importRoot(
 		),
 	})
 	return stats, nil
-}
-
-// splitTargets carries a target set alongside its SplitFileScoped
-// partition so the mirror flow addresses each half without
-// re-deriving it.
-type splitTargets struct {
-	all        TargetSet
-	dirScoped  TargetSet
-	fileScoped TargetSet
-}
-
-// runMirror syncs incrementally: diff the manifest against the
-// persistent mirror, download only changed files, and import over the
-// complete mirror tree so parser sibling reads keep working. The
-// caller holds the mirror lock from before the manifest fetch through
-// import, because extraction truncates files in place and the engine
-// reads the mirror during SyncAll.
-func (hs HTTPSync) runMirror(
-	ctx context.Context,
-	client *http.Client,
-	targets splitTargets,
-	manifest Manifest,
-	mirrorRoot string,
-) (SyncStats, error) {
-	delta, err := MirrorDiff(mirrorRoot, manifest)
-	if err != nil {
-		return SyncStats{}, err
-	}
-	// Deletions run BEFORE extraction so a remote path that changed
-	// type does not wedge the mirror: a stale file would block
-	// creating a directory of the same name and vice versa.
-	// ApplyMirrorDeletions prunes emptied directories for the same
-	// reason. The pass also clears all file-scoped mirror content
-	// (never in the manifest); the file-scoped archive re-populates it
-	// below, so exports removed on the remote disappear locally too.
-	if err := ApplyMirrorDeletions(mirrorRoot, delta.Deletions); err != nil {
-		return SyncStats{}, err
-	}
-	// Directories stranded at fetch paths (crashed extraction) are
-	// invisible to the deletion pass and would block writing the file.
-	if err := RemoveMirrorTypeConflicts(mirrorRoot, delta.Fetch); err != nil {
-		return SyncStats{}, err
-	}
-	if len(delta.Fetch) > 0 || hs.Full {
-		// Bootstrap heuristic: past half the corpus a full archive is
-		// cheaper than uploading a huge file list, and it doubles as
-		// the empty-mirror bootstrap (fetch == total). --full bypasses
-		// the stat diff entirely: it is the user's remedy for a stale
-		// or corrupt mirror, which the size/mtime comparison cannot
-		// detect (a same-size same-mtime rewrite, or local bit rot).
-		full := hs.Full || len(delta.Fetch)*2 >= delta.Total
-		err := hs.downloadIntoMirror(ctx, client, targets.dirScoped, delta.Fetch, full, mirrorRoot)
-		var statusErr *StatusError
-		if err != nil && !full && errors.As(err, &statusErr) {
-			// Mid-rollout oddity: manifest worked but the delta
-			// request was refused. Retry once as a full archive.
-			err = hs.downloadIntoMirror(ctx, client, targets.dirScoped, delta.Fetch, true, mirrorRoot)
-		}
-		if err != nil {
-			return SyncStats{}, err
-		}
-	}
-	if !targets.fileScoped.IsEmpty() {
-		// File-scoped exports (sanitized Windsurf state DBs) are
-		// regenerated per archive and carry no stat identity the
-		// manifest could diff, so they are re-fetched as a small full
-		// archive on every sync. Extraction preserves the stamped
-		// mtime, so downstream freshness checks still skip unchanged
-		// sessions.
-		err := hs.downloadIntoMirror(ctx, client, targets.fileScoped, nil, true, mirrorRoot)
-		if err != nil {
-			return SyncStats{}, err
-		}
-	}
-	return hs.importRoot(ctx, targets.all, mirrorRoot)
 }
 
 func (hs HTTPSync) fetchManifest(
@@ -275,11 +181,17 @@ func (hs HTTPSync) downloadIntoMirror(
 	fetch []string,
 	full bool,
 	mirrorRoot string,
-) error {
+) (err error) {
 	request := ArchiveRequest{TargetSet: targets}
-	label := fmt.Sprintf("Downloading %d changed files from %s", len(fetch), hs.Host)
+	downloadLabel := fmt.Sprintf(
+		"Downloading %d changed files from %s", len(fetch), hs.Host,
+	)
+	extractLabel := fmt.Sprintf(
+		"Extracting %d changed files from %s", len(fetch), hs.Host,
+	)
 	if full {
-		label = fmt.Sprintf("Downloading session archive from %s", hs.Host)
+		downloadLabel = fmt.Sprintf("Downloading session archive from %s", hs.Host)
+		extractLabel = fmt.Sprintf("Extracting session archive from %s", hs.Host)
 	} else {
 		request.DeltaFiles = fetch
 	}
@@ -301,39 +213,20 @@ func (hs HTTPSync) downloadIntoMirror(
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return httpStatusError(resp)
+	archive, err := hs.downloadArchive(
+		ctx, resp, downloadLabel, filepath.Dir(mirrorRoot),
+	)
+	if err != nil {
+		return err
 	}
-	hs.report(syncpkg.Progress{
-		Detail:     label,
-		BytesTotal: positiveContentLength(resp.ContentLength),
-	})
-	// Progress counts compressed wire bytes so totals stay meaningful.
-	progress := &progressReader{
-		r:     resp.Body,
-		total: positiveContentLength(resp.ContentLength),
-		report: func(done, total int64) {
-			hs.report(syncpkg.Progress{
-				Detail:     label,
-				BytesDone:  done,
-				BytesTotal: total,
-			})
-		},
-	}
-	stream := io.Reader(progress)
-	if resp.Header.Get("Content-Encoding") == "gzip" {
-		gz, err := gzip.NewReader(progress)
-		if err != nil {
-			return fmt.Errorf("decode archive gzip: %w", err)
+	defer func() {
+		if cleanupErr := archive.Close(); cleanupErr != nil {
+			err = retainDownloadedArchiveCleanup(
+				errors.Join(err, cleanupErr), archive, "",
+			)
 		}
-		defer gz.Close()
-		stream = gz
-	}
-	if err := os.MkdirAll(mirrorRoot, 0o755); err != nil {
-		return fmt.Errorf("create mirror dir: %w", err)
-	}
-	if _, err := ExtractTarStream(ctx, stream, mirrorRoot); err != nil {
+	}()
+	if err := archive.extract(ctx, mirrorRoot, hs.Progress, extractLabel); err != nil {
 		return fmt.Errorf("extract archive into mirror: %w", err)
 	}
 	return nil
@@ -369,7 +262,7 @@ func (hs HTTPSync) downloadAndExtract(
 	ctx context.Context,
 	client *http.Client,
 	targets TargetSet,
-) (string, error) {
+) (root string, err error) {
 	body, err := json.Marshal(targets)
 	if err != nil {
 		return "", err
@@ -382,69 +275,45 @@ func (hs HTTPSync) downloadAndExtract(
 	}
 	hs.authorize(req)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept-Encoding", "gzip")
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", httpStatusError(resp)
+	downloadLabel := fmt.Sprintf("Downloading session archive from %s", hs.Host)
+	archive, err := hs.downloadArchive(ctx, resp, downloadLabel, os.TempDir())
+	if err != nil {
+		return "", err
 	}
 	tmpDir, err := os.MkdirTemp("", "agentsview-http-*")
 	if err != nil {
 		return "", fmt.Errorf("create temp dir: %w", err)
 	}
-	archivePath := tmpDir + "/remote-sync.tar"
-	archive, err := os.Create(archivePath)
-	if err != nil {
-		os.RemoveAll(tmpDir)
-		return "", fmt.Errorf("create archive temp file: %w", err)
-	}
-	downloadLabel := fmt.Sprintf("Downloading session archive from %s", hs.Host)
-	hs.report(syncpkg.Progress{
-		Detail:     downloadLabel,
-		BytesTotal: positiveContentLength(resp.ContentLength),
-	})
-	reader := &progressReader{
-		r:     resp.Body,
-		total: positiveContentLength(resp.ContentLength),
-		report: func(done, total int64) {
-			hs.report(syncpkg.Progress{
-				Detail:     downloadLabel,
-				BytesDone:  done,
-				BytesTotal: total,
-			})
-		},
-	}
-	if _, err := io.Copy(archive, reader); err != nil {
-		_ = archive.Close()
-		os.RemoveAll(tmpDir)
-		return "", fmt.Errorf("download archive: %w", err)
-	}
-	if err := archive.Close(); err != nil {
-		os.RemoveAll(tmpDir)
-		return "", fmt.Errorf("close archive temp file: %w", err)
-	}
-	hs.report(syncpkg.Progress{
-		Detail: fmt.Sprintf("Extracting session archive from %s", hs.Host),
-	})
-	archive, err = os.Open(archivePath)
-	if err != nil {
-		os.RemoveAll(tmpDir)
-		return "", fmt.Errorf("open archive temp file: %w", err)
-	}
-	if _, err := ExtractTarStream(ctx, archive, tmpDir); err != nil {
-		_ = archive.Close()
-		os.RemoveAll(tmpDir)
-		return "", fmt.Errorf("extract tar: %w", err)
-	}
-	if err := archive.Close(); err != nil {
-		os.RemoveAll(tmpDir)
-		return "", fmt.Errorf("close archive temp file: %w", err)
-	}
-	if err := os.Remove(archivePath); err != nil {
-		os.RemoveAll(tmpDir)
-		return "", fmt.Errorf("remove archive temp file: %w", err)
+	defer func() {
+		cleanupErr := archive.Close()
+		if err == nil && cleanupErr == nil {
+			return
+		}
+		rootErr := os.RemoveAll(tmpDir)
+		if cleanupErr != nil || rootErr != nil {
+			var retainedArchive *downloadedArchive
+			if cleanupErr != nil {
+				retainedArchive = archive
+			}
+			var retainedRoot string
+			if rootErr != nil {
+				retainedRoot = tmpDir
+			}
+			err = retainDownloadedArchiveCleanup(
+				errors.Join(err, cleanupErr, rootErr),
+				retainedArchive, retainedRoot,
+			)
+		}
+		root = ""
+	}()
+	extractLabel := fmt.Sprintf("Extracting session archive from %s", hs.Host)
+	if err := archive.extract(ctx, tmpDir, hs.Progress, extractLabel); err != nil {
+		return "", err
 	}
 	return tmpDir, nil
 }
@@ -453,6 +322,10 @@ func (hs HTTPSync) report(progress syncpkg.Progress) {
 	if hs.Progress != nil {
 		hs.Progress(progress)
 	}
+}
+
+func (hs HTTPSync) reportProgressDetail(detail string) {
+	hs.report(syncpkg.Progress{Detail: detail})
 }
 
 func positiveContentLength(n int64) int64 {

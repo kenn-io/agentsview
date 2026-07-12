@@ -211,10 +211,11 @@ type MirrorLockHandle struct {
 func AcquireMirrorLock(
 	ctx context.Context, mirrorRoot string,
 ) (*MirrorLockHandle, error) {
-	if err := os.MkdirAll(filepath.Dir(mirrorRoot), 0o700); err != nil {
-		return nil, fmt.Errorf("create mirror parent dir: %w", err)
+	lockPath, err := canonicalMirrorLockPath(mirrorRoot)
+	if err != nil {
+		return nil, err
 	}
-	lock := flock.New(mirrorRoot + ".lock")
+	lock := flock.New(lockPath)
 	locked, err := lock.TryLockContext(ctx, 250*time.Millisecond)
 	if err != nil {
 		return nil, fmt.Errorf("acquire mirror lock %s: %w", lock.Path(), err)

@@ -131,9 +131,37 @@ func TestAcquireMirrorLockIsExclusive(t *testing.T) {
 	require.NoError(t, second.Close())
 }
 
+func TestAcquireMirrorLockCanonicalizesSymlinkedParent(t *testing.T) {
+	base := t.TempDir()
+	realParent := filepath.Join(base, "real")
+	require.NoError(t, os.MkdirAll(realParent, 0o755))
+	linkParent := filepath.Join(base, "link")
+	if err := os.Symlink(realParent, linkParent); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	realRoot := filepath.Join(realParent, "data", "remote-mirrors", "shared")
+	aliasRoot := filepath.Join(linkParent, "data", "remote-mirrors", "shared")
+	lock, err := AcquireMirrorLock(context.Background(), realRoot)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = lock.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	aliasLock, err := AcquireMirrorLock(ctx, aliasRoot)
+	cancel()
+	if aliasLock != nil {
+		require.NoError(t, aliasLock.Close())
+	}
+	assert.Error(t, err, "symlink aliases must contend on one canonical lock")
+
+	require.NoError(t, lock.Close())
+	aliasLock, err = AcquireMirrorLock(context.Background(), aliasRoot)
+	require.NoError(t, err)
+	require.NoError(t, aliasLock.Close())
+}
+
 func TestRemoveMirrorTypeConflictsRemovesDirAtFetchPath(t *testing.T) {
 	root := t.TempDir()
-	wedged := "/home/u/.claude/projects/p/s.jsonl"
+	wedged := "/archives/claude/projects/p/s.jsonl"
 	local, err := safeRemappedRemotePath(root, wedged)
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(local, 0o755))

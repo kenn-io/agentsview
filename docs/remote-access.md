@@ -186,6 +186,17 @@ run.
    The separate database skip cache avoids unnecessary parsing of unchanged
    sessions during normal syncs.
 
+For a configured full sync that includes local sources, mirror preparation
+finishes before database work begins. The collector then ingests local sources
+and every prepared HTTP mirror through the same batched temporary-database path,
+with FTS maintenance suspended during ingest and rebuilt once before an atomic
+swap. Configured SSH hosts run afterward. A preparation, parser, batch-write, or
+FTS failure leaves the active archive unchanged and prevents the SSH phase.
+
+Remote-only syncs, including
+`agentsview sync --host <configured-http-host> --full`, continue to import into
+the active archive and do not use the combined rebuild path.
+
 If no directory-scoped files changed, the collector skips the archive request
 and imports directly from the existing mirror. Files that disappear remotely are
 deleted from the mirror, but remote import is intentionally non-destructive:
@@ -203,9 +214,7 @@ of the remote state database.
 A full HTTP transfer occurs in these cases:
 
 - the per-host mirror is new or was removed
-- `agentsview sync --full` is used
 - at least half of the manifest files are missing or changed
-- a collector data-version resync forces its configured remote syncs full
 - a delta request is rejected after a manifest succeeded; the collector retries
   once with a full archive
 - the remote daemon does not support manifests, in which case the collector uses
@@ -214,18 +223,26 @@ A full HTTP transfer occurs in these cases:
 Windsurf's curated export is also fetched in full on every sync, independently
 of the directory-scoped archive decision.
 
-`--full` refreshes the mirror bytes and bypasses the persistent remote
-path/mtime skip cache during import. It does not delete the local database or
-turn remote sync into a destructive reconciliation.
+`--full` reparses every discovered remote session but still uses the manifest
+comparison to decide which mirror bytes need transferring. It does not delete
+the local database or turn remote sync into a destructive reconciliation.
 
 ### Compatibility And Recovery
 
-A 0.37.4 collector works with older remote daemons. A missing manifest route —
+A current collector works with older remote daemons that already expose the
+HTTP remote-sync target and archive endpoints. A missing manifest route —
 including an old daemon's HTML app shell answering that route — makes the
-collector report that incremental sync is unavailable and use the legacy
+collector report that incremental transfer is unavailable and use the legacy
 full-archive flow. That flow extracts to a temporary directory and does not
-create or update the persistent mirror. Older collectors also continue to use
-the full-archive endpoint on a 0.37.4 remote.
+create or update the persistent mirror. During a configured full local sync,
+the temporary source still uses the collector's new batched ingest path.
+
+Therefore the collector can be upgraded and tested before its spokes. Upgrading
+only the collector provides the database-ingest speedup; upgrading each spoke
+adds manifest-delta transfer and avoids downloading its complete archive. A
+spoke old enough to lack the target or archive endpoints was not compatible
+with HTTP remote sync before this change either. Older collectors also continue
+to use the full-archive endpoint on a current remote.
 
 The normal mirror comparison detects interrupted extraction when the resulting
 file size or modification time differs from the manifest, and the next sync
@@ -234,23 +251,13 @@ an interrupted extraction.
 
 The comparison does not hash file content. A remote rewrite that preserves both
 size and modification time, or local mirror corruption with the same metadata,
-can therefore look unchanged. Run a full sync to refresh the bytes:
-
-```bash
-# Refresh local sessions and every configured remote.
-agentsview sync --full
-
-# Refresh one configured host through the local daemon.
-agentsview sync --host devbox1 --full
-```
-
-The second form requires `devbox1` to match a configured `[[remote_hosts]]`
-entry; otherwise `--host` is an ad hoc SSH sync.
+can therefore look unchanged. Because `--full` now separates reparsing from
+mirror transfer, it does not repair same-stat corruption by itself.
 
 The mirror is a disposable transfer cache. When no sync is running, deleting a
-host's mirror directory is safe and makes the next compatible sync bootstrap it
-again. Leave the adjacent `.lock` file in place. Removing mirror files never
-removes imported sessions from the database.
+host's mirror directory is the repair procedure: the next compatible sync
+bootstraps it again. Leave the adjacent `.lock` file in place. Removing mirror
+files never removes imported sessions from the database.
 
 ### Transfer Safety
 

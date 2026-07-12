@@ -138,6 +138,13 @@ endpoints. HTTP transfers use a persistent per-host mirror and request file
 deltas when fewer than half of the manifest files need fetching; see
 [Remote Access — Incremental Sync](/remote-access/#incremental-sync).
 
+When a full or automatic data-version rebuild includes local sources, configured
+HTTP hosts join the same temporary-database bulk ingest and atomic swap. `--full`
+reparses the complete local and remote corpus without retransferring unchanged
+files from manifest-capable spokes. Older HTTP-capable spokes remain compatible
+through the full-archive fallback; upgrading them is required only to gain delta
+transfer.
+
 Each `remote_hosts.host` value must be unique and stable. It namespaces imported
 session IDs, the database skip cache, and the persistent mirror; changing it for
 the same machine can duplicate sessions, while reusing it for another machine

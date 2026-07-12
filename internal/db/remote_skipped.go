@@ -34,6 +34,28 @@ func (db *DB) LoadRemoteSkippedFiles(
 	return result, rows.Err()
 }
 
+// ClearRemoteSkippedFiles removes all skip cache entries for the given host.
+// Entries for other hosts are not affected.
+func (db *DB) ClearRemoteSkippedFiles(host string) error {
+	if err := db.requireWritable(); err != nil {
+		return err
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	if _, err := db.getWriter().Exec(
+		"DELETE FROM remote_skipped_files WHERE host = ?",
+		host,
+	); err != nil {
+		return fmt.Errorf(
+			"clearing remote skipped files for %s: %w",
+			host, err,
+		)
+	}
+	return nil
+}
+
 // ReplaceRemoteSkippedFiles replaces all skip cache entries
 // for the given host in a single transaction. Entries for
 // other hosts are not affected.

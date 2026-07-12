@@ -98,3 +98,24 @@ func TestRemoteSkippedFiles(t *testing.T) {
 			"replace-other-2: loaded %v, want %v", loaded2, host2)
 	})
 }
+
+func TestClearRemoteSkippedFiles(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+
+	require.NoError(t, d.ReplaceRemoteSkippedFiles(
+		"host-a", map[string]int64{"/sessions/a.jsonl": 101},
+	))
+	require.NoError(t, d.ReplaceRemoteSkippedFiles(
+		"host-b", map[string]int64{"/sessions/b.jsonl": 202},
+	))
+
+	require.NoError(t, d.ClearRemoteSkippedFiles("host-a"))
+
+	hostA, err := d.LoadRemoteSkippedFiles("host-a")
+	require.NoError(t, err, "LoadRemoteSkippedFiles host-a")
+	assert.Empty(t, hostA)
+
+	hostB, err := d.LoadRemoteSkippedFiles("host-b")
+	require.NoError(t, err, "LoadRemoteSkippedFiles host-b")
+	assert.Equal(t, map[string]int64{"/sessions/b.jsonl": 202}, hostB)
+}

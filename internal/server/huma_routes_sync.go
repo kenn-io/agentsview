@@ -59,6 +59,7 @@ type remoteSyncFailure struct {
 type remoteSyncResponse struct {
 	LocalStats *syncpkg.SyncStats  `json:"local_stats,omitempty"`
 	Failures   []remoteSyncFailure `json:"failures,omitempty"`
+	Error      string              `json:"error,omitempty"`
 }
 
 var runRemoteSync = func(
@@ -93,6 +94,34 @@ var runHTTPRemoteSync = func(
 		BlockedResultCategories: cfg.ResultContentBlockedCategories,
 		Progress:                progress,
 	}.Run(ctx)
+}
+
+type preparedHTTPRebuild interface {
+	BorrowRebuildContributors() ([]syncpkg.RebuildContributor, func(), error)
+	Close() error
+}
+
+var prepareHTTPRebuild = func(
+	ctx context.Context,
+	syncs []remotesync.HTTPSync,
+) (preparedHTTPRebuild, error) {
+	return remotesync.PrepareHTTPSyncs(ctx, syncs)
+}
+
+type preparedHTTPRebuildLease struct {
+	prepared preparedHTTPRebuild
+	release  func()
+}
+
+func (l *preparedHTTPRebuildLease) Close() error {
+	if l == nil {
+		return nil
+	}
+	if l.release != nil {
+		l.release()
+		l.release = nil
+	}
+	return l.prepared.Close()
 }
 
 func (s *Server) humaSyncStatus(
@@ -330,30 +359,252 @@ func (s *Server) runRemoteSyncRequest(
 	var localStats *syncpkg.SyncStats
 	failures := make([]remoteSyncFailure, 0)
 	var remoteStats remotesync.SyncStats
-	run := func(full bool) {
-		failures, remoteStats = s.runRemoteSyncHosts(
-			ctx, local, req.Hosts, full, progress,
-		)
-	}
+	var blocked error
 	if req.IncludeLocal {
-		stats, _ := engine.SyncThenRun(ctx, req.Full, progress,
-			func(forceFull bool) error {
-				run(forceFull)
-				return nil
-			})
-		localStats = &stats
+		httpHosts, sshHosts := partitionRemoteHosts(req.Hosts)
+		outerOwnsHTTP := len(httpHosts) > 0
+		coordinatedRun := func() (remotesync.SyncStats, error) {
+			if !outerOwnsHTTP {
+				stats, err := engine.SyncThenRun(
+					ctx, req.Full, progress, func(forceFull bool) error {
+						failures, remoteStats, blocked = s.runRemoteSyncHostsOwned(
+							ctx, local, req.Hosts, forceFull, progress, true,
+						)
+						return blocked
+					},
+				)
+				localStats = &stats
+				return remotesync.SyncStats{}, err
+			}
+			stats, err := engine.SyncThenRunWithRebuild(
+				ctx, req.Full, progress,
+				func() (
+					syncpkg.RebuildOptions,
+					syncpkg.RebuildCleanup,
+					error,
+				) {
+					prepared, err := prepareHTTPHosts(
+						ctx, s.cfg, local, httpHosts, progress,
+					)
+					if err != nil {
+						return syncpkg.RebuildOptions{}, prepared, err
+					}
+					if prepared == nil {
+						return syncpkg.RebuildOptions{}, nil, nil
+					}
+					contributors, release, err := prepared.BorrowRebuildContributors()
+					if err != nil {
+						return syncpkg.RebuildOptions{}, prepared, err
+					}
+					return syncpkg.RebuildOptions{Contributors: contributors},
+						&preparedHTTPRebuildLease{
+							prepared: prepared,
+							release:  release,
+						}, nil
+				},
+				func(forceFull, rebuilt bool) error {
+					hosts := req.Hosts
+					if rebuilt {
+						hosts = sshHosts
+					}
+					failures, remoteStats, blocked = s.runRemoteSyncHostsOwned(
+						ctx, local, hosts, forceFull, progress, !outerOwnsHTTP,
+					)
+					return blocked
+				},
+			)
+			localStats = &stats
+			return remotesync.SyncStats{}, err
+		}
+		var coordinatorErr error
+		if outerOwnsHTTP {
+			_, coordinatorErr = s.httpRemoteCleanupRegistry.Run(coordinatedRun)
+		} else {
+			_, coordinatorErr = coordinatedRun()
+		}
+		if coordinatorErr != nil {
+			if failure, ok := httpCoordinatorFailure(httpHosts, coordinatorErr); ok {
+				log.Printf("remote sync %s: %v", failure.Host.Host, coordinatorErr)
+				failures = append(failures, failure)
+				blocked = nil
+			} else {
+				blocked = coordinatorErr
+			}
+		} else if localStats != nil && localStats.Aborted {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				blocked = ctxErr
+			} else {
+				blocked = syncpkg.ErrUnifiedRebuildAborted
+			}
+		}
 	} else {
-		_ = engine.RunExclusive(func() error {
-			run(req.Full)
-			return nil
-		})
+		httpHosts, _ := partitionRemoteHosts(req.Hosts)
+		outerOwnsHTTP := len(httpHosts) > 0
+		exclusiveRun := func() (remotesync.SyncStats, error) {
+			err := engine.RunExclusive(func() error {
+				failures, remoteStats, blocked = s.runRemoteSyncHostsOwned(
+					ctx, local, req.Hosts, req.Full, progress, !outerOwnsHTTP,
+				)
+				return blocked
+			})
+			return remotesync.SyncStats{}, err
+		}
+		if outerOwnsHTTP {
+			_, blocked = s.httpRemoteCleanupRegistry.Run(exclusiveRun)
+		} else {
+			_, blocked = exclusiveRun()
+		}
 	}
 	s.emitRemoteSyncChanged(remoteStats)
 
 	return remoteSyncResponse{
 		LocalStats: localStats,
 		Failures:   failures,
+		Error:      remoteSyncTopLevelError(blocked),
 	}
+}
+
+func remoteSyncTopLevelError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled.Error()
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return context.DeadlineExceeded.Error()
+	}
+	if errors.Is(err, syncpkg.ErrUnifiedRebuildAborted) {
+		return syncpkg.ErrUnifiedRebuildAborted.Error()
+	}
+	if isHTTPRemoteCoordinatorError(err) {
+		return remotesync.FailureSummary(err)
+	}
+	return "local sync failed"
+}
+
+func partitionRemoteHosts(
+	hosts []config.RemoteHost,
+) (httpHosts, sshHosts []config.RemoteHost) {
+	for _, host := range hosts {
+		if host.Transport == config.RemoteTransportHTTP {
+			httpHosts = append(httpHosts, host)
+		} else {
+			sshHosts = append(sshHosts, host)
+		}
+	}
+	return httpHosts, sshHosts
+}
+
+func prepareHTTPHosts(
+	ctx context.Context,
+	cfg config.Config,
+	local *db.DB,
+	hosts []config.RemoteHost,
+	progress func(syncpkg.Progress),
+) (preparedHTTPRebuild, error) {
+	if len(hosts) == 0 {
+		return nil, nil
+	}
+	syncs := make([]remotesync.HTTPSync, 0, len(hosts))
+	for _, host := range hosts {
+		if host.Token == "" {
+			return nil, &remotesync.HostError{
+				Host:      host.Host,
+				Operation: "authenticate",
+				Err:       errors.New("HTTP remote sync token is required"),
+			}
+		}
+		syncs = append(syncs, remotesync.HTTPSync{
+			Host:                    host.Host,
+			URL:                     host.URL,
+			Token:                   host.Token,
+			Full:                    true,
+			DataDir:                 cfg.DataDir,
+			DB:                      local,
+			BlockedResultCategories: cfg.ResultContentBlockedCategories,
+			Progress:                progress,
+		})
+	}
+	return prepareHTTPRebuild(ctx, syncs)
+}
+
+func httpCoordinatorFailure(
+	hosts []config.RemoteHost,
+	err error,
+) (remoteSyncFailure, bool) {
+	var pending *remotesync.PendingCleanupError
+	if errors.As(err, &pending) {
+		return remoteSyncFailure{}, false
+	}
+	primary := primaryRemoteCoordinatorError(err)
+	var hostName string
+	summaryErr := primary
+	var contributorErr *syncpkg.RebuildContributorError
+	if errors.As(primary, &contributorErr) {
+		hostName = contributorErr.Contributor
+		summaryErr = contributorErr.Err
+	} else {
+		var hostErr *remotesync.HostError
+		if errors.As(primary, &hostErr) {
+			hostName = hostErr.Host
+		}
+	}
+	for _, host := range hosts {
+		if host.Host == hostName {
+			return remoteSyncFailure{
+				Host: remoteSyncFailureHost(host),
+				Err:  remotesync.FailureSummary(summaryErr),
+			}, true
+		}
+	}
+	return remoteSyncFailure{}, false
+}
+
+func primaryRemoteCoordinatorError(err error) error {
+	for err != nil {
+		if joined, ok := err.(interface{ Unwrap() []error }); ok {
+			var first error
+			for _, child := range joined.Unwrap() {
+				if child != nil {
+					first = child
+					break
+				}
+			}
+			if first == nil {
+				return err
+			}
+			err = first
+			continue
+		}
+		switch err.(type) {
+		case *syncpkg.RebuildContributorError, *remotesync.HostError:
+			return err
+		}
+		unwrapped := errors.Unwrap(err)
+		if unwrapped == nil {
+			return err
+		}
+		err = unwrapped
+	}
+	return nil
+}
+
+func isHTTPRemoteCoordinatorError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var pending *remotesync.PendingCleanupError
+	if errors.As(err, &pending) {
+		return true
+	}
+	primary := primaryRemoteCoordinatorError(err)
+	var contributor *syncpkg.RebuildContributorError
+	if errors.As(primary, &contributor) {
+		return true
+	}
+	var host *remotesync.HostError
+	return errors.As(primary, &host)
 }
 
 func (s *Server) runRemoteSyncHosts(
@@ -362,7 +613,28 @@ func (s *Server) runRemoteSyncHosts(
 	hosts []config.RemoteHost,
 	full bool,
 	progress func(syncpkg.Progress),
-) ([]remoteSyncFailure, remotesync.SyncStats) {
+) ([]remoteSyncFailure, remotesync.SyncStats, error) {
+	return s.runRemoteSyncHostsOwned(
+		ctx, local, hosts, full, progress, true,
+	)
+}
+
+type httpCleanupRetrier interface {
+	RetryCleanup() error
+}
+
+// runRemoteSyncHostsOwned optionally acquires the server's HTTP cleanup
+// registry per host. A false value is only valid while the caller already
+// owns that registry around the entire operation; retryable cleanup errors are
+// then returned immediately so the outer owner can retain them.
+func (s *Server) runRemoteSyncHostsOwned(
+	ctx context.Context,
+	local *db.DB,
+	hosts []config.RemoteHost,
+	full bool,
+	progress func(syncpkg.Progress),
+	acquireHTTPRegistry bool,
+) ([]remoteSyncFailure, remotesync.SyncStats, error) {
 	failures := make([]remoteSyncFailure, 0)
 	var totals remotesync.SyncStats
 	for _, rh := range hosts {
@@ -381,7 +653,16 @@ func (s *Server) runRemoteSyncHosts(
 			}
 			stats, err = runRemoteSync(ctx, rs)
 		case config.RemoteTransportHTTP:
-			stats, err = runHTTPRemoteSync(ctx, s.cfg, local, rh, full, progress)
+			runHTTP := func() (remotesync.SyncStats, error) {
+				return runHTTPRemoteSync(
+					ctx, s.cfg, local, rh, full, progress,
+				)
+			}
+			if acquireHTTPRegistry {
+				stats, err = s.httpRemoteCleanupRegistry.Run(runHTTP)
+			} else {
+				stats, err = runHTTP()
+			}
 		default:
 			err = fmt.Errorf("invalid remote transport %q", rh.Transport)
 		}
@@ -390,6 +671,10 @@ func (s *Server) runRemoteSyncHosts(
 		totals.Skipped += stats.Skipped
 		totals.Failed += stats.Failed
 		if err != nil {
+			var pending *remotesync.PendingCleanupError
+			if errors.As(err, &pending) {
+				return failures, totals, pending
+			}
 			// The raw error can embed the remote URL and response
 			// bodies, so it goes only to the local log; the API
 			// response carries the sanitized summary.
@@ -398,9 +683,15 @@ func (s *Server) runRemoteSyncHosts(
 				Host: remoteSyncFailureHost(rh),
 				Err:  remoteSyncFailureError(rh, err),
 			})
+			if !acquireHTTPRegistry {
+				var cleanup httpCleanupRetrier
+				if errors.As(err, &cleanup) {
+					return failures, totals, err
+				}
+			}
 		}
 	}
-	return failures, totals
+	return failures, totals, nil
 }
 
 func remoteSyncFailureHost(rh config.RemoteHost) config.RemoteHost {

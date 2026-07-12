@@ -2927,7 +2927,7 @@ func TestStampProviderFileIdentityPreservesProviderSnapshotIdentity(t *testing.T
 	assert.Equal(t, replacementDevice, results[1].Session.File.Device)
 }
 
-func TestProviderProcessCacheKeyCodexStaysContentIndependent(t *testing.T) {
+func TestProviderProcessCacheKeyCodexIncludesContentHash(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	file := parser.DiscoveredFile{Path: path, Agent: parser.AgentCodex}
 	source := parser.SourceRef{
@@ -2942,9 +2942,10 @@ func TestProviderProcessCacheKeyCodexStaysContentIndependent(t *testing.T) {
 		Key: path, Hash: "second-content-hash",
 	})
 
-	assert.Equal(t, path, first)
-	assert.Equal(t, first, second,
-		"Codex content versions must reuse one bounded skip-cache key")
+	assert.Equal(t, path+"?source_hash=first-content-hash", first)
+	assert.Equal(t, path+"?source_hash=second-content-hash", second)
+	assert.NotEqual(t, first, second,
+		"same-stat content rewrites must not reuse a rowless skip entry")
 }
 
 func (p *incrementalRequestRecorder) Parse(
