@@ -1039,7 +1039,7 @@ func startupSnapshotElapsed(
 	if st != nil && !st.StartedAt.IsZero() && !now.Before(st.StartedAt) {
 		startedAt = st.StartedAt
 	}
-	elapsed := now.Sub(startedAt).Round(time.Second)
+	elapsed := now.Sub(startedAt)
 	if elapsed < 0 {
 		return 0
 	}

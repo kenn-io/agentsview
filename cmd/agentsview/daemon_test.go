@@ -773,6 +773,31 @@ func TestDaemonRestartStreamsProgressUntilReady(t *testing.T) {
 		"agentsview restarted at http://127.0.0.1:8080 (pid 92)\n", out.String())
 }
 
+func TestDaemonRestartProgressHeartbeatUsesUnroundedElapsed(t *testing.T) {
+	var out bytes.Buffer
+	progress := daemonRestartProgressWriter{w: &out}
+	startedAt := time.Unix(100, 0)
+	state := &startupState{StartedAt: startedAt, Phase: "initial sync"}
+
+	progress.progress(state, startupSnapshotElapsed(
+		state, startedAt, startedAt.Add(1400*time.Millisecond),
+	))
+	progress.progress(state, startupSnapshotElapsed(
+		state, startedAt, startedAt.Add(5600*time.Millisecond),
+	))
+	assert.Equal(t, "  initial sync (1s)\n", out.String(),
+		"4.2 seconds of unchanged progress must not emit a heartbeat")
+	progress.progress(state, startupSnapshotElapsed(
+		state, startedAt, startedAt.Add(6400*time.Millisecond),
+	))
+
+	assert.Equal(t,
+		"  initial sync (1s)\n"+
+			"  initial sync (6s)\n",
+		out.String(),
+	)
+}
+
 func TestDaemonRestartCancellationLeavesReplacementRunning(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
 	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
