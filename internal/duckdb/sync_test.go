@@ -1229,6 +1229,14 @@ func TestDuckSessionFingerprintFieldsDiffer(t *testing.T) {
 				return s
 			},
 		},
+		{
+			name: "transcript revision change",
+			modify: func(s db.Session) db.Session {
+				revision := "1"
+				s.TranscriptRevision = &revision
+				return s
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1236,6 +1244,53 @@ func TestDuckSessionFingerprintFieldsDiffer(t *testing.T) {
 			assert.NotEqual(t, fp1, encode(tt.modify(base)))
 		})
 	}
+}
+
+func TestTranscriptRevisionBackfillForcesOneFullDuckDBPush(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	fixture := seedDuckDBSyncFixture(t, local)
+	syncer := newInMemoryTestSync(t, local, SyncOptions{
+		SyncStateTarget: "target-a",
+	})
+	backfillKey := "duckdb_transcript_revision_backfill_v1:target-a"
+
+	_, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+
+	msgs, err := local.GetAllMessages(ctx, fixture.alphaID)
+	require.NoError(t, err)
+	require.NotEmpty(t, msgs)
+	msgs[0].Content = "revised transcript"
+	require.NoError(t, local.ReplaceSessionMessages(fixture.alphaID, msgs))
+	localSession, err := local.GetSession(ctx, fixture.alphaID)
+	require.NoError(t, err)
+	require.NotNil(t, localSession)
+	require.NotNil(t, localSession.TranscriptRevision)
+	require.NoError(t, local.SetSyncState(
+		backfillKey, "",
+	))
+
+	backfill, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.True(t, backfill.Diagnostics.Full)
+	assert.Equal(t, 2, backfill.SessionsPushed)
+
+	var revision string
+	require.NoError(t, syncer.DB().QueryRowContext(
+		ctx,
+		`SELECT transcript_revision FROM sessions WHERE id = ?`,
+		fixture.alphaID,
+	).Scan(&revision))
+	assert.Equal(t, *localSession.TranscriptRevision, revision)
+
+	done, err := local.GetSyncState(backfillKey)
+	require.NoError(t, err)
+	assert.Equal(t, "1", done)
+
+	incremental, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.False(t, incremental.Diagnostics.Full)
 }
 
 func TestWriteSyncFingerprintsNormalizesRetainedLegacyValues(t *testing.T) {
@@ -2183,6 +2238,9 @@ func newTestSync(
 	t.Helper()
 	syncer, err := New(path, local, "test-machine", opts)
 	require.NoError(t, err)
+	require.NoError(t, local.SetSyncState(
+		syncer.transcriptRevisionBackfillKey(), "1",
+	))
 	t.Cleanup(func() {
 		require.NoError(t, syncer.Close())
 	})

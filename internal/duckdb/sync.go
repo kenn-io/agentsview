@@ -18,9 +18,10 @@ import (
 )
 
 const (
-	lastPushStateKey         = "duckdb_last_push_at"
-	lastPushBoundaryStateKey = "duckdb_last_push_boundary_state"
-	localSyncTimestampLayout = "2006-01-02T15:04:05.000Z"
+	lastPushStateKey                   = "duckdb_last_push_at"
+	lastPushBoundaryStateKey           = "duckdb_last_push_boundary_state"
+	transcriptRevisionBackfillStateKey = "duckdb_transcript_revision_backfill_v1"
+	localSyncTimestampLayout           = "2006-01-02T15:04:05.000Z"
 )
 
 type syncState struct {
@@ -157,6 +158,21 @@ func (s *Sync) syncStateKey(key string) string {
 	return key + ":" + s.syncStateScope
 }
 
+func (s *Sync) transcriptRevisionBackfillKey() string {
+	key := s.syncStateKey(transcriptRevisionBackfillStateKey)
+	if !s.isFiltered() {
+		return key
+	}
+	projects := append([]string(nil), s.projects...)
+	excluded := append([]string(nil), s.excludeProjects...)
+	sort.Strings(projects)
+	sort.Strings(excluded)
+	scope := strings.Join(projects, "\x00") + "\x01" +
+		strings.Join(excluded, "\x00")
+	sum := sha256.Sum256([]byte(scope))
+	return key + ":filter:" + hex.EncodeToString(sum[:])
+}
+
 // EnsureSchema creates or additively migrates the DuckDB mirror schema.
 func (s *Sync) EnsureSchema(ctx context.Context) error {
 	s.schemaMu.Lock()
@@ -212,6 +228,24 @@ func (s *Sync) Push(
 	}
 	if full {
 		lastPush = ""
+	}
+	transcriptRevisionBackfillKey := s.transcriptRevisionBackfillKey()
+	transcriptRevisionBackfillDone, err := s.local.GetSyncState(
+		transcriptRevisionBackfillKey,
+	)
+	if err != nil {
+		return result, fmt.Errorf(
+			"reading %s: %w", transcriptRevisionBackfillKey, err,
+		)
+	}
+	transcriptRevisionBackfillNeeded :=
+		transcriptRevisionBackfillDone != "1"
+	if transcriptRevisionBackfillNeeded {
+		log.Printf(
+			"duckdbsync: transcript revision backfill marker missing; forcing full push",
+		)
+		lastPush = ""
+		full = true
 	}
 	if lastPush == "" && !s.isFiltered() {
 		full = true
@@ -387,6 +421,16 @@ func (s *Sync) Push(
 		sessionFingerprints, advanceWatermark,
 	); err != nil {
 		return result, err
+	}
+	if transcriptRevisionBackfillNeeded && result.Errors == 0 {
+		if err := s.local.SetSyncState(
+			transcriptRevisionBackfillKey, "1",
+		); err != nil {
+			return result, fmt.Errorf(
+				"updating %s: %w",
+				transcriptRevisionBackfillKey, err,
+			)
+		}
 	}
 	result.Duration = time.Since(start)
 	return result, nil
@@ -1069,6 +1113,7 @@ func duckSessionFingerprintFields(sess db.Session, machine string) []any {
 		sess.HasContextData, sess.DataVersion,
 		sess.Cwd, sess.GitBranch, sess.SourceSessionID,
 		sess.SourceVersion, sess.TranscriptFidelity, sess.ParserMalformedLines,
+		nilString(sess.TranscriptRevision),
 		sess.IsTruncated, nilTime(sess.DeletedAt),
 		timeValue(sess.CreatedAt), nilString(sess.TerminationStatus),
 		sess.SecretLeakCount, sess.SecretsRulesVersion,
