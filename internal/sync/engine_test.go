@@ -199,6 +199,46 @@ func TestStartupSyncFallbackRecoversCanceledForegroundSync(t *testing.T) {
 		"a failed foreground request must leave startup recovery eligible")
 }
 
+func TestStartupSyncFallbackReleasesMaintenanceAfterCanceledAttempt(
+	t *testing.T,
+) {
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		Machine:                 "local",
+		DeferStartupMaintenance: true,
+	})
+	t.Cleanup(engine.Close)
+
+	maintenanceStarted := make(chan struct{})
+	maintenanceDone := make(chan error, 1)
+	go func() {
+		maintenanceDone <- engine.RunStartupMaintenance(
+			t.Context(),
+			func() error {
+				close(maintenanceStarted)
+				return nil
+			},
+		)
+	}()
+
+	fallbackCtx, cancelFallback := context.WithCancel(t.Context())
+	cancelFallback()
+	_, ran, err := engine.RunStartupSyncFallback(fallbackCtx, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.True(t, ran)
+
+	require.Eventually(t, func() bool {
+		select {
+		case <-maintenanceStarted:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond,
+		"an attempted fallback must release startup maintenance")
+	require.NoError(t, <-maintenanceDone)
+}
+
 func TestStartupSyncFallbackRechecksAfterInFlightForegroundSync(t *testing.T) {
 	database := openTestDB(t)
 	engine := NewEngine(database, EngineConfig{

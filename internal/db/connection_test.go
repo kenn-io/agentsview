@@ -76,3 +76,30 @@ func TestSQLiteConnectionMemoryPragmas(t *testing.T) {
 		})
 	}
 }
+
+func TestReaderPoolRetainsConfiguredBurstConnections(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	database, err := Open(path)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, database.Close())
+	})
+
+	reader := database.rawReader()
+	require.Equal(t, readerMaxOpenConns, reader.Stats().MaxOpenConnections)
+
+	connections := make([]*sql.Conn, 0, readerMaxOpenConns)
+	for range readerMaxOpenConns {
+		conn, connErr := reader.Conn(t.Context())
+		require.NoError(t, connErr)
+		connections = append(connections, conn)
+	}
+	assert.Equal(t, readerMaxOpenConns, reader.Stats().InUse)
+
+	for _, conn := range connections {
+		require.NoError(t, conn.Close())
+	}
+	stats := reader.Stats()
+	assert.Equal(t, readerMaxOpenConns, stats.Idle)
+	assert.Zero(t, stats.MaxIdleClosed)
+}

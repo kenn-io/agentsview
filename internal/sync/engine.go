@@ -1918,9 +1918,9 @@ func (e *Engine) RunStartupSyncFallback(
 	stats, err = e.syncThenRunLocked(
 		ctx, false, onProgress, func(bool) error { return nil },
 	)
-	if err == nil {
-		e.ReleaseStartupMaintenance()
-	}
+	// Once the fallback has attempted the skipped startup sync, maintenance
+	// must be allowed to proceed even if that attempt was interrupted.
+	e.ReleaseStartupMaintenance()
 	return stats, true, err
 }
 

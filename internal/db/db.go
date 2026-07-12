@@ -777,6 +777,10 @@ func makeDSN(path string, readOnly bool) string {
 
 func configureReaderPool(reader *sql.DB) {
 	reader.SetMaxOpenConns(readerMaxOpenConns)
+	// Keep burst readers warm. The database/sql default retains only two,
+	// which makes concurrent sync checks repeatedly reopen SQLite and parse
+	// the full schema.
+	reader.SetMaxIdleConns(readerMaxOpenConns)
 	reader.SetConnMaxIdleTime(readerConnMaxIdleTime)
 }
 
