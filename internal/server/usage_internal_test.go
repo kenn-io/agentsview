@@ -43,6 +43,24 @@ type usageSummaryCountsSpy struct {
 	result               db.DailyUsageResult
 }
 
+type usageComparisonProjectKeySpy struct {
+	usageSummaryCountsSpy
+	activeLabels []string
+	projectMap   map[string]export.ProjectMapEntry
+}
+
+func (s *usageComparisonProjectKeySpy) GetActiveProjectLabels(
+	context.Context,
+) ([]string, error) {
+	return s.activeLabels, nil
+}
+
+func (s *usageComparisonProjectKeySpy) BuildProjectIdentityMap(
+	context.Context, []string,
+) (map[string]export.ProjectMapEntry, error) {
+	return s.projectMap, nil
+}
+
 func TestUsageSummaryResponseEmitsEmptyProjectsMap(t *testing.T) {
 	b, err := json.Marshal(UsageSummaryResponse{
 		SchemaVersion: 1,
@@ -188,6 +206,31 @@ func TestUsageComparisonCopiesGitBranchFilterToPriorPeriod(t *testing.T) {
 
 	require.Len(t, spy.filters, 1)
 	assert.Equal(t, branch, spy.filters[0].GitBranch)
+}
+
+func TestUsageComparisonCopiesResolvedProjectExclusionToPriorPeriod(
+	t *testing.T,
+) {
+	const (
+		projectLabel = "team,core"
+		projectKey   = "pl1:sha256:hidden"
+	)
+	spy := &usageComparisonProjectKeySpy{
+		activeLabels: []string{projectLabel},
+		projectMap: map[string]export.ProjectMapEntry{
+			projectLabel: {ProjectKey: projectKey},
+		},
+	}
+	s := newRoutedTestServerWithStore(t, spy)
+
+	w := serveGet(t, s,
+		"/api/v1/usage/comparison?"+oneDayUsageRange+
+			"&current_cost=3&exclude_project_key="+url.QueryEscape(projectKey))
+	assertRecorderStatus(t, w, http.StatusOK)
+
+	require.Len(t, spy.filters, 1)
+	assert.Equal(t, []string{projectLabel},
+		spy.filters[0].ExcludeProjectLabels)
 }
 
 func TestUsageComparisonRequiresCurrentCost(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"slices"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -239,25 +240,12 @@ func (s *Server) computeUsageComparison(
 	days := int(toT.Sub(fromT).Hours()/24) + 1
 	priorTo := fromT.AddDate(0, 0, -1)
 	priorFrom := priorTo.AddDate(0, 0, -(days - 1))
-	priorFilter := db.UsageFilter{
-		From:             priorFrom.Format("2006-01-02"),
-		To:               priorTo.Format("2006-01-02"),
-		Agent:            f.Agent,
-		Project:          f.Project,
-		Machine:          f.Machine,
-		GitBranch:        f.GitBranch,
-		Model:            f.Model,
-		ExcludeProject:   f.ExcludeProject,
-		ExcludeAgent:     f.ExcludeAgent,
-		ExcludeModel:     f.ExcludeModel,
-		Timezone:         f.Timezone,
-		MinUserMessages:  f.MinUserMessages,
-		ExcludeOneShot:   f.ExcludeOneShot,
-		ExcludeAutomated: f.ExcludeAutomated,
-		ActiveSince:      f.ActiveSince,
-		Termination:      f.Termination,
-		Breakdowns:       false,
-	}
+	priorFilter := f
+	priorFilter.From = priorFrom.Format("2006-01-02")
+	priorFilter.To = priorTo.Format("2006-01-02")
+	priorFilter.ProjectLabels = slices.Clone(f.ProjectLabels)
+	priorFilter.ExcludeProjectLabels = slices.Clone(f.ExcludeProjectLabels)
+	priorFilter.Breakdowns = false
 	priorResult, err := s.db.GetDailyUsage(ctx, priorFilter)
 	if err != nil {
 		return nil, err
