@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 // that receives a value whenever the tracker reports going idle.
 type idleTrackerFixture struct {
 	tracker *IdleTracker
-	fired   chan struct{}
+	fired   chan time.Time
 }
 
 // newIdleTrackerFixture builds a tracker whose onIdle callback signals
@@ -23,9 +24,9 @@ func newIdleTrackerFixture(
 	t *testing.T, timeout time.Duration,
 ) *idleTrackerFixture {
 	t.Helper()
-	fired := make(chan struct{}, 1)
+	fired := make(chan time.Time, 1)
 	return &idleTrackerFixture{
-		tracker: NewIdleTracker(timeout, func() { fired <- struct{}{} }),
+		tracker: NewIdleTracker(timeout, func() { fired <- time.Now() }),
 		fired:   fired,
 	}
 }
@@ -52,12 +53,14 @@ func (f *idleTrackerFixture) requireNotFiredWithin(
 // requireFiredWithin fails if the tracker does not report idle within d.
 func (f *idleTrackerFixture) requireFiredWithin(
 	t *testing.T, d time.Duration, msg string,
-) {
+) time.Time {
 	t.Helper()
 	select {
-	case <-f.fired:
+	case firedAt := <-f.fired:
+		return firedAt
 	case <-time.After(d):
 		require.FailNow(t, msg)
+		return time.Time{}
 	}
 }
 
@@ -94,16 +97,62 @@ func assertBeginWorkRejected(t *testing.T, tracker *IdleTracker) {
 }
 
 func TestIdleTrackerExternalRequestResetsIdle(t *testing.T) {
-	f := newIdleTrackerFixture(t, 40*time.Millisecond)
+	timeout := 40 * time.Millisecond
+	f := newIdleTrackerFixture(t, timeout)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	requestDone := make(chan *httptest.ResponseRecorder, 1)
+
+	var releaseOnce sync.Once
+	releaseRequest := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseRequest)
+
+	go func() {
+		rec := httptest.NewRecorder()
+		f.tracker.Wrap(http.HandlerFunc(func(
+			w http.ResponseWriter, _ *http.Request,
+		) {
+			close(entered)
+			<-release
+			w.WriteHeader(http.StatusNoContent)
+		})).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+		requestDone <- rec
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		require.FailNow(t, "wrapped request did not enter handler")
+	}
+
 	f.run(t)
+	f.tracker.mu.Lock()
+	lastExternalBeforeRelease := f.tracker.lastExternal
+	f.tracker.mu.Unlock()
 
-	time.Sleep(25 * time.Millisecond)
-	serveWrappedNoContent(t, f.tracker)
+	f.requireNotFiredWithin(t, 2*timeout,
+		"idle fired while external request was active")
 
-	f.requireNotFiredWithin(t, 25*time.Millisecond,
-		"idle fired before reset timeout elapsed")
-	f.requireFiredWithin(t, 80*time.Millisecond,
+	releasedAt := time.Now()
+	releaseRequest()
+
+	var rec *httptest.ResponseRecorder
+	select {
+	case rec = <-requestDone:
+	case <-time.After(time.Second):
+		require.FailNow(t, "wrapped request did not complete after release")
+	}
+	require.Equal(t, http.StatusNoContent, rec.Code)
+
+	f.tracker.mu.Lock()
+	lastExternalAfterRelease := f.tracker.lastExternal
+	f.tracker.mu.Unlock()
+	require.True(t, lastExternalAfterRelease.After(lastExternalBeforeRelease),
+		"request completion did not advance external activity timestamp")
+
+	firedAt := f.requireFiredWithin(t, time.Second,
 		"idle did not fire after external activity became idle")
+	require.GreaterOrEqual(t, firedAt.Sub(releasedAt), timeout)
 }
 
 func TestIdleTrackerInternalWorkBlocksWithoutResettingIdle(t *testing.T) {
