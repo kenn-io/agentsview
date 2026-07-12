@@ -46,6 +46,7 @@ func TestOutputFormat_RejectsInvalid(t *testing.T) {
 // --format and the --json alias. token-use (deprecated, JSON-only) and
 // openapi (spec-only) are deliberately excluded.
 var machineOutputCommandPaths = [][]string{
+	{"version"},
 	{"projects"},
 	{"health"},
 	{"usage", "daily"},

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -817,16 +818,36 @@ func newDuckDBQuackCommand() *cobra.Command {
 }
 
 func newVersionCommand() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:          "version",
 		Short:        "Show version information",
 		GroupID:      groupMeta,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if outputFormat(cmd) == "json" {
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(versionJSON{
+					SchemaVersion: 1,
+					Name:          "agentsview",
+					Version:       version,
+					Commit:        commit,
+					BuildDate:     buildDate,
+				})
+			}
 			printVersion(cmd.OutOrStdout())
+			return nil
 		},
 	}
+	registerFormatFlags(cmd.Flags())
+	return cmd
+}
+
+type versionJSON struct {
+	SchemaVersion int    `json:"schema_version"`
+	Name          string `json:"name"`
+	Version       string `json:"version"`
+	Commit        string `json:"commit"`
+	BuildDate     string `json:"build_date"`
 }
 
 func printVersion(w io.Writer) {

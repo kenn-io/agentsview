@@ -306,15 +306,44 @@ ______________________________________________________________________
 
 ### `agentsview version`
 
-Print the version, git commit, and build date.
+Print the version, git commit, and build date. Use `--json` for a stable,
+machine-readable response that does not require a running daemon, configuration,
+or database.
 
 ```bash
 agentsview version
+agentsview version --json
+agentsview version --format json
 ```
 
 ```
 agentsview 0.23.0 (commit d49f1a9, built 2026-04-19)
 ```
+
+```json
+{
+  "schema_version": 1,
+  "name": "agentsview",
+  "version": "0.23.0",
+  "commit": "d49f1a9",
+  "build_date": "2026-04-19T12:00:00Z"
+}
+```
+
+The JSON contract uses these fields:
+
+| Field            | Type    | Meaning                                      |
+| ---------------- | ------- | -------------------------------------------- |
+| `schema_version` | integer | Version of this JSON contract; currently `1` |
+| `name`           | string  | Canonical tool name, always `agentsview`     |
+| `version`        | string  | Build version                                |
+| `commit`         | string  | Source commit recorded at build time         |
+| `build_date`     | string  | UTC build timestamp, or an empty string       |
+
+Consumers should require the expected `schema_version` and ignore unknown
+fields. Adding an optional field does not require a schema bump; removing or
+renaming a field, changing a field's type or meaning, or making a previously
+valid response invalid does.
 
 ______________________________________________________________________
 
