@@ -239,7 +239,7 @@ can still be parsed.
 | Forge                 | `~/.forge/`                                                                      | SQLite database (`.forge.db`)                                                                                                   |
 | Gemini CLI            | `~/.gemini/`                                                                     | JSONL in `tmp/` subdirectory                                                                                                    |
 | gptme                 | `~/.local/share/gptme/logs/`                                                     | JSONL logs                                                                                                                      |
-| Grok                  | `~/.grok/sessions/`                                                              | `summary.json` metadata plus optional `signals.json` token counters                                                             |
+| Grok                  | `~/.grok/sessions/`                                                              | `summary.json` + optional `signals.json` + `chat_history.jsonl` transcript when present                                         |
 | Hermes Agent          | `~/.hermes/sessions/`                                                            | JSONL / JSON per session                                                                                                        |
 | iFlow                 | `~/.iflow/projects/`                                                             | JSONL per session                                                                                                               |
 | Kilo                  | `~/.local/share/kilo/`                                                           | SQLite DB or `storage/` JSON files                                                                                              |
@@ -271,11 +271,11 @@ can still be parsed.
 | Zed                   | (platform-specific, see below)                                                   | SQLite database (`threads/threads.db`)                                                                                          |
 | Zencoder              | `~/.zencoder/sessions/`                                                          | JSONL per session                                                                                                               |
 
-Grok support is summary-only: AgentsView reads the summary, searchable first
-prompt, timestamps, project label, and message count from `summary.json`, plus
-total output tokens and peak context tokens from `signals.json` when present.
-It does not decode the full transcript from `updates.jsonl` or
-`chat_history.jsonl`. Set `GROK_DIR` or `grok_dirs` to override the default
+Grok sessions are read from `summary.json` (title, timestamps, project),
+optional `signals.json` (token counters), and `chat_history.jsonl` when
+present for the full transcript (user turns, assistant replies, thinking,
+and tool calls). If `chat_history.jsonl` is missing, AgentsView falls back
+to summary-only mode. Set `GROK_DIR` or `grok_dirs` to override the default
 directory.
 
 **VS Code Copilot default directories** vary by platform:

@@ -65,7 +65,7 @@ func grokWatchRoots(roots []string) []WatchRoot {
 		out = append(out, WatchRoot{
 			Path:         root,
 			Recursive:    true,
-			IncludeGlobs: []string{"summary.json", "signals.json"},
+			IncludeGlobs: []string{"summary.json", "signals.json", "chat_history.jsonl"},
 			DebounceKey:  string(AgentGrok) + ":sessions:" + root,
 		})
 	}
@@ -140,7 +140,7 @@ func grokStrictMatch(root, path string) (singleFileMatch, bool) {
 
 func grokTrackedFileName(name string) bool {
 	switch name {
-	case "summary.json", "signals.json":
+	case "summary.json", "signals.json", "chat_history.jsonl":
 		return true
 	default:
 		return false
@@ -200,7 +200,8 @@ func grokFingerprintSource(src singleFileSource) (SourceFingerprint, error) {
 func grokCompanionFiles(summaryPath string) map[string]string {
 	dir := filepath.Dir(summaryPath)
 	return map[string]string{
-		"signals": filepath.Join(dir, "signals.json"),
+		"signals":      filepath.Join(dir, "signals.json"),
+		"chat_history": filepath.Join(dir, "chat_history.jsonl"),
 	}
 }
 

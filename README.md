@@ -357,12 +357,12 @@ thread JSON files.
 | Zed                   | `~/Library/Application Support/Zed/` (macOS)                                                                                                                            |
 | Zencoder              | `~/.zencoder/sessions/`                                                                                                                                                 |
 
-Grok support is summary-only: AgentsView reads the summary,
-searchable first prompt, timestamps, project label, and message count from
-`summary.json`, plus total output tokens and peak context tokens from
-`signals.json` when present. It does not decode the full transcript from
-`updates.jsonl` or `chat_history.jsonl`. Set `GROK_DIR` or `grok_dirs` to
-override the default directory.
+Grok sessions are read from `summary.json` (title, timestamps, project),
+optional `signals.json` (token counters), and `chat_history.jsonl` when
+present for the full transcript (user turns, assistant replies, thinking,
+and tool calls). If `chat_history.jsonl` is missing, AgentsView falls back
+to summary-only mode. Set `GROK_DIR` or `grok_dirs` to override the default
+directory.
 
 Each directory can be overridden with an environment variable. See the
 [configuration docs](https://agentsview.io/configuration/) for details. Cursor

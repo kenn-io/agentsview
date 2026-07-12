@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -30,22 +31,22 @@ func newGrokTestProvider(t *testing.T, root string) Provider {
 func TestGrokProviderSummarySource(t *testing.T) {
 	root := t.TempDir()
 	writeGrokFixtureFile(t, grokSummaryPath(root, "cwd-key", "sess-1"), `{
-		"summary": "Fix parser regression",
-		"firstPrompt": "Investigate the failing Grok session import",
-		"modelId": "grok-code-fast",
-		"createdAt": "2026-07-08T10:00:00Z",
-		"updatedAt": "2026-07-08T10:30:00Z",
-		"lastActiveAt": "2026-07-08T10:31:00Z",
-		"hostname": "devbox",
-		"numMessages": 6,
-		"worktreeLabel": "agentsview"
-	}`)
+			"summary": "Fix parser regression",
+			"firstPrompt": "Investigate the failing Grok session import",
+			"modelId": "grok-code-fast",
+			"createdAt": "2026-07-08T10:00:00Z",
+			"updatedAt": "2026-07-08T10:30:00Z",
+			"lastActiveAt": "2026-07-08T10:31:00Z",
+			"hostname": "devbox",
+			"numMessages": 6,
+			"worktreeLabel": "agentsview"
+		}`)
 	writeGrokFixtureFile(t, filepath.Join(root, "cwd-key", "sess-1", "signals.json"), `{
-		"tokenUsage": {
-			"totalOutputTokens": 321,
-			"peakContextTokens": 4096
-		}
-	}`)
+			"tokenUsage": {
+				"totalOutputTokens": 321,
+				"peakContextTokens": 4096
+			}
+		}`)
 	provider := newGrokTestProvider(t, root)
 	sources, err := provider.Discover(context.Background())
 	require.NoError(t, err)
@@ -74,6 +75,140 @@ func TestGrokProviderSummarySource(t *testing.T) {
 	require.Len(t, outcome.Results[0].Result.Messages, 1)
 	assert.Equal(t, RoleUser, outcome.Results[0].Result.Messages[0].Role)
 	assert.Equal(t, "Investigate the failing Grok session import", outcome.Results[0].Result.Messages[0].Content)
+}
+
+func TestGrokProviderCurrentBuildSummarySchema(t *testing.T) {
+	root := t.TempDir()
+	cwdKey := "%2FUsers%2Fdev%2Frepos%2Fwp-devops"
+	sessionID := "019f542b-45b0-7720-8184-e790ac116d20"
+	writeGrokFixtureFile(t, grokSummaryPath(root, cwdKey, sessionID), `{
+			"info": {
+				"id": "019f542b-45b0-7720-8184-e790ac116d20",
+				"cwd": "/Users/dev/repos/wp-devops"
+			},
+			"session_summary": "\u5ba1\u67e5\u4ed3\u5e93\u4ee3\u7801",
+			"generated_title": "\u5ba1\u67e5\u4ed3\u5e93\u4ee3\u7801",
+			"created_at": "2026-07-12T02:32:29.874617Z",
+			"updated_at": "2026-07-12T04:29:01.847426Z",
+			"last_active_at": "2026-07-12T04:09:52.574304Z",
+			"num_messages": 927,
+			"num_chat_messages": 104,
+			"current_model_id": "grok-4.5",
+			"git_root_dir": "/Users/dev/repos/wp-devops/",
+			"head_branch": "refactor/shared-proxy-csv-utils",
+			"agent_name": "grok-build-plan"
+		}`)
+	writeGrokFixtureFile(t, filepath.Join(root, cwdKey, sessionID, "signals.json"), `{
+			"userMessageCount": 7,
+			"assistantMessageCount": 48,
+			"contextTokensUsed": 106663,
+			"contextWindowTokens": 200000,
+			"primaryModelId": "grok-4.5"
+		}`)
+
+	provider := newGrokTestProvider(t, root)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	assert.Equal(t, cwdKey, sources[0].ProjectHint)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: sources[0],
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+
+	session := outcome.Results[0].Result.Session
+	assert.Equal(t, "grok:"+sessionID, session.ID)
+	assert.Equal(t, AgentGrok, session.Agent)
+	assert.Equal(t, sessionID, session.SourceSessionID)
+	assert.Equal(t, "summary", session.TranscriptFidelity)
+	assert.Equal(t, "\u5ba1\u67e5\u4ed3\u5e93\u4ee3\u7801", session.SessionName)
+	assert.Equal(t, "\u5ba1\u67e5\u4ed3\u5e93\u4ee3\u7801", session.FirstMessage)
+	assert.Equal(t, "wp_devops", session.Project)
+	assert.Equal(t, "/Users/dev/repos/wp-devops", session.Cwd)
+	assert.Equal(t, "refactor/shared-proxy-csv-utils", session.GitBranch)
+	// Without chat_history.jsonl, counts fall back to summary/signals.
+	assert.Equal(t, TranscriptFidelitySummary, session.TranscriptFidelity)
+	assert.Equal(t, "grok-summary-v1", session.SourceVersion)
+	assert.Equal(t, 927, session.MessageCount)
+	assert.Equal(t, 7, session.UserMessageCount)
+	assert.Equal(t, 106663, session.PeakContextTokens)
+	assert.True(t, session.HasPeakContextTokens)
+	assert.False(t, session.HasTotalOutputTokens)
+	require.Len(t, outcome.Results[0].Result.Messages, 1)
+	assert.Equal(t, RoleUser, outcome.Results[0].Result.Messages[0].Role)
+	assert.Equal(t, "\u5ba1\u67e5\u4ed3\u5e93\u4ee3\u7801", outcome.Results[0].Result.Messages[0].Content)
+}
+
+func TestGrokProviderParsesChatHistoryTranscript(t *testing.T) {
+	root := t.TempDir()
+	cwdKey := "%2FUsers%2Fdev%2Frepos%2Fwp-devops"
+	sessionID := "019f5483-db23-74c1-9d35-7df33f1c3ddc"
+	writeGrokFixtureFile(t, grokSummaryPath(root, cwdKey, sessionID), `{
+			"info": {"id": "019f5483-db23-74c1-9d35-7df33f1c3ddc", "cwd": "/Users/dev/repos/wp-devops"},
+			"session_summary": "review branch",
+			"created_at": "2026-07-12T04:09:15.439384Z",
+			"updated_at": "2026-07-12T05:23:48.317854Z",
+			"last_active_at": "2026-07-12T05:23:48.317854Z",
+			"num_messages": 864,
+			"git_root_dir": "/Users/dev/repos/wp-devops/",
+			"head_branch": "refactor/shared-proxy-csv-utils"
+		}`)
+	writeGrokFixtureFile(t, filepath.Join(root, cwdKey, sessionID, "chat_history.jsonl"), strings.Join([]string{
+		`{"type":"system","content":"You are Grok"}`,
+		`{"type":"user","content":[{"type":"text","text":"<user_info>\nOS Version: macos\n</user_info>"}]}`,
+		`{"type":"user","content":[{"type":"text","text":"<user_query>review branch vs main</user_query>"}]}`,
+		`{"type":"reasoning","id":"","summary":[{"type":"summary_text","text":"Need to review the branch."}]}`,
+		`{"type":"assistant","content":"Loading review skill.","tool_calls":[{"id":"call-1","name":"read_file","arguments":"{\"target_file\":\"SKILL.md\"}"}],"model_id":"grok-4.5"}`,
+		`{"type":"tool_result","tool_call_id":"call-1","content":"skill body"}`,
+		`{"type":"assistant","content":"Review complete.","model_id":"grok-4.5"}`,
+		`{"type":"user","content":[{"type":"text","text":"<user_query>fix the issues</user_query>"}]}`,
+	}, "\n")+"\n")
+
+	provider := newGrokTestProvider(t, root)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{
+		Source: sources[0],
+	})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+
+	result := outcome.Results[0].Result
+	session := result.Session
+	assert.Equal(t, TranscriptFidelityFull, session.TranscriptFidelity)
+	assert.Equal(t, "grok-chat-v1", session.SourceVersion)
+	assert.Equal(t, "review branch vs main", session.FirstMessage)
+	assert.Equal(t, 2, session.UserMessageCount)
+	// user, assistant(+thinking+tool), tool_result, assistant, user
+	require.Len(t, result.Messages, 5)
+
+	assert.Equal(t, RoleUser, result.Messages[0].Role)
+	assert.Equal(t, "review branch vs main", result.Messages[0].Content)
+
+	assert.Equal(t, RoleAssistant, result.Messages[1].Role)
+	assert.True(t, result.Messages[1].HasThinking)
+	assert.Equal(t, "Need to review the branch.", result.Messages[1].ThinkingText)
+	assert.True(t, result.Messages[1].HasToolUse)
+	require.Len(t, result.Messages[1].ToolCalls, 1)
+	assert.Equal(t, "call-1", result.Messages[1].ToolCalls[0].ToolUseID)
+	assert.Equal(t, "read_file", result.Messages[1].ToolCalls[0].ToolName)
+	assert.Equal(t, "Read", result.Messages[1].ToolCalls[0].Category)
+	assert.Equal(t, "grok-4.5", result.Messages[1].Model)
+
+	assert.Equal(t, RoleUser, result.Messages[2].Role)
+	require.Len(t, result.Messages[2].ToolResults, 1)
+	assert.Equal(t, "call-1", result.Messages[2].ToolResults[0].ToolUseID)
+	assert.Equal(t, 10, result.Messages[2].ToolResults[0].ContentLength)
+
+	assert.Equal(t, RoleAssistant, result.Messages[3].Role)
+	assert.Equal(t, "Review complete.", result.Messages[3].Content)
+
+	assert.Equal(t, RoleUser, result.Messages[4].Role)
+	assert.Equal(t, "fix the issues", result.Messages[4].Content)
 }
 
 func TestGrokProviderFindSource(t *testing.T) {
@@ -159,20 +294,20 @@ func TestGrokProviderFingerprintTracksParsedFiles(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEqual(t, afterSummary.Hash, afterSignals.Hash)
 
-	writeGrokFixtureFile(t, updates, "{\"delta\":1}\n")
-	afterUpdates, err := provider.Fingerprint(context.Background(), source)
-	require.NoError(t, err)
-	assert.Equal(t, afterSignals.Hash, afterUpdates.Hash)
-
 	writeGrokFixtureFile(t, chat, "{\"message\":1}\n")
 	afterChat, err := provider.Fingerprint(context.Background(), source)
 	require.NoError(t, err)
-	assert.Equal(t, afterUpdates.Hash, afterChat.Hash)
+	assert.NotEqual(t, afterSignals.Hash, afterChat.Hash)
+
+	writeGrokFixtureFile(t, updates, "{\"delta\":1}\n")
+	afterUpdates, err := provider.Fingerprint(context.Background(), source)
+	require.NoError(t, err)
+	assert.Equal(t, afterChat.Hash, afterUpdates.Hash)
 
 	writeGrokFixtureFile(t, unrelated, "still ignored")
 	afterUnrelated, err := provider.Fingerprint(context.Background(), source)
 	require.NoError(t, err)
-	assert.Equal(t, afterChat.Hash, afterUnrelated.Hash)
+	assert.Equal(t, afterUpdates.Hash, afterUnrelated.Hash)
 }
 
 func TestGrokProviderChangedPathTracksParsedFiles(t *testing.T) {
@@ -181,7 +316,7 @@ func TestGrokProviderChangedPathTracksParsedFiles(t *testing.T) {
 	writeGrokFixtureFile(t, summary, `{"summary":"Changed path","firstPrompt":"hello","createdAt":"2026-07-08T10:00:00Z"}`)
 	provider := newGrokTestProvider(t, root)
 
-	for _, name := range []string{"summary.json", "signals.json"} {
+	for _, name := range []string{"summary.json", "signals.json", "chat_history.jsonl"} {
 		changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
 			Path: filepath.Join(root, "cwd-key", "sess-1", name),
 		})
@@ -190,13 +325,11 @@ func TestGrokProviderChangedPathTracksParsedFiles(t *testing.T) {
 		assert.Equal(t, filepath.Clean(summary), filepath.Clean(changed[0].FingerprintKey))
 	}
 
-	for _, name := range []string{"updates.jsonl", "chat_history.jsonl"} {
-		changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
-			Path: filepath.Join(root, "cwd-key", "sess-1", name),
-		})
-		require.NoError(t, err)
-		assert.Empty(t, changed)
-	}
+	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+		Path: filepath.Join(root, "cwd-key", "sess-1", "updates.jsonl"),
+	})
+	require.NoError(t, err)
+	assert.Empty(t, changed)
 }
 
 func TestGrokProviderArtifactBoundaries(t *testing.T) {
