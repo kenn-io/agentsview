@@ -190,6 +190,24 @@ describe("ActivityPage calendar day rollover", () => {
     localStorage.clear();
   });
 
+  it("synchronizes the current day when mounting crosses midnight", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 5, 17, 23, 59, 59, 999));
+    stubActivityPageCollaborators();
+    router.route = "activity";
+    activity.date = "2026-06-17";
+
+    component = mount(ActivityPage, { target: document.body });
+    vi.setSystemTime(new Date(2026, 5, 18, 0, 0, 0));
+    await flushEffects();
+    await openCalendar("Jun 17, 2026");
+
+    const june18 = calendarDay("Jun 18, 2026");
+    expect(june18.disabled).toBe(false);
+    await fireEvent.click(june18);
+    expect(activity.date).toBe("2026-06-18");
+  });
+
   it("enables each new local day at midnight without remounting", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 5, 17, 23, 59, 59, 500));

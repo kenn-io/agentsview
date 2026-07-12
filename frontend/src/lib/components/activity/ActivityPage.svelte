@@ -76,6 +76,7 @@
 
   function scheduleTodayRollover(): void {
     const now = new Date();
+    today = localDateStr(now);
     const nextMidnight = new Date(
       now.getFullYear(),
       now.getMonth(),
