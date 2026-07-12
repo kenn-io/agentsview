@@ -2,6 +2,7 @@ package duckdb
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -84,6 +85,18 @@ func TestValidateQuackClientURL(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.wantErr)
 		})
 	}
+}
+
+func TestLocalDuckDBBackfillTargetScopeUsesCanonicalPath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mirror.duckdb")
+	samePath := filepath.Join(dir, ".", "mirror.duckdb")
+	otherPath := filepath.Join(dir, "other.duckdb")
+
+	got := localDuckDBBackfillTargetScope(path)
+	assert.Equal(t, got, localDuckDBBackfillTargetScope(samePath))
+	assert.NotEqual(t, got, localDuckDBBackfillTargetScope(otherPath))
+	assert.NotContains(t, got, dir)
 }
 
 func TestIsStaleQuackConnectionError(t *testing.T) {

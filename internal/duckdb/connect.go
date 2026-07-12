@@ -226,16 +226,25 @@ func NewFromConfig(
 	if err != nil {
 		return nil, err
 	}
+	backfillTargetScope := opts.SyncStateTarget
+	if backfillTargetScope == "" {
+		if cfg.URL == "" {
+			backfillTargetScope = localDuckDBBackfillTargetScope(cfg.Path)
+		} else {
+			backfillTargetScope = SyncStateTargetForConfig(cfg)
+		}
+	}
 	return &Sync{
-		duck:            duck,
-		local:           local,
-		machine:         cfg.MachineName,
-		syncStateScope:  opts.SyncStateTarget,
-		projects:        opts.Projects,
-		excludeProjects: opts.ExcludeProjects,
-		connectionKind:  connectionKind,
-		quack:           quack,
-		maintenance:     duckDBCheckpointMaintenance{},
+		duck:                duck,
+		local:               local,
+		machine:             cfg.MachineName,
+		syncStateScope:      opts.SyncStateTarget,
+		backfillTargetScope: backfillTargetScope,
+		projects:            opts.Projects,
+		excludeProjects:     opts.ExcludeProjects,
+		connectionKind:      connectionKind,
+		quack:               quack,
+		maintenance:         duckDBCheckpointMaintenance{},
 	}, nil
 }
 
