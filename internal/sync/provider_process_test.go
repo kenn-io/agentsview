@@ -702,6 +702,27 @@ func TestCacheSkipRetainsOnlyLatestSourceHashKey(t *testing.T) {
 	assert.Equal(t, map[string]int64{base + "new": 1}, engine.SnapshotSkipCache())
 }
 
+func TestNewEngineNormalizesLegacySourceHashSkipDuplicates(t *testing.T) {
+	database := openTestDB(t)
+	const (
+		plain     = "/archive/session.jsonl"
+		hashBase  = plain + "?source_hash="
+		unrelated = "/archive/unrelated.jsonl"
+	)
+	require.NoError(t, database.ReplaceSkippedFiles(map[string]int64{
+		plain:            1,
+		hashBase + "old": 2,
+		hashBase + "new": 3,
+		unrelated:        4,
+	}))
+
+	engine := NewEngine(database, EngineConfig{})
+	t.Cleanup(engine.Close)
+
+	assert.Equal(t, map[string]int64{unrelated: 4}, engine.SnapshotSkipCache(),
+		"ambiguous legacy hashes must reparse once instead of choosing a stale key")
+}
+
 func TestProcessFileClaudeCachedStoredSessionChangedHashReparses(t *testing.T) {
 	root := t.TempDir()
 	sourcePath, fingerprint := writeProcessProviderSource(t, root, "stored.jsonl")

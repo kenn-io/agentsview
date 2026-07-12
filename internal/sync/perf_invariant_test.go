@@ -30,6 +30,41 @@ import (
 //     (discovery_workspace_manifest_test.go, antigravity/gemini
 //     provider tests) pin O(roots) discovery work (#912).
 
+func TestSourceHashSkipMutationWorkIsArchiveCardinalityIndependent(t *testing.T) {
+	type workCounts struct {
+		insert int
+		remove int
+	}
+	observed := make(map[int]workCounts)
+	for _, cacheSize := range []int{8, 8000} {
+		t.Run(fmt.Sprintf("%d_entries", cacheSize), func(t *testing.T) {
+			database := openTestDB(t)
+			engine := NewEngine(database, EngineConfig{})
+			t.Cleanup(engine.Close)
+			entries := make(map[string]int64, cacheSize)
+			for i := range cacheSize {
+				entries[fmt.Sprintf(
+					"/archive/session-%05d.jsonl?source_hash=old", i,
+				)] = 1
+			}
+			engine.InjectSkipCache(entries)
+
+			const base = "/archive/session-00000.jsonl?source_hash="
+			insertWork := engine.cacheSkip(base+"new", 2)
+			removeWork := engine.clearSkip(base + "new")
+
+			assert.Equal(t, cacheSize-1, len(engine.SnapshotSkipCache()))
+			observed[cacheSize] = workCounts{
+				insert: insertWork,
+				remove: removeWork,
+			}
+		})
+	}
+
+	assert.Equal(t, observed[8], observed[8000],
+		"one watcher mutation must do the same sibling work at every archive size")
+}
+
 // TestWarmFullSyncDoesNoBulkWriteWork verifies that a second full
 // sync over an unchanged Claude archive skips every session before
 // the parse and never enters the bulk-write pipeline. Claude has its

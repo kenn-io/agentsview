@@ -116,9 +116,13 @@ type Engine struct {
 	// non-interactive sessions (nil result). The file is
 	// retried when its mtime changes. S3 entries also keep an
 	// in-memory source fingerprint when one is available.
-	skipMu            gosync.RWMutex
-	skipCache         map[string]int64
-	skipFingerprints  map[string]string
+	skipMu           gosync.RWMutex
+	skipCache        map[string]int64
+	skipFingerprints map[string]string
+	// skipHashKeys maps a source base path to its one current
+	// ?source_hash= cache key. It is built once when the cache loads so a
+	// watcher mutation never scans unrelated archive entries.
+	skipHashKeys      map[string]string
 	s3CodexIndexMu    gosync.Mutex
 	s3CodexIndexCache map[string]s3CodexIndexSnapshot
 	// idPrefix and pathRewriter support remote sync:
@@ -257,6 +261,7 @@ func NewEngine(
 		migrateLegacyCodexExecSkips(database, skipCache)
 		migrateVisualStudioCopilotSkips(database, skipCache)
 	}
+	skipHashKeys, _ := normalizeSourceHashSkipCache(skipCache, nil)
 
 	dirs := make(map[parser.AgentType][]string, len(cfg.AgentDirs))
 	for k, v := range cfg.AgentDirs {
@@ -279,6 +284,7 @@ func NewEngine(
 		cwdFilter:               newCwdPrefixFilter(cfg.IncludeCwdPrefixes),
 		skipCache:               skipCache,
 		skipFingerprints:        make(map[string]string),
+		skipHashKeys:            skipHashKeys,
 		s3CodexIndexCache:       make(map[string]s3CodexIndexSnapshot),
 		ephemeral:               cfg.Ephemeral,
 		idPrefix:                cfg.IDPrefix,
@@ -1342,12 +1348,15 @@ func (e *Engine) resyncAllWithOptionsLocked(
 	// matches the persisted DB until the next restart.
 	e.skipMu.Lock()
 	savedSkipCache := e.skipCache
+	savedSkipHashKeys := e.skipHashKeys
 	e.skipCache = make(map[string]int64)
+	e.skipHashKeys = make(map[string]string)
 	e.skipMu.Unlock()
 
 	restoreSkipCache := func() {
 		e.skipMu.Lock()
 		e.skipCache = savedSkipCache
+		e.skipHashKeys = savedSkipHashKeys
 		e.skipMu.Unlock()
 	}
 
@@ -5181,12 +5190,64 @@ func (e *Engine) shouldCacheSkip(
 	return true
 }
 
-// cacheSkip records a file so it won't be retried until
-// its mtime changes.
-func (e *Engine) cacheSkip(path string, mtime int64, sourceFingerprint ...string) {
+const sourceHashSkipMarker = "?source_hash="
+
+// normalizeSourceHashSkipCache performs the one archive-sized pass needed to
+// repair legacy duplicate source-hash entries and build the watcher-time
+// sibling index. A family with multiple hashed keys is ambiguous: same-mtime
+// rewrites are why the hash exists, so no stored key can safely be called
+// current. Drop that family so the source reparses once and establishes a
+// trustworthy key.
+func normalizeSourceHashSkipCache(
+	cache map[string]int64, fingerprints map[string]string,
+) (map[string]string, map[string]struct{}) {
+	index := make(map[string]string)
+	counts := make(map[string]int)
+	ambiguous := make(map[string]struct{})
+	for path := range cache {
+		base, _, hashed := strings.Cut(path, sourceHashSkipMarker)
+		if !hashed {
+			continue
+		}
+		counts[base]++
+		if counts[base] == 1 {
+			index[base] = path
+		}
+	}
+	for path := range cache {
+		base, _, hashed := strings.Cut(path, sourceHashSkipMarker)
+		if hashed && counts[base] > 1 {
+			delete(cache, path)
+			ambiguous[base] = struct{}{}
+			if fingerprints != nil {
+				delete(fingerprints, path)
+			}
+		}
+	}
+	for base := range index {
+		delete(cache, base)
+		if fingerprints != nil {
+			delete(fingerprints, base)
+		}
+		if counts[base] > 1 {
+			delete(index, base)
+		}
+	}
+	return index, ambiguous
+}
+
+// cacheSkip records a file so it won't be retried until its mtime changes.
+// The returned work count measures sibling-index probes and is used by the
+// cardinality regression to keep watcher-time work independent of cache size.
+func (e *Engine) cacheSkip(
+	path string, mtime int64, sourceFingerprint ...string,
+) int {
 	e.skipMu.Lock()
-	e.removeSkipHashSiblingsLocked(path)
+	work := e.removeSkipHashSiblingsLocked(path)
 	e.skipCache[path] = mtime
+	if base, _, hashed := strings.Cut(path, sourceHashSkipMarker); hashed {
+		e.skipHashKeys[base] = path
+	}
 	fingerprint := ""
 	if len(sourceFingerprint) > 0 {
 		fingerprint = sourceFingerprint[0]
@@ -5200,34 +5261,44 @@ func (e *Engine) cacheSkip(path string, mtime int64, sourceFingerprint ...string
 		delete(e.skipFingerprints, path)
 	}
 	e.skipMu.Unlock()
+	return work
 }
 
-// clearSkip removes a skip-cache entry when a file
-// produces a valid session.
-func (e *Engine) clearSkip(path string) {
+// clearSkip removes a skip-cache entry when a file produces a valid session.
+// Its work count has the same cardinality-regression role as cacheSkip's.
+func (e *Engine) clearSkip(path string) int {
 	e.skipMu.Lock()
-	e.removeSkipHashSiblingsLocked(path)
+	work := e.removeSkipHashSiblingsLocked(path)
 	delete(e.skipCache, path)
 	delete(e.skipFingerprints, path)
 	e.skipMu.Unlock()
 	_ = e.db.DeleteSkippedFile(path)
+	return work
 }
 
-func (e *Engine) removeSkipHashSiblingsLocked(path string) {
-	const marker = "?source_hash="
-	base, _, hasHash := strings.Cut(path, marker)
-	if !hasHash {
-		return
+func (e *Engine) removeSkipHashSiblingsLocked(path string) int {
+	if e.skipHashKeys == nil {
+		e.skipHashKeys, _ = normalizeSourceHashSkipCache(
+			e.skipCache, e.skipFingerprints,
+		)
 	}
-	prefix := base + marker
+	base, _, hasHash := strings.Cut(path, sourceHashSkipMarker)
+	if !hasHash {
+		if sibling, ok := e.skipHashKeys[path]; ok {
+			delete(e.skipCache, sibling)
+			delete(e.skipFingerprints, sibling)
+			delete(e.skipHashKeys, path)
+		}
+		return 1
+	}
 	delete(e.skipCache, base)
 	delete(e.skipFingerprints, base)
-	for cached := range e.skipCache {
-		if cached != path && strings.HasPrefix(cached, prefix) {
-			delete(e.skipCache, cached)
-			delete(e.skipFingerprints, cached)
-		}
+	if sibling, ok := e.skipHashKeys[base]; ok {
+		delete(e.skipCache, sibling)
+		delete(e.skipFingerprints, sibling)
+		delete(e.skipHashKeys, base)
 	}
+	return 2
 }
 
 // clearWatcherOverflowCaches invalidates every freshness shortcut whose
@@ -5237,6 +5308,7 @@ func (e *Engine) clearWatcherOverflowCaches() {
 	e.skipMu.Lock()
 	e.skipCache = make(map[string]int64)
 	e.skipFingerprints = make(map[string]string)
+	e.skipHashKeys = make(map[string]string)
 	e.skipMu.Unlock()
 	if !e.ephemeral {
 		if err := e.db.ReplaceSkippedFiles(map[string]int64{}); err != nil {
@@ -5255,7 +5327,24 @@ func (e *Engine) clearWatcherOverflowCaches() {
 func (e *Engine) InjectSkipCache(entries map[string]int64) {
 	e.skipMu.Lock()
 	defer e.skipMu.Unlock()
-	maps.Copy(e.skipCache, entries)
+	if e.skipHashKeys == nil {
+		e.skipHashKeys, _ = normalizeSourceHashSkipCache(
+			e.skipCache, e.skipFingerprints,
+		)
+	}
+	incoming := make(map[string]int64, len(entries))
+	maps.Copy(incoming, entries)
+	_, ambiguous := normalizeSourceHashSkipCache(incoming, nil)
+	for base := range ambiguous {
+		e.removeSkipHashSiblingsLocked(base + sourceHashSkipMarker)
+	}
+	for path, mtime := range incoming {
+		e.removeSkipHashSiblingsLocked(path)
+		e.skipCache[path] = mtime
+		if base, _, hashed := strings.Cut(path, sourceHashSkipMarker); hashed {
+			e.skipHashKeys[base] = path
+		}
+	}
 }
 
 // SnapshotSkipCache returns a copy of the in-memory skip
