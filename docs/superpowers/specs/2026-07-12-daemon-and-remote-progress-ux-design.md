@@ -1,10 +1,5 @@
 # Daemon Startup and Remote Progress UX Design
 
-> **Update:** The canonical `daemon restart` readiness-window design and the
-> corresponding streaming-progress non-goal are superseded by
-> `2026-07-12-daemon-restart-progress-design.md`. The remaining startup-version
-> and remote-contributor progress design is unchanged.
-
 ## Context
 
 Canonical `agentsview daemon start` currently waits five seconds for a spawned
@@ -13,7 +8,7 @@ than five seconds in its initial sync is then reported as a fatal error even
 though the identified child continues to run. The existing 90-second
 automatic-start readiness window is a better fit for canonical start while
 preserving the rule that it must not claim the daemon is ready before its health
-endpoint is available. Canonical restart now has a separate approved design.
+endpoint is available.
 
 While the daemon is starting, `agentsview daemon status` reads
 `startup-state.json`. That snapshot contains the PID, elapsed time, phase,
@@ -43,8 +38,7 @@ host-specific label.
 `backgroundLaunchPolicy` will carry the readiness timeout selected by its
 caller. Canonical `daemon start` will pass the existing
 `backgroundAutoStartReadyTimeout` value of 90 seconds. The compatibility
-`serve --background` path will retain its five-second window. Canonical
-`daemon restart` follows its focused progress design instead.
+`serve --background` path will retain its five-second window.
 
 The background launcher will use the policy timeout when it is positive and fall
 back to `backgroundServeReadyTimeout` otherwise. This keeps existing callers and
