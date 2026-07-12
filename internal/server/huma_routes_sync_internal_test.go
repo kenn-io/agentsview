@@ -992,6 +992,49 @@ func TestRunRemoteSyncRequestIncrementalKeepsActiveHTTPPath(t *testing.T) {
 	assert.Equal(t, 1, activeCalls)
 }
 
+func TestRunRemoteSyncRequestAttributesOuterOwnedHTTPCleanup(t *testing.T) {
+	for _, includeLocal := range []bool{false, true} {
+		name := "remote-only"
+		if includeLocal {
+			name = "include-local"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newSyncRouteFixture(t)
+			owner := &serverHTTPCleanupError{
+				cause: errors.New("active HTTP import failed"),
+				results: []error{
+					errors.New("cleanup still holds mirror"),
+					nil,
+				},
+			}
+			stubRunHTTPRemoteSync(t, func(
+				_ context.Context, rh config.RemoteHost, _ bool,
+			) (remotesync.SyncStats, error) {
+				assert.Equal(t, "alpha", rh.Host)
+				return remotesync.SyncStats{}, owner
+			})
+
+			response := f.srv.runRemoteSyncRequest(
+				context.Background(), f.db, f.srv.syncEngineForLocal(f.db),
+				remoteSyncRequest{
+					IncludeLocal: includeLocal,
+					Hosts: []config.RemoteHost{{
+						Host: "alpha", Transport: config.RemoteTransportHTTP,
+					}},
+				}, nil,
+			)
+
+			assert.Empty(t, response.Error,
+				"an HTTP host cleanup failure is not a local sync failure")
+			require.Len(t, response.Failures, 1,
+				"the outer coordinator reports the host exactly once")
+			assert.Equal(t, "alpha", response.Failures[0].Host.Host)
+			assert.Equal(t, "HTTP remote sync failed", response.Failures[0].Err)
+			assert.Equal(t, 1, owner.retries)
+		})
+	}
+}
+
 func TestRunRemoteSyncRequestIncrementalRetainsActiveHTTPCleanup(t *testing.T) {
 	f := newSyncRouteFixture(t)
 	owner := &serverHTTPCleanupError{

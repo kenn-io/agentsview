@@ -449,10 +449,20 @@ func (s *Server) runRemoteSyncRequest(
 			})
 			return remotesync.SyncStats{}, err
 		}
+		var coordinatorErr error
 		if outerOwnsHTTP {
-			_, blocked = s.httpRemoteCleanupRegistry.Run(exclusiveRun)
+			_, coordinatorErr = s.httpRemoteCleanupRegistry.Run(exclusiveRun)
 		} else {
-			_, blocked = exclusiveRun()
+			_, coordinatorErr = exclusiveRun()
+		}
+		if coordinatorErr != nil {
+			if failure, ok := httpCoordinatorFailure(httpHosts, coordinatorErr); ok {
+				log.Printf("remote sync %s: %v", failure.Host.Host, coordinatorErr)
+				failures = append(failures, failure)
+				blocked = nil
+			} else {
+				blocked = coordinatorErr
+			}
 		}
 	}
 	s.emitRemoteSyncChanged(remoteStats)
@@ -679,16 +689,19 @@ func (s *Server) runRemoteSyncHostsOwned(
 			// bodies, so it goes only to the local log; the API
 			// response carries the sanitized summary.
 			log.Printf("remote sync %s: %v", rh.Host, err)
+			if !acquireHTTPRegistry &&
+				rh.Transport == config.RemoteTransportHTTP {
+				var cleanup httpCleanupRetrier
+				if errors.As(err, &cleanup) {
+					return failures, totals, &remotesync.HostError{
+						Host: rh.Host, Operation: "sync", Err: err,
+					}
+				}
+			}
 			failures = append(failures, remoteSyncFailure{
 				Host: remoteSyncFailureHost(rh),
 				Err:  remoteSyncFailureError(rh, err),
 			})
-			if !acquireHTTPRegistry {
-				var cleanup httpCleanupRetrier
-				if errors.As(err, &cleanup) {
-					return failures, totals, err
-				}
-			}
 		}
 	}
 	return failures, totals, nil
