@@ -11,6 +11,9 @@ LDFLAGS := -X main.version=$(VERSION) \
 LDFLAGS_RELEASE := $(LDFLAGS) -s -w
 DESKTOP_DIST_DIR := dist/desktop
 GOLANGCI_LINT_VERSION ?= v2.11.4
+# Isolate each checkout from stale sibling-worktree fixes and issue positions.
+GOLANGCI_LINT_CACHE ?= $(CURDIR)/.golangci-cache
+export GOLANGCI_LINT_CACHE
 CUSTOM_GCL := ./custom-gcl
 PRICING_SNAPSHOT_FILE := internal/pricing/snapshot/litellm_snapshot.json.gz
 

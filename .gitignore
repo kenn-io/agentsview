@@ -44,7 +44,8 @@ __pycache__/
 
 # Build caches
 .gocache
-.golangci-cache/
+# Per-checkout golangci-lint cache isolates sibling worktrees.
+/.golangci-cache/
 .cache
 .gomodcache/
 .gopath/
