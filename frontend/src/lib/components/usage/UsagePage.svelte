@@ -57,12 +57,19 @@
     })),
   );
 
-  const branchItems = $derived(
-    usage.branches.map((b) => ({
+  // Mirror the sidebar's scoping: with a project filter pinned,
+  // offering other projects' branches would let a click AND two
+  // contradictory predicates into an empty report.
+  const branchItems = $derived.by(() => {
+    const project = sessions.filters.project;
+    const scoped = project
+      ? usage.branches.filter((b) => b.project === project)
+      : usage.branches;
+    return scoped.map((b) => ({
       name: b.token,
       label: branchLabel(b.project, b.branch, m.shared_no_branch()),
-    })),
-  );
+    }));
+  });
 
 
   const earliestSession = $derived(sync.stats?.earliest_session ?? null);

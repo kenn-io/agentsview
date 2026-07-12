@@ -19,6 +19,7 @@ import { rollingRange, today } from "../utils/dates.js";
 import {
   BRANCH_LIST_SEP,
   NO_BRANCH_MATCH_TOKEN,
+  splitBranchFilterToken,
 } from "../branchFilters.js";
 import { toggleListValue } from "../utils/lists.js";
 import type { BranchInfo } from "../api/types/core.js";
@@ -339,6 +340,23 @@ class UsageStore {
     return p;
   }
 
+  // A pinned sidebar project filter contradicts branch tokens from any
+  // other project (project = X AND a branch of Y matches no session),
+  // so drop off-project tokens from the local selection at query time.
+  // The stored selection is left intact and takes effect again when
+  // the project filter clears.
+  private projectScopedLocalBranch(): string {
+    const project = sessions.filters.project;
+    const local = this.selectedGitBranch;
+    if (!project || !local) return local;
+    return local
+      .split(BRANCH_LIST_SEP)
+      .filter(
+        (token) => splitBranchFilterToken(token).project === project,
+      )
+      .join(BRANCH_LIST_SEP);
+  }
+
   // The sidebar branch filter and the usage page's own selection are
   // both include lists but share one git_branch API param, so AND them
   // by intersecting. If both controls are active and their selections
@@ -347,7 +365,7 @@ class UsageStore {
   private effectiveGitBranch(
     sidebarBranch: string,
   ): string | undefined {
-    const local = this.selectedGitBranch;
+    const local = this.projectScopedLocalBranch();
     if (!sidebarBranch) return local || undefined;
     if (!local) return sidebarBranch;
     const sidebar = new Set(sidebarBranch.split(BRANCH_LIST_SEP));

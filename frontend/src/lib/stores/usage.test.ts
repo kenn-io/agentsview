@@ -718,6 +718,32 @@ describe("UsageStore session filter params", () => {
     );
   });
 
+  it("scopes the local branch selection to the sidebar project filter", async () => {
+    const { usage } = await loadStore();
+    const { sessions } = await import("./sessions.svelte.js");
+    const tokenA = "proj-a\u001fmain";
+    const tokenB = "proj-b\u001fdev";
+
+    sessions.filters.project = "proj-a";
+    usage.selectedGitBranch = `${tokenA}\u001e${tokenB}`;
+    await usage.fetchAll();
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
+      expect.objectContaining({ gitBranch: tokenA, project: "proj-a" }),
+    );
+
+    // A branch selection made before pinning a different project
+    // defers to the project filter instead of ANDing contradictory
+    // predicates into an empty report.
+    sessions.filters.project = "proj-c";
+    await usage.fetchAll();
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
+      expect.objectContaining({ project: "proj-c" }),
+    );
+    const params =
+      usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0];
+    expect(params?.gitBranch).toBeUndefined();
+  });
+
   it("toggles the branch selection with the list separator", async () => {
     const { usage } = await loadStore();
     const tokenA = "proj-a\u001fmain";
