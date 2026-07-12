@@ -836,8 +836,9 @@ func upsertProjectIdentityObservationExecExcludingRemote(
 	} else if _, err := exec.ExecContext(ctx, `
 		DELETE FROM project_identity_observations
 		WHERE project = ? AND machine = ? AND root_path = ?
-		  AND git_remote = ''`,
+		  AND git_remote = '' AND remote_resolution != ?`,
 		obs.Project, obs.Machine, obs.RootPath,
+		export.ProjectResolutionAmbiguous,
 	); err != nil {
 		return fmt.Errorf("removing stale project identity root fallback: %w", err)
 	}

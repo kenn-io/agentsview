@@ -157,8 +157,9 @@ func upsertProjectIdentityObservation(
 		DELETE FROM source_project_identity_observations
 		WHERE source_archive_id = $1 AND project = $2
 		  AND machine = $3 AND root_path = $4
-		  AND git_remote = ''`,
+		  AND git_remote = '' AND remote_resolution != $5`,
 		obs.SourceArchiveID, obs.Project, obs.Machine, obs.RootPath,
+		export.ProjectResolutionAmbiguous,
 	); err != nil {
 		return fmt.Errorf(
 			"removing stale pg project identity root fallback: %w", err,
@@ -230,6 +231,9 @@ func observationRootKey(
 type projectIdentityObservationPlan struct {
 	// realRemote holds deduped observations with a git remote.
 	realRemote []export.ProjectIdentityObservation
+	// ambiguous holds deduped empty-remote observations that must coexist
+	// with real-remote evidence for the same root.
+	ambiguous []export.ProjectIdentityObservation
 	// fallbacks holds deduped empty-remote observations whose root has no
 	// real-remote observation in the batch. Whether each survives still
 	// depends on the rows already in PG.
@@ -241,10 +245,10 @@ type projectIdentityObservationPlan struct {
 
 // planProjectIdentityObservationSync reduces a batch to the final state of
 // applying upsertProjectIdentityObservation to each row in order: the last
-// observation per conflict key wins, and an empty-remote observation never
-// survives alongside a real-remote observation for the same root — an
-// earlier real row makes the fallback's existence check succeed, and a
-// later real row deletes the already-inserted fallback.
+// observation per conflict key wins. Ordinary empty-remote fallbacks never
+// survive alongside real-remote evidence for the same root, while ambiguous
+// observations always survive because they are conflicting evidence rather
+// than root-derived fallbacks.
 func planProjectIdentityObservationSync(
 	observations []export.ProjectIdentityObservation,
 ) projectIdentityObservationPlan {
@@ -277,6 +281,10 @@ func planProjectIdentityObservationSync(
 			plan.realRemote = append(plan.realRemote, obs)
 			continue
 		}
+		if obs.RemoteResolution == export.ProjectResolutionAmbiguous {
+			plan.ambiguous = append(plan.ambiguous, obs)
+			continue
+		}
 		if !realRootSet[key.root] {
 			plan.fallbacks = append(plan.fallbacks, obs)
 		}
@@ -306,9 +314,11 @@ func syncProjectIdentityObservationsBatch(
 	if err != nil {
 		return err
 	}
-	if err := insertProjectIdentityObservations(
-		ctx, tx, plan.realRemote,
-	); err != nil {
+	unconditional := make([]export.ProjectIdentityObservation, 0,
+		len(plan.realRemote)+len(plan.ambiguous))
+	unconditional = append(unconditional, plan.realRemote...)
+	unconditional = append(unconditional, plan.ambiguous...)
+	if err := insertProjectIdentityObservations(ctx, tx, unconditional); err != nil {
 		return err
 	}
 	return insertProjectIdentityObservations(ctx, tx, fallbacks)
@@ -344,9 +354,12 @@ func deleteProjectIdentityFallbackRows(
 	for start := 0; start < len(roots); start += projectIdentityRootKeyBatchSize {
 		end := min(start+projectIdentityRootKeyBatchSize, len(roots))
 		tuples, args := rootKeyTupleArgs(roots[start:end])
+		ambiguousParam := len(args) + 1
+		args = append(args, export.ProjectResolutionAmbiguous)
 		if _, err := tx.ExecContext(ctx, `
 			DELETE FROM source_project_identity_observations
 			WHERE git_remote = ''
+			  AND remote_resolution != $`+fmt.Sprint(ambiguousParam)+`
 			  AND (source_archive_id, project, machine, root_path) IN (`+tuples+`)`,
 			args...,
 		); err != nil {

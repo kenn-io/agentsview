@@ -695,6 +695,30 @@ func TestProjectObservationAmbiguousSupersedesResolvedAggregate(t *testing.T) {
 	assert.Nil(t, got["app"].Identity)
 }
 
+func TestProjectObservationResolvedDoesNotDiscardAmbiguousEvidence(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "repo")
+	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			Project: "app", Machine: "laptop", RootPath: root,
+			RemoteResolution:     export.ProjectResolutionAmbiguous,
+			RemoteCandidateCount: 2,
+		},
+	))
+	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			Project: "app", Machine: "laptop", RootPath: root,
+			GitRemote: "https://github.com/acme/app.git",
+		},
+	))
+
+	got, err := d.BuildProjectIdentityMap(ctx, []string{"app"})
+	require.NoError(t, err)
+	assert.Equal(t, export.ProjectResolutionAmbiguous, got["app"].Resolution)
+	assert.Nil(t, got["app"].Identity)
+}
+
 func TestProjectObservationScrubDowngradesUnusableRemoteToFallback(t *testing.T) {
 	d := testDB(t)
 	ctx := context.Background()

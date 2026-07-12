@@ -220,8 +220,9 @@ func upsertProjectIdentityObservation(
 		DELETE FROM source_project_identity_observations
 		WHERE source_archive_id = ? AND project = ?
 		  AND machine = ? AND root_path = ?
-		  AND git_remote = ''`,
+		  AND git_remote = '' AND remote_resolution != ?`,
 		obs.SourceArchiveID, obs.Project, obs.Machine, obs.RootPath,
+		export.ProjectResolutionAmbiguous,
 	); err != nil {
 		return fmt.Errorf(
 			"removing stale duckdb project identity root fallback: %w", err,

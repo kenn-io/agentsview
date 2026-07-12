@@ -1463,6 +1463,37 @@ func TestSyncMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 	)
 }
 
+func TestSyncPreservesAmbiguousIdentityAlongsideResolvedRemote(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	root := filepath.Join(t.TempDir(), "repo")
+	require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			Project: "app", Machine: "laptop", RootPath: root,
+			GitRemote:        "https://example.com/acme/app.git",
+			RemoteResolution: export.ProjectResolutionResolved,
+		},
+	))
+	require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			Project: "app", Machine: "laptop", RootPath: root,
+			RemoteResolution:     export.ProjectResolutionAmbiguous,
+			RemoteCandidateCount: 2,
+		},
+	))
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, syncer.EnsureSchema(ctx))
+	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, true))
+
+	got, err := NewStoreFromDB(syncer.DB()).BuildProjectIdentityMap(
+		ctx, []string{"app"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, export.ProjectResolutionAmbiguous, got["app"].Resolution)
+	assert.Nil(t, got["app"].Identity)
+}
+
 func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
 	t *testing.T,
 ) {

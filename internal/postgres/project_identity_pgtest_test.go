@@ -86,11 +86,16 @@ func TestSyncProjectIdentityObservationsBatchMatchesSequential(t *testing.T) {
 		obs("/has-remote", "git@x:h.git", "origin"),
 		obs("/updated", "git@x:u.git", "old-name"),
 	}
+	preExistingAmbiguous := obs("/preexisting-ambiguous", "", "")
+	preExistingAmbiguous.RemoteResolution = export.ProjectResolutionAmbiguous
+	preExistingAmbiguous.RemoteCandidateCount = 2
+	preExisting = append(preExisting, preExistingAmbiguous)
 
 	// The batch covers: real+fallback for one root in both orders, a
 	// surviving fallback, a fallback suppressed by pre-existing state, a
 	// real row replacing a pre-existing fallback, an ON CONFLICT update,
-	// and duplicate conflict keys where the last observation wins.
+	// duplicate conflict keys where the last observation wins, and ambiguous
+	// evidence arriving both in the batch and before a real remote.
 	batch := []export.ProjectIdentityObservation{
 		obs("/mixed-real-first", "git@x:m1.git", "origin"),
 		obs("/mixed-real-first", "", ""),
@@ -102,6 +107,14 @@ func TestSyncProjectIdentityObservationsBatchMatchesSequential(t *testing.T) {
 		obs("/updated", "git@x:u.git", "dup-old"),
 		obs("/updated", "git@x:u.git", "new-name"),
 	}
+	ambiguous := obs("/ambiguous-with-real", "", "")
+	ambiguous.RemoteResolution = export.ProjectResolutionAmbiguous
+	ambiguous.RemoteCandidateCount = 2
+	batch = append(batch,
+		obs("/ambiguous-with-real", "git@x:a.git", "origin"),
+		ambiguous,
+		obs("/preexisting-ambiguous", "git@x:p.git", "origin"),
+	)
 
 	reset := func() {
 		_, err := pg.ExecContext(ctx,
@@ -141,6 +154,10 @@ func TestSyncProjectIdentityObservationsBatchMatchesSequential(t *testing.T) {
 	// Anchor the shared outcome so a bug that changes both paths in the
 	// same way cannot slip through the differential comparison.
 	assert.Equal(t, []identityRow{
+		{"proj", "m1", "/ambiguous-with-real", "", "",
+			"/ambiguous-with-real|"},
+		{"proj", "m1", "/ambiguous-with-real", "git@x:a.git", "origin",
+			"/ambiguous-with-real|git@x:a.git"},
 		{"proj", "m1", "/fallback-only", "", "", "/fallback-only|"},
 		{"proj", "m1", "/has-remote", "git@x:h.git", "origin",
 			"/has-remote|git@x:h.git"},
@@ -148,11 +165,20 @@ func TestSyncProjectIdentityObservationsBatchMatchesSequential(t *testing.T) {
 			"/mixed-fallback-first|git@x:m2.git"},
 		{"proj", "m1", "/mixed-real-first", "git@x:m1.git", "origin",
 			"/mixed-real-first|git@x:m1.git"},
+		{"proj", "m1", "/preexisting-ambiguous", "", "",
+			"/preexisting-ambiguous|"},
+		{"proj", "m1", "/preexisting-ambiguous", "git@x:p.git", "origin",
+			"/preexisting-ambiguous|git@x:p.git"},
 		{"proj", "m1", "/replaced-fallback", "git@x:r.git", "origin",
 			"/replaced-fallback|git@x:r.git"},
 		{"proj", "m1", "/updated", "git@x:u.git", "new-name",
 			"/updated|git@x:u.git"},
 	}, batched)
+	projects, err := (&Store{pg: pg}).BuildProjectIdentityMap(ctx, []string{"proj"})
+	require.NoError(t, err)
+	assert.Equal(t, export.ProjectResolutionAmbiguous,
+		projects["proj"].Resolution)
+	assert.Nil(t, projects["proj"].Identity)
 
 	// An empty batch must be a no-op rather than an SQL error.
 	tx, err = pg.BeginTx(ctx, nil)
