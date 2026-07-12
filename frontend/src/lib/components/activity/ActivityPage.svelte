@@ -71,7 +71,22 @@
   });
 
   const earliestSession = $derived(sync.stats?.earliest_session ?? null);
-  const today = $derived(localDateStr(new Date()));
+  let today = $state(localDateStr(new Date()));
+  let todayRolloverTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function scheduleTodayRollover(): void {
+    const now = new Date();
+    const nextMidnight = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate() + 1,
+    );
+    todayRolloverTimer = setTimeout(() => {
+      today = localDateStr(new Date());
+      scheduleTodayRollover();
+    }, nextMidnight.getTime() - now.getTime());
+  }
+
   const agentOptions = $derived.by((): TypeaheadOption[] => [
     {
       name: "",
@@ -259,6 +274,7 @@
   }
 
   onMount(() => {
+    scheduleTodayRollover();
     // Register as a consumer so a completed sync refreshes the filter
     // dropdowns while this page is on screen; detach on unmount.
     const detach = activity.attach();
@@ -278,6 +294,9 @@
     // manual button.
     const unsubEvents = events.subscribe(() => activity.markNewData());
     return () => {
+      if (todayRolloverTimer !== undefined) {
+        clearTimeout(todayRolloverTimer);
+      }
       detach();
       unsubEvents();
     };

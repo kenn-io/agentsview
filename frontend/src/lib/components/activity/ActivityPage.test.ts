@@ -6,6 +6,7 @@ import {
   it,
   vi,
 } from "vite-plus/test";
+import { fireEvent, screen } from "@testing-library/svelte";
 import { mount, tick, unmount } from "svelte";
 import { activity } from "../../stores/activity.svelte.js";
 import { router } from "../../stores/router.svelte.js";
@@ -18,6 +19,28 @@ async function flushEffects() {
   await tick();
   await Promise.resolve();
   await tick();
+}
+
+function stubActivityPageCollaborators() {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+  vi.spyOn(activity, "attach").mockReturnValue(() => {});
+  vi.spyOn(activity, "loadFilterOptions").mockResolvedValue();
+  vi.spyOn(activity, "load").mockResolvedValue();
+}
+
+async function openCalendar(triggerLabel: string) {
+  await fireEvent.click(screen.getByRole("button", { name: triggerLabel }));
+  await fireEvent.click(screen.getByRole("radio", { name: "Calendar" }));
+}
+
+function calendarDay(label: string): HTMLButtonElement {
+  return screen.getByRole("button", { name: label }) as HTMLButtonElement;
 }
 
 describe("ActivityPage refresh control layout", () => {
@@ -87,6 +110,7 @@ describe("ActivityPage date yoke integration", () => {
     activity.rollingWindowDays = null;
     yokedDates.setEnabled(false);
     localStorage.clear();
+    vi.useRealTimers();
   });
 
   it("seeds bare Activity from an enabled representable fixed range", async () => {
@@ -136,5 +160,93 @@ describe("ActivityPage date yoke integration", () => {
       from: "2026-06-01",
       to: "2026-06-07",
     });
+  });
+});
+
+describe("ActivityPage calendar day rollover", () => {
+  let component: ReturnType<typeof mount> | undefined;
+
+  afterEach(() => {
+    if (component) {
+      unmount(component);
+      component = undefined;
+    }
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    document.body.innerHTML = "";
+    window.history.replaceState(null, "", "/");
+    router.route = "sessions";
+    router.params = {};
+    activity.preset = "day";
+    activity.date = "";
+    activity.from = "";
+    activity.to = "";
+    activity.rollingWindowDays = null;
+    activity.report = null;
+    activity.loading = false;
+    activity.error = null;
+    yokedDates.setEnabled(false);
+    localStorage.clear();
+  });
+
+  it("enables each new local day at midnight without remounting", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 5, 17, 23, 59, 59, 500));
+    stubActivityPageCollaborators();
+    router.route = "activity";
+    activity.date = "2026-06-17";
+
+    component = mount(ActivityPage, { target: document.body });
+    await flushEffects();
+    await openCalendar("Jun 17, 2026");
+
+    const june18 = calendarDay("Jun 18, 2026");
+    const june19 = calendarDay("Jun 19, 2026");
+    expect(june18.disabled).toBe(true);
+    expect(june19.disabled).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(500);
+    await flushEffects();
+
+    expect(june18.disabled).toBe(false);
+    await fireEvent.click(june18);
+    expect(activity.date).toBe("2026-06-18");
+    expect(june19.disabled).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
+    await flushEffects();
+
+    expect(june19.disabled).toBe(false);
+    await fireEvent.click(june19);
+    expect(activity.date).toBe("2026-06-19");
+
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    unmount(component);
+    component = undefined;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("catches up to the current local day after a delayed timeout", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 4, 30, 23, 59, 59, 500));
+    stubActivityPageCollaborators();
+    router.route = "activity";
+    activity.date = "2026-05-30";
+
+    component = mount(ActivityPage, { target: document.body });
+    await flushEffects();
+    await openCalendar("May 30, 2026");
+
+    const june3 = calendarDay("Jun 3, 2026");
+    expect(june3.disabled).toBe(true);
+
+    vi.setSystemTime(new Date(2026, 5, 3, 12, 0, 0));
+    await vi.advanceTimersByTimeAsync(500);
+    await flushEffects();
+
+    expect(june3.disabled).toBe(false);
+    await fireEvent.click(june3);
+    expect(activity.date).toBe("2026-06-03");
   });
 });
