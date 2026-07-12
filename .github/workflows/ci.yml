@@ -117,6 +117,7 @@ jobs:
       - name: Run shell script tests
         run: |
           bash scripts/install_test.sh
+          bash scripts/retry_test.sh
           bash scripts/check_desktop_release_health_test.sh
           bash scripts/check_desktop_release_health_from_event_test.sh
           bash desktop/scripts/test-repair-appimage-diricon.sh
@@ -280,7 +281,7 @@ jobs:
           TEST_PG_URL: postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable
 
       - name: Build SSH test container
-        run: docker build -t agentsview-sshd -f testdata/ssh/Dockerfile .
+        run: bash scripts/retry.sh 3 10 docker build -t agentsview-sshd -f testdata/ssh/Dockerfile .
 
       - name: Start SSH test container
         run: |
