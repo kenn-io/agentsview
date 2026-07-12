@@ -1526,6 +1526,18 @@ func restorePinsTx(
 func (db *DB) attachToolCalls(
 	ctx context.Context, msgs []Message,
 ) error {
+	return attachToolCallsWithQuerier(ctx, db.getReader(), msgs)
+}
+
+type messageRowsQuerier interface {
+	QueryContext(
+		ctx context.Context, query string, args ...any,
+	) (*sql.Rows, error)
+}
+
+func attachToolCallsWithQuerier(
+	ctx context.Context, q messageRowsQuerier, msgs []Message,
+) error {
 	if len(msgs) == 0 {
 		return nil
 	}
@@ -1539,20 +1551,21 @@ func (db *DB) attachToolCalls(
 
 	for i := 0; i < len(ids); i += attachToolCallBatchSize {
 		end := min(i+attachToolCallBatchSize, len(ids))
-		if err := db.attachToolCallsBatch(
-			ctx, msgs, idToIdx, ids[i:end],
+		if err := attachToolCallsBatch(
+			ctx, q, msgs, idToIdx, ids[i:end],
 		); err != nil {
 			return err
 		}
 	}
-	if err := db.attachToolResultEvents(ctx, msgs); err != nil {
+	if err := attachToolResultEvents(ctx, q, msgs); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (db *DB) attachToolCallsBatch(
+func attachToolCallsBatch(
 	ctx context.Context,
+	q messageRowsQuerier,
 	msgs []Message,
 	idToIdx map[int64]int,
 	batch []int64,
@@ -1578,7 +1591,7 @@ func (db *DB) attachToolCallsBatch(
 		ORDER BY message_id, call_index`,
 		strings.Join(placeholders, ","))
 
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("querying tool_calls: %w", err)
 	}
@@ -1634,8 +1647,8 @@ func (db *DB) attachToolCallsBatch(
 	return rows.Err()
 }
 
-func (db *DB) attachToolResultEvents(
-	ctx context.Context, msgs []Message,
+func attachToolResultEvents(
+	ctx context.Context, q messageRowsQuerier, msgs []Message,
 ) error {
 	if len(msgs) == 0 {
 		return nil
@@ -1650,8 +1663,8 @@ func (db *DB) attachToolResultEvents(
 	}
 	for i := 0; i < len(ordinals); i += attachToolCallBatchSize {
 		end := min(i+attachToolCallBatchSize, len(ordinals))
-		if err := db.attachToolResultEventsBatch(
-			ctx, msgs, ordToIdx, sessionID, ordinals[i:end],
+		if err := attachToolResultEventsBatch(
+			ctx, q, msgs, ordToIdx, sessionID, ordinals[i:end],
 		); err != nil {
 			return err
 		}
@@ -1659,8 +1672,9 @@ func (db *DB) attachToolResultEvents(
 	return nil
 }
 
-func (db *DB) attachToolResultEventsBatch(
+func attachToolResultEventsBatch(
 	ctx context.Context,
+	q messageRowsQuerier,
 	msgs []Message,
 	ordToIdx map[int]int,
 	sessionID string,
@@ -1687,7 +1701,7 @@ func (db *DB) attachToolResultEventsBatch(
 		ORDER BY tool_call_message_ordinal, call_index, event_index`,
 		strings.Join(placeholders, ","))
 
-	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("querying tool_result_events: %w", err)
 	}
