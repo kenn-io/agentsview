@@ -44,6 +44,8 @@
     | null = null;
   let visibleProgressSignature: string | null = $state(null);
   let visibleProgressRaf: number | null = null;
+  let unreadTraversalKey: string | null = null;
+  let unreadBoundarySeen = false;
 
   let baseMessages: Message[] = $derived.by(() =>
     messages.messages.filter((m) => !isSystemMessage(m)),
@@ -191,6 +193,15 @@
       return;
     }
 
+    if (baseMessages.length === 0) {
+      readProgress.markRead(
+        sessionId,
+        currentToken,
+        latestRawLoadedOrdinal,
+      );
+      return;
+    }
+
     const top = v.scrollOffset ?? containerRef?.scrollTop ?? 0;
     const height = containerRef?.clientHeight || v.scrollRect?.height || 0;
     const bottom = top + height;
@@ -223,18 +234,26 @@
 
     if (maxVisibleOrdinal === null || latestLoadedOrdinal === null) return;
 
+    const unreadBoundary = unreadBoundaryOrdinal(
+      marker,
+      latestLoadedOrdinal,
+    );
+    const traversalKey =
+      `${sessionId}|${currentToken}|${unreadBoundary}`;
+    if (unreadTraversalKey !== traversalKey) {
+      unreadTraversalKey = traversalKey;
+      unreadBoundarySeen = false;
+    }
+    if (
+      minVisibleOrdinal !== null &&
+      minVisibleOrdinal <= unreadBoundary &&
+      maxVisibleOrdinal >= unreadBoundary
+    ) {
+      unreadBoundarySeen = true;
+    }
+
     if (ui.sortNewestFirst) {
-      const completionOrdinal = marker.ordinal === null
-        ? latestLoadedOrdinal
-        : latestLoadedOrdinal <= marker.ordinal
-          ? latestLoadedOrdinal
-          : marker.ordinal + 1;
-      if (
-        minVisibleOrdinal !== null &&
-        completionOrdinal !== null &&
-        minVisibleOrdinal <= completionOrdinal &&
-        maxVisibleOrdinal >= completionOrdinal
-      ) {
+      if (unreadBoundarySeen) {
         readProgress.markRead(
           sessionId,
           currentToken,
@@ -244,7 +263,10 @@
       return;
     }
 
-    if (maxVisibleOrdinal >= latestLoadedOrdinal) {
+    if (
+      unreadBoundarySeen &&
+      maxVisibleOrdinal >= latestLoadedOrdinal
+    ) {
       readProgress.markRead(
         sessionId,
         currentToken,
@@ -298,11 +320,33 @@
     baseMessages[baseMessages.length - 1]?.ordinal ?? null,
   );
 
+  let latestRawLoadedOrdinal = $derived(
+    messages.messages[messages.messages.length - 1]?.ordinal ?? null,
+  );
+
+  function unreadBoundaryOrdinal(
+    marker: { ordinal: number | null },
+    latestOrdinal: number,
+  ): number {
+    const explicit = messages.activeSessionUnreadOrdinal;
+    if (explicit !== null) {
+      return baseMessages.find((message) =>
+        message.ordinal >= explicit
+      )?.ordinal ?? latestOrdinal;
+    }
+    const earliestOrdinal = baseMessages[0]?.ordinal ?? latestOrdinal;
+    if (marker.ordinal === null || marker.ordinal >= latestOrdinal) {
+      return earliestOrdinal;
+    }
+    return marker.ordinal + 1;
+  }
+
   $effect(() => {
     const sessionId = messages.sessionId;
     const currentToken = messages.activeSessionToken;
     const loading = messages.loading;
-    const latestOrdinal = latestLoadedOrdinal;
+    const latestOrdinal =
+      latestLoadedOrdinal ?? latestRawLoadedOrdinal;
     if (!sessionId || !currentToken || loading) return;
     readProgress.baseline(sessionId, currentToken, latestOrdinal);
   });
@@ -313,8 +357,10 @@
     const loading = messages.loading;
     const count = messages.messageCount;
     const latest = latestDisplaySignature();
+    const unreadOrdinal = messages.activeSessionUnreadOrdinal;
     if (!sessionId || !currentToken || loading || !containerRef) return;
-    const signature = `${sessionId}|${currentToken}|${count}|${latest}`;
+    const signature =
+      `${sessionId}|${currentToken}|${count}|${latest}|${unreadOrdinal}`;
     if (
       visibleProgressSignature === null ||
       !visibleProgressSignature.startsWith(`${sessionId}|`)
@@ -740,15 +786,23 @@
       return null;
     }
 
+    const unreadBoundary = unreadBoundaryOrdinal(
+      marker,
+      latestOrdinal,
+    );
+
     const items = ui.sortNewestFirst
       ? [...displayItemsAsc].reverse()
       : displayItemsAsc;
 
     if (ui.sortNewestFirst) {
-      if (marker.ordinal === null) return null;
+      const dividerBoundary = marker.ordinal !== null &&
+          unreadBoundary === marker.ordinal + 1
+        ? marker.ordinal
+        : unreadBoundary;
       for (const item of items) {
         for (const ordinal of itemOrdinals(item)) {
-          if (ordinal <= marker.ordinal) {
+          if (ordinal <= dividerBoundary) {
             return {
               ordinal,
               label: m.read_progress_earlier_messages(),
@@ -759,15 +813,9 @@
       return null;
     }
 
-    const hasTailOnlyUnread = marker.ordinal !== null &&
-      latestOrdinal <= marker.ordinal;
     for (const item of items) {
       for (const ordinal of itemOrdinals(item)) {
-        if (
-          marker.ordinal === null ||
-          ordinal > marker.ordinal ||
-          (hasTailOnlyUnread && ordinal === latestOrdinal)
-        ) {
+        if (ordinal >= unreadBoundary) {
           return {
             ordinal,
             label: m.read_progress_new_messages(),

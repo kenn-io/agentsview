@@ -231,6 +231,35 @@ describe('MessagesStore', () => {
     expect(messages.activeSessionToken).toBe('new');
   });
 
+  it('publishes the earliest changed ordinal with a revised token', async () => {
+    const original = [makeMessage(0), makeMessage(1), makeMessage(2)];
+    vi.mocked(api.getSession).mockResolvedValue({
+      ...makeSession('s1', original.length),
+      transcript_revision: 'old',
+    });
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse(original),
+    );
+    await messages.loadSession('s1');
+
+    vi.mocked(api.getSession).mockResolvedValueOnce({
+      ...makeSession('s1', original.length),
+      transcript_revision: 'new',
+    });
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse([
+        { ...makeMessage(0), content: 'edited earlier message' },
+        makeMessage(1),
+        makeMessage(2),
+      ]),
+    );
+
+    await messages.reload();
+
+    expect(messages.activeSessionToken).toBe('new');
+    expect(messages.activeSessionUnreadOrdinal).toBe(0);
+  });
+
   it('keeps a revised token pending until progressively loaded history is visible', async () => {
     const count = 4_000;
     vi.mocked(api.getSession).mockResolvedValue({
@@ -264,6 +293,7 @@ describe('MessagesStore', () => {
     await messages.loadOlder();
     expect(messages.hasOlder).toBe(false);
     expect(messages.activeSessionToken).toBe('new');
+    expect(messages.activeSessionUnreadOrdinal).toBe(0);
   });
 
   it('should not carry over mainModel to a different session', async () => {

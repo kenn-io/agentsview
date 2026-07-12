@@ -31,6 +31,7 @@ class MessagesStore {
   sessionId: string | null = $state(null);
   messageCount: number = $state(0);
   activeSessionToken: string | null = $state(null);
+  activeSessionUnreadOrdinal: number | null = $state(null);
   hasOlder: boolean = $state(false);
   loadingOlder: boolean = $state(false);
   private _stableMainModel: string = $state("");
@@ -48,6 +49,7 @@ class MessagesStore {
   private loadOlderPromise: Promise<void> | null = null;
   private pendingSessionToken: string | null = null;
   private hasPendingSessionToken: boolean = false;
+  private pendingSessionUnreadOrdinal: number | null = null;
 
   async loadSession(id: string) {
     if (
@@ -60,6 +62,7 @@ class MessagesStore {
     this._stableMainModel = "";
     this.sessionId = id;
     this.activeSessionToken = null;
+    this.activeSessionUnreadOrdinal = null;
     this.loading = true;
 
     const ac = new AbortController();
@@ -97,7 +100,7 @@ class MessagesStore {
         );
       }
       if (this.sessionId === id) {
-        this.publishOrDeferSessionToken(pendingToken);
+        this.publishOrDeferSessionToken(pendingToken, null);
       }
     } catch (err) {
       if (isAbortError(err)) return;
@@ -151,6 +154,7 @@ class MessagesStore {
     this._stableMainModel = "";
     this.messageCount = 0;
     this.activeSessionToken = null;
+    this.activeSessionUnreadOrdinal = null;
     this.hasOlder = false;
     this.loadingOlder = false;
     this.reloadPromise = null;
@@ -159,6 +163,7 @@ class MessagesStore {
     this.loadOlderPromise = null;
     this.pendingSessionToken = null;
     this.hasPendingSessionToken = false;
+    this.pendingSessionUnreadOrdinal = null;
   }
 
   private async fetchPages(
@@ -461,6 +466,9 @@ class MessagesStore {
     const signal = this.abortController?.signal;
     if (!signal || signal.aborted) return;
 
+    const previousToken = this.activeSessionToken;
+    const previousMessages = this.messages;
+
     try {
       configureGeneratedClient();
       const sess = await withAbort(
@@ -491,7 +499,10 @@ class MessagesStore {
       }
 
       if (this.sessionId === id) {
-        this.publishOrDeferSessionToken(pendingToken);
+        const unreadOrdinal = pendingToken !== previousToken
+          ? earliestChangedOrdinal(previousMessages, this.messages)
+          : null;
+        this.publishOrDeferSessionToken(pendingToken, unreadOrdinal);
       }
     } catch (err) {
       if (isAbortError(err)) return;
@@ -499,15 +510,21 @@ class MessagesStore {
     }
   }
 
-  private publishOrDeferSessionToken(token: string | null) {
+  private publishOrDeferSessionToken(
+    token: string | null,
+    unreadOrdinal: number | null,
+  ) {
     if (this.hasOlder) {
       this.pendingSessionToken = token;
       this.hasPendingSessionToken = true;
+      this.pendingSessionUnreadOrdinal = 0;
       return;
     }
     this.pendingSessionToken = null;
     this.hasPendingSessionToken = false;
+    this.pendingSessionUnreadOrdinal = null;
     this.activeSessionToken = token;
+    this.activeSessionUnreadOrdinal = unreadOrdinal;
   }
 
   private publishPendingSessionToken(id: string) {
@@ -519,8 +536,11 @@ class MessagesStore {
       return;
     }
     this.activeSessionToken = this.pendingSessionToken;
+    this.activeSessionUnreadOrdinal =
+      this.pendingSessionUnreadOrdinal;
     this.pendingSessionToken = null;
     this.hasPendingSessionToken = false;
+    this.pendingSessionUnreadOrdinal = null;
   }
 
   private async refreshLoadedWindow(
@@ -586,6 +606,38 @@ class MessagesStore {
       }
     }
   }
+}
+
+function earliestChangedOrdinal(
+  previous: Message[],
+  current: Message[],
+): number | null {
+  const previousByOrdinal = new Map(
+    previous.map((message) => [message.ordinal, message]),
+  );
+  const currentByOrdinal = new Map(
+    current.map((message) => [message.ordinal, message]),
+  );
+  const ordinals = new Set([
+    ...previousByOrdinal.keys(),
+    ...currentByOrdinal.keys(),
+  ]);
+  let earliest: number | null = null;
+  for (const ordinal of ordinals) {
+    const before = previousByOrdinal.get(ordinal);
+    const after = currentByOrdinal.get(ordinal);
+    if (
+      before !== undefined &&
+      after !== undefined &&
+      JSON.stringify(before) === JSON.stringify(after)
+    ) {
+      continue;
+    }
+    earliest = earliest === null
+      ? ordinal
+      : Math.min(earliest, ordinal);
+  }
+  return earliest;
 }
 
 export const messages = new MessagesStore();
