@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"database/sql"
@@ -120,14 +121,76 @@ func TestRunServeRuntimeWarningHelperProcess(t *testing.T) {
 func runDuckDBRuntimeWarningHelper(t *testing.T) ([]byte, error) {
 	t.Helper()
 	dataDir := t.TempDir()
-	cmd := exec.Command(os.Args[0], "-test.run=TestRunDuckDBRuntimeWarningHelperProcess")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(
+		ctx, os.Args[0], "-test.run=TestRunDuckDBRuntimeWarningHelperProcess",
+	)
 	cmd.Env = append(
 		os.Environ(),
 		"AGENTSVIEW_RUN_DUCKDB_RUNTIME_WARNING_HELPER=1",
 		"AGENTSVIEW_DATA_DIR="+dataDir,
 		"AGENTSVIEW_DUCKDB_RUNTIME_WARNING_PATH="+filepath.Join(dataDir, "mirror.duckdb"),
 	)
-	return cmd.CombinedOutput()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("pipe DuckDB helper stdout: %w", err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start DuckDB helper: %w", err)
+	}
+
+	const marker = "could not write daemon runtime record"
+	var stdoutOutput bytes.Buffer
+	observed := false
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		line := scanner.Text()
+		stdoutOutput.WriteString(line)
+		stdoutOutput.WriteByte('\n')
+		if strings.Contains(line, marker) {
+			observed = true
+			cancel()
+		}
+	}
+	scanErr := scanner.Err()
+	waitErr := cmd.Wait()
+
+	combined := append([]byte(nil), stdoutOutput.Bytes()...)
+	combined = append(combined, stderr.Bytes()...)
+	if observed {
+		if scanErr != nil {
+			return combined, fmt.Errorf(
+				"scan DuckDB helper stdout after warning: %w\noutput:\n%s",
+				scanErr, combined,
+			)
+		}
+		return stdoutOutput.Bytes(), nil
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return combined, fmt.Errorf(
+			"DuckDB helper deadline expired before stdout warning: %w\noutput:\n%s",
+			ctx.Err(), combined,
+		)
+	}
+	if scanErr != nil {
+		return combined, fmt.Errorf(
+			"scan DuckDB helper stdout before warning: %w\noutput:\n%s",
+			scanErr, combined,
+		)
+	}
+	if waitErr != nil {
+		return combined, fmt.Errorf(
+			"DuckDB helper exited nonzero before stdout warning: %w\noutput:\n%s",
+			waitErr, combined,
+		)
+	}
+	return combined, fmt.Errorf(
+		"DuckDB helper exited with status 0 before stdout warning\noutput:\n%s",
+		combined,
+	)
 }
 
 func runPGRuntimeWarningHelper(t *testing.T) ([]byte, error) {
@@ -190,8 +253,10 @@ func TestRunDuckDBRuntimeWarningHelperProcess(t *testing.T) {
 	) (string, error) {
 		return "", errors.New("forced runtime-record write failure")
 	}
+	// This is only an orphan guard if the parent dies; normal completion is
+	// driven by the parent observing the warning on stdout.
 	go func() {
-		time.Sleep(3 * time.Second)
+		time.Sleep(2 * time.Minute)
 		os.Exit(0)
 	}()
 	runDuckDBServe(config.Config{
