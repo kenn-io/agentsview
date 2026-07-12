@@ -1725,6 +1725,13 @@ func stringValue(value *string) string {
 	return *value
 }
 
+func transcriptRevisionValue(value *string) string {
+	if value == nil || *value == "" {
+		return "0"
+	}
+	return *value
+}
+
 func float64Value(value *float64) string {
 	if value == nil {
 		return ""
@@ -2035,7 +2042,7 @@ func (s *Sync) pushSession(
 		sess.MissingVerificationCount, sess.DuplicatePromptCount,
 		sess.NoCodeContextCount, sess.RunawayToolLoopCount,
 		sanitizePG(sess.TranscriptFidelity),
-		nilStr(sess.TranscriptRevision),
+		transcriptRevisionValue(sess.TranscriptRevision),
 		string(legacyMarkerMachinesJSON),
 	)
 	if err != nil {

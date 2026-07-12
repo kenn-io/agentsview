@@ -1347,7 +1347,7 @@ func sessionInsertArgs(sess db.Session, machine string) []any {
 		sess.MessageCount, sess.UserMessageCount,
 		nilString(sess.FilePath), sess.FileSize, sess.FileMtime,
 		sess.FileInode, sess.FileDevice, nilString(sess.FileHash),
-		nilTime(sess.LocalModifiedAt), nilString(sess.TranscriptRevision),
+		nilTime(sess.LocalModifiedAt), transcriptRevisionValue(sess.TranscriptRevision),
 		nilString(sess.ParentSessionID),
 		sess.RelationshipType, sess.TotalOutputTokens,
 		sess.PeakContextTokens, sess.HasTotalOutputTokens,
@@ -1698,6 +1698,13 @@ func (s *Sync) replaceScopedPinnedMessages(
 func nilString(value *string) any {
 	if value == nil || *value == "" {
 		return nil
+	}
+	return *value
+}
+
+func transcriptRevisionValue(value *string) string {
+	if value == nil || *value == "" {
+		return "0"
 	}
 	return *value
 }
