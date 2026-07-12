@@ -496,8 +496,8 @@ class UsageStore {
   }
 
   toggleProjectKey(key: string): void {
-    this.excludedProjectKeys = this.toggleCsv(
-      this.excludedProjectKeys, key,
+    this.excludedProjectKeys = toggleListValue(
+      this.excludedProjectKeys, key, ",",
     );
     this.fetchAll();
   }
