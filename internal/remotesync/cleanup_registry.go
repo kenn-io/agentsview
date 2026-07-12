@@ -2,6 +2,7 @@ package remotesync
 
 import (
 	"errors"
+	"reflect"
 	"sync"
 )
 
@@ -30,9 +31,9 @@ func (e *PendingCleanupError) Unwrap() error {
 	return e.Err
 }
 
-// CleanupRegistry serializes HTTP sync work and retains at most one failed
-// prepared-source cleanup. A retained cleanup must succeed before later work
-// can start, so ownership cannot be overwritten or grow without bound.
+// CleanupRegistry serializes HTTP sync work and retains at most one aggregate
+// of failed cleanup owners. Every retained owner must release before later
+// work can start, so ownership cannot be overwritten or grow without bound.
 type CleanupRegistry struct {
 	mu      sync.Mutex
 	pending error
@@ -48,7 +49,8 @@ func (r *CleanupRegistry) Run(
 	defer r.mu.Unlock()
 
 	if r.pending != nil {
-		if retryCleanup(r.pending) != nil {
+		if pending := retryCleanup(r.pending); pending != nil {
+			r.pending = pending
 			return SyncStats{}, &PendingCleanupError{Err: r.pending}
 		}
 		r.pending = nil
@@ -59,15 +61,100 @@ func (r *CleanupRegistry) Run(
 		return stats, nil
 	}
 	if cleanupErr := retryCleanup(err); cleanupErr != nil {
-		r.pending = err
+		r.pending = cleanupErr
 	}
 	return stats, err
 }
 
 func retryCleanup(err error) error {
-	var retrier cleanupRetrier
-	if !errors.As(err, &retrier) {
+	if retained, ok := err.(*retainedCleanupError); ok {
+		if retained.RetryCleanup() != nil {
+			return retained
+		}
 		return nil
 	}
-	return retrier.RetryCleanup()
+
+	retriers := cleanupRetriers(err)
+	if len(retriers) == 0 {
+		return nil
+	}
+	if len(retriers) == 1 {
+		if retriers[0].RetryCleanup() != nil {
+			return err
+		}
+		return nil
+	}
+
+	retained := &retainedCleanupError{cause: err, retriers: retriers}
+	if retained.RetryCleanup() != nil {
+		return retained
+	}
+	return nil
+}
+
+type retainedCleanupError struct {
+	cause    error
+	retriers []cleanupRetrier
+}
+
+func (e *retainedCleanupError) Error() string { return e.cause.Error() }
+func (e *retainedCleanupError) Unwrap() error { return e.cause }
+
+func (e *retainedCleanupError) RetryCleanup() error {
+	remaining := e.retriers[:0]
+	var retryErr error
+	for _, retrier := range e.retriers {
+		if err := retrier.RetryCleanup(); err != nil {
+			remaining = append(remaining, retrier)
+			retryErr = errors.Join(retryErr, err)
+		}
+	}
+	e.retriers = remaining
+	return retryErr
+}
+
+func cleanupRetriers(err error) []cleanupRetrier {
+	var retriers []cleanupRetrier
+	stack := []error{err}
+	for len(stack) > 0 {
+		current := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if current == nil {
+			continue
+		}
+		if retrier, ok := current.(cleanupRetrier); ok &&
+			!containsCleanupRetrier(retriers, retrier) {
+			retriers = append(retriers, retrier)
+		}
+		switch wrapped := current.(type) {
+		case interface{ Unwrap() []error }:
+			stack = append(stack, wrapped.Unwrap()...)
+		case interface{ Unwrap() error }:
+			stack = append(stack, wrapped.Unwrap())
+		}
+	}
+	return retriers
+}
+
+func containsCleanupRetrier(
+	retriers []cleanupRetrier, candidate cleanupRetrier,
+) bool {
+	for _, retrier := range retriers {
+		left := reflect.ValueOf(retrier)
+		right := reflect.ValueOf(candidate)
+		if left.Type() != right.Type() {
+			continue
+		}
+		if left.Type().Comparable() && left.Interface() == right.Interface() {
+			return true
+		}
+		switch left.Kind() {
+		case reflect.Chan, reflect.Func, reflect.Pointer,
+			reflect.Slice, reflect.UnsafePointer:
+			if left.Pointer() == right.Pointer() {
+				return true
+			}
+		}
+	}
+	return false
 }

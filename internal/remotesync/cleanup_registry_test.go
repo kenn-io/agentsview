@@ -2,6 +2,7 @@ package remotesync
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -63,6 +64,60 @@ func TestCleanupRegistryRetriesBeforeReturningAndBeforeLaterWork(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 4, owner.retryCount())
 	assert.Equal(t, 2, runs, "new work starts only after retained ownership releases")
+}
+
+func TestCleanupRegistryRetriesEveryDistinctJoinedOwner(t *testing.T) {
+	firstFailure := errors.New("first cleanup still blocked")
+	first := &cleanupRetryTestError{
+		cause:   errors.New("first cleanup owner"),
+		results: []error{firstFailure, nil},
+	}
+	secondFailure := errors.New("second cleanup still blocked")
+	second := &cleanupRetryTestError{
+		cause:   errors.New("second cleanup owner"),
+		results: []error{secondFailure, secondFailure, nil},
+	}
+	joined := errors.Join(
+		fmt.Errorf("wrapped first owner: %w", first),
+		second,
+		fmt.Errorf("duplicate first owner: %w", first),
+	)
+	var registry CleanupRegistry
+	runs := 0
+
+	_, err := registry.Run(func() (SyncStats, error) {
+		runs++
+		return SyncStats{}, joined
+	})
+	require.Same(t, joined, err)
+	assert.Equal(t, 1, first.retryCount(),
+		"one owner appearing twice in the error tree is retried once")
+	assert.Equal(t, 1, second.retryCount(),
+		"a sibling owner is retried even when the first owner retains cleanup")
+
+	_, err = registry.Run(func() (SyncStats, error) {
+		runs++
+		return SyncStats{SessionsSynced: 1}, nil
+	})
+	var pending *PendingCleanupError
+	require.ErrorAs(t, err, &pending)
+	assert.ErrorIs(t, err, first.cause)
+	assert.ErrorIs(t, err, second.cause)
+	assert.Equal(t, 2, first.retryCount())
+	assert.Equal(t, 2, second.retryCount())
+	assert.Equal(t, 1, runs,
+		"new work stays blocked while any retained owner still fails")
+
+	_, err = registry.Run(func() (SyncStats, error) {
+		runs++
+		return SyncStats{SessionsSynced: 1}, nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2, first.retryCount(),
+		"successful owners are not retried with the retained failures")
+	assert.Equal(t, 3, second.retryCount())
+	assert.Equal(t, 2, runs,
+		"new work starts after every retained owner releases")
 }
 
 func TestCleanupRegistrySerializesConcurrentWork(t *testing.T) {
