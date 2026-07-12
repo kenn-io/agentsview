@@ -3389,20 +3389,26 @@ func TestWriteSessionIncrementalBlocksLinkedResultContent(t *testing.T) {
 			ToolUseID: "toolu_blocked",
 		}},
 	})
+	before, err := d.GetSession(context.Background(), "s1")
+	require.NoError(t, err)
+	require.NotNil(t, before)
+	require.NotNil(t, before.TranscriptRevision)
+	assert.Equal(t, "1", *before.TranscriptRevision)
 
+	update := IncrementalSessionUpdate{
+		MsgCount:    1,
+		NextOrdinal: 1,
+		SubagentLinks: []ToolCallSubagentLink{{
+			ToolUseID:         "toolu_blocked",
+			SubagentSessionID: "agent-child",
+			ResultContent:     "secret result",
+			ResultContentLen:  len("secret result"),
+			HasResult:         true,
+		}},
+		BlockedResultCategories: map[string]bool{"Task": true},
+	}
 	require.NoError(t, d.WriteSessionIncremental(
-		"s1", nil, IncrementalSessionUpdate{
-			MsgCount:    1,
-			NextOrdinal: 1,
-			SubagentLinks: []ToolCallSubagentLink{{
-				ToolUseID:         "toolu_blocked",
-				SubagentSessionID: "agent-child",
-				ResultContent:     "secret result",
-				ResultContentLen:  len("secret result"),
-				HasResult:         true,
-			}},
-			BlockedResultCategories: map[string]bool{"Task": true},
-		},
+		"s1", nil, update,
 	), "incremental write")
 
 	var subagent, content string
@@ -3417,6 +3423,19 @@ func TestWriteSessionIncrementalBlocksLinkedResultContent(t *testing.T) {
 	assert.Equal(t, "agent-child", subagent)
 	assert.Equal(t, len("secret result"), contentLen)
 	assert.Empty(t, content)
+	after, err := d.GetSession(context.Background(), "s1")
+	require.NoError(t, err)
+	require.NotNil(t, after)
+	require.NotNil(t, after.TranscriptRevision)
+	assert.Equal(t, "2", *after.TranscriptRevision)
+
+	require.NoError(t, d.WriteSessionIncremental("s1", nil, update),
+		"idempotent incremental write")
+	idempotent, err := d.GetSession(context.Background(), "s1")
+	require.NoError(t, err)
+	require.NotNil(t, idempotent)
+	require.NotNil(t, idempotent.TranscriptRevision)
+	assert.Equal(t, "2", *idempotent.TranscriptRevision)
 }
 
 func TestFTSBackfill(t *testing.T) {

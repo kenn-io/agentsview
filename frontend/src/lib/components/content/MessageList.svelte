@@ -43,6 +43,7 @@
     | ReturnType<typeof setTimeout>
     | null = null;
   let visibleProgressSignature: string | null = $state(null);
+  let visibleProgressRaf: number | null = null;
 
   let baseMessages: Message[] = $derived.by(() =>
     messages.messages.filter((m) => !isSystemMessage(m)),
@@ -319,11 +320,23 @@
       !visibleProgressSignature.startsWith(`${sessionId}|`)
     ) {
       visibleProgressSignature = signature;
+      scheduleVisibleProgress(sessionId, currentToken);
       return;
     }
     if (visibleProgressSignature === signature) return;
     visibleProgressSignature = signature;
-    requestAnimationFrame(() => {
+    scheduleVisibleProgress(sessionId, currentToken);
+  });
+
+  function scheduleVisibleProgress(
+    sessionId: string,
+    currentToken: string,
+  ) {
+    if (visibleProgressRaf !== null) {
+      cancelAnimationFrame(visibleProgressRaf);
+    }
+    visibleProgressRaf = requestAnimationFrame(() => {
+      visibleProgressRaf = null;
       if (
         messages.sessionId !== sessionId ||
         messages.loading ||
@@ -333,7 +346,7 @@
       }
       recordVisibleProgress();
     });
-  });
+  }
 
   function handleScroll() {
     if (!containerRef) return;
@@ -419,6 +432,10 @@
   }
 
   onDestroy(() => {
+    if (visibleProgressRaf !== null) {
+      cancelAnimationFrame(visibleProgressRaf);
+      visibleProgressRaf = null;
+    }
     if (scrollRaf !== null) {
       cancelAnimationFrame(scrollRaf);
       scrollRaf = null;

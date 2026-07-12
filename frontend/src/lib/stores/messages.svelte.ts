@@ -46,6 +46,8 @@ class MessagesStore {
   private reloadSessionId: string | null = null;
   private pendingReload: boolean = false;
   private loadOlderPromise: Promise<void> | null = null;
+  private pendingSessionToken: string | null = null;
+  private hasPendingSessionToken: boolean = false;
 
   async loadSession(id: string) {
     if (
@@ -95,7 +97,7 @@ class MessagesStore {
         );
       }
       if (this.sessionId === id) {
-        this.activeSessionToken = pendingToken;
+        this.publishOrDeferSessionToken(pendingToken);
       }
     } catch (err) {
       if (isAbortError(err)) return;
@@ -155,6 +157,8 @@ class MessagesStore {
     this.reloadSessionId = null;
     this.pendingReload = false;
     this.loadOlderPromise = null;
+    this.pendingSessionToken = null;
+    this.hasPendingSessionToken = false;
   }
 
   private async fetchPages(
@@ -322,6 +326,7 @@ class MessagesStore {
     const oldest = this.messages[0]!.ordinal;
     if (oldest <= 0) {
       this.hasOlder = false;
+      this.publishPendingSessionToken(id);
       return;
     }
 
@@ -343,11 +348,13 @@ class MessagesStore {
       if (this.sessionId !== id) return;
       if (res.messages.length === 0) {
         this.hasOlder = false;
+        this.publishPendingSessionToken(id);
         return;
       }
       const chunk = [...res.messages].reverse();
       this.messages.unshift(...chunk);
       this.hasOlder = chunk[0]!.ordinal > 0;
+      this.publishPendingSessionToken(id);
     } catch (err) {
       if (isAbortError(err)) return;
       console.warn("Failed to load older messages:", err);
@@ -436,6 +443,7 @@ class MessagesStore {
       const oldestNow = this.messages[0]?.ordinal;
       this.hasOlder =
         oldestNow !== undefined && oldestNow > 0;
+      this.publishPendingSessionToken(id);
     } catch (err) {
       if (isAbortError(err)) return;
       console.warn(
@@ -483,12 +491,36 @@ class MessagesStore {
       }
 
       if (this.sessionId === id) {
-        this.activeSessionToken = pendingToken;
+        this.publishOrDeferSessionToken(pendingToken);
       }
     } catch (err) {
       if (isAbortError(err)) return;
       console.warn("Reload failed:", err);
     }
+  }
+
+  private publishOrDeferSessionToken(token: string | null) {
+    if (this.hasOlder) {
+      this.pendingSessionToken = token;
+      this.hasPendingSessionToken = true;
+      return;
+    }
+    this.pendingSessionToken = null;
+    this.hasPendingSessionToken = false;
+    this.activeSessionToken = token;
+  }
+
+  private publishPendingSessionToken(id: string) {
+    if (
+      this.sessionId !== id ||
+      this.hasOlder ||
+      !this.hasPendingSessionToken
+    ) {
+      return;
+    }
+    this.activeSessionToken = this.pendingSessionToken;
+    this.pendingSessionToken = null;
+    this.hasPendingSessionToken = false;
   }
 
   private async refreshLoadedWindow(

@@ -259,4 +259,19 @@ describe("MessageList follow cancellation", () => {
     await new Promise((resolve) => window.setTimeout(resolve, 20));
     expect(readProgress.get("s1")?.token).toBe("previous");
   });
+
+  it("marks a short newest-first transcript read when its unread boundary is initially visible", async () => {
+    messages.messages = [makeMessage(0), makeMessage(1)];
+    messages.messageCount = 2;
+    messages.activeSessionToken = "current";
+    ui.sortNewestFirst = true;
+    setVirtualRows(2);
+    readProgress.baseline("s1", "previous", 0);
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+
+    expect(readProgress.get("s1")?.token).toBe("current");
+  });
 });

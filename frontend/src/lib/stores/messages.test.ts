@@ -231,6 +231,41 @@ describe('MessagesStore', () => {
     expect(messages.activeSessionToken).toBe('new');
   });
 
+  it('keeps a revised token pending until progressively loaded history is visible', async () => {
+    const count = 4_000;
+    vi.mocked(api.getSession).mockResolvedValue({
+      ...makeSession('s1', count),
+      transcript_revision: 'old',
+    });
+    const tail = Array.from(
+      { length: 1_000 },
+      (_, i) => makeMessage(count - 1 - i),
+    );
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse(tail),
+    );
+    await messages.loadSession('s1');
+    expect(messages.hasOlder).toBe(true);
+    messages.activeSessionToken = 'old';
+
+    vi.mocked(api.getSession).mockResolvedValueOnce({
+      ...makeSession('s1', count),
+      transcript_revision: 'new',
+    });
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse([...tail].reverse()),
+    );
+    await messages.reload();
+    expect(messages.activeSessionToken).toBe('old');
+
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse([makeMessage(1), makeMessage(0)]),
+    );
+    await messages.loadOlder();
+    expect(messages.hasOlder).toBe(false);
+    expect(messages.activeSessionToken).toBe('new');
+  });
+
   it('should not carry over mainModel to a different session', async () => {
     const s1Msgs = Array.from({ length: 3 }, (_, i) => ({
       ...makeMessage(i),

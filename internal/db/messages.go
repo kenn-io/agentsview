@@ -981,15 +981,18 @@ func (db *DB) WriteSessionIncremental(
 	if err := writeMessagesTx(tx, msgs); err != nil {
 		return err
 	}
-	if len(msgs) > 0 {
-		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
+	transcriptChanged := len(msgs) > 0
+	for _, link := range update.SubagentLinks {
+		changed, err := applyToolCallSubagentLinkTx(
+			tx, sessionID, link, update.BlockedResultCategories,
+		)
+		if err != nil {
 			return err
 		}
+		transcriptChanged = transcriptChanged || changed
 	}
-	for _, link := range update.SubagentLinks {
-		if err := applyToolCallSubagentLinkTx(
-			tx, sessionID, link, update.BlockedResultCategories,
-		); err != nil {
+	if transcriptChanged {
+		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 			return err
 		}
 	}
@@ -2082,13 +2085,19 @@ func (db *DB) SetToolCallSubagentSession(
 		return fmt.Errorf("beginning subagent linkage tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := applyToolCallSubagentLinkTx(
+	changed, err := applyToolCallSubagentLinkTx(
 		tx, sessionID, ToolCallSubagentLink{
 			ToolUseID:         toolUseID,
 			SubagentSessionID: subagentSessionID,
 		}, nil,
-	); err != nil {
+	)
+	if err != nil {
 		return err
+	}
+	if changed {
+		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }
@@ -2096,38 +2105,53 @@ func (db *DB) SetToolCallSubagentSession(
 func applyToolCallSubagentLinkTx(
 	tx *sql.Tx, sessionID string, link ToolCallSubagentLink,
 	blockedResultCategories map[string]bool,
-) error {
-	var toolName, category, currentSubagent string
+) (bool, error) {
+	var toolName, category, currentSubagent, currentResultContent string
+	var currentResultContentLen int
 	if err := tx.QueryRow(
-		`SELECT tool_name, category, COALESCE(subagent_session_id, '')
+		`SELECT tool_name, category, COALESCE(subagent_session_id, ''),
+		        COALESCE(result_content_length, 0),
+		        COALESCE(result_content, '')
 		 FROM tool_calls
 		 WHERE session_id = ? AND tool_use_id = ?`,
 		sessionID, link.ToolUseID,
-	).Scan(&toolName, &category, &currentSubagent); err != nil {
+	).Scan(
+		&toolName, &category, &currentSubagent,
+		&currentResultContentLen, &currentResultContent,
+	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf(
+		return false, fmt.Errorf(
 			"checking tool_call for %s/%s: %w",
 			sessionID, link.ToolUseID, err,
 		)
 	}
+	storedSubagent := currentSubagent
 	if currentSubagent == "" &&
 		(category == "Task" || strings.Contains(toolName, "subagent")) {
 		currentSubagent = link.SubagentSessionID
 	}
 
 	if !link.HasResult {
+		if currentSubagent == storedSubagent {
+			return false, nil
+		}
 		_, err := tx.Exec(
 			`UPDATE tool_calls SET subagent_session_id = ?
 			 WHERE session_id = ? AND tool_use_id = ?`,
 			nilIfEmpty(currentSubagent), sessionID, link.ToolUseID,
 		)
-		return err
+		return err == nil, err
 	}
 	resultContent := link.ResultContent
 	if blockedResultCategories[category] {
 		resultContent = ""
+	}
+	if currentSubagent == storedSubagent &&
+		currentResultContentLen == link.ResultContentLen &&
+		currentResultContent == resultContent {
+		return false, nil
 	}
 	_, err := tx.Exec(
 		`UPDATE tool_calls
@@ -2137,7 +2161,7 @@ func applyToolCallSubagentLinkTx(
 		nilIfEmpty(currentSubagent), link.ResultContentLen, resultContent,
 		sessionID, link.ToolUseID,
 	)
-	return err
+	return err == nil, err
 }
 
 // SystemMessageFingerprint returns the ordered, comma-separated list of
