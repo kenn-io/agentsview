@@ -33,20 +33,34 @@ func TestPushSessionTranscriptRevisionRoundTrip(t *testing.T) {
 		pg: pg, local: localDB, machine: "test-machine",
 		schema: schema, schemaDone: true,
 	}
-	hash := "transcript-hash"
 	modified := "2026-07-12T12:00:00Z"
 	sess := db.Session{
 		ID: "read-progress", Project: "project", Machine: "test-machine",
 		Agent: "claude", MessageCount: 1, UserMessageCount: 1,
-		CreatedAt: "2026-07-12T12:00:00Z", FileHash: &hash,
-		LocalModifiedAt: &modified,
+		CreatedAt: "2026-07-12T12:00:00Z", LocalModifiedAt: &modified,
 	}
-	markerID, err := syncer.pushMarkerID()
+	require.NoError(t, localDB.UpsertSession(sess))
+	require.NoError(t, localDB.InsertMessages([]db.Message{{
+		SessionID: sess.ID, Ordinal: 0, Role: "user",
+		Content: "hello", ContentLength: len("hello"),
+	}}))
+	result, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
-	tx, err := pg.BeginTx(ctx, nil)
+	assert.Equal(t, 1, result.SessionsPushed)
+
+	// Simulate a row left at the schema default by an older push, while the
+	// normal incremental watermark says there is no local work. A missing
+	// backfill marker must force one full push and repair that row.
+	_, err = pg.ExecContext(ctx,
+		`UPDATE sessions SET transcript_revision = '0' WHERE id = $1`, sess.ID,
+	)
 	require.NoError(t, err)
-	require.NoError(t, syncer.pushSession(ctx, tx, sess, markerID, nil))
-	require.NoError(t, tx.Commit())
+	require.NoError(t, localDB.SetSyncState(
+		transcriptRevisionBackfillStateKey, "",
+	))
+	result, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.SessionsPushed)
 
 	store, err := NewStore(pgURL, schema, true)
 	require.NoError(t, err)
@@ -54,12 +68,12 @@ func TestPushSessionTranscriptRevisionRoundTrip(t *testing.T) {
 	detail, err := store.GetSession(ctx, sess.ID)
 	require.NoError(t, err)
 	require.NotNil(t, detail)
-	assertPGJSONTranscriptRevision(t, detail, hash)
+	assertPGJSONTranscriptRevision(t, detail, "1")
 
 	index, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{Limit: 50})
 	require.NoError(t, err)
 	require.Len(t, index.Sessions, 1)
-	assertPGJSONTranscriptRevision(t, index.Sessions[0], hash)
+	assertPGJSONTranscriptRevision(t, index.Sessions[0], "1")
 }
 
 func assertPGJSONTranscriptRevision(t *testing.T, value any, want string) {

@@ -301,6 +301,25 @@ func TestSessionAliasBackfillForcesOneFullPush(t *testing.T) {
 	assert.False(t, needed)
 }
 
+func TestTranscriptRevisionBackfillForcesOneFullPush(t *testing.T) {
+	store := &syncStateStoreStub{}
+
+	full, needed, err := applyTranscriptRevisionBackfillRequirement(
+		store, false,
+	)
+	require.NoError(t, err)
+	assert.True(t, full)
+	assert.True(t, needed)
+
+	require.NoError(t, markTranscriptRevisionBackfillDone(store))
+	full, needed, err = applyTranscriptRevisionBackfillRequirement(
+		store, false,
+	)
+	require.NoError(t, err)
+	assert.False(t, full)
+	assert.False(t, needed)
+}
+
 func TestCompleteSessionAliasBackfillMarksDoneUnlessErrors(t *testing.T) {
 	for _, tc := range []struct {
 		name string

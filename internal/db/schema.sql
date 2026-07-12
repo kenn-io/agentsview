@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     file_device INTEGER,
     file_hash   TEXT,
     local_modified_at TEXT,
+    transcript_revision TEXT NOT NULL DEFAULT '0',
     parent_session_id TEXT,
     relationship_type TEXT NOT NULL DEFAULT '',
     total_output_tokens INTEGER NOT NULL DEFAULT 0,

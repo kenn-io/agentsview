@@ -372,6 +372,11 @@ func writeOneSessionBatchTx(
 			return 0, err
 		}
 	}
+	if (write.ReplaceMessages && sessionExists) || len(msgs) > 0 {
+		if err := bumpTranscriptRevisionTx(tx, write.Session.ID); err != nil {
+			return 0, err
+		}
+	}
 	if write.ReplaceMessages && sessionExists {
 		if err := reconcileRecallEvidenceForSessionTx(
 			context.Background(),

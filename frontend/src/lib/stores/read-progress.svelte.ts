@@ -5,14 +5,14 @@ export interface ReadProgressMarker {
 }
 
 interface StoredReadProgress {
-  version: 1;
+  version: 2;
   sessions: Record<string, ReadProgressMarker>;
 }
 
 type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
 const STORAGE_KEY = "agentsview-read-progress";
-const STORAGE_VERSION = 1;
+const STORAGE_VERSION = 2;
 const DEFAULT_MAX_ENTRIES = 500;
 
 type TokenSource = {

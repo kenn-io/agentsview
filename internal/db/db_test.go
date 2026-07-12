@@ -2527,21 +2527,22 @@ func TestGetSessionFull(t *testing.T) {
 		requireNoError(t, err, "GetSessionFull")
 		require.NotNil(t, got, "expected non-nil session")
 		want := &Session{
-			ID:                "full-1",
-			Project:           "proj",
-			MessageCount:      5,
-			FilePath:          new("/tmp/session.jsonl"),
-			FileSize:          new(int64(2048)),
-			FileMtime:         new(int64(1700000000)),
-			FileHash:          new("abc123"),
-			FirstMessage:      new("hello"),
-			StartedAt:         new(tsZero),
-			EndedAt:           new(tsHour1),
-			Machine:           defaultMachine,
-			Agent:             defaultAgent,
-			Outcome:           "unknown",
-			OutcomeConfidence: "low",
-			CreatedAt:         got.CreatedAt,
+			ID:                 "full-1",
+			Project:            "proj",
+			MessageCount:       5,
+			FilePath:           new("/tmp/session.jsonl"),
+			FileSize:           new(int64(2048)),
+			FileMtime:          new(int64(1700000000)),
+			FileHash:           new("abc123"),
+			TranscriptRevision: new("0"),
+			FirstMessage:       new("hello"),
+			StartedAt:          new(tsZero),
+			EndedAt:            new(tsHour1),
+			Machine:            defaultMachine,
+			Agent:              defaultAgent,
+			Outcome:            "unknown",
+			OutcomeConfidence:  "low",
+			CreatedAt:          got.CreatedAt,
 		}
 		if diff := cmp.Diff(want, got); diff != "" {
 			t.Errorf("GetSessionFull mismatch (-want +got):\n%s", diff)
@@ -2557,14 +2558,15 @@ func TestGetSessionFull(t *testing.T) {
 		requireNoError(t, err, "GetSessionFull")
 		require.NotNil(t, got, "expected non-nil session")
 		want := &Session{
-			ID:                "full-2",
-			Project:           "proj",
-			MessageCount:      1,
-			Machine:           defaultMachine,
-			Agent:             defaultAgent,
-			Outcome:           "unknown",
-			OutcomeConfidence: "low",
-			CreatedAt:         got.CreatedAt,
+			ID:                 "full-2",
+			Project:            "proj",
+			MessageCount:       1,
+			TranscriptRevision: new("0"),
+			Machine:            defaultMachine,
+			Agent:              defaultAgent,
+			Outcome:            "unknown",
+			OutcomeConfidence:  "low",
+			CreatedAt:          got.CreatedAt,
 		}
 		if diff := cmp.Diff(want, got); diff != "" {
 			t.Errorf("GetSessionFull mismatch (-want +got):\n%s", diff)

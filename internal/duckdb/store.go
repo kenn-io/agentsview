@@ -208,7 +208,7 @@ const duckSessionCols = `id, project, machine, agent,
 	cwd, git_branch, source_session_id, source_version, transcript_fidelity,
 	parser_malformed_lines, is_truncated,
 	secret_leak_count, secrets_rules_version,
-	deleted_at, termination_status, file_hash`
+	deleted_at, termination_status, transcript_revision`
 
 func scanSession(rs interface{ Scan(...any) error }) (db.Session, error) {
 	var s db.Session
@@ -451,7 +451,7 @@ func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) 
 			termination_status,
 			message_count,
 			user_message_count,
-			file_hash,
+			transcript_revision,
 			is_automated,
 			position('<teammate-message' in COALESCE(first_message, '')) > 0
 		FROM sessions

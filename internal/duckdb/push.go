@@ -1244,7 +1244,8 @@ func (s *Sync) upsertSession(
 			first_message, display_name, session_name, started_at, ended_at,
 			message_count, user_message_count,
 			file_path, file_size, file_mtime, file_inode, file_device,
-			file_hash, local_modified_at, parent_session_id,
+			file_hash, local_modified_at, transcript_revision,
+			parent_session_id,
 			relationship_type, total_output_tokens, peak_context_tokens,
 			has_total_output_tokens, has_peak_context_tokens, is_automated,
 			tool_failure_signal_count, tool_retry_count, edit_churn_count,
@@ -1261,7 +1262,7 @@ func (s *Sync) upsertSession(
 			parser_malformed_lines, is_truncated, deleted_at, created_at,
 			termination_status, secret_leak_count, secrets_rules_version
 		) VALUES (
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?
@@ -1285,6 +1286,7 @@ func (s *Sync) upsertSession(
 			file_device = excluded.file_device,
 			file_hash = excluded.file_hash,
 			local_modified_at = excluded.local_modified_at,
+			transcript_revision = excluded.transcript_revision,
 			parent_session_id = excluded.parent_session_id,
 			relationship_type = excluded.relationship_type,
 			total_output_tokens = excluded.total_output_tokens,
@@ -1345,7 +1347,8 @@ func sessionInsertArgs(sess db.Session, machine string) []any {
 		sess.MessageCount, sess.UserMessageCount,
 		nilString(sess.FilePath), sess.FileSize, sess.FileMtime,
 		sess.FileInode, sess.FileDevice, nilString(sess.FileHash),
-		nilTime(sess.LocalModifiedAt), nilString(sess.ParentSessionID),
+		nilTime(sess.LocalModifiedAt), nilString(sess.TranscriptRevision),
+		nilString(sess.ParentSessionID),
 		sess.RelationshipType, sess.TotalOutputTokens,
 		sess.PeakContextTokens, sess.HasTotalOutputTokens,
 		sess.HasPeakContextTokens, sess.IsAutomated,

@@ -26,6 +26,7 @@ const (
 	lastPushTargetFingerprintKey       = "pg_target_fingerprint_v1"
 	sessionAliasBackfillStateKey       = "pg_session_alias_backfill_v1"
 	projectIdentityPublicationStateKey = "project_identity_publication_revision_v2"
+	transcriptRevisionBackfillStateKey = "pg_transcript_revision_backfill_v1"
 )
 
 // pushMarkerIDStateKey names the local sync-state entry holding this DB's
@@ -189,6 +190,17 @@ func (s *Sync) Push(
 	if aliasBackfillNeeded {
 		log.Printf(
 			"pgsync: session alias backfill marker missing; forcing full push",
+		)
+	}
+	transcriptRevisionBackfillNeeded := false
+	full, transcriptRevisionBackfillNeeded, err =
+		applyTranscriptRevisionBackfillRequirement(state, full)
+	if err != nil {
+		return result, err
+	}
+	if transcriptRevisionBackfillNeeded {
+		log.Printf(
+			"pgsync: transcript revision backfill marker missing; forcing full push",
 		)
 	}
 	if full {
@@ -435,6 +447,11 @@ func (s *Sync) Push(
 		); err != nil {
 			return result, err
 		}
+		if err := completeTranscriptRevisionBackfill(
+			state, transcriptRevisionBackfillNeeded, result,
+		); err != nil {
+			return result, err
+		}
 		if err := s.syncProjectIdentityObservations(ctx, full); err != nil {
 			return result, err
 		}
@@ -540,6 +557,11 @@ func (s *Sync) Push(
 	}
 	if err := completeSessionAliasBackfill(
 		aliasBackfillState, aliasBackfillNeeded, result,
+	); err != nil {
+		return result, err
+	}
+	if err := completeTranscriptRevisionBackfill(
+		state, transcriptRevisionBackfillNeeded, result,
 	); err != nil {
 		return result, err
 	}
@@ -1251,6 +1273,41 @@ func completeSessionAliasBackfill(
 	return markSessionAliasBackfillDone(local)
 }
 
+func applyTranscriptRevisionBackfillRequirement(
+	local syncStateStore, full bool,
+) (bool, bool, error) {
+	done, err := local.GetSyncState(transcriptRevisionBackfillStateKey)
+	if err != nil {
+		return full, false, fmt.Errorf(
+			"reading %s: %w", transcriptRevisionBackfillStateKey, err,
+		)
+	}
+	if done == "1" {
+		return full, false, nil
+	}
+	return true, true, nil
+}
+
+func markTranscriptRevisionBackfillDone(local syncStateStore) error {
+	if err := local.SetSyncState(
+		transcriptRevisionBackfillStateKey, "1",
+	); err != nil {
+		return fmt.Errorf(
+			"updating %s: %w", transcriptRevisionBackfillStateKey, err,
+		)
+	}
+	return nil
+}
+
+func completeTranscriptRevisionBackfill(
+	local syncStateStore, needed bool, result PushResult,
+) error {
+	if !needed || result.Errors > 0 {
+		return nil
+	}
+	return markTranscriptRevisionBackfillDone(local)
+}
+
 func persistPushTargetFingerprint(
 	local syncStateStore,
 	fingerprint string,
@@ -1617,6 +1674,7 @@ func sessionPushFingerprint(
 		sess.SourceSessionID,
 		sess.SourceVersion,
 		sess.TranscriptFidelity,
+		stringValue(sess.TranscriptRevision),
 		fmt.Sprintf("%d", sess.ParserMalformedLines),
 		fmt.Sprintf("%t", sess.IsTruncated),
 		stringValue(sess.TerminationStatus),
@@ -1977,7 +2035,7 @@ func (s *Sync) pushSession(
 		sess.MissingVerificationCount, sess.DuplicatePromptCount,
 		sess.NoCodeContextCount, sess.RunawayToolLoopCount,
 		sanitizePG(sess.TranscriptFidelity),
-		nilStr(sess.FileHash),
+		nilStr(sess.TranscriptRevision),
 		string(legacyMarkerMachinesJSON),
 	)
 	if err != nil {

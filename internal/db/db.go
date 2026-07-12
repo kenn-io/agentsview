@@ -1666,6 +1666,10 @@ func schemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE sessions ADD COLUMN local_modified_at TEXT",
 		},
 		{
+			"sessions", "transcript_revision",
+			"ALTER TABLE sessions ADD COLUMN transcript_revision TEXT NOT NULL DEFAULT '0'",
+		},
+		{
 			"sessions", "is_automated",
 			"ALTER TABLE sessions ADD COLUMN is_automated INTEGER NOT NULL DEFAULT 0",
 		},

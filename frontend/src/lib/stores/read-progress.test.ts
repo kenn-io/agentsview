@@ -26,6 +26,21 @@ describe("read progress", () => {
     ).toBeNull();
   });
 
+  it("drops version-one tokens so existing sessions rebaseline after upgrade", () => {
+    localStorage.setItem("agentsview-read-progress", JSON.stringify({
+      version: 1,
+      sessions: {
+        one: {
+          token: "h:old-hash|m:2026-07-11T12:00:00Z",
+          ordinal: 3,
+          touched_at: 1,
+        },
+      },
+    }));
+
+    expect(new ReadProgressStore().get("one")).toBeNull();
+  });
+
   it("keeps the initial baseline read and only flips unread off after markRead", () => {
     const store = new ReadProgressStore();
     store.baseline("one", "old", 3);

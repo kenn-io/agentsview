@@ -902,6 +902,9 @@ func (db *DB) InsertMessages(msgs []Message) error {
 		return err
 	}
 	for _, sessionID := range messageSessionIDs(msgs) {
+		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
+			return err
+		}
 		if err := setSessionAutomationFromMessagesTx(
 			tx, sessionID,
 		); err != nil {
@@ -977,6 +980,11 @@ func (db *DB) WriteSessionIncremental(
 
 	if err := writeMessagesTx(tx, msgs); err != nil {
 		return err
+	}
+	if len(msgs) > 0 {
+		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
+			return err
+		}
 	}
 	for _, link := range update.SubagentLinks {
 		if err := applyToolCallSubagentLinkTx(
@@ -1111,6 +1119,11 @@ func (db *DB) ReplaceSessionMessages(
 	} else if err := replaceSessionMessagesTx(tx, sessionID, msgs); err != nil {
 		return err
 	}
+	if !useDiff || len(plan.updates) > 0 || len(plan.inserts) > 0 {
+		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
+			return err
+		}
+	}
 	if !useDiff || len(plan.updates) > 0 {
 		if err := reconcileRecallEvidenceForSessionTx(
 			context.Background(), tx, sessionID, &pendingRecallRevocations,
@@ -1176,6 +1189,35 @@ func replaceSessionMessagesTx(
 	}
 
 	return restorePinsTx(tx, sessionID, pins)
+}
+
+func bumpTranscriptRevisionTx(tx *sql.Tx, sessionID string) error {
+	result, err := tx.Exec(
+		`UPDATE sessions
+		 SET transcript_revision = CAST(
+			CAST(transcript_revision AS INTEGER) + 1 AS TEXT
+		 )
+		 WHERE id = ?`,
+		sessionID,
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"bumping transcript revision for %s: %w", sessionID, err,
+		)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf(
+			"reading transcript revision rows for %s: %w", sessionID, err,
+		)
+	}
+	if rows != 1 {
+		return fmt.Errorf(
+			"bumping transcript revision for %s: updated %d rows",
+			sessionID, rows,
+		)
+	}
+	return nil
 }
 
 func sessionHasFTSTx(tx *sql.Tx) (bool, error) {
@@ -1272,6 +1314,11 @@ func (db *DB) ReplaceSessionContent(
 		}
 	} else if err := replaceSessionMessagesTx(tx, sessionID, msgs); err != nil {
 		return err
+	}
+	if !useDiff || len(plan.updates) > 0 || len(plan.inserts) > 0 {
+		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
+			return err
+		}
 	}
 	if !useDiff || len(plan.updates) > 0 {
 		if err := reconcileRecallEvidenceForSessionTx(

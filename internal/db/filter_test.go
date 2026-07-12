@@ -1193,22 +1193,33 @@ func TestSidebarSessionIndexIncludeAutomated(t *testing.T) {
 
 func TestSessionReadProgressRevisionUsesTranscriptContent(t *testing.T) {
 	d := testDB(t)
-	hash := "transcript-hash"
-	modified := "2026-07-12T12:00:00Z"
-	insertSession(t, d, "revision", "proj", func(s *Session) {
-		s.FileHash = &hash
-		s.LocalModifiedAt = &modified
-	})
+	insertSession(t, d, "revision", "proj")
 
 	session, err := d.GetSession(context.Background(), "revision")
 	require.NoError(t, err)
 	require.NotNil(t, session)
-	assertJSONTranscriptRevision(t, session, hash)
+	assertJSONTranscriptRevision(t, session, "0")
+
+	require.NoError(t, d.InsertMessages([]Message{{
+		SessionID: "revision", Ordinal: 0, Role: "user",
+		Content: "content", ContentLength: len("content"),
+	}}))
+	updated, err := d.GetSession(context.Background(), "revision")
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assertJSONTranscriptRevision(t, updated, "1")
+
+	name := "metadata-only rename"
+	require.NoError(t, d.RenameSession("revision", &name))
+	renamed, err := d.GetSession(context.Background(), "revision")
+	require.NoError(t, err)
+	require.NotNil(t, renamed)
+	assertJSONTranscriptRevision(t, renamed, "1")
 
 	index, err := d.GetSidebarSessionIndex(context.Background(), SessionFilter{})
 	require.NoError(t, err)
 	require.Len(t, index.Sessions, 1)
-	assertJSONTranscriptRevision(t, index.Sessions[0], hash)
+	assertJSONTranscriptRevision(t, index.Sessions[0], "1")
 }
 
 func assertJSONTranscriptRevision(t *testing.T, value any, want string) {

@@ -208,7 +208,7 @@ func duckContractSessionsCursorsAndMetadata(
 	require.NoError(t, err)
 	require.NotNil(t, alpha)
 	require.Equal(t, "alpha", alpha.Project)
-	assertDuckJSONTranscriptRevision(t, alpha, "hash-"+fixture.alphaID)
+	assertDuckJSONTranscriptRevision(t, alpha, "1")
 
 	full, err := store.GetSessionFull(ctx, fixture.alphaID)
 	require.NoError(t, err)
@@ -219,7 +219,7 @@ func duckContractSessionsCursorsAndMetadata(
 	require.NoError(t, err)
 	require.Contains(t, duckSidebarSessionIDs(index.Sessions), fixture.alphaID)
 	require.Len(t, index.Sessions, 1)
-	assertDuckJSONTranscriptRevision(t, index.Sessions[0], "hash-"+fixture.alphaID)
+	assertDuckJSONTranscriptRevision(t, index.Sessions[0], "1")
 
 	stats, err := store.GetStats(ctx, false, false)
 	require.NoError(t, err)

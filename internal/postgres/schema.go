@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     no_code_context_count     INT NOT NULL DEFAULT 0,
     runaway_tool_loop_count   INT NOT NULL DEFAULT 0,
     termination_status        TEXT,
-    transcript_revision       TEXT,
+    transcript_revision       TEXT NOT NULL DEFAULT '0',
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -445,7 +445,7 @@ func EnsureSchema(
 	alters := []columnMigration{
 		{
 			"sessions", "transcript_revision",
-			`transcript_revision TEXT`,
+			`transcript_revision TEXT NOT NULL DEFAULT '0'`,
 			"adding sessions.transcript_revision",
 		},
 		{

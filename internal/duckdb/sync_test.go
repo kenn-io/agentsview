@@ -2397,25 +2397,25 @@ func syncSession(id, project, first, ts string, messageCount int) db.Session {
 	startedAt := ts
 	endedAt := ts
 	localModifiedAt := ts
-	fileHash := "hash-" + id
+	transcriptRevision := "1"
 	return db.Session{
-		ID:                id,
-		Project:           project,
-		Machine:           "local",
-		Agent:             "claude",
-		FirstMessage:      &firstValue,
-		StartedAt:         &startedAt,
-		EndedAt:           &endedAt,
-		CreatedAt:         ts,
-		LocalModifiedAt:   &localModifiedAt,
-		FileHash:          &fileHash,
-		MessageCount:      messageCount,
-		UserMessageCount:  1,
-		RelationshipType:  "root",
-		Outcome:           "success",
-		OutcomeConfidence: "high",
-		EndedWithRole:     "assistant",
-		DataVersion:       1,
+		ID:                 id,
+		Project:            project,
+		Machine:            "local",
+		Agent:              "claude",
+		FirstMessage:       &firstValue,
+		StartedAt:          &startedAt,
+		EndedAt:            &endedAt,
+		CreatedAt:          ts,
+		LocalModifiedAt:    &localModifiedAt,
+		TranscriptRevision: &transcriptRevision,
+		MessageCount:       messageCount,
+		UserMessageCount:   1,
+		RelationshipType:   "root",
+		Outcome:            "success",
+		OutcomeConfidence:  "high",
+		EndedWithRole:      "assistant",
+		DataVersion:        1,
 	}
 }
 
