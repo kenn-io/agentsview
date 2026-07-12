@@ -304,6 +304,32 @@ describe("MessageList follow cancellation", () => {
     expect(readProgress.get("s1")?.token).toBe("current");
   });
 
+  it("keeps an appended unread boundary immutable before traversal", async () => {
+    messages.messages = [
+      makeMessage(0),
+      makeMessage(1),
+      makeMessage(2),
+      makeMessage(3),
+      makeMessage(4),
+    ];
+    messages.messageCount = 5;
+    messages.activeSessionToken = "current";
+    messages.activeSessionUnreadOrdinal = null;
+    virtualizerMock.getVirtualItems.mockReturnValue([
+      { index: 4, key: "row-4", start: 0, end: 100 },
+    ]);
+    readProgress.baseline("s1", "previous", 1);
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+
+    expect(readProgress.get("s1")).toMatchObject({
+      token: "previous",
+      ordinal: 1,
+    });
+  });
+
   it("acknowledges a revised transcript with only system messages", async () => {
     messages.messages = [{ ...makeMessage(0), is_system: true }];
     messages.messageCount = 1;

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vite-plus/test';
 import { messages } from './messages.svelte.js';
+import { readProgress } from './read-progress.svelte.js';
 import { parseContent } from '../utils/content-parser.js';
 import type {
   Message,
@@ -137,6 +138,7 @@ async function setupSession(
 describe('MessagesStore', () => {
   beforeEach(() => {
     messages.clear();
+    readProgress.reset();
     vi.clearAllMocks();
   });
 
@@ -275,7 +277,7 @@ describe('MessagesStore', () => {
     );
     await messages.loadSession('s1');
     expect(messages.hasOlder).toBe(true);
-    messages.activeSessionToken = 'old';
+    expect(messages.activeSessionToken).toBe('old');
 
     vi.mocked(api.getSession).mockResolvedValueOnce({
       ...makeSession('s1', count),
@@ -294,6 +296,28 @@ describe('MessagesStore', () => {
     expect(messages.hasOlder).toBe(false);
     expect(messages.activeSessionToken).toBe('new');
     expect(messages.activeSessionUnreadOrdinal).toBe(0);
+  });
+
+  it('publishes an already-current token for progressively loaded history', async () => {
+    const count = 4_000;
+    readProgress.baseline('s1', 'current', count - 1);
+    vi.mocked(api.getSession).mockResolvedValue({
+      ...makeSession('s1', count),
+      transcript_revision: 'current',
+    });
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse(
+        Array.from(
+          { length: 1_000 },
+          (_, i) => makeMessage(count - 1 - i),
+        ),
+      ),
+    );
+
+    await messages.loadSession('s1');
+
+    expect(messages.hasOlder).toBe(true);
+    expect(messages.activeSessionToken).toBe('current');
   });
 
   it('should not carry over mainModel to a different session', async () => {

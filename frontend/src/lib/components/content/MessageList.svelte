@@ -274,8 +274,6 @@
       );
       return;
     }
-
-    readProgress.advanceOrdinal(sessionId, maxVisibleOrdinal);
   }
 
   function visibleToolGroupOrdinals(

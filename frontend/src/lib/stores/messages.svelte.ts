@@ -13,7 +13,10 @@ import {
 } from "../api/runtime.js";
 import { clearContentCaches } from "../utils/content-parser.js";
 import { computeMainModel } from "../utils/model.js";
-import { buildReadProgressToken } from "./read-progress.svelte.js";
+import {
+  buildReadProgressToken,
+  readProgress,
+} from "./read-progress.svelte.js";
 
 const MESSAGE_PAGE_SIZE = 1000;
 const FULL_SESSION_MESSAGE_THRESHOLD = 3_000;
@@ -58,6 +61,7 @@ class MessagesStore {
     ) {
       return;
     }
+    const readMarker = readProgress.get(id);
     this.clear();
     this._stableMainModel = "";
     this.sessionId = id;
@@ -100,7 +104,12 @@ class MessagesStore {
         );
       }
       if (this.sessionId === id) {
-        this.publishOrDeferSessionToken(pendingToken, null);
+        this.publishOrDeferSessionToken(
+          pendingToken,
+          null,
+          readMarker !== null &&
+            readMarker.token !== pendingToken,
+        );
       }
     } catch (err) {
       if (isAbortError(err)) return;
@@ -513,8 +522,9 @@ class MessagesStore {
   private publishOrDeferSessionToken(
     token: string | null,
     unreadOrdinal: number | null,
+    deferForOlder: boolean = true,
   ) {
-    if (this.hasOlder) {
+    if (this.hasOlder && deferForOlder) {
       this.pendingSessionToken = token;
       this.hasPendingSessionToken = true;
       this.pendingSessionUnreadOrdinal = 0;
