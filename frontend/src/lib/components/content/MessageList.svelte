@@ -205,31 +205,27 @@
     const top = v.scrollOffset ?? containerRef?.scrollTop ?? 0;
     const height = containerRef?.clientHeight || v.scrollRect?.height || 0;
     const bottom = top + height;
-    let minVisibleOrdinal: number | null = null;
     let maxVisibleOrdinal: number | null = null;
+    const visibleOrdinals = new Set<number>();
 
     for (const row of v.getVirtualItems()) {
       if (row.end <= top || row.start >= bottom) continue;
       const item = itemAt(row.index);
       if (!item) continue;
       if (item.kind === "message") {
-        minVisibleOrdinal = minVisibleOrdinal === null
-          ? item.message.ordinal
-          : Math.min(minVisibleOrdinal, item.message.ordinal);
+        visibleOrdinals.add(item.message.ordinal);
         maxVisibleOrdinal = maxVisibleOrdinal === null
           ? item.message.ordinal
           : Math.max(maxVisibleOrdinal, item.message.ordinal);
         continue;
       }
 
-      const bounds = visibleToolGroupOrdinals(row.index);
-      if (!bounds) continue;
-      minVisibleOrdinal = minVisibleOrdinal === null
-        ? bounds.min
-        : Math.min(minVisibleOrdinal, bounds.min);
-      maxVisibleOrdinal = maxVisibleOrdinal === null
-        ? bounds.max
-        : Math.max(maxVisibleOrdinal, bounds.max);
+      for (const ordinal of visibleToolGroupOrdinals(row.index)) {
+        visibleOrdinals.add(ordinal);
+        maxVisibleOrdinal = maxVisibleOrdinal === null
+          ? ordinal
+          : Math.max(maxVisibleOrdinal, ordinal);
+      }
     }
 
     if (maxVisibleOrdinal === null || latestLoadedOrdinal === null) return;
@@ -244,11 +240,7 @@
       unreadTraversalKey = traversalKey;
       unreadBoundarySeen = false;
     }
-    if (
-      minVisibleOrdinal !== null &&
-      minVisibleOrdinal <= unreadBoundary &&
-      maxVisibleOrdinal >= unreadBoundary
-    ) {
+    if (visibleOrdinals.has(unreadBoundary)) {
       unreadBoundarySeen = true;
     }
 
@@ -278,29 +270,22 @@
 
   function visibleToolGroupOrdinals(
     rowIndex: number,
-  ): { min: number; max: number } | null {
-    if (!containerRef) return null;
+  ): number[] {
+    if (!containerRef) return [];
     const row = containerRef.querySelector<HTMLElement>(
       `.virtual-row[data-index="${rowIndex}"]`,
     );
-    if (!row) return null;
+    if (!row) return [];
     const rootRect = containerRef.getBoundingClientRect();
-    let minVisibleOrdinal: number | null = null;
-    let maxVisibleOrdinal: number | null = null;
+    const ordinals: number[] = [];
     for (const node of row.querySelectorAll<HTMLElement>("[data-message-ordinal]")) {
       const ordinal = Number(node.dataset.messageOrdinal);
       if (!Number.isInteger(ordinal) || ordinal < 0) continue;
       const rect = node.getBoundingClientRect();
       if (rect.bottom <= rootRect.top || rect.top >= rootRect.bottom) continue;
-      minVisibleOrdinal = minVisibleOrdinal === null
-        ? ordinal
-        : Math.min(minVisibleOrdinal, ordinal);
-      maxVisibleOrdinal = maxVisibleOrdinal === null
-        ? ordinal
-        : Math.max(maxVisibleOrdinal, ordinal);
+      ordinals.push(ordinal);
     }
-    if (minVisibleOrdinal === null || maxVisibleOrdinal === null) return null;
-    return { min: minVisibleOrdinal, max: maxVisibleOrdinal };
+    return ordinals;
   }
 
   // Recompute visible timestamp when minimap opens or

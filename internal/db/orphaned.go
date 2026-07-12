@@ -788,7 +788,10 @@ func reconcileTranscriptRevisionsTx(
 	}
 	for table, columns := range map[string][]string{
 		"messages": {
-			"thinking_text", "is_system",
+			"thinking_text", "is_system", "model",
+			"context_tokens", "output_tokens",
+			"has_context_tokens", "has_output_tokens",
+			"source_subtype", "is_compact_boundary",
 		},
 		"tool_calls": {
 			"call_index", "result_content", "file_path",
@@ -813,20 +816,28 @@ func reconcileTranscriptRevisionsTx(
 			SELECT CASE WHEN
 				NOT EXISTS (
 					SELECT ordinal, role, content, thinking_text, timestamp,
-						has_thinking, has_tool_use, is_system
+						has_thinking, has_tool_use, is_system, model,
+						context_tokens, output_tokens, has_context_tokens,
+						has_output_tokens, source_subtype, is_compact_boundary
 					FROM main.messages WHERE session_id = current.id
 					EXCEPT
 					SELECT ordinal, role, content, thinking_text, timestamp,
-						has_thinking, has_tool_use, is_system
+						has_thinking, has_tool_use, is_system, model,
+						context_tokens, output_tokens, has_context_tokens,
+						has_output_tokens, source_subtype, is_compact_boundary
 					FROM old_db.messages WHERE session_id = current.id
 				)
 				AND NOT EXISTS (
 					SELECT ordinal, role, content, thinking_text, timestamp,
-						has_thinking, has_tool_use, is_system
+						has_thinking, has_tool_use, is_system, model,
+						context_tokens, output_tokens, has_context_tokens,
+						has_output_tokens, source_subtype, is_compact_boundary
 					FROM old_db.messages WHERE session_id = current.id
 					EXCEPT
 					SELECT ordinal, role, content, thinking_text, timestamp,
-						has_thinking, has_tool_use, is_system
+						has_thinking, has_tool_use, is_system, model,
+						context_tokens, output_tokens, has_context_tokens,
+						has_output_tokens, source_subtype, is_compact_boundary
 					FROM main.messages WHERE session_id = current.id
 				)
 				AND NOT EXISTS (

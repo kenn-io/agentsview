@@ -330,6 +330,24 @@ describe("MessageList follow cancellation", () => {
     });
   });
 
+  it("does not acknowledge a boundary hidden by a visible ordinal gap", async () => {
+    messages.messages = [makeMessage(0), makeMessage(1), makeMessage(2)];
+    messages.messageCount = 3;
+    messages.activeSessionToken = "current";
+    messages.activeSessionUnreadOrdinal = 1;
+    virtualizerMock.getVirtualItems.mockReturnValue([
+      { index: 0, key: "row-0", start: 0, end: 100 },
+      { index: 2, key: "row-2", start: 100, end: 200 },
+    ]);
+    readProgress.baseline("s1", "previous", 2);
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+
+    expect(readProgress.get("s1")?.token).toBe("previous");
+  });
+
   it("acknowledges a revised transcript with only system messages", async () => {
     messages.messages = [{ ...makeMessage(0), is_system: true }];
     messages.messageCount = 1;

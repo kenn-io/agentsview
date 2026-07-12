@@ -4212,15 +4212,25 @@ func TestCopyOrphanedDataFromReconcilesTranscriptRevisions(t *testing.T) {
 	dir := t.TempDir()
 	srcPath := filepath.Join(dir, "old.db")
 	srcDB := testDBAtPath(t, srcPath, "src")
-	for _, id := range []string{"unchanged", "changed", "tool-changed"} {
+	ids := []string{
+		"unchanged", "changed", "tool-changed",
+		"compact-changed", "subtype-changed",
+	}
+	for _, id := range ids {
 		insertSession(t, srcDB, id, "proj")
 	}
 	insertMessages(t, srcDB,
 		userMsg("unchanged", 0, "same"),
 		userMsg("changed", 0, "old content"),
 		asstMsg("tool-changed", 0, "tool"),
+		userMsg("compact-changed", 0, "boundary"),
+		userMsg("subtype-changed", 0, "system event"),
 	)
 	_, err := srcDB.getWriter().Exec(`
+		UPDATE messages SET is_system = 1
+		WHERE session_id = 'subtype-changed'`)
+	requireNoError(t, err, "mark source system message")
+	_, err = srcDB.getWriter().Exec(`
 		INSERT INTO tool_calls
 			(message_id, session_id, tool_name, category, input_json, call_index)
 		SELECT id, session_id, 'Read', 'file', '{"path":"old"}', 0
@@ -4235,14 +4245,24 @@ func TestCopyOrphanedDataFromReconcilesTranscriptRevisions(t *testing.T) {
 	dstPath := filepath.Join(dir, "new.db")
 	dstDB := testDBAtPath(t, dstPath, "dst")
 	defer dstDB.Close()
-	for _, id := range []string{"unchanged", "changed", "tool-changed"} {
+	for _, id := range ids {
 		insertSession(t, dstDB, id, "proj")
 	}
 	insertMessages(t, dstDB,
 		userMsg("unchanged", 0, "same"),
 		userMsg("changed", 0, "new content"),
 		asstMsg("tool-changed", 0, "tool"),
+		userMsg("compact-changed", 0, "boundary"),
+		userMsg("subtype-changed", 0, "system event"),
 	)
+	_, err = dstDB.getWriter().Exec(`
+		UPDATE messages
+		SET is_compact_boundary = 1
+		WHERE session_id = 'compact-changed';
+		UPDATE messages
+		SET is_system = 1, source_subtype = 'resume'
+		WHERE session_id = 'subtype-changed'`)
+	requireNoError(t, err, "change destination display fields")
 	_, err = dstDB.getWriter().Exec(`
 		INSERT INTO tool_calls
 			(message_id, session_id, tool_name, category, input_json, call_index)
@@ -4273,6 +4293,14 @@ func TestCopyOrphanedDataFromReconcilesTranscriptRevisions(t *testing.T) {
 	require.NotNil(t, toolChanged)
 	require.NotNil(t, toolChanged.TranscriptRevision)
 	assert.Equal(t, "8", *toolChanged.TranscriptRevision)
+
+	for _, id := range []string{"compact-changed", "subtype-changed"} {
+		session, err := dstDB.GetSession(context.Background(), id)
+		requireNoError(t, err, "GetSession "+id)
+		require.NotNil(t, session)
+		require.NotNil(t, session.TranscriptRevision)
+		assert.Equal(t, "8", *session.TranscriptRevision, id)
+	}
 }
 
 func TestCopyOrphanedDataFrom_PreservesCopiedDetails(t *testing.T) {
