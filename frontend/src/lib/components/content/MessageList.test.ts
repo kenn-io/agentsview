@@ -107,6 +107,8 @@ describe("MessageList follow cancellation", () => {
     ui.followLatest = true;
     ui.followLatestRequest = 1;
     ui.sortNewestFirst = false;
+    ui.showAllBlocks();
+    ui.setTranscriptMode("normal");
     ui.selectedOrdinal = null;
     ui.pendingScrollOrdinal = null;
     ui.pendingScrollSession = null;
@@ -287,6 +289,54 @@ describe("MessageList follow cancellation", () => {
     ]);
     document.querySelector<HTMLElement>(".message-list-scroll")
       ?.dispatchEvent(new Event("scroll"));
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+
+    expect(readProgress.get("s1")?.token).toBe("current");
+  });
+
+  it("acknowledges focused-mode traversal when the raw boundary is hidden", async () => {
+    messages.messages = [
+      { ...makeMessage(0), role: "user" },
+      { ...makeMessage(1), role: "assistant" },
+      { ...makeMessage(2), role: "assistant" },
+      { ...makeMessage(3), role: "user" },
+      { ...makeMessage(4), role: "assistant" },
+    ];
+    messages.messageCount = 5;
+    messages.activeSessionToken = "current";
+    ui.sortNewestFirst = true;
+    ui.setTranscriptMode("focused");
+    setVirtualRows(4);
+    readProgress.baseline("s1", "previous", 0);
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+
+    expect(readProgress.get("s1")?.token).toBe("previous");
+
+    virtualizerMock.scrollOffset = 200;
+    document.querySelector<HTMLElement>(".message-list-scroll")
+      ?.dispatchEvent(new Event("scroll"));
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+
+    expect(readProgress.get("s1")?.token).toBe("current");
+  });
+
+  it("acknowledges traversal when a block filter hides the raw boundary", async () => {
+    messages.messages = [
+      { ...makeMessage(0), role: "user" },
+      { ...makeMessage(1), role: "assistant" },
+      { ...makeMessage(2), role: "user" },
+    ];
+    messages.messageCount = 3;
+    messages.activeSessionToken = "current";
+    ui.setBlockVisible("assistant", false);
+    setVirtualRows(2);
+    readProgress.baseline("s1", "previous", 0);
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
     await new Promise((resolve) => window.setTimeout(resolve, 20));
 
     expect(readProgress.get("s1")?.token).toBe("current");

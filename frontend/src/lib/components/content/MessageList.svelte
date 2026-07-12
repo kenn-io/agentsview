@@ -203,6 +203,19 @@
       return;
     }
 
+    const displayedOrdinals = displayItemsAsc.flatMap((item) =>
+      item.ordinals
+    );
+    const latestDisplayedOrdinal = displayedOrdinals.at(-1);
+    if (latestDisplayedOrdinal === undefined) {
+      readProgress.markRead(
+        sessionId,
+        currentToken,
+        latestLoadedOrdinal,
+      );
+      return;
+    }
+
     const top = v.scrollOffset ?? containerRef?.scrollTop ?? 0;
     const height = containerRef?.clientHeight || v.scrollRect?.height || 0;
     const bottom = top + height;
@@ -231,12 +244,15 @@
 
     if (maxVisibleOrdinal === null || latestLoadedOrdinal === null) return;
 
-    const unreadBoundary = unreadBoundaryOrdinal(
+    const rawUnreadBoundary = unreadBoundaryOrdinal(
       marker,
       latestLoadedOrdinal,
     );
+    const unreadBoundary = displayedOrdinals.find((ordinal) =>
+      ordinal >= rawUnreadBoundary
+    ) ?? latestDisplayedOrdinal;
     const traversalKey =
-      `${sessionId}|${currentToken}|${unreadBoundary}`;
+      `${sessionId}|${currentToken}|${unreadBoundary}|${latestDisplayedOrdinal}`;
     if (unreadTraversalKey !== traversalKey) {
       unreadTraversalKey = traversalKey;
       unreadBoundarySeen = false;
@@ -245,7 +261,7 @@
     if (visibleOrdinals.has(unreadBoundary)) {
       unreadBoundarySeen = true;
     }
-    if (visibleOrdinals.has(latestLoadedOrdinal)) {
+    if (visibleOrdinals.has(latestDisplayedOrdinal)) {
       unreadLatestSeen = true;
     }
 
@@ -262,7 +278,7 @@
 
     if (
       unreadBoundarySeen &&
-      maxVisibleOrdinal >= latestLoadedOrdinal
+      maxVisibleOrdinal >= latestDisplayedOrdinal
     ) {
       readProgress.markRead(
         sessionId,
