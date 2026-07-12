@@ -450,6 +450,12 @@ func runDaemonStatus(w io.Writer, deps daemonCommandDeps) error {
 	}
 	records, err := deps.statusRecords(cfg.DataDir, cfg.AuthToken)
 	if err != nil {
+		if rt := writableRuntimeFallbackForCommand(cfg, deps); rt != nil {
+			for _, line := range serveStatusLines(rt) {
+				fmt.Fprintln(w, line)
+			}
+			return nil
+		}
 		return fmt.Errorf("daemon status: inspecting runtime store: %w", err)
 	}
 
@@ -550,13 +556,19 @@ func runDaemonStop(w io.Writer, deps daemonCommandDeps) error {
 	}
 	records, err := deps.writableRecords(cfg.DataDir, cfg.AuthToken)
 	if err != nil {
-		return fmt.Errorf("daemon stop: inspecting runtime store: %w", err)
-	}
-	records, fallback := writableDaemonRecordsWithFallback(records, func() *DaemonRuntime {
-		return writableRuntimeFallbackForCommand(cfg, deps)
-	})
-	if !fallback && deps.isStarting(cfg.DataDir) {
-		return daemonPersistentStartupError("daemon stop", cfg.DataDir, deps.readStartupState(cfg.DataDir), deps.now())
+		fallback := writableRuntimeFallbackForCommand(cfg, deps)
+		if fallback == nil {
+			return fmt.Errorf("daemon stop: inspecting runtime store: %w", err)
+		}
+		records = []daemon.RuntimeRecord{fallback.Record}
+	} else {
+		var fallback bool
+		records, fallback = writableDaemonRecordsWithFallback(records, func() *DaemonRuntime {
+			return writableRuntimeFallbackForCommand(cfg, deps)
+		})
+		if !fallback && deps.isStarting(cfg.DataDir) {
+			return daemonPersistentStartupError("daemon stop", cfg.DataDir, deps.readStartupState(cfg.DataDir), deps.now())
+		}
 	}
 	if len(records) == 0 {
 		fmt.Fprintln(w, "agentsview daemon is not running.")
@@ -602,7 +614,9 @@ func runDaemonRestart(w io.Writer, deps daemonCommandDeps) error {
 	}
 	records, err := deps.writableRecords(cfg.DataDir, cfg.AuthToken)
 	if err != nil {
-		return fmt.Errorf("daemon restart: inspecting runtime store: %w", err)
+		if fallback == nil {
+			return fmt.Errorf("daemon restart: inspecting runtime store: %w", err)
+		}
 	}
 	if fallback != nil {
 		records = []daemon.RuntimeRecord{fallback.Record}

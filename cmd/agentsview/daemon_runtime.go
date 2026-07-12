@@ -186,6 +186,10 @@ func RemoveDaemonRuntime(dataDir string) {
 	}
 }
 
+var listDaemonRuntimeRecords = func(store daemon.RuntimeStore) ([]daemon.RuntimeRecord, error) {
+	return store.List()
+}
+
 // FindDaemonRuntime returns a live agentsview daemon whose kit runtime record
 // passes the ping probe. Writable daemons are preferred over read-only pg serve
 // daemons when both are discoverable. When authToken is non-empty, it is sent
@@ -196,13 +200,17 @@ func FindDaemonRuntime(dataDir string, authToken ...string) *DaemonRuntime {
 	store := runtimeStore(dataDir)
 	_, _ = store.CleanupDead()
 
-	records, err := store.List()
+	token := firstAuthToken(authToken)
+	records, err := listDaemonRuntimeRecords(store)
 	if err != nil {
+		rt := findStartupStateFallback(dataDir, token)
+		if rt != nil && daemonRuntimeCompatibilityError(rt) == nil {
+			return rt
+		}
 		return nil
 	}
 
 	ctx := context.Background()
-	token := firstAuthToken(authToken)
 	var readOnly *DaemonRuntime
 	writableRecordSeen := false
 	for _, rec := range records {
@@ -378,8 +386,12 @@ func findIncompatibleDaemonRuntime(
 
 	store := runtimeStore(dataDir)
 	_, _ = store.CleanupDead()
-	records, err := store.List()
+	records, err := listDaemonRuntimeRecords(store)
 	if err != nil {
+		rt := findStartupStateFallback(dataDir, token)
+		if rt != nil && daemonRuntimeCompatibilityError(rt) != nil {
+			return rt
+		}
 		return nil
 	}
 

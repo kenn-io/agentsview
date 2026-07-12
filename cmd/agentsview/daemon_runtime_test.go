@@ -539,6 +539,54 @@ func writeStartupFallbackFixture(
 	require.NoError(t, os.WriteFile(startupStatePath(dir), data, 0o600))
 }
 
+func failRuntimeRecordListing(t *testing.T) {
+	t.Helper()
+	oldList := listDaemonRuntimeRecords
+	listDaemonRuntimeRecords = func(daemon.RuntimeStore) ([]daemon.RuntimeRecord, error) {
+		return nil, errors.New("store unavailable")
+	}
+	t.Cleanup(func() { listDaemonRuntimeRecords = oldList })
+}
+
+func TestFindDaemonRuntime_UsesStartupFallbackWhenRuntimeStoreInspectionFails(t *testing.T) {
+	dir := runtimeTestDir(t)
+	host, port := testPingServer(t)
+	createTime, ok := processCreateTimeMillis(os.Getpid())
+	require.True(t, ok)
+	writeStartupFallbackFixture(
+		t, dir, host, port, os.Getpid(), strconv.FormatInt(createTime, 10),
+	)
+	failRuntimeRecordListing(t)
+
+	rt := FindDaemonRuntime(dir)
+	require.NotNil(t, rt)
+	assert.True(t, rt.RuntimeFallback)
+	assert.Equal(t, port, rt.Port)
+}
+
+func TestFindIncompatibleDaemonRuntime_UsesStartupFallbackWhenRuntimeStoreInspectionFails(t *testing.T) {
+	dir := runtimeTestDir(t)
+	host, port := testPingServer(t)
+	createTime, ok := processCreateTimeMillis(os.Getpid())
+	require.True(t, ok)
+	writeStartupFallbackFixture(
+		t, dir, host, port, os.Getpid(), strconv.FormatInt(createTime, 10),
+	)
+	state := readStartupState(dir)
+	require.NotNil(t, state)
+	state.APIVersion = daemonAPIVersion + 1
+	data, err := json.Marshal(state)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(startupStatePath(dir), data, 0o600))
+	failRuntimeRecordListing(t)
+
+	rt, compatErr := FindIncompatibleDaemonRuntime(dir)
+	require.NotNil(t, rt)
+	require.Error(t, compatErr)
+	assert.True(t, rt.RuntimeFallback)
+	assert.ErrorContains(t, compatErr, "API version")
+}
+
 func TestWritableDaemonFallbackResolver(t *testing.T) {
 	dir := runtimeTestDir(t)
 	host, port := testPingServer(t)
