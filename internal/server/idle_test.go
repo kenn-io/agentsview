@@ -142,17 +142,17 @@ func TestIdleTrackerExternalRequestResetsIdle(t *testing.T) {
 	case <-time.After(time.Second):
 		require.FailNow(t, "wrapped request did not complete after release")
 	}
-	require.Equal(t, http.StatusNoContent, rec.Code)
+	assert.Equal(t, http.StatusNoContent, rec.Code)
 
 	f.tracker.mu.Lock()
 	lastExternalAfterRelease := f.tracker.lastExternal
 	f.tracker.mu.Unlock()
-	require.True(t, lastExternalAfterRelease.After(lastExternalBeforeRelease),
+	assert.True(t, lastExternalAfterRelease.After(lastExternalBeforeRelease),
 		"request completion did not advance external activity timestamp")
 
 	firedAt := f.requireFiredWithin(t, time.Second,
 		"idle did not fire after external activity became idle")
-	require.GreaterOrEqual(t, firedAt.Sub(releasedAt), timeout)
+	assert.GreaterOrEqual(t, firedAt.Sub(releasedAt), timeout)
 }
 
 func TestIdleTrackerInternalWorkBlocksWithoutResettingIdle(t *testing.T) {
