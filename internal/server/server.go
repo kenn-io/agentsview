@@ -354,6 +354,13 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 	f, err := s.spaFS.Open(path)
 	if err == nil {
 		f.Close()
+		if path == "index.html" {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		if strings.HasPrefix(path, "assets/") {
+			w.Header().Set("Cache-Control",
+				"public, max-age=31536000, immutable")
+		}
 		// For index.html with a base path, inject <base href>.
 		if s.basePath != "" && path == "index.html" {
 			s.serveIndexWithBase(w, r)
@@ -363,7 +370,16 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fingerprinted frontend assets are files, not client-side routes.
+	// Returning index.html here disguises stale asset URLs as successful
+	// JavaScript or CSS responses after an upgrade.
+	if strings.HasPrefix(path, "assets/") {
+		http.NotFound(w, r)
+		return
+	}
+
 	// SPA fallback: serve index.html for all routes
+	w.Header().Set("Cache-Control", "no-cache")
 	if s.basePath != "" {
 		s.serveIndexWithBase(w, r)
 		return
