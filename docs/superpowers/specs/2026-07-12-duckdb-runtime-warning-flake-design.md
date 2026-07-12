@@ -16,9 +16,20 @@ parent will stream the child's stdout, collect it for assertions, and stop the
 child only after observing the expected runtime-record warning. Stderr will also
 be collected for diagnostic failures.
 
-A bounded command context will remain as a failure guard so a regression that
-never emits the warning cannot hang the test suite. Hitting that timeout is a
-test failure, not a normal completion path.
+The command will use a new bounded context as a failure guard so a regression
+that never emits the warning cannot hang the test suite. Stdout and stderr will
+be drained concurrently, and the child will be waited exactly once after its
+stdout reader reaches EOF. Completion has three explicit outcomes:
+
+1. After the warning is observed, canceling and reaping the still-running child
+   is successful intentional termination; the cancellation exit error is not
+   returned.
+1. A process exit before the warning is an error, even if its exit status is
+   zero.
+1. A context deadline before the warning is a timeout error.
+
+The latter two errors will include captured stdout and stderr so CI failures
+remain actionable.
 
 This approach exercises the same real `runDuckDBServe` path as the current test,
 avoids a production-only hook, and makes completion depend on the observable
