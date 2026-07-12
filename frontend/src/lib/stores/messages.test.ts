@@ -198,6 +198,39 @@ describe('MessagesStore', () => {
     expect(messages.mainModel).toBe('claude-3-opus');
   });
 
+  it('publishes a new transcript token only after refreshed messages arrive', async () => {
+    vi.mocked(api.getSession).mockResolvedValue({
+      ...makeSession('s1', 2),
+      transcript_revision: 'old',
+    });
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse([makeMessage(0), makeMessage(1)]),
+    );
+    await messages.loadSession('s1');
+    expect(messages.activeSessionToken).toBe('old');
+
+    vi.mocked(api.getSession).mockResolvedValueOnce({
+      ...makeSession('s1', 2),
+      transcript_revision: 'new',
+    });
+    const refreshed = createDeferred<MessagesResponse>();
+    vi.mocked(api.getMessages).mockReturnValueOnce(
+      refreshed.promise,
+    );
+
+    const reload = messages.reload();
+    await vi.waitFor(() => {
+      expect(vi.mocked(api.getMessages)).toHaveBeenCalledTimes(2);
+    });
+    expect(messages.activeSessionToken).toBe('old');
+
+    refreshed.resolve(
+      makeMessagesResponse([makeMessage(0), makeMessage(1)]),
+    );
+    await reload;
+    expect(messages.activeSessionToken).toBe('new');
+  });
+
   it('should not carry over mainModel to a different session', async () => {
     const s1Msgs = Array.from({ length: 3 }, (_, i) => ({
       ...makeMessage(i),

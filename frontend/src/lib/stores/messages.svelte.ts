@@ -65,6 +65,7 @@ class MessagesStore {
 
     try {
       let countHint: number | null = null;
+      let pendingToken: string | null = null;
       try {
         configureGeneratedClient();
         const sess = await withAbort(
@@ -72,9 +73,7 @@ class MessagesStore {
           ac.signal,
         );
         countHint = sess.message_count ?? 0;
-        if (this.sessionId === id) {
-          this.activeSessionToken = buildReadProgressToken(sess);
-        }
+        pendingToken = buildReadProgressToken(sess);
       } catch (err) {
         if (isAbortError(err)) return;
         console.warn(
@@ -94,6 +93,9 @@ class MessagesStore {
           ac.signal,
           countHint ?? undefined,
         );
+      }
+      if (this.sessionId === id) {
+        this.activeSessionToken = pendingToken;
       }
     } catch (err) {
       if (isAbortError(err)) return;
@@ -459,15 +461,12 @@ class MessagesStore {
       );
       if (this.sessionId !== id) return;
 
-      this.activeSessionToken = buildReadProgressToken(sess);
+      const pendingToken = buildReadProgressToken(sess);
       const newCount = sess.message_count ?? 0;
       const oldCount = this.messageCount;
       if (newCount === oldCount) {
         await this.refreshLoadedWindow(id, signal);
-        return;
-      }
-
-      if (newCount > oldCount && this.messages.length > 0) {
+      } else if (newCount > oldCount && this.messages.length > 0) {
         const oldestOrdinal = this.messages[0]!.ordinal;
         await this.loadFrom(id, oldestOrdinal, signal);
         if (this.sessionId !== id) return;
@@ -476,14 +475,16 @@ class MessagesStore {
           this.messages[this.messages.length - 1];
         if (newest && newest.ordinal !== newCount - 1) {
           await this.fullReload(id, signal, newCount);
-          return;
+        } else {
+          this.messageCount = newCount;
         }
-
-        this.messageCount = newCount;
-        return;
+      } else {
+        await this.fullReload(id, signal, newCount);
       }
 
-      await this.fullReload(id, signal, newCount);
+      if (this.sessionId === id) {
+        this.activeSessionToken = pendingToken;
+      }
     } catch (err) {
       if (isAbortError(err)) return;
       console.warn("Reload failed:", err);
