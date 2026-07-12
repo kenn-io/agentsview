@@ -97,26 +97,6 @@ func progressDetails(progress []syncpkg.Progress) []string {
 	return out
 }
 
-func maxBytesDone(progress []syncpkg.Progress) int64 {
-	var max int64
-	for _, p := range progress {
-		if p.BytesDone > max {
-			max = p.BytesDone
-		}
-	}
-	return max
-}
-
-func maxBytesTotal(progress []syncpkg.Progress) int64 {
-	var max int64
-	for _, p := range progress {
-		if p.BytesTotal > max {
-			max = p.BytesTotal
-		}
-	}
-	return max
-}
-
 func buildHTTPTestTar(t *testing.T, files map[string]string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
