@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // startupStateFileName is the data-dir file holding the starting
@@ -23,16 +25,24 @@ const startupStateFileName = "startup-state.json"
 const startupDetailThrottle = time.Second
 
 type startupState struct {
-	PID          int       `json:"pid"`
-	StartedAt    time.Time `json:"started_at"`
-	Phase        string    `json:"phase"`
-	Detail       string    `json:"detail,omitempty"`
-	LogPath      string    `json:"log_path,omitempty"`
-	Host         string    `json:"host,omitempty"`
-	Port         int       `json:"port,omitempty"`
-	RuntimeError string    `json:"runtime_error,omitempty"`
-	CreateTime   string    `json:"create_time,omitempty"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	PID              int       `json:"pid"`
+	StartedAt        time.Time `json:"started_at"`
+	Phase            string    `json:"phase"`
+	Detail           string    `json:"detail,omitempty"`
+	LogPath          string    `json:"log_path,omitempty"`
+	Host             string    `json:"host,omitempty"`
+	Port             int       `json:"port,omitempty"`
+	RuntimeError     string    `json:"runtime_error,omitempty"`
+	CreateTime       string    `json:"create_time,omitempty"`
+	APIVersion       int       `json:"api_version,omitempty"`
+	DataVersion      int       `json:"data_version,omitempty"`
+	CaddyPID         int       `json:"caddy_pid,omitempty"`
+	CaddyCreateTime  string    `json:"caddy_create_time,omitempty"`
+	RequireAuth      bool      `json:"require_auth,omitempty"`
+	RequireAuthKnown bool      `json:"require_auth_known,omitempty"`
+	NoSync           bool      `json:"no_sync,omitempty"`
+	NoSyncKnown      bool      `json:"no_sync_known,omitempty"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 func startupStatePath(dataDir string) string {
@@ -155,7 +165,7 @@ func readStartupState(dataDir string) *startupState {
 // lifecycle readers can still report startup progress and require a daemon-
 // authored snapshot before trusting this fallback.
 func publishStartupStateFallback(
-	dataDir, host string, port int, runtimeErr error,
+	dataDir, host string, port int, requireAuth, noSync bool, caddyPID int, runtimeErr error,
 ) {
 	st := readStartupState(dataDir)
 	if st == nil || host == "" || port <= 0 || runtimeErr == nil {
@@ -164,6 +174,19 @@ func publishStartupStateFallback(
 	st.Host = host
 	st.Port = port
 	st.RuntimeError = runtimeErr.Error()
+	st.RequireAuth = requireAuth
+	st.RequireAuthKnown = true
+	st.NoSync = noSync
+	st.NoSyncKnown = true
+	st.APIVersion = daemonAPIVersion
+	st.DataVersion = db.CurrentDataVersion()
+	st.CaddyPID = caddyPID
+	st.CaddyCreateTime = ""
+	if caddyPID > 0 {
+		if caddyCreateTime, ok := processCreateTimeMillis(caddyPID); ok {
+			st.CaddyCreateTime = strconv.FormatInt(caddyCreateTime, 10)
+		}
+	}
 	if createTime, ok := processCreateTimeMillis(st.PID); ok {
 		st.CreateTime = strconv.FormatInt(createTime, 10)
 	}

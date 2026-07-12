@@ -40,6 +40,7 @@ const (
 )
 
 var startProbeTickNanos int64 = int64(defaultStartProbeTick)
+var startLockTryLock = func(lock *flock.Flock) (bool, error) { return lock.TryLock() }
 
 func startProbeTick() time.Duration {
 	return time.Duration(atomic.LoadInt64(&startProbeTickNanos))
@@ -118,10 +119,16 @@ func WriteDaemonRuntimeWithAuthAndNoSync(
 			rec.Metadata[runtimeCaddyCreateTime] = strconv.FormatInt(ct, 10)
 		}
 	}
+	caddy := 0
+	if len(caddyPID) > 0 && caddyPID[0] > 0 {
+		caddy = caddyPID[0]
+	}
 	path, err := runtimeStore(dataDir).Write(rec)
 	if err != nil {
 		if !readOnly {
-			publishStartupStateFallback(dataDir, host, port, err)
+			publishStartupStateFallback(
+				dataDir, host, port, requireAuth, noSync, caddy, err,
+			)
 		}
 		return "", err
 	}
@@ -231,6 +238,9 @@ func FindDaemonRuntime(dataDir string, authToken ...string) *DaemonRuntime {
 	}
 	if !writableRecordSeen {
 		if rt := findStartupStateFallback(dataDir, token); rt != nil {
+			if daemonRuntimeCompatibilityError(rt) != nil {
+				return nil
+			}
 			return rt
 		}
 	}
@@ -246,6 +256,50 @@ func FindWritableDaemonRuntime(dataDir string, authToken ...string) *DaemonRunti
 		return nil
 	}
 	return rt
+}
+
+// writableDaemonRecordsWithFallback appends a confirmed fallback only when no live writable record exists.
+func writableDaemonRecordsWithFallback(
+	records []daemon.RuntimeRecord,
+	resolve func() *DaemonRuntime,
+) ([]daemon.RuntimeRecord, bool) {
+	if resolve == nil {
+		return records, false
+	}
+	filtered := records[:0]
+	hasWritable := false
+	for _, rec := range records {
+		rt := daemonRuntimeFromRecord(rec)
+		if !rt.ReadOnly && processCreateTimeStateForPID(
+			rec.PID, rec.Metadata[runtimeCreateTime],
+		) == processCreateTimeMismatch {
+			continue
+		}
+		filtered = append(filtered, rec)
+		if !rt.ReadOnly {
+			hasWritable = true
+		}
+	}
+	records = filtered
+	if hasWritable {
+		return records, false
+	}
+	rt := resolve()
+	if rt == nil {
+		return records, false
+	}
+	return append(records, rt.Record), rt.RuntimeFallback
+}
+
+func localWritableDaemonRecordsWithFallback(
+	dataDir, authToken string,
+) ([]daemon.RuntimeRecord, bool) {
+	return writableDaemonRecordsWithFallback(
+		liveDaemonRecords(dataDir),
+		func() *DaemonRuntime {
+			return FindWritableDaemonRuntime(dataDir, authToken)
+		},
+	)
 }
 
 func findStartupStateFallback(dataDir, authToken string) *DaemonRuntime {
@@ -269,9 +323,21 @@ func findStartupStateFallback(dataDir, authToken string) *DaemonRuntime {
 		runtimeHost:        st.Host,
 		runtimePort:        strconv.Itoa(st.Port),
 		runtimeReadOnly:    "false",
-		runtimeAPIVersion:  strconv.Itoa(daemonAPIVersion),
-		runtimeDataVersion: strconv.Itoa(db.CurrentDataVersion()),
+		runtimeAPIVersion:  strconv.Itoa(st.APIVersion),
+		runtimeDataVersion: strconv.Itoa(st.DataVersion),
 		runtimeCreateTime:  st.CreateTime,
+	}
+	if st.RequireAuthKnown {
+		rec.Metadata[runtimeRequireAuth] = strconv.FormatBool(st.RequireAuth)
+	}
+	if st.NoSyncKnown {
+		rec.Metadata[runtimeNoSync] = strconv.FormatBool(st.NoSync)
+	}
+	if st.CaddyPID > 0 {
+		rec.Metadata[runtimeCaddyPID] = strconv.Itoa(st.CaddyPID)
+	}
+	if st.CaddyCreateTime != "" {
+		rec.Metadata[runtimeCaddyCreateTime] = st.CaddyCreateTime
 	}
 	info, err := probeRuntime(context.Background(), rec, authToken,
 		daemon.ProbeOptions{ExpectedService: daemonService, Timeout: 500 * time.Millisecond})
@@ -319,6 +385,7 @@ func findIncompatibleDaemonRuntime(
 
 	ctx := context.Background()
 	var readOnly *DaemonRuntime
+	writableRecordSeen := false
 	for _, rec := range records {
 		if rec.Service != "" && rec.Service != daemonService {
 			continue
@@ -328,6 +395,9 @@ func findIncompatibleDaemonRuntime(
 		}
 		if runtimeRecordHasMismatchedCreateTime(store, rec) {
 			continue
+		}
+		if !daemonRuntimeFromRecord(rec).ReadOnly {
+			writableRecordSeen = true
 		}
 		info, err := probeRuntime(ctx, rec, token, daemon.ProbeOptions{
 			ExpectedService: daemonService,
@@ -345,6 +415,12 @@ func findIncompatibleDaemonRuntime(
 		}
 		if readOnly == nil {
 			readOnly = rt
+		}
+	}
+	if !writableRecordSeen {
+		if rt := findStartupStateFallback(dataDir, token); rt != nil &&
+			daemonRuntimeCompatibilityError(rt) != nil {
+			return rt
 		}
 	}
 	return readOnly
@@ -768,6 +844,10 @@ func UnmarkDaemonStarting(dataDir string) {
 }
 
 func isDaemonStarting(dataDir string) bool {
+	return daemonStartingWithLockProbe(dataDir, false)
+}
+
+func daemonStartingWithLockProbe(dataDir string, external bool) bool {
 	path, err := runtimeStore(dataDir).LockPath()
 	if err != nil {
 		return false
@@ -775,12 +855,12 @@ func isDaemonStarting(dataDir string) bool {
 	startLockMu.Lock()
 	defer startLockMu.Unlock()
 	if _, ok := startLocks.Load(path); ok {
-		return true
+		return !external
 	}
 	lock := flock.New(path)
-	locked, err := lock.TryLock()
+	locked, err := startLockTryLock(lock)
 	if err != nil {
-		return false
+		return true
 	}
 	if locked {
 		_ = lock.Unlock()
@@ -790,28 +870,7 @@ func isDaemonStarting(dataDir string) bool {
 }
 
 func isExternalDaemonStarting(dataDir string) bool {
-	path, err := runtimeStore(dataDir).LockPath()
-	if err != nil {
-		return false
-	}
-	startLockMu.Lock()
-	defer startLockMu.Unlock()
-	if _, ok := startLocks.Load(path); ok {
-		return false
-	}
-	lock := flock.New(path)
-	locked, err := lock.TryLock()
-	if err != nil {
-		// On Windows, probing a lock held by a helper process can report an
-		// error instead of a clean locked=false result. Treat uncertainty as
-		// active startup so replacement does not stop the incumbent daemon.
-		return true
-	}
-	if locked {
-		_ = lock.Unlock()
-		return false
-	}
-	return true
+	return daemonStartingWithLockProbe(dataDir, true)
 }
 
 const legacyStartupLockPrefix = "server.starting."

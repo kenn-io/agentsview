@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -65,6 +66,34 @@ func TestDetectTransport_UsesStartupStateFallbackWithoutRuntimeRecord(t *testing
 	createTime, ok := processCreateTimeMillis(os.Getpid())
 	require.True(t, ok)
 	writeStartupFallbackFixture(t, dir, host, port, os.Getpid(), strconv.FormatInt(createTime, 10))
+
+	tr, err := detectTransportContext(context.Background(), dir, "", time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, transportHTTP, tr.Mode)
+	assert.Equal(t, fmt.Sprintf("http://%s:%d", host, port), tr.URL)
+}
+
+func TestDetectTransport_UsesStartupStateFallbackWhileExternalLockRemainsHeld(t *testing.T) {
+	dir := runtimeTestDir(t)
+	holdExternalStartupLockForTest(t, dir)
+	host, port := testPingServer(t)
+	createTime, ok := processCreateTimeMillis(os.Getpid())
+	require.True(t, ok)
+	state := startupState{
+		PID:          os.Getpid(),
+		StartedAt:    time.Now().Add(-time.Minute),
+		Phase:        "starting HTTP server",
+		Host:         host,
+		Port:         port,
+		RuntimeError: "permission denied writing runtime record",
+		CreateTime:   strconv.FormatInt(createTime, 10),
+		APIVersion:   daemonAPIVersion,
+		DataVersion:  db.CurrentDataVersion(),
+		UpdatedAt:    time.Now(),
+	}
+	data, err := json.Marshal(state)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(startupStatePath(dir), data, 0o600))
 
 	tr, err := detectTransportContext(context.Background(), dir, "", time.Second)
 	require.NoError(t, err)

@@ -622,6 +622,10 @@ func waitForExternalServeStartup(
 		if err := ctx.Err(); err != nil {
 			return nil, true, err
 		}
+		if rt := FindDaemonRuntime(dataDir, authToken); rt != nil &&
+			!rt.ReadOnly && rt.RuntimeFallback {
+			return rt, true, nil
+		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			return nil, true, errServeStartupInProgress

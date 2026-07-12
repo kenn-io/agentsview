@@ -185,7 +185,7 @@ func TestDaemonStopUsesStartupStateFallbackWhileStarting(t *testing.T) {
 	}
 	var stopped daemon.RuntimeRecord
 	deps.writableRuntime = func(string, string) *DaemonRuntime {
-		return &DaemonRuntime{Record: testWritableRecord(77, "")}
+		return &DaemonRuntime{Record: testWritableRecord(77, ""), RuntimeFallback: true}
 	}
 	deps.stopProcess = func(rec daemon.RuntimeRecord, _ time.Duration) error {
 		stopped = rec
@@ -197,6 +197,18 @@ func TestDaemonStopUsesStartupStateFallbackWhileStarting(t *testing.T) {
 	assert.Equal(t, 77, stopped.PID)
 	assert.Contains(t, out.String(), "Stopped agentsview (pid 77).")
 	assert.NotContains(t, out.String(), "starting up")
+}
+
+func TestDaemonStopRegisteredRuntimePreservesStartupGuard(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	deps.isStarting = func(string) bool { return true }
+	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+		return []daemon.RuntimeRecord{testWritableRecord(78, "runtime.json")}, nil
+	}
+
+	err := executeDaemonCommand(t, *deps, out, "stop")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "startup is still in progress")
 }
 
 func TestDaemonStartPersistentStartupNeverLaunches(t *testing.T) {

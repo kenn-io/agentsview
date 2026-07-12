@@ -273,12 +273,9 @@ func serveIncompatibleDaemonStatusLines(
 // unrelated process). This keeps a hung-but-alive daemon stoppable while never
 // signalling a stale record whose PID belongs to something else.
 func runServeStop(cfg config.Config) {
-	records := liveDaemonRecords(cfg.DataDir)
-	if len(records) == 0 {
-		if rt := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil {
-			records = []daemon.RuntimeRecord{rt.Record}
-		}
-	}
+	records, _ := localWritableDaemonRecordsWithFallback(
+		cfg.DataDir, cfg.AuthToken,
+	)
 	if len(records) == 0 {
 		if IsDaemonStarting(cfg.DataDir) {
 			fatal("serve stop: a server is starting; retry once it is ready")
@@ -333,12 +330,9 @@ func stopDaemonRuntimeForUpgradeImpl(
 func stopWritableDaemonsForUpdate(
 	cfg config.Config,
 ) (updateDaemonStopResult, error) {
-	records := liveDaemonRecords(cfg.DataDir)
-	if len(records) == 0 {
-		if rt := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil {
-			records = []daemon.RuntimeRecord{rt.Record}
-		}
-	}
+	records, _ := localWritableDaemonRecordsWithFallback(
+		cfg.DataDir, cfg.AuthToken,
+	)
 	var result updateDaemonStopResult
 	for _, rec := range records {
 		rt := daemonRuntimeFromRecord(rec)

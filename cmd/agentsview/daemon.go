@@ -537,14 +537,13 @@ func runDaemonStop(w io.Writer, deps daemonCommandDeps) error {
 	if err != nil {
 		return fmt.Errorf("daemon stop: inspecting runtime store: %w", err)
 	}
-	if len(records) == 0 {
-		if deps.writableRuntime != nil {
-			if rt := deps.writableRuntime(cfg.DataDir, cfg.AuthToken); rt != nil {
-				records = []daemon.RuntimeRecord{rt.Record}
-			}
+	records, fallback := writableDaemonRecordsWithFallback(records, func() *DaemonRuntime {
+		if deps.writableRuntime == nil {
+			return nil
 		}
-	}
-	if len(records) == 0 && deps.isStarting(cfg.DataDir) {
+		return deps.writableRuntime(cfg.DataDir, cfg.AuthToken)
+	})
+	if !fallback && deps.isStarting(cfg.DataDir) {
 		return daemonPersistentStartupError("daemon stop", cfg.DataDir, deps.readStartupState(cfg.DataDir), deps.now())
 	}
 	if len(records) == 0 {
