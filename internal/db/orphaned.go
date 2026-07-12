@@ -187,34 +187,35 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 			"counting orphaned sessions: %w", err,
 		)
 	}
-	if count == 0 {
-		return 0, nil
-	}
-
 	t := time.Now()
 
-	// Use a transaction so all three inserts are atomic.
-	// Partial orphan copies would leave dangling sessions
-	// without messages or tool_calls.
+	// Reconcile revisions and copy orphans in one transaction. Partial
+	// orphan copies would leave dangling sessions without messages or
+	// tool_calls, while a revision update without the matching archive copy
+	// could make a failed resync look complete.
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin orphan tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := copySessionDataForIDs(ctx, tx, "_orphaned_ids"); err != nil {
-		return 0, fmt.Errorf("copying orphaned data: %w", err)
+	if err := reconcileTranscriptRevisionsTx(ctx, tx); err != nil {
+		return 0, fmt.Errorf("reconciling transcript revisions: %w", err)
 	}
-
-	if err := removeGeneratedIdentitySnapshotsWithoutSource(
-		ctx, tx, "_orphaned_ids",
-	); err != nil {
-		return 0, fmt.Errorf("repairing orphan identity snapshots: %w", err)
-	}
-	if err := sanitizeCopiedSessionContent(
-		ctx, tx, "_orphaned_ids", copiedSourceDataVersion(ctx, tx),
-	); err != nil {
-		return 0, fmt.Errorf("sanitizing orphaned data: %w", err)
+	if count > 0 {
+		if err := copySessionDataForIDs(ctx, tx, "_orphaned_ids"); err != nil {
+			return 0, fmt.Errorf("copying orphaned data: %w", err)
+		}
+		if err := removeGeneratedIdentitySnapshotsWithoutSource(
+			ctx, tx, "_orphaned_ids",
+		); err != nil {
+			return 0, fmt.Errorf("repairing orphan identity snapshots: %w", err)
+		}
+		if err := sanitizeCopiedSessionContent(
+			ctx, tx, "_orphaned_ids", copiedSourceDataVersion(ctx, tx),
+		); err != nil {
+			return 0, fmt.Errorf("sanitizing orphaned data: %w", err)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -223,10 +224,12 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		)
 	}
 
-	log.Printf(
-		"resync: copied %d orphaned sessions in %s",
-		count, time.Since(t).Round(time.Millisecond),
-	)
+	if count > 0 {
+		log.Printf(
+			"resync: copied %d orphaned sessions in %s",
+			count, time.Since(t).Round(time.Millisecond),
+		)
+	}
 
 	return count, nil
 }
@@ -762,6 +765,7 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 		"cwd", "git_branch", "source_session_id",
 		"source_version", "transcript_fidelity", "parser_malformed_lines",
 		"is_truncated", "last_write_incremental",
+		"transcript_revision",
 		"secret_leak_count", "secrets_rules_version",
 	} {
 		if oldDBHasColumn(ctx, tx, "sessions", c) {
@@ -769,6 +773,124 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 		}
 	}
 	return strings.Join(cols, ", ")
+}
+
+// reconcileTranscriptRevisionsTx preserves read-progress identity across a
+// full resync. Reparsed sessions start with fresh local counters, so matching
+// transcript rows inherit the old counter and changed rows advance it once.
+// The comparison covers the user-visible message and tool-result fields while
+// deliberately excluding session metadata and token/source bookkeeping.
+func reconcileTranscriptRevisionsTx(
+	ctx context.Context, tx *sql.Tx,
+) error {
+	if !oldDBHasColumn(ctx, tx, "sessions", "transcript_revision") {
+		return nil
+	}
+	for table, columns := range map[string][]string{
+		"messages": {
+			"thinking_text", "is_system",
+		},
+		"tool_calls": {
+			"call_index", "result_content", "file_path",
+		},
+		"tool_result_events": {
+			"call_index", "event_index",
+		},
+	} {
+		if !oldDBHasTable(ctx, tx, table) {
+			return nil
+		}
+		for _, column := range columns {
+			if !oldDBHasColumn(ctx, tx, table, column) {
+				return nil
+			}
+		}
+	}
+
+	_, err := tx.ExecContext(ctx, `
+		UPDATE main.sessions AS current
+		SET transcript_revision = (
+			SELECT CASE WHEN
+				NOT EXISTS (
+					SELECT ordinal, role, content, thinking_text, timestamp,
+						has_thinking, has_tool_use, is_system
+					FROM main.messages WHERE session_id = current.id
+					EXCEPT
+					SELECT ordinal, role, content, thinking_text, timestamp,
+						has_thinking, has_tool_use, is_system
+					FROM old_db.messages WHERE session_id = current.id
+				)
+				AND NOT EXISTS (
+					SELECT ordinal, role, content, thinking_text, timestamp,
+						has_thinking, has_tool_use, is_system
+					FROM old_db.messages WHERE session_id = current.id
+					EXCEPT
+					SELECT ordinal, role, content, thinking_text, timestamp,
+						has_thinking, has_tool_use, is_system
+					FROM main.messages WHERE session_id = current.id
+				)
+				AND NOT EXISTS (
+					SELECT m.ordinal, tc.call_index, tc.tool_name, tc.category,
+						tc.tool_use_id, tc.input_json, tc.skill_name,
+						tc.result_content, tc.subagent_session_id, tc.file_path
+					FROM main.tool_calls tc
+					JOIN main.messages m ON m.id = tc.message_id
+					WHERE tc.session_id = current.id
+					EXCEPT
+					SELECT m.ordinal, tc.call_index, tc.tool_name, tc.category,
+						tc.tool_use_id, tc.input_json, tc.skill_name,
+						tc.result_content, tc.subagent_session_id, tc.file_path
+					FROM old_db.tool_calls tc
+					JOIN old_db.messages m ON m.id = tc.message_id
+					WHERE tc.session_id = current.id
+				)
+				AND NOT EXISTS (
+					SELECT m.ordinal, tc.call_index, tc.tool_name, tc.category,
+						tc.tool_use_id, tc.input_json, tc.skill_name,
+						tc.result_content, tc.subagent_session_id, tc.file_path
+					FROM old_db.tool_calls tc
+					JOIN old_db.messages m ON m.id = tc.message_id
+					WHERE tc.session_id = current.id
+					EXCEPT
+					SELECT m.ordinal, tc.call_index, tc.tool_name, tc.category,
+						tc.tool_use_id, tc.input_json, tc.skill_name,
+						tc.result_content, tc.subagent_session_id, tc.file_path
+					FROM main.tool_calls tc
+					JOIN main.messages m ON m.id = tc.message_id
+					WHERE tc.session_id = current.id
+				)
+				AND NOT EXISTS (
+					SELECT tool_call_message_ordinal, call_index, tool_use_id,
+						agent_id, subagent_session_id, source, status, content,
+						timestamp, event_index
+					FROM main.tool_result_events WHERE session_id = current.id
+					EXCEPT
+					SELECT tool_call_message_ordinal, call_index, tool_use_id,
+						agent_id, subagent_session_id, source, status, content,
+						timestamp, event_index
+					FROM old_db.tool_result_events WHERE session_id = current.id
+				)
+				AND NOT EXISTS (
+					SELECT tool_call_message_ordinal, call_index, tool_use_id,
+						agent_id, subagent_session_id, source, status, content,
+						timestamp, event_index
+					FROM old_db.tool_result_events WHERE session_id = current.id
+					EXCEPT
+					SELECT tool_call_message_ordinal, call_index, tool_use_id,
+						agent_id, subagent_session_id, source, status, content,
+						timestamp, event_index
+					FROM main.tool_result_events WHERE session_id = current.id
+				)
+			THEN old.transcript_revision
+			ELSE CAST(CAST(old.transcript_revision AS INTEGER) + 1 AS TEXT)
+			END
+			FROM old_db.sessions AS old
+			WHERE old.id = current.id
+		)
+		WHERE EXISTS (
+			SELECT 1 FROM old_db.sessions AS old WHERE old.id = current.id
+		)`)
+	return err
 }
 
 func copySessionDataForIDs(

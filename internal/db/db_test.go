@@ -4034,9 +4034,13 @@ func TestCopyOrphanedDataFrom(t *testing.T) {
 		asstMsg("s1", 1, "reply from s1"),
 		userMsg("s2", 0, "hello from s2"),
 	)
+	_, err := srcDB.getWriter().Exec(
+		`UPDATE sessions SET transcript_revision = '7' WHERE id = 's2'`,
+	)
+	requireNoError(t, err, "set orphan transcript revision")
 	// Insert tool_calls for s1 via raw SQL since
 	// insertToolCallsTx is unexported.
-	_, err := srcDB.getWriter().Exec(`
+	_, err = srcDB.getWriter().Exec(`
 		INSERT INTO tool_calls
 			(message_id, session_id, tool_name, category)
 		SELECT id, session_id, 'Read', 'file'
@@ -4071,6 +4075,8 @@ func TestCopyOrphanedDataFrom(t *testing.T) {
 	requireNoError(t, err, "GetSession s2")
 	require.NotNil(t, s, "orphaned session s2 not found in dst")
 	assert.Equal(t, "codex", s.Agent, "s2 agent")
+	require.NotNil(t, s.TranscriptRevision)
+	assert.Equal(t, "7", *s.TranscriptRevision)
 
 	// s2 messages should be copied.
 	ctx := context.Background()
@@ -4181,6 +4187,73 @@ func TestCopyOrphanedDataFrom_NoOrphans(t *testing.T) {
 	requireNoError(t, err, "CopyOrphanedDataFrom")
 	require.Equal(t, 0, count,
 		"expected 0 orphaned sessions, got %d", count)
+}
+
+func TestCopyOrphanedDataFromReconcilesTranscriptRevisions(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "old.db")
+	srcDB := testDBAtPath(t, srcPath, "src")
+	for _, id := range []string{"unchanged", "changed", "tool-changed"} {
+		insertSession(t, srcDB, id, "proj")
+	}
+	insertMessages(t, srcDB,
+		userMsg("unchanged", 0, "same"),
+		userMsg("changed", 0, "old content"),
+		asstMsg("tool-changed", 0, "tool"),
+	)
+	_, err := srcDB.getWriter().Exec(`
+		INSERT INTO tool_calls
+			(message_id, session_id, tool_name, category, input_json, call_index)
+		SELECT id, session_id, 'Read', 'file', '{"path":"old"}', 0
+		FROM messages WHERE session_id = 'tool-changed'`)
+	requireNoError(t, err, "insert source tool call")
+	_, err = srcDB.getWriter().Exec(
+		`UPDATE sessions SET transcript_revision = '7'`,
+	)
+	requireNoError(t, err, "set source transcript revisions")
+	requireNoError(t, srcDB.Close(), "close source")
+
+	dstPath := filepath.Join(dir, "new.db")
+	dstDB := testDBAtPath(t, dstPath, "dst")
+	defer dstDB.Close()
+	for _, id := range []string{"unchanged", "changed", "tool-changed"} {
+		insertSession(t, dstDB, id, "proj")
+	}
+	insertMessages(t, dstDB,
+		userMsg("unchanged", 0, "same"),
+		userMsg("changed", 0, "new content"),
+		asstMsg("tool-changed", 0, "tool"),
+	)
+	_, err = dstDB.getWriter().Exec(`
+		INSERT INTO tool_calls
+			(message_id, session_id, tool_name, category, input_json, call_index)
+		SELECT id, session_id, 'Read', 'file', '{"path":"new"}', 0
+		FROM messages WHERE session_id = 'tool-changed'`)
+	requireNoError(t, err, "insert destination tool call")
+	name := "metadata-only rename"
+	requireNoError(t, dstDB.RenameSession("unchanged", &name), "rename session")
+
+	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
+	requireNoError(t, err, "CopyOrphanedDataFrom")
+	assert.Zero(t, count)
+
+	unchanged, err := dstDB.GetSession(context.Background(), "unchanged")
+	requireNoError(t, err, "GetSession unchanged")
+	require.NotNil(t, unchanged)
+	require.NotNil(t, unchanged.TranscriptRevision)
+	assert.Equal(t, "7", *unchanged.TranscriptRevision)
+
+	changed, err := dstDB.GetSession(context.Background(), "changed")
+	requireNoError(t, err, "GetSession changed")
+	require.NotNil(t, changed)
+	require.NotNil(t, changed.TranscriptRevision)
+	assert.Equal(t, "8", *changed.TranscriptRevision)
+
+	toolChanged, err := dstDB.GetSession(context.Background(), "tool-changed")
+	requireNoError(t, err, "GetSession tool-changed")
+	require.NotNil(t, toolChanged)
+	require.NotNil(t, toolChanged.TranscriptRevision)
+	assert.Equal(t, "8", *toolChanged.TranscriptRevision)
 }
 
 func TestCopyOrphanedDataFrom_PreservesCopiedDetails(t *testing.T) {
