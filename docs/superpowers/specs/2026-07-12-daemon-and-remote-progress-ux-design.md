@@ -1,14 +1,19 @@
 # Daemon Startup and Remote Progress UX Design
 
+> **Update:** The canonical `daemon restart` readiness-window design and the
+> corresponding streaming-progress non-goal are superseded by
+> `2026-07-12-daemon-restart-progress-design.md`. The remaining startup-version
+> and remote-contributor progress design is unchanged.
+
 ## Context
 
-Canonical `agentsview daemon start` and `agentsview daemon restart` currently
-wait five seconds for a spawned server to publish its writable runtime. A
-healthy startup that spends longer than five seconds in its initial sync is then
-reported as a fatal error even though the identified child continues to run. The
-existing 90-second automatic-start readiness window is a better fit for
-canonical lifecycle commands while preserving the rule that they must not claim
-the daemon is ready before its health endpoint is available.
+Canonical `agentsview daemon start` currently waits five seconds for a spawned
+server to publish its writable runtime. A healthy startup that spends longer
+than five seconds in its initial sync is then reported as a fatal error even
+though the identified child continues to run. The existing 90-second
+automatic-start readiness window is a better fit for canonical start while
+preserving the rule that it must not claim the daemon is ready before its health
+endpoint is available. Canonical restart now has a separate approved design.
 
 While the daemon is starting, `agentsview daemon status` reads
 `startup-state.json`. That snapshot contains the PID, elapsed time, phase,
@@ -24,8 +29,8 @@ host-specific label.
 
 ## Goals
 
-- Let normal canonical daemon starts and restarts wait long enough for healthy
-  initial syncs without weakening readiness claims.
+- Let normal canonical daemon starts wait long enough for healthy initial syncs
+  without weakening readiness claims.
 - Show the starting child binary's version before runtime publication.
 - Make HTTP contributor progress counters match the host named in the label.
 - Preserve lifecycle safety, aggregate rebuild statistics, atomic swap behavior,
@@ -36,9 +41,10 @@ host-specific label.
 ### Canonical daemon readiness window
 
 `backgroundLaunchPolicy` will carry the readiness timeout selected by its
-caller. Canonical `daemon start` and `daemon restart` will pass the existing
+caller. Canonical `daemon start` will pass the existing
 `backgroundAutoStartReadyTimeout` value of 90 seconds. The compatibility
-`serve --background` path will retain its five-second window.
+`serve --background` path will retain its five-second window. Canonical
+`daemon restart` follows its focused progress design instead.
 
 The background launcher will use the policy timeout when it is positive and fall
 back to `backgroundServeReadyTimeout` otherwise. This keeps existing callers and
@@ -92,8 +98,8 @@ decisions continue to use merged statistics and are unchanged.
 
 ## Testing
 
-- Command tests assert canonical start and restart request the 90-second
-  readiness window while compatibility launches retain five seconds.
+- Command tests assert canonical start requests the 90-second readiness window
+  while compatibility launches retain five seconds.
 - Startup-state round-trip and rendering tests cover the version line and an
   older snapshot without the field.
 - Contributor progress tests assert local and remote phases report their own
@@ -104,7 +110,7 @@ decisions continue to use merged statistics and are unchanged.
 
 ## Non-goals
 
-- Streaming startup progress directly in the blocking start or restart command.
+- Streaming startup progress directly in the blocking start command.
 - Waiting indefinitely for daemon readiness.
 - Changing the HTTP manifest, parser discovery rules, or the number of remote
   sessions ingested.
