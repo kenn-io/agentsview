@@ -145,14 +145,15 @@ func runDuckDBRuntimeWarningHelper(t *testing.T) ([]byte, error) {
 	const marker = "could not write daemon runtime record"
 	var stdoutOutput bytes.Buffer
 	observed := false
+	var stopErr error
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
 		line := scanner.Text()
 		stdoutOutput.WriteString(line)
 		stdoutOutput.WriteByte('\n')
-		if strings.Contains(line, marker) {
+		if !observed && strings.Contains(line, marker) {
 			observed = true
-			cancel()
+			stopErr = cmd.Cancel()
 		}
 	}
 	scanErr := scanner.Err()
@@ -165,6 +166,18 @@ func runDuckDBRuntimeWarningHelper(t *testing.T) ([]byte, error) {
 			return combined, fmt.Errorf(
 				"scan DuckDB helper stdout after warning: %w\noutput:\n%s",
 				scanErr, combined,
+			)
+		}
+		if stopErr != nil {
+			return combined, fmt.Errorf(
+				"stop DuckDB helper after stdout warning: %w\noutput:\n%s",
+				stopErr, combined,
+			)
+		}
+		if _, ok := waitErr.(*exec.ExitError); waitErr != nil && !ok {
+			return combined, fmt.Errorf(
+				"wait for stopped DuckDB helper after stdout warning: %w\noutput:\n%s",
+				waitErr, combined,
 			)
 		}
 		return stdoutOutput.Bytes(), nil
