@@ -451,6 +451,23 @@ func grokToolCallInputJSON(tc gjson.Result) string {
 	return ""
 }
 
+// grokSummaryMessageCount prefers the chat-transcript count over the broader
+// event counter. Current Grok Build stores both: num_chat_messages is the
+// transcript-shaped total AgentsView should surface, while num_messages also
+// includes non-chat events and would inflate summary-only sessions.
+func grokSummaryMessageCount(root gjson.Result) int {
+	for _, path := range []string{
+		"num_chat_messages",
+		"num_messages",
+		"numMessages",
+	} {
+		if v := root.Get(path); v.Exists() {
+			return int(v.Int())
+		}
+	}
+	return 0
+}
+
 func decodeGrokSummary(data []byte) grokSummaryFields {
 	root := gjson.ParseBytes(data)
 	return grokSummaryFields{
@@ -480,12 +497,8 @@ func decodeGrokSummary(data []byte) grokSummaryFields {
 			strings.TrimSpace(root.Get("last_active_at").String()),
 			strings.TrimSpace(root.Get("lastActiveAt").String()),
 		),
-		Hostname: strings.TrimSpace(root.Get("hostname").String()),
-		NumMessages: max(
-			int(root.Get("num_messages").Int()),
-			int(root.Get("numMessages").Int()),
-			int(root.Get("num_chat_messages").Int()),
-		),
+		Hostname:    strings.TrimSpace(root.Get("hostname").String()),
+		NumMessages: grokSummaryMessageCount(root),
 		WorktreeLabel: firstNonEmptyJSONLString(
 			strings.TrimSpace(root.Get("worktreeLabel").String()),
 			strings.TrimSpace(root.Get("worktree_label").String()),

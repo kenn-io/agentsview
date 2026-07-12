@@ -130,9 +130,11 @@ func TestGrokProviderCurrentBuildSummarySchema(t *testing.T) {
 	assert.Equal(t, "/Users/dev/repos/wp-devops", session.Cwd)
 	assert.Equal(t, "refactor/shared-proxy-csv-utils", session.GitBranch)
 	// Without chat_history.jsonl, counts fall back to summary/signals.
+	// Prefer num_chat_messages (104) over the broader num_messages (927),
+	// which includes non-chat events and would inflate analytics filters.
 	assert.Equal(t, TranscriptFidelitySummary, session.TranscriptFidelity)
 	assert.Equal(t, "grok-summary-v1", session.SourceVersion)
-	assert.Equal(t, 927, session.MessageCount)
+	assert.Equal(t, 104, session.MessageCount)
 	assert.Equal(t, 7, session.UserMessageCount)
 	assert.Equal(t, 106663, session.PeakContextTokens)
 	assert.True(t, session.HasPeakContextTokens)
