@@ -262,6 +262,34 @@ describe('MessagesStore', () => {
     expect(messages.activeSessionUnreadOrdinal).toBe(0);
   });
 
+  it('ignores replacement row IDs when locating changed transcript content', async () => {
+    const original = [makeMessage(0), makeMessage(1)];
+    vi.mocked(api.getSession).mockResolvedValue({
+      ...makeSession('s1', original.length),
+      transcript_revision: 'old',
+    });
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse(original),
+    );
+    await messages.loadSession('s1');
+
+    vi.mocked(api.getSession).mockResolvedValueOnce({
+      ...makeSession('s1', original.length),
+      transcript_revision: 'new',
+    });
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse(original.map((message) => ({
+        ...message,
+        id: message.id + 100,
+      }))),
+    );
+
+    await messages.reload();
+
+    expect(messages.activeSessionToken).toBe('new');
+    expect(messages.activeSessionUnreadOrdinal).toBeNull();
+  });
+
   it('keeps a revised token pending until progressively loaded history is visible', async () => {
     const count = 4_000;
     vi.mocked(api.getSession).mockResolvedValue({

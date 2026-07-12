@@ -639,7 +639,7 @@ function earliestChangedOrdinal(
     if (
       before !== undefined &&
       after !== undefined &&
-      JSON.stringify(before) === JSON.stringify(after)
+      transcriptMessageEqual(before, after)
     ) {
       continue;
     }
@@ -648,6 +648,49 @@ function earliestChangedOrdinal(
       : Math.min(earliest, ordinal);
   }
   return earliest;
+}
+
+function transcriptMessageEqual(
+  before: Message,
+  after: Message,
+): boolean {
+  const visibleContent = (message: Message) => ({
+    role: message.role,
+    content: message.content,
+    thinkingText: message.thinking_text,
+    timestamp: message.timestamp,
+    hasThinking: message.has_thinking,
+    hasToolUse: message.has_tool_use,
+    isSystem: message.is_system,
+    model: message.model,
+    contextTokens: message.context_tokens,
+    outputTokens: message.output_tokens,
+    hasContextTokens: message.has_context_tokens ?? false,
+    hasOutputTokens: message.has_output_tokens ?? false,
+    sourceSubtype: message.source_subtype ?? "",
+    isCompactBoundary: message.is_compact_boundary ?? false,
+    toolCalls: (message.tool_calls ?? []).map((call) => ({
+      toolName: call.tool_name,
+      category: call.category ?? "",
+      toolUseId: call.tool_use_id ?? "",
+      inputJson: call.input_json ?? "",
+      skillName: call.skill_name ?? "",
+      resultContent: call.result_content ?? "",
+      subagentSessionId: call.subagent_session_id ?? "",
+      resultEvents: (call.result_events ?? []).map((event) => ({
+        toolUseId: event.tool_use_id ?? "",
+        agentId: event.agent_id ?? "",
+        subagentSessionId: event.subagent_session_id ?? "",
+        source: event.source,
+        status: event.status,
+        content: event.content,
+        timestamp: event.timestamp ?? "",
+        eventIndex: event.event_index,
+      })),
+    })),
+  });
+  return JSON.stringify(visibleContent(before)) ===
+    JSON.stringify(visibleContent(after));
 }
 
 export const messages = new MessagesStore();

@@ -260,6 +260,38 @@ describe("MessageList follow cancellation", () => {
     expect(readProgress.get("s1")?.token).toBe("previous");
   });
 
+  it("requires the newest unread endpoint before acknowledging a direct boundary jump", async () => {
+    messages.messages = [
+      makeMessage(0),
+      makeMessage(1),
+      makeMessage(2),
+      makeMessage(3),
+      makeMessage(4),
+    ];
+    messages.messageCount = 5;
+    messages.activeSessionToken = "current";
+    ui.sortNewestFirst = true;
+    virtualizerMock.getVirtualItems.mockReturnValue([
+      { index: 2, key: "row-2", start: 0, end: 100 },
+    ]);
+    readProgress.baseline("s1", "previous", 1);
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+
+    expect(readProgress.get("s1")?.token).toBe("previous");
+
+    virtualizerMock.getVirtualItems.mockReturnValue([
+      { index: 0, key: "row-0", start: 0, end: 100 },
+    ]);
+    document.querySelector<HTMLElement>(".message-list-scroll")
+      ?.dispatchEvent(new Event("scroll"));
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+
+    expect(readProgress.get("s1")?.token).toBe("current");
+  });
+
   it("marks a short newest-first transcript read when its unread boundary is initially visible", async () => {
     messages.messages = [makeMessage(0), makeMessage(1)];
     messages.messageCount = 2;

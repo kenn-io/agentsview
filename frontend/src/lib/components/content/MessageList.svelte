@@ -46,6 +46,7 @@
   let visibleProgressRaf: number | null = null;
   let unreadTraversalKey: string | null = null;
   let unreadBoundarySeen = false;
+  let unreadLatestSeen = false;
 
   let baseMessages: Message[] = $derived.by(() =>
     messages.messages.filter((m) => !isSystemMessage(m)),
@@ -239,13 +240,17 @@
     if (unreadTraversalKey !== traversalKey) {
       unreadTraversalKey = traversalKey;
       unreadBoundarySeen = false;
+      unreadLatestSeen = false;
     }
     if (visibleOrdinals.has(unreadBoundary)) {
       unreadBoundarySeen = true;
     }
+    if (visibleOrdinals.has(latestLoadedOrdinal)) {
+      unreadLatestSeen = true;
+    }
 
     if (ui.sortNewestFirst) {
-      if (unreadBoundarySeen) {
+      if (unreadBoundarySeen && unreadLatestSeen) {
         readProgress.markRead(
           sessionId,
           currentToken,
