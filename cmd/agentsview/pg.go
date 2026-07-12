@@ -529,7 +529,7 @@ func preparePGServeImpl(appCfg config.Config, basePath string) (pgServeStartup, 
 		return pgServeStartup{}, fmt.Errorf(
 			"pg serve: schema incompatible: %w\n"+
 				"Drop and recreate the PG schema, then run "+
-				"'agentsview pg push --full' to repopulate.",
+				"'agentsview pg push --full' to repopulate",
 			err,
 		)
 	}

@@ -191,7 +191,7 @@ func TestRunDuckDBRuntimeWarningHelperProcess(t *testing.T) {
 		return "", errors.New("forced runtime-record write failure")
 	}
 	go func() {
-		time.Sleep(time.Second)
+		time.Sleep(3 * time.Second)
 		os.Exit(0)
 	}()
 	runDuckDBServe(config.Config{
