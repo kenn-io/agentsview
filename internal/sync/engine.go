@@ -1306,6 +1306,7 @@ func (e *Engine) resyncAllWithOptionsLocked(
 		oldFileSessions = 1
 	}
 	localOldFileSessions := oldFileSessions
+	rebuildOldFileSessions := oldFileSessions
 	contributorOldFileSessions := make([]int, len(opts.Contributors))
 	if len(opts.Contributors) > 0 {
 		localOldFileSessions, err = e.protectedFileSessionCount(
@@ -1315,6 +1316,7 @@ func (e *Engine) resyncAllWithOptionsLocked(
 			log.Printf("resync: get old local file count: %v", err)
 			localOldFileSessions = 1
 		}
+		rebuildOldFileSessions = localOldFileSessions
 		for i, contributor := range opts.Contributors {
 			count, countErr := e.protectedFileSessionCount(
 				origDB, contributor.Config.Machine,
@@ -1328,6 +1330,7 @@ func (e *Engine) resyncAllWithOptionsLocked(
 				count = 1
 			}
 			contributorOldFileSessions[i] = count
+			rebuildOldFileSessions += count
 		}
 	}
 
@@ -1565,7 +1568,7 @@ func (e *Engine) resyncAllWithOptionsLocked(
 		)
 	}
 	abortSwap := localSafetyAbort ||
-		shouldAbortResyncSwap(stats, oldFileSessions, trashedCopied)
+		shouldAbortResyncSwap(stats, rebuildOldFileSessions, trashedCopied)
 	if abortSwap {
 		log.Printf(
 			"resync: aborting swap, %d synced / %d failed / %d total",

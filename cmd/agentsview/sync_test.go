@@ -144,6 +144,67 @@ func TestDoSyncConfiguredFullUsesUnifiedHTTPContributorBeforeSSH(t *testing.T) {
 		"contributor borrow must release before prepared sources close")
 }
 
+func TestDoSyncConfiguredFullIgnoresSSHHistoryDuringUnifiedSafetyCheck(t *testing.T) {
+	cfg, database := newDirectSyncFixture(t)
+	for _, roots := range cfg.AgentDirs {
+		for _, root := range roots {
+			require.NoError(t, os.RemoveAll(root))
+		}
+	}
+	missingPath := filepath.Join(t.TempDir(), "missing-ssh-session.jsonl")
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "preserved-ssh-session", Project: "archive", Machine: "ssh-box",
+		Agent: "claude", FilePath: &missingPath, MessageCount: 1,
+	}))
+	httpRoot := t.TempDir()
+	prepared := &fakeCLIPreparedHTTPRebuild{contributors: []agentsync.RebuildContributor{{
+		Name: "http-box",
+		Config: agentsync.EngineConfig{
+			AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {httpRoot}},
+			Machine:   "http-box", IDPrefix: "http-box~", Ephemeral: true,
+		},
+	}}}
+	originalPrepare := prepareHTTPRebuildCLI
+	prepareHTTPRebuildCLI = func(
+		context.Context, []remotesync.HTTPSync,
+	) (preparedHTTPRebuildCLI, error) {
+		return prepared, nil
+	}
+	t.Cleanup(func() { prepareHTTPRebuildCLI = originalPrepare })
+	sshCalls := 0
+	originalSSH := runSSHRemoteSync
+	runSSHRemoteSync = func(
+		_ context.Context, _ config.Config, database *db.DB,
+		rh config.RemoteHost, full bool,
+	) (remotesync.SyncStats, error) {
+		sshCalls++
+		assert.Equal(t, "ssh-box", rh.Host)
+		assert.True(t, full)
+		preserved, err := database.GetSession(
+			context.Background(), "preserved-ssh-session",
+		)
+		require.NoError(t, err)
+		assert.NotNil(t, preserved,
+			"SSH pass must observe its archived session after the unified swap")
+		return remotesync.SyncStats{}, nil
+	}
+	t.Cleanup(func() { runSSHRemoteSync = originalSSH })
+
+	didResync, failures, err := runConfiguredLocalAndRemotes(
+		context.Background(), cfg, database,
+		[]config.RemoteHost{
+			{Host: "http-box", Transport: config.RemoteTransportHTTP, Token: "token"},
+			{Host: "ssh-box"},
+		}, true, nil,
+	)
+
+	require.NoError(t, err)
+	assert.True(t, didResync)
+	assert.Empty(t, failures)
+	assert.Equal(t, 1, sshCalls,
+		"SSH synchronization must run after an empty local/HTTP rebuild")
+}
+
 func TestDoSyncConfiguredFullSSHOnlyFallsBackBeforeRemoteImport(t *testing.T) {
 	cfg, database := newDirectSyncFixture(t)
 	for _, roots := range cfg.AgentDirs {
