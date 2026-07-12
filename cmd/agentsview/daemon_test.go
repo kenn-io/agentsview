@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -173,6 +174,10 @@ func TestDaemonStartUsesConfigOnlyPolicyAndIsIdempotent(t *testing.T) {
 	assert.Equal(t, []string{"serve"}, gotArgs)
 	assert.True(t, gotPolicy.ConfigOnly)
 	assert.Equal(t, "daemon start", gotPolicy.Operation)
+	assert.False(t, gotPolicy.Attached)
+	assert.Nil(t, gotPolicy.Context)
+	assert.Nil(t, gotPolicy.OnLaunch)
+	assert.Nil(t, gotPolicy.OnProgress)
 	assert.Contains(t, out.String(), "already running")
 	assert.Contains(t, out.String(), "pid 41")
 }
@@ -719,6 +724,94 @@ func TestDaemonRestartValidatesBeforeStoppingAndUsesFreshConfig(t *testing.T) {
 	assert.Contains(t, out.String(), "restarted")
 }
 
+func TestDaemonRestartStreamsProgressUntilReady(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+		return []daemon.RuntimeRecord{testWritableRecord(91, "/runtime/91.json")}, nil
+	}
+	deps.startBackground = func(
+		_ config.Config, _ []string, _ serveReplacementOptions,
+		policy backgroundLaunchPolicy,
+	) (backgroundLaunchResult, error) {
+		assert.True(t, policy.Attached)
+		require.NotNil(t, policy.Context)
+		require.NotNil(t, policy.OnLaunch)
+		require.NotNil(t, policy.OnProgress)
+
+		policy.OnLaunch(92, "/data/serve.log")
+		policy.OnProgress(&startupState{Phase: "opening database"}, 2*time.Second)
+		policy.OnProgress(&startupState{Phase: "opening database"}, 4*time.Second)
+		policy.OnProgress(&startupState{
+			Phase: "initial sync", Detail: "claude: 120/450 sessions (27%)",
+		}, 6*time.Second)
+		policy.OnProgress(&startupState{
+			Phase: "initial sync", Detail: "claude: 120/450 sessions (27%)",
+		}, 8*time.Second)
+		policy.OnProgress(&startupState{
+			Phase: "initial sync", Detail: "claude: 120/450 sessions (27%)",
+		}, 11*time.Second)
+		policy.OnProgress(nil, 12*time.Second)
+		policy.OnProgress(&startupState{Detail: "incomplete snapshot"}, 13*time.Second)
+		policy.OnProgress(&startupState{Phase: "starting HTTP server"}, 18*time.Second)
+		return backgroundLaunchResult{
+			Runtime: &DaemonRuntime{
+				Record: daemon.RuntimeRecord{PID: 92},
+				Host:   "127.0.0.1", Port: 8080,
+			},
+			Started: true, childPID: 92, LogPath: "/data/serve.log",
+		}, nil
+	}
+
+	require.NoError(t, executeDaemonCommand(t, *deps, out, "restart"))
+	assert.Equal(t, "Stopped agentsview (pid 91).\n"+
+		"Starting agentsview (pid 92)...\n"+
+		"  log: /data/serve.log\n"+
+		"  opening database (2s)\n"+
+		"  initial sync: claude: 120/450 sessions (27%) (6s)\n"+
+		"  initial sync: claude: 120/450 sessions (27%) (11s)\n"+
+		"  starting HTTP server (18s)\n"+
+		"agentsview restarted at http://127.0.0.1:8080 (pid 92)\n", out.String())
+}
+
+func TestDaemonRestartCancellationLeavesReplacementRunning(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+		return []daemon.RuntimeRecord{testWritableRecord(91, "/runtime/91.json")}, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	var stopped []int
+	deps.stopProcess = func(rec daemon.RuntimeRecord, _ time.Duration) error {
+		stopped = append(stopped, rec.PID)
+		return nil
+	}
+	deps.startBackground = func(
+		_ config.Config, _ []string, _ serveReplacementOptions,
+		policy backgroundLaunchPolicy,
+	) (backgroundLaunchResult, error) {
+		policy.OnLaunch(92, "/data/serve.log")
+		cancel()
+		return backgroundLaunchResult{
+			Started: true, childPID: 92, LogPath: "/data/serve.log",
+		}, context.Canceled
+	}
+
+	cmd := newDaemonCommandWithDeps(*deps)
+	cmd.SetContext(ctx)
+	cmd.SetOut(out)
+	cmd.SetErr(out)
+	cmd.SetArgs([]string{"restart"})
+	err := cmd.Execute()
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "pid 92")
+	assert.ErrorContains(t, err, "/data/serve.log")
+	assert.ErrorContains(t, err, "child continues running")
+	assert.ErrorContains(t, err, "agentsview daemon status")
+	assert.Equal(t, []int{91}, stopped,
+		"cancellation must not stop the replacement child")
+	assert.Contains(t, out.String(), "Starting agentsview (pid 92)...")
+}
+
 func TestDaemonRestartStoppedStartsAndReadOnlySurvives(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
 	dir := runtimeTestDir(t)
@@ -791,6 +884,10 @@ func TestServeRestartDelegatesToCanonicalWriterOnlyRestart(t *testing.T) {
 	assert.FileExists(t, path, "read-only runtime record must survive restart")
 	assert.True(t, gotPolicy.ConfigOnly)
 	assert.Equal(t, "daemon restart", gotPolicy.Operation)
+	assert.False(t, gotPolicy.Attached)
+	assert.Nil(t, gotPolicy.Context)
+	assert.Nil(t, gotPolicy.OnLaunch)
+	assert.Nil(t, gotPolicy.OnProgress)
 	assert.Contains(t, out.String(), "started (was not running)")
 }
 

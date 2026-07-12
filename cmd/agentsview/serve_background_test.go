@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -1020,6 +1021,100 @@ func TestWaitForBackgroundServeReady_UsesStartupStateFallbackWithoutRuntimeRecor
 	assert.Equal(t, port, rt.Port)
 }
 
+func TestWaitForBackgroundServeReadyAttachedObservesProgressWithoutTimeout(
+	t *testing.T,
+) {
+	setStartProbeTickForTest(t, 10*time.Millisecond)
+	dir := runtimeTestDir(t)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	startedAt := time.Now().Add(-2 * time.Second)
+	data, err := json.Marshal(startupState{
+		PID: 321, StartedAt: startedAt, Phase: "initial sync", Detail: "12/40 sessions",
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(startupStatePath(dir), data, 0o600))
+	MarkDaemonStarting(dir)
+	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+
+	observed := make(chan *startupState, 1)
+	waitCh := make(chan error)
+	resultCh := make(chan *DaemonRuntime, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		rt, waitErr := waitForBackgroundServeReadyWithPolicy(
+			context.Background(), dir, "", waitCh, 20*time.Millisecond,
+			backgroundServeReadyWaitPolicy{
+				Attached: true,
+				Observe: func(st *startupState, _ time.Duration) {
+					if st != nil {
+						select {
+						case observed <- st:
+						default:
+						}
+					}
+				},
+			},
+		)
+		resultCh <- rt
+		errCh <- waitErr
+	}()
+
+	select {
+	case st := <-observed:
+		assert.Equal(t, "initial sync", st.Phase)
+		assert.Equal(t, "12/40 sessions", st.Detail)
+	case <-time.After(time.Second):
+		t.Fatal("attached readiness wait did not observe startup progress")
+	}
+	select {
+	case err := <-errCh:
+		t.Fatalf("attached readiness wait returned at legacy timeout: %v", err)
+	case <-time.After(40 * time.Millisecond):
+	}
+
+	host, port := testPingServer(t)
+	_, err = WriteDaemonRuntime(dir, host, port, version, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { RemoveDaemonRuntime(dir) })
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+		rt := <-resultCh
+		require.NotNil(t, rt)
+		assert.Equal(t, port, rt.Port)
+	case <-time.After(time.Second):
+		t.Fatal("attached readiness wait did not return authoritative runtime")
+	}
+}
+
+func TestWaitForBackgroundServeReadyAttachedChildExitAndCancellation(t *testing.T) {
+	setStartProbeTickForTest(t, 10*time.Millisecond)
+
+	t.Run("child exit", func(t *testing.T) {
+		waitCh := make(chan error, 1)
+		waitCh <- errors.New("exit status 7")
+		rt, err := waitForBackgroundServeReadyWithPolicy(
+			context.Background(), runtimeTestDir(t), "", waitCh,
+			20*time.Millisecond, backgroundServeReadyWaitPolicy{Attached: true},
+		)
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "exit status 7")
+		assert.Nil(t, rt)
+	})
+
+	t.Run("context cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		rt, err := waitForBackgroundServeReadyWithPolicy(
+			ctx, runtimeTestDir(t), "", make(chan error),
+			20*time.Millisecond, backgroundServeReadyWaitPolicy{Attached: true},
+		)
+		assert.ErrorIs(t, err, context.Canceled)
+		assert.Nil(t, rt)
+	})
+}
+
 func TestEnsureBackgroundServeLaunchLoserReplacesStaleDaemonAfterStartup(
 	t *testing.T,
 ) {
@@ -2005,6 +2100,7 @@ func TestStartServeBackgroundReturnsStartupErrorWithLogPath(t *testing.T) {
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	startErr := errors.New("fork failed")
 	logPath := filepath.Join(dir, "serve.log")
+	launched := false
 
 	oldStart := startServeBackgroundProcessForRun
 	startServeBackgroundProcessForRun = func(
@@ -2019,7 +2115,13 @@ func TestStartServeBackgroundReturnsStartupErrorWithLogPath(t *testing.T) {
 		config.Config{DataDir: dir},
 		nil,
 		serveReplacementOptions{},
-		backgroundLaunchPolicy{ConfigOnly: true, Operation: "daemon start"},
+		backgroundLaunchPolicy{
+			ConfigOnly: true,
+			Operation:  "daemon start",
+			OnLaunch: func(int, string) {
+				launched = true
+			},
+		},
 	)
 
 	require.Error(t, err)
@@ -2028,6 +2130,7 @@ func TestStartServeBackgroundReturnsStartupErrorWithLogPath(t *testing.T) {
 	assert.False(t, result.Started)
 	assert.Equal(t, logPath, result.LogPath)
 	assert.Nil(t, result.Runtime)
+	assert.False(t, launched, "process-creation failure must not report a launch")
 }
 
 func TestRunServeBackgroundLaunchErrorPreservesLegacyFatalOutput(t *testing.T) {
