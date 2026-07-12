@@ -211,6 +211,31 @@ func TestDaemonStopRegisteredRuntimePreservesStartupGuard(t *testing.T) {
 	assert.Contains(t, err.Error(), "startup is still in progress")
 }
 
+func TestDaemonStartUsesStartupStateFallbackWhileStarting(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	deps.isStarting = func(string) bool { return true }
+	deps.writableRuntime = func(string, string) *DaemonRuntime {
+		return &DaemonRuntime{
+			Record:          testWritableRecord(79, ""),
+			Host:            "127.0.0.1",
+			Port:            8079,
+			RuntimeFallback: true,
+		}
+	}
+	starts := 0
+	deps.startBackground = func(
+		config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy,
+	) (backgroundLaunchResult, error) {
+		starts++
+		return backgroundLaunchResult{}, nil
+	}
+
+	require.NoError(t, executeDaemonCommand(t, *deps, out, "start"))
+	assert.Zero(t, starts)
+	assert.Contains(t, out.String(), "already running")
+	assert.Contains(t, out.String(), "8079")
+}
+
 func TestDaemonStartPersistentStartupNeverLaunches(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
 	deps.isStarting = func(string) bool { return true }
@@ -793,6 +818,43 @@ func TestDaemonRestartFailurePathsSignalNobody(t *testing.T) {
 			assert.Zero(t, signals)
 		})
 	}
+}
+
+func TestDaemonRestartUsesStartupStateFallbackWhileStarting(t *testing.T) {
+	deps, out := daemonCommandTestDeps(t)
+	deps.isStarting = func(string) bool { return true }
+	deps.writableRuntime = func(string, string) *DaemonRuntime {
+		return &DaemonRuntime{
+			Record:          testWritableRecord(113, ""),
+			Host:            "127.0.0.1",
+			Port:            8113,
+			RuntimeFallback: true,
+		}
+	}
+	var stopped daemon.RuntimeRecord
+	deps.stopProcess = func(rec daemon.RuntimeRecord, _ time.Duration) error {
+		stopped = rec
+		return nil
+	}
+	deps.startBackground = func(
+		_ config.Config, args []string, _ serveReplacementOptions,
+		policy backgroundLaunchPolicy,
+	) (backgroundLaunchResult, error) {
+		assert.Equal(t, []string{"serve"}, args)
+		assert.Equal(t, "daemon restart", policy.Operation)
+		return backgroundLaunchResult{
+			Runtime: &DaemonRuntime{
+				Record: daemon.RuntimeRecord{PID: 315},
+				Host:   "127.0.0.1", Port: 8080,
+			},
+			Started: true,
+		}, nil
+	}
+
+	require.NoError(t, executeDaemonCommand(t, *deps, out, "restart"))
+	assert.Equal(t, 113, stopped.PID)
+	assert.Contains(t, out.String(), "restarted")
+	assert.NotContains(t, out.String(), "startup is still in progress")
 }
 
 func TestDaemonRestartInvalidServeConfigDoesNotStopOrStart(t *testing.T) {
