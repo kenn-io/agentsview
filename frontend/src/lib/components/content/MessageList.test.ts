@@ -215,7 +215,7 @@ describe("MessageList follow cancellation", () => {
     ).toBe("0");
   });
 
-  it("places an unknown newest-first divider after unread history", async () => {
+  it("suppresses the newest-first divider when no read history exists", async () => {
     messages.messages = [
       makeMessage(0),
       makeMessage(1),
@@ -232,10 +232,7 @@ describe("MessageList follow cancellation", () => {
     await tick();
 
     const divider = document.querySelector(".read-progress-divider");
-    expect(divider?.textContent).toContain("Earlier messages");
-    expect(
-      divider?.closest(".virtual-row")?.getAttribute("data-index"),
-    ).toBe("3");
+    expect(divider).toBeNull();
   });
 
   it("does not mark newest-first updates read while only older rows are visible", async () => {

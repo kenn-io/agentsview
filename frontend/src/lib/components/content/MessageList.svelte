@@ -796,6 +796,9 @@
       : displayItemsAsc;
 
     if (ui.sortNewestFirst) {
+      if (messages.activeSessionUnreadOrdinal === null) {
+        return null;
+      }
       const dividerBoundary = marker.ordinal !== null &&
           unreadBoundary === marker.ordinal + 1
         ? marker.ordinal
