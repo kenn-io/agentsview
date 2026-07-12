@@ -4,6 +4,7 @@ package duckdb
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"testing"
@@ -207,6 +208,7 @@ func duckContractSessionsCursorsAndMetadata(
 	require.NoError(t, err)
 	require.NotNil(t, alpha)
 	require.Equal(t, "alpha", alpha.Project)
+	assertDuckJSONTranscriptRevision(t, alpha, "hash-"+fixture.alphaID)
 
 	full, err := store.GetSessionFull(ctx, fixture.alphaID)
 	require.NoError(t, err)
@@ -216,6 +218,8 @@ func duckContractSessionsCursorsAndMetadata(
 	index, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{Project: "alpha"})
 	require.NoError(t, err)
 	require.Contains(t, duckSidebarSessionIDs(index.Sessions), fixture.alphaID)
+	require.Len(t, index.Sessions, 1)
+	assertDuckJSONTranscriptRevision(t, index.Sessions[0], "hash-"+fixture.alphaID)
 
 	stats, err := store.GetStats(ctx, false, false)
 	require.NoError(t, err)
@@ -233,6 +237,17 @@ func duckContractSessionsCursorsAndMetadata(
 	machines, err := store.GetMachines(ctx, false, false)
 	require.NoError(t, err)
 	require.Equal(t, []string{"test-machine"}, machines)
+}
+
+func assertDuckJSONTranscriptRevision(t *testing.T, value any, want string) {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	require.NoError(t, err)
+	var fields map[string]any
+	require.NoError(t, json.Unmarshal(raw, &fields))
+	assert.Equal(t, want, fields["transcript_revision"])
+	assert.NotContains(t, fields, "file_hash")
+	assert.NotContains(t, fields, "local_modified_at")
 }
 
 func duckContractMessagesSearchAndSecrets(

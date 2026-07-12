@@ -18,6 +18,7 @@ import { setLocale } from "../../i18n/index.js";
 const virtualizerMock = vi.hoisted(() => ({
   options: { count: 0 },
   scrollOffset: 0,
+  scrollRect: { height: 200 },
   getVirtualItems: vi.fn<
     () => Array<{
       index: number;
@@ -94,6 +95,8 @@ describe("MessageList follow cancellation", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    virtualizerMock.scrollOffset = 0;
+    virtualizerMock.scrollRect.height = 200;
     messages.clear();
     sessions.activeSessionId = "s1";
     messages.sessionId = "s1";
@@ -231,5 +234,29 @@ describe("MessageList follow cancellation", () => {
     expect(
       divider?.closest(".virtual-row")?.getAttribute("data-index"),
     ).toBe("2");
+  });
+
+  it("does not mark newest-first updates read while only older rows are visible", async () => {
+    messages.messages = [
+      makeMessage(0),
+      makeMessage(1),
+      makeMessage(2),
+      makeMessage(3),
+      makeMessage(4),
+    ];
+    messages.messageCount = 5;
+    messages.activeSessionToken = "current";
+    ui.sortNewestFirst = true;
+    setVirtualRows(5);
+    virtualizerMock.scrollOffset = 300;
+    readProgress.baseline("s1", "previous", 1);
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    document.querySelector<HTMLElement>(".message-list-scroll")
+      ?.dispatchEvent(new Event("scroll"));
+
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+    expect(readProgress.get("s1")?.token).toBe("previous");
   });
 });

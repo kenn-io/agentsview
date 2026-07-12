@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     no_code_context_count     INT NOT NULL DEFAULT 0,
     runaway_tool_loop_count   INT NOT NULL DEFAULT 0,
     termination_status        TEXT,
+    transcript_revision       TEXT,
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -442,6 +443,11 @@ func EnsureSchema(
 
 	// Idempotent column additions for forward compatibility.
 	alters := []columnMigration{
+		{
+			"sessions", "transcript_revision",
+			`transcript_revision TEXT`,
+			"adding sessions.transcript_revision",
+		},
 		{
 			"sessions", "owner_marker",
 			`owner_marker TEXT NOT NULL DEFAULT ''`,

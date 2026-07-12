@@ -43,8 +43,8 @@ type Store struct {
 }
 
 // pgSessionCols is the column list for standard PG session
-// queries. PG has no file_path, file_size, file_mtime,
-// file_hash, or local_modified_at columns.
+// queries. PG has no local file metadata columns; transcript_revision
+// carries the backend-neutral content revision pushed from SQLite.
 const pgSessionCols = `id, project, machine, agent,
 	first_message, COALESCE(display_name, session_name) AS display_name, created_at, started_at,
 	ended_at, message_count, user_message_count,
@@ -70,7 +70,7 @@ const pgSessionCols = `id, project, machine, agent,
 	cwd, git_branch, source_session_id, source_version,
 	transcript_fidelity, parser_malformed_lines, is_truncated,
 	secret_leak_count, secrets_rules_version,
-	deleted_at, termination_status`
+	deleted_at, termination_status, transcript_revision`
 
 // paramBuilder generates numbered PostgreSQL placeholders.
 type paramBuilder struct {
@@ -229,7 +229,7 @@ func scanPGSession(
 		&s.SourceSessionID, &s.SourceVersion,
 		&s.TranscriptFidelity, &s.ParserMalformedLines, &s.IsTruncated,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
-		&deletedAt, &s.TerminationStatus,
+		&deletedAt, &s.TerminationStatus, &s.TranscriptRevision,
 	)
 	if err != nil {
 		return s, err
@@ -523,6 +523,7 @@ func (s *Store) GetSidebarSessionIndex(
 			termination_status,
 			message_count,
 			user_message_count,
+			transcript_revision,
 			is_automated,
 			position('<teammate-message' in COALESCE(first_message, '')) > 0
 		FROM sessions
@@ -759,6 +760,7 @@ func (s *Store) getSidebarSessionIndexPage(
 			s.termination_status,
 			s.message_count,
 			s.user_message_count,
+			s.transcript_revision,
 			s.is_automated,
 			position('<teammate-message' in COALESCE(s.first_message, '')) > 0
 		FROM sessions s
@@ -803,6 +805,7 @@ func scanPGSidebarSessionIndexRows(
 			&row.TerminationStatus,
 			&row.MessageCount,
 			&row.UserMessageCount,
+			&row.TranscriptRevision,
 			&row.IsAutomated,
 			&row.IsTeammate,
 		); err != nil {

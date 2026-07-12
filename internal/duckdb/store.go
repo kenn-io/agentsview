@@ -208,7 +208,7 @@ const duckSessionCols = `id, project, machine, agent,
 	cwd, git_branch, source_session_id, source_version, transcript_fidelity,
 	parser_malformed_lines, is_truncated,
 	secret_leak_count, secrets_rules_version,
-	deleted_at, termination_status`
+	deleted_at, termination_status, file_hash`
 
 func scanSession(rs interface{ Scan(...any) error }) (db.Session, error) {
 	var s db.Session
@@ -241,7 +241,7 @@ func scanSession(rs interface{ Scan(...any) error }) (db.Session, error) {
 		&s.SourceSessionID, &s.SourceVersion, &s.TranscriptFidelity,
 		&s.ParserMalformedLines, &s.IsTruncated,
 		&s.SecretLeakCount, &s.SecretsRulesVersion,
-		&deletedAt, &s.TerminationStatus,
+		&deletedAt, &s.TerminationStatus, &s.TranscriptRevision,
 	)
 	if err != nil {
 		return s, err
@@ -452,7 +452,6 @@ func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) 
 			message_count,
 			user_message_count,
 			file_hash,
-			local_modified_at,
 			is_automated,
 			position('<teammate-message' in COALESCE(first_message, '')) > 0
 		FROM sessions
@@ -473,7 +472,7 @@ func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) 
 	}
 	for rows.Next() {
 		var row db.SidebarSessionIndexRow
-		var startedAt, endedAt, createdAt, localModifiedAt any
+		var startedAt, endedAt, createdAt any
 		if err := rows.Scan(
 			&row.ID,
 			&row.ParentSessionID,
@@ -488,8 +487,7 @@ func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) 
 			&row.TerminationStatus,
 			&row.MessageCount,
 			&row.UserMessageCount,
-			&row.FileHash,
-			&localModifiedAt,
+			&row.TranscriptRevision,
 			&row.IsAutomated,
 			&row.IsTeammate,
 		); err != nil {
@@ -506,9 +504,6 @@ func (s *Store) GetSidebarSessionIndex(ctx context.Context, f db.SessionFilter) 
 			row.EndedAt = &v
 		}
 		row.CreatedAt = formatDBTime(createdAt)
-		if v := formatDBTime(localModifiedAt); v != "" {
-			row.LocalModifiedAt = &v
-		}
 		index.Sessions = append(index.Sessions, row)
 	}
 	if err := rows.Err(); err != nil {

@@ -11,17 +11,17 @@ afterEach(() => {
 });
 
 describe("read progress", () => {
-  it("builds the existing session change token from hydrated detail fields", () => {
+  it("builds the session change token only from the transcript revision", () => {
     expect(
       buildReadProgressToken({
-        file_hash: "abc",
+        transcript_revision: "abc",
         local_modified_at: "2026-07-11T12:00:00Z",
       }),
-    ).toBe("h:abc|m:2026-07-11T12:00:00Z");
+    ).toBe("abc");
     expect(
       buildReadProgressToken({
-        file_hash: null,
-        local_modified_at: null,
+        transcript_revision: null,
+        local_modified_at: "2026-07-11T12:00:01Z",
       }),
     ).toBeNull();
   });

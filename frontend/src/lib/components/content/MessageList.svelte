@@ -231,7 +231,8 @@
       if (
         minVisibleOrdinal !== null &&
         completionOrdinal !== null &&
-        minVisibleOrdinal <= completionOrdinal
+        minVisibleOrdinal <= completionOrdinal &&
+        maxVisibleOrdinal >= completionOrdinal
       ) {
         readProgress.markRead(
           sessionId,

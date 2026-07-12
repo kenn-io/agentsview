@@ -34,8 +34,7 @@ export interface Session {
   relationship_type?: string;
   deleted_at?: string | null;
   termination_status?: string | null;
-  file_hash?: string;
-  local_modified_at?: string;
+  transcript_revision?: string;
   file_path?: string;
   file_size?: number;
   file_mtime?: number;
@@ -99,8 +98,7 @@ export interface SidebarSessionIndexRow {
   termination_status?: string | null;
   message_count: number;
   user_message_count: number;
-  file_hash?: string;
-  local_modified_at?: string;
+  transcript_revision?: string;
   is_automated: boolean;
   is_teammate?: boolean;
 }

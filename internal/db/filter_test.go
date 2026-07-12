@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"testing"
 
@@ -1188,6 +1189,37 @@ func TestSidebarSessionIndexIncludeAutomated(t *testing.T) {
 	requireNoError(t, err, "GetSidebarSessionIndex")
 	requireSidebarIndexIDs(t, index.Sessions, []string{"normal", "review"})
 	require.Equal(t, 2, index.Total, "total")
+}
+
+func TestSessionReadProgressRevisionUsesTranscriptContent(t *testing.T) {
+	d := testDB(t)
+	hash := "transcript-hash"
+	modified := "2026-07-12T12:00:00Z"
+	insertSession(t, d, "revision", "proj", func(s *Session) {
+		s.FileHash = &hash
+		s.LocalModifiedAt = &modified
+	})
+
+	session, err := d.GetSession(context.Background(), "revision")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assertJSONTranscriptRevision(t, session, hash)
+
+	index, err := d.GetSidebarSessionIndex(context.Background(), SessionFilter{})
+	require.NoError(t, err)
+	require.Len(t, index.Sessions, 1)
+	assertJSONTranscriptRevision(t, index.Sessions[0], hash)
+}
+
+func assertJSONTranscriptRevision(t *testing.T, value any, want string) {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	require.NoError(t, err)
+	var fields map[string]any
+	require.NoError(t, json.Unmarshal(raw, &fields))
+	assert.Equal(t, want, fields["transcript_revision"])
+	assert.NotContains(t, fields, "file_hash")
+	assert.NotContains(t, fields, "local_modified_at")
 }
 
 func TestSidebarSessionIndexExcludeOneShotWithAutomatedIncluded(t *testing.T) {

@@ -219,26 +219,24 @@ describe("SessionList filter dropdown", () => {
       makeSession({
         id: "changed",
         display_name: "Changed",
-        file_hash: "new",
-        local_modified_at: "2026-07-11T12:00:00Z",
+        transcript_revision: "new",
         is_index_only: true,
       }),
       makeSession({
         id: "same",
         display_name: "Same",
-        file_hash: "same",
-        local_modified_at: "2026-07-11T12:00:00Z",
+        transcript_revision: "same",
         is_index_only: true,
       }),
     ];
     readProgress.baseline(
       "changed",
-      "h:old|m:2026-07-11T11:00:00Z",
+      "old",
       1,
     );
     readProgress.baseline(
       "same",
-      "h:same|m:2026-07-11T12:00:00Z",
+      "same",
       1,
     );
     vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);

@@ -53,8 +53,7 @@ export interface SessionGroupInput {
   termination_status?: string | null;
   message_count: number;
   user_message_count?: number;
-  file_hash?: string;
-  local_modified_at?: string;
+  transcript_revision?: string;
   is_automated?: boolean;
   is_teammate?: boolean;
   is_index_only?: boolean;
@@ -1324,8 +1323,7 @@ function sidebarIndexRowToSession(
     peak_context_tokens: 0,
     has_total_output_tokens: false,
     has_peak_context_tokens: false,
-    file_hash: row.file_hash,
-    local_modified_at: row.local_modified_at,
+    transcript_revision: row.transcript_revision,
     is_automated: row.is_automated,
     is_teammate: row.is_teammate ?? false,
     is_index_only: true,
@@ -1346,8 +1344,7 @@ function sidebarIndexRowToSession(
     parent_session_id: skinny.parent_session_id,
     relationship_type: skinny.relationship_type,
     termination_status: skinny.termination_status,
-    file_hash: skinny.file_hash,
-    local_modified_at: skinny.local_modified_at,
+    transcript_revision: skinny.transcript_revision,
     is_automated: skinny.is_automated,
     is_teammate: skinny.is_teammate ?? existing.is_teammate,
     is_index_only: false,

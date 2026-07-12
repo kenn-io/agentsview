@@ -16,7 +16,7 @@ const STORAGE_VERSION = 1;
 const DEFAULT_MAX_ENTRIES = 500;
 
 type TokenSource = {
-  file_hash?: string | null;
+  transcript_revision?: string | null;
   local_modified_at?: string | null;
 };
 
@@ -97,10 +97,7 @@ function readStoredMarkers(maxEntries: number): Record<string, ReadProgressMarke
 }
 
 export function buildReadProgressToken(source: TokenSource): string | null {
-  const fileHash = source.file_hash?.trim();
-  const localModifiedAt = source.local_modified_at?.trim();
-  if (!fileHash && !localModifiedAt) return null;
-  return `h:${fileHash ?? ""}|m:${localModifiedAt ?? ""}`;
+  return source.transcript_revision?.trim() || null;
 }
 
 export class ReadProgressStore {

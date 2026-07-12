@@ -2397,6 +2397,7 @@ func syncSession(id, project, first, ts string, messageCount int) db.Session {
 	startedAt := ts
 	endedAt := ts
 	localModifiedAt := ts
+	fileHash := "hash-" + id
 	return db.Session{
 		ID:                id,
 		Project:           project,
@@ -2407,6 +2408,7 @@ func syncSession(id, project, first, ts string, messageCount int) db.Session {
 		EndedAt:           &endedAt,
 		CreatedAt:         ts,
 		LocalModifiedAt:   &localModifiedAt,
+		FileHash:          &fileHash,
 		MessageCount:      messageCount,
 		UserMessageCount:  1,
 		RelationshipType:  "root",
