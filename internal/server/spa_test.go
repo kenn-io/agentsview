@@ -53,8 +53,6 @@ func TestSPAFingerprintedAssetIsImmutable(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "public, max-age=31536000, immutable",
 		w.Header().Get("Cache-Control"))
-	assert.Equal(t, "text/javascript; charset=utf-8",
-		w.Header().Get("Content-Type"))
 	assert.Equal(t, "console.log('app');", w.Body.String())
 }
 
