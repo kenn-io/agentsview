@@ -151,16 +151,34 @@ func TestRunPGRuntimeWarningHelperProcess(t *testing.T) {
 	) (string, error) {
 		return "", errors.New("forced runtime-record write failure")
 	}
-	pgServeTestStartup = func() {
-		writePGServeRuntimeRecord(&serveRuntime{
-			Cfg: config.Config{
-				DataDir: os.Getenv("AGENTSVIEW_DATA_DIR"),
-				Host:    "127.0.0.1",
-				Port:    8787,
-			},
-		})
+	database := dbtest.OpenTestDBAt(
+		t, filepath.Join(os.Getenv("AGENTSVIEW_DATA_DIR"), "pg.db"),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	port := server.FindAvailablePort("127.0.0.1", 0)
+	appCfg := config.Config{
+		Host:    "127.0.0.1",
+		Port:    port,
+		DataDir: os.Getenv("AGENTSVIEW_DATA_DIR"),
 	}
-	runPGServe(config.Config{DataDir: os.Getenv("AGENTSVIEW_DATA_DIR")}, "")
+	preparePGServe = func(config.Config, string) (pgServeStartup, error) {
+		return pgServeStartup{
+			cfg: appCfg, ctx: ctx,
+			rtOpts: serveRuntimeOptions{
+				Mode: "pg-serve", RequestedPort: appCfg.Port,
+			},
+			srv: server.New(
+				appCfg, database, nil,
+				server.WithBaseContext(ctx),
+			),
+			cleanup: func() { cancel(); _ = database.Close() },
+		}, nil
+	}
+	go func() {
+		time.Sleep(time.Second)
+		os.Exit(0)
+	}()
+	runPGServe(appCfg, "")
 }
 
 func TestRunDuckDBRuntimeWarningHelperProcess(t *testing.T) {

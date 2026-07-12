@@ -466,28 +466,27 @@ func loadPGServeConfig(cmd *cobra.Command) (config.Config, string, error) {
 	return cfg, basePath, nil
 }
 
-func runPGServe(appCfg config.Config, basePath string) {
-	setupLogFile(appCfg.DataDir)
-	if pgServeTestStartup != nil {
-		pgServeTestStartup()
-		return
-	}
-	if appCfg.RequireAuth {
-		if err := appCfg.EnsureAuthToken(); err != nil {
-			fatal("pg serve: generating auth token: %v", err)
-		}
-	}
+type pgServeStartup struct {
+	cfg     config.Config
+	ctx     context.Context
+	rtOpts  serveRuntimeOptions
+	srv     *server.Server
+	cleanup func()
+}
 
+var preparePGServe = preparePGServeImpl
+
+func preparePGServeImpl(appCfg config.Config, basePath string) (pgServeStartup, error) {
 	if err := validateServeConfig(appCfg); err != nil {
-		fatal("invalid serve config: %v", err)
+		return pgServeStartup{}, fmt.Errorf("invalid serve config: %w", err)
 	}
 
 	pgCfg, err := appCfg.ResolvePG()
 	if err != nil {
-		fatal("pg serve: %v", err)
+		return pgServeStartup{}, fmt.Errorf("pg serve: %w", err)
 	}
 	if pgCfg.URL == "" {
-		fatal("pg serve: url not configured")
+		return pgServeStartup{}, errors.New("pg serve: url not configured")
 	}
 
 	applyClassifierConfig(appCfg)
@@ -495,9 +494,9 @@ func runPGServe(appCfg config.Config, basePath string) {
 		pgCfg.URL, pgCfg.Schema, pgCfg.AllowInsecure,
 	)
 	if err != nil {
-		fatal("pg serve: %v", err)
+		return pgServeStartup{}, fmt.Errorf("pg serve: %w", err)
 	}
-	defer store.Close()
+	cleanupStore := func() { _ = store.Close() }
 
 	if len(appCfg.CustomModelPricing) > 0 {
 		store.SetCustomPricing(appCfg.CustomModelPricing)
@@ -507,37 +506,47 @@ func runPGServe(appCfg config.Config, basePath string) {
 		context.Background(),
 		os.Interrupt, syscall.SIGTERM,
 	)
-	defer stop()
+	cleanup := func() {
+		stop()
+		cleanupStore()
+	}
 
 	if err := postgres.EnsureSchema(
 		ctx, store.DB(), pgCfg.Schema,
 	); err != nil {
 		if !postgres.IsReadOnlyError(err) {
-			fatal("pg serve: schema migration failed: %v", err)
+			cleanup()
+			return pgServeStartup{}, fmt.Errorf(
+				"pg serve: schema migration failed: %w", err,
+			)
 		}
 	}
 
 	if err := postgres.CheckSchemaCompat(
 		ctx, store.DB(),
 	); err != nil {
-		fatal("pg serve: schema incompatible: %v\n"+
-			"Drop and recreate the PG schema, then run "+
-			"'agentsview pg push --full' to repopulate.", err)
+		cleanup()
+		return pgServeStartup{}, fmt.Errorf(
+			"pg serve: schema incompatible: %w\n"+
+				"Drop and recreate the PG schema, then run "+
+				"'agentsview pg push --full' to repopulate.",
+			err,
+		)
 	}
 	if err := postgres.CheckDataVersionCompat(
 		ctx, store.DB(),
 	); err != nil {
-		fatal("pg serve: %v", err)
+		cleanup()
+		return pgServeStartup{}, fmt.Errorf("pg serve: %w", err)
 	}
 	if err := wirePGVectorSearch(ctx, appCfg, store, "pg serve"); err != nil {
-		fatal("pg serve: %v", err)
+		cleanup()
+		return pgServeStartup{}, fmt.Errorf("pg serve: %w", err)
 	}
-	if err := store.DetectInsightGenerationAvailability(
-		ctx,
-	); err != nil {
-		fatal(
-			"pg serve: probing insight generation capability: %v",
-			err,
+	if err := store.DetectInsightGenerationAvailability(ctx); err != nil {
+		cleanup()
+		return pgServeStartup{}, fmt.Errorf(
+			"pg serve: probing insight generation capability: %w", err,
 		)
 	}
 
@@ -547,7 +556,8 @@ func runPGServe(appCfg config.Config, basePath string) {
 	}
 	appCfg, err = prepareServeRuntimeConfig(appCfg, rtOpts)
 	if err != nil {
-		fatal("pg serve: %v", err)
+		cleanup()
+		return pgServeStartup{}, fmt.Errorf("pg serve: %w", err)
 	}
 
 	opts := []server.Option{
@@ -564,7 +574,29 @@ func runPGServe(appCfg config.Config, basePath string) {
 	if basePath != "" {
 		opts = append(opts, server.WithBasePath(basePath))
 	}
-	srv := server.New(appCfg, store, nil, opts...)
+	return pgServeStartup{
+		cfg: appCfg, ctx: ctx, rtOpts: rtOpts,
+		srv: server.New(appCfg, store, nil, opts...), cleanup: cleanup,
+	}, nil
+}
+
+func runPGServe(appCfg config.Config, basePath string) {
+	setupLogFile(appCfg.DataDir)
+	if appCfg.RequireAuth {
+		if err := appCfg.EnsureAuthToken(); err != nil {
+			fatal("pg serve: generating auth token: %v", err)
+		}
+	}
+
+	startup, err := preparePGServe(appCfg, basePath)
+	if err != nil {
+		fatal("%v", err)
+	}
+	defer startup.cleanup()
+	appCfg = startup.cfg
+	ctx := startup.ctx
+	rtOpts := startup.rtOpts
+	srv := startup.srv
 
 	rt, err := startServerWithOptionalCaddy(
 		ctx,

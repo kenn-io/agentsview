@@ -9,7 +9,6 @@ import (
 var (
 	writeDaemonRuntimeWithAuthAndNoSync = WriteDaemonRuntimeWithAuthAndNoSync
 	writeDaemonRuntimeWithAuth          = WriteDaemonRuntimeWithAuth
-	pgServeTestStartup                  func()
 )
 
 func warnRuntimeRecordWrite(
