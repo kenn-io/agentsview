@@ -110,14 +110,70 @@ type messageDiffPlan struct {
 // full replace rather than failing the write.
 func (db *DB) planStoredMessageDiff(
 	sessionID string, msgs []Message,
-) (messageDiffPlan, bool) {
+) (messageDiffPlan, []Message, bool, bool) {
 	stored, err := db.GetAllMessages(
 		context.Background(), sessionID,
 	)
 	if err != nil {
-		return messageDiffPlan{}, false
+		return messageDiffPlan{}, nil, false, false
 	}
-	return planSessionMessageDiff(stored, msgs)
+	plan, useDiff := planSessionMessageDiff(stored, msgs)
+	return plan, stored, useDiff, true
+}
+
+func transcriptMessagesEqual(stored, incoming []Message) bool {
+	if len(stored) != len(incoming) {
+		return false
+	}
+	byOrdinal := make(map[int]Message, len(stored))
+	for _, msg := range stored {
+		if _, exists := byOrdinal[msg.Ordinal]; exists {
+			return false
+		}
+		byOrdinal[msg.Ordinal] = msg
+	}
+	seen := make(map[int]bool, len(incoming))
+	for _, msg := range incoming {
+		if seen[msg.Ordinal] {
+			return false
+		}
+		seen[msg.Ordinal] = true
+		old, exists := byOrdinal[msg.Ordinal]
+		if !exists || !transcriptMessageEqual(old, msg) {
+			return false
+		}
+	}
+	return true
+}
+
+func transcriptMessageEqual(a, b Message) bool {
+	comparableTranscriptMessage := func(msg Message) Message {
+		msg.ID = 0
+		msg.ContentLength = 0
+		msg.TokenUsage = nil
+		msg.ClaudeMessageID = ""
+		msg.ClaudeRequestID = ""
+		msg.SourceType = ""
+		msg.SourceUUID = ""
+		msg.SourceParentUUID = ""
+		msg.IsSidechain = false
+		msg.ToolCalls = append([]ToolCall(nil), msg.ToolCalls...)
+		for i := range msg.ToolCalls {
+			msg.ToolCalls[i].ResultContentLength = 0
+			msg.ToolCalls[i].ResultEvents = append(
+				[]ToolResultEvent(nil),
+				msg.ToolCalls[i].ResultEvents...,
+			)
+			for j := range msg.ToolCalls[i].ResultEvents {
+				msg.ToolCalls[i].ResultEvents[j].ContentLength = 0
+			}
+		}
+		return msg
+	}
+	return messageRowEqual(
+		comparableTranscriptMessage(a),
+		comparableTranscriptMessage(b),
+	)
 }
 
 // planSessionMessageDiff classifies incoming messages against stored

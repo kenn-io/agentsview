@@ -1106,7 +1106,11 @@ func (db *DB) ReplaceSessionMessages(
 	// syncs) so unchanged rows keep their rowids, pins, and FTS
 	// entries; fall back to the full delete+reinsert for
 	// truncations, reorders, and wholesale rewrites.
-	plan, useDiff := db.planStoredMessageDiff(sessionID, msgs)
+	plan, stored, useDiff, storedLoaded := db.planStoredMessageDiff(
+		sessionID, msgs,
+	)
+	transcriptChanged := !storedLoaded ||
+		!transcriptMessagesEqual(stored, msgs)
 
 	tx, err := db.getWriter().Begin()
 	if err != nil {
@@ -1122,7 +1126,7 @@ func (db *DB) ReplaceSessionMessages(
 	} else if err := replaceSessionMessagesTx(tx, sessionID, msgs); err != nil {
 		return err
 	}
-	if !useDiff || len(plan.updates) > 0 || len(plan.inserts) > 0 {
+	if transcriptChanged {
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 			return err
 		}
@@ -1302,7 +1306,11 @@ func (db *DB) ReplaceSessionContent(
 
 	// Same diff-vs-full decision as ReplaceSessionMessages: this is
 	// the hot path for streaming chunk-merge full-parse fallbacks.
-	plan, useDiff := db.planStoredMessageDiff(sessionID, msgs)
+	plan, stored, useDiff, storedLoaded := db.planStoredMessageDiff(
+		sessionID, msgs,
+	)
+	transcriptChanged := !storedLoaded ||
+		!transcriptMessagesEqual(stored, msgs)
 
 	tx, err := db.getWriter().Begin()
 	if err != nil {
@@ -1318,7 +1326,7 @@ func (db *DB) ReplaceSessionContent(
 	} else if err := replaceSessionMessagesTx(tx, sessionID, msgs); err != nil {
 		return err
 	}
-	if !useDiff || len(plan.updates) > 0 || len(plan.inserts) > 0 {
+	if transcriptChanged {
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 			return err
 		}
