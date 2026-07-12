@@ -633,6 +633,17 @@ func TestWriteSessionBatchReplaceMessagesOnlyBumpsChangedTranscript(t *testing.T
 	require.NotNil(t, unchanged.TranscriptRevision)
 	assert.Equal(t, "7", *unchanged.TranscriptRevision)
 
+	write.Messages[0].ContentLength = 999
+	write.Messages[0].ToolCalls[0].ResultContentLength = 999
+	write.Messages[0].ToolCalls[0].ResultEvents[0].ContentLength = 999
+	_, err = d.WriteSessionBatch([]SessionBatchWrite{write})
+	require.NoError(t, err)
+	recalculated, err := d.GetSession(context.Background(), sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, recalculated)
+	require.NotNil(t, recalculated.TranscriptRevision)
+	assert.Equal(t, "7", *recalculated.TranscriptRevision)
+
 	write.Messages[0].ToolCalls[0].ResultContent = "changed result"
 	_, err = d.WriteSessionBatch([]SessionBatchWrite{write})
 	require.NoError(t, err)

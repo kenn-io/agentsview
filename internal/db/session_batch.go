@@ -501,8 +501,9 @@ func transcriptMessagesEqual(stored, incoming []Message) bool {
 }
 
 func transcriptMessageEqual(a, b Message) bool {
-	stripSourceBookkeeping := func(msg Message) Message {
+	comparableTranscriptMessage := func(msg Message) Message {
 		msg.ID = 0
+		msg.ContentLength = 0
 		msg.TokenUsage = nil
 		msg.ClaudeMessageID = ""
 		msg.ClaudeRequestID = ""
@@ -510,11 +511,22 @@ func transcriptMessageEqual(a, b Message) bool {
 		msg.SourceUUID = ""
 		msg.SourceParentUUID = ""
 		msg.IsSidechain = false
+		msg.ToolCalls = append([]ToolCall(nil), msg.ToolCalls...)
+		for i := range msg.ToolCalls {
+			msg.ToolCalls[i].ResultContentLength = 0
+			msg.ToolCalls[i].ResultEvents = append(
+				[]ToolResultEvent(nil),
+				msg.ToolCalls[i].ResultEvents...,
+			)
+			for j := range msg.ToolCalls[i].ResultEvents {
+				msg.ToolCalls[i].ResultEvents[j].ContentLength = 0
+			}
+		}
 		return msg
 	}
 	return messageRowEqual(
-		stripSourceBookkeeping(a),
-		stripSourceBookkeeping(b),
+		comparableTranscriptMessage(a),
+		comparableTranscriptMessage(b),
 	)
 }
 
