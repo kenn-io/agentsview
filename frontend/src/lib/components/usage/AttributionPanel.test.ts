@@ -325,9 +325,11 @@ describe("AttributionPanel branch mode", () => {
     const component = mount(AttributionPanel, { target: document.body });
     await tick();
 
+    // Neutral toggle copy: once a row is selected, clicking it clears
+    // the filter, so the hint must not promise only "filter".
     expect(
       document.querySelector(".hint")?.textContent?.trim(),
-    ).toBe("Click to filter the chart");
+    ).toBe("Click to add or remove filters");
 
     const row = Array.from(
       document.querySelectorAll<HTMLDivElement>(".list-row"),
@@ -348,6 +350,96 @@ describe("AttributionPanel branch mode", () => {
     ).find((r) => r.textContent?.includes("alpha/dev"));
     expect(row?.getAttribute("title")).toBe(
       "Click to clear the alpha/dev filter",
+    );
+    unmount(component);
+  });
+
+  it("passes filter copy to treemap tile titles and aria labels", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    usage.toggles.attribution.view = "treemap";
+    usage.selectedGitBranch = branchFilterToken("alpha", "dev");
+    const component = mount(AttributionPanel, { target: document.body });
+    await tick();
+
+    const titles = Array.from(
+      document.querySelectorAll("g.tile title"),
+    ).map((t) => t.textContent);
+    expect(titles).toContain("Click to filter by alpha/main");
+    expect(titles).toContain("Click to clear the alpha/dev filter");
+
+    const ariaLabels = Array.from(
+      document.querySelectorAll("g.tile"),
+    ).map((g) => g.getAttribute("aria-label"));
+    expect(ariaLabels).toContain("Filter by alpha/main");
+    expect(ariaLabels).toContain("Clear the alpha/dev filter");
+
+    unmount(component);
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("AttributionPanel model mode", () => {
+  beforeEach(() => {
+    const summary = summaryWithAgents([]);
+    summary.modelTotals = [
+      {
+        model: "claude-sonnet-5",
+        inputTokens: 60,
+        outputTokens: 30,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        cost: 8,
+      },
+      {
+        model: "gpt-4o",
+        inputTokens: 40,
+        outputTokens: 20,
+        cacheCreationTokens: 0,
+        cacheReadTokens: 0,
+        cost: 4,
+      },
+    ];
+    usage.summary = summary;
+    usage.toggles.attribution.groupBy = "model";
+    usage.toggles.attribution.view = "list";
+  });
+
+  afterEach(() => {
+    usage.summary = null;
+    usage.toggles.attribution.groupBy = "project";
+    usage.selectedModels = "";
+    document.body.innerHTML = "";
+  });
+
+  // Model selection is include-based like branches, so model rows must
+  // advertise filtering, and a selected row must advertise clearing.
+  it("describes model rows as filter actions with selected-state copy", async () => {
+    usage.selectedModels = "gpt-4o";
+    const component = mount(AttributionPanel, { target: document.body });
+    await tick();
+
+    expect(
+      document.querySelector(".hint")?.textContent?.trim(),
+    ).toBe("Click to add or remove filters");
+
+    const rows = Array.from(
+      document.querySelectorAll<HTMLDivElement>(".list-row"),
+    );
+    const unselected = rows.find((r) =>
+      r.textContent?.includes("claude-sonnet-5"),
+    );
+    const selected = rows.find((r) => r.textContent?.includes("gpt-4o"));
+    expect(unselected?.getAttribute("title")).toBe(
+      "Click to filter by claude-sonnet-5",
+    );
+    expect(selected?.getAttribute("title")).toBe(
+      "Click to clear the gpt-4o filter",
     );
     unmount(component);
   });

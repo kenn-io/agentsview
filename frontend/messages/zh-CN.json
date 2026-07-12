@@ -833,7 +833,7 @@
   "usage_click_to_hide_hint": "点击可从图表隐藏",
   "usage_click_to_hide": "点击隐藏 {label}",
   "usage_hide_from_chart": "从图表隐藏 {label}",
-  "usage_click_to_filter_hint": "点击可筛选图表",
+  "usage_click_to_filter_hint": "点击可添加或移除筛选",
   "usage_click_to_filter": "点击按 {label} 筛选",
   "usage_click_to_clear_filter": "点击清除 {label} 筛选",
   "usage_filter_to_item": "按 {label} 筛选",

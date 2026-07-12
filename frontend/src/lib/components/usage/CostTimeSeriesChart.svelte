@@ -95,8 +95,15 @@
       }
     }
 
-    // If only one key or few keys, no need for "Other".
     if (totals.size === 0) {
+      // Branch attribution deliberately omits unattributable cost
+      // (e.g. imported Cursor usage carries no branch), so falling
+      // back to the day totals would present that cost as a series
+      // the branch views elsewhere say does not exist. Show the
+      // empty state instead, matching the attribution panel.
+      if (groupBy === "branch") {
+        return { points: [], keys: [], maxY: 0, labels: {} };
+      }
       const points = daily.map((d) => ({
         date: d.date,
         values: { total: d.totalCost },

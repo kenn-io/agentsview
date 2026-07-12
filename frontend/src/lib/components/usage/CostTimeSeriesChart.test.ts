@@ -313,4 +313,43 @@ describe("CostTimeSeriesChart", () => {
     expect(dots.at(-1)!.style.background).toBe("var(--text-muted)");
     unmount(component);
   });
+
+  // Unattributable cost (e.g. imported Cursor usage) carries no branch,
+  // so branch grouping must show the empty state rather than a "total"
+  // series the branch attribution panel says does not exist.
+  it("shows the empty state in branch mode when no cost is branch-attributable", async () => {
+    const summary = usageSummary();
+    for (const day of summary.daily) {
+      day.branchBreakdowns = [];
+    }
+    usage.summary = summary;
+    usage.toggles.timeSeries.groupBy = "branch";
+
+    const component = mount(CostTimeSeriesChart, {
+      target: document.body,
+    });
+    await tick();
+
+    expect(document.querySelector(".empty")).toBeTruthy();
+    expect(document.querySelector("svg.chart-svg")).toBeNull();
+    unmount(component);
+  });
+
+  it("keeps the total fallback for non-branch groupings without breakdowns", async () => {
+    const summary = usageSummary();
+    for (const day of summary.daily) {
+      day.projectBreakdowns = [];
+    }
+    usage.summary = summary;
+    usage.toggles.timeSeries.groupBy = "project";
+
+    const component = mount(CostTimeSeriesChart, {
+      target: document.body,
+    });
+    await tick();
+
+    expect(document.querySelector(".empty")).toBeNull();
+    expect(document.querySelector("svg.chart-svg")).toBeTruthy();
+    unmount(component);
+  });
 });

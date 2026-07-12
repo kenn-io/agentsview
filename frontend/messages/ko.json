@@ -839,7 +839,7 @@
   "usage_click_to_hide_hint": "클릭하여 차트에서 숨기기",
   "usage_click_to_hide": "{label} 숨기기",
   "usage_hide_from_chart": "{label}을(를) 차트에서 숨기기",
-  "usage_click_to_filter_hint": "클릭하여 차트 필터링",
+  "usage_click_to_filter_hint": "클릭하여 필터 추가 또는 제거",
   "usage_click_to_filter": "클릭하여 {label}(으)로 필터링",
   "usage_click_to_clear_filter": "클릭하여 {label} 필터 해제",
   "usage_filter_to_item": "{label}(으)로 필터링",

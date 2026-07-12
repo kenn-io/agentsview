@@ -860,7 +860,7 @@
   "usage_click_to_hide_hint": "Click to hide from chart",
   "usage_click_to_hide": "Click to hide {label}",
   "usage_hide_from_chart": "Hide {label} from chart",
-  "usage_click_to_filter_hint": "Click to filter the chart",
+  "usage_click_to_filter_hint": "Click to add or remove filters",
   "usage_click_to_filter": "Click to filter by {label}",
   "usage_click_to_clear_filter": "Click to clear the {label} filter",
   "usage_filter_to_item": "Filter by {label}",

@@ -91,6 +91,29 @@ func TestGetDailyUsageGitBranchFilter(t *testing.T) {
 		"usage filter uses scoped (project, branch), not branch name alone")
 }
 
+// API contract: a git_branch value whose tokens all lack the pair
+// separator decodes to an empty pair set and fails closed to zero rows.
+// The frontend relies on this by sending a deliberately separator-less
+// token when the sidebar branch filter and the usage page's local
+// selection have no overlap, so the disjoint filters must yield an
+// empty result rather than an error or unfiltered totals.
+func TestGetDailyUsageMalformedGitBranchTokenFailsClosed(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	seedBranchUsageFixture(t, d)
+
+	daily, err := d.GetDailyUsage(ctx, UsageFilter{
+		From:      "2026-05-14",
+		To:        "2026-05-14",
+		GitBranch: "__agentsview_no_branch_match__",
+	})
+	require.NoError(t, err, "GetDailyUsage")
+	assert.Empty(t, daily.Daily,
+		"separator-less branch token must fail closed, not broaden")
+	assert.Zero(t, daily.Totals.InputTokens)
+	assert.Zero(t, daily.Totals.TotalCost)
+}
+
 func TestGetDailyUsageExcludeGitBranchFilter(t *testing.T) {
 	tests := []struct {
 		name             string
