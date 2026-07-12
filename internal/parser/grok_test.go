@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -197,6 +198,7 @@ func TestGrokProviderParsesChatHistoryTranscript(t *testing.T) {
 	assert.Equal(t, "call-1", result.Messages[1].ToolCalls[0].ToolUseID)
 	assert.Equal(t, "read_file", result.Messages[1].ToolCalls[0].ToolName)
 	assert.Equal(t, "Read", result.Messages[1].ToolCalls[0].Category)
+	assert.JSONEq(t, `{"target_file":"SKILL.md"}`, result.Messages[1].ToolCalls[0].InputJSON)
 	assert.Equal(t, "grok-4.5", result.Messages[1].Model)
 
 	assert.Equal(t, RoleUser, result.Messages[2].Role)
@@ -209,6 +211,91 @@ func TestGrokProviderParsesChatHistoryTranscript(t *testing.T) {
 
 	assert.Equal(t, RoleUser, result.Messages[4].Role)
 	assert.Equal(t, "fix the issues", result.Messages[4].Content)
+}
+
+func TestGrokProviderUnwrapsOpenAIStyleToolArguments(t *testing.T) {
+	// OpenAI-style tool calls nest name/arguments under "function" and encode
+	// arguments as a JSON string. InputJSON must be the decoded object so
+	// path extraction and skill inference can read fields.
+	root := t.TempDir()
+	sessionID := "sess-openai-tools"
+	writeGrokFixtureFile(t, grokSummaryPath(root, "cwd-key", sessionID), `{
+		"info": {"id": "sess-openai-tools", "cwd": "/tmp/proj"},
+		"session_summary": "tool args",
+		"created_at": "2026-07-12T04:00:00Z",
+		"updated_at": "2026-07-12T04:01:00Z"
+	}`)
+	writeGrokFixtureFile(t, filepath.Join(root, "cwd-key", sessionID, "chat_history.jsonl"), strings.Join([]string{
+		`{"type":"user","content":"read the skill"}`,
+		`{"type":"assistant","content":"","tool_calls":[{"id":"call-fn","type":"function","function":{"name":"read_file","arguments":"{\"target_file\":\"SKILL.md\",\"offset\":10}"}}],"model_id":"grok-4.5"}`,
+	}, "\n")+"\n")
+
+	provider := newGrokTestProvider(t, root)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+
+	msgs := outcome.Results[0].Result.Messages
+	require.Len(t, msgs, 2)
+	require.Len(t, msgs[1].ToolCalls, 1)
+	tc := msgs[1].ToolCalls[0]
+	assert.Equal(t, "call-fn", tc.ToolUseID)
+	assert.Equal(t, "read_file", tc.ToolName)
+	assert.Equal(t, "Read", tc.Category)
+	assert.JSONEq(t, `{"target_file":"SKILL.md","offset":10}`, tc.InputJSON)
+	// Must not retain the outer JSON-string quotes.
+	assert.NotContains(t, tc.InputJSON, `\"target_file\"`)
+	assert.False(t, strings.HasPrefix(strings.TrimSpace(tc.InputJSON), `"`))
+}
+
+func TestGrokProviderKeepsUserPromptBesideMetadata(t *testing.T) {
+	// Mixed context-injection + real prompt must keep the prompt instead of
+	// dropping the whole user turn when any meta marker is present.
+	root := t.TempDir()
+	sessionID := "sess-mixed-meta"
+	writeGrokFixtureFile(t, grokSummaryPath(root, "cwd-key", sessionID), `{
+		"info": {"id": "sess-mixed-meta", "cwd": "/tmp/proj"},
+		"session_summary": "mixed meta",
+		"created_at": "2026-07-12T04:00:00Z",
+		"updated_at": "2026-07-12T04:01:00Z"
+	}`)
+	mixed := `<user_info>
+OS Version: macos
+</user_info>
+<git_status>
+## main
+</git_status>
+
+Please fix the flaky test in grok_test.go`
+	// Escape for JSON string embedding.
+	mixedJSON, err := json.Marshal(mixed)
+	require.NoError(t, err)
+	writeGrokFixtureFile(t, filepath.Join(root, "cwd-key", sessionID, "chat_history.jsonl"), strings.Join([]string{
+		`{"type":"user","content":` + string(mixedJSON) + `}`,
+		`{"type":"user","content":[{"type":"text","text":"<system-reminder>skills loaded</system-reminder>\n\nrun the suite"}]}`,
+		`{"type":"user","content":[{"type":"text","text":"<user_info>\nOS Version: macos\n</user_info>"}]}`,
+	}, "\n")+"\n")
+
+	provider := newGrokTestProvider(t, root)
+	sources, err := provider.Discover(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+
+	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+
+	result := outcome.Results[0].Result
+	// Meta-only third message is dropped; two real prompts remain.
+	require.Len(t, result.Messages, 2)
+	assert.Equal(t, 2, result.Session.UserMessageCount)
+	assert.Equal(t, "Please fix the flaky test in grok_test.go", result.Messages[0].Content)
+	assert.Equal(t, "run the suite", result.Messages[1].Content)
+	assert.Equal(t, "Please fix the flaky test in grok_test.go", result.Session.FirstMessage)
 }
 
 func TestGrokProviderFindSource(t *testing.T) {

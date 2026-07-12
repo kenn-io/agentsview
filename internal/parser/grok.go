@@ -346,31 +346,46 @@ func grokUserContent(content gjson.Result) string {
 	if strings.Contains(text, "<user_query>") {
 		return extractUserQuery(strings.Split(text, "\n"))
 	}
-	// Drop pure context injections that never contain a user query.
-	if grokIsMetaUserContent(text) {
-		return ""
-	}
-	return text
+	// Strip injected context blocks; keep any remaining real prompt text.
+	// Meta-only payloads collapse to empty and are skipped by the caller.
+	return grokStripMetaUserBlocks(text)
 }
 
-func grokIsMetaUserContent(text string) bool {
-	trimmed := strings.TrimSpace(text)
-	if trimmed == "" {
-		return true
+// grokStripMetaUserBlocks removes recognized Grok context-injection blocks
+// (user_info, git_status, system-reminder, agent_skills, mcp_servers) while
+// preserving any surrounding user text. Mixed payloads therefore keep the
+// real prompt instead of being discarded wholesale.
+func grokStripMetaUserBlocks(text string) string {
+	for _, tag := range []string{
+		"user_info",
+		"git_status",
+		"system-reminder",
+		"agent_skills",
+		"mcp_servers",
+	} {
+		text = grokStripXMLTagBlock(text, tag)
 	}
-	metaMarkers := []string{
-		"<user_info>",
-		"<git_status>",
-		"<system-reminder>",
-		"<agent_skills>",
-		"<mcp_servers>",
-	}
-	for _, marker := range metaMarkers {
-		if strings.Contains(trimmed, marker) {
-			return true
+	return strings.TrimSpace(text)
+}
+
+// grokStripXMLTagBlock removes every <tag>...</tag> span from text. An
+// unclosed opening tag drops the remainder of the string from that point.
+func grokStripXMLTagBlock(text, tag string) string {
+	open := "<" + tag + ">"
+	close := "</" + tag + ">"
+	for {
+		start := strings.Index(text, open)
+		if start < 0 {
+			return text
 		}
+		rest := text[start+len(open):]
+		endRel := strings.Index(rest, close)
+		if endRel < 0 {
+			return strings.TrimSpace(text[:start])
+		}
+		end := start + len(open) + endRel + len(close)
+		text = text[:start] + text[end:]
 	}
-	return false
 }
 
 func grokReasoningText(root gjson.Result) string {
@@ -403,17 +418,7 @@ func grokToolCalls(arr gjson.Result) []ParsedToolCall {
 		if name == "" {
 			return true
 		}
-		inputJSON := firstNonEmptyJSONLString(
-			tc.Get("arguments").Raw,
-			tc.Get("arguments").Str,
-			tc.Get("function.arguments").Raw,
-			tc.Get("function.arguments").Str,
-			tc.Get("input").Raw,
-		)
-		// arguments may already be a JSON string value; normalize to object JSON.
-		if args := tc.Get("arguments"); args.Type == gjson.String && gjson.Valid(args.Str) {
-			inputJSON = args.Str
-		}
+		inputJSON := grokToolCallInputJSON(tc)
 		out = append(out, ParsedToolCall{
 			ToolUseID: firstNonEmptyJSONLString(tc.Get("id").Str, tc.Get("tool_call_id").Str),
 			ToolName:  name,
@@ -424,6 +429,26 @@ func grokToolCalls(arr gjson.Result) []ParsedToolCall {
 		return true
 	})
 	return out
+}
+
+// grokToolCallInputJSON picks the first present arguments field and normalizes
+// JSON-encoded string values (OpenAI-style function.arguments) to the raw
+// object JSON so path extraction and skill inference can read them.
+func grokToolCallInputJSON(tc gjson.Result) string {
+	for _, path := range []string{"arguments", "function.arguments", "input"} {
+		args := tc.Get(path)
+		if !args.Exists() {
+			continue
+		}
+		if args.Type == gjson.String {
+			// Unwrap JSON-encoded strings (OpenAI-style); plain text stays as-is.
+			return args.Str
+		}
+		if raw := args.Raw; raw != "" && raw != "null" {
+			return raw
+		}
+	}
+	return ""
 }
 
 func decodeGrokSummary(data []byte) grokSummaryFields {
