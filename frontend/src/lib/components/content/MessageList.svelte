@@ -250,7 +250,6 @@
     if (maxVisibleOrdinal === null || latestLoadedOrdinal === null) return;
 
     const rawUnreadBoundary = unreadBoundaryOrdinal(
-      marker,
       latestLoadedOrdinal,
     );
     const unreadBoundary = displayedOrdinals.find((ordinal) =>
@@ -334,16 +333,11 @@
   );
 
   function unreadBoundaryOrdinal(
-    marker: { ordinal: number | null },
     latestOrdinal: number,
   ): number {
     const explicit = messages.activeSessionUnreadOrdinal;
     const earliestOrdinal = baseMessages[0]?.ordinal ?? latestOrdinal;
-    const boundary = explicit !== null
-      ? explicit
-      : marker.ordinal === null || marker.ordinal >= latestOrdinal
-        ? earliestOrdinal
-        : marker.ordinal + 1;
+    const boundary = explicit ?? earliestOrdinal;
     return baseMessages.find((message) =>
       message.ordinal >= boundary
     )?.ordinal ?? latestOrdinal;
@@ -795,23 +789,15 @@
       return null;
     }
 
-    const unreadBoundary = unreadBoundaryOrdinal(
-      marker,
-      latestOrdinal,
-    );
+    const unreadBoundary = unreadBoundaryOrdinal(latestOrdinal);
 
     const items = ui.sortNewestFirst
       ? [...displayItemsAsc].reverse()
       : displayItemsAsc;
 
     if (ui.sortNewestFirst) {
-      const inferredAppendBoundary =
-        messages.activeSessionUnreadOrdinal === null &&
-        marker.ordinal !== null &&
-        marker.ordinal < latestOrdinal;
       const dividerBoundary = marker.ordinal !== null &&
-          (inferredAppendBoundary ||
-            unreadBoundary === marker.ordinal + 1)
+          unreadBoundary === marker.ordinal + 1
         ? marker.ordinal
         : unreadBoundary;
       for (const item of items) {

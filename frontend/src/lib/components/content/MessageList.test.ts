@@ -193,7 +193,7 @@ describe("MessageList follow cancellation", () => {
     });
   });
 
-  it("renders the unread divider before the first unread message", async () => {
+  it("renders an unknown revision divider at the earliest message", async () => {
     messages.messages = [
       makeMessage(0),
       makeMessage(1),
@@ -212,10 +212,10 @@ describe("MessageList follow cancellation", () => {
     expect(divider?.textContent).toContain("New messages");
     expect(
       divider?.closest(".virtual-row")?.getAttribute("data-index"),
-    ).toBe("2");
+    ).toBe("0");
   });
 
-  it("keeps the newest-first divider on the first already-read row", async () => {
+  it("places an unknown newest-first divider after unread history", async () => {
     messages.messages = [
       makeMessage(0),
       makeMessage(1),
@@ -235,7 +235,7 @@ describe("MessageList follow cancellation", () => {
     expect(divider?.textContent).toContain("Earlier messages");
     expect(
       divider?.closest(".virtual-row")?.getAttribute("data-index"),
-    ).toBe("2");
+    ).toBe("3");
   });
 
   it("does not mark newest-first updates read while only older rows are visible", async () => {
@@ -262,7 +262,7 @@ describe("MessageList follow cancellation", () => {
     expect(readProgress.get("s1")?.token).toBe("previous");
   });
 
-  it("requires the newest unread endpoint before acknowledging a direct boundary jump", async () => {
+  it("requires conservative unread endpoints after a direct boundary jump", async () => {
     messages.messages = [
       makeMessage(0),
       makeMessage(1),
@@ -286,6 +286,7 @@ describe("MessageList follow cancellation", () => {
 
     virtualizerMock.getVirtualItems.mockReturnValue([
       { index: 0, key: "row-0", start: 0, end: 100 },
+      { index: 4, key: "row-4", start: 100, end: 200 },
     ]);
     document.querySelector<HTMLElement>(".message-list-scroll")
       ?.dispatchEvent(new Event("scroll"));
@@ -325,8 +326,8 @@ describe("MessageList follow cancellation", () => {
 
   it("acknowledges traversal when a block filter hides the raw boundary", async () => {
     messages.messages = [
-      { ...makeMessage(0), role: "user" },
-      { ...makeMessage(1), role: "assistant" },
+      { ...makeMessage(0), role: "assistant" },
+      { ...makeMessage(1), role: "user" },
       { ...makeMessage(2), role: "user" },
     ];
     messages.messageCount = 3;
@@ -351,9 +352,7 @@ describe("MessageList follow cancellation", () => {
     messages.messageCount = 3;
     messages.activeSessionToken = "current";
     ui.sortNewestFirst = true;
-    virtualizerMock.getVirtualItems.mockReturnValue([
-      { index: 0, key: "row-0", start: 0, end: 100 },
-    ]);
+    setVirtualRows(2);
     readProgress.baseline("s1", "previous", 0);
 
     component = mount(MessageList, { target: document.body });
@@ -404,6 +403,38 @@ describe("MessageList follow cancellation", () => {
 
     virtualizerMock.getVirtualItems.mockReturnValue([
       { index: 2, key: "row-2", start: 0, end: 100 },
+    ]);
+    document.querySelector<HTMLElement>(".message-list-scroll")
+      ?.dispatchEvent(new Event("scroll"));
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+
+    expect(readProgress.get("s1")?.token).toBe("current");
+  });
+
+  it("conservatively traverses history when a reopened revision also appends", async () => {
+    messages.messages = [
+      makeMessage(0),
+      makeMessage(1),
+      makeMessage(2),
+      makeMessage(3),
+    ];
+    messages.messageCount = 4;
+    messages.activeSessionToken = "current";
+    messages.activeSessionUnreadOrdinal = null;
+    ui.sortNewestFirst = true;
+    virtualizerMock.getVirtualItems.mockReturnValue([
+      { index: 0, key: "row-0", start: 0, end: 100 },
+    ]);
+    readProgress.baseline("s1", "previous", 2);
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+
+    expect(readProgress.get("s1")?.token).toBe("previous");
+
+    virtualizerMock.getVirtualItems.mockReturnValue([
+      { index: 3, key: "row-3", start: 0, end: 100 },
     ]);
     document.querySelector<HTMLElement>(".message-list-scroll")
       ?.dispatchEvent(new Event("scroll"));
