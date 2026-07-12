@@ -104,7 +104,13 @@ func (c *usageProbeConn) QueryContext(
 			}},
 		}, nil
 	}
-	if strings.Contains(normalized, "from project_identity_observations") {
+	if strings.Contains(normalized, "from source_archives") {
+		return &usageProbeRows{
+			columns: []string{"source_archive_id", "source_archive_salt"},
+			values:  [][]driver.Value{{"probe-archive", "probe-salt"}},
+		}, nil
+	}
+	if strings.Contains(normalized, "from source_project_identity_observations") {
 		return &usageProbeRows{
 			columns: []string{
 				"project",
@@ -228,9 +234,14 @@ func TestPGGetDailyUsageReturnsDedupedSessionCounts(t *testing.T) {
 	require.NoError(t, err, "GetDailyUsage")
 
 	assert.Equal(t, 1, result.SessionCounts.Total)
-	assert.Equal(t, 1, result.SessionCounts.ByProject["proj-a"])
+	countsByDisplay := make(map[string]int, len(result.Projects))
+	for key, project := range result.Projects {
+		countsByDisplay[project.DisplayLabel] = result.SessionCounts.ByProject[key]
+		assert.NotContains(t, key, project.DisplayLabel)
+	}
+	assert.Equal(t, map[string]int{"proj-a": 1}, countsByDisplay)
 	assert.Equal(t, 1, result.SessionCounts.ByAgent["claude"])
-	assert.Zero(t, result.SessionCounts.ByProject["proj-b"])
+	assert.NotContains(t, countsByDisplay, "proj-b")
 	assert.Zero(t, result.SessionCounts.ByAgent["codex"])
 }
 

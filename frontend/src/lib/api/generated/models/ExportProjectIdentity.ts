@@ -4,9 +4,8 @@
 /* eslint-disable */
 export type ExportProjectIdentity = {
   key: string;
-  key_source: string;
-  machine_local?: boolean;
+  kind: string;
   normalized_remote?: string;
-  root_path?: string;
+  repository_key: string;
+  root_key?: string;
 };
-

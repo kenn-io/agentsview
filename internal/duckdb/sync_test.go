@@ -70,6 +70,10 @@ func TestSyncPushContinuesAfterSessionError(t *testing.T) {
 			},
 			DataVersion:     1,
 			ReplaceMessages: true,
+			IdentityObservation: export.ProjectIdentityObservation{
+				SessionID: "duck-bad", Project: "alpha", Machine: "local",
+				RootPath: "/repo/alpha", ObservedAt: time.Now().UTC(),
+			},
 		},
 		{
 			Session: syncSession(
@@ -84,6 +88,10 @@ func TestSyncPushContinuesAfterSessionError(t *testing.T) {
 			},
 			DataVersion:     1,
 			ReplaceMessages: true,
+			IdentityObservation: export.ProjectIdentityObservation{
+				SessionID: "duck-good", Project: "alpha", Machine: "local",
+				RootPath: "/repo/alpha", ObservedAt: time.Now().UTC(),
+			},
 		},
 	})
 	require.NoError(t, err)
@@ -101,6 +109,8 @@ func TestSyncPushContinuesAfterSessionError(t *testing.T) {
 	assertDuckDBCountWhere(t, syncer.DB(), "sessions", "id = ?", "duck-good", 1)
 	assertDuckDBCountWhere(t, syncer.DB(), "sessions", "id = ?", "duck-bad", 0)
 	assertDuckDBCountWhere(t, syncer.DB(), "messages", "session_id = ?", "duck-good", 1)
+	assertDuckDBCount(t, syncer.DB(), "source_project_identity_observations", 0)
+	assertDuckDBCount(t, syncer.DB(), "source_session_project_identity_snapshots", 0)
 	require.NotEmpty(t, progress)
 	last := progress[len(progress)-1]
 	assert.Equal(t, 2, last.SessionsDone)
@@ -1332,7 +1342,7 @@ func TestSyncScrubsLegacyProjectIdentityGitRemoteCredentials(t *testing.T) {
 	)
 	require.NoError(t, err)
 	_, err = legacy.DB().ExecContext(ctx, `
-		INSERT INTO project_identity_observations (
+		INSERT INTO source_project_identity_observations (
 			project, machine, root_path, git_remote, git_remote_name,
 			worktree_name, worktree_root_path, observed_at,
 			normalized_remote, key_source, key
@@ -1342,7 +1352,7 @@ func TestSyncScrubsLegacyProjectIdentityGitRemoteCredentials(t *testing.T) {
 	)
 	require.NoError(t, err)
 	_, err = legacy.DB().ExecContext(ctx, `
-		INSERT INTO project_identity_observations (
+		INSERT INTO source_project_identity_observations (
 			project, machine, root_path, git_remote, git_remote_name,
 			worktree_name, worktree_root_path, observed_at,
 			normalized_remote, key_source, key
@@ -1361,8 +1371,9 @@ func TestSyncScrubsLegacyProjectIdentityGitRemoteCredentials(t *testing.T) {
 	var remotes []string
 	rows, err := syncer.DB().QueryContext(ctx, `
 		SELECT git_remote
-		FROM project_identity_observations
-		WHERE project = ? AND machine = ? AND root_path = ?
+		FROM source_project_identity_observations
+		WHERE source_archive_id != ''
+		  AND project = ? AND machine = ? AND root_path = ?
 		ORDER BY git_remote`,
 		"alpha", "laptop", "/tmp/app",
 	)
@@ -1375,6 +1386,234 @@ func TestSyncScrubsLegacyProjectIdentityGitRemoteCredentials(t *testing.T) {
 	}
 	require.NoError(t, rows.Err())
 	assert.Equal(t, []string{"https://github.com/acme/app.git"}, remotes)
+}
+
+func TestSyncMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID: "snapshot-session", Project: "app", Machine: "laptop", Agent: "codex",
+	}))
+	require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: "snapshot-session", Project: "app", Machine: "laptop",
+			RootPath: "/workspace/app", GitRemote: "https://github.com/acme/app.git",
+			GitRemoteName: "origin", RepositoryPath: "/workspace/app/.git",
+			WorktreeRootPath:     "/workspace/app",
+			WorktreeRelationship: export.WorktreeMain,
+			CheckoutState:        export.CheckoutDetached,
+			RemoteResolution:     export.ProjectResolutionResolved,
+			ObservedAt:           time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC),
+		},
+	))
+	archiveID, err := local.GetArchiveID(ctx)
+	require.NoError(t, err)
+	generation, err := local.GetDatabaseID(ctx)
+	require.NoError(t, err)
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, syncer.EnsureSchema(ctx))
+	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, false))
+
+	var gotArchive, gotGeneration, gotSession, gotRemote string
+	var gotRelationship export.WorktreeRelationship
+	var gotCheckout export.CheckoutState
+	err = syncer.DB().QueryRowContext(ctx, `
+		SELECT source_archive_id, source_database_generation,
+			source_session_id, git_remote, worktree_relationship, checkout_state
+		FROM source_session_project_identity_snapshots
+		WHERE source_session_id = ?`, "snapshot-session",
+	).Scan(
+		&gotArchive, &gotGeneration, &gotSession, &gotRemote,
+		&gotRelationship, &gotCheckout,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, archiveID, gotArchive)
+	assert.Equal(t, generation, gotGeneration)
+	assert.Equal(t, "snapshot-session", gotSession)
+	assert.Equal(t, "https://github.com/acme/app.git", gotRemote)
+	assert.Equal(t, export.WorktreeMain, gotRelationship)
+	assert.Equal(t, export.CheckoutDetached, gotCheckout)
+
+	_, err = syncer.DB().ExecContext(ctx, `
+		UPDATE source_session_project_identity_snapshots
+		SET git_remote = 'sentinel'
+		WHERE source_session_id = ?`, "snapshot-session")
+	require.NoError(t, err)
+	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, false))
+	require.NoError(t, syncer.DB().QueryRowContext(ctx, `
+		SELECT git_remote FROM source_session_project_identity_snapshots
+		WHERE source_session_id = ?`, "snapshot-session").Scan(&gotRemote))
+	assert.Equal(t, "sentinel", gotRemote,
+		"unchanged local revision should skip mirror publication")
+	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, true))
+	require.NoError(t, syncer.DB().QueryRowContext(ctx, `
+		SELECT git_remote FROM source_session_project_identity_snapshots
+		WHERE source_session_id = ?`, "snapshot-session").Scan(&gotRemote))
+	assert.Equal(t, "https://github.com/acme/app.git", gotRemote,
+		"forced publication should rebuild mirror identity rows")
+
+	require.NoError(t, local.DeleteSession("snapshot-session"))
+	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, false))
+	assertDuckDBCountWhere(t, syncer.DB(),
+		"source_session_project_identity_snapshots",
+		"source_archive_id = ?", archiveID, 0,
+	)
+}
+
+func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	for _, project := range []string{"alpha", "beta"} {
+		sessionID := "identity-" + project
+		require.NoError(t, local.UpsertSession(db.Session{
+			ID: sessionID, Project: project, Machine: "laptop", Agent: "codex",
+		}))
+		require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
+			export.ProjectIdentityObservation{
+				SessionID: sessionID, Project: project, Machine: "laptop",
+				RootPath:         "/workspace/" + project,
+				GitRemote:        "https://example.com/" + project + ".git",
+				RemoteResolution: export.ProjectResolutionResolved,
+				ObservedAt:       time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC),
+			},
+		))
+	}
+	target := filepath.Join(t.TempDir(), "identity-filter.duckdb")
+	filtered := newTestSync(t, target, local, SyncOptions{
+		Projects: []string{"alpha"},
+	})
+	require.NoError(t, filtered.EnsureSchema(ctx))
+	require.NoError(t, filtered.syncProjectIdentityObservations(ctx, false))
+	_, err := filtered.DB().ExecContext(ctx, `
+		UPDATE source_project_identity_observations
+		SET git_remote_name = 'sentinel'
+		WHERE project = 'alpha'`)
+	require.NoError(t, err)
+	require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: "identity-beta", Project: "beta", Machine: "laptop",
+			RootPath:         "/workspace/beta",
+			GitRemote:        "https://example.com/beta.git",
+			GitRemoteName:    "upstream",
+			RemoteResolution: export.ProjectResolutionResolved,
+			ObservedAt:       time.Date(2026, 7, 11, 13, 0, 0, 0, time.UTC),
+		},
+	))
+	require.NoError(t, filtered.syncProjectIdentityObservations(ctx, false))
+	var alphaRemoteName string
+	require.NoError(t, filtered.DB().QueryRowContext(ctx, `
+		SELECT git_remote_name FROM source_project_identity_observations
+		WHERE project = 'alpha'`).Scan(&alphaRemoteName))
+	assert.Equal(t, "sentinel", alphaRemoteName,
+		"out-of-scope changes must not republish the filtered identity scope")
+	require.NoError(t, filtered.Close())
+
+	unfiltered := newTestSync(t, target, local, SyncOptions{})
+	require.NoError(t, unfiltered.EnsureSchema(ctx))
+	require.NoError(t, unfiltered.syncProjectIdentityObservations(ctx, false))
+	assertDuckDBCountWhere(t, unfiltered.DB(),
+		"source_session_project_identity_snapshots",
+		"project = ?", "beta", 1,
+	)
+}
+
+func TestIdentityPublicationUpdatesOnlyChangedRowsAndAppliesTombstones(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	observedAt := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
+	for _, project := range []string{"alpha", "beta"} {
+		sessionID := "identity-" + project
+		require.NoError(t, local.UpsertSession(db.Session{
+			ID: sessionID, Project: project, Machine: "laptop", Agent: "codex",
+		}))
+		require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
+			export.ProjectIdentityObservation{
+				SessionID: sessionID, Project: project, Machine: "laptop",
+				RootPath:         "/workspace/" + project,
+				GitRemote:        "https://example.com/" + project + ".git",
+				GitRemoteName:    "origin",
+				RemoteResolution: export.ProjectResolutionResolved,
+				ObservedAt:       observedAt,
+			},
+		))
+	}
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID: "identity-gamma", Project: "gamma", Machine: "laptop", Agent: "codex",
+	}))
+	require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: "identity-gamma", Project: "gamma", Machine: "laptop",
+			RootPath:         "/workspace/gamma",
+			RemoteResolution: export.ProjectResolutionUnknown,
+			ObservedAt:       observedAt,
+		},
+	))
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	require.NoError(t, syncer.EnsureSchema(ctx))
+	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, false))
+	_, err := syncer.DB().ExecContext(ctx, `
+		UPDATE source_project_identity_observations
+		SET git_remote_name = 'sentinel'
+		WHERE project = 'beta'`)
+	require.NoError(t, err)
+
+	require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: "identity-alpha", Project: "alpha", Machine: "laptop",
+			RootPath:         "/workspace/alpha",
+			GitRemote:        "https://example.com/alpha.git",
+			GitRemoteName:    "upstream",
+			RemoteResolution: export.ProjectResolutionResolved,
+			ObservedAt:       observedAt.Add(time.Hour),
+		},
+	))
+	require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: "identity-gamma", Project: "gamma", Machine: "laptop",
+			RootPath:         "/workspace/gamma",
+			GitRemote:        "https://example.com/gamma.git",
+			GitRemoteName:    "origin",
+			RemoteResolution: export.ProjectResolutionResolved,
+			ObservedAt:       observedAt.Add(time.Hour),
+		},
+	))
+	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, false))
+
+	var alphaRemoteName, betaRemoteName string
+	require.NoError(t, syncer.DB().QueryRowContext(ctx, `
+		SELECT git_remote_name FROM source_project_identity_observations
+		WHERE project = 'alpha'`).Scan(&alphaRemoteName))
+	require.NoError(t, syncer.DB().QueryRowContext(ctx, `
+		SELECT git_remote_name FROM source_project_identity_observations
+		WHERE project = 'beta'`).Scan(&betaRemoteName))
+	assert.Equal(t, "upstream", alphaRemoteName)
+	assert.Equal(t, "sentinel", betaRemoteName,
+		"incremental publication must not rewrite unchanged rows")
+	var gammaFallbacks, gammaRemotes int
+	require.NoError(t, syncer.DB().QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM source_project_identity_observations
+		WHERE project = 'gamma' AND git_remote = ''`).Scan(&gammaFallbacks))
+	require.NoError(t, syncer.DB().QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM source_project_identity_observations
+		WHERE project = 'gamma' AND git_remote = ?`,
+		"https://example.com/gamma.git").Scan(&gammaRemotes))
+	assert.Zero(t, gammaFallbacks)
+	assert.Equal(t, 1, gammaRemotes)
+
+	require.NoError(t, local.DeleteSession("identity-alpha"))
+	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, false))
+	assertDuckDBCountWhere(t, syncer.DB(),
+		"source_session_project_identity_snapshots",
+		"source_session_id = ?", "identity-alpha", 0,
+	)
 }
 
 func TestSyncModelPricingSkipsUnchangedMirrorRows(t *testing.T) {

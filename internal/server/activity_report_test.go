@@ -158,9 +158,12 @@ func TestActivityReportJSONIncludesExportMetadata(t *testing.T) {
 		resp.Pricing.Models[fallbackModel].CostSource)
 	assert.True(t, resp.Pricing.Fallback.Used)
 	assert.Contains(t, resp.Pricing.Fallback.Models, fallbackModel)
-	require.Contains(t, resp.Projects, "shared-project")
-	assert.Equal(t, export.ProjectResolutionUnknown,
-		resp.Projects["shared-project"].Resolution)
+	require.Len(t, resp.Projects, 1)
+	for key, project := range resp.Projects {
+		assert.NotContains(t, key, "shared-project")
+		assert.Equal(t, "shared-project", project.DisplayLabel)
+		assert.Equal(t, export.ProjectResolutionUnknown, project.Resolution)
+	}
 	assert.Equal(t, 2, resp.Totals.Sessions)
 	assert.Equal(t, 150, resp.Totals.OutputTokens)
 	assert.NotEmpty(t, resp.Buckets)

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	gosync "sync"
 	"time"
@@ -84,6 +85,11 @@ type EngineConfig struct {
 	// that wrote data. Safe to leave nil (e.g., in PG serve mode
 	// where the engine is not run).
 	Emitter Emitter
+	// DeferStartupMaintenance keeps startup backfills blocked until the
+	// foreground sync that launched the daemon has completed. Maintenance
+	// still takes syncMu after it is released so later syncs and resyncs
+	// cannot overlap its database access.
+	DeferStartupMaintenance bool
 	// ProviderFactories and ProviderMigrationModes select which concrete
 	// providers own discovery and parsing for their agents. Nil uses the
 	// parser package registry/manifest.
@@ -118,15 +124,17 @@ type Engine struct {
 	// idPrefix and pathRewriter support remote sync:
 	// prefix all session IDs to avoid collisions, rewrite
 	// temp paths to "host:/remote/path" form.
-	ephemeral              bool
-	idPrefix               string
-	pathRewriter           func(string) string
-	emitter                Emitter
-	providerFactories      map[parser.AgentType]parser.ProviderFactory
-	providerMigrationModes map[parser.AgentType]parser.ProviderMigrationMode
-	projectIdentityMu      gosync.Mutex
-	projectIdentityCache   map[string]projectIdentityCacheEntry
-	projectIdentityWritten map[string]struct{}
+	ephemeral               bool
+	idPrefix                string
+	pathRewriter            func(string) string
+	emitter                 Emitter
+	providerFactories       map[parser.AgentType]parser.ProviderFactory
+	providerMigrationModes  map[parser.AgentType]parser.ProviderMigrationMode
+	projectIdentityMu       gosync.Mutex
+	projectIdentityCache    map[string]projectIdentityCacheEntry
+	projectIdentityWritten  map[string]struct{}
+	startupMaintenanceOnce  gosync.Once
+	startupMaintenanceReady chan struct{}
 
 	// forceParse disables every stored-state skip (skip cache,
 	// size/mtime/data_version checks, incremental JSONL deltas) so
@@ -280,6 +288,10 @@ func NewEngine(
 		providerMigrationModes:  providerModes,
 		projectIdentityCache:    make(map[string]projectIdentityCacheEntry),
 		projectIdentityWritten:  make(map[string]struct{}),
+		startupMaintenanceReady: make(chan struct{}),
+	}
+	if !cfg.DeferStartupMaintenance {
+		e.ReleaseStartupMaintenance()
 	}
 	// Errors are logged inside recomputeSignalsFromDB and are
 	// non-fatal: the next write or flush retries.
@@ -1302,6 +1314,22 @@ func (e *Engine) resyncAllLocked(
 		e.mu.Unlock()
 		return
 	}
+	if err := newDB.CopyArchiveIdentityFrom(origPath); err != nil {
+		log.Printf("resync: preserve archive identity: %v", err)
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		stats = SyncStats{
+			Aborted: true,
+			Warnings: []string{
+				"resync failed: preserve archive identity: " + err.Error(),
+			},
+		}
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return
+	}
 
 	// 2b. Copy excluded session IDs from the old DB so that
 	// UpsertSession skips permanently deleted sessions during
@@ -1576,9 +1604,11 @@ func (e *Engine) resyncAllLocked(
 		return stats
 	}
 
-	// Merge user-managed data (display_name, deleted_at,
-	// starred_sessions, pinned_messages) from the old DB
-	// so renames, soft-deletes, stars, and pins survive.
+	// Merge user-managed data and immutable project-identity snapshots from the
+	// old DB. Snapshot copy happens after parsing because the destination rows
+	// reference freshly parsed sessions. Failure must abort the swap: a fresh
+	// database without those snapshots could no longer export stable identity
+	// after a source working directory disappears.
 	reportResyncPhase(
 		PhaseCopyingMetadata,
 		"Copying user-managed session metadata",
@@ -1586,7 +1616,20 @@ func (e *Engine) resyncAllLocked(
 	)
 	if err := newDB.CopySessionMetadataFrom(origPath); err != nil {
 		log.Printf("resync: copy session metadata: %v", err)
-		// Non-fatal: worst case, renames/soft-deletes are lost.
+		stats.Aborted = true
+		stats.Warnings = append(stats.Warnings,
+			"session metadata copy failed, aborting swap: "+err.Error(),
+		)
+		newDB.Close()
+		removeTempDB(tempPath)
+		restoreSkipCache()
+		if rerr := origDB.Reopen(); rerr != nil {
+			log.Printf("resync: recovery reopen: %v", rerr)
+		}
+		e.mu.Lock()
+		e.lastSyncStats = stats
+		e.mu.Unlock()
+		return stats
 	}
 	if _, err := newDB.ApplyWorktreeProjectMappingsFromSync(
 		context.Background(), e.machine,
@@ -1775,7 +1818,22 @@ func (e *Engine) SyncThenRun(
 	}()
 	defer e.syncMu.Unlock()
 	defer e.clearCurrentProgress()
+	stats, err = e.syncThenRunLocked(ctx, full, onProgress, work)
+	if err == nil {
+		// Release while syncMu is still held. A timed fallback that was
+		// already waiting on the mutex can then recheck the gate before it
+		// performs any duplicate startup work.
+		e.ReleaseStartupMaintenance()
+	}
+	return stats, err
+}
 
+func (e *Engine) syncThenRunLocked(
+	ctx context.Context,
+	full bool,
+	onProgress ProgressFunc,
+	work func(forceFull bool) error,
+) (stats SyncStats, err error) {
 	didResync := full || e.db.NeedsResync()
 	if didResync {
 		stats = e.resyncAllLocked(ctx, onProgress)
@@ -1802,6 +1860,68 @@ func (e *Engine) SyncThenRun(
 		return stats, err
 	}
 	return stats, nil
+}
+
+// ReleaseStartupMaintenance allows startup backfills to begin. It is
+// idempotent so the foreground sync and its bounded fallback can coordinate
+// completion without assigning separate gate ownership.
+func (e *Engine) ReleaseStartupMaintenance() {
+	if e.startupMaintenanceReady == nil {
+		return
+	}
+	e.startupMaintenanceOnce.Do(func() {
+		close(e.startupMaintenanceReady)
+	})
+}
+
+// RunStartupMaintenance waits for the daemon-launching foreground sync, then
+// runs work under the same mutex used by sync and resync database swaps.
+func (e *Engine) RunStartupMaintenance(
+	ctx context.Context, work func() error,
+) error {
+	if e.startupMaintenanceReady != nil {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-e.startupMaintenanceReady:
+		}
+	}
+	return e.RunExclusive(work)
+}
+
+// RunStartupSyncFallback performs the local sync that a daemon-launching
+// client was expected to request. The caller invokes it after a bounded grace
+// period when that request may have been abandoned.
+func (e *Engine) RunStartupSyncFallback(
+	ctx context.Context, onProgress ProgressFunc,
+) (stats SyncStats, ran bool, err error) {
+	if e.refuseWriteInForceParse("RunStartupSyncFallback") {
+		return SyncStats{}, false, nil
+	}
+	e.syncMu.Lock()
+	// Defers run LIFO: Unlock runs before emit.
+	defer func() {
+		if stats.Synced > 0 {
+			e.emit("sync")
+		}
+	}()
+	defer e.syncMu.Unlock()
+	defer e.clearCurrentProgress()
+
+	if e.startupMaintenanceReady != nil {
+		select {
+		case <-e.startupMaintenanceReady:
+			return SyncStats{}, false, nil
+		default:
+		}
+	}
+	stats, err = e.syncThenRunLocked(
+		ctx, false, onProgress, func(bool) error { return nil },
+	)
+	if err == nil {
+		e.ReleaseStartupMaintenance()
+	}
+	return stats, true, err
 }
 
 // RunExclusive runs DB-writing work while holding the same mutex used by local
@@ -6052,6 +6172,91 @@ func (e *Engine) BackfillSignalComputer() func(context.Context, string) error {
 	}
 }
 
+// BackfillProjectIdentitySnapshots reconstructs immutable export evidence from
+// stored session metadata. Candidate selection and progress are durable, while
+// filesystem and Git discovery happen here so database startup remains cheap.
+func (e *Engine) BackfillProjectIdentitySnapshots(ctx context.Context) error {
+	if e.refuseWriteInForceParse("BackfillProjectIdentitySnapshots") {
+		return errors.New(
+			"BackfillProjectIdentitySnapshots refused on report-only parse-diff engine",
+		)
+	}
+	if err := e.db.EnsureProjectIdentityBackfillQueued(ctx); err != nil {
+		return err
+	}
+	status, err := e.db.ProjectIdentityBackfillStatus(ctx)
+	if err != nil {
+		return err
+	}
+	if status.State == "not_needed" || status.State == "completed" {
+		return nil
+	}
+	if err := e.db.StartProjectIdentityBackfill(ctx); err != nil {
+		return err
+	}
+	log.Printf("project identity backfill: processing %d sessions", status.TotalItems)
+
+	afterID := ""
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		candidates, err := e.db.ProjectIdentityBackfillCandidatesAfter(ctx, afterID)
+		if err != nil {
+			return e.failProjectIdentityBackfill(ctx, err)
+		}
+		if len(candidates) == 0 {
+			if err := e.db.CompleteProjectIdentityBackfill(ctx); err != nil {
+				return err
+			}
+			log.Printf("project identity backfill: completed %d sessions",
+				status.TotalItems)
+			return nil
+		}
+		observations := make([]export.ProjectIdentityObservation, 0, len(candidates))
+		for _, session := range candidates {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			observations = append(observations,
+				e.projectIdentityObservationForBackfill(session))
+		}
+		if err := e.db.ApplyProjectIdentityBackfillBatch(ctx, observations); err != nil {
+			return e.failProjectIdentityBackfill(ctx, err)
+		}
+		afterID = candidates[len(candidates)-1].ID
+	}
+}
+
+func (e *Engine) projectIdentityObservationForBackfill(
+	session db.Session,
+) export.ProjectIdentityObservation {
+	obs, ok := e.projectIdentityObservation(session)
+	if !ok {
+		obs = export.ProjectIdentityObservation{
+			SessionID:  session.ID,
+			Project:    strings.TrimSpace(session.Project),
+			Machine:    strings.TrimSpace(session.Machine),
+			RootPath:   strings.TrimSpace(session.Cwd),
+			GitBranch:  strings.TrimSpace(session.GitBranch),
+			ObservedAt: time.Now().UTC(),
+		}
+		if obs.GitBranch != "" {
+			obs.CheckoutState = export.CheckoutBranch
+		}
+	}
+	return obs
+}
+
+func (e *Engine) failProjectIdentityBackfill(
+	ctx context.Context, cause error,
+) error {
+	if err := e.db.FailProjectIdentityBackfill(ctx, cause); err != nil {
+		return errors.Join(cause, err)
+	}
+	return cause
+}
+
 // recomputeSignalsFromDB loads a session's full message history
 // and stored metadata, runs the pure in-memory signal compute
 // over them, and persists the result. Used when callers don't
@@ -7103,11 +7308,24 @@ type batchSourceFile struct {
 
 type projectIdentityCacheEntry struct {
 	rootPath         string
+	repositoryPath   string
+	gitDir           string
 	gitRemoteName    string
 	gitRemote        string
+	remoteResolution export.ProjectResolution
+	remoteCandidates int
 	worktreeName     string
 	worktreeRootPath string
+	worktreeKind     export.WorktreeRelationship
 	expiresAt        time.Time
+}
+
+type localGitIdentity struct {
+	rootPath       string
+	repositoryPath string
+	gitDir         string
+	remotes        map[string]string
+	worktreeKind   export.WorktreeRelationship
 }
 
 func (e *Engine) writeBatchBulk(
@@ -7201,12 +7419,13 @@ func (e *Engine) projectIdentityObservation(
 	project := strings.TrimSpace(s.Project)
 	machine := strings.TrimSpace(s.Machine)
 	rootPath := strings.TrimSpace(s.Cwd)
-	if project == "" || machine == "" || rootPath == "" {
+	if project == "" || machine == "" {
 		return export.ProjectIdentityObservation{}, false
 	}
 
 	cached := e.cachedProjectIdentity(machine, rootPath)
 	obs := export.ProjectIdentityObservation{
+		SessionID:  s.ID,
 		Project:    project,
 		Machine:    machine,
 		RootPath:   cached.rootPath,
@@ -7214,8 +7433,18 @@ func (e *Engine) projectIdentityObservation(
 	}
 	obs.GitRemoteName = cached.gitRemoteName
 	obs.GitRemote = cached.gitRemote
+	obs.RemoteResolution = cached.remoteResolution
+	obs.RemoteCandidateCount = cached.remoteCandidates
 	obs.WorktreeName = cached.worktreeName
 	obs.WorktreeRootPath = cached.worktreeRootPath
+	obs.RepositoryPath = cached.repositoryPath
+	obs.WorktreeRelationship = cached.worktreeKind
+	obs.GitBranch = strings.TrimSpace(s.GitBranch)
+	if obs.GitBranch != "" {
+		obs.CheckoutState = export.CheckoutBranch
+	} else {
+		obs.CheckoutState, obs.GitBranch = readGitCheckout(cached.gitDir)
+	}
 	return obs, true
 }
 
@@ -7239,17 +7468,32 @@ func (e *Engine) cachedProjectIdentity(machine, rootPath string) projectIdentity
 	// sessions and a one-minute cache TTL that becomes a sustained
 	// automountd/opendirectoryd CPU storm.
 	if e.idPrefix == "" && e.pathRewriter == nil && machine == e.machine {
-		if gitRoot, remotes := discoverLocalGitIdentity(rootPath); gitRoot != "" {
-			identity.rootPath = gitRoot
-			if name, raw, ok := export.SelectRemote(remotes); ok {
-				identity.gitRemoteName = name
-				identity.gitRemote = raw
+		if normalized, ok, err := export.NormalizeRootPath(rootPath); err == nil && ok {
+			identity.rootPath = normalized
+		}
+		if discovered := discoverLocalGitIdentity(rootPath); discovered.rootPath != "" {
+			identity.rootPath = discovered.rootPath
+			identity.repositoryPath = discovered.repositoryPath
+			identity.gitDir = discovered.gitDir
+			identity.worktreeRootPath = discovered.rootPath
+			identity.worktreeName = filepath.Base(discovered.rootPath)
+			identity.worktreeKind = discovered.worktreeKind
+			selection := export.ResolveRemoteSelection(discovered.remotes)
+			identity.remoteResolution = selection.Resolution
+			if selection.Resolution == export.ProjectResolutionUnknown {
+				identity.remoteResolution = export.ProjectResolutionResolved
+			}
+			identity.remoteCandidates = countNormalizedRemoteCandidates(discovered.remotes)
+			if selection.Resolution == export.ProjectResolutionResolved {
+				identity.gitRemoteName = selection.Name
+				identity.gitRemote = selection.Raw
 			}
 		}
 	}
-	if identity.gitRemote == "" {
+	if identity.worktreeRootPath == "" {
 		identity.worktreeName = filepath.Base(identity.rootPath)
 		identity.worktreeRootPath = identity.rootPath
+		identity.worktreeKind = export.WorktreeUnknown
 	}
 	identity.expiresAt = now.Add(projectIdentityCacheTTL)
 	e.projectIdentityCache[cacheKey] = identity
@@ -7289,38 +7533,61 @@ func projectIdentityObservationFingerprint(
 ) string {
 	return strings.Join([]string{
 		obs.Project,
+		obs.SessionID,
 		obs.Machine,
 		obs.RootPath,
 		obs.GitRemote,
 		obs.GitRemoteName,
 		obs.WorktreeName,
 		obs.WorktreeRootPath,
+		obs.RepositoryPath,
+		string(obs.WorktreeRelationship),
+		string(obs.CheckoutState),
+		obs.GitBranch,
+		string(obs.RemoteResolution),
+		strconv.Itoa(obs.RemoteCandidateCount),
 	}, "\x00")
 }
 
-func discoverLocalGitIdentity(cwd string) (string, map[string]string) {
+func countNormalizedRemoteCandidates(remotes map[string]string) int {
+	unique := make(map[string]struct{}, len(remotes))
+	for _, raw := range remotes {
+		if normalized, ok := export.NormalizeGitRemote(raw); ok {
+			unique[normalized] = struct{}{}
+		}
+	}
+	return len(unique)
+}
+
+func discoverLocalGitIdentity(cwd string) localGitIdentity {
 	if !safeLocalAbsolutePath(cwd) {
-		return "", nil
+		return localGitIdentity{}
 	}
 	// Skip macOS automounter namespaces: probing them wakes
 	// automountd/opendirectoryd for paths that virtually never exist
 	// locally (see export.IsAutomountNamespacePath).
 	if export.IsAutomountNamespacePath(runtime.GOOS, filepath.Clean(cwd)) {
-		return "", nil
+		return localGitIdentity{}
 	}
 	resolved, err := filepath.EvalSymlinks(filepath.Clean(cwd))
 	if err != nil {
-		return "", nil
+		return localGitIdentity{}
 	}
 	root := findLocalGitRoot(resolved)
 	if root == "" {
-		return "", nil
+		return localGitIdentity{}
 	}
-	config := gitConfigPath(root)
-	if config == "" {
-		return root, nil
+	gitDir, commonDir, relationship := gitDirectoryContext(root)
+	result := localGitIdentity{
+		rootPath:       root,
+		repositoryPath: repositoryPathForGitContext(root, commonDir),
+		gitDir:         gitDir,
+		worktreeKind:   relationship,
 	}
-	return root, readGitRemotes(config)
+	if commonDir != "" {
+		result.remotes = readGitRemotes(filepath.Join(commonDir, "config"))
+	}
+	return result
 }
 
 func safeLocalAbsolutePath(p string) bool {
@@ -7373,25 +7640,28 @@ func findLocalGitRoot(start string) string {
 	}
 }
 
-func gitConfigPath(root string) string {
+func gitDirectoryContext(
+	root string,
+) (gitDir, commonDir string, relationship export.WorktreeRelationship) {
 	gitPath := filepath.Join(root, ".git")
 	if info, err := os.Stat(gitPath); err == nil && info.IsDir() {
-		return filepath.Join(gitPath, "config")
+		return gitPath, gitPath, export.WorktreeMain
 	}
 	data, err := os.ReadFile(gitPath)
 	if err != nil {
-		return ""
+		return "", "", export.WorktreeUnknown
 	}
 	line := strings.TrimSpace(string(data))
 	line = strings.TrimPrefix(line, "gitdir:")
 	line = strings.TrimSpace(line)
 	if line == "" {
-		return ""
+		return "", "", export.WorktreeUnknown
 	}
 	if !filepath.IsAbs(line) {
 		line = filepath.Join(root, line)
 	}
-	commonDir := line
+	commonDir = line
+	relationship = export.WorktreeMain
 	if data, err := os.ReadFile(filepath.Join(line, "commondir")); err == nil {
 		common := strings.TrimSpace(string(data))
 		if filepath.IsAbs(common) {
@@ -7399,8 +7669,44 @@ func gitConfigPath(root string) string {
 		} else {
 			commonDir = filepath.Clean(filepath.Join(line, common))
 		}
+		relationship = export.WorktreeLinked
 	}
-	return filepath.Join(commonDir, "config")
+	return filepath.Clean(line), filepath.Clean(commonDir), relationship
+}
+
+func repositoryPathForGitContext(root, commonDir string) string {
+	repositoryPath := commonDir
+	if commonDir == "" {
+		repositoryPath = root
+	} else if filepath.Base(commonDir) == ".git" {
+		repositoryPath = filepath.Dir(commonDir)
+	}
+	if resolved, err := filepath.EvalSymlinks(repositoryPath); err == nil {
+		return resolved
+	}
+	return filepath.Clean(repositoryPath)
+}
+
+func readGitCheckout(gitDir string) (export.CheckoutState, string) {
+	if gitDir == "" {
+		return export.CheckoutUnknown, ""
+	}
+	data, err := os.ReadFile(filepath.Join(gitDir, "HEAD"))
+	if err != nil {
+		return export.CheckoutUnknown, ""
+	}
+	head := strings.TrimSpace(string(data))
+	const branchPrefix = "ref: refs/heads/"
+	if after, ok := strings.CutPrefix(head, branchPrefix); ok {
+		branch := strings.TrimSpace(after)
+		if branch != "" {
+			return export.CheckoutBranch, branch
+		}
+	}
+	if head != "" {
+		return export.CheckoutDetached, ""
+	}
+	return export.CheckoutUnknown, ""
 }
 
 func readGitRemotes(configPath string) map[string]string {

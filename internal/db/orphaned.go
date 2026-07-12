@@ -205,6 +205,12 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 	if err := copySessionDataForIDs(ctx, tx, "_orphaned_ids"); err != nil {
 		return 0, fmt.Errorf("copying orphaned data: %w", err)
 	}
+
+	if err := removeGeneratedIdentitySnapshotsWithoutSource(
+		ctx, tx, "_orphaned_ids",
+	); err != nil {
+		return 0, fmt.Errorf("repairing orphan identity snapshots: %w", err)
+	}
 	if err := sanitizeCopiedSessionContent(
 		ctx, tx, "_orphaned_ids", copiedSourceDataVersion(ctx, tx),
 	); err != nil {
@@ -296,6 +302,11 @@ func (d *DB) CopyTrashedDataFrom(sourcePath string) (int, error) {
 
 	if err := copySessionDataForIDs(ctx, tx, "_trashed_ids"); err != nil {
 		return 0, fmt.Errorf("copying trashed data: %w", err)
+	}
+	if err := removeGeneratedIdentitySnapshotsWithoutSource(
+		ctx, tx, "_trashed_ids",
+	); err != nil {
+		return 0, fmt.Errorf("repairing trashed identity snapshots: %w", err)
 	}
 	if err := sanitizeCopiedSessionContent(
 		ctx, tx, "_trashed_ids", copiedSourceDataVersion(ctx, tx),
@@ -548,9 +559,16 @@ func (d *DB) CopySessionMetadataFrom(
 			INSERT INTO main.archive_metadata (key, value, created_at, updated_at)
 			SELECT key, value, created_at, updated_at
 			FROM old_db.archive_metadata
-			WHERE true
+			WHERE key != 'database_id'
 			ON CONFLICT(key) DO UPDATE SET
-				value = excluded.value,
+				value = CASE
+					WHEN excluded.key = 'project_identity_publication_revision'
+					THEN CAST(max(
+						CAST(archive_metadata.value AS INTEGER),
+						CAST(excluded.value AS INTEGER)
+					) AS TEXT)
+					ELSE excluded.value
+				END,
 				created_at = excluded.created_at,
 				updated_at = excluded.updated_at`); err != nil {
 			return fmt.Errorf("copying archive metadata: %w", err)
@@ -558,14 +576,31 @@ func (d *DB) CopySessionMetadataFrom(
 	}
 
 	if oldDBHasTable(ctx, tx, "project_identity_observations") {
+		identityColumn := func(name, fallback string) string {
+			if oldDBHasColumn(ctx, tx, "project_identity_observations", name) {
+				return name
+			}
+			return fallback
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO main.project_identity_observations (
+				source_archive_id, source_archive_salt,
 				project, machine, root_path, git_remote, git_remote_name,
-				worktree_name, worktree_root_path, observed_at,
+				repository_path, worktree_name, worktree_root_path,
+				worktree_relationship, checkout_state, git_branch,
+				remote_resolution, remote_candidate_count, observed_at,
 				normalized_remote, key_source, key
 			)
-			SELECT project, machine, root_path, git_remote, git_remote_name,
-				worktree_name, worktree_root_path, observed_at,
+			SELECT `+identityColumn("source_archive_id", "''")+`,
+				`+identityColumn("source_archive_salt", "''")+`,
+				project, machine, root_path, git_remote, git_remote_name,
+				`+identityColumn("repository_path", "''")+`,
+				worktree_name, worktree_root_path,
+				`+identityColumn("worktree_relationship", "'unknown'")+`,
+				`+identityColumn("checkout_state", "'unknown'")+`,
+				`+identityColumn("git_branch", "''")+`,
+				`+identityColumn("remote_resolution", "'unknown'")+`,
+				`+identityColumn("remote_candidate_count", "0")+`, observed_at,
 				normalized_remote, key_source, key
 			FROM old_db.project_identity_observations
 			WHERE true
@@ -588,6 +623,44 @@ func (d *DB) CopySessionMetadataFrom(
 		}
 		if err := scrubProjectIdentityGitRemoteCredentialsTx(ctx, tx); err != nil {
 			return err
+		}
+	}
+
+	if oldDBHasTable(ctx, tx, "session_project_identity_snapshots") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO main.session_project_identity_snapshots (
+				session_id, project, machine, root_path, git_remote,
+				git_remote_name, repository_path, worktree_name,
+				worktree_root_path, worktree_relationship, checkout_state,
+				git_branch, remote_resolution, remote_candidate_count,
+				observed_at, normalized_remote, key_source, key
+			)
+			SELECT session_id, project, machine, root_path, git_remote,
+				git_remote_name, repository_path, worktree_name,
+				worktree_root_path, worktree_relationship, checkout_state,
+				git_branch, remote_resolution, remote_candidate_count,
+				observed_at, normalized_remote, key_source, key
+			FROM old_db.session_project_identity_snapshots
+			WHERE session_id IN (SELECT id FROM main.sessions)
+			ON CONFLICT(session_id) DO UPDATE SET
+				project = excluded.project,
+				machine = excluded.machine,
+				root_path = excluded.root_path,
+				git_remote = excluded.git_remote,
+				git_remote_name = excluded.git_remote_name,
+				repository_path = excluded.repository_path,
+				worktree_name = excluded.worktree_name,
+				worktree_root_path = excluded.worktree_root_path,
+				worktree_relationship = excluded.worktree_relationship,
+				checkout_state = excluded.checkout_state,
+				git_branch = excluded.git_branch,
+				remote_resolution = excluded.remote_resolution,
+				remote_candidate_count = excluded.remote_candidate_count,
+					observed_at = excluded.observed_at,
+					normalized_remote = excluded.normalized_remote,
+					key_source = excluded.key_source,
+					key = excluded.key`); err != nil {
+			return fmt.Errorf("copying session project identity snapshots: %w", err)
 		}
 	}
 
@@ -848,6 +921,33 @@ func copySessionDataForIDs(
 
 	if err := copyPinnedMessagesForIDs(ctx, tx, tempIDsTable); err != nil {
 		return err
+	}
+	return nil
+}
+
+// removeGeneratedIdentitySnapshotsWithoutSource removes only placeholder
+// snapshots created by the session-insert trigger for the current copy batch.
+// Real source snapshots are overlaid later by CopySessionMetadataFrom. The
+// temporary ID table and both snapshot primary keys keep the work proportional
+// to copied rows rather than total archive size.
+func removeGeneratedIdentitySnapshotsWithoutSource(
+	ctx context.Context,
+	tx *sql.Tx,
+	tempIDsTable string,
+) error {
+	missingSourceSnapshot := "true"
+	if oldDBHasTable(ctx, tx, "session_project_identity_snapshots") {
+		missingSourceSnapshot = `NOT EXISTS (
+			SELECT 1 FROM old_db.session_project_identity_snapshots old_snapshot
+			WHERE old_snapshot.session_id =
+				session_project_identity_snapshots.session_id
+		)`
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM main.session_project_identity_snapshots
+		WHERE session_id IN (SELECT id FROM `+tempIDsTable+`)
+		  AND `+missingSourceSnapshot); err != nil {
+		return fmt.Errorf("removing generated identity snapshots: %w", err)
 	}
 	return nil
 }

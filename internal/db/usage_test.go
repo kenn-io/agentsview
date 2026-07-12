@@ -2038,7 +2038,14 @@ func TestGetUsageSessionCounts(t *testing.T) {
 		To:   "2024-06-30",
 	})
 	requireNoError(t, err, "GetDailyUsage")
-	assert.Equal(t, counts, daily.SessionCounts)
+	assert.Equal(t, counts.Total, daily.SessionCounts.Total)
+	assert.Equal(t, counts.ByAgent, daily.SessionCounts.ByAgent)
+	projectCounts := make(map[string]int, len(daily.Projects))
+	for key, project := range daily.Projects {
+		projectCounts[project.DisplayLabel] = daily.SessionCounts.ByProject[key]
+		assert.NotContains(t, key, project.DisplayLabel)
+	}
+	assert.Equal(t, counts.ByProject, projectCounts)
 
 	dailyNoCounts, err := d.GetDailyUsage(ctx, UsageFilter{
 		From:              "2024-06-01",

@@ -363,8 +363,12 @@ func duckContractAnalyticsTrendsAndUsage(
 	require.Equal(t, 13, daily.Totals.InputTokens)
 	require.Equal(t, 11, daily.Totals.OutputTokens)
 	require.Equal(t, 2, daily.SessionCounts.Total)
-	require.Equal(t, 1, daily.SessionCounts.ByProject["alpha"])
-	require.Equal(t, 1, daily.SessionCounts.ByProject["beta"])
+	countsByDisplay := make(map[string]int, len(daily.Projects))
+	for key, project := range daily.Projects {
+		countsByDisplay[project.DisplayLabel] = daily.SessionCounts.ByProject[key]
+		require.NotContains(t, key, project.DisplayLabel)
+	}
+	require.Equal(t, map[string]int{"alpha": 1, "beta": 1}, countsByDisplay)
 
 	top, err := store.GetTopSessionsByCost(ctx, usageFilter, 10)
 	require.NoError(t, err)

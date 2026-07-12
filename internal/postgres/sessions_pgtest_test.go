@@ -13,6 +13,34 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
+func TestGetActiveProjectLabelsIncludesRelationshipSessions(t *testing.T) {
+	pgURL := testPGURL(t)
+	ensureStoreSchema(t, pgURL)
+
+	store, err := NewStore(pgURL, testSchema, true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+
+	_, err = store.DB().Exec(`
+		INSERT INTO sessions
+			(id, machine, project, agent, relationship_type)
+		VALUES
+			('active-project-subagent', 'm', 'child-only', 'claude', 'subagent'),
+			('active-project-fork', 'm', 'fork-only', 'claude', 'fork'),
+			('active-project-deleted', 'm', 'deleted-only', 'claude', 'root');
+		UPDATE sessions
+		SET deleted_at = NOW()
+		WHERE id = 'active-project-deleted'
+	`)
+	require.NoError(t, err)
+
+	labels, err := store.GetActiveProjectLabels(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"child-only", "fork-only", "test-project",
+	}, labels)
+}
+
 func TestListSessionsDateFilterIncludesOverlappingSessions(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)

@@ -4,7 +4,8 @@
 /* eslint-disable */
 import type { ExportProjectIdentity } from './ExportProjectIdentity';
 export type ExportProjectMapEntry = {
-  identity: ExportProjectIdentity;
+  display_label: string;
+  identity?: ExportProjectIdentity;
   resolution: string;
 };
 

@@ -205,10 +205,6 @@ func (s *Sync) Push(
 	if err := s.syncCursorUsageEvents(ctx); err != nil {
 		return result, err
 	}
-	if err := s.syncProjectIdentityObservations(ctx); err != nil {
-		return result, err
-	}
-
 	lastPushKey := s.syncStateKey(lastPushStateKey)
 	lastPush, err := s.local.GetSyncState(lastPushKey)
 	if err != nil {
@@ -359,6 +355,16 @@ func (s *Sync) Push(
 	} else {
 		log.Printf(
 			"duckdbsync: skipping curation refresh after %d session push errors",
+			result.Errors,
+		)
+	}
+	if result.Errors == 0 {
+		if err := s.syncProjectIdentityObservations(ctx, full); err != nil {
+			return result, err
+		}
+	} else {
+		log.Printf(
+			"duckdbsync: skipping project identity publication after %d session push errors",
 			result.Errors,
 		)
 	}

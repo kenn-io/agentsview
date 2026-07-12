@@ -31,6 +31,8 @@ var goldenFixtureNow = time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
 
 const (
 	goldenDatabaseID       = "00000000-0000-4000-8000-000000000001"
+	goldenArchiveID        = "00000000-0000-4000-8000-000000000002"
+	goldenArchiveSalt      = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
 	goldenPricingUpdatedAt = "2026-07-03T12:00:00Z"
 	goldenComputedModel    = "fixture-model-computed"
 	goldenReportedModel    = "fixture-model-reported"
@@ -138,6 +140,9 @@ func seedExportGoldenArchive(t *testing.T, database *db.DB) {
 	ctx := context.Background()
 	database.SetCursorSecret(goldenCursorSecret)
 	require.NoError(t, database.SetDatabaseIDForTest(ctx, goldenDatabaseID))
+	require.NoError(t, database.SetArchiveIdentityForTest(
+		ctx, goldenArchiveID, goldenArchiveSalt,
+	))
 	require.NoError(t, database.UpsertModelPricing([]db.ModelPricing{
 		{
 			ModelPattern:         goldenComputedModel,
@@ -154,8 +159,6 @@ func seedExportGoldenArchive(t *testing.T, database *db.DB) {
 			CacheReadPerMTok:     0.25,
 		},
 	}), "seed golden pricing")
-	seedGoldenProjectIdentities(t, database)
-
 	seedGoldenExportSession(t, database, goldenExportSessionSpec{
 		id: "path-current", project: "path-project", agent: "claude",
 		startedAt: "2026-07-03T11:00:00Z",
@@ -192,29 +195,49 @@ func seedExportGoldenArchive(t *testing.T, database *db.DB) {
 		model:     goldenReportedModel,
 		costUSD:   dbtest.Ptr(0.0042),
 	})
+	seedGoldenProjectIdentities(t, database)
 }
 
 func seedGoldenProjectIdentities(t *testing.T, database *db.DB) {
 	t.Helper()
 	ctx := context.Background()
+	for _, sessionID := range []string{"remote-current", "remote-yesterday"} {
+		require.NoError(t, database.UpsertProjectIdentityObservation(ctx,
+			export.ProjectIdentityObservation{
+				SessionID:            sessionID,
+				Project:              "remote-project",
+				Machine:              "golden-host",
+				RootPath:             "/fixtures/remote-project/worktrees/feature",
+				GitRemote:            "https://github.com/acme/remote-project.git",
+				GitRemoteName:        "origin",
+				RepositoryPath:       "/fixtures/remote-project",
+				WorktreeName:         "feature",
+				WorktreeRootPath:     "/fixtures/remote-project/worktrees/feature",
+				WorktreeRelationship: export.WorktreeLinked,
+				CheckoutState:        export.CheckoutBranch,
+				GitBranch:            "feature/golden",
+				ObservedAt:           goldenFixtureNow,
+			}), "seed remote project identity")
+	}
 	require.NoError(t, database.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
-			Project:          "remote-project",
-			Machine:          "golden-host",
-			RootPath:         "/fixtures/remote-project/worktrees/feature",
-			GitRemote:        "https://github.com/acme/remote-project.git",
-			GitRemoteName:    "origin",
-			WorktreeName:     "feature",
-			WorktreeRootPath: "/fixtures/remote-project",
-			ObservedAt:       goldenFixtureNow,
-		}), "seed remote project identity")
-	require.NoError(t, database.UpsertProjectIdentityObservation(ctx,
-		export.ProjectIdentityObservation{
-			Project:    "path-project",
-			Machine:    "golden-host",
-			RootPath:   "/fixtures/path-project",
-			ObservedAt: goldenFixtureNow,
+			SessionID:            "path-current",
+			Project:              "path-project",
+			Machine:              "golden-host",
+			RootPath:             "/fixtures/path-project",
+			RepositoryPath:       "/fixtures/path-project",
+			WorktreeRootPath:     "/fixtures/path-project",
+			WorktreeRelationship: export.WorktreeMain,
+			CheckoutState:        export.CheckoutUnknown,
+			ObservedAt:           goldenFixtureNow,
 		}), "seed path project identity")
+	require.NoError(t, database.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID:  "unknown-older",
+			Project:    "unknown-project",
+			Machine:    "golden-host",
+			ObservedAt: goldenFixtureNow,
+		}), "seed unknown project identity")
 }
 
 type goldenExportSessionSpec struct {
@@ -422,9 +445,12 @@ func TestFetchHTTPDailyUsage(t *testing.T) {
 	assert.Equal(t, export.UsageDailySchemaVersion, got.SchemaVersion)
 	require.NotNil(t, got.Pricing)
 	assert.Contains(t, got.Pricing.Models, "gpt-5.1")
-	require.Contains(t, got.Projects, "proj")
-	assert.Equal(t, export.ProjectResolutionUnknown,
-		got.Projects["proj"].Resolution)
+	require.Len(t, got.Projects, 1)
+	for key, project := range got.Projects {
+		assert.NotContains(t, key, "proj")
+		assert.Equal(t, "proj", project.DisplayLabel)
+		assert.Equal(t, export.ProjectResolutionUnknown, project.Resolution)
+	}
 	assert.Equal(t, 10, got.Totals.InputTokens)
 	assert.Equal(t, 20, got.Daily[0].OutputTokens)
 	assert.Equal(t, 1, got.SessionCounts.Total)
@@ -980,9 +1006,14 @@ func TestUsageDailyJSONIncludesExportMetadata(t *testing.T) {
 		got.Pricing.Models[fallbackModel].CostSource)
 	assert.True(t, got.Pricing.Fallback.Used)
 	assert.Contains(t, got.Pricing.Fallback.Models, fallbackModel)
-	require.Contains(t, got.Projects, "shared-project")
-	assert.Equal(t, export.ProjectResolutionUnknown,
-		got.Projects["shared-project"].Resolution)
+	require.Len(t, got.Projects, 1)
+	var projectKey string
+	for key, project := range got.Projects {
+		projectKey = key
+		assert.NotContains(t, key, "shared-project")
+		assert.Equal(t, "shared-project", project.DisplayLabel)
+		assert.Equal(t, export.ProjectResolutionUnknown, project.Resolution)
+	}
 
 	require.Len(t, got.Daily, 1)
 	assert.Equal(t, "2026-06-01", got.Daily[0].Date)
@@ -991,7 +1022,7 @@ func TestUsageDailyJSONIncludesExportMetadata(t *testing.T) {
 	assert.Equal(t, 300, got.Totals.InputTokens)
 	assert.Equal(t, 150, got.Totals.OutputTokens)
 	assert.Equal(t, 2, got.SessionCounts.Total)
-	assert.Equal(t, map[string]int{"shared-project": 2},
+	assert.Equal(t, map[string]int{projectKey: 2},
 		got.SessionCounts.ByProject)
 }
 
@@ -1510,7 +1541,10 @@ const sampleDailyUsageJSON = `{
 		}
 	},
 	"projects": {
-		"proj": {"resolution": "unknown", "identity": null}
+		"pl1:fixture": {
+			"display_label": "proj",
+			"resolution": "unknown"
+		}
 	},
 	"totals": {
 		"inputTokens": 10,

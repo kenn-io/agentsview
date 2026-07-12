@@ -16,20 +16,28 @@ func (s *Store) ListProjectIdentityObservations(
 	if labels != nil && len(labels) == 0 {
 		return []export.ProjectIdentityObservation{}, nil
 	}
-	query := `SELECT project, machine, root_path, git_remote, git_remote_name,
-		worktree_name, worktree_root_path, observed_at,
+	query := `SELECT source_archive_id, source_archive_salt,
+		project, machine, root_path, git_remote, git_remote_name,
+		repository_path, worktree_name, worktree_root_path,
+		worktree_relationship, checkout_state, git_branch,
+		remote_resolution, remote_candidate_count, observed_at,
 		normalized_remote, key_source, key
-		FROM project_identity_observations`
+		FROM source_project_identity_observations`
 	args := make([]any, 0, len(labels))
+	var predicates []string
 	if len(labels) > 0 {
 		placeholders := make([]string, 0, len(labels))
-		for i, label := range labels {
-			placeholders = append(placeholders, fmt.Sprintf("$%d", i+1))
+		for _, label := range labels {
 			args = append(args, label)
+			placeholders = append(placeholders, fmt.Sprintf("$%d", len(args)))
 		}
-		query += " WHERE project IN (" + strings.Join(placeholders, ",") + ")"
+		predicates = append(predicates,
+			"project IN ("+strings.Join(placeholders, ",")+")")
 	}
-	query += " ORDER BY project, machine, root_path, git_remote"
+	if len(predicates) > 0 {
+		query += " WHERE " + strings.Join(predicates, " AND ")
+	}
+	query += " ORDER BY source_archive_id, project, machine, root_path, git_remote"
 
 	rows, err := s.pg.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -42,13 +50,21 @@ func (s *Store) ListProjectIdentityObservations(
 		var obs export.ProjectIdentityObservation
 		var observedAt time.Time
 		if err := rows.Scan(
+			&obs.SourceArchiveID,
+			&obs.SourceArchiveSalt,
 			&obs.Project,
 			&obs.Machine,
 			&obs.RootPath,
 			&obs.GitRemote,
 			&obs.GitRemoteName,
+			&obs.RepositoryPath,
 			&obs.WorktreeName,
 			&obs.WorktreeRootPath,
+			&obs.WorktreeRelationship,
+			&obs.CheckoutState,
+			&obs.GitBranch,
+			&obs.RemoteResolution,
+			&obs.RemoteCandidateCount,
 			&observedAt,
 			&obs.NormalizedRemote,
 			&obs.KeySource,
@@ -76,85 +92,77 @@ func (s *Store) BuildProjectIdentityMap(
 	if err != nil {
 		return nil, err
 	}
-	result := export.BuildProjectsMap(labels, observations)
-	fallbacks, err := s.legacyProjectIdentityCandidates(ctx, labels)
+	scope, err := s.sourceArchiveIdentityScope(ctx, observations)
 	if err != nil {
 		return nil, err
 	}
-	for _, label := range labels {
-		if result[label].Resolution != export.ProjectResolutionUnknown {
-			continue
-		}
-		candidates := fallbacks[label]
-		switch len(candidates) {
-		case 0:
-			result[label] = export.ProjectMapEntry{
-				Resolution: export.ProjectResolutionUnknown,
-			}
-		case 1:
-			for _, identity := range candidates {
-				i := identity
-				result[label] = export.ProjectMapEntry{
-					Resolution: export.ProjectResolutionResolved,
-					Identity:   &i,
-				}
-			}
-		default:
-			result[label] = export.ProjectMapEntry{
-				Resolution: export.ProjectResolutionAmbiguous,
-			}
-		}
-	}
-	return result, nil
+	return export.BuildProjectsMapWithScope(labels, observations, scope), nil
 }
 
-func (s *Store) legacyProjectIdentityCandidates(
+func (s *Store) sourceArchiveIdentityScope(
 	ctx context.Context,
-	labels []string,
-) (map[string]map[string]export.ProjectIdentity, error) {
-	out := map[string]map[string]export.ProjectIdentity{}
-	if len(labels) == 0 {
-		return out, nil
-	}
-	args := make([]any, 0, len(labels))
-	placeholders := make([]string, 0, len(labels))
-	for i, label := range labels {
-		placeholders = append(placeholders, fmt.Sprintf("$%d", i+1))
-		args = append(args, label)
-	}
-	// PostgreSQL does not mirror sessions.file_path; fallback candidates are
-	// therefore limited to cwd. DuckDB mirrors file_path and includes that
-	// parent directory for parity with SQLite where the data exists.
-	query := `SELECT project, cwd
-		FROM sessions
-		WHERE deleted_at IS NULL
-		  AND project IN (` + strings.Join(placeholders, ",") + `)
-		  AND cwd != ''
-		ORDER BY project, cwd`
-	rows, err := s.pg.QueryContext(ctx, query, args...)
+	observations []export.ProjectIdentityObservation,
+) (export.IdentityScope, error) {
+	query := `
+		SELECT source_archive_id, source_archive_salt
+		FROM source_archives
+	`
+	query += " ORDER BY source_archive_id"
+	rows, err := s.pg.QueryContext(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("listing pg legacy project identity sessions: %w", err)
+		return export.IdentityScope{}, fmt.Errorf(
+			"listing pg source archives: %w", err,
+		)
 	}
 	defer rows.Close()
 
+	var scopes []export.IdentityScope
 	for rows.Next() {
-		var project, cwd string
-		if err := rows.Scan(&project, &cwd); err != nil {
-			return nil, fmt.Errorf("scanning pg legacy project identity session: %w", err)
+		var scope export.IdentityScope
+		if err := rows.Scan(&scope.ArchiveID, &scope.ArchiveSalt); err != nil {
+			return export.IdentityScope{}, fmt.Errorf(
+				"scanning pg source archive: %w", err,
+			)
 		}
-		identity := export.BuildStoredProjectIdentity(
-			export.ProjectIdentityInput{RootPath: cwd},
-		)
-		if identity.Key == "" {
-			continue
-		}
-		if out[project] == nil {
-			out[project] = map[string]export.ProjectIdentity{}
-		}
-		out[project][identity.Key] = identity
+		scopes = append(scopes, scope)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating pg legacy project identity sessions: %w", err)
+		return export.IdentityScope{}, fmt.Errorf(
+			"iterating pg source archives: %w", err,
+		)
 	}
-	return out, nil
+	if len(scopes) == 1 {
+		return scopes[0], nil
+	}
+	if len(scopes) == 0 {
+		return observationIdentityScope(observations), nil
+	}
+	return export.AggregateIdentityScope(scopes), nil
+}
+
+func observationIdentityScope(
+	observations []export.ProjectIdentityObservation,
+) export.IdentityScope {
+	unique := make(map[string]export.IdentityScope)
+	for _, obs := range observations {
+		scope := export.IdentityScope{
+			ArchiveID:   strings.TrimSpace(obs.SourceArchiveID),
+			ArchiveSalt: strings.TrimSpace(obs.SourceArchiveSalt),
+		}
+		if scope.ArchiveID == "" || scope.ArchiveSalt == "" {
+			continue
+		}
+		unique[scope.ArchiveID+"\x00"+scope.ArchiveSalt] = scope
+	}
+	if len(unique) == 0 {
+		return export.LegacySharedStoreIdentityScope()
+	}
+	scopes := make([]export.IdentityScope, 0, len(unique))
+	for _, scope := range unique {
+		scopes = append(scopes, scope)
+	}
+	if len(scopes) == 1 {
+		return scopes[0]
+	}
+	return export.AggregateIdentityScope(scopes)
 }

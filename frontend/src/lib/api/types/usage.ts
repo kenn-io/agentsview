@@ -20,6 +20,7 @@ export interface ModelBreakdown {
 }
 
 export interface ProjectBreakdown {
+  project_key: string;
   project: string;
   inputTokens: number;
   outputTokens: number;
@@ -51,6 +52,7 @@ export interface DailyUsageEntry {
 }
 
 export interface ProjectTotal {
+  project_key: string;
   project: string;
   inputTokens: number;
   outputTokens: number;

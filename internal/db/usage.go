@@ -53,6 +53,11 @@ type UsageFilter struct {
 	Agent   string // "" for all; supports comma-separated
 	Project string // "" for all; supports comma-separated
 	Machine string // "" for all; supports comma-separated
+	// ProjectLabels and ExcludeProjectLabels preserve exact internal labels
+	// that may themselves contain commas. A non-nil slice takes precedence
+	// over the legacy comma-separated string field.
+	ProjectLabels        []string
+	ExcludeProjectLabels []string
 	// GitBranch is a branchListSep-joined list of opaque (project, branch) tokens (EncodeBranchFilterToken).
 	GitBranch         string
 	Model             string // "" for all; supports comma-separated
@@ -68,6 +73,30 @@ type UsageFilter struct {
 	Termination       string // "", "clean", "unclean", "active", or "stale"
 	Breakdowns        bool   // populate Project/AgentBreakdowns per day
 	SkipSessionCounts bool   // skip distinct session counts when callers do not need them
+}
+
+// ProjectFilterLabels returns exact include labels when present, otherwise it
+// decodes the legacy comma-separated project filter.
+func (f UsageFilter) ProjectFilterLabels() []string {
+	if f.ProjectLabels != nil {
+		return f.ProjectLabels
+	}
+	if f.Project == "" {
+		return nil
+	}
+	return strings.Split(f.Project, ",")
+}
+
+// ExcludedProjectFilterLabels returns exact exclude labels when present,
+// otherwise it decodes the legacy comma-separated project filter.
+func (f UsageFilter) ExcludedProjectFilterLabels() []string {
+	if f.ExcludeProjectLabels != nil {
+		return f.ExcludeProjectLabels
+	}
+	if f.ExcludeProject == "" {
+		return nil
+	}
+	return strings.Split(f.ExcludeProject, ",")
 }
 
 func (f UsageFilter) appendUsageBranchFilterClauses(
@@ -119,13 +148,12 @@ func (f UsageFilter) appendUsageSourceFilterClauses(
 func (f UsageFilter) appendUsageSessionFilterClauses(
 	where string, args []any,
 ) (string, []any) {
-	appendCSV := func(
-		q string, a []any, col, csv string, include bool,
+	appendValues := func(
+		q string, a []any, col string, vals []string, include bool,
 	) (string, []any) {
-		if csv == "" {
+		if len(vals) == 0 {
 			return q, a
 		}
-		vals := strings.Split(csv, ",")
 		op := "IN"
 		if !include {
 			op = "NOT IN"
@@ -148,16 +176,28 @@ func (f UsageFilter) appendUsageSessionFilterClauses(
 		}
 		return q, a
 	}
+	appendCSV := func(
+		q string, a []any, col, csv string, include bool,
+	) (string, []any) {
+		if csv == "" {
+			return q, a
+		}
+		return appendValues(q, a, col, strings.Split(csv, ","), include)
+	}
 
 	where, args = appendCSV(where, args, "s.agent", f.Agent, true)
-	where, args = appendCSV(where, args, "s.project", f.Project, true)
+	where, args = appendValues(
+		where, args, "s.project", f.ProjectFilterLabels(), true,
+	)
 	where, args = appendCSV(where, args, "s.machine", f.Machine, true)
 	if f.GitBranch != "" {
 		var clause string
 		clause, args = BranchPairClauseArgs("s.project", "s.git_branch", f.GitBranch, args)
 		where += "\n\tAND " + clause
 	}
-	where, args = appendCSV(where, args, "s.project", f.ExcludeProject, false)
+	where, args = appendValues(
+		where, args, "s.project", f.ExcludedProjectFilterLabels(), false,
+	)
 	where, args = appendCSV(where, args, "s.agent", f.ExcludeAgent, false)
 
 	if f.MinUserMessages > 0 {
@@ -913,7 +953,8 @@ func cursorUsageRowsSQLForBounds(
 	// Cursor usage rows carry no project or git branch and bypass the session
 	// filter, so any filter they cannot satisfy (project, machine, branch)
 	// must exclude them entirely rather than let them leak into totals.
-	if f.Project != "" || f.ExcludeProject != "" ||
+	if len(f.ProjectFilterLabels()) > 0 ||
+		len(f.ExcludedProjectFilterLabels()) > 0 ||
 		f.Machine != "" || f.GitBranch != "" || f.MinUserMessages > 0 ||
 		f.ExcludeOneShot || termPred != "" ||
 		f.ActiveSince != "" {
@@ -1516,6 +1557,7 @@ type ModelBreakdown struct {
 
 // ProjectBreakdown is the per-project slice of a day's usage.
 type ProjectBreakdown struct {
+	ProjectKey          string  `json:"project_key"`
 	Project             string  `json:"project"`
 	InputTokens         int     `json:"inputTokens"`
 	OutputTokens        int     `json:"outputTokens"`
@@ -1562,6 +1604,31 @@ type DailyUsageResult struct {
 	SessionCounts UsageSessionCounts                `json:"sessionCounts,omitempty"`
 }
 
+func SanitizeDailyUsageProjectLabelsWithCatalog(
+	result *DailyUsageResult,
+	projects map[string]export.ProjectMapEntry,
+) {
+	for i := range result.Daily {
+		for j := range result.Daily[i].ProjectBreakdowns {
+			raw := result.Daily[i].ProjectBreakdowns[j].Project
+			result.Daily[i].ProjectBreakdowns[j].ProjectKey =
+				export.ProjectKeyForEntry(projects[raw])
+			result.Daily[i].ProjectBreakdowns[j].Project =
+				export.SafeProjectDisplayLabel(raw)
+		}
+	}
+	if result.SessionCounts.ByProject != nil {
+		byProject := make(map[string]int, len(result.SessionCounts.ByProject))
+		for raw, count := range result.SessionCounts.ByProject {
+			key := export.ProjectKeyForEntry(projects[raw])
+			if key != "" {
+				byProject[key] += count
+			}
+		}
+		result.SessionCounts.ByProject = byProject
+	}
+}
+
 // loadPricingMap reads the model_pricing table into a map for
 // in-memory joins. This is much faster than a SQL LEFT JOIN
 // on every row of the daily usage scan, since the pricing
@@ -1569,7 +1636,13 @@ type DailyUsageResult struct {
 func (db *DB) loadPricingMap(
 	ctx context.Context,
 ) ([]export.EffectivePricingRow, error) {
-	rows, err := db.getReader().QueryContext(ctx,
+	return db.loadPricingMapFrom(ctx, db.getReader())
+}
+
+func (db *DB) loadPricingMapFrom(
+	ctx context.Context, q sessionExportQuerier,
+) ([]export.EffectivePricingRow, error) {
+	rows, err := q.QueryContext(ctx,
 		`SELECT model_pattern,
 			input_per_mtok, output_per_mtok,
 			cache_creation_per_mtok, cache_read_per_mtok,
@@ -1955,6 +2028,10 @@ func (db *DB) GetDailyUsage(
 		if err != nil {
 			return DailyUsageResult{}, err
 		}
+		projectRows := DailyUsageResult{Daily: daily, SessionCounts: sessionCounts}
+		SanitizeDailyUsageProjectLabelsWithCatalog(&projectRows, projects)
+		daily = projectRows.Daily
+		sessionCounts = projectRows.SessionCounts
 		pricingBlock, err := rateResolver.BuildBlock()
 		if err != nil {
 			return DailyUsageResult{}, fmt.Errorf(
@@ -1963,7 +2040,7 @@ func (db *DB) GetDailyUsage(
 		return DailyUsageResult{
 			SchemaVersion: export.UsageDailySchemaVersion,
 			Pricing:       &pricingBlock,
-			Projects:      projects,
+			Projects:      export.ProjectMapForWire(projects),
 			Daily:         daily,
 			Totals:        totals,
 			SessionCounts: sessionCounts,
@@ -2143,6 +2220,10 @@ func (db *DB) GetDailyUsage(
 	if err != nil {
 		return DailyUsageResult{}, err
 	}
+	projectRows := DailyUsageResult{Daily: daily, SessionCounts: sessionCounts}
+	SanitizeDailyUsageProjectLabelsWithCatalog(&projectRows, projects)
+	daily = projectRows.Daily
+	sessionCounts = projectRows.SessionCounts
 	pricingBlock, err := rateResolver.BuildBlock()
 	if err != nil {
 		return DailyUsageResult{}, fmt.Errorf(
@@ -2151,7 +2232,7 @@ func (db *DB) GetDailyUsage(
 	return DailyUsageResult{
 		SchemaVersion: export.UsageDailySchemaVersion,
 		Pricing:       &pricingBlock,
-		Projects:      projects,
+		Projects:      export.ProjectMapForWire(projects),
 		Daily:         daily,
 		Totals:        totals,
 		SessionCounts: sessionCounts,

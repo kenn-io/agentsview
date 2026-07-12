@@ -17,6 +17,7 @@ type Comparison struct {
 
 // ProjectTotal holds range-wide token and cost totals per project.
 type ProjectTotal struct {
+	ProjectKey          string  `json:"project_key"`
 	Project             string  `json:"project"`
 	InputTokens         int     `json:"inputTokens"`
 	OutputTokens        int     `json:"outputTokens"`
@@ -112,6 +113,7 @@ func projectTotalsFromService(in []service.ProjectTotal) []ProjectTotal {
 	out := make([]ProjectTotal, 0, len(in))
 	for _, total := range in {
 		out = append(out, ProjectTotal{
+			ProjectKey:          total.ProjectKey,
 			Project:             total.Project,
 			InputTokens:         total.InputTokens,
 			OutputTokens:        total.OutputTokens,

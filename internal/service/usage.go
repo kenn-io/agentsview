@@ -3,6 +3,7 @@
 package service
 
 import (
+	"context"
 	"sort"
 	"strings"
 	"time"
@@ -17,31 +18,126 @@ import (
 // the include_* polarity of the HTTP query parameters; BuildUsageFilter
 // inverts them to the db layer's exclude_* form.
 type UsageRequest struct {
-	From             string `json:"from,omitempty"`
-	To               string `json:"to,omitempty"`
-	Timezone         string `json:"timezone,omitempty"`
-	Agent            string `json:"agent,omitempty"`
-	Project          string `json:"project,omitempty"`
-	Machine          string `json:"machine,omitempty"`
-	GitBranch        string `json:"git_branch,omitempty"`
-	ExcludeProject   string `json:"exclude_project,omitempty"`
-	ExcludeAgent     string `json:"exclude_agent,omitempty"`
-	ExcludeModel     string `json:"exclude_model,omitempty"`
-	Model            string `json:"model,omitempty"`
-	MinUserMessages  int    `json:"min_user_messages,omitempty"`
-	ActiveSince      string `json:"active_since,omitempty"`
-	Termination      string `json:"termination,omitempty"`
-	IncludeOneShot   bool   `json:"include_one_shot,omitempty"`
-	IncludeAutomated bool   `json:"include_automated,omitempty"`
-	NoDefaultRange   bool   `json:"no_default_range,omitempty"`
-	Breakdowns       *bool  `json:"breakdowns,omitempty"`
-	SessionCounts    *bool  `json:"session_counts,omitempty"`
+	From              string `json:"from,omitempty"`
+	To                string `json:"to,omitempty"`
+	Timezone          string `json:"timezone,omitempty"`
+	Agent             string `json:"agent,omitempty"`
+	Project           string `json:"project,omitempty"`
+	Machine           string `json:"machine,omitempty"`
+	GitBranch         string `json:"git_branch,omitempty"`
+	ExcludeProject    string `json:"exclude_project,omitempty"`
+	ExcludeProjectKey string `json:"exclude_project_key,omitempty"`
+	ExcludeAgent      string `json:"exclude_agent,omitempty"`
+	ExcludeModel      string `json:"exclude_model,omitempty"`
+	Model             string `json:"model,omitempty"`
+	MinUserMessages   int    `json:"min_user_messages,omitempty"`
+	ActiveSince       string `json:"active_since,omitempty"`
+	Termination       string `json:"termination,omitempty"`
+	IncludeOneShot    bool   `json:"include_one_shot,omitempty"`
+	IncludeAutomated  bool   `json:"include_automated,omitempty"`
+	NoDefaultRange    bool   `json:"no_default_range,omitempty"`
+	Breakdowns        *bool  `json:"breakdowns,omitempty"`
+	SessionCounts     *bool  `json:"session_counts,omitempty"`
+	// ProjectLabels and ExcludeProjectLabels carry exact internal labels
+	// resolved from opaque keys. Unlike the public string fields, they are
+	// never parsed as comma-separated transport input.
+	ProjectLabels        []string `json:"-"`
+	ExcludeProjectLabels []string `json:"-"`
+}
+
+// ResolveUsageProjectKeys translates opaque project-label keys back to the
+// source labels understood by storage queries. The translation stays inside
+// the local data boundary; callers never need the raw label carried by an
+// unsafe path-like project name.
+func ResolveUsageProjectKeys(
+	ctx context.Context, store db.Store, req UsageRequest,
+) (UsageRequest, error) {
+	if req.ExcludeProjectKey == "" {
+		return req, nil
+	}
+	resolved, err := resolveUsageProjectKeyLabels(
+		ctx, store, req.ExcludeProjectKey,
+	)
+	if err != nil {
+		return UsageRequest{}, err
+	}
+	req.ExcludeProjectLabels = append(req.ExcludeProjectLabels, resolved...)
+	req.ExcludeProjectKey = ""
+	return req, nil
+}
+
+func resolveUsageProjectKeyLabels(
+	ctx context.Context, store db.Store, keys string,
+) ([]string, error) {
+	labels, err := store.GetActiveProjectLabels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	catalog, err := store.BuildProjectIdentityMap(ctx, labels)
+	if err != nil {
+		return nil, err
+	}
+	byKey := make(map[string]string, len(catalog))
+	for label, entry := range catalog {
+		if entry.ProjectKey != "" {
+			byKey[entry.ProjectKey] = label
+		}
+	}
+	resolved := make([]string, 0)
+	for _, key := range splitCSVTokens(keys) {
+		label, ok := byKey[key]
+		if !ok {
+			return nil, &UsageInputError{
+				Code: UsageErrorCodeUnknownProjectKey,
+				Msg:  "unknown project key",
+			}
+		}
+		resolved = append(resolved, label)
+	}
+	return resolved, nil
+}
+
+func ResolveUsagePairwiseProjectKeys(
+	ctx context.Context, store db.Store, req UsagePairwiseComparisonRequest,
+) (UsagePairwiseComparisonRequest, error) {
+	resolvedBase, err := ResolveUsageProjectKeys(ctx, store, req.UsageRequest)
+	if err != nil {
+		return UsagePairwiseComparisonRequest{}, err
+	}
+	req.UsageRequest = resolvedBase
+	req.LeftProjectLabels, err = resolvePairwiseProjectLabels(
+		ctx, store, req.LeftDimension, req.LeftValue,
+	)
+	if err != nil {
+		return UsagePairwiseComparisonRequest{}, err
+	}
+	req.RightProjectLabels, err = resolvePairwiseProjectLabels(
+		ctx, store, req.RightDimension, req.RightValue,
+	)
+	if err != nil {
+		return UsagePairwiseComparisonRequest{}, err
+	}
+	return req, nil
+}
+
+func resolvePairwiseProjectLabels(
+	ctx context.Context, store db.Store, dimension, value string,
+) ([]string, error) {
+	if dimension != "project" || !strings.HasPrefix(value, "pl1:sha256:") {
+		return nil, nil
+	}
+	return resolveUsageProjectKeyLabels(ctx, store, value)
 }
 
 // UsageInputError flags an invalid usage filter (bad timezone, date, or
 // range). Transports map it to a 400-style client error; it mirrors
 // db.SearchInputError so handlers can errors.As it.
-type UsageInputError struct{ Msg string }
+const UsageErrorCodeUnknownProjectKey = "unknown_project_key"
+
+type UsageInputError struct {
+	Code string
+	Msg  string
+}
 
 func (e *UsageInputError) Error() string { return e.Msg }
 
@@ -86,13 +182,19 @@ func BuildUsageFilter(req UsageRequest) (db.UsageFilter, error) {
 		sessionCounts = *req.SessionCounts
 	}
 	return db.UsageFilter{
-		From:              from,
-		To:                to,
-		Agent:             req.Agent,
-		Project:           req.Project,
-		Machine:           req.Machine,
-		GitBranch:         req.GitBranch,
-		ExcludeProject:    req.ExcludeProject,
+		From:    from,
+		To:      to,
+		Agent:   req.Agent,
+		Project: req.Project,
+		ProjectLabels: mergeResolvedProjectLabels(
+			req.Project, req.ProjectLabels,
+		),
+		Machine:        req.Machine,
+		GitBranch:      req.GitBranch,
+		ExcludeProject: req.ExcludeProject,
+		ExcludeProjectLabels: mergeResolvedProjectLabels(
+			req.ExcludeProject, req.ExcludeProjectLabels,
+		),
 		ExcludeAgent:      req.ExcludeAgent,
 		ExcludeModel:      req.ExcludeModel,
 		Model:             req.Model,
@@ -125,8 +227,16 @@ func defaultUsageDateRange(from, to string) (string, string) {
 	return from, to
 }
 
+func mergeResolvedProjectLabels(raw string, resolved []string) []string {
+	if resolved == nil {
+		return nil
+	}
+	return append(splitCSVTokens(raw), resolved...)
+}
+
 // ProjectTotal holds range-wide token and cost totals per project.
 type ProjectTotal struct {
+	ProjectKey          string  `json:"project_key"`
 	Project             string  `json:"project"`
 	InputTokens         int     `json:"inputTokens"`
 	OutputTokens        int     `json:"outputTokens"`
@@ -258,6 +368,10 @@ type UsagePairwiseComparisonRequest struct {
 	LeftValue      string `json:"left_value,omitempty"`
 	RightDimension string `json:"right_dimension,omitempty"`
 	RightValue     string `json:"right_value,omitempty"`
+	// Project label slices are populated only after resolving opaque keys and
+	// preserve exact labels that cannot round-trip through CSV strings.
+	LeftProjectLabels  []string `json:"-"`
+	RightProjectLabels []string `json:"-"`
 }
 
 // buildUsageSummary assembles a UsageSummaryResult from a daily-usage
@@ -294,10 +408,13 @@ func foldProjectTotals(daily []db.DailyUsageEntry) []ProjectTotal {
 	m := make(map[string]*ProjectTotal)
 	for _, d := range daily {
 		for _, pb := range d.ProjectBreakdowns {
-			pt, ok := m[pb.Project]
+			pt, ok := m[pb.ProjectKey]
 			if !ok {
-				pt = &ProjectTotal{Project: pb.Project}
-				m[pb.Project] = pt
+				pt = &ProjectTotal{
+					ProjectKey: pb.ProjectKey,
+					Project:    pb.Project,
+				}
+				m[pb.ProjectKey] = pt
 			}
 			pt.InputTokens += pb.InputTokens
 			pt.OutputTokens += pb.OutputTokens
@@ -313,6 +430,9 @@ func foldProjectTotals(daily []db.DailyUsageEntry) []ProjectTotal {
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Cost != out[j].Cost {
 			return out[i].Cost > out[j].Cost
+		}
+		if out[i].ProjectKey != out[j].ProjectKey {
+			return out[i].ProjectKey < out[j].ProjectKey
 		}
 		return out[i].Project < out[j].Project
 	})
@@ -435,6 +555,7 @@ func BuildUsagePairwiseFilters(
 		base,
 		req.LeftDimension,
 		req.LeftValue,
+		req.LeftProjectLabels,
 		"left",
 	)
 	if err != nil {
@@ -444,6 +565,7 @@ func BuildUsagePairwiseFilters(
 		base,
 		req.RightDimension,
 		req.RightValue,
+		req.RightProjectLabels,
 		"right",
 	)
 	if err != nil {
@@ -453,19 +575,24 @@ func BuildUsagePairwiseFilters(
 }
 
 func intersectCSV(base, add string) (string, bool) {
-	if add == "" {
-		return base, base != ""
+	out, ok := intersectValues(splitCSVTokens(base), splitCSVTokens(add))
+	return joinCSVTokens(out), ok
+}
+
+func intersectValues(base, add []string) ([]string, bool) {
+	if len(add) == 0 {
+		return base, len(base) > 0
 	}
-	if base == "" {
-		return add, true
+	if len(base) == 0 {
+		return append([]string(nil), add...), true
 	}
 	addSet := map[string]struct{}{}
-	for _, token := range splitCSVTokens(add) {
+	for _, token := range add {
 		addSet[token] = struct{}{}
 	}
 	out := make([]string, 0)
 	seen := map[string]struct{}{}
-	for _, token := range splitCSVTokens(base) {
+	for _, token := range base {
 		if _, ok := addSet[token]; !ok {
 			continue
 		}
@@ -476,9 +603,9 @@ func intersectCSV(base, add string) (string, bool) {
 		out = append(out, token)
 	}
 	if len(out) == 0 {
-		return "", false
+		return nil, false
 	}
-	return joinCSVTokens(out), true
+	return out, true
 }
 
 func splitCSVTokens(raw string) []string {
@@ -503,7 +630,7 @@ type pairwiseFilterResult struct {
 }
 
 func applyPairwiseDimension(
-	base db.UsageFilter, dimension, value string,
+	base db.UsageFilter, dimension, value string, projectLabels []string,
 	label string,
 ) (pairwiseFilterResult, error) {
 	filter := base
@@ -517,7 +644,13 @@ func applyPairwiseDimension(
 		filter.Model, ok = intersectCSV(filter.Model, value)
 		return pairwiseFilterResult{filter: filter, empty: !ok}, nil
 	case "project":
-		filter.Project, ok = intersectCSV(filter.Project, value)
+		if projectLabels == nil {
+			projectLabels = splitCSVTokens(value)
+		}
+		filter.ProjectLabels, ok = intersectValues(
+			filter.ProjectFilterLabels(), projectLabels,
+		)
+		filter.Project = joinCSVTokens(filter.ProjectLabels)
 		return pairwiseFilterResult{filter: filter, empty: !ok}, nil
 	case "":
 		return pairwiseFilterResult{},

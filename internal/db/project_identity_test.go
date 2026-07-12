@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -36,6 +38,296 @@ func TestProjectObservationDatabaseIDIsCreatedAndStable(t *testing.T) {
 	overridden, err := d.GetOrCreateDatabaseID(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, "test-database-id", overridden)
+}
+
+func TestProjectObservationArchiveIDIsCreatedAndStable(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	first, err := d.GetArchiveID(ctx)
+	require.NoError(t, err)
+	assert.Regexp(t, regexp.MustCompile(
+		`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`,
+	), first)
+
+	second, err := d.GetOrCreateArchiveID(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, first, second)
+}
+
+func TestProjectIdentityPublicationRevisionTracksSnapshotChanges(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	before, err := d.ProjectIdentityPublicationRevision(ctx)
+	require.NoError(t, err)
+
+	require.NoError(t, d.UpsertSession(Session{
+		ID: "revision-session", Project: "app", Machine: "local", Agent: "codex",
+	}))
+	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: "revision-session", Project: "app", Machine: "local",
+			RootPath: "/tmp/app", ObservedAt: time.Now().UTC(),
+		}))
+	afterInsert, err := d.ProjectIdentityPublicationRevision(ctx)
+	require.NoError(t, err)
+	assert.Greater(t, afterInsert, before)
+
+	require.NoError(t, d.DeleteSession("revision-session"))
+	afterDelete, err := d.ProjectIdentityPublicationRevision(ctx)
+	require.NoError(t, err)
+	assert.Greater(t, afterDelete, afterInsert)
+}
+
+func TestSessionProjectIdentitySnapshotPreservesFirstRootKeyUntilRemoteEvidence(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+	require.NoError(t, d.UpsertSession(Session{
+		ID: "root-snapshot", Project: "app", Machine: "local", Agent: "codex",
+	}))
+	firstObservedAt := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: "root-snapshot", Project: "app", Machine: "local",
+			RootPath: "/first/app", ObservedAt: firstObservedAt,
+		}))
+	first, err := d.listSessionProjectIdentitySnapshots(
+		ctx, []string{"root-snapshot"},
+	)
+	require.NoError(t, err)
+	require.Contains(t, first, "root-snapshot")
+	require.NotEmpty(t, first["root-snapshot"].Key)
+
+	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: "root-snapshot", Project: "app", Machine: "local",
+			RootPath: "/later/app", ObservedAt: firstObservedAt.Add(time.Hour),
+		}))
+	afterRoot, err := d.listSessionProjectIdentitySnapshots(
+		ctx, []string{"root-snapshot"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "/first/app", afterRoot["root-snapshot"].RootPath)
+	assert.Equal(t, first["root-snapshot"].Key,
+		afterRoot["root-snapshot"].Key)
+
+	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: "root-snapshot", Project: "app", Machine: "local",
+			RootPath: "/later/app", GitRemote: "https://example.com/example/app.git",
+			ObservedAt: firstObservedAt.Add(2 * time.Hour),
+		}))
+	afterRemote, err := d.listSessionProjectIdentitySnapshots(
+		ctx, []string{"root-snapshot"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, export.ProjectResolutionResolved,
+		afterRemote["root-snapshot"].RemoteResolution)
+	assert.Equal(t, "https://example.com/example/app.git",
+		afterRemote["root-snapshot"].GitRemote)
+	assert.NotEqual(t, first["root-snapshot"].Key,
+		afterRemote["root-snapshot"].Key)
+
+	require.NoError(t, d.UpsertSession(Session{
+		ID: "ambiguous-snapshot", Project: "app", Machine: "local", Agent: "codex",
+	}))
+	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: "ambiguous-snapshot", Project: "app", Machine: "local",
+			RootPath: "/first/ambiguous", ObservedAt: firstObservedAt,
+		}))
+	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: "ambiguous-snapshot", Project: "app", Machine: "local",
+			RootPath: "/later/ambiguous", RemoteCandidateCount: 2,
+			RemoteResolution: export.ProjectResolutionAmbiguous,
+			ObservedAt:       firstObservedAt.Add(time.Hour),
+		}))
+	afterAmbiguous, err := d.listSessionProjectIdentitySnapshots(
+		ctx, []string{"ambiguous-snapshot"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, export.ProjectResolutionAmbiguous,
+		afterAmbiguous["ambiguous-snapshot"].RemoteResolution)
+	assert.Equal(t, 2,
+		afterAmbiguous["ambiguous-snapshot"].RemoteCandidateCount)
+}
+
+func TestLoadProjectIdentityPublicationDeltaReturnsRowsAndTombstones(
+	t *testing.T,
+) {
+	d := testDB(t)
+	ctx := context.Background()
+	observedAt := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
+	for _, project := range []string{"alpha", "beta"} {
+		sessionID := "identity-" + project
+		require.NoError(t, d.UpsertSession(Session{
+			ID: sessionID, Project: project, Machine: "local", Agent: "codex",
+		}))
+		require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+			export.ProjectIdentityObservation{
+				SessionID: sessionID, Project: project, Machine: "local",
+				RootPath:         "/workspace/" + project,
+				GitRemote:        "https://example.com/" + project + ".git",
+				GitRemoteName:    "origin",
+				RemoteResolution: export.ProjectResolutionResolved,
+				ObservedAt:       observedAt,
+			},
+		))
+	}
+	baseline, err := d.ProjectIdentityPublicationRevision(ctx)
+	require.NoError(t, err)
+
+	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: "identity-alpha", Project: "alpha", Machine: "local",
+			RootPath:         "/workspace/alpha",
+			GitRemote:        "https://example.com/alpha.git",
+			GitRemoteName:    "upstream",
+			RemoteResolution: export.ProjectResolutionResolved,
+			ObservedAt:       observedAt.Add(time.Hour),
+		},
+	))
+	_, err = d.rawWriter().ExecContext(ctx, `
+		DELETE FROM project_identity_observations
+		WHERE project = ? AND machine = ? AND root_path = ? AND git_remote = ?`,
+		"beta", "local", "/workspace/beta", "https://example.com/beta.git",
+	)
+	require.NoError(t, err)
+	require.NoError(t, d.DeleteSession("identity-alpha"))
+	through, err := d.ProjectIdentityPublicationRevision(ctx)
+	require.NoError(t, err)
+
+	delta, err := d.LoadProjectIdentityPublicationDelta(
+		ctx, baseline, through, nil, nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, delta.Observations, 1)
+	assert.Equal(t, "alpha", delta.Observations[0].Project)
+	assert.Equal(t, "upstream", delta.Observations[0].GitRemoteName)
+	assert.Equal(t, []ProjectIdentityObservationKey{{
+		Project: "beta", Machine: "local", RootPath: "/workspace/beta",
+		GitRemote: "https://example.com/beta.git",
+	}}, delta.ObservationDeletes)
+	assert.Empty(t, delta.Snapshots)
+	assert.Equal(t, []SessionProjectIdentitySnapshotKey{{
+		SessionID: "identity-alpha", Project: "alpha",
+	}}, delta.SnapshotDeletes)
+
+	betaDelta, err := d.LoadProjectIdentityPublicationDelta(
+		ctx, baseline, through, []string{"beta"}, nil,
+	)
+	require.NoError(t, err)
+	assert.Empty(t, betaDelta.Observations)
+	assert.Equal(t, delta.ObservationDeletes, betaDelta.ObservationDeletes)
+	assert.Empty(t, betaDelta.Snapshots)
+	assert.Empty(t, betaDelta.SnapshotDeletes)
+}
+
+func TestCopyArchiveIdentityFromPreservesLogicalArchiveAndNewGeneration(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "source.db")
+	source, err := Open(sourcePath)
+	require.NoError(t, err)
+	require.NoError(t, source.SetDatabaseIDForTest(ctx, "source-generation"))
+	require.NoError(t, source.SetArchiveIdentityForTest(
+		ctx, "stable-archive", strings.Repeat("a", 64),
+	))
+	require.NoError(t, source.Close())
+
+	target := testDB(t)
+	require.NoError(t, target.SetDatabaseIDForTest(ctx, "new-generation"))
+	require.NoError(t, target.SetArchiveIdentityForTest(
+		ctx, "temporary-archive", strings.Repeat("b", 64),
+	))
+	require.NoError(t, target.CopyArchiveIdentityFrom(sourcePath))
+
+	archiveID, err := target.GetArchiveID(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "stable-archive", archiveID)
+	archiveSalt, err := target.GetArchiveSalt(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, strings.Repeat("a", 64), archiveSalt)
+	databaseID, err := target.GetDatabaseID(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "new-generation", databaseID)
+}
+
+func TestProjectObservationArchiveSaltIsCreatedAndStable(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+
+	first, err := d.GetArchiveSalt(ctx)
+	require.NoError(t, err)
+	assert.Regexp(t, regexp.MustCompile(`^[0-9a-f]{64}$`), first)
+
+	second, err := d.GetOrCreateArchiveSalt(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, first, second)
+}
+
+func TestProjectObservationArchiveSaltRejectsCorruptPersistedValue(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	require.NoError(t, d.SetArchiveIdentityForTest(ctx, "archive", "not-a-salt"))
+
+	_, err := d.GetArchiveSalt(ctx)
+	require.ErrorIs(t, err, ErrArchiveSaltInvalid)
+	_, err = d.GetOrCreateArchiveSalt(ctx)
+	require.ErrorIs(t, err, ErrArchiveSaltInvalid,
+		"a corrupt established salt must not be silently replaced")
+}
+
+func TestCopyArchiveIdentityFromRejectsCorruptSalt(t *testing.T) {
+	ctx := context.Background()
+	sourcePath := filepath.Join(t.TempDir(), "source.db")
+	source, err := Open(sourcePath)
+	require.NoError(t, err)
+	require.NoError(t, source.SetArchiveIdentityForTest(
+		ctx, "archive", "truncated",
+	))
+	require.NoError(t, source.Close())
+
+	target := testDB(t)
+	err = target.CopyArchiveIdentityFrom(sourcePath)
+	require.ErrorIs(t, err, ErrArchiveSaltInvalid)
+}
+
+func TestProjectIdentityObservationRoundTripsRepositoryContext(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	want := export.ProjectIdentityObservation{
+		SourceArchiveID:      "archive-source",
+		SourceArchiveSalt:    "archive-salt",
+		Project:              "app",
+		Machine:              "host",
+		RootPath:             "/private/app/worktree",
+		RepositoryPath:       "/private/app/.git",
+		WorktreeRootPath:     "/private/app/worktree",
+		WorktreeRelationship: export.WorktreeLinked,
+		CheckoutState:        export.CheckoutDetached,
+		GitBranch:            "",
+		RemoteResolution:     export.ProjectResolutionAmbiguous,
+		RemoteCandidateCount: 2,
+		ObservedAt:           time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC),
+	}
+
+	require.NoError(t, d.UpsertProjectIdentityObservation(ctx, want))
+	got, err := d.ListProjectIdentityObservations(ctx, []string{"app"})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, want.RepositoryPath, got[0].RepositoryPath)
+	assert.Equal(t, want.SourceArchiveID, got[0].SourceArchiveID)
+	assert.Equal(t, want.SourceArchiveSalt, got[0].SourceArchiveSalt)
+	assert.Equal(t, want.WorktreeRelationship, got[0].WorktreeRelationship)
+	assert.Equal(t, want.CheckoutState, got[0].CheckoutState)
+	assert.Equal(t, want.RemoteResolution, got[0].RemoteResolution)
+	assert.Equal(t, want.RemoteCandidateCount, got[0].RemoteCandidateCount)
 }
 
 func TestProjectObservationDatabaseIDInitializedForReadOnlyOpen(t *testing.T) {
@@ -115,10 +407,8 @@ func TestProjectObservationRawValuesAreAuthoritativeForExportKeys(t *testing.T) 
 	require.Equal(t, export.ProjectResolutionResolved, projects["app"].Resolution)
 	require.NotNil(t, projects["app"].Identity)
 	assert.Equal(t, "github.com/Org/Repo", projects["app"].Identity.NormalizedRemote)
-	assert.Equal(t,
-		projectIdentitySHA("git_remote\n"+"github.com/Org/Repo"),
-		projects["app"].Identity.Key,
-	)
+	assert.Equal(t, export.ProjectKindGitRemote, projects["app"].Identity.Kind)
+	assert.NotEmpty(t, projects["app"].Identity.Key)
 }
 
 func TestProjectObservationStripsGitRemoteCredentialsBeforeStorage(t *testing.T) {
@@ -158,6 +448,9 @@ func TestProjectObservationMigrationStripsStoredGitRemoteCredentials(t *testing.
 		projectIdentitySHA("git_remote\n"+"example.com/acme/app"),
 	)
 	require.NoError(t, err)
+	_, err = d.rawWriter().Exec(`DELETE FROM stats WHERE key = ?`,
+		projectIdentityRemoteScrubCompletedKey)
+	require.NoError(t, err)
 	require.NoError(t, d.Close())
 
 	reopened, err := Open(path)
@@ -170,6 +463,12 @@ func TestProjectObservationMigrationStripsStoredGitRemoteCredentials(t *testing.
 	require.Len(t, got, 1)
 	assert.Equal(t, "https://example.com/acme/app.git", got[0].GitRemote)
 	assert.Equal(t, "example.com/acme/app", got[0].NormalizedRemote)
+	var scrubbed string
+	require.NoError(t, reopened.getReader().QueryRowContext(
+		context.Background(), `SELECT value FROM stats WHERE key = ?`,
+		projectIdentityRemoteScrubCompletedKey,
+	).Scan(&scrubbed))
+	assert.Equal(t, "1", scrubbed)
 }
 
 func TestProjectObservationListFiltersLabelsAndKeepsPersistedRemoteMachineRows(t *testing.T) {
@@ -233,10 +532,12 @@ func TestProjectIdentityGoldenFixtureObservationsAreDeterministic(t *testing.T) 
 	))
 	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
-			Project:    "path-project",
-			Machine:    "golden-host",
-			RootPath:   "/fixtures/path-project",
-			ObservedAt: observedAt,
+			Project:              "path-project",
+			Machine:              "golden-host",
+			RootPath:             "/fixtures/path-project",
+			RepositoryPath:       "/fixtures/path-project/.git",
+			WorktreeRelationship: export.WorktreeMain,
+			ObservedAt:           observedAt,
 		},
 	))
 
@@ -246,22 +547,19 @@ func TestProjectIdentityGoldenFixtureObservationsAreDeterministic(t *testing.T) 
 	require.Equal(t, export.ProjectResolutionResolved,
 		got["remote-project"].Resolution)
 	require.NotNil(t, got["remote-project"].Identity)
-	assert.Equal(t, "git_remote", got["remote-project"].Identity.KeySource)
+	assert.Equal(t, export.ProjectKindGitRemote, got["remote-project"].Identity.Kind)
 	assert.Equal(t, "github.com/acme/remote-project",
 		got["remote-project"].Identity.NormalizedRemote)
-	assert.Equal(t,
-		projectIdentitySHA("git_remote\n"+"github.com/acme/remote-project"),
-		got["remote-project"].Identity.Key)
+	assert.NotEmpty(t, got["remote-project"].Identity.Key)
 
 	require.Equal(t, export.ProjectResolutionResolved,
 		got["path-project"].Resolution)
 	require.NotNil(t, got["path-project"].Identity)
-	assert.Equal(t, "root_path", got["path-project"].Identity.KeySource)
-	assert.Equal(t, "/fixtures/path-project",
-		got["path-project"].Identity.RootPath)
-	assert.Equal(t,
-		projectIdentitySHA("root_path\n"+"/fixtures/path-project"),
-		got["path-project"].Identity.Key)
+	assert.Equal(t, export.ProjectKindMachineRoot, got["path-project"].Identity.Kind)
+	assert.Empty(t, got["path-project"].Identity.NormalizedRemote)
+	encoded, err := json.Marshal(got["path-project"])
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "/fixtures/path-project")
 
 	assert.Equal(t, export.ProjectResolutionUnknown,
 		got["unknown-project"].Resolution)
@@ -298,10 +596,8 @@ func TestProjectObservationSessionBatchWritePersistsObservation(t *testing.T) {
 	assert.Empty(t, got[0].GitRemote)
 
 	projects := export.BuildProjectsMap([]string{"mapped-project"}, got)
-	require.Equal(t, export.ProjectResolutionResolved, projects["mapped-project"].Resolution)
-	require.NotNil(t, projects["mapped-project"].Identity)
-	assert.Equal(t, "root_path", projects["mapped-project"].Identity.KeySource)
-	assert.Empty(t, projects["mapped-project"].Identity.NormalizedRemote)
+	require.Equal(t, export.ProjectResolutionUnknown, projects["mapped-project"].Resolution)
+	assert.Nil(t, projects["mapped-project"].Identity)
 }
 
 func seedProjectIdentityObservation(t *testing.T, d *DB, project string) {
@@ -373,6 +669,30 @@ func TestProjectObservationFallbackDoesNotRecreateSameRootWhenRemoteExists(t *te
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "https://github.com/acme/app.git", got[0].GitRemote)
+}
+
+func TestProjectObservationAmbiguousSupersedesResolvedAggregate(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "repo")
+	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			Project: "app", Machine: "laptop", RootPath: root,
+			GitRemote: "https://github.com/acme/app.git",
+		},
+	))
+	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			Project: "app", Machine: "laptop", RootPath: root,
+			RemoteResolution:     export.ProjectResolutionAmbiguous,
+			RemoteCandidateCount: 2,
+		},
+	))
+
+	got, err := d.BuildProjectIdentityMap(ctx, []string{"app"})
+	require.NoError(t, err)
+	assert.Equal(t, export.ProjectResolutionAmbiguous, got["app"].Resolution)
+	assert.Nil(t, got["app"].Identity)
 }
 
 func TestProjectObservationScrubDowngradesUnusableRemoteToFallback(t *testing.T) {
@@ -456,7 +776,7 @@ func TestProjectObservationDatabaseIDConcurrentCreateReturnsSingleID(t *testing.
 	require.Len(t, seen, 1)
 }
 
-func TestProjectIdentityMapPrecedencePersistedLiveWorktreeUnknown(t *testing.T) {
+func TestProjectIdentityMapUsesPersistedFactsWithoutFilesystemInference(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("test uses POSIX-style temp git paths")
 	}
@@ -550,20 +870,14 @@ func TestProjectIdentityMapPrecedencePersistedLiveWorktreeUnknown(t *testing.T) 
 	require.NotNil(t, got["persisted"].Identity)
 	assert.Equal(t, "github.com/acme/persisted", got["persisted"].Identity.NormalizedRemote)
 
-	require.Equal(t, export.ProjectResolutionResolved, got["live"].Resolution)
-	require.NotNil(t, got["live"].Identity)
-	assert.Equal(t, "github.com/acme/live", got["live"].Identity.NormalizedRemote)
-	assert.Equal(t, "git_remote", got["live"].Identity.KeySource)
+	require.Equal(t, export.ProjectResolutionUnknown, got["live"].Resolution)
+	assert.Nil(t, got["live"].Identity)
 
-	require.Equal(t, export.ProjectResolutionResolved, got["mapped"].Resolution)
-	require.NotNil(t, got["mapped"].Identity)
-	assert.Empty(t, got["mapped"].Identity.NormalizedRemote)
-	assert.Equal(t, "root_path", got["mapped"].Identity.KeySource)
+	require.Equal(t, export.ProjectResolutionUnknown, got["mapped"].Resolution)
+	assert.Nil(t, got["mapped"].Identity)
 
-	require.Equal(t, export.ProjectResolutionResolved, got["file-parent"].Resolution)
-	require.NotNil(t, got["file-parent"].Identity)
-	assert.Equal(t, "github.com/acme/file-parent", got["file-parent"].Identity.NormalizedRemote)
-	assert.Equal(t, "git_remote", got["file-parent"].Identity.KeySource)
+	require.Equal(t, export.ProjectResolutionUnknown, got["file-parent"].Resolution)
+	assert.Nil(t, got["file-parent"].Identity)
 
 	assert.Equal(t, export.ProjectResolutionUnknown, got["remote"].Resolution)
 	assert.Nil(t, got["remote"].Identity)
@@ -602,15 +916,11 @@ func TestProjectIdentityMapLegacyFallbackAcceptsWindowsDriveRoots(t *testing.T) 
 	)
 	require.NoError(t, err)
 
-	require.Equal(t, export.ProjectResolutionResolved, got["windows-backslash"].Resolution)
-	require.NotNil(t, got["windows-backslash"].Identity)
-	assert.Equal(t, export.ProjectIdentityKeySourceRootPath, got["windows-backslash"].Identity.KeySource)
-	assert.Equal(t, "C:/repo", got["windows-backslash"].Identity.RootPath)
+	require.Equal(t, export.ProjectResolutionUnknown, got["windows-backslash"].Resolution)
+	assert.Nil(t, got["windows-backslash"].Identity)
 
-	require.Equal(t, export.ProjectResolutionResolved, got["windows-slash"].Resolution)
-	require.NotNil(t, got["windows-slash"].Identity)
-	assert.Equal(t, export.ProjectIdentityKeySourceRootPath, got["windows-slash"].Identity.KeySource)
-	assert.Equal(t, "C:/repo", got["windows-slash"].Identity.RootPath)
+	require.Equal(t, export.ProjectResolutionUnknown, got["windows-slash"].Resolution)
+	assert.Nil(t, got["windows-slash"].Identity)
 
 	assert.Equal(t, export.ProjectResolutionUnknown, got["remote-prefixed"].Resolution)
 	assert.Nil(t, got["remote-prefixed"].Identity)
@@ -639,13 +949,9 @@ func TestProjectIdentityMapUnknownPersistedObservationUsesLegacyFallback(t *test
 
 	got, err := d.BuildProjectIdentityMap(ctx, []string{"fallback"})
 	require.NoError(t, err)
-	require.Equal(t, export.ProjectResolutionResolved,
+	require.Equal(t, export.ProjectResolutionUnknown,
 		got["fallback"].Resolution)
-	require.NotNil(t, got["fallback"].Identity)
-	assert.Equal(t, export.ProjectIdentityKeySourceRootPath,
-		got["fallback"].Identity.KeySource)
-	assert.Equal(t, projectIdentityTestRoot(t, root),
-		got["fallback"].Identity.RootPath)
+	assert.Nil(t, got["fallback"].Identity)
 }
 
 func TestProjectIdentityMapLegacyFallbackUsesNoRemoteGitRoot(t *testing.T) {
@@ -666,13 +972,9 @@ func TestProjectIdentityMapLegacyFallbackUsesNoRemoteGitRoot(t *testing.T) {
 
 	got, err := d.BuildProjectIdentityMap(ctx, []string{"git-root"})
 	require.NoError(t, err)
-	wantRoot := projectIdentityTestRoot(t, repo)
-	require.Equal(t, export.ProjectResolutionResolved,
+	require.Equal(t, export.ProjectResolutionUnknown,
 		got["git-root"].Resolution)
-	require.NotNil(t, got["git-root"].Identity)
-	assert.Equal(t, export.ProjectIdentityKeySourceRootPath,
-		got["git-root"].Identity.KeySource)
-	assert.Equal(t, wantRoot, got["git-root"].Identity.RootPath)
+	assert.Nil(t, got["git-root"].Identity)
 }
 
 func TestProjectIdentityMapLegacyFallbackUsesRepoDotWorktreesMapping(t *testing.T) {
@@ -705,28 +1007,8 @@ func TestProjectIdentityMapLegacyFallbackUsesRepoDotWorktreesMapping(t *testing.
 
 	got, err := d.BuildProjectIdentityMap(ctx, []string{"acme_app"})
 	require.NoError(t, err)
-	require.Equal(t, export.ProjectResolutionResolved, got["acme_app"].Resolution)
-	require.NotNil(t, got["acme_app"].Identity)
-	want := export.BuildStoredProjectIdentity(export.ProjectIdentityInput{
-		RootPath:         worktreesDir,
-		WorktreeRootPath: worktreesDir,
-	})
-	assert.Equal(t, want.Key, got["acme_app"].Identity.Key)
-	assert.Equal(t, export.ProjectIdentityKeySourceRootPath,
-		got["acme_app"].Identity.KeySource)
-}
-
-func projectIdentityTestRoot(t *testing.T, root string) string {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		if resolved, err := filepath.EvalSymlinks(root); err == nil {
-			root = resolved
-		}
-	}
-	normalized, ok, err := export.NormalizeRootPath(root)
-	require.NoError(t, err)
-	require.True(t, ok)
-	return normalized
+	require.Equal(t, export.ProjectResolutionUnknown, got["acme_app"].Resolution)
+	assert.Nil(t, got["acme_app"].Identity)
 }
 
 func TestProjectIdentityMapLegacyFallbackClosesRowsBeforeMappingLookup(t *testing.T) {
@@ -757,8 +1039,9 @@ func TestProjectIdentityMapLegacyFallbackClosesRowsBeforeMappingLookup(t *testin
 
 	got, err := d.BuildProjectIdentityMap(ctx, []string{"mapped"})
 	require.NoError(t, err)
-	require.Equal(t, export.ProjectResolutionResolved,
+	require.Equal(t, export.ProjectResolutionUnknown,
 		got["mapped"].Resolution)
+	assert.Nil(t, got["mapped"].Identity)
 }
 
 func projectObservationRowCount(t *testing.T, d *DB) int {

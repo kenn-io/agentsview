@@ -21,6 +21,7 @@ function usageSummary(): UsageSummaryResponse {
     daily: [],
     projectTotals: [
       {
+        project_key: "pl1:sha256:alpha",
         project: "alpha",
         inputTokens: 200,
         outputTokens: 100,
@@ -29,6 +30,7 @@ function usageSummary(): UsageSummaryResponse {
         cost: 10,
       },
       {
+        project_key: "pl1:sha256:beta",
         project: "beta",
         inputTokens: 100,
         outputTokens: 50,
@@ -124,7 +126,7 @@ describe("UsagePairwiseComparisonPanel", () => {
     usage.summary = usageSummary();
     usage.pairwiseSelection = {
       left: { dimension: "model", value: "claude-sonnet-4-20250514" },
-      right: { dimension: "project", value: "beta" },
+      right: { dimension: "project", value: "pl1:sha256:beta" },
     };
     usage.pairwiseComparison = pairwiseComparison();
     usage.loading.pairwise = false;

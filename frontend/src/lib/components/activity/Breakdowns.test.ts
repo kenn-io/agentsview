@@ -28,12 +28,12 @@ function makeReport(): Report {
     buckets: [],
     by_project: [
       {
-        key: "alpha", agent_minutes: 30, cost: 0,
+        key: "alpha", project_key: "pl1:sha256:alpha", agent_minutes: 30, cost: 0,
         interactive_agent_minutes: 20, automated_agent_minutes: 10,
         interactive_cost: 0, automated_cost: 0,
       },
       {
-        key: "beta", agent_minutes: 10, cost: 0,
+        key: "beta", project_key: "pl1:sha256:beta", agent_minutes: 10, cost: 0,
         interactive_agent_minutes: 10, automated_agent_minutes: 0,
         interactive_cost: 0, automated_cost: 0,
       },
@@ -160,5 +160,21 @@ describe("Breakdowns", () => {
     expect(values.some((v) => v.includes("$5.00"))).toBe(true);
     unmount(c);
     target.remove();
+  });
+
+  it("renders distinct project identities that share a display label", async () => {
+	const report = makeReport();
+	report.by_project = [
+		{ ...report.by_project![0], key: "same", project_key: "pl1:sha256:a" },
+		{ ...report.by_project![1], key: "same", project_key: "pl1:sha256:b" },
+	] as Report["by_project"];
+	const target = document.createElement("div");
+	document.body.appendChild(target);
+	const component = mount(Breakdowns, { target, props: { report } });
+	await tick();
+
+	expect(target.querySelectorAll(".bar-row")).toHaveLength(2);
+	unmount(component);
+	target.remove();
   });
 });

@@ -191,11 +191,10 @@ func (s *Server) runSyncWithResyncFallback(
 	ctx context.Context, engine *syncpkg.Engine,
 	progress func(syncpkg.Progress),
 ) syncpkg.SyncStats {
-	local, ok := s.db.(*db.DB)
-	if ok && local.NeedsResync() {
-		return s.runResyncWithFallback(ctx, engine, progress)
-	}
-	return engine.SyncAll(ctx, progress)
+	stats, _ := engine.SyncThenRun(
+		ctx, false, progress, func(bool) error { return nil },
+	)
+	return stats
 }
 
 func (s *Server) humaTriggerResync(
@@ -224,10 +223,9 @@ func (s *Server) runResyncWithFallback(
 	ctx context.Context, engine *syncpkg.Engine,
 	progress func(syncpkg.Progress),
 ) syncpkg.SyncStats {
-	stats := engine.ResyncAll(ctx, progress)
-	if stats.Aborted && ctx.Err() == nil {
-		return engine.SyncAll(ctx, progress)
-	}
+	stats, _ := engine.SyncThenRun(
+		ctx, true, progress, func(bool) error { return nil },
+	)
 	return stats
 }
 

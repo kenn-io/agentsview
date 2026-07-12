@@ -633,6 +633,28 @@ func (s *Store) GetProjects(ctx context.Context, excludeOneShot, excludeAutomate
 	return out, rows.Err()
 }
 
+func (s *Store) GetActiveProjectLabels(ctx context.Context) ([]string, error) {
+	rows, err := s.queryContext(ctx,
+		`SELECT DISTINCT project
+		 FROM sessions
+		 WHERE deleted_at IS NULL
+		 ORDER BY project`)
+	if err != nil {
+		return nil, fmt.Errorf("querying active project labels: %w", err)
+	}
+	defer rows.Close()
+
+	var labels []string
+	for rows.Next() {
+		var label string
+		if err := rows.Scan(&label); err != nil {
+			return nil, fmt.Errorf("scanning active project label: %w", err)
+		}
+		labels = append(labels, label)
+	}
+	return labels, rows.Err()
+}
+
 func (s *Store) GetAgents(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]db.AgentInfo, error) {
 	rows, err := s.queryContext(ctx,
 		`SELECT agent, COUNT(*) FROM sessions WHERE agent <> '' AND `+

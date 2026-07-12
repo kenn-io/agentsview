@@ -140,6 +140,24 @@ func TestPGAutomatedScopeOneShotExemption(t *testing.T) {
 	assert.Contains(t, usageSQL, want, "usage SQL missing one-shot exemption")
 }
 
+func TestPGUsageProjectLabelsPreserveCommas(t *testing.T) {
+	pb := &paramBuilder{}
+	sql := appendPGUsageSessionFilterClauses(
+		"WHERE true",
+		pb,
+		db.UsageFilter{
+			ProjectLabels:        []string{"team,core"},
+			ExcludeProjectLabels: []string{"other,group"},
+		},
+	)
+
+	assert.Contains(t, sql, "s.project = $1")
+	assert.Contains(t, sql, "s.project != $2")
+	require.Len(t, pb.args, 2)
+	assert.Equal(t, "team,core", pb.args[0])
+	assert.Equal(t, "other,group", pb.args[1])
+}
+
 func TestPGAnalyticsMachineMultiSelectPredicate(t *testing.T) {
 	pb := &paramBuilder{}
 	sql := buildAnalyticsWhereWithDate(

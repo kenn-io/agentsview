@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -163,6 +164,30 @@ func TestExportSessionsAllJSONMergesPricingAcrossPages(t *testing.T) {
 	assert.Contains(t, models, goldenComputedModel)
 	assert.Contains(t, models, goldenReportedModel)
 	assert.Empty(t, doc.Cursor.Next)
+}
+
+func TestBuildExportSessionsOutputMarksCrossPageProjectConflictAmbiguous(t *testing.T) {
+	const projectKey = "pl1:sha256:project"
+	page := func(identityKey string) db.SessionExportResult {
+		return db.SessionExportResult{Projects: map[string]export.ProjectMapEntry{
+			projectKey: {
+				ProjectKey: projectKey,
+				Resolution: export.ProjectResolutionResolved,
+				Identity: &export.ProjectIdentity{
+					Key: identityKey, Kind: export.ProjectKindGitRemote,
+				},
+			},
+		}}
+	}
+
+	got := buildExportSessionsOutput("database", []db.SessionExportResult{
+		page("p1:sha256:first"), page("p1:sha256:second"),
+	})
+
+	require.Contains(t, got.Projects, projectKey)
+	assert.Equal(t, export.ProjectResolutionAmbiguous,
+		got.Projects[projectKey].Resolution)
+	assert.Nil(t, got.Projects[projectKey].Identity)
 }
 
 func TestMergeExportSessionsPricingTreatsNoModelPagesAsNeutral(t *testing.T) {
@@ -385,6 +410,102 @@ func TestExportSessionsRequiresExistingDatabaseID(t *testing.T) {
 	require.ErrorIs(t, idErr, db.ErrDatabaseIDMissing)
 }
 
+func TestExportSessionsUpgradeRequiresBackgroundEvidenceBackfill(t *testing.T) {
+	dataDir := testDataDir(t)
+	dbPath := filepath.Join(dataDir, "sessions.db")
+	database := dbtest.OpenTestDBAt(t, dbPath)
+	insertExportSessionsTestSession(t, database, db.Session{
+		ID: "legacy", Project: "agentsview", Machine: "local",
+		Agent: "codex", Cwd: "/work/agentsview", MessageCount: 2,
+		UserMessageCount: 1,
+	})
+	require.NoError(t, database.Close())
+	raw, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = raw.Exec(`DROP TABLE session_project_identity_snapshots`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+
+	stdout, stderr, err := executeExportSessionsCommand(
+		newRootCommand(), "export", "status",
+	)
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
+	assert.Equal(t, "project identity evidence: pending (0/1)\n", stdout)
+
+	stdout, stderr, err = executeExportSessionsCommand(
+		newRootCommand(), "export", "sessions", "--format", "json",
+	)
+	require.Error(t, err)
+	assert.Empty(t, stderr)
+	assert.Empty(t, stdout)
+	assert.Contains(t, err.Error(), "project identity evidence backfill is pending")
+	assert.Contains(t, err.Error(), "agentsview export status")
+
+	raw, err = sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	defer raw.Close()
+	var exists int
+	require.NoError(t, raw.QueryRow(`
+		SELECT COUNT(*) FROM sqlite_master
+		WHERE type = 'table' AND name = 'session_project_identity_snapshots'
+	`).Scan(&exists))
+	assert.Equal(t, 1, exists)
+	var state string
+	require.NoError(t, raw.QueryRow(`
+		SELECT state FROM background_migrations
+		WHERE name = 'session_project_identity_snapshots_v1'
+	`).Scan(&state))
+	assert.Equal(t, "pending", state)
+}
+
+func TestExportStatusReportsBackfillFailure(t *testing.T) {
+	dataDir := testDataDir(t)
+	dbPath := filepath.Join(dataDir, "sessions.db")
+	database := dbtest.OpenTestDBAt(t, dbPath)
+	raw, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = raw.Exec(`
+		INSERT INTO background_migrations (
+			name, state, total_items, completed_items, last_error
+		) VALUES (
+			'session_project_identity_snapshots_v1', 'failed', 3, 1,
+			'git metadata unavailable'
+		)
+	`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	require.NoError(t, database.Close())
+
+	stdout, stderr, err := executeExportSessionsCommand(
+		newRootCommand(), "export", "status",
+	)
+	require.NoError(t, err)
+	assert.Empty(t, stderr)
+	assert.Equal(t,
+		"project identity evidence: failed (1/3)\n"+
+			"last error: git metadata unavailable\n",
+		stdout)
+}
+
+func TestExportSessionsDoesNotUpgradeUnrelatedReadOnlyOpenFailure(t *testing.T) {
+	dataDir := testDataDir(t)
+	dbPath := filepath.Join(dataDir, "sessions.db")
+	require.NoError(t, os.WriteFile(dbPath, nil, 0o600))
+
+	stdout, stderr, err := executeExportSessionsCommand(
+		newRootCommand(), "export", "sessions", "--format", "json",
+	)
+	require.Error(t, err)
+	assert.Empty(t, stdout)
+	assert.Empty(t, stderr)
+
+	info, statErr := os.Stat(dbPath)
+	require.NoError(t, statErr)
+	assert.Zero(t, info.Size(),
+		"a non-schema read failure must not initialize or rebuild the archive")
+}
+
 func removeArchiveDatabaseIDForTest(t *testing.T, dbPath string) {
 	t.Helper()
 	raw, err := sql.Open("sqlite3", dbPath)
@@ -475,6 +596,10 @@ func TestExportSessionsJSONGolden(t *testing.T) {
 	)
 	require.NoError(t, err, "export sessions json golden")
 	require.Empty(t, stderr)
+	assert.NotContains(t, stdout, "/fixtures/")
+	assert.NotContains(t, stdout, `"cwd"`)
+	assert.NotContains(t, stdout, `"machine":"golden-host"`)
+	assert.NotContains(t, stdout, `"root_path":"/`)
 
 	assertGoldenBytes(t, "session_export_v1.json", []byte(stdout))
 }
@@ -633,6 +758,12 @@ func insertExportSessionsTestSession(
 	t.Helper()
 	require.NoError(t, database.UpsertSession(session),
 		"upsert session %s", session.ID)
+	require.NoError(t, database.UpsertProjectIdentityObservation(
+		context.Background(), export.ProjectIdentityObservation{
+			SessionID: session.ID, Project: session.Project,
+			Machine: session.Machine, RootPath: session.Cwd,
+			GitBranch: session.GitBranch, ObservedAt: time.Now().UTC(),
+		}), "upsert session project identity %s", session.ID)
 }
 
 func decodeExportSessionsDocument(

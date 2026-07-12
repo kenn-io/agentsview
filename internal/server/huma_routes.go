@@ -45,6 +45,7 @@ type bytesOutput struct {
 
 type apiErrorResponse struct {
 	Status  int    `json:"-"`
+	Code    string `json:"code,omitempty"`
 	Message string `json:"error"`
 }
 
@@ -58,6 +59,10 @@ func (e *apiErrorResponse) GetStatus() int {
 
 func apiError(status int, message string) error {
 	return &apiErrorResponse{Status: status, Message: message}
+}
+
+func apiErrorWithCode(status int, code, message string) error {
+	return &apiErrorResponse{Status: status, Code: code, Message: message}
 }
 
 var configureHumaErrorsOnce stdsync.Once

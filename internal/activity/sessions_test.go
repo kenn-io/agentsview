@@ -3,9 +3,33 @@ package activity
 import (
 	"testing"
 
+	"go.kenn.io/agentsview/internal/export"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSanitizeProjectLabelsSanitizesSessionTitles(t *testing.T) {
+	report := Report{BySession: []SessionRow{
+		{SessionID: "path", Title: "/Users/alice/private/repo", Project: "/Users/alice/private/repo"},
+		{SessionID: "url", Title: "file:/Users/alice/private/repo", Project: "safe"},
+		{SessionID: "safe", Title: "Review project identity", Project: "safe"},
+		{SessionID: "colon", Title: "Fix: project identity", Project: "safe"},
+	}}
+	projects := map[string]export.ProjectMapEntry{
+		"/Users/alice/private/repo": {ProjectKey: "pl1-path"},
+		"safe":                      {ProjectKey: "pl1-safe"},
+	}
+
+	SanitizeProjectLabels(&report, projects)
+
+	assert.Equal(t, "path", report.BySession[0].Title)
+	assert.Empty(t, report.BySession[0].Project)
+	assert.Equal(t, "url", report.BySession[1].Title)
+	assert.Equal(t, "safe", report.BySession[1].Project)
+	assert.Equal(t, "Review project identity", report.BySession[2].Title)
+	assert.Equal(t, "Fix: project identity", report.BySession[3].Title)
+}
 
 func TestSessionsTable_TimedAndUntimed(t *testing.T) {
 	p := baseParams(t, "2026-06-16", "UTC")

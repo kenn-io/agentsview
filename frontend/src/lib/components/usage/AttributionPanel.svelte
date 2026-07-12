@@ -41,7 +41,7 @@
 
     if (groupBy === "project") {
       items = s.projectTotals.map((p) => ({
-        id: p.project,
+        id: p.project_key,
         label: p.project,
         cost: p.cost,
       }));
@@ -85,7 +85,7 @@
 
   function handleSelect(id: string) {
     if (groupBy === "project") {
-      usage.toggleProject(id);
+      usage.toggleProjectKey(id);
     } else if (groupBy === "agent") {
       usage.toggleAgent(id);
     } else {

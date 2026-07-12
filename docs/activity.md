@@ -40,19 +40,19 @@ and `automation`.
 The summary cards show:
 
 - **Peak Concurrency** — the maximum number of agents active in the same bucket,
-  with the local clock time of the peak
+    with the local clock time of the peak
 - **Active** — active wall-clock time, plus idle time in the range
 - **Agent-minutes** — combined active minutes across concurrent agents
 - **Sessions** — session count, with interactive/automated and untimed-session
-  detail when applicable
+    detail when applicable
 - **Projects** and **Models** — distinct counts in the range
 - **Total Cost** — estimated cost attributed to activity in the range
 
 The report counts subagent sessions (for example Claude Code Task-tool agents)
 and fork sessions (rewound conversation branches) alongside their parent
 sessions, so **Total Cost** lines up with `agentsview usage daily` for the same
-day and timezone. Usage rows that recur across related sessions are
-deduplicated before totaling, the same rule the Usage page applies.
+day and timezone. Usage rows that recur across related sessions are deduplicated
+before totaling, the same rule the Usage page applies.
 
 If the selected range reaches into the future, the page marks it as partial and
 shows the report's current **as of** time.
@@ -142,21 +142,19 @@ versioned JSON contract. They use the same `schema_version` and move in
 lockstep; if the CLI report changes in a way that requires a schema bump, the
 HTTP report bumps with it.
 
-Absent `schema_version` means legacy pre-v1 output. The activity report JSON,
-`agentsview usage daily --json`, and
+The activity report JSON, `agentsview usage daily --json`, and
 `agentsview export sessions --format json|ndjson` are separate versioned
-surfaces.
-
-This v1 JSON report format is intended to remain backward compatible, but it is
-still relatively new and may see some instability as downstream usage settles.
-Consumers should pin `schema_version`, ignore unknown additive fields, and treat
-missing `schema_version` as legacy output.
+surfaces. This unshipped v1 shape is the canonical contract; there is no pre-v1
+compatibility adapter. Consumers should require the expected `schema_version`
+and ignore unknown additive fields.
 
 The activity report includes the shared report-level `pricing` and `projects`
 blocks. `pricing.models` contains effective model rates using fields such as
 `input_cost_per_mtok`, `output_cost_per_mtok`, `cache_write_cost_per_mtok`, and
-`cache_read_cost_per_mtok`. `projects` is keyed by the exact project labels used
-in report rows, and unknown project identity is represented as `identity: null`.
+`cache_read_cost_per_mtok`. Every project-bearing report row contains an opaque
+`project_key`. `projects` is keyed by that value and carries the
+presentation-only `display_label`; unknown project identity is represented by an
+explicit `resolution` with `identity` omitted.
 
 See [Token Usage & Costs](/token-usage/#json-contract) for the shared bump
 rules, [Pricing Provenance](/token-usage/#pricing-provenance) for pricing digest

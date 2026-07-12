@@ -280,8 +280,12 @@ func TestActivityReportJSONMatchesHTTPExportMetadata(t *testing.T) {
 	assert.Contains(t, cliReport.Pricing.Models, "gpt-5.1")
 	assert.Contains(t, cliReport.Pricing.Models, fallbackModel)
 	assert.Equal(t, cliReport.Pricing.Models, httpReport.Pricing.Models)
-	require.Contains(t, cliReport.Projects, "shared-project")
-	require.Contains(t, httpReport.Projects, "shared-project")
+	require.Len(t, cliReport.Projects, 1)
+	require.Len(t, httpReport.Projects, 1)
+	for key, project := range cliReport.Projects {
+		assert.NotContains(t, key, "shared-project")
+		assert.Equal(t, "shared-project", project.DisplayLabel)
+	}
 	assert.Equal(t, cliReport.Projects, httpReport.Projects)
 	assert.Equal(t, "UTC", cliReport.Timezone)
 	assert.Equal(t, cliReport.Timezone, httpReport.Timezone)

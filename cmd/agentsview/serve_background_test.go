@@ -674,6 +674,15 @@ func TestServeCommandParsesBackgroundFlag(t *testing.T) {
 	assert.Equal(t, filepath.Join(dataDir, "sessions.db"), cfg.DBPath)
 }
 
+func TestServeCommandParsesHiddenSkipInitialSyncFlag(t *testing.T) {
+	cmd := newServeCommand()
+	require.NoError(t, cmd.Flags().Parse([]string{"--skip-initial-sync"}))
+	got, err := cmd.Flags().GetBool("skip-initial-sync")
+	require.NoError(t, err)
+	assert.True(t, got)
+	assert.True(t, cmd.Flags().Lookup("skip-initial-sync").Hidden)
+}
+
 func TestServeBackgroundArgsWithNoSyncKeepsExplicitFalse(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1511,6 +1520,41 @@ func TestEnsureBackgroundServePassesNoSyncToChild(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, rt)
 	assert.Equal(t, []string{"serve", "--no-sync"}, gotArgs)
+}
+
+func TestEnsureBackgroundServePassesSkipInitialSyncToChild(t *testing.T) {
+	dir := runtimeTestDir(t)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	host, port := testPingServer(t)
+
+	oldStartProcess := startServeBackgroundProcessForEnsure
+	var gotArgs []string
+	startServeBackgroundProcessForEnsure = func(
+		_ config.Config, arguments []string,
+	) (*exec.Cmd, string, error) {
+		gotArgs = append([]string(nil), arguments...)
+		if _, err := WriteDaemonRuntime(
+			dir, host, port, "test", false,
+		); err != nil {
+			return nil, "", err
+		}
+		cmd := exec.Command("sleep", "2")
+		if err := cmd.Start(); err != nil {
+			return nil, "", err
+		}
+		t.Cleanup(func() { _ = cmd.Process.Kill() })
+		return cmd, "test.log", nil
+	}
+	t.Cleanup(func() {
+		startServeBackgroundProcessForEnsure = oldStartProcess
+		RemoveDaemonRuntime(dir)
+	})
+
+	cfg := config.Config{DataDir: dir, SkipInitialSync: true}
+	rt, err := ensureBackgroundServe(context.Background(), &cfg, time.Second)
+	require.NoError(t, err)
+	require.NotNil(t, rt)
+	assert.Equal(t, []string{"serve", "--skip-initial-sync"}, gotArgs)
 }
 
 func TestEnsureBackgroundServePreservesNoSyncWhenReplacingOlderDaemon(

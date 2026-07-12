@@ -334,6 +334,7 @@
       isPinned: usage.isPinned,
       windowDays: usage.windowDays,
       excludedProjects: usage.excludedProjects,
+      excludedProjectKeys: usage.excludedProjectKeys,
       excludedAgents: usage.excludedAgents,
       excludedModels: usage.excludedModels,
       selectedModels: usage.selectedModels,

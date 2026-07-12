@@ -107,6 +107,24 @@ func TestPricingResolverBuildBlockModelsAndFallback(t *testing.T) {
 	assert.Zero(t, unpriced.CacheReadCostPerMTok)
 }
 
+func TestPricingResolverReportedCostWithoutMatchingRateIsExplicit(t *testing.T) {
+	resolver := NewPricingResolver(nil)
+	lookup := resolver.Lookup("provider-opaque-model")
+	require.False(t, lookup.OK)
+	resolver.RecordReported("provider-opaque-model", lookup)
+
+	block, err := resolver.BuildBlock()
+	require.NoError(t, err)
+	require.Contains(t, block.Models, "provider-opaque-model")
+	model := block.Models["provider-opaque-model"]
+	assert.Equal(t, CostSourceReported, model.CostSource)
+	assert.Nil(t, model.MatchedPattern)
+	assert.Zero(t, model.InputCostPerMTok)
+	assert.Zero(t, model.OutputCostPerMTok)
+	assert.Zero(t, model.CacheWriteCostPerMTok)
+	assert.Zero(t, model.CacheReadCostPerMTok)
+}
+
 func TestPricingResolverCostSource(t *testing.T) {
 	tests := []struct {
 		name string

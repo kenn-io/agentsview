@@ -19,32 +19,30 @@ it's also dramatically faster on large histories (see
 [benchmarks](#how-it-compares-to-ccusage) below).
 
 !!! warning "Experimental"
-    Token usage and cost reporting is a newer area of AgentsView
-    and is still maturing. The Usage dashboard and the
-    `agentsview usage` CLI may have rough edges, especially around
-    agents whose parsers were recently taught to emit token counts.
-    Bug reports and feature requests are very welcome — please
+
+    Token usage and cost reporting is a newer area of AgentsView and is still
+    maturing. The Usage dashboard and the `agentsview usage` CLI may have rough
+    edges, especially around agents whose parsers were recently taught to emit token
+    counts. Bug reports and feature requests are very welcome — please
     [open an issue](https://github.com/kenn-io/agentsview/issues).
 
 ## Agent Coverage
 
 !!! note
-    **As of 0.34.0**, usage totals are populated when the source
-    session includes token metadata for **Claude Code**, **Codex**,
-    **Copilot CLI**, **OpenCode** and OpenCode-format forks such as
-    **Kilo** and **MiMoCode**, **Pi**, **Gemini**, **Qwen Code**,
-    **OpenClaw**, **QClaw**, **Hermes**, **WorkBuddy**, **Forge**,
-    **Piebald**, **Antigravity IDE/CLI**, **Zed**, **VS Code
-    Copilot**, **Visual Studio Copilot**, **Mistral Vibe**, and
-    **gptme**.
 
-    Coverage is opportunistic rather than guaranteed for every
-    session from those agents: rows contribute to cost only when the
-    local transcript includes usable token counts and a model name
-    that can be priced. Other supported agents still appear in the
-    session browser, search, and analytics even when their local logs
-    do not expose token usage. Warp records session-level totals, but
-    those totals are not yet folded into the per-message cost report.
+    **As of 0.34.0**, usage totals are populated when the source session includes
+    token metadata for **Claude Code**, **Codex**, **Copilot CLI**, **OpenCode** and
+    OpenCode-format forks such as **Kilo** and **MiMoCode**, **Pi**, **Gemini**,
+    **Qwen Code**, **OpenClaw**, **QClaw**, **Hermes**, **WorkBuddy**, **Forge**,
+    **Piebald**, **Antigravity IDE/CLI**, **Zed**, **VS Code Copilot**, **Visual
+    Studio Copilot**, **Mistral Vibe**, and **gptme**.
+
+    Coverage is opportunistic rather than guaranteed for every session from those
+    agents: rows contribute to cost only when the local transcript includes usable
+    token counts and a model name that can be priced. Other supported agents still
+    appear in the session browser, search, and analytics even when their local logs
+    do not expose token usage. Warp records session-level totals, but those totals
+    are not yet folded into the per-message cost report.
 
 When an agent filter selects only agents that do not expose per-message token
 rows, AgentsView reports that as an unsupported usage state instead of silently
@@ -134,6 +132,10 @@ Date ranges > Link date ranges across pages**. Filter state is written back to
 the URL — copying the address bar gives you a shareable link to the exact view
 you're looking at. A **Clear filters** link appears next to the refresh button
 when anything is active.
+
+Project-key exclusions are the exception. Shared-store project keys are scoped
+to the current aggregate archive set, so the page keeps those exclusions in
+memory and does not write or restore them through the URL.
 
 ![Usage toolbar with filters](/assets/generated/screenshots/usage-toolbar.png)
 
@@ -292,10 +294,10 @@ agent. The usage command:
 The default window is the last 30 days; pass `--all` to scan the full history.
 
 !!! note
-    AgentsView does not mint usage events on your behalf. It can
-    only report token usage that the agent wrote to its own
-    session files. Agents that don't emit token counts (or that
-    strip them from local logs) won't show up.
+
+    AgentsView does not mint usage events on your behalf. It can only report token
+    usage that the agent wrote to its own session files. Agents that don't emit
+    token counts (or that strip them from local logs) won't show up.
 
 ### Pricing Source
 
@@ -433,12 +435,12 @@ an M5 Max, median of 5 steady-state runs:
 | `agentsview usage daily --json --offline --no-sync`      |  0.20 s |             **223×** |
 
 !!! note
-    These numbers are from a large local database (22k sessions,
-    310k token-bearing messages). The speedup scales with session
-    count — smaller databases will see smaller absolute differences
-    because `ccusage` has less JSONL to re-parse, but AgentsView
-    stays in the sub-second range either way. The ratios above are
-    an upper bound, not a universal guarantee.
+
+    These numbers are from a large local database (22k sessions, 310k token-bearing
+    messages). The speedup scales with session count — smaller databases will see
+    smaller absolute differences because `ccusage` has less JSONL to re-parse, but
+    AgentsView stays in the sub-second range either way. The ratios above are an
+    upper bound, not a universal guarantee.
 
 Apples-to-apples: `ccusage` scans all history by default, so the `--all` row is
 the matched comparison. The default 30-day window is faster still because most
@@ -452,15 +454,15 @@ Beyond raw speed, `agentsview usage`:
   CLI, OpenCode-format tools, Pi, Gemini, Qwen Code, OpenClaw/QClaw, Hermes,
   WorkBuddy, Forge, Piebald, Antigravity, Zed, VS Code Copilot, Visual Studio
   Copilot, Mistral Vibe, and gptme from the same database and command whenever
-  those sessions log token metadata. Filter with `--agent <name>` when you want
-  a single-agent view.
+  those sessions log token metadata. Filter with `--agent <name>` when you
+  want a single-agent view.
 - **Shares one database with the UI** — the same data powers
-  [Analytics](/usage/#dashboard) and session detail views, so there's no second
-  index to keep fresh.
+  [Analytics](/usage/#dashboard) and session detail views, so there's no
+  second index to keep fresh.
 - **Includes on-demand sync** — when no AgentsView server is running, `usage`
   does a quick incremental sync scoped to files modified since the last sync
-  start time so reports always reflect current state. Skip with `--no-sync` for
-  the fastest path.
+  start time so reports always reflect current state. Skip with `--no-sync`
+  for the fastest path.
 
 ## `agentsview usage daily`
 
@@ -495,7 +497,7 @@ to X" still works.
   "schema_version": 1,
   "pricing": {
     "source": "fetched",
-    "table_version": "litellm-398a0b15378c",
+    "table_version": "2026-07-03T12:00:00Z",
     "latest_row_updated_at": "2026-07-03T12:00:00Z",
     "custom_override_count": 0,
     "effective_row_count": 2428,
@@ -517,17 +519,19 @@ to X" still works.
     }
   },
   "projects": {
-    "agentsview": {
+    "pl1:sha256:333e5f19bc8ed34f56fa89e51a9307bbc972d173498993ed02e564d32162196f": {
+      "display_label": "agentsview",
       "resolution": "resolved",
       "identity": {
-        "key": "sha256:97879729c8ab311e9d4b28941e3a04830b28c527f00af53f2270212eccdbbd39",
-        "key_source": "git_remote",
-        "normalized_remote": "github.com/kenn-io/agentsview"
+        "key": "p1:sha256:eb8c8bb90c27de41cdfb780f4c756cc4c3b9faf4f7c785c9f6afa7e160c2112c",
+        "kind": "git_remote",
+        "normalized_remote": "github.com/example/agentsview",
+        "repository_key": "repo1:sha256:8a7da005b67fa8300b6072fd3a38629dc4505097258f7fb4398bf4cfd670df10"
       }
     },
-    "unknown-project": {
-      "resolution": "unknown",
-      "identity": null
+    "pl1:sha256:ba5a8fb68c3e3f1454c428f19fdfd2dff9b2c40ae6dc2fef3a19a7c761bd72a1": {
+      "display_label": "unknown-project",
+      "resolution": "unknown"
     }
   },
   "daily": [
@@ -564,22 +568,19 @@ to X" still works.
 ```
 
 `modelsUsed` is sorted by cost within each day, so the most expensive model
-appears first. Daily entries always emit `modelBreakdowns`,
-`projectBreakdowns`, and `agentBreakdowns` as arrays; empty breakdowns are `[]`,
-not omitted. `modelBreakdowns` always includes a row per model, regardless of
-whether `--breakdown` was passed; the flag only controls terminal table output.
+appears first. Daily entries always emit `modelBreakdowns`, `projectBreakdowns`,
+and `agentBreakdowns` as arrays; empty breakdowns are `[]`, not omitted.
+`modelBreakdowns` always includes a row per model, regardless of whether
+`--breakdown` was passed; the flag only controls terminal table output.
 
 ### JSON Contract
 
-`agentsview usage daily --json` is a versioned JSON surface. Missing
-`schema_version` means legacy pre-v1 output. The Usage daily JSON, Activity
-report JSON, and session summary export JSON/NDJSON are separate versioned
-surfaces, so a bump in one does not imply a bump in the others.
-
-These v1 JSON report formats are intended to remain backward compatible, but
-they are still relatively new and may see some instability as downstream usage
-settles. Consumers should pin `schema_version`, ignore unknown additive fields,
-and treat missing `schema_version` as legacy output.
+`agentsview usage daily --json` is a versioned JSON surface. The Usage daily
+JSON, Activity report JSON, and session summary export JSON/NDJSON are separate
+versioned surfaces, so a bump in one does not imply a bump in the others. This
+unshipped v1 shape is canonical and has no pre-v1 compatibility adapter.
+Consumers should require the expected `schema_version` and ignore unknown
+additive fields.
 
 | Change                                                                                | Requires `schema_version` bump? |
 | ------------------------------------------------------------------------------------- | ------------------------------- |
@@ -614,12 +615,16 @@ derivable from tokens times rates. `mixed` means both computed and reported
 costs contributed. For computed costs, reasoning tokens are priced at the
 output-token rate.
 
-`pricing.source` uses the canonical ingredient order `embedded`, `fetched`,
-`custom`, `custom+embedded`, or `custom+fetched`. When custom pricing
-participates, `custom` is first, followed by the base table ingredient.
-`pricing.table_version` is the embedded fallback snapshot version for embedded
-base tables, the latest fetched row timestamp for fetched base tables, and
-`custom` for custom-only effective tables.
+If a source reports an amount for a model with no matching effective pricing
+row, the model entry has `cost_source: "reported"`, `matched_pattern: null`, and
+zero in all four rate fields. The reported amount remains authoritative; the
+zero rates express unavailable rate provenance, not a zero-rate calculation.
+
+`pricing.source` is one of `embedded`, `fetched`, `custom`, `custom+embedded`,
+or `custom+fetched`. Combined values always serialize `custom` first, followed
+by the base table ingredient. `pricing.table_version` is the embedded fallback
+snapshot version for embedded base tables, the latest fetched row timestamp for
+fetched base tables, and `custom` for custom-only effective tables.
 `pricing.digest` is independently recomputable as RFC 8785-style canonical JSON
 hashed with SHA-256 and prefixed with `sha256:`. The digest input is exactly a
 `{"rows":[...]}` object. Rows are sorted by `model_pattern` bytewise ascending,
@@ -629,27 +634,35 @@ exactly `model_pattern`, `input_per_mtok`, `output_per_mtok`,
 `updated_at` is `null` or a UTC RFC3339 timestamp such as
 `2026-07-03T12:00:00Z`. Digest canonicalization errors fail the export instead
 of emitting an empty digest. The digest uses the resolver's internal canonical
-pricing-row keys; the public `pricing.models` block uses the
-`*_cost_per_mtok` field names shown above.
+pricing-row keys; the public `pricing.models` block uses the `*_cost_per_mtok`
+field names shown above.
 
 ### Project Identity
 
 Versioned usage, activity, and session-export payloads include a report-level
-`projects` map keyed by the exact project labels that appear in that payload's
-rows. Unknown identity is explicit: `"identity": null`.
+`projects` catalog keyed by opaque `project_key` values prefixed with
+`pl1:sha256:`. Project-bearing rows use the same key. Catalog entries contain a
+presentation-only `display_label`, an explicit `resolution`, and `identity` only
+when resolution succeeds.
 
 Resolved identities prefer remote-backed keys. Local `file://` and bare-path
 remotes are ignored for key derivation because they are machine-local. If no
 usable network remote resolves, AgentsView falls back to a normalized root path
-and marks that identity with `"machine_local": true`. Path-backed keys are
-useful within one archive or machine, but consumers should not expect them to
-join across machines.
+and emits identity `kind` as `machine_root`. Path-backed keys are useful within
+one archive or machine, but consumers should not expect them to join across
+machines.
 
-Project identity keys are also SHA-256 values prefixed with `sha256:`. The
-`root_path` and `normalized_remote` identity fields come from local project
-observations and may expose usernames or private repository names. V1 does not
-redact them; downstream consumers are responsible for redaction before sharing
-reports.
+Canonical project keys use `p1:sha256:`; repository, root, and worktree keys use
+`repo1:sha256:`, `r1:sha256:`, and `wt1:sha256:`. Network remotes are normalized
+after credentials, scheme, query, fragment, default port, and `.git` suffix are
+removed. Absolute paths, raw remotes, and credentials do not cross the export
+boundary. Remote-backed catalog identities omit machine-local `root_key`;
+session rows retain their own complete root, worktree, and checkout facts.
+
+SQLite catalog keys are archive-scoped. Shared PostgreSQL and DuckDB dashboard
+responses may aggregate archives, so their catalog keys are response-scoped and
+must not be persisted as durable selectors. The canonical `identity.key`, not
+the display label or catalog key, represents project continuity.
 
 ## `agentsview usage statusline`
 
@@ -728,8 +741,8 @@ incremental sync before querying so reports always include recent activity:
 1. If the parser data version has changed (i.e. you just upgraded), a full
    resync runs first.
 1. Otherwise, the sync scans only files modified since the last recorded sync
-   start time, minus a 10-second safety margin to catch files written during the
-   prior sync.
+   start time, minus a 10-second safety margin to catch files written during
+   the prior sync.
 
 If an `agentsview serve` process is already running, the file watcher already
 has you covered and the on-demand sync is skipped to avoid duplicate work. A

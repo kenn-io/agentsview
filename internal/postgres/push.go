@@ -13,6 +13,7 @@ import (
 	"maps"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,9 +22,10 @@ import (
 )
 
 const (
-	lastPushBoundaryStateKey     = "last_push_boundary_state"
-	lastPushTargetFingerprintKey = "pg_target_fingerprint_v1"
-	sessionAliasBackfillStateKey = "pg_session_alias_backfill_v1"
+	lastPushBoundaryStateKey           = "last_push_boundary_state"
+	lastPushTargetFingerprintKey       = "pg_target_fingerprint_v1"
+	sessionAliasBackfillStateKey       = "pg_session_alias_backfill_v1"
+	projectIdentityPublicationStateKey = "project_identity_publication_revision_v2"
 )
 
 // pushMarkerIDStateKey names the local sync-state entry holding this DB's
@@ -256,11 +258,6 @@ func (s *Sync) Push(
 		func() error { return s.syncCursorUsageEvents(ctx) }); err != nil {
 		return result, err
 	}
-	if err := timedPushSetupStep("project identity observation sync",
-		func() error { return s.syncProjectIdentityObservations(ctx) }); err != nil {
-		return result, err
-	}
-
 	cutoff := time.Now().UTC().Format(LocalSyncTimestampLayout)
 
 	allSessions, err := s.local.ListSessionsModifiedBetween(
@@ -438,6 +435,9 @@ func (s *Sync) Push(
 		); err != nil {
 			return result, err
 		}
+		if err := s.syncProjectIdentityObservations(ctx, full); err != nil {
+			return result, err
+		}
 		result.Vectors, err = s.runVectorPushPhase(ctx, full, nil, onProgress)
 		if err != nil {
 			return result, err
@@ -543,6 +543,16 @@ func (s *Sync) Push(
 	); err != nil {
 		return result, err
 	}
+	if result.Errors == 0 {
+		if err := s.syncProjectIdentityObservations(ctx, full); err != nil {
+			return result, err
+		}
+	} else {
+		log.Printf(
+			"pgsync: skipping project identity publication after %d session push errors",
+			result.Errors,
+		)
+	}
 	result.Vectors, err = s.runVectorPushPhase(ctx, full, failedSessions, onProgress)
 	if err != nil {
 		return result, err
@@ -575,34 +585,121 @@ func (s *Sync) runVectorPushPhase(
 	return res, nil
 }
 
-func (s *Sync) syncProjectIdentityObservations(ctx context.Context) error {
-	observations, err := s.local.ListProjectIdentityObservations(ctx, nil)
+func (s *Sync) syncProjectIdentityObservations(
+	ctx context.Context, force bool,
+) error {
+	revision, err := s.local.ProjectIdentityPublicationRevision(ctx)
 	if err != nil {
-		return fmt.Errorf("loading project identity observations: %w", err)
+		return err
 	}
-	observations = filterProjectIdentityObservations(
-		observations, s.projects, s.excludeProjects,
+	databaseGeneration, err := s.local.GetDatabaseID(ctx)
+	if err != nil {
+		return fmt.Errorf("loading source database generation: %w", err)
+	}
+	revisionValue := strconv.FormatInt(revision, 10)
+	state := s.effectiveSyncState()
+	stateKey := projectIdentityPublicationStateKey + ":" + databaseGeneration
+	publishedRevisionValue, err := state.GetSyncState(stateKey)
+	if err != nil {
+		return fmt.Errorf("reading project identity publication revision: %w", err)
+	}
+	fullPublication := force || publishedRevisionValue == ""
+	var publishedRevision int64
+	if !fullPublication {
+		publishedRevision, err = strconv.ParseInt(publishedRevisionValue, 10, 64)
+		if err != nil || publishedRevision < 0 || publishedRevision > revision {
+			fullPublication = true
+		} else if publishedRevision == revision {
+			return nil
+		}
+	}
+
+	var observations []export.ProjectIdentityObservation
+	var snapshots []export.ProjectIdentityObservation
+	var delta db.ProjectIdentityPublicationDelta
+	if fullPublication {
+		observations, err = s.local.ListProjectIdentityObservations(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("loading project identity observations: %w", err)
+		}
+		observations = filterProjectIdentityObservations(
+			observations, s.projects, s.excludeProjects,
+		)
+		snapshots, err = s.local.ListSessionProjectIdentitySnapshots(ctx)
+		if err != nil {
+			return fmt.Errorf("loading session project identity snapshots: %w", err)
+		}
+		snapshots = filterProjectIdentityObservations(
+			snapshots, s.projects, s.excludeProjects,
+		)
+	} else {
+		delta, err = s.local.LoadProjectIdentityPublicationDelta(
+			ctx, publishedRevision, revision, s.projects, s.excludeProjects,
+		)
+		if err != nil {
+			return err
+		}
+		observations = delta.Observations
+		snapshots = delta.Snapshots
+	}
+
+	archiveID, err := s.local.GetArchiveID(ctx)
+	if err != nil {
+		return fmt.Errorf("loading source archive id: %w", err)
+	}
+	archiveSalt, err := s.local.GetArchiveSalt(ctx)
+	if err != nil {
+		return fmt.Errorf("loading source archive salt: %w", err)
+	}
+	log.Printf(
+		"pgsync: syncing %d project identity observation(s), %d snapshot(s), "+
+			"and %d tombstone(s)",
+		len(observations), len(snapshots),
+		len(delta.ObservationDeletes)+len(delta.SnapshotDeletes),
 	)
-	if len(observations) == 0 {
-		return nil
-	}
-	log.Printf("pgsync: syncing %d project identity observation(s)",
-		len(observations))
-	for i, obs := range observations {
-		observations[i] = export.SanitizeStoredProjectIdentityObservation(obs)
-	}
 	tx, err := s.pg.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning project identity observation sync: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := upsertSourceArchiveScope(ctx, tx, archiveID, archiveSalt); err != nil {
+		return err
+	}
+	if fullPublication {
+		if err := deleteProjectIdentityScope(
+			ctx, tx, archiveID, s.projects, s.excludeProjects,
+		); err != nil {
+			return err
+		}
+	} else if err := deleteProjectIdentityDelta(
+		ctx, tx, archiveID, databaseGeneration,
+		delta.ObservationDeletes, delta.SnapshotDeletes,
+	); err != nil {
+		return err
+	}
+	for i, obs := range observations {
+		obs.SourceArchiveID = archiveID
+		obs.SourceArchiveSalt = archiveSalt
+		observations[i] = export.SanitizeStoredProjectIdentityObservation(obs)
+	}
 	if err := syncProjectIdentityObservationsBatch(
 		ctx, tx, observations,
 	); err != nil {
 		return fmt.Errorf("syncing project identity observations: %w", err)
 	}
+	for i := range snapshots {
+		snapshots[i] = export.SanitizeStoredProjectIdentityObservation(snapshots[i])
+	}
+	if err := insertSessionProjectIdentitySnapshots(
+		ctx, tx, archiveID, databaseGeneration, snapshots,
+	); err != nil {
+		return fmt.Errorf("syncing session project identity snapshots: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing project identity observation sync: %w", err)
+	}
+	if err := state.SetSyncState(stateKey, revisionValue); err != nil {
+		return fmt.Errorf("recording project identity publication revision: %w", err)
 	}
 	return nil
 }

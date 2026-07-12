@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 )
 
 func cleanPGSchema(t *testing.T, pgURL string) {
@@ -1323,6 +1324,12 @@ func TestFilteredPushAfterResetDoesNotMaskUnfilteredResetRecovery(t *testing.T) 
 			Content:   "msg " + s.ID,
 			Timestamp: s.CreatedAt,
 		}}), "insert message %s", s.ID)
+		require.NoError(t, local.UpsertProjectIdentityObservation(
+			ctx, export.ProjectIdentityObservation{
+				SessionID: s.ID, Project: s.Project, Machine: s.Machine,
+				RootPath: "/repo/alpha", ObservedAt: time.Now().UTC(),
+			},
+		), "upsert identity %s", s.ID)
 	}
 
 	unfiltered, err := New(
@@ -1434,6 +1441,15 @@ func TestFilteredPartialPushDetectsResetWithEmptyWatermark(t *testing.T) {
 	require.NoError(t, err, "initial partial filtered push")
 	require.Equal(t, 1, r1.SessionsPushed)
 	require.Equal(t, 1, r1.Errors)
+	var identityCount int
+	require.NoError(t, filtered.DB().QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM source_project_identity_observations",
+	).Scan(&identityCount))
+	assert.Zero(t, identityCount)
+	require.NoError(t, filtered.DB().QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM source_session_project_identity_snapshots",
+	).Scan(&identityCount))
+	assert.Zero(t, identityCount)
 
 	scopedLastPush, err := filtered.effectiveSyncState().GetSyncState("last_push_at")
 	require.NoError(t, err, "reading scoped watermark")

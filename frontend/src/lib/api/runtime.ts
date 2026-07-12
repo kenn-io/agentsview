@@ -75,6 +75,7 @@ export class ApiError extends Error {
   constructor(
     public readonly status: number,
     message: string,
+    public readonly code?: string,
   ) {
     super(message);
     this.name = "ApiError";
@@ -129,6 +130,19 @@ export function generatedErrorMessage(err: GeneratedApiError): string {
   return err.message || `API ${err.status}`;
 }
 
+export function generatedErrorCode(err: GeneratedApiError): string | undefined {
+  if (
+    err.body !== null &&
+    typeof err.body === "object" &&
+    "code" in err.body &&
+    typeof err.body.code === "string" &&
+    err.body.code
+  ) {
+    return err.body.code;
+  }
+  return undefined;
+}
+
 export async function callGenerated<T>(
   request: () => Promise<T>,
   signal?: AbortSignal,
@@ -138,7 +152,11 @@ export async function callGenerated<T>(
     return await withAbort(request(), signal);
   } catch (err) {
     if (err instanceof GeneratedApiError) {
-      throw new ApiError(err.status, generatedErrorMessage(err));
+      throw new ApiError(
+        err.status,
+        generatedErrorMessage(err),
+        generatedErrorCode(err),
+      );
     }
     throw err;
   }

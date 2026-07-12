@@ -81,7 +81,8 @@ func (s *Store) GetActivityReport(
 	if err != nil {
 		return activity.Report{}, err
 	}
-	report.Projects = projects
+	activity.SanitizeProjectLabels(&report, projects)
+	report.Projects = export.ProjectMapForWire(projects)
 	return report, nil
 }
 
@@ -97,12 +98,10 @@ func activityReportProjectLabels(sessions []activity.SessionMeta) []string {
 // overlaps the exact range [rangeStartUTC, rangeEndUTC), plus their
 // IDs. The ID set defines the scope for the activity and usage fetches.
 // DuckDB stores native timestamps, so the timestamp fallbacks need no
-// NULLIF guard. The Title expression mirrors the shared NULLIF/COALESCE
-// shape used by SQLite and PostgreSQL so an empty-string
-// display_name/session_name/first_message/project never wins the COALESCE
-// fallback (those columns can be empty here, and project is NOT NULL with an
-// empty-string default), yielding the same Title as the other two backends
-// instead of a possibly-empty one.
+// NULLIF guard. The Title expression mirrors SQLite and PostgreSQL while
+// intentionally excluding first_message because activity reports cross the
+// summary export boundary. Empty display_name/session_name/project values do
+// not win the fallback.
 //
 // The effective-end fallback for a session with no ended_at uses its
 // latest message timestamp before started_at, so a still-open session
@@ -119,7 +118,7 @@ func (s *Store) activityReportSessions(
 
 	query := `SELECT
 		s.id,
-		COALESCE(NULLIF(s.display_name, ''), NULLIF(s.session_name, ''), NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id) AS display_name,
+		COALESCE(NULLIF(s.display_name, ''), NULLIF(s.session_name, ''), NULLIF(s.project, ''), s.id) AS display_name,
 		s.project,
 		s.agent,
 		s.machine,

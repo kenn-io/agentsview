@@ -21,6 +21,18 @@ import (
 // window used across the usage handler tests.
 const oneDayUsageRange = "from=2024-06-01&to=2024-06-01"
 
+func TestUsageInputAPIErrorPreservesMachineReadableCode(t *testing.T) {
+	err := usageInputAPIError(&service.UsageInputError{
+		Code: service.UsageErrorCodeUnknownProjectKey,
+		Msg:  "wording may change",
+	})
+	var response *apiErrorResponse
+	require.ErrorAs(t, err, &response)
+	assert.Equal(t, http.StatusBadRequest, response.Status)
+	assert.Equal(t, service.UsageErrorCodeUnknownProjectKey, response.Code)
+	assert.Equal(t, "wording may change", response.Message)
+}
+
 type usageSummaryCountsSpy struct {
 	db.Store
 	dailyCalls           int

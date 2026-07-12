@@ -509,19 +509,20 @@ func (b *httpBackend) UsageSummary(
 ) (*UsageSummaryResult, error) {
 	q := url.Values{}
 	for k, v := range map[string]string{
-		"from":            req.From,
-		"to":              req.To,
-		"timezone":        req.Timezone,
-		"agent":           req.Agent,
-		"project":         req.Project,
-		"machine":         req.Machine,
-		"git_branch":      req.GitBranch,
-		"exclude_project": req.ExcludeProject,
-		"exclude_agent":   req.ExcludeAgent,
-		"exclude_model":   req.ExcludeModel,
-		"model":           req.Model,
-		"active_since":    req.ActiveSince,
-		"termination":     req.Termination,
+		"from":                req.From,
+		"to":                  req.To,
+		"timezone":            req.Timezone,
+		"agent":               req.Agent,
+		"project":             req.Project,
+		"machine":             req.Machine,
+		"git_branch":          req.GitBranch,
+		"exclude_project":     req.ExcludeProject,
+		"exclude_project_key": req.ExcludeProjectKey,
+		"exclude_agent":       req.ExcludeAgent,
+		"exclude_model":       req.ExcludeModel,
+		"model":               req.Model,
+		"active_since":        req.ActiveSince,
+		"termination":         req.Termination,
 	} {
 		if v != "" {
 			q.Set(k, v)
@@ -566,18 +567,19 @@ func (b *httpBackend) UsagePairwiseComparison(
 ) (*UsagePairwiseComparisonResponse, error) {
 	q := url.Values{}
 	for k, v := range map[string]string{
-		"from":            req.From,
-		"to":              req.To,
-		"timezone":        req.Timezone,
-		"agent":           req.Agent,
-		"project":         req.Project,
-		"machine":         req.Machine,
-		"git_branch":      req.GitBranch,
-		"exclude_project": req.ExcludeProject,
-		"exclude_agent":   req.ExcludeAgent,
-		"exclude_model":   req.ExcludeModel,
-		"active_since":    req.ActiveSince,
-		"termination":     req.Termination,
+		"from":                req.From,
+		"to":                  req.To,
+		"timezone":            req.Timezone,
+		"agent":               req.Agent,
+		"project":             req.Project,
+		"machine":             req.Machine,
+		"git_branch":          req.GitBranch,
+		"exclude_project":     req.ExcludeProject,
+		"exclude_project_key": req.ExcludeProjectKey,
+		"exclude_agent":       req.ExcludeAgent,
+		"exclude_model":       req.ExcludeModel,
+		"active_since":        req.ActiveSince,
+		"termination":         req.Termination,
 	} {
 		if v != "" {
 			q.Set(k, v)

@@ -166,6 +166,22 @@ func TestDuckUsageTerminationPredicate(t *testing.T) {
 	assert.True(t, ok, "termination cutoff should be bound as a timestamp string")
 }
 
+func TestDuckUsageProjectLabelsPreserveCommas(t *testing.T) {
+	where, args := appendDuckUsageSessionFilterClauses(
+		"WHERE true",
+		nil,
+		db.UsageFilter{
+			ProjectLabels:        []string{"team,core"},
+			ExcludeProjectLabels: []string{"other,group"},
+		},
+		"",
+	)
+
+	assert.Contains(t, where, "s.project = ?")
+	assert.Contains(t, where, "s.project != ?")
+	assert.Equal(t, []any{"team,core", "other,group"}, args)
+}
+
 func TestDuckUsageAutomatedScopePredicates(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -90,6 +90,32 @@ type Report struct {
 	Intervals          []ReportInterval                  `json:"intervals"`
 }
 
+func SanitizeProjectLabels(
+	report *Report, projects map[string]export.ProjectMapEntry,
+) {
+	for i := range report.ByProject {
+		report.ByProject[i].ProjectKey = export.ProjectKeyForEntry(
+			projects[report.ByProject[i].Key],
+		)
+		report.ByProject[i].Key = export.SafeProjectDisplayLabel(
+			report.ByProject[i].Key,
+		)
+	}
+	for i := range report.BySession {
+		title := export.SafeProjectDisplayLabel(report.BySession[i].Title)
+		if title == "" {
+			title = report.BySession[i].SessionID
+		}
+		report.BySession[i].Title = title
+		report.BySession[i].ProjectKey = export.ProjectKeyForEntry(
+			projects[report.BySession[i].Project],
+		)
+		report.BySession[i].Project = export.SafeProjectDisplayLabel(
+			report.BySession[i].Project,
+		)
+	}
+}
+
 type Bucket struct {
 	Start        string  `json:"start"`
 	End          string  `json:"end"`
@@ -146,6 +172,7 @@ type Totals struct {
 // additive automated/interactive segments of each, exposed for a stacked-bar
 // rendering the current UI does not yet draw (it shows the combined metric).
 type KeyMinutes struct {
+	ProjectKey              string  `json:"project_key,omitempty"`
 	Key                     string  `json:"key"`
 	AgentMinutes            float64 `json:"agent_minutes"`
 	Cost                    float64 `json:"cost"`
@@ -157,6 +184,7 @@ type KeyMinutes struct {
 
 type SessionRow struct {
 	SessionID     string   `json:"session_id"`
+	ProjectKey    string   `json:"project_key"`
 	Title         string   `json:"title"`
 	Project       string   `json:"project"`
 	Agent         string   `json:"agent"`

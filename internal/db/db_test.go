@@ -789,6 +789,103 @@ func TestMigration_ResultContentColumn(t *testing.T) {
 	assert.Equal(t, "", tc.ResultContent, "ResultContent")
 }
 
+func TestUpgradeExportSchemaInPlaceOnlyAddsExportIdentitySchema(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+	d := testDBAtPath(t, path, "schema-only upgrade db")
+	insertSession(t, d, "schema-only", "project")
+	requireNoError(t, d.Close(), "close schema-only upgrade db")
+
+	conn, err := sql.Open("sqlite3", path)
+	requireNoError(t, err, "open schema-only upgrade fixture")
+	_, err = conn.Exec(`
+		UPDATE sessions
+		SET first_message = 'ordinary interactive request',
+			user_message_count = 1,
+			is_automated = 1
+		WHERE id = 'schema-only';
+		DELETE FROM archive_metadata;
+		ALTER TABLE project_identity_observations DROP COLUMN checkout_state;
+		DROP TABLE remote_skipped_files;
+		DROP TABLE session_project_identity_snapshots;
+	`)
+	requireNoError(t, err, "prepare schema-only upgrade fixture")
+	requireNoError(t, conn.Close(), "close schema-only upgrade fixture")
+
+	requireNoError(t, UpgradeExportSchemaInPlace(path,
+		&SchemaUpgradeRequiredError{
+			Table:  "session_project_identity_snapshots",
+			Column: "session_id",
+		}), "upgrade export schema in place")
+
+	conn, err = sql.Open("sqlite3", path)
+	requireNoError(t, err, "reopen schema-only upgrade fixture")
+	defer conn.Close()
+	var isAutomated int
+	requireNoError(t, conn.QueryRow(
+		`SELECT is_automated FROM sessions WHERE id = 'schema-only'`,
+	).Scan(&isAutomated), "read preserved session classification")
+	assert.Equal(t, 1, isAutomated,
+		"schema-only upgrade must not reclassify existing sessions")
+	var tableCount int
+	requireNoError(t, conn.QueryRow(`
+		SELECT count(*) FROM sqlite_master
+		WHERE type = 'table' AND name = 'session_project_identity_snapshots'
+	`).Scan(&tableCount), "read upgraded schema")
+	assert.Equal(t, 1, tableCount)
+	requireNoError(t, conn.QueryRow(`
+		SELECT count(*) FROM sqlite_master
+		WHERE type = 'table' AND name = 'remote_skipped_files'
+	`).Scan(&tableCount), "read unrelated schema")
+	assert.Zero(t, tableCount,
+		"export upgrade must not initialize unrelated schema")
+	var columnCount int
+	requireNoError(t, conn.QueryRow(`
+		SELECT count(*) FROM pragma_table_info('project_identity_observations')
+		WHERE name = 'checkout_state'
+	`).Scan(&columnCount), "read upgraded observation schema")
+	assert.Equal(t, 1, columnCount)
+	var metadataCount int
+	requireNoError(t, conn.QueryRow(`
+		SELECT count(*) FROM archive_metadata
+		WHERE key IN ('database_id', 'archive_id', 'archive_salt')
+		  AND trim(value) != ''
+	`).Scan(&metadataCount), "read initialized export metadata")
+	assert.Equal(t, 3, metadataCount)
+}
+
+func TestUpgradeExportSchemaInPlaceRejectsUnrelatedSchemaGap(t *testing.T) {
+	d := testDB(t)
+	err := UpgradeExportSchemaInPlace(d.Path(), &SchemaUpgradeRequiredError{
+		Table:  "tool_calls",
+		Column: "file_path",
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not eligible")
+}
+
+func TestUpgradeExportSchemaInPlaceRejectsUnsupportedExistingTableGap(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+	d := testDBAtPath(t, path, "incomplete export table db")
+	requireNoError(t, d.Close(), "close incomplete export table db")
+
+	conn, err := sql.Open("sqlite3", path)
+	requireNoError(t, err, "open incomplete export table fixture")
+	_, err = conn.Exec(
+		`ALTER TABLE session_project_identity_snapshots DROP COLUMN git_branch`)
+	requireNoError(t, err, "remove unsupported snapshot column")
+	requireNoError(t, conn.Close(), "close incomplete export table fixture")
+
+	err = UpgradeExportSchemaInPlace(path, &SchemaUpgradeRequiredError{
+		Table:  "session_project_identity_snapshots",
+		Column: "git_branch",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not eligible")
+}
+
 func TestMigration_ToolResultEventsTable(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
@@ -6722,6 +6819,9 @@ func TestCopySessionMetadataPreservesArchiveIdentityMetadata(t *testing.T) {
 	requireNoError(t, err, "open old")
 	requireNoError(t, oldDB.SetDatabaseIDForTest(ctx, "old-db-id"),
 		"set old database id")
+	requireNoError(t, oldDB.SetArchiveIdentityForTest(
+		ctx, "old-archive-id", strings.Repeat("a", 64)),
+		"set old archive identity")
 	requireNoError(t, oldDB.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project:    "alpha",
@@ -6735,11 +6835,20 @@ func TestCopySessionMetadataPreservesArchiveIdentityMetadata(t *testing.T) {
 	fresh := testDB(t)
 	requireNoError(t, fresh.SetDatabaseIDForTest(ctx, "fresh-db-id"),
 		"set fresh database id")
+	requireNoError(t, fresh.SetArchiveIdentityForTest(
+		ctx, "fresh-archive-id", strings.Repeat("b", 64)),
+		"set fresh archive identity")
 	requireNoError(t, fresh.CopySessionMetadataFrom(oldPath), "copy")
 
 	gotID, err := fresh.GetOrCreateDatabaseID(ctx)
 	requireNoError(t, err, "GetOrCreateDatabaseID")
-	assert.Equal(t, "old-db-id", gotID)
+	assert.Equal(t, "fresh-db-id", gotID)
+	archiveID, err := fresh.GetArchiveID(ctx)
+	requireNoError(t, err, "GetArchiveID")
+	assert.Equal(t, "old-archive-id", archiveID)
+	archiveSalt, err := fresh.GetArchiveSalt(ctx)
+	requireNoError(t, err, "GetArchiveSalt")
+	assert.Equal(t, strings.Repeat("a", 64), archiveSalt)
 	observations, err := fresh.ListProjectIdentityObservations(
 		ctx, []string{"alpha"})
 	requireNoError(t, err, "ListProjectIdentityObservations")
@@ -6823,6 +6932,111 @@ func TestCopySessionMetadataKeepsFreshProjectIdentityObservationOnConflict(t *te
 	require.Len(t, observations, 1)
 	assert.Equal(t, root, observations[0].WorktreeRootPath)
 	assert.Equal(t, filepath.Base(root), observations[0].WorktreeName)
+}
+
+func TestCopySessionMetadataKeepsIdentityRevisionMonotonic(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	oldPath := filepath.Join(dir, "old.db")
+	oldDB, err := Open(oldPath)
+	requireNoError(t, err, "open old")
+	_, err = oldDB.rawWriter().Exec(`
+		INSERT INTO archive_metadata (key, value)
+		VALUES (?, '1')
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		archiveMetadataProjectIdentityRevisionKey,
+	)
+	requireNoError(t, err, "set old revision")
+	requireNoError(t, oldDB.Close(), "close old")
+
+	fresh := testDB(t)
+	for _, id := range []string{"session-a", "session-b", "session-c"} {
+		requireNoError(t, fresh.UpsertSession(Session{
+			ID: id, Project: "app", Machine: "host", Agent: "codex",
+		}), "insert fresh session")
+	}
+	before, err := fresh.ProjectIdentityPublicationRevision(ctx)
+	requireNoError(t, err, "revision before copy")
+	require.Greater(t, before, int64(1))
+
+	requireNoError(t, fresh.CopySessionMetadataFrom(oldPath), "copy")
+	after, err := fresh.ProjectIdentityPublicationRevision(ctx)
+	requireNoError(t, err, "revision after copy")
+	assert.GreaterOrEqual(t, after, before)
+}
+
+func TestCopySessionMetadataPreservesFirstConclusiveSessionSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	oldPath := filepath.Join(dir, "old.db")
+	oldDB, err := Open(oldPath)
+	requireNoError(t, err, "open old")
+	requireNoError(t, oldDB.UpsertSession(Session{
+		ID: "session-a", Project: "app", Machine: "host", Agent: "codex",
+	}), "insert old session")
+	requireNoError(t, oldDB.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: "session-a", Project: "app", Machine: "host",
+			RootPath: "/old/app", GitRemote: "https://github.com/acme/app.git",
+			ObservedAt: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		}), "insert old snapshot")
+	requireNoError(t, oldDB.Close(), "close old")
+
+	fresh := testDB(t)
+	requireNoError(t, fresh.UpsertSession(Session{
+		ID: "session-a", Project: "app", Machine: "host", Agent: "codex",
+	}), "insert fresh session")
+	requireNoError(t, fresh.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: "session-a", Project: "app", Machine: "host",
+			RootPath: "/new/app", GitRemote: "https://gitlab.com/acme/app.git",
+			ObservedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		}), "insert fresh snapshot")
+
+	requireNoError(t, fresh.CopySessionMetadataFrom(oldPath), "copy")
+	snapshots, err := fresh.listSessionProjectIdentitySnapshots(
+		ctx, []string{"session-a"},
+	)
+	requireNoError(t, err, "list snapshots")
+	assert.Equal(t, "https://github.com/acme/app.git",
+		snapshots["session-a"].GitRemote)
+}
+
+func TestCopySessionMetadataPreservesHistoricalUnknownSessionSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	oldPath := filepath.Join(dir, "old.db")
+	oldDB, err := Open(oldPath)
+	requireNoError(t, err, "open old")
+	requireNoError(t, oldDB.UpsertSession(Session{
+		ID: "session-a", Project: "app", Machine: "host", Agent: "codex",
+		Cwd: "/historical/app",
+	}), "insert old session")
+	requireNoError(t, oldDB.Close(), "close old")
+
+	fresh := testDB(t)
+	requireNoError(t, fresh.UpsertSession(Session{
+		ID: "session-a", Project: "app", Machine: "host", Agent: "codex",
+		Cwd: "/rediscovered/app",
+	}), "insert fresh session")
+	requireNoError(t, fresh.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: "session-a", Project: "app", Machine: "host",
+			RootPath:   "/rediscovered/app",
+			GitRemote:  "https://example.com/acme/app.git",
+			ObservedAt: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		}), "insert fresh resolved snapshot")
+
+	requireNoError(t, fresh.CopySessionMetadataFrom(oldPath), "copy")
+	snapshots, err := fresh.listSessionProjectIdentitySnapshots(
+		ctx, []string{"session-a"},
+	)
+	requireNoError(t, err, "list snapshots")
+	require.Contains(t, snapshots, "session-a")
+	assert.Equal(t, export.ProjectResolutionUnknown,
+		snapshots["session-a"].RemoteResolution)
+	assert.Equal(t, "/historical/app", snapshots["session-a"].RootPath)
+	assert.Empty(t, snapshots["session-a"].GitRemote)
 }
 
 func TestCopySessionMetadataSuppressesOldRootFallbackWhenFreshRemoteExists(t *testing.T) {

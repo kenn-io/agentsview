@@ -86,7 +86,8 @@ func (db *DB) GetActivityReport(
 	if err != nil {
 		return activity.Report{}, err
 	}
-	report.Projects = projects
+	activity.SanitizeProjectLabels(&report, projects)
+	report.Projects = export.ProjectMapForWire(projects)
 	return report, nil
 }
 
@@ -124,7 +125,7 @@ func (db *DB) activityReportSessions(
 	query := `SELECT
 		s.id,
 		COALESCE(NULLIF(s.display_name, ''), NULLIF(s.session_name, ''),
-			NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id),
+			NULLIF(s.project, ''), s.id),
 		s.project,
 		s.agent,
 		s.machine,

@@ -10,5 +10,6 @@ export type ActivityKeyMinutes = {
   interactive_agent_minutes: number;
   interactive_cost: number;
   key: string;
+  project_key?: string;
 };
 

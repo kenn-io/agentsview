@@ -81,7 +81,8 @@ func (s *Store) GetActivityReport(
 	if err != nil {
 		return activity.Report{}, err
 	}
-	report.Projects = projects
+	activity.SanitizeProjectLabels(&report, projects)
+	report.Projects = export.ProjectMapForWire(projects)
 	return report, nil
 }
 
@@ -96,7 +97,8 @@ func activityReportProjectLabels(sessions []activity.SessionMeta) []string {
 // activityReportSessions returns the candidate sessions whose window
 // overlaps the exact range [rangeStartUTC, rangeEndUTC), plus their
 // IDs. The ID set defines the scope for the activity and usage fetches.
-// The display-name expression matches the one PG's usage query uses.
+// Titles intentionally exclude first_message because activity reports cross
+// the summary export boundary.
 //
 // The effective-end fallback for a session with no ended_at uses its
 // latest message timestamp before started_at, so a still-open session
@@ -116,7 +118,7 @@ func (s *Store) activityReportSessions(
 	// session_name.
 	query := `SELECT
 		s.id,
-		COALESCE(NULLIF(s.display_name, ''), NULLIF(s.session_name, ''), NULLIF(s.first_message, ''), NULLIF(s.project, ''), s.id) AS display_name,
+		COALESCE(NULLIF(s.display_name, ''), NULLIF(s.session_name, ''), NULLIF(s.project, ''), s.id) AS display_name,
 		s.project,
 		s.agent,
 		s.machine,

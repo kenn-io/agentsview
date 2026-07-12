@@ -3,11 +3,13 @@ package duckdb
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +17,40 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
+
+const projectIdentityPublicationStateKey = "duckdb_project_identity_publication_revision_v2"
+
+func (s *Sync) projectIdentityStateKey(databaseGeneration string) string {
+	key := projectIdentityPublicationStateKey + ":" + databaseGeneration
+	if !s.isFiltered() {
+		return s.syncStateKey(key)
+	}
+	projects := append([]string(nil), s.projects...)
+	excludes := append([]string(nil), s.excludeProjects...)
+	sort.Strings(projects)
+	sort.Strings(excludes)
+	projects = slices.Compact(projects)
+	excludes = slices.Compact(excludes)
+
+	sum := sha256.New()
+	writeField := func(value string) {
+		_, _ = fmt.Fprintf(sum, "%d:", len(value))
+		_, _ = sum.Write([]byte(value))
+	}
+	writeField("include")
+	writeField(strconv.Itoa(len(projects)))
+	for _, project := range projects {
+		writeField(project)
+	}
+	writeField("exclude")
+	writeField(strconv.Itoa(len(excludes)))
+	for _, project := range excludes {
+		writeField(project)
+	}
+	return s.syncStateKey(
+		key + ":project-filter:" + hex.EncodeToString(sum.Sum(nil)[:8]),
+	)
+}
 
 func (s *Sync) syncModelPricing(ctx context.Context) error {
 	prices, err := s.local.ListModelPricing(ctx)
@@ -161,23 +197,92 @@ func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
 	return nil
 }
 
-func (s *Sync) syncProjectIdentityObservations(ctx context.Context) error {
-	observations, err := s.local.ListProjectIdentityObservations(ctx, nil)
+func (s *Sync) syncProjectIdentityObservations(
+	ctx context.Context, force bool,
+) error {
+	revision, err := s.local.ProjectIdentityPublicationRevision(ctx)
 	if err != nil {
-		return fmt.Errorf("loading project identity observations: %w", err)
+		return err
 	}
-	if len(s.projects) > 0 || len(s.excludeProjects) > 0 {
-		out := observations[:0]
-		for _, obs := range observations {
-			if !projectInSyncScope(obs.Project, s.projects, s.excludeProjects) {
-				continue
+	databaseGeneration, err := s.local.GetDatabaseID(ctx)
+	if err != nil {
+		return fmt.Errorf("loading source database generation: %w", err)
+	}
+	revisionValue := strconv.FormatInt(revision, 10)
+	stateKey := s.projectIdentityStateKey(databaseGeneration)
+	publishedRevisionValue, err := s.local.GetSyncState(stateKey)
+	if err != nil {
+		return fmt.Errorf("reading duckdb project identity publication revision: %w", err)
+	}
+	archiveID, err := s.local.GetArchiveID(ctx)
+	if err != nil {
+		return fmt.Errorf("loading source archive id: %w", err)
+	}
+	fullPublication := force || publishedRevisionValue == ""
+	var publishedRevision int64
+	if !fullPublication {
+		publishedRevision, err = strconv.ParseInt(publishedRevisionValue, 10, 64)
+		if err != nil || publishedRevision < 0 || publishedRevision > revision {
+			fullPublication = true
+		} else if publishedRevision == revision {
+			var archivePresent bool
+			if err := s.duck.QueryRowContext(ctx, `
+			SELECT count(*) > 0 FROM source_archives
+			WHERE source_archive_id = ?`, archiveID).Scan(&archivePresent); err != nil {
+				return fmt.Errorf("checking duckdb project identity publication: %w", err)
 			}
-			out = append(out, obs)
+			if archivePresent {
+				return nil
+			}
+			fullPublication = true
 		}
-		observations = out
 	}
-	if len(observations) == 0 {
-		return nil
+
+	var observations []export.ProjectIdentityObservation
+	var snapshots []export.ProjectIdentityObservation
+	var delta db.ProjectIdentityPublicationDelta
+	if fullPublication {
+		observations, err = s.local.ListProjectIdentityObservations(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("loading project identity observations: %w", err)
+		}
+		if len(s.projects) > 0 || len(s.excludeProjects) > 0 {
+			out := observations[:0]
+			for _, obs := range observations {
+				if projectInSyncScope(obs.Project, s.projects, s.excludeProjects) {
+					out = append(out, obs)
+				}
+			}
+			observations = out
+		}
+		snapshots, err = s.local.ListSessionProjectIdentitySnapshots(ctx)
+		if err != nil {
+			return fmt.Errorf("loading session project identity snapshots: %w", err)
+		}
+		if len(s.projects) > 0 || len(s.excludeProjects) > 0 {
+			out := snapshots[:0]
+			for _, snapshot := range snapshots {
+				if projectInSyncScope(
+					snapshot.Project, s.projects, s.excludeProjects,
+				) {
+					out = append(out, snapshot)
+				}
+			}
+			snapshots = out
+		}
+	} else {
+		delta, err = s.local.LoadProjectIdentityPublicationDelta(
+			ctx, publishedRevision, revision, s.projects, s.excludeProjects,
+		)
+		if err != nil {
+			return err
+		}
+		observations = delta.Observations
+		snapshots = delta.Snapshots
+	}
+	archiveSalt, err := s.local.GetArchiveSalt(ctx)
+	if err != nil {
+		return fmt.Errorf("loading source archive salt: %w", err)
 	}
 	tx, err := s.duck.BeginTx(ctx, nil)
 	if err != nil {
@@ -186,7 +291,35 @@ func (s *Sync) syncProjectIdentityObservations(ctx context.Context) error {
 	defer func() {
 		_ = tx.Rollback()
 	}()
+	if err := upsertSourceArchiveScope(
+		func(stmt string, args ...any) error {
+			return s.execMutation(ctx, tx, stmt, args...)
+		},
+		func(stmt string, args ...any) *sql.Row {
+			return tx.QueryRowContext(ctx, stmt, args...)
+		},
+		archiveID, archiveSalt,
+	); err != nil {
+		return err
+	}
+	execDelta := func(stmt string, args ...any) error {
+		return s.execMutation(ctx, tx, stmt, args...)
+	}
+	if fullPublication {
+		if err := deleteProjectIdentityScope(
+			execDelta, archiveID, s.projects, s.excludeProjects,
+		); err != nil {
+			return err
+		}
+	} else if err := deleteProjectIdentityDelta(
+		execDelta, archiveID, databaseGeneration,
+		delta.ObservationDeletes, delta.SnapshotDeletes,
+	); err != nil {
+		return err
+	}
 	for _, obs := range observations {
+		obs.SourceArchiveID = archiveID
+		obs.SourceArchiveSalt = archiveSalt
 		obs = export.SanitizeStoredProjectIdentityObservation(obs)
 		if err := upsertProjectIdentityObservation(
 			func(stmt string, args ...any) error {
@@ -203,8 +336,22 @@ func (s *Sync) syncProjectIdentityObservations(ctx context.Context) error {
 			)
 		}
 	}
+	for i := range snapshots {
+		snapshots[i] = export.SanitizeStoredProjectIdentityObservation(snapshots[i])
+	}
+	if err := upsertSessionProjectIdentitySnapshots(
+		func(stmt string, args ...any) error {
+			return s.execMutation(ctx, tx, stmt, args...)
+		},
+		archiveID, databaseGeneration, snapshots,
+	); err != nil {
+		return fmt.Errorf("syncing duckdb session project identity snapshots: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing duckdb project identity sync: %w", err)
+	}
+	if err := s.local.SetSyncState(stateKey, revisionValue); err != nil {
+		return fmt.Errorf("recording duckdb project identity publication revision: %w", err)
 	}
 	return nil
 }

@@ -13,6 +13,7 @@ export type ActivitySessionRow = {
   output_tokens: number;
   primary_model: string;
   project: string;
+  project_key: string;
   session_id: string;
   timing_quality: string;
   title: string;

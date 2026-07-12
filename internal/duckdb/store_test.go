@@ -285,6 +285,12 @@ func TestStoreGetStatsPreservesRootAndScopeFilters(t *testing.T) {
 		"exclude one-shot and automated", true, true, 1, 2, 1,
 		"2026-01-01T00:00:00Z",
 	)
+
+	labels, err := store.GetActiveProjectLabels(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"alpha", "beta", "bot", "child", "empty", "fork",
+	}, labels)
 }
 
 func TestStoreMessageIDJoinsAreSessionScoped(t *testing.T) {
@@ -838,6 +844,11 @@ func TestProjectIdentityMapLegacyFallbackUsesFilePath(t *testing.T) {
 	store := NewStoreFromDB(conn)
 
 	_, err := conn.ExecContext(ctx, `
+		INSERT INTO source_archives (source_archive_id, source_archive_salt)
+		VALUES (?, ?)`, "legacy-test-archive", "legacy-test-salt")
+	require.NoError(t, err)
+
+	_, err = conn.ExecContext(ctx, `
 		INSERT INTO sessions (id, project, machine, agent, cwd, file_path)
 		VALUES (?, ?, ?, ?, ?, ?)`,
 		"file-path-identity", "file-project", "laptop", "codex", "",
@@ -847,13 +858,118 @@ func TestProjectIdentityMapLegacyFallbackUsesFilePath(t *testing.T) {
 
 	got, err := store.BuildProjectIdentityMap(ctx, []string{"file-project"})
 	require.NoError(t, err)
-	require.Equal(t, export.ProjectResolutionResolved,
+	require.Equal(t, export.ProjectResolutionUnknown,
 		got["file-project"].Resolution)
-	require.NotNil(t, got["file-project"].Identity)
-	assert.Equal(t, export.ProjectIdentityKeySourceRootPath,
-		got["file-project"].Identity.KeySource)
-	assert.Equal(t, "/fixtures/duck-file-project",
-		got["file-project"].Identity.RootPath)
+	assert.Nil(t, got["file-project"].Identity)
+}
+
+func TestProjectIdentityMapLegacySessionsUseDistinctFallbackKeys(t *testing.T) {
+	ctx := context.Background()
+	conn := openTestDuckDB(t)
+	require.NoError(t, EnsureSchema(ctx, conn))
+	_, err := conn.ExecContext(ctx, `
+		INSERT INTO sessions (id, project, machine, agent)
+		VALUES
+			('legacy-alpha', 'alpha', 'host', 'codex'),
+			('legacy-beta', 'beta', 'host', 'codex')`)
+	require.NoError(t, err)
+
+	store := NewStoreFromDB(conn)
+	first, err := store.BuildProjectIdentityMap(ctx, []string{"alpha", "beta"})
+	require.NoError(t, err)
+	second, err := store.BuildProjectIdentityMap(ctx, []string{"alpha", "beta"})
+	require.NoError(t, err)
+
+	assert.NotEmpty(t, first["alpha"].ProjectKey)
+	assert.NotEmpty(t, first["beta"].ProjectKey)
+	assert.NotEqual(t, first["alpha"].ProjectKey, first["beta"].ProjectKey)
+	assert.Equal(t, first["alpha"].ProjectKey, second["alpha"].ProjectKey)
+	assert.Equal(t, first["beta"].ProjectKey, second["beta"].ProjectKey)
+	assert.Len(t, export.ProjectMapForWire(first), 2)
+}
+
+func TestProjectIdentityObservationRoundTripsRepositoryContext(t *testing.T) {
+	ctx := context.Background()
+	conn := openTestDuckDB(t)
+	require.NoError(t, EnsureSchema(ctx, conn))
+	observedAt := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	_, err := conn.ExecContext(ctx, `
+		INSERT INTO source_project_identity_observations (
+			source_archive_id, source_archive_salt,
+			project, machine, root_path, git_remote, git_remote_name,
+			repository_path, worktree_name, worktree_root_path,
+			worktree_relationship, checkout_state, git_branch,
+			remote_resolution, remote_candidate_count, observed_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"archive-source", "archive-salt",
+		"app", "host", "/private/app-worktree", "", "",
+		"/private/app/.git", "feature", "/private/app-worktree",
+		export.WorktreeLinked, export.CheckoutDetached, "",
+		export.ProjectResolutionAmbiguous, 2, observedAt,
+	)
+	require.NoError(t, err)
+
+	got, err := NewStoreFromDB(conn).ListProjectIdentityObservations(ctx, []string{"app"})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "archive-source", got[0].SourceArchiveID)
+	assert.Equal(t, "archive-salt", got[0].SourceArchiveSalt)
+	assert.Equal(t, "/private/app/.git", got[0].RepositoryPath)
+	assert.Equal(t, export.WorktreeLinked, got[0].WorktreeRelationship)
+	assert.Equal(t, export.CheckoutDetached, got[0].CheckoutState)
+	assert.Equal(t, export.ProjectResolutionAmbiguous, got[0].RemoteResolution)
+	assert.Equal(t, 2, got[0].RemoteCandidateCount)
+}
+
+func TestProjectIdentityObservationsAggregateSourceArchives(t *testing.T) {
+	ctx := context.Background()
+	conn := openTestDuckDB(t)
+	require.NoError(t, EnsureSchema(ctx, conn))
+	for i, archiveID := range []string{"archive-a", "archive-b"} {
+		_, err := conn.ExecContext(ctx, `
+			INSERT INTO source_archives (source_archive_id, source_archive_salt)
+			VALUES (?, ?)`, archiveID, archiveID+"-salt")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, `
+			INSERT INTO source_project_identity_observations (
+				source_archive_id, source_archive_salt, project, machine,
+				root_path, git_remote, observed_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			archiveID, archiveID+"-salt", "app", "host", "/repo/app",
+			fmt.Sprintf("https://github.com/acme/app-%d.git", i), time.Now().UTC(),
+		)
+		require.NoError(t, err)
+	}
+
+	store := NewStoreFromDB(conn)
+	all, err := store.ListProjectIdentityObservations(ctx, []string{"app"})
+	require.NoError(t, err)
+	require.Len(t, all, 2)
+	aggregate, err := store.BuildProjectIdentityMap(ctx, []string{"app", "missing"})
+	require.NoError(t, err)
+	assert.NotEmpty(t, aggregate["app"].ProjectKey)
+	assert.NotEmpty(t, aggregate["missing"].ProjectKey)
+	assert.Contains(t, export.ProjectMapForWire(aggregate), aggregate["app"].ProjectKey)
+	assert.Contains(t, export.ProjectMapForWire(aggregate), aggregate["missing"].ProjectKey)
+
+}
+
+func TestSourceArchiveScopeRejectsSaltMismatch(t *testing.T) {
+	ctx := context.Background()
+	conn := openTestDuckDB(t)
+	require.NoError(t, EnsureSchema(ctx, conn))
+	exec := func(query string, args ...any) error {
+		_, err := conn.ExecContext(ctx, query, args...)
+		return err
+	}
+
+	queryRow := func(query string, args ...any) *sql.Row {
+		return conn.QueryRowContext(ctx, query, args...)
+	}
+	require.NoError(t, upsertSourceArchiveScope(
+		exec, queryRow, "archive-a", "salt-a"))
+	err := upsertSourceArchiveScope(exec, queryRow, "archive-a", "salt-b")
+	require.ErrorContains(t, err, "archive salt mismatch")
 }
 
 func TestLoadPricingUsesFallbackWhenEffectiveTableEmpty(t *testing.T) {

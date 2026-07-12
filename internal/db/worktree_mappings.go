@@ -498,34 +498,8 @@ func resolveWorktreeProjectFromMapping(
 	}
 }
 
-// worktreeMappingIdentityRoot returns the directory that anchors the
-// project identity for a cwd matched by a mapping, when the mapping
-// resolves that cwd to the given project.
-func worktreeMappingIdentityRoot(
-	mapping WorktreeProjectMapping,
-	cwd string,
-	project string,
-) (string, bool) {
-	switch mapping.Layout {
-	case "", WorktreeMappingLayoutExplicit:
-		if mapping.Project == "" || mapping.Project != project {
-			return "", false
-		}
-		return mapping.PathPrefix, true
-	case WorktreeMappingLayoutRepoDotWorktrees:
-		resolved, root, ok := resolveRepoDotWorktrees(mapping.PathPrefix, cwd)
-		if !ok || resolved != project {
-			return "", false
-		}
-		return root, true
-	default:
-		return "", false
-	}
-}
-
-// resolveRepoDotWorktrees resolves a cwd under a repo_dot_worktrees
-// mapping to its project name and the repo.worktrees directory shared
-// by all of that repo's worktree branches.
+// resolveRepoDotWorktrees resolves a cwd under a repo_dot_worktrees mapping to
+// its project name and the repo.worktrees directory shared by all branches.
 func resolveRepoDotWorktrees(
 	pathPrefix string,
 	cwd string,

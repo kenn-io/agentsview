@@ -41,29 +41,34 @@
     points: Point[];
     keys: string[];
     maxY: number;
+	labels: Record<string, string>;
   } => {
     const daily = usage.summary?.daily;
     if (!daily || daily.length === 0) {
-      return { points: [], keys: [], maxY: 0 };
+      return { points: [], keys: [], maxY: 0, labels: {} };
     }
 
     // Sum cost per key across the whole range to find top N.
     const totals = new Map<string, number>();
+	const labels: Record<string, string> = {};
     for (const day of daily) {
       if (groupBy === "project" && day.projectBreakdowns) {
         for (const b of day.projectBreakdowns) {
-          totals.set(b.project,
-            (totals.get(b.project) ?? 0) + b.cost);
+		  labels[b.project_key] = b.project;
+          totals.set(b.project_key,
+            (totals.get(b.project_key) ?? 0) + b.cost);
         }
       } else if (groupBy === "model" && day.modelBreakdowns) {
         for (const b of day.modelBreakdowns) {
           totals.set(b.modelName,
             (totals.get(b.modelName) ?? 0) + b.cost);
+		  labels[b.modelName] = b.modelName;
         }
       } else if (groupBy === "agent" && day.agentBreakdowns) {
         for (const b of day.agentBreakdowns) {
           totals.set(b.agent,
             (totals.get(b.agent) ?? 0) + b.cost);
+		  labels[b.agent] = b.agent;
         }
       }
     }
@@ -78,7 +83,7 @@
       for (const pt of points) {
         if (pt.values.total > maxY) maxY = pt.values.total;
       }
-      return { points, keys: ["total"], maxY: maxY || 1 };
+      return { points, keys: ["total"], maxY: maxY || 1, labels };
     }
 
     // Pick top N by total cost, group the rest as "Other".
@@ -96,7 +101,7 @@
 
       if (groupBy === "project" && day.projectBreakdowns) {
         items = day.projectBreakdowns.map((b) => ({
-          key: b.project, cost: b.cost,
+		  key: b.project_key, cost: b.cost,
         }));
       } else if (groupBy === "model" && day.modelBreakdowns) {
         items = day.modelBreakdowns.map((b) => ({
@@ -135,7 +140,7 @@
       if (stack > maxY) maxY = stack;
     }
 
-    return { points, keys, maxY: maxY || 1 };
+    return { points, keys, maxY: maxY || 1, labels };
   });
 
   const chartWidth = $derived(
@@ -416,7 +421,7 @@
               class="legend-dot"
               style="background: {key === '__other__' ? 'var(--text-muted)' : projectColor(key)}"
             ></span>
-            {key === "__other__" ? m.shared_other() : key}
+			{key === "__other__" ? m.shared_other() : (seriesData.labels[key] ?? key)}
           </span>
         {/each}
       </div>

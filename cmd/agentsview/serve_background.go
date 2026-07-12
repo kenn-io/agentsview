@@ -578,6 +578,7 @@ probeDaemon:
 
 	args := []string{"serve"}
 	args = serveBackgroundArgsWithNoSync(args, cfg.NoSync)
+	args = serveBackgroundArgsWithSkipInitialSync(args, cfg.SkipInitialSync)
 	child, logPath, err := startServeBackgroundProcessForEnsure(*cfg, args)
 	if err != nil {
 		return nil, err
@@ -904,6 +905,22 @@ func serveBackgroundArgsWithNoSync(args []string, noSync bool) []string {
 	}
 	out := append([]string(nil), args...)
 	return append(out, "--no-sync")
+}
+
+func serveBackgroundArgsWithSkipInitialSync(
+	args []string, skipInitialSync bool,
+) []string {
+	if !skipInitialSync {
+		return args
+	}
+	for _, arg := range args {
+		if arg == "--skip-initial-sync" ||
+			strings.HasPrefix(arg, "--skip-initial-sync=") {
+			return args
+		}
+	}
+	out := append([]string(nil), args...)
+	return append(out, "--skip-initial-sync")
 }
 
 // isBackgroundChildStrippedFlagArg reports whether arg is a serve flag that

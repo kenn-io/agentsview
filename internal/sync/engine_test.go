@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -28,6 +29,233 @@ import (
 func openTestDB(t *testing.T) *db.DB {
 	t.Helper()
 	return dbtest.OpenTestDB(t)
+}
+
+func TestStartupMaintenanceWaitsForForegroundSyncAndSerializesLaterSyncs(
+	t *testing.T,
+) {
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		Machine:                 "local",
+		DeferStartupMaintenance: true,
+	})
+	t.Cleanup(engine.Close)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	closed := func(ch <-chan struct{}) bool {
+		select {
+		case <-ch:
+			return true
+		default:
+			return false
+		}
+	}
+
+	maintenanceStarted := make(chan struct{})
+	releaseMaintenance := make(chan struct{})
+	maintenanceDone := make(chan error, 1)
+	go func() {
+		maintenanceDone <- engine.RunStartupMaintenance(ctx, func() error {
+			close(maintenanceStarted)
+			<-releaseMaintenance
+			return nil
+		})
+	}()
+	assert.Never(t, func() bool {
+		return closed(maintenanceStarted)
+	}, 100*time.Millisecond, 10*time.Millisecond,
+		"deferred maintenance must wait for the foreground sync")
+
+	foregroundStarted := make(chan struct{})
+	releaseForeground := make(chan struct{})
+	foregroundDone := make(chan error, 1)
+	go func() {
+		_, err := engine.SyncThenRun(ctx, false, nil, func(bool) error {
+			close(foregroundStarted)
+			<-releaseForeground
+			return nil
+		})
+		foregroundDone <- err
+	}()
+	require.Eventually(t, func() bool {
+		return closed(foregroundStarted)
+	}, time.Second, 10*time.Millisecond)
+	assert.Never(t, func() bool {
+		return closed(maintenanceStarted)
+	}, 100*time.Millisecond, 10*time.Millisecond,
+		"maintenance must remain deferred while the foreground sync runs")
+
+	close(releaseForeground)
+	require.NoError(t, <-foregroundDone)
+	require.Eventually(t, func() bool {
+		return closed(maintenanceStarted)
+	}, time.Second, 10*time.Millisecond,
+		"foreground completion must release startup maintenance")
+
+	laterSyncStarted := make(chan struct{})
+	releaseLaterSync := make(chan struct{})
+	laterSyncDone := make(chan error, 1)
+	go func() {
+		_, err := engine.SyncThenRun(ctx, false, nil, func(bool) error {
+			close(laterSyncStarted)
+			<-releaseLaterSync
+			return nil
+		})
+		laterSyncDone <- err
+	}()
+	assert.Never(t, func() bool {
+		return closed(laterSyncStarted)
+	}, 100*time.Millisecond, 10*time.Millisecond,
+		"startup maintenance must hold the sync lock")
+
+	close(releaseMaintenance)
+	require.NoError(t, <-maintenanceDone)
+	require.Eventually(t, func() bool {
+		return closed(laterSyncStarted)
+	}, time.Second, 10*time.Millisecond)
+	close(releaseLaterSync)
+	require.NoError(t, <-laterSyncDone)
+}
+
+func TestStartupSyncFallbackRunsWhenForegroundSyncNeverArrives(t *testing.T) {
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		Machine:                 "local",
+		DeferStartupMaintenance: true,
+	})
+	t.Cleanup(engine.Close)
+
+	maintenanceStarted := make(chan struct{})
+	maintenanceDone := make(chan error, 1)
+	go func() {
+		maintenanceDone <- engine.RunStartupMaintenance(
+			t.Context(),
+			func() error {
+				close(maintenanceStarted)
+				return nil
+			},
+		)
+	}()
+
+	stats, ran, err := engine.RunStartupSyncFallback(t.Context(), nil)
+	require.NoError(t, err)
+	assert.True(t, ran)
+	assert.False(t, stats.Aborted)
+	assert.False(t, engine.LastSyncStartedAt().IsZero(),
+		"fallback must perform the skipped startup sync")
+	require.Eventually(t, func() bool {
+		select {
+		case <-maintenanceStarted:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond,
+		"fallback completion must release startup maintenance")
+	require.NoError(t, <-maintenanceDone)
+}
+
+func TestStartupSyncFallbackSkipsAfterForegroundSyncCompletes(t *testing.T) {
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		Machine:                 "local",
+		DeferStartupMaintenance: true,
+	})
+	t.Cleanup(engine.Close)
+
+	_, err := engine.SyncThenRun(
+		t.Context(), false, nil, func(bool) error { return nil },
+	)
+	require.NoError(t, err)
+	startedAt := engine.LastSyncStartedAt()
+	require.False(t, startedAt.IsZero())
+
+	_, ran, err := engine.RunStartupSyncFallback(t.Context(), nil)
+	require.NoError(t, err)
+	assert.False(t, ran,
+		"fallback must not duplicate a completed foreground sync")
+	assert.Equal(t, startedAt, engine.LastSyncStartedAt())
+}
+
+func TestStartupSyncFallbackRecoversCanceledForegroundSync(t *testing.T) {
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		Machine:                 "local",
+		DeferStartupMaintenance: true,
+	})
+	t.Cleanup(engine.Close)
+
+	requestCtx, cancelRequest := context.WithCancel(t.Context())
+	cancelRequest()
+	_, err := engine.SyncThenRun(
+		requestCtx, false, nil, func(bool) error { return nil },
+	)
+	require.ErrorIs(t, err, context.Canceled)
+
+	_, ran, err := engine.RunStartupSyncFallback(t.Context(), nil)
+	require.NoError(t, err)
+	assert.True(t, ran,
+		"a failed foreground request must leave startup recovery eligible")
+}
+
+func TestStartupSyncFallbackRechecksAfterInFlightForegroundSync(t *testing.T) {
+	database := openTestDB(t)
+	engine := NewEngine(database, EngineConfig{
+		Machine:                 "local",
+		DeferStartupMaintenance: true,
+	})
+	t.Cleanup(engine.Close)
+
+	foregroundStarted := make(chan struct{})
+	releaseForeground := make(chan struct{})
+	foregroundDone := make(chan error, 1)
+	go func() {
+		_, err := engine.SyncThenRun(
+			t.Context(), false, nil,
+			func(bool) error {
+				close(foregroundStarted)
+				<-releaseForeground
+				return nil
+			},
+		)
+		foregroundDone <- err
+	}()
+	select {
+	case <-foregroundStarted:
+	case <-time.After(time.Second):
+		require.FailNow(t, "foreground sync did not start")
+	}
+
+	type fallbackResult struct {
+		ran bool
+		err error
+	}
+	fallbackDone := make(chan fallbackResult, 1)
+	go func() {
+		_, ran, err := engine.RunStartupSyncFallback(t.Context(), nil)
+		fallbackDone <- fallbackResult{ran: ran, err: err}
+	}()
+	assert.Never(t, func() bool {
+		select {
+		case <-fallbackDone:
+			return true
+		default:
+			return false
+		}
+	}, 100*time.Millisecond, 10*time.Millisecond,
+		"fallback must wait for the in-flight foreground sync")
+
+	close(releaseForeground)
+	require.NoError(t, <-foregroundDone)
+	select {
+	case result := <-fallbackDone:
+		require.NoError(t, result.err)
+		assert.False(t, result.ran,
+			"fallback must recheck completion after acquiring the sync lock")
+	case <-time.After(time.Second):
+		require.FailNow(t, "fallback did not finish")
+	}
 }
 
 // fakeFileInfo implements os.FileInfo for test use.
@@ -993,6 +1221,10 @@ func TestProjectIdentityWriteBatchDiscoversLocalGitRemote(t *testing.T) {
 		[]byte("[remote \"origin\"]\n\turl = git@github.com:Org/Repo.git\n"),
 		0o644,
 	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, ".git", "HEAD"),
+		[]byte("ref: refs/heads/feature/export\n"), 0o644,
+	))
 	cwd := filepath.Join(root, "subdir")
 	require.NoError(t, os.Mkdir(cwd, 0o755))
 
@@ -1022,6 +1254,58 @@ func TestProjectIdentityWriteBatchDiscoversLocalGitRemote(t *testing.T) {
 	assert.Equal(t, "github.com:Org/Repo.git", observations[0].GitRemote)
 	assert.Equal(t, "github.com/Org/Repo", observations[0].NormalizedRemote)
 	assert.Equal(t, "git_remote", observations[0].KeySource)
+	assert.Equal(t, expectedRoot, observations[0].RepositoryPath)
+	assert.Equal(t, expectedRoot, observations[0].WorktreeRootPath)
+	assert.Equal(t, export.WorktreeMain, observations[0].WorktreeRelationship)
+	assert.Equal(t, export.CheckoutBranch, observations[0].CheckoutState)
+	assert.Equal(t, "feature/export", observations[0].GitBranch)
+}
+
+func TestProjectIdentityDiscoversLinkedWorktreeRepositoryContext(t *testing.T) {
+	database := openTestDB(t)
+	mainRoot := filepath.Join(t.TempDir(), "main")
+	linkedRoot := filepath.Join(t.TempDir(), "feature")
+	gitDir := filepath.Join(mainRoot, ".git")
+	linkedGitDir := filepath.Join(gitDir, "worktrees", "feature")
+	require.NoError(t, os.MkdirAll(linkedGitDir, 0o755))
+	require.NoError(t, os.MkdirAll(linkedRoot, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(gitDir, "config"), []byte(
+		"[remote \"origin\"]\n\turl = https://github.com/acme/app.git\n",
+	), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(linkedRoot, ".git"), []byte(
+		"gitdir: "+linkedGitDir+"\n",
+	), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(linkedGitDir, "commondir"),
+		[]byte("../..\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(linkedGitDir, "HEAD"),
+		[]byte("ref: refs/heads/feature/receipts\n"), 0o644))
+
+	e := NewEngine(database, EngineConfig{Machine: "laptop"})
+	written, _, failed, _ := e.writeBatch([]pendingWrite{{
+		sess: parser.ParsedSession{
+			ID: "linked-identity", Project: "app", Machine: "laptop",
+			Agent: parser.AgentCodex, Cwd: linkedRoot, StartedAt: time.Now(),
+		},
+	}}, syncWriteDefault, true)
+	require.Equal(t, 1, written)
+	require.Equal(t, 0, failed)
+
+	observations, err := database.ListProjectIdentityObservations(
+		context.Background(), []string{"app"},
+	)
+	require.NoError(t, err)
+	require.Len(t, observations, 1)
+	expectedMainRoot, err := filepath.EvalSymlinks(mainRoot)
+	require.NoError(t, err)
+	expectedLinkedRoot, err := filepath.EvalSymlinks(linkedRoot)
+	require.NoError(t, err)
+	assert.Equal(t, expectedMainRoot, observations[0].RepositoryPath)
+	assert.Equal(t, expectedLinkedRoot, observations[0].WorktreeRootPath)
+	assert.Equal(t, export.WorktreeLinked,
+		observations[0].WorktreeRelationship)
+	assert.Equal(t, export.CheckoutBranch, observations[0].CheckoutState)
+	assert.Equal(t, "feature/receipts", observations[0].GitBranch)
+	assert.Equal(t, "github.com/acme/app", observations[0].NormalizedRemote)
 }
 
 func TestProjectIdentityObservationWriteDeduplicatesSameEngine(t *testing.T) {
@@ -1090,6 +1374,168 @@ func TestProjectIdentityObservationCachesLocalGitDiscovery(t *testing.T) {
 	require.Len(t, observations, 1)
 	assert.Equal(t, "https://github.com/acme/cache.git", observations[0].GitRemote)
 	assert.Equal(t, "github.com/acme/cache", observations[0].NormalizedRemote)
+}
+
+func TestProjectIdentitySnapshotsPreferParsedBranchesForSharedWorkingDirectory(
+	t *testing.T,
+) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, ".git", "config"),
+		[]byte("[remote \"origin\"]\n\turl = https://github.com/acme/app.git\n"),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, ".git", "HEAD"),
+		[]byte("ref: refs/heads/current-checkout\n"), 0o644,
+	))
+	e := NewEngine(database, EngineConfig{Machine: "laptop"})
+	now := time.Now()
+
+	written, _, failed, _ := e.writeBatch([]pendingWrite{
+		{sess: parser.ParsedSession{
+			ID: "branch-a", Project: "app", Machine: "laptop",
+			Agent: parser.AgentCodex, Cwd: root, GitBranch: "historical-a",
+			StartedAt: now,
+		}},
+		{sess: parser.ParsedSession{
+			ID: "branch-b", Project: "app", Machine: "laptop",
+			Agent: parser.AgentCodex, Cwd: root, GitBranch: "historical-b",
+			StartedAt: now.Add(time.Second),
+		}},
+	}, syncWriteDefault, true)
+	require.Equal(t, 2, written)
+	require.Equal(t, 0, failed)
+
+	snapshots, err := database.ListSessionProjectIdentitySnapshots(
+		context.Background(),
+	)
+	require.NoError(t, err)
+	require.Len(t, snapshots, 2)
+	assert.Equal(t, "branch-a", snapshots[0].SessionID)
+	assert.Equal(t, "historical-a", snapshots[0].GitBranch)
+	assert.Equal(t, export.CheckoutBranch, snapshots[0].CheckoutState)
+	assert.Equal(t, "branch-b", snapshots[1].SessionID)
+	assert.Equal(t, "historical-b", snapshots[1].GitBranch)
+	assert.Equal(t, export.CheckoutBranch, snapshots[1].CheckoutState)
+}
+
+func TestProjectIdentitySnapshotsDoNotCacheCheckoutHead(t *testing.T) {
+	database := openTestDB(t)
+	root := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, ".git", "config"),
+		[]byte("[remote \"origin\"]\n\turl = https://github.com/acme/app.git\n"),
+		0o644,
+	))
+	headPath := filepath.Join(root, ".git", "HEAD")
+	require.NoError(t, os.WriteFile(
+		headPath, []byte("ref: refs/heads/branch-a\n"), 0o644,
+	))
+	e := NewEngine(database, EngineConfig{Machine: "laptop"})
+	ctx := context.Background()
+
+	require.NoError(t, e.writeProjectIdentityObservation(ctx, db.Session{
+		ID: "head-a", Project: "app-a", Machine: "laptop",
+		Agent: "codex", Cwd: root,
+	}))
+	require.NoError(t, os.WriteFile(
+		headPath, []byte("ref: refs/heads/branch-b\n"), 0o644,
+	))
+	require.NoError(t, e.writeProjectIdentityObservation(ctx, db.Session{
+		ID: "head-b", Project: "app-b", Machine: "laptop",
+		Agent: "codex", Cwd: root,
+	}))
+
+	observations, err := database.ListProjectIdentityObservations(
+		ctx, []string{"app-a", "app-b"},
+	)
+	require.NoError(t, err)
+	require.Len(t, observations, 2)
+	branches := map[string]string{}
+	for _, observation := range observations {
+		branches[observation.Project] = observation.GitBranch
+	}
+	assert.Equal(t, "branch-a", branches["app-a"])
+	assert.Equal(t, "branch-b", branches["app-b"])
+}
+
+func TestProjectIdentityBackfillPreservesEvidenceAcrossSchemaUpgrade(
+	t *testing.T,
+) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "sessions.db")
+	repo := filepath.Join(dir, "repo")
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repo, ".git", "config"),
+		[]byte("[remote \"origin\"]\n\turl = https://github.com/kenn-io/agentsview.git\n"),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repo, ".git", "HEAD"),
+		[]byte("ref: refs/heads/current-checkout\n"), 0o644,
+	))
+
+	database, err := db.Open(dbPath)
+	require.NoError(t, err)
+	require.NoError(t, database.UpsertSession(db.Session{
+		ID: "legacy-evidence", Project: "agentsview", Machine: "laptop",
+		Agent: "codex", Cwd: repo, GitBranch: "historical-branch",
+		MessageCount: 2,
+	}))
+	require.NoError(t, database.Close())
+
+	raw, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = raw.Exec(`
+		DROP TABLE session_project_identity_snapshots;
+		DROP TABLE background_migrations;
+	`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	require.NoError(t, db.UpgradeExportSchemaInPlace(dbPath,
+		&db.SchemaUpgradeRequiredError{
+			Table: "session_project_identity_snapshots", Column: "session_id",
+		}))
+
+	database, err = db.Open(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := NewEngine(database, EngineConfig{Machine: "laptop"})
+	require.NoError(t, engine.BackfillProjectIdentitySnapshots(
+		context.Background()))
+
+	snapshots, err := database.ListSessionProjectIdentitySnapshots(
+		context.Background())
+	require.NoError(t, err)
+	require.Len(t, snapshots, 1)
+	canonicalRepo, err := filepath.EvalSymlinks(repo)
+	require.NoError(t, err)
+	assert.Equal(t, "legacy-evidence", snapshots[0].SessionID)
+	assert.Equal(t, "github.com/kenn-io/agentsview",
+		snapshots[0].NormalizedRemote)
+	assert.Equal(t, canonicalRepo, snapshots[0].WorktreeRootPath)
+	assert.Equal(t, "historical-branch", snapshots[0].GitBranch)
+	assert.Equal(t, export.CheckoutBranch, snapshots[0].CheckoutState)
+
+	status, err := database.ProjectIdentityBackfillStatus(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "completed", status.State)
+	assert.Equal(t, 1, status.TotalItems)
+	assert.Equal(t, 1, status.CompletedItems)
+}
+
+func TestCountNormalizedRemoteCandidatesDeduplicatesAliases(t *testing.T) {
+	assert.Equal(t, 2, countNormalizedRemoteCandidates(map[string]string{
+		"origin":   "git@example.com:acme/app.git",
+		"mirror":   "https://example.com/acme/app.git",
+		"upstream": "https://example.com/acme/upstream.git",
+		"local":    "/tmp/app.git",
+	}))
 }
 
 // TestProjectIdentityObservationSkipsDiscoveryForRemoteMachine pins that

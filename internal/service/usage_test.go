@@ -84,6 +84,41 @@ func seedPairwiseUsageFixture(t *testing.T, d *db.DB) {
 	}
 }
 
+func seedCommaProjectUsageFixture(t *testing.T, d *db.DB) {
+	t.Helper()
+	started := "2024-06-01T09:00:00Z"
+	for _, seed := range []struct {
+		id      string
+		project string
+		input   int
+	}{
+		{id: "usage-comma", project: "team,core", input: 100},
+		{id: "usage-other", project: "other", input: 25},
+	} {
+		msg := dbtest.AsstMsg(seed.id, 1, "done")
+		msg.Timestamp = started
+		msg.Model = "test-model"
+		msg.TokenUsage = fmt.Appendf(nil,
+			`{"input_tokens":%d}`, seed.input)
+		dbtest.SeedSessionWithMessages(
+			t,
+			d,
+			seed.id,
+			seed.project,
+			[]db.Message{
+				dbtest.UserMsg(seed.id, 0, "compare usage"),
+				msg,
+			},
+			dbtest.WithMessageCounts(2, 1),
+			func(s *db.Session) {
+				s.Agent = "claude"
+				s.StartedAt = &started
+				s.EndedAt = &started
+			},
+		)
+	}
+}
+
 func assistantUsageMsg(
 	sessionID string, ordinal int, seed struct {
 		id      string
@@ -177,6 +212,20 @@ func TestDirectBackend_UsageSummary_InvalidInput(t *testing.T) {
 	require.Error(t, err)
 	var ue *service.UsageInputError
 	assert.True(t, errors.As(err, &ue), "want UsageInputError, got %T", err)
+}
+
+func TestDirectBackend_UsageSummary_UnknownProjectKeyHasStableCode(t *testing.T) {
+	t.Parallel()
+	d := dbtest.OpenTestDB(t)
+	be := service.NewDirectBackend(d, nil)
+
+	_, err := be.UsageSummary(context.Background(), service.UsageRequest{
+		ExcludeProjectKey: "pl1:sha256:stale",
+	})
+	require.Error(t, err)
+	var inputErr *service.UsageInputError
+	require.ErrorAs(t, err, &inputErr)
+	assert.Equal(t, service.UsageErrorCodeUnknownProjectKey, inputErr.Code)
 }
 
 func TestDirectBackend_UsageSummary_EmptyRange(t *testing.T) {
@@ -369,6 +418,18 @@ func TestDirectBackend_UsagePairwiseComparison_ProjectVsModel(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	seedPairwiseUsageFixture(t, d)
 	be := service.NewDirectBackend(d, nil)
+	summary, err := be.UsageSummary(context.Background(), service.UsageRequest{
+		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
+		IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	var betaKey string
+	for _, project := range summary.ProjectTotals {
+		if project.Project == "beta" {
+			betaKey = project.ProjectKey
+		}
+	}
+	require.NotEmpty(t, betaKey)
 
 	res, err := be.UsagePairwiseComparison(
 		context.Background(),
@@ -380,7 +441,7 @@ func TestDirectBackend_UsagePairwiseComparison_ProjectVsModel(t *testing.T) {
 				IncludeOneShot: true,
 			},
 			LeftDimension:  "project",
-			LeftValue:      "beta",
+			LeftValue:      betaKey,
 			RightDimension: "model",
 			RightValue:     "gpt-4o",
 		},
@@ -391,6 +452,147 @@ func TestDirectBackend_UsagePairwiseComparison_ProjectVsModel(t *testing.T) {
 	assert.Equal(t, 155, res.Left.TotalTokens)
 	assert.Equal(t, 1, res.Right.SessionCount)
 	assert.Equal(t, 50, res.Right.TotalTokens)
+}
+
+func TestDirectBackend_UsagePairwiseComparison_PreservesCommaProjectLabel(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	d := dbtest.OpenTestDB(t)
+	seedCommaProjectUsageFixture(t, d)
+	be := service.NewDirectBackend(d, nil)
+	base := service.UsageRequest{
+		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
+		IncludeOneShot: true,
+	}
+	summary, err := be.UsageSummary(context.Background(), base)
+	require.NoError(t, err)
+	keys := make(map[string]string)
+	for _, project := range summary.ProjectTotals {
+		keys[project.Project] = project.ProjectKey
+	}
+	require.NotEmpty(t, keys["team,core"])
+	require.NotEmpty(t, keys["other"])
+
+	comparison, err := be.UsagePairwiseComparison(
+		context.Background(),
+		service.UsagePairwiseComparisonRequest{
+			UsageRequest:   base,
+			LeftDimension:  "project",
+			LeftValue:      keys["team,core"],
+			RightDimension: "project",
+			RightValue:     keys["other"],
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, comparison)
+	assert.Equal(t, 1, comparison.Left.SessionCount)
+	assert.Equal(t, 100, comparison.Left.TotalTokens)
+	assert.Equal(t, 1, comparison.Right.SessionCount)
+	assert.Equal(t, 25, comparison.Right.TotalTokens)
+}
+
+func TestDirectBackend_UsageSummary_ExcludesOpaqueProjectKey(t *testing.T) {
+	t.Parallel()
+
+	d := dbtest.OpenTestDB(t)
+	seedPairwiseUsageFixture(t, d)
+	be := service.NewDirectBackend(d, nil)
+	base := service.UsageRequest{
+		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
+		IncludeOneShot: true,
+	}
+	summary, err := be.UsageSummary(context.Background(), base)
+	require.NoError(t, err)
+	var betaKey string
+	for _, project := range summary.ProjectTotals {
+		if project.Project == "beta" {
+			betaKey = project.ProjectKey
+		}
+	}
+	require.NotEmpty(t, betaKey)
+
+	base.ExcludeProjectKey = betaKey
+	filtered, err := be.UsageSummary(context.Background(), base)
+	require.NoError(t, err)
+	require.Len(t, filtered.ProjectTotals, 1)
+	assert.Equal(t, "alpha", filtered.ProjectTotals[0].Project)
+}
+
+func TestDirectBackend_UsageSummary_ExcludesSubagentOnlyProjectKey(t *testing.T) {
+	t.Parallel()
+
+	d := dbtest.OpenTestDB(t)
+	started := "2024-06-01T09:00:00Z"
+	msg := dbtest.AsstMsg("usage-subagent", 1, "done")
+	msg.Timestamp = started
+	msg.Model = "test-model"
+	msg.TokenUsage = []byte(`{"input_tokens":100}`)
+	dbtest.SeedSessionWithMessages(
+		t,
+		d,
+		"usage-subagent",
+		"subagent-only",
+		[]db.Message{
+			dbtest.UserMsg("usage-subagent", 0, "compare usage"),
+			msg,
+		},
+		dbtest.WithMessageCounts(2, 1),
+		func(s *db.Session) {
+			s.Agent = "claude"
+			s.RelationshipType = "subagent"
+			s.StartedAt = &started
+			s.EndedAt = &started
+		},
+	)
+	be := service.NewDirectBackend(d, nil)
+	base := service.UsageRequest{
+		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
+		IncludeOneShot: true,
+	}
+
+	summary, err := be.UsageSummary(context.Background(), base)
+	require.NoError(t, err)
+	require.Len(t, summary.ProjectTotals, 1)
+	require.NotEmpty(t, summary.ProjectTotals[0].ProjectKey)
+	assert.Equal(t, "subagent-only", summary.ProjectTotals[0].Project)
+
+	base.ExcludeProjectKey = summary.ProjectTotals[0].ProjectKey
+	filtered, err := be.UsageSummary(context.Background(), base)
+	require.NoError(t, err)
+	assert.Empty(t, filtered.ProjectTotals)
+	assert.Zero(t, filtered.Totals.InputTokens)
+}
+
+func TestDirectBackend_UsageSummary_ExcludesCommaProjectByOpaqueKey(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	d := dbtest.OpenTestDB(t)
+	seedCommaProjectUsageFixture(t, d)
+	be := service.NewDirectBackend(d, nil)
+	base := service.UsageRequest{
+		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC",
+		IncludeOneShot: true,
+	}
+	summary, err := be.UsageSummary(context.Background(), base)
+	require.NoError(t, err)
+	var commaKey string
+	for _, project := range summary.ProjectTotals {
+		if project.Project == "team,core" {
+			commaKey = project.ProjectKey
+		}
+	}
+	require.NotEmpty(t, commaKey)
+
+	base.ExcludeProjectKey = commaKey
+	filtered, err := be.UsageSummary(context.Background(), base)
+	require.NoError(t, err)
+	require.Len(t, filtered.ProjectTotals, 1)
+	assert.Equal(t, "other", filtered.ProjectTotals[0].Project)
+	assert.Equal(t, 25, filtered.ProjectTotals[0].InputTokens)
 }
 
 func TestDirectBackend_UsagePairwiseComparison_ZeroDataSide(t *testing.T) {
@@ -555,11 +757,12 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			queryValues = map[string]string{
-				"left_dimension":  r.URL.Query().Get("left_dimension"),
-				"left_value":      r.URL.Query().Get("left_value"),
-				"right_dimension": r.URL.Query().Get("right_dimension"),
-				"right_value":     r.URL.Query().Get("right_value"),
-				"git_branch":      r.URL.Query().Get("git_branch"),
+				"left_dimension":      r.URL.Query().Get("left_dimension"),
+				"left_value":          r.URL.Query().Get("left_value"),
+				"right_dimension":     r.URL.Query().Get("right_dimension"),
+				"right_value":         r.URL.Query().Get("right_value"),
+				"git_branch":          r.URL.Query().Get("git_branch"),
+				"exclude_project_key": r.URL.Query().Get("exclude_project_key"),
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"left":{"sessionCount":1,"totalTokens":12},"right":{"sessionCount":2,"totalTokens":34},"deltas":{"sessionCountDelta":1,"totalTokensDelta":22}}`))
@@ -572,7 +775,8 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 		context.Background(),
 		service.UsagePairwiseComparisonRequest{
 			UsageRequest: service.UsageRequest{
-				GitBranch: "alpha/main",
+				GitBranch:         "alpha/main",
+				ExcludeProjectKey: "pl1:sha256:hidden",
 			},
 			LeftDimension:  "project",
 			LeftValue:      "alpha",
@@ -587,5 +791,6 @@ func TestHTTPBackend_UsagePairwiseComparison_SerializesRequest(t *testing.T) {
 	assert.Equal(t, "model", queryValues["right_dimension"])
 	assert.Equal(t, "gpt-4o", queryValues["right_value"])
 	assert.Equal(t, "alpha/main", queryValues["git_branch"])
+	assert.Equal(t, "pl1:sha256:hidden", queryValues["exclude_project_key"])
 	assert.Equal(t, 22, res.Deltas.TotalTokensDelta)
 }

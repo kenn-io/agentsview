@@ -7398,6 +7398,34 @@ func TestResyncAllPreservesModelPricing(t *testing.T) {
 	assert.Equal(t, 75.0, pricing.OutputPerMTok, "output rate")
 }
 
+func TestResyncAllAbortsWhenSessionSnapshotMetadataCannotCopy(t *testing.T) {
+	env := setupTestEnv(t)
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "original content").
+		AddClaudeAssistant(tsEarlyS5, "original reply").
+		String()
+	env.writeClaudeSession(t, "test-proj", "metadata-copy.jsonl", content)
+	env.engine.SyncAll(context.Background(), nil)
+	assertSessionMessageCount(t, env.db, "metadata-copy", 2)
+
+	dbPath := env.db.Path()
+	require.NoError(t, env.db.Close())
+	raw, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	_, err = raw.Exec(`DROP TABLE starred_sessions;
+		CREATE TABLE starred_sessions (broken_column TEXT)`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+	require.NoError(t, env.db.Reopen())
+
+	stats := env.engine.ResyncAll(context.Background(), nil)
+
+	assert.True(t, stats.Aborted)
+	assert.Contains(t, strings.Join(stats.Warnings, "\n"),
+		"session metadata copy failed, aborting swap")
+	assertSessionMessageCount(t, env.db, "metadata-copy", 2)
+}
+
 // TestResyncAllAbortsOnFailures verifies that ResyncAll
 // does not swap the DB when sync has more failures than
 // successes.

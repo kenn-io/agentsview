@@ -3011,7 +3011,23 @@ func appendDuckUsageCSVFilter(
 	if csv == "" {
 		return where, args
 	}
-	vals := strings.Split(csv, ",")
+	parts := strings.Split(csv, ",")
+	vals := make([]string, 0, len(parts))
+	for _, value := range parts {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			vals = append(vals, trimmed)
+		}
+	}
+	return appendDuckUsageValuesFilter(where, args, col, vals, include)
+}
+
+func appendDuckUsageValuesFilter(
+	where string, args []any, col string, vals []string, include bool,
+) (string, []any) {
+	if len(vals) == 0 {
+		return where, args
+	}
 	op := "IN"
 	if !include {
 		op = "NOT IN"
@@ -3022,20 +3038,13 @@ func appendDuckUsageCSVFilter(
 		} else {
 			where += "\n\t\t\tAND " + col + " != ?"
 		}
-		args = append(args, strings.TrimSpace(vals[0]))
+		args = append(args, vals[0])
 		return where, args
 	}
-	ph := make([]string, 0, len(vals))
-	for _, v := range vals {
-		trimmed := strings.TrimSpace(v)
-		if trimmed == "" {
-			continue
-		}
-		ph = append(ph, "?")
-		args = append(args, trimmed)
-	}
-	if len(ph) == 0 {
-		return where, args
+	ph := make([]string, len(vals))
+	for i, value := range vals {
+		ph[i] = "?"
+		args = append(args, value)
 	}
 	where += "\n\t\t\tAND " + col + " " + op +
 		" (" + strings.Join(ph, ",") + ")"
@@ -3053,14 +3062,18 @@ func appendDuckUsageSessionFilterClauses(
 	where string, args []any, f db.UsageFilter, sessionID string,
 ) (string, []any) {
 	where, args = appendDuckUsageCSVFilter(where, args, "s.agent", f.Agent, true)
-	where, args = appendDuckUsageCSVFilter(where, args, "s.project", f.Project, true)
+	where, args = appendDuckUsageValuesFilter(
+		where, args, "s.project", f.ProjectFilterLabels(), true,
+	)
 	where, args = appendDuckUsageCSVFilter(where, args, "s.machine", f.Machine, true)
 	if f.GitBranch != "" {
 		var clause string
 		clause, args = db.BranchPairClauseArgs("s.project", "s.git_branch", f.GitBranch, args)
 		where += "\n\t\t\tAND " + clause
 	}
-	where, args = appendDuckUsageCSVFilter(where, args, "s.project", f.ExcludeProject, false)
+	where, args = appendDuckUsageValuesFilter(
+		where, args, "s.project", f.ExcludedProjectFilterLabels(), false,
+	)
 	where, args = appendDuckUsageCSVFilter(where, args, "s.agent", f.ExcludeAgent, false)
 	if sessionID != "" {
 		where += "\n\t\t\tAND s.id = ?"
@@ -3274,7 +3287,8 @@ func duckCursorUsageRowsSQLForBounds(
 	// Cursor usage rows carry no project or git branch and bypass the session
 	// filter, so any filter they cannot satisfy (project, machine, branch)
 	// must exclude them entirely rather than let them leak into totals.
-	if f.Project != "" || f.ExcludeProject != "" ||
+	if len(f.ProjectFilterLabels()) > 0 ||
+		len(f.ExcludedProjectFilterLabels()) > 0 ||
 		f.Machine != "" || f.GitBranch != "" || f.MinUserMessages > 0 ||
 		f.ExcludeOneShot || hasTermFilter ||
 		f.ActiveSince != "" {
@@ -3787,7 +3801,7 @@ func (s *Store) GetDailyUsage(
 	if err != nil {
 		return db.DailyUsageResult{}, err
 	}
-	result.Projects = projects
+	result.Projects = export.ProjectMapForWire(projects)
 	if !f.SkipSessionCounts {
 		counts, err := s.GetUsageSessionCounts(ctx, f)
 		if err != nil {
@@ -3795,6 +3809,7 @@ func (s *Store) GetDailyUsage(
 		}
 		result.SessionCounts = counts
 	}
+	db.SanitizeDailyUsageProjectLabelsWithCatalog(&result, projects)
 	return result, nil
 }
 

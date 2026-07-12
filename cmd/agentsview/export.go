@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"sort"
 	"strings"
 
@@ -102,7 +101,63 @@ func newExportCommand() *cobra.Command {
 		},
 	}
 	cmd.AddCommand(newExportSessionsCommand())
+	cmd.AddCommand(newExportStatusCommand())
 	return cmd
+}
+
+func newExportStatusCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:          "status",
+		Short:        "Show export evidence backfill status",
+		Args:         cobra.NoArgs,
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			appCfg, err := config.LoadPFlags(cmd.Flags())
+			if err != nil {
+				return fmt.Errorf("loading config: %w", err)
+			}
+			database, err := openExportReadOnlyDB(appCfg)
+			if err != nil {
+				return err
+			}
+			defer database.Close()
+			status, err := database.ProjectIdentityBackfillStatus(cmd.Context())
+			if err != nil {
+				return err
+			}
+			if _, err = fmt.Fprintf(cmd.OutOrStdout(),
+				"project identity evidence: %s (%d/%d)\n",
+				status.State, status.CompletedItems, status.TotalItems); err != nil {
+				return err
+			}
+			if status.State == "failed" && status.LastError != "" {
+				_, err = fmt.Fprintf(cmd.OutOrStdout(),
+					"last error: %s\n", status.LastError)
+			}
+			return err
+		},
+	}
+}
+
+func openExportReadOnlyDB(appCfg config.Config) (*db.DB, error) {
+	database, err := openReadOnlyDB(appCfg)
+	if err == nil {
+		return database, nil
+	}
+	if !db.IsSchemaUpgradeRequired(err) {
+		return nil, fmt.Errorf("open local archive: %w", err)
+	}
+	if upgradeErr := db.UpgradeExportSchemaInPlace(
+		appCfg.DBPath, err,
+	); upgradeErr != nil {
+		return nil, fmt.Errorf(
+			"upgrade local archive schema for export: %w", upgradeErr)
+	}
+	database, err = openReadOnlyDB(appCfg)
+	if err != nil {
+		return nil, fmt.Errorf("reopen upgraded local archive: %w", err)
+	}
+	return database, nil
 }
 
 func newExportSessionsCommand() *cobra.Command {
@@ -196,13 +251,23 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
-	database, err := openReadOnlyDB(appCfg)
+	database, err := openExportReadOnlyDB(appCfg)
 	if err != nil {
-		return fmt.Errorf("open local archive: %w", err)
+		return err
 	}
 	defer database.Close()
 
 	ctx := cmd.Context()
+	backfill, err := database.ProjectIdentityBackfillStatus(ctx)
+	if err != nil {
+		return fmt.Errorf("checking project identity evidence: %w", err)
+	}
+	if backfill.State != "not_needed" && backfill.State != "completed" {
+		return fmt.Errorf(
+			"project identity evidence backfill is %s (%d/%d); start or restart the writable daemon, then check `agentsview export status`",
+			backfill.State, backfill.CompletedItems, backfill.TotalItems,
+		)
+	}
 	if err := ensureExportSessionsPricing(ctx, database, appCfg); err != nil {
 		return err
 	}
@@ -307,22 +372,14 @@ func collectExportSessionPages(
 		Limit:           cfg.Limit,
 		Format:          string(cfg.Format),
 	}
+	if cfg.All {
+		return database.ExportAllSessionSummaries(ctx, opts)
+	}
 	result, err := database.ExportSessionSummaries(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
 	pages := []db.SessionExportResult{result}
-	if !cfg.All {
-		return pages, nil
-	}
-	for result.NextCursor != "" {
-		opts.Cursor = result.NextCursor
-		result, err = database.ExportSessionSummaries(ctx, opts)
-		if err != nil {
-			return nil, err
-		}
-		pages = append(pages, result)
-	}
 	return pages, nil
 }
 
@@ -389,7 +446,15 @@ func buildExportSessionsOutput(
 			pricing = mergeExportSessionsPricing(pricing, page.Pricing)
 		}
 		if page.Projects != nil {
-			maps.Copy(output.Projects, page.Projects)
+			for key, next := range page.Projects {
+				if existing, ok := output.Projects[key]; ok {
+					output.Projects[key] = db.MergeSessionProjectCatalogEntry(
+						existing, next,
+					)
+					continue
+				}
+				output.Projects[key] = next
+			}
 		}
 	}
 	if pricing != nil {

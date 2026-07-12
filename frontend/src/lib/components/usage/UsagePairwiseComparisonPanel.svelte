@@ -75,7 +75,9 @@
   ): TypeaheadOption[] {
     return optionsFor(dimension).map((option) => ({
       name: option,
-      label: option,
+      label: dimension === "project"
+        ? usage.pairwiseProjectLabel(option)
+        : option,
     }));
   }
 

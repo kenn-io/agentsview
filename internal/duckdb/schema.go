@@ -72,6 +72,17 @@ var mirrorTables = []tableSpec{
 		},
 	},
 	{
+		name: "source_archives",
+		create: `CREATE TABLE IF NOT EXISTS source_archives (
+			source_archive_id TEXT PRIMARY KEY,
+			source_archive_salt TEXT NOT NULL
+		)`,
+		columns: []columnSpec{
+			{"source_archive_id", "source_archive_id TEXT"},
+			{"source_archive_salt", "source_archive_salt TEXT NOT NULL DEFAULT ''"},
+		},
+	},
+	{
 		name: "sessions",
 		create: `CREATE TABLE IF NOT EXISTS sessions (
 			id TEXT PRIMARY KEY,
@@ -376,36 +387,105 @@ var mirrorTables = []tableSpec{
 		},
 	},
 	{
-		name: "project_identity_observations",
-		create: `CREATE TABLE IF NOT EXISTS project_identity_observations (
+		name: "source_project_identity_observations",
+		create: `CREATE TABLE IF NOT EXISTS source_project_identity_observations (
+			source_archive_id TEXT NOT NULL DEFAULT '',
+			source_archive_salt TEXT NOT NULL DEFAULT '',
 			project TEXT NOT NULL,
 			machine TEXT NOT NULL,
 			root_path TEXT NOT NULL DEFAULT '',
 			git_remote TEXT NOT NULL DEFAULT '',
 			git_remote_name TEXT NOT NULL DEFAULT '',
+			repository_path TEXT NOT NULL DEFAULT '',
 			worktree_name TEXT NOT NULL DEFAULT '',
 			worktree_root_path TEXT NOT NULL DEFAULT '',
+			worktree_relationship TEXT NOT NULL DEFAULT 'unknown',
+			checkout_state TEXT NOT NULL DEFAULT 'unknown',
+			git_branch TEXT NOT NULL DEFAULT '',
+			remote_resolution TEXT NOT NULL DEFAULT 'unknown',
+			remote_candidate_count INTEGER NOT NULL DEFAULT 0,
 			observed_at TIMESTAMP NOT NULL,
 			normalized_remote TEXT NOT NULL DEFAULT '',
 			key_source TEXT NOT NULL DEFAULT '',
 			key TEXT NOT NULL DEFAULT '',
-			PRIMARY KEY (project, machine, root_path, git_remote)
+			PRIMARY KEY (source_archive_id, project, machine, root_path, git_remote)
 		)`,
 		columns: []columnSpec{
+			{"source_archive_id", "source_archive_id TEXT NOT NULL DEFAULT ''"},
+			{"source_archive_salt", "source_archive_salt TEXT NOT NULL DEFAULT ''"},
 			{"project", "project TEXT NOT NULL DEFAULT ''"},
 			{"machine", "machine TEXT NOT NULL DEFAULT ''"},
 			{"root_path", "root_path TEXT NOT NULL DEFAULT ''"},
 			{"git_remote", "git_remote TEXT NOT NULL DEFAULT ''"},
 			{"git_remote_name", "git_remote_name TEXT NOT NULL DEFAULT ''"},
+			{"repository_path", "repository_path TEXT NOT NULL DEFAULT ''"},
 			{"worktree_name", "worktree_name TEXT NOT NULL DEFAULT ''"},
 			{"worktree_root_path", "worktree_root_path TEXT NOT NULL DEFAULT ''"},
+			{"worktree_relationship", "worktree_relationship TEXT NOT NULL DEFAULT 'unknown'"},
+			{"checkout_state", "checkout_state TEXT NOT NULL DEFAULT 'unknown'"},
+			{"git_branch", "git_branch TEXT NOT NULL DEFAULT ''"},
+			{"remote_resolution", "remote_resolution TEXT NOT NULL DEFAULT 'unknown'"},
+			{"remote_candidate_count", "remote_candidate_count INTEGER NOT NULL DEFAULT 0"},
 			{"observed_at", "observed_at TIMESTAMP"},
 			{"normalized_remote", "normalized_remote TEXT NOT NULL DEFAULT ''"},
 			{"key_source", "key_source TEXT NOT NULL DEFAULT ''"},
 			{"key", "key TEXT NOT NULL DEFAULT ''"},
 		},
 		indexes: []string{
-			"CREATE INDEX IF NOT EXISTS idx_project_identity_observations_project ON project_identity_observations(project)",
+			"CREATE INDEX IF NOT EXISTS idx_source_project_identity_observations_project ON source_project_identity_observations(project)",
+		},
+	},
+	{
+		name: "source_session_project_identity_snapshots",
+		create: `CREATE TABLE IF NOT EXISTS source_session_project_identity_snapshots (
+			source_archive_id TEXT NOT NULL,
+			source_database_generation TEXT NOT NULL,
+			source_session_id TEXT NOT NULL,
+			project TEXT NOT NULL,
+			machine TEXT NOT NULL,
+			root_path TEXT NOT NULL DEFAULT '',
+			git_remote TEXT NOT NULL DEFAULT '',
+			git_remote_name TEXT NOT NULL DEFAULT '',
+			repository_path TEXT NOT NULL DEFAULT '',
+			worktree_name TEXT NOT NULL DEFAULT '',
+			worktree_root_path TEXT NOT NULL DEFAULT '',
+			worktree_relationship TEXT NOT NULL DEFAULT 'unknown',
+			checkout_state TEXT NOT NULL DEFAULT 'unknown',
+			git_branch TEXT NOT NULL DEFAULT '',
+			remote_resolution TEXT NOT NULL DEFAULT 'unknown',
+			remote_candidate_count INTEGER NOT NULL DEFAULT 0,
+			observed_at TIMESTAMP NOT NULL,
+			normalized_remote TEXT NOT NULL DEFAULT '',
+			key_source TEXT NOT NULL DEFAULT '',
+			key TEXT NOT NULL DEFAULT '',
+			PRIMARY KEY (
+				source_archive_id, source_database_generation, source_session_id
+			)
+		)`,
+		columns: []columnSpec{
+			{"source_archive_id", "source_archive_id TEXT NOT NULL DEFAULT ''"},
+			{"source_database_generation", "source_database_generation TEXT NOT NULL DEFAULT ''"},
+			{"source_session_id", "source_session_id TEXT NOT NULL DEFAULT ''"},
+			{"project", "project TEXT NOT NULL DEFAULT ''"},
+			{"machine", "machine TEXT NOT NULL DEFAULT ''"},
+			{"root_path", "root_path TEXT NOT NULL DEFAULT ''"},
+			{"git_remote", "git_remote TEXT NOT NULL DEFAULT ''"},
+			{"git_remote_name", "git_remote_name TEXT NOT NULL DEFAULT ''"},
+			{"repository_path", "repository_path TEXT NOT NULL DEFAULT ''"},
+			{"worktree_name", "worktree_name TEXT NOT NULL DEFAULT ''"},
+			{"worktree_root_path", "worktree_root_path TEXT NOT NULL DEFAULT ''"},
+			{"worktree_relationship", "worktree_relationship TEXT NOT NULL DEFAULT 'unknown'"},
+			{"checkout_state", "checkout_state TEXT NOT NULL DEFAULT 'unknown'"},
+			{"git_branch", "git_branch TEXT NOT NULL DEFAULT ''"},
+			{"remote_resolution", "remote_resolution TEXT NOT NULL DEFAULT 'unknown'"},
+			{"remote_candidate_count", "remote_candidate_count INTEGER NOT NULL DEFAULT 0"},
+			{"observed_at", "observed_at TIMESTAMP"},
+			{"normalized_remote", "normalized_remote TEXT NOT NULL DEFAULT ''"},
+			{"key_source", "key_source TEXT NOT NULL DEFAULT ''"},
+			{"key", "key TEXT NOT NULL DEFAULT ''"},
+		},
+		indexes: []string{
+			"CREATE INDEX IF NOT EXISTS idx_source_session_project_identity_snapshots_project ON source_session_project_identity_snapshots(source_archive_id, project)",
 		},
 	},
 	{
@@ -713,10 +793,13 @@ func scrubProjectIdentityGitRemoteCredentials(
 	}()
 
 	rows, err := tx.QueryContext(ctx, `
-		SELECT project, machine, root_path, git_remote, git_remote_name,
-			worktree_name, worktree_root_path, observed_at,
+		SELECT source_archive_id, source_archive_salt,
+			project, machine, root_path, git_remote, git_remote_name,
+			repository_path, worktree_name, worktree_root_path,
+			worktree_relationship, checkout_state, git_branch,
+			remote_resolution, remote_candidate_count, observed_at,
 			normalized_remote, key_source, key
-		FROM project_identity_observations
+		FROM source_project_identity_observations
 		WHERE git_remote != ''`)
 	if err != nil {
 		return fmt.Errorf(
@@ -738,13 +821,21 @@ func scrubProjectIdentityGitRemoteCredentials(
 	for rows.Next() {
 		var obs export.ProjectIdentityObservation
 		if err := rows.Scan(
+			&obs.SourceArchiveID,
+			&obs.SourceArchiveSalt,
 			&obs.Project,
 			&obs.Machine,
 			&obs.RootPath,
 			&obs.GitRemote,
 			&obs.GitRemoteName,
+			&obs.RepositoryPath,
 			&obs.WorktreeName,
 			&obs.WorktreeRootPath,
+			&obs.WorktreeRelationship,
+			&obs.CheckoutState,
+			&obs.GitBranch,
+			&obs.RemoteResolution,
+			&obs.RemoteCandidateCount,
 			&obs.ObservedAt,
 			&obs.NormalizedRemote,
 			&obs.KeySource,
@@ -792,11 +883,11 @@ func scrubProjectIdentityGitRemoteCredentials(
 			)
 		}
 		if _, err := tx.ExecContext(ctx, `
-			DELETE FROM project_identity_observations
-			WHERE project = ? AND machine = ? AND root_path = ?
-			  AND git_remote = ?`,
-			scrub.obs.Project, scrub.obs.Machine, scrub.obs.RootPath,
-			scrub.rawRemote,
+			DELETE FROM source_project_identity_observations
+			WHERE source_archive_id = ? AND project = ? AND machine = ?
+			  AND root_path = ? AND git_remote = ?`,
+			scrub.obs.SourceArchiveID, scrub.obs.Project, scrub.obs.Machine,
+			scrub.obs.RootPath, scrub.rawRemote,
 		); err != nil {
 			return fmt.Errorf(
 				"removing raw duckdb project identity remote: %w", err,

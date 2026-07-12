@@ -65,6 +65,7 @@ function dailyEntry(index: number): DailyUsageEntry {
     modelsUsed: ["model"],
     projectBreakdowns: [
       {
+		project_key: "pl1:sha256:agentsview",
         project: "agentsview",
         inputTokens: 100,
         outputTokens: 50,
@@ -90,6 +91,7 @@ function usageSummary(): UsageSummaryResponse {
     daily: Array.from({ length: 15 }, (_, i) => dailyEntry(i)),
     projectTotals: [
       {
+        project_key: "pl1:sha256:agentsview",
         project: "agentsview",
         inputTokens: 1500,
         outputTokens: 750,
@@ -152,5 +154,25 @@ describe("CostTimeSeriesChart", () => {
     expect(x + textWidthEstimate / 2).toBeLessThanOrEqual(viewBoxRight);
 
     unmount(component);
+  });
+
+  it("keeps projects with the same display label as distinct series", async () => {
+	usage.summary = usageSummary();
+	usage.summary.daily = [dailyEntry(0)];
+	usage.summary.daily[0]!.projectBreakdowns = [
+		{ ...usage.summary.daily[0]!.projectBreakdowns![0]!, cost: 6 },
+		{
+			...usage.summary.daily[0]!.projectBreakdowns![0]!,
+			project_key: "pl1:sha256:other-archive",
+			cost: 4,
+		},
+	];
+
+	const component = mount(CostTimeSeriesChart, { target: document.body });
+	await tick();
+
+	expect(document.querySelectorAll("path[opacity='0.7']")).toHaveLength(2);
+	expect(document.querySelectorAll(".legend-item")).toHaveLength(2);
+	unmount(component);
   });
 });

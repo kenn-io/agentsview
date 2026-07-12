@@ -36,12 +36,13 @@ var (
 )
 
 const (
-	periodicSyncInterval   = 15 * time.Minute
-	telemetryPingInterval  = 24 * time.Hour
-	unwatchedPollInterval  = 2 * time.Minute
-	watcherBatchDelay      = 500 * time.Millisecond
-	watcherSyncMinInterval = 5 * time.Second
-	recursiveWatchBudget   = 8192
+	periodicSyncInterval           = 15 * time.Minute
+	telemetryPingInterval          = 24 * time.Hour
+	unwatchedPollInterval          = 2 * time.Minute
+	watcherBatchDelay              = 500 * time.Millisecond
+	watcherSyncMinInterval         = 5 * time.Second
+	deferredStartupSyncGracePeriod = 30 * time.Second
+	recursiveWatchBudget           = 8192
 )
 
 func main() {
@@ -88,9 +89,10 @@ func warnMissingDirs(dirs []string, label string) {
 }
 
 type serveOptions struct {
-	ReplaceDaemon  bool
-	NoSyncExplicit bool
-	Pprof          bool
+	ReplaceDaemon   bool
+	NoSyncExplicit  bool
+	SkipInitialSync bool
+	Pprof           bool
 }
 
 func runServe(cfg config.Config, opts serveOptions) {
@@ -212,52 +214,57 @@ func runServe(cfg config.Config, opts serveOptions) {
 			Machine:                 "local",
 			BlockedResultCategories: cfg.ResultContentBlockedCategories,
 			Emitter:                 emitter,
+			DeferStartupMaintenance: opts.SkipInitialSync,
 		})
 
-		if database.NeedsResync() {
-			startupProgress.SetPhase("full resync")
-			signalsCovered := runInitialResync(ctx, engine, startupProgress)
-			if ctx.Err() == nil {
-				finishInitialResync(database, signalsCovered)
+		if !opts.SkipInitialSync {
+			if database.NeedsResync() {
+				startupProgress.SetPhase("full resync")
+				signalsCovered := runInitialResync(ctx, engine, startupProgress)
+				if ctx.Err() == nil {
+					finishInitialResync(database, signalsCovered)
+				}
+			} else {
+				startupProgress.SetPhase("initial sync")
+				runInitialSync(ctx, engine, startupProgress)
 			}
-		} else {
-			startupProgress.SetPhase("initial sync")
-			runInitialSync(ctx, engine, startupProgress)
-		}
-		if ctx.Err() != nil {
-			return
-		}
+			if ctx.Err() != nil {
+				return
+			}
 
-		// The initial sync can leave hundreds of MB in the WAL, and
-		// SQLite checkpoints the whole log — not cancellable — when the
-		// final connection closes. A SIGTERM landing shortly after
-		// startup would spend the service manager's stop timeout inside
-		// that close and get escalated to SIGKILL, so truncate the WAL
-		// now at a controlled moment. Persistent readers just leave it
-		// for the periodic checkpoint loop.
-		if err := database.CheckpointWALTruncateWithRetry(
-			ctx,
-		); err != nil && !errors.Is(err, db.ErrWALCheckpointBusy) &&
-			ctx.Err() == nil {
-			log.Printf("post-sync wal checkpoint: %v", err)
+			// The initial sync can leave hundreds of MB in the WAL, and
+			// SQLite checkpoints the whole log — not cancellable — when the
+			// final connection closes. A SIGTERM landing shortly after
+			// startup would spend the service manager's stop timeout inside
+			// that close and get escalated to SIGKILL, so truncate the WAL
+			// now at a controlled moment. Persistent readers just leave it
+			// for the periodic checkpoint loop.
+			if err := database.CheckpointWALTruncateWithRetry(
+				ctx,
+			); err != nil && !errors.Is(err, db.ErrWALCheckpointBusy) &&
+				ctx.Err() == nil {
+				log.Printf("post-sync wal checkpoint: %v", err)
+			}
 		}
 
 		// Backfill runs in the background. On a large DB (e.g.
 		// after copying tens of thousands of orphaned sessions
 		// during a resync), walking every row to recompute
 		// signals would otherwise block the HTTP server from
-		// listening for minutes. Backfill is idempotent and
-		// guarded by a one-shot marker, so concurrent writes
-		// from the file watcher and periodic sync are safe.
+		// listening for minutes. Startup maintenance waits for
+		// a deferred foreground sync and shares its lock with
+		// later sync/resync database swaps.
 		go idleTracker.Do(func() {
-			if err := database.BackfillSignals(
-				ctx,
-				engine.BackfillSignalComputer(),
-			); err != nil && ctx.Err() == nil {
+			err := engine.RunStartupMaintenance(ctx, func() error {
+				return database.BackfillSignals(
+					ctx,
+					engine.BackfillSignalComputer(),
+				)
+			})
+			if err != nil && ctx.Err() == nil {
 				log.Printf("signals backfill: %v", err)
 			}
 		})
-
 		validRemotes := true
 		if err := cfg.ValidateRemoteHosts(); err != nil {
 			log.Printf("warning: remote_hosts config invalid, skipping periodic remote sync: %v", err)
@@ -265,6 +272,21 @@ func runServe(cfg config.Config, opts serveOptions) {
 		}
 		go startPeriodicSync(ctx, cfg, engine, database, idleTracker, validRemotes, emitter)
 	}
+
+	identityBackfillEngine := engine
+	if identityBackfillEngine == nil {
+		identityBackfillEngine = sync.NewEngine(database, sync.EngineConfig{
+			Machine: "local",
+		})
+	}
+	go idleTracker.Do(func() {
+		err := identityBackfillEngine.RunStartupMaintenance(ctx, func() error {
+			return identityBackfillEngine.BackfillProjectIdentitySnapshots(ctx)
+		})
+		if err != nil && ctx.Err() == nil {
+			log.Printf("project identity backfill: %v", err)
+		}
+	})
 
 	// Seed model_pricing so a fresh database (first run, or a
 	// resync whose pricing copy failed) is populated before
@@ -337,6 +359,22 @@ func runServe(cfg config.Config, opts serveOptions) {
 		idleTracker.Touch()
 		go idleTracker.Run(ctx)
 	}
+	if engine != nil && opts.SkipInitialSync {
+		go func() {
+			timer := time.NewTimer(deferredStartupSyncGracePeriod)
+			defer timer.Stop()
+			ran, fallbackErr := runDeferredStartupSyncFallback(
+				ctx, engine, idleTracker, timer.C,
+			)
+			if fallbackErr != nil && ctx.Err() == nil {
+				log.Printf("deferred startup sync: %v", fallbackErr)
+			} else if ran {
+				log.Printf(
+					"deferred startup sync completed after no foreground request arrived",
+				)
+			}
+		}()
+	}
 
 	if rt.PublicURL == rt.LocalURL {
 		fmt.Printf(
@@ -389,6 +427,27 @@ func runServe(cfg config.Config, opts serveOptions) {
 	if err := waitForServerRuntime(ctx, srv, rt); err != nil {
 		fatal("%v", err)
 	}
+}
+
+func runDeferredStartupSyncFallback(
+	ctx context.Context,
+	engine *sync.Engine,
+	idleTracker *server.IdleTracker,
+	timeout <-chan time.Time,
+) (bool, error) {
+	select {
+	case <-ctx.Done():
+		return false, ctx.Err()
+	case <-timeout:
+	}
+
+	done, ok := idleTracker.BeginWork()
+	if !ok {
+		return false, nil
+	}
+	defer done()
+	_, ran, err := engine.RunStartupSyncFallback(ctx, nil)
+	return ran, err
 }
 
 func ensureServeAuthToken(cfg *config.Config) error {

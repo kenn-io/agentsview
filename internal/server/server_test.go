@@ -928,6 +928,32 @@ func TestOpenAPIEndpointDocumentsBatchDeleteSessionIDsAsNonNullableArray(t *test
 		`session_ids must be a non-nullable array, not the nullable ["array","null"] union`)
 }
 
+func TestOpenAPIEndpointDocumentsOptionalProjectIdentity(t *testing.T) {
+	te := setup(t)
+
+	w := te.get(t, "/api/openapi.json")
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	var spec struct {
+		Components struct {
+			Schemas map[string]struct {
+				Required   []string `json:"required"`
+				Properties map[string]struct {
+					Ref string `json:"$ref"`
+				} `json:"properties"`
+			} `json:"schemas"`
+		} `json:"components"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+
+	schema, ok := spec.Components.Schemas["ExportProjectMapEntry"]
+	require.True(t, ok, "spec missing ExportProjectMapEntry schema")
+	assert.NotContains(t, schema.Required, "identity")
+	identity, ok := schema.Properties["identity"]
+	require.True(t, ok, "identity property missing from ExportProjectMapEntry")
+	assert.Equal(t, "#/components/schemas/ExportProjectIdentity", identity.Ref)
+}
+
 func TestOpenAPIEndpointDocumentsQualitySignalResponses(t *testing.T) {
 	te := setup(t)
 

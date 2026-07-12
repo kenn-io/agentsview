@@ -47,13 +47,18 @@
   interface Panel {
     title: string;
     rows: ActivityKeyMinutes[];
+	projectRows: boolean;
   }
 
   const panels = $derived.by((): Panel[] => [
-    { title: m.activity_project(), rows: byProject },
-    { title: m.activity_model(), rows: byModel },
-    { title: m.activity_agent(), rows: byAgent },
+    { title: m.activity_project(), rows: byProject, projectRows: true },
+    { title: m.activity_model(), rows: byModel, projectRows: false },
+    { title: m.activity_agent(), rows: byAgent, projectRows: false },
   ]);
+
+  function rowIdentity(row: ActivityKeyMinutes, projectRows: boolean): string {
+	return projectRows ? (row.project_key || row.key) : row.key;
+  }
 
   function maxValue(rows: ActivityKeyMinutes[]): number {
     if (rows.length === 0) return 1;
@@ -156,7 +161,7 @@
         <h4 class="panel-title">{panel.title}</h4>
         {#if panel.rows.length > 0}
           <div class="bar-list">
-            {#each panel.rows as row (row.key)}
+            {#each panel.rows as row (rowIdentity(row, panel.projectRows))}
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               <div
                 class="bar-row"

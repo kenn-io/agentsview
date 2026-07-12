@@ -351,6 +351,91 @@ func TestHumaTriggerSyncLocalNoSyncResyncsStaleDB(t *testing.T) {
 	assertOnlySessionFirstMessageContains(t, f.db, "stale no sync route")
 }
 
+func TestForegroundSyncReleasesDeferredStartupMaintenance(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*Server, *syncpkg.Engine)
+	}{
+		{
+			name: "sync",
+			run: func(srv *Server, engine *syncpkg.Engine) {
+				srv.runSyncWithResyncFallback(
+					context.Background(), engine, nil,
+				)
+			},
+		},
+		{
+			name: "resync",
+			run: func(srv *Server, engine *syncpkg.Engine) {
+				srv.runResyncWithFallback(
+					context.Background(), engine, nil,
+				)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			database := dbtest.OpenTestDB(t)
+			engine := syncpkg.NewEngine(database, syncpkg.EngineConfig{
+				Machine:                 "local",
+				DeferStartupMaintenance: true,
+			})
+			t.Cleanup(engine.Close)
+			srv := &Server{db: database}
+
+			maintenanceStarted := make(chan struct{})
+			maintenanceDone := make(chan error, 1)
+			go func() {
+				maintenanceDone <- engine.RunStartupMaintenance(
+					t.Context(),
+					func() error {
+						close(maintenanceStarted)
+						return nil
+					},
+				)
+			}()
+			assert.Never(t, func() bool {
+				select {
+				case <-maintenanceStarted:
+					return true
+				default:
+					return false
+				}
+			}, 100*time.Millisecond, 10*time.Millisecond,
+				"maintenance started before foreground synchronization")
+
+			tt.run(srv, engine)
+			select {
+			case err := <-maintenanceDone:
+				require.NoError(t, err)
+			case <-time.After(time.Second):
+				require.FailNow(t,
+					"foreground synchronization did not release maintenance")
+			}
+		})
+	}
+}
+
+func TestCanceledForegroundSyncLeavesStartupFallbackEligible(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	engine := syncpkg.NewEngine(database, syncpkg.EngineConfig{
+		Machine:                 "local",
+		DeferStartupMaintenance: true,
+	})
+	t.Cleanup(engine.Close)
+	srv := &Server{db: database}
+
+	requestCtx, cancelRequest := context.WithCancel(t.Context())
+	cancelRequest()
+	srv.runSyncWithResyncFallback(requestCtx, engine, nil)
+
+	_, ran, err := engine.RunStartupSyncFallback(t.Context(), nil)
+	require.NoError(t, err)
+	assert.True(t, ran,
+		"a canceled HTTP sync must leave daemon startup recovery eligible")
+}
+
 func TestHumaSyncSessionLocalNoSyncResyncsStaleDB(t *testing.T) {
 	f := newSyncRouteFixture(t, withStaleDB())
 	sessionPath := f.writeClaudeSession(t, "proj/session.jsonl",

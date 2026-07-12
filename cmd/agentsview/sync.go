@@ -82,6 +82,15 @@ func doSync(cfg SyncConfig) (hadRemoteFailures bool) {
 	}
 
 	if includeLocal || len(remoteHosts) > 0 {
+		operation := "sync"
+		if cfg.Full {
+			operation = "full sync"
+		}
+		fmt.Printf("Preparing %s...\n", operation)
+		// The follow-up daemon request performs local work only when
+		// includeLocal is true. A remote-only request still needs a newly
+		// launched daemon to populate its existing local archive at startup.
+		appCfg.SkipInitialSync = includeLocal
 		tr, err := ensureTransport(
 			&appCfg, transportIntentArchiveWrite, 0,
 		)

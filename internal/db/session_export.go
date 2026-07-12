@@ -50,11 +50,12 @@ type SessionExportResult struct {
 
 type SessionSummaryRow struct {
 	ID                    string                       `json:"id"`
-	Project               string                       `json:"project"`
-	Machine               string                       `json:"machine"`
+	Project               string                       `json:"-"`
+	ProjectReference      export.ProjectReference      `json:"project"`
+	Machine               string                       `json:"-"`
 	Agent                 string                       `json:"agent"`
-	Cwd                   string                       `json:"cwd,omitempty"`
-	GitBranch             string                       `json:"git_branch,omitempty"`
+	Cwd                   string                       `json:"-"`
+	GitBranch             string                       `json:"-"`
 	StartedAt             *string                      `json:"started_at"`
 	EndedAt               *string                      `json:"ended_at"`
 	LastActivityAt        string                       `json:"last_activity_at"`
@@ -68,7 +69,7 @@ type SessionSummaryRow struct {
 	ModelUsage            *SessionModelUsage           `json:"model_usage"`
 	ParentSessionID       *string                      `json:"parent_session_id"`
 	RelationshipType      *string                      `json:"relationship_type"`
-	Worktree              *SessionExportWorktree       `json:"worktree"`
+	Worktree              *SessionExportWorktree       `json:"-"`
 	TotalOutputTokens     int                          `json:"total_output_tokens"`
 	PeakContextTokens     int                          `json:"peak_context_tokens"`
 	HasTotalOutputTokens  bool                         `json:"has_total_output_tokens"`
@@ -184,6 +185,71 @@ func (db *DB) ExportSessionSummaries(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return SessionExportResult{}, fmt.Errorf(
+			"starting session export snapshot: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := db.exportSessionSummariesTx(ctx, tx, opts, true)
+	if err != nil {
+		return SessionExportResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return SessionExportResult{}, fmt.Errorf(
+			"committing session export snapshot: %w", err)
+	}
+	return result, nil
+}
+
+// ExportAllSessionSummaries follows every page inside one read transaction so
+// a combined JSON or NDJSON artifact has one pricing and identity snapshot.
+func (db *DB) ExportAllSessionSummaries(
+	ctx context.Context, opts SessionExportOptions,
+) ([]SessionExportResult, error) {
+	return db.exportAllSessionSummaries(ctx, opts, nil)
+}
+
+func (db *DB) exportAllSessionSummaries(
+	ctx context.Context,
+	opts SessionExportOptions,
+	afterPage func(int) error,
+) ([]SessionExportResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("starting complete session export snapshot: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	pages := []SessionExportResult{}
+	for {
+		result, err := db.exportSessionSummariesTx(ctx, tx, opts, false)
+		if err != nil {
+			return nil, err
+		}
+		pages = append(pages, result)
+		if afterPage != nil {
+			if err := afterPage(len(pages)); err != nil {
+				return nil, err
+			}
+		}
+		if result.NextCursor == "" {
+			break
+		}
+		opts.Cursor = result.NextCursor
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("committing complete session export snapshot: %w", err)
+	}
+	return pages, nil
+}
+
+func (db *DB) exportSessionSummariesTx(
+	ctx context.Context, tx *sql.Tx, opts SessionExportOptions,
+	cursorIntegrity bool,
+) (SessionExportResult, error) {
 	if opts.Limit <= 0 || opts.Limit > MaxSessionLimit {
 		opts.Limit = MaxSessionLimit
 	}
@@ -192,23 +258,14 @@ func (db *DB) ExportSessionSummaries(
 	}
 	opts.Filter = canonicalSessionExportFilter(opts.Filter)
 
-	databaseID, err := db.GetDatabaseID(ctx)
-	if err != nil {
-		return SessionExportResult{}, err
-	}
 	filters := sessionExportFilters(opts.Filter)
 
 	var cursor sessionExportCursorPayload
+	var err error
 	if opts.Cursor != "" {
 		cursor, err = db.decodeSessionExportCursor(opts.Cursor)
 		if err != nil {
 			return SessionExportResult{}, err
-		}
-		if cursor.DatabaseID != databaseID {
-			return SessionExportResult{}, fmt.Errorf(
-				"%w: cursor database %q does not match %q",
-				ErrSessionExportCursorReset, cursor.DatabaseID, databaseID,
-			)
 		}
 		if cursor.Order != sessionExportOrder {
 			return SessionExportResult{}, fmt.Errorf(
@@ -224,12 +281,19 @@ func (db *DB) ExportSessionSummaries(
 	}
 
 	where, args := buildSessionExportFilter(opts.Filter)
-	tx, err := db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	databaseID, err := sessionExportMetadataValue(
+		ctx, tx, archiveMetadataDatabaseIDKey, ErrDatabaseIDMissing,
+		"database id",
+	)
 	if err != nil {
-		return SessionExportResult{}, fmt.Errorf(
-			"starting session export snapshot: %w", err)
+		return SessionExportResult{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
+	if opts.Cursor != "" && cursor.DatabaseID != databaseID {
+		return SessionExportResult{}, fmt.Errorf(
+			"%w: cursor database %q does not match %q",
+			ErrSessionExportCursorReset, cursor.DatabaseID, databaseID,
+		)
+	}
 
 	watermark := cursor.Watermark
 	watermarkSort := cursor.WatermarkSort
@@ -246,7 +310,7 @@ func (db *DB) ExportSessionSummaries(
 			Projects:      map[string]export.ProjectMapEntry{},
 		}, nil
 	}
-	if cursor.SnapshotDigest != "" || cursor.SnapshotCount != 0 {
+	if cursorIntegrity && (cursor.SnapshotDigest != "" || cursor.SnapshotCount != 0) {
 		count, digest, err := db.sessionExportSnapshotFingerprint(
 			ctx, tx, where, args, watermarkSort)
 		if err != nil {
@@ -259,7 +323,7 @@ func (db *DB) ExportSessionSummaries(
 			)
 		}
 	}
-	if cursor.PrefixDigest != "" || cursor.PrefixCount != 0 {
+	if cursorIntegrity && (cursor.PrefixDigest != "" || cursor.PrefixCount != 0) {
 		count, digest, err := db.sessionExportPrefixFingerprint(
 			ctx, tx, where, args, watermarkSort,
 			cursor.LastActivitySort, cursor.LastID)
@@ -285,15 +349,19 @@ func (db *DB) ExportSessionSummaries(
 	if len(resultRows) > opts.Limit {
 		resultRows = resultRows[:opts.Limit]
 		last := resultRows[len(resultRows)-1]
-		snapshotCount, snapshotDigest, err := db.sessionExportSnapshotFingerprint(
-			ctx, tx, where, args, watermarkSort)
-		if err != nil {
-			return SessionExportResult{}, err
-		}
-		prefixCount, prefixDigest, err := db.sessionExportPrefixFingerprint(
-			ctx, tx, where, args, watermarkSort, last.lastActivitySort, last.ID)
-		if err != nil {
-			return SessionExportResult{}, err
+		var snapshotCount, prefixCount int
+		var snapshotDigest, prefixDigest string
+		if cursorIntegrity {
+			snapshotCount, snapshotDigest, err = db.sessionExportSnapshotFingerprint(
+				ctx, tx, where, args, watermarkSort)
+			if err != nil {
+				return SessionExportResult{}, err
+			}
+			prefixCount, prefixDigest, err = db.sessionExportPrefixFingerprint(
+				ctx, tx, where, args, watermarkSort, last.lastActivitySort, last.ID)
+			if err != nil {
+				return SessionExportResult{}, err
+			}
 		}
 		next = db.encodeSessionExportCursor(sessionExportCursorPayload{
 			DatabaseID:       databaseID,
@@ -311,24 +379,69 @@ func (db *DB) ExportSessionSummaries(
 			PrefixDigest:     prefixDigest,
 		})
 	}
-	if err := tx.Commit(); err != nil {
-		return SessionExportResult{}, fmt.Errorf(
-			"committing session export snapshot: %w", err)
-	}
-
-	pricing, err := db.attachSessionExportUsage(ctx, resultRows)
+	pricing, err := db.attachSessionExportUsage(ctx, tx, resultRows)
 	if err != nil {
 		return SessionExportResult{}, err
 	}
-	if err := db.attachSessionExportWorktrees(ctx, resultRows); err != nil {
+	if err := db.attachSessionExportWorktrees(ctx, tx, resultRows); err != nil {
 		return SessionExportResult{}, err
 	}
-	projects, err := db.BuildProjectIdentityMap(
-		ctx, sortedSetKeys(sessionExportProjectLabels(resultRows)))
+	sessionIDs := make([]string, len(resultRows))
+	for i := range resultRows {
+		sessionIDs[i] = resultRows[i].ID
+	}
+	snapshots, err := db.listSessionProjectIdentitySnapshotsFrom(
+		ctx, tx, sessionIDs)
 	if err != nil {
 		return SessionExportResult{}, err
 	}
-
+	archiveID, err := sessionExportMetadataValue(
+		ctx, tx, archiveMetadataArchiveIDKey, ErrArchiveIDMissing,
+		"archive id",
+	)
+	if err != nil {
+		return SessionExportResult{}, err
+	}
+	archiveSalt, err := sessionExportMetadataValue(
+		ctx, tx, archiveMetadataArchiveSaltKey, ErrArchiveSaltMissing,
+		"archive salt",
+	)
+	if err != nil {
+		return SessionExportResult{}, err
+	}
+	archiveSalt, err = validateArchiveSalt(archiveSalt)
+	if err != nil {
+		return SessionExportResult{}, err
+	}
+	archiveScope := export.IdentityScope{
+		ArchiveID: archiveID, ArchiveSalt: archiveSalt,
+	}
+	projects := make(map[string]export.ProjectMapEntry, len(resultRows))
+	for i := range resultRows {
+		obs, ok := snapshots[resultRows[i].ID]
+		if !ok {
+			obs = export.ProjectIdentityObservation{
+				Project: resultRows[i].Project,
+				Machine: resultRows[i].Machine,
+			}
+		}
+		resultRows[i].ProjectReference =
+			export.ResolveProjectReferenceFromObservation(obs, archiveScope)
+		reference := resultRows[i].ProjectReference
+		next := export.ProjectMapEntry{
+			DisplayLabel: reference.DisplayLabel,
+			ProjectKey:   reference.ProjectKey,
+			Resolution:   reference.Resolution,
+			Identity:     export.ProjectCatalogIdentity(reference.Identity),
+		}
+		if existing, ok := projects[reference.ProjectKey]; ok {
+			projects[reference.ProjectKey] = MergeSessionProjectCatalogEntry(
+				existing, next,
+			)
+		} else {
+			projects[reference.ProjectKey] = next
+		}
+	}
 	return SessionExportResult{
 		SchemaVersion: export.SessionSummarySchemaVersion,
 		Rows:          resultRows,
@@ -336,6 +449,49 @@ func (db *DB) ExportSessionSummaries(
 		Pricing:       pricing,
 		Projects:      projects,
 	}, nil
+}
+
+func MergeSessionProjectCatalogEntry(
+	existing, next export.ProjectMapEntry,
+) export.ProjectMapEntry {
+	if existing.Resolution == export.ProjectResolutionAmbiguous ||
+		next.Resolution == export.ProjectResolutionAmbiguous ||
+		(existing.Identity != nil && next.Identity != nil &&
+			existing.Identity.Key != next.Identity.Key) {
+		return export.ProjectMapEntry{
+			DisplayLabel: existing.DisplayLabel,
+			ProjectKey:   existing.ProjectKey,
+			Resolution:   export.ProjectResolutionAmbiguous,
+		}
+	}
+	if existing.Identity == nil && next.Identity != nil {
+		return next
+	}
+	return existing
+}
+
+func sessionExportMetadataValue(
+	ctx context.Context,
+	q sessionExportQuerier,
+	key string,
+	missing error,
+	label string,
+) (string, error) {
+	var value string
+	err := q.QueryRowContext(ctx,
+		`SELECT value FROM archive_metadata WHERE key = ?`, key,
+	).Scan(&value)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", missing
+		}
+		return "", fmt.Errorf("reading %s: %w", label, err)
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", missing
+	}
+	return value, nil
 }
 
 func (db *DB) sessionExportWatermark(
@@ -572,12 +728,12 @@ LIMIT ?`
 }
 
 func (db *DB) attachSessionExportUsage(
-	ctx context.Context, rows []SessionSummaryRow,
+	ctx context.Context, q sessionExportQuerier, rows []SessionSummaryRow,
 ) (*export.PricingBlock, error) {
 	if len(rows) == 0 {
 		return nil, nil
 	}
-	pricingRows, err := db.loadPricingMap(ctx)
+	pricingRows, err := db.loadPricingMapFrom(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("loading pricing: %w", err)
 	}
@@ -588,7 +744,7 @@ func (db *DB) attachSessionExportUsage(
 	}
 
 	query, args := sessionExportUsageQuery(sessionExportIDs(rows))
-	sqlRows, err := db.getReader().QueryContext(ctx, query, args...)
+	sqlRows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying session export usage: %w", err)
 	}
@@ -710,13 +866,13 @@ func sessionExportUsageTokens(
 }
 
 func (db *DB) attachSessionExportWorktrees(
-	ctx context.Context, rows []SessionSummaryRow,
+	ctx context.Context, q sessionExportQuerier, rows []SessionSummaryRow,
 ) error {
 	if len(rows) == 0 {
 		return nil
 	}
 	labels := sortedSetKeys(sessionExportProjectLabels(rows))
-	observations, err := db.ListProjectIdentityObservations(ctx, labels)
+	observations, err := db.listProjectIdentityObservationsFrom(ctx, q, labels)
 	if err != nil {
 		return err
 	}

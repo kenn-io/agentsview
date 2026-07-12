@@ -677,6 +677,11 @@ func (b *directBackend) Search(
 func (b *directBackend) UsageSummary(
 	ctx context.Context, req UsageRequest,
 ) (*UsageSummaryResult, error) {
+	var err error
+	req, err = ResolveUsageProjectKeys(ctx, b.db, req)
+	if err != nil {
+		return nil, err
+	}
 	f, err := BuildUsageFilter(req)
 	if err != nil {
 		return nil, err
@@ -704,6 +709,11 @@ func (b *directBackend) UsageSummary(
 func (b *directBackend) UsagePairwiseComparison(
 	ctx context.Context, req UsagePairwiseComparisonRequest,
 ) (*UsagePairwiseComparisonResponse, error) {
+	var err error
+	req, err = ResolveUsagePairwiseProjectKeys(ctx, b.db, req)
+	if err != nil {
+		return nil, err
+	}
 	leftFilter, leftEmpty, rightFilter, rightEmpty, err := BuildUsagePairwiseFilters(req)
 	if err != nil {
 		return nil, err

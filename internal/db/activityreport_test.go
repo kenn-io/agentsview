@@ -597,6 +597,26 @@ func TestGetActivityReport_TitleSkipsEmptyDisplayName(t *testing.T) {
 		"empty display_name must not mask the real session_name")
 }
 
+func TestGetActivityReport_TitleNeverFallsBackToFirstMessage(t *testing.T) {
+	d := testDB(t)
+	ctx := context.Background()
+	insertSession(t, d, "private-title", "safe-project", func(s *Session) {
+		s.Agent = "claude"
+		s.FirstMessage = Ptr("distinctive private prompt sentinel")
+		s.StartedAt = Ptr("2026-06-16T10:00:00Z")
+		s.EndedAt = Ptr("2026-06-16T10:02:00Z")
+	})
+	seedMessage(t, d, "private-title", 1, "user", "2026-06-16T10:00:00Z", "")
+	seedMessage(t, d, "private-title", 2, "assistant", "2026-06-16T10:02:00Z", "opus")
+
+	r, err := d.GetActivityReport(ctx, AnalyticsFilter{Timezone: "UTC"},
+		dayQuery(t, "2026-06-16", "UTC"))
+	require.NoError(t, err)
+	require.Len(t, r.BySession, 1)
+	assert.Equal(t, "safe-project", r.BySession[0].Title)
+	assert.NotContains(t, r.BySession[0].Title, "private prompt sentinel")
+}
+
 // TestGetActivityReport_OpenSessionWithInRangeMessageIncluded confirms a
 // still-open session (no ended_at) that started before the range but has a
 // message inside it is not dropped. The effective-end fallback uses the

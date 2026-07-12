@@ -7,12 +7,277 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 )
+
+func TestPushMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
+	t *testing.T,
+) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_push_project_snapshot_test"
+	pg, err := Open(pgURL, schema, true)
+	require.NoError(t, err)
+	defer pg.Close()
+	ctx := context.Background()
+	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+	require.NoError(t, err)
+	require.NoError(t, EnsureSchema(ctx, pg, schema))
+
+	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	defer local.Close()
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID: "snapshot-session", Project: "app", Machine: "laptop", Agent: "codex",
+	}))
+	require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: "snapshot-session", Project: "app", Machine: "laptop",
+			RootPath: "/workspace/app", GitRemote: "https://github.com/acme/app.git",
+			GitRemoteName: "origin", RepositoryPath: "/workspace/app/.git",
+			WorktreeRootPath:     "/workspace/app",
+			WorktreeRelationship: export.WorktreeMain,
+			CheckoutState:        export.CheckoutDetached,
+			RemoteResolution:     export.ProjectResolutionResolved,
+			ObservedAt:           time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC),
+		},
+	))
+	archiveID, err := local.GetArchiveID(ctx)
+	require.NoError(t, err)
+	generation, err := local.GetDatabaseID(ctx)
+	require.NoError(t, err)
+
+	syncer := &Sync{
+		pg: pg, local: local, machine: "laptop", schema: schema, schemaDone: true,
+	}
+	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, false))
+
+	var gotArchive, gotGeneration, gotSession, gotRemote string
+	var gotRelationship export.WorktreeRelationship
+	var gotCheckout export.CheckoutState
+	err = pg.QueryRowContext(ctx, `
+		SELECT source_archive_id, source_database_generation,
+			source_session_id, git_remote, worktree_relationship, checkout_state
+		FROM source_session_project_identity_snapshots
+		WHERE source_session_id = $1`, "snapshot-session",
+	).Scan(
+		&gotArchive, &gotGeneration, &gotSession, &gotRemote,
+		&gotRelationship, &gotCheckout,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, archiveID, gotArchive)
+	assert.Equal(t, generation, gotGeneration)
+	assert.Equal(t, "snapshot-session", gotSession)
+	assert.Equal(t, "https://github.com/acme/app.git", gotRemote)
+	assert.Equal(t, export.WorktreeMain, gotRelationship)
+	assert.Equal(t, export.CheckoutDetached, gotCheckout)
+
+	_, err = pg.ExecContext(ctx, `
+		UPDATE source_session_project_identity_snapshots
+		SET git_remote = 'sentinel'
+		WHERE source_session_id = $1`, "snapshot-session")
+	require.NoError(t, err)
+	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, false))
+	require.NoError(t, pg.QueryRowContext(ctx, `
+		SELECT git_remote FROM source_session_project_identity_snapshots
+		WHERE source_session_id = $1`, "snapshot-session").Scan(&gotRemote))
+	assert.Equal(t, "sentinel", gotRemote,
+		"unchanged local revision should skip PG publication")
+	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, true))
+	require.NoError(t, pg.QueryRowContext(ctx, `
+		SELECT git_remote FROM source_session_project_identity_snapshots
+		WHERE source_session_id = $1`, "snapshot-session").Scan(&gotRemote))
+	assert.Equal(t, "https://github.com/acme/app.git", gotRemote,
+		"forced publication should rebuild PG identity rows")
+
+	require.NoError(t, local.DeleteSession("snapshot-session"))
+	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, false))
+	var snapshotCount int
+	require.NoError(t, pg.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM source_session_project_identity_snapshots
+		WHERE source_archive_id = $1`, archiveID,
+	).Scan(&snapshotCount))
+	assert.Zero(t, snapshotCount)
+}
+
+func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
+	t *testing.T,
+) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_filtered_identity_revision_test"
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	ctx := context.Background()
+	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, local.Close()) })
+	for _, project := range []string{"alpha", "beta"} {
+		sessionID := "identity-" + project
+		require.NoError(t, local.UpsertSession(db.Session{
+			ID: sessionID, Project: project, Machine: "laptop", Agent: "codex",
+		}))
+		require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
+			export.ProjectIdentityObservation{
+				SessionID: sessionID, Project: project, Machine: "laptop",
+				RootPath:         "/workspace/" + project,
+				GitRemote:        "https://example.com/" + project + ".git",
+				RemoteResolution: export.ProjectResolutionResolved,
+				ObservedAt:       time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC),
+			},
+		))
+	}
+	filtered, err := New(
+		pgURL, schema, local, "laptop", true,
+		SyncOptions{Projects: []string{"alpha"}},
+	)
+	require.NoError(t, err)
+	require.NoError(t, filtered.EnsureSchema(ctx))
+	require.NoError(t, filtered.syncProjectIdentityObservations(ctx, false))
+	_, err = filtered.pg.ExecContext(ctx, `
+		UPDATE source_project_identity_observations
+		SET git_remote_name = 'sentinel'
+		WHERE project = 'alpha'`)
+	require.NoError(t, err)
+	require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: "identity-beta", Project: "beta", Machine: "laptop",
+			RootPath:         "/workspace/beta",
+			GitRemote:        "https://example.com/beta.git",
+			GitRemoteName:    "upstream",
+			RemoteResolution: export.ProjectResolutionResolved,
+			ObservedAt:       time.Date(2026, 7, 11, 13, 0, 0, 0, time.UTC),
+		},
+	))
+	require.NoError(t, filtered.syncProjectIdentityObservations(ctx, false))
+	var alphaRemoteName string
+	require.NoError(t, filtered.pg.QueryRowContext(ctx, `
+		SELECT git_remote_name FROM source_project_identity_observations
+		WHERE project = 'alpha'`).Scan(&alphaRemoteName))
+	assert.Equal(t, "sentinel", alphaRemoteName,
+		"out-of-scope changes must not republish the filtered identity scope")
+	require.NoError(t, filtered.Close())
+
+	unfiltered, err := New(
+		pgURL, schema, local, "laptop", true, SyncOptions{},
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, unfiltered.Close()) })
+	require.NoError(t, unfiltered.EnsureSchema(ctx))
+	require.NoError(t, unfiltered.syncProjectIdentityObservations(ctx, false))
+	var betaSnapshots int
+	require.NoError(t, unfiltered.pg.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM source_session_project_identity_snapshots
+		WHERE project = $1`, "beta").Scan(&betaSnapshots))
+	assert.Equal(t, 1, betaSnapshots)
+}
+
+func TestIdentityPublicationUpdatesOnlyChangedRowsAndAppliesTombstones(
+	t *testing.T,
+) {
+	pgURL := testPGURL(t)
+	const schema = "agentsview_identity_delta_test"
+	cleanNamedPGSchema(t, pgURL, schema)
+	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	ctx := context.Background()
+	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, local.Close()) })
+	observedAt := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
+	for _, project := range []string{"alpha", "beta"} {
+		sessionID := "identity-" + project
+		require.NoError(t, local.UpsertSession(db.Session{
+			ID: sessionID, Project: project, Machine: "laptop", Agent: "codex",
+		}))
+		require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
+			export.ProjectIdentityObservation{
+				SessionID: sessionID, Project: project, Machine: "laptop",
+				RootPath:         "/workspace/" + project,
+				GitRemote:        "https://example.com/" + project + ".git",
+				GitRemoteName:    "origin",
+				RemoteResolution: export.ProjectResolutionResolved,
+				ObservedAt:       observedAt,
+			},
+		))
+	}
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID: "identity-gamma", Project: "gamma", Machine: "laptop", Agent: "codex",
+	}))
+	require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: "identity-gamma", Project: "gamma", Machine: "laptop",
+			RootPath:         "/workspace/gamma",
+			RemoteResolution: export.ProjectResolutionUnknown,
+			ObservedAt:       observedAt,
+		},
+	))
+
+	syncer, err := New(pgURL, schema, local, "laptop", true, SyncOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+	require.NoError(t, syncer.EnsureSchema(ctx))
+	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, false))
+	_, err = syncer.pg.ExecContext(ctx, `
+		UPDATE source_project_identity_observations
+		SET git_remote_name = 'sentinel'
+		WHERE project = 'beta'`)
+	require.NoError(t, err)
+
+	require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: "identity-alpha", Project: "alpha", Machine: "laptop",
+			RootPath:         "/workspace/alpha",
+			GitRemote:        "https://example.com/alpha.git",
+			GitRemoteName:    "upstream",
+			RemoteResolution: export.ProjectResolutionResolved,
+			ObservedAt:       observedAt.Add(time.Hour),
+		},
+	))
+	require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
+		export.ProjectIdentityObservation{
+			SessionID: "identity-gamma", Project: "gamma", Machine: "laptop",
+			RootPath:         "/workspace/gamma",
+			GitRemote:        "https://example.com/gamma.git",
+			GitRemoteName:    "origin",
+			RemoteResolution: export.ProjectResolutionResolved,
+			ObservedAt:       observedAt.Add(time.Hour),
+		},
+	))
+	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, false))
+
+	var alphaRemoteName, betaRemoteName string
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT git_remote_name FROM source_project_identity_observations
+		WHERE project = 'alpha'`).Scan(&alphaRemoteName))
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT git_remote_name FROM source_project_identity_observations
+		WHERE project = 'beta'`).Scan(&betaRemoteName))
+	assert.Equal(t, "upstream", alphaRemoteName)
+	assert.Equal(t, "sentinel", betaRemoteName,
+		"incremental publication must not rewrite unchanged rows")
+	var gammaFallbacks, gammaRemotes int
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM source_project_identity_observations
+		WHERE project = 'gamma' AND git_remote = ''`).Scan(&gammaFallbacks))
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM source_project_identity_observations
+		WHERE project = 'gamma' AND git_remote = $1`,
+		"https://example.com/gamma.git").Scan(&gammaRemotes))
+	assert.Zero(t, gammaFallbacks)
+	assert.Equal(t, 1, gammaRemotes)
+
+	require.NoError(t, local.DeleteSession("identity-alpha"))
+	require.NoError(t, syncer.syncProjectIdentityObservations(ctx, false))
+	var snapshotCount int
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM source_session_project_identity_snapshots
+		WHERE source_session_id = $1`, "identity-alpha").Scan(&snapshotCount))
+	assert.Zero(t, snapshotCount)
+}
 
 // TestPushSystemFingerprintCollisionRegression verifies that the fast-path
 // in pushMessages correctly detects a change when the is_system flags are

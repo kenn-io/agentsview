@@ -104,11 +104,10 @@ func appendPGUsageSourceFilterClauses(
 func appendPGUsageSessionFilterClauses(
 	where string, pb *paramBuilder, f db.UsageFilter,
 ) string {
-	appendCSV := func(q, col, csv string, include bool) string {
-		if csv == "" {
+	appendValues := func(q, col string, vals []string, include bool) string {
+		if len(vals) == 0 {
 			return q
 		}
-		vals := strings.Split(csv, ",")
 		op := "IN"
 		if !include {
 			op = "NOT IN"
@@ -126,16 +125,24 @@ func appendPGUsageSessionFilterClauses(
 		return q + "\n\tAND " + col + " " + op + " (" +
 			strings.Join(placeholders, ",") + ")"
 	}
+	appendCSV := func(q, col, csv string, include bool) string {
+		if csv == "" {
+			return q
+		}
+		return appendValues(q, col, strings.Split(csv, ","), include)
+	}
 
 	where = appendCSV(where, "s.agent", f.Agent, true)
-	where = appendCSV(where, "s.project", f.Project, true)
+	where = appendValues(where, "s.project", f.ProjectFilterLabels(), true)
 	where = appendCSV(where, "s.machine", f.Machine, true)
 	if f.GitBranch != "" {
 		where += "\n\tAND " + db.BranchPairPredicate(
 			"s.project", "s.git_branch", f.GitBranch,
 			func(s string) string { return pb.add(s) })
 	}
-	where = appendCSV(where, "s.project", f.ExcludeProject, false)
+	where = appendValues(
+		where, "s.project", f.ExcludedProjectFilterLabels(), false,
+	)
 	where = appendCSV(where, "s.agent", f.ExcludeAgent, false)
 
 	if f.MinUserMessages > 0 {
@@ -743,7 +750,8 @@ func pgCursorUsageRowsSQLForBounds(
 	// Cursor usage rows carry no project or git branch and bypass the session
 	// filter, so any filter they cannot satisfy (project, machine, branch)
 	// must exclude them entirely rather than let them leak into totals.
-	if f.Project != "" || f.ExcludeProject != "" ||
+	if len(f.ProjectFilterLabels()) > 0 ||
+		len(f.ExcludedProjectFilterLabels()) > 0 ||
 		f.Machine != "" || f.GitBranch != "" || f.MinUserMessages > 0 ||
 		f.ExcludeOneShot || hasTermFilter || f.ActiveSince != "" {
 		return "", false
@@ -1457,6 +1465,10 @@ func (s *Store) GetDailyUsage(
 		if err != nil {
 			return db.DailyUsageResult{}, err
 		}
+		projectRows := db.DailyUsageResult{Daily: daily, SessionCounts: sessionCounts}
+		db.SanitizeDailyUsageProjectLabelsWithCatalog(&projectRows, projects)
+		daily = projectRows.Daily
+		sessionCounts = projectRows.SessionCounts
 		pricingBlock, err := rateResolver.BuildBlock()
 		if err != nil {
 			return db.DailyUsageResult{}, fmt.Errorf(
@@ -1465,7 +1477,7 @@ func (s *Store) GetDailyUsage(
 		return db.DailyUsageResult{
 			SchemaVersion: export.UsageDailySchemaVersion,
 			Pricing:       &pricingBlock,
-			Projects:      projects,
+			Projects:      export.ProjectMapForWire(projects),
 			Daily:         daily,
 			Totals:        totals,
 			SessionCounts: sessionCounts,
@@ -1631,6 +1643,10 @@ func (s *Store) GetDailyUsage(
 	if err != nil {
 		return db.DailyUsageResult{}, err
 	}
+	projectRows := db.DailyUsageResult{Daily: daily, SessionCounts: sessionCounts}
+	db.SanitizeDailyUsageProjectLabelsWithCatalog(&projectRows, projects)
+	daily = projectRows.Daily
+	sessionCounts = projectRows.SessionCounts
 	pricingBlock, err := rateResolver.BuildBlock()
 	if err != nil {
 		return db.DailyUsageResult{}, fmt.Errorf(
@@ -1639,7 +1655,7 @@ func (s *Store) GetDailyUsage(
 	return db.DailyUsageResult{
 		SchemaVersion: export.UsageDailySchemaVersion,
 		Pricing:       &pricingBlock,
-		Projects:      projects,
+		Projects:      export.ProjectMapForWire(projects),
 		Daily:         daily,
 		Totals:        totals,
 		SessionCounts: sessionCounts,

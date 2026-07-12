@@ -14,6 +14,7 @@ function makeRow(
     session_id: "sess",
     title: "Session",
     project: "proj",
+	project_key: "pl1:sha256:proj",
     agent: "claude",
     primary_model: "opus",
     models: ["opus"],

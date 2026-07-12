@@ -24,6 +24,8 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
+const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1"
+
 // dataVersion tracks parser changes that require a full
 // re-sync. Increment this when parsing logic changes in ways
 // that affect stored data (e.g. new fields extracted, content
@@ -818,6 +820,18 @@ func Open(path string) (*DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("initializing database id: %w", err)
 	}
+	if _, err := d.GetOrCreateArchiveID(context.Background()); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("initializing archive id: %w", err)
+	}
+	if _, err := d.GetOrCreateArchiveSalt(context.Background()); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("initializing archive salt: %w", err)
+	}
+	if err := d.EnsureProjectIdentityBackfillQueued(context.Background()); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("queueing project identity backfill: %w", err)
+	}
 
 	if dataStale && !schemaStale {
 		d.dataStale.Store(true)
@@ -838,6 +852,374 @@ func Open(path string) (*DB, error) {
 	}
 
 	return d, nil
+}
+
+const projectIdentityRevisionSchemaSQL = `
+CREATE TABLE IF NOT EXISTS project_identity_observation_changes (
+    project     TEXT NOT NULL,
+    machine     TEXT NOT NULL,
+    root_path   TEXT NOT NULL DEFAULT '',
+    git_remote  TEXT NOT NULL DEFAULT '',
+    revision    INTEGER NOT NULL,
+    deleted     INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
+    PRIMARY KEY (project, machine, root_path, git_remote)
+);
+CREATE INDEX IF NOT EXISTS idx_project_identity_observation_changes_revision
+    ON project_identity_observation_changes(revision);
+CREATE TABLE IF NOT EXISTS session_project_identity_snapshot_changes (
+    session_id  TEXT NOT NULL,
+    project     TEXT NOT NULL,
+    revision    INTEGER NOT NULL,
+    deleted     INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
+    PRIMARY KEY (session_id, project)
+);
+CREATE INDEX IF NOT EXISTS idx_session_project_identity_snapshot_changes_revision
+    ON session_project_identity_snapshot_changes(revision);
+DROP TRIGGER IF EXISTS trg_project_identity_observations_revision_insert;
+DROP TRIGGER IF EXISTS trg_project_identity_observations_revision_update;
+DROP TRIGGER IF EXISTS trg_project_identity_observations_revision_delete;
+DROP TRIGGER IF EXISTS trg_session_project_identity_snapshots_revision_insert;
+DROP TRIGGER IF EXISTS trg_session_project_identity_snapshots_revision_update;
+DROP TRIGGER IF EXISTS trg_session_project_identity_snapshots_revision_delete;
+CREATE TRIGGER IF NOT EXISTS trg_project_identity_observations_revision_insert
+AFTER INSERT ON project_identity_observations BEGIN
+    INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO project_identity_observation_changes (
+        project, machine, root_path, git_remote, revision, deleted
+    ) VALUES (
+        NEW.project, NEW.machine, NEW.root_path, NEW.git_remote,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'project_identity_publication_revision'), 0
+    ) ON CONFLICT(project, machine, root_path, git_remote) DO UPDATE SET
+        revision = excluded.revision, deleted = 0;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_project_identity_observations_revision_update
+AFTER UPDATE ON project_identity_observations BEGIN
+    INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO project_identity_observation_changes (
+        project, machine, root_path, git_remote, revision, deleted
+    ) VALUES (
+        OLD.project, OLD.machine, OLD.root_path, OLD.git_remote,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'project_identity_publication_revision'), 1
+    ) ON CONFLICT(project, machine, root_path, git_remote) DO UPDATE SET
+        revision = excluded.revision, deleted = 1;
+    INSERT INTO project_identity_observation_changes (
+        project, machine, root_path, git_remote, revision, deleted
+    ) VALUES (
+        NEW.project, NEW.machine, NEW.root_path, NEW.git_remote,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'project_identity_publication_revision'), 0
+    ) ON CONFLICT(project, machine, root_path, git_remote) DO UPDATE SET
+        revision = excluded.revision, deleted = 0;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_project_identity_observations_revision_delete
+AFTER DELETE ON project_identity_observations BEGIN
+    INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO project_identity_observation_changes (
+        project, machine, root_path, git_remote, revision, deleted
+    ) VALUES (
+        OLD.project, OLD.machine, OLD.root_path, OLD.git_remote,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'project_identity_publication_revision'), 1
+    ) ON CONFLICT(project, machine, root_path, git_remote) DO UPDATE SET
+        revision = excluded.revision, deleted = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_session_project_identity_snapshots_revision_insert
+AFTER INSERT ON session_project_identity_snapshots BEGIN
+    INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO session_project_identity_snapshot_changes (
+        session_id, project, revision, deleted
+    ) VALUES (
+        NEW.session_id, NEW.project,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'project_identity_publication_revision'), 0
+    ) ON CONFLICT(session_id, project) DO UPDATE SET
+        revision = excluded.revision, deleted = 0;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_session_project_identity_snapshots_revision_update
+AFTER UPDATE ON session_project_identity_snapshots BEGIN
+    INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO session_project_identity_snapshot_changes (
+        session_id, project, revision, deleted
+    ) VALUES (
+        OLD.session_id, OLD.project,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'project_identity_publication_revision'), 1
+    ) ON CONFLICT(session_id, project) DO UPDATE SET
+        revision = excluded.revision, deleted = 1;
+    INSERT INTO session_project_identity_snapshot_changes (
+        session_id, project, revision, deleted
+    ) VALUES (
+        NEW.session_id, NEW.project,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'project_identity_publication_revision'), 0
+    ) ON CONFLICT(session_id, project) DO UPDATE SET
+        revision = excluded.revision, deleted = 0;
+END;
+CREATE TRIGGER IF NOT EXISTS trg_session_project_identity_snapshots_revision_delete
+AFTER DELETE ON session_project_identity_snapshots BEGIN
+    INSERT INTO archive_metadata (key, value) VALUES ('project_identity_publication_revision', '1')
+    ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+    INSERT INTO session_project_identity_snapshot_changes (
+        session_id, project, revision, deleted
+    ) VALUES (
+        OLD.session_id, OLD.project,
+        (SELECT CAST(value AS INTEGER) FROM archive_metadata
+         WHERE key = 'project_identity_publication_revision'), 1
+    ) ON CONFLICT(session_id, project) DO UPDATE SET
+        revision = excluded.revision, deleted = 1;
+END;
+`
+
+const projectIdentitySnapshotInvariantSchemaSQL = `
+CREATE TRIGGER IF NOT EXISTS trg_sessions_create_project_identity_snapshot
+AFTER INSERT ON sessions BEGIN
+    INSERT INTO session_project_identity_snapshots (
+        session_id, project, machine, root_path, worktree_relationship,
+        checkout_state, git_branch, remote_resolution, observed_at
+    ) VALUES (
+        NEW.id, NEW.project, NEW.machine, NEW.cwd, 'unknown',
+        CASE WHEN NEW.git_branch != '' THEN 'branch' ELSE 'unknown' END,
+        NEW.git_branch, 'unknown', strftime('%Y-%m-%dT%H:%M:%fZ','now')
+    ) ON CONFLICT(session_id) DO NOTHING;
+END;
+`
+
+const exportIdentitySchemaSQL = `
+CREATE TABLE IF NOT EXISTS archive_metadata (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+CREATE TABLE IF NOT EXISTS project_identity_observations (
+    session_id         TEXT NOT NULL DEFAULT '',
+    source_archive_id   TEXT NOT NULL DEFAULT '',
+    source_archive_salt TEXT NOT NULL DEFAULT '',
+    project            TEXT NOT NULL,
+    machine            TEXT NOT NULL,
+    root_path          TEXT NOT NULL DEFAULT '',
+    git_remote         TEXT NOT NULL DEFAULT '',
+    git_remote_name    TEXT NOT NULL DEFAULT '',
+    repository_path    TEXT NOT NULL DEFAULT '',
+    worktree_name      TEXT NOT NULL DEFAULT '',
+    worktree_root_path TEXT NOT NULL DEFAULT '',
+    worktree_relationship TEXT NOT NULL DEFAULT 'unknown',
+    checkout_state     TEXT NOT NULL DEFAULT 'unknown',
+    git_branch         TEXT NOT NULL DEFAULT '',
+    remote_resolution  TEXT NOT NULL DEFAULT 'unknown',
+    remote_candidate_count INTEGER NOT NULL DEFAULT 0,
+    observed_at        TEXT NOT NULL,
+    normalized_remote  TEXT NOT NULL DEFAULT '',
+    key_source         TEXT NOT NULL DEFAULT '',
+    key                TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (project, machine, root_path, git_remote)
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_identity_observations_project
+    ON project_identity_observations(project);
+
+CREATE TABLE IF NOT EXISTS session_project_identity_snapshots (
+    session_id         TEXT PRIMARY KEY,
+    project            TEXT NOT NULL,
+    machine            TEXT NOT NULL,
+    root_path          TEXT NOT NULL DEFAULT '',
+    git_remote         TEXT NOT NULL DEFAULT '',
+    git_remote_name    TEXT NOT NULL DEFAULT '',
+    repository_path    TEXT NOT NULL DEFAULT '',
+    worktree_name      TEXT NOT NULL DEFAULT '',
+    worktree_root_path TEXT NOT NULL DEFAULT '',
+    worktree_relationship TEXT NOT NULL DEFAULT 'unknown',
+    checkout_state     TEXT NOT NULL DEFAULT 'unknown',
+    git_branch         TEXT NOT NULL DEFAULT '',
+    remote_resolution  TEXT NOT NULL DEFAULT 'unknown',
+    remote_candidate_count INTEGER NOT NULL DEFAULT 0,
+    observed_at        TEXT NOT NULL,
+    normalized_remote  TEXT NOT NULL DEFAULT '',
+    key_source         TEXT NOT NULL DEFAULT '',
+    key                TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS background_migrations (
+    name            TEXT PRIMARY KEY,
+    state           TEXT NOT NULL,
+    total_items     INTEGER NOT NULL DEFAULT 0,
+    completed_items INTEGER NOT NULL DEFAULT 0,
+    last_error      TEXT NOT NULL DEFAULT '',
+    started_at      TEXT,
+    updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    completed_at    TEXT
+);` + projectIdentityRevisionSchemaSQL + projectIdentitySnapshotInvariantSchemaSQL
+
+var exportIdentityColumnMigrations = []schemaColumnMigration{
+	{"project_identity_observations", "session_id", "ALTER TABLE project_identity_observations ADD COLUMN session_id TEXT NOT NULL DEFAULT ''"},
+	{"project_identity_observations", "source_archive_id", "ALTER TABLE project_identity_observations ADD COLUMN source_archive_id TEXT NOT NULL DEFAULT ''"},
+	{"project_identity_observations", "source_archive_salt", "ALTER TABLE project_identity_observations ADD COLUMN source_archive_salt TEXT NOT NULL DEFAULT ''"},
+	{"project_identity_observations", "repository_path", "ALTER TABLE project_identity_observations ADD COLUMN repository_path TEXT NOT NULL DEFAULT ''"},
+	{"project_identity_observations", "worktree_relationship", "ALTER TABLE project_identity_observations ADD COLUMN worktree_relationship TEXT NOT NULL DEFAULT 'unknown'"},
+	{"project_identity_observations", "checkout_state", "ALTER TABLE project_identity_observations ADD COLUMN checkout_state TEXT NOT NULL DEFAULT 'unknown'"},
+	{"project_identity_observations", "git_branch", "ALTER TABLE project_identity_observations ADD COLUMN git_branch TEXT NOT NULL DEFAULT ''"},
+	{"project_identity_observations", "remote_resolution", "ALTER TABLE project_identity_observations ADD COLUMN remote_resolution TEXT NOT NULL DEFAULT 'unknown'"},
+	{"project_identity_observations", "remote_candidate_count", "ALTER TABLE project_identity_observations ADD COLUMN remote_candidate_count INTEGER NOT NULL DEFAULT 0"},
+}
+
+var exportIdentityUpgradeTables = map[string]struct{}{
+	"archive_metadata":                   {},
+	"background_migrations":              {},
+	"project_identity_observations":      {},
+	"session_project_identity_snapshots": {},
+}
+
+func exportSchemaUpgradeTarget(err error) (*SchemaUpgradeRequiredError, bool) {
+	var target *SchemaUpgradeRequiredError
+	if !errors.As(err, &target) {
+		return nil, false
+	}
+	_, ok := exportIdentityUpgradeTables[target.Table]
+	return target, ok
+}
+
+func exportSchemaUpgradeEligible(
+	ctx context.Context, tx *sql.Tx, target *SchemaUpgradeRequiredError,
+) (bool, error) {
+	var tableExists bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?
+		)`, target.Table).Scan(&tableExists); err != nil {
+		return false, fmt.Errorf("checking export schema eligibility: %w", err)
+	}
+	if !tableExists {
+		return true, nil
+	}
+	for _, migration := range exportIdentityColumnMigrations {
+		if migration.table == target.Table && migration.column == target.Column {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// UpgradeExportSchemaInPlace applies only the additive identity schema needed
+// by daemonless exports. Other schema gaps still require the normal writable
+// daemon migration or rebuild path.
+func UpgradeExportSchemaInPlace(path string, cause error) (retErr error) {
+	target, ok := exportSchemaUpgradeTarget(cause)
+	if !ok {
+		return fmt.Errorf("schema gap is not eligible for export upgrade: %w", cause)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("checking database for schema upgrade: %w", err)
+	}
+	if info.Size() == 0 {
+		return fmt.Errorf("upgrading database schema: %s is empty", path)
+	}
+
+	writer, err := sql.Open("sqlite3", makeDSN(path, false))
+	if err != nil {
+		return fmt.Errorf("opening schema upgrade writer: %w", err)
+	}
+	defer func() {
+		if closeErr := writer.Close(); closeErr != nil {
+			retErr = errors.Join(retErr,
+				fmt.Errorf("closing schema upgrade writer: %w", closeErr))
+		}
+	}()
+	writer.SetMaxOpenConns(1)
+	if err := writer.Ping(); err != nil {
+		return fmt.Errorf("opening schema upgrade writer: %w", err)
+	}
+
+	tx, err := writer.BeginTx(context.Background(), nil)
+	if err != nil {
+		return fmt.Errorf("starting schema upgrade transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	eligible, err := exportSchemaUpgradeEligible(context.Background(), tx, target)
+	if err != nil {
+		return err
+	}
+	if !eligible {
+		return fmt.Errorf("schema gap is not eligible for export upgrade: %w", cause)
+	}
+	if _, err := tx.Exec(exportIdentitySchemaSQL); err != nil {
+		return fmt.Errorf("initializing export identity schema: %w", err)
+	}
+	if err := applyColumnMigrations(
+		exportIdentityColumnMigrations,
+		func(query string, args ...any) rowScanner {
+			return tx.QueryRow(query, args...)
+		},
+		func(query string, args ...any) (sql.Result, error) {
+			return tx.Exec(query, args...)
+		},
+	); err != nil {
+		return err
+	}
+	if err := initializeSchemaUpgradeMetadata(tx); err != nil {
+		return err
+	}
+	if err := ensureProjectIdentityBackfillQueuedTx(
+		context.Background(), tx,
+	); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing schema upgrade: %w", err)
+	}
+	return nil
+}
+
+func initializeSchemaUpgradeMetadata(tx *sql.Tx) error {
+	databaseID, err := newUUIDv4()
+	if err != nil {
+		return fmt.Errorf("generating database id: %w", err)
+	}
+	archiveID, err := newUUIDv4()
+	if err != nil {
+		return fmt.Errorf("generating archive id: %w", err)
+	}
+	random := make([]byte, 32)
+	if _, err := rand.Read(random); err != nil {
+		return fmt.Errorf("generating archive salt: %w", err)
+	}
+	for _, entry := range []struct {
+		key   string
+		value string
+	}{
+		{archiveMetadataDatabaseIDKey, databaseID},
+		{archiveMetadataArchiveIDKey, archiveID},
+		{archiveMetadataArchiveSaltKey, fmt.Sprintf("%x", random)},
+	} {
+		if _, err := tx.Exec(`
+			INSERT INTO archive_metadata (key, value)
+			VALUES (?, ?)
+			ON CONFLICT(key) DO UPDATE SET
+				value = excluded.value,
+				updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+			WHERE trim(archive_metadata.value) = ''`,
+			entry.key, entry.value,
+		); err != nil {
+			return fmt.Errorf("initializing archive metadata %s: %w",
+				entry.key, err)
+		}
+	}
+	return nil
 }
 
 // OpenReadOnly opens an existing SQLite database without running migrations or
@@ -914,7 +1296,9 @@ var readOnlyRequiredTables = []string{
 	"excluded_sessions",
 	"worktree_project_mappings",
 	"archive_metadata",
+	"background_migrations",
 	"project_identity_observations",
+	"session_project_identity_snapshots",
 	"pg_sync_state",
 	"model_pricing",
 	"secret_findings",
@@ -1177,19 +1561,14 @@ func readUserVersion(conn *sql.DB) (int, error) {
 	return version, nil
 }
 
-// migrateColumns adds columns introduced by this branch to
-// databases created by older releases. Each migration is
-// idempotent — it only runs when the column is missing.
-func (db *DB) migrateColumns() error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	w := db.getWriter()
+type schemaColumnMigration struct {
+	table  string
+	column string
+	ddl    string
+}
 
-	migrations := []struct {
-		table  string
-		column string
-		ddl    string
-	}{
+func schemaColumnMigrations() []schemaColumnMigration {
+	return []schemaColumnMigration{
 		{
 			"sessions", "display_name",
 			"ALTER TABLE sessions ADD COLUMN display_name TEXT",
@@ -1493,6 +1872,10 @@ func (db *DB) migrateColumns() error {
 			"ALTER TABLE insights ADD COLUMN structured_json TEXT NOT NULL DEFAULT ''",
 		},
 		{
+			"tool_calls", "result_content",
+			"ALTER TABLE tool_calls ADD COLUMN result_content TEXT",
+		},
+		{
 			"tool_calls", "file_path",
 			"ALTER TABLE tool_calls ADD COLUMN file_path TEXT",
 		},
@@ -1504,11 +1887,60 @@ func (db *DB) migrateColumns() error {
 			"worktree_project_mappings", "layout",
 			"ALTER TABLE worktree_project_mappings ADD COLUMN layout TEXT NOT NULL DEFAULT 'explicit'",
 		},
+		{
+			"project_identity_observations", "session_id",
+			"ALTER TABLE project_identity_observations ADD COLUMN session_id TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"project_identity_observations", "source_archive_id",
+			"ALTER TABLE project_identity_observations ADD COLUMN source_archive_id TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"project_identity_observations", "source_archive_salt",
+			"ALTER TABLE project_identity_observations ADD COLUMN source_archive_salt TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"project_identity_observations", "repository_path",
+			"ALTER TABLE project_identity_observations ADD COLUMN repository_path TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"project_identity_observations", "worktree_relationship",
+			"ALTER TABLE project_identity_observations ADD COLUMN worktree_relationship TEXT NOT NULL DEFAULT 'unknown'",
+		},
+		{
+			"project_identity_observations", "checkout_state",
+			"ALTER TABLE project_identity_observations ADD COLUMN checkout_state TEXT NOT NULL DEFAULT 'unknown'",
+		},
+		{
+			"project_identity_observations", "git_branch",
+			"ALTER TABLE project_identity_observations ADD COLUMN git_branch TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"project_identity_observations", "remote_resolution",
+			"ALTER TABLE project_identity_observations ADD COLUMN remote_resolution TEXT NOT NULL DEFAULT 'unknown'",
+		},
+		{
+			"project_identity_observations", "remote_candidate_count",
+			"ALTER TABLE project_identity_observations ADD COLUMN remote_candidate_count INTEGER NOT NULL DEFAULT 0",
+		},
 	}
+}
 
+func applySchemaColumnMigrations(
+	queryRow func(string, ...any) rowScanner,
+	exec func(string, ...any) (sql.Result, error),
+) error {
+	return applyColumnMigrations(schemaColumnMigrations(), queryRow, exec)
+}
+
+func applyColumnMigrations(
+	migrations []schemaColumnMigration,
+	queryRow func(string, ...any) rowScanner,
+	exec func(string, ...any) (sql.Result, error),
+) error {
 	for _, m := range migrations {
 		var count int
-		err := w.QueryRow(fmt.Sprintf(
+		err := queryRow(fmt.Sprintf(
 			"SELECT count(*) FROM pragma_table_info('%s')"+
 				" WHERE name = '%s'",
 			m.table, m.column,
@@ -1520,7 +1952,7 @@ func (db *DB) migrateColumns() error {
 			)
 		}
 		if count == 0 {
-			if _, err := w.Exec(m.ddl); err != nil {
+			if _, err := exec(m.ddl); err != nil {
 				return fmt.Errorf(
 					"adding %s.%s: %w",
 					m.table, m.column, err,
@@ -1531,6 +1963,19 @@ func (db *DB) migrateColumns() error {
 				m.table, m.column,
 			)
 		}
+	}
+	return nil
+}
+
+// migrateColumns adds columns introduced by this branch to databases created
+// by older releases, then runs the data repairs required by a normal writable
+// startup. Schema-only callers use applySchemaColumnMigrations directly.
+func (db *DB) migrateColumns() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	w := db.getWriter()
+	if err := applySchemaColumnMigrations(w.QueryRow, w.Exec); err != nil {
+		return err
 	}
 	if err := db.createPartialIndexesLocked(w); err != nil {
 		return err
@@ -1604,7 +2049,6 @@ func (db *DB) migrateColumns() error {
 			"creating worktree_project_mappings: %w", err,
 		)
 	}
-
 	if _, err := w.Exec(`
 		CREATE TABLE IF NOT EXISTS archive_metadata (
 			key        TEXT PRIMARY KEY,
@@ -1613,13 +2057,22 @@ func (db *DB) migrateColumns() error {
 			updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 		);
 		CREATE TABLE IF NOT EXISTS project_identity_observations (
+			session_id         TEXT NOT NULL DEFAULT '',
+			source_archive_id   TEXT NOT NULL DEFAULT '',
+			source_archive_salt TEXT NOT NULL DEFAULT '',
 			project            TEXT NOT NULL,
 			machine            TEXT NOT NULL,
 			root_path          TEXT NOT NULL DEFAULT '',
 			git_remote         TEXT NOT NULL DEFAULT '',
 			git_remote_name    TEXT NOT NULL DEFAULT '',
+			repository_path    TEXT NOT NULL DEFAULT '',
 			worktree_name      TEXT NOT NULL DEFAULT '',
 			worktree_root_path TEXT NOT NULL DEFAULT '',
+			worktree_relationship TEXT NOT NULL DEFAULT 'unknown',
+			checkout_state     TEXT NOT NULL DEFAULT 'unknown',
+			git_branch         TEXT NOT NULL DEFAULT '',
+			remote_resolution  TEXT NOT NULL DEFAULT 'unknown',
+			remote_candidate_count INTEGER NOT NULL DEFAULT 0,
 			observed_at        TEXT NOT NULL,
 			normalized_remote  TEXT NOT NULL DEFAULT '',
 			key_source         TEXT NOT NULL DEFAULT '',
@@ -1628,25 +2081,37 @@ func (db *DB) migrateColumns() error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_project_identity_observations_project
 			ON project_identity_observations(project);
+		CREATE TABLE IF NOT EXISTS session_project_identity_snapshots (
+			session_id         TEXT PRIMARY KEY,
+			project            TEXT NOT NULL,
+			machine            TEXT NOT NULL,
+			root_path          TEXT NOT NULL DEFAULT '',
+			git_remote         TEXT NOT NULL DEFAULT '',
+			git_remote_name    TEXT NOT NULL DEFAULT '',
+			repository_path    TEXT NOT NULL DEFAULT '',
+			worktree_name      TEXT NOT NULL DEFAULT '',
+			worktree_root_path TEXT NOT NULL DEFAULT '',
+			worktree_relationship TEXT NOT NULL DEFAULT 'unknown',
+			checkout_state     TEXT NOT NULL DEFAULT 'unknown',
+			git_branch         TEXT NOT NULL DEFAULT '',
+			remote_resolution  TEXT NOT NULL DEFAULT 'unknown',
+			remote_candidate_count INTEGER NOT NULL DEFAULT 0,
+			observed_at        TEXT NOT NULL,
+			normalized_remote  TEXT NOT NULL DEFAULT '',
+			key_source         TEXT NOT NULL DEFAULT '',
+			key                TEXT NOT NULL DEFAULT '',
+			FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+		);
 	`); err != nil {
 		return fmt.Errorf(
 			"creating project identity metadata: %w", err,
 		)
 	}
-	if _, err := w.Exec(`
-		DELETE FROM project_identity_observations
-		WHERE git_remote = ''
-		  AND EXISTS (
-			SELECT 1 FROM project_identity_observations remote
-			WHERE remote.project = project_identity_observations.project
-			  AND remote.machine = project_identity_observations.machine
-			  AND remote.root_path = project_identity_observations.root_path
-			  AND remote.git_remote != ''
-		  );
-	`); err != nil {
-		return fmt.Errorf(
-			"removing stale project identity root fallbacks: %w", err,
-		)
+	if _, err := w.Exec(projectIdentityRevisionSchemaSQL); err != nil {
+		return fmt.Errorf("creating project identity revision triggers: %w", err)
+	}
+	if _, err := w.Exec(projectIdentitySnapshotInvariantSchemaSQL); err != nil {
+		return fmt.Errorf("creating project identity snapshot trigger: %w", err)
 	}
 	if err := db.scrubProjectIdentityGitRemoteCredentialsLocked(w); err != nil {
 		return err
@@ -1678,15 +2143,43 @@ func (db *DB) migrateColumns() error {
 func (db *DB) scrubProjectIdentityGitRemoteCredentialsLocked(
 	w *writerHandle,
 ) error {
+	var completed string
+	err := w.QueryRow(`SELECT value FROM stats WHERE key = ?`,
+		projectIdentityRemoteScrubCompletedKey).Scan(&completed)
+	if err == nil && completed == "1" {
+		return nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("checking project identity remote scrub marker: %w", err)
+	}
 	tx, err := w.BeginTx(context.Background(), nil)
 	if err != nil {
 		return fmt.Errorf("starting project identity remote scrub: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`
+		DELETE FROM project_identity_observations
+		WHERE git_remote = ''
+		  AND EXISTS (
+			SELECT 1 FROM project_identity_observations remote
+			WHERE remote.project = project_identity_observations.project
+			  AND remote.machine = project_identity_observations.machine
+			  AND remote.root_path = project_identity_observations.root_path
+			  AND remote.git_remote != ''
+		  )`); err != nil {
+		return fmt.Errorf("removing stale project identity root fallbacks: %w", err)
+	}
 	if err := scrubProjectIdentityGitRemoteCredentialsTx(
 		context.Background(), tx,
 	); err != nil {
 		return err
+	}
+	if _, err := tx.Exec(`
+		INSERT INTO stats (key, value) VALUES (?, '1')
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+		projectIdentityRemoteScrubCompletedKey,
+	); err != nil {
+		return fmt.Errorf("marking project identity remote scrub complete: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing project identity remote scrub: %w", err)

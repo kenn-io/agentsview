@@ -2531,6 +2531,31 @@ func (db *DB) GetProjects(
 	return projects, rows.Err()
 }
 
+// GetActiveProjectLabels returns every project attached to a non-deleted
+// session, including fork and subagent sessions whose unique usage is eligible
+// for aggregation.
+func (db *DB) GetActiveProjectLabels(ctx context.Context) ([]string, error) {
+	rows, err := db.getReader().QueryContext(ctx,
+		`SELECT DISTINCT project
+		 FROM sessions
+		 WHERE deleted_at IS NULL
+		 ORDER BY project`)
+	if err != nil {
+		return nil, fmt.Errorf("querying active project labels: %w", err)
+	}
+	defer rows.Close()
+
+	var labels []string
+	for rows.Next() {
+		var label string
+		if err := rows.Scan(&label); err != nil {
+			return nil, fmt.Errorf("scanning active project label: %w", err)
+		}
+		labels = append(labels, label)
+	}
+	return labels, rows.Err()
+}
+
 // ProjectInfo holds a project name and its session count.
 type ProjectInfo struct {
 	Name         string `json:"name"`

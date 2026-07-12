@@ -202,6 +202,31 @@ describe("UsagePage refresh behavior", () => {
     expect(loadAgents).toHaveBeenCalled();
   });
 
+  it("ignores response-scoped project keys restored from a URL", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+
+    router.route = "usage";
+    router.params = {
+      model: "fixture-model",
+      exclude_project_key: "pl1:sha256:stale",
+    };
+    usage.excludedProjectKeys = "";
+    usage.selectedModels = "";
+
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+
+    expect(usage.excludedProjectKeys).toBe("");
+    expect(usage.selectedModels).toBe("fixture-model");
+  });
+
   it("seeds bare Usage from an enabled fixed range", async () => {
     const fetchStates: Array<{
       isPinned: boolean;

@@ -150,6 +150,7 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 	var checkDataVersion bool
 	var replace bool
 	var pprofEnabled bool
+	var skipInitialSync bool
 	cmd := &cobra.Command{
 		Use:          "serve",
 		Short:        "Start server",
@@ -174,9 +175,10 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 				return nil
 			}
 			runServe(mustLoadConfig(cmd), serveOptions{
-				ReplaceDaemon:  replace,
-				NoSyncExplicit: cmd.Flags().Changed("no-sync"),
-				Pprof:          pprofEnabled,
+				ReplaceDaemon:   replace,
+				NoSyncExplicit:  cmd.Flags().Changed("no-sync"),
+				SkipInitialSync: skipInitialSync,
+				Pprof:           pprofEnabled,
 			})
 			return nil
 		},
@@ -200,6 +202,13 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 		"Check whether the configured database is compatible with this binary",
 	)
 	_ = cmd.Flags().MarkHidden("check-data-version")
+	cmd.Flags().BoolVar(
+		&skipInitialSync,
+		"skip-initial-sync",
+		false,
+		"Start serving before the initial sync",
+	)
+	_ = cmd.Flags().MarkHidden("skip-initial-sync")
 	cmd.Flags().BoolVar(
 		&pprofEnabled,
 		"pprof",

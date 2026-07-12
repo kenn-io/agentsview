@@ -562,6 +562,124 @@ func TestDoSyncFullUsesDaemonResyncRoute(t *testing.T) {
 	env.assertNoLocalDB(t)
 }
 
+func TestDoSyncPrintsStatusBeforeWaitingForDaemonStartup(t *testing.T) {
+	env := newSyncCLIEnv(t)
+	ts := syncRouteTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/resync", r.URL.Path)
+		writeDoneSSE(t, w, agentsync.SyncStats{})
+	})
+	endpoint := serverEndpoint(t, ts)
+	startupEntered := make(chan struct{})
+	releaseStartup := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-releaseStartup:
+		default:
+			close(releaseStartup)
+		}
+	})
+	stubStartBackgroundServeForTransport(t, func(
+		context.Context, *config.Config, time.Duration,
+	) (*DaemonRuntime, error) {
+		close(startupEntered)
+		<-releaseStartup
+		return &DaemonRuntime{Host: endpoint.Host, Port: endpoint.Port}, nil
+	})
+
+	stdout := filepath.Join(t.TempDir(), "stdout")
+	outFile, err := os.Create(stdout)
+	require.NoError(t, err)
+	oldStdout := os.Stdout
+	os.Stdout = outFile
+	t.Cleanup(func() {
+		os.Stdout = oldStdout
+		_ = outFile.Close()
+	})
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- doSync(SyncConfig{Full: true})
+	}()
+	<-startupEntered
+	require.NoError(t, outFile.Sync())
+	output, err := os.ReadFile(stdout)
+	require.NoError(t, err)
+	assert.Contains(t, string(output), "Preparing full sync...")
+
+	close(releaseStartup)
+	assert.False(t, <-done)
+	require.NoError(t, outFile.Close())
+	os.Stdout = oldStdout
+	env.assertNoLocalDB(t)
+}
+
+func TestDoSyncFullSkipsRedundantDaemonInitialSync(t *testing.T) {
+	env := newSyncCLIEnv(t)
+	ts := syncRouteTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/resync", r.URL.Path)
+		writeDoneSSE(t, w, agentsync.SyncStats{})
+	})
+	endpoint := serverEndpoint(t, ts)
+	var skipInitialSync bool
+	stubStartBackgroundServeForTransport(t, func(
+		_ context.Context, cfg *config.Config, _ time.Duration,
+	) (*DaemonRuntime, error) {
+		skipInitialSync = cfg.SkipInitialSync
+		return &DaemonRuntime{Host: endpoint.Host, Port: endpoint.Port}, nil
+	})
+
+	hadFailures := doSync(SyncConfig{Full: true})
+
+	assert.False(t, hadFailures)
+	assert.True(t, skipInitialSync)
+	env.assertNoLocalDB(t)
+}
+
+func TestDoSyncSkipsRedundantDaemonInitialSync(t *testing.T) {
+	env := newSyncCLIEnv(t)
+	ts := syncRouteTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/v1/sync", r.URL.Path)
+		writeDoneSSE(t, w, agentsync.SyncStats{})
+	})
+	endpoint := serverEndpoint(t, ts)
+	var skipInitialSync bool
+	stubStartBackgroundServeForTransport(t, func(
+		_ context.Context, cfg *config.Config, _ time.Duration,
+	) (*DaemonRuntime, error) {
+		skipInitialSync = cfg.SkipInitialSync
+		return &DaemonRuntime{Host: endpoint.Host, Port: endpoint.Port}, nil
+	})
+
+	hadFailures := doSync(SyncConfig{})
+
+	assert.False(t, hadFailures)
+	assert.True(t, skipInitialSync)
+	env.assertNoLocalDB(t)
+}
+
+func TestDoSyncRemoteHostKeepsDaemonInitialLocalSync(t *testing.T) {
+	env := newSyncCLIEnv(t)
+	got, handler := captureRemoteSyncRequest(t)
+	ts := remoteSyncRouteTestServer(t, handler)
+	endpoint := serverEndpoint(t, ts)
+	var skipInitialSync bool
+	stubStartBackgroundServeForTransport(t, func(
+		_ context.Context, cfg *config.Config, _ time.Duration,
+	) (*DaemonRuntime, error) {
+		skipInitialSync = cfg.SkipInitialSync
+		return &DaemonRuntime{Host: endpoint.Host, Port: endpoint.Port}, nil
+	})
+
+	hadFailures := doSync(SyncConfig{Host: "host-a.example"})
+
+	assert.False(t, hadFailures)
+	assert.False(t, skipInitialSync,
+		"remote-only request needs the daemon startup local sync")
+	assert.False(t, got.IncludeLocal,
+		"the remote request must not duplicate the startup local sync")
+	env.assertNoLocalDB(t)
+}
+
 func TestRunDaemonSyncTrimsBaseURLTrailingSlash(t *testing.T) {
 	var syncCalled bool
 	ts := syncRouteTestServer(t, func(w http.ResponseWriter, r *http.Request) {
