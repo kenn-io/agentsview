@@ -372,6 +372,54 @@ func TestHTTPSyncLegacyRetainsCleanupWithoutLeakingExtractedRoot(t *testing.T) {
 		"retry must release both the spool and extracted legacy root")
 }
 
+func TestHTTPSyncLegacyRetainsSpoolWhenExtractionRootCreationFails(t *testing.T) {
+	archive := buildHTTPTestTar(t, map[string]string{
+		"home/user/session.jsonl": "complete",
+	})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(len(archive)))
+		_, _ = w.Write(archive)
+	}))
+	t.Cleanup(ts.Close)
+	validTemp := t.TempDir()
+	setPortableTempDir(t, validTemp)
+	invalidTemp := filepath.Join(t.TempDir(), "not-a-directory")
+	require.NoError(t, os.WriteFile(invalidTemp, []byte("block"), 0o600))
+	removeErr := errors.New("spool cleanup failed")
+	removeCalls := 0
+	hs := HTTPSync{
+		Host: "devbox",
+		URL:  ts.URL,
+		Progress: func(p syncpkg.Progress) {
+			if p.BytesDone == int64(len(archive)) {
+				for _, name := range []string{"TMPDIR", "TMP", "TEMP"} {
+					require.NoError(t, os.Setenv(name, invalidTemp))
+				}
+			}
+		},
+		removeArchiveSpool: func(string) error {
+			removeCalls++
+			if removeCalls == 1 {
+				return removeErr
+			}
+			return nil
+		},
+	}
+
+	root, err := hs.downloadAndExtract(
+		context.Background(), ts.Client(), TargetSet{},
+	)
+
+	assert.Empty(t, root)
+	require.ErrorContains(t, err, "create temp dir")
+	require.ErrorIs(t, err, removeErr)
+	var owner *downloadedArchiveCleanupError
+	require.ErrorAs(t, err, &owner,
+		"failed cleanup must retain the downloaded spool")
+	require.NoError(t, owner.RetryCleanup())
+	assert.Equal(t, 2, removeCalls)
+}
+
 func TestHTTPSyncRemovesSpooledArchiveOnCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	parent := filepath.Join(t.TempDir(), "remote-mirrors")

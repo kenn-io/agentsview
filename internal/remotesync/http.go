@@ -285,16 +285,16 @@ func (hs HTTPSync) downloadAndExtract(
 	if err != nil {
 		return "", err
 	}
-	tmpDir, err := os.MkdirTemp("", "agentsview-http-*")
-	if err != nil {
-		return "", fmt.Errorf("create temp dir: %w", err)
-	}
+	var tmpDir string
 	defer func() {
 		cleanupErr := archive.Close()
 		if err == nil && cleanupErr == nil {
 			return
 		}
-		rootErr := os.RemoveAll(tmpDir)
+		var rootErr error
+		if tmpDir != "" {
+			rootErr = os.RemoveAll(tmpDir)
+		}
 		if cleanupErr != nil || rootErr != nil {
 			var retainedArchive *downloadedArchive
 			if cleanupErr != nil {
@@ -311,6 +311,10 @@ func (hs HTTPSync) downloadAndExtract(
 		}
 		root = ""
 	}()
+	tmpDir, err = os.MkdirTemp("", "agentsview-http-*")
+	if err != nil {
+		return "", fmt.Errorf("create temp dir: %w", err)
+	}
 	extractLabel := fmt.Sprintf("Extracting session archive from %s", hs.Host)
 	if err := archive.extract(ctx, tmpDir, hs.Progress, extractLabel); err != nil {
 		return "", err

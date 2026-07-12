@@ -574,6 +574,78 @@ func TestRemoteHostSyncFuncSerializesWithEngineExclusiveLock(t *testing.T) {
 	}
 }
 
+type scheduledLockOrderRunner struct {
+	held bool
+}
+
+func (r *scheduledLockOrderRunner) RunExclusive(work func() error) error {
+	if r.held {
+		return errors.New("engine lock acquired recursively")
+	}
+	r.held = true
+	defer func() { r.held = false }()
+	return work()
+}
+
+type scheduledLockOrderCleanup struct {
+	runner  remoteSyncExclusiveRunner
+	retries int
+}
+
+func (c *scheduledLockOrderCleanup) Error() string { return "pending cleanup" }
+
+func (c *scheduledLockOrderCleanup) RetryCleanup() error {
+	c.retries++
+	if c.retries == 1 {
+		return errors.New("retain pending cleanup")
+	}
+	return c.runner.RunExclusive(func() error { return nil })
+}
+
+func TestRemoteHostSyncFuncAcquiresHTTPCleanupBeforeEngine(t *testing.T) {
+	originalRegistry := httpRemoteCleanupRegistry
+	httpRemoteCleanupRegistry = new(remotesync.CleanupRegistry)
+	t.Cleanup(func() { httpRemoteCleanupRegistry = originalRegistry })
+	runner := &scheduledLockOrderRunner{}
+	owner := &scheduledLockOrderCleanup{runner: runner}
+	_, seedErr := httpRemoteCleanupRegistry.Run(
+		func() (remotesync.SyncStats, error) {
+			return remotesync.SyncStats{}, owner
+		},
+	)
+	require.Error(t, seedErr)
+	originalHTTP := runHTTPRemoteSync
+	httpCalls := 0
+	runHTTPRemoteSync = func(
+		context.Context, config.Config, *db.DB, config.RemoteHost, bool,
+	) (remotesync.SyncStats, error) {
+		httpCalls++
+		return remotesync.SyncStats{SessionsSynced: 1}, nil
+	}
+	t.Cleanup(func() { runHTTPRemoteSync = originalHTTP })
+	database := dbtest.OpenTestDB(t)
+	syncFn := remoteHostSyncFunc(
+		context.Background(), config.Config{}, database, runner,
+		config.RemoteHost{Host: "http-host", Transport: config.RemoteTransportHTTP},
+		func(
+			ctx context.Context, cfg config.Config, database *db.DB,
+			rh config.RemoteHost, full bool,
+		) (remotesync.SyncStats, error) {
+			return runRemoteSyncTransportWithCleanup(
+				ctx, cfg, database, rh, full, false,
+			)
+		},
+	)
+
+	synced, err := syncFn()
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, synced)
+	assert.Equal(t, 1, httpCalls)
+	assert.Equal(t, 2, owner.retries,
+		"retained cleanup must acquire the engine before scheduled work")
+}
+
 func TestRemoteHostSyncFuncUsesCallerContext(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
@@ -628,7 +700,14 @@ func TestRemoteHostSyncFuncDispatchesHTTPTransport(t *testing.T) {
 			Transport: config.RemoteTransportHTTP,
 			URL:       "https://test-host.example.test",
 		},
-		runRemoteSyncTransport,
+		func(
+			ctx context.Context, cfg config.Config, database *db.DB,
+			rh config.RemoteHost, full bool,
+		) (remotesync.SyncStats, error) {
+			return runRemoteSyncTransportWithCleanup(
+				ctx, cfg, database, rh, full, false,
+			)
+		},
 	)
 
 	synced, err := syncFn()

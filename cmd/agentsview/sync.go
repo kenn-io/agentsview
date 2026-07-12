@@ -350,10 +350,26 @@ func runRemoteSyncTransport(
 	rh config.RemoteHost,
 	full bool,
 ) (remotesync.SyncStats, error) {
+	return runRemoteSyncTransportWithCleanup(
+		ctx, appCfg, database, rh, full, true,
+	)
+}
+
+func runRemoteSyncTransportWithCleanup(
+	ctx context.Context,
+	appCfg config.Config,
+	database *db.DB,
+	rh config.RemoteHost,
+	full bool,
+	acquireHTTPCleanup bool,
+) (remotesync.SyncStats, error) {
 	switch rh.Transport {
 	case "", config.RemoteTransportSSH:
 		return runSSHRemoteSync(ctx, appCfg, database, rh, full)
 	case config.RemoteTransportHTTP:
+		if !acquireHTTPCleanup {
+			return runHTTPRemoteSync(ctx, appCfg, database, rh, full)
+		}
 		return httpRemoteCleanupRegistry.Run(func() (remotesync.SyncStats, error) {
 			return runHTTPRemoteSync(ctx, appCfg, database, rh, full)
 		})

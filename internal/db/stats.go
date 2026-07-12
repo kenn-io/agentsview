@@ -58,12 +58,33 @@ func nonSourceBackedAgents() []parser.AgentType {
 func (db *DB) FileBackedSessionCount(
 	ctx context.Context,
 ) (int, error) {
+	return db.fileBackedSessionCount(ctx, "", false)
+}
+
+// FileBackedSessionCountForMachine returns the protected root-session count
+// for one sync source machine. Multi-source rebuilds use it so one healthy
+// source cannot satisfy the empty-discovery guard for another source.
+func (db *DB) FileBackedSessionCountForMachine(
+	ctx context.Context, machine string,
+) (int, error) {
+	return db.fileBackedSessionCount(ctx, machine, true)
+}
+
+func (db *DB) fileBackedSessionCount(
+	ctx context.Context, machine string, scoped bool,
+) (int, error) {
+	machinePredicate := ""
+	args := nonSourceBackedAgentArgs()
+	if scoped {
+		machinePredicate = " AND machine = ?"
+		args = append(args, machine)
+	}
 	var count int
 	err := db.getReader().QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM sessions
 		 WHERE agent NOT IN (`+nonSourceBackedAgentPlaceholders()+`)
-		 AND `+rootSessionFilter,
-		nonSourceBackedAgentArgs()...,
+		 AND `+rootSessionFilter+machinePredicate,
+		args...,
 	).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf(

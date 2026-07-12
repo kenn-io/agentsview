@@ -159,6 +159,49 @@ func TestResyncContributorsRunInOrderWithCumulativeProgress(t *testing.T) {
 	}, progressByContributor["B"])
 }
 
+func TestResyncAbortsWhenContributorLosesHistoricalSource(t *testing.T) {
+	localRoot := t.TempDir()
+	remoteRoot := t.TempDir()
+	writeSession := func(root, project, name, content string) string {
+		path := filepath.Join(root, project, name+".jsonl")
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(testjsonl.NewSessionBuilder().
+			AddClaudeUser("2026-01-01T00:00:00Z", content).String()), 0o644))
+		return path
+	}
+	writeSession(localRoot, "local", "local", "local source")
+	remotePath := writeSession(remoteRoot, "remote", "remote", "remote source")
+	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {localRoot}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+	options := RebuildOptions{Contributors: []RebuildContributor{{
+		Name: "remote",
+		Config: EngineConfig{
+			AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {remoteRoot}},
+			Machine:   "remote", IDPrefix: "remote~", Ephemeral: true,
+		},
+	}}}
+
+	initial, err := engine.ResyncAllWithOptions(context.Background(), nil, options)
+	require.NoError(t, err)
+	require.False(t, initial.Aborted)
+	require.NoError(t, os.Remove(remotePath))
+
+	stats, err := engine.ResyncAllWithOptions(context.Background(), nil, options)
+
+	require.NoError(t, err)
+	assert.True(t, stats.Aborted,
+		"a healthy local pass must not mask an empty historical contributor")
+	remote, err := database.GetSession(context.Background(), "remote~remote")
+	require.NoError(t, err)
+	assert.NotNil(t, remote, "aborted rebuild must preserve the active archive")
+}
+
 func TestResyncContributorPostSwapReopenFailureReturnsCoordinatorError(t *testing.T) {
 	root := t.TempDir()
 	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))

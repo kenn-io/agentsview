@@ -1392,7 +1392,17 @@ func startRemoteHostSync(
 ) {
 	syncFn := remoteHostSyncFunc(
 		ctx, cfg, database, engine, rh,
-		runRemoteSyncTransport,
+		func(
+			ctx context.Context,
+			cfg config.Config,
+			database *db.DB,
+			rh config.RemoteHost,
+			full bool,
+		) (remotesync.SyncStats, error) {
+			return runRemoteSyncTransportWithCleanup(
+				ctx, cfg, database, rh, full, false,
+			)
+		},
 	)
 	runRemoteHostSyncLoop(ctx, rh.Host, rh.Interval, syncFn, emitter, idleTracker, nil)
 }
@@ -1409,6 +1419,9 @@ type remoteSyncRunner func(
 	bool,
 ) (remotesync.SyncStats, error)
 
+// remoteHostSyncFunc owns the HTTP cleanup registry around the engine lock.
+// Its injected transport must therefore run HTTP without acquiring that
+// registry recursively; SSH transports have no cleanup-registry ownership.
 func remoteHostSyncFunc(
 	ctx context.Context,
 	cfg config.Config,
@@ -1421,12 +1434,24 @@ func remoteHostSyncFunc(
 		if runner == nil {
 			return 0, fmt.Errorf("scheduled remote sync missing exclusive runner")
 		}
+		runExclusive := func() (remotesync.SyncStats, error) {
+			var stats remotesync.SyncStats
+			err := runner.RunExclusive(func() error {
+				var err error
+				stats, err = runRemote(
+					ctx, cfg, database, rh, database.NeedsResync(),
+				)
+				return err
+			})
+			return stats, err
+		}
 		var stats remotesync.SyncStats
-		err := runner.RunExclusive(func() error {
-			var err error
-			stats, err = runRemote(ctx, cfg, database, rh, database.NeedsResync())
-			return err
-		})
+		var err error
+		if rh.Transport == config.RemoteTransportHTTP {
+			stats, err = httpRemoteCleanupRegistry.Run(runExclusive)
+		} else {
+			stats, err = runExclusive()
+		}
 		return stats.SessionsSynced, err
 	}
 }
