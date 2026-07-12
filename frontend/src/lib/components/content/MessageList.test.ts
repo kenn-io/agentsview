@@ -348,6 +348,25 @@ describe("MessageList follow cancellation", () => {
     expect(readProgress.get("s1")?.token).toBe("previous");
   });
 
+  it("skips a hidden system ordinal when inferring an appended boundary", async () => {
+    messages.messages = [
+      makeMessage(0),
+      { ...makeMessage(1), is_system: true },
+      makeMessage(2),
+    ];
+    messages.messageCount = 3;
+    messages.activeSessionToken = "current";
+    messages.activeSessionUnreadOrdinal = null;
+    setVirtualRows(2);
+    readProgress.baseline("s1", "previous", 0);
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    await new Promise((resolve) => window.setTimeout(resolve, 20));
+
+    expect(readProgress.get("s1")?.token).toBe("current");
+  });
+
   it("acknowledges a revised transcript with only system messages", async () => {
     messages.messages = [{ ...makeMessage(0), is_system: true }];
     messages.messageCount = 1;

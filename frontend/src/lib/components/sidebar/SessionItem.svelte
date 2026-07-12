@@ -104,14 +104,16 @@
     session.machine !== "local",
   );
 
-  let sessionToken = $derived(
-    buildReadProgressToken(session),
-  );
-
-  let hasUnread = $derived(
-    sessionToken !== null &&
-    readProgress.hasUnread(session.id, sessionToken),
-  );
+  let hasUnread = $derived.by(() => {
+    const candidates = groupSessions && !expanded
+      ? groupSessions
+      : [session];
+    return candidates.some((candidate) => {
+      const token = buildReadProgressToken(candidate);
+      return token !== null &&
+        readProgress.hasUnread(candidate.id, token);
+    });
+  });
 
   /** Whether this session is a team member (received a <teammate-message>). */
   let isTeamSession = $derived(

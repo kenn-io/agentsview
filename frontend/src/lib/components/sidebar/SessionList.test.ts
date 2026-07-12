@@ -743,6 +743,39 @@ describe("SessionList visible hydration", () => {
     expect(document.querySelectorAll(".group-hint-icon")).toHaveLength(1);
   });
 
+  it("shows unread state from a collapsed group child", async () => {
+    sessions.sessions = [
+      makeSession({
+        id: "root",
+        display_name: "Root",
+        transcript_revision: "same",
+        is_index_only: true,
+      }),
+      makeSession({
+        id: "team",
+        parent_session_id: "root",
+        display_name: "Changed team task",
+        is_teammate: true,
+        transcript_revision: "new",
+        is_index_only: true,
+      }),
+    ];
+    readProgress.baseline("root", "same", 0);
+    readProgress.baseline("team", "old", 0);
+    vi.spyOn(sessions, "hydrateVisibleSessions").mockResolvedValue(undefined);
+
+    component = mount(SessionList, { target: document.body });
+    await tick();
+
+    const indicator = document.querySelector(
+      '[aria-label="Unread messages"]',
+    );
+    expect(indicator).not.toBeNull();
+    expect(
+      indicator?.closest<HTMLElement>(".session-item")?.dataset.sessionId,
+    ).toBe("root");
+  });
+
   it("selects only rendered session rows when selecting all visible", async () => {
     sessions.sessions = [
       makeSession({

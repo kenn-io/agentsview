@@ -312,16 +312,15 @@
     latestOrdinal: number,
   ): number {
     const explicit = messages.activeSessionUnreadOrdinal;
-    if (explicit !== null) {
-      return baseMessages.find((message) =>
-        message.ordinal >= explicit
-      )?.ordinal ?? latestOrdinal;
-    }
     const earliestOrdinal = baseMessages[0]?.ordinal ?? latestOrdinal;
-    if (marker.ordinal === null || marker.ordinal >= latestOrdinal) {
-      return earliestOrdinal;
-    }
-    return marker.ordinal + 1;
+    const boundary = explicit !== null
+      ? explicit
+      : marker.ordinal === null || marker.ordinal >= latestOrdinal
+        ? earliestOrdinal
+        : marker.ordinal + 1;
+    return baseMessages.find((message) =>
+      message.ordinal >= boundary
+    )?.ordinal ?? latestOrdinal;
   }
 
   $effect(() => {
@@ -779,8 +778,13 @@
       : displayItemsAsc;
 
     if (ui.sortNewestFirst) {
+      const inferredAppendBoundary =
+        messages.activeSessionUnreadOrdinal === null &&
+        marker.ordinal !== null &&
+        marker.ordinal < latestOrdinal;
       const dividerBoundary = marker.ordinal !== null &&
-          unreadBoundary === marker.ordinal + 1
+          (inferredAppendBoundary ||
+            unreadBoundary === marker.ordinal + 1)
         ? marker.ordinal
         : unreadBoundary;
       for (const item of items) {
