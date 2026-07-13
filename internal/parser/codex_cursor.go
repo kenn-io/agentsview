@@ -26,6 +26,7 @@ const (
 type codexCursorState struct {
 	model                    string
 	cwd                      string
+	agentPath                string
 	firstUserDigest          [sha256.Size]byte
 	firstUserSeen            bool
 	sawUserTurnAfterFirst    bool
@@ -229,6 +230,7 @@ func newCodexCursorKey(
 func cloneCodexCursorState(state codexCursorState) codexCursorState {
 	state.model = strings.Clone(state.model)
 	state.cwd = strings.Clone(state.cwd)
+	state.agentPath = strings.Clone(state.agentPath)
 	state.lastTaskEvent = strings.Clone(state.lastTaskEvent)
 	return state
 }
@@ -241,6 +243,7 @@ func estimateCodexCursorEntryBytes(
 		len(key.path)+
 			len(state.model)+
 			len(state.cwd)+
+			len(state.agentPath)+
 			len(state.lastTaskEvent),
 	)
 }

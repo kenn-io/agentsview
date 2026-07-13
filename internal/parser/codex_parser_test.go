@@ -201,6 +201,50 @@ func TestParseCodexSession_SubagentActivityLinksSpawn(t *testing.T) {
 	assert.False(t, codexIncrementalNeedsFullParse(interacted))
 }
 
+func TestParseCodexSession_InboundAgentMessagesAreUserTurns(t *testing.T) {
+	const (
+		initialTask = "Inspect the parser and report the root cause."
+		followUp    = "Also identify the safest regression test."
+	)
+	initialContext := fmt.Sprintf(
+		`{"timestamp":%q,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<recommended_plugins>\nplugin list\n</recommended_plugins>"},{"type":"input_text","text":"# AGENTS.md\n<INSTRUCTIONS>\nRepository rules\n</INSTRUCTIONS>"},{"type":"input_text","text":"<environment_context>\n<cwd>/tmp/project</cwd>\n</environment_context>"}]}}`,
+		tsEarlyS1,
+	)
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSubagentSessionMetaJSON(
+			"child", "parent", "/tmp/project", "user", tsEarly,
+		),
+		initialContext,
+		testjsonl.CodexAgentMessageJSON(
+			"/root", "/root/worker", "Task received from parent.",
+			initialTask, tsEarlyS5,
+		),
+		testjsonl.CodexMsgJSON(
+			"assistant", "I found the parser branch.", tsLate,
+		),
+		testjsonl.CodexAgentMessageJSON(
+			"/root/worker", "/root", "Update sent to parent.",
+			"This outbound update must stay hidden.", tsLateS5,
+		),
+		testjsonl.CodexAgentMessageJSON(
+			"/root", "/root/worker", "Follow-up received from parent.",
+			followUp, "2024-01-01T11:00:10Z",
+		),
+	)
+
+	sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+	require.NotNil(t, sess)
+	assert.Equal(t, initialTask, sess.FirstMessage)
+	require.Len(t, msgs, 3)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, initialTask, msgs[0].Content)
+	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	assert.Equal(t, "I found the parser branch.", msgs[1].Content)
+	assert.Equal(t, RoleUser, msgs[2].Role)
+	assert.Equal(t, followUp, msgs[2].Content)
+}
+
 func TestParseCodexSession_UsesThreadNameFromSessionIndex(t *testing.T) {
 	root := t.TempDir()
 	sessionDir := filepath.Join(root, "sessions", "2026", "06", "11")

@@ -160,6 +160,8 @@ func CodexSubagentSessionMetaJSON(
 			"id":               id,
 			"cwd":              cwd,
 			"originator":       originator,
+			"agent_nickname":   "worker",
+			"agent_path":       "/root/worker",
 			"parent_thread_id": parentID,
 			"session_id":       parentID,
 			"thread_source":    "subagent",
@@ -168,7 +170,37 @@ func CodexSubagentSessionMetaJSON(
 					"thread_spawn": map[string]any{
 						"parent_thread_id": parentID,
 						"depth":            1,
+						"agent_nickname":   "worker",
+						"agent_path":       "/root/worker",
 					},
+				},
+			},
+		},
+	}
+	return mustMarshal(m)
+}
+
+// CodexAgentMessageJSON returns a current Codex inter-agent message. Codex
+// stores the delivered task in the encrypted_content field even when its
+// value is plaintext.
+func CodexAgentMessageJSON(
+	author, recipient, visibleContent, deliveredContent, timestamp string,
+) string {
+	m := map[string]any{
+		"type":      "response_item",
+		"timestamp": timestamp,
+		"payload": map[string]any{
+			"type":      "agent_message",
+			"author":    author,
+			"recipient": recipient,
+			"content": []map[string]any{
+				{
+					"type": "input_text",
+					"text": visibleContent,
+				},
+				{
+					"type":              "encrypted_content",
+					"encrypted_content": deliveredContent,
 				},
 			},
 		},

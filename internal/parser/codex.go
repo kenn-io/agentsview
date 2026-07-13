@@ -239,6 +239,12 @@ func (b *codexSessionBuilder) handleSessionMeta(
 	payload gjson.Result, envelopeTS time.Time,
 ) (skip bool) {
 	b.sessionID = payload.Get("id").Str
+	b.agentPath = strings.TrimSpace(payload.Get("agent_path").Str)
+	if b.agentPath == "" {
+		b.agentPath = strings.TrimSpace(
+			payload.Get("source.subagent.thread_spawn.agent_path").Str,
+		)
+	}
 	b.parentSessionID = strings.TrimSpace(
 		payload.Get("source.subagent.thread_spawn.parent_thread_id").Str,
 	)
@@ -277,6 +283,9 @@ func (b *codexSessionBuilder) handleResponseItem(
 		return
 	case "function_call_output", "custom_tool_call_output":
 		b.handleFunctionCallOutput(payload, ts)
+		return
+	case "agent_message":
+		b.handleAgentMessage(payload, ts)
 		return
 	}
 
@@ -326,6 +335,33 @@ func (b *codexSessionBuilder) handleResponseItem(
 	b.messages = append(b.messages, ParsedMessage{
 		Ordinal:       b.ordinal,
 		Role:          RoleType(role),
+		Content:       content,
+		Timestamp:     ts,
+		ContentLength: len(content),
+		Model:         b.model,
+	})
+	b.ordinal++
+}
+
+func (b *codexSessionBuilder) handleAgentMessage(
+	payload gjson.Result, ts time.Time,
+) {
+	content := extractCodexInboundAgentMessage(payload, b.agentPath)
+	if strings.TrimSpace(content) == "" {
+		return
+	}
+	first, replay := b.observeUserPrompt(content)
+	if first {
+		b.firstMessage = truncate(
+			strings.ReplaceAll(content, "\n", " "), 300,
+		)
+	}
+	if replay {
+		return
+	}
+	b.messages = append(b.messages, ParsedMessage{
+		Ordinal:       b.ordinal,
+		Role:          RoleUser,
 		Content:       content,
 		Timestamp:     ts,
 		ContentLength: len(content),
@@ -1293,6 +1329,27 @@ func extractCodexContent(payload gjson.Result) string {
 	return strings.Join(extractCodexTextBlocks(payload), "\n")
 }
 
+func extractCodexInboundAgentMessage(
+	payload gjson.Result, agentPath string,
+) string {
+	if agentPath == "" ||
+		strings.TrimSpace(payload.Get("recipient").Str) != agentPath {
+		return ""
+	}
+	var texts []string
+	payload.Get("content").ForEach(
+		func(_, block gjson.Result) bool {
+			if block.Get("type").Str == "encrypted_content" {
+				if text := block.Get("encrypted_content").Str; text != "" {
+					texts = append(texts, text)
+				}
+			}
+			return true
+		},
+	)
+	return strings.Join(texts, "\n")
+}
+
 // extractCodexInitialUserContent filters the synthetic blocks bundled with
 // Codex's recommended-plugins injection while retaining user-authored blocks
 // from the same response item.
@@ -1718,6 +1775,14 @@ func seedCodexIncrementalStateFromReader(
 				if cwd := payload.Get("cwd").Str; cwd != "" {
 					seed.cwd = cwd
 				}
+				seed.agentPath = strings.TrimSpace(
+					payload.Get("agent_path").Str,
+				)
+				if seed.agentPath == "" {
+					seed.agentPath = strings.TrimSpace(payload.Get(
+						"source.subagent.thread_spawn.agent_path",
+					).Str)
+				}
 				seed.forkGate.armFromMeta(
 					payload,
 					parseTimestamp(gjson.Get(line, "timestamp").Str),
@@ -1757,6 +1822,13 @@ func observeCodexIncrementalUserMessage(
 	s *codexIncrementalSeed,
 	payload gjson.Result,
 ) {
+	if payload.Get("type").Str == "agent_message" {
+		content := extractCodexInboundAgentMessage(payload, s.agentPath)
+		if strings.TrimSpace(content) != "" {
+			s.observeUserPrompt(content)
+		}
+		return
+	}
 	if payload.Get("role").Str != "user" {
 		return
 	}

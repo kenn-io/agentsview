@@ -919,6 +919,63 @@ func TestCodexProviderTokenCountCursorParity(t *testing.T) {
 	}
 }
 
+func TestCodexProviderParseIncrementalInboundAgentMessage(t *testing.T) {
+	root := t.TempDir()
+	const uuid = "01900000-0000-7000-8000-000000000002"
+	initial := testjsonl.JoinJSONL(
+		testjsonl.CodexSubagentSessionMetaJSON(
+			uuid, "01900000-0000-7000-8000-000000000001",
+			"/tmp/project", "user", tsEarly,
+		),
+		testjsonl.CodexAgentMessageJSON(
+			"/root", "/root/worker", "Task received from parent.",
+			"Inspect the parser.", tsEarlyS1,
+		),
+	)
+	path := writeCodexProviderSessionContent(t, root, uuid, initial)
+	provider, ok := NewProvider(
+		AgentCodex, ProviderConfig{Roots: []string{root}},
+	)
+	require.True(t, ok)
+	source := requireCodexProviderSource(t, provider, uuid)
+	initialFingerprint, err := provider.Fingerprint(
+		context.Background(), source,
+	)
+	require.NoError(t, err)
+	full, err := provider.Parse(context.Background(), ParseRequest{
+		Source: source, Fingerprint: initialFingerprint,
+	})
+	require.NoError(t, err)
+	require.Len(t, full.Results, 1)
+	require.Len(t, full.Results[0].Result.Messages, 1)
+
+	tail := testjsonl.CodexAgentMessageJSON(
+		"/root", "/root/worker", "Follow-up received from parent.",
+		"Check incremental parsing too.", tsEarlyS5,
+	) + "\n"
+	appendCodexProviderContent(t, path, tail)
+	currentFingerprint, err := provider.Fingerprint(
+		context.Background(), source,
+	)
+	require.NoError(t, err)
+
+	outcome, status, err := provider.ParseIncremental(
+		context.Background(),
+		IncrementalRequest{
+			Source: source, Fingerprint: currentFingerprint,
+			SessionID: "codex:" + uuid,
+			Offset:    initialFingerprint.Size, StartOrdinal: 1,
+		},
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, IncrementalApplied, status)
+	require.Len(t, outcome.Messages, 1)
+	assert.Equal(t, RoleUser, outcome.Messages[0].Role)
+	assert.Equal(t, "Check incremental parsing too.", outcome.Messages[0].Content)
+	assert.Equal(t, 1, outcome.Messages[0].Ordinal)
+}
+
 func TestCodexProviderParseIncrementalNoLifecycleMarker(t *testing.T) {
 	root := t.TempDir()
 	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229e5"
