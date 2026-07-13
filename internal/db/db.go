@@ -33,6 +33,11 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
+// Bumped to 63: the Codex parser now persists subagent lineage from
+// session metadata and links current sub_agent_activity spawn events.
+// Existing Codex rows need re-parsing so parent relationships and
+// tool-call links are backfilled.
+//
 // Bumped to 61: the ZCode parser now persists transcript messages,
 // tool calls, and tool results from the message/part tables.
 // Existing ZCode rows need re-parsing so stored sessions backfill
@@ -294,7 +299,7 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // (62: Local session machine identity now uses the operating-system hostname
 // instead of the ambiguous literal "local". Re-parsing updates existing
 // source-backed rows while the resync archive copy preserves orphaned history.)
-const dataVersion = 62
+const dataVersion = 63
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 

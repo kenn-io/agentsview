@@ -148,6 +148,52 @@ func CodexSessionMetaJSON(
 	return mustMarshal(m)
 }
 
+// CodexSubagentSessionMetaJSON returns the session_meta shape written by
+// current Codex multi-agent rollouts.
+func CodexSubagentSessionMetaJSON(
+	id, parentID, cwd, originator, timestamp string,
+) string {
+	m := map[string]any{
+		"type":      "session_meta",
+		"timestamp": timestamp,
+		"payload": map[string]any{
+			"id":               id,
+			"cwd":              cwd,
+			"originator":       originator,
+			"parent_thread_id": parentID,
+			"session_id":       parentID,
+			"thread_source":    "subagent",
+			"source": map[string]any{
+				"subagent": map[string]any{
+					"thread_spawn": map[string]any{
+						"parent_thread_id": parentID,
+						"depth":            1,
+					},
+				},
+			},
+		},
+	}
+	return mustMarshal(m)
+}
+
+// CodexSubagentActivityJSON returns a current Codex sub-agent lifecycle event.
+func CodexSubagentActivityJSON(
+	kind, eventID, agentThreadID, agentPath, timestamp string,
+) string {
+	m := map[string]any{
+		"type":      "event_msg",
+		"timestamp": timestamp,
+		"payload": map[string]any{
+			"type":            "sub_agent_activity",
+			"kind":            kind,
+			"event_id":        eventID,
+			"agent_thread_id": agentThreadID,
+			"agent_path":      agentPath,
+		},
+	}
+	return mustMarshal(m)
+}
+
 // CodexForkedSessionMetaJSON returns the session_meta of a forked
 // Codex session (payload carries forked_from_id).
 func CodexForkedSessionMetaJSON(

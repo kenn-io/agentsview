@@ -61,6 +61,8 @@ type codexSessionBuilder struct {
 	startedAt            time.Time
 	endedAt              time.Time
 	sessionID            string
+	parentSessionID      string
+	relationshipType     RelationshipType
 	project              string
 	ordinal              int
 	callNames            map[string]string
@@ -237,6 +239,19 @@ func (b *codexSessionBuilder) handleSessionMeta(
 	payload gjson.Result, envelopeTS time.Time,
 ) (skip bool) {
 	b.sessionID = payload.Get("id").Str
+	b.parentSessionID = strings.TrimSpace(
+		payload.Get("source.subagent.thread_spawn.parent_thread_id").Str,
+	)
+	if b.parentSessionID == "" &&
+		payload.Get("thread_source").Str == "subagent" {
+		b.parentSessionID = strings.TrimSpace(
+			payload.Get("parent_thread_id").Str,
+		)
+	}
+	if b.parentSessionID != "" {
+		b.parentSessionID = codexSubagentSessionID(b.parentSessionID)
+		b.relationshipType = RelSubagent
+	}
 
 	if cwd := payload.Get("cwd").Str; cwd != "" {
 		b.cwd = cwd
@@ -328,6 +343,8 @@ func (b *codexSessionBuilder) handleEventMsg(payload gjson.Result) {
 		b.handleTokenCountEvent(payload)
 	case "collab_agent_spawn_end":
 		b.handleCollabAgentSpawnEnd(payload)
+	case "sub_agent_activity":
+		b.handleSubagentActivity(payload)
 	}
 }
 
@@ -364,6 +381,21 @@ func (b *codexSessionBuilder) handleCollabAgentSpawnEnd(
 ) {
 	callID := payload.Get("call_id").Str
 	agentID := strings.TrimSpace(payload.Get("new_thread_id").Str)
+	if callID == "" || agentID == "" {
+		return
+	}
+	b.agentSpawnCalls[agentID] = callID
+	b.setCallSubagentSessionID(callID, codexSubagentSessionID(agentID))
+}
+
+func (b *codexSessionBuilder) handleSubagentActivity(
+	payload gjson.Result,
+) {
+	if payload.Get("kind").Str != "started" {
+		return
+	}
+	callID := payload.Get("event_id").Str
+	agentID := strings.TrimSpace(payload.Get("agent_thread_id").Str)
 	if callID == "" || agentID == "" {
 		return
 	}
@@ -1416,6 +1448,8 @@ func (p *codexProvider) parseSessionSnapshot(
 		Project:           b.project,
 		Machine:           machine,
 		Agent:             AgentCodex,
+		ParentSessionID:   b.parentSessionID,
+		RelationshipType:  b.relationshipType,
 		Cwd:               b.cwd,
 		FirstMessage:      b.firstMessage,
 		SessionName:       LookupCodexThreadName(path, b.sessionID),
@@ -2166,8 +2200,15 @@ func isCodexSubagentNotification(content string) bool {
 func codexIncrementalNeedsFullParse(line string) bool {
 	switch gjson.Get(line, "type").Str {
 	case codexTypeEventMsg:
-		return gjson.Get(line, "payload.type").Str ==
-			"collab_agent_spawn_end"
+		payload := gjson.Get(line, "payload")
+		switch payload.Get("type").Str {
+		case "collab_agent_spawn_end":
+			return true
+		case "sub_agent_activity":
+			return payload.Get("kind").Str == "started"
+		default:
+			return false
+		}
 	case codexTypeResponseItem:
 	default:
 		return false

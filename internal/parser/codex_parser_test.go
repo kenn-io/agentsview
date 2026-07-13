@@ -117,6 +117,90 @@ func TestParseCodexSession_Basic(t *testing.T) {
 	assertSessionMeta(t, sess, "codex:abc-123", "my_api", AgentCodex)
 }
 
+func TestParseCodexSession_SubagentLineage(t *testing.T) {
+	const (
+		childID  = "01900000-0000-7000-8000-000000000002"
+		parentID = "01900000-0000-7000-8000-000000000001"
+	)
+
+	tests := []struct {
+		name             string
+		meta             string
+		wantParent       string
+		wantRelationship RelationshipType
+	}{
+		{
+			name: "current nested source",
+			meta: fmt.Sprintf(
+				`{"timestamp":%q,"type":"session_meta","payload":{"id":%q,"cwd":"/tmp","source":{"subagent":{"thread_spawn":{"parent_thread_id":%q,"depth":1}}}}}`,
+				tsEarly, childID, parentID,
+			),
+			wantParent:       "codex:" + parentID,
+			wantRelationship: RelSubagent,
+		},
+		{
+			name: "legacy top-level fields",
+			meta: fmt.Sprintf(
+				`{"timestamp":%q,"type":"session_meta","payload":{"id":%q,"cwd":"/tmp","thread_source":"subagent","parent_thread_id":%q}}`,
+				tsEarly, childID, parentID,
+			),
+			wantParent:       "codex:" + parentID,
+			wantRelationship: RelSubagent,
+		},
+		{
+			name:             "root session",
+			meta:             testjsonl.CodexSessionMetaJSON(childID, "/tmp", "user", tsEarly),
+			wantRelationship: RelNone,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sess, _ := runCodexParserTest(t, "test.jsonl", tt.meta, false)
+
+			require.NotNil(t, sess)
+			assert.Equal(t, tt.wantParent, sess.ParentSessionID)
+			assert.Equal(t, tt.wantRelationship, sess.RelationshipType)
+		})
+	}
+}
+
+func TestParseCodexSession_SubagentActivityLinksSpawn(t *testing.T) {
+	const childID = "01900000-0000-7000-8000-000000000002"
+	activity := testjsonl.CodexSubagentActivityJSON(
+		"started", "call_spawn", childID,
+		"/root/identity_lifecycle", tsLate,
+	)
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON("parent", "/tmp", "user", tsEarly),
+		testjsonl.CodexMsgJSON("user", "delegate the task", tsEarlyS1),
+		testjsonl.CodexFunctionCallWithCallIDJSON(
+			"spawn_agent", "call_spawn",
+			map[string]any{"task_name": "identity_lifecycle"}, tsEarlyS5,
+		),
+		activity,
+		testjsonl.CodexFunctionCallOutputJSON(
+			"call_spawn", `{"task_name":"/root/identity_lifecycle"}`, tsLateS5,
+		),
+	)
+
+	_, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+	require.Len(t, msgs, 2)
+	assertToolCalls(t, msgs[1].ToolCalls, []ParsedToolCall{{
+		ToolUseID:         "call_spawn",
+		ToolName:          "spawn_agent",
+		Category:          "Task",
+		SubagentSessionID: "codex:" + childID,
+	}})
+	assert.True(t, codexIncrementalNeedsFullParse(activity))
+	interacted := testjsonl.CodexSubagentActivityJSON(
+		"interacted", "call_message", childID,
+		"/root/identity_lifecycle", tsLateS5,
+	)
+	assert.False(t, codexIncrementalNeedsFullParse(interacted))
+}
+
 func TestParseCodexSession_UsesThreadNameFromSessionIndex(t *testing.T) {
 	root := t.TempDir()
 	sessionDir := filepath.Join(root, "sessions", "2026", "06", "11")
