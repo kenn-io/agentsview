@@ -25,8 +25,8 @@ otherwise hide an invalid vector.
 - If retries are exhausted, abort safely with the affected document pending and
   without a vector or completion stamp.
 - Document cache-safe Ollama and direct `llama-server` operation for embeddings.
-- Recover a corrupted local generation through the supported transactional full
-  rebuild path and verify semantic search afterward.
+- Repair a corrupted local generation by invalidating and regenerating only
+  documents that contain an invalid stored chunk.
 
 ## Non-goals
 
@@ -99,8 +99,30 @@ should disable that cache, since independent document embeddings do not benefit
 from conversational prefix reuse.
 
 The error taxonomy will include non-finite and zero-norm response failures and
-will direct operators to correct the endpoint configuration before running a
-full rebuild.
+will direct operators to correct the endpoint configuration before repairing the
+affected stored vectors.
+
+### Targeted stored-vector repair
+
+`agentsview embeddings build` will gain an explicit `--repair-invalid` option.
+It will scan only the target generation selected by the normal build-resolution
+logic. The scan will stream each chunk's raw sqlite-vec float32 blob and its
+document key, applying the same finite and non-zero validation used for new
+endpoint responses. A malformed blob length is also invalid stored data.
+
+If any chunk is invalid, the whole document must be regenerated because the
+generation stamp covers the document and `SaveVectors` replaces all of its
+chunks together. After the read scan closes, one write transaction will remove
+only the affected documents' rows from the target generation's vec0 table, their
+target-generation chunk-map rows, and their target-generation stamps. Other
+documents and other generations remain unchanged. Removing the stamps makes
+those documents pending for the incremental fill that follows in the same build
+call.
+
+The integrity scan is opt-in rather than part of every scheduled incremental
+build. It necessarily scales with the stored generation, while background sync
+work must remain bounded by changed input. Build results and CLI output will
+report how many documents and chunks were invalidated.
 
 ### Local recovery
 
@@ -113,14 +135,13 @@ and non-zero norm.
 Recovery will use:
 
 ```text
-agentsview embeddings build --full-rebuild --yes
+agentsview embeddings build --repair-invalid
 ```
 
-For an unchanged active fingerprint, the existing full-rebuild implementation
-transactionally clears that generation's vec0 rows, chunk map, and stamps, then
-refills it. This removes both known and undiscovered invalid vectors without
-ad-hoc SQL against a database owned by the daemon. It does not touch the session
-archive.
+The command will scan the active target generation through the daemon, remove
+only documents containing invalid chunks, and let the ordinary incremental fill
+regenerate them. This avoids ad-hoc SQL against a database owned by the daemon,
+does not recompute valid embeddings, and does not touch the session archive.
 
 After completion, verification will require:
 
@@ -138,7 +159,9 @@ Focused Go tests will cover behavior owned by AgentsView:
 - an invalid response followed by a valid response succeeds through the existing
   retry mechanism;
 - a custom build encoder returning an invalid vector cannot create either a
-  chunk vector or a generation stamp; and
+  chunk vector or a generation stamp;
+- targeted repair invalidates every chunk and the stamp for a document with one
+  bad chunk, while preserving valid documents and every other generation; and
 - valid finite, non-zero vectors continue through the existing response and
   build paths.
 
