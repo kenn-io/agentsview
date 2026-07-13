@@ -35,7 +35,14 @@ const STATUS_PROBE_TIMEOUT: Duration = Duration::from_millis(1250);
 const STATUS_PROBE_FAILURE_NOTICE_AFTER: u32 = 10;
 const STATUS_PROBE_FAILURE_FAIL_AFTER: u32 = 30;
 const LOGIN_SHELL_ENV_TIMEOUT: Duration = Duration::from_secs(3);
-const UPDATE_SIDECAR_STOP_TIMEOUT: Duration = Duration::from_secs(10);
+// Stopping the detached daemon before an update install must outlast
+// both a daemon that is still mid-startup (serve stop refuses with
+// "retry once it is ready" while the startup sync runs, which takes
+// tens of seconds on large archives) and serve stop's own 10s graceful
+// shutdown window before it escalates to a forced kill.
+const UPDATE_SIDECAR_STOP_TIMEOUT: Duration = Duration::from_secs(120);
+const UPDATE_STOP_RETRY_INTERVAL: Duration = Duration::from_secs(2);
+const SERVE_STOP_STARTING_RETRY_HINT: &str = "a server is starting; retry once it is ready";
 const DATA_VERSION_TOO_NEW_EXIT_CODE: i32 = 3;
 const DESKTOP_LOG_FILE_NAME: &str = "agentsview-desktop.log";
 const DESKTOP_LOG_QUEUE_CAPACITY: usize = 64;
@@ -2401,13 +2408,21 @@ async fn check_for_updates(handle: &AppHandle, silent: bool) {
         |bytes| update.install(bytes),
     ) {
         eprintln!("[agentsview] update install failed: {err}");
+        let message = match err {
+            InstallDownloadedUpdateError::BackendStopTimedOut => {
+                "The update was downloaded, but the local backend \
+                 could not be stopped in time. Please try again in \
+                 a moment."
+            }
+            InstallDownloadedUpdateError::Install(_) => {
+                "Failed to install the update. \
+                 Please try downloading manually from the releases page."
+            }
+        };
         let h = handle.clone();
         handle
             .dialog()
-            .message(
-                "Failed to install the update. \
-                 Please try downloading manually from the releases page.",
-            )
+            .message(message)
             .title("Update Failed")
             .show(move |_| restore_webview_focus(&h));
         return;
@@ -2518,6 +2533,7 @@ async fn stop_backend_and_wait(app: AppHandle, timeout: Duration) -> bool {
 fn stop_backend_inner(app: &AppHandle, wait_timeout: Option<Duration>) -> bool {
     let state = app.state::<SidecarState>();
     if let Some(timeout) = wait_timeout {
+        let deadline = Instant::now() + timeout;
         begin_update_stop_wait(&state);
         let mut waited_generation = None;
         let detached_port = current_backend_port(app);
@@ -2541,22 +2557,22 @@ fn stop_backend_inner(app: &AppHandle, wait_timeout: Option<Duration>) -> bool {
                 app,
                 &state,
                 generation,
-                wait_for_sidecar_termination(&state, generation, timeout),
+                wait_for_sidecar_termination(&state, generation, remaining_timeout(deadline)),
             );
             launcher_stopped
-                && stop_detached_backend_for_update_with_port(app, timeout, detached_port)
+                && stop_detached_backend_for_update_with_port(app, deadline, detached_port)
         } else if let Some(generation) = current_stopping_generation(&state) {
             waited_generation = Some(generation);
             let launcher_stopped = finish_backend_stop_wait(
                 app,
                 &state,
                 generation,
-                wait_for_sidecar_termination(&state, generation, timeout),
+                wait_for_sidecar_termination(&state, generation, remaining_timeout(deadline)),
             );
             launcher_stopped
-                && stop_detached_backend_for_update_with_port(app, timeout, detached_port)
+                && stop_detached_backend_for_update_with_port(app, deadline, detached_port)
         } else {
-            stop_detached_backend_for_update(app, timeout)
+            stop_detached_backend_for_update_with_port(app, deadline, detached_port)
         };
         end_update_stop_wait(&state);
         if let Some(generation) = waited_generation {
@@ -2596,29 +2612,42 @@ fn current_backend_port(app: &AppHandle) -> Option<u16> {
         .and_then(|guard| *guard)
 }
 
-fn stop_detached_backend_for_update(app: &AppHandle, timeout: Duration) -> bool {
-    stop_detached_backend_for_update_with_port(app, timeout, current_backend_port(app))
-}
-
 fn stop_detached_backend_for_update_with_port(
     app: &AppHandle,
-    timeout: Duration,
+    deadline: Instant,
     port: Option<u16>,
 ) -> bool {
-    let deadline = Instant::now() + timeout;
-    let (mut rx, child) = match spawn_sidecar_with_args(app, sidecar_stop_args()) {
-        Ok(spawned) => spawned,
-        Err(err) => {
-            eprintln!("[agentsview] failed to run serve stop before update install: {err}");
-            return false;
-        }
-    };
-    if !wait_for_stop_launcher(&mut rx, remaining_timeout(deadline)) {
-        let _ = child.kill();
+    // serve stop exits non-zero while the daemon is still starting up
+    // ("a server is starting; retry once it is ready"), so a single
+    // failed attempt must not abort the update. Retry until the
+    // deadline passes.
+    let result = retry_stop_launcher(
+        deadline,
+        UPDATE_STOP_RETRY_INTERVAL,
+        |remaining| {
+            let (mut rx, child) = match spawn_sidecar_with_args(app, sidecar_stop_args()) {
+                Ok(spawned) => spawned,
+                Err(err) => {
+                    eprintln!("[agentsview] failed to run serve stop before update install: {err}");
+                    return StopLauncherResult::Fatal;
+                }
+            };
+            let result = wait_for_stop_launcher(&mut rx, remaining);
+            if result != StopLauncherResult::Success {
+                let _ = child.kill();
+            }
+            result
+        },
+        thread::sleep,
+    );
+    if result != StopLauncherResult::Success {
         if port.is_none() {
             eprintln!(
                 "[agentsview] serve stop did not report success, but no detached daemon port is known"
             );
+        }
+        if result == StopLauncherResult::RetryableStartup {
+            eprintln!("[agentsview] gave up stopping the backend before update install");
         }
         return false;
     }
@@ -2634,38 +2663,85 @@ fn stop_detached_backend_for_update_with_port(
     true
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StopLauncherResult {
+    Success,
+    RetryableStartup,
+    Fatal,
+}
+
+fn retry_stop_launcher<A, S>(
+    deadline: Instant,
+    retry_interval: Duration,
+    mut attempt: A,
+    mut sleep: S,
+) -> StopLauncherResult
+where
+    A: FnMut(Duration) -> StopLauncherResult,
+    S: FnMut(Duration),
+{
+    loop {
+        let result = attempt(remaining_timeout(deadline));
+        if result != StopLauncherResult::RetryableStartup {
+            return result;
+        }
+        if remaining_timeout(deadline) <= retry_interval {
+            return result;
+        }
+        sleep(retry_interval);
+    }
+}
+
 fn remaining_timeout(deadline: Instant) -> Duration {
     deadline
         .checked_duration_since(Instant::now())
         .unwrap_or_default()
 }
 
-fn wait_for_stop_launcher(rx: &mut CommandRx, timeout: Duration) -> bool {
+fn wait_for_stop_launcher(rx: &mut CommandRx, timeout: Duration) -> StopLauncherResult {
     let deadline = Instant::now() + timeout;
+    let mut output = String::new();
     loop {
         match rx.try_recv() {
-            Ok(CommandEvent::Terminated(payload)) => return payload.code.unwrap_or(1) == 0,
+            Ok(CommandEvent::Terminated(payload)) => {
+                return classify_stop_launcher_termination(payload.code, &output);
+            }
             Ok(CommandEvent::Stdout(bytes)) => {
                 let line = String::from_utf8_lossy(&bytes);
                 eprintln!("[agentsview] {}", line.trim_end());
+                output.push_str(&line);
             }
             Ok(CommandEvent::Stderr(bytes)) => {
                 let line = String::from_utf8_lossy(&bytes);
                 eprintln!("[agentsview:stderr] {}", line.trim_end());
+                output.push_str(&line);
             }
             Ok(CommandEvent::Error(err)) => {
                 eprintln!("[agentsview:error] {err}");
+                return StopLauncherResult::Fatal;
             }
             Ok(_) => {}
             Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
-            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => return false,
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                return StopLauncherResult::Fatal;
+            }
         }
         if Instant::now() >= deadline {
             eprintln!("[agentsview] timed out waiting for serve stop before update install");
-            return false;
+            return StopLauncherResult::Fatal;
         }
         thread::sleep(READY_POLL_INTERVAL);
     }
+}
+
+fn classify_stop_launcher_termination(code: Option<i32>, output: &str) -> StopLauncherResult {
+    if code == Some(0) {
+        return StopLauncherResult::Success;
+    }
+    if output.contains(SERVE_STOP_STARTING_RETRY_HINT) {
+        return StopLauncherResult::RetryableStartup;
+    }
+    StopLauncherResult::Fatal
 }
 
 fn finish_backend_stop_wait(
@@ -2817,7 +2893,7 @@ fn version_response_looks_valid(response: &[u8]) -> bool {
 mod tests {
     use super::*;
     use serde_json::Value;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, VecDeque};
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::ffi::OsStrExt;
@@ -3889,6 +3965,114 @@ agentsview running at http://127.0.0.1:18082
         assert_eq!(
             events.lock().expect("lock events").as_slice(),
             ["install", "restart"]
+        );
+    }
+
+    #[test]
+    fn stop_launcher_retries_startup_refusal_then_succeeds() {
+        let attempts = Mutex::new(VecDeque::from([
+            StopLauncherResult::RetryableStartup,
+            StopLauncherResult::Success,
+        ]));
+        let sleeps = Mutex::new(Vec::new());
+
+        let result = retry_stop_launcher(
+            Instant::now() + Duration::from_secs(10),
+            Duration::from_secs(2),
+            |_| {
+                attempts
+                    .lock()
+                    .expect("lock attempts")
+                    .pop_front()
+                    .expect("configured attempt")
+            },
+            |duration| sleeps.lock().expect("lock sleeps").push(duration),
+        );
+
+        assert_eq!(result, StopLauncherResult::Success);
+        assert!(attempts.lock().expect("lock attempts").is_empty());
+        assert_eq!(
+            sleeps.lock().expect("lock sleeps").as_slice(),
+            [Duration::from_secs(2)]
+        );
+    }
+
+    #[test]
+    fn stop_launcher_does_not_retry_fatal_failure() {
+        let attempts = Mutex::new(0);
+        let sleeps = Mutex::new(Vec::new());
+
+        let result = retry_stop_launcher(
+            Instant::now() + Duration::from_secs(10),
+            Duration::from_secs(2),
+            |_| {
+                *attempts.lock().expect("lock attempts") += 1;
+                StopLauncherResult::Fatal
+            },
+            |duration| sleeps.lock().expect("lock sleeps").push(duration),
+        );
+
+        assert_eq!(result, StopLauncherResult::Fatal);
+        assert_eq!(*attempts.lock().expect("lock attempts"), 1);
+        assert!(sleeps.lock().expect("lock sleeps").is_empty());
+    }
+
+    #[test]
+    fn stop_launcher_stops_retrying_when_deadline_is_exhausted() {
+        let attempts = Mutex::new(0);
+
+        let result = retry_stop_launcher(
+            Instant::now(),
+            Duration::from_secs(2),
+            |_| {
+                *attempts.lock().expect("lock attempts") += 1;
+                StopLauncherResult::RetryableStartup
+            },
+            |_| panic!("deadline must prevent another retry"),
+        );
+
+        assert_eq!(result, StopLauncherResult::RetryableStartup);
+        assert_eq!(*attempts.lock().expect("lock attempts"), 1);
+    }
+
+    #[test]
+    fn stop_launcher_classifies_only_startup_refusal_as_retryable() {
+        assert_eq!(
+            classify_stop_launcher_termination(
+                Some(1),
+                "serve stop: a server is starting; retry once it is ready",
+            ),
+            StopLauncherResult::RetryableStartup
+        );
+        assert_eq!(
+            classify_stop_launcher_termination(
+                Some(1),
+                "serve stop: stopping pid 42: access denied",
+            ),
+            StopLauncherResult::Fatal
+        );
+        assert_eq!(
+            classify_stop_launcher_termination(Some(0), ""),
+            StopLauncherResult::Success
+        );
+    }
+
+    #[test]
+    fn stop_launcher_treats_command_error_as_fatal() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+        tx.try_send(CommandEvent::Error("wait failed".to_string()))
+            .expect("send command error");
+        tx.try_send(CommandEvent::Terminated(
+            tauri_plugin_shell::process::TerminatedPayload {
+                code: Some(0),
+                signal: None,
+            },
+        ))
+        .expect("send misleading success");
+
+        assert_eq!(
+            wait_for_stop_launcher(&mut rx, Duration::from_secs(1)),
+            StopLauncherResult::Fatal
         );
     }
 
