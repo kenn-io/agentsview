@@ -1,6 +1,6 @@
 <script lang="ts">
   import { usage, type GroupBy } from "../../stores/usage.svelte.js";
-  import { projectColor } from "../../utils/projectColor.js";
+  import { seriesColorMap } from "../../utils/projectColor.js";
   import { m } from "../../i18n/index.js";
 
   const CHART_H = 180;
@@ -143,6 +143,12 @@
     return { points, keys, maxY: maxY || 1, labels };
   });
 
+  const colorMap = $derived(
+    seriesColorMap(
+      seriesData.keys.filter((key) => key !== "__other__").sort(),
+    ),
+  );
+
   const chartWidth = $derived(
     Math.max(containerWidth - Y_LABEL_W - X_LABEL_RIGHT_PAD, 100),
   );
@@ -194,6 +200,7 @@
     maxY: number,
     w: number,
     h: number,
+    colors: ReadonlyMap<string, string>,
   ): Array<{ key: string; d: string; color: string }> {
     if (points.length === 0) return [];
 
@@ -219,7 +226,7 @@
           `L${x0 + BAR_WIDTH},${bot}Z`;
         const color = key === "__other__"
           ? "var(--text-muted)"
-          : projectColor(key);
+          : colors.get(key) ?? "var(--text-muted)";
         result.push({ key, d, color });
         baseline += val;
       }
@@ -255,7 +262,7 @@
 
       const color = key === "__other__"
         ? "var(--text-muted)"
-        : projectColor(key);
+        : colors.get(key) ?? "var(--text-muted)";
       result.push({ key, d, color });
 
       for (let i = 0; i < points.length; i++) {
@@ -273,6 +280,7 @@
       scale.max,
       chartWidth,
       CHART_H,
+      colorMap,
     ),
   );
 
@@ -419,7 +427,7 @@
           <span class="legend-item">
             <span
               class="legend-dot"
-              style="background: {key === '__other__' ? 'var(--text-muted)' : projectColor(key)}"
+              style="background: {colorMap.get(key) ?? 'var(--text-muted)'}"
             ></span>
 			{key === "__other__" ? m.shared_other() : (seriesData.labels[key] ?? key)}
           </span>

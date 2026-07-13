@@ -175,4 +175,46 @@ describe("CostTimeSeriesChart", () => {
 	expect(document.querySelectorAll(".legend-item")).toHaveLength(2);
 	unmount(component);
   });
+
+  it("uses distinct active model colors for paths and legend dots", async () => {
+    usage.summary = usageSummary();
+    usage.toggles.timeSeries.groupBy = "model";
+    usage.summary.daily = [
+      {
+        ...usage.summary.daily[0]!,
+        projectBreakdowns: undefined,
+        modelBreakdowns: [
+          {
+            modelName: "claude-sonnet-5",
+            inputTokens: 60,
+            outputTokens: 30,
+            cacheCreationTokens: 0,
+            cacheReadTokens: 0,
+            cost: 6,
+          },
+          {
+            modelName: "claude-opus-4-8",
+            inputTokens: 40,
+            outputTokens: 20,
+            cacheCreationTokens: 0,
+            cacheReadTokens: 0,
+            cost: 4,
+          },
+        ],
+      },
+    ];
+
+    const component = mount(CostTimeSeriesChart, { target: document.body });
+    await tick();
+
+    const paths = Array.from(
+      document.querySelectorAll<SVGPathElement>("path[opacity='0.7']"),
+    ).map((path) => path.getAttribute("fill"));
+    const dots = Array.from(
+      document.querySelectorAll<HTMLElement>(".legend-dot"),
+    ).map((dot) => dot.style.background);
+    expect(new Set(paths).size).toBe(2);
+    expect(dots).toEqual(paths);
+    unmount(component);
+  });
 });

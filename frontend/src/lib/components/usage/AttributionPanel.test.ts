@@ -81,6 +81,29 @@ function summaryWithDuplicateProjectLabels(): UsageSummaryResponse {
   return summary;
 }
 
+function summaryWithModels(): UsageSummaryResponse {
+  const summary = summaryWithAgents([]);
+  summary.modelTotals = [
+    {
+      model: "claude-sonnet-5",
+      inputTokens: 60,
+      outputTokens: 30,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost: 8,
+    },
+    {
+      model: "claude-opus-4-8",
+      inputTokens: 40,
+      outputTokens: 20,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost: 4,
+    },
+  ];
+  return summary;
+}
+
 describe("AttributionPanel agent exclusion", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -150,6 +173,30 @@ describe("AttributionPanel project identity", () => {
         }),
       ),
     );
+    unmount(component);
+  });
+});
+
+describe("AttributionPanel colors", () => {
+  afterEach(() => {
+    usage.summary = null;
+    usage.toggles.attribution.groupBy = "project";
+    usage.toggles.attribution.view = "list";
+    document.body.innerHTML = "";
+  });
+
+  it("keeps colliding model rows distinct", async () => {
+    usage.summary = summaryWithModels();
+    usage.toggles.attribution.groupBy = "model";
+    usage.toggles.attribution.view = "list";
+
+    const component = mount(AttributionPanel, { target: document.body });
+    await tick();
+
+    const colors = Array.from(
+      document.querySelectorAll<HTMLElement>(".list-dot"),
+    ).map((dot) => dot.getAttribute("style"));
+    expect(new Set(colors).size).toBe(2);
     unmount(component);
   });
 });

@@ -4,7 +4,7 @@
     type GroupBy,
     type AttributionView,
   } from "../../stores/usage.svelte.js";
-  import { projectColor } from "../../utils/projectColor.js";
+  import { seriesColorMap } from "../../utils/projectColor.js";
   import Treemap from "./Treemap.svelte";
   import { m } from "../../i18n/index.js";
 
@@ -29,7 +29,7 @@
     pct: number;
   }
 
-  const rows = $derived.by((): Row[] => {
+  const rowItems = $derived.by(() => {
     const s = usage.summary;
     if (!s) return [];
 
@@ -60,13 +60,22 @@
     }
 
     items.sort((a, b) => b.cost - a.cost);
+    return items;
+  });
+
+  const colorMap = $derived(
+    seriesColorMap(rowItems.map((item) => item.id).sort()),
+  );
+
+  const rows = $derived.by((): Row[] => {
+    const items = rowItems;
     const total = items.reduce((s, d) => s + d.cost, 0);
 
     return items.map((d) => ({
       id: d.id,
       label: d.label,
       cost: d.cost,
-      color: projectColor(d.id),
+      color: colorMap.get(d.id) ?? "var(--text-muted)",
       pct: total > 0 ? d.cost / total : 0,
     }));
   });
