@@ -263,6 +263,8 @@ fn sidecar_args() -> Vec<String> {
         "--background".to_string(),
         "--host".to_string(),
         HOST.to_string(),
+        "--port".to_string(),
+        "0".to_string(),
     ]
 }
 
@@ -406,7 +408,10 @@ fn is_allowed_navigation_url(url: &Url, backend_port: Option<u16>) -> bool {
 }
 
 fn is_allowed_external_open_url(url: &Url) -> bool {
-    matches!(url.scheme(), "http" | "https" | "mailto")
+    matches!(
+        url.scheme(),
+        "http" | "https" | "mailto" | "codex" | "claude-cli"
+    )
 }
 
 // sidecar_env returns the environment passed to the backend
@@ -2912,6 +2917,8 @@ mod tests {
                 "--background".to_string(),
                 "--host".to_string(),
                 HOST.to_string(),
+                "--port".to_string(),
+                "0".to_string(),
             ]
         );
     }
@@ -3759,6 +3766,13 @@ agentsview running at http://127.0.0.1:18082
 
         let mailto = Url::parse("mailto:test@example.com").expect("valid mailto url");
         assert!(is_allowed_external_open_url(&mailto));
+
+        let codex = Url::parse("codex://threads/session-123").expect("valid codex url");
+        assert!(is_allowed_external_open_url(&codex));
+
+        let claude = Url::parse("claude-cli://open?cwd=%2Ftmp%2Fproject")
+            .expect("valid Claude Code url");
+        assert!(is_allowed_external_open_url(&claude));
 
         let file = Url::parse("file:///tmp/foo").expect("valid file url");
         assert!(!is_allowed_external_open_url(&file));

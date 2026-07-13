@@ -6,7 +6,7 @@ The wrapper does not reimplement the web app. Instead, it:
 
 1. Builds the existing Go `agentsview` binary.
 1. Packages it as a Tauri sidecar.
-1. Starts it with `serve --no-browser` on a local port.
+1. Starts it with `serve --background --host 127.0.0.1` on a local port.
 1. Loads the local URL in a native webview.
 
 ## Requirements

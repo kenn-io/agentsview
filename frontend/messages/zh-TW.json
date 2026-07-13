@@ -191,6 +191,8 @@
   "session_breadcrumb_path_copied": "路徑已複製！",
   "session_breadcrumb_opened_in": "已在 {target} 中打開",
   "session_breadcrumb_failed_to_open": "打開失敗",
+  "session_breadcrumb_open_in_codex_desktop": "在 Codex Desktop 中打開",
+  "session_breadcrumb_open_in_claude_code": "在 Claude Code 中打開",
   "session_breadcrumb_summary_mode": "摘要模式",
   "session_breadcrumb_summary_mode_tooltip": "此 transcript 缺少工具結果、思考內容和代碼差異。需要 agy-reader sidecar 才能獲得完整保真度 — 請安裝它，若已安裝，請等待其同步完成。點擊了解如何操作。",
   "session_breadcrumb_malformed_lines": [

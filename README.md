@@ -21,6 +21,13 @@ Or download the **desktop app** (macOS / Windows) from
 [GitHub Releases](https://github.com/kenn-io/agentsview/releases) or via
 homebrew: `brew install --cask agentsview`
 
+On macOS, an optional menu-bar companion is available from the separate
+`macos/agentsview-menubar` Swift Package. Build and open it with
+`make menubar-open`; it starts the existing server detached and keeps it
+running independently of the menu-bar app. It uses an OS-assigned local port
+instead of claiming `8080`. The app is menu-bar-only, so it does not open a
+window or appear in the Dock.
+
 Or run the published Docker image:
 
 ```bash

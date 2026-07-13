@@ -191,6 +191,8 @@
   "session_breadcrumb_path_copied": "경로가 복사되었습니다!",
   "session_breadcrumb_opened_in": "{target}에서 열림",
   "session_breadcrumb_failed_to_open": "열기 실패",
+  "session_breadcrumb_open_in_codex_desktop": "Codex Desktop에서 열기",
+  "session_breadcrumb_open_in_claude_code": "Claude Code에서 열기",
   "session_breadcrumb_summary_mode": "요약 모드",
   "session_breadcrumb_summary_mode_tooltip": "이 transcript에는 도구 결과, 사고 내용, 변경 사항(diff)이 없습니다. 전체 충실도를 보려면 agy-reader 사이드카가 필요합니다 — 설치하거나, 이미 설치했다면 따라잡을 때까지 기다리세요. 방법을 알아보려면 클릭하세요.",
   "session_breadcrumb_malformed_lines": [

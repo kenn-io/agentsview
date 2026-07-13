@@ -195,6 +195,8 @@
   "session_breadcrumb_path_copied": "Path copied!",
   "session_breadcrumb_opened_in": "Opened in {target}",
   "session_breadcrumb_failed_to_open": "Failed to open",
+  "session_breadcrumb_open_in_codex_desktop": "Open in Codex Desktop",
+  "session_breadcrumb_open_in_claude_code": "Open in Claude Code",
   "session_breadcrumb_summary_mode": "Summary mode",
   "session_breadcrumb_summary_mode_tooltip": "Tool results, thinking, and diffs are missing from this transcript. Full fidelity needs the agy-reader sidecar — install it, or if installed, let it catch up. Click to learn how.",
   "session_breadcrumb_malformed_lines": [

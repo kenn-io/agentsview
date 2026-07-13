@@ -41,6 +41,8 @@
     buildResumeCommand,
     formatResumeResponseCommand,
   } from "../../utils/resume.js";
+  import { codexDesktopLink } from "../../utils/codex.js";
+  import { claudeCodeLink } from "../../utils/claude.js";
 
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
   import { messages as messagesStore } from "../../stores/messages.svelte.js";
@@ -548,6 +550,16 @@
       : false,
   );
 
+  const codexLink = $derived(
+    session ? codexDesktopLink(session.agent, session.id) : null,
+  );
+
+  const claudeLink = $derived(
+    session?.agent === "claude" && isLocal
+      ? claudeCodeLink(sessionDir)
+      : null,
+  );
+
   const terminalOpeners = $derived(
     openers.filter((o) => o.kind === "terminal"),
   );
@@ -568,6 +580,7 @@
 
   const showDropdown = $derived(
     canResume ||
+    codexLink !== null ||
     (isLocal && (
       editorOpeners.length > 0 ||
       fileOpeners.length > 0 ||
@@ -745,6 +758,34 @@
                   </span>
                   <span class="open-menu-name">{m.session_breadcrumb_default_terminal()}</span>
                 </button>
+                {#if codexLink}
+                  <div class="open-menu-divider"></div>
+                  <a
+                    class="open-menu-item"
+                    data-testid="codex-desktop-link"
+                    href={codexLink}
+                    title={m.session_breadcrumb_open_in_codex_desktop()}
+                  >
+                    <span class="open-menu-num">
+                      <CirclePlayIcon size="10" strokeWidth="2" aria-hidden="true" />
+                    </span>
+                    <span class="open-menu-name">{m.session_breadcrumb_open_in_codex_desktop()}</span>
+                  </a>
+                {/if}
+                {#if claudeLink}
+                  <div class="open-menu-divider"></div>
+                  <a
+                    class="open-menu-item"
+                    data-testid="claude-code-link"
+                    href={claudeLink}
+                    title={m.session_breadcrumb_open_in_claude_code()}
+                  >
+                    <span class="open-menu-num">
+                      <CirclePlayIcon size="10" strokeWidth="2" aria-hidden="true" />
+                    </span>
+                    <span class="open-menu-name">{m.session_breadcrumb_open_in_claude_code()}</span>
+                  </a>
+                {/if}
                 <div class="open-menu-divider"></div>
                 <button class="open-menu-item" onclick={handleCopyResumeCommand}>
                   <span class="open-menu-num">
@@ -1162,6 +1203,7 @@
     padding: 6px 10px;
     font-size: 13px;
     color: var(--text-primary);
+    text-decoration: none;
     border-radius: 5px;
     cursor: pointer;
     transition: background 0.1s;
