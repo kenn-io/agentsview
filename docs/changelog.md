@@ -60,10 +60,12 @@ description: Release history for AgentsView
   `signals.json` are available.
 - Import **ZCode** transcript messages, thinking, tool calls, tool results, and
   usage from its local SQLite archive.
-- Add stable v1 JSON contracts for **`agentsview version --json`** and
-  content-free **`agentsview export sessions`** JSON/NDJSON. Session exports
-  include privacy-bounded project, repository, worktree, checkout, pricing,
-  usage, cursor, and archive-generation evidence without transcript text.
+- Add a stable v1 JSON contract for **`agentsview version --json`**.
+- Upgrade content-free **`agentsview export sessions`** JSON/NDJSON with
+  privacy-bounded project, repository, worktree, checkout, pricing, usage,
+  cursor, and archive-generation evidence without transcript text. Releases
+  0.38.0 and 0.38.1 mislabeled this incompatible shape as v1; current builds
+  report it as v2.
 
 **Improvements**
 

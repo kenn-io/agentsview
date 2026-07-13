@@ -144,9 +144,13 @@ HTTP report bumps with it.
 
 The activity report JSON, `agentsview usage daily --json`, and
 `agentsview export sessions --format json|ndjson` are separate versioned
-surfaces. Their canonical v1 contracts shipped in 0.38.0; there is no pre-v1
-compatibility adapter. Consumers should require the expected `schema_version`
-and ignore unknown additive fields.
+surfaces. Usage and activity already emitted `schema_version: 1` before 0.38,
+and the session-summary v1 contract shipped in 0.37.1. Releases 0.38.0 and
+0.38.1 emitted the substantially revised project-evidence shape while still
+reporting version 1. Current builds correct all three markers to version 2;
+those two transitional releases must not be treated as v1-compatible.
+Consumers should require the expected `schema_version` and ignore unknown
+additive fields. The commands do not provide a v1 output mode.
 
 The activity report includes the shared report-level `pricing` and `projects`
 blocks. `pricing.models` contains effective model rates using fields such as

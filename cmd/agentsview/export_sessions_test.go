@@ -49,7 +49,7 @@ func TestExportSessionsJSONEmitsOneDocument(t *testing.T) {
 	assert.Empty(t, stderr)
 
 	doc := decodeExportSessionsDocument(t, stdout)
-	assert.Equal(t, 1, doc.SchemaVersion)
+	assert.Equal(t, 2, doc.SchemaVersion)
 	assert.NotEmpty(t, doc.DatabaseID)
 	assert.NotNil(t, doc.Pricing)
 	assert.NotNil(t, doc.Projects)
@@ -69,7 +69,7 @@ func TestExportSessionsJSONAliasEmitsOneDocument(t *testing.T) {
 	assert.Empty(t, stderr)
 
 	doc := decodeExportSessionsDocument(t, stdout)
-	assert.Equal(t, 1, doc.SchemaVersion)
+	assert.Equal(t, 2, doc.SchemaVersion)
 	assert.Len(t, doc.Sessions, 2)
 	assert.Empty(t, strings.TrimSpace(decoderRemainder(t, stdout)),
 		"--json must emit exactly one JSON document")
@@ -115,7 +115,7 @@ func TestExportSessionsNDJSONEmitsMetaThenRows(t *testing.T) {
 	require.Len(t, lines, 3)
 	meta := decodeExportSessionsDocument(t, lines[0])
 	assert.Equal(t, "meta", meta.Type)
-	assert.Equal(t, 1, meta.SchemaVersion)
+	assert.Equal(t, 2, meta.SchemaVersion)
 	assert.NotEmpty(t, meta.DatabaseID)
 	assert.NotNil(t, meta.Pricing)
 	assert.NotNil(t, meta.Projects)
@@ -601,7 +601,7 @@ func TestExportSessionsJSONGolden(t *testing.T) {
 	assert.NotContains(t, stdout, `"machine":"golden-host"`)
 	assert.NotContains(t, stdout, `"root_path":"/`)
 
-	assertGoldenBytes(t, "session_export_v1.json", []byte(stdout))
+	assertGoldenBytes(t, "session_export_v2.json", []byte(stdout))
 }
 
 func TestExportSessionsNDJSONGolden(t *testing.T) {
@@ -616,7 +616,7 @@ func TestExportSessionsNDJSONGolden(t *testing.T) {
 	require.NoError(t, err, "export sessions ndjson golden")
 	require.Empty(t, stderr)
 
-	assertGoldenBytes(t, "session_export_v1.ndjson", []byte(stdout))
+	assertGoldenBytes(t, "session_export_v2.ndjson", []byte(stdout))
 }
 
 func firstExportSessionsCursor(t *testing.T) string {

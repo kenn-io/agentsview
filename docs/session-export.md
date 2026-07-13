@@ -24,7 +24,7 @@ JSON output is one document:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "database_id": "00000000-0000-4000-8000-000000000001",
   "cursor": {
     "next": "opaque-cursor-or-empty"
@@ -138,13 +138,13 @@ rows on subsequent lines. The metadata line has `"type": "meta"`; session rows
 do not add a `type` discriminator.
 
 ```json
-{"type":"meta","schema_version":1,"database_id":"00000000-0000-4000-8000-000000000001","cursor":{"next":"..."},"pricing":{},"projects":{}}
+{"type":"meta","schema_version":2,"database_id":"00000000-0000-4000-8000-000000000001","cursor":{"next":"..."},"pricing":{},"projects":{}}
 {"id":"path-current","project":{"project_key":"pl1:sha256:...","display_label":"path-project","resolution":"resolved","identity":{"key":"p1:sha256:...","kind":"machine_root","root_key":"r1:sha256:...","repository_key":"repo1:sha256:..."},"worktree":{"relationship":"main_worktree","worktree_key":"wt1:sha256:...","repository_key":"repo1:sha256:..."},"checkout":{"state":"unknown"}},"agent":"claude","started_at":"2026-07-03T11:00:00Z","ended_at":"2026-07-03T11:10:00Z","last_activity_at":"2026-07-03T11:10:00Z","duration_seconds":600,"message_count":4,"user_message_count":2,"assistant_message_count":2,"turn_count":2,"classification":"interactive","is_automated":false,"model_usage":{"models":["fixture-model-reported"],"input_tokens":300,"output_tokens":60,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"reasoning_tokens":0,"cost_usd":0.0125,"has_cost":true,"by_model":{"fixture-model-reported":{"model":"fixture-model-reported","input_tokens":300,"output_tokens":60,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"reasoning_tokens":0,"cost_usd":0.0125,"has_cost":true,"cost_source":"reported"}}},"parent_session_id":null,"relationship_type":"root","total_output_tokens":0,"peak_context_tokens":0,"has_total_output_tokens":false,"has_peak_context_tokens":false}
 ```
 
 These snippets are abbreviated illustrations. Complete checked JSON and NDJSON
-outputs live in `testdata/golden/session_export_v1.json` and
-`testdata/golden/session_export_v1.ndjson`.
+outputs live in `testdata/golden/session_export_v2.json` and
+`testdata/golden/session_export_v2.ndjson`.
 
 ## Content Boundary
 
@@ -268,17 +268,21 @@ error.
 ## Versioning
 
 `agentsview export sessions --format json|ndjson` is its own versioned surface.
-Its canonical v1 shape shipped in 0.38.0 and has no pre-v1 compatibility
-adapter. Additive fields do not require a bump, but row semantic changes, field
-type changes, sort order changes, cursor semantics changes, required-field
-meaning changes, field removal, pricing digest canonicalization changes, project
-key derivation changes, remote normalization changes, path fallback
-normalization changes, and new closed-enum values require a bump.
+Its v1 shape shipped in 0.37.1. Releases 0.38.0 and 0.38.1 introduced the
+current privacy-bounded project, repository, worktree, and checkout evidence
+shape but mistakenly continued to report version 1. Current builds report
+version 2; payloads from those two transitional releases must not be treated as
+v1-compatible. There is no flag to request v1 output. Additive fields do not
+require a bump, but row semantic changes, field type changes, sort order
+changes, cursor semantics changes, required-field meaning changes, field
+removal, pricing digest canonicalization changes, project key derivation
+changes, remote normalization changes, path fallback normalization changes, and
+new closed-enum values require a bump.
 
 Consumers should require the expected `schema_version` and ignore unknown
 additive fields.
 
-Closed v1 enums in this surface include project `resolution` (`resolved`,
+Closed v2 enums in this surface include project `resolution` (`resolved`,
 `unknown`, `ambiguous`), session `classification` (`interactive`, `automated`),
 and `cost_source` (`computed`, `reported`, `mixed`).
 
