@@ -205,14 +205,21 @@ chart showing tool usage over time.
 ### Top Skills
 
 The Top Skills panel ranks skill-backed tool calls by call count,
-session count, recency, agent mix, project mix, and week-by-week
-trend. It is populated from normalized `skill_name` metadata on
-tool calls and from inferred skill names when Codex or Cursor reads
-a `SKILL.md` file through a read-like tool call. It appears when
-your local transcripts include either explicit skill metadata or
-enough `SKILL.md` reads for AgentsView to infer the skill name.
+session count, recency, agent mix, and project mix. The adjacent
+Skill Usage Over Time chart plots the leading skills, folds
+the long tail into Other, and lets you switch between day, week,
+and month buckets or hide individual series. Both views follow the
+active Analytics date and session filters.
+
+Skill analytics is populated from normalized `skill_name` metadata
+on tool calls and from inferred skill names when Codex or Cursor
+reads a `SKILL.md` file through a read-like tool call. It appears
+when your local transcripts include either explicit skill metadata
+or enough `SKILL.md` reads for AgentsView to infer the skill name.
 
 ![Top Skills](/assets/generated/screenshots/top-skills.png)
+
+![Skill usage trends](/assets/generated/screenshots/skill-trends.png)
 
 ### Velocity Metrics
 
@@ -580,6 +587,13 @@ the header also shows **Unverified schema**. That badge means the
 session was decoded heuristically from a newer schema and may be
 incomplete.
 
+AgentsView stores reading progress for the most recent 500 sessions in the
+current browser. When a transcript changes after you have read it, the sidebar
+shows an unread dot and the transcript places a **New messages** boundary at the
+first unread region. In newest-first order the same boundary is labeled
+**Earlier messages**. The marker clears after you traverse the new region; it is
+browser-local and is not synced through SQLite or PostgreSQL.
+
 ### Message Layouts
 
 Four layouts control how messages are rendered. Cycle between
@@ -749,7 +763,12 @@ current direction.
 
 - `j` or `↓` — next message
 - `k` or `↑` — previous message
+- `Shift+J` — next user prompt
+- `Shift+K` — previous user prompt
 - Click a message to select it (blue outline)
+
+Prompt navigation follows the visible transcript, so it respects Focused mode
+and the active block-type filter.
 
 ### In-Session Search
 
@@ -1021,24 +1040,21 @@ message in its session.
 
 ### Session Resume Menu
 
-Right-click a session in the sidebar to open a context menu
-with three resume actions:
+Select a session and open **Resume** in the detail header. For supported local
+agents, the menu can launch the configured terminal, use the default terminal,
+or copy the exact resume command. Cursor resume resolves the original workspace
+path and passes it as `--workspace` to `cursor agent --resume`. The same menu
+can copy the session directory and open it in detected editors or file
+browsers.
 
-- **Reopen** — reopen the session in the agent that created it
-- **Terminal** — launch a terminal in the session's working
-  directory
-- **Open Directory** — open the session's working directory in
-  Finder (macOS) or Explorer (Windows)
+Local Codex sessions add **Open in Codex Desktop**, which deep-links to the
+stored thread. Local Claude sessions add **Open in Claude Code**, which opens a
+new Code session for the stored working directory; when the native Claude
+Desktop opener is detected, it remains available as a separate resume target.
+Desktop deep links are intentionally hidden for remote sessions because a local
+desktop app cannot open another machine's transcript or directory.
 
-GitHub Copilot CLI and Cursor sessions also appear in the
-resume dropdown. Cursor resume resolves the original workspace
-path automatically and passes it as `--workspace` to
-`cursor agent --resume`.
-
-For Claude sessions on macOS, a **Claude Desktop** option
-appears at the bottom of the resume menu. It opens the session
-in Claude Desktop's Code tab via the `claude://resume` URL
-scheme.
+![Session resume menu](/assets/generated/screenshots/session-resume-menu.png)
 
 The `agentsview session list --resume` and `--active` CLI modes use
 the same recent-activity signal to produce a compact terminal table
@@ -1163,6 +1179,8 @@ Press `?` to see all shortcuts in a modal overlay.
 | `Esc` | Close modal / deselect session |
 | `j` / `↓` | Next message |
 | `k` / `↑` | Previous message |
+| `Shift+J` | Next user prompt |
+| `Shift+K` | Previous user prompt |
 | `]` | Next session |
 | `[` | Previous session |
 | `o` | Toggle sort order |
@@ -1194,8 +1212,11 @@ Settings are organized into sections:
 | Agent Directories | Custom paths for each agent's session files. For Devin CLI, point at the local root that contains `cli/` (for example a redacted `.../Application Support/devin` path), not copied config or OAuth files. |
 | Terminal | Default terminal emulator for session resume |
 | Worktree Mappings | Map worktree paths back to their main project (see [Worktree Project Mappings](/configuration/#worktree-project-mappings)) |
+| Embeddings | Current semantic-index build phase, progress, throughput, ETA, last result, and local generations |
 | GitHub | Personal access token for Gist publishing |
 | Remote Access | Remote connections toggle, auth token, connect to remote server |
+
+![Embedding build progress](/assets/generated/screenshots/settings-embeddings.png)
 
 ![Settings remote access section](/assets/generated/screenshots/settings-remote.png)
 

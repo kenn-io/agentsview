@@ -577,8 +577,9 @@ and `agentBreakdowns` as arrays; empty breakdowns are `[]`, not omitted.
 
 `agentsview usage daily --json` is a versioned JSON surface. The Usage daily
 JSON, Activity report JSON, and session summary export JSON/NDJSON are separate
-versioned surfaces, so a bump in one does not imply a bump in the others. This
-unshipped v1 shape is canonical and has no pre-v1 compatibility adapter.
+versioned surfaces, so a bump in one does not imply a bump in the others. Their
+canonical v1 contracts shipped in 0.38.0 and have no pre-v1 compatibility
+adapter.
 Consumers should require the expected `schema_version` and ignore unknown
 additive fields.
 

@@ -3,6 +3,114 @@ title: Changelog
 description: Release history for AgentsView
 ---
 
+## 0.38.0
+<small>2026-07-13</small>
+
+**New features**
+
+- Add **desktop deep links** for opening local Codex threads in Codex Desktop
+  and local Claude workspaces in Claude Code. On macOS, closing the desktop
+  window now keeps AgentsView available from a menu-bar status item with
+  actions to show the window, open logs, check for updates, and quit.
+- Add config-driven **`agentsview daemon start|status|restart|stop`** commands
+  for the writable SQLite daemon. The commands use the effective
+  `config.toml`, leave read-only PostgreSQL and DuckDB servers alone, and
+  report startup state, URL, PID, live daemon version, and uptime.
+- Add an experimental **Recall** substrate for provenance-linked durable
+  knowledge. Recall supports lexical query and task briefs, exact
+  transcript-evidence validation, host-owned review states, supersession,
+  measurement events, dry-run extraction, and guarded reviewed imports.
+- Add **PostgreSQL semantic and hybrid search** through pgvector. `pg push`
+  copies changed chunks from the active local embedding generation,
+  `pg serve` and `--pg` reads search a matching generation, and
+  `pg vectors list|drop` manages stored generations.
+- Add **Semantic** and **Hybrid** modes to the web command palette alongside
+  Full text search, with remembered mode selection and actionable index or
+  configuration errors.
+- Track **transcript reading progress** in the browser, mark sessions with new
+  content, place a boundary at the first unread message, and add
+  `Shift+J`/`Shift+K` navigation between user prompts.
+- Show the active **embedding build** in Settings, including phase, model,
+  dimensions, chunk progress, throughput, elapsed time, estimated completion,
+  and local generations.
+- Add `request_dimensions` for embedding models and endpoints that support
+  **Matryoshka-reduced vectors**, keeping the requested dimension in the
+  generation fingerprint and validating every response.
+- Add interactive **skill usage trends** to Analytics with day, week, and month
+  grouping plus per-skill series controls.
+- Import **Grok Build** sessions through a metadata-first provider, including
+  full messages, thinking, tool calls, and usage when `chat_history.jsonl` and
+  `signals.json` are available.
+- Import **ZCode** transcript messages, thinking, tool calls, tool results, and
+  usage from its local SQLite archive.
+- Add stable v1 JSON contracts for **`agentsview version --json`** and
+  content-free **`agentsview export sessions`** JSON/NDJSON. Session exports
+  include privacy-bounded project, repository, worktree, checkout, pricing,
+  usage, cursor, and archive-generation evidence without transcript text.
+
+**Improvements**
+
+- Speed up configured HTTP **full remote syncs** by rebuilding local and
+  remote sessions together with FTS suspended, while avoiding retransfers of
+  unchanged files from manifest-capable remotes.
+- Bound **passive daemon memory and background sync work** by changed paths and
+  provider capabilities instead of repeatedly materializing archive-wide
+  session state.
+- Reuse JSONL reader workspaces, apply **Codex appends** incrementally, and
+  update **Claude subagent linkage** incrementally to reduce parser and sync
+  work on active transcripts.
+- Let Analytics, Usage, Activity, Trends, and Insights date ranges be linked
+  globally or controlled independently from Settings.
+- Keep **`daemon restart` startup progress** attached to the terminal until
+  the replacement daemon is ready, with periodic phase and elapsed-time
+  updates during long migrations or initial syncs.
+
+**Bug fixes**
+
+- Keep Activity's calendar-relative views current when the local date changes
+  without requiring a page refresh.
+- Align `agentsview stats` session totals with the default visibility rules
+  used by session lists, including one-shot, automated, child, and deleted
+  sessions.
+- Report the running daemon's **actual live version** in lifecycle status
+  output instead of trusting a possibly stale runtime-record value.
+- Recover safely when a writable daemon still owns the archive but its runtime
+  record is missing, and surface runtime-record publication warnings in server
+  logs.
+- Retry desktop backend shutdown before installing an update, avoiding failed
+  updates while the sidecar is still exiting.
+- Replay replaced JSONL segments from **VS Code Copilot** instead of treating
+  same-length splices as append-only transcript growth.
+- Export only the requested **Hermes** session when one transcript file
+  contains multiple sessions.
+- Prevent missing hashed SPA assets from falling back to stale HTML content.
+- Recognize trusted **Windows directory owners** correctly through the updated
+  filesystem trust checks.
+
+**Acknowledgements**
+
+- Thanks to [i.an](https://github.com/randomradio) for desktop deep links and
+  the macOS menu-bar status item.
+- Thanks to [Rod Boev](https://github.com/rodboev) for transcript reading
+  progress, user-prompt navigation, Grok and ZCode ingestion, stats visibility
+  parity, Hermes export fixes, Claude linkage performance, and daemon recovery.
+- Thanks to [Marius van Niekerk](https://github.com/mariusvniekerk) for the
+  stable version and session-evidence contracts, embedding build status,
+  reduced output dimensions, and JSONL parser workspace reuse.
+- Thanks to [ArBing Xie](https://github.com/arbing) for full Grok Build
+  transcript ingestion.
+- Thanks to [Kajetan Świerk](https://github.com/k0zmo) for VS Code Copilot
+  splice-replacement replay.
+- Thanks to [Leuconoe](https://github.com/Leuconoe) for reliable desktop update
+  installation while the backend exits.
+- Thanks to [Wes McKinney](https://github.com/wesm) for Recall, PostgreSQL and
+  command-palette semantic search, skill trends, daemon lifecycle and progress,
+  independent date ranges, remote-sync and background-memory improvements,
+  Codex append performance, Activity date rollover, live daemon version
+  reporting, SPA fallback and Windows owner fixes, and release documentation.
+
+---
+
 ## 0.37.5
 <small>2026-07-09</small>
 
@@ -11,15 +119,6 @@ description: Release history for AgentsView
 - Prefer richer **`agy-reader` trajectory sidecars** when parsing Antigravity
   IDE sessions, falling back to the existing heuristic decode when a sidecar is
   missing, malformed, or does not cover the session's database steps.
-
-**Improvements**
-
-- Speed up configured HTTP **full remote syncs** by ingesting local and remote
-  sessions through one batched temporary-database rebuild with FTS suspended,
-  then rebuilding search once and swapping atomically. `--full` now reparses
-  every session without retransferring unchanged mirror files from
-  manifest-capable spokes; older HTTP-capable spokes retain the full-archive
-  compatibility fallback.
 
 **Bug fixes**
 

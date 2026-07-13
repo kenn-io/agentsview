@@ -144,7 +144,7 @@ HTTP report bumps with it.
 
 The activity report JSON, `agentsview usage daily --json`, and
 `agentsview export sessions --format json|ndjson` are separate versioned
-surfaces. This unshipped v1 shape is the canonical contract; there is no pre-v1
+surfaces. Their canonical v1 contracts shipped in 0.38.0; there is no pre-v1
 compatibility adapter. Consumers should require the expected `schema_version`
 and ignore unknown additive fields.
 

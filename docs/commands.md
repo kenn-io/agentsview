@@ -38,11 +38,14 @@ directory. They ignore read-only `agentsview pg serve` and
 `daemon status` reports that no daemon is running, and `daemon stop` and
 `daemon restart` leave those servers alive.
 
-Status distinguishes running, starting, and stopped states. If startup takes
-longer than the initial readiness wait, the child continues running; use
-`agentsview daemon status` and inspect the reported `serve.log`. If startup
-state remains stuck, follow the error's guidance to verify the owning process
-before terminating it manually and retrying.
+Status distinguishes running, starting, and stopped states. `daemon start`
+returns after its initial readiness wait if a long migration or sync is still
+running; the child continues in the background. `daemon restart` stays attached
+and prints phase, detail, and elapsed-time updates until the replacement daemon
+is ready. Canceling that wait with `Ctrl+C` leaves the child running. Use
+`agentsview daemon status` and inspect the reported `serve.log` when startup is
+slow. If startup state remains stuck, follow the error's guidance to verify the
+owning process before terminating it manually and retrying.
 
 ______________________________________________________________________
 
@@ -326,16 +329,16 @@ agentsview version --format json
 ```
 
 ```
-agentsview 0.23.0 (commit d49f1a9, built 2026-04-19)
+agentsview v0.38.0 (commit 5b42bf1c, built 2026-07-13T15:37:17Z)
 ```
 
 ```json
 {
   "schema_version": 1,
   "name": "agentsview",
-  "version": "0.23.0",
-  "commit": "d49f1a9",
-  "build_date": "2026-04-19T12:00:00Z"
+  "version": "v0.38.0",
+  "commit": "5b42bf1c",
+  "build_date": "2026-07-13T15:37:17Z"
 }
 ```
 

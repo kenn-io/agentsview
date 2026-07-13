@@ -64,6 +64,7 @@ across every project, model, and tool.
   <a class="agent-chip" data-agent="kimi" href="https://www.kimi.com" target="_blank" rel="noopener"><span class="agent-chip__glyph agent-chip__glyph--mono">Km</span><span class="agent-chip__name">Kimi</span></a>
   <a class="agent-chip" data-agent="kiro" href="https://kiro.dev" target="_blank" rel="noopener"><span class="agent-chip__glyph agent-chip__glyph--mono">Kr</span><span class="agent-chip__name">Kiro</span></a>
   <a class="agent-chip" data-agent="openhands" href="https://github.com/All-Hands-AI/OpenHands" target="_blank" rel="noopener"><span class="agent-chip__glyph agent-chip__glyph--mono">OH</span><span class="agent-chip__name">OpenHands</span></a>
+  <a class="agent-chip" data-agent="zcode" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Zc</span><span class="agent-chip__name">ZCode</span></a>
   <a class="agent-chip" data-agent="zencoder" href="https://zencoder.ai" target="_blank" rel="noopener"><span class="agent-chip__glyph agent-chip__glyph--mono">Ze</span><span class="agent-chip__name">Zencoder</span></a>
   <a class="agent-chip" data-agent="commandcode" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Cc</span><span class="agent-chip__name">Command Code</span></a>
   <a class="agent-chip" data-agent="cortex-code" href="/configuration/#session-discovery"><span class="agent-chip__glyph agent-chip__glyph--mono">Cx</span><span class="agent-chip__name">Cortex Code</span></a>
@@ -249,8 +250,8 @@ push session data to a shared database for team or multi-machine setups.
     Works with [dozens of AI coding session sources](/configuration/#session-discovery)
     including Claude Code, OpenClaude, Codex, Copilot, Cursor,
     Gemini, OpenHands, Aider, Claude Cowork, DeepSeek TUI, gptme,
-    Kilo, MiMoCode, Mistral Vibe, OhMyPi, QwenPaw, Reasonix,
-    Shelley, and Visual Studio Copilot. Auto-discovers session
+    Grok, Kilo, MiMoCode, Mistral Vibe, OhMyPi, QwenPaw, Reasonix,
+    Shelley, Visual Studio Copilot, and ZCode. Auto-discovers session
     directories so there's nothing to configure.
 
 -   **Import Chat History**

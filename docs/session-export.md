@@ -268,12 +268,12 @@ error.
 ## Versioning
 
 `agentsview export sessions --format json|ndjson` is its own versioned surface.
-This unshipped v1 shape is canonical and has no pre-v1 compatibility adapter.
-Additive fields do not require a bump, but row semantic changes, field type
-changes, sort order changes, cursor semantics changes, required-field meaning
-changes, field removal, pricing digest canonicalization changes, project key
-derivation changes, remote normalization changes, path fallback normalization
-changes, and new closed-enum values require a bump.
+Its canonical v1 shape shipped in 0.38.0 and has no pre-v1 compatibility
+adapter. Additive fields do not require a bump, but row semantic changes, field
+type changes, sort order changes, cursor semantics changes, required-field
+meaning changes, field removal, pricing digest canonicalization changes, project
+key derivation changes, remote normalization changes, path fallback
+normalization changes, and new closed-enum values require a bump.
 
 Consumers should require the expected `schema_version` and ignore unknown
 additive fields.
