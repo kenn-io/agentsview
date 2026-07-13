@@ -91,14 +91,16 @@ func TestEmbedSchedulerBurstOfNotifyProducesExactlyOneBuild(t *testing.T) {
 	fake := &fakeEmbedManager{}
 	s := newEmbedScheduler(fake, 20*time.Millisecond, 0, false)
 
+	// Queue the whole burst before Run starts so the test exercises the
+	// scheduler's documented pre-reader coalescing without racing the debounce
+	// interval on slow or coarsely scheduled runners.
+	for range 10 {
+		s.Notify()
+	}
+
 	ctx := t.Context()
 	go s.Run(ctx)
 	defer s.Stop()
-
-	for range 10 {
-		s.Notify()
-		time.Sleep(2 * time.Millisecond)
-	}
 
 	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 1 },
 		"expected a build after the burst quieted")
