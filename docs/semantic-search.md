@@ -274,6 +274,13 @@ documents unless `--yes` is passed. Progress prints every ~2 seconds while a
 build runs, and a summary line reports documents embedded, chunks, skipped, and
 stale counts on completion.
 
+The web Settings page shows the same daemon-owned build while it runs, including
+the scan or embedding phase, model and dimension, chunk progress, throughput,
+elapsed time, estimated completion, and the generations already stored in
+`vectors.db`.
+
+![Embedding build progress](/assets/generated/screenshots/settings-embeddings.png)
+
 When a writable local daemon is running, `build`/`activate`/`retire` proxy to it
 over HTTP so the daemon remains the sole writer of `vectors.db`; without a
 daemon, the CLI takes a dedicated `vectors.write.lock` in the data directory and

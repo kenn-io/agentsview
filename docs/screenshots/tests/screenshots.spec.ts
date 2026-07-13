@@ -234,6 +234,18 @@ test.describe('Dashboard', () => {
     await snapEl(panel, 'top-skills');
   });
 
+  test('skill usage over time', async ({ page }) => {
+    const panel = page.locator('.chart-panel:has(.trend-container)');
+    await expect(panel).toBeVisible({ timeout: 10_000 });
+    await panel.scrollIntoViewIfNeeded();
+    await expect(
+      panel.getByRole('heading', { name: 'Skill Usage Over Time' })
+    ).toBeVisible();
+    await expect(panel.locator('.chart-svg')).toBeVisible();
+    await page.waitForTimeout(500);
+    await snapEl(panel, 'skill-trends');
+  });
+
   test('velocity metrics', async ({ page }) => {
     const content = page.locator('.analytics-content');
     await content.evaluate(
@@ -531,6 +543,30 @@ test.describe('Message viewer', () => {
   test('full message view', async ({ page }) => {
     await selectRichSession(page);
     await snap(page, 'message-viewer');
+  });
+
+  test('Codex desktop resume menu', async ({ page }) => {
+    const codexSession = page.locator(
+      '.session-item:has(.agent-tag:text-is("Codex"))'
+    ).first();
+    await expect(codexSession).toBeVisible({ timeout: 10_000 });
+    await codexSession.click();
+    await expect(page.locator('.message').first()).toBeVisible({
+      timeout: 10_000,
+    });
+
+    const resumeButton = page.locator('.resume-btn');
+    await expect(resumeButton).toBeVisible({ timeout: 5_000 });
+    await resumeButton.click();
+
+    const menu = page.locator('.open-menu');
+    const desktopLink = menu.getByTestId('codex-desktop-link');
+    await expect(menu).toBeVisible();
+    await expect(desktopLink).toHaveAttribute(
+      'href',
+      /^codex:\/\/threads\//
+    );
+    await snapEl(menu, 'session-resume-menu');
   });
 
   test('thinking blocks', async ({ page }) => {
@@ -1016,6 +1052,69 @@ test.describe('Settings', () => {
     await snapEl(remoteSection, 'settings-remote');
   });
 
+  test('settings embedding build progress', async ({ page }) => {
+    let statusPolls = 0;
+    const startedAt = new Date(Date.now() - 65_000).toISOString();
+
+    await page.route('**/api/v1/embeddings/status', async (route) => {
+      statusPolls += 1;
+      const done = 240 + statusPolls * 120;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          build_id: 38,
+          dimension: 256,
+          done,
+          model: 'qwen3-embedding:0.6b',
+          phase: 'embedding',
+          running: true,
+          started_at: startedAt,
+          total: 1000,
+        }),
+      });
+    });
+    await page.route(
+      '**/api/v1/embeddings/generations',
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            generations: [
+              {
+                dimension: 256,
+                embedded: 360,
+                fingerprint: 'docs-screenshot-generation',
+                id: 38,
+                missing: 640,
+                model: 'qwen3-embedding:0.6b',
+                state: 'building',
+              },
+            ],
+          }),
+        });
+      }
+    );
+
+    await openSettings(page);
+    const embeddingsSection = page.locator(
+      '.settings-section:has(.section-title:text("Embeddings"))'
+    );
+    await expect(embeddingsSection).toBeVisible({ timeout: 5_000 });
+    await embeddingsSection.scrollIntoViewIfNeeded();
+    await expect(
+      embeddingsSection.getByRole('progressbar', {
+        name: 'Embedding progress',
+      })
+    ).toBeVisible();
+    await expect(embeddingsSection.getByText(/^ETA /)).toBeVisible({
+      timeout: 5_000,
+    });
+
+    await snapEl(embeddingsSection, 'settings-embeddings');
+  });
+
   test('worktree project mappings section', async ({ page }) => {
     await openSettings(page);
 
@@ -1029,6 +1128,9 @@ test.describe('Settings', () => {
       timeout: 5_000,
     });
     await worktreeSection.first().scrollIntoViewIfNeeded();
+    const mappingPath = worktreeSection.first().getByRole('textbox').first();
+    await mappingPath.fill('~/code/project.worktrees');
+    await expect(mappingPath).toHaveValue('~/code/project.worktrees');
     await page.waitForTimeout(500);
 
     await snapEl(worktreeSection.first(), 'worktree-mappings');

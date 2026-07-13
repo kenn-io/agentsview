@@ -448,6 +448,31 @@ func TestExtractDBKeepsOnlyRootTrees(t *testing.T) {
 	insertSession("old_thinking_keep", "", "", old, 0, 3, 2)
 	insertSession("automated_thinking_keep", "", "", recent, 1, 1, 1)
 	_, err = conn.Exec(
+		"UPDATE sessions SET machine = 'private-workstation'",
+	)
+	require.NoError(t, err)
+	_, err = conn.Exec(
+		`INSERT INTO project_identity_observations
+		   (session_id, project, machine, root_path, observed_at)
+		 VALUES
+		   ('root_keep', 'agentsview', 'private-workstation',
+		    '/private/agentsview', ?)`,
+		recent,
+	)
+	require.NoError(t, err)
+	_, err = conn.Exec(
+		`UPDATE session_project_identity_snapshots
+		 SET machine = 'private-workstation', root_path = '/private/agentsview'
+		 WHERE session_id = 'root_keep'`,
+	)
+	require.NoError(t, err)
+	_, err = conn.Exec(
+		`INSERT INTO worktree_project_mappings
+		   (machine, path_prefix, project)
+		 VALUES ('private-workstation', '/private', 'agentsview')`,
+	)
+	require.NoError(t, err)
+	_, err = conn.Exec(
 		`UPDATE messages
 		 SET thinking_text = 'private reasoning', has_thinking = 1
 		 WHERE session_id IN ('old_thinking_keep', 'automated_thinking_keep')`,
@@ -500,6 +525,45 @@ func TestExtractDBKeepsOnlyRootTrees(t *testing.T) {
 		"SELECT COUNT(*) FROM sessions WHERE is_automated = 1",
 	).Scan(&automatedCount))
 	assert.Equal(t, 3, automatedCount)
+
+	machineRows, err := outConn.Query(
+		`SELECT m.name
+		 FROM sqlite_master m
+		 JOIN pragma_table_info(m.name) p ON p.name = 'machine'
+		 WHERE m.type = 'table'
+		 ORDER BY m.name`,
+	)
+	require.NoError(t, err)
+	var machineTables []string
+	for machineRows.Next() {
+		var table string
+		require.NoError(t, machineRows.Scan(&table))
+		machineTables = append(machineTables, table)
+	}
+	require.NoError(t, machineRows.Err())
+	require.NoError(t, machineRows.Close())
+	for _, table := range machineTables {
+		quoted := `"` + strings.ReplaceAll(table, `"`, `""`) + `"`
+		var unexpected int
+		require.NoError(t, outConn.QueryRow(
+			"SELECT COUNT(*) FROM "+quoted+" WHERE machine != 'dev-laptop'",
+		).Scan(&unexpected))
+		assert.Zero(t, unexpected, table)
+	}
+
+	for _, table := range []string{
+		"project_identity_observations",
+		"session_project_identity_snapshots",
+		"project_identity_observation_changes",
+		"session_project_identity_snapshot_changes",
+		"worktree_project_mappings",
+	} {
+		var count int
+		require.NoError(t, outConn.QueryRow(
+			"SELECT COUNT(*) FROM "+table,
+		).Scan(&count))
+		assert.Zero(t, count, table)
+	}
 
 	var orphanChildCount int
 	require.NoError(t, outConn.QueryRow(

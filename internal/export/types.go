@@ -5,11 +5,11 @@ package export
 
 import "time"
 
-const UsageDailySchemaVersion = 1
-const ActivityReportSchemaVersion = 1
-const SessionSummarySchemaVersion = 1
+const UsageDailySchemaVersion = 2
+const ActivityReportSchemaVersion = 2
+const SessionSummarySchemaVersion = 2
 
-// CostSource is a closed v1 enum. Adding a value requires a schema version
+// CostSource is a closed contract enum. Adding a value requires a schema version
 // bump for any export surface that emits it.
 type CostSource string
 
@@ -45,7 +45,7 @@ type EffectiveModelRate struct {
 	CostSource            CostSource `json:"cost_source"`
 }
 
-// ProjectResolution is a closed v1 enum. Adding a value requires a schema
+// ProjectResolution is a closed contract enum. Adding a value requires a schema
 // version bump for any export surface that emits it.
 type ProjectResolution string
 
@@ -184,7 +184,7 @@ type SessionExportError struct {
 	DatabaseID string `json:"database_id,omitempty"`
 }
 
-// SessionClassification is a closed v1 enum. Adding a value requires a schema
+// SessionClassification is a closed contract enum. Adding a value requires a schema
 // version bump for any export surface that emits it.
 type SessionClassification string
 

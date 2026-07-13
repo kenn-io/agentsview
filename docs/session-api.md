@@ -797,7 +797,7 @@ Response excerpt:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "pricing": {
     "source": "fetched",
     "table_version": "litellm-398a0b15378c",

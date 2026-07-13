@@ -281,6 +281,21 @@ DELETE FROM messages WHERE session_id IN (
 DELETE FROM sessions
 WHERE id NOT IN (SELECT id FROM screenshot_sessions);
 
+-- Project identity rows can retain the source hostname, repository paths, and
+-- remotes independently of sessions. The screenshot UI does not need this
+-- export-only evidence, so remove both the source rows and their publication
+-- journals before PostgreSQL push sees the fixture.
+DELETE FROM project_identity_observations;
+DELETE FROM session_project_identity_snapshots;
+DELETE FROM project_identity_observation_changes;
+DELETE FROM session_project_identity_snapshot_changes;
+DELETE FROM worktree_project_mappings;
+
+-- Keep generated screenshots independent of the source machine's hostname.
+-- The PostgreSQL fixture relabels a subset as work-desktop after push so the
+-- multi-machine UI remains covered with deterministic example identities.
+UPDATE sessions SET machine = 'dev-laptop';
+
 UPDATE sessions
 SET first_message = replace(first_message, r.from_text, r.to_text),
     display_name = replace(display_name, r.from_text, r.to_text),

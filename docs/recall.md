@@ -132,10 +132,10 @@ delete or recreate the session archive as a Recall reset strategy.
 
 ## Research direction
 
-The current branch is the population foundation. It deliberately does not ship a
-model runner, automatic write-through, bulk extraction, automatic promotion, or
-per-session generated summaries. The next work is intended to earn those
-capabilities in stages.
+The Recall substrate introduced in 0.38.0 is the population foundation. It
+deliberately does not ship a model runner, automatic write-through, bulk
+extraction, automatic promotion, or per-session generated summaries. The next
+work is intended to earn those capabilities in stages.
 
 ### Local extractor calibration
 

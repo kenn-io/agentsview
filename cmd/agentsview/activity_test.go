@@ -248,6 +248,7 @@ func TestActivityReportJSONMatchesHTTPExportMetadata(t *testing.T) {
 	})
 	var cliReport activity.Report
 	require.NoError(t, json.Unmarshal([]byte(cliOut), &cliReport))
+	assert.Equal(t, 2, cliReport.SchemaVersion)
 
 	srv := server.New(config.Config{
 		Host: "127.0.0.1", Port: 0, DataDir: dataDir, DBPath: dbPath,
@@ -340,5 +341,5 @@ func TestActivityReportGolden(t *testing.T) {
 	})
 	require.NoError(t, err, "activity report json golden command")
 
-	assertGoldenBytes(t, "activity_report_v1.json", []byte(stdout))
+	assertGoldenBytes(t, "activity_report_v2.json", []byte(stdout))
 }

@@ -494,7 +494,7 @@ to X" still works.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "pricing": {
     "source": "fetched",
     "table_version": "2026-07-03T12:00:00Z",
@@ -577,8 +577,13 @@ and `agentBreakdowns` as arrays; empty breakdowns are `[]`, not omitted.
 
 `agentsview usage daily --json` is a versioned JSON surface. The Usage daily
 JSON, Activity report JSON, and session summary export JSON/NDJSON are separate
-versioned surfaces, so a bump in one does not imply a bump in the others. This
-unshipped v1 shape is canonical and has no pre-v1 compatibility adapter.
+versioned surfaces, so a future bump in one does not imply a bump in the others.
+Usage and activity already emitted `schema_version: 1` before 0.38, and the
+session-summary v1 contract shipped in 0.37.1. Releases 0.38.0 and 0.38.1
+emitted the substantially revised project-evidence shape while still reporting
+version 1. Current builds correct all three markers to version 2; those two
+transitional releases must not be treated as v1-compatible. The commands do
+not provide a v1 output mode.
 Consumers should require the expected `schema_version` and ignore unknown
 additive fields.
 
@@ -607,7 +612,7 @@ table. Each model entry reports `matched_pattern`, `input_cost_per_mtok`,
 `output_cost_per_mtok`, `cache_write_cost_per_mtok`, `cache_read_cost_per_mtok`,
 and `cost_source`.
 
-`cost_source` is a closed v1 enum everywhere it appears: `computed`, `reported`,
+`cost_source` is a closed v2 enum everywhere it appears: `computed`, `reported`,
 or `mixed`. `computed` means AgentsView derived cost from token counts and the
 effective pricing resolver. `reported` means at least one source row supplied
 explicit cost, such as Cursor Admin API billing data; those rows may not be

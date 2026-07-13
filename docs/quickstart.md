@@ -25,6 +25,10 @@ auto-update support.
     you can use one or both. They are fully complementary, not mutually
     exclusive.
 
+On macOS, closing the desktop window hides it instead of quitting AgentsView.
+Use the AgentsView menu-bar status item to show the window again, open the logs
+folder, check for updates, or quit the desktop app and its managed backend.
+
 ### pip / uvx
 
 ```bash
@@ -184,7 +188,9 @@ agentsview daemon stop
 `daemon start` and `daemon restart` use the normal effective configuration from
 `config.toml` and supported environment variables. They do not accept
 serve-specific flags. `daemon restart` also starts the daemon when it is
-stopped.
+stopped. A restart stays attached and reports startup phases until the
+replacement daemon is ready; press `Ctrl+C` to stop waiting without terminating
+the child, then inspect it with `agentsview daemon status`.
 
 The existing `agentsview serve --background`, `agentsview serve status`, and
 `agentsview serve stop` commands remain available. Use `serve --background` when

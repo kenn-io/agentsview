@@ -429,7 +429,7 @@ func buildExportSessionsOutput(
 ) exportSessionsOutput {
 	var pricing *export.PricingBlock
 	output := exportSessionsOutput{
-		SchemaVersion: 1,
+		SchemaVersion: export.SessionSummarySchemaVersion,
 		DatabaseID:    databaseID,
 		Cursor:        exportSessionsOutputCursor{},
 		Pricing:       map[string]any{},
@@ -437,7 +437,8 @@ func buildExportSessionsOutput(
 		Sessions:      []db.SessionSummaryRow{},
 	}
 	for _, page := range pages {
-		if output.SchemaVersion == 1 && page.SchemaVersion != 0 {
+		if output.SchemaVersion == export.SessionSummarySchemaVersion &&
+			page.SchemaVersion != 0 {
 			output.SchemaVersion = page.SchemaVersion
 		}
 		output.Sessions = append(output.Sessions, page.Rows...)
