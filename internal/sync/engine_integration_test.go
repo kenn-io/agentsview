@@ -2597,6 +2597,84 @@ func TestSyncEngineCodex(t *testing.T) {
 	})
 }
 
+func TestSyncEngineCodexSubagentLineage(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
+	const (
+		parentID = "01900000-0000-7000-8000-000000000001"
+		childID  = "01900000-0000-7000-8000-000000000002"
+	)
+
+	parentContent := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(parentID, "/tmp/project", "user", tsEarly),
+		testjsonl.CodexMsgJSON("user", "delegate the task", tsEarlyS1),
+		testjsonl.CodexFunctionCallWithCallIDJSON(
+			"spawn_agent", "call_spawn",
+			map[string]any{"task_name": "identity_lifecycle"}, tsEarlyS5,
+		),
+	)
+	childContent := testjsonl.JoinJSONL(
+		testjsonl.CodexSubagentSessionMetaJSON(
+			childID, parentID, "/tmp/project", "user",
+			"2024-01-01T10:01:00Z",
+		),
+		testjsonl.CodexMsgJSON(
+			"assistant", "subtask complete", "2024-01-01T10:01:05Z",
+		),
+	)
+
+	parentPath := env.writeCodexSession(
+		t, filepath.Join("2024", "01", "15"),
+		"rollout-20240115-parent.jsonl", parentContent,
+	)
+	env.writeCodexSession(
+		t, filepath.Join("2024", "01", "15"),
+		"rollout-20240115-child.jsonl", childContent,
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 2, Synced: 2,
+	})
+
+	assertSessionState(t, env.db, "codex:"+childID, func(sess *db.Session) {
+		require.NotNil(t, sess.ParentSessionID)
+		assert.Equal(t, "codex:"+parentID, *sess.ParentSessionID)
+		assert.Equal(t, "subagent", sess.RelationshipType)
+	})
+
+	var linkedID sql.NullString
+	err := env.db.Reader().QueryRow(`
+		SELECT subagent_session_id
+		FROM tool_calls
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"codex:"+parentID, "call_spawn",
+	).Scan(&linkedID)
+	require.NoError(t, err)
+	assert.False(t, linkedID.Valid)
+
+	appended := testjsonl.CodexSubagentActivityJSON(
+		"started", "call_spawn", childID,
+		"/root/identity_lifecycle", "2024-01-01T10:01:00Z",
+	)
+	f, err := os.OpenFile(parentPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, writeErr := f.WriteString(appended + "\n")
+	closeErr := f.Close()
+	require.NoError(t, writeErr)
+	require.NoError(t, closeErr)
+
+	env.engine.SyncPaths([]string{parentPath})
+
+	err = env.db.Reader().QueryRow(`
+		SELECT subagent_session_id
+		FROM tool_calls
+		WHERE session_id = ? AND tool_use_id = ?`,
+		"codex:"+parentID, "call_spawn",
+	).Scan(&linkedID)
+	require.NoError(t, err)
+	require.True(t, linkedID.Valid)
+	assert.Equal(t, "codex:"+childID, linkedID.String)
+}
+
 func TestSyncEngineProgress(t *testing.T) {
 	env := setupFocusedTestEnv(t, parser.AgentClaude, parser.AgentPiebald)
 

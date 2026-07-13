@@ -117,6 +117,181 @@ func TestParseCodexSession_Basic(t *testing.T) {
 	assertSessionMeta(t, sess, "codex:abc-123", "my_api", AgentCodex)
 }
 
+func TestParseCodexSession_SubagentLineage(t *testing.T) {
+	const (
+		childID  = "01900000-0000-7000-8000-000000000002"
+		parentID = "01900000-0000-7000-8000-000000000001"
+	)
+
+	tests := []struct {
+		name             string
+		meta             string
+		wantParent       string
+		wantRelationship RelationshipType
+	}{
+		{
+			name: "current nested source",
+			meta: fmt.Sprintf(
+				`{"timestamp":%q,"type":"session_meta","payload":{"id":%q,"cwd":"/tmp","source":{"subagent":{"thread_spawn":{"parent_thread_id":%q,"depth":1}}}}}`,
+				tsEarly, childID, parentID,
+			),
+			wantParent:       "codex:" + parentID,
+			wantRelationship: RelSubagent,
+		},
+		{
+			name: "legacy top-level fields",
+			meta: fmt.Sprintf(
+				`{"timestamp":%q,"type":"session_meta","payload":{"id":%q,"cwd":"/tmp","thread_source":"subagent","parent_thread_id":%q}}`,
+				tsEarly, childID, parentID,
+			),
+			wantParent:       "codex:" + parentID,
+			wantRelationship: RelSubagent,
+		},
+		{
+			name:             "root session",
+			meta:             testjsonl.CodexSessionMetaJSON(childID, "/tmp", "user", tsEarly),
+			wantRelationship: RelNone,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sess, _ := runCodexParserTest(t, "test.jsonl", tt.meta, false)
+
+			require.NotNil(t, sess)
+			assert.Equal(t, tt.wantParent, sess.ParentSessionID)
+			assert.Equal(t, tt.wantRelationship, sess.RelationshipType)
+		})
+	}
+}
+
+func TestParseCodexSession_SubagentActivityLinksSpawn(t *testing.T) {
+	const childID = "01900000-0000-7000-8000-000000000002"
+	activity := testjsonl.CodexSubagentActivityJSON(
+		"started", "call_spawn", childID,
+		"/root/identity_lifecycle", tsLate,
+	)
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON("parent", "/tmp", "user", tsEarly),
+		testjsonl.CodexMsgJSON("user", "delegate the task", tsEarlyS1),
+		testjsonl.CodexFunctionCallWithCallIDJSON(
+			"spawn_agent", "call_spawn",
+			map[string]any{"task_name": "identity_lifecycle"}, tsEarlyS5,
+		),
+		activity,
+		testjsonl.CodexFunctionCallOutputJSON(
+			"call_spawn", `{"task_name":"/root/identity_lifecycle"}`, tsLateS5,
+		),
+	)
+
+	_, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+	require.Len(t, msgs, 2)
+	assertToolCalls(t, msgs[1].ToolCalls, []ParsedToolCall{{
+		ToolUseID:         "call_spawn",
+		ToolName:          "spawn_agent",
+		Category:          "Task",
+		SubagentSessionID: "codex:" + childID,
+	}})
+	assert.True(t, codexIncrementalNeedsFullParse(activity))
+	interacted := testjsonl.CodexSubagentActivityJSON(
+		"interacted", "call_message", childID,
+		"/root/identity_lifecycle", tsLateS5,
+	)
+	assert.False(t, codexIncrementalNeedsFullParse(interacted))
+}
+
+func TestParseCodexSession_InboundAgentMessagesAreUserTurns(t *testing.T) {
+	const (
+		initialTask = "Inspect the parser and report the root cause."
+		followUp    = "Also identify the safest regression test."
+	)
+	initialContext := fmt.Sprintf(
+		`{"timestamp":%q,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<recommended_plugins>\nplugin list\n</recommended_plugins>"},{"type":"input_text","text":"# AGENTS.md\n<INSTRUCTIONS>\nRepository rules\n</INSTRUCTIONS>"},{"type":"input_text","text":"<environment_context>\n<cwd>/tmp/project</cwd>\n</environment_context>"}]}}`,
+		tsEarlyS1,
+	)
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSubagentSessionMetaJSON(
+			"child", "parent", "/tmp/project", "user", tsEarly,
+		),
+		initialContext,
+		testjsonl.CodexAgentMessageJSON(
+			"/root", "/root/worker", "Task received from parent.",
+			initialTask, tsEarlyS5,
+		),
+		testjsonl.CodexMsgJSON(
+			"assistant", "I found the parser branch.", tsLate,
+		),
+		testjsonl.CodexAgentMessageJSON(
+			"/root/worker", "/root", "Update sent to parent.",
+			"This outbound update must stay hidden.", tsLateS5,
+		),
+		testjsonl.CodexAgentMessageJSON(
+			"/root", "/root/worker", "Follow-up received from parent.",
+			followUp, "2024-01-01T11:00:10Z",
+		),
+	)
+
+	sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+	require.NotNil(t, sess)
+	assert.Equal(t, initialTask, sess.FirstMessage)
+	require.Len(t, msgs, 3)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, initialTask, msgs[0].Content)
+	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	assert.Equal(t, "I found the parser branch.", msgs[1].Content)
+	assert.Equal(t, RoleUser, msgs[2].Role)
+	assert.Equal(t, followUp, msgs[2].Content)
+}
+
+func TestParseCodexSession_EncryptedAgentMessageUsesTaskName(t *testing.T) {
+	const encrypted = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSubagentSessionMetaJSON(
+			"child", "parent", "/tmp/project", "user", tsEarly,
+		),
+		testjsonl.CodexAgentMessageJSON(
+			"/root", "/root/worker", "Task received from parent.",
+			encrypted, tsEarlyS1,
+		),
+		testjsonl.CodexMsgJSON(
+			"assistant", "I completed the encrypted task.", tsEarlyS5,
+		),
+	)
+
+	sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+	require.NotNil(t, sess)
+	assert.Empty(t, sess.FirstMessage)
+	assert.Equal(t, "worker", sess.SessionName)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, RoleAssistant, msgs[0].Role)
+	assert.Equal(t, "I completed the encrypted task.", msgs[0].Content)
+}
+
+func TestParseCodexSession_FernetPrefixPlaintextRemainsVisible(t *testing.T) {
+	const prompt = "gAAAAA is only a prefix here, not an encrypted token."
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSubagentSessionMetaJSON(
+			"child", "parent", "/tmp/project", "user", tsEarly,
+		),
+		testjsonl.CodexAgentMessageJSON(
+			"/root", "/root/worker", "Task received from parent.",
+			prompt, tsEarlyS1,
+		),
+	)
+
+	sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+	require.NotNil(t, sess)
+	assert.Equal(t, prompt, sess.FirstMessage)
+	assert.Empty(t, sess.SessionName)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, prompt, msgs[0].Content)
+}
+
 func TestParseCodexSession_UsesThreadNameFromSessionIndex(t *testing.T) {
 	root := t.TempDir()
 	sessionDir := filepath.Join(root, "sessions", "2026", "06", "11")

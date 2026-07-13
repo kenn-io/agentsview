@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -61,6 +62,8 @@ type codexSessionBuilder struct {
 	startedAt            time.Time
 	endedAt              time.Time
 	sessionID            string
+	parentSessionID      string
+	relationshipType     RelationshipType
 	project              string
 	ordinal              int
 	callNames            map[string]string
@@ -237,6 +240,25 @@ func (b *codexSessionBuilder) handleSessionMeta(
 	payload gjson.Result, envelopeTS time.Time,
 ) (skip bool) {
 	b.sessionID = payload.Get("id").Str
+	b.agentPath = strings.TrimSpace(payload.Get("agent_path").Str)
+	if b.agentPath == "" {
+		b.agentPath = strings.TrimSpace(
+			payload.Get("source.subagent.thread_spawn.agent_path").Str,
+		)
+	}
+	b.parentSessionID = strings.TrimSpace(
+		payload.Get("source.subagent.thread_spawn.parent_thread_id").Str,
+	)
+	if b.parentSessionID == "" &&
+		payload.Get("thread_source").Str == "subagent" {
+		b.parentSessionID = strings.TrimSpace(
+			payload.Get("parent_thread_id").Str,
+		)
+	}
+	if b.parentSessionID != "" {
+		b.parentSessionID = codexSubagentSessionID(b.parentSessionID)
+		b.relationshipType = RelSubagent
+	}
 
 	if cwd := payload.Get("cwd").Str; cwd != "" {
 		b.cwd = cwd
@@ -262,6 +284,9 @@ func (b *codexSessionBuilder) handleResponseItem(
 		return
 	case "function_call_output", "custom_tool_call_output":
 		b.handleFunctionCallOutput(payload, ts)
+		return
+	case "agent_message":
+		b.handleAgentMessage(payload, ts)
 		return
 	}
 
@@ -319,6 +344,33 @@ func (b *codexSessionBuilder) handleResponseItem(
 	b.ordinal++
 }
 
+func (b *codexSessionBuilder) handleAgentMessage(
+	payload gjson.Result, ts time.Time,
+) {
+	content := extractCodexInboundAgentMessage(payload, b.agentPath)
+	if strings.TrimSpace(content) == "" {
+		return
+	}
+	first, replay := b.observeUserPrompt(content)
+	if first {
+		b.firstMessage = truncate(
+			strings.ReplaceAll(content, "\n", " "), 300,
+		)
+	}
+	if replay {
+		return
+	}
+	b.messages = append(b.messages, ParsedMessage{
+		Ordinal:       b.ordinal,
+		Role:          RoleUser,
+		Content:       content,
+		Timestamp:     ts,
+		ContentLength: len(content),
+		Model:         b.model,
+	})
+	b.ordinal++
+}
+
 func (b *codexSessionBuilder) handleEventMsg(payload gjson.Result) {
 	eventType := payload.Get("type").Str
 	switch eventType {
@@ -328,6 +380,8 @@ func (b *codexSessionBuilder) handleEventMsg(payload gjson.Result) {
 		b.handleTokenCountEvent(payload)
 	case "collab_agent_spawn_end":
 		b.handleCollabAgentSpawnEnd(payload)
+	case "sub_agent_activity":
+		b.handleSubagentActivity(payload)
 	}
 }
 
@@ -364,6 +418,21 @@ func (b *codexSessionBuilder) handleCollabAgentSpawnEnd(
 ) {
 	callID := payload.Get("call_id").Str
 	agentID := strings.TrimSpace(payload.Get("new_thread_id").Str)
+	if callID == "" || agentID == "" {
+		return
+	}
+	b.agentSpawnCalls[agentID] = callID
+	b.setCallSubagentSessionID(callID, codexSubagentSessionID(agentID))
+}
+
+func (b *codexSessionBuilder) handleSubagentActivity(
+	payload gjson.Result,
+) {
+	if payload.Get("kind").Str != "started" {
+		return
+	}
+	callID := payload.Get("event_id").Str
+	agentID := strings.TrimSpace(payload.Get("agent_thread_id").Str)
 	if callID == "" || agentID == "" {
 		return
 	}
@@ -1261,6 +1330,56 @@ func extractCodexContent(payload gjson.Result) string {
 	return strings.Join(extractCodexTextBlocks(payload), "\n")
 }
 
+func extractCodexInboundAgentMessage(
+	payload gjson.Result, agentPath string,
+) string {
+	if agentPath == "" ||
+		strings.TrimSpace(payload.Get("recipient").Str) != agentPath {
+		return ""
+	}
+	var texts []string
+	payload.Get("content").ForEach(
+		func(_, block gjson.Result) bool {
+			if block.Get("type").Str == "encrypted_content" {
+				text := block.Get("encrypted_content").Str
+				if text != "" && !isCodexEncryptedToolContent(text) {
+					texts = append(texts, text)
+				}
+			}
+			return true
+		},
+	)
+	return strings.Join(texts, "\n")
+}
+
+// isCodexEncryptedToolContent recognizes the URL-safe base64 envelope used
+// by Fernet without attempting to decrypt it. Current Codex multi-agent tools
+// can emit either plaintext or an opaque Fernet value in encrypted_content,
+// so the content type alone is not enough to decide whether it is displayable.
+func isCodexEncryptedToolContent(content string) bool {
+	if !strings.HasPrefix(content, "gAAAAA") {
+		return false
+	}
+	decoded, err := base64.URLEncoding.DecodeString(content)
+	if err != nil {
+		decoded, err = base64.RawURLEncoding.DecodeString(content)
+	}
+	if err != nil || len(decoded) < 73 || decoded[0] != 0x80 {
+		return false
+	}
+	const fernetEnvelopeBytes = 1 + 8 + 16 + 32
+	ciphertextBytes := len(decoded) - fernetEnvelopeBytes
+	return ciphertextBytes >= 16 && ciphertextBytes%16 == 0
+}
+
+func codexAgentPathLeaf(agentPath string) string {
+	trimmed := strings.Trim(agentPath, "/")
+	if i := strings.LastIndex(trimmed, "/"); i >= 0 {
+		return trimmed[i+1:]
+	}
+	return trimmed
+}
+
 // extractCodexInitialUserContent filters the synthetic blocks bundled with
 // Codex's recommended-plugins injection while retaining user-authored blocks
 // from the same response item.
@@ -1411,14 +1530,22 @@ func (p *codexProvider) parseSessionSnapshot(
 		}
 	}
 
+	sessionName := LookupCodexThreadName(path, b.sessionID)
+	if sessionName == "" && b.firstMessage == "" &&
+		b.relationshipType == RelSubagent {
+		sessionName = codexAgentPathLeaf(b.agentPath)
+	}
+
 	sess := &ParsedSession{
 		ID:                sessionID,
 		Project:           b.project,
 		Machine:           machine,
 		Agent:             AgentCodex,
+		ParentSessionID:   b.parentSessionID,
+		RelationshipType:  b.relationshipType,
 		Cwd:               b.cwd,
 		FirstMessage:      b.firstMessage,
-		SessionName:       LookupCodexThreadName(path, b.sessionID),
+		SessionName:       sessionName,
 		StartedAt:         b.startedAt,
 		EndedAt:           b.endedAt,
 		MessageCount:      len(b.messages),
@@ -1684,6 +1811,14 @@ func seedCodexIncrementalStateFromReader(
 				if cwd := payload.Get("cwd").Str; cwd != "" {
 					seed.cwd = cwd
 				}
+				seed.agentPath = strings.TrimSpace(
+					payload.Get("agent_path").Str,
+				)
+				if seed.agentPath == "" {
+					seed.agentPath = strings.TrimSpace(payload.Get(
+						"source.subagent.thread_spawn.agent_path",
+					).Str)
+				}
 				seed.forkGate.armFromMeta(
 					payload,
 					parseTimestamp(gjson.Get(line, "timestamp").Str),
@@ -1723,6 +1858,13 @@ func observeCodexIncrementalUserMessage(
 	s *codexIncrementalSeed,
 	payload gjson.Result,
 ) {
+	if payload.Get("type").Str == "agent_message" {
+		content := extractCodexInboundAgentMessage(payload, s.agentPath)
+		if strings.TrimSpace(content) != "" {
+			s.observeUserPrompt(content)
+		}
+		return
+	}
 	if payload.Get("role").Str != "user" {
 		return
 	}
@@ -2166,8 +2308,15 @@ func isCodexSubagentNotification(content string) bool {
 func codexIncrementalNeedsFullParse(line string) bool {
 	switch gjson.Get(line, "type").Str {
 	case codexTypeEventMsg:
-		return gjson.Get(line, "payload.type").Str ==
-			"collab_agent_spawn_end"
+		payload := gjson.Get(line, "payload")
+		switch payload.Get("type").Str {
+		case "collab_agent_spawn_end":
+			return true
+		case "sub_agent_activity":
+			return payload.Get("kind").Str == "started"
+		default:
+			return false
+		}
 	case codexTypeResponseItem:
 	default:
 		return false

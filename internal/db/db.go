@@ -33,6 +33,11 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // trigger a non-destructive re-sync (mtime reset + skip cache
 // clear) so existing session data is preserved.
 //
+// Bumped to 63: the Codex parser now persists current subagent lineage,
+// links spawn events, restores plaintext agent messages, suppresses opaque
+// encrypted payloads, and derives titles for encrypted child sessions.
+// Existing Codex rows need re-parsing to backfill the corrected sessions.
+//
 // Bumped to 61: the ZCode parser now persists transcript messages,
 // tool calls, and tool results from the message/part tables.
 // Existing ZCode rows need re-parsing so stored sessions backfill
@@ -294,7 +299,7 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // (62: Local session machine identity now uses the operating-system hostname
 // instead of the ambiguous literal "local". Re-parsing updates existing
 // source-backed rows while the resync archive copy preserves orphaned history.)
-const dataVersion = 62
+const dataVersion = 63
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -324,7 +329,8 @@ type DataVersionTooNewError struct {
 
 func (e *DataVersionTooNewError) Error() string {
 	return fmt.Sprintf(
-		"database data version %d is newer than this agentsview binary's data version %d. Run \"agentsview update\" or install the latest AgentsView release before serving or syncing this archive",
+		"database data version %d is newer than this agentsview binary's data version %d, so this binary cannot safely open the archive. Use an AgentsView build with data version %d or newer, or restore an archive backup compatible with data version %d. The archive was not modified",
+		e.DatabaseVersion, e.BinaryVersion,
 		e.DatabaseVersion, e.BinaryVersion,
 	)
 }
