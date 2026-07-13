@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1340,7 +1341,8 @@ func extractCodexInboundAgentMessage(
 	payload.Get("content").ForEach(
 		func(_, block gjson.Result) bool {
 			if block.Get("type").Str == "encrypted_content" {
-				if text := block.Get("encrypted_content").Str; text != "" {
+				text := block.Get("encrypted_content").Str
+				if text != "" && !isCodexEncryptedToolContent(text) {
 					texts = append(texts, text)
 				}
 			}
@@ -1348,6 +1350,34 @@ func extractCodexInboundAgentMessage(
 		},
 	)
 	return strings.Join(texts, "\n")
+}
+
+// isCodexEncryptedToolContent recognizes the URL-safe base64 envelope used
+// by Fernet without attempting to decrypt it. Current Codex multi-agent tools
+// can emit either plaintext or an opaque Fernet value in encrypted_content,
+// so the content type alone is not enough to decide whether it is displayable.
+func isCodexEncryptedToolContent(content string) bool {
+	if !strings.HasPrefix(content, "gAAAAA") {
+		return false
+	}
+	decoded, err := base64.URLEncoding.DecodeString(content)
+	if err != nil {
+		decoded, err = base64.RawURLEncoding.DecodeString(content)
+	}
+	if err != nil || len(decoded) < 73 || decoded[0] != 0x80 {
+		return false
+	}
+	const fernetEnvelopeBytes = 1 + 8 + 16 + 32
+	ciphertextBytes := len(decoded) - fernetEnvelopeBytes
+	return ciphertextBytes >= 16 && ciphertextBytes%16 == 0
+}
+
+func codexAgentPathLeaf(agentPath string) string {
+	trimmed := strings.Trim(agentPath, "/")
+	if i := strings.LastIndex(trimmed, "/"); i >= 0 {
+		return trimmed[i+1:]
+	}
+	return trimmed
 }
 
 // extractCodexInitialUserContent filters the synthetic blocks bundled with
@@ -1500,6 +1530,12 @@ func (p *codexProvider) parseSessionSnapshot(
 		}
 	}
 
+	sessionName := LookupCodexThreadName(path, b.sessionID)
+	if sessionName == "" && b.firstMessage == "" &&
+		b.relationshipType == RelSubagent {
+		sessionName = codexAgentPathLeaf(b.agentPath)
+	}
+
 	sess := &ParsedSession{
 		ID:                sessionID,
 		Project:           b.project,
@@ -1509,7 +1545,7 @@ func (p *codexProvider) parseSessionSnapshot(
 		RelationshipType:  b.relationshipType,
 		Cwd:               b.cwd,
 		FirstMessage:      b.firstMessage,
-		SessionName:       LookupCodexThreadName(path, b.sessionID),
+		SessionName:       sessionName,
 		StartedAt:         b.startedAt,
 		EndedAt:           b.endedAt,
 		MessageCount:      len(b.messages),

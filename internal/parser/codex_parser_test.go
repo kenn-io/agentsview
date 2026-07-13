@@ -245,6 +245,53 @@ func TestParseCodexSession_InboundAgentMessagesAreUserTurns(t *testing.T) {
 	assert.Equal(t, followUp, msgs[2].Content)
 }
 
+func TestParseCodexSession_EncryptedAgentMessageUsesTaskName(t *testing.T) {
+	const encrypted = "gAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSubagentSessionMetaJSON(
+			"child", "parent", "/tmp/project", "user", tsEarly,
+		),
+		testjsonl.CodexAgentMessageJSON(
+			"/root", "/root/worker", "Task received from parent.",
+			encrypted, tsEarlyS1,
+		),
+		testjsonl.CodexMsgJSON(
+			"assistant", "I completed the encrypted task.", tsEarlyS5,
+		),
+	)
+
+	sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+	require.NotNil(t, sess)
+	assert.Empty(t, sess.FirstMessage)
+	assert.Equal(t, "worker", sess.SessionName)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, RoleAssistant, msgs[0].Role)
+	assert.Equal(t, "I completed the encrypted task.", msgs[0].Content)
+}
+
+func TestParseCodexSession_FernetPrefixPlaintextRemainsVisible(t *testing.T) {
+	const prompt = "gAAAAA is only a prefix here, not an encrypted token."
+	content := testjsonl.JoinJSONL(
+		testjsonl.CodexSubagentSessionMetaJSON(
+			"child", "parent", "/tmp/project", "user", tsEarly,
+		),
+		testjsonl.CodexAgentMessageJSON(
+			"/root", "/root/worker", "Task received from parent.",
+			prompt, tsEarlyS1,
+		),
+	)
+
+	sess, msgs := runCodexParserTest(t, "test.jsonl", content, false)
+
+	require.NotNil(t, sess)
+	assert.Equal(t, prompt, sess.FirstMessage)
+	assert.Empty(t, sess.SessionName)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+	assert.Equal(t, prompt, msgs[0].Content)
+}
+
 func TestParseCodexSession_UsesThreadNameFromSessionIndex(t *testing.T) {
 	root := t.TempDir()
 	sessionDir := filepath.Join(root, "sessions", "2026", "06", "11")
