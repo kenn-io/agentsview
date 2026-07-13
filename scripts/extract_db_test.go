@@ -448,6 +448,10 @@ func TestExtractDBKeepsOnlyRootTrees(t *testing.T) {
 	insertSession("old_thinking_keep", "", "", old, 0, 3, 2)
 	insertSession("automated_thinking_keep", "", "", recent, 1, 1, 1)
 	_, err = conn.Exec(
+		"UPDATE sessions SET machine = 'private-workstation'",
+	)
+	require.NoError(t, err)
+	_, err = conn.Exec(
 		`UPDATE messages
 		 SET thinking_text = 'private reasoning', has_thinking = 1
 		 WHERE session_id IN ('old_thinking_keep', 'automated_thinking_keep')`,
@@ -500,6 +504,12 @@ func TestExtractDBKeepsOnlyRootTrees(t *testing.T) {
 		"SELECT COUNT(*) FROM sessions WHERE is_automated = 1",
 	).Scan(&automatedCount))
 	assert.Equal(t, 3, automatedCount)
+
+	var machines string
+	require.NoError(t, outConn.QueryRow(
+		"SELECT group_concat(DISTINCT machine) FROM sessions",
+	).Scan(&machines))
+	assert.Equal(t, "dev-laptop", machines)
 
 	var orphanChildCount int
 	require.NoError(t, outConn.QueryRow(

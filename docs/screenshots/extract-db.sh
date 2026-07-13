@@ -281,6 +281,11 @@ DELETE FROM messages WHERE session_id IN (
 DELETE FROM sessions
 WHERE id NOT IN (SELECT id FROM screenshot_sessions);
 
+-- Keep generated screenshots independent of the source machine's hostname.
+-- The PostgreSQL fixture relabels a subset as work-desktop after push so the
+-- multi-machine UI remains covered with deterministic example identities.
+UPDATE sessions SET machine = 'dev-laptop';
+
 UPDATE sessions
 SET first_message = replace(first_message, r.from_text, r.to_text),
     display_name = replace(display_name, r.from_text, r.to_text),

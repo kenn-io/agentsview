@@ -3,6 +3,23 @@ title: Changelog
 description: Release history for AgentsView
 ---
 
+## 0.38.1
+<small>2026-07-13</small>
+
+**Bug fixes**
+
+- Restore correct **parent-child lineage and titles for Codex subagent
+  sessions**, including current multi-agent metadata and addressed agent
+  messages. Opaque encrypted tool payloads remain excluded from transcripts
+  and search.
+
+**Acknowledgements**
+
+- Thanks to [Wes McKinney](https://github.com/wesm) for restoring Codex
+  subagent lineage and titles and for release documentation.
+
+---
+
 ## 0.38.0
 <small>2026-07-13</small>
 

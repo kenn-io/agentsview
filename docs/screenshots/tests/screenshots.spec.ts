@@ -1128,6 +1128,9 @@ test.describe('Settings', () => {
       timeout: 5_000,
     });
     await worktreeSection.first().scrollIntoViewIfNeeded();
+    const mappingPath = worktreeSection.first().getByRole('textbox').first();
+    await mappingPath.fill('~/code/project.worktrees');
+    await expect(mappingPath).toHaveValue('~/code/project.worktrees');
     await page.waitForTimeout(500);
 
     await snapEl(worktreeSection.first(), 'worktree-mappings');
