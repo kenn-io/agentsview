@@ -161,6 +161,10 @@ pub fn run() {
             if let Err(err) = setup_macos_status_item(app) {
                 eprintln!("[agentsview] failed to set up macOS status item: {err}");
             }
+            #[cfg(target_os = "macos")]
+            if let Err(err) = setup_macos_window_lifecycle(app) {
+                eprintln!("[agentsview] failed to set up macOS window lifecycle: {err}");
+            }
             match tauri::async_runtime::block_on(run_data_version_preflight(app.handle())) {
                 Ok(()) => {
                     if let Err(err) = launch_backend(app) {
@@ -246,9 +250,43 @@ fn show_main_window(handle: &AppHandle) {
     let Some(window) = handle.get_webview_window("main") else {
         return;
     };
-    let _ = window.show();
-    let _ = window.unminimize();
-    let _ = window.set_focus();
+    restore_main_window(&window);
+}
+
+trait MainWindowVisibility {
+    fn hide_main_window(&self);
+    fn show_main_window(&self);
+    fn unminimize_main_window(&self);
+    fn focus_main_window(&self);
+}
+
+impl MainWindowVisibility for WebviewWindow {
+    fn hide_main_window(&self) {
+        let _ = self.hide();
+    }
+
+    fn show_main_window(&self) {
+        let _ = self.show();
+    }
+
+    fn unminimize_main_window(&self) {
+        let _ = self.unminimize();
+    }
+
+    fn focus_main_window(&self) {
+        let _ = self.set_focus();
+    }
+}
+
+fn hide_main_window_on_close(window: &impl MainWindowVisibility, prevent_close: impl FnOnce()) {
+    prevent_close();
+    window.hide_main_window();
+}
+
+fn restore_main_window(window: &impl MainWindowVisibility) {
+    window.show_main_window();
+    window.unminimize_main_window();
+    window.focus_main_window();
 }
 
 fn launch_backend(app: &mut App) -> Result<(), DynError> {
@@ -1979,10 +2017,7 @@ fn setup_macos_status_item(app: &mut App) -> Result<(), DynError> {
         .item(&quit)
         .build()?;
 
-    let icon = app
-        .default_window_icon()
-        .cloned()
-        .ok_or_else(|| io::Error::other("default app icon is unavailable"))?;
+    let icon = macos_status_item_icon()?;
     TrayIconBuilder::with_id("agentsview")
         .icon(icon)
         .icon_as_template(true)
@@ -1990,6 +2025,25 @@ fn setup_macos_status_item(app: &mut App) -> Result<(), DynError> {
         .menu(&menu)
         .build(app)?;
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn setup_macos_window_lifecycle(app: &App) -> Result<(), DynError> {
+    let window = main_window(app)?;
+    let close_window = window.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            hide_main_window_on_close(&close_window, || api.prevent_close());
+        }
+    });
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_status_item_icon() -> Result<tauri::image::Image<'static>, DynError> {
+    Ok(tauri::image::Image::from_bytes(include_bytes!(
+        "../icons/trayTemplate.png"
+    ))?)
 }
 
 fn open_logs_folder(handle: &AppHandle) {
@@ -3886,6 +3940,69 @@ agentsview running at http://127.0.0.1:18082
             Some(DesktopMenuAction::Quit)
         );
         assert_eq!(desktop_menu_action("unknown"), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[derive(Clone, Default)]
+    struct FakeMainWindow {
+        calls: std::sync::Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    #[cfg(target_os = "macos")]
+    impl MainWindowVisibility for FakeMainWindow {
+        fn hide_main_window(&self) {
+            self.calls.lock().expect("lock calls").push("hide");
+        }
+
+        fn show_main_window(&self) {
+            self.calls.lock().expect("lock calls").push("show");
+        }
+
+        fn unminimize_main_window(&self) {
+            self.calls.lock().expect("lock calls").push("unminimize");
+        }
+
+        fn focus_main_window(&self) {
+            self.calls.lock().expect("lock calls").push("focus");
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_close_hides_the_existing_window_and_show_restores_it() {
+        let window = FakeMainWindow::default();
+        let close_calls = window.calls.clone();
+
+        hide_main_window_on_close(&window, move || {
+            close_calls
+                .lock()
+                .expect("lock close calls")
+                .push("prevent_close");
+        });
+        restore_main_window(&window);
+
+        assert_eq!(
+            *window.calls.lock().expect("lock calls for assertion"),
+            vec!["prevent_close", "hide", "show", "unminimize", "focus"]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_status_item_icon_is_a_key_only_template() {
+        let icon = macos_status_item_icon().expect("load macOS status item icon");
+
+        assert_eq!((icon.width(), icon.height()), (32, 32));
+        assert_eq!(image_alpha_at(&icon, 3, 3), 0, "tile stays transparent");
+        assert!(image_alpha_at(&icon, 8, 8) > 200, "key head is opaque");
+        assert_eq!(image_alpha_at(&icon, 20, 9), 0, "keyhole is transparent");
+        assert!(image_alpha_at(&icon, 16, 24) > 200, "key stem is opaque");
+    }
+
+    #[cfg(target_os = "macos")]
+    fn image_alpha_at(icon: &tauri::image::Image<'_>, x: u32, y: u32) -> u8 {
+        let offset = ((y * icon.width() + x) * 4 + 3) as usize;
+        icon.rgba()[offset]
     }
 
     #[test]
