@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -152,7 +153,9 @@ func newDaemonCommandWithDeps(deps daemonCommandDeps) *cobra.Command {
 			Use: "restart", Short: "Restart the background server",
 			SilenceUsage: true, Args: cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, _ []string) error {
-				ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
+				ctx, stop := signal.NotifyContext(
+					cmd.Context(), os.Interrupt, syscall.SIGTERM,
+				)
 				defer stop()
 				return runDaemonRestartAttached(ctx, cmd.OutOrStdout(), deps)
 			},
