@@ -54,6 +54,14 @@ The validator will not require unit normalization. Different embedding services
 may return valid vectors with different magnitudes, and sqlite-vec's cosine
 metric handles any finite, non-zero vector.
 
+JSON float arrays need one additional decode-time guard. Go's JSON decoder maps
+a `null` numeric-array element to the float type's zero value without returning
+an error, which would hide a mixed response such as `[0.5, null]` from the
+post-decode finite check. `embeddingVector.UnmarshalJSON` will inspect
+individual array elements and reject `null` before converting them to `float32`.
+Base64 responses retain their raw non-finite bit patterns and are handled by the
+shared validator.
+
 Validation will run at two owned boundaries:
 
 - `reorderAndValidate` will validate decoded OpenAI-compatible responses after
@@ -156,6 +164,9 @@ Focused Go tests will cover behavior owned by AgentsView:
 
 - table-driven base64 responses containing `NaN`, positive infinity, negative
   infinity, and an all-zero vector are rejected with no returned vectors;
+- JSON float responses containing either a mixed `null` element or only `null`
+  elements fail during embedding-vector decoding rather than being converted
+  to zeros;
 - an invalid response followed by a valid response succeeds through the existing
   retry mechanism;
 - a custom build encoder returning an invalid vector cannot create either a
