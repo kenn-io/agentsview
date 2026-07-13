@@ -9,6 +9,9 @@ The wrapper does not reimplement the web app. Instead, it:
 1. Starts it with `serve --background --host 127.0.0.1` on a local port.
 1. Loads the local URL in a native webview.
 
+On macOS, the same desktop process also provides a menu-bar status item for
+showing the AgentsView window, opening logs, checking for updates, and quitting.
+
 ## Requirements
 
 - Rust toolchain (`rustc`, `cargo`)
@@ -42,11 +45,11 @@ probing is skipped by default.
 Optional escape hatch:
 
 - Add overrides in `~/.agentsview/desktop.env`:
-  - Example: `PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`
-  - Example: `ANTHROPIC_API_KEY=...`
+    - Example: `PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin`
+    - Example: `ANTHROPIC_API_KEY=...`
 - Windows WSL bridge example:
-  - `CODEX_SESSIONS_DIR=wsl:Ubuntu:/home/me/.codex/sessions`
-    (becomes `\\wsl.localhost\Ubuntu\home\me\.codex\sessions` in desktop wrapper env)
+    - `CODEX_SESSIONS_DIR=wsl:Ubuntu:/home/me/.codex/sessions` (becomes
+      `\\wsl.localhost\Ubuntu\home\me\.codex\sessions` in desktop wrapper env)
 - On Windows, this file resolves to `%USERPROFILE%\\.agentsview\\desktop.env`.
 - Force a custom PATH with `AGENTSVIEW_DESKTOP_PATH`.
 - Skip login-shell env loading with `AGENTSVIEW_DESKTOP_SKIP_LOGIN_SHELL_ENV=1`.

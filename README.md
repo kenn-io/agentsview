@@ -21,13 +21,6 @@ Or download the **desktop app** (macOS / Windows) from
 [GitHub Releases](https://github.com/kenn-io/agentsview/releases) or via
 homebrew: `brew install --cask agentsview`
 
-On macOS, an optional menu-bar companion is available from the separate
-`macos/agentsview-menubar` Swift Package. Build and open it with
-`make menubar-open`; it starts the existing server detached and keeps it
-running independently of the menu-bar app. It uses an OS-assigned local port
-instead of claiming `8080`. The app is menu-bar-only, so it does not open a
-window or appear in the Dock.
-
 Or run the published Docker image:
 
 ```bash
@@ -365,10 +358,10 @@ thread JSON files.
 | Zencoder              | `~/.zencoder/sessions/`                                                                                                                                                 |
 
 Grok sessions are read from `summary.json` (title, timestamps, project),
-optional `signals.json` (token counters), and `chat_history.jsonl` when
-present for the full transcript (user turns, assistant replies, thinking,
-and tool calls). If `chat_history.jsonl` is missing, AgentsView falls back
-to summary-only mode. Set `GROK_DIR` or `grok_dirs` to override the default
+optional `signals.json` (token counters), and `chat_history.jsonl` when present
+for the full transcript (user turns, assistant replies, thinking, and tool
+calls). If `chat_history.jsonl` is missing, AgentsView falls back to
+summary-only mode. Set `GROK_DIR` or `grok_dirs` to override the default
 directory.
 
 Each directory can be overridden with an environment variable. See the
