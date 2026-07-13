@@ -34,8 +34,14 @@ test.describe("Navigation", () => {
   test("Shift+J and Shift+K navigate visible user prompts", async ({ page }, testInfo) => {
     const session = page
       .locator(".session-item")
-      .filter({ hasText: "project-beta" })
-      .filter({ hasText: "3" });
+      .filter({
+        has: page.locator(
+          '.session-project:text-is("project-beta")',
+        ),
+      })
+      .filter({
+        has: page.locator('.session-count:text-is("3")'),
+      });
     await session.first().click();
     await expect(sp.messageRows).toHaveCount(6);
 
