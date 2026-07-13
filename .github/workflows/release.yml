@@ -43,6 +43,10 @@ jobs:
         with:
           node-version: "24"
 
+      - name: Download Go modules
+        shell: bash
+        run: bash scripts/retry.sh 3 10 go mod download
+
       - name: Build frontend
         run: npm ci && npm run build
         working-directory: frontend
@@ -75,7 +79,6 @@ jobs:
           # "-O2 -g" restates Go's built-in default, which setting
           # CGO_CFLAGS would otherwise replace, leaving the SQLite
           # amalgamation unoptimized (2-3x slower queries).
-          go mod download github.com/mattn/go-sqlite3
           mkdir -p .sqlite-include
           cp "$(go list -m -f '{{.Dir}}' github.com/mattn/go-sqlite3)/sqlite3-binding.h" .sqlite-include/sqlite3.h
           export CGO_CFLAGS="-O2 -g -I${PWD}/.sqlite-include"
@@ -139,6 +142,10 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6.4.0
         with:
           node-version: "24"
+
+      - name: Download Go modules
+        shell: bash
+        run: bash scripts/retry.sh 3 10 go mod download
 
       - name: Build frontend
         run: npm ci && npm run build
