@@ -15,10 +15,12 @@ configuration change, confirming that the failure was external and transient.
 
 ## Design
 
-Add an explicit module-prefetch step to both CLI release build jobs before
-compilation. The step will run `go mod download` through the repository's
-existing `scripts/retry.sh` helper with three total attempts and a short linear
-backoff.
+Add an explicit module-prefetch step to both CLI release build jobs immediately
+after the Go and Node toolchains are set up. This placement precedes both the
+pricing snapshot's `go run` and the final `go build`, so neither command needs
+to discover missing modules during compilation. The step will invoke
+`bash scripts/retry.sh 3 10 go mod download`, providing three total attempts
+with waits of 10 and 20 seconds after the first two failures.
 
 Prefetching separates network availability from compilation. Completed module
 downloads remain cached between attempts, while a later deterministic compiler
@@ -32,10 +34,11 @@ general prefetch has already populated the module cache.
 
 ## Failure Handling
 
-The retry policy is bounded at three attempts. Each failed attempt remains
-visible in the job log, and exhaustion preserves the final `go mod download`
-exit status. Persistent dependency, checksum, authentication, or proxy failures
-therefore continue to block publication rather than being hidden.
+The retry policy is bounded at three attempts and at most 30 seconds of backoff.
+Each failed attempt remains visible in the job log, and exhaustion preserves the
+final `go mod download` exit status. Persistent dependency, checksum,
+authentication, or proxy failures therefore continue to block publication rather
+than being hidden.
 
 The workflow will not retry `go build`, archive creation, checksum generation,
 release uploads, or PyPI publication. Those operations have different failure
