@@ -32,17 +32,12 @@ test.describe("Navigation", () => {
   });
 
   test("Shift+J and Shift+K navigate visible user prompts", async ({ page }, testInfo) => {
-    const session = page
-      .locator(".session-item")
-      .filter({
-        has: page.locator(
-          '.session-project:text-is("project-beta")',
-        ),
-      })
-      .filter({
-        has: page.locator('.session-count:text-is("3")'),
-      });
-    await session.first().click();
+    const sessionId = "test-session-mixed-content-7";
+    const session = page.locator(`.session-item[data-session-id="${sessionId}"]`);
+    await expect(session).toHaveCount(1);
+    await session.click();
+    await expect(session).toHaveClass(/active/);
+    await expect(sp.scroller).toHaveAttribute("data-messages-session-id", sessionId);
     await expect(sp.messageRows).toHaveCount(6);
 
     const users = sp.messageRows.filter({
