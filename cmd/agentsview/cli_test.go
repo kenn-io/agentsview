@@ -167,7 +167,13 @@ func TestServeCheckDataVersionRejectsNewerDatabase(t *testing.T) {
 	assert.Empty(t, out)
 	assert.Contains(t, err.Error(), "database data version")
 	assert.Contains(t, err.Error(), "is newer than this agentsview binary")
-	assert.Contains(t, err.Error(), `Run "agentsview update"`)
+	assert.Contains(t, err.Error(),
+		fmt.Sprintf("Use an AgentsView build with data version %d or newer", futureVersion))
+	assert.Contains(t, err.Error(),
+		fmt.Sprintf("restore an archive backup compatible with data version %d",
+			db.CurrentDataVersion()))
+	assert.Contains(t, err.Error(), "The archive was not modified")
+	assert.NotContains(t, err.Error(), `Run "agentsview update"`)
 }
 
 func TestServeCheckDataVersionDoesNotCreateConfig(t *testing.T) {

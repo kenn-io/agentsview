@@ -497,7 +497,10 @@ func doctorLikelyCause(
 		return "SQLite user_version is stale; inspect debug.log for resync aborts or failures"
 	}
 	if *report.UserVersion > currentVersion {
-		return "SQLite user_version is newer than this binary. Run \"agentsview update\" or install the latest AgentsView release before serving or syncing"
+		return fmt.Sprintf(
+			"SQLite user_version is newer than this binary. Use an AgentsView build with data version %d or newer, or restore an archive backup compatible with data version %d",
+			*report.UserVersion, currentVersion,
+		)
 	}
 	return "data-version resync is not expected; Running initial sync... is normal incremental startup work"
 }

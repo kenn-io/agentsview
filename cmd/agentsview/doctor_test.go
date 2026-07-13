@@ -164,7 +164,13 @@ func TestDoctorSyncNewerDatabaseReportsRefusedStartup(t *testing.T) {
 		"Startup sync decision: refuse startup (database requires newer agentsview)")
 	assert.Contains(t, out,
 		"Likely cause: SQLite user_version is newer than this binary")
-	assert.Contains(t, out, `Run "agentsview update"`)
+	assert.Contains(t, out,
+		fmt.Sprintf("Use an AgentsView build with data version %d or newer",
+			futureVersion))
+	assert.Contains(t, out,
+		fmt.Sprintf("restore an archive backup compatible with data version %d",
+			db.CurrentDataVersion()))
+	assert.NotContains(t, out, `Run "agentsview update"`)
 }
 
 func TestWriteDoctorSummaryMode(t *testing.T) {
