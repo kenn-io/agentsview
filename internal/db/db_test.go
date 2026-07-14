@@ -700,6 +700,66 @@ func TestOpenDataVersionBump_SurvivesRestart(t *testing.T) {
 		"second reopen: expected NeedsResync=true")
 }
 
+func TestOpenLegacyIndexedColumn_PreservesArchiveAndRequestsResync(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+
+	d := testDBAtPath(t, path, "legacy indexed-column migration db")
+	insertSession(t, d, "s1", "proj")
+	insertMessages(t, d,
+		userMsg("s1", 0, "hello"),
+		asstMsg("s1", 1, "world"),
+	)
+	requireNoError(t, d.Close(), "close seeded database")
+
+	conn, err := sql.Open("sqlite3", path)
+	requireNoError(t, err, "open legacy fixture")
+	_, err = conn.Exec(`
+		DROP INDEX IF EXISTS idx_sessions_parent;
+		ALTER TABLE sessions DROP COLUMN parent_session_id;
+	`)
+	requireNoError(t, err, "remove indexed legacy column")
+	requireNoError(t, conn.Close(), "close legacy fixture")
+
+	d2, err := Open(path)
+	requireNoError(t, err, "open legacy archive")
+
+	require.True(t, d2.NeedsResync(),
+		"legacy schema repair must request a non-destructive resync")
+
+	page, err := d2.ListSessions(
+		context.Background(), SessionFilter{Limit: 100},
+	)
+	requireNoError(t, err, "list preserved sessions")
+	require.Len(t, page.Sessions, 1, "preserved sessions")
+	assert.Equal(t, "s1", page.Sessions[0].ID, "preserved session ID")
+
+	msgs, err := d2.GetMessages(context.Background(), "s1", 0, 100, true)
+	requireNoError(t, err, "read preserved messages")
+	require.Len(t, msgs, 2, "preserved messages")
+
+	var count int
+	err = d2.getReader().QueryRow(
+		`SELECT count(*) FROM pragma_table_info('sessions')
+		 WHERE name = 'parent_session_id'`,
+	).Scan(&count)
+	requireNoError(t, err, "check repaired column")
+	assert.Equal(t, 1, count, "parent_session_id restored")
+	err = d2.getReader().QueryRow(
+		`SELECT count(*) FROM sqlite_master
+		 WHERE type = 'index' AND name = 'idx_sessions_parent'`,
+	).Scan(&count)
+	requireNoError(t, err, "check rebuilt index")
+	assert.Equal(t, 1, count, "idx_sessions_parent restored")
+	requireNoError(t, d2.Close(), "close repaired archive")
+
+	d3, err := Open(path)
+	requireNoError(t, err, "reopen repaired archive")
+	defer d3.Close()
+	require.True(t, d3.NeedsResync(),
+		"schema repair must require resync after restart")
+}
+
 func TestMigration_ResultContentColumn(t *testing.T) {
 
 	dir := t.TempDir()
