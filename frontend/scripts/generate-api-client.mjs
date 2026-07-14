@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import {
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -17,6 +18,33 @@ const frontendDir = resolve(
   "..",
 );
 const repoRoot = resolve(frontendDir, "..");
+
+function suppressExpectedAbortLogging() {
+  const requestPath = join(
+    frontendDir,
+    "src/lib/api/generated/core/request.ts",
+  );
+  const source = readFileSync(requestPath, "utf8");
+  const generatedCatch = `    } catch (error) {
+      console.error(error);
+    }
+`;
+  const cancellationAwareCatch = `    } catch (error) {
+      if (!(error instanceof DOMException && error.name === 'AbortError')) {
+        console.error(error);
+      }
+    }
+`;
+  if (!source.includes(generatedCatch)) {
+    throw new Error(
+      "generated request body handler no longer matches the abort-log patch",
+    );
+  }
+  writeFileSync(
+    requestPath,
+    source.replace(generatedCatch, cancellationAwareCatch),
+  );
+}
 
 function run(cmd, args, options = {}) {
   const result = spawnSync(cmd, args, {
@@ -60,6 +88,7 @@ try {
   } else {
     run("npx", openapiArgs, { cwd: frontendDir });
   }
+  suppressExpectedAbortLogging();
 } finally {
   rmSync(tempDir, { recursive: true, force: true });
 }

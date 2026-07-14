@@ -243,7 +243,9 @@ export const getResponseBody = async (response: Response): Promise<any> => {
         }
       }
     } catch (error) {
-      console.error(error);
+      if (!(error instanceof DOMException && error.name === 'AbortError')) {
+        console.error(error);
+      }
     }
   }
   return undefined;
