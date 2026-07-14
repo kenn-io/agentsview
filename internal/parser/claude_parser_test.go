@@ -46,8 +46,11 @@ func callParseClaudeSessionFromWithLinks(
 		reflect.ValueOf(offset),
 		reflect.ValueOf(startOrdinal),
 	}
-	if fn.Type().NumIn() == 4 {
+	if fn.Type().NumIn() >= 4 {
 		args = append(args, reflect.ValueOf(lastEntryUUID))
+	}
+	if fn.Type().NumIn() >= 5 {
+		args = append(args, reflect.ValueOf(claudeStoredIdentity{}))
 	}
 	out := fn.Call(args)
 

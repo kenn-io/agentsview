@@ -200,15 +200,17 @@ func TestCoworkProviderParsesSession(t *testing.T) {
 	root := t.TempDir()
 	cli := "c0000000-0000-4000-8000-000000000002"
 	_, transcript := writeCoworkSession(t, root, coworkFixture{
-		org:             "org",
-		workspace:       "ws",
-		sessionUUID:     "50000000-0000-4000-8000-000000000002",
-		cliSessionID:    cli,
-		encodedProject:  "-sessions-demo",
-		title:           "Sample session title",
-		createdAt:       1700000000000,
-		lastActivityAt:  1700000100000,
-		transcriptLines: coworkTranscriptLines(cli),
+		org:            "org",
+		workspace:      "ws",
+		sessionUUID:    "50000000-0000-4000-8000-000000000002",
+		cliSessionID:   cli,
+		encodedProject: "-sessions-demo",
+		title:          "Sample session title",
+		createdAt:      1700000000000,
+		lastActivityAt: 1700000100000,
+		transcriptLines: append([]string{
+			`{"type":"agent-setting","agentSetting":"triage","entrypoint":"sdk-cli","sessionId":"` + cli + `"}`,
+		}, coworkTranscriptLines(cli)...),
 	})
 
 	results, excluded := coworkParseTranscript(t, root, transcript, "host-1")
@@ -218,6 +220,8 @@ func TestCoworkProviderParsesSession(t *testing.T) {
 	sess := results[0].Session
 	assert.Equal(t, "cowork:"+cli, sess.ID, "ID prefixed")
 	assert.Equal(t, AgentCowork, sess.Agent, "Agent")
+	assert.Equal(t, "", sess.AgentLabel, "AgentLabel")
+	assert.Equal(t, "", sess.Entrypoint, "Entrypoint")
 	assert.Equal(t, "cowork", sess.Project, "Project")
 	assert.Equal(t, "Sample session title", sess.SessionName, "title")
 	assert.Equal(t, "host-1", sess.Machine, "Machine")

@@ -46,6 +46,7 @@ type Store struct {
 // queries. PG has no local file metadata columns; transcript_revision
 // carries the backend-neutral content revision pushed from SQLite.
 const pgSessionCols = `id, project, machine, agent,
+	agent_label, entrypoint,
 	first_message, COALESCE(display_name, session_name) AS display_name, created_at, started_at,
 	ended_at, message_count, user_message_count,
 	parent_session_id, relationship_type,
@@ -203,6 +204,7 @@ func scanPGSession(
 	var startedAt, endedAt, deletedAt *time.Time
 	err := rs.Scan(
 		&s.ID, &s.Project, &s.Machine, &s.Agent,
+		&s.AgentLabel, &s.Entrypoint,
 		&s.FirstMessage, &s.DisplayName,
 		&createdAt, &startedAt, &endedAt,
 		&s.MessageCount, &s.UserMessageCount,
@@ -516,6 +518,8 @@ func (s *Store) GetSidebarSessionIndex(
 			project,
 			machine,
 			agent,
+			agent_label,
+			entrypoint,
 			COALESCE(display_name, session_name) AS display_name,
 			started_at,
 			ended_at,
@@ -753,6 +757,8 @@ func (s *Store) getSidebarSessionIndexPage(
 			s.project,
 			s.machine,
 			s.agent,
+			s.agent_label,
+			s.entrypoint,
 			COALESCE(s.display_name, s.session_name) AS display_name,
 			s.started_at,
 			s.ended_at,
@@ -798,6 +804,8 @@ func scanPGSidebarSessionIndexRows(
 			&row.Project,
 			&row.Machine,
 			&row.Agent,
+			&row.AgentLabel,
+			&row.Entrypoint,
 			&row.DisplayName,
 			&startedAt,
 			&endedAt,

@@ -60,6 +60,44 @@ func TestDuckDBSessionDateFilterIncludesOverlappingSessions(t *testing.T) {
 	assert.Equal(t, []string{"open", "spanning"}, ids)
 }
 
+func TestSessionIdentity(t *testing.T) {
+	ctx := context.Background()
+	local := newLocalDB(t)
+	startedAt := "2024-06-15T08:00:00Z"
+	endedAt := "2024-06-15T09:00:00Z"
+	sessionName := "Agent Title"
+	require.NoError(t, local.UpsertSession(db.Session{
+		ID:               "duck-identity",
+		Project:          "duck-identity",
+		Machine:          "local",
+		Agent:            "claude",
+		AgentLabel:       "Claude Triage",
+		Entrypoint:       "sdk-cli",
+		SessionName:      &sessionName,
+		StartedAt:        &startedAt,
+		EndedAt:          &endedAt,
+		CreatedAt:        startedAt,
+		MessageCount:     1,
+		UserMessageCount: 1,
+	}), "upsert identity session")
+
+	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	_, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err, "push to DuckDB")
+	store := NewStoreFromDB(syncer.DB())
+
+	index, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{
+		Project: "duck-identity",
+	})
+	require.NoError(t, err)
+	require.Len(t, index.Sessions, 1)
+	assert.Equal(t, "duck-identity", index.Sessions[0].ID)
+	assert.Equal(t, "Claude Triage", index.Sessions[0].AgentLabel)
+	assert.Equal(t, "sdk-cli", index.Sessions[0].Entrypoint)
+	require.NotNil(t, index.Sessions[0].DisplayName)
+	assert.Equal(t, "Agent Title", *index.Sessions[0].DisplayName)
+}
+
 func TestDuckDBStoreContract(t *testing.T) {
 	store, fixture := newSyncedStore(t)
 	tests := []struct {

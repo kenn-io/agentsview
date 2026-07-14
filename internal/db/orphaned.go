@@ -739,6 +739,11 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 		"file_mtime", "file_hash", "parent_session_id",
 		"relationship_type",
 	)
+	for _, c := range []string{"agent_label", "entrypoint"} {
+		if oldDBHasColumn(ctx, tx, "sessions", c) {
+			cols = append(cols, c)
+		}
+	}
 	if oldDBHasColumn(ctx, tx, "sessions", "deleted_at") {
 		cols = append(cols, "deleted_at")
 	}

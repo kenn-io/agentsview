@@ -161,6 +161,10 @@ func (p *claudeProvider) ParseIncremental(
 		req.Offset,
 		req.StartOrdinal,
 		req.LastEntryUUID,
+		claudeStoredIdentity{
+			agentLabel: req.StoredAgentLabel,
+			entrypoint: req.StoredEntrypoint,
+		},
 	)
 	if err != nil {
 		if IsIncrementalFullParseFallback(err) || errorsIsClaudeDAG(err) {

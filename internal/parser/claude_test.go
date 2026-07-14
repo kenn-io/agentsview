@@ -21,6 +21,88 @@ func buildMetadataLine(m map[string]any) string {
 	return string(b)
 }
 
+func TestClaudeSessionIdentity(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "identity.jsonl")
+	content := strings.Join([]string{
+		`{"type":"agent-setting","agentSetting":" ","entrypoint":" "}`,
+		`{"type":"agent-setting","agentSetting":"triage","entrypoint":"sdk-cli"}`,
+		`{"type":"user","sessionId":"identity-shaped-noise","uuid":"u1","message":{"content":"hello"}}`,
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	results, _, err := claudeParseWithExclusions(path, "project", "local")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "triage", results[0].Session.AgentLabel)
+	assert.Equal(t, "sdk-cli", results[0].Session.Entrypoint)
+	assert.Equal(t, AgentClaude, results[0].Session.Agent)
+}
+
+func TestClaudeSessionIdentityPreservesRawValues(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "identity-raw.jsonl")
+	content := strings.Join([]string{
+		`{"type":"agent-setting","agentSetting":"  Claude Code  ","entrypoint":"\tsdk-cli "}`,
+		`{"type":"user","sessionId":"identity-shaped-noise","uuid":"u1","message":{"content":"hello"}}`,
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	results, _, err := claudeParseWithExclusions(path, "project", "local")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "  Claude Code  ", results[0].Session.AgentLabel)
+	assert.Equal(t, "\tsdk-cli ", results[0].Session.Entrypoint)
+}
+
+func TestClaudeSessionIdentityAbsent(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "identity-absent.jsonl")
+	content := strings.Join([]string{
+		`{"type":"user","sessionId":"identity-shaped-noise","uuid":"u1","message":{"content":"hello"}}`,
+		`{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"text","text":"hi"}]}}`,
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	results, _, err := claudeParseWithExclusions(path, "project", "local")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "", results[0].Session.AgentLabel)
+	assert.Equal(t, "", results[0].Session.Entrypoint)
+	assert.Equal(t, AgentClaude, results[0].Session.Agent)
+}
+
+func TestClaudeSessionIdentityLineage(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "lineage.jsonl")
+	content := strings.Join([]string{
+		`{"type":"agent-setting","agentSetting":"triage","entrypoint":"sdk-cli"}`,
+		`{"type":"user","sessionId":"agent-setting-lineage","uuid":"u1","message":{"content":"identity-shaped-noise"}}`,
+		`{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"text","text":"root-reply"}]}}`,
+		`{"type":"user","uuid":"u2","parentUuid":"a1","message":{"content":"main-continue"}}`,
+		`{"type":"assistant","uuid":"a2","parentUuid":"u2","message":{"content":[{"type":"text","text":"main-reply"}]}}`,
+		`{"type":"user","uuid":"u3","parentUuid":"a2","message":{"content":"main-continue-2"}}`,
+		`{"type":"assistant","uuid":"a3","parentUuid":"u3","message":{"content":[{"type":"text","text":"main-reply-2"}]}}`,
+		`{"type":"user","uuid":"u4","parentUuid":"a3","message":{"content":"main-continue-3"}}`,
+		`{"type":"assistant","uuid":"a4","parentUuid":"u4","message":{"content":[{"type":"text","text":"main-reply-3"}]}}`,
+		`{"type":"user","uuid":"u5","parentUuid":"a4","message":{"content":"main-continue-4"}}`,
+		`{"type":"assistant","uuid":"a5","parentUuid":"u5","message":{"content":[{"type":"text","text":"main-reply-4"}]}}`,
+		`{"type":"user","uuid":"fork-u1","parentUuid":"a1","message":{"content":"fork-question"}}`,
+		`{"type":"assistant","uuid":"fork-a1","parentUuid":"fork-u1","message":{"content":[{"type":"text","text":"fork-reply"}]}}`,
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	results, err := parseClaudeSession(path, "project", "local")
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	forks := 0
+	for _, result := range results {
+		assert.Equal(t, "triage", result.Session.AgentLabel)
+		assert.Equal(t, "sdk-cli", result.Session.Entrypoint)
+		assert.Equal(t, "agent-setting-lineage", result.Session.SourceSessionID)
+		if result.Session.RelationshipType == RelFork {
+			forks++
+		}
+	}
+	assert.Equal(t, 1, forks)
+}
+
 func TestParseClaudeSession_Metadata(t *testing.T) {
 	t.Parallel()
 
@@ -384,6 +466,136 @@ func TestClaudeIncrementalRenameTriggersFullParse(t *testing.T) {
 	require.NoError(t, err)
 
 	_, _, _, parseErr := callParseClaudeSessionFrom(path, 0, 0, "")
+	require.Error(t, parseErr)
+	assert.True(t, IsIncrementalFullParseFallback(parseErr))
+}
+
+func TestClaudeIncrementalSessionIdentityTriggersFullParse(t *testing.T) {
+	t.Parallel()
+
+	initial := buildMetadataLine(map[string]any{
+		"type":      "user",
+		"uuid":      "u1",
+		"timestamp": tsEarly,
+		"message": map[string]any{
+			"content": "hello",
+		},
+	}) + "\n"
+	path := createTestFile(t, "identity-incremental.jsonl", initial)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+
+	appended := buildMetadataLine(map[string]any{
+		"type":         "user",
+		"uuid":         "u2",
+		"parentUuid":   "u1",
+		"timestamp":    tsLate,
+		"agentSetting": "triage",
+		"entrypoint":   "sdk-cli",
+		"message": map[string]any{
+			"content": "late identity",
+		},
+	}) + "\n"
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, _, _, parseErr := callParseClaudeSessionFrom(path, info.Size(), 1, "u1")
+	require.Error(t, parseErr)
+	assert.True(t, IsIncrementalFullParseFallback(parseErr))
+}
+
+func TestClaudeIncrementalStoredIdentityAppendStaysIncremental(t *testing.T) {
+	t.Parallel()
+
+	// Real Claude CLI transcripts carry a top-level entrypoint ("cli") on
+	// most message lines. Once the stored session already has that
+	// identity, ordinary appends must stay on the incremental path instead
+	// of escalating every append to a full re-parse of the whole file.
+	initial := buildMetadataLine(map[string]any{
+		"type":       "user",
+		"uuid":       "u1",
+		"timestamp":  tsEarly,
+		"entrypoint": "cli",
+		"message": map[string]any{
+			"content": "hello",
+		},
+	}) + "\n"
+	path := createTestFile(t, "identity-stored-incremental.jsonl", initial)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+
+	appended := buildMetadataLine(map[string]any{
+		"type":       "user",
+		"uuid":       "u2",
+		"parentUuid": "u1",
+		"timestamp":  tsLate,
+		"entrypoint": "cli",
+		"message": map[string]any{
+			"content": "routine append",
+		},
+	}) + "\n"
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	msgs, _, _, _, parseErr := claudeParseSessionFrom(
+		path, info.Size(), 1, "u1",
+		claudeStoredIdentity{entrypoint: "cli"},
+	)
+	require.NoError(t, parseErr)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, RoleUser, msgs[0].Role)
+}
+
+func TestClaudeIncrementalNewIdentityFieldStillEscalates(t *testing.T) {
+	t.Parallel()
+
+	// The stored entrypoint is known, but agentSetting appears for the
+	// first time in the append. First-non-empty-wins means the appended
+	// value changes the stored session, so the full-parse fallback must
+	// still fire for the not-yet-stored field.
+	initial := buildMetadataLine(map[string]any{
+		"type":       "user",
+		"uuid":       "u1",
+		"timestamp":  tsEarly,
+		"entrypoint": "cli",
+		"message": map[string]any{
+			"content": "hello",
+		},
+	}) + "\n"
+	path := createTestFile(t, "identity-new-field.jsonl", initial)
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+
+	appended := buildMetadataLine(map[string]any{
+		"type":         "user",
+		"uuid":         "u2",
+		"parentUuid":   "u1",
+		"timestamp":    tsLate,
+		"entrypoint":   "cli",
+		"agentSetting": "triage",
+		"message": map[string]any{
+			"content": "late label",
+		},
+	}) + "\n"
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString(appended)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, _, _, _, parseErr := claudeParseSessionFrom(
+		path, info.Size(), 1, "u1",
+		claudeStoredIdentity{entrypoint: "cli"},
+	)
 	require.Error(t, parseErr)
 	assert.True(t, IsIncrementalFullParseFallback(parseErr))
 }

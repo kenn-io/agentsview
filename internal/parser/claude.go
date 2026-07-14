@@ -94,6 +94,8 @@ func claudeParseWithExclusions(
 		cwd             string
 		gitBranch       string
 		displayName     string
+		agentLabel      string
+		entrypoint      string
 		foundParentSID  bool
 		lineIndex       int
 		malformedLines  int
@@ -123,6 +125,16 @@ func claudeParseWithExclusions(
 		lastLineFailed = false
 
 		entryType := gjson.Get(line, "type").Str
+		if agentLabel == "" {
+			if value := gjson.Get(line, "agentSetting").Str; strings.TrimSpace(value) != "" {
+				agentLabel = value
+			}
+		}
+		if entrypoint == "" {
+			if value := gjson.Get(line, "entrypoint").Str; strings.TrimSpace(value) != "" {
+				entrypoint = value
+			}
+		}
 
 		// Extract source version from first line that has it.
 		if sourceVersion == "" {
@@ -282,6 +294,8 @@ func claudeParseWithExclusions(
 		cwd:             cwd,
 		gitBranch:       gitBranch,
 		displayName:     displayName,
+		agentLabel:      agentLabel,
+		entrypoint:      entrypoint,
 		malformedLines:  malformedLines,
 		isTruncated:     isTruncated,
 	}
@@ -393,11 +407,22 @@ type ClaudeSubagentLink struct {
 	HasResult         bool
 }
 
+// claudeStoredIdentity carries the session identity values already
+// persisted for the session being incrementally parsed. Identity is
+// first-non-empty-wins across the file, so an appended identity field can
+// only change the stored session when the corresponding stored value is
+// still empty.
+type claudeStoredIdentity struct {
+	agentLabel string
+	entrypoint string
+}
+
 func claudeParseSessionFrom(
 	path string,
 	offset int64,
 	startOrdinal int,
 	lastEntryUUID string,
+	stored claudeStoredIdentity,
 ) ([]ParsedMessage, []ClaudeSubagentLink, time.Time, int64, error) {
 	var (
 		entries        []dagEntry
@@ -408,8 +433,9 @@ func claudeParseSessionFrom(
 		// non-message events (progress, queue-operation) so
 		// callers can update ended_at even when no new
 		// messages are found.
-		latestTS  time.Time
-		sawRename bool
+		latestTS               time.Time
+		sawRename              bool
+		sawSessionIdentityEdit bool
 	)
 
 	consumed, err := readJSONLFrom(
@@ -421,12 +447,18 @@ func claudeParseSessionFrom(
 				}
 			}
 			entryType := gjson.Get(line, "type").Str
+			if claudeSessionIdentityUpdate(line, stored) {
+				sawSessionIdentityEdit = true
+			}
 			if entryType == "system" {
 				if _, ok := extractRenameName(
 					gjson.Get(line, "content").Str,
 				); ok {
 					sawRename = true
 				}
+				return
+			}
+			if entryType == "agent-setting" {
 				return
 			}
 			if entryType == "attachment" {
@@ -495,6 +527,9 @@ func claudeParseSessionFrom(
 	if sawRename {
 		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
 	}
+	if sawSessionIdentityEdit {
+		return nil, nil, time.Time{}, 0, ErrClaudeIncrementalNeedsFullParse
+	}
 
 	// Queue/progress events can repair subagent linkage on an already-stored
 	// tool call. If the mapped tool_use_id is not introduced in this append,
@@ -544,6 +579,21 @@ func claudeParseSessionFrom(
 		endedAt = latestTS
 	}
 	return msgs, links, endedAt, consumed, nil
+}
+
+// claudeSessionIdentityUpdate reports whether an appended line carries an
+// identity value that could change the stored session. Identity is
+// first-non-empty-wins, so a field whose stored value is already set can
+// never be changed by an append; gating on the stored values keeps routine
+// appends incremental even though real CLI transcripts carry a top-level
+// entrypoint on most message lines.
+func claudeSessionIdentityUpdate(line string, stored claudeStoredIdentity) bool {
+	if stored.agentLabel == "" &&
+		strings.TrimSpace(gjson.Get(line, "agentSetting").Str) != "" {
+		return true
+	}
+	return stored.entrypoint == "" &&
+		strings.TrimSpace(gjson.Get(line, "entrypoint").Str) != ""
 }
 
 // needsClaudeFullParse returns true when appended entries contain
@@ -818,6 +868,8 @@ type claudeSessionMeta struct {
 	cwd             string
 	gitBranch       string
 	displayName     string
+	agentLabel      string
+	entrypoint      string
 	malformedLines  int
 	isTruncated     bool
 }
@@ -829,6 +881,8 @@ func (m claudeSessionMeta) applyTo(sess *ParsedSession) {
 	sess.Cwd = m.cwd
 	sess.GitBranch = m.gitBranch
 	sess.SessionName = m.displayName
+	sess.AgentLabel = m.agentLabel
+	sess.Entrypoint = m.entrypoint
 	sess.MalformedLines = m.malformedLines
 	sess.IsTruncated = m.isTruncated
 }

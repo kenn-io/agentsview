@@ -269,6 +269,14 @@ func appendSessionMetadataDiffs(
 ) []FieldDiff {
 	agent := prepared.Agent
 	diffs = appendScalarSessionDiff(
+		diffs, FieldAgentLabel, agent,
+		stored.AgentLabel, prepared.AgentLabel,
+	)
+	diffs = appendScalarSessionDiff(
+		diffs, FieldEntrypoint, agent,
+		stored.Entrypoint, prepared.Entrypoint,
+	)
+	diffs = appendScalarSessionDiff(
 		diffs, FieldCwd, agent, stored.Cwd, prepared.Cwd,
 	)
 	diffs = appendScalarSessionDiff(

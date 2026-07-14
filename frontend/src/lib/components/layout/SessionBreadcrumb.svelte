@@ -28,6 +28,7 @@
     agentColor,
     agentForeground,
     agentLabel,
+    entrypointBadge,
   } from "../../utils/agents.js";
   import { formatCost, formatTokenUsage } from "../../utils/format.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
@@ -679,7 +680,10 @@
         class="agent-badge"
         style:background={agentColor(session.agent)}
         style:color={agentForeground(session.agent)}
-      >{agentLabel(session.agent)}</span>
+      >{agentLabel(session.agent, session.agent_label)}</span>
+      {#if entrypointBadge(session.entrypoint)}
+        <span class="agent-badge entrypoint-badge">{entrypointBadge(session.entrypoint)}</span>
+      {/if}
       {#if session.agent === "antigravity-cli" && session.transcript_fidelity === "summary"}
         <a
           class="summary-badge"
@@ -1083,6 +1087,10 @@
     color: white;
     flex-shrink: 0;
     background: var(--text-muted);
+  }
+
+  .entrypoint-badge {
+    opacity: 0.8;
   }
 
   .summary-badge {

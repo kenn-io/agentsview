@@ -9513,6 +9513,81 @@ func TestIncrementalSync_ClaudeAppend(t *testing.T) {
 	assert.Equal(t, 500, msgs[1].ContextTokens, "assistant ContextTokens = %d, want 500", msgs[1].ContextTokens)
 }
 
+func TestIncrementalSync_ClaudeAgentSettingAppendUsesFullParse(t *testing.T) {
+	env := setupTestEnv(t)
+
+	initial := testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("hello", tsZero),
+	)
+	path := env.writeClaudeSession(
+		t, "proj", "identity-append.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	assertSessionState(t, env.db, "identity-append", func(sess *db.Session) {
+		assert.Equal(t, string(parser.AgentClaude), sess.Agent)
+		assert.Equal(t, "", sess.AgentLabel)
+		assert.Equal(t, "", sess.Entrypoint)
+	})
+
+	appended := `{"type":"user","timestamp":"2026-06-01T00:00:02Z","uuid":"u2","parentUuid":"u1","agentSetting":"triage","entrypoint":"sdk-cli","message":{"content":"late identity"}}` + "\n"
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, err = f.WriteString(appended)
+	require.NoError(t, err, "append")
+	require.NoError(t, f.Close(), "close append")
+
+	env.engine.SyncPaths([]string{path})
+
+	assertSessionMessageCount(t, env.db, "identity-append", 2)
+	assertSessionState(t, env.db, "identity-append", func(sess *db.Session) {
+		assert.Equal(t, string(parser.AgentClaude), sess.Agent)
+		assert.Equal(t, "triage", sess.AgentLabel)
+		assert.Equal(t, "sdk-cli", sess.Entrypoint)
+	})
+}
+
+func TestIncrementalSync_ClaudeStoredEntrypointAppendStaysIncremental(t *testing.T) {
+	env := setupTestEnv(t)
+
+	// Real Claude CLI transcripts carry a top-level entrypoint ("cli") on
+	// most message lines; the first full parse stores it as session
+	// identity.
+	initial := `{"type":"user","timestamp":"2026-06-01T00:00:00Z","uuid":"u1","entrypoint":"cli","message":{"content":"hello"}}` + "\n"
+	path := env.writeClaudeSession(
+		t, "proj", "identity-stored.jsonl", initial,
+	)
+	env.engine.SyncAll(context.Background(), nil)
+
+	assertSessionState(t, env.db, "identity-stored", func(sess *db.Session) {
+		assert.Equal(t, "cli", sess.Entrypoint)
+		assert.Equal(t, 0, sess.ParserMalformedLines)
+	})
+
+	// The appended batch repeats the already-stored entrypoint and adds a
+	// malformed line. The incremental reader skips malformed lines without
+	// recounting them, while a full-parse escalation re-derives
+	// parser_malformed_lines for the whole file and would store 1. The
+	// count staying 0 proves the append stayed on the incremental path.
+	appended := "not json\n" +
+		`{"type":"user","timestamp":"2026-06-01T00:00:02Z","uuid":"u2","parentUuid":"u1","entrypoint":"cli","message":{"content":"routine append"}}` + "\n"
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err, "open for append")
+	_, err = f.WriteString(appended)
+	require.NoError(t, err, "append")
+	require.NoError(t, f.Close(), "close append")
+
+	env.engine.SyncPaths([]string{path})
+
+	assertSessionMessageCount(t, env.db, "identity-stored", 2)
+	assertSessionState(t, env.db, "identity-stored", func(sess *db.Session) {
+		assert.Equal(t, "cli", sess.Entrypoint)
+		assert.Equal(t, "", sess.AgentLabel)
+		assert.Equal(t, 0, sess.ParserMalformedLines,
+			"append with already-stored identity must stay incremental")
+	})
+}
+
 func TestIncrementalSync_ClaudeFilteredTailAdvancesNextOrdinal(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 

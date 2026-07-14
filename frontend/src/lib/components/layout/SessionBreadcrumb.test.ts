@@ -674,6 +674,43 @@ describe("SessionBreadcrumb", () => {
     unmount(component);
   });
 
+  it("renders Claude session identity overrides in the badges", async () => {
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("claude", {
+          agent_label: "triage",
+          entrypoint: "sdk-cli",
+        }),
+        onBack: () => {},
+      },
+    });
+
+    await tick();
+    const badges = Array.from(document.querySelectorAll(".agent-badge"));
+    expect(badges[0]?.textContent?.trim()).toBe("triage");
+    expect(
+      document.querySelector(".entrypoint-badge")?.textContent?.trim(),
+    ).toBe("sdk-cli");
+
+    unmount(component);
+  });
+
+  it("suppresses the default cli entrypoint badge", async () => {
+    const component = mount(SessionBreadcrumb, {
+      target: document.body,
+      props: {
+        session: makeSession("claude", { entrypoint: "cli" }),
+        onBack: () => {},
+      },
+    });
+
+    await tick();
+    expect(document.querySelector(".entrypoint-badge")).toBeNull();
+
+    unmount(component);
+  });
+
   describe("copy-link timer", () => {
     beforeEach(() => {
       vi.useFakeTimers();

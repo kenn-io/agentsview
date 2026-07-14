@@ -177,7 +177,6 @@ func sessionBatchWriteFromParsed(
 		ID:                   sess.ID,
 		Project:              sess.Project,
 		Machine:              sess.Machine,
-		Agent:                string(sess.Agent),
 		MessageCount:         sess.MessageCount,
 		UserMessageCount:     sess.UserMessageCount,
 		ParentSessionID:      strPtr(sess.ParentSessionID),
@@ -191,6 +190,7 @@ func sessionBatchWriteFromParsed(
 		FileMtime:            int64Ptr(sess.File.Mtime),
 		FileHash:             strPtr(sess.File.Hash),
 	}
+	db.ApplyParsedSessionIdentity(&dbSess, sess)
 	if sess.FirstMessage != "" {
 		dbSess.FirstMessage = &sess.FirstMessage
 	}

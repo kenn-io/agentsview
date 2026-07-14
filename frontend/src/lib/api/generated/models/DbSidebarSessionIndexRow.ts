@@ -4,9 +4,11 @@
 /* eslint-disable */
 export type DbSidebarSessionIndexRow = {
   agent: string;
+  agent_label?: string;
   created_at: string;
   display_name?: string;
   ended_at: string | null;
+  entrypoint?: string;
   id: string;
   is_automated: boolean;
   is_teammate: boolean;

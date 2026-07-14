@@ -33,3 +33,18 @@ func TestSessionBatchWriteFromParsedNoSessionName(t *testing.T) {
 	assert.Nil(t, result.Session.DisplayName,
 		"DisplayName must be nil when not set")
 }
+
+func TestSessionBatchWriteFromParsedPreservesSessionIdentity(t *testing.T) {
+	sess := parser.ParsedSession{
+		ID:         "test-session-identity",
+		Agent:      parser.AgentClaude,
+		AgentLabel: "Claude Code",
+		Entrypoint: "claude-sdk",
+	}
+
+	result := sessionBatchWriteFromParsed(sess, nil)
+
+	assert.Equal(t, "claude", result.Session.Agent)
+	assert.Equal(t, "Claude Code", result.Session.AgentLabel)
+	assert.Equal(t, "claude-sdk", result.Session.Entrypoint)
+}

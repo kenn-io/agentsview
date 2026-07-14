@@ -44,7 +44,8 @@ func TestParseQoderSession(t *testing.T) {
 	require.NoError(t, os.MkdirAll(cwd, 0o755))
 	path := filepath.Join(root, "-Users-alice-sample-project", "11111111-1111-4111-8111-111111111111.jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	content := fmt.Sprintf(`{"type":"user","uuid":"u1","timestamp":"2026-06-04T09:47:27.966Z","message":{"role":"user","content":"help me"},"cwd":%q,"sessionId":"11111111-1111-4111-8111-111111111111","version":"1.0.8"}
+	content := fmt.Sprintf(`{"type":"agent-setting","agentSetting":"triage","entrypoint":"sdk-cli","sessionId":"11111111-1111-4111-8111-111111111111"}
+{"type":"user","uuid":"u1","timestamp":"2026-06-04T09:47:27.966Z","message":{"role":"user","content":"help me"},"cwd":%q,"sessionId":"11111111-1111-4111-8111-111111111111","version":"1.0.8"}
 {"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2026-06-04T09:47:32.116Z","message":{"id":"msg_1","type":"message","role":"assistant","model":"auto","stop_reason":"end_turn","usage":{"input_tokens":100,"cache_creation_input_tokens":7,"cache_read_input_tokens":50,"output_tokens":30},"content":[{"type":"text","text":"done"}]},"sessionId":"11111111-1111-4111-8111-111111111111"}
 {"type":"user","uuid":"u2","parentUuid":"a1","timestamp":"2026-06-04T09:47:39.020Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]},"sessionId":"11111111-1111-4111-8111-111111111111"}
 `, cwd)
@@ -56,6 +57,8 @@ func TestParseQoderSession(t *testing.T) {
 	sess := results[0].Session
 	assert.Equal(t, "qoder:11111111-1111-4111-8111-111111111111", sess.ID)
 	assert.Equal(t, AgentQoder, sess.Agent)
+	assert.Equal(t, "", sess.AgentLabel)
+	assert.Equal(t, "", sess.Entrypoint)
 	assert.Equal(t, "sample-project", sess.Project)
 	assert.Equal(t, cwd, sess.Cwd)
 	assert.Equal(t, "help me", sess.FirstMessage)

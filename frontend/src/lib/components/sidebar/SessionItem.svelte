@@ -11,7 +11,7 @@
   } from "../../stores/read-progress.svelte.js";
   import { starred } from "../../stores/starred.svelte.js";
   import { formatRelativeTime, truncate } from "../../utils/format.js";
-  import { agentColor as getAgentColor, agentLabel } from "../../utils/agents.js";
+  import { agentColor as getAgentColor, agentLabel, entrypointBadge } from "../../utils/agents.js";
   import {
     normalizeMessagePreview,
     previewMessage,
@@ -481,7 +481,10 @@
   {#if !compact && (!hideAgent || showMachine)}
     <div class="side-meta">
       {#if !hideAgent}
-        <span class="agent-tag" style:color={agentColor}>{agentLabel(session.agent)}</span>
+        <span class="agent-tag" style:color={agentColor}>{agentLabel(session.agent, session.agent_label)}</span>
+        {#if entrypointBadge(session.entrypoint)}
+          <span class="entrypoint-tag">{entrypointBadge(session.entrypoint)}</span>
+        {/if}
       {/if}
       {#if showMachine}
         <span class="machine-tag" title={session.machine}>
@@ -633,6 +636,11 @@
     max-width: 52px;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .entrypoint-tag {
+    opacity: 0.75;
+    font-size: 0.9em;
   }
 
   .machine-tag {

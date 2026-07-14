@@ -24,6 +24,8 @@ export interface Session {
   project: string;
   machine: string;
   agent: string;
+  agent_label?: string;
+  entrypoint?: string;
   first_message: string | null;
   display_name?: string | null;
   started_at: string | null;
@@ -91,6 +93,8 @@ export interface SidebarSessionIndexRow {
   project: string;
   machine: string;
   agent: string;
+  agent_label?: string | null;
+  entrypoint?: string | null;
   display_name?: string | null;
   started_at: string | null;
   ended_at: string | null;

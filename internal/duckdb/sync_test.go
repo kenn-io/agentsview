@@ -1214,6 +1214,20 @@ func TestDuckSessionFingerprintFieldsDiffer(t *testing.T) {
 		modify func(s db.Session) db.Session
 	}{
 		{
+			name: "agent label change",
+			modify: func(s db.Session) db.Session {
+				s.AgentLabel = "triage"
+				return s
+			},
+		},
+		{
+			name: "entrypoint change",
+			modify: func(s db.Session) db.Session {
+				s.Entrypoint = "sdk-cli"
+				return s
+			},
+		},
+		{
 			name: "display name change",
 			modify: func(s db.Session) db.Session {
 				name := "new name"

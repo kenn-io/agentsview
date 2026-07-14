@@ -884,6 +884,8 @@ type ParsedSession struct {
 	Project          string
 	Machine          string
 	Agent            AgentType
+	AgentLabel       string
+	Entrypoint       string
 	ParentSessionID  string
 	RelationshipType RelationshipType
 	Cwd              string

@@ -303,7 +303,10 @@ const projectIdentityRemoteScrubCompletedKey = "project_identity_remote_scrub_v1
 // user prompts before persistence, while reminder-only content still
 // promotes to system_reminder. Existing rows need re-parsing so reminder
 // metadata stops hiding real prompts and inflating reminder-only storage.)
-const dataVersion = 65
+// (66: Claude session identity metadata. Re-parsing populates the new
+// agent_label and entrypoint session columns from top-level agentSetting
+// and entrypoint fields on existing Claude rows.)
+const dataVersion = 66
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -1801,6 +1804,14 @@ func schemaColumnMigrations() []schemaColumnMigration {
 		{
 			"sessions", "source_version",
 			"ALTER TABLE sessions ADD COLUMN source_version TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"sessions", "agent_label",
+			"ALTER TABLE sessions ADD COLUMN agent_label TEXT NOT NULL DEFAULT ''",
+		},
+		{
+			"sessions", "entrypoint",
+			"ALTER TABLE sessions ADD COLUMN entrypoint TEXT NOT NULL DEFAULT ''",
 		},
 		{
 			"sessions", "transcript_fidelity",
