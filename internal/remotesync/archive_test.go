@@ -88,7 +88,7 @@ func TestWriteArchiveIgnoresBytesAppendedAfterHeader(t *testing.T) {
 
 	select {
 	case <-writer.headerWritten:
-	case <-time.After(time.Second):
+	case <-time.After(backgroundWaitTimeout):
 		require.FailNow(t, "tar header was not written")
 	}
 	require.NoError(t, appendFile(path, "new"))

@@ -29,6 +29,12 @@ import (
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
+// backgroundWaitTimeout bounds waits on background goroutines that are
+// expected to finish promptly. It is generous because cold windows-latest
+// runners can stall a full resync for several seconds; the timeout only
+// delays failure output when the code under test genuinely hangs.
+const backgroundWaitTimeout = 30 * time.Second
+
 func TestHTTPSyncDownloadsArchiveAndImports(t *testing.T) {
 	archive := buildHTTPTestTar(t, map[string]string{
 		"home/wes/.claude/projects/test-project/session.jsonl": testjsonl.NewSessionBuilder().
@@ -572,7 +578,7 @@ func TestDownloadedArchiveExtractionCancellationMidEntry(t *testing.T) {
 
 			select {
 			case <-reached:
-			case <-time.After(time.Second):
+			case <-time.After(backgroundWaitTimeout):
 				require.FailNow(t, "timed out waiting for extraction to enter file body")
 			}
 			cancel()
@@ -581,7 +587,7 @@ func TestDownloadedArchiveExtractionCancellationMidEntry(t *testing.T) {
 			select {
 			case err := <-errCh:
 				require.ErrorIs(t, err, context.Canceled)
-			case <-time.After(time.Second):
+			case <-time.After(backgroundWaitTimeout):
 				require.FailNow(t, "timed out waiting for canceled extraction")
 			}
 			assert.NoFileExists(t,
@@ -1290,7 +1296,7 @@ func TestPreparedHTTPSyncContributorKeepsLockUntilClose(t *testing.T) {
 	}()
 	select {
 	case <-contributorStarted:
-	case <-time.After(time.Second):
+	case <-time.After(backgroundWaitTimeout):
 		require.FailNow(t, "timed out waiting for contributor")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
@@ -1305,7 +1311,7 @@ func TestPreparedHTTPSyncContributorKeepsLockUntilClose(t *testing.T) {
 	case result := <-rebuilt:
 		require.NoError(t, result.err)
 		assert.False(t, result.stats.Aborted)
-	case <-time.After(time.Second):
+	case <-time.After(backgroundWaitTimeout):
 		require.FailNow(t, "timed out waiting for rebuild")
 	}
 
@@ -1552,7 +1558,7 @@ func TestPrepareHTTPSyncClearsOnlySelectedHostCacheBeforeMirrorMutation(t *testi
 	var snapshot cacheSnapshot
 	select {
 	case snapshot = <-atArchive:
-	case <-time.After(time.Second):
+	case <-time.After(backgroundWaitTimeout):
 		require.FailNow(t, "timed out waiting for archive cache snapshot")
 	}
 	require.NoError(t, snapshot.err)
