@@ -357,6 +357,70 @@ func TestOmnigentFingerprintChangesWithContent(t *testing.T) {
 		omnigentMetaByID(after, "conv_root").fingerprint())
 }
 
+// TestOmnigentFingerprintBoundedByChangedConversation is the cardinality-
+// scaling regression: adding a conversation to a large archive must leave every
+// other conversation's fingerprint unchanged, so incremental sync re-parses
+// only the changed batch rather than the whole DB on each write.
+func TestOmnigentFingerprintBoundedByChangedConversation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), omnigentDBName)
+	db, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	execOmnigentDDL(t, db, omnigentOldGenDDL)
+	_, err = db.Exec(`INSERT INTO alembic_version VALUES ('n1a2b3c4d5e6')`)
+	require.NoError(t, err)
+
+	insertConv := func(id string, updatedAt int64) {
+		_, err := db.Exec(`INSERT INTO conversations
+			(id, created_at, updated_at, title, kind, root_conversation_id)
+			VALUES (?,?,?,?, 'default', ?)`, id, updatedAt-1, updatedAt, id, id)
+		require.NoError(t, err)
+		_, err = db.Exec(`INSERT INTO conversation_items
+			(id, conversation_id, position, type, data, search_text)
+			VALUES (?,?,0,'message',
+				'{"role":"user","content":[{"type":"input_text","text":"hi"}]}',
+				'hi')`, id+"_i0", id)
+		require.NoError(t, err)
+	}
+	const n = 200
+	for i := 0; i < n; i++ {
+		insertConv(fmt.Sprintf("conv_%03d", i), int64(1783716000+i))
+	}
+	require.NoError(t, db.Close())
+
+	conn, err := openOmnigentDB(path)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	before, err := listOmnigentConversationMetas(conn)
+	require.NoError(t, err)
+	fps := map[string]string{}
+	for _, m := range before {
+		fps[m.rawID] = m.fingerprint()
+	}
+	require.Len(t, fps, n)
+
+	// Add a brand-new conversation (a new-session event on the shared DB).
+	writer, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = writer.Exec(`INSERT INTO conversations
+		(id, created_at, updated_at, title, kind, root_conversation_id)
+		VALUES ('conv_new', 1, 2, 'new', 'default', 'conv_new')`)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	after, err := listOmnigentConversationMetas(conn)
+	require.NoError(t, err)
+	unchanged := 0
+	for _, m := range after {
+		if want, ok := fps[m.rawID]; ok {
+			assert.Equalf(t, want, m.fingerprint(),
+				"pre-existing conversation %s must keep its fingerprint", m.rawID)
+			unchanged++
+		}
+	}
+	assert.Equal(t, n, unchanged, "all prior conversations still fingerprint-stable")
+}
+
 func omnigentMetaByID(metas []omnigentMeta, id string) omnigentMeta {
 	for _, m := range metas {
 		if m.rawID == id {
