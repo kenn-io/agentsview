@@ -193,7 +193,7 @@ func (ix *Index) buildInvalidRepair(
 				base: ix.store, db: ix.db, spec: ix.spec, fingerprint: target,
 				ordinal: repair.Ordinal, queueTable: ix.spec.repairQueueTable(), split: ix.split,
 			}
-			remaining, remainingKnown, countErr := repairRemainingAfterScanError(
+			remaining, remainingKnown, countErr := repairRemaining(
 				ctx, store, result.Repair.Documents,
 			)
 			result.Repair.Remaining = remaining
@@ -208,7 +208,12 @@ func (ix *Index) buildInvalidRepair(
 	}
 	total, err := store.countPendingChunks(ctx, ix.split)
 	if err != nil {
-		return result, err
+		remaining, remainingKnown, countErr := repairRemaining(
+			ctx, store, result.Repair.Documents,
+		)
+		result.Repair.Remaining = remaining
+		result.Repair.RemainingKnown = remainingKnown
+		return result, errors.Join(err, countErr)
 	}
 
 	wrapped, finish := ix.wrapProgress(validatingEncoder(enc), total, o.Progress)
@@ -220,9 +225,10 @@ func (ix *Index) buildInvalidRepair(
 	finish()
 	result.Fill = fill.Stats
 	result.Repair.Failed = fill.Failed
-	remaining, countErr := store.countTargets(ctx)
+	fallback := max(result.Repair.Documents-result.Fill.Documents, 0)
+	remaining, remainingKnown, countErr := repairRemaining(ctx, store, fallback)
 	result.Repair.Remaining = remaining
-	result.Repair.RemainingKnown = countErr == nil
+	result.Repair.RemainingKnown = remainingKnown
 	if countErr != nil {
 		return result, errors.Join(fillErr, countErr)
 	}
@@ -241,11 +247,11 @@ func (ix *Index) buildInvalidRepair(
 	return result, nil
 }
 
-// repairRemainingAfterScanError preserves the accumulated committed target
-// count as a fallback, then attempts a bounded recount independent of a canceled
-// build context. Cancellation is a common reason the scan stopped, but it must
-// not hide queue work that earlier batches already committed.
-func repairRemainingAfterScanError(
+// repairRemaining preserves the accumulated committed target count as a
+// fallback, then attempts a bounded recount independent of a canceled build
+// context. Cancellation during any post-scan phase must not hide queue work
+// that the scan already committed.
+func repairRemaining(
 	ctx context.Context, store *repairStore, fallback int,
 ) (remaining int, known bool, err error) {
 	countCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), repairStatusCountTimeout)

@@ -499,6 +499,43 @@ func TestBuildRepairInvalidKeepsTargetAfterContextDeadline(t *testing.T) {
 	assertFailedRepairRemainsQueued(t, context.DeadlineExceeded)
 }
 
+func TestBuildRepairInvalidCountsRemainingTargetsAfterCancellationDuringFill(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	src := &fakeUnitSource{rows: []fakeUnit{
+		{unit: userDoc("s1", "bad", 0, "bad"), endedAt: "2024-01-01T00:00:00Z"},
+	}}
+	gen := fakeGeneration("active-model")
+	require.NoError(t, buildWithoutResult(ix, ctx, src, gen))
+	ordinal, err := ix.ordinalForFingerprint(ctx, gen.Fingerprint())
+	require.NoError(t, err)
+
+	var rowID int64
+	require.NoError(t, ix.db.QueryRowContext(ctx, `
+SELECT vec_rowid FROM message_vectors_chunks
+ WHERE ordinal = ? AND doc_key = 'u:s1:bad'`, ordinal).Scan(&rowID))
+	_, err = ix.db.ExecContext(ctx,
+		`UPDATE message_vectors_v`+fmtInt64(ordinal)+` SET embedding = ? WHERE rowid = ?`,
+		make([]byte, 3*4), rowID)
+	require.NoError(t, err)
+
+	buildCtx, cancel := context.WithCancel(ctx)
+	result, err := ix.Build(buildCtx, src, func(ctx context.Context, _ []string) ([][]float32, error) {
+		cancel()
+		return nil, ctx.Err()
+	}, gen, BuildOptions{RepairInvalid: true})
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 1, result.Repair.Failed)
+	assert.Equal(t, 1, result.Repair.Remaining)
+	assert.True(t, result.Repair.RemainingKnown)
+
+	var queued int
+	require.NoError(t, ix.db.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM message_vectors_repair_queue
+ WHERE ordinal = ? AND doc_key = 'u:s1:bad'`, ordinal).Scan(&queued))
+	assert.Equal(t, 1, queued, "the canceled fill must leave its durable target queued")
+}
+
 func assertFailedRepairRemainsQueued(t *testing.T, encodeErr error) {
 	t.Helper()
 	ix := openTestIndex(t)
@@ -747,7 +784,7 @@ SELECT COUNT(*) FROM message_vectors_repair_queue WHERE ordinal = ?`, ordinal).S
 	assert.Zero(t, queued)
 }
 
-func TestRepairRemainingAfterScanErrorIgnoresCanceledBuildContext(t *testing.T) {
+func TestRepairRemainingIgnoresCanceledBuildContext(t *testing.T) {
 	ix := openTestIndex(t)
 	ctx := context.Background()
 	gen := fakeGeneration("active-model")
@@ -765,20 +802,20 @@ VALUES (?, 'u:s1:u1')`, ordinal)
 		base: ix.store, db: ix.db, spec: ix.spec, fingerprint: gen.Fingerprint(),
 		ordinal: ordinal, queueTable: ix.spec.repairQueueTable(), split: ix.split,
 	}
-	remaining, known, err := repairRemainingAfterScanError(canceled, store, 7)
+	remaining, known, err := repairRemaining(canceled, store, 7)
 	require.NoError(t, err)
 	assert.True(t, known)
 	assert.Equal(t, 1, remaining,
 		"the recount must survive cancellation instead of reporting zero or only the fallback")
 }
 
-func TestRepairRemainingAfterScanErrorReturnsFallbackWhenRecountFails(t *testing.T) {
-	raw, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), "closed.db"))
+func TestRepairRemainingReturnsFallbackWhenRecountFails(t *testing.T) {
+	raw, err := sql.Open(vectorDriverName, vectorDSN(filepath.Join(t.TempDir(), "closed.db"), false))
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 	store := &repairStore{db: raw, ordinal: 1, queueTable: "repair_queue"}
 
-	remaining, known, err := repairRemainingAfterScanError(context.Background(), store, 7)
+	remaining, known, err := repairRemaining(context.Background(), store, 7)
 	require.Error(t, err)
 	assert.Equal(t, 7, remaining)
 	assert.False(t, known)
