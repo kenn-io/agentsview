@@ -1163,8 +1163,11 @@ func TestEnsureBackgroundServeLaunchLoserReplacesStaleDaemonAfterStartup(
 	released := make(chan struct{})
 	go func() {
 		time.Sleep(2 * startProbeTick())
-		unlockStart()
+		// The parent launch lock clears before the child finishes startup.
+		// Preserve that lifecycle ordering now that unlockStart waits until
+		// the child lock is observably released.
 		_ = launchLock.Unlock()
+		unlockStart()
 		close(released)
 	}()
 
