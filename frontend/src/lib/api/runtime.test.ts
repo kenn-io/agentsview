@@ -1,13 +1,32 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   callGenerated,
 } from "./runtime.js";
 import {
   ApiError as GeneratedApiError,
+  CancelablePromise,
 } from "./generated/index";
 
 describe("callGenerated", () => {
+  it("cancels the generated transport when its signal aborts", async () => {
+    const cancelTransport = vi.fn();
+    const request = new CancelablePromise<never>(
+      (_resolve, _reject, onCancel) => {
+        onCancel(cancelTransport);
+      },
+    );
+    const controller = new AbortController();
+
+    const result = callGenerated(() => request, controller.signal);
+    controller.abort();
+
+    await expect(result).rejects.toMatchObject({
+      name: "CancelError",
+    });
+    expect(cancelTransport).toHaveBeenCalledOnce();
+  });
+
   it("normalizes generated API error bodies", async () => {
     await expect(
       callGenerated(async () => {

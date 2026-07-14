@@ -401,7 +401,10 @@
     const msgParam = router.params["msg"] ?? null;
     untrack(() => {
       if (sid) {
-        if (sid !== sessions.activeSessionId) {
+        if (
+          sid !== sessions.activeSessionId ||
+          sessions.activeSession === undefined
+        ) {
           sessions.navigateToSession(sid);
         }
         if (msgParam) {

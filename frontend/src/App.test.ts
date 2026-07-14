@@ -138,6 +138,52 @@ describe("App session URL date state", () => {
     expect(loadMessages).toHaveBeenCalledTimes(2);
   });
 
+  it("retries missing metadata when returning to the same session", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(settings, "load").mockResolvedValue();
+    vi.spyOn(starred, "load").mockResolvedValue();
+    vi.spyOn(sync, "loadStatus").mockResolvedValue();
+    vi.spyOn(sync, "loadStats").mockResolvedValue();
+    vi.spyOn(sync, "loadVersion").mockResolvedValue();
+    vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
+    vi.spyOn(sync, "startPolling").mockImplementation(() => {});
+    vi.spyOn(sync, "watchSession").mockImplementation(() => {});
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(sessions, "loadProjects").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
+    vi.spyOn(sessions, "loadChildSessions").mockResolvedValue();
+    vi.spyOn(messages, "loadSession").mockResolvedValue();
+    vi.spyOn(sessionTiming, "load").mockResolvedValue();
+    vi.spyOn(pins, "loadForSession").mockResolvedValue();
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    const navigateToSession = vi
+      .spyOn(sessions, "navigateToSession")
+      .mockResolvedValue();
+
+    sessions.sessions = [];
+    sessions.activeSessionId = "session-1";
+    router.route = "sessions";
+    router.sessionId = "session-1";
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    expect(navigateToSession).toHaveBeenCalledTimes(1);
+
+    router.navigate("usage");
+    await flushEffects();
+    router.navigateToSession("session-1");
+    await flushEffects();
+
+    expect(navigateToSession).toHaveBeenCalledTimes(2);
+  });
+
   it("treats rolling window and termination as sessions route params", () => {
     expect(SESSION_FILTER_KEYS.has("window_days")).toBe(true);
     expect(SESSION_FILTER_KEYS.has("termination")).toBe(true);
