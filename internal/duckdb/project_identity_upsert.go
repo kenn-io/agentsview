@@ -152,8 +152,9 @@ func upsertSessionProjectIdentitySnapshots(
 				archiveID, databaseGeneration, obs.SessionID,
 				obs.Project, obs.Machine, obs.RootPath, obs.GitRemote,
 				obs.GitRemoteName, obs.RepositoryPath, obs.WorktreeName,
-				obs.WorktreeRootPath, obs.WorktreeRelationship, obs.CheckoutState,
-				obs.GitBranch, obs.RemoteResolution, obs.RemoteCandidateCount,
+				obs.WorktreeRootPath, string(obs.WorktreeRelationship),
+				string(obs.CheckoutState),
+				obs.GitBranch, string(obs.RemoteResolution), obs.RemoteCandidateCount,
 				obs.ObservedAt, obs.NormalizedRemote, obs.KeySource, obs.Key,
 			)
 		}
@@ -258,8 +259,9 @@ func upsertProjectIdentityObservation(
 		obs.SourceArchiveID, obs.SourceArchiveSalt,
 		obs.Project, obs.Machine, obs.RootPath, obs.GitRemote,
 		obs.GitRemoteName, obs.RepositoryPath, obs.WorktreeName,
-		obs.WorktreeRootPath, obs.WorktreeRelationship, obs.CheckoutState,
-		obs.GitBranch, obs.RemoteResolution, obs.RemoteCandidateCount,
+		obs.WorktreeRootPath, string(obs.WorktreeRelationship),
+		string(obs.CheckoutState),
+		obs.GitBranch, string(obs.RemoteResolution), obs.RemoteCandidateCount,
 		obs.ObservedAt, obs.NormalizedRemote, obs.KeySource, obs.Key,
 	); err != nil {
 		return fmt.Errorf("upserting duckdb project identity observation: %w", err)
