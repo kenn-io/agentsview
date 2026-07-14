@@ -778,9 +778,11 @@ func directGenerationAction(
 // HTTP client for its embeddings API. Callers only reach it after
 // IsLocalDaemonActive reported true.
 func resolveEmbeddingsDaemonClient(cfg config.Config) (embeddingsDaemonClient, error) {
-	rt := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken)
+	rt := FindWritableDaemonRuntime(cfg.DataDir, cfg.AuthToken)
 	if rt == nil {
-		if _, err := FindIncompatibleDaemonRuntime(cfg.DataDir, cfg.AuthToken); err != nil {
+		if _, err := findIncompatibleWritableDaemonRuntime(
+			cfg.DataDir, cfg.AuthToken,
+		); err != nil {
 			return embeddingsDaemonClient{}, err
 		}
 		return embeddingsDaemonClient{}, errors.New("no reachable local agentsview daemon found")

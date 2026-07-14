@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -960,6 +961,34 @@ func TestResolveEmbeddingsDaemonClientReportsIncompatibleDaemon(t *testing.T) {
 	require.Nil(t, FindDaemonRuntime(dataDir))
 
 	_, err := resolveEmbeddingsDaemonClient(config.Config{DataDir: dataDir})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "daemon API version")
+	assert.Contains(t, err.Error(), "restart the daemon after upgrading AgentsView")
+}
+
+func TestResolveEmbeddingsDaemonClientPrefersIncompatibleWritableDaemonError(
+	t *testing.T,
+) {
+	dataDir := runtimeTestDir(t)
+	readOnlyEndpoint, _ := writeLiveRuntime(t, dataDir, true)
+
+	writablePID := startSleepProcess(t)
+	writableEndpoint := newPingDaemonWithPID(t, writablePID)
+	writablePath, err := writeRuntimeRecordForTest(dataDir, daemonRuntimeRecord(
+		writableEndpoint.Host, writableEndpoint.Port,
+		withRuntimePID(writablePID),
+		withRuntimeVersion("old"),
+		withRuntimeAPIVersion(daemonAPIVersion-1),
+	))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Remove(writablePath) })
+
+	compatible := FindDaemonRuntime(dataDir)
+	require.NotNil(t, compatible)
+	require.True(t, compatible.ReadOnly)
+	assert.Equal(t, readOnlyEndpoint.Port, compatible.Port)
+
+	_, err = resolveEmbeddingsDaemonClient(config.Config{DataDir: dataDir})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "daemon API version")
 	assert.Contains(t, err.Error(), "restart the daemon after upgrading AgentsView")

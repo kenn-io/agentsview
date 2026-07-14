@@ -319,7 +319,13 @@ func holdExternalDaemonStartLock(t *testing.T, dataDir string) func() {
 
 	var once sync.Once
 	unlock := func() {
-		once.Do(func() { _ = stdin.Close() })
+		once.Do(func() {
+			_ = stdin.Close()
+			deadline := time.Now().Add(5 * time.Second)
+			for isExternalDaemonStarting(dataDir) && time.Now().Before(deadline) {
+				time.Sleep(10 * time.Millisecond)
+			}
+		})
 	}
 	t.Cleanup(unlock)
 	return unlock
