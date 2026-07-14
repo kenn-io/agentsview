@@ -43,6 +43,7 @@ function runningStatus(
     phase: "embedding",
     done,
     total: 1000,
+    eta_milliseconds: 0,
     model: "test-embed-model",
     dimension: 256,
     ...overrides,
@@ -60,12 +61,9 @@ const BUILDING_GENERATION = {
 };
 
 describe("EmbeddingsSettings", () => {
-  // The component samples progress with performance.now(); tie it to the
-  // faked Date clock so vi.advanceTimersByTimeAsync moves both together.
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-11T10:00:05Z"));
-    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     embeddingsService.getApiV1EmbeddingsStatus.mockReset();
     embeddingsService.getApiV1EmbeddingsGenerations.mockReset();
     embeddingsService.getApiV1EmbeddingsGenerations.mockResolvedValue({
@@ -84,10 +82,13 @@ describe("EmbeddingsSettings", () => {
     flushSync();
   }
 
-  it("shows model, phase, progress, and an estimating state, then a smoothed ETA", async () => {
-    let current: VectorBuildStatus = runningStatus(0);
-    embeddingsService.getApiV1EmbeddingsStatus.mockImplementation(() =>
-      Promise.resolve(current),
+  it("shows the daemon's warmed estimate on the first status response", async () => {
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
+      runningStatus(200, {
+        estimate_ready: true,
+        rate_per_second: 50,
+        eta_milliseconds: 16_000,
+      }),
     );
 
     const component = mount(EmbeddingsSettings, { target: document.body });
@@ -97,23 +98,11 @@ describe("EmbeddingsSettings", () => {
     expect(text()).toContain("test-embed-model");
     expect(text()).toContain("256");
     expect(text()).toContain("Embedding");
-    expect(text()).toContain("0 / 1,000 chunks");
-    expect(text()).toContain("Estimating time remaining...");
-
-    // One positive delta is not enough for a stable rate.
-    current = runningStatus(100);
-    await settle(2000);
-    expect(text()).toContain("100 / 1,000 chunks");
-    expect(text()).toContain("10%");
-    expect(text()).toContain("Estimating time remaining...");
-
-    // Second delta at the same pace: 100 chunks / 2s -> 50 chunks/s, so the
-    // remaining 800 chunks are 16 seconds away.
-    current = runningStatus(200);
-    await settle(2000);
+    expect(text()).toContain("200 / 1,000 chunks");
+    expect(text()).toContain("20%");
     expect(text()).toContain("50 chunks/s");
     expect(text()).toContain("ETA 16s");
-    expect(text()).toContain("Elapsed 9s");
+    expect(text()).toContain("Elapsed 5s");
 
     const progressbar = document.body.querySelector('[role="progressbar"]');
     expect(progressbar?.getAttribute("aria-valuenow")).toBe("200");
@@ -122,30 +111,13 @@ describe("EmbeddingsSettings", () => {
     unmount(component);
   });
 
-  it("resets the estimator when a different build takes over", async () => {
-    let current: VectorBuildStatus = runningStatus(0);
-    embeddingsService.getApiV1EmbeddingsStatus.mockImplementation(() =>
-      Promise.resolve(current),
+  it("shows an estimating state while the daemon warms its estimate", async () => {
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(
+      runningStatus(100, { estimate_ready: false }),
     );
 
     const component = mount(EmbeddingsSettings, { target: document.body });
     await settle();
-    current = runningStatus(100);
-    await settle(2000);
-    current = runningStatus(200);
-    await settle(2000);
-    expect(document.body.textContent).toContain("ETA");
-    expect(document.body.textContent).not.toContain(
-      "Estimating time remaining...",
-    );
-
-    // A new build (fresh build_id) must not inherit the previous rate even
-    // though progress keeps increasing monotonically.
-    current = runningStatus(300, {
-      build_id: 2,
-      started_at: "2026-07-11T10:01:00Z",
-    });
-    await settle(2000);
     expect(document.body.textContent).toContain(
       "Estimating time remaining...",
     );
@@ -187,6 +159,7 @@ describe("EmbeddingsSettings", () => {
       started_at: "2026-07-11T10:00:00Z",
       done: 1000,
       total: 1000,
+      eta_milliseconds: 0,
       model: "test-embed-model",
       dimension: 256,
       last_result: {
@@ -221,6 +194,7 @@ describe("EmbeddingsSettings", () => {
       running: false,
       done: 0,
       total: 0,
+      eta_milliseconds: 0,
       model: "test-embed-model",
       dimension: 256,
       last_error: "encode batch: connection refused",
@@ -284,6 +258,7 @@ describe("EmbeddingsSettings", () => {
       running: false,
       done: 0,
       total: 0,
+      eta_milliseconds: 0,
       model: "test-embed-model",
       dimension: 256,
     };

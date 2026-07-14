@@ -182,7 +182,8 @@ func TestEmbeddingsBuildUnknownServerReturnsBadRequest(t *testing.T) {
 
 func TestEmbeddingsStatusReturnsCurrentStatus(t *testing.T) {
 	fake := &fakeEmbeddingsManager{status: vector.BuildStatus{
-		Running: true, Phase: "embedding", Done: 3, Total: 10,
+		Running: true, Phase: "embedding", Done: 10, Total: 10,
+		EstimateReady: true, RatePerSecond: 50, ETAMilliseconds: 0,
 	}}
 	s := newEmbeddingsTestServer(t, fake)
 
@@ -192,6 +193,8 @@ func TestEmbeddingsStatusReturnsCurrentStatus(t *testing.T) {
 	var status vector.BuildStatus
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &status))
 	assert.Equal(t, fake.status, status)
+	assert.Contains(t, w.Body.String(), `"eta_milliseconds":0`,
+		"a ready zero-second ETA must remain distinguishable from a missing estimate")
 }
 
 func TestEmbeddingsGenerationsReturnsWrappedList(t *testing.T) {

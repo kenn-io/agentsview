@@ -224,6 +224,35 @@ func TestManagerStatusStampsBuildIdentityAndSpace(t *testing.T) {
 	assert.Equal(t, "2026-07-11T10:01:00Z", status.StartedAt)
 }
 
+func TestManagerStatusPublishesAndClearsBuildETA(t *testing.T) {
+	base := time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)
+	now := base
+	m := &Manager{
+		gen: fakeGeneration("fake-model"),
+		now: func() time.Time { return now },
+	}
+
+	require.NoError(t, m.begin())
+	m.reportProgress(BuildProgress{Phase: "embedding", Done: 0, Total: 1000})
+	now = base.Add(2 * time.Second)
+	m.reportProgress(BuildProgress{Phase: "embedding", Done: 100, Total: 1000})
+	now = base.Add(4 * time.Second)
+	m.reportProgress(BuildProgress{Phase: "embedding", Done: 200, Total: 1000})
+
+	status := m.Status()
+	require.True(t, status.EstimateReady)
+	assert.InDelta(t, 50, status.RatePerSecond, 0.001)
+	assert.Equal(t, int64(16_000), status.ETAMilliseconds)
+	assert.Equal(t, "fake-model", status.Model)
+	assert.Equal(t, 3, status.Dimension)
+
+	m.finish(BuildResult{}, nil)
+	status = m.Status()
+	assert.False(t, status.EstimateReady)
+	assert.Zero(t, status.RatePerSecond)
+	assert.Zero(t, status.ETAMilliseconds)
+}
+
 func TestManagerGenerationsDelegatesToIndex(t *testing.T) {
 	ix := openTestIndex(t)
 	ctx := context.Background()

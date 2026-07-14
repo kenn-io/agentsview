@@ -6,7 +6,6 @@
   import type { VectorBuildStatus } from "../../api/generated/index";
   import type { VectorGenerationInfo } from "../../api/generated/models/VectorGenerationInfo";
   import { ApiError, callGenerated } from "../../api/runtime.js";
-  import { EtaEstimator, type EtaEstimate } from "../../utils/etaEstimator.js";
 
   // Poll fast only while a build is actually running; when idle the section
   // only needs to notice an externally started build (CLI, scheduler)
@@ -17,21 +16,13 @@
   // rows on a slower multiple of the active status poll.
   const GENERATIONS_EVERY_ACTIVE_POLLS = 5;
 
-  const NO_ESTIMATE: EtaEstimate = {
-    ready: false,
-    ratePerSecond: null,
-    etaMs: null,
-  };
-
   let status = $state<VectorBuildStatus | null>(null);
   let generations = $state<VectorGenerationInfo[]>([]);
   let unavailableReason = $state<string | null>(null);
   let loadError = $state<string | null>(null);
   let loaded: boolean = $state(false);
-  let estimate: EtaEstimate = $state(NO_ESTIMATE);
   let elapsedMs: number | null = $state(null);
 
-  const estimator = new EtaEstimator();
   let timer: ReturnType<typeof setTimeout> | null = null;
   let disposed = false;
   let activePollsSinceGenerations = 0;
@@ -46,6 +37,9 @@
 
   const running = $derived(status?.running ?? false);
   const phase = $derived(status?.phase ?? "");
+  const estimateReady = $derived(status?.estimate_ready ?? false);
+  const ratePerSecond = $derived(status?.rate_per_second ?? null);
+  const etaMs = $derived(status?.eta_milliseconds ?? null);
   const progressFraction = $derived(
     status && status.running && status.total > 0
       ? Math.min(1, status.done / status.total)
@@ -87,15 +81,13 @@
       status = next;
       unavailableReason = null;
       loadError = null;
-      updateEstimate(next);
+      updateElapsed(next);
       if (withGenerations || (wasRunning && !next.running)) {
         activePollsSinceGenerations = 0;
         await refreshGenerations();
       }
     } catch (e) {
       if (disposed) return;
-      estimator.reset();
-      estimate = NO_ESTIMATE;
       elapsedMs = null;
       if (e instanceof ApiError && e.status === 501) {
         unavailableReason = e.message;
@@ -121,17 +113,11 @@
     generations = (res.generations ?? []) as VectorGenerationInfo[];
   }
 
-  function updateEstimate(s: VectorBuildStatus): void {
+  function updateElapsed(s: VectorBuildStatus): void {
     if (!s.running) {
-      estimator.reset();
-      estimate = NO_ESTIMATE;
       elapsedMs = null;
       return;
     }
-    // Keyed by build identity + phase: a new build (or the scanning ->
-    // embedding transition) must never inherit the previous rate.
-    const key = `${s.build_id ?? 0}|${s.started_at ?? ""}|${s.phase ?? ""}`;
-    estimate = estimator.sample(key, s.done, s.total, performance.now());
     elapsedMs = s.started_at
       ? Math.max(0, Date.now() - Date.parse(s.started_at))
       : null;
@@ -253,13 +239,11 @@
             {#if progressFraction !== null}
               <span>{percentFormat.format(progressFraction)}</span>
             {/if}
-            {#if estimate.ready && estimate.ratePerSecond !== null}
+            {#if estimateReady && ratePerSecond !== null}
               <span>
                 {m.settings_embeddings_rate({
-                  count: Math.max(1, Math.round(estimate.ratePerSecond)),
-                  rateLabel: numberFormat.format(
-                    Math.round(estimate.ratePerSecond),
-                  ),
+                  count: Math.max(1, Math.round(ratePerSecond)),
+                  rateLabel: numberFormat.format(Math.round(ratePerSecond)),
                 })}
               </span>
             {/if}
@@ -270,10 +254,10 @@
                 })}
               </span>
             {/if}
-            {#if estimate.ready && estimate.etaMs !== null}
+            {#if estimateReady && etaMs !== null}
               <span class="eta">
                 {m.settings_embeddings_eta({
-                  duration: formatDurationLocalized(estimate.etaMs),
+                  duration: formatDurationLocalized(etaMs),
                 })}
               </span>
             {:else}

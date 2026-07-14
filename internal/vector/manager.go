@@ -76,6 +76,7 @@ type Manager struct {
 	mu      sync.Mutex
 	running bool
 	status  BuildStatus
+	eta     buildETAEstimator
 
 	// now stamps BuildStatus.StartedAt when a build begins; a test hook
 	// defaulting to time.Now.
@@ -110,12 +111,17 @@ type BuildStatus struct {
 	BuildID int64 `json:"build_id,omitempty"`
 	// StartedAt is when the current (or, once it finished, most recent)
 	// build began, RFC3339 UTC. Empty until the first build of the process.
-	StartedAt  string       `json:"started_at,omitempty"`
-	Phase      string       `json:"phase,omitempty"`
-	Done       int64        `json:"done"`
-	Total      int64        `json:"total"`
-	LastError  string       `json:"last_error,omitempty"`
-	LastResult *BuildResult `json:"last_result,omitempty"`
+	StartedAt string `json:"started_at,omitempty"`
+	Phase     string `json:"phase,omitempty"`
+	Done      int64  `json:"done"`
+	Total     int64  `json:"total"`
+	// EstimateReady is true once the daemon has enough positive progress
+	// samples to publish a stable rate and ETA for the current build phase.
+	EstimateReady   bool         `json:"estimate_ready,omitempty"`
+	RatePerSecond   float64      `json:"rate_per_second,omitempty"`
+	ETAMilliseconds int64        `json:"eta_milliseconds"`
+	LastError       string       `json:"last_error,omitempty"`
+	LastResult      *BuildResult `json:"last_result,omitempty"`
 	// Model and Dimension identify the configured embedding space the
 	// manager builds ([vector.embeddings] model/dimension), so status
 	// consumers can display the target space even before any generation
@@ -319,6 +325,7 @@ func (m *Manager) begin() error {
 	m.status.Phase = ""
 	m.status.Done = 0
 	m.status.Total = 0
+	m.clearETA()
 	return nil
 }
 
@@ -355,6 +362,10 @@ func (m *Manager) reportProgress(p BuildProgress) {
 	m.status.Phase = p.Phase
 	m.status.Done = p.Done
 	m.status.Total = p.Total
+	estimate := m.eta.sample(p.Phase, p.Done, p.Total, m.now())
+	m.status.EstimateReady = estimate.Ready
+	m.status.RatePerSecond = estimate.RatePerSecond
+	m.status.ETAMilliseconds = estimate.Remaining.Milliseconds()
 }
 
 // finish records a completed build's outcome and clears the running state.
@@ -366,6 +377,7 @@ func (m *Manager) finish(result BuildResult, err error) {
 	defer m.mu.Unlock()
 	m.running = false
 	m.status.Running = false
+	m.clearETA()
 	if err != nil {
 		m.status.LastError = err.Error()
 		return
@@ -373,6 +385,15 @@ func (m *Manager) finish(result BuildResult, err error) {
 	m.status.LastError = ""
 	r := result
 	m.status.LastResult = &r
+}
+
+// clearETA resets both the private accumulator and its public status snapshot.
+// The caller must hold m.mu.
+func (m *Manager) clearETA() {
+	m.eta.reset()
+	m.status.EstimateReady = false
+	m.status.RatePerSecond = 0
+	m.status.ETAMilliseconds = 0
 }
 
 func (m *Manager) isRunning() bool {
