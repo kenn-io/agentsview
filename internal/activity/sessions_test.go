@@ -9,6 +9,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSanitizeProjectLabelsSanitizesBranchProjects(t *testing.T) {
+	raw := "/home/example/private/repo"
+	report := Report{ByBranch: []BranchKeyMinutes{{
+		Project: raw,
+		Branch:  "main",
+		Cost:    1,
+	}}}
+	projects := map[string]export.ProjectMapEntry{
+		raw: {ProjectKey: "pl1-path"},
+	}
+
+	SanitizeProjectLabels(&report, projects)
+
+	require.Len(t, report.ByBranch, 1)
+	assert.Empty(t, report.ByBranch[0].Project)
+	assert.Equal(t, "main", report.ByBranch[0].Branch)
+}
+
 func TestSanitizeProjectLabelsSanitizesSessionTitles(t *testing.T) {
 	report := Report{BySession: []SessionRow{
 		{SessionID: "path", Title: "/Users/alice/private/repo", Project: "/Users/alice/private/repo"},

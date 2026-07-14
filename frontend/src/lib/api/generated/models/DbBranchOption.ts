@@ -2,7 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-export type BranchesResponse = {
-  branches: any[] | null;
+export type DbBranchOption = {
+  branch: string;
 };
 

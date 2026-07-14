@@ -18,7 +18,12 @@
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import { Card, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
   import RefreshControl from "../shared/RefreshControl.svelte";
-  import { branchLabel } from "../../branchFilters.js";
+  import BranchPicker from "../shared/BranchPicker.svelte";
+  import { searchBranches } from "../../api/client.js";
+  import {
+    branchPickerValues,
+    reconcileBranchFilterValues,
+  } from "../../branchFilters.js";
   import {
     addDays,
     endOfMonth,
@@ -114,22 +119,23 @@
       displayLabel: machine,
     })),
   ]);
-  // Branch tokens are project-scoped, so an active project filter narrows
-  // the offered branches to that project; a cross-project pick would AND
-  // contradictory predicates and silently zero the report.
-  const branchOptions = $derived.by((): TypeaheadOption[] => [
-    {
-      name: "",
-      label: m.activity_all_branches(),
-      displayLabel: m.activity_all_branches(),
-    },
-    ...activity.branches
-      .filter((b) => !activity.project || b.project === activity.project)
-      .map((b) => {
-        const label = branchLabel(b.project, b.branch, m.shared_no_branch());
-        return { name: b.token, label, displayLabel: label };
-      }),
-  ]);
+  const branchProjects = $derived(activity.project ? [activity.project] : []);
+  const selectedBranchNames = $derived(
+    branchPickerValues(activity.branch ? [activity.branch] : []),
+  );
+
+  function searchActivityBranches(params: {
+    projects?: string[];
+    search: string;
+    limit: number;
+  }) {
+    return searchBranches({
+      ...params,
+      includeOneShot: true,
+      includeAutomated: true,
+      scope: "all",
+    });
+  }
   const automationOptions: TypeaheadOption[] = $derived([
     {
       name: "all",
@@ -286,8 +292,11 @@
     activity.load();
   }
 
-  function onBranchChange(value: string) {
-    activity.setBranch(value);
+  function onBranchChange(values: string[]) {
+    activity.setBranch(reconcileBranchFilterValues(
+      activity.branch ? [activity.branch] : [],
+      values,
+    )[0] ?? "");
     activity.load();
   }
 
@@ -379,14 +388,19 @@
     </div>
 
     <div class="toolbar-typeahead">
-      <Typeahead
-        options={branchOptions}
-        value={activity.branch}
-        fallbackLabel={m.activity_all_branches()}
+      <BranchPicker
+        mode="single"
+        selected={selectedBranchNames}
+        projects={branchProjects}
+        search={searchActivityBranches}
+        label={m.activity_filter_by_branch()}
+        allLabel={m.activity_all_branches()}
         placeholder={m.activity_filter_branches_placeholder()}
-        title={m.activity_filter_by_branch()}
-        emptyLabel={m.activity_no_matching_branches()}
-        onselect={onBranchChange}
+        loadingLabel={m.shared_branch_loading()}
+        emptyLabel={m.shared_branch_no_match()}
+        refineLabel={m.shared_branch_refine()}
+        noBranchLabel={m.shared_no_branch()}
+        onChange={onBranchChange}
       />
     </div>
 

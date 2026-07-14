@@ -1,4 +1,4 @@
-import type { AgentInfo, BranchInfo, ProjectInfo } from "../api/types.js";
+import type { AgentInfo, ProjectInfo } from "../api/types.js";
 import { splitBranchFilterToken } from "../branchFilters.js";
 import type { Report } from "../api/types/activity.js";
 import { ActivityService, MetadataService } from "../api/generated/index";
@@ -76,15 +76,12 @@ class ActivityStore {
   // aggregation on every event.
   hasNewData: boolean = $state(false);
 
-  // Filter-option lists for the activity controls. Loaded with full
-  // inclusion (one-shot + automated) so every project/agent/machine/branch
-  // that can appear in the always-inclusive activity report is also
-  // selectable here — unlike the sidebar's lists, which honor the
-  // sidebar include toggles.
+  // Filter-option lists for the bounded metadata controls. Loaded with full
+  // inclusion (one-shot + automated), unlike the sidebar lists which honor
+  // the sidebar include toggles. Branches are searched on demand by the picker.
   projects: ProjectInfo[] = $state([]);
   agents: AgentInfo[] = $state([]);
   machines: string[] = $state([]);
-  branches: BranchInfo[] = $state([]);
 
   private loadVersion = 0;
   private reportRead = new LatestRead();
@@ -273,25 +270,6 @@ class ActivityStore {
         if (isAbortError(e) || !this.filterOptionsRead.isCurrent(signal)) return;
         ok = false;
       }
-      try {
-        // Scope "all" counts subagent and fork sessions like the activity
-        // report does, so every branch its by_branch rollup can surface is
-        // selectable in the typeahead.
-        const res = (await callGenerated(
-          () => MetadataService.getApiV1Branches({
-            ...opts,
-            scope: "all",
-          }),
-          signal,
-        )) as unknown as { branches: BranchInfo[] };
-        if (
-          ver === this.#filterOptionsVersion &&
-          this.filterOptionsRead.isCurrent(signal)
-        ) this.branches = res.branches;
-      } catch (e) {
-        if (isAbortError(e) || !this.filterOptionsRead.isCurrent(signal)) return;
-        ok = false;
-      }
       if (
         ver === this.#filterOptionsVersion &&
         this.filterOptionsRead.isCurrent(signal)
@@ -378,6 +356,10 @@ class ActivityStore {
     this.agent = params.agent ?? "";
     this.machine = params.machine ?? "";
     this.branch = params.git_branch ?? "";
+    if (this.branch && this.project) {
+      const legacy = splitBranchFilterToken(this.branch);
+      if (legacy.project && legacy.project !== this.project) this.branch = "";
+    }
     this.automation = AUTOMATIONS.has(params.automation ?? "")
       ? (params.automation as Automation)
       : "all";
@@ -488,14 +470,12 @@ class ActivityStore {
 
   setProject(project: string) {
     this.project = project;
-    // Branch tokens are project-scoped; keeping a branch from another
-    // project would AND contradictory predicates and silently zero the
-    // report, so any change of project clears the branch selection.
-    if (
-      this.branch &&
-      splitBranchFilterToken(this.branch).project !== project
-    ) {
-      this.branch = "";
+    // New branch values are plain names and remain valid under a changed
+    // project scope. Legacy project-pair URLs are cleared only when their
+    // embedded project conflicts with the new scope.
+    if (this.branch) {
+      const legacy = splitBranchFilterToken(this.branch);
+      if (legacy.project && legacy.project !== project) this.branch = "";
     }
     this.writeUrl();
   }
@@ -524,7 +504,7 @@ class ActivityStore {
 export const activity = new ActivityStore();
 
 // Refresh the activity filter options after any sync/import, mirroring the
-// sessions store, so newly imported projects/agents/machines/branches appear
+// sessions store, so newly imported projects/agents/machines appear
 // in the activity controls without a full page reload. Only refetch when an
 // ActivityPage is mounted; otherwise the invalidated cache is picked up lazily
 // by the next mount's loadFilterOptions(). The report itself is deliberately

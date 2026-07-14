@@ -529,24 +529,6 @@ describe("SessionsStore", () => {
     });
   });
 
-  describe("loadBranches", () => {
-    it("requests branch options with scope all", async () => {
-      vi.mocked(api.getBranches).mockResolvedValue({
-        branches: [
-          { project: "proj", branch: "main", token: "proj\u001fmain" },
-        ],
-      });
-      await sessions.loadBranches();
-
-      expect(api.getBranches).toHaveBeenCalledWith(
-        expect.objectContaining({ scope: "all" }),
-      );
-      expect(sessions.branches).toEqual([
-        { project: "proj", branch: "main", token: "proj\u001fmain" },
-      ]);
-    });
-  });
-
   describe("sidebar loading", () => {
     it("does not load sessions when no sidebar consumer is mounted", async () => {
       sessions.refreshSidebarIfAttached();

@@ -2,9 +2,8 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-export type DbBranchInfo = {
-  branch: string;
-  project: string;
-  token: string;
+export type DbBranchResult = {
+  branches: any[] | null;
+  has_more: boolean;
 };
 

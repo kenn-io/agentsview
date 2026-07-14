@@ -773,28 +773,35 @@ func (s *Store) GetMachines(ctx context.Context, excludeOneShot, excludeAutomate
 	return out, rows.Err()
 }
 
-func (s *Store) GetBranches(ctx context.Context, scope db.BranchScope, excludeOneShot, excludeAutomated bool) ([]db.BranchInfo, error) {
-	rows, err := s.queryContext(ctx,
-		`SELECT project, git_branch FROM sessions WHERE `+
-			sessionScopeWhere(scope, excludeOneShot, excludeAutomated)+
-			` GROUP BY project, git_branch
-			ORDER BY MAX(`+duckActivityExpr+`) DESC NULLS LAST,
-				project, git_branch`,
-	)
+func (s *Store) GetBranches(
+	ctx context.Context, query db.BranchQuery,
+) (db.BranchResult, error) {
+	query = db.NormalizeBranchQuery(query)
+	q := `SELECT git_branch FROM sessions WHERE ` +
+		sessionScopeWhere(query.Scope, query.ExcludeOneShot, query.ExcludeAutomated)
+	args := []any{}
+	if len(query.Projects) > 0 {
+		placeholders := make([]string, len(query.Projects))
+		for i, project := range query.Projects {
+			placeholders[i] = "?"
+			args = append(args, project)
+		}
+		q += " AND project IN (" + strings.Join(placeholders, ",") + ")"
+	}
+	if query.Search != "" {
+		q += ` AND git_branch ILIKE ? ESCAPE '\'`
+		args = append(args, "%"+db.EscapeLikePattern(query.Search)+"%")
+	}
+	q += ` GROUP BY git_branch
+		ORDER BY MAX(` + duckActivityExpr + `) DESC NULLS LAST, git_branch
+		LIMIT ?`
+	args = append(args, query.Limit+1)
+	rows, err := s.queryContext(ctx, q, args...)
 	if err != nil {
-		return nil, fmt.Errorf("querying duckdb branches: %w", err)
+		return db.BranchResult{}, fmt.Errorf("querying duckdb branches: %w", err)
 	}
 	defer rows.Close()
-	out := []db.BranchInfo{}
-	for rows.Next() {
-		var bi db.BranchInfo
-		if err := rows.Scan(&bi.Project, &bi.Branch); err != nil {
-			return nil, fmt.Errorf("scanning duckdb branch: %w", err)
-		}
-		bi.Token = db.EncodeBranchFilterToken(bi.Project, bi.Branch)
-		out = append(out, bi)
-	}
-	return out, rows.Err()
+	return db.ScanBranchResult(rows, query)
 }
 
 func rootSessionWhere(excludeOneShot, excludeAutomated bool) string {

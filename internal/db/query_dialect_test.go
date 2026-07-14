@@ -272,6 +272,52 @@ func TestBranchPairClauseArgsKeepsEmptyBranchDistinct(t *testing.T) {
 	assert.Equal(t, []any{"alpha", "", "alpha", "unknown"}, args)
 }
 
+func TestBranchPairClauseArgsAcceptsBranchNamesAndLegacyPairs(t *testing.T) {
+	tokens := "main" + branchListSep +
+		EncodeBranchFilterToken("alpha", "legacy") + branchListSep +
+		NoBranchFilterToken
+
+	got, args := BranchPairClauseArgs("project", "git_branch", tokens, nil)
+
+	assert.Equal(t,
+		"(git_branch = ? OR ((project = ? AND git_branch = ?) OR git_branch = ?))",
+		normalizeSQL(got))
+	assert.Equal(t, []any{"main", "alpha", "legacy", ""}, args)
+}
+
+func TestBranchPairClauseArgsTreatsLegacyPrintableSentinelsAsBranchNames(t *testing.T) {
+	got, args := BranchPairClauseArgs(
+		"project", "git_branch",
+		"__agentsview_no_branch__"+branchListSep+
+			"__agentsview_no_branch_match__",
+		nil,
+	)
+
+	assert.Equal(t, "(git_branch = ? OR git_branch = ?)", normalizeSQL(got))
+	assert.Equal(t, []any{
+		"__agentsview_no_branch__", "__agentsview_no_branch_match__",
+	}, args)
+}
+
+func TestBranchPairClauseArgsMalformedTokenFailsClosed(t *testing.T) {
+	got, args := BranchPairClauseArgs(
+		"project", "git_branch", NoBranchMatchToken, nil,
+	)
+
+	assert.Equal(t, "1 = 0", normalizeSQL(got))
+	assert.Empty(t, args)
+}
+
+func TestBranchPairClauseArgsNoMatchDiscardsEarlierBindings(t *testing.T) {
+	got, args := BranchPairClauseArgs(
+		"project", "git_branch", "main"+branchListSep+NoBranchMatchToken,
+		[]any{"existing"},
+	)
+
+	assert.Equal(t, "1 = 0", normalizeSQL(got))
+	assert.Equal(t, []any{"existing"}, args)
+}
+
 func TestSessionCursorFragmentsAreParameterized(t *testing.T) {
 	cursor := SessionCursor{
 		EndedAt: "2026-06-08T12:00:00Z",

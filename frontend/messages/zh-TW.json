@@ -827,6 +827,7 @@
     }
   ],
   "usage_cost_over_time_title": "成本趨勢",
+  "usage_unattributed": "未歸屬",
   "usage_cost_attribution_title": "成本歸因",
   "usage_attribution_treemap": "矩形樹圖",
   "usage_attribution_list": "列表",
@@ -1826,5 +1827,8 @@
   "appearance_high_contrast": "高對比度",
   "appearance_on": "開",
   "appearance_off": "關",
-  "appearance_text_size": "文字大小"
+  "appearance_text_size": "文字大小",
+  "shared_branch_loading": "正在載入分支…",
+  "shared_branch_no_match": "沒有相符的分支",
+  "shared_branch_refine": "還有更多分支，請縮小搜尋範圍。"
 }

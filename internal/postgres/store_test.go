@@ -1547,7 +1547,7 @@ func TestStoreWriteSurfaceSplitByCapability(t *testing.T) {
 	assert.ErrorIs(t, err, db.ErrReadOnly)
 }
 
-func TestStoreGetBranchesRecencyOrder(t *testing.T) {
+func TestStoreGetBranchesPickerQuery(t *testing.T) {
 	pgURL := testPGURL(t)
 	ensureStoreSchema(t, pgURL)
 
@@ -1576,24 +1576,24 @@ func TestStoreGetBranchesRecencyOrder(t *testing.T) {
 			 '2026-03-10T10:00:00Z'::timestamptz, 2, 2),
 			('br-5', 'm', 'delta', 'claude', 'x',
 			 '2026-03-10T09:00:00Z'::timestamptz,
-			 '2026-03-10T10:00:00Z'::timestamptz, 2, 2)
+			 '2026-03-10T10:00:00Z'::timestamptz, 2, 2),
+			('br-6', 'm', 'alpha', 'claude', 'feature-old',
+			 '2026-03-13T09:00:00Z'::timestamptz,
+			 '2026-03-13T10:00:00Z'::timestamptz, 2, 2),
+			('br-7', 'm', 'gamma', 'claude', 'feat/x',
+			 '2026-03-20T09:00:00Z'::timestamptz,
+			 '2026-03-20T10:00:00Z'::timestamptz, 2, 2)
 	`)
 	require.NoError(t, err, "inserting branch sessions")
 
-	branches, err := store.GetBranches(
-		context.Background(), db.BranchScopeRoots, false, false)
+	branches, err := store.GetBranches(context.Background(), db.BranchQuery{
+		Projects: []string{"alpha", "beta"},
+		Search:   "FEAT",
+		Limit:    1,
+	})
 	require.NoError(t, err, "GetBranches")
-	want := []db.BranchInfo{
-		{Project: "alpha", Branch: "feat/x"},
-		{Project: "beta", Branch: "main"},
-		{Project: "alpha", Branch: "main"},
-		{Project: "test-project", Branch: ""},
-		{Project: "delta", Branch: "x"},
-		{Project: "gamma", Branch: "x"},
-	}
-	for i := range want {
-		want[i].Token = db.EncodeBranchFilterToken(want[i].Project, want[i].Branch)
-	}
-	assert.Equal(t, want, branches,
-		"pairs ordered by most recent activity, ties alphabetical")
+	assert.Equal(t, db.BranchResult{
+		Branches: []db.BranchOption{{Branch: "feat/x"}},
+		HasMore:  true,
+	}, branches, "filter selected projects before dedupe and limit+1 pagination")
 }

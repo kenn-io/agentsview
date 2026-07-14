@@ -3653,46 +3653,24 @@ func TestDuckDBBranchDimension(t *testing.T) {
 	require.NoError(t, err)
 	store := NewStoreFromDB(syncer.DB())
 
-	branches, err := store.GetBranches(ctx, db.BranchScopeRoots, false, false)
+	branches, err := store.GetBranches(ctx, db.BranchQuery{
+		Projects: []string{"alpha", "beta"},
+		Search:   "MAIN",
+		Limit:    1,
+	})
 	require.NoError(t, err)
-	assert.Equal(t, []db.BranchInfo{
-		{
-			Project: "alpha",
-			Branch:  "feature-x",
-			Token:   db.EncodeBranchFilterToken("alpha", "feature-x"),
-		},
-		{
-			Project: "beta",
-			Branch:  "main",
-			Token:   db.EncodeBranchFilterToken("beta", "main"),
-		},
-		{
-			Project: "alpha",
-			Branch:  "main",
-			Token:   db.EncodeBranchFilterToken("alpha", "main"),
-		},
-		{
-			Project: "alpha",
-			Branch:  "",
-			Token:   db.EncodeBranchFilterToken("alpha", ""),
-		},
-		{
-			Project: "alpha",
-			Branch:  "unknown",
-			Token:   db.EncodeBranchFilterToken("alpha", "unknown"),
-		},
-	}, branches, "pairs ordered by most recent activity, ties alphabetical")
+	assert.Equal(t, db.BranchResult{
+		Branches: []db.BranchOption{{Branch: "main"}},
+		HasMore:  false,
+	}, branches, "same-named branches deduplicate after filtering selected projects")
 
-	forkOnly := db.BranchInfo{
-		Project: "delta",
-		Branch:  "fork-only",
-		Token:   db.EncodeBranchFilterToken("delta", "fork-only"),
-	}
-	assert.NotContains(t, branches, forkOnly,
-		"fork-only branch hidden from the root scope")
-	withForks, err := store.GetBranches(ctx, db.BranchScopeAll, false, false)
+	withForks, err := store.GetBranches(ctx, db.BranchQuery{
+		Scope:    db.BranchScopeAll,
+		Projects: []string{"delta"},
+		Limit:    100,
+	})
 	require.NoError(t, err)
-	assert.Contains(t, withForks, forkOnly,
+	assert.Contains(t, withForks.Branches, db.BranchOption{Branch: "fork-only"},
 		"fork-only branch included when scope is all")
 
 	wide := db.UsageFilter{From: "2026-01-01", To: "2026-12-31", Breakdowns: true}

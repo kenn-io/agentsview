@@ -1408,6 +1408,17 @@ type projectListResponse struct {
 	Projects []db.ProjectInfo `json:"projects"`
 }
 
+type branchPickerItem struct {
+	Branch  string  `json:"branch"`
+	Project *string `json:"project"`
+	Token   *string `json:"token"`
+}
+
+type branchPickerResponse struct {
+	Branches []branchPickerItem `json:"branches"`
+	HasMore  bool               `json:"has_more"`
+}
+
 type syncStatusResponse struct {
 	LastSync string         `json:"last_sync"`
 	Progress *sync.Progress `json:"progress"`
@@ -2369,6 +2380,38 @@ func TestSessionStats_DefaultVisibilityMatchesListDefaults(t *testing.T) {
 	resp = decode[db.SessionStats](t, w)
 	assert.Equal(t, 3, resp.Totals.SessionsAll, "include_all sessions_all")
 	assert.Equal(t, 21, resp.Totals.MessagesTotal, "include_all messages_total")
+}
+
+func TestListBranchesPickerFiltersSearchesDeduplicatesAndPaginates(t *testing.T) {
+	te := setup(t)
+	seed := func(id, project, branch, endedAt string) {
+		te.seedSession(t, id, project, 5, func(s *db.Session) {
+			s.GitBranch = branch
+			s.UserMessageCount = 5
+			s.EndedAt = new(endedAt)
+		})
+	}
+
+	seed("selected-old", "alpha", "feature-old", "2026-06-13T10:00:00Z")
+	seed("selected-last", "beta", "feature-last", "2026-06-11T10:00:00Z")
+	seed("selected-shared-a", "alpha", "feature-shared", "2026-06-10T10:00:00Z")
+	seed("selected-shared-b", "beta", "feature-shared", "2026-06-09T10:00:00Z")
+	seed("unselected-shared", "gamma", "feature-shared", "2026-06-20T10:00:00Z")
+	seed("search-miss", "beta", "bugfix", "2026-06-30T10:00:00Z")
+
+	w := te.get(t, "/api/v1/branches?projects=alpha&projects=beta&search=FEATURE&limit=2")
+	assertStatus(t, w, http.StatusOK)
+	resp := decode[branchPickerResponse](t, w)
+	require.Len(t, resp.Branches, 2)
+	assert.Equal(t, []string{"feature-old", "feature-last"}, []string{
+		resp.Branches[0].Branch,
+		resp.Branches[1].Branch,
+	})
+	assert.True(t, resp.HasMore)
+	for _, branch := range resp.Branches {
+		assert.Nil(t, branch.Project, "picker results are not project-qualified")
+		assert.Nil(t, branch.Token, "picker results do not expose filter tokens")
+	}
 }
 
 func TestListMachines_ExcludeOneShotDefault(t *testing.T) {

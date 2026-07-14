@@ -167,6 +167,11 @@ func SanitizeProjectLabels(
 			report.ByProject[i].Key,
 		)
 	}
+	for i := range report.ByBranch {
+		report.ByBranch[i].Project = export.SafeProjectDisplayLabel(
+			report.ByBranch[i].Project,
+		)
+	}
 	for i := range report.BySession {
 		title := export.SafeProjectDisplayLabel(report.BySession[i].Title)
 		if title == "" {

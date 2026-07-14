@@ -714,6 +714,13 @@ func splitCSV(s string) []string {
 const (
 	branchFilterSep = "\x1f"
 	branchListSep   = "\x1e"
+
+	// NoBranchFilterToken is the plain branch-name filter value for sessions
+	// whose branch is empty. Empty itself means no active filter in URLs/stores.
+	NoBranchFilterToken = "\x1dno_branch"
+	// NoBranchMatchToken is the explicit fail-closed value used when two active
+	// inclusion filters have no overlap.
+	NoBranchMatchToken = "\x1dno_branch_match"
 )
 
 // EncodeBranchFilterToken builds the opaque (project, branch) filter token.
@@ -760,20 +767,38 @@ func SplitBranchFilterTokens(s string) []BranchInfo {
 	return out
 }
 
-// BranchPairPredicate uses OR-of-ANDs instead of row-value IN for backend
-// portability. An empty decoded pair set returns false so invalid filters do
-// not broaden to all rows.
+// BranchPairPredicate accepts current branch-name values and legacy
+// (project, branch) tokens. Plain branch names match across the separately
+// applied project filter; legacy tokens retain old shared URLs precisely.
+// The explicit no-match sentinel fails closed instead of matching a real name.
 func BranchPairPredicate(
 	projectCol, branchCol, tokens string, placeholder func(string) string,
 ) string {
-	pairs := SplitBranchFilterTokens(tokens)
-	if len(pairs) == 0 {
-		return "1 = 0"
+	for token := range strings.SplitSeq(tokens, branchListSep) {
+		if token == NoBranchMatchToken {
+			return "1 = 0"
+		}
 	}
-	parts := make([]string, len(pairs))
-	for i, p := range pairs {
-		parts[i] = "(" + projectCol + " = " + placeholder(p.Project) +
-			" AND " + branchCol + " = " + placeholder(p.Branch) + ")"
+
+	parts := make([]string, 0, strings.Count(tokens, branchListSep)+1)
+	for token := range strings.SplitSeq(tokens, branchListSep) {
+		if token == "" {
+			continue
+		}
+		if token == NoBranchFilterToken {
+			parts = append(parts, branchCol+" = "+placeholder(""))
+			continue
+		}
+		project, branch, legacy := strings.Cut(token, branchFilterSep)
+		if legacy {
+			parts = append(parts, "("+projectCol+" = "+placeholder(project)+
+				" AND "+branchCol+" = "+placeholder(branch)+")")
+			continue
+		}
+		parts = append(parts, branchCol+" = "+placeholder(token))
+	}
+	if len(parts) == 0 {
+		return "1 = 0"
 	}
 	return orTree(parts)
 }

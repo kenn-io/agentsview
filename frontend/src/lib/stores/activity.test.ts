@@ -103,7 +103,6 @@ beforeEach(() => {
   activity.projects = [];
   activity.agents = [];
   activity.machines = [];
-  activity.branches = [];
   activity.setPreset("day");
   activity.setDate("2026-06-16");
   activity.setProject("");
@@ -202,6 +201,12 @@ describe("load", () => {
     activity.setBranch("p1\x1fmain");
     activity.setProject("p1");
     expect(activity.branch).toBe("p1\x1fmain");
+  });
+
+  it("clears a conflicting legacy branch during URL hydration", () => {
+    activity.hydrateFromUrl({ project: "p2", git_branch: "p1\x1fmain" });
+    expect(activity.project).toBe("p2");
+    expect(activity.branch).toBe("");
   });
 
   it("defaults the automation class to all", async () => {
@@ -337,26 +342,17 @@ describe("loadFilterOptions", () => {
     api.getMachines.mockResolvedValueOnce({
       machines: ["laptop", "desktop"],
     });
-    api.getBranches.mockResolvedValueOnce({
-      branches: [{ project: "proj-a", branch: "main", token: "proj-a\x1fmain" }],
-    });
-
     await activity.loadFilterOptions();
 
     const full = { includeOneShot: true, includeAutomated: true };
     expect(api.getProjects).toHaveBeenCalledWith(full);
     expect(api.getAgents).toHaveBeenCalledWith(full);
     expect(api.getMachines).toHaveBeenCalledWith(full);
-    // Branches use scope "all" so the typeahead offers every branch the
-    // report's subagent/fork-inclusive rollups can surface.
-    expect(api.getBranches).toHaveBeenCalledWith({ ...full, scope: "all" });
+    expect(api.getBranches).not.toHaveBeenCalled();
 
     expect(activity.projects).toEqual([{ name: "proj-a", count: 1 }]);
     expect(activity.agents).toEqual([{ name: "claude", count: 2 }]);
     expect(activity.machines).toEqual(["laptop", "desktop"]);
-    expect(activity.branches).toEqual([
-      { project: "proj-a", branch: "main", token: "proj-a\x1fmain" },
-    ]);
   });
 
   it("fetches once across repeated calls", async () => {

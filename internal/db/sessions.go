@@ -2709,51 +2709,106 @@ const (
 	BranchScopeAll
 )
 
-// GetBranches returns distinct (project, git_branch) pairs, including the empty
-// branch used for sessions with no recorded branch. Pairs are ordered by most
-// recent session activity so active branches surface first in long lists, with
-// the pair itself as a deterministic tiebreaker.
+const MaxBranchLimit = 100
+
+// BranchQuery controls the branch-name picker query. Project filtering is
+// applied before branch names are deduplicated across projects.
+type BranchQuery struct {
+	Projects         []string
+	Search           string
+	Limit            int
+	Scope            BranchScope
+	ExcludeOneShot   bool
+	ExcludeAutomated bool
+}
+
+// BranchOption is one unqualified branch name offered by the picker.
+type BranchOption struct {
+	Branch string `json:"branch"`
+}
+
+// BranchResult is one bounded page of branch picker metadata.
+type BranchResult struct {
+	Branches []BranchOption `json:"branches"`
+	HasMore  bool           `json:"has_more"`
+}
+
+// NormalizeBranchQuery applies the picker limit contract consistently across
+// storage backends.
+func NormalizeBranchQuery(q BranchQuery) BranchQuery {
+	q.Search = strings.TrimSpace(q.Search)
+	if q.Limit <= 0 || q.Limit > MaxBranchLimit {
+		q.Limit = MaxBranchLimit
+	}
+	return q
+}
+
+// ScanBranchResult scans a limit+1 query and applies the shared has_more
+// truncation contract. Rows must contain only git_branch in result order.
+func ScanBranchResult(rows *sql.Rows, q BranchQuery) (BranchResult, error) {
+	q = NormalizeBranchQuery(q)
+	branches := []BranchOption{}
+	for rows.Next() {
+		var branch BranchOption
+		if err := rows.Scan(&branch.Branch); err != nil {
+			return BranchResult{}, fmt.Errorf("scanning branch: %w", err)
+		}
+		branches = append(branches, branch)
+	}
+	if err := rows.Err(); err != nil {
+		return BranchResult{}, fmt.Errorf("iterating branches: %w", err)
+	}
+	hasMore := len(branches) > q.Limit
+	if hasMore {
+		branches = branches[:q.Limit]
+	}
+	return BranchResult{Branches: branches, HasMore: hasMore}, nil
+}
+
+// GetBranches returns distinct git_branch values, including the empty branch,
+// ordered by the latest matching session activity and then branch name.
 func (db *DB) GetBranches(
-	ctx context.Context,
-	scope BranchScope,
-	excludeOneShot, excludeAutomated bool,
-) ([]BranchInfo, error) {
-	q := `SELECT project, git_branch
+	ctx context.Context, query BranchQuery,
+) (BranchResult, error) {
+	query = NormalizeBranchQuery(query)
+	q := `SELECT git_branch
 		FROM sessions
 		WHERE message_count > 0
 		  AND deleted_at IS NULL`
-	if scope == BranchScopeRoots {
+	args := []any{}
+	if query.Scope == BranchScopeRoots {
 		q += " AND relationship_type NOT IN ('subagent', 'fork')"
 	}
-	if excludeOneShot {
-		if !excludeAutomated {
+	if query.ExcludeOneShot {
+		if !query.ExcludeAutomated {
 			q += " AND (user_message_count > 1 OR is_automated = 1)"
 		} else {
 			q += " AND user_message_count > 1"
 		}
 	}
-	if excludeAutomated {
+	if query.ExcludeAutomated {
 		q += " AND is_automated = 0"
 	}
-	q += ` GROUP BY project, git_branch
+	if len(query.Projects) > 0 {
+		placeholders, projectArgs := inPlaceholders(query.Projects)
+		q += " AND project IN " + placeholders
+		args = append(args, projectArgs...)
+	}
+	if query.Search != "" {
+		q += ` AND git_branch LIKE ? ESCAPE '\'`
+		args = append(args, "%"+EscapeLikePattern(query.Search)+"%")
+	}
+	q += ` GROUP BY git_branch
 		ORDER BY MAX(` + activityCoalesceSQLite + `) DESC,
-			project, git_branch`
-	rows, err := db.getReader().QueryContext(ctx, q)
+			git_branch
+		LIMIT ?`
+	args = append(args, query.Limit+1)
+	rows, err := db.getReader().QueryContext(ctx, q, args...)
 	if err != nil {
-		return nil, fmt.Errorf("querying branches: %w", err)
+		return BranchResult{}, fmt.Errorf("querying branches: %w", err)
 	}
 	defer rows.Close()
-
-	branches := []BranchInfo{}
-	for rows.Next() {
-		var bi BranchInfo
-		if err := rows.Scan(&bi.Project, &bi.Branch); err != nil {
-			return nil, fmt.Errorf("scanning branch: %w", err)
-		}
-		bi.Token = EncodeBranchFilterToken(bi.Project, bi.Branch)
-		branches = append(branches, bi)
-	}
-	return branches, rows.Err()
+	return ScanBranchResult(rows, query)
 }
 
 // scanSessionRows iterates rows and scans each using

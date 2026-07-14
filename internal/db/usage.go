@@ -1724,6 +1724,12 @@ func SanitizeDailyUsageProjectLabelsWithCatalog(
 			result.Daily[i].ProjectBreakdowns[j].Project =
 				export.SafeProjectDisplayLabel(raw)
 		}
+		for j := range result.Daily[i].BranchBreakdowns {
+			result.Daily[i].BranchBreakdowns[j].Project =
+				export.SafeProjectDisplayLabel(
+					result.Daily[i].BranchBreakdowns[j].Project,
+				)
+		}
 	}
 	if result.SessionCounts.ByProject != nil {
 		byProject := make(map[string]int, len(result.SessionCounts.ByProject))

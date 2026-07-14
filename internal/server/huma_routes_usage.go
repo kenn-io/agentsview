@@ -30,8 +30,8 @@ type UsageFilterInput struct {
 	Agent             string `query:"agent" doc:"Filter by agent"`
 	Project           string `query:"project" doc:"Filter by project"`
 	Machine           string `query:"machine" doc:"Filter by machine"`
-	GitBranch         string `query:"git_branch" doc:"Filter by git branch; opaque (project, branch) tokens from the /branches endpoint"`
-	ExcludeGitBranch  string `query:"exclude_git_branch" doc:"Exclude a git branch; opaque (project, branch) tokens from the /branches endpoint"`
+	GitBranch         string `query:"git_branch" doc:"Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted"`
+	ExcludeGitBranch  string `query:"exclude_git_branch" doc:"Exclude branch names; multiple names use the branch list separator, and legacy project-qualified values remain accepted"`
 	ExcludeProject    string `query:"exclude_project" doc:"Exclude a project"`
 	ExcludeProjectKey string `query:"exclude_project_key" doc:"Exclude an opaque project key"`
 	ExcludeAgent      string `query:"exclude_agent" doc:"Exclude an agent"`

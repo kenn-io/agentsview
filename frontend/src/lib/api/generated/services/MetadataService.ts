@@ -3,7 +3,7 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { AgentsResponse } from '../models/AgentsResponse';
-import type { BranchesResponse } from '../models/BranchesResponse';
+import type { DbBranchResult } from '../models/DbBranchResult';
 import type { DbSessionStats } from '../models/DbSessionStats';
 import type { DbStats } from '../models/DbStats';
 import type { MachinesResponse } from '../models/MachinesResponse';
@@ -56,13 +56,16 @@ export class MetadataService {
   }
   /**
    * List branches
-   * @returns BranchesResponse OK
+   * @returns DbBranchResult OK
    * @throws ApiError
    */
   public static getApiV1Branches({
     includeOneShot,
     includeAutomated,
     scope,
+    projects,
+    search,
+    limit = 100,
   }: {
     /**
      * Include one-shot sessions
@@ -76,7 +79,19 @@ export class MetadataService {
      * Session scope: roots (default) counts only root sessions; all also counts subagent and fork sessions, matching the activity and usage rollups
      */
     scope?: 'roots' | 'all',
-  }): CancelablePromise<BranchesResponse> {
+    /**
+     * Restrict to these projects before deduplicating branch names
+     */
+    projects?: any[] | null,
+    /**
+     * Case-insensitive branch name substring
+     */
+    search?: string,
+    /**
+     * Maximum number of branch names
+     */
+    limit?: number,
+  }): CancelablePromise<DbBranchResult> {
     return __request(OpenAPI, {
       method: 'GET',
       url: '/api/v1/branches',
@@ -84,6 +99,9 @@ export class MetadataService {
         'include_one_shot': includeOneShot,
         'include_automated': includeAutomated,
         'scope': scope,
+        'projects': projects,
+        'search': search,
+        'limit': limit,
       },
       errors: {
         400: `Bad Request`,

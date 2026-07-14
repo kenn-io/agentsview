@@ -854,6 +854,7 @@
     }
   ],
   "usage_cost_over_time_title": "Cost Over Time",
+  "usage_unattributed": "Unattributed",
   "usage_cost_attribution_title": "Cost Attribution",
   "usage_attribution_treemap": "Treemap",
   "usage_attribution_list": "List",
@@ -1864,5 +1865,8 @@
   "appearance_high_contrast": "High contrast",
   "appearance_on": "On",
   "appearance_off": "Off",
-  "appearance_text_size": "Text size"
+  "appearance_text_size": "Text size",
+  "shared_branch_loading": "Loading branches…",
+  "shared_branch_no_match": "No matching branches",
+  "shared_branch_refine": "More branches exist. Refine your search."
 }

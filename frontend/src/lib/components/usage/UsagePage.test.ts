@@ -414,6 +414,14 @@ describe("UsagePage refresh behavior", () => {
     expect(initBlock).not.toContain("sessions.initFromParams(params)");
   });
 
+  it("wires the shared multi-select branch picker with project scope", () => {
+    expect(source).toContain("<BranchPicker");
+    expect(source).toContain('mode="multi"');
+    expect(source).toContain("selected={selectedBranchNames}");
+    expect(source).toContain("projects={branchProjects}");
+    expect(source).toContain("onChange={onUsageBranchesChange}");
+  });
+
   it("mounts the pairwise comparison panel additively", () => {
     expect(source).toContain("UsagePairwiseComparisonPanel");
     expect(source).toContain("<UsagePairwiseComparisonPanel />");

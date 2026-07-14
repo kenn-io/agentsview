@@ -314,10 +314,7 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
-  // Unattributable cost (e.g. imported Cursor usage) carries no branch,
-  // so branch grouping must show the empty state rather than a "total"
-  // series the branch attribution panel says does not exist.
-  it("shows the empty state in branch mode when no cost is branch-attributable", async () => {
+  it("shows fully unattributable branch cost explicitly", async () => {
     const summary = usageSummary();
     for (const day of summary.daily) {
       day.branchBreakdowns = [];
@@ -330,8 +327,67 @@ describe("CostTimeSeriesChart", () => {
     });
     await tick();
 
-    expect(document.querySelector(".empty")).toBeTruthy();
-    expect(document.querySelector("svg.chart-svg")).toBeNull();
+    expect(document.querySelector(".empty")).toBeNull();
+    expect(document.querySelector("svg.chart-svg")).toBeTruthy();
+    expect(document.body.textContent).toContain("Unattributed");
+    unmount(component);
+  });
+
+  it("shows the unattributed remainder beside branch-attributed cost", async () => {
+    const summary = usageSummary();
+    summary.daily = [dailyEntry(0), dailyEntry(1)];
+    summary.daily[0]!.branchBreakdowns = [{
+      project: "agentsview",
+      branch: "main",
+      inputTokens: 60,
+      outputTokens: 30,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost: 6,
+    }];
+    summary.daily[1]!.branchBreakdowns = [];
+    usage.summary = summary;
+    usage.toggles.timeSeries.groupBy = "branch";
+
+    const component = mount(CostTimeSeriesChart, {
+      target: document.body,
+    });
+    await tick();
+
+    const legendText = Array.from(
+      document.querySelectorAll(".legend-item"),
+    ).map((el) => el.textContent!.trim());
+    expect(legendText).toContain("agentsview/main");
+    expect(legendText).toContain("Unattributed");
+    expect(document.querySelectorAll("path[opacity='0.7']")).toHaveLength(2);
+    unmount(component);
+  });
+
+  it("shows same-day unattributed cost beside branch-attributed cost", async () => {
+    const summary = usageSummary();
+    summary.daily = [dailyEntry(0)];
+    summary.daily[0]!.branchBreakdowns = [{
+      project: "agentsview",
+      branch: "main",
+      inputTokens: 60,
+      outputTokens: 30,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost: summary.daily[0]!.totalCost / 2,
+    }];
+    usage.summary = summary;
+    usage.toggles.timeSeries.groupBy = "branch";
+
+    const component = mount(CostTimeSeriesChart, {
+      target: document.body,
+    });
+    await tick();
+
+    const legendText = Array.from(
+      document.querySelectorAll(".legend-item"),
+    ).map((el) => el.textContent!.trim());
+    expect(legendText).toContain("agentsview/main");
+    expect(legendText).toContain("Unattributed");
     unmount(component);
   });
 

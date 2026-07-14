@@ -47,9 +47,7 @@ type machinesResponse struct {
 	Machines []string `json:"machines"`
 }
 
-type branchesResponse struct {
-	Branches []db.BranchInfo `json:"branches"`
-}
+type branchesResponse = db.BranchResult
 
 type agentsResponse struct {
 	Agents []db.AgentInfo `json:"agents"`
@@ -130,7 +128,10 @@ type branchScopeParam string
 
 type branchesInput struct {
 	BoolIncludeInput
-	Scope branchScopeParam `query:"scope" enum:"roots,all" doc:"Session scope: roots (default) counts only root sessions; all also counts subagent and fork sessions, matching the activity and usage rollups"`
+	Scope    branchScopeParam `query:"scope" enum:"roots,all" doc:"Session scope: roots (default) counts only root sessions; all also counts subagent and fork sessions, matching the activity and usage rollups"`
+	Projects []string         `query:"projects,explode" doc:"Restrict to these projects before deduplicating branch names"`
+	Search   string           `query:"search" doc:"Case-insensitive branch name substring"`
+	Limit    int              `query:"limit" minimum:"1" maximum:"100" default:"100" doc:"Maximum number of branch names"`
 }
 
 func (s *Server) humaListBranches(
@@ -141,12 +142,18 @@ func (s *Server) humaListBranches(
 	if in.Scope == "all" {
 		scope = db.BranchScopeAll
 	}
-	branches, err := s.db.GetBranches(
-		ctx, scope, !in.IncludeOneShot, !in.IncludeAutomated)
+	branches, err := s.db.GetBranches(ctx, db.BranchQuery{
+		Projects:         in.Projects,
+		Search:           in.Search,
+		Limit:            in.Limit,
+		Scope:            scope,
+		ExcludeOneShot:   !in.IncludeOneShot,
+		ExcludeAutomated: !in.IncludeAutomated,
+	})
 	if err != nil {
 		return nil, serverError(err)
 	}
-	return &jsonOutput[branchesResponse]{Body: branchesResponse{Branches: branches}}, nil
+	return &jsonOutput[branchesResponse]{Body: branches}, nil
 }
 
 func (s *Server) humaListAgents(

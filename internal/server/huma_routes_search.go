@@ -42,7 +42,7 @@ type contentSearchInput struct {
 	Project          string             `query:"project" doc:"Filter by project"`
 	ExcludeProject   string             `query:"exclude_project" doc:"Exclude a project"`
 	Machine          string             `query:"machine" doc:"Filter by machine"`
-	GitBranch        string             `query:"git_branch" doc:"Filter by git branch; opaque (project, branch) tokens from the /branches endpoint"`
+	GitBranch        string             `query:"git_branch" doc:"Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted"`
 	Agent            string             `query:"agent" doc:"Filter by agent"`
 	Date             string             `query:"date" format:"date" doc:"Filter sessions active on this YYYY-MM-DD date"`
 	DateFrom         string             `query:"date_from" format:"date" doc:"Filter sessions active on or after this date"`

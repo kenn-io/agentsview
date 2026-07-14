@@ -5,7 +5,7 @@ import type {
   UsageSummaryResponse,
   TopUsageSessionsResponse,
 } from "../api/types/usage.js";
-import { MetadataService, UsageService } from "../api/generated/index";
+import { UsageService } from "../api/generated/index";
 import {
   ApiError,
   callGenerated,
@@ -13,16 +13,18 @@ import {
   isAbortError,
 } from "../api/runtime.js";
 import { sessions } from "./sessions.svelte.js";
-import { sync } from "./sync.svelte.js";
 import { perf, type PerfEntryStatus } from "./perf.svelte.js";
 import { rollingRange, today } from "../utils/dates.js";
 import {
   BRANCH_LIST_SEP,
   NO_BRANCH_MATCH_TOKEN,
-  splitBranchFilterToken,
+  branchFilterValue,
+  branchPickerValues,
+  intersectBranchFilterValues,
+  reconcileBranchFilterValues,
+  scopeBranchFilterValues,
 } from "../branchFilters.js";
 import { toggleListValue } from "../utils/lists.js";
-import type { BranchInfo } from "../api/types/core.js";
 
 type UsageParams = Parameters<typeof UsageService.getApiV1UsageSummary>[0];
 type UsagePairwiseParams =
@@ -244,10 +246,6 @@ class UsageStore {
   }
 
   summary = $state<UsageSummaryResponse | null>(null);
-  branches: BranchInfo[] = $state([]);
-  private branchesLoaded = false;
-  private branchesPromise: Promise<void> | null = null;
-  private branchesVersion = 0;
   pairwiseComparison =
     $state<UsagePairwiseComparisonResponse | null>(null);
   pairwiseSelection = $state<UsagePairwiseSelection>(
@@ -340,38 +338,31 @@ class UsageStore {
     return p;
   }
 
-  // A pinned sidebar project filter contradicts branch tokens from any
-  // other project (project = X AND a branch of Y matches no session),
-  // so drop off-project tokens from the local selection at query time.
-  // The stored selection is left intact and takes effect again when
-  // the project filter clears.
+  // Plain branch names apply within the separately supplied project scope.
+  // Legacy project-pair tokens remain valid for stored URLs; only conflicting
+  // legacy pairs are dropped when a project is pinned.
   private projectScopedLocalBranch(): string {
-    const project = sessions.filters.project;
     const local = this.selectedGitBranch;
-    if (!project || !local) return local;
-    return local
-      .split(BRANCH_LIST_SEP)
-      .filter(
-        (token) => splitBranchFilterToken(token).project === project,
-      )
-      .join(BRANCH_LIST_SEP);
+    if (!local) return local;
+    return scopeBranchFilterValues(
+      local.split(BRANCH_LIST_SEP),
+      sessions.filters.project,
+    ).join(BRANCH_LIST_SEP);
   }
 
-  // The sidebar branch filter and the usage page's own selection are
-  // both include lists but share one git_branch API param, so AND them
-  // by intersecting. If both controls are active and their selections
-  // do not overlap, send a fail-closed token so the visible local
-  // selection is not silently ignored.
+  // The sidebar branch filter and the usage page's own selection are both
+  // include lists but share one git_branch API param, so AND them by branch
+  // name. This lets new plain names interoperate with legacy project-pair URLs.
   private effectiveGitBranch(
     sidebarBranch: string,
   ): string | undefined {
     const local = this.projectScopedLocalBranch();
     if (!sidebarBranch) return local || undefined;
     if (!local) return sidebarBranch;
-    const sidebar = new Set(sidebarBranch.split(BRANCH_LIST_SEP));
-    const both = local
-      .split(BRANCH_LIST_SEP)
-      .filter((token) => sidebar.has(token));
+    const both = intersectBranchFilterValues(
+      local.split(BRANCH_LIST_SEP),
+      sidebarBranch.split(BRANCH_LIST_SEP),
+    );
     return both.length > 0
       ? both.join(BRANCH_LIST_SEP)
       : NO_BRANCH_MATCH_TOKEN;
@@ -535,51 +526,18 @@ class UsageStore {
     this.fetchAll();
   }
 
-  async loadBranches(): Promise<void> {
-    if (this.branchesLoaded) return;
-    if (this.branchesPromise) return this.branchesPromise;
-    const version = this.branchesVersion;
-    this.branchesPromise = (async () => {
-      try {
-        configureGeneratedClient();
-        // Scope "all" counts subagent and fork sessions like the usage
-        // aggregation does, so branches whose usage comes only from
-        // fork or subagent sessions stay selectable.
-        const res = await MetadataService.getApiV1Branches({
-          includeOneShot: true,
-          includeAutomated: true,
-          scope: "all",
-        }) as unknown as { branches: BranchInfo[] };
-        // A sync completing mid-fetch invalidated this response; let the
-        // next loadBranches() refetch instead of caching stale options.
-        if (version !== this.branchesVersion) return;
-        this.branches = res.branches;
-        this.branchesLoaded = true;
-      } catch {
-        // Non-fatal; the branch dropdown stays empty.
-      } finally {
-        this.branchesPromise = null;
-      }
-    })();
-    return this.branchesPromise;
-  }
-
-  /**
-   * Drop the cached branch options so the next loadBranches() refetches.
-   * Invoked when a sync/import completes, mirroring the sessions and
-   * activity stores: newly imported sessions can introduce branches the
-   * branch dropdown must offer.
-   */
-  invalidateBranches(): void {
-    this.branchesVersion++;
-    this.branchesLoaded = false;
-    this.branchesPromise = null;
-  }
-
-  toggleBranch(token: string): void {
-    this.selectedGitBranch = toggleListValue(
-      this.selectedGitBranch, token, BRANCH_LIST_SEP,
-    );
+  toggleBranch(value: string): void {
+    const current = this.selectedGitBranch
+      ? this.selectedGitBranch.split(BRANCH_LIST_SEP)
+      : [];
+    const normalized = branchFilterValue(value);
+    const selected = branchPickerValues(current);
+    this.selectedGitBranch = selected.includes(normalized)
+      ? reconcileBranchFilterValues(
+          current,
+          selected.filter((branch) => branch !== normalized),
+        ).join(BRANCH_LIST_SEP)
+      : [...current, value].join(BRANCH_LIST_SEP);
     this.fetchAll();
   }
 
@@ -610,11 +568,11 @@ class UsageStore {
     return this.selectedModels.split(",").includes(name);
   }
 
-  isBranchSelected(token: string): boolean {
+  isBranchSelected(value: string): boolean {
     if (!this.selectedGitBranch) return false;
-    return this.selectedGitBranch
-      .split(BRANCH_LIST_SEP)
-      .includes(token);
+    return branchPickerValues(
+      this.selectedGitBranch.split(BRANCH_LIST_SEP),
+    ).includes(branchFilterValue(value));
   }
 
   selectAllProjects(): void {
@@ -710,9 +668,6 @@ class UsageStore {
 
   async fetchAll() {
     const fetchVersion = ++this.fetchAllVersion;
-    // No-op while the branch cache is warm; refetches options after a sync
-    // invalidated them, so a data refresh also refreshes the dropdown.
-    void this.loadBranches();
     this.invalidatePanel("pairwise");
     this.invalidatePanel("topSessions");
     this.rollDates();
@@ -1085,13 +1040,6 @@ class UsageStore {
 }
 
 export const usage = new UsageStore();
-
-// Refresh the branch options after any sync/import, mirroring the sessions
-// and activity stores. The invalidated cache is picked up lazily by the next
-// loadBranches() call (UsagePage mount), so no eager refetch is needed here.
-sync.onSyncComplete(() => {
-  usage.invalidateBranches();
-});
 
 export interface UsageUrlState {
   from: string;

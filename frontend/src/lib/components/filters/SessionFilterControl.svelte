@@ -12,6 +12,12 @@
   } from "../../utils/agents.js";
   import type { GroupMode } from "../sidebar/session-list-utils.js";
   import { CheckIcon, FunnelIcon } from "../../icons.js";
+  import BranchPicker from "../shared/BranchPicker.svelte";
+  import { searchBranches } from "../../api/client.js";
+  import {
+    branchPickerValues,
+    reconcileBranchFilterValues,
+  } from "../../branchFilters.js";
 
   interface Props {
     groupMode?: GroupMode;
@@ -47,7 +53,6 @@
     $state(undefined);
   let agentSearch = $state("");
   let machineSearch = $state("");
-  let branchSearch = $state("");
 
   // Each section floats selected entries to the top so a reopened dropdown
   // shows the active selection without scrolling; the sort is stable, so
@@ -93,41 +98,39 @@
     return rankedMachines.filter((m) => m.toLowerCase().includes(q));
   });
 
-  // When a project filter is pinned (project routes keep it through
-  // clearSessionFilters), offering other projects' branches would let a
-  // click AND two contradictory predicates into an empty session list.
-  const projectBranches = $derived.by(() => {
-    const project = sessions.filters.project;
-    if (!project) return sessions.branches;
-    return sessions.branches.filter((b) => b.project === project);
-  });
-
-  const rankedBranches = $derived.by(() =>
-    [...projectBranches].sort((a, b) => {
-      const aSel = selectedBranchSet.has(a.token);
-      const bSel = selectedBranchSet.has(b.token);
-      return aSel === bSel ? 0 : aSel ? -1 : 1;
-    }),
+  const branchProjects = $derived(
+    sessions.filters.project ? [sessions.filters.project] : [],
+  );
+  const selectedBranchNames = $derived(
+    branchPickerValues(sessions.selectedBranches),
   );
 
-  const visibleBranches = $derived.by(() => {
-    if (!branchSearch) return rankedBranches;
-    const q = branchSearch.toLowerCase();
-    return rankedBranches.filter(
-      (b) =>
-        b.branch.toLowerCase().includes(q) ||
-        b.project.toLowerCase().includes(q),
-    );
-  });
+  function updateBranches(values: string[]) {
+    sessions.setBranchFilters(reconcileBranchFilterValues(
+      sessions.selectedBranches,
+      values,
+    ));
+  }
+
+  function searchSessionBranches(params: {
+    projects?: string[];
+    search: string;
+    limit: number;
+  }) {
+    return searchBranches({
+      ...params,
+      includeOneShot: sessions.filters.includeOneShot,
+      includeAutomated: sessions.filters.includeAutomated,
+      scope: "roots",
+    });
+  }
 
   $effect(() => {
     if (open) {
       sessions.loadAgents();
       sessions.loadMachines();
-      sessions.loadBranches();
       agentSearch = "";
       machineSearch = "";
-      branchSearch = "";
     }
   });
 
@@ -435,50 +438,23 @@
         </div>
       </div>
     {/if}
-    {#if projectBranches.length > 0}
-      <div class="filter-section">
-        <div class="filter-section-label">{m.sidebar_filters_branch()}</div>
-        {#if projectBranches.length > 5}
-          <input
-            class="agent-search"
-            type="text"
-            placeholder={m.sidebar_filters_search_branches()}
-            bind:value={branchSearch}
-          />
-        {/if}
-        <div class="agent-select-list">
-          {#each visibleBranches as branch (branch.token)}
-            {@const selected = selectedBranchSet.has(branch.token)}
-            <button
-              class="agent-select-row"
-              class:selected
-              style:--agent-color={"var(--accent-blue)"}
-              style:--agent-foreground={"var(--accent-blue-foreground)"}
-              onclick={() => sessions.toggleBranchFilter(branch.token)}
-            >
-              <span
-                class="agent-check"
-                class:on={selected}
-              >
-                {#if selected}
-                  <CheckIcon size="8" strokeWidth="2.4" aria-hidden="true" />
-                {/if}
-              </span>
-              <span class="agent-select-name">
-                {branch.branch || m.shared_no_branch()}
-              </span>
-              <span class="agent-select-count">
-                {branch.project}
-              </span>
-            </button>
-          {:else}
-            <span class="agent-select-empty">
-              {branchSearch ? m.sidebar_filters_no_match() : m.sidebar_filters_no_branches()}
-            </span>
-          {/each}
-        </div>
-      </div>
-    {/if}
+    <div class="filter-section branch-filter-section">
+      <div class="filter-section-label">{m.sidebar_filters_branch()}</div>
+      <BranchPicker
+        mode="multi"
+        selected={selectedBranchNames}
+        projects={branchProjects}
+        search={searchSessionBranches}
+        label={m.sidebar_filters_branch()}
+        allLabel={m.activity_all_branches()}
+        placeholder={m.sidebar_filters_search_branches()}
+        loadingLabel={m.shared_branch_loading()}
+        emptyLabel={m.shared_branch_no_match()}
+        refineLabel={m.shared_branch_refine()}
+        noBranchLabel={m.shared_no_branch()}
+        onChange={updateBranches}
+      />
+    </div>
     <div class="filter-section">
       <div class="filter-section-label">{m.sidebar_filters_min_prompts()}</div>
       <div class="pill-buttons">

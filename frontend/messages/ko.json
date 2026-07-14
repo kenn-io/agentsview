@@ -833,6 +833,7 @@
     }
   ],
   "usage_cost_over_time_title": "시간대별 비용",
+  "usage_unattributed": "미귀속",
   "usage_cost_attribution_title": "비용 배분",
   "usage_attribution_treemap": "트리맵",
   "usage_attribution_list": "목록",
@@ -1830,5 +1831,8 @@
   "appearance_high_contrast": "고대비",
   "appearance_on": "켜짐",
   "appearance_off": "꺼짐",
-  "appearance_text_size": "텍스트 크기"
+  "appearance_text_size": "텍스트 크기",
+  "shared_branch_loading": "브랜치를 불러오는 중…",
+  "shared_branch_no_match": "일치하는 브랜치가 없습니다",
+  "shared_branch_refine": "더 많은 브랜치가 있습니다. 검색어를 구체화하세요."
 }

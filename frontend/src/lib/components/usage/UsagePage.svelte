@@ -31,7 +31,14 @@
   import SessionFilterControl from "../filters/SessionFilterControl.svelte";
   import SessionActiveFilters from "../filters/SessionActiveFilters.svelte";
   import FilterDropdown from "./FilterDropdown.svelte";
-  import { branchLabel, BRANCH_LIST_SEP } from "../../branchFilters.js";
+  import BranchPicker from "../shared/BranchPicker.svelte";
+  import { searchBranches } from "../../api/client.js";
+  import {
+    BRANCH_LIST_SEP,
+    branchPickerValues,
+    reconcileBranchFilterValues,
+    scopeBranchFilterValues,
+  } from "../../branchFilters.js";
   import RefreshControl from "../shared/RefreshControl.svelte";
   import {
     yokedDates,
@@ -57,20 +64,48 @@
     })),
   );
 
-  // Mirror the sidebar's scoping: with a project filter pinned,
-  // offering other projects' branches would let a click AND two
-  // contradictory predicates into an empty report.
-  const branchItems = $derived.by(() => {
-    const project = sessions.filters.project;
-    const scoped = project
-      ? usage.branches.filter((b) => b.project === project)
-      : usage.branches;
-    return scoped.map((b) => ({
-      name: b.token,
-      label: branchLabel(b.project, b.branch, m.shared_no_branch()),
-    }));
+  const branchProjects = $derived.by(() => {
+    if (sessions.filters.project) return [sessions.filters.project];
+    const excluded = new Set(
+      usage.excludedProjects ? usage.excludedProjects.split(",") : [],
+    );
+    const included = sessions.projects
+      .map((project) => project.name)
+      .filter((project) => !excluded.has(project));
+    return included.length === sessions.projects.length ? [] : included;
   });
+  const selectedBranchValues = $derived(
+    scopeBranchFilterValues(
+      usage.selectedGitBranch
+        ? usage.selectedGitBranch.split(BRANCH_LIST_SEP)
+        : [],
+      sessions.filters.project,
+    ),
+  );
+  const selectedBranchNames = $derived(
+    branchPickerValues(selectedBranchValues),
+  );
 
+  function searchUsageBranches(params: {
+    projects?: string[];
+    search: string;
+    limit: number;
+  }) {
+    return searchBranches({
+      ...params,
+      includeOneShot: true,
+      includeAutomated: true,
+      scope: "all",
+    });
+  }
+
+  function onUsageBranchesChange(values: string[]) {
+    usage.selectedGitBranch = reconcileBranchFilterValues(
+      selectedBranchValues,
+      values,
+    ).join(BRANCH_LIST_SEP);
+    usage.fetchAll();
+  }
 
   const earliestSession = $derived(sync.stats?.earliest_session ?? null);
 
@@ -392,7 +427,6 @@
     // The Agent dropdown reads sessions.agents, which is otherwise loaded
     // lazily by the sidebar filter control; a direct /usage visit needs it too.
     sessions.loadAgents();
-    usage.loadBranches();
     // SSE events only flag new data; RefreshControl owns the periodic refresh
     // and the manual button. The initial and filter-change fetches run from the
     // effects above once URL/filter state is hydrated.
@@ -462,14 +496,19 @@
           usage.deselectAllModels(modelItems.map((m) => m.name))}
       />
 
-      <FilterDropdown
+      <BranchPicker
+        mode="multi"
+        selected={selectedBranchNames}
+        projects={branchProjects}
+        search={searchUsageBranches}
         label={m.usage_branch()}
-        items={branchItems}
-        excludedCsv={usage.selectedGitBranch}
-        separator={BRANCH_LIST_SEP}
-        mode="include"
-        onToggle={(token) => usage.toggleBranch(token)}
-        onSelectAll={() => usage.selectAllBranches()}
+        allLabel={m.activity_all_branches()}
+        placeholder={m.activity_filter_branches_placeholder()}
+        loadingLabel={m.shared_branch_loading()}
+        emptyLabel={m.shared_branch_no_match()}
+        refineLabel={m.shared_branch_refine()}
+        noBranchLabel={m.shared_no_branch()}
+        onChange={onUsageBranchesChange}
       />
 
       <RefreshControl

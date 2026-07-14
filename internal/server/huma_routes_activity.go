@@ -23,7 +23,7 @@ type activityReportInput struct {
 	Timezone  string `query:"timezone" doc:"IANA timezone name"`
 	Bucket    string `query:"bucket" enum:"5m,15m,1h,1d,1w" doc:"Timeline bucket size override"`
 	Project   string `query:"project" doc:"Filter by project"`
-	GitBranch string `query:"git_branch" doc:"Filter by git branch; opaque (project, branch) tokens from the /branches endpoint"`
+	GitBranch string `query:"git_branch" doc:"Filter by branch name; multiple names use the branch list separator, and legacy project-qualified values remain accepted"`
 	Agent     string `query:"agent" doc:"Filter by agent"`
 	Machine   string `query:"machine" doc:"Filter by machine"`
 	// Automation classes the report: "all" (default) keeps both, "interactive"

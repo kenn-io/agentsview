@@ -457,60 +457,6 @@ describe("UsageStore filter persistence", () => {
   });
 });
 
-describe("UsageStore branch metadata", () => {
-  beforeEach(() => {
-    installStorage();
-    vi.clearAllMocks();
-  });
-
-  it("loads branches once and caches the result", async () => {
-    const { usage } = await loadStore();
-    await usage.loadBranches();
-    await usage.loadBranches();
-
-    expect(metadataServiceMocks.getApiV1Branches)
-      .toHaveBeenCalledTimes(1);
-    expect(metadataServiceMocks.getApiV1Branches).toHaveBeenCalledWith(
-      expect.objectContaining({ scope: "all" }),
-    );
-    expect(usage.branches).toEqual([
-      { project: "alpha", branch: "main", session_count: 3 },
-    ]);
-  });
-
-  it("refetches branches after a sync invalidates the cache", async () => {
-    const { usage } = await loadStore();
-    await usage.loadBranches();
-    expect(metadataServiceMocks.getApiV1Branches)
-      .toHaveBeenCalledTimes(1);
-
-    usage.invalidateBranches();
-    await usage.loadBranches();
-
-    expect(metadataServiceMocks.getApiV1Branches)
-      .toHaveBeenCalledTimes(2);
-  });
-
-  it("drops a branch response superseded by an invalidation", async () => {
-    const { usage } = await loadStore();
-    let resolveFetch!: (v: unknown) => void;
-    metadataServiceMocks.getApiV1Branches.mockImplementationOnce(
-      () => new Promise((r) => { resolveFetch = r; }),
-    );
-    const p = usage.loadBranches();
-    usage.invalidateBranches();
-    resolveFetch({
-      branches: [{ project: "alpha", branch: "stale", session_count: 1 }],
-    });
-    await p;
-
-    expect(usage.branches).toEqual([]);
-    await usage.loadBranches();
-    expect(metadataServiceMocks.getApiV1Branches)
-      .toHaveBeenCalledTimes(2);
-  });
-});
-
 describe("UsageStore group-by linking", () => {
   beforeEach(() => {
     installStorage();
@@ -638,6 +584,19 @@ describe("UsageStore session filter params", () => {
     );
   });
 
+  it("toggles a project key and refreshes usage", async () => {
+    const { usage } = await loadStore();
+    const fetchAll = vi.spyOn(usage, "fetchAll").mockResolvedValue();
+
+    usage.toggleProjectKey("pl1:sha256:project");
+    expect(usage.excludedProjectKeys).toBe("pl1:sha256:project");
+    expect(fetchAll).toHaveBeenCalledTimes(1);
+
+    usage.toggleProjectKey("pl1:sha256:project");
+    expect(usage.excludedProjectKeys).toBe("");
+    expect(fetchAll).toHaveBeenCalledTimes(2);
+  });
+
   it("refreshes response-scoped project selections after archive identity changes", async () => {
     usageServiceMocks.getApiV1UsageSummary.mockRejectedValueOnce(
       new apiRuntimeMocks.ApiError(
@@ -693,6 +652,19 @@ describe("UsageStore session filter params", () => {
     );
   });
 
+  it("intersects plain local branch names with legacy sidebar tokens", async () => {
+    const { usage } = await loadStore();
+    const { sessions } = await import("./sessions.svelte.js");
+
+    sessions.filters.branch = "proj-amainproj-bdev";
+    usage.selectedGitBranch = "mainfeature";
+    await usage.fetchAll();
+
+    expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
+      expect.objectContaining({ gitBranch: "proj-amain" }),
+    );
+  });
+
   it("intersects the sidebar branch filter with the local selection", async () => {
     const { usage } = await loadStore();
     const { sessions } = await import("./sessions.svelte.js");
@@ -713,7 +685,7 @@ describe("UsageStore session filter params", () => {
     await usage.fetchAll();
     expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        gitBranch: "__agentsview_no_branch_match__",
+        gitBranch: "no_branch_match",
       }),
     );
   });
@@ -725,15 +697,17 @@ describe("UsageStore session filter params", () => {
     const tokenB = "proj-b\u001fdev";
 
     sessions.filters.project = "proj-a";
-    usage.selectedGitBranch = `${tokenA}\u001e${tokenB}`;
+    usage.selectedGitBranch = `main\u001e${tokenA}\u001e${tokenB}`;
     await usage.fetchAll();
     expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
-      expect.objectContaining({ gitBranch: tokenA, project: "proj-a" }),
+      expect.objectContaining({
+        gitBranch: `main${tokenA}`,
+        project: "proj-a",
+      }),
     );
 
-    // A branch selection made before pinning a different project
-    // defers to the project filter instead of ANDing contradictory
-    // predicates into an empty report.
+    // Plain names remain valid when a different project is pinned; only
+    // conflicting legacy project-pair tokens are removed.
     sessions.filters.project = "proj-c";
     await usage.fetchAll();
     expect(usageServiceMocks.getApiV1UsageSummary).toHaveBeenLastCalledWith(
@@ -741,7 +715,19 @@ describe("UsageStore session filter params", () => {
     );
     const params =
       usageServiceMocks.getApiV1UsageSummary.mock.lastCall?.[0];
-    expect(params?.gitBranch).toBeUndefined();
+    expect(params?.gitBranch).toBe("main");
+  });
+
+  it("preserves a legacy branch token when toggled by plain branch name", async () => {
+    const { usage } = await loadStore();
+    const token = "proj-amain";
+    usage.selectedGitBranch = token;
+
+    usage.toggleBranch("feature");
+    expect(usage.selectedGitBranch).toBe(`${token}feature`);
+
+    usage.toggleBranch("main");
+    expect(usage.selectedGitBranch).toBe("feature");
   });
 
   it("toggles the branch selection with the list separator", async () => {

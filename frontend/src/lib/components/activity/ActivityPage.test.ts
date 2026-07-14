@@ -53,18 +53,20 @@ describe("ActivityPage refresh control layout", () => {
 });
 
 describe("ActivityPage branch filter", () => {
-  it("wires the branch typeahead through the activity store", () => {
-    expect(source).toContain("activity.branches");
-    expect(source).toContain("options={branchOptions}");
-    expect(source).toContain("value={activity.branch}");
-    expect(source).toContain("onselect={onBranchChange}");
-    expect(source).toContain("activity.setBranch(value)");
+  it("wires the shared single-select branch picker through the activity store", () => {
+    expect(source).toContain("<BranchPicker");
+    expect(source).toContain('mode="single"');
+    expect(source).toContain("selected={selectedBranchNames}");
+    expect(source).toContain("onChange={onBranchChange}");
+    expect(source).toContain("reconcileBranchFilterValues(");
+    expect(source).toContain("activity.branch ? [activity.branch] : []");
   });
 
-  it("scopes offered branches to the active project filter", () => {
+  it("passes the active project as branch search scope", () => {
     expect(source).toContain(
-      "!activity.project || b.project === activity.project",
+      "activity.project ? [activity.project] : []",
     );
+    expect(source).toContain("projects={branchProjects}");
   });
 });
 

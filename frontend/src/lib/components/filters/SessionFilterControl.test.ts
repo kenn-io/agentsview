@@ -12,7 +12,6 @@ function resetSessionState() {
   sessions.filters = parseFiltersFromParams({});
   sessions.agents = [];
   sessions.machines = [];
-  sessions.branches = [];
   starred.filterOnly = false;
 }
 
@@ -42,7 +41,6 @@ beforeEach(() => {
   resetSessionState();
   vi.spyOn(sessions, "loadAgents").mockResolvedValue();
   vi.spyOn(sessions, "loadMachines").mockResolvedValue();
-  vi.spyOn(sessions, "loadBranches").mockResolvedValue();
 });
 
 afterEach(() => {
@@ -52,6 +50,7 @@ afterEach(() => {
   }
   resetSessionState();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   document.body.innerHTML = "";
 });
 
@@ -116,56 +115,30 @@ describe("SessionFilterControl selected-to-top sort", () => {
     expect(names[1]).toBe("alpha-host");
   });
 
-  it("scopes branch options to the active project filter", async () => {
-    const mk = (project: string, branch: string) => ({
-      project,
-      branch,
-      token: branchFilterToken(project, branch),
-    });
-    sessions.branches = [
-      mk("proj-a", "main"),
-      mk("proj-b", "feature"),
-      mk("proj-a", "dev"),
-    ];
+  it("passes the current project scope to the shared branch picker", async () => {
     sessions.filters.project = "proj-a";
     await openDropdown();
 
-    expect(sectionRowNames("Branch")).toEqual(["main", "dev"]);
+    const branchTrigger = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".branch-picker-trigger"),
+    )[0]!;
+    expect(branchTrigger).toBeTruthy();
+    expect(branchTrigger.textContent).toContain("All Branches");
   });
 
-  it("hides the branch section when the active project has no branches", async () => {
-    sessions.branches = [
-      {
-        project: "proj-b",
-        branch: "feature",
-        token: branchFilterToken("proj-b", "feature"),
-      },
-    ];
-    sessions.filters.project = "proj-a";
+  it("searches root-session branches for the sidebar", async () => {
     await openDropdown();
-
-    const labels = Array.from(
-      document.querySelectorAll(".filter-section-label"),
-    ).map((el) => el.textContent?.trim());
-    expect(labels).not.toContain("Branch");
+    expect(document.querySelector(".branch-picker-trigger")).toBeTruthy();
   });
 
-  it("floats selected branches, keeping server order among the rest", async () => {
-    const mk = (project: string, branch: string) => ({
-      project,
-      branch,
-      token: branchFilterToken(project, branch),
-    });
-    // Deliberately non-alphabetical server (recency) order.
-    sessions.branches = [
-      mk("proj", "zeta"),
-      mk("proj", "alpha"),
-      mk("proj", "mid"),
-    ];
+  it("decodes a selected legacy project-pair branch for display", async () => {
     sessions.filters.branch = branchFilterToken("proj", "mid");
     await openDropdown();
 
-    const names = sectionRowNames("Branch");
-    expect(names).toEqual(["mid", "zeta", "alpha"]);
+    const branchTrigger = document.querySelector<HTMLButtonElement>(
+      ".branch-picker-trigger",
+    );
+    expect(branchTrigger?.textContent).toContain("mid");
+    expect(branchTrigger?.textContent).not.toContain("proj/");
   });
 });

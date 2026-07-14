@@ -95,15 +95,24 @@
       }
     }
 
-    if (totals.size === 0) {
-      // Branch attribution deliberately omits unattributable cost
-      // (e.g. imported Cursor usage carries no branch), so falling
-      // back to the day totals would present that cost as a series
-      // the branch views elsewhere say does not exist. Show the
-      // empty state instead, matching the attribution panel.
-      if (groupBy === "branch") {
-        return { points: [], keys: [], maxY: 0, labels: {} };
+    if (groupBy === "branch") {
+      // Branch breakdowns contain only session-attributable cost. Keep the
+      // chart honest by making the remainder explicit instead of silently
+      // plotting partial totals as if they were complete.
+      let unattributedTotal = 0;
+      for (const day of daily) {
+        const attributed = breakdownItems(day, groupBy)
+          .reduce((sum, item) => sum + item.cost, 0);
+        const remainder = Math.max(0, day.totalCost - attributed);
+        unattributedTotal += remainder;
       }
+      if (unattributedTotal > 0) {
+        totals.set("__unattributed__", unattributedTotal);
+        labels["__unattributed__"] = m.usage_unattributed();
+      }
+    }
+
+    if (totals.size === 0) {
       const points = daily.map((d) => ({
         date: d.date,
         values: { total: d.totalCost },
@@ -126,13 +135,24 @@
     const points: Point[] = [];
     for (const day of daily) {
       const values: Record<string, number> = {};
+      const items = breakdownItems(day, groupBy);
 
-      for (const { key, cost } of breakdownItems(day, groupBy)) {
+      for (const { key, cost } of items) {
         if (topKeys.has(key)) {
           values[key] = (values[key] ?? 0) + cost;
         } else {
           values["__other__"] =
             (values["__other__"] ?? 0) + cost;
+        }
+      }
+      if (groupBy === "branch") {
+        const attributed = items.reduce((sum, item) => sum + item.cost, 0);
+        const remainder = Math.max(0, day.totalCost - attributed);
+        if (remainder > 0) {
+          const key = topKeys.has("__unattributed__")
+            ? "__unattributed__"
+            : "__other__";
+          values[key] = (values[key] ?? 0) + remainder;
         }
       }
       points.push({ date: day.date, values });
@@ -238,7 +258,7 @@
           `L${x0},${top}` +
           `L${x0 + BAR_WIDTH},${top}` +
           `L${x0 + BAR_WIDTH},${bot}Z`;
-        const color = key === "__other__"
+        const color = key === "__other__" || key === "__unattributed__"
           ? "var(--text-muted)"
           : colors.get(key) ?? "var(--text-muted)";
         result.push({ key, d, color });
@@ -447,7 +467,7 @@
       </svg>
     </div>
 
-    {#if seriesData.keys.length > 1}
+    {#if seriesData.keys.length > 1 || seriesData.keys.includes("__unattributed__")}
       <div class="legend">
         {#each seriesData.keys as key}
           <span class="legend-item">

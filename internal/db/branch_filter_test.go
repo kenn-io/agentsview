@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"testing"
 
+	"go.kenn.io/agentsview/internal/export"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -48,6 +50,26 @@ func seedBranchUsageFixture(t *testing.T, d *DB) {
 			DedupKey:     s.id + "-key",
 		}}), "replace usage event for %s", s.id)
 	}
+}
+
+func TestSanitizeDailyUsageProjectLabelsSanitizesBranchBreakdowns(t *testing.T) {
+	raw := "/home/example/private/repo"
+	result := DailyUsageResult{Daily: []DailyUsageEntry{{
+		BranchBreakdowns: []BranchBreakdown{{
+			Project: raw,
+			Branch:  "main",
+			Cost:    1,
+		}},
+	}}}
+	projects := map[string]export.ProjectMapEntry{
+		raw: {ProjectKey: "pl1-path"},
+	}
+
+	SanitizeDailyUsageProjectLabelsWithCatalog(&result, projects)
+
+	require.Len(t, result.Daily[0].BranchBreakdowns, 1)
+	assert.Empty(t, result.Daily[0].BranchBreakdowns[0].Project)
+	assert.Equal(t, "main", result.Daily[0].BranchBreakdowns[0].Branch)
 }
 
 func TestGetDailyUsageBranchBreakdowns(t *testing.T) {
@@ -105,7 +127,7 @@ func TestGetDailyUsageMalformedGitBranchTokenFailsClosed(t *testing.T) {
 	daily, err := d.GetDailyUsage(ctx, UsageFilter{
 		From:      "2026-05-14",
 		To:        "2026-05-14",
-		GitBranch: "__agentsview_no_branch_match__",
+		GitBranch: NoBranchMatchToken,
 	})
 	require.NoError(t, err, "GetDailyUsage")
 	assert.Empty(t, daily.Daily,
@@ -278,28 +300,78 @@ func TestGetBranches(t *testing.T) {
 		s.EndedAt = new("2026-06-13T10:00:00Z")
 	})
 
-	all, err := d.GetBranches(context.Background(), BranchScopeRoots, false, false)
+	all, err := d.GetBranches(context.Background(), BranchQuery{
+		Scope: BranchScopeRoots,
+		Limit: 100,
+	})
 	require.NoError(t, err, "GetBranches includeAll")
-	assert.Equal(t, []BranchInfo{
-		branchInfoForTest("alpha", "feat/x"),
-		branchInfoForTest("beta", "main"),
-		branchInfoForTest("alpha", "main"),
-		branchInfoForTest("alpha", ""),
-		branchInfoForTest("gamma", "solo"),
-	}, all, "pairs ordered by most recent activity, empty branch included")
-	assert.NotContains(t, all, branchInfoForTest("delta", "fork-only"),
-		"fork-only branch hidden from the root scope")
+	assert.Equal(t, BranchResult{Branches: []BranchOption{
+		{Branch: "feat/x"},
+		{Branch: "main"},
+		{Branch: ""},
+		{Branch: "solo"},
+	}}, all, "branch names deduplicated by latest activity, empty branch included")
 
-	withForks, err := d.GetBranches(
-		context.Background(), BranchScopeAll, false, false)
+	withForks, err := d.GetBranches(context.Background(), BranchQuery{
+		Scope: BranchScopeAll,
+		Limit: 100,
+	})
 	require.NoError(t, err, "GetBranches scope all")
-	assert.Contains(t, withForks, branchInfoForTest("delta", "fork-only"),
+	assert.Contains(t, withForks.Branches, BranchOption{Branch: "fork-only"},
 		"fork-only branch included when scope is all")
 
-	filtered, err := d.GetBranches(context.Background(), BranchScopeRoots, true, false)
+	filtered, err := d.GetBranches(context.Background(), BranchQuery{
+		Scope:          BranchScopeRoots,
+		ExcludeOneShot: true,
+		Limit:          100,
+	})
 	require.NoError(t, err, "GetBranches excludeOneShot")
-	assert.NotContains(t, filtered, branchInfoForTest("gamma", "solo"),
+	assert.NotContains(t, filtered.Branches, BranchOption{Branch: "solo"},
 		"one-shot branch excluded when excludeOneShot is set")
+}
+
+func TestGetBranchesProjectsSearchAndLimit(t *testing.T) {
+	d := testDB(t)
+	seed := func(id, project, branch, endedAt string) {
+		insertSession(t, d, id, project, func(s *Session) {
+			s.GitBranch = branch
+			s.UserMessageCount = 5
+			s.EndedAt = new(endedAt)
+		})
+	}
+
+	seed("alpha-new", "alpha", "feature-new", "2026-06-13T10:00:00Z")
+	seed("beta-last", "beta", "feature-last", "2026-06-11T10:00:00Z")
+	seed("alpha-shared", "alpha", "feature-shared", "2026-06-10T10:00:00Z")
+	seed("beta-shared", "beta", "feature-shared", "2026-06-09T10:00:00Z")
+	seed("gamma-shared", "gamma", "feature-shared", "2026-06-20T10:00:00Z")
+	seed("beta-miss", "beta", "bugfix", "2026-06-30T10:00:00Z")
+	seed("project-name-match", "feature-project", "main", "2026-07-01T10:00:00Z")
+	seed("alpha-empty", "alpha", "", "2026-06-08T10:00:00Z")
+
+	got, err := d.GetBranches(context.Background(), BranchQuery{
+		Projects: []string{"alpha", "beta", "feature-project"},
+		Search:   "FEATURE",
+		Limit:    2,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, BranchResult{
+		Branches: []BranchOption{{Branch: "feature-new"}, {Branch: "feature-last"}},
+		HasMore:  true,
+	}, got, "project filter applies before dedupe and recency ordering")
+
+	empty, err := d.GetBranches(context.Background(), BranchQuery{
+		Projects: []string{"alpha"},
+		Limit:    100,
+	})
+	require.NoError(t, err)
+	assert.Contains(t, empty.Branches, BranchOption{Branch: ""})
+}
+
+func TestNormalizeBranchQueryDefaultsAndCapsLimit(t *testing.T) {
+	assert.Equal(t, 100, NormalizeBranchQuery(BranchQuery{}).Limit)
+	assert.Equal(t, 100, NormalizeBranchQuery(BranchQuery{Limit: 101}).Limit)
+	assert.Equal(t, 1, NormalizeBranchQuery(BranchQuery{Limit: 1}).Limit)
 }
 
 func TestSessionFilterGitBranchComposite(t *testing.T) {
