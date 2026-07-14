@@ -4,10 +4,12 @@
 /* eslint-disable */
 import type { FillStats } from './FillStats';
 import type { VectorRefreshStats } from './VectorRefreshStats';
+import type { VectorRepairStats } from './VectorRepairStats';
 export type VectorBuildResult = {
   Activated: boolean;
   Fill: FillStats;
   Fingerprint: string;
   Refresh: VectorRefreshStats;
+  Repair: VectorRepairStats;
 };
 

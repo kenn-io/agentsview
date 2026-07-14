@@ -20,12 +20,15 @@ import (
 	"github.com/gofrs/flock"
 	"github.com/shirou/gopsutil/v4/process"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/kit/daemon"
 )
 
 const (
-	daemonService          = "agentsview"
-	daemonAPIVersion       = 2
+	daemonService = "agentsview"
+	// Version 3 adds repair scan-completion and remaining-count certainty to
+	// embeddings status; older daemons cannot represent those semantics safely.
+	daemonAPIVersion       = server.APIVersion
 	runtimeReadOnly        = "read_only"
 	runtimeHost            = "host"
 	runtimePort            = "port"
@@ -539,7 +542,8 @@ func daemonRuntimeCompatibilityError(rt *DaemonRuntime) error {
 	}
 	if rt.API != daemonAPIVersion {
 		return fmt.Errorf(
-			"daemon API version %d is incompatible with client API version %d",
+			"daemon API version %d is incompatible with client API version %d; "+
+				"restart the daemon after upgrading AgentsView",
 			rt.API, daemonAPIVersion,
 		)
 	}

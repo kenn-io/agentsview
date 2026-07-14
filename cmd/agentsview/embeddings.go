@@ -70,9 +70,10 @@ func newEmbeddingsCommand() *cobra.Command {
 
 // EmbeddingsBuildOptions holds the parsed `embeddings build` flags.
 type EmbeddingsBuildOptions struct {
-	FullRebuild bool
-	Backstop    bool
-	Yes         bool
+	FullRebuild   bool
+	Backstop      bool
+	RepairInvalid bool
+	Yes           bool
 	// IncludeAutomated is the --include-automated flag's parsed value; only
 	// meaningful when IncludeAutomatedSet is true (see that field).
 	IncludeAutomated bool
@@ -104,6 +105,8 @@ func newEmbeddingsBuildCommand() *cobra.Command {
 		"Re-embed every document, even ones already embedded under the active generation")
 	cmd.Flags().BoolVar(&opts.Backstop, "backstop", false,
 		"Force a full mirror reconciliation scan without forcing a re-embed")
+	cmd.Flags().BoolVar(&opts.RepairInvalid, "repair-invalid", false,
+		"Regenerate only documents with malformed, non-finite, or zero-norm stored vectors")
 	cmd.Flags().BoolVar(&opts.Yes, "yes", false,
 		"Skip the full-rebuild confirmation prompt")
 	cmd.Flags().StringVar(&opts.Using, "using", "",
@@ -117,6 +120,8 @@ func newEmbeddingsBuildCommand() *cobra.Command {
 			"scheduled builds: mixing this flag with a different config "+
 			"default flips the index's scope on every other build, forcing "+
 			"a full mirror reconciliation each time.")
+	cmd.MarkFlagsMutuallyExclusive("full-rebuild", "repair-invalid")
+	cmd.MarkFlagsMutuallyExclusive("backstop", "repair-invalid")
 	return cmd
 }
 
@@ -349,6 +354,7 @@ func runEmbeddingsBuild(
 	req := vector.BuildRequest{
 		FullRebuild:      opts.FullRebuild,
 		Backstop:         opts.Backstop,
+		RepairInvalid:    opts.RepairInvalid,
 		IncludeAutomated: includeAutomated,
 		Using:            opts.Using,
 	}
@@ -456,11 +462,11 @@ func runDirectBuild(
 			if !res.started {
 				return errors.New("a build is already running")
 			}
-			if res.err != nil {
-				return res.err
-			}
 			if status := m.Status(); status.LastResult != nil {
 				printBuildSummary(out, *status.LastResult)
+			}
+			if res.err != nil {
+				return res.err
 			}
 			return nil
 		case <-ticker.C:
@@ -524,15 +530,16 @@ func pollDaemonBuildStatus(
 	}
 }
 
-// finalizeBuildStatus reports a stopped build's outcome: a non-empty
-// LastError becomes the returned (non-zero-exit) error, otherwise the
-// LastResult prints the same final summary the direct path prints.
+// finalizeBuildStatus reports a stopped build's outcome. LastResult prints
+// the same final summary the direct path prints, including partial results
+// from a failed attempt; a non-empty LastError then becomes the returned
+// non-zero-exit error.
 func finalizeBuildStatus(out io.Writer, status vector.BuildStatus) error {
-	if status.LastError != "" {
-		return errors.New(status.LastError)
-	}
 	if status.LastResult != nil {
 		printBuildSummary(out, *status.LastResult)
+	}
+	if status.LastError != "" {
+		return errors.New(status.LastError)
 	}
 	return nil
 }
@@ -579,6 +586,20 @@ func printBuildProgress(w io.Writer, phase string, done, total int64) {
 // build auto-activated its generation, the activation line) for either
 // build path.
 func printBuildSummary(w io.Writer, result vector.BuildResult) {
+	if result.Repair.Scanned {
+		fmt.Fprintf(w, "Repair targets: %d documents (%d chunks invalidated).\n",
+			result.Repair.Documents, result.Repair.Chunks)
+		if !result.Repair.ScanComplete {
+			fmt.Fprintln(w, "Repair scan incomplete.")
+		}
+		if !result.Repair.RemainingKnown {
+			fmt.Fprintf(w, "Repair incomplete: %d failed, remaining unknown.\n",
+				result.Repair.Failed)
+		} else if result.Repair.Failed > 0 || result.Repair.Remaining > 0 {
+			fmt.Fprintf(w, "Repair incomplete: %d failed, %d remaining.\n",
+				result.Repair.Failed, result.Repair.Remaining)
+		}
+	}
 	fmt.Fprintf(w, "Embedded %d documents (%d chunks), skipped %d, stale %d\n",
 		result.Fill.Documents, result.Fill.Chunks, result.Fill.Skipped, result.Fill.Stale)
 	if result.Activated {

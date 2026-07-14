@@ -13,4 +13,3 @@ export type SyncSyncStats = {
   total_sessions: number;
   warnings?: any[] | null;
 };
-

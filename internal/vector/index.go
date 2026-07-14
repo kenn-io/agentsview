@@ -93,6 +93,7 @@ func (s IndexSpec) schema() sqlitevec.Schema {
 func (s IndexSpec) generationsTable() string { return s.VectorsPrefix + "_generations" }
 func (s IndexSpec) stampsTable() string      { return s.VectorsPrefix + "_stamps" }
 func (s IndexSpec) chunksTable() string      { return s.VectorsPrefix + "_chunks" }
+func (s IndexSpec) repairQueueTable() string { return s.VectorsPrefix + "_repair_queue" }
 
 // MessageIndexSpec is the conversation-message embedding store. Its table
 // names, metadata keys, and schema version predate IndexSpec and must stay
@@ -210,6 +211,23 @@ func OpenSpec(
 	if err != nil {
 		db.Close()
 		return nil, fmt.Errorf("opening vector store: %w", err)
+	}
+	if !readOnly {
+		if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS `+spec.repairQueueTable()+` (
+    ordinal INTEGER NOT NULL,
+    doc_key TEXT NOT NULL,
+    PRIMARY KEY (ordinal, doc_key)
+)`); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("creating invalid vector repair queue: %w", err)
+		}
+		if _, err := db.ExecContext(ctx,
+			`CREATE INDEX IF NOT EXISTS `+spec.repairQueueTable()+`_doc_key ON `+
+				spec.repairQueueTable()+` (doc_key)`); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("indexing invalid vector repair queue by document: %w", err)
+		}
 	}
 
 	overlap := ChunkOverlap(maxInputChars)

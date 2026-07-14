@@ -2,6 +2,7 @@ package vector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -120,6 +121,40 @@ func TestManagerBuildUnknownUsingFailsBeforeStarting(t *testing.T) {
 	assert.False(t, started)
 }
 
+func TestManagerRejectsConflictingRepairRequestBeforeStarting(t *testing.T) {
+	tests := []struct {
+		name string
+		req  BuildRequest
+	}{
+		{
+			name: "full rebuild",
+			req:  BuildRequest{FullRebuild: true, RepairInvalid: true},
+		},
+		{
+			name: "backstop",
+			req:  BuildRequest{Backstop: true, RepairInvalid: true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ix := openTestIndex(t)
+			m := NewManager(ix, twoDocSource(), soloEncoders(fakeBuildEncoder()),
+				fakeGeneration("fake-model"))
+
+			err := m.StartBuild(tt.req)
+			require.Error(t, err)
+			assert.ErrorContains(t, err, "mutually exclusive")
+			assert.False(t, m.Status().Running)
+
+			started, err := m.TryBuild(context.Background(), tt.req)
+			require.Error(t, err)
+			assert.ErrorContains(t, err, "mutually exclusive")
+			assert.False(t, started)
+			assert.False(t, m.Status().Running)
+		})
+	}
+}
+
 func TestManagerStartBuildSetsRunningAndConcurrentStartReturnsErrBuildRunning(t *testing.T) {
 	ix := openTestIndex(t)
 	src := twoDocSource()
@@ -186,7 +221,40 @@ func TestManagerStatusSetsLastErrorOnEncoderFailure(t *testing.T) {
 
 	status := m.Status()
 	assert.Contains(t, status.LastError, "encoder rejected input")
-	assert.Nil(t, status.LastResult)
+	require.NotNil(t, status.LastResult)
+	assert.Equal(t, gen.Fingerprint(), status.LastResult.Fingerprint)
+	assert.Zero(t, status.LastResult.Fill.Documents)
+}
+
+func TestManagerFailureReplacesPriorSuccessfulResult(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	gen := fakeGeneration("fake-model")
+	fail := false
+	encoder := func(ctx context.Context, texts []string) ([][]float32, error) {
+		if fail {
+			return nil, errors.New("encoder rejected input")
+		}
+		return fakeBuildEncoder()(ctx, texts)
+	}
+	m := NewManager(ix, twoDocSource(), soloEncoders(encoder), gen)
+
+	started, err := m.TryBuild(ctx, BuildRequest{})
+	require.True(t, started)
+	require.NoError(t, err)
+	require.NotNil(t, m.Status().LastResult)
+	assert.Equal(t, 2, m.Status().LastResult.Fill.Documents)
+
+	fail = true
+	started, err = m.TryBuild(ctx, BuildRequest{FullRebuild: true})
+	require.True(t, started)
+	require.ErrorContains(t, err, "encoder rejected input")
+
+	status := m.Status()
+	require.NotNil(t, status.LastResult)
+	assert.Zero(t, status.LastResult.Fill.Documents,
+		"the failed attempt must replace the stale successful result")
+	assert.Contains(t, status.LastError, "encoder rejected input")
 }
 
 func TestManagerStatusStampsBuildIdentityAndSpace(t *testing.T) {
@@ -407,7 +475,7 @@ func TestManagerStartBuildRecoversPanickedEncoder(t *testing.T) {
 	status := m.Status()
 	assert.Contains(t, status.LastError, "panicked")
 	assert.Contains(t, status.LastError, "encoder exploded")
-	assert.Nil(t, status.LastResult)
+	require.NotNil(t, status.LastResult)
 
 	require.NoError(t, m.StartBuild(BuildRequest{}),
 		"manager must accept a new build after a panicked one")

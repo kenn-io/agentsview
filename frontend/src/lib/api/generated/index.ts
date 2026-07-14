@@ -202,6 +202,7 @@ export type { VectorBuildResult } from './models/VectorBuildResult';
 export type { VectorBuildStatus } from './models/VectorBuildStatus';
 export type { VectorGenerationInfo } from './models/VectorGenerationInfo';
 export type { VectorRefreshStats } from './models/VectorRefreshStats';
+export type { VectorRepairStats } from './models/VectorRepairStats';
 export type { VersionInfo } from './models/VersionInfo';
 export type { WorktreeMappingRequest } from './models/WorktreeMappingRequest';
 export type { WorktreeMappingsResponse } from './models/WorktreeMappingsResponse';

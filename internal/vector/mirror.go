@@ -431,6 +431,9 @@ func (ix *Index) finalizeEvictions(ctx context.Context, evicted map[string]struc
 		if err := ix.store.DeleteVectors(ctx, key); err != nil {
 			return deleted, fmt.Errorf("deleting evicted vectors for %s: %w", key, err)
 		}
+		if err := ix.deleteRepairTargets(ctx, key); err != nil {
+			return deleted, err
+		}
 		if _, err := ix.db.ExecContext(ctx,
 			`DELETE FROM `+ix.spec.DocsTable+` WHERE doc_key = ?`, key,
 		); err != nil {
@@ -506,6 +509,9 @@ func (ix *Index) reconcileDeletions(
 		if err := ix.store.DeleteVectors(ctx, key); err != nil {
 			return 0, fmt.Errorf("deleting vectors for %s: %w", key, err)
 		}
+		if err := ix.deleteRepairTargets(ctx, key); err != nil {
+			return 0, err
+		}
 		if _, err := ix.db.ExecContext(ctx,
 			`DELETE FROM `+ix.spec.DocsTable+` WHERE doc_key = ?`, key,
 		); err != nil {
@@ -513,6 +519,15 @@ func (ix *Index) reconcileDeletions(
 		}
 	}
 	return len(vanished), nil
+}
+
+func (ix *Index) deleteRepairTargets(ctx context.Context, docKey string) error {
+	if _, err := ix.db.ExecContext(ctx,
+		`DELETE FROM `+ix.spec.repairQueueTable()+` WHERE doc_key = ?`, docKey,
+	); err != nil {
+		return fmt.Errorf("deleting invalid vector repair targets for %s: %w", docKey, err)
+	}
+	return nil
 }
 
 // refreshWatermark reads the stored refresh watermark, returning "" when

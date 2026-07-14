@@ -1065,6 +1065,7 @@ func TestFindDaemonRuntime_IgnoresIncompatibleRuntime(t *testing.T) {
 	require.NotNil(t, rt)
 	require.Error(t, compatErr)
 	assert.Contains(t, compatErr.Error(), "API version")
+	assert.Contains(t, compatErr.Error(), "restart the daemon")
 	assert.True(t, IsLocalDaemonActive(dir),
 		"incompatible writable daemon still owns the local archive")
 }

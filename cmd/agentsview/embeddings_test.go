@@ -342,6 +342,152 @@ func TestEmbeddingsBuildDirectEndToEnd(t *testing.T) {
 	assert.Contains(t, out.String(), "Generation activated.")
 }
 
+func TestRunDirectBuildPrintsFailedAttemptResult(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "vectors.db")
+	ix, err := vector.Open(ctx, path, false, 8192)
+	require.NoError(t, err)
+	defer ix.Close()
+	gen := kitvec.Generation{Model: "fake-model", Dimensions: 4}
+	src := testPushUnitSource()
+	_, err = ix.Build(ctx, src, fakePushEncoder(), gen, vector.BuildOptions{})
+	require.NoError(t, err)
+
+	raw, err := sql.Open(vectorTestDriverName, path)
+	require.NoError(t, err)
+	var ordinal int64
+	require.NoError(t, raw.QueryRow(
+		`SELECT ordinal FROM message_vectors_generations WHERE gen_key = ?`,
+		gen.Fingerprint()).Scan(&ordinal))
+	_, err = raw.Exec(`UPDATE message_vectors_v`+strconv.FormatInt(ordinal, 10)+` SET embedding = ?`,
+		make([]byte, 4*4))
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+
+	failingEncoder := func(context.Context, []string) ([][]float32, error) {
+		return nil, &vector.HTTPStatusError{
+			Status: http.StatusBadRequest,
+			Body:   "input exceeds token limit",
+		}
+	}
+	m := vector.NewManager(ix, src, vector.EncoderSet{
+		Default: "default",
+		ByName: map[string]vector.ManagedEncoder{
+			"default": {Encode: failingEncoder},
+		},
+	}, gen)
+
+	var out bytes.Buffer
+	err = runDirectBuild(ctx, &out, m, vector.BuildRequest{RepairInvalid: true})
+	require.ErrorContains(t, err, "3 permanently rejected")
+	status := m.Status()
+	require.NotNil(t, status.LastResult)
+	assert.True(t, status.LastResult.Repair.ScanComplete)
+	assert.Equal(t, 3, status.LastResult.Repair.Failed)
+	assert.Equal(t, 3, status.LastResult.Repair.Remaining)
+	assert.True(t, status.LastResult.Repair.RemainingKnown)
+	assert.Contains(t, out.String(), "Repair targets: 3 documents (3 chunks invalidated).")
+	assert.Contains(t, out.String(), "Repair incomplete: 3 failed, 3 remaining.")
+	assert.Contains(t, out.String(), "Embedded 0 documents (0 chunks), skipped 0, stale 0")
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/embeddings/build", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(status))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	var daemonOut bytes.Buffer
+	err = buildViaDaemon(ctx, &daemonOut, embeddingsDaemonClient{baseURL: srv.URL},
+		vector.BuildRequest{RepairInvalid: true})
+	require.ErrorContains(t, err, "3 permanently rejected")
+	assert.Contains(t, daemonOut.String(), "Repair incomplete: 3 failed, 3 remaining.")
+}
+
+func TestRunDirectBuildPrintsCommittedTargetsAfterScanFailure(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "vectors.db")
+	ix, err := vector.Open(ctx, path, false, 8192)
+	require.NoError(t, err)
+	defer ix.Close()
+	gen := kitvec.Generation{Model: "fake-model", Dimensions: 4}
+	const documentCount = 129
+	src := fakePushUnitSource{units: make([]db.EmbeddableUnit, 0, documentCount)}
+	for i := range documentCount {
+		id := fmt.Sprintf("doc-%03d", i)
+		src.units = append(src.units, db.EmbeddableUnit{
+			SessionID: "session-1", Kind: "user", SourceUUID: id,
+			Ordinal: i, OrdinalEnd: i, Content: id,
+		})
+	}
+	_, err = ix.Build(ctx, src, fakePushEncoder(), gen, vector.BuildOptions{})
+	require.NoError(t, err)
+
+	raw, err := sql.Open(vectorTestDriverName, path)
+	require.NoError(t, err)
+	var ordinal int64
+	require.NoError(t, raw.QueryRow(
+		`SELECT ordinal FROM message_vectors_generations WHERE gen_key = ?`,
+		gen.Fingerprint()).Scan(&ordinal))
+	_, err = raw.Exec(`UPDATE message_vectors_v`+strconv.FormatInt(ordinal, 10)+` SET embedding = ?`,
+		make([]byte, 4*4))
+	require.NoError(t, err)
+	_, err = raw.Exec(`
+CREATE TRIGGER fail_second_repair_batch
+BEFORE INSERT ON message_vectors_repair_queue
+WHEN NEW.doc_key = 'u:session-1:doc-128'
+BEGIN
+    SELECT RAISE(ABORT, 'injected later repair batch failure');
+END`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+
+	m := vector.NewManager(ix, src, vector.EncoderSet{
+		Default: "default",
+		ByName: map[string]vector.ManagedEncoder{
+			"default": {Encode: func(context.Context, []string) ([][]float32, error) {
+				t.Fatal("scan failure must stop before refill")
+				return nil, nil
+			}},
+		},
+	}, gen)
+	var out bytes.Buffer
+	err = runDirectBuild(ctx, &out, m, vector.BuildRequest{RepairInvalid: true})
+	require.ErrorContains(t, err, "injected later repair batch failure")
+	status := m.Status()
+	require.NotNil(t, status.LastResult)
+	assert.True(t, status.LastResult.Repair.Scanned)
+	assert.False(t, status.LastResult.Repair.ScanComplete)
+	assert.Equal(t, 128, status.LastResult.Repair.Documents)
+	assert.Equal(t, 128, status.LastResult.Repair.Remaining)
+	assert.True(t, status.LastResult.Repair.RemainingKnown)
+	assert.Contains(t, out.String(), "Repair targets: 128 documents (128 chunks invalidated).")
+	assert.Contains(t, out.String(), "Repair scan incomplete.")
+	assert.Contains(t, out.String(), "Repair incomplete: 0 failed, 128 remaining.")
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/embeddings/build", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/api/v1/embeddings/status", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(status))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	var daemonOut bytes.Buffer
+	err = buildViaDaemon(ctx, &daemonOut, embeddingsDaemonClient{baseURL: srv.URL},
+		vector.BuildRequest{RepairInvalid: true})
+	require.ErrorContains(t, err, "injected later repair batch failure")
+	assert.Contains(t, daemonOut.String(), "Repair scan incomplete.")
+	assert.Contains(t, daemonOut.String(), "Repair incomplete: 0 failed, 128 remaining.")
+}
+
 // TestEmbeddingsBuildDirectPrintsProgress shrinks the direct path's
 // progress ticker and slows the embeddings stub down so the build is still
 // running when the ticker fires, asserting at least one progress line in
@@ -877,7 +1023,9 @@ func TestEmbeddingsBuildDispatchesToDaemon(t *testing.T) {
 			buildCalled.Store(true)
 			var req vector.BuildRequest
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-			assert.True(t, req.Backstop, "--backstop must pass through to the daemon")
+			assert.False(t, req.Backstop)
+			assert.True(t, req.RepairInvalid,
+				"--repair-invalid must pass through to the daemon")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
 			_ = json.NewEncoder(w).Encode(map[string]bool{"started": true})
@@ -889,7 +1037,11 @@ func TestEmbeddingsBuildDispatchesToDaemon(t *testing.T) {
 				Running: false,
 				LastResult: &vector.BuildResult{
 					Activated: true,
-					Fill:      kitvec.FillStats{Documents: 5, Chunks: 6},
+					Repair: vector.RepairStats{
+						Scanned: true, ScanComplete: true, RemainingKnown: true,
+						Documents: 2, Chunks: 3,
+					},
+					Fill: kitvec.FillStats{Documents: 5, Chunks: 6},
 				},
 			})
 		},
@@ -898,15 +1050,60 @@ func TestEmbeddingsBuildDispatchesToDaemon(t *testing.T) {
 	cmd := newEmbeddingsBuildCommand()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
-	cmd.SetArgs([]string{"--backstop"})
+	cmd.SetArgs([]string{"--repair-invalid"})
 	require.NoError(t, cmd.Execute())
 
 	assert.True(t, buildCalled.Load(), "build must route through the daemon endpoint")
 	assert.True(t, statusCalled.Load(), "build must poll the daemon status endpoint")
 	assert.Contains(t, out.String(), "Embedded 5 documents (6 chunks), skipped 0, stale 0")
+	assert.Contains(t, out.String(), "Repair targets: 2 documents (3 chunks invalidated).")
 	assert.Contains(t, out.String(), "Generation activated.")
 	assert.NoFileExists(t, filepath.Join(dataDir, "vectors.db"),
 		"daemon-dispatched build must not open vectors.db directly")
+}
+
+func TestEmbeddingsBuildRejectsBackstopWithRepair(t *testing.T) {
+	cmd := newEmbeddingsBuildCommand()
+	require.NoError(t, cmd.Flags().Set("backstop", "true"))
+	require.NoError(t, cmd.Flags().Set("repair-invalid", "true"))
+
+	err := cmd.ValidateFlagGroups()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "if any flags in the group")
+}
+
+func TestEmbeddingsBuildRejectsRepairWithFullRebuild(t *testing.T) {
+	cmd := newEmbeddingsBuildCommand()
+	cmd.SetArgs([]string{"--repair-invalid", "--full-rebuild", "--yes"})
+
+	err := cmd.Execute()
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "[full-rebuild repair-invalid]")
+}
+
+func TestPrintBuildSummaryReportsCleanRepairScan(t *testing.T) {
+	var out bytes.Buffer
+	printBuildSummary(&out, vector.BuildResult{
+		Repair: vector.RepairStats{
+			Scanned: true, ScanComplete: true, RemainingKnown: true,
+		},
+	})
+
+	assert.Contains(t, out.String(), "Repair targets: 0 documents (0 chunks invalidated).")
+}
+
+func TestPrintBuildSummaryReportsUnknownRemainingCount(t *testing.T) {
+	var out bytes.Buffer
+	printBuildSummary(&out, vector.BuildResult{
+		Repair: vector.RepairStats{
+			Scanned: true, ScanComplete: false, Documents: 7, Remaining: 7,
+		},
+	})
+
+	assert.Contains(t, out.String(), "Repair scan incomplete.")
+	assert.Contains(t, out.String(), "Repair incomplete: 0 failed, remaining unknown.")
+	assert.NotContains(t, out.String(), "7 remaining")
 }
 
 // TestEmbeddingsActivateDispatchesToDaemon drives the real `embeddings
@@ -997,6 +1194,13 @@ func TestBuildViaDaemonLastErrorReturnsNonZero(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(vector.BuildStatus{
 			Running:   false,
 			LastError: "encoder rejected input",
+			LastResult: &vector.BuildResult{
+				Repair: vector.RepairStats{
+					Scanned: true, ScanComplete: true, RemainingKnown: true,
+					Documents: 2, Chunks: 3, Failed: 1, Remaining: 1,
+				},
+				Fill: kitvec.FillStats{Documents: 1, Chunks: 1},
+			},
 		})
 	})
 	srv := httptest.NewServer(mux)
@@ -1007,6 +1211,9 @@ func TestBuildViaDaemonLastErrorReturnsNonZero(t *testing.T) {
 	err := buildViaDaemon(context.Background(), &out, client, vector.BuildRequest{})
 	require.Error(t, err)
 	assert.Equal(t, "encoder rejected input", err.Error())
+	assert.Contains(t, out.String(), "Repair targets: 2 documents (3 chunks invalidated).")
+	assert.Contains(t, out.String(), "Repair incomplete: 1 failed, 1 remaining.")
+	assert.Contains(t, out.String(), "Embedded 1 documents (1 chunks), skipped 0, stale 0")
 }
 
 // TestDirectListGenerationsVersionMismatchSurfacesRebuildRequired pins the

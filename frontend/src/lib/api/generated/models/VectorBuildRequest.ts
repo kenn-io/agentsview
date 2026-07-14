@@ -6,6 +6,7 @@ export type VectorBuildRequest = {
   backstop?: boolean;
   full_rebuild?: boolean;
   include_automated?: boolean;
+  repair_invalid?: boolean;
   using?: string;
 };
 

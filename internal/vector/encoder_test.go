@@ -127,6 +127,102 @@ func TestEncoderDecodesBase64Embeddings(t *testing.T) {
 	assert.Equal(t, []float32{4, 5, 6}, out[1])
 }
 
+func TestEncoderRejectsInvalidBase64Embeddings(t *testing.T) {
+	tests := []struct {
+		name      string
+		embedding []float32
+		reason    string
+	}{
+		{name: "nan", embedding: []float32{1, float32(math.NaN()), 0}, reason: "non-finite"},
+		{name: "positive infinity", embedding: []float32{1, float32(math.Inf(1)), 0}, reason: "non-finite"},
+		{name: "negative infinity", embedding: []float32{1, float32(math.Inf(-1)), 0}, reason: "non-finite"},
+		{name: "zero norm", embedding: []float32{0, 0, 0}, reason: "zero norm"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(t, w, http.StatusOK, map[string]any{
+					"data": []map[string]any{{
+						"index": 0, "embedding": base64Embedding(tt.embedding),
+					}},
+				})
+			}))
+			defer srv.Close()
+
+			enc := NewEncoder(EncoderConfig{
+				Endpoint: srv.URL + "/v1", Model: "test-model", Dimension: 3,
+				Timeout: time.Second, MaxRetries: 1,
+			})
+			out, err := enc(context.Background(), []string{"hello"})
+
+			assert.Nil(t, out, "an invalid batch must expose no partial vectors")
+			var invalidErr *InvalidEmbeddingError
+			require.ErrorAs(t, err, &invalidErr)
+			assert.Equal(t, 0, invalidErr.Index)
+			assert.Contains(t, err.Error(), tt.reason)
+		})
+	}
+}
+
+func TestEncoderRejectsNullEmbeddingElements(t *testing.T) {
+	tests := []struct {
+		name      string
+		embedding string
+	}{
+		{name: "mixed", embedding: `[0.5,null,0.25]`},
+		{name: "all null", embedding: `[null,null,null]`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, err := io.WriteString(w, `{"data":[{"index":0,"embedding":`+tt.embedding+`}]}`)
+				require.NoError(t, err)
+			}))
+			defer srv.Close()
+
+			enc := NewEncoder(EncoderConfig{
+				Endpoint: srv.URL + "/v1", Model: "test-model", Dimension: 3,
+				Timeout: time.Second, MaxRetries: 1,
+			})
+			out, err := enc(context.Background(), []string{"hello"})
+
+			assert.Nil(t, out)
+			require.ErrorContains(t, err, "null")
+		})
+	}
+}
+
+func TestEncoderRetriesInvalidEmbeddingResponse(t *testing.T) {
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if requests.Add(1) == 1 {
+			writeJSON(t, w, http.StatusOK, map[string]any{
+				"data": []map[string]any{{
+					"index": 0, "embedding": base64Embedding([]float32{0, 0, 0}),
+				}},
+			})
+			return
+		}
+		writeJSON(t, w, http.StatusOK, map[string]any{
+			"data": []map[string]any{{
+				"index": 0, "embedding": base64Embedding([]float32{1, 2, 3}),
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	enc := NewEncoder(EncoderConfig{
+		Endpoint: srv.URL + "/v1", Model: "test-model", Dimension: 3,
+		Timeout: time.Second, MaxRetries: 2,
+	})
+	out, err := enc(context.Background(), []string{"hello"})
+
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), requests.Load())
+	assert.Equal(t, [][]float32{{1, 2, 3}}, out)
+}
+
 // TestEncoderBase64WrongByteCountFailsDimensionCheck asserts a base64
 // payload whose float count disagrees with the configured dimension is
 // rejected rather than silently stored.

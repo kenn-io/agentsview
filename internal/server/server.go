@@ -41,6 +41,11 @@ type VersionInfo struct {
 	DataVersion                int    `json:"data_version"`
 }
 
+// APIVersion is shared by HTTP version reporting and local daemon discovery.
+// Bump it when a client-visible contract cannot be decoded safely by an older
+// CLI or daemon.
+const APIVersion = 3
+
 const daemonService = "agentsview"
 
 const (
@@ -165,7 +170,7 @@ func New(
 		opt(s)
 	}
 	if s.version.APIVersion == 0 {
-		s.version.APIVersion = 2
+		s.version.APIVersion = APIVersion
 	}
 	if s.version.DataVersion == 0 {
 		s.version.DataVersion = db.CurrentDataVersion()

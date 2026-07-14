@@ -491,6 +491,33 @@ func TestBuildEncoderErrorAbortsAndRetryResumesWithoutReembedding(t *testing.T) 
 	assert.True(t, result.Activated)
 }
 
+func TestBuildRejectsInvalidEncoderOutput(t *testing.T) {
+	ix := openTestIndex(t)
+	ctx := context.Background()
+	src := twoDocSource()
+	gen := fakeGeneration("invalid-output-model")
+	invalidEncoder := func(_ context.Context, texts []string) ([][]float32, error) {
+		out := make([][]float32, len(texts))
+		for i := range out {
+			out[i] = []float32{0, 0, 0}
+		}
+		return out, nil
+	}
+
+	result, err := ix.Build(ctx, src, invalidEncoder, gen, BuildOptions{})
+
+	var invalidErr *InvalidEmbeddingError
+	require.ErrorAs(t, err, &invalidErr)
+	assert.Zero(t, result.Fill.Documents)
+	var stamps, chunks int
+	require.NoError(t, ix.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM message_vectors_stamps`).Scan(&stamps))
+	require.NoError(t, ix.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM message_vectors_chunks`).Scan(&chunks))
+	assert.Zero(t, stamps, "invalid output must not stamp a document complete")
+	assert.Zero(t, chunks, "invalid output must not reach vector persistence")
+}
+
 // TestBuildSkipsPermanentlyRejectedDocumentAndContinues is the fix-1
 // regression test: a single document the endpoint permanently rejects
 // (400) must not wedge the whole build. kit stamps it without vectors so
@@ -646,6 +673,13 @@ func TestBuild5xxEncodeErrorStillAbortsFill(t *testing.T) {
 	var statusErr *HTTPStatusError
 	require.ErrorAs(t, err, &statusErr)
 	assert.Equal(t, http.StatusInternalServerError, statusErr.Status)
+}
+
+func TestPermanentEncodeErrorRejectsTypedNilStatusError(t *testing.T) {
+	var statusErr *HTTPStatusError
+	var err error = statusErr
+
+	assert.False(t, isPermanentEncodeError(err))
 }
 
 // TestResolveBuildTargetRetiresOtherBuildingGeneration is the fix-3

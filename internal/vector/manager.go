@@ -43,6 +43,11 @@ func (e *refusalError) Is(target error) bool { return target == ErrGenerationRef
 // offending name.
 var ErrUnknownServer = errors.New("unknown embeddings server")
 
+// ErrInvalidBuildRequest indicates caller-selected build modes conflict. The
+// manager returns it before changing build status so asynchronous callers can
+// reject the request synchronously.
+var ErrInvalidBuildRequest = errors.New("invalid embeddings build request")
+
 type unknownServerError struct {
 	name string
 }
@@ -52,6 +57,18 @@ func (e *unknownServerError) Error() string {
 }
 
 func (e *unknownServerError) Is(target error) bool { return target == ErrUnknownServer }
+
+func validateBuildRequest(req BuildRequest) error {
+	if req.RepairInvalid && req.FullRebuild {
+		return fmt.Errorf("%w: repair-invalid and full-rebuild are mutually exclusive",
+			ErrInvalidBuildRequest)
+	}
+	if req.RepairInvalid && req.Backstop {
+		return fmt.Errorf("%w: repair-invalid and backstop are mutually exclusive",
+			ErrInvalidBuildRequest)
+	}
+	return nil
+}
 
 // Manager serializes embedding builds over one Index: only one Build call
 // may run at a time, whether triggered via StartBuild (async, for the HTTP
@@ -88,6 +105,9 @@ type Manager struct {
 type BuildRequest struct {
 	FullRebuild bool `json:"full_rebuild,omitempty"`
 	Backstop    bool `json:"backstop,omitempty"`
+	// RepairInvalid scans only the selected target generation and queues
+	// documents containing unusable stored vectors for regeneration.
+	RepairInvalid bool `json:"repair_invalid,omitempty"`
 	// IncludeAutomated is the resolved include-automated scope for this
 	// build (caller-resolved from config and, for the CLI's one-off
 	// --include-automated flag, its override). See BuildOptions.IncludeAutomated.
@@ -209,6 +229,9 @@ func recoveringEncoder(enc kitvec.EncodeFunc) kitvec.EncodeFunc {
 // The goroutine runs against context.Background() so it outlives the HTTP
 // request that triggered it.
 func (m *Manager) StartBuild(req BuildRequest) error {
+	if err := validateBuildRequest(req); err != nil {
+		return err
+	}
 	me, err := m.resolveEncoder(req)
 	if err != nil {
 		return err
@@ -227,6 +250,9 @@ func (m *Manager) StartBuild(req BuildRequest) error {
 // should drop a scheduled run rather than queue it: it returns (false, nil)
 // without starting anything if a build is already running.
 func (m *Manager) TryBuild(ctx context.Context, req BuildRequest) (bool, error) {
+	if err := validateBuildRequest(req); err != nil {
+		return false, err
+	}
 	me, err := m.resolveEncoder(req)
 	if err != nil {
 		return false, err
@@ -347,6 +373,7 @@ func (m *Manager) runBuild(
 	return m.ix.Build(ctx, m.src, me.Encode, m.gen, BuildOptions{
 		FullRebuild:      req.FullRebuild,
 		Backstop:         req.Backstop,
+		RepairInvalid:    req.RepairInvalid,
 		IncludeAutomated: req.IncludeAutomated,
 		BatchSize:        me.Settings.BatchSize,
 		Concurrency:      me.Settings.Concurrency,
@@ -369,22 +396,22 @@ func (m *Manager) reportProgress(p BuildProgress) {
 }
 
 // finish records a completed build's outcome and clears the running state.
-// A successful build sets LastResult and clears any previous LastError; a
-// failed build sets LastError and leaves the last successful LastResult (if
-// any) untouched.
+// LastResult always describes the most recent attempt, including its partial
+// progress when the attempt failed, so status consumers never pair a new
+// LastError with a stale successful result.
 func (m *Manager) finish(result BuildResult, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.running = false
 	m.status.Running = false
 	m.clearETA()
+	r := result
+	m.status.LastResult = &r
 	if err != nil {
 		m.status.LastError = err.Error()
 		return
 	}
 	m.status.LastError = ""
-	r := result
-	m.status.LastResult = &r
 }
 
 // clearETA resets both the private accumulator and its public status snapshot.

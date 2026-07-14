@@ -157,6 +157,36 @@ func TestEmbeddingsBuildReturnsAcceptedAndStartsBuild(t *testing.T) {
 
 	require.Len(t, fake.startBuildCalls, 1)
 	assert.True(t, fake.startBuildCalls[0].FullRebuild)
+	assert.False(t, fake.startBuildCalls[0].RepairInvalid)
+}
+
+func TestEmbeddingsBuildInvalidRequestReturnsBadRequest(t *testing.T) {
+	tests := []struct {
+		name string
+		req  vector.BuildRequest
+	}{
+		{
+			name: "full rebuild with repair",
+			req:  vector.BuildRequest{FullRebuild: true, RepairInvalid: true},
+		},
+		{
+			name: "backstop with repair",
+			req:  vector.BuildRequest{Backstop: true, RepairInvalid: true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeEmbeddingsManager{startBuildErr: fmt.Errorf(
+				"%w: mutually exclusive build modes", vector.ErrInvalidBuildRequest)}
+			s := newEmbeddingsTestServer(t, fake)
+
+			w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/build", tt.req)
+			assertRecorderStatus(t, w, http.StatusBadRequest)
+			assert.Contains(t, w.Body.String(), "mutually exclusive")
+			require.Len(t, fake.startBuildCalls, 1)
+			assert.Equal(t, tt.req, fake.startBuildCalls[0])
+		})
+	}
 }
 
 func TestEmbeddingsBuildReturnsConflictWhenAlreadyRunning(t *testing.T) {

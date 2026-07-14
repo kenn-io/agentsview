@@ -20,6 +20,8 @@ import (
 // the completed (or aborted) run. Tests lower it to 0 for determinism.
 var progressInterval = 2 * time.Second
 
+const repairStatusCountTimeout = 2 * time.Second
+
 // BuildOptions configures one Build pass.
 type BuildOptions struct {
 	// FullRebuild forces every document to be re-embedded under the target
@@ -28,6 +30,10 @@ type BuildOptions struct {
 	// Backstop forces a full mirror reconciliation scan (ignoring the
 	// refresh watermark) without forcing a re-embed.
 	Backstop bool
+	// RepairInvalid scans the configured existing generation for malformed,
+	// structurally incomplete, wrong-dimension, non-finite, or zero-norm
+	// vectors and runs a fill restricted to only the affected documents.
+	RepairInvalid bool
 	// IncludeAutomated controls whether automated sessions' units are
 	// scanned into the mirror at all (see UnitSource.ScanEmbeddableUnits).
 	// It is part of the mirror's identity: Build compares it against the
@@ -65,6 +71,7 @@ type BuildResult struct {
 	Fingerprint string
 	Activated   bool // building generation auto-activated on completion
 	Refresh     RefreshStats
+	Repair      RepairStats
 	Fill        kitvec.FillStats
 }
 
@@ -72,16 +79,27 @@ type BuildResult struct {
 // config: Model, Dimensions, and the fingerprinted Params — max_input_chars,
 // doc_unit_scheme, and chunk_overlap_chars; see vectorGeneration in
 // cmd/agentsview/embeddings.go). It
-// refreshes the mirror, resolves which generation to fill
+// Ordinary builds refresh the mirror, resolve which generation to fill
 // (top-up the active one, start a new building generation, or reset and
-// refill the active one for FullRebuild), fills pending documents, and
-// auto-activates a building generation once it fully covers the mirror.
+// refill the active one for FullRebuild), fill pending documents, and
+// auto-activate a building generation once it fully covers the mirror.
+// RepairInvalid instead operates only on an existing generation and never
+// refreshes the mirror or changes generation state.
 func (ix *Index) Build(
 	ctx context.Context, src UnitSource, enc kitvec.EncodeFunc,
 	gen kitvec.Generation, o BuildOptions,
 ) (BuildResult, error) {
 	if err := ix.requireWritable(); err != nil {
 		return BuildResult{}, err
+	}
+	if o.RepairInvalid && o.FullRebuild {
+		return BuildResult{}, fmt.Errorf("repair-invalid and full-rebuild are mutually exclusive")
+	}
+	if o.RepairInvalid && o.Backstop {
+		return BuildResult{}, fmt.Errorf("repair-invalid and backstop are mutually exclusive")
+	}
+	if o.RepairInvalid {
+		return ix.buildInvalidRepair(ctx, enc, gen, o)
 	}
 
 	firstEver, err := ix.noWatermarkYet(ctx)
@@ -122,21 +140,27 @@ func (ix *Index) Build(
 	if err != nil {
 		return BuildResult{}, err
 	}
+	result := BuildResult{Fingerprint: target, Refresh: refreshStats}
 
 	total, err := ix.countPending(ctx, target)
 	if err != nil {
-		return BuildResult{}, err
+		return result, err
 	}
 
-	wrapped, finish := ix.wrapProgress(enc, total, o.Progress)
-	fillStats, fillErr := kitvec.Fill[string, string](ctx, ix.store, target, wrapped, kitvec.FillOptions[string]{
+	wrapped, finish := ix.wrapProgress(validatingEncoder(enc), total, o.Progress)
+	fillStore := &repairQueueCompletingStore{
+		Store: ix.store,
+		db:    ix.db,
+		spec:  ix.spec,
+	}
+	fillStats, fillErr := kitvec.Fill[string, string](ctx, fillStore, target, wrapped, kitvec.FillOptions[string]{
 		Split:         ix.split,
 		Batch:         kitvec.BatchOptions{BatchSize: o.BatchSize, Concurrency: 1},
 		Concurrency:   o.Concurrency,
 		OnEncodeError: skipPermanentEncodeError,
 	})
 	finish()
-	result := BuildResult{Fingerprint: target, Refresh: refreshStats, Fill: fillStats}
+	result.Fill = fillStats
 	if fillErr != nil {
 		return result, fillErr
 	}
@@ -147,6 +171,103 @@ func (ix *Index) Build(
 	}
 	result.Activated = activated
 	return result, nil
+}
+
+// buildInvalidRepair is separate from the ordinary build path so repair cannot
+// accidentally refresh or expand the mirror, change its stored scope, create a
+// generation, or alter generation state. repairInvalidVectors verifies that
+// the configured fingerprint already exists before invalidating anything.
+func (ix *Index) buildInvalidRepair(
+	ctx context.Context, enc kitvec.EncodeFunc, gen kitvec.Generation, o BuildOptions,
+) (BuildResult, error) {
+	target := gen.Fingerprint()
+	result := BuildResult{Fingerprint: target}
+	if o.Progress != nil {
+		o.Progress(BuildProgress{Phase: "scanning"})
+	}
+	repair, err := ix.repairInvalidVectors(ctx, target)
+	result.Repair = repair.Stats
+	if err != nil {
+		if repair.Stats.Scanned {
+			store := &repairStore{
+				base: ix.store, db: ix.db, spec: ix.spec, fingerprint: target,
+				ordinal: repair.Ordinal, queueTable: ix.spec.repairQueueTable(), split: ix.split,
+			}
+			remaining, remainingKnown, countErr := repairRemainingAfterScanError(
+				ctx, store, result.Repair.Documents,
+			)
+			result.Repair.Remaining = remaining
+			result.Repair.RemainingKnown = remainingKnown
+			return result, errors.Join(err, countErr)
+		}
+		return result, err
+	}
+	store := &repairStore{
+		base: ix.store, db: ix.db, spec: ix.spec, fingerprint: target,
+		ordinal: repair.Ordinal, queueTable: ix.spec.repairQueueTable(), split: ix.split,
+	}
+	total, err := store.countPendingChunks(ctx, ix.split)
+	if err != nil {
+		return result, err
+	}
+
+	wrapped, finish := ix.wrapProgress(validatingEncoder(enc), total, o.Progress)
+	fill, fillErr := fillRepairQueue(ctx, store, target, wrapped, repairFillOptions{
+		Split:       ix.split,
+		Batch:       kitvec.BatchOptions{BatchSize: o.BatchSize, Concurrency: 1},
+		Concurrency: o.Concurrency,
+	})
+	finish()
+	result.Fill = fill.Stats
+	result.Repair.Failed = fill.Failed
+	remaining, countErr := store.countTargets(ctx)
+	result.Repair.Remaining = remaining
+	result.Repair.RemainingKnown = countErr == nil
+	if countErr != nil {
+		return result, errors.Join(fillErr, countErr)
+	}
+	if fillErr != nil {
+		return result, fillErr
+	}
+	if fill.Failed > 0 {
+		return result, fmt.Errorf(
+			"invalid vector repair incomplete: %d permanently rejected targets remain queued; first failure: %v",
+			fill.Failed, fill.FirstFailure)
+	}
+	if remaining > 0 {
+		return result, fmt.Errorf(
+			"invalid vector repair incomplete: %d targets remain queued", remaining)
+	}
+	return result, nil
+}
+
+// repairRemainingAfterScanError preserves the accumulated committed target
+// count as a fallback, then attempts a bounded recount independent of a canceled
+// build context. Cancellation is a common reason the scan stopped, but it must
+// not hide queue work that earlier batches already committed.
+func repairRemainingAfterScanError(
+	ctx context.Context, store *repairStore, fallback int,
+) (remaining int, known bool, err error) {
+	countCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), repairStatusCountTimeout)
+	defer cancel()
+	remaining, err = store.countTargets(countCtx)
+	if err != nil {
+		return fallback, false, err
+	}
+	return remaining, true, nil
+}
+
+func validatingEncoder(enc kitvec.EncodeFunc) kitvec.EncodeFunc {
+	return func(ctx context.Context, texts []string) ([][]float32, error) {
+		vectors, err := enc(ctx, texts)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateEmbeddings(vectors); err != nil {
+			return nil, err
+		}
+		return vectors, nil
+	}
 }
 
 // skipPermanentEncodeError implements kitvec.FillOptions.OnEncodeError: a
@@ -164,13 +285,17 @@ func (ix *Index) Build(
 // the next scheduled build should retry the document rather than silently
 // giving up on it.
 func skipPermanentEncodeError(doc string, err error) bool {
-	var statusErr *HTTPStatusError
-	if !errors.As(err, &statusErr) || !statusErr.Permanent() {
+	if !isPermanentEncodeError(err) {
 		return false
 	}
 	log.Printf("vector build: skipping document %s: permanently rejected by embeddings endpoint: %v",
 		doc, err)
 	return true
+}
+
+func isPermanentEncodeError(err error) bool {
+	var statusErr *HTTPStatusError
+	return errors.As(err, &statusErr) && statusErr != nil && statusErr.Permanent()
 }
 
 // noWatermarkYet reports whether Refresh has never advanced the stored
@@ -337,8 +462,10 @@ func (ix *Index) ordinalForFingerprint(ctx context.Context, fp string) (int64, e
 
 // resetGeneration clears fp's generation of all embedded state (its vec0
 // vectors, chunk map, and stamps) in a single transaction, so a subsequent
-// Fill call re-embeds every document from scratch. It leaves the
-// generation row itself (and its state) untouched.
+// Fill call re-embeds every document from scratch. It leaves the generation
+// row itself (and its state) untouched, along with durable repair targets:
+// an ordinary build may complete them only with a non-empty validated save;
+// repair may also complete a revision-current, verified zero-chunk document.
 func (ix *Index) resetGeneration(ctx context.Context, fp string) error {
 	tx, err := ix.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -363,7 +490,6 @@ func (ix *Index) resetGeneration(ctx context.Context, fp string) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM `+ix.spec.stampsTable()+` WHERE ordinal = ?`, ordinal); err != nil {
 		return fmt.Errorf("clearing stamps: %w", err)
 	}
-
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit reset generation: %w", err)
 	}

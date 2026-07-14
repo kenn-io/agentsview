@@ -79,6 +79,25 @@ type HTTPStatusError struct {
 	RetryAfter *time.Duration
 }
 
+// InvalidEmbeddingError reports endpoint output that has the expected shape
+// but cannot participate in cosine distance. Index identifies the embedding
+// within the response batch; Component is -1 for a zero-norm vector.
+type InvalidEmbeddingError struct {
+	Index     int
+	Component int
+	Reason    string
+}
+
+func (e *InvalidEmbeddingError) Error() string {
+	if e.Component >= 0 {
+		return fmt.Sprintf(
+			"[vector.embeddings] invalid embedding at index %d component %d: %s",
+			e.Index, e.Component, e.Reason)
+	}
+	return fmt.Sprintf(
+		"[vector.embeddings] invalid embedding at index %d: %s", e.Index, e.Reason)
+}
+
 func (e *HTTPStatusError) Error() string {
 	return fmt.Sprintf("[vector.embeddings] status %d: %s", e.Status, e.Body)
 }
@@ -158,6 +177,7 @@ type embeddingsResponseBody struct {
 type embeddingVector []float32
 
 func (v *embeddingVector) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
 	if len(b) > 0 && b[0] == '"' {
 		var s string
 		if err := json.Unmarshal(b, &s); err != nil {
@@ -177,11 +197,46 @@ func (v *embeddingVector) UnmarshalJSON(b []byte) error {
 		*v = out
 		return nil
 	}
-	var floats []float32
-	if err := json.Unmarshal(b, &floats); err != nil {
+	var elements []json.RawMessage
+	if err := json.Unmarshal(b, &elements); err != nil {
 		return err
 	}
+	floats := make([]float32, len(elements))
+	for i, element := range elements {
+		if bytes.Equal(bytes.TrimSpace(element), []byte("null")) {
+			return fmt.Errorf("embedding component %d is null", i)
+		}
+		if err := json.Unmarshal(element, &floats[i]); err != nil {
+			return fmt.Errorf("decode embedding component %d: %w", i, err)
+		}
+	}
 	*v = floats
+	return nil
+}
+
+func validateEmbedding(vector []float32, index int) error {
+	var squaredNorm float64
+	for component, value := range vector {
+		f := float64(value)
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return &InvalidEmbeddingError{
+				Index: index, Component: component, Reason: "non-finite component",
+			}
+		}
+		squaredNorm += f * f
+	}
+	if squaredNorm == 0 {
+		return &InvalidEmbeddingError{Index: index, Component: -1, Reason: "zero norm"}
+	}
+	return nil
+}
+
+func validateEmbeddings(vectors [][]float32) error {
+	for index, vector := range vectors {
+		if err := validateEmbedding(vector, index); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -366,7 +421,8 @@ func (ec *encoderClient) attemptEncode(
 
 	vectors, err := reorderAndValidate(decoded, texts, cfg)
 	if err != nil {
-		return nil, false, err
+		var invalidErr *InvalidEmbeddingError
+		return nil, errors.As(err, &invalidErr), err
 	}
 	return vectors, false, nil
 }
@@ -414,6 +470,9 @@ func reorderAndValidate(
 		if !ok {
 			return nil, fmt.Errorf("[vector.embeddings] missing embedding for index %d", i)
 		}
+	}
+	if err := validateEmbeddings(out); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

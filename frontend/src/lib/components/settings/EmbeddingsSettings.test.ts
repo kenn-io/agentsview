@@ -166,6 +166,15 @@ describe("EmbeddingsSettings", () => {
         Fingerprint: "fp-1",
         Activated: true,
         Refresh: { Upserted: 5, Deleted: 0, Unchanged: 100 },
+        Repair: {
+          scanned: false,
+          scan_complete: false,
+          documents: 0,
+          chunks: 0,
+          failed: 0,
+          remaining: 0,
+          remaining_known: false,
+        },
         Fill: { Documents: 12, Chunks: 345, Skipped: 0, Stale: 0 },
       },
     };
