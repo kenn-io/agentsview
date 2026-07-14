@@ -392,10 +392,10 @@ func (b daemonArchiveWriteBackend) PGPushWatch(
 type localArchiveWriteBackend struct {
 	appCfg        config.Config
 	database      *db.DB
-	ensurePricing func(*db.DB) (bool, error)
+	ensurePricing func(*db.DB) error
 }
 
-func (b *localArchiveWriteBackend) ensureCurrentPricing() (bool, error) {
+func (b *localArchiveWriteBackend) ensureCurrentPricing() error {
 	if b.ensurePricing != nil {
 		return b.ensurePricing(b.database)
 	}
@@ -407,12 +407,9 @@ func (b *localArchiveWriteBackend) newPGPusher(
 	connect func() (pgTarget, error),
 ) *pgPusher {
 	return &pgPusher{
-		localSync: localSync,
-		ensurePricing: func() error {
-			_, err := b.ensureCurrentPricing()
-			return err
-		},
-		connect: connect,
+		localSync:     localSync,
+		ensurePricing: b.ensureCurrentPricing,
+		connect:       connect,
 	}
 }
 
@@ -427,7 +424,7 @@ func (b *localArchiveWriteBackend) PGPush(
 	if err := ctx.Err(); err != nil {
 		return postgres.PushResult{}, err
 	}
-	if _, err := b.ensureCurrentPricing(); err != nil {
+	if err := b.ensureCurrentPricing(); err != nil {
 		log.Printf("warning: pricing refresh failed: %v", err)
 	}
 	forceFull := cfg.Full || didResync

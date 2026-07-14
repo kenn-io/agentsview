@@ -121,7 +121,7 @@ type Server struct {
 	// push phase skipped, e.g. when [vector] is disabled.
 	vectorPushSource postgres.VectorPushSource
 
-	ensurePricing func(*db.DB) (bool, error)
+	ensurePricing func(*db.DB) error
 }
 
 // New creates a new Server.

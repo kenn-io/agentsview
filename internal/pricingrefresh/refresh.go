@@ -101,8 +101,9 @@ func Ensure(
 }
 
 // EnsureCurrent applies the standard online pricing lifecycle.
-func EnsureCurrent(database *db.DB) (bool, error) {
-	return Ensure(database, false, pricing.FetchLiteLLMPricing, time.Now())
+func EnsureCurrent(database *db.DB) error {
+	_, err := Ensure(database, false, pricing.FetchLiteLLMPricing, time.Now())
+	return err
 }
 
 func upsert(database *db.DB, prices []pricing.ModelPricing) error {
