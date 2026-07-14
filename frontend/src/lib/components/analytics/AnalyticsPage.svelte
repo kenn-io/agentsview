@@ -498,6 +498,7 @@
   });
 
   onDestroy(() => {
+    analytics.cancelInFlightReads();
     const state = currentAnalyticsPanelDate();
     if (state) {
       analyticsPageDates.retain(

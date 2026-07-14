@@ -2,8 +2,9 @@ import {
   TrendsService,
 } from "../api/generated/index";
 import type { TrendsTermsResponse } from "../api/types.js";
-import { callGenerated } from "../api/runtime.js";
+import { callGenerated, isAbortError } from "../api/runtime.js";
 import { rollingRange } from "../utils/dates.js";
+import { LatestRead } from "../utils/latest-read.js";
 import { perf } from "./perf.svelte.js";
 
 type TrendsTermsParams = Parameters<
@@ -32,6 +33,7 @@ class TrendsStore {
   loading = $state({ terms: false });
   errors = $state<{ terms: string | null }>({ terms: null });
   private version = 0;
+  private termsRead = new LatestRead();
 
   get timezone(): string {
     return Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -56,20 +58,26 @@ class TrendsStore {
 
   async fetchTerms(): Promise<void> {
     const v = ++this.version;
+    const signal = this.termsRead.begin();
     const isFirstLoad = this.response === null;
     this.loading.terms = true;
     this.errors.terms = null;
     const started = performance.now();
-    let status: "ok" | "error" = "ok";
+    let status: "ok" | "error" | "aborted" = "ok";
     try {
       const data = await callGenerated(() =>
         TrendsService.getApiV1TrendsTerms(this.params()),
+        signal,
       ) as unknown as TrendsTermsResponse;
-      if (this.version === v) {
+      if (this.version === v && this.termsRead.isCurrent(signal)) {
         this.response = data;
         this.errors.terms = null;
       }
     } catch (e) {
+      if (isAbortError(e) || !this.termsRead.isCurrent(signal)) {
+        status = "aborted";
+        return;
+      }
       status = "error";
       if (this.version === v) {
         this.errors.terms =
@@ -87,10 +95,16 @@ class TrendsStore {
         durationMs: performance.now() - started,
         status,
       });
-      if (this.version === v) {
+      if (this.termsRead.finish(signal)) {
         this.loading.terms = false;
       }
     }
+  }
+
+  cancelInFlightReads(): void {
+    this.version++;
+    this.termsRead.cancel();
+    this.loading.terms = false;
   }
 
   async setDateRange(from: string, to: string): Promise<void> {

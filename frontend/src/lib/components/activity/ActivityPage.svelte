@@ -295,6 +295,7 @@
     // manual button.
     const unsubEvents = events.subscribe(() => activity.markNewData());
     return () => {
+      activity.cancelInFlightReads();
       if (todayRolloverTimer !== undefined) {
         clearTimeout(todayRolloverTimer);
       }

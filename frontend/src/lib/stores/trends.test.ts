@@ -4,13 +4,20 @@ import { selectionFromRange } from "../components/shared/rangeSelection.js";
 import { TrendsService } from "../api/generated/index";
 import type { TrendsTermsResponse } from "../api/types.js";
 
+const apiRuntimeMocks = vi.hoisted(() => ({
+  callGenerated: vi.fn(
+    (request: () => Promise<unknown>, _signal?: AbortSignal) => request(),
+  ),
+}));
+
 // Capture the store's shipped default range at import time, before the
 // beforeEach reset overwrites it.
 const DEFAULT_RANGE = { from: trends.from, to: trends.to };
 
 vi.mock("../api/runtime.js", () => ({
   configureGeneratedClient: vi.fn(),
-  callGenerated: vi.fn((request: () => Promise<unknown>) => request()),
+  callGenerated: apiRuntimeMocks.callGenerated,
+  isAbortError: vi.fn(() => false),
 }));
 
 vi.mock("../api/generated/index", () => ({
@@ -48,10 +55,53 @@ function resetStore() {
 beforeEach(() => {
   resetStore();
   vi.clearAllMocks();
+  apiRuntimeMocks.callGenerated.mockImplementation(
+    (request: () => Promise<unknown>, _signal?: AbortSignal) => request(),
+  );
   trendsService.getApiV1TrendsTerms.mockResolvedValue(makeResponse());
 });
 
 describe("TrendsStore.fetchTerms", () => {
+  it("aborts the obsolete terms read when grouping changes", async () => {
+    const signals: AbortSignal[] = [];
+    apiRuntimeMocks.callGenerated.mockImplementation((
+      request: () => Promise<unknown>,
+      signal?: AbortSignal,
+    ) => {
+      signals.push(signal as AbortSignal);
+      return request();
+    });
+    trendsService.getApiV1TrendsTerms
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockResolvedValueOnce(makeResponse());
+
+    void trends.fetchTerms();
+    await Promise.resolve();
+    await trends.setGranularity("month");
+
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
+  it("aborts the visible terms read on teardown", async () => {
+    const signals: AbortSignal[] = [];
+    apiRuntimeMocks.callGenerated.mockImplementation((
+      request: () => Promise<unknown>,
+      signal?: AbortSignal,
+    ) => {
+      signals.push(signal as AbortSignal);
+      return request();
+    });
+    trendsService.getApiV1TrendsTerms.mockImplementationOnce(
+      () => new Promise(() => {}),
+    );
+
+    void trends.fetchTerms();
+    await Promise.resolve();
+    trends.cancelInFlightReads();
+
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
   it("fetches default terms with timezone and date range", async () => {
     await trends.fetchTerms();
 
