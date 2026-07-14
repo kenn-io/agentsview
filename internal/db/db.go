@@ -1522,28 +1522,17 @@ func probeDatabaseConn(
 // databases created by older releases. Open repairs them before initializing
 // schema indexes, then triggers a non-destructive full resync.
 func needsSchemaRepair(conn *sql.DB) (bool, error) {
-	probes := []struct {
-		table  string
-		column string
-	}{
-		{"sessions", "parent_session_id"},
-		{"insights", "date_from"},
-		{"tool_calls", "tool_use_id"},
-		{"sessions", "user_message_count"},
-		{"sessions", "relationship_type"},
-		{"tool_calls", "subagent_session_id"},
-	}
-	for _, p := range probes {
+	for _, migration := range legacySchemaColumnMigrations() {
 		var count int
 		err := conn.QueryRow(fmt.Sprintf(
 			"SELECT count(*) FROM pragma_table_info('%s')"+
 				" WHERE name = '%s'",
-			p.table, p.column,
+			migration.table, migration.column,
 		)).Scan(&count)
 		if err != nil {
 			return false, fmt.Errorf(
 				"probing schema (%s.%s): %w",
-				p.table, p.column, err,
+				migration.table, migration.column, err,
 			)
 		}
 		if count == 0 {
@@ -1572,9 +1561,9 @@ type schemaColumnMigration struct {
 	ddl    string
 }
 
-// preInitSchemaColumnMigrations repairs the legacy columns that must exist
-// before db.init executes schema.sql.
-func preInitSchemaColumnMigrations() []schemaColumnMigration {
+// legacySchemaColumnMigrations repairs the complete historical table shapes
+// that must exist before db.init executes schema.sql.
+func legacySchemaColumnMigrations() []schemaColumnMigration {
 	return []schemaColumnMigration{
 		{
 			"sessions", "parent_session_id",
@@ -1585,8 +1574,24 @@ func preInitSchemaColumnMigrations() []schemaColumnMigration {
 			"ALTER TABLE insights ADD COLUMN date_from TEXT NOT NULL DEFAULT ''",
 		},
 		{
+			"insights", "date_to",
+			"ALTER TABLE insights ADD COLUMN date_to TEXT NOT NULL DEFAULT ''",
+		},
+		{
 			"tool_calls", "tool_use_id",
 			"ALTER TABLE tool_calls ADD COLUMN tool_use_id TEXT",
+		},
+		{
+			"tool_calls", "input_json",
+			"ALTER TABLE tool_calls ADD COLUMN input_json TEXT",
+		},
+		{
+			"tool_calls", "skill_name",
+			"ALTER TABLE tool_calls ADD COLUMN skill_name TEXT",
+		},
+		{
+			"tool_calls", "result_content_length",
+			"ALTER TABLE tool_calls ADD COLUMN result_content_length INTEGER",
 		},
 		{
 			"sessions", "user_message_count",
@@ -2019,6 +2024,34 @@ func applyColumnMigrations(
 	return nil
 }
 
+func backfillLegacyInsightDates(tx *sql.Tx) error {
+	var legacyDateCount int
+	if err := tx.QueryRow(
+		`SELECT count(*) FROM pragma_table_info('insights')
+		 WHERE name = 'date'`,
+	).Scan(&legacyDateCount); err != nil {
+		return fmt.Errorf("probing legacy insight date: %w", err)
+	}
+	if legacyDateCount == 0 {
+		return nil
+	}
+	if _, err := tx.Exec(`
+		UPDATE insights
+		SET date_from = CASE
+				WHEN date_from = '' THEN COALESCE(date, '')
+				ELSE date_from
+			END,
+			date_to = CASE
+				WHEN date_to = '' THEN COALESCE(date, '')
+				ELSE date_to
+			END
+		WHERE date_from = '' OR date_to = ''
+	`); err != nil {
+		return fmt.Errorf("backfilling legacy insight dates: %w", err)
+	}
+	return nil
+}
+
 // repairLegacySchemaBeforeInit adds legacy columns before schema initialization.
 // The stale data marker is committed in the same transaction so a restart
 // cannot skip the required full resync.
@@ -2030,12 +2063,15 @@ func repairLegacySchemaBeforeInit(w *writerHandle) error {
 	defer func() { _ = tx.Rollback() }()
 
 	if err := applyColumnMigrations(
-		preInitSchemaColumnMigrations(),
+		legacySchemaColumnMigrations(),
 		func(query string, args ...any) rowScanner {
 			return tx.QueryRow(query, args...)
 		},
 		tx.Exec,
 	); err != nil {
+		return err
+	}
+	if err := backfillLegacyInsightDates(tx); err != nil {
 		return err
 	}
 	var version int
@@ -2921,7 +2957,7 @@ func openAndInit(path string, schemaRepairNeeded bool) (*DB, error) {
 	}
 	if schemaRepairNeeded {
 		db.mu.Lock()
-		err = repairLegacySchemaBeforeInit(writer)
+		err = repairLegacySchemaBeforeInit(db.getWriter())
 		db.mu.Unlock()
 		if err != nil {
 			db.Close()
