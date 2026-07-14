@@ -931,7 +931,7 @@ func TestMigration_ToolResultEventsTable(t *testing.T) {
 }
 
 func TestCurrentDataVersionQueuedSystemMessages(t *testing.T) {
-	assert.Equal(t, 65, CurrentDataVersion(),
+	assert.Equal(t, 66, CurrentDataVersion(),
 		"queued system message parser changes require a data version bump")
 }
 func TestInsertMessages_PreservesToolResultEvents(t *testing.T) {
