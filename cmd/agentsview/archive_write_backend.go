@@ -16,6 +16,7 @@ import (
 	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/postgres"
+	"go.kenn.io/agentsview/internal/pricingrefresh"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
@@ -389,8 +390,16 @@ func (b daemonArchiveWriteBackend) PGPushWatch(
 }
 
 type localArchiveWriteBackend struct {
-	appCfg   config.Config
-	database *db.DB
+	appCfg        config.Config
+	database      *db.DB
+	ensurePricing func(*db.DB) (bool, error)
+}
+
+func (b *localArchiveWriteBackend) ensureCurrentPricing() (bool, error) {
+	if b.ensurePricing != nil {
+		return b.ensurePricing(b.database)
+	}
+	return pricingrefresh.EnsureCurrent(b.database)
 }
 
 func (b *localArchiveWriteBackend) PGPush(
@@ -403,6 +412,9 @@ func (b *localArchiveWriteBackend) PGPush(
 	didResync := runLocalSync(ctx, b.appCfg, b.database, cfg.Full)
 	if err := ctx.Err(); err != nil {
 		return postgres.PushResult{}, err
+	}
+	if _, err := b.ensureCurrentPricing(); err != nil {
+		log.Printf("warning: pricing refresh failed: %v", err)
 	}
 	forceFull := cfg.Full || didResync
 
@@ -662,6 +674,10 @@ func (b *localArchiveWriteBackend) PGPushWatch(
 			// carry current signal/secret fields.
 			engine.FlushSignals()
 			return nil
+		},
+		ensurePricing: func() error {
+			_, ensureErr := b.ensureCurrentPricing()
+			return ensureErr
 		},
 		connect: func() (pgTarget, error) {
 			applyClassifierConfig(b.appCfg)

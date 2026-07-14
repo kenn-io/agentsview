@@ -30,9 +30,10 @@ type pgTarget interface {
 // connecting and reconnecting after errors so a transiently
 // unreachable database never crashes the daemon.
 type pgPusher struct {
-	localSync func(context.Context) error
-	connect   func() (pgTarget, error)
-	target    pgTarget
+	localSync     func(context.Context) error
+	ensurePricing func() error
+	connect       func() (pgTarget, error)
+	target        pgTarget
 }
 
 // push performs one local-sync-then-push cycle. On any PG error it
@@ -42,6 +43,11 @@ func (p *pgPusher) push(
 ) error {
 	if err := p.localSync(ctx); err != nil {
 		return fmt.Errorf("local sync: %w", err)
+	}
+	if p.ensurePricing != nil {
+		if err := p.ensurePricing(); err != nil {
+			log.Printf("warning: pricing refresh failed: %v", err)
+		}
 	}
 	if p.target == nil {
 		t, err := p.connect()
