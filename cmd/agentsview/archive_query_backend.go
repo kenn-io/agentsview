@@ -11,6 +11,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/pricingrefresh"
 	"go.kenn.io/agentsview/internal/sync"
 )
 
@@ -274,9 +275,9 @@ func (b localArchiveQueryBackend) SessionUsage(
 		return nil, tokenUseExitNotFound, nil
 	}
 	if len(u.UnpricedModels) > 0 && !b.offline {
-		refreshed, refErr := refreshPricingIfStale(
+		refreshed, refErr := pricingrefresh.RefreshIfStale(
 			b.database, pricing.FetchLiteLLMPricing,
-			pricingRefreshCooldown, time.Now(),
+			pricingrefresh.RefreshCooldown, time.Now(),
 		)
 		if refErr != nil {
 			fmt.Fprintf(os.Stderr,

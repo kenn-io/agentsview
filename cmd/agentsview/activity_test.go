@@ -21,6 +21,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/pricingrefresh"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/sync"
 )
@@ -237,7 +238,7 @@ func TestActivityReportJSONMatchesHTTPExportMetadata(t *testing.T) {
 	dbPath := filepath.Join(dataDir, "sessions.db")
 	database := dbtest.OpenTestDBAt(t, dbPath)
 	fallbackModel := fallbackPricedModel(t)
-	require.NoError(t, seedFallbackPricing(database))
+	require.NoError(t, pricingrefresh.SeedFallback(database))
 	seedUsageDailyExportMetadataFixture(t, database, fallbackModel)
 
 	cliOut := captureStdout(t, func() {
