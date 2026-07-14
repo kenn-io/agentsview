@@ -248,8 +248,14 @@ func (s *Server) humaPGPush(
 			var result postgres.PushResult
 			_, err := engine.SyncThenRun(ctx, body.Full, nil,
 				func(forceFull bool) error {
-					if refreshErr := s.ensurePricing(local); refreshErr != nil {
+					if refreshErr := s.ensurePricing(ctx, local); refreshErr != nil {
+						if ctxErr := ctx.Err(); ctxErr != nil {
+							return ctxErr
+						}
 						log.Printf("pricing refresh: %v", refreshErr)
+					}
+					if ctxErr := ctx.Err(); ctxErr != nil {
+						return ctxErr
 					}
 					ps, err := postgres.New(
 						pgCfg.URL, pgCfg.Schema, local,

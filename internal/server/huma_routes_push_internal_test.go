@@ -221,7 +221,7 @@ func TestPGPushRejectsIncludeAndExcludeProjects(t *testing.T) {
 func TestPGPushEnsuresPricingAfterLocalSync(t *testing.T) {
 	s := testServer(t, 30*time.Second)
 	database := s.db.(*db.DB)
-	s.ensurePricing = func(got *db.DB) error {
+	s.ensurePricing = func(_ context.Context, got *db.DB) error {
 		require.Same(t, database, got)
 		require.NoError(t, got.UpsertModelPricing([]db.ModelPricing{{
 			ModelPattern:  "new-model",

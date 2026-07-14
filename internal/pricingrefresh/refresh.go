@@ -2,6 +2,7 @@
 package pricingrefresh
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -101,8 +102,11 @@ func Ensure(
 }
 
 // EnsureCurrent applies the standard online pricing lifecycle.
-func EnsureCurrent(database *db.DB) error {
-	_, err := Ensure(database, false, pricing.FetchLiteLLMPricing, time.Now())
+func EnsureCurrent(ctx context.Context, database *db.DB) error {
+	fetch := func() ([]pricing.ModelPricing, error) {
+		return pricing.FetchLiteLLMPricingContext(ctx)
+	}
+	_, err := Ensure(database, false, fetch, time.Now())
 	return err
 }
 

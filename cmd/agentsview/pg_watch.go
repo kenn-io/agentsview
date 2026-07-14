@@ -31,7 +31,7 @@ type pgTarget interface {
 // unreachable database never crashes the daemon.
 type pgPusher struct {
 	localSync     func(context.Context) error
-	ensurePricing func() error
+	ensurePricing func(context.Context) error
 	connect       func() (pgTarget, error)
 	target        pgTarget
 }
@@ -45,9 +45,15 @@ func (p *pgPusher) push(
 		return fmt.Errorf("local sync: %w", err)
 	}
 	if p.ensurePricing != nil {
-		if err := p.ensurePricing(); err != nil {
+		if err := p.ensurePricing(ctx); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			log.Printf("warning: pricing refresh failed: %v", err)
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if p.target == nil {
 		t, err := p.connect()

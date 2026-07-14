@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -34,8 +35,28 @@ const perMTok = 1_000_000
 // FetchLiteLLMPricing downloads the LiteLLM pricing JSON
 // and parses it into ModelPricing entries.
 func FetchLiteLLMPricing() ([]ModelPricing, error) {
+	return FetchLiteLLMPricingContext(context.Background())
+}
+
+// FetchLiteLLMPricingContext downloads the LiteLLM pricing JSON and binds the
+// request lifetime to ctx.
+func FetchLiteLLMPricingContext(
+	ctx context.Context,
+) ([]ModelPricing, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(litellmURL)
+	return fetchLiteLLMPricing(ctx, client, litellmURL)
+}
+
+func fetchLiteLLMPricing(
+	ctx context.Context,
+	client *http.Client,
+	url string,
+) ([]ModelPricing, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating litellm pricing request: %w", err)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetching litellm pricing: %w", err)
 	}
